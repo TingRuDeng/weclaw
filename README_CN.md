@@ -78,6 +78,26 @@ docker run -it -v ~/.weclaw:/root/.weclaw ghcr.io/fastclaw-ai/weclaw start
 
 切换默认 Agent 会写入配置文件，重启后仍然生效。
 
+## 主动推送消息
+
+无需等待用户发消息，主动向微信用户推送消息。
+
+**命令行：**
+
+```bash
+weclaw send --to "user_id@im.wechat" --text "你好，来自 weclaw"
+```
+
+**HTTP API**（`weclaw start` 运行时，默认监听 `127.0.0.1:18011`）：
+
+```bash
+curl -X POST http://127.0.0.1:18011/api/send \
+  -H "Content-Type: application/json" \
+  -d '{"to": "user_id@im.wechat", "text": "你好，来自 weclaw"}'
+```
+
+设置 `WECLAW_API_ADDR` 环境变量可更改监听地址（如 `0.0.0.0:18011`）。
+
 ## 配置
 
 配置文件路径：`~/.weclaw/config.json`
@@ -109,6 +129,40 @@ docker run -it -v ~/.weclaw:/root/.weclaw ghcr.io/fastclaw-ai/weclaw start
 - `WECLAW_DEFAULT_AGENT` — 覆盖默认 Agent
 - `OPENCLAW_GATEWAY_URL` — OpenClaw HTTP 回退地址
 - `OPENCLAW_GATEWAY_TOKEN` — OpenClaw API Token
+
+## 后台运行
+
+```bash
+# 启动（默认后台运行）
+weclaw start
+
+# 查看状态
+weclaw status
+
+# 停止
+weclaw stop
+
+# 前台运行（调试用）
+weclaw start -f
+```
+
+日志输出到 `~/.weclaw/weclaw.log`。
+
+### 系统服务（开机自启）
+
+**macOS (launchd)：**
+
+```bash
+cp service/com.fastclaw.weclaw.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.fastclaw.weclaw.plist
+```
+
+**Linux (systemd)：**
+
+```bash
+sudo cp service/weclaw.service /etc/systemd/system/
+sudo systemctl enable --now weclaw
+```
 
 ## Docker
 

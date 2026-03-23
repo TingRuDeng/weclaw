@@ -199,10 +199,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 	}
 
 	if needsAgent {
-		// Send typing indicator via iLink sendtyping API
-		if typingErr := SendTypingState(ctx, client, msg.FromUserID, msg.ContextToken); typingErr != nil {
-			log.Printf("[handler] failed to send typing state: %v", typingErr)
-		}
+		// Send typing indicator via iLink sendtyping API (async, non-blocking)
+		go func() {
+			if typingErr := SendTypingState(ctx, client, msg.FromUserID, msg.ContextToken); typingErr != nil {
+				log.Printf("[handler] failed to send typing state: %v", typingErr)
+			}
+		}()
 
 		if agentName != "" {
 			// Route to named agent (start on demand if needed)

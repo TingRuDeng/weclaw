@@ -78,6 +78,26 @@ Send these as WeChat messages:
 
 Switching default agent is persisted to config — survives restarts.
 
+## Proactive Messaging
+
+Send messages to WeChat users without waiting for them to message first.
+
+**CLI:**
+
+```bash
+weclaw send --to "user_id@im.wechat" --text "Hello from weclaw"
+```
+
+**HTTP API** (runs on `127.0.0.1:18011` when `weclaw start` is running):
+
+```bash
+curl -X POST http://127.0.0.1:18011/api/send \
+  -H "Content-Type: application/json" \
+  -d '{"to": "user_id@im.wechat", "text": "Hello from weclaw"}'
+```
+
+Set `WECLAW_API_ADDR` to change the listen address (e.g. `0.0.0.0:18011`).
+
 ## Configuration
 
 Config file: `~/.weclaw/config.json`
@@ -109,6 +129,40 @@ Environment variables:
 - `WECLAW_DEFAULT_AGENT` — override default agent
 - `OPENCLAW_GATEWAY_URL` — OpenClaw HTTP fallback endpoint
 - `OPENCLAW_GATEWAY_TOKEN` — OpenClaw API token
+
+## Background Mode
+
+```bash
+# Start (runs in background by default)
+weclaw start
+
+# Check if running
+weclaw status
+
+# Stop
+weclaw stop
+
+# Run in foreground (for debugging)
+weclaw start -f
+```
+
+Logs are written to `~/.weclaw/weclaw.log`.
+
+### System service (auto-start on boot)
+
+**macOS (launchd):**
+
+```bash
+cp service/com.fastclaw.weclaw.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.fastclaw.weclaw.plist
+```
+
+**Linux (systemd):**
+
+```bash
+sudo cp service/weclaw.service /etc/systemd/system/
+sudo systemctl enable --now weclaw
+```
 
 ## Docker
 

@@ -10,6 +10,7 @@ import (
 // Config holds the application configuration.
 type Config struct {
 	DefaultAgent string                 `json:"default_agent"`
+	APIAddr      string                 `json:"api_addr,omitempty"`
 	Agents       map[string]AgentConfig `json:"agents"`
 }
 
@@ -73,6 +74,9 @@ func Load() (*Config, error) {
 func loadEnv(cfg *Config) {
 	if v := os.Getenv("WECLAW_DEFAULT_AGENT"); v != "" {
 		cfg.DefaultAgent = v
+	}
+	if v := os.Getenv("WECLAW_API_ADDR"); v != "" {
+		cfg.APIAddr = v
 	}
 }
 

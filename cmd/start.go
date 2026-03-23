@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/api"
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/ilink"
@@ -18,7 +21,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	foregroundFlag bool
+	apiAddrFlag    string
+)
+
 func init() {
+	startCmd.Flags().BoolVarP(&foregroundFlag, "foreground", "f", false, "Run in foreground (default is background)")
+	startCmd.Flags().StringVar(&apiAddrFlag, "api-addr", "", "API server listen address (default 127.0.0.1:18011)")
 	rootCmd.AddCommand(startCmd)
 }
 
@@ -29,6 +39,21 @@ var startCmd = &cobra.Command{
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
+	if !foregroundFlag {
+		// Check if login is needed — if so, do it in foreground first, then daemon
+		accounts, _ := ilink.LoadAllCredentials()
+		if len(accounts) == 0 {
+			fmt.Println("No WeChat accounts found, starting login...")
+			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			_, err := doLogin(ctx)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("login failed: %w", err)
+			}
+		}
+		return runDaemon()
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -111,6 +136,23 @@ func runStart(cmd *cobra.Command, args []string) error {
 			log.Printf("Failed to initialize default agent %q, staying in echo mode", cfg.DefaultAgent)
 		} else {
 			handler.SetDefaultAgent(cfg.DefaultAgent, ag)
+		}
+	}()
+
+	// Start HTTP API server for sending messages
+	var clients []*ilink.Client
+	for _, c := range accounts {
+		clients = append(clients, ilink.NewClient(c))
+	}
+	// Resolve API addr: flag > env/config > default
+	apiAddr := cfg.APIAddr // already includes env override from loadEnv
+	if apiAddrFlag != "" {
+		apiAddr = apiAddrFlag
+	}
+	apiServer := api.NewServer(clients, apiAddr)
+	go func() {
+		if err := apiServer.Run(ctx); err != nil {
+			log.Printf("API server error: %v", err)
 		}
 	}()
 
@@ -268,4 +310,91 @@ func doLogin(ctx context.Context) (*ilink.Credentials, error) {
 	fmt.Printf("\nLogin successful! Credentials saved to %s\n", dir)
 	fmt.Printf("Bot ID: %s\n\n", creds.ILinkBotID)
 	return creds, nil
+}
+
+// --- Daemon mode ---
+
+func weclawDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".weclaw")
+}
+
+func pidFile() string {
+	return filepath.Join(weclawDir(), "weclaw.pid")
+}
+
+func logFile() string {
+	return filepath.Join(weclawDir(), "weclaw.log")
+}
+
+// runDaemon spawns weclaw start (without --daemon) as a background process.
+func runDaemon() error {
+	// Check if already running
+	if pid, err := readPid(); err == nil {
+		if processExists(pid) {
+			fmt.Printf("weclaw is already running (pid=%d)\n", pid)
+			return nil
+		}
+	}
+
+	// Ensure log directory exists
+	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
+		return fmt.Errorf("create weclaw dir: %w", err)
+	}
+
+	// Open log file
+	lf, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log file: %w", err)
+	}
+
+	// Re-exec ourselves without --daemon
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find executable: %w", err)
+	}
+
+	cmd := exec.Command(exe, "start", "-f")
+	cmd.Stdout = lf
+	cmd.Stderr = lf
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := cmd.Start(); err != nil {
+		lf.Close()
+		return fmt.Errorf("start daemon: %w", err)
+	}
+
+	// Save PID
+	pid := cmd.Process.Pid
+	os.WriteFile(pidFile(), []byte(fmt.Sprintf("%d", pid)), 0o644)
+
+	// Detach — don't wait
+	cmd.Process.Release()
+	lf.Close()
+
+	fmt.Printf("weclaw started in background (pid=%d)\n", pid)
+	fmt.Printf("Log: %s\n", logFile())
+	fmt.Printf("Stop: weclaw stop\n")
+	return nil
+}
+
+func readPid() (int, error) {
+	data, err := os.ReadFile(pidFile())
+	if err != nil {
+		return 0, err
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		return 0, err
+	}
+	return pid, nil
+}
+
+func processExists(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	// Signal 0 checks if process exists without killing it
+	return p.Signal(syscall.Signal(0)) == nil
 }

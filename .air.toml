@@ -3,7 +3,7 @@ testdata_dir = "testdata"
 tmp_dir = "tmp"
 
 [build]
-  args_bin = ["start"]
+  args_bin = ["start", "-f"]
   bin = "./weclaw"
   cmd = "go build -o ./weclaw ."
   delay = 1000
