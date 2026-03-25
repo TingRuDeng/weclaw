@@ -711,8 +711,13 @@ func (a *ACPAgent) readLoop() {
 			a.handlePermissionRequest(line)
 
 		// Codex app-server events
-		case "item/agentMessage/delta":
+		case "codex/event/agent_message_delta":
 			a.handleCodexDelta(msg.Params)
+		case "codex/event/agent_message", "codex/event/task_complete",
+			"codex/event/item_completed", "codex/event/token_count",
+			"item/completed", "thread/tokenUsage/updated",
+			"account/rateLimits/updated", "thread/status/changed":
+			// Known codex events we don't need to act on (turn/completed is handled as RPC response)
 		case "turn/approval/request":
 			a.handlePermissionRequest(line)
 
@@ -736,8 +741,10 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 		return
 	}
 
-	log.Printf("[acp] session/update (session=%s, type=%s, text_len=%d, content_len=%d)",
-		p.SessionID, p.Update.SessionUpdate, len(p.Update.Text), len(p.Update.Content))
+	// Only log non-streaming events (skip agent_message_chunk to reduce noise)
+	if p.Update.SessionUpdate != "agent_message_chunk" {
+		log.Printf("[acp] session/update (session=%s, type=%s)", p.SessionID, p.Update.SessionUpdate)
+	}
 
 	a.notifyMu.Lock()
 	ch, ok := a.notifyCh[p.SessionID]
@@ -754,21 +761,44 @@ func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
 
 func (a *ACPAgent) handleCodexDelta(params json.RawMessage) {
 	var p struct {
-		ThreadID string `json:"threadId"`
-		Delta    string `json:"delta"`
-		Text     string `json:"text"`
+		Msg struct {
+			Type  string `json:"type"`
+			Delta string `json:"delta"`
+		} `json:"msg"`
+		ConversationID string `json:"conversationId"`
+		ThreadID       string `json:"threadId"` // some versions use threadId
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
 	}
 
+	// Try conversationId first (codex uses this), fallback to threadId
+	key := p.ConversationID
+	if key == "" {
+		key = p.ThreadID
+	}
+
+	delta := p.Msg.Delta
+	if delta == "" {
+		return
+	}
+
+	// Find the turn channel by thread ID — we need to match against stored threads
 	a.notifyMu.Lock()
-	ch, ok := a.turnCh[p.ThreadID]
+	ch, ok := a.turnCh[key]
+	if !ok {
+		// Try matching by iterating all turn channels (codex uses conversationId, not threadId)
+		for _, c := range a.turnCh {
+			ch = c
+			ok = true
+			break
+		}
+	}
 	a.notifyMu.Unlock()
 
 	if ok {
 		select {
-		case ch <- &codexTurnEvent{Delta: p.Delta, Text: p.Text}:
+		case ch <- &codexTurnEvent{Delta: delta}:
 		default:
 		}
 	}
