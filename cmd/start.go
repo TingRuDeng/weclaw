@@ -128,6 +128,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	handler.SetAgentMetas(metas)
 	handler.SetAgentWorkDirs(workDirs)
+	handler.SetProgressConfig(cfg.Progress)
+	handler.SetAgentProgressConfigs(extractAgentProgressConfigs(cfg.Agents))
 
 	// Load custom aliases from agent configs
 	handler.SetCustomAliases(config.BuildAliasMap(cfg.Agents))
@@ -279,6 +281,17 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		log.Printf("[agent] unknown type %q for %q", agCfg.Type, name)
 		return nil
 	}
+}
+
+func extractAgentProgressConfigs(agents map[string]config.AgentConfig) map[string]config.ProgressConfig {
+	progressConfigs := make(map[string]config.ProgressConfig)
+	for name, agentConfig := range agents {
+		if agentConfig.Progress == nil {
+			continue
+		}
+		progressConfigs[name] = *agentConfig.Progress
+	}
+	return progressConfigs
 }
 
 // doLogin runs the interactive QR login flow and returns credentials.

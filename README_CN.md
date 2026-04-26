@@ -188,8 +188,91 @@ curl -X POST http://127.0.0.1:18011/api/send \
 环境变量：
 
 - `WECLAW_DEFAULT_AGENT` — 覆盖默认 Agent
+- `WECLAW_PROGRESS_MODE` — 覆盖微信进度模式，例如 `summary`、`typing`、`stream`
+- `WECLAW_PROGRESS_SUMMARY_INTERVAL_SECONDS` — 覆盖进度摘要发送间隔
+- `WECLAW_PROGRESS_MAX_MESSAGES` — 覆盖单次任务最多发送的中间进度条数
 - `OPENCLAW_GATEWAY_URL` — OpenClaw HTTP 回退地址
 - `OPENCLAW_GATEWAY_TOKEN` — OpenClaw API Token
+
+### 微信进度反馈
+
+默认配置使用 `summary` 模式：
+
+```json
+{
+  "default_agent": "codex",
+  "progress": {
+    "mode": "summary",
+    "send_acceptance": true,
+    "enable_typing": true,
+    "typing_heartbeat_seconds": 8,
+    "initial_delay_seconds": 10,
+    "summary_interval_seconds": 20,
+    "max_progress_messages": 4,
+    "show_text_preview": false
+  },
+  "agents": {
+    "codex": {
+      "type": "acp",
+      "command": "codex",
+      "args": ["app-server"]
+    }
+  }
+}
+```
+
+`summary` 模式只发送受理确认、输入中状态、少量进度摘要和最终完整结果，不会把 Agent 的正文 delta、半句话或代码片段逐条发到微信。这样更适合微信聊天窗口，也避免 Codex 增量片段被重复展示。
+
+可选模式：
+
+| 模式 | 行为 |
+|------|------|
+| `off` | 不发送输入中状态和中间进度，只发送最终结果 |
+| `typing` | 发送输入中状态和最终结果 |
+| `summary` | 发送受理确认、输入中状态、低频摘要和最终结果，默认推荐 |
+| `verbose` | 预留的更详细摘要模式，当前按 summary 处理 |
+| `stream` | 恢复旧的实时正文片段预览 |
+| `debug` | 预留的内部调试模式，当前按 summary 处理 |
+
+如果需要恢复旧实时正文流：
+
+```json
+{
+  "progress": {
+    "mode": "stream",
+    "show_text_preview": true,
+    "summary_interval_seconds": 5,
+    "preview_runes": 180
+  }
+}
+```
+
+每个 Agent 可以覆盖全局进度配置：
+
+```json
+{
+  "progress": {
+    "mode": "summary"
+  },
+  "agents": {
+    "claude": {
+      "type": "cli",
+      "command": "claude",
+      "progress": {
+        "mode": "typing"
+      }
+    },
+    "codex": {
+      "type": "acp",
+      "command": "codex",
+      "args": ["app-server"],
+      "progress": {
+        "mode": "stream"
+      }
+    }
+  }
+}
+```
 
 自定义 agent cli 环境变量
 

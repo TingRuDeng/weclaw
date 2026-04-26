@@ -3,6 +3,8 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,6 +36,11 @@ type ACPAgent struct {
 	nextID   atomic.Int64
 	sessions map[string]string // conversationID -> sessionID (legacy ACP)
 	threads  map[string]string // conversationID -> threadID (codex app-server)
+	// resumeOnFirstUse marks restored thread mappings that should trigger a
+	// best-effort thread/resume call before first turn.
+	resumeOnFirstUse map[string]bool // conversationID -> resume needed
+	stateFile        string          // optional persisted state file path
+	history          map[string][]acpHistoryMessage
 
 	// pending tracks in-flight JSON-RPC requests
 	pendingMu sync.Mutex
@@ -58,6 +65,7 @@ type ACPAgentConfig struct {
 	SystemPrompt string
 	Cwd          string            // working directory
 	Env          map[string]string // extra environment variables
+	StateFile    string            // optional persisted mapping file path
 }
 
 // --- JSON-RPC types ---
@@ -152,6 +160,27 @@ const (
 	protocolCodexAppServer = "codex_app_server"
 )
 
+const acpPersistedStateVersion = 1
+
+type acpPersistedState struct {
+	Version  int                            `json:"version"`
+	Protocol string                         `json:"protocol"`
+	Sessions map[string]string              `json:"sessions,omitempty"`
+	Threads  map[string]string              `json:"threads,omitempty"`
+	History  map[string][]acpHistoryMessage `json:"history,omitempty"`
+	Updated  string                         `json:"updatedAt,omitempty"`
+}
+
+type acpHistoryMessage struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+const (
+	acpMaxHistoryMessages      = 20
+	acpMaxRehydratePromptChars = 12000
+)
+
 type codexTurnStartParams struct {
 	ThreadID       string           `json:"threadId"`
 	ApprovalPolicy string           `json:"approvalPolicy,omitempty"`
@@ -195,20 +224,29 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		cfg.Cwd = defaultWorkspace()
 	}
 	protocol := detectACPProtocol(cfg.Command, cfg.Args)
-	return &ACPAgent{
-		command:      cfg.Command,
-		args:         cfg.Args,
-		model:        cfg.Model,
-		systemPrompt: cfg.SystemPrompt,
-		cwd:          cfg.Cwd,
-		env:          cfg.Env,
-		protocol:     protocol,
-		sessions:     make(map[string]string),
-		threads:      make(map[string]string),
-		pending:      make(map[int64]chan *rpcResponse),
-		notifyCh:     make(map[string]chan *sessionUpdate),
-		turnCh:       make(map[string]chan *codexTurnEvent),
+	stateFile := cfg.StateFile
+	if stateFile == "" {
+		stateFile = defaultACPStateFile(cfg.Command, cfg.Args, cfg.Cwd, protocol)
 	}
+	a := &ACPAgent{
+		command:          cfg.Command,
+		args:             cfg.Args,
+		model:            cfg.Model,
+		systemPrompt:     cfg.SystemPrompt,
+		cwd:              cfg.Cwd,
+		env:              cfg.Env,
+		protocol:         protocol,
+		sessions:         make(map[string]string),
+		threads:          make(map[string]string),
+		resumeOnFirstUse: make(map[string]bool),
+		stateFile:        stateFile,
+		history:          make(map[string][]acpHistoryMessage),
+		pending:          make(map[int64]chan *rpcResponse),
+		notifyCh:         make(map[string]chan *sessionUpdate),
+		turnCh:           make(map[string]chan *codexTurnEvent),
+	}
+	a.loadState()
+	return a
 }
 
 // Start launches the claude-agent-acp subprocess and initializes the connection.
@@ -271,9 +309,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	log.Printf("[acp] sending initialize handshake (pid=%d, protocol=%s)...", pid, a.protocol)
 	var result json.RawMessage
 	if a.protocol == protocolCodexAppServer {
-		result, err = a.rpc(initCtx, "initialize", map[string]interface{}{
-			"clientInfo": map[string]string{"name": "weclaw", "version": "0.3.0"},
-		})
+		result, err = a.rpc(initCtx, "initialize", codexInitializeParams())
 		if err == nil {
 			// codex app-server expects an "initialized" notification after initialize response
 			err = a.notify("initialized", nil)
@@ -309,6 +345,15 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	return nil
 }
 
+func codexInitializeParams() map[string]interface{} {
+	return map[string]interface{}{
+		"clientInfo": map[string]string{"name": "weclaw", "version": "0.3.0"},
+		"capabilities": map[string]interface{}{
+			"experimentalApi": true,
+		},
+	}
+}
+
 // Stop terminates the subprocess.
 func (a *ACPAgent) Stop() {
 	a.mu.Lock()
@@ -336,7 +381,10 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 	if a.protocol == protocolCodexAppServer {
 		a.mu.Lock()
 		delete(a.threads, conversationID)
+		delete(a.resumeOnFirstUse, conversationID)
+		delete(a.history, conversationID)
 		a.mu.Unlock()
+		a.persistState()
 		log.Printf("[acp] thread reset (conversation=%s), creating new thread", conversationID)
 
 		threadID, _, err := a.getOrCreateThread(ctx, conversationID)
@@ -348,7 +396,9 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 
 	a.mu.Lock()
 	delete(a.sessions, conversationID)
+	delete(a.history, conversationID)
 	a.mu.Unlock()
+	a.persistState()
 	log.Printf("[acp] session reset (conversation=%s), creating new session", conversationID)
 
 	sessionID, _, err := a.getOrCreateSession(ctx, conversationID)
@@ -360,6 +410,15 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 
 // Chat sends a message and returns the full response.
 func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
+	return a.chat(ctx, conversationID, message, nil)
+}
+
+// ChatWithProgress sends a message and emits incremental deltas during generation.
+func (a *ACPAgent) ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
+	return a.chat(ctx, conversationID, message, onProgress)
+}
+
+func (a *ACPAgent) chat(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
 	if !a.started {
 		if err := a.Start(ctx); err != nil {
 			return "", err
@@ -368,7 +427,7 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 
 	// Route to codex app-server protocol if applicable
 	if a.protocol == protocolCodexAppServer {
-		return a.chatCodexAppServer(ctx, conversationID, message)
+		return a.chatCodexAppServer(ctx, conversationID, message, onProgress)
 	}
 
 	// Get or create session
@@ -425,6 +484,9 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 				text := extractChunkText(update)
 				if text != "" {
 					textParts = append(textParts, text)
+					if onProgress != nil {
+						onProgress(text)
+					}
 				}
 			}
 		case done := <-promptDone:
@@ -436,6 +498,9 @@ func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message stri
 						text := extractChunkText(update)
 						if text != "" {
 							textParts = append(textParts, text)
+							if onProgress != nil {
+								onProgress(text)
+							}
 						}
 					}
 				default:
@@ -484,6 +549,7 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.mu.Lock()
 	a.sessions[conversationID] = sessionResult.SessionID
 	a.mu.Unlock()
+	a.persistState()
 
 	return sessionResult.SessionID, true, nil
 }
@@ -493,16 +559,28 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string) (string, bool, error) {
 	a.mu.Lock()
 	tid, exists := a.threads[conversationID]
+	shouldResume := exists && a.resumeOnFirstUse[conversationID]
+	if shouldResume {
+		delete(a.resumeOnFirstUse, conversationID)
+	}
 	a.mu.Unlock()
 
 	if exists {
+		if shouldResume {
+			if err := a.resumeThread(ctx, tid); err != nil {
+				log.Printf("[acp] failed to resume restored thread (conversation=%s, thread=%s): %v", conversationID, tid, err)
+			} else {
+				log.Printf("[acp] restored thread resumed (conversation=%s, thread=%s)", conversationID, tid)
+			}
+		}
 		return tid, false, nil
 	}
 
 	params := map[string]interface{}{
-		"approvalPolicy": "never",
-		"cwd":            a.cwd,
-		"sandbox":        "danger-full-access",
+		"approvalPolicy":         "never",
+		"cwd":                    a.cwd,
+		"sandbox":                "danger-full-access",
+		"persistExtendedHistory": true,
 	}
 	if a.model != "" {
 		params["model"] = a.model
@@ -526,12 +604,54 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 
 	a.mu.Lock()
 	a.threads[conversationID] = threadResult.Thread.ID
+	delete(a.resumeOnFirstUse, conversationID)
 	a.mu.Unlock()
+	a.persistState()
 
 	return threadResult.Thread.ID, true, nil
 }
 
-func (a *ACPAgent) chatCodexAppServer(ctx context.Context, conversationID string, message string) (string, error) {
+func (a *ACPAgent) resumeThread(ctx context.Context, threadID string) error {
+	if threadID == "" {
+		return fmt.Errorf("empty thread id")
+	}
+
+	params := map[string]interface{}{
+		"threadId":       threadID,
+		"approvalPolicy": "never",
+		"cwd":            a.cwd,
+		"sandbox":        "danger-full-access",
+	}
+	if a.model != "" {
+		params["model"] = a.model
+	}
+
+	result, err := a.rpc(ctx, "thread/resume", params)
+	if err != nil {
+		return err
+	}
+
+	var resumeResult struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &resumeResult); err == nil && resumeResult.Thread.ID != "" && resumeResult.Thread.ID != threadID {
+		log.Printf("[acp] thread/resume returned different id (requested=%s, returned=%s)", threadID, resumeResult.Thread.ID)
+	}
+	return nil
+}
+
+func (a *ACPAgent) chatCodexAppServer(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
+	result, err := a.chatCodexAppServerWithRetry(ctx, conversationID, message, true, onProgress)
+	if err != nil {
+		return "", err
+	}
+	a.recordConversationExchange(conversationID, message, result)
+	return result, nil
+}
+
+func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversationID string, message string, allowFreshRetry bool, onProgress func(delta string)) (string, error) {
 	threadID, isNew, err := a.getOrCreateThread(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("thread error: %w", err)
@@ -564,14 +684,27 @@ func (a *ACPAgent) chatCodexAppServer(ctx context.Context, conversationID string
 
 	// Start turn (call returns quickly with turn info, actual content comes via events)
 	go func() {
-		_, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
-			ThreadID:       threadID,
-			ApprovalPolicy: "never",
-			Input:          []codexUserInput{{Type: "text", Text: message}},
-			SandboxPolicy:  map[string]interface{}{"type": "dangerFullAccess"},
-			Model:          a.model,
-			Cwd:            a.cwd,
-		})
+		startTurn := func() error {
+			_, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
+				ThreadID:       threadID,
+				ApprovalPolicy: "never",
+				Input:          []codexUserInput{{Type: "text", Text: message}},
+				SandboxPolicy:  map[string]interface{}{"type": "dangerFullAccess"},
+				Model:          a.model,
+				Cwd:            a.cwd,
+			})
+			return err
+		}
+
+		err := startTurn()
+		if err != nil && isMissingThreadError(err) {
+			log.Printf("[acp] turn/start failed with missing thread, attempting thread/resume (thread=%s): %v", threadID, err)
+			if resumeErr := a.resumeThread(ctx, threadID); resumeErr == nil {
+				err = startTurn()
+			} else {
+				err = fmt.Errorf("%w (resume failed: %v)", err, resumeErr)
+			}
+		}
 		if err != nil {
 			// If call itself fails, signal via turn channel
 			turnCh <- &codexTurnEvent{Kind: "error", Text: err.Error()}
@@ -586,22 +719,281 @@ func (a *ACPAgent) chatCodexAppServer(ctx context.Context, conversationID string
 			return "", ctx.Err()
 		case evt := <-turnCh:
 			if evt.Kind == "error" {
+				if allowFreshRetry && !isNew && isMissingThreadError(fmt.Errorf("%s", evt.Text)) {
+					log.Printf("[acp] stale thread error detected, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
+					return a.retryWithFreshThread(ctx, conversationID, message, "stale_thread_error", onProgress)
+				}
 				return "", fmt.Errorf("turn error: %s", evt.Text)
 			}
 			if evt.Delta != "" {
 				textParts = append(textParts, evt.Delta)
+				if onProgress != nil {
+					onProgress(evt.Delta)
+				}
 			}
 			if evt.Text != "" {
 				textParts = append(textParts, evt.Text)
+				if onProgress != nil {
+					onProgress(evt.Text)
+				}
 			}
 			if evt.Kind == "completed" {
 				result := strings.TrimSpace(strings.Join(textParts, ""))
 				if result == "" {
+					if allowFreshRetry && !isNew {
+						log.Printf("[acp] empty response on reused thread, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
+						return a.retryWithFreshThread(ctx, conversationID, message, "empty_response", onProgress)
+					}
 					return "", fmt.Errorf("agent returned empty response")
 				}
 				return result, nil
 			}
 		}
+	}
+}
+
+func (a *ACPAgent) retryWithFreshThread(ctx context.Context, conversationID string, message string, reason string, onProgress func(delta string)) (string, error) {
+	a.mu.Lock()
+	oldThreadID := a.threads[conversationID]
+	delete(a.threads, conversationID)
+	delete(a.resumeOnFirstUse, conversationID)
+	a.mu.Unlock()
+	a.persistState()
+
+	log.Printf("[acp] cleared stale thread mapping (conversation=%s, oldThread=%s, reason=%s), creating fresh thread", conversationID, oldThreadID, reason)
+	retryMessage := message
+	if hydrated, ok := a.buildRehydratePrompt(conversationID, message); ok {
+		retryMessage = hydrated
+		log.Printf("[acp] using local context rehydrate prompt for fresh thread (conversation=%s)", conversationID)
+	}
+
+	result, err := a.chatCodexAppServerWithRetry(ctx, conversationID, retryMessage, false, onProgress)
+	if err != nil {
+		return "", fmt.Errorf("retry with fresh thread failed: %w", err)
+	}
+	return result, nil
+}
+
+func (a *ACPAgent) recordConversationExchange(conversationID, userText, assistantText string) {
+	if conversationID == "" {
+		return
+	}
+
+	userText = strings.TrimSpace(userText)
+	assistantText = strings.TrimSpace(assistantText)
+	if userText == "" || assistantText == "" {
+		return
+	}
+
+	a.mu.Lock()
+	h := append(a.history[conversationID],
+		acpHistoryMessage{Role: "user", Text: userText},
+		acpHistoryMessage{Role: "assistant", Text: assistantText},
+	)
+	if len(h) > acpMaxHistoryMessages {
+		h = h[len(h)-acpMaxHistoryMessages:]
+	}
+	a.history[conversationID] = h
+	a.mu.Unlock()
+	a.persistState()
+}
+
+func (a *ACPAgent) buildRehydratePrompt(conversationID, currentMessage string) (string, bool) {
+	a.mu.Lock()
+	history := append([]acpHistoryMessage(nil), a.history[conversationID]...)
+	a.mu.Unlock()
+
+	if len(history) == 0 {
+		return "", false
+	}
+
+	render := func(from int) string {
+		var b strings.Builder
+		b.WriteString("Context from the previous conversation (auto-restored after thread/account switch):\n")
+		for _, msg := range history[from:] {
+			role := "User"
+			if msg.Role == "assistant" {
+				role = "Assistant"
+			}
+			b.WriteString(role)
+			b.WriteString(": ")
+			b.WriteString(msg.Text)
+			b.WriteString("\n")
+		}
+		b.WriteString("\nCurrent user message:\n")
+		b.WriteString(currentMessage)
+		b.WriteString("\n\nPlease continue the conversation using the restored context.")
+		return b.String()
+	}
+
+	start := 0
+	prompt := render(start)
+	for len(prompt) > acpMaxRehydratePromptChars && start < len(history)-1 {
+		start++
+		prompt = render(start)
+	}
+	return prompt, true
+}
+
+func isMissingThreadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	hasEntity := strings.Contains(msg, "thread") || strings.Contains(msg, "conversation") || strings.Contains(msg, "session")
+	hasMissing := strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no conversation found") ||
+		strings.Contains(msg, "unknown thread") ||
+		strings.Contains(msg, "unknown session")
+	return hasEntity && hasMissing
+}
+
+func defaultACPStateFile(command string, args []string, cwd string, protocol string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".weclaw", "state")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Printf("[acp] failed to create state dir: %v", err)
+		return ""
+	}
+	key := strings.Join([]string{
+		strings.ToLower(command),
+		strings.Join(args, "\x00"),
+		cwd,
+		protocol,
+	}, "\x00")
+	sum := sha1.Sum([]byte(key))
+	return filepath.Join(dir, "acp-"+hex.EncodeToString(sum[:])+".json")
+}
+
+func (a *ACPAgent) loadState() {
+	if a.stateFile == "" {
+		return
+	}
+
+	data, err := os.ReadFile(a.stateFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[acp] failed to read state file %s: %v", a.stateFile, err)
+		}
+		return
+	}
+
+	var state acpPersistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		log.Printf("[acp] failed to parse state file %s: %v", a.stateFile, err)
+		return
+	}
+
+	loadedSessions := 0
+	loadedThreads := 0
+	loadedHistory := 0
+
+	a.mu.Lock()
+	for conversationID, sessionID := range state.Sessions {
+		if conversationID == "" || sessionID == "" {
+			continue
+		}
+		a.sessions[conversationID] = sessionID
+		loadedSessions++
+	}
+	for conversationID, threadID := range state.Threads {
+		if conversationID == "" || threadID == "" {
+			continue
+		}
+		a.threads[conversationID] = threadID
+		a.resumeOnFirstUse[conversationID] = true
+		loadedThreads++
+	}
+	for conversationID, messages := range state.History {
+		if conversationID == "" || len(messages) == 0 {
+			continue
+		}
+		normalized := make([]acpHistoryMessage, 0, len(messages))
+		for _, msg := range messages {
+			role := strings.TrimSpace(strings.ToLower(msg.Role))
+			text := strings.TrimSpace(msg.Text)
+			if text == "" {
+				continue
+			}
+			if role != "user" && role != "assistant" {
+				continue
+			}
+			normalized = append(normalized, acpHistoryMessage{
+				Role: role,
+				Text: text,
+			})
+		}
+		if len(normalized) == 0 {
+			continue
+		}
+		if len(normalized) > acpMaxHistoryMessages {
+			normalized = normalized[len(normalized)-acpMaxHistoryMessages:]
+		}
+		a.history[conversationID] = normalized
+		loadedHistory++
+	}
+	a.mu.Unlock()
+
+	if loadedSessions > 0 || loadedThreads > 0 || loadedHistory > 0 {
+		log.Printf("[acp] restored state (sessions=%d, threads=%d, history=%d, file=%s)", loadedSessions, loadedThreads, loadedHistory, a.stateFile)
+	}
+}
+
+func (a *ACPAgent) persistState() {
+	if a.stateFile == "" {
+		return
+	}
+
+	a.mu.Lock()
+	state := acpPersistedState{
+		Version:  acpPersistedStateVersion,
+		Protocol: a.protocol,
+		Sessions: make(map[string]string, len(a.sessions)),
+		Threads:  make(map[string]string, len(a.threads)),
+		History:  make(map[string][]acpHistoryMessage, len(a.history)),
+		Updated:  time.Now().UTC().Format(time.RFC3339),
+	}
+	for k, v := range a.sessions {
+		state.Sessions[k] = v
+	}
+	for k, v := range a.threads {
+		state.Threads[k] = v
+	}
+	for conversationID, messages := range a.history {
+		if len(messages) == 0 {
+			continue
+		}
+		copied := make([]acpHistoryMessage, len(messages))
+		copy(copied, messages)
+		state.History[conversationID] = copied
+	}
+	stateFile := a.stateFile
+	a.mu.Unlock()
+
+	dir := filepath.Dir(stateFile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		log.Printf("[acp] failed to create state dir %s: %v", dir, err)
+		return
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		log.Printf("[acp] failed to marshal state: %v", err)
+		return
+	}
+
+	tmpFile := stateFile + ".tmp"
+	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
+		log.Printf("[acp] failed to write state tmp file %s: %v", tmpFile, err)
+		return
+	}
+	if err := os.Rename(tmpFile, stateFile); err != nil {
+		log.Printf("[acp] failed to move state file into place %s: %v", stateFile, err)
+		_ = os.Remove(tmpFile)
+		return
 	}
 }
 
@@ -730,6 +1122,8 @@ func (a *ACPAgent) readLoop() {
 			a.handleCodexItemStarted(msg.Params)
 		case "turn/started", "turn/completed":
 			a.handleCodexTurnEvent(msg.Method, msg.Params)
+		case "error":
+			a.handleCodexError(msg.Params)
 		case "codex/event/agent_message", "codex/event/task_complete",
 			"codex/event/item_completed", "codex/event/token_count",
 			"item/completed", "thread/tokenUsage/updated",
@@ -886,16 +1280,53 @@ func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
 	}
 }
 
+func (a *ACPAgent) handleCodexError(params json.RawMessage) {
+	text := formatCodexError(params)
+	if text == "" {
+		text = "Codex 返回未知错误"
+	}
+	a.dispatchToTurnCh("", &codexTurnEvent{Kind: "error", Text: text})
+}
+
+func formatCodexError(params json.RawMessage) string {
+	var p struct {
+		Error struct {
+			Message        string `json:"message"`
+			CodexErrorInfo string `json:"codexErrorInfo"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return ""
+	}
+
+	message := strings.TrimSpace(p.Error.Message)
+	info := strings.TrimSpace(p.Error.CodexErrorInfo)
+	if info == "usageLimitExceeded" && message != "" {
+		return "Codex 账号额度已用完：" + message + " (" + info + ")"
+	}
+	if info != "" && message != "" {
+		return message + " (" + info + ")"
+	}
+	if message != "" {
+		return message
+	}
+	return info
+}
+
 // dispatchToTurnCh sends an event to the turn channel for a thread.
 func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) {
 	a.notifyMu.Lock()
 	ch, ok := a.turnCh[threadID]
 	if !ok {
-		// Fallback: try any active turn channel
-		for _, c := range a.turnCh {
-			ch = c
-			ok = true
-			break
+		// 只有一个活跃 turn 时才 fallback，避免多会话事件串到错误用户。
+		if len(a.turnCh) == 1 {
+			for _, c := range a.turnCh {
+				ch = c
+				ok = true
+				break
+			}
+		} else if len(a.turnCh) > 1 {
+			log.Printf("[acp] dropping turn event without routable thread (thread=%q, activeTurns=%d, kind=%s)", threadID, len(a.turnCh), evt.Kind)
 		}
 	}
 	a.notifyMu.Unlock()

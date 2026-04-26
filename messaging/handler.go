@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/google/uuid"
 )
@@ -20,6 +23,19 @@ type AgentFactory func(ctx context.Context, name string) agent.Agent
 
 // SaveDefaultFunc persists the default agent name to config file.
 type SaveDefaultFunc func(name string) error
+
+// SwitchCommandRunner 用于执行外部 codex 切换脚本。
+type SwitchCommandRunner func(ctx context.Context, scriptPath string, args ...string) (string, error)
+
+// ProgressChatAgent 支持在聊天过程中输出增量内容。
+type ProgressChatAgent interface {
+	ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error)
+}
+
+// StoppableAgent 支持显式停止后台进程，账号切换后必须释放旧 Codex 进程。
+type StoppableAgent interface {
+	Stop()
+}
 
 // AgentMeta holds static config info about an agent (for /status display).
 type AgentMeta struct {
@@ -31,26 +47,44 @@ type AgentMeta struct {
 
 // Handler processes incoming WeChat messages and dispatches replies.
 type Handler struct {
-	mu            sync.RWMutex
-	defaultName   string
-	agents        map[string]agent.Agent // name -> running agent
-	agentMetas    []AgentMeta            // all configured agents (for /status)
-	agentWorkDirs map[string]string      // agent name -> configured/runtime cwd
-	customAliases map[string]string      // custom alias -> agent name (from config)
-	factory       AgentFactory
-	saveDefault   SaveDefaultFunc
-	contextTokens sync.Map   // map[userID]contextToken
-	saveDir       string     // directory to save images/files to
-	seenMsgs      sync.Map   // map[int64]time.Time — dedup by message_id
+	mu                   sync.RWMutex
+	defaultName          string
+	agents               map[string]agent.Agent // name -> running agent
+	agentMetas           []AgentMeta            // all configured agents (for /status)
+	agentWorkDirs        map[string]string      // agent name -> configured/runtime cwd
+	customAliases        map[string]string      // custom alias -> agent name (from config)
+	factory              AgentFactory
+	saveDefault          SaveDefaultFunc
+	contextTokens        sync.Map // map[userID]contextToken
+	saveDir              string   // directory to save images/files to
+	seenMsgs             sync.Map // map[int64]time.Time — dedup by message_id
+	switchScript         string
+	switchRunner         SwitchCommandRunner
+	progressConfig       config.ProgressConfig
+	agentProgressConfigs map[string]config.ProgressConfig
+	seenTextMsgs         sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
 }
+
+const (
+	switchScriptEnvVar      = "WECLAW_CODEX_SWITCH_SCRIPT"
+	switchScriptDefaultPath = "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh"
+	switchCommandTimeout    = 30 * time.Second
+	switchCommandUsage      = "用法: /sw ls | /sw current | /sw <编号|ID>"
+)
+
+var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
 
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 	return &Handler{
-		agents:        make(map[string]agent.Agent),
-		agentWorkDirs: make(map[string]string),
-		factory:       factory,
-		saveDefault:   saveDefault,
+		agents:               make(map[string]agent.Agent),
+		agentWorkDirs:        make(map[string]string),
+		factory:              factory,
+		saveDefault:          saveDefault,
+		switchScript:         resolveSwitchScriptPath(),
+		switchRunner:         defaultSwitchCommandRunner,
+		progressConfig:       config.DefaultProgressConfig(),
+		agentProgressConfigs: make(map[string]config.ProgressConfig),
 	}
 }
 
@@ -59,15 +93,57 @@ func (h *Handler) SetSaveDir(dir string) {
 	h.saveDir = dir
 }
 
-// cleanSeenMsgs removes entries older than 5 minutes from the dedup cache.
-func (h *Handler) cleanSeenMsgs() {
-	cutoff := time.Now().Add(-5 * time.Minute)
+// cleanSeenMsgs 清理超过 TTL 的消息去重缓存。
+func (h *Handler) cleanSeenMsgs(ttl time.Duration) {
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	cutoff := time.Now().Add(-ttl)
 	h.seenMsgs.Range(func(key, value any) bool {
 		if t, ok := value.(time.Time); ok && t.Before(cutoff) {
 			h.seenMsgs.Delete(key)
 		}
 		return true
 	})
+	h.seenTextMsgs.Range(func(key, value any) bool {
+		if t, ok := value.(time.Time); ok && t.Before(cutoff) {
+			h.seenTextMsgs.Delete(key)
+		}
+		return true
+	})
+}
+
+func (h *Handler) duplicateTTL() time.Duration {
+	cfg := h.resolveProgressConfig("")
+	return durationSeconds(cfg.DuplicateTTLSeconds, 5*time.Minute)
+}
+
+func (h *Handler) isDuplicateTextMessage(msg ilink.WeixinMessage, text string) bool {
+	key := buildTextDedupKey(msg.FromUserID, msg.ContextToken, text)
+	if key == "" {
+		return false
+	}
+	now := time.Now()
+	if seenAt, loaded := h.seenTextMsgs.LoadOrStore(key, now); loaded {
+		if t, ok := seenAt.(time.Time); ok && now.Sub(t) <= h.duplicateTTL() {
+			return true
+		}
+		h.seenTextMsgs.Store(key, now)
+	}
+	go h.cleanSeenMsgs(h.duplicateTTL())
+	return false
+}
+
+func buildTextDedupKey(userID string, contextToken string, text string) string {
+	normalized := strings.Join(strings.Fields(text), " ")
+	if userID == "" || normalized == "" {
+		return ""
+	}
+	return userID + "\x00" + contextToken + "\x00" + normalized
+}
+
+func duplicateTaskReply() string {
+	return "这条任务已经收到，正在处理中。\n\n完成后我会发送完整结果。"
 }
 
 // SetCustomAliases sets custom alias mappings from config.
@@ -93,6 +169,40 @@ func (h *Handler) SetAgentWorkDirs(workDirs map[string]string) {
 	for name, dir := range workDirs {
 		h.agentWorkDirs[name] = dir
 	}
+}
+
+// SetProgressConfig 设置全局微信进度反馈配置。
+func (h *Handler) SetProgressConfig(cfg config.ProgressConfig) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if cfg.Mode == "" {
+		cfg = config.DefaultProgressConfig()
+	}
+	h.progressConfig = cfg
+}
+
+// SetAgentProgressConfigs 设置每个 Agent 的进度反馈覆盖配置。
+func (h *Handler) SetAgentProgressConfigs(configs map[string]config.ProgressConfig) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.agentProgressConfigs = make(map[string]config.ProgressConfig, len(configs))
+	for name, cfg := range configs {
+		h.agentProgressConfigs[name] = cfg
+	}
+}
+
+func (h *Handler) resolveProgressConfig(agentName string) config.ProgressConfig {
+	h.mu.RLock()
+	global := h.progressConfig
+	override, ok := h.agentProgressConfigs[agentName]
+	h.mu.RUnlock()
+	if global.Mode == "" {
+		global = config.DefaultProgressConfig()
+	}
+	if !ok {
+		return global
+	}
+	return config.NormalizeProgressConfig(global, &override)
 }
 
 // SetDefaultAgent sets the default agent (already started).
@@ -274,7 +384,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 			return
 		}
 		// Clean up old entries periodically (fire-and-forget)
-		go h.cleanSeenMsgs()
+		go h.cleanSeenMsgs(h.duplicateTTL())
 	}
 
 	// Extract text from item list (text message or voice transcription)
@@ -292,6 +402,10 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 			return
 		}
 		log.Printf("[handler] received non-text message from %s, skipping", msg.FromUserID)
+		return
+	}
+	if msg.MessageID == 0 && h.isDuplicateTextMessage(msg, text) {
+		_ = SendTextReply(ctx, client, msg.FromUserID, duplicateTaskReply(), msg.ContextToken, NewClientID())
 		return
 	}
 
@@ -339,6 +453,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 		return
 	} else if trimmed == "/new" || trimmed == "/clear" {
 		reply := h.resetDefaultSession(ctx, msg.FromUserID)
+		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+		}
+		return
+	} else if isSwitchCommand(trimmed) {
+		reply := h.handleSwitchCommand(ctx, trimmed)
 		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
@@ -392,13 +512,6 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 		return
 	}
 
-	// Send typing indicator
-	go func() {
-		if typingErr := SendTypingState(ctx, client, msg.FromUserID, msg.ContextToken); typingErr != nil {
-			log.Printf("[handler] failed to send typing state: %v", typingErr)
-		}
-	}()
-
 	if len(knownNames) == 1 {
 		// Single agent
 		h.sendToNamedAgent(ctx, client, msg, knownNames[0], message, clientID)
@@ -410,12 +523,6 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, text, clientID string) {
-	go func() {
-		if typingErr := SendTypingState(ctx, client, msg.FromUserID, msg.ContextToken); typingErr != nil {
-			log.Printf("[handler] failed to send typing state: %v", typingErr)
-		}
-	}()
-
 	h.mu.RLock()
 	defaultName := h.defaultName
 	h.mu.RUnlock()
@@ -423,10 +530,16 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 	ag := h.getDefaultAgent()
 	var reply string
 	if ag != nil {
+		progressCfg := h.resolveProgressConfig(defaultName)
+		onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "", text, progressCfg)
+		defer stopProgress()
+
 		var err error
-		reply, err = h.chatWithAgent(ctx, ag, msg.FromUserID, text)
+		reply, err = h.chatWithAgentWithProgress(ctx, ag, msg.FromUserID, text, onProgress)
 		if err != nil {
-			reply = fmt.Sprintf("Error: %v", err)
+			reply = renderFinalFailure("", err)
+		} else {
+			reply = renderFinalSuccess("", reply)
 		}
 	} else {
 		log.Printf("[handler] agent not ready, using echo mode for %s", msg.FromUserID)
@@ -446,9 +559,15 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 		return
 	}
 
-	reply, err := h.chatWithAgent(ctx, ag, msg.FromUserID, message)
+	progressCfg := h.resolveProgressConfig(name)
+	onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "", message, progressCfg)
+	defer stopProgress()
+
+	reply, err := h.chatWithAgentWithProgress(ctx, ag, msg.FromUserID, message, onProgress)
 	if err != nil {
-		reply = fmt.Sprintf("Error: %v", err)
+		reply = renderFinalFailure("["+name+"] ", err)
+	} else {
+		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
 	h.sendReplyWithMedia(ctx, client, msg, name, reply, clientID)
 }
@@ -470,21 +589,24 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
 			}
-			reply, err := h.chatWithAgent(ctx, ag, msg.FromUserID, message)
+			progressCfg := h.resolveProgressConfig(n)
+			onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "["+n+"] ", message, progressCfg)
+			defer stopProgress()
+
+			reply, err := h.chatWithAgentWithProgress(ctx, ag, msg.FromUserID, message, onProgress)
 			if err != nil {
-				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
+				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", err)}
 				return
 			}
-			ch <- result{name: n, reply: reply}
+			ch <- result{name: n, reply: renderFinalSuccess("["+n+"] ", reply)}
 		}(name)
 	}
 
 	// Send replies as they arrive
 	for range names {
 		r := <-ch
-		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
 		clientID := NewClientID()
-		h.sendReplyWithMedia(ctx, client, msg, r.name, reply, clientID)
+		h.sendReplyWithMedia(ctx, client, msg, r.name, r.reply, clientID)
 	}
 }
 
@@ -539,11 +661,25 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 
 // chatWithAgent sends a message to an agent and returns the reply, with logging.
 func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, message string) (string, error) {
+	return h.chatWithAgentWithProgress(ctx, ag, userID, message, nil)
+}
+
+// chatWithAgentWithProgress sends a message and optionally forwards incremental progress text.
+func (h *Handler) chatWithAgentWithProgress(ctx context.Context, ag agent.Agent, userID, message string, onProgress func(delta string)) (string, error) {
 	info := ag.Info()
 	log.Printf("[handler] dispatching to agent (%s) for %s", info, userID)
 
 	start := time.Now()
-	reply, err := ag.Chat(ctx, userID, message)
+	var (
+		reply string
+		err   error
+	)
+
+	if streamAgent, ok := ag.(ProgressChatAgent); ok {
+		reply, err = streamAgent.ChatWithProgress(ctx, userID, message, onProgress)
+	} else {
+		reply, err = ag.Chat(ctx, userID, message)
+	}
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -553,6 +689,16 @@ func (h *Handler) chatWithAgent(ctx context.Context, ag agent.Agent, userID, mes
 
 	log.Printf("[handler] agent replied (%s, elapsed=%s): %q", info, elapsed, truncate(reply, 100))
 	return reply, nil
+}
+
+func (h *Handler) sendProgressMessage(ctx context.Context, client *ilink.Client, userID, contextToken, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	clientID := NewClientID()
+	if err := SendTextReply(ctx, client, userID, text, contextToken, clientID); err != nil {
+		log.Printf("[handler] failed to send progress message to %s: %v", userID, err)
+	}
 }
 
 // switchDefault switches the default agent. Starts it on demand if needed.
@@ -689,11 +835,195 @@ func buildHelpText() string {
 @agent msg or /agent msg - Send to a specific agent
 @a @b msg - Broadcast to multiple agents
 /new or /clear - Start a new session
+/sw ls - 列出可切换的 Codex 账户
+/sw <编号|ID> - 切换到指定 Codex 账户
+/sw help - 显示 Codex 账户切换帮助
 /cwd /path - Switch workspace directory
 /info - Show current agent info
 /help - Show this help message
 
 Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
+}
+
+func isSwitchCommand(trimmed string) bool {
+	fields := strings.Fields(trimmed)
+	return len(fields) > 0 && fields[0] == "/sw"
+}
+
+// parseSwitchCommand 将微信命令转换为 codex-switch 脚本参数。
+func parseSwitchCommand(trimmed string) ([]string, string) {
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 || fields[0] != "/sw" {
+		return nil, switchCommandUsage
+	}
+	if len(fields) == 1 {
+		return nil, switchCommandUsage
+	}
+
+	cmd := fields[1]
+	switch cmd {
+	case "ls", "list":
+		if len(fields) != 2 {
+			return nil, switchCommandUsage
+		}
+		return []string{"list"}, ""
+	case "current", "help", "config":
+		if len(fields) != 2 {
+			return nil, switchCommandUsage
+		}
+		return []string{cmd}, ""
+	case "show", "switch":
+		if len(fields) != 3 {
+			return nil, switchCommandUsage
+		}
+		return []string{cmd, fields[2]}, ""
+	default:
+		// /sw 0 或 /sw provider-id 走快捷切换模式
+		if len(fields) != 2 {
+			return nil, switchCommandUsage
+		}
+		return []string{"switch", cmd}, ""
+	}
+}
+
+func (h *Handler) handleSwitchCommand(ctx context.Context, trimmed string) string {
+	args, usage := parseSwitchCommand(trimmed)
+	if usage != "" {
+		return usage
+	}
+	if len(args) == 1 && args[0] == "help" {
+		return buildSwitchHelpText()
+	}
+
+	runner := h.switchRunner
+	if runner == nil {
+		runner = defaultSwitchCommandRunner
+	}
+
+	script := h.switchScript
+	if strings.TrimSpace(script) == "" {
+		script = resolveSwitchScriptPath()
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, switchCommandTimeout)
+	defer cancel()
+
+	output, err := runner(runCtx, script, args...)
+	cleanOutput := strings.TrimSpace(stripANSI(output))
+	if err != nil {
+		if cleanOutput == "" {
+			return fmt.Sprintf("切换失败: %v", err)
+		}
+		return fmt.Sprintf("切换失败:\n%s", cleanOutput)
+	}
+	if cleanOutput == "" {
+		cleanOutput = "命令执行完成。"
+	}
+	if isCodexSwitchAction(args) {
+		return cleanOutput + "\n\n" + h.refreshCodexAgentsAfterSwitch(ctx)
+	}
+	return cleanOutput
+}
+
+func isCodexSwitchAction(args []string) bool {
+	return len(args) > 0 && args[0] == "switch"
+}
+
+func (h *Handler) refreshCodexAgentsAfterSwitch(ctx context.Context) string {
+	stoppedNames := h.stopRunningCodexAgents()
+	if len(stoppedNames) == 0 {
+		return "Codex 账户已切换。当前没有运行中的 Codex Agent，下一次 Codex 请求会使用新账户。"
+	}
+
+	if defaultName, ok := h.defaultAgentNameForRestart(stoppedNames); ok {
+		if _, err := h.getAgent(ctx, defaultName); err != nil {
+			return fmt.Sprintf("Codex 账户已切换，但重启默认 Codex Agent 失败：%v", err)
+		}
+		return "已刷新 WeClaw 中的 Codex Agent，下一次请求会使用新账户。"
+	}
+	return "已停止旧 Codex Agent，下一次 Codex 请求会使用新账户。"
+}
+
+func (h *Handler) stopRunningCodexAgents() []string {
+	type runningAgent struct {
+		name string
+		ag   agent.Agent
+	}
+
+	h.mu.Lock()
+	var targets []runningAgent
+	for name, ag := range h.agents {
+		if !isCodexAgent(name, ag.Info()) {
+			continue
+		}
+		targets = append(targets, runningAgent{name: name, ag: ag})
+		delete(h.agents, name)
+	}
+	h.mu.Unlock()
+
+	names := make([]string, 0, len(targets))
+	for _, target := range targets {
+		names = append(names, target.name)
+		if stopper, ok := target.ag.(StoppableAgent); ok {
+			stopper.Stop()
+		}
+	}
+	return names
+}
+
+func (h *Handler) defaultAgentNameForRestart(stoppedNames []string) (string, bool) {
+	h.mu.RLock()
+	defaultName := h.defaultName
+	hasFactory := h.factory != nil
+	h.mu.RUnlock()
+	if defaultName == "" || !hasFactory {
+		return "", false
+	}
+	for _, name := range stoppedNames {
+		if name == defaultName {
+			return defaultName, true
+		}
+	}
+	return "", false
+}
+
+func isCodexAgent(name string, info agent.AgentInfo) bool {
+	if strings.EqualFold(name, "codex") || strings.EqualFold(info.Name, "codex") {
+		return true
+	}
+	command := strings.ToLower(filepath.Base(info.Command))
+	return strings.Contains(command, "codex")
+}
+
+func buildSwitchHelpText() string {
+	return `Codex 账户切换命令:
+/sw ls - 列出可切换账户
+/sw current - 显示当前账户
+/sw <编号|ID> - 切换到指定账户
+/sw show <编号|ID> - 查看账户详情
+/sw config - 查看当前 Codex 配置
+/sw help - 显示本帮助`
+}
+
+func resolveSwitchScriptPath() string {
+	if path := strings.TrimSpace(os.Getenv(switchScriptEnvVar)); path != "" {
+		return path
+	}
+	if _, err := os.Stat(switchScriptDefaultPath); err == nil {
+		return switchScriptDefaultPath
+	}
+	return "codex-switch.sh"
+}
+
+func defaultSwitchCommandRunner(ctx context.Context, scriptPath string, args ...string) (string, error) {
+	cmdArgs := append([]string{scriptPath}, args...)
+	cmd := exec.CommandContext(ctx, "/bin/bash", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func stripANSI(text string) string {
+	return ansiEscapePattern.ReplaceAllString(text, "")
 }
 
 func extractText(msg ilink.WeixinMessage) string {

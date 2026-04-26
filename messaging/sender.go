@@ -17,6 +17,16 @@ func NewClientID() string {
 // SendTypingState sends a typing indicator to a user via the iLink sendtyping API.
 // It first fetches a typing_ticket via getconfig, then sends the typing status.
 func SendTypingState(ctx context.Context, client *ilink.Client, userID, contextToken string) error {
+	return SendTypingStatus(ctx, client, userID, contextToken, ilink.TypingStatusTyping)
+}
+
+// SendTypingCancel sends a typing cancel signal to clear typing status on WeChat.
+func SendTypingCancel(ctx context.Context, client *ilink.Client, userID, contextToken string) error {
+	return SendTypingStatus(ctx, client, userID, contextToken, ilink.TypingStatusCancel)
+}
+
+// SendTypingStatus sends typing status (typing/cancel) to a user via iLink sendtyping API.
+func SendTypingStatus(ctx context.Context, client *ilink.Client, userID, contextToken string, status int) error {
 	// Get typing ticket
 	configResp, err := client.GetConfig(ctx, userID, contextToken)
 	if err != nil {
@@ -27,11 +37,11 @@ func SendTypingState(ctx context.Context, client *ilink.Client, userID, contextT
 	}
 
 	// Send typing
-	if err := client.SendTyping(ctx, userID, configResp.TypingTicket, ilink.TypingStatusTyping); err != nil {
+	if err := client.SendTyping(ctx, userID, configResp.TypingTicket, status); err != nil {
 		return fmt.Errorf("send typing: %w", err)
 	}
 
-	log.Printf("[sender] sent typing indicator to %s", userID)
+	log.Printf("[sender] sent typing status=%d to %s", status, userID)
 	return nil
 }
 
