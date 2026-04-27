@@ -321,6 +321,20 @@ func TestParseCommand_CustomAlias(t *testing.T) {
 	}
 }
 
+func TestParseCommand_AbsolutePathIsPlainText(t *testing.T) {
+	h := newTestHandler()
+	text := "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh看下具体实现"
+
+	names, msg := h.parseCommand(text)
+
+	if len(names) != 0 {
+		t.Fatalf("absolute path should not parse as agent command, names=%v", names)
+	}
+	if msg != text {
+		t.Fatalf("message=%q, want original text", msg)
+	}
+}
+
 func TestResolveAlias(t *testing.T) {
 	h := newTestHandler()
 	tests := map[string]string{
@@ -771,6 +785,32 @@ func TestDuplicateMessageIDStillDeduped(t *testing.T) {
 
 	if ag.chatCalls != 1 {
 		t.Fatalf("same MessageID should only start agent once, chatCalls=%d", ag.chatCalls)
+	}
+}
+
+func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeAgent{reply: "ok"}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	text := "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh看下具体实现"
+
+	h.HandleMessage(context.Background(), client, newTextMessage(100, text))
+
+	if ag.chatCalls != 1 {
+		t.Fatalf("absolute path text should call default agent once, chatCalls=%d", ag.chatCalls)
+	}
+	if ag.lastMessage != text {
+		t.Fatalf("agent message=%q, want original text", ag.lastMessage)
+	}
+	if containsText(calls.texts(), "Usage: specify one agent") {
+		t.Fatalf("absolute path text should not reply usage, messages=%#v", calls.texts())
 	}
 }
 

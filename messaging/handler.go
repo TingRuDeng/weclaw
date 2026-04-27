@@ -323,43 +323,28 @@ func (h *Handler) parseCommand(text string) ([]string, string) {
 		return nil, text
 	}
 
-	// Parse consecutive @name or /name tokens from the start
-	var names []string
-	rest := text
-	for {
-		rest = strings.TrimSpace(rest)
-		if !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, "@") {
-			break
-		}
-
-		// Strip prefix
-		after := rest[1:]
-		idx := strings.IndexAny(after, " /@")
-		var token string
-		if idx < 0 {
-			// Rest is just the name, no message
-			token = after
-			rest = ""
-		} else if after[idx] == '/' || after[idx] == '@' {
-			// Next token is another @name or /name
-			token = after[:idx]
-			rest = after[idx:]
-		} else {
-			// Space — name ends here
-			token = after[:idx]
-			rest = strings.TrimSpace(after[idx+1:])
-		}
-
-		if token != "" {
-			names = append(names, h.resolveAlias(token))
-		}
-
-		if rest == "" {
-			break
-		}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return nil, text
 	}
 
-	// Deduplicate names preserving order
+	var names []string
+	messageStart := len(text)
+	for _, field := range fields {
+		if !strings.HasPrefix(field, "/") && !strings.HasPrefix(field, "@") {
+			messageStart = strings.Index(text, field)
+			break
+		}
+
+		token, ok := h.parseAgentToken(field)
+		if !ok {
+			return nil, text
+		}
+		names = append(names, token)
+		messageStart = len(text)
+	}
+
+	rest := strings.TrimSpace(text[messageStart:])
 	seen := make(map[string]bool)
 	unique := names[:0]
 	for _, n := range names {
@@ -370,6 +355,18 @@ func (h *Handler) parseCommand(text string) ([]string, string) {
 	}
 
 	return unique, rest
+}
+
+// parseAgentToken 只接受独立的 /agent 或 @agent token，避免把绝对路径拆成多个 Agent。
+func (h *Handler) parseAgentToken(field string) (string, bool) {
+	if len(field) <= 1 {
+		return "", false
+	}
+	token := field[1:]
+	if strings.ContainsAny(token, "/@") {
+		return "", false
+	}
+	return h.resolveAlias(token), true
 }
 
 // HandleMessage processes a single incoming message.
