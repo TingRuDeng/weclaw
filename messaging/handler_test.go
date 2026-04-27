@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -23,16 +24,18 @@ func newTestHandler() *Handler {
 }
 
 type fakeAgent struct {
-	reply      string
-	err        error
-	chatCalled bool
-	chatCalls  int
-	info       agent.AgentInfo
+	reply       string
+	err         error
+	chatCalled  bool
+	chatCalls   int
+	lastMessage string
+	info        agent.AgentInfo
 }
 
-func (f *fakeAgent) Chat(_ context.Context, _ string, _ string) (string, error) {
+func (f *fakeAgent) Chat(_ context.Context, _ string, message string) (string, error) {
 	f.chatCalled = true
 	f.chatCalls++
+	f.lastMessage = message
 	return f.reply, f.err
 }
 
@@ -166,6 +169,33 @@ func TestSendTextReplyPreservesLineBreaks(t *testing.T) {
 	}
 }
 
+func TestSendTextReplyChunksSplitsLongTextAndKeepsOrder(t *testing.T) {
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	text := strings.Join([]string{
+		strings.Repeat("甲", 12),
+		strings.Repeat("乙", 12),
+		strings.Repeat("丙", 12),
+	}, "\n")
+
+	if err := SendTextReplyChunks(context.Background(), client, "user-1", text, "ctx-1", "client-1", 15); err != nil {
+		t.Fatalf("SendTextReplyChunks error: %v", err)
+	}
+
+	texts := calls.texts()
+	if len(texts) != 3 {
+		t.Fatalf("sent texts=%#v, want three chunks", texts)
+	}
+	if strings.Join(texts, "\n") != text {
+		t.Fatalf("joined chunks=%q, want original text", strings.Join(texts, "\n"))
+	}
+	for _, chunk := range texts {
+		if len([]rune(chunk)) > 15 {
+			t.Fatalf("chunk is too long: %q", chunk)
+		}
+	}
+}
+
 func newTextMessage(id int64, text string) ilink.WeixinMessage {
 	return ilink.WeixinMessage{
 		MessageID:    id,
@@ -177,6 +207,27 @@ func newTextMessage(id int64, text string) ilink.WeixinMessage {
 		ItemList: []ilink.MessageItem{{
 			Type:     ilink.ItemTypeText,
 			TextItem: &ilink.TextItem{Text: text},
+		}},
+	}
+}
+
+func newFileMessage(id int64, fileName string) ilink.WeixinMessage {
+	return ilink.WeixinMessage{
+		MessageID:    id,
+		FromUserID:   "user-1",
+		ToUserID:     "bot-1",
+		MessageType:  ilink.MessageTypeUser,
+		MessageState: ilink.MessageStateFinish,
+		ContextToken: "ctx-1",
+		ItemList: []ilink.MessageItem{{
+			Type: ilink.ItemTypeFile,
+			FileItem: &ilink.FileItem{
+				FileName: fileName,
+				Media: &ilink.MediaInfo{
+					EncryptQueryParam: "download-param",
+					AESKey:            "aes-key",
+				},
+			},
 		}},
 	}
 }
@@ -444,6 +495,78 @@ func TestHandleSwitchCommand_RestartsRunningCodexAgentAfterSwitch(t *testing.T) 
 	}
 }
 
+func TestHandleSwitchCommand_ReloadRefreshesCodexAgentWithoutRunningScript(t *testing.T) {
+	oldCodex := &fakeStoppableAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	newCodex := &fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}
+	h := newTestHandler()
+	h.defaultName = "codex"
+	h.agents["codex"] = oldCodex
+	h.factory = func(_ context.Context, name string) agent.Agent {
+		if name != "codex" {
+			t.Fatalf("unexpected factory name: %s", name)
+		}
+		return newCodex
+	}
+	h.switchRunner = func(_ context.Context, _ string, args ...string) (string, error) {
+		t.Fatalf("/sw reload 不应该执行外部切换脚本，got args=%v", args)
+		return "", nil
+	}
+
+	reply := h.handleSwitchCommand(context.Background(), "/sw reload")
+
+	if !oldCodex.stopped {
+		t.Fatal("/sw reload 应该停止旧 Codex Agent 进程")
+	}
+	if h.agents["codex"] != newCodex {
+		t.Fatalf("/sw reload 后默认 Codex Agent 应该重建，got %#v", h.agents["codex"])
+	}
+	if !strings.Contains(reply, "当前本机登录状态") {
+		t.Fatalf("reply should mention local login state, got %q", reply)
+	}
+}
+
+func TestHandleProgressCommandShowsCurrentMode(t *testing.T) {
+	h := NewHandler(nil, nil)
+
+	reply := h.handleProgressCommand("/progress")
+
+	if !strings.Contains(reply, "当前进度模式：summary") {
+		t.Fatalf("reply=%q, want current summary mode", reply)
+	}
+}
+
+func TestHandleProgressCommandChangesMode(t *testing.T) {
+	h := NewHandler(nil, nil)
+
+	reply := h.handleProgressCommand("/progress stream")
+
+	if !strings.Contains(reply, "已切换进度模式：stream") {
+		t.Fatalf("reply=%q, want switched stream mode", reply)
+	}
+	if got := h.resolveProgressConfig("").Mode; got != progressModeStream {
+		t.Fatalf("progress mode=%q, want stream", got)
+	}
+}
+
+func TestHandleProgressCommandRejectsUnknownMode(t *testing.T) {
+	h := NewHandler(nil, nil)
+
+	reply := h.handleProgressCommand("/progress noisy")
+
+	if !strings.Contains(reply, "不支持的进度模式") {
+		t.Fatalf("reply=%q, want unsupported mode message", reply)
+	}
+	if got := h.resolveProgressConfig("").Mode; got != progressModeSummary {
+		t.Fatalf("progress mode=%q, want unchanged summary", got)
+	}
+}
+
 func TestChatWithAgentWithProgress_UsesProgressInterface(t *testing.T) {
 	h := newTestHandler()
 	ag := &fakeProgressAgent{
@@ -648,6 +771,95 @@ func TestDuplicateMessageIDStillDeduped(t *testing.T) {
 
 	if ag.chatCalls != 1 {
 		t.Fatalf("same MessageID should only start agent once, chatCalls=%d", ag.chatCalls)
+	}
+}
+
+func TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent(t *testing.T) {
+	h := NewHandler(nil, nil)
+	saveDir := t.TempDir()
+	h.SetSaveDir(saveDir)
+	ag := &fakeAgent{reply: "已分析"}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.cdnDownloader = func(_ context.Context, queryParam string, aesKey string) ([]byte, error) {
+		if queryParam != "download-param" || aesKey != "aes-key" {
+			t.Fatalf("download args=(%q,%q), want download-param/aes-key", queryParam, aesKey)
+		}
+		return []byte("文件内容"), nil
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+	client, _, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newFileMessage(10, "方案.txt"))
+
+	if ag.chatCalls != 1 {
+		t.Fatalf("file message should start agent once, chatCalls=%d", ag.chatCalls)
+	}
+	if !strings.Contains(ag.lastMessage, "用户发送了一个文件") {
+		t.Fatalf("agent message should describe incoming file, got %q", ag.lastMessage)
+	}
+	if !strings.Contains(ag.lastMessage, "方案.txt") {
+		t.Fatalf("agent message should include file name, got %q", ag.lastMessage)
+	}
+	if !strings.Contains(ag.lastMessage, saveDir) {
+		t.Fatalf("agent message should include saved local path, got %q", ag.lastMessage)
+	}
+	if _, err := os.Stat(extractSavedPathFromAgentMessage(ag.lastMessage)); err != nil {
+		t.Fatalf("saved file missing: %v", err)
+	}
+}
+
+func TestHandleMessage_FileMessageWithoutMediaDoesNotCallAgent(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeAgent{reply: "不应调用"}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	msg := newFileMessage(11, "broken.txt")
+	msg.ItemList[0].FileItem.Media = nil
+
+	h.HandleMessage(context.Background(), client, msg)
+
+	if ag.chatCalls != 0 {
+		t.Fatalf("file without media should not call agent, chatCalls=%d", ag.chatCalls)
+	}
+	if !containsText(calls.texts(), "文件保存失败") {
+		t.Fatalf("expected file failure reply, got %#v", calls.texts())
+	}
+}
+
+func extractSavedPathFromAgentMessage(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		if strings.HasPrefix(line, "本地路径：") {
+			return strings.TrimPrefix(line, "本地路径：")
+		}
+	}
+	return ""
+}
+
+func TestSendReplyWithMediaUsesChunksForLongFinalText(t *testing.T) {
+	h := NewHandler(nil, nil)
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	msg := newTextMessage(1, "hello")
+	reply := strings.Join([]string{
+		strings.Repeat("甲", 12),
+		strings.Repeat("乙", 12),
+		strings.Repeat("丙", 12),
+	}, "\n")
+
+	h.sendReplyWithMedia(ctxWithChunkLimit(context.Background(), 15), client, msg, "codex", reply, "client-1")
+
+	texts := calls.texts()
+	if len(texts) != 3 {
+		t.Fatalf("sent texts=%#v, want three chunks", texts)
+	}
+	if strings.Join(texts, "\n") != reply {
+		t.Fatalf("joined chunks=%q, want original reply", strings.Join(texts, "\n"))
 	}
 }
 

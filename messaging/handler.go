@@ -27,6 +27,9 @@ type SaveDefaultFunc func(name string) error
 // SwitchCommandRunner 用于执行外部 codex 切换脚本。
 type SwitchCommandRunner func(ctx context.Context, scriptPath string, args ...string) (string, error)
 
+// CDNDownloader 用于下载微信 CDN 中的入站文件，便于测试注入。
+type CDNDownloader func(ctx context.Context, encryptQueryParam string, aesKey string) ([]byte, error)
+
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {
 	ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error)
@@ -60,6 +63,7 @@ type Handler struct {
 	seenMsgs             sync.Map // map[int64]time.Time — dedup by message_id
 	switchScript         string
 	switchRunner         SwitchCommandRunner
+	cdnDownloader        CDNDownloader
 	progressConfig       config.ProgressConfig
 	agentProgressConfigs map[string]config.ProgressConfig
 	seenTextMsgs         sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
@@ -69,7 +73,7 @@ const (
 	switchScriptEnvVar      = "WECLAW_CODEX_SWITCH_SCRIPT"
 	switchScriptDefaultPath = "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh"
 	switchCommandTimeout    = 30 * time.Second
-	switchCommandUsage      = "用法: /sw ls | /sw current | /sw <编号|ID>"
+	switchCommandUsage      = "用法: /sw ls | /sw current | /sw reload | /sw <编号|ID>"
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
@@ -83,6 +87,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		saveDefault:          saveDefault,
 		switchScript:         resolveSwitchScriptPath(),
 		switchRunner:         defaultSwitchCommandRunner,
+		cdnDownloader:        DownloadFileFromCDN,
 		progressConfig:       config.DefaultProgressConfig(),
 		agentProgressConfigs: make(map[string]config.ProgressConfig),
 	}
@@ -395,6 +400,13 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 			log.Printf("[handler] voice transcription from %s: %q", msg.FromUserID, truncate(text, 80))
 		}
 	}
+	if file := extractFile(msg); file != nil {
+		fileText, ok := h.handleFileInput(ctx, client, msg, file, text)
+		if !ok {
+			return
+		}
+		text = fileText
+	}
 	if text == "" {
 		// Check for image message
 		if img := extractImage(msg); img != nil && h.saveDir != "" {
@@ -459,6 +471,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 		return
 	} else if isSwitchCommand(trimmed) {
 		reply := h.handleSwitchCommand(ctx, trimmed)
+		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+		}
+		return
+	} else if isProgressCommand(trimmed) {
+		reply := h.handleProgressCommand(trimmed)
 		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
@@ -634,7 +652,7 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, client *ilink.Client, 
 
 	reply = rewriteReplyWithAttachmentResults(reply, sentPaths, failedPaths)
 
-	if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+	if err := SendTextReplyChunks(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID, textReplyChunkLimit(ctx)); err != nil {
 		log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 	}
 
@@ -838,6 +856,7 @@ func buildHelpText() string {
 /sw ls - 列出可切换的 Codex 账户
 /sw <编号|ID> - 切换到指定 Codex 账户
 /sw help - 显示 Codex 账户切换帮助
+/progress - 查看或切换进度模式
 /cwd /path - Switch workspace directory
 /info - Show current agent info
 /help - Show this help message
@@ -848,6 +867,40 @@ Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) 
 func isSwitchCommand(trimmed string) bool {
 	fields := strings.Fields(trimmed)
 	return len(fields) > 0 && fields[0] == "/sw"
+}
+
+func isProgressCommand(trimmed string) bool {
+	fields := strings.Fields(trimmed)
+	return len(fields) > 0 && fields[0] == "/progress"
+}
+
+func (h *Handler) handleProgressCommand(trimmed string) string {
+	fields := strings.Fields(trimmed)
+	if len(fields) == 1 {
+		return "当前进度模式：" + h.resolveProgressConfig("").Mode + "\n可用模式：off、typing、summary、verbose、stream、debug"
+	}
+	if len(fields) != 2 {
+		return "用法：/progress 或 /progress <off|typing|summary|verbose|stream|debug>"
+	}
+
+	mode := fields[1]
+	if !isSupportedProgressMode(mode) {
+		return "不支持的进度模式：" + mode + "\n可用模式：off、typing、summary、verbose、stream、debug"
+	}
+
+	cfg := h.resolveProgressConfig("")
+	cfg.Mode = mode
+	h.SetProgressConfig(cfg)
+	return "已切换进度模式：" + mode
+}
+
+func isSupportedProgressMode(mode string) bool {
+	switch mode {
+	case progressModeOff, progressModeTyping, progressModeSummary, progressModeVerbose, progressModeStream, progressModeDebug:
+		return true
+	default:
+		return false
+	}
 }
 
 // parseSwitchCommand 将微信命令转换为 codex-switch 脚本参数。
@@ -872,6 +925,11 @@ func parseSwitchCommand(trimmed string) ([]string, string) {
 			return nil, switchCommandUsage
 		}
 		return []string{cmd}, ""
+	case "reload", "refresh", "restart":
+		if len(fields) != 2 {
+			return nil, switchCommandUsage
+		}
+		return []string{"reload"}, ""
 	case "show", "switch":
 		if len(fields) != 3 {
 			return nil, switchCommandUsage
@@ -893,6 +951,9 @@ func (h *Handler) handleSwitchCommand(ctx context.Context, trimmed string) strin
 	}
 	if len(args) == 1 && args[0] == "help" {
 		return buildSwitchHelpText()
+	}
+	if isCodexReloadAction(args) {
+		return h.refreshCodexAgentsAfterSwitch(ctx)
 	}
 
 	runner := h.switchRunner
@@ -929,19 +990,24 @@ func isCodexSwitchAction(args []string) bool {
 	return len(args) > 0 && args[0] == "switch"
 }
 
+// isCodexReloadAction 识别只刷新 WeClaw 进程、不执行外部切号脚本的命令。
+func isCodexReloadAction(args []string) bool {
+	return len(args) == 1 && args[0] == "reload"
+}
+
 func (h *Handler) refreshCodexAgentsAfterSwitch(ctx context.Context) string {
 	stoppedNames := h.stopRunningCodexAgents()
 	if len(stoppedNames) == 0 {
-		return "Codex 账户已切换。当前没有运行中的 Codex Agent，下一次 Codex 请求会使用新账户。"
+		return "当前没有运行中的 Codex Agent，下一次 Codex 请求会使用当前本机登录状态。"
 	}
 
 	if defaultName, ok := h.defaultAgentNameForRestart(stoppedNames); ok {
 		if _, err := h.getAgent(ctx, defaultName); err != nil {
-			return fmt.Sprintf("Codex 账户已切换，但重启默认 Codex Agent 失败：%v", err)
+			return fmt.Sprintf("已停止旧 Codex Agent，但重启默认 Codex Agent 失败：%v", err)
 		}
-		return "已刷新 WeClaw 中的 Codex Agent，下一次请求会使用新账户。"
+		return "已刷新 WeClaw 中的 Codex Agent，下一次请求会使用当前本机登录状态。"
 	}
-	return "已停止旧 Codex Agent，下一次 Codex 请求会使用新账户。"
+	return "已停止旧 Codex Agent，下一次 Codex 请求会使用当前本机登录状态。"
 }
 
 func (h *Handler) stopRunningCodexAgents() []string {
@@ -1000,6 +1066,7 @@ func buildSwitchHelpText() string {
 /sw ls - 列出可切换账户
 /sw current - 显示当前账户
 /sw <编号|ID> - 切换到指定账户
+/sw reload - 手动刷新 WeClaw 中的 Codex Agent
 /sw show <编号|ID> - 查看账户详情
 /sw config - 查看当前 Codex 配置
 /sw help - 显示本帮助`
@@ -1044,6 +1111,15 @@ func extractImage(msg ilink.WeixinMessage) *ilink.ImageItem {
 	return nil
 }
 
+func extractFile(msg ilink.WeixinMessage) *ilink.FileItem {
+	for _, item := range msg.ItemList {
+		if item.Type == ilink.ItemTypeFile && item.FileItem != nil {
+			return item.FileItem
+		}
+	}
+	return nil
+}
+
 func extractVoiceText(msg ilink.WeixinMessage) string {
 	for _, item := range msg.ItemList {
 		if item.Type == ilink.ItemTypeVoice && item.VoiceItem != nil && item.VoiceItem.Text != "" {
@@ -1051,6 +1127,71 @@ func extractVoiceText(msg ilink.WeixinMessage) string {
 		}
 	}
 	return ""
+}
+
+func (h *Handler) handleFileInput(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, file *ilink.FileItem, text string) (string, bool) {
+	saved, err := h.saveIncomingFile(ctx, file)
+	if err != nil {
+		log.Printf("[handler] failed to save incoming file from %s: %v", msg.FromUserID, err)
+		reply := fmt.Sprintf("文件保存失败：%v", err)
+		_ = SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, NewClientID())
+		return "", false
+	}
+	log.Printf("[handler] saved incoming file from %s: %s", msg.FromUserID, saved.path)
+	return buildFileAgentMessage(text, saved), true
+}
+
+type savedIncomingFile struct {
+	name string
+	path string
+}
+
+func (h *Handler) saveIncomingFile(ctx context.Context, file *ilink.FileItem) (savedIncomingFile, error) {
+	if file == nil || file.Media == nil || file.Media.EncryptQueryParam == "" || file.Media.AESKey == "" {
+		return savedIncomingFile{}, fmt.Errorf("文件缺少下载信息")
+	}
+	downloader := h.cdnDownloader
+	if downloader == nil {
+		downloader = DownloadFileFromCDN
+	}
+	data, err := downloader(ctx, file.Media.EncryptQueryParam, file.Media.AESKey)
+	if err != nil {
+		return savedIncomingFile{}, err
+	}
+	fileName := safeIncomingFileName(file.FileName)
+	dir := h.incomingFileDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return savedIncomingFile{}, fmt.Errorf("创建保存目录失败：%w", err)
+	}
+	path := filepath.Join(dir, time.Now().Format("20060102-150405")+"-"+fileName)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return savedIncomingFile{}, fmt.Errorf("写入文件失败：%w", err)
+	}
+	return savedIncomingFile{name: fileName, path: path}, nil
+}
+
+func (h *Handler) incomingFileDir() string {
+	if strings.TrimSpace(h.saveDir) != "" {
+		return h.saveDir
+	}
+	return defaultAttachmentWorkspace()
+}
+
+func safeIncomingFileName(fileName string) string {
+	fileName = filepath.Base(strings.TrimSpace(fileName))
+	if fileName == "." || fileName == string(filepath.Separator) || fileName == "" {
+		return "wechat-file"
+	}
+	return fileName
+}
+
+func buildFileAgentMessage(userText string, file savedIncomingFile) string {
+	userText = strings.TrimSpace(userText)
+	fileInfo := "用户发送了一个文件，请查看并分析：\n文件名：" + file.name + "\n本地路径：" + file.path
+	if userText == "" {
+		return fileInfo
+	}
+	return userText + "\n\n" + fileInfo
 }
 
 func (h *Handler) handleImageSave(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, img *ilink.ImageItem) {

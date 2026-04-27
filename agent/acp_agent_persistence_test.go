@@ -244,6 +244,90 @@ func TestACPAgentCodexProgressCallbackReceivesDelta(t *testing.T) {
 	}
 }
 
+func TestACPAgentCodexAssemblerPrefersDeltaOverSnapshot(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	workspace := t.TempDir()
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       workspace,
+		StateFile: stateFile,
+	})
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{ItemID: "item-1", Text: "你好"}
+			ch <- &codexTurnEvent{ItemID: "item-1", Delta: "你好"}
+			ch <- &codexTurnEvent{ItemID: "item-1", Delta: "，世界"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if reply != "你好，世界" {
+		t.Fatalf("reply=%q, want=%q", reply, "你好，世界")
+	}
+}
+
+func TestACPAgentCodexAssemblerUsesSnapshotWhenNoDelta(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	workspace := t.TempDir()
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       workspace,
+		StateFile: stateFile,
+	})
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{ItemID: "item-1", Text: "完整 snapshot"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if reply != "完整 snapshot" {
+		t.Fatalf("reply=%q, want=%q", reply, "完整 snapshot")
+	}
+}
+
 func TestACPAgentCodexErrorNotificationReachesActiveTurn(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",
@@ -267,6 +351,95 @@ func TestACPAgentCodexErrorNotificationReachesActiveTurn(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected error event to be delivered to active turn")
+	}
+}
+
+func TestFormatCodexErrorHandlesDeactivatedWorkspace(t *testing.T) {
+	got := formatCodexError(json.RawMessage(`{"detail":{"code":"deactivated_workspace"}}`))
+
+	if !containsAll(got, "Codex 工作区不可用", "deactivated_workspace") {
+		t.Fatalf("formatCodexError=%q, want deactivated workspace detail", got)
+	}
+}
+
+func TestFormatCodexErrorHandlesRawMessage(t *testing.T) {
+	got := formatCodexError(json.RawMessage(`{"message":"HTTP error: 402 Payment Required","code":"deactivated_workspace"}`))
+
+	if !containsAll(got, "402 Payment Required", "deactivated_workspace") {
+		t.Fatalf("formatCodexError=%q, want raw message and code", got)
+	}
+}
+
+func TestHandleCodexErrorUsesStderrWhenPayloadUnknown(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	a.stderr = &acpStderrWriter{prefix: "[test]"}
+	_, _ = a.stderr.Write([]byte(`2026-04-27 ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 402 Payment Required: {"detail":{"code":"deactivated_workspace"}}`))
+
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexError(json.RawMessage(`{}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "error" {
+			t.Fatalf("event kind=%q, want error", evt.Kind)
+		}
+		if !containsAll(evt.Text, "Codex 工作区不可用", "deactivated_workspace") {
+			t.Fatalf("event text=%q, want stderr auth detail", evt.Text)
+		}
+	default:
+		t.Fatal("expected stderr-enriched error event")
+	}
+}
+
+func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	workspace := t.TempDir()
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       workspace,
+		StateFile: stateFile,
+	})
+	a.mu.Lock()
+	a.threads["user-1"] = "old-thread"
+	a.mu.Unlock()
+	a.persistState()
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{Kind: "error", Text: "Codex 工作区不可用：(deactivated_workspace)"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err == nil {
+		t.Fatal("chatCodexAppServer error = nil, want auth state error")
+	}
+	if !containsAll(err.Error(), "deactivated_workspace", "请重试") {
+		t.Fatalf("error=%q, want retry hint with auth detail", err.Error())
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if _, ok := persisted.Threads["user-1"]; ok {
+		t.Fatalf("auth state error should remove stale thread mapping, got %q", persisted.Threads["user-1"])
 	}
 }
 

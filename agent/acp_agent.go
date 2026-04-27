@@ -196,9 +196,77 @@ type codexUserInput struct {
 }
 
 type codexTurnEvent struct {
-	Kind  string
-	Delta string
-	Text  string
+	Kind   string
+	ItemID string
+	Delta  string
+	Text   string
+}
+
+type codexFinalAssembler struct {
+	order           []string
+	deltasByItem    map[string][]string
+	snapshotsByItem map[string]string
+	completedByItem map[string]string
+}
+
+func newCodexFinalAssembler() *codexFinalAssembler {
+	return &codexFinalAssembler{
+		deltasByItem:    make(map[string][]string),
+		snapshotsByItem: make(map[string]string),
+		completedByItem: make(map[string]string),
+	}
+}
+
+func (a *codexFinalAssembler) addDelta(itemID string, text string) {
+	itemID = normalizeCodexItemID(itemID)
+	a.rememberItem(itemID)
+	a.deltasByItem[itemID] = append(a.deltasByItem[itemID], text)
+}
+
+func (a *codexFinalAssembler) addSnapshot(itemID string, text string) {
+	itemID = normalizeCodexItemID(itemID)
+	a.rememberItem(itemID)
+	a.snapshotsByItem[itemID] = text
+}
+
+func (a *codexFinalAssembler) addCompleted(itemID string, text string) {
+	itemID = normalizeCodexItemID(itemID)
+	a.rememberItem(itemID)
+	a.completedByItem[itemID] = text
+}
+
+func (a *codexFinalAssembler) finalText() string {
+	var parts []string
+	for _, itemID := range a.order {
+		if deltas := a.deltasByItem[itemID]; len(deltas) > 0 {
+			parts = append(parts, strings.Join(deltas, ""))
+			continue
+		}
+		if text := strings.TrimSpace(a.completedByItem[itemID]); text != "" {
+			parts = append(parts, text)
+			continue
+		}
+		if text := strings.TrimSpace(a.snapshotsByItem[itemID]); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, ""))
+}
+
+func (a *codexFinalAssembler) rememberItem(itemID string) {
+	for _, existing := range a.order {
+		if existing == itemID {
+			return
+		}
+	}
+	a.order = append(a.order, itemID)
+}
+
+func normalizeCodexItemID(itemID string) string {
+	if itemID == "" {
+		return "__default__"
+	}
+	return itemID
 }
 
 func detectACPProtocol(command string, args []string) string {
@@ -711,8 +779,8 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		}
 	}()
 
-	// Collect text from events until turn/completed
-	var textParts []string
+	// 汇总同一 turn 内的文本事件，避免 snapshot 和 delta 同时出现时重复拼接。
+	assembler := newCodexFinalAssembler()
 	for {
 		select {
 		case <-ctx.Done():
@@ -723,22 +791,30 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 					log.Printf("[acp] stale thread error detected, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
 					return a.retryWithFreshThread(ctx, conversationID, message, "stale_thread_error", onProgress)
 				}
+				if isCodexAuthStateError(evt.Text) {
+					a.invalidateCodexRuntime(conversationID, "auth_state_error")
+					return "", fmt.Errorf("turn error: %s；已刷新 Codex 进程，请重试当前消息", evt.Text)
+				}
 				return "", fmt.Errorf("turn error: %s", evt.Text)
 			}
 			if evt.Delta != "" {
-				textParts = append(textParts, evt.Delta)
+				assembler.addDelta(evt.ItemID, evt.Delta)
 				if onProgress != nil {
 					onProgress(evt.Delta)
 				}
 			}
 			if evt.Text != "" {
-				textParts = append(textParts, evt.Text)
+				if evt.Kind == "item_completed" {
+					assembler.addCompleted(evt.ItemID, evt.Text)
+				} else {
+					assembler.addSnapshot(evt.ItemID, evt.Text)
+				}
 				if onProgress != nil {
 					onProgress(evt.Text)
 				}
 			}
 			if evt.Kind == "completed" {
-				result := strings.TrimSpace(strings.Join(textParts, ""))
+				result := assembler.finalText()
 				if result == "" {
 					if allowFreshRetry && !isNew {
 						log.Printf("[acp] empty response on reused thread, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
@@ -753,12 +829,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 }
 
 func (a *ACPAgent) retryWithFreshThread(ctx context.Context, conversationID string, message string, reason string, onProgress func(delta string)) (string, error) {
-	a.mu.Lock()
-	oldThreadID := a.threads[conversationID]
-	delete(a.threads, conversationID)
-	delete(a.resumeOnFirstUse, conversationID)
-	a.mu.Unlock()
-	a.persistState()
+	oldThreadID := a.clearCodexThread(conversationID)
 
 	log.Printf("[acp] cleared stale thread mapping (conversation=%s, oldThread=%s, reason=%s), creating fresh thread", conversationID, oldThreadID, reason)
 	retryMessage := message
@@ -772,6 +843,24 @@ func (a *ACPAgent) retryWithFreshThread(ctx context.Context, conversationID stri
 		return "", fmt.Errorf("retry with fresh thread failed: %w", err)
 	}
 	return result, nil
+}
+
+// invalidateCodexRuntime 在账号态异常时丢弃旧进程，避免后续请求继续使用失效登录态。
+func (a *ACPAgent) invalidateCodexRuntime(conversationID string, reason string) {
+	oldThreadID := a.clearCodexThread(conversationID)
+	log.Printf("[acp] invalidating codex runtime (conversation=%s, oldThread=%s, reason=%s)", conversationID, oldThreadID, reason)
+	a.Stop()
+}
+
+// clearCodexThread 只清理远端 thread 映射，保留本地历史用于后续恢复上下文。
+func (a *ACPAgent) clearCodexThread(conversationID string) string {
+	a.mu.Lock()
+	oldThreadID := a.threads[conversationID]
+	delete(a.threads, conversationID)
+	delete(a.resumeOnFirstUse, conversationID)
+	a.mu.Unlock()
+	a.persistState()
+	return oldThreadID
 }
 
 func (a *ACPAgent) recordConversationExchange(conversationID, userText, assistantText string) {
@@ -1124,9 +1213,11 @@ func (a *ACPAgent) readLoop() {
 			a.handleCodexTurnEvent(msg.Method, msg.Params)
 		case "error":
 			a.handleCodexError(msg.Params)
+		case "item/completed":
+			a.handleCodexItemCompleted(msg.Params)
 		case "codex/event/agent_message", "codex/event/task_complete",
 			"codex/event/item_completed", "codex/event/token_count",
-			"item/completed", "thread/tokenUsage/updated",
+			"thread/tokenUsage/updated",
 			"account/rateLimits/updated", "thread/status/changed":
 			// Known events we don't need to act on
 		case "turn/approval/request":
@@ -1234,7 +1325,7 @@ func (a *ACPAgent) handleCodexItemDelta(params json.RawMessage) {
 		return
 	}
 
-	a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Delta: p.Delta})
+	a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{ItemID: p.ItemID, Delta: p.Delta})
 }
 
 // handleCodexItemStarted handles "item/started" events.
@@ -1243,6 +1334,7 @@ func (a *ACPAgent) handleCodexItemStarted(params json.RawMessage) {
 	var p struct {
 		ThreadID string `json:"threadId"`
 		Item     struct {
+			ID      string `json:"id"`
 			Type    string `json:"type"`
 			Content []struct {
 				Type string `json:"type"`
@@ -1260,7 +1352,33 @@ func (a *ACPAgent) handleCodexItemStarted(params json.RawMessage) {
 
 	for _, c := range p.Item.Content {
 		if c.Type == "text" && c.Text != "" {
-			a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Text: c.Text})
+			a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{ItemID: p.Item.ID, Text: c.Text})
+		}
+	}
+}
+
+// handleCodexItemCompleted 将 completed 文本作为兜底最终文本来源。
+func (a *ACPAgent) handleCodexItemCompleted(params json.RawMessage) {
+	var p struct {
+		ThreadID string `json:"threadId"`
+		Item     struct {
+			ID      string `json:"id"`
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return
+	}
+	if p.Item.Type != "agentMessage" {
+		return
+	}
+	for _, c := range p.Item.Content {
+		if c.Type == "text" && c.Text != "" {
+			a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "item_completed", ItemID: p.Item.ID, Text: c.Text})
 		}
 	}
 }
@@ -1282,6 +1400,9 @@ func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
 
 func (a *ACPAgent) handleCodexError(params json.RawMessage) {
 	text := formatCodexError(params)
+	if text == "" && a.stderr != nil {
+		text = formatCodexStderrError(a.stderr.LastError())
+	}
 	if text == "" {
 		text = "Codex 返回未知错误"
 	}
@@ -1293,14 +1414,24 @@ func formatCodexError(params json.RawMessage) string {
 		Error struct {
 			Message        string `json:"message"`
 			CodexErrorInfo string `json:"codexErrorInfo"`
+			Code           string `json:"code"`
 		} `json:"error"`
+		Message string `json:"message"`
+		Code    string `json:"code"`
+		Detail  struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"detail"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return ""
 	}
 
-	message := strings.TrimSpace(p.Error.Message)
-	info := strings.TrimSpace(p.Error.CodexErrorInfo)
+	message := firstNonEmpty(p.Error.Message, p.Message, p.Detail.Message)
+	info := firstNonEmpty(p.Error.CodexErrorInfo, p.Error.Code, p.Code, p.Detail.Code)
+	if info == "deactivated_workspace" {
+		return joinCodexErrorParts("Codex 工作区不可用", message, info)
+	}
 	if info == "usageLimitExceeded" && message != "" {
 		return "Codex 账号额度已用完：" + message + " (" + info + ")"
 	}
@@ -1311,6 +1442,53 @@ func formatCodexError(params json.RawMessage) string {
 		return message
 	}
 	return info
+}
+
+// formatCodexStderrError 从 Codex stderr 中提取账号态错误，补足空泛的 error 事件。
+func formatCodexStderrError(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "deactivated_workspace") {
+		return joinCodexErrorParts("Codex 工作区不可用", text, "deactivated_workspace")
+	}
+	if strings.Contains(lower, "402 payment required") {
+		return joinCodexErrorParts("Codex 认证或工作区不可用", text, "")
+	}
+	return text
+}
+
+// isCodexAuthStateError 判断错误是否来自登录态、额度或工作区状态。
+func isCodexAuthStateError(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "deactivated_workspace") ||
+		strings.Contains(lower, "usagelimitexceeded") ||
+		strings.Contains(lower, "402 payment required")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func joinCodexErrorParts(title string, message string, code string) string {
+	var parts []string
+	if title != "" {
+		parts = append(parts, title)
+	}
+	if message != "" {
+		parts = append(parts, message)
+	}
+	if code != "" {
+		parts = append(parts, "("+code+")")
+	}
+	return strings.Join(parts, "：")
 }
 
 // dispatchToTurnCh sends an event to the turn channel for a thread.
