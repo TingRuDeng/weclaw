@@ -96,11 +96,11 @@ func TestDefaultConfigInitializesAgentsMap(t *testing.T) {
 func TestDefaultProgressConfig(t *testing.T) {
 	cfg := DefaultProgressConfig()
 
-	if cfg.Mode != "summary" {
-		t.Fatalf("Mode = %q, want summary", cfg.Mode)
+	if cfg.Mode != "typing" {
+		t.Fatalf("Mode = %q, want typing", cfg.Mode)
 	}
-	if cfg.SendAcceptance == nil || !*cfg.SendAcceptance {
-		t.Fatalf("SendAcceptance = %#v, want true pointer", cfg.SendAcceptance)
+	if cfg.SendAcceptance == nil || *cfg.SendAcceptance {
+		t.Fatalf("SendAcceptance = %#v, want false pointer", cfg.SendAcceptance)
 	}
 	if cfg.EnableTyping == nil || !*cfg.EnableTyping {
 		t.Fatalf("EnableTyping = %#v, want true pointer", cfg.EnableTyping)
@@ -128,11 +128,11 @@ func TestProgressConfigUnmarshalDefaults(t *testing.T) {
 	}
 
 	cfg.Progress = NormalizeProgressConfig(DefaultProgressConfig(), &cfg.Progress)
-	if cfg.Progress.Mode != "summary" {
-		t.Fatalf("Mode = %q, want summary", cfg.Progress.Mode)
+	if cfg.Progress.Mode != "typing" {
+		t.Fatalf("Mode = %q, want typing", cfg.Progress.Mode)
 	}
-	if cfg.Progress.SendAcceptance == nil || !*cfg.Progress.SendAcceptance {
-		t.Fatalf("SendAcceptance = %#v, want true pointer", cfg.Progress.SendAcceptance)
+	if cfg.Progress.SendAcceptance == nil || *cfg.Progress.SendAcceptance {
+		t.Fatalf("SendAcceptance = %#v, want false pointer", cfg.Progress.SendAcceptance)
 	}
 }
 

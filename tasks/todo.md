@@ -218,3 +218,22 @@
 ### Review 小结
 
 已完成微信最终回复换行展示修复。发送层会在 Markdown 转纯文本之后，把逻辑换行转换为空行分隔，解决微信气泡把步骤、目的、执行等多行结果压成一段的问题；长回复分段也基于展示文本进行，避免分段后再丢失可见换行。验证命令：`go test ./messaging -run TestSendTextReplyFormatsLineBreaksForWeChatDisplay -count=1`、`go test ./messaging -count=1` 与 `go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
+
+## 微信默认进度反馈静默化清单
+
+### 目标
+
+默认只保留微信“正在输入”状态和最终回复，不再发送“收到”“处理中”“进展”等中间文字气泡。
+
+### 执行任务
+
+- [x] 新增默认 typing 模式回归测试，确认默认不发送进度文字。
+- [x] 将默认进度模式从 `summary` 改为 `typing`。
+- [x] 将默认 `send_acceptance` 改为 `false`。
+- [x] 保留 `summary`、`stream` 等显式进度模式能力。
+- [x] 运行全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成微信默认进度反馈静默化。默认 `progress.mode` 从 `summary` 调整为 `typing`，默认 `send_acceptance` 调整为 `false`；长任务期间只保留微信 typing 状态，最终仍发送完整结果。显式切到 `summary` 或 `stream` 时，中间文字进度仍可用。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。

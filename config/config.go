@@ -92,15 +92,15 @@ func DefaultConfig() *Config {
 	}
 }
 
-// DefaultProgressConfig 返回微信场景下更可读的默认进度体验。
+// DefaultProgressConfig 返回微信场景下更安静的默认进度体验。
 func DefaultProgressConfig() ProgressConfig {
-	sendAcceptance := true
+	sendAcceptance := false
 	enableTyping := true
 	showTextPreview := false
 	includePartialOnError := false
 
 	return ProgressConfig{
-		Mode:                   "summary",
+		Mode:                   "typing",
 		SendAcceptance:         &sendAcceptance,
 		EnableTyping:           &enableTyping,
 		TypingHeartbeatSeconds: 8,

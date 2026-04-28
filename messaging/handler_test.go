@@ -165,6 +165,12 @@ func (r *recordedILinkCalls) texts() []string {
 	return append([]string(nil), r.textMessages...)
 }
 
+func (r *recordedILinkCalls) typings() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int(nil), r.typingStatuses...)
+}
+
 func waitForText(t *testing.T, calls *recordedILinkCalls, contains string) {
 	t.Helper()
 
@@ -666,8 +672,8 @@ func TestHandleProgressCommandShowsCurrentMode(t *testing.T) {
 
 	reply := h.handleProgressCommand("/progress")
 
-	if !strings.Contains(reply, "当前进度模式：summary") {
-		t.Fatalf("reply=%q, want current summary mode", reply)
+	if !strings.Contains(reply, "当前进度模式：typing") {
+		t.Fatalf("reply=%q, want current typing mode", reply)
 	}
 }
 
@@ -692,8 +698,8 @@ func TestHandleProgressCommandRejectsUnknownMode(t *testing.T) {
 	if !strings.Contains(reply, "不支持的进度模式") {
 		t.Fatalf("reply=%q, want unsupported mode message", reply)
 	}
-	if got := h.resolveProgressConfig("").Mode; got != progressModeSummary {
-		t.Fatalf("progress mode=%q, want unchanged summary", got)
+	if got := h.resolveProgressConfig("").Mode; got != progressModeTyping {
+		t.Fatalf("progress mode=%q, want unchanged typing", got)
 	}
 }
 
@@ -770,6 +776,7 @@ func TestStartProgressSessionSummaryModeDoesNotSendRealtimeSnippet(t *testing.T)
 	defer closeServer()
 
 	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeSummary
 	cfg.EnableTyping = boolPtr(false)
 	cfg.InitialDelaySeconds = 0
 	cfg.SummaryIntervalSeconds = 0
@@ -786,6 +793,26 @@ func TestStartProgressSessionSummaryModeDoesNotSendRealtimeSnippet(t *testing.T)
 		if strings.Contains(text, "实时片段") {
 			t.Fatalf("summary mode should not send realtime snippet, got messages %#v", calls.texts())
 		}
+	}
+}
+
+func TestStartProgressSessionDefaultTypingModeDoesNotSendTextFeedback(t *testing.T) {
+	h := NewHandler(nil, nil)
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	cfg := config.DefaultProgressConfig()
+	onProgress, stop := h.startProgressSession(context.Background(), client, "user-1", "ctx-1", "", "查询当前工作目录", cfg)
+
+	onProgress("正在生成结果")
+	time.Sleep(50 * time.Millisecond)
+	stop()
+
+	if texts := calls.texts(); len(texts) != 0 {
+		t.Fatalf("default typing mode should not send progress text, got %#v", texts)
+	}
+	if typings := calls.typings(); len(typings) == 0 {
+		t.Fatal("default typing mode should still send typing status")
 	}
 }
 
