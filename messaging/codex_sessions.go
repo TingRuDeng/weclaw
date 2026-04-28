@@ -24,7 +24,8 @@ type codexSessionState struct {
 }
 
 type codexSessionBinding struct {
-	Workspaces map[string]codexWorkspaceSession
+	ActiveWorkspace string
+	Workspaces      map[string]codexWorkspaceSession
 }
 
 type codexWorkspaceSession struct {
@@ -88,6 +89,28 @@ func (s *codexSessionStore) getThread(bindingKey string, workspaceRoot string) (
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	session := s.bindings[bindingKey].Workspaces[workspaceRoot]
 	return session.ThreadID, session.PendingNewThread
+}
+
+func (s *codexSessionStore) getActiveWorkspace(bindingKey string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceRoot := normalizeCodexWorkspaceRoot(s.bindings[bindingKey].ActiveWorkspace)
+	return workspaceRoot, workspaceRoot != ""
+}
+
+func (s *codexSessionStore) setActiveWorkspace(bindingKey string, workspaceRoot string) {
+	s.mu.Lock()
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	binding := s.ensureBindingLocked(bindingKey)
+	binding.ActiveWorkspace = workspaceRoot
+	if workspaceRoot != "" {
+		if _, ok := binding.Workspaces[workspaceRoot]; !ok {
+			binding.Workspaces[workspaceRoot] = codexWorkspaceSession{}
+		}
+	}
+	s.bindings[bindingKey] = binding
+	s.mu.Unlock()
+	s.save()
 }
 
 func (s *codexSessionStore) setThread(bindingKey string, workspaceRoot string, threadID string) {
@@ -208,7 +231,10 @@ func (s *codexSessionStore) load() {
 		if strings.TrimSpace(key) == "" {
 			continue
 		}
-		normalized := codexSessionBinding{Workspaces: make(map[string]codexWorkspaceSession)}
+		normalized := codexSessionBinding{
+			ActiveWorkspace: normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
+			Workspaces:      make(map[string]codexWorkspaceSession),
+		}
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 			if workspaceRoot == "" {
@@ -241,7 +267,7 @@ func (s *codexSessionStore) save() {
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaces[workspaceRoot] = session
 		}
-		state.Bindings[key] = codexSessionBinding{Workspaces: workspaces}
+		state.Bindings[key] = codexSessionBinding{ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces}
 	}
 	s.mu.Unlock()
 

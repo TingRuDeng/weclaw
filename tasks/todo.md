@@ -255,3 +255,22 @@
 ### Review 小结
 
 已完成 `/codex switch` 同步 workspace 修复。现在切换到已记录的 thread 时，会先从 Codex workspace/session 记录中反查该 thread 所属 workspace，再同步更新 Codex Agent 的 cwd 和 Handler 的 workspace 状态；如果 thread 未记录，则保留原有“当前 workspace 内切换”的行为。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
+
+## Codex active workspace 重启恢复清单
+
+### 目标
+
+修复 WeClaw 重启后 Codex 回到配置默认 cwd，导致微信侧需要重新 `/codex switch` 的问题。
+
+### 执行任务
+
+- [x] 新增 active workspace 持久化测试。
+- [x] 新增重启后按 active workspace 恢复 conversationID/thread 的回归测试。
+- [x] 在 Codex session store 中持久化 `ActiveWorkspace`。
+- [x] Codex 聊天、`/codex switch`、`/codex new`、`/cwd` 更新 active workspace。
+- [x] 运行全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex active workspace 重启恢复。`codex-sessions.json` 现在会记录每个微信用户 + Codex Agent 的 active workspace；WeClaw 重启后，下一条 Codex 消息会先恢复 active workspace，再 resume 对应 thread，不需要重新 `/codex switch`。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。

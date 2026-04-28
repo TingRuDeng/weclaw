@@ -501,7 +501,7 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 		}
 		return
 	} else if strings.HasPrefix(trimmed, "/cwd") {
-		reply := h.handleCwd(trimmed)
+		reply := h.handleCwd(trimmed, msg.FromUserID)
 		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
@@ -706,7 +706,7 @@ func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string,
 	if !isCodexAgent(agentName, ag.Info()) {
 		return userID
 	}
-	workspaceRoot := h.codexWorkspaceRoot(agentName)
+	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
 	bindingKey := codexBindingKey(userID, agentName)
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
 	codexAg, ok := ag.(agent.CodexThreadAgent)
@@ -743,8 +743,10 @@ func (h *Handler) recordCodexThread(userID string, agentName string, ag agent.Ag
 	if !ok {
 		return
 	}
-	workspaceRoot := h.codexWorkspaceRoot(agentName)
-	h.ensureCodexSessions().setThread(codexBindingKey(userID, agentName), workspaceRoot, threadID)
+	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
+	bindingKey := codexBindingKey(userID, agentName)
+	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 }
 
 func (h *Handler) syncCodexThreadFromAgent(userID string, agentName string, workspaceRoot string, ag agent.Agent) {
@@ -853,7 +855,7 @@ func (h *Handler) resetDefaultSession(ctx context.Context, userID string) string
 }
 
 // handleCwd handles the /cwd command. It updates the working directory for all running agents.
-func (h *Handler) handleCwd(trimmed string) string {
+func (h *Handler) handleCwd(trimmed string, userID ...string) string {
 	arg := strings.TrimSpace(strings.TrimPrefix(trimmed, "/cwd"))
 	if arg == "" {
 		// No path provided — show current cwd of default agent
@@ -914,8 +916,20 @@ func (h *Handler) handleCwd(trimmed string) string {
 		h.agentWorkDirs[name] = absPath
 	}
 	h.mu.Unlock()
+	h.recordActiveWorkspaceForUser(userID, agents, absPath)
 
 	return fmt.Sprintf("cwd: %s", absPath)
+}
+
+func (h *Handler) recordActiveWorkspaceForUser(userIDs []string, agents map[string]agent.Agent, workspaceRoot string) {
+	if len(userIDs) == 0 || strings.TrimSpace(userIDs[0]) == "" {
+		return
+	}
+	for name, ag := range agents {
+		if isCodexAgent(name, ag.Info()) {
+			h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(userIDs[0], name), workspaceRoot)
+		}
+	}
 }
 
 // buildStatus returns a short status string showing the current default agent.
@@ -1103,7 +1117,9 @@ func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot 
 	if codexAg, ok := ag.(agent.CodexThreadAgent); ok {
 		codexAg.ClearCodexThread(conversationID)
 	}
-	h.ensureCodexSessions().setPendingNew(codexBindingKey(userID, agentName), workspaceRoot)
+	bindingKey := codexBindingKey(userID, agentName)
+	h.ensureCodexSessions().setPendingNew(bindingKey, workspaceRoot)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 	return wechatCommandText("已切换到新会话。", "workspace: "+workspaceRoot)
 }
 
@@ -1119,6 +1135,7 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 		return fmt.Sprintf("切换线程失败: %v", err)
 	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 	return wechatCommandText("已切换线程。", "workspace: "+workspaceRoot, "thread: "+threadID)
 }
 
@@ -1179,6 +1196,22 @@ func (h *Handler) codexWorkspaceRoot(agentName string) string {
 		workspaceRoot = defaultAttachmentWorkspace()
 	}
 	return normalizeCodexWorkspaceRoot(workspaceRoot)
+}
+
+func (h *Handler) codexWorkspaceRootForUser(userID string, agentName string, ag agent.Agent) string {
+	bindingKey := codexBindingKey(userID, agentName)
+	workspaceRoot, ok := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
+	if !ok {
+		return h.codexWorkspaceRoot(agentName)
+	}
+	ag.SetCwd(workspaceRoot)
+	h.mu.Lock()
+	if h.agentWorkDirs == nil {
+		h.agentWorkDirs = make(map[string]string)
+	}
+	h.agentWorkDirs[agentName] = workspaceRoot
+	h.mu.Unlock()
+	return workspaceRoot
 }
 
 func (h *Handler) renderCodexWhere(bindingKey string, workspaceRoot string) string {

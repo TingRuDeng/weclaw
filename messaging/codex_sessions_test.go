@@ -44,3 +44,22 @@ func TestCodexSessionStorePersistsPendingNewThread(t *testing.T) {
 		t.Fatalf("restored thread=%q pending=%v, want empty true", threadID, pending)
 	}
 }
+
+func TestCodexSessionStorePersistsActiveWorkspace(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
+	bindingKey := codexBindingKey("user-1", "codex")
+	workspace := filepath.Join(t.TempDir(), "project")
+
+	first := newCodexSessionStore()
+	first.SetFilePath(stateFile)
+	first.setThread(bindingKey, workspace, "thread-1")
+	first.setActiveWorkspace(bindingKey, workspace)
+
+	second := newCodexSessionStore()
+	second.SetFilePath(stateFile)
+
+	active, ok := second.getActiveWorkspace(bindingKey)
+	if !ok || active != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(workspace))
+	}
+}

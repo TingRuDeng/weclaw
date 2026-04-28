@@ -23,3 +23,9 @@
 - `/codex switch <threadId>` 不能只切 thread；如果该 thread 已记录在某个 workspace 下，也必须同步切换 Codex Agent 的 workspace。
 - Codex 会话状态涉及 thread 和 cwd 两个状态源，修改其中一个时必须检查另一个是否需要同步。
 - 新增 Codex 会话命令时，要覆盖“跨 workspace 历史 thread 切换”的回归测试。
+
+## 2026-04-28 Codex 重启恢复
+
+- 只持久化 workspace -> thread 列表不够，还必须持久化用户当前 active workspace；否则重启后会回到配置里的默认 cwd。
+- Codex 普通聊天、`/codex switch`、`/codex new` 和 `/cwd` 都可能改变 active workspace，必须同步写入 session store。
+- 重启恢复类问题必须用“新 Handler 加载同一个 session 文件”的测试覆盖。

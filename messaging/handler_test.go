@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -1087,6 +1088,40 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "workspace: "+targetWorkspace) {
 		t.Fatalf("reply should mention switched workspace, messages=%#v", calls.texts())
+	}
+}
+
+func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
+	bindingKey := codexBindingKey("user-1", "codex")
+	defaultWorkspace := t.TempDir()
+	activeWorkspace := t.TempDir()
+
+	first := NewHandler(nil, nil)
+	first.SetCodexSessionFile(stateFile)
+	first.codexSessions.setThread(bindingKey, activeWorkspace, "thread-active")
+	first.codexSessions.setActiveWorkspace(bindingKey, activeWorkspace)
+
+	second := NewHandler(nil, nil)
+	second.SetCodexSessionFile(stateFile)
+	second.SetAgentWorkDirs(map[string]string{"codex": defaultWorkspace})
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+
+	conversationID := second.resolveAgentConversationID(context.Background(), "user-1", "codex", ag)
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", activeWorkspace)
+	if conversationID != wantConversationID {
+		t.Fatalf("conversationID=%q, want %q", conversationID, wantConversationID)
+	}
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-active" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-active)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	if ag.lastCwd != activeWorkspace {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, activeWorkspace)
 	}
 }
 
