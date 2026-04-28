@@ -940,34 +940,55 @@ func buildHelpText() string {
 	return `WeClaw 帮助
 
 常用：
+
 /info 查看当前 Agent
+
 /new 开启新会话
+
 /cwd /绝对路径 切换工作目录
+
 /progress 查看或切换进度模式
 
 Codex：
+
 /codex where 查看当前 Codex workspace 和 thread
+
 /codex workspace 查看已记录的 workspace 会话
+
 /codex new 新建当前 workspace 的 Codex 会话
+
 /codex switch <threadId> 切换到指定 Codex thread
 
 Codex 账号：
+
 /sw ls 查看可切换账号
+
 /sw current 查看当前账号
+
 /sw <编号|ID> 切换账号
+
 /sw reload 手动刷新 Codex Agent
+
 /sw help 查看账号切换帮助
 
 指定 Agent：
+
 /codex 任务 发给 Codex
+
 /claude 任务 发给 Claude
+
 @codex @claude 任务 同时发给多个 Agent
 
 常用别名：
+
 /cx = /codex
+
 /cc = /claude
+
 /cs = /cursor
+
 /km = /kimi
+
 /gm = /gemini`
 }
 

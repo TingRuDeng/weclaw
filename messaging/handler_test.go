@@ -413,6 +413,18 @@ func TestBuildHelpText(t *testing.T) {
 	if strings.Contains(text, "Available commands") || strings.Contains(text, "Aliases:") {
 		t.Error("help text should not use old English headings")
 	}
+	for _, want := range []string{
+		"常用：\n\n/info",
+		"/info 查看当前 Agent\n\n/new 开启新会话",
+		"Codex：\n\n/codex where",
+		"/codex where 查看当前 Codex workspace 和 thread\n\n/codex workspace",
+		"Codex 账号：\n\n/sw ls",
+		"常用别名：\n\n/cx = /codex",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("help text should use blank lines for WeChat rendering, missing %q", want)
+		}
+	}
 }
 
 func TestParseSwitchCommand_ListAlias(t *testing.T) {
