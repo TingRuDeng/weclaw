@@ -53,3 +53,9 @@
 - 会话列表必须带稳定编号，`/codex switch <编号>` 要使用与 `/codex ls` 相同的排序，避免用户复制长 threadId。
 - 修改命令命名时必须同步更新 `isCodexSessionCommand`、帮助文本、命令处理分支和回归测试。
 - 旧命令如果不再作为用户入口，就不要继续出现在 `/help`，防止微信侧形成两套说法。
+
+## 2026-04-28 Codex 额度错误
+
+- `usageLimitExceeded` 只是额度耗尽，不代表登录态或工作区失效，不能自动 Stop Codex 进程或清理 thread。
+- 用户需要手动切换 Codex 账号时，WeClaw 必须保留当前进程和 thread 映射，避免切账号后 `/codex switch` 遇到已关闭 stdin。
+- 只有 `deactivated_workspace` 这类真实工作区/登录态异常才允许触发 runtime invalidation。

@@ -443,6 +443,51 @@ func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
 	}
 }
 
+func TestACPAgentKeepsRuntimeOnCodexUsageLimit(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       t.TempDir(),
+		StateFile: stateFile,
+	})
+	a.started = true
+	a.mu.Lock()
+	a.threads["user-1"] = "old-thread"
+	a.mu.Unlock()
+	a.persistState()
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{Kind: "error", Text: "Codex 账号额度已用完：You've hit your usage limit. (usageLimitExceeded)"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err == nil {
+		t.Fatal("chatCodexAppServer error = nil, want usage limit error")
+	}
+	if strings.Contains(err.Error(), "已刷新 Codex 进程") {
+		t.Fatalf("usage limit should not refresh runtime, error=%q", err.Error())
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["user-1"]; got != "old-thread" {
+		t.Fatalf("usage limit should keep thread mapping, got %q", got)
+	}
+}
+
 func TestACPAgentCodexThreadControls(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")

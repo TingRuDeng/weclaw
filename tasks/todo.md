@@ -339,3 +339,21 @@
 ### Review 小结
 
 已完成 Codex 会话命令易用性调整。`/codex where` 改为 `/codex whoami`，`/codex workspace` 改为 `/codex ls`；`/codex ls` 会按稳定排序输出 0 基编号，`/codex switch` 现在同时支持编号和 threadId。帮助文本已移除旧命令入口。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## Codex 额度错误不刷新进程清单
+
+### 目标
+
+修复 `usageLimitExceeded` 被当作登录态异常处理，导致自动刷新 Codex 进程并破坏后续手动切账号和 thread resume 的问题。
+
+### 执行任务
+
+- [x] 新增额度耗尽不刷新进程、不清理 thread 映射的回归测试。
+- [x] 保留 `deactivated_workspace` 自动刷新进程的既有测试。
+- [x] 将 `usageLimitExceeded` 从 Codex auth state error 判断中移除。
+- [x] 运行全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 额度错误处理修复。`usageLimitExceeded` 现在只作为普通 turn error 返回，不会自动刷新 Codex 进程，也不会清理 thread 映射；`deactivated_workspace` 仍按真实工作区/登录态异常处理。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。

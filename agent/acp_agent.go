@@ -1499,12 +1499,11 @@ func formatCodexStderrError(text string) string {
 	return text
 }
 
-// isCodexAuthStateError 判断错误是否来自登录态、额度或工作区状态。
+// isCodexAuthStateError 判断错误是否来自登录态或工作区状态；额度耗尽不能刷新进程。
 func isCodexAuthStateError(text string) bool {
 	lower := strings.ToLower(text)
 	return strings.Contains(lower, "deactivated_workspace") ||
-		strings.Contains(lower, "usagelimitexceeded") ||
-		strings.Contains(lower, "402 payment required")
+		(strings.Contains(lower, "402 payment required") && !strings.Contains(lower, "usagelimitexceeded"))
 }
 
 func firstNonEmpty(values ...string) string {
