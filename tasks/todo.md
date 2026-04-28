@@ -162,3 +162,23 @@
 ### Review 小结
 
 已完成 Codex workspace/thread 会话切换的第一版落地。Codex 消息现在使用 `微信用户 + Agent + workspace` 组成独立会话 key；`/codex new` 会清理当前 workspace 的 thread 并进入新会话草稿；`/codex switch <threadId>` 会 resume 并切换到指定 thread；`/codex where` 和 `/codex workspace` 可查看当前状态。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
+
+## Codex workspace/thread 列表持久化清单
+
+### 目标
+
+把 WeClaw 侧 `/codex workspace` 使用的 workspace/thread 列表持久化到本地文件，避免服务重启后历史 workspace 列表丢失。
+
+### 执行任务
+
+- [x] 新增持久化测试：thread 记录写入后，新 store 能从文件恢复。
+- [x] 新增持久化测试：`/codex new` 的 pending new 状态能从文件恢复。
+- [x] 为 `codexSessionStore` 增加 JSON 文件加载和保存。
+- [x] 新增默认持久化路径 `~/.weclaw/codex-sessions.json`。
+- [x] 在启动流程中为 Handler 配置 Codex session 持久化文件。
+- [x] 运行定向测试、全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex workspace/thread 列表持久化。WeClaw 启动时会从 `~/.weclaw/codex-sessions.json` 加载 workspace/thread 列表，运行中更新 thread 或 pending new 状态时会写回该文件。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。

@@ -130,6 +130,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	handler.SetAgentWorkDirs(workDirs)
 	handler.SetProgressConfig(cfg.Progress)
 	handler.SetAgentProgressConfigs(extractAgentProgressConfigs(cfg.Agents))
+	handler.SetCodexSessionFile(messaging.DefaultCodexSessionFile())
 
 	// Load custom aliases from agent configs
 	handler.SetCustomAliases(config.BuildAliasMap(cfg.Agents))

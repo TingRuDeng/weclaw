@@ -1,6 +1,9 @@
 package messaging
 
 import (
+	"encoding/json"
+	"log"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -10,7 +13,14 @@ import (
 
 type codexSessionStore struct {
 	mu       sync.Mutex
+	filePath string
 	bindings map[string]codexSessionBinding
+}
+
+type codexSessionState struct {
+	Version  int                            `json:"version"`
+	Bindings map[string]codexSessionBinding `json:"bindings"`
+	Updated  string                         `json:"updated"`
 }
 
 type codexSessionBinding struct {
@@ -33,6 +43,23 @@ func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
 		bindings: make(map[string]codexSessionBinding),
 	}
+}
+
+// DefaultCodexSessionFile 返回 Codex workspace/thread 列表的默认持久化路径。
+func DefaultCodexSessionFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".weclaw", "codex-sessions.json")
+}
+
+// SetFilePath 设置持久化文件路径并加载已有状态。
+func (s *codexSessionStore) SetFilePath(filePath string) {
+	s.mu.Lock()
+	s.filePath = strings.TrimSpace(filePath)
+	s.mu.Unlock()
+	s.load()
 }
 
 func codexBindingKey(userID string, agentName string) string {
@@ -81,13 +108,14 @@ func (s *codexSessionStore) setPendingNew(bindingKey string, workspaceRoot strin
 
 func (s *codexSessionStore) ensureWorkspace(bindingKey string, workspaceRoot string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	binding := s.ensureBindingLocked(bindingKey)
 	if _, ok := binding.Workspaces[workspaceRoot]; !ok {
 		binding.Workspaces[workspaceRoot] = codexWorkspaceSession{}
 	}
 	s.bindings[bindingKey] = binding
+	s.mu.Unlock()
+	s.save()
 }
 
 func (s *codexSessionStore) listWorkspaces(bindingKey string) []codexWorkspaceView {
@@ -113,11 +141,12 @@ func (s *codexSessionStore) listWorkspaces(bindingKey string) []codexWorkspaceVi
 
 func (s *codexSessionStore) updateWorkspace(bindingKey string, workspaceRoot string, session codexWorkspaceSession) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	binding := s.ensureBindingLocked(bindingKey)
 	binding.Workspaces[workspaceRoot] = session
 	s.bindings[bindingKey] = binding
+	s.mu.Unlock()
+	s.save()
 }
 
 func (s *codexSessionStore) ensureBindingLocked(bindingKey string) codexSessionBinding {
@@ -126,4 +155,87 @@ func (s *codexSessionStore) ensureBindingLocked(bindingKey string) codexSessionB
 		binding.Workspaces = make(map[string]codexWorkspaceSession)
 	}
 	return binding
+}
+
+func (s *codexSessionStore) load() {
+	s.mu.Lock()
+	filePath := s.filePath
+	s.mu.Unlock()
+	if filePath == "" {
+		return
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[codex-session] failed to read %s: %v", filePath, err)
+		}
+		return
+	}
+
+	var state codexSessionState
+	if err := json.Unmarshal(data, &state); err != nil {
+		log.Printf("[codex-session] failed to parse %s: %v", filePath, err)
+		return
+	}
+
+	bindings := make(map[string]codexSessionBinding, len(state.Bindings))
+	for key, binding := range state.Bindings {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		normalized := codexSessionBinding{Workspaces: make(map[string]codexWorkspaceSession)}
+		for workspaceRoot, session := range binding.Workspaces {
+			workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+			if workspaceRoot == "" {
+				continue
+			}
+			normalized.Workspaces[workspaceRoot] = session
+		}
+		bindings[key] = normalized
+	}
+
+	s.mu.Lock()
+	s.bindings = bindings
+	s.mu.Unlock()
+}
+
+func (s *codexSessionStore) save() {
+	s.mu.Lock()
+	filePath := s.filePath
+	if filePath == "" {
+		s.mu.Unlock()
+		return
+	}
+	state := codexSessionState{
+		Version:  1,
+		Bindings: make(map[string]codexSessionBinding, len(s.bindings)),
+		Updated:  time.Now().UTC().Format(time.RFC3339),
+	}
+	for key, binding := range s.bindings {
+		workspaces := make(map[string]codexWorkspaceSession, len(binding.Workspaces))
+		for workspaceRoot, session := range binding.Workspaces {
+			workspaces[workspaceRoot] = session
+		}
+		state.Bindings[key] = codexSessionBinding{Workspaces: workspaces}
+	}
+	s.mu.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
+		log.Printf("[codex-session] failed to create state dir: %v", err)
+		return
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		log.Printf("[codex-session] failed to marshal state: %v", err)
+		return
+	}
+	tmpFile := filePath + ".tmp"
+	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
+		log.Printf("[codex-session] failed to write %s: %v", tmpFile, err)
+		return
+	}
+	if err := os.Rename(tmpFile, filePath); err != nil {
+		log.Printf("[codex-session] failed to move %s into place: %v", filePath, err)
+	}
 }

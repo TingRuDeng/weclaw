@@ -221,6 +221,11 @@ func (h *Handler) ensureCodexSessions() *codexSessionStore {
 	return h.codexSessions
 }
 
+// SetCodexSessionFile 设置 Codex workspace/thread 列表的持久化文件。
+func (h *Handler) SetCodexSessionFile(filePath string) {
+	h.ensureCodexSessions().SetFilePath(filePath)
+}
+
 // SetDefaultAgent sets the default agent (already started).
 func (h *Handler) SetDefaultAgent(name string, ag agent.Agent) {
 	h.mu.Lock()
