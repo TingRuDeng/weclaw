@@ -138,3 +138,27 @@
 ### Review 小结
 
 已完成本机手动切号后的刷新入口和账号态错误自愈。`/sw reload` 可在不切号的情况下刷新 WeClaw 内部 Codex Agent；如果 Codex 返回 `402 Payment Required`、`deactivated_workspace` 或额度类账号态错误，会清理旧 thread 并停止旧进程，避免后续微信请求继续使用失效登录态。验证命令：`go test ./messaging -run 'TestHandleSwitchCommand_ReloadRefreshesCodexAgentWithoutRunningScript|TestHandleSwitchCommand_RestartsRunningCodexAgentAfterSwitch' -count=1` 与 `go test ./agent -run 'TestHandleCodexErrorUsesStderrWhenPayloadUnknown|TestACPAgentInvalidatesCodexRuntimeOnAuthStateError|TestFormatCodexErrorHandlesDeactivatedWorkspace|TestFormatCodexErrorHandlesRawMessage' -count=1`，结果通过。
+
+## Codex workspace/thread 会话切换落地清单
+
+### 目标
+
+把 `codex-wechat` 的 Codex workspace/thread 会话模型移植到 WeClaw：保留多 Agent 能力，同时让 Codex 支持按 workspace 保存、查看、新建和切换 thread。
+
+### 执行任务
+
+- [x] 梳理 WeClaw 当前 Agent 会话 key、`/cwd`、`/codex` 路由和 ACP thread 持久化边界。
+- [x] 新增 Handler 回归测试：Codex 消息使用 `user + agent + workspace` 作为会话 key，并把当前 thread 记录到 workspace 状态。
+- [x] 新增命令测试：`/codex new` 清理当前 workspace thread，并进入新会话草稿。
+- [x] 新增命令测试：`/codex switch <threadId>` 设置当前 workspace thread，并调用 ACP resume。
+- [x] 新增命令测试：`/codex where` 和 `/codex workspace` 展示当前 workspace/thread。
+- [x] 新增 ACP 测试：Codex app-server 支持外部设置、读取、清理 thread。
+- [x] 实现 `agent.CodexThreadAgent` 可选接口，并在 `ACPAgent` 中实现。
+- [x] 新增 `messaging/codex_sessions.go` 管理微信用户、Agent、workspace 到 thread 的状态。
+- [x] 改造 Handler：识别 `/codex` 会话命令，Codex 聊天使用 workspace 会话 key。
+- [x] 运行定向测试、全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex workspace/thread 会话切换的第一版落地。Codex 消息现在使用 `微信用户 + Agent + workspace` 组成独立会话 key；`/codex new` 会清理当前 workspace 的 thread 并进入新会话草稿；`/codex switch <threadId>` 会 resume 并切换到指定 thread；`/codex where` 和 `/codex workspace` 可查看当前状态。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。

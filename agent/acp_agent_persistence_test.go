@@ -443,6 +443,51 @@ func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
 	}
 }
 
+func TestACPAgentCodexThreadControls(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       t.TempDir(),
+		StateFile: stateFile,
+	})
+	resumed := ""
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/resume" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p := params.(map[string]interface{})
+		resumed = p["threadId"].(string)
+		return json.RawMessage(`{"thread":{"id":"thread-2"}}`), nil
+	}
+
+	if err := a.UseCodexThread(ctx, "conversation-1", "thread-2"); err != nil {
+		t.Fatalf("UseCodexThread error: %v", err)
+	}
+	if resumed != "thread-2" {
+		t.Fatalf("resumed thread=%q, want thread-2", resumed)
+	}
+	threadID, ok := a.CurrentCodexThread("conversation-1")
+	if !ok || threadID != "thread-2" {
+		t.Fatalf("CurrentCodexThread=(%q,%v), want thread-2 true", threadID, ok)
+	}
+
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["conversation-1"]; got != "thread-2" {
+		t.Fatalf("persisted thread=%q, want thread-2", got)
+	}
+
+	a.ClearCodexThread("conversation-1")
+	if _, ok := a.CurrentCodexThread("conversation-1"); ok {
+		t.Fatal("ClearCodexThread should remove current thread")
+	}
+	persisted = readACPStateFile(t, stateFile)
+	if _, ok := persisted.Threads["conversation-1"]; ok {
+		t.Fatalf("cleared thread should not persist, got %q", persisted.Threads["conversation-1"])
+	}
+}
+
 func TestDispatchToTurnChFallbackOnlyWhenSingleActiveTurn(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",

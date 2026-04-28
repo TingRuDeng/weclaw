@@ -24,17 +24,19 @@ func newTestHandler() *Handler {
 }
 
 type fakeAgent struct {
-	reply       string
-	err         error
-	chatCalled  bool
-	chatCalls   int
-	lastMessage string
-	info        agent.AgentInfo
+	reply              string
+	err                error
+	chatCalled         bool
+	chatCalls          int
+	lastConversationID string
+	lastMessage        string
+	info               agent.AgentInfo
 }
 
-func (f *fakeAgent) Chat(_ context.Context, _ string, message string) (string, error) {
+func (f *fakeAgent) Chat(_ context.Context, conversationID string, message string) (string, error) {
 	f.chatCalled = true
 	f.chatCalls++
+	f.lastConversationID = conversationID
 	f.lastMessage = message
 	return f.reply, f.err
 }
@@ -59,6 +61,33 @@ type fakeStoppableAgent struct {
 
 func (f *fakeStoppableAgent) Stop() {
 	f.stopped = true
+}
+
+type fakeCodexThreadAgent struct {
+	fakeAgent
+	threadID        string
+	useConversation string
+	useThreadID     string
+	clearCalledWith string
+}
+
+func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
+	if f.threadID == "" {
+		return "", false
+	}
+	return f.threadID, true
+}
+
+func (f *fakeCodexThreadAgent) UseCodexThread(_ context.Context, conversationID string, threadID string) error {
+	f.useConversation = conversationID
+	f.useThreadID = threadID
+	f.threadID = threadID
+	return nil
+}
+
+func (f *fakeCodexThreadAgent) ClearCodexThread(conversationID string) {
+	f.clearCalledWith = conversationID
+	f.threadID = ""
 }
 
 type fakeProgressAgent struct {
@@ -811,6 +840,131 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 	}
 	if containsText(calls.texts(), "Usage: specify one agent") {
 		t.Fatalf("absolute path text should not reply usage, messages=%#v", calls.texts())
+	}
+}
+
+func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			reply: "ok",
+			info:  agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		threadID: "thread-1",
+	}
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, _, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.sendToNamedAgent(context.Background(), client, newTextMessage(101, "/codex hello"), "codex", "hello", "client-1")
+
+	if ag.chatCalls != 1 {
+		t.Fatalf("codex chat calls=%d, want 1", ag.chatCalls)
+	}
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.lastConversationID != wantConversationID {
+		t.Fatalf("conversationID=%q, want %q", ag.lastConversationID, wantConversationID)
+	}
+	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	if thread != "thread-1" || pending {
+		t.Fatalf("stored thread=%q pending=%v, want thread-1 false", thread, pending)
+	}
+}
+
+func TestHandleCodexNewCommandClearsWorkspaceThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		threadID: "thread-old",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-old")
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(102, "/codex new"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.clearCalledWith != wantConversationID {
+		t.Fatalf("clear conversationID=%q, want %q", ag.clearCalledWith, wantConversationID)
+	}
+	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	if thread != "" || !pending {
+		t.Fatalf("stored thread=%q pending=%v, want empty true", thread, pending)
+	}
+	if !containsText(calls.texts(), "已切换到新会话") {
+		t.Fatalf("reply should mention new session, messages=%#v", calls.texts())
+	}
+}
+
+func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(103, "/codex switch thread-2"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-2" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-2)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	if thread != "thread-2" || pending {
+		t.Fatalf("stored thread=%q pending=%v, want thread-2 false", thread, pending)
+	}
+	if !containsText(calls.texts(), "已切换线程") {
+		t.Fatalf("reply should mention switched thread, messages=%#v", calls.texts())
+	}
+}
+
+func TestHandleCodexWhereAndWorkspaceCommands(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(104, "/codex where"))
+	h.HandleMessage(context.Background(), client, newTextMessage(105, "/codex workspace"))
+
+	texts := calls.texts()
+	if !containsText(texts, "workspace: "+workspace) {
+		t.Fatalf("where should include workspace, messages=%#v", texts)
+	}
+	if !containsText(texts, "thread: thread-1") {
+		t.Fatalf("where/workspace should include thread, messages=%#v", texts)
 	}
 }
 

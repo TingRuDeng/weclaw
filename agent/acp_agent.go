@@ -476,6 +476,45 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 	return sessionID, nil
 }
 
+// CurrentCodexThread 返回指定会话当前绑定的 Codex thread。
+func (a *ACPAgent) CurrentCodexThread(conversationID string) (string, bool) {
+	if a.protocol != protocolCodexAppServer {
+		return "", false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	threadID := strings.TrimSpace(a.threads[conversationID])
+	return threadID, threadID != ""
+}
+
+// UseCodexThread 将指定会话切换到已有 Codex thread，并先 resume 验证可用性。
+func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, threadID string) error {
+	if a.protocol != protocolCodexAppServer {
+		return fmt.Errorf("agent is not codex app-server")
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return fmt.Errorf("empty thread id")
+	}
+	if err := a.resumeThread(ctx, threadID); err != nil {
+		return fmt.Errorf("resume thread %s: %w", threadID, err)
+	}
+	a.mu.Lock()
+	a.threads[conversationID] = threadID
+	delete(a.resumeOnFirstUse, conversationID)
+	a.mu.Unlock()
+	a.persistState()
+	return nil
+}
+
+// ClearCodexThread 清理指定会话的 Codex thread，下一条消息会创建新 thread。
+func (a *ACPAgent) ClearCodexThread(conversationID string) {
+	if a.protocol != protocolCodexAppServer {
+		return
+	}
+	a.clearCodexThread(conversationID)
+}
+
 // Chat sends a message and returns the full response.
 func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
 	return a.chat(ctx, conversationID, message, nil)

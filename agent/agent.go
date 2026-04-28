@@ -93,3 +93,10 @@ type Agent interface {
 	// SetCwd changes the working directory for subsequent operations.
 	SetCwd(cwd string)
 }
+
+// CodexThreadAgent 暴露 Codex app-server 的 thread 控制能力。
+type CodexThreadAgent interface {
+	CurrentCodexThread(conversationID string) (string, bool)
+	UseCodexThread(ctx context.Context, conversationID string, threadID string) error
+	ClearCodexThread(conversationID string)
+}
