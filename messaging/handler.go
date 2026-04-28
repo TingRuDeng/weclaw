@@ -937,21 +937,38 @@ func (h *Handler) buildStatus() string {
 }
 
 func buildHelpText() string {
-	return `Available commands:
-@agent or /agent - Switch default agent
-@agent msg or /agent msg - Send to a specific agent
-@a @b msg - Broadcast to multiple agents
-/new or /clear - Start a new session
-/sw ls - 列出可切换的 Codex 账户
-/sw <编号|ID> - 切换到指定 Codex 账户
-/sw help - 显示 Codex 账户切换帮助
-/progress - 查看或切换进度模式
-/codex where|workspace|new|switch - 管理 Codex 会话
-/cwd /path - Switch workspace directory
-/info - Show current agent info
-/help - Show this help message
+	return `WeClaw 帮助
 
-Aliases: /cc(claude) /cx(codex) /cs(cursor) /km(kimi) /gm(gemini) /oc(openclaw) /ocd(opencode) /pi(pi) /cp(copilot) /dr(droid) /if(iflow) /kr(kiro) /qw(qwen)`
+常用：
+/info 查看当前 Agent
+/new 开启新会话
+/cwd /绝对路径 切换工作目录
+/progress 查看或切换进度模式
+
+Codex：
+/codex where 查看当前 Codex workspace 和 thread
+/codex workspace 查看已记录的 workspace 会话
+/codex new 新建当前 workspace 的 Codex 会话
+/codex switch <threadId> 切换到指定 Codex thread
+
+Codex 账号：
+/sw ls 查看可切换账号
+/sw current 查看当前账号
+/sw <编号|ID> 切换账号
+/sw reload 手动刷新 Codex Agent
+/sw help 查看账号切换帮助
+
+指定 Agent：
+/codex 任务 发给 Codex
+/claude 任务 发给 Claude
+@codex @claude 任务 同时发给多个 Agent
+
+常用别名：
+/cx = /codex
+/cc = /claude
+/cs = /cursor
+/km = /kimi
+/gm = /gemini`
 }
 
 func isSwitchCommand(trimmed string) bool {

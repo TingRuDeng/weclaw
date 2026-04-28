@@ -395,14 +395,23 @@ func TestBuildHelpText(t *testing.T) {
 	if text == "" {
 		t.Error("help text is empty")
 	}
-	if !strings.Contains(text, "/info") {
-		t.Error("help text should mention /info")
+	for _, want := range []string{
+		"WeClaw 帮助",
+		"常用：",
+		"Codex：",
+		"Codex 账号：",
+		"指定 Agent：",
+		"常用别名：",
+		"/codex workspace",
+		"/sw reload",
+		"/cx = /codex",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("help text should mention %q", want)
+		}
 	}
-	if !strings.Contains(text, "/help") {
-		t.Error("help text should mention /help")
-	}
-	if !strings.Contains(text, "/sw") {
-		t.Error("help text should mention /sw")
+	if strings.Contains(text, "Available commands") || strings.Contains(text, "Aliases:") {
+		t.Error("help text should not use old English headings")
 	}
 }
 
