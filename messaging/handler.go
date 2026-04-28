@@ -847,7 +847,7 @@ func (h *Handler) resetDefaultSession(ctx context.Context, userID string) string
 		return fmt.Sprintf("Failed to reset session: %v", err)
 	}
 	if sessionID != "" {
-		return fmt.Sprintf("已创建新的%s会话\n%s", name, sessionID)
+		return wechatCommandText(fmt.Sprintf("已创建新的%s会话", name), sessionID)
 	}
 	return fmt.Sprintf("已创建新的%s会话", name)
 }
@@ -862,7 +862,7 @@ func (h *Handler) handleCwd(trimmed string) string {
 			return "No agent running."
 		}
 		info := ag.Info()
-		return fmt.Sprintf("cwd: (check agent config)\nagent: %s", info.Name)
+		return wechatCommandText("cwd: (check agent config)", "agent: "+info.Name)
 	}
 
 	// Expand ~ to home directory
@@ -933,7 +933,11 @@ func (h *Handler) buildStatus() string {
 	}
 
 	info := ag.Info()
-	return fmt.Sprintf("agent: %s\ntype: %s\nmodel: %s", h.defaultName, info.Type, info.Model)
+	return wechatCommandText(
+		"agent: "+h.defaultName,
+		"type: "+info.Type,
+		"model: "+info.Model,
+	)
 }
 
 func buildHelpText() string {
@@ -992,6 +996,27 @@ Codex 账号：
 /gm = /gemini`
 }
 
+// wechatCommandText 将内置命令回复转换为空行分隔，避免微信气泡折叠单换行。
+func wechatCommandText(parts ...string) string {
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = normalizeCommandNewlines(part)
+		for _, line := range strings.Split(part, "\n") {
+			line = strings.TrimRight(line, " \t")
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n\n")
+}
+
+func normalizeCommandNewlines(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.ReplaceAll(text, "\r", "\n")
+}
+
 func isSwitchCommand(trimmed string) bool {
 	fields := strings.Fields(trimmed)
 	return len(fields) > 0 && fields[0] == "/sw"
@@ -1018,7 +1043,10 @@ func isCodexSessionCommand(trimmed string) bool {
 func (h *Handler) handleProgressCommand(trimmed string) string {
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {
-		return "当前进度模式：" + h.resolveProgressConfig("").Mode + "\n可用模式：off、typing、summary、verbose、stream、debug"
+		return wechatCommandText(
+			"当前进度模式："+h.resolveProgressConfig("").Mode,
+			"可用模式：off、typing、summary、verbose、stream、debug",
+		)
 	}
 	if len(fields) != 2 {
 		return "用法：/progress 或 /progress <off|typing|summary|verbose|stream|debug>"
@@ -1026,7 +1054,10 @@ func (h *Handler) handleProgressCommand(trimmed string) string {
 
 	mode := fields[1]
 	if !isSupportedProgressMode(mode) {
-		return "不支持的进度模式：" + mode + "\n可用模式：off、typing、summary、verbose、stream、debug"
+		return wechatCommandText(
+			"不支持的进度模式："+mode,
+			"可用模式：off、typing、summary、verbose、stream、debug",
+		)
 	}
 
 	cfg := h.resolveProgressConfig("")
@@ -1073,7 +1104,7 @@ func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot 
 		codexAg.ClearCodexThread(conversationID)
 	}
 	h.ensureCodexSessions().setPendingNew(codexBindingKey(userID, agentName), workspaceRoot)
-	return "已切换到新会话。\n\nworkspace: " + workspaceRoot
+	return wechatCommandText("已切换到新会话。", "workspace: "+workspaceRoot)
 }
 
 func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, threadID string) string {
@@ -1086,7 +1117,7 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 		return fmt.Sprintf("切换线程失败: %v", err)
 	}
 	h.ensureCodexSessions().setThread(codexBindingKey(userID, agentName), workspaceRoot, threadID)
-	return "已切换线程。\n\nworkspace: " + workspaceRoot + "\nthread: " + threadID
+	return wechatCommandText("已切换线程。", "workspace: "+workspaceRoot, "thread: "+threadID)
 }
 
 func (h *Handler) getCodexSessionAgent(ctx context.Context) (string, agent.Agent, error) {
@@ -1132,7 +1163,7 @@ func (h *Handler) codexWorkspaceRoot(agentName string) string {
 
 func (h *Handler) renderCodexWhere(bindingKey string, workspaceRoot string) string {
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
-	return "workspace: " + workspaceRoot + "\nthread: " + renderCodexThreadLabel(threadID, pending)
+	return wechatCommandText("workspace: "+workspaceRoot, "thread: "+renderCodexThreadLabel(threadID, pending))
 }
 
 func (h *Handler) renderCodexWorkspace(bindingKey string) string {
@@ -1140,15 +1171,12 @@ func (h *Handler) renderCodexWorkspace(bindingKey string) string {
 	if len(views) == 0 {
 		return "当前还没有 Codex workspace。"
 	}
-	var b strings.Builder
-	b.WriteString("Codex workspaces:")
+	lines := []string{"Codex workspaces:"}
 	for _, view := range views {
-		b.WriteString("\n- ")
-		b.WriteString(view.WorkspaceRoot)
-		b.WriteString("\n  thread: ")
-		b.WriteString(renderCodexThreadLabel(view.ThreadID, view.PendingNewThread))
+		lines = append(lines, "- "+view.WorkspaceRoot)
+		lines = append(lines, "  thread: "+renderCodexThreadLabel(view.ThreadID, view.PendingNewThread))
 	}
-	return b.String()
+	return wechatCommandText(lines...)
 }
 
 func renderCodexThreadLabel(threadID string, pending bool) string {
@@ -1162,7 +1190,13 @@ func renderCodexThreadLabel(threadID string, pending bool) string {
 }
 
 func buildCodexSessionHelpText() string {
-	return "Codex 会话命令:\n/codex where\n/codex workspace\n/codex new\n/codex switch <threadId>"
+	return wechatCommandText(
+		"Codex 会话命令:",
+		"/codex where",
+		"/codex workspace",
+		"/codex new",
+		"/codex switch <threadId>",
+	)
 }
 
 func isSupportedProgressMode(mode string) bool {
@@ -1246,15 +1280,15 @@ func (h *Handler) handleSwitchCommand(ctx context.Context, trimmed string) strin
 		if cleanOutput == "" {
 			return fmt.Sprintf("切换失败: %v", err)
 		}
-		return fmt.Sprintf("切换失败:\n%s", cleanOutput)
+		return wechatCommandText("切换失败:", cleanOutput)
 	}
 	if cleanOutput == "" {
 		cleanOutput = "命令执行完成。"
 	}
 	if isCodexSwitchAction(args) {
-		return cleanOutput + "\n\n" + h.refreshCodexAgentsAfterSwitch(ctx)
+		return wechatCommandText(cleanOutput, h.refreshCodexAgentsAfterSwitch(ctx))
 	}
-	return cleanOutput
+	return wechatCommandText(cleanOutput)
 }
 
 func isCodexSwitchAction(args []string) bool {
@@ -1333,14 +1367,16 @@ func isCodexAgent(name string, info agent.AgentInfo) bool {
 }
 
 func buildSwitchHelpText() string {
-	return `Codex 账户切换命令:
-/sw ls - 列出可切换账户
-/sw current - 显示当前账户
-/sw <编号|ID> - 切换到指定账户
-/sw reload - 手动刷新 WeClaw 中的 Codex Agent
-/sw show <编号|ID> - 查看账户详情
-/sw config - 查看当前 Codex 配置
-/sw help - 显示本帮助`
+	return wechatCommandText(
+		"Codex 账户切换命令:",
+		"/sw ls - 列出可切换账户",
+		"/sw current - 显示当前账户",
+		"/sw <编号|ID> - 切换到指定账户",
+		"/sw reload - 手动刷新 WeClaw 中的 Codex Agent",
+		"/sw show <编号|ID> - 查看账户详情",
+		"/sw config - 查看当前 Codex 配置",
+		"/sw help - 显示本帮助",
+	)
 }
 
 func resolveSwitchScriptPath() string {

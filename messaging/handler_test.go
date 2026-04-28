@@ -427,6 +427,57 @@ func TestBuildHelpText(t *testing.T) {
 	}
 }
 
+func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Model: "gpt-test", Command: "codex"},
+	}
+
+	tests := map[string]string{
+		"info":        h.buildStatus(),
+		"cwd":         h.handleCwd("/cwd"),
+		"progress":    h.handleProgressCommand("/progress"),
+		"progressErr": h.handleProgressCommand("/progress unknown"),
+		"codexHelp":   buildCodexSessionHelpText(),
+		"switchHelp":  buildSwitchHelpText(),
+	}
+
+	for name, text := range tests {
+		if strings.Contains(text, "\n") && !strings.Contains(text, "\n\n") {
+			t.Fatalf("%s reply should use blank lines for WeChat rendering, got %q", name, text)
+		}
+	}
+}
+
+func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
+	h := NewHandler(nil, nil)
+	bindingKey := codexBindingKey("user-1", "codex")
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
+	h.codexSessions.setPendingNew(bindingKey, workspaceB)
+
+	where := h.renderCodexWhere(bindingKey, workspaceA)
+	if !strings.Contains(where, "workspace: "+workspaceA+"\n\nthread: thread-a") {
+		t.Fatalf("where reply should separate fields with blank lines, got %q", where)
+	}
+
+	list := h.renderCodexWorkspace(bindingKey)
+	for _, want := range []string{
+		"Codex workspaces:\n\n- ",
+		workspaceA + "\n\n  thread: thread-a",
+		workspaceB + "\n\n  thread: (new draft)",
+	} {
+		if !strings.Contains(list, want) {
+			t.Fatalf("workspace reply missing %q, got %q", want, list)
+		}
+	}
+	if strings.Contains(list, "Codex workspaces:\n- ") {
+		t.Fatalf("workspace reply should not use single newline after title, got %q", list)
+	}
+}
+
 func TestParseSwitchCommand_ListAlias(t *testing.T) {
 	args, usage := parseSwitchCommand("/sw ls")
 	if usage != "" {
@@ -487,6 +538,19 @@ func TestHandleSwitchCommand_StripsANSI(t *testing.T) {
 	}
 	if !strings.Contains(reply, "[OK] 已切换") {
 		t.Fatalf("unexpected reply: %q", reply)
+	}
+}
+
+func TestHandleSwitchCommandFormatsScriptOutputForWeChat(t *testing.T) {
+	h := newTestHandler()
+	h.switchRunner = func(ctx context.Context, scriptPath string, args ...string) (string, error) {
+		return "当前账号: plus\n可切换账号: 2\n", nil
+	}
+
+	reply := h.handleSwitchCommand(context.Background(), "/sw current")
+	want := "当前账号: plus\n\n可切换账号: 2"
+	if reply != want {
+		t.Fatalf("reply=%q, want %q", reply, want)
 	}
 }
 

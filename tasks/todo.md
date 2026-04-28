@@ -182,3 +182,21 @@
 ### Review 小结
 
 已完成 Codex workspace/thread 列表持久化。WeClaw 启动时会从 `~/.weclaw/codex-sessions.json` 加载 workspace/thread 列表，运行中更新 thread 或 pending new 状态时会写回该文件。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
+
+## 微信命令回复换行展示修复清单
+
+### 目标
+
+修复 `/codex workspace` 等内置命令在微信气泡中单换行被折叠的问题，同时不影响 Agent 最终回复的原始换行。
+
+### 执行任务
+
+- [x] 新增命令回复换行回归测试，覆盖 Codex workspace、where、帮助、进度、状态和账号切换帮助。
+- [x] 将内置命令回复统一为微信友好的空行分隔格式。
+- [x] 保持 `SendTextReply` 原样发送最终文本，不做全局换行替换。
+- [x] 运行定向测试、全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成微信内置命令回复换行修复。`/codex workspace`、`/codex where`、`/codex help`、`/progress`、`/info`、`/cwd` 和 `/sw` 脚本输出现在会使用空行分隔，避免微信气泡把多行内容挤成一段；`SendTextReply` 仍保持原样发送，不影响 Agent 最终回复里的真实换行。验证命令：`go test ./messaging -run 'TestCommandRepliesUseBlankLinesForWeChat|TestCodexWorkspaceRepliesUseBlankLinesForWeChat|TestHandleSwitchCommandFormatsScriptOutputForWeChat' -count=1` 与 `go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
