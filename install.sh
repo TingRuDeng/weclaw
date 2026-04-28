@@ -14,6 +14,24 @@ github_download() {
   fi
 }
 
+github_latest_url() {
+  if [ -n "$TOKEN" ]; then
+    curl -fsSLI -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "$1"
+  else
+    curl -fsSLI -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" "$1"
+  fi
+}
+
+latest_version() {
+  latest_url=$(github_latest_url "https://github.com/${REPO}/releases/latest")
+  version=${latest_url##*/tag/}
+  if [ -z "$version" ] || [ "$version" = "$latest_url" ]; then
+    echo "Error: could not determine latest version from ${latest_url}" >&2
+    exit 1
+  fi
+  echo "$version"
+}
+
 # Detect OS
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$OS" in
@@ -35,10 +53,9 @@ echo "Detected: ${OS}/${ARCH}"
 FILENAME="${BINARY}_${OS}_${ARCH}"
 VERSION="${WECLAW_VERSION:-latest}"
 if [ "$VERSION" = "latest" ]; then
-  URL="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
-else
-  URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+  VERSION=$(latest_version)
 fi
+URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 
 echo "Downloading ${URL}..."
 TMP=$(mktemp)
