@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -123,27 +122,43 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 }
 
 func getLatestVersion() (string, error) {
-	req, err := newGitHubRequest(http.MethodGet, fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo))
+	req, err := newGitHubRequest(http.MethodGet, fmt.Sprintf("https://github.com/%s/releases/latest", githubRepo))
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusSeeOther && resp.StatusCode != http.StatusTemporaryRedirect && resp.StatusCode != http.StatusPermanentRedirect {
+		return "", fmt.Errorf("GitHub latest redirect returned %d", resp.StatusCode)
 	}
 
-	var release struct {
-		TagName string `json:"tag_name"`
+	return releaseTagFromLatestRedirect(resp.Header.Get("Location"))
+}
+
+func releaseTagFromLatestRedirect(location string) (string, error) {
+	location = strings.TrimSpace(location)
+	const marker = "/releases/tag/"
+	idx := strings.LastIndex(location, marker)
+	if idx < 0 {
+		return "", fmt.Errorf("missing release tag in redirect %q", location)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
+	tag := strings.TrimSpace(location[idx+len(marker):])
+	if cut := strings.IndexAny(tag, "?#"); cut >= 0 {
+		tag = tag[:cut]
 	}
-	return release.TagName, nil
+	if tag == "" {
+		return "", fmt.Errorf("empty release tag in redirect %q", location)
+	}
+	return tag, nil
 }
 
 func downloadFile(url string) (string, error) {

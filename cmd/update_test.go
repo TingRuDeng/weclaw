@@ -32,3 +32,21 @@ func TestGitHubAuthTokenFallsBackToGHToken(t *testing.T) {
 		t.Fatalf("githubAuthToken = %q, want token-2", got)
 	}
 }
+
+func TestReleaseTagFromLatestRedirect(t *testing.T) {
+	location := "https://github.com/TingRuDeng/weclaw/releases/tag/v0.1.3"
+
+	got, err := releaseTagFromLatestRedirect(location)
+	if err != nil {
+		t.Fatalf("releaseTagFromLatestRedirect error: %v", err)
+	}
+	if got != "v0.1.3" {
+		t.Fatalf("tag = %q, want v0.1.3", got)
+	}
+}
+
+func TestReleaseTagFromLatestRedirectRejectsInvalidLocation(t *testing.T) {
+	if _, err := releaseTagFromLatestRedirect("https://github.com/TingRuDeng/weclaw/releases"); err == nil {
+		t.Fatal("expected invalid redirect error")
+	}
+}

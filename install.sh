@@ -6,14 +6,6 @@ BINARY="weclaw"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
-github_api() {
-  if [ -n "$TOKEN" ]; then
-    curl -fsSL -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "$1"
-  else
-    curl -fsSL -H "User-Agent: weclaw-installer" "$1"
-  fi
-}
-
 github_download() {
   if [ -n "$TOKEN" ]; then
     curl -fsSL -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" -o "$2" "$1"
@@ -39,20 +31,14 @@ esac
 
 echo "Detected: ${OS}/${ARCH}"
 
-# Get latest version
-echo "Fetching latest release..."
-VERSION=$(github_api "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
-
-if [ -z "$VERSION" ]; then
-  echo "Error: could not determine latest version. Is there a release on GitHub?"
-  exit 1
-fi
-
-echo "Latest version: ${VERSION}"
-
 # Download
 FILENAME="${BINARY}_${OS}_${ARCH}"
-URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+VERSION="${WECLAW_VERSION:-latest}"
+if [ "$VERSION" = "latest" ]; then
+  URL="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
+else
+  URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+fi
 
 echo "Downloading ${URL}..."
 TMP=$(mktemp)
