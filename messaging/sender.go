@@ -58,15 +58,17 @@ func SendTextReply(ctx context.Context, client *ilink.Client, toUserID, text, co
 		clientID = NewClientID()
 	}
 
-	// Convert markdown to plain text for WeChat display
+	// 先转纯文本，再做微信展示换行适配，避免气泡折叠单换行。
 	plainText := MarkdownToPlainText(text)
-	return sendPlainTextReply(ctx, client, toUserID, plainText, contextToken, clientID)
+	displayText := FormatTextForWeChatDisplay(plainText)
+	return sendPlainTextReply(ctx, client, toUserID, displayText, contextToken, clientID)
 }
 
 // SendTextReplyChunks 将过长回复按自然边界拆成多条微信消息，避免单条消息过长。
 func SendTextReplyChunks(ctx context.Context, client *ilink.Client, toUserID, text, contextToken, clientID string, maxRunes int) error {
 	plainText := MarkdownToPlainText(text)
-	chunks := splitTextReplyChunks(plainText, maxRunes)
+	displayText := FormatTextForWeChatDisplay(plainText)
+	chunks := splitTextReplyChunks(displayText, maxRunes)
 	for i, chunk := range chunks {
 		chunkClientID := clientID
 		if i > 0 || chunkClientID == "" {
@@ -77,6 +79,27 @@ func SendTextReplyChunks(ctx context.Context, client *ilink.Client, toUserID, te
 		}
 	}
 	return nil
+}
+
+// FormatTextForWeChatDisplay 将逻辑换行转换成微信气泡能稳定展示的空行分隔。
+func FormatTextForWeChatDisplay(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	parts := strings.Split(text, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, line := range parts {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n\n")
 }
 
 // sendPlainTextReply 发送已经转换为纯文本的微信消息，避免分段时重复做 markdown 转换。

@@ -200,3 +200,21 @@
 ### Review 小结
 
 已完成微信内置命令回复换行修复。`/codex workspace`、`/codex where`、`/codex help`、`/progress`、`/info`、`/cwd` 和 `/sw` 脚本输出现在会使用空行分隔，避免微信气泡把多行内容挤成一段；`SendTextReply` 仍保持原样发送，不影响 Agent 最终回复里的真实换行。验证命令：`go test ./messaging -run 'TestCommandRepliesUseBlankLinesForWeChat|TestCodexWorkspaceRepliesUseBlankLinesForWeChat|TestHandleSwitchCommandFormatsScriptOutputForWeChat' -count=1` 与 `go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
+
+## 微信最终回复换行展示修复清单
+
+### 目标
+
+修复 Agent 最终回复在微信气泡中单换行被折叠的问题，让步骤、目的、执行结果等多行文本保持可读。
+
+### 执行任务
+
+- [x] 新增发送层回归测试，复现最终回复单换行没有转成微信可见空行的问题。
+- [x] 在发送层增加微信展示格式化，将单换行转换为空行分隔。
+- [x] 同步更新长回复分段测试，确保分段顺序和展示文本一致。
+- [x] 运行定向测试、全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成微信最终回复换行展示修复。发送层会在 Markdown 转纯文本之后，把逻辑换行转换为空行分隔，解决微信气泡把步骤、目的、执行等多行结果压成一段的问题；长回复分段也基于展示文本进行，避免分段后再丢失可见换行。验证命令：`go test ./messaging -run TestSendTextReplyFormatsLineBreaksForWeChatDisplay -count=1`、`go test ./messaging -count=1` 与 `go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。

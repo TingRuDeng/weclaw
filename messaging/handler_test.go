@@ -180,10 +180,11 @@ func waitForText(t *testing.T, calls *recordedILinkCalls, contains string) {
 	t.Fatalf("未等到包含 %q 的消息，已发送: %#v", contains, calls.texts())
 }
 
-func TestSendTextReplyPreservesLineBreaks(t *testing.T) {
+func TestSendTextReplyFormatsLineBreaksForWeChatDisplay(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	reply := "🧩 步骤：查询当前工作目录\n🎯 目的：准确返回你当前会话路径\n▶️ 执行：运行 pwd 命令。\n/Volumes/Data/code/MyCode"
+	want := "🧩 步骤：查询当前工作目录\n\n🎯 目的：准确返回你当前会话路径\n\n▶️ 执行：运行 pwd 命令。\n\n/Volumes/Data/code/MyCode"
 
 	if err := SendTextReply(context.Background(), client, "user-1", reply, "ctx-1", "client-1"); err != nil {
 		t.Fatalf("SendTextReply error: %v", err)
@@ -193,8 +194,8 @@ func TestSendTextReplyPreservesLineBreaks(t *testing.T) {
 	if len(texts) != 1 {
 		t.Fatalf("sent texts=%#v, want one text", texts)
 	}
-	if texts[0] != reply {
-		t.Fatalf("sent text=%q, want original reply with newlines", texts[0])
+	if texts[0] != want {
+		t.Fatalf("sent text=%q, want WeChat display line breaks %q", texts[0], want)
 	}
 }
 
@@ -215,8 +216,9 @@ func TestSendTextReplyChunksSplitsLongTextAndKeepsOrder(t *testing.T) {
 	if len(texts) != 3 {
 		t.Fatalf("sent texts=%#v, want three chunks", texts)
 	}
-	if strings.Join(texts, "\n") != text {
-		t.Fatalf("joined chunks=%q, want original text", strings.Join(texts, "\n"))
+	wantText := FormatTextForWeChatDisplay(text)
+	if strings.Join(texts, "\n") != wantText {
+		t.Fatalf("joined chunks=%q, want WeChat display text %q", strings.Join(texts, "\n"), wantText)
 	}
 	for _, chunk := range texts {
 		if len([]rune(chunk)) > 15 {
@@ -1137,8 +1139,9 @@ func TestSendReplyWithMediaUsesChunksForLongFinalText(t *testing.T) {
 	if len(texts) != 3 {
 		t.Fatalf("sent texts=%#v, want three chunks", texts)
 	}
-	if strings.Join(texts, "\n") != reply {
-		t.Fatalf("joined chunks=%q, want original reply", strings.Join(texts, "\n"))
+	wantReply := FormatTextForWeChatDisplay(reply)
+	if strings.Join(texts, "\n") != wantReply {
+		t.Fatalf("joined chunks=%q, want WeChat display reply %q", strings.Join(texts, "\n"), wantReply)
 	}
 }
 
