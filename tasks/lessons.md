@@ -29,3 +29,9 @@
 - 只持久化 workspace -> thread 列表不够，还必须持久化用户当前 active workspace；否则重启后会回到配置里的默认 cwd。
 - Codex 普通聊天、`/codex switch`、`/codex new` 和 `/cwd` 都可能改变 active workspace，必须同步写入 session store。
 - 重启恢复类问题必须用“新 Handler 加载同一个 session 文件”的测试覆盖。
+
+## 2026-04-28 Codex 同会话并发
+
+- 同一微信用户、同一 Codex Agent、同一 workspace 不能并发进入 Codex turn；否则本地 Codex 队列和 WeClaw 进度会话可能出现结果归属错乱。
+- 串行化边界应包住进度会话、Agent 调用和最终回复，确保第二条任务不会在第一条任务完成前启动自己的 typing/progress 生命周期。
+- 并发类 bug 必须补“第二条消息等待第一条完成”的回归测试，不能只验证单次调用成功。

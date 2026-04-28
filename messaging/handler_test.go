@@ -20,6 +20,11 @@ import (
 	"github.com/fastclaw-ai/weclaw/ilink"
 )
 
+const (
+	taskQueueProbeDelay = 50 * time.Millisecond
+	taskWaitTimeout     = 500 * time.Millisecond
+)
+
 func newTestHandler() *Handler {
 	return &Handler{agents: make(map[string]agent.Agent)}
 }
@@ -112,6 +117,62 @@ func (f *fakeProgressAgent) ChatWithProgress(_ context.Context, _ string, _ stri
 		time.Sleep(f.delay)
 	}
 	return f.reply, f.err
+}
+
+type blockingProgressAgent struct {
+	fakeAgent
+	mu        sync.Mutex
+	started   int
+	active    int
+	maxActive int
+	entered   chan struct{}
+	release   chan struct{}
+}
+
+func newBlockingProgressAgent() *blockingProgressAgent {
+	return &blockingProgressAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+}
+
+func (f *blockingProgressAgent) ChatWithProgress(ctx context.Context, _ string, _ string, _ func(delta string)) (string, error) {
+	callIndex := f.markStarted()
+	f.entered <- struct{}{}
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+		f.markFinished()
+		return "", ctx.Err()
+	}
+	f.markFinished()
+	return fmt.Sprintf("第%d条结果", callIndex), nil
+}
+
+func (f *blockingProgressAgent) markStarted() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started++
+	f.active++
+	if f.active > f.maxActive {
+		f.maxActive = f.active
+	}
+	return f.started
+}
+
+func (f *blockingProgressAgent) markFinished() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.active--
+}
+
+func (f *blockingProgressAgent) stats() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.started, f.maxActive
 }
 
 type recordedILinkCalls struct {
@@ -809,7 +870,7 @@ func TestStartProgressSessionDefaultTypingModeDoesNotSendTextFeedback(t *testing
 	onProgress, stop := h.startProgressSession(context.Background(), client, "user-1", "ctx-1", "", "查询当前工作目录", cfg)
 
 	onProgress("正在生成结果")
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(taskQueueProbeDelay)
 	stop()
 
 	if texts := calls.texts(); len(texts) != 0 {
@@ -858,6 +919,51 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 
 	if !containsText(calls.texts(), "实时片段，仅供预览") {
 		t.Fatalf("expected named agent to use stream override, messages=%#v", calls.texts())
+	}
+}
+
+func TestSendToNamedCodexSerializesSameExecutionKey(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		close(firstDone)
+	}()
+	waitForAgentEnter(t, ag)
+
+	secondDone := make(chan struct{})
+	go func() {
+		h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+		close(secondDone)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	started, maxActive := ag.stats()
+	if started != 1 || maxActive != 1 {
+		t.Fatalf("并发进入 Codex: started=%d maxActive=%d", started, maxActive)
+	}
+
+	ag.release <- struct{}{}
+	waitDone(t, firstDone, "第一条任务")
+	waitForAgentEnter(t, ag)
+	ag.release <- struct{}{}
+	waitDone(t, secondDone, "第二条任务")
+
+	texts := calls.texts()
+	firstIndex := textIndex(texts, "第1条结果")
+	secondIndex := textIndex(texts, "第2条结果")
+	if firstIndex < 0 || secondIndex < 0 || firstIndex > secondIndex {
+		t.Fatalf("回复顺序错误，messages=%#v", texts)
 	}
 }
 
@@ -1255,4 +1361,31 @@ func containsText(texts []string, part string) bool {
 		}
 	}
 	return false
+}
+
+func waitForAgentEnter(t *testing.T, ag *blockingProgressAgent) {
+	t.Helper()
+	select {
+	case <-ag.entered:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("未等到 Agent 开始处理")
+	}
+}
+
+func waitDone(t *testing.T, done <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(taskWaitTimeout):
+		t.Fatalf("未等到%s结束", label)
+	}
+}
+
+func textIndex(texts []string, part string) int {
+	for i, text := range texts {
+		if strings.Contains(text, part) {
+			return i
+		}
+	}
+	return -1
 }

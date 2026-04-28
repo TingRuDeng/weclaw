@@ -274,3 +274,22 @@
 ### Review 小结
 
 已完成 Codex active workspace 重启恢复。`codex-sessions.json` 现在会记录每个微信用户 + Codex Agent 的 active workspace；WeClaw 重启后，下一条 Codex 消息会先恢复 active workspace，再 resume 对应 thread，不需要重新 `/codex switch`。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
+
+## Codex 同会话并发任务串行化清单
+
+### 目标
+
+修复本地 Codex 执行第一条任务期间收到第二条命令时，第二条结果覆盖/抢先返回，第一条进度状态残留的问题。
+
+### 执行任务
+
+- [x] 定位微信 Handler 到 ACP/Codex 的并发入口。
+- [x] 新增同一 Codex 执行通道的串行化回归测试。
+- [x] 在 Handler 中按用户、Agent 和 Codex workspace 串行化任务执行。
+- [x] 验证默认进度生命周期仍由对应任务停止。
+- [x] 运行全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 同会话并发任务串行化。Handler 现在按用户、Agent 和 Codex workspace 生成执行 key，并把进度会话、Agent 调用和最终回复包在同一把锁内；同一执行通道的第二条消息会等待第一条完整结束后再进入 Codex，避免第一条结果被跳过和 typing/progress 生命周期残留。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。

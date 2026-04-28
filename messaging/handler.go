@@ -68,6 +68,8 @@ type Handler struct {
 	agentProgressConfigs map[string]config.ProgressConfig
 	seenTextMsgs         sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
 	codexSessions        *codexSessionStore
+	taskLocksMu          sync.Mutex
+	taskLocks            map[string]*sync.Mutex
 }
 
 const (
@@ -92,6 +94,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		progressConfig:       config.DefaultProgressConfig(),
 		agentProgressConfigs: make(map[string]config.ProgressConfig),
 		codexSessions:        newCodexSessionStore(),
+		taskLocks:            make(map[string]*sync.Mutex),
 	}
 }
 
@@ -558,6 +561,32 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 	}
 }
 
+func (h *Handler) agentExecutionKey(userID string, agentName string, ag agent.Agent) string {
+	info := ag.Info()
+	if isCodexAgent(agentName, info) {
+		workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
+		return buildCodexConversationID(userID, agentName, workspaceRoot)
+	}
+	return strings.Join([]string{"agent", strings.TrimSpace(userID), strings.TrimSpace(agentName)}, "\x00")
+}
+
+func (h *Handler) lockAgentExecution(key string) func() {
+	h.taskLocksMu.Lock()
+	if h.taskLocks == nil {
+		h.taskLocks = make(map[string]*sync.Mutex)
+	}
+	lock := h.taskLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		h.taskLocks[key] = lock
+	}
+	h.taskLocksMu.Unlock()
+
+	// 同一执行通道串行进入，避免 Codex 同一 thread 内并发 turn 串结果。
+	lock.Lock()
+	return lock.Unlock
+}
+
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, text, clientID string) {
 	h.mu.RLock()
@@ -567,6 +596,10 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 	ag := h.getDefaultAgent()
 	var reply string
 	if ag != nil {
+		executionKey := h.agentExecutionKey(msg.FromUserID, defaultName, ag)
+		unlock := h.lockAgentExecution(executionKey)
+		defer unlock()
+
 		progressCfg := h.resolveProgressConfig(defaultName)
 		onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "", text, progressCfg)
 		defer stopProgress()
@@ -597,6 +630,10 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 		SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID)
 		return
 	}
+
+	executionKey := h.agentExecutionKey(msg.FromUserID, name, ag)
+	unlock := h.lockAgentExecution(executionKey)
+	defer unlock()
 
 	progressCfg := h.resolveProgressConfig(name)
 	onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "", message, progressCfg)
@@ -630,6 +667,10 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
 			}
+			executionKey := h.agentExecutionKey(msg.FromUserID, n, ag)
+			unlock := h.lockAgentExecution(executionKey)
+			defer unlock()
+
 			progressCfg := h.resolveProgressConfig(n)
 			onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "["+n+"] ", message, progressCfg)
 			defer stopProgress()
