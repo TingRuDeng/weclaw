@@ -14,7 +14,7 @@ WeChat AI Agent Bridge — connect WeChat to AI agents (Claude, Codex, Gemini, K
 
 ```bash
 # One-line install
-curl -sSL https://raw.githubusercontent.com/fastclaw-ai/weclaw/main/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
 # Start (first run will prompt QR code login)
 weclaw start
