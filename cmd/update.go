@@ -16,6 +16,7 @@ import (
 )
 
 const githubRepo = "TingRuDeng/weclaw"
+const githubUserAgent = "weclaw-updater"
 
 func init() {
 	rootCmd.AddCommand(updateCmd)
@@ -122,7 +123,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 }
 
 func getLatestVersion() (string, error) {
-	resp, err := http.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo))
+	req, err := newGitHubRequest(http.MethodGet, fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", githubRepo))
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -142,7 +147,11 @@ func getLatestVersion() (string, error) {
 }
 
 func downloadFile(url string) (string, error) {
-	resp, err := http.Get(url)
+	req, err := newGitHubRequest(http.MethodGet, url)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -170,6 +179,25 @@ func downloadFile(url string) (string, error) {
 	}
 
 	return tmp.Name(), nil
+}
+
+func newGitHubRequest(method string, url string) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", githubUserAgent)
+	if token := githubAuthToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return req, nil
+}
+
+func githubAuthToken() string {
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		return token
+	}
+	return strings.TrimSpace(os.Getenv("GH_TOKEN"))
 }
 
 func replaceBinary(src, dst string) error {

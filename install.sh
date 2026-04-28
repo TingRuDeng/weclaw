@@ -4,6 +4,23 @@ set -e
 REPO="${WECLAW_REPO:-TingRuDeng/weclaw}"
 BINARY="weclaw"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+
+github_api() {
+  if [ -n "$TOKEN" ]; then
+    curl -fsSL -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "$1"
+  else
+    curl -fsSL -H "User-Agent: weclaw-installer" "$1"
+  fi
+}
+
+github_download() {
+  if [ -n "$TOKEN" ]; then
+    curl -fsSL -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" -o "$2" "$1"
+  else
+    curl -fsSL -H "User-Agent: weclaw-installer" -o "$2" "$1"
+  fi
+}
 
 # Detect OS
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -24,7 +41,7 @@ echo "Detected: ${OS}/${ARCH}"
 
 # Get latest version
 echo "Fetching latest release..."
-VERSION=$(curl -fsSL -H "User-Agent: weclaw-installer" "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
+VERSION=$(github_api "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p')
 
 if [ -z "$VERSION" ]; then
   echo "Error: could not determine latest version. Is there a release on GitHub?"
@@ -39,7 +56,7 @@ URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 
 echo "Downloading ${URL}..."
 TMP=$(mktemp)
-curl -fsSL -o "$TMP" "$URL"
+github_download "$URL" "$TMP"
 
 # Install
 chmod +x "$TMP"

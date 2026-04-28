@@ -16,6 +16,10 @@
 # 一键安装
 curl -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
+# 私有仓库安装
+export GITHUB_TOKEN=ghp_xxx
+curl -H "Authorization: Bearer $GITHUB_TOKEN" -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
+
 # 启动（首次运行会弹出微信扫码登录）
 weclaw start
 ```

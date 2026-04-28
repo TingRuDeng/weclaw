@@ -16,6 +16,10 @@ WeChat AI Agent Bridge — connect WeChat to AI agents (Claude, Codex, Gemini, K
 # One-line install
 curl -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
+# Private repository install
+export GITHUB_TOKEN=ghp_xxx
+curl -H "Authorization: Bearer $GITHUB_TOKEN" -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
+
 # Start (first run will prompt QR code login)
 weclaw start
 ```
