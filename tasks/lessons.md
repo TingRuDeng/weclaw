@@ -17,3 +17,9 @@
 - 微信客户端已经有“对方正在输入”可视化提示时，默认不要再额外发送“收到”“处理中”“进展”等中间文字气泡。
 - 进度文字适合作为显式 `summary` / `stream` / `debug` 模式，不适合作为默认体验。
 - 改默认进度体验时，必须覆盖“默认不发文字、仍发 typing 状态”的回归测试。
+
+## 2026-04-28 Codex 会话切换
+
+- `/codex switch <threadId>` 不能只切 thread；如果该 thread 已记录在某个 workspace 下，也必须同步切换 Codex Agent 的 workspace。
+- Codex 会话状态涉及 thread 和 cwd 两个状态源，修改其中一个时必须检查另一个是否需要同步。
+- 新增 Codex 会话命令时，要覆盖“跨 workspace 历史 thread 切换”的回归测试。

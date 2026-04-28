@@ -1112,12 +1112,32 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 	if !ok {
 		return "当前 Codex Agent 不支持 thread 切换。"
 	}
+	bindingKey := codexBindingKey(userID, agentName)
+	workspaceRoot = h.resolveCodexSwitchWorkspace(bindingKey, agentName, workspaceRoot, threadID, ag)
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
 	if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
 		return fmt.Sprintf("切换线程失败: %v", err)
 	}
-	h.ensureCodexSessions().setThread(codexBindingKey(userID, agentName), workspaceRoot, threadID)
+	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	return wechatCommandText("已切换线程。", "workspace: "+workspaceRoot, "thread: "+threadID)
+}
+
+func (h *Handler) resolveCodexSwitchWorkspace(bindingKey string, agentName string, fallbackWorkspace string, threadID string, ag agent.Agent) string {
+	workspaceRoot, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID)
+	if !ok {
+		return fallbackWorkspace
+	}
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	ag.SetCwd(workspaceRoot)
+
+	h.mu.Lock()
+	if h.agentWorkDirs == nil {
+		h.agentWorkDirs = make(map[string]string)
+	}
+	h.agentWorkDirs[agentName] = workspaceRoot
+	h.mu.Unlock()
+	log.Printf("[handler] switched codex workspace for agent %s: %s", agentName, workspaceRoot)
+	return workspaceRoot
 }
 
 func (h *Handler) getCodexSessionAgent(ctx context.Context) (string, agent.Agent, error) {

@@ -30,6 +30,7 @@ type fakeAgent struct {
 	chatCalls          int
 	lastConversationID string
 	lastMessage        string
+	lastCwd            string
 	info               agent.AgentInfo
 }
 
@@ -52,7 +53,9 @@ func (f *fakeAgent) Info() agent.AgentInfo {
 	return agent.AgentInfo{Name: "fake", Type: "test", Model: "mock", Command: "fake"}
 }
 
-func (f *fakeAgent) SetCwd(_ string) {}
+func (f *fakeAgent) SetCwd(cwd string) {
+	f.lastCwd = cwd
+}
 
 type fakeStoppableAgent struct {
 	fakeAgent
@@ -1050,6 +1053,40 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "已切换线程") {
 		t.Fatalf("reply should mention switched thread, messages=%#v", calls.texts())
+	}
+}
+
+func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	currentWorkspace := t.TempDir()
+	targetWorkspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
+	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), targetWorkspace, "thread-target")
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(106, "/codex switch thread-target"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-target" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-target)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	if ag.lastCwd != targetWorkspace {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, targetWorkspace)
+	}
+	if got := h.codexWorkspaceRoot("codex"); got != targetWorkspace {
+		t.Fatalf("handler workspace=%q, want %q", got, targetWorkspace)
+	}
+	if !containsText(calls.texts(), "workspace: "+targetWorkspace) {
+		t.Fatalf("reply should mention switched workspace, messages=%#v", calls.texts())
 	}
 }
 

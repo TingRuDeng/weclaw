@@ -139,6 +139,30 @@ func (s *codexSessionStore) listWorkspaces(bindingKey string) []codexWorkspaceVi
 	return views
 }
 
+func (s *codexSessionStore) findWorkspaceByThread(bindingKey string, threadID string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return "", false
+	}
+
+	binding := s.bindings[bindingKey]
+	var matchedRoot string
+	var matchedUpdatedAt string
+	for root, session := range binding.Workspaces {
+		if strings.TrimSpace(session.ThreadID) != threadID {
+			continue
+		}
+		if matchedRoot == "" || session.UpdatedAt > matchedUpdatedAt {
+			matchedRoot = root
+			matchedUpdatedAt = session.UpdatedAt
+		}
+	}
+	return matchedRoot, matchedRoot != ""
+}
+
 func (s *codexSessionStore) updateWorkspace(bindingKey string, workspaceRoot string, session codexWorkspaceSession) {
 	s.mu.Lock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)

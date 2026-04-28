@@ -237,3 +237,21 @@
 ### Review 小结
 
 已完成微信默认进度反馈静默化。默认 `progress.mode` 从 `summary` 调整为 `typing`，默认 `send_acceptance` 调整为 `false`；长任务期间只保留微信 typing 状态，最终仍发送完整结果。显式切到 `summary` 或 `stream` 时，中间文字进度仍可用。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
+
+## Codex switch 同步 workspace 清单
+
+### 目标
+
+修复 `/codex switch <threadId>` 只切 thread、不切 workspace 的问题，避免切换历史 Codex 会话后还要额外执行 `/cwd`。
+
+### 执行任务
+
+- [x] 新增回归测试，复现已记录 thread 属于其他 workspace 时 `/codex switch` 仍使用当前 workspace 的问题。
+- [x] 在 Codex session store 中支持按 thread 反查 workspace。
+- [x] `/codex switch` 命中已记录 thread 时同步更新 Codex Agent cwd 和 Handler workspace 状态。
+- [x] 运行全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 `/codex switch` 同步 workspace 修复。现在切换到已记录的 thread 时，会先从 Codex workspace/session 记录中反查该 thread 所属 workspace，再同步更新 Codex Agent 的 cwd 和 Handler 的 workspace 状态；如果 thread 未记录，则保留原有“当前 workspace 内切换”的行为。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
