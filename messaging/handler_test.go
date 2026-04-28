@@ -479,7 +479,8 @@ func TestBuildHelpText(t *testing.T) {
 		"Codex 账号：",
 		"指定 Agent：",
 		"常用别名：",
-		"/codex workspace",
+		"/codex ls",
+		"/codex whoami",
 		"/sw reload",
 		"/cx = /codex",
 	} {
@@ -490,11 +491,14 @@ func TestBuildHelpText(t *testing.T) {
 	if strings.Contains(text, "Available commands") || strings.Contains(text, "Aliases:") {
 		t.Error("help text should not use old English headings")
 	}
+	if strings.Contains(text, "/codex where") || strings.Contains(text, "/codex workspace") {
+		t.Error("help text should not mention old Codex session commands")
+	}
 	for _, want := range []string{
 		"常用：\n\n/info",
 		"/info 查看当前 Agent\n\n/new 开启新会话",
-		"Codex：\n\n/codex where",
-		"/codex where 查看当前 Codex workspace 和 thread\n\n/codex workspace",
+		"Codex：\n\n/codex whoami",
+		"/codex whoami 查看当前 Codex workspace 和 thread\n\n/codex ls",
 		"Codex 账号：\n\n/sw ls",
 		"常用别名：\n\n/cx = /codex",
 	} {
@@ -535,16 +539,16 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
 	h.codexSessions.setPendingNew(bindingKey, workspaceB)
 
-	where := h.renderCodexWhere(bindingKey, workspaceA)
+	where := h.renderCodexWhoami(bindingKey, workspaceA)
 	if !strings.Contains(where, "workspace: "+workspaceA+"\n\nthread: thread-a") {
 		t.Fatalf("where reply should separate fields with blank lines, got %q", where)
 	}
 
-	list := h.renderCodexWorkspace(bindingKey)
+	list := h.renderCodexList(bindingKey)
 	for _, want := range []string{
-		"Codex workspaces:\n\n- ",
-		workspaceA + "\n\n  thread: thread-a",
-		workspaceB + "\n\n  thread: (new draft)",
+		"Codex workspaces:\n\n0. ",
+		workspaceA + "\n\n   thread: thread-a",
+		workspaceB + "\n\n   thread: (new draft)",
 	} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("workspace reply missing %q, got %q", want, list)
@@ -1315,6 +1319,40 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	}
 }
 
+func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
+	h := NewHandler(nil, nil)
+	root := t.TempDir()
+	currentWorkspace := filepath.Join(root, "a")
+	targetWorkspace := filepath.Join(root, "b")
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, currentWorkspace, "thread-a")
+	h.codexSessions.setThread(bindingKey, targetWorkspace, "thread-b")
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(108, "/codex switch 1"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-b" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-b)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	if ag.lastCwd != normalizeCodexWorkspaceRoot(targetWorkspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(targetWorkspace))
+	}
+	if !containsText(calls.texts(), "workspace: "+normalizeCodexWorkspaceRoot(targetWorkspace)) {
+		t.Fatalf("reply should mention switched workspace, messages=%#v", calls.texts())
+	}
+}
+
 func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
 	bindingKey := codexBindingKey("user-1", "codex")
@@ -1419,7 +1457,7 @@ func TestRecordCodexThreadKeepsExistingThreadWorkspace(t *testing.T) {
 	}
 }
 
-func TestHandleCodexWhereAndWorkspaceCommands(t *testing.T) {
+func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	ag := &fakeCodexThreadAgent{
@@ -1436,15 +1474,18 @@ func TestHandleCodexWhereAndWorkspaceCommands(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(104, "/codex where"))
-	h.HandleMessage(context.Background(), client, newTextMessage(105, "/codex workspace"))
+	h.HandleMessage(context.Background(), client, newTextMessage(104, "/codex whoami"))
+	h.HandleMessage(context.Background(), client, newTextMessage(105, "/codex ls"))
 
 	texts := calls.texts()
 	if !containsText(texts, "workspace: "+workspace) {
-		t.Fatalf("where should include workspace, messages=%#v", texts)
+		t.Fatalf("whoami should include workspace, messages=%#v", texts)
 	}
 	if !containsText(texts, "thread: thread-1") {
-		t.Fatalf("where/workspace should include thread, messages=%#v", texts)
+		t.Fatalf("whoami/ls should include thread, messages=%#v", texts)
+	}
+	if !containsText(texts, "0. "+workspace) {
+		t.Fatalf("ls should include numbered workspace, messages=%#v", texts)
 	}
 }
 

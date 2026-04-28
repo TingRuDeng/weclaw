@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1219,13 +1220,13 @@ func buildHelpText() string {
 
 Codex：
 
-/codex where 查看当前 Codex workspace 和 thread
+/codex whoami 查看当前 Codex workspace 和 thread
 
-/codex workspace 查看已记录的 workspace 会话
+/codex ls 查看已记录的 workspace 会话
 
 /codex new 新建当前 workspace 的 Codex 会话
 
-/codex switch <threadId> 切换到指定 Codex thread
+/codex switch <编号|threadId> 切换到指定 Codex thread
 
 /guide 将暂存消息作为引导对话发送给正在执行的 Codex
 
@@ -1301,7 +1302,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "where", "workspace", "new", "switch", "help":
+	case "whoami", "ls", "new", "switch", "help":
 		return true
 	default:
 		return false
@@ -1350,15 +1351,15 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
 
 	switch fields[1] {
-	case "where":
-		return h.renderCodexWhere(bindingKey, workspaceRoot)
-	case "workspace":
-		return h.renderCodexWorkspace(bindingKey)
+	case "whoami":
+		return h.renderCodexWhoami(bindingKey, workspaceRoot)
+	case "ls":
+		return h.renderCodexList(bindingKey)
 	case "new":
 		return h.handleCodexNew(userID, agentName, workspaceRoot, ag)
 	case "switch":
 		if len(fields) != 3 {
-			return "用法: /codex switch <threadId>"
+			return "用法: /codex switch <编号|threadId>"
 		}
 		return h.handleCodexSwitch(ctx, userID, agentName, workspaceRoot, ag, fields[2])
 	default:
@@ -1377,13 +1378,16 @@ func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot 
 	return wechatCommandText("已切换到新会话。", "workspace: "+workspaceRoot)
 }
 
-func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, threadID string) string {
+func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string) string {
 	codexAg, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
 		return "当前 Codex Agent 不支持 thread 切换。"
 	}
 	bindingKey := codexBindingKey(userID, agentName)
-	workspaceRoot = h.resolveCodexSwitchWorkspace(bindingKey, agentName, workspaceRoot, threadID, ag)
+	workspaceRoot, threadID, err := h.resolveCodexSwitchTarget(bindingKey, agentName, workspaceRoot, target, ag)
+	if err != nil {
+		return err.Error()
+	}
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
 	if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
 		return fmt.Sprintf("切换线程失败: %v", err)
@@ -1393,11 +1397,43 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 	return wechatCommandText("已切换线程。", "workspace: "+workspaceRoot, "thread: "+threadID)
 }
 
+func (h *Handler) resolveCodexSwitchTarget(bindingKey string, agentName string, workspaceRoot string, target string, ag agent.Agent) (string, string, error) {
+	target = strings.TrimSpace(target)
+	if index, ok := parseCodexListIndex(target); ok {
+		views := h.ensureCodexSessions().listWorkspaces(bindingKey)
+		if index < 0 || index >= len(views) {
+			return "", "", fmt.Errorf("编号不存在，请先发送 /codex ls 查看可切换会话。")
+		}
+		view := views[index]
+		threadID := strings.TrimSpace(view.ThreadID)
+		if threadID == "" || view.PendingNewThread {
+			return "", "", fmt.Errorf("编号 %d 当前没有可切换的 thread。", index)
+		}
+		workspaceRoot = h.switchCodexWorkspace(agentName, view.WorkspaceRoot, ag)
+		return workspaceRoot, threadID, nil
+	}
+	threadID := target
+	workspaceRoot = h.resolveCodexSwitchWorkspace(bindingKey, agentName, workspaceRoot, threadID, ag)
+	return workspaceRoot, threadID, nil
+}
+
+func parseCodexListIndex(value string) (int, bool) {
+	if strings.TrimSpace(value) == "" {
+		return 0, false
+	}
+	index, err := strconv.Atoi(value)
+	return index, err == nil
+}
+
 func (h *Handler) resolveCodexSwitchWorkspace(bindingKey string, agentName string, fallbackWorkspace string, threadID string, ag agent.Agent) string {
 	workspaceRoot, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID)
 	if !ok {
 		return fallbackWorkspace
 	}
+	return h.switchCodexWorkspace(agentName, workspaceRoot, ag)
+}
+
+func (h *Handler) switchCodexWorkspace(agentName string, workspaceRoot string, ag agent.Agent) string {
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	ag.SetCwd(workspaceRoot)
 
@@ -1468,20 +1504,20 @@ func (h *Handler) codexWorkspaceRootForUser(userID string, agentName string, ag 
 	return workspaceRoot
 }
 
-func (h *Handler) renderCodexWhere(bindingKey string, workspaceRoot string) string {
+func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) string {
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
 	return wechatCommandText("workspace: "+workspaceRoot, "thread: "+renderCodexThreadLabel(threadID, pending))
 }
 
-func (h *Handler) renderCodexWorkspace(bindingKey string) string {
+func (h *Handler) renderCodexList(bindingKey string) string {
 	views := h.ensureCodexSessions().listWorkspaces(bindingKey)
 	if len(views) == 0 {
 		return "当前还没有 Codex workspace。"
 	}
 	lines := []string{"Codex workspaces:"}
-	for _, view := range views {
-		lines = append(lines, "- "+view.WorkspaceRoot)
-		lines = append(lines, "  thread: "+renderCodexThreadLabel(view.ThreadID, view.PendingNewThread))
+	for index, view := range views {
+		lines = append(lines, fmt.Sprintf("%d. %s", index, view.WorkspaceRoot))
+		lines = append(lines, "   thread: "+renderCodexThreadLabel(view.ThreadID, view.PendingNewThread))
 	}
 	return wechatCommandText(lines...)
 }
@@ -1499,10 +1535,10 @@ func renderCodexThreadLabel(threadID string, pending bool) string {
 func buildCodexSessionHelpText() string {
 	return wechatCommandText(
 		"Codex 会话命令:",
-		"/codex where",
-		"/codex workspace",
+		"/codex whoami",
+		"/codex ls",
 		"/codex new",
-		"/codex switch <threadId>",
+		"/codex switch <编号|threadId>",
 	)
 }
 

@@ -318,3 +318,24 @@
 ### Review 小结
 
 已完成 Codex 引导对话与 thread 归属修复。Codex 执行中收到第二条普通消息时会先暂存并提示 `/guide` 或 `/cancel`；`/guide` 会取消第一条微信侧监听，只发送引导后的最终结果，`/cancel` 只撤回暂存消息。Codex session store 现在保证同一 thread 只能归属于一个 workspace；`recordCodexThread` 会保留已有 thread 归属，恢复旧 thread 失败时会直接报错，不再静默新建会话。本机 `codex-sessions.json` 已把 `019dd27f-441b-7282-9517-74b021a15b98` 重新绑定到 `/Volumes/Data/code/MyCode/card-manager-android`。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## Codex 会话命令易用性调整清单
+
+### 目标
+
+将 Codex 会话命令改为更短的 `/codex ls` 和 `/codex whoami`，并支持按 `/codex ls` 中的编号切换 thread。
+
+### 执行任务
+
+- [x] 更新帮助文本测试，移除旧 `/codex where` 和 `/codex workspace`。
+- [x] 更新 `/codex whoami` 与 `/codex ls` 命令测试。
+- [x] 新增 `/codex switch <编号>` 回归测试。
+- [x] 修改 Codex 会话命令解析。
+- [x] 修改 `/codex ls` 输出，为每个 workspace/thread 增加 0 基编号。
+- [x] 修改 `/codex switch`，支持编号或 threadId。
+- [x] 运行全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 会话命令易用性调整。`/codex where` 改为 `/codex whoami`，`/codex workspace` 改为 `/codex ls`；`/codex ls` 会按稳定排序输出 0 基编号，`/codex switch` 现在同时支持编号和 threadId。帮助文本已移除旧命令入口。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
