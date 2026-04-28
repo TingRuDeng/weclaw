@@ -35,3 +35,15 @@
 - 同一微信用户、同一 Codex Agent、同一 workspace 不能并发进入 Codex turn；否则本地 Codex 队列和 WeClaw 进度会话可能出现结果归属错乱。
 - 串行化边界应包住进度会话、Agent 调用和最终回复，确保第二条任务不会在第一条任务完成前启动自己的 typing/progress 生命周期。
 - 并发类 bug 必须补“第二条消息等待第一条完成”的回归测试，不能只验证单次调用成功。
+
+## 2026-04-28 Codex thread 归属
+
+- Codex thread 必须稳定归属于创建它的 workspace；不能因为当前 Handler cwd 不同就在 `recordCodexThread` 中把旧 thread 写到新 workspace。
+- session store 写入 thread 时必须保证同一个 thread 只出现在一个 workspace 下，否则 `/codex switch` 会按错误 workspace 恢复。
+- 已记录 thread 恢复失败时必须显式报错，不允许继续走 `thread/start` 静默新建会话。
+
+## 2026-04-28 Codex 引导对话
+
+- Codex 执行中收到第二条普通消息时不能直接排队，也不能直接发送；必须先暂存并让用户明确选择 `/guide` 或 `/cancel`。
+- `/guide` 表示用户放弃第一条微信侧最终回复，只关心引导后的结果；实现时要取消第一条监听并抑制第一条最终回复。
+- `/cancel` 在该语境下只撤回暂存消息，不取消正在执行的 Codex 任务。

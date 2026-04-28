@@ -293,3 +293,28 @@
 ### Review 小结
 
 已完成 Codex 同会话并发任务串行化。Handler 现在按用户、Agent 和 Codex workspace 生成执行 key，并把进度会话、Agent 调用和最终回复包在同一把锁内；同一执行通道的第二条消息会等待第一条完整结束后再进入 Codex，避免第一条结果被跳过和 typing/progress 生命周期残留。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## Codex 引导对话与 thread 归属修复清单
+
+### 目标
+
+保留 Codex 执行中继续输入引导的能力，同时修复 thread 被错误绑定到其他 workspace 后导致同 workspace 新建会话的问题。
+
+### 执行任务
+
+- [x] 新增运行中第二条消息暂存测试。
+- [x] 新增 `/guide` 发送暂存消息且抑制第一条最终回复测试。
+- [x] 新增 `/cancel` 只撤回暂存消息测试。
+- [x] 新增恢复旧 thread 失败时不静默新建会话测试。
+- [x] 新增同一 thread 只能绑定一个 workspace 的测试。
+- [x] 新增记录 thread 时保留已有 workspace 归属的测试。
+- [x] 实现 Codex active task 与 pending guide 状态。
+- [x] 修复 Codex thread 恢复失败继续新建会话的问题。
+- [x] 修复 session store 中 thread/workspace 归属可被覆盖的问题。
+- [x] 修复本机已错绑的 `codex-sessions.json`。
+- [x] 运行全量测试、diff 检查，并重新编译 `./weclaw`。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 引导对话与 thread 归属修复。Codex 执行中收到第二条普通消息时会先暂存并提示 `/guide` 或 `/cancel`；`/guide` 会取消第一条微信侧监听，只发送引导后的最终结果，`/cancel` 只撤回暂存消息。Codex session store 现在保证同一 thread 只能归属于一个 workspace；`recordCodexThread` 会保留已有 thread 归属，恢复旧 thread 失败时会直接报错，不再静默新建会话。本机 `codex-sessions.json` 已把 `019dd27f-441b-7282-9517-74b021a15b98` 重新绑定到 `/Volumes/Data/code/MyCode/card-manager-android`。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。

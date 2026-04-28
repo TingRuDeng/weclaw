@@ -189,7 +189,20 @@ func (s *codexSessionStore) findWorkspaceByThread(bindingKey string, threadID st
 func (s *codexSessionStore) updateWorkspace(bindingKey string, workspaceRoot string, session codexWorkspaceSession) {
 	s.mu.Lock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	session.ThreadID = strings.TrimSpace(session.ThreadID)
 	binding := s.ensureBindingLocked(bindingKey)
+	if session.ThreadID != "" {
+		// 同一个 Codex thread 只能属于一个 workspace，避免后续切换时按错误 cwd 恢复。
+		for root, existing := range binding.Workspaces {
+			if root == workspaceRoot || strings.TrimSpace(existing.ThreadID) != session.ThreadID {
+				continue
+			}
+			existing.ThreadID = ""
+			existing.PendingNewThread = false
+			existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			binding.Workspaces[root] = existing
+		}
+	}
 	binding.Workspaces[workspaceRoot] = session
 	s.bindings[bindingKey] = binding
 	s.mu.Unlock()

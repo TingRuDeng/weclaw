@@ -70,6 +70,8 @@ type Handler struct {
 	codexSessions        *codexSessionStore
 	taskLocksMu          sync.Mutex
 	taskLocks            map[string]*sync.Mutex
+	activeTasksMu        sync.Mutex
+	activeTasks          map[string]*activeAgentTask
 }
 
 const (
@@ -80,6 +82,14 @@ const (
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
+
+type activeAgentTask struct {
+	mu             sync.Mutex
+	cancel         context.CancelFunc
+	done           chan struct{}
+	detached       bool
+	pendingMessage string
+}
 
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
@@ -95,6 +105,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		agentProgressConfigs: make(map[string]config.ProgressConfig),
 		codexSessions:        newCodexSessionStore(),
 		taskLocks:            make(map[string]*sync.Mutex),
+		activeTasks:          make(map[string]*activeAgentTask),
 	}
 }
 
@@ -503,6 +514,15 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
 		return
+	} else if trimmed == "/guide" {
+		h.handleGuideCommand(ctx, client, msg, clientID)
+		return
+	} else if trimmed == "/cancel" {
+		reply := h.handleCancelPendingGuide(ctx, msg.FromUserID)
+		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+		}
+		return
 	} else if strings.HasPrefix(trimmed, "/cwd") {
 		reply := h.handleCwd(trimmed, msg.FromUserID)
 		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
@@ -587,6 +607,148 @@ func (h *Handler) lockAgentExecution(key string) func() {
 	return lock.Unlock
 }
 
+func (h *Handler) beginActiveTask(ctx context.Context, key string) (*activeAgentTask, context.Context, bool) {
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	if h.activeTasks == nil {
+		h.activeTasks = make(map[string]*activeAgentTask)
+	}
+	if h.activeTasks[key] != nil {
+		return h.activeTasks[key], ctx, false
+	}
+	taskCtx, cancel := context.WithCancel(ctx)
+	task := &activeAgentTask{
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+	h.activeTasks[key] = task
+	return task, taskCtx, true
+}
+
+func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
+	h.activeTasksMu.Lock()
+	if h.activeTasks[key] == task {
+		delete(h.activeTasks, key)
+	}
+	h.activeTasksMu.Unlock()
+	close(task.done)
+}
+
+func (h *Handler) storePendingGuide(key string, message string) bool {
+	h.activeTasksMu.Lock()
+	task := h.activeTasks[key]
+	h.activeTasksMu.Unlock()
+	if task == nil {
+		return false
+	}
+	task.mu.Lock()
+	task.pendingMessage = message
+	task.mu.Unlock()
+	return true
+}
+
+func (h *Handler) detachPendingGuide(key string) (string, *activeAgentTask, bool) {
+	h.activeTasksMu.Lock()
+	task := h.activeTasks[key]
+	if task == nil {
+		h.activeTasksMu.Unlock()
+		return "", nil, false
+	}
+
+	task.mu.Lock()
+	message := task.pendingMessage
+	if message == "" {
+		task.mu.Unlock()
+		h.activeTasksMu.Unlock()
+		return "", nil, false
+	}
+	task.pendingMessage = ""
+	task.detached = true
+	cancel := task.cancel
+	task.mu.Unlock()
+	h.activeTasksMu.Unlock()
+	cancel()
+	return message, task, true
+}
+
+func (h *Handler) clearPendingGuide(key string) bool {
+	h.activeTasksMu.Lock()
+	task := h.activeTasks[key]
+	h.activeTasksMu.Unlock()
+	if task == nil {
+		return false
+	}
+	task.mu.Lock()
+	defer task.mu.Unlock()
+	if task.pendingMessage == "" {
+		return false
+	}
+	task.pendingMessage = ""
+	return true
+}
+
+func (t *activeAgentTask) shouldSendFinal() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.detached
+}
+
+func runningCodexGuidePrompt() string {
+	return "Codex 正在处理上一条任务。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。"
+}
+
+func (h *Handler) handleGuideCommand(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, clientID string) {
+	name, _, key, err := h.codexGuideTarget(ctx, msg.FromUserID)
+	if err != nil {
+		_ = SendTextReply(ctx, client, msg.FromUserID, err.Error(), msg.ContextToken, clientID)
+		return
+	}
+	message, task, ok := h.detachPendingGuide(key)
+	if !ok {
+		_ = SendTextReply(ctx, client, msg.FromUserID, "当前没有可发送的引导对话。", msg.ContextToken, clientID)
+		return
+	}
+	if !waitForActiveTask(ctx, task) {
+		return
+	}
+	h.sendToNamedAgent(ctx, client, msg, name, message, clientID)
+}
+
+func (h *Handler) handleCancelPendingGuide(ctx context.Context, userID string) string {
+	_, _, key, err := h.codexGuideTarget(ctx, userID)
+	if err != nil {
+		return err.Error()
+	}
+	if !h.clearPendingGuide(key) {
+		return "当前没有可撤回的消息。"
+	}
+	return "已撤回该消息。"
+}
+
+func (h *Handler) codexGuideTarget(ctx context.Context, userID string) (string, agent.Agent, string, error) {
+	name, ok := h.codexAgentName()
+	if !ok {
+		return "", nil, "", fmt.Errorf("当前没有配置 Codex Agent。")
+	}
+	ag, err := h.getAgent(ctx, name)
+	if err != nil {
+		return "", nil, "", fmt.Errorf("Codex Agent 不可用: %v", err)
+	}
+	return name, ag, h.agentExecutionKey(userID, name, ag), nil
+}
+
+func waitForActiveTask(ctx context.Context, task *activeAgentTask) bool {
+	if task == nil {
+		return true
+	}
+	select {
+	case <-task.done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, text, clientID string) {
 	h.mu.RLock()
@@ -597,6 +759,18 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 	var reply string
 	if ag != nil {
 		executionKey := h.agentExecutionKey(msg.FromUserID, defaultName, ag)
+		var activeTask *activeAgentTask
+		if isCodexAgent(defaultName, ag.Info()) {
+			task, taskCtx, started := h.beginActiveTask(ctx, executionKey)
+			if !started {
+				h.storePendingGuide(executionKey, text)
+				_ = SendTextReply(ctx, client, msg.FromUserID, runningCodexGuidePrompt(), msg.ContextToken, clientID)
+				return
+			}
+			activeTask = task
+			defer h.finishActiveTask(executionKey, task)
+			ctx = taskCtx
+		}
 		unlock := h.lockAgentExecution(executionKey)
 		defer unlock()
 
@@ -605,13 +779,21 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 		defer stopProgress()
 
 		var err error
-		conversationID := h.resolveAgentConversationID(ctx, msg.FromUserID, defaultName, ag)
+		conversationID, resolveErr := h.resolveAgentConversationID(ctx, msg.FromUserID, defaultName, ag)
+		if resolveErr != nil {
+			reply = renderFinalFailure("", resolveErr)
+			h.sendReplyWithMedia(ctx, client, msg, defaultName, reply, clientID)
+			return
+		}
 		reply, err = h.chatWithAgentWithProgress(ctx, ag, conversationID, text, onProgress)
 		if err != nil {
 			reply = renderFinalFailure("", err)
 		} else {
 			h.recordCodexThread(msg.FromUserID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
+		}
+		if activeTask != nil && !activeTask.shouldSendFinal() {
+			return
 		}
 	} else {
 		log.Printf("[handler] agent not ready, using echo mode for %s", msg.FromUserID)
@@ -632,6 +814,18 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 	}
 
 	executionKey := h.agentExecutionKey(msg.FromUserID, name, ag)
+	var activeTask *activeAgentTask
+	if isCodexAgent(name, ag.Info()) {
+		task, taskCtx, started := h.beginActiveTask(ctx, executionKey)
+		if !started {
+			h.storePendingGuide(executionKey, message)
+			_ = SendTextReply(ctx, client, msg.FromUserID, runningCodexGuidePrompt(), msg.ContextToken, clientID)
+			return
+		}
+		activeTask = task
+		defer h.finishActiveTask(executionKey, task)
+		ctx = taskCtx
+	}
 	unlock := h.lockAgentExecution(executionKey)
 	defer unlock()
 
@@ -639,13 +833,21 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 	onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "", message, progressCfg)
 	defer stopProgress()
 
-	conversationID := h.resolveAgentConversationID(ctx, msg.FromUserID, name, ag)
+	conversationID, resolveErr := h.resolveAgentConversationID(ctx, msg.FromUserID, name, ag)
+	if resolveErr != nil {
+		reply := renderFinalFailure("["+name+"] ", resolveErr)
+		h.sendReplyWithMedia(ctx, client, msg, name, reply, clientID)
+		return
+	}
 	reply, err := h.chatWithAgentWithProgress(ctx, ag, conversationID, message, onProgress)
 	if err != nil {
 		reply = renderFinalFailure("["+name+"] ", err)
 	} else {
 		h.recordCodexThread(msg.FromUserID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
+	}
+	if activeTask != nil && !activeTask.shouldSendFinal() {
+		return
 	}
 	h.sendReplyWithMedia(ctx, client, msg, name, reply, clientID)
 }
@@ -675,7 +877,11 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 			onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "["+n+"] ", message, progressCfg)
 			defer stopProgress()
 
-			conversationID := h.resolveAgentConversationID(ctx, msg.FromUserID, n, ag)
+			conversationID, resolveErr := h.resolveAgentConversationID(ctx, msg.FromUserID, n, ag)
+			if resolveErr != nil {
+				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", resolveErr)}
+				return
+			}
 			reply, err := h.chatWithAgentWithProgress(ctx, ag, conversationID, message, onProgress)
 			if err != nil {
 				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", err)}
@@ -743,9 +949,9 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 	return roots
 }
 
-func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) string {
+func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
 	if !isCodexAgent(agentName, ag.Info()) {
-		return userID
+		return userID, nil
 	}
 	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
 	bindingKey := codexBindingKey(userID, agentName)
@@ -753,23 +959,23 @@ func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string,
 	codexAg, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
 		h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
-		return conversationID
+		return conversationID, nil
 	}
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
 	if pending {
 		codexAg.ClearCodexThread(conversationID)
-		return conversationID
+		return conversationID, nil
 	}
 	if threadID != "" {
 		current, hasCurrent := codexAg.CurrentCodexThread(conversationID)
 		if !hasCurrent || current != threadID {
 			if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
-				log.Printf("[handler] failed to resume codex thread %s: %v", threadID, err)
+				return "", fmt.Errorf("恢复 Codex 会话失败: %w", err)
 			}
 		}
 	}
 	h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
-	return conversationID
+	return conversationID, nil
 }
 
 func (h *Handler) recordCodexThread(userID string, agentName string, ag agent.Agent, conversationID string) {
@@ -786,6 +992,9 @@ func (h *Handler) recordCodexThread(userID string, agentName string, ag agent.Ag
 	}
 	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
 	bindingKey := codexBindingKey(userID, agentName)
+	if ownerWorkspace, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID); ok {
+		workspaceRoot = ownerWorkspace
+	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 }
@@ -1017,6 +1226,10 @@ Codex：
 /codex new 新建当前 workspace 的 Codex 会话
 
 /codex switch <threadId> 切换到指定 Codex thread
+
+/guide 将暂存消息作为引导对话发送给正在执行的 Codex
+
+/cancel 撤回暂存的引导消息
 
 Codex 账号：
 

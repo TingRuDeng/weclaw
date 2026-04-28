@@ -78,6 +78,7 @@ type fakeCodexThreadAgent struct {
 	useConversation string
 	useThreadID     string
 	clearCalledWith string
+	useErr          error
 }
 
 func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
@@ -90,6 +91,9 @@ func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string
 func (f *fakeCodexThreadAgent) UseCodexThread(_ context.Context, conversationID string, threadID string) error {
 	f.useConversation = conversationID
 	f.useThreadID = threadID
+	if f.useErr != nil {
+		return f.useErr
+	}
 	f.threadID = threadID
 	return nil
 }
@@ -922,10 +926,11 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	}
 }
 
-func TestSendToNamedCodexSerializesSameExecutionKey(t *testing.T) {
+func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := newBlockingProgressAgent()
-	h.agents["codex"] = ag
+	ag.fakeAgent.info = agent.AgentInfo{Name: "claude", Type: "cli", Command: "claude"}
+	h.agents["claude"] = ag
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeOff
 	h.SetProgressConfig(cfg)
@@ -937,14 +942,14 @@ func TestSendToNamedCodexSerializesSameExecutionKey(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/claude 第一条"), "claude", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
 
 	secondDone := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+		h.sendToNamedAgent(ctx, client, newTextMessage(2, "/claude 第二条"), "claude", "第二条", "client-2")
 		close(secondDone)
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -964,6 +969,119 @@ func TestSendToNamedCodexSerializesSameExecutionKey(t *testing.T) {
 	secondIndex := textIndex(texts, "第2条结果")
 	if firstIndex < 0 || secondIndex < 0 || firstIndex > secondIndex {
 		t.Fatalf("回复顺序错误，messages=%#v", texts)
+	}
+}
+
+func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		close(firstDone)
+	}()
+	waitForAgentEnter(t, ag)
+
+	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+	started, _ := ag.stats()
+	if started != 1 {
+		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
+	}
+	if !containsText(calls.texts(), "回复 /guide 将此消息作为引导对话发送给 Codex") {
+		t.Fatalf("未发送引导确认提示，messages=%#v", calls.texts())
+	}
+
+	ag.release <- struct{}{}
+	waitDone(t, firstDone, "第一条任务")
+}
+
+func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		close(firstDone)
+	}()
+	waitForAgentEnter(t, ag)
+	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+
+	guideDone := make(chan struct{})
+	go func() {
+		h.HandleMessage(ctx, client, newTextMessage(3, "/guide"))
+		close(guideDone)
+	}()
+	waitDone(t, firstDone, "第一条监听")
+	waitForAgentEnter(t, ag)
+	ag.release <- struct{}{}
+	waitDone(t, guideDone, "引导任务")
+
+	texts := calls.texts()
+	if containsText(texts, "第1条结果") {
+		t.Fatalf("第一条任务被引导接管后不应发送最终结果，messages=%#v", texts)
+	}
+	if !containsText(texts, "第2条结果") {
+		t.Fatalf("未发送引导后的最终结果，messages=%#v", texts)
+	}
+}
+
+func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		close(firstDone)
+	}()
+	waitForAgentEnter(t, ag)
+	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+
+	h.HandleMessage(ctx, client, newTextMessage(3, "/cancel"))
+	ag.release <- struct{}{}
+	waitDone(t, firstDone, "第一条任务")
+
+	started, _ := ag.stats()
+	if started != 1 {
+		t.Fatalf("/cancel 只应撤回暂存消息，不应启动第二条，started=%d", started)
+	}
+	texts := calls.texts()
+	if !containsText(texts, "已撤回该消息。") {
+		t.Fatalf("未发送撤回提示，messages=%#v", texts)
+	}
+	if !containsText(texts, "第1条结果") {
+		t.Fatalf("撤回暂存消息后应继续返回第一条结果，messages=%#v", texts)
 	}
 }
 
@@ -1217,7 +1335,10 @@ func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testin
 		},
 	}
 
-	conversationID := second.resolveAgentConversationID(context.Background(), "user-1", "codex", ag)
+	conversationID, err := second.resolveAgentConversationID(context.Background(), "user-1", "codex", ag)
+	if err != nil {
+		t.Fatalf("resolveAgentConversationID error: %v", err)
+	}
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", activeWorkspace)
 	if conversationID != wantConversationID {
@@ -1228,6 +1349,73 @@ func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testin
 	}
 	if ag.lastCwd != activeWorkspace {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, activeWorkspace)
+	}
+}
+
+func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			reply: "不应调用",
+			info:  agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		useErr: errors.New("resume failed"),
+	}
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-old")
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.sendToNamedAgent(context.Background(), client, newTextMessage(107, "/codex 继续"), "codex", "继续", "client-1")
+
+	if ag.chatCalls != 0 {
+		t.Fatalf("恢复旧 thread 失败后不应继续新建会话聊天，chatCalls=%d", ag.chatCalls)
+	}
+	if ag.useThreadID != "thread-old" {
+		t.Fatalf("恢复 thread=%q，want thread-old", ag.useThreadID)
+	}
+	if !containsText(calls.texts(), "恢复 Codex 会话失败") {
+		t.Fatalf("未提示恢复失败，messages=%#v", calls.texts())
+	}
+	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	if thread != "thread-old" || pending {
+		t.Fatalf("不应覆盖旧 thread，thread=%q pending=%v", thread, pending)
+	}
+}
+
+func TestRecordCodexThreadKeepsExistingThreadWorkspace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	currentWorkspace := t.TempDir()
+	ownerWorkspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		threadID: "thread-owner",
+	}
+	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, ownerWorkspace, "thread-owner")
+
+	h.recordCodexThread("user-1", "codex", ag, buildCodexConversationID("user-1", "codex", currentWorkspace))
+
+	currentThread, currentPending := h.codexSessions.getThread(bindingKey, currentWorkspace)
+	if currentThread != "" || currentPending {
+		t.Fatalf("不应把已有 thread 移动到当前 workspace，thread=%q pending=%v", currentThread, currentPending)
+	}
+	ownerThread, ownerPending := h.codexSessions.getThread(bindingKey, ownerWorkspace)
+	if ownerThread != "thread-owner" || ownerPending {
+		t.Fatalf("原 workspace thread=%q pending=%v，want thread-owner false", ownerThread, ownerPending)
+	}
+	active, ok := h.codexSessions.getActiveWorkspace(bindingKey)
+	if !ok || active != normalizeCodexWorkspaceRoot(ownerWorkspace) {
+		t.Fatalf("active workspace=(%q,%v)，want %q true", active, ok, normalizeCodexWorkspaceRoot(ownerWorkspace))
 	}
 }
 

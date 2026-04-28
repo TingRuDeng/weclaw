@@ -63,3 +63,26 @@ func TestCodexSessionStorePersistsActiveWorkspace(t *testing.T) {
 		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(workspace))
 	}
 }
+
+func TestCodexSessionStoreKeepsThreadBoundToOneWorkspace(t *testing.T) {
+	bindingKey := codexBindingKey("user-1", "codex")
+	firstWorkspace := filepath.Join(t.TempDir(), "first")
+	secondWorkspace := filepath.Join(t.TempDir(), "second")
+	store := newCodexSessionStore()
+
+	store.setThread(bindingKey, firstWorkspace, "thread-1")
+	store.setThread(bindingKey, secondWorkspace, "thread-1")
+
+	firstThread, firstPending := store.getThread(bindingKey, firstWorkspace)
+	if firstThread != "" || firstPending {
+		t.Fatalf("旧 workspace 不应继续绑定 thread，thread=%q pending=%v", firstThread, firstPending)
+	}
+	secondThread, secondPending := store.getThread(bindingKey, secondWorkspace)
+	if secondThread != "thread-1" || secondPending {
+		t.Fatalf("新 workspace thread=%q pending=%v，want thread-1 false", secondThread, secondPending)
+	}
+	owner, ok := store.findWorkspaceByThread(bindingKey, "thread-1")
+	if !ok || owner != normalizeCodexWorkspaceRoot(secondWorkspace) {
+		t.Fatalf("thread owner=(%q,%v)，want %q true", owner, ok, normalizeCodexWorkspaceRoot(secondWorkspace))
+	}
+}
