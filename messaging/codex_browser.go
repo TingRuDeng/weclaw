@@ -80,7 +80,7 @@ func (h *Handler) handleCodexCd(bindingKey string, agentName string, target stri
 	workspaceRoot := h.switchCodexWorkspace(agentName, group.Root, ag)
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 	h.setCodexBrowseWorkspace(bindingKey, workspaceRoot)
-	return wechatCommandText("已进入工作空间。", "工作空间: "+group.Name)
+	return "工作空间: " + group.Name
 }
 
 // renderCodexPwd 显示当前浏览层级，帮助用户确认 /cx ls 会列什么。

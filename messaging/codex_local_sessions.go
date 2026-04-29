@@ -43,9 +43,13 @@ func discoverLocalCodexSessions(codexDir string) []codexWorkspaceView {
 	}
 	index := readLocalCodexSessionIndex(filepath.Join(codexDir, "session_index.jsonl"))
 	metas := readLocalCodexSessionMetas(filepath.Join(codexDir, "sessions"))
+	archivedIDs := readLocalCodexArchivedSessionIDs(filepath.Join(codexDir, "archived_sessions"))
 
 	views := make([]codexWorkspaceView, 0, len(metas))
 	for id, meta := range metas {
+		if archivedIDs[id] {
+			continue
+		}
 		entry := index[id]
 		workspaceRoot := normalizeCodexWorkspaceRoot(meta.Cwd)
 		if id == "" || workspaceRoot == "" {
@@ -109,6 +113,33 @@ func readLocalCodexSessionMetas(root string) map[string]localCodexSessionMeta {
 		return nil
 	})
 	return metas
+}
+
+// readLocalCodexArchivedSessionIDs 读取已归档 thread，避免微信列表重新展示归档会话。
+func readLocalCodexArchivedSessionIDs(root string) map[string]bool {
+	ids := map[string]bool{}
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		if meta, ok := readLocalCodexSessionMeta(path); ok {
+			ids[meta.ID] = true
+			return nil
+		}
+		if id := localCodexThreadIDFromPath(path); id != "" {
+			ids[id] = true
+		}
+		return nil
+	})
+	return ids
+}
+
+// localCodexThreadIDFromPath 从归档文件名兜底提取 thread id。
+func localCodexThreadIDFromPath(path string) string {
+	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	name = strings.TrimPrefix(name, "rollout-")
+	return strings.TrimSpace(name)
 }
 
 // readLocalCodexSessionMeta 只读取 jsonl 首行，避免把完整对话内容加载进内存。

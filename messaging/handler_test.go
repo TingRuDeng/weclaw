@@ -1421,6 +1421,23 @@ func TestDiscoverLocalCodexSessionsReadsIndexAndSessionMeta(t *testing.T) {
 	}
 }
 
+func TestDiscoverLocalCodexSessionsSkipsArchivedSessions(t *testing.T) {
+	codexDir := t.TempDir()
+	activeWorkspace := filepath.Join(t.TempDir(), "active")
+	archivedWorkspace := filepath.Join(t.TempDir(), "archived")
+	writeLocalCodexSession(t, codexDir, "thread-active", activeWorkspace, "活跃会话", "2026-04-29T09:00:00Z")
+	writeArchivedLocalCodexSession(t, codexDir, "thread-archived", archivedWorkspace, "归档会话", "2026-04-29T08:00:00Z")
+
+	sessions := discoverLocalCodexSessions(codexDir)
+
+	if len(sessions) != 1 {
+		t.Fatalf("sessions len=%d, want 1: %#v", len(sessions), sessions)
+	}
+	if sessions[0].ThreadID != "thread-active" {
+		t.Fatalf("session thread=%q, want thread-active", sessions[0].ThreadID)
+	}
+}
+
 func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
@@ -1547,7 +1564,10 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已进入工作空间") || !strings.Contains(text, "weclaw 会话") {
+	if strings.Contains(text, "已进入工作空间") {
+		t.Fatalf("cd reply should not include redundant title, messages=%#v", calls.texts())
+	}
+	if !strings.Contains(text, "工作空间: weclaw") || !strings.Contains(text, "weclaw 会话") {
 		t.Fatalf("cd then ls should enter workspace and show sessions, messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "0. 实现两级会话浏览") || !strings.Contains(text, "1. 修复安全问题") {
@@ -1934,6 +1954,21 @@ func writeLocalCodexSession(t *testing.T, codexDir string, threadID string, work
 	meta := fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"timestamp":%q,"cwd":%q,"originator":"Codex Desktop"}}`+"\n", updatedAt, threadID, updatedAt, workspace)
 	if err := os.WriteFile(sessionPath, []byte(meta), 0o600); err != nil {
 		t.Fatalf("write session meta: %v", err)
+	}
+}
+
+func writeArchivedLocalCodexSession(t *testing.T, codexDir string, threadID string, workspace string, threadName string, updatedAt string) {
+	t.Helper()
+	writeLocalCodexSession(t, codexDir, threadID, workspace, threadName, updatedAt)
+
+	archivedDir := filepath.Join(codexDir, "archived_sessions")
+	if err := os.MkdirAll(archivedDir, 0o700); err != nil {
+		t.Fatalf("create archived session dir: %v", err)
+	}
+	meta := fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"timestamp":%q,"cwd":%q,"originator":"Codex Desktop"}}`+"\n", updatedAt, threadID, updatedAt, workspace)
+	sessionPath := filepath.Join(archivedDir, "rollout-"+threadID+".jsonl")
+	if err := os.WriteFile(sessionPath, []byte(meta), 0o600); err != nil {
+		t.Fatalf("write archived session meta: %v", err)
 	}
 }
 

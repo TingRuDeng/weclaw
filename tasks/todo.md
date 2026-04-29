@@ -238,6 +238,25 @@
 
 已完成微信默认进度反馈静默化。默认 `progress.mode` 从 `summary` 调整为 `typing`，默认 `send_acceptance` 调整为 `false`；长任务期间只保留微信 typing 状态，最终仍发送完整结果。显式切到 `summary` 或 `stream` 时，中间文字进度仍可用。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
 
+## Codex 归档会话过滤与 cd 提示精简清单
+
+### 目标
+
+`/cx ls` 不展示已经归档的本机 Codex 会话；`/cx cd <工作空间>` 成功后只提示当前工作空间，去掉冗余的“已进入工作空间。”。
+
+### 执行任务
+
+- [x] 新增归档本机会话过滤测试。
+- [x] 更新 `/cx cd` 提示测试，确认不再包含“已进入工作空间。”。
+- [x] 实现 `archived_sessions` 线程过滤。
+- [x] 精简 `/cx cd` 成功回复。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 `/cx ls` 归档会话过滤和 `/cx cd <工作空间>` 回复精简。归档判断基于本机 Codex `archived_sessions` 目录中的 thread id，列表发现阶段直接跳过这些会话；进入工作空间后只返回 `工作空间: <名称>`。验证命令：`go test ./messaging -run 'TestDiscoverLocalCodexSessionsSkipsArchivedSessions|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs' -count=1 -timeout 60s`、`go test ./messaging -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check`、`go build -o weclaw .`，结果通过。
+
 ## Review 安全与可靠性修复清单
 
 ### 目标
