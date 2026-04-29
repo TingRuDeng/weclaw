@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -97,17 +96,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	pid, pidErr := readPid()
 	if pidErr == nil && processExists(pid) {
 		fmt.Println("Stopping old process...")
-		if p, err := os.FindProcess(pid); err == nil {
-			p.Signal(os.Interrupt)
+		if err := stopAllWeclaw(); err != nil {
+			log.Printf("Failed to stop old process: %v", err)
+			fmt.Println("Update complete. Please run 'weclaw stop' and 'weclaw start' manually.")
+			return nil
 		}
-		// Wait for old process to exit
-		for i := 0; i < 20; i++ {
-			if !processExists(pid) {
-				break
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		os.Remove(pidFile())
 
 		fmt.Println("Starting new version...")
 		if err := runDaemon(); err != nil {

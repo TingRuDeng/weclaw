@@ -1,6 +1,13 @@
 package messaging
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestExtractImageURLs(t *testing.T) {
 	text := "check ![img](https://example.com/a.png) and ![](https://example.com/b.jpg)"
@@ -69,5 +76,56 @@ func TestStripQuery(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("stripQuery(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestDownloadFileRejectsLoopbackURL(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("image"))
+	}))
+	defer server.Close()
+
+	_, _, err := downloadFile(context.Background(), server.URL+"/a.png")
+	if err == nil {
+		t.Fatal("downloadFile() error = nil, want loopback rejection")
+	}
+	if called {
+		t.Fatal("loopback server was called, want rejection before request")
+	}
+}
+
+func TestRemoteMediaRedirectRejectsLoopbackTarget(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/private.png", nil)
+	client := newRemoteMediaHTTPClient()
+
+	if err := client.CheckRedirect(req, nil); err == nil {
+		t.Fatal("CheckRedirect() error = nil, want loopback rejection")
+	}
+}
+
+func TestReadRemoteMediaBodyRejectsLargeContentLength(t *testing.T) {
+	resp := &http.Response{
+		Body:          io.NopCloser(strings.NewReader("")),
+		ContentLength: 9,
+	}
+
+	_, err := readRemoteMediaBody(resp, 8)
+	if err == nil {
+		t.Fatal("readRemoteMediaBody() error = nil, want content length rejection")
+	}
+}
+
+func TestReadRemoteMediaBodyRejectsBodyAboveLimit(t *testing.T) {
+	resp := &http.Response{
+		Body:          io.NopCloser(strings.NewReader("123456789")),
+		ContentLength: -1,
+	}
+
+	_, err := readRemoteMediaBody(resp, 8)
+	if err == nil {
+		t.Fatal("readRemoteMediaBody() error = nil, want body size rejection")
 	}
 }

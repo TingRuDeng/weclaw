@@ -166,7 +166,10 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if apiAddrFlag != "" {
 		apiAddr = apiAddrFlag
 	}
-	apiServer := api.NewServer(clients, apiAddr)
+	apiServer := api.NewServer(clients, apiAddr, api.WithToken(cfg.APIToken))
+	if err := apiServer.Validate(); err != nil {
+		return err
+	}
 	go func() {
 		if err := apiServer.Run(ctx); err != nil {
 			log.Printf("API server error: %v", err)
@@ -361,10 +364,16 @@ func logFile() string {
 	return filepath.Join(weclawDir(), "weclaw.log")
 }
 
+const (
+	gracefulStopChecks   = 20
+	gracefulStopInterval = 500 * time.Millisecond
+)
+
 // runDaemon spawns weclaw start (without --daemon) as a background process.
 func runDaemon() error {
-	// Kill any existing weclaw processes before starting a new one
-	stopAllWeclaw()
+	if err := stopAllWeclaw(); err != nil {
+		return err
+	}
 
 	// Ensure log directory exists
 	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
@@ -428,22 +437,72 @@ func processExists(pid int) bool {
 	return p.Signal(syscall.Signal(0)) == nil
 }
 
-// stopAllWeclaw kills all running weclaw processes (by PID file and by process scan).
-func stopAllWeclaw() {
-	// 1. Kill by PID file
-	if pid, err := readPid(); err == nil && processExists(pid) {
-		if p, err := os.FindProcess(pid); err == nil {
-			_ = p.Signal(syscall.SIGTERM)
+type stopProcessOps struct {
+	readPid            func() (int, error)
+	processExists      func(int) bool
+	signalPID          func(int, syscall.Signal) error
+	signalProcessGroup func(int, syscall.Signal) error
+	removePIDFile      func() error
+	sleep              func(time.Duration)
+}
+
+func stopAllWeclaw() error {
+	return stopAllWeclawWithOps(defaultStopProcessOps())
+}
+
+func defaultStopProcessOps() stopProcessOps {
+	return stopProcessOps{
+		readPid:            readPid,
+		processExists:      processExists,
+		signalPID:          signalPID,
+		signalProcessGroup: signalProcessGroup,
+		removePIDFile: func() error {
+			return os.Remove(pidFile())
+		},
+		sleep: time.Sleep,
+	}
+}
+
+// stopAllWeclawWithOps 只停止 pid 文件指向的目标，避免按命令行扫描误杀其他进程。
+func stopAllWeclawWithOps(ops stopProcessOps) error {
+	pid, err := ops.readPid()
+	if err != nil {
+		return nil
+	}
+	if !ops.processExists(pid) {
+		return ops.removePIDFile()
+	}
+	_ = ops.signalPID(pid, syscall.SIGTERM)
+	if waitProcessExit(pid, ops) {
+		return ops.removePIDFile()
+	}
+
+	_ = ops.signalProcessGroup(pid, syscall.SIGKILL)
+	_ = ops.signalPID(pid, syscall.SIGKILL)
+	if waitProcessExit(pid, ops) {
+		return ops.removePIDFile()
+	}
+	return fmt.Errorf("weclaw process pid=%d did not exit", pid)
+}
+
+func waitProcessExit(pid int, ops stopProcessOps) bool {
+	for i := 0; i < gracefulStopChecks; i++ {
+		ops.sleep(gracefulStopInterval)
+		if !ops.processExists(pid) {
+			return true
 		}
 	}
-	os.Remove(pidFile())
+	return false
+}
 
-	// 2. Kill any remaining weclaw processes by scanning
-	exe, err := os.Executable()
+func signalPID(pid int, sig syscall.Signal) error {
+	p, err := os.FindProcess(pid)
 	if err != nil {
-		return
+		return err
 	}
-	// Use pkill to kill all processes matching the executable path
-	_ = exec.Command("pkill", "-f", exe+" start").Run()
-	time.Sleep(500 * time.Millisecond)
+	return p.Signal(sig)
+}
+
+func signalProcessGroup(pid int, sig syscall.Signal) error {
+	return syscall.Kill(-pid, sig)
 }

@@ -425,15 +425,25 @@ func codexInitializeParams() map[string]interface{} {
 // Stop terminates the subprocess.
 func (a *ACPAgent) Stop() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if !a.started {
+	if !a.started && a.stdin == nil && a.cmd == nil {
+		a.mu.Unlock()
 		return
 	}
-	a.stdin.Close()
-	a.cmd.Process.Kill()
-	a.cmd.Wait()
+	stdin := a.stdin
+	cmd := a.cmd
 	a.started = false
+	a.stdin = nil
+	a.cmd = nil
+	a.scanner = nil
+	a.mu.Unlock()
+
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
 }
 
 // SetCwd changes the working directory for subsequent sessions.
@@ -446,6 +456,10 @@ func (a *ACPAgent) SetCwd(cwd string) {
 // ResetSession clears the existing session for the given conversationID and
 // immediately creates a new one, returning the new session ID.
 func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (string, error) {
+	if err := a.ensureStarted(ctx); err != nil {
+		return "", err
+	}
+
 	if a.protocol == protocolCodexAppServer {
 		a.mu.Lock()
 		delete(a.threads, conversationID)
@@ -455,11 +469,7 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 		a.persistState()
 		log.Printf("[acp] thread reset (conversation=%s), creating new thread", conversationID)
 
-		threadID, _, err := a.getOrCreateThread(ctx, conversationID)
-		if err != nil {
-			return "", fmt.Errorf("create new thread: %w", err)
-		}
-		return threadID, nil
+		return a.createResetCodexThread(ctx, conversationID)
 	}
 
 	a.mu.Lock()
@@ -474,6 +484,53 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 		return "", fmt.Errorf("create new session: %w", err)
 	}
 	return sessionID, nil
+}
+
+// ensureStarted 确保重置会话前有可写的真实 runtime；测试桩直接走 rpcCall。
+func (a *ACPAgent) ensureStarted(ctx context.Context) error {
+	if a.rpcCall != nil {
+		return nil
+	}
+	a.mu.Lock()
+	started := a.started
+	a.mu.Unlock()
+	if started {
+		return nil
+	}
+	return a.Start(ctx)
+}
+
+// createResetCodexThread 处理 /new 的新 thread 创建，并在 stdin 关闭时重启一次。
+func (a *ACPAgent) createResetCodexThread(ctx context.Context, conversationID string) (string, error) {
+	threadID, _, err := a.getOrCreateThread(ctx, conversationID)
+	if err == nil {
+		return threadID, nil
+	}
+	if !isClosedStdinError(err) {
+		return "", fmt.Errorf("create new thread: %w", err)
+	}
+	log.Printf("[acp] codex stdin is closed during reset, restarting runtime (conversation=%s): %v", conversationID, err)
+	a.Stop()
+	if err := a.Start(ctx); err != nil {
+		return "", fmt.Errorf("restart codex runtime: %w", err)
+	}
+	threadID, _, err = a.getOrCreateThread(ctx, conversationID)
+	if err != nil {
+		return "", fmt.Errorf("create new thread after runtime restart: %w", err)
+	}
+	return threadID, nil
+}
+
+// isClosedStdinError 判断 JSON-RPC 写入失败是否来自已失效的子进程 stdin。
+func isClosedStdinError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "write to stdin") &&
+		(strings.Contains(text, "file already closed") ||
+			strings.Contains(text, "broken pipe") ||
+			strings.Contains(text, "closed pipe"))
 }
 
 // CurrentCodexThread 返回指定会话当前绑定的 Codex thread。
@@ -1209,8 +1266,15 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 
 // readLoop reads NDJSON lines from stdout and dispatches to pending requests or notification channels.
 func (a *ACPAgent) readLoop() {
-	for a.scanner.Scan() {
-		line := a.scanner.Text()
+	a.mu.Lock()
+	scanner := a.scanner
+	a.mu.Unlock()
+	if scanner == nil {
+		return
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
 		if line == "" {
 			continue
 		}
@@ -1269,10 +1333,67 @@ func (a *ACPAgent) readLoop() {
 		}
 	}
 
-	if err := a.scanner.Err(); err != nil {
+	exitReason := "ACP runtime exited"
+	if err := scanner.Err(); err != nil {
+		exitReason = fmt.Sprintf("ACP runtime read error: %v", err)
 		log.Printf("[acp] read loop error: %v", err)
 	}
+	a.mu.Lock()
+	currentScanner := a.scanner == scanner
+	if a.scanner == scanner {
+		a.started = false
+		a.stdin = nil
+		a.cmd = nil
+		a.scanner = nil
+	}
+	a.mu.Unlock()
+	if currentScanner {
+		a.failRuntimeWaiters(exitReason)
+	}
 	log.Println("[acp] read loop ended")
+}
+
+func (a *ACPAgent) failRuntimeWaiters(reason string) {
+	a.failPendingRequests(reason)
+	a.failActiveTurns(reason)
+}
+
+func (a *ACPAgent) failPendingRequests(reason string) {
+	resp := &rpcResponse{
+		Error: &rpcError{Code: -32000, Message: reason},
+	}
+
+	a.pendingMu.Lock()
+	channels := make([]chan *rpcResponse, 0, len(a.pending))
+	for id, ch := range a.pending {
+		delete(a.pending, id)
+		channels = append(channels, ch)
+	}
+	a.pendingMu.Unlock()
+
+	for _, ch := range channels {
+		select {
+		case ch <- resp:
+		default:
+		}
+	}
+}
+
+func (a *ACPAgent) failActiveTurns(reason string) {
+	evt := &codexTurnEvent{Kind: "error", Text: reason}
+	a.notifyMu.Lock()
+	channels := make([]chan *codexTurnEvent, 0, len(a.turnCh))
+	for _, ch := range a.turnCh {
+		channels = append(channels, ch)
+	}
+	a.notifyMu.Unlock()
+
+	for _, ch := range channels {
+		select {
+		case ch <- evt:
+		default:
+		}
+	}
 }
 
 func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
@@ -1327,25 +1448,7 @@ func (a *ACPAgent) handleCodexDelta(params json.RawMessage) {
 		return
 	}
 
-	// Find the turn channel by thread ID — we need to match against stored threads
-	a.notifyMu.Lock()
-	ch, ok := a.turnCh[key]
-	if !ok {
-		// Try matching by iterating all turn channels (codex uses conversationId, not threadId)
-		for _, c := range a.turnCh {
-			ch = c
-			ok = true
-			break
-		}
-	}
-	a.notifyMu.Unlock()
-
-	if ok {
-		select {
-		case ch <- &codexTurnEvent{Delta: delta}:
-		default:
-		}
-	}
+	a.dispatchToTurnCh(key, &codexTurnEvent{Delta: delta})
 }
 
 // handleCodexItemDelta handles "item/agentMessage/delta" events.

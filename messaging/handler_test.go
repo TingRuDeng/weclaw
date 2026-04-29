@@ -23,6 +23,7 @@ import (
 const (
 	taskQueueProbeDelay = 50 * time.Millisecond
 	taskWaitTimeout     = 500 * time.Millisecond
+	taskTimeoutWait     = 1500 * time.Millisecond
 )
 
 func newTestHandler() *Handler {
@@ -976,6 +977,51 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	}
 }
 
+func TestSendToNamedAgentUsesTaskTimeout(t *testing.T) {
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "slow", Type: "cli", Command: "slow"}
+	h.agents["slow"] = ag
+	h.SetProgressConfig(progressConfigWithTaskTimeout())
+
+	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
+		h.sendToNamedAgent(ctx, client, newTextMessage(3001, "/slow hello"), "slow", "hello", "client-1")
+	})
+	waitForText(t, calls, "context deadline exceeded")
+}
+
+func TestSendToDefaultAgentUsesTaskTimeout(t *testing.T) {
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "slow", Type: "cli", Command: "slow"}
+	h.SetDefaultAgent("slow", ag)
+	h.SetProgressConfig(progressConfigWithTaskTimeout())
+
+	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
+		h.sendToDefaultAgent(ctx, client, newTextMessage(3002, "hello"), "hello", "client-1")
+	})
+	waitForText(t, calls, "context deadline exceeded")
+}
+
+func TestBroadcastToAgentsUsesTaskTimeout(t *testing.T) {
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "slow", Type: "cli", Command: "slow"}
+	h.agents["slow"] = ag
+	h.SetProgressConfig(progressConfigWithTaskTimeout())
+
+	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
+		h.broadcastToAgents(ctx, client, newTextMessage(3003, "@slow hello"), []string{"slow"}, "hello")
+	})
+	waitForText(t, calls, "context deadline exceeded")
+}
+
 func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := newBlockingProgressAgent()
@@ -1607,6 +1653,34 @@ func waitDone(t *testing.T, done <-chan struct{}, label string) {
 	case <-done:
 	case <-time.After(taskWaitTimeout):
 		t.Fatalf("未等到%s结束", label)
+	}
+}
+
+func progressConfigWithTaskTimeout() config.ProgressConfig {
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	cfg.TaskTimeoutSeconds = 1
+	return cfg
+}
+
+func runWithExpectedTaskTimeout(t *testing.T, run func(context.Context)) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		run(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return
+	case <-time.After(taskTimeoutWait):
+		cancel()
+		<-done
+		t.Fatalf("任务未在 %s 内按 task_timeout_seconds 自动结束", taskTimeoutWait)
 	}
 }
 

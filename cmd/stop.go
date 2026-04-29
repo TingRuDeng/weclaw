@@ -14,7 +14,9 @@ var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the background weclaw process",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		stopAllWeclaw()
+		if err := stopAllWeclaw(); err != nil {
+			return err
+		}
 		fmt.Println("weclaw stopped")
 		return nil
 	},

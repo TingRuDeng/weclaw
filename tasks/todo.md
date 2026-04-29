@@ -238,6 +238,27 @@
 
 已完成微信默认进度反馈静默化。默认 `progress.mode` 从 `summary` 调整为 `typing`，默认 `send_acceptance` 调整为 `false`；长任务期间只保留微信 typing 状态，最终仍发送完整结果。显式切到 `summary` 或 `stream` 时，中间文字进度仍可用。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
 
+## Review 安全与可靠性修复清单
+
+### 目标
+
+修复外部发送 API、远程媒体下载、ACP 子进程退出、Codex delta 路由、任务超时和进程重启 6 个 review 问题。
+
+### 执行任务
+
+- [x] 为 `/api/send` 增加 token 鉴权，并拒绝无 token 的非 loopback API 监听。
+- [x] 为 URL 媒体下载增加 SSRF 校验、重定向校验和下载大小上限。
+- [x] ACP 子进程退出时失败所有 pending RPC，并通知活跃 turn。
+- [x] Codex delta 无法唯一路由时不再发送给第一个活跃 turn。
+- [x] 让 `task_timeout_seconds` 对 Agent 调用真正生效。
+- [x] 移除 `stopAllWeclaw` 的宽泛 `pkill -f`，只停止 pid 文件记录的目标进程。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 6 个 review 问题修复：`/api/send` 增加 token 鉴权并禁止无 token 的非 loopback 监听；远程媒体下载增加协议、主机/IP、重定向和体积限制；ACP runtime 退出时会失败 pending RPC 与活跃 turn；Codex delta 无法唯一路由时不再任意 fallback；`task_timeout_seconds` 已覆盖默认、指定和广播 Agent 调用；后台停止逻辑移除 `pkill -f`，只按 pid 文件目标停止并确认退出后删除 pid 文件。验证命令：定向 `go test` 覆盖 6 组回归，`go test -count=1 -timeout 60s ./...`、`git diff --check`、`go build -o weclaw .`，结果均通过。
+
 ## Codex switch 同步 workspace 清单
 
 ### 目标

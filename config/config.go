@@ -13,6 +13,7 @@ import (
 type Config struct {
 	DefaultAgent string                 `json:"default_agent"`
 	APIAddr      string                 `json:"api_addr,omitempty"`
+	APIToken     string                 `json:"api_token,omitempty"`
 	SaveDir      string                 `json:"save_dir,omitempty"`
 	Progress     ProgressConfig         `json:"progress,omitempty"`
 	Agents       map[string]AgentConfig `json:"agents"`
@@ -215,6 +216,9 @@ func loadEnv(cfg *Config) {
 	}
 	if v := os.Getenv("WECLAW_API_ADDR"); v != "" {
 		cfg.APIAddr = v
+	}
+	if v := os.Getenv("WECLAW_API_TOKEN"); v != "" {
+		cfg.APIToken = v
 	}
 	if v := os.Getenv("WECLAW_SAVE_DIR"); v != "" {
 		cfg.SaveDir = v

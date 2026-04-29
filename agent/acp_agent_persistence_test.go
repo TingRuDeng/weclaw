@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+)
+
+const (
+	testCodexAppServerEnv = "WECLAW_TEST_CODEX_APP_SERVER"
+	testCodexThreadID     = "thread-new"
 )
 
 func TestACPAgentPersistsAndRestoresCodexThread(t *testing.T) {
@@ -128,6 +134,108 @@ func TestACPAgentResetSessionPersistsDeletionOnCreateFailure(t *testing.T) {
 	}
 }
 
+// TestACPAgentResetSessionRestartsStoppedCodexRuntime 验证 Stop 后 /new 会重启 Codex runtime。
+func TestACPAgentResetSessionRestartsStoppedCodexRuntime(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperCodexAppServer"},
+		Cwd:       tempDir,
+		StateFile: filepath.Join(tempDir, "acp-state.json"),
+		Env:       map[string]string{testCodexAppServerEnv: "1"},
+	})
+	a.protocol = protocolCodexAppServer
+
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	a.Stop()
+
+	threadID, err := a.ResetSession(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("ResetSession error: %v", err)
+	}
+	if threadID != testCodexThreadID {
+		t.Fatalf("threadID=%q, want %s", threadID, testCodexThreadID)
+	}
+}
+
+// TestACPAgentResetSessionRestartsAfterClosedCodexStdin 验证 started 状态残留但 stdin 已关闭时 /new 会自愈。
+func TestACPAgentResetSessionRestartsAfterClosedCodexStdin(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperCodexAppServer"},
+		Cwd:       tempDir,
+		StateFile: filepath.Join(tempDir, "acp-state.json"),
+		Env:       map[string]string{testCodexAppServerEnv: "1"},
+	})
+	a.protocol = protocolCodexAppServer
+	_, closedWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe error: %v", err)
+	}
+	closedWriter.Close()
+	a.stdin = closedWriter
+	a.started = true
+
+	threadID, err := a.ResetSession(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("ResetSession error: %v", err)
+	}
+	if threadID != testCodexThreadID {
+		t.Fatalf("threadID=%q, want %s", threadID, testCodexThreadID)
+	}
+}
+
+func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	pendingCh := make(chan *rpcResponse, 1)
+	turnCh := make(chan *codexTurnEvent, 1)
+
+	a.pendingMu.Lock()
+	a.pending[7] = pendingCh
+	a.pendingMu.Unlock()
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+	a.mu.Lock()
+	a.scanner = bufio.NewScanner(strings.NewReader(""))
+	a.started = true
+	a.mu.Unlock()
+
+	a.readLoop()
+
+	select {
+	case resp := <-pendingCh:
+		if resp.Error == nil || !strings.Contains(resp.Error.Message, "ACP runtime exited") {
+			t.Fatalf("pending response=%#v, want ACP runtime exited error", resp)
+		}
+	default:
+		t.Fatal("pending RPC did not receive runtime exit error")
+	}
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "error" || !strings.Contains(evt.Text, "ACP runtime exited") {
+			t.Fatalf("turn event=%#v, want runtime exit error", evt)
+		}
+	default:
+		t.Fatal("active turn did not receive runtime exit error")
+	}
+
+	a.pendingMu.Lock()
+	_, pendingExists := a.pending[7]
+	a.pendingMu.Unlock()
+	if pendingExists {
+		t.Fatal("pending RPC should be removed after runtime exit")
+	}
+}
+
 func TestACPAgentCodexFallbackToFreshThreadOnEmptyResponse(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
@@ -195,6 +303,34 @@ func TestACPAgentCodexFallbackToFreshThreadOnEmptyResponse(t *testing.T) {
 	if got := persisted.Threads["user-1"]; got != "new-thread" {
 		t.Fatalf("persisted thread for user-1 = %q, want %q", got, "new-thread")
 	}
+}
+
+// TestHelperCodexAppServer 提供最小 Codex app-server，便于测试真实 stdin 生命周期。
+func TestHelperCodexAppServer(t *testing.T) {
+	if os.Getenv(testCodexAppServerEnv) != "1" {
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var req struct {
+			ID     *int64 `json:"id,omitempty"`
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil || req.ID == nil {
+			continue
+		}
+		result := map[string]interface{}{}
+		if req.Method == "thread/start" {
+			result = map[string]interface{}{"thread": map[string]string{"id": testCodexThreadID}}
+		}
+		_ = encoder.Encode(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      *req.ID,
+			"result":  result,
+		})
+	}
+	os.Exit(0)
 }
 
 func TestACPAgentCodexProgressCallbackReceivesDelta(t *testing.T) {
@@ -568,6 +704,32 @@ func TestDispatchToTurnChFallbackOnlyWhenSingleActiveTurn(t *testing.T) {
 	select {
 	case evt := <-secondTurnCh:
 		t.Fatalf("multi active turn should not fallback to thread-2, got %#v", evt)
+	default:
+	}
+}
+
+func TestHandleCodexDeltaDoesNotFallbackWithMultipleActiveTurns(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	firstTurnCh := make(chan *codexTurnEvent, 1)
+	secondTurnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = firstTurnCh
+	a.turnCh["thread-2"] = secondTurnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexDelta(json.RawMessage(`{"conversationId":"missing-thread","msg":{"delta":"wrong turn"}}`))
+
+	select {
+	case evt := <-firstTurnCh:
+		t.Fatalf("unroutable delta should not reach thread-1, got %#v", evt)
+	default:
+	}
+	select {
+	case evt := <-secondTurnCh:
+		t.Fatalf("unroutable delta should not reach thread-2, got %#v", evt)
 	default:
 	}
 }

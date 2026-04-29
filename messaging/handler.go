@@ -227,6 +227,14 @@ func (h *Handler) resolveProgressConfig(agentName string) config.ProgressConfig 
 	return config.NormalizeProgressConfig(global, &override)
 }
 
+// contextWithTaskTimeout 只限制 Agent 执行耗时，最终失败回复继续使用原始请求上下文发送。
+func contextWithTaskTimeout(ctx context.Context, cfg config.ProgressConfig) (context.Context, context.CancelFunc) {
+	if cfg.TaskTimeoutSeconds <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Duration(cfg.TaskTimeoutSeconds)*time.Second)
+}
+
 func (h *Handler) ensureCodexSessions() *codexSessionStore {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -759,10 +767,15 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 	ag := h.getDefaultAgent()
 	var reply string
 	if ag != nil {
+		replyCtx := ctx
+		progressCfg := h.resolveProgressConfig(defaultName)
+		agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
+		defer cancelTaskTimeout()
+
 		executionKey := h.agentExecutionKey(msg.FromUserID, defaultName, ag)
 		var activeTask *activeAgentTask
 		if isCodexAgent(defaultName, ag.Info()) {
-			task, taskCtx, started := h.beginActiveTask(ctx, executionKey)
+			task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 			if !started {
 				h.storePendingGuide(executionKey, text)
 				_ = SendTextReply(ctx, client, msg.FromUserID, runningCodexGuidePrompt(), msg.ContextToken, clientID)
@@ -770,23 +783,22 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 			}
 			activeTask = task
 			defer h.finishActiveTask(executionKey, task)
-			ctx = taskCtx
+			agentCtx = taskCtx
 		}
 		unlock := h.lockAgentExecution(executionKey)
 		defer unlock()
 
-		progressCfg := h.resolveProgressConfig(defaultName)
-		onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "", text, progressCfg)
+		onProgress, stopProgress := h.startProgressSession(agentCtx, client, msg.FromUserID, msg.ContextToken, "", text, progressCfg)
 		defer stopProgress()
 
 		var err error
-		conversationID, resolveErr := h.resolveAgentConversationID(ctx, msg.FromUserID, defaultName, ag)
+		conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, defaultName, ag)
 		if resolveErr != nil {
 			reply = renderFinalFailure("", resolveErr)
-			h.sendReplyWithMedia(ctx, client, msg, defaultName, reply, clientID)
+			h.sendReplyWithMedia(replyCtx, client, msg, defaultName, reply, clientID)
 			return
 		}
-		reply, err = h.chatWithAgentWithProgress(ctx, ag, conversationID, text, onProgress)
+		reply, err = h.chatWithAgentWithProgress(agentCtx, ag, conversationID, text, onProgress)
 		if err != nil {
 			reply = renderFinalFailure("", err)
 		} else {
@@ -814,10 +826,15 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 		return
 	}
 
+	replyCtx := ctx
+	progressCfg := h.resolveProgressConfig(name)
+	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
+	defer cancelTaskTimeout()
+
 	executionKey := h.agentExecutionKey(msg.FromUserID, name, ag)
 	var activeTask *activeAgentTask
 	if isCodexAgent(name, ag.Info()) {
-		task, taskCtx, started := h.beginActiveTask(ctx, executionKey)
+		task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 		if !started {
 			h.storePendingGuide(executionKey, message)
 			_ = SendTextReply(ctx, client, msg.FromUserID, runningCodexGuidePrompt(), msg.ContextToken, clientID)
@@ -825,22 +842,21 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 		}
 		activeTask = task
 		defer h.finishActiveTask(executionKey, task)
-		ctx = taskCtx
+		agentCtx = taskCtx
 	}
 	unlock := h.lockAgentExecution(executionKey)
 	defer unlock()
 
-	progressCfg := h.resolveProgressConfig(name)
-	onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "", message, progressCfg)
+	onProgress, stopProgress := h.startProgressSession(agentCtx, client, msg.FromUserID, msg.ContextToken, "", message, progressCfg)
 	defer stopProgress()
 
-	conversationID, resolveErr := h.resolveAgentConversationID(ctx, msg.FromUserID, name, ag)
+	conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, name, ag)
 	if resolveErr != nil {
 		reply := renderFinalFailure("["+name+"] ", resolveErr)
-		h.sendReplyWithMedia(ctx, client, msg, name, reply, clientID)
+		h.sendReplyWithMedia(replyCtx, client, msg, name, reply, clientID)
 		return
 	}
-	reply, err := h.chatWithAgentWithProgress(ctx, ag, conversationID, message, onProgress)
+	reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
 	if err != nil {
 		reply = renderFinalFailure("["+name+"] ", err)
 	} else {
@@ -850,7 +866,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 	if activeTask != nil && !activeTask.shouldSendFinal() {
 		return
 	}
-	h.sendReplyWithMedia(ctx, client, msg, name, reply, clientID)
+	h.sendReplyWithMedia(replyCtx, client, msg, name, reply, clientID)
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.
@@ -870,20 +886,23 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
 			}
+			progressCfg := h.resolveProgressConfig(n)
+			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
+			defer cancelTaskTimeout()
+
 			executionKey := h.agentExecutionKey(msg.FromUserID, n, ag)
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
 
-			progressCfg := h.resolveProgressConfig(n)
-			onProgress, stopProgress := h.startProgressSession(ctx, client, msg.FromUserID, msg.ContextToken, "["+n+"] ", message, progressCfg)
+			onProgress, stopProgress := h.startProgressSession(agentCtx, client, msg.FromUserID, msg.ContextToken, "["+n+"] ", message, progressCfg)
 			defer stopProgress()
 
-			conversationID, resolveErr := h.resolveAgentConversationID(ctx, msg.FromUserID, n, ag)
+			conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, n, ag)
 			if resolveErr != nil {
 				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", resolveErr)}
 				return
 			}
-			reply, err := h.chatWithAgentWithProgress(ctx, ag, conversationID, message, onProgress)
+			reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
 			if err != nil {
 				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", err)}
 				return

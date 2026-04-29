@@ -169,6 +169,7 @@ func TestAgentProgressOverride(t *testing.T) {
 func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	t.Setenv("WECLAW_DEFAULT_AGENT", "codex")
 	t.Setenv("WECLAW_API_ADDR", "127.0.0.1:18011")
+	t.Setenv("WECLAW_API_TOKEN", "secret-token")
 
 	cfg := DefaultConfig()
 	cfg.Agents["claude"] = AgentConfig{
@@ -185,6 +186,9 @@ func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	}
 	if cfg.APIAddr != "127.0.0.1:18011" {
 		t.Fatalf("APIAddr = %q, want %q", cfg.APIAddr, "127.0.0.1:18011")
+	}
+	if cfg.APIToken != "secret-token" {
+		t.Fatalf("APIToken = %q, want %q", cfg.APIToken, "secret-token")
 	}
 	if got := cfg.Agents["claude"].Env["KEEP"]; got != "value" {
 		t.Fatalf("agent env = %q, want preserved value", got)

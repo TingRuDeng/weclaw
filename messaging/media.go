@@ -3,15 +3,12 @@ package messaging
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"mime"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/ilink"
 )
@@ -124,38 +121,6 @@ func sendMediaData(ctx context.Context, client *ilink.Client, toUserID, fileName
 
 	log.Printf("[media] sent %s to %s from %s", contentType, toUserID, source)
 	return nil
-}
-
-func downloadFile(ctx context.Context, url string) ([]byte, string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, "", err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", err
-	}
-
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = inferContentType(url)
-	}
-
-	return data, contentType, nil
 }
 
 func classifyMedia(contentType, url string) (cdnMediaType int, itemType int) {
