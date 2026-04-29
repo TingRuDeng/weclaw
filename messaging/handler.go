@@ -73,6 +73,7 @@ type Handler struct {
 	taskLocks            map[string]*sync.Mutex
 	activeTasksMu        sync.Mutex
 	activeTasks          map[string]*activeAgentTask
+	codexLocalSessionDir string
 }
 
 const (
@@ -107,6 +108,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		codexSessions:        newCodexSessionStore(),
 		taskLocks:            make(map[string]*sync.Mutex),
 		activeTasks:          make(map[string]*activeAgentTask),
+		codexLocalSessionDir: defaultCodexLocalSessionDir(),
 	}
 }
 
@@ -1419,7 +1421,7 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 func (h *Handler) resolveCodexSwitchTarget(bindingKey string, agentName string, workspaceRoot string, target string, ag agent.Agent) (string, string, error) {
 	target = strings.TrimSpace(target)
 	if index, ok := parseCodexListIndex(target); ok {
-		views := h.ensureCodexSessions().listWorkspaces(bindingKey)
+		views := h.codexSwitchTargets(bindingKey)
 		if index < 0 || index >= len(views) {
 			return "", "", fmt.Errorf("编号不存在，请先发送 /codex ls 查看可切换会话。")
 		}
@@ -1446,10 +1448,13 @@ func parseCodexListIndex(value string) (int, bool) {
 
 func (h *Handler) resolveCodexSwitchWorkspace(bindingKey string, agentName string, fallbackWorkspace string, threadID string, ag agent.Agent) string {
 	workspaceRoot, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID)
-	if !ok {
-		return fallbackWorkspace
+	if ok {
+		return h.switchCodexWorkspace(agentName, workspaceRoot, ag)
 	}
-	return h.switchCodexWorkspace(agentName, workspaceRoot, ag)
+	if localWorkspace, ok := h.findLocalCodexWorkspaceByThread(threadID); ok {
+		return h.switchCodexWorkspace(agentName, localWorkspace, ag)
+	}
+	return fallbackWorkspace
 }
 
 func (h *Handler) switchCodexWorkspace(agentName string, workspaceRoot string, ag agent.Agent) string {
@@ -1529,7 +1534,7 @@ func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) str
 }
 
 func (h *Handler) renderCodexList(bindingKey string) string {
-	views := h.ensureCodexSessions().listWorkspaces(bindingKey)
+	views := h.codexSwitchTargets(bindingKey)
 	if len(views) == 0 {
 		return "当前还没有 Codex workspace。"
 	}
@@ -1537,6 +1542,12 @@ func (h *Handler) renderCodexList(bindingKey string) string {
 	for index, view := range views {
 		lines = append(lines, fmt.Sprintf("%d. %s", index, view.WorkspaceRoot))
 		lines = append(lines, "   thread: "+renderCodexThreadLabel(view.ThreadID, view.PendingNewThread))
+		if view.ThreadName != "" {
+			lines = append(lines, "   名称: "+view.ThreadName)
+		}
+		if view.Source == codexLocalSource {
+			lines = append(lines, "   来源: 本机 Codex")
+		}
 	}
 	return wechatCommandText(lines...)
 }

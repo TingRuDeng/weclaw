@@ -34,12 +34,6 @@ type codexWorkspaceSession struct {
 	UpdatedAt        string
 }
 
-type codexWorkspaceView struct {
-	WorkspaceRoot    string
-	ThreadID         string
-	PendingNewThread bool
-}
-
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
 		bindings: make(map[string]codexSessionBinding),

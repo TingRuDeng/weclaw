@@ -1399,6 +1399,99 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	}
 }
 
+func TestDiscoverLocalCodexSessionsReadsIndexAndSessionMeta(t *testing.T) {
+	codexDir := t.TempDir()
+	workspaceA := filepath.Join(t.TempDir(), "workspace-a")
+	workspaceB := filepath.Join(t.TempDir(), "workspace-b")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "桌面会话 A", "2026-04-28T08:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "桌面会话 B", "2026-04-29T08:00:00Z")
+
+	sessions := discoverLocalCodexSessions(codexDir)
+
+	if len(sessions) != 2 {
+		t.Fatalf("sessions len=%d, want 2: %#v", len(sessions), sessions)
+	}
+	if sessions[0].ThreadID != "thread-b" || sessions[0].WorkspaceRoot != normalizeCodexWorkspaceRoot(workspaceB) {
+		t.Fatalf("first session=%#v, want newest thread-b workspace-b", sessions[0])
+	}
+	if sessions[1].ThreadName != "桌面会话 A" {
+		t.Fatalf("second thread name=%q, want 桌面会话 A", sessions[1].ThreadName)
+	}
+}
+
+func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	recordedWorkspace := filepath.Join(t.TempDir(), "recorded")
+	localWorkspace := filepath.Join(t.TempDir(), "local")
+	writeLocalCodexSession(t, codexDir, "thread-recorded", recordedWorkspace, "重复会话", "2026-04-29T08:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-local", localWorkspace, "桌面本机会话", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": recordedWorkspace})
+	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), recordedWorkspace, "thread-recorded")
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(109, "/codex ls"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "0. "+normalizeCodexWorkspaceRoot(recordedWorkspace)) {
+		t.Fatalf("ls should keep recorded workspace first, messages=%#v", calls.texts())
+	}
+	if !strings.Contains(text, "1. "+normalizeCodexWorkspaceRoot(localWorkspace)) {
+		t.Fatalf("ls should include local Codex workspace, messages=%#v", calls.texts())
+	}
+	if strings.Count(text, "thread-recorded") != 1 {
+		t.Fatalf("recorded thread should be deduplicated, messages=%#v", calls.texts())
+	}
+	if !strings.Contains(text, "来源: 本机 Codex") {
+		t.Fatalf("ls should label local Codex sessions, messages=%#v", calls.texts())
+	}
+}
+
+func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "desktop")
+	writeLocalCodexSession(t, codexDir, "thread-desktop", workspace, "桌面会话", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(110, "/codex switch 0"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-desktop" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-desktop)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	}
+	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	if thread != "thread-desktop" || pending {
+		t.Fatalf("stored thread=%q pending=%v, want thread-desktop false", thread, pending)
+	}
+	if !containsText(calls.texts(), "已切换线程") {
+		t.Fatalf("reply should mention switched thread, messages=%#v", calls.texts())
+	}
+}
+
 func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
 	bindingKey := codexBindingKey("user-1", "codex")
@@ -1661,6 +1754,32 @@ func progressConfigWithTaskTimeout() config.ProgressConfig {
 	cfg.Mode = progressModeOff
 	cfg.TaskTimeoutSeconds = 1
 	return cfg
+}
+
+func writeLocalCodexSession(t *testing.T, codexDir string, threadID string, workspace string, threadName string, updatedAt string) {
+	t.Helper()
+	indexLine := fmt.Sprintf(`{"id":%q,"thread_name":%q,"updated_at":%q}`+"\n", threadID, threadName, updatedAt)
+	indexPath := filepath.Join(codexDir, "session_index.jsonl")
+	file, err := os.OpenFile(indexPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open session index: %v", err)
+	}
+	if _, err := file.WriteString(indexLine); err != nil {
+		t.Fatalf("write session index: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close session index: %v", err)
+	}
+
+	sessionDir := filepath.Join(codexDir, "sessions", "2026", "04", "29")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatalf("create session dir: %v", err)
+	}
+	sessionPath := filepath.Join(sessionDir, "rollout-"+threadID+".jsonl")
+	meta := fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"timestamp":%q,"cwd":%q,"originator":"Codex Desktop"}}`+"\n", updatedAt, threadID, updatedAt, workspace)
+	if err := os.WriteFile(sessionPath, []byte(meta), 0o600); err != nil {
+		t.Fatalf("write session meta: %v", err)
+	}
 }
 
 func runWithExpectedTaskTimeout(t *testing.T, run func(context.Context)) {

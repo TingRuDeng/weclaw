@@ -378,3 +378,23 @@
 ### Review 小结
 
 已完成 Codex 额度错误处理修复。`usageLimitExceeded` 现在只作为普通 turn error 返回，不会自动刷新 Codex 进程，也不会清理 thread 映射；`deactivated_workspace` 仍按真实工作区/登录态异常处理。验证命令：`go test -count=1 ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## Codex 本机会话发现与绑定清单
+
+### 目标
+
+让微信里的 `/codex ls` 同时展示 WeClaw 已记录会话和本机 Codex 桌面端/CLI 会话，并复用 `/codex switch <编号>` 绑定切换。
+
+### 执行任务
+
+- [x] 新增本机 Codex 会话索引解析测试，只读取元数据字段。
+- [x] 新增 `/codex ls` 合并本机会话测试，避免重复展示已记录 thread。
+- [x] 新增 `/codex switch <编号>` 绑定本机会话测试，自动切换 workspace 并 resume thread。
+- [x] 实现本机 Codex 会话元数据扫描器。
+- [x] 接入 `/codex ls` 与编号切换。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 本机会话发现与绑定。`/codex ls` 现在会合并 WeClaw 已记录 thread 与本机 `~/.codex` 会话索引，并按 thread 去重；本机会话只读取 `session_index.jsonl` 与每个 session jsonl 的首个 `session_meta` 元数据，不读取对话正文。`/codex switch <编号>` 可直接绑定 `/codex ls` 中的本机会话编号，切换 Codex workspace 后 resume 对应 thread。验证命令：`go test ./messaging -run 'TestDiscoverLocalCodexSessionsReadsIndexAndSessionMeta|TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread|TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex' -count=1 -timeout 60s`、`go test ./messaging -count=1 -timeout 60s`、`go test ./messaging -cover -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过；`messaging` 包整体覆盖率为 59.9%，低于 80% 的原因是历史包体量较大，本次新增行为已用三条定向回归覆盖。
