@@ -480,10 +480,11 @@ func TestBuildHelpText(t *testing.T) {
 		"Codex 账号：",
 		"指定 Agent：",
 		"常用别名：",
-		"/codex ls",
-		"/codex whoami",
+		"/cx ls",
+		"/cx cd <编号|名称|..>",
+		"/cx switch <编号>",
 		"/sw reload",
-		"/cx = /codex",
+		"/codex = /cx",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("help text should mention %q", want)
@@ -498,10 +499,10 @@ func TestBuildHelpText(t *testing.T) {
 	for _, want := range []string{
 		"常用：\n\n/info",
 		"/info 查看当前 Agent\n\n/new 开启新会话",
-		"Codex：\n\n/codex whoami",
-		"/codex whoami 查看当前 Codex workspace 和 thread\n\n/codex ls",
+		"Codex：\n\n/cx ls",
+		"/cx ls 查看工作空间或当前工作空间会话\n\n/cx cd",
 		"Codex 账号：\n\n/sw ls",
-		"常用别名：\n\n/cx = /codex",
+		"常用别名：\n\n/codex = /cx",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("help text should use blank lines for WeChat rendering, missing %q", want)
@@ -534,6 +535,7 @@ func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 
 func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 	h := NewHandler(nil, nil)
+	h.SetCodexLocalSessionDir(t.TempDir())
 	bindingKey := codexBindingKey("user-1", "codex")
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
@@ -547,16 +549,16 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 
 	list := h.renderCodexList(bindingKey)
 	for _, want := range []string{
-		"Codex workspaces:\n\n0. ",
-		workspaceA + "\n\n   thread: thread-a",
-		workspaceB + "\n\n   thread: (new draft)",
+		"Codex 工作空间:\n\n0. ",
+		filepath.Base(workspaceA),
+		filepath.Base(workspaceB),
 	} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("workspace reply missing %q, got %q", want, list)
 		}
 	}
-	if strings.Contains(list, "Codex workspaces:\n- ") {
-		t.Fatalf("workspace reply should not use single newline after title, got %q", list)
+	if strings.Contains(list, "thread-a") || strings.Contains(list, workspaceA) {
+		t.Fatalf("workspace reply should hide thread ids and full paths, got %q", list)
 	}
 }
 
@@ -1326,8 +1328,8 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 	if thread != "thread-2" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-2 false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已切换线程") {
-		t.Fatalf("reply should mention switched thread, messages=%#v", calls.texts())
+	if !containsText(calls.texts(), "已切换会话") {
+		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
 	}
 }
 
@@ -1360,7 +1362,7 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	if got := h.codexWorkspaceRoot("codex"); got != targetWorkspace {
 		t.Fatalf("handler workspace=%q, want %q", got, targetWorkspace)
 	}
-	if !containsText(calls.texts(), "workspace: "+targetWorkspace) {
+	if !containsText(calls.texts(), "工作空间: "+filepath.Base(targetWorkspace)) {
 		t.Fatalf("reply should mention switched workspace, messages=%#v", calls.texts())
 	}
 }
@@ -1394,7 +1396,7 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	if ag.lastCwd != normalizeCodexWorkspaceRoot(targetWorkspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(targetWorkspace))
 	}
-	if !containsText(calls.texts(), "workspace: "+normalizeCodexWorkspaceRoot(targetWorkspace)) {
+	if !containsText(calls.texts(), "工作空间: "+filepath.Base(targetWorkspace)) {
 		t.Fatalf("reply should mention switched workspace, messages=%#v", calls.texts())
 	}
 }
@@ -1443,17 +1445,11 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	h.HandleMessage(context.Background(), client, newTextMessage(109, "/codex ls"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "0. "+normalizeCodexWorkspaceRoot(recordedWorkspace)) {
-		t.Fatalf("ls should keep recorded workspace first, messages=%#v", calls.texts())
+	if !strings.Contains(text, "0. local") || !strings.Contains(text, "1. recorded") {
+		t.Fatalf("ls should include local and recorded workspace names, messages=%#v", calls.texts())
 	}
-	if !strings.Contains(text, "1. "+normalizeCodexWorkspaceRoot(localWorkspace)) {
-		t.Fatalf("ls should include local Codex workspace, messages=%#v", calls.texts())
-	}
-	if strings.Count(text, "thread-recorded") != 1 {
-		t.Fatalf("recorded thread should be deduplicated, messages=%#v", calls.texts())
-	}
-	if !strings.Contains(text, "来源: 本机 Codex") {
-		t.Fatalf("ls should label local Codex sessions, messages=%#v", calls.texts())
+	if strings.Contains(text, "thread-recorded") || strings.Contains(text, "来源:") {
+		t.Fatalf("workspace ls should hide thread ids and source labels, messages=%#v", calls.texts())
 	}
 }
 
@@ -1487,8 +1483,166 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	if thread != "thread-desktop" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-desktop false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已切换线程") {
-		t.Fatalf("reply should mention switched thread, messages=%#v", calls.texts())
+	if !containsText(calls.texts(), "已切换会话") {
+		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
+	h := NewHandler(nil, nil)
+	root := t.TempDir()
+	workspaceA := filepath.Join(root, "weclaw")
+	workspaceB := filepath.Join(root, "card-manager-android")
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetCodexLocalSessionDir(t.TempDir())
+	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
+	h.codexSessions.setThread(bindingKey, workspaceB, "thread-b")
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(111, "/cx ls"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "Codex 工作空间") {
+		t.Fatalf("ls should show workspace list, messages=%#v", calls.texts())
+	}
+	if !strings.Contains(text, "0. card-manager-android") || !strings.Contains(text, "1. weclaw") {
+		t.Fatalf("ls should show workspace short names, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, "thread-a") || strings.Contains(text, workspaceA) {
+		t.Fatalf("workspace ls should hide thread ids and full paths, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-local-a", workspace, "实现两级会话浏览", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-local-b", workspace, "修复安全问题", "2026-04-29T08:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(112, "/cx cd 0"))
+	h.HandleMessage(context.Background(), client, newTextMessage(113, "/cx ls"))
+
+	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "已进入工作空间") || !strings.Contains(text, "weclaw 会话") {
+		t.Fatalf("cd then ls should enter workspace and show sessions, messages=%#v", calls.texts())
+	}
+	if !strings.Contains(text, "0. 实现两级会话浏览") || !strings.Contains(text, "1. 修复安全问题") {
+		t.Fatalf("session ls should show numbered session names, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, "thread-local-a") || strings.Contains(text, "来源:") {
+		t.Fatalf("session ls should hide thread ids and source labels, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	workspaceA := filepath.Join(root, "alpha")
+	workspaceB := filepath.Join(root, "beta")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T10:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(114, "/cx cd alpha"))
+	h.HandleMessage(context.Background(), client, newTextMessage(115, "/cx switch 0"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspaceA)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-a" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-a)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	if !containsText(calls.texts(), "已切换会话") {
+		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
+	}
+	if containsText(calls.texts(), "thread-a") {
+		t.Fatalf("switch reply should hide thread id, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(116, "/cx cd weclaw"))
+	h.HandleMessage(context.Background(), client, newTextMessage(117, "/cx cd .."))
+	h.HandleMessage(context.Background(), client, newTextMessage(118, "/cx ls"))
+
+	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("cd .. should not change codex cwd, got %q want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "已返回工作空间列表") || !strings.Contains(text, "Codex 工作空间") {
+		t.Fatalf("cd .. should return to workspace list, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexCxPwdShowsBrowseWorkspace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(119, "/cx cd weclaw"))
+	h.HandleMessage(context.Background(), client, newTextMessage(120, "/cx pwd"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "浏览层级: 会话") || !strings.Contains(text, "工作空间: weclaw") {
+		t.Fatalf("pwd should show current browse workspace, messages=%#v", calls.texts())
 	}
 }
 
@@ -1607,6 +1761,7 @@ func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
+	h.SetCodexLocalSessionDir(t.TempDir())
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
 
@@ -1623,7 +1778,7 @@ func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	if !containsText(texts, "thread: thread-1") {
 		t.Fatalf("whoami/ls should include thread, messages=%#v", texts)
 	}
-	if !containsText(texts, "0. "+workspace) {
+	if !containsText(texts, "0. "+filepath.Base(workspace)) {
 		t.Fatalf("ls should include numbered workspace, messages=%#v", texts)
 	}
 }

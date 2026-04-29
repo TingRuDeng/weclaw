@@ -398,3 +398,26 @@
 ### Review 小结
 
 已完成 Codex 本机会话发现与绑定。`/codex ls` 现在会合并 WeClaw 已记录 thread 与本机 `~/.codex` 会话索引，并按 thread 去重；本机会话只读取 `session_index.jsonl` 与每个 session jsonl 的首个 `session_meta` 元数据，不读取对话正文。`/codex switch <编号>` 可直接绑定 `/codex ls` 中的本机会话编号，切换 Codex workspace 后 resume 对应 thread。验证命令：`go test ./messaging -run 'TestDiscoverLocalCodexSessionsReadsIndexAndSessionMeta|TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread|TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex' -count=1 -timeout 60s`、`go test ./messaging -count=1 -timeout 60s`、`go test ./messaging -cover -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过；`messaging` 包整体覆盖率为 59.9%，低于 80% 的原因是历史包体量较大，本次新增行为已用三条定向回归覆盖。
+
+## Codex 两级会话浏览清单
+
+### 目标
+
+让 `/cx ls` 先列工作空间，进入工作空间后再列该工作空间内的会话；会话列表只显示编号和名称，不暴露 thread id，并支持 `/cx cd ..` 返回工作空间列表层。
+
+### 执行任务
+
+- [x] 新增 `/cx ls` 工作空间列表测试，输出短名称并隐藏 thread id。
+- [x] 新增 `/cx cd <编号|名称>` 进入工作空间测试，并同步 Codex cwd。
+- [x] 新增 `/cx ls` 在工作空间内列会话测试，只显示编号和名称。
+- [x] 新增 `/cx switch <编号>` 在当前工作空间切换会话测试。
+- [x] 新增 `/cx cd ..` 返回工作空间列表测试，不改变 Codex cwd。
+- [x] 新增 `/cx pwd` 和帮助文本测试。
+- [x] 实现 Codex 浏览状态、工作空间聚合和会话过滤。
+- [x] 接入 `/cx` 与 `/codex` 会话命令解析。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 两级会话浏览。`/cx ls` 在默认层级只显示工作空间短名称；`/cx cd <编号|工作空间名>` 会进入工作空间并同步 Codex cwd；进入后 `/cx ls` 只显示当前工作空间内的会话编号和名称，不再暴露 thread id；`/cx switch <编号>` 按当前工作空间会话列表切换；`/cx cd ..` 仅返回工作空间列表层，不改变真实 Codex cwd；`/cx pwd` 可查看当前浏览层级。`/codex` 仍作为 `/cx` 的兼容写法。验证命令：`go test ./messaging -run 'TestCodexCxLsListsWorkspacesWithoutThreads|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex|TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd|TestCodexCxPwdShowsBrowseWorkspace' -count=1 -timeout 60s`、`go test ./messaging -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。

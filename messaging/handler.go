@@ -51,29 +51,31 @@ type AgentMeta struct {
 
 // Handler processes incoming WeChat messages and dispatches replies.
 type Handler struct {
-	mu                   sync.RWMutex
-	defaultName          string
-	agents               map[string]agent.Agent // name -> running agent
-	agentMetas           []AgentMeta            // all configured agents (for /status)
-	agentWorkDirs        map[string]string      // agent name -> configured/runtime cwd
-	customAliases        map[string]string      // custom alias -> agent name (from config)
-	factory              AgentFactory
-	saveDefault          SaveDefaultFunc
-	contextTokens        sync.Map // map[userID]contextToken
-	saveDir              string   // directory to save images/files to
-	seenMsgs             sync.Map // map[int64]time.Time — dedup by message_id
-	switchScript         string
-	switchRunner         SwitchCommandRunner
-	cdnDownloader        CDNDownloader
-	progressConfig       config.ProgressConfig
-	agentProgressConfigs map[string]config.ProgressConfig
-	seenTextMsgs         sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
-	codexSessions        *codexSessionStore
-	taskLocksMu          sync.Mutex
-	taskLocks            map[string]*sync.Mutex
-	activeTasksMu        sync.Mutex
-	activeTasks          map[string]*activeAgentTask
-	codexLocalSessionDir string
+	mu                    sync.RWMutex
+	defaultName           string
+	agents                map[string]agent.Agent // name -> running agent
+	agentMetas            []AgentMeta            // all configured agents (for /status)
+	agentWorkDirs         map[string]string      // agent name -> configured/runtime cwd
+	customAliases         map[string]string      // custom alias -> agent name (from config)
+	factory               AgentFactory
+	saveDefault           SaveDefaultFunc
+	contextTokens         sync.Map // map[userID]contextToken
+	saveDir               string   // directory to save images/files to
+	seenMsgs              sync.Map // map[int64]time.Time — dedup by message_id
+	switchScript          string
+	switchRunner          SwitchCommandRunner
+	cdnDownloader         CDNDownloader
+	progressConfig        config.ProgressConfig
+	agentProgressConfigs  map[string]config.ProgressConfig
+	seenTextMsgs          sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
+	codexSessions         *codexSessionStore
+	taskLocksMu           sync.Mutex
+	taskLocks             map[string]*sync.Mutex
+	activeTasksMu         sync.Mutex
+	activeTasks           map[string]*activeAgentTask
+	codexLocalSessionDir  string
+	codexBrowseMu         sync.Mutex
+	codexBrowseWorkspaces map[string]string
 }
 
 const (
@@ -96,19 +98,20 @@ type activeAgentTask struct {
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 	return &Handler{
-		agents:               make(map[string]agent.Agent),
-		agentWorkDirs:        make(map[string]string),
-		factory:              factory,
-		saveDefault:          saveDefault,
-		switchScript:         resolveSwitchScriptPath(),
-		switchRunner:         defaultSwitchCommandRunner,
-		cdnDownloader:        DownloadFileFromCDN,
-		progressConfig:       config.DefaultProgressConfig(),
-		agentProgressConfigs: make(map[string]config.ProgressConfig),
-		codexSessions:        newCodexSessionStore(),
-		taskLocks:            make(map[string]*sync.Mutex),
-		activeTasks:          make(map[string]*activeAgentTask),
-		codexLocalSessionDir: defaultCodexLocalSessionDir(),
+		agents:                make(map[string]agent.Agent),
+		agentWorkDirs:         make(map[string]string),
+		factory:               factory,
+		saveDefault:           saveDefault,
+		switchScript:          resolveSwitchScriptPath(),
+		switchRunner:          defaultSwitchCommandRunner,
+		cdnDownloader:         DownloadFileFromCDN,
+		progressConfig:        config.DefaultProgressConfig(),
+		agentProgressConfigs:  make(map[string]config.ProgressConfig),
+		codexSessions:         newCodexSessionStore(),
+		taskLocks:             make(map[string]*sync.Mutex),
+		activeTasks:           make(map[string]*activeAgentTask),
+		codexLocalSessionDir:  defaultCodexLocalSessionDir(),
+		codexBrowseWorkspaces: make(map[string]string),
 	}
 }
 
@@ -1241,13 +1244,15 @@ func buildHelpText() string {
 
 Codex：
 
-/codex whoami 查看当前 Codex workspace 和 thread
+/cx ls 查看工作空间或当前工作空间会话
 
-/codex ls 查看已记录的 workspace 会话
+/cx cd <编号|名称|..> 进入工作空间或返回列表
 
-/codex new 新建当前 workspace 的 Codex 会话
+/cx switch <编号> 切换当前工作空间会话
 
-/codex switch <编号|threadId> 切换到指定 Codex thread
+/cx new 新建当前工作空间的 Codex 会话
+
+/cx pwd 查看当前 Codex 浏览位置
 
 /guide 将暂存消息作为引导对话发送给正在执行的 Codex
 
@@ -1275,7 +1280,7 @@ Codex 账号：
 
 常用别名：
 
-/cx = /codex
+/codex = /cx
 
 /cc = /claude
 
@@ -1319,15 +1324,19 @@ func isProgressCommand(trimmed string) bool {
 
 func isCodexSessionCommand(trimmed string) bool {
 	fields := strings.Fields(trimmed)
-	if len(fields) < 2 || fields[0] != "/codex" {
+	if len(fields) < 2 || !isCodexSessionCommandToken(fields[0]) {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "help":
 		return true
 	default:
 		return false
 	}
+}
+
+func isCodexSessionCommandToken(token string) bool {
+	return token == "/codex" || token == "/cx"
 }
 
 func (h *Handler) handleProgressCommand(trimmed string) string {
@@ -1376,11 +1385,18 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		return h.renderCodexWhoami(bindingKey, workspaceRoot)
 	case "ls":
 		return h.renderCodexList(bindingKey)
+	case "cd":
+		if len(fields) != 3 {
+			return "用法: /cx cd <编号|工作空间名|..>"
+		}
+		return h.handleCodexCd(bindingKey, agentName, fields[2], ag)
+	case "pwd":
+		return h.renderCodexPwd(bindingKey)
 	case "new":
 		return h.handleCodexNew(userID, agentName, workspaceRoot, ag)
 	case "switch":
 		if len(fields) != 3 {
-			return "用法: /codex switch <编号|threadId>"
+			return "用法: /cx switch <编号|threadId>"
 		}
 		return h.handleCodexSwitch(ctx, userID, agentName, workspaceRoot, ag, fields[2])
 	default:
@@ -1415,26 +1431,35 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
-	return wechatCommandText("已切换线程。", "workspace: "+workspaceRoot, "thread: "+threadID)
+	return wechatCommandText("已切换会话。", "工作空间: "+shortCodexWorkspaceName(workspaceRoot))
 }
 
 func (h *Handler) resolveCodexSwitchTarget(bindingKey string, agentName string, workspaceRoot string, target string, ag agent.Agent) (string, string, error) {
 	target = strings.TrimSpace(target)
 	if index, ok := parseCodexListIndex(target); ok {
+		if view, ok := h.resolveCodexSessionByIndex(bindingKey, index); ok {
+			return h.resolveCodexSessionView(agentName, view, ag)
+		}
+		if _, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
+			return "", "", fmt.Errorf("会话编号不存在，请先发送 /cx ls 查看当前工作空间会话。")
+		}
 		views := h.codexSwitchTargets(bindingKey)
 		if index < 0 || index >= len(views) {
 			return "", "", fmt.Errorf("编号不存在，请先发送 /codex ls 查看可切换会话。")
 		}
-		view := views[index]
-		threadID := strings.TrimSpace(view.ThreadID)
-		if threadID == "" || view.PendingNewThread {
-			return "", "", fmt.Errorf("编号 %d 当前没有可切换的 thread。", index)
-		}
-		workspaceRoot = h.switchCodexWorkspace(agentName, view.WorkspaceRoot, ag)
-		return workspaceRoot, threadID, nil
+		return h.resolveCodexSessionView(agentName, views[index], ag)
 	}
 	threadID := target
 	workspaceRoot = h.resolveCodexSwitchWorkspace(bindingKey, agentName, workspaceRoot, threadID, ag)
+	return workspaceRoot, threadID, nil
+}
+
+func (h *Handler) resolveCodexSessionView(agentName string, view codexWorkspaceView, ag agent.Agent) (string, string, error) {
+	threadID := strings.TrimSpace(view.ThreadID)
+	if threadID == "" || view.PendingNewThread {
+		return "", "", fmt.Errorf("该编号当前没有可切换的会话。")
+	}
+	workspaceRoot := h.switchCodexWorkspace(agentName, view.WorkspaceRoot, ag)
 	return workspaceRoot, threadID, nil
 }
 
@@ -1534,22 +1559,10 @@ func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) str
 }
 
 func (h *Handler) renderCodexList(bindingKey string) string {
-	views := h.codexSwitchTargets(bindingKey)
-	if len(views) == 0 {
-		return "当前还没有 Codex workspace。"
+	if workspaceRoot, ok := h.codexBrowseWorkspace(bindingKey); ok {
+		return h.renderCodexSessionList(bindingKey, workspaceRoot)
 	}
-	lines := []string{"Codex workspaces:"}
-	for index, view := range views {
-		lines = append(lines, fmt.Sprintf("%d. %s", index, view.WorkspaceRoot))
-		lines = append(lines, "   thread: "+renderCodexThreadLabel(view.ThreadID, view.PendingNewThread))
-		if view.ThreadName != "" {
-			lines = append(lines, "   名称: "+view.ThreadName)
-		}
-		if view.Source == codexLocalSource {
-			lines = append(lines, "   来源: 本机 Codex")
-		}
-	}
-	return wechatCommandText(lines...)
+	return h.renderCodexWorkspaceList(bindingKey)
 }
 
 func renderCodexThreadLabel(threadID string, pending bool) string {
@@ -1565,10 +1578,12 @@ func renderCodexThreadLabel(threadID string, pending bool) string {
 func buildCodexSessionHelpText() string {
 	return wechatCommandText(
 		"Codex 会话命令:",
-		"/codex whoami",
-		"/codex ls",
-		"/codex new",
-		"/codex switch <编号|threadId>",
+		"/cx ls",
+		"/cx cd <编号|工作空间名|..>",
+		"/cx switch <编号>",
+		"/cx new",
+		"/cx pwd",
+		"/codex 可作为 /cx 的兼容写法",
 	)
 }
 
