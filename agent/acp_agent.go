@@ -18,6 +18,11 @@ import (
 	"time"
 )
 
+const (
+	acpScannerInitialBufferSize = 4 * 1024 * 1024
+	acpScannerMaxTokenSize      = 64 * 1024 * 1024
+)
+
 // ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
 type ACPAgent struct {
 	command      string
@@ -360,8 +365,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	pid := a.cmd.Process.Pid
 	log.Printf("[acp] started subprocess (command=%s, pid=%d)", a.command, pid)
 
-	a.scanner = bufio.NewScanner(stdout)
-	a.scanner.Buffer(make([]byte, 0, 4*1024*1024), 4*1024*1024) // 4MB
+	a.scanner = newACPScanner(stdout)
 	a.started = true
 
 	// Start reading loop
@@ -420,6 +424,13 @@ func codexInitializeParams() map[string]interface{} {
 			"experimentalApi": true,
 		},
 	}
+}
+
+// newACPScanner 创建 ACP stdout 读取器；Codex MCP 启动状态可能输出较大的单行 JSON。
+func newACPScanner(reader io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, acpScannerInitialBufferSize), acpScannerMaxTokenSize)
+	return scanner
 }
 
 // Stop terminates the subprocess.
@@ -530,7 +541,8 @@ func isClosedStdinError(err error) bool {
 	return strings.Contains(text, "write to stdin") &&
 		(strings.Contains(text, "file already closed") ||
 			strings.Contains(text, "broken pipe") ||
-			strings.Contains(text, "closed pipe"))
+			strings.Contains(text, "closed pipe") ||
+			strings.Contains(text, "acp runtime is not running"))
 }
 
 // CurrentCodexThread 返回指定会话当前绑定的 Codex thread。
@@ -1206,9 +1218,18 @@ func (a *ACPAgent) notify(method string, params interface{}) error {
 		return fmt.Errorf("marshal notification: %w", err)
 	}
 
+	err = a.writeJSONLine(data)
+	return err
+}
+
+// writeJSONLine 在写入 ACP stdin 前检查 runtime 状态，避免读循环退出后 nil stdin 触发 panic。
+func (a *ACPAgent) writeJSONLine(data []byte) error {
 	a.mu.Lock()
-	_, err = fmt.Fprintf(a.stdin, "%s\n", data)
-	a.mu.Unlock()
+	defer a.mu.Unlock()
+	if a.stdin == nil {
+		return fmt.Errorf("ACP runtime is not running")
+	}
+	_, err := fmt.Fprintf(a.stdin, "%s\n", data)
 	return err
 }
 
@@ -1239,9 +1260,7 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	a.mu.Lock()
-	_, err = fmt.Fprintf(a.stdin, "%s\n", data)
-	a.mu.Unlock()
+	err = a.writeJSONLine(data)
 	if err != nil {
 		return nil, fmt.Errorf("write to stdin: %w", err)
 	}
@@ -1696,9 +1715,10 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		return
 	}
 
-	a.mu.Lock()
-	fmt.Fprintf(a.stdin, "%s\n", data)
-	a.mu.Unlock()
+	if err := a.writeJSONLine(data); err != nil {
+		log.Printf("[acp] failed to write permission response: %v", err)
+		return
+	}
 
 	log.Printf("[acp] auto-allowed permission request")
 }

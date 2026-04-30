@@ -257,6 +257,25 @@
 
 已完成 `/cx ls` 归档会话过滤和 `/cx cd <工作空间>` 回复精简。归档判断基于本机 Codex `archived_sessions` 目录中的 thread id，列表发现阶段直接跳过这些会话；进入工作空间后只返回 `工作空间: <名称>`。验证命令：`go test ./messaging -run 'TestDiscoverLocalCodexSessionsSkipsArchivedSessions|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs' -count=1 -timeout 60s`、`go test ./messaging -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check`、`go build -o weclaw .`，结果通过。
 
+## ACP runtime 大消息与失效 stdin 崩溃修复清单
+
+### 目标
+
+修复 Codex app-server 输出大 JSON 行时触发 `bufio.Scanner: token too long`，以及读循环退出后继续向 nil stdin 写入导致 panic 的问题。
+
+### 执行任务
+
+- [x] 新增大 Codex 通知行读取测试。
+- [x] 新增 nil stdin 写入不 panic 的测试。
+- [x] 提升 ACP stdout 单行读取上限。
+- [x] 统一 JSON-RPC 写入前的 runtime 状态检查。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 ACP runtime 大消息与失效 stdin 崩溃修复。ACP stdout 单行读取上限从 4MB 提升到 64MB，覆盖 Codex MCP 启动状态这类大 JSON 通知；所有 JSON-RPC 写入统一经过 runtime 状态检查，读循环退出后会返回 `ACP runtime is not running`，不再对 nil stdin 执行 `fmt.Fprintf`。验证命令：`go test ./agent -run 'TestACPScannerReadsLargeCodexNotification|TestACPAgentCallReturnsErrorWhenRuntimeStdinMissing' -count=1 -timeout 60s`、`go test ./agent -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check`、`go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=v0.1.13" -o weclaw .`，结果通过。
+
 ## Review 安全与可靠性修复清单
 
 ### 目标

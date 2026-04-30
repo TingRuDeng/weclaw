@@ -236,6 +236,36 @@ func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
 	}
 }
 
+func TestACPScannerReadsLargeCodexNotification(t *testing.T) {
+	largePayload := strings.Repeat("x", 5*1024*1024)
+	line := fmt.Sprintf(`{"method":"mcpServer/startupStatus/updated","params":{"name":"codex_apps","status":"starting","detail":%q}}`, largePayload)
+	scanner := newACPScanner(strings.NewReader(line + "\n"))
+
+	if !scanner.Scan() {
+		t.Fatalf("scanner failed to read large notification: %v", scanner.Err())
+	}
+	if scanner.Text() != line {
+		t.Fatal("scanner returned unexpected large notification content")
+	}
+}
+
+func TestACPAgentCallReturnsErrorWhenRuntimeStdinMissing(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	a.mu.Lock()
+	a.started = false
+	a.stdin = nil
+	a.mu.Unlock()
+
+	_, err := a.call(context.Background(), "turn/start", map[string]string{"threadId": "thread-1"})
+
+	if err == nil || !strings.Contains(err.Error(), "ACP runtime is not running") {
+		t.Fatalf("call error=%v, want runtime not running", err)
+	}
+}
+
 func TestACPAgentCodexFallbackToFreshThreadOnEmptyResponse(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
