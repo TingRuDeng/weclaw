@@ -276,6 +276,25 @@
 
 已完成 ACP runtime 大消息与失效 stdin 崩溃修复。ACP stdout 单行读取上限从 4MB 提升到 64MB，覆盖 Codex MCP 启动状态这类大 JSON 通知；所有 JSON-RPC 写入统一经过 runtime 状态检查，读循环退出后会返回 `ACP runtime is not running`，不再对 nil stdin 执行 `fmt.Fprintf`。验证命令：`go test ./agent -run 'TestACPScannerReadsLargeCodexNotification|TestACPAgentCallReturnsErrorWhenRuntimeStdinMissing' -count=1 -timeout 60s`、`go test ./agent -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check`、`go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=v0.1.13" -o weclaw .`，结果通过。
 
+## Codex 额度耗尽后切账号自愈清单
+
+### 目标
+
+修复 Codex 账号额度耗尽后，用户切换到其他本机 Codex 账号，微信侧仍复用旧 runtime 和旧 thread、持续返回 `usageLimitExceeded` 的问题。
+
+### 执行任务
+
+- [x] 新增额度耗尽后下一次请求刷新 runtime 并创建新 thread 的回归测试。
+- [x] 保持首次额度错误不立即丢弃 thread，避免同账号临时额度错误直接破坏会话。
+- [x] 在下一次 Codex 请求开始前刷新旧 runtime，并清理当前会话旧 thread。
+- [x] 优化额度错误提示，说明切换账号后下一次请求会刷新。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 额度耗尽后的切号自愈。首次 `usageLimitExceeded` 仍作为普通额度错误返回，不立即删除旧 thread；同时标记该微信会话下一次请求需要刷新。下一次 Codex 请求开始前会停止旧 runtime、清理当前会话旧 thread，并用当前本机 Codex 登录态创建新 thread；测试桩场景也会走同一 thread 清理逻辑。错误提示增加“如果已经手动切换 Codex 账号，下一次请求会刷新 Codex 进程并创建新会话”。验证命令：`go test ./agent -run 'TestACPAgentKeepsRuntimeOnCodexUsageLimit|TestACPAgentRefreshesRuntimeOnNextTurnAfterUsageLimit' -count=1 -timeout 60s`、`go test ./agent -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check`、`go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=v0.1.14" -o weclaw .`，结果通过。
+
 ## Review 安全与可靠性修复清单
 
 ### 目标

@@ -43,9 +43,10 @@ type ACPAgent struct {
 	threads  map[string]string // conversationID -> threadID (codex app-server)
 	// resumeOnFirstUse marks restored thread mappings that should trigger a
 	// best-effort thread/resume call before first turn.
-	resumeOnFirstUse map[string]bool // conversationID -> resume needed
-	stateFile        string          // optional persisted state file path
-	history          map[string][]acpHistoryMessage
+	resumeOnFirstUse            map[string]bool // conversationID -> resume needed
+	usageLimitRefreshOnNextTurn map[string]bool // conversationID -> refresh runtime before next turn
+	stateFile                   string          // optional persisted state file path
+	history                     map[string][]acpHistoryMessage
 
 	// pending tracks in-flight JSON-RPC requests
 	pendingMu sync.Mutex
@@ -302,21 +303,22 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		stateFile = defaultACPStateFile(cfg.Command, cfg.Args, cfg.Cwd, protocol)
 	}
 	a := &ACPAgent{
-		command:          cfg.Command,
-		args:             cfg.Args,
-		model:            cfg.Model,
-		systemPrompt:     cfg.SystemPrompt,
-		cwd:              cfg.Cwd,
-		env:              cfg.Env,
-		protocol:         protocol,
-		sessions:         make(map[string]string),
-		threads:          make(map[string]string),
-		resumeOnFirstUse: make(map[string]bool),
-		stateFile:        stateFile,
-		history:          make(map[string][]acpHistoryMessage),
-		pending:          make(map[int64]chan *rpcResponse),
-		notifyCh:         make(map[string]chan *sessionUpdate),
-		turnCh:           make(map[string]chan *codexTurnEvent),
+		command:                     cfg.Command,
+		args:                        cfg.Args,
+		model:                       cfg.Model,
+		systemPrompt:                cfg.SystemPrompt,
+		cwd:                         cfg.Cwd,
+		env:                         cfg.Env,
+		protocol:                    protocol,
+		sessions:                    make(map[string]string),
+		threads:                     make(map[string]string),
+		resumeOnFirstUse:            make(map[string]bool),
+		usageLimitRefreshOnNextTurn: make(map[string]bool),
+		stateFile:                   stateFile,
+		history:                     make(map[string][]acpHistoryMessage),
+		pending:                     make(map[int64]chan *rpcResponse),
+		notifyCh:                    make(map[string]chan *sessionUpdate),
+		turnCh:                      make(map[string]chan *codexTurnEvent),
 	}
 	a.loadState()
 	return a
@@ -828,6 +830,9 @@ func (a *ACPAgent) chatCodexAppServer(ctx context.Context, conversationID string
 }
 
 func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversationID string, message string, allowFreshRetry bool, onProgress func(delta string)) (string, error) {
+	if err := a.refreshCodexRuntimeAfterUsageLimit(ctx, conversationID); err != nil {
+		return "", err
+	}
 	threadID, isNew, err := a.getOrCreateThread(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("thread error: %w", err)
@@ -903,6 +908,10 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 					a.invalidateCodexRuntime(conversationID, "auth_state_error")
 					return "", fmt.Errorf("turn error: %s；已刷新 Codex 进程，请重试当前消息", evt.Text)
 				}
+				if isCodexUsageLimitError(evt.Text) {
+					a.markCodexUsageLimitRefresh(conversationID)
+					return "", fmt.Errorf("turn error: %s；如果你已经手动切换 Codex 账号，下一次请求会刷新 Codex 进程并创建新会话", evt.Text)
+				}
 				return "", fmt.Errorf("turn error: %s", evt.Text)
 			}
 			if evt.Delta != "" {
@@ -934,6 +943,39 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 			}
 		}
 	}
+}
+
+// refreshCodexRuntimeAfterUsageLimit 在额度错误后的下一次请求前切换到当前本机 Codex 登录态。
+func (a *ACPAgent) refreshCodexRuntimeAfterUsageLimit(ctx context.Context, conversationID string) error {
+	if !a.takeCodexUsageLimitRefresh(conversationID) {
+		return nil
+	}
+	oldThreadID := a.clearCodexThread(conversationID)
+	log.Printf("[acp] refreshing codex runtime after usage limit (conversation=%s, oldThread=%s)", conversationID, oldThreadID)
+	if a.rpcCall != nil {
+		return nil
+	}
+	a.Stop()
+	if err := a.Start(ctx); err != nil {
+		return fmt.Errorf("refresh codex runtime after usage limit: %w", err)
+	}
+	return nil
+}
+
+// markCodexUsageLimitRefresh 标记下一次请求需要刷新 runtime，等待用户手动切换账号。
+func (a *ACPAgent) markCodexUsageLimitRefresh(conversationID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.usageLimitRefreshOnNextTurn[conversationID] = true
+}
+
+// takeCodexUsageLimitRefresh 取出并清除额度错误后的刷新标记。
+func (a *ACPAgent) takeCodexUsageLimitRefresh(conversationID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	shouldRefresh := a.usageLimitRefreshOnNextTurn[conversationID]
+	delete(a.usageLimitRefreshOnNextTurn, conversationID)
+	return shouldRefresh
 }
 
 func (a *ACPAgent) retryWithFreshThread(ctx context.Context, conversationID string, message string, reason string, onProgress func(delta string)) (string, error) {
@@ -1626,6 +1668,13 @@ func isCodexAuthStateError(text string) bool {
 	lower := strings.ToLower(text)
 	return strings.Contains(lower, "deactivated_workspace") ||
 		(strings.Contains(lower, "402 payment required") && !strings.Contains(lower, "usagelimitexceeded"))
+}
+
+// isCodexUsageLimitError 判断 Codex 当前账号额度是否耗尽。
+func isCodexUsageLimitError(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "usagelimitexceeded") ||
+		strings.Contains(lower, "you've hit your usage limit")
 }
 
 func firstNonEmpty(values ...string) string {

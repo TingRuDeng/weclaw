@@ -654,6 +654,79 @@ func TestACPAgentKeepsRuntimeOnCodexUsageLimit(t *testing.T) {
 	}
 }
 
+func TestACPAgentRefreshesRuntimeOnNextTurnAfterUsageLimit(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       t.TempDir(),
+		StateFile: stateFile,
+	})
+	a.started = true
+	a.mu.Lock()
+	a.threads["user-1"] = "old-thread"
+	a.mu.Unlock()
+	a.persistState()
+
+	turnStarts := 0
+	threadStarts := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			threadStarts++
+			return json.RawMessage(`{"thread":{"id":"new-thread"}}`), nil
+		case "turn/start":
+			turnStarts++
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			if turnStarts == 1 {
+				if p.ThreadID != "old-thread" {
+					t.Fatalf("first turn thread=%q, want old-thread", p.ThreadID)
+				}
+				ch <- &codexTurnEvent{Kind: "error", Text: "Codex 账号额度已用完：You've hit your usage limit. (usageLimitExceeded)"}
+				return json.RawMessage(`{"ok":true}`), nil
+			}
+			if p.ThreadID != "new-thread" {
+				t.Fatalf("second turn thread=%q, want new-thread", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{Delta: "新账号回复"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	_, err := a.Chat(ctx, "user-1", "第一次请求")
+	if err == nil {
+		t.Fatal("first Chat error = nil, want usage limit")
+	}
+	if !containsAll(err.Error(), "usageLimitExceeded", "下一次请求") {
+		t.Fatalf("usage limit error=%q, want next-request refresh hint", err.Error())
+	}
+
+	reply, err := a.Chat(ctx, "user-1", "切号后的请求")
+	if err != nil {
+		t.Fatalf("second Chat error: %v", err)
+	}
+	if reply != "新账号回复" {
+		t.Fatalf("second reply=%q, want 新账号回复", reply)
+	}
+	if threadStarts != 1 {
+		t.Fatalf("thread/start calls=%d, want 1", threadStarts)
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["user-1"]; got != "new-thread" {
+		t.Fatalf("persisted thread=%q, want new-thread", got)
+	}
+}
+
 func TestACPAgentCodexThreadControls(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
