@@ -1,10 +1,13 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +21,8 @@ import (
 )
 
 var reURL = regexp.MustCompile(`https?://\S+`)
+
+const maxLinkMetadataBytes = 5 * 1024 * 1024
 
 // IsURL checks if the text is (or starts with) a URL.
 func IsURL(text string) bool {
@@ -43,6 +48,10 @@ type LinkMetadata struct {
 
 // FetchLinkMetadata fetches a URL and extracts metadata from the HTML.
 func FetchLinkMetadata(ctx context.Context, rawURL string) (*LinkMetadata, error) {
+	if err := validateRemoteMediaURL(rawURL); err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -53,7 +62,7 @@ func FetchLinkMetadata(ctx context.Context, rawURL string) (*LinkMetadata, error
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	req.Header.Set("Referer", "https://mp.weixin.qq.com/")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := newRemoteMediaHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +72,12 @@ func FetchLinkMetadata(ctx context.Context, rawURL string) (*LinkMetadata, error
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	doc, err := html.Parse(resp.Body)
+	data, err := readLinkMetadataBody(resp, maxLinkMetadataBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	doc, err := html.Parse(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("parse HTML: %w", err)
 	}
@@ -185,11 +199,20 @@ func sanitizeFileName(name string) string {
 
 // isWeChatURL checks if a URL is a WeChat article.
 func isWeChatURL(rawURL string) bool {
-	return strings.Contains(rawURL, "mp.weixin.qq.com") || strings.Contains(rawURL, "weixin.qq.com/s/")
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "mp.weixin.qq.com" || host == "weixin.qq.com"
 }
 
 // FetchViaJina fetches a URL via Jina Reader API and returns metadata + markdown body.
 func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
+	if err := validateRemoteMediaURL(rawURL); err != nil {
+		return nil, err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -200,7 +223,7 @@ func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
 	}
 	req.Header.Set("Accept", "text/plain")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := newRemoteMediaHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +233,13 @@ func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
 		return nil, fmt.Errorf("Jina HTTP %d", resp.StatusCode)
 	}
 
+	data, err := readLinkMetadataBody(resp, maxLinkMetadataBytes)
+	if err != nil {
+		return nil, err
+	}
+
 	meta := &LinkMetadata{}
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	// Parse Jina header lines: "Title:", "URL Source:", "Published Time:", then "Markdown Content:"
@@ -244,6 +272,21 @@ func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
 	}
 
 	return meta, nil
+}
+
+// readLinkMetadataBody 限制链接正文大小，避免 HTML 解析前把异常响应完整读入内存。
+func readLinkMetadataBody(resp *http.Response, maxBytes int64) ([]byte, error) {
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("link metadata is too large: %d > %d", resp.ContentLength, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("link metadata exceeds %d bytes", maxBytes)
+	}
+	return data, nil
 }
 
 // SaveLinkToLinkhoard fetches a URL and saves it as a Linkhoard-compatible markdown file.

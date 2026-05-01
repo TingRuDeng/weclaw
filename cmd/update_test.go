@@ -1,6 +1,10 @@
 package cmd
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestGitHubRepoUsesProjectFork(t *testing.T) {
 	if githubRepo != "TingRuDeng/weclaw" {
@@ -48,5 +52,35 @@ func TestReleaseTagFromLatestRedirect(t *testing.T) {
 func TestReleaseTagFromLatestRedirectRejectsInvalidLocation(t *testing.T) {
 	if _, err := releaseTagFromLatestRedirect("https://github.com/TingRuDeng/weclaw/releases"); err == nil {
 		t.Fatal("expected invalid redirect error")
+	}
+}
+
+func TestParseReleaseChecksumsFindsAsset(t *testing.T) {
+	checksums := "abc123  weclaw_darwin_arm64\nzzz  weclaw_linux_amd64\n"
+
+	got, err := parseReleaseChecksums(checksums, "weclaw_darwin_arm64")
+	if err != nil {
+		t.Fatalf("parseReleaseChecksums error: %v", err)
+	}
+	if got != "abc123" {
+		t.Fatalf("checksum = %q, want abc123", got)
+	}
+}
+
+func TestVerifyDownloadedAssetChecksumRejectsMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "weclaw_darwin_arm64")
+	if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write temp asset: %v", err)
+	}
+
+	err := verifyDownloadedAssetChecksum(path, "0000")
+	if err == nil {
+		t.Fatal("verifyDownloadedAssetChecksum error = nil, want mismatch")
+	}
+}
+
+func TestUpdateRestartFlagDefaultsFalse(t *testing.T) {
+	if updateRestartFlag {
+		t.Fatal("update should not restart service unless --restart is set")
 	}
 }

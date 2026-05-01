@@ -71,7 +71,7 @@ func (h *Handler) handleCodexCd(bindingKey string, agentName string, target stri
 	target = strings.TrimSpace(target)
 	if target == ".." {
 		h.clearCodexBrowseWorkspace(bindingKey)
-		return "已返回工作空间列表。"
+		return wechatCommandText("已返回工作空间列表。", h.renderCodexWorkspaceList(bindingKey))
 	}
 	group, err := h.findCodexWorkspaceGroup(bindingKey, target)
 	if err != nil {
@@ -80,7 +80,7 @@ func (h *Handler) handleCodexCd(bindingKey string, agentName string, target stri
 	workspaceRoot := h.switchCodexWorkspace(agentName, group.Root, ag)
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 	h.setCodexBrowseWorkspace(bindingKey, workspaceRoot)
-	return "工作空间: " + group.Name
+	return wechatCommandText("工作空间: "+group.Name, h.renderCodexSessionList(bindingKey, workspaceRoot))
 }
 
 // renderCodexPwd 显示当前浏览层级，帮助用户确认 /cx ls 会列什么。

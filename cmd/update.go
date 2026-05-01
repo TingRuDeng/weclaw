@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -16,7 +18,11 @@ import (
 const githubRepo = "TingRuDeng/weclaw"
 const githubUserAgent = "weclaw-updater"
 
+var updateRestartFlag bool
+
 func init() {
+	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "Restart weclaw after updating")
+	upgradeCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "Restart weclaw after updating")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -32,13 +38,13 @@ var versionCmd = &cobra.Command{
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Update weclaw to the latest version and restart",
+	Short: "Update weclaw to the latest version",
 	RunE:  runUpdate,
 }
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
-	Short: "Update weclaw to the latest version and restart (alias for update)",
+	Short: "Update weclaw to the latest version (alias for update)",
 	RunE:  runUpdate,
 }
 
@@ -69,6 +75,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("download failed: %w", err)
 	}
 	defer os.Remove(tmpFile)
+	if err := verifyReleaseAssetChecksum(latest, filename, tmpFile); err != nil {
+		return fmt.Errorf("verify checksum: %w", err)
+	}
 
 	// 3. Replace current binary
 	exePath, err := os.Executable()
@@ -92,7 +101,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Updated to %s\n", latest)
 
-	// 4. Restart if running in background
+	if !updateRestartFlag {
+		fmt.Println("Update complete. Run 'weclaw restart' when you are ready.")
+		return nil
+	}
+
+	// 4. Restart only when explicitly requested
 	pid, pidErr := readPid()
 	if pidErr == nil && processExists(pid) {
 		fmt.Println("Stopping old process...")
@@ -111,6 +125,54 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		fmt.Println("Update complete. Run 'weclaw start' to start.")
 	}
 
+	return nil
+}
+
+// verifyReleaseAssetChecksum 校验 release 资产，避免下载内容被截断或替换后直接安装。
+func verifyReleaseAssetChecksum(version string, filename string, assetPath string) error {
+	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/checksums.txt", githubRepo, version)
+	checksumFile, err := downloadFile(url)
+	if err != nil {
+		return fmt.Errorf("download checksums: %w", err)
+	}
+	defer os.Remove(checksumFile)
+
+	data, err := os.ReadFile(checksumFile)
+	if err != nil {
+		return fmt.Errorf("read checksums: %w", err)
+	}
+	want, err := parseReleaseChecksums(string(data), filename)
+	if err != nil {
+		return err
+	}
+	return verifyDownloadedAssetChecksum(assetPath, want)
+}
+
+// parseReleaseChecksums 从 checksums.txt 中查找指定资产的 sha256。
+func parseReleaseChecksums(content string, filename string) (string, error) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if fields[1] == filename {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("checksum for %s not found", filename)
+}
+
+// verifyDownloadedAssetChecksum 对本地下载文件计算 sha256 并和 release 校验值比较。
+func verifyDownloadedAssetChecksum(path string, want string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", path, got, want)
+	}
 	return nil
 }
 

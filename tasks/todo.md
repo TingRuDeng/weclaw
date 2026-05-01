@@ -478,3 +478,60 @@
 ### Review 小结
 
 已完成 Codex 两级会话浏览。`/cx ls` 在默认层级只显示工作空间短名称；`/cx cd <编号|工作空间名>` 会进入工作空间并同步 Codex cwd；进入后 `/cx ls` 只显示当前工作空间内的会话编号和名称，不再暴露 thread id；`/cx switch <编号>` 按当前工作空间会话列表切换；`/cx cd ..` 仅返回工作空间列表层，不改变真实 Codex cwd；`/cx pwd` 可查看当前浏览层级。`/codex` 仍作为 `/cx` 的兼容写法。验证命令：`go test ./messaging -run 'TestCodexCxLsListsWorkspacesWithoutThreads|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex|TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd|TestCodexCxPwdShowsBrowseWorkspace' -count=1 -timeout 60s`、`go test ./messaging -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## 外部输入与更新流程加固清单
+
+### 目标
+
+修复 Linkhoard URL 抓取 SSRF、微信 CDN 入站文件无限读取、`update` 自动重启耦合、daemon pid 写入失败不可管理这四类风险。
+
+### 执行任务
+
+- [x] 新增 Linkhoard URL 校验和响应大小限制回归测试。
+- [x] 新增微信 CDN 下载大小限制回归测试。
+- [x] 新增 release checksum 校验和 update 默认不重启测试。
+- [x] 新增 daemon pid 写入失败时停止已启动进程的测试。
+- [x] 实现 Linkhoard 安全 HTTP 客户端与有限读取。
+- [x] 实现 CDN 下载有限读取。
+- [x] 实现 update 下载校验、默认不自动重启和显式 `--restart`。
+- [x] 实现 daemon pid 写入失败回滚。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成外部输入和更新流程加固。Linkhoard 直接抓取和 Jina 抓取都会先复用远程媒体 URL/IP 校验，并限制 HTML/Reader 响应体大小；微信 CDN 入站下载增加 Content-Length 和实际读取上限；`weclaw update` 现在会校验 release checksums，默认只更新不重启，显式 `--restart` 才停止并重启服务；daemon pid 写入失败会停止刚启动的进程并返回错误，避免后台进程失控。验证命令：`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## `/cx cd ..` 自动展示工作空间清单
+
+### 目标
+
+执行 `/cx cd ..` 返回工作空间层时，回复里直接展示当前工作空间列表，避免用户还要再发送一次 `/cx ls`。
+
+### 执行任务
+
+- [x] 新增 `/cx cd ..` 回复包含工作空间列表的回归测试。
+- [x] 修改 `/cx cd ..` 返回逻辑，复用现有工作空间列表渲染。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 `/cx cd ..` 体验优化。现在返回工作空间层时，会在同一条回复里展示当前工作空间列表，用户无需再额外发送 `/cx ls`；该命令仍只清除微信侧浏览层级，不改变 Codex Agent 的真实 cwd。验证命令：`go test ./messaging -run TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd -count=1 -timeout 60s`、`go test ./messaging -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## `/cx cd <工作空间>` 自动展示会话清单
+
+### 目标
+
+执行 `/cx cd <编号|工作空间名>` 进入工作空间后，回复里直接展示该工作空间下的会话列表，避免用户还要再发送一次 `/cx ls`。
+
+### 执行任务
+
+- [x] 新增 `/cx cd <工作空间>` 回复包含会话列表的回归测试。
+- [x] 修改 `/cx cd <工作空间>` 返回逻辑，复用现有会话列表渲染。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 `/cx cd <工作空间>` 体验优化。现在进入工作空间后，会在同一条回复里展示该工作空间下的会话编号和名称，用户无需再额外发送 `/cx ls`；该命令仍会同步 Codex Agent 的真实 cwd。验证命令：`go test ./messaging -run 'TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。

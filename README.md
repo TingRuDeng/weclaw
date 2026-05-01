@@ -395,8 +395,11 @@ The workflow builds binaries for `darwin/linux/windows` x `amd64/arm64`, creates
 ## Update
 
 ```bash
-# Update to the latest version (auto-restarts if running)
+# Update to the latest version (does not restart by default)
 weclaw update
+
+# Restart immediately after updating
+weclaw update --restart
 
 # Check current version
 weclaw version

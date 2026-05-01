@@ -402,18 +402,50 @@ func runDaemon() error {
 		return fmt.Errorf("start daemon: %w", err)
 	}
 
-	// Save PID
 	pid := cmd.Process.Pid
-	os.WriteFile(pidFile(), []byte(fmt.Sprintf("%d", pid)), 0o644)
+	if err := os.WriteFile(pidFile(), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		lf.Close()
+		return handleDaemonPIDWriteResult(err, daemonPIDWriteProcess{
+			kill:    cmd.Process.Kill,
+			wait:    cmd.Wait,
+			release: cmd.Process.Release,
+		})
+	}
 
 	// Detach — don't wait
-	cmd.Process.Release()
+	if err := cmd.Process.Release(); err != nil {
+		lf.Close()
+		return fmt.Errorf("release daemon process: %w", err)
+	}
 	lf.Close()
 
 	fmt.Printf("weclaw started in background (pid=%d)\n", pid)
 	fmt.Printf("Log: %s\n", logFile())
 	fmt.Printf("Stop: weclaw stop\n")
 	return nil
+}
+
+type daemonPIDWriteProcess struct {
+	kill    func() error
+	wait    func() error
+	release func() error
+}
+
+// handleDaemonPIDWriteResult 在 pid 文件写入失败时回收刚启动的进程，避免后台服务失控。
+func handleDaemonPIDWriteResult(writeErr error, proc daemonPIDWriteProcess) error {
+	if writeErr == nil {
+		if proc.release != nil {
+			return proc.release()
+		}
+		return nil
+	}
+	if proc.kill != nil {
+		_ = proc.kill()
+	}
+	if proc.wait != nil {
+		_ = proc.wait()
+	}
+	return fmt.Errorf("write pid file: %w", writeErr)
 }
 
 func readPid() (int, error) {

@@ -1558,7 +1558,6 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	defer closeServer()
 
 	h.HandleMessage(context.Background(), client, newTextMessage(112, "/cx cd 0"))
-	h.HandleMessage(context.Background(), client, newTextMessage(113, "/cx ls"))
 
 	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
@@ -1568,7 +1567,7 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 		t.Fatalf("cd reply should not include redundant title, messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "工作空间: weclaw") || !strings.Contains(text, "weclaw 会话") {
-		t.Fatalf("cd then ls should enter workspace and show sessions, messages=%#v", calls.texts())
+		t.Fatalf("cd reply should enter workspace and show sessions, messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "0. 实现两级会话浏览") || !strings.Contains(text, "1. 修复安全问题") {
 		t.Fatalf("session ls should show numbered session names, messages=%#v", calls.texts())
@@ -1630,14 +1629,15 @@ func TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd(t *testing.T) {
 
 	h.HandleMessage(context.Background(), client, newTextMessage(116, "/cx cd weclaw"))
 	h.HandleMessage(context.Background(), client, newTextMessage(117, "/cx cd .."))
-	h.HandleMessage(context.Background(), client, newTextMessage(118, "/cx ls"))
 
 	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("cd .. should not change codex cwd, got %q want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已返回工作空间列表") || !strings.Contains(text, "Codex 工作空间") {
-		t.Fatalf("cd .. should return to workspace list, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已返回工作空间列表") ||
+		!strings.Contains(text, "Codex 工作空间") ||
+		!strings.Contains(text, "0. weclaw") {
+		t.Fatalf("cd .. reply should include workspace list, messages=%#v", calls.texts())
 	}
 }
 

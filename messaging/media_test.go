@@ -129,3 +129,50 @@ func TestReadRemoteMediaBodyRejectsBodyAboveLimit(t *testing.T) {
 		t.Fatal("readRemoteMediaBody() error = nil, want body size rejection")
 	}
 }
+
+func TestFetchLinkMetadataRejectsLoopbackURL(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, _ = w.Write([]byte("<html><title>private</title></html>"))
+	}))
+	defer server.Close()
+
+	_, err := FetchLinkMetadata(context.Background(), server.URL)
+	if err == nil {
+		t.Fatal("FetchLinkMetadata() error = nil, want loopback rejection")
+	}
+	if called {
+		t.Fatal("loopback server was called, want rejection before request")
+	}
+}
+
+func TestIsWeChatURLRejectsHostContainsWechatDomain(t *testing.T) {
+	if isWeChatURL("https://evil.example/?next=mp.weixin.qq.com") {
+		t.Fatal("isWeChatURL accepted URL whose host is not a WeChat domain")
+	}
+}
+
+func TestReadLinkMetadataBodyRejectsLargeContentLength(t *testing.T) {
+	resp := &http.Response{
+		Body:          io.NopCloser(strings.NewReader("")),
+		ContentLength: 9,
+	}
+
+	_, err := readLinkMetadataBody(resp, 8)
+	if err == nil {
+		t.Fatal("readLinkMetadataBody() error = nil, want content length rejection")
+	}
+}
+
+func TestReadCDNBodyRejectsBodyAboveLimit(t *testing.T) {
+	resp := &http.Response{
+		Body:          io.NopCloser(strings.NewReader("123456789")),
+		ContentLength: -1,
+	}
+
+	_, err := readCDNBody(resp, 8)
+	if err == nil {
+		t.Fatal("readCDNBody() error = nil, want body size rejection")
+	}
+}

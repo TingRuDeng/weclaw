@@ -129,3 +129,31 @@ func TestStopAllWeclawRemovesStalePidFile(t *testing.T) {
 		t.Fatal("陈旧 pid 文件应被删除")
 	}
 }
+
+func TestHandleDaemonPIDWriteFailureStopsStartedProcess(t *testing.T) {
+	stopped := false
+	released := false
+	err := handleDaemonPIDWriteResult(errors.New("write failed"), daemonPIDWriteProcess{
+		kill: func() error {
+			stopped = true
+			return nil
+		},
+		wait: func() error {
+			return nil
+		},
+		release: func() error {
+			released = true
+			return nil
+		},
+	})
+
+	if err == nil {
+		t.Fatal("handleDaemonPIDWriteResult error = nil, want write failure")
+	}
+	if !stopped {
+		t.Fatal("pid 写入失败时应停止已启动进程")
+	}
+	if released {
+		t.Fatal("pid 写入失败时不应 release 失控进程")
+	}
+}

@@ -20,6 +20,8 @@ import (
 
 const cdnBaseURL = "https://novac2c.cdn.weixin.qq.com/c2c"
 
+const maxCDNDownloadBytes = 25 * 1024 * 1024
+
 // UploadedFile holds the result of a CDN upload.
 type UploadedFile struct {
 	DownloadParam string // encrypted query param for download
@@ -136,17 +138,32 @@ func DownloadFileFromCDN(ctx context.Context, encryptQueryParam, aesKeyBase64 st
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return nil, fmt.Errorf("CDN download HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	encrypted, err := io.ReadAll(resp.Body)
+	encrypted, err := readCDNBody(resp, maxCDNDownloadBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read CDN response: %w", err)
 	}
 
 	// Decrypt AES-128-ECB
 	return decryptAESECB(encrypted, aesKey)
+}
+
+// readCDNBody 限制入站 CDN 文件大小，避免微信大文件一次性拖垮内存。
+func readCDNBody(resp *http.Response, maxBytes int64) ([]byte, error) {
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("CDN response is too large: %d > %d", resp.ContentLength, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("CDN response exceeds %d bytes", maxBytes)
+	}
+	return data, nil
 }
 
 // decryptAESECB decrypts data encrypted with AES-128-ECB and removes PKCS7 padding.
@@ -191,7 +208,7 @@ func uploadToCDN(ctx context.Context, encrypted []byte, cdnURL string) (string, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return "", fmt.Errorf("CDN upload HTTP %d: %s", resp.StatusCode, string(body))
 	}
 

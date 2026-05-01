@@ -397,8 +397,11 @@ git push origin v0.1.0
 ## 更新
 
 ```bash
-# 更新到最新版本（运行中会自动重启）
+# 更新到最新版本（默认不自动重启）
 weclaw update
+
+# 更新完成后立即重启
+weclaw update --restart
 
 # 查看当前版本
 weclaw version
