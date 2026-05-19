@@ -14,6 +14,7 @@ type AgentInfo struct {
 	Name    string // e.g. "claude-acp", "claude", "gpt-4o"
 	Type    string // e.g. "acp", "cli", "http"
 	Model   string // e.g. "sonnet", "gpt-4o-mini"
+	Effort  string // e.g. "medium", "high"
 	Command string // binary path, e.g. "/usr/local/bin/claude-agent-acp"
 	PID     int    // subprocess PID (0 if not applicable, e.g. http agent)
 }
@@ -21,6 +22,9 @@ type AgentInfo struct {
 // String returns a human-readable summary for logging.
 func (i AgentInfo) String() string {
 	s := fmt.Sprintf("name=%s, type=%s, model=%s, command=%s", i.Name, i.Type, i.Model, i.Command)
+	if i.Effort != "" {
+		s += fmt.Sprintf(", effort=%s", i.Effort)
+	}
 	if i.PID > 0 {
 		s += fmt.Sprintf(", pid=%d", i.PID)
 	}
@@ -99,4 +103,23 @@ type CodexThreadAgent interface {
 	CurrentCodexThread(conversationID string) (string, bool)
 	UseCodexThread(ctx context.Context, conversationID string, threadID string) error
 	ClearCodexThread(conversationID string)
+}
+
+// CodexModelStatus 表示当前 WeClaw 传给 Codex 的模型配置。
+type CodexModelStatus struct {
+	Model  string
+	Effort string
+}
+
+// CodexModel 表示 Codex app-server 暴露的一个可用模型。
+type CodexModel struct {
+	ID            string
+	Name          string
+	EffortOptions []string
+}
+
+// CodexModelAgent 暴露 Codex app-server 的模型查询能力。
+type CodexModelAgent interface {
+	CodexModelStatus() CodexModelStatus
+	ListCodexModels(ctx context.Context) ([]CodexModel, error)
 }

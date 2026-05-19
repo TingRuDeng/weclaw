@@ -535,3 +535,42 @@
 ### Review 小结
 
 已完成 `/cx cd <工作空间>` 体验优化。现在进入工作空间后，会在同一条回复里展示该工作空间下的会话编号和名称，用户无需再额外发送 `/cx ls`；该命令仍会同步 Codex Agent 的真实 cwd。验证命令：`go test ./messaging -run 'TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## ACP 启动失败 panic 修复清单
+
+### 目标
+
+Codex 子进程因本机依赖缺失等原因在 initialize 阶段退出时，WeClaw 返回清晰启动错误，不能因为 runtime 状态被 readLoop 清理而 panic。
+
+### 执行任务
+
+- [x] 新增 Codex 子进程启动后立即退出的回归测试。
+- [x] 将 ACP 启动失败清理改为基于局部快照，容忍 readLoop 已经清空 runtime 字段。
+- [x] 复用统一的 ACP 子进程停止 helper，避免 Stop 和启动失败分支重复资源清理逻辑。
+- [x] 运行定向测试、agent 包测试、全量测试、diff 检查和构建。
+
+### Review 小结
+
+已完成 ACP 启动失败 panic 修复。现在 Codex app-server 因 optional dependency 缺失等原因提前退出时，`Start` 会返回 `agent startup failed` 错误，并保留 stderr 里的真实原因，不再触发空指针 panic。验证命令：`go test ./agent -run TestACPAgentStartReturnsErrorWhenSubprocessExitsDuringInitialize -count=1 -timeout 60s`、`go test ./agent -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## Codex 模型配置查询清单
+
+### 目标
+
+在微信侧提供 `/cx model status` 和 `/cx model ls`，分别查看当前 WeClaw 传给 Codex 的模型配置，以及 Codex app-server 返回的可用模型和 effort 选项。
+
+### 执行任务
+
+- [x] 新增 `effort` 配置透传到 Codex `thread/start` 和 `turn/start` 的回归测试。
+- [x] 新增 Codex `model/list` 解析 effort options 的回归测试。
+- [x] 新增 `/cx model status` 不启动 Codex 子进程的回归测试。
+- [x] 新增 `/cx model ls` 展示模型和 effort 选项的回归测试。
+- [x] 实现 `effort` 配置字段和 ACP Agent 状态透出。
+- [x] 实现 Codex app-server `model/list` 查询与兼容解析。
+- [x] 接入 `/cx model status` 和 `/cx model ls` 命令。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 模型配置查询。`/cx model status` 直接读取 WeClaw 配置和已运行 Agent 状态，不会为了看配置而启动 Codex 子进程；`/cx model ls` 会通过 Codex app-server 的 `model/list` 返回可用模型和 effort 选项；配置新增 `agents.<name>.effort`，并会透传到 Codex `thread/start`、`thread/resume` 和 `turn/start`。验证命令：`go test ./agent ./messaging -run 'TestACPAgentCodex(ThreadStart|TurnStart)IncludesEffort|TestACPAgentListCodexModelsParsesEffortOptions|TestHandleCodexModel' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。

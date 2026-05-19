@@ -47,6 +47,7 @@ type AgentMeta struct {
 	Type    string // "acp", "cli", "http"
 	Command string // binary path or endpoint
 	Model   string
+	Effort  string
 }
 
 // Handler processes incoming WeChat messages and dispatches replies.
@@ -1328,7 +1329,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "help":
 		return true
 	default:
 		return false
@@ -1370,6 +1371,9 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	if len(fields) < 2 || fields[1] == "help" {
 		return buildCodexSessionHelpText()
 	}
+	if fields[1] == "model" && isCodexModelStatusArgs(fields[2:]) {
+		return h.renderCodexModelStatusFromConfig()
+	}
 
 	agentName, ag, err := h.getCodexSessionAgent(ctx)
 	if err != nil {
@@ -1392,6 +1396,8 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		return h.handleCodexCd(bindingKey, agentName, fields[2], ag)
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
+	case "model":
+		return h.handleCodexModelCommand(ctx, ag, fields[2:])
 	case "new":
 		return h.handleCodexNew(userID, agentName, workspaceRoot, ag)
 	case "switch":
@@ -1583,6 +1589,8 @@ func buildCodexSessionHelpText() string {
 		"/cx switch <编号>",
 		"/cx new",
 		"/cx pwd",
+		"/cx model status",
+		"/cx model ls",
 		"/codex 可作为 /cx 的兼容写法",
 	)
 }

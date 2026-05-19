@@ -13,6 +13,7 @@ import (
 
 const (
 	testCodexAppServerEnv = "WECLAW_TEST_CODEX_APP_SERVER"
+	testACPExitEnv        = "WECLAW_TEST_ACP_EXIT"
 	testCodexThreadID     = "thread-new"
 )
 
@@ -95,6 +96,101 @@ func TestACPAgentPersistsAndRestoresCodexThread(t *testing.T) {
 	}
 	if calls["thread/resume"] != 1 {
 		t.Fatalf("thread/resume calls after second restore = %d, want 1", calls["thread/resume"])
+	}
+}
+
+func TestACPAgentCodexThreadStartIncludesEffort(t *testing.T) {
+	ctx := context.Background()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     t.TempDir(),
+		Model:   "gpt-5.4",
+		Effort:  "high",
+	})
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/start" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p, ok := params.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("unexpected thread/start params type %T", params)
+		}
+		if p["model"] != "gpt-5.4" || p["effort"] != "high" {
+			return nil, fmt.Errorf("model/effort params=%#v", p)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+	}
+
+	if _, _, err := a.getOrCreateThread(ctx, "user-1"); err != nil {
+		t.Fatalf("getOrCreateThread error: %v", err)
+	}
+}
+
+func TestACPAgentCodexTurnStartIncludesEffort(t *testing.T) {
+	ctx := context.Background()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     t.TempDir(),
+		Model:   "gpt-5.4",
+		Effort:  "high",
+	})
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			p, ok := params.(codexTurnStartParams)
+			if !ok {
+				return nil, fmt.Errorf("unexpected turn/start params type %T", params)
+			}
+			if p.Model != "gpt-5.4" || p.Effort != "high" {
+				return nil, fmt.Errorf("model=%q effort=%q", p.Model, p.Effort)
+			}
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Delta: "ok"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	if _, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil); err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+}
+
+func TestACPAgentListCodexModelsParsesEffortOptions(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     t.TempDir(),
+	})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "model/list" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		return json.RawMessage(`{"data":[{"id":"gpt-5.4","displayName":"GPT-5.4","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]},{"id":"gpt-5.3-codex","effortOptions":["low","medium"]}]}`), nil
+	}
+
+	models, err := a.ListCodexModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListCodexModels error: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("models len=%d, want 2", len(models))
+	}
+	if models[0].ID != "gpt-5.4" || strings.Join(models[0].EffortOptions, ",") != "medium,high" {
+		t.Fatalf("first model=%#v", models[0])
+	}
+	if models[1].ID != "gpt-5.3-codex" || strings.Join(models[1].EffortOptions, ",") != "low,medium" {
+		t.Fatalf("second model=%#v", models[1])
 	}
 }
 
@@ -187,6 +283,30 @@ func TestACPAgentResetSessionRestartsAfterClosedCodexStdin(t *testing.T) {
 	}
 	if threadID != testCodexThreadID {
 		t.Fatalf("threadID=%q, want %s", threadID, testCodexThreadID)
+	}
+}
+
+func TestACPAgentStartReturnsErrorWhenSubprocessExitsDuringInitialize(t *testing.T) {
+	ctx := context.Background()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestHelperACPStartupExit"},
+		Env:     map[string]string{testACPExitEnv: "1"},
+	})
+	a.protocol = protocolCodexAppServer
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Start panic=%v, want startup error", recovered)
+		}
+	}()
+
+	err := a.Start(ctx)
+	if err == nil {
+		t.Fatal("Start error = nil, want subprocess exit error")
+	}
+	if !strings.Contains(err.Error(), "agent startup failed") {
+		t.Fatalf("Start error=%v, want agent startup failed", err)
 	}
 }
 
@@ -361,6 +481,15 @@ func TestHelperCodexAppServer(t *testing.T) {
 		})
 	}
 	os.Exit(0)
+}
+
+// TestHelperACPStartupExit 模拟 Codex optional dependency 缺失时子进程启动后立即退出。
+func TestHelperACPStartupExit(t *testing.T) {
+	if os.Getenv(testACPExitEnv) != "1" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Error: Missing optional dependency @openai/codex-darwin-x64")
+	os.Exit(1)
 }
 
 func TestACPAgentCodexProgressCallbackReceivesDelta(t *testing.T) {

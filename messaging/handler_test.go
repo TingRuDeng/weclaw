@@ -80,6 +80,9 @@ type fakeCodexThreadAgent struct {
 	useThreadID     string
 	clearCalledWith string
 	useErr          error
+	modelStatus     agent.CodexModelStatus
+	models          []agent.CodexModel
+	modelErr        error
 }
 
 func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
@@ -102,6 +105,17 @@ func (f *fakeCodexThreadAgent) UseCodexThread(_ context.Context, conversationID 
 func (f *fakeCodexThreadAgent) ClearCodexThread(conversationID string) {
 	f.clearCalledWith = conversationID
 	f.threadID = ""
+}
+
+func (f *fakeCodexThreadAgent) CodexModelStatus() agent.CodexModelStatus {
+	return f.modelStatus
+}
+
+func (f *fakeCodexThreadAgent) ListCodexModels(_ context.Context) ([]agent.CodexModel, error) {
+	if f.modelErr != nil {
+		return nil, f.modelErr
+	}
+	return f.models, nil
 }
 
 type fakeProgressAgent struct {
@@ -1800,6 +1814,59 @@ func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	}
 	if !containsText(texts, "0. "+filepath.Base(workspace)) {
 		t.Fatalf("ls should include numbered workspace, messages=%#v", texts)
+	}
+}
+
+func TestHandleCodexModelStatusCommandShowsCurrentConfig(t *testing.T) {
+	h := NewHandler(func(_ context.Context, name string) agent.Agent {
+		t.Fatalf("model status should not start agent %q", name)
+		return nil
+	}, nil)
+	h.SetAgentMetas([]AgentMeta{{
+		Name:    "codex",
+		Type:    "acp",
+		Command: "codex",
+		Model:   "gpt-5.4",
+		Effort:  "high",
+	}})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(121, "/cx model status"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "Codex 模型配置") ||
+		!strings.Contains(text, "model: gpt-5.4") ||
+		!strings.Contains(text, "effort: high") {
+		t.Fatalf("model status reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestHandleCodexModelLsCommandListsModelsAndEfforts(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		models: []agent.CodexModel{
+			{ID: "gpt-5.4", Name: "GPT-5.4", EffortOptions: []string{"medium", "high"}},
+			{ID: "gpt-5.3-codex", EffortOptions: []string{"low", "medium"}},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": t.TempDir()})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(122, "/cx model ls"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "Codex 可用模型") ||
+		!strings.Contains(text, "0. gpt-5.4 (GPT-5.4)") ||
+		!strings.Contains(text, "effort: medium, high") ||
+		!strings.Contains(text, "1. gpt-5.3-codex") {
+		t.Fatalf("model ls reply mismatch, messages=%#v", calls.texts())
 	}
 }
 

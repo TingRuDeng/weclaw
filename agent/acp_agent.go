@@ -28,6 +28,7 @@ type ACPAgent struct {
 	command      string
 	args         []string
 	model        string
+	effort       string
 	systemPrompt string
 	cwd          string
 	env          map[string]string
@@ -68,6 +69,7 @@ type ACPAgentConfig struct {
 	Command      string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
 	Args         []string // extra args for command (e.g. ["acp"] for cursor)
 	Model        string
+	Effort       string
 	SystemPrompt string
 	Cwd          string            // working directory
 	Env          map[string]string // extra environment variables
@@ -193,6 +195,7 @@ type codexTurnStartParams struct {
 	Input          []codexUserInput `json:"input"`
 	SandboxPolicy  interface{}      `json:"sandboxPolicy,omitempty"`
 	Model          string           `json:"model,omitempty"`
+	Effort         string           `json:"effort,omitempty"`
 	Cwd            string           `json:"cwd,omitempty"`
 }
 
@@ -306,6 +309,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		command:                     cfg.Command,
 		args:                        cfg.Args,
 		model:                       cfg.Model,
+		effort:                      cfg.Effort,
 		systemPrompt:                cfg.SystemPrompt,
 		cwd:                         cfg.Cwd,
 		env:                         cfg.Env,
@@ -399,10 +403,13 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 	if err != nil {
 		a.mu.Lock()
 		a.started = false
+		stdin := a.stdin
+		cmd := a.cmd
+		a.stdin = nil
+		a.cmd = nil
+		a.scanner = nil
 		a.mu.Unlock()
-		a.stdin.Close()
-		a.cmd.Process.Kill()
-		a.cmd.Wait()
+		stopACPProcess(stdin, cmd)
 		// Use stderr detail if available (e.g. "connect ECONNREFUSED")
 		if detail := a.stderr.LastError(); detail != "" {
 			return fmt.Errorf("agent startup failed: %s", detail)
@@ -417,6 +424,17 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 
 	log.Printf("[acp] initialized (pid=%d): %s", pid, string(result))
 	return nil
+}
+
+// stopACPProcess 关闭 ACP 子进程资源；启动失败和显式 Stop 都必须容忍 readLoop 已经清理状态。
+func stopACPProcess(stdin io.Closer, cmd *exec.Cmd) {
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
 }
 
 func codexInitializeParams() map[string]interface{} {
@@ -450,13 +468,7 @@ func (a *ACPAgent) Stop() {
 	a.scanner = nil
 	a.mu.Unlock()
 
-	if stdin != nil {
-		_ = stdin.Close()
-	}
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}
+	stopACPProcess(stdin, cmd)
 }
 
 // SetCwd changes the working directory for subsequent sessions.
@@ -763,6 +775,9 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	if a.model != "" {
 		params["model"] = a.model
 	}
+	if a.effort != "" {
+		params["effort"] = a.effort
+	}
 	result, err := a.rpc(ctx, "thread/start", params)
 	if err != nil {
 		return "", false, err
@@ -802,6 +817,9 @@ func (a *ACPAgent) resumeThread(ctx context.Context, threadID string) error {
 	}
 	if a.model != "" {
 		params["model"] = a.model
+	}
+	if a.effort != "" {
+		params["effort"] = a.effort
 	}
 
 	result, err := a.rpc(ctx, "thread/resume", params)
@@ -872,6 +890,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				Input:          []codexUserInput{{Type: "text", Text: message}},
 				SandboxPolicy:  map[string]interface{}{"type": "dangerFullAccess"},
 				Model:          a.model,
+				Effort:         a.effort,
 				Cwd:            a.cwd,
 			})
 			return err
@@ -1778,6 +1797,7 @@ func (a *ACPAgent) Info() AgentInfo {
 		Name:    a.command,
 		Type:    "acp",
 		Model:   a.model,
+		Effort:  a.effort,
 		Command: a.command,
 	}
 	a.mu.Lock()

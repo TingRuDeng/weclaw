@@ -121,6 +121,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			Type:    agCfg.Type,
 			Command: command,
 			Model:   agCfg.Model,
+			Effort:  agCfg.Effort,
 		})
 		if agCfg.Cwd != "" {
 			workDirs[name] = agCfg.Cwd
@@ -246,13 +247,14 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			Cwd:          agCfg.Cwd,
 			Env:          agCfg.Env,
 			Model:        agCfg.Model,
+			Effort:       agCfg.Effort,
 			SystemPrompt: agCfg.SystemPrompt,
 		})
 		if err := ag.Start(ctx); err != nil {
 			log.Printf("[agent] failed to start ACP agent %q: %v", name, err)
 			return nil
 		}
-		log.Printf("[agent] started ACP agent: %s (command=%s, type=%s, model=%s)", name, agCfg.Command, agCfg.Type, agCfg.Model)
+		log.Printf("[agent] started ACP agent: %s (command=%s, type=%s, model=%s, effort=%s)", name, agCfg.Command, agCfg.Type, agCfg.Model, agCfg.Effort)
 		return ag
 	case "cli":
 		ag := agent.NewCLIAgent(agent.CLIAgentConfig{
