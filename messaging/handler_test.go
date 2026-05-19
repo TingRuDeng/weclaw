@@ -38,6 +38,8 @@ type fakeAgent struct {
 	lastConversationID string
 	lastMessage        string
 	lastCwd            string
+	resetConversation  string
+	resetSessionID     string
 	info               agent.AgentInfo
 }
 
@@ -49,8 +51,9 @@ func (f *fakeAgent) Chat(_ context.Context, conversationID string, message strin
 	return f.reply, f.err
 }
 
-func (f *fakeAgent) ResetSession(_ context.Context, _ string) (string, error) {
-	return "", nil
+func (f *fakeAgent) ResetSession(_ context.Context, conversationID string) (string, error) {
+	f.resetConversation = conversationID
+	return f.resetSessionID, nil
 }
 
 func (f *fakeAgent) Info() agent.AgentInfo {
@@ -1314,6 +1317,41 @@ func TestHandleCodexNewCommandClearsWorkspaceThread(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "已切换到新会话") {
 		t.Fatalf("reply should mention new session, messages=%#v", calls.texts())
+	}
+}
+
+func TestHandleGlobalNewResetsActiveCodexWorkspaceThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			resetSessionID: "thread-new",
+		},
+		threadID: "thread-old",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
+	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(123, "/new"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.resetConversation != wantConversationID {
+		t.Fatalf("reset conversation=%q, want %q", ag.resetConversation, wantConversationID)
+	}
+	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
+	if thread != "thread-new" || pending {
+		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "已创建新的codex会话") || strings.Contains(text, "/Users/") {
+		t.Fatalf("reply should use default agent name, messages=%#v", calls.texts())
 	}
 }
 

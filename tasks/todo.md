@@ -574,3 +574,21 @@ Codex 子进程因本机依赖缺失等原因在 initialize 阶段退出时，We
 ### Review 小结
 
 已完成 Codex 模型配置查询。`/cx model status` 直接读取 WeClaw 配置和已运行 Agent 状态，不会为了看配置而启动 Codex 子进程；`/cx model ls` 会通过 Codex app-server 的 `model/list` 返回可用模型和 effort 选项；配置新增 `agents.<name>.effort`，并会透传到 Codex `thread/start`、`thread/resume` 和 `turn/start`。验证命令：`go test ./agent ./messaging -run 'TestACPAgentCodex(ThreadStart|TurnStart)IncludesEffort|TestACPAgentListCodexModelsParsesEffortOptions|TestHandleCodexModel' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## `/new` 重置 Codex 工作空间会话清单
+
+### 目标
+
+修复默认 Agent 是 Codex 时，微信发送 `/new` 只重置裸用户会话，后续工作空间请求仍复用旧 thread 的问题。
+
+### 执行任务
+
+- [x] 新增 `/new` 应重置当前活跃 Codex 工作空间 conversation 的回归测试。
+- [x] 修改默认 Codex `/new`，使用 `codex + 用户 + agent + workspace` 生成的 conversationID。
+- [x] `/new` 成功后同步更新 Codex session store，避免下一条消息恢复旧 thread。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 `/new` 重置 Codex 工作空间会话修复。日志里的远端 compact 502 来自 LiteLLM/OpenAI 上游临时不可用，但 `/new` 后仍继续复用旧 thread 是本地 bug：全局 `/new` 重置了裸微信用户 ID，而 Codex 实际聊天使用工作空间维度 conversationID。现在默认 Agent 为 Codex 时，`/new` 会重置当前活跃工作空间 conversation，并把新 thread 写回 Codex session store。验证命令：`go test ./messaging -run 'TestHandleGlobalNewResetsActiveCodexWorkspaceThread|TestHandleCodexNewCommandClearsWorkspaceThread|TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart|TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
