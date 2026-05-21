@@ -83,6 +83,34 @@ func TestRenderFinalFailureExplainsACPSessionNotFound(t *testing.T) {
 	}
 }
 
+func TestRenderFinalFailureExplainsCodexWebSocketForbidden(t *testing.T) {
+	err := errors.New("turn error: \x1b[2m2026-05-21T09:02:00Z\x1b[0m ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 403 Forbidden, url: ws://192.168.201.10:4000/v1/responses")
+
+	got := renderFinalFailure("", err)
+
+	if !strings.Contains(got, "Codex 实时通道连接被服务端拒绝") ||
+		!strings.Contains(got, "403 Forbidden") ||
+		!strings.Contains(got, "HTTPS 通道重试") {
+		t.Fatalf("websocket 403 should include clear transport hint, got %q", got)
+	}
+	if strings.Contains(got, "\x1b[") || strings.Contains(got, "codex_api::endpoint") {
+		t.Fatalf("websocket 403 should hide ansi and internal module details, got %q", got)
+	}
+}
+
+func TestRenderFinalFailureStripsANSIForUnknownAgentError(t *testing.T) {
+	err := errors.New("turn error: \x1b[31munknown provider failure\x1b[0m")
+
+	got := renderFinalFailure("", err)
+
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("unknown agent error should strip ansi control sequences, got %q", got)
+	}
+	if !strings.Contains(got, "unknown provider failure") {
+		t.Fatalf("unknown agent error should keep useful text, got %q", got)
+	}
+}
+
 func TestStreamModeRendersTextPreview(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
