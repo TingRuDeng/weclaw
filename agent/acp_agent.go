@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -95,8 +96,9 @@ type rpcResponse struct {
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 // --- ACP protocol types ---
@@ -1331,17 +1333,87 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 		return nil, ctx.Err()
 	case resp := <-ch:
 		if resp.Error != nil {
-			msg := resp.Error.Message
-			// Enrich with stderr context if available
-			if a.stderr != nil {
-				if detail := a.stderr.LastError(); detail != "" {
-					msg = detail
-				}
-			}
+			msg := formatRPCErrorMessage(resp.Error, a.stderr)
 			return nil, fmt.Errorf("agent error: %s", msg)
 		}
 		return resp.Result, nil
 	}
+}
+
+// formatRPCErrorMessage 保留 JSON-RPC error 的结构化信息，并避免 stderr 的残缺 JSON 片段覆盖主错误。
+func formatRPCErrorMessage(rpcErr *rpcError, stderr *acpStderrWriter) string {
+	var parts []string
+	if rpcErr != nil {
+		if message := strings.TrimSpace(rpcErr.Message); message != "" {
+			parts = append(parts, message)
+		}
+		if data := formatRPCErrorData(rpcErr.Data); data != "" {
+			parts = append(parts, data)
+		}
+	}
+	if stderr != nil {
+		if detail := normalizeStderrDetail(stderr.LastError()); detail != "" {
+			parts = append(parts, detail)
+		}
+	}
+	if len(parts) == 0 {
+		return "未知 Agent 错误"
+	}
+	return strings.Join(dedupeStrings(parts), "；")
+}
+
+func formatRPCErrorData(data json.RawMessage) string {
+	text := strings.TrimSpace(string(data))
+	if text == "" || text == "null" || text == "{}" {
+		return ""
+	}
+	var asString string
+	if err := json.Unmarshal(data, &asString); err == nil {
+		return strings.TrimSpace(asString)
+	}
+	var asObject map[string]interface{}
+	if err := json.Unmarshal(data, &asObject); err == nil {
+		return flattenJSONMap(asObject)
+	}
+	return normalizeStderrDetail(text)
+}
+
+func flattenJSONMap(values map[string]interface{}) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := strings.TrimSpace(fmt.Sprint(values[key]))
+		if value != "" && value != "<nil>" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func normalizeStderrDetail(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" || text == "}" || text == "]" || text == "{" || text == "[" {
+		return ""
+	}
+	return text
+}
+
+func dedupeStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 // readLoop reads NDJSON lines from stdout and dispatches to pending requests or notification channels.

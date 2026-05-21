@@ -369,6 +369,32 @@ func TestACPScannerReadsLargeCodexNotification(t *testing.T) {
 	}
 }
 
+func TestFormatRPCErrorMessageUsesStructuredData(t *testing.T) {
+	err := &rpcError{
+		Code:    -32000,
+		Message: "OpenCode prompt failed",
+		Data:    json.RawMessage(`{"reason":"missing API key","provider":"opencode"}`),
+	}
+
+	got := formatRPCErrorMessage(err, nil)
+
+	if !containsAll(got, "OpenCode prompt failed", "missing API key", "opencode") {
+		t.Fatalf("formatted error=%q, want message and structured data", got)
+	}
+}
+
+func TestFormatRPCErrorMessageIgnoresUselessStderrBrace(t *testing.T) {
+	err := &rpcError{Code: -32000, Message: "OpenCode prompt failed"}
+	stderr := &acpStderrWriter{prefix: "[test]"}
+	_, _ = stderr.Write([]byte("}\n"))
+
+	got := formatRPCErrorMessage(err, stderr)
+
+	if got != "OpenCode prompt failed" {
+		t.Fatalf("formatted error=%q, want stderr brace ignored", got)
+	}
+}
+
 func TestACPAgentCallReturnsErrorWhenRuntimeStdinMissing(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",
