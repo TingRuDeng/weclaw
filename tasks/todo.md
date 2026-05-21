@@ -610,3 +610,21 @@ Codex 子进程因本机依赖缺失等原因在 initialize 阶段退出时，We
 ### Review 小结
 
 已完成 Codex/ACP 错误提示优化。Codex 上游 `502/upstream/compact` 失败会提示“Codex 上游服务暂时不可用”，说明通常不是微信或 WeClaw 配置错误，并建议稍后重试或 `/new`；ACP `Session not found` 会提示“Agent 会话已失效”，说明可能由子进程重启或切换账号后恢复旧 sessionId 导致，并建议发送 `/new`。验证命令：`go test ./messaging -run 'TestRenderFinalFailureExplainsCodexUpstreamError|TestRenderFinalFailureExplainsACPSessionNotFound' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## Codex WebSocket 可恢复告警处理清单
+
+### 目标
+
+Codex app-server 遇到 responses WebSocket `403 Forbidden` 后会重连或降级 HTTPS，WeClaw 不应把这类可恢复传输告警当作最终失败。
+
+### 执行任务
+
+- [x] 新增 stderr WebSocket 403 不应失败当前 turn 的 Agent 回归测试。
+- [x] 新增 Codex fallback message 不应被格式化成 fatal error 的回归测试。
+- [x] 调整 `handleCodexError`，忽略明确可恢复的 WebSocket 403/fallback/reconnect 噪声。
+- [x] 保留 `deactivated_workspace`、`402 Payment Required`、`usageLimitExceeded` 等真实错误路径。
+- [x] 运行定向测试、全量测试、静态检查和 diff 检查。
+
+### Review 小结
+
+已完成 Codex WebSocket 可恢复告警处理。现在 Codex app-server 的 `responses_websocket` 403、`Falling back from WebSockets to HTTPS transport` 和 reconnect 类传输噪声不会提前结束微信 turn；真实账号态、额度和结构化 error 事件仍按原路径失败。验证命令：`go test ./agent -run 'TestHandleCodexErrorIgnoresRecoverableWebSocketStderr|TestFormatCodexErrorIgnoresRecoverableWebSocketMessage|TestHandleCodexErrorUsesStderrWhenPayloadUnknown|TestACPAgentInvalidatesCodexRuntimeOnAuthStateError' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...` 与 `git diff --check`，结果通过。

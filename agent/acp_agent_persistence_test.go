@@ -693,6 +693,36 @@ func TestHandleCodexErrorUsesStderrWhenPayloadUnknown(t *testing.T) {
 	}
 }
 
+func TestHandleCodexErrorIgnoresRecoverableWebSocketStderr(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	a.stderr = &acpStderrWriter{prefix: "[test]"}
+	_, _ = a.stderr.Write([]byte(`2026-05-21T09:02:00Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 403 Forbidden, url: ws://192.168.201.10:4000/v1/responses`))
+
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexError(json.RawMessage(`{}`))
+
+	select {
+	case evt := <-turnCh:
+		t.Fatalf("recoverable websocket stderr should not fail turn, got %#v", evt)
+	default:
+	}
+}
+
+func TestFormatCodexErrorIgnoresRecoverableWebSocketMessage(t *testing.T) {
+	got := formatCodexError(json.RawMessage(`{"message":"Falling back from WebSockets to HTTPS transport. unexpected status 403 Forbidden: Unknown error, url: ws://192.168.201.10:4000/v1/responses"}`))
+
+	if got != "" {
+		t.Fatalf("recoverable websocket fallback message should be ignored, got %q", got)
+	}
+}
+
 func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
