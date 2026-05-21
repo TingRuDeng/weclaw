@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,33 @@ func TestRenderFinalSuccessReturnsReplyWithoutWrapperAndKeepsNewlines(t *testing
 	}
 	if !strings.Contains(got, "\n🎯 目的") {
 		t.Fatalf("final success should keep newlines, got %q", got)
+	}
+}
+
+func TestRenderFinalFailureExplainsCodexUpstreamError(t *testing.T) {
+	err := errors.New(`turn error: Error running remote compact task: unexpected status 502 Bad Gateway: OpenAIException - {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}}`)
+
+	got := renderFinalFailure("", err)
+
+	if !strings.Contains(got, "Codex 上游服务暂时不可用") ||
+		!strings.Contains(got, "这通常不是微信或 WeClaw 配置错误") ||
+		!strings.Contains(got, "/new") {
+		t.Fatalf("codex upstream failure should be explained clearly, got %q", got)
+	}
+	if strings.Contains(got, "OpenAIException") || strings.Contains(got, "BadGatewayError") {
+		t.Fatalf("codex upstream failure should hide noisy provider internals, got %q", got)
+	}
+}
+
+func TestRenderFinalFailureExplainsACPSessionNotFound(t *testing.T) {
+	err := errors.New("prompt error: agent error: Session not found")
+
+	got := renderFinalFailure("", err)
+
+	if !strings.Contains(got, "Agent 会话已失效") ||
+		!strings.Contains(got, "请发送 /new") ||
+		!strings.Contains(got, "重启或切换账号") {
+		t.Fatalf("session not found should include explicit recovery hint, got %q", got)
 	}
 }
 

@@ -256,9 +256,40 @@ func renderFinalSuccess(prefix string, reply string) string {
 func renderFinalFailure(prefix string, err error) string {
 	reason := "未知错误"
 	if err != nil {
-		reason = strings.TrimSpace(err.Error())
+		reason = friendlyAgentError(err)
 	}
 	return prefix + "本次未完成。\n\n原因：" + reason + "\n\n你可以调整需求后重试，或发送 /new 开启新会话。"
+}
+
+// friendlyAgentError 将常见 Agent 底层错误转换成微信侧可操作提示。
+func friendlyAgentError(err error) string {
+	raw := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(raw)
+	switch {
+	case isCodexUpstreamError(lower):
+		return "Codex 上游服务暂时不可用，当前请求没有完成。这通常不是微信或 WeClaw 配置错误，可以稍后重试；如果同一个旧会话反复触发 compact 失败，请发送 /new 创建新会话。"
+	case isACPSessionNotFound(lower):
+		return "Agent 会话已失效，可能是 ACP 子进程重启或切换账号后，本地恢复了旧 sessionId。请发送 /new 创建新会话后再试。"
+	default:
+		return raw
+	}
+}
+
+func isCodexUpstreamError(lower string) bool {
+	hasCodexSignal := strings.Contains(lower, "turn error") ||
+		strings.Contains(lower, "remote compact") ||
+		strings.Contains(lower, "/responses/compact")
+	hasUpstreamSignal := strings.Contains(lower, "upstream") ||
+		strings.Contains(lower, "bad gateway") ||
+		strings.Contains(lower, "502")
+	return hasCodexSignal && hasUpstreamSignal
+}
+
+func isACPSessionNotFound(lower string) bool {
+	hasPromptSignal := strings.Contains(lower, "prompt error") ||
+		strings.Contains(lower, "session/prompt") ||
+		strings.Contains(lower, "agent error")
+	return hasPromptSignal && strings.Contains(lower, "session not found")
 }
 
 func progressTickerInterval(cfg config.ProgressConfig) time.Duration {

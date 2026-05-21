@@ -592,3 +592,21 @@ Codex 子进程因本机依赖缺失等原因在 initialize 阶段退出时，We
 ### Review 小结
 
 已完成 `/new` 重置 Codex 工作空间会话修复。日志里的远端 compact 502 来自 LiteLLM/OpenAI 上游临时不可用，但 `/new` 后仍继续复用旧 thread 是本地 bug：全局 `/new` 重置了裸微信用户 ID，而 Codex 实际聊天使用工作空间维度 conversationID。现在默认 Agent 为 Codex 时，`/new` 会重置当前活跃工作空间 conversation，并把新 thread 写回 Codex session store。验证命令：`go test ./messaging -run 'TestHandleGlobalNewResetsActiveCodexWorkspaceThread|TestHandleCodexNewCommandClearsWorkspaceThread|TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart|TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
+
+## Codex/ACP 错误提示优化清单
+
+### 目标
+
+当失败原因来自 Codex 上游服务或 ACP 会话失效时，微信回复应给出明确原因和处理建议，避免直接暴露冗长底层错误。
+
+### 执行任务
+
+- [x] 新增 Codex upstream/compact 失败的最终回复回归测试。
+- [x] 新增 ACP `Session not found` 的最终回复回归测试。
+- [x] 实现常见 Agent 错误归类，输出微信侧可操作提示。
+- [x] 运行定向测试、全量测试、diff 检查和构建。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+已完成 Codex/ACP 错误提示优化。Codex 上游 `502/upstream/compact` 失败会提示“Codex 上游服务暂时不可用”，说明通常不是微信或 WeClaw 配置错误，并建议稍后重试或 `/new`；ACP `Session not found` 会提示“Agent 会话已失效”，说明可能由子进程重启或切换账号后恢复旧 sessionId 导致，并建议发送 `/new`。验证命令：`go test ./messaging -run 'TestRenderFinalFailureExplainsCodexUpstreamError|TestRenderFinalFailureExplainsACPSessionNotFound' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check` 与 `go build -o weclaw .`，结果通过。
