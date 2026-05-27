@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -76,7 +77,7 @@ func TestHandleCodexAppMessageReturnsTargetError(t *testing.T) {
 }
 
 func TestCodexAppClientStartsThreadAndWaitsTurn(t *testing.T) {
-	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+	server := httptest.NewServer(websocket.Server{Handshake: allowCodexAppTestHandshake, Handler: func(ws *websocket.Conn) {
 		defer ws.Close()
 		req := receiveCodexAppTestRequest(t, ws)
 		sendCodexAppTestResult(t, ws, req.ID, map[string]any{"userAgent": "test", "codexHome": "/tmp", "platformFamily": "unix", "platformOs": "linux"})
@@ -97,7 +98,7 @@ func TestCodexAppClientStartsThreadAndWaitsTurn(t *testing.T) {
 		sendCodexAppTestNotification(t, ws, "item/agentMessage/delta", map[string]any{"threadId": "thread-1", "turnId": "turn-1", "delta": "O"})
 		sendCodexAppTestNotification(t, ws, "item/completed", map[string]any{"threadId": "thread-1", "turnId": "turn-1", "item": map[string]any{"type": "agentMessage", "text": "OK"}})
 		sendCodexAppTestNotification(t, ws, "turn/completed", map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "completed"}})
-	}))
+	}})
 	defer server.Close()
 
 	client := newCodexAppClient("ws" + strings.TrimPrefix(server.URL, "http"))
@@ -127,6 +128,29 @@ func TestCodexAppClientStartsThreadAndWaitsTurn(t *testing.T) {
 	if reply != "OK" || strings.Join(progress, "") != "O" {
 		t.Fatalf("reply=%q progress=%#v, want OK/O", reply, progress)
 	}
+}
+
+func TestCodexAppClientConnectsWithoutOriginHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "" {
+			http.Error(w, "origin header is rejected", http.StatusForbidden)
+			return
+		}
+		websocket.Server{Handshake: allowCodexAppTestHandshake, Handler: func(ws *websocket.Conn) {
+			_ = ws.Close()
+		}}.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+
+	client := newCodexAppClient("ws" + strings.TrimPrefix(server.URL, "http"))
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() error = %v, want nil", err)
+	}
+	defer client.Close()
+}
+
+func allowCodexAppTestHandshake(_ *websocket.Config, _ *http.Request) error {
+	return nil
 }
 
 func TestCodexAppCompanionRuntimeStartsServerAttachAndRunsTurn(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
 
 const codexAppEventBufferSize = 256
@@ -51,7 +51,7 @@ func newCodexAppClient(url string) *codexAppClient {
 }
 
 func (c *codexAppClient) Connect(context.Context) error {
-	conn, err := websocket.Dial(c.url, "", "http://127.0.0.1/")
+	conn, _, err := websocket.DefaultDialer.Dial(c.url, nil)
 	if err != nil {
 		return fmt.Errorf("连接 Codex app-server 失败: %w", err)
 	}
@@ -152,13 +152,13 @@ func (c *codexAppClient) sendRPC(id string, method string, params any) error {
 	if err != nil {
 		return err
 	}
-	return websocket.Message.Send(c.conn, data)
+	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (c *codexAppClient) readLoop() {
 	for {
-		var raw []byte
-		if err := websocket.Message.Receive(c.conn, &raw); err != nil {
+		_, raw, err := c.conn.ReadMessage()
+		if err != nil {
 			c.failPending(err)
 			return
 		}
