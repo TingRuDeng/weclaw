@@ -53,11 +53,38 @@ docker run -it -v ~/.weclaw:/root/.weclaw ghcr.io/fastclaw-ai/weclaw start
 
 | 模式 | 工作方式                                                         | 支持的 Agent                                            |
 | ---- | ---------------------------------------------------------------- | ------------------------------------------------------- |
-| ACP  | 长驻子进程，通过 stdio JSON-RPC 通信。速度最快，复用进程和会话。 | Claude, Codex, Kimi, Gemini, Cursor, OpenCode, OpenClaw |
+| ACP  | 长驻子进程，通过 stdio JSON-RPC 通信。速度最快，复用进程和会话。 | Claude, Codex, Kimi, Gemini, Cursor, OpenClaw |
 | CLI  | 每条消息启动一个新进程，支持通过 `--resume` 恢复会话。           | Claude (`claude -p`)、Codex (`codex exec`)              |
 | HTTP | OpenAI 兼容的 Chat Completions API。                             | OpenClaw（HTTP 回退）                                   |
+| Companion | WeClaw 后台接微信，本地终端保持可见 CLI 连接。              | OpenCode、Codex app-server                             |
 
-同时存在 ACP 和 CLI 时，自动优先选择 ACP。
+同时存在 ACP 和 CLI 时，自动优先选择 ACP。OpenCode 会自动检测为 Companion 模式；Codex 默认仍使用 ACP，避免影响 `/codex ls`、`/codex switch` 和模型查询。需要本地 Codex 可见终端时，可显式配置 Codex Companion。
+
+OpenCode Companion 模式下，先启动 WeClaw，再在同一个工作空间终端执行：
+
+```bash
+weclaw companion --agent opencode --cwd /path/to/project
+```
+
+Codex Companion 模式会启动本机 `codex app-server`，再启动可见的 `codex --remote` 终端。配置示例：
+
+```json
+{
+  "agents": {
+    "codex": {
+      "type": "companion",
+      "command": "codex",
+      "cwd": "/path/to/project"
+    }
+  }
+}
+```
+
+然后在同一个工作空间终端执行：
+
+```bash
+weclaw companion --agent codex --cwd /path/to/project
+```
 
 ## 聊天命令
 
@@ -432,4 +459,4 @@ go build -o weclaw .
 
 ## 许可证
 
-[MIT](LICENSE)
+[AGPL-3.0-or-later](LICENSE)

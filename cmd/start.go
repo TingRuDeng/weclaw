@@ -283,6 +283,25 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		})
 		log.Printf("[agent] created HTTP agent: %s (endpoint=%s, model=%s)", name, agCfg.Endpoint, agCfg.Model)
 		return ag
+	case "companion":
+		if agCfg.Command == "" {
+			log.Printf("[agent] companion agent %q has no command", name)
+			return nil
+		}
+		ag := agent.NewCompanionAgent(agent.CompanionAgentConfig{
+			Name:    name,
+			Command: agCfg.Command,
+			Args:    agCfg.Args,
+			Cwd:     agCfg.Cwd,
+			Env:     agCfg.Env,
+			Model:   agCfg.Model,
+		})
+		if err := ag.Start(ctx); err != nil {
+			log.Printf("[agent] failed to start companion agent %q: %v", name, err)
+			return nil
+		}
+		log.Printf("[agent] started companion agent: %s (command=%s, type=%s)", name, agCfg.Command, agCfg.Type)
+		return ag
 	default:
 		log.Printf("[agent] unknown type %q for %q", agCfg.Type, name)
 		return nil

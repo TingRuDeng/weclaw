@@ -646,3 +646,28 @@ OpenCode ACP 返回 JSON-RPC error 时，WeClaw 应保留 `error.message` 和 `e
 ### Review 小结
 
 已完成 OpenCode ACP 错误可观测性修复。`rpcError` 现在保留 `data` 字段，错误回复会拼接结构化 `message/data`，并过滤 stderr 里的 `}`、`[`、`]` 等无意义残片；这样远程 OpenCode 失败时微信侧能看到真正原因，而不是 `agent error: }`。验证命令：`go test ./agent -run 'TestFormatRPCErrorMessageUsesStructuredData|TestFormatRPCErrorMessageIgnoresUselessStderrBrace' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...` 与 `git diff --check`，结果通过。
+
+## OpenCode Companion MVP 清单
+
+### 目标
+
+引入参考 CLI-WeChat-Bridge 的 Companion 模式：WeClaw 后台继续接微信消息，本地用户在终端运行 Companion，OpenCode 可见终端保持存在，微信输入通过本地 socket 转发到同一运行时。
+
+### 执行任务
+
+- [x] P1 串行：补 Companion 协议和代理红灯测试。
+- [x] P2 串行：实现 Companion endpoint、socket 握手、请求/响应和进度事件。
+- [x] P3 串行：接入 `type=companion` 配置、Agent 工厂和 `weclaw companion` 命令。
+- [x] P4 串行：实现 OpenCode Companion 最小运行时，复用 `opencode serve`、`opencode attach`、HTTP prompt_async 和 SSE 结果收集。
+- [x] P5 串行：将项目许可证切换为 AGPL-3.0-or-later，并保留 CLI-WeChat-Bridge 来源说明。
+- [x] P6 串行：运行定向测试、全量测试、静态检查、diff 检查和构建。
+- [x] P7 串行：补充 review 小结。
+
+### 决策日志
+
+- 2026-05-27：用户确认 WeClaw 目标就是 AGPL 开源，因此允许直接复用 AGPL 项目的设计和代码思路；本轮仍优先用 Go 重写，避免引入 Node/Bun 运行时。
+- 2026-05-27：当前工具策略要求只有用户明确要求 subagent 才能派生子代理；本轮不启用 subagent，改为串行执行，避免写冲突。
+
+### Review 小结
+
+已完成 OpenCode Companion MVP。WeClaw 后台新增 `type=companion` Agent，通过 loopback endpoint 等待本地可见 Companion 连接；本地运行 `weclaw companion --agent opencode --cwd <工作目录>` 后，会启动 `opencode serve` 与 `opencode attach`，微信输入通过 `prompt_async` 转发到同一 OpenCode session，并通过 SSE 收集文本回复和进度事件。OpenCode 自动检测默认从 ACP 改为 Companion，同时项目许可证切换为 AGPL-3.0-or-later，并补充 CLI-WeChat-Bridge 来源说明。验证命令：`go test ./agent -run 'TestRunCompanionClientHandlesRequest|TestCompanionAgent' -count=1 -timeout 60s`、`go test ./cmd -run 'TestHandleOpenCodeEventLine|TestCreateAgentByName.*Companion' -count=1 -timeout 60s`、`go test ./agent ./cmd ./config -run 'TestRunCompanionClientHandlesRequest|TestCompanionAgent|TestHandleOpenCodeEventLine|TestCreateAgentByName.*Companion|TestDetectAndConfigureOpenCodeUsesCompanion' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check`、`go build -o weclaw .` 与 `./weclaw companion --help | head -n 40`，结果通过。

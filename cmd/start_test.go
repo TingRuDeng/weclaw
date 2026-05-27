@@ -1,11 +1,53 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
+
+func TestCreateAgentByNameCreatesCompanionAgent(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	workspace := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agents["opencode"] = config.AgentConfig{
+		Type:    "companion",
+		Command: "opencode",
+		Cwd:     workspace,
+	}
+
+	ag := createAgentByName(context.Background(), cfg, "opencode")
+	if ag == nil {
+		t.Fatal("createAgentByName() = nil, want companion agent")
+	}
+	t.Cleanup(func() {
+		if stopper, ok := ag.(interface{ Stop() }); ok {
+			stopper.Stop()
+		}
+	})
+	info := ag.Info()
+	if info.Type != "companion" || info.Name != "opencode" {
+		t.Fatalf("Info() = %#v, want opencode companion", info)
+	}
+}
+
+func TestCreateAgentByNameRejectsUnknownCompanionCommand(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Agents["opencode"] = config.AgentConfig{
+		Type: "companion",
+		Cwd:  t.TempDir(),
+	}
+
+	ag := createAgentByName(context.Background(), cfg, "opencode")
+	if ag != nil {
+		t.Fatalf("createAgentByName() = %#v, want nil without command", ag)
+	}
+}
 
 func TestStopAllWeclawRemovesPidFileAfterProcessExit(t *testing.T) {
 	exists := true

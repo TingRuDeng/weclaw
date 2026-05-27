@@ -52,11 +52,38 @@ docker run -it -v ~/.weclaw:/root/.weclaw ghcr.io/fastclaw-ai/weclaw start
 
 | Mode | How it works | Examples |
 |------|-------------|----------|
-| ACP  | Long-running subprocess, JSON-RPC over stdio. Fastest — reuses process and sessions. | Claude, Codex, Kimi, Gemini, Cursor, OpenCode, OpenClaw |
+| ACP  | Long-running subprocess, JSON-RPC over stdio. Fastest — reuses process and sessions. | Claude, Codex, Kimi, Gemini, Cursor, OpenClaw |
 | CLI  | Spawns a new process per message. Supports session resume via `--resume`. | Claude (`claude -p`), Codex (`codex exec`) |
 | HTTP | OpenAI-compatible chat completions API. | OpenClaw (HTTP fallback) |
+| Companion | WeClaw keeps the WeChat bridge in the background while a local visible CLI terminal stays attached. | OpenCode, Codex app-server |
 
-Auto-detection picks ACP over CLI when both are available.
+Auto-detection picks ACP over CLI when both are available. OpenCode is detected as Companion mode. Codex still defaults to ACP so `/codex ls`, `/codex switch`, and model queries keep their existing behavior. Configure Codex Companion explicitly when you want a visible local Codex terminal.
+
+For OpenCode Companion mode, start WeClaw first, then run this in the same workspace terminal:
+
+```bash
+weclaw companion --agent opencode --cwd /path/to/project
+```
+
+Codex Companion starts a local `codex app-server`, then attaches a visible `codex --remote` terminal. Example:
+
+```json
+{
+  "agents": {
+    "codex": {
+      "type": "companion",
+      "command": "codex",
+      "cwd": "/path/to/project"
+    }
+  }
+}
+```
+
+Then run this in the same workspace terminal:
+
+```bash
+weclaw companion --agent codex --cwd /path/to/project
+```
 
 ## Chat Commands
 
@@ -430,4 +457,4 @@ go build -o weclaw .
 
 ## License
 
-[MIT](LICENSE)
+[AGPL-3.0-or-later](LICENSE)

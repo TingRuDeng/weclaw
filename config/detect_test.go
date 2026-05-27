@@ -80,3 +80,20 @@ func TestDetectAndConfigure_StrippedPath(t *testing.T) {
 	}
 	t.Logf("detected claude: type=%s, command=%s", agent.Type, agent.Command)
 }
+
+func TestDetectAndConfigureOpenCodeUsesCompanion(t *testing.T) {
+	if _, err := lookPath("opencode"); err != nil {
+		t.Skip("opencode not installed, skipping")
+	}
+
+	cfg := DefaultConfig()
+	DetectAndConfigure(cfg)
+
+	agent, ok := cfg.Agents["opencode"]
+	if !ok {
+		t.Fatal("expected opencode to be detected")
+	}
+	if agent.Type != "companion" {
+		t.Fatalf("opencode type = %q, want companion", agent.Type)
+	}
+}
