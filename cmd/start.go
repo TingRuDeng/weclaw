@@ -555,7 +555,3 @@ func signalPID(pid int, sig syscall.Signal) error {
 	}
 	return p.Signal(sig)
 }
-
-func signalProcessGroup(pid int, sig syscall.Signal) error {
-	return syscall.Kill(-pid, sig)
-}
