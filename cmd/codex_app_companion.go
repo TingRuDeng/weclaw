@@ -167,13 +167,41 @@ func (r *codexAppCompanionRuntime) startVisibleAttach(ctx context.Context, url s
 }
 
 func codexAppServerArgs(endpoint agent.CompanionEndpoint, port int) []string {
-	args := append([]string{}, endpoint.Args...)
+	args := codexAppBaseArgs(endpoint.Args)
 	return append(args, "app-server", "--listen", fmt.Sprintf("ws://%s:%d", codexAppHost, port))
 }
 
 func codexAppAttachArgs(endpoint agent.CompanionEndpoint, url string) []string {
-	args := append([]string{}, endpoint.Args...)
+	args := codexAppBaseArgs(endpoint.Args)
 	return append(args, "--remote", url, "--cd", endpoint.Cwd)
+}
+
+func codexAppBaseArgs(args []string) []string {
+	cleaned := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != "app-server" {
+			cleaned = append(cleaned, args[i])
+			continue
+		}
+		i = skipCodexAppServerArgs(args, i+1)
+	}
+	return cleaned
+}
+
+func skipCodexAppServerArgs(args []string, start int) int {
+	i := start
+	for i < len(args) {
+		if args[i] == "--listen" && i+1 < len(args) {
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(args[i], "--listen=") {
+			i++
+			continue
+		}
+		break
+	}
+	return i - 1
 }
 
 func (r *codexAppCompanionRuntime) Close() error {
