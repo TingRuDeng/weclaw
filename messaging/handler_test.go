@@ -111,6 +111,12 @@ type recordedCodexAppOpen struct {
 	workspace string
 }
 
+type recordedCodexCLIResume struct {
+	command   string
+	workspace string
+	threadID  string
+}
+
 func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
 	if f.threadID == "" {
 		return "", false
@@ -1915,10 +1921,8 @@ func TestCodexDetachClosesVisibleCompanionOnly(t *testing.T) {
 
 func TestCodexAttachRequiresVisibleCompanion(t *testing.T) {
 	h := NewHandler(nil, nil)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
+	ag := &fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "cli", Command: "codex"},
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
@@ -1929,6 +1933,55 @@ func TestCodexAttachRequiresVisibleCompanion(t *testing.T) {
 
 	if !containsText(calls.texts(), "当前 Codex Agent 不支持 attach") {
 		t.Fatalf("attach unsupported reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexAttachResumesRemoteFirstThreadInTerminal(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	var opened []recordedCodexCLIResume
+	h.SetCodexCLIResumeOpener(func(_ context.Context, command string, workspace string, threadID string) error {
+		opened = append(opened, recordedCodexCLIResume{command: command, workspace: workspace, threadID: threadID})
+		return nil
+	})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(125, "/cx attach"))
+
+	if len(opened) != 1 || opened[0].command != "codex-bin" || opened[0].workspace != workspace || opened[0].threadID != "thread-1" {
+		t.Fatalf("opened=%#v, want codex-bin/%s/thread-1", opened, workspace)
+	}
+	if !containsText(calls.texts(), "已打开 Codex 本地可见端") || !containsText(calls.texts(), "thread-1") {
+		t.Fatalf("attach reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexAttachRequiresRecordedThreadForRemoteFirstAgent(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(128, "/cx attach"))
+
+	if !containsText(calls.texts(), "当前还没有可接手的 Codex thread") {
+		t.Fatalf("attach without thread reply mismatch, messages=%#v", calls.texts())
 	}
 }
 

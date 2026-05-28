@@ -167,7 +167,64 @@ func DetectAndConfigure(cfg *Config) bool {
 		}
 	}
 
+	if NormalizeCodexRemoteFirst(cfg) {
+		modified = true
+	}
+
 	return modified
+}
+
+// NormalizeCodexRemoteFirst 将旧的 Codex Companion 默认配置迁移到 app-server remote-first。
+func NormalizeCodexRemoteFirst(cfg *Config) bool {
+	if cfg == nil || cfg.Agents == nil {
+		return false
+	}
+	agCfg, ok := cfg.Agents["codex"]
+	if !ok || agCfg.Type != "companion" || agCfg.Command == "" {
+		return false
+	}
+	if agCfg.AutoLaunch != nil && *agCfg.AutoLaunch {
+		return false
+	}
+	agCfg.Type = "acp"
+	agCfg.Args = codexRemoteFirstArgs(agCfg.Args)
+	agCfg.AutoLaunch = nil
+	cfg.Agents["codex"] = agCfg
+	log.Printf("[config] migrated codex companion to remote-first app-server")
+	return true
+}
+
+func codexRemoteFirstArgs(args []string) []string {
+	cleaned := stripCodexAppServerArgs(args)
+	return append(cleaned, "app-server", "--listen", "stdio://")
+}
+
+func stripCodexAppServerArgs(args []string) []string {
+	cleaned := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != "app-server" {
+			cleaned = append(cleaned, args[i])
+			continue
+		}
+		i = skipCodexListenArgs(args, i+1)
+	}
+	return cleaned
+}
+
+func skipCodexListenArgs(args []string, start int) int {
+	i := start
+	for i < len(args) {
+		if args[i] == "--listen" && i+1 < len(args) {
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(args[i], "--listen=") {
+			i++
+			continue
+		}
+		break
+	}
+	return i - 1
 }
 
 // loadOpenclawGateway resolves openclaw gateway connection info.

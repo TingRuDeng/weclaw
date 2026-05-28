@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,9 @@ type CDNDownloader func(ctx context.Context, encryptQueryParam string, aesKey st
 
 // CodexAppOpener 用于打开当前工作区的 Codex App，便于测试替换外部进程。
 type CodexAppOpener func(ctx context.Context, command string, workspaceRoot string) error
+
+// CodexCLIResumeOpener 用于把当前 Codex thread 打开到本地 CLI/TUI。
+type CodexCLIResumeOpener func(ctx context.Context, command string, workspaceRoot string, threadID string) error
 
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {
@@ -83,6 +87,7 @@ type Handler struct {
 	codexBrowseMu         sync.Mutex
 	codexBrowseWorkspaces map[string]string
 	codexAppOpener        CodexAppOpener
+	codexCLIResumeOpener  CodexCLIResumeOpener
 }
 
 const (
@@ -144,6 +149,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		codexLocalSessionDir:  defaultCodexLocalSessionDir(),
 		codexBrowseWorkspaces: make(map[string]string),
 		codexAppOpener:        defaultCodexAppOpener,
+		codexCLIResumeOpener:  defaultCodexCLIResumeOpener,
 	}
 }
 
@@ -255,6 +261,13 @@ func (h *Handler) SetCodexAppOpener(opener CodexAppOpener) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.codexAppOpener = opener
+}
+
+// SetCodexCLIResumeOpener 设置 Codex CLI resume 打开器，主要用于测试外部进程调用。
+func (h *Handler) SetCodexCLIResumeOpener(opener CodexCLIResumeOpener) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.codexCLIResumeOpener = opener
 }
 
 func (h *Handler) resolveProgressConfig(agentName string) config.ProgressConfig {
@@ -1638,7 +1651,7 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		if len(fields) != 2 {
 			return "用法: /cx attach 或 /cx attach app"
 		}
-		return h.handleCodexAttach(ctx, ag)
+		return h.handleCodexAttach(ctx, userID, agentName, workspaceRoot, ag)
 	case "detach":
 		if len(fields) != 2 {
 			return "用法: /cx detach"
@@ -1700,16 +1713,87 @@ func defaultCodexAppOpener(ctx context.Context, command string, workspaceRoot st
 	return nil
 }
 
-// handleCodexAttach 显式打开本地可见 Companion，保持默认 remote 模式不被强绑定。
-func (h *Handler) handleCodexAttach(ctx context.Context, ag agent.Agent) string {
+// handleCodexAttach 将当前 Codex 会话打开到本地可见端；remote-first Agent 使用 resume。
+func (h *Handler) handleCodexAttach(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
 	visibleAg, ok := ag.(agent.VisibleCompanionAgent)
 	if !ok {
-		return "当前 Codex Agent 不支持 attach。"
+		return h.handleCodexAttachResume(ctx, userID, agentName, workspaceRoot, ag)
 	}
 	if err := visibleAg.OpenVisibleCompanion(ctx); err != nil {
 		return fmt.Sprintf("打开 Codex 本地可见端失败: %v", err)
 	}
 	return "已打开 Codex 本地可见端。"
+}
+
+func (h *Handler) handleCodexAttachResume(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	if _, ok := ag.(agent.CodexThreadAgent); !ok {
+		return "当前 Codex Agent 不支持 attach。"
+	}
+	workspaceRoot = h.codexWorkspaceRootForUser(userID, agentName, ag)
+	if strings.TrimSpace(workspaceRoot) == "" {
+		workspaceRoot = h.codexWorkspaceRoot(agentName)
+	}
+	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
+	bindingKey := codexBindingKey(userID, agentName)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
+	if pending || strings.TrimSpace(threadID) == "" {
+		return "当前还没有可接手的 Codex thread，请先通过微信发送一条 Codex 任务。"
+	}
+	command := strings.TrimSpace(ag.Info().Command)
+	if command == "" {
+		return "当前 Codex Agent 未配置 command，无法打开本地可见端。"
+	}
+	if err := h.resolveCodexCLIResumeOpener()(ctx, command, workspaceRoot, threadID); err != nil {
+		return fmt.Sprintf("打开 Codex 本地可见端失败: %v", err)
+	}
+	return wechatCommandText(
+		"已打开 Codex 本地可见端。",
+		"工作空间: "+workspaceRoot,
+		"thread: "+threadID,
+	)
+}
+
+func (h *Handler) resolveCodexCLIResumeOpener() CodexCLIResumeOpener {
+	h.mu.RLock()
+	opener := h.codexCLIResumeOpener
+	h.mu.RUnlock()
+	if opener == nil {
+		return defaultCodexCLIResumeOpener
+	}
+	return opener
+}
+
+// defaultCodexCLIResumeOpener 在 Terminal 中恢复当前 Codex thread，便于本地接手。
+func defaultCodexCLIResumeOpener(ctx context.Context, command string, workspaceRoot string, threadID string) error {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("当前平台 %s 暂不支持自动打开可见终端", runtime.GOOS)
+	}
+	parts := []string{
+		shellQuoteForTerminal(command),
+		"resume",
+		shellQuoteForTerminal(threadID),
+		"--cd",
+		shellQuoteForTerminal(workspaceRoot),
+	}
+	script := "tell application \"Terminal\" to do script " + appleScriptQuoteForTerminal(strings.Join(parts, " "))
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+func shellQuoteForTerminal(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func appleScriptQuoteForTerminal(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	return "\"" + value + "\""
 }
 
 // handleCodexDetach 仅断开本地可见 Companion，后台 endpoint 继续服务微信 remote。

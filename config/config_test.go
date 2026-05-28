@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -104,6 +105,31 @@ func TestAgentConfigUnmarshalAutoLaunch(t *testing.T) {
 	got := cfg.Agents["codex"].AutoLaunch
 	if got == nil || *got {
 		t.Fatalf("AutoLaunch = %#v, want false pointer", got)
+	}
+}
+
+func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type:    "companion",
+		Command: "codex",
+		Args:    []string{"-c", "model=\"gpt-test\""},
+		Cwd:     "/tmp/work",
+	}
+
+	if !NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() = false, want true")
+	}
+	got := cfg.Agents["codex"]
+	if got.Type != "acp" {
+		t.Fatalf("Type=%q, want acp", got.Type)
+	}
+	wantArgs := []string{"-c", "model=\"gpt-test\"", "app-server", "--listen", "stdio://"}
+	if !reflect.DeepEqual(got.Args, wantArgs) {
+		t.Fatalf("Args=%#v, want %#v", got.Args, wantArgs)
+	}
+	if got.AutoLaunch != nil {
+		t.Fatalf("AutoLaunch=%#v, want nil", got.AutoLaunch)
 	}
 }
 
