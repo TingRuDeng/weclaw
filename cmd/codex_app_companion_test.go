@@ -206,12 +206,29 @@ func TestCodexAppCommandArgsPreserveConfigAndRemote(t *testing.T) {
 		Cwd:  "/tmp/work",
 	}
 	serverArgs := codexAppServerArgs(endpoint, 45679)
-	wantServer := []string{"-c", "model=\"gpt-test\"", "app-server", "--listen", "ws://127.0.0.1:45679"}
+	wantServer := []string{"-c", "check_for_update_on_startup=false", "-c", "model=\"gpt-test\"", "app-server", "--listen", "ws://127.0.0.1:45679"}
 	if !reflect.DeepEqual(serverArgs, wantServer) {
 		t.Fatalf("serverArgs=%#v, want %#v", serverArgs, wantServer)
 	}
 	attachArgs := codexAppAttachArgs(endpoint, "ws://127.0.0.1:45679")
-	wantAttach := []string{"-c", "model=\"gpt-test\"", "--remote", "ws://127.0.0.1:45679", "--cd", "/tmp/work"}
+	wantAttach := []string{"-c", "check_for_update_on_startup=false", "-c", "model=\"gpt-test\"", "--remote", "ws://127.0.0.1:45679", "--cd", "/tmp/work"}
+	if !reflect.DeepEqual(attachArgs, wantAttach) {
+		t.Fatalf("attachArgs=%#v, want %#v", attachArgs, wantAttach)
+	}
+}
+
+func TestCodexAppCommandArgsDoNotDuplicateConfiguredUpdateCheck(t *testing.T) {
+	endpoint := agent.CompanionEndpoint{
+		Args: []string{"-c", "check_for_update_on_startup=true", "-c", "model=\"gpt-test\""},
+		Cwd:  "/tmp/work",
+	}
+	serverArgs := codexAppServerArgs(endpoint, 45679)
+	wantServer := []string{"-c", "check_for_update_on_startup=true", "-c", "model=\"gpt-test\"", "app-server", "--listen", "ws://127.0.0.1:45679"}
+	if !reflect.DeepEqual(serverArgs, wantServer) {
+		t.Fatalf("serverArgs=%#v, want %#v", serverArgs, wantServer)
+	}
+	attachArgs := codexAppAttachArgs(endpoint, "ws://127.0.0.1:45679")
+	wantAttach := []string{"-c", "check_for_update_on_startup=true", "-c", "model=\"gpt-test\"", "--remote", "ws://127.0.0.1:45679", "--cd", "/tmp/work"}
 	if !reflect.DeepEqual(attachArgs, wantAttach) {
 		t.Fatalf("attachArgs=%#v, want %#v", attachArgs, wantAttach)
 	}
@@ -223,12 +240,12 @@ func TestCodexAppCommandArgsStripLegacyACPListenArgs(t *testing.T) {
 		Cwd:  "/tmp/work",
 	}
 	serverArgs := codexAppServerArgs(endpoint, 45679)
-	wantServer := []string{"-c", "model=\"gpt-test\"", "app-server", "--listen", "ws://127.0.0.1:45679"}
+	wantServer := []string{"-c", "check_for_update_on_startup=false", "-c", "model=\"gpt-test\"", "app-server", "--listen", "ws://127.0.0.1:45679"}
 	if !reflect.DeepEqual(serverArgs, wantServer) {
 		t.Fatalf("serverArgs=%#v, want %#v", serverArgs, wantServer)
 	}
 	attachArgs := codexAppAttachArgs(endpoint, "ws://127.0.0.1:45679")
-	wantAttach := []string{"-c", "model=\"gpt-test\"", "--remote", "ws://127.0.0.1:45679", "--cd", "/tmp/work"}
+	wantAttach := []string{"-c", "check_for_update_on_startup=false", "-c", "model=\"gpt-test\"", "--remote", "ws://127.0.0.1:45679", "--cd", "/tmp/work"}
 	if !reflect.DeepEqual(attachArgs, wantAttach) {
 		t.Fatalf("attachArgs=%#v, want %#v", attachArgs, wantAttach)
 	}

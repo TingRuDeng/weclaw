@@ -17,6 +17,7 @@ import (
 const (
 	codexAppHost            = "127.0.0.1"
 	codexAppServerReadyWait = 20 * time.Second
+	codexUpdateCheckConfig  = "check_for_update_on_startup"
 )
 
 type codexAppSessionClient interface {
@@ -185,7 +186,32 @@ func codexAppBaseArgs(args []string) []string {
 		}
 		i = skipCodexAppServerArgs(args, i+1)
 	}
-	return cleaned
+	return codexAppArgsWithUpdateCheckDisabled(cleaned)
+}
+
+func codexAppArgsWithUpdateCheckDisabled(args []string) []string {
+	if hasCodexUpdateCheckConfig(args) {
+		return args
+	}
+	// Companion 模式由 WeClaw 管理 Codex 生命周期，避免启动升级提示阻塞可见终端。
+	return append([]string{"-c", codexUpdateCheckConfig + "=false"}, args...)
+}
+
+func hasCodexUpdateCheckConfig(args []string) bool {
+	prefix := codexUpdateCheckConfig + "="
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" || args[i] == "--config" {
+			if i+1 < len(args) && strings.HasPrefix(args[i+1], prefix) {
+				return true
+			}
+			i++
+			continue
+		}
+		if strings.HasPrefix(args[i], "-c"+prefix) || strings.HasPrefix(args[i], "--config="+prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func skipCodexAppServerArgs(args []string, start int) int {
