@@ -19,6 +19,11 @@ type CompanionRequestHandler interface {
 	HandleCompanionRequest(ctx context.Context, req CompanionRequest, progress func(string)) (string, error)
 }
 
+// CompanionStarter 支持在连接后台后立即启动本地可见运行时。
+type CompanionStarter interface {
+	Start(ctx context.Context) error
+}
+
 type CompanionHandlerFunc func(ctx context.Context, req CompanionRequest, progress func(string)) (string, error)
 
 func (f CompanionHandlerFunc) HandleCompanionRequest(ctx context.Context, req CompanionRequest, progress func(string)) (string, error) {
@@ -44,6 +49,11 @@ func RunCompanionClient(ctx context.Context, endpoint CompanionEndpoint, handler
 	decoder := json.NewDecoder(conn)
 	if err := sendCompanionHello(encoder, endpoint.Token); err != nil {
 		return err
+	}
+	if starter, ok := handler.(CompanionStarter); ok {
+		if err := starter.Start(ctx); err != nil {
+			return err
+		}
 	}
 	for {
 		var message companionEnvelope

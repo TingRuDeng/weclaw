@@ -200,6 +200,41 @@ func TestCodexAppCompanionRuntimeStartsServerAttachAndRunsTurn(t *testing.T) {
 	}
 }
 
+func TestCodexAppCompanionRuntimeStartOpensVisibleAttachWithoutTurn(t *testing.T) {
+	endpoint := agent.CompanionEndpoint{
+		Agent:   "codex",
+		Command: "codex",
+		Cwd:     "/tmp/work",
+	}
+	fake := &fakeCodexAppSessionClient{reply: "OK"}
+	runtime := newCodexAppCompanionRuntime(endpoint)
+	runtime.reservePortFn = func() (int, error) { return 45679, nil }
+	runtime.newClientFn = func(string) codexAppSessionClient {
+		return fake
+	}
+	runtime.startServerFn = func(context.Context, int) error {
+		return nil
+	}
+	runtime.waitReadyFn = func(context.Context) error {
+		return nil
+	}
+	var attachURL string
+	runtime.startAttachFn = func(_ context.Context, url string) error {
+		attachURL = url
+		return nil
+	}
+
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if attachURL != "ws://127.0.0.1:45679" {
+		t.Fatalf("attachURL=%q, want websocket url", attachURL)
+	}
+	if !reflect.DeepEqual(fake.calls, []string{"connect", "initialize", "startThread:/tmp/work"}) {
+		t.Fatalf("calls=%#v, want eager startup without turn", fake.calls)
+	}
+}
+
 func TestCodexAppCommandArgsPreserveConfigAndRemote(t *testing.T) {
 	endpoint := agent.CompanionEndpoint{
 		Args: []string{"-c", "model=\"gpt-test\""},

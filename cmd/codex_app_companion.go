@@ -80,6 +80,11 @@ func (r *codexAppCompanionRuntime) HandleCompanionRequest(ctx context.Context, r
 	return reply, nil
 }
 
+// Start 在 Companion 握手后立即启动 Codex 可见端，避免终端只显示 weclaw companion 空等。
+func (r *codexAppCompanionRuntime) Start(ctx context.Context) error {
+	return r.ensureStarted(ctx)
+}
+
 func (r *codexAppCompanionRuntime) ensureStarted(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
