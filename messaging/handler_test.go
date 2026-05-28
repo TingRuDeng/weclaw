@@ -535,17 +535,16 @@ func TestBuildHelpText(t *testing.T) {
 	for _, want := range []string{
 		"WeClaw 帮助",
 		"常用：",
-		"Codex：",
-		"Codex 账号：",
+		"Codex 主路径：",
 		"指定 Agent：",
 		"常用别名：",
+		"高级能力：",
+		"/cx status",
 		"/cx ls",
-		"/cx cd <编号|名称|..>",
 		"/cx switch <编号>",
 		"/cx cli",
 		"/cx app",
-		"/cx status",
-		"/sw reload",
+		"/cx help",
 		"/codex = /cx",
 	} {
 		if !strings.Contains(text, want) {
@@ -558,12 +557,22 @@ func TestBuildHelpText(t *testing.T) {
 	if strings.Contains(text, "/codex where") || strings.Contains(text, "/codex workspace") {
 		t.Error("help text should not mention old Codex session commands")
 	}
+	for _, hidden := range []string{
+		"Codex 账号：",
+		"/sw reload",
+		"/cx attach app",
+		"/cx detach",
+		"/progress 查看或切换进度模式",
+	} {
+		if strings.Contains(text, hidden) {
+			t.Errorf("main help should hide advanced command %q", hidden)
+		}
+	}
 	for _, want := range []string{
 		"常用：\n\n/info",
 		"/info 查看当前 Agent\n\n/new 开启新会话",
-		"Codex：\n\n/cx ls",
-		"/cx ls 查看工作空间或当前工作空间会话\n\n/cx cd",
-		"Codex 账号：\n\n/sw ls",
+		"Codex 主路径：\n\n/cx status",
+		"/cx cli 打开当前 Codex thread 到本地 CLI\n\n/cx app",
 		"常用别名：\n\n/codex = /cx",
 	} {
 		if !strings.Contains(text, want) {

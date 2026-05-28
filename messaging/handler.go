@@ -1476,47 +1476,25 @@ func buildHelpText() string {
 
 /cwd /绝对路径 切换工作目录
 
-/progress 查看或切换进度模式
+Codex 主路径：
 
-Codex：
+/cx status 查看当前 Codex remote 和本地入口状态
 
 /cx ls 查看工作空间或当前工作空间会话
 
-/cx cd <编号|名称|..> 进入工作空间或返回列表
-
 /cx switch <编号> 切换当前工作空间会话
-
-/cx new 新建当前工作空间的 Codex 会话
-
-/cx pwd 查看当前 Codex 浏览位置
 
 /cx cli 打开当前 Codex thread 到本地 CLI
 
 /cx app 在 Codex App 中打开当前工作空间
 
-/cx status 查看当前 Codex remote 和本地入口状态
-
-/cx detach 断开本地可见端，微信继续 remote
-
-/cx attach app 在 Codex App 中打开当前工作空间
+/cx help 查看 Codex 高级会话命令
 
 /guide 将暂存消息作为引导对话发送给正在执行的 Codex
 
 /run 执行已转为待执行的暂存消息
 
 /cancel 撤回暂存消息
-
-Codex 账号：
-
-/sw ls 查看可切换账号
-
-/sw current 查看当前账号
-
-/sw <编号|ID> 切换账号
-
-/sw reload 手动刷新 Codex Agent
-
-/sw help 查看账号切换帮助
 
 指定 Agent：
 
@@ -1536,7 +1514,11 @@ Codex 账号：
 
 /km = /kimi
 
-/gm = /gemini`
+/gm = /gemini
+
+高级能力：
+
+/progress、/sw、Companion、主动推送 API 仍可用，默认不作为主路径展示。`
 }
 
 // wechatCommandText 将内置命令回复转换为空行分隔，避免微信气泡折叠单换行。

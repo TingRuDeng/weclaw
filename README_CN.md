@@ -56,34 +56,14 @@ docker run -it -v ~/.weclaw:/root/.weclaw ghcr.io/fastclaw-ai/weclaw start
 | ACP  | 长驻子进程，通过 stdio JSON-RPC 通信。速度最快，复用进程和会话。 | Claude, Codex, Kimi, Gemini, Cursor, OpenClaw |
 | CLI  | 每条消息启动一个新进程，支持通过 `--resume` 恢复会话。           | Claude (`claude -p`)、Codex (`codex exec`)              |
 | HTTP | OpenAI 兼容的 Chat Completions API。                             | OpenClaw（HTTP 回退）                                   |
-| Companion | WeClaw 后台接微信，本地终端保持可见 CLI 连接。              | OpenCode、Codex app-server                             |
+| Companion | WeClaw 后台接微信，本地终端保持可见 CLI 连接。              | OpenCode                                               |
 
-同时存在 ACP 和 CLI 时，自动优先选择 ACP。OpenCode 会自动检测为 Companion 模式；Codex 默认仍使用 ACP，避免影响 `/codex ls`、`/codex switch` 和模型查询。需要本地 Codex 可见终端时，可显式配置 Codex Companion。
+同时存在 ACP 和 CLI 时，自动优先选择 ACP。Codex 默认使用 `app-server --listen stdio://` 的 remote-first 模式：微信侧独立使用当前 workspace/thread，本地需要接手时再通过 `/cx cli` 或 `/cx app` 打开本地入口。
 
-OpenCode Companion 模式下，先启动 WeClaw，再在同一个工作空间终端执行：
+OpenCode Companion 属于高级能力：先启动 WeClaw，再在同一个工作空间终端执行：
 
 ```bash
 weclaw companion --agent opencode --cwd /path/to/project
-```
-
-Codex Companion 模式会启动本机 `codex app-server`，再启动可见的 `codex --remote` 终端。配置示例：
-
-```json
-{
-  "agents": {
-    "codex": {
-      "type": "companion",
-      "command": "codex",
-      "cwd": "/path/to/project"
-    }
-  }
-}
-```
-
-然后在同一个工作空间终端执行：
-
-```bash
-weclaw companion --agent codex --cwd /path/to/project
 ```
 
 ## 聊天命令
@@ -100,6 +80,21 @@ weclaw companion --agent codex --cwd /path/to/project
 | `/new`                  | 开始新对话（清除会话）   |
 | `/info`                 | 查看当前 Agent 信息      |
 | `/help`                 | 查看帮助信息             |
+
+### Codex 主路径
+
+Codex 的推荐使用方式是微信 remote-first，本地接手入口按需打开：
+
+| 命令 | 说明 |
+| ---- | ---- |
+| `/cx status` | 查看当前 workspace、thread、remote 和本地入口记录 |
+| `/cx ls` | 查看 Codex 工作空间或当前工作空间会话 |
+| `/cx switch <编号>` | 切换当前工作空间会话 |
+| `/cx cli` | 在本地 Terminal 打开当前 thread 的 Codex CLI |
+| `/cx app` | 在 Codex App 中打开当前工作空间 |
+| `/cx help` | 查看 Codex 高级会话命令 |
+
+本地 Terminal 或 Codex App 只是接手入口。手动关闭它们不会影响微信 remote 会话，`/cx status` 也不会实时探测本地窗口是否仍然存在。
 
 ### 快捷别名
 
@@ -140,7 +135,7 @@ WeClaw 支持收发图片、视频、文件和语音消息。
 
 **Markdown 转换：** Agent 的回复会自动从 markdown 转为纯文本再发送 — 代码块去掉围栏、链接只保留文字、加粗斜体标记去除等。
 
-## 主动推送消息
+## 高级能力：主动推送消息
 
 无需等待用户发消息，主动向微信用户推送消息。
 
@@ -227,14 +222,14 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 ### 微信进度反馈
 
-默认配置使用 `summary` 模式：
+默认配置使用 `typing` 模式：微信只显示“正在输入”和最终回复，不额外发送中间文字气泡。
 
 ```json
 {
   "default_agent": "codex",
   "progress": {
-    "mode": "summary",
-    "send_acceptance": true,
+    "mode": "typing",
+    "send_acceptance": false,
     "enable_typing": true,
     "typing_heartbeat_seconds": 8,
     "initial_delay_seconds": 10,
@@ -246,13 +241,13 @@ curl -X POST http://127.0.0.1:18011/api/send \
     "codex": {
       "type": "acp",
       "command": "codex",
-      "args": ["app-server"]
+      "args": ["app-server", "--listen", "stdio://"]
     }
   }
 }
 ```
 
-`summary` 模式只发送受理确认、输入中状态、少量进度摘要和最终完整结果，不会把 Agent 的正文 delta、半句话或代码片段逐条发到微信。这样更适合微信聊天窗口，也避免 Codex 增量片段被重复展示。
+如果需要低频文字进度，可以切到 `summary`；如果需要恢复旧实时正文流，可以切到 `stream`。
 
 可选模式：
 
@@ -260,7 +255,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 |------|------|
 | `off` | 不发送输入中状态和中间进度，只发送最终结果 |
 | `typing` | 发送输入中状态和最终结果 |
-| `summary` | 发送受理确认、输入中状态、低频摘要和最终结果，默认推荐 |
+| `summary` | 发送受理确认、输入中状态、低频摘要和最终结果 |
 | `verbose` | 预留的更详细摘要模式，当前按 summary 处理 |
 | `stream` | 恢复旧的实时正文片段预览 |
 | `debug` | 预留的内部调试模式，当前按 summary 处理 |

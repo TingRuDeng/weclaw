@@ -870,3 +870,20 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成 `/cx status` 只读状态查询。微信发送 `/cx status` 会显示当前 Codex 工作空间、thread、remote 配置状态，以及 WeClaw 最近是否成功打开过 CLI/App；该状态不实时探测手动关闭，也不会关闭或重启本地窗口。验证命令：`go test ./messaging -run 'TestCodexStatusShowsWorkspaceThreadAndLocalEntryState|TestCodexStatusRecordsSuccessfulLocalEntries|TestCodexCliCommandResumesRemoteFirstThreadInTerminal|TestCodexAppCommandOpensCurrentWorkspaceWithThread|TestBuildHelpText|TestCommandRepliesUseBlankLinesForWeChat' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-cx-status .` 与 `git diff --check`，结果均通过。
+
+## WeClaw 用户可见功能收口清单
+
+### 目标
+
+不删除已有能力，只收敛用户可见主路径：`/help` 和 README_CN 默认突出 Codex remote-first、`/cx status`、`/cx cli`、`/cx app`，将 Companion、`/sw`、主动推送 API 和高级 progress 作为高级能力保留。
+
+### 执行任务
+
+- [x] 调整 `/help` 测试，要求主帮助隐藏 `/sw`、Companion 兼容入口和高级 progress。
+- [x] 精简 `/help` 的 Codex 主路径，只展示状态、列表、切换、CLI/App 接手和 `/cx help`。
+- [x] 更新 README_CN，修正 Codex remote-first、默认 `typing` 和高级能力叙事。
+- [x] 运行全量验证并补充 review 小结。
+
+### Review 小结
+
+已完成 WeClaw 用户可见功能收口。默认 `/help` 只展示常用命令、Codex remote-first 主路径、指定 Agent 和别名；`/sw`、Companion、主动推送 API 和高级 progress 仍保留，但不再挤进主帮助。README_CN 同步修正 Codex remote-first、本地接手入口和默认 `typing` 进度模式。验证命令：`go test ./messaging -run 'TestBuildHelpText|TestCommandRepliesUseBlankLinesForWeChat|TestCodexStatusShowsWorkspaceThreadAndLocalEntryState|TestCodexCliCommandResumesRemoteFirstThreadInTerminal' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-product-surface .`、`git diff --check` 与 README_CN 旧文案检索，结果均通过。
