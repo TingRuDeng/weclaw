@@ -541,7 +541,7 @@ func TestBuildHelpText(t *testing.T) {
 		"高级能力：",
 		"/cx status",
 		"/cx ls",
-		"/cx switch <编号>",
+		"/cx <编号|..>",
 		"/cx cli",
 		"/cx app",
 		"/cx help",
@@ -572,6 +572,7 @@ func TestBuildHelpText(t *testing.T) {
 		"常用：\n\n/info",
 		"/info 查看当前 Agent\n\n/new 开启新会话",
 		"Codex 主路径：\n\n/cx status",
+		"/cx ls 查看列表\n\n/cx <编号|..>",
 		"/cx cli 打开当前 Codex thread 到本地 CLI\n\n/cx app",
 		"常用别名：\n\n/codex = /cx",
 	} {
@@ -1824,6 +1825,86 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	}
 	if containsText(calls.texts(), "thread-a") {
 		t.Fatalf("switch reply should hide thread id, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(140, "/cx 0"))
+
+	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("/cx 0 should enter workspace, got cwd=%q want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "工作空间: weclaw") || !strings.Contains(text, "0. 会话 A") {
+		t.Fatalf("/cx 0 should show workspace sessions, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexShortIndexSwitchesSessionInsideWorkspace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(141, "/cx cd weclaw"))
+	h.HandleMessage(context.Background(), client, newTextMessage(142, "/cx 0"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-a" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-a)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	if !containsText(calls.texts(), "已切换会话") {
+		t.Fatalf("/cx 0 should switch current workspace session, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexShortDotDotReturnsToWorkspaceList(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(143, "/cx cd weclaw"))
+	h.HandleMessage(context.Background(), client, newTextMessage(144, "/cx .."))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "已返回工作空间列表") || !strings.Contains(text, "0. weclaw") {
+		t.Fatalf("/cx .. should return to workspace list, messages=%#v", calls.texts())
 	}
 }
 

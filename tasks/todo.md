@@ -887,3 +887,22 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成 WeClaw 用户可见功能收口。默认 `/help` 只展示常用命令、Codex remote-first 主路径、指定 Agent 和别名；`/sw`、Companion、主动推送 API 和高级 progress 仍保留，但不再挤进主帮助。README_CN 同步修正 Codex remote-first、本地接手入口和默认 `typing` 进度模式。验证命令：`go test ./messaging -run 'TestBuildHelpText|TestCommandRepliesUseBlankLinesForWeChat|TestCodexStatusShowsWorkspaceThreadAndLocalEntryState|TestCodexCliCommandResumesRemoteFirstThreadInTerminal' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-product-surface .`、`git diff --check` 与 README_CN 旧文案检索，结果均通过。
+
+## Codex 列表短命令落地清单
+
+### 目标
+
+降低微信里切换 Codex 工作空间和会话的输入成本：支持 `/cx <编号>` 按当前浏览层级选择列表项，支持 `/cx ..` 返回上一级，同时保留 `/cx cd` 和 `/cx switch` 长命令兼容。
+
+### 执行任务
+
+- [x] 新增 `/cx 0` 在工作空间列表层进入工作空间的回归测试。
+- [x] 新增 `/cx 0` 在会话列表层切换当前工作空间会话的回归测试。
+- [x] 新增 `/cx ..` 返回工作空间列表的回归测试。
+- [x] 实现短命令识别，避免 `/cx 0` 被当成普通 Codex prompt。
+- [x] 更新 `/help` 和 README_CN 的 Codex 主路径说明。
+- [x] 运行全量验证并补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 列表短命令。现在 `/cx 0` 在工作空间列表层等价于 `/cx cd 0`，在会话列表层等价于 `/cx switch 0`；`/cx ..` 等价于 `/cx cd ..`。长命令仍保留兼容。验证命令：`go test ./messaging -run 'TestCodexShortIndexEntersWorkspaceFromWorkspaceList|TestCodexShortIndexSwitchesSessionInsideWorkspace|TestCodexShortDotDotReturnsToWorkspaceList|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex|TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd|TestBuildHelpText' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-cx-short .` 与 `git diff --check`，结果均通过。

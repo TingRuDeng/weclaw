@@ -1480,9 +1480,9 @@ Codex 主路径：
 
 /cx status 查看当前 Codex remote 和本地入口状态
 
-/cx ls 查看工作空间或当前工作空间会话
+/cx ls 查看列表
 
-/cx switch <编号> 切换当前工作空间会话
+/cx <编号|..> 选择列表项或返回上一级
 
 /cx cli 打开当前 Codex thread 到本地 CLI
 
@@ -1557,6 +1557,9 @@ func isCodexSessionCommand(trimmed string) bool {
 	if len(fields) < 2 || !isCodexSessionCommandToken(fields[0]) {
 		return false
 	}
+	if isCodexShortSelectionToken(fields[1]) {
+		return len(fields) == 2
+	}
 	switch fields[1] {
 	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "cli", "attach", "detach", "app", "open-app", "status", "help":
 		return true
@@ -1567,6 +1570,14 @@ func isCodexSessionCommand(trimmed string) bool {
 
 func isCodexSessionCommandToken(token string) bool {
 	return token == "/codex" || token == "/cx"
+}
+
+func isCodexShortSelectionToken(token string) bool {
+	if token == ".." {
+		return true
+	}
+	_, ok := parseCodexListIndex(token)
+	return ok
 }
 
 func (h *Handler) handleProgressCommand(trimmed string) string {
@@ -1612,6 +1623,10 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	bindingKey := codexBindingKey(userID, agentName)
 	h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
 	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
+
+	if len(fields) == 2 && isCodexShortSelectionToken(fields[1]) {
+		return h.handleCodexShortSelection(ctx, userID, agentName, workspaceRoot, ag, bindingKey, fields[1])
+	}
 
 	switch fields[1] {
 	case "whoami":
@@ -1665,6 +1680,16 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	default:
 		return buildCodexSessionHelpText()
 	}
+}
+
+func (h *Handler) handleCodexShortSelection(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, bindingKey string, target string) string {
+	if target == ".." {
+		return h.handleCodexCd(bindingKey, agentName, target, ag)
+	}
+	if _, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
+		return h.handleCodexSwitch(ctx, userID, agentName, workspaceRoot, ag, target)
+	}
+	return h.handleCodexCd(bindingKey, agentName, target, ag)
 }
 
 // handleCodexOpenApp 打开当前工作区的 Codex App，并尽量回显当前 thread 便于用户确认。
@@ -2089,6 +2114,7 @@ func buildCodexSessionHelpText() string {
 	return wechatCommandText(
 		"Codex 会话命令:",
 		"/cx ls",
+		"/cx <编号|..>",
 		"/cx cd <编号|工作空间名|..>",
 		"/cx switch <编号>",
 		"/cx new",
