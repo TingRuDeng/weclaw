@@ -542,6 +542,8 @@ func TestBuildHelpText(t *testing.T) {
 		"/cx ls",
 		"/cx cd <编号|名称|..>",
 		"/cx switch <编号>",
+		"/cx cli",
+		"/cx app",
 		"/sw reload",
 		"/codex = /cx",
 	} {
@@ -1966,6 +1968,36 @@ func TestCodexAttachResumesRemoteFirstThreadInTerminal(t *testing.T) {
 	}
 }
 
+func TestCodexCliCommandResumesRemoteFirstThreadInTerminal(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	var opened []recordedCodexCLIResume
+	h.SetCodexCLIResumeOpener(func(_ context.Context, command string, workspace string, threadID string) error {
+		opened = append(opened, recordedCodexCLIResume{command: command, workspace: workspace, threadID: threadID})
+		return nil
+	})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(129, "/cx cli"))
+
+	if len(opened) != 1 || opened[0].command != "codex-bin" || opened[0].workspace != workspace || opened[0].threadID != "thread-1" {
+		t.Fatalf("opened=%#v, want codex-bin/%s/thread-1", opened, workspace)
+	}
+	if !containsText(calls.texts(), "已打开 Codex CLI") || !containsText(calls.texts(), "thread-1") {
+		t.Fatalf("cli reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
 func TestCodexAttachRequiresRecordedThreadForRemoteFirstAgent(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := &fakeCodexThreadAgent{
@@ -2012,6 +2044,31 @@ func TestCodexAppCommandOpensCurrentWorkspaceWithThread(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "已打开 Codex App") || !containsText(calls.texts(), "thread-1") {
 		t.Fatalf("app reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexAppFailureSuggestsCli(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	h.SetCodexAppOpener(func(_ context.Context, _ string, _ string) error {
+		return errors.New("app unavailable")
+	})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(130, "/cx app"))
+
+	if !containsText(calls.texts(), "打开 Codex App 失败") || !containsText(calls.texts(), "/cx cli") {
+		t.Fatalf("app failure reply should suggest /cx cli, messages=%#v", calls.texts())
 	}
 }
 

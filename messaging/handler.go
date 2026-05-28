@@ -1488,7 +1488,7 @@ Codex：
 
 /cx pwd 查看当前 Codex 浏览位置
 
-/cx attach 打开当前 Codex 会话的本地可见端
+/cx cli 打开当前 Codex thread 到本地 CLI
 
 /cx app 在 Codex App 中打开当前工作空间
 
@@ -1572,7 +1572,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "attach", "detach", "app", "open-app", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "cli", "attach", "detach", "app", "open-app", "help":
 		return true
 	default:
 		return false
@@ -1644,6 +1644,11 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 			return "用法: /cx app"
 		}
 		return h.handleCodexOpenApp(ctx, userID, agentName, workspaceRoot, ag)
+	case "cli":
+		if len(fields) != 2 {
+			return "用法: /cx cli"
+		}
+		return h.handleCodexCLI(ctx, userID, agentName, workspaceRoot, ag)
 	case "attach":
 		if len(fields) == 3 && fields[2] == "app" {
 			return h.handleCodexOpenApp(ctx, userID, agentName, workspaceRoot, ag)
@@ -1681,7 +1686,10 @@ func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentNa
 		return "当前 Codex Agent 未配置 command，无法打开 Codex App。"
 	}
 	if err := opener(ctx, command, workspaceRoot); err != nil {
-		return fmt.Sprintf("打开 Codex App 失败: %v", err)
+		return wechatCommandText(
+			fmt.Sprintf("打开 Codex App 失败: %v", err),
+			"可发送 /cx cli 使用 Codex CLI 接手当前 thread。",
+		)
 	}
 	bindingKey := codexBindingKey(userID, agentName)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
@@ -1725,9 +1733,35 @@ func (h *Handler) handleCodexAttach(ctx context.Context, userID string, agentNam
 	return "已打开 Codex 本地可见端。"
 }
 
+// handleCodexCLI 将当前微信 Codex thread 恢复到本地 CLI，便于电脑端接手。
+func (h *Handler) handleCodexCLI(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	return h.openCodexThreadInCLI(ctx, userID, agentName, workspaceRoot, ag, codexCLIOpenText{
+		unsupported:      "当前 Codex Agent 不支持 cli。",
+		missingCommand:   "当前 Codex Agent 未配置 command，无法打开 Codex CLI。",
+		openFailedPrefix: "打开 Codex CLI 失败",
+		successTitle:     "已打开 Codex CLI。",
+	})
+}
+
 func (h *Handler) handleCodexAttachResume(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	return h.openCodexThreadInCLI(ctx, userID, agentName, workspaceRoot, ag, codexCLIOpenText{
+		unsupported:      "当前 Codex Agent 不支持 attach。",
+		missingCommand:   "当前 Codex Agent 未配置 command，无法打开本地可见端。",
+		openFailedPrefix: "打开 Codex 本地可见端失败",
+		successTitle:     "已打开 Codex 本地可见端。",
+	})
+}
+
+type codexCLIOpenText struct {
+	unsupported      string
+	missingCommand   string
+	openFailedPrefix string
+	successTitle     string
+}
+
+func (h *Handler) openCodexThreadInCLI(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, text codexCLIOpenText) string {
 	if _, ok := ag.(agent.CodexThreadAgent); !ok {
-		return "当前 Codex Agent 不支持 attach。"
+		return text.unsupported
 	}
 	workspaceRoot = h.codexWorkspaceRootForUser(userID, agentName, ag)
 	if strings.TrimSpace(workspaceRoot) == "" {
@@ -1741,13 +1775,13 @@ func (h *Handler) handleCodexAttachResume(ctx context.Context, userID string, ag
 	}
 	command := strings.TrimSpace(ag.Info().Command)
 	if command == "" {
-		return "当前 Codex Agent 未配置 command，无法打开本地可见端。"
+		return text.missingCommand
 	}
 	if err := h.resolveCodexCLIResumeOpener()(ctx, command, workspaceRoot, threadID); err != nil {
-		return fmt.Sprintf("打开 Codex 本地可见端失败: %v", err)
+		return fmt.Sprintf("%s: %v", text.openFailedPrefix, err)
 	}
 	return wechatCommandText(
-		"已打开 Codex 本地可见端。",
+		text.successTitle,
 		"工作空间: "+workspaceRoot,
 		"thread: "+threadID,
 	)
@@ -1987,7 +2021,7 @@ func buildCodexSessionHelpText() string {
 		"/cx switch <编号>",
 		"/cx new",
 		"/cx pwd",
-		"/cx attach",
+		"/cx cli",
 		"/cx attach app",
 		"/cx app",
 		"/cx detach",

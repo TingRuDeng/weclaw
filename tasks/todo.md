@@ -238,6 +238,24 @@
 
 已完成微信默认进度反馈静默化。默认 `progress.mode` 从 `summary` 调整为 `typing`，默认 `send_acceptance` 调整为 `false`；长任务期间只保留微信 typing 状态，最终仍发送完整结果。显式切到 `summary` 或 `stream` 时，中间文字进度仍可用。验证命令：`go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
 
+## Codex CLI 接手命令落地清单
+
+### 目标
+
+将本地 CLI 接手入口明确为 `/cx cli`，保留 `/cx attach` 作为兼容入口；当 Codex App 打开失败时，引导用户使用 `/cx cli` 接手当前 thread。
+
+### 执行任务
+
+- [x] 新增 `/cx cli` 恢复当前 remote-first thread 的回归测试。
+- [x] 新增 Codex App 打开失败时提示 `/cx cli` 的回归测试。
+- [x] 将帮助文本中的本地 CLI 接手入口调整为 `/cx cli`。
+- [x] 保留 `/cx attach` 对旧 Companion / 旧入口的兼容行为。
+- [x] 运行全量验证并补充 review 小结。
+
+### Review 小结
+
+已完成 `/cx cli` 作为 Codex CLI 接手入口的命令落地。`/cx app` 失败时会返回失败原因并提示发送 `/cx cli`；`/cx attach` 仍保留旧 Companion 和 remote-first resume 兼容行为，但帮助文本主入口改为 `/cx cli`。验证命令：`go test ./messaging -run 'TestCodexCliCommandResumesRemoteFirstThreadInTerminal|TestCodexAppFailureSuggestsCli|TestCodexAttachResumesRemoteFirstThreadInTerminal|TestCodexAppCommandOpensCurrentWorkspaceWithThread|TestCodexAttachAppAliasOpensCodexApp|TestBuildHelpText|TestCommandRepliesUseBlankLinesForWeChat' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-cx-cli .` 和 `git diff --check`，结果均通过。
+
 ## Codex 归档会话过滤与 cd 提示精简清单
 
 ### 目标
