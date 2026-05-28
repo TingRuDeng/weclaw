@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,6 +78,19 @@ func TestVerifyDownloadedAssetChecksumRejectsMismatch(t *testing.T) {
 	err := verifyDownloadedAssetChecksum(path, "0000")
 	if err == nil {
 		t.Fatal("verifyDownloadedAssetChecksum error = nil, want mismatch")
+	}
+}
+
+func TestDownloadFileRejectsOversizedContentLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "134217729")
+		_, _ = w.Write([]byte("too large"))
+	}))
+	defer server.Close()
+
+	_, err := downloadFile(server.URL)
+	if err == nil {
+		t.Fatal("downloadFile error = nil, want oversized download error")
 	}
 }
 

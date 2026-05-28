@@ -33,6 +33,7 @@ type codexAppClient struct {
 	pendingMu sync.Mutex
 	pending   map[string]chan codexAppRPCResponse
 	events    chan []byte
+	failures  chan error
 }
 
 type codexAppRPCResponse struct {
@@ -44,9 +45,10 @@ type codexAppRPCResponse struct {
 
 func newCodexAppClient(url string) *codexAppClient {
 	return &codexAppClient{
-		url:     url,
-		pending: make(map[string]chan codexAppRPCResponse),
-		events:  make(chan []byte, codexAppEventBufferSize),
+		url:      url,
+		pending:  make(map[string]chan codexAppRPCResponse),
+		events:   make(chan []byte, codexAppEventBufferSize),
+		failures: make(chan error, 1),
 	}
 }
 
@@ -103,14 +105,31 @@ func (c *codexAppClient) StartTurn(ctx context.Context, threadID string, text st
 func (c *codexAppClient) WaitTurn(ctx context.Context, threadID string, turnID string, progress func(string)) (string, error) {
 	state := &codexAppTurnState{}
 	resultCh := make(chan codexAppTurnResult, 1)
+	handleRaw := func(raw []byte) (string, error, bool) {
+		if !handleCodexAppMessage(raw, threadID, turnID, state, progress, resultCh) {
+			return "", nil, false
+		}
+		result := <-resultCh
+		return result.text, result.err, true
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
+		case err := <-c.failures:
+			for {
+				select {
+				case raw := <-c.events:
+					if text, resultErr, ok := handleRaw(raw); ok {
+						return text, resultErr
+					}
+				default:
+					return "", fmt.Errorf("Codex app-server 连接已断开: %w", err)
+				}
+			}
 		case raw := <-c.events:
-			if handleCodexAppMessage(raw, threadID, turnID, state, progress, resultCh) {
-				result := <-resultCh
-				return result.text, result.err
+			if text, err, ok := handleRaw(raw); ok {
+				return text, err
 			}
 		}
 	}
@@ -160,12 +179,21 @@ func (c *codexAppClient) readLoop() {
 		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
 			c.failPending(err)
+			c.failActiveTurn(err)
 			return
 		}
 		if c.deliverRPCResponse(raw) {
 			continue
 		}
 		c.events <- raw
+	}
+}
+
+// failActiveTurn 唤醒正在等待 turn 结果的调用方，避免 websocket 断开后只靠超时返回。
+func (c *codexAppClient) failActiveTurn(err error) {
+	select {
+	case c.failures <- err:
+	default:
 	}
 }
 

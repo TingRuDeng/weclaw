@@ -31,6 +31,7 @@ func newTestHandler() *Handler {
 }
 
 type fakeAgent struct {
+	mu                 sync.Mutex
 	reply              string
 	err                error
 	chatCalled         bool
@@ -44,6 +45,9 @@ type fakeAgent struct {
 }
 
 func (f *fakeAgent) Chat(_ context.Context, conversationID string, message string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.chatCalled = true
 	f.chatCalls++
 	f.lastConversationID = conversationID
@@ -52,6 +56,9 @@ func (f *fakeAgent) Chat(_ context.Context, conversationID string, message strin
 }
 
 func (f *fakeAgent) ResetSession(_ context.Context, conversationID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.resetConversation = conversationID
 	return f.resetSessionID, nil
 }
@@ -64,7 +71,46 @@ func (f *fakeAgent) Info() agent.AgentInfo {
 }
 
 func (f *fakeAgent) SetCwd(cwd string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.lastCwd = cwd
+}
+
+func (f *fakeAgent) wasChatCalled() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chatCalled
+}
+
+func (f *fakeAgent) chatCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chatCalls
+}
+
+func (f *fakeAgent) lastChatConversationID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastConversationID
+}
+
+func (f *fakeAgent) lastChatMessage() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastMessage
+}
+
+func (f *fakeAgent) lastWorkingDir() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastCwd
+}
+
+func (f *fakeAgent) resetConversationID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resetConversation
 }
 
 type fakeStoppableAgent struct {
@@ -307,12 +353,12 @@ func waitForFakeAgentCalls(t *testing.T, ag *fakeAgent, want int) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if ag.chatCalls == want {
+		if ag.chatCallCount() == want {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("未等到 fake agent 调用次数=%d，实际=%d", want, ag.chatCalls)
+	t.Fatalf("未等到 fake agent 调用次数=%d，实际=%d", want, ag.chatCallCount())
 }
 
 func TestSendTextReplyFormatsLineBreaksForWeChatDisplay(t *testing.T) {
@@ -912,7 +958,7 @@ func TestChatWithAgentWithProgress_UsesProgressInterface(t *testing.T) {
 	if !ag.progressCalled {
 		t.Fatal("expected ChatWithProgress to be called")
 	}
-	if ag.chatCalled {
+	if ag.wasChatCalled() {
 		t.Fatal("did not expect fallback Chat to be called")
 	}
 	if !reflect.DeepEqual(got, []string{"第一段", "第二段"}) {
@@ -930,7 +976,7 @@ func TestChatWithAgentWithProgress_FallbackToChat(t *testing.T) {
 	if reply != "ok" {
 		t.Fatalf("reply=%q, want=%q", reply, "ok")
 	}
-	if !ag.chatCalled {
+	if !ag.wasChatCalled() {
 		t.Fatal("expected fallback Chat to be called")
 	}
 }
@@ -1131,6 +1177,43 @@ func TestBroadcastToAgentsUsesTaskTimeout(t *testing.T) {
 		h.broadcastToAgents(ctx, client, newTextMessage(3003, "@slow hello"), []string{"slow"}, "hello")
 	})
 	waitForText(t, calls, "context deadline exceeded")
+}
+
+func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codex := newBlockingProgressAgent()
+	h.agents["codex"] = codex
+	h.agents["claude"] = &fakeAgent{
+		reply: "claude ok",
+		info:  agent.AgentInfo{Name: "claude", Type: "cli", Command: "claude"},
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+	waitForAgentEnter(t, codex)
+
+	done := make(chan struct{})
+	go func() {
+		h.broadcastToAgents(ctx, client, newTextMessage(2, "@codex @claude 第二条"), []string{"codex", "claude"}, "第二条")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("broadcast should not block behind running Codex task")
+	}
+	waitForText(t, calls, "Codex 正在处理上一条任务")
+	waitForText(t, calls, "[claude] claude ok")
+
+	codex.release <- struct{}{}
 }
 
 func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
@@ -1403,8 +1486,8 @@ func TestDuplicateTextFallbackWhenMessageIDZero(t *testing.T) {
 	h.HandleMessage(context.Background(), client, msg)
 
 	waitForFakeAgentCalls(t, ag, 1)
-	if ag.chatCalls != 1 {
-		t.Fatalf("MessageID=0 duplicate text should only start agent once, chatCalls=%d", ag.chatCalls)
+	if ag.chatCallCount() != 1 {
+		t.Fatalf("MessageID=0 duplicate text should only start agent once, chatCalls=%d", ag.chatCallCount())
 	}
 }
 
@@ -1425,8 +1508,8 @@ func TestDuplicateMessageIDStillDeduped(t *testing.T) {
 	h.HandleMessage(context.Background(), client, msg)
 
 	waitForFakeAgentCalls(t, ag, 1)
-	if ag.chatCalls != 1 {
-		t.Fatalf("same MessageID should only start agent once, chatCalls=%d", ag.chatCalls)
+	if ag.chatCallCount() != 1 {
+		t.Fatalf("same MessageID should only start agent once, chatCalls=%d", ag.chatCallCount())
 	}
 }
 
@@ -1446,11 +1529,11 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 	h.HandleMessage(context.Background(), client, newTextMessage(100, text))
 
 	waitForFakeAgentCalls(t, ag, 1)
-	if ag.chatCalls != 1 {
-		t.Fatalf("absolute path text should call default agent once, chatCalls=%d", ag.chatCalls)
+	if ag.chatCallCount() != 1 {
+		t.Fatalf("absolute path text should call default agent once, chatCalls=%d", ag.chatCallCount())
 	}
-	if ag.lastMessage != text {
-		t.Fatalf("agent message=%q, want original text", ag.lastMessage)
+	if ag.lastChatMessage() != text {
+		t.Fatalf("agent message=%q, want original text", ag.lastChatMessage())
 	}
 	if containsText(calls.texts(), "Usage: specify one agent") {
 		t.Fatalf("absolute path text should not reply usage, messages=%#v", calls.texts())
@@ -1479,12 +1562,12 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	h.sendToNamedAgent(context.Background(), client, newTextMessage(101, "/codex hello"), "codex", "hello", "client-1")
 
 	waitForFakeAgentCalls(t, &ag.fakeAgent, 1)
-	if ag.chatCalls != 1 {
-		t.Fatalf("codex chat calls=%d, want 1", ag.chatCalls)
+	if ag.chatCallCount() != 1 {
+		t.Fatalf("codex chat calls=%d, want 1", ag.chatCallCount())
 	}
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.lastConversationID != wantConversationID {
-		t.Fatalf("conversationID=%q, want %q", ag.lastConversationID, wantConversationID)
+	if ag.lastChatConversationID() != wantConversationID {
+		t.Fatalf("conversationID=%q, want %q", ag.lastChatConversationID(), wantConversationID)
 	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-1" || pending {
@@ -1546,8 +1629,8 @@ func TestHandleGlobalNewResetsActiveCodexWorkspaceThread(t *testing.T) {
 	h.HandleMessage(context.Background(), client, newTextMessage(123, "/new"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.resetConversation != wantConversationID {
-		t.Fatalf("reset conversation=%q, want %q", ag.resetConversation, wantConversationID)
+	if ag.resetConversationID() != wantConversationID {
+		t.Fatalf("reset conversation=%q, want %q", ag.resetConversationID(), wantConversationID)
 	}
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
 	if thread != "thread-new" || pending {
@@ -1612,8 +1695,8 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-target" {
 		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-target)", ag.useConversation, ag.useThreadID, wantConversationID)
 	}
-	if ag.lastCwd != targetWorkspace {
-		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, targetWorkspace)
+	if ag.lastWorkingDir() != targetWorkspace {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), targetWorkspace)
 	}
 	if got := h.codexWorkspaceRoot("codex"); got != targetWorkspace {
 		t.Fatalf("handler workspace=%q, want %q", got, targetWorkspace)
@@ -1649,8 +1732,8 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-b" {
 		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-b)", ag.useConversation, ag.useThreadID, wantConversationID)
 	}
-	if ag.lastCwd != normalizeCodexWorkspaceRoot(targetWorkspace) {
-		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(targetWorkspace))
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(targetWorkspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(targetWorkspace))
 	}
 	if !containsText(calls.texts(), "工作空间: "+filepath.Base(targetWorkspace)) {
 		t.Fatalf("reply should mention switched workspace, messages=%#v", calls.texts())
@@ -1749,8 +1832,8 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-desktop" {
 		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-desktop)", ag.useConversation, ag.useThreadID, wantConversationID)
 	}
-	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
-		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-desktop" || pending {
@@ -1815,8 +1898,8 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 
 	h.HandleMessage(context.Background(), client, newTextMessage(112, "/cx cd 0"))
 
-	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
-		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
 	text := strings.Join(calls.texts(), "\n")
 	if strings.Contains(text, "已进入工作空间") {
@@ -1885,8 +1968,8 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 
 	h.HandleMessage(context.Background(), client, newTextMessage(140, "/cx 0"))
 
-	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
-		t.Fatalf("/cx 0 should enter workspace, got cwd=%q want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("/cx 0 should enter workspace, got cwd=%q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "工作空间: weclaw") || !strings.Contains(text, "0. 会话 A") {
@@ -1966,8 +2049,8 @@ func TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd(t *testing.T) {
 	h.HandleMessage(context.Background(), client, newTextMessage(116, "/cx cd weclaw"))
 	h.HandleMessage(context.Background(), client, newTextMessage(117, "/cx cd .."))
 
-	if ag.lastCwd != normalizeCodexWorkspaceRoot(workspace) {
-		t.Fatalf("cd .. should not change codex cwd, got %q want %q", ag.lastCwd, normalizeCodexWorkspaceRoot(workspace))
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("cd .. should not change codex cwd, got %q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "已返回工作空间列表") ||
@@ -2326,8 +2409,8 @@ func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testin
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-active" {
 		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-active)", ag.useConversation, ag.useThreadID, wantConversationID)
 	}
-	if ag.lastCwd != activeWorkspace {
-		t.Fatalf("codex cwd=%q, want %q", ag.lastCwd, activeWorkspace)
+	if ag.lastWorkingDir() != activeWorkspace {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), activeWorkspace)
 	}
 }
 
@@ -2354,8 +2437,8 @@ func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
 	h.sendToNamedAgent(context.Background(), client, newTextMessage(107, "/codex 继续"), "codex", "继续", "client-1")
 
 	waitForText(t, calls, "恢复 Codex 会话失败")
-	if ag.chatCalls != 0 {
-		t.Fatalf("恢复旧 thread 失败后不应继续新建会话聊天，chatCalls=%d", ag.chatCalls)
+	if ag.chatCallCount() != 0 {
+		t.Fatalf("恢复旧 thread 失败后不应继续新建会话聊天，chatCalls=%d", ag.chatCallCount())
 	}
 	if ag.useThreadID != "thread-old" {
 		t.Fatalf("恢复 thread=%q，want thread-old", ag.useThreadID)
@@ -2504,19 +2587,19 @@ func TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent(t *testing.T) {
 	h.HandleMessage(context.Background(), client, newFileMessage(10, "方案.txt"))
 
 	waitForFakeAgentCalls(t, ag, 1)
-	if ag.chatCalls != 1 {
-		t.Fatalf("file message should start agent once, chatCalls=%d", ag.chatCalls)
+	if ag.chatCallCount() != 1 {
+		t.Fatalf("file message should start agent once, chatCalls=%d", ag.chatCallCount())
 	}
-	if !strings.Contains(ag.lastMessage, "用户发送了一个文件") {
-		t.Fatalf("agent message should describe incoming file, got %q", ag.lastMessage)
+	if !strings.Contains(ag.lastChatMessage(), "用户发送了一个文件") {
+		t.Fatalf("agent message should describe incoming file, got %q", ag.lastChatMessage())
 	}
-	if !strings.Contains(ag.lastMessage, "方案.txt") {
-		t.Fatalf("agent message should include file name, got %q", ag.lastMessage)
+	if !strings.Contains(ag.lastChatMessage(), "方案.txt") {
+		t.Fatalf("agent message should include file name, got %q", ag.lastChatMessage())
 	}
-	if !strings.Contains(ag.lastMessage, saveDir) {
-		t.Fatalf("agent message should include saved local path, got %q", ag.lastMessage)
+	if !strings.Contains(ag.lastChatMessage(), saveDir) {
+		t.Fatalf("agent message should include saved local path, got %q", ag.lastChatMessage())
 	}
-	if _, err := os.Stat(extractSavedPathFromAgentMessage(ag.lastMessage)); err != nil {
+	if _, err := os.Stat(extractSavedPathFromAgentMessage(ag.lastChatMessage())); err != nil {
 		t.Fatalf("saved file missing: %v", err)
 	}
 }
@@ -2533,8 +2616,8 @@ func TestHandleMessage_FileMessageWithoutMediaDoesNotCallAgent(t *testing.T) {
 
 	h.HandleMessage(context.Background(), client, msg)
 
-	if ag.chatCalls != 0 {
-		t.Fatalf("file without media should not call agent, chatCalls=%d", ag.chatCalls)
+	if ag.chatCallCount() != 0 {
+		t.Fatalf("file without media should not call agent, chatCalls=%d", ag.chatCallCount())
 	}
 	if !containsText(calls.texts(), "文件保存失败") {
 		t.Fatalf("expected file failure reply, got %#v", calls.texts())

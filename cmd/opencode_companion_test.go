@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -44,5 +45,17 @@ func TestHandleOpenCodeEventLineIgnoresOtherSession(t *testing.T) {
 	case result := <-resultCh:
 		t.Fatalf("unexpected result: %#v", result)
 	default:
+	}
+}
+
+func TestReadEventStreamReturnsErrorOnEOFBeforeIdle(t *testing.T) {
+	runtime := &openCodeCompanionRuntime{}
+	resultCh := make(chan openCodeTurnResult, 1)
+
+	runtime.readEventStream(t.Context(), bytes.NewReader(nil), "ses_1", nil, resultCh)
+
+	result := <-resultCh
+	if result.err == nil || !strings.Contains(result.err.Error(), "ended before session idle") {
+		t.Fatalf("result = %#v, want EOF before idle error", result)
 	}
 }

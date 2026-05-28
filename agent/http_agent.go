@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const maxHTTPAgentResponseBytes = 8 * 1024 * 1024
+
 // ChatMessage represents a single message in a conversation.
 type ChatMessage struct {
 	Role    string `json:"role"`
@@ -116,7 +118,7 @@ func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message str
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readHTTPAgentBody(resp, maxHTTPAgentResponseBytes)
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
 	}
@@ -155,6 +157,21 @@ func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message str
 	a.mu.Unlock()
 
 	return reply, nil
+}
+
+// readHTTPAgentBody 限制 HTTP Agent 响应体大小，避免异常服务端拖垮内存。
+func readHTTPAgentBody(resp *http.Response, maxBytes int64) ([]byte, error) {
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("HTTP agent response is too large: %d > %d", resp.ContentLength, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("HTTP agent response exceeds %d bytes", maxBytes)
+	}
+	return data, nil
 }
 
 func (a *HTTPAgent) buildMessages(conversationID string, message string) []ChatMessage {

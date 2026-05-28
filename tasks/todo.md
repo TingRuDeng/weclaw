@@ -219,6 +219,27 @@
 
 已完成微信最终回复换行展示修复。发送层会在 Markdown 转纯文本之后，把逻辑换行转换为空行分隔，解决微信气泡把步骤、目的、执行等多行结果压成一段的问题；长回复分段也基于展示文本进行，避免分段后再丢失可见换行。验证命令：`go test ./messaging -run TestSendTextReplyFormatsLineBreaksForWeChatDisplay -count=1`、`go test ./messaging -count=1` 与 `go test -count=1 ./... && git diff --check && go build -o weclaw .`，结果通过。
 
+## 2026-05-28 深度审查风险修复清单
+
+### 目标
+
+按审查优先级修复会导致任务挂死、进程崩溃、会话失效反复失败、广播阻塞和无上限读取的问题，并恢复 race gate 的可信度。
+
+### 执行任务
+
+- [x] 修复 Companion/Codex 可见端断线挂死：Codex websocket 和 OpenCode SSE 断开时必须唤醒当前等待任务。
+- [x] 修复旧 ACP 运行时竞争：`started/cmd/stdin/scanner` 状态读取统一走锁内快照，避免子进程退出时 nil panic。
+- [x] 修复旧 ACP `Session not found` 自愈：失效 session 自动清理并重建一次。
+- [x] 修复多 Agent 广播绕过 Codex active task 保护的问题，避免一个长任务拖住整次广播。
+- [x] 为 HTTP Agent、`/api/send` 和 update 下载补充大小、超时和错误摘要边界。
+- [x] 修复 race gate 中测试桩自身的数据竞争。
+- [x] 运行定向测试、全量测试、race gate、vet 和 diff 检查。
+- [x] 补充 review 小结。
+
+### Review 小结
+
+本轮按顺序完成 Companion/Codex 可见端断线唤醒、旧 ACP 运行时状态加锁读取、旧 ACP `Session not found` 一次性自愈、多 Agent 广播 Codex active task 保护、HTTP/API/update 读取上限与超时、测试桩 race 修复。验证命令：`go test ./agent -run TestHTTPAgentRejectsOversizedResponse -count=1 -timeout 60s`、`go test ./api -run TestHandleSendRejectsOversizedBody -count=1 -timeout 60s`、`go test ./cmd -run 'TestDownloadFileRejectsOversizedContentLength|TestVerifyDownloadedAssetChecksumRejectsMismatch' -count=1 -timeout 60s`、`go test ./messaging -run 'TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents|TestDuplicateTextFallbackWhenMessageIDZero|TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`git diff --check`，结果均通过。剩余风险：HTTP Agent 响应上限当前为代码内常量，后续如需按部署环境调整，可再配置化。
+
 ## 微信默认进度反馈静默化清单
 
 ### 目标

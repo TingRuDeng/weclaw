@@ -45,6 +45,19 @@ func TestHandleSendAcceptsHeaderToken(t *testing.T) {
 	}
 }
 
+func TestHandleSendRejectsOversizedBody(t *testing.T) {
+	server := NewServer(nil, "127.0.0.1:18011")
+	body := `{"to":"u","text":"` + strings.Repeat("x", maxSendRequestBytes) + `"}`
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.handleSend(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
+
 func TestValidateRejectsNonLoopbackListenWithoutToken(t *testing.T) {
 	server := NewServer(nil, "0.0.0.0:18011")
 

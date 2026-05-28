@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"golang.org/x/net/websocket"
@@ -127,6 +128,45 @@ func TestCodexAppClientStartsThreadAndWaitsTurn(t *testing.T) {
 	}
 	if reply != "OK" || strings.Join(progress, "") != "O" {
 		t.Fatalf("reply=%q progress=%#v, want OK/O", reply, progress)
+	}
+}
+
+func TestCodexAppClientWaitTurnReturnsWhenConnectionCloses(t *testing.T) {
+	server := httptest.NewServer(websocket.Server{Handshake: allowCodexAppTestHandshake, Handler: func(ws *websocket.Conn) {
+		defer ws.Close()
+		req := receiveCodexAppTestRequest(t, ws)
+		sendCodexAppTestResult(t, ws, req.ID, map[string]any{"userAgent": "test"})
+
+		req = receiveCodexAppTestRequest(t, ws)
+		sendCodexAppTestResult(t, ws, req.ID, map[string]any{"thread": map[string]any{"id": "thread-1"}})
+
+		req = receiveCodexAppTestRequest(t, ws)
+		sendCodexAppTestResult(t, ws, req.ID, map[string]any{"turn": map[string]any{"id": "turn-1"}})
+	}})
+	defer server.Close()
+
+	client := newCodexAppClient("ws" + strings.TrimPrefix(server.URL, "http"))
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer client.Close()
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	threadID, err := client.StartThread(context.Background(), "/tmp/work")
+	if err != nil {
+		t.Fatalf("StartThread() error = %v", err)
+	}
+	turnID, err := client.StartTurn(context.Background(), threadID, "hello")
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = client.WaitTurn(ctx, threadID, turnID, nil)
+	if err == nil || !strings.Contains(err.Error(), "Codex app-server 连接已断开") {
+		t.Fatalf("WaitTurn() error = %v, want connection closed error", err)
 	}
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -14,6 +16,8 @@ import (
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/messaging"
 )
+
+const maxSendRequestBytes = 1 * 1024 * 1024
 
 // Server provides an HTTP API for sending messages.
 type Server struct {
@@ -114,8 +118,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 func decodeSendRequest(w http.ResponseWriter, r *http.Request) (SendRequest, bool) {
 	var req SendRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSendRequestBytes))
+	if err := decoder.Decode(&req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return SendRequest{}, false
+		}
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return SendRequest{}, false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "invalid JSON: multiple JSON values", http.StatusBadRequest)
 		return SendRequest{}, false
 	}
 	if req.To == "" {

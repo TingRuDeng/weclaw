@@ -52,6 +52,10 @@ func (r *openCodeCompanionRuntime) readEventStream(ctx context.Context, body io.
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		resultCh <- openCodeTurnResult{err: err}
+		return
+	}
+	if ctx.Err() == nil {
+		resultCh <- openCodeTurnResult{err: fmt.Errorf("OpenCode event stream ended before session idle")}
 	}
 }
 

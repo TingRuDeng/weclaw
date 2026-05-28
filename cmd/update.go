@@ -11,12 +11,17 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
 
 const githubRepo = "TingRuDeng/weclaw"
 const githubUserAgent = "weclaw-updater"
+const updateHTTPTimeout = 60 * time.Second
+const maxUpdateDownloadBytes = 128 * 1024 * 1024
+
+var updateHTTPClient = &http.Client{Timeout: updateHTTPTimeout}
 
 var updateRestartFlag bool
 
@@ -164,12 +169,17 @@ func parseReleaseChecksums(content string, filename string) (string, error) {
 
 // verifyDownloadedAssetChecksum 对本地下载文件计算 sha256 并和 release 校验值比较。
 func verifyDownloadedAssetChecksum(path string, want string) error {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(data)
-	got := hex.EncodeToString(sum[:])
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	got := hex.EncodeToString(hash.Sum(nil))
 	if !strings.EqualFold(got, want) {
 		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", path, got, want)
 	}
@@ -182,6 +192,7 @@ func getLatestVersion() (string, error) {
 		return "", err
 	}
 	client := &http.Client{
+		Timeout: updateHTTPTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -221,7 +232,7 @@ func downloadFile(url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -230,16 +241,25 @@ func downloadFile(url string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+	if resp.ContentLength > maxUpdateDownloadBytes {
+		return "", fmt.Errorf("download is too large: %d > %d", resp.ContentLength, maxUpdateDownloadBytes)
+	}
 
 	tmp, err := os.CreateTemp("", "weclaw-update-*")
 	if err != nil {
 		return "", err
 	}
 
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	written, err := io.Copy(tmp, io.LimitReader(resp.Body, maxUpdateDownloadBytes+1))
+	if err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
 		return "", err
+	}
+	if written > maxUpdateDownloadBytes {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("download exceeds %d bytes", maxUpdateDownloadBytes)
 	}
 	tmp.Close()
 

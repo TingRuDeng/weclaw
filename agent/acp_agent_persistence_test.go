@@ -412,6 +412,63 @@ func TestACPAgentCallReturnsErrorWhenRuntimeStdinMissing(t *testing.T) {
 	}
 }
 
+func TestACPAgentLegacySessionNotFoundRetriesWithFreshSession(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	writeACPStateFile(t, stateFile, acpPersistedState{
+		Version:  acpPersistedStateVersion,
+		Sessions: map[string]string{"user-1": "session-old"},
+	})
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "claude-agent-acp",
+		Cwd:       t.TempDir(),
+		StateFile: stateFile,
+	})
+	a.mu.Lock()
+	a.started = true
+	a.cmd = nil
+	a.mu.Unlock()
+
+	promptCalls := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "session/new":
+			return json.RawMessage(`{"sessionId":"session-new"}`), nil
+		case "session/prompt":
+			promptCalls++
+			p := params.(promptParams)
+			if promptCalls == 1 {
+				if p.SessionID != "session-old" {
+					return nil, fmt.Errorf("first prompt session=%q, want session-old", p.SessionID)
+				}
+				return nil, fmt.Errorf("agent error: Internal error；details=Session not found")
+			}
+			if p.SessionID != "session-new" {
+				return nil, fmt.Errorf("retry prompt session=%q, want session-new", p.SessionID)
+			}
+			return json.RawMessage(`{"text":"fresh reply"}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	reply, err := a.Chat(ctx, "user-1", "hello")
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if reply != "fresh reply" {
+		t.Fatalf("reply=%q, want fresh reply", reply)
+	}
+	if promptCalls != 2 {
+		t.Fatalf("promptCalls=%d, want 2", promptCalls)
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Sessions["user-1"]; got != "session-new" {
+		t.Fatalf("persisted session=%q, want session-new", got)
+	}
+}
+
 func TestACPAgentCodexFallbackToFreshThreadOnEmptyResponse(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")

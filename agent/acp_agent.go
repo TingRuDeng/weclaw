@@ -611,7 +611,7 @@ func (a *ACPAgent) ChatWithProgress(ctx context.Context, conversationID string, 
 }
 
 func (a *ACPAgent) chat(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
-	if !a.started {
+	if !a.isRuntimeStarted() {
 		if err := a.Start(ctx); err != nil {
 			return "", err
 		}
@@ -622,13 +622,35 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 		return a.chatCodexAppServer(ctx, conversationID, message, onProgress)
 	}
 
+	return a.chatLegacyACP(ctx, conversationID, message, onProgress, true)
+}
+
+// isRuntimeStarted 在锁内读取 ACP 运行时状态，避免 readLoop 清理状态时并发读写。
+func (a *ACPAgent) isRuntimeStarted() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.started
+}
+
+// runtimePID 返回当前子进程 PID；运行时已退出时返回 0 供日志使用。
+func (a *ACPAgent) runtimePID() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cmd == nil || a.cmd.Process == nil {
+		return 0
+	}
+	return a.cmd.Process.Pid
+}
+
+// chatLegacyACP 处理标准 ACP session/prompt 流程，并在会话失效时允许一次重建重试。
+func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, message string, onProgress func(delta string), allowSessionRetry bool) (string, error) {
 	// Get or create session
 	sessionID, isNew, err := a.getOrCreateSession(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("session error: %w", err)
 	}
 
-	pid := a.cmd.Process.Pid
+	pid := a.runtimePID()
 	if isNew {
 		log.Printf("[acp] new session created (pid=%d, session=%s, conversation=%s)", pid, sessionID, conversationID)
 	} else {
@@ -701,6 +723,11 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 			}
 		drained:
 			if done.err != nil {
+				if allowSessionRetry && isMissingThreadError(done.err) {
+					log.Printf("[acp] stale ACP session detected, retrying with a fresh session (conversation=%s, oldSession=%s): %v", conversationID, sessionID, done.err)
+					a.clearACPSession(conversationID)
+					return a.chatLegacyACP(ctx, conversationID, message, onProgress, false)
+				}
 				return "", fmt.Errorf("prompt error: %w", done.err)
 			}
 			result := strings.TrimSpace(strings.Join(textParts, ""))
@@ -714,6 +741,16 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 			return result, nil
 		}
 	}
+}
+
+// clearACPSession 删除旧 ACP session 映射，避免恢复到服务端已经不存在的 session。
+func (a *ACPAgent) clearACPSession(conversationID string) string {
+	a.mu.Lock()
+	oldSessionID := a.sessions[conversationID]
+	delete(a.sessions, conversationID)
+	a.mu.Unlock()
+	a.persistState()
+	return oldSessionID
 }
 
 func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string) (string, bool, error) {

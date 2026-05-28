@@ -1078,6 +1078,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 	type result struct {
 		name  string
 		reply string
+		skip  bool
 	}
 
 	ch := make(chan result, len(names))
@@ -1094,6 +1095,24 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 			defer cancelTaskTimeout()
 
 			executionKey := h.agentExecutionKey(msg.FromUserID, n, ag)
+			var activeTask *activeAgentTask
+			if isCodexAgent(n, ag.Info()) {
+				task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
+				if !started {
+					h.storePendingGuide(executionKey, message)
+					ch <- result{name: n, reply: runningCodexGuidePrompt()}
+					return
+				}
+				activeTask = task
+				agentCtx = taskCtx
+				defer func() {
+					pendingMessage, ok := h.promotePendingGuideToRun(executionKey, task)
+					h.finishActiveTask(executionKey, task)
+					if ok {
+						_ = SendTextReply(ctx, client, msg.FromUserID, runnablePendingCodexPrompt(pendingMessage), msg.ContextToken, NewClientID())
+					}
+				}()
+			}
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
 
@@ -1111,6 +1130,10 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				return
 			}
 			h.recordCodexThread(msg.FromUserID, n, ag, conversationID)
+			if activeTask != nil && !activeTask.shouldSendFinal() {
+				ch <- result{name: n, skip: true}
+				return
+			}
 			ch <- result{name: n, reply: renderFinalSuccess("["+n+"] ", reply)}
 		}(name)
 	}
@@ -1118,6 +1141,9 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 	// Send replies as they arrive
 	for range names {
 		r := <-ch
+		if r.skip {
+			continue
+		}
 		clientID := NewClientID()
 		h.sendReplyWithMedia(ctx, client, msg, r.name, r.reply, clientID)
 	}
