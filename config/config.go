@@ -35,6 +35,7 @@ type AgentConfig struct {
 	Headers      map[string]string `json:"headers,omitempty"`       // extra HTTP headers (http type)
 	MaxHistory   int               `json:"max_history,omitempty"`   // max history (http type)
 	Progress     *ProgressConfig   `json:"progress,omitempty"`      // 微信进度反馈配置
+	AutoLaunch   *bool             `json:"auto_launch,omitempty"`   // companion 是否自动打开本地可见终端
 }
 
 // ProgressConfig 控制微信侧进度反馈的展示粒度。

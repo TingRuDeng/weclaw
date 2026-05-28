@@ -60,6 +60,45 @@ func TestCompanionAgentSendsInputAndReturnsFinalReply(t *testing.T) {
 	}
 }
 
+func TestCompanionAgentAutoLaunchesVisibleTerminal(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	workspace := t.TempDir()
+	var launched CompanionLaunchRequest
+	ag := NewCompanionAgent(CompanionAgentConfig{
+		Name:       "codex",
+		Command:    "codex",
+		Cwd:        workspace,
+		AutoLaunch: true,
+		Launch: func(_ context.Context, req CompanionLaunchRequest) error {
+			launched = req
+			return nil
+		},
+	})
+	if err := ag.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(ag.Stop)
+
+	if launched.Agent != "codex" || launched.Cwd != workspace {
+		t.Fatalf("launch request = %#v, want codex/%s", launched, workspace)
+	}
+	if launched.Executable == "" {
+		t.Fatal("launch executable is empty")
+	}
+}
+
+func TestCompanionShellCommandQuotesArguments(t *testing.T) {
+	got := companionShellCommand(CompanionLaunchRequest{
+		Executable: "/tmp/weclaw bin/weclaw",
+		Agent:      "codex",
+		Cwd:        "/tmp/project's dir",
+	})
+	want := "'/tmp/weclaw bin/weclaw' companion --agent 'codex' --cwd '/tmp/project'\"'\"'s dir'"
+	if got != want {
+		t.Fatalf("companionShellCommand()=%q, want %q", got, want)
+	}
+}
+
 func fakeCompanionClient(t *testing.T, endpoint CompanionEndpoint, done chan<- string) {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", endpoint.Address(), time.Second)

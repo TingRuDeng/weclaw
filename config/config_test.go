@@ -86,6 +86,27 @@ func TestAgentConfigWithoutEnvStillLoads(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUnmarshalAutoLaunch(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"agents": {
+			"codex": {
+				"type": "companion",
+				"command": "codex",
+				"auto_launch": false
+			}
+		}
+	}`)
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	got := cfg.Agents["codex"].AutoLaunch
+	if got == nil || *got {
+		t.Fatalf("AutoLaunch = %#v, want false pointer", got)
+	}
+}
+
 func TestDefaultConfigInitializesAgentsMap(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Agents == nil {

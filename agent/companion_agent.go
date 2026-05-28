@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,13 +16,25 @@ const companionConnectWait = 800 * time.Millisecond
 
 // CompanionAgentConfig 描述 WeClaw 后台侧的 Companion 代理配置。
 type CompanionAgentConfig struct {
-	Name    string
-	Command string
-	Args    []string
-	Cwd     string
-	Env     map[string]string
-	Model   string
+	Name       string
+	Command    string
+	Args       []string
+	Cwd        string
+	Env        map[string]string
+	Model      string
+	AutoLaunch bool
+	Launch     CompanionLauncher
 }
+
+// CompanionLaunchRequest 描述需要在本机可见终端里启动的 companion 命令。
+type CompanionLaunchRequest struct {
+	Executable string
+	Agent      string
+	Cwd        string
+}
+
+// CompanionLauncher 负责打开本地可见终端并运行 companion 命令。
+type CompanionLauncher func(context.Context, CompanionLaunchRequest) error
 
 type pendingCompanionCall struct {
 	onProgress func(string)
@@ -30,12 +43,14 @@ type pendingCompanionCall struct {
 
 // CompanionAgent 通过本地 loopback socket 把微信输入转发给可见终端里的 Companion。
 type CompanionAgent struct {
-	name    string
-	command string
-	args    []string
-	cwd     string
-	env     map[string]string
-	model   string
+	name       string
+	command    string
+	args       []string
+	cwd        string
+	env        map[string]string
+	model      string
+	autoLaunch bool
+	launch     CompanionLauncher
 
 	mu          sync.Mutex
 	listener    net.Listener
@@ -61,6 +76,8 @@ func NewCompanionAgent(cfg CompanionAgentConfig) *CompanionAgent {
 		cwd:         cwd,
 		env:         cfg.Env,
 		model:       cfg.Model,
+		autoLaunch:  cfg.AutoLaunch,
+		launch:      cfg.Launch,
 		connectedCh: make(chan struct{}),
 		pending:     make(map[string]*pendingCompanionCall),
 	}
@@ -94,7 +111,31 @@ func (a *CompanionAgent) Start(ctx context.Context) error {
 	a.mu.Unlock()
 
 	go a.acceptLoop(ctx, listener, token)
+	a.launchVisibleCompanion(ctx)
 	return nil
+}
+
+func (a *CompanionAgent) launchVisibleCompanion(ctx context.Context) {
+	if !a.autoLaunch {
+		return
+	}
+	launcher := a.launch
+	if launcher == nil {
+		launcher = LaunchCompanionTerminal
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		log.Printf("[companion] resolve executable for auto launch failed: %v", err)
+		return
+	}
+	req := CompanionLaunchRequest{
+		Executable: executable,
+		Agent:      a.name,
+		Cwd:        a.cwd,
+	}
+	if err := launcher(ctx, req); err != nil {
+		log.Printf("[companion] auto launch failed agent=%s cwd=%s: %v", a.name, a.cwd, err)
+	}
 }
 
 func (a *CompanionAgent) buildEndpoint(listener net.Listener, token string) CompanionEndpoint {

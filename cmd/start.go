@@ -289,12 +289,13 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			return nil
 		}
 		ag := agent.NewCompanionAgent(agent.CompanionAgentConfig{
-			Name:    name,
-			Command: agCfg.Command,
-			Args:    agCfg.Args,
-			Cwd:     agCfg.Cwd,
-			Env:     agCfg.Env,
-			Model:   agCfg.Model,
+			Name:       name,
+			Command:    agCfg.Command,
+			Args:       agCfg.Args,
+			Cwd:        agCfg.Cwd,
+			Env:        agCfg.Env,
+			Model:      agCfg.Model,
+			AutoLaunch: companionAutoLaunchEnabled(name, agCfg),
 		})
 		if err := ag.Start(ctx); err != nil {
 			log.Printf("[agent] failed to start companion agent %q: %v", name, err)
@@ -306,6 +307,13 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		log.Printf("[agent] unknown type %q for %q", agCfg.Type, name)
 		return nil
 	}
+}
+
+func companionAutoLaunchEnabled(name string, agCfg config.AgentConfig) bool {
+	if agCfg.AutoLaunch != nil {
+		return *agCfg.AutoLaunch
+	}
+	return name == "codex"
 }
 
 func extractAgentProgressConfigs(agents map[string]config.AgentConfig) map[string]config.ProgressConfig {

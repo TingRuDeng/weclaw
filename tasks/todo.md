@@ -742,3 +742,22 @@ Codex 运行中拦截到的第二条消息，如果用户既不 `/guide` 也不 
 ### Review 小结
 
 已完成 Codex 暂存消息待执行确认。Codex 运行中被拦截的第二条消息仍可通过 `/guide` 作为引导发送，也可通过 `/cancel` 撤回；如果用户不处理，上一条 Codex 任务结束后会提示“回复 /run 执行该消息”，并将消息保存为待执行状态。`/run` 会取出并删除该消息后发给 Codex，避免重复执行；`/cancel` 同时支持撤回运行中的 pending guide 和已转出的 pending run。验证命令：`go test ./messaging -run 'TestPendingGuideBecomesRunnableAfterTaskFinishes|TestCancelWithdrawsRunnablePendingGuide|TestRunningCodexStoresSecondMessageAsPendingGuide|TestGuideSendsPendingMessageAndSuppressesFirstReply|TestCancelWithdrawsPendingGuideAndKeepsRunningTask|TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-pending-run .` 与 `git diff --check`，结果通过。
+
+## Codex Companion 自动打开可见终端清单
+
+### 目标
+
+用户不需要手动执行 `weclaw companion --agent codex --cwd <工作目录>`；WeClaw 后台启动 Codex companion agent 后自动打开本机 Terminal 并运行 companion 命令，同时保留可关闭配置。
+
+### 执行任务
+
+- [x] P1 串行：补 Companion Agent 自动拉起可见终端测试。
+- [x] P2 串行：补 Codex 默认自动拉起、其他 Agent 默认不自动拉起的策略测试。
+- [x] P3 串行：补 `auto_launch` 配置反序列化和命令参数转义测试。
+- [x] P4 串行：实现 macOS Terminal 自动打开 companion 命令。
+- [x] P5 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+- [x] P6 串行：补充 review 小结。
+
+### Review 小结
+
+已完成 Codex Companion 自动打开可见终端。`codex` 的 `type=companion` Agent 默认会在后台启动后用 macOS Terminal 自动运行当前 WeClaw 二进制的 `companion --agent codex --cwd <工作目录>`；其他 Companion Agent 默认不自动弹窗。配置支持 `auto_launch: false` 显式关闭 Codex 自动拉起，也支持 `auto_launch: true` 给其他 Agent 开启。启动命令做了 shell 和 AppleScript 双层转义。验证命令：`go test ./agent ./cmd ./config -run 'TestCompanionAgentAutoLaunchesVisibleTerminal|TestCompanionShellCommandQuotesArguments|TestCompanionAutoLaunchDefaultsToCodex|TestAgentConfigUnmarshalAutoLaunch' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-auto-companion .` 与 `git diff --check`，结果通过。
