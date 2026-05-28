@@ -599,6 +599,28 @@ func TestBuildHelpText(t *testing.T) {
 	}
 }
 
+func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
+	text := buildCodexSessionHelpText()
+	for _, want := range []string{
+		"/cx ls 查看工作空间或当前工作空间会话",
+		"/cx <编号|..> 选择当前列表项或返回上一级",
+		"/cx cd <编号|工作空间名|..> 进入工作空间或返回工作空间列表",
+		"/cx switch <编号> 切换当前工作空间会话",
+		"/cx new 新建当前工作空间会话",
+		"/cx pwd 查看当前工作空间",
+		"/cx cli 打开本地 CLI 接手当前 thread",
+		"/cx app 打开 Codex App 到当前工作空间",
+		"/cx status 查看 remote、thread 和本地入口状态",
+		"/cx model status 查看 Codex 模型状态",
+		"/cx model ls 查看可用 Codex 模型",
+		"/codex 可作为 /cx 的兼容写法",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Codex help should describe %q, got %q", want, text)
+		}
+	}
+}
+
 func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.defaultName = "codex"
