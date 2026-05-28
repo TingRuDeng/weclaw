@@ -74,16 +74,19 @@ type Handler struct {
 	taskLocks             map[string]*sync.Mutex
 	activeTasksMu         sync.Mutex
 	activeTasks           map[string]*activeAgentTask
+	pendingCodexRunsMu    sync.Mutex
+	pendingCodexRuns      map[string]string
 	codexLocalSessionDir  string
 	codexBrowseMu         sync.Mutex
 	codexBrowseWorkspaces map[string]string
 }
 
 const (
-	switchScriptEnvVar      = "WECLAW_CODEX_SWITCH_SCRIPT"
-	switchScriptDefaultPath = "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh"
-	switchCommandTimeout    = 30 * time.Second
-	switchCommandUsage      = "用法: /sw ls | /sw current | /sw reload | /sw <编号|ID>"
+	switchScriptEnvVar       = "WECLAW_CODEX_SWITCH_SCRIPT"
+	switchScriptDefaultPath  = "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh"
+	switchCommandTimeout     = 30 * time.Second
+	switchCommandUsage       = "用法: /sw ls | /sw current | /sw reload | /sw <编号|ID>"
+	pendingCodexPreviewRunes = 120
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
@@ -133,6 +136,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		codexSessions:         newCodexSessionStore(),
 		taskLocks:             make(map[string]*sync.Mutex),
 		activeTasks:           make(map[string]*activeAgentTask),
+		pendingCodexRuns:      make(map[string]string),
 		codexLocalSessionDir:  defaultCodexLocalSessionDir(),
 		codexBrowseWorkspaces: make(map[string]string),
 	}
@@ -551,6 +555,9 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
 		return
+	} else if trimmed == "/run" {
+		h.handleRunPendingCodexCommand(ctx, client, msg, clientID)
+		return
 	} else if trimmed == "/guide" {
 		h.handleGuideCommand(ctx, client, msg, clientID)
 		return
@@ -724,6 +731,56 @@ func (h *Handler) clearPendingGuide(key string) bool {
 	return true
 }
 
+// promotePendingGuideToRun 将未处理的引导消息转为待执行消息，避免任务结束后丢失用户输入。
+func (h *Handler) promotePendingGuideToRun(key string, task *activeAgentTask) (string, bool) {
+	if task == nil {
+		return "", false
+	}
+	task.mu.Lock()
+	if task.detached || task.pendingMessage == "" {
+		task.mu.Unlock()
+		return "", false
+	}
+	message := task.pendingMessage
+	task.pendingMessage = ""
+	task.mu.Unlock()
+	h.storePendingCodexRun(key, message)
+	return message, true
+}
+
+// storePendingCodexRun 保存等待用户用 /run 明确确认的 Codex 消息。
+func (h *Handler) storePendingCodexRun(key string, message string) {
+	h.pendingCodexRunsMu.Lock()
+	if h.pendingCodexRuns == nil {
+		h.pendingCodexRuns = make(map[string]string)
+	}
+	h.pendingCodexRuns[key] = message
+	h.pendingCodexRunsMu.Unlock()
+}
+
+// takePendingCodexRun 取出并删除待执行消息，保证 /run 不会重复执行同一条输入。
+func (h *Handler) takePendingCodexRun(key string) (string, bool) {
+	h.pendingCodexRunsMu.Lock()
+	defer h.pendingCodexRunsMu.Unlock()
+	message := h.pendingCodexRuns[key]
+	if message == "" {
+		return "", false
+	}
+	delete(h.pendingCodexRuns, key)
+	return message, true
+}
+
+// clearPendingCodexRun 撤回已经转为待执行状态的 Codex 消息。
+func (h *Handler) clearPendingCodexRun(key string) bool {
+	h.pendingCodexRunsMu.Lock()
+	defer h.pendingCodexRunsMu.Unlock()
+	if h.pendingCodexRuns[key] == "" {
+		return false
+	}
+	delete(h.pendingCodexRuns, key)
+	return true
+}
+
 func (t *activeAgentTask) shouldSendFinal() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -731,7 +788,36 @@ func (t *activeAgentTask) shouldSendFinal() bool {
 }
 
 func runningCodexGuidePrompt() string {
-	return "Codex 正在处理上一条任务。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。"
+	return "Codex 正在处理上一条任务。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。\n不回复时，上一条任务完成后会转为待执行消息。"
+}
+
+// runnablePendingCodexPrompt 提醒用户确认执行已从引导态转出的暂存消息。
+func runnablePendingCodexPrompt(message string) string {
+	return "上一条 Codex 任务已完成。\n\n暂存消息：\n" + previewPendingCodexMessage(message) + "\n\n回复 /run 执行该消息。\n回复 /cancel 撤回该消息。"
+}
+
+// previewPendingCodexMessage 限制微信提示里的消息预览长度，避免长输入刷屏。
+func previewPendingCodexMessage(message string) string {
+	runes := []rune(strings.TrimSpace(message))
+	if len(runes) <= pendingCodexPreviewRunes {
+		return string(runes)
+	}
+	return string(runes[:pendingCodexPreviewRunes]) + "..."
+}
+
+// handleRunPendingCodexCommand 执行用户确认后的待执行 Codex 消息。
+func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, clientID string) {
+	name, _, key, err := h.codexGuideTarget(ctx, msg.FromUserID)
+	if err != nil {
+		_ = SendTextReply(ctx, client, msg.FromUserID, err.Error(), msg.ContextToken, clientID)
+		return
+	}
+	message, ok := h.takePendingCodexRun(key)
+	if !ok {
+		_ = SendTextReply(ctx, client, msg.FromUserID, "当前没有待执行的暂存消息。", msg.ContextToken, clientID)
+		return
+	}
+	h.sendToNamedAgent(ctx, client, msg, name, message, clientID)
 }
 
 func (h *Handler) handleGuideCommand(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, clientID string) {
@@ -756,7 +842,7 @@ func (h *Handler) handleCancelPendingGuide(ctx context.Context, userID string) s
 	if err != nil {
 		return err.Error()
 	}
-	if !h.clearPendingGuide(key) {
+	if !h.clearPendingGuide(key) && !h.clearPendingCodexRun(key) {
 		return "当前没有可撤回的消息。"
 	}
 	return "已撤回该消息。"
@@ -921,8 +1007,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 // runCodexAgentTask 在后台完成 Codex 调用和最终回复发送。
 func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	opts := runtime.opts
-	defer runtime.cancelTaskTimeout()
-	defer h.finishActiveTask(runtime.executionKey, runtime.task)
+	defer h.finishCodexAgentTask(runtime)
 
 	unlock := h.lockAgentExecution(runtime.executionKey)
 	defer unlock()
@@ -946,6 +1031,18 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	if runtime.task.shouldSendFinal() {
 		h.sendReplyWithMedia(opts.ctx, opts.client, opts.msg, opts.agentName, reply, opts.clientID)
 	}
+}
+
+// finishCodexAgentTask 收尾后台任务，并把未处理的暂存引导转成 /run 待确认消息。
+func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
+	runtime.cancelTaskTimeout()
+	message, ok := h.promotePendingGuideToRun(runtime.executionKey, runtime.task)
+	h.finishActiveTask(runtime.executionKey, runtime.task)
+	if !ok {
+		return
+	}
+	opts := runtime.opts
+	_ = SendTextReply(opts.ctx, opts.client, opts.msg.FromUserID, runnablePendingCodexPrompt(message), opts.msg.ContextToken, opts.clientID)
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.
@@ -1368,7 +1465,9 @@ Codex：
 
 /guide 将暂存消息作为引导对话发送给正在执行的 Codex
 
-/cancel 撤回暂存的引导消息
+/run 执行已转为待执行的暂存消息
+
+/cancel 撤回暂存消息
 
 Codex 账号：
 

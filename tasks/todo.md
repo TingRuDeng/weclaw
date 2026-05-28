@@ -724,3 +724,21 @@ OpenCode ACP 返回 JSON-RPC error 时，WeClaw 应保留 `error.message` 和 `e
 ### Review 小结
 
 已完成 Codex 引导对话回归修复。Codex Agent 现在会先登记 active task 并立即释放 Handler，实际聊天、进度和最终回复在后台任务中完成；同用户消息入口仍保持顺序，因此第二条消息会在第一条 active task 存在时被暂存为 pending guide，`/guide` 和 `/cancel` 均可继续使用。验证命令：`go test ./messaging -run 'TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored|TestGuideSendsPendingMessageAndSuppressesFirstReply|TestCancelWithdrawsPendingGuideAndKeepsRunningTask|TestSendToNamedAgentUsesAgentProgressOverride|TestDuplicateMessageIDStillDeduped|TestHandleMessage_AbsolutePathTextGoesToDefaultAgent|TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread|TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails|TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-guide-regression .` 与 `git diff --check`，结果通过。
+
+## Codex 暂存消息待执行确认清单
+
+### 目标
+
+Codex 运行中拦截到的第二条消息，如果用户既不 `/guide` 也不 `/cancel`，不能在上一条任务结束后消失；应转为待执行消息，并由用户回复 `/run` 后再执行。
+
+### 执行任务
+
+- [x] P1 串行：补暂存消息在任务结束后转为 `/run` 待执行的红灯测试。
+- [x] P2 串行：补任务结束后 `/cancel` 可撤回待执行消息的红灯测试。
+- [x] P3 串行：实现 pending guide 到 pending run 的转换、`/run` 命令和 `/cancel` 复用。
+- [x] P4 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+- [x] P5 串行：补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 暂存消息待执行确认。Codex 运行中被拦截的第二条消息仍可通过 `/guide` 作为引导发送，也可通过 `/cancel` 撤回；如果用户不处理，上一条 Codex 任务结束后会提示“回复 /run 执行该消息”，并将消息保存为待执行状态。`/run` 会取出并删除该消息后发给 Codex，避免重复执行；`/cancel` 同时支持撤回运行中的 pending guide 和已转出的 pending run。验证命令：`go test ./messaging -run 'TestPendingGuideBecomesRunnableAfterTaskFinishes|TestCancelWithdrawsRunnablePendingGuide|TestRunningCodexStoresSecondMessageAsPendingGuide|TestGuideSendsPendingMessageAndSuppressesFirstReply|TestCancelWithdrawsPendingGuideAndKeepsRunningTask|TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-pending-run .` 与 `git diff --check`，结果通过。

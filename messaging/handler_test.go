@@ -1208,6 +1208,71 @@ func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
 	}
 }
 
+func TestPendingGuideBecomesRunnableAfterTaskFinishes(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+	waitForAgentEnter(t, ag)
+	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+
+	ag.release <- struct{}{}
+	waitForText(t, calls, "第1条结果")
+	waitForText(t, calls, "回复 /run 执行该消息")
+
+	h.HandleMessage(ctx, client, newTextMessage(3, "/run"))
+	waitForAgentEnter(t, ag)
+	ag.release <- struct{}{}
+	waitForText(t, calls, "第2条结果")
+
+	started, _ := ag.stats()
+	if started != 2 {
+		t.Fatalf("/run 应执行暂存消息，started=%d", started)
+	}
+}
+
+func TestCancelWithdrawsRunnablePendingGuide(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+	waitForAgentEnter(t, ag)
+	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+
+	ag.release <- struct{}{}
+	waitForText(t, calls, "回复 /run 执行该消息")
+	h.HandleMessage(ctx, client, newTextMessage(3, "/cancel"))
+	waitForText(t, calls, "已撤回该消息。")
+
+	h.HandleMessage(ctx, client, newTextMessage(4, "/run"))
+	waitForText(t, calls, "当前没有待执行的暂存消息。")
+
+	started, _ := ag.stats()
+	if started != 1 {
+		t.Fatalf("撤回后不应执行暂存消息，started=%d", started)
+	}
+}
+
 func TestBroadcastProgressUsesAgentPrefix(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.agents["codex"] = &fakeProgressAgent{
