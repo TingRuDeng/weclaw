@@ -96,6 +96,28 @@ type activeAgentTask struct {
 	pendingMessage string
 }
 
+// codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
+type codexAgentTaskOptions struct {
+	ctx         context.Context
+	client      *ilink.Client
+	msg         ilink.WeixinMessage
+	agentName   string
+	message     string
+	clientID    string
+	replyPrefix string
+	agent       agent.Agent
+	progressCfg config.ProgressConfig
+}
+
+// codexAgentTaskRuntime 保存已经登记 active task 后的运行时资源。
+type codexAgentTaskRuntime struct {
+	opts              codexAgentTaskOptions
+	agentCtx          context.Context
+	cancelTaskTimeout context.CancelFunc
+	executionKey      string
+	task              *activeAgentTask
+}
+
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 	return &Handler{
@@ -773,24 +795,27 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 	ag := h.getDefaultAgent()
 	var reply string
 	if ag != nil {
-		replyCtx := ctx
 		progressCfg := h.resolveProgressConfig(defaultName)
+		if isCodexAgent(defaultName, ag.Info()) {
+			h.startCodexAgentTask(codexAgentTaskOptions{
+				ctx:         ctx,
+				client:      client,
+				msg:         msg,
+				agentName:   defaultName,
+				message:     text,
+				clientID:    clientID,
+				replyPrefix: "",
+				agent:       ag,
+				progressCfg: progressCfg,
+			})
+			return
+		}
+
+		replyCtx := ctx
 		agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 		defer cancelTaskTimeout()
 
 		executionKey := h.agentExecutionKey(msg.FromUserID, defaultName, ag)
-		var activeTask *activeAgentTask
-		if isCodexAgent(defaultName, ag.Info()) {
-			task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
-			if !started {
-				h.storePendingGuide(executionKey, text)
-				_ = SendTextReply(ctx, client, msg.FromUserID, runningCodexGuidePrompt(), msg.ContextToken, clientID)
-				return
-			}
-			activeTask = task
-			defer h.finishActiveTask(executionKey, task)
-			agentCtx = taskCtx
-		}
 		unlock := h.lockAgentExecution(executionKey)
 		defer unlock()
 
@@ -810,9 +835,6 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 		} else {
 			h.recordCodexThread(msg.FromUserID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
-		}
-		if activeTask != nil && !activeTask.shouldSendFinal() {
-			return
 		}
 	} else {
 		log.Printf("[handler] agent not ready, using echo mode for %s", msg.FromUserID)
@@ -834,22 +856,25 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 
 	replyCtx := ctx
 	progressCfg := h.resolveProgressConfig(name)
+	if isCodexAgent(name, ag.Info()) {
+		h.startCodexAgentTask(codexAgentTaskOptions{
+			ctx:         ctx,
+			client:      client,
+			msg:         msg,
+			agentName:   name,
+			message:     message,
+			clientID:    clientID,
+			replyPrefix: "[" + name + "] ",
+			agent:       ag,
+			progressCfg: progressCfg,
+		})
+		return
+	}
+
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 	defer cancelTaskTimeout()
 
 	executionKey := h.agentExecutionKey(msg.FromUserID, name, ag)
-	var activeTask *activeAgentTask
-	if isCodexAgent(name, ag.Info()) {
-		task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
-		if !started {
-			h.storePendingGuide(executionKey, message)
-			_ = SendTextReply(ctx, client, msg.FromUserID, runningCodexGuidePrompt(), msg.ContextToken, clientID)
-			return
-		}
-		activeTask = task
-		defer h.finishActiveTask(executionKey, task)
-		agentCtx = taskCtx
-	}
 	unlock := h.lockAgentExecution(executionKey)
 	defer unlock()
 
@@ -869,10 +894,58 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 		h.recordCodexThread(msg.FromUserID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
-	if activeTask != nil && !activeTask.shouldSendFinal() {
+	h.sendReplyWithMedia(replyCtx, client, msg, name, reply, clientID)
+}
+
+// startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
+func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
+	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
+	executionKey := h.agentExecutionKey(opts.msg.FromUserID, opts.agentName, opts.agent)
+	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
+	if !started {
+		cancelTaskTimeout()
+		h.storePendingGuide(executionKey, opts.message)
+		_ = SendTextReply(opts.ctx, opts.client, opts.msg.FromUserID, runningCodexGuidePrompt(), opts.msg.ContextToken, opts.clientID)
 		return
 	}
-	h.sendReplyWithMedia(replyCtx, client, msg, name, reply, clientID)
+
+	go h.runCodexAgentTask(codexAgentTaskRuntime{
+		opts:              opts,
+		agentCtx:          taskCtx,
+		cancelTaskTimeout: cancelTaskTimeout,
+		executionKey:      executionKey,
+		task:              task,
+	})
+}
+
+// runCodexAgentTask 在后台完成 Codex 调用和最终回复发送。
+func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
+	opts := runtime.opts
+	defer runtime.cancelTaskTimeout()
+	defer h.finishActiveTask(runtime.executionKey, runtime.task)
+
+	unlock := h.lockAgentExecution(runtime.executionKey)
+	defer unlock()
+
+	onProgress, stopProgress := h.startProgressSession(runtime.agentCtx, opts.client, opts.msg.FromUserID, opts.msg.ContextToken, opts.replyPrefix, opts.message, opts.progressCfg)
+	defer stopProgress()
+
+	conversationID, resolveErr := h.resolveAgentConversationID(runtime.agentCtx, opts.msg.FromUserID, opts.agentName, opts.agent)
+	if resolveErr != nil {
+		reply := renderFinalFailure(opts.replyPrefix, resolveErr)
+		h.sendReplyWithMedia(opts.ctx, opts.client, opts.msg, opts.agentName, reply, opts.clientID)
+		return
+	}
+	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, conversationID, opts.message, onProgress)
+	if err != nil {
+		reply = renderFinalFailure(opts.replyPrefix, err)
+	} else {
+		h.recordCodexThread(opts.msg.FromUserID, opts.agentName, opts.agent, conversationID)
+		reply = renderFinalSuccess(opts.replyPrefix, reply)
+	}
+	if runtime.task.shouldSendFinal() {
+		h.sendReplyWithMedia(opts.ctx, opts.client, opts.msg, opts.agentName, reply, opts.clientID)
+	}
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.

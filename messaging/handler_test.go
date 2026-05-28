@@ -273,6 +273,19 @@ func waitForText(t *testing.T, calls *recordedILinkCalls, contains string) {
 	t.Fatalf("未等到包含 %q 的消息，已发送: %#v", contains, calls.texts())
 }
 
+func waitForFakeAgentCalls(t *testing.T, ag *fakeAgent, want int) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if ag.chatCalls == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("未等到 fake agent 调用次数=%d，实际=%d", want, ag.chatCalls)
+}
+
 func TestSendTextReplyFormatsLineBreaksForWeChatDisplay(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -945,9 +958,7 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	defer closeServer()
 	h.sendToNamedAgent(context.Background(), client, newTextMessage(1, "/codex hello"), "codex", "hello", "client-1")
 
-	if !containsText(calls.texts(), "实时片段，仅供预览") {
-		t.Fatalf("expected named agent to use stream override, messages=%#v", calls.texts())
-	}
+	waitForText(t, calls, "实时片段，仅供预览")
 }
 
 func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
@@ -1074,6 +1085,47 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 	waitDone(t, firstDone, "第一条任务")
 }
 
+func TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		h.HandleMessage(ctx, client, newTextMessage(1, "/codex 第一条"))
+		close(firstDone)
+	}()
+	waitForAgentEnter(t, ag)
+
+	select {
+	case <-firstDone:
+	case <-time.After(50 * time.Millisecond):
+		ag.release <- struct{}{}
+		waitDone(t, firstDone, "第一条任务")
+		t.Fatal("Codex Handler 应在任务后台运行后返回，避免串行消息入口阻塞 /guide")
+	}
+
+	h.HandleMessage(ctx, client, newTextMessage(2, "/codex 第二条"))
+	started, _ := ag.stats()
+	if started != 1 {
+		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
+	}
+	if !containsText(calls.texts(), "回复 /guide 将此消息作为引导对话发送给 Codex") {
+		t.Fatalf("未发送引导确认提示，messages=%#v", calls.texts())
+	}
+
+	ag.release <- struct{}{}
+	waitForText(t, calls, "第1条结果")
+}
+
 func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := newBlockingProgressAgent()
@@ -1104,7 +1156,8 @@ func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
 	waitDone(t, firstDone, "第一条监听")
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
-	waitDone(t, guideDone, "引导任务")
+	waitDone(t, guideDone, "引导命令")
+	waitForText(t, calls, "第2条结果")
 
 	texts := calls.texts()
 	if containsText(texts, "第1条结果") {
@@ -1140,6 +1193,7 @@ func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
 	h.HandleMessage(ctx, client, newTextMessage(3, "/cancel"))
 	ag.release <- struct{}{}
 	waitDone(t, firstDone, "第一条任务")
+	waitForText(t, calls, "第1条结果")
 
 	started, _ := ag.stats()
 	if started != 1 {
@@ -1202,6 +1256,7 @@ func TestDuplicateTextFallbackWhenMessageIDZero(t *testing.T) {
 	h.HandleMessage(context.Background(), client, msg)
 	h.HandleMessage(context.Background(), client, msg)
 
+	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCalls != 1 {
 		t.Fatalf("MessageID=0 duplicate text should only start agent once, chatCalls=%d", ag.chatCalls)
 	}
@@ -1223,6 +1278,7 @@ func TestDuplicateMessageIDStillDeduped(t *testing.T) {
 	h.HandleMessage(context.Background(), client, msg)
 	h.HandleMessage(context.Background(), client, msg)
 
+	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCalls != 1 {
 		t.Fatalf("same MessageID should only start agent once, chatCalls=%d", ag.chatCalls)
 	}
@@ -1243,6 +1299,7 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 
 	h.HandleMessage(context.Background(), client, newTextMessage(100, text))
 
+	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCalls != 1 {
 		t.Fatalf("absolute path text should call default agent once, chatCalls=%d", ag.chatCalls)
 	}
@@ -1275,6 +1332,7 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 
 	h.sendToNamedAgent(context.Background(), client, newTextMessage(101, "/codex hello"), "codex", "hello", "client-1")
 
+	waitForFakeAgentCalls(t, &ag.fakeAgent, 1)
 	if ag.chatCalls != 1 {
 		t.Fatalf("codex chat calls=%d, want 1", ag.chatCalls)
 	}
@@ -1777,14 +1835,12 @@ func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
 
 	h.sendToNamedAgent(context.Background(), client, newTextMessage(107, "/codex 继续"), "codex", "继续", "client-1")
 
+	waitForText(t, calls, "恢复 Codex 会话失败")
 	if ag.chatCalls != 0 {
 		t.Fatalf("恢复旧 thread 失败后不应继续新建会话聊天，chatCalls=%d", ag.chatCalls)
 	}
 	if ag.useThreadID != "thread-old" {
 		t.Fatalf("恢复 thread=%q，want thread-old", ag.useThreadID)
-	}
-	if !containsText(calls.texts(), "恢复 Codex 会话失败") {
-		t.Fatalf("未提示恢复失败，messages=%#v", calls.texts())
 	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-old" || pending {
@@ -1929,6 +1985,7 @@ func TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent(t *testing.T) {
 
 	h.HandleMessage(context.Background(), client, newFileMessage(10, "方案.txt"))
 
+	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCalls != 1 {
 		t.Fatalf("file message should start agent once, chatCalls=%d", ag.chatCalls)
 	}

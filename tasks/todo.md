@@ -707,3 +707,20 @@ OpenCode ACP 返回 JSON-RPC error 时，WeClaw 应保留 `error.message` 和 `e
 ### Review 小结
 
 已完成微信消息顺序修复。`ilink.Monitor` 不再对每条消息无序启动 goroutine，而是按 `seq/message_id` 排序后进入按微信用户隔离的串行队列；不同用户仍可并行处理。验证命令：`go test ./ilink -run 'TestSortMessagesForDispatchUsesSeqThenMessageID|TestMonitorSerializesMessagesFromSameUser|TestMonitorAllowsDifferentUsersInParallel' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-message-order .` 与 `git diff --check`，结果通过。
+
+## Codex 引导对话回归修复清单
+
+### 目标
+
+保留微信消息按用户顺序进入 Handler 的同时，Codex 长任务启动后不能阻塞同用户后续消息入口，确保 `/guide` 和 `/cancel` 仍可在 Codex 运行中生效。
+
+### 执行任务
+
+- [x] P1 串行：补 Codex Handler 启动后台任务后立即返回的回归测试。
+- [x] P2 串行：调整 Codex Agent 执行为后台任务，先登记 active task，再异步发送最终回复。
+- [x] P3 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+- [x] P4 串行：补充 review 小结。
+
+### Review 小结
+
+已完成 Codex 引导对话回归修复。Codex Agent 现在会先登记 active task 并立即释放 Handler，实际聊天、进度和最终回复在后台任务中完成；同用户消息入口仍保持顺序，因此第二条消息会在第一条 active task 存在时被暂存为 pending guide，`/guide` 和 `/cancel` 均可继续使用。验证命令：`go test ./messaging -run 'TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored|TestGuideSendsPendingMessageAndSuppressesFirstReply|TestCancelWithdrawsPendingGuideAndKeepsRunningTask|TestSendToNamedAgentUsesAgentProgressOverride|TestDuplicateMessageIDStillDeduped|TestHandleMessage_AbsolutePathTextGoesToDefaultAgent|TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread|TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails|TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-guide-regression .` 与 `git diff --check`，结果通过。
