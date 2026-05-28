@@ -119,23 +119,45 @@ func (a *CompanionAgent) launchVisibleCompanion(ctx context.Context) {
 	if !a.autoLaunch {
 		return
 	}
-	launcher := a.launch
-	if launcher == nil {
-		launcher = LaunchCompanionTerminal
+	if err := a.OpenVisibleCompanion(ctx); err != nil {
+		log.Printf("[companion] auto launch failed agent=%s cwd=%s: %v", a.name, a.cwd, err)
 	}
+}
+
+// OpenVisibleCompanion 打开本地可见 companion，用于 /cx attach 等显式接手场景。
+func (a *CompanionAgent) OpenVisibleCompanion(ctx context.Context) error {
 	executable, err := os.Executable()
 	if err != nil {
-		log.Printf("[companion] resolve executable for auto launch failed: %v", err)
-		return
+		return fmt.Errorf("resolve executable for companion launch: %w", err)
 	}
 	req := CompanionLaunchRequest{
 		Executable: executable,
 		Agent:      a.name,
 		Cwd:        a.cwd,
 	}
-	if err := launcher(ctx, req); err != nil {
-		log.Printf("[companion] auto launch failed agent=%s cwd=%s: %v", a.name, a.cwd, err)
+	launcher := a.launch
+	if launcher == nil {
+		launcher = LaunchCompanionTerminal
 	}
+	return launcher(ctx, req)
+}
+
+// DetachVisibleCompanion 断开当前可见 companion，但保留后台 endpoint，便于之后再次 attach。
+func (a *CompanionAgent) DetachVisibleCompanion() bool {
+	a.mu.Lock()
+	conn := a.conn
+	if conn == nil {
+		a.mu.Unlock()
+		return false
+	}
+	a.conn = nil
+	a.encoder = nil
+	a.connectedCh = make(chan struct{})
+	a.mu.Unlock()
+
+	_ = conn.Close()
+	a.failPending("Companion 已断开")
+	return true
 }
 
 func (a *CompanionAgent) buildEndpoint(listener net.Listener, token string) CompanionEndpoint {

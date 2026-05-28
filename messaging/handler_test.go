@@ -88,6 +88,24 @@ type fakeCodexThreadAgent struct {
 	modelErr        error
 }
 
+type fakeVisibleCodexAgent struct {
+	fakeCodexThreadAgent
+	openCalls   int
+	detachCalls int
+	detachOK    bool
+	openErr     error
+}
+
+func (f *fakeVisibleCodexAgent) OpenVisibleCompanion(_ context.Context) error {
+	f.openCalls++
+	return f.openErr
+}
+
+func (f *fakeVisibleCodexAgent) DetachVisibleCompanion() bool {
+	f.detachCalls++
+	return f.detachOK
+}
+
 func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
 	if f.threadID == "" {
 		return "", false
@@ -1838,6 +1856,74 @@ func TestCodexCxPwdShowsBrowseWorkspace(t *testing.T) {
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "浏览层级: 会话") || !strings.Contains(text, "工作空间: weclaw") {
 		t.Fatalf("pwd should show current browse workspace, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexAttachOpensVisibleCompanion(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeVisibleCodexAgent{
+		fakeCodexThreadAgent: fakeCodexThreadAgent{
+			fakeAgent: fakeAgent{
+				info: agent.AgentInfo{Name: "codex", Type: "companion", Command: "codex"},
+			},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(123, "/cx attach"))
+
+	if ag.openCalls != 1 {
+		t.Fatalf("OpenVisibleCompanion calls=%d, want 1", ag.openCalls)
+	}
+	if !containsText(calls.texts(), "已打开 Codex 本地可见端") {
+		t.Fatalf("attach reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexDetachClosesVisibleCompanionOnly(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeVisibleCodexAgent{
+		fakeCodexThreadAgent: fakeCodexThreadAgent{
+			fakeAgent: fakeAgent{
+				info: agent.AgentInfo{Name: "codex", Type: "companion", Command: "codex"},
+			},
+		},
+		detachOK: true,
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(124, "/cx detach"))
+
+	if ag.detachCalls != 1 {
+		t.Fatalf("DetachVisibleCompanion calls=%d, want 1", ag.detachCalls)
+	}
+	if !containsText(calls.texts(), "已断开 Codex 本地可见端") {
+		t.Fatalf("detach reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexAttachRequiresVisibleCompanion(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(125, "/cx attach"))
+
+	if !containsText(calls.texts(), "当前 Codex Agent 不支持 attach") {
+		t.Fatalf("attach unsupported reply mismatch, messages=%#v", calls.texts())
 	}
 }
 

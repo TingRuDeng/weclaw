@@ -1463,6 +1463,10 @@ Codex：
 
 /cx pwd 查看当前 Codex 浏览位置
 
+/cx attach 打开当前 Codex 会话的本地可见端
+
+/cx detach 断开本地可见端，微信继续 remote
+
 /guide 将暂存消息作为引导对话发送给正在执行的 Codex
 
 /run 执行已转为待执行的暂存消息
@@ -1539,7 +1543,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "attach", "detach", "help":
 		return true
 	default:
 		return false
@@ -1606,6 +1610,16 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		return h.handleCodexCd(bindingKey, agentName, fields[2], ag)
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
+	case "attach":
+		if len(fields) != 2 {
+			return "用法: /cx attach"
+		}
+		return h.handleCodexAttach(ctx, ag)
+	case "detach":
+		if len(fields) != 2 {
+			return "用法: /cx detach"
+		}
+		return h.handleCodexDetach(ag)
 	case "model":
 		return h.handleCodexModelCommand(ctx, ag, fields[2:])
 	case "new":
@@ -1618,6 +1632,30 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	default:
 		return buildCodexSessionHelpText()
 	}
+}
+
+// handleCodexAttach 显式打开本地可见 Companion，保持默认 remote 模式不被强绑定。
+func (h *Handler) handleCodexAttach(ctx context.Context, ag agent.Agent) string {
+	visibleAg, ok := ag.(agent.VisibleCompanionAgent)
+	if !ok {
+		return "当前 Codex Agent 不支持 attach。"
+	}
+	if err := visibleAg.OpenVisibleCompanion(ctx); err != nil {
+		return fmt.Sprintf("打开 Codex 本地可见端失败: %v", err)
+	}
+	return "已打开 Codex 本地可见端。"
+}
+
+// handleCodexDetach 仅断开本地可见 Companion，后台 endpoint 继续服务微信 remote。
+func (h *Handler) handleCodexDetach(ag agent.Agent) string {
+	visibleAg, ok := ag.(agent.VisibleCompanionAgent)
+	if !ok {
+		return "当前 Codex Agent 不支持 detach。"
+	}
+	if !visibleAg.DetachVisibleCompanion() {
+		return "当前没有已连接的 Codex 本地可见端。"
+	}
+	return "已断开 Codex 本地可见端。"
 }
 
 func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
@@ -1799,6 +1837,8 @@ func buildCodexSessionHelpText() string {
 		"/cx switch <编号>",
 		"/cx new",
 		"/cx pwd",
+		"/cx attach",
+		"/cx detach",
 		"/cx model status",
 		"/cx model ls",
 		"/codex 可作为 /cx 的兼容写法",

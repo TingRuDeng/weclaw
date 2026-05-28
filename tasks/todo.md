@@ -761,3 +761,22 @@ Codex 运行中拦截到的第二条消息，如果用户既不 `/guide` 也不 
 ### Review 小结
 
 已完成 Codex Companion 自动打开可见终端。`codex` 的 `type=companion` Agent 默认会在后台启动后用 macOS Terminal 自动运行当前 WeClaw 二进制的 `companion --agent codex --cwd <工作目录>`；其他 Companion Agent 默认不自动弹窗。配置支持 `auto_launch: false` 显式关闭 Codex 自动拉起，也支持 `auto_launch: true` 给其他 Agent 开启。启动命令做了 shell 和 AppleScript 双层转义。验证命令：`go test ./agent ./cmd ./config -run 'TestCompanionAgentAutoLaunchesVisibleTerminal|TestCompanionShellCommandQuotesArguments|TestCompanionAutoLaunchDefaultsToCodex|TestAgentConfigUnmarshalAutoLaunch' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-auto-companion .` 与 `git diff --check`，结果通过。
+
+## Codex remote 默认与 attach/detach 清单
+
+### 目标
+
+Codex Companion 默认保持 remote 模式，不再强绑定本地可见终端；用户需要本地接手时，通过 `/cx attach` 显式打开可见端，通过 `/cx detach` 断开可见端且保留微信 remote 能力。
+
+### 执行任务
+
+- [x] P1 串行：补 Codex Companion 默认不自动拉起可见终端的策略测试。
+- [x] P2 串行：补 `/cx attach` 打开本地可见端的 Handler 测试。
+- [x] P3 串行：补 `/cx detach` 只断开本地可见端的 Handler 测试。
+- [x] P4 串行：将 `auto_launch` 默认值改为 `false`，保留显式 `true` 的兼容能力。
+- [x] P5 串行：接入 `/cx attach` 和 `/cx detach` 命令，并同步帮助文本。
+- [x] P6 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+
+### Review 小结
+
+已完成 Codex remote 默认与显式 attach/detach 调整。`type=companion` 默认不再自动打开本地可见终端；需要本地接手时，微信发送 `/cx attach` 会打开当前 Codex 会话的 Companion 终端，发送 `/cx detach` 会断开已连接的可见端，但后台 endpoint 和微信 remote 路径继续保留。`auto_launch: true` 仍可显式恢复自动拉起行为。验证命令：`go test ./agent ./cmd ./messaging -run 'TestCompanionAgentAutoLaunchesVisibleTerminal|TestCompanionAutoLaunchDefaultsToRemoteOnly|TestCodexAttachOpensVisibleCompanion|TestCodexDetachClosesVisibleCompanionOnly|TestCodexAttachRequiresVisibleCompanion' -count=1`，结果通过；全量验证结果见本轮交付说明。

@@ -10,19 +10,20 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
-func TestCompanionAutoLaunchDefaultsToCodex(t *testing.T) {
+func TestCompanionAutoLaunchDefaultsToRemoteOnly(t *testing.T) {
 	cfg := config.AgentConfig{Type: "companion"}
-	if !companionAutoLaunchEnabled("codex", cfg) {
-		t.Fatal("codex companion should auto launch by default")
+	if companionAutoLaunchEnabled("codex", cfg) {
+		t.Fatal("codex companion should not auto launch by default")
 	}
 	if companionAutoLaunchEnabled("opencode", cfg) {
 		t.Fatal("opencode companion should not auto launch by default")
 	}
-	disabled := false
-	cfg.AutoLaunch = &disabled
+	enabled := true
+	cfg.AutoLaunch = &enabled
 	if companionAutoLaunchEnabled("codex", cfg) {
-		t.Fatal("explicit false should disable codex auto launch")
+		return
 	}
+	t.Fatal("explicit true should enable codex auto launch")
 }
 
 func TestCreateAgentByNameCreatesCompanionAgent(t *testing.T) {

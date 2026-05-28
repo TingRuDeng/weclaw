@@ -123,3 +123,9 @@ type CodexModelAgent interface {
 	CodexModelStatus() CodexModelStatus
 	ListCodexModels(ctx context.Context) ([]CodexModel, error)
 }
+
+// VisibleCompanionAgent 支持显式打开或断开本地可见 Companion。
+type VisibleCompanionAgent interface {
+	OpenVisibleCompanion(ctx context.Context) error
+	DetachVisibleCompanion() bool
+}

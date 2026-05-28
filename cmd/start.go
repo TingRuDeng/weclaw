@@ -309,11 +309,11 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 	}
 }
 
-func companionAutoLaunchEnabled(name string, agCfg config.AgentConfig) bool {
+func companionAutoLaunchEnabled(_ string, agCfg config.AgentConfig) bool {
 	if agCfg.AutoLaunch != nil {
 		return *agCfg.AutoLaunch
 	}
-	return name == "codex"
+	return false
 }
 
 func extractAgentProgressConfigs(agents map[string]config.AgentConfig) map[string]config.ProgressConfig {
