@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync"
 	"time"
 )
 
@@ -29,6 +31,8 @@ type Monitor struct {
 	bufPath       string
 	failures      int
 	lastActivity  time.Time
+	queuesMu      sync.Mutex
+	queues        map[string]chan WeixinMessage
 }
 
 // NewMonitor creates a new long-poll monitor.
@@ -45,6 +49,7 @@ func NewMonitor(client *Client, handler MessageHandler) (*Monitor, error) {
 		handler:      handler,
 		bufPath:      bufPath,
 		lastActivity: time.Now(),
+		queues:       make(map[string]chan WeixinMessage),
 	}
 	m.loadBuf()
 	return m, nil
@@ -118,9 +123,58 @@ func (m *Monitor) Run(ctx context.Context) error {
 			m.saveBuf()
 		}
 
-		// Process messages concurrently — don't block the poll loop
+		sortMessagesForDispatch(resp.Msgs)
 		for _, msg := range resp.Msgs {
-			go m.handler(ctx, m.client, msg)
+			m.enqueueMessage(ctx, msg)
+		}
+	}
+}
+
+func sortMessagesForDispatch(messages []WeixinMessage) {
+	sort.SliceStable(messages, func(i, j int) bool {
+		left := messages[i]
+		right := messages[j]
+		if left.Seq != 0 && right.Seq != 0 && left.Seq != right.Seq {
+			return left.Seq < right.Seq
+		}
+		if left.MessageID != 0 && right.MessageID != 0 && left.MessageID != right.MessageID {
+			return left.MessageID < right.MessageID
+		}
+		return false
+	})
+}
+
+func (m *Monitor) enqueueMessage(ctx context.Context, msg WeixinMessage) {
+	key := msg.FromUserID
+	if key == "" {
+		key = msg.ToUserID
+	}
+	queue := m.messageQueue(ctx, key)
+	select {
+	case queue <- msg:
+	case <-ctx.Done():
+	}
+}
+
+func (m *Monitor) messageQueue(ctx context.Context, key string) chan WeixinMessage {
+	m.queuesMu.Lock()
+	defer m.queuesMu.Unlock()
+	queue := m.queues[key]
+	if queue == nil {
+		queue = make(chan WeixinMessage, 64)
+		m.queues[key] = queue
+		go m.runMessageQueue(ctx, queue)
+	}
+	return queue
+}
+
+func (m *Monitor) runMessageQueue(ctx context.Context, queue <-chan WeixinMessage) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-queue:
+			m.handler(ctx, m.client, msg)
 		}
 	}
 }

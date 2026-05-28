@@ -690,3 +690,20 @@ OpenCode ACP 返回 JSON-RPC error 时，WeClaw 应保留 `error.message` 和 `e
 ### Review 小结
 
 已完成 Companion endpoint 生命周期修复。后台 `runDaemon()` 在停止旧进程后清理 `~/.weclaw/companions/*.json`，避免新后台初始化窗口期保留旧端口；endpoint 写入改为临时文件写入、同步后 `rename`，避免半写文件；`weclaw companion` 读取 endpoint 后先做 TCP 活性校验，遇到陈旧端口会删除旧入口并在 15 秒内等待新入口。验证命令：`go test ./agent -run 'TestCleanupCompanionEndpointsRemovesEndpointFilesOnly|TestWriteCompanionEndpointDoesNotLeaveTempFile' -count=1`、`go test ./cmd -run 'TestWaitForLiveCompanionEndpointRemovesStaleAndRetries' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-endpoint-lifecycle .` 与 `git diff --check`，结果通过。
+
+## 微信消息顺序修复清单
+
+### 目标
+
+连续发送两条 Codex 消息时，WeClaw 应按微信用户维度保持处理顺序，避免后发消息先抢到 Codex 执行锁，导致先发消息被回复“正在处理上一条任务”。
+
+### 执行任务
+
+- [x] P1 串行：补同用户消息串行、不同用户并行和消息排序回归测试。
+- [x] P2 串行：Monitor 入队前按 `seq/message_id` 稳定排序。
+- [x] P3 串行：Monitor 改为同一微信用户串行队列，不同用户保留并行。
+- [x] P4 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+
+### Review 小结
+
+已完成微信消息顺序修复。`ilink.Monitor` 不再对每条消息无序启动 goroutine，而是按 `seq/message_id` 排序后进入按微信用户隔离的串行队列；不同用户仍可并行处理。验证命令：`go test ./ilink -run 'TestSortMessagesForDispatchUsesSeqThenMessageID|TestMonitorSerializesMessagesFromSameUser|TestMonitorAllowsDifferentUsersInParallel' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-message-order .` 与 `git diff --check`，结果通过。
