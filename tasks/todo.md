@@ -906,3 +906,19 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成 Codex 列表短命令。现在 `/cx 0` 在工作空间列表层等价于 `/cx cd 0`，在会话列表层等价于 `/cx switch 0`；`/cx ..` 等价于 `/cx cd ..`。长命令仍保留兼容。验证命令：`go test ./messaging -run 'TestCodexShortIndexEntersWorkspaceFromWorkspaceList|TestCodexShortIndexSwitchesSessionInsideWorkspace|TestCodexShortDotDotReturnsToWorkspaceList|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex|TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd|TestBuildHelpText' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-cx-short .` 与 `git diff --check`，结果均通过。
+
+## 微信帮助一屏化清单
+
+### 目标
+
+把默认 `/help` 压缩成一屏操作卡，只展示高频入口和推荐路径，降低微信侧阅读和选择成本。
+
+### 执行任务
+
+- [x] 串行：先更新 `TestBuildHelpText`，用测试锁定一屏帮助的展示范围。
+- [x] 串行：替换 `buildHelpText` 默认文案，隐藏低频兼容命令和高级能力说明。
+- [x] 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+
+### Review 小结
+
+已完成默认 `/help` 一屏化。主帮助现在只保留常用命令、Codex 高频入口、发送消息方式和更多入口；`/guide`、`/run`、`/cancel`、别名清单、`/sw`、Companion 和主动推送 API 不再出现在默认帮助中。验证命令：`go test ./messaging -run 'TestBuildHelpText|TestCommandRepliesUseBlankLinesForWeChat' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-help-compact .` 与 `git diff --check`，结果均通过。

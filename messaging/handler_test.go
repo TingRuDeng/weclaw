@@ -535,17 +535,22 @@ func TestBuildHelpText(t *testing.T) {
 	for _, want := range []string{
 		"WeClaw 帮助",
 		"常用：",
-		"Codex 主路径：",
-		"指定 Agent：",
-		"常用别名：",
-		"高级能力：",
-		"/cx status",
+		"Codex：",
+		"发送消息：",
+		"更多：",
+		"/info 查看当前状态",
+		"/new 新建会话",
+		"/cwd <路径> 切换工作目录",
+		"/cx status 查看当前状态",
 		"/cx ls",
-		"/cx <编号|..>",
-		"/cx cli",
-		"/cx app",
-		"/cx help",
-		"/codex = /cx",
+		"/cx <编号|..> 选择或返回",
+		"/cx cli 打开本地 CLI",
+		"/cx app 打开 Codex App",
+		"/codex <内容> 发给 Codex",
+		"/cc <内容> 发给 Claude",
+		"@cc @cx <内容> 同时发送",
+		"/cx help Codex 高级命令",
+		"/progress 查看进度模式",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("help text should mention %q", want)
@@ -558,7 +563,19 @@ func TestBuildHelpText(t *testing.T) {
 		t.Error("help text should not mention old Codex session commands")
 	}
 	for _, hidden := range []string{
+		"Codex 主路径：",
+		"指定 Agent：",
+		"常用别名：",
+		"高级能力：",
 		"Codex 账号：",
+		"/guide",
+		"/run",
+		"/cancel",
+		"/claude 任务",
+		"/cs = /cursor",
+		"/km = /kimi",
+		"/gm = /gemini",
+		"/progress、/sw",
 		"/sw reload",
 		"/cx attach app",
 		"/cx detach",
@@ -569,12 +586,12 @@ func TestBuildHelpText(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"常用：\n\n/info",
-		"/info 查看当前 Agent\n\n/new 开启新会话",
-		"Codex 主路径：\n\n/cx status",
-		"/cx ls 查看列表\n\n/cx <编号|..>",
-		"/cx cli 打开当前 Codex thread 到本地 CLI\n\n/cx app",
-		"常用别名：\n\n/codex = /cx",
+		"常用：\n\n/info 查看当前状态",
+		"/info 查看当前状态\n\n/new 新建会话",
+		"Codex：\n\n/cx status 查看当前状态",
+		"/cx ls 查看列表\n\n/cx <编号|..> 选择或返回",
+		"发送消息：\n\n/codex <内容> 发给 Codex",
+		"更多：\n\n/cx help Codex 高级命令",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("help text should use blank lines for WeChat rendering, missing %q", want)
