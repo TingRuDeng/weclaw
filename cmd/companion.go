@@ -1,13 +1,21 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/spf13/cobra"
+)
+
+const (
+	companionEndpointWaitTimeout   = 15 * time.Second
+	companionEndpointRetryInterval = 250 * time.Millisecond
 )
 
 var (
@@ -33,9 +41,9 @@ func runCompanionCommand(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	endpoint, err := agent.ReadCompanionEndpoint(companionAgentFlag, cwd)
+	endpoint, err := waitForLiveCompanionEndpoint(ctx, companionAgentFlag, cwd, companionEndpointWaitOptions{})
 	if err != nil {
-		return fmt.Errorf("读取 Companion 入口失败，请先启动 WeClaw 后台 Agent: %w", err)
+		return err
 	}
 	runtime, err := createCompanionRuntime(endpoint)
 	if err != nil {
@@ -58,6 +66,82 @@ func createCompanionRuntime(endpoint agent.CompanionEndpoint) (companionRuntime,
 		return newCodexAppCompanionRuntime(endpoint), nil
 	default:
 		return nil, fmt.Errorf("暂不支持 %s Companion，本轮先支持 opencode 和 codex", endpoint.Agent)
+	}
+}
+
+type companionEndpointWaitOptions struct {
+	Timeout        time.Duration
+	Interval       time.Duration
+	ReadEndpoint   func(string, string) (agent.CompanionEndpoint, error)
+	RemoveEndpoint func(string, string)
+	Dial           func(context.Context, string, string) (net.Conn, error)
+	Sleep          func(context.Context, time.Duration) error
+}
+
+func waitForLiveCompanionEndpoint(ctx context.Context, agentName string, cwd string, opts companionEndpointWaitOptions) (agent.CompanionEndpoint, error) {
+	opts = fillCompanionEndpointWaitOptions(opts)
+	waitCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
+
+	var lastErr error
+	for {
+		endpoint, err := opts.ReadEndpoint(agentName, cwd)
+		if err == nil {
+			if liveErr := ensureCompanionEndpointLive(waitCtx, endpoint, opts.Dial); liveErr == nil {
+				return endpoint, nil
+			} else {
+				lastErr = liveErr
+				opts.RemoveEndpoint(agentName, cwd)
+			}
+		} else {
+			lastErr = err
+		}
+
+		if err := opts.Sleep(waitCtx, opts.Interval); err != nil {
+			return agent.CompanionEndpoint{}, fmt.Errorf("等待 Companion 入口就绪超时: agent=%s cwd=%s；最后一次错误: %w", agentName, cwd, lastErr)
+		}
+	}
+}
+
+func fillCompanionEndpointWaitOptions(opts companionEndpointWaitOptions) companionEndpointWaitOptions {
+	if opts.Timeout <= 0 {
+		opts.Timeout = companionEndpointWaitTimeout
+	}
+	if opts.Interval <= 0 {
+		opts.Interval = companionEndpointRetryInterval
+	}
+	if opts.ReadEndpoint == nil {
+		opts.ReadEndpoint = agent.ReadCompanionEndpoint
+	}
+	if opts.RemoveEndpoint == nil {
+		opts.RemoveEndpoint = agent.RemoveCompanionEndpoint
+	}
+	if opts.Dial == nil {
+		dialer := &net.Dialer{}
+		opts.Dial = dialer.DialContext
+	}
+	if opts.Sleep == nil {
+		opts.Sleep = sleepContext
+	}
+	return opts
+}
+
+func ensureCompanionEndpointLive(ctx context.Context, endpoint agent.CompanionEndpoint, dial func(context.Context, string, string) (net.Conn, error)) error {
+	conn, err := dial(ctx, "tcp", endpoint.Address())
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

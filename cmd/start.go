@@ -395,6 +395,9 @@ func runDaemon() error {
 	if err := stopAllWeclaw(); err != nil {
 		return err
 	}
+	if err := agent.CleanupCompanionEndpoints(); err != nil {
+		return fmt.Errorf("cleanup companion endpoints: %w", err)
+	}
 
 	// Ensure log directory exists
 	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {

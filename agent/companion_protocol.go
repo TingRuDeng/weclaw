@@ -76,7 +76,11 @@ func companionEndpointPath(agentName string, cwd string) (string, error) {
 	}
 	key := sha1.Sum([]byte(normalizeCompanionCwd(cwd)))
 	fileName := sanitizeCompanionAgentName(agentName) + "-" + hex.EncodeToString(key[:]) + ".json"
-	return filepath.Join(base, "companions", fileName), nil
+	return filepath.Join(companionEndpointDir(base), fileName), nil
+}
+
+func companionEndpointDir(base string) string {
+	return filepath.Join(base, "companions")
 }
 
 func writeCompanionEndpoint(endpoint CompanionEndpoint) error {
@@ -91,8 +95,28 @@ func writeCompanionEndpoint(endpoint CompanionEndpoint) error {
 	if err != nil {
 		return fmt.Errorf("marshal companion endpoint: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write companion endpoint: %w", err)
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create companion endpoint temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write companion endpoint temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync companion endpoint temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close companion endpoint temp file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		return fmt.Errorf("chmod companion endpoint temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename companion endpoint: %w", err)
 	}
 	return nil
 }
@@ -119,6 +143,29 @@ func removeCompanionEndpoint(agentName string, cwd string) {
 	if err == nil {
 		_ = os.Remove(path)
 	}
+}
+
+// RemoveCompanionEndpoint 删除指定 Agent 和工作目录对应的 Companion 入口。
+func RemoveCompanionEndpoint(agentName string, cwd string) {
+	removeCompanionEndpoint(agentName, cwd)
+}
+
+// CleanupCompanionEndpoints 清理后台重启后必然失效的 Companion 入口文件。
+func CleanupCompanionEndpoints() error {
+	base, err := weclawHomeDir()
+	if err != nil {
+		return err
+	}
+	matches, err := filepath.Glob(filepath.Join(companionEndpointDir(base), "*.json"))
+	if err != nil {
+		return err
+	}
+	for _, path := range matches {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildCompanionToken() (string, error) {

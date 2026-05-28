@@ -671,3 +671,22 @@ OpenCode ACP 返回 JSON-RPC error 时，WeClaw 应保留 `error.message` 和 `e
 ### Review 小结
 
 已完成 OpenCode Companion MVP。WeClaw 后台新增 `type=companion` Agent，通过 loopback endpoint 等待本地可见 Companion 连接；本地运行 `weclaw companion --agent opencode --cwd <工作目录>` 后，会启动 `opencode serve` 与 `opencode attach`，微信输入通过 `prompt_async` 转发到同一 OpenCode session，并通过 SSE 收集文本回复和进度事件。OpenCode 自动检测默认从 ACP 改为 Companion，同时项目许可证切换为 AGPL-3.0-or-later，并补充 CLI-WeChat-Bridge 来源说明。验证命令：`go test ./agent -run 'TestRunCompanionClientHandlesRequest|TestCompanionAgent' -count=1 -timeout 60s`、`go test ./cmd -run 'TestHandleOpenCodeEventLine|TestCreateAgentByName.*Companion' -count=1 -timeout 60s`、`go test ./agent ./cmd ./config -run 'TestRunCompanionClientHandlesRequest|TestCompanionAgent|TestHandleOpenCodeEventLine|TestCreateAgentByName.*Companion|TestDetectAndConfigureOpenCodeUsesCompanion' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check`、`go build -o weclaw .` 与 `./weclaw companion --help | head -n 40`，结果通过。
+
+## Companion endpoint 生命周期修复清单
+
+### 目标
+
+重启 WeClaw 后，本地执行 `weclaw companion --agent codex --cwd <工作目录>` 不应读到旧 endpoint 端口直接失败，而应清理陈旧入口并等待新后台入口就绪。
+
+### 执行任务
+
+- [x] P1 串行：补 endpoint 清理、原子写入和 stale endpoint 等待重试的红灯测试。
+- [x] P2 串行：实现 companion endpoint 清理、删除导出和原子写入。
+- [x] P3 串行：启动后台前清理旧 companion endpoint。
+- [x] P4 串行：`weclaw companion` 读取 endpoint 后做 TCP 活性校验，陈旧入口删除并限时重试。
+- [x] P5 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+- [x] P6 串行：补充 review 小结。
+
+### Review 小结
+
+已完成 Companion endpoint 生命周期修复。后台 `runDaemon()` 在停止旧进程后清理 `~/.weclaw/companions/*.json`，避免新后台初始化窗口期保留旧端口；endpoint 写入改为临时文件写入、同步后 `rename`，避免半写文件；`weclaw companion` 读取 endpoint 后先做 TCP 活性校验，遇到陈旧端口会删除旧入口并在 15 秒内等待新入口。验证命令：`go test ./agent -run 'TestCleanupCompanionEndpointsRemovesEndpointFilesOnly|TestWriteCompanionEndpointDoesNotLeaveTempFile' -count=1`、`go test ./cmd -run 'TestWaitForLiveCompanionEndpointRemovesStaleAndRetries' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-endpoint-lifecycle .` 与 `git diff --check`，结果通过。
