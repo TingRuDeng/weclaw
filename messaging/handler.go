@@ -86,6 +86,7 @@ type Handler struct {
 	codexLocalSessionDir  string
 	codexBrowseMu         sync.Mutex
 	codexBrowseWorkspaces map[string]string
+	codexLocalEntries     map[string]codexLocalEntryState
 	codexAppOpener        CodexAppOpener
 	codexCLIResumeOpener  CodexCLIResumeOpener
 }
@@ -148,6 +149,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		pendingCodexRuns:      make(map[string]string),
 		codexLocalSessionDir:  defaultCodexLocalSessionDir(),
 		codexBrowseWorkspaces: make(map[string]string),
+		codexLocalEntries:     make(map[string]codexLocalEntryState),
 		codexAppOpener:        defaultCodexAppOpener,
 		codexCLIResumeOpener:  defaultCodexCLIResumeOpener,
 	}
@@ -1492,6 +1494,8 @@ Codex：
 
 /cx app 在 Codex App 中打开当前工作空间
 
+/cx status 查看当前 Codex remote 和本地入口状态
+
 /cx detach 断开本地可见端，微信继续 remote
 
 /cx attach app 在 Codex App 中打开当前工作空间
@@ -1572,7 +1576,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "cli", "attach", "detach", "app", "open-app", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "cli", "attach", "detach", "app", "open-app", "status", "help":
 		return true
 	default:
 		return false
@@ -1639,6 +1643,11 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		return h.handleCodexCd(bindingKey, agentName, fields[2], ag)
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
+	case "status":
+		if len(fields) != 2 {
+			return "用法: /cx status"
+		}
+		return h.renderCodexStatus(userID, agentName, workspaceRoot, ag)
 	case "app", "open-app":
 		if len(fields) != 2 {
 			return "用法: /cx app"
@@ -1692,6 +1701,7 @@ func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentNa
 		)
 	}
 	bindingKey := codexBindingKey(userID, agentName)
+	h.recordCodexLocalEntry(bindingKey, workspaceRoot, codexLocalEntryApp)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
 	return wechatCommandText(
 		"已打开 Codex App。",
@@ -1759,6 +1769,16 @@ type codexCLIOpenText struct {
 	successTitle     string
 }
 
+type codexLocalEntryState struct {
+	CLIOpened bool
+	AppOpened bool
+}
+
+const (
+	codexLocalEntryCLI = "cli"
+	codexLocalEntryApp = "app"
+)
+
 func (h *Handler) openCodexThreadInCLI(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, text codexCLIOpenText) string {
 	if _, ok := ag.(agent.CodexThreadAgent); !ok {
 		return text.unsupported
@@ -1780,11 +1800,52 @@ func (h *Handler) openCodexThreadInCLI(ctx context.Context, userID string, agent
 	if err := h.resolveCodexCLIResumeOpener()(ctx, command, workspaceRoot, threadID); err != nil {
 		return fmt.Sprintf("%s: %v", text.openFailedPrefix, err)
 	}
+	h.recordCodexLocalEntry(bindingKey, workspaceRoot, codexLocalEntryCLI)
 	return wechatCommandText(
 		text.successTitle,
 		"工作空间: "+workspaceRoot,
 		"thread: "+threadID,
 	)
+}
+
+func (h *Handler) recordCodexLocalEntry(bindingKey string, workspaceRoot string, entryType string) {
+	key := codexLocalEntryKey(bindingKey, workspaceRoot)
+	if key == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.codexLocalEntries == nil {
+		h.codexLocalEntries = make(map[string]codexLocalEntryState)
+	}
+	state := h.codexLocalEntries[key]
+	switch entryType {
+	case codexLocalEntryCLI:
+		state.CLIOpened = true
+	case codexLocalEntryApp:
+		state.AppOpened = true
+	default:
+		return
+	}
+	h.codexLocalEntries[key] = state
+}
+
+func (h *Handler) codexLocalEntry(bindingKey string, workspaceRoot string) codexLocalEntryState {
+	key := codexLocalEntryKey(bindingKey, workspaceRoot)
+	if key == "" {
+		return codexLocalEntryState{}
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.codexLocalEntries[key]
+}
+
+func codexLocalEntryKey(bindingKey string, workspaceRoot string) string {
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	if strings.TrimSpace(bindingKey) == "" || workspaceRoot == "" {
+		return ""
+	}
+	return bindingKey + "\x00" + workspaceRoot
 }
 
 func (h *Handler) resolveCodexCLIResumeOpener() CodexCLIResumeOpener {
@@ -1996,6 +2057,35 @@ func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) str
 	return wechatCommandText("workspace: "+workspaceRoot, "thread: "+renderCodexThreadLabel(threadID, pending))
 }
 
+func (h *Handler) renderCodexStatus(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	workspaceRoot = h.codexWorkspaceRootForUser(userID, agentName, ag)
+	if strings.TrimSpace(workspaceRoot) == "" {
+		workspaceRoot = h.codexWorkspaceRoot(agentName)
+	}
+	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
+
+	bindingKey := codexBindingKey(userID, agentName)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
+	localEntry := h.codexLocalEntry(bindingKey, workspaceRoot)
+	return wechatCommandText(
+		"Codex 状态:",
+		"工作空间: "+workspaceRoot,
+		"thread: "+renderCodexThreadLabel(threadID, pending),
+		"remote: 已配置 ("+ag.Info().Type+")",
+		"本地入口:",
+		"CLI: "+renderCodexLocalEntry(localEntry.CLIOpened),
+		"App: "+renderCodexLocalEntry(localEntry.AppOpened),
+		"说明: 本地入口只记录最近打开动作，不实时检测手动关闭。",
+	)
+}
+
+func renderCodexLocalEntry(opened bool) string {
+	if opened {
+		return "已打开过"
+	}
+	return "未打开过"
+}
+
 func (h *Handler) renderCodexList(bindingKey string) string {
 	if workspaceRoot, ok := h.codexBrowseWorkspace(bindingKey); ok {
 		return h.renderCodexSessionList(bindingKey, workspaceRoot)
@@ -2022,6 +2112,7 @@ func buildCodexSessionHelpText() string {
 		"/cx new",
 		"/cx pwd",
 		"/cx cli",
+		"/cx status",
 		"/cx attach app",
 		"/cx app",
 		"/cx detach",

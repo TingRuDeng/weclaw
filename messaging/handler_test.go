@@ -544,6 +544,7 @@ func TestBuildHelpText(t *testing.T) {
 		"/cx switch <编号>",
 		"/cx cli",
 		"/cx app",
+		"/cx status",
 		"/sw reload",
 		"/codex = /cx",
 	} {
@@ -2044,6 +2045,69 @@ func TestCodexAppCommandOpensCurrentWorkspaceWithThread(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "已打开 Codex App") || !containsText(calls.texts(), "thread-1") {
 		t.Fatalf("app reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexStatusShowsWorkspaceThreadAndLocalEntryState(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(131, "/cx status"))
+
+	text := strings.Join(calls.texts(), "\n")
+	for _, want := range []string{
+		"Codex 状态",
+		"工作空间: " + workspace,
+		"thread: thread-1",
+		"remote: 已配置",
+		"CLI: 未打开过",
+		"App: 未打开过",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status should contain %q, messages=%#v", want, calls.texts())
+		}
+	}
+}
+
+func TestCodexStatusRecordsSuccessfulLocalEntries(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	h.SetCodexCLIResumeOpener(func(_ context.Context, _ string, _ string, _ string) error {
+		return nil
+	})
+	h.SetCodexAppOpener(func(_ context.Context, _ string, _ string) error {
+		return nil
+	})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(132, "/cx cli"))
+	h.HandleMessage(context.Background(), client, newTextMessage(133, "/cx app"))
+	h.HandleMessage(context.Background(), client, newTextMessage(134, "/cx status"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "CLI: 已打开过") || !strings.Contains(text, "App: 已打开过") {
+		t.Fatalf("status should record successful local entries, messages=%#v", calls.texts())
 	}
 }
 

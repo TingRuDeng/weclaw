@@ -852,3 +852,21 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成 Codex remote-first 接手语义修正。启动时旧的 `codex type=companion` 配置会在未显式 `auto_launch: true` 时迁移为 `type=acp` + `app-server --listen stdio://`，微信普通 Codex 任务因此不再要求 `/cx attach`。当前会话有 thread 后，`/cx attach` 会打开本地 Terminal 并执行 `codex resume <thread> --cd <workspace>`，方便在电脑上接手继续。验证命令：`go test ./messaging ./config -run 'TestCodexAttachResumesRemoteFirstThreadInTerminal|TestCodexAttachRequiresRecordedThreadForRemoteFirstAgent|TestCodexAttachRequiresVisibleCompanion|TestCodexAttachOpensVisibleCompanion|TestNormalizeCodexRemoteFirstMigratesCompanion' -count=1`，结果通过；全量验证结果见本轮交付说明。
+
+## Codex 状态查询命令落地清单
+
+### 目标
+
+新增 `/cx status` 只读查询入口，让微信侧能确认当前 workspace、thread、remote 配置状态，以及最近是否通过 WeClaw 打开过 CLI/App。
+
+### 执行任务
+
+- [x] 新增 `/cx status` 展示当前 workspace、thread、remote 和本地入口初始状态的回归测试。
+- [x] 新增成功执行 `/cx cli`、`/cx app` 后 `/cx status` 展示已打开记录的回归测试。
+- [x] 实现本地入口的内存级打开记录，不做实时进程探测和关闭控制。
+- [x] 更新帮助文本，加入 `/cx status`。
+- [x] 运行全量验证并补充 review 小结。
+
+### Review 小结
+
+已完成 `/cx status` 只读状态查询。微信发送 `/cx status` 会显示当前 Codex 工作空间、thread、remote 配置状态，以及 WeClaw 最近是否成功打开过 CLI/App；该状态不实时探测手动关闭，也不会关闭或重启本地窗口。验证命令：`go test ./messaging -run 'TestCodexStatusShowsWorkspaceThreadAndLocalEntryState|TestCodexStatusRecordsSuccessfulLocalEntries|TestCodexCliCommandResumesRemoteFirstThreadInTerminal|TestCodexAppCommandOpensCurrentWorkspaceWithThread|TestBuildHelpText|TestCommandRepliesUseBlankLinesForWeChat' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-cx-status .` 与 `git diff --check`，结果均通过。
