@@ -31,6 +31,9 @@ type SwitchCommandRunner func(ctx context.Context, scriptPath string, args ...st
 // CDNDownloader 用于下载微信 CDN 中的入站文件，便于测试注入。
 type CDNDownloader func(ctx context.Context, encryptQueryParam string, aesKey string) ([]byte, error)
 
+// CodexAppOpener 用于打开当前工作区的 Codex App，便于测试替换外部进程。
+type CodexAppOpener func(ctx context.Context, command string, workspaceRoot string) error
+
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {
 	ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error)
@@ -79,6 +82,7 @@ type Handler struct {
 	codexLocalSessionDir  string
 	codexBrowseMu         sync.Mutex
 	codexBrowseWorkspaces map[string]string
+	codexAppOpener        CodexAppOpener
 }
 
 const (
@@ -139,6 +143,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		pendingCodexRuns:      make(map[string]string),
 		codexLocalSessionDir:  defaultCodexLocalSessionDir(),
 		codexBrowseWorkspaces: make(map[string]string),
+		codexAppOpener:        defaultCodexAppOpener,
 	}
 }
 
@@ -243,6 +248,13 @@ func (h *Handler) SetAgentProgressConfigs(configs map[string]config.ProgressConf
 	for name, cfg := range configs {
 		h.agentProgressConfigs[name] = cfg
 	}
+}
+
+// SetCodexAppOpener 设置 Codex App 打开器，主要用于测试外部进程调用。
+func (h *Handler) SetCodexAppOpener(opener CodexAppOpener) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.codexAppOpener = opener
 }
 
 func (h *Handler) resolveProgressConfig(agentName string) config.ProgressConfig {
@@ -1465,7 +1477,11 @@ Codex：
 
 /cx attach 打开当前 Codex 会话的本地可见端
 
+/cx app 在 Codex App 中打开当前工作空间
+
 /cx detach 断开本地可见端，微信继续 remote
+
+/cx attach app 在 Codex App 中打开当前工作空间
 
 /guide 将暂存消息作为引导对话发送给正在执行的 Codex
 
@@ -1543,7 +1559,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "attach", "detach", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "attach", "detach", "app", "open-app", "help":
 		return true
 	default:
 		return false
@@ -1610,9 +1626,17 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		return h.handleCodexCd(bindingKey, agentName, fields[2], ag)
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
-	case "attach":
+	case "app", "open-app":
 		if len(fields) != 2 {
-			return "用法: /cx attach"
+			return "用法: /cx app"
+		}
+		return h.handleCodexOpenApp(ctx, userID, agentName, workspaceRoot, ag)
+	case "attach":
+		if len(fields) == 3 && fields[2] == "app" {
+			return h.handleCodexOpenApp(ctx, userID, agentName, workspaceRoot, ag)
+		}
+		if len(fields) != 2 {
+			return "用法: /cx attach 或 /cx attach app"
 		}
 		return h.handleCodexAttach(ctx, ag)
 	case "detach":
@@ -1632,6 +1656,48 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	default:
 		return buildCodexSessionHelpText()
 	}
+}
+
+// handleCodexOpenApp 打开当前工作区的 Codex App，并尽量回显当前 thread 便于用户确认。
+func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	workspaceRoot = h.codexWorkspaceRootForUser(userID, agentName, ag)
+	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
+	opener := h.resolveCodexAppOpener()
+	command := strings.TrimSpace(ag.Info().Command)
+	if command == "" {
+		return "当前 Codex Agent 未配置 command，无法打开 Codex App。"
+	}
+	if err := opener(ctx, command, workspaceRoot); err != nil {
+		return fmt.Sprintf("打开 Codex App 失败: %v", err)
+	}
+	bindingKey := codexBindingKey(userID, agentName)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
+	return wechatCommandText(
+		"已打开 Codex App。",
+		"工作空间: "+workspaceRoot,
+		"thread: "+renderCodexThreadLabel(threadID, pending),
+	)
+}
+
+func (h *Handler) resolveCodexAppOpener() CodexAppOpener {
+	h.mu.RLock()
+	opener := h.codexAppOpener
+	h.mu.RUnlock()
+	if opener == nil {
+		return defaultCodexAppOpener
+	}
+	return opener
+}
+
+// defaultCodexAppOpener 使用当前 Codex 命令打开桌面 App 的工作区入口。
+func defaultCodexAppOpener(ctx context.Context, command string, workspaceRoot string) error {
+	cmd := exec.CommandContext(ctx, command, "app", workspaceRoot)
+	cmd.Dir = workspaceRoot
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // handleCodexAttach 显式打开本地可见 Companion，保持默认 remote 模式不被强绑定。
@@ -1838,6 +1904,8 @@ func buildCodexSessionHelpText() string {
 		"/cx new",
 		"/cx pwd",
 		"/cx attach",
+		"/cx attach app",
+		"/cx app",
 		"/cx detach",
 		"/cx model status",
 		"/cx model ls",

@@ -106,6 +106,11 @@ func (f *fakeVisibleCodexAgent) DetachVisibleCompanion() bool {
 	return f.detachOK
 }
 
+type recordedCodexAppOpen struct {
+	command   string
+	workspace string
+}
+
 func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
 	if f.threadID == "" {
 		return "", false
@@ -1924,6 +1929,65 @@ func TestCodexAttachRequiresVisibleCompanion(t *testing.T) {
 
 	if !containsText(calls.texts(), "当前 Codex Agent 不支持 attach") {
 		t.Fatalf("attach unsupported reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexAppCommandOpensCurrentWorkspaceWithThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	var opened []recordedCodexAppOpen
+	h.SetCodexAppOpener(func(_ context.Context, command string, workspace string) error {
+		opened = append(opened, recordedCodexAppOpen{command: command, workspace: workspace})
+		return nil
+	})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(126, "/cx app"))
+
+	if len(opened) != 1 || opened[0].command != "codex-bin" || opened[0].workspace != workspace {
+		t.Fatalf("opened=%#v, want codex-bin/%s", opened, workspace)
+	}
+	if !containsText(calls.texts(), "已打开 Codex App") || !containsText(calls.texts(), "thread-1") {
+		t.Fatalf("app reply mismatch, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexAttachAppAliasOpensCodexApp(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	var opened []recordedCodexAppOpen
+	h.SetCodexAppOpener(func(_ context.Context, command string, workspace string) error {
+		opened = append(opened, recordedCodexAppOpen{command: command, workspace: workspace})
+		return nil
+	})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(127, "/cx attach app"))
+
+	if len(opened) != 1 || opened[0].workspace != workspace {
+		t.Fatalf("opened=%#v, want workspace %s", opened, workspace)
+	}
+	if !containsText(calls.texts(), "已打开 Codex App") {
+		t.Fatalf("attach app reply mismatch, messages=%#v", calls.texts())
 	}
 }
 
