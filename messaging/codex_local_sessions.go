@@ -60,6 +60,9 @@ func discoverLocalCodexSessions(codexDir string) []codexWorkspaceView {
 		if id == "" || workspaceRoot == "" {
 			continue
 		}
+		if !localCodexWorkspaceExists(workspaceRoot) {
+			continue
+		}
 		views = append(views, codexWorkspaceView{
 			WorkspaceRoot: workspaceRoot,
 			ThreadID:      id,
@@ -70,6 +73,11 @@ func discoverLocalCodexSessions(codexDir string) []codexWorkspaceView {
 	}
 	sortLocalCodexSessions(views)
 	return views
+}
+
+func localCodexWorkspaceExists(workspaceRoot string) bool {
+	info, err := os.Stat(workspaceRoot)
+	return err == nil && info.IsDir()
 }
 
 // readLocalCodexSessionIndex 读取 Codex 索引文件里的 thread 名称和更新时间。

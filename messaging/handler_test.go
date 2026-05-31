@@ -1796,6 +1796,27 @@ func TestDiscoverLocalCodexSessionsSkipsHiddenDesktopSessions(t *testing.T) {
 	}
 }
 
+func TestDiscoverLocalCodexSessionsSkipsMissingWorkspace(t *testing.T) {
+	codexDir := t.TempDir()
+	existingWorkspace := filepath.Join(t.TempDir(), "existing")
+	missingWorkspace := filepath.Join(t.TempDir(), "missing")
+	if err := os.MkdirAll(existingWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir existing workspace: %v", err)
+	}
+	writeLocalCodexSession(t, codexDir, "thread-existing", existingWorkspace, "现存工作空间", "2026-04-29T09:00:00Z")
+	writeLocalCodexIndex(t, codexDir, "thread-missing", "已删除工作空间", "2026-04-29T10:00:00Z")
+	writeLocalCodexSessionMeta(t, codexDir, "thread-missing", missingWorkspace, "2026-04-29T10:00:00Z", `"Codex Desktop"`, `""`, `"vscode"`)
+
+	sessions := discoverLocalCodexSessions(codexDir)
+
+	if len(sessions) != 1 {
+		t.Fatalf("sessions len=%d, want 1: %#v", len(sessions), sessions)
+	}
+	if sessions[0].ThreadID != "thread-existing" {
+		t.Fatalf("session thread=%q, want thread-existing", sessions[0].ThreadID)
+	}
+}
+
 func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
@@ -2715,6 +2736,9 @@ func progressConfigWithTaskTimeout() config.ProgressConfig {
 
 func writeLocalCodexSession(t *testing.T, codexDir string, threadID string, workspace string, threadName string, updatedAt string) {
 	t.Helper()
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("create local codex workspace: %v", err)
+	}
 	writeLocalCodexIndex(t, codexDir, threadID, threadName, updatedAt)
 	writeLocalCodexSessionMeta(t, codexDir, threadID, workspace, updatedAt, `"Codex Desktop"`, `""`, `"vscode"`)
 }
