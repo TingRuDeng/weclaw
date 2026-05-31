@@ -1777,6 +1777,25 @@ func TestDiscoverLocalCodexSessionsSkipsArchivedSessions(t *testing.T) {
 	}
 }
 
+func TestDiscoverLocalCodexSessionsSkipsHiddenDesktopSessions(t *testing.T) {
+	codexDir := t.TempDir()
+	visibleWorkspace := filepath.Join(t.TempDir(), "visible")
+	writeLocalCodexSession(t, codexDir, "thread-visible", visibleWorkspace, "桌面主会话", "2026-04-29T09:00:00Z")
+	writeLocalCodexSessionMeta(t, codexDir, "thread-subagent", filepath.Join(t.TempDir(), "subagent"), "2026-04-29T08:00:00Z", `"Codex Desktop"`, `"subagent"`, `{"subagent":{"thread_spawn":{"parent_thread_id":"thread-visible"}}}`)
+	writeLocalCodexSessionMeta(t, codexDir, "thread-cli", filepath.Join(t.TempDir(), "cli"), "2026-04-29T07:00:00Z", `"codex-tui"`, `"user"`, `"vscode"`)
+	writeLocalCodexIndex(t, codexDir, "thread-subagent", "子代理会话", "2026-04-29T08:00:00Z")
+	writeLocalCodexIndex(t, codexDir, "thread-cli", "CLI 会话", "2026-04-29T07:00:00Z")
+
+	sessions := discoverLocalCodexSessions(codexDir)
+
+	if len(sessions) != 1 {
+		t.Fatalf("sessions len=%d, want 1: %#v", len(sessions), sessions)
+	}
+	if sessions[0].ThreadID != "thread-visible" {
+		t.Fatalf("session thread=%q, want thread-visible", sessions[0].ThreadID)
+	}
+}
+
 func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
@@ -2696,6 +2715,12 @@ func progressConfigWithTaskTimeout() config.ProgressConfig {
 
 func writeLocalCodexSession(t *testing.T, codexDir string, threadID string, workspace string, threadName string, updatedAt string) {
 	t.Helper()
+	writeLocalCodexIndex(t, codexDir, threadID, threadName, updatedAt)
+	writeLocalCodexSessionMeta(t, codexDir, threadID, workspace, updatedAt, `"Codex Desktop"`, `""`, `"vscode"`)
+}
+
+func writeLocalCodexIndex(t *testing.T, codexDir string, threadID string, threadName string, updatedAt string) {
+	t.Helper()
 	indexLine := fmt.Sprintf(`{"id":%q,"thread_name":%q,"updated_at":%q}`+"\n", threadID, threadName, updatedAt)
 	indexPath := filepath.Join(codexDir, "session_index.jsonl")
 	file, err := os.OpenFile(indexPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -2708,13 +2733,16 @@ func writeLocalCodexSession(t *testing.T, codexDir string, threadID string, work
 	if err := file.Close(); err != nil {
 		t.Fatalf("close session index: %v", err)
 	}
+}
 
+func writeLocalCodexSessionMeta(t *testing.T, codexDir string, threadID string, workspace string, updatedAt string, originatorJSON string, threadSourceJSON string, sourceJSON string) {
+	t.Helper()
 	sessionDir := filepath.Join(codexDir, "sessions", "2026", "04", "29")
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		t.Fatalf("create session dir: %v", err)
 	}
 	sessionPath := filepath.Join(sessionDir, "rollout-"+threadID+".jsonl")
-	meta := fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"timestamp":%q,"cwd":%q,"originator":"Codex Desktop"}}`+"\n", updatedAt, threadID, updatedAt, workspace)
+	meta := fmt.Sprintf(`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"timestamp":%q,"cwd":%q,"originator":%s,"thread_source":%s,"source":%s}}`+"\n", updatedAt, threadID, updatedAt, workspace, originatorJSON, threadSourceJSON, sourceJSON)
 	if err := os.WriteFile(sessionPath, []byte(meta), 0o600); err != nil {
 		t.Fatalf("write session meta: %v", err)
 	}

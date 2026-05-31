@@ -1,6 +1,9 @@
 # Binary
 weclaw
 
+# 发布产物
+dist/
+
 # Air hot reload
 tmp/
 

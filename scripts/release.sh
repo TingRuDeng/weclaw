@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="$ROOT_DIR/dist"
+DRY_RUN=0
+RUN_TESTS=1
+TAG=""
+
+TARGETS=(
+  "darwin/amd64"
+  "darwin/arm64"
+  "linux/amd64"
+  "linux/arm64"
+  "windows/amd64"
+  "windows/arm64"
+)
+
+usage() {
+  cat <<'EOF'
+用法:
+  scripts/release.sh v0.1.42
+  scripts/release.sh --next-patch
+  scripts/release.sh --next-patch --dry-run
+
+选项:
+  --next-patch   基于当前最大 vX.Y.Z tag 自动递增 patch 版本
+  --dry-run      执行检查、测试和打包，但不创建 tag、不推送、不创建 release
+  --skip-tests   跳过测试，仅用于已经完成同等验证的紧急发布
+  -h, --help     显示帮助
+EOF
+}
+
+log() {
+  printf '\n==> %s\n' "$*"
+}
+
+fail() {
+  printf '发布失败：%s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "缺少命令：$1"
+}
+
+latest_version_tag() {
+  git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1
+}
+
+next_patch_tag() {
+  local latest major minor patch
+  latest="$(latest_version_tag)"
+  [[ "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || fail "找不到可递增的语义化 tag"
+  major="${BASH_REMATCH[1]}"
+  minor="${BASH_REMATCH[2]}"
+  patch="${BASH_REMATCH[3]}"
+  printf 'v%s.%s.%s\n' "$major" "$minor" "$((patch + 1))"
+}
+
+parse_args() {
+  while (($# > 0)); do
+    case "$1" in
+      --next-patch)
+        [[ -z "$TAG" ]] || fail "不能同时指定 tag 和 --next-patch"
+        TAG="$(next_patch_tag)"
+        ;;
+      --dry-run)
+        DRY_RUN=1
+        ;;
+      --skip-tests)
+        RUN_TESTS=0
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      v[0-9]*.[0-9]*.[0-9]*)
+        [[ -z "$TAG" ]] || fail "只能指定一个发布 tag"
+        TAG="$1"
+        ;;
+      *)
+        fail "未知参数：$1"
+        ;;
+    esac
+    shift
+  done
+  [[ -n "$TAG" ]] || fail "必须指定 tag 或 --next-patch"
+  [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag 必须形如 v0.1.42"
+}
+
+check_dependencies() {
+  require_command git
+  require_command go
+  require_command gh
+  require_command shasum
+}
+
+check_clean_tree() {
+	local dirty
+	dirty="$(git status --short --untracked-files=all | grep -v '^?? dist/' || true)"
+	if [[ -n "$dirty" ]]; then
+		printf '发布失败：工作区存在未提交改动，请先提交：\n%s\n' "$dirty" >&2
+		exit 1
+	fi
+}
+
+check_tag_available() {
+	git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && fail "本地 tag 已存在：$TAG"
+  if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+    fail "远端 tag 已存在：$TAG"
+  fi
+}
+
+run_validations() {
+  [[ "$RUN_TESTS" -eq 1 ]] || return 0
+  log "运行测试与静态检查"
+  go test -count=1 -timeout 60s ./...
+  go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging
+  go vet ./...
+  git diff --check
+}
+
+build_assets() {
+	local out_dir="$DIST_DIR/$TAG"
+	log "构建发布资产：$out_dir"
+	mkdir -p "$out_dir"
+	rm -f "$out_dir"/weclaw_* "$out_dir/checksums.txt"
+
+	local target goos goarch ext output
+	for target in "${TARGETS[@]}"; do
+    goos="${target%/*}"
+    goarch="${target#*/}"
+    ext=""
+    [[ "$goos" == "windows" ]] && ext=".exe"
+    output="$out_dir/weclaw_${goos}_${goarch}${ext}"
+    CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+      go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=$TAG" -o "$output" .
+	done
+
+	# update 命令依赖 checksums.txt 校验资产完整性，本地和 Actions 产物必须保持同名格式。
+	(cd "$out_dir" && shasum -a 256 weclaw_* > checksums.txt)
+}
+
+create_release() {
+	local out_dir="$DIST_DIR/$TAG"
+  [[ "$DRY_RUN" -eq 0 ]] || {
+    log "dry-run：跳过 tag 推送和 GitHub Release 创建"
+    return 0
+  }
+
+	log "创建并推送 tag：$TAG"
+	git tag "$TAG"
+	git push origin "$TAG"
+
+	# 正式 release 会被 weclaw update 识别为 latest，不能使用 prerelease。
+	log "创建 GitHub Release：$TAG"
+	gh release create "$TAG" "$out_dir"/weclaw_* "$out_dir/checksums.txt" \
+		--repo TingRuDeng/weclaw \
+    --title "$TAG" \
+    --generate-notes
+}
+
+verify_release() {
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  local asset_count latest_tag
+  log "验证 GitHub Release"
+  asset_count="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json assets --jq '.assets | length')"
+  [[ "$asset_count" == "7" ]] || fail "Release 资产数量异常：$asset_count"
+  latest_tag="$(gh release view --repo TingRuDeng/weclaw --json tagName --jq '.tagName')"
+  [[ "$latest_tag" == "$TAG" ]] || fail "latest release 指向 $latest_tag，期望 $TAG"
+}
+
+main() {
+  cd "$ROOT_DIR"
+  parse_args "$@"
+  check_dependencies
+  check_clean_tree
+  check_tag_available
+  run_validations
+  build_assets
+  create_release
+  verify_release
+  log "发布完成：$TAG"
+}
+
+if [[ "${WECLAW_RELEASE_SOURCE_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

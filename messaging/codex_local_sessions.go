@@ -20,10 +20,12 @@ type localCodexIndexEntry struct {
 }
 
 type localCodexSessionMeta struct {
-	ID         string
-	Cwd        string
-	Timestamp  string
-	Originator string
+	ID           string
+	Cwd          string
+	Timestamp    string
+	Originator   string
+	ThreadSource string
+	Source       json.RawMessage
 }
 
 // defaultCodexLocalSessionDir 返回本机 Codex 默认会话目录。
@@ -48,6 +50,9 @@ func discoverLocalCodexSessions(codexDir string) []codexWorkspaceView {
 	views := make([]codexWorkspaceView, 0, len(metas))
 	for id, meta := range metas {
 		if archivedIDs[id] {
+			continue
+		}
+		if !isVisibleLocalCodexSession(meta) {
 			continue
 		}
 		entry := index[id]
@@ -163,22 +168,51 @@ func parseLocalCodexSessionMeta(line []byte) (localCodexSessionMeta, bool) {
 	var record struct {
 		Type    string `json:"type"`
 		Payload struct {
-			ID         string `json:"id"`
-			Cwd        string `json:"cwd"`
-			Timestamp  string `json:"timestamp"`
-			Originator string `json:"originator"`
+			ID           string          `json:"id"`
+			Cwd          string          `json:"cwd"`
+			Timestamp    string          `json:"timestamp"`
+			Originator   string          `json:"originator"`
+			ThreadSource string          `json:"thread_source"`
+			Source       json.RawMessage `json:"source"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(line, &record); err != nil || record.Type != "session_meta" {
 		return localCodexSessionMeta{}, false
 	}
 	meta := localCodexSessionMeta{
-		ID:         strings.TrimSpace(record.Payload.ID),
-		Cwd:        strings.TrimSpace(record.Payload.Cwd),
-		Timestamp:  strings.TrimSpace(record.Payload.Timestamp),
-		Originator: strings.TrimSpace(record.Payload.Originator),
+		ID:           strings.TrimSpace(record.Payload.ID),
+		Cwd:          strings.TrimSpace(record.Payload.Cwd),
+		Timestamp:    strings.TrimSpace(record.Payload.Timestamp),
+		Originator:   strings.TrimSpace(record.Payload.Originator),
+		ThreadSource: strings.TrimSpace(record.Payload.ThreadSource),
+		Source:       record.Payload.Source,
 	}
 	return meta, meta.ID != "" && meta.Cwd != ""
+}
+
+// isVisibleLocalCodexSession 保持本机扫描结果接近 Codex 桌面端可见的用户主会话。
+func isVisibleLocalCodexSession(meta localCodexSessionMeta) bool {
+	if strings.TrimSpace(meta.Originator) != "Codex Desktop" {
+		return false
+	}
+	threadSource := strings.TrimSpace(meta.ThreadSource)
+	if threadSource != "" && threadSource != "user" {
+		return false
+	}
+	return !localCodexSourceIsSubagent(meta.Source)
+}
+
+func localCodexSourceIsSubagent(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var source struct {
+		Subagent json.RawMessage `json:"subagent"`
+	}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return false
+	}
+	return len(source.Subagent) > 0
 }
 
 // sortLocalCodexSessions 按更新时间倒序排列，便于微信里优先看到最近会话。

@@ -240,6 +240,23 @@
 
 本轮按顺序完成 Companion/Codex 可见端断线唤醒、旧 ACP 运行时状态加锁读取、旧 ACP `Session not found` 一次性自愈、多 Agent 广播 Codex active task 保护、HTTP/API/update 读取上限与超时、测试桩 race 修复。验证命令：`go test ./agent -run TestHTTPAgentRejectsOversizedResponse -count=1 -timeout 60s`、`go test ./api -run TestHandleSendRejectsOversizedBody -count=1 -timeout 60s`、`go test ./cmd -run 'TestDownloadFileRejectsOversizedContentLength|TestVerifyDownloadedAssetChecksumRejectsMismatch' -count=1 -timeout 60s`、`go test ./messaging -run 'TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents|TestDuplicateTextFallbackWhenMessageIDZero|TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`git diff --check`，结果均通过。剩余风险：HTTP Agent 响应上限当前为代码内常量，后续如需按部署环境调整，可再配置化。
 
+## 2026-05-28 发布流程统一化清单
+
+### 目标
+
+把正式发布流程统一为可复用的本地脚本，并给 GitHub Actions Release 增加手动触发兜底，减少手动打包和 tag 触发异常带来的发布风险。
+
+### 执行任务
+
+- [x] 新增本地发布脚本，覆盖版本检查、工作区检查、测试、交叉编译、checksum、tag、release 创建和线上校验。
+- [x] 为 Release Actions 增加 `workflow_dispatch` 手动触发兜底。
+- [x] 补充脚本的最小自动化测试。
+- [x] 运行最小充分验证和 review gate。
+
+### Review 小结
+
+本轮新增 `scripts/release.sh` 作为正式发布入口，支持指定 tag、`--next-patch`、`--dry-run`、测试、交叉编译、checksum、tag 推送、GitHub Release 创建和线上资产校验；同时为 `.github/workflows/release.yml` 增加 `workflow_dispatch`，允许手动输入 tag 触发云端发布。验证命令：`bash -n scripts/release.sh`、`go test ./cmd -run TestReleaseScript -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`git diff --check`，结果均通过。剩余风险：当前未在本轮实际创建新 release，脚本的 GitHub 创建步骤通过代码审查和既有 `gh release create` 经验验证，下一次发布时应优先使用 `--dry-run` 后再正式执行。
+
 ## 微信默认进度反馈静默化清单
 
 ### 目标

@@ -4,9 +4,17 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. v0.1.42'
+        required: true
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -42,7 +50,7 @@ jobs:
         run: |
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=${{ github.ref_name }}" \
+          go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=${RELEASE_TAG}" \
             -o weclaw_${{ matrix.goos }}_${{ matrix.goarch }}${EXT} .
 
       - uses: actions/upload-artifact@v4
@@ -66,6 +74,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
           files: |
             dist/weclaw_*
