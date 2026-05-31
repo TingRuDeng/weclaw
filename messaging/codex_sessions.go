@@ -156,6 +156,36 @@ func (s *codexSessionStore) listWorkspaces(bindingKey string) []codexWorkspaceVi
 	return views
 }
 
+func (s *codexSessionStore) cleanMissingWorkspaces(bindingKey string) []string {
+	s.mu.Lock()
+	binding := s.bindings[bindingKey]
+	if binding.Workspaces == nil {
+		s.mu.Unlock()
+		return nil
+	}
+
+	removed := make([]string, 0)
+	for root := range binding.Workspaces {
+		if localCodexWorkspaceExists(root) {
+			continue
+		}
+		delete(binding.Workspaces, root)
+		removed = append(removed, root)
+	}
+	if len(removed) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	sort.Strings(removed)
+	if !localCodexWorkspaceExists(binding.ActiveWorkspace) {
+		binding.ActiveWorkspace = ""
+	}
+	s.bindings[bindingKey] = binding
+	s.mu.Unlock()
+	s.save()
+	return removed
+}
+
 func (s *codexSessionStore) findWorkspaceByThread(bindingKey string, threadID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

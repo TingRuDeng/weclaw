@@ -1569,7 +1569,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return len(fields) == 2
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "cli", "attach", "detach", "app", "open-app", "status", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "cli", "attach", "detach", "app", "open-app", "status", "clean", "help":
 		return true
 	default:
 		return false
@@ -1653,6 +1653,11 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 			return "用法: /cx status"
 		}
 		return h.renderCodexStatus(userID, agentName, workspaceRoot, ag)
+	case "clean":
+		if len(fields) != 2 {
+			return "用法: /cx clean"
+		}
+		return h.handleCodexClean(bindingKey)
 	case "app", "open-app":
 		if len(fields) != 2 {
 			return "用法: /cx app"
@@ -1698,6 +1703,35 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, userID string, 
 		return h.handleCodexSwitch(ctx, userID, agentName, workspaceRoot, ag, target)
 	}
 	return h.handleCodexCd(bindingKey, agentName, target, ag)
+}
+
+func (h *Handler) handleCodexClean(bindingKey string) string {
+	removed := h.ensureCodexSessions().cleanMissingWorkspaces(bindingKey)
+	if len(removed) == 0 {
+		return "没有需要清理的 Codex 工作空间。"
+	}
+	if browsing, ok := h.codexBrowseWorkspace(bindingKey); ok && containsWorkspaceRoot(removed, browsing) {
+		h.clearCodexBrowseWorkspace(bindingKey)
+	}
+	names := make([]string, 0, len(removed))
+	for _, root := range removed {
+		names = append(names, shortCodexWorkspaceName(root))
+	}
+	return wechatCommandText(
+		fmt.Sprintf("已清理 Codex 工作空间：%d 个", len(removed)),
+		"已移除："+strings.Join(names, "、"),
+		"未删除 Codex App 历史文件。",
+	)
+}
+
+func containsWorkspaceRoot(roots []string, target string) bool {
+	target = normalizeCodexWorkspaceRoot(target)
+	for _, root := range roots {
+		if normalizeCodexWorkspaceRoot(root) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // handleCodexOpenApp 打开当前工作区的 Codex App，并尽量回显当前 thread 便于用户确认。
@@ -2130,6 +2164,7 @@ func buildCodexSessionHelpText() string {
 		"/cx cli 打开本地 CLI 接手当前 thread",
 		"/cx app 打开 Codex App 到当前工作空间",
 		"/cx status 查看 remote、thread 和本地入口状态",
+		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx attach app 兼容写法，等同 /cx app",
 		"/cx detach 断开已连接的本地 Companion",
 		"/cx model status 查看 Codex 模型状态",

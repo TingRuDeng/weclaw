@@ -657,6 +657,7 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx cli 打开本地 CLI 接手当前 thread",
 		"/cx app 打开 Codex App 到当前工作空间",
 		"/cx status 查看 remote、thread 和本地入口状态",
+		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看 Codex 模型状态",
 		"/cx model ls 查看可用 Codex 模型",
 		"/codex 可作为 /cx 的兼容写法",
@@ -664,6 +665,45 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("Codex help should describe %q, got %q", want, text)
 		}
+	}
+}
+
+func TestCodexCleanRemovesMissingStoredWorkspaces(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	missingWorkspace := filepath.Join(t.TempDir(), "missing")
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		threadID: "thread-current",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetCodexLocalSessionDir(t.TempDir())
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, missingWorkspace, "thread-missing")
+	h.codexSessions.setActiveWorkspace(bindingKey, missingWorkspace)
+	h.setCodexBrowseWorkspace(bindingKey, missingWorkspace)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(109, "/cx clean"))
+
+	texts := calls.texts()
+	if !containsText(texts, "已清理 Codex 工作空间：1 个") {
+		t.Fatalf("clean reply should include removed count, messages=%#v", texts)
+	}
+	if !containsText(texts, filepath.Base(missingWorkspace)) {
+		t.Fatalf("clean reply should include removed workspace name, messages=%#v", texts)
+	}
+	if thread, _ := h.codexSessions.getThread(bindingKey, missingWorkspace); thread != "" {
+		t.Fatalf("missing workspace thread=%q, want empty after clean", thread)
+	}
+	if browse, ok := h.codexBrowseWorkspace(bindingKey); ok || browse != "" {
+		t.Fatalf("browse workspace=(%q,%v), want cleared", browse, ok)
 	}
 }
 

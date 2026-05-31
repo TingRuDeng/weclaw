@@ -976,3 +976,20 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成本机 Codex 历史 workspace 过滤。`/cx ls` 合并 `~/.codex/sessions` 时会跳过 `cwd` 不存在或不是目录的历史 session，避免旧 worktree、临时目录继续出现在微信工作空间列表中。验证命令：`go test ./messaging -run 'TestDiscoverLocalCodexSessions|TestCodexLsIncludesLocalCodexSessions|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexShortIndexEntersWorkspaceFromWorkspaceList' -count=1`、`go test -count=1 -timeout 60s ./...`、`go vet ./...`、`go build -o /tmp/weclaw-local-codex-filter .` 与 `git diff --check`，结果均通过。
+
+## Codex 工作空间显式清理命令清单
+
+### 目标
+
+新增 `/cx clean`，允许用户显式清理 WeClaw 自己持久化的失效 Codex workspace 记录，并同步帮助与 README_CN。
+
+### 执行任务
+
+- [x] 串行：新增 `/cx clean` 清理缺失 workspace 的回归测试。
+- [x] 串行：实现 `codexSessionStore` 清理失效 workspace，并清空对应浏览层级。
+- [x] 串行：同步 `/cx help` 与 README_CN 命令说明。
+- [x] 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+
+### Review 小结
+
+已完成 `/cx clean`。该命令会清理当前微信用户与当前 Codex Agent 下，WeClaw 自己持久化且路径已不存在的 workspace 记录；如果用户正在浏览被清理的 workspace，会同步回到工作空间列表层。命令不会删除 `~/.codex/sessions` 或 Codex App 历史文件。验证命令：`go test ./messaging -run 'TestCodexCleanRemovesMissingStoredWorkspaces|TestBuildCodexSessionHelpTextIncludesDescriptions|TestCommandRepliesUseBlankLinesForWeChat' -count=1`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`go build -o /tmp/weclaw-cx-clean .` 与 `git diff --check`，结果均通过。
