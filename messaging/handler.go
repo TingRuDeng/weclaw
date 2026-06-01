@@ -1493,8 +1493,16 @@ func (h *Handler) buildStatus() string {
 	return wechatCommandText(
 		"agent: "+h.defaultName,
 		"type: "+info.Type,
-		"model: "+info.Model,
+		"model: "+agentStatusModelValue(info.Model),
 	)
+}
+
+// agentStatusModelValue 用明确文案区分空模型配置和真实模型名。
+func agentStatusModelValue(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return "(Agent 默认)"
+	}
+	return model
 }
 
 func buildHelpText() string {

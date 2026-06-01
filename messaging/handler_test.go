@@ -750,6 +750,20 @@ func TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent(t *testing.T) {
 	}
 }
 
+func TestStatusCommandShowsDefaultModelWhenModelEmpty(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}
+
+	text := h.buildStatus()
+
+	if !strings.Contains(text, "model: (Agent 默认)") {
+		t.Fatalf("status should show default model, got %q", text)
+	}
+}
+
 func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.defaultName = "codex"
