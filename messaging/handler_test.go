@@ -2108,9 +2108,43 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("/cx 0 should enter workspace, got cwd=%q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-a" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-a)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "工作空间: weclaw") || !strings.Contains(text, "0. 会话 A") {
-		t.Fatalf("/cx 0 should show workspace sessions, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已进入工作空间并切换会话") || strings.Contains(text, "0. 会话 A") {
+		t.Fatalf("/cx 0 should auto switch single session, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexCxCdWorkspaceWithNoSessionsCreatesDraft(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetCodexLocalSessionDir(t.TempDir())
+	workspace := filepath.Join(t.TempDir(), "empty")
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setPendingNew(bindingKey, workspace)
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(145, "/cx cd 0"))
+
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
+	}
+	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
+	if thread != "" || !pending {
+		t.Fatalf("thread=%q pending=%v, want pending new draft", thread, pending)
+	}
+	if !containsText(calls.texts(), "已进入工作空间并创建新会话草稿") {
+		t.Fatalf("cd should create draft for empty workspace, messages=%#v", calls.texts())
 	}
 }
 

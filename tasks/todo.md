@@ -1011,3 +1011,19 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成 Codex 额度查询与状态命令精简。微信发送 `/cx quota` 会通过 Codex app-server 的 `account/rateLimits/read` 查询账号额度，并展示 limit、plan、primary/secondary 使用比例、重置时间和 credits 状态；全局运行态入口收敛为 `/status`，`/info` 不再作为状态别名，只提示改用 `/status`，避免误发给默认 Agent。验证命令：`go test ./agent ./messaging -run 'TestACPAgentReadCodexQuotaParsesRateLimits|TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent|TestHandleCodexQuotaCommandShowsRateLimits|TestBuildHelpText|TestBuildCodexSessionHelpTextIncludesDescriptions' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`go build -o /tmp/weclaw-cx-quota .` 与 `git diff --check`，结果均通过。
+
+## Codex 进入工作空间自动选会话清单
+
+### 目标
+
+优化 `/cx cd <编号|工作空间名>` 和 `/cx <编号>`：进入工作空间时，如果只有一个可切换会话就自动切换；如果没有真实会话就创建新会话草稿；多个会话时继续展示会话列表。
+
+### 执行任务
+
+- [x] 串行：新增单会话自动切换和无会话创建草稿的回归测试。
+- [x] 串行：实现进入工作空间后的自动切换、草稿创建和多会话列表保留逻辑。
+- [x] 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+
+### Review 小结
+
+已完成 Codex 进入工作空间自动选会话。现在 `/cx cd <编号|工作空间名>` 或 `/cx <编号>` 进入工作空间时，单个真实会话会自动切换；没有真实会话时会创建新会话草稿；多个真实会话仍展示列表供用户选择。验证命令：`go test ./messaging -run 'TestCodexShortIndexEntersWorkspaceFromWorkspaceList|TestCodexCxCdWorkspaceWithNoSessionsCreatesDraft|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexShortIndexSwitchesSessionInsideWorkspace|TestCodexShortDotDotReturnsToWorkspaceList' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`go build -o /tmp/weclaw-cx-cd-auto .` 与 `git diff --check`，结果均通过。

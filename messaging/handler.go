@@ -1661,7 +1661,14 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		if len(fields) != 3 {
 			return "用法: /cx cd <编号|工作空间名|..>"
 		}
-		return h.handleCodexCd(bindingKey, agentName, fields[2], ag)
+		return h.handleCodexCd(codexWorkspaceCdRequest{
+			Context:    ctx,
+			UserID:     userID,
+			BindingKey: bindingKey,
+			AgentName:  agentName,
+			Target:     fields[2],
+			Agent:      ag,
+		})
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
 	case "status":
@@ -1718,12 +1725,26 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 
 func (h *Handler) handleCodexShortSelection(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, bindingKey string, target string) string {
 	if target == ".." {
-		return h.handleCodexCd(bindingKey, agentName, target, ag)
+		return h.handleCodexCd(codexWorkspaceCdRequest{
+			Context:    ctx,
+			UserID:     userID,
+			BindingKey: bindingKey,
+			AgentName:  agentName,
+			Target:     target,
+			Agent:      ag,
+		})
 	}
 	if _, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
 		return h.handleCodexSwitch(ctx, userID, agentName, workspaceRoot, ag, target)
 	}
-	return h.handleCodexCd(bindingKey, agentName, target, ag)
+	return h.handleCodexCd(codexWorkspaceCdRequest{
+		Context:    ctx,
+		UserID:     userID,
+		BindingKey: bindingKey,
+		AgentName:  agentName,
+		Target:     target,
+		Agent:      ag,
+	})
 }
 
 func (h *Handler) handleCodexClean(bindingKey string) string {
