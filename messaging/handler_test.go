@@ -132,6 +132,8 @@ type fakeCodexThreadAgent struct {
 	modelStatus     agent.CodexModelStatus
 	models          []agent.CodexModel
 	modelErr        error
+	quota           agent.CodexQuota
+	quotaErr        error
 }
 
 type fakeVisibleCodexAgent struct {
@@ -194,6 +196,13 @@ func (f *fakeCodexThreadAgent) ListCodexModels(_ context.Context) ([]agent.Codex
 		return nil, f.modelErr
 	}
 	return f.models, nil
+}
+
+func (f *fakeCodexThreadAgent) ReadCodexQuota(_ context.Context) (agent.CodexQuota, error) {
+	if f.quotaErr != nil {
+		return agent.CodexQuota{}, f.quotaErr
+	}
+	return f.quota, nil
 }
 
 type fakeProgressAgent struct {
@@ -584,10 +593,11 @@ func TestBuildHelpText(t *testing.T) {
 		"Codex：",
 		"发送消息：",
 		"更多：",
-		"/info 查看当前状态",
+		"/status 查看 WeClaw 运行态",
 		"/new 新建会话",
 		"/cwd <路径> 切换工作目录",
-		"/cx status 查看当前状态",
+		"/cx status 查看 Codex 会话状态",
+		"/cx quota 查看 Codex 账号额度",
 		"/cx ls",
 		"/cx <编号|..> 选择或返回",
 		"/cx cli 打开本地 CLI",
@@ -614,6 +624,8 @@ func TestBuildHelpText(t *testing.T) {
 		"常用别名：",
 		"高级能力：",
 		"Codex 账号：",
+		"/info",
+		"/cx usage",
 		"/guide",
 		"/run",
 		"/cancel",
@@ -632,9 +644,9 @@ func TestBuildHelpText(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"常用：\n\n/info 查看当前状态",
-		"/info 查看当前状态\n\n/new 新建会话",
-		"Codex：\n\n/cx status 查看当前状态",
+		"常用：\n\n/status 查看 WeClaw 运行态",
+		"/status 查看 WeClaw 运行态\n\n/new 新建会话",
+		"Codex：\n\n/cx status 查看 Codex 会话状态",
 		"/cx ls 查看列表\n\n/cx <编号|..> 选择或返回",
 		"发送消息：\n\n/codex <内容> 发给 Codex",
 		"更多：\n\n/cx help Codex 高级命令",
@@ -657,6 +669,7 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx cli 打开本地 CLI 接手当前 thread",
 		"/cx app 打开 Codex App 到当前工作空间",
 		"/cx status 查看 remote、thread 和本地入口状态",
+		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看 Codex 模型状态",
 		"/cx model ls 查看可用 Codex 模型",
@@ -707,6 +720,36 @@ func TestCodexCleanRemovesMissingStoredWorkspaces(t *testing.T) {
 	}
 }
 
+func TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeAgent{
+		reply: "默认回复",
+		info:  agent.AgentInfo{Name: "codex", Type: "acp", Model: "gpt-test", Command: "codex"},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(130, "/status"))
+	h.HandleMessage(context.Background(), client, newTextMessage(131, "/info"))
+
+	texts := calls.texts()
+	if !containsText(texts, "agent: codex") || !containsText(texts, "type: acp") {
+		t.Fatalf("status reply mismatch, messages=%#v", texts)
+	}
+	if !containsText(texts, "请使用 /status") {
+		t.Fatalf("info migration reply mismatch, messages=%#v", texts)
+	}
+	if ag.chatCallCount() != 0 {
+		t.Fatalf("/info should not call default agent, calls=%d", ag.chatCallCount())
+	}
+}
+
 func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.defaultName = "codex"
@@ -715,7 +758,7 @@ func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 	}
 
 	tests := map[string]string{
-		"info":        h.buildStatus(),
+		"status":      h.buildStatus(),
 		"cwd":         h.handleCwd("/cwd"),
 		"progress":    h.handleProgressCommand("/progress"),
 		"progressErr": h.handleProgressCommand("/progress unknown"),
@@ -2643,6 +2686,62 @@ func TestHandleCodexModelLsCommandListsModelsAndEfforts(t *testing.T) {
 		!strings.Contains(text, "1. gpt-5.3-codex") {
 		t.Fatalf("model ls reply mismatch, messages=%#v", calls.texts())
 	}
+}
+
+func TestHandleCodexQuotaCommandShowsRateLimits(t *testing.T) {
+	reset := int64(1710003600)
+	h := NewHandler(nil, nil)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		quota: agent.CodexQuota{Limits: []agent.CodexRateLimit{
+			{
+				ID:       "codex",
+				Name:     "Codex",
+				PlanType: "pro",
+				Primary: &agent.CodexRateLimitWindow{
+					UsedPercent:        80,
+					ResetsAt:           &reset,
+					WindowDurationMins: int64Ptr(300),
+				},
+				Secondary: &agent.CodexRateLimitWindow{UsedPercent: 20},
+				Credits:   &agent.CodexCredits{Balance: "10", HasCredits: true},
+			},
+			{
+				ID:          "research",
+				ReachedType: "rate_limit_reached",
+				Primary:     &agent.CodexRateLimitWindow{UsedPercent: 100},
+			},
+		}},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": t.TempDir()})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(132, "/cx quota"))
+
+	text := strings.Join(calls.texts(), "\n")
+	for _, want := range []string{
+		"Codex 账号额度",
+		"codex (Codex)",
+		"plan: pro",
+		"primary: 已用 80%",
+		"secondary: 已用 20%",
+		"credits: 有额度，余额 10",
+		"research",
+		"已达到限制: rate_limit_reached",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("quota reply missing %q, messages=%#v", want, calls.texts())
+		}
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
 
 func TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent(t *testing.T) {

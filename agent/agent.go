@@ -124,6 +124,41 @@ type CodexModelAgent interface {
 	ListCodexModels(ctx context.Context) ([]CodexModel, error)
 }
 
+// CodexQuota 表示 Codex app-server 返回的账号额度快照。
+type CodexQuota struct {
+	Limits []CodexRateLimit
+}
+
+// CodexRateLimit 表示一个按 limit_id 区分的 Codex 额度桶。
+type CodexRateLimit struct {
+	ID          string
+	Name        string
+	PlanType    string
+	ReachedType string
+	Primary     *CodexRateLimitWindow
+	Secondary   *CodexRateLimitWindow
+	Credits     *CodexCredits
+}
+
+// CodexRateLimitWindow 表示一个时间窗口内的额度使用比例。
+type CodexRateLimitWindow struct {
+	UsedPercent        int
+	ResetsAt           *int64
+	WindowDurationMins *int64
+}
+
+// CodexCredits 表示账号余额类额度状态。
+type CodexCredits struct {
+	Balance    string
+	HasCredits bool
+	Unlimited  bool
+}
+
+// CodexQuotaAgent 暴露 Codex app-server 的账号额度查询能力。
+type CodexQuotaAgent interface {
+	ReadCodexQuota(ctx context.Context) (CodexQuota, error)
+}
+
 // VisibleCompanionAgent 支持显式打开或断开本地可见 Companion。
 type VisibleCompanionAgent interface {
 	OpenVisibleCompanion(ctx context.Context) error

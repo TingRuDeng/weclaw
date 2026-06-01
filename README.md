@@ -97,7 +97,7 @@ Send these as WeChat messages:
 | `/claude` | Switch default agent to Claude |
 | `/cwd /path/to/project` | Switch workspace directory |
 | `/new` | Start a new conversation (clear session) |
-| `/info` | Show current agent info |
+| `/status` | Show WeClaw runtime status |
 | `/help` | Show help message |
 
 ### Aliases

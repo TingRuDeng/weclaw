@@ -993,3 +993,21 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成 `/cx clean`。该命令会清理当前微信用户与当前 Codex Agent 下，WeClaw 自己持久化且路径已不存在的 workspace 记录；如果用户正在浏览被清理的 workspace，会同步回到工作空间列表层。命令不会删除 `~/.codex/sessions` 或 Codex App 历史文件。验证命令：`go test ./messaging -run 'TestCodexCleanRemovesMissingStoredWorkspaces|TestBuildCodexSessionHelpTextIncludesDescriptions|TestCommandRepliesUseBlankLinesForWeChat' -count=1`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`go build -o /tmp/weclaw-cx-clean .` 与 `git diff --check`，结果均通过。
+
+## Codex 额度查询与状态命令精简清单
+
+### 目标
+
+新增 `/cx quota` 查询 Codex 账号额度；将全局运行态命令收敛为 `/status`，移除 `/info` 作为用户可见内置入口，避免 status/info 和 quota/usage 多别名造成记忆负担。
+
+### 执行任务
+
+- [x] 串行：新增 `/status`、`/info` 非内置入口和 `/cx quota` 的失败测试。
+- [x] 串行：实现 Codex app-server `account/rateLimits/read` 调用与额度结构解析。
+- [x] 串行：接入 `/status` 与 `/cx quota` 命令分发，并移除 `/info` 帮助入口。
+- [x] 串行：同步 `/help`、`/cx help` 与 README_CN 命令说明。
+- [x] 串行：运行定向测试、全量测试、静态检查、构建和 diff 检查。
+
+### Review 小结
+
+已完成 Codex 额度查询与状态命令精简。微信发送 `/cx quota` 会通过 Codex app-server 的 `account/rateLimits/read` 查询账号额度，并展示 limit、plan、primary/secondary 使用比例、重置时间和 credits 状态；全局运行态入口收敛为 `/status`，`/info` 不再作为状态别名，只提示改用 `/status`，避免误发给默认 Agent。验证命令：`go test ./agent ./messaging -run 'TestACPAgentReadCodexQuotaParsesRateLimits|TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent|TestHandleCodexQuotaCommandShowsRateLimits|TestBuildHelpText|TestBuildCodexSessionHelpTextIncludesDescriptions' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`go build -o /tmp/weclaw-cx-quota .` 与 `git diff --check`，结果均通过。

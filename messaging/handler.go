@@ -546,8 +546,14 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 	}
 
 	// Built-in commands (no typing needed)
-	if trimmed == "/info" {
+	if trimmed == "/status" {
 		reply := h.buildStatus()
+		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+		}
+		return
+	} else if trimmed == "/info" {
+		reply := "命令已移除，请使用 /status 查看 WeClaw 全局运行态。"
 		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
@@ -1496,7 +1502,7 @@ func buildHelpText() string {
 
 常用：
 
-/info 查看当前状态
+/status 查看 WeClaw 运行态
 
 /new 新建会话
 
@@ -1504,7 +1510,9 @@ func buildHelpText() string {
 
 Codex：
 
-/cx status 查看当前状态
+/cx status 查看 Codex 会话状态
+
+/cx quota 查看 Codex 账号额度
 
 /cx ls 查看列表
 
@@ -1569,7 +1577,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return len(fields) == 2
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "cli", "attach", "detach", "app", "open-app", "status", "clean", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "quota", "cli", "attach", "detach", "app", "open-app", "status", "clean", "help":
 		return true
 	default:
 		return false
@@ -1653,6 +1661,11 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 			return "用法: /cx status"
 		}
 		return h.renderCodexStatus(userID, agentName, workspaceRoot, ag)
+	case "quota":
+		if len(fields) != 2 {
+			return "用法: /cx quota"
+		}
+		return h.renderCodexQuota(ctx, ag)
 	case "clean":
 		if len(fields) != 2 {
 			return "用法: /cx clean"
@@ -2164,6 +2177,7 @@ func buildCodexSessionHelpText() string {
 		"/cx cli 打开本地 CLI 接手当前 thread",
 		"/cx app 打开 Codex App 到当前工作空间",
 		"/cx status 查看 remote、thread 和本地入口状态",
+		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx attach app 兼容写法，等同 /cx app",
 		"/cx detach 断开已连接的本地 Companion",
