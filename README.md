@@ -94,11 +94,48 @@ Send these as WeChat messages:
 | `hello` | Send to default agent |
 | `/codex write a function` | Send to a specific agent |
 | `/cc explain this code` | Send to agent by alias |
+| `/cc help` | 查看 Claude 会话命令 |
 | `/claude` | Switch default agent to Claude |
 | `/cwd /path/to/project` | Switch workspace directory |
 | `/new` | Start a new conversation (clear session) |
 | `/status` | Show WeClaw runtime status |
 | `/help` | Show help message |
+
+### Codex 主路径
+
+Codex 的推荐使用方式是微信 remote-first，本地接手入口按需打开：
+
+| 命令 | 说明 |
+| ---- | ---- |
+| `/cx status` | 查看当前 workspace、thread、remote 和本地入口记录 |
+| `/cx quota` | 查看 Codex 账号额度 |
+| `/cx ls` | 查看 Codex 工作空间或当前工作空间会话 |
+| `/cx <编号|..>` | 选择当前列表项，或返回上一级 |
+| `/cx switch <编号>` | 切换当前工作空间会话 |
+| `/cx cli` | 在本地 Terminal 打开当前 thread 的 Codex CLI |
+| `/cx app` | 在 Codex App 中打开当前工作空间 |
+| `/cx clean` | 清理已不存在的 WeClaw 工作空间记录 |
+| `/cx help` | 查看 Codex 高级会话命令 |
+
+本地 Terminal 或 Codex App 只是接手入口。手动关闭它们不会影响微信 remote 会话，`/cx status` 也不会实时探测本地窗口是否仍然存在。
+
+### Claude 会话复用
+
+Claude CLI 模式支持按工作空间复用 Claude Code session，并可从微信侧切换到本机已有会话：
+
+| 命令 | 说明 |
+| ---- | ---- |
+| `/cc ls` | 查看 WeClaw 已记录和本机 Claude Code 可发现的可切换会话 |
+| `/cc switch <编号|sessionId>` | 切换到指定 Claude session，编号来自 `/cc ls` |
+| `/cc new` | 新建当前工作空间会话，下一条 Claude 消息会创建新 session |
+| `/cc pwd` | 查看当前 Claude 工作空间 |
+| `/cc status` | 查看当前工作空间、session 和 Agent 模式 |
+| `/cc cli` | 在本地 Terminal 中用 `claude --resume` 接手当前 session |
+| `/cc help` | 查看 Claude 会话命令 |
+
+`/claude` 可作为 `/cc` 的兼容入口，例如 `/claude ls`。完整 `/cc switch` 体验依赖 Claude CLI Agent；如果 Claude 使用 ACP 模式，普通聊天仍可复用自身会话，但不会强行映射到 Claude Code 本机 session。
+
+本机 Claude Code 历史来自 `~/.claude` 的只读扫描。WeClaw 只读取项目配置、session 文件名、mtime 和 transcript 首行摘要，不读取或展示完整 transcript 正文。
 
 ### Aliases
 
@@ -225,14 +262,14 @@ Environment variables:
 
 ### 微信进度反馈
 
-默认配置使用 `summary` 模式：
+默认配置使用 `typing` 模式：微信只显示“正在输入”和最终回复，不额外发送中间文字气泡。
 
 ```json
 {
   "default_agent": "codex",
   "progress": {
-    "mode": "summary",
-    "send_acceptance": true,
+    "mode": "typing",
+    "send_acceptance": false,
     "enable_typing": true,
     "typing_heartbeat_seconds": 8,
     "initial_delay_seconds": 10,
@@ -244,13 +281,13 @@ Environment variables:
     "codex": {
       "type": "acp",
       "command": "codex",
-      "args": ["app-server"]
+      "args": ["app-server", "--listen", "stdio://"]
     }
   }
 }
 ```
 
-`summary` 模式只发送受理确认、输入中状态、少量进度摘要和最终完整结果，不会把 Agent 的正文 delta、半句话或代码片段逐条发到微信。这样更适合微信聊天窗口，也避免 Codex 增量片段被重复展示。
+如果需要低频文字进度，可以切到 `summary`；如果需要恢复旧实时正文流，可以切到 `stream`。
 
 可选模式：
 
@@ -258,7 +295,7 @@ Environment variables:
 |------|------|
 | `off` | 不发送输入中状态和中间进度，只发送最终结果 |
 | `typing` | 发送输入中状态和最终结果 |
-| `summary` | 发送受理确认、输入中状态、低频摘要和最终结果，默认推荐 |
+| `summary` | 发送受理确认、输入中状态、低频摘要和最终结果 |
 | `verbose` | 预留的更详细摘要模式，当前按 summary 处理 |
 | `stream` | 恢复旧的实时正文片段预览 |
 | `debug` | 预留的内部调试模式，当前按 summary 处理 |

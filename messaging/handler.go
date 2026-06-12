@@ -38,6 +38,9 @@ type CodexAppOpener func(ctx context.Context, command string, workspaceRoot stri
 // CodexCLIResumeOpener 用于把当前 Codex thread 打开到本地 CLI/TUI。
 type CodexCLIResumeOpener func(ctx context.Context, command string, workspaceRoot string, threadID string) error
 
+// ClaudeCLIResumeOpener 用于把当前 Claude session 打开到本地 CLI。
+type ClaudeCLIResumeOpener func(ctx context.Context, command string, workspaceRoot string, sessionID string) error
+
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {
 	ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error)
@@ -84,11 +87,14 @@ type Handler struct {
 	pendingCodexRunsMu    sync.Mutex
 	pendingCodexRuns      map[string]string
 	codexLocalSessionDir  string
+	claudeSessions        *claudeSessionStore
+	claudeLocalSessionDir string
 	codexBrowseMu         sync.Mutex
 	codexBrowseWorkspaces map[string]string
 	codexLocalEntries     map[string]codexLocalEntryState
 	codexAppOpener        CodexAppOpener
 	codexCLIResumeOpener  CodexCLIResumeOpener
+	claudeCLIResumeOpener ClaudeCLIResumeOpener
 }
 
 const (
@@ -148,10 +154,13 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		activeTasks:           make(map[string]*activeAgentTask),
 		pendingCodexRuns:      make(map[string]string),
 		codexLocalSessionDir:  defaultCodexLocalSessionDir(),
+		claudeSessions:        newClaudeSessionStore(),
+		claudeLocalSessionDir: defaultClaudeLocalSessionDir(),
 		codexBrowseWorkspaces: make(map[string]string),
 		codexLocalEntries:     make(map[string]codexLocalEntryState),
 		codexAppOpener:        defaultCodexAppOpener,
 		codexCLIResumeOpener:  defaultCodexCLIResumeOpener,
+		claudeCLIResumeOpener: defaultClaudeCLIResumeOpener,
 	}
 }
 
@@ -272,6 +281,13 @@ func (h *Handler) SetCodexCLIResumeOpener(opener CodexCLIResumeOpener) {
 	h.codexCLIResumeOpener = opener
 }
 
+// SetClaudeCLIResumeOpener 设置 Claude CLI resume 打开器，主要用于测试外部进程调用。
+func (h *Handler) SetClaudeCLIResumeOpener(opener ClaudeCLIResumeOpener) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.claudeCLIResumeOpener = opener
+}
+
 func (h *Handler) resolveProgressConfig(agentName string) config.ProgressConfig {
 	h.mu.RLock()
 	global := h.progressConfig
@@ -306,6 +322,20 @@ func (h *Handler) ensureCodexSessions() *codexSessionStore {
 // SetCodexSessionFile 设置 Codex workspace/thread 列表的持久化文件。
 func (h *Handler) SetCodexSessionFile(filePath string) {
 	h.ensureCodexSessions().SetFilePath(filePath)
+}
+
+func (h *Handler) ensureClaudeSessions() *claudeSessionStore {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.claudeSessions == nil {
+		h.claudeSessions = newClaudeSessionStore()
+	}
+	return h.claudeSessions
+}
+
+// SetClaudeSessionFile 设置 Claude workspace/session 列表的持久化文件。
+func (h *Handler) SetClaudeSessionFile(filePath string) {
+	h.ensureClaudeSessions().SetFilePath(filePath)
 }
 
 // SetDefaultAgent sets the default agent (already started).
@@ -582,6 +612,12 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
 		return
+	} else if isClaudeSessionCommand(trimmed) {
+		reply := h.handleClaudeSessionCommand(ctx, msg.FromUserID, trimmed)
+		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+		}
+		return
 	} else if isCodexSessionCommand(trimmed) {
 		reply := h.handleCodexSessionCommand(ctx, msg.FromUserID, trimmed)
 		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
@@ -663,6 +699,10 @@ func (h *Handler) agentExecutionKey(userID string, agentName string, ag agent.Ag
 	if isCodexAgent(agentName, info) {
 		workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
 		return buildCodexConversationID(userID, agentName, workspaceRoot)
+	}
+	if isClaudeAgent(agentName, info) {
+		workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
+		return buildClaudeConversationID(userID, agentName, workspaceRoot)
 	}
 	return strings.Join([]string{"agent", strings.TrimSpace(userID), strings.TrimSpace(agentName)}, "\x00")
 }
@@ -953,6 +993,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 			reply = renderFinalFailure("", err)
 		} else {
 			h.recordCodexThread(msg.FromUserID, defaultName, ag, conversationID)
+			h.recordClaudeSession(msg.FromUserID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
 		}
 	} else {
@@ -1011,6 +1052,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 		reply = renderFinalFailure("["+name+"] ", err)
 	} else {
 		h.recordCodexThread(msg.FromUserID, name, ag, conversationID)
+		h.recordClaudeSession(msg.FromUserID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
 	h.sendReplyWithMedia(replyCtx, client, msg, name, reply, clientID)
@@ -1059,6 +1101,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		reply = renderFinalFailure(opts.replyPrefix, err)
 	} else {
 		h.recordCodexThread(opts.msg.FromUserID, opts.agentName, opts.agent, conversationID)
+		h.recordClaudeSession(opts.msg.FromUserID, opts.agentName, opts.agent, conversationID)
 		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
 	if runtime.task.shouldSendFinal() {
@@ -1136,6 +1179,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				return
 			}
 			h.recordCodexThread(msg.FromUserID, n, ag, conversationID)
+			h.recordClaudeSession(msg.FromUserID, n, ag, conversationID)
 			if activeTask != nil && !activeTask.shouldSendFinal() {
 				ch <- result{name: n, skip: true}
 				return
@@ -1205,9 +1249,16 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 }
 
 func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
-	if !isCodexAgent(agentName, ag.Info()) {
-		return userID, nil
+	if isCodexAgent(agentName, ag.Info()) {
+		return h.resolveCodexConversationID(ctx, userID, agentName, ag)
 	}
+	if isClaudeAgent(agentName, ag.Info()) {
+		return h.resolveClaudeConversationID(ctx, userID, agentName, ag)
+	}
+	return userID, nil
+}
+
+func (h *Handler) resolveCodexConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
 	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
 	bindingKey := codexBindingKey(userID, agentName)
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
@@ -1233,6 +1284,32 @@ func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string,
 	return conversationID, nil
 }
 
+func (h *Handler) resolveClaudeConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
+	workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
+	bindingKey := claudeBindingKey(userID, agentName)
+	conversationID := buildClaudeConversationID(userID, agentName, workspaceRoot)
+	claudeAg, ok := ag.(agent.ClaudeSessionAgent)
+	if !ok {
+		h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)
+		return conversationID, nil
+	}
+	sessionID, pending := h.ensureClaudeSessions().getSession(bindingKey, workspaceRoot)
+	if pending {
+		claudeAg.ClearClaudeSession(conversationID)
+		return conversationID, nil
+	}
+	if sessionID != "" {
+		current, hasCurrent := claudeAg.CurrentClaudeSession(conversationID)
+		if !hasCurrent || current != sessionID {
+			if err := claudeAg.UseClaudeSession(ctx, conversationID, sessionID); err != nil {
+				return "", fmt.Errorf("恢复 Claude 会话失败: %w", err)
+			}
+		}
+	}
+	h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)
+	return conversationID, nil
+}
+
 func (h *Handler) recordCodexThread(userID string, agentName string, ag agent.Agent, conversationID string) {
 	if !isCodexAgent(agentName, ag.Info()) {
 		return
@@ -1252,6 +1329,27 @@ func (h *Handler) recordCodexThread(userID string, agentName string, ag agent.Ag
 	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+}
+
+func (h *Handler) recordClaudeSession(userID string, agentName string, ag agent.Agent, conversationID string) {
+	if !isClaudeAgent(agentName, ag.Info()) {
+		return
+	}
+	claudeAg, ok := ag.(agent.ClaudeSessionAgent)
+	if !ok {
+		return
+	}
+	sessionID, ok := claudeAg.CurrentClaudeSession(conversationID)
+	if !ok {
+		return
+	}
+	workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
+	bindingKey := claudeBindingKey(userID, agentName)
+	if ownerWorkspace, ok := h.ensureClaudeSessions().findWorkspaceBySession(bindingKey, sessionID); ok {
+		workspaceRoot = ownerWorkspace
+	}
+	h.ensureClaudeSessions().setSession(bindingKey, workspaceRoot, sessionID)
+	h.ensureClaudeSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 }
 
 func (h *Handler) syncCodexThreadFromAgent(userID string, agentName string, workspaceRoot string, ag agent.Agent) {
@@ -1350,6 +1448,9 @@ func (h *Handler) resetDefaultSession(ctx context.Context, userID string) string
 	if isCodexAgent(name, ag.Info()) {
 		return h.resetDefaultCodexSession(ctx, userID, name, ag)
 	}
+	if isClaudeAgent(name, ag.Info()) {
+		return h.resetDefaultClaudeSession(ctx, userID, name, ag)
+	}
 	sessionID, err := ag.ResetSession(ctx, userID)
 	if err != nil {
 		log.Printf("[handler] reset session failed for %s: %v", userID, err)
@@ -1395,6 +1496,31 @@ func (h *Handler) recordResetCodexThread(userID string, agentName string, worksp
 		return
 	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
+}
+
+func (h *Handler) resetDefaultClaudeSession(ctx context.Context, userID string, name string, ag agent.Agent) string {
+	workspaceRoot := h.claudeWorkspaceRootForUser(userID, name, ag)
+	conversationID := buildClaudeConversationID(userID, name, workspaceRoot)
+	sessionID, err := ag.ResetSession(ctx, conversationID)
+	if err != nil {
+		log.Printf("[handler] reset claude session failed for %s: %v", conversationID, err)
+		return fmt.Sprintf("Failed to reset session: %v", err)
+	}
+	h.recordResetClaudeSession(userID, name, workspaceRoot, sessionID)
+	if sessionID != "" {
+		return wechatCommandText(fmt.Sprintf("已创建新的%s会话", name), sessionID)
+	}
+	return fmt.Sprintf("已创建新的%s会话", name)
+}
+
+func (h *Handler) recordResetClaudeSession(userID string, agentName string, workspaceRoot string, sessionID string) {
+	bindingKey := claudeBindingKey(userID, agentName)
+	h.ensureClaudeSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+	if strings.TrimSpace(sessionID) == "" {
+		h.ensureClaudeSessions().setPendingNew(bindingKey, workspaceRoot)
+		return
+	}
+	h.ensureClaudeSessions().setSession(bindingKey, workspaceRoot, sessionID)
 }
 
 // handleCwd handles the /cwd command. It updates the working directory for all running agents.
@@ -1471,6 +1597,9 @@ func (h *Handler) recordActiveWorkspaceForUser(userIDs []string, agents map[stri
 	for name, ag := range agents {
 		if isCodexAgent(name, ag.Info()) {
 			h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(userIDs[0], name), workspaceRoot)
+		}
+		if isClaudeAgent(name, ag.Info()) {
+			h.ensureClaudeSessions().setActiveWorkspace(claudeBindingKey(userIDs[0], name), workspaceRoot)
 		}
 	}
 }

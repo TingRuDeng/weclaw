@@ -105,6 +105,13 @@ type CodexThreadAgent interface {
 	ClearCodexThread(conversationID string)
 }
 
+// ClaudeSessionAgent 暴露 Claude Code CLI 的 session 控制能力。
+type ClaudeSessionAgent interface {
+	CurrentClaudeSession(conversationID string) (string, bool)
+	UseClaudeSession(ctx context.Context, conversationID string, sessionID string) error
+	ClearClaudeSession(conversationID string)
+}
+
 // CodexModelStatus 表示当前 WeClaw 传给 Codex 的模型配置。
 type CodexModelStatus struct {
 	Model  string

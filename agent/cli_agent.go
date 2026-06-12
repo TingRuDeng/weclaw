@@ -95,6 +95,42 @@ func (a *CLIAgent) ResetSession(_ context.Context, conversationID string) (strin
 	return "", nil
 }
 
+// CurrentClaudeSession 返回当前微信会话绑定的 Claude Code session。
+func (a *CLIAgent) CurrentClaudeSession(conversationID string) (string, bool) {
+	if !a.isClaudeCLI() {
+		return "", false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sessionID := strings.TrimSpace(a.sessions[conversationID])
+	return sessionID, sessionID != ""
+}
+
+// UseClaudeSession 绑定已有 Claude Code session，下一次 Chat 会通过 --resume 续接。
+func (a *CLIAgent) UseClaudeSession(_ context.Context, conversationID string, sessionID string) error {
+	if !a.isClaudeCLI() {
+		return fmt.Errorf("agent is not claude cli")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("empty session id")
+	}
+	a.mu.Lock()
+	a.sessions[conversationID] = sessionID
+	a.mu.Unlock()
+	return nil
+}
+
+// ClearClaudeSession 清理当前绑定，下一条 Claude 消息会创建新 session。
+func (a *CLIAgent) ClearClaudeSession(conversationID string) {
+	if !a.isClaudeCLI() {
+		return
+	}
+	a.mu.Lock()
+	delete(a.sessions, conversationID)
+	a.mu.Unlock()
+}
+
 // SetCwd changes the working directory for subsequent CLI invocations.
 func (a *CLIAgent) SetCwd(cwd string) {
 	a.mu.Lock()
@@ -110,6 +146,15 @@ func (a *CLIAgent) Chat(ctx context.Context, conversationID string, message stri
 	default:
 		return a.chatClaude(ctx, conversationID, message)
 	}
+}
+
+// isClaudeCLI 统一按 agent 名称和命令识别 Claude，支持用户给 Claude 配自定义别名。
+func (a *CLIAgent) isClaudeCLI() bool {
+	if strings.EqualFold(a.name, "claude") {
+		return true
+	}
+	command := strings.ToLower(strings.TrimSpace(a.command))
+	return strings.Contains(command, "claude")
 }
 
 // chatClaude uses claude -p with stream-json to get structured output and session persistence.

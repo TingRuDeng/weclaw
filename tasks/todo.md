@@ -1027,3 +1027,41 @@ Codex 普通微信任务默认走 app-server remote-first，不再依赖本地 C
 ### Review 小结
 
 已完成 Codex 进入工作空间自动选会话。现在 `/cx cd <编号|工作空间名>` 或 `/cx <编号>` 进入工作空间时，单个真实会话会自动切换；没有真实会话时会创建新会话草稿；多个真实会话仍展示列表供用户选择。验证命令：`go test ./messaging -run 'TestCodexShortIndexEntersWorkspaceFromWorkspaceList|TestCodexCxCdWorkspaceWithNoSessionsCreatesDraft|TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs|TestCodexShortIndexSwitchesSessionInsideWorkspace|TestCodexShortDotDotReturnsToWorkspaceList' -count=1 -timeout 60s`、`go test -count=1 -timeout 60s ./...`、`go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging`、`go vet ./...`、`go build -o /tmp/weclaw-cx-cd-auto .` 与 `git diff --check`，结果均通过。
+## Claude 会话复用落地清单
+
+### 目标
+
+让 Claude 在微信侧获得接近 Codex 的 workspace/session 复用体验：可列出、切换、新建、查看状态，并可在本地 Terminal 接手当前会话。
+
+### 清单
+
+- [x] P1 串行：补 Claude 本机会话扫描红灯测试。
+- [x] P2 串行：补 Claude CLI 会话控制红灯测试。
+- [x] P3 串行：补 `/cc` 会话命令红灯测试。
+- [x] P4 串行：实现 Claude 本机会话扫描与存储。
+- [x] P5 串行：实现 Claude CLI 会话控制接口。
+- [x] P6 串行：实现 `/cc` 会话命令与本地 CLI 接手。
+- [x] P7 串行：最小充分验证与 review-gate。
+- [x] P8 串行：同步 README 中的 Claude 会话复用命令、边界和隐私说明。
+
+### Review 小结
+
+已按方案 A 新增 Claude 专属会话复用层，未抽象改造 Codex。Claude 本地会话扫描只读取项目配置、文件名、mtime 和 transcript 首行摘要，不读取或展示完整正文；README 已同步 `/cc` 会话命令、CLI/ACP 边界和隐私说明。验证命令：`go test ./... -count=1 -timeout 60s` 与 `git diff --check`，结果均通过。剩余风险是 Claude ACP 仍只保留基础 session 复用，完整 `/cc switch` 体验依赖 Claude CLI Agent。
+
+## Claude 会话复用产品化优化清单
+
+### 目标
+
+补齐 Claude 会话复用在重启恢复、编号一致性和自定义 Agent 命名上的产品化缺口。
+
+### 清单
+
+- [x] 串行：补自定义 Claude CLI Agent 名称仍可控制 session 的回归测试。
+- [x] 串行：补 `/cc ls` 展示编号与 `/cc switch <编号>` 目标一致的回归测试。
+- [x] 串行：启动时接入 Claude 会话持久化文件加载。
+- [x] 串行：统一 Claude CLI 判定，支持 command 为 Claude 的自定义 Agent 名称。
+- [x] 串行：将 `/cc ls` 调整为可切换会话列表，并同步 README 文案。
+
+### Review 小结
+
+已修复成熟产品审查中发现的 3 个问题：`weclaw start` 现在会加载 Claude 会话持久化文件；自定义名称但 command 为 Claude 的 CLI Agent 可被 `/cc switch` 正确绑定；`/cc ls` 展示的编号与 `/cc switch <编号>` 使用同一目标列表。验证命令：`go test ./agent ./messaging ./cmd -run 'TestCLIAgentClaudeSessionControl|TestCLIAgentClaudeSessionControlAllowsCustomClaudeCommandName|TestSetClaudeSessionFileRestoresWorkspaceSession|TestClaudeCcLs|TestHandleClaude|TestHandleGlobalNewResetsActiveClaudeWorkspaceSession|TestHandleCwdRecordsActiveClaudeWorkspace' -count=1 -timeout 60s`、`go test ./... -count=1 -timeout 120s`、`go test -race ./agent ./cmd ./messaging -count=1 -timeout 60s`、`go vet ./...`、`go build -o /tmp/weclaw-claude-session-reuse .` 与 `git diff --check`，结果均通过。剩余风险是 60 秒全量测试会被 `config` 包真实命令探测耗尽超时；全局 `~/.claude/transcripts` 缺少可靠 workspace 归属，本轮未强行纳入。
