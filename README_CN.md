@@ -431,12 +431,19 @@ docker logs -f weclaw
 ## 发版
 
 ```bash
-# 打 tag 触发 GitHub Actions 自动构建发版
-git tag v0.1.0
-git push origin v0.1.0
+# 只构建和校验发布产物，不创建 tag 或 GitHub Release
+scripts/release.sh --next-patch --dry-run
+
+# 本地创建下一个 patch 版本发布
+scripts/release.sh --next-patch
+
+# 或发布指定版本
+scripts/release.sh v0.1.48
 ```
 
-自动构建 `darwin/linux/windows` x `amd64/arm64` 的二进制，创建 GitHub Release 并上传所有产物和校验文件。
+发布脚本会检查工作区、运行验证、构建 `darwin/linux/windows` x `amd64/arm64` 二进制、生成 `checksums.txt`、推送 tag、创建 GitHub Release，并校验线上资产。只有在已经完成等价验证后，才使用 `--skip-tests`。
+
+也可以手动触发 GitHub Actions Release workflow，或推送 `vX.Y.Z` tag 让 Actions 构建并发布同一组资产。
 
 ## 更新
 

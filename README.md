@@ -449,12 +449,19 @@ docker logs -f weclaw
 ## Release
 
 ```bash
-# Tag a new version to trigger GitHub Actions build & release
-git tag v0.1.0
-git push origin v0.1.0
+# Build and verify release assets without creating a tag or GitHub Release
+scripts/release.sh --next-patch --dry-run
+
+# Create the next patch release locally
+scripts/release.sh --next-patch
+
+# Or publish an explicit version
+scripts/release.sh v0.1.48
 ```
 
-The workflow builds binaries for `darwin/linux/windows` x `amd64/arm64`, creates a GitHub Release, and uploads all artifacts with checksums.
+The release script checks the working tree, runs validation, builds `darwin/linux/windows` x `amd64/arm64` binaries, generates `checksums.txt`, pushes the tag, creates a GitHub Release, and verifies the uploaded assets. Use `--skip-tests` only after an equivalent validation has already passed.
+
+You can also trigger the GitHub Actions Release workflow manually, or push a `vX.Y.Z` tag to let Actions build and publish the same asset set.
 
 ## Update
 
