@@ -166,6 +166,96 @@ func TestACPAgentCodexTurnStartIncludesEffort(t *testing.T) {
 	}
 }
 
+func TestACPAgentConversationCwdOverridesGlobalCwdForCodexThreadAndTurn(t *testing.T) {
+	ctx := context.Background()
+	workspaceA := filepath.Join(t.TempDir(), "workspace-a")
+	workspaceB := filepath.Join(t.TempDir(), "workspace-b")
+	if err := os.MkdirAll(workspaceA, 0o755); err != nil {
+		t.Fatalf("mkdir workspace A: %v", err)
+	}
+	if err := os.MkdirAll(workspaceB, 0o755); err != nil {
+		t.Fatalf("mkdir workspace B: %v", err)
+	}
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     workspaceB,
+	})
+	a.SetConversationCwd("conversation-a", workspaceA)
+	a.SetCwd(workspaceB)
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			p, ok := params.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("unexpected thread/start params type %T", params)
+			}
+			if p["cwd"] != workspaceA {
+				return nil, fmt.Errorf("thread/start cwd=%q, want %q", p["cwd"], workspaceA)
+			}
+			return json.RawMessage(`{"thread":{"id":"thread-a"}}`), nil
+		case "turn/start":
+			p, ok := params.(codexTurnStartParams)
+			if !ok {
+				return nil, fmt.Errorf("unexpected turn/start params type %T", params)
+			}
+			if p.Cwd != workspaceA {
+				return nil, fmt.Errorf("turn/start cwd=%q, want %q", p.Cwd, workspaceA)
+			}
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Delta: "ok"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	if _, err := a.chatCodexAppServer(ctx, "conversation-a", "hello", nil); err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+}
+
+func TestACPAgentConversationCwdOverridesGlobalCwdForCodexResume(t *testing.T) {
+	ctx := context.Background()
+	workspaceA := filepath.Join(t.TempDir(), "workspace-a")
+	workspaceB := filepath.Join(t.TempDir(), "workspace-b")
+	if err := os.MkdirAll(workspaceA, 0o755); err != nil {
+		t.Fatalf("mkdir workspace A: %v", err)
+	}
+	if err := os.MkdirAll(workspaceB, 0o755); err != nil {
+		t.Fatalf("mkdir workspace B: %v", err)
+	}
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     workspaceB,
+	})
+	a.SetConversationCwd("conversation-a", workspaceA)
+	a.SetCwd(workspaceB)
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/resume" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p, ok := params.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("unexpected thread/resume params type %T", params)
+		}
+		if p["cwd"] != workspaceA {
+			return nil, fmt.Errorf("thread/resume cwd=%q, want %q", p["cwd"], workspaceA)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-a"}}`), nil
+	}
+
+	if err := a.UseCodexThread(ctx, "conversation-a", "thread-a"); err != nil {
+		t.Fatalf("UseCodexThread error: %v", err)
+	}
+}
+
 func TestACPAgentListCodexModelsParsesEffortOptions(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",

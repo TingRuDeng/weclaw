@@ -47,7 +47,8 @@ type ACPAgent struct {
 	// best-effort thread/resume call before first turn.
 	resumeOnFirstUse            map[string]bool // conversationID -> resume needed
 	usageLimitRefreshOnNextTurn map[string]bool // conversationID -> refresh runtime before next turn
-	stateFile                   string          // optional persisted state file path
+	conversationCwds            map[string]string
+	stateFile                   string // optional persisted state file path
 	history                     map[string][]acpHistoryMessage
 
 	// pending tracks in-flight JSON-RPC requests
@@ -320,6 +321,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		threads:                     make(map[string]string),
 		resumeOnFirstUse:            make(map[string]bool),
 		usageLimitRefreshOnNextTurn: make(map[string]bool),
+		conversationCwds:            make(map[string]string),
 		stateFile:                   stateFile,
 		history:                     make(map[string][]acpHistoryMessage),
 		pending:                     make(map[int64]chan *rpcResponse),
@@ -480,6 +482,31 @@ func (a *ACPAgent) SetCwd(cwd string) {
 	a.cwd = cwd
 }
 
+// SetConversationCwd 固定单个 conversation 的工作目录，避免后台任务被全局 cwd 切换影响。
+func (a *ACPAgent) SetConversationCwd(conversationID string, cwd string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		delete(a.conversationCwds, conversationID)
+		return
+	}
+	a.conversationCwds[conversationID] = cwd
+}
+
+func (a *ACPAgent) cwdForConversation(conversationID string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if cwd := strings.TrimSpace(a.conversationCwds[conversationID]); cwd != "" {
+		return cwd
+	}
+	return a.cwd
+}
+
 // ResetSession clears the existing session for the given conversationID and
 // immediately creates a new one, returning the new session ID.
 func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (string, error) {
@@ -581,7 +608,7 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
-	if err := a.resumeThread(ctx, threadID); err != nil {
+	if err := a.resumeThread(ctx, conversationID, threadID); err != nil {
 		return fmt.Errorf("resume thread %s: %w", threadID, err)
 	}
 	a.mu.Lock()
@@ -763,7 +790,7 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	}
 
 	result, err := a.rpc(ctx, "session/new", newSessionParams{
-		Cwd:        a.cwd,
+		Cwd:        a.cwdForConversation(conversationID),
 		McpServers: []interface{}{},
 	})
 	if err != nil {
@@ -796,7 +823,7 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 
 	if exists {
 		if shouldResume {
-			if err := a.resumeThread(ctx, tid); err != nil {
+			if err := a.resumeThread(ctx, conversationID, tid); err != nil {
 				log.Printf("[acp] failed to resume restored thread (conversation=%s, thread=%s): %v", conversationID, tid, err)
 			} else {
 				log.Printf("[acp] restored thread resumed (conversation=%s, thread=%s)", conversationID, tid)
@@ -807,7 +834,7 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 
 	params := map[string]interface{}{
 		"approvalPolicy":         "never",
-		"cwd":                    a.cwd,
+		"cwd":                    a.cwdForConversation(conversationID),
 		"sandbox":                "danger-full-access",
 		"persistExtendedHistory": true,
 	}
@@ -843,7 +870,7 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	return threadResult.Thread.ID, true, nil
 }
 
-func (a *ACPAgent) resumeThread(ctx context.Context, threadID string) error {
+func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, threadID string) error {
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
@@ -851,7 +878,7 @@ func (a *ACPAgent) resumeThread(ctx context.Context, threadID string) error {
 	params := map[string]interface{}{
 		"threadId":       threadID,
 		"approvalPolicy": "never",
-		"cwd":            a.cwd,
+		"cwd":            a.cwdForConversation(conversationID),
 		"sandbox":        "danger-full-access",
 	}
 	if a.model != "" {
@@ -930,7 +957,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				SandboxPolicy:  map[string]interface{}{"type": "dangerFullAccess"},
 				Model:          a.model,
 				Effort:         a.effort,
-				Cwd:            a.cwd,
+				Cwd:            a.cwdForConversation(conversationID),
 			})
 			return err
 		}
@@ -938,7 +965,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		err := startTurn()
 		if err != nil && isMissingThreadError(err) {
 			log.Printf("[acp] turn/start failed with missing thread, attempting thread/resume (thread=%s): %v", threadID, err)
-			if resumeErr := a.resumeThread(ctx, threadID); resumeErr == nil {
+			if resumeErr := a.resumeThread(ctx, conversationID, threadID); resumeErr == nil {
 				err = startTurn()
 			} else {
 				err = fmt.Errorf("%w (resume failed: %v)", err, resumeErr)

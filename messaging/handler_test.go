@@ -318,6 +318,101 @@ func (f *blockingProgressAgent) stats() (int, int) {
 	return f.started, f.maxActive
 }
 
+type blockingCodexThreadAgent struct {
+	fakeCodexThreadAgent
+	mu               sync.Mutex
+	started          int
+	active           int
+	maxActive        int
+	entered          chan struct{}
+	release          chan struct{}
+	threads          map[string]string
+	conversationCwds map[string]string
+}
+
+func newBlockingCodexThreadAgent() *blockingCodexThreadAgent {
+	return &blockingCodexThreadAgent{
+		fakeCodexThreadAgent: fakeCodexThreadAgent{
+			fakeAgent: fakeAgent{
+				info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			},
+		},
+		entered:          make(chan struct{}, 4),
+		release:          make(chan struct{}),
+		threads:          make(map[string]string),
+		conversationCwds: make(map[string]string),
+	}
+}
+
+func (f *blockingCodexThreadAgent) ChatWithProgress(ctx context.Context, conversationID string, _ string, _ func(delta string)) (string, error) {
+	callIndex := f.markStarted(conversationID)
+	f.entered <- struct{}{}
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+		f.markFinished()
+		return "", ctx.Err()
+	}
+	f.markFinished()
+	return fmt.Sprintf("第%d条结果", callIndex), nil
+}
+
+func (f *blockingCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	threadID := f.threads[conversationID]
+	return threadID, threadID != ""
+}
+
+func (f *blockingCodexThreadAgent) UseCodexThread(_ context.Context, conversationID string, threadID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.useConversation = conversationID
+	f.useThreadID = threadID
+	if f.useErr != nil {
+		return f.useErr
+	}
+	f.threads[conversationID] = threadID
+	return nil
+}
+
+func (f *blockingCodexThreadAgent) ClearCodexThread(conversationID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearCalledWith = conversationID
+	delete(f.threads, conversationID)
+}
+
+func (f *blockingCodexThreadAgent) SetConversationCwd(conversationID string, cwd string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.conversationCwds[conversationID] = cwd
+}
+
+func (f *blockingCodexThreadAgent) markStarted(conversationID string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started++
+	f.active++
+	if f.active > f.maxActive {
+		f.maxActive = f.active
+	}
+	f.threads[conversationID] = fmt.Sprintf("thread-generated-%d", f.started)
+	return f.started
+}
+
+func (f *blockingCodexThreadAgent) markFinished() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.active--
+}
+
+func (f *blockingCodexThreadAgent) conversationCwd(conversationID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.conversationCwds[conversationID]
+}
+
 type recordedILinkCalls struct {
 	mu             sync.Mutex
 	textMessages   []string
@@ -1381,6 +1476,65 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 
 	ag.release <- struct{}{}
 	waitDone(t, firstDone, "第一条任务")
+}
+
+func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingCodexThreadAgent()
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	workspaceA := filepath.Join(t.TempDir(), "workspace-a")
+	workspaceB := filepath.Join(t.TempDir(), "workspace-b")
+	if err := os.MkdirAll(workspaceA, 0o755); err != nil {
+		t.Fatalf("mkdir workspace A: %v", err)
+	}
+	if err := os.MkdirAll(workspaceB, 0o755); err != nil {
+		t.Fatalf("mkdir workspace B: %v", err)
+	}
+	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setPendingNew(bindingKey, workspaceA)
+	h.codexSessions.setActiveWorkspace(bindingKey, workspaceA)
+	h.codexSessions.setThread(bindingKey, workspaceB, "thread-b")
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	h.HandleMessage(ctx, client, newTextMessage(10, "/codex A 任务"))
+	waitForCodexThreadAgentEnter(t, ag)
+
+	conversationA := buildCodexConversationID("user-1", "codex", workspaceA)
+	if got := ag.conversationCwd(conversationA); got != normalizeCodexWorkspaceRoot(workspaceA) {
+		t.Fatalf("conversation cwd=%q, want %q", got, normalizeCodexWorkspaceRoot(workspaceA))
+	}
+
+	h.HandleMessage(ctx, client, newTextMessage(11, "/cx switch thread-b"))
+	h.HandleMessage(ctx, client, newTextMessage(12, "/guide"))
+
+	ag.release <- struct{}{}
+	waitForText(t, calls, "第1条结果")
+
+	active, ok := h.codexSessions.getActiveWorkspace(bindingKey)
+	if !ok || active != normalizeCodexWorkspaceRoot(workspaceB) {
+		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(workspaceB))
+	}
+	threadA, pendingA := h.codexSessions.getThread(bindingKey, workspaceA)
+	if threadA != "thread-generated-1" || pendingA {
+		t.Fatalf("workspace A thread=%q pending=%v, want thread-generated-1 false", threadA, pendingA)
+	}
+	threadB, pendingB := h.codexSessions.getThread(bindingKey, workspaceB)
+	if threadB != "thread-b" || pendingB {
+		t.Fatalf("workspace B thread=%q pending=%v, want thread-b false", threadB, pendingB)
+	}
+	if !containsText(calls.texts(), "当前没有可发送的引导对话") {
+		t.Fatalf("/guide should target current B session, messages=%#v", calls.texts())
+	}
 }
 
 func TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored(t *testing.T) {
@@ -3174,6 +3328,15 @@ func waitForAgentEnter(t *testing.T, ag *blockingProgressAgent) {
 	case <-ag.entered:
 	case <-time.After(taskWaitTimeout):
 		t.Fatal("未等到 Agent 开始处理")
+	}
+}
+
+func waitForCodexThreadAgentEnter(t *testing.T, ag *blockingCodexThreadAgent) {
+	t.Helper()
+	select {
+	case <-ag.entered:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("未等到 Codex Agent 开始处理")
 	}
 }
 

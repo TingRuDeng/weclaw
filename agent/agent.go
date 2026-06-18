@@ -105,6 +105,11 @@ type CodexThreadAgent interface {
 	ClearCodexThread(conversationID string)
 }
 
+// ConversationWorkspaceAgent 允许 Agent 为单个 conversation 固定工作目录。
+type ConversationWorkspaceAgent interface {
+	SetConversationCwd(conversationID string, cwd string)
+}
+
 // ClaudeSessionAgent 暴露 Claude Code CLI 的 session 控制能力。
 type ClaudeSessionAgent interface {
 	CurrentClaudeSession(conversationID string) (string, bool)

@@ -134,7 +134,14 @@ type codexAgentTaskRuntime struct {
 	agentCtx          context.Context
 	cancelTaskTimeout context.CancelFunc
 	executionKey      string
+	route             codexConversationRoute
 	task              *activeAgentTask
+}
+
+type codexConversationRoute struct {
+	bindingKey     string
+	workspaceRoot  string
+	conversationID string
 }
 
 // NewHandler creates a new message handler.
@@ -697,14 +704,30 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 func (h *Handler) agentExecutionKey(userID string, agentName string, ag agent.Agent) string {
 	info := ag.Info()
 	if isCodexAgent(agentName, info) {
-		workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
-		return buildCodexConversationID(userID, agentName, workspaceRoot)
+		return h.codexConversationRouteForUser(userID, agentName, ag).conversationID
 	}
 	if isClaudeAgent(agentName, info) {
 		workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
 		return buildClaudeConversationID(userID, agentName, workspaceRoot)
 	}
 	return strings.Join([]string{"agent", strings.TrimSpace(userID), strings.TrimSpace(agentName)}, "\x00")
+}
+
+func (h *Handler) codexConversationRouteForUser(userID string, agentName string, ag agent.Agent) codexConversationRoute {
+	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
+	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
+	h.bindConversationCwd(ag, conversationID, workspaceRoot)
+	return codexConversationRoute{
+		bindingKey:     codexBindingKey(userID, agentName),
+		workspaceRoot:  workspaceRoot,
+		conversationID: conversationID,
+	}
+}
+
+func (h *Handler) bindConversationCwd(ag agent.Agent, conversationID string, workspaceRoot string) {
+	if workspaceAg, ok := ag.(agent.ConversationWorkspaceAgent); ok {
+		workspaceAg.SetConversationCwd(conversationID, workspaceRoot)
+	}
 }
 
 func (h *Handler) lockAgentExecution(key string) func() {
@@ -1061,7 +1084,8 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
 func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
-	executionKey := h.agentExecutionKey(opts.msg.FromUserID, opts.agentName, opts.agent)
+	route := h.codexConversationRouteForUser(opts.msg.FromUserID, opts.agentName, opts.agent)
+	executionKey := route.conversationID
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 	if !started {
 		cancelTaskTimeout()
@@ -1075,6 +1099,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		agentCtx:          taskCtx,
 		cancelTaskTimeout: cancelTaskTimeout,
 		executionKey:      executionKey,
+		route:             route,
 		task:              task,
 	})
 }
@@ -1090,18 +1115,16 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	onProgress, stopProgress := h.startProgressSession(runtime.agentCtx, opts.client, opts.msg.FromUserID, opts.msg.ContextToken, opts.replyPrefix, opts.message, opts.progressCfg)
 	defer stopProgress()
 
-	conversationID, resolveErr := h.resolveAgentConversationID(runtime.agentCtx, opts.msg.FromUserID, opts.agentName, opts.agent)
-	if resolveErr != nil {
-		reply := renderFinalFailure(opts.replyPrefix, resolveErr)
+	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
+		reply := renderFinalFailure(opts.replyPrefix, err)
 		h.sendReplyWithMedia(opts.ctx, opts.client, opts.msg, opts.agentName, reply, opts.clientID)
 		return
 	}
-	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, conversationID, opts.message, onProgress)
+	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, onProgress)
 	if err != nil {
 		reply = renderFinalFailure(opts.replyPrefix, err)
 	} else {
-		h.recordCodexThread(opts.msg.FromUserID, opts.agentName, opts.agent, conversationID)
-		h.recordClaudeSession(opts.msg.FromUserID, opts.agentName, opts.agent, conversationID)
+		h.recordCodexThreadForWorkspace(opts.msg.FromUserID, opts.agentName, opts.agent, runtime.route.conversationID, runtime.route.workspaceRoot)
 		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
 	if runtime.task.shouldSendFinal() {
@@ -1143,9 +1166,12 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 			defer cancelTaskTimeout()
 
-			executionKey := h.agentExecutionKey(msg.FromUserID, n, ag)
+			var codexRoute codexConversationRoute
+			var executionKey string
 			var activeTask *activeAgentTask
 			if isCodexAgent(n, ag.Info()) {
+				codexRoute = h.codexConversationRouteForUser(msg.FromUserID, n, ag)
+				executionKey = codexRoute.conversationID
 				task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 				if !started {
 					h.storePendingGuide(executionKey, message)
@@ -1161,6 +1187,8 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 						_ = SendTextReply(ctx, client, msg.FromUserID, runnablePendingCodexPrompt(pendingMessage), msg.ContextToken, NewClientID())
 					}
 				}()
+			} else {
+				executionKey = h.agentExecutionKey(msg.FromUserID, n, ag)
 			}
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
@@ -1168,18 +1196,32 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 			onProgress, stopProgress := h.startProgressSession(agentCtx, client, msg.FromUserID, msg.ContextToken, "["+n+"] ", message, progressCfg)
 			defer stopProgress()
 
-			conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, n, ag)
-			if resolveErr != nil {
-				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", resolveErr)}
-				return
+			var conversationID string
+			if isCodexAgent(n, ag.Info()) {
+				if err := h.prepareCodexConversation(agentCtx, codexRoute, ag); err != nil {
+					ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", err)}
+					return
+				}
+				conversationID = codexRoute.conversationID
+			} else {
+				resolvedID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, n, ag)
+				if resolveErr != nil {
+					ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", resolveErr)}
+					return
+				}
+				conversationID = resolvedID
 			}
 			reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
 			if err != nil {
 				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", err)}
 				return
 			}
-			h.recordCodexThread(msg.FromUserID, n, ag, conversationID)
-			h.recordClaudeSession(msg.FromUserID, n, ag, conversationID)
+			if isCodexAgent(n, ag.Info()) {
+				h.recordCodexThreadForWorkspace(msg.FromUserID, n, ag, conversationID, codexRoute.workspaceRoot)
+			} else {
+				h.recordCodexThread(msg.FromUserID, n, ag, conversationID)
+				h.recordClaudeSession(msg.FromUserID, n, ag, conversationID)
+			}
 			if activeTask != nil && !activeTask.shouldSendFinal() {
 				ch <- result{name: n, skip: true}
 				return
@@ -1259,29 +1301,34 @@ func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string,
 }
 
 func (h *Handler) resolveCodexConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
-	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
-	bindingKey := codexBindingKey(userID, agentName)
-	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
+	route := h.codexConversationRouteForUser(userID, agentName, ag)
+	if err := h.prepareCodexConversation(ctx, route, ag); err != nil {
+		return "", err
+	}
+	return route.conversationID, nil
+}
+
+func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConversationRoute, ag agent.Agent) error {
 	codexAg, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
-		h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
-		return conversationID, nil
+		h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
+		return nil
 	}
-	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
+	threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
 	if pending {
-		codexAg.ClearCodexThread(conversationID)
-		return conversationID, nil
+		codexAg.ClearCodexThread(route.conversationID)
+		return nil
 	}
 	if threadID != "" {
-		current, hasCurrent := codexAg.CurrentCodexThread(conversationID)
+		current, hasCurrent := codexAg.CurrentCodexThread(route.conversationID)
 		if !hasCurrent || current != threadID {
-			if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
-				return "", fmt.Errorf("恢复 Codex 会话失败: %w", err)
+			if err := codexAg.UseCodexThread(ctx, route.conversationID, threadID); err != nil {
+				return fmt.Errorf("恢复 Codex 会话失败: %w", err)
 			}
 		}
 	}
-	h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
-	return conversationID, nil
+	h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
+	return nil
 }
 
 func (h *Handler) resolveClaudeConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
@@ -1311,24 +1358,31 @@ func (h *Handler) resolveClaudeConversationID(ctx context.Context, userID string
 }
 
 func (h *Handler) recordCodexThread(userID string, agentName string, ag agent.Agent, conversationID string) {
+	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
+	if recordedWorkspace, ok := h.recordCodexThreadForWorkspace(userID, agentName, ag, conversationID, workspaceRoot); ok {
+		h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(userID, agentName), recordedWorkspace)
+	}
+}
+
+func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string, ag agent.Agent, conversationID string, workspaceRoot string) (string, bool) {
 	if !isCodexAgent(agentName, ag.Info()) {
-		return
+		return "", false
 	}
 	codexAg, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
-		return
+		return "", false
 	}
 	threadID, ok := codexAg.CurrentCodexThread(conversationID)
 	if !ok {
-		return
+		return "", false
 	}
-	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
 	bindingKey := codexBindingKey(userID, agentName)
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	if ownerWorkspace, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID); ok {
 		workspaceRoot = ownerWorkspace
 	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
-	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+	return workspaceRoot, true
 }
 
 func (h *Handler) recordClaudeSession(userID string, agentName string, ag agent.Agent, conversationID string) {
@@ -1475,6 +1529,7 @@ func (h *Handler) getDefaultAgentWithName() (string, agent.Agent) {
 func (h *Handler) resetDefaultCodexSession(ctx context.Context, userID string, name string, ag agent.Agent) string {
 	workspaceRoot := h.codexWorkspaceRootForUser(userID, name, ag)
 	conversationID := buildCodexConversationID(userID, name, workspaceRoot)
+	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	sessionID, err := ag.ResetSession(ctx, conversationID)
 	if err != nil {
 		log.Printf("[handler] reset codex session failed for %s: %v", conversationID, err)
@@ -2125,6 +2180,7 @@ func (h *Handler) handleCodexDetach(ag agent.Agent) string {
 
 func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
+	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	if codexAg, ok := ag.(agent.CodexThreadAgent); ok {
 		codexAg.ClearCodexThread(conversationID)
 	}
@@ -2145,6 +2201,7 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 		return err.Error()
 	}
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
+	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
 		return fmt.Sprintf("切换线程失败: %v", err)
 	}

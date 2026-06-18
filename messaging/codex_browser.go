@@ -109,6 +109,7 @@ func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWo
 func (h *Handler) enterCodexWorkspaceWithNewDraft(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string) string {
 	if codexAg, ok := req.Agent.(agent.CodexThreadAgent); ok {
 		conversationID := buildCodexConversationID(req.UserID, req.AgentName, workspaceRoot)
+		h.bindConversationCwd(req.Agent, conversationID, workspaceRoot)
 		codexAg.ClearCodexThread(conversationID)
 	}
 	h.ensureCodexSessions().setPendingNew(req.BindingKey, workspaceRoot)
@@ -122,6 +123,7 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 		return wechatCommandText("工作空间: "+workspaceName, h.renderCodexSessionList(req.BindingKey, workspaceRoot))
 	}
 	conversationID := buildCodexConversationID(req.UserID, req.AgentName, workspaceRoot)
+	h.bindConversationCwd(req.Agent, conversationID, workspaceRoot)
 	if err := codexAg.UseCodexThread(req.Context, conversationID, session.ThreadID); err != nil {
 		return fmt.Sprintf("切换线程失败: %v", err)
 	}

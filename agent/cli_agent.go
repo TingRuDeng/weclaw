@@ -14,15 +14,16 @@ import (
 
 // CLIAgent invokes a local CLI agent (claude, codex, etc.) via streaming JSON.
 type CLIAgent struct {
-	name         string
-	command      string
-	args         []string          // extra args from config
-	cwd          string            // working directory
-	env          map[string]string // extra environment variables
-	model        string
-	systemPrompt string
-	mu           sync.Mutex
-	sessions     map[string]string // conversationID -> session ID for multi-turn
+	name             string
+	command          string
+	args             []string          // extra args from config
+	cwd              string            // working directory
+	env              map[string]string // extra environment variables
+	model            string
+	systemPrompt     string
+	mu               sync.Mutex
+	sessions         map[string]string // conversationID -> session ID for multi-turn
+	conversationCwds map[string]string
 }
 
 // CLIAgentConfig holds configuration for a CLI agent.
@@ -43,14 +44,15 @@ func NewCLIAgent(cfg CLIAgentConfig) *CLIAgent {
 		cwd = defaultWorkspace()
 	}
 	return &CLIAgent{
-		name:         cfg.Name,
-		command:      cfg.Command,
-		args:         cfg.Args,
-		cwd:          cwd,
-		env:          cfg.Env,
-		model:        cfg.Model,
-		systemPrompt: cfg.SystemPrompt,
-		sessions:     make(map[string]string),
+		name:             cfg.Name,
+		command:          cfg.Command,
+		args:             cfg.Args,
+		cwd:              cwd,
+		env:              cfg.Env,
+		model:            cfg.Model,
+		systemPrompt:     cfg.SystemPrompt,
+		sessions:         make(map[string]string),
+		conversationCwds: make(map[string]string),
 	}
 }
 
@@ -138,11 +140,36 @@ func (a *CLIAgent) SetCwd(cwd string) {
 	a.cwd = cwd
 }
 
+// SetConversationCwd 固定单个 conversation 的工作目录，避免后台任务被全局 cwd 切换影响。
+func (a *CLIAgent) SetConversationCwd(conversationID string, cwd string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		delete(a.conversationCwds, conversationID)
+		return
+	}
+	a.conversationCwds[conversationID] = cwd
+}
+
+func (a *CLIAgent) cwdForConversation(conversationID string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if cwd := strings.TrimSpace(a.conversationCwds[conversationID]); cwd != "" {
+		return cwd
+	}
+	return a.cwd
+}
+
 // Chat sends a message to the CLI agent and returns the response.
 func (a *CLIAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
 	switch a.name {
 	case "codex":
-		return a.chatCodex(ctx, message)
+		return a.chatCodex(ctx, conversationID, message)
 	default:
 		return a.chatClaude(ctx, conversationID, message)
 	}
@@ -183,8 +210,8 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 	}
 
 	cmd := exec.CommandContext(ctx, a.command, args...)
-	if a.cwd != "" {
-		cmd.Dir = a.cwd
+	if cwd := a.cwdForConversation(conversationID); cwd != "" {
+		cmd.Dir = cwd
 	}
 	if len(a.env) > 0 {
 		cmdEnv, err := mergeEnv(os.Environ(), a.env)
@@ -285,7 +312,7 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 }
 
 // chatCodex handles codex CLI invocation using "codex exec".
-func (a *CLIAgent) chatCodex(ctx context.Context, message string) (string, error) {
+func (a *CLIAgent) chatCodex(ctx context.Context, conversationID string, message string) (string, error) {
 	args := []string{"exec", message}
 	if a.model != "" {
 		args = append(args, "--model", a.model)
@@ -295,8 +322,8 @@ func (a *CLIAgent) chatCodex(ctx context.Context, message string) (string, error
 
 	log.Printf("[cli] running codex exec (command=%s)", a.command)
 	cmd := exec.CommandContext(ctx, a.command, args...)
-	if a.cwd != "" {
-		cmd.Dir = a.cwd
+	if cwd := a.cwdForConversation(conversationID); cwd != "" {
+		cmd.Dir = cwd
 	}
 	if len(a.env) > 0 {
 		cmdEnv, err := mergeEnv(os.Environ(), a.env)
