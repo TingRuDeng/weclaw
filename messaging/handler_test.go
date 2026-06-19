@@ -2857,6 +2857,41 @@ func TestCodexAppCommandOpensCurrentWorkspaceWithThread(t *testing.T) {
 	}
 }
 
+func TestCodexAppCommandKeepsLsOnOpenedWorkspace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	staleWorkspace := t.TempDir()
+	bindingKey := codexBindingKey("user-1", "codex")
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
+	h.codexSessions.setThread(bindingKey, workspace, "thread-1")
+	h.setCodexBrowseWorkspace(bindingKey, staleWorkspace)
+	h.SetCodexAppOpener(func(_ context.Context, _ string, _ string) error {
+		return nil
+	})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(127, "/cx app"))
+	h.HandleMessage(context.Background(), client, newTextMessage(128, "/cx ls"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, filepath.Base(workspace)+" 会话") || !strings.Contains(text, "0. 未命名会话") {
+		t.Fatalf("ls should show opened workspace session, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, filepath.Base(staleWorkspace)+" 会话") {
+		t.Fatalf("ls should not stay on stale browse workspace, messages=%#v", calls.texts())
+	}
+}
+
 func TestCodexStatusShowsWorkspaceThreadAndLocalEntryState(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()

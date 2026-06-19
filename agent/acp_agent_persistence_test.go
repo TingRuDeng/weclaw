@@ -860,6 +860,48 @@ func TestACPAgentCodexAssemblerUsesSnapshotWhenNoDelta(t *testing.T) {
 	}
 }
 
+func TestACPAgentCodexAssemblerReturnsLastUserVisibleItem(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	workspace := t.TempDir()
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       workspace,
+		StateFile: stateFile,
+	})
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{ItemID: "item-1", Delta: "过程：执行 git status。"}
+			ch <- &codexTurnEvent{ItemID: "item-2", Delta: "已完成，最终结果。"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if reply != "已完成，最终结果。" {
+		t.Fatalf("reply=%q, want only last user visible item", reply)
+	}
+}
+
 func TestACPAgentCodexErrorNotificationReachesActiveTurn(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",

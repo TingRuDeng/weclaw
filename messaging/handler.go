@@ -1976,6 +1976,8 @@ func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentNa
 		)
 	}
 	bindingKey := codexBindingKey(userID, agentName)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+	h.setCodexBrowseWorkspace(bindingKey, workspaceRoot)
 	h.recordCodexLocalEntry(bindingKey, workspaceRoot, codexLocalEntryApp)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
 	return wechatCommandText(

@@ -248,21 +248,22 @@ func (a *codexFinalAssembler) addCompleted(itemID string, text string) {
 }
 
 func (a *codexFinalAssembler) finalText() string {
-	var parts []string
-	for _, itemID := range a.order {
-		if deltas := a.deltasByItem[itemID]; len(deltas) > 0 {
-			parts = append(parts, strings.Join(deltas, ""))
-			continue
-		}
-		if text := strings.TrimSpace(a.completedByItem[itemID]); text != "" {
-			parts = append(parts, text)
-			continue
-		}
-		if text := strings.TrimSpace(a.snapshotsByItem[itemID]); text != "" {
-			parts = append(parts, text)
+	for i := len(a.order) - 1; i >= 0; i-- {
+		if text := a.itemText(a.order[i]); text != "" {
+			return text
 		}
 	}
-	return strings.TrimSpace(strings.Join(parts, ""))
+	return ""
+}
+
+func (a *codexFinalAssembler) itemText(itemID string) string {
+	if deltas := a.deltasByItem[itemID]; len(deltas) > 0 {
+		return strings.TrimSpace(strings.Join(deltas, ""))
+	}
+	if text := strings.TrimSpace(a.completedByItem[itemID]); text != "" {
+		return text
+	}
+	return strings.TrimSpace(a.snapshotsByItem[itemID])
 }
 
 func (a *codexFinalAssembler) rememberItem(itemID string) {
