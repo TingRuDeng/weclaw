@@ -26,9 +26,6 @@ type AgentFactory func(ctx context.Context, name string) agent.Agent
 // SaveDefaultFunc persists the default agent name to config file.
 type SaveDefaultFunc func(name string) error
 
-// SwitchCommandRunner 用于执行外部 codex 切换脚本。
-type SwitchCommandRunner func(ctx context.Context, scriptPath string, args ...string) (string, error)
-
 // CDNDownloader 用于下载微信 CDN 中的入站文件，便于测试注入。
 type CDNDownloader func(ctx context.Context, encryptQueryParam string, aesKey string) ([]byte, error)
 
@@ -44,11 +41,6 @@ type ClaudeCLIResumeOpener func(ctx context.Context, command string, workspaceRo
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {
 	ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error)
-}
-
-// StoppableAgent 支持显式停止后台进程，账号切换后必须释放旧 Codex 进程。
-type StoppableAgent interface {
-	Stop()
 }
 
 // AgentMeta holds static config info about an agent (for /status display).
@@ -73,8 +65,6 @@ type Handler struct {
 	contextTokens         sync.Map // map[userID]contextToken
 	saveDir               string   // directory to save images/files to
 	seenMsgs              sync.Map // map[int64]time.Time — dedup by message_id
-	switchScript          string
-	switchRunner          SwitchCommandRunner
 	cdnDownloader         CDNDownloader
 	progressConfig        config.ProgressConfig
 	agentProgressConfigs  map[string]config.ProgressConfig
@@ -98,10 +88,6 @@ type Handler struct {
 }
 
 const (
-	switchScriptEnvVar       = "WECLAW_CODEX_SWITCH_SCRIPT"
-	switchScriptDefaultPath  = "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh"
-	switchCommandTimeout     = 30 * time.Second
-	switchCommandUsage       = "用法: /sw ls | /sw current | /sw reload | /sw <编号|ID>"
 	pendingCodexPreviewRunes = 120
 )
 
@@ -151,8 +137,6 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		agentWorkDirs:         make(map[string]string),
 		factory:               factory,
 		saveDefault:           saveDefault,
-		switchScript:          resolveSwitchScriptPath(),
-		switchRunner:          defaultSwitchCommandRunner,
 		cdnDownloader:         DownloadFileFromCDN,
 		progressConfig:        config.DefaultProgressConfig(),
 		agentProgressConfigs:  make(map[string]config.ProgressConfig),
@@ -607,8 +591,8 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
 		return
-	} else if isSwitchCommand(trimmed) {
-		reply := h.handleSwitchCommand(ctx, trimmed)
+	} else if isRemovedSwitchCommand(trimmed) {
+		reply := "命令已移除：WeClaw 不再支持从微信端切换 Codex 账号。"
 		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
 			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
 		}
@@ -1750,7 +1734,7 @@ func normalizeCommandNewlines(text string) string {
 	return strings.ReplaceAll(text, "\r", "\n")
 }
 
-func isSwitchCommand(trimmed string) bool {
+func isRemovedSwitchCommand(trimmed string) bool {
 	fields := strings.Fields(trimmed)
 	return len(fields) > 0 && fields[0] == "/sw"
 }
@@ -2205,8 +2189,9 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
-		return fmt.Sprintf("切换线程失败: %v", err)
+		return renderCodexSwitchFailure(err)
 	}
+	h.switchCodexWorkspace(agentName, workspaceRoot, ag)
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 	return wechatCommandText("已切换会话。", "工作空间: "+shortCodexWorkspaceName(workspaceRoot))
@@ -2237,8 +2222,7 @@ func (h *Handler) resolveCodexSessionView(agentName string, view codexWorkspaceV
 	if threadID == "" || view.PendingNewThread {
 		return "", "", fmt.Errorf("该编号当前没有可切换的会话。")
 	}
-	workspaceRoot := h.switchCodexWorkspace(agentName, view.WorkspaceRoot, ag)
-	return workspaceRoot, threadID, nil
+	return normalizeCodexWorkspaceRoot(view.WorkspaceRoot), threadID, nil
 }
 
 func parseCodexListIndex(value string) (int, bool) {
@@ -2252,12 +2236,33 @@ func parseCodexListIndex(value string) (int, bool) {
 func (h *Handler) resolveCodexSwitchWorkspace(bindingKey string, agentName string, fallbackWorkspace string, threadID string, ag agent.Agent) string {
 	workspaceRoot, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID)
 	if ok {
-		return h.switchCodexWorkspace(agentName, workspaceRoot, ag)
+		return normalizeCodexWorkspaceRoot(workspaceRoot)
 	}
 	if localWorkspace, ok := h.findLocalCodexWorkspaceByThread(threadID); ok {
-		return h.switchCodexWorkspace(agentName, localWorkspace, ag)
+		return normalizeCodexWorkspaceRoot(localWorkspace)
 	}
-	return fallbackWorkspace
+	return normalizeCodexWorkspaceRoot(fallbackWorkspace)
+}
+
+func renderCodexSwitchFailure(err error) string {
+	if isCodexThreadStoreReadError(err) {
+		return wechatCommandText(
+			"切换会话失败。",
+			"该 Codex 会话当前无法被微信接手。",
+			"可发送 /cx app 在 Codex App 中打开当前工作空间，或发送 /cx new 创建微信侧新会话。",
+		)
+	}
+	return fmt.Sprintf("切换线程失败: %v", err)
+}
+
+func isCodexThreadStoreReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "thread-store internal error") ||
+		strings.Contains(text, "failed to read thread") ||
+		strings.Contains(text, "does not start with session metadata")
 }
 
 func (h *Handler) switchCodexWorkspace(agentName string, workspaceRoot string, ag agent.Agent) string {
@@ -2413,196 +2418,12 @@ func isSupportedProgressMode(mode string) bool {
 	}
 }
 
-// parseSwitchCommand 将微信命令转换为 codex-switch 脚本参数。
-func parseSwitchCommand(trimmed string) ([]string, string) {
-	fields := strings.Fields(trimmed)
-	if len(fields) == 0 || fields[0] != "/sw" {
-		return nil, switchCommandUsage
-	}
-	if len(fields) == 1 {
-		return nil, switchCommandUsage
-	}
-
-	cmd := fields[1]
-	switch cmd {
-	case "ls", "list":
-		if len(fields) != 2 {
-			return nil, switchCommandUsage
-		}
-		return []string{"list"}, ""
-	case "current", "help", "config":
-		if len(fields) != 2 {
-			return nil, switchCommandUsage
-		}
-		return []string{cmd}, ""
-	case "reload", "refresh", "restart":
-		if len(fields) != 2 {
-			return nil, switchCommandUsage
-		}
-		return []string{"reload"}, ""
-	case "show", "switch":
-		if len(fields) != 3 {
-			return nil, switchCommandUsage
-		}
-		return []string{cmd, fields[2]}, ""
-	default:
-		// /sw 0 或 /sw provider-id 走快捷切换模式
-		if len(fields) != 2 {
-			return nil, switchCommandUsage
-		}
-		return []string{"switch", cmd}, ""
-	}
-}
-
-func (h *Handler) handleSwitchCommand(ctx context.Context, trimmed string) string {
-	args, usage := parseSwitchCommand(trimmed)
-	if usage != "" {
-		return usage
-	}
-	if len(args) == 1 && args[0] == "help" {
-		return buildSwitchHelpText()
-	}
-	if isCodexReloadAction(args) {
-		return h.refreshCodexAgentsAfterSwitch(ctx)
-	}
-
-	runner := h.switchRunner
-	if runner == nil {
-		runner = defaultSwitchCommandRunner
-	}
-
-	script := h.switchScript
-	if strings.TrimSpace(script) == "" {
-		script = resolveSwitchScriptPath()
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, switchCommandTimeout)
-	defer cancel()
-
-	output, err := runner(runCtx, script, args...)
-	cleanOutput := strings.TrimSpace(stripANSI(output))
-	if err != nil {
-		if cleanOutput == "" {
-			return fmt.Sprintf("切换失败: %v", err)
-		}
-		return wechatCommandText("切换失败:", cleanOutput)
-	}
-	if cleanOutput == "" {
-		cleanOutput = "命令执行完成。"
-	}
-	if isCodexSwitchAction(args) {
-		return wechatCommandText(cleanOutput, h.refreshCodexAgentsAfterSwitch(ctx))
-	}
-	return wechatCommandText(cleanOutput)
-}
-
-func isCodexSwitchAction(args []string) bool {
-	return len(args) > 0 && args[0] == "switch"
-}
-
-// isCodexReloadAction 识别只刷新 WeClaw 进程、不执行外部切号脚本的命令。
-func isCodexReloadAction(args []string) bool {
-	return len(args) == 1 && args[0] == "reload"
-}
-
-func (h *Handler) refreshCodexAgentsAfterSwitch(ctx context.Context) string {
-	stoppedNames := h.stopRunningCodexAgents()
-	if len(stoppedNames) == 0 {
-		return "当前没有运行中的 Codex Agent，下一次 Codex 请求会使用当前本机登录状态。"
-	}
-
-	if defaultName, ok := h.defaultAgentNameForRestart(stoppedNames); ok {
-		if _, err := h.getAgent(ctx, defaultName); err != nil {
-			return fmt.Sprintf("已停止旧 Codex Agent，但重启默认 Codex Agent 失败：%v", err)
-		}
-		return "已刷新 WeClaw 中的 Codex Agent，下一次请求会使用当前本机登录状态。"
-	}
-	return "已停止旧 Codex Agent，下一次 Codex 请求会使用当前本机登录状态。"
-}
-
-func (h *Handler) stopRunningCodexAgents() []string {
-	type runningAgent struct {
-		name string
-		ag   agent.Agent
-	}
-
-	h.mu.Lock()
-	var targets []runningAgent
-	for name, ag := range h.agents {
-		if !isCodexAgent(name, ag.Info()) {
-			continue
-		}
-		targets = append(targets, runningAgent{name: name, ag: ag})
-		delete(h.agents, name)
-	}
-	h.mu.Unlock()
-
-	names := make([]string, 0, len(targets))
-	for _, target := range targets {
-		names = append(names, target.name)
-		if stopper, ok := target.ag.(StoppableAgent); ok {
-			stopper.Stop()
-		}
-	}
-	return names
-}
-
-func (h *Handler) defaultAgentNameForRestart(stoppedNames []string) (string, bool) {
-	h.mu.RLock()
-	defaultName := h.defaultName
-	hasFactory := h.factory != nil
-	h.mu.RUnlock()
-	if defaultName == "" || !hasFactory {
-		return "", false
-	}
-	for _, name := range stoppedNames {
-		if name == defaultName {
-			return defaultName, true
-		}
-	}
-	return "", false
-}
-
 func isCodexAgent(name string, info agent.AgentInfo) bool {
 	if strings.EqualFold(name, "codex") || strings.EqualFold(info.Name, "codex") {
 		return true
 	}
 	command := strings.ToLower(filepath.Base(info.Command))
 	return strings.Contains(command, "codex")
-}
-
-func buildSwitchHelpText() string {
-	return wechatCommandText(
-		"Codex 账户切换命令:",
-		"/sw ls - 列出可切换账户",
-		"/sw current - 显示当前账户",
-		"/sw <编号|ID> - 切换到指定账户",
-		"/sw reload - 手动刷新 WeClaw 中的 Codex Agent",
-		"/sw show <编号|ID> - 查看账户详情",
-		"/sw config - 查看当前 Codex 配置",
-		"/sw help - 显示本帮助",
-	)
-}
-
-func resolveSwitchScriptPath() string {
-	if path := strings.TrimSpace(os.Getenv(switchScriptEnvVar)); path != "" {
-		return path
-	}
-	if _, err := os.Stat(switchScriptDefaultPath); err == nil {
-		return switchScriptDefaultPath
-	}
-	return "codex-switch.sh"
-}
-
-func defaultSwitchCommandRunner(ctx context.Context, scriptPath string, args ...string) (string, error) {
-	cmdArgs := append([]string{scriptPath}, args...)
-	cmd := exec.CommandContext(ctx, "/bin/bash", cmdArgs...)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
-}
-
-func stripANSI(text string) string {
-	return ansiEscapePattern.ReplaceAllString(text, "")
 }
 
 func extractText(msg ilink.WeixinMessage) string {

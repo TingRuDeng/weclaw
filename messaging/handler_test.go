@@ -113,15 +113,6 @@ func (f *fakeAgent) resetConversationID() string {
 	return f.resetConversation
 }
 
-type fakeStoppableAgent struct {
-	fakeAgent
-	stopped bool
-}
-
-func (f *fakeStoppableAgent) Stop() {
-	f.stopped = true
-}
-
 type fakeCodexThreadAgent struct {
 	fakeAgent
 	threadID        string
@@ -909,7 +900,6 @@ func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 		"progress":    h.handleProgressCommand("/progress"),
 		"progressErr": h.handleProgressCommand("/progress unknown"),
 		"codexHelp":   buildCodexSessionHelpText(),
-		"switchHelp":  buildSwitchHelpText(),
 	}
 
 	for name, text := range tests {
@@ -945,187 +935,6 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 	}
 	if strings.Contains(list, "thread-a") || strings.Contains(list, workspaceA) {
 		t.Fatalf("workspace reply should hide thread ids and full paths, got %q", list)
-	}
-}
-
-func TestParseSwitchCommand_ListAlias(t *testing.T) {
-	args, usage := parseSwitchCommand("/sw ls")
-	if usage != "" {
-		t.Fatalf("unexpected usage: %s", usage)
-	}
-	want := []string{"list"}
-	if !reflect.DeepEqual(args, want) {
-		t.Fatalf("parseSwitchCommand args=%v, want=%v", args, want)
-	}
-}
-
-func TestParseSwitchCommand_SwitchShortcut(t *testing.T) {
-	args, usage := parseSwitchCommand("/sw 0")
-	if usage != "" {
-		t.Fatalf("unexpected usage: %s", usage)
-	}
-	want := []string{"switch", "0"}
-	if !reflect.DeepEqual(args, want) {
-		t.Fatalf("parseSwitchCommand args=%v, want=%v", args, want)
-	}
-}
-
-func TestParseSwitchCommand_Usage(t *testing.T) {
-	_, usage := parseSwitchCommand("/sw")
-	if usage == "" {
-		t.Fatal("expected usage message")
-	}
-}
-
-func TestParseSwitchCommand_OldPrefixRejected(t *testing.T) {
-	_, usage := parseSwitchCommand("/switch ls")
-	if usage == "" {
-		t.Fatal("expected usage for old /switch prefix")
-	}
-}
-
-func TestHandleSwitchCommand_StripsANSI(t *testing.T) {
-	h := newTestHandler()
-	h.switchScript = "/tmp/codex-switch.sh"
-	var gotScript string
-	var gotArgs []string
-	h.switchRunner = func(ctx context.Context, scriptPath string, args ...string) (string, error) {
-		gotScript = scriptPath
-		gotArgs = append([]string(nil), args...)
-		return "\x1b[0;32m[OK]\x1b[0m 已切换\n", nil
-	}
-
-	reply := h.handleSwitchCommand(context.Background(), "/sw 1")
-	if gotScript != "/tmp/codex-switch.sh" {
-		t.Fatalf("scriptPath=%q, want %q", gotScript, "/tmp/codex-switch.sh")
-	}
-	wantArgs := []string{"switch", "1"}
-	if !reflect.DeepEqual(gotArgs, wantArgs) {
-		t.Fatalf("args=%v, want=%v", gotArgs, wantArgs)
-	}
-	if strings.Contains(reply, "\x1b[") {
-		t.Fatalf("reply still contains ANSI code: %q", reply)
-	}
-	if !strings.Contains(reply, "[OK] 已切换") {
-		t.Fatalf("unexpected reply: %q", reply)
-	}
-}
-
-func TestHandleSwitchCommandFormatsScriptOutputForWeChat(t *testing.T) {
-	h := newTestHandler()
-	h.switchRunner = func(ctx context.Context, scriptPath string, args ...string) (string, error) {
-		return "当前账号: plus\n可切换账号: 2\n", nil
-	}
-
-	reply := h.handleSwitchCommand(context.Background(), "/sw current")
-	want := "当前账号: plus\n\n可切换账号: 2"
-	if reply != want {
-		t.Fatalf("reply=%q, want %q", reply, want)
-	}
-}
-
-func TestHandleSwitchCommand_ReturnsErrorOutput(t *testing.T) {
-	h := newTestHandler()
-	h.switchRunner = func(ctx context.Context, scriptPath string, args ...string) (string, error) {
-		return "\x1b[0;31m[ERROR]\x1b[0m 切换失败", errors.New("exit status 1")
-	}
-
-	reply := h.handleSwitchCommand(context.Background(), "/sw bad-id")
-	if !strings.Contains(reply, "切换失败") {
-		t.Fatalf("unexpected reply: %q", reply)
-	}
-	if strings.Contains(reply, "\x1b[") {
-		t.Fatalf("reply still contains ANSI code: %q", reply)
-	}
-}
-
-func TestHandleSwitchCommand_LocalHelpDoesNotRunScript(t *testing.T) {
-	h := newTestHandler()
-	h.switchRunner = func(ctx context.Context, scriptPath string, args ...string) (string, error) {
-		t.Fatalf("switch help should not execute script, got script=%s args=%v", scriptPath, args)
-		return "", nil
-	}
-
-	reply := h.handleSwitchCommand(context.Background(), "/sw help")
-	if !strings.Contains(reply, "/sw ls") {
-		t.Fatalf("help reply should mention /sw ls, got %q", reply)
-	}
-	if !strings.Contains(reply, "/sw <编号|ID>") {
-		t.Fatalf("help reply should mention switch shortcut, got %q", reply)
-	}
-}
-
-func TestHandleSwitchCommand_RestartsRunningCodexAgentAfterSwitch(t *testing.T) {
-	oldCodex := &fakeStoppableAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
-	newCodex := &fakeAgent{
-		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-	}
-	h := newTestHandler()
-	h.defaultName = "codex"
-	h.agents["codex"] = oldCodex
-	h.factory = func(_ context.Context, name string) agent.Agent {
-		if name != "codex" {
-			t.Fatalf("unexpected factory name: %s", name)
-		}
-		return newCodex
-	}
-	h.switchRunner = func(_ context.Context, _ string, args ...string) (string, error) {
-		if !reflect.DeepEqual(args, []string{"switch", "1"}) {
-			t.Fatalf("switch args=%v, want [switch 1]", args)
-		}
-		return "已切换", nil
-	}
-
-	reply := h.handleSwitchCommand(context.Background(), "/sw 1")
-
-	if !oldCodex.stopped {
-		t.Fatal("切换账号后应该停止旧 Codex Agent 进程")
-	}
-	if h.agents["codex"] != newCodex {
-		t.Fatalf("切换账号后默认 Codex Agent 应该重建，got %#v", h.agents["codex"])
-	}
-	if !strings.Contains(reply, "已刷新 WeClaw 中的 Codex Agent") {
-		t.Fatalf("reply should mention codex refresh, got %q", reply)
-	}
-}
-
-func TestHandleSwitchCommand_ReloadRefreshesCodexAgentWithoutRunningScript(t *testing.T) {
-	oldCodex := &fakeStoppableAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
-	newCodex := &fakeAgent{
-		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-	}
-	h := newTestHandler()
-	h.defaultName = "codex"
-	h.agents["codex"] = oldCodex
-	h.factory = func(_ context.Context, name string) agent.Agent {
-		if name != "codex" {
-			t.Fatalf("unexpected factory name: %s", name)
-		}
-		return newCodex
-	}
-	h.switchRunner = func(_ context.Context, _ string, args ...string) (string, error) {
-		t.Fatalf("/sw reload 不应该执行外部切换脚本，got args=%v", args)
-		return "", nil
-	}
-
-	reply := h.handleSwitchCommand(context.Background(), "/sw reload")
-
-	if !oldCodex.stopped {
-		t.Fatal("/sw reload 应该停止旧 Codex Agent 进程")
-	}
-	if h.agents["codex"] != newCodex {
-		t.Fatalf("/sw reload 后默认 Codex Agent 应该重建，got %#v", h.agents["codex"])
-	}
-	if !strings.Contains(reply, "当前本机登录状态") {
-		t.Fatalf("reply should mention local login state, got %q", reply)
 	}
 }
 
@@ -1828,6 +1637,28 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 	}
 }
 
+func TestHandleMessageRemovedSwitchCommandDoesNotCallAgent(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &fakeAgent{reply: "ok"}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(101, "/sw reload"))
+
+	if ag.chatCallCount() != 0 {
+		t.Fatalf("removed /sw command should not call default agent, chatCalls=%d", ag.chatCallCount())
+	}
+	if !containsText(calls.texts(), "不再支持从微信端切换 Codex 账号") {
+		t.Fatalf("removed /sw command should explain removal, messages=%#v", calls.texts())
+	}
+}
+
 func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
@@ -2404,6 +2235,41 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "已切换会话") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
+	}
+}
+
+func TestHandleCodexSwitchFailureDoesNotLeakThreadStoreErrorOrSwitchWorkspace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	currentWorkspace := filepath.Join(t.TempDir(), "current")
+	localWorkspace := filepath.Join(t.TempDir(), "desktop")
+	writeLocalCodexSession(t, codexDir, "thread-bad", localWorkspace, "桌面会话", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info:    agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			lastCwd: currentWorkspace,
+		},
+		useErr: fmt.Errorf("resume thread thread-bad: agent error: failed to read thread: thread-store internal error: failed to read thread /tmp/rollout.jsonl: rollout does not start with session metadata"),
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
+
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(116, "/codex switch 0"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "该 Codex 会话当前无法被微信接手") || !strings.Contains(text, "/cx app") {
+		t.Fatalf("reply should explain local thread resume failure, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, "thread-store internal error") || strings.Contains(text, "session metadata") {
+		t.Fatalf("reply should hide internal thread-store details, messages=%#v", calls.texts())
+	}
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(currentWorkspace) {
+		t.Fatalf("codex cwd=%q, want unchanged %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(currentWorkspace))
 	}
 }
 
