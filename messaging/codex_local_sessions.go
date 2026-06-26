@@ -28,6 +28,11 @@ type localCodexSessionMeta struct {
 	Source       json.RawMessage
 }
 
+type codexAppWorkspaceState struct {
+	ProjectOrder        []string `json:"project-order"`
+	SavedWorkspaceRoots []string `json:"electron-saved-workspace-roots"`
+}
+
 // defaultCodexLocalSessionDir 返回本机 Codex 默认会话目录。
 func defaultCodexLocalSessionDir() string {
 	home, err := os.UserHomeDir()
@@ -73,6 +78,37 @@ func discoverLocalCodexSessions(codexDir string) []codexWorkspaceView {
 	}
 	sortLocalCodexSessions(views)
 	return views
+}
+
+// readCodexAppWorkspaceRoots 读取 Codex App 侧真实保存的项目列表，作为微信顶层空间来源。
+func readCodexAppWorkspaceRoots(codexDir string) []string {
+	codexDir = strings.TrimSpace(codexDir)
+	if codexDir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(codexDir, ".codex-global-state.json"))
+	if err != nil {
+		return nil
+	}
+	var state codexAppWorkspaceState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil
+	}
+	return mergeCodexAppWorkspaceRoots(state.ProjectOrder, state.SavedWorkspaceRoots)
+}
+
+func mergeCodexAppWorkspaceRoots(projectOrder []string, savedRoots []string) []string {
+	seen := map[string]bool{}
+	roots := make([]string, 0, len(projectOrder)+len(savedRoots))
+	for _, root := range append(projectOrder, savedRoots...) {
+		normalized := normalizeCodexWorkspaceRoot(root)
+		if normalized == "" || seen[normalized] || !localCodexWorkspaceExists(normalized) {
+			continue
+		}
+		seen[normalized] = true
+		roots = append(roots, normalized)
+	}
+	return roots
 }
 
 func localCodexWorkspaceExists(workspaceRoot string) bool {

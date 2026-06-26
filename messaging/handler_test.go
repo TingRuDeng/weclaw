@@ -2307,6 +2307,38 @@ func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
 	}
 }
 
+func TestCodexCxLsUsesCodexAppWorkspaceOrder(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	weclawWorkspace := filepath.Join(root, "weclaw")
+	safariWorkspace := filepath.Join(root, "SafariCollection")
+	tmpWorkspace := filepath.Join(root, "tmp")
+	writeLocalCodexSession(t, codexDir, "thread-weclaw", weclawWorkspace, "WeClaw 会话", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-safari", safariWorkspace, "Safari 会话", "2026-04-29T08:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-tmp", tmpWorkspace, "历史临时会话", "2026-04-29T10:00:00Z")
+	writeCodexAppWorkspaceState(t, codexDir, []string{weclawWorkspace, safariWorkspace}, []string{weclawWorkspace, safariWorkspace})
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(150, "/cx ls"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "0. weclaw") || !strings.Contains(text, "1. SafariCollection") {
+		t.Fatalf("ls should follow Codex App project order, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, "tmp") {
+		t.Fatalf("ls should hide workspaces not in Codex App project order, messages=%#v", calls.texts())
+	}
+}
+
 func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
@@ -3264,6 +3296,21 @@ func writeLocalCodexSession(t *testing.T, codexDir string, threadID string, work
 	}
 	writeLocalCodexIndex(t, codexDir, threadID, threadName, updatedAt)
 	writeLocalCodexSessionMeta(t, codexDir, threadID, workspace, updatedAt, `"Codex Desktop"`, `""`, `"vscode"`)
+}
+
+func writeCodexAppWorkspaceState(t *testing.T, codexDir string, projectOrder []string, savedRoots []string) {
+	t.Helper()
+	state := map[string][]string{
+		"project-order":                  projectOrder,
+		"electron-saved-workspace-roots": savedRoots,
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal codex app workspace state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, ".codex-global-state.json"), data, 0o600); err != nil {
+		t.Fatalf("write codex app workspace state: %v", err)
+	}
 }
 
 func writeLocalCodexIndex(t *testing.T, codexDir string, threadID string, threadName string, updatedAt string) {

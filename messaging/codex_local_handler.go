@@ -51,6 +51,14 @@ func (h *Handler) localCodexSessions() []codexWorkspaceView {
 	return discoverLocalCodexSessions(dir)
 }
 
+// codexAppWorkspaceRoots 返回 Codex App 左侧项目列表使用的工作空间顺序。
+func (h *Handler) codexAppWorkspaceRoots() []string {
+	h.mu.RLock()
+	dir := h.codexLocalSessionDir
+	h.mu.RUnlock()
+	return readCodexAppWorkspaceRoots(dir)
+}
+
 // findLocalCodexWorkspaceByThread 让用户直接按 threadId 切到本机 Codex 已有会话。
 func (h *Handler) findLocalCodexWorkspaceByThread(threadID string) (string, bool) {
 	threadID = strings.TrimSpace(threadID)

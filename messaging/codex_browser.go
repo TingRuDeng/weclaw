@@ -144,8 +144,11 @@ func (h *Handler) renderCodexPwd(bindingKey string) string {
 	)
 }
 
-// codexWorkspaceGroups 按工作空间聚合已记录会话和本机 Codex 会话。
+// codexWorkspaceGroups 按 Codex App 项目列表聚合会话，缺少 App 状态时回退历史会话聚合。
 func (h *Handler) codexWorkspaceGroups(bindingKey string) []codexWorkspaceGroup {
+	if roots := h.codexAppWorkspaceRoots(); len(roots) > 0 {
+		return h.codexWorkspaceGroupsForRoots(bindingKey, roots)
+	}
 	byRoot := map[string]*codexWorkspaceGroup{}
 	for _, view := range h.codexSwitchTargets(bindingKey) {
 		root := normalizeCodexWorkspaceRoot(view.WorkspaceRoot)
@@ -158,6 +161,31 @@ func (h *Handler) codexWorkspaceGroups(bindingKey string) []codexWorkspaceGroup 
 		byRoot[root].Sessions = append(byRoot[root].Sessions, view)
 	}
 	return sortedCodexWorkspaceGroups(byRoot)
+}
+
+func (h *Handler) codexWorkspaceGroupsForRoots(bindingKey string, roots []string) []codexWorkspaceGroup {
+	byRoot := map[string]*codexWorkspaceGroup{}
+	order := make([]string, 0, len(roots))
+	for _, root := range roots {
+		root = normalizeCodexWorkspaceRoot(root)
+		if root == "" || byRoot[root] != nil {
+			continue
+		}
+		byRoot[root] = &codexWorkspaceGroup{Name: shortCodexWorkspaceName(root), Root: root}
+		order = append(order, root)
+	}
+	for _, view := range h.codexSwitchTargets(bindingKey) {
+		root := normalizeCodexWorkspaceRoot(view.WorkspaceRoot)
+		if byRoot[root] == nil {
+			continue
+		}
+		byRoot[root].Sessions = append(byRoot[root].Sessions, view)
+	}
+	groups := make([]codexWorkspaceGroup, 0, len(order))
+	for _, root := range order {
+		groups = append(groups, *byRoot[root])
+	}
+	return groups
 }
 
 func sortedCodexWorkspaceGroups(byRoot map[string]*codexWorkspaceGroup) []codexWorkspaceGroup {
