@@ -174,15 +174,9 @@ func (h *Handler) codexWorkspaceGroupsForRoots(bindingKey string, roots []string
 		byRoot[root] = &codexWorkspaceGroup{Name: shortCodexWorkspaceName(root), Root: root}
 		order = append(order, root)
 	}
-	for _, view := range h.codexSwitchTargets(bindingKey) {
-		root := normalizeCodexWorkspaceRoot(view.WorkspaceRoot)
-		if byRoot[root] == nil {
-			continue
-		}
-		byRoot[root].Sessions = append(byRoot[root].Sessions, view)
-	}
 	groups := make([]codexWorkspaceGroup, 0, len(order))
 	for _, root := range order {
+		byRoot[root].Sessions = h.codexSessionsForWorkspace(bindingKey, root)
 		groups = append(groups, *byRoot[root])
 	}
 	return groups
@@ -206,6 +200,7 @@ func sortedCodexWorkspaceGroups(byRoot map[string]*codexWorkspaceGroup) []codexW
 func (h *Handler) codexSessionsForWorkspace(bindingKey string, workspaceRoot string) []codexWorkspaceView {
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	if sessions := h.codexAppWorkspaceThreads(workspaceRoot); sessions != nil {
+		h.ensureCodexSessions().clearStaleWorkspaceThread(bindingKey, workspaceRoot, codexVisibleThreadSet(sessions))
 		return sessions
 	}
 	sessions := make([]codexWorkspaceView, 0)
@@ -215,6 +210,17 @@ func (h *Handler) codexSessionsForWorkspace(bindingKey string, workspaceRoot str
 		}
 	}
 	return sessions
+}
+
+func codexVisibleThreadSet(sessions []codexWorkspaceView) map[string]bool {
+	visible := make(map[string]bool, len(sessions))
+	for _, session := range sessions {
+		threadID := strings.TrimSpace(session.ThreadID)
+		if threadID != "" {
+			visible[threadID] = true
+		}
+	}
+	return visible
 }
 
 func switchableCodexSessions(sessions []codexWorkspaceView) []codexWorkspaceView {

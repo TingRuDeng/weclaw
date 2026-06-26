@@ -2410,6 +2410,74 @@ func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
 	}
 }
 
+func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-archived", workspace, "已归档旧缓存", "2026-04-29T09:00:00Z")
+	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
+	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
+		t.Fatalf("write fake sqlite db: %v", err)
+	}
+	writeFakeSQLite3(t, `[{"id":"thread-visible","title":"App 可见会话","recency_at_ms":2000}]`)
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, workspace, "thread-archived")
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(152, "/cx cd 0"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-visible" {
+		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-visible)", ag.useConversation, ag.useThreadID, wantConversationID)
+	}
+	if containsText(calls.texts(), "thread-archived") || containsText(calls.texts(), "已归档旧缓存") {
+		t.Fatalf("cd should ignore stored archived thread, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexCxCdWorkspaceClearsStaleStoredThread(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-archived", workspace, "已归档旧缓存", "2026-04-29T09:00:00Z")
+	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
+	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
+		t.Fatalf("write fake sqlite db: %v", err)
+	}
+	writeFakeSQLite3(t, `[{"id":"thread-visible-a","title":"App 可见会话 A","recency_at_ms":3000},{"id":"thread-visible-b","title":"App 可见会话 B","recency_at_ms":2000}]`)
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, workspace, "thread-archived")
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(153, "/cx cd 0"))
+
+	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	if threadID != "" || pending {
+		t.Fatalf("stale stored thread=%q pending=%v, want empty false", threadID, pending)
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "App 可见会话 A") || !strings.Contains(text, "App 可见会话 B") {
+		t.Fatalf("cd should still show app visible sessions, messages=%#v", calls.texts())
+	}
+}
+
 func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()

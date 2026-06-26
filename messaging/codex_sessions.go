@@ -186,6 +186,30 @@ func (s *codexSessionStore) cleanMissingWorkspaces(bindingKey string) []string {
 	return removed
 }
 
+func (s *codexSessionStore) clearStaleWorkspaceThread(bindingKey string, workspaceRoot string, visibleThreadIDs map[string]bool) bool {
+	s.mu.Lock()
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	binding := s.bindings[bindingKey]
+	session, ok := binding.Workspaces[workspaceRoot]
+	if !ok || session.PendingNewThread {
+		s.mu.Unlock()
+		return false
+	}
+	threadID := strings.TrimSpace(session.ThreadID)
+	if threadID == "" || visibleThreadIDs[threadID] {
+		s.mu.Unlock()
+		return false
+	}
+	session.ThreadID = ""
+	session.PendingNewThread = false
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	binding.Workspaces[workspaceRoot] = session
+	s.bindings[bindingKey] = binding
+	s.mu.Unlock()
+	s.save()
+	return true
+}
+
 func (s *codexSessionStore) findWorkspaceByThread(bindingKey string, threadID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
