@@ -205,6 +205,9 @@ func sortedCodexWorkspaceGroups(byRoot map[string]*codexWorkspaceGroup) []codexW
 // codexSessionsForWorkspace 返回当前工作空间内可切换的会话，保持 /cx ls 与 /cx switch 编号一致。
 func (h *Handler) codexSessionsForWorkspace(bindingKey string, workspaceRoot string) []codexWorkspaceView {
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	if sessions := h.codexAppWorkspaceThreads(workspaceRoot); sessions != nil {
+		return sessions
+	}
 	sessions := make([]codexWorkspaceView, 0)
 	for _, view := range h.codexSwitchTargets(bindingKey) {
 		if normalizeCodexWorkspaceRoot(view.WorkspaceRoot) == workspaceRoot {

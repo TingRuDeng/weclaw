@@ -7,8 +7,10 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -31,6 +33,12 @@ type localCodexSessionMeta struct {
 type codexAppWorkspaceState struct {
 	ProjectOrder        []string `json:"project-order"`
 	SavedWorkspaceRoots []string `json:"electron-saved-workspace-roots"`
+}
+
+type codexAppThreadRow struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	RecencyAtMS int64  `json:"recency_at_ms"`
 }
 
 // defaultCodexLocalSessionDir 返回本机 Codex 默认会话目录。
@@ -95,6 +103,64 @@ func readCodexAppWorkspaceRoots(codexDir string) []string {
 		return nil
 	}
 	return mergeCodexAppWorkspaceRoots(state.ProjectOrder, state.SavedWorkspaceRoots)
+}
+
+// readCodexAppWorkspaceThreads 读取 Codex App 当前项目内实际可见会话。
+func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codexWorkspaceView {
+	codexDir = strings.TrimSpace(codexDir)
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	if codexDir == "" || workspaceRoot == "" {
+		return nil
+	}
+	dbPath := filepath.Join(codexDir, "state_5.sqlite")
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil
+	}
+	query := "select id, title, recency_at_ms from threads where archived=0 and preview<>'' and cwd=" +
+		sqliteString(workspaceRoot) + " order by recency_at_ms desc, id desc"
+	output, err := exec.Command("sqlite3", "-json", dbPath, query).Output()
+	if err != nil {
+		return nil
+	}
+	var rows []codexAppThreadRow
+	if err := json.Unmarshal(output, &rows); err != nil {
+		return nil
+	}
+	views := make([]codexWorkspaceView, 0, len(rows))
+	for _, row := range rows {
+		id := strings.TrimSpace(row.ID)
+		if id == "" {
+			continue
+		}
+		views = append(views, codexWorkspaceView{
+			WorkspaceRoot: workspaceRoot,
+			ThreadID:      id,
+			ThreadName:    firstCodexTitleLine(row.Title),
+			UpdatedAt:     strconvFormatInt(row.RecencyAtMS),
+			Source:        codexLocalSource,
+		})
+	}
+	return views
+}
+
+func sqliteString(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func firstCodexTitleLine(title string) string {
+	for _, line := range strings.Split(strings.TrimSpace(title), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func strconvFormatInt(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
 }
 
 func mergeCodexAppWorkspaceRoots(projectOrder []string, savedRoots []string) []string {

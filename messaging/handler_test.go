@@ -2377,6 +2377,39 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	}
 }
 
+func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-jsonl-a", workspace, "JSONL 旧会话 A", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-jsonl-b", workspace, "JSONL 旧会话 B", "2026-04-29T08:00:00Z")
+	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
+	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
+		t.Fatalf("write fake sqlite db: %v", err)
+	}
+	writeFakeSQLite3(t, `[{"id":"thread-app-new","title":"App 新会话\n第二行不展示","recency_at_ms":2000},{"id":"thread-app-old","title":"App 旧会话","recency_at_ms":1000}]`)
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	h.HandleMessage(context.Background(), client, newTextMessage(151, "/cx cd 0"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "0. App 新会话") || !strings.Contains(text, "1. App 旧会话") {
+		t.Fatalf("session ls should use Codex App thread order, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, "JSONL 旧会话") || strings.Contains(text, "第二行不展示") {
+		t.Fatalf("session ls should hide JSONL fallback and multiline title tail, messages=%#v", calls.texts())
+	}
+}
+
 func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
@@ -3311,6 +3344,17 @@ func writeCodexAppWorkspaceState(t *testing.T, codexDir string, projectOrder []s
 	if err := os.WriteFile(filepath.Join(codexDir, ".codex-global-state.json"), data, 0o600); err != nil {
 		t.Fatalf("write codex app workspace state: %v", err)
 	}
+}
+
+func writeFakeSQLite3(t *testing.T, output string) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := "#!/bin/sh\ncat <<'EOF'\n" + output + "\nEOF\n"
+	path := filepath.Join(binDir, "sqlite3")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake sqlite3: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func writeLocalCodexIndex(t *testing.T, codexDir string, threadID string, threadName string, updatedAt string) {

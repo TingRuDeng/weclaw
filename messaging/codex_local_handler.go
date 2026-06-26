@@ -59,6 +59,14 @@ func (h *Handler) codexAppWorkspaceRoots() []string {
 	return readCodexAppWorkspaceRoots(dir)
 }
 
+// codexAppWorkspaceThreads 返回 Codex App 在指定工作空间下展示的会话列表。
+func (h *Handler) codexAppWorkspaceThreads(workspaceRoot string) []codexWorkspaceView {
+	h.mu.RLock()
+	dir := h.codexLocalSessionDir
+	h.mu.RUnlock()
+	return readCodexAppWorkspaceThreads(dir, workspaceRoot)
+}
+
 // findLocalCodexWorkspaceByThread 让用户直接按 threadId 切到本机 Codex 已有会话。
 func (h *Handler) findLocalCodexWorkspaceByThread(threadID string) (string, bool) {
 	threadID = strings.TrimSpace(threadID)
