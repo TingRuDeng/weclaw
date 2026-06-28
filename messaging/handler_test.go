@@ -1057,6 +1057,43 @@ func TestHandleMessageUsesPlatformDefaultAgent(t *testing.T) {
 	}
 }
 
+func TestEnsureAgentStartedSerializesConcurrentStartup(t *testing.T) {
+	start := make(chan struct{})
+	release := make(chan struct{})
+	var factoryCalls int
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		factoryCalls++
+		close(start)
+		<-release
+		return &fakeAgent{reply: "ok", info: agent.AgentInfo{Name: name, Type: "test"}}
+	}, nil)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := h.EnsureAgentStarted(context.Background(), "codex")
+		firstDone <- err
+	}()
+	<-start
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := h.EnsureAgentStarted(context.Background(), "codex")
+		secondDone <- err
+	}()
+	time.Sleep(taskQueueProbeDelay)
+	close(release)
+
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first EnsureAgentStarted error: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second EnsureAgentStarted error: %v", err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("factoryCalls=%d, want one serialized startup", factoryCalls)
+	}
+}
+
 func TestChatWithAgentWithProgress_UsesProgressInterface(t *testing.T) {
 	h := newTestHandler()
 	ag := &fakeProgressAgent{

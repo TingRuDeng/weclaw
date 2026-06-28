@@ -10,11 +10,14 @@ import (
 const (
 	registryInitialRestartDelay = 3 * time.Second
 	registryMaxRestartDelay     = 30 * time.Second
+	denyNoticeInterval          = 60 * time.Second
+	denyNoticeText              = "当前账号未授权使用 WeClaw，请联系管理员配置 allowed_users。"
 )
 
 // Registry 统一管理已启用的平台实例，并在分发前执行访问控制。
 type Registry struct {
-	entries []RegistryEntry
+	entries     []RegistryEntry
+	denyNotices *denyNoticeLimiter
 }
 
 // RegistryEntry 描述一个平台实例及其访问控制策略。
@@ -36,7 +39,7 @@ func NewRegistry(entries []RegistryEntry) *Registry {
 		}
 		copied = append(copied, entry)
 	}
-	return &Registry{entries: copied}
+	return &Registry{entries: copied, denyNotices: newDenyNoticeLimiter(denyNoticeInterval)}
 }
 
 // Run 并发运行所有平台，任一平台返回错误时等待其它平台随 ctx 收敛后返回该错误。
@@ -53,7 +56,7 @@ func (r *Registry) Run(ctx context.Context, dispatch DispatchFunc) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runPlatformWithRestart(runCtx, entry, dispatch); err != nil && runCtx.Err() == nil {
+			if err := runPlatformWithRestart(runCtx, entry, dispatch, r.denyNotices); err != nil && runCtx.Err() == nil {
 				errCh <- err
 				cancel()
 			}
@@ -101,10 +104,10 @@ func (r *Registry) UpdateAccess(platformName PlatformName, allowed []string) {
 	}
 }
 
-func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch DispatchFunc) error {
+func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter) error {
 	restartDelay := registryInitialRestartDelay
 	for {
-		err := entry.Platform.Run(ctx, guardedDispatch(entry, dispatch))
+		err := entry.Platform.Run(ctx, guardedDispatch(entry, dispatch, limiter))
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -125,12 +128,55 @@ func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch D
 	}
 }
 
-func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc) DispatchFunc {
+func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter) DispatchFunc {
 	return func(ctx context.Context, msg IncomingMessage, reply Replier) {
 		if !entry.Access.Allowed(msg.UserID) {
 			log.Printf("[platform] denied %s user %q on account %q", entry.Platform.Name(), msg.UserID, entry.Platform.AccountID())
+			sendDenyNotice(ctx, entry, msg, reply, limiter)
 			return
 		}
 		dispatch(ctx, msg, reply)
 	}
+}
+
+func sendDenyNotice(ctx context.Context, entry RegistryEntry, msg IncomingMessage, reply Replier, limiter *denyNoticeLimiter) {
+	if reply == nil || limiter == nil {
+		return
+	}
+	key := string(entry.Platform.Name()) + "\x00" + entry.Platform.AccountID() + "\x00" + msg.UserID
+	if !limiter.Allow(key) {
+		return
+	}
+	if err := reply.SendText(ctx, denyNoticeText); err != nil {
+		log.Printf("[platform] failed to send deny notice to %s user %q: %v", entry.Platform.Name(), msg.UserID, err)
+	}
+}
+
+type denyNoticeLimiter struct {
+	mu     sync.Mutex
+	window time.Duration
+	now    func() time.Time
+	last   map[string]time.Time
+}
+
+func newDenyNoticeLimiter(window time.Duration) *denyNoticeLimiter {
+	return &denyNoticeLimiter{
+		window: window,
+		now:    time.Now,
+		last:   make(map[string]time.Time),
+	}
+}
+
+func (l *denyNoticeLimiter) Allow(key string) bool {
+	if l == nil || key == "" {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if last, ok := l.last[key]; ok && now.Sub(last) < l.window {
+		return false
+	}
+	l.last[key] = now
+	return true
 }

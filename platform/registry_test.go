@@ -25,7 +25,11 @@ func TestRegistryDispatchesAllowedUser(t *testing.T) {
 }
 
 func TestRegistryRejectsEmptyAllowlistByDefault(t *testing.T) {
-	platform := &recordingPlatform{messages: []IncomingMessage{{Platform: PlatformWeChat, UserID: "user-1", Text: "hi"}}}
+	reply := &recordingReplier{}
+	platform := &recordingPlatform{
+		messages: []IncomingMessage{{Platform: PlatformWeChat, UserID: "user-1", Text: "hi"}},
+		reply:    reply,
+	}
 	registry := NewRegistry([]RegistryEntry{{Platform: platform, Access: NewAccessControl(nil)}})
 	called := false
 
@@ -39,11 +43,34 @@ func TestRegistryRejectsEmptyAllowlistByDefault(t *testing.T) {
 	if called {
 		t.Fatalf("dispatch should not be called for empty allowlist")
 	}
+	if len(reply.texts) != 1 || reply.texts[0] != denyNoticeText {
+		t.Fatalf("deny notice texts=%#v, want one safe notice", reply.texts)
+	}
+}
+
+func TestRegistryRateLimitsDenyNotice(t *testing.T) {
+	reply := &recordingReplier{}
+	platform := &recordingPlatform{
+		messages: []IncomingMessage{
+			{Platform: PlatformWeChat, UserID: "user-1", Text: "hi"},
+			{Platform: PlatformWeChat, UserID: "user-1", Text: "again"},
+		},
+		reply: reply,
+	}
+	registry := NewRegistry([]RegistryEntry{{Platform: platform, Access: NewAccessControl(nil)}})
+
+	if err := registry.Run(context.Background(), func(ctx context.Context, msg IncomingMessage, reply Replier) {}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(reply.texts) != 1 {
+		t.Fatalf("deny notice count=%d, want rate limited to one", len(reply.texts))
+	}
 }
 
 type recordingPlatform struct {
 	messages []IncomingMessage
 	err      error
+	reply    Replier
 }
 
 func (p *recordingPlatform) Name() PlatformName {
@@ -60,15 +87,22 @@ func (p *recordingPlatform) Capabilities() Capabilities {
 
 func (p *recordingPlatform) Run(ctx context.Context, dispatch DispatchFunc) error {
 	for _, msg := range p.messages {
-		dispatch(ctx, msg, &recordingReplier{})
+		reply := p.reply
+		if reply == nil {
+			reply = &recordingReplier{}
+		}
+		dispatch(ctx, msg, reply)
 	}
 	return p.err
 }
 
-type recordingReplier struct{}
+type recordingReplier struct {
+	texts []string
+}
 
 func (r *recordingReplier) Capabilities() Capabilities { return Capabilities{Text: true} }
 func (r *recordingReplier) SendText(ctx context.Context, text string) error {
+	r.texts = append(r.texts, text)
 	return nil
 }
 func (r *recordingReplier) SendImage(ctx context.Context, localPath string) error {

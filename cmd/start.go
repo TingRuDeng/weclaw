@@ -153,9 +153,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 			return
 		}
 		log.Printf("Initializing default agent %q in background...", cfg.DefaultAgent)
-		ag := createAgentByName(ctx, cfg, cfg.DefaultAgent)
-		if ag == nil {
-			log.Printf("Failed to initialize default agent %q, staying in echo mode", cfg.DefaultAgent)
+		ag, err := handler.EnsureAgentStarted(ctx, cfg.DefaultAgent)
+		if err != nil {
+			log.Printf("Failed to initialize default agent %q, staying in echo mode: %v", cfg.DefaultAgent, err)
 		} else {
 			handler.SetDefaultAgent(cfg.DefaultAgent, ag)
 		}

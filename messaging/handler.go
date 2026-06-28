@@ -389,6 +389,11 @@ func (h *Handler) AgentByName(name string) agent.Agent {
 	return h.agents[name]
 }
 
+// EnsureAgentStarted 启动或复用指定 agent，供后台预热与消息按需启动共享同一条路径。
+func (h *Handler) EnsureAgentStarted(ctx context.Context, name string) (agent.Agent, error) {
+	return h.getAgent(ctx, name)
+}
+
 // getAgent returns a running agent by name, or starts it on demand via factory.
 func (h *Handler) getAgent(ctx context.Context, name string) (agent.Agent, error) {
 	// Fast path: already running
