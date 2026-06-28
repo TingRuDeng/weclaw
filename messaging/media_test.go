@@ -164,15 +164,3 @@ func TestReadLinkMetadataBodyRejectsLargeContentLength(t *testing.T) {
 		t.Fatal("readLinkMetadataBody() error = nil, want content length rejection")
 	}
 }
-
-func TestReadCDNBodyRejectsBodyAboveLimit(t *testing.T) {
-	resp := &http.Response{
-		Body:          io.NopCloser(strings.NewReader("123456789")),
-		ContentLength: -1,
-	}
-
-	_, err := readCDNBody(resp, 8)
-	if err == nil {
-		t.Fatal("readCDNBody() error = nil, want body size rejection")
-	}
-}

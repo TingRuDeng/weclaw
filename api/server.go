@@ -15,15 +15,18 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/messaging"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 const maxSendRequestBytes = 1 * 1024 * 1024
 
 // Server provides an HTTP API for sending messages.
 type Server struct {
-	clients []*ilink.Client
-	addr    string
-	token   string
+	clients  []*ilink.Client
+	registry *platform.Registry
+	addr     string
+	token    string
 }
 
 // Option 调整 API 服务运行参数，避免构造函数继续膨胀。
@@ -33,6 +36,13 @@ type Option func(*Server)
 func WithToken(token string) Option {
 	return func(s *Server) {
 		s.token = strings.TrimSpace(token)
+	}
+}
+
+// WithRegistry 配置主动发送 API 使用统一平台注册表定位出站会话。
+func WithRegistry(registry *platform.Registry) Option {
+	return func(s *Server) {
+		s.registry = registry
 	}
 }
 
@@ -50,9 +60,11 @@ func NewServer(clients []*ilink.Client, addr string, options ...Option) *Server 
 
 // SendRequest is the JSON body for POST /api/send.
 type SendRequest struct {
-	To       string `json:"to"`
-	Text     string `json:"text,omitempty"`
-	MediaURL string `json:"media_url,omitempty"` // image/video/file URL
+	Platform  string `json:"platform,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+	To        string `json:"to"`
+	Text      string `json:"text,omitempty"`
+	MediaURL  string `json:"media_url,omitempty"` // image/video/file URL
 }
 
 // Run starts the HTTP server. Blocks until ctx is cancelled.
@@ -103,11 +115,11 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	client, ok := s.firstClient(w)
+	reply, ok := s.replierFor(w, req)
 	if !ok {
 		return
 	}
-	if err := s.sendRequest(r.Context(), client, req); err != nil {
+	if err := s.sendRequest(r.Context(), reply, req); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -143,26 +155,44 @@ func decodeSendRequest(w http.ResponseWriter, r *http.Request) (SendRequest, boo
 	return req, true
 }
 
-func (s *Server) firstClient(w http.ResponseWriter) (*ilink.Client, bool) {
+func (s *Server) replierFor(w http.ResponseWriter, req SendRequest) (platform.Replier, bool) {
+	if s.registry != nil {
+		platformName := platform.PlatformName(strings.TrimSpace(req.Platform))
+		if platformName == "" {
+			platformName = platform.PlatformWeChat
+		}
+		reply, ok := s.registry.ReplierFor(platformName, strings.TrimSpace(req.AccountID), req.To)
+		if !ok {
+			http.Error(w, "target platform or account not configured", http.StatusServiceUnavailable)
+			return nil, false
+		}
+		return reply, true
+	}
 	if len(s.clients) == 0 {
 		http.Error(w, "no accounts configured", http.StatusServiceUnavailable)
 		return nil, false
 	}
-	return s.clients[0], true
+	return wechat.NewReplier(s.clients[0], req.To, "", ""), true
 }
 
-func (s *Server) sendRequest(ctx context.Context, client *ilink.Client, req SendRequest) error {
+func (s *Server) sendRequest(ctx context.Context, reply platform.Replier, req SendRequest) error {
 	if req.Text != "" {
-		if err := messaging.SendTextReply(ctx, client, req.To, req.Text, "", ""); err != nil {
+		if err := reply.SendText(ctx, req.Text); err != nil {
 			log.Printf("[api] send text failed: %v", err)
 			return fmt.Errorf("send text failed: %w", err)
 		}
 		log.Printf("[api] sent text to %s: %q", req.To, req.Text)
-		s.sendExtractedImages(ctx, client, req)
+		s.sendExtractedImages(ctx, reply, req)
 	}
 
 	if req.MediaURL != "" {
-		if err := messaging.SendMediaFromURL(ctx, client, req.To, req.MediaURL, ""); err != nil {
+		remoteReply, ok := reply.(interface {
+			SendMediaFromURL(ctx context.Context, rawURL string) error
+		})
+		if !ok {
+			return fmt.Errorf("target platform does not support remote media URL sending")
+		}
+		if err := remoteReply.SendMediaFromURL(ctx, req.MediaURL); err != nil {
 			log.Printf("[api] send media failed: %v", err)
 			return fmt.Errorf("send media failed: %w", err)
 		}
@@ -171,9 +201,15 @@ func (s *Server) sendRequest(ctx context.Context, client *ilink.Client, req Send
 	return nil
 }
 
-func (s *Server) sendExtractedImages(ctx context.Context, client *ilink.Client, req SendRequest) {
+func (s *Server) sendExtractedImages(ctx context.Context, reply platform.Replier, req SendRequest) {
+	remoteReply, ok := reply.(interface {
+		SendMediaFromURL(ctx context.Context, rawURL string) error
+	})
+	if !ok {
+		return
+	}
 	for _, imgURL := range messaging.ExtractImageURLs(req.Text) {
-		if err := messaging.SendMediaFromURL(ctx, client, req.To, imgURL, ""); err != nil {
+		if err := remoteReply.SendMediaFromURL(ctx, imgURL); err != nil {
 			log.Printf("[api] send extracted image failed: %v", err)
 		} else {
 			log.Printf("[api] sent extracted image to %s: %s", req.To, imgURL)

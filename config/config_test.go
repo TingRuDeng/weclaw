@@ -138,6 +138,45 @@ func TestDefaultConfigInitializesAgentsMap(t *testing.T) {
 	if cfg.Agents == nil {
 		t.Fatal("DefaultConfig() Agents = nil, want initialized map")
 	}
+	if cfg.Platforms == nil {
+		t.Fatal("DefaultConfig() Platforms = nil, want initialized map")
+	}
+}
+
+func TestPlatformConfigUnmarshal(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"platforms": {
+			"feishu": {
+				"enabled": true,
+				"allowed_users": ["ou_1"],
+				"default_agent": "codex",
+				"progress": {"mode": "stream"},
+				"message_aggregation_ms": 0
+			}
+		},
+		"agents": {}
+	}`)
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	feishu := cfg.Platforms["feishu"]
+	if feishu.Enabled == nil || !*feishu.Enabled {
+		t.Fatalf("feishu.Enabled=%#v, want true", feishu.Enabled)
+	}
+	if !reflect.DeepEqual(feishu.AllowedUsers, []string{"ou_1"}) {
+		t.Fatalf("AllowedUsers=%#v, want ou_1", feishu.AllowedUsers)
+	}
+	if feishu.DefaultAgent != "codex" {
+		t.Fatalf("DefaultAgent=%q, want codex", feishu.DefaultAgent)
+	}
+	if feishu.Progress == nil || feishu.Progress.Mode != "stream" {
+		t.Fatalf("Progress=%#v, want stream", feishu.Progress)
+	}
+	if feishu.MessageAggregationMs == nil || *feishu.MessageAggregationMs != 0 {
+		t.Fatalf("MessageAggregationMs=%#v, want explicit 0", feishu.MessageAggregationMs)
+	}
 }
 
 func TestDefaultProgressConfig(t *testing.T) {

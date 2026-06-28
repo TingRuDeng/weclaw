@@ -8,31 +8,41 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
 	maxConsecutiveFailures = 5
-	initialBackoff         = 3 * time.Second
-	maxBackoff             = 60 * time.Second
 	sessionExpiredBackoff  = 5 * time.Second
+	fatalSessionBackoff    = 60 * time.Second
 	errCodeSessionExpired  = -14
 )
+
+var steppedBackoffs = []time.Duration{
+	3 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+	20 * time.Second,
+	30 * time.Second,
+}
 
 // MessageHandler is called for each received message.
 type MessageHandler func(ctx context.Context, client *Client, msg WeixinMessage)
 
 // Monitor manages the long-poll loop for receiving messages.
 type Monitor struct {
-	client        *Client
-	handler       MessageHandler
-	getUpdatesBuf string
-	bufPath       string
-	failures      int
-	lastActivity  time.Time
-	queuesMu      sync.Mutex
-	queues        map[string]chan WeixinMessage
+	client          *Client
+	handler         MessageHandler
+	getUpdatesBuf   string
+	bufPath         string
+	failures        int
+	activityMu      sync.RWMutex
+	lastActivity    time.Time
+	queuesMu        sync.Mutex
+	queues          map[string]chan WeixinMessage
+	aggregateWindow time.Duration
 }
 
 // NewMonitor creates a new long-poll monitor.
@@ -90,7 +100,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 
 		// Reset failure counter on any successful response
 		m.failures = 0
-		m.lastActivity = time.Now()
+		m.setLastActivity(time.Now())
 
 		// Session expired — reset sync buf and reconnect silently
 		if resp.ErrCode == errCodeSessionExpired {
@@ -103,8 +113,12 @@ func (m *Monitor) Run(ctx context.Context) error {
 				// the bot token itself has expired. The user needs to re-login.
 				log.Printf("[monitor] WARNING: WeChat session expired and cannot be auto-recovered. Run `weclaw login` to re-authenticate.")
 			}
+			backoff := sessionExpiredBackoff
+			if m.getUpdatesBuf == "" {
+				backoff = fatalSessionBackoff
+			}
 			select {
-			case <-time.After(sessionExpiredBackoff):
+			case <-time.After(backoff):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -128,6 +142,19 @@ func (m *Monitor) Run(ctx context.Context) error {
 			m.enqueueMessage(ctx, msg)
 		}
 	}
+}
+
+// LastActivity 返回最近一次成功 GetUpdates 的时间，用于外部看门狗判断长轮询是否卡住。
+func (m *Monitor) LastActivity() time.Time {
+	m.activityMu.RLock()
+	defer m.activityMu.RUnlock()
+	return m.lastActivity
+}
+
+func (m *Monitor) setLastActivity(t time.Time) {
+	m.activityMu.Lock()
+	m.lastActivity = t
+	m.activityMu.Unlock()
 }
 
 func sortMessagesForDispatch(messages []WeixinMessage) {
@@ -174,21 +201,105 @@ func (m *Monitor) runMessageQueue(ctx context.Context, queue <-chan WeixinMessag
 		case <-ctx.Done():
 			return
 		case msg := <-queue:
-			m.handler(ctx, m.client, msg)
+			m.dispatchQueuedMessage(ctx, queue, msg)
 		}
 	}
 }
 
-// calcBackoff returns an exponential backoff duration capped at maxBackoff.
-func (m *Monitor) calcBackoff() time.Duration {
-	d := initialBackoff
-	for i := 1; i < m.failures; i++ {
-		d *= 2
-		if d > maxBackoff {
-			return maxBackoff
+func (m *Monitor) dispatchQueuedMessage(ctx context.Context, queue <-chan WeixinMessage, first WeixinMessage) {
+	if m.aggregateWindow <= 0 || isCommandWeixinMessage(first) {
+		m.handler(ctx, m.client, first)
+		return
+	}
+	batch := []WeixinMessage{first}
+	timer := time.NewTimer(m.aggregateWindow)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-queue:
+			if isCommandWeixinMessage(msg) {
+				m.handler(ctx, m.client, aggregateWeixinMessages(batch))
+				m.handler(ctx, m.client, msg)
+				return
+			}
+			batch = append(batch, msg)
+		case <-timer.C:
+			m.handler(ctx, m.client, aggregateWeixinMessages(batch))
+			return
 		}
 	}
-	return d
+}
+
+// SetAggregationWindow 设置同一用户连续消息聚合窗口；0 表示关闭聚合。
+func (m *Monitor) SetAggregationWindow(window time.Duration) {
+	m.aggregateWindow = window
+}
+
+func isCommandWeixinMessage(msg WeixinMessage) bool {
+	return strings.HasPrefix(strings.TrimSpace(weixinMessageText(msg)), "/")
+}
+
+func aggregateWeixinMessages(messages []WeixinMessage) WeixinMessage {
+	if len(messages) == 0 {
+		return WeixinMessage{}
+	}
+	if len(messages) == 1 {
+		return messages[0]
+	}
+	result := messages[len(messages)-1]
+	texts := make([]string, 0, len(messages))
+	items := make([]MessageItem, 0, len(result.ItemList)+1)
+	for _, msg := range messages {
+		for _, item := range msg.ItemList {
+			switch {
+			case item.Type == ItemTypeText && item.TextItem != nil:
+				text := strings.TrimSpace(item.TextItem.Text)
+				if text != "" {
+					texts = append(texts, text)
+				}
+			case item.Type == ItemTypeVoice && item.VoiceItem != nil && strings.TrimSpace(item.VoiceItem.Text) != "":
+				texts = append(texts, strings.TrimSpace(item.VoiceItem.Text))
+				items = append(items, item)
+			default:
+				items = append(items, item)
+			}
+		}
+	}
+	if len(texts) > 0 {
+		textItem := MessageItem{Type: ItemTypeText, TextItem: &TextItem{Text: strings.Join(texts, "\n")}}
+		items = append([]MessageItem{textItem}, items...)
+	}
+	result.ItemList = items
+	result.ClientID = ""
+	return result
+}
+
+func weixinMessageText(msg WeixinMessage) string {
+	for _, item := range msg.ItemList {
+		if item.Type == ItemTypeText && item.TextItem != nil {
+			return item.TextItem.Text
+		}
+	}
+	for _, item := range msg.ItemList {
+		if item.Type == ItemTypeVoice && item.VoiceItem != nil {
+			return item.VoiceItem.Text
+		}
+	}
+	return ""
+}
+
+// calcBackoff 返回固定阶梯退避，避免指数退避在微信短暂抖动时过慢恢复。
+func (m *Monitor) calcBackoff() time.Duration {
+	index := m.failures - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(steppedBackoffs) {
+		index = len(steppedBackoffs) - 1
+	}
+	return steppedBackoffs[index]
 }
 
 type syncData struct {

@@ -28,12 +28,12 @@ func (s *claudeSessionStore) SetFilePath(filePath string) {
 }
 
 func claudeBindingKey(userID string, agentName string) string {
-	return strings.TrimSpace(userID) + "\x00" + strings.TrimSpace(agentName)
+	return normalizeConversationUserKey(userID) + "\x00" + strings.TrimSpace(agentName)
 }
 
 func buildClaudeConversationID(userID string, agentName string, workspaceRoot string) string {
 	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
-	return strings.Join([]string{"claude", strings.TrimSpace(userID), strings.TrimSpace(agentName), workspaceRoot}, "\x00")
+	return strings.Join([]string{"claude", normalizeConversationUserKey(userID), strings.TrimSpace(agentName), workspaceRoot}, "\x00")
 }
 
 func normalizeClaudeWorkspaceRoot(workspaceRoot string) string {

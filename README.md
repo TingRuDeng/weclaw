@@ -32,6 +32,13 @@ That's it. On first start, WeClaw will:
 
 Use `weclaw login` to add additional WeChat accounts.
 
+飞书接入默认关闭。启用前先保存并校验飞书应用凭证：
+
+```bash
+weclaw feishu login --app-id cli_xxx --app-secret xxx
+weclaw feishu status
+```
+
 ### Other install methods
 
 ```bash
@@ -260,9 +267,37 @@ Environment variables:
 - `OPENCLAW_GATEWAY_URL` — OpenClaw HTTP fallback endpoint
 - `OPENCLAW_GATEWAY_TOKEN` — OpenClaw API token
 
+### 多平台配置
+
+`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用；`allowed_users` 为空时默认拒绝所有入站消息。
+
+```json
+{
+  "default_agent": "codex",
+  "platforms": {
+    "wechat": {
+      "enabled": true,
+      "allowed_users": ["user_id@im.wechat"],
+      "message_aggregation_ms": 800,
+      "progress": {"mode": "typing"}
+    },
+    "feishu": {
+      "enabled": true,
+      "allowed_users": ["ou_xxx"],
+      "default_agent": "codex",
+      "progress": {"mode": "stream"}
+    }
+  }
+}
+```
+
+安全提示：白名单用户可以驱动本机 shell agent 读取文件、运行命令或修改代码。生产使用时必须显式配置 `allowed_users`。
+
+微信 `message_aggregation_ms` 默认 800，设置为 `0` 可关闭。`default_agent`、`progress` 和 `allowed_users` 支持软配置热重载；平台启用状态和平台凭证仍需重启生效。
+
 ### 微信进度反馈
 
-默认配置使用 `typing` 模式：微信只显示“正在输入”和最终回复，不额外发送中间文字气泡。
+默认配置使用 `typing` 模式：微信只显示“正在输入”和最终回复，不额外发送中间文字气泡。飞书在 `typing` 模式下使用 thinking 卡片，`stream`/`summary` 模式下使用 CardKit 卡片更新；`off` 模式只发送最终结果。
 
 ```json
 {

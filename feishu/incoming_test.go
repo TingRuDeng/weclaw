@@ -1,0 +1,117 @@
+package feishu
+
+import (
+	"context"
+	"testing"
+
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/larksuite/oapi-sdk-go/v3/channel/types"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+)
+
+type fakeResourceDownloader struct {
+	attachments []platform.Attachment
+	seen        []types.Resource
+}
+
+// DownloadResource 记录资源下载请求，并返回预设附件。
+func (f *fakeResourceDownloader) DownloadResource(ctx context.Context, messageID string, resource types.Resource) (platform.Attachment, error) {
+	f.seen = append(f.seen, resource)
+	if len(f.attachments) == 0 {
+		return platform.Attachment{Kind: platform.AttachmentFile, Path: "/tmp/file", SourceID: resource.FileKey}, nil
+	}
+	attachment := f.attachments[0]
+	f.attachments = f.attachments[1:]
+	return attachment, nil
+}
+
+func TestToIncomingFromMessageParsesText(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = &fakeResourceDownloader{}
+	event := newMessageEvent("p2p", "text", `{"text":"<p>hello&nbsp; world</p><br>next"}`)
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("toIncomingFromMessage ok=false, want true")
+	}
+	if incoming.Platform != platform.PlatformFeishu || incoming.UserID != "ou_user" || incoming.MessageID != "om_1" {
+		t.Fatalf("incoming=%#v, want feishu user/message fields", incoming)
+	}
+	if incoming.Text != "hello  world\nnext" {
+		t.Fatalf("text=%q, want cleaned text", incoming.Text)
+	}
+}
+
+func TestToIncomingFromMessageIgnoresGroupChat(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := newMessageEvent("group", "text", `{"text":"hello"}`)
+
+	_, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if ok {
+		t.Fatal("group chat should be ignored")
+	}
+}
+
+func TestToIncomingFromMessageDownloadsImage(t *testing.T) {
+	downloader := &fakeResourceDownloader{attachments: []platform.Attachment{{
+		Kind:     platform.AttachmentImage,
+		Path:     "/tmp/image.png",
+		SourceID: "img_1",
+	}}}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = downloader
+	event := newMessageEvent("p2p", "image", `{"image_key":"img_1"}`)
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("toIncomingFromMessage ok=false, want true")
+	}
+	if len(incoming.Attachments) != 1 || incoming.Attachments[0].Kind != platform.AttachmentImage {
+		t.Fatalf("attachments=%#v, want one image", incoming.Attachments)
+	}
+	if len(downloader.seen) != 1 || downloader.seen[0].FileKey != "img_1" {
+		t.Fatalf("downloaded resources=%#v, want img_1", downloader.seen)
+	}
+}
+
+func TestToIncomingFromMessageParsesPost(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = &fakeResourceDownloader{}
+	content := `{"zh_cn":{"title":"标题","content":[[{"tag":"text","text":"第一段"},{"tag":"a","text":"链接","href":"https://example.com"}],[{"tag":"text","text":"第二段"}]]}}`
+	event := newMessageEvent("p2p", "post", content)
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("toIncomingFromMessage ok=false, want true")
+	}
+	if incoming.Text == "" || incoming.Text == "[rich text message]" {
+		t.Fatalf("post text=%q, want extracted rich text", incoming.Text)
+	}
+}
+
+// newMessageEvent 构造飞书 P2 消息事件。
+func newMessageEvent(chatType string, messageType string, content string) *larkim.P2MessageReceiveV1 {
+	return &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Sender: &larkim.EventSender{
+				SenderId: &larkim.UserId{OpenId: stringPtr("ou_user")},
+			},
+			Message: &larkim.EventMessage{
+				MessageId:   stringPtr("om_1"),
+				ChatId:      stringPtr("oc_1"),
+				ChatType:    stringPtr(chatType),
+				MessageType: stringPtr(messageType),
+				Content:     stringPtr(content),
+			},
+		},
+	}
+}
+
+// stringPtr 返回字符串指针，匹配飞书 SDK 事件模型。
+func stringPtr(value string) *string {
+	return &value
+}

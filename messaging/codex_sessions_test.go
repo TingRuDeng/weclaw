@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -84,5 +86,85 @@ func TestCodexSessionStoreKeepsThreadBoundToOneWorkspace(t *testing.T) {
 	owner, ok := store.findWorkspaceByThread(bindingKey, "thread-1")
 	if !ok || owner != normalizeCodexWorkspaceRoot(secondWorkspace) {
 		t.Fatalf("thread owner=(%q,%v)，want %q true", owner, ok, normalizeCodexWorkspaceRoot(secondWorkspace))
+	}
+}
+
+func TestCodexSessionStoreMigratesLegacyWeChatBindingKey(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
+	workspace := filepath.Join(t.TempDir(), "project")
+	writeCodexSessionState(t, stateFile, codexSessionState{
+		Version: 1,
+		Bindings: map[string]codexSessionBinding{
+			"user-1\x00codex": {
+				ActiveWorkspace: workspace,
+				Workspaces: map[string]codexWorkspaceSession{
+					workspace: {ThreadID: "thread-1"},
+				},
+			},
+		},
+	})
+
+	store := newCodexSessionStore()
+	store.SetFilePath(stateFile)
+
+	bindingKey := codexBindingKey("wechat:user-1", "codex")
+	threadID, pending := store.getThread(bindingKey, workspace)
+	if threadID != "thread-1" || pending {
+		t.Fatalf("migrated thread=%q pending=%v，want thread-1 false", threadID, pending)
+	}
+	assertCodexStateHasOnlyBinding(t, stateFile, bindingKey)
+}
+
+func TestCodexSessionStoreDoesNotDoublePrefixMigratedBindingKey(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
+	workspace := filepath.Join(t.TempDir(), "project")
+	bindingKey := codexBindingKey("wechat:user-1", "codex")
+	writeCodexSessionState(t, stateFile, codexSessionState{
+		Version: 1,
+		Bindings: map[string]codexSessionBinding{
+			bindingKey: {
+				Workspaces: map[string]codexWorkspaceSession{
+					workspace: {ThreadID: "thread-1"},
+				},
+			},
+		},
+	})
+
+	store := newCodexSessionStore()
+	store.SetFilePath(stateFile)
+
+	threadID, pending := store.getThread(bindingKey, workspace)
+	if threadID != "thread-1" || pending {
+		t.Fatalf("thread=%q pending=%v，want thread-1 false", threadID, pending)
+	}
+	assertCodexStateHasOnlyBinding(t, stateFile, bindingKey)
+}
+
+func writeCodexSessionState(t *testing.T, stateFile string, state codexSessionState) {
+	t.Helper()
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	if err := os.WriteFile(stateFile, data, 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+}
+
+func assertCodexStateHasOnlyBinding(t *testing.T, stateFile string, bindingKey string) {
+	t.Helper()
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var state codexSessionState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	if len(state.Bindings) != 1 {
+		t.Fatalf("bindings=%#v，want only %q", state.Bindings, bindingKey)
+	}
+	if _, ok := state.Bindings[bindingKey]; !ok {
+		t.Fatalf("missing binding %q in %#v", bindingKey, state.Bindings)
 	}
 }

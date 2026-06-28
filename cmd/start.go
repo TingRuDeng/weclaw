@@ -8,15 +8,17 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/api"
 	"github.com/fastclaw-ai/weclaw/config"
+	feishuplatform "github.com/fastclaw-ai/weclaw/feishu"
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/messaging"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/wechat"
 	"github.com/mdp/qrterminal/v3"
 	"github.com/spf13/cobra"
 )
@@ -34,15 +36,20 @@ func init() {
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the WeChat message bridge (auto-login if needed)",
+	Short: "Start the message bridge (auto-login WeChat if needed)",
 	RunE:  runStart,
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
 	if !foregroundFlag {
 		// Check if login is needed — if so, do it in foreground first, then daemon
 		accounts, _ := ilink.LoadAllCredentials()
-		if len(accounts) == 0 {
+		if wechatEnabled(cfg) && len(accounts) == 0 {
 			fmt.Println("No WeChat accounts found, starting login...")
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			_, err := doLogin(ctx)
@@ -64,19 +71,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 
 	// No accounts — trigger login
-	if len(accounts) == 0 {
+	if wechatEnabled(cfg) && len(accounts) == 0 {
 		log.Println("No WeChat accounts found, starting login...")
 		creds, err := doLogin(ctx)
 		if err != nil {
 			return fmt.Errorf("login failed: %w", err)
 		}
 		accounts = append(accounts, creds)
-	}
-
-	// Load config and auto-detect agents
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	if config.DetectAndConfigure(cfg) {
@@ -131,6 +132,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	handler.SetAgentWorkDirs(workDirs)
 	handler.SetProgressConfig(cfg.Progress)
 	handler.SetAgentProgressConfigs(extractAgentProgressConfigs(cfg.Agents))
+	handler.SetPlatformProgressConfigs(extractPlatformProgressConfigs(cfg.Platforms))
+	handler.SetPlatformDefaultAgents(extractPlatformDefaultAgents(cfg.Platforms))
 	handler.SetCodexSessionFile(messaging.DefaultCodexSessionFile())
 	handler.SetClaudeSessionFile(messaging.DefaultClaudeSessionFile())
 
@@ -158,17 +161,19 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// Start HTTP API server for sending messages
-	var clients []*ilink.Client
-	for _, c := range accounts {
-		clients = append(clients, ilink.NewClient(c))
+	// Build platform registry before HTTP API so active sending and inbound bridge share the same platform set.
+	registry, err := buildPlatformRegistry(accounts, cfg)
+	if err != nil {
+		return err
 	}
+	go runSoftConfigReloader(ctx, handler, registry)
+
 	// Resolve API addr: flag > env/config > default
 	apiAddr := cfg.APIAddr // already includes env override from loadEnv
 	if apiAddrFlag != "" {
 		apiAddr = apiAddrFlag
 	}
-	apiServer := api.NewServer(clients, apiAddr, api.WithToken(cfg.APIToken))
+	apiServer := api.NewServer(nil, apiAddr, api.WithToken(cfg.APIToken), api.WithRegistry(registry))
 	if err := apiServer.Validate(); err != nil {
 		return err
 	}
@@ -178,57 +183,57 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// Start monitors immediately — they will use echo mode until agent is ready
-	log.Printf("Starting message bridge for %d account(s)...", len(accounts))
-
-	var wg sync.WaitGroup
-	for _, creds := range accounts {
-		wg.Add(1)
-		go func(c *ilink.Credentials) {
-			defer wg.Done()
-			runMonitorWithRestart(ctx, c, handler)
-		}(creds)
+	// Start platforms immediately — they will use echo mode until agent is ready
+	log.Printf("Starting message bridge...")
+	if err := registry.Run(ctx, handler.HandleMessage); err != nil {
+		return err
 	}
-
-	wg.Wait()
-	log.Println("All monitors stopped")
+	log.Println("All platforms stopped")
 	return nil
 }
 
-// runMonitorWithRestart runs a monitor with automatic restart on failure.
-func runMonitorWithRestart(ctx context.Context, creds *ilink.Credentials, handler *messaging.Handler) {
-	const maxRestartDelay = 30 * time.Second
-	restartDelay := 3 * time.Second
-
-	for {
-		log.Printf("[%s] Starting monitor...", creds.ILinkBotID)
-
-		client := ilink.NewClient(creds)
-		monitor, err := ilink.NewMonitor(client, handler.HandleMessage)
-		if err != nil {
-			log.Printf("[%s] Failed to create monitor: %v", creds.ILinkBotID, err)
-		} else {
-			err = monitor.Run(ctx)
-		}
-
-		// If context is cancelled, exit
-		if ctx.Err() != nil {
-			return
-		}
-
-		log.Printf("[%s] Monitor stopped: %v, restarting in %s", creds.ILinkBotID, err, restartDelay)
-		select {
-		case <-time.After(restartDelay):
-		case <-ctx.Done():
-			return
-		}
-
-		// Exponential backoff for restarts, capped
-		restartDelay *= 2
-		if restartDelay > maxRestartDelay {
-			restartDelay = maxRestartDelay
+func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config) (*platform.Registry, error) {
+	entries := make([]platform.RegistryEntry, 0, len(accounts)+1)
+	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
+	if !wechatEnabled(cfg) {
+		log.Printf("[platform] wechat disabled by config")
+	} else {
+		for _, creds := range accounts {
+			adapter := wechat.NewAdapter(creds)
+			adapter.SetAggregationWindow(wechatAggregationWindow(wechatCfg))
+			entries = append(entries, platform.RegistryEntry{
+				Platform: adapter,
+				Access:   platform.NewAccessControl(wechatCfg.AllowedUsers),
+			})
 		}
 	}
+	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
+	if feishuCfg.Enabled != nil && *feishuCfg.Enabled {
+		creds, err := feishuplatform.LoadCredentials()
+		if err != nil {
+			return nil, fmt.Errorf("load feishu credentials: %w", err)
+		}
+		entries = append(entries, platform.RegistryEntry{
+			Platform: feishuplatform.NewAdapter(creds),
+			Access:   platform.NewAccessControl(feishuCfg.AllowedUsers),
+		})
+	}
+	return platform.NewRegistry(entries), nil
+}
+
+func wechatEnabled(cfg *config.Config) bool {
+	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
+	return wechatCfg.Enabled == nil || *wechatCfg.Enabled
+}
+
+func wechatAggregationWindow(cfg config.PlatformConfig) time.Duration {
+	if cfg.MessageAggregationMs == nil {
+		return 800 * time.Millisecond
+	}
+	if *cfg.MessageAggregationMs <= 0 {
+		return 0
+	}
+	return time.Duration(*cfg.MessageAggregationMs) * time.Millisecond
 }
 
 // createAgentByName creates and starts an agent by its config name.
@@ -326,6 +331,81 @@ func extractAgentProgressConfigs(agents map[string]config.AgentConfig) map[strin
 		progressConfigs[name] = *agentConfig.Progress
 	}
 	return progressConfigs
+}
+
+func extractPlatformProgressConfigs(platforms map[string]config.PlatformConfig) map[string]config.ProgressConfig {
+	progressConfigs := make(map[string]config.ProgressConfig)
+	for name, platformConfig := range platforms {
+		if platformConfig.Progress == nil {
+			continue
+		}
+		progressConfigs[name] = *platformConfig.Progress
+	}
+	return progressConfigs
+}
+
+func extractPlatformDefaultAgents(platforms map[string]config.PlatformConfig) map[string]string {
+	defaultAgents := make(map[string]string)
+	for name, platformConfig := range platforms {
+		if platformConfig.DefaultAgent == "" {
+			continue
+		}
+		defaultAgents[name] = platformConfig.DefaultAgent
+	}
+	return defaultAgents
+}
+
+func runSoftConfigReloader(ctx context.Context, handler *messaging.Handler, registry *platform.Registry) {
+	path, err := config.ConfigPath()
+	if err != nil {
+		log.Printf("[config] WARNING: cannot resolve config path for hot reload: %v", err)
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	lastMod := info.ModTime()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			info, err := os.Stat(path)
+			if err != nil || !info.ModTime().After(lastMod) {
+				continue
+			}
+			next, err := config.Load()
+			if err != nil {
+				log.Printf("[config] WARNING: hot reload failed, keeping previous config: %v", err)
+				lastMod = info.ModTime()
+				continue
+			}
+			applySoftConfig(handler, registry, next)
+			lastMod = info.ModTime()
+			log.Printf("[config] soft config reloaded from %s", path)
+		}
+	}
+}
+
+func applySoftConfig(handler *messaging.Handler, registry *platform.Registry, cfg *config.Config) {
+	if handler == nil || cfg == nil {
+		return
+	}
+	handler.SetProgressConfig(cfg.Progress)
+	handler.SetAgentProgressConfigs(extractAgentProgressConfigs(cfg.Agents))
+	handler.SetPlatformProgressConfigs(extractPlatformProgressConfigs(cfg.Platforms))
+	handler.SetPlatformDefaultAgents(extractPlatformDefaultAgents(cfg.Platforms))
+	if cfg.DefaultAgent != "" {
+		if ag := handler.AgentByName(cfg.DefaultAgent); ag != nil {
+			handler.SetDefaultAgent(cfg.DefaultAgent, ag)
+		}
+	}
+	for name, platformConfig := range cfg.Platforms {
+		registry.UpdateAccess(platform.PlatformName(name), platformConfig.AllowedUsers)
+	}
 }
 
 // doLogin runs the interactive QR login flow and returns credentials.

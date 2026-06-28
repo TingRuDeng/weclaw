@@ -7,7 +7,7 @@ import (
 	"syscall"
 
 	"github.com/fastclaw-ai/weclaw/ilink"
-	"github.com/fastclaw-ai/weclaw/messaging"
+	"github.com/fastclaw-ai/weclaw/wechat"
 	"github.com/spf13/cobra"
 )
 
@@ -48,16 +48,17 @@ var sendCmd = &cobra.Command{
 		}
 
 		client := ilink.NewClient(accounts[0])
+		reply := wechat.NewReplier(client, sendTo, "", "")
 
 		if sendText != "" {
-			if err := messaging.SendTextReply(ctx, client, sendTo, sendText, "", ""); err != nil {
+			if err := reply.SendText(ctx, sendText); err != nil {
 				return fmt.Errorf("send text failed: %w", err)
 			}
 			fmt.Println("Text sent")
 		}
 
 		if sendMediaURL != "" {
-			if err := messaging.SendMediaFromURL(ctx, client, sendTo, sendMediaURL, ""); err != nil {
+			if err := reply.SendMediaFromURL(ctx, sendMediaURL); err != nil {
 				return fmt.Errorf("send media failed: %w", err)
 			}
 			fmt.Println("Media sent")

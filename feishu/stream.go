@@ -1,0 +1,129 @@
+package feishu
+
+import (
+	"context"
+	"time"
+
+	"github.com/fastclaw-ai/weclaw/platform"
+)
+
+const cardkitThrottle = 500 * time.Millisecond
+
+type feishuStream struct {
+	cardKit    cardKitClient
+	cardID     string
+	title      string
+	sequence   int
+	lastUpdate time.Time
+	throttle   time.Duration
+	now        func() time.Time
+}
+
+// openCardKitStream 创建并发送 CardKit 卡片，然后开启流式模式。
+func (r *Replier) openCardKitStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
+	cardJSON, err := buildCardV2(cardOptions{
+		Status:  cardStatusThinking,
+		Title:   opts.Title,
+		Content: opts.InitialContent,
+	})
+	if err != nil {
+		return nil, err
+	}
+	cardID, err := r.cardKit.CreateCard(ctx, cardJSON)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.sender.SendCard(ctx, r.openID, cardID); err != nil {
+		return nil, err
+	}
+	stream := &feishuStream{
+		cardKit:  r.cardKit,
+		cardID:   cardID,
+		title:    opts.Title,
+		throttle: cardkitThrottle,
+		now:      time.Now,
+	}
+	stream.sequence++
+	if err := stream.cardKit.SetStreaming(ctx, stream.cardID, true, stream.sequence); err != nil {
+		return nil, err
+	}
+	return stream, nil
+}
+
+// Update 节流更新主内容组件，触发飞书打字机效果。
+func (s *feishuStream) Update(ctx context.Context, content string) error {
+	now := s.now()
+	if !s.lastUpdate.IsZero() && now.Sub(s.lastUpdate) < s.throttle {
+		return nil
+	}
+	s.sequence++
+	err := s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.sequence)
+	if shouldReenableStreaming(err) {
+		s.sequence++
+		if enableErr := s.cardKit.SetStreaming(ctx, s.cardID, true, s.sequence); enableErr != nil {
+			return ignoreCardKitUpdateError(enableErr)
+		}
+		s.sequence++
+		err = s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.sequence)
+	}
+	s.lastUpdate = now
+	return ignoreCardKitUpdateError(err)
+}
+
+// Complete 关闭流式并全量更新为完成卡片。
+func (s *feishuStream) Complete(ctx context.Context, finalContent string) error {
+	disableErr := s.disableStreaming(ctx)
+	cardJSON, buildErr := buildCardV2(cardOptions{Status: cardStatusDone, Title: s.title, Content: finalContent})
+	if buildErr != nil {
+		return buildErr
+	}
+	s.sequence++
+	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, cardJSON, s.sequence)
+	destroyErr := s.cardKit.DestroyCard(ctx, s.cardID)
+	return firstErr(updateErr, disableErr, destroyErr)
+}
+
+// Fail 关闭流式并全量更新为失败卡片。
+func (s *feishuStream) Fail(ctx context.Context, errText string) error {
+	disableErr := s.disableStreaming(ctx)
+	cardJSON, buildErr := buildCardV2(cardOptions{Status: cardStatusError, Title: s.title, Content: errText})
+	if buildErr != nil {
+		return buildErr
+	}
+	s.sequence++
+	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, cardJSON, s.sequence)
+	destroyErr := s.cardKit.DestroyCard(ctx, s.cardID)
+	return firstErr(updateErr, disableErr, destroyErr)
+}
+
+func (s *feishuStream) disableStreaming(ctx context.Context) error {
+	s.sequence++
+	return ignoreCardKitUpdateError(s.cardKit.SetStreaming(ctx, s.cardID, false, s.sequence))
+}
+
+func shouldReenableStreaming(err error) bool {
+	code, ok := feishuErrorCode(err)
+	return ok && (code == 200850 || code == 300309)
+}
+
+func ignoreCardKitUpdateError(err error) error {
+	code, ok := feishuErrorCode(err)
+	if !ok {
+		return err
+	}
+	switch code {
+	case 200400, 200740, 200810, 200937, 300317:
+		return nil
+	default:
+		return err
+	}
+}
+
+func firstErr(errors ...error) error {
+	for _, err := range errors {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

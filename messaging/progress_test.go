@@ -1,12 +1,15 @@
 package messaging
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
 func TestRenderAcceptance(t *testing.T) {
@@ -171,5 +174,27 @@ func TestProgressDedupSameSummary(t *testing.T) {
 	}
 	if !shouldSendProgress(time.Now(), state, "进展：仍在持续执行，请稍等最终结果。", cfg) {
 		t.Fatal("different summary should be allowed")
+	}
+}
+
+func TestNativeStreamProgressSkipsTypingAndCompletes(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Typing: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(true)
+
+	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "飞书流式任务", cfg)
+	onProgress("部分结果")
+	stop()
+
+	if len(reply.TypingStates) != 0 {
+		t.Fatalf("typing states=%#v, want native stream without typing", reply.TypingStates)
+	}
+	if reply.Stream.Completed == "" {
+		t.Fatal("native progress stream should be completed on stop")
+	}
+	if reply.Stream.Failed != "" {
+		t.Fatalf("stream failed=%q, want no failure", reply.Stream.Failed)
 	}
 }

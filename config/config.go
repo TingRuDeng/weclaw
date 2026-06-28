@@ -11,12 +11,22 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	DefaultAgent string                 `json:"default_agent"`
-	APIAddr      string                 `json:"api_addr,omitempty"`
-	APIToken     string                 `json:"api_token,omitempty"`
-	SaveDir      string                 `json:"save_dir,omitempty"`
-	Progress     ProgressConfig         `json:"progress,omitempty"`
-	Agents       map[string]AgentConfig `json:"agents"`
+	DefaultAgent string                    `json:"default_agent"`
+	APIAddr      string                    `json:"api_addr,omitempty"`
+	APIToken     string                    `json:"api_token,omitempty"`
+	SaveDir      string                    `json:"save_dir,omitempty"`
+	Progress     ProgressConfig            `json:"progress,omitempty"`
+	Agents       map[string]AgentConfig    `json:"agents"`
+	Platforms    map[string]PlatformConfig `json:"platforms,omitempty"`
+}
+
+// PlatformConfig 保存单个平台的启用状态、访问控制和展示覆盖配置。
+type PlatformConfig struct {
+	Enabled              *bool           `json:"enabled,omitempty"`
+	AllowedUsers         []string        `json:"allowed_users,omitempty"`
+	DefaultAgent         string          `json:"default_agent,omitempty"`
+	Progress             *ProgressConfig `json:"progress,omitempty"`
+	MessageAggregationMs *int            `json:"message_aggregation_ms,omitempty"`
 }
 
 // AgentConfig holds configuration for a single agent.
@@ -90,8 +100,9 @@ func BuildAliasMap(agents map[string]AgentConfig) map[string]string {
 // DefaultConfig returns an empty configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		Progress: DefaultProgressConfig(),
-		Agents:   make(map[string]AgentConfig),
+		Progress:  DefaultProgressConfig(),
+		Agents:    make(map[string]AgentConfig),
+		Platforms: make(map[string]PlatformConfig),
 	}
 }
 
@@ -205,6 +216,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.Agents == nil {
 		cfg.Agents = make(map[string]AgentConfig)
+	}
+	if cfg.Platforms == nil {
+		cfg.Platforms = make(map[string]PlatformConfig)
 	}
 	cfg.Progress = NormalizeProgressConfig(DefaultProgressConfig(), &cfg.Progress)
 

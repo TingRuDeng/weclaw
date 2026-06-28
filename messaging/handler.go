@@ -16,7 +16,8 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
-	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/wechat"
 	"github.com/google/uuid"
 )
 
@@ -54,37 +55,39 @@ type AgentMeta struct {
 
 // Handler processes incoming WeChat messages and dispatches replies.
 type Handler struct {
-	mu                    sync.RWMutex
-	defaultName           string
-	agents                map[string]agent.Agent // name -> running agent
-	agentMetas            []AgentMeta            // all configured agents (for /status)
-	agentWorkDirs         map[string]string      // agent name -> configured/runtime cwd
-	customAliases         map[string]string      // custom alias -> agent name (from config)
-	factory               AgentFactory
-	saveDefault           SaveDefaultFunc
-	contextTokens         sync.Map // map[userID]contextToken
-	saveDir               string   // directory to save images/files to
-	seenMsgs              sync.Map // map[int64]time.Time — dedup by message_id
-	cdnDownloader         CDNDownloader
-	progressConfig        config.ProgressConfig
-	agentProgressConfigs  map[string]config.ProgressConfig
-	seenTextMsgs          sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
-	codexSessions         *codexSessionStore
-	taskLocksMu           sync.Mutex
-	taskLocks             map[string]*sync.Mutex
-	activeTasksMu         sync.Mutex
-	activeTasks           map[string]*activeAgentTask
-	pendingCodexRunsMu    sync.Mutex
-	pendingCodexRuns      map[string]string
-	codexLocalSessionDir  string
-	claudeSessions        *claudeSessionStore
-	claudeLocalSessionDir string
-	codexBrowseMu         sync.Mutex
-	codexBrowseWorkspaces map[string]string
-	codexLocalEntries     map[string]codexLocalEntryState
-	codexAppOpener        CodexAppOpener
-	codexCLIResumeOpener  CodexCLIResumeOpener
-	claudeCLIResumeOpener ClaudeCLIResumeOpener
+	mu                      sync.RWMutex
+	defaultName             string
+	agents                  map[string]agent.Agent // name -> running agent
+	agentMetas              []AgentMeta            // all configured agents (for /status)
+	agentWorkDirs           map[string]string      // agent name -> configured/runtime cwd
+	customAliases           map[string]string      // custom alias -> agent name (from config)
+	factory                 AgentFactory
+	saveDefault             SaveDefaultFunc
+	contextTokens           sync.Map // map[userID]contextToken
+	saveDir                 string   // directory to save images/files to
+	seenMsgs                sync.Map // map[int64]time.Time — dedup by message_id
+	cdnDownloader           CDNDownloader
+	progressConfig          config.ProgressConfig
+	agentProgressConfigs    map[string]config.ProgressConfig
+	platformProgressConfigs map[string]config.ProgressConfig
+	platformDefaultAgents   map[string]string
+	seenTextMsgs            sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
+	codexSessions           *codexSessionStore
+	taskLocksMu             sync.Mutex
+	taskLocks               map[string]*sync.Mutex
+	activeTasksMu           sync.Mutex
+	activeTasks             map[string]*activeAgentTask
+	pendingCodexRunsMu      sync.Mutex
+	pendingCodexRuns        map[string]string
+	codexLocalSessionDir    string
+	claudeSessions          *claudeSessionStore
+	claudeLocalSessionDir   string
+	codexBrowseMu           sync.Mutex
+	codexBrowseWorkspaces   map[string]string
+	codexLocalEntries       map[string]codexLocalEntryState
+	codexAppOpener          CodexAppOpener
+	codexCLIResumeOpener    CodexCLIResumeOpener
+	claudeCLIResumeOpener   ClaudeCLIResumeOpener
 }
 
 const (
@@ -104,8 +107,8 @@ type activeAgentTask struct {
 // codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
 type codexAgentTaskOptions struct {
 	ctx         context.Context
-	client      *ilink.Client
-	msg         ilink.WeixinMessage
+	userID      string
+	reply       platform.Replier
 	agentName   string
 	message     string
 	clientID    string
@@ -133,25 +136,27 @@ type codexConversationRoute struct {
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 	return &Handler{
-		agents:                make(map[string]agent.Agent),
-		agentWorkDirs:         make(map[string]string),
-		factory:               factory,
-		saveDefault:           saveDefault,
-		cdnDownloader:         DownloadFileFromCDN,
-		progressConfig:        config.DefaultProgressConfig(),
-		agentProgressConfigs:  make(map[string]config.ProgressConfig),
-		codexSessions:         newCodexSessionStore(),
-		taskLocks:             make(map[string]*sync.Mutex),
-		activeTasks:           make(map[string]*activeAgentTask),
-		pendingCodexRuns:      make(map[string]string),
-		codexLocalSessionDir:  defaultCodexLocalSessionDir(),
-		claudeSessions:        newClaudeSessionStore(),
-		claudeLocalSessionDir: defaultClaudeLocalSessionDir(),
-		codexBrowseWorkspaces: make(map[string]string),
-		codexLocalEntries:     make(map[string]codexLocalEntryState),
-		codexAppOpener:        defaultCodexAppOpener,
-		codexCLIResumeOpener:  defaultCodexCLIResumeOpener,
-		claudeCLIResumeOpener: defaultClaudeCLIResumeOpener,
+		agents:                  make(map[string]agent.Agent),
+		agentWorkDirs:           make(map[string]string),
+		factory:                 factory,
+		saveDefault:             saveDefault,
+		cdnDownloader:           wechat.DownloadFileFromCDN,
+		progressConfig:          config.DefaultProgressConfig(),
+		agentProgressConfigs:    make(map[string]config.ProgressConfig),
+		platformProgressConfigs: make(map[string]config.ProgressConfig),
+		platformDefaultAgents:   make(map[string]string),
+		codexSessions:           newCodexSessionStore(),
+		taskLocks:               make(map[string]*sync.Mutex),
+		activeTasks:             make(map[string]*activeAgentTask),
+		pendingCodexRuns:        make(map[string]string),
+		codexLocalSessionDir:    defaultCodexLocalSessionDir(),
+		claudeSessions:          newClaudeSessionStore(),
+		claudeLocalSessionDir:   defaultClaudeLocalSessionDir(),
+		codexBrowseWorkspaces:   make(map[string]string),
+		codexLocalEntries:       make(map[string]codexLocalEntryState),
+		codexAppOpener:          defaultCodexAppOpener,
+		codexCLIResumeOpener:    defaultCodexCLIResumeOpener,
+		claudeCLIResumeOpener:   defaultClaudeCLIResumeOpener,
 	}
 }
 
@@ -185,8 +190,8 @@ func (h *Handler) duplicateTTL() time.Duration {
 	return durationSeconds(cfg.DuplicateTTLSeconds, 5*time.Minute)
 }
 
-func (h *Handler) isDuplicateTextMessage(msg ilink.WeixinMessage, text string) bool {
-	key := buildTextDedupKey(msg.FromUserID, msg.ContextToken, text)
+func (h *Handler) isDuplicateTextMessage(userID string, contextToken string, text string) bool {
+	key := buildTextDedupKey(userID, contextToken, text)
 	if key == "" {
 		return false
 	}
@@ -258,6 +263,28 @@ func (h *Handler) SetAgentProgressConfigs(configs map[string]config.ProgressConf
 	}
 }
 
+// SetPlatformProgressConfigs 设置每个平台的进度反馈覆盖配置。
+func (h *Handler) SetPlatformProgressConfigs(configs map[string]config.ProgressConfig) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.platformProgressConfigs = make(map[string]config.ProgressConfig, len(configs))
+	for name, cfg := range configs {
+		h.platformProgressConfigs[name] = cfg
+	}
+}
+
+// SetPlatformDefaultAgents 设置每个平台的默认 Agent 覆盖配置。
+func (h *Handler) SetPlatformDefaultAgents(defaults map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.platformDefaultAgents = make(map[string]string, len(defaults))
+	for name, agentName := range defaults {
+		if trimmed := strings.TrimSpace(agentName); trimmed != "" {
+			h.platformDefaultAgents[name] = trimmed
+		}
+	}
+}
+
 // SetCodexAppOpener 设置 Codex App 打开器，主要用于测试外部进程调用。
 func (h *Handler) SetCodexAppOpener(opener CodexAppOpener) {
 	h.mu.Lock()
@@ -280,17 +307,34 @@ func (h *Handler) SetClaudeCLIResumeOpener(opener ClaudeCLIResumeOpener) {
 }
 
 func (h *Handler) resolveProgressConfig(agentName string) config.ProgressConfig {
+	return h.resolveProgressConfigForPlatform("", agentName)
+}
+
+func (h *Handler) resolveProgressConfigForPlatform(platformName platform.PlatformName, agentName string) config.ProgressConfig {
 	h.mu.RLock()
 	global := h.progressConfig
 	override, ok := h.agentProgressConfigs[agentName]
+	platformOverride, platformOK := h.platformProgressConfigs[string(platformName)]
 	h.mu.RUnlock()
 	if global.Mode == "" {
 		global = config.DefaultProgressConfig()
 	}
-	if !ok {
-		return global
+	if ok {
+		global = config.NormalizeProgressConfig(global, &override)
 	}
-	return config.NormalizeProgressConfig(global, &override)
+	if platformOK {
+		global = config.NormalizeProgressConfig(global, &platformOverride)
+	}
+	return global
+}
+
+func (h *Handler) defaultAgentNameForPlatform(platformName platform.PlatformName) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if agentName := h.platformDefaultAgents[string(platformName)]; agentName != "" {
+		return agentName
+	}
+	return h.defaultName
 }
 
 // contextWithTaskTimeout 只限制 Agent 执行耗时，最终失败回复继续使用原始请求上下文发送。
@@ -336,6 +380,13 @@ func (h *Handler) SetDefaultAgent(name string, ag agent.Agent) {
 	h.defaultName = name
 	h.agents[name] = ag
 	log.Printf("[handler] default agent ready: %s (%s)", name, ag.Info())
+}
+
+// AgentByName 返回已启动的 agent；软配置热重载只切换已存在实例。
+func (h *Handler) AgentByName(name string) agent.Agent {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.agents[name]
 }
 
 // getAgent returns a running agent by name, or starts it on demand via factory.
@@ -488,201 +539,161 @@ func (h *Handler) parseAgentToken(field string) (string, bool) {
 	return h.resolveAlias(token), true
 }
 
-// HandleMessage processes a single incoming message.
-func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage) {
-	// Only process user messages that are finished
-	if msg.MessageType != ilink.MessageTypeUser {
+// HandleMessage processes a single platform-agnostic incoming message.
+func (h *Handler) HandleMessage(ctx context.Context, incoming platform.IncomingMessage, reply platform.Replier) {
+	if reply == nil {
+		log.Printf("[handler] received message from %s without replier", incoming.UserID)
 		return
 	}
-	if msg.MessageState != ilink.MessageStateFinish {
-		return
-	}
+	h.handlePlatformMessage(ctx, incoming, reply)
+}
 
-	// Deduplicate by message_id to avoid processing the same message multiple times
-	// (voice messages may trigger multiple finish-state updates)
-	if msg.MessageID != 0 {
-		if _, loaded := h.seenMsgs.LoadOrStore(msg.MessageID, time.Now()); loaded {
+// HandlePlatformMessage 保留给旧测试和外部调用点，内部统一转到 HandleMessage。
+func (h *Handler) HandlePlatformMessage(ctx context.Context, incoming platform.IncomingMessage, reply platform.Replier) {
+	h.HandleMessage(ctx, incoming, reply)
+}
+
+func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.IncomingMessage, replyWriter platform.Replier) {
+	if msg.MessageID != "" && msg.MessageID != "0" {
+		if _, loaded := h.seenMsgs.LoadOrStore(platformMessageDedupKey(msg), time.Now()); loaded {
 			return
 		}
-		// Clean up old entries periodically (fire-and-forget)
 		go h.cleanSeenMsgs(h.duplicateTTL())
 	}
 
-	// Extract text from item list (text message or voice transcription)
-	text := extractText(msg)
-	if text == "" {
-		if voiceText := extractVoiceText(msg); voiceText != "" {
-			text = voiceText
-			log.Printf("[handler] voice transcription from %s: %q", msg.FromUserID, truncate(text, 80))
-		}
-	}
-	if file := extractFile(msg); file != nil {
-		fileText, ok := h.handleFileInput(ctx, client, msg, file, text)
-		if !ok {
-			return
-		}
-		text = fileText
-	}
-	if text == "" {
-		// Check for image message
-		if img := extractImage(msg); img != nil && h.saveDir != "" {
-			h.handleImageSave(ctx, client, msg, img)
-			return
-		}
-		log.Printf("[handler] received non-text message from %s, skipping", msg.FromUserID)
+	text := strings.TrimSpace(platformMessageText(msg))
+	if msg.RawCommand != nil && msg.RawCommand.Action == "stop" {
+		sendPlatformText(ctx, replyWriter, msg.UserID, h.handleStopActiveTask(ctx, msg.UserID))
 		return
 	}
-	if msg.MessageID == 0 && h.isDuplicateTextMessage(msg, text) {
-		_ = SendTextReply(ctx, client, msg.FromUserID, duplicateTaskReply(), msg.ContextToken, NewClientID())
+	if file, ok := firstAttachment(msg.Attachments, platform.AttachmentFile); ok {
+		fileText, handled := h.handleFileAttachment(ctx, msg.UserID, replyWriter, file, text)
+		if !handled {
+			return
+		}
+		text = strings.TrimSpace(fileText)
+	}
+	if text == "" {
+		if img, ok := firstAttachment(msg.Attachments, platform.AttachmentImage); ok && h.saveDir != "" {
+			h.handleImageAttachmentSave(ctx, msg.UserID, replyWriter, img)
+			return
+		}
+		log.Printf("[handler] received non-text message from %s, skipping", msg.UserID)
+		return
+	}
+	if (msg.MessageID == "" || msg.MessageID == "0") && h.isDuplicateTextMessage(msg.UserID, msg.ContextToken, text) {
+		sendPlatformText(ctx, replyWriter, msg.UserID, duplicateTaskReply())
 		return
 	}
 
-	log.Printf("[handler] received from %s: %q", msg.FromUserID, truncate(text, 80))
+	log.Printf("[handler] received from %s: %q", msg.UserID, truncate(text, 80))
+	h.contextTokens.Store(msg.UserID, msg.ContextToken)
 
-	// Store context token for this user
-	h.contextTokens.Store(msg.FromUserID, msg.ContextToken)
-
-	// Generate a clientID for this reply (used to correlate typing → finish)
 	clientID := NewClientID()
+	if wxReply, ok := replyWriter.(*wechat.Replier); ok {
+		wxReply.ClientID = clientID
+	}
+	sendText := func(text string) {
+		sendPlatformText(ctx, replyWriter, msg.UserID, text)
+	}
 
-	// Intercept URLs: save to Linkhoard directly without AI agent
 	trimmed := strings.TrimSpace(text)
 	if h.saveDir != "" && IsURL(trimmed) {
 		rawURL := ExtractURL(trimmed)
 		if rawURL != "" {
 			log.Printf("[handler] saving URL to linkhoard: %s", rawURL)
 			title, err := SaveLinkToLinkhoard(ctx, h.saveDir, rawURL)
-			var reply string
 			if err != nil {
 				log.Printf("[handler] link save failed: %v", err)
-				reply = fmt.Sprintf("保存失败: %v", err)
-			} else {
-				reply = fmt.Sprintf("已保存: %s", title)
+				sendText(fmt.Sprintf("保存失败: %v", err))
+				return
 			}
-			if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-				log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-			}
+			sendText(fmt.Sprintf("已保存: %s", title))
 			return
 		}
 	}
 
-	// Built-in commands (no typing needed)
-	if trimmed == "/status" {
-		reply := h.buildStatus()
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if trimmed == "/info" {
-		reply := "命令已移除，请使用 /status 查看 WeClaw 全局运行态。"
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if trimmed == "/help" {
-		reply := buildHelpText()
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if trimmed == "/new" || trimmed == "/clear" {
-		reply := h.resetDefaultSession(ctx, msg.FromUserID)
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if isRemovedSwitchCommand(trimmed) {
-		reply := "命令已移除：WeClaw 不再支持从微信端切换 Codex 账号。"
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if isProgressCommand(trimmed) {
-		reply := h.handleProgressCommand(trimmed)
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if isClaudeSessionCommand(trimmed) {
-		reply := h.handleClaudeSessionCommand(ctx, msg.FromUserID, trimmed)
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if isCodexSessionCommand(trimmed) {
-		reply := h.handleCodexSessionCommand(ctx, msg.FromUserID, trimmed)
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if trimmed == "/run" {
-		h.handleRunPendingCodexCommand(ctx, client, msg, clientID)
-		return
-	} else if trimmed == "/guide" {
-		h.handleGuideCommand(ctx, client, msg, clientID)
-		return
-	} else if trimmed == "/cancel" {
-		reply := h.handleCancelPendingGuide(ctx, msg.FromUserID)
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
-		return
-	} else if strings.HasPrefix(trimmed, "/cwd") {
-		reply := h.handleCwd(trimmed, msg.FromUserID)
-		if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-		}
+	if h.handleBuiltInPlatformCommand(ctx, msg, replyWriter, trimmed, clientID) {
 		return
 	}
 
-	// Route: "/agentname message" or "@agent1 @agent2 message" -> specific agent(s)
 	agentNames, message := h.parseCommand(text)
-
-	// No command prefix -> send to default agent
 	if len(agentNames) == 0 {
-		h.sendToDefaultAgent(ctx, client, msg, text, clientID)
+		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, replyWriter, text, clientID)
 		return
 	}
-
-	// No message -> switch default agent (only first name)
 	if message == "" {
 		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
-			reply := h.switchDefault(ctx, agentNames[0])
-			if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-				log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-			}
+			sendText(h.switchDefault(ctx, agentNames[0]))
 		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
-			// Unknown agent -> forward to default
-			h.sendToDefaultAgent(ctx, client, msg, text, clientID)
+			h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, replyWriter, text, clientID)
 		} else {
-			reply := "Usage: specify one agent to switch, or add a message to broadcast"
-			if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-				log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-			}
+			sendText("Usage: specify one agent to switch, or add a message to broadcast")
 		}
 		return
 	}
 
-	// Filter to known agents; if single unknown agent -> forward to default
-	var knownNames []string
+	knownNames := make([]string, 0, len(agentNames))
 	for _, name := range agentNames {
 		if h.isKnownAgent(name) {
 			knownNames = append(knownNames, name)
 		}
 	}
 	if len(knownNames) == 0 {
-		// No known agents -> forward entire text to default agent
-		h.sendToDefaultAgent(ctx, client, msg, text, clientID)
+		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, replyWriter, text, clientID)
 		return
 	}
-
 	if len(knownNames) == 1 {
-		// Single agent
-		h.sendToNamedAgent(ctx, client, msg, knownNames[0], message, clientID)
-	} else {
-		// Multi-agent broadcast: parallel dispatch, send replies as they arrive
-		h.broadcastToAgents(ctx, client, msg, knownNames, message)
+		h.sendToNamedAgent(ctx, msg.Platform, msg.UserID, replyWriter, knownNames[0], message, clientID)
+		return
 	}
+	h.broadcastToAgents(ctx, msg.Platform, msg.UserID, replyWriter, knownNames, message)
+}
+
+func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier, trimmed string, clientID string) bool {
+	sendText := func(text string) {
+		sendPlatformText(ctx, reply, msg.UserID, text)
+	}
+	switch {
+	case trimmed == "/status":
+		sendText(h.buildStatus())
+	case trimmed == "/info":
+		sendText("命令已移除，请使用 /status 查看 WeClaw 全局运行态。")
+	case trimmed == "/help":
+		sendText(buildHelpText())
+	case trimmed == "/new" || trimmed == "/clear":
+		sendText(h.resetDefaultSession(ctx, msg.UserID))
+	case isRemovedSwitchCommand(trimmed):
+		sendText("命令已移除：WeClaw 不再支持从微信端切换 Codex 账号。")
+	case isProgressCommand(trimmed):
+		sendText(h.handleProgressCommand(trimmed))
+	case isClaudeSessionCommand(trimmed):
+		sendText(h.handleClaudeSessionCommand(ctx, msg.UserID, trimmed))
+	case isCodexSessionCommand(trimmed):
+		sendText(h.handleCodexSessionCommand(ctx, msg.UserID, trimmed))
+	case trimmed == "/run":
+		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.UserID, reply, clientID)
+	case trimmed == "/guide":
+		h.handleGuideCommand(ctx, msg.Platform, msg.UserID, reply, clientID)
+	case trimmed == "/cancel":
+		sendText(h.handleCancelPendingGuide(ctx, msg.UserID))
+	case strings.HasPrefix(trimmed, "/cwd"):
+		sendText(h.handleCwd(trimmed, msg.UserID))
+	default:
+		return false
+	}
+	return true
+}
+
+func platformMessageText(msg platform.IncomingMessage) string {
+	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" {
+		return strings.TrimSpace(msg.RawCommand.Value["choice"])
+	}
+	return msg.Text
+}
+
+func platformMessageDedupKey(msg platform.IncomingMessage) string {
+	return strings.TrimSpace(string(msg.Platform)) + "\x00" + strings.TrimSpace(msg.AccountID) + "\x00" + strings.TrimSpace(msg.MessageID)
 }
 
 func (h *Handler) agentExecutionKey(userID string, agentName string, ag agent.Agent) string {
@@ -886,35 +897,35 @@ func previewPendingCodexMessage(message string) string {
 }
 
 // handleRunPendingCodexCommand 执行用户确认后的待执行 Codex 消息。
-func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, clientID string) {
-	name, _, key, err := h.codexGuideTarget(ctx, msg.FromUserID)
+func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName platform.PlatformName, userID string, reply platform.Replier, clientID string) {
+	name, _, key, err := h.codexGuideTarget(ctx, userID)
 	if err != nil {
-		_ = SendTextReply(ctx, client, msg.FromUserID, err.Error(), msg.ContextToken, clientID)
+		sendPlatformText(ctx, reply, userID, err.Error())
 		return
 	}
 	message, ok := h.takePendingCodexRun(key)
 	if !ok {
-		_ = SendTextReply(ctx, client, msg.FromUserID, "当前没有待执行的暂存消息。", msg.ContextToken, clientID)
+		sendPlatformText(ctx, reply, userID, "当前没有待执行的暂存消息。")
 		return
 	}
-	h.sendToNamedAgent(ctx, client, msg, name, message, clientID)
+	h.sendToNamedAgent(ctx, platformName, userID, reply, name, message, clientID)
 }
 
-func (h *Handler) handleGuideCommand(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, clientID string) {
-	name, _, key, err := h.codexGuideTarget(ctx, msg.FromUserID)
+func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, userID string, reply platform.Replier, clientID string) {
+	name, _, key, err := h.codexGuideTarget(ctx, userID)
 	if err != nil {
-		_ = SendTextReply(ctx, client, msg.FromUserID, err.Error(), msg.ContextToken, clientID)
+		sendPlatformText(ctx, reply, userID, err.Error())
 		return
 	}
 	message, task, ok := h.detachPendingGuide(key)
 	if !ok {
-		_ = SendTextReply(ctx, client, msg.FromUserID, "当前没有可发送的引导对话。", msg.ContextToken, clientID)
+		sendPlatformText(ctx, reply, userID, "当前没有可发送的引导对话。")
 		return
 	}
 	if !waitForActiveTask(ctx, task) {
 		return
 	}
-	h.sendToNamedAgent(ctx, client, msg, name, message, clientID)
+	h.sendToNamedAgent(ctx, platformName, userID, reply, name, message, clientID)
 }
 
 func (h *Handler) handleCancelPendingGuide(ctx context.Context, userID string) string {
@@ -926,6 +937,33 @@ func (h *Handler) handleCancelPendingGuide(ctx context.Context, userID string) s
 		return "当前没有可撤回的消息。"
 	}
 	return "已撤回该消息。"
+}
+
+func (h *Handler) handleStopActiveTask(ctx context.Context, userID string) string {
+	_, _, key, err := h.codexGuideTarget(ctx, userID)
+	if err != nil {
+		return err.Error()
+	}
+	if !h.cancelActiveTask(key) {
+		return "当前没有可停止的任务。"
+	}
+	return "已停止当前任务。"
+}
+
+func (h *Handler) cancelActiveTask(key string) bool {
+	h.activeTasksMu.Lock()
+	task := h.activeTasks[key]
+	h.activeTasksMu.Unlock()
+	if task == nil {
+		return false
+	}
+	task.mu.Lock()
+	task.pendingMessage = ""
+	task.detached = true
+	cancel := task.cancel
+	task.mu.Unlock()
+	cancel()
+	return true
 }
 
 func (h *Handler) codexGuideTarget(ctx context.Context, userID string) (string, agent.Agent, string, error) {
@@ -953,20 +991,22 @@ func waitForActiveTask(ctx context.Context, task *activeAgentTask) bool {
 }
 
 // sendToDefaultAgent sends the message to the default agent and replies.
-func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, text, clientID string) {
-	h.mu.RLock()
-	defaultName := h.defaultName
-	h.mu.RUnlock()
+func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.PlatformName, userID string, replyWriter platform.Replier, text string, clientID string) {
+	defaultName := h.defaultAgentNameForPlatform(platformName)
 
-	ag := h.getDefaultAgent()
+	var ag agent.Agent
+	var agErr error
+	if defaultName != "" {
+		ag, agErr = h.getAgent(ctx, defaultName)
+	}
 	var reply string
-	if ag != nil {
-		progressCfg := h.resolveProgressConfig(defaultName)
+	if defaultName != "" && agErr == nil {
+		progressCfg := h.resolveProgressConfigForPlatform(platformName, defaultName)
 		if isCodexAgent(defaultName, ag.Info()) {
 			h.startCodexAgentTask(codexAgentTaskOptions{
 				ctx:         ctx,
-				client:      client,
-				msg:         msg,
+				userID:      userID,
+				reply:       replyWriter,
 				agentName:   defaultName,
 				message:     text,
 				clientID:    clientID,
@@ -981,53 +1021,56 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client, 
 		agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 		defer cancelTaskTimeout()
 
-		executionKey := h.agentExecutionKey(msg.FromUserID, defaultName, ag)
+		executionKey := h.agentExecutionKey(userID, defaultName, ag)
 		unlock := h.lockAgentExecution(executionKey)
 		defer unlock()
 
-		onProgress, stopProgress := h.startProgressSession(agentCtx, client, msg.FromUserID, msg.ContextToken, "", text, progressCfg)
+		onProgress, stopProgress := h.startProgressSession(agentCtx, replyWriter, "", text, progressCfg)
 		defer stopProgress()
 
 		var err error
-		conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, defaultName, ag)
+		conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, defaultName, ag)
 		if resolveErr != nil {
 			reply = renderFinalFailure("", resolveErr)
-			h.sendReplyWithMedia(replyCtx, client, msg, defaultName, reply, clientID)
+			h.sendReplyWithMedia(replyCtx, replyWriter, userID, defaultName, reply)
 			return
 		}
 		reply, err = h.chatWithAgentWithProgress(agentCtx, ag, conversationID, text, onProgress)
 		if err != nil {
 			reply = renderFinalFailure("", err)
 		} else {
-			h.recordCodexThread(msg.FromUserID, defaultName, ag, conversationID)
-			h.recordClaudeSession(msg.FromUserID, defaultName, ag, conversationID)
+			h.recordCodexThread(userID, defaultName, ag, conversationID)
+			h.recordClaudeSession(userID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
 		}
 	} else {
-		log.Printf("[handler] agent not ready, using echo mode for %s", msg.FromUserID)
+		if agErr != nil && defaultName != "" {
+			log.Printf("[handler] default agent %q not available, using echo mode for %s: %v", defaultName, userID, agErr)
+		}
+		log.Printf("[handler] agent not ready, using echo mode for %s", userID)
 		reply = "[echo] " + text
 	}
 
-	h.sendReplyWithMedia(ctx, client, msg, defaultName, reply, clientID)
+	h.sendReplyWithMedia(ctx, replyWriter, userID, defaultName, reply)
 }
 
 // sendToNamedAgent sends the message to a specific agent and replies.
-func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, name, message, clientID string) {
+func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.PlatformName, userID string, replyWriter platform.Replier, name string, message string, clientID string) {
 	ag, agErr := h.getAgent(ctx, name)
 	if agErr != nil {
 		log.Printf("[handler] agent %q not available: %v", name, agErr)
 		reply := fmt.Sprintf("Agent %q is not available: %v", name, agErr)
-		SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID)
+		sendPlatformText(ctx, replyWriter, userID, reply)
 		return
 	}
 
 	replyCtx := ctx
-	progressCfg := h.resolveProgressConfig(name)
+	progressCfg := h.resolveProgressConfigForPlatform(platformName, name)
 	if isCodexAgent(name, ag.Info()) {
 		h.startCodexAgentTask(codexAgentTaskOptions{
 			ctx:         ctx,
-			client:      client,
-			msg:         msg,
+			userID:      userID,
+			reply:       replyWriter,
 			agentName:   name,
 			message:     message,
 			clientID:    clientID,
@@ -1041,40 +1084,40 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 	defer cancelTaskTimeout()
 
-	executionKey := h.agentExecutionKey(msg.FromUserID, name, ag)
+	executionKey := h.agentExecutionKey(userID, name, ag)
 	unlock := h.lockAgentExecution(executionKey)
 	defer unlock()
 
-	onProgress, stopProgress := h.startProgressSession(agentCtx, client, msg.FromUserID, msg.ContextToken, "", message, progressCfg)
+	onProgress, stopProgress := h.startProgressSession(agentCtx, replyWriter, "", message, progressCfg)
 	defer stopProgress()
 
-	conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, name, ag)
+	conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, name, ag)
 	if resolveErr != nil {
 		reply := renderFinalFailure("["+name+"] ", resolveErr)
-		h.sendReplyWithMedia(replyCtx, client, msg, name, reply, clientID)
+		h.sendReplyWithMedia(replyCtx, replyWriter, userID, name, reply)
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
 	if err != nil {
 		reply = renderFinalFailure("["+name+"] ", err)
 	} else {
-		h.recordCodexThread(msg.FromUserID, name, ag, conversationID)
-		h.recordClaudeSession(msg.FromUserID, name, ag, conversationID)
+		h.recordCodexThread(userID, name, ag, conversationID)
+		h.recordClaudeSession(userID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
-	h.sendReplyWithMedia(replyCtx, client, msg, name, reply, clientID)
+	h.sendReplyWithMedia(replyCtx, replyWriter, userID, name, reply)
 }
 
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
 func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
-	route := h.codexConversationRouteForUser(opts.msg.FromUserID, opts.agentName, opts.agent)
+	route := h.codexConversationRouteForUser(opts.userID, opts.agentName, opts.agent)
 	executionKey := route.conversationID
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 	if !started {
 		cancelTaskTimeout()
 		h.storePendingGuide(executionKey, opts.message)
-		_ = SendTextReply(opts.ctx, opts.client, opts.msg.FromUserID, runningCodexGuidePrompt(), opts.msg.ContextToken, opts.clientID)
+		sendPlatformText(opts.ctx, opts.reply, opts.userID, runningCodexGuidePrompt())
 		return
 	}
 
@@ -1096,23 +1139,23 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	unlock := h.lockAgentExecution(runtime.executionKey)
 	defer unlock()
 
-	onProgress, stopProgress := h.startProgressSession(runtime.agentCtx, opts.client, opts.msg.FromUserID, opts.msg.ContextToken, opts.replyPrefix, opts.message, opts.progressCfg)
+	onProgress, stopProgress := h.startProgressSession(runtime.agentCtx, opts.reply, opts.replyPrefix, opts.message, opts.progressCfg)
 	defer stopProgress()
 
 	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
 		reply := renderFinalFailure(opts.replyPrefix, err)
-		h.sendReplyWithMedia(opts.ctx, opts.client, opts.msg, opts.agentName, reply, opts.clientID)
+		h.sendReplyWithMedia(opts.ctx, opts.reply, opts.userID, opts.agentName, reply)
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, onProgress)
 	if err != nil {
 		reply = renderFinalFailure(opts.replyPrefix, err)
 	} else {
-		h.recordCodexThreadForWorkspace(opts.msg.FromUserID, opts.agentName, opts.agent, runtime.route.conversationID, runtime.route.workspaceRoot)
+		h.recordCodexThreadForWorkspace(opts.userID, opts.agentName, opts.agent, runtime.route.conversationID, runtime.route.workspaceRoot)
 		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
 	if runtime.task.shouldSendFinal() {
-		h.sendReplyWithMedia(opts.ctx, opts.client, opts.msg, opts.agentName, reply, opts.clientID)
+		h.sendReplyWithMedia(opts.ctx, opts.reply, opts.userID, opts.agentName, reply)
 	}
 }
 
@@ -1125,12 +1168,12 @@ func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
 		return
 	}
 	opts := runtime.opts
-	_ = SendTextReply(opts.ctx, opts.client, opts.msg.FromUserID, runnablePendingCodexPrompt(message), opts.msg.ContextToken, opts.clientID)
+	sendPlatformText(opts.ctx, opts.reply, opts.userID, runnablePendingCodexPrompt(message))
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.
 // Each reply is sent as a separate message with the agent name prefix.
-func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, names []string, message string) {
+func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.PlatformName, userID string, replyWriter platform.Replier, names []string, message string) {
 	type result struct {
 		name  string
 		reply string
@@ -1146,7 +1189,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
 			}
-			progressCfg := h.resolveProgressConfig(n)
+			progressCfg := h.resolveProgressConfigForPlatform(platformName, n)
 			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 			defer cancelTaskTimeout()
 
@@ -1154,7 +1197,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 			var executionKey string
 			var activeTask *activeAgentTask
 			if isCodexAgent(n, ag.Info()) {
-				codexRoute = h.codexConversationRouteForUser(msg.FromUserID, n, ag)
+				codexRoute = h.codexConversationRouteForUser(userID, n, ag)
 				executionKey = codexRoute.conversationID
 				task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 				if !started {
@@ -1168,16 +1211,16 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 					pendingMessage, ok := h.promotePendingGuideToRun(executionKey, task)
 					h.finishActiveTask(executionKey, task)
 					if ok {
-						_ = SendTextReply(ctx, client, msg.FromUserID, runnablePendingCodexPrompt(pendingMessage), msg.ContextToken, NewClientID())
+						sendPlatformText(ctx, replyWriter, userID, runnablePendingCodexPrompt(pendingMessage))
 					}
 				}()
 			} else {
-				executionKey = h.agentExecutionKey(msg.FromUserID, n, ag)
+				executionKey = h.agentExecutionKey(userID, n, ag)
 			}
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
 
-			onProgress, stopProgress := h.startProgressSession(agentCtx, client, msg.FromUserID, msg.ContextToken, "["+n+"] ", message, progressCfg)
+			onProgress, stopProgress := h.startProgressSession(agentCtx, replyWriter, "["+n+"] ", message, progressCfg)
 			defer stopProgress()
 
 			var conversationID string
@@ -1188,7 +1231,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				}
 				conversationID = codexRoute.conversationID
 			} else {
-				resolvedID, resolveErr := h.resolveAgentConversationID(agentCtx, msg.FromUserID, n, ag)
+				resolvedID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, n, ag)
 				if resolveErr != nil {
 					ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", resolveErr)}
 					return
@@ -1201,10 +1244,10 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 				return
 			}
 			if isCodexAgent(n, ag.Info()) {
-				h.recordCodexThreadForWorkspace(msg.FromUserID, n, ag, conversationID, codexRoute.workspaceRoot)
+				h.recordCodexThreadForWorkspace(userID, n, ag, conversationID, codexRoute.workspaceRoot)
 			} else {
-				h.recordCodexThread(msg.FromUserID, n, ag, conversationID)
-				h.recordClaudeSession(msg.FromUserID, n, ag, conversationID)
+				h.recordCodexThread(userID, n, ag, conversationID)
+				h.recordClaudeSession(userID, n, ag, conversationID)
 			}
 			if activeTask != nil && !activeTask.shouldSendFinal() {
 				ch <- result{name: n, skip: true}
@@ -1220,13 +1263,15 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
 		if r.skip {
 			continue
 		}
-		clientID := NewClientID()
-		h.sendReplyWithMedia(ctx, client, msg, r.name, r.reply, clientID)
+		if wxReply, ok := replyWriter.(*wechat.Replier); ok {
+			wxReply.ClientID = NewClientID()
+		}
+		h.sendReplyWithMedia(ctx, replyWriter, userID, r.name, r.reply)
 	}
 }
 
 // sendReplyWithMedia sends a text reply and any extracted image URLs.
-func (h *Handler) sendReplyWithMedia(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, agentName, reply, clientID string) {
+func (h *Handler) sendReplyWithMedia(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string) {
 	imageURLs := ExtractImageURLs(reply)
 	attachmentPaths := extractLocalAttachmentPaths(reply)
 	allowedRoots := h.allowedAttachmentRoots(agentName)
@@ -1239,8 +1284,8 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, client *ilink.Client, 
 			failedPaths = append(failedPaths, attachmentPath)
 			continue
 		}
-		if err := SendMediaFromPath(ctx, client, msg.FromUserID, attachmentPath, msg.ContextToken); err != nil {
-			log.Printf("[handler] failed to send attachment to %s: %v", msg.FromUserID, err)
+		if err := replyWriter.SendImage(ctx, attachmentPath); err != nil {
+			log.Printf("[handler] failed to send attachment to %s: %v", userID, err)
 			failedPaths = append(failedPaths, attachmentPath)
 			continue
 		}
@@ -1248,16 +1293,50 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, client *ilink.Client, 
 	}
 
 	reply = rewriteReplyWithAttachmentResults(reply, sentPaths, failedPaths)
+	choiceResult, hasChoices := detectChoices(reply)
+	if hasChoices {
+		reply = choiceResult.CleanText
+	}
 
-	if err := SendTextReplyChunks(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID, textReplyChunkLimit(ctx)); err != nil {
-		log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
+	if wxReply, ok := replyWriter.(*wechat.Replier); ok {
+		wxReply.ChunkRunes = textReplyChunkLimit(ctx)
+	}
+	if strings.TrimSpace(reply) != "" {
+		if err := replyWriter.SendText(ctx, reply); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", userID, err)
+		}
+	}
+	if hasChoices {
+		if err := replyWriter.AskChoices(ctx, choiceResult.Prompt, choiceResult.Choices); err != nil {
+			log.Printf("[handler] failed to send choices to %s: %v", userID, err)
+		}
 	}
 
 	for _, imgURL := range imageURLs {
-		if err := SendMediaFromURL(ctx, client, msg.FromUserID, imgURL, msg.ContextToken); err != nil {
-			log.Printf("[handler] failed to send image to %s: %v", msg.FromUserID, err)
+		if wxReply, ok := replyWriter.(*wechat.Replier); ok {
+			if err := wxReply.SendMediaFromURL(ctx, imgURL); err != nil {
+				log.Printf("[handler] failed to send image to %s: %v", userID, err)
+			}
+			continue
 		}
+		log.Printf("[handler] skip remote image for %s: platform replier has no URL media sender", userID)
 	}
+}
+
+func sendPlatformText(ctx context.Context, reply platform.Replier, userID string, text string) {
+	if reply == nil {
+		return
+	}
+	if err := reply.SendText(ctx, text); err != nil {
+		log.Printf("[handler] failed to send reply to %s: %v", userID, err)
+	}
+}
+
+func truncate(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "..."
 }
 
 func (h *Handler) allowedAttachmentRoots(agentName string) []string {
@@ -1436,16 +1515,6 @@ func (h *Handler) chatWithAgentWithProgress(ctx context.Context, ag agent.Agent,
 
 	log.Printf("[handler] agent replied (%s, elapsed=%s): %q", info, elapsed, truncate(reply, 100))
 	return reply, nil
-}
-
-func (h *Handler) sendProgressMessage(ctx context.Context, client *ilink.Client, userID, contextToken, text string) {
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	clientID := NewClientID()
-	if err := SendTextReply(ctx, client, userID, text, contextToken, clientID); err != nil {
-		log.Printf("[handler] failed to send progress message to %s: %v", userID, err)
-	}
 }
 
 // switchDefault switches the default agent. Starts it on demand if needed.
@@ -2426,68 +2495,33 @@ func isCodexAgent(name string, info agent.AgentInfo) bool {
 	return strings.Contains(command, "codex")
 }
 
-func extractText(msg ilink.WeixinMessage) string {
-	for _, item := range msg.ItemList {
-		if item.Type == ilink.ItemTypeText && item.TextItem != nil {
-			return item.TextItem.Text
-		}
-	}
-	return ""
-}
-
-func extractImage(msg ilink.WeixinMessage) *ilink.ImageItem {
-	for _, item := range msg.ItemList {
-		if item.Type == ilink.ItemTypeImage && item.ImageItem != nil {
-			return item.ImageItem
-		}
-	}
-	return nil
-}
-
-func extractFile(msg ilink.WeixinMessage) *ilink.FileItem {
-	for _, item := range msg.ItemList {
-		if item.Type == ilink.ItemTypeFile && item.FileItem != nil {
-			return item.FileItem
-		}
-	}
-	return nil
-}
-
-func extractVoiceText(msg ilink.WeixinMessage) string {
-	for _, item := range msg.ItemList {
-		if item.Type == ilink.ItemTypeVoice && item.VoiceItem != nil && item.VoiceItem.Text != "" {
-			return item.VoiceItem.Text
-		}
-	}
-	return ""
-}
-
-func (h *Handler) handleFileInput(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, file *ilink.FileItem, text string) (string, bool) {
-	saved, err := h.saveIncomingFile(ctx, file)
-	if err != nil {
-		log.Printf("[handler] failed to save incoming file from %s: %v", msg.FromUserID, err)
-		reply := fmt.Sprintf("文件保存失败：%v", err)
-		_ = SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, NewClientID())
-		return "", false
-	}
-	log.Printf("[handler] saved incoming file from %s: %s", msg.FromUserID, saved.path)
-	return buildFileAgentMessage(text, saved), true
-}
-
 type savedIncomingFile struct {
 	name string
 	path string
 }
 
-func (h *Handler) saveIncomingFile(ctx context.Context, file *ilink.FileItem) (savedIncomingFile, error) {
-	if file == nil || file.Media == nil || file.Media.EncryptQueryParam == "" || file.Media.AESKey == "" {
-		return savedIncomingFile{}, fmt.Errorf("文件缺少下载信息")
+func firstAttachment(attachments []platform.Attachment, kind platform.AttachmentKind) (platform.Attachment, bool) {
+	for _, attachment := range attachments {
+		if attachment.Kind == kind {
+			return attachment, true
+		}
 	}
-	downloader := h.cdnDownloader
-	if downloader == nil {
-		downloader = DownloadFileFromCDN
+	return platform.Attachment{}, false
+}
+
+func (h *Handler) handleFileAttachment(ctx context.Context, userID string, reply platform.Replier, file platform.Attachment, text string) (string, bool) {
+	saved, err := h.saveIncomingAttachment(ctx, file)
+	if err != nil {
+		log.Printf("[handler] failed to save incoming file from %s: %v", userID, err)
+		sendPlatformText(ctx, reply, userID, fmt.Sprintf("文件保存失败：%v", err))
+		return "", false
 	}
-	data, err := downloader(ctx, file.Media.EncryptQueryParam, file.Media.AESKey)
+	log.Printf("[handler] saved incoming file from %s: %s", userID, saved.path)
+	return buildFileAgentMessage(text, saved), true
+}
+
+func (h *Handler) saveIncomingAttachment(ctx context.Context, file platform.Attachment) (savedIncomingFile, error) {
+	data, err := h.readAttachmentData(ctx, file)
 	if err != nil {
 		return savedIncomingFile{}, err
 	}
@@ -2501,6 +2535,22 @@ func (h *Handler) saveIncomingFile(ctx context.Context, file *ilink.FileItem) (s
 		return savedIncomingFile{}, fmt.Errorf("写入文件失败：%w", err)
 	}
 	return savedIncomingFile{name: fileName, path: path}, nil
+}
+
+func (h *Handler) readAttachmentData(ctx context.Context, attachment platform.Attachment) ([]byte, error) {
+	if attachment.Path != "" {
+		return os.ReadFile(attachment.Path)
+	}
+	encryptQueryParam := attachment.Metadata["encrypt_query_param"]
+	aesKey := attachment.Metadata["aes_key"]
+	if encryptQueryParam == "" || aesKey == "" {
+		return nil, fmt.Errorf("文件缺少下载信息")
+	}
+	downloader := h.cdnDownloader
+	if downloader == nil {
+		downloader = wechat.DownloadFileFromCDN
+	}
+	return downloader(ctx, encryptQueryParam, aesKey)
 }
 
 func (h *Handler) incomingFileDir() string {
@@ -2527,66 +2577,37 @@ func buildFileAgentMessage(userText string, file savedIncomingFile) string {
 	return userText + "\n\n" + fileInfo
 }
 
-func (h *Handler) handleImageSave(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, img *ilink.ImageItem) {
-	clientID := NewClientID()
-	log.Printf("[handler] received image from %s, saving to %s", msg.FromUserID, h.saveDir)
-
-	// Download image data
+func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, reply platform.Replier, img platform.Attachment) {
+	log.Printf("[handler] received image from %s, saving to %s", userID, h.saveDir)
 	var data []byte
 	var err error
-
-	if img.URL != "" {
-		// Direct URL download
-		data, _, err = downloadFile(ctx, img.URL)
-	} else if img.Media != nil && img.Media.EncryptQueryParam != "" {
-		// CDN encrypted download
-		data, err = DownloadFileFromCDN(ctx, img.Media.EncryptQueryParam, img.Media.AESKey)
+	if img.SourceID != "" {
+		data, _, err = downloadFile(ctx, img.SourceID)
 	} else {
-		log.Printf("[handler] image has no URL or media info from %s", msg.FromUserID)
-		return
+		data, err = h.readAttachmentData(ctx, img)
 	}
-
 	if err != nil {
-		log.Printf("[handler] failed to download image from %s: %v", msg.FromUserID, err)
-		reply := fmt.Sprintf("Failed to save image: %v", err)
-		_ = SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID)
+		log.Printf("[handler] failed to download image from %s: %v", userID, err)
+		sendPlatformText(ctx, reply, userID, fmt.Sprintf("Failed to save image: %v", err))
 		return
 	}
-
-	// Detect extension from content
 	ext := detectImageExt(data)
-
-	// Generate filename with timestamp
-	ts := time.Now().Format("20060102-150405")
-	fileName := fmt.Sprintf("%s%s", ts, ext)
-	filePath := filepath.Join(h.saveDir, fileName)
-
-	// Ensure save directory exists
+	filePath := filepath.Join(h.saveDir, time.Now().Format("20060102-150405")+ext)
 	if err := os.MkdirAll(h.saveDir, 0o755); err != nil {
 		log.Printf("[handler] failed to create save dir: %v", err)
 		return
 	}
-
-	// Write image file
 	if err := os.WriteFile(filePath, data, 0o644); err != nil {
 		log.Printf("[handler] failed to write image: %v", err)
-		reply := fmt.Sprintf("Failed to save image: %v", err)
-		_ = SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID)
+		sendPlatformText(ctx, reply, userID, fmt.Sprintf("Failed to save image: %v", err))
 		return
 	}
-
-	// Write sidecar file
 	sidecarPath := filePath + ".sidecar.md"
 	sidecarContent := fmt.Sprintf("---\nid: %s\n---\n", uuid.New().String())
 	if err := os.WriteFile(sidecarPath, []byte(sidecarContent), 0o644); err != nil {
 		log.Printf("[handler] failed to write sidecar: %v", err)
 	}
-
-	log.Printf("[handler] saved image to %s (%d bytes)", filePath, len(data))
-	reply := fmt.Sprintf("Saved: %s", fileName)
-	if err := SendTextReply(ctx, client, msg.FromUserID, reply, msg.ContextToken, clientID); err != nil {
-		log.Printf("[handler] failed to send reply to %s: %v", msg.FromUserID, err)
-	}
+	sendPlatformText(ctx, reply, userID, fmt.Sprintf("Saved image: %s", filePath))
 }
 
 func detectImageExt(data []byte) string {

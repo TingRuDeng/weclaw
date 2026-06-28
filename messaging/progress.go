@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/fastclaw-ai/weclaw/config"
-	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 const (
@@ -39,21 +39,21 @@ type progressSendState struct {
 }
 
 type progressSession struct {
-	handler      *Handler
-	ctx          context.Context
-	cancel       context.CancelFunc
-	client       *ilink.Client
-	userID       string
-	contextToken string
-	prefix       string
-	taskText     string
-	cfg          config.ProgressConfig
-	deltaCh      chan string
-	wg           sync.WaitGroup
+	handler       *Handler
+	ctx           context.Context
+	cancel        context.CancelFunc
+	reply         platform.Replier
+	stream        platform.Stream
+	prefix        string
+	taskText      string
+	cfg           config.ProgressConfig
+	deltaCh       chan string
+	wg            sync.WaitGroup
+	typingStarted bool
 }
 
-// startProgressSession 启动微信侧进度会话，最终回复仍由调用方单独发送。
-func (h *Handler) startProgressSession(ctx context.Context, client *ilink.Client, userID string, contextToken string, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func()) {
+// startProgressSession 启动平台进度会话，最终回复仍由调用方单独发送。
+func (h *Handler) startProgressSession(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func()) {
 	if cfg.Mode == "" {
 		cfg = config.DefaultProgressConfig()
 	}
@@ -63,9 +63,8 @@ func (h *Handler) startProgressSession(ctx context.Context, client *ilink.Client
 
 	progressCtx, cancel := context.WithCancel(ctx)
 	session := &progressSession{
-		handler: h, ctx: progressCtx, cancel: cancel, client: client,
-		userID: userID, contextToken: contextToken, prefix: prefix,
-		taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
+		handler: h, ctx: progressCtx, cancel: cancel, reply: reply,
+		prefix: prefix, taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
 	}
 	session.start()
 	return session.onProgress, session.stop
@@ -74,13 +73,16 @@ func (h *Handler) startProgressSession(ctx context.Context, client *ilink.Client
 func (s *progressSession) start() {
 	if boolValue(s.cfg.SendAcceptance) {
 		title := progressTaskTitle(s.taskText, 60)
-		s.send(renderAcceptance(title))
+		s.sendText(renderAcceptance(title))
 	}
-	if boolValue(s.cfg.EnableTyping) {
+	usesNativeProgress := progressModeAllowsProgress(s.cfg.Mode) && s.reply.Capabilities().Streaming
+	if boolValue(s.cfg.EnableTyping) && !usesNativeProgress {
+		s.typingStarted = true
 		s.wg.Add(1)
 		go s.runTyping()
 	}
 	if progressModeAllowsProgress(s.cfg.Mode) {
+		s.openStream()
 		s.wg.Add(1)
 		go s.runProgressLoop()
 	}
@@ -95,11 +97,13 @@ func (s *progressSession) onProgress(delta string) {
 }
 
 func (s *progressSession) stop() {
+	parentCanceled := s.ctx.Err() != nil
 	s.cancel()
 	s.wg.Wait()
-	if boolValue(s.cfg.EnableTyping) {
+	if s.typingStarted {
 		s.cancelTyping()
 	}
+	s.finishStream(parentCanceled)
 }
 
 func (s *progressSession) runTyping() {
@@ -183,11 +187,32 @@ func (s *progressSession) sendProgressIfAllowed(summary string, state *progressS
 }
 
 func (s *progressSession) send(text string) {
-	s.handler.sendProgressMessage(s.ctx, s.client, s.userID, s.contextToken, s.prefix+text)
+	if s.stream != nil {
+		if err := s.stream.Update(s.ctx, s.prefix+text); err != nil {
+			log.Printf("[handler] failed to update progress stream: %v", err)
+		}
+		return
+	}
+	s.sendText(text)
+}
+
+func (s *progressSession) sendText(text string) {
+	if err := s.reply.SendText(s.ctx, s.prefix+text); err != nil {
+		log.Printf("[handler] failed to send progress message: %v", err)
+	}
+}
+
+func (s *progressSession) openStream() {
+	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{Title: progressTaskTitle(s.taskText, 60)})
+	if err != nil {
+		log.Printf("[handler] failed to open progress stream: %v", err)
+		return
+	}
+	s.stream = stream
 }
 
 func (s *progressSession) sendTyping() {
-	if err := SendTypingState(s.ctx, s.client, s.userID, s.contextToken); err != nil {
+	if err := s.reply.Typing(s.ctx, true); err != nil {
 		log.Printf("[handler] failed to send typing state: %v", err)
 	}
 }
@@ -195,8 +220,25 @@ func (s *progressSession) sendTyping() {
 func (s *progressSession) cancelTyping() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := SendTypingCancel(ctx, s.client, s.userID, s.contextToken); err != nil {
+	if err := s.reply.Typing(ctx, false); err != nil {
 		log.Printf("[handler] failed to send typing cancel: %v", err)
+	}
+}
+
+func (s *progressSession) finishStream(parentCanceled bool) {
+	if s.stream == nil || !s.reply.Capabilities().Streaming {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var err error
+	if parentCanceled {
+		err = s.stream.Fail(ctx, "任务已停止。")
+	} else {
+		err = s.stream.Complete(ctx, "任务已完成，正在发送最终结果。")
+	}
+	if err != nil {
+		log.Printf("[handler] failed to finish progress stream: %v", err)
 	}
 }
 

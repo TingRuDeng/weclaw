@@ -18,6 +18,9 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
+	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 const (
@@ -493,14 +496,14 @@ func waitForFakeAgentCalls(t *testing.T, ag *fakeAgent, want int) {
 	t.Fatalf("未等到 fake agent 调用次数=%d，实际=%d", want, ag.chatCallCount())
 }
 
-func TestSendTextReplyFormatsLineBreaksForWeChatDisplay(t *testing.T) {
+func TestWeChatReplierFormatsLineBreaksForDisplay(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	reply := "🧩 步骤：查询当前工作目录\n🎯 目的：准确返回你当前会话路径\n▶️ 执行：运行 pwd 命令。\n/Volumes/Data/code/MyCode"
 	want := "🧩 步骤：查询当前工作目录\n\n🎯 目的：准确返回你当前会话路径\n\n▶️ 执行：运行 pwd 命令。\n\n/Volumes/Data/code/MyCode"
 
-	if err := SendTextReply(context.Background(), client, "user-1", reply, "ctx-1", "client-1"); err != nil {
-		t.Fatalf("SendTextReply error: %v", err)
+	if err := wechat.NewReplier(client, "user-1", "ctx-1", "client-1").SendText(context.Background(), reply); err != nil {
+		t.Fatalf("SendText error: %v", err)
 	}
 
 	texts := calls.texts()
@@ -512,7 +515,7 @@ func TestSendTextReplyFormatsLineBreaksForWeChatDisplay(t *testing.T) {
 	}
 }
 
-func TestSendTextReplyChunksSplitsLongTextAndKeepsOrder(t *testing.T) {
+func TestWeChatReplierSplitsLongTextAndKeepsOrder(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	text := strings.Join([]string{
@@ -521,15 +524,17 @@ func TestSendTextReplyChunksSplitsLongTextAndKeepsOrder(t *testing.T) {
 		strings.Repeat("丙", 12),
 	}, "\n")
 
-	if err := SendTextReplyChunks(context.Background(), client, "user-1", text, "ctx-1", "client-1", 15); err != nil {
-		t.Fatalf("SendTextReplyChunks error: %v", err)
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+	reply.ChunkRunes = 15
+	if err := reply.SendText(context.Background(), text); err != nil {
+		t.Fatalf("SendText error: %v", err)
 	}
 
 	texts := calls.texts()
 	if len(texts) != 3 {
 		t.Fatalf("sent texts=%#v, want three chunks", texts)
 	}
-	wantText := FormatTextForWeChatDisplay(text)
+	wantText := wechat.FormatTextForWeChatDisplay(text)
 	if strings.Join(texts, "\n") != wantText {
 		t.Fatalf("joined chunks=%q, want WeChat display text %q", strings.Join(texts, "\n"), wantText)
 	}
@@ -537,6 +542,24 @@ func TestSendTextReplyChunksSplitsLongTextAndKeepsOrder(t *testing.T) {
 		if len([]rune(chunk)) > 15 {
 			t.Fatalf("chunk is too long: %q", chunk)
 		}
+	}
+}
+
+func TestHandlePlatformMessageUsesPlatformReplier(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformWeChat,
+		AccountID: "bot-1",
+		UserID:    "user-1",
+		ChatID:    "user-1",
+		MessageID: "9001",
+		Text:      "/status",
+	}, reply)
+
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "agent:") {
+		t.Fatalf("platform reply texts=%#v, want status reply", reply.Texts)
 	}
 }
 
@@ -553,6 +576,14 @@ func newTextMessage(id int64, text string) ilink.WeixinMessage {
 			TextItem: &ilink.TextItem{Text: text},
 		}},
 	}
+}
+
+func handleTestWeChatMessage(h *Handler, ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage) {
+	if msg.MessageType != ilink.MessageTypeUser || msg.MessageState != ilink.MessageStateFinish {
+		return
+	}
+	reply := wechat.NewReplier(client, msg.FromUserID, msg.ContextToken, "")
+	h.HandleMessage(ctx, wechat.IncomingFromWeixin(msg), reply)
 }
 
 func newFileMessage(id int64, fileName string) ilink.WeixinMessage {
@@ -826,7 +857,7 @@ func TestCodexCleanRemovesMissingStoredWorkspaces(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(109, "/cx clean"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(109, "/cx clean"))
 
 	texts := calls.texts()
 	if !containsText(texts, "已清理 Codex 工作空间：1 个") {
@@ -858,8 +889,8 @@ func TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(130, "/status"))
-	h.HandleMessage(context.Background(), client, newTextMessage(131, "/info"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(130, "/status"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(131, "/info"))
 
 	texts := calls.texts()
 	if !containsText(texts, "agent: codex") || !containsText(texts, "type: acp") {
@@ -974,6 +1005,58 @@ func TestHandleProgressCommandRejectsUnknownMode(t *testing.T) {
 	}
 }
 
+func TestResolveProgressConfigForPlatformUsesPlatformOverride(t *testing.T) {
+	h := NewHandler(nil, nil)
+	globalCfg := config.DefaultProgressConfig()
+	globalCfg.Mode = progressModeTyping
+	agentCfg := config.ProgressConfig{Mode: progressModeStream}
+	platformCfg := config.ProgressConfig{Mode: progressModeSummary}
+
+	h.SetProgressConfig(globalCfg)
+	h.SetAgentProgressConfigs(map[string]config.ProgressConfig{"codex": agentCfg})
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		string(platform.PlatformFeishu): platformCfg,
+	})
+
+	got := h.resolveProgressConfigForPlatform(platform.PlatformFeishu, "codex")
+	if got.Mode != progressModeSummary {
+		t.Fatalf("progress mode=%q, want platform override %q", got.Mode, progressModeSummary)
+	}
+}
+
+func TestHandleMessageUsesPlatformDefaultAgent(t *testing.T) {
+	codex := &fakeAgent{reply: "codex reply", info: agent.AgentInfo{Name: "codex", Type: "test"}}
+	claude := &fakeAgent{reply: "claude reply", info: agent.AgentInfo{Name: "claude", Type: "test"}}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		switch name {
+		case "claude":
+			return claude
+		case "codex":
+			return codex
+		default:
+			return nil
+		}
+	}, nil)
+	h.SetDefaultAgent("codex", codex)
+	h.SetPlatformDefaultAgents(map[string]string{
+		string(platform.PlatformFeishu): "claude",
+	})
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "user-1",
+		Text:     "hello",
+	}, reply)
+
+	if !claude.wasChatCalled() {
+		t.Fatal("claude was not called for feishu platform default agent")
+	}
+	if codex.chatCallCount() != 0 {
+		t.Fatalf("codex calls=%d, want 0", codex.chatCallCount())
+	}
+}
+
 func TestChatWithAgentWithProgress_UsesProgressInterface(t *testing.T) {
 	h := newTestHandler()
 	ag := &fakeProgressAgent{
@@ -1051,7 +1134,8 @@ func TestStartProgressSessionSummaryModeDoesNotSendRealtimeSnippet(t *testing.T)
 	cfg.EnableTyping = boolPtr(false)
 	cfg.InitialDelaySeconds = 0
 	cfg.SummaryIntervalSeconds = 0
-	onProgress, stop := h.startProgressSession(context.Background(), client, "user-1", "ctx-1", "", "修复实时回复碎片化", cfg)
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "")
+	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "修复实时回复碎片化", cfg)
 
 	onProgress("这里是一段 Codex 正文 delta")
 	waitForText(t, calls, "处理中，请耐心等待")
@@ -1073,7 +1157,8 @@ func TestStartProgressSessionDefaultTypingModeDoesNotSendTextFeedback(t *testing
 	defer closeServer()
 
 	cfg := config.DefaultProgressConfig()
-	onProgress, stop := h.startProgressSession(context.Background(), client, "user-1", "ctx-1", "", "查询当前工作目录", cfg)
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "")
+	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "查询当前工作目录", cfg)
 
 	onProgress("正在生成结果")
 	time.Sleep(taskQueueProbeDelay)
@@ -1097,7 +1182,8 @@ func TestStartProgressSessionStreamModeKeepsLegacySnippet(t *testing.T) {
 	cfg.EnableTyping = boolPtr(false)
 	cfg.InitialDelaySeconds = 0
 	cfg.SummaryIntervalSeconds = 0
-	onProgress, stop := h.startProgressSession(context.Background(), client, "user-1", "ctx-1", "", "修复实时回复碎片化", cfg)
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "")
+	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "修复实时回复碎片化", cfg)
 
 	onProgress("第一段第二段第三段")
 	waitForText(t, calls, "实时片段，仅供预览")
@@ -1121,7 +1207,8 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
-	h.sendToNamedAgent(context.Background(), client, newTextMessage(1, "/codex hello"), "codex", "hello", "client-1")
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", reply, "codex", "hello", "client-1")
 
 	waitForText(t, calls, "实时片段，仅供预览")
 }
@@ -1142,14 +1229,16 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/claude 第一条"), "claude", "第一条", "client-1")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "claude", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
 
 	secondDone := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(ctx, client, newTextMessage(2, "/claude 第二条"), "claude", "第二条", "client-2")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-2")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "claude", "第二条", "client-2")
 		close(secondDone)
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -1182,7 +1271,8 @@ func TestSendToNamedAgentUsesTaskTimeout(t *testing.T) {
 	h.SetProgressConfig(progressConfigWithTaskTimeout())
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
-		h.sendToNamedAgent(ctx, client, newTextMessage(3001, "/slow hello"), "slow", "hello", "client-1")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "slow", "hello", "client-1")
 	})
 	waitForText(t, calls, "context deadline exceeded")
 }
@@ -1197,7 +1287,8 @@ func TestSendToDefaultAgentUsesTaskTimeout(t *testing.T) {
 	h.SetProgressConfig(progressConfigWithTaskTimeout())
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
-		h.sendToDefaultAgent(ctx, client, newTextMessage(3002, "hello"), "hello", "client-1")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.sendToDefaultAgent(ctx, platform.PlatformWeChat, "user-1", reply, "hello", "client-1")
 	})
 	waitForText(t, calls, "context deadline exceeded")
 }
@@ -1212,7 +1303,8 @@ func TestBroadcastToAgentsUsesTaskTimeout(t *testing.T) {
 	h.SetProgressConfig(progressConfigWithTaskTimeout())
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
-		h.broadcastToAgents(ctx, client, newTextMessage(3003, "@slow hello"), []string{"slow"}, "hello")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", reply, []string{"slow"}, "hello")
 	})
 	waitForText(t, calls, "context deadline exceeded")
 }
@@ -1234,12 +1326,13 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+	go h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
 	waitForAgentEnter(t, codex)
 
 	done := make(chan struct{})
 	go func() {
-		h.broadcastToAgents(ctx, client, newTextMessage(2, "@codex @claude 第二条"), []string{"codex", "claude"}, "第二条")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-2")
+		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", reply, []string{"codex", "claude"}, "第二条")
 		close(done)
 	}()
 
@@ -1269,12 +1362,13 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "codex", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
 
-	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 	started, _ := ag.stats()
 	if started != 1 {
 		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
@@ -1315,7 +1409,7 @@ func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	h.HandleMessage(ctx, client, newTextMessage(10, "/codex A 任务"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(10, "/codex A 任务"))
 	waitForCodexThreadAgentEnter(t, ag)
 
 	conversationA := buildCodexConversationID("user-1", "codex", workspaceA)
@@ -1323,8 +1417,8 @@ func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
 		t.Fatalf("conversation cwd=%q, want %q", got, normalizeCodexWorkspaceRoot(workspaceA))
 	}
 
-	h.HandleMessage(ctx, client, newTextMessage(11, "/cx switch thread-b"))
-	h.HandleMessage(ctx, client, newTextMessage(12, "/guide"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(11, "/cx switch thread-b"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(12, "/guide"))
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
@@ -1361,7 +1455,7 @@ func TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		h.HandleMessage(ctx, client, newTextMessage(1, "/codex 第一条"))
+		handleTestWeChatMessage(h, ctx, client, newTextMessage(1, "/codex 第一条"))
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
@@ -1374,7 +1468,7 @@ func TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored(t *testing.T) {
 		t.Fatal("Codex Handler 应在任务后台运行后返回，避免串行消息入口阻塞 /guide")
 	}
 
-	h.HandleMessage(ctx, client, newTextMessage(2, "/codex 第二条"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(2, "/codex 第二条"))
 	started, _ := ag.stats()
 	if started != 1 {
 		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
@@ -1403,15 +1497,16 @@ func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "codex", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	guideDone := make(chan struct{})
 	go func() {
-		h.HandleMessage(ctx, client, newTextMessage(3, "/guide"))
+		handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/guide"))
 		close(guideDone)
 	}()
 	waitDone(t, firstDone, "第一条监听")
@@ -1445,13 +1540,14 @@ func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "codex", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
-	h.HandleMessage(ctx, client, newTextMessage(3, "/cancel"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/cancel"))
 	ag.release <- struct{}{}
 	waitDone(t, firstDone, "第一条任务")
 	waitForText(t, calls, "第1条结果")
@@ -1483,15 +1579,15 @@ func TestPendingGuideBecomesRunnableAfterTaskFinishes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
 	waitForText(t, calls, "回复 /run 执行该消息")
 
-	h.HandleMessage(ctx, client, newTextMessage(3, "/run"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/run"))
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第2条结果")
@@ -1516,16 +1612,16 @@ func TestCancelWithdrawsRunnablePendingGuide(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	h.sendToNamedAgent(ctx, client, newTextMessage(1, "/codex 第一条"), "codex", "第一条", "client-1")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, client, newTextMessage(2, "/codex 第二条"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "回复 /run 执行该消息")
-	h.HandleMessage(ctx, client, newTextMessage(3, "/cancel"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/cancel"))
 	waitForText(t, calls, "已撤回该消息。")
 
-	h.HandleMessage(ctx, client, newTextMessage(4, "/run"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(4, "/run"))
 	waitForText(t, calls, "当前没有待执行的暂存消息。")
 
 	started, _ := ag.stats()
@@ -1556,7 +1652,8 @@ func TestBroadcastProgressUsesAgentPrefix(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.broadcastToAgents(context.Background(), client, newTextMessage(1, "@codex @claude hello"), []string{"codex", "claude"}, "hello")
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+	h.broadcastToAgents(context.Background(), platform.PlatformWeChat, "user-1", reply, []string{"codex", "claude"}, "hello")
 
 	if !containsText(calls.texts(), "[codex] 实时片段，仅供预览") {
 		t.Fatalf("expected codex progress prefix, messages=%#v", calls.texts())
@@ -1579,8 +1676,8 @@ func TestDuplicateTextFallbackWhenMessageIDZero(t *testing.T) {
 	defer closeServer()
 	msg := newTextMessage(0, "同一个任务")
 
-	h.HandleMessage(context.Background(), client, msg)
-	h.HandleMessage(context.Background(), client, msg)
+	handleTestWeChatMessage(h, context.Background(), client, msg)
+	handleTestWeChatMessage(h, context.Background(), client, msg)
 
 	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCallCount() != 1 {
@@ -1601,8 +1698,8 @@ func TestDuplicateMessageIDStillDeduped(t *testing.T) {
 	defer closeServer()
 	msg := newTextMessage(99, "同一个任务")
 
-	h.HandleMessage(context.Background(), client, msg)
-	h.HandleMessage(context.Background(), client, msg)
+	handleTestWeChatMessage(h, context.Background(), client, msg)
+	handleTestWeChatMessage(h, context.Background(), client, msg)
 
 	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCallCount() != 1 {
@@ -1623,7 +1720,7 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 	defer closeServer()
 	text := "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh看下具体实现"
 
-	h.HandleMessage(context.Background(), client, newTextMessage(100, text))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(100, text))
 
 	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCallCount() != 1 {
@@ -1649,7 +1746,7 @@ func TestHandleMessageRemovedSwitchCommandDoesNotCallAgent(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(101, "/sw reload"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(101, "/sw reload"))
 
 	if ag.chatCallCount() != 0 {
 		t.Fatalf("removed /sw command should not call default agent, chatCalls=%d", ag.chatCallCount())
@@ -1678,7 +1775,8 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	client, _, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.sendToNamedAgent(context.Background(), client, newTextMessage(101, "/codex hello"), "codex", "hello", "client-1")
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", reply, "codex", "hello", "client-1")
 
 	waitForFakeAgentCalls(t, &ag.fakeAgent, 1)
 	if ag.chatCallCount() != 1 {
@@ -1711,7 +1809,7 @@ func TestHandleCodexNewCommandClearsWorkspaceThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(102, "/codex new"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(102, "/codex new"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.clearCalledWith != wantConversationID {
@@ -1745,7 +1843,7 @@ func TestHandleGlobalNewResetsActiveCodexWorkspaceThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(123, "/new"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(123, "/new"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.resetConversationID() != wantConversationID {
@@ -1780,7 +1878,7 @@ func TestHandleGlobalNewResetsActiveClaudeWorkspaceSession(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(304, "/new"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(304, "/new"))
 
 	wantConversationID := buildClaudeConversationID("user-1", "claude", workspace)
 	if ag.resetConversationID() != wantConversationID {
@@ -1829,7 +1927,7 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(103, "/codex switch thread-2"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(103, "/codex switch thread-2"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-2" {
@@ -1861,7 +1959,7 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(106, "/codex switch thread-target"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(106, "/codex switch thread-target"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-target" {
@@ -1898,7 +1996,7 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(108, "/codex switch 1"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/codex switch 1"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-b" {
@@ -2066,7 +2164,7 @@ func TestClaudeCcLsIncludesLocalSessionsAndHidesSessionIDs(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(301, "/cc ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(301, "/cc ls"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "Claude 会话") || !strings.Contains(text, "0. local / 本机会话") {
@@ -2096,13 +2194,13 @@ func TestClaudeCcLsNumberMatchesSwitchIndexAcrossSortedWorkspaces(t *testing.T) 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(303, "/cc ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(303, "/cc ls"))
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "0. zzz / 较新会话") {
 		t.Fatalf("ls index 0 should show newest switch target, messages=%#v", calls.texts())
 	}
 
-	h.HandleMessage(context.Background(), client, newTextMessage(304, "/cc switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(304, "/cc switch 0"))
 
 	wantConversationID := buildClaudeConversationID("user-1", "claude", workspaceZ)
 	if ag.useConversation != wantConversationID || ag.useSessionID != "session-new" {
@@ -2127,7 +2225,7 @@ func TestHandleClaudeSwitchCommandBindsLocalSessionIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(302, "/cc switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(302, "/cc switch 0"))
 
 	wantConversationID := buildClaudeConversationID("user-1", "claude", workspace)
 	if ag.useConversation != wantConversationID || ag.useSessionID != "session-desktop" {
@@ -2161,7 +2259,7 @@ func TestHandleClaudeCliOpensCurrentSession(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(303, "/cc cli"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(303, "/cc cli"))
 
 	if len(opened) != 1 || opened[0].workspace != workspace || opened[0].sessionID != "session-current" {
 		t.Fatalf("opened=%#v, want current session in workspace %s", opened, workspace)
@@ -2192,7 +2290,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(109, "/codex ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(109, "/codex ls"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "0. local") || !strings.Contains(text, "1. recorded") {
@@ -2220,7 +2318,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(110, "/codex switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(110, "/codex switch 0"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-desktop" {
@@ -2259,7 +2357,7 @@ func TestHandleCodexSwitchFailureDoesNotLeakThreadStoreErrorOrSwitchWorkspace(t 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(116, "/codex switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/codex switch 0"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "该 Codex 会话当前无法被微信接手") || !strings.Contains(text, "/cx app") {
@@ -2293,7 +2391,7 @@ func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(111, "/cx ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(111, "/cx ls"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "Codex 工作空间") {
@@ -2328,7 +2426,7 @@ func TestCodexCxLsUsesCodexAppWorkspaceOrder(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(150, "/cx ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(150, "/cx ls"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "0. weclaw") || !strings.Contains(text, "1. SafariCollection") {
@@ -2357,7 +2455,7 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(112, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(112, "/cx cd 0"))
 
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
@@ -2399,7 +2497,7 @@ func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(151, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(151, "/cx cd 0"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "0. App 新会话") || !strings.Contains(text, "1. App 旧会话") {
@@ -2433,7 +2531,7 @@ func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(152, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(152, "/cx cd 0"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-visible" {
@@ -2466,7 +2564,7 @@ func TestCodexCxCdWorkspaceClearsStaleStoredThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(153, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(153, "/cx cd 0"))
 
 	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
 	if threadID != "" || pending {
@@ -2497,8 +2595,8 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(114, "/cx cd alpha"))
-	h.HandleMessage(context.Background(), client, newTextMessage(115, "/cx switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(114, "/cx cd alpha"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(115, "/cx switch 0"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspaceA)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-a" {
@@ -2528,7 +2626,7 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(140, "/cx 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(140, "/cx 0"))
 
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("/cx 0 should enter workspace, got cwd=%q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
@@ -2559,7 +2657,7 @@ func TestCodexCxCdWorkspaceWithNoSessionsCreatesDraft(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(145, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(145, "/cx cd 0"))
 
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
@@ -2589,8 +2687,8 @@ func TestCodexShortIndexSwitchesSessionInsideWorkspace(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(141, "/cx cd weclaw"))
-	h.HandleMessage(context.Background(), client, newTextMessage(142, "/cx 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(141, "/cx cd weclaw"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(142, "/cx 0"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-a" {
@@ -2617,8 +2715,8 @@ func TestCodexShortDotDotReturnsToWorkspaceList(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(143, "/cx cd weclaw"))
-	h.HandleMessage(context.Background(), client, newTextMessage(144, "/cx .."))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(143, "/cx cd weclaw"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(144, "/cx .."))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "已返回工作空间列表") || !strings.Contains(text, "0. weclaw") {
@@ -2642,8 +2740,8 @@ func TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(116, "/cx cd weclaw"))
-	h.HandleMessage(context.Background(), client, newTextMessage(117, "/cx cd .."))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx cd weclaw"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(117, "/cx cd .."))
 
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("cd .. should not change codex cwd, got %q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
@@ -2672,8 +2770,8 @@ func TestCodexCxPwdShowsBrowseWorkspace(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(119, "/cx cd weclaw"))
-	h.HandleMessage(context.Background(), client, newTextMessage(120, "/cx pwd"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(119, "/cx cd weclaw"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(120, "/cx pwd"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "浏览层级: 会话") || !strings.Contains(text, "工作空间: weclaw") {
@@ -2695,7 +2793,7 @@ func TestCodexAttachOpensVisibleCompanion(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(123, "/cx attach"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(123, "/cx attach"))
 
 	if ag.openCalls != 1 {
 		t.Fatalf("OpenVisibleCompanion calls=%d, want 1", ag.openCalls)
@@ -2720,7 +2818,7 @@ func TestCodexDetachClosesVisibleCompanionOnly(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(124, "/cx detach"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(124, "/cx detach"))
 
 	if ag.detachCalls != 1 {
 		t.Fatalf("DetachVisibleCompanion calls=%d, want 1", ag.detachCalls)
@@ -2740,7 +2838,7 @@ func TestCodexAttachRequiresVisibleCompanion(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(125, "/cx attach"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(125, "/cx attach"))
 
 	if !containsText(calls.texts(), "当前 Codex Agent 不支持 attach") {
 		t.Fatalf("attach unsupported reply mismatch, messages=%#v", calls.texts())
@@ -2767,7 +2865,7 @@ func TestCodexAttachResumesRemoteFirstThreadInTerminal(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(125, "/cx attach"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(125, "/cx attach"))
 
 	if len(opened) != 1 || opened[0].command != "codex-bin" || opened[0].workspace != workspace || opened[0].threadID != "thread-1" {
 		t.Fatalf("opened=%#v, want codex-bin/%s/thread-1", opened, workspace)
@@ -2797,7 +2895,7 @@ func TestCodexCliCommandResumesRemoteFirstThreadInTerminal(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(129, "/cx cli"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(129, "/cx cli"))
 
 	if len(opened) != 1 || opened[0].command != "codex-bin" || opened[0].workspace != workspace || opened[0].threadID != "thread-1" {
 		t.Fatalf("opened=%#v, want codex-bin/%s/thread-1", opened, workspace)
@@ -2819,7 +2917,7 @@ func TestCodexAttachRequiresRecordedThreadForRemoteFirstAgent(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(128, "/cx attach"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(128, "/cx attach"))
 
 	if !containsText(calls.texts(), "当前还没有可接手的 Codex thread") {
 		t.Fatalf("attach without thread reply mismatch, messages=%#v", calls.texts())
@@ -2846,7 +2944,7 @@ func TestCodexAppCommandOpensCurrentWorkspaceWithThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(126, "/cx app"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(126, "/cx app"))
 
 	if len(opened) != 1 || opened[0].command != "codex-bin" || opened[0].workspace != workspace {
 		t.Fatalf("opened=%#v, want codex-bin/%s", opened, workspace)
@@ -2879,8 +2977,8 @@ func TestCodexAppCommandKeepsLsOnOpenedWorkspace(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(127, "/cx app"))
-	h.HandleMessage(context.Background(), client, newTextMessage(128, "/cx ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(127, "/cx app"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(128, "/cx ls"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, filepath.Base(workspace)+" 会话") || !strings.Contains(text, "0. 未命名会话") {
@@ -2906,7 +3004,7 @@ func TestCodexStatusShowsWorkspaceThreadAndLocalEntryState(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(131, "/cx status"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(131, "/cx status"))
 
 	text := strings.Join(calls.texts(), "\n")
 	for _, want := range []string{
@@ -2944,9 +3042,9 @@ func TestCodexStatusRecordsSuccessfulLocalEntries(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(132, "/cx cli"))
-	h.HandleMessage(context.Background(), client, newTextMessage(133, "/cx app"))
-	h.HandleMessage(context.Background(), client, newTextMessage(134, "/cx status"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(132, "/cx cli"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(133, "/cx app"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(134, "/cx status"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "CLI: 已打开过") || !strings.Contains(text, "App: 已打开过") {
@@ -2972,7 +3070,7 @@ func TestCodexAppFailureSuggestsCli(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(130, "/cx app"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(130, "/cx app"))
 
 	if !containsText(calls.texts(), "打开 Codex App 失败") || !containsText(calls.texts(), "/cx cli") {
 		t.Fatalf("app failure reply should suggest /cx cli, messages=%#v", calls.texts())
@@ -2998,7 +3096,7 @@ func TestCodexAttachAppAliasOpensCodexApp(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(127, "/cx attach app"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(127, "/cx attach app"))
 
 	if len(opened) != 1 || opened[0].workspace != workspace {
 		t.Fatalf("opened=%#v, want workspace %s", opened, workspace)
@@ -3065,7 +3163,8 @@ func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.sendToNamedAgent(context.Background(), client, newTextMessage(107, "/codex 继续"), "codex", "继续", "client-1")
+	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", reply, "codex", "继续", "client-1")
 
 	waitForText(t, calls, "恢复 Codex 会话失败")
 	if ag.chatCallCount() != 0 {
@@ -3128,8 +3227,8 @@ func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(104, "/codex whoami"))
-	h.HandleMessage(context.Background(), client, newTextMessage(105, "/codex ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(104, "/codex whoami"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(105, "/codex ls"))
 
 	texts := calls.texts()
 	if !containsText(texts, "workspace: "+workspace) {
@@ -3158,7 +3257,7 @@ func TestHandleCodexModelStatusCommandShowsCurrentConfig(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(121, "/cx model status"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(121, "/cx model status"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "Codex 模型配置") ||
@@ -3185,7 +3284,7 @@ func TestHandleCodexModelLsCommandListsModelsAndEfforts(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(122, "/cx model ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(122, "/cx model ls"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "Codex 可用模型") ||
@@ -3229,7 +3328,7 @@ func TestHandleCodexQuotaCommandShowsRateLimits(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newTextMessage(132, "/cx quota"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(132, "/cx quota"))
 
 	text := strings.Join(calls.texts(), "\n")
 	for _, want := range []string{
@@ -3271,7 +3370,7 @@ func TestHandleMessage_FileMessageSavesFileAndSendsPathToAgent(t *testing.T) {
 	client, _, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	h.HandleMessage(context.Background(), client, newFileMessage(10, "方案.txt"))
+	handleTestWeChatMessage(h, context.Background(), client, newFileMessage(10, "方案.txt"))
 
 	waitForFakeAgentCalls(t, ag, 1)
 	if ag.chatCallCount() != 1 {
@@ -3301,7 +3400,7 @@ func TestHandleMessage_FileMessageWithoutMediaDoesNotCallAgent(t *testing.T) {
 	msg := newFileMessage(11, "broken.txt")
 	msg.ItemList[0].FileItem.Media = nil
 
-	h.HandleMessage(context.Background(), client, msg)
+	handleTestWeChatMessage(h, context.Background(), client, msg)
 
 	if ag.chatCallCount() != 0 {
 		t.Fatalf("file without media should not call agent, chatCalls=%d", ag.chatCallCount())
@@ -3324,23 +3423,73 @@ func TestSendReplyWithMediaUsesChunksForLongFinalText(t *testing.T) {
 	h := NewHandler(nil, nil)
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
-	msg := newTextMessage(1, "hello")
 	reply := strings.Join([]string{
 		strings.Repeat("甲", 12),
 		strings.Repeat("乙", 12),
 		strings.Repeat("丙", 12),
 	}, "\n")
 
-	h.sendReplyWithMedia(ctxWithChunkLimit(context.Background(), 15), client, msg, "codex", reply, "client-1")
+	replyWriter := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+	h.sendReplyWithMedia(withTextReplyChunkLimit(context.Background(), 15), replyWriter, "user-1", "codex", reply)
 
 	texts := calls.texts()
 	if len(texts) != 3 {
 		t.Fatalf("sent texts=%#v, want three chunks", texts)
 	}
-	wantReply := FormatTextForWeChatDisplay(reply)
+	wantReply := wechat.FormatTextForWeChatDisplay(reply)
 	if strings.Join(texts, "\n") != wantReply {
 		t.Fatalf("joined chunks=%q, want WeChat display reply %q", strings.Join(texts, "\n"), wantReply)
 	}
+}
+
+func TestSendReplyWithMediaAsksChoices(t *testing.T) {
+	h := NewHandler(nil, nil)
+	replyWriter := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.sendReplyWithMedia(context.Background(), replyWriter, "user-1", "codex", "请选择一个方案：\n1. 继续\n2. 暂停")
+
+	if len(replyWriter.Texts) != 1 || replyWriter.Texts[0] != "请选择一个方案：" {
+		t.Fatalf("texts=%#v, want cleaned prompt", replyWriter.Texts)
+	}
+	if len(replyWriter.Choices) != 1 || len(replyWriter.Choices[0].Choices) != 2 {
+		t.Fatalf("choices=%#v, want two choices", replyWriter.Choices)
+	}
+}
+
+func TestRawCommandStopCancelsActiveCodexTask(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.defaultName = "codex"
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "cli", Command: "codex"},
+		},
+	}
+	h.agents["codex"] = ag
+	key := h.agentExecutionKey("feishu:ou_user", "codex", ag)
+	task, taskCtx, started := h.beginActiveTask(context.Background(), key)
+	if !started {
+		t.Fatal("beginActiveTask started=false, want true")
+	}
+	replyWriter := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "feishu:ou_user",
+		MessageID: "card-stop-1",
+		RawCommand: &platform.CardAction{
+			Action: "stop",
+		},
+	}, replyWriter)
+
+	select {
+	case <-taskCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("task context was not canceled")
+	}
+	if task.shouldSendFinal() {
+		t.Fatal("task should not send final after stop")
+	}
+	h.finishActiveTask(key, task)
 }
 
 func boolPtr(v bool) *bool {

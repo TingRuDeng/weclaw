@@ -34,6 +34,8 @@ type codexWorkspaceSession struct {
 	UpdatedAt        string
 }
 
+const legacyBindingDefaultPlatform = "wechat"
+
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
 		bindings: make(map[string]codexSessionBinding),
@@ -58,12 +60,32 @@ func (s *codexSessionStore) SetFilePath(filePath string) {
 }
 
 func codexBindingKey(userID string, agentName string) string {
-	return strings.TrimSpace(userID) + "\x00" + strings.TrimSpace(agentName)
+	return normalizeConversationUserKey(userID) + "\x00" + strings.TrimSpace(agentName)
+}
+
+func migrateLegacyBindingKey(bindingKey string) (string, bool) {
+	parts := strings.SplitN(bindingKey, "\x00", 2)
+	migratedUserKey := normalizeConversationUserKey(parts[0])
+	if migratedUserKey == strings.TrimSpace(parts[0]) {
+		return bindingKey, false
+	}
+	if len(parts) == 1 {
+		return migratedUserKey, migratedUserKey != bindingKey
+	}
+	return migratedUserKey + "\x00" + parts[1], true
+}
+
+func normalizeConversationUserKey(userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" || strings.Contains(userID, ":") {
+		return userID
+	}
+	return legacyBindingDefaultPlatform + ":" + userID
 }
 
 func buildCodexConversationID(userID string, agentName string, workspaceRoot string) string {
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
-	return strings.Join([]string{"codex", strings.TrimSpace(userID), strings.TrimSpace(agentName), workspaceRoot}, "\x00")
+	return strings.Join([]string{"codex", normalizeConversationUserKey(userID), strings.TrimSpace(agentName), workspaceRoot}, "\x00")
 }
 
 func normalizeCodexWorkspaceRoot(workspaceRoot string) string {
@@ -288,9 +310,14 @@ func (s *codexSessionStore) load() {
 	}
 
 	bindings := make(map[string]codexSessionBinding, len(state.Bindings))
+	changed := false
 	for key, binding := range state.Bindings {
 		if strings.TrimSpace(key) == "" {
 			continue
+		}
+		migratedKey, migrated := migrateLegacyBindingKey(key)
+		if migrated {
+			changed = true
 		}
 		normalized := codexSessionBinding{
 			ActiveWorkspace: normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
@@ -303,12 +330,35 @@ func (s *codexSessionStore) load() {
 			}
 			normalized.Workspaces[workspaceRoot] = session
 		}
-		bindings[key] = normalized
+		bindings[migratedKey] = mergeCodexSessionBinding(bindings[migratedKey], normalized)
 	}
 
 	s.mu.Lock()
 	s.bindings = bindings
 	s.mu.Unlock()
+	if changed {
+		s.save()
+	}
+}
+
+func mergeCodexSessionBinding(current codexSessionBinding, incoming codexSessionBinding) codexSessionBinding {
+	if current.Workspaces == nil {
+		current.Workspaces = make(map[string]codexWorkspaceSession)
+	}
+	if current.ActiveWorkspace == "" {
+		current.ActiveWorkspace = incoming.ActiveWorkspace
+	}
+	for workspaceRoot, session := range incoming.Workspaces {
+		current.Workspaces[workspaceRoot] = mergeCodexWorkspaceSession(current.Workspaces[workspaceRoot], session)
+	}
+	return current
+}
+
+func mergeCodexWorkspaceSession(current codexWorkspaceSession, incoming codexWorkspaceSession) codexWorkspaceSession {
+	if current.UpdatedAt == "" || incoming.UpdatedAt > current.UpdatedAt {
+		return incoming
+	}
+	return current
 }
 
 func (s *codexSessionStore) save() {

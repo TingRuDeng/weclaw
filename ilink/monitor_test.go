@@ -101,9 +101,80 @@ func TestMonitorAllowsDifferentUsersInParallel(t *testing.T) {
 	close(releaseFirst)
 }
 
+func TestAggregateWeixinMessagesMergesTextAndAttachments(t *testing.T) {
+	first := textMonitorMessage("u1", "第一句")
+	first.MessageID = 1
+	second := textMonitorMessage("u1", "第二句")
+	second.MessageID = 2
+	second.ItemList = append(second.ItemList, MessageItem{
+		Type:      ItemTypeImage,
+		ImageItem: &ImageItem{URL: "https://example.com/a.png"},
+	})
+
+	got := aggregateWeixinMessages([]WeixinMessage{first, second})
+
+	if got.MessageID != 2 {
+		t.Fatalf("MessageID=%d, want latest message id 2", got.MessageID)
+	}
+	if len(got.ItemList) != 2 {
+		t.Fatalf("items=%#v, want text plus image", got.ItemList)
+	}
+	if got.ItemList[0].TextItem == nil || got.ItemList[0].TextItem.Text != "第一句\n第二句" {
+		t.Fatalf("merged text=%#v, want joined text", got.ItemList[0].TextItem)
+	}
+	if got.ItemList[1].ImageItem == nil {
+		t.Fatalf("second item=%#v, want image attachment", got.ItemList[1])
+	}
+}
+
+func TestRunMessageQueueFlushesBeforeCommand(t *testing.T) {
+	queue := make(chan WeixinMessage, 4)
+	got := make(chan WeixinMessage, 2)
+	monitor := &Monitor{
+		client:          &Client{},
+		handler:         func(ctx context.Context, client *Client, msg WeixinMessage) { got <- msg },
+		aggregateWindow: time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go monitor.runMessageQueue(ctx, queue)
+
+	queue <- textMonitorMessage("u1", "第一句")
+	queue <- textMonitorMessage("u1", "/status")
+
+	first := <-got
+	second := <-got
+	if first.ItemList[0].TextItem.Text != "第一句" {
+		t.Fatalf("first text=%q, want aggregated text before command", first.ItemList[0].TextItem.Text)
+	}
+	if second.ItemList[0].TextItem.Text != "/status" {
+		t.Fatalf("second text=%q, want command flushed immediately", second.ItemList[0].TextItem.Text)
+	}
+}
+
+func TestCalcBackoffUsesFixedSteps(t *testing.T) {
+	monitor := &Monitor{}
+	want := []time.Duration{
+		3 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+		20 * time.Second,
+		30 * time.Second,
+		30 * time.Second,
+	}
+	for i, expected := range want {
+		monitor.failures = i + 1
+		if got := monitor.calcBackoff(); got != expected {
+			t.Fatalf("failures=%d backoff=%s, want %s", monitor.failures, got, expected)
+		}
+	}
+}
+
 func textMonitorMessage(userID string, text string) WeixinMessage {
 	return WeixinMessage{
-		FromUserID: userID,
+		FromUserID:   userID,
+		MessageType:  MessageTypeUser,
+		MessageState: MessageStateFinish,
 		ItemList: []MessageItem{{
 			Type:     ItemTypeText,
 			TextItem: &TextItem{Text: text},
