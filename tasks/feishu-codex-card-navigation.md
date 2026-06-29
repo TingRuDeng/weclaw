@@ -34,6 +34,10 @@
 - 核心回归：`go test ./agent ./messaging ./feishu ./cmd -count=1 -timeout 60s`，通过。
 - 静态检查：`go vet ./...`，通过。
 - 格式检查：`git diff --check`，通过。
+- 发布阻断：`scripts/release.sh --next-patch` 在 `go test -race ./agent ./cmd ./messaging` 阶段发现测试 race；原因是审批测试并发读写 `platformtest.Replier.Choices`。
+- 修复：审批测试改为等待 `pendingApprovals` 注册，不再并发读取 fake replier 的 slice。
+- 阻断修复验证：`go test -race ./messaging -run 'ApprovalHandlerWaits|PendingApprovalIgnores' -count=1 -timeout 60s`，通过。
+- Race 回归：`go test -race ./agent ./cmd ./messaging -count=1 -timeout 60s`，通过。
 
 ## Review 小结
 

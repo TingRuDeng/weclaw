@@ -1316,7 +1316,7 @@ func TestApprovalHandlerWaitsForChoice(t *testing.T) {
 		resultCh <- optionID
 	}()
 
-	waitUntil(t, func() bool { return len(reply.Choices) == 1 })
+	waitUntil(t, func() bool { return hasPendingApprovalForTest(h, "ou_user") })
 	if !h.consumePendingApproval("ou_user", "allow_once") {
 		t.Fatal("pending approval should consume choice")
 	}
@@ -2684,7 +2684,7 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 		}
 		resultCh <- optionID
 	}()
-	waitUntil(t, func() bool { return len(reply.Choices) == 1 })
+	waitUntil(t, func() bool { return hasPendingApprovalForTest(h, "ou_user") })
 
 	h.HandleMessage(ctx, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
@@ -3865,6 +3865,12 @@ func waitUntil(t *testing.T, condition func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition was not met before timeout")
+}
+
+func hasPendingApprovalForTest(h *Handler, userID string) bool {
+	h.pendingApprovalsMu.Lock()
+	defer h.pendingApprovalsMu.Unlock()
+	return h.pendingApprovals[userID] != nil
 }
 
 func progressConfigWithTaskTimeout() config.ProgressConfig {
