@@ -1,7 +1,10 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +74,36 @@ func TestAdapterRunValidatesAndStartsWS(t *testing.T) {
 	}
 	if !validated {
 		t.Fatal("credentials were not validated")
+	}
+}
+
+func TestAdapterRunLogsPermissionGuideAfterValidation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ws := &fakeWSRunner{started: make(chan struct{}), closed: make(chan struct{})}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.validate = func(ctx context.Context, creds Credentials) error { return nil }
+	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner { return ws }
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(oldOutput)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- adapter.Run(ctx, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {})
+	}()
+	<-ws.started
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	output := logs.String()
+	if !strings.Contains(output, "https://open.feishu.cn/app/cli_a/permission") ||
+		!strings.Contains(output, "im:message") ||
+		!strings.Contains(output, "cardkit:card") {
+		t.Fatalf("logs=%q, want permission guide", output)
 	}
 }
 

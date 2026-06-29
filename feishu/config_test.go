@@ -112,6 +112,22 @@ func TestValidateCredentialsErrorDoesNotExposeSecret(t *testing.T) {
 	}
 }
 
+func TestValidateCredentialsPermissionErrorUsesUnifiedClassifier(t *testing.T) {
+	oldURL := tenantTokenURL
+	defer func() { tenantTokenURL = oldURL }()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":99991663,"msg":"missing scope"}`))
+	}))
+	defer server.Close()
+	tenantTokenURL = server.URL
+
+	err := ValidateCredentials(context.Background(), Credentials{AppID: "cli_a", AppSecret: "secret"})
+
+	if !IsPermissionError(err) {
+		t.Fatalf("ValidateCredentials error=%v, want unified permission error", err)
+	}
+}
+
 func TestCredentialsPathUsesWeclawPlatformsDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

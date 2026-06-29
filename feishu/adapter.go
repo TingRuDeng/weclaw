@@ -81,6 +81,7 @@ func (a *Adapter) Run(ctx context.Context, dispatch platform.DispatchFunc) error
 	if err := a.validate(ctx, a.creds); err != nil {
 		return err
 	}
+	logPermissionGuide(a.creds.AppID)
 	eventDispatcher := a.newEventDispatcher(dispatch)
 	wsClient := a.wsFactory(eventDispatcher)
 	go func() {

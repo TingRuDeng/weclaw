@@ -111,7 +111,7 @@ func (c *sdkCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJS
 	return nil
 }
 
-// DestroyCard 当前 SDK 未暴露删除卡片实例接口，保留生命周期钩子供后续替换真实实现。
+// DestroyCard 当前 SDK 未暴露整卡删除接口，卡片实例依赖飞书侧 TTL 自动回收。
 func (c *sdkCardKitClient) DestroyCard(ctx context.Context, cardID string) error {
 	if cardID == "" {
 		return fmt.Errorf("card_id is required")

@@ -8,17 +8,17 @@
 
 ## Tasks
 
-- [ ] 1. 修正并补全飞书权限错误码识别（P1-2）
+- [x] 1. 修正并补全飞书权限错误码识别（P1-2）
   - 在 `feishu/permission.go` 把 `permissionErrorCodes` 扩展为 `{99991400, 99991401, 99991663, 99991672, 99991670, 99991668}`
   - 新增统一入口 `IsPermissionError(err error) bool`：先尝试 `feishuErrorCode(err)` 提取 code 判定；取不到 code 时按错误文本兜底匹配 `permission|权限|scope|forbidden|not authorized|no access`（大小写不敏感）
   - 让发送（`sdkMessageSender.apiError`）、CardKit、凭证校验等处的权限判断统一走该入口
   - _Requirements: 1.1, 1.2, 1.3_
 
-- [ ] 2. 扩充权限码单测（P1-2）
+- [x] 2. 扩充权限码单测（P1-2）
   - 在 `feishu/permission_test.go` 覆盖：6 个权限码全部命中；普通参数/系统错误码不误判；无 code 时按文本兜底命中与不命中
   - _Requirements: 1.4_
 
-- [ ] 3. 抽出权限开通引导内容构建（P2-4）
+- [x] 3. 抽出权限开通引导内容构建（P2-4）
   - 在 `feishu/permission.go` 增加引导文案构建函数：包含权限设置页链接 `https://open.feishu.cn/app/{appID}/permission` 与所需 scope 列表（`im:message`、`im:message:send_as_bot`、`im:resource`、`im:chat`，可选 `cardkit:card`）
   - 提供卡片版（lark_md/markdown 元素）与纯文本版两种渲染
   - 不在任何输出中包含 `app_secret`
@@ -29,7 +29,7 @@
   - 复用现有 `permissionGuideLimiter` 60s 冷却；发送引导需要会话标识（openID/chatID），按需把会话上下文传入发送器或在 `Replier` 层处理
   - _Requirements: 2.1, 2.2, 2.4_
 
-- [ ] 5.* 核实并落实 CardKit 卡片回收（P2-3）
+- [x] 5.* 核实并落实 CardKit 卡片回收（P2-3）
   - 用终端查阅 `larksuite/oapi-sdk-go/v3` cardkit v1 是否有删除/失效接口（`go doc` 或源码）
   - 有则在 `sdkCardKitClient.DestroyCard` 调真实接口；无则改注释为"依赖飞书侧卡片 TTL 自动回收"，去除"保留钩子供后续替换"措辞
   - 确认不破坏 `feishu/stream_test.go`
@@ -47,7 +47,7 @@
   - 增加单测：未授权操作者点击不触发分发、返回非成功 toast
   - _Requirements: 5.1, 5.2, 5.3_
 
-- [ ] 8. 启动时输出飞书权限要求提示（P2-4 关联）
+- [x] 8. 启动时输出飞书权限要求提示（P2-4 关联）
   - 在 `feishu/adapter.go` 凭证校验通过后调用一次权限引导日志（scope 清单 + 设置页链接），参考 open-im `logPermissionGuide`
   - _Requirements: 6.1, 6.2_
 
@@ -108,3 +108,7 @@ graph TD
 ## Review Notes
 
 - 2026-06-29：任务 6 已完成。`feishu/incoming.go` 对 post 富文本增加兜底解析，文本中不再注入 `![image](<image_key>)` 或 `<file key="..."/>`，资源仍通过 `Attachments` 下载传递；`messaging/handler.go` 支持文字+图片一起发送时把本地图片路径传给 Agent。验证：`go test ./feishu -run 'TestToIncomingFromMessageParsesPost|TestToIncomingFromMessageParsesPostWithImage|TestToIncomingFromMessageParsesPostContentObjectFallback' -count=1 -timeout 60s`、`go test ./messaging -run 'TestHandlePlatformMessagePassesTextAndImageToAgent|TestResolveProgressConfig' -count=1 -timeout 60s`。
+- 2026-06-29：任务 1/2 已完成。`feishu/permission.go` 对齐参考实现的 6 个权限错误码，新增 `IsPermissionError(err)`，支持 code 提取与错误文本兜底；`ValidateCredentials` 改为返回统一 `feishuAPIError`，便于统一权限判定。验证：`go test ./feishu -run 'TestIsPermissionError|TestPermissionGuideLimiter|TestFormatFeishuAPIError|TestValidateCredentials' -count=1 -timeout 60s`。
+- 2026-06-29：任务 5 已完成。核实 `larksuite/oapi-sdk-go/v3@v3.9.7/service/cardkit/v1/resource.go`：`card` 资源仅有 `BatchUpdate`、`Create`、`IdConvert`、`Settings`、`Update`，删除接口只存在于 `cardElement.Delete`，没有整卡删除接口；`feishu/cardkit.go` 注释已改为依赖飞书侧 TTL 自动回收。验证：`go test ./feishu -run 'Stream|Card|Choice|Permission|ValidateCredentials' -count=1 -timeout 60s`。
+- 2026-06-29：任务 3 已完成。`feishu/permission.go` 新增权限 URL、scope 清单、纯文本引导和 CardKit 2.0 卡片引导构建函数，输出不包含 `app_secret`。验证：`go test ./feishu -run 'TestIsPermissionError|TestPermissionGuide|TestBuildPermissionGuide|TestFormatFeishuAPIError|TestValidateCredentials' -count=1 -timeout 60s`。
+- 2026-06-29：任务 8 已完成。`feishu/adapter.go` 在凭证校验通过后调用 `logPermissionGuide`，启动日志输出权限设置页、必需 scope 与可选 `cardkit:card`。验证：`go test ./feishu -run 'TestAdapterRun|TestPermissionGuide|TestBuildPermissionGuide|TestIsPermissionError|TestValidateCredentials' -count=1 -timeout 60s`。

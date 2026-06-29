@@ -131,7 +131,7 @@ func ValidateCredentials(ctx context.Context, creds Credentials) error {
 		return fmt.Errorf("decode feishu validation response: %w", err)
 	}
 	if result.Code != 0 {
-		return fmt.Errorf("validate feishu credentials: code=%d msg=%s", result.Code, result.Msg)
+		return formatFeishuAPIError(creds.AppID, result.Code, result.Msg)
 	}
 	return nil
 }
