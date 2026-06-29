@@ -161,3 +161,36 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 		t.Fatal("timed out waiting for callback dispatch")
 	}
 }
+
+func TestHandleCardActionEventRejectsUnauthorizedUser(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"ou_allowed"}))
+	event := &callback.CardActionTriggerEvent{
+		Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user"},
+			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
+			Action: &callback.CallBackAction{Value: map[string]interface{}{
+				"action": cardActionChoice,
+				"choice": "1",
+				"conv":   "feishu:ou_user",
+			}},
+		},
+	}
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Type == "success" {
+		t.Fatalf("response=%#v, want non-success toast", resp)
+	}
+	select {
+	case msg := <-dispatched:
+		t.Fatalf("unexpected dispatch: %#v", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -60,13 +61,7 @@ func TestLookPath_LoginShellFallback(t *testing.T) {
 // TestDetectAndConfigure_StrippedPath is an end-to-end test:
 // empty config + stripped PATH → DetectAndConfigure should still find claude.
 func TestDetectAndConfigure_StrippedPath(t *testing.T) {
-	if _, err := exec.LookPath("claude"); err != nil {
-		t.Skip("claude not installed, skipping")
-	}
-
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
-	defer os.Setenv("PATH", origPath)
+	withAgentDetection(t, map[string]string{"claude": "/fake/bin/claude"}, nil)
 
 	cfg := DefaultConfig()
 	DetectAndConfigure(cfg)
@@ -78,13 +73,13 @@ func TestDetectAndConfigure_StrippedPath(t *testing.T) {
 	if agent.Type != "cli" {
 		t.Fatalf("expected type=cli, got %s", agent.Type)
 	}
-	t.Logf("detected claude: type=%s, command=%s", agent.Type, agent.Command)
+	if agent.Command != "/fake/bin/claude" {
+		t.Fatalf("detected claude command=%s, want fake path", agent.Command)
+	}
 }
 
 func TestDetectAndConfigureOpenCodeUsesCompanion(t *testing.T) {
-	if _, err := lookPath("opencode"); err != nil {
-		t.Skip("opencode not installed, skipping")
-	}
+	withAgentDetection(t, map[string]string{"opencode": "/fake/bin/opencode"}, nil)
 
 	cfg := DefaultConfig()
 	DetectAndConfigure(cfg)
@@ -96,4 +91,26 @@ func TestDetectAndConfigureOpenCodeUsesCompanion(t *testing.T) {
 	if agent.Type != "companion" {
 		t.Fatalf("opencode type = %q, want companion", agent.Type)
 	}
+}
+
+func withAgentDetection(t *testing.T, paths map[string]string, probes map[string]bool) {
+	t.Helper()
+	oldLookPath := detectLookPath
+	oldCommandProbe := detectCommandProbe
+	detectLookPath = func(binary string) (string, error) {
+		path, ok := paths[binary]
+		if !ok {
+			return "", fmt.Errorf("not found: %s", binary)
+		}
+		return path, nil
+	}
+	detectCommandProbe = func(binary string, args []string) bool {
+		key := binary + "\x00" + fmt.Sprint(args)
+		allowed, ok := probes[key]
+		return !ok || allowed
+	}
+	t.Cleanup(func() {
+		detectLookPath = oldLookPath
+		detectCommandProbe = oldCommandProbe
+	})
 }

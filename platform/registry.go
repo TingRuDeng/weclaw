@@ -37,6 +37,7 @@ func NewRegistry(entries []RegistryEntry) *Registry {
 			log.Printf("[platform] WARNING: %s/%s has empty allowlist; all incoming users are denied",
 				entry.Platform.Name(), entry.Platform.AccountID())
 		}
+		applyPlatformAccess(entry.Platform, entry.Access)
 		copied = append(copied, entry)
 	}
 	return &Registry{entries: copied, denyNotices: newDenyNoticeLimiter(denyNoticeInterval)}
@@ -100,7 +101,14 @@ func (r *Registry) UpdateAccess(platformName PlatformName, allowed []string) {
 	for _, entry := range r.entries {
 		if entry.Platform.Name() == platformName {
 			entry.Access.SetAllowed(allowed)
+			applyPlatformAccess(entry.Platform, entry.Access)
 		}
+	}
+}
+
+func applyPlatformAccess(p Platform, access AccessControl) {
+	if target, ok := p.(AccessControlledPlatform); ok {
+		target.SetAccessControl(access)
 	}
 }
 

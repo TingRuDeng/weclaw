@@ -24,7 +24,7 @@
   - 不在任何输出中包含 `app_secret`
   - _Requirements: 2.3, 2.5_
 
-- [ ] 4. 权限不足时尽力把引导发到聊天（P2-4）
+- [x] 4. 权限不足时尽力把引导发到聊天（P2-4）
   - 让消息发送器在检测到权限错误时，除日志外按降级链发送引导到当前会话：先卡片、失败退纯文本、再失败仅记日志不二次抛错
   - 复用现有 `permissionGuideLimiter` 60s 冷却；发送引导需要会话标识（openID/chatID），按需把会话上下文传入发送器或在 `Replier` 层处理
   - _Requirements: 2.1, 2.2, 2.4_
@@ -41,7 +41,7 @@
   - 更新 `feishu/incoming_test.go` 断言
   - _Requirements: 4.1, 4.2, 4.3_
 
-- [ ] 7. 卡片回调先校验访问控制再回 toast（新发现-2）
+- [x] 7. 卡片回调先校验访问控制再回 toast（新发现-2）
   - 在 `feishu/adapter.go` 的 `handleCardActionEvent`：在返回成功 toast 前完成访问控制校验；未授权时返回中性/拒绝 toast 且不分发到 agent/审批
   - 复用 `platform` 层访问控制，不在 feishu 包重复实现；如当前访问控制只在 `guardedDispatch` 内，需把"是否允许"的判定暴露给回调路径（例如 dispatch 前置校验或注入判定函数）
   - 增加单测：未授权操作者点击不触发分发、返回非成功 toast
@@ -51,13 +51,13 @@
   - 在 `feishu/adapter.go` 凭证校验通过后调用一次权限引导日志（scope 清单 + 设置页链接），参考 open-im `logPermissionGuide`
   - _Requirements: 6.1, 6.2_
 
-- [ ] 9.* 排查并缓解 config 包测试缓慢（新发现-3）
+- [x] 9.* 排查并缓解 config 包测试缓慢（新发现-3）
   - 定位 `config` 包测试约 40s 的根因（agent 二进制探测 / 文件遍历 / sleep）
   - 在不削弱有效性的前提下降耗：注入可替换探测函数、缩短/移除 sleep、限制扫描范围
   - 验证 `config` 包测试通过且耗时明显下降
   - _Requirements: 7.1, 7.2, 7.3_
 
-- [ ] 10. 全量回归与质量门槛
+- [x] 10. 全量回归与质量门槛
   - `go build ./...`、`go vet ./...`、`go test ./...`、`go test -race ./feishu/... ./messaging/... ./platform/... ./wechat/...` 全绿
   - 确认微信行为零回归、平台抽象未被破坏（`messaging` 仍不依赖 `feishu`/`lark*`）
   - _Requirements: 1.4, 2.2, 3.4, 4.1, 5.2, 6.1, 7.3_
@@ -112,3 +112,7 @@ graph TD
 - 2026-06-29：任务 5 已完成。核实 `larksuite/oapi-sdk-go/v3@v3.9.7/service/cardkit/v1/resource.go`：`card` 资源仅有 `BatchUpdate`、`Create`、`IdConvert`、`Settings`、`Update`，删除接口只存在于 `cardElement.Delete`，没有整卡删除接口；`feishu/cardkit.go` 注释已改为依赖飞书侧 TTL 自动回收。验证：`go test ./feishu -run 'Stream|Card|Choice|Permission|ValidateCredentials' -count=1 -timeout 60s`。
 - 2026-06-29：任务 3 已完成。`feishu/permission.go` 新增权限 URL、scope 清单、纯文本引导和 CardKit 2.0 卡片引导构建函数，输出不包含 `app_secret`。验证：`go test ./feishu -run 'TestIsPermissionError|TestPermissionGuide|TestBuildPermissionGuide|TestFormatFeishuAPIError|TestValidateCredentials' -count=1 -timeout 60s`。
 - 2026-06-29：任务 8 已完成。`feishu/adapter.go` 在凭证校验通过后调用 `logPermissionGuide`，启动日志输出权限设置页、必需 scope 与可选 `cardkit:card`。验证：`go test ./feishu -run 'TestAdapterRun|TestPermissionGuide|TestBuildPermissionGuide|TestIsPermissionError|TestValidateCredentials' -count=1 -timeout 60s`。
+- 2026-06-29：任务 4 已完成。`feishu/replier.go` 在原始消息发送遇到权限错误时复用 `permissionGuideLimiter`，先向当前 `openID` 发送权限引导卡片，失败后降级发送纯文本，引导发送失败仅记录日志，最终仍返回原始权限错误；引导发送使用无递归路径，避免二次触发权限引导。验证：`go test ./feishu -run 'PermissionGuide|SDKMessageSender|Replier|ValidateCredentials' -count=1 -timeout 60s`。
+- 2026-06-29：任务 7 已完成。`platform.Registry` 将同一份 `AccessControl` 注入实现 `AccessControlledPlatform` 的平台实例，热更新白名单时同步复用该对象；`feishu.Adapter` 在卡片回调入口先校验操作者，未授权时返回非成功 toast 且不分发到业务层。验证：`go test ./platform ./feishu -run 'AccessControl|HandleCardActionEvent' -count=1 -timeout 60s`。
+- 2026-06-29：任务 9 已完成。`config/detect.go` 为 `DetectAndConfigure` 增加包内可替换的 binary lookup 与 command probe 注入点，生产默认仍使用真实 `lookPath`/`commandProbe`；`config/detect_test.go` 将两个慢的 DetectAndConfigure 用例改为 fake 探测，避免真实执行本机 agent 探测；`config/openclaw_gateway.go` 拆出 openclaw gateway 解析，控制 `detect.go` 职责和文件大小。验证：`go test ./config -count=1 -timeout 60s -v`，耗时从约 39.7s 降至 3.4s。
+- 2026-06-29：任务 10 已完成。全量质量门槛通过：`go test ./... -count=1 -timeout 60s`、`go vet ./...`、`git diff --check`、`go build ./...`、`go test -race ./feishu ./messaging ./platform ./wechat -count=1 -timeout 60s`。

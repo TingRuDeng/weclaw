@@ -3,6 +3,11 @@ package platform
 import "strings"
 import "sync"
 
+// AccessControlledPlatform 表示可接收 Registry 访问控制器的平台实例。
+type AccessControlledPlatform interface {
+	SetAccessControl(AccessControl)
+}
+
 // AccessControl 保存单个平台的允许用户集合，空集合按默认拒绝处理。
 type AccessControl struct {
 	state *accessState

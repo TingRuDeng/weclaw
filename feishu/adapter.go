@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"log"
+	"sync"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -25,6 +26,9 @@ type Adapter struct {
 	cardKit    cardKitClient
 	validate   func(context.Context, Credentials) error
 	wsFactory  func(*dispatcher.EventDispatcher) wsRunner
+	accessMu   sync.RWMutex
+	access     platform.AccessControl
+	accessSet  bool
 }
 
 // NewAdapter 创建飞书平台 adapter。
@@ -69,6 +73,14 @@ func (a *Adapter) Capabilities() platform.Capabilities {
 		Buttons:   true,
 		LongText:  false,
 	}
+}
+
+// SetAccessControl 接收 Registry 管理的访问控制器，供飞书卡片回调同步校验。
+func (a *Adapter) SetAccessControl(access platform.AccessControl) {
+	a.accessMu.Lock()
+	a.access = access
+	a.accessSet = true
+	a.accessMu.Unlock()
 }
 
 // NewReplier 为主动发送 API 创建飞书回复器。
@@ -126,6 +138,12 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 			Toast: &callback.Toast{Type: "warning", Content: "无法识别该操作"},
 		}, nil
 	}
+	if !a.allowCardActionUser(action.UserID) {
+		log.Printf("[feishu] denied card action user %q on account %q", action.UserID, a.creds.AppID)
+		return &callback.CardActionTriggerResponse{
+			Toast: &callback.Toast{Type: "warning", Content: "当前账号未授权使用 WeClaw"},
+		}, nil
+	}
 	msg := platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: a.creds.AppID,
@@ -147,4 +165,15 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
 	}, nil
+}
+
+func (a *Adapter) allowCardActionUser(userID string) bool {
+	a.accessMu.RLock()
+	access := a.access
+	accessSet := a.accessSet
+	a.accessMu.RUnlock()
+	if !accessSet {
+		return true
+	}
+	return access.Allowed(userID)
 }

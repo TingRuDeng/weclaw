@@ -67,10 +67,32 @@ func TestRegistryRateLimitsDenyNotice(t *testing.T) {
 	}
 }
 
+func TestRegistryInjectsAccessControlIntoPlatform(t *testing.T) {
+	platform := &accessAwareRecordingPlatform{}
+	registry := NewRegistry([]RegistryEntry{{Platform: platform, Access: NewAccessControl([]string{"user-1"})}})
+
+	if !platform.access.Allowed("user-1") {
+		t.Fatalf("platform access should allow initial user")
+	}
+	registry.UpdateAccess(PlatformWeChat, []string{"user-2"})
+	if platform.access.Allowed("user-1") || !platform.access.Allowed("user-2") {
+		t.Fatalf("platform access not updated after hot reload")
+	}
+}
+
 type recordingPlatform struct {
 	messages []IncomingMessage
 	err      error
 	reply    Replier
+}
+
+type accessAwareRecordingPlatform struct {
+	recordingPlatform
+	access AccessControl
+}
+
+func (p *accessAwareRecordingPlatform) SetAccessControl(access AccessControl) {
+	p.access = access
 }
 
 func (p *recordingPlatform) Name() PlatformName {

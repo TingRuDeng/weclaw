@@ -2,13 +2,10 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -56,6 +53,11 @@ var defaultOrder = []string{
 	"pi", "copilot", "droid", "iflow", "kiro", "qwen",
 }
 
+var (
+	detectLookPath     = lookPath
+	detectCommandProbe = commandProbe
+)
+
 // DetectAndConfigure auto-detects local agents and populates the config.
 // For each agent name, it picks the highest-priority candidate (acp > cli).
 // Returns true if the config was modified.
@@ -68,13 +70,13 @@ func DetectAndConfigure(cfg *Config) bool {
 			continue
 		}
 
-		path, err := lookPath(candidate.Binary)
+		path, err := detectLookPath(candidate.Binary)
 		if err != nil {
 			continue
 		}
 
 		// Run capability probe if specified
-		if len(candidate.CheckArgs) > 0 && !commandProbe(path, candidate.CheckArgs) {
+		if len(candidate.CheckArgs) > 0 && !detectCommandProbe(path, candidate.CheckArgs) {
 			log.Printf("[config] skipping %s at %s (type=%s): probe failed (%v)", candidate.Name, path, candidate.Type, candidate.CheckArgs)
 			continue
 		}
@@ -225,73 +227,6 @@ func skipCodexListenArgs(args []string, start int) int {
 		break
 	}
 	return i - 1
-}
-
-// loadOpenclawGateway resolves openclaw gateway connection info.
-// Priority: env vars > ~/.openclaw/openclaw.json.
-// Returns (url, token, password). url="" means not configured.
-func loadOpenclawGateway() (gwURL, gwToken, gwPassword string) {
-	// 1. Environment variables take priority
-	gwURL = os.Getenv("OPENCLAW_GATEWAY_URL")
-	gwToken = os.Getenv("OPENCLAW_GATEWAY_TOKEN")
-	gwPassword = os.Getenv("OPENCLAW_GATEWAY_PASSWORD")
-	if gwURL != "" {
-		return
-	}
-
-	// 2. Read from ~/.openclaw/openclaw.json
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-
-	data, err := os.ReadFile(filepath.Join(home, ".openclaw", "openclaw.json"))
-	if err != nil {
-		return
-	}
-
-	var ocCfg struct {
-		Gateway struct {
-			Port int    `json:"port"`
-			Mode string `json:"mode"`
-			Auth struct {
-				Mode     string `json:"mode"`
-				Token    string `json:"token"`
-				Password string `json:"password"`
-			} `json:"auth"`
-			Remote struct {
-				URL   string `json:"url"`
-				Token string `json:"token"`
-			} `json:"remote"`
-		} `json:"gateway"`
-	}
-	if err := json.Unmarshal(data, &ocCfg); err != nil {
-		log.Printf("[config] failed to parse openclaw config: %v", err)
-		return
-	}
-
-	gw := ocCfg.Gateway
-
-	// Remote gateway (gateway.remote.url)
-	if gw.Remote.URL != "" {
-		gwURL = gw.Remote.URL
-		gwToken = gw.Remote.Token
-		return
-	}
-
-	// Local gateway (gateway.port + gateway.auth)
-	if gw.Port > 0 {
-		gwURL = fmt.Sprintf("ws://127.0.0.1:%d", gw.Port)
-		switch gw.Auth.Mode {
-		case "token":
-			gwToken = gw.Auth.Token
-		case "password":
-			gwPassword = gw.Auth.Password
-		}
-		return
-	}
-
-	return
 }
 
 // commandProbe runs a binary with args and returns true if it exits 0.
