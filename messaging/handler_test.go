@@ -2518,6 +2518,7 @@ func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "weclaw")
 	writeLocalCodexSession(t, codexDir, "thread-jsonl-a", workspace, "JSONL 旧会话 A", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-jsonl-b", workspace, "JSONL 旧会话 B", "2026-04-29T08:00:00Z")
+	writeLocalCodexIndex(t, codexDir, "thread-app-new", "App 重命名会话", "2026-04-29T10:00:00Z")
 	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
 	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
 		t.Fatalf("write fake sqlite db: %v", err)
@@ -2537,11 +2538,11 @@ func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(151, "/cx cd 0"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "0. App 新会话") || !strings.Contains(text, "1. App 旧会话") {
+	if !strings.Contains(text, "0. App 重命名会话") || !strings.Contains(text, "1. App 旧会话") {
 		t.Fatalf("session ls should use Codex App thread order, messages=%#v", calls.texts())
 	}
-	if strings.Contains(text, "JSONL 旧会话") || strings.Contains(text, "第二行不展示") {
-		t.Fatalf("session ls should hide JSONL fallback and multiline title tail, messages=%#v", calls.texts())
+	if strings.Contains(text, "JSONL 旧会话") || strings.Contains(text, "App 新会话") || strings.Contains(text, "第二行不展示") {
+		t.Fatalf("session ls should hide JSONL fallback, raw app title and multiline title tail, messages=%#v", calls.texts())
 	}
 }
 

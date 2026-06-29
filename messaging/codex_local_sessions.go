@@ -128,6 +128,7 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codex
 	if err := json.Unmarshal(output, &rows); err != nil {
 		return nil
 	}
+	index := readLocalCodexSessionIndex(filepath.Join(codexDir, "session_index.jsonl"))
 	views := make([]codexWorkspaceView, 0, len(rows))
 	for _, row := range rows {
 		id := strings.TrimSpace(row.ID)
@@ -140,7 +141,7 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codex
 		views = append(views, codexWorkspaceView{
 			WorkspaceRoot: workspaceRoot,
 			ThreadID:      id,
-			ThreadName:    firstCodexTitleLine(row.Title),
+			ThreadName:    firstLocalCodexValue(index[id].ThreadName, firstCodexTitleLine(row.Title)),
 			UpdatedAt:     strconvFormatInt(row.RecencyAtMS),
 			Source:        codexLocalSource,
 		})
