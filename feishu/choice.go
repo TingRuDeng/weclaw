@@ -40,7 +40,7 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 			"tag": "button",
 			"text": map[string]any{
 				"tag":     "plain_text",
-				"content": id + ". " + label,
+				"content": label,
 			},
 			"type": "primary",
 			"value": map[string]string{

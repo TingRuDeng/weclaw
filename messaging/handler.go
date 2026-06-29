@@ -109,6 +109,7 @@ type activeAgentTask struct {
 
 type pendingApproval struct {
 	choices chan string
+	allowed map[string]bool
 }
 
 // codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
@@ -689,6 +690,9 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 	case isClaudeSessionCommand(trimmed):
 		sendText(h.handleClaudeSessionCommand(ctx, msg.UserID, trimmed))
 	case isCodexSessionCommand(trimmed):
+		if h.handleFeishuCodexSessionCommand(ctx, msg, reply, trimmed) {
+			return true
+		}
 		sendText(h.handleCodexSessionCommand(ctx, msg.UserID, trimmed))
 	case trimmed == "/run":
 		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.UserID, reply, clientID)
@@ -897,7 +901,7 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
-		pending := h.registerPendingApproval(userID)
+		pending := h.registerPendingApproval(userID, req.Options)
 		defer h.clearPendingApproval(userID, pending)
 		if err := reply.AskChoices(ctx, approvalPrompt(req), choices); err != nil {
 			return "", err
@@ -915,8 +919,8 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 	}
 }
 
-func (h *Handler) registerPendingApproval(userID string) *pendingApproval {
-	pending := &pendingApproval{choices: make(chan string, 1)}
+func (h *Handler) registerPendingApproval(userID string, options []agent.ApprovalOption) *pendingApproval {
+	pending := &pendingApproval{choices: make(chan string, 1), allowed: approvalOptionSet(options)}
 	h.pendingApprovalsMu.Lock()
 	if h.pendingApprovals == nil {
 		h.pendingApprovals = make(map[string]*pendingApproval)
@@ -945,11 +949,25 @@ func (h *Handler) consumePendingApproval(userID string, choice string) bool {
 	if pending == nil {
 		return false
 	}
+	if len(pending.allowed) > 0 && !pending.allowed[choice] {
+		return false
+	}
 	select {
 	case pending.choices <- choice:
 	default:
 	}
 	return true
+}
+
+func approvalOptionSet(options []agent.ApprovalOption) map[string]bool {
+	allowed := make(map[string]bool, len(options))
+	for _, option := range options {
+		id := strings.TrimSpace(option.ID)
+		if id != "" {
+			allowed[id] = true
+		}
+	}
+	return allowed
 }
 
 func approvalPrompt(req agent.ApprovalRequest) string {

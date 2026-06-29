@@ -2555,6 +2555,173 @@ func TestCodexCxLsUsesCodexAppWorkspaceOrder(t *testing.T) {
 	}
 }
 
+func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	workspaceA := filepath.Join(root, "alpha")
+	workspaceB := filepath.Join(root, "beta")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T08:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-cx-ls",
+		Text:      "/cx ls",
+	}, reply)
+
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want workspace choice card", reply.Choices)
+	}
+	choices := reply.Choices[0].Choices
+	if len(choices) != 2 {
+		t.Fatalf("workspace choices=%#v, want two workspaces", choices)
+	}
+	if choices[0].ID != "/cx cd 0" || choices[0].Label != "alpha" {
+		t.Fatalf("first workspace choice=%#v, want /cx cd 0 alpha", choices[0])
+	}
+	if len(reply.Texts) != 0 {
+		t.Fatalf("texts=%#v, want no text reply when card choices are available", reply.Texts)
+	}
+}
+
+func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-b", workspace, "会话 B", "2026-04-29T08:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-cx-workspace",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value:  map[string]string{"choice": "/cx cd 0"},
+		},
+	}, reply)
+
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
+	}
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want session choice card", reply.Choices)
+	}
+	if !strings.Contains(reply.Choices[0].Prompt, "weclaw 会话") {
+		t.Fatalf("prompt=%q, want workspace session prompt", reply.Choices[0].Prompt)
+	}
+	choices := reply.Choices[0].Choices
+	if len(choices) != 2 || choices[0].ID != "/cx switch 0" || choices[0].Label != "会话 A" {
+		t.Fatalf("session choices=%#v, want switch choices", choices)
+	}
+}
+
+func TestFeishuCodexInvalidWorkspaceReturnsTextError(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-cx-invalid-workspace",
+		Text:      "/cx cd missing",
+	}, reply)
+
+	if len(reply.Choices) != 0 {
+		t.Fatalf("choices=%#v, want text error only", reply.Choices)
+	}
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "工作空间不存在") {
+		t.Fatalf("texts=%#v, want missing workspace error", reply.Texts)
+	}
+}
+
+func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resultCh := make(chan string, 1)
+	go func() {
+		optionID, err := h.approvalHandlerForUser("ou_user", reply)(ctx, agent.ApprovalRequest{
+			ToolCall: json.RawMessage(`{"cmd":"rm file"}`),
+			Options: []agent.ApprovalOption{
+				{ID: "allow_once", Name: "允许", Kind: "allow"},
+				{ID: "deny_once", Name: "拒绝", Kind: "deny"},
+			},
+		})
+		if err != nil {
+			resultCh <- "error:" + err.Error()
+			return
+		}
+		resultCh <- optionID
+	}()
+	waitUntil(t, func() bool { return len(reply.Choices) == 1 })
+
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-nav-during-approval",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value:  map[string]string{"choice": "/cx cd 0"},
+		},
+	}, reply)
+
+	select {
+	case got := <-resultCh:
+		t.Fatalf("navigation choice should not resolve approval, got %q", got)
+	case <-time.After(taskQueueProbeDelay):
+	}
+
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-approval-allow",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value:  map[string]string{"choice": "allow_once"},
+		},
+	}, reply)
+
+	select {
+	case got := <-resultCh:
+		if got != "allow_once" {
+			t.Fatalf("approval result=%q, want allow_once", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not return")
+	}
+}
+
 func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
