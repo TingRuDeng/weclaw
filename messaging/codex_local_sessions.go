@@ -36,9 +36,11 @@ type codexAppWorkspaceState struct {
 }
 
 type codexAppThreadRow struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	RecencyAtMS int64  `json:"recency_at_ms"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	RecencyAtMS  int64  `json:"recency_at_ms"`
+	Source       string `json:"source"`
+	ThreadSource string `json:"thread_source"`
 }
 
 // defaultCodexLocalSessionDir 返回本机 Codex 默认会话目录。
@@ -116,8 +118,8 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codex
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil
 	}
-	query := "select id, title, recency_at_ms from threads where archived=0 and preview<>'' and cwd=" +
-		sqliteString(workspaceRoot) + " order by recency_at_ms desc, id desc"
+	query := "select id, title, recency_at_ms, source, thread_source from threads where archived=0 and preview<>'' and cwd=" +
+		sqliteString(workspaceRoot) + " and (thread_source is null or thread_source='' or thread_source='user') order by recency_at_ms desc, id desc"
 	output, err := exec.Command("sqlite3", "-json", dbPath, query).Output()
 	if err != nil {
 		return nil
@@ -132,6 +134,9 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codex
 		if id == "" {
 			continue
 		}
+		if !isVisibleCodexAppThread(row) {
+			continue
+		}
 		views = append(views, codexWorkspaceView{
 			WorkspaceRoot: workspaceRoot,
 			ThreadID:      id,
@@ -141,6 +146,14 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codex
 		})
 	}
 	return views
+}
+
+func isVisibleCodexAppThread(row codexAppThreadRow) bool {
+	threadSource := strings.TrimSpace(row.ThreadSource)
+	if threadSource != "" && threadSource != "user" {
+		return false
+	}
+	return !localCodexSourceTextIsSubagent(row.Source)
 }
 
 func sqliteString(value string) string {
@@ -316,10 +329,21 @@ func localCodexSourceIsSubagent(raw json.RawMessage) bool {
 	if len(raw) == 0 {
 		return false
 	}
+	return localCodexSourceTextIsSubagent(string(raw))
+}
+
+func localCodexSourceTextIsSubagent(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	if unquoted, err := strconv.Unquote(raw); err == nil {
+		raw = strings.TrimSpace(unquoted)
+	}
 	var source struct {
 		Subagent json.RawMessage `json:"subagent"`
 	}
-	if err := json.Unmarshal(raw, &source); err != nil {
+	if err := json.Unmarshal([]byte(raw), &source); err != nil {
 		return false
 	}
 	return len(source.Subagent) > 0

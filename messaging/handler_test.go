@@ -2545,6 +2545,43 @@ func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
 	}
 }
 
+func TestCodexCxCdWorkspaceHidesCodexAppSubagentThreads(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-jsonl", workspace, "JSONL 旧会话", "2026-04-29T09:00:00Z")
+	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
+	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
+		t.Fatalf("write fake sqlite db: %v", err)
+	}
+	writeFakeSQLite3(t, `[
+{"id":"thread-app-user","title":"App 主会话","recency_at_ms":3000,"source":"vscode","thread_source":"user"},
+{"id":"thread-app-user-2","title":"App 第二会话","recency_at_ms":2500,"source":"vscode","thread_source":"user"},
+{"id":"thread-app-guardian","title":"The following is the Codex agent history whose request action you are assessing.","recency_at_ms":2000,"source":"{\"subagent\":{\"other\":\"guardian\"}}","thread_source":"subagent"},
+{"id":"thread-app-spawn","title":"内部子任务","recency_at_ms":1000,"source":"{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"thread-app-user\"}}}","thread_source":"user"}
+]`)
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(154, "/cx cd 0"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "0. App 主会话") || !strings.Contains(text, "1. App 第二会话") {
+		t.Fatalf("session ls should show app user thread, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, "Codex agent history") || strings.Contains(text, "内部子任务") || strings.Contains(text, "JSONL 旧会话") {
+		t.Fatalf("session ls should hide subagent and JSONL fallback threads, messages=%#v", calls.texts())
+	}
+}
+
 func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
