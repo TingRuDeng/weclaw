@@ -198,3 +198,24 @@ func TestNativeStreamProgressSkipsTypingAndCompletes(t *testing.T) {
 		t.Fatalf("stream failed=%q, want no failure", reply.Stream.Failed)
 	}
 }
+
+func TestNativeStreamProgressCompletesWithFinalResult(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Typing: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+
+	onProgress, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "飞书流式任务", cfg)
+	onProgress("临时过程")
+	consumed := finish("最终结果", false)
+
+	if !consumed {
+		t.Fatal("native stream should consume final result")
+	}
+	if reply.Stream.Completed != "最终结果" {
+		t.Fatalf("completed=%q, want final result", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 0 {
+		t.Fatalf("texts=%#v, want no extra text", reply.Texts)
+	}
+}

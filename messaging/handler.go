@@ -1030,14 +1030,14 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 		unlock := h.lockAgentExecution(executionKey)
 		defer unlock()
 
-		onProgress, stopProgress := h.startProgressSession(agentCtx, replyWriter, "", text, progressCfg)
-		defer stopProgress()
+		onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "", text, progressCfg)
 
 		var err error
 		conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, defaultName, ag)
 		if resolveErr != nil {
 			reply = renderFinalFailure("", resolveErr)
-			h.sendReplyWithMedia(replyCtx, replyWriter, userID, defaultName, reply)
+			consumed := finishProgressWithReply(finishProgress, reply, true)
+			h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, defaultName, reply, consumed)
 			return
 		}
 		reply, err = h.chatWithAgentWithProgress(agentCtx, ag, conversationID, text, onProgress)
@@ -1048,6 +1048,9 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 			h.recordClaudeSession(userID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
 		}
+		consumed := finishProgressWithReply(finishProgress, reply, err != nil)
+		h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, defaultName, reply, consumed)
+		return
 	} else {
 		if agErr != nil && defaultName != "" {
 			log.Printf("[handler] default agent %q not available, using echo mode for %s: %v", defaultName, userID, agErr)
@@ -1093,13 +1096,13 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 	unlock := h.lockAgentExecution(executionKey)
 	defer unlock()
 
-	onProgress, stopProgress := h.startProgressSession(agentCtx, replyWriter, "", message, progressCfg)
-	defer stopProgress()
+	onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "", message, progressCfg)
 
 	conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, name, ag)
 	if resolveErr != nil {
 		reply := renderFinalFailure("["+name+"] ", resolveErr)
-		h.sendReplyWithMedia(replyCtx, replyWriter, userID, name, reply)
+		consumed := finishProgressWithReply(finishProgress, reply, true)
+		h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, name, reply, consumed)
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
@@ -1110,7 +1113,8 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 		h.recordClaudeSession(userID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
-	h.sendReplyWithMedia(replyCtx, replyWriter, userID, name, reply)
+	consumed := finishProgressWithReply(finishProgress, reply, err != nil)
+	h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, name, reply, consumed)
 }
 
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
@@ -1144,12 +1148,12 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	unlock := h.lockAgentExecution(runtime.executionKey)
 	defer unlock()
 
-	onProgress, stopProgress := h.startProgressSession(runtime.agentCtx, opts.reply, opts.replyPrefix, opts.message, opts.progressCfg)
-	defer stopProgress()
+	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.agentCtx, opts.reply, opts.replyPrefix, opts.message, opts.progressCfg)
 
 	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
 		reply := renderFinalFailure(opts.replyPrefix, err)
-		h.sendReplyWithMedia(opts.ctx, opts.reply, opts.userID, opts.agentName, reply)
+		consumed := finishProgressWithReply(finishProgress, reply, true)
+		h.sendReplyWithMediaAfterStream(opts.ctx, opts.reply, opts.userID, opts.agentName, reply, consumed)
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, onProgress)
@@ -1160,7 +1164,10 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
 	if runtime.task.shouldSendFinal() {
-		h.sendReplyWithMedia(opts.ctx, opts.reply, opts.userID, opts.agentName, reply)
+		consumed := finishProgressWithReply(finishProgress, reply, err != nil)
+		h.sendReplyWithMediaAfterStream(opts.ctx, opts.reply, opts.userID, opts.agentName, reply, consumed)
+	} else {
+		_ = finishProgress("", false)
 	}
 }
 
@@ -1180,9 +1187,10 @@ func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
 // Each reply is sent as a separate message with the agent name prefix.
 func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.PlatformName, userID string, replyWriter platform.Replier, names []string, message string) {
 	type result struct {
-		name  string
-		reply string
-		skip  bool
+		name          string
+		reply         string
+		skip          bool
+		finalInStream bool
 	}
 
 	ch := make(chan result, len(names))
@@ -1225,27 +1233,30 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
 
-			onProgress, stopProgress := h.startProgressSession(agentCtx, replyWriter, "["+n+"] ", message, progressCfg)
-			defer stopProgress()
+			onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "["+n+"] ", message, progressCfg)
+			sendResult := func(reply string, failed bool) {
+				consumed := finishProgressWithReply(finishProgress, reply, failed)
+				ch <- result{name: n, reply: reply, finalInStream: consumed}
+			}
 
 			var conversationID string
 			if isCodexAgent(n, ag.Info()) {
 				if err := h.prepareCodexConversation(agentCtx, codexRoute, ag); err != nil {
-					ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", err)}
+					sendResult(renderFinalFailure("["+n+"] ", err), true)
 					return
 				}
 				conversationID = codexRoute.conversationID
 			} else {
 				resolvedID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, n, ag)
 				if resolveErr != nil {
-					ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", resolveErr)}
+					sendResult(renderFinalFailure("["+n+"] ", resolveErr), true)
 					return
 				}
 				conversationID = resolvedID
 			}
 			reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
 			if err != nil {
-				ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", err)}
+				sendResult(renderFinalFailure("["+n+"] ", err), true)
 				return
 			}
 			if isCodexAgent(n, ag.Info()) {
@@ -1255,10 +1266,11 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 				h.recordClaudeSession(userID, n, ag, conversationID)
 			}
 			if activeTask != nil && !activeTask.shouldSendFinal() {
+				_ = finishProgress("", false)
 				ch <- result{name: n, skip: true}
 				return
 			}
-			ch <- result{name: n, reply: renderFinalSuccess("["+n+"] ", reply)}
+			sendResult(renderFinalSuccess("["+n+"] ", reply), false)
 		}(name)
 	}
 
@@ -1271,12 +1283,16 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 		if wxReply, ok := replyWriter.(*wechat.Replier); ok {
 			wxReply.ClientID = NewClientID()
 		}
-		h.sendReplyWithMedia(ctx, replyWriter, userID, r.name, r.reply)
+		h.sendReplyWithMediaAfterStream(ctx, replyWriter, userID, r.name, r.reply, r.finalInStream)
 	}
 }
 
 // sendReplyWithMedia sends a text reply and any extracted image URLs.
 func (h *Handler) sendReplyWithMedia(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string) {
+	h.sendReplyWithMediaAfterStream(ctx, replyWriter, userID, agentName, reply, false)
+}
+
+func (h *Handler) sendReplyWithMediaAfterStream(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
 	imageURLs := ExtractImageURLs(reply)
 	attachmentPaths := extractLocalAttachmentPaths(reply)
 	allowedRoots := h.allowedAttachmentRoots(agentName)
@@ -1306,7 +1322,7 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, replyWriter platform.R
 	if wxReply, ok := replyWriter.(*wechat.Replier); ok {
 		wxReply.ChunkRunes = textReplyChunkLimit(ctx)
 	}
-	if strings.TrimSpace(reply) != "" {
+	if !finalInStream && strings.TrimSpace(reply) != "" {
 		if err := replyWriter.SendText(ctx, reply); err != nil {
 			log.Printf("[handler] failed to send reply to %s: %v", userID, err)
 		}
@@ -1326,6 +1342,26 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, replyWriter platform.R
 		}
 		log.Printf("[handler] skip remote image for %s: platform replier has no URL media sender", userID)
 	}
+}
+
+func finalCardReplyText(reply string) string {
+	choiceResult, hasChoices := detectChoices(reply)
+	if hasChoices {
+		return choiceResult.CleanText
+	}
+	return reply
+}
+
+func finishProgressWithReply(finish func(string, bool) bool, reply string, failed bool) bool {
+	if !canConsumeFinalReplyInStream(reply) {
+		_ = finish("", failed)
+		return false
+	}
+	return finish(finalCardReplyText(reply), failed)
+}
+
+func canConsumeFinalReplyInStream(reply string) bool {
+	return len(ExtractImageURLs(reply)) == 0 && len(extractLocalAttachmentPaths(reply)) == 0
 }
 
 func sendPlatformText(ctx context.Context, reply platform.Replier, userID string, text string) {

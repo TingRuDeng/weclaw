@@ -34,7 +34,9 @@ func buildCardV2(opts cardOptions) (string, error) {
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
-			"streaming_mode": status == cardStatusStreaming || status == cardStatusThinking,
+			"streaming_mode":   status == cardStatusStreaming || status == cardStatusThinking,
+			"update_multi":     true,
+			"wide_screen_mode": true,
 		},
 		"header": map[string]any{
 			"title": map[string]any{
@@ -80,13 +82,13 @@ func normalizeCardStatus(status string) string {
 func statusLabel(status string) string {
 	switch status {
 	case cardStatusStreaming:
-		return "**正在回复**"
+		return "**生成中**"
 	case cardStatusDone:
 		return "**已完成**"
 	case cardStatusError:
 		return "**执行失败**"
 	default:
-		return "**正在思考**"
+		return "**思考中**"
 	}
 }
 
@@ -109,7 +111,9 @@ func statusDefaultContent(status string) string {
 		return "任务已完成。"
 	case cardStatusError:
 		return "任务执行失败。"
+	case cardStatusStreaming:
+		return "正在生成结果，请稍候。"
 	default:
-		return "正在处理，请稍候。"
+		return "正在分析任务，请稍候。"
 	}
 }

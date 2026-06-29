@@ -13,7 +13,9 @@ type fakeCardKitClient struct {
 	createdCards  []string
 	streamingSeqs []int
 	streamSeqs    []int
+	streamTexts   []string
 	updateSeqs    []int
+	updateCards   []string
 	destroyed     []string
 	streamErrors  []error
 }
@@ -36,6 +38,7 @@ func (f *fakeCardKitClient) SetStreaming(ctx context.Context, cardID string, ena
 // StreamContent 记录增量更新顺序号并按需返回错误。
 func (f *fakeCardKitClient) StreamContent(ctx context.Context, cardID string, elementID string, content string, sequence int) error {
 	f.streamSeqs = append(f.streamSeqs, sequence)
+	f.streamTexts = append(f.streamTexts, content)
 	if len(f.streamErrors) == 0 {
 		return nil
 	}
@@ -47,6 +50,7 @@ func (f *fakeCardKitClient) StreamContent(ctx context.Context, cardID string, el
 // UpdateCard 记录全量更新顺序号。
 func (f *fakeCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJSON string, sequence int) error {
 	f.updateSeqs = append(f.updateSeqs, sequence)
+	f.updateCards = append(f.updateCards, cardJSON)
 	return nil
 }
 
@@ -131,5 +135,37 @@ func TestFeishuStreamCompleteUpdatesDoneAndDestroys(t *testing.T) {
 	}
 	if len(cardKit.destroyed) != 1 || cardKit.destroyed[0] != "card-1" {
 		t.Fatalf("destroyed=%#v, want card-1", cardKit.destroyed)
+	}
+	card := decodeCardJSON(t, cardKit.updateCards[0])
+	body := card["body"].(map[string]any)
+	main := body["elements"].([]any)[1].(map[string]any)
+	if main["content"] != "done" {
+		t.Fatalf("final content=%#v, want done", main["content"])
+	}
+}
+
+func TestFeishuStreamCompleteIsIdempotentAndIgnoresLateUpdate(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	stream := &feishuStream{cardKit: cardKit, cardID: "card-1", sequence: 1, throttle: cardkitThrottle, now: func() time.Time { return now }}
+
+	if err := stream.Update(context.Background(), "过程"); err != nil {
+		t.Fatalf("Update error: %v", err)
+	}
+	if err := stream.Complete(context.Background(), "最终结果"); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+	if err := stream.Update(context.Background(), "迟到片段"); err != nil {
+		t.Fatalf("late Update error: %v", err)
+	}
+	if err := stream.Complete(context.Background(), "重复完成"); err != nil {
+		t.Fatalf("second Complete error: %v", err)
+	}
+
+	if len(cardKit.streamTexts) != 1 || cardKit.streamTexts[0] != "过程" {
+		t.Fatalf("stream texts=%#v, want only first update", cardKit.streamTexts)
+	}
+	if len(cardKit.updateCards) != 1 {
+		t.Fatalf("update cards=%d, want one terminal update", len(cardKit.updateCards))
 	}
 }

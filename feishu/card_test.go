@@ -28,8 +28,8 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 		template string
 		label    string
 	}{
-		{cardStatusThinking, "blue", "**正在思考**"},
-		{cardStatusStreaming, "blue", "**正在回复**"},
+		{cardStatusThinking, "blue", "**思考中**"},
+		{cardStatusStreaming, "blue", "**生成中**"},
 		{cardStatusDone, "green", "**已完成**"},
 		{cardStatusError, "red", "**执行失败**"},
 	}

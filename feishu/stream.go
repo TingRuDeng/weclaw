@@ -2,6 +2,8 @@ package feishu
 
 import (
 	"context"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -10,13 +12,15 @@ import (
 const cardkitThrottle = 500 * time.Millisecond
 
 type feishuStream struct {
-	cardKit    cardKitClient
-	cardID     string
-	title      string
-	sequence   int
-	lastUpdate time.Time
-	throttle   time.Duration
-	now        func() time.Time
+	cardKit     cardKitClient
+	cardID      string
+	title       string
+	sequence    int
+	lastUpdate  time.Time
+	lastContent string
+	closed      bool
+	throttle    time.Duration
+	now         func() time.Time
 }
 
 // openCardKitStream 创建并发送 CardKit 卡片，然后开启流式模式。
@@ -52,6 +56,9 @@ func (r *Replier) openCardKitStream(ctx context.Context, opts platform.StreamOpt
 
 // Update 节流更新主内容组件，触发飞书打字机效果。
 func (s *feishuStream) Update(ctx context.Context, content string) error {
+	if s.closed || content == s.lastContent {
+		return nil
+	}
 	now := s.now()
 	if !s.lastUpdate.IsZero() && now.Sub(s.lastUpdate) < s.throttle {
 		return nil
@@ -66,12 +73,26 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 		s.sequence++
 		err = s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.sequence)
 	}
+	if ignored := ignoreCardKitUpdateError(err); ignored != nil {
+		return ignored
+	}
+	if err != nil {
+		log.Printf("[feishu] ignored non-fatal card stream update error: %v", err)
+	}
 	s.lastUpdate = now
-	return ignoreCardKitUpdateError(err)
+	s.lastContent = content
+	return nil
 }
 
 // Complete 关闭流式并全量更新为完成卡片。
 func (s *feishuStream) Complete(ctx context.Context, finalContent string) error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if strings.TrimSpace(finalContent) == "" {
+		finalContent = s.lastContent
+	}
 	disableErr := s.disableStreaming(ctx)
 	cardJSON, buildErr := buildCardV2(cardOptions{Status: cardStatusDone, Title: s.title, Content: finalContent})
 	if buildErr != nil {
@@ -85,6 +106,10 @@ func (s *feishuStream) Complete(ctx context.Context, finalContent string) error 
 
 // Fail 关闭流式并全量更新为失败卡片。
 func (s *feishuStream) Fail(ctx context.Context, errText string) error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	disableErr := s.disableStreaming(ctx)
 	cardJSON, buildErr := buildCardV2(cardOptions{Status: cardStatusError, Title: s.title, Content: errText})
 	if buildErr != nil {

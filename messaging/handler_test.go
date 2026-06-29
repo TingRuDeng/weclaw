@@ -1250,6 +1250,50 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	waitForText(t, calls, "实时片段，仅供预览")
 }
 
+func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeProgressAgent{
+		fakeAgent:      fakeAgent{reply: "最终结果"},
+		progressDeltas: []string{"过程片段"},
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	h.SetProgressConfig(cfg)
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", reply, "mock", "hello", "client-1")
+
+	if reply.Stream.Completed != "[mock] 最终结果" {
+		t.Fatalf("completed=%q, want final reply in stream", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 0 {
+		t.Fatalf("texts=%#v, want final reply consumed by stream", reply.Texts)
+	}
+}
+
+func TestFinishProgressWithReplyKeepsAttachmentReplyOutsideStream(t *testing.T) {
+	dir := t.TempDir()
+	reportPath := filepath.Join(dir, "report.pdf")
+	if err := os.WriteFile(reportPath, []byte("pdf"), 0o644); err != nil {
+		t.Fatalf("write report: %v", err)
+	}
+	var finalText string
+	consumed := finishProgressWithReply(func(text string, failed bool) bool {
+		finalText = text
+		return true
+	}, "已生成：\n"+reportPath, false)
+
+	if consumed {
+		t.Fatal("attachment reply should not be consumed by stream")
+	}
+	if finalText != "" {
+		t.Fatalf("finalText=%q, want generic stream finish", finalText)
+	}
+}
+
 func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := newBlockingProgressAgent()

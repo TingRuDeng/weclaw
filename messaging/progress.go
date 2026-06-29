@@ -52,13 +52,21 @@ type progressSession struct {
 	typingStarted bool
 }
 
-// startProgressSession 启动平台进度会话，最终回复仍由调用方单独发送。
+// startProgressSession 启动平台进度会话，保持旧语义：最终回复由调用方单独发送。
 func (h *Handler) startProgressSession(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func()) {
+	onProgress, finish := h.startProgressSessionWithFinal(ctx, reply, prefix, taskText, cfg)
+	return onProgress, func() {
+		_ = finish("", false)
+	}
+}
+
+// startProgressSessionWithFinal 启动进度会话，并允许原生流式平台把最终结果收敛进同一张卡片。
+func (h *Handler) startProgressSessionWithFinal(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
 	if cfg.Mode == "" {
 		cfg = config.DefaultProgressConfig()
 	}
 	if cfg.Mode == progressModeOff {
-		return func(string) {}, func() {}
+		return func(string) {}, func(string, bool) bool { return false }
 	}
 
 	progressCtx, cancel := context.WithCancel(ctx)
@@ -67,7 +75,7 @@ func (h *Handler) startProgressSession(ctx context.Context, reply platform.Repli
 		prefix: prefix, taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
 	}
 	session.start()
-	return session.onProgress, session.stop
+	return session.onProgress, session.stopWithFinal
 }
 
 func (s *progressSession) start() {
@@ -96,14 +104,14 @@ func (s *progressSession) onProgress(delta string) {
 	}
 }
 
-func (s *progressSession) stop() {
+func (s *progressSession) stopWithFinal(finalText string, failed bool) bool {
 	parentCanceled := s.ctx.Err() != nil
 	s.cancel()
 	s.wg.Wait()
 	if s.typingStarted {
 		s.cancelTyping()
 	}
-	s.finishStream(parentCanceled)
+	return s.finishStream(parentCanceled, finalText, failed)
 }
 
 func (s *progressSession) runTyping() {
@@ -225,21 +233,28 @@ func (s *progressSession) cancelTyping() {
 	}
 }
 
-func (s *progressSession) finishStream(parentCanceled bool) {
+func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool) bool {
 	if s.stream == nil || !s.reply.Capabilities().Streaming {
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var err error
-	if parentCanceled {
-		err = s.stream.Fail(ctx, "任务已停止。")
-	} else {
+	switch {
+	case parentCanceled:
+		err = s.stream.Fail(ctx, firstNonBlank(finalText, "任务已停止。"))
+	case failed:
+		err = s.stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
+	case strings.TrimSpace(finalText) != "":
+		err = s.stream.Complete(ctx, finalText)
+	default:
 		err = s.stream.Complete(ctx, "任务已完成，正在发送最终结果。")
 	}
 	if err != nil {
 		log.Printf("[handler] failed to finish progress stream: %v", err)
+		return false
 	}
+	return strings.TrimSpace(finalText) != ""
 }
 
 func progressModeAllowsProgress(mode string) bool {
@@ -376,6 +391,15 @@ func durationSeconds(seconds int, fallback time.Duration) time.Duration {
 
 func boolValue(v *bool) bool {
 	return v != nil && *v
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func truncateTailRunes(text string, limit int) string {
