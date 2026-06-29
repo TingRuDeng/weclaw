@@ -79,6 +79,8 @@ type Handler struct {
 	activeTasks             map[string]*activeAgentTask
 	pendingCodexRunsMu      sync.Mutex
 	pendingCodexRuns        map[string]string
+	pendingApprovalsMu      sync.Mutex
+	pendingApprovals        map[string]*pendingApproval
 	codexLocalSessionDir    string
 	claudeSessions          *claudeSessionStore
 	claudeLocalSessionDir   string
@@ -92,6 +94,7 @@ type Handler struct {
 
 const (
 	pendingCodexPreviewRunes = 120
+	pendingApprovalTimeout   = 5 * time.Minute
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
@@ -102,6 +105,10 @@ type activeAgentTask struct {
 	done           chan struct{}
 	detached       bool
 	pendingMessage string
+}
+
+type pendingApproval struct {
+	choices chan string
 }
 
 // codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
@@ -149,6 +156,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		taskLocks:               make(map[string]*sync.Mutex),
 		activeTasks:             make(map[string]*activeAgentTask),
 		pendingCodexRuns:        make(map[string]string),
+		pendingApprovals:        make(map[string]*pendingApproval),
 		codexLocalSessionDir:    defaultCodexLocalSessionDir(),
 		claudeSessions:          newClaudeSessionStore(),
 		claudeLocalSessionDir:   defaultClaudeLocalSessionDir(),
@@ -571,6 +579,12 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		sendPlatformText(ctx, replyWriter, msg.UserID, h.handleStopActiveTask(ctx, msg.UserID))
 		return
 	}
+	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" && h.consumePendingApproval(msg.UserID, msg.RawCommand.Value["choice"]) {
+		return
+	}
+	if h.consumePendingApproval(msg.UserID, text) {
+		return
+	}
 	if file, ok := firstAttachment(msg.Attachments, platform.AttachmentFile); ok {
 		fileText, handled := h.handleFileAttachment(ctx, msg.UserID, replyWriter, file, text)
 		if !handled {
@@ -877,6 +891,113 @@ func (h *Handler) clearPendingCodexRun(key string) bool {
 	return true
 }
 
+func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) agent.ApprovalHandler {
+	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
+		choices := approvalChoices(req.Options)
+		if len(choices) == 0 {
+			return "", fmt.Errorf("approval request has no options")
+		}
+		pending := h.registerPendingApproval(userID)
+		defer h.clearPendingApproval(userID, pending)
+		if err := reply.AskChoices(ctx, approvalPrompt(req), choices); err != nil {
+			return "", err
+		}
+		timer := time.NewTimer(pendingApprovalTimeout)
+		defer timer.Stop()
+		select {
+		case choice := <-pending.choices:
+			return strings.TrimSpace(choice), nil
+		case <-timer.C:
+			return defaultDenyApprovalOption(req.Options), nil
+		case <-ctx.Done():
+			return defaultDenyApprovalOption(req.Options), ctx.Err()
+		}
+	}
+}
+
+func (h *Handler) registerPendingApproval(userID string) *pendingApproval {
+	pending := &pendingApproval{choices: make(chan string, 1)}
+	h.pendingApprovalsMu.Lock()
+	if h.pendingApprovals == nil {
+		h.pendingApprovals = make(map[string]*pendingApproval)
+	}
+	h.pendingApprovals[userID] = pending
+	h.pendingApprovalsMu.Unlock()
+	return pending
+}
+
+func (h *Handler) clearPendingApproval(userID string, pending *pendingApproval) {
+	h.pendingApprovalsMu.Lock()
+	if h.pendingApprovals[userID] == pending {
+		delete(h.pendingApprovals, userID)
+	}
+	h.pendingApprovalsMu.Unlock()
+}
+
+func (h *Handler) consumePendingApproval(userID string, choice string) bool {
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		return false
+	}
+	h.pendingApprovalsMu.Lock()
+	pending := h.pendingApprovals[userID]
+	h.pendingApprovalsMu.Unlock()
+	if pending == nil {
+		return false
+	}
+	select {
+	case pending.choices <- choice:
+	default:
+	}
+	return true
+}
+
+func approvalPrompt(req agent.ApprovalRequest) string {
+	toolCall := strings.TrimSpace(string(req.ToolCall))
+	if toolCall == "" {
+		toolCall = "Codex 请求执行一项需要确认的操作。"
+	} else if len([]rune(toolCall)) > 1200 {
+		runes := []rune(toolCall)
+		toolCall = string(runes[:1200]) + "..."
+	}
+	return "Codex 请求执行敏感操作，请确认：\n\n" + toolCall
+}
+
+func approvalChoices(options []agent.ApprovalOption) []platform.Choice {
+	choices := make([]platform.Choice, 0, len(options))
+	for _, option := range options {
+		id := strings.TrimSpace(option.ID)
+		if id == "" {
+			continue
+		}
+		choices = append(choices, platform.Choice{ID: id, Label: approvalChoiceLabel(option)})
+	}
+	return choices
+}
+
+func approvalChoiceLabel(option agent.ApprovalOption) string {
+	switch option.Kind {
+	case "allow":
+		return "允许本次"
+	case "deny", "reject":
+		return "拒绝"
+	default:
+		return firstNonBlank(option.Name, option.Kind, option.ID)
+	}
+}
+
+func defaultDenyApprovalOption(options []agent.ApprovalOption) string {
+	for _, option := range options {
+		if option.Kind != "allow" && strings.TrimSpace(option.ID) != "" {
+			return option.ID
+		}
+	}
+	if len(options) > 0 {
+		return options[0].ID
+	}
+	return ""
+}
+
 func (t *activeAgentTask) shouldSendFinal() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -1025,6 +1146,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 		replyCtx := ctx
 		agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 		defer cancelTaskTimeout()
+		agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
 
 		executionKey := h.agentExecutionKey(userID, defaultName, ag)
 		unlock := h.lockAgentExecution(executionKey)
@@ -1091,6 +1213,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 	defer cancelTaskTimeout()
+	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
 
 	executionKey := h.agentExecutionKey(userID, name, ag)
 	unlock := h.lockAgentExecution(executionKey)
@@ -1120,6 +1243,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
 func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
+	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.reply))
 	route := h.codexConversationRouteForUser(opts.userID, opts.agentName, opts.agent)
 	executionKey := route.conversationID
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
@@ -1205,6 +1329,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 			progressCfg := h.resolveProgressConfigForPlatform(platformName, n)
 			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 			defer cancelTaskTimeout()
+			agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
 
 			var codexRoute codexConversationRoute
 			var executionKey string

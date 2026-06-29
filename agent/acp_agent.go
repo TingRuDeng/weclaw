@@ -155,6 +155,8 @@ type sessionUpdate struct {
 }
 
 type permissionRequestParams struct {
+	ThreadID string             `json:"threadId,omitempty"`
+	TurnID   string             `json:"turnId,omitempty"`
 	ToolCall json.RawMessage    `json:"toolCall"`
 	Options  []permissionOption `json:"options"`
 }
@@ -208,10 +210,16 @@ type codexUserInput struct {
 }
 
 type codexTurnEvent struct {
-	Kind   string
-	ItemID string
-	Delta  string
-	Text   string
+	Kind     string
+	ItemID   string
+	Delta    string
+	Text     string
+	Approval *codexApprovalRequest
+}
+
+type codexApprovalRequest struct {
+	ID      json.RawMessage
+	Request ApprovalRequest
 }
 
 type codexFinalAssembler struct {
@@ -834,7 +842,7 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	}
 
 	params := map[string]interface{}{
-		"approvalPolicy":         "never",
+		"approvalPolicy":         approvalPolicyForContext(ctx),
 		"cwd":                    a.cwdForConversation(conversationID),
 		"sandbox":                "danger-full-access",
 		"persistExtendedHistory": true,
@@ -878,7 +886,7 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 
 	params := map[string]interface{}{
 		"threadId":       threadID,
-		"approvalPolicy": "never",
+		"approvalPolicy": approvalPolicyForContext(ctx),
 		"cwd":            a.cwdForConversation(conversationID),
 		"sandbox":        "danger-full-access",
 	}
@@ -953,7 +961,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		startTurn := func() error {
 			_, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
 				ThreadID:       threadID,
-				ApprovalPolicy: "never",
+				ApprovalPolicy: approvalPolicyForContext(ctx),
 				Input:          []codexUserInput{{Type: "text", Text: message}},
 				SandboxPolicy:  map[string]interface{}{"type": "dangerFullAccess"},
 				Model:          a.model,
@@ -985,6 +993,13 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case evt := <-turnCh:
+			if evt.Approval != nil {
+				optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
+				if err := a.respondPermissionRequest(evt.Approval.ID, optionID); err != nil {
+					return "", fmt.Errorf("approval response error: %w", err)
+				}
+				continue
+			}
 			if evt.Kind == "error" {
 				if allowFreshRetry && !isNew && isMissingThreadError(fmt.Errorf("%s", evt.Text)) {
 					log.Printf("[acp] stale thread error detected, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
@@ -1882,7 +1897,7 @@ func joinCodexErrorParts(title string, message string, code string) string {
 }
 
 // dispatchToTurnCh sends an event to the turn channel for a thread.
-func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) {
+func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
 	a.notifyMu.Lock()
 	ch, ok := a.turnCh[threadID]
 	if !ok {
@@ -1902,13 +1917,14 @@ func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) {
 	if ok {
 		select {
 		case ch <- evt:
+			return true
 		default:
 		}
 	}
+	return false
 }
 
 func (a *ACPAgent) handlePermissionRequest(raw string) {
-	// Parse the request to get the ID and auto-allow
 	var req struct {
 		ID     json.RawMessage         `json:"id"`
 		Params permissionRequestParams `json:"params"`
@@ -1918,19 +1934,44 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		return
 	}
 
-	// Find the "allow" option
-	optionID := "allow"
-	for _, opt := range req.Params.Options {
-		if opt.Kind == "allow" {
-			optionID = opt.OptionID
-			break
-		}
+	approval := &codexApprovalRequest{
+		ID: req.ID,
+		Request: ApprovalRequest{
+			ToolCall: req.Params.ToolCall,
+			Options:  approvalOptionsFromPermission(req.Params.Options),
+		},
 	}
+	if a.dispatchToTurnCh(req.Params.ThreadID, &codexTurnEvent{Kind: "approval_request", Approval: approval}) {
+		return
+	}
+	optionID := selectPermissionOption(req.Params.Options, "deny")
+	if err := a.respondPermissionRequest(req.ID, optionID); err != nil {
+		log.Printf("[acp] failed to deny unroutable permission request: %v", err)
+	}
+}
 
-	// Send response
+func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequest) string {
+	fallback := selectApprovalOption(req.Options, "deny")
+	handler := approvalHandlerFromContext(ctx)
+	if handler == nil {
+		return fallback
+	}
+	optionID, err := handler(ctx, req)
+	if err != nil {
+		log.Printf("[acp] approval handler failed, denying request: %v", err)
+		return fallback
+	}
+	if isApprovalOption(req.Options, optionID) {
+		return optionID
+	}
+	log.Printf("[acp] approval handler returned unknown option %q, denying request", optionID)
+	return fallback
+}
+
+func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string) error {
 	resp := map[string]interface{}{
 		"jsonrpc": "2.0",
-		"id":      req.ID,
+		"id":      id,
 		"result": map[string]interface{}{
 			"outcome": map[string]interface{}{
 				"outcome":  "selected",
@@ -1941,16 +1982,64 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 
 	data, err := json.Marshal(resp)
 	if err != nil {
-		log.Printf("[acp] failed to marshal permission response: %v", err)
-		return
+		return fmt.Errorf("marshal permission response: %w", err)
 	}
+	return a.writeJSONLine(data)
+}
 
-	if err := a.writeJSONLine(data); err != nil {
-		log.Printf("[acp] failed to write permission response: %v", err)
-		return
+func approvalOptionsFromPermission(options []permissionOption) []ApprovalOption {
+	result := make([]ApprovalOption, 0, len(options))
+	for _, opt := range options {
+		result = append(result, ApprovalOption{ID: opt.OptionID, Name: opt.Name, Kind: opt.Kind})
 	}
+	return result
+}
 
-	log.Printf("[acp] auto-allowed permission request")
+func selectPermissionOption(options []permissionOption, preferredKind string) string {
+	for _, opt := range options {
+		if opt.Kind == preferredKind && strings.TrimSpace(opt.OptionID) != "" {
+			return opt.OptionID
+		}
+	}
+	for _, opt := range options {
+		if opt.Kind != "allow" && strings.TrimSpace(opt.OptionID) != "" {
+			return opt.OptionID
+		}
+	}
+	if len(options) > 0 {
+		return options[0].OptionID
+	}
+	return preferredKind
+}
+
+func selectApprovalOption(options []ApprovalOption, preferredKind string) string {
+	for _, opt := range options {
+		if opt.Kind == preferredKind && strings.TrimSpace(opt.ID) != "" {
+			return opt.ID
+		}
+	}
+	for _, opt := range options {
+		if opt.Kind != "allow" && strings.TrimSpace(opt.ID) != "" {
+			return opt.ID
+		}
+	}
+	if len(options) > 0 {
+		return options[0].ID
+	}
+	return preferredKind
+}
+
+func isApprovalOption(options []ApprovalOption, optionID string) bool {
+	optionID = strings.TrimSpace(optionID)
+	if optionID == "" {
+		return false
+	}
+	for _, opt := range options {
+		if opt.ID == optionID {
+			return true
+		}
+	}
+	return false
 }
 
 // Info returns metadata about this agent.

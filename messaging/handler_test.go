@@ -1294,6 +1294,43 @@ func TestFinishProgressWithReplyKeepsAttachmentReplyOutsideStream(t *testing.T) 
 	}
 }
 
+func TestApprovalHandlerWaitsForChoice(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	resultCh := make(chan string, 1)
+	go func() {
+		optionID, err := h.approvalHandlerForUser("ou_user", reply)(ctx, agent.ApprovalRequest{
+			ToolCall: json.RawMessage(`{"cmd":"rm file"}`),
+			Options: []agent.ApprovalOption{
+				{ID: "allow_once", Name: "允许", Kind: "allow"},
+				{ID: "deny_once", Name: "拒绝", Kind: "deny"},
+			},
+		})
+		if err != nil {
+			resultCh <- "error:" + err.Error()
+			return
+		}
+		resultCh <- optionID
+	}()
+
+	waitUntil(t, func() bool { return len(reply.Choices) == 1 })
+	if !h.consumePendingApproval("ou_user", "allow_once") {
+		t.Fatal("pending approval should consume choice")
+	}
+
+	select {
+	case got := <-resultCh:
+		if got != "allow_once" {
+			t.Fatalf("approval result=%q, want allow_once", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not return")
+	}
+}
+
 func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := newBlockingProgressAgent()
@@ -3649,6 +3686,18 @@ func waitDone(t *testing.T, done <-chan struct{}, label string) {
 	case <-time.After(taskWaitTimeout):
 		t.Fatalf("未等到%s结束", label)
 	}
+}
+
+func waitUntil(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(taskWaitTimeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }
 
 func progressConfigWithTaskTimeout() config.ProgressConfig {
