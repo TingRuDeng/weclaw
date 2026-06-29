@@ -1,10 +1,12 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 // TestLookPath_InPath verifies that lookPath finds binaries already in PATH.
@@ -23,6 +25,36 @@ func TestLookPath_NotExist(t *testing.T) {
 	_, err := lookPath("nonexistent-binary-xyz-12345")
 	if err == nil {
 		t.Fatal("expected error for nonexistent binary")
+	}
+}
+
+// TestLookPath_LoginShellTimeout 验证登录 shell 兜底探测受超时限制。
+func TestLookPath_LoginShellTimeout(t *testing.T) {
+	// 使用不存在的二进制，确保进入登录 shell 兜底路径。
+	const missing = "nonexistent-binary-timeout-xyz"
+
+	origTimeout := loginShellLookupTimeout
+	origCommand := loginShellWhichCommand
+	t.Cleanup(func() {
+		loginShellLookupTimeout = origTimeout
+		loginShellWhichCommand = origCommand
+	})
+
+	loginShellLookupTimeout = 200 * time.Millisecond
+	loginShellWhichCommand = func(ctx context.Context, _ string, _ string) *exec.Cmd {
+		// 模拟 shell rc 卡住且远超探测超时时间。
+		return exec.CommandContext(ctx, "sleep", "30")
+	}
+
+	start := time.Now()
+	_, err := lookPath(missing)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error when login shell times out")
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("lookPath did not honor login-shell timeout: took %s", elapsed)
 	}
 }
 

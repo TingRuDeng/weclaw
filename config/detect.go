@@ -244,6 +244,14 @@ func agentExists(cfg *Config, name string) bool {
 	return ok
 }
 
+// loginShellLookupTimeout 限制登录 shell 兜底探测耗时，避免 shell rc 卡住自动探测。
+var loginShellLookupTimeout = 8 * time.Second
+
+// loginShellWhichCommand 构造登录 shell 的 which 探测命令，测试中可替换为卡住的命令。
+var loginShellWhichCommand = func(ctx context.Context, shell, binary string) *exec.Cmd {
+	return exec.CommandContext(ctx, shell, "-lic", "which "+binary)
+}
+
 // lookPath finds a binary by name. It first tries exec.LookPath (fast, uses
 // current PATH). If that fails, it falls back to resolving via a login shell
 // which sources the user's profile (~/.zshrc, ~/.bashrc) — this picks up
@@ -255,12 +263,14 @@ func lookPath(binary string) (string, error) {
 		return p, nil
 	}
 
-	// Fallback: resolve via login interactive shell (sources .zshrc/.bashrc)
+	// 通过登录交互 shell 兜底解析，并用超时避免 shell rc 卡住自动探测和 weclaw start。
 	shell := "zsh"
 	if runtime.GOOS != "darwin" {
 		shell = "bash"
 	}
-	out, err := exec.Command(shell, "-lic", "which "+binary).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), loginShellLookupTimeout)
+	defer cancel()
+	out, err := loginShellWhichCommand(ctx, shell, binary).Output()
 	if err != nil {
 		return "", fmt.Errorf("not found: %s", binary)
 	}
