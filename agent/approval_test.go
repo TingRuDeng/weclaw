@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -50,6 +52,49 @@ func TestHandlePermissionRequestDispatchesApprovalToTurn(t *testing.T) {
 		}
 	default:
 		t.Fatal("approval request was not dispatched")
+	}
+}
+
+func TestReadLoopDispatchesCodexItemApprovalRequestToTurn(t *testing.T) {
+	methods := []string{
+		"item/fileChange/requestApproval",
+		"item/commandExecution/requestApproval",
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+			turnCh := make(chan *codexTurnEvent, 1)
+			a.notifyMu.Lock()
+			a.turnCh["thread-item-approval"] = turnCh
+			a.notifyMu.Unlock()
+
+			raw := fmt.Sprintf(`{"jsonrpc":"2.0","id":11,"method":%q,"params":{"threadId":"thread-item-approval","turnId":"turn-1","itemId":"call-1","toolCall":{"cmd":"apply_patch"},"options":[{"optionId":"allow_once","name":"Allow","kind":"allow"},{"optionId":"deny_once","name":"Deny","kind":"deny"}]}}`, method)
+			a.mu.Lock()
+			a.scanner = bufio.NewScanner(strings.NewReader(raw + "\n"))
+			a.mu.Unlock()
+
+			a.readLoop()
+
+			select {
+			case evt := <-turnCh:
+				assertApprovalEvent(t, evt)
+			default:
+				t.Fatal("approval request was not dispatched")
+			}
+		})
+	}
+}
+
+func assertApprovalEvent(t *testing.T, evt *codexTurnEvent) {
+	t.Helper()
+	if evt.Approval == nil {
+		t.Fatal("approval event missing")
+	}
+	if string(evt.Approval.ID) != "11" {
+		t.Fatalf("approval id=%s, want 11", evt.Approval.ID)
+	}
+	if len(evt.Approval.Request.Options) != 2 || evt.Approval.Request.Options[0].ID != "allow_once" {
+		t.Fatalf("approval options=%#v", evt.Approval.Request.Options)
 	}
 }
 

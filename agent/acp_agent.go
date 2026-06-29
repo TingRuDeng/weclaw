@@ -1528,16 +1528,16 @@ func (a *ACPAgent) readLoop() {
 			continue
 		}
 
-		// Request from agent or notification
+		// 处理 agent 主动发出的请求或通知。
 		switch msg.Method {
 		case "session/update":
 			a.handleSessionUpdate(msg.Params)
 
 		case "session/request_permission":
-			// Auto-allow all permissions
+			// 旧 ACP 权限请求会复用统一审批处理链路。
 			a.handlePermissionRequest(line)
 
-		// Codex app-server events (multiple protocol versions)
+		// Codex app-server 事件，不同版本会发出不同 method。
 		case "codex/event/agent_message_delta":
 			a.handleCodexDelta(msg.Params)
 		case "item/agentMessage/delta":
@@ -1554,8 +1554,10 @@ func (a *ACPAgent) readLoop() {
 			"codex/event/item_completed", "codex/event/token_count",
 			"thread/tokenUsage/updated",
 			"account/rateLimits/updated", "thread/status/changed":
-			// Known events we don't need to act on
-		case "turn/approval/request":
+			// 这些是已知状态事件，当前桥接层不需要额外处理。
+		case "turn/approval/request",
+			"item/fileChange/requestApproval",
+			"item/commandExecution/requestApproval":
 			a.handlePermissionRequest(line)
 
 		default:
