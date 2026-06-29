@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,8 @@ var (
 	foregroundFlag bool
 	apiAddrFlag    string
 )
+
+var codexACPStartupRetryDelay = 2 * time.Second
 
 func init() {
 	startCmd.Flags().BoolVarP(&foregroundFlag, "foreground", "f", false, "Run in foreground (default is background)")
@@ -247,16 +250,8 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 
 	switch agCfg.Type {
 	case "acp":
-		ag := agent.NewACPAgent(agent.ACPAgentConfig{
-			Command:      agCfg.Command,
-			Args:         agCfg.Args,
-			Cwd:          agCfg.Cwd,
-			Env:          agCfg.Env,
-			Model:        agCfg.Model,
-			Effort:       agCfg.Effort,
-			SystemPrompt: agCfg.SystemPrompt,
-		})
-		if err := ag.Start(ctx); err != nil {
+		ag, err := startACPAgentWithRetry(ctx, name, agCfg)
+		if err != nil {
 			log.Printf("[agent] failed to start ACP agent %q: %v", name, err)
 			return nil
 		}
@@ -313,6 +308,63 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		log.Printf("[agent] unknown type %q for %q", agCfg.Type, name)
 		return nil
 	}
+}
+
+func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.AgentConfig) (*agent.ACPAgent, error) {
+	attempts := 1
+	if isCodexAppServerAgent(agCfg) {
+		attempts = 3
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		ag := newACPAgentFromConfig(agCfg)
+		if err := ag.Start(ctx); err != nil {
+			lastErr = err
+			if attempt == attempts || !isRetryableCodexStateRuntimeError(err) {
+				return nil, err
+			}
+			log.Printf("[agent] retrying Codex ACP startup after sqlite state runtime error (agent=%s, attempt=%d/%d): %v", name, attempt+1, attempts, err)
+			if err := sleepContext(ctx, codexACPStartupRetryDelay); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		return ag, nil
+	}
+	return nil, lastErr
+}
+
+func newACPAgentFromConfig(agCfg config.AgentConfig) *agent.ACPAgent {
+	return agent.NewACPAgent(agent.ACPAgentConfig{
+		Command:      agCfg.Command,
+		Args:         agCfg.Args,
+		Cwd:          agCfg.Cwd,
+		Env:          agCfg.Env,
+		Model:        agCfg.Model,
+		Effort:       agCfg.Effort,
+		SystemPrompt: agCfg.SystemPrompt,
+	})
+}
+
+func isCodexAppServerAgent(agCfg config.AgentConfig) bool {
+	if filepath.Base(agCfg.Command) != "codex" {
+		return false
+	}
+	for _, arg := range agCfg.Args {
+		if arg == "app-server" {
+			return true
+		}
+	}
+	return false
+}
+
+func isRetryableCodexStateRuntimeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "failed to initialize sqlite state runtime") ||
+		strings.Contains(text, "failed to initialize state runtime")
 }
 
 func companionAutoLaunchEnabled(_ string, agCfg config.AgentConfig) bool {
