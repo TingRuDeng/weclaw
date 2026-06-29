@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -90,6 +91,52 @@ func TestToIncomingFromMessageParsesPost(t *testing.T) {
 	}
 	if incoming.Text == "" || incoming.Text == "[rich text message]" {
 		t.Fatalf("post text=%q, want extracted rich text", incoming.Text)
+	}
+}
+
+func TestToIncomingFromMessageParsesPostWithImage(t *testing.T) {
+	downloader := &fakeResourceDownloader{attachments: []platform.Attachment{{
+		Kind:     platform.AttachmentImage,
+		Path:     "/tmp/img_1.png",
+		SourceID: "img_1",
+	}}}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = downloader
+	content := `{"zh_cn":{"content":[[{"tag":"text","text":"请看这张图"},{"tag":"img","image_key":"img_1"}]]}}`
+	event := newMessageEvent("p2p", "post", content)
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("toIncomingFromMessage ok=false, want true")
+	}
+	if incoming.Text != "请看这张图" {
+		t.Fatalf("post text=%q, want extracted text without image marker", incoming.Text)
+	}
+	if strings.Contains(incoming.Text, "img_1") || strings.Contains(incoming.Text, "![image]") {
+		t.Fatalf("post text=%q, want no raw image key marker", incoming.Text)
+	}
+	if len(incoming.Attachments) != 1 || incoming.Attachments[0].Kind != platform.AttachmentImage {
+		t.Fatalf("attachments=%#v, want one image", incoming.Attachments)
+	}
+	if len(downloader.seen) != 1 || downloader.seen[0].Type != "image" || downloader.seen[0].FileKey != "img_1" {
+		t.Fatalf("downloaded resources=%#v, want image img_1", downloader.seen)
+	}
+}
+
+func TestToIncomingFromMessageParsesPostContentObjectFallback(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = &fakeResourceDownloader{}
+	content := `{"zh_cn":{"content":{"blocks":[{"tag":"text","text":"非标准富文本"}]}}}`
+	event := newMessageEvent("p2p", "post", content)
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("toIncomingFromMessage ok=false, want true")
+	}
+	if incoming.Text != "非标准富文本" {
+		t.Fatalf("post text=%q, want fallback extracted text", incoming.Text)
 	}
 }
 

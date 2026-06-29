@@ -334,7 +334,19 @@ func (h *Handler) resolveProgressConfigForPlatform(platformName platform.Platfor
 	if platformOK {
 		global = config.NormalizeProgressConfig(global, &platformOverride)
 	}
-	return global
+	return normalizePlatformProgressConfig(platformName, global, platformOK)
+}
+
+// normalizePlatformProgressConfig 收敛平台默认进度体验，避免把不完整的 Agent delta 暴露给终端用户。
+func normalizePlatformProgressConfig(platformName platform.PlatformName, cfg config.ProgressConfig, hasPlatformOverride bool) config.ProgressConfig {
+	if platformName != platform.PlatformFeishu || hasPlatformOverride {
+		return cfg
+	}
+	if cfg.Mode == progressModeOff {
+		return cfg
+	}
+	cfg.Mode = progressModeSummary
+	return cfg
 }
 
 func (h *Handler) defaultAgentNameForPlatform(platformName platform.PlatformName) string {
@@ -592,6 +604,13 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 			return
 		}
 		text = strings.TrimSpace(fileText)
+	}
+	if img, ok := firstAttachment(msg.Attachments, platform.AttachmentImage); ok && text != "" {
+		imageText, handled := h.handleImageAttachment(ctx, msg.UserID, replyWriter, img, text)
+		if !handled {
+			return
+		}
+		text = strings.TrimSpace(imageText)
 	}
 	if text == "" {
 		if img, ok := firstAttachment(msg.Attachments, platform.AttachmentImage); ok && h.saveDir != "" {
@@ -2704,6 +2723,17 @@ func (h *Handler) handleFileAttachment(ctx context.Context, userID string, reply
 	return buildFileAgentMessage(text, saved), true
 }
 
+func (h *Handler) handleImageAttachment(ctx context.Context, userID string, reply platform.Replier, image platform.Attachment, text string) (string, bool) {
+	saved, err := h.saveIncomingAttachment(ctx, image)
+	if err != nil {
+		log.Printf("[handler] failed to save incoming image from %s: %v", userID, err)
+		sendPlatformText(ctx, reply, userID, fmt.Sprintf("图片保存失败：%v", err))
+		return "", false
+	}
+	log.Printf("[handler] saved incoming image from %s: %s", userID, saved.path)
+	return buildImageAgentMessage(text, saved), true
+}
+
 func (h *Handler) saveIncomingAttachment(ctx context.Context, file platform.Attachment) (savedIncomingFile, error) {
 	data, err := h.readAttachmentData(ctx, file)
 	if err != nil {
@@ -2759,6 +2789,15 @@ func buildFileAgentMessage(userText string, file savedIncomingFile) string {
 		return fileInfo
 	}
 	return userText + "\n\n" + fileInfo
+}
+
+func buildImageAgentMessage(userText string, file savedIncomingFile) string {
+	userText = strings.TrimSpace(userText)
+	imageInfo := "用户发送了一张图片，请查看并分析：\n文件名：" + file.name + "\n本地路径：" + file.path
+	if userText == "" {
+		return imageInfo
+	}
+	return userText + "\n\n" + imageInfo
 }
 
 func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, reply platform.Replier, img platform.Attachment) {

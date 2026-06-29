@@ -78,6 +78,15 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		return platform.IncomingMessage{}, false
 	}
 	text := cleanFeishuText(normalized.Content)
+	resources := append([]types.Resource(nil), normalized.Resources...)
+	if normalized.RawContentType == "post" {
+		postText, postResources := parseFeishuPostContent(rawMessageContent(event))
+		if postText != "" && (text == "" || text == "[rich text message]") {
+			text = postText
+		}
+		text = stripFeishuResourceMarkers(text)
+		resources = mergeFeishuResources(resources, postResources)
+	}
 	if normalized.RawContentType == "image" || normalized.RawContentType == "file" || normalized.RawContentType == "audio" || normalized.RawContentType == "media" {
 		text = ""
 	}
@@ -94,7 +103,7 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 			"raw_content_type": normalized.RawContentType,
 		},
 	}
-	for _, resource := range normalized.Resources {
+	for _, resource := range resources {
 		attachment, err := a.downloader.DownloadResource(ctx, normalized.MessageID, resource)
 		if err != nil {
 			return platform.IncomingMessage{}, false

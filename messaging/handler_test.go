@@ -1024,6 +1024,45 @@ func TestResolveProgressConfigForPlatformUsesPlatformOverride(t *testing.T) {
 	}
 }
 
+func TestResolveProgressConfigForFeishuDefaultsToSummary(t *testing.T) {
+	h := NewHandler(nil, nil)
+	globalCfg := config.DefaultProgressConfig()
+	globalCfg.Mode = progressModeStream
+	h.SetProgressConfig(globalCfg)
+
+	got := h.resolveProgressConfigForPlatform(platform.PlatformFeishu, "codex")
+
+	if got.Mode != progressModeSummary {
+		t.Fatalf("feishu progress mode=%q, want quiet summary by default", got.Mode)
+	}
+}
+
+func TestResolveProgressConfigForFeishuAllowsExplicitStreamOverride(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		string(platform.PlatformFeishu): {Mode: progressModeStream},
+	})
+
+	got := h.resolveProgressConfigForPlatform(platform.PlatformFeishu, "codex")
+
+	if got.Mode != progressModeStream {
+		t.Fatalf("feishu progress mode=%q, want explicit stream override", got.Mode)
+	}
+}
+
+func TestResolveProgressConfigKeepsWechatMode(t *testing.T) {
+	h := NewHandler(nil, nil)
+	globalCfg := config.DefaultProgressConfig()
+	globalCfg.Mode = progressModeStream
+	h.SetProgressConfig(globalCfg)
+
+	got := h.resolveProgressConfigForPlatform(platform.PlatformWeChat, "codex")
+
+	if got.Mode != progressModeStream {
+		t.Fatalf("wechat progress mode=%q, want unchanged stream", got.Mode)
+	}
+}
+
 func TestHandleMessageUsesPlatformDefaultAgent(t *testing.T) {
 	codex := &fakeAgent{reply: "codex reply", info: agent.AgentInfo{Name: "codex", Type: "test"}}
 	claude := &fakeAgent{reply: "claude reply", info: agent.AgentInfo{Name: "claude", Type: "test"}}
@@ -1271,6 +1310,37 @@ func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
 	}
 	if len(reply.Texts) != 0 {
 		t.Fatalf("texts=%#v, want final reply consumed by stream", reply.Texts)
+	}
+}
+
+func TestHandlePlatformMessagePassesTextAndImageToAgent(t *testing.T) {
+	dir := t.TempDir()
+	imagePath := filepath.Join(dir, "input.png")
+	if err := os.WriteFile(imagePath, []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	ag := &fakeAgent{reply: "ok", info: agent.AgentInfo{Name: "mock", Type: "test"}}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent { return ag }, nil)
+	h.SetDefaultAgent("mock", ag)
+	h.SetSaveDir(dir)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "om_img_text",
+		Text:      "请分析这张图",
+		Attachments: []platform.Attachment{{
+			Kind:     platform.AttachmentImage,
+			Path:     imagePath,
+			FileName: "input.png",
+		}},
+	}, reply)
+
+	if !strings.Contains(ag.lastChatMessage(), "请分析这张图") ||
+		!strings.Contains(ag.lastChatMessage(), "用户发送了一张图片") ||
+		!strings.Contains(ag.lastChatMessage(), "本地路径：") {
+		t.Fatalf("agent message=%q, want text and image path", ag.lastChatMessage())
 	}
 }
 
