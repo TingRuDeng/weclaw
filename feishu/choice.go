@@ -29,14 +29,53 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 	if prompt == "" {
 		prompt = "请选择："
 	}
-	actions := make([]map[string]any, 0, len(choices))
+	buttons := buildChoiceButtons(choices, conversationKey)
+	if len(buttons) == 0 {
+		return "", fmt.Errorf("choice card requires at least one valid choice")
+	}
+	elements := []map[string]any{
+		{
+			"tag":       "markdown",
+			"content":   prompt,
+			"text_size": "normal",
+		},
+	}
+	elements = append(elements, buttons...)
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{
+			"update_multi":     true,
+			"wide_screen_mode": true,
+		},
+		"header": map[string]any{
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": "WeClaw",
+			},
+			"template": "blue",
+		},
+		"body": map[string]any{
+			"direction": "vertical",
+			"elements":  elements,
+		},
+	}
+	data, err := json.Marshal(card)
+	if err != nil {
+		return "", fmt.Errorf("marshal feishu choice card: %w", err)
+	}
+	return string(data), nil
+}
+
+// buildChoiceButtons 过滤无效选项，并生成 CardKit 2.0 可点击按钮元素。
+func buildChoiceButtons(choices []platform.Choice, conversationKey string) []map[string]any {
+	buttons := make([]map[string]any, 0, len(choices))
 	for _, choice := range choices {
 		id := strings.TrimSpace(choice.ID)
 		label := strings.TrimSpace(choice.Label)
 		if id == "" || label == "" {
 			continue
 		}
-		actions = append(actions, map[string]any{
+		buttons = append(buttons, map[string]any{
 			"tag": "button",
 			"text": map[string]any{
 				"tag":     "plain_text",
@@ -50,34 +89,7 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 			},
 		})
 	}
-	if len(actions) == 0 {
-		return "", fmt.Errorf("choice card requires at least one valid choice")
-	}
-	card := map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
-		"header": map[string]any{
-			"title": map[string]any{
-				"tag":     "plain_text",
-				"content": "WeClaw",
-			},
-			"template": "blue",
-		},
-		"elements": []map[string]any{
-			{
-				"tag":     "markdown",
-				"content": prompt,
-			},
-			{
-				"tag":     "action",
-				"actions": actions,
-			},
-		},
-	}
-	data, err := json.Marshal(card)
-	if err != nil {
-		return "", fmt.Errorf("marshal feishu choice card: %w", err)
-	}
-	return string(data), nil
+	return buttons
 }
 
 // parseCardAction 将飞书回调事件归一化为平台 RawCommand 需要的字段。
