@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-微信 AI Agent 桥接器 — 将微信消息接入 AI Agent（Claude、Codex、Gemini、Kimi 等）。
+微信 & 飞书 AI Agent 桥接器 — 将微信（个人号）和飞书消息接入 AI Agent（Claude、Codex、Gemini、Kimi 等）。
 
 > 本项目参考 [@tencent-weixin/openclaw-weixin](https://npmx.dev/package/@tencent-weixin/openclaw-weixin) 实现，仅限个人学习，勿做他用。
 
@@ -75,7 +75,7 @@ weclaw companion --agent opencode --cwd /path/to/project
 
 ## 聊天命令
 
-在微信中发送以下命令：
+在微信或飞书中发送以下命令：
 
 | 命令                    | 说明                     |
 | ----------------------- | ------------------------ |
@@ -84,9 +84,14 @@ weclaw companion --agent opencode --cwd /path/to/project
 | `/cc 解释一下这段代码`  | 通过别名发送             |
 | `/cc help`              | 查看 Claude 会话命令     |
 | `/claude`               | 切换默认 Agent 为 Claude |
-| `/cwd /path/to/project` | 切换工作目录             |
+| `/cwd /path/to/project` | 切换工作目录（配置了 `allowed_workspace_roots` 时限制在白名单内） |
 | `/new`                  | 开始新对话（清除会话）   |
-| `/status`               | 查看 WeClaw 全局运行态   |
+| `/model` / `/model <id>` | 查看 / 切换模型（Codex：运行时切换，下个新会话生效） |
+| `/reasoning` / `/reasoning <强度>` | 查看 / 切换推理强度（Codex） |
+| `/mode` / `/mode yolo` / `/mode default` | 查看 / 自动放行 / 按钮确认 敏感操作 |
+| `/ps`                   | 查看自己运行中的任务     |
+| `/stop`                 | 停止当前运行的任务       |
+| `/status`               | 查看运行态（agent、uptime、运行中任务、调用/错误计数、模式、限流） |
 | `/help`                 | 查看帮助信息             |
 
 ### Codex 主路径
@@ -404,6 +409,59 @@ curl -X POST http://127.0.0.1:18011/api/send \
 通过 `cwd` 指定 Agent 的工作目录（workspace）。不设置则默认为 `~/.weclaw/workspace`。
 
 > **注意：** 这些参数会跳过安全检查，请了解风险后再启用。ACP 模式的 Agent 会自动处理权限，无需配置。
+
+## 安全与治理
+
+WeClaw 驱动的 AI Agent 能执行 shell 命令、读写文件。任何能给 bot 发消息的人都能驱动该 Agent，因此对外暴露前务必收紧访问。
+
+```json
+{
+  "allowed_workspace_roots": ["/home/me/projects"],
+  "rate_limit_per_minute": 20,
+  "audit_log": true,
+  "platforms": {
+    "wechat": { "enabled": true, "allowed_users": ["user_id@im.wechat"] },
+    "feishu": { "enabled": true, "allowed_users": ["ou_xxx"] }
+  }
+}
+```
+
+- **访问控制 (`allowed_users`)**：每平台白名单。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。
+- **工作目录限制 (`allowed_workspace_roots`)**：`/cwd` 只能切到白名单根目录及其子目录。为空 = 不限制（会告警）。
+- **限流 (`rate_limit_per_minute`)**：每用户每分钟最多触发 agent 次数，`0` = 不限。
+- **审计日志 (`audit_log` / `audit_log_path`)**：JSON Lines 记录谁触发了哪个 agent、yolo 自动放行等（不含密钥）。默认开启，写入 `~/.weclaw/audit.log`，按大小自动轮转。
+- **OS 用户隔离 (`run_as_user` / `run_as_env`)**：通过免密 `sudo` 让指定 agent 以独立 Unix 用户运行，做文件系统隔离。
+- **权限模式 (`/mode`)**：`yolo` 自动放行 Codex 敏感操作；`default` 弹按钮确认（飞书），超时 fail-safe 拒绝。
+
+```json
+{
+  "agents": {
+    "claude": { "type": "cli", "command": "claude", "run_as_user": "coder-bot", "run_as_env": ["ANTHROPIC_API_KEY"] }
+  }
+}
+```
+
+### 启动前体检
+
+```bash
+weclaw doctor
+```
+
+`weclaw doctor` 在你依赖配置前做预检：agent 二进制是否可达、平台凭证是否存在、空白名单告警、非回环地址必须配 token、`run_as_user` 免密 sudo 探测、工作目录限制、审计日志可写性。发现阻断性问题时以非零码退出。
+
+## Web 配置面板
+
+不想手编 `~/.weclaw/config.json` 时，可用本机网页面板：
+
+```bash
+weclaw web                 # 监听 127.0.0.1:39282，打印带 token 的本地 URL 并打开浏览器
+weclaw web --no-open       # 不自动打开浏览器
+weclaw web --addr 127.0.0.1:39282 --token <token>
+```
+
+面板可编辑安全配置、agent、写入飞书凭证并校验、面板内完成微信扫码登录、查看运行状态。软配置（agent/进度/白名单/工作目录/限流）由运行中的 `weclaw start` 热重载即时生效；平台启用/凭证变更（含新扫码的微信账号）需 `weclaw restart`。
+
+**安全**：默认仅绑回环；非回环地址必须显式 token；同源防护；token 校验失败按来源限速；**密钥只写不回显**（api_token / agent api_key+env / 飞书 app_secret 均掩码，回写掩码即保持原值）；`config.json` 原子写（`0600`）；微信登录二维码本机渲染、不外发第三方。
 
 ## 后台运行
 

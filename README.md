@@ -2,7 +2,7 @@
 
 [中文文档](README_CN.md)
 
-WeChat AI Agent Bridge — connect WeChat to AI agents (Claude, Codex, Gemini, Kimi, etc.).
+WeChat & Feishu AI Agent Bridge — connect WeChat (personal) and Feishu/Lark to AI agents (Claude, Codex, Gemini, Kimi, etc.).
 
 > This project is inspired by [@tencent-weixin/openclaw-weixin](https://npmx.dev/package/@tencent-weixin/openclaw-weixin). For personal learning only, not for commercial use.
 
@@ -94,7 +94,7 @@ weclaw companion --agent codex --cwd /path/to/project
 
 ## Chat Commands
 
-Send these as WeChat messages:
+Send these as WeChat or Feishu messages:
 
 | Command | Description |
 |---------|-------------|
@@ -103,9 +103,14 @@ Send these as WeChat messages:
 | `/cc explain this code` | Send to agent by alias |
 | `/cc help` | 查看 Claude 会话命令 |
 | `/claude` | Switch default agent to Claude |
-| `/cwd /path/to/project` | Switch workspace directory |
+| `/cwd /path/to/project` | Switch workspace directory (confined to `allowed_workspace_roots` if set) |
 | `/new` | Start a new conversation (clear session) |
-| `/status` | Show WeClaw runtime status |
+| `/model` / `/model <id>` | Show or switch model (Codex: runtime, applies next session) |
+| `/reasoning` / `/reasoning <effort>` | Show or switch reasoning effort (Codex) |
+| `/mode` / `/mode yolo` / `/mode default` | Show / auto-approve / button-confirm sensitive ops |
+| `/ps` | List your running tasks |
+| `/stop` | Stop the current running task |
+| `/status` | Show WeClaw runtime status (agent, uptime, running tasks, call/error counts, mode, limits) |
 | `/help` | Show help message |
 
 ### Codex 主路径
@@ -422,6 +427,45 @@ Example:
 Set `cwd` to specify the agent's working directory (workspace). If omitted, defaults to `~/.weclaw/workspace`.
 
 > **Warning:** These flags disable safety checks. Only enable them if you understand the risks. ACP agents handle permissions automatically and don't need these flags.
+
+## Security & Governance
+
+WeClaw drives AI agents that can execute shell commands and read/write files. Anyone who can message the bot can drive that agent, so harden access before exposing it.
+
+```json
+{
+  "allowed_workspace_roots": ["/home/me/projects"],
+  "rate_limit_per_minute": 20,
+  "audit_log": true,
+  "platforms": {
+    "wechat": { "enabled": true, "allowed_users": ["user_id@im.wechat"] },
+    "feishu": { "enabled": true, "allowed_users": ["ou_xxx"] }
+  }
+}
+```
+
+- **Access control (`allowed_users`)**: per-platform allowlist. Empty allowlist = deny everyone (fail-safe) — WeClaw warns loudly at startup if unset.
+- **Workspace confinement (`allowed_workspace_roots`)**: `/cwd` may only switch into these roots and their subdirectories. Empty = unrestricted (warned).
+- **Rate limiting (`rate_limit_per_minute`)**: max agent invocations per user per minute. `0` = off.
+- **Audit log (`audit_log` / `audit_log_path`)**: structured JSON-Lines record of who triggered which agent, yolo auto-approvals, etc. (never contains secrets). Defaults on, written to `~/.weclaw/audit.log` with size-based rotation.
+- **OS-user isolation (`run_as_user` / `run_as_env`)**: run a specific agent under a separate Unix user via passwordless `sudo` for filesystem isolation.
+- **Permission mode (`/mode`)**: `yolo` auto-approves Codex sensitive operations; `default` asks via interactive buttons (Feishu) and fail-safe denies on timeout.
+
+```json
+{
+  "agents": {
+    "claude": { "type": "cli", "command": "claude", "run_as_user": "coder-bot", "run_as_env": ["ANTHROPIC_API_KEY"] }
+  }
+}
+```
+
+### Pre-flight check
+
+```bash
+weclaw doctor
+```
+
+`weclaw doctor` validates config before you rely on it: agent binaries resolvable, platform credentials present, empty-allowlist warnings, API token required for non-loopback, `run_as_user` passwordless-sudo probe, workspace confinement, and audit-log writability. Exits non-zero on blocking issues.
 
 ## Web Config Panel
 
