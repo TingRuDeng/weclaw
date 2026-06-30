@@ -84,6 +84,43 @@ func TestToIncomingFromMessageDispatchesMentionedGroup(t *testing.T) {
 	}
 }
 
+func TestIsMentionedBotUsesNormalizedFlag(t *testing.T) {
+	if !isMentionedBotFromParts(feishuMentionCheck{NormalizedMentioned: true, AppID: "cli_a"}) {
+		t.Fatal("normalized mentioned bot should be treated as bot mention")
+	}
+}
+
+func TestIsMentionedBotRecognizesBotMentionWhenIDDiffersFromAppID(t *testing.T) {
+	mentions := []*larkim.MentionEvent{newTypedMention("ou_bot_open_id", "app")}
+
+	if !isMentionedBotFromParts(feishuMentionCheck{Mentions: mentions, Content: "@_user_1 hello", AppID: "cli_a"}) {
+		t.Fatal("bot/app typed mention should be treated as bot mention even when id is not app_id")
+	}
+}
+
+func TestIsMentionedBotDoesNotTreatUserMentionAsBot(t *testing.T) {
+	mentions := []*larkim.MentionEvent{newTypedMention("ou_other_user", "user")}
+
+	if isMentionedBotFromParts(feishuMentionCheck{Mentions: mentions, Content: "@_user_1 hello", AppID: "cli_a"}) {
+		t.Fatal("ordinary user mention should not be treated as bot mention")
+	}
+}
+
+func TestToIncomingFromMessageDispatchesBotTypedMentionedGroup(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := newMessageEvent("group", "text", `{"text":"@_user_1 hello"}`)
+	event.Event.Message.Mentions = []*larkim.MentionEvent{newTypedMention("ou_bot_open_id", "app")}
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("bot/app typed mention group message should be dispatchable")
+	}
+	if incoming.Metadata["feishu_is_mentioned"] != "true" {
+		t.Fatalf("metadata=%#v, want feishu_is_mentioned=true", incoming.Metadata)
+	}
+}
+
 func TestToIncomingFromMessageDispatchesGroupWhenMentionNotRequired(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.SetSessionOptions(FeishuSessionOptions{RequireMentionInGroup: false, ThreadIsolation: true})
@@ -212,6 +249,13 @@ func newMention(openID string) *larkim.MentionEvent {
 		Key: stringPtr("@_user_1"),
 		Id:  &larkim.UserId{OpenId: stringPtr(openID)},
 	}
+}
+
+// newTypedMention 构造带身份类型的飞书 @ 事件条目。
+func newTypedMention(openID string, mentionedType string) *larkim.MentionEvent {
+	mention := newMention(openID)
+	mention.MentionedType = stringPtr(mentionedType)
+	return mention
 }
 
 // stringPtr 返回字符串指针，匹配飞书 SDK 事件模型。

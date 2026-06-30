@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -76,6 +77,9 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 	}
 	scope := ExtractFeishuSessionScope(event)
 	scope.IsMentioned = isMentionedBot(event, a.creds.AppID)
+	if isFeishuGroupChat(scope.ChatType) {
+		log.Printf("[feishu] group mention check: mentioned=%t mention_count=%d app_id=%s", scope.IsMentioned, len(feishuMessageMentions(event)), a.creds.AppID)
+	}
 	if shouldIgnoreFeishuGroup(scope, a.session) {
 		return platform.IncomingMessage{}, false
 	}

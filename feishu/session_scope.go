@@ -13,6 +13,13 @@ const (
 	feishuScopePrefix        = "feishu"
 )
 
+type feishuMentionCheck struct {
+	NormalizedMentioned bool
+	Mentions            []*larkim.MentionEvent
+	Content             string
+	AppID               string
+}
+
 // FeishuSessionScope 描述飞书消息进入 agent 前需要固定的会话维度。
 type FeishuSessionScope struct {
 	TenantID     string
@@ -109,26 +116,74 @@ func hasAnyMention(msg *larkim.EventMessage) bool {
 
 // isMentionedBot 判断消息是否明确 @ 当前机器人。
 func isMentionedBot(event *larkim.P2MessageReceiveV1, appID string) bool {
-	if normalized := normalize.ParseMessage(event); normalized != nil && normalized.MentionedBot {
+	normalized := normalize.ParseMessage(event)
+	mentionedBot := false
+	content := ""
+	if normalized != nil {
+		mentionedBot = normalized.MentionedBot
+		content = normalized.Content
+	}
+	return isMentionedBotFromParts(feishuMentionCheck{
+		NormalizedMentioned: mentionedBot,
+		Mentions:            feishuMessageMentions(event),
+		Content:             content,
+		AppID:               appID,
+	})
+}
+
+// isMentionedBotFromParts 按可信度识别 @bot，避免把普通用户 @ 误判为 bot。
+func isMentionedBotFromParts(check feishuMentionCheck) bool {
+	if check.NormalizedMentioned {
 		return true
 	}
-	if event == nil || event.Event == nil || event.Event.Message == nil {
+	if len(check.Mentions) == 0 {
 		return false
 	}
-	appID = strings.TrimSpace(appID)
-	for _, mention := range event.Event.Message.Mentions {
-		if mention == nil || mention.Id == nil {
+	appID := strings.TrimSpace(check.AppID)
+	for _, mention := range check.Mentions {
+		if mention == nil {
 			continue
 		}
-		if strings.TrimSpace(valueFromUserID(mention.Id)) == appID {
+		if appID != "" && strings.TrimSpace(valueFromUserID(mention.Id)) == appID {
+			return true
+		}
+		if isBotMentionType(stringValue(mention.MentionedType)) && mentionKeyMatchesContent(mention, check.Content) {
 			return true
 		}
 	}
 	return false
 }
 
+// feishuMessageMentions 安全读取飞书消息里的 @ 列表。
+func feishuMessageMentions(event *larkim.P2MessageReceiveV1) []*larkim.MentionEvent {
+	if event == nil || event.Event == nil || event.Event.Message == nil {
+		return nil
+	}
+	return event.Event.Message.Mentions
+}
+
+// isBotMentionType 只接受飞书明确标记为应用或机器人的 @ 身份。
+func isBotMentionType(mentionedType string) bool {
+	switch strings.ToLower(strings.TrimSpace(mentionedType)) {
+	case "app", "bot", "tenant_app", "application":
+		return true
+	default:
+		return false
+	}
+}
+
+// mentionKeyMatchesContent 用 mention key 约束兼容判断，避免无正文时错放行。
+func mentionKeyMatchesContent(mention *larkim.MentionEvent, content string) bool {
+	key := stringValue(mention.Key)
+	content = strings.TrimSpace(content)
+	return key == "" || content == "" || strings.Contains(content, key)
+}
+
 // valueFromUserID 返回飞书用户标识中的可用 ID。
 func valueFromUserID(id *larkim.UserId) string {
+	if id == nil {
+		return ""
+	}
 	if id.OpenId != nil {
 		return *id.OpenId
 	}
