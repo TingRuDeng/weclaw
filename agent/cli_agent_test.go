@@ -3,9 +3,59 @@ package agent
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 )
+
+// TestCLIAgentTurnTimeoutKillsHangingProcess 验证单轮超时会在宽限期内中止卡死命令并返回错误。
+func TestCLIAgentTurnTimeoutKillsHangingProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group kill semantics differ on windows")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hang.sh")
+	// 脚本派生一个子进程并自身长睡，模拟卡死的 bash/测试命令。
+	content := "#!/bin/sh\nsleep 30 &\nsleep 30\n"
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	agent := NewCLIAgent(CLIAgentConfig{Name: "codex", Command: script, Cwd: dir})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := agent.Chat(ctx, "conv-timeout", "hello")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error when turn times out")
+	}
+	if elapsed > turnKillGrace+3*time.Second {
+		t.Fatalf("turn was not bounded by timeout+grace: took %s", elapsed)
+	}
+}
+
+// TestConfigureProcessGroupSetsPgid 验证单轮子进程被置于独立进程组以便整组回收。
+func TestConfigureProcessGroupSetsPgid(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no process group on windows")
+	}
+	cmd := exec.Command("true")
+	configureTurnProcess(cmd)
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+		t.Fatal("expected Setpgid to be enabled for turn process")
+	}
+	if cmd.Cancel == nil {
+		t.Fatal("expected graceful Cancel to be set")
+	}
+	if cmd.WaitDelay != turnKillGrace {
+		t.Fatalf("expected WaitDelay=%s, got %s", turnKillGrace, cmd.WaitDelay)
+	}
+}
 
 func TestCLIAgentClaudeSessionControl(t *testing.T) {
 	ag := NewCLIAgent(CLIAgentConfig{Name: "claude", Command: "claude"})

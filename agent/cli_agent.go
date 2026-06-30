@@ -10,7 +10,19 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
+
+// turnKillGrace 是 ctx 取消后等待子进程优雅退出的宽限期，超时则强杀整个进程组。
+const turnKillGrace = 5 * time.Second
+
+// configureTurnProcess 让单轮子进程独立成组，并在 ctx 取消时先 SIGINT 优雅中止、
+// 宽限期后由运行时强杀，配合 sweepProcessGroup 回收派生的 bash 等子进程树。
+func configureTurnProcess(cmd *exec.Cmd) {
+	configureProcessGroup(cmd)
+	cmd.Cancel = gracefulCancel(cmd)
+	cmd.WaitDelay = turnKillGrace
+}
 
 // CLIAgent invokes a local CLI agent (claude, codex, etc.) via streaming JSON.
 type CLIAgent struct {
@@ -21,6 +33,7 @@ type CLIAgent struct {
 	env              map[string]string // extra environment variables
 	model            string
 	systemPrompt     string
+	runAs            runAsUserSpec
 	mu               sync.Mutex
 	sessions         map[string]string // conversationID -> session ID for multi-turn
 	conversationCwds map[string]string
@@ -35,6 +48,8 @@ type CLIAgentConfig struct {
 	Env          map[string]string // extra environment variables
 	Model        string
 	SystemPrompt string
+	RunAsUser    string            // 以独立 Unix 用户运行（文件系统隔离）
+	RunAsEnv     []string          // run_as_user 时透传的环境变量名白名单
 }
 
 // NewCLIAgent creates a new CLI agent.
@@ -51,6 +66,7 @@ func NewCLIAgent(cfg CLIAgentConfig) *CLIAgent {
 		env:              cfg.Env,
 		model:            cfg.Model,
 		systemPrompt:     cfg.SystemPrompt,
+		runAs:            runAsUserSpec{User: cfg.RunAsUser, PreserveEnv: cfg.RunAsEnv},
 		sessions:         make(map[string]string),
 		conversationCwds: make(map[string]string),
 	}
@@ -209,7 +225,10 @@ func (a *CLIAgent) chatClaude(ctx context.Context, conversationID string, messag
 		log.Printf("[cli] starting new conversation (command=%s, conversation=%s)", a.command, conversationID)
 	}
 
-	cmd := exec.CommandContext(ctx, a.command, args...)
+	command, cmdArgs := a.runAs.wrapCommand(a.command, args)
+	cmd := exec.CommandContext(ctx, command, cmdArgs...)
+	configureTurnProcess(cmd)
+	defer sweepProcessGroup(cmd)
 	if cwd := a.cwdForConversation(conversationID); cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -321,7 +340,10 @@ func (a *CLIAgent) chatCodex(ctx context.Context, conversationID string, message
 	args = append(args, a.args...)
 
 	log.Printf("[cli] running codex exec (command=%s)", a.command)
-	cmd := exec.CommandContext(ctx, a.command, args...)
+	command, cmdArgs := a.runAs.wrapCommand(a.command, args)
+	cmd := exec.CommandContext(ctx, command, cmdArgs...)
+	configureTurnProcess(cmd)
+	defer sweepProcessGroup(cmd)
 	if cwd := a.cwdForConversation(conversationID); cwd != "" {
 		cmd.Dir = cwd
 	}
