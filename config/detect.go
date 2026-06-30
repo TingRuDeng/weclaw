@@ -252,6 +252,11 @@ var loginShellWhichCommand = func(ctx context.Context, shell, binary string) *ex
 	return exec.CommandContext(ctx, shell, "-lic", "which "+binary)
 }
 
+// LookPath 导出二进制解析能力，供 doctor 等命令复用（含 login shell 回退）。
+func LookPath(binary string) (string, error) {
+	return lookPath(binary)
+}
+
 // lookPath finds a binary by name. It first tries exec.LookPath (fast, uses
 // current PATH). If that fails, it falls back to resolving via a login shell
 // which sources the user's profile (~/.zshrc, ~/.bashrc) — this picks up

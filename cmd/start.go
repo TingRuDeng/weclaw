@@ -271,6 +271,8 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			Env:          agCfg.Env,
 			Model:        agCfg.Model,
 			SystemPrompt: agCfg.SystemPrompt,
+			RunAsUser:    agCfg.RunAsUser,
+			RunAsEnv:     agCfg.RunAsEnv,
 		})
 		log.Printf("[agent] created CLI agent: %s (command=%s, type=%s, model=%s)", name, agCfg.Command, agCfg.Type, agCfg.Model)
 		return ag
@@ -348,6 +350,8 @@ func newACPAgentFromConfig(agCfg config.AgentConfig) *agent.ACPAgent {
 		Model:        agCfg.Model,
 		Effort:       agCfg.Effort,
 		SystemPrompt: agCfg.SystemPrompt,
+		RunAsUser:    agCfg.RunAsUser,
+		RunAsEnv:     agCfg.RunAsEnv,
 	})
 }
 
