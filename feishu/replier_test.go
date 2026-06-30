@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 type fakeMessageSender struct {
@@ -114,6 +115,22 @@ func TestSDKMessageSenderPermissionGuideLimiterSuppressesRepeatedGuide(t *testin
 	}
 }
 
+func TestSDKMessageSenderUsesChatIDReceiveTypeForChatID(t *testing.T) {
+	sender := newTestSDKMessageSender("cli_a", nil)
+
+	err := sender.SendText(context.Background(), "oc_chat", "hello")
+
+	if err != nil {
+		t.Fatalf("SendText error: %v", err)
+	}
+	if len(sender.calls) != 1 {
+		t.Fatalf("calls=%#v, want one message", sender.calls)
+	}
+	if sender.calls[0].receiveIDType != larkim.CreateMessageV1ReceiveIDTypeChatId {
+		t.Fatalf("receiveIDType=%q, want chat_id", sender.calls[0].receiveIDType)
+	}
+}
+
 func TestReplierAskChoicesSendsCardWhenCardKitAvailable(t *testing.T) {
 	sender := &fakeMessageSender{}
 	cardKit := &fakeCardKitClient{cardID: "card-choice"}
@@ -186,9 +203,10 @@ func platformStreamOptions() platform.StreamOptions {
 }
 
 type createMessageCall struct {
-	openID  string
-	msgType string
-	content string
+	receiveID     string
+	receiveIDType string
+	msgType       string
+	content       string
 }
 
 type createMessageResult struct {
@@ -206,8 +224,8 @@ func newTestSDKMessageSender(appID string, results []createMessageResult) *testS
 	sender := &testSDKMessageSender{
 		sdkMessageSender: &sdkMessageSender{appID: appID, guide: newPermissionGuideLimiter(appID)},
 	}
-	sender.create = func(ctx context.Context, openID string, msgType string, content string) (int, string, error) {
-		sender.calls = append(sender.calls, createMessageCall{openID: openID, msgType: msgType, content: content})
+	sender.create = func(ctx context.Context, receiveID string, receiveIDType string, msgType string, content string) (int, string, error) {
+		sender.calls = append(sender.calls, createMessageCall{receiveID: receiveID, receiveIDType: receiveIDType, msgType: msgType, content: content})
 		if len(results) == 0 {
 			return 0, "", nil
 		}

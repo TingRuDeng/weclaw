@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -17,7 +18,7 @@ type messageSender interface {
 	SendCard(ctx context.Context, openID string, cardID string) error
 }
 
-type createMessageFunc func(ctx context.Context, openID string, msgType string, content string) (int, string, error)
+type createMessageFunc func(ctx context.Context, receiveID string, receiveIDType string, msgType string, content string) (int, string, error)
 
 type sdkMessageSender struct {
 	client *lark.Client
@@ -32,12 +33,12 @@ func newSDKMessageSender(client *lark.Client, appID string) messageSender {
 }
 
 // SendText 通过 im.message.create 发送飞书文本消息。
-func (s *sdkMessageSender) SendText(ctx context.Context, openID string, text string) error {
+func (s *sdkMessageSender) SendText(ctx context.Context, receiveID string, text string) error {
 	content, err := buildTextMessageContent(text)
 	if err != nil {
 		return err
 	}
-	return s.createMessage(ctx, openID, larkim.MsgTypeText, content)
+	return s.createMessage(ctx, receiveID, larkim.MsgTypeText, content)
 }
 
 // SendImage 上传本地图片并发送 image 消息。
@@ -85,26 +86,27 @@ func (s *sdkMessageSender) SendCard(ctx context.Context, openID string, cardID s
 }
 
 // createMessage 调用飞书消息创建接口，统一处理 API 错误。
-func (s *sdkMessageSender) createMessage(ctx context.Context, openID string, msgType string, content string) error {
-	code, msg, err := s.createMessageRaw(ctx, openID, msgType, content)
+func (s *sdkMessageSender) createMessage(ctx context.Context, receiveID string, msgType string, content string) error {
+	code, msg, err := s.createMessageRaw(ctx, receiveID, msgType, content)
 	if err != nil {
 		return err
 	}
 	if code != 0 {
-		s.sendPermissionGuide(ctx, openID, code)
+		s.sendPermissionGuide(ctx, receiveID, code)
 		return s.apiError(code, msg)
 	}
 	return nil
 }
 
-func (s *sdkMessageSender) createMessageRaw(ctx context.Context, openID string, msgType string, content string) (int, string, error) {
+func (s *sdkMessageSender) createMessageRaw(ctx context.Context, receiveID string, msgType string, content string) (int, string, error) {
+	receiveIDType := feishuReceiveIDType(receiveID)
 	if s.create != nil {
-		return s.create(ctx, openID, msgType, content)
+		return s.create(ctx, receiveID, receiveIDType, msgType, content)
 	}
 	req := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType(larkim.CreateMessageV1ReceiveIDTypeOpenId).
+		ReceiveIdType(receiveIDType).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
-			ReceiveId(openID).
+			ReceiveId(receiveID).
 			MsgType(msgType).
 			Content(content).
 			Build()).
@@ -117,6 +119,14 @@ func (s *sdkMessageSender) createMessageRaw(ctx context.Context, openID string, 
 		return resp.Code, resp.Msg, nil
 	}
 	return 0, "", nil
+}
+
+// feishuReceiveIDType 根据 ID 前缀选择飞书消息接收 ID 类型。
+func feishuReceiveIDType(receiveID string) string {
+	if strings.HasPrefix(receiveID, "oc_") {
+		return larkim.CreateMessageV1ReceiveIDTypeChatId
+	}
+	return larkim.CreateMessageV1ReceiveIDTypeOpenId
 }
 
 func (s *sdkMessageSender) sendPermissionGuide(ctx context.Context, openID string, code int) {
