@@ -3999,7 +3999,7 @@ func TestRawCommandStopCancelsActiveCodexTask(t *testing.T) {
 	}
 	h.agents["codex"] = ag
 	key := h.agentExecutionKey("feishu:ou_user", "codex", ag)
-	task, taskCtx, started := h.beginActiveTask(context.Background(), key)
+	task, taskCtx, started := h.beginActiveTask(context.Background(), key, activeTaskMeta{owner: "feishu:ou_user", agentName: "codex", message: "hi"})
 	if !started {
 		t.Fatal("beginActiveTask started=false, want true")
 	}
