@@ -15,6 +15,7 @@ type Config struct {
 	APIAddr      string                    `json:"api_addr,omitempty"`
 	APIToken     string                    `json:"api_token,omitempty"`
 	SaveDir      string                    `json:"save_dir,omitempty"`
+	AllowedWorkspaceRoots []string         `json:"allowed_workspace_roots,omitempty"`
 	Progress     ProgressConfig            `json:"progress,omitempty"`
 	Agents       map[string]AgentConfig    `json:"agents"`
 	Platforms    map[string]PlatformConfig `json:"platforms,omitempty"`

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -105,7 +106,28 @@ func runDoctorChecks(cfg *config.Config, deps doctorDeps) []doctorResult {
 	results = append(results, checkAgents(cfg, deps)...)
 	results = append(results, checkPlatforms(cfg, deps)...)
 	results = append(results, checkAPIToken(cfg))
+	results = append(results, checkWorkspaceRoots(cfg))
 	return results
+}
+
+// checkWorkspaceRoots 校验 /cwd 工作目录白名单：未配置时告警(agent 可被指向任意目录)，配置项不存在时失败。
+func checkWorkspaceRoots(cfg *config.Config) doctorResult {
+	result := doctorResult{Name: "workspace confinement"}
+	if len(cfg.AllowedWorkspaceRoots) == 0 {
+		result.Status = doctorWarn
+		result.Detail = "allowed_workspace_roots 未配置；/cwd 可指向任意目录，建议限制"
+		return result
+	}
+	for _, root := range cfg.AllowedWorkspaceRoots {
+		if info, err := os.Stat(root); err != nil || !info.IsDir() {
+			result.Status = doctorFail
+			result.Detail = fmt.Sprintf("allowed root not a directory: %s", root)
+			return result
+		}
+	}
+	result.Status = doctorOK
+	result.Detail = fmt.Sprintf("%d root(s) configured", len(cfg.AllowedWorkspaceRoots))
+	return result
 }
 
 func checkAgents(cfg *config.Config, deps doctorDeps) []doctorResult {

@@ -149,6 +149,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 		log.Printf("Image save directory: %s", cfg.SaveDir)
 	}
 
+	handler.SetAllowedWorkspaceRoots(cfg.AllowedWorkspaceRoots)
+	if len(cfg.AllowedWorkspaceRoots) == 0 {
+		log.Printf("WARNING: allowed_workspace_roots 未配置，/cwd 可切换到任意目录；具备 shell 权限的 agent 将不受工作目录限制。建议在 config.json 配置 allowed_workspace_roots。")
+	} else {
+		log.Printf("Allowed workspace roots: %v", cfg.AllowedWorkspaceRoots)
+	}
+
 	// Start default agent initialization in background so monitors can start immediately
 	go func() {
 		if cfg.DefaultAgent == "" {

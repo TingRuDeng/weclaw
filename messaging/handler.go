@@ -66,6 +66,7 @@ type Handler struct {
 	saveDefault             SaveDefaultFunc
 	contextTokens           sync.Map // map[userID]contextToken
 	saveDir                 string   // directory to save images/files to
+	allowedWorkspaceRoots   []string // /cwd 允许切换的根目录；空=不限制
 	seenMsgs                sync.Map // map[int64]time.Time — dedup by message_id
 	cdnDownloader           CDNDownloader
 	progressConfig          config.ProgressConfig
@@ -179,6 +180,30 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 // SetSaveDir sets the directory for saving images and files.
 func (h *Handler) SetSaveDir(dir string) {
 	h.saveDir = dir
+}
+
+// SetAllowedWorkspaceRoots 设置 /cwd 允许切换的根目录白名单；空切片表示不限制。
+func (h *Handler) SetAllowedWorkspaceRoots(roots []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cleaned := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if trimmed := strings.TrimSpace(root); trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	h.allowedWorkspaceRoots = cleaned
+}
+
+// isWorkspaceAllowed 判断目标目录是否落在 /cwd 白名单内；白名单为空时不限制。
+func (h *Handler) isWorkspaceAllowed(absPath string) bool {
+	h.mu.RLock()
+	roots := h.allowedWorkspaceRoots
+	h.mu.RUnlock()
+	if len(roots) == 0 {
+		return true
+	}
+	return isAllowedAttachmentPath(absPath, roots)
 }
 
 // cleanSeenMsgs 清理超过 TTL 的消息去重缓存。
@@ -2074,6 +2099,13 @@ func (h *Handler) handleCwd(trimmed string, userID ...string) string {
 	}
 	if !info.IsDir() {
 		return fmt.Sprintf("Not a directory: %s", absPath)
+	}
+
+	// 安全限制：配置了工作目录白名单时，/cwd 只能切到白名单根目录及其子目录，
+	// 防止被授权用户把具备 shell 权限的 agent 指向任意路径。
+	if !h.isWorkspaceAllowed(absPath) {
+		log.Printf("[handler] rejected /cwd outside allowed workspace roots: %s", absPath)
+		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请联系管理员在 allowed_workspace_roots 中添加。", absPath)
 	}
 
 	// Update cwd on all running agents
