@@ -155,6 +155,18 @@ func runStart(cmd *cobra.Command, args []string) error {
 	} else {
 		log.Printf("Allowed workspace roots: %v", cfg.AllowedWorkspaceRoots)
 	}
+	handler.SetRateLimitPerMinute(cfg.RateLimitPerMinute)
+	if cfg.RateLimitPerMinute > 0 {
+		log.Printf("Rate limit: %d agent invocations per user per minute", cfg.RateLimitPerMinute)
+	}
+	if cfg.AuditLog == nil || *cfg.AuditLog {
+		auditPath := cfg.AuditLogPath
+		if auditPath == "" {
+			auditPath = messaging.DefaultAuditLogPath()
+		}
+		handler.SetAuditLogger(messaging.NewFileAuditLogger(auditPath))
+		log.Printf("Audit log: %s", auditPath)
+	}
 
 	// Start default agent initialization in background so monitors can start immediately
 	go func() {
@@ -466,6 +478,8 @@ func applySoftConfig(handler *messaging.Handler, registry *platform.Registry, cf
 	handler.SetAgentProgressConfigs(extractAgentProgressConfigs(cfg.Agents))
 	handler.SetPlatformProgressConfigs(extractPlatformProgressConfigs(cfg.Platforms))
 	handler.SetPlatformDefaultAgents(extractPlatformDefaultAgents(cfg.Platforms))
+	handler.SetAllowedWorkspaceRoots(cfg.AllowedWorkspaceRoots)
+	handler.SetRateLimitPerMinute(cfg.RateLimitPerMinute)
 	if cfg.DefaultAgent != "" {
 		if ag := handler.AgentByName(cfg.DefaultAgent); ag != nil {
 			handler.SetDefaultAgent(cfg.DefaultAgent, ag)
