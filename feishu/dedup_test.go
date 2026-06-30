@@ -13,6 +13,7 @@ type dedupTestEventOptions struct {
 	MessageID  string
 	EventID    string
 	ThreadID   string
+	RootID     string
 	CreateTime string
 	Text       string
 	ChatType   string
@@ -120,6 +121,7 @@ func newDispatchableGroupEvent(opts dedupTestEventOptions) *larkim.P2MessageRece
 	event := newMessageEvent("group", "text", fmt.Sprintf(`{"text":%q}`, opts.Text))
 	setMessageIdentity(event, opts)
 	event.Event.Message.ThreadId = stringPtr(opts.ThreadID)
+	event.Event.Message.RootId = stringPtr(opts.RootID)
 	event.Event.Message.Mentions = []*larkim.MentionEvent{newTypedMention("ou_bot_open_id", "app")}
 	return event
 }

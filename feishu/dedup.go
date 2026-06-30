@@ -14,11 +14,14 @@ import (
 const feishuEventDedupTTL = 10 * time.Minute
 
 type feishuEventDeduper struct {
-	mu    sync.Mutex
-	seen  map[string]time.Time
-	ttl   time.Duration
-	now   func() time.Time
-	debug bool
+	mu               sync.Mutex
+	seen             map[string]time.Time
+	mirrorThreadSeen map[string][]feishuMirrorStamp
+	pendingMirrors   map[string][]*pendingGroupMirror
+	ttl              time.Duration
+	mirrorWindow     time.Duration
+	now              func() time.Time
+	debug            bool
 }
 
 // newFeishuEventDeduper 创建飞书事件短期去重器。
@@ -27,9 +30,12 @@ func newFeishuEventDeduper(ttl time.Duration) *feishuEventDeduper {
 		ttl = feishuEventDedupTTL
 	}
 	return &feishuEventDeduper{
-		seen: make(map[string]time.Time),
-		ttl:  ttl,
-		now:  time.Now,
+		seen:             make(map[string]time.Time),
+		mirrorThreadSeen: make(map[string][]feishuMirrorStamp),
+		pendingMirrors:   make(map[string][]*pendingGroupMirror),
+		ttl:              ttl,
+		mirrorWindow:     feishuMirrorDedupWindow,
+		now:              time.Now,
 	}
 }
 

@@ -134,9 +134,32 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		log.Printf("[feishu] ignored non-dispatchable message event")
 		return nil
 	}
+	scope := ExtractFeishuSessionScope(event)
+	if a.handleMirrorDedup(ctx, event, scope, msg, dispatch) {
+		return nil
+	}
+	a.dispatchIncomingMessage(ctx, msg, dispatch)
+	return nil
+}
+
+// handleMirrorDedup 在 adapter 层消化飞书话题“同时发送到群”的群聊镜像。
+func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, msg platform.IncomingMessage, dispatch platform.DispatchFunc) bool {
+	if a.deduper == nil {
+		return false
+	}
+	if hasThreadFields(scope) {
+		a.deduper.recordThreadMirrorFingerprint(event, scope, msg.Text)
+		return false
+	}
+	return a.deduper.deferPossibleGroupMirror(event, scope, msg.Text, func() {
+		a.dispatchIncomingMessage(context.WithoutCancel(ctx), msg, dispatch)
+	})
+}
+
+// dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
+func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
 	log.Printf("[feishu] message event parsed: user=%s message=%s attachments=%d", msg.UserID, msg.MessageID, len(msg.Attachments))
 	dispatch(ctx, msg, NewReplier(a.sender, firstNonEmpty(msg.ChatID, msg.UserID), a.cardKit))
-	return nil
 }
 
 // handleCardActionEvent 在 3 秒回调窗口内立即响应，再异步把按钮动作回放到统一业务层。
