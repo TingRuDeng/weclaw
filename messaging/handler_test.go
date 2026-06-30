@@ -895,7 +895,7 @@ func TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(131, "/info"))
 
 	texts := calls.texts()
-	if !containsText(texts, "agent: codex") || !containsText(texts, "type: acp") {
+	if !containsText(texts, "agent: codex") || !containsText(texts, "(acp)") {
 		t.Fatalf("status reply mismatch, messages=%#v", texts)
 	}
 	if !containsText(texts, "请使用 /status") {
@@ -906,6 +906,24 @@ func TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent(t *testing.T) {
 	}
 }
 
+func TestStatusCommandShowsRuntimeMetrics(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}}
+	h.SetRateLimitPerMinute(30)
+	h.setYoloMode("user-1", true)
+	h.agentInvocations.Store(5)
+	h.agentErrors.Store(2)
+	_, _, _ = h.beginActiveTask(context.Background(), "k1", activeTaskMeta{owner: "user-1", agentName: "codex", message: "x"})
+
+	text := h.buildStatus("user-1")
+	for _, want := range []string{"running tasks: 1 (you: 1)", "agent calls: 5, errors: 2", "mode: yolo", "rate limit: 30/min", "uptime:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status missing %q, got %q", want, text)
+		}
+	}
+}
+
 func TestStatusCommandShowsDefaultModelWhenModelEmpty(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.defaultName = "codex"
@@ -913,7 +931,7 @@ func TestStatusCommandShowsDefaultModelWhenModelEmpty(t *testing.T) {
 		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
 	}
 
-	text := h.buildStatus()
+	text := h.buildStatus("user-1")
 
 	if !strings.Contains(text, "model: (Agent 默认)") {
 		t.Fatalf("status should show default model, got %q", text)
@@ -928,7 +946,7 @@ func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 	}
 
 	tests := map[string]string{
-		"status":      h.buildStatus(),
+		"status":      h.buildStatus("user-1"),
 		"cwd":         h.handleCwd("/cwd"),
 		"progress":    h.handleProgressCommand("/progress"),
 		"progressErr": h.handleProgressCommand("/progress unknown"),

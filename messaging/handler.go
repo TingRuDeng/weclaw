@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -70,6 +71,9 @@ type Handler struct {
 	rateLimiter             *userRateLimiter
 	rateLimitPerMinute      int
 	audit                   auditLogger
+	startedAt               time.Time
+	agentInvocations        atomic.Int64
+	agentErrors             atomic.Int64
 	seenMsgs                sync.Map // map[int64]time.Time — dedup by message_id
 	cdnDownloader           CDNDownloader
 	progressConfig          config.ProgressConfig
@@ -177,6 +181,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		codexAppOpener:          defaultCodexAppOpener,
 		codexCLIResumeOpener:    defaultCodexCLIResumeOpener,
 		claudeCLIResumeOpener:   defaultClaudeCLIResumeOpener,
+		startedAt:               time.Now(),
 	}
 }
 
@@ -781,7 +786,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 	}
 	switch {
 	case trimmed == "/status":
-		sendText(h.buildStatus())
+		sendText(h.buildStatus(msg.UserID))
 	case trimmed == "/info":
 		sendText("命令已移除，请使用 /status 查看 WeClaw 全局运行态。")
 	case trimmed == "/help":
@@ -1992,6 +1997,7 @@ func (h *Handler) chatWithAgentWithProgress(ctx context.Context, ag agent.Agent,
 	info := ag.Info()
 	log.Printf("[handler] dispatching to agent (%s) for %s", info, userID)
 
+	h.agentInvocations.Add(1)
 	start := time.Now()
 	var (
 		reply string
@@ -2006,6 +2012,7 @@ func (h *Handler) chatWithAgentWithProgress(ctx context.Context, ag agent.Agent,
 	elapsed := time.Since(start)
 
 	if err != nil {
+		h.agentErrors.Add(1)
 		log.Printf("[handler] agent error (%s, elapsed=%s): %v", info, elapsed, err)
 		return "", err
 	}
@@ -2217,25 +2224,87 @@ func (h *Handler) recordActiveWorkspaceForUser(userIDs []string, agents map[stri
 }
 
 // buildStatus returns a short status string showing the current default agent.
-func (h *Handler) buildStatus() string {
+func (h *Handler) buildStatus(userID string) string {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	defaultName := h.defaultName
+	rateLimit := h.rateLimitPerMinute
+	auditOn := h.audit != nil
+	workspaceConfined := len(h.allowedWorkspaceRoots) > 0
+	var ag agent.Agent
+	if defaultName != "" {
+		ag = h.agents[defaultName]
+	}
+	h.mu.RUnlock()
 
-	if h.defaultName == "" {
-		return "agent: none (echo mode)"
+	lines := []string{"WeClaw 运行态"}
+
+	// Agent
+	switch {
+	case defaultName == "":
+		lines = append(lines, "agent: none (echo mode)")
+	case ag == nil:
+		lines = append(lines, "agent: "+defaultName+" (not started)")
+	default:
+		info := ag.Info()
+		lines = append(lines, "agent: "+defaultName+" ("+info.Type+")", "model: "+agentStatusModelValue(info.Model))
 	}
 
-	ag, ok := h.agents[h.defaultName]
-	if !ok {
-		return fmt.Sprintf("agent: %s (not started)", h.defaultName)
-	}
-
-	info := ag.Info()
-	return wechatCommandText(
-		"agent: "+h.defaultName,
-		"type: "+info.Type,
-		"model: "+agentStatusModelValue(info.Model),
+	// 运行时指标
+	totalActive, userActive := h.activeTaskCounts(userID)
+	lines = append(lines,
+		"uptime: "+formatUptime(time.Since(h.startedAt)),
+		fmt.Sprintf("running tasks: %d (you: %d)", totalActive, userActive),
+		fmt.Sprintf("agent calls: %d, errors: %d", h.agentInvocations.Load(), h.agentErrors.Load()),
 	)
+
+	// 安全/限流/模式（与当前用户相关）
+	mode := "default"
+	if h.isYoloMode(userID) {
+		mode = "yolo"
+	}
+	rateText := "off"
+	if rateLimit > 0 {
+		rateText = fmt.Sprintf("%d/min", rateLimit)
+	}
+	lines = append(lines, fmt.Sprintf("mode: %s · rate limit: %s", mode, rateText))
+	lines = append(lines, fmt.Sprintf("workspace confined: %t · audit: %t", workspaceConfined, auditOn))
+
+	return wechatCommandText(lines...)
+}
+
+// activeTaskCounts 返回当前运行中的任务总数与指定用户的任务数。
+func (h *Handler) activeTaskCounts(userID string) (total int, forUser int) {
+	owner := strings.TrimSpace(userID)
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	for _, task := range h.activeTasks {
+		task.mu.Lock()
+		running := !task.detached
+		taskOwner := task.owner
+		task.mu.Unlock()
+		if !running {
+			continue
+		}
+		total++
+		if owner != "" && taskOwner == owner {
+			forUser++
+		}
+	}
+	return total, forUser
+}
+
+// formatUptime 以天/时/分粒度展示运行时长。
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	return fmt.Sprintf("%dd%dh", int(d.Hours())/24, int(d.Hours())%24)
 }
 
 // agentStatusModelValue 用明确文案区分空模型配置和真实模型名。
