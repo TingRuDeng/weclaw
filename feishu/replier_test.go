@@ -14,6 +14,7 @@ import (
 type fakeMessageSender struct {
 	texts  []string
 	images []string
+	files  []string
 	cards  []string
 }
 
@@ -26,6 +27,11 @@ func (f *fakeMessageSender) SendText(ctx context.Context, openID string, text st
 // SendImage 记录测试发送的图片路径。
 func (f *fakeMessageSender) SendImage(ctx context.Context, openID string, localPath string) error {
 	f.images = append(f.images, openID+":"+localPath)
+	return nil
+}
+
+func (f *fakeMessageSender) SendFile(ctx context.Context, openID string, localPath string) error {
+	f.files = append(f.files, openID+":"+localPath)
 	return nil
 }
 

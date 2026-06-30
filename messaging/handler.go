@@ -1723,8 +1723,14 @@ func (h *Handler) sendReplyWithMediaAfterStream(ctx context.Context, replyWriter
 			failedPaths = append(failedPaths, attachmentPath)
 			continue
 		}
-		if err := replyWriter.SendImage(ctx, attachmentPath); err != nil {
-			log.Printf("[handler] failed to send attachment to %s: %v", userID, err)
+		var sendErr error
+		if isImageAttachmentPath(attachmentPath) {
+			sendErr = replyWriter.SendImage(ctx, attachmentPath)
+		} else {
+			sendErr = replyWriter.SendFile(ctx, attachmentPath)
+		}
+		if sendErr != nil {
+			log.Printf("[handler] failed to send attachment to %s: %v", userID, sendErr)
 			failedPaths = append(failedPaths, attachmentPath)
 			continue
 		}
@@ -1803,11 +1809,14 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 
 	h.mu.RLock()
 	agentDir := h.agentWorkDirs[agentName]
+	workspaceRoots := append([]string(nil), h.allowedWorkspaceRoots...)
 	h.mu.RUnlock()
 
 	if agentDir != "" {
 		roots = append(roots, agentDir)
 	}
+	// 允许回传 agent 在已授权工作目录(白名单)内生成的产物。
+	roots = append(roots, workspaceRoots...)
 
 	return roots
 }

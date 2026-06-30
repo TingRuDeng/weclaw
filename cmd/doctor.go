@@ -6,12 +6,14 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/feishu"
 	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/spf13/cobra"
 )
@@ -107,7 +109,31 @@ func runDoctorChecks(cfg *config.Config, deps doctorDeps) []doctorResult {
 	results = append(results, checkPlatforms(cfg, deps)...)
 	results = append(results, checkAPIToken(cfg))
 	results = append(results, checkWorkspaceRoots(cfg))
+	results = append(results, checkAuditLog(cfg))
 	return results
+}
+
+// checkAuditLog 校验审计日志目录可写（默认开启时）。
+func checkAuditLog(cfg *config.Config) doctorResult {
+	result := doctorResult{Name: "audit log"}
+	if cfg.AuditLog != nil && !*cfg.AuditLog {
+		result.Status = doctorWarn
+		result.Detail = "audit log disabled; sensitive operations will not be recorded"
+		return result
+	}
+	path := strings.TrimSpace(cfg.AuditLogPath)
+	if path == "" {
+		path = messaging.DefaultAuditLogPath()
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		result.Status = doctorFail
+		result.Detail = fmt.Sprintf("audit log dir not writable: %v", err)
+		return result
+	}
+	result.Status = doctorOK
+	result.Detail = path
+	return result
 }
 
 // checkWorkspaceRoots 校验 /cwd 工作目录白名单：未配置时告警(agent 可被指向任意目录)，配置项不存在时失败。

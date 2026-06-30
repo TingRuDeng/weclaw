@@ -159,6 +159,9 @@ func (r *recordingReplier) SendText(ctx context.Context, text string) error {
 func (r *recordingReplier) SendImage(ctx context.Context, localPath string) error {
 	return nil
 }
+func (r *recordingReplier) SendFile(ctx context.Context, localPath string) error {
+	return nil
+}
 func (r *recordingReplier) Typing(ctx context.Context, on bool) error { return nil }
 func (r *recordingReplier) OpenStream(ctx context.Context, opts StreamOptions) (Stream, error) {
 	return nil, ErrUnsupported

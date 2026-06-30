@@ -49,6 +49,11 @@ func (r *Replier) SendImage(ctx context.Context, localPath string) error {
 	return r.sender.SendImage(ctx, r.openID, localPath)
 }
 
+// SendFile 上传并发送本地文件。
+func (r *Replier) SendFile(ctx context.Context, localPath string) error {
+	return r.sender.SendFile(ctx, r.openID, localPath)
+}
+
 // Typing 使用 CardKit thinking 卡片表达处理中状态，关闭时更新为结束态。
 func (r *Replier) Typing(ctx context.Context, on bool) error {
 	if r.cardKit == nil {

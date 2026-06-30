@@ -59,6 +59,11 @@ func (r *Replier) SendImage(ctx context.Context, localPath string) error {
 	return r.sendMediaFromPath(ctx, localPath)
 }
 
+func (r *Replier) SendFile(ctx context.Context, localPath string) error {
+	// sendMediaFromPath 已按内容类型分类为 image/video/file，文件类直接走 file 消息。
+	return r.sendMediaFromPath(ctx, localPath)
+}
+
 func (r *Replier) Typing(ctx context.Context, on bool) error {
 	status := ilink.TypingStatusCancel
 	if on {
