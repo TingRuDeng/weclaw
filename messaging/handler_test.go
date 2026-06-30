@@ -1602,7 +1602,7 @@ func TestSendToNamedAgentUsesTaskTimeout(t *testing.T) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
 		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "slow", "hello", "client-1")
 	})
-	waitForText(t, calls, "context deadline exceeded")
+	waitForText(t, calls, "本轮执行超时已被中止")
 }
 
 func TestSendToDefaultAgentUsesTaskTimeout(t *testing.T) {
@@ -1618,7 +1618,7 @@ func TestSendToDefaultAgentUsesTaskTimeout(t *testing.T) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
 		h.sendToDefaultAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "hello", "client-1")
 	})
-	waitForText(t, calls, "context deadline exceeded")
+	waitForText(t, calls, "本轮执行超时已被中止")
 }
 
 func TestBroadcastToAgentsUsesTaskTimeout(t *testing.T) {
@@ -1634,7 +1634,7 @@ func TestBroadcastToAgentsUsesTaskTimeout(t *testing.T) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
 		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, []string{"slow"}, "hello")
 	})
-	waitForText(t, calls, "context deadline exceeded")
+	waitForText(t, calls, "本轮执行超时已被中止")
 }
 
 func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testing.T) {

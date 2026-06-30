@@ -33,6 +33,7 @@ type ACPAgent struct {
 	systemPrompt string
 	cwd          string
 	env          map[string]string
+	runAs        runAsUserSpec
 	protocol     string // "legacy_acp" or "codex_app_server"
 
 	mu       sync.Mutex
@@ -76,6 +77,8 @@ type ACPAgentConfig struct {
 	Cwd          string            // working directory
 	Env          map[string]string // extra environment variables
 	StateFile    string            // optional persisted mapping file path
+	RunAsUser    string            // 以独立 Unix 用户运行（文件系统隔离）
+	RunAsEnv     []string          // run_as_user 时透传的环境变量名白名单
 }
 
 // --- JSON-RPC types ---
@@ -340,6 +343,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		systemPrompt:                cfg.SystemPrompt,
 		cwd:                         cfg.Cwd,
 		env:                         cfg.Env,
+		runAs:                       runAsUserSpec{User: cfg.RunAsUser, PreserveEnv: cfg.RunAsEnv},
 		protocol:                    protocol,
 		sessions:                    make(map[string]string),
 		threads:                     make(map[string]string),
@@ -366,6 +370,10 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 
 	a.cmd = exec.CommandContext(ctx, a.command, a.args...)
 	a.cmd.Dir = a.cwd
+	if command, cmdArgs := a.runAs.wrapCommand(a.command, a.args); command != a.command {
+		a.cmd = exec.CommandContext(ctx, command, cmdArgs...)
+		a.cmd.Dir = a.cwd
+	}
 	if len(a.env) > 0 {
 		cmdEnv, err := mergeEnv(os.Environ(), a.env)
 		if err != nil {

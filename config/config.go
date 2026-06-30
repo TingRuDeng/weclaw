@@ -58,6 +58,8 @@ type AgentConfig struct {
 	MaxHistory   int               `json:"max_history,omitempty"`   // max history (http type)
 	Progress     *ProgressConfig   `json:"progress,omitempty"`      // 微信进度反馈配置
 	AutoLaunch   *bool             `json:"auto_launch,omitempty"`   // companion 是否自动打开本地可见终端
+	RunAsUser    string            `json:"run_as_user,omitempty"`   // 以独立 Unix 用户运行 agent，做文件系统隔离
+	RunAsEnv     []string          `json:"run_as_env,omitempty"`    // run_as_user 时需透传的环境变量名白名单
 }
 
 // ProgressConfig 控制微信侧进度反馈的展示粒度。
