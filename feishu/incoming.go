@@ -103,6 +103,7 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		Text:         text,
 		Metadata: map[string]string{
 			"raw_content_type":       normalized.RawContentType,
+			"original_user_id":       normalized.UserID,
 			feishuSessionMetadataKey: BuildFeishuSessionKey(scope, a.session.ThreadIsolation),
 			feishuMentionMetadataKey: fmt.Sprintf("%t", scope.IsMentioned),
 		},

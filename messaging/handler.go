@@ -116,6 +116,7 @@ type pendingApproval struct {
 type codexAgentTaskOptions struct {
 	ctx         context.Context
 	userID      string
+	routeUserID string
 	reply       platform.Replier
 	agentName   string
 	message     string
@@ -586,9 +587,7 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		}
 		go h.cleanSeenMsgs(h.duplicateTTL())
 	}
-	if sessionKey := platformMessageSessionKey(msg); sessionKey != "" {
-		msg.UserID = sessionKey
-	}
+	routeUserID := platformMessageRouteUserID(msg)
 
 	text := strings.TrimSpace(platformMessageText(msg))
 	if msg.RawCommand != nil && msg.RawCommand.Action == "stop" {
@@ -661,14 +660,14 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 
 	agentNames, message := h.parseCommand(text)
 	if len(agentNames) == 0 {
-		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, replyWriter, text, clientID)
+		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, text, clientID)
 		return
 	}
 	if message == "" {
 		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
 			sendText(h.switchDefault(ctx, agentNames[0]))
 		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
-			h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, replyWriter, text, clientID)
+			h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, text, clientID)
 		} else {
 			sendText("Usage: specify one agent to switch, or add a message to broadcast")
 		}
@@ -682,14 +681,14 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		}
 	}
 	if len(knownNames) == 0 {
-		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, replyWriter, text, clientID)
+		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, text, clientID)
 		return
 	}
 	if len(knownNames) == 1 {
-		h.sendToNamedAgent(ctx, msg.Platform, msg.UserID, replyWriter, knownNames[0], message, clientID)
+		h.sendToNamedAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, knownNames[0], message, clientID)
 		return
 	}
-	h.broadcastToAgents(ctx, msg.Platform, msg.UserID, replyWriter, knownNames, message)
+	h.broadcastToAgents(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, knownNames, message)
 }
 
 func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier, trimmed string, clientID string) bool {
@@ -745,28 +744,50 @@ func platformMessageSessionKey(msg platform.IncomingMessage) string {
 	return ""
 }
 
+// platformMessageRouteUserID 返回 agent 会话路由使用的用户维度，不改变真实发送者 ID。
+func platformMessageRouteUserID(msg platform.IncomingMessage) string {
+	if sessionKey := platformMessageSessionKey(msg); sessionKey != "" {
+		return sessionKey
+	}
+	return msg.UserID
+}
+
 func platformMessageDedupKey(msg platform.IncomingMessage) string {
 	return strings.TrimSpace(string(msg.Platform)) + "\x00" + strings.TrimSpace(msg.AccountID) + "\x00" + strings.TrimSpace(msg.MessageID)
 }
 
 func (h *Handler) agentExecutionKey(userID string, agentName string, ag agent.Agent) string {
+	return h.agentExecutionKeyForRoute(userID, userID, agentName, ag)
+}
+
+func (h *Handler) agentExecutionKeyForRoute(ownerUserID string, routeUserID string, agentName string, ag agent.Agent) string {
+	if strings.TrimSpace(routeUserID) == "" {
+		routeUserID = ownerUserID
+	}
 	info := ag.Info()
 	if isCodexAgent(agentName, info) {
-		return h.codexConversationRouteForUser(userID, agentName, ag).conversationID
+		return h.codexConversationRouteForSession(ownerUserID, routeUserID, agentName, ag).conversationID
 	}
 	if isClaudeAgent(agentName, info) {
-		workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
-		return buildClaudeConversationID(userID, agentName, workspaceRoot)
+		workspaceRoot := h.claudeWorkspaceRootForUser(ownerUserID, agentName, ag)
+		return buildClaudeConversationID(routeUserID, agentName, workspaceRoot)
 	}
-	return strings.Join([]string{"agent", strings.TrimSpace(userID), strings.TrimSpace(agentName)}, "\x00")
+	return strings.Join([]string{"agent", strings.TrimSpace(routeUserID), strings.TrimSpace(agentName)}, "\x00")
 }
 
 func (h *Handler) codexConversationRouteForUser(userID string, agentName string, ag agent.Agent) codexConversationRoute {
-	workspaceRoot := h.codexWorkspaceRootForUser(userID, agentName, ag)
-	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
+	return h.codexConversationRouteForSession(userID, userID, agentName, ag)
+}
+
+func (h *Handler) codexConversationRouteForSession(ownerUserID string, routeUserID string, agentName string, ag agent.Agent) codexConversationRoute {
+	if strings.TrimSpace(routeUserID) == "" {
+		routeUserID = ownerUserID
+	}
+	workspaceRoot := h.codexWorkspaceRootForUser(ownerUserID, agentName, ag)
+	conversationID := buildCodexConversationID(routeUserID, agentName, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	return codexConversationRoute{
-		bindingKey:     codexBindingKey(userID, agentName),
+		bindingKey:     codexBindingKey(routeUserID, agentName),
 		workspaceRoot:  workspaceRoot,
 		conversationID: conversationID,
 	}
@@ -1082,7 +1103,7 @@ func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName
 		sendPlatformText(ctx, reply, userID, "当前没有待执行的暂存消息。")
 		return
 	}
-	h.sendToNamedAgent(ctx, platformName, userID, reply, name, message, clientID)
+	h.sendToNamedAgent(ctx, platformName, userID, userID, reply, name, message, clientID)
 }
 
 func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, userID string, reply platform.Replier, clientID string) {
@@ -1099,7 +1120,7 @@ func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.
 	if !waitForActiveTask(ctx, task) {
 		return
 	}
-	h.sendToNamedAgent(ctx, platformName, userID, reply, name, message, clientID)
+	h.sendToNamedAgent(ctx, platformName, userID, userID, reply, name, message, clientID)
 }
 
 func (h *Handler) handleCancelPendingGuide(ctx context.Context, userID string) string {
@@ -1165,7 +1186,7 @@ func waitForActiveTask(ctx context.Context, task *activeAgentTask) bool {
 }
 
 // sendToDefaultAgent sends the message to the default agent and replies.
-func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.PlatformName, userID string, replyWriter platform.Replier, text string, clientID string) {
+func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.PlatformName, userID string, routeUserID string, replyWriter platform.Replier, text string, clientID string) {
 	defaultName := h.defaultAgentNameForPlatform(platformName)
 
 	var ag agent.Agent
@@ -1180,6 +1201,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 			h.startCodexAgentTask(codexAgentTaskOptions{
 				ctx:         ctx,
 				userID:      userID,
+				routeUserID: routeUserID,
 				reply:       replyWriter,
 				agentName:   defaultName,
 				message:     text,
@@ -1196,14 +1218,14 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 		defer cancelTaskTimeout()
 		agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
 
-		executionKey := h.agentExecutionKey(userID, defaultName, ag)
+		executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, defaultName, ag)
 		unlock := h.lockAgentExecution(executionKey)
 		defer unlock()
 
 		onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "", text, progressCfg)
 
 		var err error
-		conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, defaultName, ag)
+		conversationID, resolveErr := h.resolveAgentConversationIDForRoute(agentCtx, userID, routeUserID, defaultName, ag)
 		if resolveErr != nil {
 			reply = renderFinalFailure("", resolveErr)
 			consumed := finishProgressWithReply(finishProgress, reply, true)
@@ -1214,8 +1236,8 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 		if err != nil {
 			reply = renderFinalFailure("", err)
 		} else {
-			h.recordCodexThread(userID, defaultName, ag, conversationID)
-			h.recordClaudeSession(userID, defaultName, ag, conversationID)
+			h.recordCodexThread(routeUserID, defaultName, ag, conversationID)
+			h.recordClaudeSessionForRoute(userID, routeUserID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
 		}
 		consumed := finishProgressWithReply(finishProgress, reply, err != nil)
@@ -1233,7 +1255,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 }
 
 // sendToNamedAgent sends the message to a specific agent and replies.
-func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.PlatformName, userID string, replyWriter platform.Replier, name string, message string, clientID string) {
+func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.PlatformName, userID string, routeUserID string, replyWriter platform.Replier, name string, message string, clientID string) {
 	ag, agErr := h.getAgent(ctx, name)
 	if agErr != nil {
 		log.Printf("[handler] agent %q not available: %v", name, agErr)
@@ -1248,6 +1270,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 		h.startCodexAgentTask(codexAgentTaskOptions{
 			ctx:         ctx,
 			userID:      userID,
+			routeUserID: routeUserID,
 			reply:       replyWriter,
 			agentName:   name,
 			message:     message,
@@ -1263,13 +1286,13 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 	defer cancelTaskTimeout()
 	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
 
-	executionKey := h.agentExecutionKey(userID, name, ag)
+	executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, name, ag)
 	unlock := h.lockAgentExecution(executionKey)
 	defer unlock()
 
 	onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "", message, progressCfg)
 
-	conversationID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, name, ag)
+	conversationID, resolveErr := h.resolveAgentConversationIDForRoute(agentCtx, userID, routeUserID, name, ag)
 	if resolveErr != nil {
 		reply := renderFinalFailure("["+name+"] ", resolveErr)
 		consumed := finishProgressWithReply(finishProgress, reply, true)
@@ -1280,8 +1303,8 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 	if err != nil {
 		reply = renderFinalFailure("["+name+"] ", err)
 	} else {
-		h.recordCodexThread(userID, name, ag, conversationID)
-		h.recordClaudeSession(userID, name, ag, conversationID)
+		h.recordCodexThread(routeUserID, name, ag, conversationID)
+		h.recordClaudeSessionForRoute(userID, routeUserID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
 	consumed := finishProgressWithReply(finishProgress, reply, err != nil)
@@ -1290,9 +1313,12 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
 func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
+	if strings.TrimSpace(opts.routeUserID) == "" {
+		opts.routeUserID = opts.userID
+	}
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.reply))
-	route := h.codexConversationRouteForUser(opts.userID, opts.agentName, opts.agent)
+	route := h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
 	executionKey := route.conversationID
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 	if !started {
@@ -1332,7 +1358,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	if err != nil {
 		reply = renderFinalFailure(opts.replyPrefix, err)
 	} else {
-		h.recordCodexThreadForWorkspace(opts.userID, opts.agentName, opts.agent, runtime.route.conversationID, runtime.route.workspaceRoot)
+		h.recordCodexThreadForWorkspace(opts.routeUserID, opts.agentName, opts.agent, runtime.route.conversationID, runtime.route.workspaceRoot)
 		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
 	if runtime.task.shouldSendFinal() {
@@ -1357,7 +1383,7 @@ func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
 
 // broadcastToAgents sends the message to multiple agents in parallel.
 // Each reply is sent as a separate message with the agent name prefix.
-func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.PlatformName, userID string, replyWriter platform.Replier, names []string, message string) {
+func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.PlatformName, userID string, routeUserID string, replyWriter platform.Replier, names []string, message string) {
 	type result struct {
 		name          string
 		reply         string
@@ -1383,7 +1409,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 			var executionKey string
 			var activeTask *activeAgentTask
 			if isCodexAgent(n, ag.Info()) {
-				codexRoute = h.codexConversationRouteForUser(userID, n, ag)
+				codexRoute = h.codexConversationRouteForSession(userID, routeUserID, n, ag)
 				executionKey = codexRoute.conversationID
 				task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
 				if !started {
@@ -1401,7 +1427,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 					}
 				}()
 			} else {
-				executionKey = h.agentExecutionKey(userID, n, ag)
+				executionKey = h.agentExecutionKeyForRoute(userID, routeUserID, n, ag)
 			}
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
@@ -1420,7 +1446,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 				}
 				conversationID = codexRoute.conversationID
 			} else {
-				resolvedID, resolveErr := h.resolveAgentConversationID(agentCtx, userID, n, ag)
+				resolvedID, resolveErr := h.resolveAgentConversationIDForRoute(agentCtx, userID, routeUserID, n, ag)
 				if resolveErr != nil {
 					sendResult(renderFinalFailure("["+n+"] ", resolveErr), true)
 					return
@@ -1433,10 +1459,10 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 				return
 			}
 			if isCodexAgent(n, ag.Info()) {
-				h.recordCodexThreadForWorkspace(userID, n, ag, conversationID, codexRoute.workspaceRoot)
+				h.recordCodexThreadForWorkspace(routeUserID, n, ag, conversationID, codexRoute.workspaceRoot)
 			} else {
-				h.recordCodexThread(userID, n, ag, conversationID)
-				h.recordClaudeSession(userID, n, ag, conversationID)
+				h.recordCodexThread(routeUserID, n, ag, conversationID)
+				h.recordClaudeSessionForRoute(userID, routeUserID, n, ag, conversationID)
 			}
 			if activeTask != nil && !activeTask.shouldSendFinal() {
 				_ = finishProgress("", false)
@@ -1568,17 +1594,28 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 }
 
 func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
+	return h.resolveAgentConversationIDForRoute(ctx, userID, userID, agentName, ag)
+}
+
+func (h *Handler) resolveAgentConversationIDForRoute(ctx context.Context, ownerUserID string, routeUserID string, agentName string, ag agent.Agent) (string, error) {
+	if strings.TrimSpace(routeUserID) == "" {
+		routeUserID = ownerUserID
+	}
 	if isCodexAgent(agentName, ag.Info()) {
-		return h.resolveCodexConversationID(ctx, userID, agentName, ag)
+		return h.resolveCodexConversationIDForRoute(ctx, ownerUserID, routeUserID, agentName, ag)
 	}
 	if isClaudeAgent(agentName, ag.Info()) {
-		return h.resolveClaudeConversationID(ctx, userID, agentName, ag)
+		return h.resolveClaudeConversationIDForRoute(ctx, ownerUserID, routeUserID, agentName, ag)
 	}
-	return userID, nil
+	return routeUserID, nil
 }
 
 func (h *Handler) resolveCodexConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
-	route := h.codexConversationRouteForUser(userID, agentName, ag)
+	return h.resolveCodexConversationIDForRoute(ctx, userID, userID, agentName, ag)
+}
+
+func (h *Handler) resolveCodexConversationIDForRoute(ctx context.Context, ownerUserID string, routeUserID string, agentName string, ag agent.Agent) (string, error) {
+	route := h.codexConversationRouteForSession(ownerUserID, routeUserID, agentName, ag)
 	if err := h.prepareCodexConversation(ctx, route, ag); err != nil {
 		return "", err
 	}
@@ -1609,9 +1646,16 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 }
 
 func (h *Handler) resolveClaudeConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
-	workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
-	bindingKey := claudeBindingKey(userID, agentName)
-	conversationID := buildClaudeConversationID(userID, agentName, workspaceRoot)
+	return h.resolveClaudeConversationIDForRoute(ctx, userID, userID, agentName, ag)
+}
+
+func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, ownerUserID string, routeUserID string, agentName string, ag agent.Agent) (string, error) {
+	if strings.TrimSpace(routeUserID) == "" {
+		routeUserID = ownerUserID
+	}
+	workspaceRoot := h.claudeWorkspaceRootForUser(ownerUserID, agentName, ag)
+	bindingKey := claudeBindingKey(routeUserID, agentName)
+	conversationID := buildClaudeConversationID(routeUserID, agentName, workspaceRoot)
 	claudeAg, ok := ag.(agent.ClaudeSessionAgent)
 	if !ok {
 		h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)
@@ -1663,6 +1707,13 @@ func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string,
 }
 
 func (h *Handler) recordClaudeSession(userID string, agentName string, ag agent.Agent, conversationID string) {
+	h.recordClaudeSessionForRoute(userID, userID, agentName, ag, conversationID)
+}
+
+func (h *Handler) recordClaudeSessionForRoute(ownerUserID string, routeUserID string, agentName string, ag agent.Agent, conversationID string) {
+	if strings.TrimSpace(routeUserID) == "" {
+		routeUserID = ownerUserID
+	}
 	if !isClaudeAgent(agentName, ag.Info()) {
 		return
 	}
@@ -1674,8 +1725,8 @@ func (h *Handler) recordClaudeSession(userID string, agentName string, ag agent.
 	if !ok {
 		return
 	}
-	workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
-	bindingKey := claudeBindingKey(userID, agentName)
+	workspaceRoot := h.claudeWorkspaceRootForUser(ownerUserID, agentName, ag)
+	bindingKey := claudeBindingKey(routeUserID, agentName)
 	if ownerWorkspace, ok := h.ensureClaudeSessions().findWorkspaceBySession(bindingKey, sessionID); ok {
 		workspaceRoot = ownerWorkspace
 	}

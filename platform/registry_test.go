@@ -24,6 +24,31 @@ func TestRegistryDispatchesAllowedUser(t *testing.T) {
 	_ = reply
 }
 
+func TestRegistryAllowsFeishuByOriginalUserIDWhenSessionMetadataExists(t *testing.T) {
+	platform := &recordingPlatform{
+		name: PlatformFeishu,
+		messages: []IncomingMessage{{
+			Platform: PlatformFeishu,
+			UserID:   "ou_user",
+			Text:     "hi",
+			Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+		}},
+	}
+	registry := NewRegistry([]RegistryEntry{{Platform: platform, Access: NewAccessControl([]string{"ou_user"})}})
+	var got []IncomingMessage
+
+	err := registry.Run(context.Background(), func(ctx context.Context, msg IncomingMessage, reply Replier) {
+		got = append(got, msg)
+	})
+
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(got) != 1 || got[0].UserID != "ou_user" {
+		t.Fatalf("got messages=%#v, want original Feishu user", got)
+	}
+}
+
 func TestRegistryRejectsEmptyAllowlistByDefault(t *testing.T) {
 	reply := &recordingReplier{}
 	platform := &recordingPlatform{
@@ -81,6 +106,7 @@ func TestRegistryInjectsAccessControlIntoPlatform(t *testing.T) {
 }
 
 type recordingPlatform struct {
+	name     PlatformName
 	messages []IncomingMessage
 	err      error
 	reply    Replier
@@ -96,6 +122,9 @@ func (p *accessAwareRecordingPlatform) SetAccessControl(access AccessControl) {
 }
 
 func (p *recordingPlatform) Name() PlatformName {
+	if p.name != "" {
+		return p.name
+	}
 	return PlatformWeChat
 }
 

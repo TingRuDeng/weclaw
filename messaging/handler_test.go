@@ -1,10 +1,12 @@
 package messaging
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1158,6 +1160,82 @@ func TestHandleMessageUsesFeishuSessionMetadataForRouting(t *testing.T) {
 	}
 }
 
+func TestHandleMessageKeepsFeishuSenderUserIDForLogs(t *testing.T) {
+	ag := &fakeAgent{reply: "ok", info: agent.AgentInfo{Name: "mock", Type: "test"}}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		if name == "mock" {
+			return ag
+		}
+		return nil
+	}, nil)
+	h.SetDefaultAgent("mock", ag)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(oldOutput)
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "hello",
+		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+	}, reply)
+
+	output := logs.String()
+	if !strings.Contains(output, "received from ou_user") {
+		t.Fatalf("logs=%q, want true sender open_id", output)
+	}
+	if strings.Contains(output, "received from feishu:tenant_1:group:oc_1:om_root") {
+		t.Fatalf("logs=%q, should not expose session key as sender", output)
+	}
+}
+
+func TestHandleMessageKeepsFeishuSenderUserIDForWorkspaceCommands(t *testing.T) {
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			reply: "ok",
+			info:  agent.AgentInfo{Name: "codex", Type: "test"},
+		},
+	}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		if name == "codex" {
+			return ag
+		}
+		return nil
+	}, nil)
+	h.SetDefaultAgent("codex", ag)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	workspaceRoot := t.TempDir()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/cwd " + workspaceRoot,
+		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+	}, reply)
+
+	ownerWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey("ou_user", "codex"))
+	if !ok || ownerWorkspace != normalizeCodexWorkspaceRoot(workspaceRoot) {
+		t.Fatalf("owner workspace=%q ok=%v, want %q for true sender", ownerWorkspace, ok, workspaceRoot)
+	}
+	if sessionWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey("feishu:tenant_1:group:oc_1:om_root", "codex")); ok {
+		t.Fatalf("session workspace=%q, should not bind /cwd to session key", sessionWorkspace)
+	}
+}
+
+func TestPlatformMessageSessionKeyIgnoresWechatMetadata(t *testing.T) {
+	msg := platform.IncomingMessage{
+		Platform: platform.PlatformWeChat,
+		UserID:   "wx_user",
+		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+	}
+
+	if got := platformMessageSessionKey(msg); got != "" {
+		t.Fatalf("wechat session key=%q, want empty", got)
+	}
+}
+
 func TestEnsureAgentStartedSerializesConcurrentStartup(t *testing.T) {
 	start := make(chan struct{})
 	release := make(chan struct{})
@@ -1346,7 +1424,7 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", reply, "codex", "hello", "client-1")
+	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "hello", "client-1")
 
 	waitForText(t, calls, "实时片段，仅供预览")
 }
@@ -1365,7 +1443,7 @@ func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
 	h.SetProgressConfig(cfg)
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
-	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", reply, "mock", "hello", "client-1")
+	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
 
 	if reply.Stream.Completed != "[mock] 最终结果" {
 		t.Fatalf("completed=%q, want final reply in stream", reply.Stream.Completed)
@@ -1480,7 +1558,7 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "claude", "第一条", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "claude", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
@@ -1488,7 +1566,7 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	secondDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-2")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "claude", "第二条", "client-2")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "claude", "第二条", "client-2")
 		close(secondDone)
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -1522,7 +1600,7 @@ func TestSendToNamedAgentUsesTaskTimeout(t *testing.T) {
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "slow", "hello", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "slow", "hello", "client-1")
 	})
 	waitForText(t, calls, "context deadline exceeded")
 }
@@ -1538,7 +1616,7 @@ func TestSendToDefaultAgentUsesTaskTimeout(t *testing.T) {
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToDefaultAgent(ctx, platform.PlatformWeChat, "user-1", reply, "hello", "client-1")
+		h.sendToDefaultAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "hello", "client-1")
 	})
 	waitForText(t, calls, "context deadline exceeded")
 }
@@ -1554,7 +1632,7 @@ func TestBroadcastToAgentsUsesTaskTimeout(t *testing.T) {
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", reply, []string{"slow"}, "hello")
+		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, []string{"slow"}, "hello")
 	})
 	waitForText(t, calls, "context deadline exceeded")
 }
@@ -1576,13 +1654,13 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
+	go h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
 	waitForAgentEnter(t, codex)
 
 	done := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-2")
-		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", reply, []string{"codex", "claude"}, "第二条")
+		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, []string{"codex", "claude"}, "第二条")
 		close(done)
 	}()
 
@@ -1613,12 +1691,12 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "codex", "第一条", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
 
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 	started, _ := ag.stats()
 	if started != 1 {
 		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
@@ -1748,11 +1826,11 @@ func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "codex", "第一条", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	guideDone := make(chan struct{})
 	go func() {
@@ -1791,11 +1869,11 @@ func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", reply, "codex", "第一条", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "第一条", "client-1")
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/cancel"))
 	ag.release <- struct{}{}
@@ -1829,9 +1907,9 @@ func TestPendingGuideBecomesRunnableAfterTaskFinishes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
@@ -1862,9 +1940,9 @@ func TestCancelWithdrawsRunnablePendingGuide(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "回复 /run 执行该消息")
@@ -1903,7 +1981,7 @@ func TestBroadcastProgressUsesAgentPrefix(t *testing.T) {
 	defer closeServer()
 
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.broadcastToAgents(context.Background(), platform.PlatformWeChat, "user-1", reply, []string{"codex", "claude"}, "hello")
+	h.broadcastToAgents(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, []string{"codex", "claude"}, "hello")
 
 	if !containsText(calls.texts(), "[codex] 实时片段，仅供预览") {
 		t.Fatalf("expected codex progress prefix, messages=%#v", calls.texts())
@@ -2026,7 +2104,7 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	defer closeServer()
 
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", reply, "codex", "hello", "client-1")
+	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "hello", "client-1")
 
 	waitForFakeAgentCalls(t, &ag.fakeAgent, 1)
 	if ag.chatCallCount() != 1 {
@@ -3619,7 +3697,7 @@ func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
 	defer closeServer()
 
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", reply, "codex", "继续", "client-1")
+	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "继续", "client-1")
 
 	waitForText(t, calls, "恢复 Codex 会话失败")
 	if ag.chatCallCount() != 0 {

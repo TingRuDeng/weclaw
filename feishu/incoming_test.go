@@ -46,6 +46,9 @@ func TestToIncomingFromMessageParsesText(t *testing.T) {
 	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:dm:oc_1:ou_user" {
 		t.Fatalf("metadata=%#v, want scoped DM session", incoming.Metadata)
 	}
+	if incoming.Metadata["original_user_id"] != "ou_user" {
+		t.Fatalf("metadata=%#v, want original_user_id=ou_user", incoming.Metadata)
+	}
 }
 
 func TestToIncomingFromMessageIgnoresUnmentionedGroupByDefault(t *testing.T) {
