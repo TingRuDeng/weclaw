@@ -1,6 +1,7 @@
 package feishu
 
 import (
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -24,6 +25,7 @@ type parsedCardAction struct {
 	Label     string
 	Summary   string
 	TaskCard  string
+	Approval  string
 	Conv      string
 	UserID    string
 	ChatID    string
@@ -105,6 +107,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		if options.Summary != "" {
 			value["summary"] = options.Summary
 		}
+		if approvalKey := approvalPayloadKey(options); approvalKey != "" {
+			value["approval_key"] = approvalKey
+		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",
 			"text": map[string]any{
@@ -116,6 +121,19 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		})
 	}
 	return buttons
+}
+
+// approvalPayloadKey 给同一张审批卡片上的所有按钮生成同一个稳定 key，避免不同 decision 互相覆盖。
+func approvalPayloadKey(options choiceButtonOptions) string {
+	if options.Kind != cardKindApproval {
+		return ""
+	}
+	base := strings.TrimSpace(options.ConversationKey) + "\x00" + strings.TrimSpace(options.Summary)
+	if strings.TrimSpace(base) == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(base))
+	return fmt.Sprintf("%x", sum)
 }
 
 // approvalSummaryFromPrompt 从审批 prompt 中提取 command/cwd 摘要，避免点击后卡片继续占用大段空间。
@@ -198,6 +216,13 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 		TaskCard: firstNonEmpty(
 			callbackValueString(value, "task_card_id"),
 			callbackValueString(value, "taskCardId"),
+		),
+		Approval: firstNonEmpty(
+			callbackValueString(value, "approval_key"),
+			callbackValueString(value, "approval_id"),
+			callbackValueString(value, "approvalId"),
+			callbackValueString(value, "action_key"),
+			callbackValueString(value, "actionKey"),
 		),
 		Conv:   callbackValueString(value, "conv"),
 		UserID: strings.TrimSpace(event.Event.Operator.OpenID),

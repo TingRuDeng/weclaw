@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -277,13 +278,101 @@ func TestHandleCardActionEventIsIdempotentForApproval(t *testing.T) {
 	}
 }
 
+func TestHandleCardActionEventConcurrentApprovalDispatchesOnce(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := approvalCardActionEvent("allow", "允许本次", "")
+	dispatched := make(chan platform.IncomingMessage, 16)
+	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	}
+	var wg sync.WaitGroup
+
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := adapter.handleCardActionEvent(context.Background(), event, dispatch)
+			if err != nil {
+				t.Errorf("handleCardActionEvent error: %v", err)
+			}
+			if resp == nil || resp.Card == nil {
+				t.Errorf("response=%#v, want compact card", resp)
+			}
+		}()
+	}
+	wg.Wait()
+	time.Sleep(100 * time.Millisecond)
+
+	if got := len(dispatched); got != 1 {
+		t.Fatalf("dispatch count=%d, want 1", got)
+	}
+}
+
+func TestHandleCardActionEventSecondApprovalDoesNotOverwriteFirstDecision(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	allowEvent := approvalCardActionEvent("allow", "允许本次", "")
+	denyEvent := approvalCardActionEvent("deny", "拒绝", "")
+	dispatched := make(chan platform.IncomingMessage, 2)
+	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	}
+
+	first, err := adapter.handleCardActionEvent(context.Background(), allowEvent, dispatch)
+	if err != nil {
+		t.Fatalf("first handleCardActionEvent error: %v", err)
+	}
+	second, err := adapter.handleCardActionEvent(context.Background(), denyEvent, dispatch)
+	if err != nil {
+		t.Fatalf("second handleCardActionEvent error: %v", err)
+	}
+
+	assertApprovalCardContent(t, first, "✅ 已授权", "允许本次")
+	assertApprovalCardContent(t, second, "✅ 已授权", "允许本次")
+	select {
+	case msg := <-dispatched:
+		if msg.RawCommand.Value["choice"] != "allow" {
+			t.Fatalf("dispatched choice=%q, want first allow", msg.RawCommand.Value["choice"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first dispatch")
+	}
+	select {
+	case msg := <-dispatched:
+		t.Fatalf("duplicate approval dispatched: %#v", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestHandleCardActionEventUsesApprovalKeyWhenMessageIDMissing(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := approvalCardActionEvent("allow", "允许本次", "")
+	event.Event.Context.OpenMessageID = ""
+	dispatched := make(chan platform.IncomingMessage, 2)
+	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	}
+
+	if _, err := adapter.handleCardActionEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatalf("first handleCardActionEvent error: %v", err)
+	}
+	if _, err := adapter.handleCardActionEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatalf("second handleCardActionEvent error: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	if got := len(dispatched); got != 1 {
+		t.Fatalf("dispatch count=%d, want 1 via approval key fallback", got)
+	}
+}
+
 func approvalCardActionEvent(choice string, label string, taskCardID string) *callback.CardActionTriggerEvent {
 	value := map[string]interface{}{
-		"action":  cardActionChoice,
-		"choice":  choice,
-		"kind":    cardKindApproval,
-		"label":   label,
-		"summary": "command: date",
+		"action":       cardActionChoice,
+		"choice":       choice,
+		"kind":         cardKindApproval,
+		"label":        label,
+		"summary":      "command: date",
+		"approval_key": "approval-key-1",
 	}
 	if taskCardID != "" {
 		value["task_card_id"] = taskCardID
@@ -294,5 +383,20 @@ func approvalCardActionEvent(choice string, label string, taskCardID string) *ca
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action:   &callback.CallBackAction{Value: value},
 		},
+	}
+}
+
+func assertApprovalCardContent(t *testing.T, resp *callback.CardActionTriggerResponse, wants ...string) {
+	t.Helper()
+	if resp == nil || resp.Card == nil {
+		t.Fatalf("response=%#v, want compact approval card", resp)
+	}
+	card := resp.Card.Data.(map[string]any)
+	body := card["body"].(map[string]any)
+	content := body["elements"].([]map[string]any)[0]["content"].(string)
+	for _, want := range wants {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content=%q, want %q", content, want)
+		}
 	}
 }

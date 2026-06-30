@@ -253,6 +253,9 @@ func (a *Adapter) recordApprovalAction(action parsedCardAction) (parsedCardActio
 }
 
 func approvalActionKey(action parsedCardAction) string {
+	if key := strings.TrimSpace(action.Approval); key != "" {
+		return action.UserID + "\x00approval\x00" + key
+	}
 	if strings.TrimSpace(action.MessageID) == "" {
 		return ""
 	}
