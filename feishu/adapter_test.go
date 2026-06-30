@@ -194,3 +194,105 @@ func TestHandleCardActionEventRejectsUnauthorizedUser(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	event := approvalCardActionEvent("allow", "允许本次", "card-task-1")
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Card == nil {
+		t.Fatalf("response=%#v, want compact approval card", resp)
+	}
+	if cardKit.updateCountFor("card-task-1") != 1 {
+		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
+	}
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestHandleCardActionEventIgnoresTaskCardUpdateFailure(t *testing.T) {
+	cardKit := &fakeCardKitClient{updateErrors: []error{context.Canceled}}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	event := approvalCardActionEvent("allow", "允许本次", "card-task-1")
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Card == nil {
+		t.Fatalf("response=%#v, want compact approval card despite task card failure", resp)
+	}
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestHandleCardActionEventIsIdempotentForApproval(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := approvalCardActionEvent("allow", "允许本次", "")
+	dispatched := make(chan platform.IncomingMessage, 2)
+	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	}
+
+	first, err := adapter.handleCardActionEvent(context.Background(), event, dispatch)
+	if err != nil {
+		t.Fatalf("first handleCardActionEvent error: %v", err)
+	}
+	second, err := adapter.handleCardActionEvent(context.Background(), event, dispatch)
+	if err != nil {
+		t.Fatalf("second handleCardActionEvent error: %v", err)
+	}
+	if first == nil || first.Card == nil || second == nil || second.Card == nil {
+		t.Fatalf("responses first=%#v second=%#v, want compact cards", first, second)
+	}
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first dispatch")
+	}
+	select {
+	case msg := <-dispatched:
+		t.Fatalf("duplicate approval dispatched: %#v", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func approvalCardActionEvent(choice string, label string, taskCardID string) *callback.CardActionTriggerEvent {
+	value := map[string]interface{}{
+		"action":  cardActionChoice,
+		"choice":  choice,
+		"kind":    cardKindApproval,
+		"label":   label,
+		"summary": "command: date",
+	}
+	if taskCardID != "" {
+		value["task_card_id"] = taskCardID
+	}
+	return &callback.CardActionTriggerEvent{
+		Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user"},
+			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
+			Action:   &callback.CallBackAction{Value: value},
+		},
+	}
+}

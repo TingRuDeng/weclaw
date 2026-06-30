@@ -16,8 +16,10 @@ type fakeCardKitClient struct {
 	streamTexts   []string
 	updateSeqs    []int
 	updateCards   []string
+	updateCardIDs []string
 	destroyed     []string
 	streamErrors  []error
+	updateErrors  []error
 }
 
 // CreateCard 记录创建卡片 JSON 并返回固定 card_id。
@@ -49,9 +51,25 @@ func (f *fakeCardKitClient) StreamContent(ctx context.Context, cardID string, el
 
 // UpdateCard 记录全量更新顺序号。
 func (f *fakeCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJSON string, sequence int) error {
+	f.updateCardIDs = append(f.updateCardIDs, cardID)
 	f.updateSeqs = append(f.updateSeqs, sequence)
 	f.updateCards = append(f.updateCards, cardJSON)
-	return nil
+	if len(f.updateErrors) == 0 {
+		return nil
+	}
+	err := f.updateErrors[0]
+	f.updateErrors = f.updateErrors[1:]
+	return err
+}
+
+func (f *fakeCardKitClient) updateCountFor(cardID string) int {
+	count := 0
+	for _, got := range f.updateCardIDs {
+		if got == cardID {
+			count++
+		}
+	}
+	return count
 }
 
 // DestroyCard 记录生命周期销毁调用。

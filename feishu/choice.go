@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	cardActionChoice   = "choice"
-	cardActionStop     = "stop"
-	cardKindApproval   = "approval"
-	approvalPromptHead = "Codex 请求执行敏感操作，请确认："
+	cardActionChoice       = "choice"
+	cardActionStop         = "stop"
+	cardKindApproval       = "approval"
+	approvalPromptHead     = "Codex 请求执行敏感操作，请确认："
+	approvalSummaryMaxRune = 160
 )
 
 type parsedCardAction struct {
@@ -21,10 +22,18 @@ type parsedCardAction struct {
 	Choice    string
 	Kind      string
 	Label     string
+	Summary   string
+	TaskCard  string
 	Conv      string
 	UserID    string
 	ChatID    string
 	MessageID string
+}
+
+type choiceButtonOptions struct {
+	ConversationKey string
+	Kind            string
+	Summary         string
 }
 
 // buildChoiceCard 构建飞书按钮卡片，每个按钮携带可回放到业务层的动作值。
@@ -33,7 +42,12 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 	if prompt == "" {
 		prompt = "请选择："
 	}
-	buttons := buildChoiceButtons(choices, conversationKey, choiceCardKind(prompt))
+	options := choiceButtonOptions{
+		ConversationKey: conversationKey,
+		Kind:            choiceCardKind(prompt),
+		Summary:         approvalSummaryFromPrompt(prompt),
+	}
+	buttons := buildChoiceButtons(choices, options)
 	if len(buttons) == 0 {
 		return "", fmt.Errorf("choice card requires at least one valid choice")
 	}
@@ -71,7 +85,7 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 }
 
 // buildChoiceButtons 过滤无效选项，并生成 CardKit 2.0 可点击按钮元素。
-func buildChoiceButtons(choices []platform.Choice, conversationKey string, kind string) []map[string]any {
+func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) []map[string]any {
 	buttons := make([]map[string]any, 0, len(choices))
 	for _, choice := range choices {
 		id := strings.TrimSpace(choice.ID)
@@ -82,11 +96,14 @@ func buildChoiceButtons(choices []platform.Choice, conversationKey string, kind 
 		value := map[string]string{
 			"action": cardActionChoice,
 			"choice": id,
-			"conv":   conversationKey,
+			"conv":   options.ConversationKey,
 			"label":  label,
 		}
-		if kind != "" {
-			value["kind"] = kind
+		if options.Kind != "" {
+			value["kind"] = options.Kind
+		}
+		if options.Summary != "" {
+			value["summary"] = options.Summary
 		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",
@@ -99,6 +116,59 @@ func buildChoiceButtons(choices []platform.Choice, conversationKey string, kind 
 		})
 	}
 	return buttons
+}
+
+// approvalSummaryFromPrompt 从审批 prompt 中提取 command/cwd 摘要，避免点击后卡片继续占用大段空间。
+func approvalSummaryFromPrompt(prompt string) string {
+	if choiceCardKind(prompt) != cardKindApproval {
+		return ""
+	}
+	raw := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(prompt), approvalPromptHead))
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "command: " + compactOneLine(raw, approvalSummaryMaxRune)
+	}
+	command := compactOneLine(firstStringValue(payload, "cmd", "command"), approvalSummaryMaxRune/2)
+	cwd := compactOneLine(firstStringValue(payload, "cwd", "path"), approvalSummaryMaxRune/2)
+	lines := make([]string, 0, 2)
+	if command != "" {
+		lines = append(lines, "command: "+command)
+	}
+	if cwd != "" {
+		lines = append(lines, "cwd: "+cwd)
+	}
+	return compactOneLine(strings.Join(lines, "\n"), approvalSummaryMaxRune)
+}
+
+func firstStringValue(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if raw, ok := values[key]; ok {
+			value := strings.TrimSpace(fmt.Sprint(raw))
+			if value != "" && value != "<nil>" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func compactOneLine(text string, maxRunes int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if maxRunes <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 // choiceCardKind 只标记 Codex 审批卡片，避免普通导航/选择卡片点击后被改成审批状态。
@@ -120,10 +190,15 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 		return parsedCardAction{}, false
 	}
 	parsed := parsedCardAction{
-		Action: action,
-		Choice: callbackValueString(value, "choice"),
-		Kind:   callbackValueString(value, "kind"),
-		Label:  callbackValueString(value, "label"),
+		Action:  action,
+		Choice:  callbackValueString(value, "choice"),
+		Kind:    callbackValueString(value, "kind"),
+		Label:   callbackValueString(value, "label"),
+		Summary: callbackValueString(value, "summary"),
+		TaskCard: firstNonEmpty(
+			callbackValueString(value, "task_card_id"),
+			callbackValueString(value, "taskCardId"),
+		),
 		Conv:   callbackValueString(value, "conv"),
 		UserID: strings.TrimSpace(event.Event.Operator.OpenID),
 	}
@@ -146,6 +221,11 @@ func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
 	if label == "" {
 		label = "已选择"
 	}
+	status, template := approvalHandledStatus(action)
+	content := "**" + status + "**\n\n已选择：" + label
+	if summary := strings.TrimSpace(action.Summary); summary != "" {
+		content += "\n\n" + summary
+	}
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
@@ -157,20 +237,41 @@ func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
 				"tag":     "plain_text",
 				"content": "WeClaw",
 			},
-			"template": "green",
+			"template": template,
 		},
 		"body": map[string]any{
 			"direction": "vertical",
 			"elements": []map[string]any{
 				{
 					"tag":       "markdown",
-					"content":   fmt.Sprintf("**已处理**\n\n已选择：%s", label),
+					"content":   content,
 					"text_size": "normal",
 				},
 			},
 		},
 	}
 	return &callback.Card{Type: "card_json", Data: card}
+}
+
+// buildTaskApprovalRecordCard 是轻量主任务卡片回写，占位记录审批结果，不重构进度卡片体系。
+func buildTaskApprovalRecordCard(action parsedCardAction) (string, error) {
+	handled := buildChoiceHandledCard(action)
+	data, err := json.Marshal(handled.Data)
+	if err != nil {
+		return "", fmt.Errorf("marshal feishu task approval record card: %w", err)
+	}
+	return string(data), nil
+}
+
+func approvalHandledStatus(action parsedCardAction) (string, string) {
+	choice := strings.ToLower(strings.TrimSpace(action.Choice))
+	label := strings.ToLower(strings.TrimSpace(action.Label))
+	switch {
+	case strings.Contains(choice, "deny") || strings.Contains(choice, "reject") || strings.Contains(label, "拒"):
+		return "❌ 已拒绝", "red"
+	default:
+		return "✅ 已授权", "green"
+	}
 }
 
 func callbackValueString(value map[string]interface{}, key string) string {

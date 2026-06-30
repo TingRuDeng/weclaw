@@ -3,7 +3,9 @@ package feishu
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -31,6 +33,8 @@ type Adapter struct {
 	accessMu   sync.RWMutex
 	access     platform.AccessControl
 	accessSet  bool
+	approvalMu sync.Mutex
+	approvals  map[string]parsedCardAction
 }
 
 // NewAdapter 创建飞书平台 adapter。
@@ -44,6 +48,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		validate:   ValidateCredentials,
 		session:    DefaultFeishuSessionOptions(),
 		deduper:    newFeishuEventDeduper(feishuEventDedupTTL),
+		approvals:  make(map[string]parsedCardAction),
 	}
 	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
 		return larkws.NewClient(
@@ -176,6 +181,9 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 			Toast: &callback.Toast{Type: "warning", Content: "当前账号未授权使用 WeClaw"},
 		}, nil
 	}
+	if action.Kind == cardKindApproval {
+		return a.handleApprovalCardAction(ctx, action, dispatch), nil
+	}
 	msg := platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: a.creds.AppID,
@@ -194,15 +202,76 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		},
 	}
 	go dispatch(context.WithoutCancel(ctx), msg, NewReplier(a.sender, action.UserID, a.cardKit))
-	if action.Kind == cardKindApproval {
-		return &callback.CardActionTriggerResponse{
-			Toast: &callback.Toast{Type: "success", Content: "已处理"},
-			Card:  buildChoiceHandledCard(action),
-		}, nil
-	}
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
 	}, nil
+}
+
+// handleApprovalCardAction 处理飞书审批按钮，先收纳审批卡片，再把首个 decision 交给 agent。
+func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCardAction, dispatch platform.DispatchFunc) *callback.CardActionTriggerResponse {
+	handled, first := a.recordApprovalAction(action)
+	if first {
+		msg := platform.IncomingMessage{
+			Platform:  platform.PlatformFeishu,
+			AccountID: a.creds.AppID,
+			UserID:    handled.UserID,
+			ChatID:    handled.ChatID,
+			MessageID: handled.MessageID + ":card:" + handled.Action + ":" + handled.Choice,
+			RawCommand: &platform.CardAction{
+				Action: handled.Action,
+				Value: map[string]string{
+					"choice": handled.Choice,
+					"conv":   handled.Conv,
+				},
+			},
+			Metadata: map[string]string{"source": "card.action.trigger"},
+		}
+		go dispatch(context.WithoutCancel(ctx), msg, NewReplier(a.sender, handled.UserID, a.cardKit))
+		a.updateTaskCardWithApproval(ctx, handled)
+	}
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "success", Content: "已处理"},
+		Card:  buildChoiceHandledCard(handled),
+	}
+}
+
+func (a *Adapter) recordApprovalAction(action parsedCardAction) (parsedCardAction, bool) {
+	key := approvalActionKey(action)
+	if key == "" {
+		return action, true
+	}
+	a.approvalMu.Lock()
+	defer a.approvalMu.Unlock()
+	if a.approvals == nil {
+		a.approvals = make(map[string]parsedCardAction)
+	}
+	if existing, ok := a.approvals[key]; ok {
+		return existing, false
+	}
+	a.approvals[key] = action
+	return action, true
+}
+
+func approvalActionKey(action parsedCardAction) string {
+	if strings.TrimSpace(action.MessageID) == "" {
+		return ""
+	}
+	return action.UserID + "\x00" + action.MessageID
+}
+
+func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedCardAction) {
+	if a.cardKit == nil || strings.TrimSpace(action.TaskCard) == "" {
+		return
+	}
+	// 当前仅支持按钮 payload 携带 task_card_id；生产态还缺 approval_id 到主任务卡片的稳定映射。
+	cardJSON, err := buildTaskApprovalRecordCard(action)
+	if err != nil {
+		log.Printf("[feishu] failed to build task approval record card: %v", err)
+		return
+	}
+	if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, int(time.Now().UnixMilli())); err != nil {
+		log.Printf("[feishu] ignored task approval card update error: %v", err)
+	}
 }
 
 func (a *Adapter) allowCardActionUser(userID string) bool {

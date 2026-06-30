@@ -39,7 +39,7 @@ func TestBuildChoiceCardUsesCardKitV2ButtonValues(t *testing.T) {
 }
 
 func TestBuildChoiceCardMarksApprovalButtons(t *testing.T) {
-	cardJSON, err := buildChoiceCard("Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{ID: "allow", Label: "允许本次"}}, "feishu:ou_user")
+	cardJSON, err := buildChoiceCard("Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\",\"cwd\":\"/tmp/work\"}", []platform.Choice{{ID: "allow", Label: "允许本次"}}, "feishu:ou_user")
 	if err != nil {
 		t.Fatalf("buildChoiceCard error: %v", err)
 	}
@@ -48,8 +48,23 @@ func TestBuildChoiceCardMarksApprovalButtons(t *testing.T) {
 	elements := body["elements"].([]any)
 	button := elements[1].(map[string]any)
 	value := button["value"].(map[string]any)
-	if value["kind"] != "approval" || value["label"] != "允许本次" {
+	if value["kind"] != "approval" || value["label"] != "允许本次" || value["summary"] == "" {
 		t.Fatalf("button value=%#v, want approval kind and label", value)
+	}
+}
+
+func TestBuildChoiceCardDoesNotMarkNormalChoicesAsApproval(t *testing.T) {
+	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{ID: "/cx cd 0", Label: "weclaw"}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	button := elements[1].(map[string]any)
+	value := button["value"].(map[string]any)
+	if value["kind"] != nil {
+		t.Fatalf("button value=%#v, want no approval kind", value)
 	}
 }
 
@@ -86,10 +101,11 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 			Operator: &callback.Operator{OpenID: "ou_user"},
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
-				"action": cardActionChoice,
-				"choice": "allow",
-				"kind":   "approval",
-				"label":  "允许本次",
+				"action":  cardActionChoice,
+				"choice":  "allow",
+				"kind":    "approval",
+				"label":   "允许本次",
+				"summary": "command: date\ncwd: /tmp/work",
 			}},
 		},
 	}
@@ -115,12 +131,48 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 	}
 	body := card["body"].(map[string]any)
 	content := body["elements"].([]map[string]any)[0]["content"].(string)
-	if !strings.Contains(content, "已处理") || !strings.Contains(content, "允许本次") {
-		t.Fatalf("content=%q, want handled approval label", content)
+	if !strings.Contains(content, "✅ 已授权") || !strings.Contains(content, "允许本次") || !strings.Contains(content, "command: date") {
+		t.Fatalf("content=%q, want compact allow status", content)
+	}
+	if strings.Contains(content, "{") || strings.Contains(content, "}") || len(body["elements"].([]map[string]any)) != 1 {
+		t.Fatalf("content=%q, want compact card without verbose JSON or buttons", content)
 	}
 	select {
 	case <-dispatched:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestBuildChoiceHandledCardShowsDenyStatus(t *testing.T) {
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "deny", Label: "拒绝", Summary: "command: rm file"})
+	data := card.Data.(map[string]any)
+	header := data["header"].(map[string]any)
+	if header["template"] != "red" {
+		t.Fatalf("header=%#v, want red denied card", header)
+	}
+	body := data["body"].(map[string]any)
+	content := body["elements"].([]map[string]any)[0]["content"].(string)
+	if !strings.Contains(content, "❌ 已拒绝") || !strings.Contains(content, "拒绝") {
+		t.Fatalf("content=%q, want deny status", content)
+	}
+}
+
+func TestApprovalSummaryTruncatesLongCommandAndCwd(t *testing.T) {
+	longValue := strings.Repeat("很长路径", 80)
+	cardJSON, err := buildChoiceCard("Codex 请求执行敏感操作，请确认：\n\n"+`{"cmd":"`+longValue+`","cwd":"/tmp/`+longValue+`"}`, []platform.Choice{{ID: "allow", Label: "允许本次"}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	value := elements[1].(map[string]any)["value"].(map[string]any)
+	summary := value["summary"].(string)
+	if !strings.Contains(summary, "...") {
+		t.Fatalf("summary=%q, want truncated summary", summary)
+	}
+	if len([]rune(summary)) > 180 {
+		t.Fatalf("summary length=%d, want compact summary", len([]rune(summary)))
 	}
 }
