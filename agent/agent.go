@@ -136,6 +136,12 @@ type CodexModelAgent interface {
 	ListCodexModels(ctx context.Context) ([]CodexModel, error)
 }
 
+// CodexModelControlAgent 暴露 Codex 运行时模型/推理强度切换能力。
+type CodexModelControlAgent interface {
+	CodexModelAgent
+	SetCodexModel(model string, effort string)
+}
+
 // CodexQuota 表示 Codex app-server 返回的账号额度快照。
 type CodexQuota struct {
 	Limits []CodexRateLimit

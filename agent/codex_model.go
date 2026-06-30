@@ -4,11 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // CodexModelStatus 返回当前 WeClaw 侧配置，空值表示沿用 Codex 默认值。
 func (a *ACPAgent) CodexModelStatus() CodexModelStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	return CodexModelStatus{Model: a.model, Effort: a.effort}
+}
+
+// SetCodexModel 运行时更新 Codex 模型/推理强度；空字符串表示保持原值。
+// 变更在下一个新建/恢复的 thread(即下一个新会话)生效，不影响已进行中的 thread。
+func (a *ACPAgent) SetCodexModel(model string, effort string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if strings.TrimSpace(model) != "" {
+		a.model = strings.TrimSpace(model)
+	}
+	if strings.TrimSpace(effort) != "" {
+		a.effort = strings.TrimSpace(effort)
+	}
 }
 
 // ListCodexModels 通过 Codex app-server 的 model/list 查询可用模型。
