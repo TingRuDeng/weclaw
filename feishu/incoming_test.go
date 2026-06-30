@@ -7,6 +7,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/channel/types"
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
@@ -42,9 +43,12 @@ func TestToIncomingFromMessageParsesText(t *testing.T) {
 	if incoming.Text != "hello  world\nnext" {
 		t.Fatalf("text=%q, want cleaned text", incoming.Text)
 	}
+	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:dm:oc_1:ou_user" {
+		t.Fatalf("metadata=%#v, want scoped DM session", incoming.Metadata)
+	}
 }
 
-func TestToIncomingFromMessageIgnoresGroupChat(t *testing.T) {
+func TestToIncomingFromMessageIgnoresUnmentionedGroupByDefault(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := newMessageEvent("group", "text", `{"text":"hello"}`)
 
@@ -52,6 +56,44 @@ func TestToIncomingFromMessageIgnoresGroupChat(t *testing.T) {
 
 	if ok {
 		t.Fatal("group chat should be ignored")
+	}
+}
+
+func TestToIncomingFromMessageDispatchesMentionedGroup(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := newMessageEvent("group", "text", `{"text":"<at user_id=\"cli_a\">bot</at> hello"}`)
+	event.Event.Message.RootId = stringPtr("om_root")
+	event.Event.Message.Mentions = []*larkim.MentionEvent{newMention("cli_a")}
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("mentioned group message should be dispatchable")
+	}
+	if incoming.UserID != "ou_user" {
+		t.Fatalf("incoming.UserID=%q, want sender open_id for access control", incoming.UserID)
+	}
+	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:group:oc_1:om_root" {
+		t.Fatalf("metadata=%#v, want scoped group thread session", incoming.Metadata)
+	}
+	if incoming.Metadata["feishu_is_mentioned"] != "true" {
+		t.Fatalf("metadata=%#v, want feishu_is_mentioned=true", incoming.Metadata)
+	}
+}
+
+func TestToIncomingFromMessageDispatchesGroupWhenMentionNotRequired(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.SetSessionOptions(FeishuSessionOptions{RequireMentionInGroup: false, ThreadIsolation: true})
+	event := newMessageEvent("group", "text", `{"text":"hello"}`)
+	event.Event.Message.ThreadId = stringPtr("omt_thread")
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("group message should dispatch when require_mention_in_group=false")
+	}
+	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:group:oc_1:omt_thread" {
+		t.Fatalf("metadata=%#v, want scoped thread session", incoming.Metadata)
 	}
 }
 
@@ -143,6 +185,9 @@ func TestToIncomingFromMessageParsesPostContentObjectFallback(t *testing.T) {
 // newMessageEvent 构造飞书 P2 消息事件。
 func newMessageEvent(chatType string, messageType string, content string) *larkim.P2MessageReceiveV1 {
 	return &larkim.P2MessageReceiveV1{
+		EventV2Base: &larkevent.EventV2Base{
+			Header: &larkevent.EventHeader{TenantKey: "tenant_1"},
+		},
 		Event: &larkim.P2MessageReceiveV1Data{
 			Sender: &larkim.EventSender{
 				SenderId: &larkim.UserId{OpenId: stringPtr("ou_user")},
@@ -155,6 +200,14 @@ func newMessageEvent(chatType string, messageType string, content string) *larki
 				Content:     stringPtr(content),
 			},
 		},
+	}
+}
+
+// newMention 构造飞书 @ 事件条目。
+func newMention(openID string) *larkim.MentionEvent {
+	return &larkim.MentionEvent{
+		Key: stringPtr("@_user_1"),
+		Id:  &larkim.UserId{OpenId: stringPtr(openID)},
 	}
 }
 

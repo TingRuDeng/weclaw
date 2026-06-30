@@ -74,7 +74,9 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 	if normalized == nil || normalized.UserID == "" || normalized.MessageID == "" {
 		return platform.IncomingMessage{}, false
 	}
-	if normalized.ChatType != "" && normalized.ChatType != "p2p" {
+	scope := ExtractFeishuSessionScope(event)
+	scope.IsMentioned = isMentionedBot(event, a.creds.AppID)
+	if shouldIgnoreFeishuGroup(scope, a.session) {
 		return platform.IncomingMessage{}, false
 	}
 	text := cleanFeishuText(normalized.Content)
@@ -100,7 +102,9 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		ContextToken: normalized.MessageID,
 		Text:         text,
 		Metadata: map[string]string{
-			"raw_content_type": normalized.RawContentType,
+			"raw_content_type":       normalized.RawContentType,
+			feishuSessionMetadataKey: BuildFeishuSessionKey(scope, a.session.ThreadIsolation),
+			feishuMentionMetadataKey: fmt.Sprintf("%t", scope.IsMentioned),
 		},
 	}
 	for _, resource := range resources {
@@ -114,6 +118,14 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		return platform.IncomingMessage{}, false
 	}
 	return incoming, true
+}
+
+// shouldIgnoreFeishuGroup 按配置决定群聊消息是否需要 @bot 才进入 agent。
+func shouldIgnoreFeishuGroup(scope FeishuSessionScope, options FeishuSessionOptions) bool {
+	if !isFeishuGroupChat(scope.ChatType) {
+		return false
+	}
+	return options.RequireMentionInGroup && !scope.IsMentioned
 }
 
 // cleanFeishuText 清理飞书文本中的轻量 HTML 标记，同时保留普通空格。

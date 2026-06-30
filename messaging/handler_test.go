@@ -1135,6 +1135,29 @@ func TestHandleMessageUsesPlatformDefaultAgent(t *testing.T) {
 	}
 }
 
+func TestHandleMessageUsesFeishuSessionMetadataForRouting(t *testing.T) {
+	ag := &fakeAgent{reply: "ok", info: agent.AgentInfo{Name: "mock", Type: "test"}}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		if name == "mock" {
+			return ag
+		}
+		return nil
+	}, nil)
+	h.SetDefaultAgent("mock", ag)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_sender",
+		Text:     "hello",
+		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+	}, reply)
+
+	if got := ag.lastChatConversationID(); got != "feishu:tenant_1:group:oc_1:om_root" {
+		t.Fatalf("conversationID=%q, want feishu metadata session key", got)
+	}
+}
+
 func TestEnsureAgentStartedSerializesConcurrentStartup(t *testing.T) {
 	start := make(chan struct{})
 	release := make(chan struct{})

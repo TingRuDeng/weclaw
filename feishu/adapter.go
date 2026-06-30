@@ -26,6 +26,7 @@ type Adapter struct {
 	cardKit    cardKitClient
 	validate   func(context.Context, Credentials) error
 	wsFactory  func(*dispatcher.EventDispatcher) wsRunner
+	session    FeishuSessionOptions
 	accessMu   sync.RWMutex
 	access     platform.AccessControl
 	accessSet  bool
@@ -40,6 +41,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		sender:     newSDKMessageSender(restClient, creds.AppID),
 		cardKit:    newSDKCardKitClient(restClient, creds.AppID),
 		validate:   ValidateCredentials,
+		session:    DefaultFeishuSessionOptions(),
 	}
 	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
 		return larkws.NewClient(
@@ -49,6 +51,11 @@ func NewAdapter(creds Credentials) *Adapter {
 		)
 	}
 	return adapter
+}
+
+// SetSessionOptions 设置飞书群聊触发和 thread 隔离策略。
+func (a *Adapter) SetSessionOptions(options FeishuSessionOptions) {
+	a.session = options
 }
 
 // Name 返回平台名称。
@@ -126,7 +133,7 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		return nil
 	}
 	log.Printf("[feishu] message event parsed: user=%s message=%s attachments=%d", msg.UserID, msg.MessageID, len(msg.Attachments))
-	dispatch(ctx, msg, NewReplier(a.sender, msg.UserID, a.cardKit))
+	dispatch(ctx, msg, NewReplier(a.sender, firstNonEmpty(msg.ChatID, msg.UserID), a.cardKit))
 	return nil
 }
 

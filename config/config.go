@@ -22,11 +22,23 @@ type Config struct {
 
 // PlatformConfig 保存单个平台的启用状态、访问控制和展示覆盖配置。
 type PlatformConfig struct {
-	Enabled              *bool           `json:"enabled,omitempty"`
-	AllowedUsers         []string        `json:"allowed_users,omitempty"`
-	DefaultAgent         string          `json:"default_agent,omitempty"`
-	Progress             *ProgressConfig `json:"progress,omitempty"`
-	MessageAggregationMs *int            `json:"message_aggregation_ms,omitempty"`
+	Enabled               *bool           `json:"enabled,omitempty"`
+	AllowedUsers          []string        `json:"allowed_users,omitempty"`
+	DefaultAgent          string          `json:"default_agent,omitempty"`
+	Progress              *ProgressConfig `json:"progress,omitempty"`
+	MessageAggregationMs  *int            `json:"message_aggregation_ms,omitempty"`
+	RequireMentionInGroup *bool           `json:"require_mention_in_group,omitempty"`
+	ThreadIsolation       *bool           `json:"thread_isolation,omitempty"`
+}
+
+// EffectiveRequireMentionInGroup 返回飞书群聊 @ 触发规则，默认要求 @bot。
+func (c PlatformConfig) EffectiveRequireMentionInGroup() bool {
+	return boolValueDefault(c.RequireMentionInGroup, true)
+}
+
+// EffectiveThreadIsolation 返回飞书 thread 会话隔离规则，默认按 thread 隔离。
+func (c PlatformConfig) EffectiveThreadIsolation() bool {
+	return boolValueDefault(c.ThreadIsolation, true)
 }
 
 // AgentConfig holds configuration for a single agent.
@@ -128,6 +140,14 @@ func DefaultProgressConfig() ProgressConfig {
 		TaskTimeoutSeconds:     0,
 		IncludePartialOnError:  &includePartialOnError,
 	}
+}
+
+// boolValueDefault 读取可选布尔值，缺省时返回业务安全默认值。
+func boolValueDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 // NormalizeProgressConfig 用局部配置覆盖基础配置，未填写字段沿用基础值。

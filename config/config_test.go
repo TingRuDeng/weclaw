@@ -145,6 +145,8 @@ func TestDefaultConfigInitializesAgentsMap(t *testing.T) {
 
 func TestPlatformConfigUnmarshal(t *testing.T) {
 	var cfg Config
+	requireMention := false
+	threadIsolation := false
 	data := []byte(`{
 		"platforms": {
 			"feishu": {
@@ -152,7 +154,9 @@ func TestPlatformConfigUnmarshal(t *testing.T) {
 				"allowed_users": ["ou_1"],
 				"default_agent": "codex",
 				"progress": {"mode": "stream"},
-				"message_aggregation_ms": 0
+				"message_aggregation_ms": 0,
+				"require_mention_in_group": false,
+				"thread_isolation": false
 			}
 		},
 		"agents": {}
@@ -176,6 +180,23 @@ func TestPlatformConfigUnmarshal(t *testing.T) {
 	}
 	if feishu.MessageAggregationMs == nil || *feishu.MessageAggregationMs != 0 {
 		t.Fatalf("MessageAggregationMs=%#v, want explicit 0", feishu.MessageAggregationMs)
+	}
+	if feishu.RequireMentionInGroup == nil || *feishu.RequireMentionInGroup != requireMention {
+		t.Fatalf("RequireMentionInGroup=%#v, want explicit false", feishu.RequireMentionInGroup)
+	}
+	if feishu.ThreadIsolation == nil || *feishu.ThreadIsolation != threadIsolation {
+		t.Fatalf("ThreadIsolation=%#v, want explicit false", feishu.ThreadIsolation)
+	}
+}
+
+func TestPlatformConfigDefaultsFeishuSessionRules(t *testing.T) {
+	cfg := PlatformConfig{}
+
+	if !cfg.EffectiveRequireMentionInGroup() {
+		t.Fatal("EffectiveRequireMentionInGroup=false, want default true")
+	}
+	if !cfg.EffectiveThreadIsolation() {
+		t.Fatal("EffectiveThreadIsolation=false, want default true")
 	}
 }
 

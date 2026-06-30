@@ -216,8 +216,13 @@ func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config) (*
 		if err != nil {
 			return nil, fmt.Errorf("load feishu credentials: %w", err)
 		}
+		adapter := feishuplatform.NewAdapter(creds)
+		adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
+			RequireMentionInGroup: feishuCfg.EffectiveRequireMentionInGroup(),
+			ThreadIsolation:       feishuCfg.EffectiveThreadIsolation(),
+		})
 		entries = append(entries, platform.RegistryEntry{
-			Platform: feishuplatform.NewAdapter(creds),
+			Platform: adapter,
 			Access:   platform.NewAccessControl(feishuCfg.AllowedUsers),
 		})
 	}

@@ -586,6 +586,9 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		}
 		go h.cleanSeenMsgs(h.duplicateTTL())
 	}
+	if sessionKey := platformMessageSessionKey(msg); sessionKey != "" {
+		msg.UserID = sessionKey
+	}
 
 	text := strings.TrimSpace(platformMessageText(msg))
 	if msg.RawCommand != nil && msg.RawCommand.Action == "stop" {
@@ -732,6 +735,14 @@ func platformMessageText(msg platform.IncomingMessage) string {
 		return strings.TrimSpace(msg.RawCommand.Value["choice"])
 	}
 	return msg.Text
+}
+
+// platformMessageSessionKey 返回平台 adapter 明确传入的会话 key。
+func platformMessageSessionKey(msg platform.IncomingMessage) string {
+	if msg.Platform == platform.PlatformFeishu && msg.Metadata != nil {
+		return strings.TrimSpace(msg.Metadata["feishu_session_key"])
+	}
+	return ""
 }
 
 func platformMessageDedupKey(msg platform.IncomingMessage) string {
