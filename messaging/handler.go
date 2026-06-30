@@ -811,6 +811,10 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 		sendText(h.handleListActiveTasks(msg.UserID))
 	case trimmed == "/mode" || strings.HasPrefix(trimmed, "/mode "):
 		sendText(h.handleModeCommand(msg.UserID, trimmed))
+	case trimmed == "/model" || strings.HasPrefix(trimmed, "/model "):
+		sendText(h.handleModelCommand(ctx, msg.Platform, strings.TrimSpace(strings.TrimPrefix(trimmed, "/model"))))
+	case trimmed == "/reasoning" || strings.HasPrefix(trimmed, "/reasoning "):
+		sendText(h.handleReasoningCommand(ctx, msg.Platform, strings.TrimSpace(strings.TrimPrefix(trimmed, "/reasoning"))))
 	case strings.HasPrefix(trimmed, "/cwd"):
 		sendText(h.handleCwd(trimmed, msg.UserID))
 	default:
@@ -2254,6 +2258,8 @@ func buildHelpText() string {
 /cwd <路径> 切换工作目录
 
 /mode 查看权限模式，/mode yolo 自动放行，/mode default 按钮确认
+
+/model 查看/切换模型，/reasoning 查看/切换推理强度
 
 /ps 查看运行中的任务
 
