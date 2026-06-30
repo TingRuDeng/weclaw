@@ -155,16 +155,18 @@ type sessionUpdate struct {
 }
 
 type permissionRequestParams struct {
-	ThreadID           string             `json:"threadId,omitempty"`
-	TurnID             string             `json:"turnId,omitempty"`
-	ToolCall           json.RawMessage    `json:"toolCall"`
-	Command            permissionCommand  `json:"command,omitempty"`
-	Cwd                string             `json:"cwd,omitempty"`
-	Options            []permissionOption `json:"options"`
-	AvailableDecisions []string           `json:"availableDecisions,omitempty"`
+	ThreadID           string              `json:"threadId,omitempty"`
+	TurnID             string              `json:"turnId,omitempty"`
+	ToolCall           json.RawMessage     `json:"toolCall"`
+	Command            permissionCommand   `json:"command,omitempty"`
+	Cwd                string              `json:"cwd,omitempty"`
+	Options            []permissionOption  `json:"options"`
+	AvailableDecisions permissionDecisions `json:"availableDecisions,omitempty"`
 }
 
 type permissionCommand []string
+
+type permissionDecisions []string
 
 type permissionOption struct {
 	OptionID string `json:"optionId"`
@@ -1986,6 +1988,65 @@ func (c *permissionCommand) UnmarshalJSON(data []byte) error {
 	}
 	*c = permissionCommand{command}
 	return nil
+}
+
+// UnmarshalJSON 兼容 Codex availableDecisions 字段：字符串数组或带 decision 的对象数组。
+func (d *permissionDecisions) UnmarshalJSON(data []byte) error {
+	var rawItems []json.RawMessage
+	if err := json.Unmarshal(data, &rawItems); err == nil {
+		*d = parsePermissionDecisionItems(rawItems)
+		return nil
+	}
+	decision, ok, err := parsePermissionDecisionValue(data)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		*d = nil
+		return nil
+	}
+	*d = permissionDecisions{decision}
+	return nil
+}
+
+// parsePermissionDecisionItems 逐项提取新版审批 decision，跳过空对象。
+func parsePermissionDecisionItems(items []json.RawMessage) permissionDecisions {
+	decisions := make(permissionDecisions, 0, len(items))
+	for _, item := range items {
+		if decision, ok, _ := parsePermissionDecisionValue(item); ok {
+			decisions = append(decisions, decision)
+		}
+	}
+	return decisions
+}
+
+// parsePermissionDecisionValue 从字符串或对象中取出实际要回传给 Codex 的 decision。
+func parsePermissionDecisionValue(data json.RawMessage) (string, bool, error) {
+	var decision string
+	if err := json.Unmarshal(data, &decision); err == nil {
+		return strings.TrimSpace(decision), strings.TrimSpace(decision) != "", nil
+	}
+	var object struct {
+		Decision string `json:"decision"`
+		ID       string `json:"id"`
+		OptionID string `json:"optionId"`
+		Value    string `json:"value"`
+	}
+	if err := json.Unmarshal(data, &object); err != nil {
+		return "", false, err
+	}
+	decision = firstNonEmptyString(object.Decision, object.ID, object.OptionID, object.Value)
+	return decision, decision != "", nil
+}
+
+// firstNonEmptyString 返回第一个非空字符串，用于兼容不同对象字段名。
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequest) string {

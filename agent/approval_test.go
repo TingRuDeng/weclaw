@@ -113,6 +113,30 @@ func TestHandleCodexCommandApprovalAcceptsStringCommand(t *testing.T) {
 	}
 }
 
+func TestHandleCodexCommandApprovalAcceptsObjectAvailableDecisions(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-approval"] = turnCh
+	a.notifyMu.Unlock()
+
+	raw := `{"jsonrpc":"2.0","id":12,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-approval","turnId":"turn-1","itemId":"call-1","approvalId":3,"command":"date","cwd":"/tmp","availableDecisions":[{"decision":"allow","label":"Allow"},{"decision":"deny","label":"Deny"}]}}`
+	a.handlePermissionRequest(raw)
+
+	select {
+	case evt := <-turnCh:
+		if evt.Approval == nil {
+			t.Fatal("approval event missing")
+		}
+		options := evt.Approval.Request.Options
+		if len(options) != 2 || options[0].ID != "allow" || options[1].ID != "deny" {
+			t.Fatalf("approval options=%#v, want object available decisions", options)
+		}
+	default:
+		t.Fatal("approval request was not dispatched")
+	}
+}
+
 func TestRespondCodexApprovalRequestUsesDecisionResult(t *testing.T) {
 	var out bytes.Buffer
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
