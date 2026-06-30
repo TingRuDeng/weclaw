@@ -194,6 +194,12 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		},
 	}
 	go dispatch(context.WithoutCancel(ctx), msg, NewReplier(a.sender, action.UserID, a.cardKit))
+	if action.Kind == cardKindApproval {
+		return &callback.CardActionTriggerResponse{
+			Toast: &callback.Toast{Type: "success", Content: "已处理"},
+			Card:  buildChoiceHandledCard(action),
+		}, nil
+	}
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
 	}, nil

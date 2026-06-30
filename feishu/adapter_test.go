@@ -146,8 +146,8 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCardActionEvent error: %v", err)
 	}
-	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
-		t.Fatalf("response=%#v, want success toast", resp)
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" || resp.Card != nil {
+		t.Fatalf("response=%#v, want success toast without card update", resp)
 	}
 	select {
 	case msg := <-dispatched:
