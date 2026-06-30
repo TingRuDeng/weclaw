@@ -66,6 +66,10 @@ type Handler struct {
 	saveDefault             SaveDefaultFunc
 	contextTokens           sync.Map // map[userID]contextToken
 	saveDir                 string   // directory to save images/files to
+	allowedWorkspaceRoots   []string // /cwd 允许切换的根目录；空=不限制
+	rateLimiter             *userRateLimiter
+	rateLimitPerMinute      int
+	audit                   auditLogger
 	seenMsgs                sync.Map // map[int64]time.Time — dedup by message_id
 	cdnDownloader           CDNDownloader
 	progressConfig          config.ProgressConfig
@@ -179,6 +183,68 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 // SetSaveDir sets the directory for saving images and files.
 func (h *Handler) SetSaveDir(dir string) {
 	h.saveDir = dir
+}
+
+// SetAllowedWorkspaceRoots 设置 /cwd 允许切换的根目录白名单；空切片表示不限制。
+func (h *Handler) SetAllowedWorkspaceRoots(roots []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cleaned := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if trimmed := strings.TrimSpace(root); trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	h.allowedWorkspaceRoots = cleaned
+}
+
+// SetRateLimitPerMinute 设置每用户每分钟触发 agent 的上限；<=0 表示不限流。
+func (h *Handler) SetRateLimitPerMinute(limit int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rateLimitPerMinute = limit
+	if limit > 0 && h.rateLimiter == nil {
+		h.rateLimiter = newUserRateLimiter(time.Minute)
+	}
+}
+
+// SetAuditLogger 设置审计日志记录器。
+func (h *Handler) SetAuditLogger(logger auditLogger) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.audit = logger
+}
+
+func (h *Handler) auditRecord(entry auditEntry) {
+	h.mu.RLock()
+	logger := h.audit
+	h.mu.RUnlock()
+	if logger != nil {
+		logger.Log(entry)
+	}
+}
+
+// allowAgentInvocation 在触发 agent 前做每用户限流；返回 false 表示已超限。
+func (h *Handler) allowAgentInvocation(routeUserID string) bool {
+	h.mu.RLock()
+	limit := h.rateLimitPerMinute
+	limiter := h.rateLimiter
+	h.mu.RUnlock()
+	if limit <= 0 || limiter == nil {
+		return true
+	}
+	return limiter.Allow(routeUserID, limit)
+}
+
+// isWorkspaceAllowed 判断目标目录是否落在 /cwd 白名单内；白名单为空时不限制。
+func (h *Handler) isWorkspaceAllowed(absPath string) bool {
+	h.mu.RLock()
+	roots := h.allowedWorkspaceRoots
+	h.mu.RUnlock()
+	if len(roots) == 0 {
+		return true
+	}
+	return isAllowedAttachmentPath(absPath, roots)
 }
 
 // cleanSeenMsgs 清理超过 TTL 的消息去重缓存。
@@ -664,6 +730,18 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		return
 	}
 
+	if !h.allowAgentInvocation(routeUserID) {
+		log.Printf("[handler] rate limit exceeded for %s", routeUserID)
+		sendText("请求过于频繁，请稍后再试。")
+		return
+	}
+	h.auditRecord(auditEntry{
+		Platform: string(msg.Platform),
+		User:     msg.UserID,
+		Action:   "agent_message",
+		Summary:  text,
+	})
+
 	agentNames, message := h.parseCommand(text)
 	if len(agentNames) == 0 {
 		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, text, clientID)
@@ -978,6 +1056,7 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 		if h.isYoloMode(userID) {
 			decision := autoApproveApprovalOption(req.Options)
 			log.Printf("[handler] yolo mode auto-approving sensitive operation for %s -> %q", userID, decision)
+			h.auditRecord(auditEntry{User: userID, Action: "approval_auto_yolo", Summary: decision})
 			return decision, nil
 		}
 		pending := h.registerPendingApproval(userID, req.Options)
@@ -1236,6 +1315,7 @@ func (h *Handler) handleModeCommand(userID string, trimmed string) string {
 	switch strings.ToLower(strings.TrimSpace(fields[1])) {
 	case "yolo":
 		h.setYoloMode(userID, true)
+		h.auditRecord(auditEntry{User: userID, Action: "mode_yolo_enabled"})
 		return "已切换为 yolo 模式：Codex 敏感操作将自动放行。\n⚠️ 该模式跳过确认，请确保当前会话可信。发送 /mode default 可恢复确认。"
 	case "default", "ask", "off":
 		h.setYoloMode(userID, false)
@@ -2074,6 +2154,13 @@ func (h *Handler) handleCwd(trimmed string, userID ...string) string {
 	}
 	if !info.IsDir() {
 		return fmt.Sprintf("Not a directory: %s", absPath)
+	}
+
+	// 安全限制：配置了工作目录白名单时，/cwd 只能切到白名单根目录及其子目录，
+	// 防止被授权用户把具备 shell 权限的 agent 指向任意路径。
+	if !h.isWorkspaceAllowed(absPath) {
+		log.Printf("[handler] rejected /cwd outside allowed workspace roots: %s", absPath)
+		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请联系管理员在 allowed_workspace_roots 中添加。", absPath)
 	}
 
 	// Update cwd on all running agents
