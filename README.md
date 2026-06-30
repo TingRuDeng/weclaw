@@ -423,6 +423,20 @@ Set `cwd` to specify the agent's working directory (workspace). If omitted, defa
 
 > **Warning:** These flags disable safety checks. Only enable them if you understand the risks. ACP agents handle permissions automatically and don't need these flags.
 
+## Web Config Panel
+
+Run a local browser-based config panel instead of hand-editing `~/.weclaw/config.json`:
+
+```bash
+weclaw web                 # serves on 127.0.0.1:39282, prints a tokenized local URL, opens the browser
+weclaw web --no-open       # don't auto-open the browser
+weclaw web --addr 127.0.0.1:39282 --token <token>
+```
+
+The panel lets you edit security settings (`allowed_workspace_roots`, `rate_limit_per_minute`, audit), agents, write Feishu credentials, validate them, and complete WeChat QR login in-page.
+
+**Security:** the panel reads/writes files containing shell-capable agent config and secrets, so by default it binds loopback only, requires a token (auto-generated for loopback; mandatory when binding a non-loopback address), enforces same-origin checks, and **never echoes secrets** (API token, agent api_key/env values, Feishu app_secret are masked; submitting the mask keeps the stored value). Config is written atomically (`0600`). Soft config (agents/progress/allowed_users/workspace roots/rate limit) is hot-reloaded by a running `weclaw start`; platform enable/credential changes (incl. newly scanned WeChat accounts) require `weclaw restart`.
+
 ## Background Mode
 
 ```bash

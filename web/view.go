@@ -1,0 +1,169 @@
+package web
+
+import "github.com/fastclaw-ai/weclaw/config"
+
+// secretMask 表示"该密钥保持不变"。读取时密钥被替换为该值，写回时该值表示沿用原密钥。
+const secretMask = "__WECLAW_UNCHANGED__"
+
+// configView 是面向前端的脱敏配置视图。
+type configView struct {
+	DefaultAgent          string                           `json:"default_agent"`
+	APIAddr               string                           `json:"api_addr"`
+	APIToken              string                           `json:"api_token"`
+	SaveDir               string                           `json:"save_dir"`
+	AllowedWorkspaceRoots []string                         `json:"allowed_workspace_roots"`
+	RateLimitPerMinute    int                              `json:"rate_limit_per_minute"`
+	AuditLog              *bool                            `json:"audit_log"`
+	AuditLogPath          string                           `json:"audit_log_path"`
+	Progress              config.ProgressConfig            `json:"progress"`
+	Agents                map[string]agentView             `json:"agents"`
+	Platforms             map[string]config.PlatformConfig `json:"platforms"`
+}
+
+// agentView 是脱敏后的 agent 配置（密钥字段掩码）。
+type agentView struct {
+	Type         string            `json:"type"`
+	Command      string            `json:"command,omitempty"`
+	Args         []string          `json:"args,omitempty"`
+	Aliases      []string          `json:"aliases,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Model        string            `json:"model,omitempty"`
+	Effort       string            `json:"effort,omitempty"`
+	SystemPrompt string            `json:"system_prompt,omitempty"`
+	Endpoint     string            `json:"endpoint,omitempty"`
+	APIKey       string            `json:"api_key,omitempty"`
+	RunAsUser    string            `json:"run_as_user,omitempty"`
+	RunAsEnv     []string          `json:"run_as_env,omitempty"`
+}
+
+// redactConfig 把配置转为脱敏视图：所有密钥替换为掩码常量(非空时)，env 值掩码。
+func redactConfig(cfg *config.Config) configView {
+	v := configView{
+		DefaultAgent:          cfg.DefaultAgent,
+		APIAddr:               cfg.APIAddr,
+		SaveDir:               cfg.SaveDir,
+		AllowedWorkspaceRoots: cfg.AllowedWorkspaceRoots,
+		RateLimitPerMinute:    cfg.RateLimitPerMinute,
+		AuditLog:              cfg.AuditLog,
+		AuditLogPath:          cfg.AuditLogPath,
+		Progress:              cfg.Progress,
+		Agents:                make(map[string]agentView, len(cfg.Agents)),
+		Platforms:             cfg.Platforms,
+	}
+	if cfg.APIToken != "" {
+		v.APIToken = secretMask
+	}
+	for name, ag := range cfg.Agents {
+		av := agentView{
+			Type:         ag.Type,
+			Command:      ag.Command,
+			Args:         ag.Args,
+			Aliases:      ag.Aliases,
+			Cwd:          ag.Cwd,
+			Model:        ag.Model,
+			Effort:       ag.Effort,
+			SystemPrompt: ag.SystemPrompt,
+			Endpoint:     ag.Endpoint,
+			RunAsUser:    ag.RunAsUser,
+			RunAsEnv:     ag.RunAsEnv,
+		}
+		if ag.APIKey != "" {
+			av.APIKey = secretMask
+		}
+		if len(ag.Env) > 0 {
+			av.Env = make(map[string]string, len(ag.Env))
+			for k := range ag.Env {
+				av.Env[k] = secretMask // 键保留、值掩码
+			}
+		}
+		v.Agents[name] = av
+	}
+	return v
+}
+
+// mergeView 把脱敏视图合并回 current：掩码值沿用 current 的密钥，非掩码值覆盖。
+func mergeView(current *config.Config, v configView) *config.Config {
+	merged := *current // 浅拷贝顶层标量
+	merged.DefaultAgent = v.DefaultAgent
+	merged.APIAddr = v.APIAddr
+	merged.SaveDir = v.SaveDir
+	merged.AllowedWorkspaceRoots = v.AllowedWorkspaceRoots
+	merged.RateLimitPerMinute = v.RateLimitPerMinute
+	merged.AuditLog = v.AuditLog
+	merged.AuditLogPath = v.AuditLogPath
+	merged.Progress = v.Progress
+	merged.Platforms = v.Platforms
+
+	merged.APIToken = mergeSecret(v.APIToken, current.APIToken)
+
+	merged.Agents = make(map[string]config.AgentConfig, len(v.Agents))
+	for name, av := range v.Agents {
+		prev := current.Agents[name]
+		ac := config.AgentConfig{
+			Type:         av.Type,
+			Command:      av.Command,
+			Args:         av.Args,
+			Aliases:      av.Aliases,
+			Cwd:          av.Cwd,
+			Model:        av.Model,
+			Effort:       av.Effort,
+			SystemPrompt: av.SystemPrompt,
+			Endpoint:     av.Endpoint,
+			RunAsUser:    av.RunAsUser,
+			RunAsEnv:     av.RunAsEnv,
+			Progress:     prev.Progress,
+			MaxHistory:   prev.MaxHistory,
+			Headers:      prev.Headers,
+			AutoLaunch:   prev.AutoLaunch,
+		}
+		ac.APIKey = mergeSecret(av.APIKey, prev.APIKey)
+		ac.Env = mergeEnv(av.Env, prev.Env)
+		merged.Agents[name] = ac
+	}
+	return &merged
+}
+
+func mergeSecret(incoming, existing string) string {
+	if incoming == secretMask {
+		return existing
+	}
+	return incoming
+}
+
+// mergeEnv 合并 env：键沿用视图(允许增删键)，值为掩码时沿用原值。
+func mergeEnv(incoming, existing map[string]string) map[string]string {
+	if len(incoming) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(incoming))
+	for k, v := range incoming {
+		if v == secretMask {
+			result[k] = existing[k]
+		} else {
+			result[k] = v
+		}
+	}
+	return result
+}
+
+// platformTopologyChanged 判断是否发生平台拓扑变更(需重启)：平台启用状态或飞书凭证类。
+func platformTopologyChanged(current, next *config.Config) bool {
+	if len(current.Platforms) != len(next.Platforms) {
+		return true
+	}
+	for name, np := range next.Platforms {
+		cp, ok := current.Platforms[name]
+		if !ok || !boolPtrEqual(cp.Enabled, np.Enabled) {
+			return true
+		}
+	}
+	return false
+}
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
