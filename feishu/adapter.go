@@ -34,7 +34,16 @@ type Adapter struct {
 	access     platform.AccessControl
 	accessSet  bool
 	approvalMu sync.Mutex
-	approvals  map[string]parsedCardAction
+	approvals  map[string]approvalRecord
+	now        func() time.Time
+}
+
+const feishuApprovalTTL = 30 * time.Minute
+
+// approvalRecord 记录一次审批决策及其时间，用于幂等去重与 TTL 清理。
+type approvalRecord struct {
+	action parsedCardAction
+	at     time.Time
 }
 
 // NewAdapter 创建飞书平台 adapter。
@@ -48,7 +57,8 @@ func NewAdapter(creds Credentials) *Adapter {
 		validate:   ValidateCredentials,
 		session:    DefaultFeishuSessionOptions(),
 		deduper:    newFeishuEventDeduper(feishuEventDedupTTL),
-		approvals:  make(map[string]parsedCardAction),
+		approvals:  make(map[string]approvalRecord),
+		now:        time.Now,
 	}
 	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
 		return larkws.NewClient(
@@ -243,13 +253,31 @@ func (a *Adapter) recordApprovalAction(action parsedCardAction) (parsedCardActio
 	a.approvalMu.Lock()
 	defer a.approvalMu.Unlock()
 	if a.approvals == nil {
-		a.approvals = make(map[string]parsedCardAction)
+		a.approvals = make(map[string]approvalRecord)
 	}
+	now := a.nowOrDefault()
+	a.purgeApprovalsLocked(now)
 	if existing, ok := a.approvals[key]; ok {
-		return existing, false
+		return existing.action, false
 	}
-	a.approvals[key] = action
+	a.approvals[key] = approvalRecord{action: action, at: now}
 	return action, true
+}
+
+// purgeApprovalsLocked 清理超过 TTL 的审批记录，避免长期运行内存无限增长。
+func (a *Adapter) purgeApprovalsLocked(now time.Time) {
+	for key, rec := range a.approvals {
+		if now.Sub(rec.at) > feishuApprovalTTL {
+			delete(a.approvals, key)
+		}
+	}
+}
+
+func (a *Adapter) nowOrDefault() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
 }
 
 func approvalActionKey(action parsedCardAction) string {

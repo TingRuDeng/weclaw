@@ -8,6 +8,34 @@ import (
 	"testing"
 )
 
+func TestFileAuditLoggerRotatesBySize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	l := newFileAuditLogger(path)
+	l.maxBytes = 200 // 极小阈值便于触发轮转
+	l.backups = 2
+
+	for i := 0; i < 50; i++ {
+		l.Log(auditEntry{User: "u1", Action: "agent_message", Summary: strings.Repeat("x", 40)})
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("active log should exist: %v", err)
+	}
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatalf("expected rotated backup .1: %v", err)
+	}
+	// 不应超过 backups 数量
+	if _, err := os.Stat(path + ".3"); err == nil {
+		t.Fatal("backups beyond configured count must be discarded")
+	}
+	// 活动文件应小于阈值的合理范围（单条 + 一点冗余）
+	info, _ := os.Stat(path)
+	if info.Size() > l.maxBytes*2 {
+		t.Fatalf("active log not rotated, size=%d", info.Size())
+	}
+}
+
 func TestFileAuditLoggerWritesJSONLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	l := newFileAuditLogger(path)
