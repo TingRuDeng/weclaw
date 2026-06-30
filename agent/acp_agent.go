@@ -158,11 +158,13 @@ type permissionRequestParams struct {
 	ThreadID           string             `json:"threadId,omitempty"`
 	TurnID             string             `json:"turnId,omitempty"`
 	ToolCall           json.RawMessage    `json:"toolCall"`
-	Command            []string           `json:"command,omitempty"`
+	Command            permissionCommand  `json:"command,omitempty"`
 	Cwd                string             `json:"cwd,omitempty"`
 	Options            []permissionOption `json:"options"`
 	AvailableDecisions []string           `json:"availableDecisions,omitempty"`
 }
+
+type permissionCommand []string
 
 type permissionOption struct {
 	OptionID string `json:"optionId"`
@@ -1964,6 +1966,26 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 	if err := a.respondPermissionRequest(req.ID, optionID, responseFormat); err != nil {
 		log.Printf("[acp] failed to deny unroutable permission request: %v", err)
 	}
+}
+
+// UnmarshalJSON 兼容 Codex command 审批字段的新旧形态：字符串数组或单个命令字符串。
+func (c *permissionCommand) UnmarshalJSON(data []byte) error {
+	var parts []string
+	if err := json.Unmarshal(data, &parts); err == nil {
+		*c = permissionCommand(parts)
+		return nil
+	}
+	var command string
+	if err := json.Unmarshal(data, &command); err != nil {
+		return err
+	}
+	command = strings.TrimSpace(command)
+	if command == "" {
+		*c = nil
+		return nil
+	}
+	*c = permissionCommand{command}
+	return nil
 }
 
 func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequest) string {

@@ -86,6 +86,33 @@ func TestHandleCodexCommandApprovalUsesAvailableDecisions(t *testing.T) {
 	}
 }
 
+func TestHandleCodexCommandApprovalAcceptsStringCommand(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-approval"] = turnCh
+	a.notifyMu.Unlock()
+
+	raw := `{"jsonrpc":"2.0","id":12,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-approval","turnId":"turn-1","itemId":"call-1","approvalId":3,"command":"date","cwd":"/tmp","availableDecisions":["allow","deny"]}}`
+	a.handlePermissionRequest(raw)
+
+	select {
+	case evt := <-turnCh:
+		if evt.Approval == nil {
+			t.Fatal("approval event missing")
+		}
+		var tool map[string]string
+		if err := json.Unmarshal(evt.Approval.Request.ToolCall, &tool); err != nil {
+			t.Fatalf("tool call json: %v", err)
+		}
+		if tool["cmd"] != "date" || tool["cwd"] != "/tmp" {
+			t.Fatalf("tool call=%#v, want string command and cwd", tool)
+		}
+	default:
+		t.Fatal("approval request was not dispatched")
+	}
+}
+
 func TestRespondCodexApprovalRequestUsesDecisionResult(t *testing.T) {
 	var out bytes.Buffer
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
