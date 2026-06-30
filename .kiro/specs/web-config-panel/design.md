@@ -14,7 +14,7 @@ weclaw 目前只能通过手编 `~/.weclaw/config.json` + 扫码登录 + `weclaw
 
 - **主配置**：`~/.weclaw/config.json`，`config.Load()` / `config.Save()`（`0600`，`MarshalIndent`）。字段：`default_agent`、`api_addr`、`api_token`、`save_dir`、`allowed_workspace_roots`、`rate_limit_per_minute`、`audit_log`/`audit_log_path`、`progress`、`agents{...}`、`platforms{wechat,feishu}`。
 - **飞书凭证**：`~/.weclaw/platforms/feishu.json`（`feishu.SaveCredentials`/`LoadCredentials`，`0600`），支持 `WECLAW_FEISHU_APP_ID/SECRET` 环境变量覆盖。
-- **微信凭证**：`~/.weclaw/accounts/*.json`，由 `ilink` 扫码登录写入（`weclaw login`）。Web 面板**不做扫码**（二维码交互复杂），仅展示状态并引导用户在终端 `weclaw login`。
+- **微信凭证**：`~/.weclaw/accounts/*.json`，由 `ilink` 扫码登录写入（`weclaw login`）。Web 面板**在页面内完成扫码登录**：后端复用 `ilink.FetchQRCode` 拉二维码、`ilink.PollQRStatus` 轮询确认并 `ilink.SaveCredentials` 落盘；前端渲染二维码并轮询状态。
 - **软配置热重载**：`cmd/start.go` 的 `runSoftConfigReloader` 每 2s 监测 `config.json` mtime，变更后 `config.Load()` 并 `applySoftConfig` 应用：`progress`、`default_agent`、`allowed_users`、`allowed_workspace_roots`、`rate_limit_per_minute`、平台 progress/default agent。**平台启用状态与凭证不热重载**（涉及长连接生命周期，需重启）。
 - **发送 API**：`api/server.go` 已有 loopback 判定 `isLoopbackListenAddr`、token 常量时间比较 `constantTimeEqual`、`X-WeClaw-Token`/`Bearer` 解析——Web 面板复用同款鉴权与回环判定。
 
@@ -69,6 +69,8 @@ weclaw web --token <token>      # 显式 token；非回环监听时必填
 weclaw web --no-open            # 不自动打开浏览器
 ```
 
+> 默认端口固定为 `39282`（与 cc-connect 对齐，便于记忆与文档统一）。可用 `--addr` 覆盖。
+
 ```go
 // cmd/web.go (LLD)
 func runWeb(cmd *cobra.Command, args []string) error {
@@ -110,7 +112,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 | `PUT /api/config` | 校验并保存配置 | 脱敏 `Config`（密钥占位表示"不改"） | `{status, restart_required}` |
 | `POST /api/feishu/credentials` | 写飞书 app_id/secret | `{app_id, app_secret}` | `{status}`（secret 只写不回显） |
 | `GET /api/status` | 运行/连接状态 | — | 平台启用、凭证存在性、agent 列表、daemon 是否在跑 |
-| `POST /api/validate/feishu` | 校验飞书凭证有效性 | `{app_id, app_secret?}` | `{ok, message}`（复用 `feishu.ValidateCredentials`） |
+| `POST /api/validate/feishu` | 校验飞书凭证有效性 | `{app_id, app_secret?}` | `{ok, message}`（复用 `feishu.ValidateCredentials`，**仅轻量 token 校验，不建长连接**） |
+| `POST /api/wechat/login/start` | 拉取微信登录二维码 | — | `{login_id, qr_content}`（二维码内容，前端渲染） |
+| `GET /api/wechat/login/status?login_id=` | 轮询扫码状态 | — | `{status}`：`waiting`/`scanned`/`confirmed`/`expired`；`confirmed` 时已落盘账号 |
 | `GET /` , `/static/*` | 前端页面/资源 | — | embed 静态 |
 
 ### 密钥脱敏与写回（核心安全逻辑，LLD）
@@ -147,12 +151,47 @@ func (s *configService) save(view configView) (restartRequired bool, err error) 
 - 保存 → `PUT /api/config`；若 `restart_required` 提示"运行 `weclaw restart` 生效"，否则提示"已即时生效"。
 - 微信卡：仅显示账号状态，附文案"在终端运行 `weclaw login` 扫码添加"。
 
-## 能力边界（明确不做）
+### 微信扫码登录（面板内，LLD）
 
-1. **不做微信扫码登录**：二维码流是终端交互，面板只展示状态并引导 `weclaw login`。
+复用现有 `ilink` 登录原语，把"终端扫码"搬到网页：
+
+```go
+// web/wechat_login.go
+// start：拉二维码，登记一个有 TTL 的 pending 登录会话(内存)，后台启动轮询。
+func (s *Server) handleWeChatLoginStart(w http.ResponseWriter, r *http.Request) {
+    qr, err := ilink.FetchQRCode(r.Context())          // 复用现有
+    if err != nil { writeErr(w, err); return }
+    id := s.wechatLogins.begin(qr)                      // 内存登记，记录 status=waiting
+    go s.wechatLogins.poll(id, qr, func(status string) {/* 更新内存状态 */})
+    // poll 内部用 ilink.PollQRStatus；confirmed 时 ilink.SaveCredentials 落盘账号
+    writeJSON(w, map[string]string{"login_id": id, "qr_content": qr.QRCodeImgContent})
+}
+
+// status：前端每 ~2s 轮询，返回 waiting/scanned/confirmed/expired。
+func (s *Server) handleWeChatLoginStatus(w http.ResponseWriter, r *http.Request) {
+    writeJSON(w, map[string]string{"status": s.wechatLogins.status(r.URL.Query().Get("login_id"))})
+}
+```
+
+前端：调用 `start` 拿 `qr_content` → 用纯前端二维码库（或后端直接出 PNG/`data:` URI）渲染图片 → 轮询 `status`；`confirmed` 后刷新平台状态卡显示新账号。
+
+**安全/并发约束**：
+- 登录会话存内存、带 TTL（如 5 分钟），`login_id` 随机不可猜；`expired` 后清理。
+- 扫码端点同样经 token + 同源中间件（与其它 API 一致），不额外开放。
+- 二维码内容只在本机回环传给浏览器；不持久化、不进日志。
+- 与运行中的 `weclaw start`：登录只是把新账号写入 `~/.weclaw/accounts/`；新账号被守护进程接管需重启（属"平台拓扑变更"，面板提示 `weclaw restart`）。
+
+### 飞书凭证校验（轻量，LLD）
+
+`/api/validate/feishu` **只做一次 token 有效性校验**（复用 `feishu.ValidateCredentials` 调 `tenant_access_token` 接口），**不建立 `larkws` 长连接**——避免与运行中守护进程争夺同一 app 的长连接，且足以覆盖 app_id/secret 错误、未发布版本、权限不足等配错场景。长连接是否真正收事件由守护进程日志 / `weclaw doctor` 负责。
+
+## 能力边界（明确不做 / 约束）
+
+1. **微信扫码在面板内做，但新账号需重启接管**：扫码登录把账号写入 `~/.weclaw/accounts/`，运行中的守护进程接管该新账号需 `weclaw restart`（属平台拓扑变更）。
 2. **不回显任何密钥**：`api_token`、agent `api_key`/`env` 值、飞书 `app_secret` 一律掩码；写回用占位"保持不变"。
-3. **不热重载平台拓扑**：平台 enable/凭证类改动写盘后提示重启；软配置（progress/default_agent/allowed_users/workspace_roots/rate_limit）靠现有 mtime 重载即时生效。
-4. **默认仅本机**：默认绑 `127.0.0.1`；绑非回环必须显式 token，并默认拒绝跨站 Origin。
+3. **不热重载平台拓扑**：平台 enable/凭证类改动（含新增微信账号）写盘后提示重启；软配置（progress/default_agent/allowed_users/workspace_roots/rate_limit）靠现有 mtime 重载即时生效。
+4. **默认仅本机**：默认绑 `127.0.0.1:39282`；绑非回环必须显式 token，并默认拒绝跨站 Origin。
+5. **飞书校验只做轻量 token 校验**，不建长连接（理由见上）。
 
 ## Data Models
 
@@ -196,6 +235,8 @@ type statusView struct {
 | `PUT /api/config` 校验失败 | 400 + 字段级原因，不写盘 |
 | 写盘失败 | 原子写：临时文件+rename，失败不破坏原 `config.json` |
 | 飞书凭证校验失败 | `/api/validate/feishu` 返回 `{ok:false,message}`（复用 `ValidateCredentials` 的权限引导） |
+| 微信二维码过期 | `status=expired`，前端提示重新拉取；内存登录会话按 TTL 清理 |
+| 微信登录会话非法 login_id | 404/`expired`，不泄露其它会话信息 |
 
 ## Testing Strategy
 
@@ -226,6 +267,9 @@ type statusView struct {
 ### Property 6: 软配置即时性
 写回仅含软配置变更时，运行中的守护进程在一个 mtime 周期内应用，无需重启。
 
+### Property 7: 扫码会话隔离
+微信登录 `login_id` 随机不可猜、带 TTL；非法或过期 `login_id` **绝不**返回其它会话状态或泄露二维码内容。
+
 ## 安全考量（一等公民）
 
 - 面板可改 agent 命令/env/工作目录白名单——等于可改"谁能在本机跑什么"。因此默认仅本机、强制鉴权、密钥只写不回显、同源防护，缺一不可。
@@ -236,11 +280,11 @@ type statusView struct {
 ## 分阶段实施建议
 
 - **阶段 1**：`web` 包 + `cmd/web.go`，鉴权中间件 + 回环/同源防护 + `GET/PUT /api/config`（含脱敏与原子写）+ 最小静态页（安全卡 + agent 卡）。复用 `api` 包鉴权 helper（先提取为导出函数）。
-- **阶段 2**：飞书凭证写入与校验（`/api/feishu/credentials`、`/api/validate/feishu`）、`GET /api/status`、平台卡与微信状态引导。
+- **阶段 2**：飞书凭证写入与轻量校验（`/api/feishu/credentials`、`/api/validate/feishu`）、微信面板内扫码登录（`/api/wechat/login/start|status`，复用 `ilink` 原语）、`GET /api/status`、平台卡。
 - **阶段 3**：体验打磨（保存即时/重启提示、表单校验、i18n 可选）。每阶段 `go build/vet/test ./...` 全绿，且新增脱敏/鉴权/原子写测试。
 
-## 开放问题（实现前确认）
+## 已确认决策（原开放问题）
 
-1. 默认端口用 `39282`（同 cc-connect）还是 weclaw 自己的（如 `18012`）？
-2. `weclaw web` 是否需要在 daemon 未运行时也能"试启动飞书校验"——倾向只做凭证有效性校验，不拉长连接。
-3. 微信账号管理是否要在面板内提供"触发 `weclaw login`"的按钮（需要把二维码渲染到网页）——建议阶段 1 先不做，仅状态 + 终端引导。
+1. **默认端口 = `39282`**（与 cc-connect 对齐）。
+2. **飞书校验只做轻量 token 校验，不拉长连接**：避免与运行中守护进程争夺同一 app 的长连接，且足以覆盖常见配错。
+3. **微信扫码在面板内完成**：复用 `ilink.FetchQRCode`/`PollQRStatus`/`SaveCredentials`，前端渲染二维码并轮询；新账号被守护进程接管需 `weclaw restart`。
