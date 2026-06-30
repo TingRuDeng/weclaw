@@ -992,6 +992,45 @@ func TestHandleProgressCommandChangesMode(t *testing.T) {
 	}
 }
 
+func TestProgressCommandShowsPlatformEffectiveMode(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		string(platform.PlatformFeishu): {Mode: progressModeStream},
+	})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.handleBuiltInPlatformCommand(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/progress",
+	}, reply, "/progress", "")
+
+	if !containsText(reply.Texts, "当前进度模式：stream") {
+		t.Fatalf("reply=%#v, want feishu effective stream mode", reply.Texts)
+	}
+}
+
+func TestProgressCommandChangesPlatformOverride(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		string(platform.PlatformFeishu): {Mode: progressModeStream},
+	})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.handleBuiltInPlatformCommand(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/progress typing",
+	}, reply, "/progress typing", "")
+
+	if !containsText(reply.Texts, "已切换进度模式：typing") {
+		t.Fatalf("reply=%#v, want switched typing mode", reply.Texts)
+	}
+	if got := h.resolveProgressConfigForPlatform(platform.PlatformFeishu, "codex").Mode; got != progressModeTyping {
+		t.Fatalf("feishu progress mode=%q, want typing", got)
+	}
+}
+
 func TestHandleProgressCommandRejectsUnknownMode(t *testing.T) {
 	h := NewHandler(nil, nil)
 

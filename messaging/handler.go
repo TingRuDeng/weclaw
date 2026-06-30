@@ -705,7 +705,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 	case isRemovedSwitchCommand(trimmed):
 		sendText("命令已移除：WeClaw 不再支持从微信端切换 Codex 账号。")
 	case isProgressCommand(trimmed):
-		sendText(h.handleProgressCommand(trimmed))
+		sendText(h.handleProgressCommandForPlatform(trimmed, msg.Platform))
 	case isClaudeSessionCommand(trimmed):
 		sendText(h.handleClaudeSessionCommand(ctx, msg.UserID, trimmed))
 	case isCodexSessionCommand(trimmed):
@@ -2045,10 +2045,14 @@ func isCodexShortSelectionToken(token string) bool {
 }
 
 func (h *Handler) handleProgressCommand(trimmed string) string {
+	return h.handleProgressCommandForPlatform(trimmed, "")
+}
+
+func (h *Handler) handleProgressCommandForPlatform(trimmed string, platformName platform.PlatformName) string {
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {
 		return wechatCommandText(
-			"当前进度模式："+h.resolveProgressConfig("").Mode,
+			"当前进度模式："+h.resolveProgressConfigForProgressCommand(platformName).Mode,
 			"可用模式：off、typing、summary、verbose、stream、debug",
 		)
 	}
@@ -2064,10 +2068,30 @@ func (h *Handler) handleProgressCommand(trimmed string) string {
 		)
 	}
 
-	cfg := h.resolveProgressConfig("")
+	cfg := h.resolveProgressConfigForProgressCommand(platformName)
 	cfg.Mode = mode
-	h.SetProgressConfig(cfg)
+	h.setProgressConfigForProgressCommand(platformName, cfg)
 	return "已切换进度模式：" + mode
+}
+
+func (h *Handler) resolveProgressConfigForProgressCommand(platformName platform.PlatformName) config.ProgressConfig {
+	if platformName == "" {
+		return h.resolveProgressConfig("")
+	}
+	return h.resolveProgressConfigForPlatform(platformName, "")
+}
+
+func (h *Handler) setProgressConfigForProgressCommand(platformName platform.PlatformName, cfg config.ProgressConfig) {
+	if platformName == "" {
+		h.SetProgressConfig(cfg)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.platformProgressConfigs == nil {
+		h.platformProgressConfigs = make(map[string]config.ProgressConfig)
+	}
+	h.platformProgressConfigs[string(platformName)] = cfg
 }
 
 func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, trimmed string) string {
