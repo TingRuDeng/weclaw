@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,6 +82,7 @@ type Handler struct {
 	pendingCodexRuns        map[string]string
 	pendingApprovalsMu      sync.Mutex
 	pendingApprovals        map[string]*pendingApproval
+	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
 	codexLocalSessionDir    string
 	claudeSessions          *claudeSessionStore
 	claudeLocalSessionDir   string
@@ -105,6 +107,10 @@ type activeAgentTask struct {
 	done           chan struct{}
 	detached       bool
 	pendingMessage string
+	owner          string
+	agentName      string
+	preview        string
+	startedAt      time.Time
 }
 
 type pendingApproval struct {
@@ -721,6 +727,12 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 		h.handleGuideCommand(ctx, msg.Platform, msg.UserID, reply, clientID)
 	case trimmed == "/cancel":
 		sendText(h.handleCancelPendingGuide(ctx, msg.UserID))
+	case trimmed == "/stop":
+		sendText(h.handleStopActiveTask(ctx, msg.UserID))
+	case trimmed == "/ps":
+		sendText(h.handleListActiveTasks(msg.UserID))
+	case trimmed == "/mode" || strings.HasPrefix(trimmed, "/mode "):
+		sendText(h.handleModeCommand(msg.UserID, trimmed))
 	case strings.HasPrefix(trimmed, "/cwd"):
 		sendText(h.handleCwd(trimmed, msg.UserID))
 	default:
@@ -816,7 +828,7 @@ func (h *Handler) lockAgentExecution(key string) func() {
 	return lock.Unlock
 }
 
-func (h *Handler) beginActiveTask(ctx context.Context, key string) (*activeAgentTask, context.Context, bool) {
+func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTaskMeta) (*activeAgentTask, context.Context, bool) {
 	h.activeTasksMu.Lock()
 	defer h.activeTasksMu.Unlock()
 	if h.activeTasks == nil {
@@ -827,11 +839,22 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string) (*activeAgent
 	}
 	taskCtx, cancel := context.WithCancel(ctx)
 	task := &activeAgentTask{
-		cancel: cancel,
-		done:   make(chan struct{}),
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		owner:     strings.TrimSpace(meta.owner),
+		agentName: strings.TrimSpace(meta.agentName),
+		preview:   previewPendingCodexMessage(meta.message),
+		startedAt: time.Now(),
 	}
 	h.activeTasks[key] = task
 	return task, taskCtx, true
+}
+
+// activeTaskMeta 描述一次后台任务的归属信息，供 /ps 和 /cancel 检索。
+type activeTaskMeta struct {
+	owner     string
+	agentName string
+	message   string
 }
 
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
@@ -951,6 +974,11 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 		choices := approvalChoices(req.Options)
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
+		}
+		if h.isYoloMode(userID) {
+			decision := autoApproveApprovalOption(req.Options)
+			log.Printf("[handler] yolo mode auto-approving sensitive operation for %s -> %q", userID, decision)
+			return decision, nil
 		}
 		pending := h.registerPendingApproval(userID, req.Options)
 		defer h.clearPendingApproval(userID, pending)
@@ -1145,6 +1173,109 @@ func (h *Handler) handleStopActiveTask(ctx context.Context, userID string) strin
 	return "已停止当前任务。"
 }
 
+// handleCancelCommand 已并入 /cancel(撤回暂存) 与 /stop(停止运行) 两个独立命令，保留占位以便检索历史语义。
+
+// handleListActiveTasks 列出指定用户当前运行中的后台任务，供 /ps 查看。
+func (h *Handler) handleListActiveTasks(userID string) string {
+	owner := strings.TrimSpace(userID)
+	now := time.Now()
+	type runningTask struct {
+		agentName string
+		preview   string
+		elapsed   time.Duration
+	}
+	var tasks []runningTask
+	h.activeTasksMu.Lock()
+	for _, task := range h.activeTasks {
+		task.mu.Lock()
+		matched := task.owner == owner && !task.detached
+		if matched {
+			tasks = append(tasks, runningTask{
+				agentName: task.agentName,
+				preview:   task.preview,
+				elapsed:   now.Sub(task.startedAt),
+			})
+		}
+		task.mu.Unlock()
+	}
+	h.activeTasksMu.Unlock()
+	if len(tasks) == 0 {
+		return "当前没有运行中的任务。"
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].elapsed > tasks[j].elapsed })
+	lines := []string{fmt.Sprintf("运行中的任务（%d）：", len(tasks))}
+	for i, task := range tasks {
+		name := firstNonBlank(task.agentName, "agent")
+		line := fmt.Sprintf("%d. %s · 已运行 %s", i+1, name, formatTaskElapsed(task.elapsed))
+		if preview := strings.TrimSpace(task.preview); preview != "" {
+			line += "\n   " + preview
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "\n回复 /cancel 停止当前任务。")
+	return strings.Join(lines, "\n")
+}
+
+// formatTaskElapsed 以分钟/秒粒度展示任务已运行时长。
+func formatTaskElapsed(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d秒", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%d分%d秒", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+// handleModeCommand 查看或切换当前用户的审批模式（yolo 自动放行 / default 按钮确认）。
+func (h *Handler) handleModeCommand(userID string, trimmed string) string {
+	fields := strings.Fields(trimmed)
+	if len(fields) == 1 {
+		if h.isYoloMode(userID) {
+			return "当前权限模式：yolo（自动放行 Codex 敏感操作）。\n发送 /mode default 恢复按钮确认。"
+		}
+		return "当前权限模式：default（每次敏感操作弹按钮确认）。\n发送 /mode yolo 自动放行。"
+	}
+	switch strings.ToLower(strings.TrimSpace(fields[1])) {
+	case "yolo":
+		h.setYoloMode(userID, true)
+		return "已切换为 yolo 模式：Codex 敏感操作将自动放行。\n⚠️ 该模式跳过确认，请确保当前会话可信。发送 /mode default 可恢复确认。"
+	case "default", "ask", "off":
+		h.setYoloMode(userID, false)
+		return "已切换为 default 模式：Codex 敏感操作会弹按钮确认。"
+	default:
+		return "用法：/mode 查看当前模式；/mode yolo 自动放行；/mode default 按钮确认。"
+	}
+}
+
+func (h *Handler) setYoloMode(userID string, on bool) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return
+	}
+	if on {
+		h.yoloUsers.Store(userID, struct{}{})
+		return
+	}
+	h.yoloUsers.Delete(userID)
+}
+
+func (h *Handler) isYoloMode(userID string) bool {
+	_, ok := h.yoloUsers.Load(strings.TrimSpace(userID))
+	return ok
+}
+
+// autoApproveApprovalOption 在 yolo 模式下选择允许类选项；没有显式 allow 时退回首个选项。
+func autoApproveApprovalOption(options []agent.ApprovalOption) string {
+	for _, option := range options {
+		if option.Kind == "allow" && strings.TrimSpace(option.ID) != "" {
+			return option.ID
+		}
+	}
+	if len(options) > 0 {
+		return options[0].ID
+	}
+	return ""
+}
+
+
 func (h *Handler) cancelActiveTask(key string) bool {
 	h.activeTasksMu.Lock()
 	task := h.activeTasks[key]
@@ -1320,7 +1451,11 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.reply))
 	route := h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
 	executionKey := route.conversationID
-	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
+	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{
+		owner:     opts.userID,
+		agentName: opts.agentName,
+		message:   opts.message,
+	})
 	if !started {
 		cancelTaskTimeout()
 		h.storePendingGuide(executionKey, opts.message)
@@ -1411,7 +1546,11 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 			if isCodexAgent(n, ag.Info()) {
 				codexRoute = h.codexConversationRouteForSession(userID, routeUserID, n, ag)
 				executionKey = codexRoute.conversationID
-				task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey)
+				task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{
+					owner:     userID,
+					agentName: n,
+					message:   message,
+				})
 				if !started {
 					h.storePendingGuide(executionKey, message)
 					ch <- result{name: n, reply: runningCodexGuidePrompt()}
@@ -2017,6 +2156,12 @@ func buildHelpText() string {
 /new 新建会话
 
 /cwd <路径> 切换工作目录
+
+/mode 查看权限模式，/mode yolo 自动放行，/mode default 按钮确认
+
+/ps 查看运行中的任务
+
+/stop 停止当前运行的任务
 
 Codex：
 
