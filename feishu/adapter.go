@@ -27,6 +27,7 @@ type Adapter struct {
 	validate   func(context.Context, Credentials) error
 	wsFactory  func(*dispatcher.EventDispatcher) wsRunner
 	session    FeishuSessionOptions
+	deduper    *feishuEventDeduper
 	accessMu   sync.RWMutex
 	access     platform.AccessControl
 	accessSet  bool
@@ -42,6 +43,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		cardKit:    newSDKCardKitClient(restClient, creds.AppID),
 		validate:   ValidateCredentials,
 		session:    DefaultFeishuSessionOptions(),
+		deduper:    newFeishuEventDeduper(feishuEventDedupTTL),
 	}
 	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
 		return larkws.NewClient(

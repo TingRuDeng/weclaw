@@ -83,6 +83,10 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 	if shouldIgnoreFeishuGroup(scope, a.session) {
 		return platform.IncomingMessage{}, false
 	}
+	if a.deduper != nil && a.deduper.isDuplicate(event, scope) {
+		log.Printf("[feishu] ignored duplicate message event")
+		return platform.IncomingMessage{}, false
+	}
 	text := cleanFeishuText(normalized.Content)
 	resources := append([]types.Resource(nil), normalized.Resources...)
 	if normalized.RawContentType == "post" {
