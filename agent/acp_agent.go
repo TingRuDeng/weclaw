@@ -155,10 +155,13 @@ type sessionUpdate struct {
 }
 
 type permissionRequestParams struct {
-	ThreadID string             `json:"threadId,omitempty"`
-	TurnID   string             `json:"turnId,omitempty"`
-	ToolCall json.RawMessage    `json:"toolCall"`
-	Options  []permissionOption `json:"options"`
+	ThreadID           string             `json:"threadId,omitempty"`
+	TurnID             string             `json:"turnId,omitempty"`
+	ToolCall           json.RawMessage    `json:"toolCall"`
+	Command            []string           `json:"command,omitempty"`
+	Cwd                string             `json:"cwd,omitempty"`
+	Options            []permissionOption `json:"options"`
+	AvailableDecisions []string           `json:"availableDecisions,omitempty"`
 }
 
 type permissionOption struct {
@@ -166,6 +169,13 @@ type permissionOption struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 }
+
+type permissionResponseFormat string
+
+const (
+	permissionResponseOutcome  permissionResponseFormat = "outcome"
+	permissionResponseDecision permissionResponseFormat = "decision"
+)
 
 // Codex app-server protocol constants and types.
 const (
@@ -218,8 +228,9 @@ type codexTurnEvent struct {
 }
 
 type codexApprovalRequest struct {
-	ID      json.RawMessage
-	Request ApprovalRequest
+	ID             json.RawMessage
+	ResponseFormat permissionResponseFormat
+	Request        ApprovalRequest
 }
 
 type codexFinalAssembler struct {
@@ -995,7 +1006,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		case evt := <-turnCh:
 			if evt.Approval != nil {
 				optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
-				if err := a.respondPermissionRequest(evt.Approval.ID, optionID); err != nil {
+				if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat); err != nil {
 					return "", fmt.Errorf("approval response error: %w", err)
 				}
 				continue
@@ -1929,6 +1940,7 @@ func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
 func (a *ACPAgent) handlePermissionRequest(raw string) {
 	var req struct {
 		ID     json.RawMessage         `json:"id"`
+		Method string                  `json:"method"`
 		Params permissionRequestParams `json:"params"`
 	}
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
@@ -1936,18 +1948,20 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		return
 	}
 
+	responseFormat := permissionResponseFormatForMethod(req.Method)
 	approval := &codexApprovalRequest{
-		ID: req.ID,
+		ID:             req.ID,
+		ResponseFormat: responseFormat,
 		Request: ApprovalRequest{
-			ToolCall: req.Params.ToolCall,
-			Options:  approvalOptionsFromPermission(req.Params.Options),
+			ToolCall: permissionToolCall(req.Params),
+			Options:  approvalOptionsFromPermission(req.Params),
 		},
 	}
 	if a.dispatchToTurnCh(req.Params.ThreadID, &codexTurnEvent{Kind: "approval_request", Approval: approval}) {
 		return
 	}
-	optionID := selectPermissionOption(req.Params.Options, "deny")
-	if err := a.respondPermissionRequest(req.ID, optionID); err != nil {
+	optionID := selectPermissionOption(req.Params, "deny")
+	if err := a.respondPermissionRequest(req.ID, optionID, responseFormat); err != nil {
 		log.Printf("[acp] failed to deny unroutable permission request: %v", err)
 	}
 }
@@ -1970,16 +1984,22 @@ func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequ
 	return fallback
 }
 
-func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string) error {
+func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string, responseFormat permissionResponseFormat) error {
 	resp := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      id,
-		"result": map[string]interface{}{
+	}
+	if responseFormat == permissionResponseDecision {
+		resp["result"] = map[string]interface{}{
+			"decision": optionID,
+		}
+	} else {
+		resp["result"] = map[string]interface{}{
 			"outcome": map[string]interface{}{
 				"outcome":  "selected",
 				"optionId": optionID,
 			},
-		},
+		}
 	}
 
 	data, err := json.Marshal(resp)
@@ -1989,27 +2009,94 @@ func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string)
 	return a.writeJSONLine(data)
 }
 
-func approvalOptionsFromPermission(options []permissionOption) []ApprovalOption {
-	result := make([]ApprovalOption, 0, len(options))
-	for _, opt := range options {
+// permissionResponseFormatForMethod 区分旧 ACP 和新版 Codex item 审批响应结构。
+func permissionResponseFormatForMethod(method string) permissionResponseFormat {
+	switch method {
+	case "item/fileChange/requestApproval", "item/commandExecution/requestApproval":
+		return permissionResponseDecision
+	default:
+		return permissionResponseOutcome
+	}
+}
+
+// permissionToolCall 为新版审批请求补出可读命令，避免飞书按钮只显示泛化提示。
+func permissionToolCall(params permissionRequestParams) json.RawMessage {
+	if len(params.ToolCall) > 0 && string(params.ToolCall) != "null" {
+		return params.ToolCall
+	}
+	tool := map[string]interface{}{}
+	if len(params.Command) > 0 {
+		tool["cmd"] = strings.Join(params.Command, " ")
+	}
+	if strings.TrimSpace(params.Cwd) != "" {
+		tool["cwd"] = params.Cwd
+	}
+	if len(tool) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(tool)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// approvalOptionsFromPermission 统一旧 options 和新版 availableDecisions。
+func approvalOptionsFromPermission(params permissionRequestParams) []ApprovalOption {
+	result := make([]ApprovalOption, 0, len(params.Options)+len(params.AvailableDecisions))
+	for _, opt := range params.Options {
 		result = append(result, ApprovalOption{ID: opt.OptionID, Name: opt.Name, Kind: opt.Kind})
+	}
+	for _, decision := range params.AvailableDecisions {
+		decision = strings.TrimSpace(decision)
+		if decision == "" {
+			continue
+		}
+		result = append(result, ApprovalOption{ID: decision, Name: decision, Kind: approvalKindFromDecision(decision)})
 	}
 	return result
 }
 
-func selectPermissionOption(options []permissionOption, preferredKind string) string {
-	for _, opt := range options {
+// approvalKindFromDecision 把新版 decision 字符串映射到通用允许/拒绝类型。
+func approvalKindFromDecision(decision string) string {
+	lower := strings.ToLower(strings.TrimSpace(decision))
+	switch {
+	case strings.Contains(lower, "deny"), strings.Contains(lower, "reject"):
+		return "deny"
+	case strings.Contains(lower, "allow"), strings.Contains(lower, "approve"):
+		return "allow"
+	default:
+		return lower
+	}
+}
+
+// selectPermissionOption 在无法路由给用户时选择保守 fallback，优先拒绝。
+func selectPermissionOption(params permissionRequestParams, preferredKind string) string {
+	for _, opt := range params.Options {
 		if opt.Kind == preferredKind && strings.TrimSpace(opt.OptionID) != "" {
 			return opt.OptionID
 		}
 	}
-	for _, opt := range options {
+	for _, decision := range params.AvailableDecisions {
+		if approvalKindFromDecision(decision) == preferredKind && strings.TrimSpace(decision) != "" {
+			return strings.TrimSpace(decision)
+		}
+	}
+	for _, opt := range params.Options {
 		if opt.Kind != "allow" && strings.TrimSpace(opt.OptionID) != "" {
 			return opt.OptionID
 		}
 	}
-	if len(options) > 0 {
-		return options[0].OptionID
+	for _, decision := range params.AvailableDecisions {
+		if approvalKindFromDecision(decision) != "allow" && strings.TrimSpace(decision) != "" {
+			return strings.TrimSpace(decision)
+		}
+	}
+	if len(params.Options) > 0 {
+		return params.Options[0].OptionID
+	}
+	if len(params.AvailableDecisions) > 0 {
+		return strings.TrimSpace(params.AvailableDecisions[0])
 	}
 	return preferredKind
 }
