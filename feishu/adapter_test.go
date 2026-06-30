@@ -343,6 +343,42 @@ func TestHandleCardActionEventSecondApprovalDoesNotOverwriteFirstDecision(t *tes
 	}
 }
 
+func TestHandleCardActionEventCrossUserSameApprovalKeyDispatchesOnce(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	firstEvent := approvalCardActionEvent("allow", "允许本次", "")
+	secondEvent := approvalCardActionEvent("deny", "拒绝", "")
+	secondEvent.Event.Operator.OpenID = "ou_other"
+	dispatched := make(chan platform.IncomingMessage, 2)
+	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	}
+
+	first, err := adapter.handleCardActionEvent(context.Background(), firstEvent, dispatch)
+	if err != nil {
+		t.Fatalf("first handleCardActionEvent error: %v", err)
+	}
+	second, err := adapter.handleCardActionEvent(context.Background(), secondEvent, dispatch)
+	if err != nil {
+		t.Fatalf("second handleCardActionEvent error: %v", err)
+	}
+
+	assertApprovalCardContent(t, first, "✅ 已授权", "允许本次")
+	assertApprovalCardContent(t, second, "✅ 已授权", "允许本次")
+	select {
+	case msg := <-dispatched:
+		if msg.UserID != "ou_user" || msg.RawCommand.Value["choice"] != "allow" {
+			t.Fatalf("first dispatch msg=%#v, want original allow", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first dispatch")
+	}
+	select {
+	case msg := <-dispatched:
+		t.Fatalf("cross-user duplicate approval dispatched: %#v", msg)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestHandleCardActionEventUsesApprovalKeyWhenMessageIDMissing(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := approvalCardActionEvent("allow", "允许本次", "")
@@ -362,6 +398,15 @@ func TestHandleCardActionEventUsesApprovalKeyWhenMessageIDMissing(t *testing.T) 
 
 	if got := len(dispatched); got != 1 {
 		t.Fatalf("dispatch count=%d, want 1 via approval key fallback", got)
+	}
+}
+
+func TestApprovalActionKeyFallsBackToMessageIDOnly(t *testing.T) {
+	first := parsedCardAction{UserID: "ou_user", MessageID: "om_approval"}
+	second := parsedCardAction{UserID: "ou_other", MessageID: "om_approval"}
+
+	if got, want := approvalActionKey(first), approvalActionKey(second); got != want {
+		t.Fatalf("approvalActionKey first=%q second=%q, want user-independent message fallback", got, want)
 	}
 }
 

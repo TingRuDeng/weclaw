@@ -254,12 +254,12 @@ func (a *Adapter) recordApprovalAction(action parsedCardAction) (parsedCardActio
 
 func approvalActionKey(action parsedCardAction) string {
 	if key := strings.TrimSpace(action.Approval); key != "" {
-		return action.UserID + "\x00approval\x00" + key
+		return "approval\x00" + key
 	}
-	if strings.TrimSpace(action.MessageID) == "" {
-		return ""
+	if messageID := strings.TrimSpace(action.MessageID); messageID != "" {
+		return "message\x00" + messageID
 	}
-	return action.UserID + "\x00" + action.MessageID
+	return ""
 }
 
 func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedCardAction) {
