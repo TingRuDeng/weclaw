@@ -29,6 +29,7 @@ type Server struct {
 	token        string
 	cfg          *configService
 	wechatLogins *wechatLoginStore
+	authThrottle *authThrottle
 }
 
 // NewServer 创建配置面板服务。
@@ -42,6 +43,7 @@ func NewServer(opts Options) *Server {
 		token:        strings.TrimSpace(opts.Token),
 		cfg:          newConfigService(),
 		wechatLogins: newWechatLoginStore(),
+		authThrottle: newAuthThrottle(),
 	}
 }
 
@@ -99,10 +101,17 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			client := clientKey(r)
+			if s.authThrottle.blocked(client) {
+				http.Error(w, "too many failed auth attempts, slow down", http.StatusTooManyRequests)
+				return
+			}
 			if !s.authorized(r) {
+				s.authThrottle.fail(client)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
+			s.authThrottle.reset(client)
 		}
 		next.ServeHTTP(w, r)
 	})

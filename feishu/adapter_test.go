@@ -247,6 +247,33 @@ func TestHandleCardActionEventIgnoresTaskCardUpdateFailure(t *testing.T) {
 	}
 }
 
+func TestRecordApprovalActionPurgesExpired(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	now := time.Unix(0, 0)
+	adapter.now = func() time.Time { return now }
+
+	first := parsedCardAction{Action: cardActionChoice, Kind: cardKindApproval, Approval: "appr-1", UserID: "ou_1"}
+	if _, ok := adapter.recordApprovalAction(first); !ok {
+		t.Fatal("first approval should be recorded as new")
+	}
+	if len(adapter.approvals) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(adapter.approvals))
+	}
+
+	// 超过 TTL 后，新审批写入时应清掉过期的旧记录
+	now = now.Add(feishuApprovalTTL + time.Minute)
+	second := parsedCardAction{Action: cardActionChoice, Kind: cardKindApproval, Approval: "appr-2", UserID: "ou_1"}
+	if _, ok := adapter.recordApprovalAction(second); !ok {
+		t.Fatal("second approval should be recorded as new")
+	}
+	if len(adapter.approvals) != 1 {
+		t.Fatalf("expired approval not purged: map size=%d", len(adapter.approvals))
+	}
+	if _, ok := adapter.approvals["approval\x00appr-1"]; ok {
+		t.Fatal("expired approval key should have been purged")
+	}
+}
+
 func TestHandleCardActionEventIsIdempotentForApproval(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := approvalCardActionEvent("allow", "允许本次", "")
