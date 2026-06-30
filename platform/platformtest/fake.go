@@ -11,6 +11,7 @@ type Replier struct {
 	Caps         platform.Capabilities
 	Texts        []string
 	Images       []string
+	Files        []string
 	TypingStates []bool
 	Choices      []ChoiceRequest
 	Stream       *Stream
@@ -38,6 +39,11 @@ func (r *Replier) SendText(ctx context.Context, text string) error {
 
 func (r *Replier) SendImage(ctx context.Context, localPath string) error {
 	r.Images = append(r.Images, localPath)
+	return nil
+}
+
+func (r *Replier) SendFile(ctx context.Context, localPath string) error {
+	r.Files = append(r.Files, localPath)
 	return nil
 }
 

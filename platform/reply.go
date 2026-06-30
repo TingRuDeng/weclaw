@@ -12,6 +12,7 @@ type Replier interface {
 	Capabilities() Capabilities
 	SendText(ctx context.Context, text string) error
 	SendImage(ctx context.Context, localPath string) error
+	SendFile(ctx context.Context, localPath string) error
 	Typing(ctx context.Context, on bool) error
 	OpenStream(ctx context.Context, opts StreamOptions) (Stream, error)
 	AskChoices(ctx context.Context, prompt string, choices []Choice) error

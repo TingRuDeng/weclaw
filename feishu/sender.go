@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
@@ -15,6 +16,7 @@ import (
 type messageSender interface {
 	SendText(ctx context.Context, openID string, text string) error
 	SendImage(ctx context.Context, openID string, localPath string) error
+	SendFile(ctx context.Context, openID string, localPath string) error
 	SendCard(ctx context.Context, openID string, cardID string) error
 }
 
@@ -71,6 +73,35 @@ func (s *sdkMessageSender) createImage(ctx context.Context, file *os.File) (*lar
 			Build()).
 		Build()
 	return s.client.Im.Image.Create(ctx, imageReq)
+}
+
+// SendFile 上传本地文件并发送 file 消息。
+func (s *sdkMessageSender) SendFile(ctx context.Context, openID string, localPath string) error {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	fileReq := larkim.NewCreateFileReqBuilder().
+		Body(larkim.NewCreateFileReqBodyBuilder().
+			FileType("stream").
+			FileName(filepath.Base(localPath)).
+			File(file).
+			Build()).
+		Build()
+	fileResp, err := s.client.Im.File.Create(ctx, fileReq)
+	if err != nil {
+		return err
+	}
+	if !fileResp.Success() || fileResp.Data == nil || fileResp.Data.FileKey == nil {
+		s.sendPermissionGuide(ctx, openID, fileResp.Code)
+		return s.apiError(fileResp.Code, fileResp.Msg)
+	}
+	content, err := json.Marshal(map[string]string{"file_key": *fileResp.Data.FileKey})
+	if err != nil {
+		return err
+	}
+	return s.createMessage(ctx, openID, larkim.MsgTypeFile, string(content))
 }
 
 // SendCard 发送已创建的 CardKit 卡片实例。

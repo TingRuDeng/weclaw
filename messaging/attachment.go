@@ -113,6 +113,13 @@ func isSupportedAttachmentPath(path string) bool {
 	return slices.Contains(supportedAttachmentExts, ext)
 }
 
+var imageAttachmentExts = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+// isImageAttachmentPath 判断回传产物是否为图片类型，用于选择 SendImage / SendFile。
+func isImageAttachmentPath(path string) bool {
+	return slices.Contains(imageAttachmentExts, strings.ToLower(filepath.Ext(path)))
+}
+
 func canonicalizePath(path string, mustExist bool) (string, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {

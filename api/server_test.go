@@ -143,6 +143,10 @@ func (r *recordingReplier) SendImage(ctx context.Context, localPath string) erro
 	return nil
 }
 
+func (r *recordingReplier) SendFile(ctx context.Context, localPath string) error {
+	return nil
+}
+
 func (r *recordingReplier) Typing(ctx context.Context, on bool) error {
 	return nil
 }

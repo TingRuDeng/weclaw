@@ -99,6 +99,20 @@ func TestDoctorWarnsEmptyWorkspaceRoots(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsAuditDisabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	disabled := false
+	cfg.AuditLog = &disabled
+	results := runDoctorChecks(cfg, testDoctorDeps())
+	r, ok := findResult(results, "audit log")
+	if !ok {
+		t.Fatal("missing audit log check")
+	}
+	if r.Status != doctorWarn {
+		t.Fatalf("expected warn when audit disabled, got %v", r.Status)
+	}
+}
+
 func TestDoctorPassesHealthyConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents["claude"] = config.AgentConfig{Type: "cli", Command: "claude"}

@@ -29,14 +29,18 @@
 
 ### 能力增强组（PR-B）
 
-- [ ] 5. agent 产物回传（本地文件→聊天）
-  - 约定 agent 输出本地文件路径 → 在白名单根内则作为附件回传
-  - 复用 isAllowedAttachmentPath 限制可发送路径
-  - 测试：白名单内回传、外拒绝
+- [x] 5. agent 产物回传（本地文件→聊天）
+  - `platform.Replier` 新增 `SendFile`；handler 按扩展名路由图片→SendImage、其他→SendFile
+  - 可回传根扩展为 默认工作区 + agent workDir + `allowed_workspace_roots`，复用 isAllowedAttachmentPath 限制范围
+  - feishu 新增文件上传(im.File)+msg_type=file；wechat 复用既有按类型分类的 CDN 发送
+  - 测试：图片/文件分流、白名单外拒绝
 
-- [ ] 6. `weclaw doctor` 增强 + Web 配置面板
-  - doctor：补充更多检查项（workspace 已加）
-  - Web 面板 `weclaw web`：可视化配置 platforms/凭证/allowed_users（评估后实现）
+- [x] 6a. `weclaw doctor` 增强
+  - 补充 workspace confinement、audit log 可写性检查
+  - 测试：审计禁用告警等
+
+- [ ] 6b.* Web 配置面板 `weclaw web`（延后，单独 spec）
+  - 体量大：HTML/JS 面板 + 配置读写 HTTP 端点 + 鉴权，建议独立推进
 
 ## Notes
 
