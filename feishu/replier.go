@@ -16,6 +16,9 @@ type Replier struct {
 	sender       messageSender
 	cardKit      cardKitClient
 	openID       string
+	taskCards    *taskCardRegistry
+	taskCardMu   sync.RWMutex
+	taskCardID   string
 	typingMu     sync.Mutex
 	typingStream platform.Stream
 }
@@ -27,6 +30,10 @@ func NewReplier(sender messageSender, openID string, cardKitClients ...cardKitCl
 		cardKit = cardKitClients[0]
 	}
 	return &Replier{sender: sender, cardKit: cardKit, openID: openID}
+}
+
+func newReplierWithTaskCards(sender messageSender, openID string, cardKit cardKitClient, cards *taskCardRegistry) *Replier {
+	return &Replier{sender: sender, cardKit: cardKit, openID: openID, taskCards: cards}
 }
 
 // Capabilities 返回飞书回复器能力。
@@ -86,7 +93,7 @@ func (r *Replier) Typing(ctx context.Context, on bool) error {
 // OpenStream 优先创建 CardKit 流式卡片；测试或未配置 CardKit 时降级为最终态文本。
 func (r *Replier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
 	if r.cardKit != nil {
-		return r.openCardKitStream(ctx, opts)
+		return r.openTaskCardKitStream(ctx, opts)
 	}
 	return &textFinalStream{reply: r}, nil
 }
@@ -95,6 +102,7 @@ func (r *Replier) OpenStream(ctx context.Context, opts platform.StreamOptions) (
 func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
 	if r.cardKit != nil {
 		conv := platform.IncomingMessage{Platform: platform.PlatformFeishu, UserID: r.openID}.ConversationKey()
+		choices = attachTaskCardID(choices, r.CurrentTaskCardID())
 		cardJSON, err := buildChoiceCard(prompt, choices, conv)
 		if err != nil {
 			return err
@@ -113,6 +121,37 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 		lines = append(lines, fmt.Sprintf("%s. %s", choice.ID, choice.Label))
 	}
 	return r.SendText(ctx, strings.Join(lines, "\n"))
+}
+
+// CurrentTaskCardID 返回当前任务流卡片 ID，供审批按钮回写主任务卡片。
+func (r *Replier) CurrentTaskCardID() string {
+	r.taskCardMu.RLock()
+	defer r.taskCardMu.RUnlock()
+	return r.taskCardID
+}
+
+func (r *Replier) setCurrentTaskCardID(cardID string) {
+	r.taskCardMu.Lock()
+	r.taskCardID = strings.TrimSpace(cardID)
+	r.taskCardMu.Unlock()
+}
+
+func attachTaskCardID(choices []platform.Choice, cardID string) []platform.Choice {
+	cardID = strings.TrimSpace(cardID)
+	if cardID == "" {
+		return choices
+	}
+	out := make([]platform.Choice, 0, len(choices))
+	for _, choice := range choices {
+		metadata := make(map[string]string, len(choice.Metadata)+1)
+		for key, value := range choice.Metadata {
+			metadata[key] = value
+		}
+		metadata["task_card_id"] = cardID
+		choice.Metadata = metadata
+		out = append(out, choice)
+	}
+	return out
 }
 
 // textFinalStream 是 CardKit 接入前的安全降级流，只发送最终态。

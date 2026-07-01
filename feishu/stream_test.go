@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +160,28 @@ func TestFeishuStreamCompleteUpdatesDoneAndDestroys(t *testing.T) {
 	main := body["elements"].([]any)[1].(map[string]any)
 	if main["content"] != "done" {
 		t.Fatalf("final content=%#v, want done", main["content"])
+	}
+}
+
+func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
+	registry.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "accept", Summary: "command: date"})
+	stream := &feishuStream{cardKit: cardKit, taskCards: registry, cardID: "card-1", sequence: 4, throttle: cardkitThrottle, now: time.Now}
+
+	if err := stream.Complete(context.Background(), "最终结果"); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+	card := decodeCardJSON(t, cardKit.updateCards[0])
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if len(elements) != 3 {
+		t.Fatalf("elements=%d, want approval record element", len(elements))
+	}
+	approval := elements[2].(map[string]any)
+	if !strings.Contains(approval["content"].(string), "command: date") {
+		t.Fatalf("approval content=%q, want approval record", approval["content"])
 	}
 }
 

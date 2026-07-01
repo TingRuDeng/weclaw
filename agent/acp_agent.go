@@ -26,15 +26,17 @@ const (
 
 // ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
 type ACPAgent struct {
-	command      string
-	args         []string
-	model        string
-	effort       string
-	systemPrompt string
-	cwd          string
-	env          map[string]string
-	runAs        runAsUserSpec
-	protocol     string // "legacy_acp" or "codex_app_server"
+	command        string
+	args           []string
+	model          string
+	effort         string
+	approvalPolicy string
+	sandboxMode    string
+	systemPrompt   string
+	cwd            string
+	env            map[string]string
+	runAs          runAsUserSpec
+	protocol       string // "legacy_acp" or "codex_app_server"
 
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -69,16 +71,18 @@ type ACPAgent struct {
 
 // ACPAgentConfig holds configuration for the ACP agent.
 type ACPAgentConfig struct {
-	Command      string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
-	Args         []string // extra args for command (e.g. ["acp"] for cursor)
-	Model        string
-	Effort       string
-	SystemPrompt string
-	Cwd          string            // working directory
-	Env          map[string]string // extra environment variables
-	StateFile    string            // optional persisted mapping file path
-	RunAsUser    string            // 以独立 Unix 用户运行（文件系统隔离）
-	RunAsEnv     []string          // run_as_user 时透传的环境变量名白名单
+	Command        string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
+	Args           []string // extra args for command (e.g. ["acp"] for cursor)
+	Model          string
+	Effort         string
+	ApprovalPolicy string
+	SandboxMode    string
+	SystemPrompt   string
+	Cwd            string            // working directory
+	Env            map[string]string // extra environment variables
+	StateFile      string            // optional persisted mapping file path
+	RunAsUser      string            // 以独立 Unix 用户运行（文件系统隔离）
+	RunAsEnv       []string          // run_as_user 时透传的环境变量名白名单
 }
 
 // --- JSON-RPC types ---
@@ -340,6 +344,8 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		args:                        cfg.Args,
 		model:                       cfg.Model,
 		effort:                      cfg.Effort,
+		approvalPolicy:              strings.TrimSpace(cfg.ApprovalPolicy),
+		sandboxMode:                 strings.TrimSpace(cfg.SandboxMode),
 		systemPrompt:                cfg.SystemPrompt,
 		cwd:                         cfg.Cwd,
 		env:                         cfg.Env,
@@ -865,9 +871,9 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	}
 
 	params := map[string]interface{}{
-		"approvalPolicy":         approvalPolicyForContext(ctx),
+		"approvalPolicy":         a.approvalPolicyForContext(ctx),
 		"cwd":                    a.cwdForConversation(conversationID),
-		"sandbox":                "danger-full-access",
+		"sandbox":                a.sandboxModeForCodex(),
 		"persistExtendedHistory": true,
 	}
 	if a.model != "" {
@@ -909,9 +915,9 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 
 	params := map[string]interface{}{
 		"threadId":       threadID,
-		"approvalPolicy": approvalPolicyForContext(ctx),
+		"approvalPolicy": a.approvalPolicyForContext(ctx),
 		"cwd":            a.cwdForConversation(conversationID),
-		"sandbox":        "danger-full-access",
+		"sandbox":        a.sandboxModeForCodex(),
 	}
 	if a.model != "" {
 		params["model"] = a.model
@@ -984,9 +990,9 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		startTurn := func() error {
 			_, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
 				ThreadID:       threadID,
-				ApprovalPolicy: approvalPolicyForContext(ctx),
+				ApprovalPolicy: a.approvalPolicyForContext(ctx),
 				Input:          []codexUserInput{{Type: "text", Text: message}},
-				SandboxPolicy:  map[string]interface{}{"type": "dangerFullAccess"},
+				SandboxPolicy:  map[string]interface{}{"type": a.sandboxPolicyTypeForCodex()},
 				Model:          a.model,
 				Effort:         a.effort,
 				Cwd:            a.cwdForConversation(conversationID),
@@ -2158,6 +2164,43 @@ func approvalKindFromDecision(decision string) string {
 		return "allow"
 	default:
 		return lower
+	}
+}
+
+func (a *ACPAgent) approvalPolicyForContext(ctx context.Context) string {
+	if policy := strings.TrimSpace(a.approvalPolicy); policy != "" {
+		return policy
+	}
+	return approvalPolicyForContext(ctx)
+}
+
+func (a *ACPAgent) sandboxModeForCodex() string {
+	mode := strings.TrimSpace(a.sandboxMode)
+	if mode == "" {
+		return "danger-full-access"
+	}
+	switch strings.ToLower(mode) {
+	case "readonly", "read_only", "read-only":
+		return "read-only"
+	case "workspacewrite", "workspace_write", "workspace-write":
+		return "workspace-write"
+	case "dangerfullaccess", "danger_full_access", "danger-full-access":
+		return "danger-full-access"
+	default:
+		return mode
+	}
+}
+
+func (a *ACPAgent) sandboxPolicyTypeForCodex() string {
+	switch a.sandboxModeForCodex() {
+	case "read-only":
+		return "readOnly"
+	case "workspace-write":
+		return "workspaceWrite"
+	case "danger-full-access":
+		return "dangerFullAccess"
+	default:
+		return strings.TrimSpace(a.sandboxMode)
 	}
 }
 

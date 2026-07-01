@@ -158,6 +158,34 @@ func TestReplierAskChoicesSendsCardWhenCardKitAvailable(t *testing.T) {
 	}
 }
 
+func TestReplierAskChoicesIncludesCurrentTaskCardID(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{cardID: "card-task-1"}
+	reply := newReplierWithTaskCards(sender, "ou_user", cardKit, newTaskCardRegistry())
+
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"})
+	if err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+	if stream == nil || reply.CurrentTaskCardID() != "card-task-1" {
+		t.Fatalf("current task card=%q, want card-task-1", reply.CurrentTaskCardID())
+	}
+	err = reply.AskChoices(context.Background(), "Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{ID: "accept", Label: "accept"}})
+	if err != nil {
+		t.Fatalf("AskChoices error: %v", err)
+	}
+	if len(cardKit.createdCards) != 2 {
+		t.Fatalf("createdCards=%d, want task card and approval card", len(cardKit.createdCards))
+	}
+	card := decodeCardJSON(t, cardKit.createdCards[1])
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	value := elements[1].(map[string]any)["value"].(map[string]any)
+	if value["task_card_id"] != "card-task-1" {
+		t.Fatalf("button value=%#v, want task card id", value)
+	}
+}
+
 func TestReplierTypingUsesThinkingCard(t *testing.T) {
 	sender := &fakeMessageSender{}
 	cardKit := &fakeCardKitClient{cardID: "card-typing"}

@@ -3042,6 +3042,58 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	}
 }
 
+func TestApprovalHandlerIncludesTaskCardIDMetadata(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newTaskCardMetadataReplier("card-task-1")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resultCh := make(chan string, 1)
+
+	go func() {
+		optionID, err := h.approvalHandlerForUser("ou_user", reply)(ctx, agent.ApprovalRequest{
+			ToolCall: json.RawMessage(`{"cmd":"date"}`),
+			Options: []agent.ApprovalOption{
+				{ID: "accept", Name: "accept", Kind: "allow"},
+				{ID: "cancel", Name: "cancel", Kind: "deny"},
+			},
+		})
+		if err != nil {
+			resultCh <- "error:" + err.Error()
+			return
+		}
+		resultCh <- optionID
+	}()
+
+	choice := reply.waitChoice(t, ctx)
+	if choice.Metadata["approval_key"] == "" {
+		t.Fatalf("choice metadata=%#v, want approval key", choice.Metadata)
+	}
+	if choice.Metadata["task_card_id"] != "card-task-1" {
+		t.Fatalf("choice metadata=%#v, want task card id", choice.Metadata)
+	}
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value: map[string]string{
+				"choice":       "accept",
+				"approval_key": choice.Metadata["approval_key"],
+				"task_card_id": choice.Metadata["task_card_id"],
+			},
+		},
+	}, reply)
+
+	select {
+	case got := <-resultCh:
+		if got != "accept" {
+			t.Fatalf("approval result=%q, want accept", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not return")
+	}
+}
+
 type approvalKeyCaptureReplier struct {
 	mu         sync.Mutex
 	texts      []string
@@ -3109,6 +3161,38 @@ func approvalKeyFromChoices(choices []platform.Choice) string {
 		return ""
 	}
 	return strings.TrimSpace(choices[0].Metadata["approval_key"])
+}
+
+type taskCardMetadataReplier struct {
+	approvalKeyCaptureReplier
+	taskCardID string
+	choiceCh   chan platform.Choice
+}
+
+func newTaskCardMetadataReplier(taskCardID string) *taskCardMetadataReplier {
+	return &taskCardMetadataReplier{taskCardID: taskCardID, choiceCh: make(chan platform.Choice, 1)}
+}
+
+func (r *taskCardMetadataReplier) CurrentTaskCardID() string {
+	return r.taskCardID
+}
+
+func (r *taskCardMetadataReplier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
+	if len(choices) > 0 {
+		r.choiceCh <- choices[0]
+	}
+	return nil
+}
+
+func (r *taskCardMetadataReplier) waitChoice(t *testing.T, ctx context.Context) platform.Choice {
+	t.Helper()
+	select {
+	case choice := <-r.choiceCh:
+		return choice
+	case <-ctx.Done():
+		t.Fatal("choice was not captured")
+		return platform.Choice{}
+	}
 }
 
 func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {

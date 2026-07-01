@@ -110,6 +110,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		if approvalKey := firstNonEmpty(strings.TrimSpace(choice.Metadata["approval_key"]), approvalPayloadKey(options)); approvalKey != "" {
 			value["approval_key"] = approvalKey
 		}
+		if taskCardID := strings.TrimSpace(choice.Metadata["task_card_id"]); taskCardID != "" {
+			value["task_card_id"] = taskCardID
+		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",
 			"text": map[string]any{
@@ -292,7 +295,11 @@ func approvalHandledStatus(action parsedCardAction) (string, string) {
 	choice := strings.ToLower(strings.TrimSpace(action.Choice))
 	label := strings.ToLower(strings.TrimSpace(action.Label))
 	switch {
-	case strings.Contains(choice, "deny") || strings.Contains(choice, "reject") || strings.Contains(label, "拒"):
+	case strings.Contains(choice, "cancel") ||
+		strings.Contains(choice, "deny") ||
+		strings.Contains(choice, "reject") ||
+		strings.Contains(label, "cancel") ||
+		strings.Contains(label, "拒"):
 		return "❌ 已拒绝", "red"
 	default:
 		return "✅ 已授权", "green"

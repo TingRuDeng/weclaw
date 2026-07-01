@@ -298,3 +298,56 @@ func TestCodexTurnStartUsesUntrustedApprovalPolicyWithHandler(t *testing.T) {
 		t.Fatalf("turn approval policy=%q, want untrusted", turnApprovalPolicy)
 	}
 }
+
+func TestCodexAppServerUsesConfiguredApprovalAndSandbox(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command:        "codex",
+		Args:           []string{"app-server", "--listen", "stdio://"},
+		Cwd:            t.TempDir(),
+		ApprovalPolicy: "on-request",
+		SandboxMode:    "workspace-write",
+	})
+	var threadApprovalPolicy string
+	var threadSandbox string
+	var turnApprovalPolicy string
+	var turnSandboxType string
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			p, ok := params.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("unexpected thread/start params type %T", params)
+			}
+			threadApprovalPolicy, _ = p["approvalPolicy"].(string)
+			threadSandbox, _ = p["sandbox"].(string)
+			return json.RawMessage(`{"thread":{"id":"thread-configured"}}`), nil
+		case "turn/start":
+			p, ok := params.(codexTurnStartParams)
+			if !ok {
+				return nil, fmt.Errorf("unexpected turn/start params type %T", params)
+			}
+			turnApprovalPolicy = p.ApprovalPolicy
+			sandbox, _ := p.SandboxPolicy.(map[string]interface{})
+			turnSandboxType, _ = sandbox["type"].(string)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Delta: "ok"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	if _, err := a.chatCodexAppServer(context.Background(), "conversation-configured", "hello", nil); err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if threadApprovalPolicy != "on-request" || turnApprovalPolicy != "on-request" {
+		t.Fatalf("approval policies thread=%q turn=%q, want on-request", threadApprovalPolicy, turnApprovalPolicy)
+	}
+	if threadSandbox != "workspace-write" || turnSandboxType != "workspaceWrite" {
+		t.Fatalf("sandbox thread=%q turn=%q, want workspace-write/workspaceWrite", threadSandbox, turnSandboxType)
+	}
+}

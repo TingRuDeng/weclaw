@@ -1065,7 +1065,7 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
 		prompt := approvalPrompt(req)
 		approvalKey := approvalPendingKey(userID, prompt, req.Options)
-		choices := approvalChoices(req.Options, approvalKey)
+		choices := approvalChoices(req.Options, approvalKey, taskCardIDFromReplier(reply))
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
@@ -1235,7 +1235,7 @@ func approvalPrompt(req agent.ApprovalRequest) string {
 	return "Codex 请求执行敏感操作，请确认：\n\n" + toolCall
 }
 
-func approvalChoices(options []agent.ApprovalOption, approvalKey string) []platform.Choice {
+func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
 	for _, option := range options {
 		id := strings.TrimSpace(option.ID)
@@ -1243,12 +1243,32 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string) []platf
 			continue
 		}
 		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option)}
-		if approvalKey != "" {
-			choice.Metadata = map[string]string{"approval_key": approvalKey}
+		metadata := approvalChoiceMetadata(approvalKey, taskCardID)
+		if len(metadata) > 0 {
+			choice.Metadata = metadata
 		}
 		choices = append(choices, choice)
 	}
 	return choices
+}
+
+func approvalChoiceMetadata(approvalKey string, taskCardID string) map[string]string {
+	metadata := make(map[string]string, 2)
+	if approvalKey = strings.TrimSpace(approvalKey); approvalKey != "" {
+		metadata["approval_key"] = approvalKey
+	}
+	if taskCardID = strings.TrimSpace(taskCardID); taskCardID != "" {
+		metadata["task_card_id"] = taskCardID
+	}
+	return metadata
+}
+
+func taskCardIDFromReplier(reply platform.Replier) string {
+	reporter, ok := reply.(platform.TaskCardReporter)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(reporter.CurrentTaskCardID())
 }
 
 func approvalPendingKey(userID string, prompt string, options []agent.ApprovalOption) string {

@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +61,29 @@ func TestBuildCardV2NormalizesUnknownStatus(t *testing.T) {
 	header := card["header"].(map[string]any)
 	if header["template"] != "blue" {
 		t.Fatalf("template=%v, want blue", header["template"])
+	}
+}
+
+func TestBuildCardV2AppendsApprovalRecords(t *testing.T) {
+	raw, err := buildCardV2(cardOptions{
+		Status:    cardStatusDone,
+		Title:     "Codex",
+		Content:   "最终回答",
+		Approvals: []string{"✅ 已授权：accept\ncommand: date"},
+	})
+	if err != nil {
+		t.Fatalf("buildCardV2 error: %v", err)
+	}
+	card := decodeCardJSON(t, raw)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if len(elements) != 3 {
+		t.Fatalf("elements=%d, want approval record element", len(elements))
+	}
+	approval := elements[2].(map[string]any)
+	content := approval["content"].(string)
+	if !strings.Contains(content, "审批记录") || !strings.Contains(content, "command: date") {
+		t.Fatalf("approval content=%q, want approval summary", content)
 	}
 }
 

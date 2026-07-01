@@ -13,6 +13,7 @@ const cardkitThrottle = 500 * time.Millisecond
 
 type feishuStream struct {
 	cardKit     cardKitClient
+	taskCards   *taskCardRegistry
 	cardID      string
 	title       string
 	sequence    int
@@ -25,6 +26,14 @@ type feishuStream struct {
 
 // openCardKitStream 创建并发送 CardKit 卡片，然后开启流式模式。
 func (r *Replier) openCardKitStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
+	return r.openCardKitStreamWithMode(ctx, opts, false)
+}
+
+func (r *Replier) openTaskCardKitStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
+	return r.openCardKitStreamWithMode(ctx, opts, true)
+}
+
+func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.StreamOptions, trackTask bool) (platform.Stream, error) {
 	cardJSON, err := buildCardV2(cardOptions{
 		Status:  cardStatusThinking,
 		Title:   opts.Title,
@@ -40,12 +49,23 @@ func (r *Replier) openCardKitStream(ctx context.Context, opts platform.StreamOpt
 	if err := r.sender.SendCard(ctx, r.openID, cardID); err != nil {
 		return nil, err
 	}
+	if trackTask {
+		r.setCurrentTaskCardID(cardID)
+		if r.taskCards != nil {
+			r.taskCards.record(cardID, cardOptions{
+				Status:  cardStatusThinking,
+				Title:   opts.Title,
+				Content: opts.InitialContent,
+			})
+		}
+	}
 	stream := &feishuStream{
-		cardKit:  r.cardKit,
-		cardID:   cardID,
-		title:    opts.Title,
-		throttle: cardkitThrottle,
-		now:      time.Now,
+		cardKit:   r.cardKit,
+		taskCards: r.taskCards,
+		cardID:    cardID,
+		title:     opts.Title,
+		throttle:  cardkitThrottle,
+		now:       time.Now,
 	}
 	stream.sequence++
 	if err := stream.cardKit.SetStreaming(ctx, stream.cardID, true, stream.sequence); err != nil {
@@ -81,6 +101,9 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 	}
 	s.lastUpdate = now
 	s.lastContent = content
+	if s.taskCards != nil {
+		s.taskCards.updateContent(s.cardID, content)
+	}
 	return nil
 }
 
@@ -94,7 +117,13 @@ func (s *feishuStream) Complete(ctx context.Context, finalContent string) error 
 		finalContent = s.lastContent
 	}
 	disableErr := s.disableStreaming(ctx)
-	cardJSON, buildErr := buildCardV2(cardOptions{Status: cardStatusDone, Title: s.title, Content: finalContent})
+	opts := cardOptions{Status: cardStatusDone, Title: s.title, Content: finalContent}
+	if s.taskCards != nil {
+		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, cardStatusDone, finalContent); ok {
+			opts = snapshot
+		}
+	}
+	cardJSON, buildErr := buildCardV2(opts)
 	if buildErr != nil {
 		return buildErr
 	}
@@ -111,7 +140,13 @@ func (s *feishuStream) Fail(ctx context.Context, errText string) error {
 	}
 	s.closed = true
 	disableErr := s.disableStreaming(ctx)
-	cardJSON, buildErr := buildCardV2(cardOptions{Status: cardStatusError, Title: s.title, Content: errText})
+	opts := cardOptions{Status: cardStatusError, Title: s.title, Content: errText}
+	if s.taskCards != nil {
+		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, cardStatusError, errText); ok {
+			opts = snapshot
+		}
+	}
+	cardJSON, buildErr := buildCardV2(opts)
 	if buildErr != nil {
 		return buildErr
 	}

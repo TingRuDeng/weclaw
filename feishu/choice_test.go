@@ -71,6 +71,24 @@ func TestBuildChoiceCardUsesApprovalKeyMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildChoiceCardUsesTaskCardIDMetadata(t *testing.T) {
+	cardJSON, err := buildChoiceCard("Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{
+		ID:       "accept",
+		Label:    "accept",
+		Metadata: map[string]string{"task_card_id": "card-task-1"},
+	}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	value := elements[1].(map[string]any)["value"].(map[string]any)
+	if value["task_card_id"] != "card-task-1" {
+		t.Fatalf("button value=%#v, want task card id", value)
+	}
+}
+
 func TestBuildChoiceCardDoesNotMarkNormalChoicesAsApproval(t *testing.T) {
 	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{ID: "/cx cd 0", Label: "weclaw"}}, "feishu:ou_user")
 	if err != nil {
@@ -176,6 +194,20 @@ func TestBuildChoiceHandledCardShowsDenyStatus(t *testing.T) {
 	content := body["elements"].([]map[string]any)[0]["content"].(string)
 	if !strings.Contains(content, "❌ 已拒绝") || !strings.Contains(content, "拒绝") {
 		t.Fatalf("content=%q, want deny status", content)
+	}
+}
+
+func TestBuildChoiceHandledCardShowsCancelAsDenyStatus(t *testing.T) {
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "cancel", Label: "cancel", Summary: "command: rm file"})
+	data := card.Data.(map[string]any)
+	header := data["header"].(map[string]any)
+	if header["template"] != "red" {
+		t.Fatalf("header=%#v, want red denied card", header)
+	}
+	body := data["body"].(map[string]any)
+	content := body["elements"].([]map[string]any)[0]["content"].(string)
+	if !strings.Contains(content, "❌ 已拒绝") || !strings.Contains(content, "cancel") {
+		t.Fatalf("content=%q, want cancel denied status", content)
 	}
 }
 

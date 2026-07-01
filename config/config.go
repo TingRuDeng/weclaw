@@ -7,21 +7,22 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Config holds the application configuration.
 type Config struct {
-	DefaultAgent string                    `json:"default_agent"`
-	APIAddr      string                    `json:"api_addr,omitempty"`
-	APIToken     string                    `json:"api_token,omitempty"`
-	SaveDir      string                    `json:"save_dir,omitempty"`
-	AllowedWorkspaceRoots []string         `json:"allowed_workspace_roots,omitempty"`
-	RateLimitPerMinute    int              `json:"rate_limit_per_minute,omitempty"` // 每用户每分钟最多触发 agent 次数；0=不限流
-	AuditLog              *bool            `json:"audit_log,omitempty"`             // 是否记录审计日志；缺省=开启
-	AuditLogPath          string           `json:"audit_log_path,omitempty"`        // 审计日志路径；空=~/.weclaw/audit.log
-	Progress     ProgressConfig            `json:"progress,omitempty"`
-	Agents       map[string]AgentConfig    `json:"agents"`
-	Platforms    map[string]PlatformConfig `json:"platforms,omitempty"`
+	DefaultAgent          string                    `json:"default_agent"`
+	APIAddr               string                    `json:"api_addr,omitempty"`
+	APIToken              string                    `json:"api_token,omitempty"`
+	SaveDir               string                    `json:"save_dir,omitempty"`
+	AllowedWorkspaceRoots []string                  `json:"allowed_workspace_roots,omitempty"`
+	RateLimitPerMinute    int                       `json:"rate_limit_per_minute,omitempty"` // 每用户每分钟最多触发 agent 次数；0=不限流
+	AuditLog              *bool                     `json:"audit_log,omitempty"`             // 是否记录审计日志；缺省=开启
+	AuditLogPath          string                    `json:"audit_log_path,omitempty"`        // 审计日志路径；空=~/.weclaw/audit.log
+	Progress              ProgressConfig            `json:"progress,omitempty"`
+	Agents                map[string]AgentConfig    `json:"agents"`
+	Platforms             map[string]PlatformConfig `json:"platforms,omitempty"`
 }
 
 // PlatformConfig 保存单个平台的启用状态、访问控制和展示覆盖配置。
@@ -47,23 +48,74 @@ func (c PlatformConfig) EffectiveThreadIsolation() bool {
 
 // AgentConfig holds configuration for a single agent.
 type AgentConfig struct {
-	Type         string            `json:"type"`                    // "acp", "cli", "http", or "companion"
-	Command      string            `json:"command,omitempty"`       // binary path (cli/acp type)
-	Args         []string          `json:"args,omitempty"`          // extra args for command (e.g. ["acp"] for cursor)
-	Aliases      []string          `json:"aliases,omitempty"`       // custom trigger commands (e.g. ["gpt", "4o"])
-	Cwd          string            `json:"cwd,omitempty"`           // working directory (workspace)
-	Env          map[string]string `json:"env,omitempty"`           // extra environment variables (cli/acp type)
-	Model        string            `json:"model,omitempty"`         // model name
-	Effort       string            `json:"effort,omitempty"`        // Codex reasoning effort
-	SystemPrompt string            `json:"system_prompt,omitempty"` // system prompt
-	Endpoint     string            `json:"endpoint,omitempty"`      // API endpoint (http type)
-	APIKey       string            `json:"api_key,omitempty"`       // API key (http type)
-	Headers      map[string]string `json:"headers,omitempty"`       // extra HTTP headers (http type)
-	MaxHistory   int               `json:"max_history,omitempty"`   // max history (http type)
-	Progress     *ProgressConfig   `json:"progress,omitempty"`      // 微信进度反馈配置
-	AutoLaunch   *bool             `json:"auto_launch,omitempty"`   // companion 是否自动打开本地可见终端
-	RunAsUser    string            `json:"run_as_user,omitempty"`   // 以独立 Unix 用户运行 agent，做文件系统隔离
-	RunAsEnv     []string          `json:"run_as_env,omitempty"`    // run_as_user 时需透传的环境变量名白名单
+	Type            string            `json:"type"`                       // "acp", "cli", "http", or "companion"
+	Command         string            `json:"command,omitempty"`          // binary path (cli/acp type)
+	Args            []string          `json:"args,omitempty"`             // extra args for command (e.g. ["acp"] for cursor)
+	Aliases         []string          `json:"aliases,omitempty"`          // custom trigger commands (e.g. ["gpt", "4o"])
+	Cwd             string            `json:"cwd,omitempty"`              // working directory (workspace)
+	Env             map[string]string `json:"env,omitempty"`              // extra environment variables (cli/acp type)
+	Model           string            `json:"model,omitempty"`            // model name
+	Effort          string            `json:"effort,omitempty"`           // Codex reasoning effort
+	PermissionLevel string            `json:"permission_level,omitempty"` // Codex 权限档位：request_approval / auto_approval / full_access
+	ApprovalPolicy  string            `json:"approval_policy,omitempty"`  // Codex approvalPolicy 高级覆盖
+	SandboxMode     string            `json:"sandbox_mode,omitempty"`     // Codex sandbox：read-only / workspace-write / danger-full-access
+	SystemPrompt    string            `json:"system_prompt,omitempty"`    // system prompt
+	Endpoint        string            `json:"endpoint,omitempty"`         // API endpoint (http type)
+	APIKey          string            `json:"api_key,omitempty"`          // API key (http type)
+	Headers         map[string]string `json:"headers,omitempty"`          // extra HTTP headers (http type)
+	MaxHistory      int               `json:"max_history,omitempty"`      // max history (http type)
+	Progress        *ProgressConfig   `json:"progress,omitempty"`         // 微信进度反馈配置
+	AutoLaunch      *bool             `json:"auto_launch,omitempty"`      // companion 是否自动打开本地可见终端
+	RunAsUser       string            `json:"run_as_user,omitempty"`      // 以独立 Unix 用户运行 agent，做文件系统隔离
+	RunAsEnv        []string          `json:"run_as_env,omitempty"`       // run_as_user 时需透传的环境变量名白名单
+}
+
+// EffectiveApprovalPolicy 返回 Codex ACP 会话使用的审批策略；空值表示沿用运行时默认策略。
+func (c AgentConfig) EffectiveApprovalPolicy() string {
+	if policy := strings.TrimSpace(c.ApprovalPolicy); policy != "" {
+		return policy
+	}
+	switch normalizePermissionLevel(c.PermissionLevel) {
+	case "request_approval":
+		return "on-request"
+	case "auto_approval":
+		return "untrusted"
+	case "full_access":
+		return "never"
+	default:
+		return ""
+	}
+}
+
+// EffectiveSandboxMode 返回 Codex ACP 会话使用的沙箱模式；空值表示沿用运行时默认策略。
+func (c AgentConfig) EffectiveSandboxMode() string {
+	if mode := strings.TrimSpace(c.SandboxMode); mode != "" {
+		return mode
+	}
+	switch normalizePermissionLevel(c.PermissionLevel) {
+	case "request_approval":
+		return "workspace-write"
+	case "auto_approval", "full_access":
+		return "danger-full-access"
+	default:
+		return ""
+	}
+}
+
+func normalizePermissionLevel(level string) string {
+	level = strings.ToLower(strings.TrimSpace(level))
+	level = strings.ReplaceAll(level, "-", "_")
+	level = strings.ReplaceAll(level, " ", "_")
+	switch level {
+	case "request", "ask", "ask_approval", "request_approval":
+		return "request_approval"
+	case "auto", "auto_approve", "auto_approval", "untrusted":
+		return "auto_approval"
+	case "full", "full_access", "danger", "danger_full_access":
+		return "full_access"
+	default:
+		return level
+	}
 }
 
 // ProgressConfig 控制微信侧进度反馈的展示粒度。

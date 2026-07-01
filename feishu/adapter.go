@@ -35,6 +35,7 @@ type Adapter struct {
 	accessSet  bool
 	approvalMu sync.Mutex
 	approvals  map[string]approvalRecord
+	taskCards  *taskCardRegistry
 	now        func() time.Time
 }
 
@@ -58,6 +59,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		session:    DefaultFeishuSessionOptions(),
 		deduper:    newFeishuEventDeduper(feishuEventDedupTTL),
 		approvals:  make(map[string]approvalRecord),
+		taskCards:  newTaskCardRegistry(),
 		now:        time.Now,
 	}
 	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
@@ -109,7 +111,7 @@ func (a *Adapter) SetAccessControl(access platform.AccessControl) {
 
 // NewReplier 为主动发送 API 创建飞书回复器。
 func (a *Adapter) NewReplier(chatID string) platform.Replier {
-	return NewReplier(a.sender, chatID, a.cardKit)
+	return newReplierWithTaskCards(a.sender, chatID, a.cardKit, a.taskCards)
 }
 
 // Run 校验凭证并启动飞书长连接，收到事件后交给 dispatcher 处理。
@@ -174,7 +176,7 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
 	log.Printf("[feishu] message event parsed: user=%s message=%s attachments=%d", msg.UserID, msg.MessageID, len(msg.Attachments))
-	dispatch(ctx, msg, NewReplier(a.sender, firstNonEmpty(msg.ChatID, msg.UserID), a.cardKit))
+	dispatch(ctx, msg, newReplierWithTaskCards(a.sender, firstNonEmpty(msg.ChatID, msg.UserID), a.cardKit, a.taskCards))
 }
 
 // handleCardActionEvent 在 3 秒回调窗口内立即响应，再异步把按钮动作回放到统一业务层。
@@ -211,7 +213,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 			"source": "card.action.trigger",
 		},
 	}
-	go dispatch(context.WithoutCancel(ctx), msg, NewReplier(a.sender, action.UserID, a.cardKit))
+	go dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, action.UserID, a.cardKit, a.taskCards))
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
 	}, nil
@@ -230,13 +232,15 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 			RawCommand: &platform.CardAction{
 				Action: handled.Action,
 				Value: map[string]string{
-					"choice": handled.Choice,
-					"conv":   handled.Conv,
+					"choice":       handled.Choice,
+					"conv":         handled.Conv,
+					"approval_key": handled.Approval,
+					"task_card_id": handled.TaskCard,
 				},
 			},
 			Metadata: map[string]string{"source": "card.action.trigger"},
 		}
-		go dispatch(context.WithoutCancel(ctx), msg, NewReplier(a.sender, handled.UserID, a.cardKit))
+		go dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, handled.UserID, a.cardKit, a.taskCards))
 		a.updateTaskCardWithApproval(ctx, handled)
 	}
 	return &callback.CardActionTriggerResponse{
@@ -294,8 +298,14 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 	if a.cardKit == nil || strings.TrimSpace(action.TaskCard) == "" {
 		return
 	}
-	// 当前仅支持按钮 payload 携带 task_card_id；生产态还缺 approval_id 到主任务卡片的稳定映射。
-	cardJSON, err := buildTaskApprovalRecordCard(action)
+	opts, ok := a.taskCards.addApproval(action.TaskCard, action)
+	var cardJSON string
+	var err error
+	if ok {
+		cardJSON, err = buildCardV2(opts)
+	} else {
+		cardJSON, err = buildTaskApprovalRecordCard(action)
+	}
 	if err != nil {
 		log.Printf("[feishu] failed to build task approval record card: %v", err)
 		return

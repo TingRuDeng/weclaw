@@ -217,7 +217,56 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
 	}
 	select {
-	case <-dispatched:
+	case msg := <-dispatched:
+		if msg.RawCommand.Value["approval_key"] != "approval-key-1" {
+			t.Fatalf("raw command=%#v, want approval key passthrough", msg.RawCommand.Value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestHandleCardActionEventAppendsApprovalToTaskCardState(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	adapter.taskCards.record("card-task-1", cardOptions{
+		Status:  cardStatusThinking,
+		Title:   "Codex",
+		Content: "正在分析任务",
+	})
+	event := approvalCardActionEvent("allow", "允许本次", "card-task-1")
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Card == nil {
+		t.Fatalf("response=%#v, want compact approval card", resp)
+	}
+	if cardKit.updateCountFor("card-task-1") != 1 {
+		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
+	}
+	card := decodeCardJSON(t, cardKit.updateCards[0])
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	main := elements[1].(map[string]any)
+	approval := elements[2].(map[string]any)
+	if main["content"] != "正在分析任务" {
+		t.Fatalf("main content=%#v, want preserved task content", main["content"])
+	}
+	if !strings.Contains(approval["content"].(string), "允许本次") {
+		t.Fatalf("approval content=%q, want approval label", approval["content"])
+	}
+	select {
+	case msg := <-dispatched:
+		if msg.RawCommand.Value["task_card_id"] != "card-task-1" {
+			t.Fatalf("raw command=%#v, want task card passthrough", msg.RawCommand.Value)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
 	}

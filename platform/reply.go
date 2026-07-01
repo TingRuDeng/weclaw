@@ -18,6 +18,11 @@ type Replier interface {
 	AskChoices(ctx context.Context, prompt string, choices []Choice) error
 }
 
+// TaskCardReporter 是平台可选能力，用于把后续交互绑定到当前任务卡片。
+type TaskCardReporter interface {
+	CurrentTaskCardID() string
+}
+
 // OutboundReplierFactory 表示平台可为主动发送 API 创建会话回复器。
 type OutboundReplierFactory interface {
 	NewReplier(chatID string) Replier
