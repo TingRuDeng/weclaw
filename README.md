@@ -92,6 +92,23 @@ Then run this in the same workspace terminal:
 weclaw companion --agent codex --cwd /path/to/project
 ```
 
+## Platform Support
+
+| Capability | WeChat (personal) | Feishu / Lark |
+|------------|:-----------------:|:-------------:|
+| Text & slash commands | ✅ | ✅ |
+| Images (send/receive) | ✅ | ✅ |
+| Files (send/receive) | ✅ | ✅ |
+| Voice → text (inbound) | ✅ (WeChat STT) | ⚠️ received as file, no auto-transcription |
+| Rich cards | ❌ | ✅ (CardKit) |
+| Streaming (typewriter) | ❌ degrades to typing + text | ✅ CardKit stream |
+| Interactive buttons | ❌ degrades to numbered text | ✅ (choices / approvals) |
+| Group chat | ❌ 1:1 only | ✅ (requires @bot) |
+| Proactive send | ✅ | ✅ (text) |
+| Login | QR scan (`weclaw login`) | app_id/secret (`weclaw feishu login`) |
+
+Business logic (commands, agent routing, sessions, progress) is platform-agnostic; each adapter degrades gracefully to its native capabilities.
+
 ## Chat Commands
 
 Send these as WeChat or Feishu messages:
