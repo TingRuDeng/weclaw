@@ -107,7 +107,7 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		if options.Summary != "" {
 			value["summary"] = options.Summary
 		}
-		if approvalKey := approvalPayloadKey(options); approvalKey != "" {
+		if approvalKey := firstNonEmpty(strings.TrimSpace(choice.Metadata["approval_key"]), approvalPayloadKey(options)); approvalKey != "" {
 			value["approval_key"] = approvalKey
 		}
 		buttons = append(buttons, map[string]any{

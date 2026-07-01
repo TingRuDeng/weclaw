@@ -2950,6 +2950,106 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 	}
 }
 
+func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
+	h := NewHandler(nil, nil)
+	replyA := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	replyB := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resultA := make(chan string, 1)
+	resultB := make(chan string, 1)
+	options := []agent.ApprovalOption{
+		{ID: "allow_once", Name: "允许", Kind: "allow"},
+		{ID: "deny_once", Name: "拒绝", Kind: "deny"},
+	}
+
+	go func() {
+		optionID, err := h.approvalHandlerForUser("ou_user", replyA)(ctx, agent.ApprovalRequest{
+			ToolCall: json.RawMessage(`{"cmd":"first"}`),
+			Options:  options,
+		})
+		if err != nil {
+			resultA <- "error:" + err.Error()
+			return
+		}
+		resultA <- optionID
+	}()
+	go func() {
+		optionID, err := h.approvalHandlerForUser("ou_user", replyB)(ctx, agent.ApprovalRequest{
+			ToolCall: json.RawMessage(`{"cmd":"second"}`),
+			Options:  options,
+		})
+		if err != nil {
+			resultB <- "error:" + err.Error()
+			return
+		}
+		resultB <- optionID
+	}()
+
+	waitUntil(t, func() bool { return approvalKeyFromReply(replyA) != "" && approvalKeyFromReply(replyB) != "" })
+	keyA := approvalKeyFromReply(replyA)
+	keyB := approvalKeyFromReply(replyB)
+	if keyA == keyB {
+		t.Fatalf("approval keys must isolate cards, got both %q", keyA)
+	}
+
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "approval-card-a",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value:  map[string]string{"choice": "accept", "approval_key": keyA},
+		},
+	}, replyA)
+
+	select {
+	case got := <-resultA:
+		if got != "allow_once" {
+			t.Fatalf("approval A result=%q, want allow_once", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval A did not return")
+	}
+	select {
+	case got := <-resultB:
+		t.Fatalf("approval B should still be pending, got %q", got)
+	case <-time.After(taskQueueProbeDelay):
+	}
+	if len(replyA.Texts) != 0 {
+		t.Fatalf("approval action was treated as normal message: %#v", replyA.Texts)
+	}
+
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "approval-card-b",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value:  map[string]string{"choice": "cancel", "approval_key": keyB},
+		},
+	}, replyB)
+
+	select {
+	case got := <-resultB:
+		if got != "deny_once" {
+			t.Fatalf("approval B result=%q, want deny_once", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval B did not return")
+	}
+	if len(replyB.Texts) != 0 {
+		t.Fatalf("approval action was treated as normal message: %#v", replyB.Texts)
+	}
+}
+
+func approvalKeyFromReply(reply *platformtest.Replier) string {
+	if reply == nil || len(reply.Choices) == 0 || len(reply.Choices[0].Choices) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(reply.Choices[0].Choices[0].Metadata["approval_key"])
+}
+
 func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
@@ -4098,7 +4198,12 @@ func waitUntil(t *testing.T, condition func() bool) {
 func hasPendingApprovalForTest(h *Handler, userID string) bool {
 	h.pendingApprovalsMu.Lock()
 	defer h.pendingApprovalsMu.Unlock()
-	return h.pendingApprovals[userID] != nil
+	for _, pending := range h.pendingApprovals {
+		if pending.userID == strings.TrimSpace(userID) {
+			return true
+		}
+	}
+	return false
 }
 
 func progressConfigWithTaskTimeout() config.ProgressConfig {

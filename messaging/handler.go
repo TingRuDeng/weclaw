@@ -2,6 +2,8 @@ package messaging
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -124,6 +126,9 @@ type activeAgentTask struct {
 type pendingApproval struct {
 	choices chan string
 	allowed map[string]bool
+	aliases map[string]string
+	key     string
+	userID  string
 }
 
 // codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
@@ -671,7 +676,7 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		sendPlatformText(ctx, replyWriter, msg.UserID, h.handleStopActiveTask(ctx, msg.UserID))
 		return
 	}
-	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" && h.consumePendingApproval(msg.UserID, msg.RawCommand.Value["choice"]) {
+	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" && h.consumePendingApprovalForKey(msg.UserID, msg.RawCommand.Value["approval_key"], msg.RawCommand.Value["choice"]) {
 		return
 	}
 	if h.consumePendingApproval(msg.UserID, text) {
@@ -1058,7 +1063,9 @@ func (h *Handler) clearPendingCodexRun(key string) bool {
 
 func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) agent.ApprovalHandler {
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
-		choices := approvalChoices(req.Options)
+		prompt := approvalPrompt(req)
+		approvalKey := approvalPendingKey(userID, prompt, req.Options)
+		choices := approvalChoices(req.Options, approvalKey)
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
@@ -1068,9 +1075,9 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 			h.auditRecord(auditEntry{User: userID, Action: "approval_auto_yolo", Summary: decision})
 			return decision, nil
 		}
-		pending := h.registerPendingApproval(userID, req.Options)
+		pending := h.registerPendingApproval(userID, approvalKey, req.Options)
 		defer h.clearPendingApproval(userID, pending)
-		if err := reply.AskChoices(ctx, approvalPrompt(req), choices); err != nil {
+		if err := reply.AskChoices(ctx, prompt, choices); err != nil {
 			return "", err
 		}
 		timer := time.NewTimer(pendingApprovalTimeout)
@@ -1086,44 +1093,86 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 	}
 }
 
-func (h *Handler) registerPendingApproval(userID string, options []agent.ApprovalOption) *pendingApproval {
-	pending := &pendingApproval{choices: make(chan string, 1), allowed: approvalOptionSet(options)}
+func (h *Handler) registerPendingApproval(userID string, approvalKey string, options []agent.ApprovalOption) *pendingApproval {
+	pending := &pendingApproval{
+		choices: make(chan string, 1),
+		allowed: approvalOptionSet(options),
+		aliases: approvalOptionAliases(options),
+		key:     pendingApprovalMapKey(userID, approvalKey),
+		userID:  strings.TrimSpace(userID),
+	}
 	h.pendingApprovalsMu.Lock()
 	if h.pendingApprovals == nil {
 		h.pendingApprovals = make(map[string]*pendingApproval)
 	}
-	h.pendingApprovals[userID] = pending
+	h.pendingApprovals[pending.key] = pending
 	h.pendingApprovalsMu.Unlock()
 	return pending
 }
 
 func (h *Handler) clearPendingApproval(userID string, pending *pendingApproval) {
 	h.pendingApprovalsMu.Lock()
-	if h.pendingApprovals[userID] == pending {
-		delete(h.pendingApprovals, userID)
+	if h.pendingApprovals[pending.key] == pending {
+		delete(h.pendingApprovals, pending.key)
 	}
 	h.pendingApprovalsMu.Unlock()
 }
 
 func (h *Handler) consumePendingApproval(userID string, choice string) bool {
+	return h.consumePendingApprovalForKey(userID, "", choice)
+}
+
+func (h *Handler) consumePendingApprovalForKey(userID string, approvalKey string, choice string) bool {
 	choice = strings.TrimSpace(choice)
 	if choice == "" {
 		return false
 	}
 	h.pendingApprovalsMu.Lock()
-	pending := h.pendingApprovals[userID]
+	pending := h.findPendingApprovalLocked(userID, approvalKey)
 	h.pendingApprovalsMu.Unlock()
 	if pending == nil {
 		return false
 	}
-	if len(pending.allowed) > 0 && !pending.allowed[choice] {
+	resolved := pending.resolveChoice(choice)
+	if resolved == "" {
 		return false
 	}
 	select {
-	case pending.choices <- choice:
+	case pending.choices <- resolved:
 	default:
 	}
 	return true
+}
+
+func (h *Handler) findPendingApprovalLocked(userID string, approvalKey string) *pendingApproval {
+	if key := pendingApprovalMapKey(userID, approvalKey); key != "" {
+		return h.pendingApprovals[key]
+	}
+	var found *pendingApproval
+	for _, pending := range h.pendingApprovals {
+		if pending.userID != strings.TrimSpace(userID) {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = pending
+	}
+	return found
+}
+
+func (p *pendingApproval) resolveChoice(choice string) string {
+	if p == nil {
+		return ""
+	}
+	choice = strings.TrimSpace(choice)
+	if p.allowed[choice] {
+		return choice
+	}
+	if resolved := p.aliases[strings.ToLower(choice)]; resolved != "" {
+		return resolved
+	}
+	return ""
 }
 
 func approvalOptionSet(options []agent.ApprovalOption) map[string]bool {
@@ -1137,6 +1186,44 @@ func approvalOptionSet(options []agent.ApprovalOption) map[string]bool {
 	return allowed
 }
 
+func approvalOptionAliases(options []agent.ApprovalOption) map[string]string {
+	aliases := make(map[string]string)
+	for _, option := range options {
+		id := strings.TrimSpace(option.ID)
+		if id == "" {
+			continue
+		}
+		aliases[strings.ToLower(id)] = id
+		switch approvalOptionKind(option) {
+		case "allow":
+			for _, alias := range []string{"accept", "accepted", "approve", "approved", "allow"} {
+				if aliases[alias] == "" {
+					aliases[alias] = id
+				}
+			}
+		case "deny":
+			for _, alias := range []string{"cancel", "cancelled", "deny", "denied", "reject", "rejected"} {
+				if aliases[alias] == "" {
+					aliases[alias] = id
+				}
+			}
+		}
+	}
+	return aliases
+}
+
+func approvalOptionKind(option agent.ApprovalOption) string {
+	lower := strings.ToLower(strings.TrimSpace(firstNonBlank(option.Kind, option.ID, option.Name)))
+	switch {
+	case strings.Contains(lower, "accept"), strings.Contains(lower, "allow"), strings.Contains(lower, "approve"):
+		return "allow"
+	case strings.Contains(lower, "cancel"), strings.Contains(lower, "deny"), strings.Contains(lower, "reject"):
+		return "deny"
+	default:
+		return lower
+	}
+}
+
 func approvalPrompt(req agent.ApprovalRequest) string {
 	toolCall := strings.TrimSpace(string(req.ToolCall))
 	if toolCall == "" {
@@ -1148,16 +1235,39 @@ func approvalPrompt(req agent.ApprovalRequest) string {
 	return "Codex 请求执行敏感操作，请确认：\n\n" + toolCall
 }
 
-func approvalChoices(options []agent.ApprovalOption) []platform.Choice {
+func approvalChoices(options []agent.ApprovalOption, approvalKey string) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
 	for _, option := range options {
 		id := strings.TrimSpace(option.ID)
 		if id == "" {
 			continue
 		}
-		choices = append(choices, platform.Choice{ID: id, Label: approvalChoiceLabel(option)})
+		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option)}
+		if approvalKey != "" {
+			choice.Metadata = map[string]string{"approval_key": approvalKey}
+		}
+		choices = append(choices, choice)
 	}
 	return choices
+}
+
+func approvalPendingKey(userID string, prompt string, options []agent.ApprovalOption) string {
+	parts := make([]string, 0, len(options)+2)
+	parts = append(parts, strings.TrimSpace(userID), strings.TrimSpace(prompt))
+	for _, option := range options {
+		parts = append(parts, strings.TrimSpace(option.ID)+":"+strings.TrimSpace(option.Kind))
+	}
+	sum := sha1.Sum([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func pendingApprovalMapKey(userID string, approvalKey string) string {
+	userID = strings.TrimSpace(userID)
+	approvalKey = strings.TrimSpace(approvalKey)
+	if userID == "" || approvalKey == "" {
+		return ""
+	}
+	return userID + "\x00" + approvalKey
 }
 
 func approvalChoiceLabel(option agent.ApprovalOption) string {
@@ -1363,7 +1473,6 @@ func autoApproveApprovalOption(options []agent.ApprovalOption) string {
 	}
 	return ""
 }
-
 
 func (h *Handler) cancelActiveTask(key string) bool {
 	h.activeTasksMu.Lock()

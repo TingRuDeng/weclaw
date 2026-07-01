@@ -38,6 +38,7 @@ type StreamOptions struct {
 
 // Choice 表示一项可由用户选择的编号选项。
 type Choice struct {
-	ID    string
-	Label string
+	ID       string
+	Label    string
+	Metadata map[string]string
 }

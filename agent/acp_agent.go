@@ -2152,9 +2152,9 @@ func approvalOptionsFromPermission(params permissionRequestParams) []ApprovalOpt
 func approvalKindFromDecision(decision string) string {
 	lower := strings.ToLower(strings.TrimSpace(decision))
 	switch {
-	case strings.Contains(lower, "deny"), strings.Contains(lower, "reject"):
+	case strings.Contains(lower, "cancel"), strings.Contains(lower, "deny"), strings.Contains(lower, "reject"):
 		return "deny"
-	case strings.Contains(lower, "allow"), strings.Contains(lower, "approve"):
+	case strings.Contains(lower, "accept"), strings.Contains(lower, "allow"), strings.Contains(lower, "approve"):
 		return "allow"
 	default:
 		return lower

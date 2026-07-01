@@ -53,6 +53,24 @@ func TestBuildChoiceCardMarksApprovalButtons(t *testing.T) {
 	}
 }
 
+func TestBuildChoiceCardUsesApprovalKeyMetadata(t *testing.T) {
+	cardJSON, err := buildChoiceCard("Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{
+		ID:       "accept",
+		Label:    "accept",
+		Metadata: map[string]string{"approval_key": "approval-key-from-handler"},
+	}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	value := elements[1].(map[string]any)["value"].(map[string]any)
+	if value["approval_key"] != "approval-key-from-handler" {
+		t.Fatalf("button value=%#v, want metadata approval key", value)
+	}
+}
+
 func TestBuildChoiceCardDoesNotMarkNormalChoicesAsApproval(t *testing.T) {
 	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{ID: "/cx cd 0", Label: "weclaw"}}, "feishu:ou_user")
 	if err != nil {
