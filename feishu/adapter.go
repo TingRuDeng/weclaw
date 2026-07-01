@@ -20,6 +20,8 @@ type wsRunner interface {
 	Close()
 }
 
+const approvalActionResultTimeout = 200 * time.Millisecond
+
 // Adapter 将飞书长连接事件适配为平台无关消息。
 type Adapter struct {
 	creds      Credentials
@@ -223,6 +225,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCardAction, dispatch platform.DispatchFunc) *callback.CardActionTriggerResponse {
 	handled, first := a.recordApprovalAction(action)
 	if first {
+		resultCh := make(chan platform.CardActionResult, 1)
 		msg := platform.IncomingMessage{
 			Platform:  platform.PlatformFeishu,
 			AccountID: a.creds.AppID,
@@ -237,15 +240,42 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 					"approval_key": handled.Approval,
 					"task_card_id": handled.TaskCard,
 				},
+				Result: resultCh,
 			},
 			Metadata: map[string]string{"source": "card.action.trigger"},
 		}
-		go dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, handled.UserID, a.cardKit, a.taskCards))
-		a.updateTaskCardWithApproval(ctx, handled)
+		dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, handled.UserID, a.cardKit, a.taskCards))
+		if a.approvalActionExpired(ctx, resultCh) {
+			handled.Status = approvalStatusExpired
+			a.updateApprovalActionRecord(handled)
+		} else if a.updateTaskCardWithApproval(ctx, handled) {
+			handled.Status = approvalStatusArchived
+			a.updateApprovalActionRecord(handled)
+		}
 	}
 	return &callback.CardActionTriggerResponse{
-		Toast: &callback.Toast{Type: "success", Content: "已处理"},
+		Toast: approvalActionToast(handled),
 		Card:  buildChoiceHandledCard(handled),
+	}
+}
+
+func approvalActionToast(action parsedCardAction) *callback.Toast {
+	if strings.TrimSpace(action.Status) == approvalStatusExpired {
+		return &callback.Toast{Type: "warning", Content: "授权请求已过期，请重新发起任务"}
+	}
+	return &callback.Toast{Type: "success", Content: "已处理"}
+}
+
+func (a *Adapter) approvalActionExpired(ctx context.Context, resultCh <-chan platform.CardActionResult) bool {
+	timer := time.NewTimer(approvalActionResultTimeout)
+	defer timer.Stop()
+	select {
+	case result := <-resultCh:
+		return result == platform.CardActionResultExpired
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -266,6 +296,19 @@ func (a *Adapter) recordApprovalAction(action parsedCardAction) (parsedCardActio
 	}
 	a.approvals[key] = approvalRecord{action: action, at: now}
 	return action, true
+}
+
+func (a *Adapter) updateApprovalActionRecord(action parsedCardAction) {
+	key := approvalActionKey(action)
+	if key == "" {
+		return
+	}
+	a.approvalMu.Lock()
+	defer a.approvalMu.Unlock()
+	if existing, ok := a.approvals[key]; ok {
+		existing.action = action
+		a.approvals[key] = existing
+	}
 }
 
 // purgeApprovalsLocked 清理超过 TTL 的审批记录，避免长期运行内存无限增长。
@@ -294,9 +337,9 @@ func approvalActionKey(action parsedCardAction) string {
 	return ""
 }
 
-func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedCardAction) {
+func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedCardAction) bool {
 	if a.cardKit == nil || strings.TrimSpace(action.TaskCard) == "" {
-		return
+		return false
 	}
 	opts, ok := a.taskCards.addApproval(action.TaskCard, action)
 	var cardJSON string
@@ -308,11 +351,13 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 	}
 	if err != nil {
 		log.Printf("[feishu] failed to build task approval record card: %v", err)
-		return
+		return false
 	}
 	if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, int(time.Now().UnixMilli())); err != nil {
 		log.Printf("[feishu] ignored task approval card update error: %v", err)
+		return false
 	}
+	return true
 }
 
 func (a *Adapter) allowCardActionUser(userID string) bool {

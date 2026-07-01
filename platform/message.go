@@ -17,6 +17,14 @@ type IncomingMessage struct {
 	Metadata     map[string]string
 }
 
+// CardActionResult 表示卡片动作进入业务层后的处理结果。
+type CardActionResult string
+
+const (
+	CardActionResultConsumed CardActionResult = "consumed"
+	CardActionResultExpired  CardActionResult = "expired"
+)
+
 // ConversationKey 返回跨平台会话隔离 key，避免不同平台的相同用户 ID 串话。
 func (m IncomingMessage) ConversationKey() string {
 	platformName := strings.TrimSpace(string(m.Platform))
@@ -52,4 +60,5 @@ type Attachment struct {
 type CardAction struct {
 	Action string
 	Value  map[string]string
+	Result chan<- CardActionResult
 }

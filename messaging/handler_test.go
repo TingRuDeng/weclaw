@@ -813,6 +813,64 @@ func TestBuildHelpText(t *testing.T) {
 	}
 }
 
+func TestFeishuHelpSendsChoiceCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-help-1",
+		Text:      "/help",
+	}, reply)
+
+	if len(reply.Texts) != 0 {
+		t.Fatalf("feishu help should use card choices, got texts %#v", reply.Texts)
+	}
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want one help card", reply.Choices)
+	}
+	got := reply.Choices[0]
+	if !strings.Contains(got.Prompt, "WeClaw 帮助") {
+		t.Fatalf("prompt=%q, want help title", got.Prompt)
+	}
+	wants := map[string]string{
+		"/status":    "运行状态",
+		"/cx ls":     "Codex 工作空间",
+		"/cx status": "Codex 会话状态",
+		"/cx help":   "Codex 高级命令",
+		"/mode":      "权限模式",
+		"/stop":      "停止当前任务",
+	}
+	if len(got.Choices) != len(wants) {
+		t.Fatalf("choices=%#v, want %d entries", got.Choices, len(wants))
+	}
+	for _, choice := range got.Choices {
+		if wants[choice.ID] != choice.Label {
+			t.Fatalf("choice=%#v, want label %q", choice, wants[choice.ID])
+		}
+	}
+}
+
+func TestNonFeishuHelpKeepsText(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformWeChat,
+		UserID:    "user-1",
+		MessageID: "wechat-help-1",
+		Text:      "/help",
+	}, reply)
+
+	if len(reply.Choices) != 0 {
+		t.Fatalf("non-feishu help should not send choice card: %#v", reply.Choices)
+	}
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "WeClaw 帮助") {
+		t.Fatalf("texts=%#v, want help text", reply.Texts)
+	}
+}
+
 func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 	text := buildCodexSessionHelpText()
 	for _, want := range []string{
@@ -3039,6 +3097,65 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	}
 	if texts := replyB.textsSnapshot(); len(texts) != 0 {
 		t.Fatalf("approval action was treated as normal message: %#v", texts)
+	}
+}
+
+func TestExpiredApprovalActionDoesNotStartNewTask(t *testing.T) {
+	ag := &fakeAgent{reply: "不应执行"}
+	h := NewHandler(func(context.Context, string) agent.Agent { return ag }, nil)
+	h.defaultName = "codex"
+	reply := platformtest.NewReplier(platform.Capabilities{})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "expired-approval-card",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value: map[string]string{
+				"choice":       "accept",
+				"approval_key": "approval-expired",
+			},
+		},
+	}, reply)
+
+	if ag.wasChatCalled() {
+		t.Fatalf("expired approval action must not start agent task, got message %q", ag.lastChatMessage())
+	}
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "授权请求已过期") {
+		t.Fatalf("reply=%#v, want stale approval explanation", reply.Texts)
+	}
+}
+
+func TestExpiredApprovalActionReportsResultWhenCallbackWaits(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{})
+	resultCh := make(chan platform.CardActionResult, 1)
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "expired-approval-callback",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value: map[string]string{
+				"choice":       "accept",
+				"approval_key": "approval-expired",
+			},
+			Result: resultCh,
+		},
+	}, reply)
+
+	select {
+	case got := <-resultCh:
+		if got != platform.CardActionResultExpired {
+			t.Fatalf("result=%q, want expired", got)
+		}
+	default:
+		t.Fatal("expired approval result was not reported")
+	}
+	if len(reply.Texts) != 0 {
+		t.Fatalf("callback path should rely on card update, got texts %#v", reply.Texts)
 	}
 }
 

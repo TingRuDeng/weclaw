@@ -676,8 +676,17 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		sendPlatformText(ctx, replyWriter, msg.UserID, h.handleStopActiveTask(ctx, msg.UserID))
 		return
 	}
-	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" && h.consumePendingApprovalForKey(msg.UserID, msg.RawCommand.Value["approval_key"], msg.RawCommand.Value["choice"]) {
-		return
+	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" {
+		if h.consumePendingApprovalForKey(msg.UserID, msg.RawCommand.Value["approval_key"], msg.RawCommand.Value["choice"]) {
+			reportCardActionResult(msg.RawCommand, platform.CardActionResultConsumed)
+			return
+		}
+		if isApprovalChoiceCommand(msg.RawCommand) {
+			if !reportCardActionResult(msg.RawCommand, platform.CardActionResultExpired) {
+				sendPlatformText(ctx, replyWriter, msg.UserID, staleApprovalReply())
+			}
+			return
+		}
 	}
 	if h.consumePendingApproval(msg.UserID, text) {
 		return
@@ -795,6 +804,9 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 	case trimmed == "/info":
 		sendText("命令已移除，请使用 /status 查看 WeClaw 全局运行态。")
 	case trimmed == "/help":
+		if h.handleFeishuHelpCommand(ctx, msg, reply) {
+			return true
+		}
 		sendText(buildHelpText())
 	case trimmed == "/new" || trimmed == "/clear":
 		sendText(h.resetDefaultSession(ctx, msg.UserID))
@@ -1173,6 +1185,28 @@ func (p *pendingApproval) resolveChoice(choice string) string {
 		return resolved
 	}
 	return ""
+}
+
+// isApprovalChoiceCommand 判断卡片动作是否来自 Codex 审批按钮，避免过期审批落入普通消息队列。
+func isApprovalChoiceCommand(cmd *platform.CardAction) bool {
+	return cmd != nil &&
+		cmd.Action == "choice" &&
+		strings.TrimSpace(cmd.Value["approval_key"]) != ""
+}
+
+func reportCardActionResult(cmd *platform.CardAction, result platform.CardActionResult) bool {
+	if cmd == nil || cmd.Result == nil {
+		return false
+	}
+	select {
+	case cmd.Result <- result:
+	default:
+	}
+	return true
+}
+
+func staleApprovalReply() string {
+	return "这次授权请求已过期或原任务已结束，没有再发送给 Codex。\n\n请重新发起任务。"
 }
 
 func approvalOptionSet(options []agent.ApprovalOption) map[string]bool {

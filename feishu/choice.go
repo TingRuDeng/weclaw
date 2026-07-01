@@ -14,6 +14,8 @@ const (
 	cardActionChoice       = "choice"
 	cardActionStop         = "stop"
 	cardKindApproval       = "approval"
+	approvalStatusExpired  = "expired"
+	approvalStatusArchived = "archived"
 	approvalPromptHead     = "Codex 请求执行敏感操作，请确认："
 	approvalSummaryMaxRune = 160
 )
@@ -30,6 +32,7 @@ type parsedCardAction struct {
 	UserID    string
 	ChatID    string
 	MessageID string
+	Status    string
 }
 
 type choiceButtonOptions struct {
@@ -250,10 +253,17 @@ func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
 		label = "已选择"
 	}
 	status, template := approvalHandledStatus(action)
+	if strings.TrimSpace(action.Status) == approvalStatusArchived {
+		return buildChoiceHandledStatusCard(template, "**"+status+"**")
+	}
 	content := "**" + status + "**\n\n已选择：" + label
 	if summary := strings.TrimSpace(action.Summary); summary != "" {
 		content += "\n\n" + summary
 	}
+	return buildChoiceHandledStatusCard(template, content)
+}
+
+func buildChoiceHandledStatusCard(template string, content string) *callback.Card {
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
@@ -292,6 +302,12 @@ func buildTaskApprovalRecordCard(action parsedCardAction) (string, error) {
 }
 
 func approvalHandledStatus(action parsedCardAction) (string, string) {
+	if strings.TrimSpace(action.Status) == approvalStatusArchived {
+		return "✅ 已收纳到任务卡片", "green"
+	}
+	if strings.TrimSpace(action.Status) == approvalStatusExpired {
+		return "⚠️ 已过期", "yellow"
+	}
 	choice := strings.ToLower(strings.TrimSpace(action.Choice))
 	label := strings.ToLower(strings.TrimSpace(action.Label))
 	switch {

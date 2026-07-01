@@ -213,6 +213,8 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("response=%#v, want compact approval card", resp)
 	}
+	assertApprovalCardContent(t, resp, "✅ 已收纳到任务卡片")
+	assertApprovalCardNotContains(t, resp, "command: date")
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
 	}
@@ -248,6 +250,8 @@ func TestHandleCardActionEventAppendsApprovalToTaskCardState(t *testing.T) {
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("response=%#v, want compact approval card", resp)
 	}
+	assertApprovalCardContent(t, resp, "✅ 已收纳到任务卡片")
+	assertApprovalCardNotContains(t, resp, "command: date")
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
 	}
@@ -289,11 +293,47 @@ func TestHandleCardActionEventIgnoresTaskCardUpdateFailure(t *testing.T) {
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("response=%#v, want compact approval card despite task card failure", resp)
 	}
+	assertApprovalCardContent(t, resp, "✅ 已授权", "允许本次", "command: date")
+	assertApprovalCardNotContains(t, resp, "已收纳到任务卡片")
 	select {
 	case <-dispatched:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
 	}
+}
+
+func TestHandleCardActionEventShowsExpiredWhenApprovalNoLongerPending(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	event := approvalCardActionEvent("allow", "允许本次", "card-task-1")
+	dispatches := 0
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatches++
+		msg.RawCommand.Result <- platform.CardActionResultExpired
+	})
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if dispatches != 1 {
+		t.Fatalf("dispatches=%d, want 1", dispatches)
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "warning" {
+		t.Fatalf("response=%#v, want warning toast", resp)
+	}
+	assertApprovalCardContent(t, resp, "⚠️ 已过期", "允许本次")
+	if cardKit.updateCountFor("card-task-1") != 0 {
+		t.Fatalf("expired approval must not update task card, updated=%#v", cardKit.updateCardIDs)
+	}
+
+	second, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		t.Fatalf("duplicate expired approval dispatched: %#v", msg)
+	})
+	if err != nil {
+		t.Fatalf("second handleCardActionEvent error: %v", err)
+	}
+	assertApprovalCardContent(t, second, "⚠️ 已过期", "允许本次")
 }
 
 func TestRecordApprovalActionPurgesExpired(t *testing.T) {
@@ -509,15 +549,31 @@ func approvalCardActionEvent(choice string, label string, taskCardID string) *ca
 
 func assertApprovalCardContent(t *testing.T, resp *callback.CardActionTriggerResponse, wants ...string) {
 	t.Helper()
+	content := approvalCardContentForTest(t, resp)
+	for _, want := range wants {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content=%q, want %q", content, want)
+		}
+	}
+}
+
+func assertApprovalCardNotContains(t *testing.T, resp *callback.CardActionTriggerResponse, forbidden ...string) {
+	t.Helper()
+	content := approvalCardContentForTest(t, resp)
+	for _, value := range forbidden {
+		if strings.Contains(content, value) {
+			t.Fatalf("content=%q, should not contain %q", content, value)
+		}
+	}
+}
+
+func approvalCardContentForTest(t *testing.T, resp *callback.CardActionTriggerResponse) string {
+	t.Helper()
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("response=%#v, want compact approval card", resp)
 	}
 	card := resp.Card.Data.(map[string]any)
 	body := card["body"].(map[string]any)
 	content := body["elements"].([]map[string]any)[0]["content"].(string)
-	for _, want := range wants {
-		if !strings.Contains(content, want) {
-			t.Fatalf("content=%q, want %q", content, want)
-		}
-	}
+	return content
 }

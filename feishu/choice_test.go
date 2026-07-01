@@ -211,6 +211,37 @@ func TestBuildChoiceHandledCardShowsCancelAsDenyStatus(t *testing.T) {
 	}
 }
 
+func TestBuildChoiceHandledCardShowsExpiredStatus(t *testing.T) {
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date", Status: approvalStatusExpired})
+	data := card.Data.(map[string]any)
+	header := data["header"].(map[string]any)
+	if header["template"] != "yellow" {
+		t.Fatalf("header=%#v, want yellow expired card", header)
+	}
+	body := data["body"].(map[string]any)
+	content := body["elements"].([]map[string]any)[0]["content"].(string)
+	if !strings.Contains(content, "⚠️ 已过期") || !strings.Contains(content, "允许本次") {
+		t.Fatalf("content=%q, want expired status", content)
+	}
+}
+
+func TestBuildChoiceHandledCardShowsArchivedStatus(t *testing.T) {
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date", Status: approvalStatusArchived})
+	data := card.Data.(map[string]any)
+	header := data["header"].(map[string]any)
+	if header["template"] != "green" {
+		t.Fatalf("header=%#v, want green archived card", header)
+	}
+	body := data["body"].(map[string]any)
+	content := body["elements"].([]map[string]any)[0]["content"].(string)
+	if !strings.Contains(content, "✅ 已收纳到任务卡片") {
+		t.Fatalf("content=%q, want archived status", content)
+	}
+	if strings.Contains(content, "command: date") || strings.Contains(content, "允许本次") {
+		t.Fatalf("content=%q, want one-line archived status", content)
+	}
+}
+
 func TestBuildChoiceHandledCardCallbackJSONUsesRawType(t *testing.T) {
 	resp := &callback.CardActionTriggerResponse{
 		Card: buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date"}),
