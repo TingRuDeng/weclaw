@@ -146,6 +146,9 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 
 func TestBuildChoiceHandledCardShowsDenyStatus(t *testing.T) {
 	card := buildChoiceHandledCard(parsedCardAction{Choice: "deny", Label: "拒绝", Summary: "command: rm file"})
+	if card.Type != "raw" {
+		t.Fatalf("card type=%q, want raw for callback card update", card.Type)
+	}
 	data := card.Data.(map[string]any)
 	header := data["header"].(map[string]any)
 	if header["template"] != "red" {
@@ -155,6 +158,27 @@ func TestBuildChoiceHandledCardShowsDenyStatus(t *testing.T) {
 	content := body["elements"].([]map[string]any)[0]["content"].(string)
 	if !strings.Contains(content, "❌ 已拒绝") || !strings.Contains(content, "拒绝") {
 		t.Fatalf("content=%q, want deny status", content)
+	}
+}
+
+func TestBuildChoiceHandledCardCallbackJSONUsesRawType(t *testing.T) {
+	resp := &callback.CardActionTriggerResponse{
+		Card: buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date"}),
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal callback response: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("callback response json invalid: %v", err)
+	}
+	card := payload["card"].(map[string]any)
+	if card["type"] != "raw" {
+		t.Fatalf("callback card type=%#v, want raw", card["type"])
+	}
+	if card["type"] == "card_json" {
+		t.Fatalf("callback card must not use CardKit API type card_json: %s", string(data))
 	}
 }
 

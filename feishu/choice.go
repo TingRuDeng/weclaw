@@ -275,7 +275,7 @@ func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
 			},
 		},
 	}
-	return &callback.Card{Type: "card_json", Data: card}
+	return &callback.Card{Type: "raw", Data: card}
 }
 
 // buildTaskApprovalRecordCard 是轻量主任务卡片回写，占位记录审批结果，不重构进度卡片体系。
