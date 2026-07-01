@@ -3806,7 +3806,7 @@ func TestCodexStatusShowsWorkspaceThreadAndLocalEntryState(t *testing.T) {
 	for _, want := range []string{
 		"Codex 状态",
 		"工作空间: " + workspace,
-		"thread: thread-1",
+		"会话: 未命名会话",
 		"remote: 已配置",
 		"CLI: 未打开过",
 		"App: 未打开过",
@@ -3814,6 +3814,35 @@ func TestCodexStatusShowsWorkspaceThreadAndLocalEntryState(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status should contain %q, messages=%#v", want, calls.texts())
 		}
+	}
+}
+
+func TestCodexStatusShowsSessionName(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := t.TempDir()
+	writeLocalCodexSession(t, codexDir, "thread-1", workspace, "修复审批体验", "2026-07-01T08:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
+		},
+		threadID: "thread-1",
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.agentWorkDirs["codex"] = workspace
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(135, "/cx status"))
+
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "会话: 修复审批体验") {
+		t.Fatalf("status should show session name, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, "thread: thread-1") {
+		t.Fatalf("status should not show raw thread id, messages=%#v", calls.texts())
 	}
 }
 

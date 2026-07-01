@@ -77,3 +77,14 @@ func (h *Handler) findLocalCodexWorkspaceByThread(threadID string) (string, bool
 	}
 	return "", false
 }
+
+// findLocalCodexSessionByThread 按 thread id 查找本机 Codex 会话元数据，用于展示稳定的会话名称。
+func (h *Handler) findLocalCodexSessionByThread(threadID string) (codexWorkspaceView, bool) {
+	threadID = strings.TrimSpace(threadID)
+	for _, view := range h.localCodexSessions() {
+		if strings.TrimSpace(view.ThreadID) == threadID {
+			return view, true
+		}
+	}
+	return codexWorkspaceView{}, false
+}

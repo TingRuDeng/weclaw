@@ -3153,11 +3153,12 @@ func (h *Handler) renderCodexStatus(userID string, agentName string, workspaceRo
 
 	bindingKey := codexBindingKey(userID, agentName)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
+	sessionLabel := h.codexSessionLabelForStatus(bindingKey, workspaceRoot, threadID, pending)
 	localEntry := h.codexLocalEntry(bindingKey, workspaceRoot)
 	return wechatCommandText(
 		"Codex 状态:",
 		"工作空间: "+workspaceRoot,
-		"thread: "+renderCodexThreadLabel(threadID, pending),
+		"会话: "+sessionLabel,
 		"remote: 已配置 ("+ag.Info().Type+")",
 		"本地入口:",
 		"CLI: "+renderCodexLocalEntry(localEntry.CLIOpened),

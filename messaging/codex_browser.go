@@ -293,3 +293,22 @@ func codexSessionDisplayName(view codexWorkspaceView) string {
 	}
 	return "未命名会话"
 }
+
+func (h *Handler) codexSessionLabelForStatus(bindingKey string, workspaceRoot string, threadID string, pending bool) string {
+	threadID = strings.TrimSpace(threadID)
+	if pending {
+		return "新会话草稿"
+	}
+	if threadID == "" {
+		return "未绑定"
+	}
+	if session, ok := h.findLocalCodexSessionByThread(threadID); ok {
+		return codexSessionDisplayName(session)
+	}
+	for _, session := range h.codexSessionsForWorkspace(bindingKey, workspaceRoot) {
+		if strings.TrimSpace(session.ThreadID) == threadID {
+			return codexSessionDisplayName(session)
+		}
+	}
+	return "未命名会话"
+}
