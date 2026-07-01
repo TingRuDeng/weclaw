@@ -2952,8 +2952,8 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 
 func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	h := NewHandler(nil, nil)
-	replyA := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	replyB := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	replyA := newApprovalKeyCaptureReplier()
+	replyB := newApprovalKeyCaptureReplier()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	resultA := make(chan string, 1)
@@ -2986,9 +2986,8 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 		resultB <- optionID
 	}()
 
-	waitUntil(t, func() bool { return approvalKeyFromReply(replyA) != "" && approvalKeyFromReply(replyB) != "" })
-	keyA := approvalKeyFromReply(replyA)
-	keyB := approvalKeyFromReply(replyB)
+	keyA := replyA.waitApprovalKey(t, ctx)
+	keyB := replyB.waitApprovalKey(t, ctx)
 	if keyA == keyB {
 		t.Fatalf("approval keys must isolate cards, got both %q", keyA)
 	}
@@ -3016,8 +3015,8 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 		t.Fatalf("approval B should still be pending, got %q", got)
 	case <-time.After(taskQueueProbeDelay):
 	}
-	if len(replyA.Texts) != 0 {
-		t.Fatalf("approval action was treated as normal message: %#v", replyA.Texts)
+	if texts := replyA.textsSnapshot(); len(texts) != 0 {
+		t.Fatalf("approval action was treated as normal message: %#v", texts)
 	}
 
 	h.HandleMessage(ctx, platform.IncomingMessage{
@@ -3038,16 +3037,78 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("approval B did not return")
 	}
-	if len(replyB.Texts) != 0 {
-		t.Fatalf("approval action was treated as normal message: %#v", replyB.Texts)
+	if texts := replyB.textsSnapshot(); len(texts) != 0 {
+		t.Fatalf("approval action was treated as normal message: %#v", texts)
 	}
 }
 
-func approvalKeyFromReply(reply *platformtest.Replier) string {
-	if reply == nil || len(reply.Choices) == 0 || len(reply.Choices[0].Choices) == 0 {
+type approvalKeyCaptureReplier struct {
+	mu         sync.Mutex
+	texts      []string
+	approvalCh chan string
+}
+
+func newApprovalKeyCaptureReplier() *approvalKeyCaptureReplier {
+	return &approvalKeyCaptureReplier{approvalCh: make(chan string, 1)}
+}
+
+func (r *approvalKeyCaptureReplier) Capabilities() platform.Capabilities {
+	return platform.Capabilities{Text: true, Buttons: true}
+}
+
+func (r *approvalKeyCaptureReplier) SendText(ctx context.Context, text string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.texts = append(r.texts, text)
+	return nil
+}
+
+func (r *approvalKeyCaptureReplier) SendImage(ctx context.Context, localPath string) error {
+	return nil
+}
+
+func (r *approvalKeyCaptureReplier) SendFile(ctx context.Context, localPath string) error {
+	return nil
+}
+
+func (r *approvalKeyCaptureReplier) Typing(ctx context.Context, on bool) error {
+	return nil
+}
+
+func (r *approvalKeyCaptureReplier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
+	return nil, errors.New("stream not supported")
+}
+
+func (r *approvalKeyCaptureReplier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
+	r.approvalCh <- approvalKeyFromChoices(choices)
+	return nil
+}
+
+func (r *approvalKeyCaptureReplier) waitApprovalKey(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	select {
+	case key := <-r.approvalCh:
+		if key == "" {
+			t.Fatal("approval key is empty")
+		}
+		return key
+	case <-ctx.Done():
+		t.Fatal("approval key was not captured")
 		return ""
 	}
-	return strings.TrimSpace(reply.Choices[0].Choices[0].Metadata["approval_key"])
+}
+
+func (r *approvalKeyCaptureReplier) textsSnapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.texts...)
+}
+
+func approvalKeyFromChoices(choices []platform.Choice) string {
+	if len(choices) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(choices[0].Metadata["approval_key"])
 }
 
 func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
