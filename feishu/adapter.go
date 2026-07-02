@@ -198,6 +198,10 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 	if action.Kind == cardKindApproval {
 		return a.handleApprovalCardAction(ctx, action, dispatch), nil
 	}
+	metadata := map[string]string{"source": "card.action.trigger"}
+	if action.SessionKey != "" {
+		metadata[feishuSessionMetadataKey] = action.SessionKey
+	}
 	msg := platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: a.creds.AppID,
@@ -211,9 +215,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 				"conv":   action.Conv,
 			},
 		},
-		Metadata: map[string]string{
-			"source": "card.action.trigger",
-		},
+		Metadata: metadata,
 	}
 	go dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, action.UserID, a.cardKit, a.taskCards))
 	return &callback.CardActionTriggerResponse{

@@ -21,18 +21,19 @@ const (
 )
 
 type parsedCardAction struct {
-	Action    string
-	Choice    string
-	Kind      string
-	Label     string
-	Summary   string
-	TaskCard  string
-	Approval  string
-	Conv      string
-	UserID    string
-	ChatID    string
-	MessageID string
-	Status    string
+	Action     string
+	Choice     string
+	Kind       string
+	Label      string
+	Summary    string
+	TaskCard   string
+	Approval   string
+	Conv       string
+	SessionKey string
+	UserID     string
+	ChatID     string
+	MessageID  string
+	Status     string
 }
 
 type choiceButtonOptions struct {
@@ -115,6 +116,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		}
 		if taskCardID := strings.TrimSpace(choice.Metadata["task_card_id"]); taskCardID != "" {
 			value["task_card_id"] = taskCardID
+		}
+		if sessionKey := strings.TrimSpace(choice.Metadata[feishuSessionMetadataKey]); sessionKey != "" {
+			value[feishuSessionMetadataKey] = sessionKey
 		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",
@@ -230,8 +234,9 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 			callbackValueString(value, "action_key"),
 			callbackValueString(value, "actionKey"),
 		),
-		Conv:   callbackValueString(value, "conv"),
-		UserID: strings.TrimSpace(event.Event.Operator.OpenID),
+		Conv:       callbackValueString(value, "conv"),
+		SessionKey: callbackValueString(value, feishuSessionMetadataKey),
+		UserID:     strings.TrimSpace(event.Event.Operator.OpenID),
 	}
 	if event.Event.Context != nil {
 		parsed.ChatID = strings.TrimSpace(event.Event.Context.OpenChatID)

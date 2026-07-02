@@ -89,6 +89,24 @@ func TestBuildChoiceCardUsesTaskCardIDMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildChoiceCardUsesFeishuSessionMetadata(t *testing.T) {
+	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{
+		ID:       "/cx cd 0",
+		Label:    "weclaw",
+		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+	}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	value := elements[1].(map[string]any)["value"].(map[string]any)
+	if value["feishu_session_key"] != "feishu:tenant_1:group:oc_1:om_root" {
+		t.Fatalf("button value=%#v, want feishu session metadata", value)
+	}
+}
+
 func TestBuildChoiceCardDoesNotMarkNormalChoicesAsApproval(t *testing.T) {
 	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{ID: "/cx cd 0", Label: "weclaw"}}, "feishu:ou_user")
 	if err != nil {
@@ -110,9 +128,10 @@ func TestParseCardAction(t *testing.T) {
 			Operator: &callback.Operator{OpenID: "ou_user"},
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
-				"action": cardActionChoice,
-				"choice": "2",
-				"conv":   "feishu:ou_user",
+				"action":             cardActionChoice,
+				"choice":             "2",
+				"conv":               "feishu:ou_user",
+				"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root",
 			}},
 		},
 	}
@@ -124,6 +143,9 @@ func TestParseCardAction(t *testing.T) {
 	}
 	if action.Action != cardActionChoice || action.Choice != "2" || action.Conv != "feishu:ou_user" {
 		t.Fatalf("action=%#v, want normalized choice", action)
+	}
+	if action.SessionKey != "feishu:tenant_1:group:oc_1:om_root" {
+		t.Fatalf("action=%#v, want feishu session key", action)
 	}
 	if action.UserID != "ou_user" || action.ChatID != "oc_chat" || action.MessageID != "om_msg" {
 		t.Fatalf("action=%#v, want operator and context ids", action)

@@ -107,6 +107,7 @@ type Handler struct {
 const (
 	pendingCodexPreviewRunes = 120
 	pendingApprovalTimeout   = 5 * time.Minute
+	feishuSessionMetadataKey = "feishu_session_key"
 )
 
 var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
@@ -673,7 +674,7 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 
 	text := strings.TrimSpace(platformMessageText(msg))
 	if msg.RawCommand != nil && msg.RawCommand.Action == "stop" {
-		sendPlatformText(ctx, replyWriter, msg.UserID, h.handleStopActiveTask(ctx, msg.UserID))
+		sendPlatformText(ctx, replyWriter, msg.UserID, h.handleStopActiveTask(ctx, msg.UserID, routeUserID))
 		return
 	}
 	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" {
@@ -745,7 +746,13 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		}
 	}
 
-	if h.handleBuiltInPlatformCommand(ctx, msg, replyWriter, trimmed, clientID) {
+	if h.handleBuiltInPlatformCommand(ctx, platformCommandRequest{
+		Message:     msg,
+		RouteUserID: routeUserID,
+		Reply:       replyWriter,
+		Trimmed:     trimmed,
+		ClientID:    clientID,
+	}) {
 		return
 	}
 
@@ -794,9 +801,25 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 	h.broadcastToAgents(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, knownNames, message)
 }
 
-func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier, trimmed string, clientID string) bool {
+// platformCommandRequest 承载内置命令上下文，Message.UserID 是操作者，RouteUserID 是会话路由键。
+type platformCommandRequest struct {
+	Message     platform.IncomingMessage
+	RouteUserID string
+	Reply       platform.Replier
+	Trimmed     string
+	ClientID    string
+}
+
+// handleBuiltInPlatformCommand 处理平台内置命令，飞书使用 routeUserID 控制会话但保留真实发送者回复。
+func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platformCommandRequest) bool {
+	msg := req.Message
+	routeUserID := strings.TrimSpace(req.RouteUserID)
+	if routeUserID == "" {
+		routeUserID = msg.UserID
+	}
+	trimmed := req.Trimmed
 	sendText := func(text string) {
-		sendPlatformText(ctx, reply, msg.UserID, text)
+		sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	}
 	switch {
 	case trimmed == "/status":
@@ -804,12 +827,12 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 	case trimmed == "/info":
 		sendText("命令已移除，请使用 /status 查看 WeClaw 全局运行态。")
 	case trimmed == "/help":
-		if h.handleFeishuHelpCommand(ctx, msg, reply) {
+		if h.handleFeishuHelpCommand(ctx, msg, req.Reply, routeUserID) {
 			return true
 		}
 		sendText(buildHelpText())
 	case trimmed == "/new" || trimmed == "/clear":
-		sendText(h.resetDefaultSession(ctx, msg.UserID))
+		sendText(h.resetDefaultSessionForRoute(ctx, msg.UserID, routeUserID))
 	case isRemovedSwitchCommand(trimmed):
 		sendText("命令已移除：WeClaw 不再支持从微信端切换 Codex 账号。")
 	case isProgressCommand(trimmed):
@@ -817,18 +840,22 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, msg platform
 	case isClaudeSessionCommand(trimmed):
 		sendText(h.handleClaudeSessionCommand(ctx, msg.UserID, trimmed))
 	case isCodexSessionCommand(trimmed):
-		if h.handleFeishuCodexSessionCommand(ctx, msg, reply, trimmed) {
+		if h.handleFeishuCodexSessionCommand(ctx, msg, routeUserID, req.Reply, trimmed) {
 			return true
 		}
-		sendText(h.handleCodexSessionCommand(ctx, msg.UserID, trimmed))
+		sendText(h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
+			ActorUserID: msg.UserID,
+			RouteUserID: routeUserID,
+			Trimmed:     trimmed,
+		}))
 	case trimmed == "/run":
-		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.UserID, reply, clientID)
+		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.UserID, routeUserID, req.Reply, req.ClientID)
 	case trimmed == "/guide":
-		h.handleGuideCommand(ctx, msg.Platform, msg.UserID, reply, clientID)
+		h.handleGuideCommand(ctx, msg.Platform, msg.UserID, routeUserID, req.Reply, req.ClientID)
 	case trimmed == "/cancel":
-		sendText(h.handleCancelPendingGuide(ctx, msg.UserID))
+		sendText(h.handleCancelPendingGuide(ctx, msg.UserID, routeUserID))
 	case trimmed == "/stop":
-		sendText(h.handleStopActiveTask(ctx, msg.UserID))
+		sendText(h.handleStopActiveTask(ctx, msg.UserID, routeUserID))
 	case trimmed == "/ps":
 		sendText(h.handleListActiveTasks(msg.UserID))
 	case trimmed == "/mode" || strings.HasPrefix(trimmed, "/mode "):
@@ -855,7 +882,7 @@ func platformMessageText(msg platform.IncomingMessage) string {
 // platformMessageSessionKey 返回平台 adapter 明确传入的会话 key。
 func platformMessageSessionKey(msg platform.IncomingMessage) string {
 	if msg.Platform == platform.PlatformFeishu && msg.Metadata != nil {
-		return strings.TrimSpace(msg.Metadata["feishu_session_key"])
+		return strings.TrimSpace(msg.Metadata[feishuSessionMetadataKey])
 	}
 	return ""
 }
@@ -1372,39 +1399,39 @@ func previewPendingCodexMessage(message string) string {
 }
 
 // handleRunPendingCodexCommand 执行用户确认后的待执行 Codex 消息。
-func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName platform.PlatformName, userID string, reply platform.Replier, clientID string) {
-	name, _, key, err := h.codexGuideTarget(ctx, userID)
+func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName platform.PlatformName, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
+	name, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
-		sendPlatformText(ctx, reply, userID, err.Error())
+		sendPlatformText(ctx, reply, actorUserID, err.Error())
 		return
 	}
 	message, ok := h.takePendingCodexRun(key)
 	if !ok {
-		sendPlatformText(ctx, reply, userID, "当前没有待执行的暂存消息。")
+		sendPlatformText(ctx, reply, actorUserID, "当前没有待执行的暂存消息。")
 		return
 	}
-	h.sendToNamedAgent(ctx, platformName, userID, userID, reply, name, message, clientID)
+	h.sendToNamedAgent(ctx, platformName, actorUserID, routeUserID, reply, name, message, clientID)
 }
 
-func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, userID string, reply platform.Replier, clientID string) {
-	name, _, key, err := h.codexGuideTarget(ctx, userID)
+func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
+	name, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
-		sendPlatformText(ctx, reply, userID, err.Error())
+		sendPlatformText(ctx, reply, actorUserID, err.Error())
 		return
 	}
 	message, task, ok := h.detachPendingGuide(key)
 	if !ok {
-		sendPlatformText(ctx, reply, userID, "当前没有可发送的引导对话。")
+		sendPlatformText(ctx, reply, actorUserID, "当前没有可发送的引导对话。")
 		return
 	}
 	if !waitForActiveTask(ctx, task) {
 		return
 	}
-	h.sendToNamedAgent(ctx, platformName, userID, userID, reply, name, message, clientID)
+	h.sendToNamedAgent(ctx, platformName, actorUserID, routeUserID, reply, name, message, clientID)
 }
 
-func (h *Handler) handleCancelPendingGuide(ctx context.Context, userID string) string {
-	_, _, key, err := h.codexGuideTarget(ctx, userID)
+func (h *Handler) handleCancelPendingGuide(ctx context.Context, actorUserID string, routeUserID string) string {
+	_, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
 		return err.Error()
 	}
@@ -1414,8 +1441,8 @@ func (h *Handler) handleCancelPendingGuide(ctx context.Context, userID string) s
 	return "已撤回该消息。"
 }
 
-func (h *Handler) handleStopActiveTask(ctx context.Context, userID string) string {
-	_, _, key, err := h.codexGuideTarget(ctx, userID)
+func (h *Handler) handleStopActiveTask(ctx context.Context, actorUserID string, routeUserID string) string {
+	_, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
 		return err.Error()
 	}
@@ -1545,6 +1572,11 @@ func (h *Handler) cancelActiveTask(key string) bool {
 }
 
 func (h *Handler) codexGuideTarget(ctx context.Context, userID string) (string, agent.Agent, string, error) {
+	return h.codexGuideTargetForRoute(ctx, userID, userID)
+}
+
+// codexGuideTargetForRoute 用普通消息相同的 actor/route 规则定位正在运行或暂存的 Codex turn。
+func (h *Handler) codexGuideTargetForRoute(ctx context.Context, actorUserID string, routeUserID string) (string, agent.Agent, string, error) {
 	name, ok := h.codexAgentName()
 	if !ok {
 		return "", nil, "", fmt.Errorf("当前没有配置 Codex Agent。")
@@ -1553,7 +1585,7 @@ func (h *Handler) codexGuideTarget(ctx context.Context, userID string) (string, 
 	if err != nil {
 		return "", nil, "", fmt.Errorf("Codex Agent 不可用: %v", err)
 	}
-	return name, ag, h.agentExecutionKey(userID, name, ag), nil
+	return name, ag, h.agentExecutionKeyForRoute(actorUserID, routeUserID, name, ag), nil
 }
 
 func waitForActiveTask(ctx context.Context, task *activeAgentTask) bool {
@@ -2215,19 +2247,27 @@ func (h *Handler) switchDefault(ctx context.Context, name string) string {
 
 // resetDefaultSession resets the session for the given userID on the default agent.
 func (h *Handler) resetDefaultSession(ctx context.Context, userID string) string {
+	return h.resetDefaultSessionForRoute(ctx, userID, userID)
+}
+
+// resetDefaultSessionForRoute 重置 routeUserID 对应会话，避免飞书 thread 的 /new 重置到真实用户全局会话。
+func (h *Handler) resetDefaultSessionForRoute(ctx context.Context, actorUserID string, routeUserID string) string {
+	if strings.TrimSpace(routeUserID) == "" {
+		routeUserID = actorUserID
+	}
 	name, ag := h.getDefaultAgentWithName()
 	if ag == nil {
 		return "No agent running."
 	}
 	if isCodexAgent(name, ag.Info()) {
-		return h.resetDefaultCodexSession(ctx, userID, name, ag)
+		return h.resetDefaultCodexSessionForRoute(ctx, actorUserID, routeUserID, name, ag)
 	}
 	if isClaudeAgent(name, ag.Info()) {
-		return h.resetDefaultClaudeSession(ctx, userID, name, ag)
+		return h.resetDefaultClaudeSession(ctx, routeUserID, name, ag)
 	}
-	sessionID, err := ag.ResetSession(ctx, userID)
+	sessionID, err := ag.ResetSession(ctx, routeUserID)
 	if err != nil {
-		log.Printf("[handler] reset session failed for %s: %v", userID, err)
+		log.Printf("[handler] reset session failed for %s: %v", routeUserID, err)
 		return fmt.Sprintf("Failed to reset session: %v", err)
 	}
 	if sessionID != "" {
@@ -2247,15 +2287,20 @@ func (h *Handler) getDefaultAgentWithName() (string, agent.Agent) {
 
 // resetDefaultCodexSession 重置当前微信用户正在使用的 Codex 工作空间会话。
 func (h *Handler) resetDefaultCodexSession(ctx context.Context, userID string, name string, ag agent.Agent) string {
-	workspaceRoot := h.codexWorkspaceRootForUser(userID, name, ag)
-	conversationID := buildCodexConversationID(userID, name, workspaceRoot)
+	return h.resetDefaultCodexSessionForRoute(ctx, userID, userID, name, ag)
+}
+
+// resetDefaultCodexSessionForRoute 用真实用户解析工作空间，用 route 会话创建新的 Codex thread。
+func (h *Handler) resetDefaultCodexSessionForRoute(ctx context.Context, actorUserID string, routeUserID string, name string, ag agent.Agent) string {
+	workspaceRoot := h.codexWorkspaceRootForUser(actorUserID, name, ag)
+	conversationID := buildCodexConversationID(routeUserID, name, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	sessionID, err := ag.ResetSession(ctx, conversationID)
 	if err != nil {
 		log.Printf("[handler] reset codex session failed for %s: %v", conversationID, err)
 		return fmt.Sprintf("Failed to reset session: %v", err)
 	}
-	h.recordResetCodexThread(userID, name, workspaceRoot, sessionID)
+	h.recordResetCodexThread(routeUserID, name, workspaceRoot, sessionID)
 	if sessionID != "" {
 		return wechatCommandText(fmt.Sprintf("已创建新的%s会话", name), sessionID)
 	}
@@ -2635,7 +2680,32 @@ func (h *Handler) setProgressConfigForProgressCommand(platformName platform.Plat
 	h.platformProgressConfigs[string(platformName)] = cfg
 }
 
+// codexSessionCommandRequest 拆开真实用户和会话路由，避免飞书 thread 命令串到用户全局会话。
+type codexSessionCommandRequest struct {
+	ActorUserID string
+	RouteUserID string
+	Trimmed     string
+}
+
 func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, trimmed string) string {
+	return h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
+		ActorUserID: userID,
+		RouteUserID: userID,
+		Trimmed:     trimmed,
+	})
+}
+
+// handleCodexSessionCommandForRoute 让飞书内置会话命令操作 route session，同时继续按真实用户解析工作空间。
+func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req codexSessionCommandRequest) string {
+	actorUserID := strings.TrimSpace(req.ActorUserID)
+	routeUserID := strings.TrimSpace(req.RouteUserID)
+	if routeUserID == "" {
+		routeUserID = actorUserID
+	}
+	if actorUserID == "" {
+		actorUserID = routeUserID
+	}
+	trimmed := req.Trimmed
 	fields := strings.Fields(trimmed)
 	if len(fields) < 2 || fields[1] == "help" {
 		return buildCodexSessionHelpText()
@@ -2648,13 +2718,14 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	if err != nil {
 		return err.Error()
 	}
-	workspaceRoot := h.codexWorkspaceRoot(agentName)
-	bindingKey := codexBindingKey(userID, agentName)
+	workspaceRoot := h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
+	bindingKey := codexBindingKey(routeUserID, agentName)
+	ownerBindingKey := codexBindingKey(actorUserID, agentName)
 	h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
-	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
+	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
 
 	if len(fields) == 2 && isCodexShortSelectionToken(fields[1]) {
-		return h.handleCodexShortSelection(ctx, userID, agentName, workspaceRoot, ag, bindingKey, fields[1])
+		return h.handleCodexShortSelection(ctx, routeUserID, agentName, workspaceRoot, ag, bindingKey, fields[1], ownerBindingKey)
 	}
 
 	switch fields[1] {
@@ -2667,12 +2738,13 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 			return "用法: /cx cd <编号|工作空间名|..>"
 		}
 		return h.handleCodexCd(codexWorkspaceCdRequest{
-			Context:    ctx,
-			UserID:     userID,
-			BindingKey: bindingKey,
-			AgentName:  agentName,
-			Target:     fields[2],
-			Agent:      ag,
+			Context:         ctx,
+			UserID:          routeUserID,
+			BindingKey:      bindingKey,
+			OwnerBindingKey: ownerBindingKey,
+			AgentName:       agentName,
+			Target:          fields[2],
+			Agent:           ag,
 		})
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
@@ -2680,7 +2752,7 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		if len(fields) != 2 {
 			return "用法: /cx status"
 		}
-		return h.renderCodexStatus(userID, agentName, workspaceRoot, ag)
+		return h.renderCodexStatusForRoute(actorUserID, routeUserID, agentName, workspaceRoot, ag)
 	case "quota":
 		if len(fields) != 2 {
 			return "用法: /cx quota"
@@ -2695,20 +2767,20 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		if len(fields) != 2 {
 			return "用法: /cx app"
 		}
-		return h.handleCodexOpenApp(ctx, userID, agentName, workspaceRoot, ag)
+		return h.handleCodexOpenAppForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
 	case "cli":
 		if len(fields) != 2 {
 			return "用法: /cx cli"
 		}
-		return h.handleCodexCLI(ctx, userID, agentName, workspaceRoot, ag)
+		return h.handleCodexCLIForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
 	case "attach":
 		if len(fields) == 3 && fields[2] == "app" {
-			return h.handleCodexOpenApp(ctx, userID, agentName, workspaceRoot, ag)
+			return h.handleCodexOpenAppForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
 		}
 		if len(fields) != 2 {
 			return "用法: /cx attach 或 /cx attach app"
 		}
-		return h.handleCodexAttach(ctx, userID, agentName, workspaceRoot, ag)
+		return h.handleCodexAttachForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
 	case "detach":
 		if len(fields) != 2 {
 			return "用法: /cx detach"
@@ -2717,38 +2789,40 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 	case "model":
 		return h.handleCodexModelCommand(ctx, ag, fields[2:])
 	case "new":
-		return h.handleCodexNew(userID, agentName, workspaceRoot, ag)
+		return h.handleCodexNewForRoute(routeUserID, agentName, workspaceRoot, ag, ownerBindingKey)
 	case "switch":
 		if len(fields) != 3 {
 			return "用法: /cx switch <编号|threadId>"
 		}
-		return h.handleCodexSwitch(ctx, userID, agentName, workspaceRoot, ag, fields[2])
+		return h.handleCodexSwitchForRoute(ctx, routeUserID, agentName, workspaceRoot, ag, fields[2], ownerBindingKey)
 	default:
 		return buildCodexSessionHelpText()
 	}
 }
 
-func (h *Handler) handleCodexShortSelection(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, bindingKey string, target string) string {
+func (h *Handler) handleCodexShortSelection(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, bindingKey string, target string, ownerBindingKey string) string {
 	if target == ".." {
 		return h.handleCodexCd(codexWorkspaceCdRequest{
-			Context:    ctx,
-			UserID:     userID,
-			BindingKey: bindingKey,
-			AgentName:  agentName,
-			Target:     target,
-			Agent:      ag,
+			Context:         ctx,
+			UserID:          userID,
+			BindingKey:      bindingKey,
+			OwnerBindingKey: ownerBindingKey,
+			AgentName:       agentName,
+			Target:          target,
+			Agent:           ag,
 		})
 	}
 	if _, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
-		return h.handleCodexSwitch(ctx, userID, agentName, workspaceRoot, ag, target)
+		return h.handleCodexSwitchForRoute(ctx, userID, agentName, workspaceRoot, ag, target, ownerBindingKey)
 	}
 	return h.handleCodexCd(codexWorkspaceCdRequest{
-		Context:    ctx,
-		UserID:     userID,
-		BindingKey: bindingKey,
-		AgentName:  agentName,
-		Target:     target,
-		Agent:      ag,
+		Context:         ctx,
+		UserID:          userID,
+		BindingKey:      bindingKey,
+		OwnerBindingKey: ownerBindingKey,
+		AgentName:       agentName,
+		Target:          target,
+		Agent:           ag,
 	})
 }
 
@@ -2783,8 +2857,13 @@ func containsWorkspaceRoot(roots []string, target string) bool {
 
 // handleCodexOpenApp 打开当前工作区的 Codex App，并尽量回显当前 thread 便于用户确认。
 func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	workspaceRoot = h.codexWorkspaceRootForUser(userID, agentName, ag)
-	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
+	return h.handleCodexOpenAppForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
+}
+
+// handleCodexOpenAppForRoute 打开真实用户工作空间，并记录 route session 的本地入口状态。
+func (h *Handler) handleCodexOpenAppForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	workspaceRoot = h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
+	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
 	opener := h.resolveCodexAppOpener()
 	command := strings.TrimSpace(ag.Info().Command)
 	if command == "" {
@@ -2796,8 +2875,9 @@ func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentNa
 			"可发送 /cx cli 使用 Codex CLI 接手当前 thread。",
 		)
 	}
-	bindingKey := codexBindingKey(userID, agentName)
-	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+	bindingKey := codexBindingKey(routeUserID, agentName)
+	ownerBindingKey := codexBindingKey(actorUserID, agentName)
+	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
 	h.setCodexBrowseWorkspace(bindingKey, workspaceRoot)
 	h.recordCodexLocalEntry(bindingKey, workspaceRoot, codexLocalEntryApp)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
@@ -2831,9 +2911,14 @@ func defaultCodexAppOpener(ctx context.Context, command string, workspaceRoot st
 
 // handleCodexAttach 将当前 Codex 会话打开到本地可见端；remote-first Agent 使用 resume。
 func (h *Handler) handleCodexAttach(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	return h.handleCodexAttachForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
+}
+
+// handleCodexAttachForRoute 让飞书 route session 接手当前可见端或 CLI 恢复流程。
+func (h *Handler) handleCodexAttachForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
 	visibleAg, ok := ag.(agent.VisibleCompanionAgent)
 	if !ok {
-		return h.handleCodexAttachResume(ctx, userID, agentName, workspaceRoot, ag)
+		return h.handleCodexAttachResumeForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
 	}
 	if err := visibleAg.OpenVisibleCompanion(ctx); err != nil {
 		return fmt.Sprintf("打开 Codex 本地可见端失败: %v", err)
@@ -2843,7 +2928,12 @@ func (h *Handler) handleCodexAttach(ctx context.Context, userID string, agentNam
 
 // handleCodexCLI 将当前微信 Codex thread 恢复到本地 CLI，便于电脑端接手。
 func (h *Handler) handleCodexCLI(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.openCodexThreadInCLI(ctx, userID, agentName, workspaceRoot, ag, codexCLIOpenText{
+	return h.handleCodexCLIForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
+}
+
+// handleCodexCLIForRoute 使用 route session 查 thread，用真实用户工作空间启动 CLI。
+func (h *Handler) handleCodexCLIForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	return h.openCodexThreadInCLIForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag, codexCLIOpenText{
 		unsupported:      "当前 Codex Agent 不支持 cli。",
 		missingCommand:   "当前 Codex Agent 未配置 command，无法打开 Codex CLI。",
 		openFailedPrefix: "打开 Codex CLI 失败",
@@ -2852,7 +2942,12 @@ func (h *Handler) handleCodexCLI(ctx context.Context, userID string, agentName s
 }
 
 func (h *Handler) handleCodexAttachResume(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.openCodexThreadInCLI(ctx, userID, agentName, workspaceRoot, ag, codexCLIOpenText{
+	return h.handleCodexAttachResumeForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
+}
+
+// handleCodexAttachResumeForRoute 复用 CLI 恢复路径，但保持飞书 route session 不丢失。
+func (h *Handler) handleCodexAttachResumeForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	return h.openCodexThreadInCLIForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag, codexCLIOpenText{
 		unsupported:      "当前 Codex Agent 不支持 attach。",
 		missingCommand:   "当前 Codex Agent 未配置 command，无法打开本地可见端。",
 		openFailedPrefix: "打开 Codex 本地可见端失败",
@@ -2878,15 +2973,20 @@ const (
 )
 
 func (h *Handler) openCodexThreadInCLI(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, text codexCLIOpenText) string {
+	return h.openCodexThreadInCLIForRoute(ctx, userID, userID, agentName, workspaceRoot, ag, text)
+}
+
+// openCodexThreadInCLIForRoute 从 route session 读取 thread，再在真实用户工作空间中打开本地 CLI。
+func (h *Handler) openCodexThreadInCLIForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent, text codexCLIOpenText) string {
 	if _, ok := ag.(agent.CodexThreadAgent); !ok {
 		return text.unsupported
 	}
-	workspaceRoot = h.codexWorkspaceRootForUser(userID, agentName, ag)
+	workspaceRoot = h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
 	if strings.TrimSpace(workspaceRoot) == "" {
 		workspaceRoot = h.codexWorkspaceRoot(agentName)
 	}
-	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
-	bindingKey := codexBindingKey(userID, agentName)
+	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
+	bindingKey := codexBindingKey(routeUserID, agentName)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
 	if pending || strings.TrimSpace(threadID) == "" {
 		return "当前还没有可接手的 Codex thread，请先通过微信发送一条 Codex 任务。"
@@ -3002,6 +3102,11 @@ func (h *Handler) handleCodexDetach(ag agent.Agent) string {
 }
 
 func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	return h.handleCodexNewForRoute(userID, agentName, workspaceRoot, ag, "")
+}
+
+// handleCodexNewForRoute 只清理 route session 的 thread，避免飞书 thread 影响同一用户其他会话。
+func (h *Handler) handleCodexNewForRoute(userID string, agentName string, workspaceRoot string, ag agent.Agent, ownerBindingKey string) string {
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	if codexAg, ok := ag.(agent.CodexThreadAgent); ok {
@@ -3009,11 +3114,16 @@ func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot 
 	}
 	bindingKey := codexBindingKey(userID, agentName)
 	h.ensureCodexSessions().setPendingNew(bindingKey, workspaceRoot)
-	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
 	return wechatCommandText("已切换到新会话。", "workspace: "+workspaceRoot)
 }
 
 func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string) string {
+	return h.handleCodexSwitchForRoute(ctx, userID, agentName, workspaceRoot, ag, target, "")
+}
+
+// handleCodexSwitchForRoute 切换 route session 的 thread，并同步真实用户当前工作空间。
+func (h *Handler) handleCodexSwitchForRoute(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string) string {
 	codexAg, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
 		return "当前 Codex Agent 不支持 thread 切换。"
@@ -3030,7 +3140,7 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 	}
 	h.switchCodexWorkspace(agentName, workspaceRoot, ag)
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
-	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
 	return wechatCommandText("已切换会话。", "工作空间: "+shortCodexWorkspaceName(workspaceRoot))
 }
 
@@ -3179,13 +3289,18 @@ func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) str
 }
 
 func (h *Handler) renderCodexStatus(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	workspaceRoot = h.codexWorkspaceRootForUser(userID, agentName, ag)
+	return h.renderCodexStatusForRoute(userID, userID, agentName, workspaceRoot, ag)
+}
+
+// renderCodexStatusForRoute 显示 route session 的 thread 状态，同时用真实用户工作空间解释路径。
+func (h *Handler) renderCodexStatusForRoute(actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	workspaceRoot = h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
 	if strings.TrimSpace(workspaceRoot) == "" {
 		workspaceRoot = h.codexWorkspaceRoot(agentName)
 	}
-	h.syncCodexThreadFromAgent(userID, agentName, workspaceRoot, ag)
+	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
 
-	bindingKey := codexBindingKey(userID, agentName)
+	bindingKey := codexBindingKey(routeUserID, agentName)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
 	sessionLabel := h.codexSessionLabelForStatus(bindingKey, workspaceRoot, threadID, pending)
 	localEntry := h.codexLocalEntry(bindingKey, workspaceRoot)

@@ -17,12 +17,13 @@ type codexWorkspaceGroup struct {
 }
 
 type codexWorkspaceCdRequest struct {
-	Context    context.Context
-	UserID     string
-	BindingKey string
-	AgentName  string
-	Target     string
-	Agent      agent.Agent
+	Context         context.Context
+	UserID          string
+	BindingKey      string
+	OwnerBindingKey string
+	AgentName       string
+	Target          string
+	Agent           agent.Agent
 }
 
 // codexBrowseWorkspace 返回当前微信用户正在浏览的 Codex 工作空间。
@@ -88,9 +89,17 @@ func (h *Handler) handleCodexCd(req codexWorkspaceCdRequest) string {
 		return err.Error()
 	}
 	workspaceRoot := h.switchCodexWorkspace(req.AgentName, group.Root, req.Agent)
-	h.ensureCodexSessions().setActiveWorkspace(req.BindingKey, workspaceRoot)
+	h.setCodexActiveWorkspaceForRoute(req.BindingKey, req.OwnerBindingKey, workspaceRoot)
 	h.setCodexBrowseWorkspace(req.BindingKey, workspaceRoot)
 	return h.enterCodexWorkspace(req, group, workspaceRoot)
+}
+
+// setCodexActiveWorkspaceForRoute 同步 route 会话和真实用户的当前工作空间。
+func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, ownerBindingKey string, workspaceRoot string) {
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
+	if ownerBindingKey != "" && ownerBindingKey != bindingKey {
+		h.ensureCodexSessions().setActiveWorkspace(ownerBindingKey, workspaceRoot)
+	}
 }
 
 // enterCodexWorkspace 根据会话数量决定自动切换、创建草稿或展示列表。

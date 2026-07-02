@@ -132,9 +132,10 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 			Operator: &callback.Operator{OpenID: "ou_user"},
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
-				"action": cardActionChoice,
-				"choice": "1",
-				"conv":   "feishu:ou_user",
+				"action":             cardActionChoice,
+				"choice":             "1",
+				"conv":               "feishu:ou_user",
+				"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root",
 			}},
 		},
 	}
@@ -157,6 +158,9 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 		}
 		if msg.Platform != platform.PlatformFeishu || msg.UserID != "ou_user" || msg.ChatID != "oc_chat" {
 			t.Fatalf("msg=%#v, want feishu ids", msg)
+		}
+		if msg.Metadata["feishu_session_key"] != "feishu:tenant_1:group:oc_1:om_root" {
+			t.Fatalf("msg.Metadata=%#v, want feishu session key", msg.Metadata)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")

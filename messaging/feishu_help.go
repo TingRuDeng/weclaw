@@ -8,11 +8,12 @@ import (
 )
 
 // handleFeishuHelpCommand 将飞书 /help 升级为按钮卡片，保留微信端文本帮助。
-func (h *Handler) handleFeishuHelpCommand(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) bool {
+func (h *Handler) handleFeishuHelpCommand(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier, routeUserID string) bool {
 	if msg.Platform != platform.PlatformFeishu || reply == nil || !reply.Capabilities().Buttons {
 		return false
 	}
-	if err := reply.AskChoices(ctx, feishuHelpPrompt(), feishuHelpChoices()); err != nil {
+	choices := platformChoicesWithMetadata(feishuHelpChoices(), feishuChoiceSessionMetadata(msg, routeUserID))
+	if err := reply.AskChoices(ctx, feishuHelpPrompt(), choices); err != nil {
 		log.Printf("[handler] failed to send feishu help card to %s: %v", msg.UserID, err)
 		return false
 	}

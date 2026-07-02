@@ -10,19 +10,23 @@ import (
 )
 
 // handleFeishuCodexSessionCommand 将飞书侧 Codex 浏览命令升级为按钮卡片，微信仍走文本命令。
-func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier, trimmed string) bool {
+func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platform.IncomingMessage, routeUserID string, reply platform.Replier, trimmed string) bool {
 	if msg.Platform != platform.PlatformFeishu || reply == nil || !reply.Capabilities().Buttons {
 		return false
 	}
-	result := h.handleCodexSessionCommand(ctx, msg.UserID, trimmed)
-	if h.sendFeishuCodexNavigationChoices(ctx, msg.UserID, reply, trimmed, result) {
+	result := h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
+		ActorUserID: msg.UserID,
+		RouteUserID: routeUserID,
+		Trimmed:     trimmed,
+	})
+	if h.sendFeishuCodexNavigationChoices(ctx, msg, routeUserID, reply, trimmed, result) {
 		return true
 	}
 	sendPlatformText(ctx, reply, msg.UserID, result)
 	return true
 }
 
-func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, userID string, reply platform.Replier, trimmed string, commandReply string) bool {
+func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg platform.IncomingMessage, routeUserID string, reply platform.Replier, trimmed string, commandReply string) bool {
 	agentName, ok := h.codexAgentName()
 	if !ok {
 		return false
@@ -34,11 +38,12 @@ func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, userID s
 	if isCodexNavigationErrorReply(commandReply) {
 		return false
 	}
-	bindingKey := codexBindingKey(userID, agentName)
+	bindingKey := codexBindingKey(routeUserID, agentName)
+	metadata := feishuChoiceSessionMetadata(msg, routeUserID)
 	if workspaceRoot, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
-		return h.sendFeishuCodexSessionChoices(ctx, userID, reply, bindingKey, workspaceRoot, fields)
+		return h.sendFeishuCodexSessionChoices(ctx, msg.UserID, reply, bindingKey, workspaceRoot, fields, metadata)
 	}
-	return h.sendFeishuCodexWorkspaceChoices(ctx, userID, reply, bindingKey)
+	return h.sendFeishuCodexWorkspaceChoices(ctx, msg.UserID, reply, bindingKey, metadata)
 }
 
 func isCodexNavigationErrorReply(reply string) bool {
@@ -70,7 +75,7 @@ func isFeishuCodexNavigationCommand(fields []string) bool {
 	}
 }
 
-func (h *Handler) sendFeishuCodexWorkspaceChoices(ctx context.Context, userID string, reply platform.Replier, bindingKey string) bool {
+func (h *Handler) sendFeishuCodexWorkspaceChoices(ctx context.Context, userID string, reply platform.Replier, bindingKey string, metadata map[string]string) bool {
 	groups := h.codexWorkspaceGroups(bindingKey)
 	choices := make([]platform.Choice, 0, len(groups))
 	for index, group := range groups {
@@ -85,10 +90,11 @@ func (h *Handler) sendFeishuCodexWorkspaceChoices(ctx context.Context, userID st
 	if len(choices) == 0 {
 		return false
 	}
+	choices = platformChoicesWithMetadata(choices, metadata)
 	return h.askFeishuCodexChoices(ctx, userID, reply, "Codex 工作空间\n请选择要进入的工作空间。", choices)
 }
 
-func (h *Handler) sendFeishuCodexSessionChoices(ctx context.Context, userID string, reply platform.Replier, bindingKey string, workspaceRoot string, fields []string) bool {
+func (h *Handler) sendFeishuCodexSessionChoices(ctx context.Context, userID string, reply platform.Replier, bindingKey string, workspaceRoot string, fields []string, metadata map[string]string) bool {
 	sessions := h.codexSessionsForWorkspace(bindingKey, workspaceRoot)
 	choices := make([]platform.Choice, 0, len(sessions))
 	for index, session := range sessions {
@@ -103,6 +109,7 @@ func (h *Handler) sendFeishuCodexSessionChoices(ctx context.Context, userID stri
 	if len(choices) == 0 || !shouldShowFeishuSessionChoices(fields, len(choices)) {
 		return false
 	}
+	choices = platformChoicesWithMetadata(choices, metadata)
 	prompt := fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(workspaceRoot))
 	return h.askFeishuCodexChoices(ctx, userID, reply, prompt, choices)
 }
