@@ -14,6 +14,7 @@ const (
 	cardActionChoice       = "choice"
 	cardActionStop         = "stop"
 	cardKindApproval       = "approval"
+	approvalStatusHandled  = "handled"
 	approvalStatusExpired  = "expired"
 	approvalStatusArchived = "archived"
 	approvalPromptHead     = "Codex 请求执行敏感操作，请确认："
@@ -28,6 +29,7 @@ type parsedCardAction struct {
 	Summary    string
 	TaskCard   string
 	Approval   string
+	Panel      bool
 	Conv       string
 	SessionKey string
 	UserID     string
@@ -234,6 +236,7 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 			callbackValueString(value, "action_key"),
 			callbackValueString(value, "actionKey"),
 		),
+		Panel:      callbackValueString(value, "approval_panel") == "1",
 		Conv:       callbackValueString(value, "conv"),
 		SessionKey: callbackValueString(value, feishuSessionMetadataKey),
 		UserID:     strings.TrimSpace(event.Event.Operator.OpenID),

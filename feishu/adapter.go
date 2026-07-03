@@ -253,6 +253,15 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 		} else if a.updateTaskCardWithApproval(ctx, handled) {
 			handled.Status = approvalStatusArchived
 			a.updateApprovalActionRecord(handled)
+		} else {
+			handled.Status = approvalStatusHandled
+			a.updateApprovalActionRecord(handled)
+		}
+	}
+	if panelCard := a.updateApprovalPanelWithAction(handled); panelCard != nil {
+		return &callback.CardActionTriggerResponse{
+			Toast: approvalActionToast(handled),
+			Card:  panelCard,
 		}
 	}
 	return &callback.CardActionTriggerResponse{
@@ -357,6 +366,17 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 		return false
 	}
 	return true
+}
+
+func (a *Adapter) updateApprovalPanelWithAction(action parsedCardAction) *callback.Card {
+	if !action.Panel || a.taskCards == nil {
+		return nil
+	}
+	snapshot, ok := a.taskCards.completeApprovalPanelItem(action)
+	if !ok {
+		return nil
+	}
+	return buildApprovalPanelCallbackCard(snapshot)
 }
 
 // cardKitSequence 使用秒级时间生成飞书 CardKit 可接受的更新序号，避免毫秒时间戳越界。

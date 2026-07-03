@@ -11,6 +11,7 @@ import (
 
 type fakeCardKitClient struct {
 	cardID        string
+	cardIDs       []string
 	createdCards  []string
 	streamingSeqs []int
 	streamSeqs    []int
@@ -26,6 +27,11 @@ type fakeCardKitClient struct {
 // CreateCard 记录创建卡片 JSON 并返回固定 card_id。
 func (f *fakeCardKitClient) CreateCard(ctx context.Context, cardJSON string) (string, error) {
 	f.createdCards = append(f.createdCards, cardJSON)
+	if len(f.cardIDs) > 0 {
+		cardID := f.cardIDs[0]
+		f.cardIDs = f.cardIDs[1:]
+		return cardID, nil
+	}
 	if f.cardID == "" {
 		return "card-1", nil
 	}

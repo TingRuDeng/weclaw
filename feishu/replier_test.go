@@ -160,7 +160,7 @@ func TestReplierAskChoicesSendsCardWhenCardKitAvailable(t *testing.T) {
 
 func TestReplierAskChoicesIncludesCurrentTaskCardID(t *testing.T) {
 	sender := &fakeMessageSender{}
-	cardKit := &fakeCardKitClient{cardID: "card-task-1"}
+	cardKit := &fakeCardKitClient{cardIDs: []string{"card-task-1", "card-panel-1"}}
 	reply := newReplierWithTaskCards(sender, "ou_user", cardKit, newTaskCardRegistry())
 
 	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"})
@@ -180,10 +180,109 @@ func TestReplierAskChoicesIncludesCurrentTaskCardID(t *testing.T) {
 	card := decodeCardJSON(t, cardKit.createdCards[1])
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	value := elements[1].(map[string]any)["value"].(map[string]any)
+	value := elements[2].(map[string]any)["value"].(map[string]any)
 	if value["task_card_id"] != "card-task-1" {
 		t.Fatalf("button value=%#v, want task card id", value)
 	}
+	if value["approval_panel"] != "1" {
+		t.Fatalf("button value=%#v, want approval panel marker", value)
+	}
+}
+
+func TestReplierAskChoicesAggregatesApprovalsIntoOnePanel(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{cardIDs: []string{"card-task-1", "card-panel-1"}}
+	reply := newReplierWithTaskCards(sender, "ou_user", cardKit, newTaskCardRegistry())
+	if _, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"}); err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+
+	err := reply.AskChoices(context.Background(), "Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{
+		ID:       "accept",
+		Label:    "允许本次",
+		Metadata: map[string]string{"approval_key": "approval-1"},
+	}})
+	if err != nil {
+		t.Fatalf("first AskChoices error: %v", err)
+	}
+	err = reply.AskChoices(context.Background(), "Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"pwd\"}", []platform.Choice{{
+		ID:       "accept",
+		Label:    "允许本次",
+		Metadata: map[string]string{"approval_key": "approval-2"},
+	}})
+	if err != nil {
+		t.Fatalf("second AskChoices error: %v", err)
+	}
+
+	if len(sender.cards) != 2 || sender.cards[1] != "ou_user:card-panel-1" {
+		t.Fatalf("sent cards=%#v, want task card and one approval panel", sender.cards)
+	}
+	if cardKit.updateCountFor("card-panel-1") != 1 {
+		t.Fatalf("updated card ids=%#v, want update existing approval panel", cardKit.updateCardIDs)
+	}
+	panel := decodeCardJSON(t, cardKit.updateCards[0])
+	body := panel["body"].(map[string]any)
+	content := body["elements"].([]any)[0].(map[string]any)["content"].(string)
+	if !strings.Contains(content, "待处理审批：2 个") {
+		t.Fatalf("panel content=%q, want two pending approvals", content)
+	}
+}
+
+func TestReplierAskChoicesRollsBackPanelItemWhenUpdateFails(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{
+		cardIDs:      []string{"card-task-1", "card-panel-1", "card-fallback-1"},
+		updateErrors: []error{context.Canceled},
+	}
+	reply := newReplierWithTaskCards(sender, "ou_user", cardKit, newTaskCardRegistry())
+	if _, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"}); err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+	if err := reply.AskChoices(context.Background(), approvalPromptForTest("date"), approvalChoiceForTest("approval-1")); err != nil {
+		t.Fatalf("first AskChoices error: %v", err)
+	}
+	if err := reply.AskChoices(context.Background(), approvalPromptForTest("pwd"), approvalChoiceForTest("approval-2")); err != nil {
+		t.Fatalf("second AskChoices error: %v", err)
+	}
+	if err := reply.AskChoices(context.Background(), approvalPromptForTest("whoami"), approvalChoiceForTest("approval-3")); err != nil {
+		t.Fatalf("third AskChoices error: %v", err)
+	}
+
+	if len(sender.cards) != 3 || sender.cards[2] != "ou_user:card-fallback-1" {
+		t.Fatalf("sent cards=%#v, want fallback independent approval card", sender.cards)
+	}
+	if cardKit.updateCountFor("card-panel-1") != 2 {
+		t.Fatalf("updated card ids=%#v, want failed update plus later success", cardKit.updateCardIDs)
+	}
+	panel := decodeCardJSON(t, cardKit.updateCards[1])
+	body := panel["body"].(map[string]any)
+	content := approvalPanelContentForTest(body)
+	if !strings.Contains(content, "待处理审批：2 个") || strings.Contains(content, "pwd") {
+		t.Fatalf("panel content=%q, want rollback of failed second approval", content)
+	}
+}
+
+func approvalPromptForTest(command string) string {
+	return "Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"" + command + "\"}"
+}
+
+func approvalChoiceForTest(key string) []platform.Choice {
+	return []platform.Choice{{
+		ID:       "accept",
+		Label:    "允许本次",
+		Metadata: map[string]string{"approval_key": key},
+	}}
+}
+
+func approvalPanelContentForTest(body map[string]any) string {
+	elements := body["elements"].([]any)
+	parts := make([]string, 0, len(elements))
+	for _, element := range elements {
+		if content, ok := element.(map[string]any)["content"].(string); ok {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func TestReplierTypingUsesThinkingCard(t *testing.T) {

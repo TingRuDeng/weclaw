@@ -15,11 +15,14 @@ type taskCardRegistry struct {
 }
 
 type taskCardState struct {
-	title     string
-	status    string
-	content   string
-	approvals []string
-	updatedAt time.Time
+	title             string
+	status            string
+	content           string
+	approvals         []string
+	approvalPanelID   string
+	approvalPanelSeq  int
+	approvalPanelRows []approvalPanelItem
+	updatedAt         time.Time
 }
 
 func newTaskCardRegistry() *taskCardRegistry {
