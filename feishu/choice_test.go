@@ -189,10 +189,10 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 	}
 	body := card["body"].(map[string]any)
 	content := body["elements"].([]map[string]any)[0]["content"].(string)
-	if !strings.Contains(content, "✅ 已授权") || !strings.Contains(content, "允许本次") || !strings.Contains(content, "command: date") {
+	if !strings.Contains(content, "✅ 已授权") || !strings.Contains(content, "允许本次") {
 		t.Fatalf("content=%q, want compact allow status", content)
 	}
-	if strings.Contains(content, "{") || strings.Contains(content, "}") || len(body["elements"].([]map[string]any)) != 1 {
+	if strings.Contains(content, "command: date") || strings.Contains(content, "{") || strings.Contains(content, "}") || len(body["elements"].([]map[string]any)) != 1 {
 		t.Fatalf("content=%q, want compact card without verbose JSON or buttons", content)
 	}
 	select {
@@ -261,6 +261,19 @@ func TestBuildChoiceHandledCardShowsArchivedStatus(t *testing.T) {
 	}
 	if strings.Contains(content, "command: date") || strings.Contains(content, "允许本次") {
 		t.Fatalf("content=%q, want one-line archived status", content)
+	}
+}
+
+func TestBuildChoiceHandledCardCompactsHandledApprovalSummary(t *testing.T) {
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: apply_patch very long payload"})
+	data := card.Data.(map[string]any)
+	body := data["body"].(map[string]any)
+	content := body["elements"].([]map[string]any)[0]["content"].(string)
+	if !strings.Contains(content, "✅ 已授权") || !strings.Contains(content, "允许本次") {
+		t.Fatalf("content=%q, want compact handled approval status", content)
+	}
+	if strings.Contains(content, "apply_patch") || strings.Contains(content, "payload") {
+		t.Fatalf("content=%q, want no verbose approval summary", content)
 	}
 }
 

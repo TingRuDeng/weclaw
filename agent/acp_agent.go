@@ -2064,7 +2064,7 @@ func firstNonEmptyString(values ...string) string {
 }
 
 func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequest) string {
-	fallback := selectApprovalOption(req.Options, "deny")
+	fallback := selectApprovalOption(req.Options, defaultDenyDecision(req.Options))
 	handler := approvalHandlerFromContext(ctx)
 	if handler == nil {
 		return fallback
@@ -2250,6 +2250,16 @@ func selectApprovalOption(options []ApprovalOption, preferredKind string) string
 		return options[0].ID
 	}
 	return preferredKind
+}
+
+// defaultDenyDecision 在 Codex 新版审批请求缺少 options 时返回协议认可的拒绝值。
+func defaultDenyDecision(options []ApprovalOption) string {
+	for _, opt := range options {
+		if strings.EqualFold(strings.TrimSpace(opt.ID), "cancel") {
+			return "cancel"
+		}
+	}
+	return "decline"
 }
 
 func isApprovalOption(options []ApprovalOption, optionID string) bool {

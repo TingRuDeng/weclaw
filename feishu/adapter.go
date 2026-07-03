@@ -344,22 +344,24 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 		return false
 	}
 	opts, ok := a.taskCards.addApproval(action.TaskCard, action)
-	var cardJSON string
-	var err error
-	if ok {
-		cardJSON, err = buildCardV2(opts)
-	} else {
-		cardJSON, err = buildTaskApprovalRecordCard(action)
-	}
-	if err != nil {
-		log.Printf("[feishu] failed to build task approval record card: %v", err)
+	if !ok {
 		return false
 	}
-	if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, int(time.Now().UnixMilli())); err != nil {
+	cardJSON, err := buildCardV2(opts)
+	if err != nil {
+		log.Printf("[feishu] failed to build task card approval snapshot: %v", err)
+		return false
+	}
+	if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, cardKitSequence(a.nowOrDefault())); err != nil {
 		log.Printf("[feishu] ignored task approval card update error: %v", err)
 		return false
 	}
 	return true
+}
+
+// cardKitSequence 使用秒级时间生成飞书 CardKit 可接受的更新序号，避免毫秒时间戳越界。
+func cardKitSequence(now time.Time) int {
+	return int(now.Unix())
 }
 
 func (a *Adapter) allowCardActionUser(userID string) bool {

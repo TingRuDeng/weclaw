@@ -262,9 +262,6 @@ func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
 		return buildChoiceHandledStatusCard(template, "**"+status+"**")
 	}
 	content := "**" + status + "**\n\n已选择：" + label
-	if summary := strings.TrimSpace(action.Summary); summary != "" {
-		content += "\n\n" + summary
-	}
 	return buildChoiceHandledStatusCard(template, content)
 }
 
@@ -294,16 +291,6 @@ func buildChoiceHandledStatusCard(template string, content string) *callback.Car
 		},
 	}
 	return &callback.Card{Type: "raw", Data: card}
-}
-
-// buildTaskApprovalRecordCard 是轻量主任务卡片回写，占位记录审批结果，不重构进度卡片体系。
-func buildTaskApprovalRecordCard(action parsedCardAction) (string, error) {
-	handled := buildChoiceHandledCard(action)
-	data, err := json.Marshal(handled.Data)
-	if err != nil {
-		return "", fmt.Errorf("marshal feishu task approval record card: %w", err)
-	}
-	return string(data), nil
 }
 
 func approvalHandledStatus(action parsedCardAction) (string, string) {

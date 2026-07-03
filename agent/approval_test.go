@@ -183,6 +183,19 @@ func TestRespondCodexApprovalRequestUsesDecisionResult(t *testing.T) {
 	}
 }
 
+func TestResolvePermissionOptionUsesProtocolDeclineWhenOptionsMissing(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+		return "", fmt.Errorf("approval request has no options")
+	})
+
+	got := a.resolvePermissionOption(ctx, ApprovalRequest{})
+
+	if got != "decline" {
+		t.Fatalf("fallback option=%q, want decline", got)
+	}
+}
+
 func TestRespondLegacyPermissionRequestUsesOutcomeResult(t *testing.T) {
 	var out bytes.Buffer
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})

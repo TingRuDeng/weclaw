@@ -204,6 +204,13 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.cardKit = cardKit
+	adapter.taskCards.record("card-task-1", cardOptions{
+		Status:  cardStatusThinking,
+		Title:   "Codex",
+		Content: "正在分析任务",
+	})
+	now := time.Date(2026, 7, 3, 8, 31, 38, 874000000, time.Local)
+	adapter.now = func() time.Time { return now }
 	event := approvalCardActionEvent("allow", "允许本次", "card-task-1")
 	dispatched := make(chan platform.IncomingMessage, 1)
 
@@ -221,6 +228,9 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	assertApprovalCardNotContains(t, resp, "command: date")
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
+	}
+	if cardKit.updateSeqs[0] != int(now.Unix()) {
+		t.Fatalf("update sequence=%d, want unix seconds %d", cardKit.updateSeqs[0], now.Unix())
 	}
 	select {
 	case msg := <-dispatched:
@@ -297,8 +307,36 @@ func TestHandleCardActionEventIgnoresTaskCardUpdateFailure(t *testing.T) {
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("response=%#v, want compact approval card despite task card failure", resp)
 	}
-	assertApprovalCardContent(t, resp, "✅ 已授权", "允许本次", "command: date")
+	assertApprovalCardContent(t, resp, "✅ 已授权", "允许本次")
+	assertApprovalCardNotContains(t, resp, "command: date")
 	assertApprovalCardNotContains(t, resp, "已收纳到任务卡片")
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestHandleCardActionEventDoesNotOverwriteUnknownTaskCard(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	event := approvalCardActionEvent("allow", "允许本次", "card-task-1")
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Card == nil {
+		t.Fatalf("response=%#v, want compact approval card", resp)
+	}
+	if cardKit.updateCountFor("card-task-1") != 0 {
+		t.Fatalf("updated card ids=%#v, want no task card overwrite without registry state", cardKit.updateCardIDs)
+	}
 	select {
 	case <-dispatched:
 	case <-time.After(time.Second):
