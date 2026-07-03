@@ -189,6 +189,35 @@ func TestReplierAskChoicesIncludesCurrentTaskCardID(t *testing.T) {
 	}
 }
 
+func TestReplierAskChoicesSendsApprovalToOwner(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{cardIDs: []string{"card-task-1", "card-panel-1"}}
+	reply := newReplierWithTaskCards(sender, "oc_group", cardKit, newTaskCardRegistry())
+	if _, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"}); err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+
+	err := reply.AskChoices(context.Background(), approvalPromptForTest("date"), []platform.Choice{{
+		ID:       "accept",
+		Label:    "允许本次",
+		Metadata: map[string]string{"approval_key": "approval-1", "approval_owner": "ou_user"},
+	}})
+
+	if err != nil {
+		t.Fatalf("AskChoices error: %v", err)
+	}
+	if len(sender.cards) != 2 || sender.cards[1] != "ou_user:card-panel-1" {
+		t.Fatalf("sent cards=%#v, want approval panel sent to owner", sender.cards)
+	}
+	panel := decodeCardJSON(t, cardKit.createdCards[1])
+	body := panel["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	value := elements[2].(map[string]any)["value"].(map[string]any)
+	if value["approval_owner"] != "ou_user" {
+		t.Fatalf("button value=%#v, want approval owner", value)
+	}
+}
+
 func TestReplierAskChoicesAggregatesApprovalsIntoOnePanel(t *testing.T) {
 	sender := &fakeMessageSender{}
 	cardKit := &fakeCardKitClient{cardIDs: []string{"card-task-1", "card-panel-1"}}

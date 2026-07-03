@@ -225,6 +225,11 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 
 // handleApprovalCardAction 处理飞书审批按钮，先收纳审批卡片，再把首个 decision 交给 agent。
 func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCardAction, dispatch platform.DispatchFunc) *callback.CardActionTriggerResponse {
+	if !approvalActionOwnedByUser(action) {
+		return &callback.CardActionTriggerResponse{
+			Toast: &callback.Toast{Type: "warning", Content: "只有任务发起人可以审批"},
+		}
+	}
 	handled, first := a.recordApprovalAction(action)
 	if first {
 		resultCh := make(chan platform.CardActionResult, 1)
@@ -288,6 +293,15 @@ func (a *Adapter) approvalActionExpired(ctx context.Context, resultCh <-chan pla
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// approvalActionOwnedByUser 在写入幂等记录前拦截非发起人，避免群聊里抢先点击耗掉审批。
+func approvalActionOwnedByUser(action parsedCardAction) bool {
+	owner := strings.TrimSpace(action.Owner)
+	if owner == "" {
+		return true
+	}
+	return owner == strings.TrimSpace(action.UserID)
 }
 
 func (a *Adapter) recordApprovalAction(action parsedCardAction) (parsedCardAction, bool) {

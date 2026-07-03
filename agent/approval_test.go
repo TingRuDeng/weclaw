@@ -86,6 +86,30 @@ func TestHandleCodexCommandApprovalUsesAvailableDecisions(t *testing.T) {
 	}
 }
 
+func TestHandleCodexCommandApprovalUsesSnakeCaseAvailableDecisions(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-approval"] = turnCh
+	a.notifyMu.Unlock()
+
+	raw := `{"jsonrpc":"2.0","id":12,"method":"item/fileChange/requestApproval","params":{"threadId":"thread-approval","turnId":"turn-1","itemId":"call-1","approvalId":3,"available_decisions":["accept","cancel"],"changes":"apply_patch touching agent/acp_agent.go"}}`
+	a.handlePermissionRequest(raw)
+
+	select {
+	case evt := <-turnCh:
+		if evt.Approval == nil {
+			t.Fatal("approval event missing")
+		}
+		options := evt.Approval.Request.Options
+		if len(options) != 2 || options[0].ID != "accept" || options[1].Kind != "deny" {
+			t.Fatalf("approval options=%#v, want snake_case available decisions", options)
+		}
+	default:
+		t.Fatal("approval request was not dispatched")
+	}
+}
+
 func TestHandleCodexCommandApprovalAcceptsStringCommand(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	turnCh := make(chan *codexTurnEvent, 1)

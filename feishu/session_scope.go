@@ -174,9 +174,9 @@ func isBotMentionType(mentionedType string) bool {
 
 // mentionKeyMatchesContent 用 mention key 约束兼容判断，避免无正文时错放行。
 func mentionKeyMatchesContent(mention *larkim.MentionEvent, content string) bool {
-	key := stringValue(mention.Key)
+	key := strings.TrimSpace(stringValue(mention.Key))
 	content = strings.TrimSpace(content)
-	return key == "" || content == "" || strings.Contains(content, key)
+	return key != "" && content != "" && strings.Contains(content, key)
 }
 
 // valueFromUserID 返回飞书用户标识中的可用 ID。

@@ -104,8 +104,9 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 		conv := platform.IncomingMessage{Platform: platform.PlatformFeishu, UserID: r.openID}.ConversationKey()
 		taskCardID := r.CurrentTaskCardID()
 		choices = attachTaskCardID(choices, taskCardID)
+		targetOpenID := approvalTargetOpenID(choices, r.openID)
 		panelReq := approvalPanelRequest{Prompt: prompt, Choices: choices, Conv: conv, TaskCard: taskCardID}
-		if handled, err := r.askApprovalPanel(ctx, panelReq); handled || err != nil {
+		if handled, err := r.askApprovalPanel(ctx, panelReq, targetOpenID); handled || err != nil {
 			return err
 		}
 		cardJSON, err := buildChoiceCard(prompt, choices, conv)
@@ -116,7 +117,7 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 		if err != nil {
 			return err
 		}
-		return r.sender.SendCard(ctx, r.openID, cardID)
+		return r.sender.SendCard(ctx, targetOpenID, cardID)
 	}
 	var lines []string
 	if strings.TrimSpace(prompt) != "" {
@@ -129,7 +130,7 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 }
 
 // askApprovalPanel 将同一任务内的多个审批合并到一张面板卡片，避免聊天里刷出多张审批卡。
-func (r *Replier) askApprovalPanel(ctx context.Context, req approvalPanelRequest) (bool, error) {
+func (r *Replier) askApprovalPanel(ctx context.Context, req approvalPanelRequest, targetOpenID string) (bool, error) {
 	item, ok := newApprovalPanelItem(req)
 	if !ok || r.taskCards == nil {
 		return false, nil
@@ -143,7 +144,7 @@ func (r *Replier) askApprovalPanel(ctx context.Context, req approvalPanelRequest
 		return false, err
 	}
 	if snapshot.CardID == "" {
-		return r.createApprovalPanel(ctx, req.TaskCard, cardJSON)
+		return r.createApprovalPanel(ctx, req.TaskCard, targetOpenID, cardJSON)
 	}
 	if err := r.cardKit.UpdateCard(ctx, snapshot.CardID, cardJSON, snapshot.Seq); err != nil {
 		r.taskCards.removeApprovalPanelItem(req.TaskCard, item.Key)
@@ -152,7 +153,7 @@ func (r *Replier) askApprovalPanel(ctx context.Context, req approvalPanelRequest
 	return true, nil
 }
 
-func (r *Replier) createApprovalPanel(ctx context.Context, taskCardID string, cardJSON string) (bool, error) {
+func (r *Replier) createApprovalPanel(ctx context.Context, taskCardID string, targetOpenID string, cardJSON string) (bool, error) {
 	cardID, err := r.cardKit.CreateCard(ctx, cardJSON)
 	if err != nil {
 		return false, nil
@@ -160,7 +161,7 @@ func (r *Replier) createApprovalPanel(ctx context.Context, taskCardID string, ca
 	if _, ok := r.taskCards.bindApprovalPanelCard(taskCardID, cardID); !ok {
 		return false, nil
 	}
-	return true, r.sender.SendCard(ctx, r.openID, cardID)
+	return true, r.sender.SendCard(ctx, targetOpenID, cardID)
 }
 
 // CurrentTaskCardID 返回当前任务流卡片 ID，供审批按钮回写主任务卡片。
@@ -192,6 +193,19 @@ func attachTaskCardID(choices []platform.Choice, cardID string) []platform.Choic
 		out = append(out, choice)
 	}
 	return out
+}
+
+// approvalTargetOpenID 只把 Codex 审批发送给发起人，普通选择卡继续使用原会话目标。
+func approvalTargetOpenID(choices []platform.Choice, fallback string) string {
+	for _, choice := range choices {
+		if strings.TrimSpace(choice.Metadata["approval_key"]) == "" {
+			continue
+		}
+		if owner := strings.TrimSpace(choice.Metadata[approvalOwnerValueKey]); owner != "" {
+			return owner
+		}
+	}
+	return fallback
 }
 
 // textFinalStream 是 CardKit 接入前的安全降级流，只发送最终态。

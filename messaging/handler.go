@@ -1104,7 +1104,7 @@ func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) 
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
 		prompt := approvalPrompt(req)
 		approvalKey := approvalPendingKey(userID, prompt, req.Options)
-		choices := approvalChoices(req.Options, approvalKey, taskCardIDFromReplier(reply))
+		choices := approvalChoices(req.Options, approvalKey, taskCardIDFromReplier(reply), userID)
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
@@ -1296,7 +1296,7 @@ func approvalPrompt(req agent.ApprovalRequest) string {
 	return "Codex 请求执行敏感操作，请确认：\n\n" + toolCall
 }
 
-func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string) []platform.Choice {
+func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
 	for _, option := range options {
 		id := strings.TrimSpace(option.ID)
@@ -1304,7 +1304,7 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCar
 			continue
 		}
 		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option)}
-		metadata := approvalChoiceMetadata(approvalKey, taskCardID)
+		metadata := approvalChoiceMetadata(approvalKey, taskCardID, ownerUserID)
 		if len(metadata) > 0 {
 			choice.Metadata = metadata
 		}
@@ -1313,13 +1313,16 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCar
 	return choices
 }
 
-func approvalChoiceMetadata(approvalKey string, taskCardID string) map[string]string {
-	metadata := make(map[string]string, 2)
+func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string) map[string]string {
+	metadata := make(map[string]string, 3)
 	if approvalKey = strings.TrimSpace(approvalKey); approvalKey != "" {
 		metadata["approval_key"] = approvalKey
 	}
 	if taskCardID = strings.TrimSpace(taskCardID); taskCardID != "" {
 		metadata["task_card_id"] = taskCardID
+	}
+	if ownerUserID = strings.TrimSpace(ownerUserID); ownerUserID != "" {
+		metadata["approval_owner"] = ownerUserID
 	}
 	return metadata
 }
@@ -1491,7 +1494,7 @@ func (h *Handler) handleListActiveTasks(userID string) string {
 		}
 		lines = append(lines, line)
 	}
-	lines = append(lines, "\n回复 /cancel 停止当前任务。")
+	lines = append(lines, "\n回复 /stop 停止当前任务。")
 	return strings.Join(lines, "\n")
 }
 

@@ -84,6 +84,9 @@ func TestListActiveTasksEmptyAndPopulated(t *testing.T) {
 	if !strings.Contains(got, "codex") || !strings.Contains(got, "重构登录模块") {
 		t.Fatalf("expected running codex task listed, got %q", got)
 	}
+	if !strings.Contains(got, "/stop") || strings.Contains(got, "/cancel 停止当前任务") {
+		t.Fatalf("expected /stop guidance, got %q", got)
+	}
 	if other := h.handleListActiveTasks("wechat:u2"); !strings.Contains(other, "没有运行中的任务") {
 		t.Fatalf("tasks must be scoped per owner, got %q", other)
 	}

@@ -14,6 +14,7 @@ const (
 	cardActionChoice       = "choice"
 	cardActionStop         = "stop"
 	cardKindApproval       = "approval"
+	approvalOwnerValueKey  = "approval_owner"
 	approvalStatusHandled  = "handled"
 	approvalStatusExpired  = "expired"
 	approvalStatusArchived = "archived"
@@ -29,6 +30,7 @@ type parsedCardAction struct {
 	Summary    string
 	TaskCard   string
 	Approval   string
+	Owner      string
 	Panel      bool
 	Conv       string
 	SessionKey string
@@ -118,6 +120,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		}
 		if taskCardID := strings.TrimSpace(choice.Metadata["task_card_id"]); taskCardID != "" {
 			value["task_card_id"] = taskCardID
+		}
+		if owner := strings.TrimSpace(choice.Metadata[approvalOwnerValueKey]); owner != "" {
+			value[approvalOwnerValueKey] = owner
 		}
 		if sessionKey := strings.TrimSpace(choice.Metadata[feishuSessionMetadataKey]); sessionKey != "" {
 			value[feishuSessionMetadataKey] = sessionKey
@@ -236,6 +241,7 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 			callbackValueString(value, "action_key"),
 			callbackValueString(value, "actionKey"),
 		),
+		Owner:      callbackValueString(value, approvalOwnerValueKey),
 		Panel:      callbackValueString(value, "approval_panel") == "1",
 		Conv:       callbackValueString(value, "conv"),
 		SessionKey: callbackValueString(value, feishuSessionMetadataKey),

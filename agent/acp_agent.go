@@ -162,13 +162,14 @@ type sessionUpdate struct {
 }
 
 type permissionRequestParams struct {
-	ThreadID           string              `json:"threadId,omitempty"`
-	TurnID             string              `json:"turnId,omitempty"`
-	ToolCall           json.RawMessage     `json:"toolCall"`
-	Command            permissionCommand   `json:"command,omitempty"`
-	Cwd                string              `json:"cwd,omitempty"`
-	Options            []permissionOption  `json:"options"`
-	AvailableDecisions permissionDecisions `json:"availableDecisions,omitempty"`
+	ThreadID                string              `json:"threadId,omitempty"`
+	TurnID                  string              `json:"turnId,omitempty"`
+	ToolCall                json.RawMessage     `json:"toolCall"`
+	Command                 permissionCommand   `json:"command,omitempty"`
+	Cwd                     string              `json:"cwd,omitempty"`
+	Options                 []permissionOption  `json:"options"`
+	AvailableDecisions      permissionDecisions `json:"availableDecisions,omitempty"`
+	AvailableDecisionsSnake permissionDecisions `json:"available_decisions,omitempty"`
 }
 
 type permissionCommand []string
@@ -2140,11 +2141,12 @@ func permissionToolCall(params permissionRequestParams) json.RawMessage {
 
 // approvalOptionsFromPermission 统一旧 options 和新版 availableDecisions。
 func approvalOptionsFromPermission(params permissionRequestParams) []ApprovalOption {
-	result := make([]ApprovalOption, 0, len(params.Options)+len(params.AvailableDecisions))
+	decisions := permissionAvailableDecisions(params)
+	result := make([]ApprovalOption, 0, len(params.Options)+len(decisions))
 	for _, opt := range params.Options {
 		result = append(result, ApprovalOption{ID: opt.OptionID, Name: opt.Name, Kind: opt.Kind})
 	}
-	for _, decision := range params.AvailableDecisions {
+	for _, decision := range decisions {
 		decision = strings.TrimSpace(decision)
 		if decision == "" {
 			continue
@@ -2152,6 +2154,14 @@ func approvalOptionsFromPermission(params permissionRequestParams) []ApprovalOpt
 		result = append(result, ApprovalOption{ID: decision, Name: decision, Kind: approvalKindFromDecision(decision)})
 	}
 	return result
+}
+
+// permissionAvailableDecisions 兼容 Codex app-server 新旧字段名，避免新版 snake_case 审批被误判为无选项。
+func permissionAvailableDecisions(params permissionRequestParams) permissionDecisions {
+	if len(params.AvailableDecisions) > 0 {
+		return params.AvailableDecisions
+	}
+	return params.AvailableDecisionsSnake
 }
 
 // approvalKindFromDecision 把新版 decision 字符串映射到通用允许/拒绝类型。
@@ -2211,7 +2221,7 @@ func selectPermissionOption(params permissionRequestParams, preferredKind string
 			return opt.OptionID
 		}
 	}
-	for _, decision := range params.AvailableDecisions {
+	for _, decision := range permissionAvailableDecisions(params) {
 		if approvalKindFromDecision(decision) == preferredKind && strings.TrimSpace(decision) != "" {
 			return strings.TrimSpace(decision)
 		}
@@ -2221,7 +2231,7 @@ func selectPermissionOption(params permissionRequestParams, preferredKind string
 			return opt.OptionID
 		}
 	}
-	for _, decision := range params.AvailableDecisions {
+	for _, decision := range permissionAvailableDecisions(params) {
 		if approvalKindFromDecision(decision) != "allow" && strings.TrimSpace(decision) != "" {
 			return strings.TrimSpace(decision)
 		}
@@ -2229,8 +2239,8 @@ func selectPermissionOption(params permissionRequestParams, preferredKind string
 	if len(params.Options) > 0 {
 		return params.Options[0].OptionID
 	}
-	if len(params.AvailableDecisions) > 0 {
-		return strings.TrimSpace(params.AvailableDecisions[0])
+	if decisions := permissionAvailableDecisions(params); len(decisions) > 0 {
+		return strings.TrimSpace(decisions[0])
 	}
 	return preferredKind
 }

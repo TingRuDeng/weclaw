@@ -24,6 +24,7 @@ type approvalPanelItem struct {
 type approvalPanelChoice struct {
 	ID         string
 	Label      string
+	Owner      string
 	Conv       string
 	SessionKey string
 }
@@ -65,6 +66,7 @@ func newApprovalPanelItem(req approvalPanelRequest) (approvalPanelItem, bool) {
 		itemChoices = append(itemChoices, approvalPanelChoice{
 			ID:         id,
 			Label:      label,
+			Owner:      strings.TrimSpace(choice.Metadata[approvalOwnerValueKey]),
 			Conv:       req.Conv,
 			SessionKey: strings.TrimSpace(choice.Metadata[feishuSessionMetadataKey]),
 		})
@@ -204,6 +206,9 @@ func approvalPanelButtons(item approvalPanelItem) []map[string]any {
 		}
 		if choice.SessionKey != "" {
 			value[feishuSessionMetadataKey] = choice.SessionKey
+		}
+		if choice.Owner != "" {
+			value[approvalOwnerValueKey] = choice.Owner
 		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",

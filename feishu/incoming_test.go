@@ -98,6 +98,15 @@ func TestIsMentionedBotRecognizesBotMentionWhenIDDiffersFromAppID(t *testing.T) 
 	}
 }
 
+func TestIsMentionedBotDoesNotTreatOtherBotMentionAsCurrentBot(t *testing.T) {
+	mentions := []*larkim.MentionEvent{newTypedMention("ou_other_bot", "app")}
+	mentions[0].Key = stringPtr("")
+
+	if isMentionedBotFromParts(feishuMentionCheck{Mentions: mentions, Content: "@_other_bot hello", AppID: "cli_a"}) {
+		t.Fatal("other bot mention with empty key should not be treated as current bot mention")
+	}
+}
+
 func TestIsMentionedBotDoesNotTreatUserMentionAsBot(t *testing.T) {
 	mentions := []*larkim.MentionEvent{newTypedMention("ou_other_user", "user")}
 
