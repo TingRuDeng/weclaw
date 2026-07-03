@@ -30,6 +30,8 @@
 - 审批面板只作用于 Codex 审批，不影响普通 AskChoices。
 - 如果没有任务卡片 ID 或 CardKit 不可用，保留现有独立审批卡兜底。
 - 面板更新失败不伪装成功，保留当前独立卡片路径。
+- 审批结果成功回写主任务卡片后，审批面板删除对应行，避免主任务卡和审批面板重复展示同一条审批记录。
+- 如果主任务卡片回写失败，审批面板保留已处理行，避免审计痕迹丢失。
 
 ## 执行计划
 
@@ -45,6 +47,7 @@
 - `go test ./feishu -run 'ApprovalPanel|AskChoices|CardActionEvent' -count=1 -timeout 60s`：通过。
 - `go test ./...`：通过。
 - `git diff --check`：通过。
+- `go test ./feishu -run 'ApprovalPanel|CardActionEvent|AskChoices' -count=1 -timeout 60s`：通过。
 
 ## Review 小结
 
@@ -52,3 +55,4 @@
 - 普通 AskChoices 仍走原独立卡片路径。
 - 审批回调仍先走幂等记录，只有首个 decision dispatch 给业务层。
 - 如果 CardKit 面板创建或更新失败，保留原独立审批卡路径，避免审批请求不可见。
+- 主任务卡片是审批历史的唯一主要展示区；审批面板主要负责待处理入口。

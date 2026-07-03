@@ -372,6 +372,13 @@ func (a *Adapter) updateApprovalPanelWithAction(action parsedCardAction) *callba
 	if !action.Panel || a.taskCards == nil {
 		return nil
 	}
+	if strings.TrimSpace(action.Status) == approvalStatusArchived {
+		snapshot, ok := a.taskCards.removeApprovalPanelItem(action.TaskCard, action.Approval)
+		if !ok {
+			return nil
+		}
+		return buildApprovalPanelCallbackCard(snapshot)
+	}
 	snapshot, ok := a.taskCards.completeApprovalPanelItem(action)
 	if !ok {
 		return nil

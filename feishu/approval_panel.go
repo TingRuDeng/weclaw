@@ -128,8 +128,11 @@ func buildApprovalPanelCardData(snapshot approvalPanelSnapshot) map[string]any {
 
 func approvalPanelTitle(snapshot approvalPanelSnapshot) string {
 	pending, handled := approvalPanelCounts(snapshot.Items)
+	if pending == 0 && handled == 0 {
+		return "✅ 本轮审批已处理，记录已收纳到任务卡片。"
+	}
 	if pending == 0 {
-		return fmt.Sprintf("✅ 本轮 %d 个审批已处理，详情已收纳到任务卡片。", handled)
+		return fmt.Sprintf("✅ 已处理审批：%d 个", handled)
 	}
 	return fmt.Sprintf("**待处理审批：%d 个**\n\n已处理：%d 个", pending, handled)
 }

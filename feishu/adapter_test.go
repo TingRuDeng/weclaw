@@ -322,8 +322,9 @@ func TestHandleCardActionEventUpdatesApprovalPanelCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCardActionEvent error: %v", err)
 	}
-	assertApprovalCardContent(t, resp, "本轮 1 个审批已处理")
+	assertApprovalCardContent(t, resp, "本轮审批已处理", "记录已收纳到任务卡片")
 	assertApprovalCardNotContains(t, resp, "待处理审批")
+	assertApprovalPanelElementCount(t, resp, 1)
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
 	}
@@ -332,6 +333,50 @@ func TestHandleCardActionEventUpdatesApprovalPanelCard(t *testing.T) {
 		if msg.RawCommand.Value["approval_key"] != "approval-key-1" {
 			t.Fatalf("raw command=%#v, want approval key", msg.RawCommand.Value)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestHandleCardActionEventKeepsPanelRecordWhenTaskCardUpdateFails(t *testing.T) {
+	cardKit := &fakeCardKitClient{updateErrors: []error{context.Canceled}}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	adapter.taskCards.record("card-task-1", cardOptions{
+		Status:  cardStatusThinking,
+		Title:   "Codex",
+		Content: "正在分析任务",
+	})
+	item := approvalPanelItem{
+		Key:      "approval-key-1",
+		Summary:  "command: date",
+		TaskCard: "card-task-1",
+		Choices:  []approvalPanelChoice{{ID: "allow", Label: "允许本次", Conv: "feishu:ou_user"}},
+	}
+	if _, ok := adapter.taskCards.upsertApprovalPanelItem("card-task-1", item); !ok {
+		t.Fatal("approval panel item should be registered")
+	}
+	if _, ok := adapter.taskCards.bindApprovalPanelCard("card-task-1", "card-panel-1"); !ok {
+		t.Fatal("approval panel card should be bound")
+	}
+	event := approvalCardActionEvent("allow", "允许本次", "card-task-1")
+	event.Event.Action.Value["approval_panel"] = "1"
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	assertApprovalCardContent(t, resp, "已处理审批：1 个")
+	assertApprovalCardAllContent(t, resp, "✅ 已授权：允许本次", "command: date")
+	if cardKit.updateCountFor("card-task-1") != 1 {
+		t.Fatalf("updated card ids=%#v, want attempted task card update", cardKit.updateCardIDs)
+	}
+	select {
+	case <-dispatched:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
 	}
@@ -656,13 +701,48 @@ func assertApprovalCardNotContains(t *testing.T, resp *callback.CardActionTrigge
 	}
 }
 
+func assertApprovalCardAllContent(t *testing.T, resp *callback.CardActionTriggerResponse, wants ...string) {
+	t.Helper()
+	content := approvalCardAllContentForTest(t, resp)
+	for _, want := range wants {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content=%q, want %q", content, want)
+		}
+	}
+}
+
+func assertApprovalPanelElementCount(t *testing.T, resp *callback.CardActionTriggerResponse, want int) {
+	t.Helper()
+	elements := approvalCardElementsForTest(t, resp)
+	if len(elements) != want {
+		t.Fatalf("elements=%d, want %d", len(elements), want)
+	}
+}
+
 func approvalCardContentForTest(t *testing.T, resp *callback.CardActionTriggerResponse) string {
+	t.Helper()
+	elements := approvalCardElementsForTest(t, resp)
+	return elements[0]["content"].(string)
+}
+
+func approvalCardAllContentForTest(t *testing.T, resp *callback.CardActionTriggerResponse) string {
+	t.Helper()
+	elements := approvalCardElementsForTest(t, resp)
+	parts := make([]string, 0, len(elements))
+	for _, element := range elements {
+		if content, ok := element["content"].(string); ok {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func approvalCardElementsForTest(t *testing.T, resp *callback.CardActionTriggerResponse) []map[string]any {
 	t.Helper()
 	if resp == nil || resp.Card == nil {
 		t.Fatalf("response=%#v, want compact approval card", resp)
 	}
 	card := resp.Card.Data.(map[string]any)
 	body := card["body"].(map[string]any)
-	content := body["elements"].([]map[string]any)[0]["content"].(string)
-	return content
+	return body["elements"].([]map[string]any)
 }

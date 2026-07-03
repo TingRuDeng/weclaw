@@ -68,28 +68,32 @@ func (r *taskCardRegistry) completeApprovalPanelItem(action parsedCardAction) (a
 	return approvalPanelSnapshot{}, false
 }
 
-func (r *taskCardRegistry) removeApprovalPanelItem(taskCardID string, approvalKey string) {
+func (r *taskCardRegistry) removeApprovalPanelItem(taskCardID string, approvalKey string) (approvalPanelSnapshot, bool) {
 	if r == nil || strings.TrimSpace(taskCardID) == "" || strings.TrimSpace(approvalKey) == "" {
-		return
+		return approvalPanelSnapshot{}, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state := r.cards[taskCardID]
 	if state == nil {
-		return
+		return approvalPanelSnapshot{}, false
 	}
-	state.approvalPanelRows = removeApprovalPanelRow(state.approvalPanelRows, approvalKey)
-	state.approvalPanelSeq++
+	rows, removed := removeApprovalPanelRow(state.approvalPanelRows, approvalKey)
+	state.approvalPanelRows = rows
+	if removed {
+		state.approvalPanelSeq++
+	}
 	state.updatedAt = r.nowOrDefault()
+	return state.approvalPanelSnapshot(), true
 }
 
-func removeApprovalPanelRow(rows []approvalPanelItem, approvalKey string) []approvalPanelItem {
+func removeApprovalPanelRow(rows []approvalPanelItem, approvalKey string) ([]approvalPanelItem, bool) {
 	for index := range rows {
 		if rows[index].Key == approvalKey {
-			return append(rows[:index], rows[index+1:]...)
+			return append(rows[:index], rows[index+1:]...), true
 		}
 	}
-	return rows
+	return rows, false
 }
 
 func (s *taskCardState) approvalPanelSnapshot() approvalPanelSnapshot {
