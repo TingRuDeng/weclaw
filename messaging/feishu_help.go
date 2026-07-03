@@ -30,7 +30,7 @@ func feishuHelpChoices() []platform.Choice {
 		{ID: "/cx ls", Label: "Codex 工作空间"},
 		{ID: "/cx status", Label: "Codex 会话状态"},
 		{ID: "/cx help", Label: "Codex 高级命令"},
-		{ID: "/mode", Label: "权限模式"},
+		{ID: "/mode", Label: "确认模式"},
 		{ID: "/stop", Label: "停止当前任务"},
 	}
 }

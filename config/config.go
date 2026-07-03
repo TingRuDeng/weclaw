@@ -56,7 +56,7 @@ type AgentConfig struct {
 	Env             map[string]string `json:"env,omitempty"`              // extra environment variables (cli/acp type)
 	Model           string            `json:"model,omitempty"`            // model name
 	Effort          string            `json:"effort,omitempty"`           // Codex reasoning effort
-	PermissionLevel string            `json:"permission_level,omitempty"` // Codex 权限档位：request_approval / auto_approval / full_access
+	PermissionLevel string            `json:"permission_level,omitempty"` // Codex 权限档位：request_approval / auto_approval / full_access；auto=工作区内自动执行
 	ApprovalPolicy  string            `json:"approval_policy,omitempty"`  // Codex approvalPolicy 高级覆盖
 	SandboxMode     string            `json:"sandbox_mode,omitempty"`     // Codex sandbox：read-only / workspace-write / danger-full-access
 	SystemPrompt    string            `json:"system_prompt,omitempty"`    // system prompt
@@ -79,7 +79,7 @@ func (c AgentConfig) EffectiveApprovalPolicy() string {
 	case "request_approval":
 		return "on-request"
 	case "auto_approval":
-		return "untrusted"
+		return "never"
 	case "full_access":
 		return "never"
 	default:
@@ -95,7 +95,9 @@ func (c AgentConfig) EffectiveSandboxMode() string {
 	switch normalizePermissionLevel(c.PermissionLevel) {
 	case "request_approval":
 		return "workspace-write"
-	case "auto_approval", "full_access":
+	case "auto_approval":
+		return "workspace-write"
+	case "full_access":
 		return "danger-full-access"
 	default:
 		return ""

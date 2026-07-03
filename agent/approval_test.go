@@ -225,6 +225,28 @@ func TestResolvePermissionOptionUsesProtocolDeclineWhenOptionsMissing(t *testing
 	}
 }
 
+func TestSelectPermissionOptionUsesCodexFileChangeDecisionFallback(t *testing.T) {
+	params := permissionRequestParams{
+		AvailableDecisionsSnake: permissionDecisions{"accept", "cancel"},
+	}
+
+	got := selectPermissionOption(params, "deny")
+
+	if got != "cancel" {
+		t.Fatalf("fallback decision=%q, want cancel", got)
+	}
+}
+
+func TestSelectPermissionOptionDoesNotInventInvalidDenyDecision(t *testing.T) {
+	params := permissionRequestParams{}
+
+	got := selectPermissionOption(params, "deny")
+
+	if got != "decline" {
+		t.Fatalf("fallback decision=%q, want decline", got)
+	}
+}
+
 func TestRespondLegacyPermissionRequestUsesOutcomeResult(t *testing.T) {
 	var out bytes.Buffer
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})

@@ -321,7 +321,7 @@ func TestAgentConfigEffectiveCodexPermissionLevel(t *testing.T) {
 		sandbox  string
 	}{
 		{name: "request approval", cfg: AgentConfig{PermissionLevel: "request_approval"}, approval: "on-request", sandbox: "workspace-write"},
-		{name: "auto approval", cfg: AgentConfig{PermissionLevel: "auto_approval"}, approval: "untrusted", sandbox: "danger-full-access"},
+		{name: "auto approval", cfg: AgentConfig{PermissionLevel: "auto_approval"}, approval: "never", sandbox: "workspace-write"},
 		{name: "full access", cfg: AgentConfig{PermissionLevel: "full_access"}, approval: "never", sandbox: "danger-full-access"},
 		{
 			name: "explicit override",

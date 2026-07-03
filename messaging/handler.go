@@ -1509,14 +1509,14 @@ func formatTaskElapsed(d time.Duration) string {
 	return fmt.Sprintf("%d分%d秒", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-// handleModeCommand 查看或切换当前用户的审批模式（yolo 自动放行 / default 按钮确认）。
+// handleModeCommand 查看或切换当前用户的确认模式（yolo 自动放行 / default 按钮确认）。
 func (h *Handler) handleModeCommand(userID string, trimmed string) string {
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {
 		if h.isYoloMode(userID) {
-			return "当前权限模式：yolo（自动放行 Codex 敏感操作）。\n发送 /mode default 恢复按钮确认。"
+			return "当前确认模式：yolo（自动放行 Codex 敏感操作）。\n发送 /mode default 恢复按钮确认。"
 		}
-		return "当前权限模式：default（每次敏感操作弹按钮确认）。\n发送 /mode yolo 自动放行。"
+		return "当前确认模式：default（每次敏感操作弹按钮确认）。\n发送 /mode yolo 自动放行。"
 	}
 	switch strings.ToLower(strings.TrimSpace(fields[1])) {
 	case "yolo":
@@ -1527,7 +1527,7 @@ func (h *Handler) handleModeCommand(userID string, trimmed string) string {
 		h.setYoloMode(userID, false)
 		return "已切换为 default 模式：Codex 敏感操作会弹按钮确认。"
 	default:
-		return "用法：/mode 查看当前模式；/mode yolo 自动放行；/mode default 按钮确认。"
+		return "用法：/mode 查看当前确认模式；/mode yolo 自动放行；/mode default 按钮确认。"
 	}
 }
 
@@ -2557,7 +2557,7 @@ func buildHelpText() string {
 
 /cwd <路径> 切换工作目录
 
-/mode 查看权限模式，/mode yolo 自动放行，/mode default 按钮确认
+/mode 查看确认模式，/mode yolo 自动放行，/mode default 按钮确认
 
 /model 查看/切换模型，/reasoning 查看/切换推理强度
 

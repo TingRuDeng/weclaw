@@ -65,6 +65,29 @@ func TestApprovalHandlerYoloAutoApproves(t *testing.T) {
 	}
 }
 
+func TestApprovalHandlerYoloAutoApprovesCodexFileChangeDecision(t *testing.T) {
+	h := NewHandler(nil, nil)
+	user := "wechat:u1"
+	h.setYoloMode(user, true)
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	handler := h.approvalHandlerForUser(user, user, reply)
+	options := []agent.ApprovalOption{
+		{ID: "accept", Kind: "allow"},
+		{ID: "cancel", Kind: "deny"},
+	}
+	decision, err := handler(context.Background(), agent.ApprovalRequest{Options: options})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision != "accept" {
+		t.Fatalf("expected accept decision auto-approved, got %q", decision)
+	}
+	if len(reply.Choices) != 0 {
+		t.Fatalf("yolo mode must not prompt buttons, got %d AskChoices calls", len(reply.Choices))
+	}
+}
+
 func TestListActiveTasksEmptyAndPopulated(t *testing.T) {
 	h := NewHandler(nil, nil)
 	user := "wechat:u1"

@@ -1979,7 +1979,7 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 	if a.dispatchToTurnCh(req.Params.ThreadID, &codexTurnEvent{Kind: "approval_request", Approval: approval}) {
 		return
 	}
-	optionID := selectPermissionOption(req.Params, "deny")
+	optionID := selectPermissionOption(req.Params, defaultDenyDecision(approval.Request.Options))
 	if err := a.respondPermissionRequest(req.ID, optionID, responseFormat); err != nil {
 		log.Printf("[acp] failed to deny unroutable permission request: %v", err)
 	}
@@ -2219,6 +2219,7 @@ func (a *ACPAgent) sandboxPolicyTypeForCodex() string {
 
 // selectPermissionOption 在无法路由给用户时选择保守 fallback，优先拒绝。
 func selectPermissionOption(params permissionRequestParams, preferredKind string) string {
+	preferredKind = strings.TrimSpace(preferredKind)
 	for _, opt := range params.Options {
 		if opt.Kind == preferredKind && strings.TrimSpace(opt.OptionID) != "" {
 			return opt.OptionID
@@ -2244,6 +2245,9 @@ func selectPermissionOption(params permissionRequestParams, preferredKind string
 	}
 	if decisions := permissionAvailableDecisions(params); len(decisions) > 0 {
 		return strings.TrimSpace(decisions[0])
+	}
+	if preferredKind == "" || preferredKind == "deny" {
+		return "decline"
 	}
 	return preferredKind
 }

@@ -839,7 +839,7 @@ func TestFeishuHelpSendsChoiceCard(t *testing.T) {
 		"/cx ls":     "Codex 工作空间",
 		"/cx status": "Codex 会话状态",
 		"/cx help":   "Codex 高级命令",
-		"/mode":      "权限模式",
+		"/mode":      "确认模式",
 		"/stop":      "停止当前任务",
 	}
 	if len(got.Choices) != len(wants) {
