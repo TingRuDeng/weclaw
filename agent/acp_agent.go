@@ -2066,6 +2066,9 @@ func firstNonEmptyString(values ...string) string {
 
 func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequest) string {
 	fallback := selectApprovalOption(req.Options, defaultDenyDecision(req.Options))
+	if len(req.Options) == 0 {
+		return fallback
+	}
 	handler := approvalHandlerFromContext(ctx)
 	if handler == nil {
 		return fallback

@@ -1246,6 +1246,38 @@ func TestHandleMessageUsesFeishuSessionMetadataForRouting(t *testing.T) {
 	}
 }
 
+func TestHandleMessageAttachesFeishuSessionMetadataToDetectedChoices(t *testing.T) {
+	ag := &fakeAgent{
+		reply: "请选择下一步：\n1. 确认计划\n2. 取消",
+		info:  agent.AgentInfo{Name: "mock", Type: "test"},
+	}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		if name == "mock" {
+			return ag
+		}
+		return nil
+	}, nil)
+	h.SetDefaultAgent("mock", ag)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	sessionKey := "feishu:tenant_1:dm:oc_1:ou_sender"
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_sender",
+		Text:     "开始",
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}, reply)
+
+	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 2 {
+		t.Fatalf("choices=%#v, want detected choices", reply.Choices)
+	}
+	for _, choice := range reply.Choices[0].Choices {
+		if got := choice.Metadata["feishu_session_key"]; got != sessionKey {
+			t.Fatalf("choice metadata=%#v, want session key %q", choice.Metadata, sessionKey)
+		}
+	}
+}
+
 func TestHandleMessageKeepsFeishuSenderUserIDForLogs(t *testing.T) {
 	ag := &fakeAgent{reply: "ok", info: agent.AgentInfo{Name: "mock", Type: "test"}}
 	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
@@ -1761,7 +1793,7 @@ func TestApprovalHandlerWaitsForChoice(t *testing.T) {
 
 	resultCh := make(chan string, 1)
 	go func() {
-		optionID, err := h.approvalHandlerForUser("ou_user", reply)(ctx, agent.ApprovalRequest{
+		optionID, err := h.approvalHandlerForUser("ou_user", "ou_user", reply)(ctx, agent.ApprovalRequest{
 			ToolCall: json.RawMessage(`{"cmd":"rm file"}`),
 			Options: []agent.ApprovalOption{
 				{ID: "allow_once", Name: "允许", Kind: "allow"},
@@ -3137,7 +3169,7 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 	defer cancel()
 	resultCh := make(chan string, 1)
 	go func() {
-		optionID, err := h.approvalHandlerForUser("ou_user", reply)(ctx, agent.ApprovalRequest{
+		optionID, err := h.approvalHandlerForUser("ou_user", "ou_user", reply)(ctx, agent.ApprovalRequest{
 			ToolCall: json.RawMessage(`{"cmd":"rm file"}`),
 			Options: []agent.ApprovalOption{
 				{ID: "allow_once", Name: "允许", Kind: "allow"},
@@ -3202,7 +3234,7 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	}
 
 	go func() {
-		optionID, err := h.approvalHandlerForUser("ou_user", replyA)(ctx, agent.ApprovalRequest{
+		optionID, err := h.approvalHandlerForUser("ou_user", "ou_user", replyA)(ctx, agent.ApprovalRequest{
 			ToolCall: json.RawMessage(`{"cmd":"first"}`),
 			Options:  options,
 		})
@@ -3213,7 +3245,7 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 		resultA <- optionID
 	}()
 	go func() {
-		optionID, err := h.approvalHandlerForUser("ou_user", replyB)(ctx, agent.ApprovalRequest{
+		optionID, err := h.approvalHandlerForUser("ou_user", "ou_user", replyB)(ctx, agent.ApprovalRequest{
 			ToolCall: json.RawMessage(`{"cmd":"second"}`),
 			Options:  options,
 		})
@@ -3347,7 +3379,7 @@ func TestApprovalHandlerIncludesTaskCardIDMetadata(t *testing.T) {
 	resultCh := make(chan string, 1)
 
 	go func() {
-		optionID, err := h.approvalHandlerForUser("ou_user", reply)(ctx, agent.ApprovalRequest{
+		optionID, err := h.approvalHandlerForUser("ou_user", "ou_user", reply)(ctx, agent.ApprovalRequest{
 			ToolCall: json.RawMessage(`{"cmd":"date"}`),
 			Options: []agent.ApprovalOption{
 				{ID: "accept", Name: "accept", Kind: "allow"},

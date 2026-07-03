@@ -1100,11 +1100,11 @@ func (h *Handler) clearPendingCodexRun(key string) bool {
 	return true
 }
 
-func (h *Handler) approvalHandlerForUser(userID string, reply platform.Replier) agent.ApprovalHandler {
+func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, reply platform.Replier) agent.ApprovalHandler {
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
 		prompt := approvalPrompt(req)
 		approvalKey := approvalPendingKey(userID, prompt, req.Options)
-		choices := approvalChoices(req.Options, approvalKey, taskCardIDFromReplier(reply), userID)
+		choices := approvalChoices(req.Options, approvalKey, taskCardIDFromReplier(reply), userID, routeUserID)
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
@@ -1296,7 +1296,7 @@ func approvalPrompt(req agent.ApprovalRequest) string {
 	return "Codex 请求执行敏感操作，请确认：\n\n" + toolCall
 }
 
-func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string) []platform.Choice {
+func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string, routeUserID string) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
 	for _, option := range options {
 		id := strings.TrimSpace(option.ID)
@@ -1304,7 +1304,7 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCar
 			continue
 		}
 		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option)}
-		metadata := approvalChoiceMetadata(approvalKey, taskCardID, ownerUserID)
+		metadata := approvalChoiceMetadata(approvalKey, taskCardID, ownerUserID, routeUserID)
 		if len(metadata) > 0 {
 			choice.Metadata = metadata
 		}
@@ -1313,8 +1313,8 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCar
 	return choices
 }
 
-func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string) map[string]string {
-	metadata := make(map[string]string, 3)
+func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string, routeUserID string) map[string]string {
+	metadata := make(map[string]string, 4)
 	if approvalKey = strings.TrimSpace(approvalKey); approvalKey != "" {
 		metadata["approval_key"] = approvalKey
 	}
@@ -1323,6 +1323,9 @@ func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID s
 	}
 	if ownerUserID = strings.TrimSpace(ownerUserID); ownerUserID != "" {
 		metadata["approval_owner"] = ownerUserID
+	}
+	if sessionKey := feishuSessionKeyFromRoute(routeUserID); sessionKey != "" {
+		metadata[feishuSessionMetadataKey] = sessionKey
 	}
 	return metadata
 }
@@ -1634,7 +1637,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 		replyCtx := ctx
 		agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 		defer cancelTaskTimeout()
-		agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
+		agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, routeUserID, replyWriter))
 
 		executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, defaultName, ag)
 		unlock := h.lockAgentExecution(executionKey)
@@ -1647,7 +1650,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 		if resolveErr != nil {
 			reply = renderFinalFailure("", resolveErr)
 			consumed := finishProgressWithReply(finishProgress, reply, true)
-			h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, defaultName, reply, consumed)
+			h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, defaultName, reply, consumed)
 			return
 		}
 		reply, err = h.chatWithAgentWithProgress(agentCtx, ag, conversationID, text, onProgress)
@@ -1659,7 +1662,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 			reply = renderFinalSuccess("", reply)
 		}
 		consumed := finishProgressWithReply(finishProgress, reply, err != nil)
-		h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, defaultName, reply, consumed)
+		h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, defaultName, reply, consumed)
 		return
 	} else {
 		if agErr != nil && defaultName != "" {
@@ -1669,7 +1672,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 		reply = "[echo] " + text
 	}
 
-	h.sendReplyWithMedia(ctx, replyWriter, userID, defaultName, reply)
+	h.sendReplyWithMediaForRoute(ctx, replyWriter, userID, routeUserID, defaultName, reply)
 }
 
 // sendToNamedAgent sends the message to a specific agent and replies.
@@ -1702,7 +1705,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 	defer cancelTaskTimeout()
-	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
+	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, routeUserID, replyWriter))
 
 	executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, name, ag)
 	unlock := h.lockAgentExecution(executionKey)
@@ -1714,7 +1717,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 	if resolveErr != nil {
 		reply := renderFinalFailure("["+name+"] ", resolveErr)
 		consumed := finishProgressWithReply(finishProgress, reply, true)
-		h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, name, reply, consumed)
+		h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, name, reply, consumed)
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
@@ -1726,7 +1729,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
 	consumed := finishProgressWithReply(finishProgress, reply, err != nil)
-	h.sendReplyWithMediaAfterStream(replyCtx, replyWriter, userID, name, reply, consumed)
+	h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, name, reply, consumed)
 }
 
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
@@ -1735,7 +1738,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		opts.routeUserID = opts.userID
 	}
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
-	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.reply))
+	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.routeUserID, opts.reply))
 	route := h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
 	executionKey := route.conversationID
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{
@@ -1773,7 +1776,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
 		reply := renderFinalFailure(opts.replyPrefix, err)
 		consumed := finishProgressWithReply(finishProgress, reply, true)
-		h.sendReplyWithMediaAfterStream(opts.ctx, opts.reply, opts.userID, opts.agentName, reply, consumed)
+		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, onProgress)
@@ -1785,7 +1788,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	}
 	if runtime.task.shouldSendFinal() {
 		consumed := finishProgressWithReply(finishProgress, reply, err != nil)
-		h.sendReplyWithMediaAfterStream(opts.ctx, opts.reply, opts.userID, opts.agentName, reply, consumed)
+		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
 	} else {
 		_ = finishProgress("", false)
 	}
@@ -1825,7 +1828,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 			progressCfg := h.resolveProgressConfigForPlatform(platformName, n)
 			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 			defer cancelTaskTimeout()
-			agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, replyWriter))
+			agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, routeUserID, replyWriter))
 
 			var codexRoute codexConversationRoute
 			var executionKey string
@@ -1908,7 +1911,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 		if wxReply, ok := replyWriter.(*wechat.Replier); ok {
 			wxReply.ClientID = NewClientID()
 		}
-		h.sendReplyWithMediaAfterStream(ctx, replyWriter, userID, r.name, r.reply, r.finalInStream)
+		h.sendReplyWithMediaAfterStreamForRoute(ctx, replyWriter, userID, routeUserID, r.name, r.reply, r.finalInStream)
 	}
 }
 
@@ -1918,6 +1921,22 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, replyWriter platform.R
 }
 
 func (h *Handler) sendReplyWithMediaAfterStream(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
+	h.sendReplyWithMediaAfterStreamWithMetadata(ctx, replyWriter, userID, agentName, reply, finalInStream, nil)
+}
+
+func (h *Handler) sendReplyWithMediaForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string) {
+	h.sendReplyWithMediaAfterStreamForRoute(ctx, replyWriter, userID, routeUserID, agentName, reply, false)
+}
+
+func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string, finalInStream bool) {
+	metadata := map[string]string{}
+	if sessionKey := feishuSessionKeyFromRoute(routeUserID); sessionKey != "" {
+		metadata[feishuSessionMetadataKey] = sessionKey
+	}
+	h.sendReplyWithMediaAfterStreamWithMetadata(ctx, replyWriter, userID, agentName, reply, finalInStream, metadata)
+}
+
+func (h *Handler) sendReplyWithMediaAfterStreamWithMetadata(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool, choiceMetadata map[string]string) {
 	imageURLs := ExtractImageURLs(reply)
 	attachmentPaths := extractLocalAttachmentPaths(reply)
 	allowedRoots := h.allowedAttachmentRoots(agentName)
@@ -1948,6 +1967,7 @@ func (h *Handler) sendReplyWithMediaAfterStream(ctx context.Context, replyWriter
 	choiceResult, hasChoices := detectChoices(reply)
 	if hasChoices {
 		reply = choiceResult.CleanText
+		choiceResult.Choices = platformChoicesWithMetadata(choiceResult.Choices, choiceMetadata)
 	}
 
 	if wxReply, ok := replyWriter.(*wechat.Replier); ok {

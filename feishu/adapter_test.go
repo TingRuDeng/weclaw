@@ -242,6 +242,29 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	}
 }
 
+func TestHandleApprovalCardActionPreservesSessionKey(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := approvalCardActionEvent("allow", "允许本次", "")
+	sessionKey := "feishu:tenant_1:dm:oc_1:ou_user"
+	event.Event.Action.Value[feishuSessionMetadataKey] = sessionKey
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	if _, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	}); err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+
+	select {
+	case msg := <-dispatched:
+		if got := msg.Metadata[feishuSessionMetadataKey]; got != sessionKey {
+			t.Fatalf("metadata=%#v, want session key %q", msg.Metadata, sessionKey)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
 func TestHandleCardActionEventAppendsApprovalToTaskCardState(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})

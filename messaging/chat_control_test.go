@@ -48,7 +48,7 @@ func TestApprovalHandlerYoloAutoApproves(t *testing.T) {
 	h.setYoloMode(user, true)
 
 	denyReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	handler := h.approvalHandlerForUser(user, denyReply)
+	handler := h.approvalHandlerForUser(user, user, denyReply)
 	options := []agent.ApprovalOption{
 		{ID: "deny-1", Kind: "deny"},
 		{ID: "allow-1", Kind: "allow"},

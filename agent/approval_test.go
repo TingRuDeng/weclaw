@@ -209,7 +209,9 @@ func TestRespondCodexApprovalRequestUsesDecisionResult(t *testing.T) {
 
 func TestResolvePermissionOptionUsesProtocolDeclineWhenOptionsMissing(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	called := false
 	ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+		called = true
 		return "", fmt.Errorf("approval request has no options")
 	})
 
@@ -217,6 +219,9 @@ func TestResolvePermissionOptionUsesProtocolDeclineWhenOptionsMissing(t *testing
 
 	if got != "decline" {
 		t.Fatalf("fallback option=%q, want decline", got)
+	}
+	if called {
+		t.Fatal("approval handler was called for request without options")
 	}
 }
 

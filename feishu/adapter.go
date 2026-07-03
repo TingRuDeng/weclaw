@@ -233,6 +233,10 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 	handled, first := a.recordApprovalAction(action)
 	if first {
 		resultCh := make(chan platform.CardActionResult, 1)
+		metadata := map[string]string{"source": "card.action.trigger"}
+		if handled.SessionKey != "" {
+			metadata[feishuSessionMetadataKey] = handled.SessionKey
+		}
 		msg := platform.IncomingMessage{
 			Platform:  platform.PlatformFeishu,
 			AccountID: a.creds.AppID,
@@ -249,7 +253,7 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 				},
 				Result: resultCh,
 			},
-			Metadata: map[string]string{"source": "card.action.trigger"},
+			Metadata: metadata,
 		}
 		dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, handled.UserID, a.cardKit, a.taskCards))
 		if a.approvalActionExpired(ctx, resultCh) {

@@ -12,10 +12,19 @@ func feishuChoiceSessionMetadata(msg platform.IncomingMessage, routeUserID strin
 		return nil
 	}
 	routeUserID = strings.TrimSpace(routeUserID)
-	if routeUserID == "" {
+	if routeUserID == "" || !strings.HasPrefix(routeUserID, string(platform.PlatformFeishu)+":") {
 		return nil
 	}
 	return map[string]string{feishuSessionMetadataKey: routeUserID}
+}
+
+// feishuSessionKeyFromRoute 只把飞书会话路由写回飞书按钮，避免裸用户 ID 误走历史微信兼容会话。
+func feishuSessionKeyFromRoute(routeUserID string) string {
+	routeUserID = strings.TrimSpace(routeUserID)
+	if strings.HasPrefix(routeUserID, string(platform.PlatformFeishu)+":") {
+		return routeUserID
+	}
+	return ""
 }
 
 // platformChoicesWithMetadata 返回新切片，避免复用调用方 choice 时污染原始对象。

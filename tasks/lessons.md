@@ -107,3 +107,11 @@
 - 反例：把 `/tmp/weclaw` 或仓库本地构建产物 `cp` 到 `/usr/local/bin/weclaw`，会绕过 Release 校验，并可能让 macOS 在 `_dyld_start` 阶段卡住，导致 `weclaw update/version/start` 被 killed 或挂起。
 - 正确做法：先发布 Release，再运行 `weclaw update`；如果安装器本身已损坏，只允许下载 Release 资产和 `checksums.txt`，校验哈希后做一次引导修复，再继续用 `weclaw update` 验证。
 - 来源：2026-07-03 用户指出“为什么每次都把本地包弄坏，而不是使用 weclaw update 命令更新本地包”。
+
+## 2026-07-03 飞书按钮会话路由
+
+- 触发条件：飞书里把 Codex 普通回复中的编号选项渲染成按钮，或把 Codex 权限请求渲染成审批按钮时。
+- 规则：所有飞书按钮 payload 都必须透传 `feishu_session_key`；普通选择卡只表示继续对话，不等同于 Codex 权限审批。
+- 反例：用户点击“确认计划”按钮后，因为按钮没有 session key，回调退化成裸用户 ID，被历史兼容逻辑归到 `wechat:<user>` 会话，导致像是新开会话。
+- 正确做法：普通选择卡、审批卡和审批回调都保留原飞书会话路由；真正权限审批只来自 Codex 的 `requestApproval` 事件，缺少可选 decision 时不要弹飞书审批卡。
+- 来源：2026-07-03 用户指出“这是要我输入确认，而不是弹审批卡片，WeClaw 是不是没区分 Codex 真正申请权限的方式”。
