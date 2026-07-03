@@ -229,8 +229,8 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
 	}
-	if cardKit.updateSeqs[0] != int(now.Unix()) {
-		t.Fatalf("update sequence=%d, want unix seconds %d", cardKit.updateSeqs[0], now.Unix())
+	if cardKit.updateSeqs[0] != 1 {
+		t.Fatalf("update sequence=%d, want task card sequence 1", cardKit.updateSeqs[0])
 	}
 	select {
 	case msg := <-dispatched:

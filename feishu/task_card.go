@@ -19,6 +19,7 @@ type taskCardState struct {
 	status            string
 	content           string
 	approvals         []string
+	sequence          int
 	approvalPanelID   string
 	approvalPanelSeq  int
 	approvalPanelRows []approvalPanelItem
@@ -88,18 +89,43 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 }
 
 func (r *taskCardRegistry) addApproval(cardID string, action parsedCardAction) (cardOptions, bool) {
+	opts, _, ok := r.addApprovalWithSequence(cardID, action)
+	return opts, ok
+}
+
+func (r *taskCardRegistry) addApprovalWithSequence(cardID string, action parsedCardAction) (cardOptions, int, bool) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
-		return cardOptions{}, false
+		return cardOptions{}, 0, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state := r.cards[cardID]
 	if state == nil {
-		return cardOptions{}, false
+		return cardOptions{}, 0, false
 	}
 	state.approvals = append(state.approvals, approvalRecordLine(action))
+	state.sequence++
 	state.updatedAt = r.nowOrDefault()
-	return state.cardOptions(), true
+	return state.cardOptions(), state.sequence, true
+}
+
+func (r *taskCardRegistry) nextSequence(cardID string, current int) int {
+	next := current + 1
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return next
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.cards[cardID]
+	if state == nil {
+		return next
+	}
+	if state.sequence < current {
+		state.sequence = current
+	}
+	state.sequence++
+	state.updatedAt = r.nowOrDefault()
+	return state.sequence
 }
 
 func (s *taskCardState) cardOptions() cardOptions {

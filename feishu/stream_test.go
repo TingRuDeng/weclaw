@@ -191,6 +191,31 @@ func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 	}
 }
 
+func TestTaskCardApprovalUpdateKeepsStreamSequenceMonotonic(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
+	stream := &feishuStream{cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex", sequence: 4, throttle: cardkitThrottle, now: time.Now}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	adapter.taskCards = registry
+	adapter.now = func() time.Time { return time.Date(2026, 7, 3, 10, 40, 0, 0, time.UTC) }
+
+	if !adapter.updateTaskCardWithApproval(context.Background(), parsedCardAction{TaskCard: "card-1", Choice: "accept", Label: "允许本次", Summary: "command: date"}) {
+		t.Fatal("approval update should update task card")
+	}
+	if err := stream.Complete(context.Background(), "最终结果"); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+
+	if len(cardKit.updateSeqs) != 2 {
+		t.Fatalf("update seqs=%#v, want approval update and final update", cardKit.updateSeqs)
+	}
+	if cardKit.updateSeqs[1] <= cardKit.updateSeqs[0] {
+		t.Fatalf("update seqs=%#v, final update must be greater than approval update", cardKit.updateSeqs)
+	}
+}
+
 func TestFeishuStreamCompleteIsIdempotentAndIgnoresLateUpdate(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)

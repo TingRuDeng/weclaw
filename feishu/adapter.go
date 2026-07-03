@@ -352,7 +352,7 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 	if a.cardKit == nil || strings.TrimSpace(action.TaskCard) == "" {
 		return false
 	}
-	opts, ok := a.taskCards.addApproval(action.TaskCard, action)
+	opts, sequence, ok := a.taskCards.addApprovalWithSequence(action.TaskCard, action)
 	if !ok {
 		return false
 	}
@@ -361,7 +361,7 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 		log.Printf("[feishu] failed to build task card approval snapshot: %v", err)
 		return false
 	}
-	if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, cardKitSequence(a.nowOrDefault())); err != nil {
+	if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, sequence); err != nil {
 		log.Printf("[feishu] ignored task approval card update error: %v", err)
 		return false
 	}
@@ -384,11 +384,6 @@ func (a *Adapter) updateApprovalPanelWithAction(action parsedCardAction) *callba
 		return nil
 	}
 	return buildApprovalPanelCallbackCard(snapshot)
-}
-
-// cardKitSequence 使用秒级时间生成飞书 CardKit 可接受的更新序号，避免毫秒时间戳越界。
-func cardKitSequence(now time.Time) int {
-	return int(now.Unix())
 }
 
 func (a *Adapter) allowCardActionUser(userID string) bool {

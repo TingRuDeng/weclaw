@@ -67,8 +67,7 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 		throttle:  cardkitThrottle,
 		now:       time.Now,
 	}
-	stream.sequence++
-	if err := stream.cardKit.SetStreaming(ctx, stream.cardID, true, stream.sequence); err != nil {
+	if err := stream.cardKit.SetStreaming(ctx, stream.cardID, true, stream.nextSequence()); err != nil {
 		return nil, err
 	}
 	return stream, nil
@@ -83,15 +82,12 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 	if !s.lastUpdate.IsZero() && now.Sub(s.lastUpdate) < s.throttle {
 		return nil
 	}
-	s.sequence++
-	err := s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.sequence)
+	err := s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.nextSequence())
 	if shouldReenableStreaming(err) {
-		s.sequence++
-		if enableErr := s.cardKit.SetStreaming(ctx, s.cardID, true, s.sequence); enableErr != nil {
+		if enableErr := s.cardKit.SetStreaming(ctx, s.cardID, true, s.nextSequence()); enableErr != nil {
 			return ignoreCardKitUpdateError(enableErr)
 		}
-		s.sequence++
-		err = s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.sequence)
+		err = s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.nextSequence())
 	}
 	if ignored := ignoreCardKitUpdateError(err); ignored != nil {
 		return ignored
@@ -127,8 +123,7 @@ func (s *feishuStream) Complete(ctx context.Context, finalContent string) error 
 	if buildErr != nil {
 		return buildErr
 	}
-	s.sequence++
-	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, cardJSON, s.sequence)
+	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, cardJSON, s.nextSequence())
 	destroyErr := s.cardKit.DestroyCard(ctx, s.cardID)
 	return firstErr(updateErr, disableErr, destroyErr)
 }
@@ -150,15 +145,22 @@ func (s *feishuStream) Fail(ctx context.Context, errText string) error {
 	if buildErr != nil {
 		return buildErr
 	}
-	s.sequence++
-	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, cardJSON, s.sequence)
+	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, cardJSON, s.nextSequence())
 	destroyErr := s.cardKit.DestroyCard(ctx, s.cardID)
 	return firstErr(updateErr, disableErr, destroyErr)
 }
 
 func (s *feishuStream) disableStreaming(ctx context.Context) error {
+	return ignoreCardKitUpdateError(s.cardKit.SetStreaming(ctx, s.cardID, false, s.nextSequence()))
+}
+
+func (s *feishuStream) nextSequence() int {
+	if s.taskCards != nil {
+		s.sequence = s.taskCards.nextSequence(s.cardID, s.sequence)
+		return s.sequence
+	}
 	s.sequence++
-	return ignoreCardKitUpdateError(s.cardKit.SetStreaming(ctx, s.cardID, false, s.sequence))
+	return s.sequence
 }
 
 func shouldReenableStreaming(err error) bool {
