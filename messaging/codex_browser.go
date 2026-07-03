@@ -125,7 +125,7 @@ func (h *Handler) enterCodexWorkspaceWithNewDraft(req codexWorkspaceCdRequest, w
 	return wechatCommandText("已进入工作空间并创建新会话草稿。", "工作空间: "+workspaceName)
 }
 
-// enterCodexWorkspaceWithSingleSession 自动切换唯一会话，减少微信侧二次输入。
+// enterCodexWorkspaceWithSingleSession 自动切换唯一会话；坏历史无法恢复时改为新会话草稿。
 func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string, session codexWorkspaceView) string {
 	codexAg, ok := req.Agent.(agent.CodexThreadAgent)
 	if !ok {
@@ -134,6 +134,15 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 	conversationID := buildCodexConversationID(req.UserID, req.AgentName, workspaceRoot)
 	h.bindConversationCwd(req.Agent, conversationID, workspaceRoot)
 	if err := codexAg.UseCodexThread(req.Context, conversationID, session.ThreadID); err != nil {
+		if isCodexThreadStoreReadError(err) {
+			codexAg.ClearCodexThread(conversationID)
+			h.ensureCodexSessions().setPendingNew(req.BindingKey, workspaceRoot)
+			return wechatCommandText(
+				"已进入工作空间并创建新会话草稿。",
+				"工作空间: "+workspaceName,
+				"原会话无法被微信接手，已改用新会话。",
+			)
+		}
 		return fmt.Sprintf("切换线程失败: %v", err)
 	}
 	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)

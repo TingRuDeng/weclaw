@@ -3703,6 +3703,45 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	}
 }
 
+func TestCodexCxSwitchDoesNotCreateDraftWhenOtherSessionsExist(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-bad", workspace, "坏历史会话", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-good", workspace, "可选会话", "2026-04-29T08:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		useErr: fmt.Errorf("thread-store internal error: failed to read thread"),
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	bindingKey := codexBindingKey("user-1", "codex")
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(147, "/cx cd weclaw"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(148, "/cx switch 0"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-bad" {
+		t.Fatalf("应尝试切换目标 thread，use conversation/thread=(%q,%q)", ag.useConversation, ag.useThreadID)
+	}
+	if ag.clearCalledWith != "" {
+		t.Fatalf("有其他可选会话时不应清理当前会话，clear=%q", ag.clearCalledWith)
+	}
+	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
+	if thread != "" || pending {
+		t.Fatalf("有其他可选会话时不应创建新会话草稿，thread=%q pending=%v", thread, pending)
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "切换会话失败") || strings.Contains(text, "已进入工作空间并创建新会话草稿") {
+		t.Fatalf("switch failure should not create draft, messages=%#v", calls.texts())
+	}
+}
+
 func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
@@ -3731,6 +3770,43 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "已进入工作空间并切换会话") || strings.Contains(text, "0. 会话 A") {
 		t.Fatalf("/cx 0 should auto switch single session, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexShortIndexCreatesDraftWhenSingleSessionCannotBeRestored(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-bad", workspace, "坏历史会话", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		useErr: fmt.Errorf("thread-store internal error: failed to read thread"),
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(146, "/cx 0"))
+
+	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-bad" {
+		t.Fatalf("应先尝试恢复唯一 thread，use conversation/thread=(%q,%q)", ag.useConversation, ag.useThreadID)
+	}
+	if ag.clearCalledWith != wantConversationID {
+		t.Fatalf("坏 thread 应清理当前会话，clear=%q want %q", ag.clearCalledWith, wantConversationID)
+	}
+	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	if thread != "" || !pending {
+		t.Fatalf("坏 thread 应进入新会话草稿，thread=%q pending=%v", thread, pending)
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "已进入工作空间并创建新会话草稿") ||
+		!strings.Contains(text, "原会话无法被微信接手") {
+		t.Fatalf("reply should explain draft fallback, messages=%#v", calls.texts())
 	}
 }
 
