@@ -8,12 +8,7 @@ RUN_TESTS=1
 TAG=""
 
 TARGETS=(
-  "darwin/amd64"
   "darwin/arm64"
-  "linux/amd64"
-  "linux/arm64"
-  "windows/amd64"
-  "windows/arm64"
 )
 
 usage() {
@@ -166,7 +161,7 @@ verify_release() {
   local asset_count latest_tag
   log "验证 GitHub Release"
   asset_count="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json assets --jq '.assets | length')"
-  [[ "$asset_count" == "7" ]] || fail "Release 资产数量异常：$asset_count"
+  [[ "$asset_count" == "2" ]] || fail "Release 资产数量异常：$asset_count"
   latest_tag="$(gh release view --repo TingRuDeng/weclaw --json tagName --jq '.tagName')"
   [[ "$latest_tag" == "$TAG" ]] || fail "latest release 指向 $latest_tag，期望 $TAG"
 }
