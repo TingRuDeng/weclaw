@@ -36,7 +36,7 @@
   - _Requirements: 3.1, 3.2, 3.3, 3.4_
 
 - [x] 6. 清理 post 富文本解析的无效占位（新发现-1）
-  - 在 `feishu/incoming.go` 的 post 解析中，去除注入 agent 文本的 `![image](<image_key>)` 与 `<file key="..."/>` 占位；图片/文件仍下载为 `Attachments`
+  - 在 `feishu/incoming.go` 的 post 解析中，去除注入 agent 文本的 Markdown 图片占位与 `<file key="..."/>` 占位；图片/文件仍下载为 `Attachments`
   - 如需在文本中提示附件，使用与普通图片/文件入站一致的表述（不要用裸 image_key）
   - 更新 `feishu/incoming_test.go` 断言
   - _Requirements: 4.1, 4.2, 4.3_
@@ -107,7 +107,7 @@ graph TD
 
 ## Review Notes
 
-- 2026-06-29：任务 6 已完成。`feishu/incoming.go` 对 post 富文本增加兜底解析，文本中不再注入 `![image](<image_key>)` 或 `<file key="..."/>`，资源仍通过 `Attachments` 下载传递；`messaging/handler.go` 支持文字+图片一起发送时把本地图片路径传给 Agent。验证：`go test ./feishu -run 'TestToIncomingFromMessageParsesPost|TestToIncomingFromMessageParsesPostWithImage|TestToIncomingFromMessageParsesPostContentObjectFallback' -count=1 -timeout 60s`、`go test ./messaging -run 'TestHandlePlatformMessagePassesTextAndImageToAgent|TestResolveProgressConfig' -count=1 -timeout 60s`。
+- 2026-06-29：任务 6 已完成。`feishu/incoming.go` 对 post 富文本增加兜底解析，文本中不再注入 Markdown 图片占位或 `<file key="..."/>`，资源仍通过 `Attachments` 下载传递；`messaging/handler.go` 支持文字+图片一起发送时把本地图片路径传给 Agent。验证：`go test ./feishu -run 'TestToIncomingFromMessageParsesPost|TestToIncomingFromMessageParsesPostWithImage|TestToIncomingFromMessageParsesPostContentObjectFallback' -count=1 -timeout 60s`、`go test ./messaging -run 'TestHandlePlatformMessagePassesTextAndImageToAgent|TestResolveProgressConfig' -count=1 -timeout 60s`。
 - 2026-06-29：任务 1/2 已完成。`feishu/permission.go` 对齐参考实现的 6 个权限错误码，新增 `IsPermissionError(err)`，支持 code 提取与错误文本兜底；`ValidateCredentials` 改为返回统一 `feishuAPIError`，便于统一权限判定。验证：`go test ./feishu -run 'TestIsPermissionError|TestPermissionGuideLimiter|TestFormatFeishuAPIError|TestValidateCredentials' -count=1 -timeout 60s`。
 - 2026-06-29：任务 5 已完成。核实 `larksuite/oapi-sdk-go/v3@v3.9.7/service/cardkit/v1/resource.go`：`card` 资源仅有 `BatchUpdate`、`Create`、`IdConvert`、`Settings`、`Update`，删除接口只存在于 `cardElement.Delete`，没有整卡删除接口；`feishu/cardkit.go` 注释已改为依赖飞书侧 TTL 自动回收。验证：`go test ./feishu -run 'Stream|Card|Choice|Permission|ValidateCredentials' -count=1 -timeout 60s`。
 - 2026-06-29：任务 3 已完成。`feishu/permission.go` 新增权限 URL、scope 清单、纯文本引导和 CardKit 2.0 卡片引导构建函数，输出不包含 `app_secret`。验证：`go test ./feishu -run 'TestIsPermissionError|TestPermissionGuide|TestBuildPermissionGuide|TestFormatFeishuAPIError|TestValidateCredentials' -count=1 -timeout 60s`。

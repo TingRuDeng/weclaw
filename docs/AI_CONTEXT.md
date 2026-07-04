@@ -1,6 +1,6 @@
 ---
 ai_summary:
-  purpose: "提供 WeClaw 代码结构、运行数据流、关键状态和验证命令的精简上下文地图。"
+  purpose: "提供 WeClaw 当前仓库形态、核心目录、文档路由、高风险区域和验证命令的精简上下文地图。"
   read_when:
     - "需要修改 WeClaw 功能、命令、平台 adapter、Agent runtime、配置或发布流程时。"
     - "排查飞书、微信、Codex、Claude、主动发送 API 或更新发布问题时。"
@@ -13,109 +13,71 @@ ai_summary:
     - "config/config.go"
     - "scripts/release.sh"
   verify_with:
-    - "go test ./... -count=1 -timeout 120s"
-    - "go test -race ./agent ./cmd ./messaging -count=1 -timeout 60s"
-    - "go vet ./..."
     - "python3 scripts/validate_docs.py . --profile generic"
+    - "git diff --check"
   stale_when:
     - "顶层模块职责、消息数据流、配置字段、命令列表、发布流程或验证命令变化。"
 ---
 
 # WeClaw AI 上下文
 
-## Purpose
+## Project Snapshot
 
-本文是 WeClaw 的当前代码上下文地图，帮助维护者和自动化编码代理快速定位源码事实、风险边界和验证命令。
+- 仓库类型：单一 Go 仓库，不是 coordination directory。
+- Go 模块：`github.com/fastclaw-ai/weclaw`，以 `main.go` 和 `cmd/root.go` 进入 CLI。
+- 产品定位：把微信个人号和飞书消息接入 AI Agent，业务层通过 `platform` 抽象隔离平台差异。
+- 发布目标：`scripts/release.sh` 当前只构建 `darwin/arm64`，本机安装必须走 `weclaw update`。
+- Android profile：未检测到 Gradle 或 `AndroidManifest.xml`，当前只适用 `generic` profile。
 
-## Source of truth
+## Core Directories
 
-- 进程和命令入口：`main.go`、`cmd/root.go`、`cmd/start.go`
-- 配置模型：`config/config.go`、`config/detect.go`
-- Agent 抽象和运行时：`agent/agent.go`、`agent/acp_agent.go`、`agent/cli_agent.go`、`agent/http_agent.go`、`agent/companion_agent.go`
-- 跨平台消息模型：`platform/platform.go`、`platform/message.go`、`platform/reply.go`、`platform/registry.go`
-- 消息业务层：`messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`、`messaging/claude_sessions.go`
-- 平台接入：`wechat/`、`ilink/`、`feishu/`
-- 本机 API：`api/server.go`
-- Web 配置界面：`web/`
-- 发布和更新：`scripts/release.sh`、`cmd/update.go`、`cmd/restart_safety.go`
+- `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口。
+- `config/`：配置结构、默认值、Agent 探测、工作目录白名单和 API 安全校验。
+- `agent/`：统一 Agent 接口，以及 ACP、CLI、HTTP、Companion 等 runtime。
+- `platform/`：跨平台消息、回复、注册表和访问控制抽象。
+- `messaging/`：命令路由、会话、审批、进度、任务状态和 Agent 调用主业务。
+- `feishu/`：飞书事件解析、会话范围、卡片、按钮、审批和权限提示。
+- `wechat/`、`ilink/`：微信个人号接入、入站消息、replier、token 和 monitor。
+- `api/`：本机 HTTP API，包含主动发送和 runtime 状态查询。
+- `web/`：Web 配置界面。
+- `docs/`、`tasks/`：上下文索引、当前任务记录和长期 lessons。
 
-## Key facts
+## Documentation Map
 
-### 仓库形态
+- `AGENTS.md`：可移植代理入口，只放路由、约束和验证边界。
+- `docs/README.md`：文档索引，说明 authority docs、任务记录和验证命令。
+- `docs/AI_CONTEXT.md`：当前代码地图和高风险路径摘要。
+- `README_CN.md`、`README.md`：产品级使用、配置和命令说明。
+- `tasks/todo.md`：当前或正在执行的任务记录，不长期累积已完成流水账。
+- `tasks/lessons.md`：发布、重启、飞书审批、Codex 会话等踩坑规则。
 
-- 这是单一 Go 仓库，不是 coordination root；所有常规验证命令从仓库根目录执行。
-- `go.mod` 声明模块为 `github.com/fastclaw-ai/weclaw`。
-- 主要运行入口是 `cmd.Execute()`，默认命令会走 `runStart`。
+## Common Task Reading Paths
 
-### 启动数据流
+- 修改启动、停止、更新或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`scripts/release.sh`。
+- 修改消息命令或任务状态：先读 `messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`。
+- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/cli_agent.go`、`messaging/codex_sessions.go`、`messaging/claude_sessions.go`。
+- 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
+- 修改微信体验：先读 `wechat/`、`ilink/`、`messaging/progress.go`。
+- 修改配置：先读 `config/config.go`、`config/detect.go` 和相关测试。
 
-- `cmd/start.go` 的 `runStart` 读取 `config.Load()`，必要时触发微信登录，然后创建 `messaging.Handler`。
-- `buildPlatformRegistry` 根据配置启用微信和飞书平台；飞书默认需要显式启用并加载凭证。
-- `platform.Registry.Run` 并发运行平台 adapter，并在分发前执行 `allowed_users` 访问控制。
-- `api.NewServer` 和平台 registry 共享同一套 outbound replier；`/api/send` 用它主动发消息。
-- `api.WithRuntimeStatusProvider(handler)` 让 CLI 在重启前能读取运行中任务数。
+## High-Risk Areas
 
-### 消息与会话
-
-- 平台 adapter 把原始事件转换为 `platform.IncomingMessage`，再交给 `messaging.Handler.HandleMessage`。
-- `platform.IncomingMessage.ConversationKey()` 用平台名前缀隔离不同 IM 平台的同名用户。
-- 飞书真实发送者身份和 session routing 分离：真实用户用于访问控制与审计，`feishu_session_key` 只用于会话路由。
-- Codex 推荐 remote-first：微信或飞书侧维护当前 workspace/thread，本地 Terminal 或 Codex App 只是接手入口。
-- 运行中 Codex 长任务登记在 `Handler.activeTasks`，支持 `/ps` 查看和 `/stop` 取消。
-
-### Agent runtime
-
-- `agent.Agent` 是统一聊天接口，支持 `Chat`、`ResetSession`、`Info`、`SetCwd`。
-- ACP runtime 适合 Claude、Codex、Gemini、Kimi、Cursor 等长驻 JSON-RPC 子进程。
-- CLI runtime 适合每次消息启动命令的 agent，并可按具体实现恢复会话。
-- HTTP runtime 走 OpenAI 兼容 Chat Completions API。
-- Companion runtime 用于保持本地可见 CLI/App 与后台 bridge 连接。
-
-### 配置与安全边界
-
-- 配置文件由 `config.Config` 定义，默认路径由 `config.ConfigPath()` 决定。
-- `allowed_workspace_roots` 为空时 `/cwd` 不限制工作目录；配置后必须限制在白名单内。
-- `api_addr` 监听非 loopback 地址时必须配置 `api_token`，否则 `api.Server.Validate()` 拒绝启动。
-- Agent 的 `permission_level` 会映射 Codex `approvalPolicy` 和 `sandboxMode`；高级字段 `approval_policy`、`sandbox_mode` 可覆盖。
+- 飞书真实发送者身份和 session routing 必须分离；`feishu_session_key` 只用于会话路由。
+- 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
+- Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
+- 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。
+- Agent `permission_level` 会映射 Codex `approvalPolicy` 与 `sandboxMode`；高级字段可覆盖。
+- `api_addr` 监听非 loopback 地址时必须配置 `api_token`。
 - 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。
 
-### 发布与重启
+## Validation Commands
 
-- `scripts/release.sh` 当前 `TARGETS` 只包含 `darwin/arm64`。
-- 正式发布会运行 `go test`、race 测试、`go vet` 和 `git diff --check`，然后创建 tag 与 GitHub Release。
-- `weclaw update` 会下载 release 资产并校验 `checksums.txt`。
-- `weclaw restart` 与 `weclaw update --restart` 会通过 `/api/runtime` 检查 active task；有运行中任务时默认拒绝重启，除非显式传 `--force`。
-
-### 测试布局
-
-- `agent/*_test.go` 覆盖 ACP、CLI、HTTP、Companion、Codex 配额、审批和进程隔离。
-- `messaging/*_test.go` 覆盖命令路由、Codex/Claude 会话、进度、附件、审计、限流和工作目录白名单。
-- `feishu/*_test.go` 覆盖事件解析、会话范围、卡片、审批按钮、去重和权限提示。
-- `wechat/*_test.go` 与 `ilink/*_test.go` 覆盖微信 adapter、入站消息、replier 和 token/monitor 行为。
-- `cmd/*_test.go` 覆盖启动、停止、更新、发布脚本、Companion 和诊断命令。
-
-## How to verify
-
-quick:
-
-```bash
-python3 scripts/validate_docs.py . --profile generic
-git diff --check
-```
-
-full:
-
-```bash
-go test ./... -count=1 -timeout 120s
-go test -race ./agent ./cmd ./messaging -count=1 -timeout 60s
-go vet ./...
-```
-
-release-side-effect:
-
-```bash
-scripts/release.sh --next-patch
-```
+- quick: `python3 scripts/validate_docs.py . --profile generic`
+- quick: `git diff --check`
+- full: `go test ./... -count=1 -timeout 120s`
+- full: `go test -race ./agent ./cmd ./messaging -count=1 -timeout 60s`
+- full: `go vet ./...`
+- release-side-effect: `scripts/release.sh --next-patch`
 
 ## Stale when
 

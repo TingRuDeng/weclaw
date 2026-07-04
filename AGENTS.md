@@ -8,11 +8,13 @@ ai_summary:
     - "README_CN.md"
     - "docs/README.md"
     - "docs/AI_CONTEXT.md"
+    - "tasks/lessons.md"
+    - "tasks/todo.md"
     - "scripts/release.sh"
     - "go.mod"
   verify_with:
     - "python3 scripts/validate_docs.py . --profile generic"
-    - "go test ./... -count=1 -timeout 120s"
+    - "git diff --check"
   stale_when:
     - "新增或删除顶层模块、命令入口、平台 adapter、发布脚本或上下文文档结构。"
     - "验证命令、发布目标或默认开发流程发生变化。"
@@ -45,6 +47,8 @@ ai_summary:
 - `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；Codex remote-first 能力主要在 ACP 与 Companion 相关文件中。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
 - `scripts/release.sh` 当前只构建 `darwin/arm64` 发布资产，并会运行测试、race、vet 和 `git diff --check`。
+- `tasks/todo.md` 只保留当前或正在执行的任务记录；已完成历史流水账不长期保留。
+- `tasks/lessons.md` 是长期经验沉淀，清理文档时必须保留。
 - 不要把机器本地绝对路径写入项目上下文文档；配置示例可以使用 `/path/to/project` 这类占位路径。
 - 发布后本机安装必须走 `weclaw update`，不要用本地构建产物直接覆盖 PATH 中的 `weclaw`。
 

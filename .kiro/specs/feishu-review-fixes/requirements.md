@@ -62,7 +62,7 @@ _对应审查项 P2-3_
 
 #### Acceptance Criteria
 
-1. WHEN 解析飞书 `post` 富文本且其中含图片/文件资源 THE SYSTEM SHALL NOT 向交给 agent 的文本注入 `![image](<image_key>)` 或 `<file key="..."/>` 这类无效占位。
+1. WHEN 解析飞书 `post` 富文本且其中含图片/文件资源 THE SYSTEM SHALL NOT 向交给 agent 的文本注入 Markdown 图片占位或 `<file key="..."/>` 这类无效占位。
 2. THE 图片/文件资源 SHALL 仍按现有逻辑下载为本地附件并通过 `Attachments` 传递；agent 文本中如需提及附件，SHALL 使用与普通图片/文件入站一致的占位或本地路径表述。
 3. THE `feishu/incoming_test.go` SHALL 更新断言以反映清理后的文本输出。
 

@@ -1,6 +1,6 @@
 ---
 ai_summary:
-  purpose: "索引 WeClaw 当前权威上下文文档、旧细节记录、验证命令和文档维护边界。"
+  purpose: "索引 WeClaw 当前权威上下文文档、任务记录、验证命令和文档维护边界。"
   read_when:
     - "需要快速判断某类任务应该读取哪些项目文档时。"
     - "更新上下文文档、发布说明或验证策略前。"
@@ -14,7 +14,7 @@ ai_summary:
     - "python3 scripts/validate_docs.py . --profile generic"
     - "python3 -m py_compile scripts/validate_docs.py"
   stale_when:
-    - "新增权威文档、废弃旧细节文档或改变发布/验证命令。"
+    - "新增权威文档、改变任务记录边界或改变发布/验证命令。"
     - "README_CN.md、tasks/lessons.md 或主要源码目录描述发生变化。"
 ---
 
@@ -48,15 +48,13 @@ ai_summary:
 | 文档 | 何时读取 | 维护边界 |
 | --- | --- | --- |
 | `AGENTS.md` | 开始任何代码、测试、发布或上下文文档任务前 | 只放路由、约束、验证入口 |
-| `docs/README.md` | 查找项目文档和验证命令时 | 索引权威文档与 legacy detail docs |
+| `docs/README.md` | 查找项目文档和验证命令时 | 索引权威文档、任务记录和验证命令 |
 | `docs/AI_CONTEXT.md` | 理解模块、数据流、命令、测试和发布路径时 | 描述当前事实，必须有源码依据 |
 
-## Legacy detail docs
+## Task records
 
-这些文件保留为历史 PR 细节记录。它们不是当前完整权威文档；使用前需要对照源码和当前上下文包复核。
-
-- `docs/pr-a-feishu-session-scope.md`：飞书会话范围收口记录；相关源码以 `feishu/session_scope.go`、`feishu/incoming.go`、`messaging/feishu_route.go` 为准。
-- `docs/pr-b-feishu-approval-card.md`：飞书审批卡片收口记录；相关源码以 `feishu/choice.go`、`feishu/approval_panel.go`、`messaging/handler.go` 为准。
+- `tasks/todo.md` 只记录当前或正在执行的任务，不长期累积已完成流水账。
+- `tasks/lessons.md` 记录可复用的踩坑规则和高风险路径，清理文档时必须保留。
 
 ## How to verify
 
@@ -87,4 +85,4 @@ scripts/release.sh --next-patch
 - `agent/` 新增 Agent 类型或改变 Codex / Claude 会话控制路径。
 - `platform/`、`wechat/`、`feishu/` 的消息模型或能力降级策略变化。
 - `scripts/release.sh`、`cmd/update.go` 或发布资产矩阵变化。
-- legacy detail docs 被迁移、删除或升级为当前 authority docs。
+- 任务记录边界、上下文包验证规则或 authority docs 范围变化。
