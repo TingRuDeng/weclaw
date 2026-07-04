@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	acpScannerInitialBufferSize = 4 * 1024 * 1024
-	acpScannerMaxTokenSize      = 64 * 1024 * 1024
+	acpScannerInitialBufferSize   = 4 * 1024 * 1024
+	acpScannerMaxTokenSize        = 64 * 1024 * 1024
+	acpUnhandledMethodLogInterval = 5 * time.Minute
 )
 
 // ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
@@ -62,6 +63,9 @@ type ACPAgent struct {
 	notifyMu sync.Mutex
 	notifyCh map[string]chan *sessionUpdate // sessionID -> channel
 	turnCh   map[string]chan *codexTurnEvent
+
+	unhandledLogMu sync.Mutex
+	unhandledLogAt map[string]time.Time
 
 	stderr *acpStderrWriter // captures stderr for error reporting
 
@@ -883,10 +887,14 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	if a.effort != "" {
 		params["effort"] = a.effort
 	}
+	startedAt := time.Now()
 	result, err := a.rpc(ctx, "thread/start", params)
+	elapsed := time.Since(startedAt)
 	if err != nil {
+		log.Printf("[acp] thread/start failed (conversation=%s, elapsed=%s): %v", conversationID, elapsed, err)
 		return "", false, err
 	}
+	log.Printf("[acp] thread/start completed (conversation=%s, elapsed=%s)", conversationID, elapsed)
 
 	var threadResult struct {
 		Thread struct {
@@ -927,10 +935,14 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 		params["effort"] = a.effort
 	}
 
+	startedAt := time.Now()
 	result, err := a.rpc(ctx, "thread/resume", params)
+	elapsed := time.Since(startedAt)
 	if err != nil {
+		log.Printf("[acp] thread/resume failed (thread=%s, conversation=%s, elapsed=%s): %v", threadID, conversationID, elapsed, err)
 		return err
 	}
+	log.Printf("[acp] thread/resume completed (thread=%s, conversation=%s, elapsed=%s)", threadID, conversationID, elapsed)
 
 	var resumeResult struct {
 		Thread struct {
@@ -941,6 +953,27 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 		log.Printf("[acp] thread/resume returned different id (requested=%s, returned=%s)", threadID, resumeResult.Thread.ID)
 	}
 	return nil
+}
+
+type codexTurnMetrics struct {
+	startedAt    time.Time
+	firstEventAt time.Time
+}
+
+func newCodexTurnMetrics(startedAt time.Time) codexTurnMetrics {
+	return codexTurnMetrics{startedAt: startedAt}
+}
+
+func (m *codexTurnMetrics) markFirstEvent(now time.Time) (time.Duration, bool) {
+	if !m.firstEventAt.IsZero() {
+		return 0, false
+	}
+	m.firstEventAt = now
+	return now.Sub(m.startedAt), true
+}
+
+func (m codexTurnMetrics) elapsed(now time.Time) time.Duration {
+	return now.Sub(m.startedAt)
 }
 
 func (a *ACPAgent) chatCodexAppServer(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
@@ -986,9 +1019,12 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		a.notifyMu.Unlock()
 	}()
 
+	turnMetrics := newCodexTurnMetrics(time.Now())
+
 	// Start turn (call returns quickly with turn info, actual content comes via events)
 	go func() {
 		startTurn := func() error {
+			startedAt := time.Now()
 			_, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
 				ThreadID:       threadID,
 				ApprovalPolicy: a.approvalPolicyForContext(ctx),
@@ -998,6 +1034,12 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				Effort:         a.effort,
 				Cwd:            a.cwdForConversation(conversationID),
 			})
+			elapsed := time.Since(startedAt)
+			if err != nil {
+				log.Printf("[acp] turn/start failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, elapsed, err)
+			} else {
+				log.Printf("[acp] turn/start accepted (pid=%d, thread=%s, conversation=%s, elapsed=%s)", pid, threadID, conversationID, elapsed)
+			}
 			return err
 		}
 
@@ -1021,16 +1063,22 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("[acp] turn context done (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), ctx.Err())
 			return "", ctx.Err()
 		case evt := <-turnCh:
+			if latency, ok := turnMetrics.markFirstEvent(time.Now()); ok {
+				log.Printf("[acp] first turn event (pid=%d, thread=%s, conversation=%s, kind=%s, elapsed=%s)", pid, threadID, conversationID, evt.Kind, latency)
+			}
 			if evt.Approval != nil {
 				optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
 				if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat); err != nil {
+					log.Printf("[acp] turn approval response failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), err)
 					return "", fmt.Errorf("approval response error: %w", err)
 				}
 				continue
 			}
 			if evt.Kind == "error" {
+				log.Printf("[acp] turn failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %.200s", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), evt.Text)
 				if allowFreshRetry && !isNew && isMissingThreadError(fmt.Errorf("%s", evt.Text)) {
 					log.Printf("[acp] stale thread error detected, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
 					return a.retryWithFreshThread(ctx, conversationID, message, "stale_thread_error", onProgress)
@@ -1062,6 +1110,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				}
 			}
 			if evt.Kind == "completed" {
+				log.Printf("[acp] turn completed (pid=%d, thread=%s, conversation=%s, elapsed=%s)", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()))
 				result := assembler.finalText()
 				if result == "" {
 					if allowFreshRetry && !isNew {
@@ -1583,7 +1632,8 @@ func (a *ACPAgent) readLoop() {
 		case "codex/event/agent_message", "codex/event/task_complete",
 			"codex/event/item_completed", "codex/event/token_count",
 			"thread/tokenUsage/updated",
-			"account/rateLimits/updated", "thread/status/changed":
+			"account/rateLimits/updated", "thread/status/changed",
+			"item/commandExecution/outputDelta", "turn/diff/updated":
 			// 这些是已知状态事件，当前桥接层不需要额外处理。
 		case "turn/approval/request",
 			"item/fileChange/requestApproval",
@@ -1591,7 +1641,7 @@ func (a *ACPAgent) readLoop() {
 			a.handlePermissionRequest(line)
 
 		default:
-			if msg.Method != "" {
+			if a.shouldLogUnhandledMethod(msg.Method, time.Now()) {
 				log.Printf("[acp] unhandled method: %s (raw: %.200s)", msg.Method, line)
 			}
 		}
@@ -1615,6 +1665,25 @@ func (a *ACPAgent) readLoop() {
 		a.failRuntimeWaiters(exitReason)
 	}
 	log.Println("[acp] read loop ended")
+}
+
+func (a *ACPAgent) shouldLogUnhandledMethod(method string, now time.Time) bool {
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return false
+	}
+
+	a.unhandledLogMu.Lock()
+	defer a.unhandledLogMu.Unlock()
+	if a.unhandledLogAt == nil {
+		a.unhandledLogAt = make(map[string]time.Time)
+	}
+	last, ok := a.unhandledLogAt[method]
+	if ok && now.Sub(last) < acpUnhandledMethodLogInterval {
+		return false
+	}
+	a.unhandledLogAt[method] = now
+	return true
 }
 
 func (a *ACPAgent) failRuntimeWaiters(reason string) {

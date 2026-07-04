@@ -556,6 +556,9 @@ func doLogin(ctx context.Context) (*ilink.Credentials, error) {
 // --- Daemon mode ---
 
 func weclawDir() string {
+	if override := strings.TrimSpace(os.Getenv("WECLAW_HOME")); override != "" {
+		return override
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".weclaw")
 }

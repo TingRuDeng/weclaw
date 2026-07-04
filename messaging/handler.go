@@ -122,6 +122,8 @@ type activeAgentTask struct {
 	agentName      string
 	preview        string
 	startedAt      time.Time
+	lastProgress   string
+	lastProgressAt time.Time
 }
 
 type pendingApproval struct {
@@ -981,6 +983,13 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTa
 	return task, taskCtx, true
 }
 
+func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	task := h.activeTasks[key]
+	return task, task != nil
+}
+
 // activeTaskMeta 描述一次后台任务的归属信息，供 /ps 和 /cancel 检索。
 type activeTaskMeta struct {
 	owner     string
@@ -1386,6 +1395,17 @@ func (t *activeAgentTask) shouldSendFinal() bool {
 	return !t.detached
 }
 
+func (t *activeAgentTask) recordProgress(now time.Time, delta string) {
+	progress := previewPendingCodexMessage(delta)
+	if progress == "" {
+		return
+	}
+	t.mu.Lock()
+	t.lastProgress = progress
+	t.lastProgressAt = now
+	t.mu.Unlock()
+}
+
 func runningCodexGuidePrompt() string {
 	return "Codex 正在处理上一条任务。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。\n不回复时，上一条任务完成后会转为待执行消息。"
 }
@@ -1465,9 +1485,11 @@ func (h *Handler) handleListActiveTasks(userID string) string {
 	owner := strings.TrimSpace(userID)
 	now := time.Now()
 	type runningTask struct {
-		agentName string
-		preview   string
-		elapsed   time.Duration
+		agentName      string
+		preview        string
+		elapsed        time.Duration
+		lastProgress   string
+		lastProgressAt time.Time
 	}
 	var tasks []runningTask
 	h.activeTasksMu.Lock()
@@ -1476,9 +1498,11 @@ func (h *Handler) handleListActiveTasks(userID string) string {
 		matched := task.owner == owner && !task.detached
 		if matched {
 			tasks = append(tasks, runningTask{
-				agentName: task.agentName,
-				preview:   task.preview,
-				elapsed:   now.Sub(task.startedAt),
+				agentName:      task.agentName,
+				preview:        task.preview,
+				elapsed:        now.Sub(task.startedAt),
+				lastProgress:   task.lastProgress,
+				lastProgressAt: task.lastProgressAt,
 			})
 		}
 		task.mu.Unlock()
@@ -1494,6 +1518,9 @@ func (h *Handler) handleListActiveTasks(userID string) string {
 		line := fmt.Sprintf("%d. %s · 已运行 %s", i+1, name, formatTaskElapsed(task.elapsed))
 		if preview := strings.TrimSpace(task.preview); preview != "" {
 			line += "\n   " + preview
+		}
+		if progress := strings.TrimSpace(task.lastProgress); progress != "" {
+			line += fmt.Sprintf("\n   最近进展（%s前）：%s", formatTaskElapsed(now.Sub(task.lastProgressAt)), progress)
 		}
 		lines = append(lines, line)
 	}
@@ -1772,6 +1799,10 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	defer unlock()
 
 	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.agentCtx, opts.reply, opts.replyPrefix, opts.message, opts.progressCfg)
+	recordProgress := func(delta string) {
+		runtime.task.recordProgress(time.Now(), delta)
+		onProgress(delta)
+	}
 
 	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
 		reply := renderFinalFailure(opts.replyPrefix, err)
@@ -1779,7 +1810,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
 		return
 	}
-	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, onProgress)
+	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, recordProgress)
 	if err != nil {
 		reply = renderFinalFailure(opts.replyPrefix, err)
 	} else {

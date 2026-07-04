@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -106,6 +107,15 @@ func TestListActiveTasksEmptyAndPopulated(t *testing.T) {
 	got := h.handleListActiveTasks(user)
 	if !strings.Contains(got, "codex") || !strings.Contains(got, "重构登录模块") {
 		t.Fatalf("expected running codex task listed, got %q", got)
+	}
+	task, ok := h.activeTask("key-1")
+	if !ok {
+		t.Fatal("expected active task to exist")
+	}
+	task.recordProgress(time.Now(), "正在修改表单组件")
+	got = h.handleListActiveTasks(user)
+	if !strings.Contains(got, "最近进展") || !strings.Contains(got, "正在修改表单组件") {
+		t.Fatalf("expected active task progress listed, got %q", got)
 	}
 	if !strings.Contains(got, "/stop") || strings.Contains(got, "/cancel 停止当前任务") {
 		t.Fatalf("expected /stop guidance, got %q", got)
