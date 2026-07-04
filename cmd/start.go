@@ -205,7 +205,13 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if apiAddrFlag != "" {
 		apiAddr = apiAddrFlag
 	}
-	apiServer := api.NewServer(nil, apiAddr, api.WithToken(cfg.APIToken), api.WithRegistry(registry))
+	apiServer := api.NewServer(
+		nil,
+		apiAddr,
+		api.WithToken(cfg.APIToken),
+		api.WithRegistry(registry),
+		api.WithRuntimeStatusProvider(handler),
+	)
 	if err := apiServer.Validate(); err != nil {
 		return err
 	}

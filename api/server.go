@@ -25,8 +25,14 @@ const maxSendRequestBytes = 1 * 1024 * 1024
 type Server struct {
 	clients  []*ilink.Client
 	registry *platform.Registry
+	status   RuntimeStatusProvider
 	addr     string
 	token    string
+}
+
+// RuntimeStatusProvider 暴露服务进程内的轻量运行态，供本机 CLI 做重启保护。
+type RuntimeStatusProvider interface {
+	ActiveTaskCount() int
 }
 
 // Option 调整 API 服务运行参数，避免构造函数继续膨胀。
@@ -43,6 +49,13 @@ func WithToken(token string) Option {
 func WithRegistry(registry *platform.Registry) Option {
 	return func(s *Server) {
 		s.registry = registry
+	}
+}
+
+// WithRuntimeStatusProvider 配置只读运行态来源。
+func WithRuntimeStatusProvider(provider RuntimeStatusProvider) Option {
+	return func(s *Server) {
+		s.status = provider
 	}
 }
 
@@ -75,6 +88,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/send", s.handleSend)
+	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -100,6 +114,25 @@ func (s *Server) Validate() error {
 		return nil
 	}
 	return fmt.Errorf("api token is required when api_addr %q is not loopback", s.addr)
+}
+
+func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeRead(w, r) {
+		return
+	}
+	activeTasks := 0
+	if s.status != nil {
+		activeTasks = s.status.ActiveTaskCount()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":       "ok",
+		"active_tasks": activeTasks,
+	})
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +251,10 @@ func (s *Server) sendExtractedImages(ctx context.Context, reply platform.Replier
 }
 
 func (s *Server) authorizeSend(w http.ResponseWriter, r *http.Request) bool {
+	return s.authorizeRead(w, r)
+}
+
+func (s *Server) authorizeRead(w http.ResponseWriter, r *http.Request) bool {
 	if s.token == "" {
 		return true
 	}

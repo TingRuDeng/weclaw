@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -27,7 +28,9 @@ var updateRestartFlag bool
 
 func init() {
 	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "Restart weclaw after updating")
+	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
 	upgradeCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "Restart weclaw after updating")
+	upgradeCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -112,6 +115,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if !updateRestartFlag {
 		fmt.Println("Update complete. Run 'weclaw restart' when you are ready.")
 		return nil
+	}
+	if err := ensureConfiguredRestartSafe(context.Background(), restartForceFlag); err != nil {
+		return err
 	}
 
 	// 4. Restart only when explicitly requested

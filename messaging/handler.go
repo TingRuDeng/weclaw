@@ -2555,6 +2555,12 @@ func (h *Handler) activeTaskCounts(userID string) (total int, forUser int) {
 	return total, forUser
 }
 
+// ActiveTaskCount 返回未脱离的运行中任务总数，供本机 CLI 在重启前做保护。
+func (h *Handler) ActiveTaskCount() int {
+	total, _ := h.activeTaskCounts("")
+	return total
+}
+
 // formatUptime 以天/时/分粒度展示运行时长。
 func formatUptime(d time.Duration) string {
 	if d < time.Minute {

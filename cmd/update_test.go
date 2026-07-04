@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -122,5 +124,59 @@ func TestValidateUpdateTargetRejectsDifferentRunningExecutable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), runningPath) || !strings.Contains(err.Error(), updatePath) {
 		t.Fatalf("error=%v, want both paths", err)
+	}
+}
+
+func TestRestartGuardBlocksWhenRuntimeHasActiveTasks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runtime" {
+			t.Fatalf("path=%q, want /api/runtime", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(runtimeStatusResponse{ActiveTasks: 1})
+	}))
+	defer server.Close()
+
+	err := ensureRestartSafe(context.Background(), restartSafetyOptions{
+		apiAddr:       strings.TrimPrefix(server.URL, "http://"),
+		processExists: true,
+	})
+
+	if err == nil {
+		t.Fatal("ensureRestartSafe error = nil, want active task rejection")
+	}
+	if !strings.Contains(err.Error(), "1 个运行中的任务") {
+		t.Fatalf("error=%v, want active task count", err)
+	}
+}
+
+func TestRestartGuardSkipsWhenRuntimeStatusUnavailable(t *testing.T) {
+	err := ensureRestartSafe(context.Background(), restartSafetyOptions{
+		apiAddr:       "127.0.0.1:1",
+		processExists: true,
+	})
+
+	if err != nil {
+		t.Fatalf("ensureRestartSafe error=%v, want nil when runtime status is unavailable", err)
+	}
+}
+
+func TestRestartGuardAllowsForceWithActiveTasks(t *testing.T) {
+	err := ensureRestartSafe(context.Background(), restartSafetyOptions{
+		processExists: true,
+		force:         true,
+	})
+
+	if err != nil {
+		t.Fatalf("ensureRestartSafe error=%v, want nil with force", err)
+	}
+}
+
+func TestRuntimeStatusURLDialLoopbackForWildcardListen(t *testing.T) {
+	got, err := runtimeStatusURL("http://0.0.0.0:18011")
+	if err != nil {
+		t.Fatalf("runtimeStatusURL error: %v", err)
+	}
+	if got != "http://127.0.0.1:18011/api/runtime" {
+		t.Fatalf("runtime status URL=%q, want loopback URL", got)
 	}
 }

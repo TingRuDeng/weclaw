@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,6 +46,40 @@ func TestHandleSendAcceptsHeaderToken(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHandleRuntimeStatusReturnsActiveTaskCount(t *testing.T) {
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeStatusProvider(staticRuntimeStatus{active: 2}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
+	rec := httptest.NewRecorder()
+	server.handleRuntimeStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%q, want 200", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Status      string `json:"status"`
+		ActiveTasks int    `json:"active_tasks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("parse runtime status: %v", err)
+	}
+	if body.Status != "ok" || body.ActiveTasks != 2 {
+		t.Fatalf("runtime status=%#v, want ok with 2 active tasks", body)
+	}
+}
+
+func TestHandleRuntimeStatusRequiresTokenWhenConfigured(t *testing.T) {
+	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
+	rec := httptest.NewRecorder()
+	server.handleRuntimeStatus(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
@@ -95,6 +130,14 @@ func TestHandleSendRejectsOversizedBody(t *testing.T) {
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
 	}
+}
+
+type staticRuntimeStatus struct {
+	active int
+}
+
+func (s staticRuntimeStatus) ActiveTaskCount() int {
+	return s.active
 }
 
 type outboundPlatform struct {
