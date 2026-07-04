@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,5 +98,29 @@ func TestDownloadFileRejectsOversizedContentLength(t *testing.T) {
 func TestUpdateRestartFlagDefaultsFalse(t *testing.T) {
 	if updateRestartFlag {
 		t.Fatal("update should not restart service unless --restart is set")
+	}
+}
+
+func TestValidateUpdateTargetRejectsDifferentRunningExecutable(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	runningPath := filepath.Join(t.TempDir(), "running-weclaw")
+	updatePath := filepath.Join(t.TempDir(), "update-weclaw")
+	if err := os.WriteFile(runningPath, []byte("running"), 0o755); err != nil {
+		t.Fatalf("write running path: %v", err)
+	}
+	if err := os.WriteFile(updatePath, []byte("update"), 0o755); err != nil {
+		t.Fatalf("write update path: %v", err)
+	}
+	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: runningPath}); err != nil {
+		t.Fatalf("writeRuntimeState error: %v", err)
+	}
+
+	err := validateUpdateTargetMatchesRuntime(updatePath)
+
+	if err == nil {
+		t.Fatal("validateUpdateTargetMatchesRuntime error = nil, want path mismatch")
+	}
+	if !strings.Contains(err.Error(), runningPath) || !strings.Contains(err.Error(), updatePath) {
+		t.Fatalf("error=%v, want both paths", err)
 	}
 }

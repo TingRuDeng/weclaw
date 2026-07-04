@@ -329,6 +329,67 @@ func TestStopAllWeclawRemovesStalePidFile(t *testing.T) {
 	}
 }
 
+func TestReadRuntimeStateSupportsLegacyPidFile(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
+		t.Fatalf("create weclaw dir: %v", err)
+	}
+	if err := os.WriteFile(pidFile(), []byte("1234"), 0o600); err != nil {
+		t.Fatalf("write legacy pid: %v", err)
+	}
+
+	state, err := readRuntimeState()
+
+	if err != nil {
+		t.Fatalf("readRuntimeState error: %v", err)
+	}
+	if state.PID != 1234 {
+		t.Fatalf("PID=%d, want 1234", state.PID)
+	}
+}
+
+func TestWriteRuntimeStatePersistsExecutableIdentity(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+
+	err := writeRuntimeState(runtimeState{
+		PID:       1234,
+		Exe:       "/tmp/weclaw",
+		Version:   "test-version",
+		Mode:      "foreground",
+		StartedAt: time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("writeRuntimeState error: %v", err)
+	}
+
+	state, err := readRuntimeState()
+	if err != nil {
+		t.Fatalf("readRuntimeState error: %v", err)
+	}
+	if state.PID != 1234 || state.Exe != "/tmp/weclaw" || state.Mode != "foreground" {
+		t.Fatalf("state=%+v, want persisted pid/exe/mode", state)
+	}
+}
+
+func TestAcquireRuntimeLockRejectsSecondHolder(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+
+	first, err := acquireRuntimeLock()
+	if err != nil {
+		t.Fatalf("first acquireRuntimeLock error: %v", err)
+	}
+	defer first.Close()
+
+	second, err := acquireRuntimeLock()
+	if err == nil {
+		_ = second.Close()
+		t.Fatal("second acquireRuntimeLock error = nil, want already running")
+	}
+	if !strings.Contains(err.Error(), "weclaw 已在运行") {
+		t.Fatalf("error=%v, want running hint", err)
+	}
+}
+
 func TestHandleDaemonPIDWriteFailureStopsStartedProcess(t *testing.T) {
 	stopped := false
 	released := false

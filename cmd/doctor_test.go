@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -125,4 +126,32 @@ func TestDoctorPassesHealthyConfig(t *testing.T) {
 			t.Fatalf("unexpected fail: %s — %s", r.Name, r.Detail)
 		}
 	}
+}
+
+func TestSummarizeWeclawProcessesWarnsMultipleInstallPaths(t *testing.T) {
+	processes := []weclawProcess{
+		{PID: 1, Exe: "/usr/local/bin/weclaw", Args: "weclaw start -f"},
+		{PID: 2, Exe: "/Users/test/.local/bin/weclaw", Args: "weclaw start"},
+	}
+
+	result := summarizeWeclawProcesses(processes)
+
+	if result.Status != doctorWarn {
+		t.Fatalf("Status=%v, want warn", result.Status)
+	}
+	if result.Name != "weclaw processes" {
+		t.Fatalf("Name=%q, want weclaw processes", result.Name)
+	}
+	if got := result.Detail; got == "" || !containsAll(got, "2 process(es)", "2 install path(s)") {
+		t.Fatalf("Detail=%q, want process and install path summary", got)
+	}
+}
+
+func containsAll(s string, parts ...string) bool {
+	for _, part := range parts {
+		if !strings.Contains(s, part) {
+			return false
+		}
+	}
+	return true
 }

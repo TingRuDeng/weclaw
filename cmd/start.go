@@ -64,6 +64,16 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return runDaemon()
 	}
 
+	runtimeLock, err := acquireRuntimeLock()
+	if err != nil {
+		return err
+	}
+	defer runtimeLock.Close()
+	if err := writeCurrentRuntimeState(currentServiceMode()); err != nil {
+		return fmt.Errorf("write runtime state: %w", err)
+	}
+	defer removeRuntimeState()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -571,6 +581,13 @@ func runDaemon() error {
 	if err := agent.CleanupCompanionEndpoints(); err != nil {
 		return fmt.Errorf("cleanup companion endpoints: %w", err)
 	}
+	runtimeLock, err := acquireRuntimeLock()
+	if err != nil {
+		return err
+	}
+	if err := runtimeLock.Close(); err != nil {
+		return err
+	}
 
 	// Ensure log directory exists
 	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
@@ -590,6 +607,7 @@ func runDaemon() error {
 	}
 
 	cmd := exec.Command(exe, "start", "-f")
+	cmd.Env = append(os.Environ(), daemonChildEnv+"=1")
 	cmd.Stdout = lf
 	cmd.Stderr = lf
 	setSysProcAttr(cmd)
@@ -600,7 +618,13 @@ func runDaemon() error {
 	}
 
 	pid := cmd.Process.Pid
-	if err := os.WriteFile(pidFile(), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+	if err := writeRuntimeState(runtimeState{
+		PID:       pid,
+		Exe:       exe,
+		Version:   Version,
+		Mode:      "background",
+		StartedAt: time.Now(),
+	}); err != nil {
 		lf.Close()
 		return handleDaemonPIDWriteResult(err, daemonPIDWriteProcess{
 			kill:    cmd.Process.Kill,
@@ -643,18 +667,6 @@ func handleDaemonPIDWriteResult(writeErr error, proc daemonPIDWriteProcess) erro
 		_ = proc.wait()
 	}
 	return fmt.Errorf("write pid file: %w", writeErr)
-}
-
-func readPid() (int, error) {
-	data, err := os.ReadFile(pidFile())
-	if err != nil {
-		return 0, err
-	}
-	var pid int
-	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
-		return 0, err
-	}
-	return pid, nil
 }
 
 func processExists(pid int) bool {

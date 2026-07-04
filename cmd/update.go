@@ -93,6 +93,9 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if resolved, err := resolveSymlink(exePath); err == nil {
 		exePath = resolved
 	}
+	if err := validateUpdateTargetMatchesRuntime(exePath); err != nil {
+		return err
+	}
 
 	if err := replaceBinary(tmpFile, exePath); err != nil {
 		return fmt.Errorf("replace binary: %w", err)
@@ -131,6 +134,22 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// validateUpdateTargetMatchesRuntime 避免更新路径和正在运行的服务路径错位。
+func validateUpdateTargetMatchesRuntime(exePath string) error {
+	state, err := readRuntimeState()
+	if err != nil || !processExists(state.PID) || strings.TrimSpace(state.Exe) == "" {
+		return nil
+	}
+	runningPath := state.Exe
+	if resolved, err := resolveSymlink(runningPath); err == nil {
+		runningPath = resolved
+	}
+	if runningPath == exePath {
+		return nil
+	}
+	return fmt.Errorf("running weclaw uses %s, but update target is %s; please run update from the same installation path", runningPath, exePath)
 }
 
 // verifyReleaseAssetChecksum 校验 release 资产，避免下载内容被截断或替换后直接安装。
