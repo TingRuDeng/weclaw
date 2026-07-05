@@ -132,6 +132,21 @@ func TestStreamModeRendersTextPreview(t *testing.T) {
 	}
 }
 
+func TestStreamModeKeepsStructuredProgressStatus(t *testing.T) {
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	status := "进展：Codex 已产生代码变更。"
+
+	got := renderDeltaProgress(status, cfg)
+
+	if got != status {
+		t.Fatalf("structured progress status=%q, want %q", got, status)
+	}
+	if strings.Contains(got, "实时片段") {
+		t.Fatalf("structured progress should not be rendered as realtime snippet, got %q", got)
+	}
+}
+
 func TestProgressThrottleByInterval(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.SummaryIntervalSeconds = 20

@@ -55,6 +55,54 @@ func TestACPAgentCodexProgressCallbackReceivesDelta(t *testing.T) {
 	}
 }
 
+func TestACPAgentCodexProgressEventDoesNotBecomeFinalReply(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	workspace := t.TempDir()
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       workspace,
+		StateFile: stateFile,
+	})
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{Kind: "progress", Text: "进展：Codex 已产生代码或文件变更。"}
+			ch <- &codexTurnEvent{ItemID: "item-1", Delta: "最终结果"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	var progress []string
+	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", func(delta string) {
+		progress = append(progress, delta)
+	})
+	if err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if reply != "最终结果" {
+		t.Fatalf("reply=%q, want final agent text only", reply)
+	}
+	if len(progress) != 2 || progress[0] != "进展：Codex 已产生代码或文件变更。" || progress[1] != "最终结果" {
+		t.Fatalf("progress=%#v, want status then final delta", progress)
+	}
+}
+
 func TestACPAgentCodexAssemblerPrefersDeltaOverSnapshot(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")

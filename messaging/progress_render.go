@@ -15,8 +15,12 @@ func renderInitialProgress() string {
 }
 
 func renderDeltaProgress(delta string, cfg config.ProgressConfig) string {
+	delta = strings.TrimSpace(delta)
+	if strings.HasPrefix(delta, "进展：") {
+		return delta
+	}
 	if cfg.Mode == progressModeStream {
-		preview := truncateTailRunes(strings.TrimSpace(delta), cfg.PreviewRunes)
+		preview := truncateTailRunes(delta, cfg.PreviewRunes)
 		return "实时片段，仅供预览：\n" + preview
 	}
 	return "处理中，请耐心等待....."

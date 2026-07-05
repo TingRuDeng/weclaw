@@ -107,11 +107,17 @@ func (a *ACPAgent) handleCodexItemCompleted(params json.RawMessage) {
 	}
 }
 
-// handleCodexTurnEvent handles "turn/started" and "turn/completed" notifications.
+// handleCodexTurnEvent 处理 turn 生命周期事件，兼容 Codex app-server 的成功与失败形态。
 func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
 	var p struct {
 		ThreadID string `json:"threadId"`
 		Status   string `json:"status"`
+		Error    struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+		} `json:"error"`
+		Message string `json:"message"`
+		Code    string `json:"code"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
@@ -119,6 +125,11 @@ func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
 
 	if method == "turn/completed" {
 		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "completed"})
+		return
+	}
+	if method == "turn/failed" {
+		text := joinCodexErrorParts("Codex turn 执行失败", firstNonEmpty(p.Error.Message, p.Message), firstNonEmpty(p.Error.Code, p.Code, p.Status))
+		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "error", Text: text})
 	}
 }
 

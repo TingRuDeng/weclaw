@@ -109,6 +109,56 @@ func TestFormatCodexErrorIgnoresRecoverableWebSocketMessage(t *testing.T) {
 	}
 }
 
+func TestHandleCodexAutoApprovalReviewStartedEmitsProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexAutoApprovalReviewStarted(json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","reviewId":"review-1"}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "progress" || !strings.Contains(evt.Text, "自动审批审核中") {
+			t.Fatalf("event=%#v, want auto approval progress", evt)
+		}
+	default:
+		t.Fatal("expected auto approval progress event")
+	}
+}
+
+func TestHandleCodexGuardianWarningEmitsProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexGuardianWarning(json.RawMessage(`{"threadId":"thread-1","message":"Automatic approval review approved (risk: medium)"}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "progress" || !containsAll(evt.Text, "自动审批", "通过") {
+			t.Fatalf("event=%#v, want guardian approval progress", evt)
+		}
+	default:
+		t.Fatal("expected guardian progress event")
+	}
+}
+
+func TestCodexTurnDiagnosticsAppendsRecentProgressToUnknownError(t *testing.T) {
+	diagnostics := newCodexTurnDiagnostics(3)
+	diagnostics.remember("进展：Codex 自动审批审核中。")
+	diagnostics.remember("进展：Codex 已产生代码变更。")
+
+	got := diagnostics.withError("Codex 返回未知错误")
+
+	if !containsAll(got, "Codex 返回未知错误", "最近事件", "自动审批审核中", "已产生代码变更") {
+		t.Fatalf("diagnostic error=%q, want recent turn events", got)
+	}
+}
+
 func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")

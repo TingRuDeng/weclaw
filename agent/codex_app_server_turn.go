@@ -113,6 +113,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 
 	// 汇总同一 turn 内的文本事件，避免 snapshot 和 delta 同时出现时重复拼接。
 	assembler := newCodexFinalAssembler()
+	diagnostics := newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
 	for {
 		select {
 		case <-ctx.Done():
@@ -123,6 +124,10 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				log.Printf("[acp] first turn event (pid=%d, thread=%s, conversation=%s, kind=%s, elapsed=%s)", pid, threadID, conversationID, evt.Kind, latency)
 			}
 			if evt.Approval != nil {
+				diagnostics.remember("进展：Codex 请求权限审批。")
+				if onProgress != nil {
+					onProgress("进展：Codex 请求权限审批。")
+				}
 				optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
 				if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat); err != nil {
 					log.Printf("[acp] turn approval response failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), err)
@@ -131,20 +136,28 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				continue
 			}
 			if evt.Kind == "error" {
-				log.Printf("[acp] turn failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %.200s", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), evt.Text)
-				if allowFreshRetry && !isNew && isMissingThreadError(fmt.Errorf("%s", evt.Text)) {
+				errorText := diagnostics.withError(evt.Text)
+				log.Printf("[acp] turn failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %.200s", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), errorText)
+				if allowFreshRetry && !isNew && isMissingThreadError(fmt.Errorf("%s", errorText)) {
 					log.Printf("[acp] stale thread error detected, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
 					return a.retryWithFreshThread(ctx, conversationID, message, "stale_thread_error", onProgress)
 				}
-				if isCodexAuthStateError(evt.Text) {
+				if isCodexAuthStateError(errorText) {
 					a.invalidateCodexRuntime(conversationID, "auth_state_error")
-					return "", fmt.Errorf("turn error: %s；已刷新 Codex 进程，请重试当前消息", evt.Text)
+					return "", fmt.Errorf("turn error: %s；已刷新 Codex 进程，请重试当前消息", errorText)
 				}
-				if isCodexUsageLimitError(evt.Text) {
+				if isCodexUsageLimitError(errorText) {
 					a.markCodexUsageLimitRefresh(conversationID)
-					return "", fmt.Errorf("turn error: %s；如果你已经手动切换 Codex 账号，下一次请求会刷新 Codex 进程并创建新会话", evt.Text)
+					return "", fmt.Errorf("turn error: %s；如果你已经手动切换 Codex 账号，下一次请求会刷新 Codex 进程并创建新会话", errorText)
 				}
-				return "", fmt.Errorf("turn error: %s", evt.Text)
+				return "", fmt.Errorf("turn error: %s", errorText)
+			}
+			if evt.Kind == "progress" {
+				diagnostics.remember(evt.Text)
+				if onProgress != nil {
+					onProgress(evt.Text)
+				}
+				continue
 			}
 			if evt.Delta != "" {
 				assembler.addDelta(evt.ItemID, evt.Delta)

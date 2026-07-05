@@ -56,17 +56,27 @@ func (a *ACPAgent) readLoop() {
 			a.handleCodexItemDelta(msg.Params)
 		case "item/started":
 			a.handleCodexItemStarted(msg.Params)
-		case "turn/started", "turn/completed":
+		case "turn/started", "turn/completed", "turn/failed":
 			a.handleCodexTurnEvent(msg.Method, msg.Params)
 		case "error":
 			a.handleCodexError(msg.Params)
 		case "item/completed":
 			a.handleCodexItemCompleted(msg.Params)
+		case "item/autoApprovalReview/started":
+			a.handleCodexAutoApprovalReviewStarted(msg.Params)
+		case "item/autoApprovalReview/completed":
+			a.handleCodexAutoApprovalReviewCompleted(msg.Params)
+		case "guardianWarning":
+			a.handleCodexGuardianWarning(msg.Params)
+		case "item/commandExecution/outputDelta":
+			a.handleCodexCommandProgress(msg.Params)
+		case "item/fileChange/outputDelta", "turn/diff/updated":
+			a.handleCodexFileProgress(msg.Params)
 		case "codex/event/agent_message", "codex/event/task_complete",
 			"codex/event/item_completed", "codex/event/token_count",
 			"thread/tokenUsage/updated",
 			"account/rateLimits/updated", "thread/status/changed",
-			"item/commandExecution/outputDelta", "turn/diff/updated":
+			"mcpServer/startupStatus/updated":
 			// 这些是已知状态事件，当前桥接层不需要额外处理。
 		case "turn/approval/request",
 			"item/fileChange/requestApproval",
