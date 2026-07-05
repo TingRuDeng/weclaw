@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/fastclaw-ai/weclaw/ilink"
@@ -22,6 +23,8 @@ type Replier struct {
 	ContextToken string
 	ClientID     string
 	ChunkRunes   int
+	mu           sync.Mutex
+	clientIDUsed bool
 }
 
 // NewReplier 创建微信回复器。
@@ -43,16 +46,28 @@ func (r *Replier) SendText(ctx context.Context, text string) error {
 	plainText := MarkdownToPlainText(text)
 	displayText := FormatTextForWeChatDisplay(plainText)
 	chunks := splitTextReplyChunks(displayText, r.ChunkRunes)
+	clientIDs := r.clientIDsForTextChunks(len(chunks))
 	for i, chunk := range chunks {
-		clientID := r.ClientID
-		if i > 0 || clientID == "" {
-			clientID = NewClientID()
-		}
-		if err := r.sendPlainText(ctx, chunk, clientID); err != nil {
+		if err := r.sendPlainText(ctx, chunk, clientIDs[i]); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (r *Replier) clientIDsForTextChunks(count int) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make([]string, count)
+	for i := 0; i < count; i++ {
+		if i == 0 && r.ClientID != "" && !r.clientIDUsed {
+			ids[i] = r.ClientID
+			r.clientIDUsed = true
+			continue
+		}
+		ids[i] = NewClientID()
+	}
+	return ids
 }
 
 func (r *Replier) SendImage(ctx context.Context, localPath string) error {

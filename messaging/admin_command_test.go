@@ -81,8 +81,11 @@ func TestServiceAdminCommandRunsUpdateForWhitelistedUser(t *testing.T) {
 	if !strings.Contains(texts[0], "开始执行管理命令：/update") {
 		t.Fatalf("reply texts=%#v, want start notice", texts)
 	}
-	if !strings.Contains(texts[1], "Already up to date") {
-		t.Fatalf("reply texts=%#v, want update command output", texts)
+	if !strings.Contains(texts[1], "当前已是最新版本") {
+		t.Fatalf("reply texts=%#v, want concise update result", texts)
+	}
+	if strings.Contains(texts[1], "Checking for updates") {
+		t.Fatalf("reply texts=%#v, should not expose raw update output", texts)
 	}
 }
 
@@ -138,6 +141,32 @@ func TestServiceAdminCommandRejectsUnsupportedArgs(t *testing.T) {
 	texts := reply.waitTexts(t, 1)
 	if len(texts) != 1 || !strings.Contains(texts[0], "不支持参数") {
 		t.Fatalf("reply texts=%#v, want unsupported args notice", texts)
+	}
+}
+
+func TestFormatServiceAdminCommandReplySummarizesUpdateOutput(t *testing.T) {
+	output := "Checking for updates...\nAlready up to date (v0.1.97)\n"
+
+	reply := formatServiceAdminCommandReply("update", output, nil)
+
+	if !strings.Contains(reply, "当前已是最新版本：v0.1.97") {
+		t.Fatalf("reply=%q, want concise latest version summary", reply)
+	}
+	if strings.Contains(reply, "Checking for updates") {
+		t.Fatalf("reply=%q, should not include raw update progress", reply)
+	}
+}
+
+func TestFormatServiceAdminCommandReplySummarizesUpdatedVersion(t *testing.T) {
+	output := "Checking for updates...\nCurrent: v0.1.96 -> Latest: v0.1.97\nDownloading https://example.invalid/weclaw...\nUpdated to v0.1.97\nUpdate complete. Run 'weclaw restart' when you are ready.\n"
+
+	reply := formatServiceAdminCommandReply("update", output, nil)
+
+	if !strings.Contains(reply, "已更新到：v0.1.97") || !strings.Contains(reply, "请执行 /restart --force 生效") {
+		t.Fatalf("reply=%q, want updated version summary with restart hint", reply)
+	}
+	if strings.Contains(reply, "Downloading") {
+		t.Fatalf("reply=%q, should not include raw download progress", reply)
 	}
 }
 

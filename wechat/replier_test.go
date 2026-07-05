@@ -76,6 +76,14 @@ func (c *recordedCalls) texts() []string {
 	return texts
 }
 
+func (c *recordedCalls) clientIDs() []string {
+	ids := make([]string, 0, len(c.messages))
+	for _, msg := range c.messages {
+		ids = append(ids, msg.Msg.ClientID)
+	}
+	return ids
+}
+
 func TestReplierSendTextFormatsForWeChat(t *testing.T) {
 	client, calls, closeServer := newRecordingClient(t)
 	defer closeServer()
@@ -88,6 +96,30 @@ func TestReplierSendTextFormatsForWeChat(t *testing.T) {
 	texts := calls.texts()
 	if len(texts) != 1 || texts[0] != "标题\n\n正文 code" {
 		t.Fatalf("texts=%#v, want formatted plain text", texts)
+	}
+}
+
+func TestReplierSendTextUsesUniqueClientIDPerSend(t *testing.T) {
+	client, calls, closeServer := newRecordingClient(t)
+	defer closeServer()
+	reply := NewReplier(client, "user-1", "ctx-1", "client-1")
+
+	if err := reply.SendText(context.Background(), "第一条"); err != nil {
+		t.Fatalf("first SendText error: %v", err)
+	}
+	if err := reply.SendText(context.Background(), "第二条"); err != nil {
+		t.Fatalf("second SendText error: %v", err)
+	}
+
+	ids := calls.clientIDs()
+	if len(ids) != 2 {
+		t.Fatalf("client ids=%#v, want two sends", ids)
+	}
+	if ids[0] != "client-1" {
+		t.Fatalf("first client id=%q, want incoming client id", ids[0])
+	}
+	if ids[1] == "" || ids[1] == ids[0] {
+		t.Fatalf("client ids=%#v, want unique id for second SendText call", ids)
 	}
 }
 
