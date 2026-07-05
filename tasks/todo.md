@@ -2,29 +2,29 @@
 
 ## 目标
 
-支持从 WeClaw 查看 Claude Code 可选模型列表：新增 `/cc model status` 与 `/cc model ls`，只做查询展示，不切换模型，不启动 Claude Code 交互式界面。
+重做 WeClaw 的 Codex 权限三档：删除旧档位兼容，接入 Codex app-server `approvalsReviewer` 透传，让飞书审批、自动审查和全权限模式的语义与 Codex 官方权限模型一致。
 
 ## 执行任务
 
-- [x] P1 串行：补 Claude 模型命令路由与渲染测试，先验证失败。
-- [x] P2 串行：新增 Claude 模型查询接口与 CLI Agent 实现。
-- [x] P3 串行：接入 `/cc model status|ls` 路由和帮助文案。
-- [x] P4 串行：运行最小充分验证与交付前 review-gate。
+- [x] P1 串行：更新配置模型与权限档位映射。
+- [x] P2 串行：把 `approvalsReviewer` 透传到 Codex `thread/start` 与 `turn/start`。
+- [x] P3 串行：更新 `/mode` 文案、README 与 AI_CONTEXT。
+- [x] P4 串行：补充测试并运行最小充分验证。
 
 ## 并行评估
 
-本轮不启用 subagent。改动集中在同一条 `/cc` 命令链路、同一组接口和测试，存在明显写冲突；串行执行更安全。
+本轮不启用 subagent。改动集中在 Codex 权限配置、ACP 参数和相关测试文案，同一批文件存在写冲突；串行执行更清晰。
 
 ## 验证命令
 
 ```bash
-GOCACHE=/private/tmp/weclaw-go-cache go test ./messaging -count=1 -timeout 60s
-GOCACHE=/private/tmp/weclaw-go-cache go test ./agent -count=1 -timeout 60s
+GOCACHE=/private/tmp/weclaw-go-cache go test ./config ./agent ./messaging ./cmd -count=1 -timeout 60s
+python3 scripts/validate_docs.py . --profile generic
 git diff --check
 ```
 
 ## Review 小结
 
-已新增 Claude Code 模型查看能力：`/cc model status` 展示当前 Claude 模型配置，`/cc model ls` 展示 Claude Code 常用模型清单，并在输出中说明实际可用性仍受账号、组织策略和 provider 限制。本轮新增 `agent.ClaudeModelAgent`、`agent.DefaultClaudeModels`、CLI Agent 查询实现和 `messaging` 层渲染/路由；未实现模型切换，未启动 Claude Code 交互式界面，未读取密钥。
+已将 Codex 权限档位重做为 `default`、`auto_review`、`full_access` 三档；省略 `permission_level` 时等同 `default`。旧档位 `request_approval`、`auto_approval`、`auto`、`ask` 会在配置校验阶段 fail-fast。新增 `approval_reviewer` 高级字段，并把 `approvalsReviewer` 透传到 Codex app-server 的 `thread/start`、`thread/resume` 和 `turn/start`。`/mode yolo` 文案已改为“本用户自动同意审批请求”，避免和全局 sandbox / reviewer 配置混淆。
 
-验证命令：`GOCACHE=/private/tmp/weclaw-go-cache go test ./messaging -run 'TestClaudeModel' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./agent -run 'TestCLIAgent.*ClaudeModel' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./agent ./messaging`、`git diff --check`，结果均通过。`go test ./agent -count=1 -timeout 60s` 在当前沙箱因既有 Companion/HTTP 测试需要监听本地端口、以及既有 ACP 测试写入 `~/.weclaw/state` 被拒绝而失败，失败点与本轮新增代码无关；未继续扩大验证范围。
+验证命令：`GOCACHE=/private/tmp/weclaw-go-cache go test ./config -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./agent -run 'TestCodexAppServerUsesConfiguredApproval|TestAgentConfigDoesNotExist' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./messaging -run 'TestMode|TestApprovalHandlerYolo|TestHelpText' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -run 'TestCreateAgentByName|TestCompanionAutoLaunch' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./config ./agent ./messaging ./cmd -count=1 -timeout 60s`、`python3 scripts/validate_docs.py . --profile generic`、`git diff --check`，结果均通过。cmd 目标测试在沙箱内因本地监听权限失败，已按规则提权重跑并通过。

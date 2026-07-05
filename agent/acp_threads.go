@@ -127,6 +127,9 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 		"sandbox":                a.sandboxModeForCodex(),
 		"persistExtendedHistory": true,
 	}
+	if reviewer := a.approvalReviewerForCodex(); reviewer != "" {
+		params["approvalsReviewer"] = reviewer
+	}
 	if a.model != "" {
 		params["model"] = a.model
 	}
@@ -173,6 +176,9 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 		"approvalPolicy": a.approvalPolicyForContext(ctx),
 		"cwd":            a.cwdForConversation(conversationID),
 		"sandbox":        a.sandboxModeForCodex(),
+	}
+	if reviewer := a.approvalReviewerForCodex(); reviewer != "" {
+		params["approvalsReviewer"] = reviewer
 	}
 	if a.model != "" {
 		params["model"] = a.model

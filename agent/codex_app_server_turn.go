@@ -78,13 +78,14 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		startTurn := func() error {
 			startedAt := time.Now()
 			_, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
-				ThreadID:       threadID,
-				ApprovalPolicy: a.approvalPolicyForContext(ctx),
-				Input:          []codexUserInput{{Type: "text", Text: message}},
-				SandboxPolicy:  map[string]interface{}{"type": a.sandboxPolicyTypeForCodex()},
-				Model:          a.model,
-				Effort:         a.effort,
-				Cwd:            a.cwdForConversation(conversationID),
+				ThreadID:          threadID,
+				ApprovalPolicy:    a.approvalPolicyForContext(ctx),
+				ApprovalsReviewer: a.approvalReviewerForCodex(),
+				Input:             []codexUserInput{{Type: "text", Text: message}},
+				SandboxPolicy:     map[string]interface{}{"type": a.sandboxPolicyTypeForCodex()},
+				Model:             a.model,
+				Effort:            a.effort,
+				Cwd:               a.cwdForConversation(conversationID),
 			})
 			elapsed := time.Since(startedAt)
 			if err != nil {

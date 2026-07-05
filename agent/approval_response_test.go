@@ -209,8 +209,10 @@ func TestCodexAppServerUsesConfiguredApprovalAndSandbox(t *testing.T) {
 		SandboxMode:    "workspace-write",
 	})
 	var threadApprovalPolicy string
+	var threadApprovalReviewer string
 	var threadSandbox string
 	var turnApprovalPolicy string
+	var turnApprovalReviewer string
 	var turnSandboxType string
 
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
@@ -221,6 +223,7 @@ func TestCodexAppServerUsesConfiguredApprovalAndSandbox(t *testing.T) {
 				return nil, fmt.Errorf("unexpected thread/start params type %T", params)
 			}
 			threadApprovalPolicy, _ = p["approvalPolicy"].(string)
+			threadApprovalReviewer, _ = p["approvalsReviewer"].(string)
 			threadSandbox, _ = p["sandbox"].(string)
 			return json.RawMessage(`{"thread":{"id":"thread-configured"}}`), nil
 		case "turn/start":
@@ -229,6 +232,7 @@ func TestCodexAppServerUsesConfiguredApprovalAndSandbox(t *testing.T) {
 				return nil, fmt.Errorf("unexpected turn/start params type %T", params)
 			}
 			turnApprovalPolicy = p.ApprovalPolicy
+			turnApprovalReviewer = p.ApprovalsReviewer
 			sandbox, _ := p.SandboxPolicy.(map[string]interface{})
 			turnSandboxType, _ = sandbox["type"].(string)
 			a.notifyMu.Lock()
@@ -248,7 +252,56 @@ func TestCodexAppServerUsesConfiguredApprovalAndSandbox(t *testing.T) {
 	if threadApprovalPolicy != "on-request" || turnApprovalPolicy != "on-request" {
 		t.Fatalf("approval policies thread=%q turn=%q, want on-request", threadApprovalPolicy, turnApprovalPolicy)
 	}
+	if threadApprovalReviewer != "" || turnApprovalReviewer != "" {
+		t.Fatalf("approval reviewers thread=%q turn=%q, want empty", threadApprovalReviewer, turnApprovalReviewer)
+	}
 	if threadSandbox != "workspace-write" || turnSandboxType != "workspaceWrite" {
 		t.Fatalf("sandbox thread=%q turn=%q, want workspace-write/workspaceWrite", threadSandbox, turnSandboxType)
+	}
+}
+
+func TestCodexAppServerUsesConfiguredApprovalReviewer(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command:          "codex",
+		Args:             []string{"app-server", "--listen", "stdio://"},
+		Cwd:              t.TempDir(),
+		ApprovalPolicy:   "on-request",
+		ApprovalReviewer: "auto_review",
+		SandboxMode:      "workspace-write",
+	})
+	var threadApprovalReviewer string
+	var turnApprovalReviewer string
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			p, ok := params.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("unexpected thread/start params type %T", params)
+			}
+			threadApprovalReviewer, _ = p["approvalsReviewer"].(string)
+			return json.RawMessage(`{"thread":{"id":"thread-reviewer"}}`), nil
+		case "turn/start":
+			p, ok := params.(codexTurnStartParams)
+			if !ok {
+				return nil, fmt.Errorf("unexpected turn/start params type %T", params)
+			}
+			turnApprovalReviewer = p.ApprovalsReviewer
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Delta: "ok"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	if _, err := a.chatCodexAppServer(context.Background(), "conversation-reviewer", "hello", nil); err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if threadApprovalReviewer != "auto_review" || turnApprovalReviewer != "auto_review" {
+		t.Fatalf("approval reviewers thread=%q turn=%q, want auto_review", threadApprovalReviewer, turnApprovalReviewer)
 	}
 }

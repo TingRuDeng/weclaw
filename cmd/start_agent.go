@@ -87,6 +87,9 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 }
 
 func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.AgentConfig) (*agent.ACPAgent, error) {
+	if err := agCfg.ValidateCodexPermissionConfig(); err != nil {
+		return nil, err
+	}
 	attempts := 1
 	if isCodexAppServerAgent(agCfg) {
 		attempts = 3
@@ -112,17 +115,18 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 
 func newACPAgentFromConfig(agCfg config.AgentConfig) *agent.ACPAgent {
 	return agent.NewACPAgent(agent.ACPAgentConfig{
-		Command:        agCfg.Command,
-		Args:           agCfg.Args,
-		Cwd:            agCfg.Cwd,
-		Env:            agCfg.Env,
-		Model:          agCfg.Model,
-		Effort:         agCfg.Effort,
-		ApprovalPolicy: agCfg.EffectiveApprovalPolicy(),
-		SandboxMode:    agCfg.EffectiveSandboxMode(),
-		SystemPrompt:   agCfg.SystemPrompt,
-		RunAsUser:      agCfg.RunAsUser,
-		RunAsEnv:       agCfg.RunAsEnv,
+		Command:          agCfg.Command,
+		Args:             agCfg.Args,
+		Cwd:              agCfg.Cwd,
+		Env:              agCfg.Env,
+		Model:            agCfg.Model,
+		Effort:           agCfg.Effort,
+		ApprovalPolicy:   agCfg.EffectiveApprovalPolicy(),
+		ApprovalReviewer: agCfg.EffectiveApprovalReviewer(),
+		SandboxMode:      agCfg.EffectiveSandboxMode(),
+		SystemPrompt:     agCfg.SystemPrompt,
+		RunAsUser:        agCfg.RunAsUser,
+		RunAsEnv:         agCfg.RunAsEnv,
 	})
 }
 

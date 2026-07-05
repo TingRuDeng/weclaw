@@ -12,6 +12,10 @@ func (a *ACPAgent) approvalPolicyForContext(ctx context.Context) string {
 	return approvalPolicyForContext(ctx)
 }
 
+func (a *ACPAgent) approvalReviewerForCodex() string {
+	return strings.TrimSpace(a.approvalReviewer)
+}
+
 func (a *ACPAgent) sandboxModeForCodex() string {
 	mode := strings.TrimSpace(a.sandboxMode)
 	if mode == "" {

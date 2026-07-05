@@ -105,7 +105,7 @@ weclaw companion --agent opencode --cwd /path/to/project
 | `/new`                  | 开始新对话（清除会话）   |
 | `/model` / `/model <id>` | 查看 / 切换模型（Codex：运行时切换，下个新会话生效） |
 | `/reasoning` / `/reasoning <强度>` | 查看 / 切换推理强度（Codex） |
-| `/mode` / `/mode yolo` / `/mode default` | 查看 / 自动放行 / 按钮确认 敏感操作 |
+| `/mode` / `/mode yolo` / `/mode default` | 查看 / 本用户自动同意 / 按钮确认 Codex 审批请求 |
 | `/ps`                   | 查看自己运行中的任务     |
 | `/stop`                 | 停止当前运行的任务       |
 | `/status`               | 查看运行态（agent、uptime、运行中任务、调用/错误计数、模式、限流） |
@@ -425,7 +425,17 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 通过 `cwd` 指定 Agent 的工作目录（workspace）。不设置则默认为 `~/.weclaw/workspace`。
 
-> **注意：** 这些参数会跳过安全检查，请了解风险后再启用。ACP 模式的 Agent 会自动处理权限，无需配置。
+> **注意：** 这些参数会跳过安全检查，请了解风险后再启用。ACP 模式的 Codex Agent 使用 `permission_level` 控制权限边界，无需通过 CLI 参数跳过审批。
+
+ACP Codex 的 `permission_level` 不配置时等同于 `default`，显式配置时只支持三档：
+
+| 档位 | Codex 映射 | 说明 |
+|------|------------|------|
+| `default` | `workspace-write` + `on-request` + `user` reviewer | 推荐默认值；工作区内自动执行，越界时走飞书审批。 |
+| `auto_review` | `workspace-write` + `on-request` + `auto_review` reviewer | 由 Codex 自动审查越界审批；不扩大 sandbox。 |
+| `full_access` | `danger-full-access` + `never` | 全权限执行，不弹审批；仅在可信环境使用。 |
+
+旧档位 `request_approval`、`auto_approval` 不再兼容；配置后启动会报错。
 
 ## 安全与治理
 
@@ -448,7 +458,8 @@ WeClaw 驱动的 AI Agent 能执行 shell 命令、读写文件。任何能给 b
 - **限流 (`rate_limit_per_minute`)**：每用户每分钟最多触发 agent 次数，`0` = 不限。
 - **审计日志 (`audit_log` / `audit_log_path`)**：JSON Lines 记录谁触发了哪个 agent、yolo 自动放行等（不含密钥）。默认开启，写入 `~/.weclaw/audit.log`，按大小自动轮转。
 - **OS 用户隔离 (`run_as_user` / `run_as_env`)**：通过免密 `sudo` 让指定 agent 以独立 Unix 用户运行，做文件系统隔离。
-- **权限模式 (`/mode`)**：`yolo` 自动放行 Codex 敏感操作；`default` 弹按钮确认（飞书），超时 fail-safe 拒绝。
+- **Codex 权限档位 (`permission_level`)**：`default` 走工作区 sandbox + 人工审批，`auto_review` 使用 Codex 自动审查，`full_access` 关闭 sandbox 边界。
+- **会话审批模式 (`/mode`)**：`yolo` 只让当前用户自动同意 Codex 审批请求；`default` 弹按钮确认（飞书），超时 fail-safe 拒绝。
 
 ```json
 {

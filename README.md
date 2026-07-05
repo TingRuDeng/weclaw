@@ -124,7 +124,7 @@ Send these as WeChat or Feishu messages:
 | `/new` | Start a new conversation (clear session) |
 | `/model` / `/model <id>` | Show or switch model (Codex: runtime, applies next session) |
 | `/reasoning` / `/reasoning <effort>` | Show or switch reasoning effort (Codex) |
-| `/mode` / `/mode yolo` / `/mode default` | Show / auto-approve / button-confirm sensitive ops |
+| `/mode` / `/mode yolo` / `/mode default` | Show / current-user auto-approve / button-confirm Codex approvals |
 | `/ps` | List your running tasks |
 | `/stop` | Stop the current running task |
 | `/status` | Show WeClaw runtime status (agent, uptime, running tasks, call/error counts, mode, limits) |
@@ -443,7 +443,17 @@ Example:
 
 Set `cwd` to specify the agent's working directory (workspace). If omitted, defaults to `~/.weclaw/workspace`.
 
-> **Warning:** These flags disable safety checks. Only enable them if you understand the risks. ACP agents handle permissions automatically and don't need these flags.
+> **Warning:** These flags disable safety checks. Only enable them if you understand the risks. ACP Codex agents use `permission_level` for permission boundaries and do not need CLI permission-bypass flags.
+
+When omitted, ACP Codex `permission_level` behaves as `default`. When set, it accepts only three values:
+
+| Level | Codex mapping | What it does |
+|-------|---------------|--------------|
+| `default` | `workspace-write` + `on-request` + `user` reviewer | Recommended default. Work inside the workspace automatically and ask through Feishu before crossing the boundary. |
+| `auto_review` | `workspace-write` + `on-request` + `auto_review` reviewer | Let Codex auto-review boundary-crossing approvals without expanding the sandbox. |
+| `full_access` | `danger-full-access` + `never` | Run without sandbox restrictions or approval prompts. Use only in trusted environments. |
+
+Old levels such as `request_approval` and `auto_approval` are no longer accepted; startup fails fast when they are configured.
 
 ## Security & Governance
 
@@ -466,7 +476,8 @@ WeClaw drives AI agents that can execute shell commands and read/write files. An
 - **Rate limiting (`rate_limit_per_minute`)**: max agent invocations per user per minute. `0` = off.
 - **Audit log (`audit_log` / `audit_log_path`)**: structured JSON-Lines record of who triggered which agent, yolo auto-approvals, etc. (never contains secrets). Defaults on, written to `~/.weclaw/audit.log` with size-based rotation.
 - **OS-user isolation (`run_as_user` / `run_as_env`)**: run a specific agent under a separate Unix user via passwordless `sudo` for filesystem isolation.
-- **Permission mode (`/mode`)**: `yolo` auto-approves Codex sensitive operations; `default` asks via interactive buttons (Feishu) and fail-safe denies on timeout.
+- **Codex permission level (`permission_level`)**: `default` uses workspace sandboxing plus manual approval, `auto_review` uses Codex auto-review, and `full_access` disables the sandbox boundary.
+- **Session approval mode (`/mode`)**: `yolo` only makes the current user auto-approve Codex approval requests; `default` asks via interactive buttons (Feishu) and fail-safe denies on timeout.
 
 ```json
 {

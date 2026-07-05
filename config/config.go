@@ -48,38 +48,37 @@ func (c PlatformConfig) EffectiveThreadIsolation() bool {
 
 // AgentConfig holds configuration for a single agent.
 type AgentConfig struct {
-	Type            string            `json:"type"`                       // "acp", "cli", "http", or "companion"
-	Command         string            `json:"command,omitempty"`          // binary path (cli/acp type)
-	Args            []string          `json:"args,omitempty"`             // extra args for command (e.g. ["acp"] for cursor)
-	Aliases         []string          `json:"aliases,omitempty"`          // custom trigger commands (e.g. ["gpt", "4o"])
-	Cwd             string            `json:"cwd,omitempty"`              // working directory (workspace)
-	Env             map[string]string `json:"env,omitempty"`              // extra environment variables (cli/acp type)
-	Model           string            `json:"model,omitempty"`            // model name
-	Effort          string            `json:"effort,omitempty"`           // Codex reasoning effort
-	PermissionLevel string            `json:"permission_level,omitempty"` // Codex 权限档位：request_approval / auto_approval / full_access；auto=工作区内自动执行
-	ApprovalPolicy  string            `json:"approval_policy,omitempty"`  // Codex approvalPolicy 高级覆盖
-	SandboxMode     string            `json:"sandbox_mode,omitempty"`     // Codex sandbox：read-only / workspace-write / danger-full-access
-	SystemPrompt    string            `json:"system_prompt,omitempty"`    // system prompt
-	Endpoint        string            `json:"endpoint,omitempty"`         // API endpoint (http type)
-	APIKey          string            `json:"api_key,omitempty"`          // API key (http type)
-	Headers         map[string]string `json:"headers,omitempty"`          // extra HTTP headers (http type)
-	MaxHistory      int               `json:"max_history,omitempty"`      // max history (http type)
-	Progress        *ProgressConfig   `json:"progress,omitempty"`         // 微信进度反馈配置
-	AutoLaunch      *bool             `json:"auto_launch,omitempty"`      // companion 是否自动打开本地可见终端
-	RunAsUser       string            `json:"run_as_user,omitempty"`      // 以独立 Unix 用户运行 agent，做文件系统隔离
-	RunAsEnv        []string          `json:"run_as_env,omitempty"`       // run_as_user 时需透传的环境变量名白名单
+	Type             string            `json:"type"`                        // "acp", "cli", "http", or "companion"
+	Command          string            `json:"command,omitempty"`           // binary path (cli/acp type)
+	Args             []string          `json:"args,omitempty"`              // extra args for command (e.g. ["acp"] for cursor)
+	Aliases          []string          `json:"aliases,omitempty"`           // custom trigger commands (e.g. ["gpt", "4o"])
+	Cwd              string            `json:"cwd,omitempty"`               // working directory (workspace)
+	Env              map[string]string `json:"env,omitempty"`               // extra environment variables (cli/acp type)
+	Model            string            `json:"model,omitempty"`             // model name
+	Effort           string            `json:"effort,omitempty"`            // Codex reasoning effort
+	PermissionLevel  string            `json:"permission_level,omitempty"`  // Codex 权限档位：default / auto_review / full_access
+	ApprovalPolicy   string            `json:"approval_policy,omitempty"`   // Codex approvalPolicy 高级覆盖
+	ApprovalReviewer string            `json:"approval_reviewer,omitempty"` // Codex approvalsReviewer 高级覆盖：user / auto_review
+	SandboxMode      string            `json:"sandbox_mode,omitempty"`      // Codex sandbox：read-only / workspace-write / danger-full-access
+	SystemPrompt     string            `json:"system_prompt,omitempty"`     // system prompt
+	Endpoint         string            `json:"endpoint,omitempty"`          // API endpoint (http type)
+	APIKey           string            `json:"api_key,omitempty"`           // API key (http type)
+	Headers          map[string]string `json:"headers,omitempty"`           // extra HTTP headers (http type)
+	MaxHistory       int               `json:"max_history,omitempty"`       // max history (http type)
+	Progress         *ProgressConfig   `json:"progress,omitempty"`          // 微信进度反馈配置
+	AutoLaunch       *bool             `json:"auto_launch,omitempty"`       // companion 是否自动打开本地可见终端
+	RunAsUser        string            `json:"run_as_user,omitempty"`       // 以独立 Unix 用户运行 agent，做文件系统隔离
+	RunAsEnv         []string          `json:"run_as_env,omitempty"`        // run_as_user 时需透传的环境变量名白名单
 }
 
-// EffectiveApprovalPolicy 返回 Codex ACP 会话使用的审批策略；空值表示沿用运行时默认策略。
+// EffectiveApprovalPolicy 返回 Codex ACP 会话使用的审批策略；未配置档位时使用 default。
 func (c AgentConfig) EffectiveApprovalPolicy() string {
 	if policy := strings.TrimSpace(c.ApprovalPolicy); policy != "" {
 		return policy
 	}
 	switch normalizePermissionLevel(c.PermissionLevel) {
-	case "request_approval":
+	case "", "default", "auto_review":
 		return "on-request"
-	case "auto_approval":
-		return "never"
 	case "full_access":
 		return "never"
 	default:
@@ -87,15 +86,13 @@ func (c AgentConfig) EffectiveApprovalPolicy() string {
 	}
 }
 
-// EffectiveSandboxMode 返回 Codex ACP 会话使用的沙箱模式；空值表示沿用运行时默认策略。
+// EffectiveSandboxMode 返回 Codex ACP 会话使用的沙箱模式；未配置档位时使用 default。
 func (c AgentConfig) EffectiveSandboxMode() string {
 	if mode := strings.TrimSpace(c.SandboxMode); mode != "" {
 		return mode
 	}
 	switch normalizePermissionLevel(c.PermissionLevel) {
-	case "request_approval":
-		return "workspace-write"
-	case "auto_approval":
+	case "", "default", "auto_review":
 		return "workspace-write"
 	case "full_access":
 		return "danger-full-access"
@@ -104,20 +101,41 @@ func (c AgentConfig) EffectiveSandboxMode() string {
 	}
 }
 
+// EffectiveApprovalReviewer 返回 Codex app-server 的审批 reviewer；未配置档位时使用 default。
+func (c AgentConfig) EffectiveApprovalReviewer() string {
+	if reviewer := strings.TrimSpace(c.ApprovalReviewer); reviewer != "" {
+		return reviewer
+	}
+	switch normalizePermissionLevel(c.PermissionLevel) {
+	case "", "default":
+		return "user"
+	case "auto_review":
+		return "auto_review"
+	default:
+		return ""
+	}
+}
+
+// ValidateCodexPermissionConfig 在启动前拒绝旧权限档位，避免静默落到错误审批体验。
+func (c AgentConfig) ValidateCodexPermissionConfig() error {
+	level := normalizePermissionLevel(c.PermissionLevel)
+	switch level {
+	case "", "default", "auto_review", "full_access":
+	default:
+		return fmt.Errorf("invalid permission_level %q: use default, auto_review, or full_access", c.PermissionLevel)
+	}
+	reviewer := strings.TrimSpace(c.ApprovalReviewer)
+	switch reviewer {
+	case "", "user", "auto_review":
+		return nil
+	default:
+		return fmt.Errorf("invalid approval_reviewer %q: use user or auto_review", c.ApprovalReviewer)
+	}
+}
+
 func normalizePermissionLevel(level string) string {
 	level = strings.ToLower(strings.TrimSpace(level))
-	level = strings.ReplaceAll(level, "-", "_")
-	level = strings.ReplaceAll(level, " ", "_")
-	switch level {
-	case "request", "ask", "ask_approval", "request_approval":
-		return "request_approval"
-	case "auto", "auto_approve", "auto_approval", "untrusted":
-		return "auto_approval"
-	case "full", "full_access", "danger", "danger_full_access":
-		return "full_access"
-	default:
-		return level
-	}
+	return strings.ReplaceAll(level, "-", "_")
 }
 
 // ProgressConfig 控制微信侧进度反馈的展示粒度。
@@ -303,7 +321,23 @@ func Load() (*Config, error) {
 	cfg.Progress = NormalizeProgressConfig(DefaultProgressConfig(), &cfg.Progress)
 
 	loadEnv(cfg)
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// Validate 检查配置中会影响运行时安全边界的字段。
+func (c *Config) Validate() error {
+	if c == nil {
+		return nil
+	}
+	for name, agentCfg := range c.Agents {
+		if err := agentCfg.ValidateCodexPermissionConfig(); err != nil {
+			return fmt.Errorf("agent %q: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func loadEnv(cfg *Config) {

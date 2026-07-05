@@ -38,6 +38,7 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		model:                       cfg.Model,
 		effort:                      cfg.Effort,
 		approvalPolicy:              strings.TrimSpace(cfg.ApprovalPolicy),
+		approvalReviewer:            strings.TrimSpace(cfg.ApprovalReviewer),
 		sandboxMode:                 strings.TrimSpace(cfg.SandboxMode),
 		systemPrompt:                cfg.SystemPrompt,
 		cwd:                         cfg.Cwd,

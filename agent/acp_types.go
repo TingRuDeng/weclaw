@@ -138,13 +138,14 @@ const (
 )
 
 type codexTurnStartParams struct {
-	ThreadID       string           `json:"threadId"`
-	ApprovalPolicy string           `json:"approvalPolicy,omitempty"`
-	Input          []codexUserInput `json:"input"`
-	SandboxPolicy  interface{}      `json:"sandboxPolicy,omitempty"`
-	Model          string           `json:"model,omitempty"`
-	Effort         string           `json:"effort,omitempty"`
-	Cwd            string           `json:"cwd,omitempty"`
+	ThreadID          string           `json:"threadId"`
+	ApprovalPolicy    string           `json:"approvalPolicy,omitempty"`
+	ApprovalsReviewer string           `json:"approvalsReviewer,omitempty"`
+	Input             []codexUserInput `json:"input"`
+	SandboxPolicy     interface{}      `json:"sandboxPolicy,omitempty"`
+	Model             string           `json:"model,omitempty"`
+	Effort            string           `json:"effort,omitempty"`
+	Cwd               string           `json:"cwd,omitempty"`
 }
 
 type codexUserInput struct {

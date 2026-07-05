@@ -66,7 +66,7 @@ ai_summary:
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
 - 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。
-- Agent `permission_level` 会映射 Codex `approvalPolicy` 与 `sandboxMode`；高级字段可覆盖。
+- Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。
 - `api_addr` 监听非 loopback 地址时必须配置 `api_token`。
 - 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。
 

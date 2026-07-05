@@ -13,17 +13,18 @@ import (
 
 // ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
 type ACPAgent struct {
-	command        string
-	args           []string
-	model          string
-	effort         string
-	approvalPolicy string
-	sandboxMode    string
-	systemPrompt   string
-	cwd            string
-	env            map[string]string
-	runAs          runAsUserSpec
-	protocol       string // "legacy_acp" or "codex_app_server"
+	command          string
+	args             []string
+	model            string
+	effort           string
+	approvalPolicy   string
+	approvalReviewer string
+	sandboxMode      string
+	systemPrompt     string
+	cwd              string
+	env              map[string]string
+	runAs            runAsUserSpec
+	protocol         string // "legacy_acp" or "codex_app_server"
 
 	mu       sync.Mutex
 	cmd      *exec.Cmd
@@ -61,16 +62,17 @@ type ACPAgent struct {
 
 // ACPAgentConfig holds configuration for the ACP agent.
 type ACPAgentConfig struct {
-	Command        string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
-	Args           []string // extra args for command (e.g. ["acp"] for cursor)
-	Model          string
-	Effort         string
-	ApprovalPolicy string
-	SandboxMode    string
-	SystemPrompt   string
-	Cwd            string            // working directory
-	Env            map[string]string // extra environment variables
-	StateFile      string            // optional persisted mapping file path
-	RunAsUser      string            // 以独立 Unix 用户运行（文件系统隔离）
-	RunAsEnv       []string          // run_as_user 时透传的环境变量名白名单
+	Command          string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
+	Args             []string // extra args for command (e.g. ["acp"] for cursor)
+	Model            string
+	Effort           string
+	ApprovalPolicy   string
+	ApprovalReviewer string
+	SandboxMode      string
+	SystemPrompt     string
+	Cwd              string            // working directory
+	Env              map[string]string // extra environment variables
+	StateFile        string            // optional persisted mapping file path
+	RunAsUser        string            // 以独立 Unix 用户运行（文件系统隔离）
+	RunAsEnv         []string          // run_as_user 时透传的环境变量名白名单
 }

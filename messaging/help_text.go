@@ -13,7 +13,7 @@ func buildHelpText() string {
 
 /cwd <路径> 切换工作目录
 
-/mode 查看确认模式，/mode yolo 自动放行，/mode default 按钮确认
+/mode 查看会话审批模式，/mode yolo 本用户自动同意，/mode default 按钮确认
 
 /model 查看/切换模型，/reasoning 查看/切换推理强度
 
