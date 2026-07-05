@@ -154,6 +154,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	} else {
 		log.Printf("Allowed workspace roots: %v", cfg.AllowedWorkspaceRoots)
 	}
+	handler.SetAdminUsers(cfg.AdminUsers)
+	log.Printf("Admin users configured: %d", len(cfg.AdminUsers))
 	handler.SetRateLimitPerMinute(cfg.RateLimitPerMinute)
 	if cfg.RateLimitPerMinute > 0 {
 		log.Printf("Rate limit: %d agent invocations per user per minute", cfg.RateLimitPerMinute)

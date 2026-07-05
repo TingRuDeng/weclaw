@@ -200,6 +200,22 @@ func TestPlatformConfigDefaultsFeishuSessionRules(t *testing.T) {
 	}
 }
 
+func TestConfigUnmarshalAdminUsers(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"admin_users": ["ou_admin", "wx_admin"],
+		"agents": {}
+	}`)
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	want := []string{"ou_admin", "wx_admin"}
+	if !reflect.DeepEqual(cfg.AdminUsers, want) {
+		t.Fatalf("AdminUsers=%#v, want %#v", cfg.AdminUsers, want)
+	}
+}
+
 func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	t.Setenv("WECLAW_DEFAULT_AGENT", "codex")
 	t.Setenv("WECLAW_API_ADDR", "127.0.0.1:18011")

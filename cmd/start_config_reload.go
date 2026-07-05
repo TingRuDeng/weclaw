@@ -88,6 +88,7 @@ func applySoftConfig(handler *messaging.Handler, registry *platform.Registry, cf
 	handler.SetPlatformProgressConfigs(extractPlatformProgressConfigs(cfg.Platforms))
 	handler.SetPlatformDefaultAgents(extractPlatformDefaultAgents(cfg.Platforms))
 	handler.SetAllowedWorkspaceRoots(cfg.AllowedWorkspaceRoots)
+	handler.SetAdminUsers(cfg.AdminUsers)
 	handler.SetRateLimitPerMinute(cfg.RateLimitPerMinute)
 	if cfg.DefaultAgent != "" {
 		if ag := handler.AgentByName(cfg.DefaultAgent); ag != nil {

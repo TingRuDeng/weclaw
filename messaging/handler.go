@@ -61,6 +61,7 @@ type Handler struct {
 	contextTokens           sync.Map // map[userID]contextToken
 	saveDir                 string   // directory to save images/files to
 	allowedWorkspaceRoots   []string // /cwd 允许切换的根目录；空=不限制
+	adminUsers              map[string]struct{}
 	rateLimiter             *userRateLimiter
 	rateLimitPerMinute      int
 	audit                   auditLogger
@@ -93,6 +94,7 @@ type Handler struct {
 	codexAppOpener          CodexAppOpener
 	codexCLIResumeOpener    CodexCLIResumeOpener
 	claudeCLIResumeOpener   ClaudeCLIResumeOpener
+	serviceAdminExecutor    ServiceAdminCommandExecutor
 }
 
 const (

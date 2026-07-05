@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,18 @@ func TestMergeViewOverwritesNewSecret(t *testing.T) {
 	merged := mergeView(current, view)
 	if merged.APIToken != "new-token" {
 		t.Fatalf("new secret should overwrite, got %q", merged.APIToken)
+	}
+}
+
+func TestMergeViewUpdatesAdminUsers(t *testing.T) {
+	current := &config.Config{AdminUsers: []string{"old_admin"}}
+	view := redactConfig(current)
+	view.AdminUsers = []string{"new_admin"}
+
+	merged := mergeView(current, view)
+
+	if !reflect.DeepEqual(merged.AdminUsers, []string{"new_admin"}) {
+		t.Fatalf("AdminUsers=%#v, want new_admin", merged.AdminUsers)
 	}
 }
 

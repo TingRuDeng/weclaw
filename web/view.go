@@ -12,6 +12,7 @@ type configView struct {
 	APIToken              string                           `json:"api_token"`
 	SaveDir               string                           `json:"save_dir"`
 	AllowedWorkspaceRoots []string                         `json:"allowed_workspace_roots"`
+	AdminUsers            []string                         `json:"admin_users"`
 	RateLimitPerMinute    int                              `json:"rate_limit_per_minute"`
 	AuditLog              *bool                            `json:"audit_log"`
 	AuditLogPath          string                           `json:"audit_log_path"`
@@ -44,6 +45,7 @@ func redactConfig(cfg *config.Config) configView {
 		APIAddr:               cfg.APIAddr,
 		SaveDir:               cfg.SaveDir,
 		AllowedWorkspaceRoots: cfg.AllowedWorkspaceRoots,
+		AdminUsers:            cfg.AdminUsers,
 		RateLimitPerMinute:    cfg.RateLimitPerMinute,
 		AuditLog:              cfg.AuditLog,
 		AuditLogPath:          cfg.AuditLogPath,
@@ -89,6 +91,7 @@ func mergeView(current *config.Config, v configView) *config.Config {
 	merged.APIAddr = v.APIAddr
 	merged.SaveDir = v.SaveDir
 	merged.AllowedWorkspaceRoots = v.AllowedWorkspaceRoots
+	merged.AdminUsers = v.AdminUsers
 	merged.RateLimitPerMinute = v.RateLimitPerMinute
 	merged.AuditLog = v.AuditLog
 	merged.AuditLogPath = v.AuditLogPath

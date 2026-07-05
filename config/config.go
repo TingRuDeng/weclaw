@@ -17,6 +17,7 @@ type Config struct {
 	APIToken              string                    `json:"api_token,omitempty"`
 	SaveDir               string                    `json:"save_dir,omitempty"`
 	AllowedWorkspaceRoots []string                  `json:"allowed_workspace_roots,omitempty"`
+	AdminUsers            []string                  `json:"admin_users,omitempty"`           // 可执行 WeClaw 管理命令的用户白名单；空=禁用远程管理
 	RateLimitPerMinute    int                       `json:"rate_limit_per_minute,omitempty"` // 每用户每分钟最多触发 agent 次数；0=不限流
 	AuditLog              *bool                     `json:"audit_log,omitempty"`             // 是否记录审计日志；缺省=开启
 	AuditLogPath          string                    `json:"audit_log_path,omitempty"`        // 审计日志路径；空=~/.weclaw/audit.log
