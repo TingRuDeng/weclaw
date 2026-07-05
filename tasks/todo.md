@@ -2,17 +2,24 @@
 
 ## 目标
 
-落实深度审查后的安全、稳定性和发布闭环改造：修复 Codex 权限默认值、命令探测安全、后台启动竞态、mac arm64 更新策略、远程下载复用，并补齐发布后 update smoke。
+落实核心文件拆分：对 `messaging/handler.go` 与 `agent/acp_agent.go` 做零行为变更拆分，把审批、任务状态、Codex 会话命令、Agent 执行主流程、ACP/Codex 协议、运行时、thread/session 与审批桥接移到同包独立文件，降低后续飞书/Codex 回归定位成本。
 
 ## 执行任务
 
-- [x] 串行：确认本地和远端分支状态，读取 lessons 与执行约束。
-- [x] 串行：P0 修复 Codex 默认沙箱和登录 shell 命令探测风险，并补测试。
-- [x] 串行：P1 修复后台启动锁交接竞态和 update 非 mac arm64 提示，并补测试。
-- [x] 串行：P2 抽取远程媒体安全下载公共能力，减少平台重复实现，并补测试。
-- [x] 串行：P3 统一 GitHub Actions 发布矩阵为 darwin/arm64，并补发布后 `weclaw update` smoke。
-- [x] 串行：运行最小充分验证与交付前 review-gate。
+- [x] 串行：确认工作区干净并读取当前执行约束。
+- [x] 串行：P0 机械拆分审批 pending、审批按钮、审批文案与选项解析。
+- [x] 串行：P1 机械拆分 active task、pending guide、pending Codex run 与任务命令。
+- [x] 串行：P2 继续拆小新文件，并机械拆分 Codex 会话命令、本地入口、切换与状态渲染。
+- [x] 串行：P3 机械拆分 Agent 执行主流程、Codex 后台任务与回复投递。
+- [x] 串行：P4 运行最小充分验证与交付前 review-gate。
+- [x] 串行：P5 继续零行为拆分入站附件处理逻辑。
+- [x] 串行：P6 继续零行为拆分内置命令、平台路由、状态/help/progress/cwd helper。
+- [x] 串行：P7 继续零行为拆分 Agent 会话解析、默认会话重置、配置 setter、去重和构造器。
+- [x] 串行：P8 机械拆分 ACP/Codex 协议类型、构造器与进程生命周期。
+- [x] 串行：P9 机械拆分 ACP session/thread 管理、状态持久化与 JSON-RPC 基础设施。
+- [x] 串行：P10 机械拆分 Codex app-server turn、事件处理、错误格式化与审批桥接。
+- [x] 串行：P11 运行全量验证与交付前 review-gate。
 
 ## Review 小结
 
-已将 Codex 未显式配置时的默认沙箱从 `danger-full-access` 收紧为 `workspace-write`；登录 shell 二进制探测改为参数传递，避免拼接用户配置 command；后台启动增加 launch lock，并等待子进程持有 runtime lock 后再返回；`weclaw update` 明确只支持当前发布策略的 `darwin/arm64` 资产；新增 `internal/remotefetch` 统一远程媒体安全下载能力，`messaging` 与 `wechat` 改为薄封装；GitHub Actions CI/Release 发布矩阵同步收敛为 `darwin/arm64`；`scripts/release.sh` 在正式发布后会用临时旧版本二进制执行 `weclaw update` smoke，验证下载、checksum 和自替换链路。验证命令：`go test ./... -count=1 -timeout 120s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/validate_docs.py`、`python3 scripts/validate_docs.py . --profile generic`、`git diff --check`，结果均通过。
+已完成核心文件零行为拆分：`messaging/handler.go` 中的审批 pending、审批按钮、审批文案、审批选项解析、yolo 模式、active task、pending guide、pending Codex run、`/run`、`/guide`、`/stop`、`/ps`、Codex 会话命令分发、本地入口、thread 切换、状态渲染、Agent 执行、Codex 后台任务、广播执行、回复投递、入站附件、内置命令、平台路由、状态/help/progress/cwd helper、Agent 会话解析、默认会话重置、配置 setter、消息去重和构造器已移动到同包独立文件；`agent/acp_agent.go` 中的 ACP/Codex 协议类型、构造器、进程生命周期、session/thread 管理、状态持久化、JSON-RPC 基础设施、Codex app-server turn、事件处理、错误格式化与审批桥接已移动到同包独立文件。`messaging/handler.go` 从 3602 行降到 286 行，`agent/acp_agent.go` 从 2465 行降到 76 行；本轮新增拆分文件均低于 300 行。本轮未改变函数签名、调用点和业务分支。验证命令：`GOCACHE=/private/tmp/weclaw-go-cache go test ./agent -count=1 -timeout 120s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`python3 -m py_compile scripts/validate_docs.py`、`python3 scripts/validate_docs.py . --profile generic`、`git diff --check`，结果均通过；`py_compile` 生成的 `scripts/__pycache__/validate_docs.cpython-310.pyc` 已清理。

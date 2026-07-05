@@ -1,0 +1,72 @@
+package messaging
+
+import "strings"
+
+func buildHelpText() string {
+	return `WeClaw 帮助
+
+常用：
+
+/status 查看 WeClaw 运行态
+
+/new 新建会话
+
+/cwd <路径> 切换工作目录
+
+/mode 查看确认模式，/mode yolo 自动放行，/mode default 按钮确认
+
+/model 查看/切换模型，/reasoning 查看/切换推理强度
+
+/ps 查看运行中的任务
+
+/stop 停止当前运行的任务
+
+Codex：
+
+/cx status 查看 Codex 会话状态
+
+/cx quota 查看 Codex 账号额度
+
+/cx ls 查看列表
+
+/cx <编号|..> 选择或返回
+
+/cx cli 打开本地 CLI
+
+/cx app 打开 Codex App
+
+发送消息：
+
+/codex <内容> 发给 Codex
+
+/cc <内容> 发给 Claude
+
+@cc @cx <内容> 同时发送
+
+更多：
+
+/cx help Codex 高级命令
+
+/progress 查看进度模式`
+}
+
+// wechatCommandText 将内置命令回复转换为空行分隔，避免微信气泡折叠单换行。
+func wechatCommandText(parts ...string) string {
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = normalizeCommandNewlines(part)
+		for _, line := range strings.Split(part, "\n") {
+			line = strings.TrimRight(line, " \t")
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n\n")
+}
+
+func normalizeCommandNewlines(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	return strings.ReplaceAll(text, "\r", "\n")
+}

@@ -1,0 +1,158 @@
+package messaging
+
+import (
+	"crypto/sha1"
+	"encoding/hex"
+	"strings"
+
+	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
+)
+
+func staleApprovalReply() string {
+	return "这次授权请求已过期或原任务已结束，没有再发送给 Codex。\n\n请重新发起任务。"
+}
+
+func approvalOptionSet(options []agent.ApprovalOption) map[string]bool {
+	allowed := make(map[string]bool, len(options))
+	for _, option := range options {
+		id := strings.TrimSpace(option.ID)
+		if id != "" {
+			allowed[id] = true
+		}
+	}
+	return allowed
+}
+
+func approvalOptionAliases(options []agent.ApprovalOption) map[string]string {
+	aliases := make(map[string]string)
+	for _, option := range options {
+		id := strings.TrimSpace(option.ID)
+		if id == "" {
+			continue
+		}
+		aliases[strings.ToLower(id)] = id
+		switch approvalOptionKind(option) {
+		case "allow":
+			for _, alias := range []string{"accept", "accepted", "approve", "approved", "allow"} {
+				if aliases[alias] == "" {
+					aliases[alias] = id
+				}
+			}
+		case "deny":
+			for _, alias := range []string{"cancel", "cancelled", "deny", "denied", "reject", "rejected"} {
+				if aliases[alias] == "" {
+					aliases[alias] = id
+				}
+			}
+		}
+	}
+	return aliases
+}
+
+func approvalOptionKind(option agent.ApprovalOption) string {
+	lower := strings.ToLower(strings.TrimSpace(firstNonBlank(option.Kind, option.ID, option.Name)))
+	switch {
+	case strings.Contains(lower, "accept"), strings.Contains(lower, "allow"), strings.Contains(lower, "approve"):
+		return "allow"
+	case strings.Contains(lower, "cancel"), strings.Contains(lower, "deny"), strings.Contains(lower, "reject"):
+		return "deny"
+	default:
+		return lower
+	}
+}
+
+func approvalPrompt(req agent.ApprovalRequest) string {
+	toolCall := strings.TrimSpace(string(req.ToolCall))
+	if toolCall == "" {
+		toolCall = "Codex 请求执行一项需要确认的操作。"
+	} else if len([]rune(toolCall)) > 1200 {
+		runes := []rune(toolCall)
+		toolCall = string(runes[:1200]) + "..."
+	}
+	return "Codex 请求执行敏感操作，请确认：\n\n" + toolCall
+}
+
+func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string, routeUserID string) []platform.Choice {
+	choices := make([]platform.Choice, 0, len(options))
+	for _, option := range options {
+		id := strings.TrimSpace(option.ID)
+		if id == "" {
+			continue
+		}
+		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option)}
+		metadata := approvalChoiceMetadata(approvalKey, taskCardID, ownerUserID, routeUserID)
+		if len(metadata) > 0 {
+			choice.Metadata = metadata
+		}
+		choices = append(choices, choice)
+	}
+	return choices
+}
+
+func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string, routeUserID string) map[string]string {
+	metadata := make(map[string]string, 4)
+	if approvalKey = strings.TrimSpace(approvalKey); approvalKey != "" {
+		metadata["approval_key"] = approvalKey
+	}
+	if taskCardID = strings.TrimSpace(taskCardID); taskCardID != "" {
+		metadata["task_card_id"] = taskCardID
+	}
+	if ownerUserID = strings.TrimSpace(ownerUserID); ownerUserID != "" {
+		metadata["approval_owner"] = ownerUserID
+	}
+	if sessionKey := feishuSessionKeyFromRoute(routeUserID); sessionKey != "" {
+		metadata[feishuSessionMetadataKey] = sessionKey
+	}
+	return metadata
+}
+
+func taskCardIDFromReplier(reply platform.Replier) string {
+	reporter, ok := reply.(platform.TaskCardReporter)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(reporter.CurrentTaskCardID())
+}
+
+func approvalPendingKey(userID string, prompt string, options []agent.ApprovalOption) string {
+	parts := make([]string, 0, len(options)+2)
+	parts = append(parts, strings.TrimSpace(userID), strings.TrimSpace(prompt))
+	for _, option := range options {
+		parts = append(parts, strings.TrimSpace(option.ID)+":"+strings.TrimSpace(option.Kind))
+	}
+	sum := sha1.Sum([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func pendingApprovalMapKey(userID string, approvalKey string) string {
+	userID = strings.TrimSpace(userID)
+	approvalKey = strings.TrimSpace(approvalKey)
+	if userID == "" || approvalKey == "" {
+		return ""
+	}
+	return userID + "\x00" + approvalKey
+}
+
+func approvalChoiceLabel(option agent.ApprovalOption) string {
+	switch option.Kind {
+	case "allow":
+		return "允许本次"
+	case "deny", "reject":
+		return "拒绝"
+	default:
+		return firstNonBlank(option.Name, option.Kind, option.ID)
+	}
+}
+
+func defaultDenyApprovalOption(options []agent.ApprovalOption) string {
+	for _, option := range options {
+		if option.Kind != "allow" && strings.TrimSpace(option.ID) != "" {
+			return option.ID
+		}
+	}
+	if len(options) > 0 {
+		return options[0].ID
+	}
+	return ""
+}
