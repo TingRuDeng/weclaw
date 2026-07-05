@@ -573,6 +573,11 @@ func pidFile() string {
 	return filepath.Join(weclawDir(), "weclaw.pid")
 }
 
+// daemonLaunchLockFile 返回后台启动父进程的短生命周期锁文件路径。
+func daemonLaunchLockFile() string {
+	return filepath.Join(weclawDir(), "weclaw.start.lock")
+}
+
 func logFile() string {
 	return filepath.Join(weclawDir(), "weclaw.log")
 }
@@ -580,10 +585,18 @@ func logFile() string {
 const (
 	gracefulStopChecks   = 20
 	gracefulStopInterval = 500 * time.Millisecond
+	daemonReadyChecks    = 50
+	daemonReadyInterval  = 100 * time.Millisecond
 )
 
 // runDaemon spawns weclaw start (without --daemon) as a background process.
 func runDaemon() error {
+	launchLock, err := acquireDaemonLaunchLock()
+	if err != nil {
+		return err
+	}
+	defer launchLock.Close()
+
 	if err := stopAllWeclaw(); err != nil {
 		return err
 	}
@@ -641,6 +654,12 @@ func runDaemon() error {
 			release: cmd.Process.Release,
 		})
 	}
+	if err := waitDaemonChildReady(pid); err != nil {
+		lf.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
 
 	// Detach — don't wait
 	if err := cmd.Process.Release(); err != nil {
@@ -653,6 +672,22 @@ func runDaemon() error {
 	fmt.Printf("Log: %s\n", logFile())
 	fmt.Printf("Stop: weclaw stop\n")
 	return nil
+}
+
+// waitDaemonChildReady 等待后台子进程真正持有 runtime lock，避免父进程提前返回造成并发 start 抢占。
+func waitDaemonChildReady(pid int) error {
+	for i := 0; i < daemonReadyChecks; i++ {
+		if !processExists(pid) {
+			return fmt.Errorf("weclaw 后台子进程 pid=%d 已退出，未完成启动", pid)
+		}
+		lock, err := acquireRuntimeLock()
+		if err != nil {
+			return nil
+		}
+		_ = lock.Close()
+		time.Sleep(daemonReadyInterval)
+	}
+	return fmt.Errorf("weclaw 后台子进程 pid=%d 未在超时内完成启动", pid)
 }
 
 type daemonPIDWriteProcess struct {

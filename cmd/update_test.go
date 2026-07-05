@@ -72,6 +72,24 @@ func TestParseReleaseChecksumsFindsAsset(t *testing.T) {
 	}
 }
 
+func TestReleaseAssetNameOnlySupportsDarwinArm64(t *testing.T) {
+	name, err := releaseAssetNameForRuntime("darwin", "arm64")
+	if err != nil {
+		t.Fatalf("releaseAssetNameForRuntime supported target error: %v", err)
+	}
+	if name != "weclaw_darwin_arm64" {
+		t.Fatalf("asset name=%q, want weclaw_darwin_arm64", name)
+	}
+
+	_, err = releaseAssetNameForRuntime("linux", "amd64")
+	if err == nil {
+		t.Fatal("releaseAssetNameForRuntime unsupported target error = nil")
+	}
+	if !strings.Contains(err.Error(), "darwin/arm64") {
+		t.Fatalf("error=%v, want supported target hint", err)
+	}
+}
+
 func TestVerifyDownloadedAssetChecksumRejectsMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "weclaw_darwin_arm64")
 	if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {

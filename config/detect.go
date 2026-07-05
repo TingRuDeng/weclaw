@@ -249,7 +249,7 @@ var loginShellLookupTimeout = 8 * time.Second
 
 // loginShellWhichCommand 构造登录 shell 的 which 探测命令，测试中可替换为卡住的命令。
 var loginShellWhichCommand = func(ctx context.Context, shell, binary string) *exec.Cmd {
-	return exec.CommandContext(ctx, shell, "-lic", "which "+binary)
+	return exec.CommandContext(ctx, shell, "-lic", `command -v -- "$1"`, "_", binary)
 }
 
 // LookPath 导出二进制解析能力，供 doctor 等命令复用（含 login shell 回退）。

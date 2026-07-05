@@ -58,6 +58,24 @@ func TestLookPath_LoginShellTimeout(t *testing.T) {
 	}
 }
 
+// TestLoginShellWhichCommandPassesBinaryAsArg 验证登录 shell 兜底探测不把用户配置的 command 拼进脚本文本。
+func TestLoginShellWhichCommandPassesBinaryAsArg(t *testing.T) {
+	const binary = "missing; echo injected"
+
+	cmd := loginShellWhichCommand(context.Background(), "zsh", binary)
+
+	if len(cmd.Args) < 5 {
+		t.Fatalf("login shell args=%#v, want script plus binary argument", cmd.Args)
+	}
+	if got := cmd.Args[len(cmd.Args)-1]; got != binary {
+		t.Fatalf("binary arg=%q, want %q; args=%#v", got, binary, cmd.Args)
+	}
+	script := cmd.Args[3]
+	if script == "" || script == "which "+binary {
+		t.Fatalf("script=%q, want parameterized command lookup", script)
+	}
+}
+
 // TestLookPath_LoginShellFallback reproduces the daemon scenario:
 // PATH is stripped to system-only dirs (no nvm), so exec.LookPath fails,
 // but lookPath resolves claude via login shell fallback.

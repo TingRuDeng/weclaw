@@ -72,9 +72,10 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Current: %s -> Latest: %s\n", Version, latest)
 
 	// 2. Download new binary
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
-	filename := fmt.Sprintf("weclaw_%s_%s", goos, goarch)
+	filename, err := releaseAssetNameForRuntime(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
 	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest, filename)
 
 	fmt.Printf("Downloading %s...\n", url)
@@ -140,6 +141,14 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// releaseAssetNameForRuntime 返回当前发布策略支持的 release 资产名。
+func releaseAssetNameForRuntime(goos string, goarch string) (string, error) {
+	if goos == "darwin" && goarch == "arm64" {
+		return "weclaw_darwin_arm64", nil
+	}
+	return "", fmt.Errorf("当前 release 只提供 darwin/arm64 包，当前平台是 %s/%s", goos, goarch)
 }
 
 // validateUpdateTargetMatchesRuntime 避免更新路径和正在运行的服务路径错位。

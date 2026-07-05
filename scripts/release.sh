@@ -166,6 +166,36 @@ verify_release() {
   [[ "$latest_tag" == "$TAG" ]] || fail "latest release 指向 $latest_tag，期望 $TAG"
 }
 
+verify_update_smoke() {
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+
+  local host_os host_arch
+  host_os="$(go env GOHOSTOS)"
+  host_arch="$(go env GOHOSTARCH)"
+  if [[ "$host_os/$host_arch" != "darwin/arm64" ]]; then
+    log "跳过 update smoke：当前主机是 ${host_os}/${host_arch}，无法执行 darwin/arm64 发布资产"
+    return 0
+  fi
+
+  (
+    set -euo pipefail
+    local tmp_dir smoke_bin version_output
+    tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/weclaw-update-smoke.XXXXXX")"
+    cleanup() {
+      rm -rf "$tmp_dir"
+    }
+    trap cleanup EXIT
+
+    log "验证 weclaw update 自更新链路"
+    smoke_bin="$tmp_dir/weclaw"
+    mkdir -p "$tmp_dir/home"
+    go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=v0.0.0-update-smoke" -o "$smoke_bin" .
+    WECLAW_HOME="$tmp_dir/home" "$smoke_bin" update
+    version_output="$(WECLAW_HOME="$tmp_dir/home" "$smoke_bin" version)"
+    [[ "$version_output" == *"weclaw $TAG ("* ]] || fail "update smoke 版本异常：$version_output"
+  )
+}
+
 main() {
   cd "$ROOT_DIR"
   parse_args "$@"
@@ -176,6 +206,7 @@ main() {
   build_assets
   create_release
   verify_release
+  verify_update_smoke
   log "发布完成：$TAG"
 }
 

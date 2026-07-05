@@ -390,6 +390,25 @@ func TestAcquireRuntimeLockRejectsSecondHolder(t *testing.T) {
 	}
 }
 
+func TestAcquireDaemonLaunchLockRejectsSecondLauncher(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+
+	first, err := acquireDaemonLaunchLock()
+	if err != nil {
+		t.Fatalf("first acquireDaemonLaunchLock error: %v", err)
+	}
+	defer first.Close()
+
+	second, err := acquireDaemonLaunchLock()
+	if err == nil {
+		_ = second.Close()
+		t.Fatal("second acquireDaemonLaunchLock error = nil, want already starting")
+	}
+	if !strings.Contains(err.Error(), "weclaw 正在启动") {
+		t.Fatalf("error=%v, want starting hint", err)
+	}
+}
+
 func TestHandleDaemonPIDWriteFailureStopsStartedProcess(t *testing.T) {
 	stopped := false
 	released := false

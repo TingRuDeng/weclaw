@@ -34,16 +34,6 @@ jobs:
       matrix:
         include:
           - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: windows
             goarch: arm64
 
     steps:
@@ -69,10 +59,8 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=${{ steps.version.outputs.version }}" \
-            -o weclaw_${{ matrix.goos }}_${{ matrix.goarch }}${EXT} .
+            -o weclaw_${{ matrix.goos }}_${{ matrix.goarch }} .
 
       - uses: actions/upload-artifact@v4
         with:

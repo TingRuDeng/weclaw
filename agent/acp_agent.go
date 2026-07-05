@@ -2259,7 +2259,7 @@ func (a *ACPAgent) approvalPolicyForContext(ctx context.Context) string {
 func (a *ACPAgent) sandboxModeForCodex() string {
 	mode := strings.TrimSpace(a.sandboxMode)
 	if mode == "" {
-		return "danger-full-access"
+		return "workspace-write"
 	}
 	switch strings.ToLower(mode) {
 	case "readonly", "read_only", "read-only":

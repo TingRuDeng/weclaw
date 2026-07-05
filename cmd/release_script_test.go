@@ -39,6 +39,48 @@ func TestReleaseScriptNextPatchTag(t *testing.T) {
 	}
 }
 
+func TestReleaseScriptUpdateSmokeSkipsDryRun(t *testing.T) {
+	script := releaseScriptPath(t)
+
+	output := runReleaseScriptTestCommand(t, "", "bash", "-c", "WECLAW_RELEASE_SOURCE_ONLY=1 source "+shellQuote(script)+" && DRY_RUN=1 && verify_update_smoke && echo ok")
+	if strings.TrimSpace(output) != "ok" {
+		t.Fatalf("verify_update_smoke dry-run output=%q, want ok", output)
+	}
+}
+
+func TestReleaseScriptUpdateSmokeSkipsUnsupportedHost(t *testing.T) {
+	script := releaseScriptPath(t)
+	command := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
+		`go() { if [[ "$1 $2" == "env GOHOSTOS" ]]; then echo linux; elif [[ "$1 $2" == "env GOHOSTARCH" ]]; then echo amd64; else echo unexpected-go-call >&2; return 9; fi; } && ` +
+		`DRY_RUN=0 TAG=v9.9.9 verify_update_smoke`
+
+	output := runReleaseScriptTestCommand(t, "", "bash", "-c", command)
+	if !strings.Contains(output, "跳过 update smoke") {
+		t.Fatalf("verify_update_smoke unsupported host output=%q, want skip hint", output)
+	}
+}
+
+func TestReleaseWorkflowsOnlyBuildDarwinArm64(t *testing.T) {
+	for _, path := range []string{
+		filepath.Join("..", ".github", "workflows", "ci.yml"),
+		filepath.Join("..", ".github", "workflows", "release.yml"),
+	} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		for _, unsupported := range []string{"goos: linux", "goos: windows", "goarch: amd64"} {
+			if strings.Contains(text, unsupported) {
+				t.Fatalf("%s contains unsupported release target %q", path, unsupported)
+			}
+		}
+		if !strings.Contains(text, "goos: darwin") || !strings.Contains(text, "goarch: arm64") {
+			t.Fatalf("%s missing darwin/arm64 target", path)
+		}
+	}
+}
+
 func releaseScriptPath(t *testing.T) string {
 	t.Helper()
 	abs, err := filepath.Abs(filepath.Join("..", "scripts", "release.sh"))

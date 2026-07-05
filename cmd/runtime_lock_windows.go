@@ -18,20 +18,33 @@ func runtimeLockFile() string {
 	return filepath.Join(weclawDir(), "weclaw.lock")
 }
 
-// acquireRuntimeLock 在 Windows 上用独占创建退化实现单实例保护。
-func acquireRuntimeLock() (*runtimeLock, error) {
+// acquireExclusiveLockFile 用独占创建语义实现可复用的非阻塞锁。
+func acquireExclusiveLockFile(path string, busyError func() string) (*runtimeLock, error) {
 	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
 		return nil, err
 	}
-	path := runtimeLockFile()
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
-			return nil, fmt.Errorf("weclaw 已在运行%s", runtimeLockHolderHint())
+			return nil, fmt.Errorf("%s", busyError())
 		}
 		return nil, err
 	}
 	return &runtimeLock{path: path, file: file}, nil
+}
+
+// acquireRuntimeLock 在 Windows 上用独占创建退化实现单实例保护。
+func acquireRuntimeLock() (*runtimeLock, error) {
+	return acquireExclusiveLockFile(runtimeLockFile(), func() string {
+		return "weclaw 已在运行" + runtimeLockHolderHint()
+	})
+}
+
+// acquireDaemonLaunchLock 串行化后台启动父进程，避免锁交接窗口内互相 stop/start。
+func acquireDaemonLaunchLock() (*runtimeLock, error) {
+	return acquireExclusiveLockFile(daemonLaunchLockFile(), func() string {
+		return "weclaw 正在启动，请稍后重试"
+	})
 }
 
 // Close 释放退化锁文件，Windows 下用删除文件表示释放。

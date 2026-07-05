@@ -333,10 +333,17 @@ func TestCodexTurnStartUsesUntrustedApprovalPolicyWithHandler(t *testing.T) {
 		Cwd:     t.TempDir(),
 	})
 	var turnApprovalPolicy string
+	var threadSandbox string
+	var turnSandboxType string
 
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		switch method {
 		case "thread/start":
+			p, ok := params.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("unexpected thread/start params type %T", params)
+			}
+			threadSandbox, _ = p["sandbox"].(string)
 			return json.RawMessage(`{"thread":{"id":"thread-approval"}}`), nil
 		case "turn/start":
 			p, ok := params.(codexTurnStartParams)
@@ -344,6 +351,8 @@ func TestCodexTurnStartUsesUntrustedApprovalPolicyWithHandler(t *testing.T) {
 				return nil, fmt.Errorf("unexpected turn/start params type %T", params)
 			}
 			turnApprovalPolicy = p.ApprovalPolicy
+			sandbox, _ := p.SandboxPolicy.(map[string]interface{})
+			turnSandboxType, _ = sandbox["type"].(string)
 			a.notifyMu.Lock()
 			ch := a.turnCh[p.ThreadID]
 			a.notifyMu.Unlock()
@@ -360,6 +369,9 @@ func TestCodexTurnStartUsesUntrustedApprovalPolicyWithHandler(t *testing.T) {
 	}
 	if turnApprovalPolicy != "untrusted" {
 		t.Fatalf("turn approval policy=%q, want untrusted", turnApprovalPolicy)
+	}
+	if threadSandbox != "workspace-write" || turnSandboxType != "workspaceWrite" {
+		t.Fatalf("default sandbox thread=%q turn=%q, want workspace-write/workspaceWrite", threadSandbox, turnSandboxType)
 	}
 }
 
