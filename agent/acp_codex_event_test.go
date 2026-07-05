@@ -1,0 +1,273 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestACPAgentCodexErrorNotificationReachesActiveTurn(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexError(json.RawMessage(`{"error":{"message":"You've hit your usage limit. Try again later.","codexErrorInfo":"usageLimitExceeded"}}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "error" {
+			t.Fatalf("event kind=%q, want error", evt.Kind)
+		}
+		if !containsAll(evt.Text, "You've hit your usage limit", "usageLimitExceeded") {
+			t.Fatalf("event text did not include codex error details: %q", evt.Text)
+		}
+	default:
+		t.Fatal("expected error event to be delivered to active turn")
+	}
+}
+
+func TestFormatCodexErrorHandlesDeactivatedWorkspace(t *testing.T) {
+	got := formatCodexError(json.RawMessage(`{"detail":{"code":"deactivated_workspace"}}`))
+
+	if !containsAll(got, "Codex 工作区不可用", "deactivated_workspace") {
+		t.Fatalf("formatCodexError=%q, want deactivated workspace detail", got)
+	}
+}
+
+func TestFormatCodexErrorHandlesRawMessage(t *testing.T) {
+	got := formatCodexError(json.RawMessage(`{"message":"HTTP error: 402 Payment Required","code":"deactivated_workspace"}`))
+
+	if !containsAll(got, "402 Payment Required", "deactivated_workspace") {
+		t.Fatalf("formatCodexError=%q, want raw message and code", got)
+	}
+}
+
+func TestHandleCodexErrorUsesStderrWhenPayloadUnknown(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	a.stderr = &acpStderrWriter{prefix: "[test]"}
+	_, _ = a.stderr.Write([]byte(`2026-04-27 ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 402 Payment Required: {"detail":{"code":"deactivated_workspace"}}`))
+
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexError(json.RawMessage(`{}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "error" {
+			t.Fatalf("event kind=%q, want error", evt.Kind)
+		}
+		if !containsAll(evt.Text, "Codex 工作区不可用", "deactivated_workspace") {
+			t.Fatalf("event text=%q, want stderr auth detail", evt.Text)
+		}
+	default:
+		t.Fatal("expected stderr-enriched error event")
+	}
+}
+
+func TestHandleCodexErrorIgnoresRecoverableWebSocketStderr(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	a.stderr = &acpStderrWriter{prefix: "[test]"}
+	_, _ = a.stderr.Write([]byte(`2026-05-21T09:02:00Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 403 Forbidden, url: ws://192.168.201.10:4000/v1/responses`))
+
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexError(json.RawMessage(`{}`))
+
+	select {
+	case evt := <-turnCh:
+		t.Fatalf("recoverable websocket stderr should not fail turn, got %#v", evt)
+	default:
+	}
+}
+
+func TestFormatCodexErrorIgnoresRecoverableWebSocketMessage(t *testing.T) {
+	got := formatCodexError(json.RawMessage(`{"message":"Falling back from WebSockets to HTTPS transport. unexpected status 403 Forbidden: Unknown error, url: ws://192.168.201.10:4000/v1/responses"}`))
+
+	if got != "" {
+		t.Fatalf("recoverable websocket fallback message should be ignored, got %q", got)
+	}
+}
+
+func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	workspace := t.TempDir()
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       workspace,
+		StateFile: stateFile,
+	})
+	a.mu.Lock()
+	a.threads["user-1"] = "old-thread"
+	a.mu.Unlock()
+	a.persistState()
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{Kind: "error", Text: "Codex 工作区不可用：(deactivated_workspace)"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err == nil {
+		t.Fatal("chatCodexAppServer error = nil, want auth state error")
+	}
+	if !containsAll(err.Error(), "deactivated_workspace", "请重试") {
+		t.Fatalf("error=%q, want retry hint with auth detail", err.Error())
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if _, ok := persisted.Threads["user-1"]; ok {
+		t.Fatalf("auth state error should remove stale thread mapping, got %q", persisted.Threads["user-1"])
+	}
+}
+
+func TestACPAgentKeepsRuntimeOnCodexUsageLimit(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       t.TempDir(),
+		StateFile: stateFile,
+	})
+	a.started = true
+	a.mu.Lock()
+	a.threads["user-1"] = "old-thread"
+	a.mu.Unlock()
+	a.persistState()
+
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{Kind: "error", Text: "Codex 账号额度已用完：You've hit your usage limit. (usageLimitExceeded)"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err == nil {
+		t.Fatal("chatCodexAppServer error = nil, want usage limit error")
+	}
+	if strings.Contains(err.Error(), "已刷新 Codex 进程") {
+		t.Fatalf("usage limit should not refresh runtime, error=%q", err.Error())
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["user-1"]; got != "old-thread" {
+		t.Fatalf("usage limit should keep thread mapping, got %q", got)
+	}
+}
+
+func TestACPAgentRefreshesRuntimeOnNextTurnAfterUsageLimit(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		Cwd:       t.TempDir(),
+		StateFile: stateFile,
+	})
+	a.started = true
+	a.mu.Lock()
+	a.threads["user-1"] = "old-thread"
+	a.mu.Unlock()
+	a.persistState()
+
+	turnStarts := 0
+	threadStarts := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			threadStarts++
+			return json.RawMessage(`{"thread":{"id":"new-thread"}}`), nil
+		case "turn/start":
+			turnStarts++
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			if ch == nil {
+				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
+			}
+			if turnStarts == 1 {
+				if p.ThreadID != "old-thread" {
+					t.Fatalf("first turn thread=%q, want old-thread", p.ThreadID)
+				}
+				ch <- &codexTurnEvent{Kind: "error", Text: "Codex 账号额度已用完：You've hit your usage limit. (usageLimitExceeded)"}
+				return json.RawMessage(`{"ok":true}`), nil
+			}
+			if p.ThreadID != "new-thread" {
+				t.Fatalf("second turn thread=%q, want new-thread", p.ThreadID)
+			}
+			ch <- &codexTurnEvent{Delta: "新账号回复"}
+			ch <- &codexTurnEvent{Kind: "completed"}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	_, err := a.Chat(ctx, "user-1", "第一次请求")
+	if err == nil {
+		t.Fatal("first Chat error = nil, want usage limit")
+	}
+	if !containsAll(err.Error(), "usageLimitExceeded", "下一次请求") {
+		t.Fatalf("usage limit error=%q, want next-request refresh hint", err.Error())
+	}
+
+	reply, err := a.Chat(ctx, "user-1", "切号后的请求")
+	if err != nil {
+		t.Fatalf("second Chat error: %v", err)
+	}
+	if reply != "新账号回复" {
+		t.Fatalf("second reply=%q, want 新账号回复", reply)
+	}
+	if threadStarts != 1 {
+		t.Fatalf("thread/start calls=%d, want 1", threadStarts)
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["user-1"]; got != "new-thread" {
+		t.Fatalf("persisted thread=%q, want new-thread", got)
+	}
+}

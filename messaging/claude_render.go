@@ -55,6 +55,7 @@ func buildClaudeSessionHelpText() string {
 		"/cc pwd 查看当前工作空间",
 		"/cc cli 打开本地 CLI 接手当前 session",
 		"/cc status 查看 Claude session 状态",
+		"/cc model ls 查看 Claude 可选模型",
 		"/claude 可作为 /cc 的兼容写法",
 	)
 }

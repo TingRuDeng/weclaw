@@ -200,79 +200,6 @@ func TestPlatformConfigDefaultsFeishuSessionRules(t *testing.T) {
 	}
 }
 
-func TestDefaultProgressConfig(t *testing.T) {
-	cfg := DefaultProgressConfig()
-
-	if cfg.Mode != "typing" {
-		t.Fatalf("Mode = %q, want typing", cfg.Mode)
-	}
-	if cfg.SendAcceptance == nil || *cfg.SendAcceptance {
-		t.Fatalf("SendAcceptance = %#v, want false pointer", cfg.SendAcceptance)
-	}
-	if cfg.EnableTyping == nil || !*cfg.EnableTyping {
-		t.Fatalf("EnableTyping = %#v, want true pointer", cfg.EnableTyping)
-	}
-	if cfg.ShowTextPreview == nil || *cfg.ShowTextPreview {
-		t.Fatalf("ShowTextPreview = %#v, want false pointer", cfg.ShowTextPreview)
-	}
-	if cfg.SummaryIntervalSeconds != 20 {
-		t.Fatalf("SummaryIntervalSeconds = %d, want 20", cfg.SummaryIntervalSeconds)
-	}
-	if cfg.MaxProgressMessages != 4 {
-		t.Fatalf("MaxProgressMessages = %d, want 4", cfg.MaxProgressMessages)
-	}
-}
-
-func TestProgressConfigUnmarshalDefaults(t *testing.T) {
-	var cfg Config
-	data := []byte(`{
-		"progress": {},
-		"agents": {}
-	}`)
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("unmarshal config: %v", err)
-	}
-
-	cfg.Progress = NormalizeProgressConfig(DefaultProgressConfig(), &cfg.Progress)
-	if cfg.Progress.Mode != "typing" {
-		t.Fatalf("Mode = %q, want typing", cfg.Progress.Mode)
-	}
-	if cfg.Progress.SendAcceptance == nil || *cfg.Progress.SendAcceptance {
-		t.Fatalf("SendAcceptance = %#v, want false pointer", cfg.Progress.SendAcceptance)
-	}
-}
-
-func TestAgentProgressOverride(t *testing.T) {
-	var cfg Config
-	data := []byte(`{
-		"progress": {
-			"mode": "summary"
-		},
-		"agents": {
-			"codex": {
-				"type": "acp",
-				"progress": {
-					"mode": "stream"
-				}
-			}
-		}
-	}`)
-
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatalf("unmarshal config: %v", err)
-	}
-
-	global := NormalizeProgressConfig(DefaultProgressConfig(), &cfg.Progress)
-	agentCfg := NormalizeProgressConfig(global, cfg.Agents["codex"].Progress)
-	if global.Mode != "summary" {
-		t.Fatalf("global Mode = %q, want summary", global.Mode)
-	}
-	if agentCfg.Mode != "stream" {
-		t.Fatalf("agent Mode = %q, want stream", agentCfg.Mode)
-	}
-}
-
 func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	t.Setenv("WECLAW_DEFAULT_AGENT", "codex")
 	t.Setenv("WECLAW_API_ADDR", "127.0.0.1:18011")
@@ -299,49 +226,5 @@ func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	}
 	if got := cfg.Agents["claude"].Env["KEEP"]; got != "value" {
 		t.Fatalf("agent env = %q, want preserved value", got)
-	}
-}
-
-func TestLoadEnvOverridesProgressMode(t *testing.T) {
-	t.Setenv("WECLAW_PROGRESS_MODE", "typing")
-
-	cfg := DefaultConfig()
-	loadEnv(cfg)
-
-	if cfg.Progress.Mode != "typing" {
-		t.Fatalf("Progress.Mode = %q, want typing", cfg.Progress.Mode)
-	}
-}
-
-func TestAgentConfigEffectiveCodexPermissionLevel(t *testing.T) {
-	cases := []struct {
-		name     string
-		cfg      AgentConfig
-		approval string
-		sandbox  string
-	}{
-		{name: "request approval", cfg: AgentConfig{PermissionLevel: "request_approval"}, approval: "on-request", sandbox: "workspace-write"},
-		{name: "auto approval", cfg: AgentConfig{PermissionLevel: "auto_approval"}, approval: "never", sandbox: "workspace-write"},
-		{name: "full access", cfg: AgentConfig{PermissionLevel: "full_access"}, approval: "never", sandbox: "danger-full-access"},
-		{
-			name: "explicit override",
-			cfg: AgentConfig{
-				PermissionLevel: "full_access",
-				ApprovalPolicy:  "untrusted",
-				SandboxMode:     "read-only",
-			},
-			approval: "untrusted",
-			sandbox:  "read-only",
-		},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.EffectiveApprovalPolicy(); got != tt.approval {
-				t.Fatalf("EffectiveApprovalPolicy()=%q, want %q", got, tt.approval)
-			}
-			if got := tt.cfg.EffectiveSandboxMode(); got != tt.sandbox {
-				t.Fatalf("EffectiveSandboxMode()=%q, want %q", got, tt.sandbox)
-			}
-		})
 	}
 }

@@ -117,6 +117,25 @@ type ClaudeSessionAgent interface {
 	ClearClaudeSession(conversationID string)
 }
 
+// ClaudeModelStatus 表示当前 WeClaw 传给 Claude Code 的模型配置。
+type ClaudeModelStatus struct {
+	Model string
+}
+
+// ClaudeModel 表示 Claude Code 可展示的一个模型选项。
+type ClaudeModel struct {
+	ID          string
+	Name        string
+	Alias       string
+	Description string
+}
+
+// ClaudeModelAgent 暴露 Claude Code 的模型配置查询能力。
+type ClaudeModelAgent interface {
+	ClaudeModelStatus() ClaudeModelStatus
+	ListClaudeModels(ctx context.Context) ([]ClaudeModel, error)
+}
+
 // CodexModelStatus 表示当前 WeClaw 传给 Codex 的模型配置。
 type CodexModelStatus struct {
 	Model  string
