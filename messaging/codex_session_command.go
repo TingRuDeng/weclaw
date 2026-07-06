@@ -135,8 +135,6 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		return h.handleCodexModelCommand(ctx, ag, fields[2:])
 	case "new":
 		return h.handleCodexNewForRoute(routeUserID, agentName, workspaceRoot, ag, ownerBindingKey)
-	case "new-thread":
-		return h.handleCodexNewForRoute(routeUserID, agentName, workspaceRoot, ag, ownerBindingKey)
 	case "switch":
 		if len(fields) != 3 {
 			return "用法: /cx switch <编号|threadId>"

@@ -51,7 +51,7 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 	}
 }
 
-func TestHandleCardActionEventReplyUsesCardMessage(t *testing.T) {
+func TestHandleCardActionEventGroupReplyUsesFreshMessage(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	sender := &fakeMessageSender{}
 	adapter.sender = sender
@@ -63,7 +63,7 @@ func TestHandleCardActionEventReplyUsesCardMessage(t *testing.T) {
 				"action":             cardActionChoice,
 				"choice":             "/cx status",
 				"conv":               "feishu:ou_user",
-				"feishu_session_key": "feishu:tenant_1:group:oc_chat:om_root",
+				"feishu_session_key": "feishu:tenant_1:group:oc_chat",
 			}},
 		},
 	}
@@ -87,11 +87,11 @@ func TestHandleCardActionEventReplyUsesCardMessage(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
 	}
-	if len(sender.texts) != 0 {
-		t.Fatalf("texts=%#v, want no fresh card callback reply", sender.texts)
+	if len(sender.replyTexts) != 0 {
+		t.Fatalf("replyTexts=%#v, want no card message thread reply", sender.replyTexts)
 	}
-	if len(sender.replyTexts) != 1 || sender.replyTexts[0] != "om_card:已切换" {
-		t.Fatalf("replyTexts=%#v, want reply to card message", sender.replyTexts)
+	if len(sender.texts) != 1 || sender.texts[0] != "oc_chat:已切换" {
+		t.Fatalf("texts=%#v, want fresh group card callback message", sender.texts)
 	}
 }
 
@@ -136,50 +136,6 @@ func TestHandleCardActionEventDMReplyUsesFreshMessage(t *testing.T) {
 	}
 	if len(sender.texts) != 1 || sender.texts[0] != "oc_chat:已切换" {
 		t.Fatalf("texts=%#v, want fresh DM card callback message", sender.texts)
-	}
-}
-
-func TestHandleCardActionEventDMThreadReplyUsesCardMessage(t *testing.T) {
-	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
-	sender := &fakeMessageSender{}
-	adapter.sender = sender
-	event := &callback.CardActionTriggerEvent{
-		Event: &callback.CardActionTriggerRequest{
-			Operator: &callback.Operator{OpenID: "ou_user"},
-			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_card"},
-			Action: &callback.CallBackAction{Value: map[string]interface{}{
-				"action":             cardActionChoice,
-				"choice":             "/cx status",
-				"conv":               "feishu:ou_user",
-				"feishu_session_key": "feishu:tenant_1:dm_thread:oc_chat:ou_user:om_root",
-			}},
-		},
-	}
-	done := make(chan struct{}, 1)
-
-	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
-		if err := reply.SendText(ctx, "已切换"); err != nil {
-			t.Fatalf("SendText error: %v", err)
-		}
-		done <- struct{}{}
-	})
-
-	if err != nil {
-		t.Fatalf("handleCardActionEvent error: %v", err)
-	}
-	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
-		t.Fatalf("response=%#v, want success toast", resp)
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for callback dispatch")
-	}
-	if len(sender.texts) != 0 {
-		t.Fatalf("texts=%#v, want no fresh DM thread callback message", sender.texts)
-	}
-	if len(sender.replyTexts) != 1 || sender.replyTexts[0] != "om_card:已切换" {
-		t.Fatalf("replyTexts=%#v, want DM thread card callback reply", sender.replyTexts)
 	}
 }
 

@@ -13,12 +13,12 @@ func TestBuildFeishuSessionKeyIsolatesDMBySender(t *testing.T) {
 	second := first
 	second.SenderOpenID = "ou_b"
 
-	if got, want := BuildFeishuSessionKey(first, true), BuildFeishuSessionKey(second, true); got == want {
+	if got, want := BuildFeishuSessionKey(first), BuildFeishuSessionKey(second); got == want {
 		t.Fatalf("DM session key should isolate sender_open_id, got same key %q", got)
 	}
 }
 
-func TestBuildFeishuSessionKeyIsolatesDMThread(t *testing.T) {
+func TestBuildFeishuSessionKeyIgnoresDMThread(t *testing.T) {
 	first := FeishuSessionScope{
 		TenantID:     "tenant_1",
 		ChatID:       "oc_dm",
@@ -30,17 +30,17 @@ func TestBuildFeishuSessionKeyIsolatesDMThread(t *testing.T) {
 	second := first
 	second.RootID = "om_root_b"
 
-	firstKey := BuildFeishuSessionKey(first, true)
-	secondKey := BuildFeishuSessionKey(second, true)
-	if firstKey == secondKey {
-		t.Fatalf("DM thread session key should isolate thread_key, got same key %q", firstKey)
+	firstKey := BuildFeishuSessionKey(first)
+	secondKey := BuildFeishuSessionKey(second)
+	if firstKey != secondKey {
+		t.Fatalf("DM thread should share chat session key, got %q and %q", firstKey, secondKey)
 	}
-	if firstKey != "feishu:tenant_1:dm_thread:oc_dm:ou_user:om_root_a" {
-		t.Fatalf("first key=%q, want DM thread key", firstKey)
+	if firstKey != "feishu:tenant_1:dm:oc_dm:ou_user" {
+		t.Fatalf("first key=%q, want DM chat key", firstKey)
 	}
 }
 
-func TestBuildFeishuSessionKeyIsolatesGroupThread(t *testing.T) {
+func TestBuildFeishuSessionKeyIgnoresGroupThread(t *testing.T) {
 	first := FeishuSessionScope{
 		TenantID:     "tenant_1",
 		ChatID:       "oc_group",
@@ -52,8 +52,8 @@ func TestBuildFeishuSessionKeyIsolatesGroupThread(t *testing.T) {
 	second := first
 	second.RootID = "om_root_b"
 
-	if got, want := BuildFeishuSessionKey(first, true), BuildFeishuSessionKey(second, true); got == want {
-		t.Fatalf("group thread session key should isolate thread_key, got same key %q", got)
+	if got, want := BuildFeishuSessionKey(first), BuildFeishuSessionKey(second); got != want {
+		t.Fatalf("group thread should share chat session key, got %q and %q", got, want)
 	}
 }
 
@@ -74,12 +74,10 @@ func TestResolveThreadKeyFallbackOrder(t *testing.T) {
 	}
 }
 
-func TestBuildFeishuSessionKeyMergesThreadWhenIsolationDisabled(t *testing.T) {
+func TestBuildFeishuSessionKeyUsesGroupChatKey(t *testing.T) {
 	first := FeishuSessionScope{TenantID: "tenant_1", ChatID: "oc_group", RootID: "om_root_a", ChatType: "group", MessageID: "om_1"}
-	second := first
-	second.RootID = "om_root_b"
 
-	if got, want := BuildFeishuSessionKey(first, false), BuildFeishuSessionKey(second, false); got != want {
-		t.Fatalf("thread_isolation=false should merge group threads, got %q and %q", got, want)
+	if got := BuildFeishuSessionKey(first); got != "feishu:tenant_1:group:oc_group" {
+		t.Fatalf("group session key=%q, want chat key", got)
 	}
 }

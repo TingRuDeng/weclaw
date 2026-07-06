@@ -36,7 +36,6 @@ func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config) (*
 		adapter := feishuplatform.NewAdapter(creds)
 		adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
 			RequireMentionInGroup: feishuCfg.EffectiveRequireMentionInGroup(),
-			ThreadIsolation:       feishuCfg.EffectiveThreadIsolation(),
 		})
 		entries = append(entries, platform.RegistryEntry{
 			Platform: adapter,

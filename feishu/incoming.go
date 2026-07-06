@@ -100,10 +100,6 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 	if normalized.RawContentType == "image" || normalized.RawContentType == "file" || normalized.RawContentType == "audio" || normalized.RawContentType == "media" {
 		text = ""
 	}
-	sessionScope := scope
-	if shouldStartFeishuDMThread(text, scope) {
-		sessionScope.RootID = scope.MessageID
-	}
 	incoming := platform.IncomingMessage{
 		Platform:     platform.PlatformFeishu,
 		AccountID:    a.creds.AppID,
@@ -117,7 +113,7 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 			"raw_content_type":       normalized.RawContentType,
 			"original_user_id":       normalized.UserID,
 			"feishu_chat_type":       scope.ChatType,
-			feishuSessionMetadataKey: BuildFeishuSessionKey(sessionScope, a.session.ThreadIsolation),
+			feishuSessionMetadataKey: BuildFeishuSessionKey(scope),
 			feishuMentionMetadataKey: fmt.Sprintf("%t", scope.IsMentioned),
 		},
 	}
@@ -132,20 +128,6 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		return platform.IncomingMessage{}, false
 	}
 	return incoming, true
-}
-
-func shouldStartFeishuDMThread(text string, scope FeishuSessionScope) bool {
-	if isFeishuGroupChat(scope.ChatType) || strings.TrimSpace(scope.MessageID) == "" {
-		return false
-	}
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) != 2 {
-		return false
-	}
-	if fields[0] != "/cx" && fields[0] != "/codex" {
-		return false
-	}
-	return fields[1] == "new-thread"
 }
 
 // shouldIgnoreFeishuGroup 按配置决定群聊消息是否需要 @bot 才进入 agent。

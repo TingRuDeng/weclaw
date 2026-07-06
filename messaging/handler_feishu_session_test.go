@@ -12,7 +12,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestFeishuNewUsesSessionMetadataForReset(t *testing.T) {
+func TestFeishuNewUsesGroupSessionMetadataForReset(t *testing.T) {
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			reply:          "ok",
@@ -29,7 +29,7 @@ func TestFeishuNewUsesSessionMetadataForReset(t *testing.T) {
 	h.SetDefaultAgent("codex", ag)
 	h.SetCodexLocalSessionDir(t.TempDir())
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
+	sessionKey := "feishu:tenant_1:group:oc_1"
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
@@ -47,7 +47,7 @@ func TestFeishuNewUsesSessionMetadataForReset(t *testing.T) {
 	}
 }
 
-func TestFeishuCodexStatusUsesSessionMetadataForRouting(t *testing.T) {
+func TestFeishuGroupStatusUsesChatSessionMetadataForRouting(t *testing.T) {
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
@@ -63,7 +63,7 @@ func TestFeishuCodexStatusUsesSessionMetadataForRouting(t *testing.T) {
 	h.SetDefaultAgent("codex", ag)
 	h.SetCodexLocalSessionDir(t.TempDir())
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
+	sessionKey := "feishu:tenant_1:group:oc_1"
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
@@ -82,12 +82,16 @@ func TestFeishuCodexStatusUsesSessionMetadataForRouting(t *testing.T) {
 	}
 }
 
-func TestFeishuCodexNewThreadUsesSessionMetadataForDraft(t *testing.T) {
+func TestCodexNewThreadIsNotBuiltinSessionCommand(t *testing.T) {
+	if isCodexSessionCommand("/cx new-thread") {
+		t.Fatal("/cx new-thread should not be treated as a builtin Codex session command")
+	}
+}
+
+func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
-			reply:          "ok",
-			resetSessionID: "thread-new",
-			info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
 		},
 	}
 	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
@@ -98,37 +102,6 @@ func TestFeishuCodexNewThreadUsesSessionMetadataForDraft(t *testing.T) {
 	}, nil)
 	h.SetDefaultAgent("codex", ag)
 	h.SetCodexLocalSessionDir(t.TempDir())
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	sessionKey := "feishu:tenant_1:dm_thread:oc_1:ou_user:om_1"
-
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformFeishu,
-		UserID:   "ou_user",
-		Text:     "/cx new-thread",
-		Metadata: map[string]string{"feishu_session_key": sessionKey},
-	}, reply)
-
-	if got := ag.clearCalledWith; !strings.Contains(got, sessionKey) {
-		t.Fatalf("clear conversation=%q, want route session key %q", got, sessionKey)
-	}
-	routeThread, pending := h.ensureCodexSessions().getThread(codexBindingKey(sessionKey, "codex"), h.codexWorkspaceRootForUser("ou_user", "codex", ag))
-	if routeThread != "" || !pending {
-		t.Fatalf("route thread=%q pending=%v, want empty true", routeThread, pending)
-	}
-}
-
-func TestFeishuDMThreadWorkspaceSwitchDoesNotAffectOtherThreads(t *testing.T) {
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
-	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
-		if name == "codex" {
-			return ag
-		}
-		return nil
-	}, nil)
 	h.SetDefaultAgent("codex", ag)
 	codexDir := t.TempDir()
 	root := t.TempDir()
@@ -138,104 +111,45 @@ func TestFeishuDMThreadWorkspaceSwitchDoesNotAffectOtherThreads(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T10:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 
-	routeA := "feishu:tenant_1:dm_thread:oc_1:ou_user:om_a"
-	routeB := "feishu:tenant_1:dm_thread:oc_1:ou_user:om_b"
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(routeA, "codex"), workspaceA)
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(routeB, "codex"), workspaceA)
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("ou_user", "codex"), workspaceA)
-
-	h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "ou_user",
-		RouteUserID: routeA,
-		Trimmed:     "/cx cd beta",
-		Platform:    platform.PlatformFeishu,
-		Reply:       platformtest.NewReplier(platform.Capabilities{Text: true}),
-	})
-	statusB := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "ou_user",
-		RouteUserID: routeB,
-		Trimmed:     "/cx status",
-		Platform:    platform.PlatformFeishu,
-		Reply:       platformtest.NewReplier(platform.Capabilities{Text: true}),
-	})
-
-	if !strings.Contains(statusB, "工作空间: "+workspaceA) {
-		t.Fatalf("route B status=%q, want workspace A after route A switches to B", statusB)
-	}
-	if strings.Contains(statusB, "工作空间: "+workspaceB) {
-		t.Fatalf("route B status=%q, should not follow route A workspace B", statusB)
-	}
-}
-
-func TestFeishuDMThreadWorkspaceSwitchDoesNotMutateDefaultWorkspace(t *testing.T) {
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
-	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
-		if name == "codex" {
-			return ag
-		}
-		return nil
-	}, nil)
-	h.SetDefaultAgent("codex", ag)
-	codexDir := t.TempDir()
-	root := t.TempDir()
-	workspaceA := filepath.Join(root, "alpha")
-	workspaceB := filepath.Join(root, "beta")
-	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
-	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T10:00:00Z")
-	h.SetCodexLocalSessionDir(codexDir)
 	h.agentWorkDirs["codex"] = workspaceA
+	route := "feishu:tenant_1:dm:oc_1:ou_user"
 
-	routeA := "feishu:tenant_1:dm_thread:oc_1:ou_user:om_a"
-	routeB := "feishu:tenant_1:dm_thread:oc_1:ou_user:om_b"
 	h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "ou_user",
-		RouteUserID: routeA,
+		RouteUserID: route,
 		Trimmed:     "/cx cd beta",
 		Platform:    platform.PlatformFeishu,
 		Reply:       platformtest.NewReplier(platform.Capabilities{Text: true}),
 	})
-	statusB := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+	status := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "ou_user",
-		RouteUserID: routeB,
+		RouteUserID: route,
 		Trimmed:     "/cx status",
 		Platform:    platform.PlatformFeishu,
 		Reply:       platformtest.NewReplier(platform.Capabilities{Text: true}),
 	})
 
-	if !strings.Contains(statusB, "工作空间: "+workspaceA) {
-		t.Fatalf("route B status=%q, want default workspace A after route A switches to B", statusB)
-	}
-	if strings.Contains(statusB, "工作空间: "+workspaceB) {
-		t.Fatalf("route B status=%q, should not follow route A workspace B", statusB)
+	if !strings.Contains(status, "工作空间: "+workspaceB) {
+		t.Fatalf("route status=%q, want workspace B after chat session switch", status)
 	}
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "执行一个任务",
-		Metadata: map[string]string{"feishu_session_key": routeB},
+		Metadata: map[string]string{"feishu_session_key": route},
 	}, platformtest.NewReplier(platform.Capabilities{Text: true}))
 	waitForFakeAgentCalls(t, &ag.fakeAgent, 1)
-	wantConversationID := buildCodexConversationID(routeB, "codex", workspaceA)
+	wantConversationID := buildCodexConversationID(route, "codex", workspaceB)
 	if got := ag.lastChatConversationID(); got != wantConversationID {
 		t.Fatalf("route B conversation=%q, want %q", got, wantConversationID)
-	}
-}
-
-func TestCodexNewThreadIsBuiltinSessionCommand(t *testing.T) {
-	if !isCodexSessionCommand("/cx new-thread") {
-		t.Fatal("/cx new-thread should be treated as a builtin Codex session command")
 	}
 }
 
 func TestFeishuHelpChoicesCarrySessionMetadata(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
+	sessionKey := "feishu:tenant_1:group:oc_1"
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
@@ -263,7 +177,7 @@ func TestFeishuRawCommandStopUsesSessionMetadata(t *testing.T) {
 		},
 	}
 	h.agents["codex"] = ag
-	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
+	sessionKey := "feishu:tenant_1:group:oc_1"
 	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("ou_user", "codex"), t.TempDir())
 	key := h.agentExecutionKeyForRoute("ou_user", sessionKey, "codex", ag)
 	task, taskCtx, started := h.beginActiveTask(context.Background(), key, activeTaskMeta{owner: "ou_user", agentName: "codex", message: "hi"})
@@ -304,7 +218,7 @@ func TestFeishuRunPendingUsesSessionMetadata(t *testing.T) {
 	}, nil)
 	h.SetDefaultAgent("codex", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
+	sessionKey := "feishu:tenant_1:group:oc_1"
 	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("ou_user", "codex"), t.TempDir())
 	executionKey := h.agentExecutionKeyForRoute("ou_user", sessionKey, "codex", ag)
 	h.storePendingCodexRun(executionKey, "继续执行")
@@ -329,7 +243,7 @@ func TestPlatformMessageSessionKeyIgnoresWechatMetadata(t *testing.T) {
 	msg := platform.IncomingMessage{
 		Platform: platform.PlatformWeChat,
 		UserID:   "wx_user",
-		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1"},
 	}
 
 	if got := platformMessageSessionKey(msg); got != "" {

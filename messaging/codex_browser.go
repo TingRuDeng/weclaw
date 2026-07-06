@@ -97,7 +97,7 @@ func (h *Handler) handleCodexCd(req codexWorkspaceCdRequest) string {
 	return h.enterCodexWorkspace(req, group, workspaceRoot)
 }
 
-// setCodexActiveWorkspaceForRoute 只更新当前 route，避免飞书回复串会话互相污染工作空间。
+// setCodexActiveWorkspaceForRoute 只更新当前 route，避免平台路由会话互相污染工作空间。
 func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, _ string, workspaceRoot string) {
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 }

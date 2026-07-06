@@ -33,15 +33,14 @@ type FeishuSessionScope struct {
 	AgentName    string
 }
 
-// FeishuSessionOptions 控制飞书群聊触发和 thread 会话隔离策略。
+// FeishuSessionOptions 控制飞书群聊触发策略。
 type FeishuSessionOptions struct {
 	RequireMentionInGroup bool
-	ThreadIsolation       bool
 }
 
-// DefaultFeishuSessionOptions 返回安全默认值：群聊必须 @，thread 默认隔离。
+// DefaultFeishuSessionOptions 返回安全默认值：群聊必须 @。
 func DefaultFeishuSessionOptions() FeishuSessionOptions {
-	return FeishuSessionOptions{RequireMentionInGroup: true, ThreadIsolation: true}
+	return FeishuSessionOptions{RequireMentionInGroup: true}
 }
 
 // ExtractFeishuSessionScope 从飞书事件中抽取统一会话语义。
@@ -82,20 +81,13 @@ func ResolveThreadKey(scope FeishuSessionScope) string {
 }
 
 // BuildFeishuSessionKey 根据飞书会话范围生成稳定 session key。
-func BuildFeishuSessionKey(scope FeishuSessionScope, threadIsolation bool) string {
+func BuildFeishuSessionKey(scope FeishuSessionScope) string {
 	parts := []string{feishuScopePrefix}
 	if tenant := strings.TrimSpace(scope.TenantID); tenant != "" {
 		parts = append(parts, tenant)
 	}
 	if isFeishuGroupChat(scope.ChatType) {
 		parts = append(parts, "group", strings.TrimSpace(scope.ChatID))
-		if threadIsolation && hasThreadFields(scope) {
-			parts = append(parts, ResolveThreadKey(scope))
-		}
-		return strings.Join(parts, ":")
-	}
-	if threadIsolation && hasThreadFields(scope) {
-		parts = append(parts, "dm_thread", strings.TrimSpace(scope.ChatID), strings.TrimSpace(scope.SenderOpenID), ResolveThreadKey(scope))
 		return strings.Join(parts, ":")
 	}
 	parts = append(parts, "dm", strings.TrimSpace(scope.ChatID), strings.TrimSpace(scope.SenderOpenID))

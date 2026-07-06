@@ -124,10 +124,10 @@
 - 正确做法：普通选择卡、审批卡和审批回调都保留原飞书会话路由；真正权限审批只来自 Codex 的 `requestApproval` 事件，缺少可选 decision 时不要弹飞书审批卡。
 - 来源：2026-07-03 用户指出“这是要我输入确认，而不是弹审批卡片，WeClaw 是不是没区分 Codex 真正申请权限的方式”。
 
-## 2026-07-06 飞书 DM 子会话工作空间隔离
+## 2026-07-06 飞书项目机器人会话模型
 
-- 触发条件：飞书单聊通过 `/cx new-thread` 形成多个回复串子会话，或群聊多个回复串分别使用 Codex 工作空间时。
-- 规则：`dm_thread` 和 group thread route 必须独立保存 active workspace；route 级 `/cx cd`、`/cx switch`、`/cx app`、`/cx cli`、`/new` 不能写真实用户 owner workspace，也不能写 Codex Agent 全局 cwd。
-- 反例：A 子会话 `/cx cd beta` 后写入全局 cwd，B 子会话没有自己的 active workspace 时从全局 cwd 兜底，表现为所有子会话一起切到 beta。
-- 正确做法：通过 `codexWorkspaceRootForRoute` 和 `switchCodexWorkspaceForRoute` 区分 route 与真实用户；只有 `routeUserID == actorUserID` 的主会话才允许同步全局 cwd。
-- 来源：2026-07-06 用户反馈“怎么在子会话里切换，所有其他子会话都一起切换到新的工作空间了”。
+- 触发条件：需要多个项目并行接入 Codex，但不需要用回复串做同一机器人内的多项目隔离时。
+- 规则：优先用“一个飞书机器人 = 一个项目入口”区分项目；飞书回复串 / 话题不应创建 WeClaw 子会话，`/cx new-thread` 不应作为内置命令。
+- 反例：继续维护 `dm_thread` 或 group thread route，会把项目隔离、回复目标和 Codex 会话切换耦合到同一套复杂逻辑里。
+- 正确做法：session key 只保留聊天维度；DM 为 `feishu:<tenant>:dm:<chatID>:<senderOpenID>`，群聊为 `feishu:<tenant>:group:<chatID>`，多项目并行交给多机器人入口。
+- 来源：2026-07-06 用户确认“按单聊和群聊回复串隔离都移除的范围执行”。

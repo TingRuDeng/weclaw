@@ -2,7 +2,6 @@ package feishu
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +25,7 @@ func TestHandleMessageEventDropsGroupMirrorAfterThreadFirst(t *testing.T) {
 	_ = adapter.handleMessageEvent(context.Background(), mirror, recorder.dispatch)
 
 	recorder.requireCount(t, 1, 80*time.Millisecond)
-	recorder.requireSessionContains(t, "omt_thread")
+	recorder.requireSessionEquals(t, "feishu:tenant_1:group:oc_1")
 }
 
 func TestHandleMessageEventDropsPendingGroupMirrorWhenThreadArrives(t *testing.T) {
@@ -46,7 +45,7 @@ func TestHandleMessageEventDropsPendingGroupMirrorWhenThreadArrives(t *testing.T
 	_ = adapter.handleMessageEvent(context.Background(), thread, recorder.dispatch)
 
 	recorder.requireCount(t, 1, 120*time.Millisecond)
-	recorder.requireSessionContains(t, "omt_thread")
+	recorder.requireSessionEquals(t, "feishu:tenant_1:group:oc_1")
 }
 
 func TestHandleMessageEventDispatchesPendingGroupWithoutThreadMirror(t *testing.T) {
@@ -145,17 +144,6 @@ func (r *dispatchRecorder) requireCount(t *testing.T, want int, timeout time.Dur
 		r.seen = append(r.seen, msg)
 		t.Fatalf("dispatches=%d, want %d", len(r.seen), want)
 	case <-time.After(timeout):
-	}
-}
-
-func (r *dispatchRecorder) requireSessionContains(t *testing.T, value string) {
-	t.Helper()
-	if len(r.seen) == 0 {
-		t.Fatal("no dispatched message")
-	}
-	session := r.seen[0].Metadata[feishuSessionMetadataKey]
-	if !strings.Contains(session, value) {
-		t.Fatalf("session=%q, want contains %q", session, value)
 	}
 }
 

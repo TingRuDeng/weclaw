@@ -65,7 +65,7 @@ ai_summary:
 ## High-Risk Areas
 
 - 飞书真实发送者身份和 session routing 必须分离；`feishu_session_key` 只用于会话路由。
-- 飞书 DM 子会话使用 `dm_thread` route 独立保存 Codex active workspace；子会话 `/cx cd`、`/cx switch`、`/cx app`、`/cx cli`、`/new` 只能更新当前 route，不能改写真实用户 owner workspace 或 Agent 全局 cwd。
+- 飞书会话按聊天窗口聚合：DM 使用 `feishu:<tenant>:dm:<chatID>:<senderOpenID>`，群聊使用 `feishu:<tenant>:group:<chatID>`；回复串 / 话题不再生成独立 route。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。

@@ -83,25 +83,7 @@ func (h *Handler) codexWorkspaceRootForRoute(ownerUserID string, routeUserID str
 	if workspaceRoot, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey(routeUserID, agentName)); ok {
 		return h.applyCodexWorkspaceRootForRoute(ownerUserID, routeUserID, agentName, ag, workspaceRoot)
 	}
-	if parentRoute, ok := parentFeishuDMThreadRoute(routeUserID); ok {
-		if workspaceRoot, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey(parentRoute, agentName)); ok {
-			return h.applyCodexWorkspaceRootForRoute(ownerUserID, routeUserID, agentName, ag, workspaceRoot)
-		}
-	}
 	return h.codexWorkspaceRootForUser(ownerUserID, agentName, ag)
-}
-
-func parentFeishuDMThreadRoute(routeUserID string) (string, bool) {
-	parts := strings.Split(strings.TrimSpace(routeUserID), ":")
-	for i, part := range parts {
-		if part != "dm_thread" || i+3 >= len(parts) {
-			continue
-		}
-		parent := append([]string{}, parts[:i]...)
-		parent = append(parent, "dm", parts[i+1], parts[i+2])
-		return strings.Join(parent, ":"), true
-	}
-	return "", false
 }
 
 func (h *Handler) applyCodexWorkspaceRoot(agentName string, ag agent.Agent, workspaceRoot string) string {
@@ -201,7 +183,6 @@ func buildCodexSessionHelpText() string {
 		"/cx cd <编号|工作空间名|..> 进入工作空间或返回工作空间列表",
 		"/cx switch <编号> 切换当前工作空间会话",
 		"/cx new 新建当前工作空间会话",
-		"/cx new-thread 在飞书单聊开启回复串会话",
 		"/cx pwd 查看当前工作空间",
 		"/cx cli 打开本地 CLI 接手当前 thread",
 		"/cx app 打开 Codex App 到当前工作空间",

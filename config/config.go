@@ -34,17 +34,11 @@ type PlatformConfig struct {
 	Progress              *ProgressConfig `json:"progress,omitempty"`
 	MessageAggregationMs  *int            `json:"message_aggregation_ms,omitempty"`
 	RequireMentionInGroup *bool           `json:"require_mention_in_group,omitempty"`
-	ThreadIsolation       *bool           `json:"thread_isolation,omitempty"`
 }
 
 // EffectiveRequireMentionInGroup 返回飞书群聊 @ 触发规则，默认要求 @bot。
 func (c PlatformConfig) EffectiveRequireMentionInGroup() bool {
 	return boolValueDefault(c.RequireMentionInGroup, true)
-}
-
-// EffectiveThreadIsolation 返回飞书 thread 会话隔离规则，默认按 thread 隔离。
-func (c PlatformConfig) EffectiveThreadIsolation() bool {
-	return boolValueDefault(c.ThreadIsolation, true)
 }
 
 // AgentConfig holds configuration for a single agent.

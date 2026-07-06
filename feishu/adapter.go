@@ -60,7 +60,7 @@ func NewAdapter(creds Credentials) *Adapter {
 	return adapter
 }
 
-// SetSessionOptions 设置飞书群聊触发和 thread 隔离策略。
+// SetSessionOptions 设置飞书群聊触发策略。
 func (a *Adapter) SetSessionOptions(options FeishuSessionOptions) {
 	a.session = options
 }

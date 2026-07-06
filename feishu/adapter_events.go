@@ -3,7 +3,6 @@ package feishu
 import (
 	"context"
 	"log"
-	"strings"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -54,7 +53,7 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
 	log.Printf("[feishu] message event parsed: user=%s message=%s attachments=%d", msg.UserID, msg.MessageID, len(msg.Attachments))
-	dispatch(ctx, msg, a.newScopedReplier(msg, firstNonEmpty(msg.ReplyToID, msg.ContextToken)))
+	dispatch(ctx, msg, a.newScopedReplier(msg))
 }
 
 // handleCardActionEvent 在 3 秒回调窗口内立即响应，再异步把按钮动作回放到统一业务层。
@@ -93,28 +92,13 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		},
 		Metadata: metadata,
 	}
-	go dispatch(context.WithoutCancel(ctx), msg, a.newScopedReplier(msg, action.MessageID))
+	go dispatch(context.WithoutCancel(ctx), msg, a.newScopedReplier(msg))
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
 	}, nil
 }
 
-func (a *Adapter) newScopedReplier(msg platform.IncomingMessage, replyToID string) platform.Replier {
+func (a *Adapter) newScopedReplier(msg platform.IncomingMessage) platform.Replier {
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
-	if shouldReplyInFeishuThread(msg) {
-		return newReplierForMessageWithTaskCards(a.sender, target, replyToID, a.cardKit, a.taskCards)
-	}
 	return newReplierWithTaskCards(a.sender, target, a.cardKit, a.taskCards)
-}
-
-func shouldReplyInFeishuThread(msg platform.IncomingMessage) bool {
-	if msg.Metadata == nil {
-		return false
-	}
-	chatType := msg.Metadata["feishu_chat_type"]
-	if isFeishuGroupChat(chatType) {
-		return true
-	}
-	sessionKey := msg.Metadata[feishuSessionMetadataKey]
-	return strings.Contains(sessionKey, ":group:") || strings.Contains(sessionKey, ":dm_thread:")
 }
