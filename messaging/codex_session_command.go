@@ -49,7 +49,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 	if err != nil {
 		return err.Error()
 	}
-	workspaceRoot := h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
+	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	bindingKey := codexBindingKey(routeUserID, agentName)
 	ownerBindingKey := codexBindingKey(actorUserID, agentName)
 	h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)

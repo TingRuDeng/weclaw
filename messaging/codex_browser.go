@@ -91,18 +91,15 @@ func (h *Handler) handleCodexCd(req codexWorkspaceCdRequest) string {
 	if err != nil {
 		return err.Error()
 	}
-	workspaceRoot := h.switchCodexWorkspace(req.AgentName, group.Root, req.Agent)
+	workspaceRoot := h.switchCodexWorkspaceForRoute(req.ActorUserID, req.UserID, req.AgentName, group.Root, req.Agent)
 	h.setCodexActiveWorkspaceForRoute(req.BindingKey, req.OwnerBindingKey, workspaceRoot)
 	h.setCodexBrowseWorkspace(req.BindingKey, workspaceRoot)
 	return h.enterCodexWorkspace(req, group, workspaceRoot)
 }
 
-// setCodexActiveWorkspaceForRoute 同步 route 会话和真实用户的当前工作空间。
-func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, ownerBindingKey string, workspaceRoot string) {
+// setCodexActiveWorkspaceForRoute 只更新当前 route，避免飞书回复串会话互相污染工作空间。
+func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, _ string, workspaceRoot string) {
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
-	if ownerBindingKey != "" && ownerBindingKey != bindingKey {
-		h.ensureCodexSessions().setActiveWorkspace(ownerBindingKey, workspaceRoot)
-	}
 }
 
 // enterCodexWorkspace 根据会话数量决定自动切换、创建草稿或展示列表。

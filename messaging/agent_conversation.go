@@ -35,7 +35,7 @@ func (h *Handler) codexConversationRouteForSession(ownerUserID string, routeUser
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = ownerUserID
 	}
-	workspaceRoot := h.codexWorkspaceRootForUser(ownerUserID, agentName, ag)
+	workspaceRoot := h.codexWorkspaceRootForRoute(ownerUserID, routeUserID, agentName, ag)
 	conversationID := buildCodexConversationID(routeUserID, agentName, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	return codexConversationRoute{

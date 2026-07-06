@@ -17,7 +17,7 @@ func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentNa
 
 // handleCodexOpenAppForRoute 打开真实用户工作空间，并记录 route session 的本地入口状态。
 func (h *Handler) handleCodexOpenAppForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	workspaceRoot = h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
+	workspaceRoot = h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
 	opener := h.resolveCodexAppOpener()
 	command := strings.TrimSpace(ag.Info().Command)
@@ -136,7 +136,7 @@ func (h *Handler) openCodexThreadInCLIForRoute(ctx context.Context, actorUserID 
 	if _, ok := ag.(agent.CodexThreadAgent); !ok {
 		return text.unsupported
 	}
-	workspaceRoot = h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
+	workspaceRoot = h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	if strings.TrimSpace(workspaceRoot) == "" {
 		workspaceRoot = h.codexWorkspaceRoot(agentName)
 	}

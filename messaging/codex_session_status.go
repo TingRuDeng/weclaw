@@ -71,6 +71,41 @@ func (h *Handler) codexWorkspaceRootForUser(userID string, agentName string, ag 
 	if !ok {
 		return h.codexWorkspaceRoot(agentName)
 	}
+	return h.applyCodexWorkspaceRoot(agentName, ag, workspaceRoot)
+}
+
+// codexWorkspaceRootForRoute 解析 route 自己的工作空间；只有真实用户主会话会同步全局 cwd。
+func (h *Handler) codexWorkspaceRootForRoute(ownerUserID string, routeUserID string, agentName string, ag agent.Agent) string {
+	routeUserID = strings.TrimSpace(routeUserID)
+	if routeUserID == "" {
+		routeUserID = ownerUserID
+	}
+	if workspaceRoot, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey(routeUserID, agentName)); ok {
+		return h.applyCodexWorkspaceRootForRoute(ownerUserID, routeUserID, agentName, ag, workspaceRoot)
+	}
+	if parentRoute, ok := parentFeishuDMThreadRoute(routeUserID); ok {
+		if workspaceRoot, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey(parentRoute, agentName)); ok {
+			return h.applyCodexWorkspaceRootForRoute(ownerUserID, routeUserID, agentName, ag, workspaceRoot)
+		}
+	}
+	return h.codexWorkspaceRootForUser(ownerUserID, agentName, ag)
+}
+
+func parentFeishuDMThreadRoute(routeUserID string) (string, bool) {
+	parts := strings.Split(strings.TrimSpace(routeUserID), ":")
+	for i, part := range parts {
+		if part != "dm_thread" || i+3 >= len(parts) {
+			continue
+		}
+		parent := append([]string{}, parts[:i]...)
+		parent = append(parent, "dm", parts[i+1], parts[i+2])
+		return strings.Join(parent, ":"), true
+	}
+	return "", false
+}
+
+func (h *Handler) applyCodexWorkspaceRoot(agentName string, ag agent.Agent, workspaceRoot string) string {
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	ag.SetCwd(workspaceRoot)
 	h.mu.Lock()
 	if h.agentWorkDirs == nil {
@@ -79,6 +114,26 @@ func (h *Handler) codexWorkspaceRootForUser(userID string, agentName string, ag 
 	h.agentWorkDirs[agentName] = workspaceRoot
 	h.mu.Unlock()
 	return workspaceRoot
+}
+
+func (h *Handler) applyCodexWorkspaceRootForRoute(ownerUserID string, routeUserID string, agentName string, ag agent.Agent, workspaceRoot string) string {
+	if shouldSyncCodexGlobalWorkspace(ownerUserID, routeUserID) {
+		return h.applyCodexWorkspaceRoot(agentName, ag, workspaceRoot)
+	}
+	return normalizeCodexWorkspaceRoot(workspaceRoot)
+}
+
+func (h *Handler) switchCodexWorkspaceForRoute(ownerUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+	if shouldSyncCodexGlobalWorkspace(ownerUserID, routeUserID) {
+		return h.switchCodexWorkspace(agentName, workspaceRoot, ag)
+	}
+	return normalizeCodexWorkspaceRoot(workspaceRoot)
+}
+
+func shouldSyncCodexGlobalWorkspace(ownerUserID string, routeUserID string) bool {
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	routeUserID = strings.TrimSpace(routeUserID)
+	return routeUserID == "" || routeUserID == ownerUserID
 }
 
 func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) string {
@@ -92,7 +147,7 @@ func (h *Handler) renderCodexStatus(userID string, agentName string, workspaceRo
 
 // renderCodexStatusForRoute 显示 route session 的 thread 状态，同时用真实用户工作空间解释路径。
 func (h *Handler) renderCodexStatusForRoute(actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	workspaceRoot = h.codexWorkspaceRootForUser(actorUserID, agentName, ag)
+	workspaceRoot = h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	if strings.TrimSpace(workspaceRoot) == "" {
 		workspaceRoot = h.codexWorkspaceRoot(agentName)
 	}

@@ -57,7 +57,7 @@ func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, user
 	if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
 		return renderCodexSwitchFailure(err)
 	}
-	h.switchCodexWorkspace(agentName, workspaceRoot, ag)
+	h.switchCodexWorkspaceForRoute(firstNonBlank(opts.actorUserID, userID), userID, agentName, workspaceRoot, ag)
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
 	lines := []string{"已切换会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
