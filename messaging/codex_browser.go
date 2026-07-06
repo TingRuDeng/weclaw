@@ -76,6 +76,7 @@ func (h *Handler) renderCodexSessionList(bindingKey string, workspaceRoot string
 	for index, session := range sessions {
 		lines = append(lines, fmt.Sprintf("%d. %s", index, codexSessionDisplayName(session)))
 	}
+	lines = append(lines, "", "发送 /cx cd .. 返回工作空间列表。")
 	return wechatCommandText(lines...)
 }
 

@@ -99,18 +99,23 @@ func (h *Handler) sendFeishuCodexWorkspaceChoices(ctx context.Context, userID st
 func (h *Handler) sendFeishuCodexSessionChoices(ctx context.Context, userID string, reply platform.Replier, bindingKey string, workspaceRoot string, fields []string, metadata map[string]string) bool {
 	sessions := h.codexSessionsForWorkspace(bindingKey, workspaceRoot)
 	choices := make([]platform.Choice, 0, len(sessions))
-	for index, session := range sessions {
+	for _, session := range sessions {
 		if strings.TrimSpace(session.ThreadID) == "" || session.PendingNewThread {
 			continue
 		}
 		choices = append(choices, platform.Choice{
-			ID:    fmt.Sprintf("/cx switch %d", index),
+			ID:    fmt.Sprintf("/cx switch %s", strings.TrimSpace(session.ThreadID)),
 			Label: codexSessionDisplayName(session),
 		})
 	}
-	if len(choices) == 0 || !shouldShowFeishuSessionChoices(fields, len(choices)) {
+	sessionChoiceCount := len(choices)
+	if sessionChoiceCount == 0 || !shouldShowFeishuSessionChoices(fields, sessionChoiceCount) {
 		return false
 	}
+	choices = append(choices, platform.Choice{
+		ID:    "/cx cd ..",
+		Label: "返回工作空间列表",
+	})
 	choices = platformChoicesWithMetadata(choices, metadata)
 	prompt := fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(workspaceRoot))
 	return h.askFeishuCodexChoices(ctx, userID, reply, prompt, choices)
