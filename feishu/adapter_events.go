@@ -53,7 +53,7 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
 	log.Printf("[feishu] message event parsed: user=%s message=%s attachments=%d", msg.UserID, msg.MessageID, len(msg.Attachments))
-	dispatch(ctx, msg, newReplierWithTaskCards(a.sender, firstNonEmpty(msg.ChatID, msg.UserID), a.cardKit, a.taskCards))
+	dispatch(ctx, msg, newReplierForMessageWithTaskCards(a.sender, firstNonEmpty(msg.ChatID, msg.UserID), firstNonEmpty(msg.ReplyToID, msg.ContextToken), a.cardKit, a.taskCards))
 }
 
 // handleCardActionEvent 在 3 秒回调窗口内立即响应，再异步把按钮动作回放到统一业务层。
@@ -92,7 +92,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		},
 		Metadata: metadata,
 	}
-	go dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, action.UserID, a.cardKit, a.taskCards))
+	go dispatch(context.WithoutCancel(ctx), msg, newReplierForMessageWithTaskCards(a.sender, firstNonEmpty(action.ChatID, action.UserID), action.MessageID, a.cardKit, a.taskCards))
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
 	}, nil

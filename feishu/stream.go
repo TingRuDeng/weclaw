@@ -46,7 +46,7 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 	if err != nil {
 		return nil, err
 	}
-	if err := r.sender.SendCard(ctx, r.openID, cardID); err != nil {
+	if err := r.sendCard(ctx, r.openID, cardID); err != nil {
 		return nil, err
 	}
 	if trackTask {

@@ -84,6 +84,32 @@ func TestToIncomingFromMessageDispatchesMentionedGroup(t *testing.T) {
 	}
 }
 
+func TestToIncomingFromMessageSeparatesGroupReplyThreads(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	first := newMessageEvent("group", "text", `{"text":"<at user_id=\"cli_a\">bot</at> first"}`)
+	first.Event.Message.RootId = stringPtr("om_root_a")
+	first.Event.Message.Mentions = []*larkim.MentionEvent{newMention("cli_a")}
+	second := newMessageEvent("group", "text", `{"text":"<at user_id=\"cli_a\">bot</at> second"}`)
+	second.Event.Message.MessageId = stringPtr("om_2")
+	second.Event.Message.RootId = stringPtr("om_root_b")
+	second.Event.Message.Mentions = []*larkim.MentionEvent{newMention("cli_a")}
+
+	firstIncoming, firstOK := adapter.toIncomingFromMessage(context.Background(), first)
+	secondIncoming, secondOK := adapter.toIncomingFromMessage(context.Background(), second)
+
+	if !firstOK || !secondOK {
+		t.Fatal("mentioned group reply threads should both be dispatchable")
+	}
+	firstKey := firstIncoming.Metadata["feishu_session_key"]
+	secondKey := secondIncoming.Metadata["feishu_session_key"]
+	if firstKey == secondKey {
+		t.Fatalf("session keys should differ, both=%q", firstKey)
+	}
+	if !strings.Contains(firstKey, "om_root_a") || !strings.Contains(secondKey, "om_root_b") {
+		t.Fatalf("session keys=(%q,%q), want root ids", firstKey, secondKey)
+	}
+}
+
 func TestIsMentionedBotUsesNormalizedFlag(t *testing.T) {
 	if !isMentionedBotFromParts(feishuMentionCheck{NormalizedMentioned: true, AppID: "cli_a"}) {
 		t.Fatal("normalized mentioned bot should be treated as bot mention")

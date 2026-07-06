@@ -18,15 +18,21 @@ type messageSender interface {
 	SendImage(ctx context.Context, openID string, localPath string) error
 	SendFile(ctx context.Context, openID string, localPath string) error
 	SendCard(ctx context.Context, openID string, cardID string) error
+	ReplyText(ctx context.Context, messageID string, text string) error
+	ReplyImage(ctx context.Context, messageID string, localPath string) error
+	ReplyFile(ctx context.Context, messageID string, localPath string) error
+	ReplyCard(ctx context.Context, messageID string, cardID string) error
 }
 
 type createMessageFunc func(ctx context.Context, receiveID string, receiveIDType string, msgType string, content string) (int, string, error)
+type replyMessageFunc func(ctx context.Context, messageID string, msgType string, content string, replyInThread bool) (int, string, error)
 
 type sdkMessageSender struct {
 	client *lark.Client
 	appID  string
 	guide  *permissionGuideLimiter
 	create createMessageFunc
+	reply  replyMessageFunc
 }
 
 // newSDKMessageSender 创建基于飞书 REST client 的消息发送器。
@@ -45,24 +51,34 @@ func (s *sdkMessageSender) SendText(ctx context.Context, receiveID string, text 
 
 // SendImage 上传本地图片并发送 image 消息。
 func (s *sdkMessageSender) SendImage(ctx context.Context, openID string, localPath string) error {
-	file, err := os.Open(localPath)
+	content, err := s.imageMessageContent(ctx, openID, localPath)
 	if err != nil {
 		return err
+	}
+	return s.createMessage(ctx, openID, larkim.MsgTypeImage, content)
+}
+
+func (s *sdkMessageSender) imageMessageContent(ctx context.Context, guideTarget string, localPath string) (string, error) {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return "", err
 	}
 	defer file.Close()
 	imageResp, err := s.createImage(ctx, file)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !imageResp.Success() || imageResp.Data == nil || imageResp.Data.ImageKey == nil {
-		s.sendPermissionGuide(ctx, openID, imageResp.Code)
-		return s.apiError(imageResp.Code, imageResp.Msg)
+		if guideTarget != "" {
+			s.sendPermissionGuide(ctx, guideTarget, imageResp.Code)
+		}
+		return "", s.apiError(imageResp.Code, imageResp.Msg)
 	}
 	content, err := json.Marshal(map[string]string{"image_key": *imageResp.Data.ImageKey})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return s.createMessage(ctx, openID, larkim.MsgTypeImage, string(content))
+	return string(content), nil
 }
 
 func (s *sdkMessageSender) createImage(ctx context.Context, file *os.File) (*larkim.CreateImageResp, error) {
@@ -77,9 +93,17 @@ func (s *sdkMessageSender) createImage(ctx context.Context, file *os.File) (*lar
 
 // SendFile 上传本地文件并发送 file 消息。
 func (s *sdkMessageSender) SendFile(ctx context.Context, openID string, localPath string) error {
-	file, err := os.Open(localPath)
+	content, err := s.fileMessageContent(ctx, openID, localPath)
 	if err != nil {
 		return err
+	}
+	return s.createMessage(ctx, openID, larkim.MsgTypeFile, content)
+}
+
+func (s *sdkMessageSender) fileMessageContent(ctx context.Context, guideTarget string, localPath string) (string, error) {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return "", err
 	}
 	defer file.Close()
 	fileReq := larkim.NewCreateFileReqBuilder().
@@ -91,17 +115,19 @@ func (s *sdkMessageSender) SendFile(ctx context.Context, openID string, localPat
 		Build()
 	fileResp, err := s.client.Im.File.Create(ctx, fileReq)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !fileResp.Success() || fileResp.Data == nil || fileResp.Data.FileKey == nil {
-		s.sendPermissionGuide(ctx, openID, fileResp.Code)
-		return s.apiError(fileResp.Code, fileResp.Msg)
+		if guideTarget != "" {
+			s.sendPermissionGuide(ctx, guideTarget, fileResp.Code)
+		}
+		return "", s.apiError(fileResp.Code, fileResp.Msg)
 	}
 	content, err := json.Marshal(map[string]string{"file_key": *fileResp.Data.FileKey})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return s.createMessage(ctx, openID, larkim.MsgTypeFile, string(content))
+	return string(content), nil
 }
 
 // SendCard 发送已创建的 CardKit 卡片实例。

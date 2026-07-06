@@ -16,6 +16,7 @@ type Replier struct {
 	sender       messageSender
 	cardKit      cardKitClient
 	openID       string
+	replyToID    string
 	taskCards    *taskCardRegistry
 	taskCardMu   sync.RWMutex
 	taskCardID   string
@@ -32,8 +33,19 @@ func NewReplier(sender messageSender, openID string, cardKitClients ...cardKitCl
 	return &Replier{sender: sender, cardKit: cardKit, openID: openID}
 }
 
+// NewReplierForMessage 创建会回复到原飞书消息 / 话题的回复器。
+func NewReplierForMessage(sender messageSender, openID string, replyToID string, cardKitClients ...cardKitClient) *Replier {
+	reply := NewReplier(sender, openID, cardKitClients...)
+	reply.replyToID = strings.TrimSpace(replyToID)
+	return reply
+}
+
 func newReplierWithTaskCards(sender messageSender, openID string, cardKit cardKitClient, cards *taskCardRegistry) *Replier {
 	return &Replier{sender: sender, cardKit: cardKit, openID: openID, taskCards: cards}
+}
+
+func newReplierForMessageWithTaskCards(sender messageSender, openID string, replyToID string, cardKit cardKitClient, cards *taskCardRegistry) *Replier {
+	return &Replier{sender: sender, cardKit: cardKit, openID: openID, replyToID: strings.TrimSpace(replyToID), taskCards: cards}
 }
 
 // Capabilities 返回飞书回复器能力。
@@ -44,6 +56,12 @@ func (r *Replier) Capabilities() platform.Capabilities {
 // SendText 拆分超长文本并逐条发送。
 func (r *Replier) SendText(ctx context.Context, text string) error {
 	for _, chunk := range splitFeishuText(text) {
+		if r.replyToID != "" {
+			if err := r.sender.ReplyText(ctx, r.replyToID, chunk); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := r.sender.SendText(ctx, r.openID, chunk); err != nil {
 			return err
 		}
@@ -53,11 +71,17 @@ func (r *Replier) SendText(ctx context.Context, text string) error {
 
 // SendImage 上传并发送本地图片。
 func (r *Replier) SendImage(ctx context.Context, localPath string) error {
+	if r.replyToID != "" {
+		return r.sender.ReplyImage(ctx, r.replyToID, localPath)
+	}
 	return r.sender.SendImage(ctx, r.openID, localPath)
 }
 
 // SendFile 上传并发送本地文件。
 func (r *Replier) SendFile(ctx context.Context, localPath string) error {
+	if r.replyToID != "" {
+		return r.sender.ReplyFile(ctx, r.replyToID, localPath)
+	}
 	return r.sender.SendFile(ctx, r.openID, localPath)
 }
 
@@ -117,7 +141,7 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 		if err != nil {
 			return err
 		}
-		return r.sender.SendCard(ctx, targetOpenID, cardID)
+		return r.sendCard(ctx, targetOpenID, cardID)
 	}
 	var lines []string
 	if strings.TrimSpace(prompt) != "" {
@@ -161,7 +185,14 @@ func (r *Replier) createApprovalPanel(ctx context.Context, taskCardID string, ta
 	if _, ok := r.taskCards.bindApprovalPanelCard(taskCardID, cardID); !ok {
 		return false, nil
 	}
-	return true, r.sender.SendCard(ctx, targetOpenID, cardID)
+	return true, r.sendCard(ctx, targetOpenID, cardID)
+}
+
+func (r *Replier) sendCard(ctx context.Context, targetOpenID string, cardID string) error {
+	if r.replyToID != "" && targetOpenID == r.openID {
+		return r.sender.ReplyCard(ctx, r.replyToID, cardID)
+	}
+	return r.sender.SendCard(ctx, targetOpenID, cardID)
 }
 
 // CurrentTaskCardID 返回当前任务流卡片 ID，供审批按钮回写主任务卡片。

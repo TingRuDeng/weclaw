@@ -9,10 +9,14 @@ import (
 )
 
 type fakeMessageSender struct {
-	texts  []string
-	images []string
-	files  []string
-	cards  []string
+	texts       []string
+	images      []string
+	files       []string
+	cards       []string
+	replyTexts  []string
+	replyImages []string
+	replyFiles  []string
+	replyCards  []string
 }
 
 // SendText 记录测试发送的文本。
@@ -38,6 +42,30 @@ func (f *fakeMessageSender) SendCard(ctx context.Context, openID string, cardID 
 	return nil
 }
 
+// ReplyText 记录测试发送的回复串文本。
+func (f *fakeMessageSender) ReplyText(ctx context.Context, messageID string, text string) error {
+	f.replyTexts = append(f.replyTexts, messageID+":"+text)
+	return nil
+}
+
+// ReplyImage 记录测试发送的回复串图片。
+func (f *fakeMessageSender) ReplyImage(ctx context.Context, messageID string, localPath string) error {
+	f.replyImages = append(f.replyImages, messageID+":"+localPath)
+	return nil
+}
+
+// ReplyFile 记录测试发送的回复串文件。
+func (f *fakeMessageSender) ReplyFile(ctx context.Context, messageID string, localPath string) error {
+	f.replyFiles = append(f.replyFiles, messageID+":"+localPath)
+	return nil
+}
+
+// ReplyCard 记录测试发送的回复串卡片。
+func (f *fakeMessageSender) ReplyCard(ctx context.Context, messageID string, cardID string) error {
+	f.replyCards = append(f.replyCards, messageID+":"+cardID)
+	return nil
+}
+
 func TestReplierSendTextSplitsLongText(t *testing.T) {
 	sender := &fakeMessageSender{}
 	reply := NewReplier(sender, "ou_user")
@@ -51,6 +79,21 @@ func TestReplierSendTextSplitsLongText(t *testing.T) {
 	}
 }
 
+func TestReplierSendTextRepliesToSourceMessage(t *testing.T) {
+	sender := &fakeMessageSender{}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+
+	if err := reply.SendText(context.Background(), "hello"); err != nil {
+		t.Fatalf("SendText error: %v", err)
+	}
+	if len(sender.texts) != 0 {
+		t.Fatalf("texts=%#v, want no fresh message", sender.texts)
+	}
+	if len(sender.replyTexts) != 1 || sender.replyTexts[0] != "om_root:hello" {
+		t.Fatalf("replyTexts=%#v, want reply to source message", sender.replyTexts)
+	}
+}
+
 func TestReplierSendImageUsesSender(t *testing.T) {
 	sender := &fakeMessageSender{}
 	reply := NewReplier(sender, "ou_user")
@@ -60,6 +103,27 @@ func TestReplierSendImageUsesSender(t *testing.T) {
 	}
 	if len(sender.images) != 1 || sender.images[0] != "ou_user:/tmp/a.png" {
 		t.Fatalf("images=%#v, want image path", sender.images)
+	}
+}
+
+func TestReplierSendMediaRepliesToSourceMessage(t *testing.T) {
+	sender := &fakeMessageSender{}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+
+	if err := reply.SendImage(context.Background(), "/tmp/a.png"); err != nil {
+		t.Fatalf("SendImage error: %v", err)
+	}
+	if err := reply.SendFile(context.Background(), "/tmp/a.txt"); err != nil {
+		t.Fatalf("SendFile error: %v", err)
+	}
+	if len(sender.images) != 0 || len(sender.files) != 0 {
+		t.Fatalf("fresh media images=%#v files=%#v, want none", sender.images, sender.files)
+	}
+	if len(sender.replyImages) != 1 || sender.replyImages[0] != "om_root:/tmp/a.png" {
+		t.Fatalf("replyImages=%#v, want reply image", sender.replyImages)
+	}
+	if len(sender.replyFiles) != 1 || sender.replyFiles[0] != "om_root:/tmp/a.txt" {
+		t.Fatalf("replyFiles=%#v, want reply file", sender.replyFiles)
 	}
 }
 
@@ -81,6 +145,70 @@ func TestReplierAskChoicesSendsCardWhenCardKitAvailable(t *testing.T) {
 	}
 	if len(sender.texts) != 0 {
 		t.Fatalf("texts=%#v, want no text fallback", sender.texts)
+	}
+}
+
+func TestReplierAskChoicesRepliesCardToSourceMessage(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{cardID: "card-choice"}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root", cardKit)
+
+	err := reply.AskChoices(context.Background(), "请选择", []platform.Choice{{ID: "1", Label: "继续"}})
+
+	if err != nil {
+		t.Fatalf("AskChoices error: %v", err)
+	}
+	if len(sender.cards) != 0 {
+		t.Fatalf("cards=%#v, want no fresh card", sender.cards)
+	}
+	if len(sender.replyCards) != 1 || sender.replyCards[0] != "om_root:card-choice" {
+		t.Fatalf("replyCards=%#v, want card reply", sender.replyCards)
+	}
+}
+
+func TestReplierOpenStreamRepliesCardToSourceMessage(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{cardID: "card-task"}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root", cardKit)
+
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"})
+
+	if err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+	if stream == nil {
+		t.Fatal("OpenStream stream=nil, want stream")
+	}
+	if len(sender.cards) != 0 {
+		t.Fatalf("cards=%#v, want no fresh stream card", sender.cards)
+	}
+	if len(sender.replyCards) != 1 || sender.replyCards[0] != "om_root:card-task" {
+		t.Fatalf("replyCards=%#v, want stream card reply", sender.replyCards)
+	}
+}
+
+func TestReplierApprovalCardStillSendsToOwner(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{cardID: "card-approval"}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root", cardKit)
+
+	err := reply.AskChoices(context.Background(), approvalPromptForTest("date"), []platform.Choice{{
+		ID:    "accept",
+		Label: "允许",
+		Metadata: map[string]string{
+			"approval_key":        "approval-1",
+			approvalOwnerValueKey: "ou_owner",
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("AskChoices error: %v", err)
+	}
+	if len(sender.replyCards) != 0 {
+		t.Fatalf("replyCards=%#v, want approval sent to owner DM", sender.replyCards)
+	}
+	if len(sender.cards) != 1 || sender.cards[0] != "ou_owner:card-approval" {
+		t.Fatalf("cards=%#v, want approval owner card", sender.cards)
 	}
 }
 
