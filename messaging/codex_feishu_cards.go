@@ -18,6 +18,8 @@ func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platf
 		ActorUserID: msg.UserID,
 		RouteUserID: routeUserID,
 		Trimmed:     trimmed,
+		Platform:    msg.Platform,
+		Reply:       reply,
 	})
 	if h.sendFeishuCodexNavigationChoices(ctx, msg, routeUserID, reply, trimmed, result) {
 		return true

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type codexWorkspaceGroup struct {
@@ -17,11 +18,14 @@ type codexWorkspaceGroup struct {
 type codexWorkspaceCdRequest struct {
 	Context         context.Context
 	UserID          string
+	ActorUserID     string
 	BindingKey      string
 	OwnerBindingKey string
 	AgentName       string
 	Target          string
 	Agent           agent.Agent
+	Platform        platform.PlatformName
+	Reply           platform.Replier
 }
 
 // codexBrowseWorkspace 返回当前微信用户正在浏览的 Codex 工作空间。
@@ -144,7 +148,23 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 		return fmt.Sprintf("切换线程失败: %v", err)
 	}
 	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)
-	return wechatCommandText("已进入工作空间并切换会话。", "工作空间: "+workspaceName)
+	lines := []string{"已进入工作空间并切换会话。", "工作空间: " + workspaceName}
+	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
+		ctx:            req.Context,
+		actorUserID:    firstNonBlank(req.ActorUserID, req.UserID),
+		routeUserID:    req.UserID,
+		agentName:      req.AgentName,
+		agent:          req.Agent,
+		conversationID: conversationID,
+		threadID:       session.ThreadID,
+		platform:       req.Platform,
+		reply:          req.Reply,
+	})
+	if active {
+		lines = append(lines, renderExternalCodexActiveNotice(state)...)
+	}
+	lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
+	return wechatCommandText(lines...)
 }
 
 // renderCodexPwd 显示当前浏览层级，帮助用户确认 /cx ls 会列什么。

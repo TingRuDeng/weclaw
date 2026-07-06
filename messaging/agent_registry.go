@@ -9,7 +9,14 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-// SetDefaultAgent sets the default agent (already started).
+// agentStartState 合并同名 agent 的并发启动请求，避免重复拉起外部进程。
+type agentStartState struct {
+	done chan struct{}
+	ag   agent.Agent
+	err  error
+}
+
+// SetDefaultAgent 设置已经启动完成的默认 agent。
 func (h *Handler) SetDefaultAgent(name string, ag agent.Agent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -30,35 +37,72 @@ func (h *Handler) EnsureAgentStarted(ctx context.Context, name string) (agent.Ag
 	return h.getAgent(ctx, name)
 }
 
-// getAgent returns a running agent by name, or starts it on demand via factory.
+// getAgent 返回已运行的 agent；未启动时按需创建，且创建过程不持有 Handler 全局锁。
 func (h *Handler) getAgent(ctx context.Context, name string) (agent.Agent, error) {
 	h.mu.RLock()
 	ag, ok := h.agents[name]
+	factory := h.factory
 	h.mu.RUnlock()
 	if ok {
 		return ag, nil
 	}
 
-	if h.factory == nil {
+	if factory == nil {
 		return nil, fmt.Errorf("agent %q not found and no factory configured", name)
 	}
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	if ag, ok := h.agents[name]; ok {
+		h.mu.Unlock()
 		return ag, nil
 	}
+	if start, ok := h.agentStarts[name]; ok {
+		h.mu.Unlock()
+		return waitAgentStart(ctx, name, start)
+	}
+	start := &agentStartState{done: make(chan struct{})}
+	h.agentStarts[name] = start
+	h.mu.Unlock()
 
 	log.Printf("[handler] starting agent %q on demand...", name)
-	ag = h.factory(ctx, name)
-	if ag == nil {
-		return nil, fmt.Errorf("agent %q not available", name)
-	}
+	ag = factory(ctx, name)
 
-	h.agents[name] = ag
+	h.mu.Lock()
+	if existing, ok := h.agents[name]; ok {
+		ag = existing
+	} else if ag != nil {
+		h.agents[name] = ag
+	}
+	if ag == nil {
+		start.err = fmt.Errorf("agent %q not available", name)
+	} else {
+		start.ag = ag
+	}
+	delete(h.agentStarts, name)
+	close(start.done)
+	h.mu.Unlock()
+
+	if start.err != nil {
+		return nil, start.err
+	}
 	log.Printf("[handler] agent started on demand: %s (%s)", name, ag.Info())
 	return ag, nil
+}
+
+// waitAgentStart 等待同名 agent 的首个启动请求完成。
+func waitAgentStart(ctx context.Context, name string, start *agentStartState) (agent.Agent, error) {
+	select {
+	case <-start.done:
+		if start.err != nil {
+			return nil, start.err
+		}
+		if start.ag == nil {
+			return nil, fmt.Errorf("agent %q not available", name)
+		}
+		return start.ag, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("agent %q start wait canceled: %w", name, ctx.Err())
+	}
 }
 
 // getDefaultAgent returns the default agent (may be nil if not ready yet).

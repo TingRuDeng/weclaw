@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 // codexSessionCommandRequest 拆开真实用户和会话路由，避免飞书 thread 命令串到用户全局会话。
@@ -13,6 +14,8 @@ type codexSessionCommandRequest struct {
 	ActorUserID string
 	RouteUserID string
 	Trimmed     string
+	Platform    platform.PlatformName
+	Reply       platform.Replier
 }
 
 func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, trimmed string) string {
@@ -53,7 +56,18 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
 
 	if len(fields) == 2 && isCodexShortSelectionToken(fields[1]) {
-		return h.handleCodexShortSelection(ctx, routeUserID, agentName, workspaceRoot, ag, bindingKey, fields[1], ownerBindingKey)
+		return h.handleCodexShortSelection(ctx, codexShortSelectionRequest{
+			UserID:          routeUserID,
+			ActorUserID:     actorUserID,
+			AgentName:       agentName,
+			WorkspaceRoot:   workspaceRoot,
+			Agent:           ag,
+			BindingKey:      bindingKey,
+			Target:          fields[1],
+			OwnerBindingKey: ownerBindingKey,
+			Platform:        req.Platform,
+			Reply:           req.Reply,
+		})
 	}
 
 	switch fields[1] {
@@ -68,11 +82,14 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		return h.handleCodexCd(codexWorkspaceCdRequest{
 			Context:         ctx,
 			UserID:          routeUserID,
+			ActorUserID:     actorUserID,
 			BindingKey:      bindingKey,
 			OwnerBindingKey: ownerBindingKey,
 			AgentName:       agentName,
 			Target:          fields[2],
 			Agent:           ag,
+			Platform:        req.Platform,
+			Reply:           req.Reply,
 		})
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
@@ -122,35 +139,62 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		if len(fields) != 3 {
 			return "用法: /cx switch <编号|threadId>"
 		}
-		return h.handleCodexSwitchForRoute(ctx, routeUserID, agentName, workspaceRoot, ag, fields[2], ownerBindingKey)
+		return h.handleCodexSwitchForRouteWithOptions(ctx, routeUserID, agentName, workspaceRoot, ag, fields[2], ownerBindingKey, codexSwitchOptions{
+			actorUserID: actorUserID,
+			platform:    req.Platform,
+			reply:       req.Reply,
+		})
 	default:
 		return buildCodexSessionHelpText()
 	}
 }
 
-func (h *Handler) handleCodexShortSelection(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, bindingKey string, target string, ownerBindingKey string) string {
-	if target == ".." {
+type codexShortSelectionRequest struct {
+	UserID          string
+	ActorUserID     string
+	AgentName       string
+	WorkspaceRoot   string
+	Agent           agent.Agent
+	BindingKey      string
+	Target          string
+	OwnerBindingKey string
+	Platform        platform.PlatformName
+	Reply           platform.Replier
+}
+
+func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortSelectionRequest) string {
+	if req.Target == ".." {
 		return h.handleCodexCd(codexWorkspaceCdRequest{
 			Context:         ctx,
-			UserID:          userID,
-			BindingKey:      bindingKey,
-			OwnerBindingKey: ownerBindingKey,
-			AgentName:       agentName,
-			Target:          target,
-			Agent:           ag,
+			UserID:          req.UserID,
+			ActorUserID:     req.ActorUserID,
+			BindingKey:      req.BindingKey,
+			OwnerBindingKey: req.OwnerBindingKey,
+			AgentName:       req.AgentName,
+			Target:          req.Target,
+			Agent:           req.Agent,
+			Platform:        req.Platform,
+			Reply:           req.Reply,
 		})
 	}
-	if _, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
-		return h.handleCodexSwitchForRoute(ctx, userID, agentName, workspaceRoot, ag, target, ownerBindingKey)
+	if _, browsing := h.codexBrowseWorkspace(req.BindingKey); browsing {
+		return h.handleCodexSwitchForRouteWithOptions(ctx, req.UserID, req.AgentName, req.WorkspaceRoot, req.Agent, req.Target, req.OwnerBindingKey, codexSwitchOptions{
+			actorUserID: req.ActorUserID,
+			platform:    req.Platform,
+			reply:       req.Reply,
+		})
 	}
 	return h.handleCodexCd(codexWorkspaceCdRequest{
 		Context:         ctx,
-		UserID:          userID,
-		BindingKey:      bindingKey,
-		OwnerBindingKey: ownerBindingKey,
-		AgentName:       agentName,
-		Target:          target,
-		Agent:           ag,
+		UserID:          req.UserID,
+		ActorUserID:     req.ActorUserID,
+		BindingKey:      req.BindingKey,
+		OwnerBindingKey: req.OwnerBindingKey,
+		AgentName:       req.AgentName,
+		Target:          req.Target,
+		Agent:           req.Agent,
+		Platform:        req.Platform,
+		Reply:           req.Reply,
 	})
 }
 

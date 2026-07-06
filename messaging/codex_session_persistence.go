@@ -84,6 +84,9 @@ func mergeCodexWorkspaceSession(current codexWorkspaceSession, incoming codexWor
 }
 
 func (s *codexSessionStore) save() {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	s.mu.Lock()
 	filePath := s.filePath
 	if filePath == "" {
@@ -113,12 +116,28 @@ func (s *codexSessionStore) save() {
 		log.Printf("[codex-session] failed to marshal state: %v", err)
 		return
 	}
-	tmpFile := filePath + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
-		log.Printf("[codex-session] failed to write %s: %v", tmpFile, err)
+	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), filepath.Base(filePath)+".*.tmp")
+	if err != nil {
+		log.Printf("[codex-session] failed to create temp state file: %v", err)
 		return
 	}
-	if err := os.Rename(tmpFile, filePath); err != nil {
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName)
+	if err := tmpFile.Chmod(0o600); err != nil {
+		_ = tmpFile.Close()
+		log.Printf("[codex-session] failed to chmod %s: %v", tmpName, err)
+		return
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		log.Printf("[codex-session] failed to write %s: %v", tmpName, err)
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		log.Printf("[codex-session] failed to close %s: %v", tmpName, err)
+		return
+	}
+	if err := os.Rename(tmpName, filePath); err != nil {
 		log.Printf("[codex-session] failed to move %s into place: %v", filePath, err)
 	}
 }

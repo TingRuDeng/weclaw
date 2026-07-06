@@ -19,6 +19,9 @@ type activeAgentTask struct {
 	startedAt      time.Time
 	lastProgress   string
 	lastProgressAt time.Time
+	externalCodex  bool
+	codexThreadID  string
+	codexTurnID    string
 }
 
 func (h *Handler) lockAgentExecution(key string) func() {
@@ -49,12 +52,15 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTa
 	}
 	taskCtx, cancel := context.WithCancel(ctx)
 	task := &activeAgentTask{
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		owner:     strings.TrimSpace(meta.owner),
-		agentName: strings.TrimSpace(meta.agentName),
-		preview:   previewPendingCodexMessage(meta.message),
-		startedAt: time.Now(),
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		owner:         strings.TrimSpace(meta.owner),
+		agentName:     strings.TrimSpace(meta.agentName),
+		preview:       previewPendingCodexMessage(meta.message),
+		startedAt:     time.Now(),
+		externalCodex: meta.externalCodex,
+		codexThreadID: strings.TrimSpace(meta.codexThreadID),
+		codexTurnID:   strings.TrimSpace(meta.codexTurnID),
 	}
 	h.activeTasks[key] = task
 	return task, taskCtx, true
@@ -69,9 +75,12 @@ func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {
 
 // activeTaskMeta 描述一次后台任务的归属信息，供 /ps 和 /cancel 检索。
 type activeTaskMeta struct {
-	owner     string
-	agentName string
-	message   string
+	owner         string
+	agentName     string
+	message       string
+	externalCodex bool
+	codexThreadID string
+	codexTurnID   string
 }
 
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
@@ -134,6 +143,55 @@ func (h *Handler) clearPendingGuide(key string) bool {
 	}
 	task.pendingMessage = ""
 	return true
+}
+
+func (h *Handler) takeExternalCodexGuide(key string) (string, string, string, *activeAgentTask, bool) {
+	h.activeTasksMu.Lock()
+	task := h.activeTasks[key]
+	h.activeTasksMu.Unlock()
+	if task == nil {
+		return "", "", "", nil, false
+	}
+	task.mu.Lock()
+	defer task.mu.Unlock()
+	if !task.externalCodex || task.pendingMessage == "" || task.codexThreadID == "" || task.codexTurnID == "" {
+		return "", "", "", task, false
+	}
+	message := task.pendingMessage
+	task.pendingMessage = ""
+	return message, task.codexThreadID, task.codexTurnID, task, true
+}
+
+func (h *Handler) restorePendingGuide(key string, task *activeAgentTask, message string) {
+	if task == nil || strings.TrimSpace(message) == "" {
+		return
+	}
+	h.activeTasksMu.Lock()
+	current := h.activeTasks[key]
+	h.activeTasksMu.Unlock()
+	if current != task {
+		return
+	}
+	task.mu.Lock()
+	if task.pendingMessage == "" {
+		task.pendingMessage = message
+	}
+	task.mu.Unlock()
+}
+
+func (h *Handler) externalCodexTurnForTask(key string) (string, string, bool) {
+	h.activeTasksMu.Lock()
+	task := h.activeTasks[key]
+	h.activeTasksMu.Unlock()
+	if task == nil {
+		return "", "", false
+	}
+	task.mu.Lock()
+	defer task.mu.Unlock()
+	if !task.externalCodex || task.codexThreadID == "" || task.codexTurnID == "" {
+		return "", "", false
+	}
+	return task.codexThreadID, task.codexTurnID, true
 }
 
 // promotePendingGuideToRun 将未处理的引导消息转为待执行消息，避免任务结束后丢失用户输入。

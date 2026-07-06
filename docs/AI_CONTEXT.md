@@ -32,7 +32,7 @@ ai_summary:
 ## Core Directories
 
 - `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口。
-- `config/`：配置结构、默认值、Agent 探测、工作目录白名单和 API 安全校验。
+- `config/`：配置结构、默认值、Agent 探测、工作目录白名单、管理员白名单和 API 安全校验。
 - `agent/`：统一 Agent 接口，以及 ACP、CLI、HTTP、Companion 等 runtime。
 - `platform/`：跨平台消息、回复、注册表和访问控制抽象。
 - `messaging/`：命令路由、会话、审批、进度、任务状态和 Agent 调用主业务。
@@ -53,7 +53,7 @@ ai_summary:
 
 ## Common Task Reading Paths
 
-- 修改启动、停止、更新或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`scripts/release.sh`。
+- 修改启动、停止、更新、远程管理命令或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`messaging/admin_commands.go`、`scripts/release.sh`。
 - 修改消息命令或任务状态：先读 `messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`。
 - 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/cli_agent.go`、`messaging/codex_sessions.go`、`messaging/claude_sessions.go`。
 - 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
@@ -65,7 +65,10 @@ ai_summary:
 - 飞书真实发送者身份和 session routing 必须分离；`feishu_session_key` 只用于会话路由。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
+- 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。
 - 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。
+- 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。
+- 微信同一条入站消息触发多次回复时，`wechat.Replier` 必须为后续 `SendText` 生成新的 `client_id`，避免微信端把结果消息按重复消息去重。
 - Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。
 - `api_addr` 监听非 loopback 地址时必须配置 `api_token`。
 - 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。

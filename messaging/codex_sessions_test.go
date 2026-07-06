@@ -2,8 +2,10 @@ package messaging
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -63,6 +65,33 @@ func TestCodexSessionStorePersistsActiveWorkspace(t *testing.T) {
 	active, ok := second.getActiveWorkspace(bindingKey)
 	if !ok || active != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(workspace))
+	}
+}
+
+func TestCodexSessionStoreConcurrentSavesKeepAllWorkspaceThreads(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
+	bindingKey := codexBindingKey("user-1", "codex")
+	store := newCodexSessionStore()
+	store.SetFilePath(stateFile)
+
+	const workspaceCount = 80
+	var wg sync.WaitGroup
+	for i := 0; i < workspaceCount; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workspace := filepath.Join(t.TempDir(), fmt.Sprintf("project-%02d", i))
+			store.setThread(bindingKey, workspace, fmt.Sprintf("thread-%02d", i))
+		}()
+	}
+	wg.Wait()
+
+	restored := newCodexSessionStore()
+	restored.SetFilePath(stateFile)
+	views := restored.listWorkspaces(bindingKey)
+	if len(views) != workspaceCount {
+		t.Fatalf("restored workspace count=%d, want %d: %#v", len(views), workspaceCount, views)
 	}
 }
 

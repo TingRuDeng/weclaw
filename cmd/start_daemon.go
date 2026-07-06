@@ -40,7 +40,7 @@ const (
 	daemonReadyInterval  = 100 * time.Millisecond
 )
 
-// runDaemon spawns weclaw start (without --daemon) as a background process.
+// runDaemon 启动后台子进程；普通 start 只负责启动，不隐式停止既有服务。
 func runDaemon() error {
 	launchLock, err := acquireDaemonLaunchLock()
 	if err != nil {
@@ -48,12 +48,6 @@ func runDaemon() error {
 	}
 	defer launchLock.Close()
 
-	if err := stopAllWeclaw(); err != nil {
-		return err
-	}
-	if err := agent.CleanupCompanionEndpoints(); err != nil {
-		return fmt.Errorf("cleanup companion endpoints: %w", err)
-	}
 	runtimeLock, err := acquireRuntimeLock()
 	if err != nil {
 		return err
@@ -61,19 +55,22 @@ func runDaemon() error {
 	if err := runtimeLock.Close(); err != nil {
 		return err
 	}
+	if err := agent.CleanupCompanionEndpoints(); err != nil {
+		return fmt.Errorf("cleanup companion endpoints: %w", err)
+	}
 
-	// Ensure log directory exists
+	// 确保日志目录存在。
 	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
 		return fmt.Errorf("create weclaw dir: %w", err)
 	}
 
-	// Open log file
+	// 后台子进程 stdout/stderr 都写入统一日志文件。
 	lf, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
 
-	// Re-exec ourselves without --daemon
+	// 复用当前二进制启动真正的前台服务进程。
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("find executable: %w", err)
@@ -112,7 +109,7 @@ func runDaemon() error {
 		return err
 	}
 
-	// Detach — don't wait
+	// 启动确认后释放子进程，避免父进程阻塞。
 	if err := cmd.Process.Release(); err != nil {
 		lf.Close()
 		return fmt.Errorf("release daemon process: %w", err)
@@ -176,6 +173,7 @@ func processExists(pid int) bool {
 type stopProcessOps struct {
 	readPid            func() (int, error)
 	processExists      func(int) bool
+	runtimeLockBusy    func() bool
 	signalPID          func(int, syscall.Signal) error
 	signalProcessGroup func(int, syscall.Signal) error
 	removePIDFile      func() error
@@ -190,6 +188,7 @@ func defaultStopProcessOps() stopProcessOps {
 	return stopProcessOps{
 		readPid:            readPid,
 		processExists:      processExists,
+		runtimeLockBusy:    runtimeLockBusy,
 		signalPID:          signalPID,
 		signalProcessGroup: signalProcessGroup,
 		removePIDFile: func() error {
@@ -208,6 +207,9 @@ func stopAllWeclawWithOps(ops stopProcessOps) error {
 	if !ops.processExists(pid) {
 		return ops.removePIDFile()
 	}
+	if ops.runtimeLockBusy != nil && !ops.runtimeLockBusy() {
+		return ops.removePIDFile()
+	}
 	_ = ops.signalPID(pid, syscall.SIGTERM)
 	if waitProcessExit(pid, ops) {
 		return ops.removePIDFile()
@@ -219,6 +221,16 @@ func stopAllWeclawWithOps(ops stopProcessOps) error {
 		return ops.removePIDFile()
 	}
 	return fmt.Errorf("weclaw process pid=%d did not exit", pid)
+}
+
+// runtimeLockBusy 用运行锁确认 pid 文件是否仍指向真实 WeClaw 服务。
+func runtimeLockBusy() bool {
+	lock, err := acquireRuntimeLock()
+	if err != nil {
+		return true
+	}
+	_ = lock.Close()
+	return false
 }
 
 func waitProcessExit(pid int, ops stopProcessOps) bool {

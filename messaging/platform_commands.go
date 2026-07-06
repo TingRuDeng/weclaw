@@ -55,6 +55,8 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 			ActorUserID: msg.UserID,
 			RouteUserID: routeUserID,
 			Trimmed:     trimmed,
+			Platform:    msg.Platform,
+			Reply:       req.Reply,
 		}))
 	case trimmed == "/run":
 		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.UserID, routeUserID, req.Reply, req.ClientID)

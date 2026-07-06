@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const (
@@ -297,4 +298,130 @@ func TestACPAgentCodexThreadControls(t *testing.T) {
 	if _, ok := persisted.Threads["conversation-1"]; ok {
 		t.Fatalf("cleared thread should not persist, got %q", persisted.Threads["conversation-1"])
 	}
+}
+
+func TestACPAgentReadsActiveCodexThreadState(t *testing.T) {
+	ctx := context.Background()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     t.TempDir(),
+	})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p := params.(map[string]interface{})
+		if p["threadId"] != "thread-active" || p["includeTurns"] != true {
+			return nil, fmt.Errorf("thread/read params=%#v", p)
+		}
+		return json.RawMessage(`{
+			"thread": {
+				"id": "thread-active",
+				"status": {"type": "active", "activeFlags": ["waitingOnUserInput"]},
+				"turns": [
+					{"id": "turn-old", "status": "completed", "items": [{"id": "agent-old", "type": "agentMessage", "text": "旧回复"}]},
+					{"id": "turn-active", "status": "inProgress", "items": [{"id": "user-1", "type": "userMessage", "content": [{"type": "text", "text": "本地 App 发起的任务"}]}]}
+				]
+			}
+		}`), nil
+	}
+
+	state, err := a.ReadCodexThreadState(ctx, "conversation-1", "thread-active")
+	if err != nil {
+		t.Fatalf("ReadCodexThreadState error: %v", err)
+	}
+	if !state.Active || state.ActiveTurnID != "turn-active" {
+		t.Fatalf("active state=%#v, want active turn-active", state)
+	}
+	if !state.WaitingOnUserInput {
+		t.Fatalf("waiting flag=false, state=%#v", state)
+	}
+	if state.Preview != "本地 App 发起的任务" {
+		t.Fatalf("preview=%q", state.Preview)
+	}
+}
+
+func TestACPAgentSteersActiveCodexTurn(t *testing.T) {
+	ctx := context.Background()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     t.TempDir(),
+	})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "turn/steer" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p := params.(map[string]interface{})
+		if p["threadId"] != "thread-active" || p["expectedTurnId"] != "turn-active" {
+			return nil, fmt.Errorf("turn/steer params=%#v", p)
+		}
+		input := p["input"].([]codexUserInput)
+		if len(input) != 1 || input[0].Text != "补充要求" {
+			return nil, fmt.Errorf("turn/steer input=%#v", input)
+		}
+		return json.RawMessage(`{"ok":true}`), nil
+	}
+
+	if err := a.SteerCodexThread(ctx, "conversation-1", "thread-active", "turn-active", "补充要求"); err != nil {
+		t.Fatalf("SteerCodexThread error: %v", err)
+	}
+}
+
+func TestACPAgentInterruptsActiveCodexTurn(t *testing.T) {
+	ctx := context.Background()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     t.TempDir(),
+	})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "turn/interrupt" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p := params.(map[string]interface{})
+		if p["threadId"] != "thread-active" || p["turnId"] != "turn-active" {
+			return nil, fmt.Errorf("turn/interrupt params=%#v", p)
+		}
+		return json.RawMessage(`{"ok":true}`), nil
+	}
+
+	if err := a.InterruptCodexThread(ctx, "conversation-1", "thread-active", "turn-active"); err != nil {
+		t.Fatalf("InterruptCodexThread error: %v", err)
+	}
+}
+
+func TestACPAgentWatchesAttachedCodexThread(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+		Cwd:     t.TempDir(),
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			a.notifyMu.Lock()
+			ch := a.turnCh["thread-active"]
+			a.notifyMu.Unlock()
+			if ch != nil {
+				ch <- &codexTurnEvent{ItemID: "agent-1", Delta: "接管后的最终回复"}
+				ch <- &codexTurnEvent{Kind: "completed"}
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	reply, err := a.WatchCodexThread(ctx, "conversation-1", "thread-active", nil)
+	if err != nil {
+		t.Fatalf("WatchCodexThread error: %v", err)
+	}
+	if reply != "接管后的最终回复" {
+		t.Fatalf("reply=%q", reply)
+	}
+	<-done
 }

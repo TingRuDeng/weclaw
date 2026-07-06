@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -167,6 +168,26 @@ func TestFormatServiceAdminCommandReplySummarizesUpdatedVersion(t *testing.T) {
 	}
 	if strings.Contains(reply, "Downloading") {
 		t.Fatalf("reply=%q, should not include raw download progress", reply)
+	}
+}
+
+func TestDefaultServiceAdminRestartReportsInvalidExecutable(t *testing.T) {
+	oldExecutable := currentExecutablePathFunc
+	currentExecutablePathFunc = func() (string, error) {
+		return filepath.Join(t.TempDir(), "missing-weclaw"), nil
+	}
+	t.Cleanup(func() { currentExecutablePathFunc = oldExecutable })
+
+	output, err := defaultServiceAdminCommandExecutor(context.Background(), "restart", nil)
+
+	if err == nil {
+		t.Fatal("defaultServiceAdminCommandExecutor restart error = nil, want executable validation error")
+	}
+	if strings.TrimSpace(output) != "" {
+		t.Fatalf("output=%q, want empty output on validation failure", output)
+	}
+	if !strings.Contains(err.Error(), "restart executable") {
+		t.Fatalf("error=%v, want restart executable hint", err)
 	}
 }
 

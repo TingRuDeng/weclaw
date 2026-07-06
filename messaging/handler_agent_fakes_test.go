@@ -96,16 +96,28 @@ func (f *fakeAgent) resetConversationID() string {
 
 type fakeCodexThreadAgent struct {
 	fakeAgent
-	threadID        string
-	useConversation string
-	useThreadID     string
-	clearCalledWith string
-	useErr          error
-	modelStatus     agent.CodexModelStatus
-	models          []agent.CodexModel
-	modelErr        error
-	quota           agent.CodexQuota
-	quotaErr        error
+	threadID          string
+	useConversation   string
+	useThreadID       string
+	clearCalledWith   string
+	useErr            error
+	threadState       agent.CodexThreadState
+	threadStateErr    error
+	watchReply        string
+	watchErr          error
+	watchDone         chan struct{}
+	steerThreadID     string
+	steerTurnID       string
+	steerMessage      string
+	steerErr          error
+	interruptThreadID string
+	interruptTurnID   string
+	interruptErr      error
+	modelStatus       agent.CodexModelStatus
+	models            []agent.CodexModel
+	modelErr          error
+	quota             agent.CodexQuota
+	quotaErr          error
 }
 
 type fakeVisibleCodexAgent struct {
@@ -194,6 +206,44 @@ func (f *fakeCodexThreadAgent) UseCodexThread(_ context.Context, conversationID 
 func (f *fakeCodexThreadAgent) ClearCodexThread(conversationID string) {
 	f.clearCalledWith = conversationID
 	f.threadID = ""
+}
+
+func (f *fakeCodexThreadAgent) ReadCodexThreadState(_ context.Context, _ string, threadID string) (agent.CodexThreadState, error) {
+	if f.threadStateErr != nil {
+		return agent.CodexThreadState{}, f.threadStateErr
+	}
+	state := f.threadState
+	if state.ThreadID == "" {
+		state.ThreadID = threadID
+	}
+	return state, nil
+}
+
+func (f *fakeCodexThreadAgent) WatchCodexThread(ctx context.Context, _ string, _ string, _ func(string)) (string, error) {
+	if f.watchDone != nil {
+		select {
+		case <-f.watchDone:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	if f.watchErr != nil {
+		return "", f.watchErr
+	}
+	return f.watchReply, nil
+}
+
+func (f *fakeCodexThreadAgent) SteerCodexThread(_ context.Context, _ string, threadID string, turnID string, message string) error {
+	f.steerThreadID = threadID
+	f.steerTurnID = turnID
+	f.steerMessage = message
+	return f.steerErr
+}
+
+func (f *fakeCodexThreadAgent) InterruptCodexThread(_ context.Context, _ string, threadID string, turnID string) error {
+	f.interruptThreadID = threadID
+	f.interruptTurnID = turnID
+	return f.interruptErr
 }
 
 func (f *fakeCodexThreadAgent) CodexModelStatus() agent.CodexModelStatus {

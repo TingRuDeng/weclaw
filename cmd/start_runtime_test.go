@@ -132,6 +132,36 @@ func TestStopAllWeclawRemovesStalePidFile(t *testing.T) {
 	}
 }
 
+func TestStopAllWeclawDoesNotSignalWhenRuntimeLockIsFree(t *testing.T) {
+	removed := false
+	signaled := false
+	err := stopAllWeclawWithOps(stopProcessOps{
+		readPid:         func() (int, error) { return 1234, nil },
+		processExists:   func(int) bool { return true },
+		runtimeLockBusy: func() bool { return false },
+		signalPID:       func(int, syscall.Signal) error { signaled = true; return nil },
+		signalProcessGroup: func(int, syscall.Signal) error {
+			signaled = true
+			return nil
+		},
+		removePIDFile: func() error {
+			removed = true
+			return nil
+		},
+		sleep: func(time.Duration) {},
+	})
+
+	if err != nil {
+		t.Fatalf("stopAllWeclawWithOps error: %v", err)
+	}
+	if signaled {
+		t.Fatal("runtime lock 已释放时不应向 pid 文件里的进程发信号")
+	}
+	if !removed {
+		t.Fatal("runtime lock 已释放时应清理陈旧 pid 文件")
+	}
+}
+
 func TestReadRuntimeStateSupportsLegacyPidFile(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {

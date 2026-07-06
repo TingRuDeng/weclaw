@@ -24,7 +24,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	if !started {
 		cancelTaskTimeout()
 		h.storePendingGuide(executionKey, opts.message)
-		sendPlatformText(opts.ctx, opts.reply, opts.userID, runningCodexGuidePrompt())
+		sendPlatformText(opts.ctx, opts.reply, opts.userID, runningCodexGuidePromptForTask(task))
 		return
 	}
 

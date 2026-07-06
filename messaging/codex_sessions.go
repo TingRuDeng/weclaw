@@ -10,6 +10,7 @@ import (
 
 type codexSessionStore struct {
 	mu       sync.Mutex
+	saveMu   sync.Mutex
 	filePath string
 	bindings map[string]codexSessionBinding
 }

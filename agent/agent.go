@@ -105,6 +105,25 @@ type CodexThreadAgent interface {
 	ClearCodexThread(conversationID string)
 }
 
+// CodexThreadState 描述 Codex app-server thread 当前运行态。
+type CodexThreadState struct {
+	ThreadID             string
+	Active               bool
+	ActiveTurnID         string
+	WaitingOnApproval    bool
+	WaitingOnUserInput   bool
+	Preview              string
+	LastAgentMessageText string
+}
+
+// CodexThreadRuntimeAgent 暴露 Codex App 已运行 thread 的接管能力。
+type CodexThreadRuntimeAgent interface {
+	ReadCodexThreadState(ctx context.Context, conversationID string, threadID string) (CodexThreadState, error)
+	WatchCodexThread(ctx context.Context, conversationID string, threadID string, onProgress func(delta string)) (string, error)
+	SteerCodexThread(ctx context.Context, conversationID string, threadID string, turnID string, message string) error
+	InterruptCodexThread(ctx context.Context, conversationID string, threadID string, turnID string) error
+}
+
 // ConversationWorkspaceAgent 允许 Agent 为单个 conversation 固定工作目录。
 type ConversationWorkspaceAgent interface {
 	SetConversationCwd(conversationID string, cwd string)

@@ -7,7 +7,14 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
+
+type codexSwitchOptions struct {
+	actorUserID string
+	platform    platform.PlatformName
+	reply       platform.Replier
+}
 
 func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
 	return h.handleCodexNewForRoute(userID, agentName, workspaceRoot, ag, "")
@@ -32,6 +39,10 @@ func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentNam
 
 // handleCodexSwitchForRoute 切换 route session 的 thread，并同步真实用户当前工作空间。
 func (h *Handler) handleCodexSwitchForRoute(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string) string {
+	return h.handleCodexSwitchForRouteWithOptions(ctx, userID, agentName, workspaceRoot, ag, target, ownerBindingKey, codexSwitchOptions{})
+}
+
+func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string, opts codexSwitchOptions) string {
 	codexAg, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
 		return "当前 Codex Agent 不支持 thread 切换。"
@@ -49,7 +60,23 @@ func (h *Handler) handleCodexSwitchForRoute(ctx context.Context, userID string, 
 	h.switchCodexWorkspace(agentName, workspaceRoot, ag)
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
-	return wechatCommandText("已切换会话。", "工作空间: "+shortCodexWorkspaceName(workspaceRoot))
+	lines := []string{"已切换会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
+	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
+		ctx:            ctx,
+		actorUserID:    firstNonBlank(opts.actorUserID, userID),
+		routeUserID:    userID,
+		agentName:      agentName,
+		agent:          ag,
+		conversationID: conversationID,
+		threadID:       threadID,
+		platform:       opts.platform,
+		reply:          opts.reply,
+	})
+	if active {
+		lines = append(lines, renderExternalCodexActiveNotice(state)...)
+	}
+	lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
+	return wechatCommandText(lines...)
 }
 
 func (h *Handler) resolveCodexSwitchTarget(bindingKey string, agentName string, workspaceRoot string, target string, ag agent.Agent) (string, string, error) {

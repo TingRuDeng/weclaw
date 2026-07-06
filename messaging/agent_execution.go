@@ -173,7 +173,7 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 				})
 				if !started {
 					h.storePendingGuide(executionKey, message)
-					ch <- result{name: n, reply: runningCodexGuidePrompt()}
+					ch <- result{name: n, reply: runningCodexGuidePromptForTask(task)}
 					return
 				}
 				activeTask = task

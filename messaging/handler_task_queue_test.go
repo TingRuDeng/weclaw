@@ -144,3 +144,53 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 
 	codex.release <- struct{}{}
 }
+
+func TestStatusCommandDoesNotWaitForOnDemandAgentStart(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		close(started)
+		<-release
+		return &fakeAgent{
+			reply: "slow ok",
+			info:  agent.AgentInfo{Name: name, Type: "cli", Command: name},
+		}
+	}, nil)
+	h.SetAgentMetas([]AgentMeta{{Name: "slow", Type: "cli", Command: "slow"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform: platform.PlatformWeChat,
+		UserID:   "user-1",
+		Text:     "/slow hello",
+	}, newAdminCommandTestReplier())
+	select {
+	case <-started:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("未等到按需 Agent 开始启动")
+	}
+
+	statusReply := newAdminCommandTestReplier()
+	done := make(chan struct{})
+	go func() {
+		h.HandleMessage(ctx, platform.IncomingMessage{
+			Platform: platform.PlatformWeChat,
+			UserID:   "user-1",
+			Text:     "/status",
+		}, statusReply)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(150 * time.Millisecond):
+		close(release)
+		t.Fatal("/status 不应等待慢速 Agent 启动完成")
+	}
+	close(release)
+	texts := statusReply.waitTexts(t, 1)
+	if len(texts) != 1 || !containsText(texts, "WeClaw 运行态") {
+		t.Fatalf("status texts=%#v, want runtime status", texts)
+	}
+}

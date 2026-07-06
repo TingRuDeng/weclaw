@@ -53,9 +53,10 @@ type Handler struct {
 	mu                      sync.RWMutex
 	defaultName             string
 	agents                  map[string]agent.Agent // name -> running agent
-	agentMetas              []AgentMeta            // all configured agents (for /status)
-	agentWorkDirs           map[string]string      // agent name -> configured/runtime cwd
-	customAliases           map[string]string      // custom alias -> agent name (from config)
+	agentStarts             map[string]*agentStartState
+	agentMetas              []AgentMeta       // all configured agents (for /status)
+	agentWorkDirs           map[string]string // agent name -> configured/runtime cwd
+	customAliases           map[string]string // custom alias -> agent name (from config)
 	factory                 AgentFactory
 	saveDefault             SaveDefaultFunc
 	contextTokens           sync.Map // map[userID]contextToken

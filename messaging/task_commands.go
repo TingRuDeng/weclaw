@@ -15,6 +15,19 @@ func runningCodexGuidePrompt() string {
 	return "Codex 正在处理上一条任务。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。\n不回复时，上一条任务完成后会转为待执行消息。"
 }
 
+func runningCodexGuidePromptForTask(task *activeAgentTask) string {
+	if task == nil {
+		return runningCodexGuidePrompt()
+	}
+	task.mu.Lock()
+	external := task.externalCodex
+	task.mu.Unlock()
+	if !external {
+		return runningCodexGuidePrompt()
+	}
+	return "Codex App 任务正在进行。\n\n回复 /guide 将此消息发送到当前 Codex App 任务。\n回复 /cancel 撤回该消息。\n不回复时，当前任务完成后会转为待执行消息。"
+}
+
 // runnablePendingCodexPrompt 提醒用户确认执行已从引导态转出的暂存消息。
 func runnablePendingCodexPrompt(message string) string {
 	return "上一条 Codex 任务已完成。\n\n暂存消息：\n" + previewPendingCodexMessage(message) + "\n\n回复 /run 执行该消息。\n回复 /cancel 撤回该消息。"
@@ -50,6 +63,10 @@ func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
 		return
 	}
+	if text, handled := h.steerPendingGuideToExternalCodex(ctx, key, name); handled {
+		sendPlatformText(ctx, reply, actorUserID, text)
+		return
+	}
 	message, task, ok := h.detachPendingGuide(key)
 	if !ok {
 		sendPlatformText(ctx, reply, actorUserID, "当前没有可发送的引导对话。")
@@ -73,14 +90,54 @@ func (h *Handler) handleCancelPendingGuide(ctx context.Context, actorUserID stri
 }
 
 func (h *Handler) handleStopActiveTask(ctx context.Context, actorUserID string, routeUserID string) string {
-	_, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
+	_, ag, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
 		return err.Error()
+	}
+	if reply, handled := h.interruptExternalCodexTask(ctx, key, ag); handled {
+		return reply
 	}
 	if !h.cancelActiveTask(key) {
 		return "当前没有可停止的任务。"
 	}
 	return "已停止当前任务。"
+}
+
+func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key string, agentName string) (string, bool) {
+	ag, err := h.getAgent(ctx, agentName)
+	if err != nil {
+		return fmt.Sprintf("Codex Agent 不可用: %v", err), true
+	}
+	runtimeAg, ok := ag.(agent.CodexThreadRuntimeAgent)
+	if !ok {
+		return "", false
+	}
+	message, threadID, turnID, task, ok := h.takeExternalCodexGuide(key)
+	if !ok {
+		return "", false
+	}
+	if err := runtimeAg.SteerCodexThread(ctx, key, threadID, turnID, message); err != nil {
+		h.restorePendingGuide(key, task, message)
+		return fmt.Sprintf("发送到当前 Codex App 任务失败: %v", err), true
+	}
+	task.recordProgress(time.Now(), "已发送引导对话。")
+	return "已发送到当前 Codex App 任务。", true
+}
+
+func (h *Handler) interruptExternalCodexTask(ctx context.Context, key string, ag agent.Agent) (string, bool) {
+	runtimeAg, ok := ag.(agent.CodexThreadRuntimeAgent)
+	if !ok {
+		return "", false
+	}
+	threadID, turnID, ok := h.externalCodexTurnForTask(key)
+	if !ok {
+		return "", false
+	}
+	if err := runtimeAg.InterruptCodexThread(ctx, key, threadID, turnID); err != nil {
+		return fmt.Sprintf("停止当前 Codex App 任务失败: %v", err), true
+	}
+	h.cancelActiveTask(key)
+	return "已停止当前任务。", true
 }
 
 // handleCancelCommand 已并入 /cancel(撤回暂存) 与 /stop(停止运行) 两个独立命令，保留占位以便检索历史语义。

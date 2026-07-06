@@ -13,6 +13,7 @@ import (
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 	return &Handler{
 		agents:                  make(map[string]agent.Agent),
+		agentStarts:             make(map[string]*agentStartState),
 		agentWorkDirs:           make(map[string]string),
 		factory:                 factory,
 		saveDefault:             saveDefault,

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
 const (
@@ -179,18 +178,6 @@ func approvalSummaryFromPrompt(prompt string) string {
 	return compactOneLine(strings.Join(lines, "\n"), approvalSummaryMaxRune)
 }
 
-func firstStringValue(values map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if raw, ok := values[key]; ok {
-			value := strings.TrimSpace(fmt.Sprint(raw))
-			if value != "" && value != "<nil>" {
-				return value
-			}
-		}
-	}
-	return ""
-}
-
 func compactOneLine(text string, maxRunes int) string {
 	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
 	if maxRunes <= 0 {
@@ -212,131 +199,4 @@ func choiceCardKind(prompt string) string {
 		return cardKindApproval
 	}
 	return ""
-}
-
-// parseCardAction 将飞书回调事件归一化为平台 RawCommand 需要的字段。
-func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, bool) {
-	if event == nil || event.Event == nil || event.Event.Action == nil || event.Event.Operator == nil {
-		return parsedCardAction{}, false
-	}
-	value := event.Event.Action.Value
-	action := callbackValueString(value, "action")
-	if action == "" {
-		return parsedCardAction{}, false
-	}
-	parsed := parsedCardAction{
-		Action:  action,
-		Choice:  callbackValueString(value, "choice"),
-		Kind:    callbackValueString(value, "kind"),
-		Label:   callbackValueString(value, "label"),
-		Summary: callbackValueString(value, "summary"),
-		TaskCard: firstNonEmpty(
-			callbackValueString(value, "task_card_id"),
-			callbackValueString(value, "taskCardId"),
-		),
-		Approval: firstNonEmpty(
-			callbackValueString(value, "approval_key"),
-			callbackValueString(value, "approval_id"),
-			callbackValueString(value, "approvalId"),
-			callbackValueString(value, "action_key"),
-			callbackValueString(value, "actionKey"),
-		),
-		Owner:      callbackValueString(value, approvalOwnerValueKey),
-		Panel:      callbackValueString(value, "approval_panel") == "1",
-		Conv:       callbackValueString(value, "conv"),
-		SessionKey: callbackValueString(value, feishuSessionMetadataKey),
-		UserID:     strings.TrimSpace(event.Event.Operator.OpenID),
-	}
-	if event.Event.Context != nil {
-		parsed.ChatID = strings.TrimSpace(event.Event.Context.OpenChatID)
-		parsed.MessageID = strings.TrimSpace(event.Event.Context.OpenMessageID)
-	}
-	if parsed.UserID == "" {
-		return parsedCardAction{}, false
-	}
-	return parsed, true
-}
-
-// buildChoiceHandledCard 构建按钮点击后的原卡片替换内容，让用户能区分已处理审批。
-func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
-	label := strings.TrimSpace(action.Label)
-	if label == "" {
-		label = strings.TrimSpace(action.Choice)
-	}
-	if label == "" {
-		label = "已选择"
-	}
-	status, template := approvalHandledStatus(action)
-	if strings.TrimSpace(action.Status) == approvalStatusArchived {
-		return buildChoiceHandledStatusCard(template, "**"+status+"**")
-	}
-	content := "**" + status + "**\n\n已选择：" + label
-	return buildChoiceHandledStatusCard(template, content)
-}
-
-func buildChoiceHandledStatusCard(template string, content string) *callback.Card {
-	card := map[string]any{
-		"schema": "2.0",
-		"config": map[string]any{
-			"update_multi":     true,
-			"wide_screen_mode": true,
-		},
-		"header": map[string]any{
-			"title": map[string]any{
-				"tag":     "plain_text",
-				"content": "WeClaw",
-			},
-			"template": template,
-		},
-		"body": map[string]any{
-			"direction": "vertical",
-			"elements": []map[string]any{
-				{
-					"tag":       "markdown",
-					"content":   content,
-					"text_size": "normal",
-				},
-			},
-		},
-	}
-	return &callback.Card{Type: "raw", Data: card}
-}
-
-func approvalHandledStatus(action parsedCardAction) (string, string) {
-	if strings.TrimSpace(action.Status) == approvalStatusArchived {
-		return "✅ 已收纳到任务卡片", "green"
-	}
-	if strings.TrimSpace(action.Status) == approvalStatusExpired {
-		return "⚠️ 已过期", "yellow"
-	}
-	choice := strings.ToLower(strings.TrimSpace(action.Choice))
-	label := strings.ToLower(strings.TrimSpace(action.Label))
-	switch {
-	case strings.Contains(choice, "cancel") ||
-		strings.Contains(choice, "deny") ||
-		strings.Contains(choice, "reject") ||
-		strings.Contains(label, "cancel") ||
-		strings.Contains(label, "拒"):
-		return "❌ 已拒绝", "red"
-	default:
-		return "✅ 已授权", "green"
-	}
-}
-
-func callbackValueString(value map[string]interface{}, key string) string {
-	if value == nil {
-		return ""
-	}
-	raw, ok := value[key]
-	if !ok || raw == nil {
-		return ""
-	}
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case fmt.Stringer:
-		return strings.TrimSpace(v.String())
-	default:
-		return strings.TrimSpace(fmt.Sprint(v))
-	}
 }
