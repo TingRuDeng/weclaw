@@ -33,3 +33,27 @@ func TestHandleMessageEventReplyUsesSourceMessage(t *testing.T) {
 		t.Fatalf("replyTexts=%#v, want reply to source message", sender.replyTexts)
 	}
 }
+
+func TestHandleMessageEventDMReplyUsesFreshMessage(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	sender := &fakeMessageSender{}
+	adapter.sender = sender
+	adapter.downloader = &fakeResourceDownloader{}
+	event := newMessageEvent("p2p", "text", `{"text":"hello"}`)
+
+	err := adapter.handleMessageEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		if err := reply.SendText(ctx, "收到"); err != nil {
+			t.Fatalf("SendText error: %v", err)
+		}
+	})
+
+	if err != nil {
+		t.Fatalf("handleMessageEvent error: %v", err)
+	}
+	if len(sender.replyTexts) != 0 {
+		t.Fatalf("replyTexts=%#v, want no DM reply thread", sender.replyTexts)
+	}
+	if len(sender.texts) != 1 || sender.texts[0] != "oc_1:收到" {
+		t.Fatalf("texts=%#v, want fresh DM message", sender.texts)
+	}
+}

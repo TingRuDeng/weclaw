@@ -62,3 +62,9 @@
 - 剩余风险：飞书回复接口权限不足时会暴露 API 错误，需要实际线上权限验证。
 - 潜在技术债：单聊仍是单窗口卡片式多会话，不属于本轮目标。
 - 结论：通过。
+
+## 回归修复记录
+
+- 2026-07-06：发布后发现飞书单聊 DM 也被 `message.reply` 回复，客户端表现为每条消息都自动开回复串。根因是 `dispatchIncomingMessage` 对所有飞书消息都启用了 thread-aware Replier。
+- 修复策略：仅群聊 / 话题群或 `feishu_session_key` 为 group 时启用回复串；DM 继续普通发送到单聊窗口。
+- 回归测试：`TestHandleMessageEventDMReplyUsesFreshMessage`、`TestHandleCardActionEventDMReplyUsesFreshMessage`。
