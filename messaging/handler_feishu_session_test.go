@@ -81,6 +81,47 @@ func TestFeishuCodexStatusUsesSessionMetadataForRouting(t *testing.T) {
 	}
 }
 
+func TestFeishuCodexNewThreadUsesSessionMetadataForDraft(t *testing.T) {
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			reply:          "ok",
+			resetSessionID: "thread-new",
+			info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		if name == "codex" {
+			return ag
+		}
+		return nil
+	}, nil)
+	h.SetDefaultAgent("codex", ag)
+	h.SetCodexLocalSessionDir(t.TempDir())
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	sessionKey := "feishu:tenant_1:dm_thread:oc_1:ou_user:om_1"
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/cx new-thread",
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}, reply)
+
+	if got := ag.clearCalledWith; !strings.Contains(got, sessionKey) {
+		t.Fatalf("clear conversation=%q, want route session key %q", got, sessionKey)
+	}
+	routeThread, pending := h.ensureCodexSessions().getThread(codexBindingKey(sessionKey, "codex"), h.codexWorkspaceRootForUser("ou_user", "codex", ag))
+	if routeThread != "" || !pending {
+		t.Fatalf("route thread=%q pending=%v, want empty true", routeThread, pending)
+	}
+}
+
+func TestCodexNewThreadIsBuiltinSessionCommand(t *testing.T) {
+	if !isCodexSessionCommand("/cx new-thread") {
+		t.Fatal("/cx new-thread should be treated as a builtin Codex session command")
+	}
+}
+
 func TestFeishuHelpChoicesCarrySessionMetadata(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})

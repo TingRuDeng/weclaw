@@ -18,6 +18,28 @@ func TestBuildFeishuSessionKeyIsolatesDMBySender(t *testing.T) {
 	}
 }
 
+func TestBuildFeishuSessionKeyIsolatesDMThread(t *testing.T) {
+	first := FeishuSessionScope{
+		TenantID:     "tenant_1",
+		ChatID:       "oc_dm",
+		SenderOpenID: "ou_user",
+		ChatType:     "p2p",
+		RootID:       "om_root_a",
+		MessageID:    "om_1",
+	}
+	second := first
+	second.RootID = "om_root_b"
+
+	firstKey := BuildFeishuSessionKey(first, true)
+	secondKey := BuildFeishuSessionKey(second, true)
+	if firstKey == secondKey {
+		t.Fatalf("DM thread session key should isolate thread_key, got same key %q", firstKey)
+	}
+	if firstKey != "feishu:tenant_1:dm_thread:oc_dm:ou_user:om_root_a" {
+		t.Fatalf("first key=%q, want DM thread key", firstKey)
+	}
+}
+
 func TestBuildFeishuSessionKeyIsolatesGroupThread(t *testing.T) {
 	first := FeishuSessionScope{
 		TenantID:     "tenant_1",

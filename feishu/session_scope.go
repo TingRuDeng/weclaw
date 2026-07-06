@@ -94,6 +94,10 @@ func BuildFeishuSessionKey(scope FeishuSessionScope, threadIsolation bool) strin
 		}
 		return strings.Join(parts, ":")
 	}
+	if threadIsolation && hasThreadFields(scope) {
+		parts = append(parts, "dm_thread", strings.TrimSpace(scope.ChatID), strings.TrimSpace(scope.SenderOpenID), ResolveThreadKey(scope))
+		return strings.Join(parts, ":")
+	}
 	parts = append(parts, "dm", strings.TrimSpace(scope.ChatID), strings.TrimSpace(scope.SenderOpenID))
 	return strings.Join(parts, ":")
 }

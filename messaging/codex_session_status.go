@@ -146,6 +146,7 @@ func buildCodexSessionHelpText() string {
 		"/cx cd <编号|工作空间名|..> 进入工作空间或返回工作空间列表",
 		"/cx switch <编号> 切换当前工作空间会话",
 		"/cx new 新建当前工作空间会话",
+		"/cx new-thread 在飞书单聊开启回复串会话",
 		"/cx pwd 查看当前工作空间",
 		"/cx cli 打开本地 CLI 接手当前 thread",
 		"/cx app 打开 Codex App 到当前工作空间",

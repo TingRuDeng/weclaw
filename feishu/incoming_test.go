@@ -51,6 +51,38 @@ func TestToIncomingFromMessageParsesText(t *testing.T) {
 	}
 }
 
+func TestToIncomingFromMessageDMNewThreadUsesMessageSession(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = &fakeResourceDownloader{}
+	event := newMessageEvent("p2p", "text", `{"text":"/cx new-thread"}`)
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("DM new-thread command should be dispatchable")
+	}
+	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:dm_thread:oc_1:ou_user:om_1" {
+		t.Fatalf("metadata=%#v, want DM thread session rooted at command message", incoming.Metadata)
+	}
+}
+
+func TestToIncomingFromMessageDMThreadReplyUsesRootSession(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = &fakeResourceDownloader{}
+	event := newMessageEvent("p2p", "text", `{"text":"继续"}`)
+	event.Event.Message.MessageId = stringPtr("om_2")
+	event.Event.Message.RootId = stringPtr("om_1")
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("DM thread reply should be dispatchable")
+	}
+	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:dm_thread:oc_1:ou_user:om_1" {
+		t.Fatalf("metadata=%#v, want DM thread session rooted at root message", incoming.Metadata)
+	}
+}
+
 func TestToIncomingFromMessageIgnoresUnmentionedGroupByDefault(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := newMessageEvent("group", "text", `{"text":"hello"}`)

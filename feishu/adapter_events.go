@@ -116,5 +116,5 @@ func shouldReplyInFeishuThread(msg platform.IncomingMessage) bool {
 		return true
 	}
 	sessionKey := msg.Metadata[feishuSessionMetadataKey]
-	return strings.Contains(sessionKey, ":group:")
+	return strings.Contains(sessionKey, ":group:") || strings.Contains(sessionKey, ":dm_thread:")
 }
