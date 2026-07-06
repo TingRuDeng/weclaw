@@ -7,6 +7,8 @@ ai_summary:
   source_of_truth:
     - "cmd/start.go"
     - "messaging/handler.go"
+    - "messaging/codex_session_status.go"
+    - "messaging/codex_browser.go"
     - "agent/agent.go"
     - "platform/platform.go"
     - "platform/message.go"
@@ -55,7 +57,7 @@ ai_summary:
 
 - 修改启动、停止、更新、远程管理命令或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`messaging/admin_commands.go`、`scripts/release.sh`。
 - 修改消息命令或任务状态：先读 `messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`。
-- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/cli_agent.go`、`messaging/codex_sessions.go`、`messaging/claude_sessions.go`。
+- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/cli_agent.go`、`messaging/codex_sessions.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`。
 - 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
 - 修改微信体验：先读 `wechat/`、`ilink/`、`messaging/progress.go`。
 - 修改配置：先读 `config/config.go`、`config/detect.go` 和相关测试。
@@ -63,6 +65,7 @@ ai_summary:
 ## High-Risk Areas
 
 - 飞书真实发送者身份和 session routing 必须分离；`feishu_session_key` 只用于会话路由。
+- 飞书 DM 子会话使用 `dm_thread` route 独立保存 Codex active workspace；子会话 `/cx cd`、`/cx switch`、`/cx app`、`/cx cli`、`/new` 只能更新当前 route，不能改写真实用户 owner workspace 或 Agent 全局 cwd。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。

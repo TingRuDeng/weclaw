@@ -68,3 +68,6 @@
 - 2026-07-06：发布后发现飞书单聊 DM 也被 `message.reply` 回复，客户端表现为每条消息都自动开回复串。根因是 `dispatchIncomingMessage` 对所有飞书消息都启用了 thread-aware Replier。
 - 修复策略：仅群聊 / 话题群或 `feishu_session_key` 为 group 时启用回复串；DM 继续普通发送到单聊窗口。
 - 回归测试：`TestHandleMessageEventDMReplyUsesFreshMessage`、`TestHandleCardActionEventDMReplyUsesFreshMessage`。
+- 2026-07-06：新增飞书单聊 `/cx new-thread` 后发现一个 DM 子会话切换工作空间，其他子会话也跟随切换。根因是 route 级 `/cx cd` 和 `/cx switch` 仍写入 Codex Agent 全局 cwd，未预置 active workspace 的子会话会从全局 cwd 兜底。
+- 修复策略：`dm_thread` route 独立保存 active workspace；飞书子会话解析工作空间时只返回 route 路径，不改真实用户 owner workspace，也不改 Agent 全局 cwd。`/cx app`、`/cx cli`、`/new` 同步按 route 当前 workspace 执行。
+- 回归测试：`TestFeishuDMThreadWorkspaceSwitchDoesNotAffectOtherThreads`、`TestFeishuDMThreadWorkspaceSwitchDoesNotMutateDefaultWorkspace`。

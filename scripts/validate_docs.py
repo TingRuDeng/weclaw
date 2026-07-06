@@ -18,13 +18,10 @@ REQUIRED_AUTHORITY_HEADINGS = ("## Purpose", "## Source of truth", "## Key facts
 LEGACY_AUTHORITY_HEADINGS = ("## Purpose", "## Source Of Truth", "## Key Facts", "## How To Verify", "## Stale When")
 REQUIRED_AI_KEYS = ("purpose", "read_when", "source_of_truth", "verify_with", "stale_when")
 AI_CONTEXT_SECTIONS = ("## Project Snapshot", "## Core Directories", "## Documentation Map", "## Common Task Reading Paths", "## High-Risk Areas", "## Validation Commands", "## Stale when")
-GENERIC_SECTION_VALUES = {
-    "tbd", "todo", "n/a", "coming soon", "run tests", "check manually", "follow best practices", "use proper architecture",
-    "use clean architecture", "run appropriate tests", "follow conventions", "检查一下", "手动确认", "运行测试", "按需验证",
-    "遵循最佳实践", "后续补充", "待补充", "人工检查", "执行测试", "使用合适的验证",
-}
+GENERIC_SECTION_VALUES = {"tbd", "todo", "n/a", "coming soon", "run tests", "check manually", "follow best practices", "use proper architecture", "use clean architecture", "run appropriate tests", "follow conventions", "检查一下", "手动确认", "运行测试", "按需验证", "遵循最佳实践", "后续补充", "待补充", "人工检查", "执行测试", "使用合适的验证"}
 COMMAND_PREFIXES = ("./", "python", "python3", "gradle", "./gradlew", "npm", "pnpm", "yarn", "make", "git")
-VERIFY_TIERS = ("quick", "full", "device-required", "release-side-effect")
+VERIFY_TIERS = ("quick", "full", "network-read", "device-required", "release-side-effect")
+READ_ONLY_EXTERNAL_PREFIXES = ("npm view", "pnpm view", "yarn info")
 SKIPPED_DOC_PARTS = ("docs/archive/", "docs/AGENT_STARTER_PROMPT.md")
 SKIPPED_LINK_DIRS = {".agents", ".codex", ".git", ".idea", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", "__pycache__", "coverage", "dist", "node_modules"}
 LEGACY_DOC_SECTION = "## Legacy detail docs"
@@ -44,10 +41,7 @@ def validate_base(base):
     if not base.exists(): return [f"{base}: 路径不存在"]
     return [] if base.is_dir() else [f"{base}: 必须是目录"]
 def validate_profile_files(base, profile):
-    issues = []
-    for rel in required_files_for(profile):
-        if not (base / rel).exists():
-            issues.append(f"{rel}: 缺少必需文件 {rel}")
+    issues = [f"{rel}: 缺少必需文件 {rel}" for rel in required_files_for(profile) if not (base / rel).exists()]
     if profile not in ("generic", "android"):
         issues.append(f"{base}: 未知 profile {profile}")
     return issues
@@ -111,9 +105,7 @@ def validate_summary_key(rel, key, summary):
     value = summary.get(key)
     if key == "purpose":
         return [] if isinstance(value, str) and value.strip() else [f"{rel}: ai_summary.purpose 不能为空"]
-    if isinstance(value, list) and value:
-        return []
-    return [f"{rel}: ai_summary.{key} 必须至少包含一项"]
+    return [] if isinstance(value, list) and value else [f"{rel}: ai_summary.{key} 必须至少包含一项"]
 def find_ai_summary_block(text):
     for pattern in (r"```ya?ml\s+(ai_summary:.*?)```", r"^---\s+(ai_summary:.*?)---"):
         match = re.search(pattern, text, re.DOTALL)
@@ -167,17 +159,9 @@ def validate_ai_context_sections(rel, text):
         issues.append(f"{rel}: AI_CONTEXT 章节顺序错误")
     return issues
 def validate_source_paths(rel, summary, base):
-    issues = []
-    for entry in summary_entries(summary, "source_of_truth"):
-        if should_check_path(entry) and not (base / entry).exists():
-            issues.append(f"{rel}: source_of_truth 路径不存在 {entry}")
-    return issues
+    return [f"{rel}: source_of_truth 路径不存在 {entry}" for entry in summary_entries(summary, "source_of_truth") if should_check_path(entry) and not (base / entry).exists()]
 def validate_verify_commands(rel, summary):
-    issues = []
-    for command in summary_entries(summary, "verify_with"):
-        if not is_specific_command(command):
-            issues.append(f"{rel}: verify_with 不是具体命令 {command}")
-    return issues
+    return [f"{rel}: verify_with 不是具体命令 {command}" for command in summary_entries(summary, "verify_with") if not is_specific_command(command)]
 def summary_entries(summary, key):
     value = summary.get(key, [])
     if isinstance(value, list): return value
@@ -202,6 +186,7 @@ def validate_verify_tiers(rel, text, headings):
         content = section_content(text, heading)
         if len(command_lines(content)) > 1 and not has_verify_tier(content):
             issues.append(f"{rel}: 章节 {heading} 缺少验证命令分层")
+        issues.extend(validate_tier_command_placement(rel, content))
     return issues
 def command_lines(content):
     return [line for line in map(normalize_command_line, content.splitlines()) if is_specific_command(line)]
@@ -213,7 +198,20 @@ def normalize_command_line(line):
         if line.lower().startswith(prefix): return line[len(prefix):].strip()
     return line
 def has_verify_tier(content):
-    return bool(re.search(r"(?im)^\s*-?\s*(quick|full|device-required|release-side-effect)\s*:", content))
+    return bool(re.search(rf"(?im)^\s*-?\s*({'|'.join(VERIFY_TIERS)})\s*:", content))
+def validate_tier_command_placement(rel, content):
+    issues, current_tier = [], ""
+    for raw_line in content.splitlines():
+        current_tier = line_tier(raw_line) or current_tier
+        command = normalize_command_line(raw_line)
+        if current_tier == "release-side-effect" and is_read_only_external_command(command):
+            issues.append(f"{rel}: 只读外部命令应放入 network-read 分层 {command}")
+    return issues
+def line_tier(line):
+    stripped = line.strip().strip("`").lower().removeprefix("- ").strip()
+    return next((tier for tier in VERIFY_TIERS if stripped.startswith(f"{tier}:")), "")
+def is_read_only_external_command(command):
+    return any(command.strip().lower().startswith(prefix) for prefix in READ_ONLY_EXTERNAL_PREFIXES)
 def validate_repository_shape(base):
     nested = nested_git_repositories(base)
     if len(nested) < 2: return []
