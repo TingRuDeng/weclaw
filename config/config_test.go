@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -181,6 +182,82 @@ func TestPlatformConfigUnmarshal(t *testing.T) {
 	}
 	if feishu.RequireMentionInGroup == nil || *feishu.RequireMentionInGroup != requireMention {
 		t.Fatalf("RequireMentionInGroup=%#v, want explicit false", feishu.RequireMentionInGroup)
+	}
+}
+
+func TestPlatformConfigUnmarshalFeishuBots(t *testing.T) {
+	var cfg Config
+	requireMention := false
+	data := []byte(`{
+		"platforms": {
+			"feishu": {
+				"enabled": true,
+				"bots": [
+					{
+						"name": "project-a",
+						"app_id": "cli_a",
+						"allowed_users": ["ou_1"],
+						"default_agent": "codex",
+						"progress": {"mode": "stream"},
+						"require_mention_in_group": false
+					},
+					{
+						"name": "project-b",
+						"app_id": "cli_b",
+						"allowed_users": ["ou_2"]
+					}
+				]
+			}
+		},
+		"agents": {}
+	}`)
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	bots := cfg.Platforms["feishu"].Bots
+	if len(bots) != 2 {
+		t.Fatalf("Bots=%#v, want two bots", bots)
+	}
+	if bots[0].Name != "project-a" || bots[0].AppID != "cli_a" {
+		t.Fatalf("first bot=%#v, want project-a/cli_a", bots[0])
+	}
+	if !reflect.DeepEqual(bots[0].AllowedUsers, []string{"ou_1"}) {
+		t.Fatalf("AllowedUsers=%#v, want ou_1", bots[0].AllowedUsers)
+	}
+	if bots[0].DefaultAgent != "codex" {
+		t.Fatalf("DefaultAgent=%q, want codex", bots[0].DefaultAgent)
+	}
+	if bots[0].Progress == nil || bots[0].Progress.Mode != "stream" {
+		t.Fatalf("Progress=%#v, want stream", bots[0].Progress)
+	}
+	if bots[0].RequireMentionInGroup == nil || *bots[0].RequireMentionInGroup != requireMention {
+		t.Fatalf("RequireMentionInGroup=%#v, want explicit false", bots[0].RequireMentionInGroup)
+	}
+}
+
+func TestValidateFeishuBotsRejectsDuplicateName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Platforms["feishu"] = PlatformConfig{Bots: []FeishuBotConfig{
+		{Name: "project-a", AppID: "cli_a"},
+		{Name: "project-a", AppID: "cli_b"},
+	}}
+
+	err := cfg.Validate()
+
+	if err == nil || !strings.Contains(err.Error(), "duplicate feishu bot name") {
+		t.Fatalf("Validate error=%v, want duplicate bot name", err)
+	}
+}
+
+func TestValidateFeishuBotsRejectsLegacySingleBotConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Platforms["feishu"] = PlatformConfig{AllowedUsers: []string{"ou_1"}}
+
+	err := cfg.Validate()
+
+	if err == nil || !strings.Contains(err.Error(), "platforms.feishu.bots") {
+		t.Fatalf("Validate error=%v, want legacy config rejection", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/feishu"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -95,6 +96,70 @@ func TestPlatformTopologyChanged(t *testing.T) {
 	if !platformTopologyChanged(cur, topo) {
 		t.Fatal("enabling a platform must require restart")
 	}
+}
+
+func TestPlatformTopologyChangedDetectsFeishuBotList(t *testing.T) {
+	cur := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {
+		Enabled: boolPtr(true),
+		Bots:    []config.FeishuBotConfig{{Name: "project-a", AppID: "cli_a", AllowedUsers: []string{"ou_a"}}},
+	}}}
+	soft := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {
+		Enabled: boolPtr(true),
+		Bots:    []config.FeishuBotConfig{{Name: "project-a", AppID: "cli_a", AllowedUsers: []string{"ou_b"}}},
+	}}}
+	topo := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {
+		Enabled: boolPtr(true),
+		Bots:    []config.FeishuBotConfig{{Name: "project-a", AppID: "cli_b"}},
+	}}}
+
+	if platformTopologyChanged(cur, soft) {
+		t.Fatal("allowed_users-only bot change is soft")
+	}
+	if !platformTopologyChanged(cur, topo) {
+		t.Fatal("bot app_id change must require restart")
+	}
+}
+
+func TestPlatformStatusesIncludeEachFeishuBot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := feishu.SaveCredentialsForBot("project-a", feishu.Credentials{AppID: "cli_a", AppSecret: "secret-a"}); err != nil {
+		t.Fatalf("SaveCredentialsForBot error: %v", err)
+	}
+	enabled := true
+	cfg := config.DefaultConfig()
+	cfg.Platforms["feishu"] = config.PlatformConfig{
+		Enabled: &enabled,
+		Bots: []config.FeishuBotConfig{
+			{Name: "project-a", AppID: "cli_a", AllowedUsers: []string{"ou_a"}},
+			{Name: "project-b", AppID: "cli_b"},
+		},
+	}
+
+	statuses := platformStatuses(cfg)
+
+	first, ok := findPlatformStatus(statuses, "feishu/project-a")
+	if !ok {
+		t.Fatalf("missing feishu/project-a status: %#v", statuses)
+	}
+	if !first.CredentialsPresent || first.AllowedUsersCount != 1 {
+		t.Fatalf("project-a status=%#v, want credentials and one allowed user", first)
+	}
+	second, ok := findPlatformStatus(statuses, "feishu/project-b")
+	if !ok {
+		t.Fatalf("missing feishu/project-b status: %#v", statuses)
+	}
+	if second.CredentialsPresent || second.AllowedUsersCount != 0 {
+		t.Fatalf("project-b status=%#v, want no credentials and empty allowlist", second)
+	}
+}
+
+func findPlatformStatus(statuses []platformStatus, name string) (platformStatus, bool) {
+	for _, status := range statuses {
+		if status.Name == name {
+			return status, true
+		}
+	}
+	return platformStatus{}, false
 }
 
 func TestValidateConfigRejectsBadAgent(t *testing.T) {

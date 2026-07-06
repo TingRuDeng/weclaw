@@ -71,7 +71,7 @@ func validateConfig(cfg *config.Config) error {
 	if cfg.RateLimitPerMinute < 0 {
 		return fmt.Errorf("rate_limit_per_minute must be >= 0")
 	}
-	return nil
+	return cfg.Validate()
 }
 
 // atomicSaveConfig 通过临时文件 + rename 原子写回 config.json(0600)，失败不破坏原文件。

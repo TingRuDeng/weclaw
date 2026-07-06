@@ -106,6 +106,20 @@ func (r *Registry) UpdateAccess(platformName PlatformName, allowed []string) {
 	}
 }
 
+// UpdateAccessForAccount 热更新指定平台账号的访问控制白名单，不影响同平台其它账号。
+func (r *Registry) UpdateAccessForAccount(platformName PlatformName, accountID string, allowed []string) {
+	if r == nil {
+		return
+	}
+	for _, entry := range r.entries {
+		if entry.Platform.Name() != platformName || entry.Platform.AccountID() != accountID {
+			continue
+		}
+		entry.Access.SetAllowed(allowed)
+		applyPlatformAccess(entry.Platform, entry.Access)
+	}
+}
+
 func applyPlatformAccess(p Platform, access AccessControl) {
 	if target, ok := p.(AccessControlledPlatform); ok {
 		target.SetAccessControl(access)

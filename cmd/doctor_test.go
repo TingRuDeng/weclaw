@@ -14,7 +14,7 @@ func testDoctorDeps() doctorDeps {
 	return doctorDeps{
 		lookPath:       func(string) (string, error) { return "/usr/local/bin/agent", nil },
 		wechatAccounts: func() (int, error) { return 1, nil },
-		feishuCredsOK:  func() error { return nil },
+		feishuCredsOK:  func(string) error { return nil },
 		sudoProbe:      func(string) error { return nil },
 	}
 }
@@ -72,6 +72,39 @@ func TestDoctorWarnsEmptyAllowlist(t *testing.T) {
 	}
 	if r.Status != doctorWarn {
 		t.Fatalf("expected warn for empty allowlist, got %v", r.Status)
+	}
+}
+
+func TestDoctorChecksEachFeishuBot(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Platforms = map[string]config.PlatformConfig{
+		"wechat": {Enabled: boolPtr(false)},
+		"feishu": {
+			Enabled: boolPtr(true),
+			Bots: []config.FeishuBotConfig{
+				{Name: "project-a", AppID: "cli_a", AllowedUsers: []string{"ou_a"}},
+				{Name: "project-b", AppID: "cli_b"},
+			},
+		},
+	}
+	deps := testDoctorDeps()
+	checked := make(map[string]bool)
+	deps.feishuCredsOK = func(name string) error {
+		checked[name] = true
+		return nil
+	}
+
+	results := runDoctorChecks(cfg, deps)
+
+	if !checked["project-a"] || !checked["project-b"] {
+		t.Fatalf("checked=%#v, want both feishu bots checked", checked)
+	}
+	r, ok := findResult(results, "access control feishu project-b")
+	if !ok {
+		t.Fatal("missing project-b allowlist check")
+	}
+	if r.Status != doctorWarn {
+		t.Fatalf("project-b allowlist status=%v, want warn", r.Status)
 	}
 }
 

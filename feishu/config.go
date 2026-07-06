@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -40,6 +41,19 @@ func CredentialsPath() (string, error) {
 	return filepath.Join(home, ".weclaw", "platforms", "feishu.json"), nil
 }
 
+// CredentialsPathForBot 返回指定飞书机器人的凭证文件路径。
+func CredentialsPathForBot(name string) (string, error) {
+	cleanName, err := normalizeBotName(name)
+	if err != nil {
+		return "", err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".weclaw", "platforms", "feishu", cleanName+".json"), nil
+}
+
 // SaveCredentials 以 0600 权限保存飞书凭证。
 func SaveCredentials(creds Credentials) error {
 	if err := validateLocalCredentials(creds); err != nil {
@@ -49,22 +63,33 @@ func SaveCredentials(creds Credentials) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create feishu credentials dir: %w", err)
+	return writeCredentialsFile(path, creds)
+}
+
+// SaveCredentialsForBot 以 0600 权限保存指定飞书机器人的凭证。
+func SaveCredentialsForBot(name string, creds Credentials) error {
+	if err := validateLocalCredentials(creds); err != nil {
+		return err
 	}
-	data, err := json.MarshalIndent(creds, "", "  ")
+	path, err := CredentialsPathForBot(name)
 	if err != nil {
-		return fmt.Errorf("marshal feishu credentials: %w", err)
+		return err
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write feishu credentials: %w", err)
-	}
-	return nil
+	return writeCredentialsFile(path, creds)
 }
 
 // LoadCredentials 读取飞书凭证，环境变量优先于文件。
 func LoadCredentials() (Credentials, error) {
 	record, err := LoadCredentialsWithSource()
+	if err != nil {
+		return Credentials{}, err
+	}
+	return record.Credentials, nil
+}
+
+// LoadCredentialsForBot 读取指定飞书机器人的凭证。
+func LoadCredentialsForBot(name string) (Credentials, error) {
+	record, err := LoadCredentialsWithSourceForBot(name)
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -80,21 +105,30 @@ func LoadCredentialsWithSource() (CredentialRecord, error) {
 	if err != nil {
 		return CredentialRecord{}, err
 	}
-	data, err := os.ReadFile(path)
+	record, err := readCredentialsFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return CredentialRecord{}, fmt.Errorf("feishu credentials not found, run `weclaw feishu login --app-id <id> --app-secret <secret>`")
 		}
-		return CredentialRecord{}, fmt.Errorf("read feishu credentials: %w", err)
-	}
-	var creds Credentials
-	if err := json.Unmarshal(data, &creds); err != nil {
-		return CredentialRecord{}, fmt.Errorf("parse feishu credentials: %w", err)
-	}
-	if err := validateLocalCredentials(creds); err != nil {
 		return CredentialRecord{}, err
 	}
-	return CredentialRecord{Credentials: creds, Source: "file", Path: path}, nil
+	return record, nil
+}
+
+// LoadCredentialsWithSourceForBot 读取指定飞书机器人凭证并返回来源。
+func LoadCredentialsWithSourceForBot(name string) (CredentialRecord, error) {
+	path, err := CredentialsPathForBot(name)
+	if err != nil {
+		return CredentialRecord{}, err
+	}
+	record, err := readCredentialsFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return CredentialRecord{}, fmt.Errorf("feishu bot %q credentials not found, run `weclaw feishu login --name %s --app-id <id> --app-secret <secret>`", name, name)
+		}
+		return CredentialRecord{}, err
+	}
+	return record, nil
 }
 
 // ValidateCredentials 调用飞书 tenant token 接口校验 app_id/app_secret 是否有效。
@@ -148,6 +182,56 @@ func credentialsFromEnv() (CredentialRecord, bool, error) {
 		return CredentialRecord{}, true, err
 	}
 	return CredentialRecord{Credentials: creds, Source: "env"}, true, nil
+}
+
+func writeCredentialsFile(path string, creds Credentials) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create feishu credentials dir: %w", err)
+	}
+	data, err := json.MarshalIndent(creds, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal feishu credentials: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("write feishu credentials: %w", err)
+	}
+	return nil
+}
+
+func readCredentialsFile(path string) (CredentialRecord, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return CredentialRecord{}, fmt.Errorf("read feishu credentials: %w", err)
+	}
+	var creds Credentials
+	if err := json.Unmarshal(data, &creds); err != nil {
+		return CredentialRecord{}, fmt.Errorf("parse feishu credentials: %w", err)
+	}
+	if err := validateLocalCredentials(creds); err != nil {
+		return CredentialRecord{}, err
+	}
+	return CredentialRecord{Credentials: creds, Source: "file", Path: path}, nil
+}
+
+func normalizeBotName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("invalid feishu bot name %q", name)
+	}
+	for _, r := range name {
+		if isBotNameRune(r) {
+			continue
+		}
+		return "", fmt.Errorf("invalid feishu bot name %q", name)
+	}
+	return name, nil
+}
+
+func isBotNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' ||
+		r >= 'A' && r <= 'Z' ||
+		r >= '0' && r <= '9' ||
+		r == '-' || r == '_' || r == '.'
 }
 
 // validateLocalCredentials 做本地必填校验，不触发网络请求。

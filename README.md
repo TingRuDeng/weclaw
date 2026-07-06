@@ -35,8 +35,8 @@ Use `weclaw login` to add additional WeChat accounts.
 飞书接入默认关闭。启用前先保存并校验飞书应用凭证：
 
 ```bash
-weclaw feishu login --app-id cli_xxx --app-secret xxx
-weclaw feishu status
+weclaw feishu login --name project-a --app-id cli_xxx --app-secret xxx
+weclaw feishu status --name project-a
 ```
 
 ### Other install methods
@@ -297,7 +297,7 @@ Environment variables:
 
 ### 多平台配置
 
-`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用；`allowed_users` 为空时默认拒绝所有入站消息。
+`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用并配置 `bots[]`；每个 bot 的 `allowed_users` 为空时默认拒绝所有入站消息。
 
 ```json
 {
@@ -311,9 +311,15 @@ Environment variables:
     },
     "feishu": {
       "enabled": true,
-      "allowed_users": ["ou_xxx"],
-      "default_agent": "codex",
-      "progress": {"mode": "stream"}
+      "bots": [
+        {
+          "name": "project-a",
+          "app_id": "cli_xxx",
+          "allowed_users": ["ou_xxx"],
+          "default_agent": "codex",
+          "progress": {"mode": "stream"}
+        }
+      ]
     }
   }
 }
@@ -321,7 +327,7 @@ Environment variables:
 
 安全提示：白名单用户可以驱动本机 shell agent 读取文件、运行命令或修改代码。生产使用时必须显式配置 `allowed_users`。
 
-微信 `message_aggregation_ms` 默认 800，设置为 `0` 可关闭。`default_agent`、`progress` 和 `allowed_users` 支持软配置热重载；平台启用状态和平台凭证仍需重启生效。
+微信 `message_aggregation_ms` 默认 800，设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 支持软配置热重载；新增、删除 bot 或修改 `app_id` 仍需重启生效。
 
 ### 微信进度反馈
 
@@ -473,12 +479,17 @@ WeClaw drives AI agents that can execute shell commands and read/write files. An
   "audit_log": true,
   "platforms": {
     "wechat": { "enabled": true, "allowed_users": ["user_id@im.wechat"] },
-    "feishu": { "enabled": true, "allowed_users": ["ou_xxx"] }
+    "feishu": {
+      "enabled": true,
+      "bots": [
+        { "name": "project-a", "app_id": "cli_xxx", "allowed_users": ["ou_xxx"] }
+      ]
+    }
   }
 }
 ```
 
-- **Access control (`allowed_users`)**: per-platform allowlist. Empty allowlist = deny everyone (fail-safe) — WeClaw warns loudly at startup if unset.
+- **Access control (`allowed_users`)**: WeChat uses a platform-level allowlist; Feishu uses per-bot allowlists in `bots[]`. Empty allowlist = deny everyone (fail-safe) — WeClaw warns loudly at startup if unset.
 - **Admin allowlist (`admin_users`)**: top-level allowlist for WeClaw management commands. A user must be present in both the platform `allowed_users` and top-level `admin_users` to run `/update`, `/upgrade`, `/restart`, or `/restart --force` from WeChat / Feishu. Empty = remote management disabled.
 - **Workspace confinement (`allowed_workspace_roots`)**: `/cwd` may only switch into these roots and their subdirectories. Empty = unrestricted (warned).
 - **Rate limiting (`rate_limit_per_minute`)**: max agent invocations per user per minute. `0` = off.

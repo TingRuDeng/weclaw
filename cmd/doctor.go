@@ -47,7 +47,7 @@ type doctorResult struct {
 type doctorDeps struct {
 	lookPath       func(string) (string, error)
 	wechatAccounts func() (int, error)
-	feishuCredsOK  func() error
+	feishuCredsOK  func(string) error
 	sudoProbe      func(user string) error
 }
 
@@ -58,8 +58,8 @@ func defaultDoctorDeps() doctorDeps {
 			accounts, err := ilink.LoadAllCredentials()
 			return len(accounts), err
 		},
-		feishuCredsOK: func() error {
-			_, err := feishu.LoadCredentials()
+		feishuCredsOK: func(name string) error {
+			_, err := feishu.LoadCredentialsForBot(name)
 			return err
 		},
 		sudoProbe: func(user string) error {
@@ -233,8 +233,7 @@ func checkPlatforms(cfg *config.Config, deps doctorDeps) []doctorResult {
 		results = append(results, checkAllowlist(cfg, string(platform.PlatformWeChat)))
 	}
 	if feishuEnabled {
-		results = append(results, checkFeishu(deps))
-		results = append(results, checkAllowlist(cfg, string(platform.PlatformFeishu)))
+		results = append(results, checkFeishuBots(cfg, deps)...)
 	}
 	if !wechatEnabled && !feishuEnabled {
 		results = append(results, doctorResult{Name: "platforms", Status: doctorWarn, Detail: "no platform enabled; nothing to run"})
@@ -269,15 +268,39 @@ func checkWeChat(deps doctorDeps) doctorResult {
 	return result
 }
 
-func checkFeishu(deps doctorDeps) doctorResult {
-	result := doctorResult{Name: "platform feishu"}
-	if err := deps.feishuCredsOK(); err != nil {
+func checkFeishuBots(cfg *config.Config, deps doctorDeps) []doctorResult {
+	bots := cfg.Platforms[string(platform.PlatformFeishu)].Bots
+	if len(bots) == 0 {
+		return []doctorResult{{Name: "platform feishu", Status: doctorFail, Detail: "platforms.feishu.bots is required"}}
+	}
+	results := make([]doctorResult, 0, len(bots)*2)
+	for _, bot := range bots {
+		results = append(results, checkFeishuBot(bot, deps), checkFeishuBotAllowlist(bot))
+	}
+	return results
+}
+
+func checkFeishuBot(bot config.FeishuBotConfig, deps doctorDeps) doctorResult {
+	result := doctorResult{Name: fmt.Sprintf("platform feishu %s", bot.Name)}
+	if err := deps.feishuCredsOK(bot.Name); err != nil {
 		result.Status = doctorFail
 		result.Detail = err.Error()
 		return result
 	}
 	result.Status = doctorOK
 	result.Detail = "credentials present"
+	return result
+}
+
+func checkFeishuBotAllowlist(bot config.FeishuBotConfig) doctorResult {
+	result := doctorResult{Name: fmt.Sprintf("access control feishu %s", bot.Name)}
+	if len(bot.AllowedUsers) == 0 {
+		result.Status = doctorWarn
+		result.Detail = "empty allowed_users -> default-deny rejects everyone; add allowed_users"
+		return result
+	}
+	result.Status = doctorOK
+	result.Detail = fmt.Sprintf("%d allowed user(s)", len(bot.AllowedUsers))
 	return result
 }
 

@@ -257,14 +257,14 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 
 	agentNames, message := h.parseCommand(text)
 	if len(agentNames) == 0 {
-		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, text, clientID)
+		h.sendToDefaultAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, text, clientID)
 		return
 	}
 	if message == "" {
 		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
 			sendText(h.switchDefault(ctx, agentNames[0]))
 		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
-			h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, text, clientID)
+			h.sendToDefaultAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, text, clientID)
 		} else {
 			sendText("Usage: specify one agent to switch, or add a message to broadcast")
 		}
@@ -278,11 +278,11 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		}
 	}
 	if len(knownNames) == 0 {
-		h.sendToDefaultAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, text, clientID)
+		h.sendToDefaultAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, text, clientID)
 		return
 	}
 	if len(knownNames) == 1 {
-		h.sendToNamedAgent(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, knownNames[0], message, clientID)
+		h.sendToNamedAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, knownNames[0], message, clientID)
 		return
 	}
 	h.broadcastToAgents(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, knownNames, message)

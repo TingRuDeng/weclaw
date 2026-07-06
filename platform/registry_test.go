@@ -105,11 +105,30 @@ func TestRegistryInjectsAccessControlIntoPlatform(t *testing.T) {
 	}
 }
 
+func TestRegistryUpdatesAccessForSpecificAccount(t *testing.T) {
+	first := &accessAwareRecordingPlatform{recordingPlatform: recordingPlatform{name: PlatformFeishu, accountID: "cli_a"}}
+	second := &accessAwareRecordingPlatform{recordingPlatform: recordingPlatform{name: PlatformFeishu, accountID: "cli_b"}}
+	registry := NewRegistry([]RegistryEntry{
+		{Platform: first, Access: NewAccessControl([]string{"ou_a"})},
+		{Platform: second, Access: NewAccessControl([]string{"ou_b"})},
+	})
+
+	registry.UpdateAccessForAccount(PlatformFeishu, "cli_b", []string{"ou_c"})
+
+	if !first.access.Allowed("ou_a") || first.access.Allowed("ou_c") {
+		t.Fatalf("first access was changed unexpectedly")
+	}
+	if second.access.Allowed("ou_b") || !second.access.Allowed("ou_c") {
+		t.Fatalf("second access not updated for target account")
+	}
+}
+
 type recordingPlatform struct {
-	name     PlatformName
-	messages []IncomingMessage
-	err      error
-	reply    Replier
+	name      PlatformName
+	accountID string
+	messages  []IncomingMessage
+	err       error
+	reply     Replier
 }
 
 type accessAwareRecordingPlatform struct {
@@ -129,6 +148,9 @@ func (p *recordingPlatform) Name() PlatformName {
 }
 
 func (p *recordingPlatform) AccountID() string {
+	if p.accountID != "" {
+		return p.accountID
+	}
 	return "acct-1"
 }
 

@@ -26,9 +26,11 @@ func extractPlatformProgressConfigs(platforms map[string]config.PlatformConfig) 
 	progressConfigs := make(map[string]config.ProgressConfig)
 	for name, platformConfig := range platforms {
 		if platformConfig.Progress == nil {
+			addBotProgressConfigs(progressConfigs, platform.PlatformName(name), platformConfig.Bots)
 			continue
 		}
 		progressConfigs[name] = *platformConfig.Progress
+		addBotProgressConfigs(progressConfigs, platform.PlatformName(name), platformConfig.Bots)
 	}
 	return progressConfigs
 }
@@ -36,10 +38,10 @@ func extractPlatformProgressConfigs(platforms map[string]config.PlatformConfig) 
 func extractPlatformDefaultAgents(platforms map[string]config.PlatformConfig) map[string]string {
 	defaultAgents := make(map[string]string)
 	for name, platformConfig := range platforms {
-		if platformConfig.DefaultAgent == "" {
-			continue
+		if platformConfig.DefaultAgent != "" {
+			defaultAgents[name] = platformConfig.DefaultAgent
 		}
-		defaultAgents[name] = platformConfig.DefaultAgent
+		addBotDefaultAgents(defaultAgents, platform.PlatformName(name), platformConfig.Bots)
 	}
 	return defaultAgents
 }
@@ -96,6 +98,31 @@ func applySoftConfig(handler *messaging.Handler, registry *platform.Registry, cf
 		}
 	}
 	for name, platformConfig := range cfg.Platforms {
-		registry.UpdateAccess(platform.PlatformName(name), platformConfig.AllowedUsers)
+		platformName := platform.PlatformName(name)
+		if len(platformConfig.Bots) == 0 {
+			registry.UpdateAccess(platformName, platformConfig.AllowedUsers)
+			continue
+		}
+		for _, bot := range platformConfig.Bots {
+			registry.UpdateAccessForAccount(platformName, bot.AppID, bot.AllowedUsers)
+		}
+	}
+}
+
+func addBotProgressConfigs(target map[string]config.ProgressConfig, platformName platform.PlatformName, bots []config.FeishuBotConfig) {
+	for _, bot := range bots {
+		if bot.Progress == nil {
+			continue
+		}
+		target[messaging.PlatformAccountConfigKey(platformName, bot.AppID)] = *bot.Progress
+	}
+}
+
+func addBotDefaultAgents(target map[string]string, platformName platform.PlatformName, bots []config.FeishuBotConfig) {
+	for _, bot := range bots {
+		if bot.DefaultAgent == "" {
+			continue
+		}
+		target[messaging.PlatformAccountConfigKey(platformName, bot.AppID)] = bot.DefaultAgent
 	}
 }

@@ -59,9 +59,9 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 			Reply:       req.Reply,
 		}))
 	case trimmed == "/run":
-		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.UserID, routeUserID, req.Reply, req.ClientID)
+		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, req.Reply, req.ClientID)
 	case trimmed == "/guide":
-		h.handleGuideCommand(ctx, msg.Platform, msg.UserID, routeUserID, req.Reply, req.ClientID)
+		h.handleGuideCommand(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, req.Reply, req.ClientID)
 	case trimmed == "/cancel":
 		sendText(h.handleCancelPendingGuide(ctx, msg.UserID, routeUserID))
 	case trimmed == "/stop":
@@ -71,9 +71,9 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	case trimmed == "/mode" || strings.HasPrefix(trimmed, "/mode "):
 		sendText(h.handleModeCommand(msg.UserID, trimmed))
 	case trimmed == "/model" || strings.HasPrefix(trimmed, "/model "):
-		sendText(h.handleModelCommand(ctx, msg.Platform, strings.TrimSpace(strings.TrimPrefix(trimmed, "/model"))))
+		sendText(h.handleModelCommandForAccount(ctx, msg.Platform, msg.AccountID, strings.TrimSpace(strings.TrimPrefix(trimmed, "/model"))))
 	case trimmed == "/reasoning" || strings.HasPrefix(trimmed, "/reasoning "):
-		sendText(h.handleReasoningCommand(ctx, msg.Platform, strings.TrimSpace(strings.TrimPrefix(trimmed, "/reasoning"))))
+		sendText(h.handleReasoningCommandForAccount(ctx, msg.Platform, msg.AccountID, strings.TrimSpace(strings.TrimPrefix(trimmed, "/reasoning"))))
 	case strings.HasPrefix(trimmed, "/cwd"):
 		sendText(h.handleCwd(trimmed, msg.UserID))
 	default:

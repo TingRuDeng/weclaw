@@ -43,10 +43,15 @@ func (h *Handler) resolveProgressConfig(agentName string) config.ProgressConfig 
 }
 
 func (h *Handler) resolveProgressConfigForPlatform(platformName platform.PlatformName, agentName string) config.ProgressConfig {
+	return h.resolveProgressConfigForAccount(platformName, "", agentName)
+}
+
+func (h *Handler) resolveProgressConfigForAccount(platformName platform.PlatformName, accountID string, agentName string) config.ProgressConfig {
 	h.mu.RLock()
 	global := h.progressConfig
 	override, ok := h.agentProgressConfigs[agentName]
 	platformOverride, platformOK := h.platformProgressConfigs[string(platformName)]
+	accountOverride, accountOK := h.platformProgressConfigs[PlatformAccountConfigKey(platformName, accountID)]
 	h.mu.RUnlock()
 	if global.Mode == "" {
 		global = config.DefaultProgressConfig()
@@ -57,7 +62,10 @@ func (h *Handler) resolveProgressConfigForPlatform(platformName platform.Platfor
 	if platformOK {
 		global = config.NormalizeProgressConfig(global, &platformOverride)
 	}
-	return normalizePlatformProgressConfig(platformName, global, platformOK)
+	if accountOK {
+		global = config.NormalizeProgressConfig(global, &accountOverride)
+	}
+	return normalizePlatformProgressConfig(platformName, global, platformOK || accountOK)
 }
 
 // normalizePlatformProgressConfig 收敛平台默认进度体验，避免把不完整的 Agent delta 暴露给终端用户。
@@ -73,12 +81,27 @@ func normalizePlatformProgressConfig(platformName platform.PlatformName, cfg con
 }
 
 func (h *Handler) defaultAgentNameForPlatform(platformName platform.PlatformName) string {
+	return h.defaultAgentNameForAccount(platformName, "")
+}
+
+func (h *Handler) defaultAgentNameForAccount(platformName platform.PlatformName, accountID string) string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	if agentName := h.platformDefaultAgents[PlatformAccountConfigKey(platformName, accountID)]; agentName != "" {
+		return agentName
+	}
 	if agentName := h.platformDefaultAgents[string(platformName)]; agentName != "" {
 		return agentName
 	}
 	return h.defaultName
+}
+
+// PlatformAccountConfigKey 构造平台账号级配置 key，用于多飞书机器人隔离默认 Agent 和进度配置。
+func PlatformAccountConfigKey(platformName platform.PlatformName, accountID string) string {
+	if platformName == "" || accountID == "" {
+		return ""
+	}
+	return string(platformName) + "\x00" + accountID
 }
 
 // contextWithTaskTimeout 只限制 Agent 执行耗时，最终失败回复继续使用原始请求上下文发送。

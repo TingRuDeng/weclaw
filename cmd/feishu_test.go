@@ -27,15 +27,18 @@ func TestRunFeishuLoginValidatesBeforeSave(t *testing.T) {
 		}
 		return nil
 	}
-	saveFeishuCreds = func(creds feishu.Credentials) error {
+	saveFeishuCreds = func(name string, creds feishu.Credentials) error {
 		if !validated {
 			t.Fatal("save called before validation")
+		}
+		if name != "project-a" {
+			t.Fatalf("name=%q, want project-a", name)
 		}
 		saved = true
 		return nil
 	}
 
-	if err := runFeishuLogin(context.Background(), "cli_a", "secret-a"); err != nil {
+	if err := runFeishuLogin(context.Background(), "project-a", "cli_a", "secret-a"); err != nil {
 		t.Fatalf("runFeishuLogin error: %v", err)
 	}
 	if !saved {
@@ -46,8 +49,8 @@ func TestRunFeishuLoginValidatesBeforeSave(t *testing.T) {
 func TestRunFeishuStatusDoesNotPrintSecret(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	secret := "secret-should-not-print"
-	if err := feishu.SaveCredentials(feishu.Credentials{AppID: "cli_a", AppSecret: secret}); err != nil {
-		t.Fatalf("SaveCredentials error: %v", err)
+	if err := feishu.SaveCredentialsForBot("project-a", feishu.Credentials{AppID: "cli_a", AppSecret: secret}); err != nil {
+		t.Fatalf("SaveCredentialsForBot error: %v", err)
 	}
 	oldValidator := validateFeishuCreds
 	defer func() { validateFeishuCreds = oldValidator }()
@@ -56,7 +59,7 @@ func TestRunFeishuStatusDoesNotPrintSecret(t *testing.T) {
 	}
 
 	output := captureStdout(t, func() {
-		if err := runFeishuStatus(context.Background()); err != nil {
+		if err := runFeishuStatus(context.Background(), "project-a"); err != nil {
 			t.Fatalf("runFeishuStatus error: %v", err)
 		}
 	})

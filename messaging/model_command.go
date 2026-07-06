@@ -11,7 +11,11 @@ import (
 // handleModelCommand 统一的 /model 入口：查看/切换默认 agent 的模型。
 // Codex(ACP) 支持运行时切换(下个新会话生效)；其它 agent 模型由配置固定。
 func (h *Handler) handleModelCommand(ctx context.Context, platformName platform.PlatformName, arg string) string {
-	name, ag, ok := h.resolveModelAgent(ctx, platformName)
+	return h.handleModelCommandForAccount(ctx, platformName, "", arg)
+}
+
+func (h *Handler) handleModelCommandForAccount(ctx context.Context, platformName platform.PlatformName, accountID string, arg string) string {
+	name, ag, ok := h.resolveModelAgentForAccount(ctx, platformName, accountID)
 	if !ok {
 		return "当前没有可用的默认 Agent。"
 	}
@@ -32,7 +36,11 @@ func (h *Handler) handleModelCommand(ctx context.Context, platformName platform.
 
 // handleReasoningCommand 统一的 /reasoning 入口：查看/切换默认 agent 的推理强度。
 func (h *Handler) handleReasoningCommand(ctx context.Context, platformName platform.PlatformName, arg string) string {
-	name, ag, ok := h.resolveModelAgent(ctx, platformName)
+	return h.handleReasoningCommandForAccount(ctx, platformName, "", arg)
+}
+
+func (h *Handler) handleReasoningCommandForAccount(ctx context.Context, platformName platform.PlatformName, accountID string, arg string) string {
+	name, ag, ok := h.resolveModelAgentForAccount(ctx, platformName, accountID)
 	if !ok {
 		return "当前没有可用的默认 Agent。"
 	}
@@ -53,7 +61,11 @@ func (h *Handler) handleReasoningCommand(ctx context.Context, platformName platf
 
 // resolveModelAgent 解析当前平台的默认 agent 并确保其已启动。
 func (h *Handler) resolveModelAgent(ctx context.Context, platformName platform.PlatformName) (string, agent.Agent, bool) {
-	name := h.defaultAgentNameForPlatform(platformName)
+	return h.resolveModelAgentForAccount(ctx, platformName, "")
+}
+
+func (h *Handler) resolveModelAgentForAccount(ctx context.Context, platformName platform.PlatformName, accountID string) (string, agent.Agent, bool) {
+	name := h.defaultAgentNameForAccount(platformName, accountID)
 	if strings.TrimSpace(name) == "" {
 		return "", nil, false
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/feishu"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -43,11 +44,48 @@ func TestBuildPlatformRegistryRequiresFeishuCredentialsWhenEnabled(t *testing.T)
 	enabled := true
 	disabled := false
 	cfg.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{Enabled: &disabled}
-	cfg.Platforms[string(platform.PlatformFeishu)] = config.PlatformConfig{Enabled: &enabled}
+	cfg.Platforms[string(platform.PlatformFeishu)] = config.PlatformConfig{
+		Enabled: &enabled,
+		Bots: []config.FeishuBotConfig{
+			{Name: "project-a", AppID: "cli_a", AllowedUsers: []string{"ou_1"}},
+		},
+	}
 
 	_, err := buildPlatformRegistry(nil, cfg)
 
 	if err == nil || !strings.Contains(err.Error(), "load feishu credentials") {
 		t.Fatalf("buildPlatformRegistry error=%v, want feishu credential error", err)
+	}
+}
+
+func TestBuildPlatformRegistryCreatesAllFeishuBots(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := feishu.SaveCredentialsForBot("project-a", feishu.Credentials{AppID: "cli_a", AppSecret: "secret-a"}); err != nil {
+		t.Fatalf("SaveCredentialsForBot project-a error: %v", err)
+	}
+	if err := feishu.SaveCredentialsForBot("project-b", feishu.Credentials{AppID: "cli_b", AppSecret: "secret-b"}); err != nil {
+		t.Fatalf("SaveCredentialsForBot project-b error: %v", err)
+	}
+	cfg := config.DefaultConfig()
+	enabled := true
+	disabled := false
+	cfg.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{Enabled: &disabled}
+	cfg.Platforms[string(platform.PlatformFeishu)] = config.PlatformConfig{
+		Enabled: &enabled,
+		Bots: []config.FeishuBotConfig{
+			{Name: "project-a", AppID: "cli_a", AllowedUsers: []string{"ou_a"}},
+			{Name: "project-b", AppID: "cli_b", AllowedUsers: []string{"ou_b"}},
+		},
+	}
+
+	registry, err := buildPlatformRegistry(nil, cfg)
+	if err != nil {
+		t.Fatalf("buildPlatformRegistry error: %v", err)
+	}
+	if _, ok := registry.ReplierFor(platform.PlatformFeishu, "cli_a", "oc_a"); !ok {
+		t.Fatalf("missing replier for cli_a")
+	}
+	if _, ok := registry.ReplierFor(platform.PlatformFeishu, "cli_b", "oc_b"); !ok {
+		t.Fatalf("missing replier for cli_b")
 	}
 }

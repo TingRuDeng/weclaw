@@ -43,7 +43,7 @@ func previewPendingCodexMessage(message string) string {
 }
 
 // handleRunPendingCodexCommand 执行用户确认后的待执行 Codex 消息。
-func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName platform.PlatformName, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
+func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName platform.PlatformName, accountID string, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
 	name, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
@@ -54,10 +54,10 @@ func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName
 		sendPlatformText(ctx, reply, actorUserID, "当前没有待执行的暂存消息。")
 		return
 	}
-	h.sendToNamedAgent(ctx, platformName, actorUserID, routeUserID, reply, name, message, clientID)
+	h.sendToNamedAgentForAccount(ctx, platformName, accountID, actorUserID, routeUserID, reply, name, message, clientID)
 }
 
-func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
+func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, accountID string, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
 	name, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
@@ -75,7 +75,7 @@ func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.
 	if !waitForActiveTask(ctx, task) {
 		return
 	}
-	h.sendToNamedAgent(ctx, platformName, actorUserID, routeUserID, reply, name, message, clientID)
+	h.sendToNamedAgentForAccount(ctx, platformName, accountID, actorUserID, routeUserID, reply, name, message, clientID)
 }
 
 func (h *Handler) handleCancelPendingGuide(ctx context.Context, actorUserID string, routeUserID string) string {

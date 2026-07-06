@@ -66,6 +66,8 @@ ai_summary:
 
 - 飞书真实发送者身份和 session routing 必须分离；`feishu_session_key` 只用于会话路由。
 - 飞书会话按聊天窗口聚合：DM 使用 `feishu:<tenant>:dm:<chatID>:<senderOpenID>`，群聊使用 `feishu:<tenant>:group:<chatID>`；回复串 / 话题不再生成独立 route。
+- 飞书多项目入口通过 `platforms.feishu.bots[]` 配置多个机器人；每个 bot 的凭证按 `weclaw feishu login --name <bot>` 保存，`app_secret` 不得写入 `config.json`。
+- 飞书 bot 的 `allowed_users`、`default_agent` 和 `progress` 按 `app_id` 隔离；新增、删除 bot 或修改 `app_id` 属于平台拓扑变化，需要重启。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。

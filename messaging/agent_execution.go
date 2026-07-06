@@ -12,7 +12,11 @@ import (
 
 // sendToDefaultAgent sends the message to the default agent and replies.
 func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.PlatformName, userID string, routeUserID string, replyWriter platform.Replier, text string, clientID string) {
-	defaultName := h.defaultAgentNameForPlatform(platformName)
+	h.sendToDefaultAgentForAccount(ctx, platformName, "", userID, routeUserID, replyWriter, text, clientID)
+}
+
+func (h *Handler) sendToDefaultAgentForAccount(ctx context.Context, platformName platform.PlatformName, accountID string, userID string, routeUserID string, replyWriter platform.Replier, text string, clientID string) {
+	defaultName := h.defaultAgentNameForAccount(platformName, accountID)
 
 	var ag agent.Agent
 	var agErr error
@@ -21,7 +25,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 	}
 	var reply string
 	if defaultName != "" && agErr == nil {
-		progressCfg := h.resolveProgressConfigForPlatform(platformName, defaultName)
+		progressCfg := h.resolveProgressConfigForAccount(platformName, accountID, defaultName)
 		if isCodexAgent(defaultName, ag.Info()) {
 			h.startCodexAgentTask(codexAgentTaskOptions{
 				ctx:         ctx,
@@ -81,6 +85,10 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 
 // sendToNamedAgent sends the message to a specific agent and replies.
 func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.PlatformName, userID string, routeUserID string, replyWriter platform.Replier, name string, message string, clientID string) {
+	h.sendToNamedAgentForAccount(ctx, platformName, "", userID, routeUserID, replyWriter, name, message, clientID)
+}
+
+func (h *Handler) sendToNamedAgentForAccount(ctx context.Context, platformName platform.PlatformName, accountID string, userID string, routeUserID string, replyWriter platform.Replier, name string, message string, clientID string) {
 	ag, agErr := h.getAgent(ctx, name)
 	if agErr != nil {
 		log.Printf("[handler] agent %q not available: %v", name, agErr)
@@ -90,7 +98,7 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, platformName platform.Pl
 	}
 
 	replyCtx := ctx
-	progressCfg := h.resolveProgressConfigForPlatform(platformName, name)
+	progressCfg := h.resolveProgressConfigForAccount(platformName, accountID, name)
 	if isCodexAgent(name, ag.Info()) {
 		h.startCodexAgentTask(codexAgentTaskOptions{
 			ctx:         ctx,

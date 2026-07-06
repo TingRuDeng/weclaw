@@ -43,7 +43,7 @@ async function loadStatus() {
   const st = await api('GET', '/api/status');
   const daemon = st.daemon_running ? '<span class="pill ok">守护进程运行中</span>' : '<span class="pill warn">守护进程未运行</span>';
   const plats = (st.platforms || []).map(p =>
-    `${p.name}: ${p.enabled ? '启用' : '停用'} · 凭证${p.credentials_present ? '已配置' : '缺失'} · 白名单 ${p.allowed_users_count} 人`).join('<br>');
+    `${p.name}${p.account_id ? ` (${p.account_id})` : ''}: ${p.enabled ? '启用' : '停用'} · 凭证${p.credentials_present ? '已配置' : '缺失'} · 白名单 ${p.allowed_users_count} 人`).join('<br>');
   const agents = (st.agents || []).map(a => `${a.name} (${a.type})`).join('、');
   document.getElementById('status').innerHTML = `${daemon}<br>${plats}<br>Agents: ${agents || '无'}`;
 }
@@ -60,10 +60,11 @@ async function saveConfig() {
 }
 
 async function saveFeishu() {
+  const name = document.getElementById('fs-name').value.trim();
   const app_id = document.getElementById('fs-appid').value.trim();
   const app_secret = document.getElementById('fs-secret').value.trim();
   try {
-    await api('POST', '/api/feishu/credentials', { app_id, app_secret });
+    await api('POST', '/api/feishu/credentials', { name, app_id, app_secret });
     document.getElementById('fs-secret').value = '';
     toast('飞书凭证已保存');
     loadStatus();
@@ -71,10 +72,11 @@ async function saveFeishu() {
 }
 
 async function validateFeishu() {
+  const name = document.getElementById('fs-name').value.trim();
   const app_id = document.getElementById('fs-appid').value.trim();
   const app_secret = document.getElementById('fs-secret').value.trim();
   try {
-    const r = await api('POST', '/api/validate/feishu', { app_id, app_secret });
+    const r = await api('POST', '/api/validate/feishu', { name, app_id, app_secret });
     toast(r.ok ? '凭证有效' : '校验失败: ' + r.message);
   } catch (e) { toast('校验失败: ' + e.message); }
 }

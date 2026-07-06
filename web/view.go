@@ -160,6 +160,21 @@ func platformTopologyChanged(current, next *config.Config) bool {
 		if !ok || !boolPtrEqual(cp.Enabled, np.Enabled) {
 			return true
 		}
+		if name == "feishu" && feishuBotsTopologyChanged(cp.Bots, np.Bots) {
+			return true
+		}
+	}
+	return false
+}
+
+func feishuBotsTopologyChanged(current, next []config.FeishuBotConfig) bool {
+	if len(current) != len(next) {
+		return true
+	}
+	for i := range next {
+		if current[i].Name != next[i].Name || current[i].AppID != next[i].AppID {
+			return true
+		}
 	}
 	return false
 }

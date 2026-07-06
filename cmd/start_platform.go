@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -13,7 +14,8 @@ import (
 )
 
 func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config) (*platform.Registry, error) {
-	entries := make([]platform.RegistryEntry, 0, len(accounts)+1)
+	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
+	entries := make([]platform.RegistryEntry, 0, len(accounts)+len(feishuCfg.Bots))
 	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
 	if !wechatEnabled(cfg) {
 		log.Printf("[platform] wechat disabled by config")
@@ -27,22 +29,47 @@ func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config) (*
 			})
 		}
 	}
-	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
 	if feishuCfg.Enabled != nil && *feishuCfg.Enabled {
-		creds, err := feishuplatform.LoadCredentials()
+		feishuEntries, err := buildFeishuRegistryEntries(feishuCfg)
 		if err != nil {
-			return nil, fmt.Errorf("load feishu credentials: %w", err)
+			return nil, err
 		}
-		adapter := feishuplatform.NewAdapter(creds)
-		adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
-			RequireMentionInGroup: feishuCfg.EffectiveRequireMentionInGroup(),
-		})
-		entries = append(entries, platform.RegistryEntry{
-			Platform: adapter,
-			Access:   platform.NewAccessControl(feishuCfg.AllowedUsers),
-		})
+		entries = append(entries, feishuEntries...)
 	}
 	return platform.NewRegistry(entries), nil
+}
+
+func buildFeishuRegistryEntries(feishuCfg config.PlatformConfig) ([]platform.RegistryEntry, error) {
+	if len(feishuCfg.Bots) == 0 {
+		return nil, fmt.Errorf("platforms.feishu.bots is required when feishu is enabled")
+	}
+	entries := make([]platform.RegistryEntry, 0, len(feishuCfg.Bots))
+	for _, bot := range feishuCfg.Bots {
+		entry, err := buildFeishuRegistryEntry(bot)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func buildFeishuRegistryEntry(bot config.FeishuBotConfig) (platform.RegistryEntry, error) {
+	creds, err := feishuplatform.LoadCredentialsForBot(bot.Name)
+	if err != nil {
+		return platform.RegistryEntry{}, fmt.Errorf("load feishu credentials for %q: %w", bot.Name, err)
+	}
+	if strings.TrimSpace(creds.AppID) != strings.TrimSpace(bot.AppID) {
+		return platform.RegistryEntry{}, fmt.Errorf("feishu bot %q app_id mismatch: config %q, credentials %q", bot.Name, bot.AppID, creds.AppID)
+	}
+	adapter := feishuplatform.NewAdapter(creds)
+	adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
+		RequireMentionInGroup: bot.EffectiveRequireMentionInGroup(),
+	})
+	return platform.RegistryEntry{
+		Platform: adapter,
+		Access:   platform.NewAccessControl(bot.AllowedUsers),
+	}, nil
 }
 
 func wechatEnabled(cfg *config.Config) bool {

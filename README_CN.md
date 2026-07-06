@@ -36,8 +36,8 @@ weclaw start
 飞书接入默认关闭。需要启用时先保存并校验飞书应用凭证：
 
 ```bash
-weclaw feishu login --app-id cli_xxx --app-secret xxx
-weclaw feishu status
+weclaw feishu login --name project-a --app-id cli_xxx --app-secret xxx
+weclaw feishu status --name project-a
 ```
 
 ### 其他安装方式
@@ -270,7 +270,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 ### 多平台配置
 
-`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用，并且 `allowed_users` 为空时默认拒绝所有入站消息。
+`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用并配置 `bots[]`；每个 bot 的 `allowed_users` 为空时默认拒绝所有入站消息。
 
 ```json
 {
@@ -284,9 +284,15 @@ curl -X POST http://127.0.0.1:18011/api/send \
     },
     "feishu": {
       "enabled": true,
-      "allowed_users": ["ou_xxx"],
-      "default_agent": "codex",
-      "progress": {"mode": "stream"}
+      "bots": [
+        {
+          "name": "project-a",
+          "app_id": "cli_xxx",
+          "allowed_users": ["ou_xxx"],
+          "default_agent": "codex",
+          "progress": {"mode": "stream"}
+        }
+      ]
     }
   }
 }
@@ -294,7 +300,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 安全提示：白名单用户可以驱动本机 shell agent 读取文件、运行命令或修改代码。生产使用时必须显式配置 `allowed_users`，不要把 bot 暴露给不可信用户。
 
-微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。`default_agent`、`progress` 和 `allowed_users` 支持软配置热重载；平台启用状态和平台凭证仍需重启生效。
+微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 支持软配置热重载；新增、删除 bot 或修改 `app_id` 仍需重启生效。
 
 环境变量：
 
@@ -455,12 +461,17 @@ WeClaw 驱动的 AI Agent 能执行 shell 命令、读写文件。任何能给 b
   "audit_log": true,
   "platforms": {
     "wechat": { "enabled": true, "allowed_users": ["user_id@im.wechat"] },
-    "feishu": { "enabled": true, "allowed_users": ["ou_xxx"] }
+    "feishu": {
+      "enabled": true,
+      "bots": [
+        { "name": "project-a", "app_id": "cli_xxx", "allowed_users": ["ou_xxx"] }
+      ]
+    }
   }
 }
 ```
 
-- **访问控制 (`allowed_users`)**：每平台白名单。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。
+- **访问控制 (`allowed_users`)**：微信按平台配置，飞书按 `bots[]` 内每个机器人配置。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。
 - **管理员白名单 (`admin_users`)**：顶层配置。只有同时位于对应平台 `allowed_users` 和顶层 `admin_users` 的用户，才能在微信 / 飞书执行 `/update`、`/upgrade`、`/restart`、`/restart --force`。为空 = 禁用远程管理命令。
 - **工作目录限制 (`allowed_workspace_roots`)**：`/cwd` 只能切到白名单根目录及其子目录。为空 = 不限制（会告警）。
 - **限流 (`rate_limit_per_minute`)**：每用户每分钟最多触发 agent 次数，`0` = 不限。

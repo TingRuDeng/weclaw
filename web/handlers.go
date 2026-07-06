@@ -75,6 +75,7 @@ func (s *Server) handleFeishuCredentials(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var body struct {
+		Name      string `json:"name"`
 		AppID     string `json:"app_id"`
 		AppSecret string `json:"app_secret"`
 	}
@@ -82,7 +83,7 @@ func (s *Server) handleFeishuCredentials(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := feishu.SaveCredentials(feishu.Credentials{AppID: body.AppID, AppSecret: body.AppSecret}); err != nil {
+	if err := feishu.SaveCredentialsForBot(body.Name, feishu.Credentials{AppID: body.AppID, AppSecret: body.AppSecret}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -95,6 +96,7 @@ func (s *Server) handleValidateFeishu(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		Name      string `json:"name"`
 		AppID     string `json:"app_id"`
 		AppSecret string `json:"app_secret"`
 	}
@@ -105,7 +107,7 @@ func (s *Server) handleValidateFeishu(w http.ResponseWriter, r *http.Request) {
 	creds := feishu.Credentials{AppID: body.AppID, AppSecret: body.AppSecret}
 	if body.AppSecret == "" {
 		// 未填 secret 时用已保存凭证校验
-		if saved, err := feishu.LoadCredentials(); err == nil {
+		if saved, err := feishu.LoadCredentialsForBot(body.Name); err == nil {
 			creds = saved
 		}
 	}

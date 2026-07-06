@@ -63,6 +63,40 @@ func TestHandleMessageUsesPlatformDefaultAgent(t *testing.T) {
 	}
 }
 
+func TestHandleMessageUsesFeishuAccountDefaultAgent(t *testing.T) {
+	codex := &fakeAgent{reply: "codex reply", info: agent.AgentInfo{Name: "codex", Type: "test"}}
+	claude := &fakeAgent{reply: "claude reply", info: agent.AgentInfo{Name: "claude", Type: "test"}}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
+		switch name {
+		case "claude":
+			return claude
+		case "codex":
+			return codex
+		default:
+			return nil
+		}
+	}, nil)
+	h.SetDefaultAgent("codex", codex)
+	h.SetPlatformDefaultAgents(map[string]string{
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_b"): "claude",
+	})
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		AccountID: "cli_b",
+		UserID:    "user-1",
+		Text:      "hello",
+	}, reply)
+
+	if !claude.wasChatCalled() {
+		t.Fatal("claude was not called for feishu account default agent")
+	}
+	if codex.chatCallCount() != 0 {
+		t.Fatalf("codex calls=%d, want 0", codex.chatCallCount())
+	}
+}
+
 func TestHandleMessageUsesFeishuSessionMetadataForRouting(t *testing.T) {
 	ag := &fakeAgent{reply: "ok", info: agent.AgentInfo{Name: "mock", Type: "test"}}
 	h := NewHandler(func(ctx context.Context, name string) agent.Agent {

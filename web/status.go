@@ -16,6 +16,7 @@ import (
 
 type platformStatus struct {
 	Name               string `json:"name"`
+	AccountID          string `json:"account_id,omitempty"`
 	Enabled            bool   `json:"enabled"`
 	CredentialsPresent bool   `json:"credentials_present"`
 	AllowedUsersCount  int    `json:"allowed_users_count"`
@@ -51,23 +52,34 @@ func platformStatuses(cfg *config.Config) []platformStatus {
 	accounts, _ := ilink.LoadAllCredentials()
 
 	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
-	feishuEnabled := feishuCfg.Enabled != nil && *feishuCfg.Enabled
-	_, feishuErr := feishu.LoadCredentials()
-
-	return []platformStatus{
+	statuses := []platformStatus{
 		{
 			Name:               string(platform.PlatformWeChat),
 			Enabled:            wechatEnabled,
 			CredentialsPresent: len(accounts) > 0,
 			AllowedUsersCount:  len(wechatCfg.AllowedUsers),
 		},
-		{
-			Name:               string(platform.PlatformFeishu),
-			Enabled:            feishuEnabled,
-			CredentialsPresent: feishuErr == nil,
-			AllowedUsersCount:  len(feishuCfg.AllowedUsers),
-		},
 	}
+	return append(statuses, feishuPlatformStatuses(feishuCfg)...)
+}
+
+func feishuPlatformStatuses(feishuCfg config.PlatformConfig) []platformStatus {
+	enabled := feishuCfg.Enabled != nil && *feishuCfg.Enabled
+	if len(feishuCfg.Bots) == 0 {
+		return []platformStatus{{Name: string(platform.PlatformFeishu), Enabled: enabled}}
+	}
+	statuses := make([]platformStatus, 0, len(feishuCfg.Bots))
+	for _, bot := range feishuCfg.Bots {
+		_, err := feishu.LoadCredentialsForBot(bot.Name)
+		statuses = append(statuses, platformStatus{
+			Name:               string(platform.PlatformFeishu) + "/" + bot.Name,
+			AccountID:          bot.AppID,
+			Enabled:            enabled,
+			CredentialsPresent: err == nil,
+			AllowedUsersCount:  len(bot.AllowedUsers),
+		})
+	}
+	return statuses
 }
 
 func agentStatuses(cfg *config.Config) []agentStatus {

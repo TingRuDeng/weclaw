@@ -28,16 +28,32 @@ type Config struct {
 
 // PlatformConfig 保存单个平台的启用状态、访问控制和展示覆盖配置。
 type PlatformConfig struct {
-	Enabled               *bool           `json:"enabled,omitempty"`
+	Enabled               *bool             `json:"enabled,omitempty"`
+	AllowedUsers          []string          `json:"allowed_users,omitempty"`
+	DefaultAgent          string            `json:"default_agent,omitempty"`
+	Progress              *ProgressConfig   `json:"progress,omitempty"`
+	MessageAggregationMs  *int              `json:"message_aggregation_ms,omitempty"`
+	RequireMentionInGroup *bool             `json:"require_mention_in_group,omitempty"`
+	Bots                  []FeishuBotConfig `json:"bots,omitempty"`
+}
+
+// FeishuBotConfig 描述单个飞书机器人入口，secret 只允许保存在凭证文件中。
+type FeishuBotConfig struct {
+	Name                  string          `json:"name"`
+	AppID                 string          `json:"app_id"`
 	AllowedUsers          []string        `json:"allowed_users,omitempty"`
 	DefaultAgent          string          `json:"default_agent,omitempty"`
 	Progress              *ProgressConfig `json:"progress,omitempty"`
-	MessageAggregationMs  *int            `json:"message_aggregation_ms,omitempty"`
 	RequireMentionInGroup *bool           `json:"require_mention_in_group,omitempty"`
 }
 
 // EffectiveRequireMentionInGroup 返回飞书群聊 @ 触发规则，默认要求 @bot。
 func (c PlatformConfig) EffectiveRequireMentionInGroup() bool {
+	return boolValueDefault(c.RequireMentionInGroup, true)
+}
+
+// EffectiveRequireMentionInGroup 返回单个飞书机器人群聊 @ 触发规则，默认要求 @bot。
+func (c FeishuBotConfig) EffectiveRequireMentionInGroup() bool {
 	return boolValueDefault(c.RequireMentionInGroup, true)
 }
 
@@ -332,7 +348,44 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
 	}
+	if err := validateFeishuPlatformConfig(c.Platforms["feishu"]); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateFeishuPlatformConfig(platformCfg PlatformConfig) error {
+	if hasLegacyFeishuConfig(platformCfg) {
+		return fmt.Errorf("platforms.feishu legacy single-bot fields are not supported; use platforms.feishu.bots")
+	}
+	seenNames := make(map[string]struct{}, len(platformCfg.Bots))
+	seenAppIDs := make(map[string]struct{}, len(platformCfg.Bots))
+	for _, bot := range platformCfg.Bots {
+		name := strings.TrimSpace(bot.Name)
+		appID := strings.TrimSpace(bot.AppID)
+		if name == "" {
+			return fmt.Errorf("platforms.feishu.bots contains empty bot name")
+		}
+		if appID == "" {
+			return fmt.Errorf("platforms.feishu.bots[%q] app_id is required", name)
+		}
+		if _, ok := seenNames[name]; ok {
+			return fmt.Errorf("duplicate feishu bot name %q", name)
+		}
+		if _, ok := seenAppIDs[appID]; ok {
+			return fmt.Errorf("duplicate feishu bot app_id %q", appID)
+		}
+		seenNames[name] = struct{}{}
+		seenAppIDs[appID] = struct{}{}
+	}
+	return nil
+}
+
+func hasLegacyFeishuConfig(platformCfg PlatformConfig) bool {
+	return len(platformCfg.AllowedUsers) > 0 ||
+		strings.TrimSpace(platformCfg.DefaultAgent) != "" ||
+		platformCfg.Progress != nil ||
+		platformCfg.RequireMentionInGroup != nil
 }
 
 func loadEnv(cfg *Config) {

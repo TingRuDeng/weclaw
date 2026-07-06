@@ -38,6 +38,52 @@ func TestSaveAndLoadCredentialsUsesSecureFile(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadCredentialsForBotUsesIsolatedFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	first := Credentials{AppID: "cli_a", AppSecret: "secret-a"}
+	second := Credentials{AppID: "cli_b", AppSecret: "secret-b"}
+
+	if err := SaveCredentialsForBot("project-a", first); err != nil {
+		t.Fatalf("SaveCredentialsForBot project-a error: %v", err)
+	}
+	if err := SaveCredentialsForBot("project-b", second); err != nil {
+		t.Fatalf("SaveCredentialsForBot project-b error: %v", err)
+	}
+	path, err := CredentialsPathForBot("project-a")
+	if err != nil {
+		t.Fatalf("CredentialsPathForBot error: %v", err)
+	}
+	wantPath := filepath.Join(home, ".weclaw", "platforms", "feishu", "project-a.json")
+	if path != wantPath {
+		t.Fatalf("path=%q, want %q", path, wantPath)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat credentials: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("credentials mode=%o, want 600", mode)
+	}
+	loaded, err := LoadCredentialsForBot("project-a")
+	if err != nil {
+		t.Fatalf("LoadCredentialsForBot error: %v", err)
+	}
+	if loaded != first {
+		t.Fatalf("credentials=%#v, want %#v", loaded, first)
+	}
+}
+
+func TestCredentialsPathForBotRejectsUnsafeName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	_, err := CredentialsPathForBot("../project")
+
+	if err == nil || !strings.Contains(err.Error(), "invalid feishu bot name") {
+		t.Fatalf("CredentialsPathForBot error=%v, want invalid name", err)
+	}
+}
+
 func TestLoadCredentialsPrefersEnvironment(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(envAppID, "cli_env")
