@@ -221,14 +221,21 @@ func scheduleRestartCommand(args []string) (string, error) {
 	}
 	go func() {
 		time.Sleep(adminRestartDelay)
-		cmd := exec.Command(exe, append([]string{"restart"}, args...)...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd := buildRestartCommand(exe, args)
 		if err := cmd.Start(); err != nil {
 			log.Printf("[admin] failed to start delayed restart: %v", err)
 		}
 	}()
 	return "已触发 weclaw restart；服务会在消息发出后尝试重启。", nil
+}
+
+// buildRestartCommand 构造延迟重启进程；远程重启必须脱离旧服务进程组，避免 stop 超时强杀时把自己杀掉。
+func buildRestartCommand(exe string, args []string) *exec.Cmd {
+	cmd := exec.Command(exe, append([]string{"restart"}, args...)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	configureDetachedRestartCommand(cmd)
+	return cmd
 }
 
 // resolveRestartExecutable 确认 restart 使用的二进制可访问，避免后台 goroutine 静默失败。
