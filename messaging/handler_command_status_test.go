@@ -54,7 +54,6 @@ func TestBuildHelpText(t *testing.T) {
 		"/info",
 		"/cx usage",
 		"/guide",
-		"/run",
 		"/cancel",
 		"/claude 任务",
 		"/cs = /cursor",

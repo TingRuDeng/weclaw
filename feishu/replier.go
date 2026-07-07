@@ -50,7 +50,7 @@ func newReplierForMessageWithTaskCards(sender messageSender, openID string, repl
 
 // Capabilities 返回飞书回复器能力。
 func (r *Replier) Capabilities() platform.Capabilities {
-	return platform.Capabilities{Text: true, Typing: true, Image: true, File: true, Card: true, Streaming: true, Buttons: true, LongText: false}
+	return platform.Capabilities{Text: true, Typing: true, Image: true, File: true, Card: true, Streaming: true, Buttons: true, LongText: false, FinalReplyOutsideStream: true}
 }
 
 // SendText 拆分超长文本并逐条发送。

@@ -25,7 +25,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		codexSessions:           newCodexSessionStore(),
 		taskLocks:               make(map[string]*sync.Mutex),
 		activeTasks:             make(map[string]*activeAgentTask),
-		pendingCodexRuns:        make(map[string]string),
+		pendingCodexConfirms:    make(map[string]string),
 		pendingApprovals:        make(map[string]*pendingApproval),
 		codexLocalSessionDir:    defaultCodexLocalSessionDir(),
 		claudeSessions:          newClaudeSessionStore(),

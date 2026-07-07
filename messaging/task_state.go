@@ -207,41 +207,47 @@ func (h *Handler) promotePendingGuideToRun(key string, task *activeAgentTask) (s
 	message := task.pendingMessage
 	task.pendingMessage = ""
 	task.mu.Unlock()
-	h.storePendingCodexRun(key, message)
+	h.storePendingCodexConfirmation(key, message)
 	return message, true
 }
 
-// storePendingCodexRun 保存等待用户用 /run 明确确认的 Codex 消息。
-func (h *Handler) storePendingCodexRun(key string, message string) {
-	h.pendingCodexRunsMu.Lock()
-	if h.pendingCodexRuns == nil {
-		h.pendingCodexRuns = make(map[string]string)
+// storePendingCodexConfirmation 保存等待用户回复“确认”的 Codex 消息。
+func (h *Handler) storePendingCodexConfirmation(key string, message string) {
+	h.pendingCodexConfirmsMu.Lock()
+	if h.pendingCodexConfirms == nil {
+		h.pendingCodexConfirms = make(map[string]string)
 	}
-	h.pendingCodexRuns[key] = message
-	h.pendingCodexRunsMu.Unlock()
+	h.pendingCodexConfirms[key] = message
+	h.pendingCodexConfirmsMu.Unlock()
 }
 
-// takePendingCodexRun 取出并删除待执行消息，保证 /run 不会重复执行同一条输入。
-func (h *Handler) takePendingCodexRun(key string) (string, bool) {
-	h.pendingCodexRunsMu.Lock()
-	defer h.pendingCodexRunsMu.Unlock()
-	message := h.pendingCodexRuns[key]
+// takePendingCodexConfirmation 取出并删除待确认消息，保证同一条输入不会重复执行。
+func (h *Handler) takePendingCodexConfirmation(key string) (string, bool) {
+	h.pendingCodexConfirmsMu.Lock()
+	defer h.pendingCodexConfirmsMu.Unlock()
+	message := h.pendingCodexConfirms[key]
 	if message == "" {
 		return "", false
 	}
-	delete(h.pendingCodexRuns, key)
+	delete(h.pendingCodexConfirms, key)
 	return message, true
 }
 
-// clearPendingCodexRun 撤回已经转为待执行状态的 Codex 消息。
-func (h *Handler) clearPendingCodexRun(key string) bool {
-	h.pendingCodexRunsMu.Lock()
-	defer h.pendingCodexRunsMu.Unlock()
-	if h.pendingCodexRuns[key] == "" {
+// clearPendingCodexConfirmation 撤回已经转为待确认状态的 Codex 消息。
+func (h *Handler) clearPendingCodexConfirmation(key string) bool {
+	h.pendingCodexConfirmsMu.Lock()
+	defer h.pendingCodexConfirmsMu.Unlock()
+	if h.pendingCodexConfirms[key] == "" {
 		return false
 	}
-	delete(h.pendingCodexRuns, key)
+	delete(h.pendingCodexConfirms, key)
 	return true
+}
+
+func (h *Handler) hasPendingCodexConfirmation() bool {
+	h.pendingCodexConfirmsMu.Lock()
+	defer h.pendingCodexConfirmsMu.Unlock()
+	return len(h.pendingCodexConfirms) > 0
 }
 
 func (t *activeAgentTask) shouldSendFinal() bool {

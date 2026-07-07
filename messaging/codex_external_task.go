@@ -107,7 +107,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		reply = renderFinalSuccess("", reply)
 	}
 	if runtime.task.shouldSendFinal() {
-		consumed := finishProgressWithReply(finishProgress, reply, failed)
+		consumed := finishProgressWithReplyForPlatform(runtime.opts.reply, finishProgress, reply, failed)
 		h.sendReplyWithMediaAfterStreamForRoute(runtime.opts.ctx, runtime.opts.reply, runtime.opts.actorUserID, runtime.opts.routeUserID, runtime.opts.agentName, reply, consumed)
 		return
 	}

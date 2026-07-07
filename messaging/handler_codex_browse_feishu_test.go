@@ -102,6 +102,42 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 	}
 }
 
+func TestFeishuCodexWorkspaceChoiceSendsSingleSessionChoiceCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-cx-workspace-single",
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value:  map[string]string{"choice": "/cx cd 0"},
+		},
+	}, reply)
+
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want single session choice card", reply.Choices)
+	}
+	choices := reply.Choices[0].Choices
+	if len(choices) != 2 || choices[0].ID != "/cx switch thread-a" {
+		t.Fatalf("single session choices=%#v, want switch choice and back choice", choices)
+	}
+	if choices[1].ID != "/cx cd .." || choices[1].Label != "返回工作空间列表" {
+		t.Fatalf("last single session choice=%#v, want back to workspace list", choices[1])
+	}
+}
+
 func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()

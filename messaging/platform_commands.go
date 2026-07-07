@@ -59,8 +59,6 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 			AccountID:   msg.AccountID,
 			Reply:       req.Reply,
 		}))
-	case trimmed == "/run":
-		h.handleRunPendingCodexCommand(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, req.Reply, req.ClientID)
 	case trimmed == "/guide":
 		h.handleGuideCommand(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, req.Reply, req.ClientID)
 	case trimmed == "/cancel":

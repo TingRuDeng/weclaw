@@ -30,7 +30,7 @@ func runningCodexGuidePromptForTask(task *activeAgentTask) string {
 
 // runnablePendingCodexPrompt 提醒用户确认执行已从引导态转出的暂存消息。
 func runnablePendingCodexPrompt(message string) string {
-	return "上一条 Codex 任务已完成。\n\n暂存消息：\n" + previewPendingCodexMessage(message) + "\n\n回复 /run 执行该消息。\n回复 /cancel 撤回该消息。"
+	return "上一条 Codex 任务已完成。\n\n暂存消息：\n" + previewPendingCodexMessage(message) + "\n\n回复“确认”执行该消息。\n回复 /cancel 撤回该消息。"
 }
 
 // previewPendingCodexMessage 限制微信提示里的消息预览长度，避免长输入刷屏。
@@ -42,19 +42,26 @@ func previewPendingCodexMessage(message string) string {
 	return string(runes[:pendingCodexPreviewRunes]) + "..."
 }
 
-// handleRunPendingCodexCommand 执行用户确认后的待执行 Codex 消息。
-func (h *Handler) handleRunPendingCodexCommand(ctx context.Context, platformName platform.PlatformName, accountID string, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
+// handlePendingCodexConfirmation 执行用户确认后的待执行 Codex 消息。
+func (h *Handler) handlePendingCodexConfirmation(ctx context.Context, platformName platform.PlatformName, accountID string, actorUserID string, routeUserID string, text string, reply platform.Replier, clientID string) bool {
+	if !isPendingCodexConfirmText(text) || !h.hasPendingCodexConfirmation() {
+		return false
+	}
 	name, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
-		return
+		return true
 	}
-	message, ok := h.takePendingCodexRun(key)
+	message, ok := h.takePendingCodexConfirmation(key)
 	if !ok {
-		sendPlatformText(ctx, reply, actorUserID, "当前没有待执行的暂存消息。")
-		return
+		return false
 	}
 	h.sendToNamedAgentForAccount(ctx, platformName, accountID, actorUserID, routeUserID, reply, name, message, clientID)
+	return true
+}
+
+func isPendingCodexConfirmText(text string) bool {
+	return strings.TrimSpace(text) == "确认"
 }
 
 func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, accountID string, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
@@ -83,7 +90,7 @@ func (h *Handler) handleCancelPendingGuide(ctx context.Context, actorUserID stri
 	if err != nil {
 		return err.Error()
 	}
-	if !h.clearPendingGuide(key) && !h.clearPendingCodexRun(key) {
+	if !h.clearPendingGuide(key) && !h.clearPendingCodexConfirmation(key) {
 		return "当前没有可撤回的消息。"
 	}
 	return "已撤回该消息。"

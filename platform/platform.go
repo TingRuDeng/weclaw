@@ -23,6 +23,8 @@ type Capabilities struct {
 	Streaming bool
 	Buttons   bool
 	LongText  bool
+	// FinalReplyOutsideStream 表示流式更新不会触发新消息提醒，最终结果需要独立发送。
+	FinalReplyOutsideStream bool
 }
 
 // Platform 表示一个可运行的 IM 接入端。

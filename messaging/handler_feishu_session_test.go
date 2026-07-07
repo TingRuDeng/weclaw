@@ -203,7 +203,7 @@ func TestFeishuRawCommandStopUsesSessionMetadata(t *testing.T) {
 	h.finishActiveTask(key, task)
 }
 
-func TestFeishuRunPendingUsesSessionMetadata(t *testing.T) {
+func TestFeishuConfirmPendingUsesSessionMetadata(t *testing.T) {
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			reply: "ok",
@@ -221,12 +221,12 @@ func TestFeishuRunPendingUsesSessionMetadata(t *testing.T) {
 	sessionKey := "feishu:tenant_1:group:oc_1"
 	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("ou_user", "codex"), t.TempDir())
 	executionKey := h.agentExecutionKeyForRoute("ou_user", sessionKey, "codex", ag)
-	h.storePendingCodexRun(executionKey, "继续执行")
+	h.storePendingCodexConfirmation(executionKey, "继续执行")
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
-		Text:     "/run",
+		Text:     "确认",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
 	}, reply)
 

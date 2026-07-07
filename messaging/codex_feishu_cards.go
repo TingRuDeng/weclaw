@@ -126,7 +126,10 @@ func shouldShowFeishuSessionChoices(fields []string, choiceCount int) bool {
 	if choiceCount > 1 {
 		return true
 	}
-	return len(fields) >= 2 && fields[1] == "ls"
+	if len(fields) < 2 {
+		return false
+	}
+	return fields[1] == "ls" || fields[1] == "cd"
 }
 
 func (h *Handler) askFeishuCodexChoices(ctx context.Context, userID string, reply platform.Replier, prompt string, choices []platform.Choice) bool {

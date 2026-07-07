@@ -129,6 +129,30 @@ func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
 	}
 }
 
+func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeProgressAgent{
+		fakeAgent:      fakeAgent{reply: "最终结果"},
+		progressDeltas: []string{"过程片段"},
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	h.SetProgressConfig(cfg)
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
+	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+
+	if reply.Stream.Completed != "任务已完成，正在发送最终结果。" {
+		t.Fatalf("completed=%q, want generic completion card", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] 最终结果" {
+		t.Fatalf("texts=%#v, want final reply as separate message", reply.Texts)
+	}
+}
+
 func TestHandlePlatformMessagePassesTextAndImageToAgent(t *testing.T) {
 	dir := t.TempDir()
 	imagePath := filepath.Join(dir, "input.png")

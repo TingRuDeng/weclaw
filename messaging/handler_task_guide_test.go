@@ -250,16 +250,16 @@ func TestPendingGuideBecomesRunnableAfterTaskFinishes(t *testing.T) {
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
-	waitForText(t, calls, "回复 /run 执行该消息")
+	waitForText(t, calls, "回复“确认”执行该消息")
 
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/run"))
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "确认"))
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第2条结果")
 
 	started, _ := ag.stats()
 	if started != 2 {
-		t.Fatalf("/run 应执行暂存消息，started=%d", started)
+		t.Fatalf("确认应执行暂存消息，started=%d", started)
 	}
 }
 
@@ -282,12 +282,11 @@ func TestCancelWithdrawsRunnablePendingGuide(t *testing.T) {
 	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
 
 	ag.release <- struct{}{}
-	waitForText(t, calls, "回复 /run 执行该消息")
+	waitForText(t, calls, "回复“确认”执行该消息")
 	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/cancel"))
 	waitForText(t, calls, "已撤回该消息。")
 
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(4, "/run"))
-	waitForText(t, calls, "当前没有待执行的暂存消息。")
+	handleTestWeChatMessage(h, ctx, client, newTextMessage(4, "继续"))
 
 	started, _ := ag.stats()
 	if started != 1 {

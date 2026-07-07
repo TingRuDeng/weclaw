@@ -42,6 +42,30 @@ weclaw feishu status --name project-a
 
 `bootstrap` saves Feishu credentials and updates `platforms.feishu.bots[]` in one step, which is the recommended first-time setup path. If the official `lark-cli` is installed, the command suggests using it for permission, event subscription, and message-send diagnostics. WeClaw runtime still uses the built-in Feishu SDK websocket client and does not depend on `lark-cli`.
 
+飞书应用建议按最小权限开通。WeClaw 运行时使用应用身份，不需要 `user` scopes；开通或修改权限后必须重新发布版本并完成审批。
+
+```json
+{
+  "scopes": {
+    "tenant": [
+      "im:message.p2p_msg:readonly",
+      "im:message.group_at_msg:readonly",
+      "im:message.group_at_msg.include_bot:readonly",
+      "im:message:send_as_bot",
+      "im:resource",
+      "im:chat",
+      "cardkit:card:read",
+      "cardkit:card:write",
+      "application:bot.basic_info:read",
+      "application:bot.menu:write"
+    ],
+    "user": []
+  }
+}
+```
+
+其中 `im:message.p2p_msg:readonly` 负责单聊入站消息。如果机器人能主动发消息，但单聊回复没有触发 `im.message.receive_v1` 事件，优先检查这个权限和版本发布状态。
+
 ### Other install methods
 
 ```bash
@@ -134,6 +158,40 @@ Send these as WeChat or Feishu messages:
 | `/restart` / `/restart --force` | Admin-only remote WeClaw restart (requires `admin_users`) |
 | `/status` | Show WeClaw runtime status (agent, uptime, running tasks, call/error counts, mode, limits) |
 | `/help` | Show help message |
+
+### 飞书机器人推荐菜单
+
+飞书自定义菜单最多可配置 5 个主菜单，每个主菜单最多 5 个子菜单。建议先按下面这组常用命令配置；子菜单动作直接填写命令文本。
+
+| 主菜单 | 子菜单 | 命令 |
+| ------ | ------ | ---- |
+| 🧭 常用 | 帮助 | `/help` |
+| 🧭 常用 | 状态 | `/status` |
+| 🧭 常用 | 进度模式 | `/progress` |
+| 🧭 常用 | 确认模式 | `/mode` |
+| 🧭 常用 | 停止任务 | `/stop` |
+| 🤖 Codex | 工作空间 | `/cx ls` |
+| 🤖 Codex | 会话状态 | `/cx status` |
+| 🤖 Codex | 新建会话 | `/cx new` |
+| 🤖 Codex | 当前目录 | `/cx pwd` |
+| 🤖 Codex | 模型列表 | `/cx model ls` |
+| 🧠 Claude | 会话列表 | `/cc ls` |
+| 🧠 Claude | 会话状态 | `/cc status` |
+| 🧠 Claude | 新建会话 | `/cc new` |
+| 🧠 Claude | 当前目录 | `/cc pwd` |
+| 🧠 Claude | 模型列表 | `/cc model ls` |
+| 📁 工作区 | 当前目录 | `/cwd` |
+| 📁 工作区 | Codex 帮助 | `/cx help` |
+| 📁 工作区 | Codex 额度 | `/cx quota` |
+| 📁 工作区 | Codex 清理 | `/cx clean` |
+| 📁 工作区 | WeClaw 信息 | `/info` |
+| ⚙️ 控制 | 运行任务 | `/ps` |
+| ⚙️ 控制 | 引导任务 | `/guide` |
+| ⚙️ 控制 | 停止任务 | `/stop` |
+| ⚙️ 控制 | 更新 WeClaw | `/update` |
+| ⚙️ 控制 | 重启 WeClaw | `/restart` |
+
+普通计划确认和暂存消息确认都直接回复“确认”。`/cancel` 只撤回暂存消息，不建议放入固定菜单；停止运行中任务请用 `/stop`。
 
 ### Codex 主路径
 

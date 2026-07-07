@@ -54,7 +54,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 
 	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
 		reply := renderFinalFailure(opts.replyPrefix, err)
-		consumed := finishProgressWithReply(finishProgress, reply, true)
+		consumed := finishProgressWithReplyForPlatform(opts.reply, finishProgress, reply, true)
 		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
 		return
 	}
@@ -66,14 +66,14 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
 	if runtime.task.shouldSendFinal() {
-		consumed := finishProgressWithReply(finishProgress, reply, err != nil)
+		consumed := finishProgressWithReplyForPlatform(opts.reply, finishProgress, reply, err != nil)
 		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
 	} else {
 		_ = finishProgress("", false)
 	}
 }
 
-// finishCodexAgentTask 收尾后台任务，并把未处理的暂存引导转成 /run 待确认消息。
+// finishCodexAgentTask 收尾后台任务，并把未处理的暂存引导转成确认消息。
 func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
 	runtime.cancelTaskTimeout()
 	message, ok := h.promotePendingGuideToRun(runtime.executionKey, runtime.task)

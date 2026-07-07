@@ -81,8 +81,8 @@ type Handler struct {
 	taskLocks               map[string]*sync.Mutex
 	activeTasksMu           sync.Mutex
 	activeTasks             map[string]*activeAgentTask
-	pendingCodexRunsMu      sync.Mutex
-	pendingCodexRuns        map[string]string
+	pendingCodexConfirmsMu  sync.Mutex
+	pendingCodexConfirms    map[string]string
 	pendingApprovalsMu      sync.Mutex
 	pendingApprovals        map[string]*pendingApproval
 	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
@@ -240,6 +240,10 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		Trimmed:     trimmed,
 		ClientID:    clientID,
 	}) {
+		return
+	}
+
+	if h.handlePendingCodexConfirmation(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, trimmed, replyWriter, clientID) {
 		return
 	}
 

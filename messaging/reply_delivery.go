@@ -105,6 +105,21 @@ func finishProgressWithReply(finish func(string, bool) bool, reply string, faile
 	return finish(finalCardReplyText(reply), failed)
 }
 
+func finishProgressWithReplyForPlatform(replyWriter platform.Replier, finish func(string, bool) bool, reply string, failed bool) bool {
+	if shouldKeepFinalReplyOutsideStream(replyWriter, reply) {
+		_ = finish("", failed)
+		return false
+	}
+	return finishProgressWithReply(finish, reply, failed)
+}
+
+func shouldKeepFinalReplyOutsideStream(replyWriter platform.Replier, reply string) bool {
+	if replyWriter == nil || strings.TrimSpace(reply) == "" {
+		return false
+	}
+	return replyWriter.Capabilities().FinalReplyOutsideStream && canConsumeFinalReplyInStream(reply)
+}
+
 func canConsumeFinalReplyInStream(reply string) bool {
 	return len(ExtractImageURLs(reply)) == 0 && len(extractLocalAttachmentPaths(reply)) == 0
 }
