@@ -91,6 +91,7 @@ func TestServiceAdminCommandRunsUpdateForWhitelistedUser(t *testing.T) {
 }
 
 func TestServiceAdminCommandAllowsRestartForceOnly(t *testing.T) {
+	useAdminRestartNotificationPath(t)
 	var gotCommand string
 	var gotArgs []string
 	h := NewHandler(nil, nil)
@@ -160,6 +161,7 @@ func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 }
 
 func TestServiceAdminCommandsRunSequentially(t *testing.T) {
+	useAdminRestartNotificationPath(t)
 	h := NewHandler(nil, nil)
 	h.SetAdminUsers([]string{"ou_admin"})
 	updateStarted := make(chan struct{})

@@ -36,7 +36,8 @@ func isServiceAdminCommand(trimmed string) bool {
 }
 
 // handleServiceAdminCommand 先校验权限和参数，再后台执行受控的 WeClaw 管理命令。
-func (h *Handler) handleServiceAdminCommand(ctx context.Context, userID string, trimmed string, reply platform.Replier) {
+func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.IncomingMessage, trimmed string, reply platform.Replier) {
+	userID := msg.UserID
 	if !h.isAdminUser(userID) {
 		sendPlatformText(ctx, reply, userID, adminCommandDeniedText)
 		return
@@ -56,7 +57,7 @@ func (h *Handler) handleServiceAdminCommand(ctx context.Context, userID string, 
 		return
 	}
 	sendPlatformText(ctx, reply, userID, "开始执行管理命令：/"+command)
-	go h.runServiceAdminCommand(userID, command, args, reply)
+	go h.runServiceAdminCommand(msg, command, args, reply)
 }
 
 // isAdminUser 判断当前用户是否在管理命令白名单中。
@@ -73,7 +74,8 @@ func (h *Handler) currentServiceAdminCommandExecutor() ServiceAdminCommandExecut
 	return h.serviceAdminExecutor
 }
 
-func (h *Handler) runServiceAdminCommand(userID string, command string, args []string, reply platform.Replier) {
+func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command string, args []string, reply platform.Replier) {
+	userID := msg.UserID
 	runCtx, cancel := context.WithTimeout(context.Background(), adminCommandTimeout)
 	defer cancel()
 	h.serviceAdminMu.Lock()
@@ -84,6 +86,13 @@ func (h *Handler) runServiceAdminCommand(userID string, command string, args []s
 		return
 	}
 	output, err := executor(runCtx, command, args)
+	if command == "restart" && err == nil {
+		if notifyErr := recordAdminRestartNotification(msg); notifyErr != nil {
+			log.Printf("[admin-restart] failed to persist completion notification: %v", notifyErr)
+			sendPlatformText(runCtx, reply, userID, formatServiceAdminRestartNotificationUnavailable(output))
+			return
+		}
+	}
 	sendPlatformText(runCtx, reply, userID, formatServiceAdminCommandReply(command, output, err))
 }
 
@@ -128,79 +137,6 @@ func (h *Handler) activeTaskCount() int {
 	h.activeTasksMu.Lock()
 	defer h.activeTasksMu.Unlock()
 	return len(h.activeTasks)
-}
-
-func formatServiceAdminCommandReply(command string, output string, err error) string {
-	output = strings.TrimSpace(output)
-	if err != nil {
-		return strings.TrimSpace(fmt.Sprintf("管理命令执行失败：/%s\n错误：%v\n%s", command, err, summarizeServiceAdminOutput(command, output)))
-	}
-	if output == "" {
-		return fmt.Sprintf("管理命令执行完成：/%s", command)
-	}
-	return fmt.Sprintf("管理命令执行完成：/%s\n%s", command, summarizeServiceAdminOutput(command, output))
-}
-
-func summarizeServiceAdminOutput(command string, output string) string {
-	lines := meaningfulOutputLines(output)
-	if len(lines) == 0 {
-		return ""
-	}
-	switch command {
-	case "update", "upgrade":
-		if version := findOutputVersion(lines, "Already up to date ("); version != "" {
-			return "当前已是最新版本：" + version
-		}
-		if hasOutputLinePrefix(lines, "Already up to date") {
-			return "当前已是最新版本"
-		}
-		if version := findOutputVersion(lines, "Updated to "); version != "" {
-			return "已更新到：" + version + "\n请执行 /restart --force 生效"
-		}
-		return lastMeaningfulLine(lines)
-	default:
-		return truncateRunes(strings.Join(lines, "\n"), 500)
-	}
-}
-
-func meaningfulOutputLines(output string) []string {
-	rawLines := strings.Split(output, "\n")
-	lines := make([]string, 0, len(rawLines))
-	for _, line := range rawLines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines
-}
-
-func findOutputVersion(lines []string, prefix string) string {
-	for _, line := range lines {
-		if !strings.HasPrefix(line, prefix) {
-			continue
-		}
-		version := strings.TrimPrefix(line, prefix)
-		version = strings.TrimSuffix(version, ")")
-		return strings.TrimSpace(version)
-	}
-	return ""
-}
-
-func hasOutputLinePrefix(lines []string, prefix string) bool {
-	for _, line := range lines {
-		if strings.HasPrefix(line, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func lastMeaningfulLine(lines []string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	return truncateRunes(lines[len(lines)-1], 500)
 }
 
 func defaultServiceAdminCommandExecutor(ctx context.Context, command string, args []string) (string, error) {

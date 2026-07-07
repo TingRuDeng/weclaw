@@ -212,6 +212,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
+	// 新进程启动到可主动发送阶段后，回写上一次远程重启的完成通知。
+	go messaging.DeliverPendingRestartNotifications(ctx, registry, Version)
+
 	// Start platforms immediately — they will use echo mode until agent is ready
 	log.Printf("Starting message bridge...")
 	if err := registry.Run(ctx, handler.HandleMessage); err != nil {

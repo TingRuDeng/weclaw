@@ -29,7 +29,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	}
 	switch {
 	case isServiceAdminCommand(trimmed):
-		h.handleServiceAdminCommand(ctx, msg.UserID, trimmed, req.Reply)
+		h.handleServiceAdminCommand(ctx, msg, trimmed, req.Reply)
 	case trimmed == "/status":
 		sendText(h.buildStatus(msg.UserID))
 	case trimmed == "/info":
