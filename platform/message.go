@@ -7,6 +7,7 @@ type IncomingMessage struct {
 	Platform     PlatformName
 	AccountID    string
 	UserID       string
+	UserAliases  []string
 	ChatID       string
 	MessageID    string
 	Text         string
@@ -15,6 +16,27 @@ type IncomingMessage struct {
 	ReplyToID    string
 	ContextToken string
 	Metadata     map[string]string
+}
+
+// UserIdentityKeys 返回可用于访问控制的用户身份，保留 UserID 作为主身份。
+func (m IncomingMessage) UserIdentityKeys() []string {
+	values := make([]string, 0, len(m.UserAliases)+1)
+	seen := make(map[string]bool, len(m.UserAliases)+1)
+	addIdentityKey(&values, seen, m.UserID)
+	for _, alias := range m.UserAliases {
+		addIdentityKey(&values, seen, alias)
+	}
+	return values
+}
+
+// addIdentityKey 去重追加非空身份，避免同一用户重复匹配。
+func addIdentityKey(values *[]string, seen map[string]bool, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" || seen[value] {
+		return
+	}
+	seen[value] = true
+	*values = append(*values, value)
 }
 
 // CardActionResult 表示卡片动作进入业务层后的处理结果。

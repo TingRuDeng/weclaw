@@ -33,7 +33,7 @@ func init() {
 	feishuBootstrapCmd.Flags().StringVar(&feishuBotName, "name", "", "Feishu bot name")
 	feishuBootstrapCmd.Flags().StringVar(&feishuLoginAppID, "app-id", "", "Feishu app_id")
 	feishuBootstrapCmd.Flags().StringVar(&feishuLoginAppSecret, "app-secret", "", "Feishu app_secret")
-	feishuBootstrapCmd.Flags().StringVar(&feishuBootstrapAllowedUsers, "allowed-users", "", "Comma-separated Feishu open_id allowlist")
+	feishuBootstrapCmd.Flags().StringVar(&feishuBootstrapAllowedUsers, "allowed-users", "", "Comma-separated Feishu open_id or union_id allowlist")
 	feishuBootstrapCmd.Flags().StringVar(&feishuBootstrapDefaultAgent, "default-agent", "", "Default agent for this Feishu bot")
 	feishuBootstrapCmd.Flags().StringVar(&feishuBootstrapProgressMode, "progress", "", "Progress mode for this Feishu bot")
 	feishuBootstrapCmd.Flags().BoolVar(&feishuBootstrapRequireMention, "require-mention-in-group", true, "Require @bot in group chats")

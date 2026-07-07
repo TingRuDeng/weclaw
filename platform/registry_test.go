@@ -49,6 +49,31 @@ func TestRegistryAllowsFeishuByOriginalUserIDWhenSessionMetadataExists(t *testin
 	}
 }
 
+func TestRegistryDispatchesAllowedFeishuUserAlias(t *testing.T) {
+	platform := &recordingPlatform{
+		name: PlatformFeishu,
+		messages: []IncomingMessage{{
+			Platform:    PlatformFeishu,
+			UserID:      "ou_android_user",
+			UserAliases: []string{"on_same_person"},
+			Text:        "hi",
+		}},
+	}
+	registry := NewRegistry([]RegistryEntry{{Platform: platform, Access: NewAccessControl([]string{"on_same_person"})}})
+	var got []IncomingMessage
+
+	err := registry.Run(context.Background(), func(ctx context.Context, msg IncomingMessage, reply Replier) {
+		got = append(got, msg)
+	})
+
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(got) != 1 || got[0].UserID != "ou_android_user" {
+		t.Fatalf("got messages=%#v, want alias-authorized Feishu user", got)
+	}
+}
+
 func TestRegistryRejectsEmptyAllowlistByDefault(t *testing.T) {
 	reply := &recordingReplier{}
 	platform := &recordingPlatform{

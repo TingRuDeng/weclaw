@@ -171,3 +171,81 @@ func TestHandleCardActionEventRejectsUnauthorizedUser(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestHandleCardActionEventAllowsCachedUnionIDAlias(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = &fakeResourceDownloader{}
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"on_same_person"}))
+	message := newMessageEvent("p2p", "text", `{"text":"hello"}`)
+	message.Event.Sender.SenderId.UnionId = stringPtr("on_same_person")
+	if err := adapter.handleMessageEvent(context.Background(), message, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {}); err != nil {
+		t.Fatalf("handleMessageEvent error: %v", err)
+	}
+	event := &callback.CardActionTriggerEvent{
+		Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user"},
+			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
+			Action: &callback.CallBackAction{Value: map[string]interface{}{
+				"action": cardActionChoice,
+				"choice": "1",
+				"conv":   "feishu:ou_user",
+			}},
+		},
+	}
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
+		t.Fatalf("response=%#v, want success toast", resp)
+	}
+	select {
+	case msg := <-dispatched:
+		if !containsString(msg.UserAliases, "on_same_person") {
+			t.Fatalf("aliases=%#v, want cached union_id", msg.UserAliases)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestHandleCardActionEventAllowsOperatorUserIDAlias(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"user_1"}))
+	event := &callback.CardActionTriggerEvent{
+		Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user", UserID: stringPtr("user_1")},
+			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
+			Action: &callback.CallBackAction{Value: map[string]interface{}{
+				"action": cardActionChoice,
+				"choice": "1",
+				"conv":   "feishu:ou_user",
+			}},
+		},
+	}
+	dispatched := make(chan platform.IncomingMessage, 1)
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	})
+
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
+		t.Fatalf("response=%#v, want success toast", resp)
+	}
+	select {
+	case msg := <-dispatched:
+		if !containsString(msg.UserAliases, "user_1") {
+			t.Fatalf("aliases=%#v, want callback user_id", msg.UserAliases)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback dispatch")
+	}
+}

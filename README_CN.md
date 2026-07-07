@@ -36,12 +36,12 @@ weclaw start
 飞书接入默认关闭。需要启用时先保存并校验飞书应用凭证：
 
 ```bash
-weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users ou_xxx --default-agent codex --progress stream
+weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users on_xxx --default-agent codex --progress stream
 weclaw feishu login --name project-a --app-id cli_xxx --app-secret xxx
 weclaw feishu status --name project-a
 ```
 
-`bootstrap` 会同时保存飞书凭证并更新 `platforms.feishu.bots[]`，适合首次配置。若本机安装了官方 `lark-cli`，命令会提示继续用它检查应用权限、事件订阅和消息发送能力；WeClaw 运行时仍使用内置飞书 SDK 长连接，不依赖 `lark-cli`。
+`bootstrap` 会同时保存飞书凭证并更新 `platforms.feishu.bots[]`，适合首次配置。飞书 `open_id` 是应用级身份，同一个人在不同机器人应用下不同；多机器人建议在 `allowed_users` 使用同开发商下稳定的 `union_id`。若本机安装了官方 `lark-cli`，命令会提示继续用它检查应用权限、事件订阅和消息发送能力；WeClaw 运行时仍使用内置飞书 SDK 长连接，不依赖 `lark-cli`。
 
 ### 其他安装方式
 
@@ -236,7 +236,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 # 多账号平台需要指定账号；飞书账号使用 bot 的 app_id
 curl -X POST http://127.0.0.1:18011/api/send \
   -H "Content-Type: application/json" \
-  -d '{"platform": "feishu", "account_id": "cli_xxx", "to": "ou_xxx", "text": "你好"}'
+  -d '{"platform": "feishu", "account_id": "cli_xxx", "to": "on_xxx", "text": "你好"}'
 ```
 
 支持的媒体类型：图片（png、jpg、gif、webp）、视频（mp4、mov）、文件（pdf、doc、zip 等）。
@@ -285,7 +285,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 首次配置可以用命令生成下面这段结构，并把 secret 保存到独立凭证文件：
 
 ```bash
-weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users ou_xxx --default-agent codex --progress stream
+weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users on_xxx --default-agent codex --progress stream
 ```
 
 ```json
@@ -304,7 +304,7 @@ weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --all
         {
           "name": "project-a",
           "app_id": "cli_xxx",
-          "allowed_users": ["ou_xxx"],
+          "allowed_users": ["on_xxx"],
           "default_agent": "codex",
           "progress": {"mode": "stream"}
         }
@@ -316,7 +316,7 @@ weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --all
 
 安全提示：白名单用户可以驱动本机 shell agent 读取文件、运行命令或修改代码。生产使用时必须显式配置 `allowed_users`，不要把 bot 暴露给不可信用户。
 
-微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 按 `app_id` 隔离并支持软配置热重载；新增、删除 bot 或修改 `app_id` 仍需重启生效。
+微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 按 `app_id` 隔离并支持软配置热重载；`allowed_users` 可填应用级 `open_id` 或同开发商下稳定的 `union_id`，多机器人优先使用 `union_id`；新增、删除 bot 或修改 `app_id` 仍需重启生效。
 
 环境变量：
 
@@ -474,7 +474,7 @@ WeClaw 驱动的 AI Agent 能执行 shell 命令、读写文件。任何能给 b
 ```json
 {
   "allowed_workspace_roots": ["/home/me/projects"],
-  "admin_users": ["user_id@im.wechat", "ou_xxx"],
+  "admin_users": ["user_id@im.wechat", "on_xxx"],
   "rate_limit_per_minute": 20,
   "audit_log": true,
   "platforms": {
@@ -482,14 +482,14 @@ WeClaw 驱动的 AI Agent 能执行 shell 命令、读写文件。任何能给 b
     "feishu": {
       "enabled": true,
       "bots": [
-        { "name": "project-a", "app_id": "cli_xxx", "allowed_users": ["ou_xxx"] }
+        { "name": "project-a", "app_id": "cli_xxx", "allowed_users": ["on_xxx"] }
       ]
     }
   }
 }
 ```
 
-- **访问控制 (`allowed_users`)**：微信按平台配置，飞书按 `bots[]` 内每个机器人配置。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。
+- **访问控制 (`allowed_users`)**：微信按平台配置，飞书按 `bots[]` 内每个机器人配置。飞书可填应用级 `open_id` 或同开发商下稳定的 `union_id`；多机器人优先使用 `union_id`。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。
 - **管理员白名单 (`admin_users`)**：顶层配置。只有同时位于对应平台 `allowed_users` 和顶层 `admin_users` 的用户，才能在微信 / 飞书执行 `/update`、`/upgrade`、`/restart`、`/restart --force`。为空 = 禁用远程管理命令。
 - **工作目录限制 (`allowed_workspace_roots`)**：`/cwd` 只能切到白名单根目录及其子目录。为空 = 不限制（会告警）。
 - **限流 (`rate_limit_per_minute`)**：每用户每分钟最多触发 agent 次数，`0` = 不限。

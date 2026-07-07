@@ -81,6 +81,22 @@ func TestSDKMessageSenderUsesChatIDReceiveTypeForChatID(t *testing.T) {
 	}
 }
 
+func TestSDKMessageSenderUsesUnionIDReceiveTypeForUnionID(t *testing.T) {
+	sender := newTestSDKMessageSender("cli_a", nil)
+
+	err := sender.SendText(context.Background(), "on_user", "hello")
+
+	if err != nil {
+		t.Fatalf("SendText error: %v", err)
+	}
+	if len(sender.calls) != 1 {
+		t.Fatalf("calls=%#v, want one message", sender.calls)
+	}
+	if sender.calls[0].receiveIDType != larkim.CreateMessageV1ReceiveIDTypeUnionId {
+		t.Fatalf("receiveIDType=%q, want union_id", sender.calls[0].receiveIDType)
+	}
+}
+
 func TestSDKMessageSenderRepliesInThread(t *testing.T) {
 	sender := newTestSDKMessageSender("cli_a", nil)
 

@@ -102,22 +102,27 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 	if normalized.RawContentType == "image" || normalized.RawContentType == "file" || normalized.RawContentType == "audio" || normalized.RawContentType == "media" {
 		text = ""
 	}
+	metadata := map[string]string{
+		"raw_content_type":       normalized.RawContentType,
+		"original_user_id":       normalized.UserID,
+		"feishu_chat_type":       scope.ChatType,
+		feishuSessionMetadataKey: BuildFeishuSessionKey(scope),
+		feishuMentionMetadataKey: fmt.Sprintf("%t", scope.IsMentioned),
+	}
+	addMetadataIfNotEmpty(metadata, "feishu_open_id", scope.SenderOpenID)
+	addMetadataIfNotEmpty(metadata, "feishu_user_id", scope.SenderUserID)
+	addMetadataIfNotEmpty(metadata, "feishu_union_id", scope.SenderUnionID)
 	incoming := platform.IncomingMessage{
 		Platform:     platform.PlatformFeishu,
 		AccountID:    a.creds.AppID,
 		UserID:       normalized.UserID,
+		UserAliases:  feishuUserAliases(scope),
 		ChatID:       normalized.ChatID,
 		MessageID:    normalized.MessageID,
 		ReplyToID:    normalized.MessageID,
 		ContextToken: normalized.MessageID,
 		Text:         text,
-		Metadata: map[string]string{
-			"raw_content_type":       normalized.RawContentType,
-			"original_user_id":       normalized.UserID,
-			"feishu_chat_type":       scope.ChatType,
-			feishuSessionMetadataKey: BuildFeishuSessionKey(scope),
-			feishuMentionMetadataKey: fmt.Sprintf("%t", scope.IsMentioned),
-		},
+		Metadata:     metadata,
 	}
 	for _, resource := range resources {
 		attachment, err := a.downloader.DownloadResource(ctx, normalized.MessageID, resource)
@@ -130,6 +135,35 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		return platform.IncomingMessage{}, false
 	}
 	return incoming, true
+}
+
+// addMetadataIfNotEmpty 只记录飞书真实返回的非空身份字段。
+func addMetadataIfNotEmpty(metadata map[string]string, key string, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	metadata[key] = value
+}
+
+// feishuUserAliases 返回飞书访问控制可用的稳定身份别名。
+func feishuUserAliases(scope FeishuSessionScope) []string {
+	aliases := make([]string, 0, 3)
+	seen := make(map[string]bool, 3)
+	addFeishuAlias(&aliases, seen, scope.SenderOpenID)
+	addFeishuAlias(&aliases, seen, scope.SenderUserID)
+	addFeishuAlias(&aliases, seen, scope.SenderUnionID)
+	return aliases
+}
+
+// addFeishuAlias 去重追加飞书身份，避免同一身份重复参与匹配。
+func addFeishuAlias(aliases *[]string, seen map[string]bool, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" || seen[value] {
+		return
+	}
+	seen[value] = true
+	*aliases = append(*aliases, value)
 }
 
 // shouldIgnoreFeishuGroup 按配置决定群聊消息是否需要 @bot 才进入 agent。

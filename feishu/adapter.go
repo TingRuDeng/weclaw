@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,8 @@ type Adapter struct {
 	accessMu   sync.RWMutex
 	access     platform.AccessControl
 	accessSet  bool
+	identityMu sync.RWMutex
+	identities map[string][]string
 	approvalMu sync.Mutex
 	approvals  map[string]approvalRecord
 	taskCards  *taskCardRegistry
@@ -46,6 +49,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		validate:   ValidateCredentials,
 		session:    DefaultFeishuSessionOptions(),
 		deduper:    newFeishuEventDeduper(feishuEventDedupTTL),
+		identities: make(map[string][]string),
 		approvals:  make(map[string]approvalRecord),
 		taskCards:  newTaskCardRegistry(),
 		now:        time.Now,
@@ -121,7 +125,7 @@ func (a *Adapter) Run(ctx context.Context, dispatch platform.DispatchFunc) error
 	return err
 }
 
-func (a *Adapter) allowCardActionUser(userID string) bool {
+func (a *Adapter) allowCardActionUser(userID string, aliases []string) bool {
 	a.accessMu.RLock()
 	access := a.access
 	accessSet := a.accessSet
@@ -129,5 +133,48 @@ func (a *Adapter) allowCardActionUser(userID string) bool {
 	if !accessSet {
 		return true
 	}
-	return access.Allowed(userID)
+	identities := mergeUserAliases(userID, aliases, a.identityKeysForUser(userID))
+	for _, identity := range identities {
+		if access.Allowed(identity) {
+			return true
+		}
+	}
+	return false
+}
+
+// rememberUserIdentities 缓存飞书用户身份，供后续卡片回调复用 union_id。
+func (a *Adapter) rememberUserIdentities(msg platform.IncomingMessage) {
+	keys := msg.UserIdentityKeys()
+	if len(keys) == 0 {
+		return
+	}
+	a.identityMu.Lock()
+	defer a.identityMu.Unlock()
+	for _, key := range keys {
+		a.identities[key] = append([]string(nil), keys...)
+	}
+}
+
+// identityKeysForUser 返回某个飞书回调用户可用于授权的所有已知身份。
+func (a *Adapter) identityKeysForUser(userID string) []string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil
+	}
+	a.identityMu.RLock()
+	cached := append([]string(nil), a.identities[userID]...)
+	a.identityMu.RUnlock()
+	if len(cached) > 0 {
+		return cached
+	}
+	return []string{userID}
+}
+
+// mergeUserAliases 合并多来源身份，保留主 ID 以便后续统一去重。
+func mergeUserAliases(userID string, groups ...[]string) []string {
+	msg := platform.IncomingMessage{UserID: userID}
+	for _, group := range groups {
+		msg.UserAliases = append(msg.UserAliases, group...)
+	}
+	return msg.UserIdentityKeys()
 }

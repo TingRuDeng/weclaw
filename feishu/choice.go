@@ -22,21 +22,22 @@ const (
 )
 
 type parsedCardAction struct {
-	Action     string
-	Choice     string
-	Kind       string
-	Label      string
-	Summary    string
-	TaskCard   string
-	Approval   string
-	Owner      string
-	Panel      bool
-	Conv       string
-	SessionKey string
-	UserID     string
-	ChatID     string
-	MessageID  string
-	Status     string
+	Action      string
+	Choice      string
+	Kind        string
+	Label       string
+	Summary     string
+	TaskCard    string
+	Approval    string
+	Owner       string
+	Panel       bool
+	Conv        string
+	SessionKey  string
+	UserID      string
+	UserAliases []string
+	ChatID      string
+	MessageID   string
+	Status      string
 }
 
 type choiceButtonOptions struct {

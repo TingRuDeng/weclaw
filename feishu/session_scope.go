@@ -22,16 +22,18 @@ type feishuMentionCheck struct {
 
 // FeishuSessionScope 描述飞书消息进入 agent 前需要固定的会话维度。
 type FeishuSessionScope struct {
-	AccountID    string
-	TenantID     string
-	ChatID       string
-	ThreadID     string
-	RootID       string
-	MessageID    string
-	SenderOpenID string
-	ChatType     string
-	IsMentioned  bool
-	AgentName    string
+	AccountID     string
+	TenantID      string
+	ChatID        string
+	ThreadID      string
+	RootID        string
+	MessageID     string
+	SenderOpenID  string
+	SenderUserID  string
+	SenderUnionID string
+	ChatType      string
+	IsMentioned   bool
+	AgentName     string
 }
 
 // FeishuSessionOptions 控制飞书群聊触发策略。
@@ -54,8 +56,10 @@ func ExtractFeishuSessionScope(event *larkim.P2MessageReceiveV1) FeishuSessionSc
 	if event.Event == nil {
 		return scope
 	}
-	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil && event.Event.Sender.SenderId.OpenId != nil {
-		scope.SenderOpenID = strings.TrimSpace(*event.Event.Sender.SenderId.OpenId)
+	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
+		scope.SenderOpenID = stringValue(event.Event.Sender.SenderId.OpenId)
+		scope.SenderUserID = stringValue(event.Event.Sender.SenderId.UserId)
+		scope.SenderUnionID = stringValue(event.Event.Sender.SenderId.UnionId)
 	}
 	if event.Event.Message == nil {
 		return scope

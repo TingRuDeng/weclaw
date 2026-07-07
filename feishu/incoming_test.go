@@ -53,6 +53,26 @@ func TestToIncomingFromMessageParsesText(t *testing.T) {
 	}
 }
 
+func TestToIncomingFromMessageAddsStableUserAliases(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = &fakeResourceDownloader{}
+	event := newMessageEvent("p2p", "text", `{"text":"hello"}`)
+	event.Event.Sender.SenderId.UnionId = stringPtr("on_same_person")
+	event.Event.Sender.SenderId.UserId = stringPtr("user_same_person")
+
+	incoming, ok := adapter.toIncomingFromMessage(context.Background(), event)
+
+	if !ok {
+		t.Fatal("toIncomingFromMessage ok=false, want true")
+	}
+	if incoming.Metadata["feishu_union_id"] != "on_same_person" {
+		t.Fatalf("metadata=%#v, want feishu_union_id", incoming.Metadata)
+	}
+	if !containsString(incoming.UserAliases, "on_same_person") || !containsString(incoming.UserAliases, "user_same_person") {
+		t.Fatalf("aliases=%#v, want union_id and user_id aliases", incoming.UserAliases)
+	}
+}
+
 func TestToIncomingFromMessageDMNewThreadUsesDMSession(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.downloader = &fakeResourceDownloader{}
@@ -391,6 +411,15 @@ func newTypedMention(openID string, mentionedType string) *larkim.MentionEvent {
 // stringPtr 返回字符串指针，匹配飞书 SDK 事件模型。
 func stringPtr(value string) *string {
 	return &value
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func captureLogOutput(t *testing.T, fn func()) string {

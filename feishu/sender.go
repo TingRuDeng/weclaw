@@ -183,6 +183,9 @@ func feishuReceiveIDType(receiveID string) string {
 	if strings.HasPrefix(receiveID, "oc_") {
 		return larkim.CreateMessageV1ReceiveIDTypeChatId
 	}
+	if strings.HasPrefix(receiveID, "on_") {
+		return larkim.CreateMessageV1ReceiveIDTypeUnionId
+	}
 	return larkim.CreateMessageV1ReceiveIDTypeOpenId
 }
 

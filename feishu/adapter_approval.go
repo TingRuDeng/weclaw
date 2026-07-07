@@ -36,11 +36,12 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 			metadata[feishuSessionMetadataKey] = handled.SessionKey
 		}
 		msg := platform.IncomingMessage{
-			Platform:  platform.PlatformFeishu,
-			AccountID: a.creds.AppID,
-			UserID:    handled.UserID,
-			ChatID:    handled.ChatID,
-			MessageID: handled.MessageID + ":card:" + handled.Action + ":" + handled.Choice,
+			Platform:    platform.PlatformFeishu,
+			AccountID:   a.creds.AppID,
+			UserID:      handled.UserID,
+			UserAliases: handled.UserAliases,
+			ChatID:      handled.ChatID,
+			MessageID:   handled.MessageID + ":card:" + handled.Action + ":" + handled.Choice,
 			RawCommand: &platform.CardAction{
 				Action: handled.Action,
 				Value: map[string]string{

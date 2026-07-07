@@ -185,13 +185,24 @@ func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch D
 
 func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter) DispatchFunc {
 	return func(ctx context.Context, msg IncomingMessage, reply Replier) {
-		if !entry.Access.Allowed(msg.UserID) {
-			log.Printf("[platform] denied %s user %q on account %q", entry.Platform.Name(), msg.UserID, entry.Platform.AccountID())
+		if !accessAllowsMessage(entry.Access, msg) {
+			log.Printf("[platform] denied %s user %q aliases=%q on account %q",
+				entry.Platform.Name(), msg.UserID, msg.UserAliases, entry.Platform.AccountID())
 			sendDenyNotice(ctx, entry, msg, reply, limiter)
 			return
 		}
 		dispatch(ctx, msg, reply)
 	}
+}
+
+// accessAllowsMessage 用主用户 ID 和平台身份别名共同判断授权。
+func accessAllowsMessage(access AccessControl, msg IncomingMessage) bool {
+	for _, userID := range msg.UserIdentityKeys() {
+		if access.Allowed(userID) {
+			return true
+		}
+	}
+	return false
 }
 
 func sendDenyNotice(ctx context.Context, entry RegistryEntry, msg IncomingMessage, reply Replier, limiter *denyNoticeLimiter) {

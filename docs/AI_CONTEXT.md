@@ -73,7 +73,7 @@ ai_summary:
 - 飞书多项目入口通过 `platforms.feishu.bots[]` 配置多个机器人；每个 bot 的凭证按 `weclaw feishu login --name <bot>` 或 `weclaw feishu bootstrap --name <bot>` 保存，`app_secret` 不得写入 `config.json`。
 - `weclaw feishu bootstrap` 只负责首次配置向导：保存凭证、更新 `bots[]`、提示可用 `lark-cli` 做权限/事件诊断；飞书运行时仍使用内置 SDK 长连接，不依赖 `lark-cli`。
 - 飞书显式启用时必须配置非空 `bots[]`；缺失 bot 应在 `config.Validate` 阶段 fail-fast，不应等到平台启动阶段才失败。
-- 飞书 bot 的 `allowed_users`、`default_agent` 和 `progress` 按 `app_id` 隔离；新增、删除 bot 或修改 `app_id` 属于平台拓扑变化，需要重启。
+- 飞书 bot 的 `allowed_users`、`default_agent` 和 `progress` 按 `app_id` 隔离；`allowed_users` 支持应用级 `open_id` 和同开发商下稳定的 `union_id`，多机器人优先配置 `union_id`；新增、删除 bot 或修改 `app_id` 属于平台拓扑变化，需要重启。
 - `/progress` 从飞书入口触发时必须按当前 `account_id` 写入账号级配置，广播、Codex 会话切换和 Codex App 外部任务 watcher 也必须读取账号级进度配置。
 - `/api/send` 在同一平台存在多个可主动发送账号时必须要求 `account_id`，不能静默选择第一个账号。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。

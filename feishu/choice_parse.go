@@ -34,11 +34,12 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 			callbackValueString(value, "action_key"),
 			callbackValueString(value, "actionKey"),
 		),
-		Owner:      callbackValueString(value, approvalOwnerValueKey),
-		Panel:      callbackValueString(value, "approval_panel") == "1",
-		Conv:       callbackValueString(value, "conv"),
-		SessionKey: callbackValueString(value, feishuSessionMetadataKey),
-		UserID:     strings.TrimSpace(event.Event.Operator.OpenID),
+		Owner:       callbackValueString(value, approvalOwnerValueKey),
+		Panel:       callbackValueString(value, "approval_panel") == "1",
+		Conv:        callbackValueString(value, "conv"),
+		SessionKey:  callbackValueString(value, feishuSessionMetadataKey),
+		UserID:      strings.TrimSpace(event.Event.Operator.OpenID),
+		UserAliases: cardActionUserAliases(event.Event.Operator),
 	}
 	if event.Event.Context != nil {
 		parsed.ChatID = strings.TrimSpace(event.Event.Context.OpenChatID)
@@ -48,6 +49,17 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 		return parsedCardAction{}, false
 	}
 	return parsed, true
+}
+
+// cardActionUserAliases 抽取飞书卡片回调里除 open_id 外的用户身份。
+func cardActionUserAliases(operator *callback.Operator) []string {
+	if operator == nil {
+		return nil
+	}
+	aliases := make([]string, 0, 1)
+	seen := make(map[string]bool, 1)
+	addFeishuAlias(&aliases, seen, stringValue(operator.UserID))
+	return aliases
 }
 
 func firstStringValue(values map[string]any, keys ...string) string {

@@ -125,7 +125,7 @@ func TestBuildChoiceCardDoesNotMarkNormalChoicesAsApproval(t *testing.T) {
 func TestParseCardAction(t *testing.T) {
 	event := &callback.CardActionTriggerEvent{
 		Event: &callback.CardActionTriggerRequest{
-			Operator: &callback.Operator{OpenID: "ou_user"},
+			Operator: &callback.Operator{OpenID: "ou_user", UserID: stringPtr("user_1")},
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
 				"action":             cardActionChoice,
@@ -149,6 +149,9 @@ func TestParseCardAction(t *testing.T) {
 	}
 	if action.UserID != "ou_user" || action.ChatID != "oc_chat" || action.MessageID != "om_msg" {
 		t.Fatalf("action=%#v, want operator and context ids", action)
+	}
+	if !containsString(action.UserAliases, "user_1") {
+		t.Fatalf("aliases=%#v, want callback user_id", action.UserAliases)
 	}
 }
 

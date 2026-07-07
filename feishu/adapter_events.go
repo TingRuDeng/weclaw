@@ -28,6 +28,7 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		log.Printf("[feishu] ignored non-dispatchable message event")
 		return nil
 	}
+	a.rememberUserIdentities(msg)
 	scope := ExtractFeishuSessionScope(event)
 	if a.handleMirrorDedup(ctx, event, scope, msg, dispatch) {
 		return nil
@@ -64,12 +65,13 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 			Toast: &callback.Toast{Type: "warning", Content: "无法识别该操作"},
 		}, nil
 	}
-	if !a.allowCardActionUser(action.UserID) {
+	if !a.allowCardActionUser(action.UserID, action.UserAliases) {
 		log.Printf("[feishu] denied card action user %q on account %q", action.UserID, a.creds.AppID)
 		return &callback.CardActionTriggerResponse{
 			Toast: &callback.Toast{Type: "warning", Content: "当前账号未授权使用 WeClaw"},
 		}, nil
 	}
+	action.UserAliases = mergeUserAliases(action.UserID, action.UserAliases, a.identityKeysForUser(action.UserID))
 	if action.Kind == cardKindApproval {
 		return a.handleApprovalCardAction(ctx, action, dispatch), nil
 	}
@@ -78,11 +80,12 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		metadata[feishuSessionMetadataKey] = action.SessionKey
 	}
 	msg := platform.IncomingMessage{
-		Platform:  platform.PlatformFeishu,
-		AccountID: a.creds.AppID,
-		UserID:    action.UserID,
-		ChatID:    action.ChatID,
-		MessageID: action.MessageID + ":card:" + action.Action + ":" + action.Choice,
+		Platform:    platform.PlatformFeishu,
+		AccountID:   a.creds.AppID,
+		UserID:      action.UserID,
+		UserAliases: action.UserAliases,
+		ChatID:      action.ChatID,
+		MessageID:   action.MessageID + ":card:" + action.Action + ":" + action.Choice,
 		RawCommand: &platform.CardAction{
 			Action: action.Action,
 			Value: map[string]string{
