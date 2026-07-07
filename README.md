@@ -35,9 +35,12 @@ Use `weclaw login` to add additional WeChat accounts.
 飞书接入默认关闭。启用前先保存并校验飞书应用凭证：
 
 ```bash
+weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users ou_xxx --default-agent codex --progress stream
 weclaw feishu login --name project-a --app-id cli_xxx --app-secret xxx
 weclaw feishu status --name project-a
 ```
+
+`bootstrap` saves Feishu credentials and updates `platforms.feishu.bots[]` in one step, which is the recommended first-time setup path. If the official `lark-cli` is installed, the command suggests using it for permission, event subscription, and message-send diagnostics. WeClaw runtime still uses the built-in Feishu SDK websocket client and does not depend on `lark-cli`.
 
 ### Other install methods
 
@@ -305,6 +308,12 @@ Environment variables:
 ### 多平台配置
 
 `platforms` defaults to the legacy behavior: WeChat only. Feishu must be explicitly enabled with a non-empty `bots[]`; `enabled=true` without bots fails config validation. Each bot has its own `allowed_users`; an empty allowlist denies all inbound messages.
+
+For first-time setup, use this command to generate the config shape below and store the secret in the dedicated credential file:
+
+```bash
+weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users ou_xxx --default-agent codex --progress stream
+```
 
 ```json
 {

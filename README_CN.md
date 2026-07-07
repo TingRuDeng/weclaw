@@ -36,9 +36,12 @@ weclaw start
 飞书接入默认关闭。需要启用时先保存并校验飞书应用凭证：
 
 ```bash
+weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users ou_xxx --default-agent codex --progress stream
 weclaw feishu login --name project-a --app-id cli_xxx --app-secret xxx
 weclaw feishu status --name project-a
 ```
+
+`bootstrap` 会同时保存飞书凭证并更新 `platforms.feishu.bots[]`，适合首次配置。若本机安装了官方 `lark-cli`，命令会提示继续用它检查应用权限、事件订阅和消息发送能力；WeClaw 运行时仍使用内置飞书 SDK 长连接，不依赖 `lark-cli`。
 
 ### 其他安装方式
 
@@ -278,6 +281,12 @@ curl -X POST http://127.0.0.1:18011/api/send \
 ### 多平台配置
 
 `platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用并配置非空 `bots[]`；`enabled=true` 但没有 bot 会在配置校验阶段失败。每个 bot 的 `allowed_users` 为空时默认拒绝所有入站消息。
+
+首次配置可以用命令生成下面这段结构，并把 secret 保存到独立凭证文件：
+
+```bash
+weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users ou_xxx --default-agent codex --progress stream
+```
 
 ```json
 {
