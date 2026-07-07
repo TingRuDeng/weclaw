@@ -68,6 +68,12 @@ func (s *claudeSessionStore) listWorkspaces(bindingKey string) []codexWorkspaceV
 	return s.store.listWorkspaces(bindingKey)
 }
 
+func (s *claudeSessionStore) clearStaleWorkspaceSessions(bindingKey string, visibleByWorkspace map[string]map[string]bool) {
+	for workspaceRoot, visibleSessionIDs := range visibleByWorkspace {
+		s.store.clearStaleWorkspaceThread(bindingKey, workspaceRoot, visibleSessionIDs)
+	}
+}
+
 func (s *claudeSessionStore) findWorkspaceBySession(bindingKey string, sessionID string) (string, bool) {
 	return s.store.findWorkspaceByThread(bindingKey, sessionID)
 }

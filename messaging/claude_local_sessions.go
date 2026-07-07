@@ -31,21 +31,48 @@ func defaultClaudeLocalSessionDir() string {
 
 // discoverLocalClaudeSessions 只读取 Claude transcript 的首行摘要和文件元数据。
 func discoverLocalClaudeSessions(claudeDir string) []codexWorkspaceView {
+	views, _ := discoverLocalClaudeSessionSnapshot(claudeDir)
+	return views
+}
+
+func discoverLocalClaudeSessionSnapshot(claudeDir string) ([]codexWorkspaceView, map[string]map[string]bool) {
 	claudeDir = strings.TrimSpace(claudeDir)
 	if claudeDir == "" {
-		return nil
+		return nil, map[string]map[string]bool{}
 	}
-	projects := readLocalClaudeProjects(claudeDir)
 	views := make([]codexWorkspaceView, 0)
+	visibleByWorkspace := map[string]map[string]bool{}
+	for _, workspaceRoot := range discoverLocalClaudeWorkspaceRoots(claudeDir) {
+		sessions := readLocalClaudeProjectSessions(claudeDir, workspaceRoot)
+		visibleByWorkspace[workspaceRoot] = localClaudeVisibleSessionSet(sessions)
+		views = append(views, sessions...)
+	}
+	sortLocalCodexSessions(views)
+	return views, visibleByWorkspace
+}
+
+func discoverLocalClaudeWorkspaceRoots(claudeDir string) []string {
+	projects := readLocalClaudeProjects(claudeDir)
+	roots := make([]string, 0, len(projects))
 	for workspaceRoot := range projects {
 		workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
 		if workspaceRoot == "" || !localClaudeWorkspaceExists(workspaceRoot) {
 			continue
 		}
-		views = append(views, readLocalClaudeProjectSessions(claudeDir, workspaceRoot)...)
+		roots = append(roots, workspaceRoot)
 	}
-	sortLocalCodexSessions(views)
-	return views
+	return roots
+}
+
+func localClaudeVisibleSessionSet(sessions []codexWorkspaceView) map[string]bool {
+	visible := make(map[string]bool, len(sessions))
+	for _, session := range sessions {
+		sessionID := strings.TrimSpace(session.ThreadID)
+		if sessionID != "" {
+			visible[sessionID] = true
+		}
+	}
+	return visible
 }
 
 func readLocalClaudeProjects(claudeDir string) map[string]json.RawMessage {

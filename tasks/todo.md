@@ -2,39 +2,46 @@
 
 ## 目标
 
-移除飞书单聊和群聊回复串隔离能力，让“一个飞书机器人 = 一个项目入口”成为默认模型，降低 WeClaw 会话路由复杂度。
+新增命令行交互式添加飞书机器人入口：`weclaw feishu add`。该命令应引导用户输入 bot 名称、飞书 `app_id`、`app_secret`、白名单、默认 Agent、进度模式和群聊 @ 规则，然后复用现有 bootstrap 落盘能力保存凭证并更新 `~/.weclaw/config.json`。
 
 ## 执行任务
 
-- [x] P0 串行：创建备份 tag `pre-remove-feishu-thread-sessions-20260706`。
-- [x] P1 串行：补充/调整失败测试，明确单聊 `/cx new-thread` 不再创建子会话，群聊不再按 root/thread 隔离。
-- [x] P2 串行：移除飞书 `dm_thread` 与 group thread route 生成逻辑。
-- [x] P3 串行：移除回复串发送路径和 `/cx new-thread` 内置命令。
-- [x] P4 串行：清理帮助文案、README、上下文文档和过时任务说明。
-- [x] P5 串行：运行最小充分验证并完成 review-gate。
+- [x] P0 串行：等待用户确认本计划，未确认前不改业务代码。
+- [x] P1 串行：先补 RED 测试，覆盖 `runFeishuAdd` 会按交互输入调用现有 bootstrap 流程，且输出不泄露 `app_secret`。
+- [x] P2 串行：实现交互输入抽象和 `weclaw feishu add` 子命令，只提示缺失字段，secret 使用隐藏输入能力。
+- [x] P3 串行：复用 `runFeishuBootstrap` 完成凭证校验、凭证保存、`platforms.feishu.bots[]` 更新和结果输出。
+- [x] P4 串行：运行最小验证和全量验证。
+- [x] P5 串行：执行 review-gate 交付前审查。
 
 ## 并行评估
 
-本轮不启用 subagent。改动集中在飞书会话路由、回复器和 Codex 会话命令，同一组文件存在写冲突，串行 TDD 更清晰。
+本轮不启用 subagent。现有 `cmd/feishu.go` 与 `cmd/feishu_test.go` 已接近单文件行数上限，新增逻辑拆到 `cmd/feishu_add.go` 与 `cmd/feishu_add_test.go`；命令注册只在 `cmd/feishu.go` 做最小改动。同一 CLI 命令链路存在写冲突，串行 TDD 更清晰。
 
 ## 验证命令
 
 ```bash
-GOCACHE=/private/tmp/weclaw-go-cache go test ./feishu -run 'TestToIncomingFromMessageDMNewThreadUsesDMSession|TestToIncomingFromMessageGroupIgnoresRootForSession|TestHandleMessageEventGroupReplyUsesFreshMessage|TestHandleMessageEventDMNewThreadReplyUsesFreshMessage' -count=1 -timeout 60s
-GOCACHE=/private/tmp/weclaw-go-cache go test ./messaging -run 'TestCodexNewThreadIsNotBuiltinSessionCommand|TestFeishuGroupStatusUsesChatSessionMetadataForRouting' -count=1 -timeout 60s
-GOCACHE=/private/tmp/weclaw-go-cache go test ./feishu ./messaging -count=1 -timeout 60s
+GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -run 'TestRunFeishuAdd' -count=1 -timeout 60s
+GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -count=1 -timeout 60s
 GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s
 GOCACHE=/private/tmp/weclaw-go-cache go vet ./...
-python3 scripts/validate_docs.py . --profile generic
 git diff --check
 ```
 
 ## Review 小结
 
-终态：finished。Spec 符合度：已按“单聊和群聊回复串隔离都移除”的范围完成；飞书 DM session key 固定为聊天 + 发送者，群聊 session key 固定为群聊，不再包含 root/thread；`/cx new-thread` 不再是内置 Codex 会话命令；飞书消息和卡片回调不再自动回复到原消息 / 话题。
+终态：finished。Spec 符合度：已实现 `weclaw feishu add` 交互式添加飞书机器人，交互收集 bot 名称、`app_id`、`app_secret`、白名单、默认 Agent、进度模式和群聊 @ 规则；最终复用 `runFeishuBootstrap` 做凭证校验、凭证保存和 `platforms.feishu.bots[]` 更新。
 
-安全检查：未引入密钥、外部输入执行、SQL/Shell 拼接或静默 fallback。复杂度检查：删除旧分支多于新增逻辑，核心路径更短；保留底层 Replier 原消息回复能力，避免扩大到无关底层 SDK 封装。
+安全检查：`app_secret` 不写入 `config.json`，真实 TTY 使用隐藏输入；测试覆盖 stdout 不包含 secret。未引入硬编码 secret、Shell 拼接、无依据 fallback 或静默降级。
 
-验证命令：`GOCACHE=/private/tmp/weclaw-go-cache go test ./feishu -run 'TestBuildFeishuSessionKey|TestToIncomingFromMessageDMNewThreadUsesDMSession|TestToIncomingFromMessageGroupIgnoresRootForSession|TestHandleMessageEventGroupReplyUsesFreshMessage|TestHandleMessageEventDMNewThreadReplyUsesFreshMessage|TestHandleMessageEventDMThreadReplyUsesFreshMessage|TestHandleCardActionEventGroupReplyUsesFreshMessage|TestHandleCardActionEventDMReplyUsesFreshMessage' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./messaging -run 'TestCodexNewThreadIsNotBuiltinSessionCommand|TestFeishuGroupStatusUsesChatSessionMetadataForRouting|TestBuildCodexSessionHelpTextIncludesDescriptions|TestFeishuDMSessionWorkspaceSwitchStaysInChatSession' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./feishu ./messaging -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`python3 scripts/validate_docs.py . --profile generic`、`git diff --check`，结果均通过。全量测试因 sandbox 禁止本地 listener 曾失败，已用提权权限重跑通过。
+测试与验证：`GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -run 'TestRunFeishuAdd' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`git diff --check` 均通过。`cmd` 包和全量测试因现有 `httptest` 需要监听本地端口，使用提升权限执行。
 
-剩余风险：历史状态里已经存在的 `dm_thread` route 不会被迁移；新入站消息不会再生成这些 route。若用户手动保留旧 route 数据，它只会作为普通 route 字符串存在，不再由飞书入站路径引用。
+复杂度检查：新增逻辑拆到 `cmd/feishu_add.go` 和 `cmd/feishu_add_test.go`，相关文件均小于 300 行；新增 helper 参数数不超过 3，核心函数保持短小。
+
+Document-refresh: not-needed
+原因：本轮只新增 CLI 交互入口，现有 `bootstrap` 文档仍可用；未改变配置结构、运行时语义或发布流程。
+
+剩余风险：交互式 add 会在未显式传 `--progress` 时默认写入 `stream`；这符合当前飞书体验目标，但与 bootstrap 的空值不覆盖语义不同。
+
+潜在技术债：`feishu.go` 仍复用一组全局 flag 变量绑定多个子命令，这是既有模式，本轮只做最小接入未重构。
+
+结论：通过。

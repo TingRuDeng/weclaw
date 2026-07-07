@@ -11,6 +11,8 @@ func (h *Handler) SetClaudeLocalSessionDir(dir string) {
 
 // claudeSwitchTargets 合并 WeClaw 已记录会话与本机 Claude 会话。
 func (h *Handler) claudeSwitchTargets(bindingKey string) []codexWorkspaceView {
+	localViews, visibleByWorkspace := h.localClaudeSessionSnapshot()
+	h.ensureClaudeSessions().clearStaleWorkspaceSessions(bindingKey, visibleByWorkspace)
 	storedViews := h.ensureClaudeSessions().listWorkspaces(bindingKey)
 	views := make([]codexWorkspaceView, 0, len(storedViews))
 	seenSessions := make(map[string]bool, len(storedViews))
@@ -23,12 +25,12 @@ func (h *Handler) claudeSwitchTargets(bindingKey string) []codexWorkspaceView {
 			seenSessions[view.ThreadID] = true
 		}
 	}
-	return h.appendLocalClaudeSwitchTargets(views, seenSessions)
+	return h.appendLocalClaudeSwitchTargets(views, seenSessions, localViews)
 }
 
 // appendLocalClaudeSwitchTargets 追加未被 WeClaw 记录过的本机会话，避免重复展示同一个 session。
-func (h *Handler) appendLocalClaudeSwitchTargets(views []codexWorkspaceView, seenSessions map[string]bool) []codexWorkspaceView {
-	for _, view := range h.localClaudeSessions() {
+func (h *Handler) appendLocalClaudeSwitchTargets(views []codexWorkspaceView, seenSessions map[string]bool, localViews []codexWorkspaceView) []codexWorkspaceView {
+	for _, view := range localViews {
 		if view.ThreadID == "" || seenSessions[view.ThreadID] {
 			continue
 		}
@@ -47,6 +49,13 @@ func (h *Handler) localClaudeSessions() []codexWorkspaceView {
 	dir := h.claudeLocalSessionDir
 	h.mu.RUnlock()
 	return discoverLocalClaudeSessions(dir)
+}
+
+func (h *Handler) localClaudeSessionSnapshot() ([]codexWorkspaceView, map[string]map[string]bool) {
+	h.mu.RLock()
+	dir := h.claudeLocalSessionDir
+	h.mu.RUnlock()
+	return discoverLocalClaudeSessionSnapshot(dir)
 }
 
 func (h *Handler) findLocalClaudeWorkspaceBySession(sessionID string) (string, bool) {

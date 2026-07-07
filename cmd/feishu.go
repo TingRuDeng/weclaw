@@ -37,7 +37,14 @@ func init() {
 	feishuBootstrapCmd.Flags().StringVar(&feishuBootstrapDefaultAgent, "default-agent", "", "Default agent for this Feishu bot")
 	feishuBootstrapCmd.Flags().StringVar(&feishuBootstrapProgressMode, "progress", "", "Progress mode for this Feishu bot")
 	feishuBootstrapCmd.Flags().BoolVar(&feishuBootstrapRequireMention, "require-mention-in-group", true, "Require @bot in group chats")
-	feishuCmd.AddCommand(feishuLoginCmd, feishuStatusCmd, feishuBootstrapCmd)
+	feishuAddCmd.Flags().StringVar(&feishuBotName, "name", "", "飞书机器人名称")
+	feishuAddCmd.Flags().StringVar(&feishuLoginAppID, "app-id", "", "飞书 app_id")
+	feishuAddCmd.Flags().StringVar(&feishuLoginAppSecret, "app-secret", "", "飞书 app_secret")
+	feishuAddCmd.Flags().StringVar(&feishuBootstrapAllowedUsers, "allowed-users", "", "逗号分隔的飞书 open_id 或 union_id 白名单")
+	feishuAddCmd.Flags().StringVar(&feishuBootstrapDefaultAgent, "default-agent", "", "该飞书机器人的默认 Agent")
+	feishuAddCmd.Flags().StringVar(&feishuBootstrapProgressMode, "progress", "", "该飞书机器人的进度模式")
+	feishuAddCmd.Flags().BoolVar(&feishuBootstrapRequireMention, "require-mention-in-group", true, "群聊中是否要求 @ 机器人")
+	feishuCmd.AddCommand(feishuLoginCmd, feishuStatusCmd, feishuBootstrapCmd, feishuAddCmd)
 	rootCmd.AddCommand(feishuCmd)
 }
 

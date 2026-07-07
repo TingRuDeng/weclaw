@@ -191,6 +191,29 @@ func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 	}
 }
 
+func TestFeishuStreamCompleteWithEmptyContentClearsTaskCardProgress(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
+	registry.updateContent("card-1", "进展：任务仍在执行中，连接正常。")
+	stream := &feishuStream{cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex", sequence: 4, throttle: cardkitThrottle, now: time.Now}
+
+	if err := stream.Complete(context.Background(), ""); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+
+	card := decodeCardJSON(t, cardKit.updateCards[0])
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if len(elements) != 1 {
+		t.Fatalf("elements=%d, want status-only done card: %#v", len(elements), elements)
+	}
+	status := elements[0].(map[string]any)
+	if status["element_id"] != "status" || status["content"] != "**已完成**" {
+		t.Fatalf("status element=%#v, want done status only", status)
+	}
+}
+
 func TestTaskCardApprovalUpdateKeepsStreamSequenceMonotonic(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	registry := newTaskCardRegistry()

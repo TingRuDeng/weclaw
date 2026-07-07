@@ -80,8 +80,9 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 	}
 	if strings.TrimSpace(status) != "" {
 		state.status = normalizeCardStatus(status)
-	}
-	if strings.TrimSpace(content) != "" {
+		// 终态更新传入空正文时表示清空主内容，避免完成卡片残留上一条进度。
+		state.content = content
+	} else if strings.TrimSpace(content) != "" {
 		state.content = content
 	}
 	state.updatedAt = r.nowOrDefault()
