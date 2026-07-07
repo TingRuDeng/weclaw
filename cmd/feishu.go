@@ -204,7 +204,9 @@ func printFeishuBootstrapResult(opts feishuBootstrapOptions) {
 	fmt.Printf("Bot: %s\n", opts.Name)
 	fmt.Printf("App ID: %s\n", opts.AppID)
 	fmt.Println("已更新：~/.weclaw/config.json")
-	fmt.Println("已保存：~/.weclaw/platforms/feishu/<bot>.json")
+	if path, err := feishu.CredentialsPathForBot(opts.Name); err == nil {
+		fmt.Printf("已保存：%s\n", path)
+	}
 	if path, err := exec.LookPath("lark-cli"); err == nil {
 		fmt.Printf("检测到 lark-cli：%s\n", path)
 		fmt.Println("建议继续用 lark-cli 检查应用权限、事件订阅和消息发送能力。")

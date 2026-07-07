@@ -81,6 +81,7 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		log.Printf("[feishu] group mention check: mentioned=%t mention_count=%d app_id=%s", scope.IsMentioned, len(feishuMessageMentions(event)), a.creds.AppID)
 	}
 	if shouldIgnoreFeishuGroup(scope, a.session) {
+		log.Printf("[feishu] ignored group message without bot mention: account=%s chat=%s message=%s mention_count=%d", a.creds.AppID, scope.ChatID, scope.MessageID, len(feishuMessageMentions(event)))
 		return platform.IncomingMessage{}, false
 	}
 	if a.deduper != nil && a.deduper.isDuplicate(event, scope) {

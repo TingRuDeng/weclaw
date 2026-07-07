@@ -136,6 +136,16 @@ func TestRunFeishuBootstrapCreatesBotConfigAndCredentials(t *testing.T) {
 	if !strings.Contains(output, "飞书 bootstrap 完成") {
 		t.Fatalf("output=%q, want completion message", output)
 	}
+	credentialPath, err := feishu.CredentialsPathForBot("project-a")
+	if err != nil {
+		t.Fatalf("CredentialsPathForBot error: %v", err)
+	}
+	if !strings.Contains(output, "已保存："+credentialPath) {
+		t.Fatalf("output=%q, want credential path %q", output, credentialPath)
+	}
+	if strings.Contains(output, "<bot>.json") {
+		t.Fatalf("output=%q, should not contain placeholder credential path", output)
+	}
 }
 
 func TestRunFeishuBootstrapUpdatesExistingBotByName(t *testing.T) {

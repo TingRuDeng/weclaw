@@ -1,7 +1,9 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"strings"
 	"testing"
 
@@ -91,6 +93,26 @@ func TestToIncomingFromMessageIgnoresUnmentionedGroupByDefault(t *testing.T) {
 
 	if ok {
 		t.Fatal("group chat should be ignored")
+	}
+}
+
+func TestToIncomingFromMessageLogsUnmentionedGroupReason(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := newMessageEvent("group", "text", `{"text":"hello"}`)
+	logOutput := captureLogOutput(t, func() {
+		adapter.toIncomingFromMessage(context.Background(), event)
+	})
+
+	wantParts := []string{
+		"ignored group message without bot mention",
+		"account=cli_a",
+		"chat=oc_1",
+		"message=om_1",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("log=%q, want %q", logOutput, want)
+		}
 	}
 }
 
@@ -325,4 +347,14 @@ func newTypedMention(openID string, mentionedType string) *larkim.MentionEvent {
 // stringPtr 返回字符串指针，匹配飞书 SDK 事件模型。
 func stringPtr(value string) *string {
 	return &value
+}
+
+func captureLogOutput(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(oldWriter) })
+	fn()
+	return buf.String()
 }
