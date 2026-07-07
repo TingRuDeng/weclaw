@@ -20,7 +20,7 @@ func (h *Handler) handleModeCommand(userID string, trimmed string) string {
 		h.setYoloMode(userID, true)
 		h.auditRecord(auditEntry{User: userID, Action: "mode_yolo_enabled"})
 		return "已切换为 yolo 模式：本用户会自动同意 Codex 审批请求。\n⚠️ 该模式不改变全局 sandbox，只跳过本会话按钮确认。发送 /mode default 可恢复确认。"
-	case "default", "ask", "off":
+	case "default":
 		h.setYoloMode(userID, false)
 		return "已切换为 default 模式：Codex 审批请求会弹按钮确认。"
 	default:

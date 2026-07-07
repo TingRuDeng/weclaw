@@ -111,7 +111,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 			return "用法: /cx clean"
 		}
 		return h.handleCodexClean(bindingKey)
-	case "app", "open-app":
+	case "app":
 		if len(fields) != 2 {
 			return "用法: /cx app"
 		}
@@ -122,11 +122,8 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		}
 		return h.handleCodexCLIForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
 	case "attach":
-		if len(fields) == 3 && fields[2] == "app" {
-			return h.handleCodexOpenAppForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
-		}
 		if len(fields) != 2 {
-			return "用法: /cx attach 或 /cx attach app"
+			return "用法: /cx attach"
 		}
 		return h.handleCodexAttachForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
 	case "detach":

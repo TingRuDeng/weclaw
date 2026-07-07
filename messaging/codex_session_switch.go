@@ -92,7 +92,7 @@ func (h *Handler) resolveCodexSwitchTarget(bindingKey string, agentName string, 
 		}
 		views := h.codexSwitchTargets(bindingKey)
 		if index < 0 || index >= len(views) {
-			return "", "", fmt.Errorf("编号不存在，请先发送 /codex ls 查看可切换会话。")
+			return "", "", fmt.Errorf("编号不存在，请先发送 /cx ls 查看可切换会话。")
 		}
 		return h.resolveCodexSessionView(agentName, views[index], ag)
 	}

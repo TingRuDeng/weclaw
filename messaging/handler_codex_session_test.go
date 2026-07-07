@@ -65,7 +65,7 @@ func TestHandleCodexNewCommandClearsWorkspaceThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(102, "/codex new"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(102, "/cx new"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.clearCalledWith != wantConversationID {
@@ -130,7 +130,7 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(103, "/codex switch thread-2"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(103, "/cx switch thread-2"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-2" {
@@ -162,7 +162,7 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(106, "/codex switch thread-target"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(106, "/cx switch thread-target"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-target" {
@@ -199,7 +199,7 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/codex switch 1"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/cx switch 1"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-b" {

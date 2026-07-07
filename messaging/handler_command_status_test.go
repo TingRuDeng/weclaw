@@ -157,7 +157,6 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看 Codex 模型状态",
 		"/cx model ls 查看可用 Codex 模型",
-		"/codex 可作为 /cx 的兼容写法",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Codex help should describe %q, got %q", want, text)

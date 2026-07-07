@@ -22,7 +22,7 @@ func isClaudeSessionCommand(trimmed string) bool {
 }
 
 func isClaudeSessionCommandToken(token string) bool {
-	return token == "/claude" || token == "/cc"
+	return token == "/cc"
 }
 
 func (h *Handler) handleClaudeSessionCommand(ctx context.Context, userID string, trimmed string) string {

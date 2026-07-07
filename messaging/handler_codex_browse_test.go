@@ -109,7 +109,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(109, "/codex ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(109, "/cx ls"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "0. local") || !strings.Contains(text, "1. recorded") {
@@ -137,7 +137,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(110, "/codex switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(110, "/cx switch 0"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-desktop" {
@@ -176,7 +176,7 @@ func TestHandleCodexSwitchFailureDoesNotLeakThreadStoreErrorOrSwitchWorkspace(t 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/codex switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch 0"))
 
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "该 Codex 会话当前无法被微信接手") || !strings.Contains(text, "/cx app") {

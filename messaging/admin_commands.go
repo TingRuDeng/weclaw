@@ -28,7 +28,7 @@ func isServiceAdminCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/update", "/upgrade", "/restart":
+	case "/update", "/restart":
 		return true
 	default:
 		return false
@@ -104,7 +104,7 @@ func parseServiceAdminCommand(trimmed string) (string, []string, error) {
 	command := strings.TrimPrefix(fields[0], "/")
 	args := fields[1:]
 	switch command {
-	case "update", "upgrade":
+	case "update":
 		if len(args) > 0 {
 			return "", nil, fmt.Errorf("/%s 不支持参数；请先执行 /%s，更新完成后再执行 /restart 或 /restart --force。", command, command)
 		}

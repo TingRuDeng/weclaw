@@ -79,6 +79,7 @@ ai_summary:
 - `/api/send` 在同一平台存在多个可主动发送账号时必须要求 `account_id`，不能静默选择第一个账号。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - 飞书推荐菜单以 Codex / Claude 高频命令为主，默认不把 `/cx app`、`/cc cli`、`/cancel` 放到常用菜单；普通计划确认和暂存消息确认都直接回复“确认”，`/cancel` 只用于撤回暂存消息。
+- 命令入口只保留当前主路径：远程更新使用 `/update`，Codex 会话使用 `/cx ...`，Claude 会话使用 `/cc ...`；不要重新引入 `/info`、`/clear`、`/upgrade`、`/codex ...` 会话入口、`/claude ...` 会话入口、`/cx open-app` 或 `/cx attach app` 这类兼容路由。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。
 - 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。

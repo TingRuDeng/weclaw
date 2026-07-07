@@ -13,7 +13,7 @@ func (h *Handler) handleCodexModelCommand(ctx context.Context, ag agent.Agent, a
 	if len(args) == 0 || args[0] == "status" {
 		return h.renderCodexModelStatus(ag)
 	}
-	if args[0] == "ls" || args[0] == "list" {
+	if args[0] == "ls" {
 		return h.renderCodexModelList(ctx, ag)
 	}
 	return "用法: /cx model status | /cx model ls"

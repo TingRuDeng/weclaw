@@ -18,10 +18,7 @@ var updateRestartFlag bool
 func init() {
 	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "Restart weclaw after updating")
 	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
-	upgradeCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "Restart weclaw after updating")
-	upgradeCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
 	rootCmd.AddCommand(updateCmd)
-	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(versionCmd)
 }
 
@@ -36,12 +33,6 @@ var versionCmd = &cobra.Command{
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update weclaw to the latest version",
-	RunE:  runUpdate,
-}
-
-var upgradeCmd = &cobra.Command{
-	Use:   "upgrade",
-	Short: "Update weclaw to the latest version (alias for update)",
 	RunE:  runUpdate,
 }
 

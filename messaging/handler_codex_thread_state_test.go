@@ -133,8 +133,8 @@ func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(104, "/codex whoami"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(105, "/codex ls"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(104, "/cx whoami"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(105, "/cx ls"))
 
 	texts := calls.texts()
 	if !containsText(texts, "workspace: "+workspace) {

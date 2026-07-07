@@ -13,7 +13,7 @@ func (h *Handler) handleClaudeModelCommand(ctx context.Context, ag agent.Agent, 
 	if len(args) == 0 || args[0] == "status" {
 		return h.renderClaudeModelStatus(ag)
 	}
-	if args[0] == "ls" || args[0] == "list" {
+	if args[0] == "ls" {
 		return h.renderClaudeModelList(ctx, ag)
 	}
 	return "用法: /cc model status | /cc model ls"

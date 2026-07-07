@@ -85,7 +85,7 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 	}
 }
 
-func TestHandleMessageRemovedSwitchCommandDoesNotCallAgent(t *testing.T) {
+func TestHandleMessageRemovedSwitchCommandGoesToDefaultAgent(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := &fakeAgent{reply: "ok"}
 	h.defaultName = "codex"
@@ -99,11 +99,15 @@ func TestHandleMessageRemovedSwitchCommandDoesNotCallAgent(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(101, "/sw reload"))
 
-	if ag.chatCallCount() != 0 {
-		t.Fatalf("removed /sw command should not call default agent, chatCalls=%d", ag.chatCallCount())
+	waitForFakeAgentCalls(t, ag, 1)
+	if ag.chatCallCount() != 1 {
+		t.Fatalf("已删除的 /sw 命令应落到默认 Agent，chatCalls=%d", ag.chatCallCount())
 	}
-	if !containsText(calls.texts(), "不再支持从微信端切换 Codex 账号") {
-		t.Fatalf("removed /sw command should explain removal, messages=%#v", calls.texts())
+	if ag.lastChatMessage() != "/sw reload" {
+		t.Fatalf("agent message=%q，期望保留原始已删除命令文本", ag.lastChatMessage())
+	}
+	if containsText(calls.texts(), "不再支持从微信端切换 Codex 账号") {
+		t.Fatalf("已删除的 /sw 命令不应再被内置命令消费，messages=%#v", calls.texts())
 	}
 }
 

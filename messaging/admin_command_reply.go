@@ -50,7 +50,7 @@ func summarizeServiceAdminOutput(command string, output string) string {
 		return ""
 	}
 	switch command {
-	case "update", "upgrade":
+	case "update":
 		if version := findOutputVersion(lines, "Already up to date ("); version != "" {
 			return "当前已是最新版本：" + version
 		}

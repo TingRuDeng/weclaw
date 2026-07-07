@@ -189,11 +189,9 @@ func buildCodexSessionHelpText() string {
 		"/cx status 查看 remote、thread 和本地入口状态",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
-		"/cx attach app 兼容写法，等同 /cx app",
 		"/cx detach 断开已连接的本地 Companion",
 		"/cx model status 查看 Codex 模型状态",
 		"/cx model ls 查看可用 Codex 模型",
-		"/codex 可作为 /cx 的兼容写法",
 	)
 }
 

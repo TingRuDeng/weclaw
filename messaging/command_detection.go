@@ -2,11 +2,6 @@ package messaging
 
 import "strings"
 
-func isRemovedSwitchCommand(trimmed string) bool {
-	fields := strings.Fields(trimmed)
-	return len(fields) > 0 && fields[0] == "/sw"
-}
-
 func isProgressCommand(trimmed string) bool {
 	fields := strings.Fields(trimmed)
 	return len(fields) > 0 && fields[0] == "/progress"
@@ -21,15 +16,17 @@ func isCodexSessionCommand(trimmed string) bool {
 		return len(fields) == 2
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "quota", "cli", "attach", "detach", "app", "open-app", "status", "clean", "help":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "quota", "cli", "detach", "app", "status", "clean", "help":
 		return true
+	case "attach":
+		return len(fields) == 2
 	default:
 		return false
 	}
 }
 
 func isCodexSessionCommandToken(token string) bool {
-	return token == "/codex" || token == "/cx"
+	return token == "/cx"
 }
 
 func isCodexShortSelectionToken(token string) bool {

@@ -49,7 +49,7 @@ func TestCodexCleanRemovesMissingStoredWorkspaces(t *testing.T) {
 	}
 }
 
-func TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent(t *testing.T) {
+func TestStatusCommandUsesGlobalStatus(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := &fakeAgent{
 		reply: "默认回复",
@@ -65,17 +65,13 @@ func TestStatusCommandUsesGlobalStatusAndInfoDoesNotCallAgent(t *testing.T) {
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(130, "/status"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(131, "/info"))
 
 	texts := calls.texts()
 	if !containsText(texts, "agent: codex") || !containsText(texts, "(acp)") {
 		t.Fatalf("status reply mismatch, messages=%#v", texts)
 	}
-	if !containsText(texts, "请使用 /status") {
-		t.Fatalf("info migration reply mismatch, messages=%#v", texts)
-	}
 	if ag.chatCallCount() != 0 {
-		t.Fatalf("/info should not call default agent, calls=%d", ag.chatCallCount())
+		t.Fatalf("/status should not call default agent, calls=%d", ag.chatCallCount())
 	}
 }
 

@@ -32,17 +32,13 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 		h.handleServiceAdminCommand(ctx, msg, trimmed, req.Reply)
 	case trimmed == "/status":
 		sendText(h.buildStatus(msg.UserID))
-	case trimmed == "/info":
-		sendText("命令已移除，请使用 /status 查看 WeClaw 全局运行态。")
 	case trimmed == "/help":
 		if h.handleFeishuHelpCommand(ctx, msg, req.Reply, routeUserID) {
 			return true
 		}
 		sendText(buildHelpText())
-	case trimmed == "/new" || trimmed == "/clear":
+	case trimmed == "/new":
 		sendText(h.resetDefaultSessionForRoute(ctx, msg.UserID, routeUserID))
-	case isRemovedSwitchCommand(trimmed):
-		sendText("命令已移除：WeClaw 不再支持从微信端切换 Codex 账号。")
 	case isProgressCommand(trimmed):
 		sendText(h.handleProgressCommandForAccount(trimmed, msg.Platform, msg.AccountID))
 	case isClaudeSessionCommand(trimmed):

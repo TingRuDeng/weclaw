@@ -244,32 +244,3 @@ func TestCodexAppFailureSuggestsCli(t *testing.T) {
 		t.Fatalf("app failure reply should suggest /cx cli, messages=%#v", calls.texts())
 	}
 }
-
-func TestCodexAttachAppAliasOpensCodexApp(t *testing.T) {
-	h := NewHandler(nil, nil)
-	workspace := t.TempDir()
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex-bin"},
-		},
-	}
-	h.defaultName = "codex"
-	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
-	var opened []recordedCodexAppOpen
-	h.SetCodexAppOpener(func(_ context.Context, command string, workspace string) error {
-		opened = append(opened, recordedCodexAppOpen{command: command, workspace: workspace})
-		return nil
-	})
-	client, calls, closeServer := newRecordingILinkClient(t)
-	defer closeServer()
-
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(127, "/cx attach app"))
-
-	if len(opened) != 1 || opened[0].workspace != workspace {
-		t.Fatalf("opened=%#v, want workspace %s", opened, workspace)
-	}
-	if !containsText(calls.texts(), "已打开 Codex App") {
-		t.Fatalf("attach app reply mismatch, messages=%#v", calls.texts())
-	}
-}

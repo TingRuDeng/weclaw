@@ -9,7 +9,7 @@ func (h *Handler) SetCodexLocalSessionDir(dir string) {
 	h.codexLocalSessionDir = strings.TrimSpace(dir)
 }
 
-// codexSwitchTargets 合并 WeClaw 已记录会话与本机 Codex 会话，保证编号和 /codex ls 展示一致。
+// codexSwitchTargets 合并 WeClaw 已记录会话与本机 Codex 会话，保证编号和 /cx ls 展示一致。
 func (h *Handler) codexSwitchTargets(bindingKey string) []codexWorkspaceView {
 	storedViews := h.ensureCodexSessions().listWorkspaces(bindingKey)
 	views := make([]codexWorkspaceView, 0, len(storedViews))
