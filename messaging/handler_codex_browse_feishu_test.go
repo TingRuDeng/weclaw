@@ -58,6 +58,48 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	}
 }
 
+func TestFeishuCodexCxLsDuringActiveTaskDoesNotSendNavigationCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	sessionKey := "feishu:tenant_1:dm:oc_1:ou_user"
+	route := h.codexConversationRouteForSession("ou_user", sessionKey, "codex", ag)
+	task, _, started := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
+		owner:     "ou_user",
+		agentName: "codex",
+		message:   "正在执行的任务",
+	})
+	if !started {
+		t.Fatal("active task should start")
+	}
+	defer h.finishActiveTask(route.conversationID, task)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-cx-ls-running",
+		Text:      "/cx ls",
+		Metadata:  map[string]string{"feishu_session_key": sessionKey},
+	}, reply)
+
+	if len(reply.Choices) != 0 {
+		t.Fatalf("choices=%#v, want no navigation card while task is running", reply.Choices)
+	}
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "Codex 正在处理上一条任务") {
+		t.Fatalf("texts=%#v, want running task notice", reply.Texts)
+	}
+}
+
 func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()

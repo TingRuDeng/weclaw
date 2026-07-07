@@ -120,6 +120,52 @@ func TestServiceAdminCommandAllowsRestartForceOnly(t *testing.T) {
 	}
 }
 
+func TestServiceAdminCommandsRunSequentially(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"ou_admin"})
+	updateStarted := make(chan struct{})
+	allowUpdateDone := make(chan struct{})
+	restartStarted := make(chan struct{})
+	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
+		switch command {
+		case "update":
+			close(updateStarted)
+			<-allowUpdateDone
+			return "Updated to v0.1.113", nil
+		case "restart":
+			close(restartStarted)
+			return "restart scheduled", nil
+		default:
+			t.Fatalf("unexpected admin command=%q", command)
+			return "", nil
+		}
+	})
+	reply := newAdminCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Text:     "/update",
+	}, reply)
+	waitForClosedChannel(t, updateStarted, "update start")
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Text:     "/restart --force",
+	}, reply)
+	assertChannelNotClosed(t, restartStarted, "restart should wait for update")
+
+	close(allowUpdateDone)
+	waitForClosedChannel(t, restartStarted, "restart start")
+	texts := reply.waitTexts(t, 4)
+	if !strings.Contains(texts[2], "已更新到：v0.1.113") {
+		t.Fatalf("reply texts=%#v, want update completion before restart", texts)
+	}
+	if !strings.Contains(texts[3], "restart scheduled") {
+		t.Fatalf("reply texts=%#v, want restart completion after update", texts)
+	}
+}
+
 func TestServiceAdminCommandRejectsUnsupportedArgs(t *testing.T) {
 	calls := 0
 	h := NewHandler(nil, nil)
@@ -248,4 +294,22 @@ func (r *adminCommandTestReplier) waitTexts(t *testing.T, want int) []string {
 	defer r.mu.Unlock()
 	t.Fatalf("reply texts=%#v, want at least %d", r.texts, want)
 	return nil
+}
+
+func waitForClosedChannel(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timeout waiting for %s", name)
+	}
+}
+
+func assertChannelNotClosed(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatalf("%s", name)
+	case <-time.After(100 * time.Millisecond):
+	}
 }

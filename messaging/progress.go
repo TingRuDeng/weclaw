@@ -18,6 +18,9 @@ const (
 	progressModeVerbose = "verbose"
 	progressModeStream  = "stream"
 	progressModeDebug   = "debug"
+
+	progressDefaultCompletion  = "任务已完成，正在发送最终结果。"
+	progressStatusOnlyComplete = "\x00weclaw_status_only_complete"
 )
 
 var progressStageHints = []struct {
@@ -55,7 +58,7 @@ type progressSession struct {
 func (h *Handler) startProgressSession(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func()) {
 	onProgress, finish := h.startProgressSessionWithFinal(ctx, reply, prefix, taskText, cfg)
 	return onProgress, func() {
-		_ = finish("", false)
+		_ = finish(progressDefaultCompletion, false)
 	}
 }
 
@@ -244,14 +247,16 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 		err = s.stream.Fail(ctx, firstNonBlank(finalText, "任务已停止。"))
 	case failed:
 		err = s.stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
+	case finalText == progressStatusOnlyComplete:
+		err = s.stream.Complete(ctx, "")
 	case strings.TrimSpace(finalText) != "":
 		err = s.stream.Complete(ctx, finalText)
 	default:
-		err = s.stream.Complete(ctx, "任务已完成，正在发送最终结果。")
+		err = s.stream.Complete(ctx, progressDefaultCompletion)
 	}
 	if err != nil {
 		log.Printf("[handler] failed to finish progress stream: %v", err)
 		return false
 	}
-	return strings.TrimSpace(finalText) != ""
+	return strings.TrimSpace(finalText) != "" && finalText != progressStatusOnlyComplete
 }

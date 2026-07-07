@@ -14,6 +14,10 @@ func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platf
 	if msg.Platform != platform.PlatformFeishu || reply == nil || !reply.Capabilities().Buttons {
 		return false
 	}
+	if notice, blocked := h.runningCodexNavigationNotice(ctx, msg.UserID, routeUserID, trimmed); blocked {
+		sendPlatformText(ctx, reply, msg.UserID, notice)
+		return true
+	}
 	result := h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
 		ActorUserID: msg.UserID,
 		RouteUserID: routeUserID,
@@ -27,6 +31,25 @@ func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platf
 	}
 	sendPlatformText(ctx, reply, msg.UserID, result)
 	return true
+}
+
+func (h *Handler) runningCodexNavigationNotice(ctx context.Context, actorUserID string, routeUserID string, trimmed string) (string, bool) {
+	if !isFeishuCodexNavigationCommand(strings.Fields(trimmed)) {
+		return "", false
+	}
+	_, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
+	if err != nil {
+		return "", false
+	}
+	task, ok := h.activeTask(key)
+	if !ok {
+		return "", false
+	}
+	return runningCodexNavigationBlockedPrompt(task), true
+}
+
+func runningCodexNavigationBlockedPrompt(task *activeAgentTask) string {
+	return runningCodexGuidePromptForTask(task) + "\n\n为避免会话卡片插入任务结果，任务完成后再发送 /cx ls。"
 }
 
 func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg platform.IncomingMessage, routeUserID string, reply platform.Replier, trimmed string, commandReply string) bool {

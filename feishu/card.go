@@ -29,7 +29,8 @@ func buildCardV2(opts cardOptions) (string, error) {
 		title = "WeClaw"
 	}
 	content := strings.TrimSpace(opts.Content)
-	if content == "" {
+	omitMainContent := status == cardStatusDone && content == ""
+	if content == "" && !omitMainContent {
 		content = statusDefaultContent(status)
 	}
 	elements := []map[string]any{
@@ -38,11 +39,13 @@ func buildCardV2(opts cardOptions) (string, error) {
 			"element_id": "status",
 			"content":    statusLabel(status),
 		},
-		{
+	}
+	if !omitMainContent {
+		elements = append(elements, map[string]any{
 			"tag":        "markdown",
 			"element_id": cardMainContentID,
 			"content":    content,
-		},
+		})
 	}
 	if approvalContent := approvalRecordsContent(opts.Approvals); approvalContent != "" {
 		elements = append(elements, map[string]any{

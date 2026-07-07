@@ -145,8 +145,8 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
 
-	if reply.Stream.Completed != "任务已完成，正在发送最终结果。" {
-		t.Fatalf("completed=%q, want generic completion card", reply.Stream.Completed)
+	if reply.Stream.Completed != "" {
+		t.Fatalf("completed=%q, want status-only completion card", reply.Stream.Completed)
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] 最终结果" {
 		t.Fatalf("texts=%#v, want final reply as separate message", reply.Texts)

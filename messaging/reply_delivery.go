@@ -107,7 +107,7 @@ func finishProgressWithReply(finish func(string, bool) bool, reply string, faile
 
 func finishProgressWithReplyForPlatform(replyWriter platform.Replier, finish func(string, bool) bool, reply string, failed bool) bool {
 	if shouldKeepFinalReplyOutsideStream(replyWriter, reply) {
-		_ = finish("", failed)
+		_ = finish(progressStatusOnlyComplete, failed)
 		return false
 	}
 	return finishProgressWithReply(finish, reply, failed)

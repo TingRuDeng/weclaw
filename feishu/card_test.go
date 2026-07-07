@@ -52,6 +52,23 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 	}
 }
 
+func TestBuildCardV2DoneWithoutContentOmitsMainContent(t *testing.T) {
+	raw, err := buildCardV2(cardOptions{Status: cardStatusDone})
+	if err != nil {
+		t.Fatalf("buildCardV2 error: %v", err)
+	}
+	card := decodeCardJSON(t, raw)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if len(elements) != 1 {
+		t.Fatalf("elements=%d, want status-only done card", len(elements))
+	}
+	status := elements[0].(map[string]any)
+	if status["element_id"] != "status" || status["content"] != "**已完成**" {
+		t.Fatalf("status element=%#v, want done status only", status)
+	}
+}
+
 func TestBuildCardV2NormalizesUnknownStatus(t *testing.T) {
 	raw, err := buildCardV2(cardOptions{Status: "unknown"})
 	if err != nil {

@@ -95,6 +95,7 @@ type Handler struct {
 	codexAppOpener          CodexAppOpener
 	codexCLIResumeOpener    CodexCLIResumeOpener
 	claudeCLIResumeOpener   ClaudeCLIResumeOpener
+	serviceAdminMu          sync.Mutex
 	serviceAdminExecutor    ServiceAdminCommandExecutor
 }
 

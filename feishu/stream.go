@@ -3,7 +3,6 @@ package feishu
 import (
 	"context"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -109,9 +108,6 @@ func (s *feishuStream) Complete(ctx context.Context, finalContent string) error 
 		return nil
 	}
 	s.closed = true
-	if strings.TrimSpace(finalContent) == "" {
-		finalContent = s.lastContent
-	}
 	disableErr := s.disableStreaming(ctx)
 	opts := cardOptions{Status: cardStatusDone, Title: s.title, Content: finalContent}
 	if s.taskCards != nil {
