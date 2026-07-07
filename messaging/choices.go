@@ -8,6 +8,7 @@ import (
 )
 
 var numberedChoiceLinePattern = regexp.MustCompile(`^\s*(\d+)[\.\)、）)]\s*(.+?)\s*$`)
+var englishChoicePromptPattern = regexp.MustCompile(`\b(choose|select)\b`)
 
 type choiceDetection struct {
 	CleanText string
@@ -44,13 +45,13 @@ func detectChoices(reply string) (choiceDetection, bool) {
 // containsChoicePrompt 判断回复是否真的在请求用户选择，避免误判普通编号列表。
 func containsChoicePrompt(text string) bool {
 	normalized := strings.ToLower(text)
-	keywords := []string{"请选择", "选择", "回复编号", "输入编号", "选一个", "choose", "select"}
+	keywords := []string{"请选择", "请回复", "回复编号", "输入编号", "选择编号", "选一个"}
 	for _, keyword := range keywords {
 		if strings.Contains(normalized, keyword) {
 			return true
 		}
 	}
-	return false
+	return englishChoicePromptPattern.MatchString(normalized)
 }
 
 // lastNonEmptyLine 返回最后一行非空文本作为按钮 prompt。

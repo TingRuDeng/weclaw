@@ -35,8 +35,8 @@ func TestSummaryModeDoesNotRenderTextPreview(t *testing.T) {
 	if strings.Contains(got, delta) {
 		t.Fatalf("summary progress should not contain raw delta, got %q", got)
 	}
-	if strings.Contains(got, "实时片段") {
-		t.Fatalf("summary progress should not contain realtime snippet label, got %q", got)
+	if strings.Contains(got, "实时状态") {
+		t.Fatalf("summary progress should not contain realtime status label, got %q", got)
 	}
 	if got != "处理中，请耐心等待....." {
 		t.Fatalf("summary progress=%q, want short waiting text", got)
@@ -114,21 +114,39 @@ func TestRenderFinalFailureStripsANSIForUnknownAgentError(t *testing.T) {
 	}
 }
 
-func TestStreamModeRendersTextPreview(t *testing.T) {
+func TestStreamModeRendersLastNonEmptyStatusLine(t *testing.T) {
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.PreviewRunes = 80
+
+	got := renderDeltaProgress("正在分析代码\n\n正在运行 go test ./messaging\n", cfg)
+
+	if !strings.Contains(got, "实时状态") {
+		t.Fatalf("stream progress should contain status label, got %q", got)
+	}
+	if !strings.Contains(got, "正在运行 go test ./messaging") {
+		t.Fatalf("stream progress should contain last non-empty line, got %q", got)
+	}
+	if strings.Contains(got, "正在分析代码") {
+		t.Fatalf("stream progress should hide older lines, got %q", got)
+	}
+	if strings.Contains(got, "实时片段") {
+		t.Fatalf("stream progress should not use legacy snippet label, got %q", got)
+	}
+}
+
+func TestStreamModeTruncatesLongStatusLineToLatestTail(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
 	cfg.PreviewRunes = 4
 
 	got := renderDeltaProgress("第一段第二段第三段", cfg)
 
-	if !strings.Contains(got, "实时片段，仅供预览") {
-		t.Fatalf("stream progress should contain preview label, got %q", got)
-	}
 	if !strings.Contains(got, "第三段") {
-		t.Fatalf("stream progress should contain tail preview, got %q", got)
+		t.Fatalf("stream progress should keep latest tail of long status line, got %q", got)
 	}
 	if strings.Contains(got, "第一段") {
-		t.Fatalf("stream progress should truncate old text, got %q", got)
+		t.Fatalf("stream progress should drop stale head of long status line, got %q", got)
 	}
 }
 
@@ -142,8 +160,8 @@ func TestStreamModeKeepsStructuredProgressStatus(t *testing.T) {
 	if got != status {
 		t.Fatalf("structured progress status=%q, want %q", got, status)
 	}
-	if strings.Contains(got, "实时片段") {
-		t.Fatalf("structured progress should not be rendered as realtime snippet, got %q", got)
+	if strings.Contains(got, "实时状态") {
+		t.Fatalf("structured progress should not be rendered as realtime status, got %q", got)
 	}
 }
 

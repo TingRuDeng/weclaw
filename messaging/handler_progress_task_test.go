@@ -37,8 +37,8 @@ func TestStartProgressSessionSummaryModeDoesNotSendRealtimeSnippet(t *testing.T)
 		if strings.Contains(text, "这里是一段 Codex 正文 delta") {
 			t.Fatalf("summary mode should not send raw delta, got messages %#v", calls.texts())
 		}
-		if strings.Contains(text, "实时片段") {
-			t.Fatalf("summary mode should not send realtime snippet, got messages %#v", calls.texts())
+		if strings.Contains(text, "实时状态") {
+			t.Fatalf("summary mode should not send realtime status, got messages %#v", calls.texts())
 		}
 	}
 }
@@ -64,7 +64,7 @@ func TestStartProgressSessionDefaultTypingModeDoesNotSendTextFeedback(t *testing
 	}
 }
 
-func TestStartProgressSessionStreamModeKeepsLegacySnippet(t *testing.T) {
+func TestStartProgressSessionStreamModeSendsLastStatusLine(t *testing.T) {
 	h := NewHandler(nil, nil)
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -77,16 +77,21 @@ func TestStartProgressSessionStreamModeKeepsLegacySnippet(t *testing.T) {
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "")
 	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "修复实时回复碎片化", cfg)
 
-	onProgress("第一段第二段第三段")
-	waitForText(t, calls, "实时片段，仅供预览")
+	onProgress("第一段\n第二段\n第三段")
+	waitForText(t, calls, "实时状态")
+	waitForText(t, calls, "第三段")
 	stop()
+
+	if containsText(calls.texts(), "第一段") {
+		t.Fatalf("stream progress should not send old lines, messages=%#v", calls.texts())
+	}
 }
 
 func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.agents["codex"] = &fakeProgressAgent{
 		fakeAgent:      fakeAgent{reply: "最终结果"},
-		progressDeltas: []string{"第一段第二段第三段"},
+		progressDeltas: []string{"第一段\n第二段\n第三段"},
 		delay:          50 * time.Millisecond,
 	}
 	globalCfg := config.DefaultProgressConfig()
@@ -102,7 +107,8 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
 	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "hello", "client-1")
 
-	waitForText(t, calls, "实时片段，仅供预览")
+	waitForText(t, calls, "实时状态")
+	waitForText(t, calls, "第三段")
 }
 
 func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
@@ -141,6 +147,7 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 	cfg.InitialDelaySeconds = 0
 	cfg.SummaryIntervalSeconds = 0
 	h.SetProgressConfig(cfg)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
@@ -150,6 +157,47 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] 最终结果" {
 		t.Fatalf("texts=%#v, want final reply as separate message", reply.Texts)
+	}
+}
+
+func TestFinalReplyOutsideStreamDoesNotPutOrdinaryAnswerInCard(t *testing.T) {
+	finalReply := strings.Join([]string{
+		"本轮未联网检索，未使用 subagent。",
+		"",
+		"1. 流水页切到“消费”时，顶部显示本月摘要。",
+		"2. 摘要卡支持用户选择左右切换。",
+		"3. 点击摘要卡进入过滤后的流水列表。",
+	}, "\n")
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeProgressAgent{
+		fakeAgent:      fakeAgent{reply: finalReply},
+		progressDeltas: []string{finalReply},
+		delay:          taskQueueProbeDelay,
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	h.SetProgressConfig(cfg)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
+	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+
+	if reply.Stream.Completed != "" {
+		t.Fatalf("completed=%q, want status-only task card", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] "+finalReply {
+		t.Fatalf("texts=%#v, want ordinary final answer as text", reply.Texts)
+	}
+	for _, update := range reply.Stream.Updates {
+		if strings.Contains(update, "本轮未联网检索") || strings.Contains(update, "流水页切到") {
+			t.Fatalf("stream update should not contain ordinary final answer body, updates=%#v", reply.Stream.Updates)
+		}
+	}
+	if len(reply.Stream.Updates) == 0 || !strings.Contains(reply.Stream.Updates[len(reply.Stream.Updates)-1], "点击摘要卡进入过滤后的流水列表。") {
+		t.Fatalf("stream updates=%#v, want latest status line only", reply.Stream.Updates)
 	}
 }
 
@@ -274,10 +322,10 @@ func TestBroadcastProgressUsesAgentPrefix(t *testing.T) {
 		message:      "hello",
 	})
 
-	if !containsText(calls.texts(), "[codex] 实时片段，仅供预览") {
+	if !containsText(calls.texts(), "[codex] 实时状态") {
 		t.Fatalf("expected codex progress prefix, messages=%#v", calls.texts())
 	}
-	if !containsText(calls.texts(), "[claude] 实时片段，仅供预览") {
+	if !containsText(calls.texts(), "[claude] 实时状态") {
 		t.Fatalf("expected claude progress prefix, messages=%#v", calls.texts())
 	}
 }
