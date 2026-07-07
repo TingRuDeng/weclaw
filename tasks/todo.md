@@ -2,26 +2,34 @@
 
 ## 目标
 
-新增命令行交互式添加飞书机器人入口：`weclaw feishu add`。该命令应引导用户输入 bot 名称、飞书 `app_id`、`app_secret`、白名单、默认 Agent、进度模式和群聊 @ 规则，然后复用现有 bootstrap 落盘能力保存凭证并更新 `~/.weclaw/config.json`。
+为飞书机器人配置增加用户友好的中文识别能力：保留 `name` 作为 ASCII 内部 ID 和凭证文件名，新增中文 `display_name` 与 `aliases`，让 CLI 查询类命令可以通过中文名或别名定位到同一个 bot。
+
+## 已确认方案
+
+- `name` 继续只允许 `a-zA-Z0-9._-`，用于 `~/.weclaw/platforms/feishu/<name>.json`，避免路径和脚本兼容风险。
+- `display_name` 用于展示，可填写中文。
+- `aliases` 用于识别，可填写多个中文或英文别名。
+- CLI 接收 bot 参数时先按 `name` 精确匹配，再按 `display_name` 和 `aliases` 匹配；匹配不到或多重匹配时返回明确错误。
 
 ## 执行任务
 
-- [x] P0 串行：等待用户确认本计划，未确认前不改业务代码。
-- [x] P1 串行：先补 RED 测试，覆盖 `runFeishuAdd` 会按交互输入调用现有 bootstrap 流程，且输出不泄露 `app_secret`。
-- [x] P2 串行：实现交互输入抽象和 `weclaw feishu add` 子命令，只提示缺失字段，secret 使用隐藏输入能力。
-- [x] P3 串行：复用 `runFeishuBootstrap` 完成凭证校验、凭证保存、`platforms.feishu.bots[]` 更新和结果输出。
-- [x] P4 串行：运行最小验证和全量验证。
+- [x] P0 串行：补 RED 测试，覆盖配置字段、重复别名校验、`feishu add` 写入中文展示名/别名、CLI 按中文名解析。
+- [x] P1 串行：实现 `FeishuBotConfig` 的 `display_name` / `aliases` 字段与校验逻辑。
+- [x] P2 串行：实现 bot 引用解析 helper，并接入 `feishu login/status/bootstrap` 等凭证命令。
+- [x] P3 串行：扩展 `weclaw feishu add` 交互与 flag，写入 `display_name` / `aliases`。
+- [x] P4 串行：运行定向、包级、全量测试、vet 和 diff check。
 - [x] P5 串行：执行 review-gate 交付前审查。
 
 ## 并行评估
 
-本轮不启用 subagent。现有 `cmd/feishu.go` 与 `cmd/feishu_test.go` 已接近单文件行数上限，新增逻辑拆到 `cmd/feishu_add.go` 与 `cmd/feishu_add_test.go`；命令注册只在 `cmd/feishu.go` 做最小改动。同一 CLI 命令链路存在写冲突，串行 TDD 更清晰。
+本轮不启用 subagent。变更集中在 `config` 与 `cmd` 的共享结构和命令入口，同一轮并行写入会产生文件级冲突；串行 TDD 更清晰。只读分析已完成，无需网络检索。
 
 ## 验证命令
 
 ```bash
-GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -run 'TestRunFeishuAdd' -count=1 -timeout 60s
-GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -count=1 -timeout 60s
+GOCACHE=/private/tmp/weclaw-go-cache go test ./config -run 'TestValidateFeishuBot' -count=1 -timeout 60s
+GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -run 'TestRunFeishu(Add|Status|Login|Bootstrap)|TestResolveFeishuBot' -count=1 -timeout 60s
+GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd ./config -count=1 -timeout 60s
 GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s
 GOCACHE=/private/tmp/weclaw-go-cache go vet ./...
 git diff --check
@@ -29,19 +37,19 @@ git diff --check
 
 ## Review 小结
 
-终态：finished。Spec 符合度：已实现 `weclaw feishu add` 交互式添加飞书机器人，交互收集 bot 名称、`app_id`、`app_secret`、白名单、默认 Agent、进度模式和群聊 @ 规则；最终复用 `runFeishuBootstrap` 做凭证校验、凭证保存和 `platforms.feishu.bots[]` 更新。
+终态：finished。Spec 符合度：已保留飞书 bot `name` 作为 ASCII 内部 ID，并新增 `display_name` 与 `aliases`；`weclaw feishu add` 和 `bootstrap` 可写入展示名/别名，`login`、`status`、`bootstrap` 可通过中文展示名或别名解析到内部 ID。
 
-安全检查：`app_secret` 不写入 `config.json`，真实 TTY 使用隐藏输入；测试覆盖 stdout 不包含 secret。未引入硬编码 secret、Shell 拼接、无依据 fallback 或静默降级。
+安全检查：`app_secret` 仍只保存到凭证文件，不写入 `config.json`；新增别名解析不执行外部命令、不拼接 Shell、不引入 secret 或静默降级。`display_name`/`aliases` 在配置边界做去歧义校验，避免同一中文名匹配多个 bot。
 
-测试与验证：`GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -run 'TestRunFeishuAdd' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`git diff --check` 均通过。`cmd` 包和全量测试因现有 `httptest` 需要监听本地端口，使用提升权限执行。
+测试与验证：RED 测试先因 `DisplayName`/`Aliases` 字段和 `resolveFeishuBotName` 缺失失败；实现后以下命令均通过：`GOCACHE=/private/tmp/weclaw-go-cache go test ./config -run 'TestValidateFeishuBotsRejectsDuplicateAlias' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd -run 'TestRunFeishuAddPromptsAndBootstrapsBot|TestRunFeishuStatusResolvesDisplayName|TestResolveFeishuBotNameMatchesAlias' -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./cmd ./config -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`git diff --check`、`python3 scripts/validate_docs.py . --profile generic`。
 
-复杂度检查：新增逻辑拆到 `cmd/feishu_add.go` 和 `cmd/feishu_add_test.go`，相关文件均小于 300 行；新增 helper 参数数不超过 3，核心函数保持短小。
+复杂度检查：新增生产文件 `cmd/feishu_bootstrap.go`、`cmd/feishu_login_status.go`、`cmd/feishu_bot_ref.go`、`config/feishu_bot.go` 均低于 300 行；`cmd/feishu.go` 已从 309 行拆到 100 行。既有 `config/config.go` 仍超过 300 行，本轮只在现有结构体和校验入口做最小接入，未顺手扩大拆分范围。
 
 Document-refresh: not-needed
-原因：本轮只新增 CLI 交互入口，现有 `bootstrap` 文档仍可用；未改变配置结构、运行时语义或发布流程。
+原因：本轮未修改用户说明文档，配置新增字段可由 `weclaw feishu add` 交互写入；项目文档索引校验通过。
 
-剩余风险：交互式 add 会在未显式传 `--progress` 时默认写入 `stream`；这符合当前飞书体验目标，但与 bootstrap 的空值不覆盖语义不同。
+剩余风险：`display_name` 和 `aliases` 只解决 WeClaw CLI 本地识别，不会改变飞书开放平台里的机器人展示名。
 
-潜在技术债：`feishu.go` 仍复用一组全局 flag 变量绑定多个子命令，这是既有模式，本轮只做最小接入未重构。
+潜在技术债：`config/config.go` 是既有大文件，后续若继续改配置结构，应单独拆分配置模型和平台校验逻辑。
 
 结论：通过。

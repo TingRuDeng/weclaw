@@ -40,6 +40,8 @@ type PlatformConfig struct {
 // FeishuBotConfig 描述单个飞书机器人入口，secret 只允许保存在凭证文件中。
 type FeishuBotConfig struct {
 	Name                  string          `json:"name"`
+	DisplayName           string          `json:"display_name,omitempty"`
+	Aliases               []string        `json:"aliases,omitempty"`
 	AppID                 string          `json:"app_id"`
 	AllowedUsers          []string        `json:"allowed_users,omitempty"`
 	DefaultAgent          string          `json:"default_agent,omitempty"`
@@ -380,6 +382,9 @@ func validateFeishuPlatformConfig(platformCfg PlatformConfig) error {
 		}
 		seenNames[name] = struct{}{}
 		seenAppIDs[appID] = struct{}{}
+	}
+	if err := validateFeishuBotReferences(platformCfg.Bots); err != nil {
+		return err
 	}
 	return nil
 }

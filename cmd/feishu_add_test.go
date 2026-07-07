@@ -31,6 +31,8 @@ func TestRunFeishuAddPromptsAndBootstrapsBot(t *testing.T) {
 	prompter := &fakeFeishuAddPrompter{
 		prompts: []string{
 			"project-a",
+			"卡片管家",
+			"信用卡管理, 安卓卡管",
 			"cli_a",
 			"ou_1, union_2",
 			"codex",
@@ -59,6 +61,12 @@ func TestRunFeishuAddPromptsAndBootstrapsBot(t *testing.T) {
 	bot := bots[0]
 	if bot.Name != "project-a" || bot.AppID != "cli_a" {
 		t.Fatalf("bot=%#v，期望 project-a/cli_a", bot)
+	}
+	if bot.DisplayName != "卡片管家" {
+		t.Fatalf("display name=%q，期望中文展示名", bot.DisplayName)
+	}
+	if strings.Join(bot.Aliases, ",") != "信用卡管理,安卓卡管" {
+		t.Fatalf("aliases=%#v，期望中文别名", bot.Aliases)
 	}
 	if strings.Join(bot.AllowedUsers, ",") != "ou_1,union_2" {
 		t.Fatalf("allowed users=%#v，期望 ou_1,union_2", bot.AllowedUsers)

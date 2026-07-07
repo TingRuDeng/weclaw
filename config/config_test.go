@@ -250,6 +250,20 @@ func TestValidateFeishuBotsRejectsDuplicateName(t *testing.T) {
 	}
 }
 
+func TestValidateFeishuBotsRejectsDuplicateAlias(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Platforms["feishu"] = PlatformConfig{Bots: []FeishuBotConfig{
+		{Name: "project-a", AppID: "cli_a", DisplayName: "卡片管家"},
+		{Name: "project-b", AppID: "cli_b", Aliases: []string{"卡片管家"}},
+	}}
+
+	err := cfg.Validate()
+
+	if err == nil || !strings.Contains(err.Error(), `duplicate feishu bot alias "卡片管家"`) {
+		t.Fatalf("Validate error=%v, want duplicate bot alias", err)
+	}
+}
+
 func TestValidateFeishuBotsRejectsLegacySingleBotConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Platforms["feishu"] = PlatformConfig{AllowedUsers: []string{"ou_1"}}

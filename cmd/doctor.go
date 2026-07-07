@@ -281,7 +281,7 @@ func checkFeishuBots(cfg *config.Config, deps doctorDeps) []doctorResult {
 }
 
 func checkFeishuBot(bot config.FeishuBotConfig, deps doctorDeps) doctorResult {
-	result := doctorResult{Name: fmt.Sprintf("platform feishu %s", bot.Name)}
+	result := doctorResult{Name: fmt.Sprintf("platform feishu %s", feishuBotDisplayLabel(bot))}
 	if err := deps.feishuCredsOK(bot.Name); err != nil {
 		result.Status = doctorFail
 		result.Detail = err.Error()
@@ -293,7 +293,7 @@ func checkFeishuBot(bot config.FeishuBotConfig, deps doctorDeps) doctorResult {
 }
 
 func checkFeishuBotAllowlist(bot config.FeishuBotConfig) doctorResult {
-	result := doctorResult{Name: fmt.Sprintf("access control feishu %s", bot.Name)}
+	result := doctorResult{Name: fmt.Sprintf("access control feishu %s", feishuBotDisplayLabel(bot))}
 	if len(bot.AllowedUsers) == 0 {
 		result.Status = doctorWarn
 		result.Detail = "empty allowed_users -> default-deny rejects everyone; add allowed_users"

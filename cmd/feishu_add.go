@@ -19,6 +19,10 @@ const feishuAddDefaultProgressMode = "stream"
 
 type feishuAddOptions struct {
 	Name                  string
+	DisplayName           string
+	DisplayNameSet        bool
+	Aliases               []string
+	AliasesSet            bool
 	AppID                 string
 	AppSecret             string
 	AllowedUsers          []string
@@ -44,6 +48,10 @@ var feishuAddCmd = &cobra.Command{
 		defer cancel()
 		return runFeishuAdd(ctx, feishuAddOptions{
 			Name:                  feishuBotName,
+			DisplayName:           feishuBotDisplayName,
+			DisplayNameSet:        cmd.Flags().Changed("display-name"),
+			Aliases:               splitCSV(feishuBotAliases),
+			AliasesSet:            cmd.Flags().Changed("aliases"),
 			AppID:                 feishuLoginAppID,
 			AppSecret:             feishuLoginAppSecret,
 			AllowedUsers:          splitCSV(feishuBootstrapAllowedUsers),
@@ -87,8 +95,20 @@ func runFeishuAdd(ctx context.Context, opts feishuAddOptions, prompter feishuAdd
 // collectFeishuAddOptions 只补齐命令行未提供的字段，避免覆盖脚本传入的显式配置。
 func collectFeishuAddOptions(opts feishuAddOptions, prompter feishuAddPrompter) (feishuBootstrapOptions, error) {
 	var err error
-	if opts.Name, err = promptFeishuAddString(prompter, "Bot 名称", opts.Name); err != nil {
+	if opts.Name, err = promptFeishuAddString(prompter, "Bot 内部 ID（仅英文、数字、点、横线、下划线）", opts.Name); err != nil {
 		return feishuBootstrapOptions{}, err
+	}
+	if !opts.DisplayNameSet {
+		opts.DisplayName, err = prompter.Prompt("Bot 展示名，可填中文", opts.DisplayName)
+		if err != nil {
+			return feishuBootstrapOptions{}, err
+		}
+	}
+	if !opts.AliasesSet {
+		opts.Aliases, err = promptFeishuAddAliases(prompter)
+		if err != nil {
+			return feishuBootstrapOptions{}, err
+		}
 	}
 	if opts.AppID, err = promptFeishuAddString(prompter, "飞书 app_id", opts.AppID); err != nil {
 		return feishuBootstrapOptions{}, err
@@ -130,6 +150,8 @@ func collectFeishuAddOptions(opts feishuAddOptions, prompter feishuAddPrompter) 
 func (opts feishuAddOptions) toBootstrapOptions() feishuBootstrapOptions {
 	return feishuBootstrapOptions{
 		Name:                  opts.Name,
+		DisplayName:           opts.DisplayName,
+		Aliases:               opts.Aliases,
 		AppID:                 opts.AppID,
 		AppSecret:             opts.AppSecret,
 		AllowedUsers:          opts.AllowedUsers,
@@ -137,6 +159,15 @@ func (opts feishuAddOptions) toBootstrapOptions() feishuBootstrapOptions {
 		ProgressMode:          opts.ProgressMode,
 		RequireMentionInGroup: opts.RequireMentionInGroup,
 	}
+}
+
+// promptFeishuAddAliases 读取飞书机器人别名，空输入表示不配置别名。
+func promptFeishuAddAliases(prompter feishuAddPrompter) ([]string, error) {
+	value, err := prompter.Prompt("Bot 别名，逗号分隔，可填中文，可留空", "")
+	if err != nil {
+		return nil, err
+	}
+	return splitCSV(value), nil
 }
 
 // promptFeishuAddString 在已有值为空时才询问用户，支持命令行参数覆盖交互输入。
