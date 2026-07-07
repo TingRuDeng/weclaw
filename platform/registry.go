@@ -110,6 +110,22 @@ func (r *Registry) OutboundAccountCount(platformName PlatformName) int {
 	return count
 }
 
+// HasAccount 判断指定平台账号是否已经在当前 registry 中运行。
+func (r *Registry) HasAccount(platformName PlatformName, accountID string) bool {
+	if r == nil {
+		return false
+	}
+	for _, entry := range r.entries {
+		if entry.Platform.Name() != platformName {
+			continue
+		}
+		if entry.Platform.AccountID() == accountID {
+			return true
+		}
+	}
+	return false
+}
+
 // UpdateAccess 热更新指定平台的访问控制白名单，不重启平台连接。
 func (r *Registry) UpdateAccess(platformName PlatformName, allowed []string) {
 	if r == nil {

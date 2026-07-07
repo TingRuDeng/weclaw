@@ -25,7 +25,7 @@ func TestHandleMessageEventDropsGroupMirrorAfterThreadFirst(t *testing.T) {
 	_ = adapter.handleMessageEvent(context.Background(), mirror, recorder.dispatch)
 
 	recorder.requireCount(t, 1, 80*time.Millisecond)
-	recorder.requireSessionEquals(t, "feishu:tenant_1:group:oc_1")
+	recorder.requireSessionEquals(t, "feishu:cli_a:tenant_1:group:oc_1")
 }
 
 func TestHandleMessageEventDropsPendingGroupMirrorWhenThreadArrives(t *testing.T) {
@@ -45,7 +45,7 @@ func TestHandleMessageEventDropsPendingGroupMirrorWhenThreadArrives(t *testing.T
 	_ = adapter.handleMessageEvent(context.Background(), thread, recorder.dispatch)
 
 	recorder.requireCount(t, 1, 120*time.Millisecond)
-	recorder.requireSessionEquals(t, "feishu:tenant_1:group:oc_1")
+	recorder.requireSessionEquals(t, "feishu:cli_a:tenant_1:group:oc_1")
 }
 
 func TestHandleMessageEventDispatchesPendingGroupWithoutThreadMirror(t *testing.T) {
@@ -60,7 +60,7 @@ func TestHandleMessageEventDispatchesPendingGroupWithoutThreadMirror(t *testing.
 	_ = adapter.handleMessageEvent(context.Background(), event, recorder.dispatch)
 
 	recorder.requireCount(t, 1, 80*time.Millisecond)
-	recorder.requireSessionEquals(t, "feishu:tenant_1:group:oc_1")
+	recorder.requireSessionEquals(t, "feishu:cli_a:tenant_1:group:oc_1")
 }
 
 func TestHandleMessageEventDispatchesRepeatedPlainGroupMessagesWithoutThreadMirror(t *testing.T) {

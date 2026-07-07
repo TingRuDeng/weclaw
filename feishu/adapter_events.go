@@ -52,7 +52,7 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
-	log.Printf("[feishu] message event parsed: user=%s message=%s attachments=%d", msg.UserID, msg.MessageID, len(msg.Attachments))
+	log.Printf("[feishu] message event parsed: account=%s user=%s chat=%s message=%s attachments=%d", msg.AccountID, msg.UserID, msg.ChatID, msg.MessageID, len(msg.Attachments))
 	dispatch(ctx, msg, a.newScopedReplier(msg))
 }
 

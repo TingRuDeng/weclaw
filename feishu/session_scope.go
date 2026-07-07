@@ -22,6 +22,7 @@ type feishuMentionCheck struct {
 
 // FeishuSessionScope 描述飞书消息进入 agent 前需要固定的会话维度。
 type FeishuSessionScope struct {
+	AccountID    string
 	TenantID     string
 	ChatID       string
 	ThreadID     string
@@ -83,6 +84,9 @@ func ResolveThreadKey(scope FeishuSessionScope) string {
 // BuildFeishuSessionKey 根据飞书会话范围生成稳定 session key。
 func BuildFeishuSessionKey(scope FeishuSessionScope) string {
 	parts := []string{feishuScopePrefix}
+	if accountID := strings.TrimSpace(scope.AccountID); accountID != "" {
+		parts = append(parts, accountID)
+	}
 	if tenant := strings.TrimSpace(scope.TenantID); tenant != "" {
 		parts = append(parts, tenant)
 	}

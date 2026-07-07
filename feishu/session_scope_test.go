@@ -81,3 +81,18 @@ func TestBuildFeishuSessionKeyUsesGroupChatKey(t *testing.T) {
 		t.Fatalf("group session key=%q, want chat key", got)
 	}
 }
+
+func TestBuildFeishuSessionKeyIncludesAccountWhenPresent(t *testing.T) {
+	first := FeishuSessionScope{AccountID: "cli_a", TenantID: "tenant_1", ChatID: "oc_group", ChatType: "group"}
+	second := FeishuSessionScope{AccountID: "cli_b", TenantID: "tenant_1", ChatID: "oc_group", ChatType: "group"}
+
+	firstKey := BuildFeishuSessionKey(first)
+	secondKey := BuildFeishuSessionKey(second)
+
+	if firstKey == secondKey {
+		t.Fatalf("session keys should differ across bots: %q", firstKey)
+	}
+	if firstKey != "feishu:cli_a:tenant_1:group:oc_group" {
+		t.Fatalf("session key=%q, want account-scoped key", firstKey)
+	}
+}

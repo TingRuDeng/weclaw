@@ -45,7 +45,7 @@ func TestToIncomingFromMessageParsesText(t *testing.T) {
 	if incoming.Text != "hello  world\nnext" {
 		t.Fatalf("text=%q, want cleaned text", incoming.Text)
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:dm:oc_1:ou_user" {
+	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" {
 		t.Fatalf("metadata=%#v, want scoped DM session", incoming.Metadata)
 	}
 	if incoming.Metadata["original_user_id"] != "ou_user" {
@@ -63,7 +63,7 @@ func TestToIncomingFromMessageDMNewThreadUsesDMSession(t *testing.T) {
 	if !ok {
 		t.Fatal("DM new-thread command should be dispatchable")
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:dm:oc_1:ou_user" {
+	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" {
 		t.Fatalf("metadata=%#v, want plain DM session", incoming.Metadata)
 	}
 }
@@ -80,7 +80,7 @@ func TestToIncomingFromMessageDMThreadReplyUsesDMSession(t *testing.T) {
 	if !ok {
 		t.Fatal("DM thread reply should be dispatchable")
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:dm:oc_1:ou_user" {
+	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" {
 		t.Fatalf("metadata=%#v, want plain DM session", incoming.Metadata)
 	}
 }
@@ -116,6 +116,26 @@ func TestToIncomingFromMessageLogsUnmentionedGroupReason(t *testing.T) {
 	}
 }
 
+func TestDispatchIncomingMessageLogsAccount(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	msg := platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		AccountID: "cli_a",
+		UserID:    "ou_user",
+		ChatID:    "oc_1",
+		MessageID: "om_1",
+		Text:      "hello",
+	}
+
+	logOutput := captureLogOutput(t, func() {
+		adapter.dispatchIncomingMessage(context.Background(), msg, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {})
+	})
+
+	if !strings.Contains(logOutput, "account=cli_a") {
+		t.Fatalf("log=%q, want account id", logOutput)
+	}
+}
+
 func TestToIncomingFromMessageDispatchesMentionedGroup(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := newMessageEvent("group", "text", `{"text":"<at user_id=\"cli_a\">bot</at> hello"}`)
@@ -130,11 +150,35 @@ func TestToIncomingFromMessageDispatchesMentionedGroup(t *testing.T) {
 	if incoming.UserID != "ou_user" {
 		t.Fatalf("incoming.UserID=%q, want sender open_id for access control", incoming.UserID)
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:group:oc_1" {
+	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:group:oc_1" {
 		t.Fatalf("metadata=%#v, want scoped group chat session", incoming.Metadata)
 	}
 	if incoming.Metadata["feishu_is_mentioned"] != "true" {
 		t.Fatalf("metadata=%#v, want feishu_is_mentioned=true", incoming.Metadata)
+	}
+}
+
+func TestToIncomingFromMessageScopesSessionByAccount(t *testing.T) {
+	first := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	second := NewAdapter(Credentials{AppID: "cli_b", AppSecret: "secret"})
+	firstEvent := newMessageEvent("group", "text", `{"text":"<at user_id=\"cli_a\">bot</at> hello"}`)
+	firstEvent.Event.Message.Mentions = []*larkim.MentionEvent{newMention("cli_a")}
+	secondEvent := newMessageEvent("group", "text", `{"text":"<at user_id=\"cli_b\">bot</at> hello"}`)
+	secondEvent.Event.Message.Mentions = []*larkim.MentionEvent{newMention("cli_b")}
+
+	firstIncoming, firstOK := first.toIncomingFromMessage(context.Background(), firstEvent)
+	secondIncoming, secondOK := second.toIncomingFromMessage(context.Background(), secondEvent)
+
+	if !firstOK || !secondOK {
+		t.Fatal("mentioned group messages should be dispatchable")
+	}
+	firstKey := firstIncoming.Metadata["feishu_session_key"]
+	secondKey := secondIncoming.Metadata["feishu_session_key"]
+	if firstKey == secondKey {
+		t.Fatalf("session keys should differ across bot accounts: %q", firstKey)
+	}
+	if firstKey != "feishu:cli_a:tenant_1:group:oc_1" {
+		t.Fatalf("session key=%q, want account-scoped key", firstKey)
 	}
 }
 
@@ -156,7 +200,7 @@ func TestToIncomingFromMessageGroupIgnoresRootForSession(t *testing.T) {
 	}
 	firstKey := firstIncoming.Metadata["feishu_session_key"]
 	secondKey := secondIncoming.Metadata["feishu_session_key"]
-	if firstKey != "feishu:tenant_1:group:oc_1" || secondKey != firstKey {
+	if firstKey != "feishu:cli_a:tenant_1:group:oc_1" || secondKey != firstKey {
 		t.Fatalf("session keys=(%q,%q), want same group chat session", firstKey, secondKey)
 	}
 }
@@ -218,7 +262,7 @@ func TestToIncomingFromMessageDispatchesGroupWhenMentionNotRequired(t *testing.T
 	if !ok {
 		t.Fatal("group message should dispatch when require_mention_in_group=false")
 	}
-	if incoming.Metadata["feishu_session_key"] != "feishu:tenant_1:group:oc_1" {
+	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:group:oc_1" {
 		t.Fatalf("metadata=%#v, want scoped group chat session", incoming.Metadata)
 	}
 }

@@ -104,6 +104,10 @@ func applySoftConfig(handler *messaging.Handler, registry *platform.Registry, cf
 			continue
 		}
 		for _, bot := range platformConfig.Bots {
+			if !registry.HasAccount(platformName, bot.AppID) {
+				log.Printf("[config] %s account %q is configured but not running; restart weclaw to activate new platform account", platformName, bot.AppID)
+				continue
+			}
 			registry.UpdateAccessForAccount(platformName, bot.AppID, bot.AllowedUsers)
 		}
 	}

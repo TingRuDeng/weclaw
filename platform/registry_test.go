@@ -123,6 +123,22 @@ func TestRegistryUpdatesAccessForSpecificAccount(t *testing.T) {
 	}
 }
 
+func TestRegistryHasAccount(t *testing.T) {
+	first := &recordingPlatform{name: PlatformFeishu, accountID: "cli_a"}
+	second := &recordingPlatform{name: PlatformFeishu, accountID: "cli_b"}
+	registry := NewRegistry([]RegistryEntry{
+		{Platform: first, Access: NewAccessControl([]string{"ou_a"})},
+		{Platform: second, Access: NewAccessControl([]string{"ou_b"})},
+	})
+
+	if !registry.HasAccount(PlatformFeishu, "cli_b") {
+		t.Fatal("registry should report existing feishu account")
+	}
+	if registry.HasAccount(PlatformFeishu, "cli_missing") {
+		t.Fatal("registry should not report missing feishu account")
+	}
+}
+
 type recordingPlatform struct {
 	name      PlatformName
 	accountID string

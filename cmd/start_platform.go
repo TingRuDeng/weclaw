@@ -62,6 +62,7 @@ func buildFeishuRegistryEntry(bot config.FeishuBotConfig) (platform.RegistryEntr
 	if strings.TrimSpace(creds.AppID) != strings.TrimSpace(bot.AppID) {
 		return platform.RegistryEntry{}, fmt.Errorf("feishu bot %q app_id mismatch: config %q, credentials %q", bot.Name, bot.AppID, creds.AppID)
 	}
+	log.Printf("[platform] registering feishu bot name=%s account=%s", bot.Name, bot.AppID)
 	adapter := feishuplatform.NewAdapter(creds)
 	adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
 		RequireMentionInGroup: bot.EffectiveRequireMentionInGroup(),
