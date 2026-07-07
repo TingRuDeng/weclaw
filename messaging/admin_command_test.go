@@ -120,6 +120,45 @@ func TestServiceAdminCommandAllowsRestartForceOnly(t *testing.T) {
 	}
 }
 
+func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
+	calls := 0
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"ou_admin"})
+	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
+		calls++
+		return "should not run", nil
+	})
+	task, _, started := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{
+		owner:     "ou_admin",
+		agentName: "codex",
+		message:   "运行中的任务",
+	})
+	if !started {
+		t.Fatal("active task should start")
+	}
+	defer h.finishActiveTask("task-1", task)
+	reply := newAdminCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Text:     "/restart",
+	}, reply)
+
+	if calls != 0 {
+		t.Fatalf("admin executor calls=%d, want 0 while active task blocks restart", calls)
+	}
+	texts := reply.waitTexts(t, 1)
+	if len(texts) != 1 ||
+		!strings.Contains(texts[0], "当前还有 1 个运行中的任务") ||
+		!strings.Contains(texts[0], "/restart --force") {
+		t.Fatalf("reply texts=%#v, want active task restart notice", texts)
+	}
+	if strings.Contains(texts[0], "开始执行管理命令") {
+		t.Fatalf("reply texts=%#v, should not send start notice for blocked restart", texts)
+	}
+}
+
 func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetAdminUsers([]string{"ou_admin"})

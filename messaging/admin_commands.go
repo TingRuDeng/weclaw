@@ -46,6 +46,10 @@ func (h *Handler) handleServiceAdminCommand(ctx context.Context, userID string, 
 		sendPlatformText(ctx, reply, userID, err.Error())
 		return
 	}
+	if notice, blocked := h.restartBlockedByActiveTasks(command, args); blocked {
+		sendPlatformText(ctx, reply, userID, notice)
+		return
+	}
 	executor := h.currentServiceAdminCommandExecutor()
 	if executor == nil {
 		sendPlatformText(ctx, reply, userID, "管理命令执行器未配置，暂未执行。")
@@ -103,6 +107,27 @@ func parseServiceAdminCommand(trimmed string) (string, []string, error) {
 		return "", nil, fmt.Errorf("未知管理命令：/%s", command)
 	}
 	return command, args, nil
+}
+
+func (h *Handler) restartBlockedByActiveTasks(command string, args []string) (string, bool) {
+	if command != "restart" || hasRestartForceArg(args) {
+		return "", false
+	}
+	count := h.activeTaskCount()
+	if count == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("当前还有 %d 个运行中的任务，已取消重启。\n\n请等待任务完成或发送 /stop 后重试；如果确认要中断任务并重启，请发送 /restart --force。", count), true
+}
+
+func hasRestartForceArg(args []string) bool {
+	return len(args) == 1 && args[0] == "--force"
+}
+
+func (h *Handler) activeTaskCount() int {
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	return len(h.activeTasks)
 }
 
 func formatServiceAdminCommandReply(command string, output string, err error) string {
