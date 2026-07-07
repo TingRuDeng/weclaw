@@ -7,12 +7,15 @@ ai_summary:
   source_of_truth:
     - "cmd/start.go"
     - "messaging/handler.go"
+    - "messaging/progress_command.go"
     - "messaging/codex_session_status.go"
     - "messaging/codex_browser.go"
     - "agent/agent.go"
     - "platform/platform.go"
     - "platform/message.go"
     - "config/config.go"
+    - "api/server.go"
+    - "web/view.go"
     - "scripts/release.sh"
   verify_with:
     - "python3 scripts/validate_docs.py . --profile generic"
@@ -60,14 +63,18 @@ ai_summary:
 - 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/cli_agent.go`、`messaging/codex_sessions.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`。
 - 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
 - 修改微信体验：先读 `wechat/`、`ilink/`、`messaging/progress.go`。
-- 修改配置：先读 `config/config.go`、`config/detect.go` 和相关测试。
+- 修改配置：先读 `config/config.go`、`config/detect.go`、`web/view.go` 和相关测试。
+- 修改主动发送 API：先读 `api/server.go`、`platform/registry.go` 和 `api/server_test.go`。
 
 ## High-Risk Areas
 
 - 飞书真实发送者身份和 session routing 必须分离；`feishu_session_key` 只用于会话路由。
 - 飞书会话按聊天窗口聚合：DM 使用 `feishu:<tenant>:dm:<chatID>:<senderOpenID>`，群聊使用 `feishu:<tenant>:group:<chatID>`；回复串 / 话题不再生成独立 route。
 - 飞书多项目入口通过 `platforms.feishu.bots[]` 配置多个机器人；每个 bot 的凭证按 `weclaw feishu login --name <bot>` 保存，`app_secret` 不得写入 `config.json`。
+- 飞书显式启用时必须配置非空 `bots[]`；缺失 bot 应在 `config.Validate` 阶段 fail-fast，不应等到平台启动阶段才失败。
 - 飞书 bot 的 `allowed_users`、`default_agent` 和 `progress` 按 `app_id` 隔离；新增、删除 bot 或修改 `app_id` 属于平台拓扑变化，需要重启。
+- `/progress` 从飞书入口触发时必须按当前 `account_id` 写入账号级配置，广播、Codex 会话切换和 Codex App 外部任务 watcher 也必须读取账号级进度配置。
+- `/api/send` 在同一平台存在多个可主动发送账号时必须要求 `account_id`，不能静默选择第一个账号。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。
@@ -75,6 +82,7 @@ ai_summary:
 - 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。
 - 微信同一条入站消息触发多次回复时，`wechat.Replier` 必须为后续 `SendText` 生成新的 `client_id`，避免微信端把结果消息按重复消息去重。
 - Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。
+- Web 配置保存必须保留 Agent 的 Codex 权限字段：`permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode`。
 - `api_addr` 监听非 loopback 地址时必须配置 `api_token`。
 - 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。
 

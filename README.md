@@ -248,9 +248,16 @@ curl -X POST http://127.0.0.1:18011/api/send \
 curl -X POST http://127.0.0.1:18011/api/send \
   -H "Content-Type: application/json" \
   -d '{"to": "user_id@im.wechat", "text": "See this", "media_url": "https://example.com/photo.png"}'
+
+# Multi-account platforms must specify the outbound account; Feishu uses the bot app_id
+curl -X POST http://127.0.0.1:18011/api/send \
+  -H "Content-Type: application/json" \
+  -d '{"platform": "feishu", "account_id": "cli_xxx", "to": "ou_xxx", "text": "Hello"}'
 ```
 
 Supported media types: images (png, jpg, gif, webp), videos (mp4, mov), files (pdf, doc, zip, etc.).
+
+When a platform has multiple outbound accounts, `/api/send` requires `account_id`; otherwise it returns 400 to avoid sending through the wrong bot or account.
 
 Set `WECLAW_API_ADDR` to change the listen address (e.g. `0.0.0.0:18011`).
 
@@ -297,7 +304,7 @@ Environment variables:
 
 ### 多平台配置
 
-`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用并配置 `bots[]`；每个 bot 的 `allowed_users` 为空时默认拒绝所有入站消息。
+`platforms` defaults to the legacy behavior: WeChat only. Feishu must be explicitly enabled with a non-empty `bots[]`; `enabled=true` without bots fails config validation. Each bot has its own `allowed_users`; an empty allowlist denies all inbound messages.
 
 ```json
 {
@@ -325,9 +332,9 @@ Environment variables:
 }
 ```
 
-安全提示：白名单用户可以驱动本机 shell agent 读取文件、运行命令或修改代码。生产使用时必须显式配置 `allowed_users`。
+Security note: allowlisted users can drive local shell agents to read files, run commands, or modify code. Configure `allowed_users` explicitly before production use.
 
-微信 `message_aggregation_ms` 默认 800，设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 支持软配置热重载；新增、删除 bot 或修改 `app_id` 仍需重启生效。
+WeChat `message_aggregation_ms` defaults to 800 and can be disabled with `0`. Feishu `bots[].default_agent`, `bots[].progress`, and `bots[].allowed_users` are isolated by `app_id` and support soft hot reload. Adding/removing a bot or changing `app_id` still requires restart.
 
 ### 微信进度反馈
 
@@ -381,6 +388,8 @@ Environment variables:
   }
 }
 ```
+
+When `/progress <mode>` is sent from Feishu, it only changes the current bot account's progress mode; other Feishu bots and WeChat settings are not affected.
 
 每个 Agent 可以覆盖全局进度配置：
 
@@ -526,9 +535,9 @@ weclaw web --no-open       # don't auto-open the browser
 weclaw web --addr 127.0.0.1:39282 --token <token>
 ```
 
-The panel lets you edit security settings (`allowed_workspace_roots`, `rate_limit_per_minute`, audit), agents, write Feishu credentials, validate them, and complete WeChat QR login in-page.
+The panel lets you edit security settings (`allowed_workspace_roots`, `rate_limit_per_minute`, audit), agents, Codex permission fields, write Feishu credentials, validate them, and complete WeChat QR login in-page.
 
-**Security:** the panel reads/writes files containing shell-capable agent config and secrets, so by default it binds loopback only, requires a token (auto-generated for loopback; mandatory when binding a non-loopback address), enforces same-origin checks, and **never echoes secrets** (API token, agent api_key/env values, Feishu app_secret are masked; submitting the mask keeps the stored value). Config is written atomically (`0600`). Soft config (agents/progress/allowed_users/admin_users/workspace roots/rate limit) is hot-reloaded by a running `weclaw start`; platform enable/credential changes (incl. newly scanned WeChat accounts) require `weclaw restart`.
+**Security:** the panel reads/writes files containing shell-capable agent config and secrets, so by default it binds loopback only, requires a token (auto-generated for loopback; mandatory when binding a non-loopback address), enforces same-origin checks, and **never echoes secrets** (API token, agent api_key/env values, Feishu app_secret are masked; submitting the mask keeps the stored value). Codex `permission_level`, `approval_policy`, `approval_reviewer`, and `sandbox_mode` are preserved when saving config. Config is written atomically (`0600`). Soft config (agents/progress/allowed_users/admin_users/workspace roots/rate limit) is hot-reloaded by a running `weclaw start`; platform enable/credential changes (incl. newly scanned WeChat accounts) require `weclaw restart`.
 
 ## Background Mode
 

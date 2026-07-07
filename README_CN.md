@@ -229,9 +229,16 @@ curl -X POST http://127.0.0.1:18011/api/send \
 curl -X POST http://127.0.0.1:18011/api/send \
   -H "Content-Type: application/json" \
   -d '{"to": "user_id@im.wechat", "text": "看看这个", "media_url": "https://example.com/photo.png"}'
+
+# 多账号平台需要指定账号；飞书账号使用 bot 的 app_id
+curl -X POST http://127.0.0.1:18011/api/send \
+  -H "Content-Type: application/json" \
+  -d '{"platform": "feishu", "account_id": "cli_xxx", "to": "ou_xxx", "text": "你好"}'
 ```
 
 支持的媒体类型：图片（png、jpg、gif、webp）、视频（mp4、mov）、文件（pdf、doc、zip 等）。
+
+当同一平台配置了多个可主动发送账号时，HTTP API 必须传 `account_id`，否则会返回 400，避免消息发到错误的机器人或账号。
 
 设置 `WECLAW_API_ADDR` 环境变量可更改监听地址（如 `0.0.0.0:18011`）。
 
@@ -270,7 +277,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 ### 多平台配置
 
-`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用并配置 `bots[]`；每个 bot 的 `allowed_users` 为空时默认拒绝所有入站消息。
+`platforms` 缺省时保持旧行为：只启用微信。飞书需要显式启用并配置非空 `bots[]`；`enabled=true` 但没有 bot 会在配置校验阶段失败。每个 bot 的 `allowed_users` 为空时默认拒绝所有入站消息。
 
 ```json
 {
@@ -300,7 +307,7 @@ curl -X POST http://127.0.0.1:18011/api/send \
 
 安全提示：白名单用户可以驱动本机 shell agent 读取文件、运行命令或修改代码。生产使用时必须显式配置 `allowed_users`，不要把 bot 暴露给不可信用户。
 
-微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 支持软配置热重载；新增、删除 bot 或修改 `app_id` 仍需重启生效。
+微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 按 `app_id` 隔离并支持软配置热重载；新增、删除 bot 或修改 `app_id` 仍需重启生效。
 
 环境变量：
 
@@ -363,6 +370,8 @@ curl -X POST http://127.0.0.1:18011/api/send \
   }
 }
 ```
+
+在飞书里发送 `/progress <mode>` 时，只会修改当前机器人账号的进度模式；其他飞书机器人和微信配置不受影响。
 
 每个 Agent 可以覆盖全局进度配置：
 
@@ -508,9 +517,9 @@ weclaw web --no-open       # 不自动打开浏览器
 weclaw web --addr 127.0.0.1:39282 --token <token>
 ```
 
-面板可编辑安全配置、agent、写入飞书凭证并校验、面板内完成微信扫码登录、查看运行状态。软配置（agent/进度/白名单/管理员白名单/工作目录/限流）由运行中的 `weclaw start` 热重载即时生效；平台启用/凭证变更（含新扫码的微信账号）需 `weclaw restart`。
+面板可编辑安全配置、agent、Codex 权限字段、写入飞书凭证并校验、面板内完成微信扫码登录、查看运行状态。软配置（agent/进度/白名单/管理员白名单/工作目录/限流）由运行中的 `weclaw start` 热重载即时生效；平台启用/凭证变更（含新扫码的微信账号）需 `weclaw restart`。
 
-**安全**：默认仅绑回环；非回环地址必须显式 token；同源防护；token 校验失败按来源限速；**密钥只写不回显**（api_token / agent api_key+env / 飞书 app_secret 均掩码，回写掩码即保持原值）；`config.json` 原子写（`0600`）；微信登录二维码本机渲染、不外发第三方。
+**安全**：默认仅绑回环；非回环地址必须显式 token；同源防护；token 校验失败按来源限速；**密钥只写不回显**（api_token / agent api_key+env / 飞书 app_secret 均掩码，回写掩码即保持原值）；Codex `permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode` 会随配置保存保留；`config.json` 原子写（`0600`）；微信登录二维码本机渲染、不外发第三方。
 
 ## 后台运行
 
