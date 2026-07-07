@@ -44,7 +44,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	case isRemovedSwitchCommand(trimmed):
 		sendText("命令已移除：WeClaw 不再支持从微信端切换 Codex 账号。")
 	case isProgressCommand(trimmed):
-		sendText(h.handleProgressCommandForPlatform(trimmed, msg.Platform))
+		sendText(h.handleProgressCommandForAccount(trimmed, msg.Platform, msg.AccountID))
 	case isClaudeSessionCommand(trimmed):
 		sendText(h.handleClaudeSessionCommand(ctx, msg.UserID, trimmed))
 	case isCodexSessionCommand(trimmed):
@@ -56,6 +56,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 			RouteUserID: routeUserID,
 			Trimmed:     trimmed,
 			Platform:    msg.Platform,
+			AccountID:   msg.AccountID,
 			Reply:       req.Reply,
 		}))
 	case trimmed == "/run":

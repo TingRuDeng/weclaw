@@ -107,6 +107,33 @@ func TestHandleSendUsesRegistryTarget(t *testing.T) {
 	}
 }
 
+func TestHandleSendRequiresAccountIDWhenPlatformHasMultipleAccounts(t *testing.T) {
+	first := &recordingReplier{}
+	second := &recordingReplier{}
+	registry := platform.NewRegistry([]platform.RegistryEntry{
+		{
+			Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: first},
+			Access:   platform.NewAccessControl([]string{"ignored"}),
+		},
+		{
+			Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_b", reply: second},
+			Access:   platform.NewAccessControl([]string{"ignored"}),
+		},
+	})
+	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","to":"ou_user","text":"hi"}`))
+	rec := httptest.NewRecorder()
+	server.handleSend(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body=%q, want 400", rec.Code, rec.Body.String())
+	}
+	if len(first.texts) != 0 || len(second.texts) != 0 {
+		t.Fatalf("ambiguous send should not use any bot, first=%#v second=%#v", first.texts, second.texts)
+	}
+}
+
 func TestHandleSendReturnsUnavailableForMissingRegistryTarget(t *testing.T) {
 	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(platform.NewRegistry(nil)))
 

@@ -194,7 +194,12 @@ func (s *Server) replierFor(w http.ResponseWriter, req SendRequest) (platform.Re
 		if platformName == "" {
 			platformName = platform.PlatformWeChat
 		}
-		reply, ok := s.registry.ReplierFor(platformName, strings.TrimSpace(req.AccountID), req.To)
+		accountID := strings.TrimSpace(req.AccountID)
+		if accountID == "" && s.registry.OutboundAccountCount(platformName) > 1 {
+			http.Error(w, `"account_id" is required when target platform has multiple accounts`, http.StatusBadRequest)
+			return nil, false
+		}
+		reply, ok := s.registry.ReplierFor(platformName, accountID, req.To)
 		if !ok {
 			http.Error(w, "target platform or account not configured", http.StatusServiceUnavailable)
 			return nil, false

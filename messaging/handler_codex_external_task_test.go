@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
 func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
@@ -130,6 +133,62 @@ func TestCodexExternalAppTaskSendsFinalReply(t *testing.T) {
 	close(watchDone)
 
 	waitForText(t, calls, "本地任务完成")
+}
+
+func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	offCfg := config.DefaultProgressConfig()
+	offCfg.Mode = progressModeOff
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): offCfg,
+	})
+	watchDone := make(chan struct{})
+	defer func() {
+		select {
+		case <-watchDone:
+		default:
+			close(watchDone)
+		}
+	}()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{
+			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		},
+		threadState: agent.CodexThreadState{
+			ThreadID:     "thread-active",
+			Active:       true,
+			ActiveTurnID: "turn-active",
+			Preview:      "本地 App 发起的任务",
+		},
+		watchReply: "本地任务完成",
+		watchDone:  watchDone,
+	}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+
+	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		AccountID: "cli_a",
+		UserID:    "ou_user",
+		Text:      "/cx cd weclaw",
+	}, reply)
+
+	close(watchDone)
+	waitUntil(t, func() bool {
+		_, active := h.activeTask(buildCodexConversationID("ou_user", "codex", workspace))
+		return !active
+	})
+	if !containsText(reply.Texts, "本地任务完成") {
+		t.Fatalf("texts=%#v, want final text reply", reply.Texts)
+	}
+	if reply.Stream.Completed != "" {
+		t.Fatalf("completed=%q, want no stream completion when account progress is off", reply.Stream.Completed)
+	}
 }
 
 func TestCodexSwitchShowsAppThreadStateReadError(t *testing.T) {

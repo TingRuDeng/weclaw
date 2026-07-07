@@ -42,7 +42,16 @@ func TestMergeViewPreservesMaskedSecrets(t *testing.T) {
 	current := &config.Config{
 		APIToken: "keep-token",
 		Agents: map[string]config.AgentConfig{
-			"claude": {Type: "cli", Command: "claude", APIKey: "keep-key", Env: map[string]string{"K": "keep-val"}},
+			"claude": {
+				Type:             "cli",
+				Command:          "claude",
+				APIKey:           "keep-key",
+				Env:              map[string]string{"K": "keep-val"},
+				PermissionLevel:  "auto_review",
+				ApprovalPolicy:   "on-request",
+				ApprovalReviewer: "auto_review",
+				SandboxMode:      "workspace-write",
+			},
 		},
 	}
 	view := redactConfig(current)
@@ -58,6 +67,10 @@ func TestMergeViewPreservesMaskedSecrets(t *testing.T) {
 	ag := merged.Agents["claude"]
 	if ag.APIKey != "keep-key" || ag.Env["K"] != "keep-val" {
 		t.Fatalf("masked secrets must be preserved: %+v", ag)
+	}
+	if ag.PermissionLevel != "auto_review" || ag.ApprovalPolicy != "on-request" ||
+		ag.ApprovalReviewer != "auto_review" || ag.SandboxMode != "workspace-write" {
+		t.Fatalf("codex permission fields must be preserved: %+v", ag)
 	}
 	if ag.Command != "claude-2" {
 		t.Fatalf("non-secret change should apply, got %q", ag.Command)

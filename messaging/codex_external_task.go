@@ -18,6 +18,7 @@ type externalCodexTaskOptions struct {
 	conversationID string
 	threadID       string
 	platform       platform.PlatformName
+	accountID      string
 	reply          platform.Replier
 }
 
@@ -91,7 +92,7 @@ type externalCodexTaskRuntime struct {
 
 func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) {
 	defer h.finishExternalCodexTask(runtime)
-	progressCfg := h.resolveProgressConfigForPlatform(runtime.opts.platform, runtime.opts.agentName)
+	progressCfg := h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
 	taskText := firstNonBlank(runtime.state.Preview, "Codex App 本地任务")
 	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.ctx, runtime.opts.reply, "", taskText, progressCfg)
 	recordProgress := func(delta string) {

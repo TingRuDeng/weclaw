@@ -19,6 +19,7 @@ func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platf
 		RouteUserID: routeUserID,
 		Trimmed:     trimmed,
 		Platform:    msg.Platform,
+		AccountID:   msg.AccountID,
 		Reply:       reply,
 	})
 	if h.sendFeishuCodexNavigationChoices(ctx, msg, routeUserID, reply, trimmed, result) {

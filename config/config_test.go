@@ -261,6 +261,18 @@ func TestValidateFeishuBotsRejectsLegacySingleBotConfig(t *testing.T) {
 	}
 }
 
+func TestValidateFeishuRejectsEnabledWithoutBots(t *testing.T) {
+	enabled := true
+	cfg := DefaultConfig()
+	cfg.Platforms["feishu"] = PlatformConfig{Enabled: &enabled}
+
+	err := cfg.Validate()
+
+	if err == nil || !strings.Contains(err.Error(), "platforms.feishu.bots is required") {
+		t.Fatalf("Validate error=%v, want missing bots rejection", err)
+	}
+}
+
 func TestPlatformConfigDefaultsFeishuSessionRules(t *testing.T) {
 	cfg := PlatformConfig{}
 

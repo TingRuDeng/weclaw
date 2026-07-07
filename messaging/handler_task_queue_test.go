@@ -102,7 +102,15 @@ func TestBroadcastToAgentsUsesTaskTimeout(t *testing.T) {
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, []string{"slow"}, "hello")
+		h.broadcastToAgents(broadcastAgentsRequest{
+			ctx:          ctx,
+			platformName: platform.PlatformWeChat,
+			userID:       "user-1",
+			routeUserID:  "user-1",
+			replyWriter:  reply,
+			names:        []string{"slow"},
+			message:      "hello",
+		})
 	})
 	waitForText(t, calls, "本轮执行超时已被中止")
 }
@@ -130,7 +138,15 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 	done := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-2")
-		h.broadcastToAgents(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, []string{"codex", "claude"}, "第二条")
+		h.broadcastToAgents(broadcastAgentsRequest{
+			ctx:          ctx,
+			platformName: platform.PlatformWeChat,
+			userID:       "user-1",
+			routeUserID:  "user-1",
+			replyWriter:  reply,
+			names:        []string{"codex", "claude"},
+			message:      "第二条",
+		})
 		close(done)
 	}()
 

@@ -82,6 +82,37 @@ func TestProgressCommandChangesPlatformOverride(t *testing.T) {
 	}
 }
 
+func TestProgressCommandChangesOnlyCurrentFeishuAccount(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): {Mode: progressModeSummary},
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_b"): {Mode: progressModeStream},
+	})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.handleBuiltInPlatformCommand(context.Background(), platformCommandRequest{
+		Message: platform.IncomingMessage{
+			Platform:  platform.PlatformFeishu,
+			AccountID: "cli_a",
+			UserID:    "ou_user",
+			Text:      "/progress typing",
+		},
+		RouteUserID: "ou_user",
+		Reply:       reply,
+		Trimmed:     "/progress typing",
+	})
+
+	if !containsText(reply.Texts, "已切换进度模式：typing") {
+		t.Fatalf("reply=%#v, want switched typing mode", reply.Texts)
+	}
+	if got := h.resolveProgressConfigForAccount(platform.PlatformFeishu, "cli_a", "codex").Mode; got != progressModeTyping {
+		t.Fatalf("cli_a progress mode=%q, want typing", got)
+	}
+	if got := h.resolveProgressConfigForAccount(platform.PlatformFeishu, "cli_b", "codex").Mode; got != progressModeStream {
+		t.Fatalf("cli_b progress mode=%q, want unchanged stream", got)
+	}
+}
+
 func TestHandleProgressCommandRejectsUnknownMode(t *testing.T) {
 	h := NewHandler(nil, nil)
 

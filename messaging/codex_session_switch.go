@@ -13,6 +13,7 @@ import (
 type codexSwitchOptions struct {
 	actorUserID string
 	platform    platform.PlatformName
+	accountID   string
 	reply       platform.Replier
 }
 
@@ -70,6 +71,7 @@ func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, user
 		conversationID: conversationID,
 		threadID:       threadID,
 		platform:       opts.platform,
+		accountID:      opts.accountID,
 		reply:          opts.reply,
 	})
 	if active {

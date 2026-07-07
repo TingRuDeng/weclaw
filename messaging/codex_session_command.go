@@ -15,6 +15,7 @@ type codexSessionCommandRequest struct {
 	RouteUserID string
 	Trimmed     string
 	Platform    platform.PlatformName
+	AccountID   string
 	Reply       platform.Replier
 }
 
@@ -66,6 +67,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 			Target:          fields[1],
 			OwnerBindingKey: ownerBindingKey,
 			Platform:        req.Platform,
+			AccountID:       req.AccountID,
 			Reply:           req.Reply,
 		})
 	}
@@ -89,6 +91,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 			Target:          fields[2],
 			Agent:           ag,
 			Platform:        req.Platform,
+			AccountID:       req.AccountID,
 			Reply:           req.Reply,
 		})
 	case "pwd":
@@ -142,6 +145,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		return h.handleCodexSwitchForRouteWithOptions(ctx, routeUserID, agentName, workspaceRoot, ag, fields[2], ownerBindingKey, codexSwitchOptions{
 			actorUserID: actorUserID,
 			platform:    req.Platform,
+			accountID:   req.AccountID,
 			reply:       req.Reply,
 		})
 	default:
@@ -159,6 +163,7 @@ type codexShortSelectionRequest struct {
 	Target          string
 	OwnerBindingKey string
 	Platform        platform.PlatformName
+	AccountID       string
 	Reply           platform.Replier
 }
 
@@ -174,6 +179,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 			Target:          req.Target,
 			Agent:           req.Agent,
 			Platform:        req.Platform,
+			AccountID:       req.AccountID,
 			Reply:           req.Reply,
 		})
 	}
@@ -181,6 +187,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		return h.handleCodexSwitchForRouteWithOptions(ctx, req.UserID, req.AgentName, req.WorkspaceRoot, req.Agent, req.Target, req.OwnerBindingKey, codexSwitchOptions{
 			actorUserID: req.ActorUserID,
 			platform:    req.Platform,
+			accountID:   req.AccountID,
 			reply:       req.Reply,
 		})
 	}
@@ -194,6 +201,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		Target:          req.Target,
 		Agent:           req.Agent,
 		Platform:        req.Platform,
+		AccountID:       req.AccountID,
 		Reply:           req.Reply,
 	})
 }

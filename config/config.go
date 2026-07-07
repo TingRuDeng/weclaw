@@ -358,6 +358,9 @@ func validateFeishuPlatformConfig(platformCfg PlatformConfig) error {
 	if hasLegacyFeishuConfig(platformCfg) {
 		return fmt.Errorf("platforms.feishu legacy single-bot fields are not supported; use platforms.feishu.bots")
 	}
+	if platformCfg.Enabled != nil && *platformCfg.Enabled && len(platformCfg.Bots) == 0 {
+		return fmt.Errorf("platforms.feishu.bots is required when feishu is enabled")
+	}
 	seenNames := make(map[string]struct{}, len(platformCfg.Bots))
 	seenAppIDs := make(map[string]struct{}, len(platformCfg.Bots))
 	for _, bot := range platformCfg.Bots {

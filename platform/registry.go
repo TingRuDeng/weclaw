@@ -93,6 +93,23 @@ func (r *Registry) ReplierFor(platformName PlatformName, accountID string, chatI
 	return nil, false
 }
 
+// OutboundAccountCount 返回指定平台可主动发送的账号数量，用于拒绝多账号歧义发送。
+func (r *Registry) OutboundAccountCount(platformName PlatformName) int {
+	if r == nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range r.entries {
+		if platformName != "" && entry.Platform.Name() != platformName {
+			continue
+		}
+		if _, ok := entry.Platform.(OutboundReplierFactory); ok {
+			count++
+		}
+	}
+	return count
+}
+
 // UpdateAccess 热更新指定平台的访问控制白名单，不重启平台连接。
 func (r *Registry) UpdateAccess(platformName PlatformName, allowed []string) {
 	if r == nil {

@@ -8,14 +8,18 @@ import (
 )
 
 func (h *Handler) handleProgressCommand(trimmed string) string {
-	return h.handleProgressCommandForPlatform(trimmed, "")
+	return h.handleProgressCommandForAccount(trimmed, "", "")
 }
 
 func (h *Handler) handleProgressCommandForPlatform(trimmed string, platformName platform.PlatformName) string {
+	return h.handleProgressCommandForAccount(trimmed, platformName, "")
+}
+
+func (h *Handler) handleProgressCommandForAccount(trimmed string, platformName platform.PlatformName, accountID string) string {
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {
 		return wechatCommandText(
-			"当前进度模式："+h.resolveProgressConfigForProgressCommand(platformName).Mode,
+			"当前进度模式："+h.resolveProgressConfigForProgressCommand(platformName, accountID).Mode,
 			"可用模式：off、typing、summary、verbose、stream、debug",
 		)
 	}
@@ -31,28 +35,32 @@ func (h *Handler) handleProgressCommandForPlatform(trimmed string, platformName 
 		)
 	}
 
-	cfg := h.resolveProgressConfigForProgressCommand(platformName)
+	cfg := h.resolveProgressConfigForProgressCommand(platformName, accountID)
 	cfg.Mode = mode
-	h.setProgressConfigForProgressCommand(platformName, cfg)
+	h.setProgressConfigForProgressCommand(platformName, accountID, cfg)
 	return "已切换进度模式：" + mode
 }
 
-func (h *Handler) resolveProgressConfigForProgressCommand(platformName platform.PlatformName) config.ProgressConfig {
+func (h *Handler) resolveProgressConfigForProgressCommand(platformName platform.PlatformName, accountID string) config.ProgressConfig {
 	if platformName == "" {
 		return h.resolveProgressConfig("")
 	}
-	return h.resolveProgressConfigForPlatform(platformName, "")
+	return h.resolveProgressConfigForAccount(platformName, accountID, "")
 }
 
-func (h *Handler) setProgressConfigForProgressCommand(platformName platform.PlatformName, cfg config.ProgressConfig) {
+func (h *Handler) setProgressConfigForProgressCommand(platformName platform.PlatformName, accountID string, cfg config.ProgressConfig) {
 	if platformName == "" {
 		h.SetProgressConfig(cfg)
 		return
+	}
+	key := string(platformName)
+	if accountKey := PlatformAccountConfigKey(platformName, accountID); accountKey != "" {
+		key = accountKey
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.platformProgressConfigs == nil {
 		h.platformProgressConfigs = make(map[string]config.ProgressConfig)
 	}
-	h.platformProgressConfigs[string(platformName)] = cfg
+	h.platformProgressConfigs[key] = cfg
 }

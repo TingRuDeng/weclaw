@@ -25,6 +25,7 @@ type codexWorkspaceCdRequest struct {
 	Target          string
 	Agent           agent.Agent
 	Platform        platform.PlatformName
+	AccountID       string
 	Reply           platform.Replier
 }
 
@@ -156,6 +157,7 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 		conversationID: conversationID,
 		threadID:       session.ThreadID,
 		platform:       req.Platform,
+		accountID:      req.AccountID,
 		reply:          req.Reply,
 	})
 	if active {

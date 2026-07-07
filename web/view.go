@@ -23,19 +23,23 @@ type configView struct {
 
 // agentView 是脱敏后的 agent 配置（密钥字段掩码）。
 type agentView struct {
-	Type         string            `json:"type"`
-	Command      string            `json:"command,omitempty"`
-	Args         []string          `json:"args,omitempty"`
-	Aliases      []string          `json:"aliases,omitempty"`
-	Cwd          string            `json:"cwd,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Model        string            `json:"model,omitempty"`
-	Effort       string            `json:"effort,omitempty"`
-	SystemPrompt string            `json:"system_prompt,omitempty"`
-	Endpoint     string            `json:"endpoint,omitempty"`
-	APIKey       string            `json:"api_key,omitempty"`
-	RunAsUser    string            `json:"run_as_user,omitempty"`
-	RunAsEnv     []string          `json:"run_as_env,omitempty"`
+	Type             string            `json:"type"`
+	Command          string            `json:"command,omitempty"`
+	Args             []string          `json:"args,omitempty"`
+	Aliases          []string          `json:"aliases,omitempty"`
+	Cwd              string            `json:"cwd,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	Model            string            `json:"model,omitempty"`
+	Effort           string            `json:"effort,omitempty"`
+	PermissionLevel  string            `json:"permission_level,omitempty"`
+	ApprovalPolicy   string            `json:"approval_policy,omitempty"`
+	ApprovalReviewer string            `json:"approval_reviewer,omitempty"`
+	SandboxMode      string            `json:"sandbox_mode,omitempty"`
+	SystemPrompt     string            `json:"system_prompt,omitempty"`
+	Endpoint         string            `json:"endpoint,omitempty"`
+	APIKey           string            `json:"api_key,omitempty"`
+	RunAsUser        string            `json:"run_as_user,omitempty"`
+	RunAsEnv         []string          `json:"run_as_env,omitempty"`
 }
 
 // redactConfig 把配置转为脱敏视图：所有密钥替换为掩码常量(非空时)，env 值掩码。
@@ -58,17 +62,21 @@ func redactConfig(cfg *config.Config) configView {
 	}
 	for name, ag := range cfg.Agents {
 		av := agentView{
-			Type:         ag.Type,
-			Command:      ag.Command,
-			Args:         ag.Args,
-			Aliases:      ag.Aliases,
-			Cwd:          ag.Cwd,
-			Model:        ag.Model,
-			Effort:       ag.Effort,
-			SystemPrompt: ag.SystemPrompt,
-			Endpoint:     ag.Endpoint,
-			RunAsUser:    ag.RunAsUser,
-			RunAsEnv:     ag.RunAsEnv,
+			Type:             ag.Type,
+			Command:          ag.Command,
+			Args:             ag.Args,
+			Aliases:          ag.Aliases,
+			Cwd:              ag.Cwd,
+			Model:            ag.Model,
+			Effort:           ag.Effort,
+			PermissionLevel:  ag.PermissionLevel,
+			ApprovalPolicy:   ag.ApprovalPolicy,
+			ApprovalReviewer: ag.ApprovalReviewer,
+			SandboxMode:      ag.SandboxMode,
+			SystemPrompt:     ag.SystemPrompt,
+			Endpoint:         ag.Endpoint,
+			RunAsUser:        ag.RunAsUser,
+			RunAsEnv:         ag.RunAsEnv,
 		}
 		if ag.APIKey != "" {
 			av.APIKey = secretMask
@@ -104,21 +112,25 @@ func mergeView(current *config.Config, v configView) *config.Config {
 	for name, av := range v.Agents {
 		prev := current.Agents[name]
 		ac := config.AgentConfig{
-			Type:         av.Type,
-			Command:      av.Command,
-			Args:         av.Args,
-			Aliases:      av.Aliases,
-			Cwd:          av.Cwd,
-			Model:        av.Model,
-			Effort:       av.Effort,
-			SystemPrompt: av.SystemPrompt,
-			Endpoint:     av.Endpoint,
-			RunAsUser:    av.RunAsUser,
-			RunAsEnv:     av.RunAsEnv,
-			Progress:     prev.Progress,
-			MaxHistory:   prev.MaxHistory,
-			Headers:      prev.Headers,
-			AutoLaunch:   prev.AutoLaunch,
+			Type:             av.Type,
+			Command:          av.Command,
+			Args:             av.Args,
+			Aliases:          av.Aliases,
+			Cwd:              av.Cwd,
+			Model:            av.Model,
+			Effort:           av.Effort,
+			PermissionLevel:  av.PermissionLevel,
+			ApprovalPolicy:   av.ApprovalPolicy,
+			ApprovalReviewer: av.ApprovalReviewer,
+			SandboxMode:      av.SandboxMode,
+			SystemPrompt:     av.SystemPrompt,
+			Endpoint:         av.Endpoint,
+			RunAsUser:        av.RunAsUser,
+			RunAsEnv:         av.RunAsEnv,
+			Progress:         prev.Progress,
+			MaxHistory:       prev.MaxHistory,
+			Headers:          prev.Headers,
+			AutoLaunch:       prev.AutoLaunch,
 		}
 		ac.APIKey = mergeSecret(av.APIKey, prev.APIKey)
 		ac.Env = mergeEnv(av.Env, prev.Env)

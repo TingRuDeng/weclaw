@@ -240,12 +240,48 @@ func TestBroadcastProgressUsesAgentPrefix(t *testing.T) {
 	defer closeServer()
 
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.broadcastToAgents(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, []string{"codex", "claude"}, "hello")
+	h.broadcastToAgents(broadcastAgentsRequest{
+		ctx:          context.Background(),
+		platformName: platform.PlatformWeChat,
+		userID:       "user-1",
+		routeUserID:  "user-1",
+		replyWriter:  reply,
+		names:        []string{"codex", "claude"},
+		message:      "hello",
+	})
 
 	if !containsText(calls.texts(), "[codex] 实时片段，仅供预览") {
 		t.Fatalf("expected codex progress prefix, messages=%#v", calls.texts())
 	}
 	if !containsText(calls.texts(), "[claude] 实时片段，仅供预览") {
 		t.Fatalf("expected claude progress prefix, messages=%#v", calls.texts())
+	}
+}
+
+func TestBroadcastProgressUsesFeishuAccountOverride(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "slow", Type: "cli", Command: "slow"}
+	h.agents["slow"] = ag
+	timeoutCfg := progressConfigWithTaskTimeout()
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): timeoutCfg,
+	})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
+		h.broadcastToAgents(broadcastAgentsRequest{
+			ctx:          ctx,
+			platformName: platform.PlatformFeishu,
+			accountID:    "cli_a",
+			userID:       "ou_user",
+			routeUserID:  "ou_user",
+			replyWriter:  reply,
+			names:        []string{"slow"},
+			message:      "hello",
+		})
+	})
+	if !containsText(reply.Texts, "本轮执行超时已被中止") {
+		t.Fatalf("reply=%#v, want timeout from account progress config", reply.Texts)
 	}
 }

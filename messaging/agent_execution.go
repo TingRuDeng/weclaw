@@ -144,9 +144,20 @@ func (h *Handler) sendToNamedAgentForAccount(ctx context.Context, platformName p
 	h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, name, reply, consumed)
 }
 
+type broadcastAgentsRequest struct {
+	ctx          context.Context
+	platformName platform.PlatformName
+	accountID    string
+	userID       string
+	routeUserID  string
+	replyWriter  platform.Replier
+	names        []string
+	message      string
+}
+
 // broadcastToAgents sends the message to multiple agents in parallel.
 // Each reply is sent as a separate message with the agent name prefix.
-func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.PlatformName, userID string, routeUserID string, replyWriter platform.Replier, names []string, message string) {
+func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 	type result struct {
 		name          string
 		reply         string
@@ -154,33 +165,33 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 		finalInStream bool
 	}
 
-	ch := make(chan result, len(names))
+	ch := make(chan result, len(req.names))
 
-	for _, name := range names {
+	for _, name := range req.names {
 		go func(n string) {
-			ag, err := h.getAgent(ctx, n)
+			ag, err := h.getAgent(req.ctx, n)
 			if err != nil {
 				ch <- result{name: n, reply: fmt.Sprintf("Error: %v", err)}
 				return
 			}
-			progressCfg := h.resolveProgressConfigForPlatform(platformName, n)
-			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
+			progressCfg := h.resolveProgressConfigForAccount(req.platformName, req.accountID, n)
+			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(req.ctx, progressCfg)
 			defer cancelTaskTimeout()
-			agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, routeUserID, replyWriter))
+			agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(req.userID, req.routeUserID, req.replyWriter))
 
 			var codexRoute codexConversationRoute
 			var executionKey string
 			var activeTask *activeAgentTask
 			if isCodexAgent(n, ag.Info()) {
-				codexRoute = h.codexConversationRouteForSession(userID, routeUserID, n, ag)
+				codexRoute = h.codexConversationRouteForSession(req.userID, req.routeUserID, n, ag)
 				executionKey = codexRoute.conversationID
 				task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{
-					owner:     userID,
+					owner:     req.userID,
 					agentName: n,
-					message:   message,
+					message:   req.message,
 				})
 				if !started {
-					h.storePendingGuide(executionKey, message)
+					h.storePendingGuide(executionKey, req.message)
 					ch <- result{name: n, reply: runningCodexGuidePromptForTask(task)}
 					return
 				}
@@ -190,16 +201,16 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 					pendingMessage, ok := h.promotePendingGuideToRun(executionKey, task)
 					h.finishActiveTask(executionKey, task)
 					if ok {
-						sendPlatformText(ctx, replyWriter, userID, runnablePendingCodexPrompt(pendingMessage))
+						sendPlatformText(req.ctx, req.replyWriter, req.userID, runnablePendingCodexPrompt(pendingMessage))
 					}
 				}()
 			} else {
-				executionKey = h.agentExecutionKeyForRoute(userID, routeUserID, n, ag)
+				executionKey = h.agentExecutionKeyForRoute(req.userID, req.routeUserID, n, ag)
 			}
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
 
-			onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "["+n+"] ", message, progressCfg)
+			onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, req.replyWriter, "["+n+"] ", req.message, progressCfg)
 			sendResult := func(reply string, failed bool) {
 				consumed := finishProgressWithReply(finishProgress, reply, failed)
 				ch <- result{name: n, reply: reply, finalInStream: consumed}
@@ -213,23 +224,23 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 				}
 				conversationID = codexRoute.conversationID
 			} else {
-				resolvedID, resolveErr := h.resolveAgentConversationIDForRoute(agentCtx, userID, routeUserID, n, ag)
+				resolvedID, resolveErr := h.resolveAgentConversationIDForRoute(agentCtx, req.userID, req.routeUserID, n, ag)
 				if resolveErr != nil {
 					sendResult(renderFinalFailure("["+n+"] ", resolveErr), true)
 					return
 				}
 				conversationID = resolvedID
 			}
-			reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
+			reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, req.message, onProgress)
 			if err != nil {
 				sendResult(renderFinalFailure("["+n+"] ", err), true)
 				return
 			}
 			if isCodexAgent(n, ag.Info()) {
-				h.recordCodexThreadForWorkspace(routeUserID, n, ag, conversationID, codexRoute.workspaceRoot)
+				h.recordCodexThreadForWorkspace(req.routeUserID, n, ag, conversationID, codexRoute.workspaceRoot)
 			} else {
-				h.recordCodexThread(routeUserID, n, ag, conversationID)
-				h.recordClaudeSessionForRoute(userID, routeUserID, n, ag, conversationID)
+				h.recordCodexThread(req.routeUserID, n, ag, conversationID)
+				h.recordClaudeSessionForRoute(req.userID, req.routeUserID, n, ag, conversationID)
 			}
 			if activeTask != nil && !activeTask.shouldSendFinal() {
 				_ = finishProgress("", false)
@@ -241,14 +252,14 @@ func (h *Handler) broadcastToAgents(ctx context.Context, platformName platform.P
 	}
 
 	// Send replies as they arrive
-	for range names {
+	for range req.names {
 		r := <-ch
 		if r.skip {
 			continue
 		}
-		if wxReply, ok := replyWriter.(*wechat.Replier); ok {
+		if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
 			wxReply.ClientID = NewClientID()
 		}
-		h.sendReplyWithMediaAfterStreamForRoute(ctx, replyWriter, userID, routeUserID, r.name, r.reply, r.finalInStream)
+		h.sendReplyWithMediaAfterStreamForRoute(req.ctx, req.replyWriter, req.userID, req.routeUserID, r.name, r.reply, r.finalInStream)
 	}
 }

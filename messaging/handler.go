@@ -285,5 +285,14 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		h.sendToNamedAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, knownNames[0], message, clientID)
 		return
 	}
-	h.broadcastToAgents(ctx, msg.Platform, msg.UserID, routeUserID, replyWriter, knownNames, message)
+	h.broadcastToAgents(broadcastAgentsRequest{
+		ctx:          ctx,
+		platformName: msg.Platform,
+		accountID:    msg.AccountID,
+		userID:       msg.UserID,
+		routeUserID:  routeUserID,
+		replyWriter:  replyWriter,
+		names:        knownNames,
+		message:      message,
+	})
 }
