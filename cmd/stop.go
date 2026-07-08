@@ -12,12 +12,12 @@ func init() {
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the background weclaw process",
+	Short: "停止后台 WeClaw 服务",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := stopAllWeclaw(); err != nil {
 			return err
 		}
-		fmt.Println("weclaw stopped")
+		fmt.Println("WeClaw 已停止")
 		return nil
 	},
 }

@@ -51,6 +51,8 @@ Codex：
 
 /cx help Codex 高级命令
 
+/cc help Claude 高级命令
+
 /progress 查看进度模式`
 	if !isAdmin {
 		return text

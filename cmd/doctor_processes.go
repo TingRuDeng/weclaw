@@ -20,7 +20,7 @@ type weclawProcess struct {
 
 var doctorProcessesCmd = &cobra.Command{
 	Use:   "processes",
-	Short: "Inspect running weclaw processes",
+	Short: "查看正在运行的 WeClaw 进程",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		processes, err := listWeclawProcesses()
 		if err != nil {

@@ -33,6 +33,7 @@ func TestBuildHelpText(t *testing.T) {
 		"/cc <内容> 发给 Claude",
 		"@cc @cx <内容> 同时发送",
 		"/cx help Codex 高级命令",
+		"/cc help Claude 高级命令",
 		"/progress 查看进度模式",
 	} {
 		if !strings.Contains(text, want) {
@@ -76,6 +77,7 @@ func TestBuildHelpText(t *testing.T) {
 		"/cx ls 查看列表\n\n/cx <编号|..> 选择或返回",
 		"发送消息：\n\n/codex <内容> 发给 Codex",
 		"更多：\n\n/cx help Codex 高级命令",
+		"/cx help Codex 高级命令\n\n/cc help Claude 高级命令",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("help text should use blank lines for WeChat rendering, missing %q", want)
@@ -109,6 +111,7 @@ func TestFeishuHelpSendsChoiceCard(t *testing.T) {
 		"/cx ls":     "Codex 工作空间",
 		"/cx status": "Codex 会话状态",
 		"/cx help":   "Codex 高级命令",
+		"/cc help":   "Claude 高级命令",
 		"/mode":      "确认模式",
 		"/stop":      "停止当前任务",
 	}
@@ -139,7 +142,7 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 		t.Fatalf("choices=%#v, want one help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list"} {
+	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users"} {
 		if !got[want] {
 			t.Fatalf("admin help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
@@ -148,6 +151,9 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 		if strings.Contains(reply.Choices[0].Prompt, hidden) {
 			t.Fatalf("admin help prompt=%q, should keep command list in buttons, not prompt text", reply.Choices[0].Prompt)
 		}
+	}
+	if !strings.Contains(reply.Choices[0].Prompt, "授权和取消授权可从用户管理入口查看说明") {
+		t.Fatalf("admin help prompt=%q, want concise user management hint", reply.Choices[0].Prompt)
 	}
 }
 

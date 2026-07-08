@@ -16,16 +16,16 @@ func init() {
 
 var restartCmd = &cobra.Command{
 	Use:   "restart",
-	Short: "Restart the background weclaw process",
+	Short: "重启后台 WeClaw 服务",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := ensureConfiguredRestartSafe(context.Background(), restartForceFlag); err != nil {
 			return err
 		}
-		fmt.Println("Stopping weclaw...")
+		fmt.Println("正在停止 WeClaw...")
 		if err := stopAllWeclaw(); err != nil {
 			return err
 		}
-		fmt.Println("Starting weclaw...")
+		fmt.Println("正在启动 WeClaw...")
 		return runDaemon()
 	},
 }

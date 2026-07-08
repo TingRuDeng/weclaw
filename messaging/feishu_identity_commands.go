@@ -233,12 +233,13 @@ func feishuBotConfigLabel(bot config.FeishuBotConfig) string {
 
 func feishuIdentityUsageText() string {
 	return strings.Join([]string{
-		"用法:",
-		"/feishu users pending",
-		"/feishu users list",
-		"/feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]",
-		"/feishu users approve-code <授权码> [--bot <name|app_id>] [--admin] [--name <显示名>]",
-		"/feishu users revoke <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]",
-		"--admin 只会写入 union_id；缺少 union_id 时会拒绝。",
+		"飞书用户管理:",
+		"/feishu users pending 查看待授权用户，并显示可复制授权命令",
+		"/feishu users list 查看已授权用户、机器人范围和用户类型",
+		"/feishu users approve-code <授权码> 授权用户",
+		"/feishu users approve-code <授权码> --admin 授权并设为管理员",
+		"/feishu users revoke <用户ID> 取消用户访问授权",
+		"/feishu users revoke <用户ID> --admin 同时取消管理员权限",
+		"可选: --bot <name|app_id> 限定某个机器人；管理员权限只接受 union_id。",
 	}, "\n")
 }

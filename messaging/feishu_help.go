@@ -25,7 +25,7 @@ func feishuHelpPrompt(isAdmin bool) string {
 	if !isAdmin {
 		return "WeClaw 帮助\n请选择常用操作入口。"
 	}
-	return "WeClaw 帮助\n请选择常用操作入口。"
+	return "WeClaw 帮助\n请选择常用操作入口。\n\n授权和取消授权可从用户管理入口查看说明。"
 }
 
 func feishuHelpChoices(isAdmin bool) []platform.Choice {
@@ -34,6 +34,7 @@ func feishuHelpChoices(isAdmin bool) []platform.Choice {
 		{ID: "/cx ls", Label: "Codex 工作空间"},
 		{ID: "/cx status", Label: "Codex 会话状态"},
 		{ID: "/cx help", Label: "Codex 高级命令"},
+		{ID: "/cc help", Label: "Claude 高级命令"},
 		{ID: "/mode", Label: "确认模式"},
 		{ID: "/stop", Label: "停止当前任务"},
 	}
@@ -43,6 +44,7 @@ func feishuHelpChoices(isAdmin bool) []platform.Choice {
 	return append(choices,
 		platform.Choice{ID: "/update", Label: "远程更新"},
 		platform.Choice{ID: "/restart", Label: "重启服务"},
+		platform.Choice{ID: "/feishu users", Label: "用户管理说明"},
 		platform.Choice{ID: "/feishu users pending", Label: "待授权用户"},
 		platform.Choice{ID: "/feishu users list", Label: "已授权用户"},
 	)

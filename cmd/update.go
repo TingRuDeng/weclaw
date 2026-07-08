@@ -24,7 +24,7 @@ func init() {
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the current version",
+	Short: "查看当前版本",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("weclaw %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
 	},
@@ -32,24 +32,24 @@ var versionCmd = &cobra.Command{
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
-	Short: "Update weclaw to the latest version",
+	Short: "更新 WeClaw",
 	RunE:  runUpdate,
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
 	// 1. Get latest version
-	fmt.Println("Checking for updates...")
+	fmt.Println("正在检查更新...")
 	latest, err := getLatestVersion()
 	if err != nil {
-		return fmt.Errorf("failed to check latest version: %w", err)
+		return fmt.Errorf("检查最新版本失败: %w", err)
 	}
 
 	if latest == Version {
-		fmt.Printf("Already up to date (%s)\n", Version)
+		fmt.Printf("已是最新版本 (%s)\n", Version)
 		return nil
 	}
 
-	fmt.Printf("Current: %s -> Latest: %s\n", Version, latest)
+	fmt.Printf("当前版本: %s -> 最新版本: %s\n", Version, latest)
 
 	// 2. Download new binary
 	filename, err := releaseAssetNameForRuntime(runtime.GOOS, runtime.GOARCH)
@@ -58,10 +58,10 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest, filename)
 
-	fmt.Printf("Downloading %s...\n", url)
+	fmt.Printf("正在下载 %s...\n", url)
 	tmpFile, err := downloadFile(url)
 	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
+		return fmt.Errorf("下载失败: %w", err)
 	}
 	defer os.Remove(tmpFile)
 	if err := verifyReleaseAssetChecksum(latest, filename, tmpFile); err != nil {

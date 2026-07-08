@@ -12,7 +12,7 @@ import (
 
 var feishuUsersCmd = &cobra.Command{
 	Use:   "users",
-	Short: "查看飞书自动发现用户",
+	Short: "管理飞书用户授权",
 }
 
 var (
@@ -23,7 +23,7 @@ var (
 
 var feishuUsersPendingCmd = &cobra.Command{
 	Use:   "pending",
-	Short: "查看待确认飞书用户",
+	Short: "查看待授权飞书用户",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runFeishuUsers("pending")
 	},
@@ -31,7 +31,7 @@ var feishuUsersPendingCmd = &cobra.Command{
 
 var feishuUsersListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "查看已授权飞书用户身份",
+	Short: "查看已授权飞书用户",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runFeishuUsers("list")
 	},
@@ -39,7 +39,7 @@ var feishuUsersListCmd = &cobra.Command{
 
 var feishuUsersApproveCmd = &cobra.Command{
 	Use:   "approve <union_id|user_id|open_id>",
-	Short: "确认飞书用户并写入配置",
+	Short: "授权飞书用户访问机器人",
 	Args:  validateFeishuUsersApproveArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runFeishuUsersApprove(feishuUsersApproveOptions{
@@ -52,7 +52,7 @@ var feishuUsersApproveCmd = &cobra.Command{
 
 var feishuUsersRenameCmd = &cobra.Command{
 	Use:   "rename <union_id|user_id|open_id> <显示名>",
-	Short: "为飞书用户身份设置本地显示名",
+	Short: "备注飞书用户姓名",
 	Args:  validateFeishuUsersRenameArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runFeishuUsersRename(feishuUsersRenameOptions{
@@ -64,7 +64,7 @@ var feishuUsersRenameCmd = &cobra.Command{
 
 var feishuUsersApproveCodeCmd = &cobra.Command{
 	Use:   "approve-code <授权码>",
-	Short: "使用授权码确认飞书用户并写入配置",
+	Short: "使用授权码授权飞书用户",
 	Args:  validateFeishuUsersApproveCodeArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runFeishuUsersApproveCode(feishuUsersApproveCodeOptions{

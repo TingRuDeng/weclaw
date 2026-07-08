@@ -15,7 +15,7 @@ func init() {
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Add a WeChat account via QR code scan",
+	Short: "扫码添加微信账号",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
@@ -24,7 +24,7 @@ var loginCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Account %s added. Run 'weclaw start' to begin.\n", creds.ILinkBotID)
+		fmt.Printf("账号 %s 已添加。运行 weclaw start 启动服务。\n", creds.ILinkBotID)
 		return nil
 	},
 }

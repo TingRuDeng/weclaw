@@ -22,14 +22,14 @@ var (
 )
 
 func init() {
-	startCmd.Flags().BoolVarP(&foregroundFlag, "foreground", "f", false, "Run in foreground (default is background)")
-	startCmd.Flags().StringVar(&apiAddrFlag, "api-addr", "", "API server listen address (default 127.0.0.1:18011)")
+	startCmd.Flags().BoolVarP(&foregroundFlag, "foreground", "f", false, "前台运行，默认后台运行")
+	startCmd.Flags().StringVar(&apiAddrFlag, "api-addr", "", "HTTP API 监听地址，默认 127.0.0.1:18011")
 	rootCmd.AddCommand(startCmd)
 }
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the message bridge",
+	Short: "启动消息服务",
 	RunE:  runStart,
 }
 

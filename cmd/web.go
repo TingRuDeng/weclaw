@@ -26,15 +26,15 @@ var (
 var webTokenRandomReader io.Reader = rand.Reader
 
 func init() {
-	webCmd.Flags().StringVar(&webAddrFlag, "addr", "127.0.0.1:39282", "Web config panel listen address")
-	webCmd.Flags().StringVar(&webTokenFlag, "token", "", "Auth token (required when addr is not loopback)")
-	webCmd.Flags().BoolVar(&webNoOpenFlag, "no-open", false, "Do not open the browser automatically")
+	webCmd.Flags().StringVar(&webAddrFlag, "addr", "127.0.0.1:39282", "Web 配置面板监听地址")
+	webCmd.Flags().StringVar(&webTokenFlag, "token", "", "访问 token，非本机监听地址时必填")
+	webCmd.Flags().BoolVar(&webNoOpenFlag, "no-open", false, "启动后不自动打开浏览器")
 	rootCmd.AddCommand(webCmd)
 }
 
 var webCmd = &cobra.Command{
 	Use:   "web",
-	Short: "Start the local web config panel",
+	Short: "打开本地 Web 配置面板",
 	RunE:  runWeb,
 }
 

@@ -70,7 +70,7 @@ func defaultDoctorDeps() doctorDeps {
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "Run pre-flight checks on config, agents, platforms and isolation",
+	Short: "检查配置、Agent 和平台状态",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {

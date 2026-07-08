@@ -31,7 +31,7 @@ func init() {
 
 var companionCmd = &cobra.Command{
 	Use:   "companion",
-	Short: "启动本地可见 CLI Companion",
+	Short: "启动本地可见 CLI 接管入口",
 	RunE:  runCompanionCommand,
 }
 
