@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -207,6 +208,43 @@ func TestRunFeishuBootstrapUpdatesExistingBotByName(t *testing.T) {
 	}
 }
 
+func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateForTest(t)
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("pending"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "待确认飞书用户") ||
+		!strings.Contains(output, "on_same_person") ||
+		!strings.Contains(output, "cli_a") {
+		t.Fatalf("output=%q, want pending identity", output)
+	}
+	if strings.Contains(output, "on_approved") {
+		t.Fatalf("output=%q, should hide approved identity from pending", output)
+	}
+}
+
+func TestRunFeishuUsersListPrintsAllIdentities(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateForTest(t)
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("list"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "飞书用户身份") ||
+		!strings.Contains(output, "on_same_person") ||
+		!strings.Contains(output, "on_approved") {
+		t.Fatalf("output=%q, want all identities", output)
+	}
+}
+
 func feishuBoolPtr(value bool) *bool {
 	return &value
 }
@@ -241,4 +279,40 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatalf("read stdout pipe: %v", err)
 	}
 	return buf.String()
+}
+
+func writeFeishuIdentityStateForTest(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir identity dir: %v", err)
+	}
+	data := `{
+  "version": 1,
+  "records": {
+    "on_same_person": {
+      "key": "on_same_person",
+      "union_id": "on_same_person",
+      "open_id": "ou_a",
+      "open_ids": {"cli_a": "ou_a"},
+      "accounts": ["cli_a"],
+      "pending": true,
+      "approved": false,
+      "last_seen": "2026-07-08T00:00:00Z"
+    },
+    "on_approved": {
+      "key": "on_approved",
+      "union_id": "on_approved",
+      "open_id": "ou_b",
+      "open_ids": {"cli_b": "ou_b"},
+      "accounts": ["cli_b"],
+      "pending": false,
+      "approved": true,
+      "last_seen": "2026-07-08T00:00:01Z"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("write identity state: %v", err)
+	}
 }

@@ -136,6 +136,7 @@ weclaw companion --agent opencode --cwd /path/to/project
 | `/stop`                 | 停止当前运行的任务       |
 | `/update`               | 管理员远程更新 WeClaw（需配置 `admin_users`） |
 | `/restart` / `/restart --force` | 管理员远程重启 WeClaw（需配置 `admin_users`） |
+| `/feishu users pending` / `/feishu users approve <编号>` | 管理员确认飞书自动发现用户 |
 | `/status`               | 查看运行态（agent、uptime、运行中任务、调用/错误计数、模式、限流） |
 | `/help`                 | 查看帮助信息             |
 
@@ -374,6 +375,8 @@ weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --all
 
 微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 按 `app_id` 隔离并支持软配置热重载；`allowed_users` 可填应用级 `open_id` 或同开发商下稳定的 `union_id`，多机器人优先使用 `union_id`；新增、删除 bot 或修改 `app_id` 仍需重启生效。
 
+飞书未授权用户给任意 bot 发消息时，WeClaw 会把 `open_id/user_id/union_id` 记录到 `~/.weclaw/feishu-identities.json`，但不会自动放行。管理员可在飞书里发送 `/feishu users pending` 查看待确认用户，发送 `/feishu users approve <编号>` 把稳定身份写入所有已配置 bot 的 `allowed_users`；需要限定单个 bot 时加 `--bot <name|app_id>`，需要同时加入远程管理白名单时加 `--admin`。本机可用 `weclaw feishu users pending` 和 `weclaw feishu users list` 只读查看自动发现状态。
+
 环境变量：
 
 - `WECLAW_DEFAULT_AGENT` — 覆盖默认 Agent
@@ -545,8 +548,8 @@ WeClaw 驱动的 AI Agent 能执行 shell 命令、读写文件。任何能给 b
 }
 ```
 
-- **访问控制 (`allowed_users`)**：微信按平台配置，飞书按 `bots[]` 内每个机器人配置。飞书可填应用级 `open_id` 或同开发商下稳定的 `union_id`；多机器人优先使用 `union_id`。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。
-- **管理员白名单 (`admin_users`)**：顶层配置。只有同时位于对应平台 `allowed_users` 和顶层 `admin_users` 的用户，才能在微信 / 飞书执行 `/update`、`/restart`、`/restart --force`。为空 = 禁用远程管理命令。
+- **访问控制 (`allowed_users`)**：微信按平台配置，飞书按 `bots[]` 内每个机器人配置。飞书可填应用级 `open_id` 或同开发商下稳定的 `union_id`；多机器人优先使用 `union_id`。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。飞书自动发现只记录待确认身份，必须由管理员执行 `/feishu users approve` 后才写入白名单。
+- **管理员白名单 (`admin_users`)**：顶层配置。只有同时位于对应平台 `allowed_users` 和顶层 `admin_users` 的用户，才能在微信 / 飞书执行 `/update`、`/restart`、`/restart --force` 和飞书用户授权命令。飞书管理员匹配会同时检查 `open_id/user_id/union_id`；为空 = 禁用远程管理命令。
 - **工作目录限制 (`allowed_workspace_roots`)**：`/cwd` 只能切到白名单根目录及其子目录。为空 = 不限制（会告警）。
 - **限流 (`rate_limit_per_minute`)**：每用户每分钟最多触发 agent 次数，`0` = 不限。
 - **审计日志 (`audit_log` / `audit_log_path`)**：JSON Lines 记录谁触发了哪个 agent、yolo 自动放行等（不含密钥）。默认开启，写入 `~/.weclaw/audit.log`，按大小自动轮转。

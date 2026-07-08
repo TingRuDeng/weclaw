@@ -13,7 +13,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
-func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config) (*platform.Registry, error) {
+func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config, opts ...platform.RegistryOption) (*platform.Registry, error) {
 	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
 	entries := make([]platform.RegistryEntry, 0, len(accounts)+len(feishuCfg.Bots))
 	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
@@ -36,7 +36,7 @@ func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config) (*
 		}
 		entries = append(entries, feishuEntries...)
 	}
-	return platform.NewRegistry(entries), nil
+	return platform.NewRegistry(entries, opts...), nil
 }
 
 func buildFeishuRegistryEntries(feishuCfg config.PlatformConfig) ([]platform.RegistryEntry, error) {

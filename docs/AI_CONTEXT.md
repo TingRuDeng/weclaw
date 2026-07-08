@@ -75,6 +75,7 @@ ai_summary:
 - 飞书显式启用时必须配置非空 `bots[]`；缺失 bot 应在 `config.Validate` 阶段 fail-fast，不应等到平台启动阶段才失败。
 - 飞书最小权限应覆盖单聊入站、群聊 @ 入站、发消息、资源、会话、CardKit 和机器人菜单：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonly`、`im:message.group_at_msg.include_bot:readonly`、`im:message:send_as_bot`、`im:resource`、`im:chat`、`cardkit:card:read`、`cardkit:card:write`、`application:bot.basic_info:read`、`application:bot.menu:write`；`user` scopes 可为空。
 - 飞书 bot 的 `allowed_users`、`default_agent` 和 `progress` 按 `app_id` 隔离；`allowed_users` 支持应用级 `open_id` 和同开发商下稳定的 `union_id`，多机器人优先配置 `union_id`；新增、删除 bot 或修改 `app_id` 属于平台拓扑变化，需要重启。
+- 飞书未授权入站身份会在访问控制前写入 `~/.weclaw/feishu-identities.json`，但不会自动放行；管理员通过 `/feishu users pending/list/approve` 确认后才写入 `config.json`，本地只读查看使用 `weclaw feishu users pending/list`。
 - `/progress` 从飞书入口触发时必须按当前 `account_id` 写入账号级配置，广播、Codex 会话切换和 Codex App 外部任务 watcher 也必须读取账号级进度配置。
 - `/api/send` 在同一平台存在多个可主动发送账号时必须要求 `account_id`，不能静默选择第一个账号。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
@@ -83,7 +84,7 @@ ai_summary:
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。
 - 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。
-- 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。
+- 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。飞书管理员身份判断必须同时检查 `open_id/user_id/union_id`。
 - 微信同一条入站消息触发多次回复时，`wechat.Replier` 必须为后续 `SendText` 生成新的 `client_id`，避免微信端把结果消息按重复消息去重。
 - Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。
 - Web 配置保存必须保留 Agent 的 Codex 权限字段：`permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode`。

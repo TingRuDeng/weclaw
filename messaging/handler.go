@@ -77,6 +77,7 @@ type Handler struct {
 	platformDefaultAgents   map[string]string
 	seenTextMsgs            sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
 	codexSessions           *codexSessionStore
+	feishuIdentities        *feishuIdentityStore
 	taskLocksMu             sync.Mutex
 	taskLocks               map[string]*sync.Mutex
 	activeTasksMu           sync.Mutex

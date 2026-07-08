@@ -38,7 +38,7 @@ func isServiceAdminCommand(trimmed string) bool {
 // handleServiceAdminCommand 先校验权限和参数，再后台执行受控的 WeClaw 管理命令。
 func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.IncomingMessage, trimmed string, reply platform.Replier) {
 	userID := msg.UserID
-	if !h.isAdminUser(userID) {
+	if !h.isAdminMessage(msg) {
 		sendPlatformText(ctx, reply, userID, adminCommandDeniedText)
 		return
 	}
@@ -62,10 +62,23 @@ func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.In
 
 // isAdminUser 判断当前用户是否在管理命令白名单中。
 func (h *Handler) isAdminUser(userID string) bool {
+	return h.adminIdentityAllowed([]string{userID})
+}
+
+// isAdminMessage 使用主 ID 和平台身份别名共同判断管理权限。
+func (h *Handler) isAdminMessage(msg platform.IncomingMessage) bool {
+	return h.adminIdentityAllowed(msg.UserIdentityKeys())
+}
+
+func (h *Handler) adminIdentityAllowed(identities []string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	_, ok := h.adminUsers[strings.TrimSpace(userID)]
-	return ok
+	for _, identity := range identities {
+		if _, ok := h.adminUsers[strings.TrimSpace(identity)]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) currentServiceAdminCommandExecutor() ServiceAdminCommandExecutor {

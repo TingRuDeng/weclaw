@@ -16,8 +16,9 @@ const (
 
 // Registry 统一管理已启用的平台实例，并在分发前执行访问控制。
 type Registry struct {
-	entries     []RegistryEntry
-	denyNotices *denyNoticeLimiter
+	entries          []RegistryEntry
+	denyNotices      *denyNoticeLimiter
+	identityObserver IdentityObserver
 }
 
 // RegistryEntry 描述一个平台实例及其访问控制策略。
@@ -26,8 +27,20 @@ type RegistryEntry struct {
 	Access   AccessControl
 }
 
+// IdentityObserver 在访问控制前观察入站身份，只用于发现身份，不决定授权。
+type IdentityObserver func(IncomingMessage)
+
+type RegistryOption func(*Registry)
+
+// WithIdentityObserver 注册入站身份观察器，便于拒绝未授权消息前记录飞书身份。
+func WithIdentityObserver(observer IdentityObserver) RegistryOption {
+	return func(r *Registry) {
+		r.identityObserver = observer
+	}
+}
+
 // NewRegistry 创建平台注册表，空白名单默认拒绝所有入站消息。
-func NewRegistry(entries []RegistryEntry) *Registry {
+func NewRegistry(entries []RegistryEntry, opts ...RegistryOption) *Registry {
 	copied := make([]RegistryEntry, 0, len(entries))
 	for _, entry := range entries {
 		if entry.Platform == nil {
@@ -40,7 +53,13 @@ func NewRegistry(entries []RegistryEntry) *Registry {
 		applyPlatformAccess(entry.Platform, entry.Access)
 		copied = append(copied, entry)
 	}
-	return &Registry{entries: copied, denyNotices: newDenyNoticeLimiter(denyNoticeInterval)}
+	registry := &Registry{entries: copied, denyNotices: newDenyNoticeLimiter(denyNoticeInterval)}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(registry)
+		}
+	}
+	return registry
 }
 
 // Run 并发运行所有平台，任一平台返回错误时等待其它平台随 ctx 收敛后返回该错误。
@@ -57,7 +76,7 @@ func (r *Registry) Run(ctx context.Context, dispatch DispatchFunc) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runPlatformWithRestart(runCtx, entry, dispatch, r.denyNotices); err != nil && runCtx.Err() == nil {
+			if err := runPlatformWithRestart(runCtx, entry, dispatch, r.denyNotices, r.identityObserver); err != nil && runCtx.Err() == nil {
 				errCh <- err
 				cancel()
 			}
@@ -159,10 +178,10 @@ func applyPlatformAccess(p Platform, access AccessControl) {
 	}
 }
 
-func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter) error {
+func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter, observer IdentityObserver) error {
 	restartDelay := registryInitialRestartDelay
 	for {
-		err := entry.Platform.Run(ctx, guardedDispatch(entry, dispatch, limiter))
+		err := entry.Platform.Run(ctx, guardedDispatch(entry, dispatch, limiter, observer))
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -183,8 +202,9 @@ func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch D
 	}
 }
 
-func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter) DispatchFunc {
+func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter, observer IdentityObserver) DispatchFunc {
 	return func(ctx context.Context, msg IncomingMessage, reply Replier) {
+		observeIncomingIdentity(observer, msg)
 		if !accessAllowsMessage(entry.Access, msg) {
 			log.Printf("[platform] denied %s user %q aliases=%q on account %q",
 				entry.Platform.Name(), msg.UserID, msg.UserAliases, entry.Platform.AccountID())
@@ -193,6 +213,13 @@ func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNo
 		}
 		dispatch(ctx, msg, reply)
 	}
+}
+
+func observeIncomingIdentity(observer IdentityObserver, msg IncomingMessage) {
+	if observer == nil || msg.Platform != PlatformFeishu {
+		return
+	}
+	observer(msg)
 }
 
 // accessAllowsMessage 用主用户 ID 和平台身份别名共同判断授权。

@@ -14,6 +14,20 @@ func (h *Handler) SetCodexSessionFile(filePath string) {
 	h.ensureCodexSessions().SetFilePath(filePath)
 }
 
+func (h *Handler) ensureFeishuIdentities() *feishuIdentityStore {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.feishuIdentities == nil {
+		h.feishuIdentities = newFeishuIdentityStore()
+	}
+	return h.feishuIdentities
+}
+
+// SetFeishuIdentityFile 设置飞书自动发现身份的持久化文件。
+func (h *Handler) SetFeishuIdentityFile(filePath string) {
+	h.ensureFeishuIdentities().SetFilePath(filePath)
+}
+
 func (h *Handler) ensureClaudeSessions() *claudeSessionStore {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -98,6 +98,44 @@ func TestRegistryRejectsEmptyAllowlistByDefault(t *testing.T) {
 	}
 }
 
+func TestRegistryObservesDeniedFeishuIdentity(t *testing.T) {
+	reply := &recordingReplier{}
+	msg := IncomingMessage{
+		Platform:    PlatformFeishu,
+		AccountID:   "cli_a",
+		UserID:      "ou_user",
+		UserAliases: []string{"on_same_person"},
+		Text:        "hi",
+	}
+	platform := &recordingPlatform{
+		name:     PlatformFeishu,
+		messages: []IncomingMessage{msg},
+		reply:    reply,
+	}
+	var observed []IncomingMessage
+	registry := NewRegistry(
+		[]RegistryEntry{{Platform: platform, Access: NewAccessControl(nil)}},
+		WithIdentityObserver(func(msg IncomingMessage) {
+			observed = append(observed, msg)
+		}),
+	)
+	called := false
+
+	err := registry.Run(context.Background(), func(ctx context.Context, msg IncomingMessage, reply Replier) {
+		called = true
+	})
+
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if called {
+		t.Fatal("dispatch should remain denied")
+	}
+	if len(observed) != 1 || observed[0].UserID != "ou_user" {
+		t.Fatalf("observed=%#v, want denied feishu identity", observed)
+	}
+}
+
 func TestRegistryRateLimitsDenyNotice(t *testing.T) {
 	reply := &recordingReplier{}
 	platform := &recordingPlatform{

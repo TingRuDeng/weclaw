@@ -12,6 +12,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/messaging"
+	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -137,6 +138,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	handler.SetPlatformProgressConfigs(extractPlatformProgressConfigs(cfg.Platforms))
 	handler.SetPlatformDefaultAgents(extractPlatformDefaultAgents(cfg.Platforms))
 	handler.SetCodexSessionFile(messaging.DefaultCodexSessionFile())
+	handler.SetFeishuIdentityFile(messaging.DefaultFeishuIdentityFile())
 	handler.SetClaudeSessionFile(messaging.DefaultClaudeSessionFile())
 
 	// Load custom aliases from agent configs
@@ -185,7 +187,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Build platform registry before HTTP API so active sending and inbound bridge share the same platform set.
-	registry, err := buildPlatformRegistry(accounts, cfg)
+	registry, err := buildPlatformRegistry(accounts, cfg, platform.WithIdentityObserver(handler.ObserveFeishuIdentity))
 	if err != nil {
 		return err
 	}

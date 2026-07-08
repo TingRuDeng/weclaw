@@ -46,7 +46,7 @@ func init() {
 	feishuAddCmd.Flags().StringVar(&feishuBootstrapDefaultAgent, "default-agent", "", "该飞书机器人的默认 Agent")
 	feishuAddCmd.Flags().StringVar(&feishuBootstrapProgressMode, "progress", "", "该飞书机器人的进度模式")
 	feishuAddCmd.Flags().BoolVar(&feishuBootstrapRequireMention, "require-mention-in-group", true, "群聊中是否要求 @ 机器人")
-	feishuCmd.AddCommand(feishuLoginCmd, feishuStatusCmd, feishuBootstrapCmd, feishuAddCmd)
+	feishuCmd.AddCommand(feishuLoginCmd, feishuStatusCmd, feishuBootstrapCmd, feishuAddCmd, feishuUsersCmd)
 	rootCmd.AddCommand(feishuCmd)
 }
 

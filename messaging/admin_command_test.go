@@ -90,6 +90,32 @@ func TestServiceAdminCommandRunsUpdateForWhitelistedUser(t *testing.T) {
 	}
 }
 
+func TestServiceAdminCommandAllowsFeishuUnionIDAlias(t *testing.T) {
+	var gotCommand string
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
+		gotCommand = command
+		return "Already up to date", nil
+	})
+	reply := newAdminCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:    platform.PlatformFeishu,
+		UserID:      "ou_admin_for_this_bot",
+		UserAliases: []string{"on_admin"},
+		Text:        "/update",
+	}, reply)
+
+	texts := reply.waitTexts(t, 2)
+	if gotCommand != "update" {
+		t.Fatalf("executor command=%q, want update", gotCommand)
+	}
+	if !strings.Contains(texts[0], "开始执行管理命令：/update") {
+		t.Fatalf("reply texts=%#v, want start notice", texts)
+	}
+}
+
 func TestServiceAdminCommandAllowsRestartForceOnly(t *testing.T) {
 	useAdminRestartNotificationPath(t)
 	var gotCommand string

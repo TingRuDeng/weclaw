@@ -30,6 +30,8 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	switch {
 	case isServiceAdminCommand(trimmed):
 		h.handleServiceAdminCommand(ctx, msg, trimmed, req.Reply)
+	case isFeishuIdentityCommand(trimmed):
+		sendText(h.handleFeishuIdentityCommand(msg, trimmed))
 	case trimmed == "/status":
 		sendText(h.buildStatus(msg.UserID))
 	case trimmed == "/help":

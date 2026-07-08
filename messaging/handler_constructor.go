@@ -23,6 +23,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		platformProgressConfigs: make(map[string]config.ProgressConfig),
 		platformDefaultAgents:   make(map[string]string),
 		codexSessions:           newCodexSessionStore(),
+		feishuIdentities:        newFeishuIdentityStore(),
 		taskLocks:               make(map[string]*sync.Mutex),
 		activeTasks:             make(map[string]*activeAgentTask),
 		pendingCodexConfirms:    make(map[string]string),
