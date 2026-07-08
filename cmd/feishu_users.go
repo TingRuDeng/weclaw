@@ -31,7 +31,7 @@ var feishuUsersPendingCmd = &cobra.Command{
 
 var feishuUsersListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "查看全部飞书用户身份",
+	Short: "查看已授权飞书用户身份",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runFeishuUsers("list")
 	},
@@ -93,11 +93,11 @@ func init() {
 
 func runFeishuUsers(kind string) error {
 	pendingOnly := kind == "pending"
-	views, err := messaging.LoadFeishuIdentityViews("", pendingOnly)
+	views, err := loadFeishuUserViews(kind, pendingOnly)
 	if err != nil {
 		return err
 	}
-	title := "飞书用户身份"
+	title := "已授权飞书用户"
 	if pendingOnly {
 		title = "待确认飞书用户"
 	}
@@ -105,6 +105,13 @@ func runFeishuUsers(kind string) error {
 	nameLookup := lookupFeishuIdentityNamesForViews(context.Background(), views, lookupAccounts)
 	printFeishuIdentityViews(title, views, botLabels, nameLookup)
 	return nil
+}
+
+func loadFeishuUserViews(kind string, pendingOnly bool) ([]messaging.FeishuIdentityView, error) {
+	if kind == "list" {
+		return messaging.LoadApprovedFeishuIdentityViews("")
+	}
+	return messaging.LoadFeishuIdentityViews("", pendingOnly)
 }
 
 // validateFeishuUsersApproveArgs 校验授权命令必须带一个可识别用户 ID。
@@ -170,6 +177,9 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 
 // feishuIdentityViewStatus 把身份授权状态转为面向用户的中文文案。
 func feishuIdentityViewStatus(view messaging.FeishuIdentityView) string {
+	if strings.TrimSpace(view.AuthCode) != "" {
+		return "待确认"
+	}
 	if view.Approved {
 		return "已授权"
 	}

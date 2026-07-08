@@ -86,6 +86,27 @@ func TestFeishuIdentityStoreApproveRemovesPendingRecord(t *testing.T) {
 	}
 }
 
+func TestFeishuIdentityStoreListsApprovedRecordWithActiveAuthCodeAsPending(t *testing.T) {
+	store := newFeishuIdentityStore()
+	store.records["on_same_person"] = feishuIdentityRecord{
+		Key:               "on_same_person",
+		UnionID:           "on_same_person",
+		Approved:          true,
+		Pending:           false,
+		AuthCode:          "123456",
+		AuthCodeExpiresAt: time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+	}
+
+	pending := store.ListPending()
+
+	if len(pending) != 1 || pending[0].Key != "on_same_person" {
+		t.Fatalf("pending=%#v, want approved record with active auth code", pending)
+	}
+	if approved := store.ListApproved(); len(approved) != 0 {
+		t.Fatalf("approved=%#v, want active auth code hidden from approved list", approved)
+	}
+}
+
 func TestFeishuIdentityStoreSkipsDuplicateSave(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "feishu-identities.json")
 	store := newFeishuIdentityStore()

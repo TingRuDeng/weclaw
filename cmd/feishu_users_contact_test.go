@@ -18,7 +18,7 @@ func TestRunFeishuUsersListPrintsContactName(t *testing.T) {
 	lookupFeishuIdentityNames = func(context.Context, []messaging.FeishuIdentityView, []feishuIdentityNameLookupAccount) feishuIdentityNameLookupResult {
 		return feishuIdentityNameLookupResult{
 			Names: map[string]string{
-				"on_same_person": "张三",
+				"on_approved": "张三",
 			},
 		}
 	}
@@ -32,7 +32,7 @@ func TestRunFeishuUsersListPrintsContactName(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "张三 (on_same_person)") {
+	if !strings.Contains(output, "张三 (on_approved)") {
 		t.Fatalf("output=%q, want contact name before stable id", output)
 	}
 }
@@ -45,7 +45,7 @@ func TestRunFeishuUsersListPrintsContactLookupWarning(t *testing.T) {
 	oldLookup := lookupFeishuIdentityNames
 	lookupFeishuIdentityNames = func(context.Context, []messaging.FeishuIdentityView, []feishuIdentityNameLookupAccount) feishuIdentityNameLookupResult {
 		return feishuIdentityNameLookupResult{
-			Warnings: []string{"卡片管家 查询 on_same_person 失败: 缺少通讯录权限"},
+			Warnings: []string{"卡片管家 查询 on_approved 失败: 缺少通讯录权限"},
 		}
 	}
 	t.Cleanup(func() {

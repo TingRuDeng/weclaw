@@ -63,13 +63,28 @@ func (s *feishuIdentityStore) Remember(msg platform.IncomingMessage) {
 }
 
 func (s *feishuIdentityStore) ListPending() []feishuIdentityRecord {
+	now := time.Now().UTC()
 	return s.listRecords(func(record feishuIdentityRecord) bool {
-		return record.Pending && !record.Approved
+		return feishuIdentityRecordNeedsApproval(record, now)
 	})
 }
 
 func (s *feishuIdentityStore) ListRecords() []feishuIdentityRecord {
 	return s.listRecords(func(feishuIdentityRecord) bool { return true })
+}
+
+func (s *feishuIdentityStore) ListApproved() []feishuIdentityRecord {
+	now := time.Now().UTC()
+	return s.listRecords(func(record feishuIdentityRecord) bool {
+		return record.Approved && !feishuAuthCodeValid(record, now)
+	})
+}
+
+func feishuIdentityRecordNeedsApproval(record feishuIdentityRecord, now time.Time) bool {
+	if record.Pending && !record.Approved {
+		return true
+	}
+	return feishuAuthCodeValid(record, now)
 }
 
 func (s *feishuIdentityStore) Approve(selector string) (feishuIdentityRecord, bool) {

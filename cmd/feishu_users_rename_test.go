@@ -15,7 +15,7 @@ func TestRunFeishuUsersRenameUpdatesDisplayName(t *testing.T) {
 
 	output := captureStdout(t, func() {
 		err := runFeishuUsersRename(feishuUsersRenameOptions{
-			Selector:    "on_same_person",
+			Selector:    "on_approved",
 			DisplayName: "张三",
 		})
 		if err != nil {
@@ -23,7 +23,7 @@ func TestRunFeishuUsersRenameUpdatesDisplayName(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "已更新飞书用户显示名: 张三 (on_same_person)") {
+	if !strings.Contains(output, "已更新飞书用户显示名: 张三 (on_approved)") {
 		t.Fatalf("output=%q, want rename completion message", output)
 	}
 
@@ -32,7 +32,7 @@ func TestRunFeishuUsersRenameUpdatesDisplayName(t *testing.T) {
 			t.Fatalf("runFeishuUsers error: %v", err)
 		}
 	})
-	if !strings.Contains(listOutput, "张三 (on_same_person)") {
+	if !strings.Contains(listOutput, "张三 (on_approved)") {
 		t.Fatalf("output=%q, want manual display name in list", listOutput)
 	}
 }

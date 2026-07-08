@@ -34,6 +34,21 @@ func LoadFeishuIdentityViews(filePath string, pendingOnly bool) ([]FeishuIdentit
 	return views, nil
 }
 
+// LoadApprovedFeishuIdentityViews 读取已完成授权的飞书身份台账。
+func LoadApprovedFeishuIdentityViews(filePath string) ([]FeishuIdentityView, error) {
+	store := newFeishuIdentityStore()
+	store.SetFilePath(firstNonBlank(filePath, DefaultFeishuIdentityFile()))
+	if err := store.LoadError(); err != nil {
+		return nil, err
+	}
+	records := store.ListApproved()
+	views := make([]FeishuIdentityView, 0, len(records))
+	for _, record := range records {
+		views = append(views, feishuIdentityViewFromRecord(record))
+	}
+	return views, nil
+}
+
 func feishuIdentityViewFromRecord(record feishuIdentityRecord) FeishuIdentityView {
 	authCode, expiresAt := visibleFeishuAuthCode(record, time.Now().UTC())
 	return FeishuIdentityView{

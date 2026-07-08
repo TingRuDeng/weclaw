@@ -37,7 +37,7 @@ func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
 	}
 }
 
-func TestRunFeishuUsersListPrintsAllIdentities(t *testing.T) {
+func TestRunFeishuUsersListPrintsOnlyApprovedIdentities(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 
@@ -47,10 +47,31 @@ func TestRunFeishuUsersListPrintsAllIdentities(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "飞书用户身份") ||
-		!strings.Contains(output, "on_same_person") ||
+	if !strings.Contains(output, "已授权飞书用户") ||
 		!strings.Contains(output, "on_approved") {
-		t.Fatalf("output=%q, want all identities", output)
+		t.Fatalf("output=%q, want approved identity", output)
+	}
+	if strings.Contains(output, "on_same_person") {
+		t.Fatalf("output=%q, should hide pending identity from list", output)
+	}
+}
+
+func TestRunFeishuUsersListHidesApprovedIdentityWithActiveAuthCode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateWithApprovedAuthCodeForTest(t)
+	writeFeishuBotsConfigForTest(t)
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("list"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if strings.Contains(output, "on_same_person") || strings.Contains(output, "授权码: 123456") {
+		t.Fatalf("output=%q, should hide active authorization request from list", output)
+	}
+	if !strings.Contains(output, "已授权飞书用户: 暂无") {
+		t.Fatalf("output=%q, want empty approved list", output)
 	}
 }
 
@@ -69,6 +90,23 @@ func TestRunFeishuUsersPendingPrintsAuthCodeCommand(t *testing.T) {
 		!strings.Contains(output, "weclaw feishu users approve-code 123456") ||
 		!strings.Contains(output, "weclaw feishu users approve-code 123456 --admin") {
 		t.Fatalf("output=%q, want approve-code command hints", output)
+	}
+}
+
+func TestRunFeishuUsersPendingPrintsApprovedIdentityWithAuthCode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateWithApprovedAuthCodeForTest(t)
+	writeFeishuBotsConfigForTest(t)
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("pending"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "授权码: 123456") ||
+		!strings.Contains(output, "状态: 待确认") {
+		t.Fatalf("output=%q, want pending approved identity with active auth code", output)
 	}
 }
 
@@ -246,6 +284,34 @@ func writeFeishuIdentityStateWithAuthCodeForTest(t *testing.T) {
       "auth_code_expires_at": "2099-01-01T00:00:00Z",
       "pending": true,
       "approved": false,
+      "last_seen": "2026-07-08T00:00:00Z"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("write identity state: %v", err)
+	}
+}
+
+func writeFeishuIdentityStateWithApprovedAuthCodeForTest(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir identity dir: %v", err)
+	}
+	data := `{
+  "version": 1,
+  "records": {
+    "on_same_person": {
+      "key": "on_same_person",
+      "union_id": "on_same_person",
+      "open_id": "ou_a",
+      "open_ids": {"cli_a": "ou_a", "cli_b": "ou_b"},
+      "accounts": ["cli_a", "cli_b"],
+      "auth_code": "123456",
+      "auth_code_expires_at": "2099-01-01T00:00:00Z",
+      "pending": false,
+      "approved": true,
       "last_seen": "2026-07-08T00:00:00Z"
     }
   }

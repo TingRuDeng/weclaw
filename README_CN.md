@@ -374,7 +374,7 @@ weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --all
 
 微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 按 `app_id` 隔离并支持软配置热重载；`allowed_users` 可填应用级 `open_id` 或同开发商下稳定的 `union_id`，多机器人优先使用 `union_id`；新增、删除 bot 或修改 `app_id` 仍需重启生效。
 
-飞书未授权用户给任意 bot 发消息时，WeClaw 会把 `open_id/user_id/union_id` 记录到 `~/.weclaw/feishu-identities.json`，但不会自动放行。拒绝提示会返回短期授权码；管理员可在飞书里发送 `/feishu users approve-code <授权码>`，或本机执行 `weclaw feishu users approve-code <授权码>`，把稳定身份写入已配置 bot 的 `allowed_users`；需要限定单个 bot 时加 `--bot <name|app_id>`，需要同时加入远程管理白名单时加 `--admin`。本机可用 `weclaw feishu users pending` 和 `weclaw feishu users list` 查看自动发现状态，也可用 `weclaw feishu users rename <id> <显示名>` 手动补全姓名。
+飞书未授权用户给任意 bot 发消息时，WeClaw 会把 `open_id/user_id/union_id` 记录到 `~/.weclaw/feishu-identities.json`，但不会自动放行。拒绝提示会返回短期授权码；管理员可在飞书里发送 `/feishu users approve-code <授权码>`，或本机执行 `weclaw feishu users approve-code <授权码>`，把稳定身份写入已配置 bot 的 `allowed_users`；需要限定单个 bot 时加 `--bot <name|app_id>`，需要同时加入远程管理白名单时加 `--admin`。本机可用 `weclaw feishu users pending` 查看待处理授权请求，用 `weclaw feishu users list` 查看已授权历史记录，也可用 `weclaw feishu users rename <id> <显示名>` 手动补全姓名。
 
 微信未授权用户发消息时，也会收到短期授权码。管理员在本机执行 `weclaw users approve-code <授权码>` 可把该微信用户写入 `platforms.wechat.allowed_users`；需要同时加入远程管理白名单时加 `--admin`。
 

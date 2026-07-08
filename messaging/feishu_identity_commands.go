@@ -49,7 +49,7 @@ func (h *Handler) handleFeishuIdentityCommand(msg platform.IncomingMessage, trim
 	case "pending":
 		return h.renderFeishuIdentityRecords(h.ensureFeishuIdentities().ListPending(), "待确认飞书用户")
 	case "list":
-		return h.renderFeishuIdentityRecords(h.ensureFeishuIdentities().ListRecords(), "飞书用户身份")
+		return h.renderFeishuIdentityRecords(h.ensureFeishuIdentities().ListApproved(), "已授权飞书用户")
 	case "approve":
 		return h.handleFeishuIdentityApprove(fields[3:])
 	case "approve-code":
