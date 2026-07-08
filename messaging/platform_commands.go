@@ -38,7 +38,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 		if h.handleFeishuHelpCommand(ctx, msg, req.Reply, routeUserID) {
 			return true
 		}
-		sendText(buildHelpText())
+		sendText(buildHelpTextForAdmin(h.isAdminMessage(msg)))
 	case trimmed == "/new":
 		sendText(h.resetDefaultSessionForRoute(ctx, msg.UserID, routeUserID))
 	case isProgressCommand(trimmed):

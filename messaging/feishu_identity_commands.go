@@ -53,6 +53,8 @@ func (h *Handler) handleFeishuIdentityCommand(msg platform.IncomingMessage, trim
 		return h.handleFeishuIdentityApprove(fields[3:])
 	case "approve-code":
 		return h.handleFeishuIdentityApproveCode(fields[3:])
+	case "revoke":
+		return h.handleFeishuIdentityRevoke(fields[3:])
 	default:
 		return feishuIdentityUsageText()
 	}
@@ -236,6 +238,7 @@ func feishuIdentityUsageText() string {
 		"/feishu users list",
 		"/feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]",
 		"/feishu users approve-code <授权码> [--bot <name|app_id>] [--admin] [--name <显示名>]",
+		"/feishu users revoke <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]",
 		"--admin 只会写入 union_id；缺少 union_id 时会拒绝。",
 	}, "\n")
 }

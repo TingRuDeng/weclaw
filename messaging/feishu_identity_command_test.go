@@ -38,12 +38,13 @@ func TestFeishuIdentityCommandListHidesPendingScope(t *testing.T) {
 
 	texts := reply.waitTexts(t, 2)
 	listReply := texts[len(texts)-1]
-	if !strings.Contains(listReply, "已授权机器人") || !strings.Contains(listReply, "状态: 已授权") {
+	if !strings.Contains(listReply, "已授权机器人") {
 		t.Fatalf("reply=%q, want authorized scope", listReply)
 	}
 	if strings.Contains(listReply, "待授权机器人") ||
 		strings.Contains(listReply, "下一步: /feishu users pending") ||
-		strings.Contains(listReply, "部分授权") {
+		strings.Contains(listReply, "部分授权") ||
+		strings.Contains(listReply, "状态: 已授权") {
 		t.Fatalf("reply=%q, list should not print pending scope", listReply)
 	}
 
@@ -134,6 +135,37 @@ func TestFeishuIdentityCommandApprovesSingleBotAndAdminUser(t *testing.T) {
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "已同步加入 admin_users") {
 		t.Fatalf("reply=%q, want admin confirmation", texts[0])
+	}
+}
+
+func TestFeishuIdentityCommandRevokesSingleBotAndAdminUser(t *testing.T) {
+	setupFeishuIdentityCommandConfig(t)
+	handler := newFeishuIdentityCommandHandler(t)
+	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
+	reply := newAdminCommandTestReplier()
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve on_same_person --admin"), reply)
+	reply.waitTexts(t, 1)
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users revoke on_same_person --bot android --admin"), reply)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	bots := cfg.Platforms["feishu"].Bots
+	if !testStringSliceContains(bots[0].AllowedUsers, "on_same_person") {
+		t.Fatalf("main allowed=%#v, should keep user", bots[0].AllowedUsers)
+	}
+	if testStringSliceContains(bots[1].AllowedUsers, "on_same_person") {
+		t.Fatalf("android allowed=%#v, should remove user", bots[1].AllowedUsers)
+	}
+	if testStringSliceContains(cfg.AdminUsers, "on_same_person") {
+		t.Fatalf("admin users=%#v, should remove union_id", cfg.AdminUsers)
+	}
+	texts := reply.waitTexts(t, 2)
+	if !strings.Contains(texts[1], "已取消飞书用户授权") ||
+		!strings.Contains(texts[1], "已移出 admin_users") {
+		t.Fatalf("reply=%q, want revoke confirmation", texts[1])
 	}
 }
 

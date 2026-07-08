@@ -161,7 +161,9 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	if len(view.AuthorizedAccounts) == 0 && len(view.UnauthorizedAccounts) == 0 && len(view.Accounts) > 0 {
 		fmt.Printf("   相关机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.Accounts, botLabels), ", "))
 	}
-	fmt.Printf("   状态: %s\n", feishuIdentityViewStatus(view, showApprovalCode))
+	if showApprovalCode {
+		fmt.Printf("   状态: %s\n", feishuIdentityViewStatus(view, showApprovalCode))
+	}
 	if showApprovalCode && strings.TrimSpace(view.AuthCode) != "" {
 		fmt.Printf("   授权码: %s\n", view.AuthCode)
 		fmt.Printf("   授权命令: weclaw feishu users approve-code %s\n", view.AuthCode)

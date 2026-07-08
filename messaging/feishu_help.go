@@ -12,20 +12,24 @@ func (h *Handler) handleFeishuHelpCommand(ctx context.Context, msg platform.Inco
 	if msg.Platform != platform.PlatformFeishu || reply == nil || !reply.Capabilities().Buttons {
 		return false
 	}
-	choices := platformChoicesWithMetadata(feishuHelpChoices(), feishuChoiceSessionMetadata(msg, routeUserID))
-	if err := reply.AskChoices(ctx, feishuHelpPrompt(), choices); err != nil {
+	isAdmin := h.isAdminMessage(msg)
+	choices := platformChoicesWithMetadata(feishuHelpChoices(isAdmin), feishuChoiceSessionMetadata(msg, routeUserID))
+	if err := reply.AskChoices(ctx, feishuHelpPrompt(isAdmin), choices); err != nil {
 		log.Printf("[handler] failed to send feishu help card to %s: %v", msg.UserID, err)
 		return false
 	}
 	return true
 }
 
-func feishuHelpPrompt() string {
-	return "WeClaw 帮助\n请选择常用操作入口。"
+func feishuHelpPrompt(isAdmin bool) string {
+	if !isAdmin {
+		return "WeClaw 帮助\n请选择常用操作入口。"
+	}
+	return "WeClaw 帮助\n请选择常用操作入口。\n\n" + adminHelpText()
 }
 
-func feishuHelpChoices() []platform.Choice {
-	return []platform.Choice{
+func feishuHelpChoices(isAdmin bool) []platform.Choice {
+	choices := []platform.Choice{
 		{ID: "/status", Label: "运行状态"},
 		{ID: "/cx ls", Label: "Codex 工作空间"},
 		{ID: "/cx status", Label: "Codex 会话状态"},
@@ -33,4 +37,13 @@ func feishuHelpChoices() []platform.Choice {
 		{ID: "/mode", Label: "确认模式"},
 		{ID: "/stop", Label: "停止当前任务"},
 	}
+	if !isAdmin {
+		return choices
+	}
+	return append(choices,
+		platform.Choice{ID: "/update", Label: "远程更新"},
+		platform.Choice{ID: "/restart", Label: "重启服务"},
+		platform.Choice{ID: "/feishu users pending", Label: "待授权用户"},
+		platform.Choice{ID: "/feishu users list", Label: "已授权用户"},
+	)
 }

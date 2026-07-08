@@ -3,7 +3,11 @@ package messaging
 import "strings"
 
 func buildHelpText() string {
-	return `WeClaw 帮助
+	return buildHelpTextForAdmin(false)
+}
+
+func buildHelpTextForAdmin(isAdmin bool) string {
+	text := `WeClaw 帮助
 
 常用：
 
@@ -48,6 +52,28 @@ Codex：
 /cx help Codex 高级命令
 
 /progress 查看进度模式`
+	if !isAdmin {
+		return text
+	}
+	return text + "\n\n" + adminHelpText()
+}
+
+func adminHelpText() string {
+	return `管理员：
+
+/update 远程更新 WeClaw
+
+/restart 重启 WeClaw
+
+/restart --force 强制重启 WeClaw
+
+/feishu users pending 查看待授权飞书用户
+
+/feishu users list 查看已授权飞书用户
+
+/feishu users approve-code <授权码> 授权飞书用户
+
+/feishu users revoke <用户ID> 取消飞书用户授权`
 }
 
 // wechatCommandText 将内置命令回复转换为空行分隔，避免微信气泡折叠单换行。

@@ -48,7 +48,9 @@ func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[stri
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		lines = append(lines, "   待授权机器人: "+strings.Join(feishuAccountLabels(view.UnauthorizedAccounts, labels), ", "))
 	}
-	lines = append(lines, "   状态: "+feishuIdentityMessageStatus(view, showApprovalCode))
+	if showApprovalCode {
+		lines = append(lines, "   状态: "+feishuIdentityMessageStatus(view, showApprovalCode))
+	}
 	lines = append(lines, feishuIdentityActionLines(view, showApprovalCode)...)
 	return lines
 }

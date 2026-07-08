@@ -71,15 +71,15 @@ func TestRunFeishuUsersListPrintsAuthorizedScopeWithoutAuthCode(t *testing.T) {
 	})
 
 	if !strings.Contains(output, "on_same_person") ||
-		!strings.Contains(output, "已授权机器人: 卡片管家") ||
-		!strings.Contains(output, "状态: 已授权") {
+		!strings.Contains(output, "已授权机器人: 卡片管家") {
 		t.Fatalf("output=%q, want authorized bot scope only", output)
 	}
 	if strings.Contains(output, "授权码: 123456") ||
 		strings.Contains(output, "approve-code 123456") ||
 		strings.Contains(output, "待授权机器人") ||
 		strings.Contains(output, "下一步: weclaw feishu users pending") ||
-		strings.Contains(output, "部分授权") {
+		strings.Contains(output, "部分授权") ||
+		strings.Contains(output, "状态: 已授权") {
 		t.Fatalf("output=%q, list should not print pending scope", output)
 	}
 }

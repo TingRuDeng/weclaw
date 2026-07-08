@@ -122,6 +122,97 @@ func TestFeishuHelpSendsChoiceCard(t *testing.T) {
 	}
 }
 
+func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_admin",
+		MessageID: "feishu-admin-help-1",
+		Text:      "/help",
+		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
+	}, reply)
+
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want one help card", reply.Choices)
+	}
+	got := helpChoiceIDs(reply.Choices[0].Choices)
+	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list"} {
+		if !got[want] {
+			t.Fatalf("admin help choices=%#v, want %q", reply.Choices[0].Choices, want)
+		}
+	}
+	for _, want := range []string{"/feishu users approve-code <授权码>", "/feishu users revoke <用户ID>"} {
+		if !strings.Contains(reply.Choices[0].Prompt, want) {
+			t.Fatalf("admin help prompt=%q, want %q", reply.Choices[0].Prompt, want)
+		}
+	}
+}
+
+func TestHelpHidesAdminCommandsForNonAdmin(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	feishuReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	wechatReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-user-help-1",
+		Text:      "/help",
+		Metadata:  map[string]string{"feishu_union_id": "on_user"},
+	}, feishuReply)
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformWeChat,
+		UserID:    "wx_user",
+		MessageID: "wechat-user-help-1",
+		Text:      "/help",
+	}, wechatReply)
+
+	got := helpChoiceIDs(feishuReply.Choices[0].Choices)
+	for _, hidden := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list"} {
+		if got[hidden] {
+			t.Fatalf("non-admin feishu help choices=%#v, should hide %q", feishuReply.Choices[0].Choices, hidden)
+		}
+		if strings.Contains(feishuReply.Choices[0].Prompt, hidden) {
+			t.Fatalf("non-admin feishu help prompt=%q, should hide %q", feishuReply.Choices[0].Prompt, hidden)
+		}
+		if strings.Contains(wechatReply.Texts[0], hidden) {
+			t.Fatalf("non-admin wechat help=%q, should hide %q", wechatReply.Texts[0], hidden)
+		}
+	}
+}
+
+func TestWeChatHelpShowsAdminCommandsForAdmin(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"wx_admin"})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformWeChat,
+		UserID:    "wx_admin",
+		MessageID: "wechat-admin-help-1",
+		Text:      "/help",
+	}, reply)
+
+	if len(reply.Texts) != 1 {
+		t.Fatalf("texts=%#v, want one help text", reply.Texts)
+	}
+	for _, want := range []string{
+		"管理员：",
+		"/update 远程更新 WeClaw",
+		"/restart 重启 WeClaw",
+		"/feishu users pending 查看待授权飞书用户",
+		"/feishu users revoke <用户ID> 取消飞书用户授权",
+	} {
+		if !strings.Contains(reply.Texts[0], want) {
+			t.Fatalf("admin wechat help=%q, want %q", reply.Texts[0], want)
+		}
+	}
+}
+
 func TestNonFeishuHelpKeepsText(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -139,6 +230,14 @@ func TestNonFeishuHelpKeepsText(t *testing.T) {
 	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "WeClaw 帮助") {
 		t.Fatalf("texts=%#v, want help text", reply.Texts)
 	}
+}
+
+func helpChoiceIDs(choices []platform.Choice) map[string]bool {
+	ids := make(map[string]bool, len(choices))
+	for _, choice := range choices {
+		ids[choice.ID] = true
+	}
+	return ids
 }
 
 func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
