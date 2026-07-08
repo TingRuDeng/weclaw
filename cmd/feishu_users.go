@@ -162,10 +162,10 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	if view.OpenID != "" {
 		fmt.Printf("   open_id: %s\n", view.OpenID)
 	}
-	if len(view.AuthorizedAccounts) > 0 {
+	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		fmt.Printf("   已授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.AuthorizedAccounts, botLabels), ", "))
 	}
-	if len(view.UnauthorizedAccounts) > 0 {
+	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		fmt.Printf("   待授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.UnauthorizedAccounts, botLabels), ", "))
 	}
 	if len(view.AuthorizedAccounts) == 0 && len(view.UnauthorizedAccounts) == 0 && len(view.Accounts) > 0 {
@@ -180,9 +180,6 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 		}
 		return
 	}
-	if !showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
-		fmt.Println("   下一步: weclaw feishu users pending")
-	}
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		printFeishuIdentityApproveHints(view)
 	}
@@ -191,13 +188,10 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 // feishuIdentityViewStatus 把身份授权状态转为面向用户的中文文案。
 func feishuIdentityViewStatus(view messaging.FeishuIdentityView, showApprovalCode bool) string {
 	if showApprovalCode && strings.TrimSpace(view.AuthCode) != "" {
-		if len(view.AuthorizedAccounts) > 0 && len(view.UnauthorizedAccounts) > 0 {
-			return "部分授权，待确认"
-		}
 		return "待确认"
 	}
-	if len(view.AuthorizedAccounts) > 0 && len(view.UnauthorizedAccounts) > 0 {
-		return "部分授权"
+	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
+		return "待授权"
 	}
 	if len(view.AuthorizedAccounts) > 0 || view.Approved {
 		return "已授权"
@@ -275,9 +269,11 @@ func printFeishuIdentityApproveHints(view messaging.FeishuIdentityView) {
 	if selector == "" {
 		return
 	}
-	fmt.Printf("   授权访问: weclaw feishu users approve %s\n", selector)
+	fmt.Printf("   授权命令: weclaw feishu users approve %s\n", selector)
+	fmt.Println("   授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。")
 	if strings.TrimSpace(view.UnionID) != "" {
-		fmt.Printf("   设为管理员: weclaw feishu users approve %s --admin\n", view.UnionID)
+		fmt.Printf("   管理员命令: weclaw feishu users approve %s --admin\n", view.UnionID)
+		fmt.Println("   管理员说明: 需要同时设为管理员时执行上面的管理员命令。")
 	}
 }
 

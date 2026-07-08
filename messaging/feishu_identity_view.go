@@ -97,7 +97,7 @@ func feishuIdentityViewNeedsApproval(view FeishuIdentityView, record feishuIdent
 	if len(view.UnauthorizedAccounts) == 0 {
 		return false
 	}
-	return record.Pending && !record.Approved
+	return true
 }
 
 func loadFeishuIdentityConfig() (config.Config, bool) {

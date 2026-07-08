@@ -24,6 +24,45 @@ func TestFeishuIdentityCommandListsPendingUsers(t *testing.T) {
 	}
 }
 
+func TestFeishuIdentityCommandListHidesPendingScope(t *testing.T) {
+	setupFeishuIdentityCommandConfig(t)
+	handler := newFeishuIdentityCommandHandler(t)
+	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
+	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_b", "ou_b", "user_a", "on_same_person"))
+	reply := newAdminCommandTestReplier()
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve on_same_person --bot main"), reply)
+	reply.waitTexts(t, 1)
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users list"), reply)
+
+	texts := reply.waitTexts(t, 2)
+	listReply := texts[len(texts)-1]
+	if !strings.Contains(listReply, "已授权机器人") || !strings.Contains(listReply, "状态: 已授权") {
+		t.Fatalf("reply=%q, want authorized scope", listReply)
+	}
+	if strings.Contains(listReply, "待授权机器人") ||
+		strings.Contains(listReply, "下一步: /feishu users pending") ||
+		strings.Contains(listReply, "部分授权") {
+		t.Fatalf("reply=%q, list should not print pending scope", listReply)
+	}
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users pending"), reply)
+
+	texts = reply.waitTexts(t, 3)
+	pendingReply := texts[len(texts)-1]
+	if !strings.Contains(pendingReply, "待授权机器人") ||
+		!strings.Contains(pendingReply, "cli_b") ||
+		!strings.Contains(pendingReply, "状态: 待授权") ||
+		!strings.Contains(pendingReply, "授权命令: /feishu users approve on_same_person") ||
+		!strings.Contains(pendingReply, "授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。") {
+		t.Fatalf("reply=%q, want pending scope in pending command", pendingReply)
+	}
+	if strings.Contains(pendingReply, "已授权机器人") {
+		t.Fatalf("reply=%q, pending should not print authorized scope", pendingReply)
+	}
+}
+
 func TestFeishuIdentityCommandApprovesUnionIDForAllBots(t *testing.T) {
 	setupFeishuIdentityCommandConfig(t)
 	handler := newFeishuIdentityCommandHandler(t)

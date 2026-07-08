@@ -43,10 +43,10 @@ func feishuIdentityViewsForMessage(records []feishuIdentityRecord, cfg config.Co
 func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[string]string, showApprovalCode bool) []string {
 	lines := []string{"- " + view.Key}
 	lines = append(lines, feishuIdentityIDLines(view)...)
-	if len(view.AuthorizedAccounts) > 0 {
+	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		lines = append(lines, "   已授权机器人: "+strings.Join(feishuAccountLabels(view.AuthorizedAccounts, labels), ", "))
 	}
-	if len(view.UnauthorizedAccounts) > 0 {
+	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		lines = append(lines, "   待授权机器人: "+strings.Join(feishuAccountLabels(view.UnauthorizedAccounts, labels), ", "))
 	}
 	lines = append(lines, "   状态: "+feishuIdentityMessageStatus(view, showApprovalCode))
@@ -72,8 +72,8 @@ func feishuIdentityActionLines(view FeishuIdentityView, showApprovalCode bool) [
 	if showApprovalCode && strings.TrimSpace(view.AuthCode) != "" {
 		return feishuIdentityAuthCodeLines(view)
 	}
-	if !showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
-		return []string{"   下一步: /feishu users pending"}
+	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
+		return feishuIdentityApproveHintLines(view)
 	}
 	return nil
 }
@@ -89,15 +89,30 @@ func feishuIdentityAuthCodeLines(view FeishuIdentityView) []string {
 	return lines
 }
 
+func feishuIdentityApproveHintLines(view FeishuIdentityView) []string {
+	selector := firstNonBlank(view.UnionID, view.UserID, view.OpenID, view.Key)
+	if strings.TrimSpace(selector) == "" {
+		return nil
+	}
+	lines := []string{
+		"   授权命令: /feishu users approve " + selector,
+		"   授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。",
+	}
+	if strings.TrimSpace(view.UnionID) != "" {
+		lines = append(lines,
+			"   管理员命令: /feishu users approve "+view.UnionID+" --admin",
+			"   管理员说明: 需要同时设为管理员时执行上面的管理员命令。",
+		)
+	}
+	return lines
+}
+
 func feishuIdentityMessageStatus(view FeishuIdentityView, showApprovalCode bool) string {
 	if showApprovalCode && strings.TrimSpace(view.AuthCode) != "" {
-		if len(view.AuthorizedAccounts) > 0 && len(view.UnauthorizedAccounts) > 0 {
-			return "部分授权，待确认"
-		}
 		return "待确认"
 	}
-	if len(view.AuthorizedAccounts) > 0 && len(view.UnauthorizedAccounts) > 0 {
-		return "部分授权"
+	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
+		return "待授权"
 	}
 	if len(view.AuthorizedAccounts) > 0 {
 		return "已授权"

@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +11,7 @@ func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuBotUserForTest(t, "cli_b", "on_approved")
 
 	output := captureStdout(t, func() {
 		if err := runFeishuUsers("pending"); err != nil {
@@ -31,8 +30,9 @@ func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
 	if !strings.Contains(output, "卡片管家 (project-a, cli_a)") {
 		t.Fatalf("output=%q, want readable bot label", output)
 	}
-	if !strings.Contains(output, "授权访问: weclaw feishu users approve on_same_person") ||
-		!strings.Contains(output, "设为管理员: weclaw feishu users approve on_same_person --admin") {
+	if !strings.Contains(output, "授权命令: weclaw feishu users approve on_same_person") ||
+		!strings.Contains(output, "授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。") ||
+		!strings.Contains(output, "管理员命令: weclaw feishu users approve on_same_person --admin") {
 		t.Fatalf("output=%q, want approve command hints", output)
 	}
 }
@@ -72,13 +72,15 @@ func TestRunFeishuUsersListPrintsAuthorizedScopeWithoutAuthCode(t *testing.T) {
 
 	if !strings.Contains(output, "on_same_person") ||
 		!strings.Contains(output, "已授权机器人: 卡片管家") ||
-		!strings.Contains(output, "待授权机器人: project-b") ||
-		!strings.Contains(output, "状态: 部分授权") {
-		t.Fatalf("output=%q, want authorized and pending bot scopes", output)
+		!strings.Contains(output, "状态: 已授权") {
+		t.Fatalf("output=%q, want authorized bot scope only", output)
 	}
 	if strings.Contains(output, "授权码: 123456") ||
-		strings.Contains(output, "approve-code 123456") {
-		t.Fatalf("output=%q, list should not print auth code commands", output)
+		strings.Contains(output, "approve-code 123456") ||
+		strings.Contains(output, "待授权机器人") ||
+		strings.Contains(output, "下一步: weclaw feishu users pending") ||
+		strings.Contains(output, "部分授权") {
+		t.Fatalf("output=%q, list should not print pending scope", output)
 	}
 }
 
@@ -113,8 +115,36 @@ func TestRunFeishuUsersPendingPrintsApprovedIdentityWithAuthCode(t *testing.T) {
 	})
 
 	if !strings.Contains(output, "授权码: 123456") ||
-		!strings.Contains(output, "状态: 部分授权，待确认") {
+		!strings.Contains(output, "状态: 待确认") {
 		t.Fatalf("output=%q, want pending approved identity with active auth code", output)
+	}
+	if strings.Contains(output, "已授权机器人") {
+		t.Fatalf("output=%q, pending should not print authorized scope", output)
+	}
+}
+
+func TestRunFeishuUsersPendingPrintsUnauthorizedScopeWithoutAuthCode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateWithApprovedExpiredAuthCodeForTest(t)
+	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuBotUserForTest(t, "cli_a", "on_same_person")
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("pending"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "待授权机器人: project-b") ||
+		!strings.Contains(output, "状态: 待授权") ||
+		!strings.Contains(output, "授权命令: weclaw feishu users approve on_same_person") ||
+		!strings.Contains(output, "授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。") {
+		t.Fatalf("output=%q, want pending unauthorized scope", output)
+	}
+	if strings.Contains(output, "授权码: 123456") ||
+		strings.Contains(output, "approve-code 123456") ||
+		strings.Contains(output, "已授权机器人") {
+		t.Fatalf("output=%q, should hide expired auth code", output)
 	}
 }
 
@@ -209,200 +239,5 @@ func TestRunFeishuUsersApproveRejectsAdminWithoutUnionID(t *testing.T) {
 	}
 	if len(cfg.AdminUsers) != 0 {
 		t.Fatalf("admin_users=%#v, want empty", cfg.AdminUsers)
-	}
-}
-
-func writeFeishuIdentityStateForTest(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
-	}
-	data := `{
-  "version": 1,
-  "records": {
-    "on_same_person": {
-      "key": "on_same_person",
-      "union_id": "on_same_person",
-      "open_id": "ou_a",
-      "open_ids": {"cli_a": "ou_a"},
-      "accounts": ["cli_a"],
-      "pending": true,
-      "approved": false,
-      "last_seen": "2026-07-08T00:00:00Z"
-    },
-    "on_approved": {
-      "key": "on_approved",
-      "union_id": "on_approved",
-      "open_id": "ou_b",
-      "open_ids": {"cli_b": "ou_b"},
-      "accounts": ["cli_b"],
-      "pending": false,
-      "approved": true,
-      "last_seen": "2026-07-08T00:00:01Z"
-    }
-  }
-}`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatalf("write identity state: %v", err)
-	}
-}
-
-func writeFeishuIdentityStateWithoutUnionForTest(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
-	}
-	data := `{
-  "version": 1,
-  "records": {
-    "ou_only": {
-      "key": "ou_only",
-      "open_id": "ou_only",
-      "open_ids": {"cli_a": "ou_only"},
-      "accounts": ["cli_a"],
-      "pending": true,
-      "approved": false,
-      "last_seen": "2026-07-08T00:00:00Z"
-    }
-  }
-}`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatalf("write identity state: %v", err)
-	}
-}
-
-func writeFeishuIdentityStateWithAuthCodeForTest(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
-	}
-	data := `{
-  "version": 1,
-  "records": {
-    "on_same_person": {
-      "key": "on_same_person",
-      "union_id": "on_same_person",
-      "open_id": "ou_a",
-      "open_ids": {"cli_a": "ou_a"},
-      "accounts": ["cli_a"],
-      "auth_code": "123456",
-      "auth_code_expires_at": "2099-01-01T00:00:00Z",
-      "pending": true,
-      "approved": false,
-      "last_seen": "2026-07-08T00:00:00Z"
-    }
-  }
-}`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatalf("write identity state: %v", err)
-	}
-}
-
-func writeFeishuIdentityStateWithApprovedAuthCodeForTest(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
-	}
-	data := `{
-  "version": 1,
-  "records": {
-    "on_same_person": {
-      "key": "on_same_person",
-      "union_id": "on_same_person",
-      "open_id": "ou_a",
-      "open_ids": {"cli_a": "ou_a", "cli_b": "ou_b"},
-      "accounts": ["cli_a", "cli_b"],
-      "auth_code": "123456",
-      "auth_code_expires_at": "2099-01-01T00:00:00Z",
-      "pending": false,
-      "approved": true,
-      "last_seen": "2026-07-08T00:00:00Z"
-    }
-  }
-}`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatalf("write identity state: %v", err)
-	}
-}
-
-func writeFeishuIdentityStateWithExpiredAuthCodeForTest(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir identity dir: %v", err)
-	}
-	data := `{
-  "version": 1,
-  "records": {
-    "on_same_person": {
-      "key": "on_same_person",
-      "union_id": "on_same_person",
-      "open_id": "ou_a",
-      "open_ids": {"cli_a": "ou_a"},
-      "accounts": ["cli_a"],
-      "auth_code": "123456",
-      "auth_code_expires_at": "2000-01-01T00:00:00Z",
-      "pending": true,
-      "approved": false,
-      "last_seen": "2026-07-08T00:00:00Z"
-    }
-  }
-}`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatalf("write identity state: %v", err)
-	}
-}
-
-func writeFeishuBotsConfigForTest(t *testing.T) {
-	t.Helper()
-	enabled := true
-	cfg := config.DefaultConfig()
-	cfg.Platforms["feishu"] = config.PlatformConfig{
-		Enabled: &enabled,
-		Bots: []config.FeishuBotConfig{
-			{Name: "project-a", DisplayName: "卡片管家", AppID: "cli_a"},
-			{Name: "project-b", AppID: "cli_b"},
-		},
-	}
-	if err := config.Save(cfg); err != nil {
-		t.Fatalf("config.Save error: %v", err)
-	}
-}
-
-func authorizeFeishuUserForTest(t *testing.T, userID string) {
-	t.Helper()
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load error: %v", err)
-	}
-	feishuCfg := cfg.Platforms["feishu"]
-	for i := range feishuCfg.Bots {
-		feishuCfg.Bots[i].AllowedUsers = append(feishuCfg.Bots[i].AllowedUsers, userID)
-	}
-	cfg.Platforms["feishu"] = feishuCfg
-	if err := config.Save(cfg); err != nil {
-		t.Fatalf("config.Save error: %v", err)
-	}
-}
-
-func authorizeFeishuBotUserForTest(t *testing.T, appID string, userID string) {
-	t.Helper()
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load error: %v", err)
-	}
-	feishuCfg := cfg.Platforms["feishu"]
-	for i := range feishuCfg.Bots {
-		if feishuCfg.Bots[i].AppID == appID {
-			feishuCfg.Bots[i].AllowedUsers = append(feishuCfg.Bots[i].AllowedUsers, userID)
-		}
-	}
-	cfg.Platforms["feishu"] = feishuCfg
-	if err := config.Save(cfg); err != nil {
-		t.Fatalf("config.Save error: %v", err)
 	}
 }
