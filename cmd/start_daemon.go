@@ -191,11 +191,18 @@ func defaultStopProcessOps() stopProcessOps {
 		runtimeLockBusy:    runtimeLockBusy,
 		signalPID:          signalPID,
 		signalProcessGroup: signalProcessGroup,
-		removePIDFile: func() error {
-			return os.Remove(pidFile())
-		},
-		sleep: time.Sleep,
+		removePIDFile:      removePIDFile,
+		sleep:              time.Sleep,
 	}
+}
+
+// removePIDFile 清理运行态文件；服务进程可能已在退出 defer 中先删掉它。
+func removePIDFile() error {
+	err := os.Remove(pidFile())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 // stopAllWeclawWithOps 只停止 pid 文件指向的目标，避免按命令行扫描误杀其他进程。

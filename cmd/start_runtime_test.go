@@ -132,6 +132,14 @@ func TestStopAllWeclawRemovesStalePidFile(t *testing.T) {
 	}
 }
 
+func TestRemovePIDFileTreatsMissingFileAsClean(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+
+	if err := removePIDFile(); err != nil {
+		t.Fatalf("removePIDFile error=%v，缺失 pid 文件应视为已清理", err)
+	}
+}
+
 func TestStopAllWeclawDoesNotSignalWhenRuntimeLockIsFree(t *testing.T) {
 	removed := false
 	signaled := false
