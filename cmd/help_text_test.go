@@ -14,6 +14,7 @@ func TestRootHelpUsesChineseProductDescription(t *testing.T) {
 		"WeClaw 连接微信、飞书和 AI Agent",
 		"启动消息服务",
 		"管理飞书机器人",
+		"管理本机配置",
 		"检查运行状态",
 		"更新 WeClaw",
 		"查看版本",
