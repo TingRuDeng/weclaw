@@ -69,6 +69,14 @@ func (a *Adapter) SetSessionOptions(options FeishuSessionOptions) {
 	a.session = options
 }
 
+// SetDedupStateFile 设置飞书消息事件短期去重状态文件。
+func (a *Adapter) SetDedupStateFile(path string) {
+	if a.deduper == nil {
+		return
+	}
+	a.deduper.setStateFile(path)
+}
+
 // Name 返回平台名称。
 func (a *Adapter) Name() platform.PlatformName {
 	return platform.PlatformFeishu

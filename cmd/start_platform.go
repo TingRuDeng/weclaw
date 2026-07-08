@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +14,8 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/wechat"
 )
+
+var feishuStateFileUnsafeChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config, opts ...platform.RegistryOption) (*platform.Registry, error) {
 	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
@@ -64,6 +68,7 @@ func buildFeishuRegistryEntry(bot config.FeishuBotConfig) (platform.RegistryEntr
 	}
 	log.Printf("[platform] registering feishu bot name=%s display=%s account=%s", bot.Name, config.FeishuBotDisplayName(bot), bot.AppID)
 	adapter := feishuplatform.NewAdapter(creds)
+	adapter.SetDedupStateFile(feishuDedupStateFile(creds.AppID))
 	adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
 		RequireMentionInGroup: bot.EffectiveRequireMentionInGroup(),
 	})
@@ -91,4 +96,12 @@ func wechatAggregationWindow(cfg config.PlatformConfig) time.Duration {
 		return 0
 	}
 	return time.Duration(*cfg.MessageAggregationMs) * time.Millisecond
+}
+
+func feishuDedupStateFile(appID string) string {
+	name := strings.Trim(feishuStateFileUnsafeChars.ReplaceAllString(strings.TrimSpace(appID), "-"), "-")
+	if name == "" {
+		name = "default"
+	}
+	return filepath.Join(weclawDir(), "state", "feishu-dedup-"+name+".json")
 }

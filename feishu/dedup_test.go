@@ -3,7 +3,9 @@ package feishu
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -102,6 +104,49 @@ func TestHandleMessageEventDoesNotContentDedupDM(t *testing.T) {
 
 	if dispatches != 2 {
 		t.Fatalf("dispatches=%d, want DM messages with different IDs dispatched twice", dispatches)
+	}
+}
+
+func TestHandleMessageEventDedupesSameMessageAfterAdapterRestart(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "feishu-dedup.json")
+	first := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	first.SetDedupStateFile(stateFile)
+	event := newDMEvent(dedupTestEventOptions{
+		MessageID: "om_replayed", EventID: "evt_replayed",
+		CreateTime: "1719730000000", Text: "/cx ls",
+	})
+
+	if dispatchFeishuEvents(first, event) != 1 {
+		t.Fatal("首次消息应正常分发")
+	}
+
+	second := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	second.SetDedupStateFile(stateFile)
+	if dispatchFeishuEvents(second, event) != 0 {
+		t.Fatal("重启后同一飞书消息不应再次分发")
+	}
+}
+
+func TestFeishuEventDedupStateDropsExpiredEntries(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "feishu-dedup.json")
+	base := time.Date(2026, 7, 8, 18, 0, 0, 0, time.UTC)
+	first := newFeishuEventDeduper(10 * time.Minute)
+	first.now = func() time.Time { return base }
+	first.setStateFile(stateFile)
+	event := newDMEvent(dedupTestEventOptions{
+		MessageID: "om_expired", EventID: "evt_expired",
+		CreateTime: "1719730000000", Text: "/cx ls",
+	})
+	scope := ExtractFeishuSessionScope(event)
+	if first.isDuplicate(event, scope) {
+		t.Fatal("首次消息不应被判重")
+	}
+
+	second := newFeishuEventDeduper(10 * time.Minute)
+	second.now = func() time.Time { return base.Add(11 * time.Minute) }
+	second.setStateFile(stateFile)
+	if second.isDuplicate(event, scope) {
+		t.Fatal("超过 TTL 的持久化指纹不应继续判重")
 	}
 }
 
