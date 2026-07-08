@@ -42,7 +42,6 @@ func feishuIdentityViewsForMessage(records []feishuIdentityRecord, cfg config.Co
 
 func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[string]string, showApprovalCode bool) []string {
 	lines := []string{"- " + view.Key}
-	lines = append(lines, feishuIdentityIDLines(view)...)
 	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		lines = append(lines, "   已授权机器人: "+strings.Join(feishuAccountLabels(view.AuthorizedAccounts, labels), ", "))
 	}
@@ -51,20 +50,6 @@ func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[stri
 	}
 	lines = append(lines, "   状态: "+feishuIdentityMessageStatus(view, showApprovalCode))
 	lines = append(lines, feishuIdentityActionLines(view, showApprovalCode)...)
-	return lines
-}
-
-func feishuIdentityIDLines(view FeishuIdentityView) []string {
-	lines := []string{}
-	if view.UnionID != "" {
-		lines = append(lines, "   union_id: "+view.UnionID)
-	}
-	if view.UserID != "" {
-		lines = append(lines, "   user_id: "+view.UserID)
-	}
-	if view.OpenID != "" {
-		lines = append(lines, "   open_id: "+view.OpenID)
-	}
 	return lines
 }
 

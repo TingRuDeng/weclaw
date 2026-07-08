@@ -152,16 +152,6 @@ func printFeishuIdentityViews(title string, views []messaging.FeishuIdentityView
 // printFeishuIdentityView 输出单条身份详情和可复制的授权命令。
 func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLabels map[string]string, names map[string]string, showApprovalCode bool) {
 	fmt.Printf("%d. %s\n", index, feishuIdentityDisplayLabel(view, names))
-	fmt.Printf("   身份ID: %s\n", view.Key)
-	if view.UnionID != "" {
-		fmt.Printf("   union_id: %s\n", view.UnionID)
-	}
-	if view.UserID != "" {
-		fmt.Printf("   user_id: %s\n", view.UserID)
-	}
-	if view.OpenID != "" {
-		fmt.Printf("   open_id: %s\n", view.OpenID)
-	}
 	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		fmt.Printf("   已授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.AuthorizedAccounts, botLabels), ", "))
 	}
