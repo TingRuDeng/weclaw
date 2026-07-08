@@ -12,6 +12,7 @@ import (
 func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
+	writeFeishuBotsConfigForTest(t)
 
 	output := captureStdout(t, func() {
 		if err := runFeishuUsers("pending"); err != nil {
@@ -26,6 +27,13 @@ func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
 	}
 	if strings.Contains(output, "on_approved") {
 		t.Fatalf("output=%q, should hide approved identity from pending", output)
+	}
+	if !strings.Contains(output, "卡片管家 (project-a, cli_a)") {
+		t.Fatalf("output=%q, want readable bot label", output)
+	}
+	if !strings.Contains(output, "授权访问: weclaw feishu users approve on_same_person") ||
+		!strings.Contains(output, "设为管理员: weclaw feishu users approve on_same_person --admin") {
+		t.Fatalf("output=%q, want approve command hints", output)
 	}
 }
 
@@ -188,7 +196,7 @@ func writeFeishuBotsConfigForTest(t *testing.T) {
 	cfg.Platforms["feishu"] = config.PlatformConfig{
 		Enabled: &enabled,
 		Bots: []config.FeishuBotConfig{
-			{Name: "project-a", AppID: "cli_a"},
+			{Name: "project-a", DisplayName: "卡片管家", AppID: "cli_a"},
 			{Name: "project-b", AppID: "cli_b"},
 		},
 	}

@@ -99,7 +99,7 @@ func collectFeishuAddOptions(opts feishuAddOptions, prompter feishuAddPrompter) 
 		return feishuBootstrapOptions{}, err
 	}
 	if !opts.DisplayNameSet {
-		opts.DisplayName, err = prompter.Prompt("Bot 展示名，可填中文", opts.DisplayName)
+		opts.DisplayName, err = prompter.Prompt("Bot 展示名（主显示名称，可填中文）", opts.DisplayName)
 		if err != nil {
 			return feishuBootstrapOptions{}, err
 		}
@@ -163,7 +163,7 @@ func (opts feishuAddOptions) toBootstrapOptions() feishuBootstrapOptions {
 
 // promptFeishuAddAliases 读取飞书机器人别名，空输入表示不配置别名。
 func promptFeishuAddAliases(prompter feishuAddPrompter) ([]string, error) {
-	value, err := prompter.Prompt("Bot 别名，逗号分隔，可填中文，可留空", "")
+	value, err := prompter.Prompt("Bot 别名（额外可识别名称，逗号分隔，可留空）", "")
 	if err != nil {
 		return nil, err
 	}

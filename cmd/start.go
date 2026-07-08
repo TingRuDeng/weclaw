@@ -29,7 +29,7 @@ func init() {
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the message bridge (auto-login WeChat if needed)",
+	Short: "Start the message bridge",
 	RunE:  runStart,
 }
 

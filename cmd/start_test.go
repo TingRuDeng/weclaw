@@ -18,6 +18,37 @@ func TestWechatEnabledDefaultsToTrue(t *testing.T) {
 	}
 }
 
+func TestWechatEnabledDefaultsToFalseWhenFeishuEnabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	enabled := true
+	cfg.Platforms[string(platform.PlatformFeishu)] = config.PlatformConfig{
+		Enabled: &enabled,
+		Bots: []config.FeishuBotConfig{
+			{Name: "project-a", AppID: "cli_a"},
+		},
+	}
+
+	if wechatEnabled(cfg) {
+		t.Fatal("wechat should be disabled by default when feishu is enabled")
+	}
+}
+
+func TestWechatEnabledCanBeExplicitlyEnabledWithFeishu(t *testing.T) {
+	cfg := config.DefaultConfig()
+	enabled := true
+	cfg.Platforms[string(platform.PlatformFeishu)] = config.PlatformConfig{
+		Enabled: &enabled,
+		Bots: []config.FeishuBotConfig{
+			{Name: "project-a", AppID: "cli_a"},
+		},
+	}
+	cfg.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{Enabled: &enabled}
+
+	if !wechatEnabled(cfg) {
+		t.Fatal("wechat should stay enabled when explicitly configured with feishu")
+	}
+}
+
 func TestWechatEnabledCanBeDisabled(t *testing.T) {
 	cfg := config.DefaultConfig()
 	disabled := false

@@ -75,7 +75,12 @@ func buildFeishuRegistryEntry(bot config.FeishuBotConfig) (platform.RegistryEntr
 
 func wechatEnabled(cfg *config.Config) bool {
 	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
-	return wechatCfg.Enabled == nil || *wechatCfg.Enabled
+	if wechatCfg.Enabled != nil {
+		return *wechatCfg.Enabled
+	}
+	// 飞书-only 新用户没有微信账号时，启动不能被微信自动登录阻塞。
+	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
+	return feishuCfg.Enabled == nil || !*feishuCfg.Enabled
 }
 
 func wechatAggregationWindow(cfg config.PlatformConfig) time.Duration {

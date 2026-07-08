@@ -5,6 +5,7 @@ type FeishuIdentityView struct {
 	UnionID  string
 	UserID   string
 	OpenID   string
+	OpenIDs  map[string]string
 	Accounts []string
 	Pending  bool
 	Approved bool
@@ -34,8 +35,21 @@ func feishuIdentityViewFromRecord(record feishuIdentityRecord) FeishuIdentityVie
 		UnionID:  record.UnionID,
 		UserID:   record.UserID,
 		OpenID:   record.OpenID,
+		OpenIDs:  cloneStringMap(record.OpenIDs),
 		Accounts: append([]string(nil), record.Accounts...),
 		Pending:  record.Pending,
 		Approved: record.Approved,
 	}
+}
+
+// cloneStringMap 复制身份映射，避免 CLI 展示层误改持久化记录。
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }

@@ -53,6 +53,21 @@ func TestFeishuIdentityStorePersistsRecords(t *testing.T) {
 	}
 }
 
+func TestLoadFeishuIdentityViewsIncludesOpenIDs(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "feishu-identities.json")
+	store := newFeishuIdentityStore()
+	store.SetFilePath(stateFile)
+	store.Remember(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
+
+	views, err := LoadFeishuIdentityViews(stateFile, false)
+	if err != nil {
+		t.Fatalf("LoadFeishuIdentityViews error: %v", err)
+	}
+	if len(views) != 1 || views[0].OpenIDs["cli_a"] != "ou_a" {
+		t.Fatalf("views=%#v, want cli_a open_id", views)
+	}
+}
+
 func TestFeishuIdentityStoreApproveRemovesPendingRecord(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "feishu-identities.json")
 	store := newFeishuIdentityStore()

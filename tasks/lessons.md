@@ -218,6 +218,13 @@
 - 规则：飞书 `admin_users` 只允许使用 `union_id`；不保留 `open_id` 或 `user_id` 兼容。
 - 反例：把某个机器人里的 `ou_...` 写进 `admin_users`，换另一个机器人后同一个人不再是管理员，或误以为多应用身份通用。
 - 正确做法：飞书管理命令只读取 `feishu_union_id` 或 `on_` 形态的 union_id 别名；`/feishu users approve --admin` 在缺少 union_id 时必须拒绝写入。
+
+## 2026-07-08 飞书用户列表友好显示
+
+- 触发条件：`weclaw feishu users pending/list` 需要给管理员展示可识别的人名。
+- 规则：用户列表可以通过飞书通讯录接口补全姓名，但必须优先使用身份记录里按 app_id 保存的 `open_ids`，避免多机器人场景下拿错应用内 open_id。
+- 反例：只显示 `union_id/open_id`，管理员无法判断是谁；或者拿某个机器人里的 `open_id` 去另一个机器人查询，导致 `open_id cross app` 或查不到人。
+- 正确做法：展示层保留稳定 ID，同时显示 `姓名 (union_id)`；通讯录查询失败时明确输出失败原因，不能静默退回纯 ID。
 - 来源：2026-07-08 用户确认“那不用兼容，直接使用 union_id”。
 
 ## 2026-07-08 飞书首次管理员初始化
@@ -227,3 +234,19 @@
 - 反例：只支持飞书聊天命令写 `admin_users`，导致新安装环境只能手动编辑 `config.json`。
 - 正确做法：本地 `weclaw feishu users approve <union_id> --admin` 复用同一套授权逻辑，写入 `allowed_users` 和顶层 `admin_users`。
 - 来源：2026-07-08 用户指出“一开始就没配置管理员，那不就只能改配置文件了吗”。
+
+## 2026-07-08 飞书-only 启动不依赖微信
+
+- 触发条件：新用户只通过 `weclaw feishu add` 配置飞书，然后执行 `weclaw start`。
+- 规则：只要飞书平台已启用且微信未显式启用，启动不能要求微信登录；微信默认启用只适用于没有配置飞书的旧默认场景。
+- 反例：飞书 bot 已配置完成，但 `weclaw start` 因没有微信账号而弹出微信扫码，导致用户以为飞书配置无效。
+- 正确做法：`wechatEnabled` 先尊重 `platforms.wechat.enabled`；未配置时，如果 `platforms.feishu.enabled=true`，则默认不启用微信。
+- 来源：2026-07-08 用户指出“没登录微信不应该影响服务启动”。
+
+## 2026-07-08 飞书身份授权输出
+
+- 触发条件：用户执行 `weclaw feishu users pending/list` 准备授权飞书用户。
+- 规则：输出必须直接给出可复制的授权命令，并把机器人 app_id 显示成可读标签，避免用户再反查配置。
+- 反例：只输出 `机器人: cli_xxx` 和身份字段，用户不知道执行哪条命令、也分不清不同 bot。
+- 正确做法：每条身份记录显示 `weclaw feishu users approve <id>` 和 `--admin` 示例；已配置 bot 显示为 `展示名 (name, app_id)`。
+- 来源：2026-07-08 用户指出 pending 输出缺少授权提示且机器人显示 id 没法区分。
