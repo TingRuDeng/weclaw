@@ -21,6 +21,7 @@ type FeishuIdentityView struct {
 	AuthCodeExpiresAt    string
 	Pending              bool
 	Approved             bool
+	Admin                bool
 }
 
 // LoadFeishuIdentityViews 读取飞书自动发现身份，供本地 CLI 做只读展示。
@@ -80,7 +81,19 @@ func feishuIdentityViewFromRecord(record feishuIdentityRecord, cfg config.Config
 		AuthCodeExpiresAt:    expiresAt,
 		Pending:              record.Pending,
 		Approved:             record.Approved,
+		Admin:                feishuIdentityAdminForRecord(record, cfg, cfgOK),
 	}
+}
+
+func feishuIdentityAdminForRecord(record feishuIdentityRecord, cfg config.Config, cfgOK bool) bool {
+	if !cfgOK {
+		return false
+	}
+	unionID := strings.TrimSpace(record.UnionID)
+	if unionID == "" {
+		return false
+	}
+	return stringSliceContains(cfg.AdminUsers, unionID)
 }
 
 func visibleFeishuAuthCode(record feishuIdentityRecord, unauthorized []string, now time.Time) (string, string) {

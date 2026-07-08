@@ -25,7 +25,7 @@ func feishuHelpPrompt(isAdmin bool) string {
 	if !isAdmin {
 		return "WeClaw 帮助\n请选择常用操作入口。"
 	}
-	return "WeClaw 帮助\n请选择常用操作入口。\n\n" + adminHelpText()
+	return "WeClaw 帮助\n请选择常用操作入口。"
 }
 
 func feishuHelpChoices(isAdmin bool) []platform.Choice {

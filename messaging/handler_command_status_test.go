@@ -144,9 +144,9 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 			t.Fatalf("admin help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
 	}
-	for _, want := range []string{"/feishu users approve-code <授权码>", "/feishu users revoke <用户ID>"} {
-		if !strings.Contains(reply.Choices[0].Prompt, want) {
-			t.Fatalf("admin help prompt=%q, want %q", reply.Choices[0].Prompt, want)
+	for _, hidden := range []string{"/update", "/restart", "/feishu users approve-code", "/feishu users revoke"} {
+		if strings.Contains(reply.Choices[0].Prompt, hidden) {
+			t.Fatalf("admin help prompt=%q, should keep command list in buttons, not prompt text", reply.Choices[0].Prompt)
 		}
 	}
 }

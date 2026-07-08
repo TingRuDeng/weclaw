@@ -154,6 +154,7 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	fmt.Printf("%d. %s\n", index, feishuIdentityDisplayLabel(view, names))
 	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		fmt.Printf("   已授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.AuthorizedAccounts, botLabels), ", "))
+		fmt.Printf("   用户类型: %s\n", feishuIdentityUserType(view))
 	}
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		fmt.Printf("   待授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.UnauthorizedAccounts, botLabels), ", "))
@@ -175,6 +176,13 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		printFeishuIdentityApproveHints(view)
 	}
+}
+
+func feishuIdentityUserType(view messaging.FeishuIdentityView) string {
+	if view.Admin {
+		return "管理员"
+	}
+	return "普通用户"
 }
 
 // feishuIdentityViewStatus 把身份授权状态转为面向用户的中文文案。

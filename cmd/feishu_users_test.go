@@ -84,6 +84,28 @@ func TestRunFeishuUsersListPrintsAuthorizedScopeWithoutAuthCode(t *testing.T) {
 	}
 }
 
+func TestRunFeishuUsersListPrintsUserType(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateForTest(t)
+	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuUserForTest(t, "on_same_person")
+	authorizeFeishuUserForTest(t, "on_approved")
+	addFeishuAdminUserForTest(t, "on_approved")
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("list"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "on_approved") ||
+		!strings.Contains(output, "用户类型: 管理员") ||
+		!strings.Contains(output, "on_same_person") ||
+		!strings.Contains(output, "用户类型: 普通用户") {
+		t.Fatalf("output=%q, want admin and normal user types", output)
+	}
+}
+
 func TestRunFeishuUsersPendingPrintsAuthCodeCommand(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateWithAuthCodeForTest(t)

@@ -44,6 +44,7 @@ func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[stri
 	lines := []string{"- " + view.Key}
 	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		lines = append(lines, "   已授权机器人: "+strings.Join(feishuAccountLabels(view.AuthorizedAccounts, labels), ", "))
+		lines = append(lines, "   用户类型: "+feishuIdentityUserTypeForMessage(view))
 	}
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		lines = append(lines, "   待授权机器人: "+strings.Join(feishuAccountLabels(view.UnauthorizedAccounts, labels), ", "))
@@ -53,6 +54,13 @@ func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[stri
 	}
 	lines = append(lines, feishuIdentityActionLines(view, showApprovalCode)...)
 	return lines
+}
+
+func feishuIdentityUserTypeForMessage(view FeishuIdentityView) string {
+	if view.Admin {
+		return "管理员"
+	}
+	return "普通用户"
 }
 
 func feishuIdentityActionLines(view FeishuIdentityView, showApprovalCode bool) []string {
