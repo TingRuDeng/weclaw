@@ -15,22 +15,18 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, replyWriter platform.R
 }
 
 func (h *Handler) sendReplyWithMediaAfterStream(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
-	h.sendReplyWithMediaAfterStreamWithMetadata(ctx, replyWriter, userID, agentName, reply, finalInStream, nil)
+	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, agentName, reply, finalInStream)
 }
 
 func (h *Handler) sendReplyWithMediaForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string) {
 	h.sendReplyWithMediaAfterStreamForRoute(ctx, replyWriter, userID, routeUserID, agentName, reply, false)
 }
 
-func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string, finalInStream bool) {
-	metadata := map[string]string{}
-	if sessionKey := feishuSessionKeyFromRoute(routeUserID); sessionKey != "" {
-		metadata[feishuSessionMetadataKey] = sessionKey
-	}
-	h.sendReplyWithMediaAfterStreamWithMetadata(ctx, replyWriter, userID, agentName, reply, finalInStream, metadata)
+func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, replyWriter platform.Replier, userID string, _ string, agentName string, reply string, finalInStream bool) {
+	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, agentName, reply, finalInStream)
 }
 
-func (h *Handler) sendReplyWithMediaAfterStreamWithMetadata(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool, choiceMetadata map[string]string) {
+func (h *Handler) sendReplyWithMediaAfterStreamCore(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
 	imageURLs := ExtractImageURLs(reply)
 	attachmentPaths := extractLocalAttachmentPaths(reply)
 	allowedRoots := h.allowedAttachmentRoots(agentName)
@@ -58,23 +54,12 @@ func (h *Handler) sendReplyWithMediaAfterStreamWithMetadata(ctx context.Context,
 	}
 
 	reply = rewriteReplyWithAttachmentResults(reply, sentPaths, failedPaths)
-	choiceResult, hasChoices := detectChoices(reply)
-	if hasChoices {
-		reply = choiceResult.CleanText
-		choiceResult.Choices = platformChoicesWithMetadata(choiceResult.Choices, choiceMetadata)
-	}
-
 	if wxReply, ok := replyWriter.(*wechat.Replier); ok {
 		wxReply.ChunkRunes = textReplyChunkLimit(ctx)
 	}
 	if !finalInStream && strings.TrimSpace(reply) != "" {
 		if err := replyWriter.SendText(ctx, reply); err != nil {
 			log.Printf("[handler] failed to send reply to %s: %v", userID, err)
-		}
-	}
-	if hasChoices {
-		if err := replyWriter.AskChoices(ctx, choiceResult.Prompt, choiceResult.Choices); err != nil {
-			log.Printf("[handler] failed to send choices to %s: %v", userID, err)
 		}
 	}
 
@@ -89,20 +74,12 @@ func (h *Handler) sendReplyWithMediaAfterStreamWithMetadata(ctx context.Context,
 	}
 }
 
-func finalCardReplyText(reply string) string {
-	choiceResult, hasChoices := detectChoices(reply)
-	if hasChoices {
-		return choiceResult.CleanText
-	}
-	return reply
-}
-
 func finishProgressWithReply(finish func(string, bool) bool, reply string, failed bool) bool {
 	if !canConsumeFinalReplyInStream(reply) {
 		_ = finish("", failed)
 		return false
 	}
-	return finish(finalCardReplyText(reply), failed)
+	return finish(reply, failed)
 }
 
 func finishProgressWithReplyForPlatform(replyWriter platform.Replier, finish func(string, bool) bool, reply string, failed bool) bool {

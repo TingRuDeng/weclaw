@@ -61,7 +61,7 @@ type Handler struct {
 	saveDefault             SaveDefaultFunc
 	contextTokens           sync.Map // map[userID]contextToken
 	saveDir                 string   // directory to save images/files to
-	allowedWorkspaceRoots   []string // /cwd 允许切换的根目录；空=不限制
+	allowedWorkspaceRoots   []string // /cwd 允许切换的根目录；空=禁止远程切换
 	adminUsers              map[string]struct{}
 	rateLimiter             *userRateLimiter
 	rateLimitPerMinute      int

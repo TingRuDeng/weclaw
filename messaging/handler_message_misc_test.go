@@ -202,17 +202,17 @@ func TestSendReplyWithMediaUsesChunksForLongFinalText(t *testing.T) {
 	}
 }
 
-func TestSendReplyWithMediaAsksChoices(t *testing.T) {
+func TestSendReplyWithMediaKeepsChoiceLikeFinalReplyAsText(t *testing.T) {
 	h := NewHandler(nil, nil)
 	replyWriter := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
 	h.sendReplyWithMedia(context.Background(), replyWriter, "user-1", "codex", "请选择一个方案：\n1. 继续\n2. 暂停")
 
-	if len(replyWriter.Texts) != 1 || replyWriter.Texts[0] != "请选择一个方案：" {
-		t.Fatalf("texts=%#v, want cleaned prompt", replyWriter.Texts)
+	if len(replyWriter.Texts) != 1 || replyWriter.Texts[0] != "请选择一个方案：\n1. 继续\n2. 暂停" {
+		t.Fatalf("texts=%#v, want original final reply", replyWriter.Texts)
 	}
-	if len(replyWriter.Choices) != 1 || len(replyWriter.Choices[0].Choices) != 2 {
-		t.Fatalf("choices=%#v, want two choices", replyWriter.Choices)
+	if len(replyWriter.Choices) != 0 {
+		t.Fatalf("choices=%#v, want no auto choice card", replyWriter.Choices)
 	}
 }
 

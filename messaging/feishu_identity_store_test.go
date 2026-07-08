@@ -1,8 +1,12 @@
 package messaging
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 )
@@ -64,6 +68,59 @@ func TestFeishuIdentityStoreApproveRemovesPendingRecord(t *testing.T) {
 	}
 	if pending := store.ListPending(); len(pending) != 0 {
 		t.Fatalf("pending=%#v, want empty after approve", pending)
+	}
+}
+
+func TestFeishuIdentityStoreSkipsDuplicateSave(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "feishu-identities.json")
+	store := newFeishuIdentityStore()
+	store.SetFilePath(stateFile)
+	msg := feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person")
+	store.Remember(msg)
+	first, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("read first state: %v", err)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	store.Remember(msg)
+
+	second, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("read second state: %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("duplicate identity should not rewrite state file")
+	}
+}
+
+func TestFeishuIdentityStoreCapsDiscoveredRecords(t *testing.T) {
+	const wantMaxRecords = 200
+	store := newFeishuIdentityStore()
+	for i := 0; i < wantMaxRecords+5; i++ {
+		suffix := strconv.Itoa(i)
+		store.Remember(feishuIdentityMessage("cli_a", "ou_"+suffix, "user_"+suffix, "on_"+suffix))
+	}
+
+	records := store.ListRecords()
+	if len(records) > wantMaxRecords {
+		t.Fatalf("record count=%d, want <= %d", len(records), wantMaxRecords)
+	}
+}
+
+func TestFeishuIdentityStorePurgesStalePendingRecords(t *testing.T) {
+	store := newFeishuIdentityStore()
+	old := time.Now().Add(-31 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	store.records["old_pending"] = feishuIdentityRecord{Key: "old_pending", OpenID: "old_pending", Pending: true, LastSeen: old}
+	store.records["old_approved"] = feishuIdentityRecord{Key: "old_approved", OpenID: "old_approved", Approved: true, LastSeen: old}
+
+	store.Remember(feishuIdentityMessage("cli_a", "ou_new", "user_new", "on_new"))
+
+	if _, ok := store.Find("old_pending"); ok {
+		t.Fatal("stale pending identity should be purged")
+	}
+	if _, ok := store.Find("old_approved"); !ok {
+		t.Fatal("approved identity should not be purged by pending TTL")
 	}
 }
 

@@ -29,7 +29,7 @@ func TestFeishuIdentityCommandApprovesUnionIDForAllBots(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve 1"), reply)
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve on_same_person"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "已授权") || !strings.Contains(texts[0], "on_same_person") {
@@ -42,6 +42,29 @@ func TestFeishuIdentityCommandApprovesUnionIDForAllBots(t *testing.T) {
 	for _, bot := range cfg.Platforms["feishu"].Bots {
 		if !testStringSliceContains(bot.AllowedUsers, "on_same_person") {
 			t.Fatalf("bot=%s allowed=%#v, want union_id", bot.Name, bot.AllowedUsers)
+		}
+	}
+}
+
+func TestFeishuIdentityCommandRejectsNumericApprovalSelector(t *testing.T) {
+	setupFeishuIdentityCommandConfig(t)
+	handler := newFeishuIdentityCommandHandler(t)
+	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
+	reply := newAdminCommandTestReplier()
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve 1"), reply)
+
+	texts := reply.waitTexts(t, 1)
+	if !strings.Contains(texts[0], "请使用 union_id、user_id 或 open_id") {
+		t.Fatalf("reply=%q, want stable selector warning", texts[0])
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	for _, bot := range cfg.Platforms["feishu"].Bots {
+		if testStringSliceContains(bot.AllowedUsers, "on_same_person") {
+			t.Fatalf("bot=%s allowed=%#v, should not approve numeric selector", bot.Name, bot.AllowedUsers)
 		}
 	}
 }

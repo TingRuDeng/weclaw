@@ -53,6 +53,7 @@ func TestHandleCwdRecordsActiveClaudeWorkspace(t *testing.T) {
 	}
 	h.defaultName = "claude"
 	h.agents["claude"] = ag
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 
 	reply := h.handleCwd("/cwd "+workspace, "user-1")
 

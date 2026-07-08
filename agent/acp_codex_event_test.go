@@ -147,6 +147,33 @@ func TestHandleCodexGuardianWarningEmitsProgress(t *testing.T) {
 	}
 }
 
+func TestHandleCodexPlanUpdatedEmitsCurrentStepProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexPlanUpdated(json.RawMessage(`{
+		"threadId":"thread-1",
+		"turnId":"turn-1",
+		"plan":[
+			{"step":"读取日志定位错误事件","status":"completed"},
+			{"step":"修复实时状态渲染","status":"in_progress"},
+			{"step":"运行回归测试","status":"pending"}
+		]
+	}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "progress" || evt.Text != "进展：修复实时状态渲染" {
+			t.Fatalf("event=%#v, want current plan step progress", evt)
+		}
+	default:
+		t.Fatal("expected plan progress event")
+	}
+}
+
 func TestCodexTurnDiagnosticsAppendsRecentProgressToUnknownError(t *testing.T) {
 	diagnostics := newCodexTurnDiagnostics(3)
 	diagnostics.remember("进展：Codex 自动审批审核中。")

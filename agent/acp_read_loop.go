@@ -58,6 +58,8 @@ func (a *ACPAgent) readLoop() {
 			a.handleCodexItemStarted(msg.Params)
 		case "turn/started", "turn/completed", "turn/failed":
 			a.handleCodexTurnEvent(msg.Method, msg.Params)
+		case "turn/plan/updated":
+			a.handleCodexPlanUpdated(msg.Params)
 		case "error":
 			a.handleCodexError(msg.Params)
 		case "item/completed":

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os/exec"
 	"os/signal"
 	"runtime"
@@ -20,6 +21,9 @@ var (
 	webTokenFlag  string
 	webNoOpenFlag bool
 )
+
+// webTokenRandomReader 允许测试注入失败随机源，生产环境使用 crypto/rand。
+var webTokenRandomReader io.Reader = rand.Reader
 
 func init() {
 	webCmd.Flags().StringVar(&webAddrFlag, "addr", "127.0.0.1:39282", "Web config panel listen address")
@@ -38,7 +42,11 @@ func runWeb(cmd *cobra.Command, args []string) error {
 	addr := strings.TrimSpace(webAddrFlag)
 	token := strings.TrimSpace(webTokenFlag)
 	if token == "" {
-		token = generateWebToken()
+		generated, err := generateWebToken()
+		if err != nil {
+			return fmt.Errorf("生成 Web 认证 token 失败: %w", err)
+		}
+		token = generated
 	}
 
 	srv := web.NewServer(web.Options{Addr: addr, Token: token})
@@ -58,12 +66,13 @@ func runWeb(cmd *cobra.Command, args []string) error {
 	return srv.Run(ctx)
 }
 
-func generateWebToken() string {
+// generateWebToken 生成 Web 面板认证 token；随机源失败时返回错误，避免固定 token 降级。
+func generateWebToken() (string, error) {
 	var b [24]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "weclaw-web-token"
+	if _, err := io.ReadFull(webTokenRandomReader, b[:]); err != nil {
+		return "", err
 	}
-	return hex.EncodeToString(b[:])
+	return hex.EncodeToString(b[:]), nil
 }
 
 // openBrowser 尽力打开默认浏览器；失败不影响服务运行。

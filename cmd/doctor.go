@@ -136,12 +136,12 @@ func checkAuditLog(cfg *config.Config) doctorResult {
 	return result
 }
 
-// checkWorkspaceRoots 校验 /cwd 工作目录白名单：未配置时告警(agent 可被指向任意目录)，配置项不存在时失败。
+// checkWorkspaceRoots 校验 /cwd 工作目录白名单：未配置时提示远程切换已禁用，配置项不存在时失败。
 func checkWorkspaceRoots(cfg *config.Config) doctorResult {
 	result := doctorResult{Name: "workspace confinement"}
 	if len(cfg.AllowedWorkspaceRoots) == 0 {
 		result.Status = doctorWarn
-		result.Detail = "allowed_workspace_roots 未配置；/cwd 可指向任意目录，建议限制"
+		result.Detail = "allowed_workspace_roots 未配置；远程 /cwd 切换已禁用"
 		return result
 	}
 	for _, root := range cfg.AllowedWorkspaceRoots {

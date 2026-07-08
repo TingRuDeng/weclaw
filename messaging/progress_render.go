@@ -34,9 +34,23 @@ func lastNonEmptyProgressLine(text string) string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
+	if status := lastStructuredProgressLine(lines); status != "" {
+		return status
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// lastStructuredProgressLine 优先选择显式进度，避免最终回复正文覆盖任务卡片状态。
+func lastStructuredProgressLine(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "进展：") {
 			return line
 		}
 	}

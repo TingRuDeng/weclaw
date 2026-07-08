@@ -69,11 +69,25 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 	}, nil
 }
 
-// toIncomingFromMessage 将飞书 P2 消息事件转换为平台统一入站消息。
 func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2MessageReceiveV1) (platform.IncomingMessage, bool) {
+	incoming, resources, ok := a.toIncomingEnvelopeFromMessage(event)
+	if !ok {
+		return platform.IncomingMessage{}, false
+	}
+	if err := a.attachMessageResources(ctx, &incoming, resources); err != nil {
+		return platform.IncomingMessage{}, false
+	}
+	if incomingMessageEmpty(incoming) {
+		return platform.IncomingMessage{}, false
+	}
+	return incoming, true
+}
+
+// toIncomingEnvelopeFromMessage 只解析文本、身份和资源描述，不下载附件。
+func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1) (platform.IncomingMessage, []types.Resource, bool) {
 	normalized := normalize.ParseMessage(event)
 	if normalized == nil || normalized.UserID == "" || normalized.MessageID == "" {
-		return platform.IncomingMessage{}, false
+		return platform.IncomingMessage{}, nil, false
 	}
 	scope := ExtractFeishuSessionScope(event)
 	scope.AccountID = a.creds.AppID
@@ -83,25 +97,13 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 	}
 	if shouldIgnoreFeishuGroup(scope, a.session) {
 		log.Printf("[feishu] ignored group message without bot mention: account=%s chat=%s message=%s mention_count=%d", a.creds.AppID, scope.ChatID, scope.MessageID, len(feishuMessageMentions(event)))
-		return platform.IncomingMessage{}, false
+		return platform.IncomingMessage{}, nil, false
 	}
 	if a.deduper != nil && a.deduper.isDuplicate(event, scope) {
 		log.Printf("[feishu] ignored duplicate message event")
-		return platform.IncomingMessage{}, false
+		return platform.IncomingMessage{}, nil, false
 	}
-	text := cleanFeishuText(normalized.Content)
-	resources := append([]types.Resource(nil), normalized.Resources...)
-	if normalized.RawContentType == "post" {
-		postText, postResources := parseFeishuPostContent(rawMessageContent(event))
-		if postText != "" && (text == "" || text == "[rich text message]") {
-			text = postText
-		}
-		text = stripFeishuResourceMarkers(text)
-		resources = mergeFeishuResources(resources, postResources)
-	}
-	if normalized.RawContentType == "image" || normalized.RawContentType == "file" || normalized.RawContentType == "audio" || normalized.RawContentType == "media" {
-		text = ""
-	}
+	text, resources := feishuMessageTextAndResources(event, normalized)
 	metadata := map[string]string{
 		"raw_content_type":       normalized.RawContentType,
 		"original_user_id":       normalized.UserID,
@@ -124,17 +126,39 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		Text:         text,
 		Metadata:     metadata,
 	}
+	return incoming, resources, true
+}
+
+func feishuMessageTextAndResources(event *larkim.P2MessageReceiveV1, normalized *types.NormalizedMessage) (string, []types.Resource) {
+	text := cleanFeishuText(normalized.Content)
+	resources := append([]types.Resource(nil), normalized.Resources...)
+	if normalized.RawContentType == "post" {
+		postText, postResources := parseFeishuPostContent(rawMessageContent(event))
+		if postText != "" && (text == "" || text == "[rich text message]") {
+			text = postText
+		}
+		text = stripFeishuResourceMarkers(text)
+		resources = mergeFeishuResources(resources, postResources)
+	}
+	if normalized.RawContentType == "image" || normalized.RawContentType == "file" || normalized.RawContentType == "audio" || normalized.RawContentType == "media" {
+		text = ""
+	}
+	return text, resources
+}
+
+func (a *Adapter) attachMessageResources(ctx context.Context, incoming *platform.IncomingMessage, resources []types.Resource) error {
 	for _, resource := range resources {
-		attachment, err := a.downloader.DownloadResource(ctx, normalized.MessageID, resource)
+		attachment, err := a.downloader.DownloadResource(ctx, incoming.MessageID, resource)
 		if err != nil {
-			return platform.IncomingMessage{}, false
+			return err
 		}
 		incoming.Attachments = append(incoming.Attachments, attachment)
 	}
-	if strings.TrimSpace(incoming.Text) == "" && len(incoming.Attachments) == 0 {
-		return platform.IncomingMessage{}, false
-	}
-	return incoming, true
+	return nil
+}
+
+func incomingMessageEmpty(incoming platform.IncomingMessage) bool {
+	return strings.TrimSpace(incoming.Text) == "" && len(incoming.Attachments) == 0
 }
 
 // addMetadataIfNotEmpty 只记录飞书真实返回的非空身份字段。

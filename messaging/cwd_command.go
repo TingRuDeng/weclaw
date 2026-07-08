@@ -48,7 +48,7 @@ func (h *Handler) handleCwd(trimmed string, userID ...string) string {
 		return fmt.Sprintf("Not a directory: %s", absPath)
 	}
 
-	// 安全限制：配置了工作目录白名单时，/cwd 只能切到白名单根目录及其子目录，
+	// 安全限制：/cwd 只能切到白名单根目录及其子目录，未配置白名单时拒绝远程切换，
 	// 防止被授权用户把具备 shell 权限的 agent 指向任意路径。
 	if !h.isWorkspaceAllowed(absPath) {
 		log.Printf("[handler] rejected /cwd outside allowed workspace roots: %s", absPath)

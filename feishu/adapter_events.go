@@ -13,6 +13,9 @@ import (
 // newEventDispatcher 注册飞书消息事件和卡片回调事件。
 func (a *Adapter) newEventDispatcher(dispatch platform.DispatchFunc) *dispatcher.EventDispatcher {
 	return dispatcher.NewEventDispatcher("", "").
+		OnP2MessageReadV1(func(ctx context.Context, event *larkim.P2MessageReadV1) error {
+			return a.handleMessageReadEvent(ctx, event)
+		}).
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			return a.handleMessageEvent(ctx, event, dispatch)
 		}).
@@ -21,14 +24,29 @@ func (a *Adapter) newEventDispatcher(dispatch platform.DispatchFunc) *dispatcher
 		})
 }
 
+// handleMessageReadEvent 消化机器人消息已读事件；它只表示客户端阅读状态，不应进入业务消息流。
+func (a *Adapter) handleMessageReadEvent(_ context.Context, _ *larkim.P2MessageReadV1) error {
+	return nil
+}
+
 // handleMessageEvent 解析飞书消息并分发到业务层。
 func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1, dispatch platform.DispatchFunc) error {
-	msg, ok := a.toIncomingFromMessage(ctx, event)
+	msg, resources, ok := a.toIncomingEnvelopeFromMessage(event)
 	if !ok {
 		log.Printf("[feishu] ignored non-dispatchable message event")
 		return nil
 	}
 	a.rememberUserIdentities(msg)
+	if a.allowIncomingMessage(msg) {
+		if err := a.attachMessageResources(ctx, &msg, resources); err != nil {
+			log.Printf("[feishu] ignored message with resource download failure: %v", err)
+			return nil
+		}
+		if incomingMessageEmpty(msg) {
+			log.Printf("[feishu] ignored non-dispatchable message event")
+			return nil
+		}
+	}
 	scope := ExtractFeishuSessionScope(event)
 	if a.handleMirrorDedup(ctx, event, scope, msg, dispatch) {
 		return nil
@@ -55,6 +73,10 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
 	log.Printf("[feishu] message event parsed: account=%s user=%s chat=%s message=%s attachments=%d", msg.AccountID, msg.UserID, msg.ChatID, msg.MessageID, len(msg.Attachments))
 	dispatch(ctx, msg, a.newScopedReplier(msg))
+}
+
+func (a *Adapter) allowIncomingMessage(msg platform.IncomingMessage) bool {
+	return a.allowCardActionUser(msg.UserID, msg.UserAliases)
 }
 
 // handleCardActionEvent 在 3 秒回调窗口内立即响应，再异步把按钮动作回放到统一业务层。

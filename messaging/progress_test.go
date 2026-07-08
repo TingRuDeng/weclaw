@@ -165,6 +165,29 @@ func TestStreamModeKeepsStructuredProgressStatus(t *testing.T) {
 	}
 }
 
+func TestStreamModePrefersStructuredProgressOverFinalMarkdown(t *testing.T) {
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.PreviewRunes = 120
+	delta := strings.Join([]string{
+		"进展：修复实时状态渲染",
+		"",
+		"## 交付说明",
+		"",
+		"### 做了什么",
+		"- 这是一段最终回复正文",
+	}, "\n")
+
+	got := renderDeltaProgress(delta, cfg)
+
+	if got != "进展：修复实时状态渲染" {
+		t.Fatalf("stream progress=%q, want structured progress", got)
+	}
+	if strings.Contains(got, "最终回复正文") {
+		t.Fatalf("stream progress must not show final answer line, got %q", got)
+	}
+}
+
 func TestProgressThrottleByInterval(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.SummaryIntervalSeconds = 20

@@ -10,7 +10,7 @@ func (h *Handler) SetSaveDir(dir string) {
 	h.saveDir = dir
 }
 
-// SetAllowedWorkspaceRoots 设置 /cwd 允许切换的根目录白名单；空切片表示不限制。
+// SetAllowedWorkspaceRoots 设置 /cwd 允许切换的根目录白名单；空切片表示禁止远程切换目录。
 func (h *Handler) SetAllowedWorkspaceRoots(roots []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -73,13 +73,13 @@ func (h *Handler) allowAgentInvocation(routeUserID string) bool {
 	return limiter.Allow(routeUserID, limit)
 }
 
-// isWorkspaceAllowed 判断目标目录是否落在 /cwd 白名单内；白名单为空时不限制。
+// isWorkspaceAllowed 判断目标目录是否落在 /cwd 白名单内；白名单为空时默认拒绝。
 func (h *Handler) isWorkspaceAllowed(absPath string) bool {
 	h.mu.RLock()
 	roots := h.allowedWorkspaceRoots
 	h.mu.RUnlock()
 	if len(roots) == 0 {
-		return true
+		return false
 	}
 	return isAllowedAttachmentPath(absPath, roots)
 }

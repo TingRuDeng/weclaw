@@ -156,6 +156,31 @@ func TestDispatchIncomingMessageLogsAccount(t *testing.T) {
 	}
 }
 
+func TestHandleMessageEventDoesNotDownloadUnauthorizedAttachment(t *testing.T) {
+	downloader := &fakeResourceDownloader{}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = downloader
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"ou_allowed"}))
+	event := newMessageEvent("p2p", "image", `{"image_key":"img_1"}`)
+
+	dispatched := false
+	if err := adapter.handleMessageEvent(context.Background(), event, func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		dispatched = true
+		if len(msg.Attachments) != 0 {
+			t.Fatalf("unauthorized envelope attachments=%#v, want none before authorization", msg.Attachments)
+		}
+	}); err != nil {
+		t.Fatalf("handleMessageEvent error: %v", err)
+	}
+
+	if !dispatched {
+		t.Fatal("unauthorized envelope should still reach registry for deny notice")
+	}
+	if len(downloader.seen) != 0 {
+		t.Fatalf("downloaded resources=%#v, want none before authorization", downloader.seen)
+	}
+}
+
 func TestToIncomingFromMessageDispatchesMentionedGroup(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := newMessageEvent("group", "text", `{"text":"<at user_id=\"cli_a\">bot</at> hello"}`)

@@ -9,6 +9,37 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
+func TestEventDispatcherIgnoresMessageReadEvent(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	dispatcher := adapter.newEventDispatcher(func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		t.Fatalf("message read event must not dispatch incoming message, got %#v", msg)
+	})
+
+	payload := []byte(`{
+		"schema":"2.0",
+		"header":{
+			"event_id":"evt_1",
+			"event_type":"im.message.message_read_v1",
+			"create_time":"1720000000000",
+			"token":"",
+			"app_id":"cli_a",
+			"tenant_key":"tenant_1"
+		},
+		"event":{
+			"message_id_list":["om_1"],
+			"reader":{
+				"reader_id":{"open_id":"ou_user"},
+				"read_time":"1720000000000",
+				"tenant_key":"tenant_1"
+			}
+		}
+	}`)
+
+	if _, err := dispatcher.Do(context.Background(), payload); err != nil {
+		t.Fatalf("message read event should be ignored without error, got %v", err)
+	}
+}
+
 func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := &callback.CardActionTriggerEvent{

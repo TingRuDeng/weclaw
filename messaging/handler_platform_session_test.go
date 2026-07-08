@@ -120,7 +120,7 @@ func TestHandleMessageUsesFeishuSessionMetadataForRouting(t *testing.T) {
 	}
 }
 
-func TestHandleMessageAttachesFeishuSessionMetadataToDetectedChoices(t *testing.T) {
+func TestHandleMessageKeepsFeishuChoiceLikeFinalReplyAsText(t *testing.T) {
 	ag := &fakeAgent{
 		reply: "请选择下一步：\n1. 确认计划\n2. 取消",
 		info:  agent.AgentInfo{Name: "mock", Type: "test"},
@@ -142,13 +142,11 @@ func TestHandleMessageAttachesFeishuSessionMetadataToDetectedChoices(t *testing.
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
 	}, reply)
 
-	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 2 {
-		t.Fatalf("choices=%#v, want detected choices", reply.Choices)
+	if len(reply.Texts) != 1 || reply.Texts[0] != ag.reply {
+		t.Fatalf("texts=%#v, want original final reply", reply.Texts)
 	}
-	for _, choice := range reply.Choices[0].Choices {
-		if got := choice.Metadata["feishu_session_key"]; got != sessionKey {
-			t.Fatalf("choice metadata=%#v, want session key %q", choice.Metadata, sessionKey)
-		}
+	if len(reply.Choices) != 0 {
+		t.Fatalf("choices=%#v, want no auto choice card", reply.Choices)
 	}
 }
 
@@ -199,6 +197,7 @@ func TestHandleMessageKeepsFeishuSenderUserIDForWorkspaceCommands(t *testing.T) 
 	h.SetDefaultAgent("codex", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	workspaceRoot := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspaceRoot})
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,

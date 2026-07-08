@@ -9,6 +9,7 @@ const (
 	codexProgressPrefix          = "进展："
 	codexTurnDiagnosticsLimit    = 5
 	codexGuardianWarningMaxRunes = 120
+	codexPlanStepMaxRunes        = 120
 )
 
 type codexProgressParams struct {
@@ -17,6 +18,16 @@ type codexProgressParams struct {
 	Status   string `json:"status"`
 	Decision string `json:"decision"`
 	Outcome  string `json:"outcome"`
+}
+
+type codexPlanUpdatedParams struct {
+	ThreadID string          `json:"threadId"`
+	Plan     []codexPlanStep `json:"plan"`
+}
+
+type codexPlanStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
 }
 
 type codexTurnDiagnostics struct {
@@ -86,6 +97,50 @@ func (a *ACPAgent) handleCodexCommandProgress(params json.RawMessage) {
 
 func (a *ACPAgent) handleCodexFileProgress(params json.RawMessage) {
 	a.dispatchCodexProgress(params, "进展：Codex 已产生代码或文件变更。")
+}
+
+// handleCodexPlanUpdated 把 Codex App 的计划状态转换成任务卡片可读的当前步骤。
+func (a *ACPAgent) handleCodexPlanUpdated(params json.RawMessage) {
+	var p codexPlanUpdatedParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return
+	}
+	step := currentCodexPlanStep(p.Plan)
+	if step == "" {
+		return
+	}
+	a.dispatchProgressToThread(p.ThreadID, codexProgressPrefix+trimRunes(step, codexPlanStepMaxRunes))
+}
+
+// currentCodexPlanStep 优先展示进行中步骤，缺失时回退到最近完成或即将开始的步骤。
+func currentCodexPlanStep(plan []codexPlanStep) string {
+	if step := firstPlanStepByStatus(plan, "in_progress"); step != "" {
+		return step
+	}
+	if step := lastPlanStepByStatus(plan, "completed"); step != "" {
+		return step
+	}
+	return firstPlanStepByStatus(plan, "pending")
+}
+
+// firstPlanStepByStatus 返回指定状态下最靠前的非空步骤。
+func firstPlanStepByStatus(plan []codexPlanStep, status string) string {
+	for _, item := range plan {
+		if item.Status == status && strings.TrimSpace(item.Step) != "" {
+			return strings.TrimSpace(item.Step)
+		}
+	}
+	return ""
+}
+
+// lastPlanStepByStatus 返回指定状态下最靠后的非空步骤。
+func lastPlanStepByStatus(plan []codexPlanStep, status string) string {
+	for i := len(plan) - 1; i >= 0; i-- {
+		if plan[i].Status == status && strings.TrimSpace(plan[i].Step) != "" {
+			return strings.TrimSpace(plan[i].Step)
+		}
+	}
+	return ""
 }
 
 func (a *ACPAgent) dispatchCodexProgress(params json.RawMessage, text string) {

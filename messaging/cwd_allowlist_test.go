@@ -26,10 +26,10 @@ func TestCwdAllowlistRejectsOutsideRoots(t *testing.T) {
 	}
 }
 
-func TestCwdAllowlistEmptyMeansUnrestricted(t *testing.T) {
+func TestCwdAllowlistEmptyRejectsDirectorySwitch(t *testing.T) {
 	dir := t.TempDir()
 	h := NewHandler(nil, nil)
-	if got := h.handleCwd("/cwd " + dir); strings.Contains(got, "不在允许") {
-		t.Fatalf("empty allowlist should not restrict, got %q", got)
+	if got := h.handleCwd("/cwd " + dir); !strings.Contains(got, "allowed_workspace_roots") {
+		t.Fatalf("empty allowlist should reject /cwd switch, got %q", got)
 	}
 }

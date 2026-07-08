@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestACPAgentCodexProgressCallbackReceivesDelta(t *testing.T) {
+func TestACPAgentCodexProgressCallbackReceivesOnlyStructuredStatus(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	workspace := t.TempDir()
@@ -32,7 +32,8 @@ func TestACPAgentCodexProgressCallbackReceivesDelta(t *testing.T) {
 			if ch == nil {
 				return nil, fmt.Errorf("missing turn channel for thread %s", p.ThreadID)
 			}
-			ch <- &codexTurnEvent{Delta: "实时片段"}
+			ch <- &codexTurnEvent{Kind: "progress", Text: "进展：Codex 正在分析请求。"}
+			ch <- &codexTurnEvent{Delta: "最终回复"}
 			ch <- &codexTurnEvent{Kind: "completed"}
 			return json.RawMessage(`{"ok":true}`), nil
 		default:
@@ -47,11 +48,11 @@ func TestACPAgentCodexProgressCallbackReceivesDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
-	if reply != "实时片段" {
-		t.Fatalf("reply=%q, want=%q", reply, "实时片段")
+	if reply != "最终回复" {
+		t.Fatalf("reply=%q, want=%q", reply, "最终回复")
 	}
-	if len(got) != 1 || got[0] != "实时片段" {
-		t.Fatalf("progress deltas=%v, want=[实时片段]", got)
+	if len(got) != 1 || got[0] != "进展：Codex 正在分析请求。" {
+		t.Fatalf("progress=%v, want only structured status", got)
 	}
 }
 
@@ -98,8 +99,8 @@ func TestACPAgentCodexProgressEventDoesNotBecomeFinalReply(t *testing.T) {
 	if reply != "最终结果" {
 		t.Fatalf("reply=%q, want final agent text only", reply)
 	}
-	if len(progress) != 2 || progress[0] != "进展：Codex 已产生代码或文件变更。" || progress[1] != "最终结果" {
-		t.Fatalf("progress=%#v, want status then final delta", progress)
+	if len(progress) != 1 || progress[0] != "进展：Codex 已产生代码或文件变更。" {
+		t.Fatalf("progress=%#v, want only status event", progress)
 	}
 }
 

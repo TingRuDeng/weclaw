@@ -161,18 +161,12 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 			}
 			if evt.Delta != "" {
 				assembler.addDelta(evt.ItemID, evt.Delta)
-				if onProgress != nil {
-					onProgress(evt.Delta)
-				}
 			}
 			if evt.Text != "" {
 				if evt.Kind == "item_completed" {
 					assembler.addCompleted(evt.ItemID, evt.Text)
 				} else {
 					assembler.addSnapshot(evt.ItemID, evt.Text)
-				}
-				if onProgress != nil {
-					onProgress(evt.Text)
 				}
 			}
 			if evt.Kind == "completed" {

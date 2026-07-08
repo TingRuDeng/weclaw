@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -67,9 +66,12 @@ func (h *Handler) handleFeishuIdentityApprove(args []string) string {
 
 func parseFeishuIdentityApproveOptions(args []string) (feishuIdentityApproveOptions, error) {
 	if len(args) == 0 {
-		return feishuIdentityApproveOptions{}, fmt.Errorf("用法: /feishu users approve <编号|union_id|open_id> [--bot <name|app_id>] [--admin]")
+		return feishuIdentityApproveOptions{}, fmt.Errorf("用法: /feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]")
 	}
 	opts := feishuIdentityApproveOptions{Selector: strings.TrimSpace(args[0])}
+	if isNumericFeishuIdentitySelector(opts.Selector) {
+		return opts, fmt.Errorf("为避免列表变化导致误授权，请使用 union_id、user_id 或 open_id。")
+	}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--admin":
@@ -89,12 +91,6 @@ func parseFeishuIdentityApproveOptions(args []string) (feishuIdentityApproveOpti
 
 func resolveFeishuIdentityApprovalRecord(store *feishuIdentityStore, selector string) (feishuIdentityRecord, bool) {
 	pending := store.ListPending()
-	if index, ok := parseOneBasedIndex(selector); ok {
-		if index < 1 || index > len(pending) {
-			return feishuIdentityRecord{}, false
-		}
-		return pending[index-1], true
-	}
 	for _, record := range pending {
 		if feishuIdentityRecordMatches(record, selector) {
 			return record, true
@@ -103,12 +99,17 @@ func resolveFeishuIdentityApprovalRecord(store *feishuIdentityStore, selector st
 	return feishuIdentityRecord{}, false
 }
 
-func parseOneBasedIndex(value string) (int, bool) {
-	index, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil {
-		return 0, false
+func isNumericFeishuIdentitySelector(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
 	}
-	return index, true
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func preferredFeishuAllowedIdentity(record feishuIdentityRecord) string {
@@ -184,14 +185,14 @@ func (h *Handler) renderFeishuIdentityRecords(records []feishuIdentityRecord, ti
 		return title + ": 暂无。"
 	}
 	lines := []string{title + ":"}
-	for i, record := range records {
-		lines = append(lines, renderFeishuIdentityRecord(i+1, record)...)
+	for _, record := range records {
+		lines = append(lines, renderFeishuIdentityRecord(record)...)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func renderFeishuIdentityRecord(index int, record feishuIdentityRecord) []string {
-	lines := []string{fmt.Sprintf("%d. %s", index, record.Key)}
+func renderFeishuIdentityRecord(record feishuIdentityRecord) []string {
+	lines := []string{"- " + record.Key}
 	if record.UnionID != "" {
 		lines = append(lines, "   union_id: "+record.UnionID)
 	}
@@ -224,6 +225,6 @@ func feishuIdentityUsageText() string {
 		"用法:",
 		"/feishu users pending",
 		"/feishu users list",
-		"/feishu users approve <编号|union_id|open_id> [--bot <name|app_id>] [--admin]",
+		"/feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]",
 	}, "\n")
 }
