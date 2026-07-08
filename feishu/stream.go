@@ -81,6 +81,9 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 	if !s.lastUpdate.IsZero() && now.Sub(s.lastUpdate) < s.throttle {
 		return nil
 	}
+	if s.taskCards != nil {
+		return s.updateTaskCard(ctx, content, now)
+	}
 	err := s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.nextSequence())
 	if shouldReenableStreaming(err) {
 		if enableErr := s.cardKit.SetStreaming(ctx, s.cardID, true, s.nextSequence()); enableErr != nil {
@@ -99,6 +102,29 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 	if s.taskCards != nil {
 		s.taskCards.updateContent(s.cardID, content)
 	}
+	return nil
+}
+
+func (s *feishuStream) updateTaskCard(ctx context.Context, content string, now time.Time) error {
+	opts, sequence, ok := s.taskCards.updateContentWithSequence(s.cardID, content)
+	if !ok {
+		err := s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, content, s.nextSequence())
+		return ignoreCardKitUpdateError(err)
+	}
+	cardJSON, err := buildCardV2(opts)
+	if err != nil {
+		return err
+	}
+	err = s.cardKit.UpdateCard(ctx, s.cardID, cardJSON, sequence)
+	if ignored := ignoreCardKitUpdateError(err); ignored != nil {
+		return ignored
+	}
+	if err != nil {
+		log.Printf("[feishu] ignored non-fatal task card update error: %v", err)
+	}
+	s.lastUpdate = now
+	s.lastContent = content
+	s.sequence = sequence
 	return nil
 }
 

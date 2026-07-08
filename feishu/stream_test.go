@@ -145,6 +145,40 @@ func TestFeishuStreamReenablesStreamingOnInvalidState(t *testing.T) {
 	}
 }
 
+func TestTaskCardStreamUpdateReplacesProgressContent(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "打包发布", Content: "正在分析任务，请稍候。"})
+	now := time.Date(2026, 7, 8, 15, 28, 0, 0, time.UTC)
+	stream := &feishuStream{cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "打包发布", sequence: 1, throttle: cardkitThrottle, now: func() time.Time { return now }}
+
+	first := "进展：Codex 正在执行命令并产生输出。"
+	second := "进展：Codex 正在运行测试。"
+	if err := stream.Update(context.Background(), first); err != nil {
+		t.Fatalf("Update first error: %v", err)
+	}
+	now = now.Add(cardkitThrottle)
+	if err := stream.Update(context.Background(), second); err != nil {
+		t.Fatalf("Update second error: %v", err)
+	}
+
+	if len(cardKit.streamTexts) != 0 {
+		t.Fatalf("task card progress should not use append-style stream content, got %#v", cardKit.streamTexts)
+	}
+	if len(cardKit.updateCards) != 2 {
+		t.Fatalf("update cards=%d, want replacing updates", len(cardKit.updateCards))
+	}
+	card := decodeCardJSON(t, cardKit.updateCards[1])
+	body := card["body"].(map[string]any)
+	main := body["elements"].([]any)[1].(map[string]any)
+	if main["content"] != second {
+		t.Fatalf("main content=%q, want latest progress only", main["content"])
+	}
+	if strings.Contains(main["content"].(string), first) {
+		t.Fatalf("main content=%q should not keep previous progress", main["content"])
+	}
+}
+
 func TestFeishuStreamCompleteUpdatesDoneAndDestroys(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	stream := &feishuStream{cardKit: cardKit, cardID: "card-1", sequence: 4, throttle: cardkitThrottle, now: time.Now}
