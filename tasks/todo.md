@@ -2,21 +2,21 @@
 
 ## 目标
 
-修复飞书已读事件日志报错、普通文本污染卡片展示、任务卡片实时状态不准确的问题。
+支持通过本地命令把飞书用户加入 `admin_users`，解决首次未配置管理员时只能手改配置文件的问题。
 
 ## 执行任务
 
-- [x] P1 串行：定位飞书日志、回复卡片化和实时状态根因。
-- [x] P2 串行：补飞书已读事件、Codex 计划进度、实时状态筛选回归测试。
-- [x] P3 串行：注册飞书 `im.message.message_read_v1` 空处理器。
-- [x] P4 串行：接入 Codex App `turn/plan/updated` 并只把结构化进度写入任务卡片。
-- [x] P5 串行：进度渲染优先展示 `进展：` 状态，避免最终回复正文覆盖。
-- [x] P6 串行：全量验证与 review-gate。
+- [x] P0 串行：保留上一轮飞书 `admin_users` 只使用 `union_id` 的未提交改动。
+- [x] P1 串行：补本地 `weclaw feishu users approve <union_id> --admin` 的失败测试。
+- [x] P2 串行：复用飞书身份授权写配置逻辑，增加本地 CLI approve 子命令。
+- [x] P3 串行：更新本地 CLI 与飞书内命令的帮助文案，避免继续提示 `open_id/user_id` 可加入管理员。
+- [x] P4 串行：跑受影响测试、全量验证与 review-gate。
 
 ## 验证命令
 
 ```bash
-go test ./feishu ./platform ./messaging ./cmd ./web -count=1 -timeout 120s
+go test ./cmd ./messaging -run 'TestRunFeishuUsers|TestFeishuIdentityCommand|TestServiceAdminCommand' -count=1 -timeout 120s
+go test ./cmd ./messaging -count=1 -timeout 120s
 go test ./... -count=1 -timeout 120s
 go vet ./...
 python3 scripts/validate_docs.py . --profile generic
@@ -27,4 +27,4 @@ git diff --check
 
 终态：finished。
 
-Review 小结：已读事件只做显式 no-op，不改变业务消息流；Codex App 最终回复不再写入任务卡片实时状态，实时区优先显示结构化 `进展：` 信息。全量测试、vet、文档校验和 diff 检查已通过。
+Review 小结：新增本地 `weclaw feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]`，复用飞书聊天命令的授权写配置逻辑。`--admin` 只写入 `union_id`，支持待确认、已发现和已授权身份后补管理员；飞书管理命令仍只按 `union_id` 判断。全量测试、vet、文档结构校验和 diff 检查已通过。

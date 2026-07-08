@@ -15,7 +15,7 @@ import (
 func TestServiceAdminRestartPersistsCompletionNotice(t *testing.T) {
 	path := useAdminRestartNotificationPath(t)
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"ou_admin"})
+	h.SetAdminUsers([]string{"on_admin"})
 	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
 		return "restart scheduled", nil
 	})
@@ -27,6 +27,7 @@ func TestServiceAdminRestartPersistsCompletionNotice(t *testing.T) {
 		UserID:    "ou_admin",
 		ChatID:    "oc_chat",
 		Text:      "/restart --force",
+		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
 	}, reply)
 
 	texts := reply.waitTexts(t, 2)

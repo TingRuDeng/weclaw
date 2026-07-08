@@ -211,3 +211,19 @@
 - 反例：把 `item/agentMessage/delta` 直接写入 progress，最终回复的 `## 交付说明` 或列表行会覆盖卡片状态，看起来像普通文本被渲染进卡片。
 - 正确做法：Codex App 接入 `turn/plan/updated`、命令输出、文件变更等进度事件；最终回答只用于最终消息发送，并让渲染层优先选择 `进展：` 状态。
 - 来源：2026-07-08 用户指出“又把普通文本回复渲染成卡片了”和“任务卡片实时状态看着不行”。
+
+## 2026-07-08 飞书 admin_users 身份
+
+- 触发条件：判断飞书用户是否可执行 `/update`、`/restart`、`/feishu users` 等管理命令。
+- 规则：飞书 `admin_users` 只允许使用 `union_id`；不保留 `open_id` 或 `user_id` 兼容。
+- 反例：把某个机器人里的 `ou_...` 写进 `admin_users`，换另一个机器人后同一个人不再是管理员，或误以为多应用身份通用。
+- 正确做法：飞书管理命令只读取 `feishu_union_id` 或 `on_` 形态的 union_id 别名；`/feishu users approve --admin` 在缺少 union_id 时必须拒绝写入。
+- 来源：2026-07-08 用户确认“那不用兼容，直接使用 union_id”。
+
+## 2026-07-08 飞书首次管理员初始化
+
+- 触发条件：`admin_users` 为空时，需要把第一个飞书管理员加入远程管理白名单。
+- 规则：首次管理员初始化不能依赖飞书内 `/feishu users approve --admin`，因为该命令本身需要管理员权限；必须提供本地 CLI 写配置路径。
+- 反例：只支持飞书聊天命令写 `admin_users`，导致新安装环境只能手动编辑 `config.json`。
+- 正确做法：本地 `weclaw feishu users approve <union_id> --admin` 复用同一套授权逻辑，写入 `allowed_users` 和顶层 `admin_users`。
+- 来源：2026-07-08 用户指出“一开始就没配置管理员，那不就只能改配置文件了吗”。

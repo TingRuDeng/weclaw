@@ -13,6 +13,11 @@ var feishuUsersCmd = &cobra.Command{
 	Short: "查看飞书自动发现用户",
 }
 
+var (
+	feishuUsersApproveBotRef string
+	feishuUsersApproveAdmin  bool
+)
+
 var feishuUsersPendingCmd = &cobra.Command{
 	Use:   "pending",
 	Short: "查看待确认飞书用户",
@@ -29,8 +34,29 @@ var feishuUsersListCmd = &cobra.Command{
 	},
 }
 
+var feishuUsersApproveCmd = &cobra.Command{
+	Use:   "approve <union_id|user_id|open_id>",
+	Short: "确认飞书用户并写入配置",
+	Args:  validateFeishuUsersApproveArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runFeishuUsersApprove(feishuUsersApproveOptions{
+			Selector: args[0],
+			BotRef:   feishuUsersApproveBotRef,
+			Admin:    feishuUsersApproveAdmin,
+		})
+	},
+}
+
+type feishuUsersApproveOptions struct {
+	Selector string
+	BotRef   string
+	Admin    bool
+}
+
 func init() {
-	feishuUsersCmd.AddCommand(feishuUsersPendingCmd, feishuUsersListCmd)
+	feishuUsersApproveCmd.Flags().StringVar(&feishuUsersApproveBotRef, "bot", "", "限定写入的飞书机器人 name 或 app_id")
+	feishuUsersApproveCmd.Flags().BoolVar(&feishuUsersApproveAdmin, "admin", false, "同时写入顶层 admin_users")
+	feishuUsersCmd.AddCommand(feishuUsersPendingCmd, feishuUsersListCmd, feishuUsersApproveCmd)
 }
 
 func runFeishuUsers(kind string) error {
@@ -44,6 +70,26 @@ func runFeishuUsers(kind string) error {
 		title = "待确认飞书用户"
 	}
 	printFeishuIdentityViews(title, views)
+	return nil
+}
+
+func validateFeishuUsersApproveArgs(cmd *cobra.Command, args []string) error {
+	if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
+		return nil
+	}
+	return fmt.Errorf("用法: weclaw feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]")
+}
+
+func runFeishuUsersApprove(opts feishuUsersApproveOptions) error {
+	result, err := messaging.ApproveFeishuIdentity(messaging.FeishuIdentityApproveRequest{
+		Selector: opts.Selector,
+		BotRef:   opts.BotRef,
+		Admin:    opts.Admin,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Println(messaging.RenderFeishuIdentityApproval(result))
 	return nil
 }
 

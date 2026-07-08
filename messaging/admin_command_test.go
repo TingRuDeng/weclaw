@@ -67,7 +67,7 @@ func TestServiceAdminCommandRunsUpdateForWhitelistedUser(t *testing.T) {
 	reply := newAdminCommandTestReplier()
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformFeishu,
+		Platform: platform.PlatformWeChat,
 		UserID:   "ou_admin",
 		Text:     "/update",
 	}, reply)
@@ -90,7 +90,7 @@ func TestServiceAdminCommandRunsUpdateForWhitelistedUser(t *testing.T) {
 	}
 }
 
-func TestServiceAdminCommandAllowsFeishuUnionIDAlias(t *testing.T) {
+func TestServiceAdminCommandAllowsFeishuUnionID(t *testing.T) {
 	var gotCommand string
 	h := NewHandler(nil, nil)
 	h.SetAdminUsers([]string{"on_admin"})
@@ -101,10 +101,10 @@ func TestServiceAdminCommandAllowsFeishuUnionIDAlias(t *testing.T) {
 	reply := newAdminCommandTestReplier()
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
-		Platform:    platform.PlatformFeishu,
-		UserID:      "ou_admin_for_this_bot",
-		UserAliases: []string{"on_admin"},
-		Text:        "/update",
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin_for_this_bot",
+		Text:     "/update",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
 	}, reply)
 
 	texts := reply.waitTexts(t, 2)
@@ -113,6 +113,37 @@ func TestServiceAdminCommandAllowsFeishuUnionIDAlias(t *testing.T) {
 	}
 	if !strings.Contains(texts[0], "开始执行管理命令：/update") {
 		t.Fatalf("reply texts=%#v, want start notice", texts)
+	}
+}
+
+func TestServiceAdminCommandRejectsFeishuOpenIDAndUserID(t *testing.T) {
+	calls := 0
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"ou_admin_for_this_bot", "user_admin"})
+	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
+		calls++
+		return "should not run", nil
+	})
+	reply := newAdminCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:    platform.PlatformFeishu,
+		UserID:      "ou_admin_for_this_bot",
+		UserAliases: []string{"user_admin", "on_real_admin"},
+		Text:        "/update",
+		Metadata: map[string]string{
+			"feishu_open_id":  "ou_admin_for_this_bot",
+			"feishu_user_id":  "user_admin",
+			"feishu_union_id": "on_real_admin",
+		},
+	}, reply)
+
+	texts := reply.waitTexts(t, 1)
+	if calls != 0 {
+		t.Fatalf("admin executor calls=%d, want 0 when admin_users only has feishu open_id/user_id", calls)
+	}
+	if !strings.Contains(texts[0], "未授权执行 WeClaw 管理命令") {
+		t.Fatalf("reply texts=%#v, want unauthorized notice", texts)
 	}
 }
 
@@ -150,7 +181,7 @@ func TestServiceAdminCommandAllowsRestartForceOnly(t *testing.T) {
 func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 	calls := 0
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"ou_admin"})
+	h.SetAdminUsers([]string{"on_admin"})
 	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
 		calls++
 		return "should not run", nil
@@ -170,6 +201,7 @@ func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/restart",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
 	}, reply)
 
 	if calls != 0 {
@@ -189,7 +221,7 @@ func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 	useAdminRestartNotificationPath(t)
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"ou_admin"})
+	h.SetAdminUsers([]string{"on_admin"})
 	updateStarted := make(chan struct{})
 	allowUpdateDone := make(chan struct{})
 	restartStarted := make(chan struct{})
@@ -213,12 +245,14 @@ func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
 	}, reply)
 	waitForClosedChannel(t, updateStarted, "update start")
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/restart --force",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
 	}, reply)
 	assertChannelNotClosed(t, restartStarted, "restart should wait for update")
 
@@ -236,7 +270,7 @@ func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 func TestServiceAdminCommandRejectsUnsupportedArgs(t *testing.T) {
 	calls := 0
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"ou_admin"})
+	h.SetAdminUsers([]string{"on_admin"})
 	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
 		calls++
 		return "should not run", nil
@@ -247,6 +281,7 @@ func TestServiceAdminCommandRejectsUnsupportedArgs(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update --restart",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
 	}, reply)
 
 	if calls != 0 {

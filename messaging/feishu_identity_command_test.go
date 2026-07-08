@@ -97,12 +97,33 @@ func TestFeishuIdentityCommandApprovesSingleBotAndAdminUser(t *testing.T) {
 	}
 }
 
+func TestFeishuIdentityCommandAdminRequiresUnionID(t *testing.T) {
+	setupFeishuIdentityCommandConfig(t)
+	handler := newFeishuIdentityCommandHandler(t)
+	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", ""))
+	reply := newAdminCommandTestReplier()
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve ou_a --admin"), reply)
+
+	texts := reply.waitTexts(t, 1)
+	if !strings.Contains(texts[0], "缺少 union_id") {
+		t.Fatalf("reply=%q, want union_id required warning", texts[0])
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if testStringSliceContains(cfg.AdminUsers, "ou_a") || testStringSliceContains(cfg.AdminUsers, "user_a") {
+		t.Fatalf("admin users=%#v, should not write open_id or user_id", cfg.AdminUsers)
+	}
+}
+
 func setupFeishuIdentityCommandConfig(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	enabled := true
 	cfg := config.DefaultConfig()
-	cfg.AdminUsers = []string{"ou_admin"}
+	cfg.AdminUsers = []string{"on_admin"}
 	cfg.Platforms["feishu"] = config.PlatformConfig{
 		Enabled: &enabled,
 		Bots: []config.FeishuBotConfig{
@@ -119,7 +140,7 @@ func newFeishuIdentityCommandHandler(t *testing.T) *Handler {
 	t.Helper()
 	handler := NewHandler(nil, nil)
 	handler.SetFeishuIdentityFile(DefaultFeishuIdentityFile())
-	handler.SetAdminUsers([]string{"ou_admin"})
+	handler.SetAdminUsers([]string{"on_admin"})
 	return handler
 }
 
@@ -128,6 +149,7 @@ func feishuAdminCommandMessage(text string) platform.IncomingMessage {
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_a",
 		UserID:    "ou_admin",
+		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
 		MessageID: strings.ReplaceAll(text, " ", "-"),
 		Text:      text,
 	}

@@ -65,9 +65,33 @@ func (h *Handler) isAdminUser(userID string) bool {
 	return h.adminIdentityAllowed([]string{userID})
 }
 
-// isAdminMessage 使用主 ID 和平台身份别名共同判断管理权限。
+// isAdminMessage 使用平台指定的管理身份判断权限；飞书只接受 union_id。
 func (h *Handler) isAdminMessage(msg platform.IncomingMessage) bool {
-	return h.adminIdentityAllowed(msg.UserIdentityKeys())
+	return h.adminIdentityAllowed(adminIdentityKeysForMessage(msg))
+}
+
+// adminIdentityKeysForMessage 返回管理权限可用身份；飞书多应用下只使用稳定 union_id。
+func adminIdentityKeysForMessage(msg platform.IncomingMessage) []string {
+	if msg.Platform == platform.PlatformFeishu {
+		return feishuAdminIdentityKeys(msg)
+	}
+	return msg.UserIdentityKeys()
+}
+
+// feishuAdminIdentityKeys 只提取飞书 union_id，避免 open_id / user_id 跨应用不可复用。
+func feishuAdminIdentityKeys(msg platform.IncomingMessage) []string {
+	if msg.Metadata != nil {
+		if unionID := strings.TrimSpace(msg.Metadata["feishu_union_id"]); unionID != "" {
+			return []string{unionID}
+		}
+	}
+	for _, identity := range msg.UserIdentityKeys() {
+		identity = strings.TrimSpace(identity)
+		if strings.HasPrefix(identity, "on_") {
+			return []string{identity}
+		}
+	}
+	return nil
 }
 
 func (h *Handler) adminIdentityAllowed(identities []string) bool {

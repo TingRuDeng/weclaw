@@ -16,6 +16,21 @@ type feishuIdentityApproveOptions struct {
 	Admin    bool
 }
 
+// FeishuIdentityApproveRequest 描述一次飞书身份授权写配置请求。
+type FeishuIdentityApproveRequest struct {
+	Selector string
+	BotRef   string
+	Admin    bool
+	FilePath string
+}
+
+// FeishuIdentityApproveResult 返回已写入配置的身份和机器人范围。
+type FeishuIdentityApproveResult struct {
+	Identity string
+	Bots     []string
+	Admin    bool
+}
+
 func isFeishuIdentityCommand(trimmed string) bool {
 	return trimmed == "/feishu users" || strings.HasPrefix(trimmed, "/feishu users ")
 }
@@ -45,23 +60,11 @@ func (h *Handler) handleFeishuIdentityApprove(args []string) string {
 	if err != nil {
 		return err.Error()
 	}
-	store := h.ensureFeishuIdentities()
-	record, ok := resolveFeishuIdentityApprovalRecord(store, opts.Selector)
-	if !ok {
-		return "未找到待确认飞书用户。"
-	}
-	identity := preferredFeishuAllowedIdentity(record)
-	if identity == "" {
-		return "该飞书用户缺少可授权身份。"
-	}
-	bots, err := addFeishuIdentityToConfig(identity, opts.BotRef, opts.Admin)
+	result, err := approveFeishuIdentity(h.ensureFeishuIdentities(), opts)
 	if err != nil {
-		return fmt.Sprintf("授权失败: %v", err)
+		return err.Error()
 	}
-	if _, ok := store.Approve(record.Key); !ok {
-		return "授权已写入配置，但更新身份状态失败。"
-	}
-	return renderFeishuIdentityApproved(identity, bots, opts.Admin)
+	return RenderFeishuIdentityApproval(result)
 }
 
 func parseFeishuIdentityApproveOptions(args []string) (feishuIdentityApproveOptions, error) {
@@ -96,6 +99,12 @@ func resolveFeishuIdentityApprovalRecord(store *feishuIdentityStore, selector st
 			return record, true
 		}
 	}
+	records := store.ListRecords()
+	for _, record := range records {
+		if feishuIdentityRecordMatches(record, selector) {
+			return record, true
+		}
+	}
 	return feishuIdentityRecord{}, false
 }
 
@@ -114,6 +123,46 @@ func isNumericFeishuIdentitySelector(value string) bool {
 
 func preferredFeishuAllowedIdentity(record feishuIdentityRecord) string {
 	return firstNonBlank(record.UnionID, record.UserID, record.OpenID)
+}
+
+// ApproveFeishuIdentity 从本地自动发现状态确认飞书用户，并写入配置。
+func ApproveFeishuIdentity(req FeishuIdentityApproveRequest) (FeishuIdentityApproveResult, error) {
+	opts := feishuIdentityApproveOptions{
+		Selector: strings.TrimSpace(req.Selector),
+		BotRef:   strings.TrimSpace(req.BotRef),
+		Admin:    req.Admin,
+	}
+	store := newFeishuIdentityStore()
+	store.SetFilePath(firstNonBlank(req.FilePath, DefaultFeishuIdentityFile()))
+	if err := store.LoadError(); err != nil {
+		return FeishuIdentityApproveResult{}, err
+	}
+	return approveFeishuIdentity(store, opts)
+}
+
+func approveFeishuIdentity(store *feishuIdentityStore, opts feishuIdentityApproveOptions) (FeishuIdentityApproveResult, error) {
+	if isNumericFeishuIdentitySelector(opts.Selector) {
+		return FeishuIdentityApproveResult{}, fmt.Errorf("为避免列表变化导致误授权，请使用 union_id、user_id 或 open_id。")
+	}
+	record, ok := resolveFeishuIdentityApprovalRecord(store, opts.Selector)
+	if !ok {
+		return FeishuIdentityApproveResult{}, fmt.Errorf("未找到飞书用户身份。")
+	}
+	if opts.Admin && strings.TrimSpace(record.UnionID) == "" {
+		return FeishuIdentityApproveResult{}, fmt.Errorf("该飞书用户缺少 union_id，不能加入 admin_users。")
+	}
+	identity := preferredFeishuAllowedIdentity(record)
+	if identity == "" {
+		return FeishuIdentityApproveResult{}, fmt.Errorf("该飞书用户缺少可授权身份。")
+	}
+	bots, err := addFeishuIdentityToConfig(identity, opts.BotRef, opts.Admin)
+	if err != nil {
+		return FeishuIdentityApproveResult{}, fmt.Errorf("授权失败: %w", err)
+	}
+	if _, ok := store.Approve(record.Key); !ok {
+		return FeishuIdentityApproveResult{}, fmt.Errorf("授权已写入配置，但更新身份状态失败。")
+	}
+	return FeishuIdentityApproveResult{Identity: identity, Bots: bots, Admin: opts.Admin}, nil
 }
 
 func addFeishuIdentityToConfig(identity string, botRef string, admin bool) ([]string, error) {
@@ -208,13 +257,14 @@ func renderFeishuIdentityRecord(record feishuIdentityRecord) []string {
 	return lines
 }
 
-func renderFeishuIdentityApproved(identity string, bots []string, admin bool) string {
+// RenderFeishuIdentityApproval 渲染飞书身份授权后的用户可见结果。
+func RenderFeishuIdentityApproval(result FeishuIdentityApproveResult) string {
 	lines := []string{
-		"已授权飞书用户: " + identity,
-		"机器人: " + strings.Join(bots, ", "),
+		"已授权飞书用户: " + result.Identity,
+		"机器人: " + strings.Join(result.Bots, ", "),
 		"配置已写入，运行中服务会通过配置热重载生效。",
 	}
-	if admin {
+	if result.Admin {
 		lines = append(lines, "已同步加入 admin_users。")
 	}
 	return strings.Join(lines, "\n")
@@ -226,5 +276,6 @@ func feishuIdentityUsageText() string {
 		"/feishu users pending",
 		"/feishu users list",
 		"/feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]",
+		"--admin 只会写入 union_id；缺少 union_id 时会拒绝。",
 	}, "\n")
 }
