@@ -58,8 +58,9 @@ func TestRunFeishuUsersListPrintsContactLookupWarning(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "姓名查询失败: 卡片管家 查询 on_same_person 失败: 缺少通讯录权限") {
-		t.Fatalf("output=%q, want explicit contact lookup warning", output)
+	if !strings.Contains(output, "提示: 部分姓名未能从飞书通讯录获取") ||
+		!strings.Contains(output, "weclaw feishu users rename <id> <显示名>") {
+		t.Fatalf("output=%q, want manual rename hint", output)
 	}
 }
 

@@ -136,6 +136,28 @@ func TestRegistryObservesDeniedFeishuIdentity(t *testing.T) {
 	}
 }
 
+func TestRegistryUsesCustomDenyNotice(t *testing.T) {
+	reply := &recordingReplier{}
+	msg := IncomingMessage{Platform: PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "hi"}
+	platform := &recordingPlatform{name: PlatformFeishu, messages: []IncomingMessage{msg}, reply: reply}
+	registry := NewRegistry(
+		[]RegistryEntry{{Platform: platform, Access: NewAccessControl(nil)}},
+		WithDenyNoticeProvider(func(IncomingMessage) string {
+			return "当前账号无权限，请联系管理员授权。\n授权码: 123456"
+		}),
+	)
+
+	err := registry.Run(context.Background(), func(ctx context.Context, msg IncomingMessage, reply Replier) {
+		t.Fatal("dispatch should not be called for denied user")
+	})
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if len(reply.texts) != 1 || reply.texts[0] != "当前账号无权限，请联系管理员授权。\n授权码: 123456" {
+		t.Fatalf("deny notice texts=%#v, want custom auth code notice", reply.texts)
+	}
+}
+
 func TestRegistryRateLimitsDenyNotice(t *testing.T) {
 	reply := &recordingReplier{}
 	platform := &recordingPlatform{

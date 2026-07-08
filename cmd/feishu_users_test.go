@@ -54,6 +54,44 @@ func TestRunFeishuUsersListPrintsAllIdentities(t *testing.T) {
 	}
 }
 
+func TestRunFeishuUsersPendingPrintsAuthCodeCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateWithAuthCodeForTest(t)
+	writeFeishuBotsConfigForTest(t)
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("pending"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if !strings.Contains(output, "授权码: 123456") ||
+		!strings.Contains(output, "weclaw feishu users approve-code 123456") ||
+		!strings.Contains(output, "weclaw feishu users approve-code 123456 --admin") {
+		t.Fatalf("output=%q, want approve-code command hints", output)
+	}
+}
+
+func TestRunFeishuUsersPendingHidesExpiredAuthCode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeFeishuIdentityStateWithExpiredAuthCodeForTest(t)
+	writeFeishuBotsConfigForTest(t)
+
+	output := captureStdout(t, func() {
+		if err := runFeishuUsers("pending"); err != nil {
+			t.Fatalf("runFeishuUsers error: %v", err)
+		}
+	})
+
+	if strings.Contains(output, "授权码: 123456") ||
+		strings.Contains(output, "approve-code 123456") {
+		t.Fatalf("output=%q, should hide expired auth code", output)
+	}
+	if !strings.Contains(output, "weclaw feishu users approve on_same_person") {
+		t.Fatalf("output=%q, want stable-id approval hint", output)
+	}
+}
+
 func TestRunFeishuUsersApproveAddsAdminUser(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
@@ -178,6 +216,62 @@ func writeFeishuIdentityStateWithoutUnionForTest(t *testing.T) {
       "open_id": "ou_only",
       "open_ids": {"cli_a": "ou_only"},
       "accounts": ["cli_a"],
+      "pending": true,
+      "approved": false,
+      "last_seen": "2026-07-08T00:00:00Z"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("write identity state: %v", err)
+	}
+}
+
+func writeFeishuIdentityStateWithAuthCodeForTest(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir identity dir: %v", err)
+	}
+	data := `{
+  "version": 1,
+  "records": {
+    "on_same_person": {
+      "key": "on_same_person",
+      "union_id": "on_same_person",
+      "open_id": "ou_a",
+      "open_ids": {"cli_a": "ou_a"},
+      "accounts": ["cli_a"],
+      "auth_code": "123456",
+      "auth_code_expires_at": "2099-01-01T00:00:00Z",
+      "pending": true,
+      "approved": false,
+      "last_seen": "2026-07-08T00:00:00Z"
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("write identity state: %v", err)
+	}
+}
+
+func writeFeishuIdentityStateWithExpiredAuthCodeForTest(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("HOME"), ".weclaw", "feishu-identities.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir identity dir: %v", err)
+	}
+	data := `{
+  "version": 1,
+  "records": {
+    "on_same_person": {
+      "key": "on_same_person",
+      "union_id": "on_same_person",
+      "open_id": "ou_a",
+      "open_ids": {"cli_a": "ou_a"},
+      "accounts": ["cli_a"],
+      "auth_code": "123456",
+      "auth_code_expires_at": "2000-01-01T00:00:00Z",
       "pending": true,
       "approved": false,
       "last_seen": "2026-07-08T00:00:00Z"

@@ -187,7 +187,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Build platform registry before HTTP API so active sending and inbound bridge share the same platform set.
-	registry, err := buildPlatformRegistry(accounts, cfg, platform.WithIdentityObserver(handler.ObserveFeishuIdentity))
+	registry, err := buildPlatformRegistry(
+		accounts,
+		cfg,
+		platform.WithIdentityObserver(handler.ObserveFeishuIdentity),
+		platform.WithDenyNoticeProvider(handler.ObserveDeniedIdentity),
+	)
 	if err != nil {
 		return err
 	}

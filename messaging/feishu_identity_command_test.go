@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -94,6 +95,58 @@ func TestFeishuIdentityCommandApprovesSingleBotAndAdminUser(t *testing.T) {
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "已同步加入 admin_users") {
 		t.Fatalf("reply=%q, want admin confirmation", texts[0])
+	}
+}
+
+func TestFeishuIdentityCommandApprovesByCodeWithDisplayName(t *testing.T) {
+	setupFeishuIdentityCommandConfig(t)
+	handler := newFeishuIdentityCommandHandler(t)
+	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
+	record, ok := handler.ensureFeishuIdentities().IssueAuthCode("on_same_person", time.Now().UTC())
+	if !ok {
+		t.Fatal("IssueAuthCode ok=false, want true")
+	}
+	reply := newAdminCommandTestReplier()
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve-code "+record.AuthCode+" --name 张三"), reply)
+
+	texts := reply.waitTexts(t, 1)
+	if !strings.Contains(texts[0], "张三 (on_same_person)") {
+		t.Fatalf("reply=%q, want display name in approval", texts[0])
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	for _, bot := range cfg.Platforms["feishu"].Bots {
+		if !testStringSliceContains(bot.AllowedUsers, "on_same_person") {
+			t.Fatalf("bot=%s allowed=%#v, want union_id", bot.Name, bot.AllowedUsers)
+		}
+	}
+}
+
+func TestFeishuIdentityCommandPendingHidesExpiredAuthCode(t *testing.T) {
+	setupFeishuIdentityCommandConfig(t)
+	handler := newFeishuIdentityCommandHandler(t)
+	store := handler.ensureFeishuIdentities()
+	store.records["on_same_person"] = feishuIdentityRecord{
+		Key:               "on_same_person",
+		UnionID:           "on_same_person",
+		OpenID:            "ou_a",
+		Accounts:          []string{"cli_a"},
+		AuthCode:          "123456",
+		AuthCodeExpiresAt: "2000-01-01T00:00:00Z",
+		Pending:           true,
+	}
+	store.save()
+	reply := newAdminCommandTestReplier()
+
+	handler.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users pending"), reply)
+
+	texts := reply.waitTexts(t, 1)
+	if strings.Contains(texts[0], "授权码: 123456") ||
+		strings.Contains(texts[0], "approve-code 123456") {
+		t.Fatalf("reply=%q, should hide expired auth code", texts[0])
 	}
 }
 

@@ -39,6 +39,9 @@ func mergeFeishuIdentityRecords(current feishuIdentityRecord, incoming feishuIde
 	current.Pending = current.Pending || incoming.Pending
 	current.FirstSeen = earliestNonEmptyTime(current.FirstSeen, incoming.FirstSeen)
 	current.LastSeen = latestNonEmptyTime(current.LastSeen, incoming.LastSeen)
+	current.DisplayName = firstNonBlank(current.DisplayName, incoming.DisplayName)
+	current.AuthCode = firstNonBlank(current.AuthCode, incoming.AuthCode)
+	current.AuthCodeExpiresAt = firstNonBlank(current.AuthCodeExpiresAt, incoming.AuthCodeExpiresAt)
 	current.UnionID = firstNonBlank(current.UnionID, incoming.UnionID)
 	current.UserID = firstNonBlank(current.UserID, incoming.UserID)
 	current.OpenID = firstNonBlank(current.OpenID, incoming.OpenID)

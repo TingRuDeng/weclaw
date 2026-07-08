@@ -3,6 +3,7 @@ package messaging
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -26,9 +27,10 @@ type FeishuIdentityApproveRequest struct {
 
 // FeishuIdentityApproveResult 返回已写入配置的身份和机器人范围。
 type FeishuIdentityApproveResult struct {
-	Identity string
-	Bots     []string
-	Admin    bool
+	Identity    string
+	Bots        []string
+	Admin       bool
+	DisplayName string
 }
 
 func isFeishuIdentityCommand(trimmed string) bool {
@@ -50,6 +52,8 @@ func (h *Handler) handleFeishuIdentityCommand(msg platform.IncomingMessage, trim
 		return h.renderFeishuIdentityRecords(h.ensureFeishuIdentities().ListRecords(), "飞书用户身份")
 	case "approve":
 		return h.handleFeishuIdentityApprove(fields[3:])
+	case "approve-code":
+		return h.handleFeishuIdentityApproveCode(fields[3:])
 	default:
 		return feishuIdentityUsageText()
 	}
@@ -254,20 +258,14 @@ func renderFeishuIdentityRecord(record feishuIdentityRecord) []string {
 	if len(record.Accounts) > 0 {
 		lines = append(lines, "   机器人: "+strings.Join(record.Accounts, ", "))
 	}
+	if authCode, _ := visibleFeishuAuthCode(record, time.Now().UTC()); authCode != "" {
+		lines = append(lines, "   授权码: "+authCode)
+		lines = append(lines, "   授权访问: /feishu users approve-code "+authCode)
+		if strings.TrimSpace(record.UnionID) != "" {
+			lines = append(lines, "   设为管理员: /feishu users approve-code "+authCode+" --admin")
+		}
+	}
 	return lines
-}
-
-// RenderFeishuIdentityApproval 渲染飞书身份授权后的用户可见结果。
-func RenderFeishuIdentityApproval(result FeishuIdentityApproveResult) string {
-	lines := []string{
-		"已授权飞书用户: " + result.Identity,
-		"机器人: " + strings.Join(result.Bots, ", "),
-		"配置已写入，运行中服务会通过配置热重载生效。",
-	}
-	if result.Admin {
-		lines = append(lines, "已同步加入 admin_users。")
-	}
-	return strings.Join(lines, "\n")
 }
 
 func feishuIdentityUsageText() string {
@@ -276,6 +274,7 @@ func feishuIdentityUsageText() string {
 		"/feishu users pending",
 		"/feishu users list",
 		"/feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]",
+		"/feishu users approve-code <授权码> [--bot <name|app_id>] [--admin] [--name <显示名>]",
 		"--admin 只会写入 union_id；缺少 union_id 时会拒绝。",
 	}, "\n")
 }

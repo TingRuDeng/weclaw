@@ -77,7 +77,7 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 		promptDone <- promptDoneMsg{result: result, err: err}
 	}()
 
-	// Collect text chunks from notifications
+	// 普通 agent_message_chunk 是最终回复正文，不能作为进度推给飞书任务卡片。
 	var textParts []string
 
 	for {
@@ -89,9 +89,6 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 				text := extractChunkText(update)
 				if text != "" {
 					textParts = append(textParts, text)
-					if onProgress != nil {
-						onProgress(text)
-					}
 				}
 			}
 		case done := <-promptDone:
@@ -103,9 +100,6 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 						text := extractChunkText(update)
 						if text != "" {
 							textParts = append(textParts, text)
-							if onProgress != nil {
-								onProgress(text)
-							}
 						}
 					}
 				default:

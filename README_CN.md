@@ -20,28 +20,27 @@ curl -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | 
 export GITHUB_TOKEN=ghp_xxx
 curl -H "Authorization: Bearer $GITHUB_TOKEN" -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
-# 启动（首次运行会弹出微信扫码登录）
+# 启动
 weclaw start
 ```
 
 就这么简单。首次启动时，WeClaw 会：
 
-1. 显示二维码 — 用微信扫码登录
+1. 读取 `~/.weclaw/config.json`
 2. 自动检测已安装的 AI Agent（Claude、Codex、Gemini 等）
-3. 保存配置到 `~/.weclaw/config.json`
-4. 开始接收和回复微信消息
+3. 启动已启用的平台
+4. 开始接收和回复微信 / 飞书消息
 
-使用 `weclaw login` 可以添加更多微信账号。
+微信需要扫码登录时，先执行 `weclaw login`；仅启用飞书时，启动不会要求登录微信。
 
-飞书接入默认关闭。需要启用时先保存并校验飞书应用凭证：
+飞书接入默认关闭。需要启用时可用交互式命令添加机器人：
 
 ```bash
-weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --allowed-users on_xxx --default-agent codex --progress stream
-weclaw feishu login --name project-a --app-id cli_xxx --app-secret xxx
+weclaw feishu add
 weclaw feishu status --name project-a
 ```
 
-`bootstrap` 会同时保存飞书凭证并更新 `platforms.feishu.bots[]`，适合首次配置。飞书 `open_id` 是应用级身份，同一个人在不同机器人应用下不同；多机器人建议在 `allowed_users` 使用同开发商下稳定的 `union_id`。若本机安装了官方 `lark-cli`，命令会提示继续用它检查应用权限、事件订阅和消息发送能力；WeClaw 运行时仍使用内置飞书 SDK 长连接，不依赖 `lark-cli`。
+`weclaw feishu add` 会保存飞书凭证并更新 `platforms.feishu.bots[]`，适合首次配置。飞书 `open_id` 是应用级身份，同一个人在不同机器人应用下不同；多机器人建议在 `allowed_users` 使用同开发商下稳定的 `union_id`。若本机安装了官方 `lark-cli`，命令会提示继续用它检查应用权限、事件订阅和消息发送能力；WeClaw 运行时仍使用内置飞书 SDK 长连接，不依赖 `lark-cli`。
 
 飞书应用建议按最小权限开通。WeClaw 运行时使用应用身份，不需要 `user` scopes；开通或修改权限后必须重新发布版本并完成审批。
 
@@ -136,7 +135,7 @@ weclaw companion --agent opencode --cwd /path/to/project
 | `/stop`                 | 停止当前运行的任务       |
 | `/update`               | 管理员远程更新 WeClaw（需配置 `admin_users`） |
 | `/restart` / `/restart --force` | 管理员远程重启 WeClaw（需配置 `admin_users`） |
-| `/feishu users pending` / `/feishu users approve <编号>` | 管理员确认飞书自动发现用户 |
+| `/feishu users pending` / `/feishu users approve-code <授权码>` | 管理员确认飞书自动发现用户 |
 | `/status`               | 查看运行态（agent、uptime、运行中任务、调用/错误计数、模式、限流） |
 | `/help`                 | 查看帮助信息             |
 
@@ -375,7 +374,9 @@ weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --all
 
 微信 `message_aggregation_ms` 默认 800，表示 800ms 内同一用户的连续非命令消息会合并；设置为 `0` 可关闭。飞书 `bots[].default_agent`、`bots[].progress` 和 `bots[].allowed_users` 按 `app_id` 隔离并支持软配置热重载；`allowed_users` 可填应用级 `open_id` 或同开发商下稳定的 `union_id`，多机器人优先使用 `union_id`；新增、删除 bot 或修改 `app_id` 仍需重启生效。
 
-飞书未授权用户给任意 bot 发消息时，WeClaw 会把 `open_id/user_id/union_id` 记录到 `~/.weclaw/feishu-identities.json`，但不会自动放行。管理员可在飞书里发送 `/feishu users pending` 查看待确认用户，发送 `/feishu users approve <编号>` 把稳定身份写入所有已配置 bot 的 `allowed_users`；需要限定单个 bot 时加 `--bot <name|app_id>`，需要同时加入远程管理白名单时加 `--admin`。本机可用 `weclaw feishu users pending` 和 `weclaw feishu users list` 只读查看自动发现状态。
+飞书未授权用户给任意 bot 发消息时，WeClaw 会把 `open_id/user_id/union_id` 记录到 `~/.weclaw/feishu-identities.json`，但不会自动放行。拒绝提示会返回短期授权码；管理员可在飞书里发送 `/feishu users approve-code <授权码>`，或本机执行 `weclaw feishu users approve-code <授权码>`，把稳定身份写入已配置 bot 的 `allowed_users`；需要限定单个 bot 时加 `--bot <name|app_id>`，需要同时加入远程管理白名单时加 `--admin`。本机可用 `weclaw feishu users pending` 和 `weclaw feishu users list` 查看自动发现状态，也可用 `weclaw feishu users rename <id> <显示名>` 手动补全姓名。
+
+微信未授权用户发消息时，也会收到短期授权码。管理员在本机执行 `weclaw users approve-code <授权码>` 可把该微信用户写入 `platforms.wechat.allowed_users`；需要同时加入远程管理白名单时加 `--admin`。
 
 环境变量：
 

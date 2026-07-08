@@ -171,7 +171,7 @@ func TestFinalReplyOutsideStreamDoesNotPutOrdinaryAnswerInCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.agents["mock"] = &fakeProgressAgent{
 		fakeAgent:      fakeAgent{reply: finalReply},
-		progressDeltas: []string{finalReply},
+		progressDeltas: []string{"进展：Agent 正在整理结果。"},
 		delay:          taskQueueProbeDelay,
 	}
 	cfg := config.DefaultProgressConfig()
@@ -191,13 +191,16 @@ func TestFinalReplyOutsideStreamDoesNotPutOrdinaryAnswerInCard(t *testing.T) {
 	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] "+finalReply {
 		t.Fatalf("texts=%#v, want ordinary final answer as text", reply.Texts)
 	}
+	if len(reply.Stream.Updates) == 0 {
+		t.Fatal("stream should keep task status updates")
+	}
 	for _, update := range reply.Stream.Updates {
 		if strings.Contains(update, "本轮未联网检索") || strings.Contains(update, "流水页切到") {
 			t.Fatalf("stream update should not contain ordinary final answer body, updates=%#v", reply.Stream.Updates)
 		}
 	}
-	if len(reply.Stream.Updates) == 0 || !strings.Contains(reply.Stream.Updates[len(reply.Stream.Updates)-1], "点击摘要卡进入过滤后的流水列表。") {
-		t.Fatalf("stream updates=%#v, want latest status line only", reply.Stream.Updates)
+	if !strings.Contains(reply.Stream.Updates[len(reply.Stream.Updates)-1], "Agent 正在整理结果") {
+		t.Fatalf("stream updates=%#v, want latest explicit status", reply.Stream.Updates)
 	}
 }
 

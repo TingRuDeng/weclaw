@@ -16,9 +16,10 @@ const (
 
 // Registry 统一管理已启用的平台实例，并在分发前执行访问控制。
 type Registry struct {
-	entries          []RegistryEntry
-	denyNotices      *denyNoticeLimiter
-	identityObserver IdentityObserver
+	entries            []RegistryEntry
+	denyNotices        *denyNoticeLimiter
+	identityObserver   IdentityObserver
+	denyNoticeProvider DenyNoticeProvider
 }
 
 // RegistryEntry 描述一个平台实例及其访问控制策略。
@@ -30,12 +31,22 @@ type RegistryEntry struct {
 // IdentityObserver 在访问控制前观察入站身份，只用于发现身份，不决定授权。
 type IdentityObserver func(IncomingMessage)
 
+// DenyNoticeProvider 按入站消息生成未授权提示，空返回值使用默认提示。
+type DenyNoticeProvider func(IncomingMessage) string
+
 type RegistryOption func(*Registry)
 
 // WithIdentityObserver 注册入站身份观察器，便于拒绝未授权消息前记录飞书身份。
 func WithIdentityObserver(observer IdentityObserver) RegistryOption {
 	return func(r *Registry) {
 		r.identityObserver = observer
+	}
+}
+
+// WithDenyNoticeProvider 注册未授权提示生成器，用于附加授权码等上下文。
+func WithDenyNoticeProvider(provider DenyNoticeProvider) RegistryOption {
+	return func(r *Registry) {
+		r.denyNoticeProvider = provider
 	}
 }
 
@@ -76,7 +87,7 @@ func (r *Registry) Run(ctx context.Context, dispatch DispatchFunc) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runPlatformWithRestart(runCtx, entry, dispatch, r.denyNotices, r.identityObserver); err != nil && runCtx.Err() == nil {
+			if err := runPlatformWithRestart(runCtx, entry, dispatch, r.denyNotices, r.identityObserver, r.denyNoticeProvider); err != nil && runCtx.Err() == nil {
 				errCh <- err
 				cancel()
 			}
@@ -178,10 +189,10 @@ func applyPlatformAccess(p Platform, access AccessControl) {
 	}
 }
 
-func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter, observer IdentityObserver) error {
+func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter, observer IdentityObserver, denyProvider DenyNoticeProvider) error {
 	restartDelay := registryInitialRestartDelay
 	for {
-		err := entry.Platform.Run(ctx, guardedDispatch(entry, dispatch, limiter, observer))
+		err := entry.Platform.Run(ctx, guardedDispatch(entry, dispatch, limiter, observer, denyProvider))
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -202,13 +213,13 @@ func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch D
 	}
 }
 
-func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter, observer IdentityObserver) DispatchFunc {
+func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter, observer IdentityObserver, denyProvider DenyNoticeProvider) DispatchFunc {
 	return func(ctx context.Context, msg IncomingMessage, reply Replier) {
 		observeIncomingIdentity(observer, msg)
 		if !accessAllowsMessage(entry.Access, msg) {
 			log.Printf("[platform] denied %s user %q aliases=%q on account %q",
 				entry.Platform.Name(), msg.UserID, msg.UserAliases, entry.Platform.AccountID())
-			sendDenyNotice(ctx, entry, msg, reply, limiter)
+			sendDenyNotice(ctx, entry, msg, reply, limiter, denyProvider)
 			return
 		}
 		dispatch(ctx, msg, reply)
@@ -232,7 +243,7 @@ func accessAllowsMessage(access AccessControl, msg IncomingMessage) bool {
 	return false
 }
 
-func sendDenyNotice(ctx context.Context, entry RegistryEntry, msg IncomingMessage, reply Replier, limiter *denyNoticeLimiter) {
+func sendDenyNotice(ctx context.Context, entry RegistryEntry, msg IncomingMessage, reply Replier, limiter *denyNoticeLimiter, denyProvider DenyNoticeProvider) {
 	if reply == nil || limiter == nil {
 		return
 	}
@@ -240,7 +251,13 @@ func sendDenyNotice(ctx context.Context, entry RegistryEntry, msg IncomingMessag
 	if !limiter.Allow(key) {
 		return
 	}
-	if err := reply.SendText(ctx, denyNoticeText); err != nil {
+	text := denyNoticeText
+	if denyProvider != nil {
+		if provided := denyProvider(msg); provided != "" {
+			text = provided
+		}
+	}
+	if err := reply.SendText(ctx, text); err != nil {
 		log.Printf("[platform] failed to send deny notice to %s user %q: %v", entry.Platform.Name(), msg.UserID, err)
 	}
 }

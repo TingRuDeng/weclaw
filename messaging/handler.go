@@ -108,36 +108,6 @@ const (
 
 var ansiEscapePattern = regexp.MustCompile(`\x1B\[[0-?]*[ -/]*[@-~]`)
 
-// codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
-type codexAgentTaskOptions struct {
-	ctx         context.Context
-	userID      string
-	routeUserID string
-	reply       platform.Replier
-	agentName   string
-	message     string
-	clientID    string
-	replyPrefix string
-	agent       agent.Agent
-	progressCfg config.ProgressConfig
-}
-
-// codexAgentTaskRuntime 保存已经登记 active task 后的运行时资源。
-type codexAgentTaskRuntime struct {
-	opts              codexAgentTaskOptions
-	agentCtx          context.Context
-	cancelTaskTimeout context.CancelFunc
-	executionKey      string
-	route             codexConversationRoute
-	task              *activeAgentTask
-}
-
-type codexConversationRoute struct {
-	bindingKey     string
-	workspaceRoot  string
-	conversationID string
-}
-
 // HandleMessage processes a single platform-agnostic incoming message.
 func (h *Handler) HandleMessage(ctx context.Context, incoming platform.IncomingMessage, reply platform.Replier) {
 	if reply == nil {

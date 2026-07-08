@@ -18,6 +18,7 @@ var feishuUsersCmd = &cobra.Command{
 var (
 	feishuUsersApproveBotRef string
 	feishuUsersApproveAdmin  bool
+	feishuUsersApproveName   string
 )
 
 var feishuUsersPendingCmd = &cobra.Command{
@@ -49,6 +50,32 @@ var feishuUsersApproveCmd = &cobra.Command{
 	},
 }
 
+var feishuUsersRenameCmd = &cobra.Command{
+	Use:   "rename <union_id|user_id|open_id> <显示名>",
+	Short: "为飞书用户身份设置本地显示名",
+	Args:  validateFeishuUsersRenameArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runFeishuUsersRename(feishuUsersRenameOptions{
+			Selector:    args[0],
+			DisplayName: args[1],
+		})
+	},
+}
+
+var feishuUsersApproveCodeCmd = &cobra.Command{
+	Use:   "approve-code <授权码>",
+	Short: "使用授权码确认飞书用户并写入配置",
+	Args:  validateFeishuUsersApproveCodeArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runFeishuUsersApproveCode(feishuUsersApproveCodeOptions{
+			Code:        args[0],
+			BotRef:      feishuUsersApproveBotRef,
+			Admin:       feishuUsersApproveAdmin,
+			DisplayName: feishuUsersApproveName,
+		})
+	},
+}
+
 type feishuUsersApproveOptions struct {
 	Selector string
 	BotRef   string
@@ -58,7 +85,10 @@ type feishuUsersApproveOptions struct {
 func init() {
 	feishuUsersApproveCmd.Flags().StringVar(&feishuUsersApproveBotRef, "bot", "", "限定写入的飞书机器人 name 或 app_id")
 	feishuUsersApproveCmd.Flags().BoolVar(&feishuUsersApproveAdmin, "admin", false, "同时写入顶层 admin_users")
-	feishuUsersCmd.AddCommand(feishuUsersPendingCmd, feishuUsersListCmd, feishuUsersApproveCmd)
+	feishuUsersApproveCodeCmd.Flags().StringVar(&feishuUsersApproveBotRef, "bot", "", "限定写入的飞书机器人 name 或 app_id")
+	feishuUsersApproveCodeCmd.Flags().BoolVar(&feishuUsersApproveAdmin, "admin", false, "同时写入顶层 admin_users")
+	feishuUsersApproveCodeCmd.Flags().StringVar(&feishuUsersApproveName, "name", "", "为该用户写入本地显示名")
+	feishuUsersCmd.AddCommand(feishuUsersPendingCmd, feishuUsersListCmd, feishuUsersApproveCmd, feishuUsersApproveCodeCmd, feishuUsersRenameCmd)
 }
 
 func runFeishuUsers(kind string) error {
@@ -72,7 +102,7 @@ func runFeishuUsers(kind string) error {
 		title = "待确认飞书用户"
 	}
 	botLabels, lookupAccounts := feishuBotUserListMetadata()
-	nameLookup := lookupFeishuIdentityNames(context.Background(), views, lookupAccounts)
+	nameLookup := lookupFeishuIdentityNamesForViews(context.Background(), views, lookupAccounts)
 	printFeishuIdentityViews(title, views, botLabels, nameLookup)
 	return nil
 }
@@ -127,27 +157,15 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	if len(view.Accounts) > 0 {
 		fmt.Printf("   机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.Accounts, botLabels), ", "))
 	}
-	fmt.Printf("   状态: %s\n", feishuIdentityViewStatus(view))
-	printFeishuIdentityApproveHints(view)
-}
-
-// printFeishuIdentityNameWarnings 把可恢复的通讯录查询失败展示给用户。
-func printFeishuIdentityNameWarnings(warnings []string) {
-	for _, warning := range warnings {
-		warning = strings.TrimSpace(warning)
-		if warning != "" {
-			fmt.Printf("姓名查询失败: %s\n", warning)
+	if strings.TrimSpace(view.AuthCode) != "" {
+		fmt.Printf("   授权码: %s\n", view.AuthCode)
+		fmt.Printf("   授权访问: weclaw feishu users approve-code %s\n", view.AuthCode)
+		if strings.TrimSpace(view.UnionID) != "" {
+			fmt.Printf("   设为管理员: weclaw feishu users approve-code %s --admin\n", view.AuthCode)
 		}
 	}
-}
-
-// feishuIdentityDisplayLabel 优先显示通讯录姓名，同时保留稳定 ID 便于复制授权。
-func feishuIdentityDisplayLabel(view messaging.FeishuIdentityView, names map[string]string) string {
-	name := feishuIdentityResolvedName(view, names)
-	if name == "" || name == view.Key {
-		return view.Key
-	}
-	return fmt.Sprintf("%s (%s)", name, view.Key)
+	fmt.Printf("   状态: %s\n", feishuIdentityViewStatus(view))
+	printFeishuIdentityApproveHints(view)
 }
 
 // feishuIdentityViewStatus 把身份授权状态转为面向用户的中文文案。

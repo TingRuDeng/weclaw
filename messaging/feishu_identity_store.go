@@ -86,6 +86,8 @@ func (s *feishuIdentityStore) Approve(selector string) (feishuIdentityRecord, bo
 	record := s.records[key]
 	record.Approved = true
 	record.Pending = false
+	record.AuthCode = ""
+	record.AuthCodeExpiresAt = ""
 	s.records[key] = record
 	s.mu.Unlock()
 	s.save()
