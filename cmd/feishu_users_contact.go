@@ -37,6 +37,13 @@ var (
 	fetchFeishuContactNameFn  = fetchFeishuContactName
 )
 
+type silentFeishuSDKLogger struct{}
+
+func (silentFeishuSDKLogger) Debug(context.Context, ...interface{}) {}
+func (silentFeishuSDKLogger) Info(context.Context, ...interface{})  {}
+func (silentFeishuSDKLogger) Warn(context.Context, ...interface{})  {}
+func (silentFeishuSDKLogger) Error(context.Context, ...interface{}) {}
+
 // lookupFeishuIdentityNamesFromContact 用已配置机器人凭证补全身份记录的人类可读姓名。
 func lookupFeishuIdentityNamesFromContact(ctx context.Context, views []messaging.FeishuIdentityView, accounts []feishuIdentityNameLookupAccount) feishuIdentityNameLookupResult {
 	if len(views) == 0 || len(accounts) == 0 {
@@ -78,7 +85,8 @@ func fetchFeishuContactName(ctx context.Context, query feishuContactUserQuery) (
 	if err != nil {
 		return "", err
 	}
-	client := lark.NewClient(creds.AppID, creds.AppSecret)
+	// CLI 输出需要保持可解析，SDK 初始化日志不能混入标准输出。
+	client := lark.NewClient(creds.AppID, creds.AppSecret, lark.WithLogger(silentFeishuSDKLogger{}))
 	req := contact.NewGetUserReqBuilder().
 		UserId(query.UserID).
 		UserIdType(query.UserIDType).

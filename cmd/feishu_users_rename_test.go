@@ -12,6 +12,7 @@ func TestRunFeishuUsersRenameUpdatesDisplayName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuUserForTest(t, "on_approved")
 
 	output := captureStdout(t, func() {
 		err := runFeishuUsersRename(feishuUsersRenameOptions{

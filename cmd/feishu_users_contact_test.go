@@ -13,6 +13,7 @@ func TestRunFeishuUsersListPrintsContactName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuUserForTest(t, "on_approved")
 
 	oldLookup := lookupFeishuIdentityNames
 	lookupFeishuIdentityNames = func(context.Context, []messaging.FeishuIdentityView, []feishuIdentityNameLookupAccount) feishuIdentityNameLookupResult {
@@ -41,6 +42,7 @@ func TestRunFeishuUsersListPrintsContactLookupWarning(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuUserForTest(t, "on_approved")
 
 	oldLookup := lookupFeishuIdentityNames
 	lookupFeishuIdentityNames = func(context.Context, []messaging.FeishuIdentityView, []feishuIdentityNameLookupAccount) feishuIdentityNameLookupResult {

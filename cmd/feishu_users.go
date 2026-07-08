@@ -103,7 +103,7 @@ func runFeishuUsers(kind string) error {
 	}
 	botLabels, lookupAccounts := feishuBotUserListMetadata()
 	nameLookup := lookupFeishuIdentityNamesForViews(context.Background(), views, lookupAccounts)
-	printFeishuIdentityViews(title, views, botLabels, nameLookup)
+	printFeishuIdentityViews(title, views, botLabels, nameLookup, pendingOnly)
 	return nil
 }
 
@@ -137,7 +137,7 @@ func runFeishuUsersApprove(opts feishuUsersApproveOptions) error {
 }
 
 // printFeishuIdentityViews 输出身份列表，并在联系人查询失败时显式提示原因。
-func printFeishuIdentityViews(title string, views []messaging.FeishuIdentityView, botLabels map[string]string, names feishuIdentityNameLookupResult) {
+func printFeishuIdentityViews(title string, views []messaging.FeishuIdentityView, botLabels map[string]string, names feishuIdentityNameLookupResult, showApprovalCode bool) {
 	if len(views) == 0 {
 		fmt.Printf("%s: 暂无\n", title)
 		return
@@ -145,13 +145,14 @@ func printFeishuIdentityViews(title string, views []messaging.FeishuIdentityView
 	fmt.Println(title + ":")
 	printFeishuIdentityNameWarnings(names.Warnings)
 	for i, view := range views {
-		printFeishuIdentityView(i+1, view, botLabels, names.Names)
+		printFeishuIdentityView(i+1, view, botLabels, names.Names, showApprovalCode)
 	}
 }
 
 // printFeishuIdentityView 输出单条身份详情和可复制的授权命令。
-func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLabels map[string]string, names map[string]string) {
+func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLabels map[string]string, names map[string]string, showApprovalCode bool) {
 	fmt.Printf("%d. %s\n", index, feishuIdentityDisplayLabel(view, names))
+	fmt.Printf("   身份ID: %s\n", view.Key)
 	if view.UnionID != "" {
 		fmt.Printf("   union_id: %s\n", view.UnionID)
 	}
@@ -161,26 +162,44 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	if view.OpenID != "" {
 		fmt.Printf("   open_id: %s\n", view.OpenID)
 	}
-	if len(view.Accounts) > 0 {
-		fmt.Printf("   机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.Accounts, botLabels), ", "))
+	if len(view.AuthorizedAccounts) > 0 {
+		fmt.Printf("   已授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.AuthorizedAccounts, botLabels), ", "))
 	}
-	if strings.TrimSpace(view.AuthCode) != "" {
+	if len(view.UnauthorizedAccounts) > 0 {
+		fmt.Printf("   待授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.UnauthorizedAccounts, botLabels), ", "))
+	}
+	if len(view.AuthorizedAccounts) == 0 && len(view.UnauthorizedAccounts) == 0 && len(view.Accounts) > 0 {
+		fmt.Printf("   相关机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.Accounts, botLabels), ", "))
+	}
+	fmt.Printf("   状态: %s\n", feishuIdentityViewStatus(view, showApprovalCode))
+	if showApprovalCode && strings.TrimSpace(view.AuthCode) != "" {
 		fmt.Printf("   授权码: %s\n", view.AuthCode)
-		fmt.Printf("   授权访问: weclaw feishu users approve-code %s\n", view.AuthCode)
+		fmt.Printf("   授权命令: weclaw feishu users approve-code %s\n", view.AuthCode)
 		if strings.TrimSpace(view.UnionID) != "" {
-			fmt.Printf("   设为管理员: weclaw feishu users approve-code %s --admin\n", view.AuthCode)
+			fmt.Printf("   授权并设为管理员: weclaw feishu users approve-code %s --admin\n", view.AuthCode)
 		}
+		return
 	}
-	fmt.Printf("   状态: %s\n", feishuIdentityViewStatus(view))
-	printFeishuIdentityApproveHints(view)
+	if !showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
+		fmt.Println("   下一步: weclaw feishu users pending")
+	}
+	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
+		printFeishuIdentityApproveHints(view)
+	}
 }
 
 // feishuIdentityViewStatus 把身份授权状态转为面向用户的中文文案。
-func feishuIdentityViewStatus(view messaging.FeishuIdentityView) string {
-	if strings.TrimSpace(view.AuthCode) != "" {
+func feishuIdentityViewStatus(view messaging.FeishuIdentityView, showApprovalCode bool) string {
+	if showApprovalCode && strings.TrimSpace(view.AuthCode) != "" {
+		if len(view.AuthorizedAccounts) > 0 && len(view.UnauthorizedAccounts) > 0 {
+			return "部分授权，待确认"
+		}
 		return "待确认"
 	}
-	if view.Approved {
+	if len(view.AuthorizedAccounts) > 0 && len(view.UnauthorizedAccounts) > 0 {
+		return "部分授权"
+	}
+	if len(view.AuthorizedAccounts) > 0 || view.Approved {
 		return "已授权"
 	}
 	if view.Pending {

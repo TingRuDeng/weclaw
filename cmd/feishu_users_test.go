@@ -40,6 +40,8 @@ func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
 func TestRunFeishuUsersListPrintsOnlyApprovedIdentities(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
+	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuUserForTest(t, "on_approved")
 
 	output := captureStdout(t, func() {
 		if err := runFeishuUsers("list"); err != nil {
@@ -56,10 +58,11 @@ func TestRunFeishuUsersListPrintsOnlyApprovedIdentities(t *testing.T) {
 	}
 }
 
-func TestRunFeishuUsersListHidesApprovedIdentityWithActiveAuthCode(t *testing.T) {
+func TestRunFeishuUsersListPrintsAuthorizedScopeWithoutAuthCode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateWithApprovedAuthCodeForTest(t)
 	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuBotUserForTest(t, "cli_a", "on_same_person")
 
 	output := captureStdout(t, func() {
 		if err := runFeishuUsers("list"); err != nil {
@@ -67,11 +70,15 @@ func TestRunFeishuUsersListHidesApprovedIdentityWithActiveAuthCode(t *testing.T)
 		}
 	})
 
-	if strings.Contains(output, "on_same_person") || strings.Contains(output, "授权码: 123456") {
-		t.Fatalf("output=%q, should hide active authorization request from list", output)
+	if !strings.Contains(output, "on_same_person") ||
+		!strings.Contains(output, "已授权机器人: 卡片管家") ||
+		!strings.Contains(output, "待授权机器人: project-b") ||
+		!strings.Contains(output, "状态: 部分授权") {
+		t.Fatalf("output=%q, want authorized and pending bot scopes", output)
 	}
-	if !strings.Contains(output, "已授权飞书用户: 暂无") {
-		t.Fatalf("output=%q, want empty approved list", output)
+	if strings.Contains(output, "授权码: 123456") ||
+		strings.Contains(output, "approve-code 123456") {
+		t.Fatalf("output=%q, list should not print auth code commands", output)
 	}
 }
 
@@ -97,6 +104,7 @@ func TestRunFeishuUsersPendingPrintsApprovedIdentityWithAuthCode(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateWithApprovedAuthCodeForTest(t)
 	writeFeishuBotsConfigForTest(t)
+	authorizeFeishuBotUserForTest(t, "cli_a", "on_same_person")
 
 	output := captureStdout(t, func() {
 		if err := runFeishuUsers("pending"); err != nil {
@@ -105,7 +113,7 @@ func TestRunFeishuUsersPendingPrintsApprovedIdentityWithAuthCode(t *testing.T) {
 	})
 
 	if !strings.Contains(output, "授权码: 123456") ||
-		!strings.Contains(output, "状态: 待确认") {
+		!strings.Contains(output, "状态: 部分授权，待确认") {
 		t.Fatalf("output=%q, want pending approved identity with active auth code", output)
 	}
 }
@@ -360,6 +368,40 @@ func writeFeishuBotsConfigForTest(t *testing.T) {
 			{Name: "project-b", AppID: "cli_b"},
 		},
 	}
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("config.Save error: %v", err)
+	}
+}
+
+func authorizeFeishuUserForTest(t *testing.T, userID string) {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load error: %v", err)
+	}
+	feishuCfg := cfg.Platforms["feishu"]
+	for i := range feishuCfg.Bots {
+		feishuCfg.Bots[i].AllowedUsers = append(feishuCfg.Bots[i].AllowedUsers, userID)
+	}
+	cfg.Platforms["feishu"] = feishuCfg
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("config.Save error: %v", err)
+	}
+}
+
+func authorizeFeishuBotUserForTest(t *testing.T, appID string, userID string) {
+	t.Helper()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load error: %v", err)
+	}
+	feishuCfg := cfg.Platforms["feishu"]
+	for i := range feishuCfg.Bots {
+		if feishuCfg.Bots[i].AppID == appID {
+			feishuCfg.Bots[i].AllowedUsers = append(feishuCfg.Bots[i].AllowedUsers, userID)
+		}
+	}
+	cfg.Platforms["feishu"] = feishuCfg
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("config.Save error: %v", err)
 	}

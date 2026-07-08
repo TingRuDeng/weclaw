@@ -3,7 +3,6 @@ package messaging
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -47,9 +46,9 @@ func (h *Handler) handleFeishuIdentityCommand(msg platform.IncomingMessage, trim
 	}
 	switch fields[2] {
 	case "pending":
-		return h.renderFeishuIdentityRecords(h.ensureFeishuIdentities().ListPending(), "待确认飞书用户")
+		return h.renderFeishuIdentityViews("待确认飞书用户", true)
 	case "list":
-		return h.renderFeishuIdentityRecords(h.ensureFeishuIdentities().ListApproved(), "已授权飞书用户")
+		return h.renderFeishuIdentityViews("已授权飞书用户", false)
 	case "approve":
 		return h.handleFeishuIdentityApprove(fields[3:])
 	case "approve-code":
@@ -228,44 +227,6 @@ func feishuBotConfigLabel(bot config.FeishuBotConfig) string {
 		return display
 	}
 	return display + " (" + strings.TrimSpace(bot.Name) + ")"
-}
-
-func (h *Handler) renderFeishuIdentityRecords(records []feishuIdentityRecord, title string) string {
-	if err := h.ensureFeishuIdentities().LoadError(); err != nil {
-		return fmt.Sprintf("读取飞书身份状态失败: %v", err)
-	}
-	if len(records) == 0 {
-		return title + ": 暂无。"
-	}
-	lines := []string{title + ":"}
-	for _, record := range records {
-		lines = append(lines, renderFeishuIdentityRecord(record)...)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func renderFeishuIdentityRecord(record feishuIdentityRecord) []string {
-	lines := []string{"- " + record.Key}
-	if record.UnionID != "" {
-		lines = append(lines, "   union_id: "+record.UnionID)
-	}
-	if record.UserID != "" {
-		lines = append(lines, "   user_id: "+record.UserID)
-	}
-	if record.OpenID != "" {
-		lines = append(lines, "   open_id: "+record.OpenID)
-	}
-	if len(record.Accounts) > 0 {
-		lines = append(lines, "   机器人: "+strings.Join(record.Accounts, ", "))
-	}
-	if authCode, _ := visibleFeishuAuthCode(record, time.Now().UTC()); authCode != "" {
-		lines = append(lines, "   授权码: "+authCode)
-		lines = append(lines, "   授权访问: /feishu users approve-code "+authCode)
-		if strings.TrimSpace(record.UnionID) != "" {
-			lines = append(lines, "   设为管理员: /feishu users approve-code "+authCode+" --admin")
-		}
-	}
-	return lines
 }
 
 func feishuIdentityUsageText() string {
