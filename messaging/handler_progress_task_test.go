@@ -160,6 +160,73 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 	}
 }
 
+func TestNativeStreamProgressCollapsesRepeatedStructuredStatus(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeProgressAgent{
+		fakeAgent: fakeAgent{reply: "最终结果"},
+		progressDeltas: []string{
+			"进展：Codex 已产生代码或文件变更。",
+			"进展：Codex 已产生代码或文件变更。",
+			"进展：Codex 已产生代码或文件变更。",
+		},
+		delay: taskQueueProbeDelay,
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	h.SetProgressConfig(cfg)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
+	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+
+	if len(reply.Stream.Updates) == 0 {
+		t.Fatal("stream should receive progress updates")
+	}
+	last := reply.Stream.Updates[len(reply.Stream.Updates)-1]
+	if strings.Count(last, "进展：") != 1 {
+		t.Fatalf("stream update should contain one latest status, updates=%#v", reply.Stream.Updates)
+	}
+}
+
+func TestNativeStreamProgressUsesLatestCodexAppLine(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeProgressAgent{
+		fakeAgent: fakeAgent{reply: "最终结果"},
+		progressDeltas: []string{
+			"进展：Codex 正在分析请求。",
+			"进展：Codex 正在执行命令并产生输出。",
+			"进展：Codex 已产生代码或文件变更。",
+		},
+		delay: taskQueueProbeDelay,
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	h.SetProgressConfig(cfg)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
+	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+
+	if len(reply.Stream.Updates) == 0 {
+		t.Fatal("stream should receive progress updates")
+	}
+	last := reply.Stream.Updates[len(reply.Stream.Updates)-1]
+	if !strings.Contains(last, "进展：Codex 已产生代码或文件变更。") {
+		t.Fatalf("stream update=%q, want latest codex app progress line", last)
+	}
+	for _, stale := range []string{"进展：Codex 正在分析请求。", "进展：Codex 正在执行命令并产生输出。"} {
+		if strings.Contains(last, stale) {
+			t.Fatalf("stream update=%q should not keep stale progress %q", last, stale)
+		}
+	}
+}
+
 func TestFinalReplyOutsideStreamDoesNotPutOrdinaryAnswerInCard(t *testing.T) {
 	finalReply := strings.Join([]string{
 		"本轮未联网检索，未使用 subagent。",

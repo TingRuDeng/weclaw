@@ -165,6 +165,22 @@ func TestStreamModeKeepsStructuredProgressStatus(t *testing.T) {
 	}
 }
 
+func TestStreamModeKeepsOnlyLatestStructuredProgressOnSameLine(t *testing.T) {
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	delta := "进展：Codex 已产生代码或文件变更。进展：Codex 已产生代码或文件变更。进展：Codex 已产生代码或文件变更。"
+
+	got := renderDeltaProgress(delta, cfg)
+
+	want := "进展：Codex 已产生代码或文件变更。"
+	if got != want {
+		t.Fatalf("structured progress=%q, want latest single status %q", got, want)
+	}
+	if strings.Count(got, "进展：") != 1 {
+		t.Fatalf("structured progress should contain one status marker, got %q", got)
+	}
+}
+
 func TestStreamModePrefersStructuredProgressOverFinalMarkdown(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream

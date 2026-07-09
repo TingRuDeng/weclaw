@@ -161,7 +161,7 @@ func (s *progressSession) handleProgressDelta(delta string, tail string, started
 	if time.Since(startedAt) < durationSeconds(s.cfg.InitialDelaySeconds, 0) {
 		return tail
 	}
-	summary := renderDeltaProgress(tail, s.cfg)
+	summary := renderDeltaProgress(delta, s.cfg)
 	if state.sentDeltaNotice && s.cfg.Mode != progressModeStream {
 		return tail
 	}

@@ -50,11 +50,20 @@ func lastNonEmptyProgressLine(text string) string {
 func lastStructuredProgressLine(lines []string) string {
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "进展：") {
-			return line
+		if status := latestStructuredProgressInLine(line); status != "" {
+			return status
 		}
 	}
 	return ""
+}
+
+func latestStructuredProgressInLine(line string) string {
+	const marker = "进展："
+	index := strings.LastIndex(line, marker)
+	if index < 0 {
+		return ""
+	}
+	return strings.TrimSpace(line[index:])
 }
 
 func renderFinalSuccess(prefix string, reply string) string {
