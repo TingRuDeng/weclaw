@@ -132,6 +132,12 @@ func TestStopAllWeclawRemovesStalePidFile(t *testing.T) {
 	}
 }
 
+func TestProcessExistsTreatsPermissionDeniedAsRunning(t *testing.T) {
+	if !processSignalMeansExists(syscall.EPERM) {
+		t.Fatal("signal 0 返回 EPERM 时说明进程存在，不应视为过期 pid")
+	}
+}
+
 func TestRemovePIDFileTreatsMissingFileAsClean(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 

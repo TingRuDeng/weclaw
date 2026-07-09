@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -166,8 +167,11 @@ func processExists(pid int) bool {
 	if err != nil {
 		return false
 	}
-	// Signal 0 checks if process exists without killing it
-	return p.Signal(syscall.Signal(0)) == nil
+	return processSignalMeansExists(p.Signal(syscall.Signal(0)))
+}
+
+func processSignalMeansExists(err error) bool {
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 type stopProcessOps struct {

@@ -273,3 +273,11 @@
 - 反例：把 `item/commandExecution/outputDelta` 或 patch 原始 `+...` 行直接显示到卡片，信息噪声大；只做无状态字符串匹配，会在有命令输出、文件变更、文本 delta 混杂时丢失当前动作。
 - 正确做法：命令显示 `运行 <command>` 并把命令输出最新有效行作为次要详情；文件事件显示 `修改/新增/删除 <path>` 并计数去重；计划显示当前步骤；只有普通文本 delta 时显示 `Codex 正在生成回复`；卡片主行展示当前动作，次行展示输出预览或完成计数。
 - 来源：2026-07-09 用户多次纠正“跟 Codex App 本地显示的实时进度看着不一样”，并要求联网参考其他开源实现。
+
+## 2026-07-09 进程存在性判断
+
+- 触发条件：`weclaw status`、`restart`、`update --restart` 或 stop 逻辑通过 `Signal(0)` 判断 pid 文件里的进程是否存在。
+- 规则：`Signal(0)` 返回 `EPERM` 表示进程存在但当前上下文无权探测，不能当成过期 pid 文件。
+- 反例：沙箱或受限权限下 `processExists` 把 `operation not permitted` 当成不存在，导致 `weclaw status` 显示“未运行（存在过期 pid 文件）”，但实际 pid 仍是 `/Users/dengtingru/.local/bin/weclaw start -f`。
+- 正确做法：进程存在性判断应把 `nil` 和 `syscall.EPERM` 都视为存在；只有明确 `ESRCH` 或其他不存在错误才视为不存在。
+- 来源：2026-07-09 用户纠正“但 weclaw 在运行中，是通过飞书重启的”。
