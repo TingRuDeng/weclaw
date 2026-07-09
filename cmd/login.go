@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	rootCmd.AddCommand(loginCmd)
+	wechatCmd.AddCommand(loginCmd)
 }
 
 var loginCmd = &cobra.Command{

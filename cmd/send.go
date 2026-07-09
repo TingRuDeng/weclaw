@@ -22,15 +22,15 @@ func init() {
 	sendCmd.Flags().StringVar(&sendText, "text", "", "要发送的文本")
 	sendCmd.Flags().StringVar(&sendMediaURL, "media", "", "要发送的图片、视频或文件 URL")
 	sendCmd.MarkFlagRequired("to")
-	rootCmd.AddCommand(sendCmd)
+	wechatCmd.AddCommand(sendCmd)
 }
 
 var sendCmd = &cobra.Command{
 	Use:   "send",
 	Short: "发送微信消息",
-	Example: `  weclaw send --to "user_id@im.wechat" --text "Hello"
-  weclaw send --to "user_id@im.wechat" --media "https://example.com/image.png"
-  weclaw send --to "user_id@im.wechat" --text "See this" --media "https://example.com/image.png"`,
+	Example: `  weclaw wechat send --to "user_id@im.wechat" --text "Hello"
+  weclaw wechat send --to "user_id@im.wechat" --media "https://example.com/image.png"
+  weclaw wechat send --to "user_id@im.wechat" --text "See this" --media "https://example.com/image.png"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if sendText == "" && sendMediaURL == "" {
 			return fmt.Errorf("必须提供 --text 或 --media")
@@ -44,7 +44,7 @@ var sendCmd = &cobra.Command{
 			return fmt.Errorf("load credentials: %w", err)
 		}
 		if len(accounts) == 0 {
-			return fmt.Errorf("未找到微信账号，请先运行 weclaw start 或 weclaw login")
+			return fmt.Errorf("未找到微信账号，请先运行 weclaw start 或 weclaw wechat login")
 		}
 
 		client := ilink.NewClient(accounts[0])

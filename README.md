@@ -30,7 +30,7 @@ That's it. On first start, WeClaw will:
 3. Save config to `~/.weclaw/config.json`
 4. Start receiving and replying to WeChat messages
 
-Use `weclaw login` to add additional WeChat accounts.
+Use `weclaw wechat login` to add additional WeChat accounts.
 
 飞书接入默认关闭。启用前先保存并校验飞书应用凭证：
 
@@ -132,7 +132,7 @@ weclaw companion --agent codex --cwd /path/to/project
 | Interactive buttons | ❌ degrades to numbered text | ✅ (choices / approvals) |
 | Group chat | ❌ 1:1 only | ✅ (requires @bot) |
 | Proactive send | ✅ | ✅ (text) |
-| Login | QR scan (`weclaw login`) | app_id/secret (`weclaw feishu login`) |
+| Login | QR scan (`weclaw wechat login`) | app_id/secret (`weclaw feishu login`) |
 
 Business logic (commands, agent routing, sessions, progress) is platform-agnostic; each adapter degrades gracefully to its native capabilities.
 
@@ -280,16 +280,16 @@ Send messages to WeChat users without waiting for them to message first.
 
 ```bash
 # Send text
-weclaw send --to "user_id@im.wechat" --text "Hello from weclaw"
+weclaw wechat send --to "user_id@im.wechat" --text "Hello from weclaw"
 
 # Send image
-weclaw send --to "user_id@im.wechat" --media "https://example.com/photo.png"
+weclaw wechat send --to "user_id@im.wechat" --media "https://example.com/photo.png"
 
 # Send text + image
-weclaw send --to "user_id@im.wechat" --text "Check this out" --media "https://example.com/photo.png"
+weclaw wechat send --to "user_id@im.wechat" --text "Check this out" --media "https://example.com/photo.png"
 
 # Send file
-weclaw send --to "user_id@im.wechat" --media "https://example.com/report.pdf"
+weclaw wechat send --to "user_id@im.wechat" --media "https://example.com/report.pdf"
 ```
 
 **HTTP API** (runs on `127.0.0.1:18011` when `weclaw start` is running):
@@ -647,7 +647,7 @@ sudo systemctl enable --now weclaw
 docker build -t weclaw .
 
 # Login (interactive — scan QR code)
-docker run -it -v ~/.weclaw:/root/.weclaw weclaw login
+docker run -it -v ~/.weclaw:/root/.weclaw weclaw wechat login
 
 # Start with HTTP agent
 docker run -d --name weclaw \

@@ -16,7 +16,7 @@ const githubRepo = "TingRuDeng/weclaw"
 var updateRestartFlag bool
 
 func init() {
-	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "Restart weclaw after updating")
+	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后重启 WeClaw")
 	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)

@@ -40,6 +40,14 @@ type AccessCodeApprovalResult struct {
 	Admin    bool
 }
 
+type AccessCodeView struct {
+	Code      string
+	Platform  string
+	AccountID string
+	UserID    string
+	ExpiresAt string
+}
+
 // DefaultAccessCodeFile 返回跨平台授权码状态文件路径。
 func DefaultAccessCodeFile() string {
 	home, err := os.UserHomeDir()
@@ -117,6 +125,26 @@ func ApproveAccessCode(req AccessCodeApprovalRequest) (AccessCodeApprovalResult,
 	delete(state.Records, code)
 	saveAccessCodeState(filePath, state)
 	return AccessCodeApprovalResult{Platform: record.Platform, Identity: record.UserID, Admin: req.Admin}, nil
+}
+
+// LoadPendingAccessCodeViews 返回仍有效的通用授权码，用于命令行查看待授权用户。
+func LoadPendingAccessCodeViews(filePath string) []AccessCodeView {
+	state := loadAccessCodeState(firstNonBlank(filePath, DefaultAccessCodeFile()))
+	now := time.Now().UTC()
+	views := make([]AccessCodeView, 0, len(state.Records))
+	for _, record := range state.Records {
+		if !accessCodeValid(record, now) {
+			continue
+		}
+		views = append(views, AccessCodeView{
+			Code:      record.Code,
+			Platform:  record.Platform,
+			AccountID: record.AccountID,
+			UserID:    record.UserID,
+			ExpiresAt: record.ExpiresAt,
+		})
+	}
+	return views
 }
 
 func loadAccessCodeState(filePath string) accessCodeState {

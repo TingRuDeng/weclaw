@@ -75,6 +75,26 @@ func TestDoctorWarnsEmptyAllowlist(t *testing.T) {
 	}
 }
 
+func TestDoctorSkipsImplicitWeChatWhenFeishuEnabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Platforms = map[string]config.PlatformConfig{
+		"feishu": {
+			Enabled: boolPtr(true),
+			Bots: []config.FeishuBotConfig{
+				{Name: "main", AppID: "cli_main", AllowedUsers: []string{"ou_main"}},
+			},
+		},
+	}
+
+	results := runDoctorChecks(cfg, testDoctorDeps())
+	if _, ok := findResult(results, "platform wechat"); ok {
+		t.Fatal("unexpected wechat platform check when feishu enables wechat-off default")
+	}
+	if _, ok := findResult(results, "access control wechat"); ok {
+		t.Fatal("unexpected wechat allowlist check when wechat is not enabled")
+	}
+}
+
 func TestDoctorChecksEachFeishuBot(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Platforms = map[string]config.PlatformConfig{

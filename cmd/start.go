@@ -43,7 +43,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		// Check if login is needed — if so, do it in foreground first, then daemon
 		accounts, _ := ilink.LoadAllCredentials()
 		if wechatEnabled(cfg) && len(accounts) == 0 {
-			fmt.Println("No WeChat accounts found, starting login...")
+			fmt.Println("未找到微信账号，正在启动微信扫码登录...")
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			_, err := doLogin(ctx)
 			cancel()
@@ -75,7 +75,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	// No accounts — trigger login
 	if wechatEnabled(cfg) && len(accounts) == 0 {
-		log.Println("No WeChat accounts found, starting login...")
+		log.Println("未找到微信账号，正在启动微信扫码登录...")
 		creds, err := doLogin(ctx)
 		if err != nil {
 			return fmt.Errorf("login failed: %w", err)

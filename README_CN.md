@@ -31,7 +31,7 @@ weclaw start
 3. 启动已启用的平台
 4. 开始接收和回复微信 / 飞书消息
 
-微信需要扫码登录时，先执行 `weclaw login`；仅启用飞书时，启动不会要求登录微信。
+微信需要扫码登录时，先执行 `weclaw wechat login`；仅启用飞书时，启动不会要求登录微信。
 
 飞书接入默认关闭。需要启用时可用交互式命令添加机器人：
 
@@ -112,7 +112,7 @@ weclaw companion --agent opencode --cwd /path/to/project
 | 交互按钮 | ❌ 降级为编号文本 | ✅（选择 / 审批） |
 | 群聊 | ❌ 仅单聊 | ✅（需 @bot 触发） |
 | 主动发消息 | ✅ | ✅（文本） |
-| 登录 | 扫码（`weclaw login`） | app_id/secret（`weclaw feishu login`） |
+| 登录 | 扫码（`weclaw wechat login`） | app_id/secret（`weclaw feishu login`） |
 
 业务逻辑（命令、agent 路由、会话、进度）与平台无关；各平台 adapter 按自身能力优雅降级。
 
@@ -259,16 +259,16 @@ WeClaw 支持收发图片、视频、文件和语音消息。
 
 ```bash
 # 发送文本
-weclaw send --to "user_id@im.wechat" --text "你好，来自 weclaw"
+weclaw wechat send --to "user_id@im.wechat" --text "你好，来自 weclaw"
 
 # 发送图片
-weclaw send --to "user_id@im.wechat" --media "https://example.com/photo.png"
+weclaw wechat send --to "user_id@im.wechat" --media "https://example.com/photo.png"
 
 # 发送文本 + 图片
-weclaw send --to "user_id@im.wechat" --text "看看这个" --media "https://example.com/photo.png"
+weclaw wechat send --to "user_id@im.wechat" --text "看看这个" --media "https://example.com/photo.png"
 
 # 发送文件
-weclaw send --to "user_id@im.wechat" --media "https://example.com/report.pdf"
+weclaw wechat send --to "user_id@im.wechat" --media "https://example.com/report.pdf"
 ```
 
 **HTTP API**（`weclaw start` 运行时，默认监听 `127.0.0.1:18011`）：
@@ -376,7 +376,7 @@ weclaw feishu bootstrap --name project-a --app-id cli_xxx --app-secret xxx --all
 
 飞书未授权用户给任意 bot 发消息时，WeClaw 会把 `open_id/user_id/union_id` 记录到 `~/.weclaw/feishu-identities.json`，但不会自动放行。拒绝提示会返回短期授权码；管理员可在飞书里发送 `/feishu users approve-code <授权码>`，或本机执行 `weclaw feishu users approve-code <授权码>`，把稳定身份写入已配置 bot 的 `allowed_users`；需要限定单个 bot 时加 `--bot <name|app_id>`，需要同时加入远程管理白名单时加 `--admin`。本机可用 `weclaw feishu users pending` 查看待处理授权请求，用 `weclaw feishu users list` 查看已授权历史记录，用 `weclaw feishu users revoke <用户ID> [--bot <name|app_id>] [--admin]` 取消授权，也可用 `weclaw feishu users rename <id> <显示名>` 手动补全姓名。
 
-微信未授权用户发消息时，也会收到短期授权码。管理员在本机执行 `weclaw users approve-code <授权码>` 可把该微信用户写入 `platforms.wechat.allowed_users`；需要同时加入远程管理白名单时加 `--admin`。
+微信未授权用户发消息时，也会收到短期授权码。管理员在本机执行 `weclaw wechat users approve-code <授权码>` 可把该微信用户写入 `platforms.wechat.allowed_users`；需要同时加入远程管理白名单时加 `--admin`。
 
 环境变量：
 
@@ -631,7 +631,7 @@ sudo systemctl enable --now weclaw
 docker build -t weclaw .
 
 # 登录（交互式，扫描二维码）
-docker run -it -v ~/.weclaw:/root/.weclaw weclaw login
+docker run -it -v ~/.weclaw:/root/.weclaw weclaw wechat login
 
 # 使用 HTTP Agent 启动
 docker run -d --name weclaw \

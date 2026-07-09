@@ -39,9 +39,87 @@ func TestRunUsersApproveCodeWritesWechatAllowedUser(t *testing.T) {
 	}
 }
 
+func TestRunUsersListShowsWechatAllowedUsers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Platforms["wechat"] = config.PlatformConfig{
+		AllowedUsers: []string{"wx_user@im.wechat", "wx_admin@im.wechat"},
+	}
+	cfg.AdminUsers = []string{"wx_admin@im.wechat"}
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	output := captureStdout(t, func() {
+		if err := runUsersList(); err != nil {
+			t.Fatalf("list users: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"已授权微信用户:",
+		"wx_user@im.wechat",
+		"用户类型: 普通用户",
+		"wx_admin@im.wechat",
+		"用户类型: 管理员",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output=%q, want %q", output, want)
+		}
+	}
+}
+
+func TestRunUsersPendingShowsWechatAccessCodes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeUsersAccessCodeForTest(t, time.Now().Add(30*time.Minute))
+
+	output := captureStdout(t, func() {
+		if err := runUsersPending(); err != nil {
+			t.Fatalf("pending users: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"待授权微信用户:",
+		"wx_user@im.wechat",
+		"授权码: 123456",
+		"授权命令: weclaw wechat users approve-code 123456",
+		"管理员命令: weclaw wechat users approve-code 123456 --admin",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output=%q, want %q", output, want)
+		}
+	}
+}
+
+func TestWechatUsersCommandPath(t *testing.T) {
+	output := commandHelpText(t, wechatCmd)
+	for _, want := range []string{
+		"管理微信平台",
+		"users",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("wechat help=%q, want %q", output, want)
+		}
+	}
+
+	usersOutput := commandHelpText(t, newWechatUsersCmd())
+	for _, want := range []string{
+		"管理微信用户授权",
+		"list",
+		"pending",
+		"approve-code",
+	} {
+		if !strings.Contains(usersOutput, want) {
+			t.Fatalf("wechat users help=%q, want %q", usersOutput, want)
+		}
+	}
+}
+
 func runUsersApproveCodeForTest(code string, admin bool) error {
+	cmd := newWechatUsersApproveCodeCmd("weclaw wechat users")
 	usersApproveAdmin = admin
-	return usersApproveCodeCmd.RunE(usersApproveCodeCmd, []string{code})
+	return cmd.RunE(cmd, []string{code})
 }
 
 func writeUsersAccessCodeForTest(t *testing.T, expiresAt time.Time) {

@@ -241,10 +241,9 @@ func checkPlatforms(cfg *config.Config, deps doctorDeps) []doctorResult {
 	return results
 }
 
-// platformEnablement 解析启用的平台，复用 start.go 语义：微信默认启用、飞书默认关闭。
+// platformEnablement 解析启用的平台，必须与启动阶段保持一致，避免 doctor 误报实际未启动的平台。
 func platformEnablement(cfg *config.Config) (wechat bool, feishu bool) {
-	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
-	wechat = wechatCfg.Enabled == nil || *wechatCfg.Enabled
+	wechat = wechatEnabled(cfg)
 	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
 	feishu = feishuCfg.Enabled != nil && *feishuCfg.Enabled
 	return wechat, feishu
@@ -260,7 +259,7 @@ func checkWeChat(deps doctorDeps) doctorResult {
 	}
 	if count == 0 {
 		result.Status = doctorFail
-		result.Detail = "no WeChat account; run `weclaw login`"
+		result.Detail = "no WeChat account; run `weclaw wechat login`"
 		return result
 	}
 	result.Status = doctorOK
