@@ -78,12 +78,14 @@ func TestStartProgressSessionStreamModeSendsLastStatusLine(t *testing.T) {
 	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "修复实时回复碎片化", cfg)
 
 	onProgress("第一段\n第二段\n第三段")
-	waitForText(t, calls, "实时状态")
 	waitForText(t, calls, "第三段")
 	stop()
 
 	if containsText(calls.texts(), "第一段") {
 		t.Fatalf("stream progress should not send old lines, messages=%#v", calls.texts())
+	}
+	if containsText(calls.texts(), "实时状态") {
+		t.Fatalf("stream progress should not wrap latest line, messages=%#v", calls.texts())
 	}
 }
 
@@ -107,8 +109,10 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
 	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "hello", "client-1")
 
-	waitForText(t, calls, "实时状态")
 	waitForText(t, calls, "第三段")
+	if containsText(calls.texts(), "实时状态") {
+		t.Fatalf("stream progress should not wrap latest line, messages=%#v", calls.texts())
+	}
 }
 
 func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
@@ -392,10 +396,10 @@ func TestBroadcastProgressUsesAgentPrefix(t *testing.T) {
 		message:      "hello",
 	})
 
-	if !containsText(calls.texts(), "[codex] 实时状态") {
+	if !containsText(calls.texts(), "[codex] codex delta") {
 		t.Fatalf("expected codex progress prefix, messages=%#v", calls.texts())
 	}
-	if !containsText(calls.texts(), "[claude] 实时状态") {
+	if !containsText(calls.texts(), "[claude] claude delta") {
 		t.Fatalf("expected claude progress prefix, messages=%#v", calls.texts())
 	}
 }

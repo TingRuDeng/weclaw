@@ -121,17 +121,13 @@ func TestStreamModeRendersLastNonEmptyStatusLine(t *testing.T) {
 
 	got := renderDeltaProgress("正在分析代码\n\n正在运行 go test ./messaging\n", cfg)
 
-	if !strings.Contains(got, "实时状态") {
-		t.Fatalf("stream progress should contain status label, got %q", got)
+	if got != "正在运行 go test ./messaging" {
+		t.Fatalf("stream progress should be latest non-empty line only, got %q", got)
 	}
-	if !strings.Contains(got, "正在运行 go test ./messaging") {
-		t.Fatalf("stream progress should contain last non-empty line, got %q", got)
-	}
-	if strings.Contains(got, "正在分析代码") {
-		t.Fatalf("stream progress should hide older lines, got %q", got)
-	}
-	if strings.Contains(got, "实时片段") {
-		t.Fatalf("stream progress should not use legacy snippet label, got %q", got)
+	for _, stale := range []string{"正在分析代码", "实时状态", "实时片段"} {
+		if strings.Contains(got, stale) {
+			t.Fatalf("stream progress should not contain stale or wrapper text %q, got %q", stale, got)
+		}
 	}
 }
 

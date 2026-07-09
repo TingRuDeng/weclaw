@@ -265,3 +265,11 @@
 - 反例：把相同的 `进展：Codex 正在执行命令并产生输出。` 多次传给 `StreamContent`，飞书卡片会把它拼成一长段重复文本。
 - 正确做法：任务卡片实时进度使用 registry 快照重建卡片并 `UpdateCard`，保留审批记录和单调 sequence；非任务流才使用流式追加接口。
 - 来源：2026-07-08 用户截图反馈“任务卡片的实时进度有问题”。
+
+## 2026-07-09 Codex App 实时进度原始行
+
+- 触发条件：用户要求任务卡片展示 Codex App 实时输出，尤其是“类似 tail -f log，只输出最新一行”。
+- 规则：实时进度源必须优先取 Codex App 事件里的原始 `delta/message/output/text` 最新非空行，不能用 WeClaw 合成摘要冒充实时输出。
+- 反例：把 `item/commandExecution/outputDelta` 或 `item/fileChange/outputDelta` 统一显示成 `进展：Codex 正在执行命令并产生输出。`、`进展：Codex 已产生代码或文件变更。`，用户看不到真实最新行。
+- 正确做法：事件解析层只在存在原始可读行时派发进度；stream 渲染层直接覆盖为最新行本身，不额外包“实时状态”等说明文本。
+- 来源：2026-07-09 用户截图反馈“我想知道的是 codex app 实时输出的最新的一行”。

@@ -24,7 +24,7 @@ func renderDeltaProgress(delta string, cfg config.ProgressConfig) string {
 		if status == "" {
 			return ""
 		}
-		return "实时状态：\n" + status
+		return status
 	}
 	return "处理中，请耐心等待....."
 }

@@ -10,6 +10,7 @@ const (
 	codexTurnDiagnosticsLimit    = 5
 	codexGuardianWarningMaxRunes = 120
 	codexPlanStepMaxRunes        = 120
+	codexRealtimeLineMaxRunes    = 240
 )
 
 type codexProgressParams struct {
@@ -18,6 +19,10 @@ type codexProgressParams struct {
 	Status   string `json:"status"`
 	Decision string `json:"decision"`
 	Outcome  string `json:"outcome"`
+	Delta    string `json:"delta"`
+	Output   string `json:"output"`
+	Text     string `json:"text"`
+	Diff     string `json:"diff"`
 }
 
 type codexPlanUpdatedParams struct {
@@ -92,11 +97,11 @@ func (a *ACPAgent) handleCodexGuardianWarning(params json.RawMessage) {
 }
 
 func (a *ACPAgent) handleCodexCommandProgress(params json.RawMessage) {
-	a.dispatchCodexProgress(params, "进展：Codex 正在执行命令并产生输出。")
+	a.dispatchCodexRealtimeLine(params)
 }
 
 func (a *ACPAgent) handleCodexFileProgress(params json.RawMessage) {
-	a.dispatchCodexProgress(params, "进展：Codex 已产生代码或文件变更。")
+	a.dispatchCodexRealtimeLine(params)
 }
 
 // handleCodexPlanUpdated 把 Codex App 的计划状态转换成任务卡片可读的当前步骤。
@@ -148,6 +153,15 @@ func (a *ACPAgent) dispatchCodexProgress(params json.RawMessage, text string) {
 	a.dispatchProgressToThread(p.ThreadID, text)
 }
 
+func (a *ACPAgent) dispatchCodexRealtimeLine(params json.RawMessage) {
+	p := decodeCodexProgressParams(params)
+	line := latestCodexRealtimeLine(p)
+	if line == "" {
+		return
+	}
+	a.dispatchProgressToThread(p.ThreadID, trimRunes(line, codexRealtimeLineMaxRunes))
+}
+
 func (a *ACPAgent) dispatchProgressToThread(threadID string, text string) {
 	a.dispatchToTurnCh(threadID, &codexTurnEvent{Kind: "progress", Text: text})
 }
@@ -162,6 +176,29 @@ func isPositiveCodexReview(params json.RawMessage) bool {
 	p := decodeCodexProgressParams(params)
 	text := strings.ToLower(strings.Join([]string{p.Status, p.Decision, p.Outcome, p.Message}, " "))
 	return strings.Contains(text, "approved") || strings.Contains(text, "accept") || strings.Contains(text, "allow")
+}
+
+// latestCodexRealtimeLine 从 Codex App 的原始事件中取最后一条可读输出。
+func latestCodexRealtimeLine(p codexProgressParams) string {
+	for _, value := range []string{p.Delta, p.Output, p.Text, p.Message, p.Status, p.Diff} {
+		if line := lastNonEmptyCodexLine(value); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func lastNonEmptyCodexLine(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func trimRunes(text string, limit int) string {

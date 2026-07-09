@@ -174,6 +174,66 @@ func TestHandleCodexPlanUpdatedEmitsCurrentStepProgress(t *testing.T) {
 	}
 }
 
+func TestHandleCodexCommandProgressEmitsLatestRawLine(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexCommandProgress(json.RawMessage(`{
+		"threadId":"thread-1",
+		"delta":"go test ./agent\nok github.com/fastclaw-ai/weclaw/agent 0.231s\n"
+	}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "progress" || evt.Text != "ok github.com/fastclaw-ai/weclaw/agent 0.231s" {
+			t.Fatalf("event=%#v, want latest raw command line", evt)
+		}
+	default:
+		t.Fatal("expected raw command progress event")
+	}
+}
+
+func TestHandleCodexFileProgressEmitsLatestRawLine(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexFileProgress(json.RawMessage(`{
+		"threadId":"thread-1",
+		"message":"*** Begin Patch\n*** Update File: agent/codex_progress_events.go\n+读取 Codex App 最新输出行\n"
+	}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "progress" || evt.Text != "+读取 Codex App 最新输出行" {
+			t.Fatalf("event=%#v, want latest raw file line", evt)
+		}
+	default:
+		t.Fatal("expected raw file progress event")
+	}
+}
+
+func TestHandleCodexProgressSkipsEmptyRawLine(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexCommandProgress(json.RawMessage(`{"threadId":"thread-1"}`))
+
+	select {
+	case evt := <-turnCh:
+		t.Fatalf("empty raw progress should not emit synthetic status, got %#v", evt)
+	default:
+	}
+}
+
 func TestCodexTurnDiagnosticsAppendsRecentProgressToUnknownError(t *testing.T) {
 	diagnostics := newCodexTurnDiagnostics(3)
 	diagnostics.remember("进展：Codex 自动审批审核中。")
