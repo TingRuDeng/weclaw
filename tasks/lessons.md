@@ -269,7 +269,7 @@
 ## 2026-07-09 Codex App 实时进度可读行
 
 - 触发条件：用户要求任务卡片展示 Codex App 实时输出，尤其是“类似 tail -f log，只输出最新一行”。
-- 规则：实时进度源必须优先提取 Codex App 事件里的结构化可读状态，如命令、文件路径、计划步骤；原始 `delta/message/output/text` 最新非空行只能作为兜底。
-- 反例：把 `item/commandExecution/outputDelta` 或 `item/fileChange/outputDelta` 统一显示成合成摘要，用户看不到真实状态；或者直接显示 patch 的 `+...` 原始行，用户觉得不美观。
-- 正确做法：命令事件显示 `运行 <command>` 或最后一行命令输出；文件事件显示 `修改 <path>`；stream 渲染层直接覆盖为最新可读行，不额外包“实时状态”等说明文本。
-- 来源：2026-07-09 用户截图反馈“我想知道的是 codex app 实时输出的最新的一行”，随后纠正“原始输出看着不美观，是否应该参考 codex app 的每一行输出”。
+- 规则：实时进度源必须优先提取 Codex App 事件里的结构化可读状态，如命令、文件路径、计划步骤；原始 `delta/message/output/text` 最新非空行只能作为兜底，正文 delta 不能直接刷进卡片。
+- 反例：把 `item/commandExecution/outputDelta` 或 `item/fileChange/outputDelta` 统一显示成合成摘要，用户看不到真实状态；直接显示 patch 的 `+...` 原始行，用户觉得不美观；完全忽略 agent 文本 delta，又会导致没有工具事件的回合看不到实时进度。
+- 正确做法：命令事件显示 `运行 <command>` 或最后一行命令输出；文件事件显示 `修改 <path>`；如果本轮只有 agent 文本 delta，则只发 `进展：Codex 正在生成回复。` 这类不含正文的状态，stream 渲染层直接覆盖为最新可读行。
+- 来源：2026-07-09 用户截图反馈“我想知道的是 codex app 实时输出的最新的一行”，随后纠正“原始输出看着不美观，是否应该参考 codex app 的每一行输出”，并反馈“现在怎么看不到实时进度了”。

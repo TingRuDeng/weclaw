@@ -11,6 +11,7 @@ const (
 	codexGuardianWarningMaxRunes = 120
 	codexPlanStepMaxRunes        = 120
 	codexRealtimeLineMaxRunes    = 240
+	codexGeneratingProgress      = "进展：Codex 正在生成回复。"
 )
 
 type codexProgressParams struct {

@@ -25,6 +25,7 @@ func (a *ACPAgent) WatchCodexThread(ctx context.Context, conversationID string, 
 func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID string, threadID string, turnCh <-chan *codexTurnEvent, onProgress func(string)) (string, error) {
 	assembler := newCodexFinalAssembler()
 	diagnostics := newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
+	progressEmitted := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -39,7 +40,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID 
 			if evt.Kind == "error" {
 				return "", fmt.Errorf("turn error: %s", diagnostics.withError(evt.Text))
 			}
-			collectCodexTurnText(assembler, evt, onProgress)
+			progressEmitted = collectCodexTurnText(assembler, evt, onProgress, progressEmitted, diagnostics)
 			if evt.Kind == "completed" {
 				return a.attachedCodexFinalText(ctx, conversationID, threadID, assembler)
 			}
@@ -55,11 +56,18 @@ func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTu
 	return nil
 }
 
-func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, onProgress func(string)) {
+func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, onProgress func(string), progressEmitted bool, diagnostics *codexTurnDiagnostics) bool {
 	if evt.Kind == "progress" && onProgress != nil {
+		diagnostics.remember(evt.Text)
 		onProgress(evt.Text)
+		progressEmitted = true
 	}
 	if evt.Delta != "" {
+		if onProgress != nil && !progressEmitted {
+			diagnostics.remember(codexGeneratingProgress)
+			onProgress(codexGeneratingProgress)
+			progressEmitted = true
+		}
 		assembler.addDelta(evt.ItemID, evt.Delta)
 	}
 	if evt.Text != "" {
@@ -69,6 +77,7 @@ func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, o
 			assembler.addSnapshot(evt.ItemID, evt.Text)
 		}
 	}
+	return progressEmitted
 }
 
 func (a *ACPAgent) attachedCodexFinalText(ctx context.Context, conversationID string, threadID string, assembler *codexFinalAssembler) (string, error) {
