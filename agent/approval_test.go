@@ -133,6 +133,16 @@ func TestHandleCodexCommandApprovalAcceptsStringCommand(t *testing.T) {
 	}
 }
 
+func TestPermissionCommandAcceptsObjectCommand(t *testing.T) {
+	var command permissionCommand
+	if err := json.Unmarshal([]byte(`{"cmd":"go test ./agent"}`), &command); err != nil {
+		t.Fatalf("unmarshal object command: %v", err)
+	}
+	if got := string(command[0]); got != "go test ./agent" {
+		t.Fatalf("command=%q, want object cmd", got)
+	}
+}
+
 func TestHandleCodexCommandApprovalAcceptsObjectAvailableDecisions(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	turnCh := make(chan *codexTurnEvent, 1)

@@ -70,7 +70,7 @@ func (a *ACPAgent) readLoop() {
 			a.handleCodexAutoApprovalReviewCompleted(msg.Params)
 		case "guardianWarning":
 			a.handleCodexGuardianWarning(msg.Params)
-		case "item/commandExecution/outputDelta":
+		case "item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction":
 			a.handleCodexCommandProgress(msg.Params)
 		case "item/fileChange/outputDelta", "turn/diff/updated":
 			a.handleCodexFileProgress(msg.Params)

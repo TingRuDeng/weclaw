@@ -14,15 +14,22 @@ const (
 )
 
 type codexProgressParams struct {
-	ThreadID string `json:"threadId"`
-	Message  string `json:"message"`
-	Status   string `json:"status"`
-	Decision string `json:"decision"`
-	Outcome  string `json:"outcome"`
-	Delta    string `json:"delta"`
-	Output   string `json:"output"`
-	Text     string `json:"text"`
-	Diff     string `json:"diff"`
+	ThreadID string            `json:"threadId"`
+	Message  string            `json:"message"`
+	Status   string            `json:"status"`
+	Decision string            `json:"decision"`
+	Outcome  string            `json:"outcome"`
+	Delta    string            `json:"delta"`
+	Output   string            `json:"output"`
+	Text     string            `json:"text"`
+	Diff     string            `json:"diff"`
+	Changes  string            `json:"changes"`
+	Command  permissionCommand `json:"command"`
+	Cwd      string            `json:"cwd"`
+	Path     string            `json:"path"`
+	FilePath string            `json:"filePath"`
+	Files    []string          `json:"files"`
+	Paths    []string          `json:"paths"`
 }
 
 type codexPlanUpdatedParams struct {
@@ -97,11 +104,11 @@ func (a *ACPAgent) handleCodexGuardianWarning(params json.RawMessage) {
 }
 
 func (a *ACPAgent) handleCodexCommandProgress(params json.RawMessage) {
-	a.dispatchCodexRealtimeLine(params)
+	a.dispatchCodexCommandLine(params)
 }
 
 func (a *ACPAgent) handleCodexFileProgress(params json.RawMessage) {
-	a.dispatchCodexRealtimeLine(params)
+	a.dispatchCodexFileLine(params)
 }
 
 // handleCodexPlanUpdated 把 Codex App 的计划状态转换成任务卡片可读的当前步骤。
@@ -153,9 +160,18 @@ func (a *ACPAgent) dispatchCodexProgress(params json.RawMessage, text string) {
 	a.dispatchProgressToThread(p.ThreadID, text)
 }
 
-func (a *ACPAgent) dispatchCodexRealtimeLine(params json.RawMessage) {
+func (a *ACPAgent) dispatchCodexCommandLine(params json.RawMessage) {
 	p := decodeCodexProgressParams(params)
-	line := latestCodexRealtimeLine(p)
+	line := codexCommandProgressLine(p)
+	if line == "" {
+		return
+	}
+	a.dispatchProgressToThread(p.ThreadID, trimRunes(line, codexRealtimeLineMaxRunes))
+}
+
+func (a *ACPAgent) dispatchCodexFileLine(params json.RawMessage) {
+	p := decodeCodexProgressParams(params)
+	line := codexFileProgressLine(p)
 	if line == "" {
 		return
 	}
@@ -183,6 +199,50 @@ func latestCodexRealtimeLine(p codexProgressParams) string {
 	for _, value := range []string{p.Delta, p.Output, p.Text, p.Message, p.Status, p.Diff} {
 		if line := lastNonEmptyCodexLine(value); line != "" {
 			return line
+		}
+	}
+	return ""
+}
+
+// codexCommandProgressLine 把命令进度转换成 Codex App 风格的可读行。
+func codexCommandProgressLine(p codexProgressParams) string {
+	if command := strings.TrimSpace(strings.Join(p.Command, " ")); command != "" {
+		return "运行 " + command
+	}
+	return latestCodexRealtimeLine(p)
+}
+
+// codexFileProgressLine 优先显示文件名，避免把 patch/diff 原文塞进卡片。
+func codexFileProgressLine(p codexProgressParams) string {
+	if path := firstCodexFilePath(p); path != "" {
+		return "修改 " + path
+	}
+	if path := filePathFromPatchText(firstNonEmpty(p.Changes, p.Diff, p.Message, p.Text, p.Output, p.Delta)); path != "" {
+		return "修改 " + path
+	}
+	return latestCodexRealtimeLine(p)
+}
+
+func firstCodexFilePath(p codexProgressParams) string {
+	for _, path := range append([]string{p.FilePath, p.Path}, append(p.Files, p.Paths...)...) {
+		if trimmed := strings.TrimSpace(path); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func filePathFromPatchText(text string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if path := strings.TrimSpace(strings.TrimPrefix(line, "*** Update File:")); path != line {
+			return path
+		}
+		if path := strings.TrimSpace(strings.TrimPrefix(line, "*** Add File:")); path != line {
+			return path
+		}
+		if path := strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File:")); path != line {
+			return path
 		}
 	}
 	return ""

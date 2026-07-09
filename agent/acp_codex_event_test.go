@@ -174,7 +174,30 @@ func TestHandleCodexPlanUpdatedEmitsCurrentStepProgress(t *testing.T) {
 	}
 }
 
-func TestHandleCodexCommandProgressEmitsLatestRawLine(t *testing.T) {
+func TestHandleCodexCommandProgressPrefersCommandLine(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexCommandProgress(json.RawMessage(`{
+		"threadId":"thread-1",
+		"command":["go","test","./agent"],
+		"delta":"go test ./agent\nok github.com/fastclaw-ai/weclaw/agent 0.231s\n"
+	}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "progress" || evt.Text != "运行 go test ./agent" {
+			t.Fatalf("event=%#v, want readable command line", evt)
+		}
+	default:
+		t.Fatal("expected raw command progress event")
+	}
+}
+
+func TestHandleCodexCommandProgressFallsBackToLatestOutputLine(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
@@ -189,14 +212,37 @@ func TestHandleCodexCommandProgressEmitsLatestRawLine(t *testing.T) {
 	select {
 	case evt := <-turnCh:
 		if evt.Kind != "progress" || evt.Text != "ok github.com/fastclaw-ai/weclaw/agent 0.231s" {
-			t.Fatalf("event=%#v, want latest raw command line", evt)
+			t.Fatalf("event=%#v, want latest command output line", evt)
 		}
 	default:
 		t.Fatal("expected raw command progress event")
 	}
 }
 
-func TestHandleCodexFileProgressEmitsLatestRawLine(t *testing.T) {
+func TestHandleCodexFileProgressPrefersFilePath(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexFileProgress(json.RawMessage(`{
+		"threadId":"thread-1",
+		"filePath":"agent/codex_progress_events.go",
+		"message":"*** Begin Patch\n*** Update File: agent/codex_progress_events.go\n+读取 Codex App 最新输出行\n"
+	}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "progress" || evt.Text != "修改 agent/codex_progress_events.go" {
+			t.Fatalf("event=%#v, want readable file line", evt)
+		}
+	default:
+		t.Fatal("expected raw file progress event")
+	}
+}
+
+func TestHandleCodexFileProgressExtractsPatchPath(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
@@ -210,8 +256,8 @@ func TestHandleCodexFileProgressEmitsLatestRawLine(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "+读取 Codex App 最新输出行" {
-			t.Fatalf("event=%#v, want latest raw file line", evt)
+		if evt.Kind != "progress" || evt.Text != "修改 agent/codex_progress_events.go" {
+			t.Fatalf("event=%#v, want readable patch file line", evt)
 		}
 	default:
 		t.Fatal("expected raw file progress event")

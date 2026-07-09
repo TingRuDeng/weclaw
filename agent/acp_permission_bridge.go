@@ -45,16 +45,38 @@ func (c *permissionCommand) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	var command string
-	if err := json.Unmarshal(data, &command); err != nil {
-		return err
-	}
-	command = strings.TrimSpace(command)
-	if command == "" {
-		*c = nil
+	if err := json.Unmarshal(data, &command); err == nil {
+		command = strings.TrimSpace(command)
+		if command == "" {
+			*c = nil
+			return nil
+		}
+		*c = permissionCommand{command}
 		return nil
 	}
-	*c = permissionCommand{command}
+	var object struct {
+		Cmd     string   `json:"cmd"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	if err := json.Unmarshal(data, &object); err != nil {
+		return err
+	}
+	*c = permissionCommandFromObject(object.Cmd, object.Command, object.Args)
 	return nil
+}
+
+func permissionCommandFromObject(cmd string, command string, args []string) permissionCommand {
+	if value := firstNonEmptyString(cmd, command); value != "" {
+		return permissionCommand{value}
+	}
+	result := make(permissionCommand, 0, len(args))
+	for _, arg := range args {
+		if trimmed := strings.TrimSpace(arg); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 // UnmarshalJSON 兼容 Codex availableDecisions 字段：字符串数组或带 decision 的对象数组。

@@ -266,10 +266,10 @@
 - 正确做法：任务卡片实时进度使用 registry 快照重建卡片并 `UpdateCard`，保留审批记录和单调 sequence；非任务流才使用流式追加接口。
 - 来源：2026-07-08 用户截图反馈“任务卡片的实时进度有问题”。
 
-## 2026-07-09 Codex App 实时进度原始行
+## 2026-07-09 Codex App 实时进度可读行
 
 - 触发条件：用户要求任务卡片展示 Codex App 实时输出，尤其是“类似 tail -f log，只输出最新一行”。
-- 规则：实时进度源必须优先取 Codex App 事件里的原始 `delta/message/output/text` 最新非空行，不能用 WeClaw 合成摘要冒充实时输出。
-- 反例：把 `item/commandExecution/outputDelta` 或 `item/fileChange/outputDelta` 统一显示成 `进展：Codex 正在执行命令并产生输出。`、`进展：Codex 已产生代码或文件变更。`，用户看不到真实最新行。
-- 正确做法：事件解析层只在存在原始可读行时派发进度；stream 渲染层直接覆盖为最新行本身，不额外包“实时状态”等说明文本。
-- 来源：2026-07-09 用户截图反馈“我想知道的是 codex app 实时输出的最新的一行”。
+- 规则：实时进度源必须优先提取 Codex App 事件里的结构化可读状态，如命令、文件路径、计划步骤；原始 `delta/message/output/text` 最新非空行只能作为兜底。
+- 反例：把 `item/commandExecution/outputDelta` 或 `item/fileChange/outputDelta` 统一显示成合成摘要，用户看不到真实状态；或者直接显示 patch 的 `+...` 原始行，用户觉得不美观。
+- 正确做法：命令事件显示 `运行 <command>` 或最后一行命令输出；文件事件显示 `修改 <path>`；stream 渲染层直接覆盖为最新可读行，不额外包“实时状态”等说明文本。
+- 来源：2026-07-09 用户截图反馈“我想知道的是 codex app 实时输出的最新的一行”，随后纠正“原始输出看着不美观，是否应该参考 codex app 的每一行输出”。
