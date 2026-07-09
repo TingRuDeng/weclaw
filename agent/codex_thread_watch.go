@@ -25,7 +25,7 @@ func (a *ACPAgent) WatchCodexThread(ctx context.Context, conversationID string, 
 func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID string, threadID string, turnCh <-chan *codexTurnEvent, onProgress func(string)) (string, error) {
 	assembler := newCodexFinalAssembler()
 	diagnostics := newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
-	progressEmitted := false
+	progressState := newCodexProgressState()
 	for {
 		select {
 		case <-ctx.Done():
@@ -40,7 +40,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID 
 			if evt.Kind == "error" {
 				return "", fmt.Errorf("turn error: %s", diagnostics.withError(evt.Text))
 			}
-			progressEmitted = collectCodexTurnText(assembler, evt, onProgress, progressEmitted, diagnostics)
+			collectCodexTurnText(assembler, evt, onProgress, progressState, diagnostics)
 			if evt.Kind == "completed" {
 				return a.attachedCodexFinalText(ctx, conversationID, threadID, assembler)
 			}
@@ -56,17 +56,21 @@ func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTu
 	return nil
 }
 
-func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, onProgress func(string), progressEmitted bool, diagnostics *codexTurnDiagnostics) bool {
-	if evt.Kind == "progress" && onProgress != nil {
-		diagnostics.remember(evt.Text)
-		onProgress(evt.Text)
-		progressEmitted = true
+func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, onProgress func(string), progressState *codexProgressState, diagnostics *codexTurnDiagnostics) {
+	if evt.Kind == "progress" {
+		if progressText, ok := progressState.record(evt); ok {
+			diagnostics.remember(progressText)
+			if onProgress != nil {
+				onProgress(progressText)
+			}
+		}
 	}
 	if evt.Delta != "" {
-		if onProgress != nil && !progressEmitted {
-			diagnostics.remember(codexGeneratingProgress)
-			onProgress(codexGeneratingProgress)
-			progressEmitted = true
+		if onProgress != nil {
+			if progressText, ok := progressState.emitGenerating(); ok {
+				diagnostics.remember(progressText)
+				onProgress(progressText)
+			}
 		}
 		assembler.addDelta(evt.ItemID, evt.Delta)
 	}
@@ -77,7 +81,6 @@ func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, o
 			assembler.addSnapshot(evt.ItemID, evt.Text)
 		}
 	}
-	return progressEmitted
 }
 
 func (a *ACPAgent) attachedCodexFinalText(ctx context.Context, conversationID string, threadID string, assembler *codexFinalAssembler) (string, error) {

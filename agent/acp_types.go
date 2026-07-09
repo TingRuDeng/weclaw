@@ -158,7 +158,15 @@ type codexTurnEvent struct {
 	ItemID   string
 	Delta    string
 	Text     string
+	Progress *codexProgressEvent
 	Approval *codexApprovalRequest
+}
+
+type codexProgressEvent struct {
+	Kind     string
+	Action   string
+	Detail   string
+	FilePath string
 }
 
 type codexApprovalRequest struct {

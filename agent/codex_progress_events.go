@@ -167,7 +167,7 @@ func (a *ACPAgent) dispatchCodexCommandLine(params json.RawMessage) {
 	if line == "" {
 		return
 	}
-	a.dispatchProgressToThread(p.ThreadID, trimRunes(line, codexRealtimeLineMaxRunes))
+	a.dispatchProgressEventToThread(p.ThreadID, line, codexCommandProgressEvent(p, line))
 }
 
 func (a *ACPAgent) dispatchCodexFileLine(params json.RawMessage) {
@@ -176,11 +176,19 @@ func (a *ACPAgent) dispatchCodexFileLine(params json.RawMessage) {
 	if line == "" {
 		return
 	}
-	a.dispatchProgressToThread(p.ThreadID, trimRunes(line, codexRealtimeLineMaxRunes))
+	a.dispatchProgressEventToThread(p.ThreadID, line, codexFileProgressEvent(p, line))
 }
 
 func (a *ACPAgent) dispatchProgressToThread(threadID string, text string) {
 	a.dispatchToTurnCh(threadID, &codexTurnEvent{Kind: "progress", Text: text})
+}
+
+func (a *ACPAgent) dispatchProgressEventToThread(threadID string, text string, progress *codexProgressEvent) {
+	a.dispatchToTurnCh(threadID, &codexTurnEvent{
+		Kind:     "progress",
+		Text:     trimRunes(text, codexRealtimeLineMaxRunes),
+		Progress: progress,
+	})
 }
 
 func decodeCodexProgressParams(params json.RawMessage) codexProgressParams {
@@ -213,6 +221,18 @@ func codexCommandProgressLine(p codexProgressParams) string {
 	return latestCodexRealtimeLine(p)
 }
 
+// codexCommandProgressEvent 保留命令主动作，并把最新输出作为次要详情交给 turn 聚合器。
+func codexCommandProgressEvent(p codexProgressParams, line string) *codexProgressEvent {
+	event := &codexProgressEvent{Kind: "command"}
+	if command := strings.TrimSpace(strings.Join(p.Command, " ")); command != "" {
+		event.Action = "运行 " + command
+		event.Detail = latestCodexRealtimeLine(p)
+		return event
+	}
+	event.Detail = line
+	return event
+}
+
 // codexFileProgressLine 优先显示文件名，避免把 patch/diff 原文塞进卡片。
 func codexFileProgressLine(p codexProgressParams) string {
 	if path := firstCodexFilePath(p); path != "" {
@@ -222,6 +242,16 @@ func codexFileProgressLine(p codexProgressParams) string {
 		return "修改 " + path
 	}
 	return latestCodexRealtimeLine(p)
+}
+
+func codexFileProgressEvent(p codexProgressParams, line string) *codexProgressEvent {
+	event := &codexProgressEvent{Kind: "file", Action: line}
+	if path := firstCodexFilePath(p); path != "" {
+		event.FilePath = path
+		return event
+	}
+	event.FilePath = filePathFromPatchText(firstNonEmpty(p.Changes, p.Diff, p.Message, p.Text, p.Output, p.Delta))
+	return event
 }
 
 func firstCodexFilePath(p codexProgressParams) string {

@@ -114,7 +114,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 	// 汇总同一 turn 内的文本事件，避免 snapshot 和 delta 同时出现时重复拼接。
 	assembler := newCodexFinalAssembler()
 	diagnostics := newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
-	progressEmitted := false
+	progressState := newCodexProgressState()
 	for {
 		select {
 		case <-ctx.Done():
@@ -129,7 +129,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				if onProgress != nil {
 					onProgress("进展：Codex 请求权限审批。")
 				}
-				progressEmitted = true
+				progressState.emitted = true
 				optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
 				if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat); err != nil {
 					log.Printf("[acp] turn approval response failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), err)
@@ -155,18 +155,20 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				return "", fmt.Errorf("turn error: %s", errorText)
 			}
 			if evt.Kind == "progress" {
-				diagnostics.remember(evt.Text)
-				if onProgress != nil {
-					onProgress(evt.Text)
+				if progressText, ok := progressState.record(evt); ok {
+					diagnostics.remember(progressText)
+					if onProgress != nil {
+						onProgress(progressText)
+					}
 				}
-				progressEmitted = true
 				continue
 			}
 			if evt.Delta != "" {
-				if onProgress != nil && !progressEmitted {
-					diagnostics.remember(codexGeneratingProgress)
-					onProgress(codexGeneratingProgress)
-					progressEmitted = true
+				if onProgress != nil {
+					if progressText, ok := progressState.emitGenerating(); ok {
+						diagnostics.remember(progressText)
+						onProgress(progressText)
+					}
 				}
 				assembler.addDelta(evt.ItemID, evt.Delta)
 			}
