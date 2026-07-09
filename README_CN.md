@@ -126,7 +126,7 @@ weclaw companion --agent opencode --cwd /path/to/project
 | `/codex 写一个排序函数` | 发送给指定 Agent         |
 | `/cc 解释一下这段代码`  | 通过别名发送             |
 | `/cc help`              | 查看 Claude 会话命令     |
-| `/cwd /path/to/project` | 切换工作目录（配置了 `allowed_workspace_roots` 时限制在白名单内） |
+| `/cwd /path/to/project` | 切换工作目录（普通用户限制在 `allowed_workspace_roots` 白名单内；管理员不受此限制） |
 | `/new`                  | 开始新对话（清除会话）   |
 | `/model` / `/model <id>` | 查看 / 切换模型（Codex：运行时切换，下个新会话生效） |
 | `/reasoning` / `/reasoning <强度>` | 查看 / 切换推理强度（Codex） |
@@ -551,7 +551,7 @@ WeClaw 驱动的 AI Agent 能执行 shell 命令、读写文件。任何能给 b
 
 - **访问控制 (`allowed_users`)**：微信按平台配置，飞书按 `bots[]` 内每个机器人配置。飞书可填应用级 `open_id` 或同开发商下稳定的 `union_id`；多机器人优先使用 `union_id`。白名单为空 = 拒绝所有（fail-safe）；未配置时启动会显著告警。飞书自动发现只记录待确认身份，必须由管理员执行 `/feishu users approve` 后才写入白名单。
 - **管理员白名单 (`admin_users`)**：顶层配置。只有同时位于对应平台 `allowed_users` 和顶层 `admin_users` 的用户，才能在微信 / 飞书执行 `/update`、`/restart`、`/restart --force` 和飞书用户授权命令。飞书管理员匹配会同时检查 `open_id/user_id/union_id`；为空 = 禁用远程管理命令。
-- **工作目录限制 (`allowed_workspace_roots`)**：`/cwd` 只能切到白名单根目录及其子目录。为空 = 不限制（会告警）。
+- **工作目录限制 (`allowed_workspace_roots`)**：普通用户 `/cwd` 只能切到白名单根目录及其子目录；为空时普通用户远程切换目录会被拒绝。`admin_users` 中的管理员不受此白名单限制。
 - **限流 (`rate_limit_per_minute`)**：每用户每分钟最多触发 agent 次数，`0` = 不限。
 - **审计日志 (`audit_log` / `audit_log_path`)**：JSON Lines 记录谁触发了哪个 agent、yolo 自动放行等（不含密钥）。默认开启，写入 `~/.weclaw/audit.log`，按大小自动轮转。
 - **OS 用户隔离 (`run_as_user` / `run_as_env`)**：通过免密 `sudo` 让指定 agent 以独立 Unix 用户运行，做文件系统隔离。

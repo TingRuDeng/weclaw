@@ -141,7 +141,7 @@ func checkWorkspaceRoots(cfg *config.Config) doctorResult {
 	result := doctorResult{Name: "workspace confinement"}
 	if len(cfg.AllowedWorkspaceRoots) == 0 {
 		result.Status = doctorWarn
-		result.Detail = "allowed_workspace_roots 未配置；远程 /cwd 切换已禁用"
+		result.Detail = "allowed_workspace_roots 未配置；普通用户远程 /cwd 切换已禁用，管理员不受此限制"
 		return result
 	}
 	for _, root := range cfg.AllowedWorkspaceRoots {

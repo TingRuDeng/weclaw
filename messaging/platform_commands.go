@@ -72,7 +72,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	case trimmed == "/reasoning" || strings.HasPrefix(trimmed, "/reasoning "):
 		sendText(h.handleReasoningCommandForAccount(ctx, msg.Platform, msg.AccountID, strings.TrimSpace(strings.TrimPrefix(trimmed, "/reasoning"))))
 	case strings.HasPrefix(trimmed, "/cwd"):
-		sendText(h.handleCwd(trimmed, msg.UserID))
+		sendText(h.handleCwdForMessage(trimmed, msg))
 	default:
 		return false
 	}

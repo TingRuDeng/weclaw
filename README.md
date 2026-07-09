@@ -147,7 +147,7 @@ Send these as WeChat or Feishu messages:
 | `/cc explain this code` | Send to agent by alias |
 | `/cc help` | 查看 Claude 会话命令 |
 | `/claude` | Switch default agent to Claude |
-| `/cwd /path/to/project` | Switch workspace directory (confined to `allowed_workspace_roots` if set) |
+| `/cwd /path/to/project` | Switch workspace directory (regular users are confined to `allowed_workspace_roots`; admins are exempt) |
 | `/new` | Start a new conversation (clear session) |
 | `/model` / `/model <id>` | Show or switch model (Codex: runtime, applies next session) |
 | `/reasoning` / `/reasoning <effort>` | Show or switch reasoning effort (Codex) |
@@ -567,7 +567,7 @@ WeClaw drives AI agents that can execute shell commands and read/write files. An
 
 - **Access control (`allowed_users`)**: WeChat uses a platform-level allowlist; Feishu uses per-bot allowlists in `bots[]`. Empty allowlist = deny everyone (fail-safe) — WeClaw warns loudly at startup if unset.
 - **Admin allowlist (`admin_users`)**: top-level allowlist for WeClaw management commands. A user must be present in both the platform `allowed_users` and top-level `admin_users` to run `/update`, `/upgrade`, `/restart`, or `/restart --force` from WeChat / Feishu. Empty = remote management disabled.
-- **Workspace confinement (`allowed_workspace_roots`)**: `/cwd` may only switch into these roots and their subdirectories. Empty = unrestricted (warned).
+- **Workspace confinement (`allowed_workspace_roots`)**: regular users may only `/cwd` into these roots and their subdirectories. Empty roots reject regular-user remote directory switching. Users in `admin_users` are exempt from this allowlist.
 - **Rate limiting (`rate_limit_per_minute`)**: max agent invocations per user per minute. `0` = off.
 - **Audit log (`audit_log` / `audit_log_path`)**: structured JSON-Lines record of who triggered which agent, yolo auto-approvals, etc. (never contains secrets). Defaults on, written to `~/.weclaw/audit.log` with size-based rotation.
 - **OS-user isolation (`run_as_user` / `run_as_env`)**: run a specific agent under a separate Unix user via passwordless `sudo` for filesystem isolation.

@@ -152,7 +152,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 	handler.SetAllowedWorkspaceRoots(cfg.AllowedWorkspaceRoots)
 	if len(cfg.AllowedWorkspaceRoots) == 0 {
-		log.Printf("WARNING: allowed_workspace_roots 未配置，远程 /cwd 切换已禁用；如需切换工作区，请在 config.json 配置 allowed_workspace_roots。")
+		log.Printf("WARNING: allowed_workspace_roots 未配置，普通用户远程 /cwd 切换已禁用；管理员不受此限制。")
 	} else {
 		log.Printf("Allowed workspace roots: %v", cfg.AllowedWorkspaceRoots)
 	}
