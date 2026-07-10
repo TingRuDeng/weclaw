@@ -3,9 +3,11 @@ package messaging
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -13,6 +15,8 @@ import (
 )
 
 const accessCodeTTL = 30 * time.Minute
+
+var accessCodeStateMu sync.Mutex
 
 type accessCodeState struct {
 	Version int                         `json:"version"`
@@ -50,11 +54,7 @@ type AccessCodeView struct {
 
 // DefaultAccessCodeFile 返回跨平台授权码状态文件路径。
 func DefaultAccessCodeFile() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".weclaw", "access-codes.json")
+	return filepath.Join(defaultDataDir(), "access-codes.json")
 }
 
 // ObserveDeniedIdentity 为被拒绝的入站身份生成用户可交给管理员的授权码。
@@ -65,25 +65,31 @@ func (h *Handler) ObserveDeniedIdentity(msg platform.IncomingMessage) string {
 	if msg.Platform != platform.PlatformWeChat {
 		return ""
 	}
-	record, ok := issueAccessCode(DefaultAccessCodeFile(), msg, time.Now().UTC())
-	if !ok {
-		return ""
+	record, err := issueAccessCode(DefaultAccessCodeFile(), msg, time.Now().UTC())
+	if err != nil {
+		log.Printf("[access-code] failed to issue code for %s: %v", msg.UserID, err)
+		return "当前账号无权限，且授权码生成失败，请联系管理员检查 WeClaw 状态。"
 	}
 	return fmt.Sprintf("当前账号无权限，请联系管理员授权。\n授权码: %s", record.Code)
 }
 
-func issueAccessCode(filePath string, msg platform.IncomingMessage, now time.Time) (accessCodeRecord, bool) {
+func issueAccessCode(filePath string, msg platform.IncomingMessage, now time.Time) (accessCodeRecord, error) {
 	userID := strings.TrimSpace(msg.UserID)
 	if userID == "" {
-		return accessCodeRecord{}, false
+		return accessCodeRecord{}, fmt.Errorf("用户身份为空")
 	}
-	state := loadAccessCodeState(filePath)
+	accessCodeStateMu.Lock()
+	defer accessCodeStateMu.Unlock()
+	state, err := loadAccessCodeState(filePath)
+	if err != nil {
+		return accessCodeRecord{}, err
+	}
 	if record, ok := findAccessRecord(state, string(msg.Platform), userID, now); ok {
-		return record, true
+		return record, nil
 	}
 	code, ok := newUniqueAccessCode(state, now)
 	if !ok {
-		return accessCodeRecord{}, false
+		return accessCodeRecord{}, fmt.Errorf("无法生成唯一授权码")
 	}
 	record := accessCodeRecord{
 		Code:      code,
@@ -93,14 +99,21 @@ func issueAccessCode(filePath string, msg platform.IncomingMessage, now time.Tim
 		ExpiresAt: now.Add(accessCodeTTL).UTC().Format(time.RFC3339),
 	}
 	state.Records[code] = record
-	saveAccessCodeState(filePath, state)
-	return record, true
+	if err := saveAccessCodeState(filePath, state); err != nil {
+		return accessCodeRecord{}, err
+	}
+	return record, nil
 }
 
 // ApproveAccessCode 使用通用授权码写入平台 allowed_users。
 func ApproveAccessCode(req AccessCodeApprovalRequest) (AccessCodeApprovalResult, error) {
+	accessCodeStateMu.Lock()
+	defer accessCodeStateMu.Unlock()
 	filePath := firstNonBlank(req.FilePath, DefaultAccessCodeFile())
-	state := loadAccessCodeState(filePath)
+	state, err := loadAccessCodeState(filePath)
+	if err != nil {
+		return AccessCodeApprovalResult{}, err
+	}
 	code := strings.TrimSpace(req.Code)
 	record, ok := state.Records[code]
 	if !ok || !accessCodeValid(record, time.Now().UTC()) {
@@ -123,13 +136,21 @@ func ApproveAccessCode(req AccessCodeApprovalRequest) (AccessCodeApprovalResult,
 		return AccessCodeApprovalResult{}, err
 	}
 	delete(state.Records, code)
-	saveAccessCodeState(filePath, state)
+	if err := saveAccessCodeState(filePath, state); err != nil {
+		return AccessCodeApprovalResult{}, err
+	}
 	return AccessCodeApprovalResult{Platform: record.Platform, Identity: record.UserID, Admin: req.Admin}, nil
 }
 
 // LoadPendingAccessCodeViews 返回仍有效的通用授权码，用于命令行查看待授权用户。
 func LoadPendingAccessCodeViews(filePath string) []AccessCodeView {
-	state := loadAccessCodeState(firstNonBlank(filePath, DefaultAccessCodeFile()))
+	accessCodeStateMu.Lock()
+	defer accessCodeStateMu.Unlock()
+	state, err := loadAccessCodeState(firstNonBlank(filePath, DefaultAccessCodeFile()))
+	if err != nil {
+		log.Printf("[access-code] failed to load pending codes: %v", err)
+		return nil
+	}
 	now := time.Now().UTC()
 	views := make([]AccessCodeView, 0, len(state.Records))
 	for _, record := range state.Records {
@@ -147,29 +168,66 @@ func LoadPendingAccessCodeViews(filePath string) []AccessCodeView {
 	return views
 }
 
-func loadAccessCodeState(filePath string) accessCodeState {
+func loadAccessCodeState(filePath string) (accessCodeState, error) {
 	state := accessCodeState{Version: 1, Records: make(map[string]accessCodeRecord)}
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return state
+		if os.IsNotExist(err) {
+			return state, nil
+		}
+		return state, fmt.Errorf("读取授权码状态失败: %w", err)
 	}
-	if err := json.Unmarshal(data, &state); err != nil || state.Records == nil {
+	if err := json.Unmarshal(data, &state); err != nil {
+		return state, fmt.Errorf("解析授权码状态失败: %w", err)
+	}
+	if state.Records == nil {
 		state.Records = make(map[string]accessCodeRecord)
 	}
-	return state
+	return state, nil
 }
 
-func saveAccessCodeState(filePath string, state accessCodeState) {
+func saveAccessCodeState(filePath string, state accessCodeState) error {
 	if strings.TrimSpace(filePath) == "" {
-		return
+		return fmt.Errorf("授权码状态文件路径为空")
 	}
 	state.Version = 1
 	state.Updated = time.Now().UTC().Format(time.RFC3339)
-	_ = os.MkdirAll(filepath.Dir(filePath), 0o700)
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err == nil {
-		_ = os.WriteFile(filePath, data, 0o600)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
+		return fmt.Errorf("创建授权码状态目录失败: %w", err)
 	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("编码授权码状态失败: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(filePath), ".access-codes-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建授权码临时文件失败: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := writeAccessCodeTemp(tmp, data); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, filePath); err != nil {
+		return fmt.Errorf("替换授权码状态失败: %w", err)
+	}
+	return nil
+}
+
+func writeAccessCodeTemp(tmp *os.File, data []byte) error {
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	return tmp.Close()
 }
 
 func findAccessRecord(state accessCodeState, platformName string, userID string, now time.Time) (accessCodeRecord, bool) {

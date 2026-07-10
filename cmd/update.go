@@ -102,23 +102,40 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	// 4. Restart only when explicitly requested
-	pid, pidErr := readPid()
-	if pidErr == nil && processExists(pid) {
-		fmt.Println("Stopping old process...")
-		if err := stopAllWeclaw(); err != nil {
-			log.Printf("Failed to stop old process: %v", err)
-			fmt.Println("Update complete. Please run 'weclaw stop' and 'weclaw start' manually.")
-			return nil
-		}
+	return restartUpdatedService(defaultUpdateRestartOps())
+}
 
-		fmt.Println("Starting new version...")
-		if err := runDaemon(); err != nil {
-			log.Printf("Failed to restart: %v", err)
-			fmt.Println("Update complete. Please run 'weclaw start' manually.")
-		}
-	} else {
-		fmt.Println("Update complete. Run 'weclaw start' to start.")
+type updateRestartOps struct {
+	running func() bool
+	stop    func() error
+	start   func() error
+}
+
+func defaultUpdateRestartOps() updateRestartOps {
+	return updateRestartOps{
+		running: func() bool {
+			pid, err := readPid()
+			return err == nil && processExists(pid)
+		},
+		stop:  stopAllWeclaw,
+		start: runDaemon,
 	}
+}
 
+func restartUpdatedService(ops updateRestartOps) error {
+	if !ops.running() {
+		fmt.Println("Update complete. Run 'weclaw start' to start.")
+		return nil
+	}
+	fmt.Println("Stopping old process...")
+	if err := ops.stop(); err != nil {
+		log.Printf("Failed to stop old process: %v", err)
+		return fmt.Errorf("更新完成，但停止旧服务失败: %w", err)
+	}
+	fmt.Println("Starting new version...")
+	if err := ops.start(); err != nil {
+		log.Printf("Failed to restart: %v", err)
+		return fmt.Errorf("更新完成，但启动新服务失败: %w", err)
+	}
 	return nil
 }

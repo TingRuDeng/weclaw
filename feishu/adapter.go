@@ -122,15 +122,20 @@ func (a *Adapter) Run(ctx context.Context, dispatch platform.DispatchFunc) error
 	logPermissionGuide(a.creds.AppID)
 	eventDispatcher := a.newEventDispatcher(dispatch)
 	wsClient := a.wsFactory(eventDispatcher)
+	errCh := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		wsClient.Close()
+		errCh <- wsClient.Start(ctx)
 	}()
-	err := wsClient.Start(ctx)
-	if ctx.Err() != nil {
+	select {
+	case err := <-errCh:
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		wsClient.Close()
 		return nil
 	}
-	return err
 }
 
 func (a *Adapter) allowCardActionUser(userID string, aliases []string) bool {

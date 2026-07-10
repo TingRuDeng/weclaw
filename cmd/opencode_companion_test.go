@@ -2,9 +2,24 @@ package cmd
 
 import (
 	"bytes"
+	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestOpenCodeHTTPClientHasHeaderTimeoutWithoutWholeRequestDeadline(t *testing.T) {
+	client := newOpenCodeHTTPClient()
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport=%T, want *http.Transport", client.Transport)
+	}
+	if transport.ResponseHeaderTimeout <= 0 || transport.TLSHandshakeTimeout <= 0 || transport.DialContext == nil {
+		t.Fatalf("transport=%+v, want bounded connection and response headers", transport)
+	}
+	if client.Timeout != 0 {
+		t.Fatalf("client timeout=%s, SSE body must be controlled by context", client.Timeout)
+	}
+}
 
 func TestHandleOpenCodeEventLineBuildsFinalTextOnIdle(t *testing.T) {
 	resultCh := make(chan openCodeTurnResult, 1)

@@ -9,14 +9,16 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
 
 func defaultACPStateFile(command string, args []string, cwd string, protocol string) string {
-	home, err := os.UserHomeDir()
+	home, err := config.DataDir()
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(home, ".weclaw", "state")
+	dir := filepath.Join(home, "state")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		log.Printf("[acp] failed to create state dir: %v", err)
 		return ""

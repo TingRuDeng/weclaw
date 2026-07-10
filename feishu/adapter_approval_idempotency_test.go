@@ -239,3 +239,29 @@ func TestApprovalActionKeyFallsBackToMessageIDOnly(t *testing.T) {
 		t.Fatalf("approvalActionKey first=%q second=%q, want user-independent message fallback", got, want)
 	}
 }
+
+func TestSameApprovalKeyOnDifferentCardsDispatchesIndependently(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	first := approvalCardActionEvent("allow", "允许本次", "")
+	second := approvalCardActionEvent("deny", "拒绝", "")
+	second.Event.Context.OpenMessageID = "om_other"
+	dispatched := make(chan platform.IncomingMessage, 2)
+	dispatch := func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		dispatched <- msg
+	}
+
+	if _, err := adapter.handleCardActionEvent(context.Background(), first, dispatch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.handleCardActionEvent(context.Background(), second, dispatch); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-dispatched:
+		case <-time.After(time.Second):
+			t.Fatalf("dispatch count=%d, want 2 independent cards", i)
+		}
+	}
+}

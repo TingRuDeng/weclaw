@@ -21,6 +21,8 @@ import (
 var htmlTagPattern = regexp.MustCompile(`<[^>]+>`)
 var repeatedNewlinePattern = regexp.MustCompile(`\n{2,}`)
 
+const maxFeishuResourceBytes int64 = 32 * 1024 * 1024
+
 // resourceDownloader 抽象飞书资源下载，便于单元测试替换 SDK 调用。
 type resourceDownloader interface {
 	DownloadResource(ctx context.Context, messageID string, resource types.Resource) (platform.Attachment, error)
@@ -57,6 +59,15 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 	if err := resp.WriteFile(target); err != nil {
 		return platform.Attachment{}, err
 	}
+	info, err := os.Stat(target)
+	if err != nil {
+		os.Remove(target)
+		return platform.Attachment{}, err
+	}
+	if info.Size() > maxFeishuResourceBytes {
+		os.Remove(target)
+		return platform.Attachment{}, fmt.Errorf("feishu resource exceeds %d MiB", maxFeishuResourceBytes/(1024*1024))
+	}
 	if err := os.Chmod(target, 0o600); err != nil {
 		return platform.Attachment{}, err
 	}
@@ -65,7 +76,7 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 		Path:     target,
 		FileName: firstNonEmpty(resource.FileName, resp.FileName, filepath.Base(target)),
 		SourceID: resource.FileKey,
-		Metadata: map[string]string{"resource_type": resource.Type},
+		Metadata: map[string]string{"resource_type": resource.Type, "temporary": "true"},
 	}, nil
 }
 
@@ -244,7 +255,8 @@ func feishuResourceTarget(resource types.Resource) string {
 	if name == "" {
 		name = fmt.Sprintf("resource-%d", time.Now().UnixNano())
 	}
-	return filepath.Join(os.TempDir(), "weclaw-feishu", name)
+	uniqueName := fmt.Sprintf("%d-%s", time.Now().UnixNano(), name)
+	return filepath.Join(os.TempDir(), "weclaw-feishu", uniqueName)
 }
 
 // sanitizeFilePart 清理文件名中的路径分隔符，避免平台资源 key 影响本地路径。

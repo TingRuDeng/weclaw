@@ -28,6 +28,20 @@ func (h *Handler) claudeSwitchTargets(bindingKey string) []codexWorkspaceView {
 	return h.appendLocalClaudeSwitchTargets(views, seenSessions, localViews)
 }
 
+func (h *Handler) claudeSwitchTargetsForAccess(bindingKey string, actorUserID string, admin bool) []codexWorkspaceView {
+	views := h.claudeSwitchTargets(bindingKey)
+	if admin {
+		return views
+	}
+	filtered := make([]codexWorkspaceView, 0, len(views))
+	for _, view := range views {
+		if h.isWorkspaceAllowed(view.WorkspaceRoot) {
+			filtered = append(filtered, view)
+		}
+	}
+	return filtered
+}
+
 // appendLocalClaudeSwitchTargets 追加未被 WeClaw 记录过的本机会话，避免重复展示同一个 session。
 func (h *Handler) appendLocalClaudeSwitchTargets(views []codexWorkspaceView, seenSessions map[string]bool, localViews []codexWorkspaceView) []codexWorkspaceView {
 	for _, view := range localViews {

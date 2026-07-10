@@ -2,10 +2,31 @@ package ilink
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 )
+
+func TestWriteSyncDataAtomicallyReplacesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sync.json")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSyncData(path, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "new" {
+		t.Fatalf("data=%q err=%v, want new", data, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".sync-*.tmp"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary files=%v err=%v, want none", matches, err)
+	}
+}
 
 func TestSortMessagesForDispatchUsesSeqThenMessageID(t *testing.T) {
 	messages := []WeixinMessage{
@@ -35,7 +56,7 @@ func TestMonitorSerializesMessagesFromSameUser(t *testing.T) {
 	secondHandled := make(chan struct{})
 	handled := make(chan string, 2)
 	monitor := &Monitor{
-		queues: make(map[string]chan WeixinMessage),
+		queues: make(map[string]chan queuedWeixinMessage),
 		handler: func(_ context.Context, _ *Client, msg WeixinMessage) {
 			text := msg.ItemList[0].TextItem.Text
 			handled <- text
@@ -77,7 +98,7 @@ func TestMonitorAllowsDifferentUsersInParallel(t *testing.T) {
 	secondHandled := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	monitor := &Monitor{
-		queues: make(map[string]chan WeixinMessage),
+		queues: make(map[string]chan queuedWeixinMessage),
 		handler: func(_ context.Context, _ *Client, msg WeixinMessage) {
 			text := msg.ItemList[0].TextItem.Text
 			if text == "first" {
@@ -99,6 +120,63 @@ func TestMonitorAllowsDifferentUsersInParallel(t *testing.T) {
 		t.Fatal("不同用户消息应允许并行处理")
 	}
 	close(releaseFirst)
+}
+
+func TestProcessUpdateResponseAdvancesCursorAfterDispatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	monitor := &Monitor{
+		getUpdatesBuf: "before",
+		bufPath:       t.TempDir() + "/sync.json",
+		queues:        make(map[string]chan queuedWeixinMessage),
+		handler: func(context.Context, *Client, WeixinMessage) {
+			close(entered)
+			<-release
+		},
+	}
+	done := make(chan bool, 1)
+	go func() {
+		done <- monitor.processUpdateResponse(ctx, &GetUpdatesResponse{
+			GetUpdatesBuf: "after",
+			Msgs:          []WeixinMessage{textMonitorMessage("u1", "hello")},
+		})
+	}()
+	<-entered
+	if monitor.getUpdatesBuf != "before" {
+		t.Fatalf("cursor=%q, should not advance before dispatch completes", monitor.getUpdatesBuf)
+	}
+	close(release)
+	if ok := <-done; !ok || monitor.getUpdatesBuf != "after" {
+		t.Fatalf("processed=%v cursor=%q, want after", ok, monitor.getUpdatesBuf)
+	}
+}
+
+func TestMonitorRemovesIdleUserQueue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handled := make(chan struct{})
+	monitor := &Monitor{
+		queues: make(map[string]chan queuedWeixinMessage),
+		handler: func(context.Context, *Client, WeixinMessage) {
+			close(handled)
+		},
+	}
+
+	monitor.enqueueMessage(ctx, textMonitorMessage("u1", "hello"))
+	<-handled
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		monitor.queuesMu.Lock()
+		count := len(monitor.queues)
+		monitor.queuesMu.Unlock()
+		if count == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("handled user queue was not removed")
 }
 
 func TestAggregateWeixinMessagesMergesTextAndAttachments(t *testing.T) {
@@ -128,7 +206,7 @@ func TestAggregateWeixinMessagesMergesTextAndAttachments(t *testing.T) {
 }
 
 func TestRunMessageQueueFlushesBeforeCommand(t *testing.T) {
-	queue := make(chan WeixinMessage, 4)
+	queue := make(chan queuedWeixinMessage, 4)
 	got := make(chan WeixinMessage, 2)
 	monitor := &Monitor{
 		client:          &Client{},
@@ -137,10 +215,10 @@ func TestRunMessageQueueFlushesBeforeCommand(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go monitor.runMessageQueue(ctx, queue)
+	go monitor.runMessageQueue(ctx, "u1", queue)
 
-	queue <- textMonitorMessage("u1", "第一句")
-	queue <- textMonitorMessage("u1", "/status")
+	queue <- queuedWeixinMessage{message: textMonitorMessage("u1", "第一句")}
+	queue <- queuedWeixinMessage{message: textMonitorMessage("u1", "/status")}
 
 	first := <-got
 	second := <-got

@@ -72,12 +72,14 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 	}()
 
 	turnMetrics := newCodexTurnMetrics(time.Now())
+	turnIDCh := make(chan string, 1)
+	activeTurnID := ""
 
 	// Start turn (call returns quickly with turn info, actual content comes via events)
 	go func() {
 		startTurn := func() error {
 			startedAt := time.Now()
-			_, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
+			result, err := a.rpc(ctx, "turn/start", codexTurnStartParams{
 				ThreadID:          threadID,
 				ApprovalPolicy:    a.approvalPolicyForContext(ctx),
 				ApprovalsReviewer: a.approvalReviewerForCodex(),
@@ -87,6 +89,9 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				Effort:            a.effort,
 				Cwd:               a.cwdForConversation(conversationID),
 			})
+			if turnID := codexTurnIDFromStartResult(result); turnID != "" {
+				turnIDCh <- turnID
+			}
 			elapsed := time.Since(startedAt)
 			if err != nil {
 				log.Printf("[acp] turn/start failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, elapsed, err)
@@ -119,7 +124,12 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 		select {
 		case <-ctx.Done():
 			log.Printf("[acp] turn context done (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), ctx.Err())
+			if err := a.interruptCancelledCodexTurn(threadID, activeTurnID, turnIDCh); err != nil {
+				return "", fmt.Errorf("%w: remote turn interrupt failed: %v", ctx.Err(), err)
+			}
 			return "", ctx.Err()
+		case activeTurnID = <-turnIDCh:
+			continue
 		case evt := <-turnCh:
 			if latency, ok := turnMetrics.markFirstEvent(time.Now()); ok {
 				log.Printf("[acp] first turn event (pid=%d, thread=%s, conversation=%s, kind=%s, elapsed=%s)", pid, threadID, conversationID, evt.Kind, latency)
@@ -131,7 +141,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				}
 				progressState.emitted = true
 				optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
-				if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat); err != nil {
+				if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat, evt.Approval.RequestedPermissions); err != nil {
 					log.Printf("[acp] turn approval response failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), err)
 					return "", fmt.Errorf("approval response error: %w", err)
 				}

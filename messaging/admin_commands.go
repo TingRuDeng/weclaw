@@ -160,10 +160,14 @@ func (h *Handler) restartBlockedByActiveTasks(command string, args []string) (st
 		return "", false
 	}
 	count := h.activeTaskCount()
-	if count == 0 {
-		return "", false
+	if count > 0 {
+		return fmt.Sprintf("当前还有 %d 个运行中的任务，已取消重启。\n\n请等待任务完成或发送 /stop 后重试；如果确认要中断任务并重启，请发送 /restart --force。", count), true
 	}
-	return fmt.Sprintf("当前还有 %d 个运行中的任务，已取消重启。\n\n请等待任务完成或发送 /stop 后重试；如果确认要中断任务并重启，请发送 /restart --force。", count), true
+	pending := h.pendingCodexConfirmationCount()
+	if pending > 0 {
+		return fmt.Sprintf("当前还有 %d 条待确认消息，已取消重启。\n\n请先确认或撤回消息；如果确认要丢弃并重启，请发送 /restart --force。", pending), true
+	}
+	return "", false
 }
 
 func hasRestartForceArg(args []string) bool {
@@ -171,9 +175,7 @@ func hasRestartForceArg(args []string) bool {
 }
 
 func (h *Handler) activeTaskCount() int {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	return len(h.activeTasks)
+	return h.ActiveTaskCount()
 }
 
 func defaultServiceAdminCommandExecutor(ctx context.Context, command string, args []string) (string, error) {

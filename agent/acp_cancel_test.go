@@ -1,0 +1,88 @@
+package agent
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+)
+
+func TestChatLegacyACPSendsSessionCancelWhenContextCancelled(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	a := NewACPAgent(ACPAgentConfig{Command: "claude-agent-acp"})
+	var out bytes.Buffer
+	a.stdin = nopWriteCloser{Buffer: &out}
+	promptStarted := make(chan struct{})
+	a.rpcCall = func(ctx context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "session/new":
+			return json.RawMessage(`{"sessionId":"session-1"}`), nil
+		case "session/prompt":
+			close(promptStarted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.chatLegacyACP(ctx, "conversation-1", "hello", nil, false)
+		done <- err
+	}()
+	<-promptStarted
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("chat error=%v, want context canceled", err)
+	}
+	if got := out.String(); !strings.Contains(got, `"method":"session/cancel"`) || !strings.Contains(got, `"sessionId":"session-1"`) {
+		t.Fatalf("cancel notification missing: %s", got)
+	}
+}
+
+func TestChatCodexAppServerInterruptsTurnWhenContextCancelled(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir()})
+	turnStarted := make(chan struct{})
+	interruptCalled := make(chan struct{}, 1)
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			close(turnStarted)
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		case "turn/interrupt":
+			p := params.(map[string]interface{})
+			if p["threadId"] != "thread-1" || p["turnId"] != "turn-1" {
+				return nil, fmt.Errorf("interrupt params=%#v", p)
+			}
+			interruptCalled <- struct{}{}
+			return json.RawMessage(`{}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.chatCodexAppServer(ctx, "conversation-1", "hello", nil)
+		done <- err
+	}()
+	<-turnStarted
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("chat error=%v, want context canceled", err)
+	}
+	select {
+	case <-interruptCalled:
+	default:
+		t.Fatal("turn/interrupt was not called")
+	}
+}

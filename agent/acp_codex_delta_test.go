@@ -317,6 +317,28 @@ func TestDispatchToTurnChFallbackOnlyWhenSingleActiveTurn(t *testing.T) {
 	}
 }
 
+func TestDispatchToTurnChReservesCapacityForCompletedEvent(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 16)
+	a.turnCh["thread-1"] = turnCh
+	for i := 0; i < cap(turnCh)*2; i++ {
+		a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "progress", Text: "running"})
+	}
+	if !a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "completed"}) {
+		t.Fatal("completed event was dropped")
+	}
+
+	found := false
+	for len(turnCh) > 0 {
+		if (<-turnCh).Kind == "completed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("completed event missing from turn channel")
+	}
+}
+
 func TestHandleCodexDeltaDoesNotFallbackWithMultipleActiveTurns(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",

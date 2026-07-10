@@ -93,6 +93,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	codexDir := t.TempDir()
 	recordedWorkspace := filepath.Join(t.TempDir(), "recorded")
 	localWorkspace := filepath.Join(t.TempDir(), "local")
+	h.SetAllowedWorkspaceRoots([]string{recordedWorkspace, localWorkspace})
 	writeLocalCodexSession(t, codexDir, "thread-recorded", recordedWorkspace, "重复会话", "2026-04-29T08:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-local", localWorkspace, "桌面本机会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -195,6 +196,12 @@ func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
 	root := t.TempDir()
 	workspaceA := filepath.Join(root, "weclaw")
 	workspaceB := filepath.Join(root, "card-manager-android")
+	for _, workspace := range []string{workspaceA, workspaceB} {
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			t.Fatalf("创建测试工作空间失败: %v", err)
+		}
+	}
+	h.SetAllowedWorkspaceRoots([]string{root})
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
@@ -228,6 +235,7 @@ func TestCodexCxLsUsesCodexAppWorkspaceOrder(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	root := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{root})
 	weclawWorkspace := filepath.Join(root, "weclaw")
 	safariWorkspace := filepath.Join(root, "SafariCollection")
 	tmpWorkspace := filepath.Join(root, "tmp")

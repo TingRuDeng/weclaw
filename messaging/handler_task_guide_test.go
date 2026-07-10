@@ -46,6 +46,21 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 	waitDone(t, firstDone, "第一条任务")
 }
 
+func TestStorePendingGuideDoesNotOverwriteExistingMessage(t *testing.T) {
+	h := NewHandler(nil, nil)
+	task, _, started := h.beginActiveTask(context.Background(), "shared", activeTaskMeta{owner: "user-1"})
+	if !started || !h.storePendingGuide("shared", "第二条") {
+		t.Fatal("首次暂存消息失败")
+	}
+	if h.storePendingGuide("shared", "第三条") {
+		t.Fatal("已有暂存消息时不应覆盖")
+	}
+	if got := task.pendingGuide(); got != "第二条" {
+		t.Fatalf("pending guide=%q, want first pending message", got)
+	}
+	h.finishActiveTask("shared", task)
+}
+
 func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := newBlockingCodexThreadAgent()

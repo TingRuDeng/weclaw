@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,8 +38,17 @@ type openCodeCompanionRuntime struct {
 func newOpenCodeCompanionRuntime(endpoint agent.CompanionEndpoint) *openCodeCompanionRuntime {
 	return &openCodeCompanionRuntime{
 		endpoint: endpoint,
-		client:   &http.Client{},
+		client:   newOpenCodeHTTPClient(),
 	}
+}
+
+func newOpenCodeHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	transport.IdleConnTimeout = 90 * time.Second
+	return &http.Client{Transport: transport}
 }
 
 func (r *openCodeCompanionRuntime) HandleCompanionRequest(ctx context.Context, req agent.CompanionRequest, progress func(string)) (string, error) {

@@ -17,6 +17,7 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -64,6 +65,7 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -108,6 +110,7 @@ func TestCodexExternalAppTaskSendsFinalReply(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	watchDone := make(chan struct{})
@@ -139,6 +142,7 @@ func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	offCfg := config.DefaultProgressConfig()
@@ -195,6 +199,7 @@ func TestCodexSwitchShowsAppThreadStateReadError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -220,6 +225,7 @@ func TestCodexSwitchShowsMissingActiveTurnError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -253,6 +259,7 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{

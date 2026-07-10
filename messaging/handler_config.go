@@ -104,8 +104,10 @@ func (h *Handler) SetAgentWorkDirs(workDirs map[string]string) {
 	defer h.mu.Unlock()
 
 	h.agentWorkDirs = make(map[string]string, len(workDirs))
+	h.configuredAgentWorkDirs = make(map[string]string, len(workDirs))
 	for name, dir := range workDirs {
 		h.agentWorkDirs[name] = dir
+		h.configuredAgentWorkDirs[name] = dir
 	}
 }
 

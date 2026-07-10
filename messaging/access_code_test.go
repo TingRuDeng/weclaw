@@ -1,7 +1,10 @@
 package messaging
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,12 +33,12 @@ func TestApproveAccessCodeWritesWechatAllowedUserAndAdmin(t *testing.T) {
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
-	record, ok := issueAccessCode(DefaultAccessCodeFile(), platform.IncomingMessage{
+	record, err := issueAccessCode(DefaultAccessCodeFile(), platform.IncomingMessage{
 		Platform: platform.PlatformWeChat,
 		UserID:   "wx_user@im.wechat",
 	}, time.Now().UTC())
-	if !ok {
-		t.Fatal("issueAccessCode ok=false, want true")
+	if err != nil {
+		t.Fatalf("issueAccessCode error=%v", err)
 	}
 
 	result, err := ApproveAccessCode(AccessCodeApprovalRequest{Code: record.Code, Admin: true})
@@ -58,5 +61,40 @@ func TestApproveAccessCodeWritesWechatAllowedUserAndAdmin(t *testing.T) {
 	}
 	if _, err := ApproveAccessCode(AccessCodeApprovalRequest{Code: record.Code}); err == nil {
 		t.Fatal("used access code should be cleared")
+	}
+}
+
+func TestIssueAccessCodeReturnsStateSaveError(t *testing.T) {
+	filePath := t.TempDir()
+	_, err := issueAccessCode(filePath, platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, UserID: "wx_user",
+	}, time.Now().UTC())
+	if err == nil {
+		t.Fatal("issueAccessCode error=nil, want state save failure")
+	}
+}
+
+func TestIssueAccessCodeConcurrentRequestsKeepAllRecords(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "access-codes.json")
+	now := time.Now().UTC()
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			_, err := issueAccessCode(filePath, platform.IncomingMessage{
+				Platform: platform.PlatformWeChat,
+				UserID:   fmt.Sprintf("wx_user_%d", index),
+			}, now)
+			if err != nil {
+				t.Errorf("issueAccessCode(%d): %v", index, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	views := LoadPendingAccessCodeViews(filePath)
+	if len(views) != 20 {
+		t.Fatalf("pending records=%d, want 20", len(views))
 	}
 }

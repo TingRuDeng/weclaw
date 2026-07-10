@@ -87,7 +87,7 @@ func TestCodexAttachResumesRemoteFirstThreadInTerminal(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	var opened []recordedCodexCLIResume
 	h.SetCodexCLIResumeOpener(func(_ context.Context, command string, workspace string, threadID string) error {
 		opened = append(opened, recordedCodexCLIResume{command: command, workspace: workspace, threadID: threadID})
@@ -117,7 +117,7 @@ func TestCodexCliCommandResumesRemoteFirstThreadInTerminal(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	var opened []recordedCodexCLIResume
 	h.SetCodexCLIResumeOpener(func(_ context.Context, command string, workspace string, threadID string) error {
 		opened = append(opened, recordedCodexCLIResume{command: command, workspace: workspace, threadID: threadID})
@@ -166,7 +166,7 @@ func TestCodexAppCommandOpensCurrentWorkspaceWithThread(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	var opened []recordedCodexAppOpen
 	h.SetCodexAppOpener(func(_ context.Context, command string, workspace string) error {
 		opened = append(opened, recordedCodexAppOpen{command: command, workspace: workspace})
@@ -188,6 +188,7 @@ func TestCodexAppCommandOpensCurrentWorkspaceWithThread(t *testing.T) {
 func TestCodexAppCommandKeepsLsOnOpenedWorkspace(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	staleWorkspace := t.TempDir()
 	bindingKey := codexBindingKey("user-1", "codex")
 	ag := &fakeCodexThreadAgent{
@@ -198,7 +199,7 @@ func TestCodexAppCommandKeepsLsOnOpenedWorkspace(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
 	h.codexSessions.setThread(bindingKey, workspace, "thread-1")
 	h.setCodexBrowseWorkspace(bindingKey, staleWorkspace)
@@ -231,7 +232,7 @@ func TestCodexAppFailureSuggestsCli(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.SetCodexAppOpener(func(_ context.Context, _ string, _ string) error {
 		return errors.New("app unavailable")
 	})

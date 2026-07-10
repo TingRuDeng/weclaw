@@ -81,6 +81,16 @@ func runSoftConfigReloader(ctx context.Context, handler *messaging.Handler, regi
 	}
 }
 
+// saveDefaultAgent 基于磁盘最新配置更新默认 Agent，避免热重载字段被启动快照覆盖。
+func saveDefaultAgent(name string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.DefaultAgent = name
+	return config.Save(cfg)
+}
+
 func applySoftConfig(handler *messaging.Handler, registry *platform.Registry, cfg *config.Config) {
 	if handler == nil || cfg == nil {
 		return

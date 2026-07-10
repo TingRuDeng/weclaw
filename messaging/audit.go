@@ -111,9 +111,5 @@ func NewFileAuditLogger(path string) auditLogger {
 
 // DefaultAuditLogPath 返回默认审计文件路径 ~/.weclaw/audit.log。
 func DefaultAuditLogPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(os.TempDir(), "weclaw-audit.log")
-	}
-	return filepath.Join(home, ".weclaw", "audit.log")
+	return filepath.Join(defaultDataDir(), "audit.log")
 }

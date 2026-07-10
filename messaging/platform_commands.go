@@ -44,7 +44,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	case isProgressCommand(trimmed):
 		sendText(h.handleProgressCommandForAccount(trimmed, msg.Platform, msg.AccountID))
 	case isClaudeSessionCommand(trimmed):
-		sendText(h.handleClaudeSessionCommand(ctx, msg.UserID, trimmed))
+		sendText(h.handleClaudeSessionCommandForRoute(ctx, msg.UserID, routeUserID, h.isAdminMessage(msg), trimmed))
 	case isCodexSessionCommand(trimmed):
 		if h.handleFeishuCodexSessionCommand(ctx, msg, routeUserID, req.Reply, trimmed) {
 			return true
@@ -56,6 +56,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 			Platform:    msg.Platform,
 			AccountID:   msg.AccountID,
 			Reply:       req.Reply,
+			Admin:       h.isAdminMessage(msg),
 		}))
 	case trimmed == "/guide":
 		h.handleGuideCommand(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, req.Reply, req.ClientID)

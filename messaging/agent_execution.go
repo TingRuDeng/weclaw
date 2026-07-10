@@ -166,6 +166,7 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 	}
 
 	ch := make(chan result, len(req.names))
+	replyWriter := newSerializedReplier(req.replyWriter)
 
 	for _, name := range req.names {
 		go func(n string) {
@@ -177,7 +178,7 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 			progressCfg := h.resolveProgressConfigForAccount(req.platformName, req.accountID, n)
 			agentCtx, cancelTaskTimeout := contextWithTaskTimeout(req.ctx, progressCfg)
 			defer cancelTaskTimeout()
-			agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(req.userID, req.routeUserID, req.replyWriter))
+			agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(req.userID, req.routeUserID, replyWriter))
 
 			var codexRoute codexConversationRoute
 			var executionKey string
@@ -191,17 +192,19 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 					message:   req.message,
 				})
 				if !started {
-					h.storePendingGuide(executionKey, req.message)
-					ch <- result{name: n, reply: runningCodexGuidePromptForTask(task)}
+					if h.storePendingGuide(executionKey, req.message) {
+						ch <- result{name: n, reply: runningCodexGuidePromptForTask(task)}
+					} else {
+						ch <- result{name: n, reply: "当前任务已有一条暂存消息，请先处理后再发送。"}
+					}
 					return
 				}
 				activeTask = task
 				agentCtx = taskCtx
 				defer func() {
-					pendingMessage, ok := h.promotePendingGuideToRun(executionKey, task)
-					h.finishActiveTask(executionKey, task)
+					pendingMessage, ok := h.completeActiveTask(executionKey, task)
 					if ok {
-						sendPlatformText(req.ctx, req.replyWriter, req.userID, runnablePendingCodexPrompt(pendingMessage))
+						sendPlatformText(req.ctx, replyWriter, req.userID, runnablePendingCodexPrompt(pendingMessage))
 					}
 				}()
 			} else {
@@ -210,9 +213,9 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
 
-			onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, req.replyWriter, "["+n+"] ", req.message, progressCfg)
+			onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "["+n+"] ", req.message, progressCfg)
 			sendResult := func(reply string, failed bool) {
-				consumed := finishProgressWithReplyForPlatform(req.replyWriter, finishProgress, reply, failed)
+				consumed := finishProgressWithReplyForPlatform(replyWriter, finishProgress, reply, failed)
 				ch <- result{name: n, reply: reply, finalInStream: consumed}
 			}
 
@@ -260,6 +263,6 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 		if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
 			wxReply.ClientID = NewClientID()
 		}
-		h.sendReplyWithMediaAfterStreamForRoute(req.ctx, req.replyWriter, req.userID, req.routeUserID, r.name, r.reply, r.finalInStream)
+		h.sendReplyWithMediaAfterStreamForRoute(req.ctx, replyWriter, req.userID, req.routeUserID, r.name, r.reply, r.finalInStream)
 	}
 }

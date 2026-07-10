@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	root := t.TempDir()
 	workspaceA := filepath.Join(root, "alpha")
 	workspaceB := filepath.Join(root, "beta")
+	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T10:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -48,6 +50,7 @@ func TestCodexCxSwitchDoesNotCreateDraftWhenOtherSessionsExist(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-bad", workspace, "坏历史会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-good", workspace, "可选会话", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -87,6 +90,7 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -118,6 +122,7 @@ func TestCodexShortIndexCreatesDraftWhenSingleSessionCannotBeRestored(t *testing
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-bad", workspace, "坏历史会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -155,6 +160,10 @@ func TestCodexCxCdWorkspaceWithNoSessionsCreatesDraft(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetCodexLocalSessionDir(t.TempDir())
 	workspace := filepath.Join(t.TempDir(), "empty")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("创建测试工作空间失败: %v", err)
+	}
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
@@ -185,6 +194,7 @@ func TestCodexShortIndexSwitchesSessionInsideWorkspace(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -213,6 +223,7 @@ func TestCodexShortDotDotReturnsToWorkspaceList(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -238,6 +249,7 @@ func TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -268,6 +280,7 @@ func TestCodexCxPwdShowsBrowseWorkspace(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{

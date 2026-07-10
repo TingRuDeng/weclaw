@@ -32,6 +32,13 @@ type Server struct {
 	authThrottle *authThrottle
 }
 
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 15 * time.Second
+	httpWriteTimeout      = 2 * time.Minute
+	httpIdleTimeout       = 60 * time.Second
+)
+
 // NewServer 创建配置面板服务。
 func NewServer(opts Options) *Server {
 	addr := strings.TrimSpace(opts.Addr)
@@ -66,7 +73,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	s.routes(mux)
 
-	srv := &http.Server{Addr: s.addr, Handler: s.guard(mux)}
+	srv := newHTTPServer(s.addr, s.guard(mux))
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -77,6 +84,17 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
+	}
 }
 
 func (s *Server) routes(mux *http.ServeMux) {

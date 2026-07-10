@@ -128,9 +128,13 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = ownerUserID
 	}
-	workspaceRoot := h.claudeWorkspaceRootForUser(ownerUserID, agentName, ag)
+	workspaceRoot := h.claudeWorkspaceRootForUser(routeUserID, agentName, ag)
+	if !h.workspaceAllowedForAgentContext(ctx, agentName, workspaceRoot) {
+		return "", fmt.Errorf("当前工作空间不在允许范围，请发送 /cc ls 重新选择")
+	}
 	bindingKey := claudeBindingKey(routeUserID, agentName)
 	conversationID := buildClaudeConversationID(routeUserID, agentName, workspaceRoot)
+	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	claudeAg, ok := ag.(agent.ClaudeSessionAgent)
 	if !ok {
 		h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)

@@ -26,7 +26,11 @@ func (h *Handler) renderClaudeStatus(route claudeSessionRoute) string {
 }
 
 func (h *Handler) renderClaudeWorkspaceList(bindingKey string) string {
-	views := h.claudeSwitchTargets(bindingKey)
+	return h.renderClaudeWorkspaceListForAccess(bindingKey, "", false)
+}
+
+func (h *Handler) renderClaudeWorkspaceListForAccess(bindingKey string, actorUserID string, admin bool) string {
+	views := h.claudeSwitchTargetsForAccess(bindingKey, actorUserID, admin)
 	if len(views) == 0 {
 		return "当前还没有可切换的 Claude 会话。"
 	}

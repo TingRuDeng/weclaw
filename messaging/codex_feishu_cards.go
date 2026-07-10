@@ -69,7 +69,7 @@ func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg plat
 	if workspaceRoot, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
 		return h.sendFeishuCodexSessionChoices(ctx, msg.UserID, reply, bindingKey, workspaceRoot, fields, metadata)
 	}
-	return h.sendFeishuCodexWorkspaceChoices(ctx, msg.UserID, reply, bindingKey, metadata)
+	return h.sendFeishuCodexWorkspaceChoices(ctx, msg.UserID, reply, bindingKey, h.isAdminMessage(msg), metadata)
 }
 
 func isCodexNavigationErrorReply(reply string) bool {
@@ -101,8 +101,8 @@ func isFeishuCodexNavigationCommand(fields []string) bool {
 	}
 }
 
-func (h *Handler) sendFeishuCodexWorkspaceChoices(ctx context.Context, userID string, reply platform.Replier, bindingKey string, metadata map[string]string) bool {
-	groups := h.codexWorkspaceGroups(bindingKey)
+func (h *Handler) sendFeishuCodexWorkspaceChoices(ctx context.Context, userID string, reply platform.Replier, bindingKey string, admin bool, metadata map[string]string) bool {
+	groups := h.codexWorkspaceGroupsForAccess(bindingKey, userID, admin)
 	choices := make([]platform.Choice, 0, len(groups))
 	for index, group := range groups {
 		if strings.TrimSpace(group.Name) == "" {

@@ -52,7 +52,11 @@ func (h *Handler) handlePendingCodexConfirmation(ctx context.Context, platformNa
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
 		return true
 	}
-	message, ok := h.takePendingCodexConfirmation(key)
+	message, ok, denied := h.takePendingCodexConfirmation(key, actorUserID)
+	if denied {
+		sendPlatformText(ctx, reply, actorUserID, "只有消息暂存人可以确认执行。")
+		return true
+	}
 	if !ok {
 		return false
 	}
@@ -70,11 +74,15 @@ func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
 		return
 	}
-	if text, handled := h.steerPendingGuideToExternalCodex(ctx, key, name); handled {
+	if text, handled := h.steerPendingGuideToExternalCodex(ctx, key, name, actorUserID); handled {
 		sendPlatformText(ctx, reply, actorUserID, text)
 		return
 	}
-	message, task, ok := h.detachPendingGuide(key)
+	message, task, ok, denied := h.detachPendingGuide(key, actorUserID)
+	if denied {
+		sendPlatformText(ctx, reply, actorUserID, "只有任务发起人可以发送引导消息。")
+		return
+	}
 	if !ok {
 		sendPlatformText(ctx, reply, actorUserID, "当前没有可发送的引导对话。")
 		return
@@ -90,7 +98,15 @@ func (h *Handler) handleCancelPendingGuide(ctx context.Context, actorUserID stri
 	if err != nil {
 		return err.Error()
 	}
-	if !h.clearPendingGuide(key) && !h.clearPendingCodexConfirmation(key) {
+	cleared, guideDenied := h.clearPendingGuide(key, actorUserID)
+	if guideDenied {
+		return "只有任务发起人可以撤回暂存消息。"
+	}
+	confirmCleared, confirmDenied := h.clearPendingCodexConfirmation(key, actorUserID)
+	if confirmDenied {
+		return "只有消息暂存人可以撤回该消息。"
+	}
+	if !cleared && !confirmCleared {
 		return "当前没有可撤回的消息。"
 	}
 	return "已撤回该消息。"
@@ -101,16 +117,20 @@ func (h *Handler) handleStopActiveTask(ctx context.Context, actorUserID string, 
 	if err != nil {
 		return err.Error()
 	}
-	if reply, handled := h.interruptExternalCodexTask(ctx, key, ag); handled {
+	if reply, handled := h.interruptExternalCodexTask(ctx, key, ag, actorUserID); handled {
 		return reply
 	}
-	if !h.cancelActiveTask(key) {
+	cancelled, denied := h.cancelActiveTask(key, actorUserID)
+	if denied {
+		return "只有任务发起人可以停止当前任务。"
+	}
+	if !cancelled {
 		return "当前没有可停止的任务。"
 	}
 	return "已停止当前任务。"
 }
 
-func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key string, agentName string) (string, bool) {
+func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key string, agentName string, actor string) (string, bool) {
 	ag, err := h.getAgent(ctx, agentName)
 	if err != nil {
 		return fmt.Sprintf("Codex Agent 不可用: %v", err), true
@@ -119,7 +139,10 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 	if !ok {
 		return "", false
 	}
-	message, threadID, turnID, task, ok := h.takeExternalCodexGuide(key)
+	message, threadID, turnID, task, ok, denied := h.takeExternalCodexGuide(key, actor)
+	if denied {
+		return "只有任务发起人可以发送引导消息。", true
+	}
 	if !ok {
 		return "", false
 	}
@@ -131,19 +154,22 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 	return "已发送到当前 Codex App 任务。", true
 }
 
-func (h *Handler) interruptExternalCodexTask(ctx context.Context, key string, ag agent.Agent) (string, bool) {
+func (h *Handler) interruptExternalCodexTask(ctx context.Context, key string, ag agent.Agent, actor string) (string, bool) {
 	runtimeAg, ok := ag.(agent.CodexThreadRuntimeAgent)
 	if !ok {
 		return "", false
 	}
-	threadID, turnID, ok := h.externalCodexTurnForTask(key)
+	threadID, turnID, ok, denied := h.externalCodexTurnForTask(key, actor)
+	if denied {
+		return "只有任务发起人可以停止当前任务。", true
+	}
 	if !ok {
 		return "", false
 	}
 	if err := runtimeAg.InterruptCodexThread(ctx, key, threadID, turnID); err != nil {
 		return fmt.Sprintf("停止当前 Codex App 任务失败: %v", err), true
 	}
-	h.cancelActiveTask(key)
+	h.cancelActiveTask(key, actor)
 	return "已停止当前任务。", true
 }
 
@@ -205,20 +231,26 @@ func formatTaskElapsed(d time.Duration) string {
 	return fmt.Sprintf("%d分%d秒", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-func (h *Handler) cancelActiveTask(key string) bool {
+func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
 	h.activeTasksMu.Lock()
 	task := h.activeTasks[key]
-	h.activeTasksMu.Unlock()
 	if task == nil {
-		return false
+		h.activeTasksMu.Unlock()
+		return false, false
 	}
 	task.mu.Lock()
+	if task.owner != strings.TrimSpace(actor) {
+		task.mu.Unlock()
+		h.activeTasksMu.Unlock()
+		return false, true
+	}
 	task.pendingMessage = ""
 	task.detached = true
 	cancel := task.cancel
 	task.mu.Unlock()
+	h.activeTasksMu.Unlock()
 	cancel()
-	return true
+	return true, false
 }
 
 func (h *Handler) codexGuideTarget(ctx context.Context, userID string) (string, agent.Agent, string, error) {

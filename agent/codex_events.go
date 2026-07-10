@@ -52,85 +52,65 @@ func (a *ACPAgent) handleCodexItemDelta(params json.RawMessage) {
 	a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{ItemID: p.ItemID, Delta: p.Delta})
 }
 
-// handleCodexItemStarted handles "item/started" events.
-// When type=agentMessage, extracts text from content array.
-func (a *ACPAgent) handleCodexItemStarted(params json.RawMessage) {
-	var p struct {
-		ThreadID string `json:"threadId"`
-		Item     struct {
-			ID      string `json:"id"`
-			Type    string `json:"type"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"item"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		return
-	}
-
-	if p.Item.Type != "agentMessage" {
-		return
-	}
-
-	for _, c := range p.Item.Content {
-		if c.Type == "text" && c.Text != "" {
-			a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{ItemID: p.Item.ID, Text: c.Text})
-		}
-	}
-}
-
-// handleCodexItemCompleted 将 completed 文本作为兜底最终文本来源。
-func (a *ACPAgent) handleCodexItemCompleted(params json.RawMessage) {
-	var p struct {
-		ThreadID string `json:"threadId"`
-		Item     struct {
-			ID      string `json:"id"`
-			Type    string `json:"type"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"item"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		return
-	}
-	if p.Item.Type != "agentMessage" {
-		return
-	}
-	for _, c := range p.Item.Content {
-		if c.Type == "text" && c.Text != "" {
-			a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "item_completed", ItemID: p.Item.ID, Text: c.Text})
-		}
-	}
-}
-
 // handleCodexTurnEvent 处理 turn 生命周期事件，兼容 Codex app-server 的成功与失败形态。
 func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
 	var p struct {
-		ThreadID string `json:"threadId"`
-		Status   string `json:"status"`
-		Error    struct {
-			Message string `json:"message"`
-			Code    string `json:"code"`
-		} `json:"error"`
-		Message string `json:"message"`
-		Code    string `json:"code"`
+		ThreadID string          `json:"threadId"`
+		Status   string          `json:"status"`
+		Error    json.RawMessage `json:"error"`
+		Message  string          `json:"message"`
+		Code     string          `json:"code"`
+		Turn     struct {
+			ID     string          `json:"id"`
+			Status string          `json:"status"`
+			Error  json.RawMessage `json:"error"`
+		} `json:"turn"`
 	}
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
 	}
 
+	turnID := strings.TrimSpace(p.Turn.ID)
+	if method == "turn/started" {
+		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "started", TurnID: turnID})
+		return
+	}
 	if method == "turn/completed" {
-		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "completed"})
+		a.dispatchToTurnCh(p.ThreadID, codexCompletedEvent(turnID, firstNonEmpty(p.Turn.Status, p.Status), p.Turn.Error))
 		return
 	}
 	if method == "turn/failed" {
-		text := joinCodexErrorParts("Codex turn 执行失败", firstNonEmpty(p.Error.Message, p.Message), firstNonEmpty(p.Error.Code, p.Code, p.Status))
-		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "error", Text: text})
+		text := firstNonEmpty(formatCodexTurnError(p.Error), p.Message, p.Code, p.Status)
+		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "error", TurnID: turnID, Text: joinCodexErrorParts("Codex turn 执行失败", text, "")})
 	}
+}
+
+func codexCompletedEvent(turnID string, status string, rawError json.RawMessage) *codexTurnEvent {
+	status = strings.TrimSpace(status)
+	switch status {
+	case "completed":
+		return &codexTurnEvent{Kind: "completed", TurnID: turnID}
+	case "interrupted":
+		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: "Codex turn 已中断"}
+	case "failed":
+		text := firstNonEmpty(formatCodexTurnError(rawError), "未知错误")
+		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: joinCodexErrorParts("Codex turn 执行失败", text, "")}
+	default:
+		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: joinCodexErrorParts("Codex turn 终态无效", status, "")}
+	}
+}
+
+func formatCodexTurnError(rawError json.RawMessage) string {
+	if len(rawError) == 0 || string(rawError) == "null" {
+		return ""
+	}
+	wrapper, err := json.Marshal(struct {
+		Error json.RawMessage `json:"error"`
+	}{Error: rawError})
+	if err != nil {
+		return ""
+	}
+	return formatCodexError(wrapper)
 }
 
 func (a *ACPAgent) handleCodexError(params json.RawMessage) {
@@ -255,32 +235,4 @@ func joinCodexErrorParts(title string, message string, code string) string {
 		parts = append(parts, "("+code+")")
 	}
 	return strings.Join(parts, "：")
-}
-
-// dispatchToTurnCh sends an event to the turn channel for a thread.
-func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
-	a.notifyMu.Lock()
-	ch, ok := a.turnCh[threadID]
-	if !ok {
-		// 只有一个活跃 turn 时才 fallback，避免多会话事件串到错误用户。
-		if len(a.turnCh) == 1 {
-			for _, c := range a.turnCh {
-				ch = c
-				ok = true
-				break
-			}
-		} else if len(a.turnCh) > 1 {
-			log.Printf("[acp] dropping turn event without routable thread (thread=%q, activeTurns=%d, kind=%s)", threadID, len(a.turnCh), evt.Kind)
-		}
-	}
-	a.notifyMu.Unlock()
-
-	if ok {
-		select {
-		case ch <- evt:
-			return true
-		default:
-		}
-	}
-	return false
 }

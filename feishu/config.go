@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	weclawconfig "github.com/fastclaw-ai/weclaw/config"
 )
 
 const (
@@ -34,11 +36,11 @@ type CredentialRecord struct {
 
 // CredentialsPath 返回飞书凭证文件路径。
 func CredentialsPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := weclawconfig.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".weclaw", "platforms", "feishu.json"), nil
+	return filepath.Join(home, "platforms", "feishu.json"), nil
 }
 
 // CredentialsPathForBot 返回指定飞书机器人的凭证文件路径。
@@ -47,11 +49,11 @@ func CredentialsPathForBot(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	home, err := os.UserHomeDir()
+	home, err := weclawconfig.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".weclaw", "platforms", "feishu", cleanName+".json"), nil
+	return filepath.Join(home, "platforms", "feishu", cleanName+".json"), nil
 }
 
 // SaveCredentials 以 0600 权限保存飞书凭证。

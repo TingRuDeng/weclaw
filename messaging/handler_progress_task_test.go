@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,6 +162,27 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] 最终结果" {
 		t.Fatalf("texts=%#v, want final reply as separate message", reply.Texts)
+	}
+}
+
+func TestFinalReplyOutsideStreamFailureDoesNotExposeStatusSentinel(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeProgressAgent{fakeAgent: fakeAgent{err: errors.New("boom")}}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	h.SetProgressConfig(cfg)
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, FinalReplyOutsideStream: true,
+	})
+
+	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "ou_user", "ou_user", reply, "mock", "hello", "client-1")
+
+	if reply.Stream.Failed == progressStatusOnlyComplete || strings.Contains(reply.Stream.Failed, "weclaw_status_only_complete") {
+		t.Fatalf("failed card exposed internal sentinel: %q", reply.Stream.Failed)
+	}
+	if !strings.Contains(reply.Stream.Failed, "boom") {
+		t.Fatalf("failed card=%q, want real failure", reply.Stream.Failed)
 	}
 }
 

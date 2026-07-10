@@ -1,10 +1,7 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -76,34 +73,5 @@ func validateConfig(cfg *config.Config) error {
 
 // atomicSaveConfig 通过临时文件 + rename 原子写回 config.json(0600)，失败不破坏原文件。
 func atomicSaveConfig(cfg *config.Config) error {
-	path, err := config.ConfigPath()
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	tmp, err := os.CreateTemp(dir, ".config-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp config: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // rename 成功后该文件已不存在，Remove 无害
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return config.Save(cfg)
 }

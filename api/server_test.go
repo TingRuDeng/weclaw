@@ -11,6 +11,13 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
+func TestAPIHTTPServerHasSlowClientTimeouts(t *testing.T) {
+	srv := newHTTPServer("127.0.0.1:0", http.NewServeMux())
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Fatalf("timeouts=%+v, want all server timeouts configured", srv)
+	}
+}
+
 func TestHandleSendRequiresConfiguredToken(t *testing.T) {
 	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"))
 

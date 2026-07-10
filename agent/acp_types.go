@@ -84,11 +84,14 @@ type sessionUpdate struct {
 }
 
 type permissionRequestParams struct {
+	SessionID               string              `json:"sessionId,omitempty"`
 	ThreadID                string              `json:"threadId,omitempty"`
 	TurnID                  string              `json:"turnId,omitempty"`
 	ToolCall                json.RawMessage     `json:"toolCall"`
 	Command                 permissionCommand   `json:"command,omitempty"`
 	Cwd                     string              `json:"cwd,omitempty"`
+	Reason                  string              `json:"reason,omitempty"`
+	Permissions             json.RawMessage     `json:"permissions,omitempty"`
 	Options                 []permissionOption  `json:"options"`
 	AvailableDecisions      permissionDecisions `json:"availableDecisions,omitempty"`
 	AvailableDecisionsSnake permissionDecisions `json:"available_decisions,omitempty"`
@@ -107,8 +110,9 @@ type permissionOption struct {
 type permissionResponseFormat string
 
 const (
-	permissionResponseOutcome  permissionResponseFormat = "outcome"
-	permissionResponseDecision permissionResponseFormat = "decision"
+	permissionResponseOutcome     permissionResponseFormat = "outcome"
+	permissionResponseDecision    permissionResponseFormat = "decision"
+	permissionResponsePermissions permissionResponseFormat = "permissions"
 )
 
 const (
@@ -155,6 +159,7 @@ type codexUserInput struct {
 
 type codexTurnEvent struct {
 	Kind     string
+	TurnID   string
 	ItemID   string
 	Delta    string
 	Text     string
@@ -170,7 +175,8 @@ type codexProgressEvent struct {
 }
 
 type codexApprovalRequest struct {
-	ID             json.RawMessage
-	ResponseFormat permissionResponseFormat
-	Request        ApprovalRequest
+	ID                   json.RawMessage
+	ResponseFormat       permissionResponseFormat
+	RequestedPermissions json.RawMessage
+	Request              ApprovalRequest
 }

@@ -6,19 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
 )
 
 func weclawDir() string {
-	if override := strings.TrimSpace(os.Getenv("WECLAW_HOME")); override != "" {
-		return override
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".weclaw")
+	dir, _ := config.DataDir()
+	return dir
 }
 
 func pidFile() string {

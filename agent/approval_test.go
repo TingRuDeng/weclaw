@@ -52,6 +52,31 @@ func TestHandlePermissionRequestDispatchesApprovalToTurn(t *testing.T) {
 	}
 }
 
+func TestHandleStandardACPPermissionRequestDispatchesBySessionID(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "claude-agent-acp"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["session-1"] = turnCh
+	a.turnCh["session-2"] = make(chan *codexTurnEvent, 1)
+	a.notifyMu.Unlock()
+
+	raw := `{"jsonrpc":"2.0","id":8,"method":"session/request_permission","params":{"sessionId":"session-1","toolCall":{"title":"Remove file"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"reject-once","name":"Reject once","kind":"reject_once"}]}}`
+	a.handlePermissionRequest(raw)
+
+	select {
+	case evt := <-turnCh:
+		if evt.Approval == nil {
+			t.Fatal("approval event missing")
+		}
+		options := evt.Approval.Request.Options
+		if len(options) != 2 || options[0].Kind != "allow" || options[1].Kind != "deny" {
+			t.Fatalf("approval options=%#v, want normalized allow/deny kinds", options)
+		}
+	default:
+		t.Fatal("standard ACP permission request was not dispatched by sessionId")
+	}
+}
+
 func TestHandleCodexCommandApprovalUsesAvailableDecisions(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	turnCh := make(chan *codexTurnEvent, 1)

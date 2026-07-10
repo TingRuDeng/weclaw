@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -147,6 +148,44 @@ func TestHandleCodexGuardianWarningEmitsProgress(t *testing.T) {
 	}
 }
 
+func TestHandleCodexTurnCompletedUsesNestedCompletedStatus(t *testing.T) {
+	evt := handleCodexTurnEventForTest(t, `{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}`)
+	if evt.Kind != "completed" || evt.TurnID != "turn-1" {
+		t.Fatalf("event=%#v, want completed turn-1", evt)
+	}
+}
+
+func TestHandleCodexTurnCompletedReportsNestedInterruptedStatus(t *testing.T) {
+	evt := handleCodexTurnEventForTest(t, `{"threadId":"thread-1","turn":{"id":"turn-1","status":"interrupted","items":[]}}`)
+	if evt.Kind != "error" || !strings.Contains(evt.Text, "已中断") {
+		t.Fatalf("event=%#v, want interrupted error", evt)
+	}
+}
+
+func TestHandleCodexTurnCompletedReportsNestedFailure(t *testing.T) {
+	evt := handleCodexTurnEventForTest(t, `{"threadId":"thread-1","turn":{"id":"turn-1","status":"failed","error":{"message":"sandbox denied","codexErrorInfo":"SandboxError"}}}`)
+	if evt.Kind != "error" || !containsAll(evt.Text, "sandbox denied", "SandboxError") {
+		t.Fatalf("event=%#v, want nested failure detail", evt)
+	}
+}
+
+func handleCodexTurnEventForTest(t *testing.T, params string) *codexTurnEvent {
+	t.Helper()
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+	a.handleCodexTurnEvent("turn/completed", json.RawMessage(params))
+	select {
+	case evt := <-turnCh:
+		return evt
+	default:
+		t.Fatal("turn event was not dispatched")
+		return nil
+	}
+}
+
 func TestHandleCodexPlanUpdatedEmitsCurrentStepProgress(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
@@ -171,6 +210,86 @@ func TestHandleCodexPlanUpdatedEmitsCurrentStepProgress(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected plan progress event")
+	}
+}
+
+func TestHandleCodexPlanUpdatedAcceptsCamelCaseStatus(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexPlanUpdated(json.RawMessage(`{"threadId":"thread-1","plan":[{"step":"对齐 Codex v2 协议","status":"inProgress"}]}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Text != "进展：对齐 Codex v2 协议" {
+			t.Fatalf("event=%#v", evt)
+		}
+	default:
+		t.Fatal("camelCase plan status did not emit progress")
+	}
+}
+
+func TestHandleCodexItemStartedEmitsCommandProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexItemStarted(json.RawMessage(`{"threadId":"thread-1","item":{"id":"cmd-1","type":"commandExecution","command":["go","test","./agent"],"cwd":"/workspace","status":"inProgress"}}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Progress == nil || evt.Progress.Action != "运行 go test ./agent" {
+			t.Fatalf("event=%#v, want command progress", evt)
+		}
+	default:
+		t.Fatal("commandExecution item did not emit progress")
+	}
+}
+
+func TestHandleCodexItemStartedEmitsFileProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexItemStarted(json.RawMessage(`{"threadId":"thread-1","item":{"id":"file-1","type":"fileChange","changes":[{"path":"agent/new.go","kind":{"type":"add"},"diff":"+package agent"}],"status":"inProgress"}}`))
+
+	select {
+	case evt := <-turnCh:
+		if evt.Progress == nil || evt.Progress.Action != "新增 agent/new.go" || evt.Progress.FilePath != "agent/new.go" {
+			t.Fatalf("event=%#v, want file progress", evt)
+		}
+	default:
+		t.Fatal("fileChange item did not emit progress")
+	}
+}
+
+func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+	raw := `{"jsonrpc":"2.0","method":"item/fileChange/patchUpdated","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"file-1","changes":[{"path":"agent/old.go","kind":{"type":"delete"},"diff":"-package agent"}]}}`
+	a.mu.Lock()
+	a.scanner = bufio.NewScanner(strings.NewReader(raw + "\n"))
+	a.mu.Unlock()
+
+	a.readLoop()
+
+	select {
+	case evt := <-turnCh:
+		if evt.Progress == nil || evt.Progress.Action != "删除 agent/old.go" {
+			t.Fatalf("event=%#v, want patchUpdated progress", evt)
+		}
+	default:
+		t.Fatal("patchUpdated did not emit progress")
 	}
 }
 

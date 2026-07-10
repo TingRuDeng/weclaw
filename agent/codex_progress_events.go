@@ -24,7 +24,7 @@ type codexProgressParams struct {
 	Output   string            `json:"output"`
 	Text     string            `json:"text"`
 	Diff     string            `json:"diff"`
-	Changes  string            `json:"changes"`
+	Changes  json.RawMessage   `json:"changes"`
 	Command  permissionCommand `json:"command"`
 	Cwd      string            `json:"cwd"`
 	Path     string            `json:"path"`
@@ -139,7 +139,7 @@ func currentCodexPlanStep(plan []codexPlanStep) string {
 // firstPlanStepByStatus 返回指定状态下最靠前的非空步骤。
 func firstPlanStepByStatus(plan []codexPlanStep, status string) string {
 	for _, item := range plan {
-		if item.Status == status && strings.TrimSpace(item.Step) != "" {
+		if codexPlanStatusMatches(item.Status, status) && strings.TrimSpace(item.Step) != "" {
 			return strings.TrimSpace(item.Step)
 		}
 	}
@@ -149,11 +149,19 @@ func firstPlanStepByStatus(plan []codexPlanStep, status string) string {
 // lastPlanStepByStatus 返回指定状态下最靠后的非空步骤。
 func lastPlanStepByStatus(plan []codexPlanStep, status string) string {
 	for i := len(plan) - 1; i >= 0; i-- {
-		if plan[i].Status == status && strings.TrimSpace(plan[i].Step) != "" {
+		if codexPlanStatusMatches(plan[i].Status, status) && strings.TrimSpace(plan[i].Step) != "" {
 			return strings.TrimSpace(plan[i].Step)
 		}
 	}
 	return ""
+}
+
+func codexPlanStatusMatches(actual string, expected string) bool {
+	normalize := func(value string) string {
+		value = strings.ToLower(strings.TrimSpace(value))
+		return strings.NewReplacer("_", "", "-", "").Replace(value)
+	}
+	return normalize(actual) == normalize(expected)
 }
 
 func (a *ACPAgent) dispatchCodexProgress(params json.RawMessage, text string) {
@@ -163,20 +171,28 @@ func (a *ACPAgent) dispatchCodexProgress(params json.RawMessage, text string) {
 
 func (a *ACPAgent) dispatchCodexCommandLine(params json.RawMessage) {
 	p := decodeCodexProgressParams(params)
-	line := codexCommandProgressLine(p)
-	if line == "" {
-		return
-	}
-	a.dispatchProgressEventToThread(p.ThreadID, line, codexCommandProgressEvent(p, line))
+	a.dispatchCodexCommandProgress(p)
 }
 
 func (a *ACPAgent) dispatchCodexFileLine(params json.RawMessage) {
 	p := decodeCodexProgressParams(params)
+	a.dispatchCodexFileProgress(p)
+}
+
+func (a *ACPAgent) dispatchCodexFileProgress(p codexProgressParams) {
 	line := codexFileProgressLine(p)
 	if line == "" {
 		return
 	}
 	a.dispatchProgressEventToThread(p.ThreadID, line, codexFileProgressEvent(p, line))
+}
+
+func (a *ACPAgent) dispatchCodexCommandProgress(p codexProgressParams) {
+	line := codexCommandProgressLine(p)
+	if line == "" {
+		return
+	}
+	a.dispatchProgressEventToThread(p.ThreadID, line, codexCommandProgressEvent(p, line))
 }
 
 func (a *ACPAgent) dispatchProgressToThread(threadID string, text string) {
@@ -231,52 +247,6 @@ func codexCommandProgressEvent(p codexProgressParams, line string) *codexProgres
 	}
 	event.Detail = line
 	return event
-}
-
-// codexFileProgressLine 优先显示文件名，避免把 patch/diff 原文塞进卡片。
-func codexFileProgressLine(p codexProgressParams) string {
-	if path := firstCodexFilePath(p); path != "" {
-		return "修改 " + path
-	}
-	if path := filePathFromPatchText(firstNonEmpty(p.Changes, p.Diff, p.Message, p.Text, p.Output, p.Delta)); path != "" {
-		return "修改 " + path
-	}
-	return latestCodexRealtimeLine(p)
-}
-
-func codexFileProgressEvent(p codexProgressParams, line string) *codexProgressEvent {
-	event := &codexProgressEvent{Kind: "file", Action: line}
-	if path := firstCodexFilePath(p); path != "" {
-		event.FilePath = path
-		return event
-	}
-	event.FilePath = filePathFromPatchText(firstNonEmpty(p.Changes, p.Diff, p.Message, p.Text, p.Output, p.Delta))
-	return event
-}
-
-func firstCodexFilePath(p codexProgressParams) string {
-	for _, path := range append([]string{p.FilePath, p.Path}, append(p.Files, p.Paths...)...) {
-		if trimmed := strings.TrimSpace(path); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
-func filePathFromPatchText(text string) string {
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if path := strings.TrimSpace(strings.TrimPrefix(line, "*** Update File:")); path != line {
-			return path
-		}
-		if path := strings.TrimSpace(strings.TrimPrefix(line, "*** Add File:")); path != line {
-			return path
-		}
-		if path := strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File:")); path != line {
-			return path
-		}
-	}
-	return ""
 }
 
 func lastNonEmptyCodexLine(text string) string {

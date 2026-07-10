@@ -15,11 +15,7 @@ var supportedAttachmentExts = []string{
 }
 
 func defaultAttachmentWorkspace() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Clean(os.TempDir())
-	}
-	return filepath.Join(home, ".weclaw", "workspace")
+	return filepath.Join(defaultDataDir(), "workspace")
 }
 
 func extractLocalAttachmentPaths(text string) []string {

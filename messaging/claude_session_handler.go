@@ -26,6 +26,10 @@ func isClaudeSessionCommandToken(token string) bool {
 }
 
 func (h *Handler) handleClaudeSessionCommand(ctx context.Context, userID string, trimmed string) string {
+	return h.handleClaudeSessionCommandForRoute(ctx, userID, userID, h.isAdminUser(userID), trimmed)
+}
+
+func (h *Handler) handleClaudeSessionCommandForRoute(ctx context.Context, actorUserID string, routeUserID string, admin bool, trimmed string) string {
 	fields := strings.Fields(trimmed)
 	if len(fields) < 2 || fields[1] == "help" {
 		return buildClaudeSessionHelpText()
@@ -34,16 +38,21 @@ func (h *Handler) handleClaudeSessionCommand(ctx context.Context, userID string,
 	if err != nil {
 		return err.Error()
 	}
-	workspaceRoot := h.claudeWorkspaceRootForUser(userID, agentName, ag)
-	bindingKey := claudeBindingKey(userID, agentName)
+	if strings.TrimSpace(routeUserID) == "" {
+		routeUserID = actorUserID
+	}
+	workspaceRoot := h.claudeWorkspaceRootForUser(routeUserID, agentName, ag)
+	bindingKey := claudeBindingKey(routeUserID, agentName)
 	h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)
 	route := claudeSessionRoute{
 		Context:       ctx,
-		UserID:        userID,
+		ActorUserID:   actorUserID,
+		UserID:        routeUserID,
 		AgentName:     agentName,
 		Agent:         ag,
 		WorkspaceRoot: workspaceRoot,
 		BindingKey:    bindingKey,
+		Admin:         admin,
 	}
 	h.syncClaudeSessionFromAgent(route)
 	return h.routeClaudeSessionCommand(fields, route)
@@ -51,11 +60,13 @@ func (h *Handler) handleClaudeSessionCommand(ctx context.Context, userID string,
 
 type claudeSessionRoute struct {
 	Context       context.Context
+	ActorUserID   string
 	UserID        string
 	AgentName     string
 	Agent         agent.Agent
 	WorkspaceRoot string
 	BindingKey    string
+	Admin         bool
 }
 
 func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSessionRoute) string {
@@ -63,7 +74,7 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 	case "whoami":
 		return h.renderClaudeWhoami(route.BindingKey, route.WorkspaceRoot)
 	case "ls":
-		return h.renderClaudeWorkspaceList(route.BindingKey)
+		return h.renderClaudeWorkspaceListForAccess(route.BindingKey, route.ActorUserID, route.Admin)
 	case "pwd":
 		return wechatCommandText("workspace: " + route.WorkspaceRoot)
 	case "status":

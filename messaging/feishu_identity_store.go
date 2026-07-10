@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -26,11 +25,7 @@ type feishuIdentityStore struct {
 
 // DefaultFeishuIdentityFile 返回飞书身份自动发现状态文件路径。
 func DefaultFeishuIdentityFile() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".weclaw", "feishu-identities.json")
+	return filepath.Join(defaultDataDir(), "feishu-identities.json")
 }
 
 func newFeishuIdentityStore() *feishuIdentityStore {

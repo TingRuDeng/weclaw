@@ -17,6 +17,7 @@ type codexSessionCommandRequest struct {
 	Platform    platform.PlatformName
 	AccountID   string
 	Reply       platform.Replier
+	Admin       bool
 }
 
 func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, trimmed string) string {
@@ -24,6 +25,7 @@ func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, 
 		ActorUserID: userID,
 		RouteUserID: userID,
 		Trimmed:     trimmed,
+		Admin:       h.isAdminUser(userID),
 	})
 }
 
@@ -38,6 +40,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		actorUserID = routeUserID
 	}
 	trimmed := req.Trimmed
+	admin := req.Admin || h.isAdminUser(actorUserID)
 	fields := strings.Fields(trimmed)
 	if len(fields) < 2 || fields[1] == "help" {
 		return buildCodexSessionHelpText()
@@ -53,6 +56,9 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	bindingKey := codexBindingKey(routeUserID, agentName)
 	ownerBindingKey := codexBindingKey(actorUserID, agentName)
+	if reply := h.rejectDisallowedCodexWorkspace(bindingKey, agentName, workspaceRoot, fields, admin); reply != "" {
+		return reply
+	}
 	h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
 	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
 
@@ -69,6 +75,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 			Platform:        req.Platform,
 			AccountID:       req.AccountID,
 			Reply:           req.Reply,
+			Admin:           admin,
 		})
 	}
 
@@ -76,7 +83,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 	case "whoami":
 		return h.renderCodexWhoami(bindingKey, workspaceRoot)
 	case "ls":
-		return h.renderCodexList(bindingKey)
+		return h.renderCodexListForAccess(bindingKey, actorUserID, admin)
 	case "cd":
 		if len(fields) != 3 {
 			return "用法: /cx cd <编号|工作空间名|..>"
@@ -93,6 +100,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 			Platform:        req.Platform,
 			AccountID:       req.AccountID,
 			Reply:           req.Reply,
+			Admin:           admin,
 		})
 	case "pwd":
 		return h.renderCodexPwd(bindingKey)
@@ -150,6 +158,36 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 	}
 }
 
+func (h *Handler) rejectDisallowedCodexWorkspace(bindingKey string, agentName string, workspaceRoot string, fields []string, admin bool) string {
+	if admin || len(fields) < 2 {
+		return ""
+	}
+	command := fields[1]
+	if isCodexWorkspaceIndependentCommand(command) {
+		return ""
+	}
+	if isCodexShortSelectionToken(command) {
+		if browsing, ok := h.codexBrowseWorkspace(bindingKey); ok && !h.isWorkspaceAllowed(browsing) {
+			h.clearCodexBrowseWorkspace(bindingKey)
+			return "当前浏览工作空间不在允许范围，请发送 /cx ls 重新选择。"
+		}
+		return ""
+	}
+	if h.isWorkspaceAllowed(workspaceRoot) || h.isConfiguredAgentWorkspace(agentName, workspaceRoot) {
+		return ""
+	}
+	return "当前工作空间不在允许范围，请发送 /cx ls 重新选择。"
+}
+
+func isCodexWorkspaceIndependentCommand(command string) bool {
+	switch command {
+	case "ls", "cd", "clean", "quota", "detach", "model":
+		return true
+	default:
+		return false
+	}
+}
+
 type codexShortSelectionRequest struct {
 	UserID          string
 	ActorUserID     string
@@ -162,6 +200,7 @@ type codexShortSelectionRequest struct {
 	Platform        platform.PlatformName
 	AccountID       string
 	Reply           platform.Replier
+	Admin           bool
 }
 
 func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortSelectionRequest) string {
@@ -178,6 +217,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 			Platform:        req.Platform,
 			AccountID:       req.AccountID,
 			Reply:           req.Reply,
+			Admin:           req.Admin,
 		})
 	}
 	if _, browsing := h.codexBrowseWorkspace(req.BindingKey); browsing {
@@ -200,6 +240,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		Platform:        req.Platform,
 		AccountID:       req.AccountID,
 		Reply:           req.Reply,
+		Admin:           req.Admin,
 	})
 }
 

@@ -19,7 +19,7 @@ func TestCodexStatusShowsWorkspaceThreadAndLocalEntryState(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
@@ -54,7 +54,7 @@ func TestCodexStatusShowsSessionName(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
@@ -80,7 +80,7 @@ func TestCodexStatusRecordsSuccessfulLocalEntries(t *testing.T) {
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
-	h.agentWorkDirs["codex"] = workspace
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.SetCodexCLIResumeOpener(func(_ context.Context, _ string, _ string, _ string) error {
 		return nil
 	})

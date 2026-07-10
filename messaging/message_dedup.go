@@ -25,6 +25,19 @@ func (h *Handler) cleanSeenMsgs(ttl time.Duration) {
 	})
 }
 
+// maybeCleanSeenMsgs 每个 TTL 窗口最多清理一次，避免为每条消息创建后台 goroutine。
+func (h *Handler) maybeCleanSeenMsgs(now time.Time) {
+	ttl := h.duplicateTTL()
+	last := h.lastDedupCleanup.Load()
+	if last > 0 && now.Sub(time.Unix(0, last)) < ttl {
+		return
+	}
+	if !h.lastDedupCleanup.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	h.cleanSeenMsgs(ttl)
+}
+
 func (h *Handler) duplicateTTL() time.Duration {
 	cfg := h.resolveProgressConfig("")
 	return durationSeconds(cfg.DuplicateTTLSeconds, 5*time.Minute)
@@ -42,7 +55,7 @@ func (h *Handler) isDuplicateTextMessage(userID string, contextToken string, tex
 		}
 		h.seenTextMsgs.Store(key, now)
 	}
-	go h.cleanSeenMsgs(h.duplicateTTL())
+	h.maybeCleanSeenMsgs(now)
 	return false
 }
 

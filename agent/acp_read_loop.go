@@ -72,7 +72,7 @@ func (a *ACPAgent) readLoop() {
 			a.handleCodexGuardianWarning(msg.Params)
 		case "item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction":
 			a.handleCodexCommandProgress(msg.Params)
-		case "item/fileChange/outputDelta", "turn/diff/updated":
+		case "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated":
 			a.handleCodexFileProgress(msg.Params)
 		case "codex/event/agent_message", "codex/event/task_complete",
 			"codex/event/item_completed", "codex/event/token_count",
@@ -82,7 +82,8 @@ func (a *ACPAgent) readLoop() {
 			// 这些是已知状态事件，当前桥接层不需要额外处理。
 		case "turn/approval/request",
 			"item/fileChange/requestApproval",
-			"item/commandExecution/requestApproval":
+			"item/commandExecution/requestApproval",
+			"item/permissions/requestApproval":
 			a.handlePermissionRequest(line)
 
 		default:

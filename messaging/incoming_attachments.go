@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"github.com/fastclaw-ai/weclaw/wechat"
 	"github.com/google/uuid"
 )
+
+const maxIncomingAttachmentBytes int64 = 32 * 1024 * 1024
 
 type savedIncomingFile struct {
 	name string
@@ -51,25 +54,28 @@ func (h *Handler) handleImageAttachment(ctx context.Context, userID string, repl
 }
 
 func (h *Handler) saveIncomingAttachment(ctx context.Context, file platform.Attachment) (savedIncomingFile, error) {
+	if file.Metadata["temporary"] == "true" && file.Path != "" {
+		defer os.Remove(file.Path)
+	}
 	data, err := h.readAttachmentData(ctx, file)
 	if err != nil {
 		return savedIncomingFile{}, err
 	}
 	fileName := safeIncomingFileName(file.FileName)
 	dir := h.incomingFileDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return savedIncomingFile{}, fmt.Errorf("创建保存目录失败：%w", err)
 	}
-	path := filepath.Join(dir, time.Now().Format("20060102-150405")+"-"+fileName)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return savedIncomingFile{}, fmt.Errorf("写入文件失败：%w", err)
+	path, err := writeIncomingAttachment(dir, fileName, data)
+	if err != nil {
+		return savedIncomingFile{}, err
 	}
 	return savedIncomingFile{name: fileName, path: path}, nil
 }
 
 func (h *Handler) readAttachmentData(ctx context.Context, attachment platform.Attachment) ([]byte, error) {
 	if attachment.Path != "" {
-		return os.ReadFile(attachment.Path)
+		return readLocalAttachment(attachment.Path)
 	}
 	encryptQueryParam := attachment.Metadata["encrypt_query_param"]
 	aesKey := attachment.Metadata["aes_key"]
@@ -80,7 +86,61 @@ func (h *Handler) readAttachmentData(ctx context.Context, attachment platform.At
 	if downloader == nil {
 		downloader = wechat.DownloadFileFromCDN
 	}
-	return downloader(ctx, encryptQueryParam, aesKey)
+	data, err := downloader(ctx, encryptQueryParam, aesKey)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxIncomingAttachmentBytes {
+		return nil, fmt.Errorf("文件超过 %d MiB 限制", maxIncomingAttachmentBytes/(1024*1024))
+	}
+	return data, nil
+}
+
+func readLocalAttachment(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("附件不是普通文件")
+	}
+	if info.Size() > maxIncomingAttachmentBytes {
+		return nil, fmt.Errorf("文件超过 %d MiB 限制", maxIncomingAttachmentBytes/(1024*1024))
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxIncomingAttachmentBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxIncomingAttachmentBytes {
+		return nil, fmt.Errorf("文件超过 %d MiB 限制", maxIncomingAttachmentBytes/(1024*1024))
+	}
+	return data, nil
+}
+
+func writeIncomingAttachment(dir string, fileName string, data []byte) (string, error) {
+	ext := filepath.Ext(fileName)
+	base := strings.TrimSuffix(fileName, ext)
+	pattern := time.Now().Format("20060102-150405") + "-" + base + "-*" + ext
+	file, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", fmt.Errorf("创建文件失败：%w", err)
+	}
+	path := file.Name()
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("写入文件失败：%w", err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("关闭文件失败：%w", err)
+	}
+	return path, nil
 }
 
 func (h *Handler) incomingFileDir() string {

@@ -425,3 +425,23 @@ func TestACPAgentWatchesAttachedCodexThread(t *testing.T) {
 	}
 	<-done
 }
+
+func TestACPAgentWatchReturnsCompletedStateAfterRegistration(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-finished","status":{"type":"idle"},"turns":[{"id":"turn-1","status":"completed","items":[{"id":"msg-1","type":"agentMessage","text":"任务已经完成"}]}]}}`), nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	reply, err := a.WatchCodexThread(ctx, "conversation-1", "thread-finished", nil)
+	if err != nil {
+		t.Fatalf("WatchCodexThread error: %v", err)
+	}
+	if reply != "任务已经完成" {
+		t.Fatalf("reply=%q", reply)
+	}
+}

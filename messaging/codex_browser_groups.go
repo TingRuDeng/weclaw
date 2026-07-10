@@ -26,6 +26,24 @@ func (h *Handler) codexWorkspaceGroups(bindingKey string) []codexWorkspaceGroup 
 	return sortedCodexWorkspaceGroups(byRoot)
 }
 
+func (h *Handler) codexWorkspaceGroupsForUser(bindingKey string, actorUserID string) []codexWorkspaceGroup {
+	return h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, h.isAdminUser(actorUserID))
+}
+
+func (h *Handler) codexWorkspaceGroupsForAccess(bindingKey string, actorUserID string, admin bool) []codexWorkspaceGroup {
+	groups := h.codexWorkspaceGroups(bindingKey)
+	if admin {
+		return groups
+	}
+	filtered := make([]codexWorkspaceGroup, 0, len(groups))
+	for _, group := range groups {
+		if h.isWorkspaceAllowed(group.Root) || h.isConfiguredWorkspace(group.Root) {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered
+}
+
 func (h *Handler) codexWorkspaceGroupsForRoots(bindingKey string, roots []string) []codexWorkspaceGroup {
 	byRoot := map[string]*codexWorkspaceGroup{}
 	order := make([]string, 0, len(roots))
@@ -98,8 +116,12 @@ func switchableCodexSessions(sessions []codexWorkspaceView) []codexWorkspaceView
 }
 
 func (h *Handler) findCodexWorkspaceGroup(bindingKey string, target string) (codexWorkspaceGroup, error) {
+	return h.findCodexWorkspaceGroupForAccess(bindingKey, "", false, target)
+}
+
+func (h *Handler) findCodexWorkspaceGroupForAccess(bindingKey string, actorUserID string, admin bool, target string) (codexWorkspaceGroup, error) {
 	target = strings.TrimSpace(target)
-	groups := h.codexWorkspaceGroups(bindingKey)
+	groups := h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
 	if index, ok := parseCodexListIndex(target); ok {
 		if index < 0 || index >= len(groups) {
 			return codexWorkspaceGroup{}, fmt.Errorf("工作空间编号不存在，请先发送 /cx ls 查看。")

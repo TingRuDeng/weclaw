@@ -130,11 +130,19 @@ type fakeVisibleCodexAgent struct {
 
 type fakeClaudeSessionAgent struct {
 	fakeAgent
-	sessionID       string
-	useConversation string
-	useSessionID    string
-	clearCalledWith string
-	useErr          error
+	sessionID        string
+	useConversation  string
+	useSessionID     string
+	clearCalledWith  string
+	useErr           error
+	conversationCwds map[string]string
+}
+
+func (f *fakeClaudeSessionAgent) SetConversationCwd(conversationID string, cwd string) {
+	if f.conversationCwds == nil {
+		f.conversationCwds = make(map[string]string)
+	}
+	f.conversationCwds[conversationID] = cwd
 }
 
 func (f *fakeClaudeSessionAgent) CurrentClaudeSession(conversationID string) (string, bool) {

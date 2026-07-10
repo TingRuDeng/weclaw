@@ -19,6 +19,12 @@ func (a *ACPAgent) WatchCodexThread(ctx context.Context, conversationID string, 
 		delete(a.turnCh, threadID)
 		a.notifyMu.Unlock()
 	}()
+	if state, err := a.ReadCodexThreadState(ctx, conversationID, threadID); err == nil && !state.Active {
+		if state.LastAgentMessageText != "" {
+			return state.LastAgentMessageText, nil
+		}
+		return "Codex App 本地任务已完成，但没有返回文本。", nil
+	}
 	return a.collectAttachedCodexTurn(ctx, conversationID, threadID, turnCh, onProgress)
 }
 
@@ -50,7 +56,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID 
 
 func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTurnEvent) error {
 	optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
-	if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat); err != nil {
+	if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat, evt.Approval.RequestedPermissions); err != nil {
 		return fmt.Errorf("approval response error: %w", err)
 	}
 	return nil

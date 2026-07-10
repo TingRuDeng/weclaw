@@ -7,15 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
 
 const (
-	qrCodeURL     = "https://ilinkai.weixin.qq.com/ilink/bot/get_bot_qrcode?bot_type=3"
-	qrStatusURL   = "https://ilinkai.weixin.qq.com/ilink/bot/get_qrcode_status?qrcode="
-	statusWait     = "wait"
-	statusScanned  = "scaned"
+	qrCodeURL       = "https://ilinkai.weixin.qq.com/ilink/bot/get_bot_qrcode?bot_type=3"
+	qrStatusURL     = "https://ilinkai.weixin.qq.com/ilink/bot/get_qrcode_status?qrcode="
+	statusWait      = "wait"
+	statusScanned   = "scaned"
 	statusConfirmed = "confirmed"
-	statusExpired  = "expired"
+	statusExpired   = "expired"
 )
 
 // FetchQRCode retrieves a new QR code for login.
@@ -79,11 +81,11 @@ func PollQRStatus(ctx context.Context, qrcode string, onStatus func(status strin
 
 // AccountsDir returns the directory where account credentials are stored.
 func AccountsDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := config.DataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".weclaw", "accounts"), nil
+	return filepath.Join(home, "accounts"), nil
 }
 
 // NormalizeAccountID converts raw bot ID to filesystem-safe format.

@@ -2,10 +2,54 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestSaveAtomicallyReplacesConfigWithPrivateMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".weclaw", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"agents":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.DefaultAgent = "codex"
+
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("mode=%o, want 600", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config-*.tmp"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary files=%#v err=%v", matches, err)
+	}
+}
+
+func TestConfigPathUsesWECLAWHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	path, err := ConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, "config.json")
+	if path != want {
+		t.Fatalf("ConfigPath=%q, want %q", path, want)
+	}
+}
 
 func TestAgentConfigUnmarshalEnv(t *testing.T) {
 	var cfg Config

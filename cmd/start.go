@@ -106,10 +106,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		func(ctx context.Context, name string) agent.Agent {
 			return createAgentByName(ctx, cfg, name)
 		},
-		func(name string) error {
-			cfg.DefaultAgent = name
-			return config.Save(cfg)
-		},
+		saveDefaultAgent,
 	)
 
 	// Populate agent metas for /status

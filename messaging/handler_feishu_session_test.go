@@ -107,11 +107,12 @@ func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
 	root := t.TempDir()
 	workspaceA := filepath.Join(root, "alpha")
 	workspaceB := filepath.Join(root, "beta")
+	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T10:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 
-	h.agentWorkDirs["codex"] = workspaceA
+	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
 	route := "feishu:tenant_1:dm:oc_1:ou_user"
 
 	h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
@@ -203,6 +204,46 @@ func TestFeishuRawCommandStopUsesSessionMetadata(t *testing.T) {
 	h.finishActiveTask(key, task)
 }
 
+func TestFeishuGroupTaskRejectsStopAndCancelFromOtherUser(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.defaultName = "codex"
+	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "cli", Command: "codex"},
+	}}
+	h.agents["codex"] = ag
+	sessionKey := "feishu:tenant_1:group:oc_1"
+	key := h.agentExecutionKeyForRoute("ou_owner", sessionKey, "codex", ag)
+	task, taskCtx, started := h.beginActiveTask(context.Background(), key, activeTaskMeta{
+		owner: "ou_owner", agentName: "codex", message: "第一条",
+	})
+	if !started || !h.storePendingGuide(key, "第二条") {
+		t.Fatal("准备运行中任务失败")
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	for _, command := range []string{"/cancel", "/stop"} {
+		h.HandleMessage(context.Background(), platform.IncomingMessage{
+			Platform: platform.PlatformFeishu,
+			UserID:   "ou_other",
+			Text:     command,
+			Metadata: map[string]string{"feishu_session_key": sessionKey},
+		}, reply)
+	}
+
+	select {
+	case <-taskCtx.Done():
+		t.Fatal("其他群成员不应停止任务发起人的任务")
+	default:
+	}
+	if got := task.pendingGuide(); got != "第二条" {
+		t.Fatalf("pending guide=%q, want unchanged", got)
+	}
+	if !containsText(reply.Texts, "只有任务发起人可以") {
+		t.Fatalf("reply texts=%#v, want owner rejection", reply.Texts)
+	}
+	h.finishActiveTask(key, task)
+}
+
 func TestFeishuConfirmPendingUsesSessionMetadata(t *testing.T) {
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
@@ -219,9 +260,11 @@ func TestFeishuConfirmPendingUsesSessionMetadata(t *testing.T) {
 	h.SetDefaultAgent("codex", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant_1:group:oc_1"
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("ou_user", "codex"), t.TempDir())
+	workspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("ou_user", "codex"), workspace)
 	executionKey := h.agentExecutionKeyForRoute("ou_user", sessionKey, "codex", ag)
-	h.storePendingCodexConfirmation(executionKey, "继续执行")
+	h.storePendingCodexConfirmation(executionKey, "继续执行", "ou_user")
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
@@ -236,6 +279,33 @@ func TestFeishuConfirmPendingUsesSessionMetadata(t *testing.T) {
 	}
 	if got := ag.lastChatConversationID(); !strings.Contains(got, sessionKey) {
 		t.Fatalf("conversation=%q, want route session key %q", got, sessionKey)
+	}
+}
+
+func TestFeishuGroupPendingConfirmationRejectsOtherUser(t *testing.T) {
+	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		reply: "ok",
+		info:  agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent { return ag }, nil)
+	h.SetDefaultAgent("codex", ag)
+	sessionKey := "feishu:tenant_1:group:oc_1"
+	executionKey := h.agentExecutionKeyForRoute("ou_owner", sessionKey, "codex", ag)
+	h.storePendingCodexConfirmation(executionKey, "继续执行", "ou_owner")
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_other",
+		Text:     "确认",
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}, reply)
+
+	if got := ag.lastChatMessage(); got != "" {
+		t.Fatalf("other user executed pending message=%q", got)
+	}
+	if !containsText(reply.Texts, "只有消息暂存人可以") {
+		t.Fatalf("reply texts=%#v, want pending owner rejection", reply.Texts)
 	}
 }
 

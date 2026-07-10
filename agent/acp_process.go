@@ -159,6 +159,7 @@ func (a *ACPAgent) Stop() {
 	a.mu.Unlock()
 
 	stopACPProcess(stdin, cmd)
+	a.failRuntimeWaiters("ACP runtime stopped")
 }
 
 // ensureStarted 确保重置会话前有可写的真实 runtime；测试桩直接走 rpcCall。

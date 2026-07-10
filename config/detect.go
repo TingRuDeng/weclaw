@@ -114,18 +114,7 @@ func DetectAndConfigure(cfg *Config) bool {
 
 			// Also register openclaw-acp as a separate agent for users who want ACP
 			if _, apcExists := cfg.Agents["openclaw-acp"]; !apcExists {
-				args := []string{"acp", "--url", gwURL}
-				if gwToken != "" {
-					args = append(args, "--token", gwToken)
-				} else if gwPassword != "" {
-					args = append(args, "--password", gwPassword)
-				}
-				cfg.Agents["openclaw-acp"] = AgentConfig{
-					Type:    "acp",
-					Command: agCfg.Command,
-					Args:    args,
-					Model:   "openclaw:main",
-				}
+				cfg.Agents["openclaw-acp"] = openclawACPConfig(agCfg.Command, gwURL, gwToken, gwPassword)
 				log.Printf("[config] openclaw ACP also available as 'openclaw-acp' (use /openclaw-acp to switch)")
 			}
 		} else {
@@ -174,6 +163,19 @@ func DetectAndConfigure(cfg *Config) bool {
 	}
 
 	return modified
+}
+
+func openclawACPConfig(command string, gatewayURL string, token string, password string) AgentConfig {
+	env := make(map[string]string)
+	if token != "" {
+		env["OPENCLAW_GATEWAY_TOKEN"] = token
+	} else if password != "" {
+		env["OPENCLAW_GATEWAY_PASSWORD"] = password
+	}
+	return AgentConfig{
+		Type: "acp", Command: command, Args: []string{"acp", "--url", gatewayURL},
+		Env: env, Model: "openclaw:main",
+	}
 }
 
 // NormalizeCodexRemoteFirst 将旧的 Codex Companion 默认配置迁移到 app-server remote-first。

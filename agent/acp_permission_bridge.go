@@ -20,19 +20,24 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 	}
 
 	responseFormat := permissionResponseFormatForMethod(req.Method)
+	options := approvalOptionsFromPermission(req.Params)
+	if responseFormat == permissionResponsePermissions {
+		options = codexPermissionApprovalOptions()
+	}
 	approval := &codexApprovalRequest{
-		ID:             req.ID,
-		ResponseFormat: responseFormat,
+		ID:                   req.ID,
+		ResponseFormat:       responseFormat,
+		RequestedPermissions: req.Params.Permissions,
 		Request: ApprovalRequest{
 			ToolCall: permissionToolCall(req.Params),
-			Options:  approvalOptionsFromPermission(req.Params),
+			Options:  options,
 		},
 	}
-	if a.dispatchToTurnCh(req.Params.ThreadID, &codexTurnEvent{Kind: "approval_request", Approval: approval}) {
+	if a.dispatchToTurnCh(permissionRouteID(req.Params), &codexTurnEvent{Kind: "approval_request", Approval: approval}) {
 		return
 	}
 	optionID := selectPermissionOption(req.Params, defaultDenyDecision(approval.Request.Options))
-	if err := a.respondPermissionRequest(req.ID, optionID, responseFormat); err != nil {
+	if err := a.respondPermissionRequest(req.ID, optionID, responseFormat, req.Params.Permissions); err != nil {
 		log.Printf("[acp] failed to deny unroutable permission request: %v", err)
 	}
 }
@@ -159,22 +164,27 @@ func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequ
 	return fallback
 }
 
-func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string, responseFormat permissionResponseFormat) error {
+func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string, responseFormat permissionResponseFormat, requested ...json.RawMessage) error {
 	resp := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      id,
 	}
-	if responseFormat == permissionResponseDecision {
+	if responseFormat == permissionResponsePermissions {
+		permissions, err := grantedCodexPermissions(optionID, requested)
+		if err != nil {
+			return err
+		}
+		resp["result"] = map[string]interface{}{"permissions": permissions}
+	} else if responseFormat == permissionResponseDecision {
 		resp["result"] = map[string]interface{}{
 			"decision": optionID,
 		}
 	} else {
-		resp["result"] = map[string]interface{}{
-			"outcome": map[string]interface{}{
-				"outcome":  "selected",
-				"optionId": optionID,
-			},
+		outcome := map[string]interface{}{"outcome": "cancelled"}
+		if strings.TrimSpace(optionID) != "" && !strings.EqualFold(optionID, "decline") {
+			outcome = map[string]interface{}{"outcome": "selected", "optionId": optionID}
 		}
+		resp["result"] = map[string]interface{}{"outcome": outcome}
 	}
 
 	data, err := json.Marshal(resp)
@@ -184,9 +194,27 @@ func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string,
 	return a.writeJSONLine(data)
 }
 
+func grantedCodexPermissions(optionID string, requested []json.RawMessage) (interface{}, error) {
+	if approvalKindFromDecision(optionID) != "allow" || len(requested) == 0 || len(requested[0]) == 0 {
+		return map[string]interface{}{}, nil
+	}
+	var permissions interface{}
+	if err := json.Unmarshal(requested[0], &permissions); err != nil {
+		return nil, fmt.Errorf("parse requested permissions: %w", err)
+	}
+	return permissions, nil
+}
+
+// permissionRouteID 按协议类型选择会话键，标准 ACP 使用 sessionId，Codex 使用 threadId。
+func permissionRouteID(params permissionRequestParams) string {
+	return firstNonEmptyString(params.ThreadID, params.SessionID)
+}
+
 // permissionResponseFormatForMethod 区分旧 ACP 和新版 Codex item 审批响应结构。
 func permissionResponseFormatForMethod(method string) permissionResponseFormat {
 	switch method {
+	case "item/permissions/requestApproval":
+		return permissionResponsePermissions
 	case "item/fileChange/requestApproval", "item/commandExecution/requestApproval":
 		return permissionResponseDecision
 	default:
@@ -198,6 +226,17 @@ func permissionResponseFormatForMethod(method string) permissionResponseFormat {
 func permissionToolCall(params permissionRequestParams) json.RawMessage {
 	if len(params.ToolCall) > 0 && string(params.ToolCall) != "null" {
 		return params.ToolCall
+	}
+	if len(params.Permissions) > 0 && string(params.Permissions) != "null" {
+		tool := map[string]interface{}{
+			"cwd":         strings.TrimSpace(params.Cwd),
+			"reason":      strings.TrimSpace(params.Reason),
+			"permissions": params.Permissions,
+		}
+		data, err := json.Marshal(tool)
+		if err == nil {
+			return data
+		}
 	}
 	tool := map[string]interface{}{}
 	if len(params.Command) > 0 {
@@ -221,7 +260,7 @@ func approvalOptionsFromPermission(params permissionRequestParams) []ApprovalOpt
 	decisions := permissionAvailableDecisions(params)
 	result := make([]ApprovalOption, 0, len(params.Options)+len(decisions))
 	for _, opt := range params.Options {
-		result = append(result, ApprovalOption{ID: opt.OptionID, Name: opt.Name, Kind: opt.Kind})
+		result = append(result, ApprovalOption{ID: opt.OptionID, Name: opt.Name, Kind: approvalKindFromDecision(opt.Kind)})
 	}
 	for _, decision := range decisions {
 		decision = strings.TrimSpace(decision)
@@ -245,7 +284,7 @@ func permissionAvailableDecisions(params permissionRequestParams) permissionDeci
 func approvalKindFromDecision(decision string) string {
 	lower := strings.ToLower(strings.TrimSpace(decision))
 	switch {
-	case strings.Contains(lower, "cancel"), strings.Contains(lower, "deny"), strings.Contains(lower, "reject"):
+	case strings.Contains(lower, "cancel"), strings.Contains(lower, "decline"), strings.Contains(lower, "deny"), strings.Contains(lower, "reject"):
 		return "deny"
 	case strings.Contains(lower, "accept"), strings.Contains(lower, "allow"), strings.Contains(lower, "approve"):
 		return "allow"

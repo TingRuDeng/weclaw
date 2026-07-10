@@ -15,6 +15,7 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	codexDir := t.TempDir()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-local-a", workspace, "实现两级会话浏览", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-local-b", workspace, "修复安全问题", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -52,6 +53,7 @@ func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-jsonl-a", workspace, "JSONL 旧会话 A", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-jsonl-b", workspace, "JSONL 旧会话 B", "2026-04-29T08:00:00Z")
 	writeLocalCodexIndex(t, codexDir, "thread-app-new", "App 重命名会话", "2026-04-29T10:00:00Z")
@@ -86,6 +88,7 @@ func TestCodexCxCdWorkspaceHidesCodexAppSubagentThreads(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-jsonl", workspace, "JSONL 旧会话", "2026-04-29T09:00:00Z")
 	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
 	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
@@ -123,6 +126,7 @@ func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-archived", workspace, "已归档旧缓存", "2026-04-29T09:00:00Z")
 	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
 	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
@@ -157,6 +161,7 @@ func TestCodexCxCdWorkspaceClearsStaleStoredThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-archived", workspace, "已归档旧缓存", "2026-04-29T09:00:00Z")
 	writeCodexAppWorkspaceState(t, codexDir, []string{workspace}, []string{workspace})
 	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {

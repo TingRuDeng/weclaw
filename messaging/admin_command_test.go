@@ -218,6 +218,32 @@ func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 	}
 }
 
+func TestRestartIgnoresDetachedTask(t *testing.T) {
+	h := NewHandler(nil, nil)
+	task, _, started := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{owner: "ou_admin"})
+	if !started {
+		t.Fatal("active task should start")
+	}
+	if cancelled, denied := h.cancelActiveTask("task-1", "ou_admin"); !cancelled || denied {
+		t.Fatalf("cancelled=%v denied=%v, want true false", cancelled, denied)
+	}
+	if text, blocked := h.restartBlockedByActiveTasks("restart", nil); blocked {
+		t.Fatalf("detached task should not block restart: %s", text)
+	}
+	h.finishActiveTask("task-1", task)
+}
+
+func TestRestartBlocksPendingCodexConfirmation(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.storePendingCodexConfirmation("task-1", "继续执行", "ou_admin")
+
+	text, blocked := h.restartBlockedByActiveTasks("restart", nil)
+
+	if !blocked || !strings.Contains(text, "待确认消息") {
+		t.Fatalf("blocked=%v text=%q, want pending confirmation notice", blocked, text)
+	}
+}
+
 func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 	useAdminRestartNotificationPath(t)
 	h := NewHandler(nil, nil)

@@ -14,6 +14,7 @@ func TestClaudeCcLsClearsStoredSessionMissingFromLocalWorkspace(t *testing.T) {
 	h := NewHandler(nil, nil)
 	claudeDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "desktop")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalClaudeSession(t, claudeDir, "session-live", workspace, "本机会话", "2026-04-29T09:00:00Z")
 	h.SetClaudeLocalSessionDir(claudeDir)
 	ag := &fakeClaudeSessionAgent{
@@ -82,6 +83,7 @@ func TestClaudeSwitchIndexSkipsStoredSessionMissingFromLocalWorkspace(t *testing
 	h := NewHandler(nil, nil)
 	claudeDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "desktop")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalClaudeSession(t, claudeDir, "session-live", workspace, "本机会话", "2026-04-29T09:00:00Z")
 	h.SetClaudeLocalSessionDir(claudeDir)
 	ag := &fakeClaudeSessionAgent{

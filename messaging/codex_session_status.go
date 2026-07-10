@@ -159,10 +159,18 @@ func renderCodexLocalEntry(opened bool) string {
 }
 
 func (h *Handler) renderCodexList(bindingKey string) string {
+	return h.renderCodexListForAccess(bindingKey, "", false)
+}
+
+func (h *Handler) renderCodexListForAccess(bindingKey string, actorUserID string, admin bool) string {
 	if workspaceRoot, ok := h.codexBrowseWorkspace(bindingKey); ok {
+		if !admin && !h.isWorkspaceAllowed(workspaceRoot) {
+			h.clearCodexBrowseWorkspace(bindingKey)
+			return h.renderCodexWorkspaceListForAccess(bindingKey, actorUserID, admin)
+		}
 		return h.renderCodexSessionList(bindingKey, workspaceRoot)
 	}
-	return h.renderCodexWorkspaceList(bindingKey)
+	return h.renderCodexWorkspaceListForAccess(bindingKey, actorUserID, admin)
 }
 
 func renderCodexThreadLabel(threadID string, pending bool) string {

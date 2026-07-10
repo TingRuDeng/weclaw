@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -77,6 +78,35 @@ func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
 	a.pendingMu.Unlock()
 	if pendingExists {
 		t.Fatal("pending RPC should be removed after runtime exit")
+	}
+}
+
+func TestACPAgentStopFailsPendingRequestsAndActiveTurns(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	pendingCh := make(chan *rpcResponse, 1)
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.pending[9] = pendingCh
+	a.turnCh["thread-1"] = turnCh
+	a.started = true
+	a.stdin = nopWriteCloser{Buffer: &bytes.Buffer{}}
+
+	a.Stop()
+
+	select {
+	case resp := <-pendingCh:
+		if resp.Error == nil || !strings.Contains(resp.Error.Message, "stopped") {
+			t.Fatalf("pending response=%#v", resp)
+		}
+	default:
+		t.Fatal("pending RPC was not failed by Stop")
+	}
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "error" || !strings.Contains(evt.Text, "stopped") {
+			t.Fatalf("turn event=%#v", evt)
+		}
+	default:
+		t.Fatal("active turn was not failed by Stop")
 	}
 }
 

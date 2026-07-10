@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -75,21 +76,65 @@ func validateUpdateTargetMatchesRuntime(exePath string) error {
 }
 
 func replaceBinary(src, dst string) error {
-	// 先尝试直接替换；失败时 Unix 平台再交给 sudo cp。
-	if err := os.Rename(src, dst); err == nil {
+	if err := stageAndReplaceBinary(src, dst); err == nil {
 		return nil
 	}
 
 	if runtime.GOOS != "windows" {
 		fmt.Printf("Installing to %s (requires sudo)...\n", dst)
-		cmd := exec.Command("sudo", "cp", src, dst)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		return sudoStageAndReplaceBinary(src, dst)
 	}
 
 	return fmt.Errorf("cannot write to %s", dst)
+}
+
+func stageAndReplaceBinary(src string, dst string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	stage, err := os.CreateTemp(filepath.Dir(dst), ".weclaw-update-*")
+	if err != nil {
+		return err
+	}
+	stagePath := stage.Name()
+	defer os.Remove(stagePath)
+	if err := copyUpdateBinary(stage, source); err != nil {
+		return err
+	}
+	return os.Rename(stagePath, dst)
+}
+
+func copyUpdateBinary(stage *os.File, source io.Reader) error {
+	if err := stage.Chmod(0o755); err != nil {
+		stage.Close()
+		return err
+	}
+	if _, err := io.Copy(stage, source); err != nil {
+		stage.Close()
+		return err
+	}
+	if err := stage.Sync(); err != nil {
+		stage.Close()
+		return err
+	}
+	return stage.Close()
+}
+
+func sudoStageAndReplaceBinary(src string, dst string) error {
+	stage := filepath.Join(filepath.Dir(dst), fmt.Sprintf(".weclaw-update-%d", os.Getpid()))
+	defer exec.Command("sudo", "rm", "-f", stage).Run()
+	for _, args := range [][]string{{"cp", src, stage}, {"chmod", "755", stage}, {"mv", stage, dst}} {
+		cmd := exec.Command("sudo", args...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func resolveSymlink(path string) (string, error) {

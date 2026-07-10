@@ -157,6 +157,9 @@ func (a *Adapter) nowOrDefault() time.Time {
 
 func approvalActionKey(action parsedCardAction) string {
 	if key := strings.TrimSpace(action.Approval); key != "" {
+		if messageID := strings.TrimSpace(action.MessageID); messageID != "" {
+			return "approval\x00" + key + "\x00message\x00" + messageID
+		}
 		return "approval\x00" + key
 	}
 	if messageID := strings.TrimSpace(action.MessageID); messageID != "" {

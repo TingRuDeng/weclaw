@@ -56,6 +56,7 @@ type Handler struct {
 	agentStarts             map[string]*agentStartState
 	agentMetas              []AgentMeta       // all configured agents (for /status)
 	agentWorkDirs           map[string]string // agent name -> configured/runtime cwd
+	configuredAgentWorkDirs map[string]string // agent name -> 启动配置 cwd，不随会话切换变化
 	customAliases           map[string]string // custom alias -> agent name (from config)
 	factory                 AgentFactory
 	saveDefault             SaveDefaultFunc
@@ -69,6 +70,7 @@ type Handler struct {
 	startedAt               time.Time
 	agentInvocations        atomic.Int64
 	agentErrors             atomic.Int64
+	lastDedupCleanup        atomic.Int64
 	seenMsgs                sync.Map // map[int64]time.Time — dedup by message_id
 	cdnDownloader           CDNDownloader
 	progressConfig          config.ProgressConfig
@@ -83,7 +85,7 @@ type Handler struct {
 	activeTasksMu           sync.Mutex
 	activeTasks             map[string]*activeAgentTask
 	pendingCodexConfirmsMu  sync.Mutex
-	pendingCodexConfirms    map[string]string
+	pendingCodexConfirms    map[string]pendingCodexConfirmation
 	pendingApprovalsMu      sync.Mutex
 	pendingApprovals        map[string]*pendingApproval
 	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
@@ -127,9 +129,10 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		if _, loaded := h.seenMsgs.LoadOrStore(platformMessageDedupKey(msg), time.Now()); loaded {
 			return
 		}
-		go h.cleanSeenMsgs(h.duplicateTTL())
+		h.maybeCleanSeenMsgs(time.Now())
 	}
 	routeUserID := platformMessageRouteUserID(msg)
+	ctx = contextWithWorkspaceAdmin(ctx, h.isAdminMessage(msg))
 
 	text := strings.TrimSpace(platformMessageText(msg))
 	if msg.RawCommand != nil && msg.RawCommand.Action == "stop" {

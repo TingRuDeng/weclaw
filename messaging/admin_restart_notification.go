@@ -152,15 +152,11 @@ func adminRestartCompletionText(version string) string {
 
 // defaultAdminRestartNotificationPath 返回跨进程共享的重启通知状态文件路径。
 func defaultAdminRestartNotificationPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	home = strings.TrimSpace(home)
+	home := strings.TrimSpace(defaultDataDir())
 	if home == "" {
 		return "", fmt.Errorf("用户主目录为空")
 	}
-	return filepath.Join(home, ".weclaw", "state", adminRestartNotificationFile), nil
+	return filepath.Join(home, "state", adminRestartNotificationFile), nil
 }
 
 // firstNonEmptyString 返回第一个去空白后非空的字符串，用于统一路由兜底顺序。

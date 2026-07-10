@@ -2,16 +2,59 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/feishu"
 )
+
+func TestFrontendDoesNotRenderServerDataWithInnerHTML(t *testing.T) {
+	data, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "innerHTML") {
+		t.Fatal("app.js must use DOM text nodes instead of innerHTML")
+	}
+}
+
+func TestWebHTTPServerHasSlowClientTimeouts(t *testing.T) {
+	srv := newHTTPServer("127.0.0.1:0", http.NewServeMux())
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Fatalf("timeouts=%+v, want all server timeouts configured", srv)
+	}
+}
+
+func TestWebDataDirUsesWECLAWHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	if got := webDataDir(); got != home {
+		t.Fatalf("webDataDir=%q, want %q", got, home)
+	}
+}
+
+func TestProcessSignalMeansRunningOnEPERM(t *testing.T) {
+	if !processSignalMeansRunning(syscall.EPERM) || processSignalMeansRunning(errors.New("missing")) {
+		t.Fatal("EPERM should mean running and unrelated errors should not")
+	}
+}
+
+func TestParseRuntimePIDSupportsJSONAndLegacyFormat(t *testing.T) {
+	if got := parseRuntimePID([]byte(`{"pid":123,"mode":"background"}`)); got != 123 {
+		t.Fatalf("json pid=%d, want 123", got)
+	}
+	if got := parseRuntimePID([]byte("456\n")); got != 456 {
+		t.Fatalf("legacy pid=%d, want 456", got)
+	}
+}
 
 func boolPtr(b bool) *bool { return &b }
 

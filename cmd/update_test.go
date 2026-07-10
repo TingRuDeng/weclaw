@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -118,6 +119,43 @@ func TestDownloadFileRejectsOversizedContentLength(t *testing.T) {
 func TestUpdateRestartFlagDefaultsFalse(t *testing.T) {
 	if updateRestartFlag {
 		t.Fatal("update should not restart service unless --restart is set")
+	}
+}
+
+func TestRestartUpdatedServiceReturnsStartError(t *testing.T) {
+	want := errors.New("start failed")
+	err := restartUpdatedService(updateRestartOps{
+		running: func() bool { return true },
+		stop:    func() error { return nil },
+		start:   func() error { return want },
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("error=%v, want start failure", err)
+	}
+}
+
+func TestReplaceBinaryUsesAtomicTargetDirectoryStage(t *testing.T) {
+	sourceDir := t.TempDir()
+	targetDir := t.TempDir()
+	src := filepath.Join(sourceDir, "downloaded")
+	dst := filepath.Join(targetDir, "weclaw")
+	if err := os.WriteFile(src, []byte("new-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceBinary(src, dst); err != nil {
+		t.Fatalf("replaceBinary error: %v", err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil || string(data) != "new-binary" {
+		t.Fatalf("target=%q err=%v", data, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(targetDir, ".weclaw-update-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("staged files=%#v err=%v", matches, err)
 	}
 }
 

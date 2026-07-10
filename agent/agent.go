@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
 
 // AgentInfo holds metadata about an agent for logging/debugging.
@@ -33,11 +35,11 @@ func (i AgentInfo) String() string {
 
 // defaultWorkspace returns ~/.weclaw/workspace as the default working directory.
 func defaultWorkspace() string {
-	home, err := os.UserHomeDir()
+	home, err := config.DataDir()
 	if err != nil {
 		return os.TempDir()
 	}
-	dir := filepath.Join(home, ".weclaw", "workspace")
+	dir := filepath.Join(home, "workspace")
 	os.MkdirAll(dir, 0o755)
 	return dir
 }

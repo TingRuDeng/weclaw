@@ -135,6 +135,7 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 	bindingKey := codexBindingKey("user-1", "codex")
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspaceA, workspaceB})
 	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
 	h.codexSessions.setPendingNew(bindingKey, workspaceB)
 
@@ -143,7 +144,7 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 		t.Fatalf("where reply should separate fields with blank lines, got %q", where)
 	}
 
-	list := h.renderCodexList(bindingKey)
+	list := h.renderCodexListForAccess(bindingKey, "user-1", false)
 	for _, want := range []string{
 		"Codex 工作空间:\n\n0. ",
 		filepath.Base(workspaceA),

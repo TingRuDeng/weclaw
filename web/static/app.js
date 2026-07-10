@@ -41,11 +41,22 @@ async function loadConfig() {
 
 async function loadStatus() {
   const st = await api('GET', '/api/status');
-  const daemon = st.daemon_running ? '<span class="pill ok">守护进程运行中</span>' : '<span class="pill warn">守护进程未运行</span>';
-  const plats = (st.platforms || []).map(p =>
-    `${p.name}${p.account_id ? ` (${p.account_id})` : ''}: ${p.enabled ? '启用' : '停用'} · 凭证${p.credentials_present ? '已配置' : '缺失'} · 白名单 ${p.allowed_users_count} 人`).join('<br>');
+  const status = document.getElementById('status');
+  status.replaceChildren();
+  const daemon = document.createElement('span');
+  daemon.className = st.daemon_running ? 'pill ok' : 'pill warn';
+  daemon.textContent = st.daemon_running ? '守护进程运行中' : '守护进程未运行';
+  status.appendChild(daemon);
+  for (const p of (st.platforms || [])) {
+    appendStatusLine(status, `${p.name}${p.account_id ? ` (${p.account_id})` : ''}: ${p.enabled ? '启用' : '停用'} · 凭证${p.credentials_present ? '已配置' : '缺失'} · 白名单 ${p.allowed_users_count} 人`);
+  }
   const agents = (st.agents || []).map(a => `${a.name} (${a.type})`).join('、');
-  document.getElementById('status').innerHTML = `${daemon}<br>${plats}<br>Agents: ${agents || '无'}`;
+  appendStatusLine(status, `Agents: ${agents || '无'}`);
+}
+
+function appendStatusLine(parent, text) {
+  parent.appendChild(document.createElement('br'));
+  parent.appendChild(document.createTextNode(text));
 }
 
 async function saveConfig() {
@@ -85,16 +96,25 @@ let wechatTimer = null;
 
 async function startWeChatLogin() {
   const qrBox = document.getElementById('qr');
-  qrBox.innerHTML = '正在获取二维码…';
+  qrBox.textContent = '正在获取二维码…';
   try {
     const r = await api('POST', '/api/wechat/login/start', {});
     const qrSrc = `/api/wechat/login/qr?login_id=${encodeURIComponent(r.login_id)}&token=${encodeURIComponent(token())}`;
-    qrBox.innerHTML = `<div class="muted">用微信扫码并确认</div>` +
-      `<img class="qr" src="${qrSrc}" alt="二维码" />` +
-      `<div id="wechat-state" class="muted">等待扫码…</div>`;
+    const hint = document.createElement('div');
+    hint.className = 'muted';
+    hint.textContent = '用微信扫码并确认';
+    const image = document.createElement('img');
+    image.className = 'qr';
+    image.src = qrSrc;
+    image.alt = '二维码';
+    const state = document.createElement('div');
+    state.id = 'wechat-state';
+    state.className = 'muted';
+    state.textContent = '等待扫码…';
+    qrBox.replaceChildren(hint, image, state);
     if (wechatTimer) clearInterval(wechatTimer);
     wechatTimer = setInterval(() => pollWeChat(r.login_id), 2000);
-  } catch (e) { qrBox.innerHTML = '获取二维码失败: ' + e.message; }
+  } catch (e) { qrBox.textContent = '获取二维码失败: ' + e.message; }
 }
 
 async function pollWeChat(loginID) {

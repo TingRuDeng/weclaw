@@ -15,6 +15,11 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.routeUserID, opts.reply))
 	route := h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
+	if !h.workspaceAllowedForAgentContext(opts.ctx, opts.agentName, route.workspaceRoot) {
+		sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前工作空间不在允许范围，请发送 /cx ls 重新选择。")
+		cancelTaskTimeout()
+		return
+	}
 	executionKey := route.conversationID
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{
 		owner:     opts.userID,
@@ -23,8 +28,11 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	})
 	if !started {
 		cancelTaskTimeout()
-		h.storePendingGuide(executionKey, opts.message)
-		sendPlatformText(opts.ctx, opts.reply, opts.userID, runningCodexGuidePromptForTask(task))
+		if h.storePendingGuide(executionKey, opts.message) {
+			sendPlatformText(opts.ctx, opts.reply, opts.userID, runningCodexGuidePromptForTask(task))
+		} else {
+			sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")
+		}
 		return
 	}
 
@@ -76,8 +84,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 // finishCodexAgentTask 收尾后台任务，并把未处理的暂存引导转成确认消息。
 func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
 	runtime.cancelTaskTimeout()
-	message, ok := h.promotePendingGuideToRun(runtime.executionKey, runtime.task)
-	h.finishActiveTask(runtime.executionKey, runtime.task)
+	message, ok := h.completeActiveTask(runtime.executionKey, runtime.task)
 	if !ok {
 		return
 	}

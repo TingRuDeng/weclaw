@@ -27,6 +27,7 @@ type codexWorkspaceCdRequest struct {
 	Platform        platform.PlatformName
 	AccountID       string
 	Reply           platform.Replier
+	Admin           bool
 }
 
 // codexBrowseWorkspace 返回当前微信用户正在浏览的 Codex 工作空间。
@@ -56,7 +57,11 @@ func (h *Handler) clearCodexBrowseWorkspace(bindingKey string) {
 
 // renderCodexWorkspaceList 只展示工作空间短名称，避免微信里刷出长路径和 thread id。
 func (h *Handler) renderCodexWorkspaceList(bindingKey string) string {
-	groups := h.codexWorkspaceGroups(bindingKey)
+	return h.renderCodexWorkspaceListForAccess(bindingKey, "", false)
+}
+
+func (h *Handler) renderCodexWorkspaceListForAccess(bindingKey string, actorUserID string, admin bool) string {
+	groups := h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
 	if len(groups) == 0 {
 		return "当前还没有 Codex 工作空间。"
 	}
@@ -86,9 +91,9 @@ func (h *Handler) handleCodexCd(req codexWorkspaceCdRequest) string {
 	req.Target = strings.TrimSpace(req.Target)
 	if req.Target == ".." {
 		h.clearCodexBrowseWorkspace(req.BindingKey)
-		return wechatCommandText("已返回工作空间列表。", h.renderCodexWorkspaceList(req.BindingKey))
+		return wechatCommandText("已返回工作空间列表。", h.renderCodexWorkspaceListForAccess(req.BindingKey, req.ActorUserID, req.Admin))
 	}
-	group, err := h.findCodexWorkspaceGroup(req.BindingKey, req.Target)
+	group, err := h.findCodexWorkspaceGroupForAccess(req.BindingKey, req.ActorUserID, req.Admin, req.Target)
 	if err != nil {
 		return err.Error()
 	}

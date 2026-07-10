@@ -127,6 +127,7 @@ func TestClaudeCcLsIncludesLocalSessionsAndHidesSessionIDs(t *testing.T) {
 	h := NewHandler(nil, nil)
 	claudeDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "local")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalClaudeSession(t, claudeDir, "session-local", workspace, "本机会话", "2026-04-29T09:00:00Z")
 	h.SetClaudeLocalSessionDir(claudeDir)
 	ag := &fakeClaudeSessionAgent{
@@ -192,6 +193,7 @@ func TestClaudeCcLsNumberMatchesSwitchIndexAcrossSortedWorkspaces(t *testing.T) 
 	claudeDir := t.TempDir()
 	workspaceA := filepath.Join(t.TempDir(), "aaa")
 	workspaceZ := filepath.Join(t.TempDir(), "zzz")
+	h.SetAllowedWorkspaceRoots([]string{workspaceA, workspaceZ})
 	writeLocalClaudeSession(t, claudeDir, "session-old", workspaceA, "较早会话", "2026-04-28T09:00:00Z")
 	writeLocalClaudeSession(t, claudeDir, "session-new", workspaceZ, "较新会话", "2026-04-29T09:00:00Z")
 	h.SetClaudeLocalSessionDir(claudeDir)
@@ -224,6 +226,7 @@ func TestHandleClaudeSwitchCommandBindsLocalSessionIndex(t *testing.T) {
 	h := NewHandler(nil, nil)
 	claudeDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "desktop")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalClaudeSession(t, claudeDir, "session-desktop", workspace, "桌面会话", "2026-04-29T09:00:00Z")
 	h.SetClaudeLocalSessionDir(claudeDir)
 	ag := &fakeClaudeSessionAgent{
@@ -243,8 +246,8 @@ func TestHandleClaudeSwitchCommandBindsLocalSessionIndex(t *testing.T) {
 	if ag.useConversation != wantConversationID || ag.useSessionID != "session-desktop" {
 		t.Fatalf("use conversation/session=(%q,%q), want (%q,session-desktop)", ag.useConversation, ag.useSessionID, wantConversationID)
 	}
-	if ag.lastWorkingDir() != normalizeClaudeWorkspaceRoot(workspace) {
-		t.Fatalf("claude cwd=%q, want %q", ag.lastWorkingDir(), normalizeClaudeWorkspaceRoot(workspace))
+	if ag.conversationCwds[wantConversationID] != normalizeClaudeWorkspaceRoot(workspace) {
+		t.Fatalf("conversation cwd=%q, want %q", ag.conversationCwds[wantConversationID], normalizeClaudeWorkspaceRoot(workspace))
 	}
 	if !containsText(calls.texts(), "已切换 Claude 会话") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())

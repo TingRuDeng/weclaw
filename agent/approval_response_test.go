@@ -62,6 +62,21 @@ func TestSelectPermissionOptionUsesCodexFileChangeDecisionFallback(t *testing.T)
 	}
 }
 
+func TestSelectPermissionOptionRejectsStandardACPAllowOnce(t *testing.T) {
+	params := permissionRequestParams{
+		Options: []permissionOption{
+			{OptionID: "allow-once", Kind: "allow_once"},
+			{OptionID: "reject-once", Kind: "reject_once"},
+		},
+	}
+
+	got := selectPermissionOption(params, "deny")
+
+	if got != "reject-once" {
+		t.Fatalf("fallback option=%q, want reject-once", got)
+	}
+}
+
 func TestSelectPermissionOptionDoesNotInventInvalidDenyDecision(t *testing.T) {
 	params := permissionRequestParams{}
 
@@ -97,6 +112,30 @@ func TestRespondLegacyPermissionRequestUsesOutcomeResult(t *testing.T) {
 	}
 }
 
+func TestRespondLegacyPermissionRequestUsesCancelledOutcomeWithoutSafeOption(t *testing.T) {
+	var out bytes.Buffer
+	a := NewACPAgent(ACPAgentConfig{Command: "claude-agent-acp"})
+	a.stdin = nopWriteCloser{Buffer: &out}
+
+	if err := a.respondPermissionRequest(json.RawMessage(`9`), "decline", permissionResponseOutcome); err != nil {
+		t.Fatalf("respondPermissionRequest error: %v", err)
+	}
+
+	var resp struct {
+		Result struct {
+			Outcome struct {
+				Outcome string `json:"outcome"`
+			} `json:"outcome"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &resp); err != nil {
+		t.Fatalf("response json: %v", err)
+	}
+	if resp.Result.Outcome.Outcome != "cancelled" {
+		t.Fatalf("outcome=%q, want cancelled; raw=%s", resp.Result.Outcome.Outcome, out.String())
+	}
+}
+
 func TestReadLoopDispatchesCodexItemApprovalRequestToTurn(t *testing.T) {
 	methods := []string{
 		"item/fileChange/requestApproval",
@@ -124,6 +163,56 @@ func TestReadLoopDispatchesCodexItemApprovalRequestToTurn(t *testing.T) {
 				t.Fatal("approval request was not dispatched")
 			}
 		})
+	}
+}
+
+func TestReadLoopDispatchesCodexPermissionsApprovalRequestToTurn(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-permissions"] = turnCh
+	a.notifyMu.Unlock()
+
+	raw := `{"jsonrpc":"2.0","id":61,"method":"item/permissions/requestApproval","params":{"threadId":"thread-permissions","turnId":"turn-1","itemId":"call-1","cwd":"/workspace","reason":"Select workspace root","permissions":{"fileSystem":{"write":["/workspace"]},"network":{"enabled":true}}}}`
+	a.mu.Lock()
+	a.scanner = bufio.NewScanner(strings.NewReader(raw + "\n"))
+	a.mu.Unlock()
+	a.readLoop()
+
+	select {
+	case evt := <-turnCh:
+		if evt.Approval == nil || evt.Approval.ResponseFormat != permissionResponsePermissions {
+			t.Fatalf("approval event=%#v, want permissions response", evt)
+		}
+		options := evt.Approval.Request.Options
+		if len(options) != 2 || options[0].Kind != "allow" || options[1].Kind != "deny" {
+			t.Fatalf("approval options=%#v, want allow/deny", options)
+		}
+	default:
+		t.Fatal("permissions approval request was not dispatched")
+	}
+}
+
+func TestRespondCodexPermissionsApprovalReturnsGrantedSubset(t *testing.T) {
+	var out bytes.Buffer
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.stdin = nopWriteCloser{Buffer: &out}
+	requested := json.RawMessage(`{"fileSystem":{"write":["/workspace"]},"network":{"enabled":true}}`)
+
+	if err := a.respondPermissionRequest(json.RawMessage(`61`), "allow", permissionResponsePermissions, requested); err != nil {
+		t.Fatalf("respondPermissionRequest error: %v", err)
+	}
+
+	var resp struct {
+		Result struct {
+			Permissions json.RawMessage `json:"permissions"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &resp); err != nil {
+		t.Fatalf("response json: %v", err)
+	}
+	if string(resp.Result.Permissions) != string(requested) {
+		t.Fatalf("permissions=%s, want %s", resp.Result.Permissions, requested)
 	}
 }
 

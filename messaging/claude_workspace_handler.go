@@ -23,13 +23,6 @@ func (h *Handler) claudeWorkspaceRootForUser(userID string, agentName string, ag
 	if !ok {
 		return h.claudeWorkspaceRoot(agentName)
 	}
-	ag.SetCwd(workspaceRoot)
-	h.mu.Lock()
-	if h.agentWorkDirs == nil {
-		h.agentWorkDirs = make(map[string]string)
-	}
-	h.agentWorkDirs[agentName] = workspaceRoot
-	h.mu.Unlock()
 	return workspaceRoot
 }
 
@@ -43,6 +36,7 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 		return err.Error()
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
+	h.bindConversationCwd(route.Agent, conversationID, workspaceRoot)
 	if err := claudeAg.UseClaudeSession(route.Context, conversationID, sessionID); err != nil {
 		return fmt.Sprintf("切换 Claude 会话失败: %v", err)
 	}
@@ -58,11 +52,14 @@ func (h *Handler) resolveClaudeSwitchTarget(route claudeSessionRoute, target str
 	}
 	sessionID := target
 	workspaceRoot := h.resolveClaudeSwitchWorkspace(route, sessionID)
+	if !route.Admin && !h.isWorkspaceAllowed(workspaceRoot) {
+		return "", "", fmt.Errorf("该 Claude 会话工作空间不在 allowed_workspace_roots 范围内。")
+	}
 	return workspaceRoot, sessionID, nil
 }
 
 func (h *Handler) resolveClaudeSwitchIndex(route claudeSessionRoute, index int) (string, string, error) {
-	views := h.claudeSwitchTargets(route.BindingKey)
+	views := h.claudeSwitchTargetsForAccess(route.BindingKey, route.ActorUserID, route.Admin)
 	if index < 0 || index >= len(views) {
 		return "", "", fmt.Errorf("编号不存在，请先发送 /cc ls 查看可切换会话。")
 	}
@@ -84,19 +81,12 @@ func (h *Handler) resolveClaudeSwitchWorkspace(route claudeSessionRoute, session
 }
 
 func (h *Handler) switchClaudeWorkspace(agentName string, workspaceRoot string, ag agent.Agent) string {
-	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
-	ag.SetCwd(workspaceRoot)
-	h.mu.Lock()
-	if h.agentWorkDirs == nil {
-		h.agentWorkDirs = make(map[string]string)
-	}
-	h.agentWorkDirs[agentName] = workspaceRoot
-	h.mu.Unlock()
-	return workspaceRoot
+	return normalizeClaudeWorkspaceRoot(workspaceRoot)
 }
 
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
+	h.bindConversationCwd(route.Agent, conversationID, route.WorkspaceRoot)
 	if claudeAg, ok := route.Agent.(agent.ClaudeSessionAgent); ok {
 		claudeAg.ClearClaudeSession(conversationID)
 	}

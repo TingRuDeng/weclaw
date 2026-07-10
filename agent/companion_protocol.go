@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
 
 const (
@@ -196,12 +198,5 @@ func normalizeCompanionCwd(cwd string) string {
 }
 
 func weclawHomeDir() (string, error) {
-	if override := strings.TrimSpace(os.Getenv("WECLAW_HOME")); override != "" {
-		return override, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".weclaw"), nil
+	return config.DataDir()
 }

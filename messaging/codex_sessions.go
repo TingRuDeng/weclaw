@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -42,11 +41,7 @@ func newCodexSessionStore() *codexSessionStore {
 
 // DefaultCodexSessionFile 返回 Codex workspace/thread 列表的默认持久化路径。
 func DefaultCodexSessionFile() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".weclaw", "codex-sessions.json")
+	return filepath.Join(defaultDataDir(), "codex-sessions.json")
 }
 
 // SetFilePath 设置持久化文件路径并加载已有状态。

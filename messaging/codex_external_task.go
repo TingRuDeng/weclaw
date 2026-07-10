@@ -115,8 +115,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 }
 
 func (h *Handler) finishExternalCodexTask(runtime externalCodexTaskRuntime) {
-	message, ok := h.promotePendingGuideToRun(runtime.opts.conversationID, runtime.task)
-	h.finishActiveTask(runtime.opts.conversationID, runtime.task)
+	message, ok := h.completeActiveTask(runtime.opts.conversationID, runtime.task)
 	if ok {
 		sendPlatformText(runtime.opts.ctx, runtime.opts.reply, runtime.opts.actorUserID, runnablePendingCodexPrompt(message))
 	}

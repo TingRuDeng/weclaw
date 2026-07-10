@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	defaultBaseURL     = "https://ilinkai.weixin.qq.com"
-	longPollTimeout    = 35 * time.Second
-	sendTimeout        = 15 * time.Second
+	defaultBaseURL  = "https://ilinkai.weixin.qq.com"
+	longPollTimeout = 35 * time.Second
+	sendTimeout     = 15 * time.Second
 )
 
 // Client is an iLink HTTP API client.
@@ -83,6 +83,9 @@ func (c *Client) SendMessage(ctx context.Context, msg *SendMessageRequest) (*Sen
 	if err := c.doPost(ctx, "/ilink/bot/sendmessage", msg, &resp); err != nil {
 		return nil, err
 	}
+	if err := ilinkBusinessError("sendmessage", resp.Ret, resp.ErrMsg); err != nil {
+		return nil, err
+	}
 	return &resp, nil
 }
 
@@ -99,6 +102,9 @@ func (c *Client) GetConfig(ctx context.Context, userID, contextToken string) (*G
 
 	var resp GetConfigResponse
 	if err := c.doPost(ctx, "/ilink/bot/getconfig", req, &resp); err != nil {
+		return nil, err
+	}
+	if err := ilinkBusinessError("getconfig", resp.Ret, resp.ErrMsg); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -120,10 +126,7 @@ func (c *Client) SendTyping(ctx context.Context, userID, typingTicket string, st
 	if err := c.doPost(ctx, "/ilink/bot/sendtyping", req, &resp); err != nil {
 		return err
 	}
-	if resp.Ret != 0 {
-		return fmt.Errorf("sendtyping failed: ret=%d errmsg=%s", resp.Ret, resp.ErrMsg)
-	}
-	return nil
+	return ilinkBusinessError("sendtyping", resp.Ret, resp.ErrMsg)
 }
 
 // GetUploadURL gets a pre-signed CDN upload URL for media files.
@@ -135,7 +138,17 @@ func (c *Client) GetUploadURL(ctx context.Context, req *GetUploadURLRequest) (*G
 	if err := c.doPost(ctx, "/ilink/bot/getuploadurl", req, &resp); err != nil {
 		return nil, err
 	}
+	if err := ilinkBusinessError("getuploadurl", resp.Ret, resp.ErrMsg); err != nil {
+		return nil, err
+	}
 	return &resp, nil
+}
+
+func ilinkBusinessError(operation string, ret int, message string) error {
+	if ret == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s failed: ret=%d errmsg=%s", operation, ret, message)
 }
 
 // BaseURL returns the base URL for CDN operations.

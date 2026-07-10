@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -16,11 +15,7 @@ func newClaudeSessionStore() *claudeSessionStore {
 
 // DefaultClaudeSessionFile 返回 Claude workspace/session 列表的默认持久化路径。
 func DefaultClaudeSessionFile() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".weclaw", "claude-sessions.json")
+	return filepath.Join(defaultDataDir(), "claude-sessions.json")
 }
 
 func (s *claudeSessionStore) SetFilePath(filePath string) {

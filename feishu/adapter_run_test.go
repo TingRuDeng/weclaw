@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -15,6 +16,20 @@ type fakeWSRunner struct {
 	started chan struct{}
 	closed  chan struct{}
 }
+
+type stubbornWSRunner struct {
+	started chan struct{}
+	release chan struct{}
+	closed  chan struct{}
+}
+
+func (f *stubbornWSRunner) Start(context.Context) error {
+	close(f.started)
+	<-f.release
+	return nil
+}
+
+func (f *stubbornWSRunner) Close() { close(f.closed) }
 
 // Start 记录启动状态，并阻塞到 Close 被调用。
 func (f *fakeWSRunner) Start(ctx context.Context) error {
@@ -119,4 +134,35 @@ func TestAdapterRunStopsWhenValidationFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run error=nil, want validation failure")
 	}
+}
+
+func TestAdapterRunReturnsWhenWSStartIgnoresClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ws := &stubbornWSRunner{
+		started: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{}),
+	}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.validate = func(context.Context, Credentials) error { return nil }
+	adapter.wsFactory = func(*dispatcher.EventDispatcher) wsRunner { return ws }
+	done := make(chan error, 1)
+	go func() {
+		done <- adapter.Run(ctx, func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	}()
+	<-ws.started
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run error=%v, want nil after cancellation", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Run should not wait forever for ws Start")
+	}
+	select {
+	case <-ws.closed:
+	default:
+		t.Fatal("Run should close ws client on cancellation")
+	}
+	close(ws.release)
 }

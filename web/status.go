@@ -1,6 +1,8 @@
 package web
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,21 +104,38 @@ func agentStatuses(cfg *config.Config) []agentStatus {
 
 // daemonRunning 通过 pid 文件 + 信号 0 探测守护进程是否存活。
 func daemonRunning() bool {
-	home, err := os.UserHomeDir()
+	data, err := os.ReadFile(filepath.Join(webDataDir(), "weclaw.pid"))
 	if err != nil {
 		return false
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".weclaw", "weclaw.pid"))
-	if err != nil {
-		return false
-	}
-	var pid int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil || pid <= 0 {
+	pid := parseRuntimePID(data)
+	if pid <= 0 {
 		return false
 	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	return processSignalMeansRunning(proc.Signal(syscall.Signal(0)))
+}
+
+func webDataDir() string {
+	dir, _ := config.DataDir()
+	return dir
+}
+
+func parseRuntimePID(data []byte) int {
+	var state struct {
+		PID int `json:"pid"`
+	}
+	if json.Unmarshal(data, &state) == nil && state.PID > 0 {
+		return state.PID
+	}
+	var pid int
+	_, _ = fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid)
+	return pid
+}
+
+func processSignalMeansRunning(err error) bool {
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

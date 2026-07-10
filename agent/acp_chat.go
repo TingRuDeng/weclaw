@@ -50,13 +50,16 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 
 	// Register notification channel for this session
 	notifyCh := make(chan *sessionUpdate, 256)
+	approvalCh := make(chan *codexTurnEvent, 16)
 	a.notifyMu.Lock()
 	a.notifyCh[sessionID] = notifyCh
+	a.turnCh[sessionID] = approvalCh
 	a.notifyMu.Unlock()
 
 	defer func() {
 		a.notifyMu.Lock()
 		delete(a.notifyCh, sessionID)
+		delete(a.turnCh, sessionID)
 		a.notifyMu.Unlock()
 	}()
 
@@ -83,6 +86,9 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 	for {
 		select {
 		case <-ctx.Done():
+			if err := a.notify("session/cancel", map[string]interface{}{"sessionId": sessionID}); err != nil {
+				return "", fmt.Errorf("%w: session/cancel failed: %v", ctx.Err(), err)
+			}
 			return "", ctx.Err()
 		case update := <-notifyCh:
 			if update.SessionUpdate == "agent_message_chunk" {
@@ -90,6 +96,14 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 				if text != "" {
 					textParts = append(textParts, text)
 				}
+			}
+		case evt := <-approvalCh:
+			if evt.Approval == nil {
+				continue
+			}
+			optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
+			if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat, evt.Approval.RequestedPermissions); err != nil {
+				return "", fmt.Errorf("approval response error: %w", err)
 			}
 		case done := <-promptDone:
 			// Drain remaining notifications

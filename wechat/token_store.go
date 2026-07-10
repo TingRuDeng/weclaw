@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -28,8 +29,8 @@ func newContextTokenStore(botID string) *contextTokenStore {
 }
 
 func contextTokenStorePath(botID string) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".weclaw", "accounts", strings.TrimSpace(botID)+".tokens.json")
+	home, _ := config.DataDir()
+	return filepath.Join(home, "accounts", strings.TrimSpace(botID)+".tokens.json")
 }
 
 func (s *contextTokenStore) Get(userID string) string {
