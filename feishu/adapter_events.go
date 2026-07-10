@@ -120,6 +120,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 	go dispatch(context.WithoutCancel(ctx), msg, a.newScopedReplier(msg))
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
+		Card:  buildSelectedChoiceCard(action),
 	}, nil
 }
 

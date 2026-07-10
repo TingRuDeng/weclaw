@@ -6,6 +6,18 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
+// buildSelectedChoiceCard 将已点击的普通交互卡片收纳为不可重复操作的选择结果。
+func buildSelectedChoiceCard(action parsedCardAction) *callback.Card {
+	label := strings.TrimSpace(action.Label)
+	if label == "" {
+		label = strings.TrimSpace(action.Choice)
+	}
+	if label == "" {
+		label = "已选择"
+	}
+	return buildChoiceHandledStatusCard("blue", "已选择："+label)
+}
+
 // buildChoiceHandledCard 构建按钮点击后的原卡片替换内容，让用户能区分已处理审批。
 func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
 	label := strings.TrimSpace(action.Label)

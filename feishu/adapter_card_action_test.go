@@ -49,6 +49,7 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
 				"action":             cardActionChoice,
 				"choice":             "1",
+				"label":              "账本 App 开发",
 				"conv":               "feishu:ou_user",
 				"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root",
 			}},
@@ -63,9 +64,10 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCardActionEvent error: %v", err)
 	}
-	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" || resp.Card != nil {
-		t.Fatalf("response=%#v, want success toast without card update", resp)
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
+		t.Fatalf("response=%#v, want success toast", resp)
 	}
+	assertSelectedChoiceCard(t, resp.Card, "账本 App 开发")
 	select {
 	case msg := <-dispatched:
 		if msg.RawCommand == nil || msg.RawCommand.Action != cardActionChoice || msg.RawCommand.Value["choice"] != "1" {
@@ -195,6 +197,9 @@ func TestHandleCardActionEventRejectsUnauthorizedUser(t *testing.T) {
 	}
 	if resp == nil || resp.Toast == nil || resp.Toast.Type == "success" {
 		t.Fatalf("response=%#v, want non-success toast", resp)
+	}
+	if resp.Card != nil {
+		t.Fatalf("response=%#v, unauthorized action must not update card", resp)
 	}
 	select {
 	case msg := <-dispatched:
