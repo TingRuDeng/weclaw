@@ -128,7 +128,9 @@ func (a *ACPAgent) handleCodexError(params json.RawMessage) {
 		text = formatCodexStderrError(stderrText)
 	}
 	if text == "" {
-		text = "Codex 返回未知错误"
+		// 新版 app-server 可能在传输回退前发送空 error，权威终态仍由 turn/completed 给出。
+		log.Printf("[acp] ignoring codex error without actionable details: %.200s", string(params))
+		return
 	}
 	a.dispatchToTurnCh("", &codexTurnEvent{Kind: "error", Text: text})
 }
@@ -136,9 +138,10 @@ func (a *ACPAgent) handleCodexError(params json.RawMessage) {
 func formatCodexError(params json.RawMessage) string {
 	var p struct {
 		Error struct {
-			Message        string `json:"message"`
-			CodexErrorInfo string `json:"codexErrorInfo"`
-			Code           string `json:"code"`
+			Message           string          `json:"message"`
+			CodexErrorInfo    string          `json:"codexErrorInfo"`
+			Code              string          `json:"code"`
+			AdditionalDetails json.RawMessage `json:"additionalDetails"`
 		} `json:"error"`
 		Message string `json:"message"`
 		Code    string `json:"code"`
@@ -156,6 +159,11 @@ func formatCodexError(params json.RawMessage) string {
 	if isRecoverableCodexTransportText(message) || isRecoverableCodexTransportText(info) {
 		return ""
 	}
+	summary := formatCodexErrorSummary(message, info)
+	return appendCodexAdditionalDetails(summary, p.Error.AdditionalDetails)
+}
+
+func formatCodexErrorSummary(message string, info string) string {
 	if info == "deactivated_workspace" {
 		return joinCodexErrorParts("Codex 工作区不可用", message, info)
 	}
@@ -165,10 +173,25 @@ func formatCodexError(params json.RawMessage) string {
 	if info != "" && message != "" {
 		return message + " (" + info + ")"
 	}
-	if message != "" {
-		return message
+	return firstNonEmpty(message, info)
+}
+
+func appendCodexAdditionalDetails(summary string, raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return summary
 	}
-	return info
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		text = string(raw)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return summary
+	}
+	if summary == "" {
+		return text
+	}
+	return summary + "；" + text
 }
 
 // formatCodexStderrError 从 Codex stderr 中提取账号态错误，补足空泛的 error 事件。

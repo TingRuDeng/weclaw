@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-07-10 Codex 非致命 warning
+
+- 触发条件：Codex app-server 发送 `warning`，或 WebSocket 断开后回退 HTTPS。
+- 规则：`warning` 只用于展示非致命运行状态；turn 必须等待 `turn/completed` 的最终状态，不能由空 `error` 提前结束。
+- 反例：收到空 `error` 后立即返回“Codex 返回未知错误”，导致稍后到达的 HTTPS 回退 warning 和成功终态无人接收。
+- 正确做法：有明确内容的 error 保持失败；无有效详情的 error 只记录日志，继续等待 `turn/completed`，并把传输回退映射为简洁进度。
+
 ## 2026-04-28 微信绝对路径误判
 
 - 微信消息中以 `/` 开头的内容不一定是命令，也可能是 macOS / Linux 绝对路径。
