@@ -207,20 +207,25 @@ func formatCodexStderrError(text string) string {
 	if strings.Contains(lower, "402 payment required") {
 		return joinCodexErrorParts("Codex 认证或工作区不可用", text, "")
 	}
-	return text
+	if isCodexUsageLimitError(text) {
+		return text
+	}
+	// 普通 stderr 可能属于更早的请求，不能替代当前 turn/completed 的权威终态。
+	return ""
 }
 
 // isRecoverableCodexTransportText 判断 Codex responses WebSocket 失败是否属于可恢复传输噪声。
 func isRecoverableCodexTransportText(text string) bool {
 	lower := strings.ToLower(text)
 	hasWebSocketSignal := strings.Contains(lower, "responses_websocket") ||
+		strings.Contains(lower, "responsestreamdisconnected") ||
 		strings.Contains(lower, "websocket") ||
 		strings.Contains(lower, "ws://")
 	hasForbiddenSignal := strings.Contains(lower, "403 forbidden")
-	hasRecoverSignal := strings.Contains(lower, "falling back from websockets to https transport") ||
-		strings.Contains(lower, "failed to connect to websocket") ||
-		strings.Contains(lower, "reconnecting")
-	return hasWebSocketSignal && hasForbiddenSignal && hasRecoverSignal
+	hasFallbackSignal := strings.Contains(lower, "falling back from websockets to https transport")
+	hasReconnectSignal := strings.Contains(lower, "reconnecting")
+	hasConnectFailure := strings.Contains(lower, "failed to connect to websocket")
+	return hasWebSocketSignal && (hasFallbackSignal || hasReconnectSignal || hasForbiddenSignal && hasConnectFailure)
 }
 
 // isCodexAuthStateError 判断错误是否来自登录态或工作区状态；额度耗尽不能刷新进程。

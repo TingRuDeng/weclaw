@@ -21,6 +21,39 @@ func TestHandleCodexErrorIgnoresEmptyPayload(t *testing.T) {
 	}
 }
 
+func TestHandleCodexErrorDoesNotUseStaleGenericStderr(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	a.stderr = &acpStderrWriter{prefix: "[test]"}
+	_, _ = a.stderr.Write([]byte("2026-07-10T08:23:31Z ERROR Failed to run pre-sampling compact"))
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.turnCh["thread-1"] = turnCh
+
+	a.handleCodexError(json.RawMessage(`{}`))
+
+	select {
+	case evt := <-turnCh:
+		t.Fatalf("普通陈旧 stderr 不应终止 turn，实际收到 %#v", evt)
+	default:
+	}
+}
+
+func TestHandleCodexErrorIgnoresReconnectObject(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	a.stderr = &acpStderrWriter{prefix: "[test]"}
+	_, _ = a.stderr.Write([]byte("2026-07-10T08:23:31Z ERROR Failed to run pre-sampling compact"))
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.turnCh["thread-1"] = turnCh
+	payload := `{"error":{"message":"Reconnecting... 3/5","codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":null}},"additionalDetails":"stream disconnected before completion: websocket closed by server"}}`
+
+	a.handleCodexError(json.RawMessage(payload))
+
+	select {
+	case evt := <-turnCh:
+		t.Fatalf("重连 error 不应终止 turn，实际收到 %#v", evt)
+	default:
+	}
+}
+
 func TestReadLoopRoutesCodexWarningAsProgress(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 2)
