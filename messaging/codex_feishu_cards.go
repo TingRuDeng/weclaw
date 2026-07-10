@@ -25,6 +25,7 @@ func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platf
 		Platform:    msg.Platform,
 		AccountID:   msg.AccountID,
 		Reply:       reply,
+		Admin:       h.isAdminMessage(msg),
 	})
 	if h.sendFeishuCodexNavigationChoices(ctx, msg, routeUserID, reply, trimmed, result) {
 		return true

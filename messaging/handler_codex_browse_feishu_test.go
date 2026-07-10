@@ -59,6 +59,48 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	}
 }
 
+func TestFeishuCodexWorkspaceChoiceKeepsAliasAdminAccess(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	workspaceA := filepath.Join(root, "alpha")
+	workspaceB := filepath.Join(root, "beta")
+	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T08:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
+	h.SetAdminUsers([]string{"on_admin"})
+	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}}
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	sessionKey := "feishu:tenant_1:dm:oc_1:ou_open"
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_open", UserAliases: []string{"on_admin"},
+		MessageID: "feishu-alias-admin-list", Text: "/cx ls",
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}, reply)
+	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 2 {
+		t.Fatalf("workspace choices=%#v, want two admin-visible workspaces", reply.Choices)
+	}
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_open", UserAliases: []string{"on_admin"},
+		MessageID:  "feishu-alias-admin-choice",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cx cd 1"}},
+		Metadata:   map[string]string{"feishu_session_key": sessionKey},
+	}, reply)
+
+	bindingKey := codexBindingKey(sessionKey, "codex")
+	activeWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
+	if !ok || activeWorkspace != normalizeCodexWorkspaceRoot(workspaceB) {
+		t.Fatalf("active workspace=%q ok=%t, want alias admin workspace %q; texts=%#v", activeWorkspace, ok, workspaceB, reply.Texts)
+	}
+}
+
 func TestFeishuCodexCxLsDuringActiveTaskDoesNotSendNavigationCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
