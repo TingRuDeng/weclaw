@@ -8,20 +8,21 @@ import (
 )
 
 type activeAgentTask struct {
-	mu             sync.Mutex
-	cancel         context.CancelFunc
-	done           chan struct{}
-	detached       bool
-	pendingMessage string
-	owner          string
-	agentName      string
-	preview        string
-	startedAt      time.Time
-	lastProgress   string
-	lastProgressAt time.Time
-	externalCodex  bool
-	codexThreadID  string
-	codexTurnID    string
+	mu              sync.Mutex
+	cancel          context.CancelFunc
+	done            chan struct{}
+	detached        bool
+	pendingMessage  string
+	owner           string
+	agentName       string
+	preview         string
+	startedAt       time.Time
+	lastProgress    string
+	lastProgressAt  time.Time
+	externalCodex   bool
+	externalControl bool
+	codexThreadID   string
+	codexTurnID     string
 }
 
 func (t *activeAgentTask) pendingGuide() string {
@@ -58,15 +59,16 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTa
 	}
 	taskCtx, cancel := context.WithCancel(ctx)
 	task := &activeAgentTask{
-		cancel:        cancel,
-		done:          make(chan struct{}),
-		owner:         strings.TrimSpace(meta.owner),
-		agentName:     strings.TrimSpace(meta.agentName),
-		preview:       previewPendingCodexMessage(meta.message),
-		startedAt:     time.Now(),
-		externalCodex: meta.externalCodex,
-		codexThreadID: strings.TrimSpace(meta.codexThreadID),
-		codexTurnID:   strings.TrimSpace(meta.codexTurnID),
+		cancel:          cancel,
+		done:            make(chan struct{}),
+		owner:           strings.TrimSpace(meta.owner),
+		agentName:       strings.TrimSpace(meta.agentName),
+		preview:         previewPendingCodexMessage(meta.message),
+		startedAt:       time.Now(),
+		externalCodex:   meta.externalCodex,
+		externalControl: meta.externalControl,
+		codexThreadID:   strings.TrimSpace(meta.codexThreadID),
+		codexTurnID:     strings.TrimSpace(meta.codexTurnID),
 	}
 	h.activeTasks[key] = task
 	return task, taskCtx, true
@@ -81,12 +83,13 @@ func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {
 
 // activeTaskMeta 描述一次后台任务的归属信息，供 /ps 和 /cancel 检索。
 type activeTaskMeta struct {
-	owner         string
-	agentName     string
-	message       string
-	externalCodex bool
-	codexThreadID string
-	codexTurnID   string
+	owner           string
+	agentName       string
+	message         string
+	externalCodex   bool
+	externalControl bool
+	codexThreadID   string
+	codexTurnID     string
 }
 
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
@@ -181,7 +184,7 @@ func (h *Handler) takeExternalCodexGuide(key string, actor string) (string, stri
 	if task.owner != strings.TrimSpace(actor) {
 		return "", "", "", task, false, true
 	}
-	if !task.externalCodex || task.pendingMessage == "" || task.codexThreadID == "" || task.codexTurnID == "" {
+	if !task.externalCodex || !task.externalControl || task.pendingMessage == "" || task.codexThreadID == "" || task.codexTurnID == "" {
 		return "", "", "", task, false, false
 	}
 	message := task.pendingMessage
@@ -219,7 +222,7 @@ func (h *Handler) externalCodexTurnForTask(key string, actor string) (string, st
 	if task.owner != strings.TrimSpace(actor) {
 		return "", "", false, true
 	}
-	if !task.externalCodex || task.codexThreadID == "" || task.codexTurnID == "" {
+	if !task.externalCodex || !task.externalControl || task.codexThreadID == "" || task.codexTurnID == "" {
 		return "", "", false, false
 	}
 	return task.codexThreadID, task.codexTurnID, true, false

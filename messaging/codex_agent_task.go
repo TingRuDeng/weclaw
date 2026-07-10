@@ -28,6 +28,10 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	})
 	if !started {
 		cancelTaskTimeout()
+		if !task.acceptsGuide() {
+			sendPlatformText(opts.ctx, opts.reply, opts.userID, runningReadOnlyCodexAppPrompt())
+			return
+		}
 		if h.storePendingGuide(executionKey, opts.message) {
 			sendPlatformText(opts.ctx, opts.reply, opts.userID, runningCodexGuidePromptForTask(task))
 		} else {

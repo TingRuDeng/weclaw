@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-10 Codex App 跨进程任务镜像
+
+- 触发条件：Codex App 本地进程正在执行 turn，用户从飞书切换到同一 thread。
+- 规则：不能用 WeClaw 自己的 app-server `thread/read` 判断另一个 Codex App 进程的 active 状态；进程间不共享 active 状态和通知流。
+- 反例：`thread/resume` 成功后只查询 WeClaw app-server，返回非 active 就静默跳过，导致飞书没有任务、进度和最终结果反馈。
+- 正确做法：跨进程任务以共享 rollout 的 `task_started`、`task_complete`、`turn_aborted` 为生命周期来源，并从初始文件偏移增量跟踪进度与最终结果。
+- 来源：2026-07-10 用户反馈“Codex App 本地正在执行任务，飞书切换到该会话后没有反馈”。
+
 ## 2026-07-10 Codex 非致命 warning
 
 - 触发条件：Codex app-server 发送 `warning`，或 WebSocket 断开后回退 HTTPS。

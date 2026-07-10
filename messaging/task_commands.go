@@ -3,7 +3,6 @@ package messaging
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,11 +20,19 @@ func runningCodexGuidePromptForTask(task *activeAgentTask) string {
 	}
 	task.mu.Lock()
 	external := task.externalCodex
+	control := task.externalControl
 	task.mu.Unlock()
 	if !external {
 		return runningCodexGuidePrompt()
 	}
+	if !control {
+		return runningReadOnlyCodexAppPrompt()
+	}
 	return "Codex App 任务正在进行。\n\n回复 /guide 将此消息发送到当前 Codex App 任务。\n回复 /cancel 撤回该消息。\n不回复时，当前任务完成后会转为待执行消息。"
+}
+
+func runningReadOnlyCodexAppPrompt() string {
+	return "Codex App 本地任务正在进行。\n\n任务完成后结果会自动返回飞书；当前任务需在 Codex App 中操作。"
 }
 
 // runnablePendingCodexPrompt 提醒用户确认执行已从引导态转出的暂存消息。
@@ -155,6 +162,13 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 }
 
 func (h *Handler) interruptExternalCodexTask(ctx context.Context, key string, ag agent.Agent, actor string) (string, bool) {
+	external, control, denied := h.externalCodexControlState(key, actor)
+	if denied {
+		return "只有任务发起人可以停止当前任务。", true
+	}
+	if external && !control {
+		return "当前任务由 Codex App 本地进程执行，请在 Codex App 中停止。", true
+	}
 	runtimeAg, ok := ag.(agent.CodexThreadRuntimeAgent)
 	if !ok {
 		return "", false
@@ -174,62 +188,6 @@ func (h *Handler) interruptExternalCodexTask(ctx context.Context, key string, ag
 }
 
 // handleCancelCommand 已并入 /cancel(撤回暂存) 与 /stop(停止运行) 两个独立命令，保留占位以便检索历史语义。
-
-// handleListActiveTasks 列出指定用户当前运行中的后台任务，供 /ps 查看。
-func (h *Handler) handleListActiveTasks(userID string) string {
-	owner := strings.TrimSpace(userID)
-	now := time.Now()
-	type runningTask struct {
-		agentName      string
-		preview        string
-		elapsed        time.Duration
-		lastProgress   string
-		lastProgressAt time.Time
-	}
-	var tasks []runningTask
-	h.activeTasksMu.Lock()
-	for _, task := range h.activeTasks {
-		task.mu.Lock()
-		matched := task.owner == owner && !task.detached
-		if matched {
-			tasks = append(tasks, runningTask{
-				agentName:      task.agentName,
-				preview:        task.preview,
-				elapsed:        now.Sub(task.startedAt),
-				lastProgress:   task.lastProgress,
-				lastProgressAt: task.lastProgressAt,
-			})
-		}
-		task.mu.Unlock()
-	}
-	h.activeTasksMu.Unlock()
-	if len(tasks) == 0 {
-		return "当前没有运行中的任务。"
-	}
-	sort.Slice(tasks, func(i, j int) bool { return tasks[i].elapsed > tasks[j].elapsed })
-	lines := []string{fmt.Sprintf("运行中的任务（%d）：", len(tasks))}
-	for i, task := range tasks {
-		name := firstNonBlank(task.agentName, "agent")
-		line := fmt.Sprintf("%d. %s · 已运行 %s", i+1, name, formatTaskElapsed(task.elapsed))
-		if preview := strings.TrimSpace(task.preview); preview != "" {
-			line += "\n   " + preview
-		}
-		if progress := strings.TrimSpace(task.lastProgress); progress != "" {
-			line += fmt.Sprintf("\n   最近进展（%s前）：%s", formatTaskElapsed(now.Sub(task.lastProgressAt)), progress)
-		}
-		lines = append(lines, line)
-	}
-	lines = append(lines, "\n回复 /stop 停止当前任务。")
-	return strings.Join(lines, "\n")
-}
-
-// formatTaskElapsed 以分钟/秒粒度展示任务已运行时长。
-func formatTaskElapsed(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%d秒", int(d.Seconds()))
-	}
-	return fmt.Sprintf("%d分%d秒", int(d.Minutes()), int(d.Seconds())%60)
-}
 
 func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
 	h.activeTasksMu.Lock()
