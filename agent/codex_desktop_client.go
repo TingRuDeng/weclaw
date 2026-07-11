@@ -22,7 +22,8 @@ type codexDesktopCallResult struct {
 }
 
 type codexDesktopPendingCall struct {
-	result chan codexDesktopCallResult
+	result  chan codexDesktopCallResult
+	written bool
 }
 
 type codexDesktopDiscoveryResult struct {
@@ -31,16 +32,16 @@ type codexDesktopDiscoveryResult struct {
 }
 
 type codexDesktopPendingDiscovery struct {
-	result chan codexDesktopDiscoveryResult
+	result  chan codexDesktopDiscoveryResult
+	written bool
 }
 
 type codexDesktopClientOptions struct {
-	dial             func(context.Context) (net.Conn, error)
-	requestID        func() string
-	now              func() time.Time
-	requestTimeout   time.Duration
-	discoveryTimeout time.Duration
-	onBroadcast      func(codexDesktopEnvelope)
+	dial                             func(context.Context) (net.Conn, error)
+	requestID                        func() string
+	now                              func() time.Time
+	requestTimeout, discoveryTimeout time.Duration
+	onBroadcast                      func(codexDesktopEnvelope)
 }
 
 type codexDesktopConnectionRef struct {
@@ -59,21 +60,17 @@ type codexDesktopClient struct {
 	mu      sync.Mutex
 	writeMu sync.Mutex
 
-	dial             func(context.Context) (net.Conn, error)
-	conn             net.Conn
-	clientID         string
-	epoch            uint64
-	closed           bool
-	connecting       bool
-	everConnected    bool
-	pending          map[string]*codexDesktopPendingCall
-	discovery        map[string]*codexDesktopPendingDiscovery
-	requestID        func() string
-	now              func() time.Time
-	requestSeq       uint64
-	requestTimeout   time.Duration
-	discoveryTimeout time.Duration
-	onBroadcast      func(codexDesktopEnvelope)
+	dial                              func(context.Context) (net.Conn, error)
+	conn                              net.Conn
+	clientID                          string
+	epoch, requestSeq                 uint64
+	closed, connecting, everConnected bool
+	pending                           map[string]*codexDesktopPendingCall
+	discovery                         map[string]*codexDesktopPendingDiscovery
+	requestID                         func() string
+	now                               func() time.Time
+	requestTimeout, discoveryTimeout  time.Duration
+	onBroadcast                       func(codexDesktopEnvelope)
 }
 
 // newCodexDesktopClient 创建可注入传输、时钟和超时的 IPC client。
@@ -281,8 +278,22 @@ func (c *codexDesktopClient) writeEnvelope(connection codexDesktopConnectionRef,
 		return c.disconnectedError()
 	}
 	if err := writeCodexDesktopFrame(connection.conn, payload); err != nil {
-		_ = c.disconnectEpoch(connection, err)
-		return fmt.Errorf("%w: 写入 method=%s requestId=%s: %v", ErrCodexDesktopDeliveryUnknown, envelope.Method, envelope.RequestID, err)
+		_ = c.disconnectEpochLocked(connection, err)
+		return fmt.Errorf("%w: 写入 method=%s requestId=%s: %v", ErrCodexDesktopDisconnected, envelope.Method, envelope.RequestID, err)
 	}
+	c.mu.Lock()
+	if pending := c.pending[envelope.RequestID]; pending != nil {
+		pending.written = true
+	}
+	if pending := c.discovery[envelope.RequestID]; pending != nil {
+		pending.written = true
+	}
+	c.mu.Unlock()
 	return nil
+}
+
+// isCodexDesktopNoClientError 匹配路由器两种已知无人处理错误文本。
+func isCodexDesktopNoClientError(message string) bool {
+	normalized := strings.ToLower(message)
+	return strings.Contains(normalized, "no-client-found") || strings.Contains(normalized, "no codex ipc client can handle")
 }

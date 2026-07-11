@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"strings"
 )
 
 // readLoop 独占读取当前连接，并由 epoch 防止旧连接清理新状态。
@@ -175,28 +174,39 @@ func (c *codexDesktopClient) connectionMatchesLocked(connection codexDesktopConn
 
 // disconnectEpoch 仅清理匹配代次，并一次性失败全部在途请求。
 func (c *codexDesktopClient) disconnectEpoch(connection codexDesktopConnectionRef, cause error) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.disconnectEpochLocked(connection, cause)
+}
+
+// disconnectEpochLocked 在写锁内按完整写入状态分类所有等待者。
+func (c *codexDesktopClient) disconnectEpochLocked(connection codexDesktopConnectionRef, cause error) error {
 	c.mu.Lock()
 	if c.conn != connection.conn || c.epoch != connection.epoch {
 		c.mu.Unlock()
 		return nil
 	}
-	c.conn = nil
-	c.clientID = ""
-	c.connecting = false
+	c.conn, c.clientID, c.connecting = nil, "", false
 	pending, discovery := c.pending, c.discovery
-	c.pending = make(map[string]*codexDesktopPendingCall)
-	c.discovery = make(map[string]*codexDesktopPendingDiscovery)
+	c.pending, c.discovery = make(map[string]*codexDesktopPendingCall), make(map[string]*codexDesktopPendingDiscovery)
 	c.mu.Unlock()
 
 	closeErr := connection.conn.Close()
-	err := fmt.Errorf("%w: %w: %v", ErrCodexDesktopDeliveryUnknown, ErrCodexDesktopDisconnected, cause)
 	for _, call := range pending {
-		call.result <- codexDesktopCallResult{err: err}
+		call.result <- codexDesktopCallResult{err: codexDesktopPendingDisconnectError(call.written, cause)}
 	}
 	for _, request := range discovery {
-		request.result <- codexDesktopDiscoveryResult{err: err}
+		request.result <- codexDesktopDiscoveryResult{err: codexDesktopPendingDisconnectError(request.written, cause)}
 	}
 	return closeErr
+}
+
+// codexDesktopPendingDisconnectError 仅将完整写入的请求标为交付状态未知。
+func codexDesktopPendingDisconnectError(written bool, cause error) error {
+	if written {
+		return fmt.Errorf("%w: %w: %v", ErrCodexDesktopDeliveryUnknown, ErrCodexDesktopDisconnected, cause)
+	}
+	return fmt.Errorf("%w: %v", ErrCodexDesktopDisconnected, cause)
 }
 
 // beginConnect 串行化连接尝试，并允许已连接调用幂等返回。
@@ -231,9 +241,7 @@ func (c *codexDesktopClient) installConnection(conn net.Conn) (codexDesktopConne
 		c.connecting = false
 		return codexDesktopConnectionRef{}, ErrCodexDesktopDisconnected
 	}
-	c.epoch++
-	c.conn = conn
-	c.clientID = ""
+	c.epoch, c.conn, c.clientID = c.epoch+1, conn, ""
 	return codexDesktopConnectionRef{conn: conn, epoch: c.epoch}, nil
 }
 
@@ -244,9 +252,7 @@ func (c *codexDesktopClient) finishInitialize(connection codexDesktopConnectionR
 	if c.conn != connection.conn || c.epoch != connection.epoch {
 		return ErrCodexDesktopDisconnected
 	}
-	c.clientID = clientID
-	c.connecting = false
-	c.everConnected = true
+	c.clientID, c.connecting, c.everConnected = clientID, false, true
 	return nil
 }
 
@@ -289,10 +295,4 @@ func (c *codexDesktopClient) connectedClientID() (string, error) {
 		return "", c.stateErrorLocked()
 	}
 	return c.clientID, nil
-}
-
-// isCodexDesktopNoClientError 匹配路由器两种已知无人处理错误文本。
-func isCodexDesktopNoClientError(message string) bool {
-	normalized := strings.ToLower(message)
-	return strings.Contains(normalized, "no-client-found") || strings.Contains(normalized, "no codex ipc client can handle")
 }

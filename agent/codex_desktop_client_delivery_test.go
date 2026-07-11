@@ -3,11 +3,37 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestCodexDesktopClientClassifiesIncompleteFrameAsDisconnected(t *testing.T) {
+	tests := []struct {
+		name string
+		mode codexDesktopFailingWriteMode
+	}{
+		{"zero byte write", codexDesktopFailingWriteZero},
+		{"partial header", codexDesktopFailingWriteHeader},
+		{"partial payload", codexDesktopFailingWritePayload},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, failing := newCodexDesktopFailingWriteClient(t)
+			mustConnectCodexDesktopTestClient(t, client)
+			failing.arm(test.mode)
+
+			_, err := client.Call(context.Background(), "thread-follower-start-turn", map[string]string{"prompt": "secret"})
+			if !errors.Is(err, ErrCodexDesktopDisconnected) || errors.Is(err, ErrCodexDesktopDeliveryUnknown) {
+				t.Fatalf("Call() error = %v, want disconnected only", err)
+			}
+			assertCodexDesktopWriteFailureCleanup(t, client, failing)
+		})
+	}
+}
 
 func TestCodexDesktopClientReturnsDeliveryUnknownAfterWrite(t *testing.T) {
 	written := make(chan struct{})
@@ -120,3 +146,83 @@ func TestCodexDesktopClientDiscoveryTimeoutIsAmbiguous(t *testing.T) {
 		t.Fatalf("Discover() error = %v", err)
 	}
 }
+
+type codexDesktopFailingWriteMode int32
+
+const (
+	codexDesktopFailingWriteOff codexDesktopFailingWriteMode = iota
+	codexDesktopFailingWriteZero
+	codexDesktopFailingWriteHeader
+	codexDesktopFailingWritePayload
+)
+
+type codexDesktopFailingConn struct {
+	net.Conn
+	mode   atomic.Int32
+	writes atomic.Int32
+	closed atomic.Bool
+}
+
+func (c *codexDesktopFailingConn) arm(mode codexDesktopFailingWriteMode) {
+	c.writes.Store(0)
+	c.mode.Store(int32(mode))
+}
+
+func (c *codexDesktopFailingConn) Write(payload []byte) (int, error) {
+	mode := codexDesktopFailingWriteMode(c.mode.Load())
+	if mode == codexDesktopFailingWriteOff {
+		return c.Conn.Write(payload)
+	}
+	write := c.writes.Add(1)
+	if mode == codexDesktopFailingWriteZero || write > 2 {
+		return 0, nil
+	}
+	if mode == codexDesktopFailingWriteHeader {
+		return c.writePartial(payload, write == 1, 2)
+	}
+	if write == 1 {
+		return c.Conn.Write(payload)
+	}
+	return c.writePartial(payload, true, 3)
+}
+
+func (c *codexDesktopFailingConn) Close() error {
+	c.closed.Store(true)
+	return c.Conn.Close()
+}
+
+func (c *codexDesktopFailingConn) writePartial(payload []byte, partial bool, limit int) (int, error) {
+	if !partial {
+		return 0, nil
+	}
+	if len(payload) < limit {
+		limit = len(payload)
+	}
+	return c.Conn.Write(payload[:limit])
+}
+
+func newCodexDesktopFailingWriteClient(t *testing.T) (*codexDesktopClient, *codexDesktopFailingConn) {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	failing := &codexDesktopFailingConn{Conn: clientConn}
+	go func() {
+		defer serverConn.Close()
+		serveCodexDesktopTestInitialize(t, serverConn, "client-1")
+		_, _ = readCodexDesktopFrame(serverConn)
+	}()
+	options := codexDesktopTestOptions(func(context.Context) (net.Conn, error) { return failing, nil })
+	return newCodexDesktopClient(options), failing
+}
+
+func assertCodexDesktopWriteFailureCleanup(t *testing.T, client *codexDesktopClient, conn *codexDesktopFailingConn) {
+	t.Helper()
+	client.mu.Lock()
+	pending, discovery := len(client.pending), len(client.discovery)
+	connection := client.conn
+	client.mu.Unlock()
+	if !conn.closed.Load() || connection != nil || pending != 0 || discovery != 0 || client.IsConnected() {
+		t.Fatalf("cleanup closed=%v conn=%v pending=%d discovery=%d connected=%v", conn.closed.Load(), connection, pending, discovery, client.IsConnected())
+	}
+}
+
+var _ io.Writer = (*codexDesktopFailingConn)(nil)
