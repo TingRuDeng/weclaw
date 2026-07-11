@@ -5,56 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"strings"
 	"sync"
 	"time"
 )
-
-const (
-	codexDesktopRequestTimeout   = 10 * time.Second
-	codexDesktopDiscoveryTimeout = 1500 * time.Millisecond
-	codexDesktopInitialClientID  = "initializing-client"
-)
-
-type codexDesktopCallResult struct {
-	result json.RawMessage
-	err    error
-}
-
-type codexDesktopPendingCall struct {
-	result  chan codexDesktopCallResult
-	written bool
-}
-
-type codexDesktopDiscoveryResult struct {
-	canHandle bool
-	err       error
-}
-
-type codexDesktopPendingDiscovery struct {
-	result  chan codexDesktopDiscoveryResult
-	written bool
-}
-
-type codexDesktopClientOptions struct {
-	dial                             func(context.Context) (net.Conn, error)
-	requestID                        func() string
-	now                              func() time.Time
-	requestTimeout, discoveryTimeout time.Duration
-	onBroadcast                      func(codexDesktopEnvelope)
-}
-
-type codexDesktopConnectionRef struct {
-	conn       net.Conn
-	epoch      uint64
-	connecting bool
-}
-
-type codexDesktopCallOptions struct {
-	envelope   codexDesktopEnvelope
-	timeout    time.Duration
-	connection codexDesktopConnectionRef
-}
 
 type codexDesktopClient struct {
 	mu      sync.Mutex
@@ -62,6 +15,7 @@ type codexDesktopClient struct {
 
 	dial                              func(context.Context) (net.Conn, error)
 	conn                              net.Conn
+	connectionState                   *codexDesktopConnectionState
 	clientID                          string
 	epoch, requestSeq                 uint64
 	closed, connecting, everConnected bool
@@ -71,6 +25,11 @@ type codexDesktopClient struct {
 	now                               func() time.Time
 	requestTimeout, discoveryTimeout  time.Duration
 	onBroadcast                       func(codexDesktopEnvelope)
+	broadcastMu                       sync.Mutex
+	broadcasts                        []codexDesktopBroadcast
+	broadcastWake                     chan struct{}
+	broadcastStop, broadcastDone      chan struct{}
+	broadcastCloseOnce                sync.Once
 }
 
 // newCodexDesktopClient 创建可注入传输、时钟和超时的 IPC client。
@@ -87,12 +46,16 @@ func newCodexDesktopClient(options codexDesktopClientOptions) *codexDesktopClien
 	if options.discoveryTimeout <= 0 {
 		options.discoveryTimeout = codexDesktopDiscoveryTimeout
 	}
-	return &codexDesktopClient{
+	client := &codexDesktopClient{
 		dial: options.dial, requestID: options.requestID, now: options.now,
 		requestTimeout: options.requestTimeout, discoveryTimeout: options.discoveryTimeout,
 		onBroadcast: options.onBroadcast, pending: make(map[string]*codexDesktopPendingCall),
-		discovery: make(map[string]*codexDesktopPendingDiscovery),
+		discovery:     make(map[string]*codexDesktopPendingDiscovery),
+		broadcastWake: make(chan struct{}, 1),
+		broadcastStop: make(chan struct{}), broadcastDone: make(chan struct{}),
 	}
+	client.startBroadcastWorker()
+	return client
 }
 
 // Connect 建立安全连接，并在暴露 connected 状态前完成 initialize 握手。
@@ -162,12 +125,16 @@ func (c *codexDesktopClient) Close() error {
 		return nil
 	}
 	c.closed = true
-	conn, epoch := c.conn, c.epoch
+	conn, epoch, state := c.conn, c.epoch, c.connectionState
 	c.mu.Unlock()
+	c.stopBroadcastWorker()
 	if conn == nil {
+		c.waitBroadcastWorker()
 		return nil
 	}
-	return c.disconnectEpoch(codexDesktopConnectionRef{conn: conn, epoch: epoch}, ErrCodexDesktopDisconnected)
+	err := c.disconnectEpoch(codexDesktopConnectionRef{conn: conn, epoch: epoch, state: state}, ErrCodexDesktopDisconnected)
+	c.waitBroadcastWorker()
+	return err
 }
 
 // IsConnected 返回 initialize 已成功且连接仍属于当前 epoch 的状态。
@@ -182,118 +149,4 @@ func (c *codexDesktopClient) Epoch() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.epoch
-}
-
-// initialize 完成固定 clientType 的首帧握手并提取 clientId。
-func (c *codexDesktopClient) initialize(ctx context.Context, connection codexDesktopConnectionRef) (string, error) {
-	envelope, err := newCodexDesktopRequest(codexDesktopRequestSpec{
-		RequestID: c.nextRequestID(), SourceClientID: codexDesktopInitialClientID,
-		Method: "initialize", Params: map[string]string{"clientType": "weclaw"},
-	})
-	if err != nil {
-		return "", err
-	}
-	connection.connecting = true
-	result, err := c.sendCallOnConnection(ctx, codexDesktopCallOptions{
-		envelope: envelope, timeout: c.requestTimeout, connection: connection,
-	})
-	if err != nil {
-		return "", err
-	}
-	var response struct {
-		ClientID string `json:"clientId"`
-	}
-	if len(result) == 0 || result[0] != '{' || json.Unmarshal(result, &response) != nil || strings.TrimSpace(response.ClientID) == "" {
-		return "", fmt.Errorf("Codex Desktop initialize result 缺少非空 clientId")
-	}
-	return response.ClientID, nil
-}
-
-// sendCall 在已连接状态下锁定当前连接代次。
-func (c *codexDesktopClient) sendCall(ctx context.Context, options codexDesktopCallOptions) (json.RawMessage, error) {
-	connection, err := c.connectionForWrite(false)
-	if err != nil {
-		return nil, err
-	}
-	options.connection = connection
-	return c.sendCallOnConnection(ctx, options)
-}
-
-// sendCallOnConnection 注册响应等待者，并在完整写入后应用交付不确定语义。
-func (c *codexDesktopClient) sendCallOnConnection(ctx context.Context, options codexDesktopCallOptions) (json.RawMessage, error) {
-	pending := &codexDesktopPendingCall{result: make(chan codexDesktopCallResult, 1)}
-	requestID := options.envelope.RequestID
-	if err := c.registerCall(requestID, pending, options.connection); err != nil {
-		return nil, err
-	}
-	if err := c.writeEnvelope(options.connection, options.envelope); err != nil {
-		c.removeCall(requestID, pending)
-		return nil, err
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, options.timeout)
-	defer cancel()
-	select {
-	case result := <-pending.result:
-		return result.result, result.err
-	case <-waitCtx.Done():
-		c.removeCall(requestID, pending)
-		return nil, fmt.Errorf("%w: %w", ErrCodexDesktopDeliveryUnknown, waitCtx.Err())
-	}
-}
-
-// sendDiscovery 发送 discovery 帧并等待对应布尔响应。
-func (c *codexDesktopClient) sendDiscovery(ctx context.Context, envelope codexDesktopEnvelope) (bool, error) {
-	connection, err := c.connectionForWrite(false)
-	if err != nil {
-		return false, err
-	}
-	pending := &codexDesktopPendingDiscovery{result: make(chan codexDesktopDiscoveryResult, 1)}
-	if err := c.registerDiscovery(envelope.RequestID, pending, connection); err != nil {
-		return false, err
-	}
-	if err := c.writeEnvelope(connection, envelope); err != nil {
-		c.removeDiscovery(envelope.RequestID, pending)
-		return false, err
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, c.discoveryTimeout)
-	defer cancel()
-	select {
-	case result := <-pending.result:
-		return result.canHandle, result.err
-	case <-waitCtx.Done():
-		c.removeDiscovery(envelope.RequestID, pending)
-		return false, fmt.Errorf("%w: %w", ErrCodexDesktopDeliveryUnknown, waitCtx.Err())
-	}
-}
-
-// writeEnvelope 串行化整帧写入，并在写入失败时终止对应 epoch。
-func (c *codexDesktopClient) writeEnvelope(connection codexDesktopConnectionRef, envelope codexDesktopEnvelope) error {
-	payload, err := encodeCodexDesktopEnvelope(envelope)
-	if err != nil {
-		return err
-	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	if !c.connectionMatches(connection) {
-		return c.disconnectedError()
-	}
-	if err := writeCodexDesktopFrame(connection.conn, payload); err != nil {
-		_ = c.disconnectEpochLocked(connection, err)
-		return fmt.Errorf("%w: 写入 method=%s requestId=%s: %v", ErrCodexDesktopDisconnected, envelope.Method, envelope.RequestID, err)
-	}
-	c.mu.Lock()
-	if pending := c.pending[envelope.RequestID]; pending != nil {
-		pending.written = true
-	}
-	if pending := c.discovery[envelope.RequestID]; pending != nil {
-		pending.written = true
-	}
-	c.mu.Unlock()
-	return nil
-}
-
-// isCodexDesktopNoClientError 匹配路由器两种已知无人处理错误文本。
-func isCodexDesktopNoClientError(message string) bool {
-	normalized := strings.ToLower(message)
-	return strings.Contains(normalized, "no-client-found") || strings.Contains(normalized, "no codex ipc client can handle")
 }
