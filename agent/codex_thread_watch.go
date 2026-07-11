@@ -11,14 +11,10 @@ func (a *ACPAgent) WatchCodexThread(ctx context.Context, conversationID string, 
 		return "", fmt.Errorf("agent is not codex app-server")
 	}
 	turnCh := make(chan *codexTurnEvent, 256)
-	a.notifyMu.Lock()
-	a.turnCh[threadID] = turnCh
-	a.notifyMu.Unlock()
-	defer func() {
-		a.notifyMu.Lock()
-		delete(a.turnCh, threadID)
-		a.notifyMu.Unlock()
-	}()
+	if !a.registerTurnChannel(threadID, turnCh) {
+		return "", fmt.Errorf("thread %s already has an active watcher or turn", threadID)
+	}
+	defer a.unregisterTurnChannel(threadID, turnCh)
 	if state, err := a.ReadCodexThreadState(ctx, conversationID, threadID); err == nil && !state.Active {
 		if state.LastAgentMessageText != "" {
 			return state.LastAgentMessageText, nil

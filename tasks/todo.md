@@ -2,86 +2,93 @@
 
 ## 目标
 
-按审查严重级别和用户确认顺序修复 10 个既有问题，并增加“切换会话后展示实际模型与推理强度”能力。每项独立执行 TDD、验证和提交。
+按 2026-07-11 全面审查的严重级别顺序修复 P1、P2、P3 问题。每项先补失败测试，再做最小根因修复并执行受影响范围验证。
 
 ## 非目标
 
-- 不改变飞书、微信现有命令名称。
-- 不为旧审批卡片、旧发布流程或错误模型档位保留兼容分支。
-- 不使用 Agent 全局配置冒充历史会话的实际模型状态。
-- 不在静态质量阶段顺带重构无关业务。
+- 不改变现有飞书、微信命令名称和正常交互语义。
+- 不重写 Agent、消息平台或配置架构。
+- 不保留已确认有风险的失败放行和静默降级路径。
+- 不在本轮处理无关重构或新增产品功能。
 
 ## 当前事实
 
-- 基线：`v0.1.156`，提交 `1e02953`，分支 `codex/fix-deep-review-findings`。
-- 基线命令 `go test ./... -count=1 -timeout 120s` 通过。
-- Codex app-server `thread/read` 不直接返回主会话模型和推理强度；本地 rollout 的 `turn_context` 包含实际 `model` 与 `effort`。
-- Claude transcript 通常包含 assistant 使用的模型，但外部历史会话不保证记录推理强度。
+- 基线分支：`main`，提交 `2ae9564`，工作分支 `codex/fix-comprehensive-review`。
+- 基线全仓单测、全仓 race、`go vet`、`govulncheck`、文档校验均通过。
+- 基线总语句覆盖率为 69.8%，关键并发时序缺少定向测试。
+- 本轮按顺序串行执行；多个任务共享 Agent 和 Handler 状态，不使用并行写入或 subagent。
 
-## 决策日志
+## 已确认决策
 
-- 审批使用上游请求 ID；缺少上游 ID 时生成随机唯一 ID，不再由提示文本推导。
-- ACP 运行时模型配置通过单次加锁快照读取，锁不跨越 RPC。
-- Claude 只缓存实际观察到的模型档位；切换模型时清除不兼容 effort。
-- 会话模型字段缺失时显示“未知（会话未记录）”，不做全局配置回退。
-- 本地 `scripts/release.sh` 保留为稳定版默认发布者；Actions 稳定版入口仅手动触发。
-- 全程串行执行；多个任务重复修改同一文件，不使用并行写入或 subagent。
+- Codex 同一真实 thread 同时只允许一个 turn 所有者；事件通道必须带注册所有权，注销时不能删除其他订阅者。
+- 所有 Agent 都登记运行任务；Codex 保留暂存消息和跨端控制能力，其他 Agent 只复用统一生命周期与重启计数。
+- 已知 WeClaw 进程存在但运行状态无法确认时，普通重启失败关闭；仅 `--force` 可以继续。
+- loopback API 保留本地无 token 调用，但拒绝非 loopback Host 和跨源浏览器请求。
+- 持久化写入必须串行、使用唯一临时文件并原子替换。
 
 ## 执行计划
 
-- [x] P1 串行：修复并发审批请求隔离。
-- [x] P2 串行：修复 ACP 运行时模型配置竞态。
-- [x] P3 串行：修复 Claude 模型推理档位缓存。
-- [x] P4 串行：切换会话时显示实际模型配置。
-- [x] P5 串行：避免资料保存覆盖已有文件。
-- [x] P6 串行：确保审批超时默认拒绝。
-- [x] P7 串行：修复会话状态 Agent 展示。
-- [x] P8 串行：清理过期授权码状态。
-- [x] P9 串行：统一稳定版发布流程。
-- [x] P10 串行：修正 Web 工作空间权限提示。
-- [x] P11 串行：清理静态检查问题和超大文件。
-- [x] P12 串行：执行全量验证与 Review Gate。
+- [x] P1-1 串行：修复 Codex thread 事件通道覆盖和错误注销。
+  - 修改：`agent/acp_agent.go`、`agent/codex_turn_dispatch.go`、`agent/codex_app_server_turn.go`、`agent/codex_thread_watch.go`、`agent/acp_chat.go`。
+  - 测试：新增同 key 重复注册、所有权注销和同 thread 并发 turn 回归测试。
+- [ ] P1-2 串行：统一 Codex、Claude、HTTP Agent 运行任务生命周期。
+  - 修改：`messaging/agent_execution.go`、`messaging/task_state.go`、`messaging/handler_status.go`。
+  - 测试：Claude/HTTP 执行期间 `ActiveTaskCount()` 为 1，结束后归零。
+- [ ] P1-3 串行：重启状态读取失败时默认拒绝重启。
+  - 修改：`cmd/restart_safety.go`、相关重启错误文案。
+  - 测试：配置读取失败、API 超时、401、无效 JSON 均返回阻断错误；`--force` 放行。
+- [ ] P1-4 串行：阻止 loopback API DNS rebinding。
+  - 修改：`api/server.go`、`api/auth.go`，新增请求边界校验 helper。
+  - 测试：loopback Host 成功，外部 Host、跨源 Origin 拒绝，token 模式保持可用。
+- [ ] P2-1 串行：序列化 ACP 状态快照持久化。
+  - 修改：`agent/acp_agent.go`、`agent/acp_state.go`。
+  - 测试：并发保存最终文件可解析且不会由旧快照覆盖新状态。
+- [ ] P2-2 串行：修复 Companion 旧连接清理误伤新连接请求。
+  - 修改：`agent/companion_agent.go`、`agent/companion_agent_chat.go`。
+  - 测试：连接代际切换后旧 read loop 退出不失败新连接 pending request。
+- [ ] P2-3 串行：为 ACP 启动增加 starting/ready 状态同步。
+  - 修改：`agent/acp_agent.go`、`agent/acp_process.go`。
+  - 测试：并发 `Start` 必须等待同一次 initialize 成功或共同收到失败。
+- [ ] P2-4 串行：扩充远程请求特殊地址拒绝范围。
+  - 修改：`internal/remotefetch/remotefetch.go`。
+  - 测试：拒绝 CGNAT、benchmark、文档网段和 IPv6 特殊用途地址，保留合法公网地址。
+- [ ] P2-5 串行：统一回收飞书临时附件。
+  - 修改：`feishu/adapter_events.go`、`feishu/incoming.go` 或消息交付边界 helper。
+  - 测试：多附件、空文本、处理中断和下载中途失败均清理临时文件。
+- [ ] P2-6 串行：序列化并原子写入微信 context token。
+  - 修改：`wechat/token_store.go`。
+  - 测试：并发用户更新后文件包含全部最新 token，失败不破坏旧文件。
+- [ ] P2-7 串行：回收长期状态表。
+  - 修改：`messaging/handler.go`、`messaging/task_state.go`、`messaging/rate_limit.go`、`platform/registry.go`、`web/auth_throttle.go`、`feishu/adapter.go`。
+  - 测试：过期键和空闲执行锁会被删除；删除未使用的 `contextTokens`。
+- [ ] P2-8 串行：限制敏感日志并为后台日志增加轮转。
+  - 修改：`api/send.go`、`messaging/audit.go`、`cmd/start_daemon.go`，必要时新增日志轮转 helper。
+  - 测试：API 不记录正文，审计摘要脱敏，日志超过阈值后轮转。
+- [ ] P2-9 串行：拒绝非法 HTTP Agent `max_history`。
+  - 修改：`config/config.go`、`web/config_service.go`、`agent/http_agent.go`。
+  - 测试：负值配置校验失败，构造函数不会产生可崩溃状态。
+- [ ] P2-10 串行：加强稳定版发布门禁与 CI 最小权限。
+  - 修改：`.github/workflows/release.yml`、`.github/workflows/ci.yml`。
+  - 验证：YAML 结构检查、文档契约和发布脚本测试。
+- [ ] P3-1 串行：完整判断 Web 配置是否需要重启。
+  - 修改：`web/view.go`、`web/config_service.go`。
+  - 测试：Agent、API、审计、保存目录等非热更新字段变化返回 `restart_required=true`。
+- [ ] P3-2 串行：同步 Claude 模型与推理强度文档。
+  - 修改：`README_CN.md`、`README.md`。
+  - 验证：文档契约检查。
+- [ ] FINAL 串行：执行全量测试、race、vet、staticcheck、govulncheck、覆盖率、文档契约和 Review Gate。
 
 ## 验证矩阵
 
-- 每项先运行定向测试确认 RED，再最小实现并确认 GREEN。
-- 每项提交前执行受影响包 `go test -race`，硬超时 60 秒。
-- 终验执行全仓测试、race、vet、staticcheck、govulncheck、文档契约、发布 dry-run 和差异检查。
-
-## 进度记录
-
-- 2026-07-11：用户确认功能边界、风险决策、执行计划和新增会话模型展示策略。
-- 2026-07-11：创建隔离 worktree，完成依赖下载和全仓基线测试。
-- 2026-07-11：P1 完成；审批请求透传 JSON-RPC ID，卡片键加入随机 nonce，相同内容的并发审批可独立处理且注册冲突不再覆盖。
-- 2026-07-11：P2 完成；ACP Info、thread start/resume、turn start 与模型状态统一读取单次加锁快照，定向 race 复现由失败转为通过。
-- 2026-07-11：P3 完成；Claude ACP 按模型保留真实档位，模型变化清除旧 effort，未知档位不再伪造，显式不兼容配置在 RPC 前失败。
-- 2026-07-11：P4 完成；Codex 读取所选 rollout 最新 turn_context，Claude 读取所选 transcript 最新 assistant 模型，缺失字段明确显示“未知（会话未记录）”，命令、飞书卡片和单会话自动切换统一生效。
-- 2026-07-11：P5 完成；链接和图片资料改为独占创建正文与 sidecar，同名及并发保存自动递增后缀，已有文件不再被截断覆盖。
-- 2026-07-11：P6 完成；审批超时与上下文取消只选择语义明确的拒绝项，无拒绝项时返回协议级 decline，不再回退到可能代表允许的首项。
-- 2026-07-11：P7 完成；/status 按会话选择、平台账号默认和全局默认的既有优先级解析 Agent，飞书会话切换后展示对应 Agent 类型与模型。
-- 2026-07-11：P8 完成；微信授权码在签发、批准和待授权列表入口统一清理过期或损坏记录，并在锁内持久化清理后的状态。
-- 2026-07-11：P9 完成；本地 release.sh 保持稳定版默认发布者，Actions Release 删除 tag 自动触发，仅允许手动按已存在 tag 构建，并对同 tag 任务串行化。
-- 2026-07-11：P10 完成；Web 面板的 allowed_workspace_roots 提示与运行时一致，明确普通用户未配置时禁用远程 /cwd，管理员不受限制。
-- 2026-07-11：P11 完成；清除未使用私有包装和类型、修正覆盖参数及静态规范问题，拆分 doctor 平台检查与 Codex App 事件解析，全仓 staticcheck 和 go vet 零告警，生产 Go 文件均不超过 300 行。
-- 2026-07-11：P12 完成；全仓测试、全仓 race、go vet、staticcheck、govulncheck、文档契约和 v0.1.157 发布 dry-run 全部通过。
+- 每项先运行定向测试确认 RED，再实现并确认 GREEN。
+- 逻辑改动完成后执行受影响包 `go test -race -count=1 -timeout 60s`。
+- 阶段完成后执行 `go test ./... -count=1 -timeout 120s`。
+- 终验执行 `go test -race ./...`、`go vet ./...`、`staticcheck ./...`、`govulncheck ./...`、覆盖率、文档校验与 `git diff --check`。
 
 ## Review 小结
 
-终态：finished。
+终态：执行中。
 
-Spec 符合度：通过。11 项计划均按确认顺序实现并独立提交，会话切换严格展示历史记录值，不使用全局 Agent 配置回退。
+## 进度记录
 
-安全检查：通过。未新增硬编码凭证；审批超时保持 fail-closed；资料文件使用独占创建；本地会话文件均通过已发现记录定位，不直接拼接用户输入路径。
-
-测试与验证：通过。`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、`govulncheck ./...`、文档契约和发布 dry-run 均为零失败。
-
-复杂度检查：通过。生产 Go 文件最大 295 行；新增和修改的关键逻辑按职责拆分，`cmd/doctor.go` 为 222 行，`cmd/codex_app_protocol.go` 为 242 行。
-
-Document-refresh: needed
-原因：稳定版发布触发方式发生变化，已同步更新中英文 README。
-
-剩余风险：Claude 历史 transcript 通常不记录推理强度，此时按确认策略显示“未知（会话未记录）”。
-
-潜在技术债：当前未加入 CI staticcheck job，终验仍由本地发布验证矩阵执行。
-
-结论：通过。
+- 2026-07-11：P1-1 完成；Codex thread 与标准 ACP session 使用原子所有权注册，重复 owner 不再覆盖，注销仅清理调用者持有的通道；`go test -race ./agent` 通过。

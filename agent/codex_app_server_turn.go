@@ -61,15 +61,10 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 
 	// Register turn event channel
 	turnCh := make(chan *codexTurnEvent, 256)
-	a.notifyMu.Lock()
-	a.turnCh[threadID] = turnCh
-	a.notifyMu.Unlock()
-
-	defer func() {
-		a.notifyMu.Lock()
-		delete(a.turnCh, threadID)
-		a.notifyMu.Unlock()
-	}()
+	if !a.registerTurnChannel(threadID, turnCh) {
+		return "", fmt.Errorf("thread %s already has an active turn", threadID)
+	}
+	defer a.unregisterTurnChannel(threadID, turnCh)
 
 	turnMetrics := newCodexTurnMetrics(time.Now())
 	turnIDCh := make(chan string, 1)

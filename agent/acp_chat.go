@@ -51,17 +51,10 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 	// Register notification channel for this session
 	notifyCh := make(chan *sessionUpdate, 256)
 	approvalCh := make(chan *codexTurnEvent, 16)
-	a.notifyMu.Lock()
-	a.notifyCh[sessionID] = notifyCh
-	a.turnCh[sessionID] = approvalCh
-	a.notifyMu.Unlock()
-
-	defer func() {
-		a.notifyMu.Lock()
-		delete(a.notifyCh, sessionID)
-		delete(a.turnCh, sessionID)
-		a.notifyMu.Unlock()
-	}()
+	if !a.registerLegacySessionChannels(sessionID, notifyCh, approvalCh) {
+		return "", fmt.Errorf("session %s already has an active prompt", sessionID)
+	}
+	defer a.unregisterLegacySessionChannels(sessionID, notifyCh, approvalCh)
 
 	// Send prompt (this blocks until the prompt completes)
 	type promptDoneMsg struct {
