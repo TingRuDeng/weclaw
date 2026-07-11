@@ -39,7 +39,7 @@ func (s *configService) apply(v configView) (restartRequired bool, err error) {
 	if err := validateConfig(merged); err != nil {
 		return false, err
 	}
-	restartRequired = platformTopologyChanged(current, merged)
+	restartRequired = restartRequiredConfigChanged(current, merged)
 	if err := s.save(merged); err != nil {
 		return false, err
 	}

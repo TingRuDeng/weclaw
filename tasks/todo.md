@@ -70,7 +70,7 @@
 - [x] P2-10 串行：加强稳定版发布门禁与 CI 最小权限。
   - 修改：`.github/workflows/release.yml`、`.github/workflows/ci.yml`。
   - 验证：YAML 结构检查、文档契约和发布脚本测试。
-- [ ] P3-1 串行：完整判断 Web 配置是否需要重启。
+- [x] P3-1 串行：完整判断 Web 配置是否需要重启。
   - 修改：`web/view.go`、`web/config_service.go`。
   - 测试：Agent、API、审计、保存目录等非热更新字段变化返回 `restart_required=true`。
 - [ ] P3-2 串行：同步 Claude 模型与推理强度文档。
@@ -105,3 +105,4 @@
 - 2026-07-11：P2-8 完成；API 与审计日志只保留消息元数据，后台日志按 20 MiB 即时轮转并保留 3 份备份，轮转后重绑定 stdout/stderr；相关包 race 测试通过。
 - 2026-07-11：P2-9 完成；负数 HTTP Agent max_history 在配置加载、Web 保存和直接构造时统一返回错误，不再产生可切片越界的实例；相关包 race 测试通过。
 - 2026-07-11：P2-10 完成；稳定版 Release 增加单测、race 和 vet，工作流默认 contents:read，仅 release/publish job 获得写权限；YAML 与文档契约校验通过。
+- 2026-07-11：P3-1 完成；Web 通过剔除热重载字段后的结构化投影判断重启需求，Agent、API、审计、保存目录和平台运行参数变化不再漏报；`go test -race ./web` 通过。

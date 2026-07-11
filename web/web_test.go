@@ -165,11 +165,11 @@ func TestMergeViewUpdatesAdminUsers(t *testing.T) {
 func TestPlatformTopologyChanged(t *testing.T) {
 	cur := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {Enabled: boolPtr(false)}}}
 	soft := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {Enabled: boolPtr(false), AllowedUsers: []string{"u1"}}}}
-	if platformTopologyChanged(cur, soft) {
+	if restartRequiredConfigChanged(cur, soft) {
 		t.Fatal("allowed_users change is soft, must not require restart")
 	}
 	topo := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {Enabled: boolPtr(true)}}}
-	if !platformTopologyChanged(cur, topo) {
+	if !restartRequiredConfigChanged(cur, topo) {
 		t.Fatal("enabling a platform must require restart")
 	}
 }
@@ -188,11 +188,54 @@ func TestPlatformTopologyChangedDetectsFeishuBotList(t *testing.T) {
 		Bots:    []config.FeishuBotConfig{{Name: "project-a", AppID: "cli_b"}},
 	}}}
 
-	if platformTopologyChanged(cur, soft) {
+	if restartRequiredConfigChanged(cur, soft) {
 		t.Fatal("allowed_users-only bot change is soft")
 	}
-	if !platformTopologyChanged(cur, topo) {
+	if !restartRequiredConfigChanged(cur, topo) {
 		t.Fatal("bot app_id change must require restart")
+	}
+}
+
+func TestPlatformTopologyChangedDetectsNonReloadableConfig(t *testing.T) {
+	base := config.DefaultConfig()
+	base.APIAddr = "127.0.0.1:18011"
+	base.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex", Model: "gpt-old"}
+
+	tests := []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{name: "api address", mutate: func(cfg *config.Config) { cfg.APIAddr = "127.0.0.1:19011" }},
+		{name: "save dir", mutate: func(cfg *config.Config) { cfg.SaveDir = "/tmp/output" }},
+		{name: "audit path", mutate: func(cfg *config.Config) { cfg.AuditLogPath = "/tmp/audit.log" }},
+		{name: "agent model", mutate: func(cfg *config.Config) {
+			agentCfg := cfg.Agents["codex"]
+			agentCfg.Model = "gpt-new"
+			cfg.Agents["codex"] = agentCfg
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			next := mergeView(base, redactConfig(base))
+			tt.mutate(next)
+			if !restartRequiredConfigChanged(base, next) {
+				t.Fatal("non-reloadable change must require restart")
+			}
+		})
+	}
+}
+
+func TestPlatformTopologyChangedIgnoresSoftAgentProgress(t *testing.T) {
+	base := config.DefaultConfig()
+	base.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex"}
+	next := mergeView(base, redactConfig(base))
+	agentCfg := next.Agents["codex"]
+	progress := config.DefaultProgressConfig()
+	agentCfg.Progress = &progress
+	next.Agents["codex"] = agentCfg
+
+	if restartRequiredConfigChanged(base, next) {
+		t.Fatal("agent progress change is soft, must not require restart")
 	}
 }
 

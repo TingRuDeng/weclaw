@@ -1,6 +1,10 @@
 package web
 
-import "github.com/fastclaw-ai/weclaw/config"
+import (
+	"reflect"
+
+	"github.com/fastclaw-ai/weclaw/config"
+)
 
 // secretMask 表示"该密钥保持不变"。读取时密钥被替换为该值，写回时该值表示沿用原密钥。
 const secretMask = "__WECLAW_UNCHANGED__"
@@ -162,38 +166,52 @@ func mergeEnv(incoming, existing map[string]string) map[string]string {
 	return result
 }
 
-// platformTopologyChanged 判断是否发生平台拓扑变更(需重启)：平台启用状态或飞书凭证类。
-func platformTopologyChanged(current, next *config.Config) bool {
-	if len(current.Platforms) != len(next.Platforms) {
-		return true
-	}
-	for name, np := range next.Platforms {
-		cp, ok := current.Platforms[name]
-		if !ok || !boolPtrEqual(cp.Enabled, np.Enabled) {
-			return true
-		}
-		if name == "feishu" && feishuBotsTopologyChanged(cp.Bots, np.Bots) {
-			return true
-		}
-	}
-	return false
+type restartConfigProjection struct {
+	APIAddr      string
+	APIToken     string
+	SaveDir      string
+	AuditLog     *bool
+	AuditLogPath string
+	Agents       map[string]config.AgentConfig
+	Platforms    map[string]config.PlatformConfig
 }
 
-func feishuBotsTopologyChanged(current, next []config.FeishuBotConfig) bool {
-	if len(current) != len(next) {
-		return true
-	}
-	for i := range next {
-		if current[i].Name != next[i].Name || current[i].AppID != next[i].AppID {
-			return true
-		}
-	}
-	return false
+// restartRequiredConfigChanged 判断是否修改了无法热重载的运行配置。
+func restartRequiredConfigChanged(current, next *config.Config) bool {
+	return !reflect.DeepEqual(restartProjection(current), restartProjection(next))
 }
 
-func boolPtrEqual(a, b *bool) bool {
-	if a == nil || b == nil {
-		return a == b
+func restartProjection(cfg *config.Config) restartConfigProjection {
+	if cfg == nil {
+		return restartConfigProjection{}
 	}
-	return *a == *b
+	agents := make(map[string]config.AgentConfig, len(cfg.Agents))
+	for name, agentCfg := range cfg.Agents {
+		agentCfg.Progress = nil
+		agents[name] = agentCfg
+	}
+	platforms := make(map[string]config.PlatformConfig, len(cfg.Platforms))
+	for name, platformCfg := range cfg.Platforms {
+		platforms[name] = restartPlatformProjection(platformCfg)
+	}
+	return restartConfigProjection{
+		APIAddr: cfg.APIAddr, APIToken: cfg.APIToken, SaveDir: cfg.SaveDir,
+		AuditLog: cfg.AuditLog, AuditLogPath: cfg.AuditLogPath,
+		Agents: agents, Platforms: platforms,
+	}
+}
+
+func restartPlatformProjection(platformCfg config.PlatformConfig) config.PlatformConfig {
+	platformCfg.AllowedUsers = nil
+	platformCfg.DefaultAgent = ""
+	platformCfg.Progress = nil
+	bots := make([]config.FeishuBotConfig, len(platformCfg.Bots))
+	for index, bot := range platformCfg.Bots {
+		bot.AllowedUsers = nil
+		bot.DefaultAgent = ""
+		bot.Progress = nil
+		bots[index] = bot
+	}
+	platformCfg.Bots = bots
+	return platformCfg
 }
