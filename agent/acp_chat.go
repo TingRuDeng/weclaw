@@ -91,12 +91,17 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 				}
 			}
 		case evt := <-approvalCh:
-			if evt.Approval == nil {
+			if evt.Approval != nil {
+				if err := a.handleCodexApprovalEvent(ctx, evt); err != nil {
+					return "", fmt.Errorf("approval response error: %w", err)
+				}
 				continue
 			}
-			optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
-			if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat, evt.Approval.RequestedPermissions); err != nil {
-				return "", fmt.Errorf("approval response error: %w", err)
+			if evt.UserInput != nil {
+				if err := a.handleCodexUserInputEvent(ctx, evt); err != nil {
+					return "", fmt.Errorf("user input response error: %w", err)
+				}
+				continue
 			}
 		case done := <-promptDone:
 			// Drain remaining notifications

@@ -20,7 +20,7 @@
 - [x] P4.1：固化 Desktop IPC frame 与 envelope。
 - [x] P4.2：建立安全的 IPC client 与 macOS endpoint。
 - [x] P4.3：实现 snapshot、patch 与事件投影。
-- [ ] P4.4：映射 Desktop 操作、审批和结构化问答。
+- [x] P4.4：映射 Desktop 操作、审批和结构化问答。
 - [ ] P4.5：建立 thread owner 状态机。
 - [ ] P4.6：让 ACPAgent 按 owner 路由 Chat 和控制。
 - [ ] P4.7：安全刷新 ACP 并恢复同一 thread。

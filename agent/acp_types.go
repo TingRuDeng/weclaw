@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -177,13 +178,14 @@ type codexUserInput struct {
 }
 
 type codexTurnEvent struct {
-	Kind     string
-	TurnID   string
-	ItemID   string
-	Delta    string
-	Text     string
-	Progress *codexProgressEvent
-	Approval *codexApprovalRequest
+	Kind      string
+	TurnID    string
+	ItemID    string
+	Delta     string
+	Text      string
+	Progress  *codexProgressEvent
+	Approval  *codexApprovalRequest
+	UserInput *codexUserInputEvent
 }
 
 type codexProgressEvent struct {
@@ -198,4 +200,5 @@ type codexApprovalRequest struct {
 	ResponseFormat       permissionResponseFormat
 	RequestedPermissions json.RawMessage
 	Request              ApprovalRequest
+	Respond              func(context.Context, string) error
 }

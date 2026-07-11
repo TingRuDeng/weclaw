@@ -380,7 +380,7 @@ git commit -m "投影 Codex Desktop 会话实时状态"
 - Modify: `agent/codex_thread_watch.go`
 - Modify: `agent/codex_turn_dispatch.go`
 
-- [ ] **Step 1: 写 turn 操作 wire 失败测试**
+- [x] **Step 1: 写 turn 操作 wire 失败测试**
 
 ```go
 func TestCodexDesktopStartTurnMapsFollowerPayload(t *testing.T) {}
@@ -391,7 +391,7 @@ func TestCodexDesktopStartDoesNotRetryDeliveryUnknown(t *testing.T) {}
 
 `senderRequestId` 在一次逻辑发送中稳定；start 响应兼容 `{result:{turn:{id}}}` 和 `{turn:{id}}`，两种都必须提取非空 turn ID。
 
-- [ ] **Step 2: 把审批响应改成 provider responder**
+- [x] **Step 2: 把审批响应改成 provider responder**
 
 ```go
 type codexApprovalRequest struct {
@@ -403,7 +403,7 @@ type codexApprovalRequest struct {
 
 app-server 在 `handlePermissionRequest` 构造 responder，内部继续调用 `respondPermissionRequest`；Desktop projector 构造 follower responder。`chatLegacyACP`、`chatCodexAppServerWithRetry` 和 `collectAttachedCodexTurn` 统一调用新的 `handleCodexApprovalEvent`：执行 `resolvePermissionOption` 后调用 `evt.Approval.Respond`，没有 responder 必须报错，不能自动批准。`isCodexTurnControlEvent` 同时把审批和用户问答视为不可丢控制事件。
 
-- [ ] **Step 3: 写审批映射失败测试**
+- [x] **Step 3: 写审批映射失败测试**
 
 ```go
 func TestCodexDesktopCommandApprovalUsesCommandDecision(t *testing.T) {}
@@ -415,7 +415,7 @@ func TestCodexDesktopResolvedApprovalIsNotReplayed(t *testing.T) {}
 
 允许的 decision 仅为 `accept/acceptForSession/decline/cancel`；未知值返回错误并保留 pending，不默认批准。
 
-- [ ] **Step 4: 定义结构化问答契约**
+- [x] **Step 4: 定义结构化问答契约**
 
 ```go
 type UserInputOption struct { Label, Description string }
@@ -429,7 +429,7 @@ func ContextWithUserInputHandler(context.Context, UserInputHandler) context.Cont
 
 Desktop `item/tool/requestUserInput` 只在 request 未 completed 且 questions 非空时投影。回答必须覆盖每个 question ID，并发送 `thread-follower-submit-user-input`；空答案保持 pending 并显式失败。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 Run: `gofmt -w agent/codex_desktop_actions*.go agent/user_input*.go agent/acp_types.go agent/acp_permission_bridge.go agent/acp_chat.go agent/codex_app_server_turn.go agent/codex_thread_watch.go agent/codex_turn_dispatch.go`
 

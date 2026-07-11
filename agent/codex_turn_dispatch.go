@@ -49,7 +49,7 @@ func isCodexTurnControlEvent(evt *codexTurnEvent) bool {
 	if evt == nil {
 		return false
 	}
-	return evt.Approval != nil || evt.Kind == "completed" || evt.Kind == "error" || evt.Kind == "started"
+	return evt.Approval != nil || evt.UserInput != nil || evt.Kind == "completed" || evt.Kind == "error" || evt.Kind == "started"
 }
 
 func dispatchCodexTurnControlEvent(ch chan *codexTurnEvent, evt *codexTurnEvent) bool {

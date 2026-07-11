@@ -136,10 +136,20 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 					onProgress("进展：Codex 请求权限审批。")
 				}
 				progressState.emitted = true
-				optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
-				if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat, evt.Approval.RequestedPermissions); err != nil {
+				if err := a.handleCodexApprovalEvent(ctx, evt); err != nil {
 					log.Printf("[acp] turn approval response failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), err)
 					return "", fmt.Errorf("approval response error: %w", err)
+				}
+				continue
+			}
+			if evt.UserInput != nil {
+				diagnostics.remember("进展：Codex 请求补充信息。")
+				if onProgress != nil {
+					onProgress("进展：Codex 请求补充信息。")
+				}
+				progressState.emitted = true
+				if err := a.handleCodexUserInputEvent(ctx, evt); err != nil {
+					return "", fmt.Errorf("user input response error: %w", err)
 				}
 				continue
 			}

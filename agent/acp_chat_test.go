@@ -74,6 +74,11 @@ func TestLegacyACPChatHandlesPermissionRequest(t *testing.T) {
 					{ID: "allow-once", Kind: "allow"},
 					{ID: "reject-once", Kind: "deny"},
 				}},
+				Respond: func(_ context.Context, optionID string) error {
+					return a.respondPermissionRequest(
+						json.RawMessage(`7`), optionID, permissionResponseOutcome,
+					)
+				},
 			}}
 			notifyCh <- &sessionUpdate{SessionUpdate: "agent_message_chunk", Content: json.RawMessage(`{"type":"text","text":"done"}`)}
 			return json.RawMessage(`{"ok":true}`), nil

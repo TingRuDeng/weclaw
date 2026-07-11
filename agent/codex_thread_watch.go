@@ -39,6 +39,12 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID 
 				}
 				continue
 			}
+			if evt.UserInput != nil {
+				if err := a.handleCodexUserInputEvent(ctx, evt); err != nil {
+					return "", fmt.Errorf("user input response error: %w", err)
+				}
+				continue
+			}
 			if evt.Kind == "error" {
 				return "", fmt.Errorf("turn error: %s", diagnostics.withError(evt.Text))
 			}
@@ -51,8 +57,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID 
 }
 
 func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTurnEvent) error {
-	optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
-	if err := a.respondPermissionRequest(evt.Approval.ID, optionID, evt.Approval.ResponseFormat, evt.Approval.RequestedPermissions); err != nil {
+	if err := a.handleCodexApprovalEvent(ctx, evt); err != nil {
 		return fmt.Errorf("approval response error: %w", err)
 	}
 	return nil

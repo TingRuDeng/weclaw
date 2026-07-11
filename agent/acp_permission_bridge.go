@@ -34,6 +34,11 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 			Options:   options,
 		},
 	}
+	approval.Respond = func(_ context.Context, optionID string) error {
+		return a.respondPermissionRequest(
+			req.ID, optionID, responseFormat, req.Params.Permissions,
+		)
+	}
 	if a.dispatchToTurnCh(permissionRouteID(req.Params), &codexTurnEvent{Kind: "approval_request", Approval: approval}) {
 		return
 	}

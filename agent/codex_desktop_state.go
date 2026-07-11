@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ type codexDesktopStateUpdate struct {
 type codexDesktopStateOptions struct {
 	now             func() time.Time
 	requestSnapshot func(string)
+	actions         *codexDesktopActions
 }
 
 type codexDesktopSnapshotSpec struct {
@@ -67,6 +69,8 @@ type codexDesktopStateStore struct {
 	needsSnapshot   map[string]uint64
 	now             func() time.Time
 	requestSnapshot func(string)
+	actions         *codexDesktopActions
+	actionSeen      map[string]map[string]bool
 }
 
 // newCodexDesktopStateStore 创建 revision 严格递增的 Desktop 状态缓存。
@@ -79,6 +83,7 @@ func newCodexDesktopStateStore(options codexDesktopStateOptions) *codexDesktopSt
 		queued:        make(map[string][]codexDesktopQueuedPatchSet),
 		needsSnapshot: make(map[string]uint64), now: options.now,
 		requestSnapshot: options.requestSnapshot,
+		actions:         options.actions, actionSeen: make(map[string]map[string]bool),
 	}
 }
 
@@ -106,6 +111,8 @@ func (s *codexDesktopStateStore) applySnapshot(spec codexDesktopSnapshotSpec) (c
 	replayed, replayErr := s.replayQueuedLocked(spec.threadID)
 	events = append(events, replayed...)
 	snapshot = s.threads[spec.threadID]
+	actionEvents, actionErr := s.projectPendingActionEventsLocked(snapshot)
+	events = append(events, actionEvents...)
 	target := s.needsSnapshot[spec.threadID]
 	needsSnapshot := target > snapshot.Revision
 	if !needsSnapshot {
@@ -114,7 +121,7 @@ func (s *codexDesktopStateStore) applySnapshot(spec codexDesktopSnapshotSpec) (c
 	return codexDesktopStateUpdate{
 		Snapshot: cloneCodexDesktopSnapshot(snapshot), Events: events,
 		Applied: true, NeedsSnapshot: needsSnapshot,
-	}, replayErr
+	}, errors.Join(replayErr, actionErr)
 }
 
 // applyPatchSet 只接受与当前 revision 连续的 patch；其余进入有界等待队列。
@@ -155,11 +162,13 @@ func (s *codexDesktopStateStore) applyPatchSet(spec codexDesktopPatchSetSpec) (c
 	}
 	snapshot, events := buildCodexDesktopSnapshot(snapshotSpec, s.now(), &current.projection)
 	s.threads[spec.threadID] = snapshot
+	actionEvents, actionErr := s.projectPendingActionEventsLocked(snapshot)
+	events = append(events, actionEvents...)
 	s.evictIdleLocked(spec.threadID)
 	s.mu.Unlock()
 	return codexDesktopStateUpdate{
 		Snapshot: cloneCodexDesktopSnapshot(snapshot), Events: events, Applied: true,
-	}, nil
+	}, actionErr
 }
 
 // snapshot 返回私有深拷贝，调用者不能修改缓存基线。
@@ -231,5 +240,6 @@ func (s *codexDesktopStateStore) evictIdleLocked(currentThreadID string) {
 		delete(s.threads, candidate)
 		delete(s.queued, candidate)
 		delete(s.needsSnapshot, candidate)
+		delete(s.actionSeen, candidate)
 	}
 }
