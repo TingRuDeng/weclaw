@@ -109,10 +109,12 @@ type CodexLiveRuntime interface {
 | `thread-follower-interrupt-turn` | 2 | 停止 active turn |
 | `thread-follower-command-approval-decision` | 1 | 回复命令审批 |
 | `thread-follower-file-approval-decision` | 1 | 回复文件审批 |
-| `thread-follower-permissions-request-approval-response` | 1 | 回复权限申请 |
+| `thread-follower-permissions-request-approval-response` | 1 | 权限申请兼容方法；保留版本探测，首期不作为默认发送路径 |
 | `thread-follower-submit-user-input` | 1 | 回复结构化用户问答 |
 
 版本表集中维护，未知版本或明确拒绝时将该能力标记为不兼容，并向用户返回可操作错误。
+
+当前 Remodex follower 与对应回归测试已验证：`item/permissions/requestApproval` 默认通过 `thread-follower-file-approval-decision` 回复；专用 permissions response 只在 owner 兼容处理器中出现。首期按已验证映射实现，专用方法等待 Codex Desktop 实机证据后再启用，避免凭字段名猜测协议。
 
 ### 6.3 所有权发现
 
