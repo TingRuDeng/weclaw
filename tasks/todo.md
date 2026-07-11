@@ -40,7 +40,7 @@
 - [x] P9 串行：统一稳定版发布流程。
 - [x] P10 串行：修正 Web 工作空间权限提示。
 - [x] P11 串行：清理静态检查问题和超大文件。
-- [ ] P12 串行：执行全量验证与 Review Gate。
+- [x] P12 串行：执行全量验证与 Review Gate。
 
 ## 验证矩阵
 
@@ -63,7 +63,25 @@
 - 2026-07-11：P9 完成；本地 release.sh 保持稳定版默认发布者，Actions Release 删除 tag 自动触发，仅允许手动按已存在 tag 构建，并对同 tag 任务串行化。
 - 2026-07-11：P10 完成；Web 面板的 allowed_workspace_roots 提示与运行时一致，明确普通用户未配置时禁用远程 /cwd，管理员不受限制。
 - 2026-07-11：P11 完成；清除未使用私有包装和类型、修正覆盖参数及静态规范问题，拆分 doctor 平台检查与 Codex App 事件解析，全仓 staticcheck 和 go vet 零告警，生产 Go 文件均不超过 300 行。
+- 2026-07-11：P12 完成；全仓测试、全仓 race、go vet、staticcheck、govulncheck、文档契约和 v0.1.157 发布 dry-run 全部通过。
 
 ## Review 小结
 
-终态：进行中。
+终态：finished。
+
+Spec 符合度：通过。11 项计划均按确认顺序实现并独立提交，会话切换严格展示历史记录值，不使用全局 Agent 配置回退。
+
+安全检查：通过。未新增硬编码凭证；审批超时保持 fail-closed；资料文件使用独占创建；本地会话文件均通过已发现记录定位，不直接拼接用户输入路径。
+
+测试与验证：通过。`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、`govulncheck ./...`、文档契约和发布 dry-run 均为零失败。
+
+复杂度检查：通过。生产 Go 文件最大 295 行；新增和修改的关键逻辑按职责拆分，`cmd/doctor.go` 为 222 行，`cmd/codex_app_protocol.go` 为 242 行。
+
+Document-refresh: needed
+原因：稳定版发布触发方式发生变化，已同步更新中英文 README。
+
+剩余风险：Claude 历史 transcript 通常不记录推理强度，此时按确认策略显示“未知（会话未记录）”。
+
+潜在技术债：当前未加入 CI staticcheck job，终验仍由本地发布验证矩阵执行。
+
+结论：通过。
