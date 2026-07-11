@@ -84,7 +84,13 @@ func issueAccessCode(filePath string, msg platform.IncomingMessage, now time.Tim
 	if err != nil {
 		return accessCodeRecord{}, err
 	}
+	purged := purgeExpiredAccessCodes(&state, now)
 	if record, ok := findAccessRecord(state, string(msg.Platform), userID, now); ok {
+		if purged {
+			if err := saveAccessCodeState(filePath, state); err != nil {
+				return accessCodeRecord{}, err
+			}
+		}
 		return record, nil
 	}
 	code, ok := newUniqueAccessCode(state, now)
@@ -114,9 +120,16 @@ func ApproveAccessCode(req AccessCodeApprovalRequest) (AccessCodeApprovalResult,
 	if err != nil {
 		return AccessCodeApprovalResult{}, err
 	}
+	now := time.Now().UTC()
+	purged := purgeExpiredAccessCodes(&state, now)
 	code := strings.TrimSpace(req.Code)
 	record, ok := state.Records[code]
-	if !ok || !accessCodeValid(record, time.Now().UTC()) {
+	if !ok || !accessCodeValid(record, now) {
+		if purged {
+			if err := saveAccessCodeState(filePath, state); err != nil {
+				return AccessCodeApprovalResult{}, err
+			}
+		}
 		return AccessCodeApprovalResult{}, fmt.Errorf("授权码无效或已过期")
 	}
 	if record.Platform != string(platform.PlatformWeChat) {
@@ -152,6 +165,11 @@ func LoadPendingAccessCodeViews(filePath string) []AccessCodeView {
 		return nil
 	}
 	now := time.Now().UTC()
+	if purgeExpiredAccessCodes(&state, now) {
+		if err := saveAccessCodeState(firstNonBlank(filePath, DefaultAccessCodeFile()), state); err != nil {
+			log.Printf("[access-code] failed to purge expired codes: %v", err)
+		}
+	}
 	views := make([]AccessCodeView, 0, len(state.Records))
 	for _, record := range state.Records {
 		if !accessCodeValid(record, now) {
@@ -257,4 +275,20 @@ func accessCodeExists(state accessCodeState, code string, now time.Time) bool {
 func accessCodeValid(record accessCodeRecord, now time.Time) bool {
 	expiresAt, err := time.Parse(time.RFC3339, record.ExpiresAt)
 	return err == nil && strings.TrimSpace(record.Code) != "" && now.Before(expiresAt)
+}
+
+// purgeExpiredAccessCodes 删除过期或格式损坏的记录，并告知调用方是否需要持久化。
+func purgeExpiredAccessCodes(state *accessCodeState, now time.Time) bool {
+	if state == nil {
+		return false
+	}
+	purged := false
+	for code, record := range state.Records {
+		if accessCodeValid(record, now) {
+			continue
+		}
+		delete(state.Records, code)
+		purged = true
+	}
+	return purged
 }

@@ -98,3 +98,89 @@ func TestIssueAccessCodeConcurrentRequestsKeepAllRecords(t *testing.T) {
 		t.Fatalf("pending records=%d, want 20", len(views))
 	}
 }
+
+func TestLoadPendingAccessCodeViewsPurgesExpiredState(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "access-codes.json")
+	now := time.Now().UTC()
+	state := accessCodeState{Records: map[string]accessCodeRecord{
+		"expired": {
+			Code: "expired", Platform: string(platform.PlatformWeChat), UserID: "old-user",
+			ExpiresAt: now.Add(-time.Minute).Format(time.RFC3339),
+		},
+		"valid": {
+			Code: "valid", Platform: string(platform.PlatformWeChat), UserID: "new-user",
+			ExpiresAt: now.Add(time.Minute).Format(time.RFC3339),
+		},
+	}}
+	if err := saveAccessCodeState(filePath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	views := LoadPendingAccessCodeViews(filePath)
+	if len(views) != 1 || views[0].Code != "valid" {
+		t.Fatalf("views=%#v，期望仅返回有效授权码", views)
+	}
+	loaded, err := loadAccessCodeState(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Records) != 1 || loaded.Records["valid"].Code != "valid" {
+		t.Fatalf("持久化状态未清理过期授权码：%#v", loaded.Records)
+	}
+}
+
+func TestApproveExpiredAccessCodePurgesRecord(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "access-codes.json")
+	state := accessCodeState{Records: map[string]accessCodeRecord{
+		"expired": {
+			Code: "expired", Platform: string(platform.PlatformWeChat), UserID: "old-user",
+			ExpiresAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
+		},
+	}}
+	if err := saveAccessCodeState(filePath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApproveAccessCode(AccessCodeApprovalRequest{Code: "expired", FilePath: filePath}); err == nil {
+		t.Fatal("批准过期授权码应失败")
+	}
+	loaded, err := loadAccessCodeState(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Records) != 0 {
+		t.Fatalf("过期授权码批准失败后仍留在状态文件：%#v", loaded.Records)
+	}
+}
+
+func TestIssueAccessCodePurgesExpiredRecordWhenReusingValidCode(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "access-codes.json")
+	now := time.Now().UTC()
+	state := accessCodeState{Records: map[string]accessCodeRecord{
+		"expired": {
+			Code: "expired", Platform: string(platform.PlatformWeChat), UserID: "old-user",
+			ExpiresAt: now.Add(-time.Minute).Format(time.RFC3339),
+		},
+		"valid": {
+			Code: "valid", Platform: string(platform.PlatformWeChat), UserID: "same-user",
+			ExpiresAt: now.Add(time.Minute).Format(time.RFC3339),
+		},
+	}}
+	if err := saveAccessCodeState(filePath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := issueAccessCode(filePath, platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, UserID: "same-user",
+	}, now)
+	if err != nil || record.Code != "valid" {
+		t.Fatalf("复用有效授权码失败：record=%#v err=%v", record, err)
+	}
+	loaded, err := loadAccessCodeState(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Records) != 1 || loaded.Records["valid"].Code != "valid" {
+		t.Fatalf("复用有效授权码时未清理过期状态：%#v", loaded.Records)
+	}
+}
