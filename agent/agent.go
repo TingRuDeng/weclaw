@@ -107,9 +107,11 @@ type CodexThreadAgent interface {
 	ClearCodexThread(conversationID string)
 }
 
-// CodexThreadState 描述 Codex app-server thread 当前运行态。
+// CodexThreadState 描述 app-server 或 Desktop 持有的 Codex thread 当前运行态。
 type CodexThreadState struct {
 	ThreadID             string
+	Model                string
+	Effort               string
 	Active               bool
 	ActiveTurnID         string
 	WaitingOnApproval    bool

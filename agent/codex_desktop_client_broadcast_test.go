@@ -46,6 +46,8 @@ func TestCodexDesktopClientBroadcastCallbackCanCall(t *testing.T) {
 
 func TestCodexDesktopClientBroadcastsKeepArrivalOrder(t *testing.T) {
 	methods := make(chan string, 2)
+	release := make(chan struct{})
+	defer close(release)
 	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		serveCodexDesktopTestInitialize(t, conn, "client-1")
 		writeCodexDesktopTestEnvelope(t, conn, codexDesktopEnvelope{
@@ -56,6 +58,7 @@ func TestCodexDesktopClientBroadcastsKeepArrivalOrder(t *testing.T) {
 			Type: codexDesktopEnvelopeBroadcast, Method: "second", Version: 2,
 			Params: json.RawMessage(`{"conversationId":"thread-1"}`),
 		})
+		<-release
 	})
 	options := codexDesktopTestOptions(dial)
 	options.onBroadcast = func(envelope codexDesktopEnvelope) { methods <- envelope.Method }
