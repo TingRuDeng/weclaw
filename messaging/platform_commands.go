@@ -46,18 +46,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	case isClaudeSessionCommand(trimmed):
 		sendText(h.handleClaudeSessionCommandForRoute(ctx, msg.UserID, routeUserID, h.isAdminMessage(msg), trimmed))
 	case isCodexSessionCommand(trimmed):
-		if h.handleFeishuCodexSessionCommand(ctx, msg, routeUserID, req.Reply, trimmed) {
-			return true
-		}
-		sendText(h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
-			ActorUserID: msg.UserID,
-			RouteUserID: routeUserID,
-			Trimmed:     trimmed,
-			Platform:    msg.Platform,
-			AccountID:   msg.AccountID,
-			Reply:       req.Reply,
-			Admin:       h.isAdminMessage(msg),
-		}))
+		return h.handleCodexSessionPlatformCommand(ctx, req, routeUserID)
 	case trimmed == "/guide":
 		h.handleGuideCommand(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, req.Reply, req.ClientID)
 	case trimmed == "/cancel":
@@ -68,14 +57,31 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 		sendText(h.handleListActiveTasks(msg.UserID))
 	case trimmed == "/mode" || strings.HasPrefix(trimmed, "/mode "):
 		sendText(h.handleModeCommand(msg.UserID, trimmed))
-	case trimmed == "/model" || strings.HasPrefix(trimmed, "/model "):
-		sendText(h.handleModelCommandForAccount(ctx, msg.Platform, msg.AccountID, strings.TrimSpace(strings.TrimPrefix(trimmed, "/model"))))
-	case trimmed == "/reasoning" || strings.HasPrefix(trimmed, "/reasoning "):
-		sendText(h.handleReasoningCommandForAccount(ctx, msg.Platform, msg.AccountID, strings.TrimSpace(strings.TrimPrefix(trimmed, "/reasoning"))))
+	case isModelSettingCommand(trimmed):
+		return h.handleModelSettingPlatformCommand(ctx, req)
 	case strings.HasPrefix(trimmed, "/cwd"):
 		sendText(h.handleCwdForMessage(trimmed, msg))
 	default:
 		return false
 	}
+	return true
+}
+
+// handleCodexSessionPlatformCommand 隔离较长的 Codex 会话参数装配。
+func (h *Handler) handleCodexSessionPlatformCommand(ctx context.Context, req platformCommandRequest, routeUserID string) bool {
+	msg := req.Message
+	if h.handleFeishuCodexSessionCommand(ctx, msg, routeUserID, req.Reply, req.Trimmed) {
+		return true
+	}
+	text := h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
+		ActorUserID: msg.UserID,
+		RouteUserID: routeUserID,
+		Trimmed:     req.Trimmed,
+		Platform:    msg.Platform,
+		AccountID:   msg.AccountID,
+		Reply:       req.Reply,
+		Admin:       h.isAdminMessage(msg),
+	})
+	sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	return true
 }
