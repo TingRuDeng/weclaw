@@ -14,106 +14,158 @@ import (
 	"time"
 )
 
-// Start launches the claude-agent-acp subprocess and initializes the connection.
-func (a *ACPAgent) Start(ctx context.Context) error {
-	a.mu.Lock()
-	if a.started {
-		a.mu.Unlock()
-		return nil
+// Start launches the ACP subprocess；并发调用会等待同一次初始化结果。
+func (a *ACPAgent) Start(ctx context.Context) (err error) {
+	leader, done := a.beginACPStart()
+	if !leader {
+		if done == nil {
+			return nil
+		}
+		return a.waitACPStart(ctx, done)
 	}
+	defer func() {
+		err = a.finishACPStart(err)
+	}()
+	return a.startACPProcess(ctx)
+}
 
-	a.cmd = exec.CommandContext(ctx, a.command, a.args...)
-	a.cmd.Dir = a.cwd
+func (a *ACPAgent) startACPProcess(ctx context.Context) error {
+	pid, err := a.launchACPSubprocess(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := a.initializeACPSubprocess(ctx, pid)
+	if err != nil {
+		return a.failACPStartup(pid, err)
+	}
+	log.Printf("[acp] initialized (pid=%d): %s", pid, string(result))
+	return nil
+}
+
+func (a *ACPAgent) launchACPSubprocess(ctx context.Context) (int, error) {
+	a.mu.Lock()
+	cmd := exec.CommandContext(ctx, a.command, a.args...)
+	cmd.Dir = a.cwd
 	if command, cmdArgs := a.runAs.wrapCommand(a.command, a.args); command != a.command {
-		a.cmd = exec.CommandContext(ctx, command, cmdArgs...)
-		a.cmd.Dir = a.cwd
+		cmd = exec.CommandContext(ctx, command, cmdArgs...)
+		cmd.Dir = a.cwd
 	}
 	if len(a.env) > 0 {
 		cmdEnv, err := mergeEnv(os.Environ(), a.env)
 		if err != nil {
 			a.mu.Unlock()
-			return fmt.Errorf("build acp env: %w", err)
+			return 0, fmt.Errorf("build acp env: %w", err)
 		}
-		a.cmd.Env = cmdEnv
+		cmd.Env = cmdEnv
 	}
-	// Capture stderr for debugging and error reporting
 	a.stderr = &acpStderrWriter{prefix: "[acp-stderr]"}
-	a.cmd.Stderr = a.stderr
-
-	var err error
-	a.stdin, err = a.cmd.StdinPipe()
+	cmd.Stderr = a.stderr
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		a.mu.Unlock()
-		return fmt.Errorf("create stdin pipe: %w", err)
+		return 0, fmt.Errorf("create stdin pipe: %w", err)
 	}
-
-	stdout, err := a.cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = stdin.Close()
 		a.mu.Unlock()
-		return fmt.Errorf("create stdout pipe: %w", err)
+		return 0, fmt.Errorf("create stdout pipe: %w", err)
 	}
-
-	if err := a.cmd.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
 		a.mu.Unlock()
-		return fmt.Errorf("start acp agent %s: %w", a.command, err)
+		return 0, fmt.Errorf("start acp agent %s: %w", a.command, err)
 	}
-
-	pid := a.cmd.Process.Pid
-	log.Printf("[acp] started subprocess (command=%s, pid=%d)", a.command, pid)
-
+	a.cmd = cmd
+	a.stdin = stdin
 	a.scanner = newACPScanner(stdout)
 	a.started = true
-
-	// Start reading loop
-	go a.readLoop()
-
-	// Release lock before calling initialize — call() needs a.mu to write to stdin
+	pid := cmd.Process.Pid
 	a.mu.Unlock()
+	go a.readLoop()
+	log.Printf("[acp] started subprocess (command=%s, pid=%d)", a.command, pid)
+	return pid, nil
+}
 
-	// Initialize handshake with timeout
+func (a *ACPAgent) initializeACPSubprocess(ctx context.Context, pid int) (json.RawMessage, error) {
 	initCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-
 	log.Printf("[acp] sending initialize handshake (pid=%d, protocol=%s)...", pid, a.protocol)
-	var result json.RawMessage
 	if a.protocol == protocolCodexAppServer {
-		result, err = a.rpc(initCtx, "initialize", codexInitializeParams())
-		if err == nil {
-			// codex app-server expects an "initialized" notification after initialize response
-			err = a.notify("initialized", nil)
+		result, err := a.rpc(initCtx, "initialize", codexInitializeParams())
+		if err != nil {
+			return nil, err
 		}
-	} else {
-		result, err = a.rpc(initCtx, "initialize", initParams{
-			ProtocolVersion: 1,
-			ClientCapabilities: clientCapabilities{
-				FS: &fsCapabilities{ReadTextFile: true, WriteTextFile: true},
-			},
-		})
+		return result, a.notify("initialized", nil)
 	}
-	if err != nil {
-		a.mu.Lock()
-		a.started = false
-		stdin := a.stdin
-		cmd := a.cmd
-		a.stdin = nil
-		a.cmd = nil
-		a.scanner = nil
-		a.mu.Unlock()
-		stopACPProcess(stdin, cmd)
-		// Use stderr detail if available (e.g. "connect ECONNREFUSED")
-		if detail := a.stderr.LastError(); detail != "" {
-			return fmt.Errorf("agent startup failed: %s", detail)
-		}
-		// Provide a helpful hint when the binary looks like a Claude CLI that doesn't support ACP
-		base := strings.ToLower(filepath.Base(a.command))
-		if base == "claude" || base == "claude.exe" {
-			return fmt.Errorf("agent startup failed (pid=%d): %w; claude CLI does not support ACP directly, set type to \"cli\" or install claude-agent-acp", pid, err)
-		}
-		return fmt.Errorf("agent startup failed (pid=%d): %w", pid, err)
-	}
+	return a.rpc(initCtx, "initialize", initParams{
+		ProtocolVersion: 1,
+		ClientCapabilities: clientCapabilities{
+			FS: &fsCapabilities{ReadTextFile: true, WriteTextFile: true},
+		},
+	})
+}
 
-	log.Printf("[acp] initialized (pid=%d): %s", pid, string(result))
-	return nil
+func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
+	a.mu.Lock()
+	a.started = false
+	stdin := a.stdin
+	cmd := a.cmd
+	a.stdin = nil
+	a.cmd = nil
+	a.scanner = nil
+	a.mu.Unlock()
+	stopACPProcess(stdin, cmd)
+	if detail := a.stderr.LastError(); detail != "" {
+		return fmt.Errorf("agent startup failed: %s", detail)
+	}
+	base := strings.ToLower(filepath.Base(a.command))
+	if base == "claude" || base == "claude.exe" {
+		return fmt.Errorf("agent startup failed (pid=%d): %w; claude CLI does not support ACP directly, set type to \"cli\" or install claude-agent-acp", pid, startErr)
+	}
+	return fmt.Errorf("agent startup failed (pid=%d): %w", pid, startErr)
+}
+
+func (a *ACPAgent) beginACPStart() (bool, <-chan struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.starting {
+		return false, a.startDone
+	}
+	if a.started {
+		return false, nil
+	}
+	a.starting = true
+	a.startDone = make(chan struct{})
+	a.startErr = nil
+	return true, a.startDone
+}
+
+func (a *ACPAgent) waitACPStart(ctx context.Context, done <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.startErr
+	}
+}
+
+func (a *ACPAgent) finishACPStart(startErr error) error {
+	a.mu.Lock()
+	if startErr == nil && !a.started {
+		startErr = fmt.Errorf("ACP runtime exited during startup")
+	}
+	a.starting = false
+	a.startErr = startErr
+	done := a.startDone
+	a.startDone = nil
+	a.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
+	return startErr
 }
 
 // stopACPProcess 关闭 ACP 子进程资源；启动失败和显式 Stop 都必须容忍 readLoop 已经清理状态。
@@ -168,7 +220,7 @@ func (a *ACPAgent) ensureStarted(ctx context.Context) error {
 		return nil
 	}
 	a.mu.Lock()
-	started := a.started
+	started := a.started && !a.starting
 	a.mu.Unlock()
 	if started {
 		return nil
@@ -180,7 +232,7 @@ func (a *ACPAgent) ensureStarted(ctx context.Context) error {
 func (a *ACPAgent) isRuntimeStarted() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.started
+	return a.started && !a.starting
 }
 
 // runtimePID 返回当前子进程 PID；运行时已退出时返回 0 供日志使用。

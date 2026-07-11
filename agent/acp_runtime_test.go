@@ -9,7 +9,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
+
+const testACPDelayedInitEnv = "WECLAW_TEST_ACP_DELAYED_INIT"
 
 func TestACPAgentStartReturnsErrorWhenSubprocessExitsDuringInitialize(t *testing.T) {
 	ctx := context.Background()
@@ -33,6 +36,54 @@ func TestACPAgentStartReturnsErrorWhenSubprocessExitsDuringInitialize(t *testing
 	if !strings.Contains(err.Error(), "agent startup failed") {
 		t.Fatalf("Start error=%v, want agent startup failed", err)
 	}
+}
+
+func TestACPAgentConcurrentStartWaitsForInitialize(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestHelperACPDelayedInitialize"},
+		Env:     map[string]string{testACPDelayedInitEnv: "1"},
+	})
+	a.protocol = protocolCodexAppServer
+	t.Cleanup(a.Stop)
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- a.Start(context.Background()) }()
+	waitForACPProcessStarted(t, a)
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- a.Start(context.Background()) }()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second Start returned before initialize completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	for name, done := range map[string]<-chan error{"first": firstDone, "second": secondDone} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s Start error=%v", name, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s Start did not finish", name)
+		}
+	}
+}
+
+func waitForACPProcessStarted(t *testing.T, a *ACPAgent) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		started := a.started
+		a.mu.Unlock()
+		if started {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("ACP subprocess did not start")
 }
 
 func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
@@ -201,4 +252,27 @@ func TestHelperACPStartupExit(t *testing.T) {
 	}
 	fmt.Fprintln(os.Stderr, "Error: Missing optional dependency @openai/codex-darwin-x64")
 	os.Exit(1)
+}
+
+// TestHelperACPDelayedInitialize 模拟进程已启动但 initialize 尚未完成的窗口。
+func TestHelperACPDelayedInitialize(t *testing.T) {
+	if os.Getenv(testACPDelayedInitEnv) != "1" {
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		os.Exit(2)
+	}
+	var request rpcRequest
+	if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
+		os.Exit(3)
+	}
+	time.Sleep(200 * time.Millisecond)
+	response := rpcResponse{JSONRPC: "2.0", ID: &request.ID, Result: json.RawMessage(`{}`)}
+	if err := json.NewEncoder(os.Stdout).Encode(response); err != nil {
+		os.Exit(4)
+	}
+	for scanner.Scan() {
+	}
+	os.Exit(0)
 }

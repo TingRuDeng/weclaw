@@ -46,7 +46,7 @@
 - [x] P2-2 串行：修复 Companion 旧连接清理误伤新连接请求。
   - 修改：`agent/companion_agent.go`、`agent/companion_agent_chat.go`。
   - 测试：连接代际切换后旧 read loop 退出不失败新连接 pending request。
-- [ ] P2-3 串行：为 ACP 启动增加 starting/ready 状态同步。
+- [x] P2-3 串行：为 ACP 启动增加 starting/ready 状态同步。
   - 修改：`agent/acp_agent.go`、`agent/acp_process.go`。
   - 测试：并发 `Start` 必须等待同一次 initialize 成功或共同收到失败。
 - [ ] P2-4 串行：扩充远程请求特殊地址拒绝范围。
@@ -97,3 +97,4 @@
 - 2026-07-11：P1-4 完成；无 token API 拒绝非 loopback Host 和跨源 Origin，显式 token 模式保持可用；`go test -race ./api` 通过。
 - 2026-07-11：P2-1 完成；ACP 状态保存串行覆盖快照和写入，使用唯一 0600 临时文件原子替换，避免旧快照和固定 `.tmp` 互相覆盖；`go test -race ./agent` 通过。
 - 2026-07-11：P2-2 完成；Companion pending call 原子绑定实际发送连接，旧连接替换或 read loop 退出只失败本代请求，不再清空新连接请求；`go test -race ./agent` 通过。
+- 2026-07-11：P2-3 完成；ACP 并发 Start 等待同一次 initialize/initialized 握手并共享成功或失败结果，子进程存活不再等同于协议就绪；`go test -race ./agent` 通过。

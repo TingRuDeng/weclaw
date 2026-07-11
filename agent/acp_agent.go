@@ -26,14 +26,17 @@ type ACPAgent struct {
 	runAs            runAsUserSpec
 	protocol         string // "legacy_acp" or "codex_app_server"
 
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	scanner  *bufio.Scanner
-	started  bool
-	nextID   atomic.Int64
-	sessions map[string]string // conversationID -> sessionID (legacy ACP)
-	threads  map[string]string // conversationID -> threadID (codex app-server)
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	scanner   *bufio.Scanner
+	started   bool
+	starting  bool
+	startDone chan struct{}
+	startErr  error
+	nextID    atomic.Int64
+	sessions  map[string]string // conversationID -> sessionID (legacy ACP)
+	threads   map[string]string // conversationID -> threadID (codex app-server)
 	// resumeOnFirstUse marks restored thread mappings that should trigger a
 	// best-effort thread/resume call before first turn.
 	resumeOnFirstUse            map[string]bool // conversationID -> resume needed
