@@ -110,6 +110,24 @@ func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 	}
 }
 
+func TestStableReleaseWorkflowIsManualOnlyAndBuildsRequestedTag(t *testing.T) {
+	path := filepath.Join("..", ".github", "workflows", "release.yml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取稳定版 workflow 失败：%v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, "\n  push:") {
+		t.Fatal("稳定版 workflow 不应由 tag push 自动触发，本地发布脚本是唯一默认发布者")
+	}
+	if !strings.Contains(text, "workflow_dispatch:") {
+		t.Fatal("稳定版 workflow 应保留手动兜底入口")
+	}
+	if !strings.Contains(text, "ref: ${{ inputs.tag }}") {
+		t.Fatal("手动发布必须 checkout 输入 tag，禁止用默认分支内容冒充目标版本")
+	}
+}
+
 func releaseScriptPath(t *testing.T) string {
 	t.Helper()
 	abs, err := filepath.Abs(filepath.Join("..", "scripts", "release.sh"))

@@ -659,7 +659,7 @@ scripts/release.sh v0.1.48
 
 发布脚本会检查工作区、运行验证、构建 `darwin/arm64` 二进制、生成 `checksums.txt`、推送 tag、创建 GitHub Release、校验线上资产，并在 mac M 系列主机上用临时二进制执行一次 `weclaw update` smoke。只有在已经完成等价验证后，才使用 `--skip-tests`。
 
-也可以手动触发 GitHub Actions Release workflow，或推送 `vX.Y.Z` tag 让 Actions 构建并发布同一组 `darwin/arm64` 资产。
+GitHub Actions Release workflow 仅作为手动兜底入口，触发时必须输入已存在的 `vX.Y.Z` tag。推送 tag 不会自动发布，避免与本地发布脚本并发创建同一个稳定版 Release。
 
 ## 更新
 

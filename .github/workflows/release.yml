@@ -1,9 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -14,7 +11,11 @@ permissions:
   contents: write
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag }}
+
+concurrency:
+  group: stable-release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -27,6 +28,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
       - uses: actions/setup-go@v5
         with:

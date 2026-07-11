@@ -677,9 +677,9 @@ scripts/release.sh --next-patch
 scripts/release.sh v0.1.48
 ```
 
-The release script checks the working tree, runs validation, builds `darwin/linux/windows` x `amd64/arm64` binaries, generates `checksums.txt`, pushes the tag, creates a GitHub Release, and verifies the uploaded assets. Use `--skip-tests` only after an equivalent validation has already passed.
+发布脚本会检查工作区、运行验证、构建 `darwin/arm64` 二进制、生成 `checksums.txt`、推送 tag、创建 GitHub Release，并验证上传资产。只有在已经完成等价验证后，才使用 `--skip-tests`。
 
-You can also trigger the GitHub Actions Release workflow manually, or push a `vX.Y.Z` tag to let Actions build and publish the same asset set.
+GitHub Actions Release workflow 仅作为手动兜底入口，触发时必须输入已存在的 `vX.Y.Z` tag。推送 tag 不会自动发布，避免与本地发布脚本并发创建同一个稳定版 Release。
 
 ## Update
 
