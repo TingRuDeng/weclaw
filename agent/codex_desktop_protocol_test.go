@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,48 @@ func TestCodexDesktopEnvelopeRejectsInvalidJSON(t *testing.T) {
 	_, err := decodeCodexDesktopEnvelope([]byte(`{"type":"request"`))
 	if err == nil {
 		t.Fatal("decodeCodexDesktopEnvelope() error = nil, want invalid JSON error")
+	}
+}
+
+func TestCodexDesktopEnvelopeRejectsMissingRequiredFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{"broadcast missing params", `{"type":"broadcast","version":11,"method":"thread-stream-state-changed"}`, "params"},
+		{"broadcast null params", `{"type":"broadcast","version":11,"method":"thread-stream-state-changed","params":null}`, "params"},
+		{"response missing resultType", `{"type":"response","requestId":"response-1"}`, "resultType"},
+		{"success response missing result", `{"type":"response","requestId":"response-1","resultType":"success"}`, "result"},
+		{"error response missing error", `{"type":"response","requestId":"response-1","resultType":"error"}`, "error"},
+		{"response invalid resultType", `{"type":"response","requestId":"response-1","resultType":"pending"}`, "resultType"},
+		{"discovery response null", `{"type":"client-discovery-response","requestId":"discover-1","response":null}`, "response"},
+		{"discovery response not object", `{"type":"client-discovery-response","requestId":"discover-1","response":[]}`, "response"},
+		{"discovery response missing canHandle", `{"type":"client-discovery-response","requestId":"discover-1","response":{}}`, "canHandle"},
+		{"discovery response invalid canHandle", `{"type":"client-discovery-response","requestId":"discover-1","response":{"canHandle":"yes"}}`, "canHandle"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := decodeCodexDesktopEnvelope([]byte(test.payload))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("decodeCodexDesktopEnvelope() error = %v, want field %s error", err, test.want)
+			}
+		})
+	}
+}
+
+func TestCodexDesktopEnvelopeAcceptsExplicitNullSuccessResult(t *testing.T) {
+	payload := []byte(`{"type":"response","requestId":"response-1","resultType":"success","result":null}`)
+	if _, err := decodeCodexDesktopEnvelope(payload); err != nil {
+		t.Fatalf("decodeCodexDesktopEnvelope() error = %v", err)
+	}
+}
+
+func TestCodexDesktopDiscoveryResponseAcceptsBooleanCanHandle(t *testing.T) {
+	payload := []byte(`{"type":"client-discovery-response","requestId":"discover-1","response":{"canHandle":false}}`)
+	if _, err := decodeCodexDesktopEnvelope(payload); err != nil {
+		t.Fatalf("decodeCodexDesktopEnvelope() error = %v", err)
 	}
 }
 

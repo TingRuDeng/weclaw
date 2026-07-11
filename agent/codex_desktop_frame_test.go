@@ -110,6 +110,22 @@ func TestCodexDesktopFrameWritesLengthPrefixedPayload(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopFrameRejectsInvalidJSONPayload(t *testing.T) {
+	payload := []byte("not-json")
+	t.Run("read", func(t *testing.T) {
+		var stream bytes.Buffer
+		writeRawCodexDesktopTestFrame(t, &stream, payload)
+		if _, err := readCodexDesktopFrame(&stream); err == nil {
+			t.Fatal("readCodexDesktopFrame() error = nil, want invalid JSON error")
+		}
+	})
+	t.Run("write", func(t *testing.T) {
+		if err := writeCodexDesktopFrame(io.Discard, payload); err == nil {
+			t.Fatal("writeCodexDesktopFrame() error = nil, want invalid JSON error")
+		}
+	})
+}
+
 func writeRawCodexDesktopTestFrame(t *testing.T, writer io.Writer, payload []byte) {
 	t.Helper()
 	var header [codexDesktopFrameHeaderBytes]byte

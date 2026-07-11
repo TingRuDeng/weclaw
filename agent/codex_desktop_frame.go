@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"unicode/utf8"
@@ -26,8 +27,8 @@ func readCodexDesktopFrame(reader io.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(reader, payload); err != nil {
 		return nil, fmt.Errorf("读取 Codex Desktop frame payload: %w", err)
 	}
-	if !utf8.Valid(payload) {
-		return nil, fmt.Errorf("Codex Desktop frame payload 不是有效 UTF-8")
+	if err := validateCodexDesktopFramePayload(payload); err != nil {
+		return nil, err
 	}
 	return payload, nil
 }
@@ -63,6 +64,9 @@ func validateCodexDesktopFramePayload(payload []byte) error {
 	}
 	if !utf8.Valid(payload) {
 		return fmt.Errorf("Codex Desktop frame payload 不是有效 UTF-8")
+	}
+	if !json.Valid(payload) {
+		return fmt.Errorf("Codex Desktop frame payload 不是有效 JSON")
 	}
 	return nil
 }

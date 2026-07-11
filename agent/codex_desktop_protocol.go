@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ const (
 	codexDesktopEnvelopeBroadcast         = "broadcast"
 	codexDesktopEnvelopeDiscoveryRequest  = "client-discovery-request"
 	codexDesktopEnvelopeDiscoveryResponse = "client-discovery-response"
+	codexDesktopResultSuccess             = "success"
+	codexDesktopResultError               = "error"
 )
 
 var (
@@ -95,9 +98,9 @@ func validateCodexDesktopEnvelope(envelope codexDesktopEnvelope) error {
 	case codexDesktopEnvelopeRequest:
 		return validateCodexDesktopMethodEnvelope(envelope, true)
 	case codexDesktopEnvelopeBroadcast:
-		return validateCodexDesktopMethodEnvelope(envelope, false)
+		return validateCodexDesktopBroadcast(envelope)
 	case codexDesktopEnvelopeResponse:
-		return requireCodexDesktopRequestID(envelope)
+		return validateCodexDesktopResponse(envelope)
 	case codexDesktopEnvelopeDiscoveryRequest:
 		return validateCodexDesktopDiscoveryRequest(envelope)
 	case codexDesktopEnvelopeDiscoveryResponse:
@@ -105,6 +108,36 @@ func validateCodexDesktopEnvelope(envelope codexDesktopEnvelope) error {
 	default:
 		return fmt.Errorf("Codex Desktop envelope type %q 不受支持", envelope.Type)
 	}
+}
+
+func validateCodexDesktopBroadcast(envelope codexDesktopEnvelope) error {
+	if err := validateCodexDesktopMethodEnvelope(envelope, false); err != nil {
+		return err
+	}
+	if isMissingOrNullCodexDesktopJSON(envelope.Params) {
+		return fmt.Errorf("Codex Desktop broadcast envelope 缺少非空 params")
+	}
+	return nil
+}
+
+func validateCodexDesktopResponse(envelope codexDesktopEnvelope) error {
+	if err := requireCodexDesktopRequestID(envelope); err != nil {
+		return err
+	}
+	switch envelope.ResultType {
+	case codexDesktopResultSuccess:
+		// RawMessage 长度为零表示字段缺失；字面 null 长度非零，属于合法显式结果。
+		if len(envelope.Result) == 0 {
+			return fmt.Errorf("Codex Desktop success response 缺少 result")
+		}
+	case codexDesktopResultError:
+		if strings.TrimSpace(envelope.Error) == "" {
+			return fmt.Errorf("Codex Desktop error response 缺少非空 error")
+		}
+	default:
+		return fmt.Errorf("Codex Desktop response resultType %q 无效", envelope.ResultType)
+	}
+	return nil
 }
 
 func validateCodexDesktopMethodEnvelope(envelope codexDesktopEnvelope, requestIDRequired bool) error {
@@ -151,10 +184,28 @@ func validateCodexDesktopDiscoveryResponse(envelope codexDesktopEnvelope) error 
 	if err := requireCodexDesktopRequestID(envelope); err != nil {
 		return err
 	}
-	if len(envelope.Response) == 0 {
-		return fmt.Errorf("Codex Desktop client-discovery-response 缺少 response")
+	if isMissingOrNullCodexDesktopJSON(envelope.Response) {
+		return fmt.Errorf("Codex Desktop client-discovery-response 缺少非空 response 对象")
+	}
+	trimmed := bytes.TrimSpace(envelope.Response)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return fmt.Errorf("Codex Desktop client-discovery-response response 必须为对象")
+	}
+	var response struct {
+		CanHandle *bool `json:"canHandle"`
+	}
+	if err := json.Unmarshal(envelope.Response, &response); err != nil {
+		return fmt.Errorf("Codex Desktop discovery response canHandle 必须为 bool: %w", err)
+	}
+	if response.CanHandle == nil {
+		return fmt.Errorf("Codex Desktop discovery response 缺少 bool 类型 canHandle")
 	}
 	return nil
+}
+
+func isMissingOrNullCodexDesktopJSON(value json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(value)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
 }
 
 func requireCodexDesktopRequestID(envelope codexDesktopEnvelope) error {
