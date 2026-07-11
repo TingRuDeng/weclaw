@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -102,17 +101,16 @@ func SaveLinkToLinkhoard(ctx context.Context, saveDir, rawURL string) (string, e
 		sb.WriteString("\n")
 	}
 
-	// Write markdown file
-	filePath := filepath.Join(saveDir, title+".md")
-	if err := os.WriteFile(filePath, []byte(sb.String()), 0o644); err != nil {
-		return "", fmt.Errorf("write file: %w", err)
-	}
-
-	// Write sidecar
-	sidecarPath := filePath + ".sidecar.md"
 	sidecarContent := fmt.Sprintf("---\nid: %s\n---\n", itemID)
-	if err := os.WriteFile(sidecarPath, []byte(sidecarContent), 0o644); err != nil {
-		log.Printf("[linkhoard] failed to write sidecar: %v", err)
+	filePath, err := writeUniqueArtifactPair(
+		saveDir,
+		title,
+		".md",
+		[]byte(sb.String()),
+		[]byte(sidecarContent),
+	)
+	if err != nil {
+		return "", fmt.Errorf("write file: %w", err)
 	}
 
 	log.Printf("[linkhoard] saved %q to %s", meta.Title, filePath)

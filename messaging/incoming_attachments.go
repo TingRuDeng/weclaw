@@ -191,20 +191,22 @@ func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, 
 		return
 	}
 	ext := detectImageExt(data)
-	filePath := filepath.Join(h.saveDir, time.Now().Format("20060102-150405")+ext)
 	if err := os.MkdirAll(h.saveDir, 0o755); err != nil {
 		log.Printf("[handler] failed to create save dir: %v", err)
 		return
 	}
-	if err := os.WriteFile(filePath, data, 0o644); err != nil {
+	sidecarContent := fmt.Sprintf("---\nid: %s\n---\n", uuid.New().String())
+	filePath, err := writeUniqueArtifactPair(
+		h.saveDir,
+		time.Now().Format("20060102-150405"),
+		ext,
+		data,
+		[]byte(sidecarContent),
+	)
+	if err != nil {
 		log.Printf("[handler] failed to write image: %v", err)
 		sendPlatformText(ctx, reply, userID, fmt.Sprintf("Failed to save image: %v", err))
 		return
-	}
-	sidecarPath := filePath + ".sidecar.md"
-	sidecarContent := fmt.Sprintf("---\nid: %s\n---\n", uuid.New().String())
-	if err := os.WriteFile(sidecarPath, []byte(sidecarContent), 0o644); err != nil {
-		log.Printf("[handler] failed to write sidecar: %v", err)
 	}
 	sendPlatformText(ctx, reply, userID, fmt.Sprintf("Saved image: %s", filePath))
 }
