@@ -33,7 +33,7 @@ func TestClaudeACPConfiguresNewSessionModelThenEffort(t *testing.T) {
 		case "session/new":
 			return json.RawMessage(`{"sessionId":"session-1","configOptions":` + claudeACPConfigOptionsJSON + `}`), nil
 		case "session/set_config_option":
-			return json.RawMessage(`{"configOptions":` + claudeACPConfigOptionsJSON + `}`), nil
+			return claudeConfigResultForTest("opus", "low", "medium", "high"), nil
 		default:
 			return nil, fmt.Errorf("unexpected method %s", method)
 		}
@@ -100,6 +100,147 @@ func TestClaudeACPConfigFailureDoesNotStoreSession(t *testing.T) {
 	if stored != "" {
 		t.Fatalf("stored=%q，配置失败的 session 不应写入映射", stored)
 	}
+}
+
+func TestClaudeACPCachesEffortOptionsPerModel(t *testing.T) {
+	agent := NewACPAgent(ACPAgentConfig{
+		Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	agent.cacheClaudeConfigOptions(claudeConfigOptionsForTest(t, "sonnet", "low", "medium"))
+	agent.cacheClaudeConfigOptions(claudeConfigOptionsForTest(t, "opus", "high", "max"))
+
+	models, err := agent.ListClaudeModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListClaudeModels error: %v", err)
+	}
+	sonnet := claudeModelByAliasForTest(t, models, "sonnet")
+	opus := claudeModelByAliasForTest(t, models, "opus")
+	if strings.Join(sonnet.EffortOptions, ",") != "low,medium" {
+		t.Fatalf("sonnet efforts=%#v, want low,medium", sonnet.EffortOptions)
+	}
+	if strings.Join(opus.EffortOptions, ",") != "high,max" {
+		t.Fatalf("opus efforts=%#v, want high,max", opus.EffortOptions)
+	}
+}
+
+func TestClaudeACPModelChangeClearsPreviousEffort(t *testing.T) {
+	agent := NewACPAgent(ACPAgentConfig{
+		Command: "claude-agent-acp", Model: "sonnet", Effort: "high",
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+
+	agent.SetClaudeModel("opus", "")
+
+	status := agent.ClaudeModelStatus()
+	if status.Model != "opus" || status.Effort != "" {
+		t.Fatalf("status=%#v, want opus with default effort", status)
+	}
+}
+
+func TestClaudeACPDoesNotAdvertiseUnobservedEffortOptions(t *testing.T) {
+	agent := NewACPAgent(ACPAgentConfig{
+		Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+
+	models, err := agent.ListClaudeModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListClaudeModels error: %v", err)
+	}
+	for _, model := range models {
+		if len(model.EffortOptions) != 0 {
+			t.Fatalf("model %s efforts=%#v, want unknown", model.Alias, model.EffortOptions)
+		}
+	}
+}
+
+func TestClaudeACPRejectsEffortUnsupportedBySelectedModel(t *testing.T) {
+	agent := NewACPAgent(ACPAgentConfig{
+		Command: "claude-agent-acp", Model: "opus", Effort: "low",
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	var configured []string
+	agent.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "session/new":
+			return claudeSessionResultForTest("sonnet", "low", "medium"), nil
+		case "session/set_config_option":
+			value := configOptionValue(params)
+			configured = append(configured, value)
+			if value == "opus" {
+				return claudeConfigResultForTest("opus", "high", "max"), nil
+			}
+			return nil, fmt.Errorf("unexpected effort configuration %q", value)
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	_, _, err := agent.getOrCreateSession(context.Background(), "conversation-1")
+
+	if err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
+		t.Fatalf("err=%v, want unsupported effort error", err)
+	}
+	if strings.Join(configured, ",") != "opus" {
+		t.Fatalf("configured=%#v, invalid effort must not reach ACP", configured)
+	}
+}
+
+func claudeConfigOptionsForTest(t *testing.T, currentModel string, efforts ...string) []acpSessionConfigOption {
+	t.Helper()
+	options := []acpSessionConfigOption{{
+		ID: claudeModelConfigID, CurrentValue: currentModel,
+		Options: []acpSessionConfigChoice{{Value: "sonnet", Name: "Sonnet"}, {Value: "opus", Name: "Opus"}},
+	}, {
+		ID: claudeEffortConfigID, CurrentValue: firstClaudeEffortForTest(efforts),
+	}}
+	for _, effort := range efforts {
+		options[1].Options = append(options[1].Options, acpSessionConfigChoice{Value: effort, Name: effort})
+	}
+	return options
+}
+
+func claudeSessionResultForTest(currentModel string, efforts ...string) json.RawMessage {
+	return claudeConfigEnvelopeForTest("sessionId", "session-1", currentModel, efforts)
+}
+
+func claudeConfigResultForTest(currentModel string, efforts ...string) json.RawMessage {
+	return claudeConfigEnvelopeForTest("", "", currentModel, efforts)
+}
+
+func claudeConfigEnvelopeForTest(idKey string, id string, currentModel string, efforts []string) json.RawMessage {
+	options := []acpSessionConfigOption{{
+		ID: claudeModelConfigID, CurrentValue: currentModel,
+		Options: []acpSessionConfigChoice{{Value: "sonnet", Name: "Sonnet"}, {Value: "opus", Name: "Opus"}},
+	}, {
+		ID: claudeEffortConfigID, CurrentValue: firstClaudeEffortForTest(efforts),
+	}}
+	for _, effort := range efforts {
+		options[1].Options = append(options[1].Options, acpSessionConfigChoice{Value: effort, Name: effort})
+	}
+	payload := map[string]interface{}{"configOptions": options}
+	if idKey != "" {
+		payload[idKey] = id
+	}
+	data, _ := json.Marshal(payload)
+	return data
+}
+
+func firstClaudeEffortForTest(efforts []string) string {
+	if len(efforts) == 0 {
+		return ""
+	}
+	return efforts[0]
+}
+
+func claudeModelByAliasForTest(t *testing.T, models []ClaudeModel, alias string) ClaudeModel {
+	t.Helper()
+	for _, model := range models {
+		if model.Alias == alias {
+			return model
+		}
+	}
+	t.Fatalf("model alias %q not found", alias)
+	return ClaudeModel{}
 }
 
 func configOptionValue(params interface{}) string {
