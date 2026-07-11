@@ -60,6 +60,7 @@ func TestHandleRuntimeStatusReturnsActiveTaskCount(t *testing.T) {
 	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeStatusProvider(staticRuntimeStatus{active: 2}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
+	req.Host = "127.0.0.1:18011"
 	rec := httptest.NewRecorder()
 	server.handleRuntimeStatus(rec, req)
 
@@ -90,6 +91,46 @@ func TestHandleRuntimeStatusRequiresTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAuthorizeReadRejectsExternalHostWithoutToken(t *testing.T) {
+	server := NewServer(nil, "127.0.0.1:18011")
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
+	req.Host = "attacker.example:18011"
+	rec := httptest.NewRecorder()
+
+	if server.authorizeRead(rec, req) {
+		t.Fatal("authorizeRead accepted external Host without token")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestAuthorizeReadRejectsCrossOriginWithoutToken(t *testing.T) {
+	server := NewServer(nil, "127.0.0.1:18011")
+	req := httptest.NewRequest(http.MethodPost, "/api/send", nil)
+	req.Host = "127.0.0.1:18011"
+	req.Header.Set("Origin", "http://127.0.0.1:3000")
+	rec := httptest.NewRecorder()
+
+	if server.authorizeRead(rec, req) {
+		t.Fatal("authorizeRead accepted cross-origin request without token")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestAuthorizeReadAllowsLoopbackHostWithoutToken(t *testing.T) {
+	server := NewServer(nil, "127.0.0.1:18011")
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
+	req.Host = "localhost:18011"
+	rec := httptest.NewRecorder()
+
+	if !server.authorizeRead(rec, req) {
+		t.Fatalf("authorizeRead rejected loopback Host, status=%d", rec.Code)
+	}
+}
+
 func TestHandleSendUsesRegistryTarget(t *testing.T) {
 	reply := &recordingReplier{}
 	registry := platform.NewRegistry([]platform.RegistryEntry{{
@@ -103,6 +144,7 @@ func TestHandleSendUsesRegistryTarget(t *testing.T) {
 	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"hi"}`))
+	req.Host = "127.0.0.1:18011"
 	rec := httptest.NewRecorder()
 	server.handleSend(rec, req)
 
@@ -130,6 +172,7 @@ func TestHandleSendRequiresAccountIDWhenPlatformHasMultipleAccounts(t *testing.T
 	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","to":"ou_user","text":"hi"}`))
+	req.Host = "127.0.0.1:18011"
 	rec := httptest.NewRecorder()
 	server.handleSend(rec, req)
 
@@ -145,6 +188,7 @@ func TestHandleSendReturnsUnavailableForMissingRegistryTarget(t *testing.T) {
 	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(platform.NewRegistry(nil)))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","to":"ou_user","text":"hi"}`))
+	req.Host = "127.0.0.1:18011"
 	rec := httptest.NewRecorder()
 	server.handleSend(rec, req)
 
@@ -158,6 +202,7 @@ func TestHandleSendRejectsOversizedBody(t *testing.T) {
 	body := `{"to":"u","text":"` + strings.Repeat("x", maxSendRequestBytes) + `"}`
 
 	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(body))
+	req.Host = "127.0.0.1:18011"
 	rec := httptest.NewRecorder()
 	server.handleSend(rec, req)
 
