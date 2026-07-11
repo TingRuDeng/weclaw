@@ -51,6 +51,15 @@ func TestConfigPathUsesWECLAWHome(t *testing.T) {
 	}
 }
 
+func TestConfigValidateRejectsNegativeHTTPMaxHistory(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents["http"] = AgentConfig{Type: "http", Endpoint: "https://example.com", MaxHistory: -1}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate error=nil, want negative max_history rejection")
+	}
+}
+
 func TestAgentConfigUnmarshalEnv(t *testing.T) {
 	var cfg Config
 	data := []byte(`{

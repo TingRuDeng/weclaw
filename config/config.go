@@ -202,6 +202,9 @@ func (c *Config) Validate() error {
 		return nil
 	}
 	for name, agentCfg := range c.Agents {
+		if agentCfg.MaxHistory < 0 {
+			return fmt.Errorf("agent %q: max_history must be >= 0", name)
+		}
 		if err := agentCfg.ValidateCodexPermissionConfig(); err != nil {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}

@@ -64,7 +64,7 @@
 - [x] P2-8 串行：限制敏感日志并为后台日志增加轮转。
   - 修改：`api/send.go`、`messaging/audit.go`、`cmd/start_daemon.go`，必要时新增日志轮转 helper。
   - 测试：API 不记录正文，审计摘要脱敏，日志超过阈值后轮转。
-- [ ] P2-9 串行：拒绝非法 HTTP Agent `max_history`。
+- [x] P2-9 串行：拒绝非法 HTTP Agent `max_history`。
   - 修改：`config/config.go`、`web/config_service.go`、`agent/http_agent.go`。
   - 测试：负值配置校验失败，构造函数不会产生可崩溃状态。
 - [ ] P2-10 串行：加强稳定版发布门禁与 CI 最小权限。
@@ -103,3 +103,4 @@
 - 2026-07-11：P2-6 完成；微信 context token 在保存锁内读取最新全集，使用同步后的 0600 临时文件原子替换，避免旧快照覆盖和截断文件；`go test -race ./wechat` 通过。
 - 2026-07-11：P2-7 完成；执行锁按引用计数删除，消息限流、拒绝通知、Web 鉴权和飞书身份缓存按窗口回收，并移除未使用的 Handler context token map；四个相关包 race 测试通过。
 - 2026-07-11：P2-8 完成；API 与审计日志只保留消息元数据，后台日志按 20 MiB 即时轮转并保留 3 份备份，轮转后重绑定 stdout/stderr；相关包 race 测试通过。
+- 2026-07-11：P2-9 完成；负数 HTTP Agent max_history 在配置加载、Web 保存和直接构造时统一返回错误，不再产生可切片越界的实例；相关包 race 测试通过。

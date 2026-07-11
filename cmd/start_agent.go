@@ -51,7 +51,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			log.Printf("[agent] HTTP agent %q has no endpoint", name)
 			return nil
 		}
-		ag := agent.NewHTTPAgent(agent.HTTPAgentConfig{
+		ag, err := agent.NewHTTPAgent(agent.HTTPAgentConfig{
 			Endpoint:     agCfg.Endpoint,
 			APIKey:       agCfg.APIKey,
 			Headers:      agCfg.Headers,
@@ -59,6 +59,10 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			SystemPrompt: agCfg.SystemPrompt,
 			MaxHistory:   agCfg.MaxHistory,
 		})
+		if err != nil {
+			log.Printf("[agent] invalid HTTP agent %q config: %v", name, err)
+			return nil
+		}
 		log.Printf("[agent] created HTTP agent: %s (endpoint=%s, model=%s)", name, agCfg.Endpoint, agCfg.Model)
 		return ag
 	case "companion":

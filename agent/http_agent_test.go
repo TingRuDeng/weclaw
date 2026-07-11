@@ -15,10 +15,19 @@ func TestHTTPAgentRejectsOversizedResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ag := NewHTTPAgent(HTTPAgentConfig{Endpoint: server.URL})
-	_, err := ag.Chat(context.Background(), "u1", "hello")
+	ag, err := NewHTTPAgent(HTTPAgentConfig{Endpoint: server.URL})
+	if err != nil {
+		t.Fatalf("NewHTTPAgent error: %v", err)
+	}
+	_, err = ag.Chat(context.Background(), "u1", "hello")
 
 	if err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("Chat() error = %v, want oversized response error", err)
+	}
+}
+
+func TestNewHTTPAgentRejectsNegativeMaxHistory(t *testing.T) {
+	if _, err := NewHTTPAgent(HTTPAgentConfig{Endpoint: "https://example.com", MaxHistory: -1}); err == nil {
+		t.Fatal("NewHTTPAgent error=nil, want negative max_history rejection")
 	}
 }

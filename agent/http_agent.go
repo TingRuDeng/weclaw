@@ -43,7 +43,10 @@ type HTTPAgentConfig struct {
 }
 
 // NewHTTPAgent creates a new OpenAI-compatible HTTP agent.
-func NewHTTPAgent(cfg HTTPAgentConfig) *HTTPAgent {
+func NewHTTPAgent(cfg HTTPAgentConfig) (*HTTPAgent, error) {
+	if cfg.MaxHistory < 0 {
+		return nil, fmt.Errorf("max_history must be >= 0")
+	}
 	if cfg.MaxHistory == 0 {
 		cfg.MaxHistory = 20
 	}
@@ -59,7 +62,7 @@ func NewHTTPAgent(cfg HTTPAgentConfig) *HTTPAgent {
 		httpClient:   &http.Client{Timeout: 120 * time.Second},
 		history:      make(map[string][]ChatMessage),
 		maxHistory:   cfg.MaxHistory,
-	}
+	}, nil
 }
 
 // Info returns metadata about this agent.
