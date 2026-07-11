@@ -26,6 +26,26 @@ func TestFrontendDoesNotRenderServerDataWithInnerHTML(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRootsHintMatchesRuntimeAccessRules(t *testing.T) {
+	data, err := fs.ReadFile(staticFS, "static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"普通用户允许的工作目录根",
+		"未配置时，普通用户远程 /cwd 被禁用",
+		"管理员不受此限制",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("工作空间提示缺少 %q", want)
+		}
+	}
+	if strings.Contains(text, "未配置工作目录根时，/cwd 可指向任意目录") {
+		t.Fatal("配置面板仍展示与运行时相反的旧提示")
+	}
+}
+
 func TestWebHTTPServerHasSlowClientTimeouts(t *testing.T) {
 	srv := newHTTPServer("127.0.0.1:0", http.NewServeMux())
 	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {

@@ -31,12 +31,12 @@
     <div class="card" id="status-card"><h2>状态</h2><div id="status">加载中…</div></div>
 
     <div class="card"><h2>安全</h2>
-      <label>允许的工作目录根 (allowed_workspace_roots，每行一个)</label>
+      <label>普通用户允许的工作目录根 (allowed_workspace_roots，每行一个)</label>
       <textarea id="workspace-roots" rows="3"></textarea>
       <div class="row">
         <div><label>每分钟限流 (rate_limit_per_minute，0=不限)</label><input type="number" id="rate-limit" min="0" /></div>
       </div>
-      <p class="muted">未配置工作目录根时，/cwd 可指向任意目录，建议限制。</p>
+      <p class="muted">未配置时，普通用户远程 /cwd 被禁用；管理员不受此限制。</p>
     </div>
 
     <div class="card"><h2>飞书</h2>
