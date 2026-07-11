@@ -10,17 +10,20 @@ import (
 
 // CLIAgent invokes a local CLI agent (claude, codex, etc.) via streaming JSON.
 type CLIAgent struct {
-	name             string
-	command          string
-	args             []string          // extra args from config
-	cwd              string            // working directory
-	env              map[string]string // extra environment variables
-	model            string
-	systemPrompt     string
-	runAs            runAsUserSpec
-	mu               sync.Mutex
-	sessions         map[string]string // conversationID -> session ID for multi-turn
-	conversationCwds map[string]string
+	name                string
+	command             string
+	args                []string          // extra args from config
+	cwd                 string            // working directory
+	env                 map[string]string // extra environment variables
+	model               string
+	effort              string
+	systemPrompt        string
+	runAs               runAsUserSpec
+	mu                  sync.Mutex
+	sessions            map[string]string // conversationID -> session ID for multi-turn
+	conversationCwds    map[string]string
+	conversationModels  map[string]string
+	conversationEfforts map[string]string
 }
 
 // CLIAgentConfig holds configuration for a CLI agent.
@@ -31,6 +34,7 @@ type CLIAgentConfig struct {
 	Cwd          string            // working directory (workspace)
 	Env          map[string]string // extra environment variables
 	Model        string
+	Effort       string
 	SystemPrompt string
 	RunAsUser    string   // 以独立 Unix 用户运行（文件系统隔离）
 	RunAsEnv     []string // run_as_user 时透传的环境变量名白名单
@@ -43,25 +47,32 @@ func NewCLIAgent(cfg CLIAgentConfig) *CLIAgent {
 		cwd = defaultWorkspace()
 	}
 	return &CLIAgent{
-		name:             cfg.Name,
-		command:          cfg.Command,
-		args:             cfg.Args,
-		cwd:              cwd,
-		env:              cfg.Env,
-		model:            cfg.Model,
-		systemPrompt:     cfg.SystemPrompt,
-		runAs:            runAsUserSpec{User: cfg.RunAsUser, PreserveEnv: cfg.RunAsEnv},
-		sessions:         make(map[string]string),
-		conversationCwds: make(map[string]string),
+		name:                cfg.Name,
+		command:             cfg.Command,
+		args:                cfg.Args,
+		cwd:                 cwd,
+		env:                 cfg.Env,
+		model:               cfg.Model,
+		effort:              cfg.Effort,
+		systemPrompt:        cfg.SystemPrompt,
+		runAs:               runAsUserSpec{User: cfg.RunAsUser, PreserveEnv: cfg.RunAsEnv},
+		sessions:            make(map[string]string),
+		conversationCwds:    make(map[string]string),
+		conversationModels:  make(map[string]string),
+		conversationEfforts: make(map[string]string),
 	}
 }
 
 // Info returns metadata about this agent.
 func (a *CLIAgent) Info() AgentInfo {
+	a.mu.Lock()
+	model, effort := a.model, a.effort
+	a.mu.Unlock()
 	return AgentInfo{
 		Name:    a.name,
 		Type:    "cli",
-		Model:   a.model,
+		Model:   model,
+		Effort:  effort,
 		Command: a.command,
 	}
 }
@@ -72,6 +83,8 @@ func (a *CLIAgent) Info() AgentInfo {
 func (a *CLIAgent) ResetSession(_ context.Context, conversationID string) (string, error) {
 	a.mu.Lock()
 	delete(a.sessions, conversationID)
+	delete(a.conversationModels, conversationID)
+	delete(a.conversationEfforts, conversationID)
 	a.mu.Unlock()
 	log.Printf("[cli] session reset (command=%s, conversation=%s)", a.command, conversationID)
 	return "", nil
@@ -99,6 +112,8 @@ func (a *CLIAgent) UseClaudeSession(_ context.Context, conversationID string, se
 	}
 	a.mu.Lock()
 	a.sessions[conversationID] = sessionID
+	delete(a.conversationModels, conversationID)
+	delete(a.conversationEfforts, conversationID)
 	a.mu.Unlock()
 	return nil
 }
@@ -110,6 +125,8 @@ func (a *CLIAgent) ClearClaudeSession(conversationID string) {
 	}
 	a.mu.Lock()
 	delete(a.sessions, conversationID)
+	delete(a.conversationModels, conversationID)
+	delete(a.conversationEfforts, conversationID)
 	a.mu.Unlock()
 }
 

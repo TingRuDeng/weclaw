@@ -64,7 +64,7 @@ type AgentConfig struct {
 	Cwd              string            `json:"cwd,omitempty"`               // working directory (workspace)
 	Env              map[string]string `json:"env,omitempty"`               // extra environment variables (cli/acp type)
 	Model            string            `json:"model,omitempty"`             // model name
-	Effort           string            `json:"effort,omitempty"`            // Codex reasoning effort
+	Effort           string            `json:"effort,omitempty"`            // Codex / Claude reasoning effort
 	PermissionLevel  string            `json:"permission_level,omitempty"`  // Codex 权限档位：default / auto_review / full_access
 	ApprovalPolicy   string            `json:"approval_policy,omitempty"`   // Codex approvalPolicy 高级覆盖
 	ApprovalReviewer string            `json:"approval_reviewer,omitempty"` // Codex approvalsReviewer 高级覆盖：user / auto_review

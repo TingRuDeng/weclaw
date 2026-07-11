@@ -53,7 +53,30 @@ type newSessionParams struct {
 }
 
 type newSessionResult struct {
+	SessionID     string                   `json:"sessionId"`
+	ConfigOptions []acpSessionConfigOption `json:"configOptions,omitempty"`
+}
+
+type acpSessionConfigOption struct {
+	ID           string                   `json:"id"`
+	CurrentValue string                   `json:"currentValue,omitempty"`
+	Options      []acpSessionConfigChoice `json:"options,omitempty"`
+}
+
+type acpSessionConfigChoice struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type sessionConfigOptionParams struct {
 	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
+type sessionConfigOptionResult struct {
+	ConfigOptions []acpSessionConfigOption `json:"configOptions,omitempty"`
 }
 
 type promptParams struct {

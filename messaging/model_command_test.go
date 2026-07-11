@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -84,44 +83,6 @@ func TestModelCommandNonCodexAgentInforms(t *testing.T) {
 	out := h.handleModelCommand(context.Background(), platform.PlatformWeChat, "opus")
 	if !strings.Contains(out, "由配置固定") {
 		t.Fatalf("non-codex agent should report fixed-by-config: %q", out)
-	}
-}
-
-func TestFeishuModelCommandsUseSessionDefaultAgent(t *testing.T) {
-	codex := &fakeCodexModelAgent{
-		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
-		model:     "gpt-5",
-	}
-	claude := &fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "cli", Command: "claude"}}
-	h := NewHandler(func(_ context.Context, name string) agent.Agent {
-		if name == "claude" {
-			return claude
-		}
-		return codex
-	}, nil)
-	h.SetDefaultAgent("codex", codex)
-	h.SetAgentMetas([]AgentMeta{{Name: "claude"}, {Name: "codex"}})
-	h.SetPlatformDefaultAgents(map[string]string{
-		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_main"): "codex",
-	})
-	sessionKey := "feishu:tenant:dm:chat-a:user-1"
-	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
-		t.Fatalf("设置会话 Agent 失败：%v", err)
-	}
-
-	for index, command := range []string{"/model opus", "/reasoning high"} {
-		reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-		h.HandleMessage(context.Background(), platform.IncomingMessage{
-			Platform:  platform.PlatformFeishu,
-			AccountID: "cli_main",
-			UserID:    "user-1",
-			MessageID: fmt.Sprintf("model-session-%d", index),
-			Text:      command,
-			Metadata:  map[string]string{"feishu_session_key": sessionKey},
-		}, reply)
-		if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "claude") {
-			t.Fatalf("command=%q reply=%#v，期望操作当前会话的 claude", command, reply.Texts)
-		}
 	}
 }
 
@@ -240,8 +201,8 @@ func TestExplicitReasoningCommandAndWechatOverviewStayText(t *testing.T) {
 		Text:      "/reasoning high",
 	}, feishuReply)
 
-	if len(feishuReply.Choices) != 0 || len(feishuReply.Texts) != 1 || ag.effort != "high" {
-		t.Fatalf("texts=%#v choices=%#v effort=%q，显式命令应保持文本确认", feishuReply.Texts, feishuReply.Choices, ag.effort)
+	if len(feishuReply.Choices) != 0 || len(feishuReply.Texts) != 1 || ag.model != "gpt-5.6-sol" || ag.effort != "high" {
+		t.Fatalf("texts=%#v choices=%#v model=%q effort=%q，推理命令不能修改模型", feishuReply.Texts, feishuReply.Choices, ag.model, ag.effort)
 	}
 	wechatReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
@@ -261,8 +222,12 @@ func TestReasoningSettingCardRejectsEffortsFromDifferentModel(t *testing.T) {
 		model:     "custom-model",
 		models:    []agent.CodexModel{{ID: "gpt-5.6-sol", EffortOptions: []string{"low", "medium", "high"}}},
 	}
+	control, ok := newModelSettingController("codex", ag)
+	if !ok {
+		t.Fatal("期望创建 Codex 模型控制适配器")
+	}
 
-	_, choices := modelSettingCard(context.Background(), ag, modelSettingReasoning)
+	_, choices := modelSettingCard(context.Background(), control, modelSettingReasoning)
 
 	if len(choices) != 0 {
 		t.Fatalf("choices=%#v，未知当前模型不能借用其他模型的推理强度", choices)

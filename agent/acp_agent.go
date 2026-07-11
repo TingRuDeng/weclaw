@@ -41,6 +41,7 @@ type ACPAgent struct {
 	conversationCwds            map[string]string
 	stateFile                   string // optional persisted state file path
 	history                     map[string][]acpHistoryMessage
+	claudeModels                []ClaudeModel
 
 	// pending tracks in-flight JSON-RPC requests
 	pendingMu sync.Mutex

@@ -77,9 +77,24 @@ func TestRemovedModelListAliasIsRejected(t *testing.T) {
 
 type fakeClaudeModelAgent struct {
 	fakeAgent
+	model  string
+	effort string
 	models []agent.ClaudeModel
+}
+
+func (f *fakeClaudeModelAgent) ClaudeModelStatus() agent.ClaudeModelStatus {
+	return agent.ClaudeModelStatus{Model: f.model, Effort: f.effort}
 }
 
 func (f *fakeClaudeModelAgent) ListClaudeModels(context.Context) ([]agent.ClaudeModel, error) {
 	return f.models, nil
+}
+
+func (f *fakeClaudeModelAgent) SetClaudeModel(model string, effort string) {
+	if model != "" {
+		f.model = model
+	}
+	if effort != "" {
+		f.effort = effort
+	}
 }

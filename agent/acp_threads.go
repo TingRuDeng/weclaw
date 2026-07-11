@@ -92,6 +92,14 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	if err := json.Unmarshal(result, &sessionResult); err != nil {
 		return "", false, fmt.Errorf("parse session result: %w", err)
 	}
+	if sessionResult.SessionID == "" {
+		return "", false, fmt.Errorf("session/new returned empty session id")
+	}
+	if a.isClaudeLegacyACP() {
+		if err := a.configureClaudeSession(ctx, sessionResult.SessionID, sessionResult.ConfigOptions); err != nil {
+			return "", false, err
+		}
+	}
 
 	a.mu.Lock()
 	a.sessions[conversationID] = sessionResult.SessionID

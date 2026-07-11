@@ -13,8 +13,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 )
+
+func TestCreateAgentByNamePassesClaudeModelAndEffort(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents["claude"] = config.AgentConfig{
+		Type: "cli", Command: "claude", Model: "opus", Effort: "high", Cwd: t.TempDir(),
+	}
+
+	ag := createAgentByName(context.Background(), cfg, "claude")
+	control, ok := ag.(agent.ClaudeModelControlAgent)
+	if !ok {
+		t.Fatalf("agent=%T，期望支持 Claude 模型控制", ag)
+	}
+	status := control.ClaudeModelStatus()
+	if status.Model != "opus" || status.Effort != "high" {
+		t.Fatalf("status=%#v，期望启动配置完整透传", status)
+	}
+}
 
 func TestCreateAgentByNameRetriesCodexSQLiteRuntimeStartup(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())

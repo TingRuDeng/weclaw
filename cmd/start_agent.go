@@ -39,11 +39,12 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 			Cwd:          agCfg.Cwd,
 			Env:          agCfg.Env,
 			Model:        agCfg.Model,
+			Effort:       agCfg.Effort,
 			SystemPrompt: agCfg.SystemPrompt,
 			RunAsUser:    agCfg.RunAsUser,
 			RunAsEnv:     agCfg.RunAsEnv,
 		})
-		log.Printf("[agent] created CLI agent: %s (command=%s, type=%s, model=%s)", name, agCfg.Command, agCfg.Type, agCfg.Model)
+		log.Printf("[agent] created CLI agent: %s (command=%s, type=%s, model=%s, effort=%s)", name, agCfg.Command, agCfg.Type, agCfg.Model, agCfg.Effort)
 		return ag
 	case "http":
 		if agCfg.Endpoint == "" {
