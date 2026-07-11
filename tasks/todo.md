@@ -76,7 +76,7 @@
 - [x] P3-2 串行：同步 Claude 模型与推理强度文档。
   - 修改：`README_CN.md`、`README.md`。
   - 验证：文档契约检查。
-- [ ] FINAL 串行：执行全量测试、race、vet、staticcheck、govulncheck、覆盖率、文档契约和 Review Gate。
+- [x] FINAL 串行：执行全量测试、race、vet、staticcheck、govulncheck、覆盖率、文档契约和 Review Gate。
 
 ## 验证矩阵
 
@@ -87,7 +87,28 @@
 
 ## Review 小结
 
-终态：执行中。
+终态：finished。
+
+Spec 符合度：通过。16 项审查问题按 P1、P2、P3 顺序完成，未引入计划外产品功能或兼容分支。
+
+安全检查：通过。loopback API 增加 Host/Origin 边界，远程请求拒绝特殊用途地址，日志不再记录消息正文，发布权限按 job 最小化，未新增硬编码凭证。
+
+测试与验证：通过。全仓单测、全仓 race、go vet、staticcheck、govulncheck、文档契约、差异检查和 v0.1.159 发布 dry-run 均为零失败。
+
+复杂度检查：通过本轮生产代码边界。生产 Go 文件均不超过 300 行，新增关键函数按职责拆分；17 个既有测试文件仍超过 300 行。
+
+Document-refresh: needed
+原因：Claude 已支持模型和推理强度切换，已同步中英文 README；发布工作流行为无需新增用户说明。
+
+剩余风险：loopback API 在无 token 模式仍信任本机进程；这是保留本地 CLI 易用性的已确认边界。总语句覆盖率为 69.9%，未达到核心模块 80% 目标。
+
+潜在技术债：17 个历史测试文件超过 300 行；`ilink`、`remotefetch`、`cmd`、`web` 和 `wechat` 包覆盖率仍偏低。
+
+并行执行说明：未使用 subagent。任务共享 Agent、Handler、配置和发布状态，按用户要求串行执行并在每项后独立提交。
+
+检索说明：未联网检索；本轮依据本地源码、测试和官方 Go 工具输出完成。
+
+结论：通过。
 
 ## 进度记录
 
@@ -107,3 +128,4 @@
 - 2026-07-11：P2-10 完成；稳定版 Release 增加单测、race 和 vet，工作流默认 contents:read，仅 release/publish job 获得写权限；YAML 与文档契约校验通过。
 - 2026-07-11：P3-1 完成；Web 通过剔除热重载字段后的结构化投影判断重启需求，Agent、API、审计、保存目录和平台运行参数变化不再漏报；`go test -race ./web` 通过。
 - 2026-07-11：P3-2 完成；中英文 README 同步 Codex/Claude 模型与推理强度按当前会话 Agent 切换、下个新会话生效的真实语义；文档契约通过。
+- 2026-07-11：FINAL 完成；最新提交上的全仓单测、全仓 race、go vet、staticcheck、govulncheck、文档契约和差异检查通过，v0.1.159 发布 dry-run 成功，总语句覆盖率 69.9%。
