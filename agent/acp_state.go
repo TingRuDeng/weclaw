@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -108,11 +109,29 @@ func (a *ACPAgent) loadState() {
 }
 
 func (a *ACPAgent) persistState() {
-	if a.stateFile == "" {
+	a.stateSaveMu.Lock()
+	defer a.stateSaveMu.Unlock()
+
+	state, stateFile, ok := a.snapshotPersistedState()
+	if !ok {
 		return
 	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		log.Printf("[acp] failed to marshal state: %v", err)
+		return
+	}
+	if err := writeACPStateAtomically(stateFile, data); err != nil {
+		log.Printf("[acp] failed to persist state file %s: %v", stateFile, err)
+	}
+}
 
+func (a *ACPAgent) snapshotPersistedState() (acpPersistedState, string, bool) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stateFile == "" {
+		return acpPersistedState{}, "", false
+	}
 	state := acpPersistedState{
 		Version:  acpPersistedStateVersion,
 		Protocol: a.protocol,
@@ -135,29 +154,33 @@ func (a *ACPAgent) persistState() {
 		copy(copied, messages)
 		state.History[conversationID] = copied
 	}
-	stateFile := a.stateFile
-	a.mu.Unlock()
+	return state, a.stateFile, true
+}
 
+func writeACPStateAtomically(stateFile string, data []byte) error {
 	dir := filepath.Dir(stateFile)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		log.Printf("[acp] failed to create state dir %s: %v", dir, err)
-		return
+		return fmt.Errorf("create state dir: %w", err)
 	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
+	tmp, err := os.CreateTemp(dir, filepath.Base(stateFile)+".tmp-*")
 	if err != nil {
-		log.Printf("[acp] failed to marshal state: %v", err)
-		return
+		return fmt.Errorf("create state tmp file: %w", err)
 	}
-
-	tmpFile := stateFile + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
-		log.Printf("[acp] failed to write state tmp file %s: %v", tmpFile, err)
-		return
+	tmpFile := tmp.Name()
+	defer os.Remove(tmpFile)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod state tmp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write state tmp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close state tmp file: %w", err)
 	}
 	if err := os.Rename(tmpFile, stateFile); err != nil {
-		log.Printf("[acp] failed to move state file into place %s: %v", stateFile, err)
-		_ = os.Remove(tmpFile)
-		return
+		return fmt.Errorf("replace state file: %w", err)
 	}
+	return nil
 }

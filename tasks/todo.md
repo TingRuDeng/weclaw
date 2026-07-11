@@ -40,7 +40,7 @@
 - [x] P1-4 串行：阻止 loopback API DNS rebinding。
   - 修改：`api/server.go`、`api/auth.go`，新增请求边界校验 helper。
   - 测试：loopback Host 成功，外部 Host、跨源 Origin 拒绝，token 模式保持可用。
-- [ ] P2-1 串行：序列化 ACP 状态快照持久化。
+- [x] P2-1 串行：序列化 ACP 状态快照持久化。
   - 修改：`agent/acp_agent.go`、`agent/acp_state.go`。
   - 测试：并发保存最终文件可解析且不会由旧快照覆盖新状态。
 - [ ] P2-2 串行：修复 Companion 旧连接清理误伤新连接请求。
@@ -95,3 +95,4 @@
 - 2026-07-11：P1-2 完成；默认、命名和广播的非 Codex 执行统一登记 active task，Claude/HTTP 任务现已进入重启保护与状态统计；`go test -race ./messaging` 通过。
 - 2026-07-11：P1-3 完成；已知服务进程存在时，配置损坏、API 不可达、未授权或响应损坏均阻断普通重启，仅显式 `--force` 放行；`go test -race ./cmd` 通过。
 - 2026-07-11：P1-4 完成；无 token API 拒绝非 loopback Host 和跨源 Origin，显式 token 模式保持可用；`go test -race ./api` 通过。
+- 2026-07-11：P2-1 完成；ACP 状态保存串行覆盖快照和写入，使用唯一 0600 临时文件原子替换，避免旧快照和固定 `.tmp` 互相覆盖；`go test -race ./agent` 通过。
