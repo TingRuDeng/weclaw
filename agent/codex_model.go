@@ -9,9 +9,8 @@ import (
 
 // CodexModelStatus 返回当前 WeClaw 侧配置，空值表示沿用 Codex 默认值。
 func (a *ACPAgent) CodexModelStatus() CodexModelStatus {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return CodexModelStatus{Model: a.model, Effort: a.effort}
+	config := a.modelConfigSnapshot()
+	return CodexModelStatus{Model: config.model, Effort: config.effort}
 }
 
 // SetCodexModel 运行时更新 Codex 模型/推理强度；空字符串表示保持原值。

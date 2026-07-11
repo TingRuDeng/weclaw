@@ -138,11 +138,12 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	if reviewer := a.approvalReviewerForCodex(); reviewer != "" {
 		params["approvalsReviewer"] = reviewer
 	}
-	if a.model != "" {
-		params["model"] = a.model
+	config := a.modelConfigSnapshot()
+	if config.model != "" {
+		params["model"] = config.model
 	}
-	if a.effort != "" {
-		params["effort"] = a.effort
+	if config.effort != "" {
+		params["effort"] = config.effort
 	}
 	startedAt := time.Now()
 	result, err := a.rpc(ctx, "thread/start", params)
@@ -188,11 +189,12 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 	if reviewer := a.approvalReviewerForCodex(); reviewer != "" {
 		params["approvalsReviewer"] = reviewer
 	}
-	if a.model != "" {
-		params["model"] = a.model
+	config := a.modelConfigSnapshot()
+	if config.model != "" {
+		params["model"] = config.model
 	}
-	if a.effort != "" {
-		params["effort"] = a.effort
+	if config.effort != "" {
+		params["effort"] = config.effort
 	}
 
 	startedAt := time.Now()

@@ -27,9 +27,8 @@ func (a *ACPAgent) isClaudeLegacyACP() bool {
 
 // ClaudeModelStatus 返回后续新建 Claude ACP session 使用的运行时配置。
 func (a *ACPAgent) ClaudeModelStatus() ClaudeModelStatus {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return ClaudeModelStatus{Model: a.model, Effort: a.effort}
+	config := a.modelConfigSnapshot()
+	return ClaudeModelStatus{Model: config.model, Effort: config.effort}
 }
 
 // SetClaudeModel 更新后续新建 Claude ACP session 使用的模型配置。

@@ -9,11 +9,12 @@ import (
 
 // Info returns metadata about this agent.
 func (a *ACPAgent) Info() AgentInfo {
+	config := a.modelConfigSnapshot()
 	info := AgentInfo{
 		Name:    a.command,
 		Type:    "acp",
-		Model:   a.model,
-		Effort:  a.effort,
+		Model:   config.model,
+		Effort:  config.effort,
 		Command: a.command,
 	}
 	a.mu.Lock()
