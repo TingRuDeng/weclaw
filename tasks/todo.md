@@ -26,7 +26,7 @@
 - [x] P4.7：安全刷新 ACP 并恢复同一 thread。
 - [x] P4.8：为 Messaging 注入审批和结构化问答。
 - [x] P4.9：让会话切换先绑定 owner。
-- [ ] P4.10：重构 active task owner 与终态幂等。
+- [x] P4.10：重构 active task owner 与终态幂等。
 - [ ] P4.11：Desktop 断线时接续 rollout。
 - [ ] P4.12：按实时 owner 路由消息、引导和停止。
 - [ ] P5 验收：执行单测、race、静态检查、全仓验证和真实 Codex App 手工验收。

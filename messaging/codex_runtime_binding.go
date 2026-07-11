@@ -94,7 +94,7 @@ func (h *Handler) hasExternalCodexTask(conversationID string) bool {
 	}
 	task.mu.Lock()
 	defer task.mu.Unlock()
-	return task.externalCodex
+	return task.isExternalCodexLocked()
 }
 
 func isCodexOwnerStateError(err error) bool {

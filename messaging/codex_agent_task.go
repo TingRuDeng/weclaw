@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/agent"
 )
 
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
@@ -25,10 +27,13 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		return
 	}
 	executionKey := route.conversationID
+	runtimeOwner, ownerRevision := codexTaskOwnerSnapshot(opts.agent, route.conversationID)
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{
-		owner:     opts.userID,
-		agentName: opts.agentName,
-		message:   opts.message,
+		owner:        opts.userID,
+		agentName:    opts.agentName,
+		message:      opts.message,
+		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
+		codexThreadID: route.threadID,
 	})
 	if !started {
 		cancelTaskTimeout()
@@ -55,8 +60,9 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 func (h *Handler) pendingCodexTask(opts codexAgentTaskOptions) pendingAgentTask {
 	opts.ctx = context.WithoutCancel(opts.ctx)
 	return pendingAgentTask{
-		message: opts.message,
-		run:     func() { h.startCodexAgentTask(opts) },
+		message:    opts.message,
+		codexRoute: opts.route,
+		run:        func() { h.startCodexAgentTask(opts) },
 	}
 }
 
@@ -80,6 +86,11 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
 		return
 	}
+	if liveAgent, ok := opts.agent.(agent.CodexLiveRuntimeAgent); ok {
+		if binding, found := liveAgent.CurrentCodexThreadBinding(runtime.route.conversationID); found {
+			runtime.task.syncCodexRuntime(binding)
+		}
+	}
 	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, recordProgress)
 	if err != nil {
 		reply = renderFinalFailure(opts.replyPrefix, err)
@@ -93,6 +104,18 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	} else {
 		_ = finishProgress("", false)
 	}
+}
+
+func codexTaskOwnerSnapshot(ag agent.Agent, conversationID string) (agent.CodexRuntimeOwner, uint64) {
+	liveAgent, ok := ag.(agent.CodexLiveRuntimeAgent)
+	if !ok {
+		return agent.CodexOwnerWeClawRuntime, 0
+	}
+	binding, found := liveAgent.CurrentCodexThreadBinding(conversationID)
+	if !found {
+		return agent.CodexOwnerUnknown, 0
+	}
+	return binding.Owner, binding.OwnerRevision
 }
 
 // finishCodexAgentTask 收尾后台任务，并自动执行未被消费的暂存消息。

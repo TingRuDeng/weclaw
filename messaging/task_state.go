@@ -6,29 +6,33 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/agent"
 )
 
 type activeAgentTask struct {
-	mu              sync.Mutex
-	cancel          context.CancelFunc
-	done            chan struct{}
-	detached        bool
-	pending         pendingAgentTask
-	owner           string
-	agentName       string
-	preview         string
-	startedAt       time.Time
-	lastProgress    string
-	lastProgressAt  time.Time
-	externalCodex   bool
-	externalControl bool
-	codexThreadID   string
-	codexTurnID     string
+	mu             sync.Mutex
+	cancel         context.CancelFunc
+	done           chan struct{}
+	detached       bool
+	pending        pendingAgentTask
+	owner          string
+	agentName      string
+	preview        string
+	startedAt      time.Time
+	lastProgress   string
+	lastProgressAt time.Time
+	runtimeOwner   agent.CodexRuntimeOwner
+	ownerRevision  uint64
+	phase          codexTaskPhase
+	codexThreadID  string
+	codexTurnID    string
 }
 
 type pendingAgentTask struct {
-	message string
-	run     func()
+	message    string
+	run        func()
+	codexRoute codexConversationRoute
 }
 
 func (t *activeAgentTask) pendingGuide() string {
@@ -48,16 +52,17 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTa
 	}
 	taskCtx, cancel := context.WithCancel(ctx)
 	task := &activeAgentTask{
-		cancel:          cancel,
-		done:            make(chan struct{}),
-		owner:           strings.TrimSpace(meta.owner),
-		agentName:       strings.TrimSpace(meta.agentName),
-		preview:         previewPendingCodexMessage(meta.message),
-		startedAt:       time.Now(),
-		externalCodex:   meta.externalCodex,
-		externalControl: meta.externalControl,
-		codexThreadID:   strings.TrimSpace(meta.codexThreadID),
-		codexTurnID:     strings.TrimSpace(meta.codexTurnID),
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		owner:         strings.TrimSpace(meta.owner),
+		agentName:     strings.TrimSpace(meta.agentName),
+		preview:       previewPendingCodexMessage(meta.message),
+		startedAt:     time.Now(),
+		runtimeOwner:  meta.runtimeOwner,
+		ownerRevision: meta.ownerRevision,
+		phase:         codexTaskRunning,
+		codexThreadID: strings.TrimSpace(meta.codexThreadID),
+		codexTurnID:   strings.TrimSpace(meta.codexTurnID),
 	}
 	h.activeTasks[key] = task
 	return task, taskCtx, true
@@ -81,13 +86,13 @@ func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {
 
 // activeTaskMeta 描述一次后台任务的归属信息，供 /ps 和 /cancel 检索。
 type activeTaskMeta struct {
-	owner           string
-	agentName       string
-	message         string
-	externalCodex   bool
-	externalControl bool
-	codexThreadID   string
-	codexTurnID     string
+	owner         string
+	agentName     string
+	message       string
+	runtimeOwner  agent.CodexRuntimeOwner
+	ownerRevision uint64
+	codexThreadID string
+	codexTurnID   string
 }
 
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
@@ -182,7 +187,7 @@ func (h *Handler) takeExternalCodexGuide(key string, actor string) (pendingAgent
 	if task.owner != strings.TrimSpace(actor) {
 		return pendingAgentTask{}, "", "", task, false, true
 	}
-	if !task.externalCodex || !task.externalControl || task.pending.message == "" || task.codexThreadID == "" || task.codexTurnID == "" {
+	if !task.canControlExternalCodexLocked() || task.pending.message == "" {
 		return pendingAgentTask{}, "", "", task, false, false
 	}
 	pending := task.pending
@@ -220,7 +225,7 @@ func (h *Handler) externalCodexTurnForTask(key string, actor string) (string, st
 	if task.owner != strings.TrimSpace(actor) {
 		return "", "", false, true
 	}
-	if !task.externalCodex || !task.externalControl || task.codexThreadID == "" || task.codexTurnID == "" {
+	if !task.canControlExternalCodexLocked() {
 		return "", "", false, false
 	}
 	return task.codexThreadID, task.codexTurnID, true, false
@@ -237,8 +242,14 @@ func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (pending
 		return pendingAgentTask{}, false
 	}
 	task.mu.Lock()
+	wasStopping := task.phase == codexTaskStopping
+	if !task.claimTerminalLocked() {
+		task.mu.Unlock()
+		h.activeTasksMu.Unlock()
+		return pendingAgentTask{}, false
+	}
 	pending := pendingAgentTask{}
-	if !task.detached {
+	if !task.detached || wasStopping {
 		pending = task.pending
 	}
 	task.pending = pendingAgentTask{}

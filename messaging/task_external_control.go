@@ -14,7 +14,7 @@ func (h *Handler) externalCodexControlState(key string, actor string) (bool, boo
 	defer h.activeTasksMu.Unlock()
 	defer task.mu.Unlock()
 	if task.owner != strings.TrimSpace(actor) {
-		return task.externalCodex, task.externalControl, true
+		return task.isExternalCodexLocked(), task.canControlExternalCodexLocked(), true
 	}
-	return task.externalCodex, task.externalControl, false
+	return task.isExternalCodexLocked(), task.canControlExternalCodexLocked(), false
 }

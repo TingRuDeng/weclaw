@@ -19,8 +19,8 @@ func runningCodexGuidePromptForTask(task *activeAgentTask) string {
 		return runningCodexGuidePrompt()
 	}
 	task.mu.Lock()
-	external := task.externalCodex
-	control := task.externalControl
+	external := task.isExternalCodexLocked()
+	control := task.canControlExternalCodexLocked()
 	task.mu.Unlock()
 	if !external {
 		return runningCodexGuidePrompt()
@@ -176,8 +176,8 @@ func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
 		h.activeTasksMu.Unlock()
 		return false, true
 	}
-	task.pending = pendingAgentTask{}
 	task.detached = true
+	task.phase = codexTaskStopping
 	cancel := task.cancel
 	task.mu.Unlock()
 	h.activeTasksMu.Unlock()

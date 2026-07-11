@@ -49,7 +49,7 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 		t.Fatal("切换 active Codex App thread 后应登记外部任务镜像")
 	}
 	task.mu.Lock()
-	external := task.externalCodex
+	external := task.isExternalCodexLocked()
 	threadID := task.codexThreadID
 	turnID := task.codexTurnID
 	task.mu.Unlock()

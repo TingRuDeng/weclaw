@@ -756,7 +756,7 @@ git commit -m "会话切换绑定 Codex 实时运行时"
 - Modify: `messaging/codex_agent_task.go`
 - Modify: `messaging/codex_task_types.go`
 
-- [ ] **Step 1: 写任务状态失败测试**
+- [x] **Step 1: 写任务状态失败测试**
 
 ```go
 func TestCodexTaskStoresOwnerRevisionAndThread(t *testing.T) {}
@@ -765,7 +765,7 @@ func TestCodexPendingMessageKeepsFrozenThreadRoute(t *testing.T) {}
 func TestCodexStopPhaseKeepsPendingMessage(t *testing.T) {}
 ```
 
-- [ ] **Step 2: 用具名状态替换两个布尔字段**
+- [x] **Step 2: 用具名状态替换两个布尔字段**
 
 ```go
 type codexTaskPhase string
@@ -780,11 +780,11 @@ const (
 
 `activeAgentTask` 保存 `runtimeOwner`、`ownerRevision`、`phase`、`codexThreadID`、`codexTurnID`，删除 `externalCodex/externalControl`。`claimTerminal` 在 task mutex 下只允许第一次从非终态进入终态；IPC 与 rollout 只有获胜者可以发送最终结果和提升 pending。
 
-- [ ] **Step 3: 暂存消息执行前重新 bind**
+- [x] **Step 3: 暂存消息执行前重新 bind**
 
 `pendingCodexTask` 继续冻结 route/thread/reply，但 `runCodexAgentTask` 必须再次执行 Task 9 resolver；不得捕获旧 owner 或直接调用 Desktop/ACP。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 Run: `gofmt -w messaging/handler_codex_live_task_state_test.go messaging/task_state.go messaging/task_external_control.go messaging/codex_agent_task.go messaging/codex_task_types.go`
 
