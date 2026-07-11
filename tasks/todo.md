@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-书面 Spec 与函数级实施计划均已完成并通过自审；等待用户选择执行方式，生产代码仍未开始修改。
+书面 Spec 与函数级实施计划均已确认，正在隔离分支按 TDD 和双重审查执行。
 
 ## 任务清单
 
@@ -17,7 +17,18 @@
 - [x] P2 串行：提交并由用户审查 `tasks/codex-desktop-live-takeover.md`。
 - [x] P3 并行只读：分析 Agent 接入点、Messaging 时序和 Remodex 最小 IPC 契约。
 - [x] P3 串行：完成并自审 `tasks/codex-desktop-live-takeover-plan.md`。
-- [ ] P4 执行：按批准计划先写失败测试，再实现 Desktop IPC 接管。
+- [ ] P4.1：固化 Desktop IPC frame 与 envelope。
+- [ ] P4.2：建立安全的 IPC client 与 macOS endpoint。
+- [ ] P4.3：实现 snapshot、patch 与事件投影。
+- [ ] P4.4：映射 Desktop 操作、审批和结构化问答。
+- [ ] P4.5：建立 thread owner 状态机。
+- [ ] P4.6：让 ACPAgent 按 owner 路由 Chat 和控制。
+- [ ] P4.7：安全刷新 ACP 并恢复同一 thread。
+- [ ] P4.8：为 Messaging 注入审批和结构化问答。
+- [ ] P4.9：让会话切换先绑定 owner。
+- [ ] P4.10：重构 active task owner 与终态幂等。
+- [ ] P4.11：Desktop 断线时接续 rollout。
+- [ ] P4.12：按实时 owner 路由消息、引导和停止。
 - [ ] P5 验收：执行单测、race、静态检查、全仓验证和真实 Codex App 手工验收。
 - [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 
@@ -27,4 +38,4 @@
 
 ## Review 小结
 
-书面 Spec 已确认；实施计划发现 permissions follower 映射存在新证据，已同步修正 Spec。计划共 13 个 TDD Task、64 个可勾选步骤，已完成 Spec 覆盖、占位符和类型一致性检查，未修改生产代码。
+基线 `go test ./... -count=1 -timeout 120s` 已通过。计划共 13 个 TDD Task、64 个可勾选步骤；每个实现 Task 都必须依次通过 Spec 审查和代码质量审查。
