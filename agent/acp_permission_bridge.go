@@ -29,8 +29,9 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 		ResponseFormat:       responseFormat,
 		RequestedPermissions: req.Params.Permissions,
 		Request: ApprovalRequest{
-			ToolCall: permissionToolCall(req.Params),
-			Options:  options,
+			RequestID: strings.TrimSpace(string(req.ID)),
+			ToolCall:  permissionToolCall(req.Params),
+			Options:   options,
 		},
 	}
 	if a.dispatchToTurnCh(permissionRouteID(req.Params), &codexTurnEvent{Kind: "approval_request", Approval: approval}) {

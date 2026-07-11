@@ -1,12 +1,13 @@
 package messaging
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/google/uuid"
 )
 
 func staleApprovalReply() string {
@@ -115,13 +116,9 @@ func taskCardIDFromReplier(reply platform.Replier) string {
 	return strings.TrimSpace(reporter.CurrentTaskCardID())
 }
 
-func approvalPendingKey(userID string, prompt string, options []agent.ApprovalOption) string {
-	parts := make([]string, 0, len(options)+2)
-	parts = append(parts, strings.TrimSpace(userID), strings.TrimSpace(prompt))
-	for _, option := range options {
-		parts = append(parts, strings.TrimSpace(option.ID)+":"+strings.TrimSpace(option.Kind))
-	}
-	sum := sha1.Sum([]byte(strings.Join(parts, "\x00")))
+func approvalPendingKey(requestID string) string {
+	// 请求 ID 便于关联上游审批，随机 nonce 保证不同 Agent 的同号请求也不会碰撞。
+	sum := sha256.Sum256([]byte(strings.TrimSpace(requestID) + "\x00" + uuid.NewString()))
 	return hex.EncodeToString(sum[:])
 }
 

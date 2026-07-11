@@ -2,75 +2,58 @@
 
 ## 目标
 
-将飞书里的 `/model` 和 `/reasoning` 无参数查询优化为交互卡片，用户可直接选择模型或推理强度；点击后只收纳当前卡片，并明确提示新设置从下一个新会话生效。
+按审查严重级别和用户确认顺序修复 10 个既有问题，并增加“切换会话后展示实际模型与推理强度”能力。每项独立执行 TDD、验证和提交。
 
 ## 非目标
 
-- 不改变微信的文本命令体验。
-- 不改变 `/model <模型ID>`、`/reasoning <强度>` 的直接命令入口。
-- 不改变 Codex 模型与推理强度的持久化语义，仍只更新当前 WeClaw 运行时配置。
-- 不允许选择 Codex 当前模型目录未声明支持的推理强度。
+- 不改变飞书、微信现有命令名称。
+- 不为旧审批卡片、旧发布流程或错误模型档位保留兼容分支。
+- 不使用 Agent 全局配置冒充历史会话的实际模型状态。
+- 不在静态质量阶段顺带重构无关业务。
 
 ## 当前事实
 
-- `messaging/model_command.go` 的 `renderModelOverview`、`renderReasoningOverview` 已能查询模型目录和当前模型支持的推理强度，但只返回文本。
-- `messaging/platform_commands.go` 的 `handleBuiltInPlatformCommand` 直接把 `/model`、`/reasoning` 的结果发送为文本，没有使用 `platform.Replier.AskChoices`。
-- `feishu/choice.go` 的 `buildChoiceCard` 与 `feishu/adapter_events.go` 的 `handleCardActionEvent` 已支持把卡片按钮回放为统一业务命令，并在点击后收纳原卡片。
-- `messaging/platform_message.go` 的 `platformMessageText` 会把卡片 `choice` 还原为命令文本，因此按钮可直接携带 `/model <ID>`、`/reasoning <强度>`。
+- 基线：`v0.1.156`，提交 `1e02953`，分支 `codex/fix-deep-review-findings`。
+- 基线命令 `go test ./... -count=1 -timeout 120s` 通过。
+- Codex app-server `thread/read` 不直接返回主会话模型和推理强度；本地 rollout 的 `turn_context` 包含实际 `model` 与 `effort`。
+- Claude transcript 通常包含 assistant 使用的模型，但外部历史会话不保证记录推理强度。
 
 ## 决策日志
 
-- 采用现有 `AskChoices` 通道，不为模型设置新增第二套回调状态机。
-- 飞书无参数命令优先发送卡片；显式带参数命令继续返回文本确认。
-- 模型卡片选项来自 `ListCodexModels`；推理强度只来自当前模型的 `EffortOptions`。
-- 当前值在按钮标签中标记为“当前”，点击后由现有回调收纳原卡片，业务层另行发送生效提示。
-- 当模型目录查询失败或没有有效选项时返回现有文本说明，不伪造固定档位。
-- 不使用 subagent；消息路由、卡片选项和测试共享同一行为边界，串行 TDD 可避免写冲突。
+- 审批使用上游请求 ID；缺少上游 ID 时生成随机唯一 ID，不再由提示文本推导。
+- ACP 运行时模型配置通过单次加锁快照读取，锁不跨越 RPC。
+- Claude 只缓存实际观察到的模型档位；切换模型时清除不兼容 effort。
+- 会话模型字段缺失时显示“未知（会话未记录）”，不做全局配置回退。
+- 本地 `scripts/release.sh` 保留为稳定版默认发布者；Actions 稳定版入口仅手动触发。
+- 全程串行执行；多个任务重复修改同一文件，不使用并行写入或 subagent。
 
 ## 执行计划
 
-- [x] P1 串行 RED：在 `messaging/model_command_test.go` 补模型卡片、推理强度卡片、当前值标记和无选项回退测试，并运行定向测试确认按预期失败。
-- [x] P2 串行 GREEN：在 `messaging/model_command.go` 增加模型/推理强度卡片选项构造函数；在 `messaging/platform_commands.go` 让飞书无参数命令调用 `AskChoices`，带参数命令保持原路径。
-- [x] P3 串行 RED/GREEN：在 `feishu/choice_selected_card_test.go` 覆盖设置卡片点击后的收纳结果，确认选项命令通过现有 `choice` 回放，不新增独立设置状态。
-- [x] P4 串行验证：执行格式化、messaging 与 feishu 定向测试、全仓测试、race、vet、文档契约、`git diff --check` 和 review gate。
+- [x] P1 串行：修复并发审批请求隔离。
+- [ ] P2 串行：修复 ACP 运行时模型配置竞态。
+- [ ] P3 串行：修复 Claude 模型推理档位缓存。
+- [ ] P4 串行：切换会话时显示实际模型配置。
+- [ ] P5 串行：避免资料保存覆盖已有文件。
+- [ ] P6 串行：确保审批超时默认拒绝。
+- [ ] P7 串行：修复会话状态 Agent 展示。
+- [ ] P8 串行：清理过期授权码状态。
+- [ ] P9 串行：统一稳定版发布流程。
+- [ ] P10 串行：修正 Web 工作空间权限提示。
+- [ ] P11 串行：清理静态检查问题和超大文件。
+- [ ] P12 串行：执行全量验证与 Review Gate。
 
 ## 验证矩阵
 
-- 飞书 `/model`：展示当前模型和动态模型按钮，当前项有明确标记。
-- 飞书 `/reasoning`：只展示当前模型支持的档位，当前项有明确标记。
-- 飞书按钮点击：回放现有带参数命令，收纳被点击卡片，并发送“下一个新会话生效”的确认。
-- 微信及无按钮能力平台：继续收到文本概览。
-- 模型目录查询失败或选项为空：返回文本概览，不发送空卡片。
-- 非 Codex Agent：继续返回“由配置固定”的现有提示。
-- 回归命令：`go test ./messaging ./feishu -count=1 -timeout 60s`。
-- 全量命令：`go test -race ./messaging ./feishu -count=1 -timeout 60s`、`go test ./... -count=1 -timeout 120s`、`go vet ./...`、`python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+- 每项先运行定向测试确认 RED，再最小实现并确认 GREEN。
+- 每项提交前执行受影响包 `go test -race`，硬超时 60 秒。
+- 终验执行全仓测试、race、vet、staticcheck、govulncheck、文档契约、发布 dry-run 和差异检查。
 
 ## 进度记录
 
-- 2026-07-11：用户确认 `/model` 与 `/reasoning` 一起卡片化；已完成只读代码分析和实施规划。
-- 2026-07-11：P1 完成；飞书 `/model`、`/reasoning` 卡片测试均因当前实现只发送文本而按预期失败，空模型列表回退测试通过。
-- 2026-07-11：P2 完成；飞书无参数 `/model`、`/reasoning` 使用动态卡片，当前项有标记，空选项回退文本；带参数命令与微信保持文本。
-- 2026-07-11：P3 完成；飞书点击推理强度后收纳原卡片，并将完整 `/reasoning high` 命令回放到统一业务层；无需新增飞书回调状态。
-- 2026-07-11：P4 完成；修正显式模型未命中目录时借用其他模型推理档位的边界，并完成最终 race、全仓测试、vet、文档契约和差异检查。
+- 2026-07-11：用户确认功能边界、风险决策、执行计划和新增会话模型展示策略。
+- 2026-07-11：创建隔离 worktree，完成依赖下载和全仓基线测试。
+- 2026-07-11：P1 完成；审批请求透传 JSON-RPC ID，卡片键加入随机 nonce，相同内容的并发审批可独立处理且注册冲突不再覆盖。
 
 ## Review 小结
 
-终态：finished。
-
-Spec 符合度：通过。飞书无参数 `/model`、`/reasoning` 使用动态选择卡片，当前值明确标记；点击后复用统一命令路由并只收纳已点击卡片；微信和显式带参数命令保持文本。
-
-安全检查：模型和推理强度选项只来自 Codex `model/list`；显式模型未命中目录时不借用其他模型档位；未新增权限入口、外部命令拼接或凭据处理。
-
-测试与验证：TDD 主路径和未知模型边界均先失败后通过；最终 `go test -race ./messaging ./feishu -count=1 -timeout 60s`、`go test ./... -count=1 -timeout 120s`、`go vet ./...`、文档契约和 `git diff --check` 均通过。
-
-复杂度检查：`handleBuiltInPlatformCommand` 已提取 Codex 会话和模型设置职责，降至 49 行；所有修改文件少于 300 行，新增函数参数不超过 3 个、嵌套不超过 3 层。
-
-Document-refresh: not-needed
-
-原因：命令名称和配置结构未变化，只把飞书已有文本查询升级为同语义的交互卡片，帮助文案无需调整。
-
-剩余风险：未显式配置模型时沿用 Codex 模型目录首项作为默认模型档位来源，依赖 Codex `model/list` 保持默认模型优先排序。
-
-潜在技术债：`CodexModel` 尚未解析 app-server 的显式默认模型标记；若未来模型目录不再默认项优先，需要补充该字段以消除排序依赖。
-
-结论：通过。
+终态：进行中。

@@ -34,6 +34,9 @@ func TestHandlePermissionRequestDispatchesApprovalToTurn(t *testing.T) {
 		if evt.Approval == nil {
 			t.Fatal("approval event missing")
 		}
+		if evt.Approval.Request.RequestID != "7" {
+			t.Fatalf("approval request id=%q, want 7", evt.Approval.Request.RequestID)
+		}
 		if string(evt.Approval.ID) != "7" {
 			t.Fatalf("approval id=%s, want 7", evt.Approval.ID)
 		}

@@ -16,8 +16,9 @@ type ApprovalOption struct {
 
 // ApprovalRequest 描述一次需要用户确认的 Codex 敏感操作。
 type ApprovalRequest struct {
-	ToolCall json.RawMessage
-	Options  []ApprovalOption
+	RequestID string
+	ToolCall  json.RawMessage
+	Options   []ApprovalOption
 }
 
 // ApprovalHandler 由消息层实现，用于把 Codex 审批请求转成平台交互。

@@ -162,6 +162,73 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	}
 }
 
+func TestPendingApprovalIsolatesIdenticalConcurrentRequests(t *testing.T) {
+	h := NewHandler(nil, nil)
+	replyA := newApprovalKeyCaptureReplier()
+	replyB := newApprovalKeyCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	options := []agent.ApprovalOption{
+		{ID: "allow_once", Name: "允许", Kind: "allow"},
+		{ID: "deny_once", Name: "拒绝", Kind: "deny"},
+	}
+	request := agent.ApprovalRequest{
+		RequestID: "101", ToolCall: json.RawMessage(`{"cmd":"same"}`), Options: options,
+	}
+	resultA := startApprovalForTest(ctx, h, replyA, request)
+	request.RequestID = "102"
+	resultB := startApprovalForTest(ctx, h, replyB, request)
+
+	keyA := replyA.waitApprovalKey(t, ctx)
+	keyB := replyB.waitApprovalKey(t, ctx)
+	if keyA == keyB {
+		t.Fatalf("identical approvals must use unique keys, got %q", keyA)
+	}
+	resolveApprovalForTest(t, ctx, h, replyA, keyA, "accept", resultA, "allow_once")
+	assertApprovalPendingForTest(t, resultB)
+	resolveApprovalForTest(t, ctx, h, replyB, keyB, "cancel", resultB, "deny_once")
+}
+
+func startApprovalForTest(ctx context.Context, h *Handler, reply platform.Replier, request agent.ApprovalRequest) <-chan string {
+	result := make(chan string, 1)
+	go func() {
+		optionID, err := h.approvalHandlerForUser("ou_user", "ou_user", reply)(ctx, request)
+		if err != nil {
+			result <- "error:" + err.Error()
+			return
+		}
+		result <- optionID
+	}()
+	return result
+}
+
+func resolveApprovalForTest(t *testing.T, ctx context.Context, h *Handler, reply platform.Replier, key string, choice string, result <-chan string, want string) {
+	t.Helper()
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
+			"choice": choice, "approval_key": key,
+		}},
+	}, reply)
+	select {
+	case got := <-result:
+		if got != want {
+			t.Fatalf("approval result=%q, want %q", got, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not return")
+	}
+}
+
+func assertApprovalPendingForTest(t *testing.T, result <-chan string) {
+	t.Helper()
+	select {
+	case got := <-result:
+		t.Fatalf("other approval should remain pending, got %q", got)
+	case <-time.After(taskQueueProbeDelay):
+	}
+}
+
 func TestExpiredApprovalActionDoesNotStartNewTask(t *testing.T) {
 	ag := &fakeAgent{reply: "不应执行"}
 	h := NewHandler(func(context.Context, string) agent.Agent { return ag }, nil)

@@ -22,7 +22,7 @@ type pendingApproval struct {
 func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, reply platform.Replier) agent.ApprovalHandler {
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
 		prompt := approvalPrompt(req)
-		approvalKey := approvalPendingKey(userID, prompt, req.Options)
+		approvalKey := approvalPendingKey(req.RequestID)
 		choices := approvalChoices(req.Options, approvalKey, taskCardIDFromReplier(reply), userID, routeUserID)
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
@@ -33,7 +33,10 @@ func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, repl
 			h.auditRecord(auditEntry{User: userID, Action: "approval_auto_yolo", Summary: decision})
 			return decision, nil
 		}
-		pending := h.registerPendingApproval(userID, approvalKey, req.Options)
+		pending, err := h.registerPendingApproval(userID, approvalKey, req.Options)
+		if err != nil {
+			return "", err
+		}
 		defer h.clearPendingApproval(userID, pending)
 		if err := reply.AskChoices(ctx, prompt, choices); err != nil {
 			return "", err
@@ -51,7 +54,7 @@ func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, repl
 	}
 }
 
-func (h *Handler) registerPendingApproval(userID string, approvalKey string, options []agent.ApprovalOption) *pendingApproval {
+func (h *Handler) registerPendingApproval(userID string, approvalKey string, options []agent.ApprovalOption) (*pendingApproval, error) {
 	pending := &pendingApproval{
 		choices: make(chan string, 1),
 		allowed: approvalOptionSet(options),
@@ -63,9 +66,13 @@ func (h *Handler) registerPendingApproval(userID string, approvalKey string, opt
 	if h.pendingApprovals == nil {
 		h.pendingApprovals = make(map[string]*pendingApproval)
 	}
+	if h.pendingApprovals[pending.key] != nil {
+		h.pendingApprovalsMu.Unlock()
+		return nil, fmt.Errorf("approval request key collision")
+	}
 	h.pendingApprovals[pending.key] = pending
 	h.pendingApprovalsMu.Unlock()
-	return pending
+	return pending, nil
 }
 
 func (h *Handler) clearPendingApproval(userID string, pending *pendingApproval) {
