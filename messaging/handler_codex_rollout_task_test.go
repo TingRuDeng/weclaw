@@ -62,6 +62,9 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 	if strings.Contains(notice, "/guide") || strings.Contains(notice, "/stop") {
 		t.Fatalf("switch notice=%q, read-only rollout mirror must not advertise remote control", notice)
 	}
+	if strings.Contains(notice, "需在 Codex App 中操作") || !strings.Contains(notice, "结果会自动返回当前会话") {
+		t.Fatalf("switch notice=%q, must only describe automatic result delivery", notice)
+	}
 	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "补充要求",
 		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
@@ -74,7 +77,7 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/stop",
 		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
 	}, reply)
-	if _, ok := h.activeTask(conversationID); !ok || !containsText(reply.Texts, "请在 Codex App 中停止") {
+	if _, ok := h.activeTask(conversationID); !ok || !containsText(reply.Texts, "暂不支持从飞书或微信停止") {
 		t.Fatalf("texts=%#v, /stop must not cancel read-only rollout mirror", reply.Texts)
 	}
 

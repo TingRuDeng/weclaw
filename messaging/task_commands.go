@@ -141,7 +141,7 @@ func (h *Handler) interruptExternalCodexTask(ctx context.Context, key string, ag
 		return "只有任务发起人可以停止当前任务。", true
 	}
 	if external && !control {
-		return "当前任务由 Codex App 本地进程执行，请在 Codex App 中停止。", true
+		return "当前任务由独立 Codex App 进程执行，暂不支持从飞书或微信停止。", true
 	}
 	runtimeAg, ok := ag.(agent.CodexThreadRuntimeAgent)
 	if !ok {

@@ -2,48 +2,47 @@
 
 ## 目标
 
-Codex 任务执行中收到的第二条普通消息，在用户未选择 `/guide`、`/cancel` 或 `/stop` 时，于上一任务结束后自动执行，不再要求二次确认。
+切换到 Codex App 独立进程正在执行的会话时，不主动提示“需在 Codex App 中操作”；仅在用户实际发送 `/stop` 时说明跨进程停止限制。
 
 ## 执行任务
 
-- [x] P1 串行：补充普通 Codex、广播 Codex 和 Codex App 镜像自动续跑测试，并确认旧实现失败。
-- [x] P2 串行：让暂存项保存原消息的延迟执行动作，任务收尾后直接执行。
-- [x] P3 串行：删除二次确认状态，同步 `/guide`、`/cancel`、`/stop` 提示和公开说明。
-- [x] P4 串行：执行定向测试、race、全仓测试、静态检查和 review gate。
+- [x] P1 串行：补充切换提示、任务列表和 `/stop` 文案回归测试，并确认旧实现失败。
+- [x] P2 串行：隐藏主动操作提示，仅保留结果自动回传说明和按需 `/stop` 限制反馈。
+- [x] P3 串行：执行 messaging、race、全仓测试、静态检查和 review gate。
 
 ## 规划
 
-用户已确认规则：未操作时自动续跑；上一任务报错也继续，只有显式 `/guide`、`/cancel` 或成功 `/stop` 才消费或清除暂存消息。
+用户已确认方案：不使用杀进程或停止 watcher 冒充定向停止；共享 daemon 未接入前，仅对实际 `/stop` 明确跨进程限制。
 
 ## 并行说明
 
-本轮不使用 subagent。暂存状态和三条收尾路径共享同一任务状态机，串行修改可避免竞态和写冲突。
+本轮不使用 subagent。改动集中在同一任务展示与控制状态，串行修改可避免文案和能力标记不一致。
 
 ## 进度记录
 
-- 2026-07-11：根因确认是旧版 `completeActiveTask` 主动把暂存消息转成待确认状态；用户确认改为自动续跑。
-- 2026-07-11：P1 完成；旧实现下普通、广播和只读镜像测试分别停在确认提示或拒绝暂存，符合预期失败。
-- 2026-07-11：P2、P3 完成；暂存项保留原消息延迟执行动作，三条收尾路径已自动续跑，二次确认状态及公开说明已清理。
-- 2026-07-11：P4 完成；成功、失败、广播、飞书 session、Codex App 镜像及 `/guide`、`/cancel`、`/stop` 边界通过，race、全仓测试、vet、文档契约和差异检查均通过。
+- 2026-07-11：官方源码确认 `turn/interrupt` 依赖当前 app-server 的 `ThreadManager` 和 active turn，独立 Codex App turn 不能由 WeClaw app-server 直接中断；本机未运行共享 daemon/control socket。
+- 2026-07-11：P1 完成；旧实现的切换回复和 `/ps` 均包含主动 App 操作提示，测试按预期失败。
+- 2026-07-11：P2 完成；切换回复和 `/ps` 只说明结果自动回传，实际 `/stop` 才返回跨进程限制；WeClaw 持有任务的 `/stop` 回归通过。
+- 2026-07-11：P3 完成；messaging race、全仓测试、vet、文档契约和差异检查均通过。
 
 ## Review 小结
 
 终态：finished。
 
-Spec 符合度：通过。未被 `/guide`、`/cancel` 或成功 `/stop` 消费的第二条普通消息，会在上一任务成功、失败或中断后自动执行，不再进入待确认状态。
+Spec 符合度：通过。切换反馈和 `/ps` 不再主动提示回到 Codex App；实际 `/stop` 才说明独立 App turn 暂不支持从飞书或微信停止。
 
-安全检查：自动续跑只执行已通过原消息入口校验的内容；保留原账号、用户、route、Agent、工作空间、回复通道和客户端标识，未引入密钥、外部命令、静默降级或跨用户执行。
+安全检查：未改变任务控制权限，未杀进程、未停止 watcher 冒充任务停止，也未把独立 App turn 错标为可控制；WeClaw app-server 持有的 turn 继续使用 `turn/interrupt`。
 
 测试与验证：TDD 回归先失败后通过；`go test -race ./messaging -count=1 -timeout 60s`、`go test ./... -count=1 -timeout 120s`、`go vet ./...`、文档契约和 `git diff --check` 均通过。
 
-复杂度检查：新增 `pendingCodexTask` 为 9 行，自动续跑相关状态函数均不超过 50 行，相关生产文件均少于 300 行；`agent_execution.go` 中既有广播与发送大函数未在本轮做无关重构。
+复杂度检查：生产代码仅修改三个文案分支，未新增函数或状态；相关生产文件均少于 300 行。
 
-Document-refresh: needed
+Document-refresh: not-needed
 
-原因：用户可见的暂存消息交互发生变化，已同步 `README.md`、`README_CN.md`、`docs/AI_CONTEXT.md` 和经验规则。
+原因：公开命令和配置未变化，能力边界已写入任务记录与经验规则，用户可见提示由测试锁定。
 
-剩余风险：真实飞书客户端连续发送多条消息时仍只保留第一条暂存消息，后续消息会明确提示先处理现有暂存项，这是现有容量约束。
+剩余风险：若未来 Codex App 改为与 WeClaw 共享 app-server daemon，需要重新探测 control socket，并将该任务来源升级为可控制。
 
-潜在技术债：`agent_execution.go` 仍有历史大函数和长参数接口，后续应单独拆分，避免与本次行为修复混合扩大范围。
+潜在技术债：Codex 共享 daemon 和 remote-control 仍是实验能力，当前未接入 WeClaw。
 
 结论：通过。

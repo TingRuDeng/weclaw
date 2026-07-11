@@ -105,7 +105,7 @@ func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
 	if state.Controllable {
 		lines = append(lines, "新消息会先暂存；回复 /guide 发送到当前任务，回复 /cancel 撤回。")
 	} else {
-		lines = append(lines, "任务完成后结果会自动返回飞书；当前任务需在 Codex App 中操作。")
+		lines = append(lines, "任务完成后结果会自动返回当前会话。")
 	}
 	return lines
 }

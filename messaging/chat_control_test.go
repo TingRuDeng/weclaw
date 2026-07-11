@@ -124,3 +124,17 @@ func TestListActiveTasksEmptyAndPopulated(t *testing.T) {
 		t.Fatalf("tasks must be scoped per owner, got %q", other)
 	}
 }
+
+func TestRunningTasksFooterDoesNotPromptCodexAppOperation(t *testing.T) {
+	readOnly := runningTasksFooter([]runningTaskView{{stoppable: false}})
+	if strings.Contains(readOnly, "Codex App") || strings.Contains(readOnly, "App 中操作") {
+		t.Fatalf("read-only footer must not prompt app operation, got %q", readOnly)
+	}
+	if !strings.Contains(readOnly, "结果会自动返回当前会话") {
+		t.Fatalf("read-only footer must describe result delivery, got %q", readOnly)
+	}
+	mixed := runningTasksFooter([]runningTaskView{{stoppable: true}, {stoppable: false}})
+	if strings.Contains(mixed, "Codex App") || strings.Contains(mixed, "App 中操作") {
+		t.Fatalf("mixed footer must not prompt app operation, got %q", mixed)
+	}
+}

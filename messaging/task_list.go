@@ -74,11 +74,11 @@ func runningTasksFooter(tasks []runningTaskView) string {
 	}
 	switch {
 	case stoppable && readOnly:
-		return "\n/stop 仅停止可控制任务；本地 Codex App 任务需在 App 中操作。"
+		return "\n/stop 仅停止可控制任务。"
 	case stoppable:
 		return "\n回复 /stop 停止当前任务。"
 	default:
-		return "\n本地 Codex App 任务需在 App 中操作，完成后结果会自动返回。"
+		return "\n任务完成后结果会自动返回当前会话。"
 	}
 }
 
