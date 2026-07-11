@@ -205,14 +205,64 @@ func TestRestartGuardBlocksWhenRuntimeHasActiveTasks(t *testing.T) {
 	}
 }
 
-func TestRestartGuardSkipsWhenRuntimeStatusUnavailable(t *testing.T) {
+func TestRestartGuardBlocksWhenRuntimeStatusUnavailable(t *testing.T) {
 	err := ensureRestartSafe(context.Background(), restartSafetyOptions{
 		apiAddr:       "127.0.0.1:1",
 		processExists: true,
 	})
 
-	if err != nil {
-		t.Fatalf("ensureRestartSafe error=%v, want nil when runtime status is unavailable", err)
+	if err == nil {
+		t.Fatal("ensureRestartSafe error = nil, want unavailable runtime rejection")
+	}
+	if !strings.Contains(err.Error(), "无法确认运行中任务状态") {
+		t.Fatalf("error=%v, want unavailable runtime detail", err)
+	}
+}
+
+func TestRestartGuardBlocksInvalidRuntimeResponses(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "unauthorized", status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`},
+		{name: "invalid json", status: http.StatusOK, body: `{`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			err := ensureRestartSafe(context.Background(), restartSafetyOptions{
+				apiAddr:       strings.TrimPrefix(server.URL, "http://"),
+				processExists: true,
+			})
+			if err == nil || !strings.Contains(err.Error(), "无法确认运行中任务状态") {
+				t.Fatalf("ensureRestartSafe error=%v, want runtime rejection", err)
+			}
+		})
+	}
+}
+
+func TestConfiguredRestartGuardBlocksInvalidConfigForRunningProcess(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{`), 0o600); err != nil {
+		t.Fatalf("write invalid config: %v", err)
+	}
+	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "weclaw"}); err != nil {
+		t.Fatalf("writeRuntimeState error: %v", err)
+	}
+
+	err := ensureConfiguredRestartSafe(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "无法读取当前配置") {
+		t.Fatalf("ensureConfiguredRestartSafe error=%v, want config rejection", err)
+	}
+	if err := ensureConfiguredRestartSafe(context.Background(), true); err != nil {
+		t.Fatalf("ensureConfiguredRestartSafe force error=%v, want nil", err)
 	}
 }
 

@@ -34,9 +34,12 @@ func ensureConfiguredRestartSafe(ctx context.Context, force bool) error {
 	if err != nil || !processExists(state.PID) {
 		return nil
 	}
+	if force {
+		return nil
+	}
 	cfg, err := config.Load()
 	if err != nil {
-		return nil
+		return fmt.Errorf("无法读取当前配置以确认运行中任务状态，已取消重启；修复配置后重试，如确认要中断可加 --force: %w", err)
 	}
 	return ensureRestartSafe(ctx, restartSafetyOptions{
 		apiAddr:       cfg.APIAddr,
@@ -51,7 +54,10 @@ func ensureRestartSafe(ctx context.Context, opts restartSafetyOptions) error {
 		return nil
 	}
 	status, ok := fetchRuntimeStatus(ctx, opts.apiAddr, opts.apiToken)
-	if !ok || status.ActiveTasks <= 0 {
+	if !ok {
+		return fmt.Errorf("无法确认运行中任务状态，已取消重启；请检查 WeClaw API 和配置，如确认要中断可加 --force")
+	}
+	if status.ActiveTasks <= 0 {
 		return nil
 	}
 	return fmt.Errorf("当前还有 %d 个运行中的任务，已取消重启；请等待完成或在飞书发送 /stop 后重试，如确认要中断可加 --force", status.ActiveTasks)
