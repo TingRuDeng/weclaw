@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 )
 
@@ -17,9 +18,7 @@ func (a *CompanionAgent) ChatWithProgress(ctx context.Context, conversationID st
 	}
 	id := fmt.Sprintf("%d", a.nextID.Add(1))
 	call := &pendingCompanionCall{onProgress: onProgress, response: make(chan companionResponse, 1)}
-	a.storePending(id, call)
-	if err := a.sendRequest(id, conversationID, message); err != nil {
-		a.takePending(id)
+	if err := a.sendRequest(id, conversationID, message, call); err != nil {
 		return "", err
 	}
 	return a.waitResponse(ctx, id, call)
@@ -45,13 +44,15 @@ func (a *CompanionAgent) waitConnected(ctx context.Context) error {
 	}
 }
 
-func (a *CompanionAgent) sendRequest(id string, conversationID string, text string) error {
+func (a *CompanionAgent) sendRequest(id string, conversationID string, text string, call *pendingCompanionCall) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.encoder == nil {
+	if a.encoder == nil || a.conn == nil {
 		return fmt.Errorf("%s Companion 未连接", a.name)
 	}
-	return a.encoder.Encode(companionEnvelope{
+	call.connection = a.conn
+	a.storePending(id, call)
+	err := a.encoder.Encode(companionEnvelope{
 		Type: companionMessageRequest,
 		ID:   id,
 		Request: &companionRequest{
@@ -60,6 +61,10 @@ func (a *CompanionAgent) sendRequest(id string, conversationID string, text stri
 			Text:           text,
 		},
 	})
+	if err != nil {
+		a.takePending(id)
+	}
+	return err
 }
 
 func (a *CompanionAgent) waitResponse(ctx context.Context, id string, call *pendingCompanionCall) (string, error) {
@@ -110,6 +115,25 @@ func (a *CompanionAgent) failPending(reason string) {
 	a.pending = make(map[string]*pendingCompanionCall)
 	a.pendingMu.Unlock()
 	for _, call := range pending {
+		select {
+		case call.response <- companionResponse{OK: false, Error: reason}:
+		default:
+		}
+	}
+}
+
+func (a *CompanionAgent) failPendingForConnection(conn net.Conn, reason string) {
+	a.pendingMu.Lock()
+	failed := make([]*pendingCompanionCall, 0)
+	for id, call := range a.pending {
+		if call.connection != conn {
+			continue
+		}
+		delete(a.pending, id)
+		failed = append(failed, call)
+	}
+	a.pendingMu.Unlock()
+	for _, call := range failed {
 		select {
 		case call.response <- companionResponse{OK: false, Error: reason}:
 		default:

@@ -39,6 +39,7 @@ type CompanionLauncher func(context.Context, CompanionLaunchRequest) error
 type pendingCompanionCall struct {
 	onProgress func(string)
 	response   chan companionResponse
+	connection net.Conn
 }
 
 // CompanionAgent 通过本地 loopback socket 把微信输入转发给可见终端里的 Companion。
@@ -156,7 +157,7 @@ func (a *CompanionAgent) DetachVisibleCompanion() bool {
 	a.mu.Unlock()
 
 	_ = conn.Close()
-	a.failPending("Companion 已断开")
+	a.failPendingForConnection(conn, "Companion 已断开")
 	return true
 }
 
@@ -206,9 +207,7 @@ func (a *CompanionAgent) handleConn(conn net.Conn, token string) {
 
 func (a *CompanionAgent) setConn(conn net.Conn) {
 	a.mu.Lock()
-	if a.conn != nil && a.conn != conn {
-		_ = a.conn.Close()
-	}
+	previous := a.conn
 	a.conn = conn
 	a.encoder = json.NewEncoder(conn)
 	select {
@@ -217,6 +216,10 @@ func (a *CompanionAgent) setConn(conn net.Conn) {
 		close(a.connectedCh)
 	}
 	a.mu.Unlock()
+	if previous != nil && previous != conn {
+		_ = previous.Close()
+		a.failPendingForConnection(previous, "Companion 连接已替换")
+	}
 	log.Printf("[companion] connected agent=%s remote=%s", a.name, conn.RemoteAddr())
 }
 
@@ -258,5 +261,5 @@ func (a *CompanionAgent) clearConn(conn net.Conn) {
 	}
 	a.mu.Unlock()
 	_ = conn.Close()
-	a.failPending("Companion 连接已断开")
+	a.failPendingForConnection(conn, "Companion 连接已断开")
 }

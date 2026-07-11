@@ -87,6 +87,36 @@ func TestCompanionAgentAutoLaunchesVisibleTerminal(t *testing.T) {
 	}
 }
 
+// TestCompanionOldConnectionCleanupKeepsNewPendingCalls 验证旧 read loop 不会误伤新连接请求。
+func TestCompanionOldConnectionCleanupKeepsNewPendingCalls(t *testing.T) {
+	ag := NewCompanionAgent(CompanionAgentConfig{Name: "codex"})
+	oldServer, oldClient := net.Pipe()
+	newServer, newClient := net.Pipe()
+	t.Cleanup(func() {
+		_ = oldClient.Close()
+		_ = newClient.Close()
+		_ = newServer.Close()
+	})
+
+	ag.setConn(oldServer)
+	ag.setConn(newServer)
+	call := &pendingCompanionCall{
+		connection: newServer,
+		response:   make(chan companionResponse, 1),
+	}
+	ag.storePending("new-call", call)
+
+	ag.clearConn(oldServer)
+	if got := ag.takePending("new-call"); got != call {
+		t.Fatalf("pending call=%p, want new connection call %p", got, call)
+	}
+	select {
+	case response := <-call.response:
+		t.Fatalf("new connection call failed by old cleanup: %#v", response)
+	default:
+	}
+}
+
 func TestCompanionShellCommandQuotesArguments(t *testing.T) {
 	got := companionShellCommand(CompanionLaunchRequest{
 		Executable: "/tmp/weclaw bin/weclaw",
