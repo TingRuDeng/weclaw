@@ -233,20 +233,26 @@ func (h *Handler) externalCodexTurnForTask(key string, actor string) (string, st
 
 // completeActiveTask 原子移除运行任务并提升暂存消息，避免收尾时丢失并发输入。
 func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool) {
+	pending, hasPending, claimed := h.claimAndCompleteActiveTask(key, task)
+	return pending, claimed && hasPending
+}
+
+// claimAndCompleteActiveTask 原子认领终态并移除任务，供多观察源竞争。
+func (h *Handler) claimAndCompleteActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool, bool) {
 	if task == nil {
-		return pendingAgentTask{}, false
+		return pendingAgentTask{}, false, false
 	}
 	h.activeTasksMu.Lock()
 	if h.activeTasks[key] != task {
 		h.activeTasksMu.Unlock()
-		return pendingAgentTask{}, false
+		return pendingAgentTask{}, false, false
 	}
 	task.mu.Lock()
 	wasStopping := task.phase == codexTaskStopping
 	if !task.claimTerminalLocked() {
 		task.mu.Unlock()
 		h.activeTasksMu.Unlock()
-		return pendingAgentTask{}, false
+		return pendingAgentTask{}, false, false
 	}
 	pending := pendingAgentTask{}
 	if !task.detached || wasStopping {
@@ -258,9 +264,9 @@ func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (pending
 	h.activeTasksMu.Unlock()
 	close(task.done)
 	if pending.message == "" || pending.run == nil {
-		return pendingAgentTask{}, false
+		return pendingAgentTask{}, false, true
 	}
-	return pending, true
+	return pending, true, true
 }
 
 func (t *activeAgentTask) shouldSendFinal() bool {

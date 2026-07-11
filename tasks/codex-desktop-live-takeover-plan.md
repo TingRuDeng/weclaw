@@ -806,7 +806,7 @@ git commit -m "统一 Codex 实时任务所有权状态"
 - Modify: `messaging/codex_external_task.go`
 - Modify: `messaging/codex_rollout_watch.go`
 
-- [ ] **Step 1: 写断线与双源终态失败测试**
+- [x] **Step 1: 写断线与双源终态失败测试**
 
 ```go
 func TestCodexDesktopDisconnectDoesNotFinishTask(t *testing.T) {}
@@ -818,7 +818,7 @@ func TestCodexPendingWaitsForDesktopRelease(t *testing.T) {}
 func TestCodexReconnectRestoresControlAfterSnapshot(t *testing.T) {}
 ```
 
-- [ ] **Step 2: 把 watcher 结果分类为终态或观察中断**
+- [x] **Step 2: 把 watcher 结果分类为终态或观察中断**
 
 ```go
 type codexExternalWatchResult struct {
@@ -831,15 +831,15 @@ type codexExternalWatchResult struct {
 
 `ErrCodexDesktopDisconnected` 只把 task phase 改为 disconnected；立即重新调用 `readLocalCodexRolloutTaskState`，使用新的 Path/TurnID/Offset bootstrap rollout，不能沿用 IPC 静音期间越过的旧 offset。
 
-- [ ] **Step 3: 实现断线 supervisor**
+- [x] **Step 3: 实现断线 supervisor**
 
 若 rollout active，调用 `watchCodexRolloutTask`；若 rollout 尚未出现，按 200ms poll 等待 snapshot 重连、rollout active/terminal 或明确 release。只在真实 `task_complete/turn_aborted`、Desktop 明确 terminal event，或 release 后读取到 rollout terminal 时调用 `claimTerminal`。
 
-- [ ] **Step 4: 阻止错误路径提升 pending**
+- [x] **Step 4: 阻止错误路径提升 pending**
 
 删除 `runExternalCodexTaskWatcher` 的无条件 defer finish。watch error 只有在权威 terminal failure 时发送失败；断线、owner unknown 和版本不兼容只更新卡片状态并保留 active task/pending。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 Run: `gofmt -w messaging/codex_external_watch.go messaging/handler_codex_live_recovery_test.go messaging/handler_codex_live_progress_test.go messaging/codex_external_task.go messaging/codex_rollout_watch.go`
 

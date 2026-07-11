@@ -2,10 +2,13 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+var errCodexRolloutAborted = errors.New("Codex rollout 任务已中断")
 
 const codexRolloutPollInterval = 200 * time.Millisecond
 
@@ -44,7 +47,7 @@ type codexRolloutWatchResult struct {
 // finalText 将 rollout 终态转换为对外结果或明确的中断错误。
 func (r codexRolloutWatchResult) finalText() (string, error) {
 	if r.aborted {
-		return "", fmt.Errorf("codex App 本地任务已中断: %s", firstNonBlank(r.reason, "interrupted"))
+		return "", fmt.Errorf("%w: %s", errCodexRolloutAborted, firstNonBlank(r.reason, "interrupted"))
 	}
 	return firstNonBlank(r.final, "Codex App 本地任务已完成，但没有返回文本。"), nil
 }

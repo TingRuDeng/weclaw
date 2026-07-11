@@ -162,7 +162,6 @@ type externalCodexTaskRuntime struct {
 }
 
 func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) {
-	defer h.finishExternalCodexTask(runtime)
 	progressCfg := h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
 	taskText := firstNonBlank(runtime.state.Preview, "Codex App 本地任务")
 	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.ctx, runtime.opts.reply, "", taskText, progressCfg)
@@ -173,25 +172,27 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if runtime.state.Progress != "" {
 		onProgress(runtime.state.Progress)
 	}
-	reply, err := runtime.watch(runtime.ctx, recordProgress)
-	failed := err != nil
-	if failed {
-		reply = renderFinalFailure("", err)
-	} else {
-		reply = renderFinalSuccess("", reply)
-	}
-	if runtime.task.shouldSendFinal() {
-		consumed := finishProgressWithReplyForPlatform(runtime.opts.reply, finishProgress, reply, failed)
-		h.sendReplyWithMediaAfterStreamForRoute(runtime.opts.ctx, runtime.opts.reply, runtime.opts.actorUserID, runtime.opts.routeUserID, runtime.opts.agentName, reply, consumed)
+	result := h.superviseExternalCodexWatch(runtime, recordProgress)
+	if !result.Terminal {
+		_ = finishProgress("", false)
 		return
 	}
-	_ = finishProgress("", false)
-}
-
-// finishExternalCodexTask 清理任务镜像，并唤醒此前暂存的可执行消息。
-func (h *Handler) finishExternalCodexTask(runtime externalCodexTaskRuntime) {
-	pending, ok := h.completeActiveTask(runtime.opts.conversationID, runtime.task)
-	if ok {
+	pending, hasPending, claimed := h.claimAndCompleteActiveTask(runtime.opts.conversationID, runtime.task)
+	if !claimed {
+		_ = finishProgress("", false)
+		return
+	}
+	reply := renderFinalSuccess("", result.Final)
+	if result.Failed {
+		reply = renderFinalFailure("", result.Err)
+	}
+	if runtime.task.shouldSendFinal() {
+		consumed := finishProgressWithReplyForPlatform(runtime.opts.reply, finishProgress, reply, result.Failed)
+		h.sendReplyWithMediaAfterStreamForRoute(runtime.opts.ctx, runtime.opts.reply, runtime.opts.actorUserID, runtime.opts.routeUserID, runtime.opts.agentName, reply, consumed)
+	} else {
+		_ = finishProgress("", false)
+	}
+	if hasPending {
 		pending.run()
 	}
 }

@@ -45,3 +45,22 @@ func (t *activeAgentTask) syncCodexRuntime(binding agent.CodexThreadBinding) {
 	t.ownerRevision = binding.OwnerRevision
 	t.codexThreadID = binding.Ref.ThreadID
 }
+
+func (t *activeAgentTask) markCodexDisconnected() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.phase != codexTaskTerminal {
+		t.phase = codexTaskDisconnected
+		t.runtimeOwner = agent.CodexOwnerDesktopDisconnected
+	}
+}
+
+func (t *activeAgentTask) markCodexRunning(binding agent.CodexThreadBinding) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.phase != codexTaskTerminal {
+		t.phase = codexTaskRunning
+		t.runtimeOwner = binding.Owner
+		t.ownerRevision = binding.OwnerRevision
+	}
+}
