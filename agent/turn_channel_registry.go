@@ -1,5 +1,28 @@
 package agent
 
+// failAppServerActiveTurns 仅终止 app-server turn，保留 Desktop watcher。
+func (a *ACPAgent) failAppServerActiveTurns(reason string) {
+	event := &codexTurnEvent{Kind: "error", Text: reason}
+	a.notifyMu.Lock()
+	channels := make([]chan *codexTurnEvent, 0, len(a.turnCh))
+	for threadID, channel := range a.turnCh {
+		if a.codexOwners != nil {
+			binding, ok := a.codexOwners.threadBinding(threadID)
+			if ok && (binding.Owner == CodexOwnerDesktopLive || binding.Owner == CodexOwnerDesktopDisconnected) {
+				continue
+			}
+		}
+		channels = append(channels, channel)
+	}
+	a.notifyMu.Unlock()
+	for _, channel := range channels {
+		select {
+		case channel <- event:
+		default:
+		}
+	}
+}
+
 // registerTurnChannel 原子注册 thread/session 的事件所有者，已有任务时拒绝覆盖。
 func (a *ACPAgent) registerTurnChannel(key string, ch chan *codexTurnEvent) bool {
 	a.notifyMu.Lock()

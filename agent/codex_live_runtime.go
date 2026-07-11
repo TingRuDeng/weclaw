@@ -60,8 +60,3 @@ func (a *ACPAgent) CurrentCodexThreadBinding(conversationID string) (CodexThread
 	}
 	return a.codexOwners.currentConversationBinding(conversationID)
 }
-
-// RecoverCodexThread 的安全恢复流程在 runtime recovery 阶段实现。
-func (a *ACPAgent) RecoverCodexThread(context.Context, CodexThreadRef) error {
-	return errors.New("Codex thread recovery 尚未启用")
-}

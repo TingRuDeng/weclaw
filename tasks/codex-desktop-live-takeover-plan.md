@@ -587,7 +587,7 @@ git commit -m "按 owner 路由 Codex Desktop 实时会话"
 - Modify: `agent/acp_threads.go`
 - Modify: `agent/turn_channel_registry.go`
 
-- [ ] **Step 1: 写恢复门禁失败测试**
+- [x] **Step 1: 写恢复门禁失败测试**
 
 ```go
 func TestACPAgentRecoverCodexThreadRejectsLiveOwner(t *testing.T) {}
@@ -598,19 +598,19 @@ func TestACPAgentRestoredThreadResumeFailureIsReturned(t *testing.T) {}
 func TestACPAgentRecoveryDoesNotFailDesktopWatchers(t *testing.T) {}
 ```
 
-- [ ] **Step 2: 跟踪当前 ACP process 已加载 thread**
+- [x] **Step 2: 对恢复目标采用保守的 process 刷新策略**
 
-`thread/start` 和成功 `thread/resume` 记录 process epoch 与 thread ID；Desktop 后续修改过同一 thread 时标记 stale。恢复 stale thread 前必须确认 ACP `turnCh` 中没有 app-server active turn。
+不依赖无法从 Desktop IPC 完整证明的 process epoch。只允许恢复 `persisted_only` 且已确认释放的 thread，并在恢复前确认 ACP `turnCh` 中没有 active turn；每次恢复目标 thread 都刷新 app-server，确保不会复用已加载的陈旧上下文。
 
-- [ ] **Step 3: 实现 process-only restart**
+- [x] **Step 3: 实现 process-only restart**
 
 整体 `Stop` 仍关闭所有 runtime；内部 `restartCodexAppServer` 只停止 ACP subprocess、失败 app-server pending RPC/turn，不能关闭 Desktop state subscriptions。新进程启动后将其他 ACP conversation 标回 `resumeOnFirstUse`，目标 thread 执行一次真实 `thread/resume`。
 
-- [ ] **Step 4: 修复已存在的吞错行为**
+- [x] **Step 4: 修复已存在的吞错行为**
 
 `getOrCreateThread` 的 restored `thread/resume` 失败必须返回 error，不再只写日志后继续在旧 ID 上 `turn/start`。`UseCodexThread` 改为 owner-aware wrapper，Messaging 新代码调用 `RecoverCodexThread`。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 Run: `gofmt -w agent/codex_runtime_recovery*.go agent/acp_process.go agent/acp_threads.go agent/turn_channel_registry.go`
 

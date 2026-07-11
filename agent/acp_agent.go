@@ -64,9 +64,10 @@ type ACPAgent struct {
 	// rpcCall allows tests to stub JSON-RPC interactions without a subprocess.
 	rpcCall func(ctx context.Context, method string, params interface{}) (json.RawMessage, error)
 
-	desktopProbe   codexDesktopOwnerProbe
-	codexOwners    *codexRuntimeOwnerRegistry
-	desktopRuntime *codexDesktopRuntime
+	desktopProbe              codexDesktopOwnerProbe
+	codexOwners               *codexRuntimeOwnerRegistry
+	desktopRuntime            *codexDesktopRuntime
+	restartCodexAppServerCall func(context.Context) error
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.

@@ -23,7 +23,7 @@
 - [x] P4.4：映射 Desktop 操作、审批和结构化问答。
 - [x] P4.5：建立 thread owner 状态机。
 - [x] P4.6：让 ACPAgent 按 owner 路由 Chat 和控制。
-- [ ] P4.7：安全刷新 ACP 并恢复同一 thread。
+- [x] P4.7：安全刷新 ACP 并恢复同一 thread。
 - [ ] P4.8：为 Messaging 注入审批和结构化问答。
 - [ ] P4.9：让会话切换先绑定 owner。
 - [ ] P4.10：重构 active task owner 与终态幂等。

@@ -42,6 +42,9 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
+	if handled, err := a.bindKnownDesktopThread(conversationID, threadID); handled {
+		return err
+	}
 	if err := a.resumeThread(ctx, conversationID, threadID); err != nil {
 		return fmt.Errorf("resume thread %s: %w", threadID, err)
 	}
@@ -51,6 +54,26 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 	a.mu.Unlock()
 	a.persistState()
 	return nil
+}
+
+// bindKnownDesktopThread 防止旧入口通过 app-server 抢占 Desktop 正在持有的 thread。
+func (a *ACPAgent) bindKnownDesktopThread(conversationID string, threadID string) (bool, error) {
+	if a.codexOwners == nil {
+		return false, nil
+	}
+	binding, ok := a.codexOwners.threadBinding(threadID)
+	if !ok || (binding.Owner != CodexOwnerDesktopLive && binding.Owner != CodexOwnerDesktopDisconnected) {
+		return false, nil
+	}
+	a.codexOwners.bindConversation(CodexThreadRef{
+		ConversationID: conversationID,
+		ThreadID:       threadID,
+	}, binding)
+	a.persistState()
+	if binding.Owner == CodexOwnerDesktopDisconnected {
+		return true, ErrCodexDesktopDisconnected
+	}
+	return true, nil
 }
 
 // ClearCodexThread 清理指定会话的 Codex thread，下一条消息会创建新 thread。
@@ -113,18 +136,17 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	a.mu.Lock()
 	tid, exists := a.threads[conversationID]
 	shouldResume := exists && a.resumeOnFirstUse[conversationID]
-	if shouldResume {
-		delete(a.resumeOnFirstUse, conversationID)
-	}
 	a.mu.Unlock()
 
 	if exists {
 		if shouldResume {
 			if err := a.resumeThread(ctx, conversationID, tid); err != nil {
-				log.Printf("[acp] failed to resume restored thread (conversation=%s, thread=%s): %v", conversationID, tid, err)
-			} else {
-				log.Printf("[acp] restored thread resumed (conversation=%s, thread=%s)", conversationID, tid)
+				return "", false, fmt.Errorf("resume restored thread %s: %w", tid, err)
 			}
+			a.mu.Lock()
+			delete(a.resumeOnFirstUse, conversationID)
+			a.mu.Unlock()
+			log.Printf("[acp] restored thread resumed (conversation=%s, thread=%s)", conversationID, tid)
 		}
 		return tid, false, nil
 	}
