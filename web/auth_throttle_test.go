@@ -44,3 +44,19 @@ func TestAuthThrottleResetOnSuccess(t *testing.T) {
 		t.Fatal("reset should clear prior failure count")
 	}
 }
+
+func TestAuthThrottleRemovesExpiredSources(t *testing.T) {
+	now := time.Unix(100, 0)
+	th := newAuthThrottle()
+	th.now = func() time.Time { return now }
+	th.fail("expired")
+	now = now.Add(authWindow + authBlockFor + time.Second)
+	th.fail("current")
+
+	if _, ok := th.fails["expired"]; ok {
+		t.Fatal("expired failure source was not removed")
+	}
+	if _, ok := th.blocked_["expired"]; ok {
+		t.Fatal("expired blocked source was not removed")
+	}
+}

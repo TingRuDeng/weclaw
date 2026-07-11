@@ -263,10 +263,11 @@ func sendDenyNotice(ctx context.Context, entry RegistryEntry, msg IncomingMessag
 }
 
 type denyNoticeLimiter struct {
-	mu     sync.Mutex
-	window time.Duration
-	now    func() time.Time
-	last   map[string]time.Time
+	mu          sync.Mutex
+	window      time.Duration
+	now         func() time.Time
+	last        map[string]time.Time
+	lastCleanup time.Time
 }
 
 func newDenyNoticeLimiter(window time.Duration) *denyNoticeLimiter {
@@ -284,9 +285,22 @@ func (l *denyNoticeLimiter) Allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
+	l.cleanupExpiredLocked(now)
 	if last, ok := l.last[key]; ok && now.Sub(last) < l.window {
 		return false
 	}
 	l.last[key] = now
 	return true
+}
+
+func (l *denyNoticeLimiter) cleanupExpiredLocked(now time.Time) {
+	if !l.lastCleanup.IsZero() && now.Sub(l.lastCleanup) < l.window {
+		return
+	}
+	for key, last := range l.last {
+		if now.Sub(last) >= l.window {
+			delete(l.last, key)
+		}
+	}
+	l.lastCleanup = now
 }

@@ -31,6 +31,11 @@ type pendingAgentTask struct {
 	run     func()
 }
 
+type executionLock struct {
+	mu    sync.Mutex
+	users int
+}
+
 func (t *activeAgentTask) pendingGuide() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -40,18 +45,27 @@ func (t *activeAgentTask) pendingGuide() string {
 func (h *Handler) lockAgentExecution(key string) func() {
 	h.taskLocksMu.Lock()
 	if h.taskLocks == nil {
-		h.taskLocks = make(map[string]*sync.Mutex)
+		h.taskLocks = make(map[string]*executionLock)
 	}
 	lock := h.taskLocks[key]
 	if lock == nil {
-		lock = &sync.Mutex{}
+		lock = &executionLock{}
 		h.taskLocks[key] = lock
 	}
+	lock.users++
 	h.taskLocksMu.Unlock()
 
 	// 同一执行通道串行进入，避免 Codex 同一 thread 内并发 turn 串结果。
-	lock.Lock()
-	return lock.Unlock
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		h.taskLocksMu.Lock()
+		lock.users--
+		if lock.users == 0 && h.taskLocks[key] == lock {
+			delete(h.taskLocks, key)
+		}
+		h.taskLocksMu.Unlock()
+	}
 }
 
 func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTaskMeta) (*activeAgentTask, context.Context, bool) {

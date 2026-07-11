@@ -17,25 +17,33 @@ type wsRunner interface {
 	Close()
 }
 
+const feishuIdentityCacheTTL = 24 * time.Hour
+
+type cachedFeishuIdentity struct {
+	keys   []string
+	seenAt time.Time
+}
+
 // Adapter 将飞书长连接事件适配为平台无关消息。
 type Adapter struct {
-	creds      Credentials
-	downloader resourceDownloader
-	sender     messageSender
-	cardKit    cardKitClient
-	validate   func(context.Context, Credentials) error
-	wsFactory  func(*dispatcher.EventDispatcher) wsRunner
-	session    FeishuSessionOptions
-	deduper    *feishuEventDeduper
-	accessMu   sync.RWMutex
-	access     platform.AccessControl
-	accessSet  bool
-	identityMu sync.RWMutex
-	identities map[string][]string
-	approvalMu sync.Mutex
-	approvals  map[string]approvalRecord
-	taskCards  *taskCardRegistry
-	now        func() time.Time
+	creds             Credentials
+	downloader        resourceDownloader
+	sender            messageSender
+	cardKit           cardKitClient
+	validate          func(context.Context, Credentials) error
+	wsFactory         func(*dispatcher.EventDispatcher) wsRunner
+	session           FeishuSessionOptions
+	deduper           *feishuEventDeduper
+	accessMu          sync.RWMutex
+	access            platform.AccessControl
+	accessSet         bool
+	identityMu        sync.RWMutex
+	identities        map[string]cachedFeishuIdentity
+	identityCleanupAt time.Time
+	approvalMu        sync.Mutex
+	approvals         map[string]approvalRecord
+	taskCards         *taskCardRegistry
+	now               func() time.Time
 }
 
 // NewAdapter 创建飞书平台 adapter。
@@ -49,7 +57,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		validate:   ValidateCredentials,
 		session:    DefaultFeishuSessionOptions(),
 		deduper:    newFeishuEventDeduper(feishuEventDedupTTL),
-		identities: make(map[string][]string),
+		identities: make(map[string]cachedFeishuIdentity),
 		approvals:  make(map[string]approvalRecord),
 		taskCards:  newTaskCardRegistry(),
 		now:        time.Now,
@@ -163,8 +171,10 @@ func (a *Adapter) rememberUserIdentities(msg platform.IncomingMessage) {
 	}
 	a.identityMu.Lock()
 	defer a.identityMu.Unlock()
+	now := a.now()
+	a.cleanupIdentitiesLocked(now)
 	for _, key := range keys {
-		a.identities[key] = append([]string(nil), keys...)
+		a.identities[key] = cachedFeishuIdentity{keys: append([]string(nil), keys...), seenAt: now}
 	}
 }
 
@@ -174,13 +184,29 @@ func (a *Adapter) identityKeysForUser(userID string) []string {
 	if userID == "" {
 		return nil
 	}
-	a.identityMu.RLock()
-	cached := append([]string(nil), a.identities[userID]...)
-	a.identityMu.RUnlock()
-	if len(cached) > 0 {
-		return cached
+	a.identityMu.Lock()
+	cached, ok := a.identities[userID]
+	if ok && a.now().Sub(cached.seenAt) >= feishuIdentityCacheTTL {
+		delete(a.identities, userID)
+		ok = false
+	}
+	a.identityMu.Unlock()
+	if ok {
+		return append([]string(nil), cached.keys...)
 	}
 	return []string{userID}
+}
+
+func (a *Adapter) cleanupIdentitiesLocked(now time.Time) {
+	if !a.identityCleanupAt.IsZero() && now.Sub(a.identityCleanupAt) < feishuIdentityCacheTTL {
+		return
+	}
+	for key, cached := range a.identities {
+		if now.Sub(cached.seenAt) >= feishuIdentityCacheTTL {
+			delete(a.identities, key)
+		}
+	}
+	a.identityCleanupAt = now
 }
 
 // mergeUserAliases 合并多来源身份，保留主 ID 以便后续统一去重。

@@ -92,6 +92,18 @@ func TestSendToNamedAgentTracksNonCodexActiveTask(t *testing.T) {
 	}
 }
 
+func TestAgentExecutionLockRemovedAfterUse(t *testing.T) {
+	h := NewHandler(nil, nil)
+	unlock := h.lockAgentExecution("execution-1")
+	unlock()
+
+	h.taskLocksMu.Lock()
+	defer h.taskLocksMu.Unlock()
+	if _, ok := h.taskLocks["execution-1"]; ok {
+		t.Fatal("idle execution lock was not removed")
+	}
+}
+
 func TestSendToNamedAgentUsesTaskTimeout(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()

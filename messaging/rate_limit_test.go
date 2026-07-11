@@ -40,6 +40,22 @@ func TestUserRateLimiterDisabled(t *testing.T) {
 	}
 }
 
+func TestUserRateLimiterRemovesExpiredKeys(t *testing.T) {
+	now := time.Unix(100, 0)
+	l := newUserRateLimiter(time.Minute)
+	l.now = func() time.Time { return now }
+	if !l.Allow("expired", 1) {
+		t.Fatal("initial call should be allowed")
+	}
+	now = now.Add(2 * time.Minute)
+	if !l.Allow("current", 1) {
+		t.Fatal("current call should be allowed")
+	}
+	if _, ok := l.hits["expired"]; ok {
+		t.Fatal("expired limiter key was not removed")
+	}
+}
+
 func TestHandlerRateLimitGate(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetRateLimitPerMinute(2)

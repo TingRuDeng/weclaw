@@ -36,9 +36,9 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		log.Printf("[feishu] ignored non-dispatchable message event")
 		return nil
 	}
-	a.rememberUserIdentities(msg)
 	allowed := a.allowIncomingMessage(msg)
 	if allowed {
+		a.rememberUserIdentities(msg)
 		if err := a.attachMessageResources(ctx, &msg, resources); err != nil {
 			newTemporaryAttachmentCleanup(msg.Attachments)()
 			log.Printf("[feishu] ignored message with resource download failure: %v", err)

@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -25,7 +24,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		agentSessions:           newAgentSessionStore(),
 		codexSessions:           newCodexSessionStore(),
 		feishuIdentities:        newFeishuIdentityStore(),
-		taskLocks:               make(map[string]*sync.Mutex),
+		taskLocks:               make(map[string]*executionLock),
 		activeTasks:             make(map[string]*activeAgentTask),
 		pendingApprovals:        make(map[string]*pendingApproval),
 		codexLocalSessionDir:    defaultCodexLocalSessionDir(),

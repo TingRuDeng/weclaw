@@ -15,10 +15,11 @@ const (
 
 // authThrottle 对 API token 校验失败做按来源限速，缓解暴力破解。
 type authThrottle struct {
-	mu       sync.Mutex
-	fails    map[string][]time.Time
-	blocked_ map[string]time.Time
-	now      func() time.Time
+	mu          sync.Mutex
+	fails       map[string][]time.Time
+	blocked_    map[string]time.Time
+	now         func() time.Time
+	lastCleanup time.Time
 }
 
 func newAuthThrottle() *authThrottle {
@@ -36,11 +37,13 @@ func (t *authThrottle) blocked(key string) bool {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := t.now()
+	t.cleanupExpiredLocked(now)
 	until, ok := t.blocked_[key]
 	if !ok {
 		return false
 	}
-	if t.now().After(until) {
+	if now.After(until) {
 		delete(t.blocked_, key)
 		delete(t.fails, key)
 		return false
@@ -57,6 +60,7 @@ func (t *authThrottle) fail(key string) {
 	cutoff := now.Add(-authWindow)
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.cleanupExpiredLocked(now)
 	kept := t.fails[key][:0]
 	for _, at := range t.fails[key] {
 		if at.After(cutoff) {
@@ -68,6 +72,32 @@ func (t *authThrottle) fail(key string) {
 	if len(kept) >= authMaxFailures {
 		t.blocked_[key] = now.Add(authBlockFor)
 	}
+}
+
+func (t *authThrottle) cleanupExpiredLocked(now time.Time) {
+	if !t.lastCleanup.IsZero() && now.Sub(t.lastCleanup) < authWindow {
+		return
+	}
+	cutoff := now.Add(-authWindow)
+	for key, failures := range t.fails {
+		kept := failures[:0]
+		for _, failure := range failures {
+			if failure.After(cutoff) {
+				kept = append(kept, failure)
+			}
+		}
+		if len(kept) == 0 {
+			delete(t.fails, key)
+		} else {
+			t.fails[key] = kept
+		}
+	}
+	for key, until := range t.blocked_ {
+		if now.After(until) {
+			delete(t.blocked_, key)
+		}
+	}
+	t.lastCleanup = now
 }
 
 // reset 在成功鉴权后清除该来源的失败计数。

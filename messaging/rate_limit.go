@@ -8,10 +8,11 @@ import (
 // userRateLimiter 是按 key(通常是 routeUserID) 的滑动窗口限流器，
 // 用于约束单用户触发 agent 的频率，防止刷屏 / 烧 token / 滥用。
 type userRateLimiter struct {
-	mu     sync.Mutex
-	window time.Duration
-	hits   map[string][]time.Time
-	now    func() time.Time
+	mu          sync.Mutex
+	window      time.Duration
+	hits        map[string][]time.Time
+	now         func() time.Time
+	lastCleanup time.Time
 }
 
 func newUserRateLimiter(window time.Duration) *userRateLimiter {
@@ -34,6 +35,7 @@ func (l *userRateLimiter) Allow(key string, limit int) bool {
 	cutoff := now.Add(-l.window)
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.cleanupExpiredLocked(now, cutoff)
 	kept := l.hits[key][:0]
 	for _, t := range l.hits[key] {
 		if t.After(cutoff) {
@@ -46,4 +48,24 @@ func (l *userRateLimiter) Allow(key string, limit int) bool {
 	}
 	l.hits[key] = append(kept, now)
 	return true
+}
+
+func (l *userRateLimiter) cleanupExpiredLocked(now time.Time, cutoff time.Time) {
+	if !l.lastCleanup.IsZero() && now.Sub(l.lastCleanup) < l.window {
+		return
+	}
+	for key, hits := range l.hits {
+		kept := hits[:0]
+		for _, hit := range hits {
+			if hit.After(cutoff) {
+				kept = append(kept, hit)
+			}
+		}
+		if len(kept) == 0 {
+			delete(l.hits, key)
+		} else {
+			l.hits[key] = kept
+		}
+	}
+	l.lastCleanup = now
 }

@@ -58,7 +58,7 @@
 - [x] P2-6 串行：序列化并原子写入微信 context token。
   - 修改：`wechat/token_store.go`。
   - 测试：并发用户更新后文件包含全部最新 token，失败不破坏旧文件。
-- [ ] P2-7 串行：回收长期状态表。
+- [x] P2-7 串行：回收长期状态表。
   - 修改：`messaging/handler.go`、`messaging/task_state.go`、`messaging/rate_limit.go`、`platform/registry.go`、`web/auth_throttle.go`、`feishu/adapter.go`。
   - 测试：过期键和空闲执行锁会被删除；删除未使用的 `contextTokens`。
 - [ ] P2-8 串行：限制敏感日志并为后台日志增加轮转。
@@ -101,3 +101,4 @@
 - 2026-07-11：P2-4 完成；远程请求新增 CGNAT、benchmark、文档、保留、NAT64、discard-only 和 6to4 前缀拒绝表，合法公网 IPv4/IPv6 保持可用；调用方 race 测试通过。
 - 2026-07-11：P2-5 完成；飞书临时附件采用幂等所有权清理，覆盖正常分发、未消费、多附件、延迟镜像、重复丢弃、取消、部分下载和 SDK 文件失败路径；`go test -race ./feishu` 通过。
 - 2026-07-11：P2-6 完成；微信 context token 在保存锁内读取最新全集，使用同步后的 0600 临时文件原子替换，避免旧快照覆盖和截断文件；`go test -race ./wechat` 通过。
+- 2026-07-11：P2-7 完成；执行锁按引用计数删除，消息限流、拒绝通知、Web 鉴权和飞书身份缓存按窗口回收，并移除未使用的 Handler context token map；四个相关包 race 测试通过。

@@ -60,7 +60,6 @@ type Handler struct {
 	customAliases           map[string]string // custom alias -> agent name (from config)
 	factory                 AgentFactory
 	saveDefault             SaveDefaultFunc
-	contextTokens           sync.Map // map[userID]contextToken
 	saveDir                 string   // directory to save images/files to
 	allowedWorkspaceRoots   []string // /cwd 允许切换的根目录；空=禁止远程切换
 	adminUsers              map[string]struct{}
@@ -82,7 +81,7 @@ type Handler struct {
 	codexSessions           *codexSessionStore
 	feishuIdentities        *feishuIdentityStore
 	taskLocksMu             sync.Mutex
-	taskLocks               map[string]*sync.Mutex
+	taskLocks               map[string]*executionLock
 	activeTasksMu           sync.Mutex
 	activeTasks             map[string]*activeAgentTask
 	pendingApprovalsMu      sync.Mutex
@@ -181,8 +180,6 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 	}
 
 	log.Printf("[handler] received from %s: %q", msg.UserID, truncate(text, 80))
-	h.contextTokens.Store(msg.UserID, msg.ContextToken)
-
 	clientID := NewClientID()
 	if wxReply, ok := replyWriter.(*wechat.Replier); ok {
 		wxReply.ClientID = clientID

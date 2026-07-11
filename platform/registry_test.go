@@ -3,7 +3,24 @@ package platform
 import (
 	"context"
 	"testing"
+	"time"
 )
+
+func TestDenyNoticeLimiterRemovesExpiredUsers(t *testing.T) {
+	now := time.Unix(100, 0)
+	limiter := newDenyNoticeLimiter(time.Minute)
+	limiter.now = func() time.Time { return now }
+	if !limiter.Allow("expired") {
+		t.Fatal("initial deny notice should be allowed")
+	}
+	now = now.Add(2 * time.Minute)
+	if !limiter.Allow("current") {
+		t.Fatal("current deny notice should be allowed")
+	}
+	if _, ok := limiter.last["expired"]; ok {
+		t.Fatal("expired deny notice key was not removed")
+	}
+}
 
 func TestRegistryDispatchesAllowedUser(t *testing.T) {
 	reply := &recordingReplier{}
