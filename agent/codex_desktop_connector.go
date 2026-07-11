@@ -27,6 +27,61 @@ func (r *codexDesktopRuntime) setOwnerRegistry(owners *codexRuntimeOwnerRegistry
 	r.mu.Unlock()
 }
 
+// setEventHandler 注入 ACPAgent 的统一 turn event 分发器。
+func (r *codexDesktopRuntime) setEventHandler(handler func(string, []*codexTurnEvent)) {
+	r.mu.Lock()
+	r.onEvents = handler
+	r.mu.Unlock()
+}
+
+// threadState 返回 Desktop projector 的最新不可变状态。
+func (r *codexDesktopRuntime) threadState(threadID string) (CodexThreadState, error) {
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state == nil {
+		return CodexThreadState{}, ErrCodexDesktopUnavailable
+	}
+	snapshot, ok := state.snapshot(threadID)
+	if !ok {
+		return CodexThreadState{}, ErrCodexDesktopOwnershipUnknown
+	}
+	return snapshot.State, nil
+}
+
+// startTurn 通过 follower 在同一个 Desktop thread 开始任务。
+func (r *codexDesktopRuntime) startTurn(ctx context.Context, spec codexDesktopStartTurnSpec) (string, error) {
+	r.mu.Lock()
+	actions := r.actions
+	r.mu.Unlock()
+	if actions == nil {
+		return "", ErrCodexDesktopUnavailable
+	}
+	return actions.startTurn(ctx, spec)
+}
+
+// steerTurn 通过 follower 引导 Desktop active turn。
+func (r *codexDesktopRuntime) steerTurn(ctx context.Context, spec codexDesktopSteerTurnSpec) error {
+	r.mu.Lock()
+	actions := r.actions
+	r.mu.Unlock()
+	if actions == nil {
+		return ErrCodexDesktopUnavailable
+	}
+	return actions.steerTurn(ctx, spec)
+}
+
+// interruptTurn 通过 follower 停止 Desktop active turn。
+func (r *codexDesktopRuntime) interruptTurn(ctx context.Context, threadID string, turnID string) error {
+	r.mu.Lock()
+	actions := r.actions
+	r.mu.Unlock()
+	if actions == nil {
+		return ErrCodexDesktopUnavailable
+	}
+	return actions.interruptTurn(ctx, threadID, turnID)
+}
+
 // ensureInitialized 首次使用时才创建 IPC client、actions 和 state store。
 func (r *codexDesktopRuntime) ensureInitialized() *codexDesktopClient {
 	r.mu.Lock()

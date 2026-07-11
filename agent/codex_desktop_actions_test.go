@@ -16,10 +16,14 @@ type codexDesktopActionCaller struct {
 	calls  []codexDesktopActionCall
 	result json.RawMessage
 	err    error
+	onCall func(string)
 }
 
 func (c *codexDesktopActionCaller) Call(_ context.Context, method string, params any) (json.RawMessage, error) {
 	c.calls = append(c.calls, codexDesktopActionCall{method: method, params: params})
+	if c.onCall != nil {
+		c.onCall(method)
+	}
 	return c.result, c.err
 }
 

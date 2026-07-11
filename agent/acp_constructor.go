@@ -76,6 +76,11 @@ func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
 		if a.desktopRuntime != nil {
 			a.desktopRuntime.setOwnerRegistry(a.codexOwners)
+			a.desktopRuntime.setEventHandler(func(threadID string, events []*codexTurnEvent) {
+				for _, event := range events {
+					a.dispatchToTurnCh(threadID, event)
+				}
+			})
 		}
 	}
 	a.loadState()

@@ -10,6 +10,14 @@ func (a *ACPAgent) WatchCodexThread(ctx context.Context, conversationID string, 
 	if a.protocol != protocolCodexAppServer {
 		return "", fmt.Errorf("agent is not codex app-server")
 	}
+	if binding, ok := a.desktopBindingForThread(conversationID, threadID); ok {
+		if binding.Owner == CodexOwnerDesktopDisconnected {
+			return "", ErrCodexDesktopDisconnected
+		}
+		if binding.Owner == CodexOwnerUnknown {
+			return "", ErrCodexDesktopOwnershipUnknown
+		}
+	}
 	turnCh := make(chan *codexTurnEvent, 256)
 	if !a.registerTurnChannel(threadID, turnCh) {
 		return "", fmt.Errorf("thread %s already has an active watcher or turn", threadID)

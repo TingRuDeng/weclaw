@@ -510,7 +510,7 @@ git commit -m "建立 Codex thread 单一运行时所有权"
 - Modify: `agent/codex_thread_state.go`
 - Modify: `agent/codex_thread_watch.go`
 
-- [ ] **Step 1: 写 Desktop Chat 路由失败测试**
+- [x] **Step 1: 写 Desktop Chat 路由失败测试**
 
 ```go
 func TestACPAgentDesktopChatDoesNotStartAppServer(t *testing.T) {}
@@ -521,7 +521,7 @@ func TestACPAgentDesktopWatchUsesProjectedEvents(t *testing.T) {}
 
 fake 的 `Start` 调用即失败，以证明 `ACPAgent.chat` 在 `isRuntimeStarted` 前先检查 Desktop binding。
 
-- [ ] **Step 2: 实现 owner-first Chat**
+- [x] **Step 2: 实现 owner-first Chat**
 
 ```go
 func (a *ACPAgent) chat(ctx context.Context, conversationID, message string, onProgress func(string)) (string, error) {
@@ -551,7 +551,7 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID, message string, onP
 
 Desktop 路径先订阅 thread，再发送 start；start 返回的 turn ID 与 snapshot turn ID 关联后，复用 `collectAttachedCodexTurn` 聚合结果。
 
-- [ ] **Step 3: 写控制路由失败测试**
+- [x] **Step 3: 写控制路由失败测试**
 
 ```go
 func TestACPAgentDesktopReadStateDoesNotCallThreadRead(t *testing.T) {}
@@ -561,11 +561,11 @@ func TestACPAgentDesktopApprovalUsesContextHandler(t *testing.T) {}
 func TestACPAgentDesktopUserInputUsesContextHandler(t *testing.T) {}
 ```
 
-- [ ] **Step 4: 拆出 app-server 私有实现**
+- [x] **Step 4: 拆出 app-server 私有实现**
 
 保留 `CodexThreadRuntimeAgent` 的四个公开签名；新增 `readCodexAppServerThreadState`、`steerCodexAppServerThread`、`interruptCodexAppServerThread`、`watchCodexAppServerThread`。公开方法只按 binding owner 分派，不在 `codex_thread_state.go` 混入 IPC 解析。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 Run: `gofmt -w agent/codex_desktop_runtime*.go agent/acp_chat.go agent/acp_threads.go agent/codex_thread_state.go agent/codex_thread_watch.go`
 

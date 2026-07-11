@@ -19,6 +19,20 @@ func (a *ACPAgent) ChatWithProgress(ctx context.Context, conversationID string, 
 }
 
 func (a *ACPAgent) chat(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
+	if a.protocol == protocolCodexAppServer {
+		if binding, ok := a.CurrentCodexThreadBinding(conversationID); ok {
+			switch binding.Owner {
+			case CodexOwnerDesktopLive:
+				return a.chatCodexDesktop(ctx, binding, message, onProgress)
+			case CodexOwnerDesktopDisconnected:
+				return "", ErrCodexDesktopDisconnected
+			case CodexOwnerUnknown:
+				return "", ErrCodexDesktopOwnershipUnknown
+			case CodexOwnerPersistedOnly:
+				return "", fmt.Errorf("Codex thread 必须先恢复再继续对话")
+			}
+		}
+	}
 	if !a.isRuntimeStarted() {
 		if err := a.Start(ctx); err != nil {
 			return "", err
