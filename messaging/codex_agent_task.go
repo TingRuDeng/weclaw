@@ -4,8 +4,6 @@ import (
 	"context"
 	"strings"
 	"time"
-
-	"github.com/fastclaw-ai/weclaw/agent"
 )
 
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
@@ -14,7 +12,9 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		opts.routeUserID = opts.userID
 	}
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
-	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.routeUserID, opts.reply))
+	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
+		actorUserID: opts.userID, routeUserID: opts.routeUserID, reply: opts.reply,
+	})
 	route := opts.route
 	if route.conversationID == "" {
 		route = h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)

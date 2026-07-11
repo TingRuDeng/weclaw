@@ -633,7 +633,7 @@ git commit -m "安全恢复 Codex 持久化 thread"
 - Modify: `messaging/agent_broadcast.go`
 - Modify: `messaging/approvals.go`
 
-- [ ] **Step 1: 写问答卡片失败测试**
+- [x] **Step 1: 写问答卡片失败测试**
 
 ```go
 func TestUserInputHandlerCollectsEachQuestionAnswer(t *testing.T) {}
@@ -644,7 +644,7 @@ func TestUserInputHandlerCancelsOutstandingChoicesOnContextDone(t *testing.T) {}
 
 每个 question 通过现有 `AskChoices` 顺序展示，内部 decision key 使用 `requestID:questionID`，返回 option label 组成 `UserInputAnswers`。无 options 的请求首期显式提示“不支持自由文本问答”，不劫持普通消息作为隐式回答。
 
-- [ ] **Step 2: 提取统一 context 注入函数**
+- [x] **Step 2: 提取统一 context 注入函数**
 
 ```go
 type agentInteractionContextOptions struct {
@@ -661,7 +661,7 @@ func (h *Handler) withAgentInteractions(
 
 该函数同时调用 `ContextWithApprovalHandler` 和 `ContextWithUserInputHandler`；普通 Codex 任务、外部 Desktop watcher 和广播入口必须复用它，避免某一平台漏掉交互处理。
 
-- [ ] **Step 3: 验证并提交**
+- [x] **Step 3: 验证并提交**
 
 Run: `gofmt -w messaging/agent_interactions.go messaging/handler_user_input_test.go messaging/codex_agent_task.go messaging/codex_external_task.go messaging/agent_broadcast.go messaging/approvals.go`
 

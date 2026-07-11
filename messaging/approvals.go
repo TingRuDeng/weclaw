@@ -21,6 +21,11 @@ type pendingApproval struct {
 
 func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, reply platform.Replier) agent.ApprovalHandler {
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
+		if err := validateAgentInteractionRoute(agentInteractionContextOptions{
+			actorUserID: userID, routeUserID: routeUserID, reply: reply,
+		}); err != nil {
+			return "", err
+		}
 		prompt := approvalPrompt(req)
 		approvalKey := approvalPendingKey(req.RequestID)
 		choices := approvalChoices(req.Options, approvalKey, taskCardIDFromReplier(reply), userID, routeUserID)

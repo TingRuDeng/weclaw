@@ -50,7 +50,9 @@ func (h *Handler) runBroadcastAgent(req broadcastAgentsRequest, reply platform.R
 	progressCfg := h.resolveProgressConfigForAccount(req.platformName, req.accountID, name)
 	agentCtx, cancel := contextWithTaskTimeout(req.ctx, progressCfg)
 	defer cancel()
-	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(req.userID, req.routeUserID, reply))
+	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
+		actorUserID: req.userID, routeUserID: req.routeUserID, reply: reply,
+	})
 	runtime, ok := h.beginBroadcastRuntime(req, name, ag, agentCtx, reply, results)
 	if !ok {
 		return

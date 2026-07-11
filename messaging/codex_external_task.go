@@ -120,7 +120,9 @@ func renderExternalCodexStateReadError(err error) []string {
 
 // startExternalCodexTaskWatcher 登记任务镜像并启动异步进度与终态回推。
 func (h *Handler) startExternalCodexTaskWatcher(opts externalCodexTaskOptions, state externalCodexTaskState, watch externalCodexTaskWatch) {
-	taskCtx := agent.ContextWithApprovalHandler(context.Background(), h.approvalHandlerForUser(opts.actorUserID, opts.routeUserID, opts.reply))
+	taskCtx := h.withAgentInteractions(context.Background(), agentInteractionContextOptions{
+		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID, reply: opts.reply,
+	})
 	task, watchCtx, started := h.beginActiveTask(taskCtx, opts.conversationID, activeTaskMeta{
 		owner: opts.actorUserID, agentName: opts.agentName,
 		message:       firstNonBlank(state.Preview, "Codex App 本地任务"),

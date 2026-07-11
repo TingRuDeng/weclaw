@@ -44,7 +44,9 @@ func (h *Handler) sendToDefaultAgentForAccount(ctx context.Context, platformName
 		replyCtx := ctx
 		agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 		defer cancelTaskTimeout()
-		agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, routeUserID, replyWriter))
+		agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
+			actorUserID: userID, routeUserID: routeUserID, reply: replyWriter,
+		})
 
 		executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, defaultName, ag)
 		unlock := h.lockAgentExecution(executionKey)
@@ -126,7 +128,9 @@ func (h *Handler) sendToNamedAgentForAccount(ctx context.Context, platformName p
 
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(ctx, progressCfg)
 	defer cancelTaskTimeout()
-	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(userID, routeUserID, replyWriter))
+	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
+		actorUserID: userID, routeUserID: routeUserID, reply: replyWriter,
+	})
 
 	executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, name, ag)
 	unlock := h.lockAgentExecution(executionKey)
