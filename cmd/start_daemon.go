@@ -63,7 +63,7 @@ func runDaemon() error {
 	}
 
 	// 后台子进程 stdout/stderr 都写入统一日志文件。
-	lf, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	lf, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}

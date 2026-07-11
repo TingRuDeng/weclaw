@@ -223,7 +223,7 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		Platform: string(msg.Platform),
 		User:     msg.UserID,
 		Action:   "agent_message",
-		Summary:  text,
+		Summary:  auditMessageSummary(text),
 	})
 
 	agentNames, message := h.parseCommand(text)

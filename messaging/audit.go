@@ -104,6 +104,11 @@ func auditSanitizeSummary(summary string) string {
 	return summary
 }
 
+// auditMessageSummary 只记录正文规模，不把用户输入写入审计文件。
+func auditMessageSummary(text string) string {
+	return fmt.Sprintf("text_runes=%d", len([]rune(text)))
+}
+
 // NewFileAuditLogger 创建写本地 JSON Lines 审计文件的记录器。
 func NewFileAuditLogger(path string) auditLogger {
 	return newFileAuditLogger(path)

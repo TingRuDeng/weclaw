@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -107,7 +108,7 @@ func (s *Server) sendRequest(ctx context.Context, reply platform.Replier, req Se
 		if err := reply.SendText(ctx, req.Text); err != nil {
 			return fmt.Errorf("send text failed: %w", err)
 		}
-		log.Printf("[api] sent text to %s: %q", req.To, req.Text)
+		log.Printf("[api] sent text to %s (runes=%d)", req.To, utf8.RuneCountInString(req.Text))
 		s.sendExtractedImages(ctx, reply, req)
 	}
 	if req.MediaURL == "" {
@@ -122,7 +123,7 @@ func (s *Server) sendRequest(ctx context.Context, reply platform.Replier, req Se
 	if err := remoteReply.SendMediaFromURL(ctx, req.MediaURL); err != nil {
 		return fmt.Errorf("send media failed: %w", err)
 	}
-	log.Printf("[api] sent media to %s: %s", req.To, req.MediaURL)
+	log.Printf("[api] sent media to %s", req.To)
 	return nil
 }
 
@@ -138,6 +139,6 @@ func (s *Server) sendExtractedImages(ctx context.Context, reply platform.Replier
 			log.Printf("[api] send extracted image failed: %v", err)
 			continue
 		}
-		log.Printf("[api] sent extracted image to %s: %s", req.To, imageURL)
+		log.Printf("[api] sent extracted image to %s", req.To)
 	}
 }

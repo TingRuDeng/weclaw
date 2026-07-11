@@ -71,3 +71,13 @@ func TestAuditSummaryTruncated(t *testing.T) {
 		t.Fatal("truncated summary should end with ellipsis")
 	}
 }
+
+func TestAgentMessageAuditSummaryContainsOnlyMetadata(t *testing.T) {
+	got := auditMessageSummary("top-secret-message")
+	if strings.Contains(got, "top-secret-message") {
+		t.Fatalf("audit summary contains message body: %q", got)
+	}
+	if got != "text_runes=18" {
+		t.Fatalf("audit summary=%q, want rune count metadata", got)
+	}
+}

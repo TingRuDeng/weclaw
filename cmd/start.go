@@ -34,6 +34,13 @@ var startCmd = &cobra.Command{
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
+	daemonLog, err := configureDaemonLogging()
+	if err != nil {
+		return err
+	}
+	if daemonLog != nil {
+		defer daemonLog.Close()
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)

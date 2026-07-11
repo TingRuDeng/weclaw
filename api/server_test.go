@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -153,6 +155,31 @@ func TestHandleSendUsesRegistryTarget(t *testing.T) {
 	}
 	if reply.to != "ou_user" || len(reply.texts) != 1 || reply.texts[0] != "hi" {
 		t.Fatalf("reply=%#v, want feishu target text", reply)
+	}
+}
+
+func TestHandleSendLogDoesNotContainMessageBody(t *testing.T) {
+	reply := &recordingReplier{}
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
+		Access:   platform.NewAccessControl([]string{"ignored"}),
+	}})
+	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(oldOutput)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"top-secret-message"}`))
+	req.Host = "127.0.0.1:18011"
+	rec := httptest.NewRecorder()
+	server.handleSend(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, body=%q, want 200", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(logs.String(), "top-secret-message") {
+		t.Fatalf("API log contains message body: %q", logs.String())
 	}
 }
 
