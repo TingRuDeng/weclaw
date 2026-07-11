@@ -55,7 +55,7 @@
 - [x] P2-5 串行：统一回收飞书临时附件。
   - 修改：`feishu/adapter_events.go`、`feishu/incoming.go` 或消息交付边界 helper。
   - 测试：多附件、空文本、处理中断和下载中途失败均清理临时文件。
-- [ ] P2-6 串行：序列化并原子写入微信 context token。
+- [x] P2-6 串行：序列化并原子写入微信 context token。
   - 修改：`wechat/token_store.go`。
   - 测试：并发用户更新后文件包含全部最新 token，失败不破坏旧文件。
 - [ ] P2-7 串行：回收长期状态表。
@@ -100,3 +100,4 @@
 - 2026-07-11：P2-3 完成；ACP 并发 Start 等待同一次 initialize/initialized 握手并共享成功或失败结果，子进程存活不再等同于协议就绪；`go test -race ./agent` 通过。
 - 2026-07-11：P2-4 完成；远程请求新增 CGNAT、benchmark、文档、保留、NAT64、discard-only 和 6to4 前缀拒绝表，合法公网 IPv4/IPv6 保持可用；调用方 race 测试通过。
 - 2026-07-11：P2-5 完成；飞书临时附件采用幂等所有权清理，覆盖正常分发、未消费、多附件、延迟镜像、重复丢弃、取消、部分下载和 SDK 文件失败路径；`go test -race ./feishu` 通过。
+- 2026-07-11：P2-6 完成；微信 context token 在保存锁内读取最新全集，使用同步后的 0600 临时文件原子替换，避免旧快照覆盖和截断文件；`go test -race ./wechat` 通过。

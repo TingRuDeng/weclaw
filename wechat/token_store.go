@@ -14,6 +14,7 @@ import (
 
 type contextTokenStore struct {
 	mu     sync.RWMutex
+	saveMu sync.Mutex
 	path   string
 	tokens map[string]string
 }
@@ -48,11 +49,16 @@ func (s *contextTokenStore) Set(userID string, token string) error {
 	}
 	s.mu.Lock()
 	s.tokens[tokenKey(userID)] = token
+	s.mu.Unlock()
+
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.RLock()
 	snapshot := make(map[string]string, len(s.tokens))
 	for key, value := range s.tokens {
 		snapshot[key] = value
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 	return writeContextTokens(s.path, snapshot)
 }
 
@@ -72,7 +78,42 @@ func writeContextTokens(path string, tokens map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("marshal context tokens: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600)
+	return replaceContextTokenFile(path, data)
+}
+
+func replaceContextTokenFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tokens-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create token temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := writeContextTokenTemp(tmp, data); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replace token file: %w", err)
+	}
+	return nil
+}
+
+func writeContextTokenTemp(tmp *os.File, data []byte) error {
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod token temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write token temp file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync token temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close token temp file: %w", err)
+	}
+	return nil
 }
 
 func tokenKey(userID string) string {
