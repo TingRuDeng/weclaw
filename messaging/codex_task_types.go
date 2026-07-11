@@ -37,4 +37,5 @@ type codexConversationRoute struct {
 	bindingKey     string
 	workspaceRoot  string
 	conversationID string
+	threadID       string
 }

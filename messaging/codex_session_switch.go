@@ -31,7 +31,7 @@ func (h *Handler) handleCodexNewForRoute(userID string, agentName string, worksp
 }
 
 func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string, opts codexSwitchOptions) string {
-	codexAg, ok := ag.(agent.CodexThreadAgent)
+	_, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
 		return "当前 Codex Agent 不支持 thread 切换。"
 	}
@@ -42,14 +42,23 @@ func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, user
 	}
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
-	if err := codexAg.UseCodexThread(ctx, conversationID, threadID); err != nil {
+	route := codexConversationRoute{
+		bindingKey: bindingKey, workspaceRoot: workspaceRoot,
+		conversationID: conversationID, threadID: threadID,
+	}
+	resolution, err := h.resolveCodexRuntime(ctx, codexRuntimeResolveOptions{
+		route: route, threadID: threadID, ag: ag,
+	})
+	if err != nil {
 		return renderCodexSwitchFailure(err)
 	}
 	h.switchCodexWorkspaceForRoute(firstNonBlank(opts.actorUserID, userID), userID, agentName, workspaceRoot, ag)
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
 	lines := []string{"已切换会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
-	lines = append(lines, renderSessionModelStatus(h.codexSessionModelStatus(threadID))...)
+	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(threadID))
+	lines = append(lines, renderSessionModelStatus(modelStatus)...)
+	lines = append(lines, renderCodexOwnerNotice(resolution)...)
 	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
 		ctx:            ctx,
 		actorUserID:    firstNonBlank(opts.actorUserID, userID),

@@ -686,7 +686,7 @@ git commit -m "支持远程回答 Codex 结构化问题"
 - Modify: `messaging/agent_conversation.go`
 - Modify: `messaging/agent_broadcast.go`
 
-- [ ] **Step 1: 写切换路径失败测试**
+- [x] **Step 1: 写切换路径失败测试**
 
 ```go
 func TestCodexSwitchDesktopActiveSkipsUseCodexThread(t *testing.T) {}
@@ -698,7 +698,7 @@ func TestCodexPrepareConversationRechecksOwnerEveryTurn(t *testing.T) {}
 func TestCodexBroadcastUsesOwnerAwareBinding(t *testing.T) {}
 ```
 
-- [ ] **Step 2: 实现统一 bind/recover resolver**
+- [x] **Step 2: 实现统一 bind/recover resolver**
 
 ```go
 type codexRuntimeResolution struct {
@@ -726,15 +726,15 @@ func (h *Handler) resolveCodexRuntime(
 4. `persisted_only`：rollout active 时仍保持 disconnected；rollout 终态且 route 无 active task 时调用 `RecoverCodexThread`。
 5. 不支持新接口的测试/非 app-server fake 才沿用现有 `UseCodexThread`。
 
-- [ ] **Step 3: 替换三个恢复入口**
+- [x] **Step 3: 替换三个恢复入口**
 
 `handleCodexSwitchForRouteWithOptions`、`enterCodexWorkspaceWithSingleSession`、`prepareCodexConversation` 全部调用 resolver；`agent_broadcast` 走相同路径。`codexConversationRoute` 增加冻结的 `threadID`，暂存消息不能在执行时悄悄换成别的 thread。
 
-- [ ] **Step 4: 切换反馈包含 live 状态**
+- [x] **Step 4: 切换反馈包含 live 状态**
 
 使用 Task 3 已增加的 `CodexThreadState.Model` 和 `Effort`；Desktop snapshot 优先展示，缺失时再使用 `codexSessionModelStatus`。active thread 返回任务、当前进展和可用控制；idle thread 返回当前模型与推理强度。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 Run: `gofmt -w messaging/codex_runtime_binding.go messaging/codex_live_fakes_test.go messaging/handler_codex_live_switch_test.go messaging/codex_task_types.go messaging/codex_session_switch.go messaging/codex_browser.go messaging/agent_conversation.go messaging/agent_broadcast.go`
 

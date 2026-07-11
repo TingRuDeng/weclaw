@@ -134,7 +134,14 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 	}
 	conversationID := buildCodexConversationID(req.UserID, req.AgentName, workspaceRoot)
 	h.bindConversationCwd(req.Agent, conversationID, workspaceRoot)
-	if err := codexAg.UseCodexThread(req.Context, conversationID, session.ThreadID); err != nil {
+	route := codexConversationRoute{
+		bindingKey: req.BindingKey, workspaceRoot: workspaceRoot,
+		conversationID: conversationID, threadID: session.ThreadID,
+	}
+	resolution, err := h.resolveCodexRuntime(req.Context, codexRuntimeResolveOptions{
+		route: route, threadID: session.ThreadID, ag: req.Agent,
+	})
+	if err != nil {
 		if isCodexThreadStoreReadError(err) {
 			codexAg.ClearCodexThread(conversationID)
 			h.ensureCodexSessions().setPendingNew(req.BindingKey, workspaceRoot)
@@ -148,7 +155,9 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 	}
 	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)
 	lines := []string{"已进入工作空间并切换会话。", "工作空间: " + workspaceName}
-	lines = append(lines, renderSessionModelStatus(h.codexSessionModelStatus(session.ThreadID))...)
+	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(session.ThreadID))
+	lines = append(lines, renderSessionModelStatus(modelStatus)...)
+	lines = append(lines, renderCodexOwnerNotice(resolution)...)
 	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
 		ctx:            req.Context,
 		actorUserID:    firstNonBlank(req.ActorUserID, req.UserID),

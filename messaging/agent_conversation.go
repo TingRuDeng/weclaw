@@ -34,10 +34,15 @@ func (h *Handler) codexConversationRouteForSession(ownerUserID string, routeUser
 	workspaceRoot := h.codexWorkspaceRootForRoute(ownerUserID, routeUserID, agentName, ag)
 	conversationID := buildCodexConversationID(routeUserID, agentName, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
+	threadID, pending := h.ensureCodexSessions().getThread(codexBindingKey(routeUserID, agentName), workspaceRoot)
+	if pending {
+		threadID = ""
+	}
 	return codexConversationRoute{
 		bindingKey:     codexBindingKey(routeUserID, agentName),
 		workspaceRoot:  workspaceRoot,
 		conversationID: conversationID,
+		threadID:       threadID,
 	}
 }
 
@@ -96,12 +101,18 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 		codexAg.ClearCodexThread(route.conversationID)
 		return nil
 	}
+	if route.threadID != "" {
+		threadID = route.threadID
+	}
 	if threadID != "" {
-		current, hasCurrent := codexAg.CurrentCodexThread(route.conversationID)
-		if !hasCurrent || current != threadID {
-			if err := codexAg.UseCodexThread(ctx, route.conversationID, threadID); err != nil {
-				return fmt.Errorf("恢复 Codex 会话失败: %w", err)
-			}
+		resolution, err := h.resolveCodexRuntime(ctx, codexRuntimeResolveOptions{
+			route: route, threadID: threadID, ag: ag,
+		})
+		if err != nil {
+			return fmt.Errorf("恢复 Codex 会话失败: %w", err)
+		}
+		if err := ensureCodexRuntimeReady(resolution); err != nil {
+			return fmt.Errorf("恢复 Codex 会话失败: %w", err)
 		}
 	}
 	h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
