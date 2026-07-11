@@ -74,10 +74,13 @@ func validateCodexDesktopFramePayload(payload []byte) error {
 func writeCodexDesktopFrameBytes(writer io.Writer, data []byte) error {
 	for len(data) > 0 {
 		written, err := writer.Write(data)
+		if written < 0 || written > len(data) {
+			return fmt.Errorf("writer 返回非法写入长度 %d，待写长度 %d: %w", written, len(data), io.ErrShortWrite)
+		}
 		if err != nil {
 			return err
 		}
-		if written <= 0 || written > len(data) {
+		if written == 0 {
 			return io.ErrShortWrite
 		}
 		data = data[written:]

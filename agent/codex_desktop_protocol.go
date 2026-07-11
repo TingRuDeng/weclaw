@@ -96,7 +96,7 @@ func validateCodexDesktopEnvelope(envelope codexDesktopEnvelope) error {
 	}
 	switch envelope.Type {
 	case codexDesktopEnvelopeRequest:
-		return validateCodexDesktopMethodEnvelope(envelope, true)
+		return validateCodexDesktopRequest(envelope)
 	case codexDesktopEnvelopeBroadcast:
 		return validateCodexDesktopBroadcast(envelope)
 	case codexDesktopEnvelopeResponse:
@@ -108,6 +108,20 @@ func validateCodexDesktopEnvelope(envelope codexDesktopEnvelope) error {
 	default:
 		return fmt.Errorf("Codex Desktop envelope type %q 不受支持", envelope.Type)
 	}
+}
+
+func validateCodexDesktopRequest(envelope codexDesktopEnvelope) error {
+	if err := validateCodexDesktopMethodEnvelope(envelope, true); err != nil {
+		return err
+	}
+	if isMissingOrNullCodexDesktopJSON(envelope.Params) {
+		return fmt.Errorf("Codex Desktop request envelope 缺少非空 params 对象")
+	}
+	trimmed := bytes.TrimSpace(envelope.Params)
+	if trimmed[0] != '{' || !json.Valid(trimmed) {
+		return fmt.Errorf("Codex Desktop request envelope params 必须为 JSON 对象")
+	}
+	return nil
 }
 
 func validateCodexDesktopBroadcast(envelope codexDesktopEnvelope) error {

@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -126,6 +127,64 @@ func TestCodexDesktopFrameRejectsInvalidJSONPayload(t *testing.T) {
 	})
 }
 
+func TestCodexDesktopFrameWriterHandlesPartialWrites(t *testing.T) {
+	payload := []byte(`{"type":"request"}`)
+	writer := &codexDesktopPartialWriter{maxBytes: 2}
+	if err := writeCodexDesktopFrame(writer, payload); err != nil {
+		t.Fatalf("writeCodexDesktopFrame() error = %v", err)
+	}
+	var want bytes.Buffer
+	writeRawCodexDesktopTestFrame(t, &want, payload)
+	if !bytes.Equal(writer.buffer.Bytes(), want.Bytes()) {
+		t.Fatalf("partial writer output = %v, want %v", writer.buffer.Bytes(), want.Bytes())
+	}
+}
+
+func TestCodexDesktopFrameWriterRejectsZeroWrite(t *testing.T) {
+	writer := codexDesktopWriterFunc(func([]byte) (int, error) { return 0, nil })
+	err := writeCodexDesktopFrame(writer, []byte(`{"type":"request"}`))
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("writeCodexDesktopFrame() error = %v, want io.ErrShortWrite", err)
+	}
+}
+
+func TestCodexDesktopFrameWriterRejectsInvalidWriteCount(t *testing.T) {
+	tests := []struct {
+		name  string
+		count func(int) int
+	}{
+		{"negative", func(int) int { return -1 }},
+		{"larger than input", func(length int) int { return length + 1 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writer := codexDesktopWriterFunc(func(data []byte) (int, error) {
+				return test.count(len(data)), nil
+			})
+			err := writeCodexDesktopFrame(writer, []byte(`{"type":"request"}`))
+			if err == nil || !strings.Contains(err.Error(), "非法") || !errors.Is(err, io.ErrShortWrite) {
+				t.Fatalf("writeCodexDesktopFrame() error = %v, want explicit invalid count error", err)
+			}
+		})
+	}
+}
+
+func TestCodexDesktopFrameRejectsNonUTF8Payload(t *testing.T) {
+	payload := []byte{'"', 0xff, '"'}
+	t.Run("read", func(t *testing.T) {
+		var stream bytes.Buffer
+		writeRawCodexDesktopTestFrame(t, &stream, payload)
+		if _, err := readCodexDesktopFrame(&stream); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+			t.Fatalf("readCodexDesktopFrame() error = %v, want UTF-8 error", err)
+		}
+	})
+	t.Run("write", func(t *testing.T) {
+		if err := writeCodexDesktopFrame(io.Discard, payload); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+			t.Fatalf("writeCodexDesktopFrame() error = %v, want UTF-8 error", err)
+		}
+	})
+}
+
 func writeRawCodexDesktopTestFrame(t *testing.T, writer io.Writer, payload []byte) {
 	t.Helper()
 	var header [codexDesktopFrameHeaderBytes]byte
@@ -136,4 +195,22 @@ func writeRawCodexDesktopTestFrame(t *testing.T, writer io.Writer, payload []byt
 	if _, err := writer.Write(payload); err != nil {
 		t.Fatalf("write frame payload: %v", err)
 	}
+}
+
+type codexDesktopPartialWriter struct {
+	buffer   bytes.Buffer
+	maxBytes int
+}
+
+func (writer *codexDesktopPartialWriter) Write(data []byte) (int, error) {
+	if len(data) > writer.maxBytes {
+		data = data[:writer.maxBytes]
+	}
+	return writer.buffer.Write(data)
+}
+
+type codexDesktopWriterFunc func([]byte) (int, error)
+
+func (write codexDesktopWriterFunc) Write(data []byte) (int, error) {
+	return write(data)
 }

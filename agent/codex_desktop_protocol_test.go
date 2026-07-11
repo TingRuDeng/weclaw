@@ -47,6 +47,9 @@ func TestCodexDesktopEnvelopeRejectsMissingRequiredFields(t *testing.T) {
 		payload string
 		want    string
 	}{
+		{"request missing params", `{"type":"request","requestId":"request-1","version":1,"method":"initialize"}`, "params"},
+		{"request null params", `{"type":"request","requestId":"request-1","version":1,"method":"initialize","params":null}`, "params"},
+		{"request non-object params", `{"type":"request","requestId":"request-1","version":1,"method":"initialize","params":[]}`, "params"},
 		{"broadcast missing params", `{"type":"broadcast","version":11,"method":"thread-stream-state-changed"}`, "params"},
 		{"broadcast null params", `{"type":"broadcast","version":11,"method":"thread-stream-state-changed","params":null}`, "params"},
 		{"response missing resultType", `{"type":"response","requestId":"response-1"}`, "resultType"},
@@ -66,6 +69,18 @@ func TestCodexDesktopEnvelopeRejectsMissingRequiredFields(t *testing.T) {
 				t.Fatalf("decodeCodexDesktopEnvelope() error = %v, want field %s error", err, test.want)
 			}
 		})
+	}
+}
+
+func TestCodexDesktopRequestConstructorRejectsNilParams(t *testing.T) {
+	_, err := newCodexDesktopRequest(codexDesktopRequestSpec{
+		RequestID:      "request-1",
+		SourceClientID: "weclaw-client",
+		Method:         "initialize",
+		Params:         nil,
+	})
+	if err == nil || !strings.Contains(err.Error(), "params") {
+		t.Fatalf("newCodexDesktopRequest() error = %v, want params error", err)
 	}
 }
 
