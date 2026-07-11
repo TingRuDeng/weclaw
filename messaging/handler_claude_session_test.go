@@ -228,6 +228,7 @@ func TestHandleClaudeSwitchCommandBindsLocalSessionIndex(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "desktop")
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalClaudeSession(t, claudeDir, "session-desktop", workspace, "桌面会话", "2026-04-29T09:00:00Z")
+	appendLocalClaudeAssistantModel(t, claudeDir, workspace, "session-desktop", "claude-sonnet-4-5")
 	h.SetClaudeLocalSessionDir(claudeDir)
 	ag := &fakeClaudeSessionAgent{
 		fakeAgent: fakeAgent{
@@ -251,5 +252,9 @@ func TestHandleClaudeSwitchCommandBindsLocalSessionIndex(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "已切换 Claude 会话") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "模型: claude-sonnet-4-5") || !strings.Contains(text, "推理强度: 未知（会话未记录）") {
+		t.Fatalf("reply should show recorded claude model and unknown effort, messages=%#v", calls.texts())
 	}
 }

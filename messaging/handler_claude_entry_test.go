@@ -98,3 +98,20 @@ func writeLocalClaudeTranscript(t *testing.T, claudeDir string, workspace string
 		t.Fatalf("chtime claude transcript: %v", err)
 	}
 }
+
+func appendLocalClaudeAssistantModel(t *testing.T, claudeDir string, workspace string, sessionID string, model string) {
+	t.Helper()
+	path := filepath.Join(claudeDir, "projects", encodeClaudeProjectPath(workspace), sessionID+".jsonl")
+	record := fmt.Sprintf(`{"type":"assistant","message":{"model":%q}}`+"\n", model)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open claude transcript: %v", err)
+	}
+	if _, err := file.WriteString(record); err != nil {
+		_ = file.Close()
+		t.Fatalf("append claude assistant model: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close claude transcript: %v", err)
+	}
+}

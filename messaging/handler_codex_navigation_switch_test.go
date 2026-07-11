@@ -92,6 +92,7 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "weclaw")
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	appendLocalCodexTurnContext(t, codexDir, "thread-a", "gpt-5.5", "medium")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
@@ -115,6 +116,9 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "已进入工作空间并切换会话") || strings.Contains(text, "0. 会话 A") {
 		t.Fatalf("/cx 0 should auto switch single session, messages=%#v", calls.texts())
+	}
+	if !strings.Contains(text, "模型: gpt-5.5") || !strings.Contains(text, "推理强度: medium") {
+		t.Fatalf("auto switch should show session model status, messages=%#v", calls.texts())
 	}
 }
 

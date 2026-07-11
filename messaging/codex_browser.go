@@ -153,6 +153,7 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 	}
 	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)
 	lines := []string{"已进入工作空间并切换会话。", "工作空间: " + workspaceName}
+	lines = append(lines, renderSessionModelStatus(h.codexSessionModelStatus(session.ThreadID))...)
 	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
 		ctx:            req.Context,
 		actorUserID:    firstNonBlank(req.ActorUserID, req.UserID),

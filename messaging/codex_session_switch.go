@@ -62,6 +62,7 @@ func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, user
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
 	lines := []string{"已切换会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
+	lines = append(lines, renderSessionModelStatus(h.codexSessionModelStatus(threadID))...)
 	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
 		ctx:            ctx,
 		actorUserID:    firstNonBlank(opts.actorUserID, userID),

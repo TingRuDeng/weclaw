@@ -42,7 +42,9 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 	}
 	h.ensureClaudeSessions().setSession(route.BindingKey, workspaceRoot, sessionID)
 	h.ensureClaudeSessions().setActiveWorkspace(route.BindingKey, workspaceRoot)
-	return wechatCommandText("已切换 Claude 会话。", "工作空间: "+shortCodexWorkspaceName(workspaceRoot))
+	lines := []string{"已切换 Claude 会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
+	lines = append(lines, renderSessionModelStatus(h.claudeSessionModelStatus(sessionID))...)
+	return wechatCommandText(lines...)
 }
 
 func (h *Handler) resolveClaudeSwitchTarget(route claudeSessionRoute, target string) (string, string, error) {

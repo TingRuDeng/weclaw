@@ -19,6 +19,7 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "weclaw")
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
+	appendLocalCodexTurnContext(t, codexDir, "thread-active", "gpt-5.5", "high")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
@@ -58,6 +59,9 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "Codex App 任务正在进行") || !strings.Contains(text, "本地 App 发起的任务") {
 		t.Fatalf("switch reply should show active task, messages=%#v", calls.texts())
+	}
+	if !strings.Contains(text, "模型: gpt-5.5") || !strings.Contains(text, "推理强度: high") {
+		t.Fatalf("active switch reply should keep session model status, messages=%#v", calls.texts())
 	}
 }
 

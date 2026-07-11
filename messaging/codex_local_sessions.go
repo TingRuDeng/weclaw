@@ -27,6 +27,7 @@ type localCodexSessionMeta struct {
 	Originator   string
 	ThreadSource string
 	Source       json.RawMessage
+	Path         string
 }
 
 // defaultCodexLocalSessionDir 返回本机 Codex 默认会话目录。
@@ -169,7 +170,9 @@ func readLocalCodexSessionMeta(path string) (localCodexSessionMeta, bool) {
 	if err != nil && err != io.EOF {
 		return localCodexSessionMeta{}, false
 	}
-	return parseLocalCodexSessionMeta([]byte(line))
+	meta, ok := parseLocalCodexSessionMeta([]byte(line))
+	meta.Path = path
+	return meta, ok
 }
 
 // parseLocalCodexSessionMeta 从 session_meta 中提取恢复 thread 所需的最小字段。

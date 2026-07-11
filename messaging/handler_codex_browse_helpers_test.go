@@ -72,6 +72,27 @@ func writeLocalCodexSessionMeta(t *testing.T, codexDir string, threadID string, 
 	}
 }
 
+func appendLocalCodexTurnContext(t *testing.T, codexDir string, threadID string, model string, effort string) {
+	t.Helper()
+	metas := readLocalCodexSessionMetas(filepath.Join(codexDir, "sessions"))
+	meta, ok := metas[threadID]
+	if !ok {
+		t.Fatalf("find local codex session: %s", threadID)
+	}
+	record := fmt.Sprintf(`{"type":"turn_context","payload":{"model":%q,"effort":%q}}`+"\n", model, effort)
+	file, err := os.OpenFile(meta.Path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open local codex session: %v", err)
+	}
+	if _, err := file.WriteString(record); err != nil {
+		_ = file.Close()
+		t.Fatalf("append local codex turn context: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close local codex session: %v", err)
+	}
+}
+
 func writeArchivedLocalCodexSession(t *testing.T, codexDir string, threadID string, workspace string, threadName string, updatedAt string) {
 	t.Helper()
 	writeLocalCodexSession(t, codexDir, threadID, workspace, threadName, updatedAt)

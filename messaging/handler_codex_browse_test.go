@@ -126,6 +126,8 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "desktop")
 	writeLocalCodexSession(t, codexDir, "thread-desktop", workspace, "桌面会话", "2026-04-29T09:00:00Z")
+	appendLocalCodexTurnContext(t, codexDir, "thread-desktop", "gpt-old", "low")
+	appendLocalCodexTurnContext(t, codexDir, "thread-desktop", "gpt-5.5", "high")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
@@ -153,6 +155,10 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	}
 	if !containsText(calls.texts(), "已切换会话") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
+	}
+	text := strings.Join(calls.texts(), "\n")
+	if !strings.Contains(text, "模型: gpt-5.5") || !strings.Contains(text, "推理强度: high") {
+		t.Fatalf("reply should show latest session model status, messages=%#v", calls.texts())
 	}
 }
 

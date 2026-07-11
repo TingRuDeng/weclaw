@@ -281,6 +281,7 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	workspaceB := filepath.Join(root, "beta")
 	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
+	appendLocalCodexTurnContext(t, codexDir, "thread-a", "gpt-5.5", "high")
 	writeLocalCodexSession(t, codexDir, "thread-a2", workspaceA, "Alpha 会话 2", "2026-04-29T08:30:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -327,6 +328,9 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	}
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspaceA) {
 		t.Fatalf("stale card cwd=%q, want original workspace %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspaceA))
+	}
+	if len(reply.Texts) == 0 || !strings.Contains(reply.Texts[len(reply.Texts)-1], "模型: gpt-5.5") {
+		t.Fatalf("card switch should show session model status, texts=%#v", reply.Texts)
 	}
 }
 
