@@ -134,6 +134,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	handler.SetAgentProgressConfigs(extractAgentProgressConfigs(cfg.Agents))
 	handler.SetPlatformProgressConfigs(extractPlatformProgressConfigs(cfg.Platforms))
 	handler.SetPlatformDefaultAgents(extractPlatformDefaultAgents(cfg.Platforms))
+	if err := handler.SetAgentSessionFile(messaging.DefaultAgentSessionFile()); err != nil {
+		log.Printf("加载会话 Agent 状态失败：%v", err)
+	}
 	handler.SetCodexSessionFile(messaging.DefaultCodexSessionFile())
 	handler.SetFeishuIdentityFile(messaging.DefaultFeishuIdentityFile())
 	handler.SetClaudeSessionFile(messaging.DefaultClaudeSessionFile())

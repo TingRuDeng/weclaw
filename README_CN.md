@@ -141,30 +141,26 @@ weclaw companion --agent opencode --cwd /path/to/project
 
 ### 飞书机器人推荐菜单
 
-飞书自定义菜单最多可配置 5 个主菜单，每个主菜单最多 5 个子菜单。建议先按下面这组常用命令配置；子菜单动作直接填写命令文本。
+飞书自定义菜单最多可配置 5 个主菜单，每个主菜单最多 5 个子菜单。手机端建议只配置下面 4 个主菜单，避免第 5 个菜单被折叠；子菜单动作直接填写命令文本。
 
 | 主菜单 | 子菜单 | 命令 |
 | ------ | ------ | ---- |
 | 🧭 常用 | 帮助 | `/help` |
 | 🧭 常用 | 状态 | `/status` |
-| 🧭 常用 | 进度模式 | `/progress` |
-| 🧭 常用 | 确认模式 | `/mode` |
-| 🧭 常用 | 停止任务 | `/stop` |
+| 🧭 常用 | 选择模型 | `/model` |
+| 🧭 常用 | 推理强度 | `/reasoning` |
+| 🧭 常用 | 当前目录 | `/cwd` |
 | 🤖 Codex | 工作空间 | `/cx ls` |
 | 🤖 Codex | 会话状态 | `/cx status` |
 | 🤖 Codex | 新建会话 | `/cx new` |
-| 🤖 Codex | 当前目录 | `/cx pwd` |
-| 🤖 Codex | 模型列表 | `/cx model ls` |
+| 🤖 Codex | 账号额度 | `/cx quota` |
+| 🤖 Codex | 高级命令 | `/cx help` |
 | 🧠 Claude | 会话列表 | `/cc ls` |
 | 🧠 Claude | 会话状态 | `/cc status` |
 | 🧠 Claude | 新建会话 | `/cc new` |
 | 🧠 Claude | 当前目录 | `/cc pwd` |
 | 🧠 Claude | 模型列表 | `/cc model ls` |
-| 📁 工作区 | 当前目录 | `/cwd` |
-| 📁 工作区 | Codex 帮助 | `/cx help` |
-| 📁 工作区 | Codex 额度 | `/cx quota` |
-| 📁 工作区 | Codex 清理 | `/cx clean` |
-| ⚙️ 控制 | 运行任务 | `/ps` |
+| ⚙️ 控制 | 撤回暂存 | `/cancel` |
 | ⚙️ 控制 | 引导任务 | `/guide` |
 | ⚙️ 控制 | 停止任务 | `/stop` |
 | ⚙️ 控制 | 更新 WeClaw | `/update` |

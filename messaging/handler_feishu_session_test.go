@@ -48,6 +48,48 @@ func TestFeishuNewUsesGroupSessionMetadataForReset(t *testing.T) {
 	}
 }
 
+func TestFeishuNewUsesSessionDefaultAgent(t *testing.T) {
+	workspace := t.TempDir()
+	codex := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+		resetSessionID: "thread-new",
+	}}
+	claude := &fakeClaudeSessionAgent{fakeAgent: fakeAgent{
+		info:           agent.AgentInfo{Name: "claude", Type: "cli", Command: "claude"},
+		resetSessionID: "session-new",
+	}}
+	h := NewHandler(func(_ context.Context, name string) agent.Agent {
+		if name == "claude" {
+			return claude
+		}
+		return codex
+	}, nil)
+	h.SetDefaultAgent("codex", codex)
+	h.SetAgentMetas([]AgentMeta{{Name: "claude"}, {Name: "codex"}})
+	h.SetAgentWorkDirs(map[string]string{"claude": workspace, "codex": workspace})
+	sessionKey := "feishu:tenant:dm:chat-a:user-1"
+	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
+		t.Fatalf("设置会话 Agent 失败：%v", err)
+	}
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		AccountID: "cli_main",
+		UserID:    "user-1",
+		MessageID: "new-session-agent",
+		Text:      "/new",
+		Metadata:  map[string]string{"feishu_session_key": sessionKey},
+	}, platformtest.NewReplier(platform.Capabilities{Text: true}))
+
+	want := buildClaudeConversationID(sessionKey, "claude", workspace)
+	if got := claude.resetConversationID(); got != want {
+		t.Fatalf("Claude reset conversation=%q，期望 %q", got, want)
+	}
+	if got := codex.resetConversationID(); got != "" {
+		t.Fatalf("Codex 不应被重置，实际 conversation=%q", got)
+	}
+}
+
 func TestFeishuGroupStatusUsesChatSessionMetadataForRouting(t *testing.T) {
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{

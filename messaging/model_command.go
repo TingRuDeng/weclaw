@@ -13,6 +13,19 @@ const (
 	modelSettingReasoning = "reasoning"
 )
 
+type modelAgentRoute struct {
+	routeUserID string
+	platform    platform.PlatformName
+	accountID   string
+}
+
+type modelSettingCardRequest struct {
+	message platform.IncomingMessage
+	reply   platform.Replier
+	setting string
+	route   modelAgentRoute
+}
+
 func isModelSettingCommand(command string) bool {
 	return command == "/model" || strings.HasPrefix(command, "/model ") ||
 		command == "/reasoning" || strings.HasPrefix(command, "/reasoning ")
@@ -26,12 +39,18 @@ func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req pla
 		setting, prefix = modelSettingReasoning, "/reasoning"
 	}
 	arg := strings.TrimSpace(strings.TrimPrefix(req.Trimmed, prefix))
-	if arg == "" && h.sendFeishuModelSettingCard(ctx, msg, req.Reply, setting) {
+	route := modelAgentRoute{routeUserID: req.RouteUserID, platform: msg.Platform, accountID: msg.AccountID}
+	if arg == "" && h.sendFeishuModelSettingCard(ctx, modelSettingCardRequest{
+		message: msg,
+		reply:   req.Reply,
+		setting: setting,
+		route:   route,
+	}) {
 		return true
 	}
-	text := h.handleModelCommandForAccount(ctx, msg.Platform, msg.AccountID, arg)
+	text := h.handleModelCommandForRoute(ctx, route, arg)
 	if setting == modelSettingReasoning {
-		text = h.handleReasoningCommandForAccount(ctx, msg.Platform, msg.AccountID, arg)
+		text = h.handleReasoningCommandForRoute(ctx, route, arg)
 	}
 	sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	return true
@@ -44,7 +63,11 @@ func (h *Handler) handleModelCommand(ctx context.Context, platformName platform.
 }
 
 func (h *Handler) handleModelCommandForAccount(ctx context.Context, platformName platform.PlatformName, accountID string, arg string) string {
-	name, ag, ok := h.resolveModelAgentForAccount(ctx, platformName, accountID)
+	return h.handleModelCommandForRoute(ctx, modelAgentRoute{platform: platformName, accountID: accountID}, arg)
+}
+
+func (h *Handler) handleModelCommandForRoute(ctx context.Context, route modelAgentRoute, arg string) string {
+	name, ag, ok := h.resolveModelAgentForRoute(ctx, route)
 	if !ok {
 		return "当前没有可用的默认 Agent。"
 	}
@@ -69,7 +92,11 @@ func (h *Handler) handleReasoningCommand(ctx context.Context, platformName platf
 }
 
 func (h *Handler) handleReasoningCommandForAccount(ctx context.Context, platformName platform.PlatformName, accountID string, arg string) string {
-	name, ag, ok := h.resolveModelAgentForAccount(ctx, platformName, accountID)
+	return h.handleReasoningCommandForRoute(ctx, modelAgentRoute{platform: platformName, accountID: accountID}, arg)
+}
+
+func (h *Handler) handleReasoningCommandForRoute(ctx context.Context, route modelAgentRoute, arg string) string {
+	name, ag, ok := h.resolveModelAgentForRoute(ctx, route)
 	if !ok {
 		return "当前没有可用的默认 Agent。"
 	}
@@ -94,7 +121,11 @@ func (h *Handler) resolveModelAgent(ctx context.Context, platformName platform.P
 }
 
 func (h *Handler) resolveModelAgentForAccount(ctx context.Context, platformName platform.PlatformName, accountID string) (string, agent.Agent, bool) {
-	name := h.defaultAgentNameForAccount(platformName, accountID)
+	return h.resolveModelAgentForRoute(ctx, modelAgentRoute{platform: platformName, accountID: accountID})
+}
+
+func (h *Handler) resolveModelAgentForRoute(ctx context.Context, route modelAgentRoute) (string, agent.Agent, bool) {
+	name := h.defaultAgentNameForRoute(route.routeUserID, route.platform, route.accountID)
 	if strings.TrimSpace(name) == "" {
 		return "", nil, false
 	}
@@ -163,11 +194,13 @@ func modelEffortOptions(models []agent.CodexModel, model string) []string {
 }
 
 // sendFeishuModelSettingCard 使用统一选择卡片展示 Codex 模型设置。
-func (h *Handler) sendFeishuModelSettingCard(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier, setting string) bool {
+func (h *Handler) sendFeishuModelSettingCard(ctx context.Context, req modelSettingCardRequest) bool {
+	msg := req.message
+	reply := req.reply
 	if msg.Platform != platform.PlatformFeishu || reply == nil || !reply.Capabilities().Buttons {
 		return false
 	}
-	_, ag, ok := h.resolveModelAgentForAccount(ctx, msg.Platform, msg.AccountID)
+	_, ag, ok := h.resolveModelAgentForRoute(ctx, req.route)
 	if !ok {
 		return false
 	}
@@ -175,7 +208,7 @@ func (h *Handler) sendFeishuModelSettingCard(ctx context.Context, msg platform.I
 	if !ok {
 		return false
 	}
-	prompt, choices := modelSettingCard(ctx, modelAg, setting)
+	prompt, choices := modelSettingCard(ctx, modelAg, req.setting)
 	if len(choices) == 0 {
 		return false
 	}

@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -82,6 +83,17 @@ func normalizePlatformProgressConfig(platformName platform.PlatformName, cfg con
 
 func (h *Handler) defaultAgentNameForPlatform(platformName platform.PlatformName) string {
 	return h.defaultAgentNameForAccount(platformName, "")
+}
+
+// defaultAgentNameForRoute 优先使用当前消息会话显式选择的 Agent。
+func (h *Handler) defaultAgentNameForRoute(routeUserID string, platformName platform.PlatformName, accountID string) string {
+	if agentName, ok := h.ensureAgentSessions().Get(routeUserID); ok {
+		if h.isKnownAgent(agentName) {
+			return agentName
+		}
+		log.Printf("[handler] session %q selected unavailable agent %q; using configured default", routeUserID, agentName)
+	}
+	return h.defaultAgentNameForAccount(platformName, accountID)
 }
 
 func (h *Handler) defaultAgentNameForAccount(platformName platform.PlatformName, accountID string) string {

@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -83,6 +84,44 @@ func TestModelCommandNonCodexAgentInforms(t *testing.T) {
 	out := h.handleModelCommand(context.Background(), platform.PlatformWeChat, "opus")
 	if !strings.Contains(out, "由配置固定") {
 		t.Fatalf("non-codex agent should report fixed-by-config: %q", out)
+	}
+}
+
+func TestFeishuModelCommandsUseSessionDefaultAgent(t *testing.T) {
+	codex := &fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "gpt-5",
+	}
+	claude := &fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "cli", Command: "claude"}}
+	h := NewHandler(func(_ context.Context, name string) agent.Agent {
+		if name == "claude" {
+			return claude
+		}
+		return codex
+	}, nil)
+	h.SetDefaultAgent("codex", codex)
+	h.SetAgentMetas([]AgentMeta{{Name: "claude"}, {Name: "codex"}})
+	h.SetPlatformDefaultAgents(map[string]string{
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_main"): "codex",
+	})
+	sessionKey := "feishu:tenant:dm:chat-a:user-1"
+	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
+		t.Fatalf("设置会话 Agent 失败：%v", err)
+	}
+
+	for index, command := range []string{"/model opus", "/reasoning high"} {
+		reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+		h.HandleMessage(context.Background(), platform.IncomingMessage{
+			Platform:  platform.PlatformFeishu,
+			AccountID: "cli_main",
+			UserID:    "user-1",
+			MessageID: fmt.Sprintf("model-session-%d", index),
+			Text:      command,
+			Metadata:  map[string]string{"feishu_session_key": sessionKey},
+		}, reply)
+		if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "claude") {
+			t.Fatalf("command=%q reply=%#v，期望操作当前会话的 claude", command, reply.Texts)
+		}
 	}
 }
 

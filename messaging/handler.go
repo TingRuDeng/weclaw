@@ -77,6 +77,7 @@ type Handler struct {
 	agentProgressConfigs    map[string]config.ProgressConfig
 	platformProgressConfigs map[string]config.ProgressConfig
 	platformDefaultAgents   map[string]string
+	agentSessions           *agentSessionStore
 	seenTextMsgs            sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
 	codexSessions           *codexSessionStore
 	feishuIdentities        *feishuIdentityStore
@@ -235,7 +236,7 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 	}
 	if message == "" {
 		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
-			sendText(h.switchDefault(ctx, agentNames[0]))
+			sendText(h.switchDefault(ctx, routeUserID, agentNames[0]))
 		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
 			h.sendToDefaultAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, text, clientID)
 		} else {

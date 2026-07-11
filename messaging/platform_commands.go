@@ -40,7 +40,12 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 		}
 		sendText(buildHelpTextForAdmin(h.isAdminMessage(msg)))
 	case trimmed == "/new":
-		sendText(h.resetDefaultSessionForRoute(ctx, msg.UserID, routeUserID))
+		sendText(h.resetDefaultSessionForMessage(ctx, defaultSessionResetRequest{
+			actorUserID: msg.UserID,
+			routeUserID: routeUserID,
+			platform:    msg.Platform,
+			accountID:   msg.AccountID,
+		}))
 	case isProgressCommand(trimmed):
 		sendText(h.handleProgressCommandForAccount(trimmed, msg.Platform, msg.AccountID))
 	case isClaudeSessionCommand(trimmed):

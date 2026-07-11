@@ -1,5 +1,19 @@
 package messaging
 
+func (h *Handler) ensureAgentSessions() *agentSessionStore {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.agentSessions == nil {
+		h.agentSessions = newAgentSessionStore()
+	}
+	return h.agentSessions
+}
+
+// SetAgentSessionFile 设置会话级默认 Agent 的持久化文件。
+func (h *Handler) SetAgentSessionFile(filePath string) error {
+	return h.ensureAgentSessions().SetFilePath(filePath)
+}
+
 func (h *Handler) ensureCodexSessions() *codexSessionStore {
 	h.mu.Lock()
 	defer h.mu.Unlock()

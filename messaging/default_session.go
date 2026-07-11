@@ -7,35 +7,24 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-// switchDefault switches the default agent. Starts it on demand if needed.
-// The change is persisted to config file.
-func (h *Handler) switchDefault(ctx context.Context, name string) string {
+// switchDefault 切换当前消息会话的默认 Agent，并在目标 Agent 可用后持久化选择。
+func (h *Handler) switchDefault(ctx context.Context, routeUserID string, name string) string {
 	ag, err := h.getAgent(ctx, name)
 	if err != nil {
 		log.Printf("[handler] failed to switch default to %q: %v", name, err)
-		return fmt.Sprintf("Failed to switch to %q: %v", name, err)
+		return fmt.Sprintf("切换到 %q 失败：%v", name, err)
 	}
-
-	h.mu.Lock()
-	old := h.defaultName
-	h.defaultName = name
-	h.agents[name] = ag
-	h.mu.Unlock()
-
-	// Persist to config file
-	if h.saveDefault != nil {
-		if err := h.saveDefault(name); err != nil {
-			log.Printf("[handler] failed to save default agent to config: %v", err)
-		} else {
-			log.Printf("[handler] saved default agent %q to config", name)
-		}
+	if err := h.ensureAgentSessions().Set(routeUserID, name); err != nil {
+		log.Printf("[handler] failed to save session agent %q for %q: %v", name, routeUserID, err)
+		return fmt.Sprintf("切换到 %q 失败：%v", name, err)
 	}
 
 	info := ag.Info()
-	log.Printf("[handler] switched default agent: %s -> %s (%s)", old, name, info)
-	return fmt.Sprintf("switch to %s", name)
+	log.Printf("[handler] switched session %q to agent %s (%s)", routeUserID, name, info)
+	return fmt.Sprintf("当前会话已切换到 %s", name)
 }
 
 // resetDefaultSession resets the session for the given userID on the default agent.
@@ -45,11 +34,29 @@ func (h *Handler) resetDefaultSession(ctx context.Context, userID string) string
 
 // resetDefaultSessionForRoute 重置 routeUserID 对应会话，避免飞书 thread 的 /new 重置到真实用户全局会话。
 func (h *Handler) resetDefaultSessionForRoute(ctx context.Context, actorUserID string, routeUserID string) string {
+	return h.resetDefaultSessionForMessage(ctx, defaultSessionResetRequest{
+		actorUserID: actorUserID,
+		routeUserID: routeUserID,
+	})
+}
+
+type defaultSessionResetRequest struct {
+	actorUserID string
+	routeUserID string
+	platform    platform.PlatformName
+	accountID   string
+}
+
+// resetDefaultSessionForMessage 按消息会话选择的 Agent 重置对应会话。
+func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req defaultSessionResetRequest) string {
+	actorUserID := req.actorUserID
+	routeUserID := req.routeUserID
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = actorUserID
 	}
-	name, ag := h.getDefaultAgentWithName()
-	if ag == nil {
+	name := h.defaultAgentNameForRoute(routeUserID, req.platform, req.accountID)
+	ag, err := h.getAgent(ctx, name)
+	if err != nil || ag == nil {
 		return "No agent running."
 	}
 	if isCodexAgent(name, ag.Info()) {

@@ -16,7 +16,7 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, platformName platform.
 }
 
 func (h *Handler) sendToDefaultAgentForAccount(ctx context.Context, platformName platform.PlatformName, accountID string, userID string, routeUserID string, replyWriter platform.Replier, text string, clientID string) {
-	defaultName := h.defaultAgentNameForAccount(platformName, accountID)
+	defaultName := h.defaultAgentNameForRoute(routeUserID, platformName, accountID)
 
 	var ag agent.Agent
 	var agErr error
