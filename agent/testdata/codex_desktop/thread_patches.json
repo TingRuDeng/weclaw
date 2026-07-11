@@ -1,0 +1,22 @@
+{
+  "type": "broadcast",
+  "sourceClientId": "desktop-client",
+  "version": 11,
+  "method": "thread-stream-state-changed",
+  "params": {
+    "conversationId": "thread-1",
+    "hostId": "host-1",
+    "change": {
+      "type": "patches",
+      "baseRevision": 1,
+      "revision": 2,
+      "patches": [
+        {
+          "op": "replace",
+          "path": ["threadRuntimeStatus"],
+          "value": {"type": "running"}
+        }
+      ]
+    }
+  }
+}

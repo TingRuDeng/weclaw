@@ -1,0 +1,25 @@
+{
+  "type": "broadcast",
+  "sourceClientId": "desktop-client",
+  "version": 11,
+  "method": "thread-stream-state-changed",
+  "params": {
+    "conversationId": "thread-1",
+    "hostId": "host-1",
+    "change": {
+      "type": "snapshot",
+      "revision": 1,
+      "conversationState": {
+        "id": "thread-1",
+        "sessionId": "session-1",
+        "turns": [],
+        "requests": [],
+        "latestModel": "gpt-5.4",
+        "latestReasoningEffort": "high",
+        "rolloutPath": "/tmp/rollout.jsonl",
+        "cwd": "/tmp/project",
+        "threadRuntimeStatus": {"type": "idle"}
+      }
+    }
+  }
+}
