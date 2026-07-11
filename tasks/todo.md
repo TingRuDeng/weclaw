@@ -31,7 +31,7 @@
 - [x] P1-1 串行：修复 Codex thread 事件通道覆盖和错误注销。
   - 修改：`agent/acp_agent.go`、`agent/codex_turn_dispatch.go`、`agent/codex_app_server_turn.go`、`agent/codex_thread_watch.go`、`agent/acp_chat.go`。
   - 测试：新增同 key 重复注册、所有权注销和同 thread 并发 turn 回归测试。
-- [ ] P1-2 串行：统一 Codex、Claude、HTTP Agent 运行任务生命周期。
+- [x] P1-2 串行：统一 Codex、Claude、HTTP Agent 运行任务生命周期。
   - 修改：`messaging/agent_execution.go`、`messaging/task_state.go`、`messaging/handler_status.go`。
   - 测试：Claude/HTTP 执行期间 `ActiveTaskCount()` 为 1，结束后归零。
 - [ ] P1-3 串行：重启状态读取失败时默认拒绝重启。
@@ -92,3 +92,4 @@
 ## 进度记录
 
 - 2026-07-11：P1-1 完成；Codex thread 与标准 ACP session 使用原子所有权注册，重复 owner 不再覆盖，注销仅清理调用者持有的通道；`go test -race ./agent` 通过。
+- 2026-07-11：P1-2 完成；默认、命名和广播的非 Codex 执行统一登记 active task，Claude/HTTP 任务现已进入重启保护与状态统计；`go test -race ./messaging` 通过。

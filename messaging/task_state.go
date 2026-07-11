@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +78,15 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTa
 	}
 	h.activeTasks[key] = task
 	return task, taskCtx, true
+}
+
+// beginSynchronousActiveTask 登记串行执行的非 Codex 任务，供重启保护和任务状态查询使用。
+func (h *Handler) beginSynchronousActiveTask(ctx context.Context, key string, meta activeTaskMeta) (*activeAgentTask, context.Context, error) {
+	task, taskCtx, started := h.beginActiveTask(ctx, key, meta)
+	if !started {
+		return nil, ctx, fmt.Errorf("execution %s already has an active task", key)
+	}
+	return task, taskCtx, nil
 }
 
 func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {

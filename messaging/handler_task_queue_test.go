@@ -59,6 +59,39 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	}
 }
 
+// TestSendToNamedAgentTracksNonCodexActiveTask 验证 Claude 等任务会阻止普通重启。
+func TestSendToNamedAgentTracksNonCodexActiveTask(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "claude", Type: "acp", Command: "claude-agent-acp"}
+	h.agents["claude"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+
+	client, _, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
+		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "claude", "任务", "client-1")
+		close(done)
+	}()
+	waitForAgentEnter(t, ag)
+	if got := h.ActiveTaskCount(); got != 1 {
+		t.Fatalf("ActiveTaskCount()=%d, want 1 while Claude is running", got)
+	}
+
+	ag.release <- struct{}{}
+	waitDone(t, done, "Claude 任务")
+	if got := h.ActiveTaskCount(); got != 0 {
+		t.Fatalf("ActiveTaskCount()=%d, want 0 after Claude completed", got)
+	}
+}
+
 func TestSendToNamedAgentUsesTaskTimeout(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()

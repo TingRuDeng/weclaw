@@ -50,6 +50,16 @@ func (h *Handler) sendToDefaultAgentForAccount(ctx context.Context, platformName
 		executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, defaultName, ag)
 		unlock := h.lockAgentExecution(executionKey)
 		defer unlock()
+		task, trackedCtx, trackErr := h.beginSynchronousActiveTask(agentCtx, executionKey, activeTaskMeta{
+			owner: userID, agentName: defaultName, message: text,
+		})
+		if trackErr != nil {
+			reply = renderFinalFailure("", trackErr)
+			h.sendReplyWithMediaForRoute(replyCtx, replyWriter, userID, routeUserID, defaultName, reply)
+			return
+		}
+		agentCtx = trackedCtx
+		defer h.finishActiveTask(executionKey, task)
 
 		onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "", text, progressCfg)
 
@@ -122,6 +132,16 @@ func (h *Handler) sendToNamedAgentForAccount(ctx context.Context, platformName p
 	executionKey := h.agentExecutionKeyForRoute(userID, routeUserID, name, ag)
 	unlock := h.lockAgentExecution(executionKey)
 	defer unlock()
+	task, trackedCtx, trackErr := h.beginSynchronousActiveTask(agentCtx, executionKey, activeTaskMeta{
+		owner: userID, agentName: name, message: message,
+	})
+	if trackErr != nil {
+		reply := renderFinalFailure("["+name+"] ", trackErr)
+		h.sendReplyWithMediaForRoute(replyCtx, replyWriter, userID, routeUserID, name, reply)
+		return
+	}
+	agentCtx = trackedCtx
+	defer h.finishActiveTask(executionKey, task)
 
 	onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "", message, progressCfg)
 
@@ -218,6 +238,18 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 			}
 			unlock := h.lockAgentExecution(executionKey)
 			defer unlock()
+			if !isCodexAgent(n, ag.Info()) {
+				task, trackedCtx, trackErr := h.beginSynchronousActiveTask(agentCtx, executionKey, activeTaskMeta{
+					owner: req.userID, agentName: n, message: req.message,
+				})
+				if trackErr != nil {
+					ch <- result{name: n, reply: renderFinalFailure("["+n+"] ", trackErr)}
+					return
+				}
+				activeTask = task
+				agentCtx = trackedCtx
+				defer h.finishActiveTask(executionKey, task)
+			}
 
 			onProgress, finishProgress := h.startProgressSessionWithFinal(agentCtx, replyWriter, "["+n+"] ", req.message, progressCfg)
 			sendResult := func(reply string, failed bool) {
