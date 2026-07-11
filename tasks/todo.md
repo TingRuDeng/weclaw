@@ -2,130 +2,28 @@
 
 ## 目标
 
-按 2026-07-11 全面审查的严重级别顺序修复 P1、P2、P3 问题。每项先补失败测试，再做最小根因修复并执行受影响范围验证。
+把 WeClaw 从“通过共享 rollout 观察 Codex App，再由独立 app-server 恢复历史”升级为“通过 Codex Desktop IPC 实时接管同一个本地 thread”。
 
-## 非目标
+## 当前阶段
 
-- 不改变现有飞书、微信命令名称和正常交互语义。
-- 不重写 Agent、消息平台或配置架构。
-- 不保留已确认有风险的失败放行和静默降级路径。
-- 不在本轮处理无关重构或新增产品功能。
+Spec 设计与审查。用户已确认架构方向，尚未批准书面 Spec，禁止修改生产代码。
 
-## 当前事实
+## 任务清单
 
-- 基线分支：`main`，提交 `2ae9564`，工作分支 `codex/fix-comprehensive-review`。
-- 基线全仓单测、全仓 race、`go vet`、`govulncheck`、文档校验均通过。
-- 基线总语句覆盖率为 69.8%，关键并发时序缺少定向测试。
-- 本轮按顺序串行执行；多个任务共享 Agent 和 Handler 状态，不使用并行写入或 subagent。
+- [x] P1 串行：定位当前上下文丢失根因。
+- [x] P1 调研：核对 OpenAI app-server、Codex Remote Control、Remodex、Happy、MobileCLI 和 Claude Channels。
+- [x] P1 本机验证：只读连接 Codex Desktop IPC，确认 initialize 和状态广播可用。
+- [x] P2 串行：形成 Codex Desktop 实时接管架构设计。
+- [ ] P2 串行：提交并由用户审查 `tasks/codex-desktop-live-takeover.md`。
+- [ ] P3 串行：书面 Spec 确认后编写函数级实施计划。
+- [ ] P4 执行：按批准计划先写失败测试，再实现 Desktop IPC 接管。
+- [ ] P5 验收：执行单测、race、静态检查、全仓验证和真实 Codex App 手工验收。
+- [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 
-## 已确认决策
+## 并行说明
 
-- Codex 同一真实 thread 同时只允许一个 turn 所有者；事件通道必须带注册所有权，注销时不能删除其他订阅者。
-- 所有 Agent 都登记运行任务；Codex 保留暂存消息和跨端控制能力，其他 Agent 只复用统一生命周期与重启计数。
-- 已知 WeClaw 进程存在但运行状态无法确认时，普通重启失败关闭；仅 `--force` 可以继续。
-- loopback API 保留本地无 token 调用，但拒绝非 loopback Host 和跨源浏览器请求。
-- 持久化写入必须串行、使用唯一临时文件并原子替换。
-
-## 执行计划
-
-- [x] P1-1 串行：修复 Codex thread 事件通道覆盖和错误注销。
-  - 修改：`agent/acp_agent.go`、`agent/codex_turn_dispatch.go`、`agent/codex_app_server_turn.go`、`agent/codex_thread_watch.go`、`agent/acp_chat.go`。
-  - 测试：新增同 key 重复注册、所有权注销和同 thread 并发 turn 回归测试。
-- [x] P1-2 串行：统一 Codex、Claude、HTTP Agent 运行任务生命周期。
-  - 修改：`messaging/agent_execution.go`、`messaging/task_state.go`、`messaging/handler_status.go`。
-  - 测试：Claude/HTTP 执行期间 `ActiveTaskCount()` 为 1，结束后归零。
-- [x] P1-3 串行：重启状态读取失败时默认拒绝重启。
-  - 修改：`cmd/restart_safety.go`、相关重启错误文案。
-  - 测试：配置读取失败、API 超时、401、无效 JSON 均返回阻断错误；`--force` 放行。
-- [x] P1-4 串行：阻止 loopback API DNS rebinding。
-  - 修改：`api/server.go`、`api/auth.go`，新增请求边界校验 helper。
-  - 测试：loopback Host 成功，外部 Host、跨源 Origin 拒绝，token 模式保持可用。
-- [x] P2-1 串行：序列化 ACP 状态快照持久化。
-  - 修改：`agent/acp_agent.go`、`agent/acp_state.go`。
-  - 测试：并发保存最终文件可解析且不会由旧快照覆盖新状态。
-- [x] P2-2 串行：修复 Companion 旧连接清理误伤新连接请求。
-  - 修改：`agent/companion_agent.go`、`agent/companion_agent_chat.go`。
-  - 测试：连接代际切换后旧 read loop 退出不失败新连接 pending request。
-- [x] P2-3 串行：为 ACP 启动增加 starting/ready 状态同步。
-  - 修改：`agent/acp_agent.go`、`agent/acp_process.go`。
-  - 测试：并发 `Start` 必须等待同一次 initialize 成功或共同收到失败。
-- [x] P2-4 串行：扩充远程请求特殊地址拒绝范围。
-  - 修改：`internal/remotefetch/remotefetch.go`。
-  - 测试：拒绝 CGNAT、benchmark、文档网段和 IPv6 特殊用途地址，保留合法公网地址。
-- [x] P2-5 串行：统一回收飞书临时附件。
-  - 修改：`feishu/adapter_events.go`、`feishu/incoming.go` 或消息交付边界 helper。
-  - 测试：多附件、空文本、处理中断和下载中途失败均清理临时文件。
-- [x] P2-6 串行：序列化并原子写入微信 context token。
-  - 修改：`wechat/token_store.go`。
-  - 测试：并发用户更新后文件包含全部最新 token，失败不破坏旧文件。
-- [x] P2-7 串行：回收长期状态表。
-  - 修改：`messaging/handler.go`、`messaging/task_state.go`、`messaging/rate_limit.go`、`platform/registry.go`、`web/auth_throttle.go`、`feishu/adapter.go`。
-  - 测试：过期键和空闲执行锁会被删除；删除未使用的 `contextTokens`。
-- [x] P2-8 串行：限制敏感日志并为后台日志增加轮转。
-  - 修改：`api/send.go`、`messaging/audit.go`、`cmd/start_daemon.go`，必要时新增日志轮转 helper。
-  - 测试：API 不记录正文，审计摘要脱敏，日志超过阈值后轮转。
-- [x] P2-9 串行：拒绝非法 HTTP Agent `max_history`。
-  - 修改：`config/config.go`、`web/config_service.go`、`agent/http_agent.go`。
-  - 测试：负值配置校验失败，构造函数不会产生可崩溃状态。
-- [x] P2-10 串行：加强稳定版发布门禁与 CI 最小权限。
-  - 修改：`.github/workflows/release.yml`、`.github/workflows/ci.yml`。
-  - 验证：YAML 结构检查、文档契约和发布脚本测试。
-- [x] P3-1 串行：完整判断 Web 配置是否需要重启。
-  - 修改：`web/view.go`、`web/config_service.go`。
-  - 测试：Agent、API、审计、保存目录等非热更新字段变化返回 `restart_required=true`。
-- [x] P3-2 串行：同步 Claude 模型与推理强度文档。
-  - 修改：`README_CN.md`、`README.md`。
-  - 验证：文档契约检查。
-- [x] FINAL 串行：执行全量测试、race、vet、staticcheck、govulncheck、覆盖率、文档契约和 Review Gate。
-
-## 验证矩阵
-
-- 每项先运行定向测试确认 RED，再实现并确认 GREEN。
-- 逻辑改动完成后执行受影响包 `go test -race -count=1 -timeout 60s`。
-- 阶段完成后执行 `go test ./... -count=1 -timeout 120s`。
-- 终验执行 `go test -race ./...`、`go vet ./...`、`staticcheck ./...`、`govulncheck ./...`、覆盖率、文档校验与 `git diff --check`。
+当前不使用 subagent。IPC owner、ACP owner、active task 与 route binding 共享同一状态链，设计与核心实现必须串行；实施计划确认后仅把无写冲突的测试夹具或协议解析任务并行拆分。
 
 ## Review 小结
 
-终态：finished。
-
-Spec 符合度：通过。16 项审查问题按 P1、P2、P3 顺序完成，未引入计划外产品功能或兼容分支。
-
-安全检查：通过。loopback API 增加 Host/Origin 边界，远程请求拒绝特殊用途地址，日志不再记录消息正文，发布权限按 job 最小化，未新增硬编码凭证。
-
-测试与验证：通过。全仓单测、全仓 race、go vet、staticcheck、govulncheck、文档契约、差异检查和 v0.1.159 发布 dry-run 均为零失败。
-
-复杂度检查：通过本轮生产代码边界。生产 Go 文件均不超过 300 行，新增关键函数按职责拆分；17 个既有测试文件仍超过 300 行。
-
-Document-refresh: needed
-原因：Claude 已支持模型和推理强度切换，已同步中英文 README；发布工作流行为无需新增用户说明。
-
-剩余风险：loopback API 在无 token 模式仍信任本机进程；这是保留本地 CLI 易用性的已确认边界。总语句覆盖率为 69.9%，未达到核心模块 80% 目标。
-
-潜在技术债：17 个历史测试文件超过 300 行；`ilink`、`remotefetch`、`cmd`、`web` 和 `wechat` 包覆盖率仍偏低。
-
-并行执行说明：未使用 subagent。任务共享 Agent、Handler、配置和发布状态，按用户要求串行执行并在每项后独立提交。
-
-检索说明：未联网检索；本轮依据本地源码、测试和官方 Go 工具输出完成。
-
-结论：通过。
-
-## 进度记录
-
-- 2026-07-11：P1-1 完成；Codex thread 与标准 ACP session 使用原子所有权注册，重复 owner 不再覆盖，注销仅清理调用者持有的通道；`go test -race ./agent` 通过。
-- 2026-07-11：P1-2 完成；默认、命名和广播的非 Codex 执行统一登记 active task，Claude/HTTP 任务现已进入重启保护与状态统计；`go test -race ./messaging` 通过。
-- 2026-07-11：P1-3 完成；已知服务进程存在时，配置损坏、API 不可达、未授权或响应损坏均阻断普通重启，仅显式 `--force` 放行；`go test -race ./cmd` 通过。
-- 2026-07-11：P1-4 完成；无 token API 拒绝非 loopback Host 和跨源 Origin，显式 token 模式保持可用；`go test -race ./api` 通过。
-- 2026-07-11：P2-1 完成；ACP 状态保存串行覆盖快照和写入，使用唯一 0600 临时文件原子替换，避免旧快照和固定 `.tmp` 互相覆盖；`go test -race ./agent` 通过。
-- 2026-07-11：P2-2 完成；Companion pending call 原子绑定实际发送连接，旧连接替换或 read loop 退出只失败本代请求，不再清空新连接请求；`go test -race ./agent` 通过。
-- 2026-07-11：P2-3 完成；ACP 并发 Start 等待同一次 initialize/initialized 握手并共享成功或失败结果，子进程存活不再等同于协议就绪；`go test -race ./agent` 通过。
-- 2026-07-11：P2-4 完成；远程请求新增 CGNAT、benchmark、文档、保留、NAT64、discard-only 和 6to4 前缀拒绝表，合法公网 IPv4/IPv6 保持可用；调用方 race 测试通过。
-- 2026-07-11：P2-5 完成；飞书临时附件采用幂等所有权清理，覆盖正常分发、未消费、多附件、延迟镜像、重复丢弃、取消、部分下载和 SDK 文件失败路径；`go test -race ./feishu` 通过。
-- 2026-07-11：P2-6 完成；微信 context token 在保存锁内读取最新全集，使用同步后的 0600 临时文件原子替换，避免旧快照覆盖和截断文件；`go test -race ./wechat` 通过。
-- 2026-07-11：P2-7 完成；执行锁按引用计数删除，消息限流、拒绝通知、Web 鉴权和飞书身份缓存按窗口回收，并移除未使用的 Handler context token map；四个相关包 race 测试通过。
-- 2026-07-11：P2-8 完成；API 与审计日志只保留消息元数据，后台日志按 20 MiB 即时轮转并保留 3 份备份，轮转后重绑定 stdout/stderr；相关包 race 测试通过。
-- 2026-07-11：P2-9 完成；负数 HTTP Agent max_history 在配置加载、Web 保存和直接构造时统一返回错误，不再产生可切片越界的实例；相关包 race 测试通过。
-- 2026-07-11：P2-10 完成；稳定版 Release 增加单测、race 和 vet，工作流默认 contents:read，仅 release/publish job 获得写权限；YAML 与文档契约校验通过。
-- 2026-07-11：P3-1 完成；Web 通过剔除热重载字段后的结构化投影判断重启需求，Agent、API、审计、保存目录和平台运行参数变化不再漏报；`go test -race ./web` 通过。
-- 2026-07-11：P3-2 完成；中英文 README 同步 Codex/Claude 模型与推理强度按当前会话 Agent 切换、下个新会话生效的真实语义；文档契约通过。
-- 2026-07-11：FINAL 完成；最新提交上的全仓单测、全仓 race、go vet、staticcheck、govulncheck、文档契约和差异检查通过，v0.1.159 发布 dry-run 成功，总语句覆盖率 69.9%。
+待书面 Spec 审查后补充。
