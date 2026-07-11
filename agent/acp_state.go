@@ -56,6 +56,7 @@ func (a *ACPAgent) loadState() {
 	loadedSessions := 0
 	loadedThreads := 0
 	loadedHistory := 0
+	loadedBindings := 0
 
 	a.mu.Lock()
 	for conversationID, sessionID := range state.Sessions {
@@ -102,9 +103,12 @@ func (a *ACPAgent) loadState() {
 		loadedHistory++
 	}
 	a.mu.Unlock()
+	if a.codexOwners != nil {
+		loadedBindings = a.codexOwners.restoreBindings(state.LiveBindings)
+	}
 
-	if loadedSessions > 0 || loadedThreads > 0 || loadedHistory > 0 {
-		log.Printf("[acp] restored state (sessions=%d, threads=%d, history=%d, file=%s)", loadedSessions, loadedThreads, loadedHistory, a.stateFile)
+	if loadedSessions > 0 || loadedThreads > 0 || loadedHistory > 0 || loadedBindings > 0 {
+		log.Printf("[acp] restored state (sessions=%d, threads=%d, history=%d, bindings=%d, file=%s)", loadedSessions, loadedThreads, loadedHistory, loadedBindings, a.stateFile)
 	}
 }
 
@@ -139,6 +143,9 @@ func (a *ACPAgent) snapshotPersistedState() (acpPersistedState, string, bool) {
 		Threads:  make(map[string]string, len(a.threads)),
 		History:  make(map[string][]acpHistoryMessage, len(a.history)),
 		Updated:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if a.codexOwners != nil {
+		state.LiveBindings = a.codexOwners.persistedBindings()
 	}
 	for k, v := range a.sessions {
 		state.Sessions[k] = v

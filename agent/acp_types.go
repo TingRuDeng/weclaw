@@ -140,15 +140,16 @@ const (
 	protocolCodexAppServer = "codex_app_server"
 )
 
-const acpPersistedStateVersion = 1
+const acpPersistedStateVersion = 2
 
 type acpPersistedState struct {
-	Version  int                            `json:"version"`
-	Protocol string                         `json:"protocol"`
-	Sessions map[string]string              `json:"sessions,omitempty"`
-	Threads  map[string]string              `json:"threads,omitempty"`
-	History  map[string][]acpHistoryMessage `json:"history,omitempty"`
-	Updated  string                         `json:"updatedAt,omitempty"`
+	Version      int                            `json:"version"`
+	Protocol     string                         `json:"protocol"`
+	Sessions     map[string]string              `json:"sessions,omitempty"`
+	Threads      map[string]string              `json:"threads,omitempty"`
+	History      map[string][]acpHistoryMessage `json:"history,omitempty"`
+	LiveBindings map[string]CodexThreadBinding  `json:"liveBindings,omitempty"`
+	Updated      string                         `json:"updatedAt,omitempty"`
 }
 
 type acpHistoryMessage struct {

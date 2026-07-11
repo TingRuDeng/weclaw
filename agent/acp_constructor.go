@@ -19,8 +19,17 @@ func detectACPProtocol(command string, args []string) string {
 	return protocolLegacyACP
 }
 
+type acpAgentOptions struct {
+	desktopProbe codexDesktopOwnerProbe
+}
+
 // NewACPAgent creates a new ACP agent.
 func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
+	return newACPAgent(cfg, acpAgentOptions{})
+}
+
+// newACPAgent 允许包内测试注入 Desktop probe，不改变公开构造签名。
+func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	if cfg.Command == "" {
 		cfg.Command = "claude-agent-acp"
 	}
@@ -55,6 +64,19 @@ func NewACPAgent(cfg ACPAgentConfig) *ACPAgent {
 		pending:                     make(map[int64]chan *rpcResponse),
 		notifyCh:                    make(map[string]chan *sessionUpdate),
 		turnCh:                      make(map[string]chan *codexTurnEvent),
+		desktopProbe:                options.desktopProbe,
+	}
+	if protocol == protocolCodexAppServer {
+		probe := options.desktopProbe
+		if probe == nil {
+			a.desktopRuntime = newCodexDesktopRuntime()
+			probe = a.desktopRuntime
+		}
+		a.desktopProbe = probe
+		a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
+		if a.desktopRuntime != nil {
+			a.desktopRuntime.setOwnerRegistry(a.codexOwners)
+		}
 	}
 	a.loadState()
 	return a

@@ -454,7 +454,7 @@ git commit -m "接入 Codex Desktop 控制与交互请求"
 - Modify: `agent/acp_state.go`
 - Test: `agent/acp_recovery_test.go`
 
-- [ ] **Step 1: 写 owner 转移失败测试**
+- [x] **Step 1: 写 owner 转移失败测试**
 
 ```go
 func TestCodexDesktopSnapshotClaimsUnownedThread(t *testing.T) {}
@@ -465,7 +465,7 @@ func TestCodexRuntimeOwnerNoClientFoundConfirmsRelease(t *testing.T) {}
 func TestCodexRuntimeOwnerMissingSocketAndProcessConfirmsRelease(t *testing.T) {}
 ```
 
-- [ ] **Step 2: 实现 `BindCodexThread` 的只读探测顺序**
+- [x] **Step 2: 实现 `BindCodexThread` 的只读探测顺序**
 
 ```text
 缓存 snapshot 命中 -> desktop_live
@@ -479,15 +479,15 @@ load 请求 timeout/断线/业务 error -> unknown 或 desktop_disconnected
 
 探测期间不发送 turn/start，也不调用 ACP。第一阶段收到其他 client discovery 一律答 false，避免声称自己实现了 owner 广播处理器。
 
-- [ ] **Step 3: 注入 connector 而不改变 `NewACPAgent` 外部签名**
+- [x] **Step 3: 注入 connector 而不改变 `NewACPAgent` 外部签名**
 
 `ACPAgent` 新增包内 `desktopRuntime codexDesktopRuntime` 和 owner registry；仅 `protocolCodexAppServer` 构造。测试通过包内 constructor options 注入 fake，不依赖真实 Codex App。
 
-- [ ] **Step 4: 持久化不确定 live binding**
+- [x] **Step 4: 持久化不确定 live binding**
 
 `acpPersistedState` 版本升到 2，新增 conversation→thread live binding。落盘时 `desktop_live` 统一写成 `desktop_disconnected`；加载后必须重新 probe，不能直接恢复控制或 ACP thread。读取 v1 state 保持现有 sessions/threads/history 迁移。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 Run: `gofmt -w agent/codex_live_runtime.go agent/codex_desktop_owner*.go agent/acp_agent.go agent/acp_constructor.go agent/acp_types.go agent/acp_state.go agent/acp_recovery_test.go`
 

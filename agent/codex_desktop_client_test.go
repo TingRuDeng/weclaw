@@ -130,11 +130,14 @@ func TestCodexDesktopClientReconnectKeepsNewEpoch(t *testing.T) {
 
 func TestCodexDesktopClientDispatchesValidatedBroadcastVersion(t *testing.T) {
 	broadcasts := make(chan codexDesktopEnvelope, 1)
+	release := make(chan struct{})
+	defer close(release)
 	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		serveCodexDesktopTestInitialize(t, conn, "client-1")
 		writeCodexDesktopTestEnvelope(t, conn, codexDesktopEnvelope{
 			Type: codexDesktopEnvelopeBroadcast, Method: "thread-stream-state-changed", Version: 11, Params: json.RawMessage(`{"threadId":"thread-1"}`),
 		})
+		<-release
 	})
 	options := codexDesktopTestOptions(dial)
 	options.onBroadcast = func(envelope codexDesktopEnvelope) { broadcasts <- envelope }

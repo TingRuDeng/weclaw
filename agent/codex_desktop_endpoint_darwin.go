@@ -117,6 +117,16 @@ func codexDesktopProcessPresent() (bool, error) {
 	return codexDesktopProcessPresentFrom(unix.SysctlKinfoProcSlice)
 }
 
+// codexDesktopPresence 返回真实 socket/进程存在性，探测错误时保持保守占用。
+func codexDesktopPresence() (bool, bool) {
+	socketPresent, socketErr := codexDesktopPathPresent(codexDesktopEndpointPath(), os.Lstat)
+	processPresent, processErr := codexDesktopProcessPresent()
+	if socketErr != nil || processErr != nil {
+		return true, true
+	}
+	return socketPresent, processPresent
+}
+
 // codexDesktopProcessPresentFrom 只接受进程名精确为 Codex 的记录。
 func codexDesktopProcessPresentFrom(list func(string, ...int) ([]unix.KinfoProc, error)) (bool, error) {
 	processes, err := list("kern.proc.all")
