@@ -33,7 +33,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	case isFeishuIdentityCommand(trimmed):
 		sendText(h.handleFeishuIdentityCommand(msg, trimmed))
 	case trimmed == "/status":
-		sendText(h.buildStatus(msg.UserID))
+		sendText(h.buildStatusForRoute(msg.UserID, routeUserID, msg.Platform, msg.AccountID))
 	case trimmed == "/help":
 		if h.handleFeishuHelpCommand(ctx, msg, req.Reply, routeUserID) {
 			return true

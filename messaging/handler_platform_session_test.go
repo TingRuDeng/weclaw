@@ -153,6 +153,40 @@ func TestHandleMessageUsesPersistedSessionDefaultAgent(t *testing.T) {
 	}
 }
 
+func TestStatusUsesFeishuSessionSelectedAgent(t *testing.T) {
+	codex := &fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Model: "gpt-test"}}
+	claude := &fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "cli", Model: "claude-test"}}
+	h := NewHandler(nil, nil)
+	h.SetDefaultAgent("codex", codex)
+	h.agents["claude"] = claude
+	h.SetAgentMetas([]AgentMeta{{Name: "codex"}, {Name: "claude"}})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	sessionKey := "feishu:tenant:dm:chat-status:user-1"
+	message := platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "user-1",
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}
+
+	message.MessageID = "status-switch"
+	message.Text = "/cc"
+	h.HandleMessage(context.Background(), message, reply)
+	message.MessageID = "status-read"
+	message.Text = "/status"
+	h.HandleMessage(context.Background(), message, reply)
+
+	if len(reply.Texts) != 2 {
+		t.Fatalf("回复数量=%d，期望切换和状态各一条：%#v", len(reply.Texts), reply.Texts)
+	}
+	status := reply.Texts[1]
+	if !strings.Contains(status, "agent: claude (cli)") || !strings.Contains(status, "model: claude-test") {
+		t.Fatalf("会话状态未展示当前 Claude Agent：%q", status)
+	}
+	if strings.Contains(status, "agent: codex") {
+		t.Fatalf("会话状态不应回退到全局 Codex：%q", status)
+	}
+}
+
 func TestNamedAgentMessageDoesNotChangeSessionDefaultAgent(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "agent-sessions.json")
 	codex := &fakeAgent{reply: "codex reply", info: agent.AgentInfo{Name: "codex", Type: "test"}}

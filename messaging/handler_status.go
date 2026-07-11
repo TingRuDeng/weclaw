@@ -6,31 +6,37 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-// buildStatus returns a short status string showing the current default agent.
+// buildStatus 返回用户默认路由的运行状态，供无平台上下文的本地调用使用。
 func (h *Handler) buildStatus(userID string) string {
+	return h.buildStatusForRoute(userID, userID, "", "")
+}
+
+// buildStatusForRoute 展示当前消息会话实际选择的 Agent，而不是全局默认值。
+func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platformName platform.PlatformName, accountID string) string {
+	currentName := h.defaultAgentNameForRoute(routeUserID, platformName, accountID)
 	h.mu.RLock()
-	defaultName := h.defaultName
 	rateLimit := h.rateLimitPerMinute
 	auditOn := h.audit != nil
 	workspaceConfined := len(h.allowedWorkspaceRoots) > 0
 	var ag agent.Agent
-	if defaultName != "" {
-		ag = h.agents[defaultName]
+	if currentName != "" {
+		ag = h.agents[currentName]
 	}
 	h.mu.RUnlock()
 
 	lines := []string{"WeClaw 运行态"}
 
 	switch {
-	case defaultName == "":
+	case currentName == "":
 		lines = append(lines, "agent: none (echo mode)")
 	case ag == nil:
-		lines = append(lines, "agent: "+defaultName+" (not started)")
+		lines = append(lines, "agent: "+currentName+" (not started)")
 	default:
 		info := ag.Info()
-		lines = append(lines, "agent: "+defaultName+" ("+info.Type+")", "model: "+agentStatusModelValue(info.Model))
+		lines = append(lines, "agent: "+currentName+" ("+info.Type+")", "model: "+agentStatusModelValue(info.Model))
 	}
 
 	totalActive, userActive := h.activeTaskCounts(userID)
