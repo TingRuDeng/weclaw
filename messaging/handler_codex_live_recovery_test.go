@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,17 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
+
+func TestCodexDesktopLocalInteractionErrorIsNotTerminal(t *testing.T) {
+	result := classifyCodexWatchResult("", errors.New("approval response failed"), "desktop")
+	if result.Terminal {
+		t.Fatalf("result=%#v", result)
+	}
+	terminal := classifyCodexWatchResult("", agent.ErrCodexTurnTerminal, "desktop")
+	if !terminal.Terminal || !terminal.Failed {
+		t.Fatalf("terminal=%#v", terminal)
+	}
+}
 
 func TestCodexDesktopDisconnectDoesNotFinishTask(t *testing.T) {
 	h, runtime, cancel := disconnectedExternalRuntimeFixture(t)

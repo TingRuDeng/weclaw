@@ -212,25 +212,6 @@ func (h *Handler) restorePendingGuide(key string, task *activeAgentTask, pending
 	task.mu.Unlock()
 }
 
-func (h *Handler) externalCodexTurnForTask(key string, actor string) (string, string, bool, bool) {
-	h.activeTasksMu.Lock()
-	task := h.activeTasks[key]
-	if task == nil {
-		h.activeTasksMu.Unlock()
-		return "", "", false, false
-	}
-	task.mu.Lock()
-	defer h.activeTasksMu.Unlock()
-	defer task.mu.Unlock()
-	if task.owner != strings.TrimSpace(actor) {
-		return "", "", false, true
-	}
-	if !task.canControlExternalCodexLocked() {
-		return "", "", false, false
-	}
-	return task.codexThreadID, task.codexTurnID, true, false
-}
-
 // completeActiveTask 原子移除运行任务并提升暂存消息，避免收尾时丢失并发输入。
 func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool) {
 	pending, hasPending, claimed := h.claimAndCompleteActiveTask(key, task)
@@ -239,34 +220,46 @@ func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (pending
 
 // claimAndCompleteActiveTask 原子认领终态并移除任务，供多观察源竞争。
 func (h *Handler) claimAndCompleteActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool, bool) {
-	if task == nil {
+	if !h.claimActiveTaskTerminal(key, task) {
 		return pendingAgentTask{}, false, false
+	}
+	pending, hasPending := h.finishClaimedActiveTask(key, task)
+	return pending, hasPending, true
+}
+
+func (h *Handler) claimActiveTaskTerminal(key string, task *activeAgentTask) bool {
+	if task == nil {
+		return false
 	}
 	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
 	if h.activeTasks[key] != task {
-		h.activeTasksMu.Unlock()
-		return pendingAgentTask{}, false, false
+		return false
 	}
 	task.mu.Lock()
-	wasStopping := task.phase == codexTaskStopping
-	if !task.claimTerminalLocked() {
-		task.mu.Unlock()
-		h.activeTasksMu.Unlock()
-		return pendingAgentTask{}, false, false
+	defer task.mu.Unlock()
+	return task.claimTerminalLocked()
+}
+
+func (h *Handler) finishClaimedActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool) {
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	if task == nil || h.activeTasks[key] != task {
+		return pendingAgentTask{}, false
 	}
+	task.mu.Lock()
 	pending := pendingAgentTask{}
-	if !task.detached || wasStopping {
+	if task.phase == codexTaskTerminal {
 		pending = task.pending
 	}
 	task.pending = pendingAgentTask{}
 	delete(h.activeTasks, key)
 	task.mu.Unlock()
-	h.activeTasksMu.Unlock()
 	close(task.done)
 	if pending.message == "" || pending.run == nil {
-		return pendingAgentTask{}, false, true
+		return pendingAgentTask{}, false
 	}
-	return pending, true, true
+	return pending, true
 }
 
 func (t *activeAgentTask) shouldSendFinal() bool {

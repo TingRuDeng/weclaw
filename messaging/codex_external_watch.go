@@ -161,5 +161,8 @@ func classifyCodexWatchResult(text string, err error, source string) codexExtern
 	if source == "rollout" && !errors.Is(err, errCodexRolloutAborted) {
 		return codexExternalWatchResult{Err: err, Source: source}
 	}
-	return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: source}
+	if errors.Is(err, errCodexRolloutAborted) || errors.Is(err, agent.ErrCodexTurnTerminal) {
+		return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: source}
+	}
+	return codexExternalWatchResult{Err: err, Source: source}
 }

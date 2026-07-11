@@ -54,7 +54,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, conversationID 
 				continue
 			}
 			if evt.Kind == "error" {
-				return "", fmt.Errorf("turn error: %s", diagnostics.withError(evt.Text))
+				return "", fmt.Errorf("%w: %s", ErrCodexTurnTerminal, diagnostics.withError(evt.Text))
 			}
 			collectCodexTurnText(assembler, evt, onProgress, progressState, diagnostics)
 			if evt.Kind == "completed" {

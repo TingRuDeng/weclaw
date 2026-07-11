@@ -126,15 +126,14 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 	if !handled {
 		return "", false
 	}
-	pending, threadID, turnID, task, ok, denied := h.takeExternalCodexGuide(key, actor)
+	pending, _, _, task, ok, denied := h.takeExternalCodexGuide(key, actor)
 	if denied {
 		return "只有任务发起人可以发送引导消息。", true
 	}
 	if !ok {
 		return "", false
 	}
-	threadID, turnID = target.threadID, target.turnID
-	if err := runtimeAg.SteerCodexThread(ctx, key, threadID, turnID, pending.message); err != nil {
+	if err := runtimeAg.SteerCodexThread(ctx, key, target.threadID, target.turnID, pending.message); err != nil {
 		h.restorePendingGuide(key, task, pending)
 		return fmt.Sprintf("发送到当前 Codex App 任务失败: %v", err), true
 	}

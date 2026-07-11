@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-书面 Spec 与函数级实施计划均已确认，正在隔离分支按 TDD 和双重审查执行。
+实现与自动化验收已完成；等待真实飞书机器人和 Codex App 执行手工接管验收。
 
 ## 任务清单
 
@@ -29,7 +29,8 @@
 - [x] P4.10：重构 active task owner 与终态幂等。
 - [x] P4.11：Desktop 断线时接续 rollout。
 - [x] P4.12：按实时 owner 路由消息、引导和停止。
-- [ ] P5 验收：执行单测、race、静态检查、全仓验证和真实 Codex App 手工验收。
+- [x] P5.1 自动验收：受影响包与全仓单测、race、vet、staticcheck、文档校验、差异检查。
+- [ ] P5.2 手工验收：真实飞书机器人与 Codex App 的接管、控制、审批、断线和恢复场景。
 - [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 
 ## 并行说明
@@ -38,4 +39,4 @@
 
 ## Review 小结
 
-基线 `go test ./... -count=1 -timeout 120s` 已通过。计划共 13 个 TDD Task、64 个可勾选步骤；每个实现 Task 都必须依次通过 Spec 审查和代码质量审查。
+2026-07-11 自动验收通过：`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均为退出码 0。Review gate 未发现阻塞性代码问题；真实 App 手工验收尚未执行。

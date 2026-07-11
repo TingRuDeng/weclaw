@@ -59,7 +59,10 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 	}
 	opts.cancel()
 	taskOpts.route = opts.route
-	task, _ := h.activeTask(opts.route.conversationID)
+	task, exists := h.activeTask(opts.route.conversationID)
+	if !exists {
+		return false
+	}
 	if h.storePendingGuide(opts.route.conversationID, h.pendingCodexTask(taskOpts)) {
 		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, runningCodexGuidePromptForTask(task))
 		return true

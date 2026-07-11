@@ -177,8 +177,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		_ = finishProgress("", false)
 		return
 	}
-	pending, hasPending, claimed := h.claimAndCompleteActiveTask(runtime.opts.conversationID, runtime.task)
-	if !claimed {
+	if !h.claimActiveTaskTerminal(runtime.opts.conversationID, runtime.task) {
 		_ = finishProgress("", false)
 		return
 	}
@@ -192,6 +191,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	} else {
 		_ = finishProgress("", false)
 	}
+	pending, hasPending := h.finishClaimedActiveTask(runtime.opts.conversationID, runtime.task)
 	if hasPending {
 		pending.run()
 	}

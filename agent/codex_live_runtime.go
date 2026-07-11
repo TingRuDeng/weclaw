@@ -5,7 +5,10 @@ import (
 	"errors"
 )
 
-var ErrCodexDesktopOwnershipUnknown = errors.New("Codex Desktop thread 所有权未知")
+var (
+	ErrCodexDesktopOwnershipUnknown = errors.New("Codex Desktop thread 所有权未知")
+	ErrCodexTurnTerminal            = errors.New("Codex turn 已终止")
+)
 
 type CodexRuntimeOwner string
 
