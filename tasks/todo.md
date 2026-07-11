@@ -52,7 +52,7 @@
 - [x] P2-4 串行：扩充远程请求特殊地址拒绝范围。
   - 修改：`internal/remotefetch/remotefetch.go`。
   - 测试：拒绝 CGNAT、benchmark、文档网段和 IPv6 特殊用途地址，保留合法公网地址。
-- [ ] P2-5 串行：统一回收飞书临时附件。
+- [x] P2-5 串行：统一回收飞书临时附件。
   - 修改：`feishu/adapter_events.go`、`feishu/incoming.go` 或消息交付边界 helper。
   - 测试：多附件、空文本、处理中断和下载中途失败均清理临时文件。
 - [ ] P2-6 串行：序列化并原子写入微信 context token。
@@ -99,3 +99,4 @@
 - 2026-07-11：P2-2 完成；Companion pending call 原子绑定实际发送连接，旧连接替换或 read loop 退出只失败本代请求，不再清空新连接请求；`go test -race ./agent` 通过。
 - 2026-07-11：P2-3 完成；ACP 并发 Start 等待同一次 initialize/initialized 握手并共享成功或失败结果，子进程存活不再等同于协议就绪；`go test -race ./agent` 通过。
 - 2026-07-11：P2-4 完成；远程请求新增 CGNAT、benchmark、文档、保留、NAT64、discard-only 和 6to4 前缀拒绝表，合法公网 IPv4/IPv6 保持可用；调用方 race 测试通过。
+- 2026-07-11：P2-5 完成；飞书临时附件采用幂等所有权清理，覆盖正常分发、未消费、多附件、延迟镜像、重复丢弃、取消、部分下载和 SDK 文件失败路径；`go test -race ./feishu` 通过。

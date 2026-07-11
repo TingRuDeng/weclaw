@@ -57,6 +57,7 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 		return platform.Attachment{}, err
 	}
 	if err := resp.WriteFile(target); err != nil {
+		_ = os.Remove(target)
 		return platform.Attachment{}, err
 	}
 	info, err := os.Stat(target)
@@ -69,6 +70,7 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 		return platform.Attachment{}, fmt.Errorf("feishu resource exceeds %d MiB", maxFeishuResourceBytes/(1024*1024))
 	}
 	if err := os.Chmod(target, 0o600); err != nil {
+		_ = os.Remove(target)
 		return platform.Attachment{}, err
 	}
 	return platform.Attachment{
@@ -86,6 +88,7 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		return platform.IncomingMessage{}, false
 	}
 	if err := a.attachMessageResources(ctx, &incoming, resources); err != nil {
+		newTemporaryAttachmentCleanup(incoming.Attachments)()
 		return platform.IncomingMessage{}, false
 	}
 	if incomingMessageEmpty(incoming) {

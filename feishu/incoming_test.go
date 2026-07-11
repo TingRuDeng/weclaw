@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -178,6 +180,49 @@ func TestHandleMessageEventDoesNotDownloadUnauthorizedAttachment(t *testing.T) {
 	}
 	if len(downloader.seen) != 0 {
 		t.Fatalf("downloaded resources=%#v, want none before authorization", downloader.seen)
+	}
+}
+
+func TestHandleMessageEventCleansAllTemporaryAttachmentsAfterDispatch(t *testing.T) {
+	tempDir := t.TempDir()
+	first := filepath.Join(tempDir, "first.png")
+	second := filepath.Join(tempDir, "second.png")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
+			t.Fatalf("write temporary attachment: %v", err)
+		}
+	}
+	downloader := &fakeResourceDownloader{attachments: []platform.Attachment{
+		{Kind: platform.AttachmentImage, Path: first, Metadata: map[string]string{"temporary": "true"}},
+		{Kind: platform.AttachmentImage, Path: second, Metadata: map[string]string{"temporary": "true"}},
+	}}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = downloader
+	content := `{"zh_cn":{"content":[[{"tag":"text","text":"两张图"},{"tag":"img","image_key":"img_1"},{"tag":"img","image_key":"img_2"}]]}}`
+	event := newMessageEvent("p2p", "post", content)
+
+	dispatched := false
+	err := adapter.handleMessageEvent(context.Background(), event, func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		dispatched = true
+		if len(msg.Attachments) != 2 {
+			t.Fatalf("attachments=%d, want 2", len(msg.Attachments))
+		}
+		for _, attachment := range msg.Attachments {
+			if _, err := os.Stat(attachment.Path); err != nil {
+				t.Fatalf("attachment unavailable during dispatch: %v", err)
+			}
+		}
+	})
+	if err != nil {
+		t.Fatalf("handleMessageEvent error: %v", err)
+	}
+	if !dispatched {
+		t.Fatal("message was not dispatched")
+	}
+	for _, path := range []string{first, second} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("temporary attachment still exists: %s err=%v", path, err)
+		}
 	}
 }
 

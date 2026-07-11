@@ -37,18 +37,28 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		return nil
 	}
 	a.rememberUserIdentities(msg)
-	if a.allowIncomingMessage(msg) {
+	allowed := a.allowIncomingMessage(msg)
+	if allowed {
 		if err := a.attachMessageResources(ctx, &msg, resources); err != nil {
+			newTemporaryAttachmentCleanup(msg.Attachments)()
 			log.Printf("[feishu] ignored message with resource download failure: %v", err)
 			return nil
 		}
-		if incomingMessageEmpty(msg) {
-			log.Printf("[feishu] ignored non-dispatchable message event")
-			return nil
+	}
+	cleanup := newTemporaryAttachmentCleanup(msg.Attachments)
+	cleanupOwned := true
+	defer func() {
+		if cleanupOwned {
+			cleanup()
 		}
+	}()
+	if allowed && incomingMessageEmpty(msg) {
+		log.Printf("[feishu] ignored non-dispatchable message event")
+		return nil
 	}
 	scope := ExtractFeishuSessionScope(event)
-	if a.handleMirrorDedup(ctx, event, scope, msg, dispatch) {
+	if a.handleMirrorDedup(ctx, event, scope, msg, dispatch, cleanup) {
+		cleanupOwned = false
 		return nil
 	}
 	a.dispatchIncomingMessage(ctx, msg, dispatch)
@@ -56,7 +66,7 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 }
 
 // handleMirrorDedup 在 adapter 层消化飞书话题“同时发送到群”的群聊镜像。
-func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, msg platform.IncomingMessage, dispatch platform.DispatchFunc) bool {
+func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, msg platform.IncomingMessage, dispatch platform.DispatchFunc, cleanup func()) bool {
 	if a.deduper == nil {
 		return false
 	}
@@ -65,8 +75,9 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 		return false
 	}
 	return a.deduper.deferPossibleGroupMirror(event, scope, msg.Text, func() {
+		defer cleanup()
 		a.dispatchIncomingMessage(context.WithoutCancel(ctx), msg, dispatch)
-	})
+	}, cleanup)
 }
 
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
