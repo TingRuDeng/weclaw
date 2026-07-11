@@ -860,7 +860,7 @@ git commit -m "断线后继续观察 Codex 本地任务"
 - Modify: `messaging/task_external_control.go`
 - Modify: `messaging/codex_agent_task.go`
 
-- [ ] **Step 1: 写消息与控制失败测试**
+- [x] **Step 1: 写消息与控制失败测试**
 
 ```go
 func TestCodexDesktopIdleMessageStartsDesktopTurn(t *testing.T) {}
@@ -872,19 +872,19 @@ func TestCodexPendingMessageRechecksOwnerBeforeAutorun(t *testing.T) {}
 func TestUnauthorizedUserCannotGuideStopOrReadPendingAction(t *testing.T) {}
 ```
 
-- [ ] **Step 2: 普通消息只走统一 Chat**
+- [x] **Step 2: 普通消息只走统一 Chat**
 
 `startCodexAgentTask` 在登记自己的新任务前先执行只读 owner/state 解析：idle Desktop thread 的普通消息由 `ACPAgent.ChatWithProgress` owner 路由到 follower start；若发现 Desktop active 且 Handler 尚未登记 external task，先调用 `startExternalCodexTaskIfActive` 建立 watcher，再把当前消息保存为 pending。active 时只保留一条 pending，第二条拒绝；Messaging 不直接构造 IPC start payload。
 
-- [ ] **Step 3: 控制前读取实时 binding**
+- [x] **Step 3: 控制前读取实时 binding**
 
 `/guide` 和 `/stop` 不再相信 task 中缓存的 `externalControl`；先校验 actor，再读取 `CurrentCodexThreadBinding` 和 `ReadCodexThreadState`。只有 `desktop_live + matching active turn` 才允许 follower steer/interrupt。
 
-- [ ] **Step 4: 分离 stop 和 cancel 语义**
+- [x] **Step 4: 分离 stop 和 cancel 语义**
 
 `/stop` 成功后 phase 进入 stopping，保留 pending 并等待权威终态；`/cancel` 只撤回 pending。断线时 `/stop` 返回“实时连接已断开，无法确认停止”，不能回退到本地 context cancel 并伪装成功。
 
-- [ ] **Step 5: 验证并提交**
+- [x] **Step 5: 验证并提交**
 
 Run: `gofmt -w messaging/handler_codex_live_message_control_test.go messaging/task_commands.go messaging/task_external_control.go messaging/codex_agent_task.go`
 

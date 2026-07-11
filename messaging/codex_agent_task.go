@@ -26,6 +26,11 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		return
 	}
+	if h.preflightCodexTaskStart(codexTaskPreflightOptions{
+		taskOpts: opts, route: route, cancel: cancelTaskTimeout,
+	}) {
+		return
+	}
 	executionKey := route.conversationID
 	runtimeOwner, ownerRevision := codexTaskOwnerSnapshot(opts.agent, route.conversationID)
 	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{

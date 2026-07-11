@@ -28,7 +28,7 @@
 - [x] P4.9：让会话切换先绑定 owner。
 - [x] P4.10：重构 active task owner 与终态幂等。
 - [x] P4.11：Desktop 断线时接续 rollout。
-- [ ] P4.12：按实时 owner 路由消息、引导和停止。
+- [x] P4.12：按实时 owner 路由消息、引导和停止。
 - [ ] P5 验收：执行单测、race、静态检查、全仓验证和真实 Codex App 手工验收。
 - [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 

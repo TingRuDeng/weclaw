@@ -64,3 +64,25 @@ func (t *activeAgentTask) markCodexRunning(binding agent.CodexThreadBinding) {
 		t.ownerRevision = binding.OwnerRevision
 	}
 }
+
+func (t *activeAgentTask) refreshExternalCodexTurn(binding agent.CodexThreadBinding, turnID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.runtimeOwner = binding.Owner
+	t.ownerRevision = binding.OwnerRevision
+	t.codexTurnID = turnID
+}
+
+func (t *activeAgentTask) canControlExternalCodex() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.canControlExternalCodexLocked()
+}
+
+func (t *activeAgentTask) markStopping() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.phase != codexTaskTerminal {
+		t.phase = codexTaskStopping
+	}
+}

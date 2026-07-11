@@ -289,7 +289,7 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	if ag.interruptThreadID != "thread-active" || ag.interruptTurnID != "turn-active" {
 		t.Fatalf("interrupt=(%q,%q), want active thread turn", ag.interruptThreadID, ag.interruptTurnID)
 	}
-	if !containsText(calls.texts(), "已停止当前任务") {
-		t.Fatalf("/stop should confirm interrupt, messages=%#v", calls.texts())
+	if !containsText(calls.texts(), "已发送停止请求，等待任务终态") {
+		t.Fatalf("/stop should confirm interrupt and wait for terminal, messages=%#v", calls.texts())
 	}
 }

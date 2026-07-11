@@ -50,16 +50,13 @@ func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
 		return
 	}
-	external, control, denied := h.externalCodexControlState(key, actorUserID)
+	external, _, denied := h.externalCodexControlState(key, actorUserID)
 	if denied {
 		sendPlatformText(ctx, reply, actorUserID, "只有任务发起人可以发送引导消息。")
 		return
 	}
-	if external && !control {
-		sendPlatformText(ctx, reply, actorUserID, "当前 Codex App 本地任务不支持 /guide；暂存消息会在任务结束后自动执行。")
-		return
-	}
-	if text, handled := h.steerPendingGuideToExternalCodex(ctx, key, name, actorUserID); handled {
+	if external {
+		text, _ := h.steerPendingGuideToExternalCodex(ctx, key, name, actorUserID)
 		sendPlatformText(ctx, reply, actorUserID, text)
 		return
 	}
@@ -120,6 +117,15 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 	if !ok {
 		return "", false
 	}
+	target, handled, resolveErr := h.resolveExternalCodexControl(externalCodexControlRequest{
+		ctx: ctx, key: key, ag: ag, actor: actor, action: "guide",
+	})
+	if handled && resolveErr != nil {
+		return resolveErr.Error(), true
+	}
+	if !handled {
+		return "", false
+	}
 	pending, threadID, turnID, task, ok, denied := h.takeExternalCodexGuide(key, actor)
 	if denied {
 		return "只有任务发起人可以发送引导消息。", true
@@ -127,6 +133,7 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 	if !ok {
 		return "", false
 	}
+	threadID, turnID = target.threadID, target.turnID
 	if err := runtimeAg.SteerCodexThread(ctx, key, threadID, turnID, pending.message); err != nil {
 		h.restorePendingGuide(key, task, pending)
 		return fmt.Sprintf("发送到当前 Codex App 任务失败: %v", err), true
@@ -136,29 +143,24 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 }
 
 func (h *Handler) interruptExternalCodexTask(ctx context.Context, key string, ag agent.Agent, actor string) (string, bool) {
-	external, control, denied := h.externalCodexControlState(key, actor)
-	if denied {
-		return "只有任务发起人可以停止当前任务。", true
-	}
-	if external && !control {
-		return "当前任务由独立 Codex App 进程执行，暂不支持从飞书或微信停止。", true
-	}
 	runtimeAg, ok := ag.(agent.CodexThreadRuntimeAgent)
 	if !ok {
 		return "", false
 	}
-	threadID, turnID, ok, denied := h.externalCodexTurnForTask(key, actor)
-	if denied {
-		return "只有任务发起人可以停止当前任务。", true
-	}
-	if !ok {
+	target, handled, err := h.resolveExternalCodexControl(externalCodexControlRequest{
+		ctx: ctx, key: key, ag: ag, actor: actor, action: "停止",
+	})
+	if !handled {
 		return "", false
 	}
-	if err := runtimeAg.InterruptCodexThread(ctx, key, threadID, turnID); err != nil {
+	if err != nil {
+		return err.Error(), true
+	}
+	if err := runtimeAg.InterruptCodexThread(ctx, key, target.threadID, target.turnID); err != nil {
 		return fmt.Sprintf("停止当前 Codex App 任务失败: %v", err), true
 	}
-	h.cancelActiveTask(key, actor)
-	return "已停止当前任务。", true
+	target.task.markStopping()
+	return "已发送停止请求，等待任务终态。", true
 }
 
 // handleCancelCommand 已并入 /cancel(撤回暂存) 与 /stop(停止运行) 两个独立命令，保留占位以便检索历史语义。
