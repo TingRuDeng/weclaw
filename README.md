@@ -149,8 +149,8 @@ Send these as WeChat or Feishu messages:
 | `/claude` | Switch default agent to Claude |
 | `/cwd /path/to/project` | Switch workspace directory (regular users are confined to `allowed_workspace_roots`; admins are exempt) |
 | `/new` | Start a new conversation (clear session) |
-| `/model` / `/model <id>` | Show or switch model (Codex: runtime, applies next session) |
-| `/reasoning` / `/reasoning <effort>` | Show or switch reasoning effort (Codex) |
+| `/model` / `/model <id>` | Show or switch the current session agent model (Codex / Claude, applies to the next new session) |
+| `/reasoning` / `/reasoning <effort>` | Show or switch the current session agent reasoning effort (Codex / Claude, applies to the next new session) |
 | `/mode` / `/mode yolo` / `/mode default` | Show / current-user auto-approve / button-confirm Codex approvals |
 | `/ps` | List your running tasks |
 | `/stop` | Stop the current running task |

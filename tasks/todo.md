@@ -73,7 +73,7 @@
 - [x] P3-1 串行：完整判断 Web 配置是否需要重启。
   - 修改：`web/view.go`、`web/config_service.go`。
   - 测试：Agent、API、审计、保存目录等非热更新字段变化返回 `restart_required=true`。
-- [ ] P3-2 串行：同步 Claude 模型与推理强度文档。
+- [x] P3-2 串行：同步 Claude 模型与推理强度文档。
   - 修改：`README_CN.md`、`README.md`。
   - 验证：文档契约检查。
 - [ ] FINAL 串行：执行全量测试、race、vet、staticcheck、govulncheck、覆盖率、文档契约和 Review Gate。
@@ -106,3 +106,4 @@
 - 2026-07-11：P2-9 完成；负数 HTTP Agent max_history 在配置加载、Web 保存和直接构造时统一返回错误，不再产生可切片越界的实例；相关包 race 测试通过。
 - 2026-07-11：P2-10 完成；稳定版 Release 增加单测、race 和 vet，工作流默认 contents:read，仅 release/publish job 获得写权限；YAML 与文档契约校验通过。
 - 2026-07-11：P3-1 完成；Web 通过剔除热重载字段后的结构化投影判断重启需求，Agent、API、审计、保存目录和平台运行参数变化不再漏报；`go test -race ./web` 通过。
+- 2026-07-11：P3-2 完成；中英文 README 同步 Codex/Claude 模型与推理强度按当前会话 Agent 切换、下个新会话生效的真实语义；文档契约通过。

@@ -128,8 +128,8 @@ weclaw companion --agent opencode --cwd /path/to/project
 | `/cc help`              | 查看 Claude 会话命令     |
 | `/cwd /path/to/project` | 切换工作目录（普通用户限制在 `allowed_workspace_roots` 白名单内；管理员不受此限制） |
 | `/new`                  | 开始新对话（清除会话）   |
-| `/model` / `/model <id>` | 查看 / 切换模型（Codex：运行时切换，下个新会话生效） |
-| `/reasoning` / `/reasoning <强度>` | 查看 / 切换推理强度（Codex） |
+| `/model` / `/model <id>` | 查看 / 切换当前会话 Agent 的模型（Codex / Claude，下个新会话生效） |
+| `/reasoning` / `/reasoning <强度>` | 查看 / 切换当前会话 Agent 的推理强度（Codex / Claude，下个新会话生效） |
 | `/mode` / `/mode yolo` / `/mode default` | 查看 / 本用户自动同意 / 按钮确认 Codex 审批请求 |
 | `/ps`                   | 查看自己运行中的任务     |
 | `/stop`                 | 停止当前运行的任务       |
