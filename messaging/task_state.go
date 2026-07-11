@@ -12,7 +12,7 @@ type activeAgentTask struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	detached        bool
-	pendingMessage  string
+	pending         pendingAgentTask
 	owner           string
 	agentName       string
 	preview         string
@@ -25,10 +25,15 @@ type activeAgentTask struct {
 	codexTurnID     string
 }
 
+type pendingAgentTask struct {
+	message string
+	run     func()
+}
+
 func (t *activeAgentTask) pendingGuide() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.pendingMessage
+	return t.pending.message
 }
 
 func (h *Handler) lockAgentExecution(key string) func() {
@@ -105,7 +110,7 @@ func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
 	}
 }
 
-func (h *Handler) storePendingGuide(key string, message string) bool {
+func (h *Handler) storePendingGuide(key string, pending pendingAgentTask) bool {
 	h.activeTasksMu.Lock()
 	task := h.activeTasks[key]
 	if task == nil {
@@ -115,10 +120,10 @@ func (h *Handler) storePendingGuide(key string, message string) bool {
 	task.mu.Lock()
 	defer h.activeTasksMu.Unlock()
 	defer task.mu.Unlock()
-	if task.pendingMessage != "" {
+	if task.pending.message != "" {
 		return false
 	}
-	task.pendingMessage = message
+	task.pending = pending
 	return true
 }
 
@@ -136,13 +141,13 @@ func (h *Handler) detachPendingGuide(key string, actor string) (string, *activeA
 		h.activeTasksMu.Unlock()
 		return "", task, false, true
 	}
-	message := task.pendingMessage
+	message := task.pending.message
 	if message == "" {
 		task.mu.Unlock()
 		h.activeTasksMu.Unlock()
 		return "", nil, false, false
 	}
-	task.pendingMessage = ""
+	task.pending = pendingAgentTask{}
 	task.detached = true
 	cancel := task.cancel
 	task.mu.Unlock()
@@ -164,36 +169,36 @@ func (h *Handler) clearPendingGuide(key string, actor string) (bool, bool) {
 	if task.owner != strings.TrimSpace(actor) {
 		return false, true
 	}
-	if task.pendingMessage == "" {
+	if task.pending.message == "" {
 		return false, false
 	}
-	task.pendingMessage = ""
+	task.pending = pendingAgentTask{}
 	return true, false
 }
 
-func (h *Handler) takeExternalCodexGuide(key string, actor string) (string, string, string, *activeAgentTask, bool, bool) {
+func (h *Handler) takeExternalCodexGuide(key string, actor string) (pendingAgentTask, string, string, *activeAgentTask, bool, bool) {
 	h.activeTasksMu.Lock()
 	task := h.activeTasks[key]
 	if task == nil {
 		h.activeTasksMu.Unlock()
-		return "", "", "", nil, false, false
+		return pendingAgentTask{}, "", "", nil, false, false
 	}
 	task.mu.Lock()
 	defer h.activeTasksMu.Unlock()
 	defer task.mu.Unlock()
 	if task.owner != strings.TrimSpace(actor) {
-		return "", "", "", task, false, true
+		return pendingAgentTask{}, "", "", task, false, true
 	}
-	if !task.externalCodex || !task.externalControl || task.pendingMessage == "" || task.codexThreadID == "" || task.codexTurnID == "" {
-		return "", "", "", task, false, false
+	if !task.externalCodex || !task.externalControl || task.pending.message == "" || task.codexThreadID == "" || task.codexTurnID == "" {
+		return pendingAgentTask{}, "", "", task, false, false
 	}
-	message := task.pendingMessage
-	task.pendingMessage = ""
-	return message, task.codexThreadID, task.codexTurnID, task, true, false
+	pending := task.pending
+	task.pending = pendingAgentTask{}
+	return pending, task.codexThreadID, task.codexTurnID, task, true, false
 }
 
-func (h *Handler) restorePendingGuide(key string, task *activeAgentTask, message string) {
-	if task == nil || strings.TrimSpace(message) == "" {
+func (h *Handler) restorePendingGuide(key string, task *activeAgentTask, pending pendingAgentTask) {
+	if task == nil || strings.TrimSpace(pending.message) == "" {
 		return
 	}
 	h.activeTasksMu.Lock()
@@ -203,8 +208,8 @@ func (h *Handler) restorePendingGuide(key string, task *activeAgentTask, message
 		return
 	}
 	task.mu.Lock()
-	if task.pendingMessage == "" {
-		task.pendingMessage = message
+	if task.pending.message == "" {
+		task.pending = pending
 	}
 	task.mu.Unlock()
 }
@@ -229,31 +234,29 @@ func (h *Handler) externalCodexTurnForTask(key string, actor string) (string, st
 }
 
 // completeActiveTask 原子移除运行任务并提升暂存消息，避免收尾时丢失并发输入。
-func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (string, bool) {
+func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool) {
 	if task == nil {
-		return "", false
+		return pendingAgentTask{}, false
 	}
 	h.activeTasksMu.Lock()
 	if h.activeTasks[key] != task {
 		h.activeTasksMu.Unlock()
-		return "", false
+		return pendingAgentTask{}, false
 	}
 	task.mu.Lock()
-	message := ""
+	pending := pendingAgentTask{}
 	if !task.detached {
-		message = task.pendingMessage
+		pending = task.pending
 	}
-	task.pendingMessage = ""
-	owner := task.owner
+	task.pending = pendingAgentTask{}
 	delete(h.activeTasks, key)
 	task.mu.Unlock()
 	h.activeTasksMu.Unlock()
 	close(task.done)
-	if message == "" {
-		return "", false
+	if pending.message == "" || pending.run == nil {
+		return pendingAgentTask{}, false
 	}
-	h.storePendingCodexConfirmation(key, message, owner)
-	return message, true
+	return pending, true
 }
 
 func (t *activeAgentTask) shouldSendFinal() bool {

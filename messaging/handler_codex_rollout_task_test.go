@@ -28,10 +28,11 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 	h.SetCodexLocalSessionDir(codexDir)
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.defaultName = "codex"
-	h.agents["codex"] = &fakeCodexThreadAgent{
+	ag := &fakeCodexThreadAgent{
 		fakeAgent:   fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
 		threadState: agent.CodexThreadState{ThreadID: threadID},
 	}
+	h.agents["codex"] = ag
 	progressOff := config.DefaultProgressConfig()
 	progressOff.Mode = progressModeOff
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
@@ -66,8 +67,8 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
 	}, reply)
 	task, _ := h.activeTask(conversationID)
-	if task.pendingGuide() != "" || !containsText(reply.Texts, "当前任务需在 Codex App 中操作") {
-		t.Fatalf("pending=%q texts=%#v, read-only task must reject remote guide", task.pendingGuide(), reply.Texts)
+	if task.pendingGuide() != "补充要求" || !containsText(reply.Texts, "自动执行此消息") {
+		t.Fatalf("pending=%q texts=%#v, read-only task must queue the next message", task.pendingGuide(), reply.Texts)
 	}
 	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/stop",
@@ -80,11 +81,13 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 	appendCodexRolloutRecord(t, rolloutPath, rolloutProgressRecord("正在整理最终结果"))
 	appendCodexRolloutRecord(t, rolloutPath, rolloutTaskCompleteRecord(turnID, "本地任务最终结果"))
 	waitUntil(t, func() bool {
-		_, ok := h.activeTask(conversationID)
-		return !ok
+		return ag.lastChatMessage() == "补充要求"
 	})
 	if !containsText(reply.Texts, "本地任务最终结果") {
 		t.Fatalf("texts=%#v, rollout task 完成后应返回最终结果", reply.Texts)
+	}
+	if containsText(reply.Texts, "回复“确认”执行该消息") {
+		t.Fatalf("texts=%#v, rollout task 自动续跑不应要求确认", reply.Texts)
 	}
 }
 

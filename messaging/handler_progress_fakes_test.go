@@ -59,7 +59,7 @@ func (f *blockingProgressAgent) ChatWithProgress(ctx context.Context, _ string, 
 		return "", ctx.Err()
 	}
 	f.markFinished()
-	return fmt.Sprintf("第%d条结果", callIndex), nil
+	return fmt.Sprintf("第%d条结果", callIndex), f.err
 }
 
 func (f *blockingProgressAgent) markStarted() int {

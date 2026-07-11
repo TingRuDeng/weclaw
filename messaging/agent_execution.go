@@ -153,6 +153,7 @@ type broadcastAgentsRequest struct {
 	replyWriter  platform.Replier
 	names        []string
 	message      string
+	clientID     string
 }
 
 // broadcastToAgents sends the message to multiple agents in parallel.
@@ -192,7 +193,12 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 					message:   req.message,
 				})
 				if !started {
-					if h.storePendingGuide(executionKey, req.message) {
+					pending := h.pendingCodexTask(codexAgentTaskOptions{
+						ctx: req.ctx, userID: req.userID, routeUserID: req.routeUserID,
+						reply: replyWriter, agentName: n, message: req.message, clientID: req.clientID,
+						replyPrefix: "[" + n + "] ", agent: ag, progressCfg: progressCfg, route: codexRoute,
+					})
+					if h.storePendingGuide(executionKey, pending) {
 						ch <- result{name: n, reply: runningCodexGuidePromptForTask(task)}
 					} else {
 						ch <- result{name: n, reply: "当前任务已有一条暂存消息，请先处理后再发送。"}
@@ -202,9 +208,9 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 				activeTask = task
 				agentCtx = taskCtx
 				defer func() {
-					pendingMessage, ok := h.completeActiveTask(executionKey, task)
+					pending, ok := h.completeActiveTask(executionKey, task)
 					if ok {
-						sendPlatformText(req.ctx, replyWriter, req.userID, runnablePendingCodexPrompt(pendingMessage))
+						pending.run()
 					}
 				}()
 			} else {

@@ -233,17 +233,6 @@ func TestRestartIgnoresDetachedTask(t *testing.T) {
 	h.finishActiveTask("task-1", task)
 }
 
-func TestRestartBlocksPendingCodexConfirmation(t *testing.T) {
-	h := NewHandler(nil, nil)
-	h.storePendingCodexConfirmation("task-1", "继续执行", "ou_admin")
-
-	text, blocked := h.restartBlockedByActiveTasks("restart", nil)
-
-	if !blocked || !strings.Contains(text, "待确认消息") {
-		t.Fatalf("blocked=%v text=%q, want pending confirmation notice", blocked, text)
-	}
-}
-
 func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 	useAdminRestartNotificationPath(t)
 	h := NewHandler(nil, nil)

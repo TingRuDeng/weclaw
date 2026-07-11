@@ -49,10 +49,10 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 func TestStorePendingGuideDoesNotOverwriteExistingMessage(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, started := h.beginActiveTask(context.Background(), "shared", activeTaskMeta{owner: "user-1"})
-	if !started || !h.storePendingGuide("shared", "第二条") {
+	if !started || !h.storePendingGuide("shared", pendingAgentTask{message: "第二条", run: func() {}}) {
 		t.Fatal("首次暂存消息失败")
 	}
-	if h.storePendingGuide("shared", "第三条") {
+	if h.storePendingGuide("shared", pendingAgentTask{message: "第三条", run: func() {}}) {
 		t.Fatal("已有暂存消息时不应覆盖")
 	}
 	if got := task.pendingGuide(); got != "第二条" {
@@ -245,7 +245,7 @@ func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
 	}
 }
 
-func TestPendingGuideBecomesRunnableAfterTaskFinishes(t *testing.T) {
+func TestPendingGuideRunsAutomaticallyAfterTaskFinishes(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := newBlockingProgressAgent()
 	h.defaultName = "codex"
@@ -265,46 +265,15 @@ func TestPendingGuideBecomesRunnableAfterTaskFinishes(t *testing.T) {
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
-	waitForText(t, calls, "回复“确认”执行该消息")
-
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "确认"))
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第2条结果")
 
 	started, _ := ag.stats()
 	if started != 2 {
-		t.Fatalf("确认应执行暂存消息，started=%d", started)
+		t.Fatalf("上一任务完成后应自动执行暂存消息，started=%d", started)
 	}
-}
-
-func TestCancelWithdrawsRunnablePendingGuide(t *testing.T) {
-	h := NewHandler(nil, nil)
-	ag := newBlockingProgressAgent()
-	h.defaultName = "codex"
-	h.agents["codex"] = ag
-	cfg := config.DefaultProgressConfig()
-	cfg.Mode = progressModeOff
-	h.SetProgressConfig(cfg)
-
-	client, calls, closeServer := newRecordingILinkClient(t)
-	defer closeServer()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
-	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
-
-	ag.release <- struct{}{}
-	waitForText(t, calls, "回复“确认”执行该消息")
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/cancel"))
-	waitForText(t, calls, "已撤回该消息。")
-
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(4, "继续"))
-
-	started, _ := ag.stats()
-	if started != 1 {
-		t.Fatalf("撤回后不应执行暂存消息，started=%d", started)
+	if containsText(calls.texts(), "回复“确认”执行该消息") {
+		t.Fatalf("自动续跑不应再要求确认，messages=%#v", calls.texts())
 	}
 }

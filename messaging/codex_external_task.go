@@ -175,8 +175,8 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 
 // finishExternalCodexTask 清理任务镜像，并唤醒此前暂存的可执行消息。
 func (h *Handler) finishExternalCodexTask(runtime externalCodexTaskRuntime) {
-	message, ok := h.completeActiveTask(runtime.opts.conversationID, runtime.task)
+	pending, ok := h.completeActiveTask(runtime.opts.conversationID, runtime.task)
 	if ok {
-		sendPlatformText(runtime.opts.ctx, runtime.opts.reply, runtime.opts.actorUserID, runnablePendingCodexPrompt(message))
+		pending.run()
 	}
 }

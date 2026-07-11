@@ -20,6 +20,7 @@ type codexAgentTaskOptions struct {
 	replyPrefix string
 	agent       agent.Agent
 	progressCfg config.ProgressConfig
+	route       codexConversationRoute
 }
 
 // codexAgentTaskRuntime 保存已经登记 active task 后的运行时资源。

@@ -84,8 +84,6 @@ type Handler struct {
 	taskLocks               map[string]*sync.Mutex
 	activeTasksMu           sync.Mutex
 	activeTasks             map[string]*activeAgentTask
-	pendingCodexConfirmsMu  sync.Mutex
-	pendingCodexConfirms    map[string]pendingCodexConfirmation
 	pendingApprovalsMu      sync.Mutex
 	pendingApprovals        map[string]*pendingApproval
 	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
@@ -218,10 +216,6 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		return
 	}
 
-	if h.handlePendingCodexConfirmation(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, trimmed, replyWriter, clientID) {
-		return
-	}
-
 	if !h.allowAgentInvocation(routeUserID) {
 		log.Printf("[handler] rate limit exceeded for %s", routeUserID)
 		sendText("请求过于频繁，请稍后再试。")
@@ -273,5 +267,6 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		replyWriter:  replyWriter,
 		names:        knownNames,
 		message:      message,
+		clientID:     clientID,
 	})
 }

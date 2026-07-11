@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
@@ -216,7 +217,7 @@ func TestFeishuGroupTaskRejectsStopAndCancelFromOtherUser(t *testing.T) {
 	task, taskCtx, started := h.beginActiveTask(context.Background(), key, activeTaskMeta{
 		owner: "ou_owner", agentName: "codex", message: "第一条",
 	})
-	if !started || !h.storePendingGuide(key, "第二条") {
+	if !started || !h.storePendingGuide(key, pendingAgentTask{message: "第二条", run: func() {}}) {
 		t.Fatal("准备运行中任务失败")
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
@@ -244,69 +245,37 @@ func TestFeishuGroupTaskRejectsStopAndCancelFromOtherUser(t *testing.T) {
 	h.finishActiveTask(key, task)
 }
 
-func TestFeishuConfirmPendingUsesSessionMetadata(t *testing.T) {
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			reply: "ok",
-			info:  agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
-	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
-		if name == "codex" {
-			return ag
+func TestFeishuPendingMessageRunsAutomaticallyInOriginalSession(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	h.SetDefaultAgent("codex", ag)
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	sessionKey := "feishu:tenant_1:group:oc_1"
+	message := func(text string) platform.IncomingMessage {
+		return platform.IncomingMessage{
+			Platform: platform.PlatformFeishu, UserID: "ou_user", Text: text,
+			Metadata: map[string]string{"feishu_session_key": sessionKey},
 		}
-		return nil
-	}, nil)
-	h.SetDefaultAgent("codex", ag)
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	sessionKey := "feishu:tenant_1:group:oc_1"
-	workspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspace})
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("ou_user", "codex"), workspace)
-	executionKey := h.agentExecutionKeyForRoute("ou_user", sessionKey, "codex", ag)
-	h.storePendingCodexConfirmation(executionKey, "继续执行", "ou_user")
-
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformFeishu,
-		UserID:   "ou_user",
-		Text:     "确认",
-		Metadata: map[string]string{"feishu_session_key": sessionKey},
-	}, reply)
-
-	waitUntil(t, func() bool { return ag.lastChatMessage() == "继续执行" })
-	if got := ag.lastChatMessage(); got != "继续执行" {
-		t.Fatalf("chat message=%q, want pending message from route session", got)
 	}
-	if got := ag.lastChatConversationID(); !strings.Contains(got, sessionKey) {
-		t.Fatalf("conversation=%q, want route session key %q", got, sessionKey)
-	}
-}
 
-func TestFeishuGroupPendingConfirmationRejectsOtherUser(t *testing.T) {
-	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
-		reply: "ok",
-		info:  agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-	}}
-	h := NewHandler(func(ctx context.Context, name string) agent.Agent { return ag }, nil)
-	h.SetDefaultAgent("codex", ag)
-	sessionKey := "feishu:tenant_1:group:oc_1"
-	executionKey := h.agentExecutionKeyForRoute("ou_owner", sessionKey, "codex", ag)
-	h.storePendingCodexConfirmation(executionKey, "继续执行", "ou_owner")
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), message("第一条"), reply)
+	waitForAgentEnter(t, ag)
+	h.HandleMessage(context.Background(), message("第二条"), reply)
+	ag.release <- struct{}{}
+	waitForAgentEnter(t, ag)
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformFeishu,
-		UserID:   "ou_other",
-		Text:     "确认",
-		Metadata: map[string]string{"feishu_session_key": sessionKey},
-	}, reply)
-
-	if got := ag.lastChatMessage(); got != "" {
-		t.Fatalf("other user executed pending message=%q", got)
+	key := h.agentExecutionKeyForRoute("ou_user", sessionKey, "codex", ag)
+	if _, ok := h.activeTask(key); !ok {
+		t.Fatal("自动续跑任务应保持在原飞书 session")
 	}
-	if !containsText(reply.Texts, "只有消息暂存人可以") {
-		t.Fatalf("reply texts=%#v, want pending owner rejection", reply.Texts)
-	}
+	ag.release <- struct{}{}
+	waitUntil(t, func() bool {
+		_, ok := h.activeTask(key)
+		return !ok
+	})
 }
 
 func TestPlatformMessageSessionKeyIgnoresWechatMetadata(t *testing.T) {

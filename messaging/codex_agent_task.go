@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -14,7 +15,10 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	}
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = agent.ContextWithApprovalHandler(agentCtx, h.approvalHandlerForUser(opts.userID, opts.routeUserID, opts.reply))
-	route := h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
+	route := opts.route
+	if route.conversationID == "" {
+		route = h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
+	}
 	if !h.workspaceAllowedForAgentContext(opts.ctx, opts.agentName, route.workspaceRoot) {
 		sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前工作空间不在允许范围，请发送 /cx ls 重新选择。")
 		cancelTaskTimeout()
@@ -28,11 +32,8 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	})
 	if !started {
 		cancelTaskTimeout()
-		if !task.acceptsGuide() {
-			sendPlatformText(opts.ctx, opts.reply, opts.userID, runningReadOnlyCodexAppPrompt())
-			return
-		}
-		if h.storePendingGuide(executionKey, opts.message) {
+		opts.route = route
+		if h.storePendingGuide(executionKey, h.pendingCodexTask(opts)) {
 			sendPlatformText(opts.ctx, opts.reply, opts.userID, runningCodexGuidePromptForTask(task))
 		} else {
 			sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")
@@ -48,6 +49,15 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		route:             route,
 		task:              task,
 	})
+}
+
+// pendingCodexTask 冻结第二条消息的 route 与回复上下文，供上一任务结束后续跑。
+func (h *Handler) pendingCodexTask(opts codexAgentTaskOptions) pendingAgentTask {
+	opts.ctx = context.WithoutCancel(opts.ctx)
+	return pendingAgentTask{
+		message: opts.message,
+		run:     func() { h.startCodexAgentTask(opts) },
+	}
 }
 
 // runCodexAgentTask 在后台完成 Codex 调用和最终回复发送。
@@ -85,13 +95,12 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	}
 }
 
-// finishCodexAgentTask 收尾后台任务，并把未处理的暂存引导转成确认消息。
+// finishCodexAgentTask 收尾后台任务，并自动执行未被消费的暂存消息。
 func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
 	runtime.cancelTaskTimeout()
-	message, ok := h.completeActiveTask(runtime.executionKey, runtime.task)
+	pending, ok := h.completeActiveTask(runtime.executionKey, runtime.task)
 	if !ok {
 		return
 	}
-	opts := runtime.opts
-	sendPlatformText(opts.ctx, opts.reply, opts.userID, runnablePendingCodexPrompt(message))
+	pending.run()
 }

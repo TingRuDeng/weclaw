@@ -159,6 +159,12 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 	waitForText(t, calls, "[claude] claude ok")
 
 	codex.release <- struct{}{}
+	waitForAgentEnter(t, codex)
+	codex.release <- struct{}{}
+	waitForText(t, calls, "第2条结果")
+	if containsText(calls.texts(), "回复“确认”执行该消息") {
+		t.Fatalf("广播暂存消息自动续跑时不应要求确认，messages=%#v", calls.texts())
+	}
 }
 
 func TestStatusCommandDoesNotWaitForOnDemandAgentStart(t *testing.T) {

@@ -170,7 +170,7 @@ weclaw companion --agent opencode --cwd /path/to/project
 | ⚙️ 控制 | 更新 WeClaw | `/update` |
 | ⚙️ 控制 | 重启 WeClaw | `/restart` |
 
-普通计划确认和暂存消息确认都直接回复“确认”。`/cancel` 只撤回暂存消息，不建议放入固定菜单；停止运行中任务请用 `/stop`。
+普通计划确认仍直接回复“确认”。Codex 运行中收到的第二条普通消息会暂存，未选择 `/guide`、`/cancel` 或 `/stop` 时会在上一任务结束后自动执行；`/cancel` 只撤回暂存消息，停止运行中任务请用 `/stop`。
 
 ### Codex 主路径
 

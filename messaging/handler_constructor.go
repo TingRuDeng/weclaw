@@ -26,7 +26,6 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		feishuIdentities:        newFeishuIdentityStore(),
 		taskLocks:               make(map[string]*sync.Mutex),
 		activeTasks:             make(map[string]*activeAgentTask),
-		pendingCodexConfirms:    make(map[string]pendingCodexConfirmation),
 		pendingApprovals:        make(map[string]*pendingApproval),
 		codexLocalSessionDir:    defaultCodexLocalSessionDir(),
 		claudeSessions:          newClaudeSessionStore(),

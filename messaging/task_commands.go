@@ -11,7 +11,7 @@ import (
 )
 
 func runningCodexGuidePrompt() string {
-	return "Codex 正在处理上一条任务。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。\n不回复时，上一条任务完成后会转为待执行消息。"
+	return "Codex 正在处理上一条任务，此消息已暂存。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。\n不操作时，上一条任务结束后会自动执行此消息。"
 }
 
 func runningCodexGuidePromptForTask(task *activeAgentTask) string {
@@ -28,16 +28,11 @@ func runningCodexGuidePromptForTask(task *activeAgentTask) string {
 	if !control {
 		return runningReadOnlyCodexAppPrompt()
 	}
-	return "Codex App 任务正在进行。\n\n回复 /guide 将此消息发送到当前 Codex App 任务。\n回复 /cancel 撤回该消息。\n不回复时，当前任务完成后会转为待执行消息。"
+	return "Codex App 任务正在进行，此消息已暂存。\n\n回复 /guide 将此消息发送到当前 Codex App 任务。\n回复 /cancel 撤回该消息。\n不操作时，当前任务结束后会自动执行此消息。"
 }
 
 func runningReadOnlyCodexAppPrompt() string {
-	return "Codex App 本地任务正在进行。\n\n任务完成后结果会自动返回飞书；当前任务需在 Codex App 中操作。"
-}
-
-// runnablePendingCodexPrompt 提醒用户确认执行已从引导态转出的暂存消息。
-func runnablePendingCodexPrompt(message string) string {
-	return "上一条 Codex 任务已完成。\n\n暂存消息：\n" + previewPendingCodexMessage(message) + "\n\n回复“确认”执行该消息。\n回复 /cancel 撤回该消息。"
+	return "Codex App 本地任务正在进行，此消息已暂存。\n\n当前任务不支持 /guide；回复 /cancel 可撤回此消息。\n不操作时，本地任务结束后会自动执行此消息。"
 }
 
 // previewPendingCodexMessage 限制微信提示里的消息预览长度，避免长输入刷屏。
@@ -49,36 +44,19 @@ func previewPendingCodexMessage(message string) string {
 	return string(runes[:pendingCodexPreviewRunes]) + "..."
 }
 
-// handlePendingCodexConfirmation 执行用户确认后的待执行 Codex 消息。
-func (h *Handler) handlePendingCodexConfirmation(ctx context.Context, platformName platform.PlatformName, accountID string, actorUserID string, routeUserID string, text string, reply platform.Replier, clientID string) bool {
-	if !isPendingCodexConfirmText(text) || !h.hasPendingCodexConfirmation() {
-		return false
-	}
-	name, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
-	if err != nil {
-		sendPlatformText(ctx, reply, actorUserID, err.Error())
-		return true
-	}
-	message, ok, denied := h.takePendingCodexConfirmation(key, actorUserID)
-	if denied {
-		sendPlatformText(ctx, reply, actorUserID, "只有消息暂存人可以确认执行。")
-		return true
-	}
-	if !ok {
-		return false
-	}
-	h.sendToNamedAgentForAccount(ctx, platformName, accountID, actorUserID, routeUserID, reply, name, message, clientID)
-	return true
-}
-
-func isPendingCodexConfirmText(text string) bool {
-	return strings.TrimSpace(text) == "确认"
-}
-
 func (h *Handler) handleGuideCommand(ctx context.Context, platformName platform.PlatformName, accountID string, actorUserID string, routeUserID string, reply platform.Replier, clientID string) {
 	name, _, key, err := h.codexGuideTargetForRoute(ctx, actorUserID, routeUserID)
 	if err != nil {
 		sendPlatformText(ctx, reply, actorUserID, err.Error())
+		return
+	}
+	external, control, denied := h.externalCodexControlState(key, actorUserID)
+	if denied {
+		sendPlatformText(ctx, reply, actorUserID, "只有任务发起人可以发送引导消息。")
+		return
+	}
+	if external && !control {
+		sendPlatformText(ctx, reply, actorUserID, "当前 Codex App 本地任务不支持 /guide；暂存消息会在任务结束后自动执行。")
 		return
 	}
 	if text, handled := h.steerPendingGuideToExternalCodex(ctx, key, name, actorUserID); handled {
@@ -109,11 +87,7 @@ func (h *Handler) handleCancelPendingGuide(ctx context.Context, actorUserID stri
 	if guideDenied {
 		return "只有任务发起人可以撤回暂存消息。"
 	}
-	confirmCleared, confirmDenied := h.clearPendingCodexConfirmation(key, actorUserID)
-	if confirmDenied {
-		return "只有消息暂存人可以撤回该消息。"
-	}
-	if !cleared && !confirmCleared {
+	if !cleared {
 		return "当前没有可撤回的消息。"
 	}
 	return "已撤回该消息。"
@@ -146,15 +120,15 @@ func (h *Handler) steerPendingGuideToExternalCodex(ctx context.Context, key stri
 	if !ok {
 		return "", false
 	}
-	message, threadID, turnID, task, ok, denied := h.takeExternalCodexGuide(key, actor)
+	pending, threadID, turnID, task, ok, denied := h.takeExternalCodexGuide(key, actor)
 	if denied {
 		return "只有任务发起人可以发送引导消息。", true
 	}
 	if !ok {
 		return "", false
 	}
-	if err := runtimeAg.SteerCodexThread(ctx, key, threadID, turnID, message); err != nil {
-		h.restorePendingGuide(key, task, message)
+	if err := runtimeAg.SteerCodexThread(ctx, key, threadID, turnID, pending.message); err != nil {
+		h.restorePendingGuide(key, task, pending)
 		return fmt.Sprintf("发送到当前 Codex App 任务失败: %v", err), true
 	}
 	task.recordProgress(time.Now(), "已发送引导对话。")
@@ -202,7 +176,7 @@ func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
 		h.activeTasksMu.Unlock()
 		return false, true
 	}
-	task.pendingMessage = ""
+	task.pending = pendingAgentTask{}
 	task.detached = true
 	cancel := task.cancel
 	task.mu.Unlock()
