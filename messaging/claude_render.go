@@ -25,10 +25,6 @@ func (h *Handler) renderClaudeStatus(route claudeSessionRoute) string {
 	)
 }
 
-func (h *Handler) renderClaudeWorkspaceList(bindingKey string) string {
-	return h.renderClaudeWorkspaceListForAccess(bindingKey, "", false)
-}
-
 func (h *Handler) renderClaudeWorkspaceListForAccess(bindingKey string, actorUserID string, admin bool) string {
 	views := h.claudeSwitchTargetsForAccess(bindingKey, actorUserID, admin)
 	if len(views) == 0 {

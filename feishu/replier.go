@@ -44,10 +44,6 @@ func newReplierWithTaskCards(sender messageSender, openID string, cardKit cardKi
 	return &Replier{sender: sender, cardKit: cardKit, openID: openID, taskCards: cards}
 }
 
-func newReplierForMessageWithTaskCards(sender messageSender, openID string, replyToID string, cardKit cardKitClient, cards *taskCardRegistry) *Replier {
-	return &Replier{sender: sender, cardKit: cardKit, openID: openID, replyToID: strings.TrimSpace(replyToID), taskCards: cards}
-}
-
 // Capabilities 返回飞书回复器能力。
 func (r *Replier) Capabilities() platform.Capabilities {
 	return platform.Capabilities{Text: true, Typing: true, Image: true, File: true, Card: true, Streaming: true, Buttons: true, LongText: false, FinalReplyOutsideStream: true}

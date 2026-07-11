@@ -10,14 +10,9 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-// handleCodexOpenApp 打开当前工作区的 Codex App，并尽量回显当前 thread 便于用户确认。
-func (h *Handler) handleCodexOpenApp(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.handleCodexOpenAppForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
-}
-
 // handleCodexOpenAppForRoute 打开真实用户工作空间，并记录 route session 的本地入口状态。
-func (h *Handler) handleCodexOpenAppForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	workspaceRoot = h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
+func (h *Handler) handleCodexOpenAppForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, ag agent.Agent) string {
+	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
 	opener := h.resolveCodexAppOpener()
 	command := strings.TrimSpace(ag.Info().Command)
@@ -64,16 +59,11 @@ func defaultCodexAppOpener(ctx context.Context, command string, workspaceRoot st
 	return nil
 }
 
-// handleCodexAttach 将当前 Codex 会话打开到本地可见端；remote-first Agent 使用 resume。
-func (h *Handler) handleCodexAttach(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.handleCodexAttachForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
-}
-
 // handleCodexAttachForRoute 让飞书 route session 接手当前可见端或 CLI 恢复流程。
-func (h *Handler) handleCodexAttachForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
+func (h *Handler) handleCodexAttachForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, ag agent.Agent) string {
 	visibleAg, ok := ag.(agent.VisibleCompanionAgent)
 	if !ok {
-		return h.handleCodexAttachResumeForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
+		return h.handleCodexAttachResumeForRoute(ctx, actorUserID, routeUserID, agentName, ag)
 	}
 	if err := visibleAg.OpenVisibleCompanion(ctx); err != nil {
 		return fmt.Sprintf("打开 Codex 本地可见端失败: %v", err)
@@ -81,14 +71,9 @@ func (h *Handler) handleCodexAttachForRoute(ctx context.Context, actorUserID str
 	return "已打开 Codex 本地可见端。"
 }
 
-// handleCodexCLI 将当前微信 Codex thread 恢复到本地 CLI，便于电脑端接手。
-func (h *Handler) handleCodexCLI(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.handleCodexCLIForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
-}
-
 // handleCodexCLIForRoute 使用 route session 查 thread，用真实用户工作空间启动 CLI。
-func (h *Handler) handleCodexCLIForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.openCodexThreadInCLIForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag, codexCLIOpenText{
+func (h *Handler) handleCodexCLIForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, ag agent.Agent) string {
+	return h.openCodexThreadInCLIForRoute(ctx, actorUserID, routeUserID, agentName, ag, codexCLIOpenText{
 		unsupported:      "当前 Codex Agent 不支持 cli。",
 		missingCommand:   "当前 Codex Agent 未配置 command，无法打开 Codex CLI。",
 		openFailedPrefix: "打开 Codex CLI 失败",
@@ -96,13 +81,9 @@ func (h *Handler) handleCodexCLIForRoute(ctx context.Context, actorUserID string
 	})
 }
 
-func (h *Handler) handleCodexAttachResume(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.handleCodexAttachResumeForRoute(ctx, userID, userID, agentName, workspaceRoot, ag)
-}
-
 // handleCodexAttachResumeForRoute 复用 CLI 恢复路径，但保持飞书 route session 不丢失。
-func (h *Handler) handleCodexAttachResumeForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.openCodexThreadInCLIForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag, codexCLIOpenText{
+func (h *Handler) handleCodexAttachResumeForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, ag agent.Agent) string {
+	return h.openCodexThreadInCLIForRoute(ctx, actorUserID, routeUserID, agentName, ag, codexCLIOpenText{
 		unsupported:      "当前 Codex Agent 不支持 attach。",
 		missingCommand:   "当前 Codex Agent 未配置 command，无法打开本地可见端。",
 		openFailedPrefix: "打开 Codex 本地可见端失败",
@@ -127,16 +108,12 @@ const (
 	codexLocalEntryApp = "app"
 )
 
-func (h *Handler) openCodexThreadInCLI(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, text codexCLIOpenText) string {
-	return h.openCodexThreadInCLIForRoute(ctx, userID, userID, agentName, workspaceRoot, ag, text)
-}
-
 // openCodexThreadInCLIForRoute 从 route session 读取 thread，再在真实用户工作空间中打开本地 CLI。
-func (h *Handler) openCodexThreadInCLIForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent, text codexCLIOpenText) string {
+func (h *Handler) openCodexThreadInCLIForRoute(ctx context.Context, actorUserID string, routeUserID string, agentName string, ag agent.Agent, text codexCLIOpenText) string {
 	if _, ok := ag.(agent.CodexThreadAgent); !ok {
 		return text.unsupported
 	}
-	workspaceRoot = h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
+	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	if strings.TrimSpace(workspaceRoot) == "" {
 		workspaceRoot = h.codexWorkspaceRoot(agentName)
 	}

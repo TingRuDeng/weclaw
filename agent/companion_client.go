@@ -33,11 +33,11 @@ func (f CompanionHandlerFunc) HandleCompanionRequest(ctx context.Context, req Co
 // RunCompanionClient 连接后台 WeClaw，并把请求交给本地可见运行时处理。
 func RunCompanionClient(ctx context.Context, endpoint CompanionEndpoint, handler CompanionRequestHandler) error {
 	if handler == nil {
-		return errors.New("Companion 处理器为空")
+		return errors.New("companion 处理器为空")
 	}
 	conn, err := net.Dial("tcp", endpoint.Address())
 	if err != nil {
-		return fmt.Errorf("连接 Companion 入口失败: %w", err)
+		return fmt.Errorf("连接 companion 入口失败: %w", err)
 	}
 	defer conn.Close()
 	go func() {

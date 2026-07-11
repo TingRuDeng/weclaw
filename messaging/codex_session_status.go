@@ -27,11 +27,11 @@ func (h *Handler) switchCodexWorkspace(agentName string, workspaceRoot string, a
 func (h *Handler) getCodexSessionAgent(ctx context.Context) (string, agent.Agent, error) {
 	agentName, ok := h.codexAgentName()
 	if !ok {
-		return "", nil, fmt.Errorf("当前没有配置 Codex Agent。")
+		return "", nil, fmt.Errorf("当前没有配置 codex agent")
 	}
 	ag, err := h.getAgent(ctx, agentName)
 	if err != nil {
-		return "", nil, fmt.Errorf("Codex Agent 不可用: %v", err)
+		return "", nil, fmt.Errorf("codex agent 不可用: %v", err)
 	}
 	return agentName, ag, nil
 }
@@ -123,13 +123,9 @@ func (h *Handler) renderCodexWhoami(bindingKey string, workspaceRoot string) str
 	return wechatCommandText("workspace: "+workspaceRoot, "thread: "+renderCodexThreadLabel(threadID, pending))
 }
 
-func (h *Handler) renderCodexStatus(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.renderCodexStatusForRoute(userID, userID, agentName, workspaceRoot, ag)
-}
-
 // renderCodexStatusForRoute 显示 route session 的 thread 状态，同时用真实用户工作空间解释路径。
-func (h *Handler) renderCodexStatusForRoute(actorUserID string, routeUserID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	workspaceRoot = h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
+func (h *Handler) renderCodexStatusForRoute(actorUserID string, routeUserID string, agentName string, ag agent.Agent) string {
+	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	if strings.TrimSpace(workspaceRoot) == "" {
 		workspaceRoot = h.codexWorkspaceRoot(agentName)
 	}
@@ -156,10 +152,6 @@ func renderCodexLocalEntry(opened bool) string {
 		return "已打开过"
 	}
 	return "未打开过"
-}
-
-func (h *Handler) renderCodexList(bindingKey string) string {
-	return h.renderCodexListForAccess(bindingKey, "", false)
 }
 
 func (h *Handler) renderCodexListForAccess(bindingKey string, actorUserID string, admin bool) string {

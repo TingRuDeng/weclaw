@@ -107,7 +107,7 @@ func (a *ACPAgent) Start(ctx context.Context) error {
 		// Provide a helpful hint when the binary looks like a Claude CLI that doesn't support ACP
 		base := strings.ToLower(filepath.Base(a.command))
 		if base == "claude" || base == "claude.exe" {
-			return fmt.Errorf("agent startup failed (pid=%d): %w\n\nHint: the 'claude' CLI does not support ACP protocol directly.\nSet type to \"cli\" in your config, or install claude-agent-acp and set command to \"claude-agent-acp\".", pid, err)
+			return fmt.Errorf("agent startup failed (pid=%d): %w; claude CLI does not support ACP directly, set type to \"cli\" or install claude-agent-acp", pid, err)
 		}
 		return fmt.Errorf("agent startup failed (pid=%d): %w", pid, err)
 	}

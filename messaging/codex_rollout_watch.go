@@ -12,7 +12,7 @@ const codexRolloutPollInterval = 200 * time.Millisecond
 // watchCodexRolloutTask 从初始 EOF 偏移增量跟踪指定 turn，避免重复读取历史记录。
 func watchCodexRolloutTask(ctx context.Context, state codexRolloutTaskState, onProgress func(string)) (string, error) {
 	if !state.Active || strings.TrimSpace(state.TurnID) == "" {
-		return "", fmt.Errorf("Codex rollout 当前没有运行中的任务")
+		return "", fmt.Errorf("codex rollout 当前没有运行中的任务")
 	}
 	ticker := time.NewTicker(codexRolloutPollInterval)
 	defer ticker.Stop()
@@ -44,7 +44,7 @@ type codexRolloutWatchResult struct {
 // finalText 将 rollout 终态转换为对外结果或明确的中断错误。
 func (r codexRolloutWatchResult) finalText() (string, error) {
 	if r.aborted {
-		return "", fmt.Errorf("Codex App 本地任务已中断: %s", firstNonBlank(r.reason, "interrupted"))
+		return "", fmt.Errorf("codex App 本地任务已中断: %s", firstNonBlank(r.reason, "interrupted"))
 	}
 	return firstNonBlank(r.final, "Codex App 本地任务已完成，但没有返回文本。"), nil
 }
@@ -68,7 +68,7 @@ func readCodexRolloutTaskDelta(state codexRolloutTaskState, offset int64, onProg
 			}
 		case codexRolloutTaskStarted:
 			if event.TurnID != "" && event.TurnID != state.TurnID && !result.done {
-				return fmt.Errorf("Codex rollout 在当前任务结束前切换到新 turn")
+				return fmt.Errorf("codex rollout 在当前任务结束前切换到新 turn")
 			}
 		}
 		return nil

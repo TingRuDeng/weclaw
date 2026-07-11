@@ -70,18 +70,18 @@ func (a *ACPAgent) configureClaudeSession(ctx context.Context, sessionID string,
 	if status.Model != "" {
 		request := claudeSessionConfigRequest{sessionID: sessionID, configID: claudeModelConfigID, value: status.Model}
 		if err := a.setClaudeSessionConfig(ctx, request); err != nil {
-			return fmt.Errorf("设置 Claude model 失败: %w", err)
+			return fmt.Errorf("设置 claude model 失败: %w", err)
 		}
 	}
 	if status.Effort == "" {
 		return nil
 	}
 	if !a.claudeEffortSupported(selectedModel, status.Effort) {
-		return fmt.Errorf("Claude 模型 %s 不支持推理强度 %s", selectedModel, status.Effort)
+		return fmt.Errorf("claude 模型 %s 不支持推理强度 %s", selectedModel, status.Effort)
 	}
 	request := claudeSessionConfigRequest{sessionID: sessionID, configID: claudeEffortConfigID, value: status.Effort}
 	if err := a.setClaudeSessionConfig(ctx, request); err != nil {
-		return fmt.Errorf("设置 Claude effort 失败: %w", err)
+		return fmt.Errorf("设置 claude effort 失败: %w", err)
 	}
 	return nil
 }

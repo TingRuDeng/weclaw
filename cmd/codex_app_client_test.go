@@ -99,7 +99,7 @@ func TestCodexAppClientWaitTurnReturnsWhenConnectionCloses(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err = client.WaitTurn(ctx, threadID, turnID, nil)
-	if err == nil || !strings.Contains(err.Error(), "Codex app-server 连接已断开") {
+	if err == nil || !strings.Contains(err.Error(), "codex app-server 连接已断开") {
 		t.Fatalf("WaitTurn() error = %v, want connection closed error", err)
 	}
 }

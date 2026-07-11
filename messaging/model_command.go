@@ -116,15 +116,6 @@ func (h *Handler) handleReasoningCommandForRoute(ctx context.Context, route mode
 	)
 }
 
-// resolveModelAgent 解析当前平台的默认 agent 并确保其已启动。
-func (h *Handler) resolveModelAgent(ctx context.Context, platformName platform.PlatformName) (string, agent.Agent, bool) {
-	return h.resolveModelAgentForAccount(ctx, platformName, "")
-}
-
-func (h *Handler) resolveModelAgentForAccount(ctx context.Context, platformName platform.PlatformName, accountID string) (string, agent.Agent, bool) {
-	return h.resolveModelAgentForRoute(ctx, modelAgentRoute{platform: platformName, accountID: accountID})
-}
-
 func (h *Handler) resolveModelAgentForRoute(ctx context.Context, route modelAgentRoute) (string, agent.Agent, bool) {
 	name := h.defaultAgentNameForRoute(route.routeUserID, route.platform, route.accountID)
 	if strings.TrimSpace(name) == "" {

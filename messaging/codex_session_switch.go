@@ -17,10 +17,6 @@ type codexSwitchOptions struct {
 	reply       platform.Replier
 }
 
-func (h *Handler) handleCodexNew(userID string, agentName string, workspaceRoot string, ag agent.Agent) string {
-	return h.handleCodexNewForRoute(userID, agentName, workspaceRoot, ag, "")
-}
-
 // handleCodexNewForRoute 只清理 route session 的 thread，避免飞书 thread 影响同一用户其他会话。
 func (h *Handler) handleCodexNewForRoute(userID string, agentName string, workspaceRoot string, ag agent.Agent, ownerBindingKey string) string {
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
@@ -32,15 +28,6 @@ func (h *Handler) handleCodexNewForRoute(userID string, agentName string, worksp
 	h.ensureCodexSessions().setPendingNew(bindingKey, workspaceRoot)
 	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
 	return wechatCommandText("已切换到新会话。", "workspace: "+workspaceRoot)
-}
-
-func (h *Handler) handleCodexSwitch(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string) string {
-	return h.handleCodexSwitchForRoute(ctx, userID, agentName, workspaceRoot, ag, target, "")
-}
-
-// handleCodexSwitchForRoute 切换 route session 的 thread，并同步真实用户当前工作空间。
-func (h *Handler) handleCodexSwitchForRoute(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string) string {
-	return h.handleCodexSwitchForRouteWithOptions(ctx, userID, agentName, workspaceRoot, ag, target, ownerBindingKey, codexSwitchOptions{})
 }
 
 func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string, opts codexSwitchOptions) string {

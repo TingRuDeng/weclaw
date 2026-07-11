@@ -27,19 +27,6 @@ func (h *Handler) switchDefault(ctx context.Context, routeUserID string, name st
 	return fmt.Sprintf("当前会话已切换到 %s", name)
 }
 
-// resetDefaultSession resets the session for the given userID on the default agent.
-func (h *Handler) resetDefaultSession(ctx context.Context, userID string) string {
-	return h.resetDefaultSessionForRoute(ctx, userID, userID)
-}
-
-// resetDefaultSessionForRoute 重置 routeUserID 对应会话，避免飞书 thread 的 /new 重置到真实用户全局会话。
-func (h *Handler) resetDefaultSessionForRoute(ctx context.Context, actorUserID string, routeUserID string) string {
-	return h.resetDefaultSessionForMessage(ctx, defaultSessionResetRequest{
-		actorUserID: actorUserID,
-		routeUserID: routeUserID,
-	})
-}
-
 type defaultSessionResetRequest struct {
 	actorUserID string
 	routeUserID string
@@ -74,20 +61,6 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 		return wechatCommandText(fmt.Sprintf("已创建新的%s会话", name), sessionID)
 	}
 	return fmt.Sprintf("已创建新的%s会话", name)
-}
-
-func (h *Handler) getDefaultAgentWithName() (string, agent.Agent) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.defaultName == "" {
-		return "", nil
-	}
-	return h.defaultName, h.agents[h.defaultName]
-}
-
-// resetDefaultCodexSession 重置当前微信用户正在使用的 Codex 工作空间会话。
-func (h *Handler) resetDefaultCodexSession(ctx context.Context, userID string, name string, ag agent.Agent) string {
-	return h.resetDefaultCodexSessionForRoute(ctx, userID, userID, name, ag)
 }
 
 // resetDefaultCodexSessionForRoute 按 route 当前工作空间创建新的 Codex thread。

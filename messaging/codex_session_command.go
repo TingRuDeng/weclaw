@@ -20,15 +20,6 @@ type codexSessionCommandRequest struct {
 	Admin       bool
 }
 
-func (h *Handler) handleCodexSessionCommand(ctx context.Context, userID string, trimmed string) string {
-	return h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
-		ActorUserID: userID,
-		RouteUserID: userID,
-		Trimmed:     trimmed,
-		Admin:       h.isAdminUser(userID),
-	})
-}
-
 // handleCodexSessionCommandForRoute 让飞书内置会话命令操作 route session，同时继续按真实用户解析工作空间。
 func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req codexSessionCommandRequest) string {
 	actorUserID := strings.TrimSpace(req.ActorUserID)
@@ -108,7 +99,7 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		if len(fields) != 2 {
 			return "用法: /cx status"
 		}
-		return h.renderCodexStatusForRoute(actorUserID, routeUserID, agentName, workspaceRoot, ag)
+		return h.renderCodexStatusForRoute(actorUserID, routeUserID, agentName, ag)
 	case "quota":
 		if len(fields) != 2 {
 			return "用法: /cx quota"
@@ -123,17 +114,17 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 		if len(fields) != 2 {
 			return "用法: /cx app"
 		}
-		return h.handleCodexOpenAppForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
+		return h.handleCodexOpenAppForRoute(ctx, actorUserID, routeUserID, agentName, ag)
 	case "cli":
 		if len(fields) != 2 {
 			return "用法: /cx cli"
 		}
-		return h.handleCodexCLIForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
+		return h.handleCodexCLIForRoute(ctx, actorUserID, routeUserID, agentName, ag)
 	case "attach":
 		if len(fields) != 2 {
 			return "用法: /cx attach"
 		}
-		return h.handleCodexAttachForRoute(ctx, actorUserID, routeUserID, agentName, workspaceRoot, ag)
+		return h.handleCodexAttachForRoute(ctx, actorUserID, routeUserID, agentName, ag)
 	case "detach":
 		if len(fields) != 2 {
 			return "用法: /cx detach"

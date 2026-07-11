@@ -55,11 +55,6 @@ func (h *Handler) clearCodexBrowseWorkspace(bindingKey string) {
 	delete(h.codexBrowseWorkspaces, bindingKey)
 }
 
-// renderCodexWorkspaceList 只展示工作空间短名称，避免微信里刷出长路径和 thread id。
-func (h *Handler) renderCodexWorkspaceList(bindingKey string) string {
-	return h.renderCodexWorkspaceListForAccess(bindingKey, "", false)
-}
-
 func (h *Handler) renderCodexWorkspaceListForAccess(bindingKey string, actorUserID string, admin bool) string {
 	groups := h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
 	if len(groups) == 0 {

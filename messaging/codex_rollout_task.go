@@ -116,7 +116,7 @@ func readCodexRolloutEvents(path string, offset int64, visit func(codexRolloutEv
 		return offset, fmt.Errorf("读取 Codex rollout 状态失败: %w", err)
 	}
 	if info.Size() < offset {
-		return offset, fmt.Errorf("Codex rollout 已被截断")
+		return offset, fmt.Errorf("codex rollout 已被截断")
 	}
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return offset, fmt.Errorf("定位 Codex rollout 失败: %w", err)

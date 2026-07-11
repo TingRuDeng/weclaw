@@ -115,10 +115,6 @@ func switchableCodexSessions(sessions []codexWorkspaceView) []codexWorkspaceView
 	return result
 }
 
-func (h *Handler) findCodexWorkspaceGroup(bindingKey string, target string) (codexWorkspaceGroup, error) {
-	return h.findCodexWorkspaceGroupForAccess(bindingKey, "", false, target)
-}
-
 func (h *Handler) findCodexWorkspaceGroupForAccess(bindingKey string, actorUserID string, admin bool, target string) (codexWorkspaceGroup, error) {
 	target = strings.TrimSpace(target)
 	groups := h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)

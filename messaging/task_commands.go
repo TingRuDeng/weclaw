@@ -185,19 +185,15 @@ func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
 	return true, false
 }
 
-func (h *Handler) codexGuideTarget(ctx context.Context, userID string) (string, agent.Agent, string, error) {
-	return h.codexGuideTargetForRoute(ctx, userID, userID)
-}
-
 // codexGuideTargetForRoute 用普通消息相同的 actor/route 规则定位正在运行或暂存的 Codex turn。
 func (h *Handler) codexGuideTargetForRoute(ctx context.Context, actorUserID string, routeUserID string) (string, agent.Agent, string, error) {
 	name, ok := h.codexAgentName()
 	if !ok {
-		return "", nil, "", fmt.Errorf("当前没有配置 Codex Agent。")
+		return "", nil, "", fmt.Errorf("当前没有配置 codex agent")
 	}
 	ag, err := h.getAgent(ctx, name)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("Codex Agent 不可用: %v", err)
+		return "", nil, "", fmt.Errorf("codex agent 不可用: %v", err)
 	}
 	return name, ag, h.agentExecutionKeyForRoute(actorUserID, routeUserID, name, ag), nil
 }

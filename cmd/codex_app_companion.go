@@ -75,7 +75,7 @@ func (r *codexAppCompanionRuntime) HandleCompanionRequest(ctx context.Context, r
 		return "", err
 	}
 	if strings.TrimSpace(reply) == "" {
-		return "", errors.New("Codex app-server 返回空回复")
+		return "", errors.New("codex app-server 返回空回复")
 	}
 	return reply, nil
 }

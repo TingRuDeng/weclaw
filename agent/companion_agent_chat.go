@@ -70,12 +70,12 @@ func (a *CompanionAgent) waitResponse(ctx context.Context, id string, call *pend
 	case response := <-call.response:
 		if !response.OK {
 			if response.Error == "" {
-				response.Error = "Companion 返回未知错误"
+				response.Error = "companion 返回未知错误"
 			}
 			return "", errors.New(response.Error)
 		}
 		if response.Text == "" {
-			return "", errors.New("Companion 返回空回复")
+			return "", errors.New("companion 返回空回复")
 		}
 		return response.Text, nil
 	}

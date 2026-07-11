@@ -11,8 +11,11 @@ func TestUserRateLimiterWindow(t *testing.T) {
 	l.now = func() time.Time { return now }
 
 	// limit=2：前两次放行，第三次拒绝
-	if !l.Allow("u1", 2) || !l.Allow("u1", 2) {
-		t.Fatal("first two calls should be allowed")
+	if !l.Allow("u1", 2) {
+		t.Fatal("first call should be allowed")
+	}
+	if !l.Allow("u1", 2) {
+		t.Fatal("second call should be allowed")
 	}
 	if l.Allow("u1", 2) {
 		t.Fatal("third call within window should be denied")
@@ -40,8 +43,11 @@ func TestUserRateLimiterDisabled(t *testing.T) {
 func TestHandlerRateLimitGate(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetRateLimitPerMinute(2)
-	if !h.allowAgentInvocation("wechat:u1") || !h.allowAgentInvocation("wechat:u1") {
-		t.Fatal("first two invocations should pass")
+	if !h.allowAgentInvocation("wechat:u1") {
+		t.Fatal("first invocation should pass")
+	}
+	if !h.allowAgentInvocation("wechat:u1") {
+		t.Fatal("second invocation should pass")
 	}
 	if h.allowAgentInvocation("wechat:u1") {
 		t.Fatal("third invocation should be throttled")

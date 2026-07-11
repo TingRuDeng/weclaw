@@ -89,10 +89,6 @@ type promptEntry struct {
 	Text string `json:"text,omitempty"`
 }
 
-type promptResult struct {
-	StopReason string `json:"stopReason"`
-}
-
 type sessionUpdateParams struct {
 	SessionID string        `json:"sessionId"`
 	Update    sessionUpdate `json:"update"`

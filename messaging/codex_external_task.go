@@ -37,10 +37,10 @@ func (h *Handler) startExternalCodexTaskIfActive(opts externalCodexTaskOptions) 
 		return state, false, err
 	}
 	if state.ActiveTurnID == "" {
-		return state, false, fmt.Errorf("Codex App thread 处于 active 状态，但未找到 active turn")
+		return state, false, fmt.Errorf("codex App thread 处于 active 状态，但未找到 active turn")
 	}
 	if opts.reply == nil {
-		return state, false, fmt.Errorf("Codex App thread 正在运行，但当前入口无法接管回推")
+		return state, false, fmt.Errorf("codex App thread 正在运行，但当前入口无法接管回推")
 	}
 	h.startExternalCodexTaskWatcher(opts, state, watch)
 	return state, true, nil

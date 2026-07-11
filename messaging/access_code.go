@@ -175,13 +175,7 @@ func LoadPendingAccessCodeViews(filePath string) []AccessCodeView {
 		if !accessCodeValid(record, now) {
 			continue
 		}
-		views = append(views, AccessCodeView{
-			Code:      record.Code,
-			Platform:  record.Platform,
-			AccountID: record.AccountID,
-			UserID:    record.UserID,
-			ExpiresAt: record.ExpiresAt,
-		})
+		views = append(views, AccessCodeView(record))
 	}
 	return views
 }

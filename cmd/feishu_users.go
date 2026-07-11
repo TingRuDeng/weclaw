@@ -202,12 +202,6 @@ func feishuIdentityViewStatus(view messaging.FeishuIdentityView, showApprovalCod
 	return "已发现"
 }
 
-// feishuBotAccountLabels 返回 app_id 到可读机器人名称的映射。
-func feishuBotAccountLabels() map[string]string {
-	labels, _ := feishuBotUserListMetadata()
-	return labels
-}
-
 // feishuBotUserListMetadata 同时生成机器人展示标签和联系人查询所需账号信息。
 func feishuBotUserListMetadata() (map[string]string, []feishuIdentityNameLookupAccount) {
 	cfg, err := config.Load()

@@ -33,7 +33,7 @@ func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Jina HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("jina HTTP %d", resp.StatusCode)
 	}
 
 	data, err := readLinkMetadataBody(resp, maxLinkMetadataBytes)
@@ -71,7 +71,7 @@ func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
 
 	// Check for Jina failure (CAPTCHA, empty content)
 	if meta.Body == "" || strings.Contains(meta.Body, "环境异常") || strings.Contains(meta.Body, "CAPTCHA") {
-		return nil, fmt.Errorf("Jina returned empty or blocked content")
+		return nil, fmt.Errorf("jina returned empty or blocked content")
 	}
 
 	return meta, nil

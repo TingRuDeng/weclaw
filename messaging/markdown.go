@@ -22,8 +22,6 @@ var (
 	reHeader = regexp.MustCompile(`(?m)^#{1,6}\s+`)
 	// Bold: **text** or __text__
 	reBold = regexp.MustCompile(`\*\*(.+?)\*\*|__(.+?)__`)
-	// Italic: *text* or _text_
-	reItalic = regexp.MustCompile(`(?:^|[^*])\*([^*]+)\*(?:[^*]|$)|(?:^|[^_])_([^_]+)_(?:[^_]|$)`)
 	// Strikethrough: ~~text~~
 	reStrike = regexp.MustCompile(`~~(.+?)~~`)
 	// Blockquote: > prefix

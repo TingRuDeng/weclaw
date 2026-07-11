@@ -27,10 +27,6 @@ func (h *Handler) agentExecutionKeyForRoute(ownerUserID string, routeUserID stri
 	return strings.Join([]string{"agent", strings.TrimSpace(routeUserID), strings.TrimSpace(agentName)}, "\x00")
 }
 
-func (h *Handler) codexConversationRouteForUser(userID string, agentName string, ag agent.Agent) codexConversationRoute {
-	return h.codexConversationRouteForSession(userID, userID, agentName, ag)
-}
-
 func (h *Handler) codexConversationRouteForSession(ownerUserID string, routeUserID string, agentName string, ag agent.Agent) codexConversationRoute {
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = ownerUserID
@@ -68,10 +64,6 @@ func (h *Handler) allowedAttachmentRoots(agentName string) []string {
 	return roots
 }
 
-func (h *Handler) resolveAgentConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
-	return h.resolveAgentConversationIDForRoute(ctx, userID, userID, agentName, ag)
-}
-
 func (h *Handler) resolveAgentConversationIDForRoute(ctx context.Context, ownerUserID string, routeUserID string, agentName string, ag agent.Agent) (string, error) {
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = ownerUserID
@@ -83,10 +75,6 @@ func (h *Handler) resolveAgentConversationIDForRoute(ctx context.Context, ownerU
 		return h.resolveClaudeConversationIDForRoute(ctx, ownerUserID, routeUserID, agentName, ag)
 	}
 	return routeUserID, nil
-}
-
-func (h *Handler) resolveCodexConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
-	return h.resolveCodexConversationIDForRoute(ctx, userID, userID, agentName, ag)
 }
 
 func (h *Handler) resolveCodexConversationIDForRoute(ctx context.Context, ownerUserID string, routeUserID string, agentName string, ag agent.Agent) (string, error) {
@@ -118,10 +106,6 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 	}
 	h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
 	return nil
-}
-
-func (h *Handler) resolveClaudeConversationID(ctx context.Context, userID string, agentName string, ag agent.Agent) (string, error) {
-	return h.resolveClaudeConversationIDForRoute(ctx, userID, userID, agentName, ag)
 }
 
 func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, ownerUserID string, routeUserID string, agentName string, ag agent.Agent) (string, error) {
@@ -183,10 +167,6 @@ func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string,
 	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	return workspaceRoot, true
-}
-
-func (h *Handler) recordClaudeSession(userID string, agentName string, ag agent.Agent, conversationID string) {
-	h.recordClaudeSessionForRoute(userID, userID, agentName, ag, conversationID)
 }
 
 func (h *Handler) recordClaudeSessionForRoute(ownerUserID string, routeUserID string, agentName string, ag agent.Agent, conversationID string) {

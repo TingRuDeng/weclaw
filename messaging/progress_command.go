@@ -11,10 +11,6 @@ func (h *Handler) handleProgressCommand(trimmed string) string {
 	return h.handleProgressCommandForAccount(trimmed, "", "")
 }
 
-func (h *Handler) handleProgressCommandForPlatform(trimmed string, platformName platform.PlatformName) string {
-	return h.handleProgressCommandForAccount(trimmed, platformName, "")
-}
-
 func (h *Handler) handleProgressCommandForAccount(trimmed string, platformName platform.PlatformName, accountID string) string {
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {

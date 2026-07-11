@@ -98,11 +98,11 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 func (h *Handler) getClaudeSessionAgent(ctx context.Context) (string, agent.Agent, error) {
 	agentName, ok := h.claudeAgentName()
 	if !ok {
-		return "", nil, fmt.Errorf("当前没有配置 Claude Agent。")
+		return "", nil, fmt.Errorf("当前没有配置 claude agent")
 	}
 	ag, err := h.getAgent(ctx, agentName)
 	if err != nil {
-		return "", nil, fmt.Errorf("Claude Agent 不可用: %v", err)
+		return "", nil, fmt.Errorf("claude agent 不可用: %v", err)
 	}
 	return agentName, ag, nil
 }

@@ -32,7 +32,7 @@ func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testin
 		},
 	}
 
-	conversationID, err := second.resolveAgentConversationID(context.Background(), "user-1", "codex", ag)
+	conversationID, err := second.resolveAgentConversationIDForRoute(context.Background(), "user-1", "user-1", "codex", ag)
 	if err != nil {
 		t.Fatalf("resolveAgentConversationID error: %v", err)
 	}

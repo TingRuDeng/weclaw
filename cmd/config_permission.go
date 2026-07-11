@@ -79,7 +79,7 @@ func collectConfigPermissionOptions(opts configPermissionOptions, prompter confi
 	}
 	opts.Agent = strings.TrimSpace(opts.Agent)
 	if opts.Agent == "" {
-		return configPermissionOptions{}, fmt.Errorf("Agent 不能为空")
+		return configPermissionOptions{}, fmt.Errorf("agent 不能为空")
 	}
 	if !opts.LevelSet {
 		opts.Level, err = prompter.Prompt("权限档位 default/auto_review/full_access", levelDefault)
@@ -102,7 +102,7 @@ func applyCodexPermissionLevel(opts configPermissionOptions) error {
 	}
 	agentCfg, ok := cfg.Agents[opts.Agent]
 	if !ok {
-		return fmt.Errorf("Agent %q 不存在，请先配置该 Agent", opts.Agent)
+		return fmt.Errorf("agent %q 不存在，请先配置该 agent", opts.Agent)
 	}
 	agentCfg.PermissionLevel = opts.Level
 	agentCfg.ApprovalPolicy = ""
