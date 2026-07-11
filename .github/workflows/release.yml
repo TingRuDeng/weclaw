@@ -8,7 +8,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   RELEASE_TAG: ${{ inputs.tag }}
@@ -35,6 +35,15 @@ jobs:
         with:
           go-version: '1.26.5'
 
+      - name: Test
+        run: go test ./... -count=1 -timeout 120s
+
+      - name: Race test
+        run: go test -race ./... -count=1 -timeout 180s
+
+      - name: Vet
+        run: go vet ./...
+
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
@@ -55,6 +64,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
