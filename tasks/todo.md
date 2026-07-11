@@ -18,7 +18,7 @@
 - [x] P3 并行只读：分析 Agent 接入点、Messaging 时序和 Remodex 最小 IPC 契约。
 - [x] P3 串行：完成并自审 `tasks/codex-desktop-live-takeover-plan.md`。
 - [x] P4.1：固化 Desktop IPC frame 与 envelope。
-- [ ] P4.2：建立安全的 IPC client 与 macOS endpoint。
+- [x] P4.2：建立安全的 IPC client 与 macOS endpoint。
 - [ ] P4.3：实现 snapshot、patch 与事件投影。
 - [ ] P4.4：映射 Desktop 操作、审批和结构化问答。
 - [ ] P4.5：建立 thread owner 状态机。

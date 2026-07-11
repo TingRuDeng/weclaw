@@ -22,6 +22,14 @@ const (
 var (
 	// ErrCodexDesktopIncompatible 供调用方识别必须停止使用当前协议的版本错误。
 	ErrCodexDesktopIncompatible = errors.New("Codex Desktop 协议版本不兼容")
+	// ErrCodexDesktopUnavailable 表示安全 endpoint 当前不可连接，请求确认未送达。
+	ErrCodexDesktopUnavailable = errors.New("Codex Desktop 当前不可用")
+	// ErrCodexDesktopDisconnected 表示连接已断开，请求确认未送达。
+	ErrCodexDesktopDisconnected = errors.New("Codex Desktop 连接已断开")
+	// ErrCodexDesktopDeliveryUnknown 表示请求已写入连接，但无法确认是否被处理。
+	ErrCodexDesktopDeliveryUnknown = errors.New("Codex Desktop 请求交付状态未知")
+	// ErrCodexDesktopNoClient 表示路由器确认没有客户端可以处理请求。
+	ErrCodexDesktopNoClient = errors.New("没有 Codex Desktop 客户端可处理请求")
 
 	codexDesktopMethodVersions = map[string]int{
 		"initialize":                                            1,
