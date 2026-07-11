@@ -70,6 +70,34 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 	}
 }
 
+func TestApprovalCancellationNeverFallsBackToAllowOnlyOption(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	decision, err := h.approvalHandlerForUser("ou_user", "ou_user", reply)(ctx, agent.ApprovalRequest{
+		Options: []agent.ApprovalOption{{ID: "allow_once", Name: "允许", Kind: "allow"}},
+	})
+
+	if err == nil {
+		t.Fatal("上下文超时应返回错误")
+	}
+	if decision != "decline" {
+		t.Fatalf("decision=%q，审批取消必须 fail-closed 为 decline", decision)
+	}
+}
+
+func TestDefaultDenyApprovalOptionRecognizesDenyAlias(t *testing.T) {
+	options := []agent.ApprovalOption{
+		{ID: "accept", Name: "允许"},
+		{ID: "cancel", Name: "取消"},
+	}
+	if got := defaultDenyApprovalOption(options); got != "cancel" {
+		t.Fatalf("default deny=%q，期望识别 cancel 拒绝语义", got)
+	}
+}
+
 func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	h := NewHandler(nil, nil)
 	replyA := newApprovalKeyCaptureReplier()

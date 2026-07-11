@@ -144,12 +144,10 @@ func approvalChoiceLabel(option agent.ApprovalOption) string {
 
 func defaultDenyApprovalOption(options []agent.ApprovalOption) string {
 	for _, option := range options {
-		if option.Kind != "allow" && strings.TrimSpace(option.ID) != "" {
-			return option.ID
+		if approvalOptionKind(option) == "deny" && strings.TrimSpace(option.ID) != "" {
+			return strings.TrimSpace(option.ID)
 		}
 	}
-	if len(options) > 0 {
-		return options[0].ID
-	}
-	return ""
+	// 没有明确拒绝项时使用协议级拒绝值，禁止回退到可能代表允许的首项。
+	return "decline"
 }
