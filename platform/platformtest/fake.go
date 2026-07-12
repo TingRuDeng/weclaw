@@ -9,15 +9,16 @@ import (
 
 // Replier 是测试用回复器，记录业务层发出的所有回复意图。
 type Replier struct {
-	Caps         platform.Capabilities
-	Texts        []string
-	Images       []string
-	Files        []string
-	TypingStates []bool
-	Choices      []ChoiceRequest
-	Stream       *Stream
-	StreamOpened chan struct{}
-	streamOnce   sync.Once
+	Caps          platform.Capabilities
+	Texts         []string
+	Images        []string
+	Files         []string
+	TypingStates  []bool
+	Choices       []ChoiceRequest
+	Stream        *Stream
+	StreamOpened  chan struct{}
+	OpenStreamErr error
+	streamOnce    sync.Once
 }
 
 // ChoiceRequest 记录一次 AskChoices 调用。
@@ -56,6 +57,9 @@ func (r *Replier) Typing(ctx context.Context, on bool) error {
 }
 
 func (r *Replier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
+	if r.OpenStreamErr != nil {
+		return nil, r.OpenStreamErr
+	}
 	r.Stream.Options = opts
 	r.streamOnce.Do(func() { close(r.StreamOpened) })
 	return r.Stream, nil
@@ -68,10 +72,12 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 
 // Stream 是测试用流式回复器。
 type Stream struct {
-	Options   platform.StreamOptions
-	Updates   []string
-	Completed string
-	Failed    string
+	Options     platform.StreamOptions
+	Updates     []string
+	Completed   string
+	Failed      string
+	CompleteErr error
+	FailErr     error
 }
 
 func (s *Stream) Update(ctx context.Context, content string) error {
@@ -80,11 +86,17 @@ func (s *Stream) Update(ctx context.Context, content string) error {
 }
 
 func (s *Stream) Complete(ctx context.Context, finalContent string) error {
+	if s.CompleteErr != nil {
+		return s.CompleteErr
+	}
 	s.Completed = finalContent
 	return nil
 }
 
 func (s *Stream) Fail(ctx context.Context, errText string) error {
+	if s.FailErr != nil {
+		return s.FailErr
+	}
 	s.Failed = errText
 	return nil
 }

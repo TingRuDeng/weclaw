@@ -19,6 +19,21 @@ type fakeMessageSender struct {
 	replyCards  []string
 }
 
+func TestReplierCapabilitiesRequireCardKitForStreaming(t *testing.T) {
+	withoutCardKit := NewReplier(nil, "ou_user").Capabilities()
+	if withoutCardKit.Streaming || withoutCardKit.StreamCompletionNotification {
+		t.Fatalf("capabilities without CardKit = %#v", withoutCardKit)
+	}
+
+	withCardKit := NewReplier(nil, "ou_user", &fakeCardKitClient{}).Capabilities()
+	if !withCardKit.Streaming || !withCardKit.StreamCompletionNotification {
+		t.Fatalf("capabilities with CardKit = %#v", withCardKit)
+	}
+	if withCardKit.FinalReplyOutsideStream {
+		t.Fatalf("final reply must enter task card: %#v", withCardKit)
+	}
+}
+
 // SendText 记录测试发送的文本。
 func (f *fakeMessageSender) SendText(ctx context.Context, openID string, text string) error {
 	f.texts = append(f.texts, openID+":"+text)

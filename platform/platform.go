@@ -25,6 +25,8 @@ type Capabilities struct {
 	LongText  bool
 	// FinalReplyOutsideStream 表示流式更新不会触发新消息提醒，最终结果需要独立发送。
 	FinalReplyOutsideStream bool
+	// StreamCompletionNotification 表示 stream 成功进入终态后仍需发送简短通知。
+	StreamCompletionNotification bool
 }
 
 // Platform 表示一个可运行的 IM 接入端。
