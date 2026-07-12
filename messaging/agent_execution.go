@@ -68,8 +68,13 @@ func (h *Handler) sendToDefaultAgentForAccount(ctx context.Context, platformName
 		conversationID, resolveErr := h.resolveAgentConversationIDForRoute(agentCtx, userID, routeUserID, defaultName, ag)
 		if resolveErr != nil {
 			reply = renderFinalFailure("", resolveErr)
-			consumed := finishProgressWithReplyForPlatform(replyWriter, finishProgress, reply, true)
-			h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, defaultName, reply, consumed)
+			h.finishAndSendProgressReply(progressReplyDelivery{
+				delivery: replyDeliveryRequest{
+					ctx: replyCtx, replyWriter: replyWriter, userID: userID,
+					agentName: defaultName, reply: reply,
+				},
+				failed: true, finish: finishProgress,
+			})
 			return
 		}
 		reply, err = h.chatWithAgentWithProgress(agentCtx, ag, conversationID, text, onProgress)
@@ -80,8 +85,13 @@ func (h *Handler) sendToDefaultAgentForAccount(ctx context.Context, platformName
 			h.recordClaudeSessionForRoute(userID, routeUserID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
 		}
-		consumed := finishProgressWithReplyForPlatform(replyWriter, finishProgress, reply, err != nil)
-		h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, defaultName, reply, consumed)
+		h.finishAndSendProgressReply(progressReplyDelivery{
+			delivery: replyDeliveryRequest{
+				ctx: replyCtx, replyWriter: replyWriter, userID: userID,
+				agentName: defaultName, reply: reply,
+			},
+			failed: err != nil, finish: finishProgress,
+		})
 		return
 	} else {
 		if agErr != nil && defaultName != "" {
@@ -151,8 +161,13 @@ func (h *Handler) sendToNamedAgentForAccount(ctx context.Context, platformName p
 	conversationID, resolveErr := h.resolveAgentConversationIDForRoute(agentCtx, userID, routeUserID, name, ag)
 	if resolveErr != nil {
 		reply := renderFinalFailure("["+name+"] ", resolveErr)
-		consumed := finishProgressWithReplyForPlatform(replyWriter, finishProgress, reply, true)
-		h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, name, reply, consumed)
+		h.finishAndSendProgressReply(progressReplyDelivery{
+			delivery: replyDeliveryRequest{
+				ctx: replyCtx, replyWriter: replyWriter, userID: userID,
+				agentName: name, reply: reply,
+			},
+			failed: true, finish: finishProgress,
+		})
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(agentCtx, ag, conversationID, message, onProgress)
@@ -163,6 +178,11 @@ func (h *Handler) sendToNamedAgentForAccount(ctx context.Context, platformName p
 		h.recordClaudeSessionForRoute(userID, routeUserID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
-	consumed := finishProgressWithReplyForPlatform(replyWriter, finishProgress, reply, err != nil)
-	h.sendReplyWithMediaAfterStreamForRoute(replyCtx, replyWriter, userID, routeUserID, name, reply, consumed)
+	h.finishAndSendProgressReply(progressReplyDelivery{
+		delivery: replyDeliveryRequest{
+			ctx: replyCtx, replyWriter: replyWriter, userID: userID,
+			agentName: name, reply: reply,
+		},
+		failed: err != nil, finish: finishProgress,
+	})
 }

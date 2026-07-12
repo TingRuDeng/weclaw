@@ -23,10 +23,9 @@ type broadcastAgentsRequest struct {
 }
 
 type broadcastAgentResult struct {
-	name          string
-	reply         string
-	skip          bool
-	finalInStream bool
+	name  string
+	reply string
+	skip  bool
 }
 
 // broadcastToAgents 并行执行多个 Agent，并按完成顺序发送各自结果。
@@ -129,8 +128,14 @@ func (h *Handler) deferBroadcastCodexMessage(req broadcastAgentsRequest, name st
 func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string, ag agent.Agent, runtime broadcastAgentRuntime, reply platform.Replier, progressCfg config.ProgressConfig, results chan<- broadcastAgentResult) {
 	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.ctx, reply, "["+name+"] ", req.message, progressCfg)
 	send := func(text string, failed bool) {
-		consumed := finishProgressWithReplyForPlatform(reply, finishProgress, text, failed)
-		results <- broadcastAgentResult{name: name, reply: text, finalInStream: consumed}
+		h.finishAndSendProgressReply(progressReplyDelivery{
+			delivery: replyDeliveryRequest{
+				ctx: req.ctx, replyWriter: reply, userID: req.userID,
+				agentName: name, reply: text,
+			},
+			failed: failed, finish: finishProgress,
+		})
+		results <- broadcastAgentResult{name: name, skip: true}
 	}
 	conversationID, err := h.broadcastConversationID(runtime.ctx, req, name, ag, runtime.codexRoute)
 	if err != nil {
@@ -177,5 +182,5 @@ func (h *Handler) sendBroadcastAgentResult(req broadcastAgentsRequest, reply pla
 	if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
 		wxReply.ClientID = NewClientID()
 	}
-	h.sendReplyWithMediaAfterStreamForRoute(req.ctx, reply, req.userID, req.routeUserID, result.name, result.reply, result.finalInStream)
+	h.sendReplyWithMediaAfterStreamForRoute(req.ctx, reply, req.userID, req.routeUserID, result.name, result.reply, false)
 }

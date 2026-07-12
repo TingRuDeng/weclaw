@@ -91,10 +91,13 @@ func TestRewriteReplyWithAttachmentResults(t *testing.T) {
 	if !strings.Contains(got, "这里再次内联提到 "+sentPath+"，不应该被替换。") {
 		t.Fatalf("expected inline path to remain, got %q", got)
 	}
-	if !strings.Contains(got, failedPath) {
-		t.Fatalf("expected failed path to remain, got %q", got)
+	if strings.Contains(got, failedPath) {
+		t.Fatalf("expected failed path line to be replaced, got %q", got)
 	}
 	if !strings.Contains(got, "附件发送失败：archive.zip") {
 		t.Fatalf("expected failure note, got %q", got)
+	}
+	if strings.Count(got, "附件发送失败：archive.zip") != 1 {
+		t.Fatalf("expected one failure note, got %q", got)
 	}
 }

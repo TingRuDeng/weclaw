@@ -26,52 +26,97 @@ func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, rep
 	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, agentName, reply, finalInStream)
 }
 
-func (h *Handler) sendReplyWithMediaAfterStreamCore(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
-	imageURLs := ExtractImageURLs(reply)
-	attachmentPaths := extractLocalAttachmentPaths(reply)
-	allowedRoots := h.allowedAttachmentRoots(agentName)
+type replyDeliveryRequest struct {
+	ctx         context.Context
+	replyWriter platform.Replier
+	userID      string
+	agentName   string
+	reply       string
+}
 
+type progressReplyDelivery struct {
+	delivery replyDeliveryRequest
+	failed   bool
+	finish   func(string, bool) bool
+}
+
+type replyDeliveryProjection struct {
+	text      string
+	imageURLs []string
+}
+
+func (h *Handler) sendReplyWithMediaAfterStreamCore(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
+	req := replyDeliveryRequest{
+		ctx: ctx, replyWriter: replyWriter, userID: userID,
+		agentName: agentName, reply: reply,
+	}
+	projection := h.prepareReplyDelivery(req)
+	h.sendReplyProjection(req, projection, finalInStream)
+}
+
+func (h *Handler) prepareReplyDelivery(req replyDeliveryRequest) replyDeliveryProjection {
+	attachmentPaths := extractLocalAttachmentPaths(req.reply)
+	sentPaths, failedPaths := h.sendLocalAttachments(req, attachmentPaths)
+	return replyDeliveryProjection{
+		text:      rewriteReplyWithAttachmentResults(req.reply, sentPaths, failedPaths),
+		imageURLs: ExtractImageURLs(req.reply),
+	}
+}
+
+func (h *Handler) sendLocalAttachments(req replyDeliveryRequest, paths []string) ([]string, []string) {
+	allowedRoots := h.allowedAttachmentRoots(req.agentName)
 	var sentPaths []string
 	var failedPaths []string
-	for _, attachmentPath := range attachmentPaths {
+	for _, attachmentPath := range paths {
 		if !isAllowedAttachmentPath(attachmentPath, allowedRoots) {
-			log.Printf("[handler] rejected attachment outside allowed roots for agent %q: %s", agentName, attachmentPath)
+			log.Printf("[handler] rejected attachment outside allowed roots for agent %q: %s", req.agentName, attachmentPath)
 			failedPaths = append(failedPaths, attachmentPath)
 			continue
 		}
 		var sendErr error
 		if isImageAttachmentPath(attachmentPath) {
-			sendErr = replyWriter.SendImage(ctx, attachmentPath)
+			sendErr = req.replyWriter.SendImage(req.ctx, attachmentPath)
 		} else {
-			sendErr = replyWriter.SendFile(ctx, attachmentPath)
+			sendErr = req.replyWriter.SendFile(req.ctx, attachmentPath)
 		}
 		if sendErr != nil {
-			log.Printf("[handler] failed to send attachment to %s: %v", userID, sendErr)
+			log.Printf("[handler] failed to send attachment to %s: %v", req.userID, sendErr)
 			failedPaths = append(failedPaths, attachmentPath)
 			continue
 		}
 		sentPaths = append(sentPaths, attachmentPath)
 	}
+	return sentPaths, failedPaths
+}
 
-	reply = rewriteReplyWithAttachmentResults(reply, sentPaths, failedPaths)
-	if wxReply, ok := replyWriter.(*wechat.Replier); ok {
-		wxReply.ChunkRunes = textReplyChunkLimit(ctx)
+func (h *Handler) sendReplyProjection(req replyDeliveryRequest, projection replyDeliveryProjection, finalInStream bool) {
+	if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
+		wxReply.ChunkRunes = textReplyChunkLimit(req.ctx)
 	}
-	if !finalInStream && strings.TrimSpace(reply) != "" {
-		if err := replyWriter.SendText(ctx, reply); err != nil {
-			log.Printf("[handler] failed to send reply to %s: %v", userID, err)
+	if !finalInStream && strings.TrimSpace(projection.text) != "" {
+		if err := req.replyWriter.SendText(req.ctx, projection.text); err != nil {
+			log.Printf("[handler] failed to send reply to %s: %v", req.userID, err)
 		}
 	}
 
-	for _, imgURL := range imageURLs {
-		if wxReply, ok := replyWriter.(*wechat.Replier); ok {
-			if err := wxReply.SendMediaFromURL(ctx, imgURL); err != nil {
-				log.Printf("[handler] failed to send image to %s: %v", userID, err)
+	for _, imgURL := range projection.imageURLs {
+		if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
+			if err := wxReply.SendMediaFromURL(req.ctx, imgURL); err != nil {
+				log.Printf("[handler] failed to send image to %s: %v", req.userID, err)
 			}
 			continue
 		}
-		log.Printf("[handler] skip remote image for %s: platform replier has no URL media sender", userID)
+		log.Printf("[handler] skip remote image for %s: platform replier has no URL media sender", req.userID)
 	}
+}
+
+func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
+	projection := h.prepareReplyDelivery(req.delivery)
+	consumed := finishProgressWithReplyForPlatform(
+		req.delivery.replyWriter, req.finish, projection.text, req.failed,
+	)
+	h.sendReplyProjection(req.delivery, projection, consumed)
+	return consumed
 }
 
 func finishProgressWithReply(finish func(string, bool) bool, reply string, failed bool) bool {

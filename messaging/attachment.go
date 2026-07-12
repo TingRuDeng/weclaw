@@ -71,29 +71,41 @@ func isAllowedAttachmentPath(path string, allowedRoots []string) bool {
 }
 
 func rewriteReplyWithAttachmentResults(reply string, sentPaths, failedPaths []string) string {
-	sentMap := make(map[string]string, len(sentPaths))
+	replacements := make(map[string]string, len(sentPaths)+len(failedPaths))
 	for _, path := range sentPaths {
-		sentMap[path] = "已发送附件：" + filepath.Base(path)
+		replacements[path] = "已发送附件：" + filepath.Base(path)
+	}
+	failureLabels := make(map[string]string, len(failedPaths))
+	for _, path := range failedPaths {
+		label := "附件发送失败：" + filepath.Base(path)
+		replacements[path] = label
+		failureLabels[path] = label
 	}
 
 	lines := strings.Split(reply, "\n")
+	emittedFailures := make(map[string]struct{}, len(failureLabels))
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if replacement, ok := sentMap[trimmed]; ok {
+		if replacement, ok := replacements[trimmed]; ok {
 			lines[i] = replacement
+			if _, failed := failureLabels[trimmed]; failed {
+				emittedFailures[trimmed] = struct{}{}
+			}
 		}
 	}
 
 	rewritten := strings.Join(lines, "\n")
-
 	var failureLines []string
-	seenFailures := make(map[string]struct{})
+	seenFailures := make(map[string]struct{}, len(failureLabels))
 	for _, path := range failedPaths {
+		if _, ok := emittedFailures[path]; ok {
+			continue
+		}
 		if _, ok := seenFailures[path]; ok {
 			continue
 		}
 		seenFailures[path] = struct{}{}
-		failureLines = append(failureLines, "附件发送失败："+filepath.Base(path))
+		failureLines = append(failureLines, failureLabels[path])
 	}
 	if len(failureLines) == 0 {
 		return rewritten

@@ -87,8 +87,13 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 
 	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
 		reply := renderFinalFailure(opts.replyPrefix, err)
-		consumed := finishProgressWithReplyForPlatform(opts.reply, finishProgress, reply, true)
-		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
+		h.finishAndSendProgressReply(progressReplyDelivery{
+			delivery: replyDeliveryRequest{
+				ctx: opts.ctx, replyWriter: opts.reply, userID: opts.userID,
+				agentName: opts.agentName, reply: reply,
+			},
+			failed: true, finish: finishProgress,
+		})
 		return
 	}
 	if liveAgent, ok := opts.agent.(agent.CodexLiveRuntimeAgent); ok {
@@ -104,8 +109,13 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
 	if runtime.task.shouldSendFinal() {
-		consumed := finishProgressWithReplyForPlatform(opts.reply, finishProgress, reply, err != nil)
-		h.sendReplyWithMediaAfterStreamForRoute(opts.ctx, opts.reply, opts.userID, opts.routeUserID, opts.agentName, reply, consumed)
+		h.finishAndSendProgressReply(progressReplyDelivery{
+			delivery: replyDeliveryRequest{
+				ctx: opts.ctx, replyWriter: opts.reply, userID: opts.userID,
+				agentName: opts.agentName, reply: reply,
+			},
+			failed: err != nil, finish: finishProgress,
+		})
 	} else {
 		_ = finishProgress("", false)
 	}

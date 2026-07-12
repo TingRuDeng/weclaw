@@ -222,7 +222,7 @@ func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
 
 - [ ] **Step 3：迁移全部终态入口**
 
-`agent_execution.go`、`codex_agent_task.go`、`codex_external_task.go` 改为构造 `progressReplyDelivery`。`agent_broadcast.go` 的 result 保存 `failed` 与 `finish`，在 `sendBroadcastAgentResult` 中调用统一入口；未启动 progress session 的错误仍走普通回复。
+`agent_execution.go`、`codex_agent_task.go`、`codex_external_task.go` 改为构造 `progressReplyDelivery`。广播 worker 必须在自身 context 被 defer cancel 前，通过现有 serialized Replier 调用统一入口；随后发送 `skip=true` 的 result 只用于完成顺序同步。禁止把 `finish` 延迟到接收端，避免成功任务因 worker context 已取消而被误判为停止。未启动 progress session 的错误仍走普通回复。
 
 补充回归：Claude blocking Agent 显式设置 `AgentInfo{Name: "claude", Type: "acp"}`，在返回前已 `StreamOpened`；Codex 后台任务和外部 watcher 终态写回原卡；飞书广播维持 serialized Replier 无重入。再增加 `OpenStreamErr` 集成断言，证明开卡失败提示后最终完整结果仍以普通文本送达。
 

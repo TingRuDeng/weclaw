@@ -163,6 +163,46 @@ func TestSendToNamedAgentNativeStreamCompletesCardAndNotifies(t *testing.T) {
 	}
 }
 
+func TestClaudeTaskOpensNativeStreamBeforeAgentReturns(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "claude", Type: "acp", Command: "claude-agent-acp"}
+	h.agents["claude"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	h.SetProgressConfig(cfg)
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, StreamCompletionNotification: true,
+	})
+	done := make(chan struct{})
+	go func() {
+		h.sendToNamedAgent(
+			context.Background(), platform.PlatformFeishu,
+			"ou_user", "ou_user", reply, "claude", "hello", "client-1",
+		)
+		close(done)
+	}()
+
+	select {
+	case <-reply.StreamOpened:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("Claude 返回前未创建任务卡")
+	}
+	waitForAgentEnter(t, ag)
+	close(ag.release)
+	select {
+	case <-done:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("Claude 任务未结束")
+	}
+	if reply.Stream.Completed != "[claude] 第1条结果" {
+		t.Fatalf("completed = %q", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 1 || reply.Texts[0] != "任务已完成，请查看上方卡片。" {
+		t.Fatalf("texts = %#v", reply.Texts)
+	}
+}
+
 func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.agents["mock"] = &fakeProgressAgent{
