@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -60,6 +61,75 @@ func TestACPAgentDisconnectedControlsReturnTypedError(t *testing.T) {
 	err := a.InterruptCodexThread(context.Background(), "conversation-1", "thread-1", "turn-1")
 	if !errors.Is(err, ErrCodexDesktopDisconnected) {
 		t.Fatalf("InterruptCodexThread() error = %v", err)
+	}
+}
+
+// TestACPAgentDesktopChatRecoversAfterNoClient 验证 Desktop 明确释放后原消息会在同一 thread 单次续跑。
+func TestACPAgentDesktopChatRecoversAfterNoClient(t *testing.T) {
+	a, caller := desktopRuntimeTestAgent(t)
+	caller.err = ErrCodexDesktopNoClient
+	restarts := 0
+	a.restartCodexAppServerCall = func(context.Context) error {
+		restarts++
+		return nil
+	}
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/resume":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			turn := params.(codexTurnStartParams)
+			if len(turn.Input) != 1 || turn.Input[0].Text != "继续" {
+				return nil, fmt.Errorf("unexpected retry input: %#v", turn.Input)
+			}
+			a.dispatchToTurnCh(turn.ThreadID, &codexTurnEvent{ItemID: "item-1", Delta: "恢复后的回复"})
+			a.dispatchToTurnCh(turn.ThreadID, &codexTurnEvent{Kind: "completed"})
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	reply, err := a.Chat(context.Background(), "conversation-1", "继续")
+	if err != nil || reply != "恢复后的回复" {
+		t.Fatalf("Chat() = %q, %v", reply, err)
+	}
+	if restarts != 1 || len(caller.calls) != 1 || len(methods) != 2 || methods[0] != "thread/resume" || methods[1] != "turn/start" {
+		t.Fatalf("restarts=%d desktopCalls=%d methods=%v", restarts, len(caller.calls), methods)
+	}
+	binding, ok := a.CurrentCodexThreadBinding("conversation-1")
+	if !ok || binding.Owner != CodexOwnerWeClawRuntime || binding.Ref.ThreadID != "thread-1" {
+		t.Fatalf("binding=%#v ok=%v", binding, ok)
+	}
+}
+
+// TestACPAgentDesktopChatDoesNotRecoverAmbiguousErrors 验证非确定性错误不会转移所有权或重试消息。
+func TestACPAgentDesktopChatDoesNotRecoverAmbiguousErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "连接断开", err: ErrCodexDesktopDisconnected},
+		{name: "交付状态未知", err: ErrCodexDesktopDeliveryUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a, caller := desktopRuntimeTestAgent(t)
+			caller.err = test.err
+			restarts := 0
+			a.restartCodexAppServerCall = func(context.Context) error { restarts++; return nil }
+
+			_, err := a.Chat(context.Background(), "conversation-1", "继续")
+			if !errors.Is(err, test.err) || restarts != 0 {
+				t.Fatalf("Chat() error=%v restarts=%d", err, restarts)
+			}
+			binding, ok := a.CurrentCodexThreadBinding("conversation-1")
+			if !ok || binding.Owner != CodexOwnerDesktopLive || binding.ReleaseConfirmed {
+				t.Fatalf("binding=%#v ok=%v", binding, ok)
+			}
+		})
 	}
 }
 

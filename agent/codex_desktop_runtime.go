@@ -2,9 +2,26 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
+
+// chatCodexDesktopWithRecovery 仅在 Desktop 明确无人处理时恢复同一 thread 并重试一次。
+func (a *ACPAgent) chatCodexDesktopWithRecovery(ctx context.Context, binding CodexThreadBinding, message string, onProgress func(string)) (string, error) {
+	reply, err := a.chatCodexDesktop(ctx, binding, message, onProgress)
+	if !errors.Is(err, ErrCodexDesktopNoClient) {
+		return reply, err
+	}
+	if _, released := a.codexOwners.confirmDesktopReleased(binding.Ref.ThreadID); !released {
+		return "", err
+	}
+	a.persistState()
+	if recoverErr := a.RecoverCodexThread(ctx, binding.Ref); recoverErr != nil {
+		return "", fmt.Errorf("Codex Desktop 已释放，恢复 thread 失败: %w", recoverErr)
+	}
+	return a.chatCodexAppServer(ctx, binding.Ref.ConversationID, message, onProgress)
+}
 
 // chatCodexDesktop 先订阅事件，再在同一 Desktop thread 开始 turn。
 func (a *ACPAgent) chatCodexDesktop(ctx context.Context, binding CodexThreadBinding, message string, onProgress func(string)) (string, error) {

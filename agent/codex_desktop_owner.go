@@ -70,6 +70,23 @@ func (r *codexRuntimeOwnerRegistry) markDesktopDisconnected() {
 	}
 }
 
+// confirmDesktopReleased 仅把 Desktop 明确拒绝处理的 live thread 标记为可恢复。
+func (r *codexRuntimeOwnerRegistry) confirmDesktopReleased(threadID string) (CodexThreadBinding, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	threadID = strings.TrimSpace(threadID)
+	binding, ok := r.threads[threadID]
+	if !ok || binding.Owner != CodexOwnerDesktopLive {
+		return binding, false
+	}
+	binding.Owner = CodexOwnerPersistedOnly
+	binding.OwnerRevision++
+	binding.Connected = false
+	binding.ReleaseConfirmed = true
+	r.threads[threadID] = binding
+	return binding, true
+}
+
 // threadBinding 返回指定 thread 的当前权威 owner 快照。
 func (r *codexRuntimeOwnerRegistry) threadBinding(threadID string) (CodexThreadBinding, bool) {
 	r.mu.Lock()

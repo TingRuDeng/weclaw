@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-真实飞书与 Codex App 自动续跑链路已完成实机验收；展示噪声优化已通过自动化验证，准备发布。
+Desktop 客户端明确释放 thread 后，普通消息已能自动转交 WeClaw runtime；自动化验证完成，等待发布后实机复测。
 
 ## 任务清单
 
@@ -41,6 +41,9 @@
 - [x] P5.3c 串行 TDD：更新 `messaging/task_commands.go` 的暂存提示为单行简洁文案，并调整相关断言，保留 `/guide`、`/cancel` 命令能力但不重复展示操作说明。
 - [x] P5.3d 串行自动验收：运行 `go test ./messaging ./feishu`、全仓单测、race、vet、文档校验和 `git diff --check`。
 - [ ] P5.3e 发布后实机复测：用飞书验证短任务无空完成卡、排队提示单行且自动续跑结果正常返回。
+- [x] P5.4a 串行 TDD：复现普通消息沿旧 `desktop_live` 绑定发送时收到 `no-client-found`，却未恢复同一 thread 的问题。
+- [x] P5.4b 串行实现：仅在 Desktop 明确返回 `no-client-found` 时确认 release，恢复到 WeClaw app-server 并单次重试原消息。
+- [x] P5.4c 串行验证：断线与交付状态未知不得触发回退，并完成受影响测试、全仓测试、race、vet、staticcheck 和交付审查。
 - [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 
 ## 并行说明
@@ -58,3 +61,5 @@
 2026-07-12 第三次实机验收确认缓存 revision 落后于 Desktop：缓存为 `4340`，实时状态已到 `4533`，并把已完成 turn 当成 active。第六版已过滤未接管 thread 的初始化广播，解析 `load-complete-history` 返回 revision，并等待同一连接代次的状态缓存达到该 revision 后才完成绑定；全仓测试和 race 通过。直接飞书消息已成功返回，真正的 active task 暂存续跑仍待最终确认。
 
 2026-07-12 第四次实机验收确认本地 turn 结束后，飞书暂存消息于 `09:19:12` 自动出队，`09:19:21` 返回最终结果，随后 `active_tasks=0`；用户截图确认结果已到达飞书。展示优化进一步修复排队路径丢失账号级 `stream` 配置、短任务提前创建空完成卡和重复操作提示。发布前全仓单测、race、vet、文档校验和差异检查通过；当前环境未安装 `staticcheck`。
+
+2026-07-12 发布后实机日志确认 Android thread 的旧 `desktop_live` 绑定在 Desktop 返回 `no-client-found` 后仍被普通消息复用。已增加确定性 release 转移、同 thread app-server 恢复和原消息单次重试；断线与交付未知负向测试通过。`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均为退出码 0。

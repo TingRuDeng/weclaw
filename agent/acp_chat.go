@@ -23,7 +23,7 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 		if binding, ok := a.CurrentCodexThreadBinding(conversationID); ok {
 			switch binding.Owner {
 			case CodexOwnerDesktopLive:
-				return a.chatCodexDesktop(ctx, binding, message, onProgress)
+				return a.chatCodexDesktopWithRecovery(ctx, binding, message, onProgress)
 			case CodexOwnerDesktopDisconnected:
 				return "", ErrCodexDesktopDisconnected
 			case CodexOwnerUnknown:
