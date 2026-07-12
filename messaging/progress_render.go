@@ -22,6 +22,19 @@ func renderCardCreationFallback() string {
 	return "任务已开始，卡片创建失败，将以普通消息返回结果。"
 }
 
+func renderStreamTerminalNotification(parentCanceled bool, failed bool, finalText string) string {
+	if strings.TrimSpace(finalText) == "" || finalText == progressStatusOnlyComplete {
+		return ""
+	}
+	if parentCanceled {
+		return "任务已停止，请查看上方卡片。"
+	}
+	if failed {
+		return "任务执行失败，请查看上方卡片。"
+	}
+	return "任务已完成，请查看上方卡片。"
+}
+
 func renderDeltaProgress(delta string, cfg config.ProgressConfig) string {
 	status := lastNonEmptyProgressLine(delta)
 	if strings.HasPrefix(status, "进展：") {

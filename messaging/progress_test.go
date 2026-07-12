@@ -345,3 +345,51 @@ func TestProgressOffModeDoesNotOpenNativeStream(t *testing.T) {
 		t.Fatalf("OpenStream calls = %d, want 0", reply.OpenStreamCalls)
 	}
 }
+
+func TestNativeStreamTerminalNotifications(t *testing.T) {
+	tests := []struct {
+		name   string
+		cancel bool
+		failed bool
+		want   string
+	}{
+		{name: "success", want: "任务已完成，请查看上方卡片。"},
+		{name: "failure", failed: true, want: "任务执行失败，请查看上方卡片。"},
+		{name: "stopped", cancel: true, want: "任务已停止，请查看上方卡片。"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			reply := platformtest.NewReplier(platform.Capabilities{
+				Text: true, Streaming: true, StreamCompletionNotification: true,
+			})
+			cfg := config.DefaultProgressConfig()
+			cfg.Mode = progressModeStream
+			_, finish := NewHandler(nil, nil).startProgressSessionWithFinal(ctx, reply, "", "任务", cfg)
+			if tc.cancel {
+				cancel()
+			}
+			finish("终态正文", tc.failed)
+			if len(reply.Texts) != 1 || reply.Texts[0] != tc.want {
+				t.Fatalf("texts = %#v", reply.Texts)
+			}
+		})
+	}
+}
+
+func TestNativeStreamTerminalFailureDoesNotNotify(t *testing.T) {
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, StreamCompletionNotification: true,
+	})
+	reply.Stream.CompleteErr = errors.New("update failed")
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	_, finish := NewHandler(nil, nil).startProgressSessionWithFinal(context.Background(), reply, "", "任务", cfg)
+
+	if finish("完整结果", false) {
+		t.Fatal("failed terminal update must not consume final reply")
+	}
+	if len(reply.Texts) != 0 {
+		t.Fatalf("texts = %#v", reply.Texts)
+	}
+}

@@ -284,5 +284,11 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 		log.Printf("[handler] failed to finish progress stream: %v", err)
 		return false
 	}
+	notification := renderStreamTerminalNotification(parentCanceled, failed, finalText)
+	if notification != "" && s.reply.Capabilities().StreamCompletionNotification {
+		if notifyErr := s.reply.SendText(ctx, notification); notifyErr != nil {
+			log.Printf("[handler] failed to send stream terminal notification: %v", notifyErr)
+		}
+	}
 	return strings.TrimSpace(finalText) != "" && finalText != progressStatusOnlyComplete
 }

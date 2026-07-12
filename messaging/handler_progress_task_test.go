@@ -140,6 +140,29 @@ func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
 	}
 }
 
+func TestSendToNamedAgentNativeStreamCompletesCardAndNotifies(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeProgressAgent{fakeAgent: fakeAgent{reply: "最终结果"}}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	h.SetProgressConfig(cfg)
+
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, StreamCompletionNotification: true,
+	})
+	h.sendToNamedAgent(
+		context.Background(), platform.PlatformFeishu,
+		"feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1",
+	)
+
+	if reply.Stream.Completed != "[mock] 最终结果" {
+		t.Fatalf("completed = %q", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 1 || reply.Texts[0] != "任务已完成，请查看上方卡片。" {
+		t.Fatalf("texts = %#v", reply.Texts)
+	}
+}
+
 func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.agents["mock"] = &fakeProgressAgent{
