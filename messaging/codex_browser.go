@@ -107,7 +107,7 @@ func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, _ string, w
 func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWorkspaceGroup, workspaceRoot string) string {
 	sessions := switchableCodexSessions(group.Sessions)
 	if len(sessions) == 0 {
-		return h.enterCodexWorkspaceWithNewDraft(req, group.Name, workspaceRoot)
+		return h.enterCodexWorkspaceWithoutSessions(req, group.Name, workspaceRoot)
 	}
 	if len(sessions) == 1 {
 		return h.enterCodexWorkspaceWithSingleSession(req, group.Name, workspaceRoot, sessions[0])
@@ -115,20 +115,19 @@ func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWo
 	return wechatCommandText("工作空间: "+group.Name, h.renderCodexSessionList(req.BindingKey, workspaceRoot))
 }
 
-// enterCodexWorkspaceWithNewDraft 清理当前 thread，下一条 Codex 普通任务会创建新会话。
-func (h *Handler) enterCodexWorkspaceWithNewDraft(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string) string {
-	if codexAg, ok := req.Agent.(agent.CodexThreadAgent); ok {
-		conversationID := buildCodexConversationID(req.UserID, req.AgentName, workspaceRoot)
-		h.bindConversationCwd(req.Agent, conversationID, workspaceRoot)
-		codexAg.ClearCodexThread(conversationID)
-	}
-	h.ensureCodexSessions().setPendingNew(req.BindingKey, workspaceRoot)
-	return wechatCommandText("已进入工作空间并创建新会话草稿。", "工作空间: "+workspaceName)
+// enterCodexWorkspaceWithoutSessions 保持未绑定状态，由用户显式决定是否创建会话。
+func (h *Handler) enterCodexWorkspaceWithoutSessions(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string) string {
+	h.ensureCodexSessions().ensureWorkspace(req.BindingKey, workspaceRoot)
+	return wechatCommandText(
+		"当前工作空间没有可用会话。",
+		"工作空间: "+workspaceName,
+		"发送 /cx new 创建新会话。",
+	)
 }
 
 // enterCodexWorkspaceWithSingleSession 自动切换唯一会话；坏历史无法恢复时改为新会话草稿。
 func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string, session codexWorkspaceView) string {
-	codexAg, ok := req.Agent.(agent.CodexThreadAgent)
+	_, ok := req.Agent.(agent.CodexThreadAgent)
 	if !ok {
 		return wechatCommandText("工作空间: "+workspaceName, h.renderCodexSessionList(req.BindingKey, workspaceRoot))
 	}
@@ -139,16 +138,14 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 		conversationID: conversationID, threadID: session.ThreadID,
 	}
 	resolution, err := h.resolveCodexRuntime(req.Context, codexRuntimeResolveOptions{
-		route: route, threadID: session.ThreadID, ag: req.Agent,
+		route: route, threadID: session.ThreadID, ag: req.Agent, allowDisconnectedRecovery: true,
 	})
 	if err != nil {
 		if isCodexThreadStoreReadError(err) {
-			codexAg.ClearCodexThread(conversationID)
-			h.ensureCodexSessions().setPendingNew(req.BindingKey, workspaceRoot)
 			return wechatCommandText(
-				"已进入工作空间并创建新会话草稿。",
+				"切换会话失败。",
 				"工作空间: "+workspaceName,
-				"原会话无法被微信接手，已改用新会话。",
+				"原会话无法被微信接手，请选择其他会话或发送 /cx new。",
 			)
 		}
 		return fmt.Sprintf("切换线程失败: %v", err)

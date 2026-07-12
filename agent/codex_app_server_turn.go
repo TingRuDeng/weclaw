@@ -194,6 +194,9 @@ func (a *ACPAgent) clearCodexThread(conversationID string) string {
 	delete(a.threads, conversationID)
 	delete(a.resumeOnFirstUse, conversationID)
 	a.mu.Unlock()
+	if a.codexOwners != nil {
+		a.codexOwners.unbindConversation(conversationID)
+	}
 	a.persistState()
 	return oldThreadID
 }

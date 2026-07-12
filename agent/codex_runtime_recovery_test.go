@@ -17,6 +17,37 @@ func TestACPAgentRecoverCodexThreadRejectsLiveOwner(t *testing.T) {
 	}
 }
 
+// TestACPAgentResetSessionRebindsNewThreadOwner 验证显式新建后不再沿用旧 Desktop owner。
+func TestACPAgentResetSessionRebindsNewThreadOwner(t *testing.T) {
+	a := recoveryTestAgent(t, CodexOwnerDesktopDisconnected)
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/start" {
+			return nil, errors.New("unexpected rpc method: " + method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil
+	}
+
+	threadID, err := a.ResetSession(context.Background(), "conversation-1")
+	if err != nil || threadID != "thread-new" {
+		t.Fatalf("ResetSession()=(%q,%v), want thread-new", threadID, err)
+	}
+	binding, ok := a.CurrentCodexThreadBinding("conversation-1")
+	if !ok || binding.Ref.ThreadID != "thread-new" || binding.Owner != CodexOwnerWeClawRuntime {
+		t.Fatalf("binding=%#v ok=%v, want new WeClaw owner", binding, ok)
+	}
+}
+
+// TestACPAgentClearCodexThreadUnbindsConversation 验证显式清理后旧 owner 不能继续拦截普通消息。
+func TestACPAgentClearCodexThreadUnbindsConversation(t *testing.T) {
+	a := recoveryTestAgent(t, CodexOwnerDesktopDisconnected)
+
+	a.ClearCodexThread("conversation-1")
+
+	if binding, ok := a.CurrentCodexThreadBinding("conversation-1"); ok {
+		t.Fatalf("binding=%#v, want conversation unbound", binding)
+	}
+}
+
 func TestACPAgentUseCodexThreadDoesNotResumeDesktopOwner(t *testing.T) {
 	a := recoveryTestAgent(t, CodexOwnerDesktopLive)
 	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
@@ -33,13 +64,24 @@ func TestACPAgentUseCodexThreadDoesNotResumeDesktopOwner(t *testing.T) {
 	}
 }
 
-func TestACPAgentRecoverCodexThreadRejectsDisconnectedOwner(t *testing.T) {
+func TestACPAgentRecoverCodexThreadAllowsDisconnectedOwner(t *testing.T) {
 	a := recoveryTestAgent(t, CodexOwnerDesktopDisconnected)
+	a.restartCodexAppServerCall = func(context.Context) error { return nil }
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/resume" {
+			return nil, errors.New("unexpected rpc method: " + method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+	}
 	err := a.RecoverCodexThread(context.Background(), CodexThreadRef{
 		ConversationID: "conversation-1", ThreadID: "thread-1",
 	})
-	if !errors.Is(err, ErrCodexDesktopDisconnected) {
+	if err != nil {
 		t.Fatalf("RecoverCodexThread() error = %v", err)
+	}
+	binding, ok := a.CurrentCodexThreadBinding("conversation-1")
+	if !ok || binding.Owner != CodexOwnerWeClawRuntime {
+		t.Fatalf("binding=%#v ok=%v, want WeClaw owner", binding, ok)
 	}
 }
 

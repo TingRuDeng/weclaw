@@ -30,7 +30,7 @@ func (a *ACPAgent) RecoverCodexThread(ctx context.Context, ref CodexThreadRef) e
 	a.threads[ref.ConversationID] = ref.ThreadID
 	delete(a.resumeOnFirstUse, ref.ConversationID)
 	a.mu.Unlock()
-	a.codexOwners.claimWeClawThread(ref.ThreadID, binding.State)
+	a.codexOwners.claimWeClawConversation(ref, binding.State)
 	a.persistState()
 	return nil
 }
@@ -40,7 +40,7 @@ func validateCodexRecoveryBinding(binding CodexThreadBinding) error {
 	case CodexOwnerDesktopLive, CodexOwnerUnknown:
 		return ErrCodexDesktopOwnershipUnknown
 	case CodexOwnerDesktopDisconnected:
-		return ErrCodexDesktopDisconnected
+		return nil
 	case CodexOwnerPersistedOnly:
 		if binding.ReleaseConfirmed {
 			return nil

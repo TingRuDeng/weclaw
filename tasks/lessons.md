@@ -390,3 +390,11 @@
 - 反例：额度错误后清除原 thread，下一条消息自动创建新 thread；或 stale thread/session 恢复失败后自动重建并重试原消息。这会丢失上下文，并剥夺用户切换其他会话或主动新建的选择权。
 - 正确做法：保留原绑定，恢复失败时显式提示用户选择已有会话或发送 `/new`；把“获取或恢复已有会话”和“显式创建新会话”拆成独立 API。
 - 来源：2026-07-12 用户明确要求“必须手动 `/new`，直接新建会剥夺用户选择的权利”，并确认未绑定窗口也不能自动创建首次会话。
+
+## 2026-07-12 Codex 会话状态必须跨存储原子同步
+
+- 触发条件：创建、清理或切换 Codex thread，同时存在 ACP thread map、owner registry 和 Messaging route session store。
+- 规则：显式创建成功后必须把三个状态源同步到同一 thread；清理时必须同时解除 conversation owner 路由。任何“新会话草稿”都不能依赖下一条普通消息隐式完成。
+- 反例：`thread/start` 已返回新 thread，但 owner registry 仍指向旧 `desktop_disconnected` thread，导致后续消息绕过新 thread 并立即报断线；`/cx new` 只写 pending draft，在禁止隐式创建后永远无法完成。
+- 正确做法：提供 owner registry 原子 claim-and-bind 操作；`/new`、`/cx new` 立即创建并记录；空工作空间和恢复失败只提示显式选择，不伪装成已创建。
+- 来源：2026-07-12 用户反馈“飞书里切换会话、新建会话失败”，生产日志和状态文件显示 ACP thread 与 owner binding 指向不同 thread。

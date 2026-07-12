@@ -48,12 +48,13 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	}
 }
 
-func TestHandleCodexNewCommandClearsWorkspaceThread(t *testing.T) {
+func TestHandleCodexNewCommandImmediatelyCreatesWorkspaceThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			resetSessionID: "thread-new",
 		},
 		threadID: "thread-old",
 	}
@@ -68,14 +69,14 @@ func TestHandleCodexNewCommandClearsWorkspaceThread(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(102, "/cx new"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.clearCalledWith != wantConversationID {
-		t.Fatalf("clear conversationID=%q, want %q", ag.clearCalledWith, wantConversationID)
+	if ag.resetConversationID() != wantConversationID {
+		t.Fatalf("reset conversationID=%q, want %q", ag.resetConversationID(), wantConversationID)
 	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
-	if thread != "" || !pending {
-		t.Fatalf("stored thread=%q pending=%v, want empty true", thread, pending)
+	if thread != "thread-new" || pending {
+		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已切换到新会话") {
+	if !containsText(calls.texts(), "已创建新的codex会话") {
 		t.Fatalf("reply should mention new session, messages=%#v", calls.texts())
 	}
 }

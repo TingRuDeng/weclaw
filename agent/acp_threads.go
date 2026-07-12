@@ -52,6 +52,11 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 	a.threads[conversationID] = threadID
 	delete(a.resumeOnFirstUse, conversationID)
 	a.mu.Unlock()
+	if a.codexOwners != nil {
+		a.codexOwners.claimWeClawConversation(CodexThreadRef{
+			ConversationID: conversationID, ThreadID: threadID,
+		}, CodexThreadState{ThreadID: threadID})
+	}
 	a.persistState()
 	return nil
 }
@@ -168,6 +173,11 @@ func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (str
 	a.threads[conversationID] = threadID
 	delete(a.resumeOnFirstUse, conversationID)
 	a.mu.Unlock()
+	if a.codexOwners != nil {
+		a.codexOwners.claimWeClawConversation(CodexThreadRef{
+			ConversationID: conversationID, ThreadID: threadID,
+		}, CodexThreadState{ThreadID: threadID})
+	}
 	a.persistState()
 	return threadID, nil
 }

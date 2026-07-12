@@ -15,9 +15,10 @@ type codexRuntimeResolution struct {
 }
 
 type codexRuntimeResolveOptions struct {
-	route    codexConversationRoute
-	threadID string
-	ag       agent.Agent
+	route                     codexConversationRoute
+	threadID                  string
+	ag                        agent.Agent
+	allowDisconnectedRecovery bool
 }
 
 // resolveCodexRuntime 先绑定实时 owner，再决定是否允许 app-server 恢复。
@@ -47,7 +48,8 @@ func (h *Handler) resolveCodexRuntime(ctx context.Context, opts codexRuntimeReso
 		return resolution, err
 	}
 	resolution.Rollout = rollout
-	if binding.Owner != agent.CodexOwnerPersistedOnly || rollout.Active || h.hasExternalCodexTask(opts.route.conversationID) {
+	if !canRecoverCodexBinding(binding.Owner, opts.allowDisconnectedRecovery) ||
+		rollout.Active || h.hasExternalCodexTask(opts.route.conversationID) {
 		return resolution, nil
 	}
 	if err := liveAgent.RecoverCodexThread(ctx, ref); err != nil {
@@ -56,6 +58,12 @@ func (h *Handler) resolveCodexRuntime(ctx context.Context, opts codexRuntimeReso
 	resolution.Binding.Owner = agent.CodexOwnerWeClawRuntime
 	resolution.Binding.Connected = true
 	return resolution, nil
+}
+
+// canRecoverCodexBinding 限制断线 thread 只能由用户显式切换授权恢复。
+func canRecoverCodexBinding(owner agent.CodexRuntimeOwner, allowDisconnected bool) bool {
+	return owner == agent.CodexOwnerPersistedOnly ||
+		allowDisconnected && owner == agent.CodexOwnerDesktopDisconnected
 }
 
 func (h *Handler) resolveLegacyCodexRuntime(ctx context.Context, opts codexRuntimeResolveOptions) (codexRuntimeResolution, error) {

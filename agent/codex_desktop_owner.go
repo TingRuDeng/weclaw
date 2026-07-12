@@ -55,6 +55,30 @@ func (r *codexRuntimeOwnerRegistry) claimWeClawThread(threadID string, state Cod
 	return binding
 }
 
+// claimWeClawConversation 原子声明 app-server owner 并把 conversation 切换到同一 thread。
+func (r *codexRuntimeOwnerRegistry) claimWeClawConversation(ref CodexThreadRef, state CodexThreadState) CodexThreadBinding {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ref.ConversationID = strings.TrimSpace(ref.ConversationID)
+	ref.ThreadID = strings.TrimSpace(ref.ThreadID)
+	current := r.threads[ref.ThreadID]
+	state.ThreadID = ref.ThreadID
+	binding := CodexThreadBinding{
+		Ref: ref, Owner: CodexOwnerWeClawRuntime,
+		OwnerRevision: current.OwnerRevision + 1, Connected: true, State: state,
+	}
+	r.threads[ref.ThreadID] = binding
+	r.conversations[ref.ConversationID] = ref.ThreadID
+	return binding
+}
+
+// unbindConversation 删除 conversation 路由，不改变 thread 本身的 owner 证据。
+func (r *codexRuntimeOwnerRegistry) unbindConversation(conversationID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.conversations, strings.TrimSpace(conversationID))
+}
+
 // markDesktopDisconnected 降级 Desktop owner，但不产生 release evidence。
 func (r *codexRuntimeOwnerRegistry) markDesktopDisconnected() {
 	r.mu.Lock()

@@ -63,6 +63,7 @@ func TestCodexCxSwitchDoesNotCreateDraftWhenOtherSessionsExist(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.ensureWorkspace(bindingKey, workspace)
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
@@ -122,7 +123,7 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	}
 }
 
-func TestCodexShortIndexCreatesDraftWhenSingleSessionCannotBeRestored(t *testing.T) {
+func TestCodexShortIndexPreservesBindingWhenSingleSessionCannotBeRestored(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -137,6 +138,7 @@ func TestCodexShortIndexCreatesDraftWhenSingleSessionCannotBeRestored(t *testing
 	}
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
+	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-bad")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
@@ -146,51 +148,47 @@ func TestCodexShortIndexCreatesDraftWhenSingleSessionCannotBeRestored(t *testing
 	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-bad" {
 		t.Fatalf("应先尝试恢复唯一 thread，use conversation/thread=(%q,%q)", ag.useConversation, ag.useThreadID)
 	}
-	if ag.clearCalledWith != wantConversationID {
-		t.Fatalf("坏 thread 应清理当前会话，clear=%q want %q", ag.clearCalledWith, wantConversationID)
+	if ag.clearCalledWith != "" {
+		t.Fatalf("坏 thread 不应清理原绑定，clear=%q", ag.clearCalledWith)
 	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
-	if thread != "" || !pending {
-		t.Fatalf("坏 thread 应进入新会话草稿，thread=%q pending=%v", thread, pending)
+	if thread != "thread-bad" || pending {
+		t.Fatalf("坏 thread 应保留原绑定，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已进入工作空间并创建新会话草稿") ||
-		!strings.Contains(text, "原会话无法被微信接手") {
-		t.Fatalf("reply should explain draft fallback, messages=%#v", calls.texts())
+	if !strings.Contains(text, "原会话无法被微信接手") || !strings.Contains(text, "/cx new") ||
+		strings.Contains(text, "已进入工作空间并创建新会话草稿") {
+		t.Fatalf("reply should preserve user choice, messages=%#v", calls.texts())
 	}
 }
 
-func TestCodexCxCdWorkspaceWithNoSessionsCreatesDraft(t *testing.T) {
+func TestCodexCxCdWorkspaceWithNoSessionsRequiresExplicitNew(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.SetCodexLocalSessionDir(t.TempDir())
 	workspace := filepath.Join(t.TempDir(), "empty")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatalf("创建测试工作空间失败: %v", err)
 	}
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+			resetSessionID: "thread-new",
 		},
 	}
-	h.defaultName = "codex"
-	h.agents["codex"] = ag
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setPendingNew(bindingKey, workspace)
-	client, calls, closeServer := newRecordingILinkClient(t)
-	defer closeServer()
+	text := h.enterCodexWorkspaceWithoutSessions(codexWorkspaceCdRequest{
+		Context: context.Background(), UserID: "user-1", ActorUserID: "user-1",
+		BindingKey: bindingKey, AgentName: "codex", Agent: ag,
+	}, "empty", workspace)
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(145, "/cx cd 0"))
-
-	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
-		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
-	}
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
-	if thread != "" || !pending {
-		t.Fatalf("thread=%q pending=%v, want pending new draft", thread, pending)
+	if thread != "" || pending {
+		t.Fatalf("thread=%q pending=%v, want unbound workspace", thread, pending)
 	}
-	if !containsText(calls.texts(), "已进入工作空间并创建新会话草稿") {
-		t.Fatalf("cd should create draft for empty workspace, messages=%#v", calls.texts())
+	if ag.resetConversationID() != "" {
+		t.Fatalf("cd workspace must not create session, reset=%q", ag.resetConversationID())
+	}
+	if !strings.Contains(text, "发送 /cx new") {
+		t.Fatalf("cd should require explicit new session, text=%q", text)
 	}
 }
 

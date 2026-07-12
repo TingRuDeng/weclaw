@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -58,6 +59,41 @@ func TestCodexSwitchUnknownOwnerDoesNotResumeACP(t *testing.T) {
 	)
 	if ag.useThreadID != "" || ag.recoverCalls != 0 || !strings.Contains(text, "所有权未知") {
 		t.Fatalf("use=%q recover=%d text=%q", ag.useThreadID, ag.recoverCalls, text)
+	}
+}
+
+// TestCodexExplicitSwitchRecoversDisconnectedIdleThread 验证用户选择会话即授权接管空闲断线 thread。
+func TestCodexExplicitSwitchRecoversDisconnectedIdleThread(t *testing.T) {
+	h, ag, route := disconnectedCodexResolutionFixture(t, false)
+	text := h.handleCodexSwitchForRouteWithOptions(
+		context.Background(), "user-1", "codex", route.workspaceRoot, ag, "thread-1", "",
+		codexSwitchOptions{actorUserID: "user-1"},
+	)
+	if ag.recoverCalls != 1 || ag.binding.Owner != agent.CodexOwnerWeClawRuntime || !strings.Contains(text, "已切换会话") {
+		t.Fatalf("recover=%d binding=%#v text=%q", ag.recoverCalls, ag.binding, text)
+	}
+}
+
+// TestCodexNormalPrepareDoesNotRecoverDisconnectedThread 验证普通消息不能把断线状态当成接管授权。
+func TestCodexNormalPrepareDoesNotRecoverDisconnectedThread(t *testing.T) {
+	h, ag, route := disconnectedCodexResolutionFixture(t, false)
+
+	err := h.prepareCodexConversation(context.Background(), route, ag)
+
+	if !errors.Is(err, agent.ErrCodexDesktopDisconnected) || ag.recoverCalls != 0 {
+		t.Fatalf("err=%v recover=%d, want disconnected without recovery", err, ag.recoverCalls)
+	}
+}
+
+// TestCodexExplicitSwitchDoesNotRecoverDisconnectedActiveThread 验证活动 rollout 不能被显式切换抢占。
+func TestCodexExplicitSwitchDoesNotRecoverDisconnectedActiveThread(t *testing.T) {
+	h, ag, route := disconnectedCodexResolutionFixture(t, true)
+	h.handleCodexSwitchForRouteWithOptions(
+		context.Background(), "user-1", "codex", route.workspaceRoot, ag, "thread-1", "",
+		codexSwitchOptions{actorUserID: "user-1"},
+	)
+	if ag.recoverCalls != 0 {
+		t.Fatalf("recover=%d, want 0 for active rollout", ag.recoverCalls)
 	}
 }
 
@@ -147,4 +183,12 @@ func persistedCodexResolutionFixture(t *testing.T, active bool) (*Handler, *fake
 	}
 	h.SetCodexLocalSessionDir(codexDir)
 	return h, ag, h.codexConversationRouteForSession("user-1", "user-1", "codex", ag)
+}
+
+func disconnectedCodexResolutionFixture(t *testing.T, active bool) (*Handler, *fakeCodexLiveAgent, codexConversationRoute) {
+	h, ag, route := persistedCodexResolutionFixture(t, active)
+	ag.binding.Owner = agent.CodexOwnerDesktopDisconnected
+	ag.binding.Connected = false
+	ag.bindErr = agent.ErrCodexDesktopDisconnected
+	return h, ag, route
 }

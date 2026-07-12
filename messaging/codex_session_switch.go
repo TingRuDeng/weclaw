@@ -17,17 +17,27 @@ type codexSwitchOptions struct {
 	reply       platform.Replier
 }
 
-// handleCodexNewForRoute 只清理 route session 的 thread，避免飞书 thread 影响同一用户其他会话。
-func (h *Handler) handleCodexNewForRoute(userID string, agentName string, workspaceRoot string, ag agent.Agent, ownerBindingKey string) string {
-	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
-	h.bindConversationCwd(ag, conversationID, workspaceRoot)
-	if codexAg, ok := ag.(agent.CodexThreadAgent); ok {
-		codexAg.ClearCodexThread(conversationID)
+type codexNewRequest struct {
+	ctx             context.Context
+	userID          string
+	agentName       string
+	workspaceRoot   string
+	agent           agent.Agent
+	ownerBindingKey string
+}
+
+// handleCodexNewForRoute 立即创建 route session 的 thread，避免依赖下一条普通消息隐式创建。
+func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
+	conversationID := buildCodexConversationID(req.userID, req.agentName, req.workspaceRoot)
+	h.bindConversationCwd(req.agent, conversationID, req.workspaceRoot)
+	threadID, err := req.agent.ResetSession(req.ctx, conversationID)
+	if err != nil {
+		return fmt.Sprintf("创建新的 Codex 会话失败: %v", err)
 	}
-	bindingKey := codexBindingKey(userID, agentName)
-	h.ensureCodexSessions().setPendingNew(bindingKey, workspaceRoot)
-	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
-	return wechatCommandText("已切换到新会话。", "workspace: "+workspaceRoot)
+	bindingKey := codexBindingKey(req.userID, req.agentName)
+	h.recordResetCodexThread(req.userID, req.agentName, req.workspaceRoot, threadID)
+	h.setCodexActiveWorkspaceForRoute(bindingKey, req.ownerBindingKey, req.workspaceRoot)
+	return wechatCommandText("已创建新的"+req.agentName+"会话", threadID)
 }
 
 func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string, opts codexSwitchOptions) string {
@@ -47,7 +57,7 @@ func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, user
 		conversationID: conversationID, threadID: threadID,
 	}
 	resolution, err := h.resolveCodexRuntime(ctx, codexRuntimeResolveOptions{
-		route: route, threadID: threadID, ag: ag,
+		route: route, threadID: threadID, ag: ag, allowDisconnectedRecovery: true,
 	})
 	if err != nil {
 		return renderCodexSwitchFailure(err)
