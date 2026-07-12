@@ -200,7 +200,7 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("broadcast should not block behind running Codex task")
 	}
-	waitForText(t, calls, "Codex 正在处理上一条任务")
+	waitForText(t, calls, queuedCodexMessage)
 	waitForText(t, calls, "[claude] claude ok")
 
 	codex.release <- struct{}{}

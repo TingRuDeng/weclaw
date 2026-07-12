@@ -51,6 +51,7 @@ type progressSession struct {
 	cfg           config.ProgressConfig
 	deltaCh       chan string
 	wg            sync.WaitGroup
+	streamMu      sync.Mutex
 	typingStarted bool
 }
 
@@ -92,13 +93,18 @@ func (s *progressSession) start() {
 		go s.runTyping()
 	}
 	if progressModeAllowsProgress(s.cfg.Mode) {
-		s.openStream()
 		s.wg.Add(1)
 		go s.runProgressLoop()
 	}
 }
 
 func (s *progressSession) onProgress(delta string) {
+	if strings.TrimSpace(delta) == "" {
+		return
+	}
+	if s.cfg.InitialDelaySeconds <= 0 {
+		s.ensureStream()
+	}
 	select {
 	case s.deltaCh <- delta:
 	case <-s.ctx.Done():
@@ -197,8 +203,9 @@ func (s *progressSession) sendProgressIfAllowed(summary string, state *progressS
 }
 
 func (s *progressSession) send(text string) {
-	if s.stream != nil {
-		if err := s.stream.Update(s.ctx, s.prefix+text); err != nil {
+	stream := s.ensureStream()
+	if stream != nil {
+		if err := stream.Update(s.ctx, s.prefix+text); err != nil {
 			log.Printf("[handler] failed to update progress stream: %v", err)
 		}
 		return
@@ -212,13 +219,19 @@ func (s *progressSession) sendText(text string) {
 	}
 }
 
-func (s *progressSession) openStream() {
+func (s *progressSession) ensureStream() platform.Stream {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.stream != nil || !progressModeAllowsProgress(s.cfg.Mode) {
+		return s.stream
+	}
 	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{Title: progressTaskTitle(s.taskText, 60)})
 	if err != nil {
 		log.Printf("[handler] failed to open progress stream: %v", err)
-		return
+		return nil
 	}
 	s.stream = stream
+	return stream
 }
 
 func (s *progressSession) sendTyping() {
@@ -236,7 +249,10 @@ func (s *progressSession) cancelTyping() {
 }
 
 func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool) bool {
-	if s.stream == nil || !s.reply.Capabilities().Streaming {
+	s.streamMu.Lock()
+	stream := s.stream
+	s.streamMu.Unlock()
+	if stream == nil || !s.reply.Capabilities().Streaming {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -244,15 +260,15 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 	var err error
 	switch {
 	case parentCanceled:
-		err = s.stream.Fail(ctx, firstNonBlank(finalText, "任务已停止。"))
+		err = stream.Fail(ctx, firstNonBlank(finalText, "任务已停止。"))
 	case failed:
-		err = s.stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
+		err = stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
 	case finalText == progressStatusOnlyComplete:
-		err = s.stream.Complete(ctx, "")
+		err = stream.Complete(ctx, "")
 	case strings.TrimSpace(finalText) != "":
-		err = s.stream.Complete(ctx, finalText)
+		err = stream.Complete(ctx, finalText)
 	default:
-		err = s.stream.Complete(ctx, progressDefaultCompletion)
+		err = stream.Complete(ctx, progressDefaultCompletion)
 	}
 	if err != nil {
 		log.Printf("[handler] failed to finish progress stream: %v", err)

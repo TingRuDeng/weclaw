@@ -70,7 +70,7 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
 	}, reply)
 	task, _ := h.activeTask(conversationID)
-	if task.pendingGuide() != "补充要求" || !containsText(reply.Texts, "自动执行此消息") {
+	if task.pendingGuide() != "补充要求" || !containsText(reply.Texts, queuedCodexMessage) {
 		t.Fatalf("pending=%q texts=%#v, read-only task must queue the next message", task.pendingGuide(), reply.Texts)
 	}
 	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{

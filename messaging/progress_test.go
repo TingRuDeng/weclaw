@@ -250,6 +250,7 @@ func TestNativeStreamProgressSkipsTypingAndCompletes(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Typing: true, Streaming: true})
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
+	cfg.InitialDelaySeconds = 0
 	cfg.EnableTyping = boolPtr(true)
 
 	onProgress, stop := h.startProgressSession(context.Background(), reply, "", "飞书流式任务", cfg)
@@ -272,6 +273,7 @@ func TestNativeStreamProgressCompletesWithFinalResult(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Typing: true, Streaming: true})
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
+	cfg.InitialDelaySeconds = 0
 
 	onProgress, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "飞书流式任务", cfg)
 	onProgress("临时过程")
@@ -285,5 +287,23 @@ func TestNativeStreamProgressCompletesWithFinalResult(t *testing.T) {
 	}
 	if len(reply.Texts) != 0 {
 		t.Fatalf("texts=%#v, want no extra text", reply.Texts)
+	}
+}
+
+func TestNativeStreamShortTaskDoesNotCreateEmptyCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+
+	onProgress, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "短任务", cfg)
+	onProgress("快速产生但尚未到展示时间的进度")
+	consumed := finish("最终结果", false)
+
+	if consumed {
+		t.Fatal("未产生进度的短任务不应把最终回复收进进度卡")
+	}
+	if reply.Stream.Options.Title != "" || reply.Stream.Completed != "" {
+		t.Fatalf("stream=%#v，短任务不应创建空完成卡", reply.Stream)
 	}
 }

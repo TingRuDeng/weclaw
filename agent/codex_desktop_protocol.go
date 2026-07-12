@@ -34,6 +34,8 @@ var (
 	codexDesktopMethodVersions = map[string]int{
 		"initialize":                                            1,
 		"thread-stream-state-changed":                           11,
+		"thread-read-state-changed":                             1,
+		"thread-queued-followups-changed":                        1,
 		"thread-follower-load-complete-history":                 1,
 		"thread-follower-start-turn":                            1,
 		"thread-follower-steer-turn":                            1,
@@ -192,9 +194,15 @@ func validateCodexDesktopDiscoveryRequest(envelope codexDesktopEnvelope) error {
 	if len(envelope.Request) == 0 {
 		return fmt.Errorf("Codex Desktop client-discovery-request 缺少 request")
 	}
-	nested, err := decodeCodexDesktopEnvelope(envelope.Request)
-	if err != nil {
-		return fmt.Errorf("校验 Codex Desktop discovery 嵌套 request: %w", err)
+	trimmed := bytes.TrimSpace(envelope.Request)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+		return fmt.Errorf("Codex Desktop discovery 嵌套 request 必须为 JSON 对象")
+	}
+	var nested struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(trimmed, &nested); err != nil {
+		return fmt.Errorf("解析 Codex Desktop discovery 嵌套 request: %w", err)
 	}
 	if nested.Type != codexDesktopEnvelopeRequest {
 		return fmt.Errorf("Codex Desktop discovery 嵌套 request type 为 %q", nested.Type)

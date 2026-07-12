@@ -178,11 +178,11 @@ func TestFinalReplyOutsideStreamFailureDoesNotExposeStatusSentinel(t *testing.T)
 
 	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "ou_user", "ou_user", reply, "mock", "hello", "client-1")
 
-	if reply.Stream.Failed == progressStatusOnlyComplete || strings.Contains(reply.Stream.Failed, "weclaw_status_only_complete") {
-		t.Fatalf("failed card exposed internal sentinel: %q", reply.Stream.Failed)
+	if reply.Stream.Failed != "" {
+		t.Fatalf("failed card=%q，无进度失败任务不应创建卡片", reply.Stream.Failed)
 	}
-	if !strings.Contains(reply.Stream.Failed, "boom") {
-		t.Fatalf("failed card=%q, want real failure", reply.Stream.Failed)
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "boom") {
+		t.Fatalf("texts=%#v，want 单条真实失败回复", reply.Texts)
 	}
 }
 

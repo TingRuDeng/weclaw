@@ -327,3 +327,35 @@
 - 反例：认领终态时立即删除 active task，再异步写回复；状态查询或测试看到任务结束后读取回复，会与写入并发，pending 也可能先于最终回复执行。
 - 正确做法：把终态处理拆成 claim、publish、finish 三阶段；只有 claim 获胜者可以 publish 和 finish，其他观察源不得发送最终消息或执行 pending。
 - 来源：2026-07-11 全仓 race 检测发现 external watcher 的完成状态早于最终回复写入。
+
+## 2026-07-12 Codex Desktop 长会话终态归档
+
+- 触发条件：通过 Desktop IPC 观察较长 Codex 会话，活动 turn 完成后需要向飞书回推结果并提升暂存消息。
+- 规则：不能只比较相邻 revision 中同名 turn 的 `active -> terminal`；必须保留刚从活动区移除的 turn 指纹，跨过 `active -> absent -> terminal` 的归档窗口，且只在看到明确终态后结束任务。
+- 反例：活动 turn 从 `tail:*:local:*` 实体移除时立即丢弃投影记忆，下一 revision 的 `turn:<id>` completed 实体会被当作全新历史，观察器永远收不到 completed，飞书暂存消息也不会自动执行。
+- 正确做法：为消失的 active turn 保留短期 tombstone；终态实体出现时以同一 turn ID 恢复差分、发送一次终态并清除 tombstone；中间缺失 revision 不得误报完成。
+- 来源：2026-07-12 实机快照确认 turn `019f5394-8c46-7a21-b5a3-16fa89fb22df` 已 completed，但 WeClaw 仍显示 `active_tasks=1`，飞书未收到自动结果。
+
+## 2026-07-12 Codex Desktop 观察器状态复核
+
+- 触发条件：通过实时事件等待外部 Desktop turn 完成，并在终态后发送结果或提升暂存消息。
+- 规则：观察器必须记录开始时的 turn ID，并采用“实时事件 + 周期状态复核”；终态事件只能加速收尾，不能成为唯一收尾条件。
+- 反例：`WatchCodexThread` 注册 channel 后无限等待 completed；状态缓存已经显示原 turn 完成或出现新 turn，观察器仍不退出，`active_tasks` 和暂存消息永久滞留。
+- 正确做法：实时事件按目标 turn ID 过滤；周期读取权威线程状态，原 turn 不再 active 时使用已聚合文本或最近助手结果收尾；后续 turn 的事件不得被旧观察器消费。
+- 来源：2026-07-12 首次终态归档修复部署后，飞书仍未收到自动结果且 `/api/runtime` 持续返回 `active_tasks=1`。
+
+## 2026-07-12 Codex Desktop revision 屏障
+
+- 触发条件：连接 Desktop IPC 后加载目标 thread，或根据加载结果决定当前 active turn。
+- 规则：`thread-follower-load-complete-history` 成功响应只表示 Desktop 已发送目标 revision；调用方必须等待该连接代次的状态缓存实际达到响应 revision，才能读取状态或建立 watcher。
+- 反例：初始化时 Desktop 同时广播多个已打开会话，旧目标 snapshot 先进入缓存；`LoadHistory` 收到成功响应后立即读取，错误地把上一个已完成 turn 当作当前 active turn。
+- 正确做法：只投影 WeClaw 明确接管的 thread；解析 history 响应中的 revision，通过每 thread 唤醒机制等待缓存达到该 revision；状态事件长期静默时执行低频带屏障刷新。
+- 来源：2026-07-12 实机对比 WeClaw 缓存 revision `4340` 与 Desktop 实时 revision `4533`，缓存 active turn 实际已 completed。
+
+## 2026-07-12 飞书短任务进度卡收敛
+
+- 触发条件：飞书使用原生流式进度卡，任务在初始展示延迟内完成，最终回复又要求单独发送文本。
+- 规则：进度流只能在进度真正达到展示时机时创建；未展示任何进度的短任务直接发送最终回复，不得留下空的“已完成”卡片。排队接管必须继承当前账号已解析的进度配置。
+- 反例：任务启动即创建流卡，或排队边界丢失账号级 `stream` 配置而回落到全局 typing；短任务结束后会同时留下 typing 完成卡、空进度完成卡和最终文本。
+- 正确做法：延迟创建原生流卡；零延迟配置在非空进度到达时创建，正延迟配置只在进度实际发送时创建；排队外部任务直接传递调用入口已解析的 `ProgressConfig`；暂存状态只发送一行确认。
+- 来源：2026-07-12 用户截图反馈飞书回复混乱，实机记录显示同一流程叠加暂存提示、空完成卡和最终文本。

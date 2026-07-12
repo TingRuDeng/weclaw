@@ -34,6 +34,7 @@ func TestCodexDesktopStartTurnMapsFollowerPayload(t *testing.T) {
 	turnID, err := actions.startTurn(context.Background(), codexDesktopStartTurnSpec{
 		ConversationID: "thread-1", Input: []codexUserInput{{Type: "text", Text: "继续"}},
 		Cwd: "/tmp/project", Model: "gpt-test", Effort: "high",
+		SandboxPolicy: map[string]any{"type": "workspaceWrite"},
 	})
 	if err != nil || turnID != "turn-1" {
 		t.Fatalf("startTurn() = %q, %v", turnID, err)
@@ -47,6 +48,10 @@ func TestCodexDesktopStartTurnMapsFollowerPayload(t *testing.T) {
 	}
 	if payload.TurnStartParams.ThreadID != "thread-1" || payload.TurnStartParams.Model != "gpt-test" {
 		t.Fatalf("turn params = %#v", payload.TurnStartParams)
+	}
+	sandbox := payload.TurnStartParams.SandboxPolicy.(map[string]any)
+	if roots, ok := sandbox["writableRoots"].([]string); !ok || len(roots) != 0 {
+		t.Fatalf("sandbox = %#v", sandbox)
 	}
 }
 

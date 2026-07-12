@@ -106,6 +106,7 @@ type fakeCodexThreadAgent struct {
 	watchReply        string
 	watchErr          error
 	watchDone         chan struct{}
+	watchProgress     string
 	steerThreadID     string
 	steerTurnID       string
 	steerMessage      string
@@ -227,7 +228,10 @@ func (f *fakeCodexThreadAgent) ReadCodexThreadState(_ context.Context, _ string,
 	return state, nil
 }
 
-func (f *fakeCodexThreadAgent) WatchCodexThread(ctx context.Context, _ string, _ string, _ func(string)) (string, error) {
+func (f *fakeCodexThreadAgent) WatchCodexThread(ctx context.Context, _ string, _ string, onProgress func(string)) (string, error) {
+	if f.watchProgress != "" && onProgress != nil {
+		onProgress(f.watchProgress)
+	}
 	if f.watchDone != nil {
 		select {
 		case <-f.watchDone:

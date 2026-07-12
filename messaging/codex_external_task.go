@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -19,6 +20,7 @@ type externalCodexTaskOptions struct {
 	threadID       string
 	platform       platform.PlatformName
 	accountID      string
+	progressCfg    config.ProgressConfig
 	reply          platform.Replier
 }
 
@@ -162,7 +164,10 @@ type externalCodexTaskRuntime struct {
 }
 
 func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) {
-	progressCfg := h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
+	progressCfg := runtime.opts.progressCfg
+	if progressCfg.Mode == "" {
+		progressCfg = h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
+	}
 	taskText := firstNonBlank(runtime.state.Preview, "Codex App 本地任务")
 	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.ctx, runtime.opts.reply, "", taskText, progressCfg)
 	recordProgress := func(delta string) {

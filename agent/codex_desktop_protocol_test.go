@@ -98,6 +98,18 @@ func TestCodexDesktopDiscoveryResponseAcceptsBooleanCanHandle(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopDiscoveryAcceptsUnsupportedNestedRequest(t *testing.T) {
+	payload := []byte(`{"type":"client-discovery-request","requestId":"discover-1","request":{"type":"request","requestId":"nested-1","sourceClientId":"desktop-client","version":0,"method":"ide-context","params":{"workspaceRoot":"/path/to/project"}}}`)
+
+	envelope, err := decodeCodexDesktopEnvelope(payload)
+	if err != nil {
+		t.Fatalf("decodeCodexDesktopEnvelope() error = %v", err)
+	}
+	if envelope.Type != codexDesktopEnvelopeDiscoveryRequest {
+		t.Fatalf("envelope.Type = %q", envelope.Type)
+	}
+}
+
 func TestCodexDesktopDiscoveryCarriesNestedMethodVersion(t *testing.T) {
 	envelope, err := newCodexDesktopDiscoveryRequest(codexDesktopDiscoverySpec{
 		RequestID:      "discover-1",

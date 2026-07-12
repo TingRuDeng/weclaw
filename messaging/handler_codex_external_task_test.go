@@ -102,8 +102,8 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 		t.Fatalf("/guide for external active turn should not start new chat, calls=%d", ag.chatCallCount())
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "回复 /guide 将此消息发送到当前 Codex App 任务") {
-		t.Fatalf("普通消息应提示 active turn 引导方式，messages=%#v", calls.texts())
+	if !strings.Contains(text, queuedCodexMessage) {
+		t.Fatalf("普通消息应发送简洁排队提示，messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "已发送到当前 Codex App 任务") {
 		t.Fatalf("/guide should confirm steer, messages=%#v", calls.texts())

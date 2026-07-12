@@ -133,7 +133,10 @@ func codexDesktopPreviousTurn(previous *codexDesktopProjectionState, turnID stri
 	if previous == nil {
 		return codexDesktopProjectedTurn{}, false
 	}
-	turn, ok := previous.turns[turnID]
+	if turn, ok := previous.turns[turnID]; ok {
+		return turn, true
+	}
+	turn, ok := previous.activeTombstones[turnID]
 	return turn, ok
 }
 
@@ -153,11 +156,17 @@ func cloneCodexDesktopProjection(source codexDesktopProjectionState) codexDeskto
 	clone := codexDesktopProjectionState{
 		turns: make(map[string]codexDesktopProjectedTurn, len(source.turns)),
 		order: append([]string(nil), source.order...), terminal: copyCodexDesktopTerminals(&source),
+		activeTombstones: make(map[string]codexDesktopProjectedTurn, len(source.activeTombstones)),
 	}
 	for turnID, turn := range source.turns {
 		turn.order = append([]string(nil), turn.order...)
 		turn.items = cloneCodexDesktopProjectedItems(turn.items)
 		clone.turns[turnID] = turn
+	}
+	for turnID, turn := range source.activeTombstones {
+		turn.order = append([]string(nil), turn.order...)
+		turn.items = cloneCodexDesktopProjectedItems(turn.items)
+		clone.activeTombstones[turnID] = turn
 	}
 	return clone
 }

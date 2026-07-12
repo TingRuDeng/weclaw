@@ -139,7 +139,7 @@ func TestFeishuCodexCxLsDuringActiveTaskDoesNotSendNavigationCard(t *testing.T) 
 	if len(reply.Choices) != 0 {
 		t.Fatalf("choices=%#v, want no navigation card while task is running", reply.Choices)
 	}
-	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "Codex 正在处理上一条任务") {
+	if len(reply.Texts) != 1 || reply.Texts[0] != "当前任务正在执行，请在完成后再发送 /cx ls。" {
 		t.Fatalf("texts=%#v, want running task notice", reply.Texts)
 	}
 }

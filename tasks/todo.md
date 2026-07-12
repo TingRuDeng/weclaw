@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-实现与自动化验收已完成；等待真实飞书机器人和 Codex App 执行手工接管验收。
+真实飞书与 Codex App 自动续跑链路已完成实机验收；展示噪声优化已通过自动化验证，准备发布。
 
 ## 任务清单
 
@@ -30,7 +30,17 @@
 - [x] P4.11：Desktop 断线时接续 rollout。
 - [x] P4.12：按实时 owner 路由消息、引导和停止。
 - [x] P5.1 自动验收：受影响包与全仓单测、race、vet、staticcheck、文档校验、差异检查。
+- [x] P5.2a 实机验收：连接 Desktop IPC、切换同一会话、识别本地 active turn 并暂存飞书消息。
+- [x] P5.2b 实机修复：兼容 discovery 嵌套未知方法、workspaceWrite writableRoots、长会话 turnHistory 和已知状态广播。
+- [x] P5.2c 实机修复：观察器绑定原 turn ID，并通过状态复核补偿终态事件链断裂。
+- [x] P5.2d 实机修复：过滤未接管 thread 广播，并等待 history 响应 revision 真正落入缓存。
+- [x] P5.2e 实机验收：本地 turn 结束后自动回推结果，并自动执行暂存的飞书消息。
 - [ ] P5.2 手工验收：真实飞书机器人与 Codex App 的接管、控制、审批、断线和恢复场景。
+- [x] P5.3a 串行 TDD：在 `messaging/progress_test.go` 复现短任务未产生进度时仍创建空完成卡；修改 `messaging/progress.go`，将原生进度流延迟到首次真实进度或定时进度时创建。
+- [x] P5.3b 串行 TDD：在 `messaging/handler_codex_live_message_control_test.go` 复现排队外部任务丢失账号级 `stream` 配置；修改 `messaging/codex_task_start.go` 与 `messaging/codex_external_task.go`，直接继承已解析的任务进度配置。
+- [x] P5.3c 串行 TDD：更新 `messaging/task_commands.go` 的暂存提示为单行简洁文案，并调整相关断言，保留 `/guide`、`/cancel` 命令能力但不重复展示操作说明。
+- [x] P5.3d 串行自动验收：运行 `go test ./messaging ./feishu`、全仓单测、race、vet、文档校验和 `git diff --check`。
+- [ ] P5.3e 发布后实机复测：用飞书验证短任务无空完成卡、排队提示单行且自动续跑结果正常返回。
 - [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 
 ## 并行说明
@@ -40,3 +50,11 @@
 ## Review 小结
 
 2026-07-11 自动验收通过：`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均为退出码 0。Review gate 未发现阻塞性代码问题；真实 App 手工验收尚未执行。
+
+2026-07-12 实机发现 Desktop 长会话会按 `inProgress -> 暂时移除 -> completed` 两次修订归档 turn，旧投影器因此遗漏终态。已增加跨修订活动 turn 指纹并完成 RED/GREEN；`go test ./...`、`go test -race ./...`、`go vet ./...`、文档校验和 `git diff --check` 通过。当前环境缺少 `staticcheck` 可执行文件，本轮未重复执行；飞书自动回推仍等待当前实机 turn 结束验证。
+
+2026-07-12 第二次实机验收确认仅修复投影仍不充分：Desktop turn 已完成，但纯事件观察器没有复核权威状态，`active_tasks` 继续保持 1。已增加原 turn ID 隔离和每两秒状态复核测试；第五版临时服务已启动，等待再次实机确认自动回推。
+
+2026-07-12 第三次实机验收确认缓存 revision 落后于 Desktop：缓存为 `4340`，实时状态已到 `4533`，并把已完成 turn 当成 active。第六版已过滤未接管 thread 的初始化广播，解析 `load-complete-history` 返回 revision，并等待同一连接代次的状态缓存达到该 revision 后才完成绑定；全仓测试和 race 通过。直接飞书消息已成功返回，真正的 active task 暂存续跑仍待最终确认。
+
+2026-07-12 第四次实机验收确认本地 turn 结束后，飞书暂存消息于 `09:19:12` 自动出队，`09:19:21` 返回最终结果，随后 `active_tasks=0`；用户截图确认结果已到达飞书。展示优化进一步修复排队路径丢失账号级 `stream` 配置、短任务提前创建空完成卡和重复操作提示。发布前全仓单测、race、vet、文档校验和差异检查通过；当前环境未安装 `staticcheck`。

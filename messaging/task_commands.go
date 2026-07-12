@@ -10,30 +10,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-func runningCodexGuidePrompt() string {
-	return "Codex 正在处理上一条任务，此消息已暂存。\n\n回复 /guide 将此消息作为引导对话发送给 Codex。\n回复 /cancel 撤回该消息。\n不操作时，上一条任务结束后会自动执行此消息。"
-}
-
-func runningCodexGuidePromptForTask(task *activeAgentTask) string {
-	if task == nil {
-		return runningCodexGuidePrompt()
-	}
-	task.mu.Lock()
-	external := task.isExternalCodexLocked()
-	control := task.canControlExternalCodexLocked()
-	task.mu.Unlock()
-	if !external {
-		return runningCodexGuidePrompt()
-	}
-	if !control {
-		return runningReadOnlyCodexAppPrompt()
-	}
-	return "Codex App 任务正在进行，此消息已暂存。\n\n回复 /guide 将此消息发送到当前 Codex App 任务。\n回复 /cancel 撤回该消息。\n不操作时，当前任务结束后会自动执行此消息。"
-}
-
-func runningReadOnlyCodexAppPrompt() string {
-	return "Codex App 本地任务正在进行，此消息已暂存。\n\n当前任务不支持 /guide；回复 /cancel 可撤回此消息。\n不操作时，本地任务结束后会自动执行此消息。"
-}
+const queuedCodexMessage = "已排队，将在当前任务结束后自动执行。"
 
 // previewPendingCodexMessage 限制微信提示里的消息预览长度，避免长输入刷屏。
 func previewPendingCodexMessage(message string) string {

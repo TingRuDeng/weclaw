@@ -56,7 +56,8 @@ func (a *codexDesktopActions) startTurn(ctx context.Context, spec codexDesktopSt
 		TurnStartParams: codexTurnStartParams{
 			ThreadID: strings.TrimSpace(spec.ConversationID), Input: spec.Input, Cwd: spec.Cwd,
 			ApprovalPolicy: spec.ApprovalPolicy, ApprovalsReviewer: spec.ApprovalsReviewer,
-			SandboxPolicy: spec.SandboxPolicy, Model: spec.Model, Effort: spec.Effort,
+			SandboxPolicy: normalizeCodexDesktopSandboxPolicy(spec.SandboxPolicy),
+			Model:         spec.Model, Effort: spec.Effort,
 		},
 	}
 	result, err := a.client.Call(ctx, "thread-follower-start-turn", payload)
@@ -68,6 +69,22 @@ func (a *codexDesktopActions) startTurn(ctx context.Context, spec codexDesktopSt
 		return "", fmt.Errorf("Codex Desktop start turn 响应缺少 turn.id")
 	}
 	return turnID, nil
+}
+
+// normalizeCodexDesktopSandboxPolicy 补齐 Desktop workspaceWrite 处理器要求的可迭代根目录。
+func normalizeCodexDesktopSandboxPolicy(policy any) any {
+	sandbox, ok := policy.(map[string]any)
+	if !ok || sandbox["type"] != "workspaceWrite" {
+		return policy
+	}
+	result := make(map[string]any, len(sandbox)+1)
+	for key, value := range sandbox {
+		result[key] = value
+	}
+	if _, exists := result["writableRoots"]; !exists {
+		result["writableRoots"] = []string{}
+	}
+	return result
 }
 
 // steerTurn 把补充消息限定到调用方确认的 active turn。

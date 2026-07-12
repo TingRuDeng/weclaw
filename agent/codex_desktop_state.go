@@ -65,6 +65,7 @@ type codexDesktopQueuedPatchSet struct {
 type codexDesktopStateStore struct {
 	mu              sync.Mutex
 	threads         map[string]codexDesktopThreadSnapshot
+	revisionWake    map[string]chan struct{}
 	queued          map[string][]codexDesktopQueuedPatchSet
 	needsSnapshot   map[string]uint64
 	now             func() time.Time
@@ -80,6 +81,7 @@ func newCodexDesktopStateStore(options codexDesktopStateOptions) *codexDesktopSt
 	}
 	return &codexDesktopStateStore{
 		threads:       make(map[string]codexDesktopThreadSnapshot),
+		revisionWake:  make(map[string]chan struct{}),
 		queued:        make(map[string][]codexDesktopQueuedPatchSet),
 		needsSnapshot: make(map[string]uint64), now: options.now,
 		requestSnapshot: options.requestSnapshot,
@@ -111,6 +113,7 @@ func (s *codexDesktopStateStore) applySnapshot(spec codexDesktopSnapshotSpec) (c
 	replayed, replayErr := s.replayQueuedLocked(spec.threadID)
 	events = append(events, replayed...)
 	snapshot = s.threads[spec.threadID]
+	s.signalRevisionLocked(spec.threadID)
 	actionEvents, actionErr := s.projectPendingActionEventsLocked(snapshot)
 	events = append(events, actionEvents...)
 	target := s.needsSnapshot[spec.threadID]
@@ -162,6 +165,7 @@ func (s *codexDesktopStateStore) applyPatchSet(spec codexDesktopPatchSetSpec) (c
 	}
 	snapshot, events := buildCodexDesktopSnapshot(snapshotSpec, s.now(), &current.projection)
 	s.threads[spec.threadID] = snapshot
+	s.signalRevisionLocked(spec.threadID)
 	actionEvents, actionErr := s.projectPendingActionEventsLocked(snapshot)
 	events = append(events, actionEvents...)
 	s.evictIdleLocked(spec.threadID)

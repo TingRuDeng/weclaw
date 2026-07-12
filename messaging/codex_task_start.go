@@ -48,7 +48,7 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 		ctx: taskOpts.ctx, actorUserID: taskOpts.userID, routeUserID: taskOpts.routeUserID,
 		agentName: taskOpts.agentName, agent: taskOpts.agent,
 		conversationID: opts.route.conversationID, threadID: opts.route.threadID,
-		reply: taskOpts.reply,
+		progressCfg: taskOpts.progressCfg, reply: taskOpts.reply,
 	})
 	if err != nil {
 		h.rejectCodexTaskStart(opts, err)
@@ -59,12 +59,12 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 	}
 	opts.cancel()
 	taskOpts.route = opts.route
-	task, exists := h.activeTask(opts.route.conversationID)
+	_, exists := h.activeTask(opts.route.conversationID)
 	if !exists {
 		return false
 	}
 	if h.storePendingGuide(opts.route.conversationID, h.pendingCodexTask(taskOpts)) {
-		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, runningCodexGuidePromptForTask(task))
+		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, queuedCodexMessage)
 		return true
 	}
 	sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")

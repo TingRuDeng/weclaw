@@ -42,15 +42,15 @@ func (h *Handler) runningCodexNavigationNotice(ctx context.Context, actorUserID 
 	if err != nil {
 		return "", false
 	}
-	task, ok := h.activeTask(key)
+	_, ok := h.activeTask(key)
 	if !ok {
 		return "", false
 	}
-	return runningCodexNavigationBlockedPrompt(task), true
+	return runningCodexNavigationBlockedPrompt(), true
 }
 
-func runningCodexNavigationBlockedPrompt(task *activeAgentTask) string {
-	return runningCodexGuidePromptForTask(task) + "\n\n为避免会话卡片插入任务结果，任务完成后再发送 /cx ls。"
+func runningCodexNavigationBlockedPrompt() string {
+	return "当前任务正在执行，请在完成后再发送 /cx ls。"
 }
 
 func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg platform.IncomingMessage, routeUserID string, reply platform.Replier, trimmed string, commandReply string) bool {

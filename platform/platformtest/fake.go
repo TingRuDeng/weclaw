@@ -2,6 +2,7 @@ package platformtest
 
 import (
 	"context"
+	"sync"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 )
@@ -15,6 +16,8 @@ type Replier struct {
 	TypingStates []bool
 	Choices      []ChoiceRequest
 	Stream       *Stream
+	StreamOpened chan struct{}
+	streamOnce   sync.Once
 }
 
 // ChoiceRequest 记录一次 AskChoices 调用。
@@ -25,7 +28,7 @@ type ChoiceRequest struct {
 
 // NewReplier 创建测试回复器。
 func NewReplier(caps platform.Capabilities) *Replier {
-	return &Replier{Caps: caps, Stream: &Stream{}}
+	return &Replier{Caps: caps, Stream: &Stream{}, StreamOpened: make(chan struct{})}
 }
 
 func (r *Replier) Capabilities() platform.Capabilities {
@@ -54,6 +57,7 @@ func (r *Replier) Typing(ctx context.Context, on bool) error {
 
 func (r *Replier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
 	r.Stream.Options = opts
+	r.streamOnce.Do(func() { close(r.StreamOpened) })
 	return r.Stream, nil
 }
 

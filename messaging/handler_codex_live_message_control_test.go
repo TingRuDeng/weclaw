@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
@@ -32,6 +33,35 @@ func TestCodexDesktopActiveMessageQueuesOnePending(t *testing.T) {
 	defer task.cancel()
 	if ag.chatCallCount() != 0 {
 		t.Fatal("active Desktop thread 不应开始新 turn")
+	}
+}
+
+func TestCodexDesktopQueuedMessageKeepsResolvedStreamProgress(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, true)
+	ag.watchDone = make(chan struct{})
+	ag.watchProgress = "正在处理本地任务"
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Typing: true, Streaming: true})
+	opts.reply = reply
+	opts.progressCfg = config.DefaultProgressConfig()
+	opts.progressCfg.Mode = progressModeStream
+	opts.progressCfg.InitialDelaySeconds = 0
+
+	h.startCodexAgentTask(opts)
+	select {
+	case <-reply.StreamOpened:
+	case <-time.After(taskWaitTimeout):
+		t.Fatalf("typing=%#v，排队外部任务未继承 stream 配置", reply.TypingStates)
+	}
+	task, ok := h.activeTask(route.conversationID)
+	if !ok {
+		t.Fatal("排队后外部任务未登记")
+	}
+	defer task.cancel()
+	if reply.Stream.Options.Title == "" {
+		t.Fatalf("typing=%#v，排队外部任务未继承 stream 配置", reply.TypingStates)
+	}
+	if len(reply.TypingStates) != 0 {
+		t.Fatalf("typing=%#v，stream 模式不应创建 typing 卡", reply.TypingStates)
 	}
 }
 

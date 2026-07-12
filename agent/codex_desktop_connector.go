@@ -2,9 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
+	"time"
 )
+
+const codexDesktopStateApplyTimeout = 10 * time.Second
 
 type codexDesktopRuntime struct {
 	mu       sync.Mutex
@@ -13,11 +19,12 @@ type codexDesktopRuntime struct {
 	actions  *codexDesktopActions
 	owners   *codexRuntimeOwnerRegistry
 	onEvents func(string, []*codexTurnEvent)
+	tracked  map[string]bool
 }
 
 // newCodexDesktopRuntime 创建尚未连接 socket 的懒初始化 runtime。
 func newCodexDesktopRuntime() *codexDesktopRuntime {
-	return &codexDesktopRuntime{}
+	return &codexDesktopRuntime{tracked: make(map[string]bool)}
 }
 
 // setOwnerRegistry 建立 snapshot 到 owner registry 的单向通知。
@@ -97,7 +104,7 @@ func (r *codexDesktopRuntime) ensureInitialized() *codexDesktopClient {
 		actions: actions,
 		requestSnapshot: func(threadID string) {
 			ref := CodexThreadRef{ThreadID: threadID}
-			if err := r.LoadHistory(context.Background(), ref); err != nil {
+			if err := r.requestHistory(context.Background(), ref, false); err != nil {
 				log.Printf("[acp] Desktop snapshot recovery failed (thread=%s): %v", threadID, err)
 			}
 		},
@@ -120,14 +127,50 @@ func (r *codexDesktopRuntime) Discover(ctx context.Context, ref CodexThreadRef) 
 
 // LoadHistory 请求 Desktop 广播目标 thread 的完整 conversation state。
 func (r *codexDesktopRuntime) LoadHistory(ctx context.Context, ref CodexThreadRef) error {
+	return r.requestHistory(ctx, ref, true)
+}
+
+// requestHistory 请求目标完整状态，并按需等待返回 revision 完成投影。
+func (r *codexDesktopRuntime) requestHistory(ctx context.Context, ref CodexThreadRef, wait bool) error {
+	r.trackThread(ref.ThreadID)
 	client := r.ensureInitialized()
 	if err := client.Connect(ctx); err != nil {
 		return err
 	}
-	_, err := client.Call(ctx, "thread-follower-load-complete-history", map[string]string{
+	result, err := client.Call(ctx, "thread-follower-load-complete-history", map[string]string{
 		"conversationId": ref.ThreadID,
 	})
-	return err
+	if err != nil || !wait {
+		return err
+	}
+	revision, err := codexDesktopLoadRevision(result)
+	if err != nil {
+		return err
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, codexDesktopStateApplyTimeout)
+	defer cancel()
+	return r.state.waitForRevision(waitCtx, strings.TrimSpace(ref.ThreadID), client.Epoch(), revision)
+}
+
+// codexDesktopLoadRevision 提取 Desktop load-complete-history 的状态屏障 revision。
+func codexDesktopLoadRevision(result json.RawMessage) (uint64, error) {
+	var response struct {
+		Revision uint64 `json:"revision"`
+	}
+	if json.Unmarshal(result, &response) != nil || response.Revision == 0 {
+		return 0, fmt.Errorf("Codex Desktop history 响应缺少有效 revision")
+	}
+	return response.Revision, nil
+}
+
+// trackThread 标记 WeClaw 明确接管的 Desktop thread。
+func (r *codexDesktopRuntime) trackThread(threadID string) {
+	r.mu.Lock()
+	if r.tracked == nil {
+		r.tracked = make(map[string]bool)
+	}
+	r.tracked[strings.TrimSpace(threadID)] = true
+	r.mu.Unlock()
 }
 
 // Presence 返回 socket 与 Codex 主进程存在性。
@@ -139,8 +182,12 @@ func (r *codexDesktopRuntime) Presence() (bool, bool) {
 func (r *codexDesktopRuntime) handleBroadcast(envelope codexDesktopEnvelope) {
 	r.mu.Lock()
 	client, state, owners, onEvents := r.client, r.state, r.owners, r.onEvents
+	tracked := r.tracked[codexDesktopBroadcastThreadID(envelope)]
 	r.mu.Unlock()
 	if client == nil || state == nil {
+		return
+	}
+	if envelope.Method == "thread-stream-state-changed" && !tracked {
 		return
 	}
 	update, err := state.applyEnvelope(client.Epoch(), envelope)
@@ -154,4 +201,13 @@ func (r *codexDesktopRuntime) handleBroadcast(envelope codexDesktopEnvelope) {
 	if onEvents != nil && len(update.Events) > 0 {
 		onEvents(update.Snapshot.ThreadID, update.Events)
 	}
+}
+
+// codexDesktopBroadcastThreadID 只提取广播路由字段，不解析大型 conversationState。
+func codexDesktopBroadcastThreadID(envelope codexDesktopEnvelope) string {
+	var params struct {
+		ConversationID string `json:"conversationId"`
+	}
+	_ = json.Unmarshal(envelope.Params, &params)
+	return strings.TrimSpace(params.ConversationID)
 }

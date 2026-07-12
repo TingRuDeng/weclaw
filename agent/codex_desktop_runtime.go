@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // chatCodexDesktop 先订阅事件，再在同一 Desktop thread 开始 turn。
@@ -17,7 +18,7 @@ func (a *ACPAgent) chatCodexDesktop(ctx context.Context, binding CodexThreadBind
 	}
 	defer a.unregisterTurnChannel(threadID, turnCh)
 	config := a.modelConfigSnapshot()
-	_, err := a.desktopRuntime.startTurn(ctx, codexDesktopStartTurnSpec{
+	turnID, err := a.desktopRuntime.startTurn(ctx, codexDesktopStartTurnSpec{
 		ConversationID: threadID, Input: []codexUserInput{{Type: "text", Text: message}},
 		Cwd:               a.cwdForConversation(binding.Ref.ConversationID),
 		ApprovalPolicy:    a.approvalPolicyForContext(ctx),
@@ -28,7 +29,12 @@ func (a *ACPAgent) chatCodexDesktop(ctx context.Context, binding CodexThreadBind
 	if err != nil {
 		return "", err
 	}
-	return a.collectAttachedCodexTurn(ctx, binding.Ref.ConversationID, threadID, turnCh, onProgress)
+	ticker := time.NewTicker(codexThreadWatchReconcileInterval)
+	defer ticker.Stop()
+	return a.collectAttachedCodexTurn(ctx, codexThreadWatchOptions{
+		conversationID: binding.Ref.ConversationID, threadID: threadID,
+		targetTurnID: turnID, turnCh: turnCh, onProgress: onProgress, reconcile: ticker.C,
+	})
 }
 
 func (a *ACPAgent) desktopBindingForThread(conversationID string, threadID string) (CodexThreadBinding, bool) {

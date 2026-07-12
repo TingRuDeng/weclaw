@@ -112,7 +112,7 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	return broadcastAgentRuntime{ctx: taskCtx, executionKey: key, codexRoute: route, activeTask: task, finishRuntime: finish}, true
 }
 
-func (h *Handler) deferBroadcastCodexMessage(req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute, reply platform.Replier, key string, task *activeAgentTask, results chan<- broadcastAgentResult) {
+func (h *Handler) deferBroadcastCodexMessage(req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute, reply platform.Replier, key string, _ *activeAgentTask, results chan<- broadcastAgentResult) {
 	pending := h.pendingCodexTask(codexAgentTaskOptions{
 		ctx: req.ctx, userID: req.userID, routeUserID: req.routeUserID, reply: reply,
 		agentName: name, message: req.message, clientID: req.clientID,
@@ -121,7 +121,7 @@ func (h *Handler) deferBroadcastCodexMessage(req broadcastAgentsRequest, name st
 	})
 	text := "当前任务已有一条暂存消息，请先处理后再发送。"
 	if h.storePendingGuide(key, pending) {
-		text = runningCodexGuidePromptForTask(task)
+		text = queuedCodexMessage
 	}
 	results <- broadcastAgentResult{name: name, reply: text}
 }

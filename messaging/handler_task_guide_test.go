@@ -38,7 +38,7 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 	if started != 1 {
 		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
 	}
-	if !containsText(calls.texts(), "回复 /guide 将此消息作为引导对话发送给 Codex") {
+	if !containsText(calls.texts(), queuedCodexMessage) {
 		t.Fatalf("未发送引导确认提示，messages=%#v", calls.texts())
 	}
 
@@ -153,7 +153,7 @@ func TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored(t *testing.T) {
 	if started != 1 {
 		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
 	}
-	if !containsText(calls.texts(), "回复 /guide 将此消息作为引导对话发送给 Codex") {
+	if !containsText(calls.texts(), queuedCodexMessage) {
 		t.Fatalf("未发送引导确认提示，messages=%#v", calls.texts())
 	}
 

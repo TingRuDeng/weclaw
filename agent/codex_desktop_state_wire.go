@@ -18,10 +18,18 @@ type codexDesktopStateChange struct {
 	Patches           []codexDesktopPatch `json:"patches"`
 }
 
+var codexDesktopIgnoredStateBroadcasts = map[string]bool{
+	"thread-read-state-changed":       true,
+	"thread-queued-followups-changed": true,
+}
+
 // applyEnvelope 校验并分派 thread-stream-state-changed 广播。
 func (s *codexDesktopStateStore) applyEnvelope(epoch uint64, envelope codexDesktopEnvelope) (codexDesktopStateUpdate, error) {
 	if err := validateCodexDesktopEnvelope(envelope); err != nil {
 		return codexDesktopStateUpdate{}, err
+	}
+	if envelope.Type == codexDesktopEnvelopeBroadcast && codexDesktopIgnoredStateBroadcasts[envelope.Method] {
+		return codexDesktopStateUpdate{}, nil
 	}
 	if envelope.Type != codexDesktopEnvelopeBroadcast || envelope.Method != "thread-stream-state-changed" {
 		return codexDesktopStateUpdate{}, fmt.Errorf("不支持的 Codex Desktop 状态事件 %s/%s", envelope.Type, envelope.Method)
