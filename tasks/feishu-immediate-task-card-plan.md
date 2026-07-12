@@ -22,7 +22,7 @@
 
 **文件：** `platform/platform.go`、`platform/platformtest/fake.go`、`feishu/replier.go`、`feishu/replier_test.go`
 
-- [ ] **Step 1：写 RED 测试**
+- [x] **Step 1：写 RED 测试**
 
 ```go
 func TestReplierCapabilitiesRequireCardKitForStreaming(t *testing.T) {
@@ -39,7 +39,7 @@ func TestReplierCapabilitiesRequireCardKitForStreaming(t *testing.T) {
 
 预期：`StreamCompletionNotification` 不存在，编译失败。
 
-- [ ] **Step 2：实现能力和故障注入**
+- [x] **Step 2：实现能力和故障注入**
 
 ```go
 // platform.Capabilities 新增：
@@ -66,7 +66,7 @@ func (r *Replier) Capabilities() platform.Capabilities {
 }
 ```
 
-- [ ] **Step 3：GREEN 与提交**
+- [x] **Step 3：GREEN 与提交**
 
 ```bash
 go test ./platform/platformtest ./feishu -count=1 -timeout 60s
@@ -78,7 +78,7 @@ git commit -m "声明飞书任务卡终态通知能力"
 
 **文件：** `messaging/progress.go`、`messaging/progress_render.go`、`messaging/progress_test.go`
 
-- [ ] **Step 1：写 RED 测试**
+- [x] **Step 1：写 RED 测试**
 
 ```go
 func TestNativeStreamOpensBeforeFirstAgentProgress(t *testing.T) {
@@ -107,7 +107,7 @@ func TestNativeStreamCreationFailureIsExplicitAndNotRetried(t *testing.T) {
 
 预期：尚未即时开卡，两个测试失败。
 
-- [ ] **Step 2：最小实现**
+- [x] **Step 2：最小实现**
 
 ```go
 func renderInitialCardProgress() string { return "正在处理任务，请稍候。" }
@@ -123,7 +123,7 @@ platform.StreamOptions{
 }
 ```
 
-- [ ] **Step 3：GREEN、负向边界与提交**
+- [x] **Step 3：GREEN、负向边界与提交**
 
 新增 `TestProgressOffModeDoesNotOpenNativeStream`，断言 `Mode=off` 时 `Stream.Options` 为空；保留默认 typing 和微信 stream 测试，证明本轮只改变飞书原生 stream。
 
@@ -137,7 +137,7 @@ git commit -m "让飞书任务卡在任务开始时立即显示"
 
 **文件：** `messaging/progress.go`、`messaging/progress_render.go`、`messaging/progress_test.go`、`messaging/handler_progress_task_test.go`
 
-- [ ] **Step 1：写表驱动 RED 测试**
+- [x] **Step 1：写表驱动 RED 测试**
 
 ```go
 tests := []struct{ name string; cancel, failed bool; want string }{
@@ -153,7 +153,7 @@ tests := []struct{ name string; cancel, failed bool; want string }{
 
 预期：通知缺失。
 
-- [ ] **Step 2：实现终态选择**
+- [x] **Step 2：实现终态选择**
 
 ```go
 func renderStreamTerminalNotification(parentCanceled bool, failed bool, finalText string) string {
@@ -166,7 +166,7 @@ func renderStreamTerminalNotification(parentCanceled bool, failed bool, finalTex
 
 `finishStream` 仅在 `Complete` / `Fail` 成功后，根据能力调用 `SendText`；通知失败记录日志但保持卡片为权威终态。保留 `FinalReplyOutsideStream` 兼容测试；新增默认飞书断言：完整结果进入卡片，文本只有简短通知。
 
-- [ ] **Step 3：GREEN 与提交**
+- [x] **Step 3：GREEN 与提交**
 
 ```bash
 go test ./messaging -run 'TestNativeStreamTerminal|TestSendToNamedAgentNativeStream' -count=1 -timeout 60s
@@ -178,7 +178,7 @@ git commit -m "完成飞书任务卡后发送简短通知"
 
 **文件：** `messaging/reply_delivery.go`、`messaging/agent_execution.go`、`messaging/codex_agent_task.go`、`messaging/codex_external_task.go`、`messaging/agent_broadcast.go` 及对应测试。
 
-- [ ] **Step 1：写 RED 测试**
+- [x] **Step 1：写 RED 测试**
 
 附件测试创建允许目录内的 `report.pdf`；调用新入口后断言：文件独立发送、卡片正文包含 `已发送附件：report.pdf`、不包含绝对路径。终态失败测试注入 `CompleteErr`，断言只收到完整普通文本，没有完成通知。
 
@@ -202,7 +202,7 @@ type progressReplyDelivery struct {
 
 预期：统一入口尚不存在，编译失败。
 
-- [ ] **Step 2：实现投影和统一入口**
+- [x] **Step 2：实现投影和统一入口**
 
 ```go
 type replyDeliveryProjection struct {
@@ -220,13 +220,13 @@ func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
 
 `prepareReplyDelivery(delivery)` 复用现有 allowed roots 校验、图片/文件分流和 `rewriteReplyWithAttachmentResults`。`sendReplyProjection` 仅在 `consumed=false` 时发正文，但始终保留远程图片 URL 行为。现有 `sendReplyWithMediaAfterStreamCore` 也复用这两个 helper，不复制附件逻辑。
 
-- [ ] **Step 3：迁移全部终态入口**
+- [x] **Step 3：迁移全部终态入口**
 
 `agent_execution.go`、`codex_agent_task.go`、`codex_external_task.go` 改为构造 `progressReplyDelivery`。广播 worker 必须在自身 context 被 defer cancel 前，通过现有 serialized Replier 调用统一入口；随后发送 `skip=true` 的 result 只用于完成顺序同步。禁止把 `finish` 延迟到接收端，避免成功任务因 worker context 已取消而被误判为停止。未启动 progress session 的错误仍走普通回复。
 
 补充回归：Claude blocking Agent 显式设置 `AgentInfo{Name: "claude", Type: "acp"}`，在返回前已 `StreamOpened`；Codex 后台任务和外部 watcher 终态写回原卡；飞书广播维持 serialized Replier 无重入。再增加 `OpenStreamErr` 集成断言，证明开卡失败提示后最终完整结果仍以普通文本送达。
 
-- [ ] **Step 4：GREEN 与提交**
+- [x] **Step 4：GREEN 与提交**
 
 ```bash
 go test ./messaging ./feishu ./platform/platformtest -count=1 -timeout 60s
@@ -236,10 +236,10 @@ git commit -m "统一飞书任务卡最终结果交付"
 
 ## Task 5：全仓验收
 
-- [ ] `gofmt` 所有改动 Go 文件。
-- [ ] 运行 `go test ./... -count=1 -timeout 120s`。
-- [ ] 运行 `go test -race ./... -count=1 -timeout 120s`。
-- [ ] 运行 `go vet ./...`、`staticcheck ./...`。
-- [ ] 运行 `python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
-- [ ] Review gate 核对即时模式边界、单次开卡、卡片成功才通知、失败完整回退、附件根目录校验、Codex/Claude/watcher/broadcast 共用实现。
-- [ ] 更新 `tasks/todo.md` 的 P5.6c/P5.6d 和 `tasks/lessons.md`，提交：`完成飞书即时任务卡片验收`。
+- [x] `gofmt` 所有改动 Go 文件。
+- [x] 运行 `go test ./... -count=1 -timeout 120s`。
+- [x] 运行 `go test -race ./... -count=1 -timeout 120s`。
+- [x] 运行 `go vet ./...`、`staticcheck ./...`。
+- [x] 运行 `python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+- [x] Review gate 核对即时模式边界、单次开卡、卡片成功才通知、失败完整回退、附件根目录校验、Codex/Claude/watcher/broadcast 共用实现。
+- [x] 更新 `tasks/todo.md` 的 P5.6c/P5.6d 和 `tasks/lessons.md`，提交：`完成飞书即时任务卡片验收`。

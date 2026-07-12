@@ -360,6 +360,7 @@ func TestNativeStreamTerminalNotifications(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			reply := platformtest.NewReplier(platform.Capabilities{
 				Text: true, Streaming: true, StreamCompletionNotification: true,
 			})

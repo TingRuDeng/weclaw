@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-飞书即时任务卡片设计已确认，正在固化 Spec 并等待实施计划审查。
+飞书即时任务卡片已实现并通过自动验收，等待发布后真实飞书复测。
 
 ## 任务清单
 
@@ -49,8 +49,9 @@
 - [x] P5.5c 串行验证：确认 Desktop live/disconnected 不会被错误标记为可恢复，并完成全仓自动验收与交付审查。
 - [x] P5.6a 串行设计：确认飞书立即创建任务卡、终态写入完整回答并发送简短通知的交互与安全边界。
 - [x] P5.6b 串行规划：精确到平台能力、进度会话、最终交付和测试函数，等待用户确认后实施。
-- [ ] P5.6c 串行 TDD：实现 Codex 与 Claude 共用的飞书即时任务卡片及终态通知。
-- [ ] P5.6d 串行验收：完成全仓测试、race、静态检查和真实飞书复测。
+- [x] P5.6c 串行 TDD：实现 Codex 与 Claude 共用的飞书即时任务卡片及终态通知。
+- [x] P5.6d 串行自动验收：完成全仓测试、race、静态检查、文档校验和交付审查。
+- [ ] P5.6e 发布后实机复测：确认飞书立即开卡、更新最新状态、终态写入完整回答并发送单条通知。
 - [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 
 ## 并行说明
@@ -72,3 +73,5 @@
 2026-07-12 发布后实机日志确认 Android thread 的旧 `desktop_live` 绑定在 Desktop 返回 `no-client-found` 后仍被普通消息复用。已增加确定性 release 转移、同 thread app-server 恢复和原消息单次重试；断线与交付未知负向测试通过。`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均为退出码 0。
 
 2026-07-12 重启后 `/cx switch` 失败的根因是 `persistedBindings` 丢弃 `weclaw_runtime` owner，conversation 虽保留 thread 映射，却失去可恢复证据。现将进程内 owner 跨重启转换为 `persisted_only + ReleaseConfirmed`，并保留 Desktop live/disconnected 的保守边界；写盘、重建 Agent、重启 app-server、`thread/resume` 原 thread 的回归测试通过。`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均为退出码 0。
+
+2026-07-12 飞书即时任务卡片按统一消息层实现：任务登记后立即开卡，执行中只替换最新结构化状态，终态成功后把完整回答写入原卡并发送单条通知；开卡或终态更新失败会显式回退完整普通文本。附件先经过 allowed roots 校验和媒体投递，再把安全结果写入卡片；Codex、Claude、外部 watcher 和广播共用终态入口。全仓单测、race、vet、staticcheck、文档校验和差异检查通过，真实飞书复测等待发布后执行。
