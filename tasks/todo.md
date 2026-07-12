@@ -25,6 +25,8 @@
 
 ## 任务清单
 
+实施细节见 `tasks/explicit-agent-session-lifecycle-plan.md`。
+
 - [ ] P1 串行：在 `agent/acp_threads.go` 拆分已有会话读取与显式创建函数。
 - [ ] P2 串行：在 `agent/codex_app_server_turn.go` 删除 Codex 隐式新建和额度清理路径。
 - [ ] P3 串行：在 `agent/acp_chat.go` 删除 Claude session 失效后的自动重建。
