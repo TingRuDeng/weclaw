@@ -382,3 +382,11 @@
 - 反例：长期信任旧 `desktop_live` 绑定并直接返回错误；或者把断线、超时、交付状态未知也当成 release 自动重试，造成消息重复执行。
 - 正确做法：只对 `ErrCodexDesktopNoClient` 执行 release、recover 和单次 app-server 重试；`ErrCodexDesktopDisconnected` 与 `ErrCodexDesktopDeliveryUnknown` 保持原错误和 owner，不做回退。
 - 来源：2026-07-12 Android 飞书机器人发送普通消息后，日志立即返回 `没有 Codex Desktop 客户端可处理请求: no-client-found`。
+
+## 2026-07-12 Agent 会话创建必须由用户显式授权
+
+- 触发条件：普通消息遇到额度耗尽、网络错误、空响应、会话恢复失败，或当前聊天窗口没有有效 Agent 会话绑定。
+- 规则：任何错误都不得隐式调用 `thread/start` 或 `session/new`；没有绑定时也不得因普通消息自动创建。只有用户发送 `/new` 或明确点击新建入口，系统才可以创建会话。
+- 反例：额度错误后清除原 thread，下一条消息自动创建新 thread；或 stale thread/session 恢复失败后自动重建并重试原消息。这会丢失上下文，并剥夺用户切换其他会话或主动新建的选择权。
+- 正确做法：保留原绑定，恢复失败时显式提示用户选择已有会话或发送 `/new`；把“获取或恢复已有会话”和“显式创建新会话”拆成独立 API。
+- 来源：2026-07-12 用户明确要求“必须手动 `/new`，直接新建会剥夺用户选择的权利”，并确认未绑定窗口也不能自动创建首次会话。
