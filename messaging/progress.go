@@ -41,18 +41,19 @@ type progressSendState struct {
 }
 
 type progressSession struct {
-	handler       *Handler
-	ctx           context.Context
-	cancel        context.CancelFunc
-	reply         platform.Replier
-	stream        platform.Stream
-	prefix        string
-	taskText      string
-	cfg           config.ProgressConfig
-	deltaCh       chan string
-	wg            sync.WaitGroup
-	streamMu      sync.Mutex
-	typingStarted bool
+	handler             *Handler
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	reply               platform.Replier
+	stream              platform.Stream
+	prefix              string
+	taskText            string
+	cfg                 config.ProgressConfig
+	deltaCh             chan string
+	wg                  sync.WaitGroup
+	streamMu            sync.Mutex
+	streamOpenAttempted bool
+	typingStarted       bool
 }
 
 // startProgressSession 启动平台进度会话，保持旧语义：最终回复由调用方单独发送。
@@ -87,6 +88,9 @@ func (s *progressSession) start() {
 		s.sendText(renderAcceptance(title))
 	}
 	usesNativeProgress := progressModeAllowsProgress(s.cfg.Mode) && s.reply.Capabilities().Streaming
+	if usesNativeProgress && s.ensureStream() == nil {
+		s.sendText(renderCardCreationFallback())
+	}
 	if boolValue(s.cfg.EnableTyping) && !usesNativeProgress {
 		s.typingStarted = true
 		s.wg.Add(1)
@@ -210,6 +214,9 @@ func (s *progressSession) send(text string) {
 		}
 		return
 	}
+	if s.reply.Capabilities().Streaming {
+		return
+	}
 	s.sendText(text)
 }
 
@@ -222,10 +229,13 @@ func (s *progressSession) sendText(text string) {
 func (s *progressSession) ensureStream() platform.Stream {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
-	if s.stream != nil || !progressModeAllowsProgress(s.cfg.Mode) {
+	if s.stream != nil || s.streamOpenAttempted || !progressModeAllowsProgress(s.cfg.Mode) {
 		return s.stream
 	}
-	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{Title: progressTaskTitle(s.taskText, 60)})
+	s.streamOpenAttempted = true
+	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{
+		Title: progressTaskTitle(s.taskText, 60), InitialContent: renderInitialCardProgress(),
+	})
 	if err != nil {
 		log.Printf("[handler] failed to open progress stream: %v", err)
 		return nil

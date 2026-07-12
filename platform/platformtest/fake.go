@@ -9,16 +9,17 @@ import (
 
 // Replier 是测试用回复器，记录业务层发出的所有回复意图。
 type Replier struct {
-	Caps          platform.Capabilities
-	Texts         []string
-	Images        []string
-	Files         []string
-	TypingStates  []bool
-	Choices       []ChoiceRequest
-	Stream        *Stream
-	StreamOpened  chan struct{}
-	OpenStreamErr error
-	streamOnce    sync.Once
+	Caps            platform.Capabilities
+	Texts           []string
+	Images          []string
+	Files           []string
+	TypingStates    []bool
+	Choices         []ChoiceRequest
+	Stream          *Stream
+	StreamOpened    chan struct{}
+	OpenStreamErr   error
+	OpenStreamCalls int
+	streamOnce      sync.Once
 }
 
 // ChoiceRequest 记录一次 AskChoices 调用。
@@ -57,6 +58,7 @@ func (r *Replier) Typing(ctx context.Context, on bool) error {
 }
 
 func (r *Replier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
+	r.OpenStreamCalls++
 	if r.OpenStreamErr != nil {
 		return nil, r.OpenStreamErr
 	}

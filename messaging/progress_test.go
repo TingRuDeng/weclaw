@@ -290,20 +290,58 @@ func TestNativeStreamProgressCompletesWithFinalResult(t *testing.T) {
 	}
 }
 
-func TestNativeStreamShortTaskDoesNotCreateEmptyCard(t *testing.T) {
+func TestNativeStreamOpensBeforeFirstAgentProgress(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
 
-	onProgress, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "短任务", cfg)
-	onProgress("快速产生但尚未到展示时间的进度")
-	consumed := finish("最终结果", false)
-
-	if consumed {
-		t.Fatal("未产生进度的短任务不应把最终回复收进进度卡")
+	_, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "短任务", cfg)
+	if reply.Stream.Options.Title != "短任务" {
+		t.Fatalf("stream options = %#v", reply.Stream.Options)
 	}
-	if reply.Stream.Options.Title != "" || reply.Stream.Completed != "" {
-		t.Fatalf("stream=%#v，短任务不应创建空完成卡", reply.Stream)
+	if reply.Stream.Options.InitialContent != "正在处理任务，请稍候。" {
+		t.Fatalf("initial content = %q", reply.Stream.Options.InitialContent)
+	}
+	consumed := finish("最终结果", false)
+	if !consumed || reply.Stream.Completed != "最终结果" {
+		t.Fatalf("consumed = %v, stream = %#v", consumed, reply.Stream)
+	}
+}
+
+func TestNativeStreamCreationFailureIsExplicitAndNotRetried(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	reply.OpenStreamErr = errors.New("card unavailable")
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.InitialDelaySeconds = 0
+
+	onProgress, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "任务", cfg)
+	onProgress("进展：正在分析。")
+	if finish("最终结果", false) {
+		t.Fatal("failed stream must not consume final reply")
+	}
+	want := "任务已开始，卡片创建失败，将以普通消息返回结果。"
+	if len(reply.Texts) != 1 || reply.Texts[0] != want {
+		t.Fatalf("texts = %#v", reply.Texts)
+	}
+	if reply.OpenStreamCalls != 1 {
+		t.Fatalf("OpenStream calls = %d, want 1", reply.OpenStreamCalls)
+	}
+}
+
+func TestProgressOffModeDoesNotOpenNativeStream(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+
+	_, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "任务", cfg)
+	if finish("最终结果", false) {
+		t.Fatal("off mode must not consume final reply")
+	}
+	if reply.OpenStreamCalls != 0 {
+		t.Fatalf("OpenStream calls = %d, want 0", reply.OpenStreamCalls)
 	}
 }

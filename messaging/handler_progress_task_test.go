@@ -178,8 +178,8 @@ func TestFinalReplyOutsideStreamFailureDoesNotExposeStatusSentinel(t *testing.T)
 
 	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "ou_user", "ou_user", reply, "mock", "hello", "client-1")
 
-	if reply.Stream.Failed != "" {
-		t.Fatalf("failed card=%q，无进度失败任务不应创建卡片", reply.Stream.Failed)
+	if !strings.Contains(reply.Stream.Failed, "boom") {
+		t.Fatalf("failed card=%q，want 即时任务卡显示真实失败", reply.Stream.Failed)
 	}
 	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "boom") {
 		t.Fatalf("texts=%#v，want 单条真实失败回复", reply.Texts)

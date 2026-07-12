@@ -14,6 +14,14 @@ func renderInitialProgress() string {
 	return "进展：任务仍在执行中，连接正常。\n\n我会继续等待 Agent 完成，并发送最终完整结果。"
 }
 
+func renderInitialCardProgress() string {
+	return "正在处理任务，请稍候。"
+}
+
+func renderCardCreationFallback() string {
+	return "任务已开始，卡片创建失败，将以普通消息返回结果。"
+}
+
 func renderDeltaProgress(delta string, cfg config.ProgressConfig) string {
 	status := lastNonEmptyProgressLine(delta)
 	if strings.HasPrefix(status, "进展：") {
