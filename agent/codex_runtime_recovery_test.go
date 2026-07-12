@@ -79,6 +79,41 @@ func TestACPAgentRecoverCodexThreadRestartsBeforeResume(t *testing.T) {
 	}
 }
 
+func TestACPAgentRecoversPersistedWeClawThreadAfterRestart(t *testing.T) {
+	stateFile := t.TempDir() + "/state.json"
+	source := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: stateFile,
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+	binding := source.codexOwners.claimWeClawThread(
+		"thread-1", CodexThreadState{ThreadID: "thread-1"},
+	)
+	ref := CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"}
+	source.codexOwners.bindConversation(ref, binding)
+	source.persistState()
+
+	restored := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: stateFile,
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+	var order []string
+	restored.restartCodexAppServerCall = func(context.Context) error {
+		order = append(order, "restart")
+		return nil
+	}
+	restored.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		order = append(order, method)
+		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+	}
+	if err := restored.RecoverCodexThread(context.Background(), ref); err != nil {
+		t.Fatalf("RecoverCodexThread() error = %v", err)
+	}
+	if len(order) != 2 || order[0] != "restart" || order[1] != "thread/resume" {
+		t.Fatalf("order = %#v", order)
+	}
+	if restored.threads["conversation-1"] != "thread-1" {
+		t.Fatalf("threads = %#v", restored.threads)
+	}
+}
+
 func TestACPAgentRecoveryDoesNotFailDesktopWatchers(t *testing.T) {
 	a := recoveryTestAgent(t, CodexOwnerDesktopLive)
 	desktopCh := make(chan *codexTurnEvent, 1)

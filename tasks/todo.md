@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-Desktop 客户端明确释放 thread 后，普通消息已能自动转交 WeClaw runtime；自动化验证完成，等待发布后实机复测。
+WeClaw 重启后的 owner 恢复已修复并通过自动化验收，等待发布后实机复测 `/cx switch`。
 
 ## 任务清单
 
@@ -44,6 +44,9 @@ Desktop 客户端明确释放 thread 后，普通消息已能自动转交 WeClaw
 - [x] P5.4a 串行 TDD：复现普通消息沿旧 `desktop_live` 绑定发送时收到 `no-client-found`，却未恢复同一 thread 的问题。
 - [x] P5.4b 串行实现：仅在 Desktop 明确返回 `no-client-found` 时确认 release，恢复到 WeClaw app-server 并单次重试原消息。
 - [x] P5.4c 串行验证：断线与交付状态未知不得触发回退，并完成受影响测试、全仓测试、race、vet、staticcheck 和交付审查。
+- [x] P5.5a 串行 TDD：复现 `weclaw_runtime` owner 在重启快照中被丢弃，导致原 thread 不可恢复的问题。
+- [x] P5.5b 串行实现：把 WeClaw 已持有的 thread 持久化为已确认释放的 `persisted_only`，重启后仍恢复同一 thread。
+- [x] P5.5c 串行验证：确认 Desktop live/disconnected 不会被错误标记为可恢复，并完成全仓自动验收与交付审查。
 - [ ] P6 后续独立任务：为 Claude Channels 编写单独 Spec，不与本轮 Codex 改动混合。
 
 ## 并行说明
@@ -63,3 +66,5 @@ Desktop 客户端明确释放 thread 后，普通消息已能自动转交 WeClaw
 2026-07-12 第四次实机验收确认本地 turn 结束后，飞书暂存消息于 `09:19:12` 自动出队，`09:19:21` 返回最终结果，随后 `active_tasks=0`；用户截图确认结果已到达飞书。展示优化进一步修复排队路径丢失账号级 `stream` 配置、短任务提前创建空完成卡和重复操作提示。发布前全仓单测、race、vet、文档校验和差异检查通过；当前环境未安装 `staticcheck`。
 
 2026-07-12 发布后实机日志确认 Android thread 的旧 `desktop_live` 绑定在 Desktop 返回 `no-client-found` 后仍被普通消息复用。已增加确定性 release 转移、同 thread app-server 恢复和原消息单次重试；断线与交付未知负向测试通过。`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均为退出码 0。
+
+2026-07-12 重启后 `/cx switch` 失败的根因是 `persistedBindings` 丢弃 `weclaw_runtime` owner，conversation 虽保留 thread 映射，却失去可恢复证据。现将进程内 owner 跨重启转换为 `persisted_only + ReleaseConfirmed`，并保留 Desktop live/disconnected 的保守边界；写盘、重建 Agent、重启 app-server、`thread/resume` 原 thread 的回归测试通过。`go test ./...`、`go test -race ./...`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均为退出码 0。

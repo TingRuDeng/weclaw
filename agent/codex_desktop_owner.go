@@ -167,27 +167,24 @@ func (r *codexRuntimeOwnerRegistry) currentConversationBinding(conversationID st
 	return binding, true
 }
 
-// persistedBindings 把 live owner 降级为 disconnected 后生成 conversation 快照。
+// persistedBindings 把进程内 owner 转换为重启后可安全恢复的 conversation 快照。
 func (r *codexRuntimeOwnerRegistry) persistedBindings() map[string]CodexThreadBinding {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	result := make(map[string]CodexThreadBinding, len(r.conversations))
 	for conversationID, threadID := range r.conversations {
 		binding, ok := r.threads[threadID]
-		if !ok || binding.Owner == CodexOwnerWeClawRuntime || binding.Owner == CodexOwnerPersistedOnly {
+		if !ok {
 			continue
 		}
-		if binding.Owner == CodexOwnerDesktopLive {
-			binding.Owner = CodexOwnerDesktopDisconnected
-			binding.Connected = false
-		}
+		binding = restartSafeCodexBinding(binding)
 		binding.Ref = CodexThreadRef{ConversationID: conversationID, ThreadID: threadID}
 		result[conversationID] = binding
 	}
 	return result
 }
 
-// restoreBindings 恢复不确定 binding，启动后仍需重新 probe。
+// restoreBindings 恢复 owner 快照；旧版本写入的进程内 owner 也按重启语义迁移。
 func (r *codexRuntimeOwnerRegistry) restoreBindings(bindings map[string]CodexThreadBinding) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -197,14 +194,24 @@ func (r *codexRuntimeOwnerRegistry) restoreBindings(bindings map[string]CodexThr
 		if conversationID == "" || threadID == "" {
 			continue
 		}
-		if binding.Owner == CodexOwnerDesktopLive {
-			binding.Owner = CodexOwnerDesktopDisconnected
-		}
-		binding.Connected = false
+		binding = restartSafeCodexBinding(binding)
 		binding.Ref = CodexThreadRef{ConversationID: conversationID, ThreadID: threadID}
 		r.threads[threadID] = binding
 		r.conversations[conversationID] = threadID
 		loaded++
 	}
 	return loaded
+}
+
+// restartSafeCodexBinding 保留确定性释放证据，但不把 Desktop 断线误判为释放。
+func restartSafeCodexBinding(binding CodexThreadBinding) CodexThreadBinding {
+	binding.Connected = false
+	switch binding.Owner {
+	case CodexOwnerDesktopLive:
+		binding.Owner = CodexOwnerDesktopDisconnected
+	case CodexOwnerWeClawRuntime:
+		binding.Owner = CodexOwnerPersistedOnly
+		binding.ReleaseConfirmed = true
+	}
+	return binding
 }

@@ -123,6 +123,34 @@ func TestACPStatePersistsDesktopLiveAsDisconnected(t *testing.T) {
 	}
 }
 
+func TestACPStatePersistsWeClawRuntimeAsRecoverable(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: stateFile,
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+	binding := a.codexOwners.claimWeClawThread(
+		"thread-1", CodexThreadState{ThreadID: "thread-1"},
+	)
+	a.codexOwners.bindConversation(CodexThreadRef{
+		ConversationID: "conversation-1", ThreadID: "thread-1",
+	}, binding)
+	a.persistState()
+
+	persisted := readACPStateFile(t, stateFile)
+	got := persisted.LiveBindings["conversation-1"]
+	if got.Owner != CodexOwnerPersistedOnly || !got.ReleaseConfirmed {
+		t.Fatalf("persisted binding = %#v", got)
+	}
+
+	restored := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: stateFile,
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+	got, ok := restored.CurrentCodexThreadBinding("conversation-1")
+	if !ok || got.Ref.ThreadID != "thread-1" || got.Owner != CodexOwnerPersistedOnly || !got.ReleaseConfirmed {
+		t.Fatalf("restored binding = %#v, ok = %v", got, ok)
+	}
+}
+
 func TestCodexRuntimeOwnerRestoredBindingMustProbeAgain(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{
 		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,

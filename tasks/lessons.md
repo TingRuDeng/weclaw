@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-07-12 Codex owner 跨重启恢复
+
+- 触发条件：WeClaw 已通过 app-server 接管 Codex thread，随后服务重启并再次执行 `/cx switch`。
+- 规则：`weclaw_runtime` 是进程内所有权，持久化时必须转换为已确认可恢复的 `persisted_only`；不能直接丢弃 conversation 到 thread 的 owner 证据。
+- 安全边界：`desktop_live` 跨重启只能降级为 `desktop_disconnected`，普通断线不能产生 release evidence，避免与仍在运行的 Codex App 双写同一 thread。
+- 验证方式：回归测试必须覆盖写盘、创建新 Agent、重启 app-server、`thread/resume` 原 thread，以及 Desktop live/disconnected 拒绝恢复。
+
 ## 2026-07-11 Codex App 跨进程控制提示
 
 - 触发条件：用户从飞书或微信切换到 Codex App 独立进程正在执行的会话。
