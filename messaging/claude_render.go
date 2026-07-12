@@ -37,6 +37,33 @@ func (h *Handler) renderClaudeWorkspaceListForAccess(bindingKey string, actorUse
 	return wechatCommandText(lines...)
 }
 
+// renderClaudeWorkspaceGroupsForAccess 渲染 `/cc cd ..` 使用的工作空间文本列表。
+func (h *Handler) renderClaudeWorkspaceGroupsForAccess(bindingKey string, actorUserID string, admin bool) string {
+	groups := h.claudeWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
+	if len(groups) == 0 {
+		return "当前还没有 Claude 工作空间。"
+	}
+	lines := []string{"Claude 工作空间:"}
+	for index, group := range groups {
+		lines = append(lines, fmt.Sprintf("%d. %s", index, group.Name))
+	}
+	return wechatCommandText(lines...)
+}
+
+// renderClaudeSessionList 渲染工作空间内会话，并明确要求空空间使用 `/cc new`。
+func renderClaudeSessionList(workspaceRoot string, sessions []codexWorkspaceView) string {
+	workspaceName := shortCodexWorkspaceName(workspaceRoot)
+	if len(sessions) == 0 {
+		return wechatCommandText("工作空间: "+workspaceName, "当前工作空间还没有可切换会话，请发送 /cc new。")
+	}
+	lines := []string{workspaceName + " 会话:"}
+	for index, session := range sessions {
+		lines = append(lines, fmt.Sprintf("%d. %s", index, codexSessionDisplayName(session)))
+	}
+	lines = append(lines, "", "发送 /cc cd .. 返回工作空间列表。")
+	return wechatCommandText(lines...)
+}
+
 func claudeSessionListLabel(view codexWorkspaceView) string {
 	workspaceName := shortCodexWorkspaceName(view.WorkspaceRoot)
 	sessionName := codexSessionDisplayName(view)
@@ -50,6 +77,7 @@ func buildClaudeSessionHelpText() string {
 	return wechatCommandText(
 		"Claude 会话命令:",
 		"/cc ls 查看可切换会话",
+		"/cc cd <编号|..> 进入工作空间或返回列表",
 		"/cc switch <编号|sessionId> 切换 Claude 会话",
 		"/cc new 新建当前工作空间会话",
 		"/cc pwd 查看当前工作空间",

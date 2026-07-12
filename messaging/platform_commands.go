@@ -49,7 +49,7 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	case isProgressCommand(trimmed):
 		sendText(h.handleProgressCommandForAccount(trimmed, msg.Platform, msg.AccountID))
 	case isClaudeSessionCommand(trimmed):
-		sendText(h.handleClaudeSessionCommandForRoute(ctx, msg.UserID, routeUserID, h.isAdminMessage(msg), trimmed))
+		return h.handleClaudeSessionPlatformCommand(ctx, req, routeUserID)
 	case isCodexSessionCommand(trimmed):
 		return h.handleCodexSessionPlatformCommand(ctx, req, routeUserID)
 	case trimmed == "/guide":
@@ -69,6 +69,18 @@ func (h *Handler) handleBuiltInPlatformCommand(ctx context.Context, req platform
 	default:
 		return false
 	}
+	return true
+}
+
+// handleClaudeSessionPlatformCommand 为飞书提供卡片导航，其他平台继续使用文本命令。
+func (h *Handler) handleClaudeSessionPlatformCommand(ctx context.Context, req platformCommandRequest, routeUserID string) bool {
+	msg := req.Message
+	cardReq := claudeFeishuCommandRequest{Context: ctx, Message: msg, RouteUserID: routeUserID, Reply: req.Reply, Trimmed: req.Trimmed}
+	if h.handleFeishuClaudeSessionCommand(cardReq) {
+		return true
+	}
+	text := h.handleClaudeSessionCommandForRoute(ctx, msg.UserID, routeUserID, h.isAdminMessage(msg), req.Trimmed)
+	sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	return true
 }
 

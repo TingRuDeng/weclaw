@@ -1,6 +1,9 @@
 package messaging
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // SetClaudeLocalSessionDir 设置本机 Claude 数据目录，测试和特殊部署可覆盖默认 ~/.claude。
 func (h *Handler) SetClaudeLocalSessionDir(dir string) {
@@ -40,6 +43,63 @@ func (h *Handler) claudeSwitchTargetsForAccess(bindingKey string, actorUserID st
 		}
 	}
 	return filtered
+}
+
+// claudeWorkspaceGroupsForAccess 按工作空间聚合可访问的 Claude 会话，供文本和卡片导航共用。
+func (h *Handler) claudeWorkspaceGroupsForAccess(bindingKey string, actorUserID string, admin bool) []codexWorkspaceGroup {
+	byRoot := make(map[string]*codexWorkspaceGroup)
+	for _, view := range h.claudeSwitchTargetsForAccess(bindingKey, actorUserID, admin) {
+		root := normalizeClaudeWorkspaceRoot(view.WorkspaceRoot)
+		if root == "" {
+			continue
+		}
+		if byRoot[root] == nil {
+			byRoot[root] = &codexWorkspaceGroup{Name: shortCodexWorkspaceName(root), Root: root}
+		}
+		byRoot[root].Sessions = append(byRoot[root].Sessions, view)
+	}
+	return sortedCodexWorkspaceGroups(byRoot)
+}
+
+// findClaudeWorkspaceGroupForAccess 按稳定编号或名称解析用户可访问的工作空间。
+func (h *Handler) findClaudeWorkspaceGroupForAccess(route claudeSessionRoute, target string) (codexWorkspaceGroup, error) {
+	groups := h.claudeWorkspaceGroupsForAccess(route.BindingKey, route.ActorUserID, route.Admin)
+	if index, ok := parseCodexListIndex(strings.TrimSpace(target)); ok {
+		if index < 0 || index >= len(groups) {
+			return codexWorkspaceGroup{}, fmt.Errorf("工作空间编号不存在，请先发送 /cc ls 查看。")
+		}
+		return groups[index], nil
+	}
+	return findClaudeWorkspaceGroupByName(groups, strings.TrimSpace(target))
+}
+
+// findClaudeWorkspaceGroupByName 使用 Claude 命令文案处理名称缺失和重名。
+func findClaudeWorkspaceGroupByName(groups []codexWorkspaceGroup, target string) (codexWorkspaceGroup, error) {
+	matched := -1
+	for index := range groups {
+		if groups[index].Name != target {
+			continue
+		}
+		if matched >= 0 {
+			return codexWorkspaceGroup{}, fmt.Errorf("工作空间名称 %q 不唯一，请使用编号。", target)
+		}
+		matched = index
+	}
+	if matched < 0 {
+		return codexWorkspaceGroup{}, fmt.Errorf("工作空间不存在，请先发送 /cc ls 查看。")
+	}
+	return groups[matched], nil
+}
+
+// claudeSessionsForWorkspace 返回指定工作空间内可切换的真实会话。
+func (h *Handler) claudeSessionsForWorkspace(route claudeSessionRoute, workspaceRoot string) []codexWorkspaceView {
+	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
+	for _, group := range h.claudeWorkspaceGroupsForAccess(route.BindingKey, route.ActorUserID, route.Admin) {
+		if group.Root == workspaceRoot {
+			return switchableCodexSessions(group.Sessions)
+		}
+	}
+	return nil
 }
 
 // appendLocalClaudeSwitchTargets 追加未被 WeClaw 记录过的本机会话，避免重复展示同一个 session。

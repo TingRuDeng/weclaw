@@ -14,7 +14,7 @@ func isClaudeSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "pwd", "status", "cli", "model", "help":
+	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "cli", "model", "help":
 		return true
 	default:
 		return false
@@ -75,6 +75,11 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 		return h.renderClaudeWhoami(route.BindingKey, route.WorkspaceRoot)
 	case "ls":
 		return h.renderClaudeWorkspaceListForAccess(route.BindingKey, route.ActorUserID, route.Admin)
+	case "cd":
+		if len(fields) != 3 {
+			return "用法: /cc cd <工作空间编号|..>"
+		}
+		return h.handleClaudeCd(route, fields[2])
 	case "pwd":
 		return wechatCommandText("workspace: " + route.WorkspaceRoot)
 	case "status":

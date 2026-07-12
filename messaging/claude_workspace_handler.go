@@ -86,6 +86,23 @@ func (h *Handler) switchClaudeWorkspace(agentName string, workspaceRoot string, 
 	return normalizeClaudeWorkspaceRoot(workspaceRoot)
 }
 
+// handleClaudeCd 只切换工作空间浏览上下文；会话必须由用户继续选择或显式新建。
+func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string {
+	if strings.TrimSpace(target) == ".." {
+		return h.renderClaudeWorkspaceGroupsForAccess(route.BindingKey, route.ActorUserID, route.Admin)
+	}
+	group, err := h.findClaudeWorkspaceGroupForAccess(route, target)
+	if err != nil {
+		return err.Error()
+	}
+	workspaceRoot := normalizeClaudeWorkspaceRoot(group.Root)
+	h.ensureClaudeSessions().setActiveWorkspace(route.BindingKey, workspaceRoot)
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
+	h.bindConversationCwd(route.Agent, conversationID, workspaceRoot)
+	sessions := h.claudeSessionsForWorkspace(route, workspaceRoot)
+	return renderClaudeSessionList(workspaceRoot, sessions)
+}
+
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
 	h.bindConversationCwd(route.Agent, conversationID, route.WorkspaceRoot)
