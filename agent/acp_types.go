@@ -143,24 +143,13 @@ const (
 const acpPersistedStateVersion = 2
 
 type acpPersistedState struct {
-	Version      int                            `json:"version"`
-	Protocol     string                         `json:"protocol"`
-	Sessions     map[string]string              `json:"sessions,omitempty"`
-	Threads      map[string]string              `json:"threads,omitempty"`
-	History      map[string][]acpHistoryMessage `json:"history,omitempty"`
-	LiveBindings map[string]CodexThreadBinding  `json:"liveBindings,omitempty"`
-	Updated      string                         `json:"updatedAt,omitempty"`
+	Version      int                           `json:"version"`
+	Protocol     string                        `json:"protocol"`
+	Sessions     map[string]string             `json:"sessions,omitempty"`
+	Threads      map[string]string             `json:"threads,omitempty"`
+	LiveBindings map[string]CodexThreadBinding `json:"liveBindings,omitempty"`
+	Updated      string                        `json:"updatedAt,omitempty"`
 }
-
-type acpHistoryMessage struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
-}
-
-const (
-	acpMaxHistoryMessages      = 20
-	acpMaxRehydratePromptChars = 12000
-)
 
 type codexTurnStartParams struct {
 	ThreadID          string           `json:"threadId"`

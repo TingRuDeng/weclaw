@@ -55,7 +55,6 @@ func (a *ACPAgent) loadState() {
 
 	loadedSessions := 0
 	loadedThreads := 0
-	loadedHistory := 0
 	loadedBindings := 0
 
 	a.mu.Lock()
@@ -74,41 +73,13 @@ func (a *ACPAgent) loadState() {
 		a.resumeOnFirstUse[conversationID] = true
 		loadedThreads++
 	}
-	for conversationID, messages := range state.History {
-		if conversationID == "" || len(messages) == 0 {
-			continue
-		}
-		normalized := make([]acpHistoryMessage, 0, len(messages))
-		for _, msg := range messages {
-			role := strings.TrimSpace(strings.ToLower(msg.Role))
-			text := strings.TrimSpace(msg.Text)
-			if text == "" {
-				continue
-			}
-			if role != "user" && role != "assistant" {
-				continue
-			}
-			normalized = append(normalized, acpHistoryMessage{
-				Role: role,
-				Text: text,
-			})
-		}
-		if len(normalized) == 0 {
-			continue
-		}
-		if len(normalized) > acpMaxHistoryMessages {
-			normalized = normalized[len(normalized)-acpMaxHistoryMessages:]
-		}
-		a.history[conversationID] = normalized
-		loadedHistory++
-	}
 	a.mu.Unlock()
 	if a.codexOwners != nil {
 		loadedBindings = a.codexOwners.restoreBindings(state.LiveBindings)
 	}
 
-	if loadedSessions > 0 || loadedThreads > 0 || loadedHistory > 0 || loadedBindings > 0 {
-		log.Printf("[acp] restored state (sessions=%d, threads=%d, history=%d, bindings=%d, file=%s)", loadedSessions, loadedThreads, loadedHistory, loadedBindings, a.stateFile)
+	if loadedSessions > 0 || loadedThreads > 0 || loadedBindings > 0 {
+		log.Printf("[acp] restored state (sessions=%d, threads=%d, bindings=%d, file=%s)", loadedSessions, loadedThreads, loadedBindings, a.stateFile)
 	}
 }
 
@@ -141,7 +112,6 @@ func (a *ACPAgent) snapshotPersistedState() (acpPersistedState, string, bool) {
 		Protocol: a.protocol,
 		Sessions: make(map[string]string, len(a.sessions)),
 		Threads:  make(map[string]string, len(a.threads)),
-		History:  make(map[string][]acpHistoryMessage, len(a.history)),
 		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
 	if a.codexOwners != nil {
@@ -152,14 +122,6 @@ func (a *ACPAgent) snapshotPersistedState() (acpPersistedState, string, bool) {
 	}
 	for k, v := range a.threads {
 		state.Threads[k] = v
-	}
-	for conversationID, messages := range a.history {
-		if len(messages) == 0 {
-			continue
-		}
-		copied := make([]acpHistoryMessage, len(messages))
-		copy(copied, messages)
-		state.History[conversationID] = copied
 	}
 	return state, a.stateFile, true
 }

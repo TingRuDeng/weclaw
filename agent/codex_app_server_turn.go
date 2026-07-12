@@ -29,19 +29,15 @@ func (m codexTurnMetrics) elapsed(now time.Time) time.Duration {
 }
 
 func (a *ACPAgent) chatCodexAppServer(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
-	result, err := a.chatCodexAppServerWithRetry(ctx, conversationID, message, true, onProgress)
+	result, err := a.chatCodexAppServerTurn(ctx, conversationID, message, onProgress)
 	if err != nil {
 		return "", err
 	}
-	a.recordConversationExchange(conversationID, message, result)
 	return result, nil
 }
 
-func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversationID string, message string, allowFreshRetry bool, onProgress func(delta string)) (string, error) {
-	if err := a.refreshCodexRuntimeAfterUsageLimit(ctx, conversationID); err != nil {
-		return "", err
-	}
-	threadID, isNew, err := a.getOrCreateThread(ctx, conversationID)
+func (a *ACPAgent) chatCodexAppServerTurn(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
+	threadID, err := a.requireThread(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("thread error: %w", err)
 	}
@@ -53,11 +49,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 	}
 	a.mu.Unlock()
 
-	if isNew {
-		log.Printf("[acp] new thread created (pid=%d, thread=%s, conversation=%s)", pid, threadID, conversationID)
-	} else {
-		log.Printf("[acp] reusing thread (pid=%d, thread=%s, conversation=%s)", pid, threadID, conversationID)
-	}
+	log.Printf("[acp] reusing thread (pid=%d, thread=%s, conversation=%s)", pid, threadID, conversationID)
 
 	// Register turn event channel
 	turnCh := make(chan *codexTurnEvent, 256)
@@ -156,18 +148,6 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 			if evt.Kind == "error" {
 				errorText := diagnostics.withError(evt.Text)
 				log.Printf("[acp] turn failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %.200s", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), errorText)
-				if allowFreshRetry && !isNew && isMissingThreadError(fmt.Errorf("%s", errorText)) {
-					log.Printf("[acp] stale thread error detected, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
-					return a.retryWithFreshThread(ctx, conversationID, message, "stale_thread_error", onProgress)
-				}
-				if isCodexAuthStateError(errorText) {
-					a.invalidateCodexRuntime(conversationID, "auth_state_error")
-					return "", fmt.Errorf("turn error: %s；已刷新 Codex 进程，请重试当前消息", errorText)
-				}
-				if isCodexUsageLimitError(errorText) {
-					a.markCodexUsageLimitRefresh(conversationID)
-					return "", fmt.Errorf("turn error: %s；如果你已经手动切换 Codex 账号，下一次请求会刷新 Codex 进程并创建新会话", errorText)
-				}
 				return "", fmt.Errorf("turn error: %s", errorText)
 			}
 			if evt.Kind == "progress" {
@@ -199,10 +179,6 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 				log.Printf("[acp] turn completed (pid=%d, thread=%s, conversation=%s, elapsed=%s)", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()))
 				result := assembler.finalText()
 				if result == "" {
-					if allowFreshRetry && !isNew {
-						log.Printf("[acp] empty response on reused thread, retrying with a fresh thread (conversation=%s, oldThread=%s)", conversationID, threadID)
-						return a.retryWithFreshThread(ctx, conversationID, message, "empty_response", onProgress)
-					}
 					return "", fmt.Errorf("agent returned empty response")
 				}
 				return result, nil
@@ -211,64 +187,7 @@ func (a *ACPAgent) chatCodexAppServerWithRetry(ctx context.Context, conversation
 	}
 }
 
-// refreshCodexRuntimeAfterUsageLimit 在额度错误后的下一次请求前切换到当前本机 Codex 登录态。
-func (a *ACPAgent) refreshCodexRuntimeAfterUsageLimit(ctx context.Context, conversationID string) error {
-	if !a.takeCodexUsageLimitRefresh(conversationID) {
-		return nil
-	}
-	oldThreadID := a.clearCodexThread(conversationID)
-	log.Printf("[acp] refreshing codex runtime after usage limit (conversation=%s, oldThread=%s)", conversationID, oldThreadID)
-	if a.rpcCall != nil {
-		return nil
-	}
-	a.Stop()
-	if err := a.Start(ctx); err != nil {
-		return fmt.Errorf("refresh codex runtime after usage limit: %w", err)
-	}
-	return nil
-}
-
-// markCodexUsageLimitRefresh 标记下一次请求需要刷新 runtime，等待用户手动切换账号。
-func (a *ACPAgent) markCodexUsageLimitRefresh(conversationID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.usageLimitRefreshOnNextTurn[conversationID] = true
-}
-
-// takeCodexUsageLimitRefresh 取出并清除额度错误后的刷新标记。
-func (a *ACPAgent) takeCodexUsageLimitRefresh(conversationID string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	shouldRefresh := a.usageLimitRefreshOnNextTurn[conversationID]
-	delete(a.usageLimitRefreshOnNextTurn, conversationID)
-	return shouldRefresh
-}
-
-func (a *ACPAgent) retryWithFreshThread(ctx context.Context, conversationID string, message string, reason string, onProgress func(delta string)) (string, error) {
-	oldThreadID := a.clearCodexThread(conversationID)
-
-	log.Printf("[acp] cleared stale thread mapping (conversation=%s, oldThread=%s, reason=%s), creating fresh thread", conversationID, oldThreadID, reason)
-	retryMessage := message
-	if hydrated, ok := a.buildRehydratePrompt(conversationID, message); ok {
-		retryMessage = hydrated
-		log.Printf("[acp] using local context rehydrate prompt for fresh thread (conversation=%s)", conversationID)
-	}
-
-	result, err := a.chatCodexAppServerWithRetry(ctx, conversationID, retryMessage, false, onProgress)
-	if err != nil {
-		return "", fmt.Errorf("retry with fresh thread failed: %w", err)
-	}
-	return result, nil
-}
-
-// invalidateCodexRuntime 在账号态异常时丢弃旧进程，避免后续请求继续使用失效登录态。
-func (a *ACPAgent) invalidateCodexRuntime(conversationID string, reason string) {
-	oldThreadID := a.clearCodexThread(conversationID)
-	log.Printf("[acp] invalidating codex runtime (conversation=%s, oldThread=%s, reason=%s)", conversationID, oldThreadID, reason)
-	a.Stop()
-}
-
-// clearCodexThread 只清理远端 thread 映射，保留本地历史用于后续恢复上下文。
+// clearCodexThread 清理指定 conversation 的 thread 映射，仅供用户显式切换或新建会话。
 func (a *ACPAgent) clearCodexThread(conversationID string) string {
 	a.mu.Lock()
 	oldThreadID := a.threads[conversationID]

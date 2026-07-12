@@ -76,7 +76,7 @@ func (a *ACPAgent) bindKnownDesktopThread(conversationID string, threadID string
 	return true, nil
 }
 
-// ClearCodexThread 清理指定会话的 Codex thread，下一条消息会创建新 thread。
+// ClearCodexThread 清理指定会话的 Codex thread；后续必须由用户切换会话或显式新建。
 func (a *ACPAgent) ClearCodexThread(conversationID string) {
 	if a.protocol != protocolCodexAppServer {
 		return
@@ -84,43 +84,37 @@ func (a *ACPAgent) ClearCodexThread(conversationID string) {
 	a.clearCodexThread(conversationID)
 }
 
-// clearACPSession 删除旧 ACP session 映射，避免恢复到服务端已经不存在的 session。
-func (a *ACPAgent) clearACPSession(conversationID string) string {
-	a.mu.Lock()
-	oldSessionID := a.sessions[conversationID]
-	delete(a.sessions, conversationID)
-	a.mu.Unlock()
-	a.persistState()
-	return oldSessionID
-}
-
-func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string) (string, bool, error) {
+// requireSession 返回普通聊天已经绑定的 ACP session，不承担创建职责。
+func (a *ACPAgent) requireSession(conversationID string) (string, error) {
 	a.mu.Lock()
 	sid, exists := a.sessions[conversationID]
 	a.mu.Unlock()
-
-	if exists {
-		return sid, false, nil
+	if !exists || strings.TrimSpace(sid) == "" {
+		return "", fmt.Errorf("%w: conversation=%s", ErrAgentSessionNotBound, conversationID)
 	}
+	return sid, nil
+}
 
+// createSession 创建并保存一个由用户显式请求的新 ACP session。
+func (a *ACPAgent) createSession(ctx context.Context, conversationID string) (string, error) {
 	result, err := a.rpc(ctx, "session/new", newSessionParams{
 		Cwd:        a.cwdForConversation(conversationID),
 		McpServers: []interface{}{},
 	})
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 
 	var sessionResult newSessionResult
 	if err := json.Unmarshal(result, &sessionResult); err != nil {
-		return "", false, fmt.Errorf("parse session result: %w", err)
+		return "", fmt.Errorf("parse session result: %w", err)
 	}
 	if sessionResult.SessionID == "" {
-		return "", false, fmt.Errorf("session/new returned empty session id")
+		return "", fmt.Errorf("session/new returned empty session id")
 	}
 	if a.isClaudeLegacyACP() {
 		if err := a.configureClaudeSession(ctx, sessionResult.SessionID, sessionResult.ConfigOptions); err != nil {
-			return "", false, err
+			return "", err
 		}
 	}
 
@@ -129,28 +123,57 @@ func (a *ACPAgent) getOrCreateSession(ctx context.Context, conversationID string
 	a.mu.Unlock()
 	a.persistState()
 
-	return sessionResult.SessionID, true, nil
+	return sessionResult.SessionID, nil
 }
 
-func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string) (string, bool, error) {
+// requireThread 返回普通聊天已经绑定的 Codex thread，必要时恢复同一 thread。
+func (a *ACPAgent) requireThread(ctx context.Context, conversationID string) (string, error) {
 	a.mu.Lock()
 	tid, exists := a.threads[conversationID]
 	shouldResume := exists && a.resumeOnFirstUse[conversationID]
 	a.mu.Unlock()
 
-	if exists {
-		if shouldResume {
-			if err := a.resumeThread(ctx, conversationID, tid); err != nil {
-				return "", false, fmt.Errorf("resume restored thread %s: %w", tid, err)
-			}
-			a.mu.Lock()
-			delete(a.resumeOnFirstUse, conversationID)
-			a.mu.Unlock()
-			log.Printf("[acp] restored thread resumed (conversation=%s, thread=%s)", conversationID, tid)
-		}
-		return tid, false, nil
+	if !exists || strings.TrimSpace(tid) == "" {
+		return "", fmt.Errorf("%w: conversation=%s", ErrAgentSessionNotBound, conversationID)
 	}
+	if shouldResume {
+		if err := a.resumeThread(ctx, conversationID, tid); err != nil {
+			return "", fmt.Errorf("resume restored thread %s: %w", tid, err)
+		}
+		a.mu.Lock()
+		delete(a.resumeOnFirstUse, conversationID)
+		a.mu.Unlock()
+		log.Printf("[acp] restored thread resumed (conversation=%s, thread=%s)", conversationID, tid)
+	}
+	return tid, nil
+}
 
+// createThread 创建并保存一个由用户显式请求的新 Codex thread。
+func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (string, error) {
+	params := a.codexThreadStartParams(ctx, conversationID)
+	startedAt := time.Now()
+	result, err := a.rpc(ctx, "thread/start", params)
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		log.Printf("[acp] thread/start failed (conversation=%s, elapsed=%s): %v", conversationID, elapsed, err)
+		return "", err
+	}
+	log.Printf("[acp] thread/start completed (conversation=%s, elapsed=%s)", conversationID, elapsed)
+
+	threadID, err := codexThreadIDFromStartResult(result)
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	a.threads[conversationID] = threadID
+	delete(a.resumeOnFirstUse, conversationID)
+	a.mu.Unlock()
+	a.persistState()
+	return threadID, nil
+}
+
+// codexThreadStartParams 组装显式新建 thread 所需的会话配置。
+func (a *ACPAgent) codexThreadStartParams(ctx context.Context, conversationID string) map[string]interface{} {
 	params := map[string]interface{}{
 		"approvalPolicy":         a.approvalPolicyForContext(ctx),
 		"cwd":                    a.cwdForConversation(conversationID),
@@ -167,34 +190,24 @@ func (a *ACPAgent) getOrCreateThread(ctx context.Context, conversationID string)
 	if config.effort != "" {
 		params["effort"] = config.effort
 	}
-	startedAt := time.Now()
-	result, err := a.rpc(ctx, "thread/start", params)
-	elapsed := time.Since(startedAt)
-	if err != nil {
-		log.Printf("[acp] thread/start failed (conversation=%s, elapsed=%s): %v", conversationID, elapsed, err)
-		return "", false, err
-	}
-	log.Printf("[acp] thread/start completed (conversation=%s, elapsed=%s)", conversationID, elapsed)
+	return params
+}
 
+// codexThreadIDFromStartResult 校验 thread/start 响应并提取 thread ID。
+func codexThreadIDFromStartResult(result json.RawMessage) (string, error) {
 	var threadResult struct {
 		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
 	if err := json.Unmarshal(result, &threadResult); err != nil {
-		return "", false, fmt.Errorf("parse thread/start result: %w", err)
+		return "", fmt.Errorf("parse thread/start result: %w", err)
 	}
 	if threadResult.Thread.ID == "" {
-		return "", false, fmt.Errorf("thread/start returned empty thread id")
+		return "", fmt.Errorf("thread/start returned empty thread id")
 	}
 
-	a.mu.Lock()
-	a.threads[conversationID] = threadResult.Thread.ID
-	delete(a.resumeOnFirstUse, conversationID)
-	a.mu.Unlock()
-	a.persistState()
-
-	return threadResult.Thread.ID, true, nil
+	return threadResult.Thread.ID, nil
 }
 
 func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, threadID string) error {

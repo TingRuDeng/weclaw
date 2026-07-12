@@ -228,13 +228,6 @@ func isRecoverableCodexTransportText(text string) bool {
 	return hasWebSocketSignal && (hasFallbackSignal || hasReconnectSignal || hasForbiddenSignal && hasConnectFailure)
 }
 
-// isCodexAuthStateError 判断错误是否来自登录态或工作区状态；额度耗尽不能刷新进程。
-func isCodexAuthStateError(text string) bool {
-	lower := strings.ToLower(text)
-	return strings.Contains(lower, "deactivated_workspace") ||
-		(strings.Contains(lower, "402 payment required") && !strings.Contains(lower, "usagelimitexceeded"))
-}
-
 // isCodexUsageLimitError 判断 Codex 当前账号额度是否耗尽。
 func isCodexUsageLimitError(text string) bool {
 	lower := strings.ToLower(text)

@@ -27,14 +27,14 @@
 
 实施细节见 `tasks/explicit-agent-session-lifecycle-plan.md`。
 
-- [ ] P1 串行：在 `agent/acp_threads.go` 拆分已有会话读取与显式创建函数。
-- [ ] P2 串行：在 `agent/codex_app_server_turn.go` 删除 Codex 隐式新建和额度清理路径。
-- [ ] P3 串行：在 `agent/acp_chat.go` 删除 Claude session 失效后的自动重建。
-- [ ] P4 串行：在 `agent/acp_session_control.go` 保证只有 `ResetSession` 走显式创建。
-- [ ] P5 串行：在 `messaging/progress_errors.go` 统一未绑定和恢复失败提示。
-- [ ] P6 串行：补充 Codex、Claude、`/new` 和消息提示回归测试。
-- [ ] P7 可并行验证：运行受影响包测试、全仓测试、vet、staticcheck 和差异检查。
-- [ ] P8 串行：执行 review gate，并补充 Review 小结。
+- [x] P1 串行：在 `agent/acp_threads.go` 拆分已有会话读取与显式创建函数。
+- [x] P2 串行：在 `agent/codex_app_server_turn.go` 删除 Codex 隐式新建和额度清理路径。
+- [x] P3 串行：在 `agent/acp_chat.go` 删除 Claude session 失效后的自动重建。
+- [x] P4 串行：在 `agent/acp_session_control.go` 保证只有 `ResetSession` 走显式创建。
+- [x] P5 串行：在 `messaging/progress_errors.go` 统一未绑定和恢复失败提示。
+- [x] P6 串行：补充 Codex、Claude、`/new` 和消息提示回归测试。
+- [x] P7 可并行验证：运行受影响包测试、全仓测试、vet、staticcheck 和差异检查。
+- [x] P8 串行：执行 review gate，并补充 Review 小结。
 
 ## 预计修改范围
 
@@ -61,4 +61,6 @@ git diff --check
 
 ## Review 小结
 
-等待实现与验证完成后填写。
+2026-07-12 完成显式会话生命周期改造：Codex 与 Claude 普通消息只获取或恢复已有绑定，未绑定时不启动 runtime、不调用任何 RPC；额度、认证、网络、空响应和 missing thread/session 错误均不再清理绑定或自动创建。`thread/start` 与 `session/new` 仅保留在显式创建函数，并由 `/new` 的 `ResetSession` 路径调用。
+
+自动验收通过：`go test ./agent ./messaging -count=1 -timeout 60s`、`go test ./... -count=1 -timeout 120s`、`go vet ./...`、`staticcheck ./...`、`python3 scripts/validate_docs.py . --profile generic` 和 `git diff --check` 均为退出码 0。Review gate 未发现阻塞性安全、行为或静态检查问题；剩余风险是尚未在真实飞书和微信窗口复测“额度恢复后继续原会话”与“未绑定提示”交互。

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -103,7 +104,7 @@ func TestACPAgentResetSessionRestartsAfterClosedCodexStdin(t *testing.T) {
 	}
 }
 
-func TestACPAgentLegacySessionNotFoundRetriesWithFreshSession(t *testing.T) {
+func TestACPAgentLegacySessionNotFoundKeepsOriginalSession(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	writeACPStateFile(t, stateFile, acpPersistedState{
@@ -122,45 +123,41 @@ func TestACPAgentLegacySessionNotFoundRetriesWithFreshSession(t *testing.T) {
 	a.mu.Unlock()
 
 	promptCalls := 0
+	sessionStarts := 0
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		switch method {
 		case "session/new":
-			return json.RawMessage(`{"sessionId":"session-new"}`), nil
+			sessionStarts++
+			return nil, fmt.Errorf("session/new must not be called")
 		case "session/prompt":
 			promptCalls++
 			p := params.(promptParams)
-			if promptCalls == 1 {
-				if p.SessionID != "session-old" {
-					return nil, fmt.Errorf("first prompt session=%q, want session-old", p.SessionID)
-				}
-				return nil, fmt.Errorf("agent error: Internal error；details=Session not found")
+			if p.SessionID != "session-old" {
+				return nil, fmt.Errorf("prompt session=%q, want session-old", p.SessionID)
 			}
-			if p.SessionID != "session-new" {
-				return nil, fmt.Errorf("retry prompt session=%q, want session-new", p.SessionID)
-			}
-			return json.RawMessage(`{"text":"fresh reply"}`), nil
+			return nil, fmt.Errorf("agent error: Internal error；details=Session not found")
 		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
 	}
 
-	reply, err := a.Chat(ctx, "user-1", "hello")
-	if err != nil {
-		t.Fatalf("Chat() error = %v", err)
+	_, err := a.Chat(ctx, "user-1", "hello")
+	if err == nil || !strings.Contains(err.Error(), "Session not found") {
+		t.Fatalf("Chat() error=%v, want Session not found", err)
 	}
-	if reply != "fresh reply" {
-		t.Fatalf("reply=%q, want fresh reply", reply)
+	if promptCalls != 1 {
+		t.Fatalf("promptCalls=%d, want 1", promptCalls)
 	}
-	if promptCalls != 2 {
-		t.Fatalf("promptCalls=%d, want 2", promptCalls)
+	if sessionStarts != 0 {
+		t.Fatalf("session/new calls=%d, want 0", sessionStarts)
 	}
 	persisted := readACPStateFile(t, stateFile)
-	if got := persisted.Sessions["user-1"]; got != "session-new" {
-		t.Fatalf("persisted session=%q, want session-new", got)
+	if got := persisted.Sessions["user-1"]; got != "session-old" {
+		t.Fatalf("persisted session=%q, want session-old", got)
 	}
 }
 
-func TestACPAgentCodexFallbackToFreshThreadOnEmptyResponse(t *testing.T) {
+func TestACPAgentCodexKeepsThreadOnEmptyResponse(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	workspace := t.TempDir()
@@ -182,7 +179,7 @@ func TestACPAgentCodexFallbackToFreshThreadOnEmptyResponse(t *testing.T) {
 		calls[method]++
 		switch method {
 		case "thread/start":
-			return json.RawMessage(`{"thread":{"id":"new-thread"}}`), nil
+			return nil, fmt.Errorf("thread/start must not be called")
 		case "turn/start":
 			p, ok := params.(codexTurnStartParams)
 			if !ok {
@@ -201,30 +198,22 @@ func TestACPAgentCodexFallbackToFreshThreadOnEmptyResponse(t *testing.T) {
 				ch <- &codexTurnEvent{Kind: "completed"}
 				return json.RawMessage(`{"ok":true}`), nil
 			}
-			if p.ThreadID == "new-thread" {
-				ch <- &codexTurnEvent{Delta: "fresh reply"}
-				ch <- &codexTurnEvent{Kind: "completed"}
-				return json.RawMessage(`{"ok":true}`), nil
-			}
 			return nil, fmt.Errorf("unexpected thread id: %s", p.ThreadID)
 		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
 	}
 
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
-	if err != nil {
-		t.Fatalf("chatCodexAppServer error: %v", err)
+	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	if err == nil || !strings.Contains(err.Error(), "agent returned empty response") {
+		t.Fatalf("chatCodexAppServer error=%v, want empty response", err)
 	}
-	if reply != "fresh reply" {
-		t.Fatalf("reply = %q, want %q", reply, "fresh reply")
-	}
-	if calls["thread/start"] != 1 {
-		t.Fatalf("thread/start calls = %d, want 1", calls["thread/start"])
+	if calls["thread/start"] != 0 {
+		t.Fatalf("thread/start calls = %d, want 0", calls["thread/start"])
 	}
 
 	persisted := readACPStateFile(t, stateFile)
-	if got := persisted.Threads["user-1"]; got != "new-thread" {
-		t.Fatalf("persisted thread for user-1 = %q, want %q", got, "new-thread")
+	if got := persisted.Threads["user-1"]; got != "old-thread" {
+		t.Fatalf("persisted thread for user-1 = %q, want old-thread", got)
 	}
 }

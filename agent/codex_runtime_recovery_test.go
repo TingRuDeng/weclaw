@@ -145,8 +145,8 @@ func TestACPAgentRestoredThreadResumeFailureIsReturned(t *testing.T) {
 	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
 		return nil, errors.New("resume failed")
 	}
-	if _, _, err := a.getOrCreateThread(context.Background(), "conversation-1"); err == nil {
-		t.Fatal("getOrCreateThread() error = nil")
+	if _, err := a.requireThread(context.Background(), "conversation-1"); err == nil {
+		t.Fatal("requireThread() error = nil")
 	}
 	if !a.resumeOnFirstUse["conversation-1"] {
 		t.Fatal("resume failure cleared retry marker")

@@ -29,10 +29,13 @@ func TestChatLegacyACPSendsSessionCancelWhenContextCancelled(t *testing.T) {
 			return nil, fmt.Errorf("unexpected method %s", method)
 		}
 	}
+	if _, err := a.createSession(ctx, "conversation-1"); err != nil {
+		t.Fatalf("createSession error: %v", err)
+	}
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.chatLegacyACP(ctx, "conversation-1", "hello", nil, false)
+		_, err := a.chatLegacyACP(ctx, "conversation-1", "hello", nil)
 		done <- err
 	}()
 	<-promptStarted
@@ -69,6 +72,7 @@ func TestChatCodexAppServerInterruptsTurnWhenContextCancelled(t *testing.T) {
 			return nil, fmt.Errorf("unexpected method %s", method)
 		}
 	}
+	createCodexThreadForTest(t, ctx, a, "conversation-1")
 
 	done := make(chan error, 1)
 	go func() {

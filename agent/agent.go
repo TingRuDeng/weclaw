@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/config"
 )
+
+// ErrAgentSessionNotBound 表示当前消息窗口尚未绑定可继续的 Agent 会话。
+var ErrAgentSessionNotBound = errors.New("Agent 会话未绑定")
 
 // AgentInfo holds metadata about an agent for logging/debugging.
 type AgentInfo struct {

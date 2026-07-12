@@ -32,6 +32,11 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 				return "", fmt.Errorf("Codex thread 必须先恢复再继续对话")
 			}
 		}
+		if _, ok := a.CurrentCodexThread(conversationID); !ok {
+			return "", fmt.Errorf("thread error: %w", ErrAgentSessionNotBound)
+		}
+	} else if _, err := a.requireSession(conversationID); err != nil {
+		return "", fmt.Errorf("session error: %w", err)
 	}
 	if !a.isRuntimeStarted() {
 		if err := a.Start(ctx); err != nil {
@@ -44,23 +49,19 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 		return a.chatCodexAppServer(ctx, conversationID, message, onProgress)
 	}
 
-	return a.chatLegacyACP(ctx, conversationID, message, onProgress, true)
+	return a.chatLegacyACP(ctx, conversationID, message, onProgress)
 }
 
-// chatLegacyACP 处理标准 ACP session/prompt 流程，并在会话失效时允许一次重建重试。
-func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, message string, onProgress func(delta string), allowSessionRetry bool) (string, error) {
-	// Get or create session
-	sessionID, isNew, err := a.getOrCreateSession(ctx, conversationID)
+// chatLegacyACP 处理标准 ACP session/prompt 流程，任何失败都保留原 session 绑定。
+func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
+	// 普通消息只能使用已经由用户显式选择或创建的 session。
+	sessionID, err := a.requireSession(conversationID)
 	if err != nil {
 		return "", fmt.Errorf("session error: %w", err)
 	}
 
 	pid := a.runtimePID()
-	if isNew {
-		log.Printf("[acp] new session created (pid=%d, session=%s, conversation=%s)", pid, sessionID, conversationID)
-	} else {
-		log.Printf("[acp] reusing session (pid=%d, session=%s, conversation=%s)", pid, sessionID, conversationID)
-	}
+	log.Printf("[acp] reusing session (pid=%d, session=%s, conversation=%s)", pid, sessionID, conversationID)
 
 	// Register notification channel for this session
 	notifyCh := make(chan *sessionUpdate, 256)
@@ -134,11 +135,6 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 			}
 		drained:
 			if done.err != nil {
-				if allowSessionRetry && isMissingThreadError(done.err) {
-					log.Printf("[acp] stale ACP session detected, retrying with a fresh session (conversation=%s, oldSession=%s): %v", conversationID, sessionID, done.err)
-					a.clearACPSession(conversationID)
-					return a.chatLegacyACP(ctx, conversationID, message, onProgress, false)
-				}
 				return "", fmt.Errorf("prompt error: %w", done.err)
 			}
 			result := strings.TrimSpace(strings.Join(textParts, ""))

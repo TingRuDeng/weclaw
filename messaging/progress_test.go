@@ -7,10 +7,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
+
+func TestRenderFinalFailureExplainsAgentSessionNotBound(t *testing.T) {
+	got := renderFinalFailure("", agent.ErrAgentSessionNotBound)
+
+	if !strings.Contains(got, "当前窗口尚未绑定会话") ||
+		!strings.Contains(got, "选择已有会话") ||
+		!strings.Contains(got, "发送 /new") {
+		t.Fatalf("session not bound should include explicit choices, got %q", got)
+	}
+}
 
 func TestRenderAcceptance(t *testing.T) {
 	taskTitle := progressTaskTitle("修复 WeClaw 里 Codex 实时回复碎片化的问题，并保留 stream 兼容模式", 13)
@@ -79,10 +90,22 @@ func TestRenderFinalFailureExplainsACPSessionNotFound(t *testing.T) {
 
 	got := renderFinalFailure("", err)
 
-	if !strings.Contains(got, "Agent 会话已失效") ||
-		!strings.Contains(got, "请发送 /new") ||
-		!strings.Contains(got, "重启或切换账号") {
+	if !strings.Contains(got, "原会话无法恢复") ||
+		!strings.Contains(got, "切换其他会话") ||
+		!strings.Contains(got, "发送 /new") {
 		t.Fatalf("session not found should include explicit recovery hint, got %q", got)
+	}
+}
+
+func TestRenderFinalFailureExplainsCodexThreadNotFound(t *testing.T) {
+	err := errors.New("thread error: resume restored thread old-thread: thread not found")
+
+	got := renderFinalFailure("", err)
+
+	if !strings.Contains(got, "原会话无法恢复") ||
+		!strings.Contains(got, "切换其他会话") ||
+		!strings.Contains(got, "发送 /new") {
+		t.Fatalf("thread not found should include explicit recovery hint, got %q", got)
 	}
 }
 

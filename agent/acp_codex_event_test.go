@@ -411,7 +411,7 @@ func TestCodexTurnDiagnosticsAppendsRecentProgressToUnknownError(t *testing.T) {
 	}
 }
 
-func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
+func TestACPAgentKeepsCodexThreadOnAuthStateError(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	workspace := t.TempDir()
@@ -421,6 +421,7 @@ func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
 		Cwd:       workspace,
 		StateFile: stateFile,
 	})
+	a.started = true
 	a.mu.Lock()
 	a.threads["user-1"] = "old-thread"
 	a.mu.Unlock()
@@ -447,12 +448,12 @@ func TestACPAgentInvalidatesCodexRuntimeOnAuthStateError(t *testing.T) {
 	if err == nil {
 		t.Fatal("chatCodexAppServer error = nil, want auth state error")
 	}
-	if !containsAll(err.Error(), "deactivated_workspace", "请重试") {
-		t.Fatalf("error=%q, want retry hint with auth detail", err.Error())
+	if !strings.Contains(err.Error(), "deactivated_workspace") {
+		t.Fatalf("error=%q, want auth detail", err.Error())
 	}
 	persisted := readACPStateFile(t, stateFile)
-	if _, ok := persisted.Threads["user-1"]; ok {
-		t.Fatalf("auth state error should remove stale thread mapping, got %q", persisted.Threads["user-1"])
+	if got := persisted.Threads["user-1"]; got != "old-thread" {
+		t.Fatalf("auth state error should keep thread mapping, got %q", got)
 	}
 }
 
@@ -501,7 +502,7 @@ func TestACPAgentKeepsRuntimeOnCodexUsageLimit(t *testing.T) {
 	}
 }
 
-func TestACPAgentRefreshesRuntimeOnNextTurnAfterUsageLimit(t *testing.T) {
+func TestACPAgentContinuesSameThreadAfterUsageLimit(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	a := NewACPAgent(ACPAgentConfig{
@@ -522,7 +523,7 @@ func TestACPAgentRefreshesRuntimeOnNextTurnAfterUsageLimit(t *testing.T) {
 		switch method {
 		case "thread/start":
 			threadStarts++
-			return json.RawMessage(`{"thread":{"id":"new-thread"}}`), nil
+			return nil, fmt.Errorf("thread/start must not be called")
 		case "turn/start":
 			turnStarts++
 			p := params.(codexTurnStartParams)
@@ -539,10 +540,10 @@ func TestACPAgentRefreshesRuntimeOnNextTurnAfterUsageLimit(t *testing.T) {
 				ch <- &codexTurnEvent{Kind: "error", Text: "Codex 账号额度已用完：You've hit your usage limit. (usageLimitExceeded)"}
 				return json.RawMessage(`{"ok":true}`), nil
 			}
-			if p.ThreadID != "new-thread" {
-				t.Fatalf("second turn thread=%q, want new-thread", p.ThreadID)
+			if p.ThreadID != "old-thread" {
+				t.Fatalf("second turn thread=%q, want old-thread", p.ThreadID)
 			}
-			ch <- &codexTurnEvent{Delta: "新账号回复"}
+			ch <- &codexTurnEvent{Delta: "额度恢复后的回复"}
 			ch <- &codexTurnEvent{Kind: "completed"}
 			return json.RawMessage(`{"ok":true}`), nil
 		default:
@@ -554,22 +555,60 @@ func TestACPAgentRefreshesRuntimeOnNextTurnAfterUsageLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("first Chat error = nil, want usage limit")
 	}
-	if !containsAll(err.Error(), "usageLimitExceeded", "下一次请求") {
-		t.Fatalf("usage limit error=%q, want next-request refresh hint", err.Error())
+	if !strings.Contains(err.Error(), "usageLimitExceeded") {
+		t.Fatalf("usage limit error=%q, want usage detail", err.Error())
 	}
 
 	reply, err := a.Chat(ctx, "user-1", "切号后的请求")
 	if err != nil {
 		t.Fatalf("second Chat error: %v", err)
 	}
-	if reply != "新账号回复" {
-		t.Fatalf("second reply=%q, want 新账号回复", reply)
+	if reply != "额度恢复后的回复" {
+		t.Fatalf("second reply=%q, want 额度恢复后的回复", reply)
 	}
-	if threadStarts != 1 {
-		t.Fatalf("thread/start calls=%d, want 1", threadStarts)
+	if threadStarts != 0 {
+		t.Fatalf("thread/start calls=%d, want 0", threadStarts)
 	}
 	persisted := readACPStateFile(t, stateFile)
-	if got := persisted.Threads["user-1"]; got != "new-thread" {
-		t.Fatalf("persisted thread=%q, want new-thread", got)
+	if got := persisted.Threads["user-1"]; got != "old-thread" {
+		t.Fatalf("persisted thread=%q, want old-thread", got)
+	}
+}
+
+// TestACPAgentKeepsCodexThreadWhenResumeReportsMissing 验证恢复失败不会自动新建 thread。
+func TestACPAgentKeepsCodexThreadWhenResumeReportsMissing(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		StateFile: stateFile,
+	})
+	a.started = true
+	a.mu.Lock()
+	a.threads["user-1"] = "old-thread"
+	a.resumeOnFirstUse["user-1"] = true
+	a.mu.Unlock()
+	a.persistState()
+	threadStarts := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method == "thread/start" {
+			threadStarts++
+		}
+		if method == "thread/resume" {
+			return nil, fmt.Errorf("thread not found")
+		}
+		return nil, fmt.Errorf("unexpected rpc method: %s", method)
+	}
+
+	_, err := a.Chat(context.Background(), "user-1", "hello")
+	if err == nil || !strings.Contains(err.Error(), "thread not found") {
+		t.Fatalf("Chat error=%v, want thread not found", err)
+	}
+	if threadStarts != 0 {
+		t.Fatalf("thread/start calls=%d, want 0", threadStarts)
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["user-1"]; got != "old-thread" {
+		t.Fatalf("persisted thread=%q, want old-thread", got)
 	}
 }

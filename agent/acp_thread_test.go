@@ -16,6 +16,14 @@ const (
 	testCodexThreadID     = "thread-new"
 )
 
+// createCodexThreadForTest 显式建立测试会话，避免测试依赖普通消息隐式创建。
+func createCodexThreadForTest(t *testing.T, ctx context.Context, a *ACPAgent, conversationID string) {
+	t.Helper()
+	if _, err := a.createThread(ctx, conversationID); err != nil {
+		t.Fatalf("createThread(%s) error: %v", conversationID, err)
+	}
+}
+
 func TestACPAgentPersistsAndRestoresCodexThread(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
@@ -41,12 +49,9 @@ func TestACPAgentPersistsAndRestoresCodexThread(t *testing.T) {
 		}
 	}
 
-	threadID, isNew, err := a.getOrCreateThread(ctx, "user-1")
+	threadID, err := a.createThread(ctx, "user-1")
 	if err != nil {
-		t.Fatalf("getOrCreateThread(create) error: %v", err)
-	}
-	if !isNew {
-		t.Fatalf("isNew = %v, want true", isNew)
+		t.Fatalf("createThread error: %v", err)
 	}
 	if threadID != "thread-1" {
 		t.Fatalf("threadID = %q, want %q", threadID, "thread-1")
@@ -75,12 +80,9 @@ func TestACPAgentPersistsAndRestoresCodexThread(t *testing.T) {
 		}
 	}
 
-	restoredThreadID, restoredIsNew, err := b.getOrCreateThread(ctx, "user-1")
+	restoredThreadID, err := b.requireThread(ctx, "user-1")
 	if err != nil {
-		t.Fatalf("getOrCreateThread(restore) error: %v", err)
-	}
-	if restoredIsNew {
-		t.Fatalf("restored isNew = %v, want false", restoredIsNew)
+		t.Fatalf("requireThread(restore) error: %v", err)
 	}
 	if restoredThreadID != "thread-1" {
 		t.Fatalf("restored threadID = %q, want %q", restoredThreadID, "thread-1")
@@ -89,9 +91,9 @@ func TestACPAgentPersistsAndRestoresCodexThread(t *testing.T) {
 		t.Fatalf("thread/resume calls after first restore = %d, want 1", calls["thread/resume"])
 	}
 
-	_, _, err = b.getOrCreateThread(ctx, "user-1")
+	_, err = b.requireThread(ctx, "user-1")
 	if err != nil {
-		t.Fatalf("getOrCreateThread(second restore call) error: %v", err)
+		t.Fatalf("requireThread(second restore call) error: %v", err)
 	}
 	if calls["thread/resume"] != 1 {
 		t.Fatalf("thread/resume calls after second restore = %d, want 1", calls["thread/resume"])
@@ -122,8 +124,8 @@ func TestACPAgentCodexThreadStartIncludesEffort(t *testing.T) {
 		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
 	}
 
-	if _, _, err := a.getOrCreateThread(ctx, "user-1"); err != nil {
-		t.Fatalf("getOrCreateThread error: %v", err)
+	if _, err := a.createThread(ctx, "user-1"); err != nil {
+		t.Fatalf("createThread error: %v", err)
 	}
 }
 
@@ -158,6 +160,9 @@ func TestACPAgentCodexTurnStartIncludesEffort(t *testing.T) {
 		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
+	}
+	if _, err := a.createThread(ctx, "user-1"); err != nil {
+		t.Fatalf("createThread error: %v", err)
 	}
 
 	if _, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil); err != nil {
@@ -211,6 +216,9 @@ func TestACPAgentConversationCwdOverridesGlobalCwdForCodexThreadAndTurn(t *testi
 		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
+	}
+	if _, err := a.createThread(ctx, "conversation-a"); err != nil {
+		t.Fatalf("createThread error: %v", err)
 	}
 
 	if _, err := a.chatCodexAppServer(ctx, "conversation-a", "hello", nil); err != nil {

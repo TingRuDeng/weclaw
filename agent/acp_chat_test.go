@@ -10,6 +10,63 @@ import (
 	"testing"
 )
 
+// TestACPAgentChatRequiresCodexThread 验证普通消息不能隐式创建 Codex thread。
+func TestACPAgentChatRequiresCodexThread(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	threadStarts := 0
+	rpcCalls := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		rpcCalls++
+		if method == "thread/start" {
+			threadStarts++
+		}
+		return nil, fmt.Errorf("unexpected rpc method: %s", method)
+	}
+
+	_, err := a.Chat(context.Background(), "conversation-1", "hello")
+	if err == nil {
+		t.Fatal("Chat error = nil, want session not bound")
+	}
+	if threadStarts != 0 {
+		t.Fatalf("thread/start calls=%d, want 0", threadStarts)
+	}
+	if rpcCalls != 0 {
+		t.Fatalf("rpc calls=%d, want 0", rpcCalls)
+	}
+}
+
+// TestLegacyACPChatRequiresSession 验证普通消息不能隐式创建 Claude session。
+func TestLegacyACPChatRequiresSession(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "claude-agent-acp",
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	sessionStarts := 0
+	rpcCalls := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		rpcCalls++
+		if method == "session/new" {
+			sessionStarts++
+		}
+		return nil, fmt.Errorf("unexpected rpc method: %s", method)
+	}
+
+	_, err := a.Chat(context.Background(), "conversation-1", "hello")
+	if err == nil {
+		t.Fatal("Chat error = nil, want session not bound")
+	}
+	if sessionStarts != 0 {
+		t.Fatalf("session/new calls=%d, want 0", sessionStarts)
+	}
+	if rpcCalls != 0 {
+		t.Fatalf("rpc calls=%d, want 0", rpcCalls)
+	}
+}
+
 func TestLegacyACPAgentMessageChunkDoesNotEmitProgress(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
@@ -32,11 +89,14 @@ func TestLegacyACPAgentMessageChunkDoesNotEmitProgress(t *testing.T) {
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
 	}
+	if _, err := a.createSession(ctx, "user-1"); err != nil {
+		t.Fatalf("createSession error: %v", err)
+	}
 
 	var progress []string
 	reply, err := a.chatLegacyACP(ctx, "user-1", "hello", func(delta string) {
 		progress = append(progress, delta)
-	}, false)
+	})
 	if err != nil {
 		t.Fatalf("chatLegacyACP error: %v", err)
 	}
@@ -86,8 +146,11 @@ func TestLegacyACPChatHandlesPermissionRequest(t *testing.T) {
 			return nil, fmt.Errorf("unexpected method %s", method)
 		}
 	}
+	if _, err := a.createSession(ctx, "conversation-1"); err != nil {
+		t.Fatalf("createSession error: %v", err)
+	}
 
-	reply, err := a.chatLegacyACP(ctx, "conversation-1", "hello", nil, false)
+	reply, err := a.chatLegacyACP(ctx, "conversation-1", "hello", nil)
 	if err != nil {
 		t.Fatalf("chatLegacyACP error: %v", err)
 	}

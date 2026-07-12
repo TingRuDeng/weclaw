@@ -39,13 +39,11 @@ type ACPAgent struct {
 	threads   map[string]string // conversationID -> threadID (codex app-server)
 	// resumeOnFirstUse marks restored thread mappings that should trigger a
 	// best-effort thread/resume call before first turn.
-	resumeOnFirstUse            map[string]bool // conversationID -> resume needed
-	usageLimitRefreshOnNextTurn map[string]bool // conversationID -> refresh runtime before next turn
-	conversationCwds            map[string]string
-	stateFile                   string // optional persisted state file path
-	history                     map[string][]acpHistoryMessage
-	claudeModels                []ClaudeModel
-	stateSaveMu                 sync.Mutex
+	resumeOnFirstUse map[string]bool // conversationID -> resume needed
+	conversationCwds map[string]string
+	stateFile        string // optional persisted state file path
+	claudeModels     []ClaudeModel
+	stateSaveMu      sync.Mutex
 
 	// pending tracks in-flight JSON-RPC requests
 	pendingMu sync.Mutex

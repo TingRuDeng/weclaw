@@ -50,7 +50,6 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 		a.mu.Lock()
 		delete(a.threads, conversationID)
 		delete(a.resumeOnFirstUse, conversationID)
-		delete(a.history, conversationID)
 		a.mu.Unlock()
 		a.persistState()
 		log.Printf("[acp] thread reset (conversation=%s), creating new thread", conversationID)
@@ -60,12 +59,11 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 
 	a.mu.Lock()
 	delete(a.sessions, conversationID)
-	delete(a.history, conversationID)
 	a.mu.Unlock()
 	a.persistState()
 	log.Printf("[acp] session reset (conversation=%s), creating new session", conversationID)
 
-	sessionID, _, err := a.getOrCreateSession(ctx, conversationID)
+	sessionID, err := a.createSession(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("create new session: %w", err)
 	}
@@ -74,7 +72,7 @@ func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (str
 
 // createResetCodexThread 处理 /new 的新 thread 创建，并在 stdin 关闭时重启一次。
 func (a *ACPAgent) createResetCodexThread(ctx context.Context, conversationID string) (string, error) {
-	threadID, _, err := a.getOrCreateThread(ctx, conversationID)
+	threadID, err := a.createThread(ctx, conversationID)
 	if err == nil {
 		return threadID, nil
 	}
@@ -86,7 +84,7 @@ func (a *ACPAgent) createResetCodexThread(ctx context.Context, conversationID st
 	if err := a.Start(ctx); err != nil {
 		return "", fmt.Errorf("restart codex runtime: %w", err)
 	}
-	threadID, _, err = a.getOrCreateThread(ctx, conversationID)
+	threadID, err = a.createThread(ctx, conversationID)
 	if err != nil {
 		return "", fmt.Errorf("create new thread after runtime restart: %w", err)
 	}

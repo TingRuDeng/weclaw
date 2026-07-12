@@ -39,10 +39,10 @@ func TestClaudeACPConfiguresNewSessionModelThenEffort(t *testing.T) {
 		}
 	}
 
-	sessionID, isNew, err := ag.getOrCreateSession(context.Background(), "conversation-1")
+	sessionID, err := ag.createSession(context.Background(), "conversation-1")
 
-	if err != nil || !isNew || sessionID != "session-1" {
-		t.Fatalf("session=(%q,%v,%v)，期望新 session-1", sessionID, isNew, err)
+	if err != nil || sessionID != "session-1" {
+		t.Fatalf("session=(%q,%v)，期望新 session-1", sessionID, err)
 	}
 	want := []string{"session/new:", "session/set_config_option:opus", "session/set_config_option:high"}
 	if strings.Join(calls, ",") != strings.Join(want, ",") {
@@ -66,12 +66,12 @@ func TestClaudeACPDoesNotReconfigureExistingSession(t *testing.T) {
 		}
 		return json.RawMessage(`{"sessionId":"session-1","configOptions":` + claudeACPConfigOptionsJSON + `}`), nil
 	}
-	if _, _, err := ag.getOrCreateSession(context.Background(), "conversation-1"); err != nil {
+	if _, err := ag.createSession(context.Background(), "conversation-1"); err != nil {
 		t.Fatalf("create session error: %v", err)
 	}
 	ag.SetClaudeModel("opus", "high")
-	if _, isNew, err := ag.getOrCreateSession(context.Background(), "conversation-1"); err != nil || isNew {
-		t.Fatalf("existing session=(isNew=%v, err=%v)", isNew, err)
+	if _, err := ag.requireSession("conversation-1"); err != nil {
+		t.Fatalf("existing session error=%v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("rpc calls=%d，已有 session 不应重新配置", calls)
@@ -89,7 +89,7 @@ func TestClaudeACPConfigFailureDoesNotStoreSession(t *testing.T) {
 		return nil, fmt.Errorf("method not supported")
 	}
 
-	_, _, err := ag.getOrCreateSession(context.Background(), "conversation-1")
+	_, err := ag.createSession(context.Background(), "conversation-1")
 
 	if err == nil || !strings.Contains(err.Error(), "model") {
 		t.Fatalf("err=%v，期望明确返回 model 配置失败", err)
@@ -175,7 +175,7 @@ func TestClaudeACPRejectsEffortUnsupportedBySelectedModel(t *testing.T) {
 		}
 	}
 
-	_, _, err := agent.getOrCreateSession(context.Background(), "conversation-1")
+	_, err := agent.createSession(context.Background(), "conversation-1")
 
 	if err == nil || !strings.Contains(err.Error(), "不支持推理强度") {
 		t.Fatalf("err=%v, want unsupported effort error", err)
