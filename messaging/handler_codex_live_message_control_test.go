@@ -89,7 +89,7 @@ func TestCodexDesktopGuideUsesCurrentTurn(t *testing.T) {
 		codexThreadID: "thread-1", codexTurnID: "turn-old",
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "补充要求", run: func() {}})
-	text, handled := h.steerPendingGuideToExternalCodex(context.Background(), route.conversationID, "codex", "user-1")
+	text, handled := h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{ctx: context.Background(), key: route.conversationID, agentName: "codex", actor: "user-1"})
 	if !handled || !strings.Contains(text, "已发送") || ag.steerTurnID != "turn-1" {
 		t.Fatalf("handled=%v text=%q turn=%q", handled, text, ag.steerTurnID)
 	}
@@ -103,7 +103,7 @@ func TestCodexDesktopStopWaitsForTerminalAndKeepsPending(t *testing.T) {
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "下一条", run: func() {}})
-	text, handled := h.interruptExternalCodexTask(context.Background(), route.conversationID, ag, "user-1")
+	text, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{ctx: context.Background(), key: route.conversationID, agent: ag, actor: "user-1"})
 	if !handled || !strings.Contains(text, "等待任务终态") {
 		t.Fatalf("handled=%v text=%q", handled, text)
 	}
@@ -133,8 +133,8 @@ func TestUnauthorizedUserCannotGuideStopOrReadPendingAction(t *testing.T) {
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "私有指令", run: func() {}})
-	guide, handled := h.steerPendingGuideToExternalCodex(context.Background(), route.conversationID, "codex", "user-2")
-	stop, stopHandled := h.interruptExternalCodexTask(context.Background(), route.conversationID, ag, "user-2")
+	guide, handled := h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{ctx: context.Background(), key: route.conversationID, agentName: "codex", actor: "user-2"})
+	stop, stopHandled := h.interruptExternalCodexTask(externalCodexTaskCommand{ctx: context.Background(), key: route.conversationID, agent: ag, actor: "user-2"})
 	if !handled || !stopHandled || !strings.Contains(guide, "只有任务发起人") || !strings.Contains(stop, "只有任务发起人") {
 		t.Fatalf("guide=%q stop=%q", guide, stop)
 	}

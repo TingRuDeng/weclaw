@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 // AgentFactory creates an agent by config name. Returns nil if the name is unknown.
@@ -122,148 +120,20 @@ func (h *Handler) HandlePlatformMessage(ctx context.Context, incoming platform.I
 }
 
 func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.IncomingMessage, replyWriter platform.Replier) {
-	if msg.MessageID != "" && msg.MessageID != "0" {
-		if _, loaded := h.seenMsgs.LoadOrStore(platformMessageDedupKey(msg), time.Now()); loaded {
-			return
-		}
-		h.maybeCleanSeenMsgs(time.Now())
-	}
-	routeUserID := platformMessageRouteUserID(msg)
-	ctx = contextWithWorkspaceAdmin(ctx, h.isAdminMessage(msg))
-
-	text := strings.TrimSpace(platformMessageText(msg))
-	if msg.RawCommand != nil && msg.RawCommand.Action == "stop" {
-		sendPlatformText(ctx, replyWriter, msg.UserID, h.handleStopActiveTask(ctx, msg.UserID, routeUserID))
+	if h.isDuplicatePlatformMessage(msg) {
 		return
 	}
-	if msg.RawCommand != nil && msg.RawCommand.Action == "choice" {
-		if h.consumePendingApprovalForKey(msg.UserID, msg.RawCommand.Value["approval_key"], msg.RawCommand.Value["choice"]) {
-			reportCardActionResult(msg.RawCommand, platform.CardActionResultConsumed)
-			return
-		}
-		if isApprovalChoiceCommand(msg.RawCommand) {
-			if !reportCardActionResult(msg.RawCommand, platform.CardActionResultExpired) {
-				sendPlatformText(ctx, replyWriter, msg.UserID, staleApprovalReply())
-			}
-			return
-		}
+	runtime := platformMessageRuntime{
+		ctx: contextWithWorkspaceAdmin(ctx, h.isAdminMessage(msg)),
+		msg: msg, reply: replyWriter, routeUserID: platformMessageRouteUserID(msg),
+		text: strings.TrimSpace(platformMessageText(msg)),
 	}
-	if h.consumePendingApproval(msg.UserID, text) {
+	if h.handlePlatformRawCommand(runtime) {
 		return
 	}
-	if file, ok := firstAttachment(msg.Attachments, platform.AttachmentFile); ok {
-		fileText, handled := h.handleFileAttachment(ctx, msg.UserID, replyWriter, file, text)
-		if !handled {
-			return
-		}
-		text = strings.TrimSpace(fileText)
-	}
-	if img, ok := firstAttachment(msg.Attachments, platform.AttachmentImage); ok && text != "" {
-		imageText, handled := h.handleImageAttachment(ctx, msg.UserID, replyWriter, img, text)
-		if !handled {
-			return
-		}
-		text = strings.TrimSpace(imageText)
-	}
-	if text == "" {
-		if img, ok := firstAttachment(msg.Attachments, platform.AttachmentImage); ok && h.saveDir != "" {
-			h.handleImageAttachmentSave(ctx, msg.UserID, replyWriter, img)
-			return
-		}
-		log.Printf("[handler] received non-text message from %s, skipping", msg.UserID)
+	runtime, ready := h.preparePlatformMessage(runtime)
+	if !ready {
 		return
 	}
-	if (msg.MessageID == "" || msg.MessageID == "0") && h.isDuplicateTextMessage(msg.UserID, msg.ContextToken, text) {
-		sendPlatformText(ctx, replyWriter, msg.UserID, duplicateTaskReply())
-		return
-	}
-
-	log.Printf("[handler] received from %s: %q", msg.UserID, truncate(text, 80))
-	clientID := NewClientID()
-	if wxReply, ok := replyWriter.(*wechat.Replier); ok {
-		wxReply.ClientID = clientID
-	}
-	sendText := func(text string) {
-		sendPlatformText(ctx, replyWriter, msg.UserID, text)
-	}
-
-	trimmed := strings.TrimSpace(text)
-	if h.saveDir != "" && IsURL(trimmed) {
-		rawURL := ExtractURL(trimmed)
-		if rawURL != "" {
-			log.Printf("[handler] saving URL to linkhoard: %s", rawURL)
-			title, err := SaveLinkToLinkhoard(ctx, h.saveDir, rawURL)
-			if err != nil {
-				log.Printf("[handler] link save failed: %v", err)
-				sendText(fmt.Sprintf("保存失败: %v", err))
-				return
-			}
-			sendText(fmt.Sprintf("已保存: %s", title))
-			return
-		}
-	}
-
-	if h.handleBuiltInPlatformCommand(ctx, platformCommandRequest{
-		Message:     msg,
-		RouteUserID: routeUserID,
-		Reply:       replyWriter,
-		Trimmed:     trimmed,
-		ClientID:    clientID,
-	}) {
-		return
-	}
-
-	if !h.allowAgentInvocation(routeUserID) {
-		log.Printf("[handler] rate limit exceeded for %s", routeUserID)
-		sendText("请求过于频繁，请稍后再试。")
-		return
-	}
-	h.auditRecord(auditEntry{
-		Platform: string(msg.Platform),
-		User:     msg.UserID,
-		Action:   "agent_message",
-		Summary:  auditMessageSummary(text),
-	})
-
-	agentNames, message := h.parseCommand(text)
-	if len(agentNames) == 0 {
-		h.sendToDefaultAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, text, clientID)
-		return
-	}
-	if message == "" {
-		if len(agentNames) == 1 && h.isKnownAgent(agentNames[0]) {
-			sendText(h.switchDefault(ctx, routeUserID, agentNames[0]))
-		} else if len(agentNames) == 1 && !h.isKnownAgent(agentNames[0]) {
-			h.sendToDefaultAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, text, clientID)
-		} else {
-			sendText("Usage: specify one agent to switch, or add a message to broadcast")
-		}
-		return
-	}
-
-	knownNames := make([]string, 0, len(agentNames))
-	for _, name := range agentNames {
-		if h.isKnownAgent(name) {
-			knownNames = append(knownNames, name)
-		}
-	}
-	if len(knownNames) == 0 {
-		h.sendToDefaultAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, text, clientID)
-		return
-	}
-	if len(knownNames) == 1 {
-		h.sendToNamedAgentForAccount(ctx, msg.Platform, msg.AccountID, msg.UserID, routeUserID, replyWriter, knownNames[0], message, clientID)
-		return
-	}
-	h.broadcastToAgents(broadcastAgentsRequest{
-		ctx:          ctx,
-		platformName: msg.Platform,
-		accountID:    msg.AccountID,
-		userID:       msg.UserID,
-		routeUserID:  routeUserID,
-		replyWriter:  replyWriter,
-		names:        knownNames,
-		message:      message,
-		clientID:     clientID,
-	})
+	h.dispatchPlatformMessage(runtime)
 }

@@ -70,7 +70,7 @@ func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
 	defer closeServer()
 
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "继续", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "继续", clientID: "client-1"})
 
 	waitForText(t, calls, "恢复 Codex 会话失败")
 	if ag.chatCallCount() != 0 {

@@ -64,7 +64,7 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 		return false
 	}
 	if h.storePendingGuide(opts.route.conversationID, h.pendingCodexTask(taskOpts)) {
-		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, queuedCodexMessage)
+		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, queuedAgentMessage)
 		return true
 	}
 	sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")

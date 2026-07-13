@@ -28,17 +28,17 @@ func TestRunningCodexStoresSecondMessageAsPendingGuide(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "第一条", "client-1")
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "第一条", clientID: "client-1"})
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
 
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
 	started, _ := ag.stats()
 	if started != 1 {
 		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
 	}
-	if !containsText(calls.texts(), queuedCodexMessage) {
+	if !containsText(calls.texts(), queuedAgentMessage) {
 		t.Fatalf("未发送引导确认提示，messages=%#v", calls.texts())
 	}
 
@@ -61,7 +61,17 @@ func TestStorePendingGuideDoesNotOverwriteExistingMessage(t *testing.T) {
 	h.finishActiveTask("shared", task)
 }
 
-func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
+type frozenWorkspaceFixture struct {
+	h          *Handler
+	agent      *blockingCodexThreadAgent
+	workspaceA string
+	workspaceB string
+	bindingKey string
+}
+
+// newFrozenWorkspaceFixture 创建任务运行期间切换工作空间的测试场景。
+func newFrozenWorkspaceFixture(t *testing.T) frozenWorkspaceFixture {
+	t.Helper()
 	h := NewHandler(nil, nil)
 	ag := newBlockingCodexThreadAgent()
 	h.defaultName = "codex"
@@ -83,38 +93,49 @@ func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
 	h.codexSessions.setPendingNew(bindingKey, workspaceA)
 	h.codexSessions.setActiveWorkspace(bindingKey, workspaceA)
 	h.codexSessions.setThread(bindingKey, workspaceB, "thread-b")
+	return frozenWorkspaceFixture{
+		h: h, agent: ag, workspaceA: workspaceA, workspaceB: workspaceB, bindingKey: bindingKey,
+	}
+}
 
+// assertFrozenWorkspaceState 验证任务结果仍写回启动时工作空间。
+func assertFrozenWorkspaceState(t *testing.T, fixture frozenWorkspaceFixture) {
+	t.Helper()
+	active, ok := fixture.h.codexSessions.getActiveWorkspace(fixture.bindingKey)
+	if !ok || active != normalizeCodexWorkspaceRoot(fixture.workspaceB) {
+		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(fixture.workspaceB))
+	}
+	threadA, pendingA := fixture.h.codexSessions.getThread(fixture.bindingKey, fixture.workspaceA)
+	if threadA != "thread-generated-1" || pendingA {
+		t.Fatalf("workspace A thread=%q pending=%v, want thread-generated-1 false", threadA, pendingA)
+	}
+	threadB, pendingB := fixture.h.codexSessions.getThread(fixture.bindingKey, fixture.workspaceB)
+	if threadB != "thread-b" || pendingB {
+		t.Fatalf("workspace B thread=%q pending=%v, want thread-b false", threadB, pendingB)
+	}
+}
+
+func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
+	fixture := newFrozenWorkspaceFixture(t)
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(10, "/codex A 任务"))
-	waitForCodexThreadAgentEnter(t, ag)
+	handleTestWeChatMessage(fixture.h, ctx, client, newTextMessage(10, "/codex A 任务"))
+	waitForCodexThreadAgentEnter(t, fixture.agent)
 
-	conversationA := buildCodexConversationID("user-1", "codex", workspaceA)
-	if got := ag.conversationCwd(conversationA); got != normalizeCodexWorkspaceRoot(workspaceA) {
-		t.Fatalf("conversation cwd=%q, want %q", got, normalizeCodexWorkspaceRoot(workspaceA))
+	conversationA := buildCodexConversationID("user-1", "codex", fixture.workspaceA)
+	if got := fixture.agent.conversationCwd(conversationA); got != normalizeCodexWorkspaceRoot(fixture.workspaceA) {
+		t.Fatalf("conversation cwd=%q, want %q", got, normalizeCodexWorkspaceRoot(fixture.workspaceA))
 	}
 
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(11, "/cx switch thread-b"))
-	handleTestWeChatMessage(h, ctx, client, newTextMessage(12, "/guide"))
+	handleTestWeChatMessage(fixture.h, ctx, client, newTextMessage(11, "/cx switch thread-b"))
+	handleTestWeChatMessage(fixture.h, ctx, client, newTextMessage(12, "/guide"))
 
-	ag.release <- struct{}{}
+	fixture.agent.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
-
-	active, ok := h.codexSessions.getActiveWorkspace(bindingKey)
-	if !ok || active != normalizeCodexWorkspaceRoot(workspaceB) {
-		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(workspaceB))
-	}
-	threadA, pendingA := h.codexSessions.getThread(bindingKey, workspaceA)
-	if threadA != "thread-generated-1" || pendingA {
-		t.Fatalf("workspace A thread=%q pending=%v, want thread-generated-1 false", threadA, pendingA)
-	}
-	threadB, pendingB := h.codexSessions.getThread(bindingKey, workspaceB)
-	if threadB != "thread-b" || pendingB {
-		t.Fatalf("workspace B thread=%q pending=%v, want thread-b false", threadB, pendingB)
-	}
+	assertFrozenWorkspaceState(t, fixture)
 	if !containsText(calls.texts(), "当前没有可发送的引导对话") {
 		t.Fatalf("/guide should target current B session, messages=%#v", calls.texts())
 	}
@@ -153,7 +174,7 @@ func TestCodexHandlerReturnsWhileTaskRunsSoGuideCanBeStored(t *testing.T) {
 	if started != 1 {
 		t.Fatalf("第二条消息不应立即进入 Codex，started=%d", started)
 	}
-	if !containsText(calls.texts(), queuedCodexMessage) {
+	if !containsText(calls.texts(), queuedAgentMessage) {
 		t.Fatalf("未发送引导确认提示，messages=%#v", calls.texts())
 	}
 
@@ -178,11 +199,11 @@ func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "第一条", "client-1")
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "第一条", clientID: "client-1"})
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
 
 	guideDone := make(chan struct{})
 	go func() {
@@ -221,11 +242,11 @@ func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "第一条", "client-1")
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "第一条", clientID: "client-1"})
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
 
 	handleTestWeChatMessage(h, ctx, client, newTextMessage(3, "/cancel"))
 	ag.release <- struct{}{}
@@ -259,9 +280,9 @@ func TestPendingGuideRunsAutomaticallyAfterTaskFinishes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), name: "codex", message: "第一条", clientID: "client-1"})
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
 
 	ag.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")

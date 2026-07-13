@@ -41,6 +41,7 @@ func TestFeishuClaudeSessionSwitchBindsWindowToClaude(t *testing.T) {
 		MessageID: "message-after-switch", Text: "你是什么模型",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
 	}, reply)
+	waitUntil(t, claude.wasChatCalled)
 
 	if selected, ok := h.ensureAgentSessions().Get(sessionKey); !ok || selected != "claude" {
 		t.Fatalf("窗口 Agent=(%q,%t)，期望成功切换后绑定 claude", selected, ok)

@@ -28,7 +28,7 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "claude", "第一条", "client-1")
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "claude", message: "第一条", clientID: "client-1"})
 		close(firstDone)
 	}()
 	waitForAgentEnter(t, ag)
@@ -36,7 +36,7 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	secondDone := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-2")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "claude", "第二条", "client-2")
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "claude", message: "第二条", clientID: "client-2"})
 		close(secondDone)
 	}()
 	time.Sleep(50 * time.Millisecond)
@@ -77,7 +77,7 @@ func TestSendToNamedAgentTracksNonCodexActiveTask(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "claude", "任务", "client-1")
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "claude", message: "任务", clientID: "client-1"})
 		close(done)
 	}()
 	waitForAgentEnter(t, ag)
@@ -87,6 +87,7 @@ func TestSendToNamedAgentTracksNonCodexActiveTask(t *testing.T) {
 
 	ag.release <- struct{}{}
 	waitDone(t, done, "Claude 任务")
+	waitForNoActiveTask(t, h, "user-1", ag)
 	if got := h.ActiveTaskCount(); got != 0 {
 		t.Fatalf("ActiveTaskCount()=%d, want 0 after Claude completed", got)
 	}
@@ -115,7 +116,7 @@ func TestSendToNamedAgentUsesTaskTimeout(t *testing.T) {
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "slow", "hello", "client-1")
+		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "slow", message: "hello", clientID: "client-1"})
 	})
 	waitForText(t, calls, "本轮执行超时已被中止")
 }
@@ -131,7 +132,7 @@ func TestSendToDefaultAgentUsesTaskTimeout(t *testing.T) {
 
 	runWithExpectedTaskTimeout(t, func(ctx context.Context) {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-		h.sendToDefaultAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", reply, "hello", "client-1")
+		h.sendToDefaultAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, message: "hello", clientID: "client-1"})
 	})
 	waitForText(t, calls, "本轮执行超时已被中止")
 }
@@ -177,7 +178,7 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
+	go h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), name: "codex", message: "第一条", clientID: "client-1"})
 	waitForAgentEnter(t, codex)
 
 	done := make(chan struct{})
@@ -200,7 +201,7 @@ func TestBroadcastToRunningCodexReturnsGuideWithoutBlockingOtherAgents(t *testin
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("broadcast should not block behind running Codex task")
 	}
-	waitForText(t, calls, queuedCodexMessage)
+	waitForText(t, calls, queuedAgentMessage)
 	waitForText(t, calls, "[claude] claude ok")
 
 	codex.release <- struct{}{}

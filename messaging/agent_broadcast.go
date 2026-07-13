@@ -120,7 +120,7 @@ func (h *Handler) deferBroadcastCodexMessage(req broadcastAgentsRequest, name st
 	})
 	text := "当前任务已有一条暂存消息，请先处理后再发送。"
 	if h.storePendingGuide(key, pending) {
-		text = queuedCodexMessage
+		text = queuedAgentMessage
 	}
 	results <- broadcastAgentResult{name: name, reply: text}
 }

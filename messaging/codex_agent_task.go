@@ -44,7 +44,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		opts.route = route
 		if h.storePendingGuide(executionKey, h.pendingCodexTask(opts)) {
-			sendPlatformText(opts.ctx, opts.reply, opts.userID, queuedCodexMessage)
+			sendPlatformText(opts.ctx, opts.reply, opts.userID, queuedAgentMessage)
 		} else {
 			sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")
 		}

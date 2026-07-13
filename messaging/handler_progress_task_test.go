@@ -108,7 +108,7 @@ func TestSendToNamedAgentUsesAgentProgressOverride(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "hello", clientID: "client-1"})
 
 	waitForText(t, calls, "第三段")
 	if containsText(calls.texts(), "实时状态") {
@@ -130,7 +130,7 @@ func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
 	h.SetProgressConfig(cfg)
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
-	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
 	if reply.Stream.Completed != "[mock] 最终结果" {
 		t.Fatalf("completed=%q, want final reply in stream", reply.Stream.Completed)
@@ -150,10 +150,7 @@ func TestSendToNamedAgentNativeStreamCompletesCardAndNotifies(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{
 		Text: true, Streaming: true, StreamCompletionNotification: true,
 	})
-	h.sendToNamedAgent(
-		context.Background(), platform.PlatformFeishu,
-		"feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1",
-	)
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
 	if reply.Stream.Completed != "[mock] 最终结果" {
 		t.Fatalf("completed = %q", reply.Stream.Completed)
@@ -176,10 +173,8 @@ func TestClaudeTaskOpensNativeStreamBeforeAgentReturns(t *testing.T) {
 	})
 	done := make(chan struct{})
 	go func() {
-		h.sendToNamedAgent(
-			context.Background(), platform.PlatformFeishu,
-			"ou_user", "ou_user", reply, "claude", "hello", "client-1",
-		)
+		h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "ou_user", routeUserID: "ou_user", reply: reply, name: "claude", message: "hello", clientID: "client-1"})
+
 		close(done)
 	}()
 
@@ -195,6 +190,7 @@ func TestClaudeTaskOpensNativeStreamBeforeAgentReturns(t *testing.T) {
 	case <-time.After(taskWaitTimeout):
 		t.Fatal("Claude 任务未结束")
 	}
+	waitForNoActiveTask(t, h, "ou_user", ag)
 	if reply.Stream.Completed != "[claude] 第1条结果" {
 		t.Fatalf("completed = %q", reply.Stream.Completed)
 	}
@@ -218,7 +214,7 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
-	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
 	if reply.Stream.Completed != "" {
 		t.Fatalf("completed=%q, want status-only completion card", reply.Stream.Completed)
@@ -239,7 +235,7 @@ func TestFinalReplyOutsideStreamFailureDoesNotExposeStatusSentinel(t *testing.T)
 		Text: true, Streaming: true, FinalReplyOutsideStream: true,
 	})
 
-	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "ou_user", "ou_user", reply, "mock", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "ou_user", routeUserID: "ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
 	if !strings.Contains(reply.Stream.Failed, "boom") {
 		t.Fatalf("failed card=%q，want 即时任务卡显示真实失败", reply.Stream.Failed)
@@ -269,7 +265,7 @@ func TestNativeStreamProgressCollapsesRepeatedStructuredStatus(t *testing.T) {
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
-	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
 	if len(reply.Stream.Updates) == 0 {
 		t.Fatal("stream should receive progress updates")
@@ -300,7 +296,7 @@ func TestNativeStreamProgressUsesLatestCodexAppLine(t *testing.T) {
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
-	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
 	if len(reply.Stream.Updates) == 0 {
 		t.Fatal("stream should receive progress updates")
@@ -339,7 +335,7 @@ func TestFinalReplyOutsideStreamDoesNotPutOrdinaryAnswerInCard(t *testing.T) {
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
-	h.sendToNamedAgent(context.Background(), platform.PlatformFeishu, "feishu:ou_user", "feishu:ou_user", reply, "mock", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
 	if reply.Stream.Completed != "" {
 		t.Fatalf("completed=%q, want status-only task card", reply.Stream.Completed)

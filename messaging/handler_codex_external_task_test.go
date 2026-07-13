@@ -102,7 +102,7 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 		t.Fatalf("/guide for external active turn should not start new chat, calls=%d", ag.chatCallCount())
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, queuedCodexMessage) {
+	if !strings.Contains(text, queuedAgentMessage) {
 		t.Fatalf("普通消息应发送简洁排队提示，messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "已发送到当前 Codex App 任务") {
@@ -142,7 +142,16 @@ func TestCodexExternalAppTaskSendsFinalReply(t *testing.T) {
 	waitForText(t, calls, "本地任务完成")
 }
 
-func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
+type feishuExternalProgressFixture struct {
+	h         *Handler
+	workspace string
+	watchDone chan struct{}
+	reply     *platformtest.Replier
+}
+
+// newFeishuExternalProgressFixture 创建关闭飞书进度的外部 Codex 任务场景。
+func newFeishuExternalProgressFixture(t *testing.T) feishuExternalProgressFixture {
+	t.Helper()
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -155,13 +164,13 @@ func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): offCfg,
 	})
 	watchDone := make(chan struct{})
-	defer func() {
+	t.Cleanup(func() {
 		select {
 		case <-watchDone:
 		default:
 			close(watchDone)
 		}
-	}()
+	})
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
@@ -178,24 +187,29 @@ func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	return feishuExternalProgressFixture{h: h, workspace: workspace, watchDone: watchDone, reply: reply}
+}
 
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
+	fixture := newFeishuExternalProgressFixture(t)
+
+	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_a",
 		UserID:    "ou_user",
 		Text:      "/cx cd weclaw",
-	}, reply)
+	}, fixture.reply)
 
-	close(watchDone)
+	close(fixture.watchDone)
 	waitUntil(t, func() bool {
-		_, active := h.activeTask(buildCodexConversationID("ou_user", "codex", workspace))
+		_, active := fixture.h.activeTask(buildCodexConversationID("ou_user", "codex", fixture.workspace))
 		return !active
 	})
-	if !containsText(reply.Texts, "本地任务完成") {
-		t.Fatalf("texts=%#v, want final text reply", reply.Texts)
+	if !containsText(fixture.reply.Texts, "本地任务完成") {
+		t.Fatalf("texts=%#v, want final text reply", fixture.reply.Texts)
 	}
-	if reply.Stream.Completed != "" {
-		t.Fatalf("completed=%q, want no stream completion when account progress is off", reply.Stream.Completed)
+	if fixture.reply.Stream.Completed != "" {
+		t.Fatalf("completed=%q, want no stream completion when account progress is off", fixture.reply.Stream.Completed)
 	}
 }
 

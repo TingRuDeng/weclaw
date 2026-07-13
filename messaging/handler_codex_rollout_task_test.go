@@ -14,7 +14,19 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
+type rolloutMirrorFixture struct {
+	h              *Handler
+	agent          *fakeCodexThreadAgent
+	rolloutPath    string
+	turnID         string
+	conversationID string
+	reply          *platformtest.Replier
+	sessionKey     string
+}
+
+// newRolloutMirrorFixture 创建只读镜像本地 Codex rollout 的飞书场景。
+func newRolloutMirrorFixture(t *testing.T) rolloutMirrorFixture {
+	t.Helper()
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -40,20 +52,27 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 	})
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant:dm:chat:user"
+	return rolloutMirrorFixture{
+		h: h, agent: ag, rolloutPath: rolloutPath, turnID: turnID,
+		conversationID: buildCodexConversationID(sessionKey, "codex", workspace),
+		reply:          reply, sessionKey: sessionKey,
+	}
+}
 
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+// switchAndAssertRolloutMirror 验证切换反馈和外部任务镜像登记。
+func switchAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
+	t.Helper()
+	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_a",
 		UserID:    "ou_user",
-		Text:      "/cx switch " + threadID,
-		Metadata:  map[string]string{feishuSessionMetadataKey: sessionKey},
-	}, reply)
-
-	conversationID := buildCodexConversationID(sessionKey, "codex", workspace)
-	if _, ok := h.activeTask(conversationID); !ok {
+		Text:      "/cx switch thread-rollout-active",
+		Metadata:  map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
+	}, fixture.reply)
+	if _, ok := fixture.h.activeTask(fixture.conversationID); !ok {
 		t.Fatal("切换到本地运行中 rollout 后应登记外部任务镜像")
 	}
-	notice := strings.Join(reply.Texts, "\n")
+	notice := strings.Join(fixture.reply.Texts, "\n")
 	for _, want := range []string{"Codex App 任务正在进行", "修复跨进程任务反馈", "正在核对任务状态"} {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("switch notice=%q, want %q", notice, want)
@@ -65,33 +84,49 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 	if strings.Contains(notice, "需在 Codex App 中操作") || !strings.Contains(notice, "结果会自动返回当前会话") {
 		t.Fatalf("switch notice=%q, must only describe automatic result delivery", notice)
 	}
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "补充要求",
-		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
-	}, reply)
-	task, _ := h.activeTask(conversationID)
-	if task.pendingGuide() != "补充要求" || !containsText(reply.Texts, queuedCodexMessage) {
-		t.Fatalf("pending=%q texts=%#v, read-only task must queue the next message", task.pendingGuide(), reply.Texts)
-	}
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/stop",
-		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
-	}, reply)
-	if _, ok := h.activeTask(conversationID); !ok || !containsText(reply.Texts, "暂不支持从飞书或微信停止") {
-		t.Fatalf("texts=%#v, /stop must not cancel read-only rollout mirror", reply.Texts)
-	}
+}
 
-	appendCodexRolloutRecord(t, rolloutPath, rolloutProgressRecord("正在整理最终结果"))
-	appendCodexRolloutRecord(t, rolloutPath, rolloutTaskCompleteRecord(turnID, "本地任务最终结果"))
+// queueAndStopRolloutMirror 验证只读任务排队且无法从远端停止。
+func queueAndStopRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
+	t.Helper()
+	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "补充要求",
+		Metadata: map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
+	}, fixture.reply)
+	task, _ := fixture.h.activeTask(fixture.conversationID)
+	if task.pendingGuide() != "补充要求" || !containsText(fixture.reply.Texts, queuedAgentMessage) {
+		t.Fatalf("pending=%q texts=%#v, read-only task must queue the next message", task.pendingGuide(), fixture.reply.Texts)
+	}
+	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/stop",
+		Metadata: map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
+	}, fixture.reply)
+	if _, ok := fixture.h.activeTask(fixture.conversationID); !ok || !containsText(fixture.reply.Texts, "暂不支持从飞书或微信停止") {
+		t.Fatalf("texts=%#v, /stop must not cancel read-only rollout mirror", fixture.reply.Texts)
+	}
+}
+
+// completeAndAssertRolloutMirror 验证本地完成后回传结果并自动续跑。
+func completeAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
+	t.Helper()
+	appendCodexRolloutRecord(t, fixture.rolloutPath, rolloutProgressRecord("正在整理最终结果"))
+	appendCodexRolloutRecord(t, fixture.rolloutPath, rolloutTaskCompleteRecord(fixture.turnID, "本地任务最终结果"))
 	waitUntil(t, func() bool {
-		return ag.lastChatMessage() == "补充要求"
+		return fixture.agent.lastChatMessage() == "补充要求"
 	})
-	if !containsText(reply.Texts, "本地任务最终结果") {
-		t.Fatalf("texts=%#v, rollout task 完成后应返回最终结果", reply.Texts)
+	if !containsText(fixture.reply.Texts, "本地任务最终结果") {
+		t.Fatalf("texts=%#v, rollout task 完成后应返回最终结果", fixture.reply.Texts)
 	}
-	if containsText(reply.Texts, "回复“确认”执行该消息") {
-		t.Fatalf("texts=%#v, rollout task 自动续跑不应要求确认", reply.Texts)
+	if containsText(fixture.reply.Texts, "回复“确认”执行该消息") {
+		t.Fatalf("texts=%#v, rollout task 自动续跑不应要求确认", fixture.reply.Texts)
 	}
+}
+
+func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
+	fixture := newRolloutMirrorFixture(t)
+	switchAndAssertRolloutMirror(t, fixture)
+	queueAndStopRolloutMirror(t, fixture)
+	completeAndAssertRolloutMirror(t, fixture)
 }
 
 func localRolloutPathForTest(codexDir string, threadID string) string {

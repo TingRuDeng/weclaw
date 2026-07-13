@@ -25,9 +25,9 @@ func TestPendingGuideRunsAutomaticallyAfterPreviousTaskFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), "codex", "第一条", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-1"), name: "codex", message: "第一条", clientID: "client-1"})
 	waitForAgentEnter(t, ag)
-	h.sendToNamedAgent(ctx, platform.PlatformWeChat, "user-1", "user-1", wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), "codex", "第二条", "client-2")
+	h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: wechat.NewReplier(client, "user-1", "ctx-1", "client-2"), name: "codex", message: "第二条", clientID: "client-2"})
 
 	ag.release <- struct{}{}
 	waitForAgentEnter(t, ag)

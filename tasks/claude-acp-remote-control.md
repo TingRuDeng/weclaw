@@ -159,13 +159,13 @@ type ClaudeSessionConfigAgent interface {
 - 修改：`messaging/agent_conversation.go`、`messaging/default_session.go`、`messaging/cwd_command.go`、`messaging/claude_render.go`、`messaging/claude_feishu_cards.go`、`messaging/session_stores.go`、`messaging/handler_agent_fakes_test.go`、`cmd/start.go`
 - 删除：`messaging/claude_local_sessions.go`、`messaging/claude_session_model.go`
 
-- [ ] 写 ACP 目录卡片、权限过滤、switch/new 原子提交、恢复失败、无绑定拒绝和 v1 active workspace 迁移测试。
-- [ ] 运行 `go test ./messaging -run 'Test(ClaudeACP|FeishuClaude|ClaudeSession)' -count=1 -timeout 60s`，确认失败。
-- [ ] 改为 ACP list 唯一目录来源；删除 pending-new 和 transcript 扫描。
-- [ ] 实现 `commitClaudeSelection(request)` 与显式回滚，失败不覆盖窗口 Agent。
-- [ ] 切换反馈和 `/cc status` 展示当前 session 模型、推理强度和恢复状态。
-- [ ] 重跑 `go test ./messaging -count=1 -timeout 60s`。
-- [ ] 提交：`功能：接入 Claude ACP 会话导航`。
+- [x] 写 ACP 目录卡片、权限过滤、switch/new 原子提交、恢复失败、无绑定拒绝和 v1 active workspace 迁移测试。
+- [x] 运行 `go test ./messaging -run 'Test(ClaudeACP|FeishuClaude|ClaudeSession)' -count=1 -timeout 60s`，确认失败。
+- [x] 改为 ACP list 唯一目录来源；删除 pending-new 和 transcript 扫描。
+- [x] 实现 `commitClaudeSelection(request)` 与显式回滚，失败不覆盖窗口 Agent。
+- [x] 切换反馈和 `/cc status` 展示当前 session 模型、推理强度和恢复状态。
+- [x] 重跑 `go test ./messaging -count=1 -timeout 60s`。
+- [x] 提交：`功能：接入 Claude ACP 会话导航`。
 
 ### 任务 6：统一后台任务、队列与停止
 
@@ -173,12 +173,12 @@ type ClaudeSessionConfigAgent interface {
 - 新建：`messaging/agent_task.go`、`messaging/agent_task_test.go`
 - 修改：`messaging/agent_execution.go`、`messaging/task_state.go`、`messaging/task_commands.go`、`messaging/codex_agent_task.go`
 
-- [ ] 写立即创建卡片、进度更新、单条排队、失败后续跑、撤回、停止和 Agent 隔离测试。
-- [ ] 运行 `go test ./messaging -run 'Test(AgentTask|ClaudeTask)' -count=1 -timeout 60s`，确认失败。
-- [ ] Claude ACP 改用后台执行器；复用 `activeAgentTask`，保留 Codex 外部 turn 专属流程。
-- [ ] `/stop` 和 `/cancel` 按当前窗口 Agent 定位；Claude `/guide` 返回明确不支持。
-- [ ] 重跑任务、队列、Codex live 回归测试。
-- [ ] 提交：`功能：统一 Claude 任务进度与队列控制`。
+- [x] 写立即创建卡片、进度更新、单条排队、失败后续跑、撤回、停止和 Agent 隔离测试。
+- [x] 运行 `go test ./messaging -run 'Test(AgentTask|ClaudeTask)' -count=1 -timeout 60s`，确认失败。
+- [x] Claude ACP 改用后台执行器；复用 `activeAgentTask`，保留 Codex 外部 turn 专属流程。
+- [x] `/stop` 和 `/cancel` 按当前窗口 Agent 定位；Claude `/guide` 返回明确不支持。
+- [x] 重跑任务、队列、Codex live 回归测试。
+- [x] 提交：`功能：统一 Claude 任务进度与队列控制`。
 
 ### 任务 7：本地交接和死代码清理
 

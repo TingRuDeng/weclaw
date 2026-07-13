@@ -32,7 +32,7 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	defer closeServer()
 
 	reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-1")
-	h.sendToNamedAgent(context.Background(), platform.PlatformWeChat, "user-1", "user-1", reply, "codex", "hello", "client-1")
+	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "codex", message: "hello", clientID: "client-1"})
 
 	waitForFakeAgentCalls(t, &ag.fakeAgent, 1)
 	if ag.chatCallCount() != 1 {
