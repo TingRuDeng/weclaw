@@ -3,10 +3,64 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/config"
 )
+
+// TestPrepareConfiguredStartDaemonChildSkipsCapabilityProbe 验证后台子进程不重复执行父进程已完成的 ACP 握手。
+func TestPrepareConfiguredStartDaemonChildSkipsCapabilityProbe(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	t.Setenv(daemonChildEnv, "1")
+	t.Setenv("PATH", t.TempDir())
+	marker := filepath.Join(home, "adapter-started")
+	adapter := filepath.Join(home, "claude-agent-acp")
+	script := "#!/bin/sh\n/usr/bin/touch '" + marker + "'\nexit 31\n"
+	if err := os.WriteFile(adapter, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents["claude"] = config.AgentConfig{Type: "acp", Command: adapter}
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := prepareConfiguredStart(context.Background(), func(*config.Config) error { return nil })
+	if err != nil {
+		t.Fatalf("prepareConfiguredStart error=%v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("daemon 子进程重复执行了 ACP adapter，stat error=%v", err)
+	}
+	if err := prepared.run(); err != nil {
+		t.Fatalf("prepared.run error=%v", err)
+	}
+}
+
+// TestConfiguredStartPreflightParentKeepsCapabilityProbe 验证父进程仍执行完整 ACP 能力握手。
+func TestConfiguredStartPreflightParentKeepsCapabilityProbe(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	t.Setenv(daemonChildEnv, "")
+	t.Setenv("PATH", t.TempDir())
+	marker := filepath.Join(home, "adapter-started")
+	adapter := filepath.Join(home, "claude-agent-acp")
+	script := "#!/bin/sh\n/usr/bin/touch '" + marker + "'\nexit 31\n"
+	if err := os.WriteFile(adapter, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents["claude"] = config.AgentConfig{Type: "acp", Command: adapter}
+	err := configuredStartPreflight()(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("父进程必须暴露 ACP 能力握手失败")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("父进程未执行 ACP adapter，stat error=%v", err)
+	}
+}
 
 // TestPrepareStartRejectsLoadAndPreflightErrors 验证启动准备阶段不会把错误延迟到停服之后。
 func TestPrepareStartRejectsLoadAndPreflightErrors(t *testing.T) {

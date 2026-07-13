@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/spf13/cobra"
@@ -70,8 +71,24 @@ func loadStartConfig() (*config.Config, error) {
 func prepareConfiguredStart(ctx context.Context, start func(*config.Config) error) (preparedStart, error) {
 	return prepareStart(ctx, startPreparationOps{
 		loadConfig: loadStartConfig,
-		preflight:  preflightStartConfig,
+		preflight:  configuredStartPreflight(),
 		start:      start,
+	})
+}
+
+// configuredStartPreflight 让后台子进程复用父进程已完成的能力握手。
+func configuredStartPreflight() func(context.Context, *config.Config) error {
+	if os.Getenv(daemonChildEnv) == "1" {
+		return preflightDaemonChildConfig
+	}
+	return preflightStartConfig
+}
+
+// preflightDaemonChildConfig 只复核配置与命令路径，避免在获取运行锁前重复启动 ACP。
+func preflightDaemonChildConfig(_ context.Context, cfg *config.Config) error {
+	return cfg.PreflightClaudeACPAgents(config.ClaudeACPPreflightOptions{
+		LookPath: config.LookPath,
+		Probe:    func(string, config.AgentConfig) error { return nil },
 	})
 }
 
