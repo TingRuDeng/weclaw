@@ -2,26 +2,31 @@
 
 ## 目标
 
-修复飞书或微信显式切换 Claude/Codex 会话后，下一条普通消息仍发送给原 Agent 的问题。
+将 Claude 远程后端收敛为 ACP，并补齐真实 session 列表、恢复、实时进度、审批、停止、排队续跑、模型配置和本地空闲交接。
 
-## 根因
-
-Agent 专属 session store 与窗口级 `agentSessionStore` 是两套状态。`/cc switch` 等命令只更新前者，普通消息仍按窗口旧绑定或账号默认 Agent 路由。
+完整 Spec 与执行计划：`tasks/claude-acp-remote-control.md`。
 
 ## 任务清单
 
-- [x] TDD：复现切换 Claude session 后普通消息仍进入 Codex。
-- [x] 实现：Claude switch/new 成功后同步窗口 Agent。
-- [x] TDD：覆盖 Codex switch/new 的反向切换。
-- [x] 实现：Codex switch/new 成功后同步窗口 Agent。
-- [x] 边界：目标 session 操作失败时保留原窗口 Agent。
-- [x] 验证：消息层测试、竞态检测、全仓测试、vet、staticcheck 和文档检查。
-- [x] 审查：检查权限、持久化顺序、复杂度和剩余风险。
+- [x] P0 并行只读：分析 Agent ACP 能力、消息会话链路和配置迁移边界。
+- [x] P0 并行只读：核对 `claude-agent-acp` 官方 session 能力。
+- [x] P1 串行：确认现状分析与目标边界。
+- [x] P1 串行：确认功能点与验收标准。
+- [x] P1 串行：确认风险、架构决策和失败语义。
+- [x] P1 串行：确认文件级执行计划与验证矩阵。
+- [x] P2 串行：写入 Spec、TDD 计划和并行文件所有权。
+- [ ] P3 串行：等待最终 HARD-GATE 批准。
+- [ ] P4 串行：建立 ACP 能力与 Claude session 接口。
+- [ ] P5 并行：实现 ACP session、配置、进度和配置迁移。
+- [ ] P6 并行：实现 Claude 会话导航与通用任务控制。
+- [ ] P7 串行：整合、删除死路径并同步文档。
+- [ ] P8 并行验证：定向测试、全量测试、race、vet、staticcheck、构建和文档门禁。
+- [ ] P9 串行：执行 `review-gate` 并记录 Review 小结。
 
-## 验证结果
+## 当前状态
 
-`go test ./messaging -count=1 -timeout 60s`、`go test -race ./messaging -count=1 -timeout 120s`、`go test ./... -count=1 -timeout 120s`、`go vet ./...`、`staticcheck ./...`、文档校验和 `git diff --check` 均通过。
+设计和执行计划已经写入，尚未开始实现。用户再次明确批准前，不修改生产代码和测试代码。
 
 ## Review 小结
 
-修复只改变成功的显式 Agent 会话操作；浏览工作空间不会切换窗口 Agent，失败恢复不会覆盖原绑定。源码尚未提交发布，本机运行中的 v0.1.165 仍保持旧行为。
+待实现与验证完成后填写。
