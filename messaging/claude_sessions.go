@@ -17,6 +17,11 @@ const (
 	claudeBindingResumeFailed  claudeBindingStatus = "resume_failed"
 )
 
+// claudeBindingExecutionKey 统一 Claude 绑定写入、交接和任务登记使用的串行键。
+func claudeBindingExecutionKey(bindingKey string) string {
+	return "claude-binding:" + bindingKey
+}
+
 type claudeSessionBinding struct {
 	WorkspaceRoot string              `json:"workspace_root,omitempty"`
 	SessionID     string              `json:"session_id,omitempty"`

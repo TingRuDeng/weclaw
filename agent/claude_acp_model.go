@@ -11,6 +11,32 @@ const (
 	claudeEffortConfigID = "effort"
 )
 
+var defaultClaudeEffortOptions = []string{"low", "medium", "high", "xhigh", "max"}
+
+var defaultClaudeModels = []ClaudeModel{
+	{
+		ID: "claude-fable-5", Name: "Claude Fable 5", Alias: "fable",
+		Description: "长任务和高能力代理场景", EffortOptions: defaultClaudeEffortOptions,
+	},
+	{
+		ID: "claude-opus-4-8", Name: "Claude Opus 4.8", Alias: "opus",
+		Description: "复杂编码和企业工作", EffortOptions: defaultClaudeEffortOptions,
+	},
+	{
+		ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Alias: "sonnet",
+		Description: "速度和能力均衡", EffortOptions: defaultClaudeEffortOptions,
+	},
+	{
+		ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Alias: "haiku",
+		Description: "低延迟和轻量任务", EffortOptions: defaultClaudeEffortOptions,
+	},
+}
+
+// DefaultClaudeModels 返回 Claude ACP 尚未上报目录时使用的模型清单副本。
+func DefaultClaudeModels() []ClaudeModel {
+	return cloneClaudeModels(defaultClaudeModels)
+}
+
 // ClaudeModelStatus 返回后续新建 Claude ACP session 使用的运行时配置。
 func (a *ACPAgent) ClaudeModelStatus() ClaudeModelStatus {
 	config := a.modelConfigSnapshot()

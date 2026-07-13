@@ -29,8 +29,15 @@ type CodexAppOpener func(ctx context.Context, command string, workspaceRoot stri
 // CodexCLIResumeOpener 用于把当前 Codex thread 打开到本地 CLI/TUI。
 type CodexCLIResumeOpener func(ctx context.Context, command string, workspaceRoot string, threadID string) error
 
+// ClaudeCLIResumeRequest 描述一次原生 Claude CLI 空闲会话交接。
+type ClaudeCLIResumeRequest struct {
+	Command       string
+	WorkspaceRoot string
+	SessionID     string
+}
+
 // ClaudeCLIResumeOpener 用于把当前 Claude session 打开到本地 CLI。
-type ClaudeCLIResumeOpener func(ctx context.Context, command string, workspaceRoot string, sessionID string) error
+type ClaudeCLIResumeOpener func(ctx context.Context, request ClaudeCLIResumeRequest) error
 
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {

@@ -186,10 +186,10 @@ type ClaudeSessionConfigAgent interface {
 - 修改：`messaging/claude_cli_handler.go`、`agent/cli_agent.go`
 - 删除：`agent/cli_claude.go`、`agent/claude_model.go` 及对应 Claude CLI 专属测试
 
-- [ ] 写 `local_command`、运行中拒绝、非法 session ID、越权 cwd 和原生命令参数测试。
-- [ ] 运行对应测试确认失败，再实现严格校验和空闲交接。
-- [ ] 删除 Claude CLI 后端分支，确认其他通用 CLI Agent 测试仍通过。
-- [ ] 提交：`重构：删除 Claude CLI 远程后端`。
+- [x] 写 `local_command`、运行中拒绝、非法 session ID、越权 cwd 和原生命令参数测试。
+- [x] 运行对应测试确认失败，再实现严格校验和空闲交接。
+- [x] 删除 Claude CLI 后端分支，确认其他通用 CLI Agent 测试仍通过。
+- [x] 提交：`重构：删除 Claude CLI 远程后端`。
 
 ### 任务 8：文档、全量验证与 Review Gate
 

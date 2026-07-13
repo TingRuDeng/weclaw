@@ -135,7 +135,7 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	if !ok {
 		return conversationID, nil
 	}
-	unlock := h.lockAgentExecution("claude-binding:" + bindingKey)
+	unlock := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
 	defer unlock()
 	binding := h.ensureClaudeSessions().binding(bindingKey)
 	if binding.SessionID == "" || binding.Status == claudeBindingUnbound {

@@ -39,6 +39,9 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	if strings.TrimSpace(opts.routeUserID) == "" {
 		opts.routeUserID = opts.userID
 	}
+	bindingKey := claudeBindingKey(opts.routeUserID, opts.agentName)
+	unlockBinding := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
+	defer unlockBinding()
 	// 后台任务保留消息上下文值，但不能随平台请求返回而被取消。
 	opts.ctx = context.WithoutCancel(opts.ctx)
 	agentCtx, cancel := contextWithTaskTimeout(opts.ctx, opts.progressCfg)

@@ -27,7 +27,7 @@ func (h *Handler) claudeWorkspaceRootForUser(userID string, agentName string, _ 
 }
 
 func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) string {
-	unlock := h.lockAgentExecution("claude-binding:" + route.BindingKey)
+	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
 	selected, err := h.findClaudeSessionForRoute(route, target)
 	if err != nil {
@@ -99,7 +99,7 @@ func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string
 	if strings.TrimSpace(target) == ".." {
 		return h.renderClaudeWorkspaceGroups(route)
 	}
-	unlock := h.lockAgentExecution("claude-binding:" + route.BindingKey)
+	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
 	group, err := h.findClaudeWorkspaceGroupForRoute(route, target)
 	if err != nil {
@@ -119,7 +119,7 @@ func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string
 }
 
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
-	unlock := h.lockAgentExecution("claude-binding:" + route.BindingKey)
+	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
 	previous := h.ensureClaudeSessions().binding(route.BindingKey)
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)

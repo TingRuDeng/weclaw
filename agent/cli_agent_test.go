@@ -6,9 +6,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestCLIAgentRejectsClaudeBackend(t *testing.T) {
+	ag := NewCLIAgent(CLIAgentConfig{Name: "claude", Command: "/不存在/claude"})
+	_, err := ag.Chat(context.Background(), "conversation-1", "hello")
+	if err == nil || !strings.Contains(err.Error(), "Claude 必须使用 ACP") {
+		t.Fatalf("err=%v, want explicit ACP-only rejection", err)
+	}
+}
 
 // TestCLIAgentTurnTimeoutKillsHangingProcess 验证单轮超时会在宽限期内中止卡死命令并返回错误。
 func TestCLIAgentTurnTimeoutKillsHangingProcess(t *testing.T) {
@@ -54,42 +63,6 @@ func TestConfigureProcessGroupSetsPgid(t *testing.T) {
 	}
 	if cmd.WaitDelay != turnKillGrace {
 		t.Fatalf("expected WaitDelay=%s, got %s", turnKillGrace, cmd.WaitDelay)
-	}
-}
-
-func TestCLIAgentClaudeSessionControl(t *testing.T) {
-	ag := NewCLIAgent(CLIAgentConfig{Name: "claude", Command: "claude"})
-
-	if err := ag.UseClaudeSession(context.Background(), "conversation-1", "session-1"); err != nil {
-		t.Fatalf("UseClaudeSession error: %v", err)
-	}
-	sessionID, ok := ag.CurrentClaudeSession("conversation-1")
-	if !ok || sessionID != "session-1" {
-		t.Fatalf("CurrentClaudeSession=(%q,%v), want session-1 true", sessionID, ok)
-	}
-
-	ag.ClearClaudeSession("conversation-1")
-
-	if sessionID, ok := ag.CurrentClaudeSession("conversation-1"); ok || sessionID != "" {
-		t.Fatalf("session should be cleared, got (%q,%v)", sessionID, ok)
-	}
-}
-
-func TestCLIAgentClaudeSessionControlAllowsCustomClaudeCommandName(t *testing.T) {
-	ag := NewCLIAgent(CLIAgentConfig{Name: "sonnet", Command: "/usr/local/bin/claude"})
-
-	if err := ag.UseClaudeSession(context.Background(), "conversation-1", "session-1"); err != nil {
-		t.Fatalf("UseClaudeSession error: %v", err)
-	}
-	sessionID, ok := ag.CurrentClaudeSession("conversation-1")
-	if !ok || sessionID != "session-1" {
-		t.Fatalf("CurrentClaudeSession=(%q,%v), want session-1 true", sessionID, ok)
-	}
-
-	ag.ClearClaudeSession("conversation-1")
-
-	if sessionID, ok := ag.CurrentClaudeSession("conversation-1"); ok || sessionID != "" {
-		t.Fatalf("session should be cleared, got (%q,%v)", sessionID, ok)
 	}
 }
 
