@@ -109,23 +109,15 @@ func TestLookPath_LoginShellFallback(t *testing.T) {
 	t.Logf("lookPath resolved claude via login shell: %s", p)
 }
 
-// TestDetectAndConfigure_StrippedPath is an end-to-end test:
-// empty config + stripped PATH → DetectAndConfigure should still find claude.
+// TestDetectAndConfigure_StrippedPath 验证只有原生 Claude CLI 时不会注册远程后端。
 func TestDetectAndConfigure_StrippedPath(t *testing.T) {
 	withAgentDetection(t, map[string]string{"claude": "/fake/bin/claude"}, nil)
 
 	cfg := DefaultConfig()
 	DetectAndConfigure(cfg)
 
-	agent, ok := cfg.Agents["claude"]
-	if !ok {
-		t.Fatal("expected claude to be detected via login shell fallback")
-	}
-	if agent.Type != "cli" {
-		t.Fatalf("expected type=cli, got %s", agent.Type)
-	}
-	if agent.Command != "/fake/bin/claude" {
-		t.Fatalf("detected claude command=%s, want fake path", agent.Command)
+	if _, ok := cfg.Agents["claude"]; ok {
+		t.Fatal("Claude CLI must not be detected as a remote backend")
 	}
 }
 

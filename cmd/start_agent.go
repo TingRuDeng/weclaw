@@ -21,6 +21,10 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 		log.Printf("[agent] %q not found in config", name)
 		return nil
 	}
+	if name == "claude" && agCfg.Type != "acp" {
+		log.Printf("[agent] Claude remote backend only supports ACP; run weclaw config agent")
+		return nil
+	}
 
 	switch agCfg.Type {
 	case "acp":
@@ -122,6 +126,7 @@ func newACPAgentFromConfig(name string, agCfg config.AgentConfig) *agent.ACPAgen
 	return agent.NewACPAgent(agent.ACPAgentConfig{
 		ConfiguredName:   name,
 		Command:          agCfg.Command,
+		LocalCommand:     agCfg.LocalCommand,
 		Args:             agCfg.Args,
 		Cwd:              agCfg.Cwd,
 		Env:              agCfg.Env,

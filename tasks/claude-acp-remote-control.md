@@ -140,15 +140,16 @@ type ClaudeSessionConfigAgent interface {
 
 **文件：**
 - 修改：`config/config.go`、`config/detect.go`、`cmd/config.go`、`cmd/start.go`、`cmd/start_agent.go`、`cmd/doctor.go`
+- 修改：`agent/acp_agent.go`、`agent/acp_constructor.go`、`agent/acp_info.go`，将 `local_command` 传入运行时元数据
 - 新建：`cmd/config_agent.go`、`cmd/config_agent_test.go`、`cmd/doctor_agent.go`
 - 修改：`web/view.go`、`web/config_service.go`、`web/status.go`、`web/static/app.js`
 
-- [ ] 写 ACP-only 检测、旧 CLI 启动阻断、迁移命令、doctor capability probe、Web 往返测试。
-- [ ] 运行 `go test ./config ./cmd ./web -count=1 -timeout 60s`，确认新增测试失败。
-- [ ] 增加 `local_command`；删除 Claude CLI candidate；实现 `weclaw config agent`。
-- [ ] 启动和 Web 保存调用 `ValidateClaudeACPAgents()`；doctor 握手后立即停止，不创建 session。
-- [ ] 重跑定向测试，并验证迁移命令保留 env/model/cwd/progress、清空旧 CLI args。
-- [ ] 提交：`配置：收敛 Claude ACP 启动与诊断`。
+- [x] 写 ACP-only 检测、旧 CLI 启动阻断、迁移命令、doctor capability probe、Web 往返测试。
+- [x] 运行 `go test ./config ./cmd ./web -count=1 -timeout 60s`，确认新增测试失败。
+- [x] 增加 `local_command`；删除 Claude CLI candidate；实现 `weclaw config agent`。
+- [x] 启动和 Web 保存调用 `ValidateClaudeACPAgents()`；doctor 握手后立即停止，不创建 session。
+- [x] 重跑定向测试，并验证迁移命令保留 env/model/cwd/progress、清空旧 CLI args。
+- [x] 提交：`配置：收敛 Claude ACP 启动与诊断`。
 
 ### 任务 5：重写 Claude 会话选择链路
 

@@ -68,6 +68,9 @@ func validateConfig(cfg *config.Config) error {
 	if cfg.RateLimitPerMinute < 0 {
 		return fmt.Errorf("rate_limit_per_minute must be >= 0")
 	}
+	if err := cfg.ValidateClaudeACPAgents(); err != nil {
+		return err
+	}
 	return cfg.Validate()
 }
 

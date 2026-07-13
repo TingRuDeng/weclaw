@@ -25,9 +25,10 @@ type platformStatus struct {
 }
 
 type agentStatus struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Command string `json:"command,omitempty"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	Command      string `json:"command,omitempty"`
+	LocalCommand string `json:"local_command,omitempty"`
 }
 
 type statusView struct {
@@ -97,7 +98,9 @@ func agentStatuses(cfg *config.Config) []agentStatus {
 		if ag.Type == "http" {
 			command = ag.Endpoint
 		}
-		out = append(out, agentStatus{Name: name, Type: ag.Type, Command: command})
+		out = append(out, agentStatus{
+			Name: name, Type: ag.Type, Command: command, LocalCommand: ag.LocalCommand,
+		})
 	}
 	return out
 }

@@ -15,6 +15,7 @@ import (
 type ACPAgent struct {
 	configuredName   string
 	command          string
+	localCommand     string
 	args             []string
 	model            string
 	effort           string
@@ -84,6 +85,7 @@ type ACPAgent struct {
 type ACPAgentConfig struct {
 	ConfiguredName   string   // 配置 map 中的 Agent 名称，用于稳定识别业务身份
 	Command          string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
+	LocalCommand     string   // 原生 Claude 命令，仅用于本地可见交接
 	Args             []string // extra args for command (e.g. ["acp"] for cursor)
 	Model            string
 	Effort           string

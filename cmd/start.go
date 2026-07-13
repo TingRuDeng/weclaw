@@ -45,6 +45,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	if err := cfg.ValidateClaudeACPAgents(); err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
 
 	if !foregroundFlag {
 		// Check if login is needed — if so, do it in foreground first, then daemon
@@ -97,6 +100,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 			path, _ := config.ConfigPath()
 			log.Printf("Auto-detected agents saved to %s", path)
 		}
+	}
+	if err := cfg.ValidateClaudeACPAgents(); err != nil {
+		return err
 	}
 
 	// Log all available agents

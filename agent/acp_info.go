@@ -11,11 +11,12 @@ import (
 func (a *ACPAgent) Info() AgentInfo {
 	config := a.modelConfigSnapshot()
 	info := AgentInfo{
-		Name:    a.command,
-		Type:    "acp",
-		Model:   config.model,
-		Effort:  config.effort,
-		Command: a.command,
+		Name:         a.command,
+		Type:         "acp",
+		Model:        config.model,
+		Effort:       config.effort,
+		Command:      a.command,
+		LocalCommand: a.localCommand,
 	}
 	a.mu.Lock()
 	if a.cmd != nil && a.cmd.Process != nil {

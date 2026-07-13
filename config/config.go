@@ -59,6 +59,7 @@ func (c FeishuBotConfig) EffectiveRequireMentionInGroup() bool {
 type AgentConfig struct {
 	Type             string            `json:"type"`                        // "acp", "cli", "http", or "companion"
 	Command          string            `json:"command,omitempty"`           // binary path (cli/acp type)
+	LocalCommand     string            `json:"local_command,omitempty"`     // ACP 会话本地交接使用的原生命令
 	Args             []string          `json:"args,omitempty"`              // extra args for command (e.g. ["acp"] for cursor)
 	Aliases          []string          `json:"aliases,omitempty"`           // custom trigger commands (e.g. ["gpt", "4o"])
 	Cwd              string            `json:"cwd,omitempty"`               // working directory (workspace)

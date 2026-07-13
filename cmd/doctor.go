@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -46,6 +47,7 @@ type doctorDeps struct {
 	wechatAccounts func() (int, error)
 	feishuCredsOK  func(string) error
 	sudoProbe      func(user string) error
+	claudeACPProbe func(context.Context, string, config.AgentConfig) error
 }
 
 func defaultDoctorDeps() doctorDeps {
@@ -62,6 +64,7 @@ func defaultDoctorDeps() doctorDeps {
 		sudoProbe: func(user string) error {
 			return exec.Command("sudo", "-n", "-u", user, "true").Run()
 		},
+		claudeACPProbe: defaultClaudeACPProbe,
 	}
 }
 
@@ -163,7 +166,11 @@ func checkAgents(cfg *config.Config, deps doctorDeps) []doctorResult {
 	results := make([]doctorResult, 0, len(names))
 	for _, name := range names {
 		agCfg := cfg.Agents[name]
-		results = append(results, checkAgentBinary(name, agCfg, deps))
+		binaryResult := checkAgentBinary(name, agCfg, deps)
+		results = append(results, binaryResult)
+		if name == "claude" && (agCfg.Type != "acp" || binaryResult.Status == doctorOK) {
+			results = append(results, checkClaudeACP(name, agCfg, deps))
+		}
 		if strings.TrimSpace(agCfg.RunAsUser) != "" && (agCfg.Type == "cli" || agCfg.Type == "acp") {
 			results = append(results, checkRunAsUser(name, agCfg.RunAsUser, deps))
 		}

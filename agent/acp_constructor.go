@@ -56,6 +56,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	a := &ACPAgent{
 		configuredName:           strings.TrimSpace(cfg.ConfiguredName),
 		command:                  cfg.Command,
+		localCommand:             strings.TrimSpace(cfg.LocalCommand),
 		args:                     cfg.Args,
 		model:                    cfg.Model,
 		effort:                   cfg.Effort,

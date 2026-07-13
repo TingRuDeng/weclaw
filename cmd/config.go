@@ -10,5 +10,6 @@ var configCmd = &cobra.Command{
 // init 注册本机配置命令，避免把安全配置入口暴露到远程平台命令中。
 func init() {
 	configCmd.AddCommand(configPermissionCmd)
+	configCmd.AddCommand(configAgentCmd)
 	rootCmd.AddCommand(configCmd)
 }

@@ -29,6 +29,7 @@ type configView struct {
 type agentView struct {
 	Type             string            `json:"type"`
 	Command          string            `json:"command,omitempty"`
+	LocalCommand     string            `json:"local_command,omitempty"`
 	Args             []string          `json:"args,omitempty"`
 	Aliases          []string          `json:"aliases,omitempty"`
 	Cwd              string            `json:"cwd,omitempty"`
@@ -68,6 +69,7 @@ func redactConfig(cfg *config.Config) configView {
 		av := agentView{
 			Type:             ag.Type,
 			Command:          ag.Command,
+			LocalCommand:     ag.LocalCommand,
 			Args:             ag.Args,
 			Aliases:          ag.Aliases,
 			Cwd:              ag.Cwd,
@@ -118,6 +120,7 @@ func mergeView(current *config.Config, v configView) *config.Config {
 		ac := config.AgentConfig{
 			Type:             av.Type,
 			Command:          av.Command,
+			LocalCommand:     av.LocalCommand,
 			Args:             av.Args,
 			Aliases:          av.Aliases,
 			Cwd:              av.Cwd,

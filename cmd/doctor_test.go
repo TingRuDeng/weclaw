@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ func testDoctorDeps() doctorDeps {
 		wechatAccounts: func() (int, error) { return 1, nil },
 		feishuCredsOK:  func(string) error { return nil },
 		sudoProbe:      func(string) error { return nil },
+		claudeACPProbe: func(context.Context, string, config.AgentConfig) error { return nil },
 	}
 }
 
@@ -169,7 +171,7 @@ func TestDoctorWarnsAuditDisabled(t *testing.T) {
 
 func TestDoctorPassesHealthyConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents["claude"] = config.AgentConfig{Type: "cli", Command: "claude"}
+	cfg.Agents["claude"] = config.AgentConfig{Type: "acp", Command: "claude-agent-acp"}
 	cfg.Platforms = map[string]config.PlatformConfig{
 		"wechat": {Enabled: boolPtr(true), AllowedUsers: []string{"u1"}},
 	}

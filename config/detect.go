@@ -23,11 +23,10 @@ type agentCandidate struct {
 }
 
 // agentCandidates is ordered by priority: for each agent name, earlier entries
-// are preferred. E.g. claude ACP is tried before claude CLI.
+// are preferred. Claude 远程能力只允许 ACP，不提供 CLI 回退。
 var agentCandidates = []agentCandidate{
-	// claude: prefer ACP, fallback to CLI
+	// claude: ACP-only，原生 CLI 只作为 local_command 使用
 	{Name: "claude", Binary: "claude-agent-acp", Type: "acp", Model: "sonnet"},
-	{Name: "claude", Binary: "claude", Type: "cli", Model: "sonnet"},
 	// codex: prefer ACP, fallback to CLI
 	{Name: "codex", Binary: "codex-acp", Type: "acp", Model: ""},
 	{Name: "codex", Binary: "codex", Args: []string{"app-server", "--listen", "stdio://"}, CheckArgs: []string{"app-server", "--help"}, Type: "acp", Model: ""},
@@ -59,7 +58,7 @@ var (
 )
 
 // DetectAndConfigure auto-detects local agents and populates the config.
-// For each agent name, it picks the highest-priority candidate (acp > cli).
+// For each agent name, it picks the highest-priority candidate；Claude 仅检测 ACP adapter。
 // Returns true if the config was modified.
 func DetectAndConfigure(cfg *Config) bool {
 	modified := false
@@ -83,10 +82,11 @@ func DetectAndConfigure(cfg *Config) bool {
 
 		log.Printf("[config] auto-detected %s at %s (type=%s)", candidate.Name, path, candidate.Type)
 		cfg.Agents[candidate.Name] = AgentConfig{
-			Type:    candidate.Type,
-			Command: path,
-			Args:    candidate.Args,
-			Model:   candidate.Model,
+			Type:         candidate.Type,
+			Command:      path,
+			LocalCommand: detectedLocalCommand(candidate.Name),
+			Args:         candidate.Args,
+			Model:        candidate.Model,
 		}
 		modified = true
 	}
