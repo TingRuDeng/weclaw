@@ -5,6 +5,8 @@ REPO="${WECLAW_REPO:-TingRuDeng/weclaw}"
 BINARY="weclaw"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+CLAUDE_ACP_PACKAGE="@agentclientprotocol/claude-agent-acp"
+CLAUDE_ACP_VERSION="${CLAUDE_ACP_VERSION:-0.58.1}"
 
 github_download() {
   if [ -n "$TOKEN" ]; then
@@ -30,6 +32,93 @@ latest_version() {
     exit 1
   fi
   echo "$version"
+}
+
+# 从 PATH 中解析真实可执行文件，并统一返回绝对路径。
+resolve_executable() {
+  executable_name=$1
+  previous_ifs=$IFS
+  IFS=:
+  for executable_dir in $PATH; do
+    [ -n "$executable_dir" ] || executable_dir=.
+    if [ -f "$executable_dir/$executable_name" ] && [ -x "$executable_dir/$executable_name" ]; then
+      IFS=$previous_ifs
+      absolute_dir=$(CDPATH= cd -- "$executable_dir" 2>/dev/null && pwd) || return 1
+      printf '%s/%s\n' "$absolute_dir" "$executable_name"
+      return 0
+    fi
+  done
+  IFS=$previous_ifs
+  return 1
+}
+
+absolute_file_path() {
+  file_path=$1
+  file_dir=${file_path%/*}
+  file_name=${file_path##*/}
+  absolute_dir=$(CDPATH= cd -- "$file_dir" 2>/dev/null && pwd) || return 1
+  printf '%s/%s\n' "$absolute_dir" "$file_name"
+}
+
+claude_acp_install_command() {
+  printf 'npm install -g %s@%s' "$CLAUDE_ACP_PACKAGE" "$CLAUDE_ACP_VERSION"
+}
+
+validate_claude_acp_version() {
+  case "$CLAUDE_ACP_VERSION" in
+    *[!0-9A-Za-z._+-]*)
+      echo "CLAUDE_ACP_VERSION 无效，WeClaw 二进制已保留。" >&2
+      return 1
+      ;;
+  esac
+}
+
+shell_quote() {
+  escaped_value=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
+  printf "'%s'" "$escaped_value"
+}
+
+configure_claude_agent() {
+  installed_weclaw=$1
+  claude_path=$2
+  adapter_path=$3
+  if "$installed_weclaw" config agent --name claude \
+    --command "$adapter_path" --local-command "$claude_path"; then
+    return 0
+  fi
+  echo "Claude ACP 配置失败，WeClaw 二进制已保留。" >&2
+  echo "请运行以下命令修复：" >&2
+  quoted_weclaw=$(shell_quote "$installed_weclaw")
+  quoted_adapter=$(shell_quote "$adapter_path")
+  quoted_claude=$(shell_quote "$claude_path")
+  printf '  %s config agent --name claude --command %s --local-command %s\n' \
+    "$quoted_weclaw" "$quoted_adapter" "$quoted_claude" >&2
+  return 1
+}
+
+# Claude 存在时补齐 ACP adapter；显式跳过时不修改 npm 或配置。
+setup_claude_acp() {
+  installed_weclaw=$1
+  [ "${WECLAW_SKIP_CLAUDE_ACP:-0}" != "1" ] || return 0
+  claude_path=$(resolve_executable claude) || return 0
+  adapter_path=$(resolve_executable claude-agent-acp) || adapter_path=
+  if [ -z "$adapter_path" ]; then
+    validate_claude_acp_version || return 1
+    echo "正在安装 Claude ACP adapter ${CLAUDE_ACP_VERSION}..."
+    if ! npm install -g "${CLAUDE_ACP_PACKAGE}@${CLAUDE_ACP_VERSION}"; then
+      echo "Claude ACP 安装失败，WeClaw 二进制已保留。" >&2
+      echo "请修复 npm 后运行：" >&2
+      echo "  $(claude_acp_install_command)" >&2
+      return 1
+    fi
+    adapter_path=$(resolve_executable claude-agent-acp) || {
+      echo "Claude ACP 安装后未出现在 PATH，WeClaw 二进制已保留。" >&2
+      echo "请运行以下命令修复：" >&2
+      echo "  $(claude_acp_install_command)" >&2
+      return 1
+    }
+  fi
+  configure_claude_agent "$installed_weclaw" "$claude_path" "$adapter_path"
 }
 
 # Detect OS
@@ -76,6 +165,9 @@ if [ "$OS" = "darwin" ]; then
   xattr -d com.apple.quarantine "${INSTALL_DIR}/${BINARY}" 2>/dev/null || true
   xattr -d com.apple.provenance "${INSTALL_DIR}/${BINARY}" 2>/dev/null || true
 fi
+
+INSTALLED_WECLAW=$(absolute_file_path "${INSTALL_DIR}/${BINARY}")
+setup_claude_acp "$INSTALLED_WECLAW"
 
 echo ""
 echo "weclaw ${VERSION} installed to ${INSTALL_DIR}/${BINARY}"

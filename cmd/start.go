@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -25,6 +26,17 @@ var startCmd = &cobra.Command{
 	RunE:  runStart,
 }
 
+type preparedStart struct {
+	cfg *config.Config
+	run func() error
+}
+
+type startPreparationOps struct {
+	loadConfig func() (*config.Config, error)
+	preflight  func(context.Context, *config.Config) error
+	start      func(*config.Config) error
+}
+
 // runStart 加载配置后按前台或后台模式进入对应启动流程。
 func runStart(cmd *cobra.Command, args []string) error {
 	daemonLog, err := configureDaemonLogging()
@@ -34,24 +46,69 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if daemonLog != nil {
 		defer daemonLog.Close()
 	}
-	cfg, err := loadStartConfig()
+	start := runBackgroundStart
+	if foregroundFlag {
+		start = runForegroundStart
+	}
+	prepared, err := prepareConfiguredStart(cmd.Context(), start)
 	if err != nil {
 		return err
 	}
-	if !foregroundFlag {
-		return runBackgroundStart(cfg)
-	}
-	return runForegroundStart(cfg)
+	return prepared.run()
 }
 
-// loadStartConfig 加载并校验启动配置，避免后台进程接收无效 Claude 配置。
+// loadStartConfig 加载启动配置，并统一包装配置文件错误。
 func loadStartConfig() (*config.Config, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
-	}
-	if err := cfg.ValidateClaudeACPAgents(); err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+		return nil, fmt.Errorf("加载配置失败: %w", err)
 	}
 	return cfg, nil
+}
+
+// prepareConfiguredStart 使用正式依赖生成可延迟执行的已预检启动闭包。
+func prepareConfiguredStart(ctx context.Context, start func(*config.Config) error) (preparedStart, error) {
+	return prepareStart(ctx, startPreparationOps{
+		loadConfig: loadStartConfig,
+		preflight:  preflightStartConfig,
+		start:      start,
+	})
+}
+
+// prepareStart 固化一次配置快照，避免停止服务前后重复加载配置。
+func prepareStart(ctx context.Context, ops startPreparationOps) (preparedStart, error) {
+	cfg, err := ops.loadConfig()
+	if err != nil {
+		return preparedStart{}, err
+	}
+	if err := ops.preflight(ctx, cfg); err != nil {
+		return preparedStart{}, fmt.Errorf("启动预检失败: %w", err)
+	}
+	return preparedStart{cfg: cfg, run: func() error { return ops.start(cfg) }}, nil
+}
+
+// preflightStartConfig 验证 Claude ACP adapter 可执行且具备会话列表与恢复能力。
+func preflightStartConfig(ctx context.Context, cfg *config.Config) error {
+	modified := config.DetectAndConfigure(cfg)
+	err := cfg.PreflightClaudeACPAgents(config.ClaudeACPPreflightOptions{
+		LookPath: config.LookPath,
+		Probe: func(name string, agentCfg config.AgentConfig) error {
+			return defaultClaudeACPProbe(ctx, name, agentCfg)
+		},
+	})
+	if err != nil || !modified {
+		return err
+	}
+	return persistDetectedStartConfig(modified, cfg, config.Save)
+}
+
+// persistDetectedStartConfig 确保后台子进程能重新加载同一份预检配置。
+func persistDetectedStartConfig(modified bool, cfg *config.Config, save func(*config.Config) error) error {
+	if !modified {
+		return nil
+	}
+	if err := save(cfg); err != nil {
+		return fmt.Errorf("保存自动探测配置失败: %w", err)
+	}
+	return nil
 }

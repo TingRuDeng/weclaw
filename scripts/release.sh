@@ -110,6 +110,7 @@ check_tag_available() {
 run_validations() {
   [[ "$RUN_TESTS" -eq 1 ]] || return 0
   log "运行测试与静态检查"
+  sh "$ROOT_DIR/scripts/install_test.sh"
   go test -count=1 -timeout 60s ./...
   go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging
   go vet ./...

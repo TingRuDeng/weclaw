@@ -10,22 +10,26 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
-func TestStartConfiguredDaemonStopsOnConfigError(t *testing.T) {
+// TestRunRestartDoesNotStopWhenPreflightFails 验证预检失败时旧服务保持运行。
+func TestRunRestartDoesNotStopWhenPreflightFails(t *testing.T) {
 	wantErr := errors.New("Claude 仅支持 ACP")
-	started := false
-	err := startConfiguredDaemonWithOps(configuredDaemonStartOps{
-		loadConfig: func() (*config.Config, error) { return nil, wantErr },
-		start: func(*config.Config) error {
-			started = true
+	stopped := false
+	err := runRestart(context.Background(), false, restartOps{
+		prepare: func(context.Context) (preparedStart, error) { return preparedStart{}, wantErr },
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			t.Fatal("预检失败后不应检查任务")
 			return nil
 		},
+		isRunning: func() bool { t.Fatal("预检失败后不应检查进程"); return false },
+		stop:      func() error { stopped = true; return nil },
+		out:       &bytes.Buffer{},
 	})
 
 	if !errors.Is(err, wantErr) {
-		t.Fatalf("startConfiguredDaemonWithOps error=%v, want %v", err, wantErr)
+		t.Fatalf("runRestart error=%v, want %v", err, wantErr)
 	}
-	if started {
-		t.Fatal("配置预检失败时不应派生后台进程")
+	if stopped {
+		t.Fatal("配置预检失败时不应停止旧服务")
 	}
 }
 
@@ -35,14 +39,13 @@ func TestRunRestartStartsDirectlyWhenWeclawIsNotRunning(t *testing.T) {
 	started := false
 
 	err := runRestart(context.Background(), false, restartOps{
-		ensureSafe: func(context.Context, bool) error { return nil },
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error { started = true; return nil }}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
 		isRunning:  func() bool { return false },
 		stop: func() error {
 			stopped = true
-			return nil
-		},
-		start: func() error {
-			started = true
 			return nil
 		},
 		out: &out,
@@ -70,7 +73,11 @@ func TestRunRestartStopsBeforeStartWhenWeclawIsRunning(t *testing.T) {
 	var calls []string
 
 	err := runRestart(context.Background(), true, restartOps{
-		ensureSafe: func(_ context.Context, force bool) error {
+		prepare: func(context.Context) (preparedStart, error) {
+			calls = append(calls, "prepare")
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error { calls = append(calls, "start"); return nil }}, nil
+		},
+		ensureSafe: func(_ context.Context, force bool, _ *config.Config) error {
 			if !force {
 				t.Fatal("force flag 未传入安全检查")
 			}
@@ -85,17 +92,13 @@ func TestRunRestartStopsBeforeStartWhenWeclawIsRunning(t *testing.T) {
 			calls = append(calls, "stop")
 			return nil
 		},
-		start: func() error {
-			calls = append(calls, "start")
-			return nil
-		},
 		out: &out,
 	})
 
 	if err != nil {
 		t.Fatalf("runRestart error: %v", err)
 	}
-	want := []string{"safe", "running", "stop", "start"}
+	want := []string{"prepare", "safe", "running", "stop", "start"}
 	if strings.Join(calls, ",") != strings.Join(want, ",") {
 		t.Fatalf("calls=%v, want %v", calls, want)
 	}
@@ -107,14 +110,16 @@ func TestRunRestartStopsBeforeStartWhenWeclawIsRunning(t *testing.T) {
 func TestRunRestartStopsWhenSafetyCheckFails(t *testing.T) {
 	wantErr := errors.New("安全检查失败")
 	err := runRestart(context.Background(), false, restartOps{
-		ensureSafe: func(context.Context, bool) error { return wantErr },
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return wantErr },
 		isRunning: func() bool {
 			t.Fatal("安全检查失败后不应继续判断运行状态")
 			return false
 		},
-		stop:  func() error { return nil },
-		start: func() error { return nil },
-		out:   &bytes.Buffer{},
+		stop: func() error { return nil },
+		out:  &bytes.Buffer{},
 	})
 
 	if !errors.Is(err, wantErr) {

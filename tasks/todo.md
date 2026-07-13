@@ -2,31 +2,24 @@
 
 ## 目标
 
-将 Claude 远程后端收敛为 ACP，并补齐真实 session 列表、恢复、实时进度、审批、停止、排队续跑、模型配置和本地空闲交接。
+让 WeClaw 安装脚本在已安装 Claude CLI 时自动补齐 `claude-agent-acp`，并让更新、重启在停止现有服务前完成 Claude ACP 依赖预检。
 
-完整 Spec 与执行计划：`tasks/claude-acp-remote-control.md`。
+完整 Spec 与执行计划：`tasks/claude-acp-installation.md`。
 
 ## 任务清单
 
-- [x] P0 并行只读：分析 Agent ACP 能力、消息会话链路和配置迁移边界。
-- [x] P0 并行只读：核对 `claude-agent-acp` 官方 session 能力。
-- [x] P1 串行：确认现状分析与目标边界。
-- [x] P1 串行：确认功能点与验收标准。
-- [x] P1 串行：确认风险、架构决策和失败语义。
-- [x] P1 串行：确认文件级执行计划与验证矩阵。
-- [x] P2 串行：写入 Spec、TDD 计划和并行文件所有权。
-- [x] P3 串行：最终 HARD-GATE 已批准。
-- [x] P4 串行：建立 ACP 能力与 Claude session 接口。
-- [x] P5 并行：实现 ACP session、配置、进度、配置迁移与 Claude 会话导航。
-- [x] P6 串行：统一 Claude 后台任务、队列与停止语义。
-- [x] P7 串行：整合并删除 Claude CLI 远程后端死路径。
-- [x] P8 并行验证：同步文档，执行定向测试、全量测试、race、vet、staticcheck、构建和文档门禁。
-- [x] P9 串行：执行 `review-gate` 并记录 Review 小结。
+- [x] P0 串行：确认需求、失败语义、版本策略和 HARD-GATE。
+- [x] P0 串行：建立隔离工作树并完成全仓基线测试。
+- [x] P1 并行：实现安装脚本自动安装、跳过开关和 Shell 测试。
+- [x] P1 并行：实现 Claude ACP 安装校验及更新、重启预检。
+- [x] P2 串行：整合实现并同步中英文使用说明。
+- [x] P3 并行：执行 Shell、Go、Race、Vet、Staticcheck 和文档验证。
+- [x] P4 串行：执行 `review-gate` 并记录 Review 小结。
 
 ## 当前状态
 
-任务 1 至 9 已完成，当前进入最终提交前核验。
+P0 至 P4 已完成，准备提交。
 
 ## Review 小结
 
-Review Gate 终态为 finished，结论通过。此前发现的当前 session 配置未接入、活动任务绑定漂移、Claude 身份命令推断和复杂度阻塞均已修复；`/cc switch`、`/cc cd`、`/cc new`、`/cwd` 与任务启动统一使用 Claude 绑定锁。定向测试、全仓测试、Race、Vet、Staticcheck、构建、文档校验和 `git diff --check` 全部通过，Claude ACP 核心语句覆盖率为 86.1%。剩余风险仅为飞书、微信和本地 Terminal 的实机环境差异，不存在已知代码阻塞。
+Review Gate 终态为 `finished`，结论通过。安装脚本覆盖无 Claude、显式跳过、已有适配器、默认与覆盖版本、非法版本、npm 缺失、npm 失败、能力配置失败和发布门禁共 10 个隔离用例；测试不会修改真实 npm 全局环境。更新与重启在停止旧服务前完成同一配置快照的命令解析和 ACP 能力握手，失败时不调用停止。新增核心编排函数覆盖率为 83.3% 至 100%；全仓测试、Race、Vet、Staticcheck、构建、文档校验和差异检查全部通过。剩余风险是 npm 全局目录权限和不同 Node 版本管理器的真实机器差异，失败路径会保留 WeClaw 并返回明确修复命令。

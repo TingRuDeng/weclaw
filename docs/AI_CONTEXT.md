@@ -31,12 +31,12 @@ ai_summary:
 - 仓库类型：单一 Go 仓库，不是 coordination directory。
 - Go 模块：`github.com/fastclaw-ai/weclaw`，以 `main.go` 和 `cmd/root.go` 进入 CLI。
 - 产品定位：把微信个人号和飞书消息接入 AI Agent，业务层通过 `platform` 抽象隔离平台差异。
-- 发布目标：`scripts/release.sh` 当前只构建 `darwin/arm64`，本机安装必须走 `weclaw update`。
+- 发布目标：`scripts/release.sh` 当前只构建 `darwin/arm64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。
 - Android profile：未检测到 Gradle 或 `AndroidManifest.xml`，当前只适用 `generic` profile。
 
 ## Core Directories
 
-- `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口。
+- `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口；更新后重启与手动重启必须在停止旧服务前复用启动预检。
 - `config/`：配置结构、默认值、Agent 探测、工作目录白名单、管理员白名单和 API 安全校验。
 - `agent/`：统一 Agent 接口，以及 ACP、CLI、HTTP、Companion 等 runtime。
 - `platform/`：跨平台消息、回复、注册表和访问控制抽象。

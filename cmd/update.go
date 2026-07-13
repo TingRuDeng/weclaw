@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"runtime"
 
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/spf13/cobra"
 )
 
@@ -37,21 +39,22 @@ var updateCmd = &cobra.Command{
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
-	// 1. Get latest version
 	fmt.Println("正在检查更新...")
 	latest, err := getLatestVersion()
 	if err != nil {
 		return fmt.Errorf("检查最新版本失败: %w", err)
 	}
-
 	if latest == Version {
 		fmt.Printf("已是最新版本 (%s)\n", Version)
-		return nil
+	} else if err := applyUpdate(latest); err != nil {
+		return err
 	}
+	return completeUpdate(cmd.Context(), updateRestartFlag, restartForceFlag, defaultUpdateCompletionOps())
+}
 
+// applyUpdate 下载、校验并原子替换当前可执行文件。
+func applyUpdate(latest string) error {
 	fmt.Printf("当前版本: %s -> 最新版本: %s\n", Version, latest)
-
-	// 2. Download new binary
 	filename, err := releaseAssetNameForRuntime(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
@@ -65,15 +68,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 	defer os.Remove(tmpFile)
 	if err := verifyReleaseAssetChecksum(latest, filename, tmpFile); err != nil {
-		return fmt.Errorf("verify checksum: %w", err)
+		return fmt.Errorf("校验发布文件摘要失败: %w", err)
 	}
-
-	// 3. Replace current binary
 	exePath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("find executable: %w", err)
+		return fmt.Errorf("定位当前可执行文件失败: %w", err)
 	}
-	// Resolve symlinks
 	if resolved, err := resolveSymlink(exePath); err == nil {
 		exePath = resolved
 	}
@@ -82,59 +82,72 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if err := replaceBinary(tmpFile, exePath); err != nil {
-		return fmt.Errorf("replace binary: %w", err)
+		return fmt.Errorf("替换可执行文件失败: %w", err)
 	}
-
-	// Clear macOS quarantine/provenance attributes to avoid Gatekeeper killing the binary
 	if runtime.GOOS == "darwin" {
 		exec.Command("xattr", "-d", "com.apple.quarantine", exePath).Run()
 		exec.Command("xattr", "-d", "com.apple.provenance", exePath).Run()
 	}
+	fmt.Printf("已更新到 %s\n", latest)
+	return nil
+}
 
-	fmt.Printf("Updated to %s\n", latest)
+type updateCompletionOps struct {
+	prepare    func(context.Context) (preparedStart, error)
+	ensureSafe func(context.Context, bool, *config.Config) error
+	running    func() bool
+	stop       func() error
+	out        io.Writer
+}
 
-	if !updateRestartFlag {
-		fmt.Println("Update complete. Run 'weclaw restart' when you are ready.")
+// defaultUpdateCompletionOps 复用正式启动预检，并保留更新命令原有的运行状态语义。
+func defaultUpdateCompletionOps() updateCompletionOps {
+	return updateCompletionOps{
+		prepare: func(ctx context.Context) (preparedStart, error) {
+			return prepareConfiguredStart(ctx, runBackgroundStart)
+		},
+		ensureSafe: ensureRestartSafeWithConfig,
+		running:    weclawIsRunningForRestart,
+		stop:       stopAllWeclaw,
+		out:        os.Stdout,
+	}
+}
+
+// completeUpdate 根据重启选项把预检错误转换为警告或停止前硬失败。
+func completeUpdate(ctx context.Context, restart bool, force bool, ops updateCompletionOps) error {
+	prepared, err := ops.prepare(ctx)
+	if err != nil {
+		if restart {
+			return err
+		}
+		fmt.Fprintf(ops.out, "警告：Claude ACP 依赖预检失败：%v\n", err)
+		fmt.Fprintln(ops.out, "更新完成；修复依赖后运行 weclaw restart。")
 		return nil
 	}
-	if err := ensureConfiguredRestartSafe(context.Background(), restartForceFlag); err != nil {
+	if !restart {
+		fmt.Fprintln(ops.out, "更新完成；准备就绪后运行 weclaw restart。")
+		return nil
+	}
+	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
 		return err
 	}
-
-	// 4. Restart only when explicitly requested
-	return restartUpdatedService(defaultUpdateRestartOps())
+	return restartUpdatedService(prepared, ops)
 }
 
-type updateRestartOps struct {
-	running func() bool
-	stop    func() error
-	start   func() error
-}
-
-func defaultUpdateRestartOps() updateRestartOps {
-	return updateRestartOps{
-		running: func() bool {
-			pid, err := readPid()
-			return err == nil && processExists(pid)
-		},
-		stop:  stopAllWeclaw,
-		start: runDaemon,
-	}
-}
-
-func restartUpdatedService(ops updateRestartOps) error {
+// restartUpdatedService 仅在旧服务实际运行时执行停止与已预检启动闭包。
+func restartUpdatedService(prepared preparedStart, ops updateCompletionOps) error {
 	if !ops.running() {
-		fmt.Println("Update complete. Run 'weclaw start' to start.")
+		fmt.Fprintln(ops.out, "更新完成；当前服务未运行，请执行 weclaw start。")
 		return nil
 	}
-	fmt.Println("Stopping old process...")
+	fmt.Fprintln(ops.out, "正在停止旧服务...")
 	if err := ops.stop(); err != nil {
-		log.Printf("Failed to stop old process: %v", err)
+		log.Printf("停止旧服务失败：%v", err)
 		return fmt.Errorf("更新完成，但停止旧服务失败: %w", err)
 	}
-	fmt.Println("Starting new version...")
-	if err := ops.start(); err != nil {
-		log.Printf("Failed to restart: %v", err)
+	fmt.Fprintln(ops.out, "正在启动新版本...")
+	if err := prepared.run(); err != nil {
+		log.Printf("启动新版本失败：%v", err)
 		return fmt.Errorf("更新完成，但启动新服务失败: %w", err)
 	}
 	return nil

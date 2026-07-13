@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
 
 func TestGitHubRepoUsesProjectFork(t *testing.T) {
@@ -116,21 +119,29 @@ func TestDownloadFileRejectsOversizedContentLength(t *testing.T) {
 	}
 }
 
-func TestUpdateRestartFlagDefaultsFalse(t *testing.T) {
-	if updateRestartFlag {
-		t.Fatal("update should not restart service unless --restart is set")
+// TestCompleteUpdateHandlesClaudeACPPreflight 验证普通更新警告与更新后重启阻断使用同一预检。
+func TestCompleteUpdateHandlesClaudeACPPreflight(t *testing.T) {
+	want := errors.New("ACP 能力缺失")
+	stopped := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) { return preparedStart{}, want },
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			t.Fatal("预检失败后不应检查任务")
+			return nil
+		},
+		running: func() bool { t.Fatal("预检失败后不应检查进程"); return false },
+		stop:    func() error { stopped = true; return nil }, out: &bytes.Buffer{},
 	}
-}
-
-func TestRestartUpdatedServiceReturnsStartError(t *testing.T) {
-	want := errors.New("start failed")
-	err := restartUpdatedService(updateRestartOps{
-		running: func() bool { return true },
-		stop:    func() error { return nil },
-		start:   func() error { return want },
-	})
-	if !errors.Is(err, want) {
-		t.Fatalf("error=%v, want start failure", err)
+	if err := completeUpdate(context.Background(), true, false, ops); !errors.Is(err, want) || stopped {
+		t.Fatalf("restart error=%v stopped=%t, want preflight failure without stop", err, stopped)
+	}
+	var out bytes.Buffer
+	ops.out = &out
+	if err := completeUpdate(context.Background(), false, false, ops); err != nil {
+		t.Fatalf("ordinary update error=%v, want warning only", err)
+	}
+	if !strings.Contains(out.String(), "警告") || !strings.Contains(out.String(), want.Error()) {
+		t.Fatalf("ordinary update output=%q, want dependency warning", out.String())
 	}
 }
 

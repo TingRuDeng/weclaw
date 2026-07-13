@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,43 @@ import (
 	"github.com/fastclaw-ai/weclaw/feishu"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
+
+// TestPersistDetectedStartConfigExposesSaveFailure 验证自动探测结果无法持久化时阻止启动。
+func TestPersistDetectedStartConfigExposesSaveFailure(t *testing.T) {
+	wantErr := errors.New("只读配置")
+	err := persistDetectedStartConfig(true, config.DefaultConfig(), func(*config.Config) error {
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("persistDetectedStartConfig error=%v, want %v", err, wantErr)
+	}
+}
+
+// TestPrepareStartUsesOneValidatedConfigSnapshot 验证启动闭包不会在执行时重新加载配置。
+func TestPrepareStartUsesOneValidatedConfigSnapshot(t *testing.T) {
+	wantCfg := config.DefaultConfig()
+	loads := 0
+	preflights := 0
+	prepared, err := prepareStart(context.Background(), startPreparationOps{
+		loadConfig: func() (*config.Config, error) { loads++; return wantCfg, nil },
+		preflight:  func(context.Context, *config.Config) error { preflights++; return nil },
+		start: func(got *config.Config) error {
+			if got != wantCfg {
+				t.Fatal("启动闭包未使用已预检配置快照")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepareStart error: %v", err)
+	}
+	if err := prepared.run(); err != nil {
+		t.Fatalf("prepared.run error: %v", err)
+	}
+	if loads != 1 || preflights != 1 {
+		t.Fatalf("loads=%d preflights=%d, want 1/1", loads, preflights)
+	}
+}
 
 func TestWechatEnabledDefaultsToTrue(t *testing.T) {
 	cfg := config.DefaultConfig()

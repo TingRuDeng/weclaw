@@ -17,12 +17,14 @@ var (
 )
 
 type configAgentLookPath func(string) (string, error)
+type configAgentProbe func(string, config.AgentConfig) error
 
 type configAgentOptions struct {
 	Name         string
 	Command      string
 	LocalCommand string
 	LookPath     configAgentLookPath
+	Probe        configAgentProbe
 }
 
 var configAgentCmd = &cobra.Command{
@@ -33,6 +35,9 @@ var configAgentCmd = &cobra.Command{
 		return runConfigAgent(configAgentOptions{
 			Name: configAgentName, Command: configAgentCommand,
 			LocalCommand: configAgentLocalCommand, LookPath: config.LookPath,
+			Probe: func(name string, agentCfg config.AgentConfig) error {
+				return defaultClaudeACPProbe(cmd.Context(), name, agentCfg)
+			},
 		})
 	},
 }
@@ -65,10 +70,27 @@ func runConfigAgent(opts configAgentOptions) error {
 	if err := cfg.ValidateClaudeACPAgents(); err != nil {
 		return err
 	}
+	if err := probeConfigAgent(next, agentCfg); err != nil {
+		return err
+	}
 	if err := config.Save(cfg); err != nil {
 		return err
 	}
 	printConfigAgentResult(next)
+	return nil
+}
+
+// probeConfigAgent 在写入 Claude 配置前完成 ACP initialize 握手。
+func probeConfigAgent(opts configAgentOptions, agentCfg config.AgentConfig) error {
+	if opts.Name != "claude" {
+		return nil
+	}
+	if opts.Probe == nil {
+		return fmt.Errorf("Claude ACP 能力探针未配置")
+	}
+	if err := opts.Probe(opts.Name, agentCfg); err != nil {
+		return fmt.Errorf("Claude ACP 能力预检失败: %w", err)
+	}
 	return nil
 }
 

@@ -26,47 +26,32 @@ var restartCmd = &cobra.Command{
 }
 
 type restartOps struct {
-	ensureSafe func(context.Context, bool) error
+	prepare    func(context.Context) (preparedStart, error)
+	ensureSafe func(context.Context, bool, *config.Config) error
 	isRunning  func() bool
 	stop       func() error
-	start      func() error
 	out        io.Writer
-}
-
-type configuredDaemonStartOps struct {
-	loadConfig func() (*config.Config, error)
-	start      func(*config.Config) error
 }
 
 func defaultRestartOps() restartOps {
 	return restartOps{
-		ensureSafe: ensureConfiguredRestartSafe,
+		prepare: func(ctx context.Context) (preparedStart, error) {
+			return prepareConfiguredStart(ctx, runBackgroundStart)
+		},
+		ensureSafe: ensureRestartSafeWithConfig,
 		isRunning:  weclawIsRunningForRestart,
 		stop:       stopAllWeclaw,
-		start:      startConfiguredDaemon,
 		out:        os.Stdout,
 	}
 }
 
-// startConfiguredDaemon 复用 start 命令的配置校验和登录前置流程。
-func startConfiguredDaemon() error {
-	return startConfiguredDaemonWithOps(configuredDaemonStartOps{
-		loadConfig: loadStartConfig,
-		start:      runBackgroundStart,
-	})
-}
-
-// startConfiguredDaemonWithOps 保证配置预检失败时不会派生后台子进程。
-func startConfiguredDaemonWithOps(ops configuredDaemonStartOps) error {
-	cfg, err := ops.loadConfig()
+// runRestart 在停止旧服务前固化已预检的配置和启动闭包。
+func runRestart(ctx context.Context, force bool, ops restartOps) error {
+	prepared, err := ops.prepare(ctx)
 	if err != nil {
 		return err
 	}
-	return ops.start(cfg)
-}
-
-func runRestart(ctx context.Context, force bool, ops restartOps) error {
-	if err := ops.ensureSafe(ctx, force); err != nil {
+	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
 		return err
 	}
 	if ops.isRunning() {
@@ -78,7 +63,19 @@ func runRestart(ctx context.Context, force bool, ops restartOps) error {
 		fmt.Fprintln(ops.out, "未检测到运行中的 WeClaw，直接启动...")
 	}
 	fmt.Fprintln(ops.out, "正在启动 WeClaw...")
-	return ops.start()
+	return prepared.run()
+}
+
+// ensureRestartSafeWithConfig 使用同一配置快照检查运行中任务，避免预检后再次读取磁盘。
+func ensureRestartSafeWithConfig(ctx context.Context, force bool, cfg *config.Config) error {
+	state, err := readRuntimeState()
+	if err != nil || !processExists(state.PID) {
+		return nil
+	}
+	return ensureRestartSafe(ctx, restartSafetyOptions{
+		apiAddr: cfg.APIAddr, apiToken: cfg.APIToken,
+		processExists: true, force: force,
+	})
 }
 
 // weclawIsRunningForRestart 只在 restart 入口判断是否需要执行停止阶段。

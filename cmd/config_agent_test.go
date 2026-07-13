@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ func TestRunConfigAgentMigratesLegacyClaude(t *testing.T) {
 	err := runConfigAgent(configAgentOptions{
 		Name: "claude", Command: "/bin/claude-agent-acp", LocalCommand: "/bin/claude",
 		LookPath: func(command string) (string, error) { return command, nil },
+		Probe:    func(string, config.AgentConfig) error { return nil },
 	})
 	if err != nil {
 		t.Fatalf("runConfigAgent error: %v", err)
@@ -41,6 +43,30 @@ func TestRunConfigAgentMigratesLegacyClaude(t *testing.T) {
 	}
 	if got.Progress == nil || got.Progress.Mode != "stream" || len(got.Aliases) != 1 || got.Aliases[0] != "cc" {
 		t.Fatalf("progress or aliases not preserved: %+v", got)
+	}
+}
+
+// TestRunConfigAgentRejectsBrokenClaudeAdapter 验证能力握手失败时不会覆盖原配置。
+func TestRunConfigAgentRejectsBrokenClaudeAdapter(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	original := `{"agents":{"claude":{"type":"cli","command":"claude"}}}`
+	path := filepath.Join(home, "config.json")
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("initialize 失败")
+	err := runConfigAgent(configAgentOptions{
+		Name: "claude", Command: "/bin/claude-agent-acp",
+		LookPath: func(command string) (string, error) { return command, nil },
+		Probe:    func(string, config.AgentConfig) error { return wantErr },
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runConfigAgent error=%v, want %v", err, wantErr)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != original {
+		t.Fatalf("config=%q error=%v, want unchanged", data, err)
 	}
 }
 
@@ -89,5 +115,15 @@ func TestResolveConfigAgentOptionsAllowsMissingAutoLocalCommand(t *testing.T) {
 func TestConfigAgentCommandRejectsPositionArguments(t *testing.T) {
 	if err := configAgentCmd.Args(configAgentCmd, []string{"codex"}); err == nil {
 		t.Fatal("position argument must be rejected")
+	}
+}
+
+// TestProbeConfigAgentBoundaries 验证非 Claude 跳过探针且 Claude 缺少探针时显式失败。
+func TestProbeConfigAgentBoundaries(t *testing.T) {
+	if err := probeConfigAgent(configAgentOptions{Name: "codex"}, config.AgentConfig{}); err != nil {
+		t.Fatalf("non-Claude probe error=%v", err)
+	}
+	if err := probeConfigAgent(configAgentOptions{Name: "claude"}, config.AgentConfig{}); err == nil {
+		t.Fatal("Claude 缺少能力探针时必须失败")
 	}
 }

@@ -24,6 +24,8 @@ curl -H "Authorization: Bearer $GITHUB_TOKEN" -sSL https://raw.githubusercontent
 weclaw start
 ```
 
+一键安装检测到本机已有 Claude CLI 时，会自动安装并配置 Claude ACP 适配器。默认固定使用 `@agentclientprotocol/claude-agent-acp@0.58.1`；可通过 `CLAUDE_ACP_VERSION` 指定其他版本，或通过 `WECLAW_SKIP_CLAUDE_ACP=1` 明确跳过。适配器安装不会自动使用 `sudo`，失败时会保留已安装的 WeClaw 并输出可直接执行的修复命令。
+
 就这么简单。首次启动时，WeClaw 会：
 
 1. 读取 `~/.weclaw/config.json`
@@ -668,6 +670,8 @@ weclaw update --restart
 # 查看当前版本
 weclaw version
 ```
+
+`weclaw update` 只更新 WeClaw 二进制，不会修改全局 npm 包。若 Claude ACP 依赖或配置不可用，普通更新会完成并给出修复提示；`weclaw update --restart` 和 `weclaw restart` 会在停止旧服务前完成预检，预检失败时旧服务保持运行。
 
 ## 开发
 
