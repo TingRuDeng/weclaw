@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
+
+const maxFeishuMessageAgeSeconds = int64(time.Duration(1<<63-1) / time.Second)
 
 // Config holds the application configuration.
 type Config struct {
@@ -43,6 +46,7 @@ type FeishuBotConfig struct {
 	DefaultAgent          string          `json:"default_agent,omitempty"`
 	Progress              *ProgressConfig `json:"progress,omitempty"`
 	RequireMentionInGroup *bool           `json:"require_mention_in_group,omitempty"`
+	MaxMessageAgeSeconds  *int64          `json:"max_message_age_seconds,omitempty"`
 }
 
 // EffectiveRequireMentionInGroup 返回飞书群聊 @ 触发规则，默认要求 @bot。
@@ -233,6 +237,12 @@ func validateFeishuPlatformConfig(platformCfg PlatformConfig) error {
 		}
 		if appID == "" {
 			return fmt.Errorf("platforms.feishu.bots[%q] app_id is required", name)
+		}
+		if bot.MaxMessageAgeSeconds != nil && *bot.MaxMessageAgeSeconds < 0 {
+			return fmt.Errorf("platforms.feishu.bots[%q] max_message_age_seconds must be >= 0", name)
+		}
+		if bot.MaxMessageAgeSeconds != nil && *bot.MaxMessageAgeSeconds > maxFeishuMessageAgeSeconds {
+			return fmt.Errorf("platforms.feishu.bots[%q] max_message_age_seconds must be <= %d", name, maxFeishuMessageAgeSeconds)
 		}
 		if _, ok := seenNames[name]; ok {
 			return fmt.Errorf("duplicate feishu bot name %q", name)

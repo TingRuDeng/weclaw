@@ -31,6 +31,9 @@ func (a *Adapter) handleMessageReadEvent(_ context.Context, _ *larkim.P2MessageR
 
 // handleMessageEvent 解析飞书消息并分发到业务层。
 func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1, dispatch platform.DispatchFunc) error {
+	if a.shouldIgnoreStaleMessage(event) {
+		return nil
+	}
 	msg, resources, ok := a.toIncomingEnvelopeFromMessage(event)
 	if !ok {
 		log.Printf("[feishu] ignored non-dispatchable message event")

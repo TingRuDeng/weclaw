@@ -96,6 +96,7 @@ func upsertFeishuBotConfig(cfg *config.Config, opts feishuBootstrapOptions) {
 
 // mergeFeishuBootstrapBot 保留本次 bootstrap 未显式覆盖的既有 bot 配置。
 func mergeFeishuBootstrapBot(existing config.FeishuBotConfig, next config.FeishuBotConfig, opts feishuBootstrapOptions) config.FeishuBotConfig {
+	next.MaxMessageAgeSeconds = existing.MaxMessageAgeSeconds
 	if len(opts.AllowedUsers) == 0 {
 		next.AllowedUsers = existing.AllowedUsers
 	}

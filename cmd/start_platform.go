@@ -68,6 +68,7 @@ func buildFeishuRegistryEntry(bot config.FeishuBotConfig) (platform.RegistryEntr
 	}
 	log.Printf("[platform] registering feishu bot name=%s display=%s account=%s", bot.Name, config.FeishuBotDisplayName(bot), bot.AppID)
 	adapter := feishuplatform.NewAdapter(creds)
+	adapter.SetMaxMessageAge(resolveFeishuMaxMessageAge(bot))
 	adapter.SetDedupStateFile(feishuDedupStateFile(creds.AppID))
 	adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
 		RequireMentionInGroup: bot.EffectiveRequireMentionInGroup(),
@@ -76,6 +77,14 @@ func buildFeishuRegistryEntry(bot config.FeishuBotConfig) (platform.RegistryEntr
 		Platform: adapter,
 		Access:   platform.NewAccessControl(bot.AllowedUsers),
 	}, nil
+}
+
+// resolveFeishuMaxMessageAge 返回单个飞书机器人使用的消息时效窗口。
+func resolveFeishuMaxMessageAge(bot config.FeishuBotConfig) time.Duration {
+	if bot.MaxMessageAgeSeconds == nil {
+		return feishuplatform.DefaultMessageMaxAge
+	}
+	return time.Duration(*bot.MaxMessageAgeSeconds) * time.Second
 }
 
 func wechatEnabled(cfg *config.Config) bool {
