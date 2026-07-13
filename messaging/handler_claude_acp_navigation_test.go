@@ -3,6 +3,8 @@ package messaging
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -116,6 +118,74 @@ func TestClaudeSwitchSaveFailureRollsBackRuntime(t *testing.T) {
 	}
 	if len(fake.useCalls) != 2 || fake.useCalls[0] != "session-new" || fake.useCalls[1] != "session-old" {
 		t.Fatalf("useCalls=%#v，期望恢复旧 ACP runtime", fake.useCalls)
+	}
+}
+
+func TestClaudeNewFailureRestoresPreviousRuntime(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	if err := h.ensureClaudeSessions().commitSelection(key, workspace, "session-old"); err != nil {
+		t.Fatal(err)
+	}
+	fake.sessionID = "session-old"
+	fake.resetClears = true
+	fake.resetErr = errors.New("session/new failed")
+
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new")
+	binding := h.ensureClaudeSessions().binding(key)
+	if !strings.Contains(text, "session/new failed") || binding.SessionID != "session-old" {
+		t.Fatalf("text=%q binding=%+v", text, binding)
+	}
+	if fake.useSessionID != "session-old" || fake.sessionID != "session-old" {
+		t.Fatalf("use=%q runtime=%q，期望恢复旧 session", fake.useSessionID, fake.sessionID)
+	}
+}
+
+func TestClaudeSwitchAgentSelectionSaveFailureRollsBack(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	if err := h.ensureClaudeSessions().commitSelection(key, workspace, "session-old"); err != nil {
+		t.Fatal(err)
+	}
+	fake.sessionID = "session-old"
+	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-new", Cwd: workspace}}
+	statePath := filepath.Join(t.TempDir(), "agent-sessions.json")
+	if err := h.SetAgentSessionFile(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ensureAgentSessions().Set("user-1", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	invalidParent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(invalidParent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.ensureAgentSessions().filePath = filepath.Join(invalidParent, "state.json")
+
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 0")
+	binding := h.ensureClaudeSessions().binding(key)
+	selected, _ := h.ensureAgentSessions().Get("user-1")
+	if !strings.Contains(text, "失败") || binding.SessionID != "session-old" || selected != "codex" {
+		t.Fatalf("text=%q binding=%+v selected=%q", text, binding, selected)
+	}
+	if fake.useSessionID != "session-old" {
+		t.Fatalf("runtime=%q，期望恢复旧 session", fake.useSessionID)
+	}
+}
+
+func TestClaudeStatusShowsSessionConfigAndRecoveryState(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	if err := h.ensureClaudeSessions().commitSelection(key, workspace, "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	fake.sessionConfig = agent.ClaudeSessionConfig{Model: "opus", Effort: "high"}
+
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc status")
+	for _, want := range []string{"session-1", "恢复状态: 已就绪", "模型: opus", "推理强度: high"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text=%q，缺少 %q", text, want)
+		}
 	}
 }
 

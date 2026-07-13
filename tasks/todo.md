@@ -25,8 +25,8 @@
 
 ## 当前状态
 
-任务 5 已完成实现与本地审查；下一步执行任务 6“统一后台任务、队列与停止”。
+任务 5 已完成实现与独立复审；下一步执行任务 6“统一后台任务、队列与停止”。
 
 ## Review 小结
 
-任务 1 至 5 已验证。任务 5 将 Claude 会话目录收敛为 ACP `session/list`，实现显式选择/新建、重启恢复状态机、v1 确定性迁移、跨 ACP runtime/状态文件/窗口 Agent 的补偿事务，并删除本地 transcript 扫描。全仓测试、Vet、Staticcheck、构建和 `git diff --check` 均通过；独立审查因子进程线程额度已满未能启动，最终 Review Gate 将统一补做。
+任务 1 至 5 已验证。任务 5 将 Claude 会话目录收敛为 ACP `session/list`，实现显式选择/新建、重启恢复状态机、v1 确定性迁移、跨 ACP runtime/状态文件/窗口 Agent 的补偿事务，并删除本地 transcript 扫描。独立规格审查发现 `/cc new` 创建失败后的 runtime 恢复缺口，修复后复审 PASS；全仓测试、Vet、Staticcheck、构建和 `git diff --check` 均通过。

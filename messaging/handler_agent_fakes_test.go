@@ -140,8 +140,21 @@ type fakeClaudeSessionAgent struct {
 	useCalls         []string
 	clearCalledWith  string
 	useErr           error
+	resetErr         error
+	resetClears      bool
 	sessionConfig    agent.ClaudeSessionConfig
 	conversationCwds map[string]string
+}
+
+func (f *fakeClaudeSessionAgent) ResetSession(_ context.Context, conversationID string) (string, error) {
+	f.fakeAgent.mu.Lock()
+	f.fakeAgent.resetConversation = conversationID
+	sessionID := f.fakeAgent.resetSessionID
+	f.fakeAgent.mu.Unlock()
+	if f.resetClears {
+		f.sessionID = ""
+	}
+	return sessionID, f.resetErr
 }
 
 func (f *fakeClaudeSessionAgent) ListClaudeSessions(context.Context) ([]agent.ClaudeSession, error) {

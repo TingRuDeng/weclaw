@@ -80,6 +80,7 @@ func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent
 	lines := []string{
 		"已切换 Claude 会话。",
 		"工作空间: " + shortCodexWorkspaceName(selected.Cwd),
+		"session: " + selected.ID,
 		"恢复状态: 已就绪",
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, selected.Cwd)
@@ -120,11 +121,14 @@ func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	unlock := h.lockAgentExecution("claude-binding:" + route.BindingKey)
 	defer unlock()
+	previous := h.ensureClaudeSessions().binding(route.BindingKey)
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
 	h.bindConversationCwd(route.Agent, conversationID, route.WorkspaceRoot)
 	sessionID, err := route.Agent.ResetSession(route.Context, conversationID)
 	if err != nil || strings.TrimSpace(sessionID) == "" {
-		return fmt.Sprintf("新建 Claude 会话失败: %v", firstError(err, fmt.Errorf("session/new 未返回 sessionId")))
+		createErr := firstError(err, fmt.Errorf("session/new 未返回 sessionId"))
+		rollbackErr := h.rollbackClaudeRuntime(route, conversationID, previous)
+		return fmt.Sprintf("新建 Claude 会话失败: %v", errors.Join(createErr, rollbackErr))
 	}
 	selected := agent.ClaudeSession{ID: sessionID, Cwd: route.WorkspaceRoot}
 	if err := h.commitNewClaudeSelection(route, conversationID, selected); err != nil {
