@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	modelSettingModel     = "model"
-	modelSettingReasoning = "reasoning"
+	modelSettingModel            = "model"
+	modelSettingReasoning        = "reasoning"
+	modelSettingAgentMetadataKey = "model_setting_agent"
 )
 
 type modelAgentRoute struct {
@@ -34,6 +35,10 @@ func isModelSettingCommand(command string) bool {
 // handleModelSettingPlatformCommand 统一模型设置文本命令和飞书卡片入口。
 func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req platformCommandRequest) bool {
 	msg := req.Message
+	if !h.modelSettingCardAgentMatches(req) {
+		sendPlatformText(ctx, req.Reply, msg.UserID, "该模型设置卡片已失效，请重新发送 /model 或 /reasoning。")
+		return true
+	}
 	setting, prefix := modelSettingModel, "/model"
 	if strings.HasPrefix(req.Trimmed, "/reasoning") {
 		setting, prefix = modelSettingReasoning, "/reasoning"
@@ -56,6 +61,20 @@ func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req pla
 	}
 	sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	return true
+}
+
+// modelSettingCardAgentMatches 拒绝缺少目标或已切换 Agent 的旧模型卡片。
+func (h *Handler) modelSettingCardAgentMatches(req platformCommandRequest) bool {
+	command := req.Message.RawCommand
+	if command == nil || command.Action != "choice" {
+		return true
+	}
+	expected := strings.TrimSpace(command.Value[modelSettingAgentMetadataKey])
+	if expected == "" {
+		return false
+	}
+	current := h.defaultAgentNameForRoute(req.RouteUserID, req.Message.Platform, req.Message.AccountID)
+	return expected == current
 }
 
 // handleModelCommand 统一的 /model 入口：查看/切换当前会话 Agent 的模型。

@@ -38,6 +38,7 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 		Panel:       callbackValueString(value, "approval_panel") == "1",
 		Conv:        callbackValueString(value, "conv"),
 		SessionKey:  callbackValueString(value, feishuSessionMetadataKey),
+		AgentName:   callbackValueString(value, modelSettingAgentKey),
 		UserID:      strings.TrimSpace(event.Event.Operator.OpenID),
 		UserAliases: cardActionUserAliases(event.Event.Operator),
 	}

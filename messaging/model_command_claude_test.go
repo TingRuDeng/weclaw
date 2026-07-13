@@ -78,7 +78,7 @@ func TestFeishuClaudeModelAndReasoningCommandsUseChoiceCards(t *testing.T) {
 	if !strings.Contains(modelCard.Prompt, "Claude") || modelCard.Choices[0].ID != "/model claude-sonnet-5" || !strings.Contains(modelCard.Choices[0].Label, "当前") {
 		t.Fatalf("model card=%#v，期望 Claude 当前模型和切换命令", modelCard)
 	}
-	assertModelCardSessionMetadata(t, modelCard.Choices, sessionKey)
+	assertModelCardMetadata(t, modelCard.Choices, sessionKey, "claude")
 
 	reasoningReply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/reasoning", "claude-reasoning-card"})
 	if len(reasoningReply.Choices) != 1 {
@@ -94,17 +94,70 @@ func TestFeishuClaudeModelAndReasoningCommandsUseChoiceCards(t *testing.T) {
 			t.Fatalf("choices[%d].ID=%q，期望 %q", index, choices[index].ID, want)
 		}
 	}
-	assertModelCardSessionMetadata(t, choices, sessionKey)
+	assertModelCardMetadata(t, choices, sessionKey, "claude")
 }
 
-// assertModelCardSessionMetadata 验证卡片回调仍绑定生成卡片时的飞书会话。
-func assertModelCardSessionMetadata(t *testing.T, choices []platform.Choice, sessionKey string) {
+// assertModelCardMetadata 验证卡片回调仍绑定生成卡片时的飞书会话和 Agent。
+func assertModelCardMetadata(t *testing.T, choices []platform.Choice, sessionKey string, agentName string) {
 	t.Helper()
 	for _, choice := range choices {
 		if choice.Metadata[feishuSessionMetadataKey] != sessionKey {
 			t.Fatalf("choice=%#v，期望保留飞书会话键 %q", choice, sessionKey)
 		}
+		if choice.Metadata[modelSettingAgentMetadataKey] != agentName {
+			t.Fatalf("choice=%#v，期望保留目标 Agent %q", choice, agentName)
+		}
 	}
+}
+
+// TestFeishuModelCardValidatesOriginalAgent 验证模型卡只操作生成时的当前 Agent。
+func TestFeishuModelCardValidatesOriginalAgent(t *testing.T) {
+	tests := []struct {
+		name, expectedAgent, currentAgent string
+		wantStale                         bool
+	}{
+		{name: "当前 Agent 未变化", expectedAgent: "claude", currentAgent: "claude"},
+		{name: "旧卡缺少 Agent", currentAgent: "claude", wantStale: true},
+		{name: "当前 Agent 已切换", expectedAgent: "claude", currentAgent: "codex", wantStale: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, codex, claude, sessionKey := newModelCardGuardHandler(t, tt.currentAgent)
+			reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+			h.HandleMessage(context.Background(), platform.IncomingMessage{
+				Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "model-card-" + tt.name,
+				RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
+					"choice": "/reasoning high", modelSettingAgentMetadataKey: tt.expectedAgent,
+				}},
+				Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
+			}, reply)
+			if tt.wantStale {
+				if !containsText(reply.Texts, "卡片已失效") || codex.effort != "" || claude.effort != "medium" {
+					t.Fatalf("texts=%#v codex=%q claude=%q，期望拒绝旧卡", reply.Texts, codex.effort, claude.effort)
+				}
+				return
+			}
+			if claude.effort != "high" || !containsText(reply.Texts, "已将 claude 推理强度切换为") {
+				t.Fatalf("texts=%#v effort=%q，期望更新当前 Claude", reply.Texts, claude.effort)
+			}
+		})
+	}
+}
+
+// newModelCardGuardHandler 构造可切换当前 Agent 的模型卡片测试环境。
+func newModelCardGuardHandler(t *testing.T, currentAgent string) (*Handler, *fakeCodexModelAgent, *fakeClaudeModelAgent, string) {
+	t.Helper()
+	codex := &fakeCodexModelAgent{fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp"}}, model: "gpt-5"}
+	claude := &fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp"}},
+		model:     "sonnet", effort: "medium", models: []agent.ClaudeModel{{ID: "sonnet", EffortOptions: []string{"medium", "high"}}},
+	}
+	h := newClaudeModelHandler(codex, claude)
+	sessionKey := "feishu:tenant:dm:model-card:user-1"
+	if err := h.ensureAgentSessions().Set(sessionKey, currentAgent); err != nil {
+		t.Fatal(err)
+	}
+	return h, codex, claude, sessionKey
 }
 
 type fakeCurrentClaudeModelAgent struct {

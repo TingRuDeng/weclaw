@@ -279,7 +279,7 @@ func TestExpiredApprovalActionDoesNotStartNewTask(t *testing.T) {
 	if ag.wasChatCalled() {
 		t.Fatalf("expired approval action must not start agent task, got message %q", ag.lastChatMessage())
 	}
-	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "授权请求已过期") {
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "交互已过期") {
 		t.Fatalf("reply=%#v, want stale approval explanation", reply.Texts)
 	}
 }

@@ -19,6 +19,7 @@ const (
 	approvalStatusArchived = "archived"
 	approvalPromptHead     = "Codex 请求执行敏感操作，请确认："
 	approvalSummaryMaxRune = 160
+	modelSettingAgentKey   = "model_setting_agent"
 )
 
 type parsedCardAction struct {
@@ -33,6 +34,7 @@ type parsedCardAction struct {
 	Panel       bool
 	Conv        string
 	SessionKey  string
+	AgentName   string
 	UserID      string
 	UserAliases []string
 	ChatID      string
@@ -126,6 +128,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		}
 		if sessionKey := strings.TrimSpace(choice.Metadata[feishuSessionMetadataKey]); sessionKey != "" {
 			value[feishuSessionMetadataKey] = sessionKey
+		}
+		if agentName := strings.TrimSpace(choice.Metadata[modelSettingAgentKey]); agentName != "" {
+			value[modelSettingAgentKey] = agentName
 		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",

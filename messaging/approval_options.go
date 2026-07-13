@@ -11,7 +11,7 @@ import (
 )
 
 func staleApprovalReply() string {
-	return "这次授权请求已过期或原任务已结束，没有再发送给 Codex。\n\n请重新发起任务。"
+	return "这次交互已过期或原任务已结束，没有再发送给 Agent。\n\n请重新发起任务。"
 }
 
 func approvalOptionSet(options []agent.ApprovalOption) map[string]bool {

@@ -121,10 +121,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		MessageID:   action.MessageID + ":card:" + action.Action + ":" + action.Choice,
 		RawCommand: &platform.CardAction{
 			Action: action.Action,
-			Value: map[string]string{
-				"choice": action.Choice,
-				"conv":   action.Conv,
-			},
+			Value:  regularCardActionValue(action),
 		},
 		Metadata: metadata,
 	}
@@ -133,6 +130,21 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		Toast: &callback.Toast{Type: "success", Content: "已收到"},
 		Card:  buildSelectedChoiceCard(action),
 	}, nil
+}
+
+// regularCardActionValue 保留普通选择卡片的业务关联字段，避免并发问答失去精确目标。
+func regularCardActionValue(action parsedCardAction) map[string]string {
+	value := map[string]string{"choice": action.Choice, "conv": action.Conv}
+	if action.Approval != "" {
+		value["approval_key"] = action.Approval
+	}
+	if action.TaskCard != "" {
+		value["task_card_id"] = action.TaskCard
+	}
+	if action.AgentName != "" {
+		value[modelSettingAgentKey] = action.AgentName
+	}
+	return value
 }
 
 func (a *Adapter) newScopedReplier(msg platform.IncomingMessage) platform.Replier {

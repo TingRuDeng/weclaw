@@ -47,7 +47,7 @@ func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platfor
 	)
 
 	mode := "default"
-	if h.isYoloMode(userID) {
+	if h.isYoloMode(routeUserID) {
 		mode = "yolo"
 	}
 	rateText := "off"

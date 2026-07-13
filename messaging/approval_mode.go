@@ -6,42 +6,47 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-// handleModeCommand 查看或切换当前用户的会话内审批模式。
-func (h *Handler) handleModeCommand(userID string, trimmed string) string {
+// handleModeCommand 查看或切换当前平台会话的审批模式。
+func (h *Handler) handleModeCommand(modeKey string, trimmed string) string {
+	return h.handleModeCommandForActor(modeKey, modeKey, trimmed)
+}
+
+// handleModeCommandForActor 分离会话状态键和审计操作者，避免群聊路由覆盖真实身份。
+func (h *Handler) handleModeCommandForActor(modeKey string, actorUserID string, trimmed string) string {
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {
-		if h.isYoloMode(userID) {
-			return "当前会话审批模式：yolo（本用户自动同意 Codex 审批请求）。\n发送 /mode default 恢复按钮确认。"
+		if h.isYoloMode(modeKey) {
+			return "当前会话审批模式：yolo（当前会话自动同意 Codex 审批请求）。\n发送 /mode default 恢复按钮确认。"
 		}
-		return "当前会话审批模式：default（Codex 审批请求会弹按钮确认）。\n发送 /mode yolo 改为本用户自动同意。"
+		return "当前会话审批模式：default（Codex 审批请求会弹按钮确认）。\n发送 /mode yolo 改为当前会话自动同意。"
 	}
 	switch strings.ToLower(strings.TrimSpace(fields[1])) {
 	case "yolo":
-		h.setYoloMode(userID, true)
-		h.auditRecord(auditEntry{User: userID, Action: "mode_yolo_enabled"})
-		return "已切换为 yolo 模式：本用户会自动同意 Codex 审批请求。\n⚠️ 该模式不改变全局 sandbox，只跳过本会话按钮确认。发送 /mode default 可恢复确认。"
+		h.setYoloMode(modeKey, true)
+		h.auditRecord(auditEntry{User: actorUserID, Action: "mode_yolo_enabled"})
+		return "已切换为 yolo 模式：当前会话会自动同意 Codex 审批请求。\n⚠️ 该模式不改变全局 sandbox，只跳过本会话按钮确认。发送 /mode default 可恢复确认。"
 	case "default":
-		h.setYoloMode(userID, false)
+		h.setYoloMode(modeKey, false)
 		return "已切换为 default 模式：Codex 审批请求会弹按钮确认。"
 	default:
-		return "用法：/mode 查看当前会话审批模式；/mode yolo 本用户自动同意；/mode default 按钮确认。"
+		return "用法：/mode 查看当前会话审批模式；/mode yolo 当前会话自动同意；/mode default 按钮确认。"
 	}
 }
 
-func (h *Handler) setYoloMode(userID string, on bool) {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
+func (h *Handler) setYoloMode(modeKey string, on bool) {
+	modeKey = strings.TrimSpace(modeKey)
+	if modeKey == "" {
 		return
 	}
 	if on {
-		h.yoloUsers.Store(userID, struct{}{})
+		h.yoloUsers.Store(modeKey, struct{}{})
 		return
 	}
-	h.yoloUsers.Delete(userID)
+	h.yoloUsers.Delete(modeKey)
 }
 
-func (h *Handler) isYoloMode(userID string) bool {
-	_, ok := h.yoloUsers.Load(strings.TrimSpace(userID))
+func (h *Handler) isYoloMode(modeKey string) bool {
+	_, ok := h.yoloUsers.Load(strings.TrimSpace(modeKey))
 	return ok
 }
 

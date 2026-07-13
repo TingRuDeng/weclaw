@@ -43,6 +43,37 @@ func TestModeYoloIsolatedPerUser(t *testing.T) {
 	}
 }
 
+// TestModeYoloIsolatedPerFeishuSession 验证同一用户的不同飞书窗口互不共享审批模式。
+func TestModeYoloIsolatedPerFeishuSession(t *testing.T) {
+	h := NewHandler(nil, nil)
+	routeA := "feishu:tenant:dm:chat-a:ou_user"
+	routeB := "feishu:tenant:group:chat-b"
+	h.HandleMessage(context.Background(), modeCommandMessage("mode-a", routeA, "/mode yolo"), platformtest.NewReplier(platform.Capabilities{Text: true}))
+	replyB := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), modeCommandMessage("mode-b", routeB, "/mode"), replyB)
+
+	if !h.isYoloMode(routeA) || h.isYoloMode(routeB) {
+		t.Fatalf("routeA=%t routeB=%t，期望审批模式按飞书窗口隔离", h.isYoloMode(routeA), h.isYoloMode(routeB))
+	}
+	if !containsText(replyB.Texts, "default") {
+		t.Fatalf("窗口 B 回复=%#v，期望保持 default", replyB.Texts)
+	}
+	if !strings.Contains(h.buildStatusForRoute("ou_user", routeA, platform.PlatformFeishu, "cli_main"), "mode: yolo") {
+		t.Fatal("窗口 A 状态应显示 yolo")
+	}
+	if !strings.Contains(h.buildStatusForRoute("ou_user", routeB, platform.PlatformFeishu, "cli_main"), "mode: default") {
+		t.Fatal("窗口 B 状态应显示 default")
+	}
+}
+
+// modeCommandMessage 构造指定飞书窗口的审批模式命令。
+func modeCommandMessage(messageID string, route string, text string) platform.IncomingMessage {
+	return platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: messageID, Text: text,
+		Metadata: map[string]string{feishuSessionMetadataKey: route},
+	}
+}
+
 func TestApprovalHandlerYoloAutoApproves(t *testing.T) {
 	h := NewHandler(nil, nil)
 	user := "wechat:u1"
@@ -63,6 +94,30 @@ func TestApprovalHandlerYoloAutoApproves(t *testing.T) {
 	}
 	if len(denyReply.Choices) != 0 {
 		t.Fatalf("yolo mode must not prompt buttons, got %d AskChoices calls", len(denyReply.Choices))
+	}
+}
+
+// TestApprovalHandlerReadsRouteMode 验证审批只读取任务所属窗口的模式。
+func TestApprovalHandlerReadsRouteMode(t *testing.T) {
+	h := NewHandler(nil, nil)
+	routeA := "feishu:tenant:dm:chat-a:ou_user"
+	routeB := "feishu:tenant:group:chat-b"
+	h.setYoloMode(routeA, true)
+	options := []agent.ApprovalOption{{ID: "deny-1", Kind: "deny"}, {ID: "allow-1", Kind: "allow"}}
+
+	replyA := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	ctxA, cancelA := context.WithTimeout(context.Background(), taskQueueProbeDelay)
+	defer cancelA()
+	decision, err := h.approvalHandlerForUser("ou_user", routeA, replyA)(ctxA, agent.ApprovalRequest{Options: options})
+	if err != nil || decision != "allow-1" || len(replyA.Choices) != 0 {
+		t.Fatalf("窗口 A decision=%q err=%v choices=%#v，期望自动同意", decision, err, replyA.Choices)
+	}
+	replyB := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = h.approvalHandlerForUser("ou_user", routeB, replyB)(ctx, agent.ApprovalRequest{Options: options})
+	if len(replyB.Choices) != 1 {
+		t.Fatalf("窗口 B choices=%#v，期望继续按钮确认", replyB.Choices)
 	}
 }
 

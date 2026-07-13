@@ -32,7 +32,7 @@ func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, repl
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
-		if h.isYoloMode(userID) {
+		if h.isYoloMode(routeUserID) {
 			decision := autoApproveApprovalOption(req.Options)
 			log.Printf("[handler] yolo mode auto-approving sensitive operation for %s -> %q", userID, decision)
 			h.auditRecord(auditEntry{User: userID, Action: "approval_auto_yolo", Summary: decision})

@@ -91,9 +91,12 @@ func TestBuildChoiceCardUsesTaskCardIDMetadata(t *testing.T) {
 
 func TestBuildChoiceCardUsesFeishuSessionMetadata(t *testing.T) {
 	cardJSON, err := buildChoiceCard("请选择工作空间", []platform.Choice{{
-		ID:       "/cx cd 0",
-		Label:    "weclaw",
-		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
+		ID:    "/cx cd 0",
+		Label: "weclaw",
+		Metadata: map[string]string{
+			"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root",
+			modelSettingAgentKey: "claude",
+		},
 	}}, "feishu:ou_user")
 	if err != nil {
 		t.Fatalf("buildChoiceCard error: %v", err)
@@ -104,6 +107,9 @@ func TestBuildChoiceCardUsesFeishuSessionMetadata(t *testing.T) {
 	value := elements[1].(map[string]any)["value"].(map[string]any)
 	if value["feishu_session_key"] != "feishu:tenant_1:group:oc_1:om_root" {
 		t.Fatalf("button value=%#v, want feishu session metadata", value)
+	}
+	if value[modelSettingAgentKey] != "claude" {
+		t.Fatalf("button value=%#v, want model setting agent", value)
 	}
 }
 
@@ -132,6 +138,7 @@ func TestParseCardAction(t *testing.T) {
 				"choice":             "2",
 				"conv":               "feishu:ou_user",
 				"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root",
+				modelSettingAgentKey: "claude",
 			}},
 		},
 	}
@@ -146,6 +153,9 @@ func TestParseCardAction(t *testing.T) {
 	}
 	if action.SessionKey != "feishu:tenant_1:group:oc_1:om_root" {
 		t.Fatalf("action=%#v, want feishu session key", action)
+	}
+	if action.AgentName != "claude" {
+		t.Fatalf("action=%#v, want model setting agent", action)
 	}
 	if action.UserID != "ou_user" || action.ChatID != "oc_chat" || action.MessageID != "om_msg" {
 		t.Fatalf("action=%#v, want operator and context ids", action)
