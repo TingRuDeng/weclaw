@@ -20,13 +20,13 @@
 - [x] P5 并行：实现 ACP session、配置、进度、配置迁移与 Claude 会话导航。
 - [x] P6 串行：统一 Claude 后台任务、队列与停止语义。
 - [x] P7 串行：整合并删除 Claude CLI 远程后端死路径。
-- [ ] P8 并行验证（进行中）：同步文档，执行定向测试、全量测试、race、vet、staticcheck、构建和文档门禁。
-- [ ] P9 串行：执行 `review-gate` 并记录 Review 小结。
+- [x] P8 并行验证：同步文档，执行定向测试、全量测试、race、vet、staticcheck、构建和文档门禁。
+- [x] P9 串行：执行 `review-gate` 并记录 Review 小结。
 
 ## 当前状态
 
-任务 7 已完成实现与独立复审；下一步执行任务 8“文档、全量验证与 Review Gate”。
+任务 1 至 9 已完成，当前进入最终提交前核验。
 
 ## Review 小结
 
-任务 1 至 7 已验证。任务 7 将 `/cc cli` 收敛为基于 `local_command` 的空闲会话交接，增加活动任务、session ID、工作空间权限和原生命令参数校验，并删除 Claude CLI 远程对话、会话与模型实现。独立复审发现绑定快照和任务启动存在 TOCTOU，统一使用 Claude 绑定锁并补并发测试后复审 PASS；全仓测试、Race、Vet、Staticcheck、构建和 `git diff --check` 均通过。
+Review Gate 终态为 finished，结论通过。此前发现的当前 session 配置未接入、活动任务绑定漂移、Claude 身份命令推断和复杂度阻塞均已修复；`/cc switch`、`/cc cd`、`/cc new`、`/cwd` 与任务启动统一使用 Claude 绑定锁。定向测试、全仓测试、Race、Vet、Staticcheck、构建、文档校验和 `git diff --check` 全部通过，Claude ACP 核心语句覆盖率为 86.1%。剩余风险仅为飞书、微信和本地 Terminal 的实机环境差异，不存在已知代码阻塞。

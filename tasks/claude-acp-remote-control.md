@@ -196,11 +196,13 @@ type ClaudeSessionConfigAgent interface {
 **文件：**
 - 修改：`README_CN.md`、`README.md`、`docs/AI_CONTEXT.md`、`tasks/todo.md`
 
-- [ ] 同步 ACP-only 配置、`local_command`、`/cc` 语义和独立 CLI 活跃任务边界。
-- [ ] 执行验证矩阵中的全部命令并记录结果。
-- [ ] 使用 `review-gate` 检查 Spec 覆盖、安全、复杂度、并发、状态一致性和剩余风险。
-- [ ] 在本文件和 `tasks/todo.md` 写入 Review 小结。
-- [ ] 提交：`文档：同步 Claude ACP 远程接管说明`。
+- [x] 同步 ACP-only 配置、`local_command`、`/cc` 语义和独立 CLI 活跃任务边界。
+- [x] 执行验证矩阵中的全部命令并记录结果。
+- [x] 使用 `review-gate` 检查 Spec 覆盖、安全、复杂度、并发、状态一致性和剩余风险。
+- [x] 在本文件和 `tasks/todo.md` 写入 Review 小结。
+- [x] 提交：`文档：同步 Claude ACP 远程接管说明`。
+
+Review Gate 终态为 finished，结论通过。当前 Claude session 的模型和推理强度通过 ACP 配置接口立即更新；活动任务期间禁止 session 或 workspace 漂移；Claude 身份仅由配置名称或 ACP `agentInfo` 判定。验证矩阵全部通过，Claude ACP 核心语句覆盖率为 86.1%；剩余风险为飞书、微信和本地 Terminal 的实机环境差异。
 
 ## 5. 并行与写冲突
 
@@ -232,6 +234,5 @@ git diff --check
 
 ## 7. HARD-GATE
 
-- 当前仅完成设计与规划，未修改实现代码。
-- 用户再次明确批准后，才允许创建执行分支/worktree 并按任务 1 开始 TDD。
-- 执行中若协议能力、上游响应或现有状态模型与本 Spec 不一致，必须先更新本文件并重新确认。
+- 用户已明确批准执行，任务 1 至 8 已按本 Spec 完成。
+- 执行中发现的 ACP 身份、绑定并发和当前 session 配置偏差已同步回本 Spec，并通过 Review Gate。

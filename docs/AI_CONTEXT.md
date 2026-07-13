@@ -60,7 +60,7 @@ ai_summary:
 
 - 修改启动、停止、更新、远程管理命令或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`messaging/admin_commands.go`、`scripts/release.sh`。
 - 修改消息命令或任务状态：先读 `messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`。
-- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/cli_agent.go`、`messaging/codex_sessions.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`。
+- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/acp_sessions.go`、`agent/acp_session_catalog.go`、`messaging/codex_sessions.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`、`messaging/agent_task.go`。
 - 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
 - 修改微信体验：先读 `wechat/`、`ilink/`、`messaging/progress.go`。
 - 修改配置：先读 `config/config.go`、`config/detect.go`、`web/view.go` 和相关测试。
@@ -82,6 +82,9 @@ ai_summary:
 - 飞书推荐菜单以 Codex / Claude 高频命令为主，默认不把 `/cx app`、`/cc cli`、`/cancel` 放到常用菜单；普通计划确认仍回复“确认”，Codex 运行中的暂存消息未被 `/guide`、`/cancel` 或 `/stop` 消费时会在上一任务结束后自动执行。
 - 命令入口只保留当前主路径：远程更新使用 `/update`，Codex 会话使用 `/cx ...`，Claude 会话使用 `/cc ...`；不要重新引入 `/info`、`/clear`、`/upgrade`、`/codex ...` 会话入口、`/claude ...` 会话入口、`/cx open-app` 或 `/cx attach app` 这类兼容路由。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
+- Claude 远程后端是 ACP-only；`session/list` 是目录事实源，`claudeSessionStore` 保存 route 绑定，`ACPAgent.sessions` 只保存可重建运行态。禁止重新引入 Claude CLI 聊天后端或 `~/.claude` transcript 扫描。
+- `/cc cli` 只允许通过 `AgentInfo.LocalCommand` 交接空闲 session；绑定切换、任务登记和本地交接必须共用 `claudeBindingExecutionKey`，避免 workspace/session 快照与任务启动发生竞态。
+- Claude ACP 复用通用后台任务队列：每个活动任务最多暂存一条消息，失败后仍自动续跑；`/cancel` 撤回暂存，`/stop` 按当前窗口 Agent 停止，`/guide` 对 Claude 明确不支持。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。
 - 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。
 - 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。飞书管理员身份判断必须同时检查 `open_id/user_id/union_id`。
