@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-13 Agent 会话切换必须同步窗口 Agent
+
+- 触发条件：用户在飞书或微信通过 `/cc switch`、`/cc new`、`/cx switch` 或 `/cx new` 显式选择某个 Agent 的会话。
+- 规则：会话切换成功后必须同时更新 route 级 `agentSessionStore`；只更新 Claude/Codex 自己的 session store，会让下一条普通消息继续按账号默认 Agent 路由。
+- 失败边界：目标会话恢复或创建失败时不得覆盖窗口原有 Agent 绑定；窗口 Agent 只能在目标会话操作成功后持久化。
+- 测试要求：回归测试必须让平台账号默认 Agent 与目标 Agent 不同，并验证下一条普通消息实际进入目标 Agent。
+- 来源：2026-07-13 用户反馈飞书切换到 Claude 会话后，普通消息仍发送给 Codex。
+
 ## 2026-07-12 飞书即时任务卡片终态
 
 - 触发条件：飞书需要在 Agent 首个进度事件前给出可见反馈，并把最终回答收敛到同一张卡片。

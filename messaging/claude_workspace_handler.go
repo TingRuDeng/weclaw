@@ -42,6 +42,9 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 	}
 	h.ensureClaudeSessions().setSession(route.BindingKey, workspaceRoot, sessionID)
 	h.ensureClaudeSessions().setActiveWorkspace(route.BindingKey, workspaceRoot)
+	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
+		return fmt.Sprintf("切换 Claude 会话失败: 保存当前窗口 Agent: %v", err)
+	}
 	lines := []string{"已切换 Claude 会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
 	lines = append(lines, renderSessionModelStatus(h.claudeSessionModelStatus(sessionID))...)
 	return wechatCommandText(lines...)
@@ -111,6 +114,9 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	}
 	h.ensureClaudeSessions().setPendingNew(route.BindingKey, route.WorkspaceRoot)
 	h.ensureClaudeSessions().setActiveWorkspace(route.BindingKey, route.WorkspaceRoot)
+	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
+		return fmt.Sprintf("新建 Claude 会话失败: 保存当前窗口 Agent: %v", err)
+	}
 	return wechatCommandText("已切换到新的 Claude 会话。", "workspace: "+route.WorkspaceRoot)
 }
 

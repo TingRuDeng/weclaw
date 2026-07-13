@@ -37,6 +37,9 @@ func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
 	bindingKey := codexBindingKey(req.userID, req.agentName)
 	h.recordResetCodexThread(req.userID, req.agentName, req.workspaceRoot, threadID)
 	h.setCodexActiveWorkspaceForRoute(bindingKey, req.ownerBindingKey, req.workspaceRoot)
+	if err := h.ensureAgentSessions().Set(req.userID, req.agentName); err != nil {
+		return fmt.Sprintf("创建新的 Codex 会话失败: 保存当前窗口 Agent: %v", err)
+	}
 	return wechatCommandText("已创建新的"+req.agentName+"会话", threadID)
 }
 
@@ -65,6 +68,9 @@ func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, user
 	h.switchCodexWorkspaceForRoute(firstNonBlank(opts.actorUserID, userID), userID, agentName, workspaceRoot, ag)
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
+	if err := h.ensureAgentSessions().Set(userID, agentName); err != nil {
+		return fmt.Sprintf("切换 Codex 会话失败: 保存当前窗口 Agent: %v", err)
+	}
 	lines := []string{"已切换会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
 	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(threadID))
 	lines = append(lines, renderSessionModelStatus(modelStatus)...)
