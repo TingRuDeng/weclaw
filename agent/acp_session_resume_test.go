@@ -33,7 +33,7 @@ func TestClaudeACPResumeUpdatesBindingOnlyAfterSuccess(t *testing.T) {
 			if !ok || len(servers) != 0 {
 				t.Fatalf("session/resume mcpServers=%#v, want []", values["mcpServers"])
 			}
-			return json.RawMessage(`{}`), nil
+			return claudeConfigResultForTest("sonnet", "medium"), nil
 		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}

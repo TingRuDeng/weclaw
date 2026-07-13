@@ -27,16 +27,17 @@ type ACPAgent struct {
 	runAs            runAsUserSpec
 	protocol         string // "legacy_acp" or "codex_app_server"
 
-	mu        sync.Mutex
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	scanner   *bufio.Scanner
-	started   bool
-	starting  bool
-	startDone chan struct{}
-	startErr  error
-	nextID    atomic.Int64
-	sessions  map[string]string // conversationID -> sessionID (legacy ACP)
+	mu           sync.Mutex
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	scanner      *bufio.Scanner
+	started      bool
+	starting     bool
+	startDone    chan struct{}
+	startErr     error
+	nextID       atomic.Int64
+	wireSequence atomic.Uint64
+	sessions     map[string]string // conversationID -> sessionID (legacy ACP)
 	// pendingPersistedSessions 在标准 ACP 握手确认身份前隔离磁盘中的旧 session。
 	pendingPersistedSessions map[string]string
 	legacyRuntimeGeneration  uint64
@@ -46,12 +47,15 @@ type ACPAgent struct {
 	threads                  map[string]string // conversationID -> threadID (codex app-server)
 	// resumeOnFirstUse marks restored thread mappings that should trigger a
 	// best-effort thread/resume call before first turn.
-	resumeOnFirstUse map[string]bool // conversationID -> resume needed
-	conversationCwds map[string]string
-	stateFile        string // optional persisted state file path
-	claudeModels     []ClaudeModel
-	capabilities     acpCapabilitySnapshot
-	stateSaveMu      sync.Mutex
+	resumeOnFirstUse      map[string]bool // conversationID -> resume needed
+	conversationCwds      map[string]string
+	stateFile             string // optional persisted state file path
+	claudeModels          []ClaudeModel
+	claudeSessionConfigs  map[string][]acpSessionConfigOption
+	claudeConfigRevisions map[string]uint64
+	capabilities          acpCapabilitySnapshot
+	stateSaveMu           sync.Mutex
+	claudeConfigMu        sync.Mutex
 
 	// pending tracks in-flight JSON-RPC requests
 	pendingMu sync.Mutex

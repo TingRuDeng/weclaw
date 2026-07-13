@@ -37,7 +37,7 @@ func extractChunkText(update *sessionUpdate) string {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}
-		if err := json.Unmarshal(update.Content, &content); err == nil && content.Text != "" {
+		if err := json.Unmarshal(update.Content, &content); err == nil && content.Type == "text" && content.Text != "" {
 			return content.Text
 		}
 	}

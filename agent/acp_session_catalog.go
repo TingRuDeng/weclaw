@@ -167,11 +167,14 @@ func (a *ACPAgent) UseClaudeSession(ctx context.Context, conversationID string, 
 		return fmt.Errorf("session/list 中不存在 sessionId %q", sessionID)
 	}
 	params := acpSessionResumeParams{SessionID: selected.ID, Cwd: selected.Cwd, McpServers: []interface{}{}}
-	result, err := a.rpc(ctx, "session/resume", params)
+	result, sequence, err := a.rpcWithSequence(ctx, "session/resume", params)
 	if err != nil {
 		return fmt.Errorf("session/resume 失败: %w", err)
 	}
 	if err := validateACPObjectResult(result, "session/resume"); err != nil {
+		return err
+	}
+	if err := a.cacheClaudeResumeConfig(selected.ID, result, sequence); err != nil {
 		return err
 	}
 	commit := conversationBindingCommit{sessionID: selected.ID, cwd: selected.Cwd}

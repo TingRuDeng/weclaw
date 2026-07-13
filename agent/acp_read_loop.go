@@ -28,6 +28,7 @@ func (a *ACPAgent) readLoop() {
 			log.Printf("[acp] failed to parse message: %v", err)
 			continue
 		}
+		msg.Sequence = a.wireSequence.Add(1)
 
 		// Response to a request we made (has id, no method)
 		if msg.ID != nil && msg.Method == "" {
@@ -43,7 +44,7 @@ func (a *ACPAgent) readLoop() {
 		// 处理 agent 主动发出的请求或通知。
 		switch msg.Method {
 		case "session/update":
-			a.handleSessionUpdate(msg.Params)
+			a.handleSessionUpdateAt(msg.Params, msg.Sequence)
 
 		case "session/request_permission":
 			// 旧 ACP 权限请求会复用统一审批处理链路。
@@ -90,7 +91,7 @@ func (a *ACPAgent) readLoop() {
 
 		default:
 			if a.shouldLogUnhandledMethod(msg.Method, time.Now()) {
-				log.Printf("[acp] unhandled method: %s (raw: %.200s)", msg.Method, line)
+				log.Printf("[acp] unhandled method: %s", msg.Method)
 			}
 		}
 	}

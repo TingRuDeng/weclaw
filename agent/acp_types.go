@@ -21,12 +21,13 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
+	JSONRPC  string          `json:"jsonrpc"`
+	ID       *int64          `json:"id,omitempty"`
+	Method   string          `json:"method,omitempty"`
+	Result   json.RawMessage `json:"result,omitempty"`
+	Error    *rpcError       `json:"error,omitempty"`
+	Params   json.RawMessage `json:"params,omitempty"`
+	Sequence uint64          `json:"-"`
 }
 
 type rpcError struct {
@@ -82,7 +83,10 @@ type newSessionResult struct {
 
 type acpSessionConfigOption struct {
 	ID           string                   `json:"id"`
-	CurrentValue string                   `json:"currentValue,omitempty"`
+	Name         string                   `json:"name,omitempty"`
+	Category     string                   `json:"category,omitempty"`
+	Type         string                   `json:"type,omitempty"`
+	CurrentValue interface{}              `json:"currentValue,omitempty"`
 	Options      []acpSessionConfigChoice `json:"options,omitempty"`
 }
 
@@ -96,10 +100,6 @@ type sessionConfigOptionParams struct {
 	SessionID string `json:"sessionId"`
 	ConfigID  string `json:"configId"`
 	Value     string `json:"value"`
-}
-
-type sessionConfigOptionResult struct {
-	ConfigOptions []acpSessionConfigOption `json:"configOptions,omitempty"`
 }
 
 type promptParams struct {
@@ -118,11 +118,24 @@ type sessionUpdateParams struct {
 }
 
 type sessionUpdate struct {
-	SessionUpdate string          `json:"sessionUpdate"`
-	Content       json.RawMessage `json:"content,omitempty"`
+	SessionUpdate string                   `json:"sessionUpdate"`
+	Content       json.RawMessage          `json:"content,omitempty"`
+	Title         string                   `json:"title,omitempty"`
+	MessageID     string                   `json:"messageId,omitempty"`
+	Kind          string                   `json:"kind,omitempty"`
+	Status        string                   `json:"status,omitempty"`
+	ToolCallID    string                   `json:"toolCallId,omitempty"`
+	Entries       []acpPlanEntry           `json:"entries,omitempty"`
+	ConfigOptions []acpSessionConfigOption `json:"configOptions,omitempty"`
 	// For agent_message_chunk
 	Type string `json:"type,omitempty"`
 	Text string `json:"text,omitempty"`
+}
+
+type acpPlanEntry struct {
+	Content  string `json:"content"`
+	Priority string `json:"priority,omitempty"`
+	Status   string `json:"status"`
 }
 
 type permissionRequestParams struct {

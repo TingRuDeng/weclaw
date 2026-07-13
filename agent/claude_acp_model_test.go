@@ -23,7 +23,7 @@ const claudeACPConfigOptionsJSON = `[
 
 func TestClaudeACPConfiguresNewSessionModelThenEffort(t *testing.T) {
 	ag := NewACPAgent(ACPAgentConfig{
-		Command: "claude-agent-acp", Model: "opus", Effort: "high",
+		ConfiguredName: "claude", Command: "claude-agent-acp", Model: "opus", Effort: "high",
 		StateFile: filepath.Join(t.TempDir(), "state.json"),
 	})
 	var calls []string
@@ -56,7 +56,7 @@ func TestClaudeACPConfiguresNewSessionModelThenEffort(t *testing.T) {
 
 func TestClaudeACPDoesNotReconfigureExistingSession(t *testing.T) {
 	ag := NewACPAgent(ACPAgentConfig{
-		Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
+		ConfiguredName: "claude", Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	})
 	calls := 0
 	ag.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
@@ -80,7 +80,7 @@ func TestClaudeACPDoesNotReconfigureExistingSession(t *testing.T) {
 
 func TestClaudeACPConfigFailureDoesNotStoreSession(t *testing.T) {
 	ag := NewACPAgent(ACPAgentConfig{
-		Command: "claude-agent-acp", Model: "opus", StateFile: filepath.Join(t.TempDir(), "state.json"),
+		ConfiguredName: "claude", Command: "claude-agent-acp", Model: "opus", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	})
 	ag.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		if method == "session/new" {
@@ -104,7 +104,7 @@ func TestClaudeACPConfigFailureDoesNotStoreSession(t *testing.T) {
 
 func TestClaudeACPCachesEffortOptionsPerModel(t *testing.T) {
 	agent := NewACPAgent(ACPAgentConfig{
-		Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
+		ConfiguredName: "claude", Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	})
 	agent.cacheClaudeConfigOptions(claudeConfigOptionsForTest(t, "sonnet", "low", "medium"))
 	agent.cacheClaudeConfigOptions(claudeConfigOptionsForTest(t, "opus", "high", "max"))
@@ -125,7 +125,7 @@ func TestClaudeACPCachesEffortOptionsPerModel(t *testing.T) {
 
 func TestClaudeACPModelChangeClearsPreviousEffort(t *testing.T) {
 	agent := NewACPAgent(ACPAgentConfig{
-		Command: "claude-agent-acp", Model: "sonnet", Effort: "high",
+		ConfiguredName: "claude", Command: "claude-agent-acp", Model: "sonnet", Effort: "high",
 		StateFile: filepath.Join(t.TempDir(), "state.json"),
 	})
 
@@ -139,7 +139,7 @@ func TestClaudeACPModelChangeClearsPreviousEffort(t *testing.T) {
 
 func TestClaudeACPDoesNotAdvertiseUnobservedEffortOptions(t *testing.T) {
 	agent := NewACPAgent(ACPAgentConfig{
-		Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
+		ConfiguredName: "claude", Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	})
 
 	models, err := agent.ListClaudeModels(context.Background())
@@ -155,7 +155,7 @@ func TestClaudeACPDoesNotAdvertiseUnobservedEffortOptions(t *testing.T) {
 
 func TestClaudeACPRejectsEffortUnsupportedBySelectedModel(t *testing.T) {
 	agent := NewACPAgent(ACPAgentConfig{
-		Command: "claude-agent-acp", Model: "opus", Effort: "low",
+		ConfiguredName: "claude", Command: "claude-agent-acp", Model: "opus", Effort: "low",
 		StateFile: filepath.Join(t.TempDir(), "state.json"),
 	})
 	var configured []string
@@ -200,14 +200,14 @@ func claudeConfigOptionsForTest(t *testing.T, currentModel string, efforts ...st
 }
 
 func claudeSessionResultForTest(currentModel string, efforts ...string) json.RawMessage {
-	return claudeConfigEnvelopeForTest("sessionId", "session-1", currentModel, efforts)
+	return claudeConfigEnvelopeForTest("session-1", currentModel, efforts)
 }
 
 func claudeConfigResultForTest(currentModel string, efforts ...string) json.RawMessage {
-	return claudeConfigEnvelopeForTest("", "", currentModel, efforts)
+	return claudeConfigEnvelopeForTest("", currentModel, efforts)
 }
 
-func claudeConfigEnvelopeForTest(idKey string, id string, currentModel string, efforts []string) json.RawMessage {
+func claudeConfigEnvelopeForTest(sessionID string, currentModel string, efforts []string) json.RawMessage {
 	options := []acpSessionConfigOption{{
 		ID: claudeModelConfigID, CurrentValue: currentModel,
 		Options: []acpSessionConfigChoice{{Value: "sonnet", Name: "Sonnet"}, {Value: "opus", Name: "Opus"}},
@@ -218,8 +218,8 @@ func claudeConfigEnvelopeForTest(idKey string, id string, currentModel string, e
 		options[1].Options = append(options[1].Options, acpSessionConfigChoice{Value: effort, Name: effort})
 	}
 	payload := map[string]interface{}{"configOptions": options}
-	if idKey != "" {
-		payload[idKey] = id
+	if sessionID != "" {
+		payload["sessionId"] = sessionID
 	}
 	data, _ := json.Marshal(payload)
 	return data

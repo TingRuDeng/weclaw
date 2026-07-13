@@ -34,11 +34,11 @@ func (a *ACPAgent) startACPProcess(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	result, err := a.initializeACPSubprocess(ctx, pid)
+	_, err = a.initializeACPSubprocess(ctx, pid)
 	if err != nil {
 		return a.failACPStartup(pid, err)
 	}
-	log.Printf("[acp] initialized (pid=%d): %s", pid, string(result))
+	log.Printf("[acp] initialized (pid=%d, protocol=%s)", pid, a.protocol)
 	return nil
 }
 

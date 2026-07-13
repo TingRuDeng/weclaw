@@ -85,7 +85,7 @@ func TestClaudeACPChatLazyResumesAfterRuntimeGenerationChanges(t *testing.T) {
 		switch method {
 		case "session/resume":
 			assertLazyResumeParams(t, params, workspace)
-			return json.RawMessage(`{}`), nil
+			return claudeConfigResultForTest("sonnet", "medium"), nil
 		case "session/prompt":
 			sendLegacyTestReply(t, agent, "session-1", "done")
 			return json.RawMessage(`{}`), nil
@@ -147,7 +147,7 @@ func prepareClaudeLazyResumeTest(t *testing.T) (*ACPAgent, string) {
 		if method == "session/list" {
 			return json.RawMessage(fmt.Sprintf(`{"sessions":[{"sessionId":"session-1","cwd":%q}]}`, workspace)), nil
 		}
-		return json.RawMessage(`{}`), nil
+		return claudeConfigResultForTest("sonnet", "medium"), nil
 	}
 	if err := agent.UseClaudeSession(context.Background(), "conversation-1", "session-1"); err != nil {
 		t.Fatalf("UseClaudeSession: %v", err)

@@ -41,7 +41,7 @@ func TestClaudeACPConcurrentUseKeepsLatestIntent(t *testing.T) {
 		if method != "session/resume" {
 			return nil, fmt.Errorf("unexpected method %s", method)
 		}
-		return json.RawMessage(`{}`), nil
+		return claudeConfigResultForTest("sonnet", "medium"), nil
 	}
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- agent.UseClaudeSession(context.Background(), "conversation-1", "session-a") }()
@@ -100,7 +100,7 @@ func TestClaudeACPLazyResumeRejectsABA(t *testing.T) {
 		agent.conversationCwds[conversationID] = workspace
 		agent.sessionGenerations[conversationID] = 0
 		agent.mu.Unlock()
-		return json.RawMessage(`{}`), nil
+		return claudeConfigResultForTest("sonnet", "medium"), nil
 	}
 	err := agent.resumeClaudeSessionIfStale(context.Background(), conversationID, "session-a")
 	if err == nil || !containsAll(err.Error(), "绑定", "变化") {

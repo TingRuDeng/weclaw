@@ -52,6 +52,8 @@ func (a *ACPAgent) clearLegacyBindingsLocked() {
 	clear(a.sessions)
 	clear(a.sessionGenerations)
 	clear(a.bindingRevisions)
+	clear(a.claudeSessionConfigs)
+	clear(a.claudeConfigRevisions)
 }
 
 // resolvePersistedSessionsLocked 在握手身份确定后一次性恢复或丢弃旧标准 ACP session。

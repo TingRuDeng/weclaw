@@ -79,7 +79,8 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 	defer a.unregisterLegacySessionChannels(sessionID, notifyCh, approvalCh)
 	state := legacyPromptState{
 		ctx: ctx, sessionID: sessionID, notifyCh: notifyCh, approvalCh: approvalCh,
-		promptDone: a.startLegacyPrompt(ctx, sessionID, message),
+		promptDone: a.startLegacyPrompt(ctx, sessionID, message), onProgress: onProgress,
+		progress: newClaudeACPProgressState(),
 	}
 	return a.waitLegacyPrompt(state)
 }
@@ -95,6 +96,8 @@ type legacyPromptState struct {
 	notifyCh   <-chan *sessionUpdate
 	approvalCh <-chan *codexTurnEvent
 	promptDone <-chan legacyPromptDone
+	onProgress func(string)
+	progress   *claudeACPProgressState
 }
 
 // startLegacyPrompt 异步执行阻塞的 session/prompt RPC，让当前协程继续消费事件。
@@ -105,9 +108,6 @@ func (a *ACPAgent) startLegacyPrompt(ctx context.Context, sessionID string, mess
 			SessionID: sessionID,
 			Prompt:    []promptEntry{{Type: "text", Text: message}},
 		})
-		if result != nil {
-			log.Printf("[acp] prompt result (session=%s): %s", sessionID, string(result))
-		}
 		done <- legacyPromptDone{result: result, err: err}
 	}()
 	return done
@@ -125,12 +125,13 @@ func (a *ACPAgent) waitLegacyPrompt(state legacyPromptState) (string, error) {
 			return "", state.ctx.Err()
 		case update := <-state.notifyCh:
 			textParts = appendLegacyChunk(textParts, update)
+			emitLegacyProgress(state, update)
 		case event := <-state.approvalCh:
 			if err := a.handleLegacyInteraction(state.ctx, event); err != nil {
 				return "", err
 			}
 		case done := <-state.promptDone:
-			return finishLegacyPrompt(state.notifyCh, textParts, done)
+			return finishLegacyPrompt(state, textParts, done)
 		}
 	}
 }
@@ -172,14 +173,25 @@ func appendLegacyChunk(parts []string, update *sessionUpdate) []string {
 }
 
 // finishLegacyPrompt 排空已到达的正文更新并解析最终响应。
-func finishLegacyPrompt(notifyCh <-chan *sessionUpdate, parts []string, done legacyPromptDone) (string, error) {
+func finishLegacyPrompt(state legacyPromptState, parts []string, done legacyPromptDone) (string, error) {
 	for {
 		select {
-		case update := <-notifyCh:
+		case update := <-state.notifyCh:
 			parts = appendLegacyChunk(parts, update)
+			emitLegacyProgress(state, update)
 		default:
 			return legacyPromptResult(parts, done)
 		}
+	}
+}
+
+// emitLegacyProgress 只把结构化 Claude ACP 事件发送到实时进度链路。
+func emitLegacyProgress(state legacyPromptState, update *sessionUpdate) {
+	if state.onProgress == nil || state.progress == nil {
+		return
+	}
+	if text, ok := state.progress.progressText(update); ok {
+		state.onProgress(text)
 	}
 }
 

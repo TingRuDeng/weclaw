@@ -124,15 +124,17 @@ type ClaudeSessionConfigAgent interface {
 ### 任务 3：实现 session 配置与结构化进度
 
 **文件：**
-- 修改：`agent/acp_chat.go`、`agent/acp_session_update.go`、`agent/claude_acp_model.go`
-- 新建：`agent/acp_claude_progress.go`、`agent/acp_claude_progress_test.go`、`agent/claude_acp_session_config_test.go`
+- 修改：`agent/acp_agent.go`、`agent/acp_constructor.go`、`agent/acp_types.go`、`agent/acp_capabilities.go`、`agent/acp_process.go`、`agent/acp_read_loop.go`、`agent/acp_rpc.go`、`agent/acp_chat.go`、`agent/acp_session_update.go`、`agent/acp_session_catalog.go`、`agent/acp_sessions.go`、`agent/claude_acp_model.go`
+- 新建：`agent/acp_claude_progress.go`、`agent/claude_acp_session_config.go`、`agent/acp_claude_progress_test.go`、`agent/claude_acp_session_config_test.go`
 
-- [ ] 写 thought/tool/tool_update/plan 映射、最终正文去重、当前 session 配置切换测试。
-- [ ] 运行 `go test ./agent -run 'TestClaudeACP(Progress|SessionConfig)' -count=1 -timeout 60s`，确认失败。
-- [ ] 实现安全摘要映射；不把 `agent_message_chunk` 作为进度，不输出原始 ACP JSON。
-- [ ] 通过 `session/set_config_option` 更新当前 session；配置文件值只应用于 `session/new`。
-- [ ] 重跑定向测试、权限测试和取消测试。
-- [ ] 提交：`功能：补齐 Claude ACP 配置与实时进度`。
+- [x] 写 thought/tool/tool_update/plan 映射、最终正文去重、当前 session 配置切换测试。
+- [x] 运行 `go test ./agent -run 'TestClaudeACP(Progress|SessionConfig)' -count=1 -timeout 60s`，确认失败。
+- [x] 实现安全摘要映射；不把 `agent_message_chunk` 作为进度，不输出原始 ACP JSON。
+- [x] 通过 `session/set_config_option` 更新当前 session；按 session 缓存完整配置，resume 回填配置；配置文件值只应用于 `session/new`。
+- [x] 使用入站消息序号防止旧快照覆盖新通知；串行配置写入，并显式报告模型成功、推理强度失败的部分完成状态。
+- [x] 将 thought 缓冲限制为 4096 字符、结构化进度历史限制为最近 128 条。
+- [x] 重跑定向测试、权限测试和取消测试。
+- [x] 提交：`功能：补齐 Claude ACP 配置与实时进度`。
 
 ### 任务 4：收敛配置、迁移与诊断
 

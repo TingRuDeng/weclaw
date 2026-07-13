@@ -75,6 +75,8 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		resumeOnFirstUse:         make(map[string]bool),
 		conversationCwds:         make(map[string]string),
 		stateFile:                options.stateFile,
+		claudeSessionConfigs:     make(map[string][]acpSessionConfigOption),
+		claudeConfigRevisions:    make(map[string]uint64),
 		pending:                  make(map[int64]chan *rpcResponse),
 		notifyCh:                 make(map[string]chan *sessionUpdate),
 		turnCh:                   make(map[string]chan *codexTurnEvent),

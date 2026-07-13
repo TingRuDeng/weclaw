@@ -236,10 +236,3 @@ func marshalParamsForTest(t *testing.T, params interface{}) map[string]interface
 	}
 	return values
 }
-
-func assertNoWhitespace(t *testing.T, value string) {
-	t.Helper()
-	if strings.TrimSpace(value) != value {
-		t.Fatalf("value=%q contains surrounding whitespace", value)
-	}
-}

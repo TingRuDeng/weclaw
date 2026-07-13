@@ -9,10 +9,16 @@ import (
 )
 
 func (a *ACPAgent) rpc(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	result, _, err := a.rpcWithSequence(ctx, method, params)
+	return result, err
+}
+
+func (a *ACPAgent) rpcWithSequence(ctx context.Context, method string, params interface{}) (json.RawMessage, uint64, error) {
 	if a.rpcCall != nil {
-		return a.rpcCall(ctx, method, params)
+		result, err := a.rpcCall(ctx, method, params)
+		return result, 0, err
 	}
-	return a.call(ctx, method, params)
+	return a.callWithSequence(ctx, method, params)
 }
 
 // notify sends a JSON-RPC notification (no id, no response expected).
@@ -49,6 +55,11 @@ func (a *ACPAgent) writeJSONLine(data []byte) error {
 
 // call sends a JSON-RPC request and waits for the response.
 func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+	result, _, err := a.callWithSequence(ctx, method, params)
+	return result, err
+}
+
+func (a *ACPAgent) callWithSequence(ctx context.Context, method string, params interface{}) (json.RawMessage, uint64, error) {
 	id := a.nextID.Add(1)
 
 	ch := make(chan *rpcResponse, 1)
@@ -71,23 +82,23 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, 0, fmt.Errorf("marshal request: %w", err)
 	}
 
 	err = a.writeJSONLine(data)
 	if err != nil {
-		return nil, fmt.Errorf("write to stdin: %w", err)
+		return nil, 0, fmt.Errorf("write to stdin: %w", err)
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
 	case resp := <-ch:
 		if resp.Error != nil {
 			msg := formatRPCErrorMessage(resp.Error, a.stderr)
-			return nil, fmt.Errorf("agent error: %s", msg)
+			return nil, resp.Sequence, fmt.Errorf("agent error: %s", msg)
 		}
-		return resp.Result, nil
+		return resp.Result, resp.Sequence, nil
 	}
 }
 

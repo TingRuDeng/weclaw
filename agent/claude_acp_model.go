@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -11,19 +10,6 @@ const (
 	claudeModelConfigID  = "model"
 	claudeEffortConfigID = "effort"
 )
-
-type claudeSessionConfigRequest struct {
-	sessionID string
-	configID  string
-	value     string
-}
-
-func (a *ACPAgent) isClaudeLegacyACP() bool {
-	if a.protocol != protocolLegacyACP {
-		return false
-	}
-	return strings.Contains(strings.ToLower(strings.TrimSpace(a.command)), "claude")
-}
 
 // ClaudeModelStatus 返回后续新建 Claude ACP session 使用的运行时配置。
 func (a *ACPAgent) ClaudeModelStatus() ClaudeModelStatus {
@@ -51,7 +37,7 @@ func (a *ACPAgent) SetClaudeModel(model string, effort string) {
 
 // ListClaudeModels 优先返回 Claude ACP 最近一次 session 暴露的模型目录。
 func (a *ACPAgent) ListClaudeModels(_ context.Context) ([]ClaudeModel, error) {
-	if !a.isClaudeLegacyACP() {
+	if !a.isClaudeACP() {
 		return nil, fmt.Errorf("当前 Agent 不是 Claude ACP")
 	}
 	a.mu.Lock()
@@ -63,45 +49,6 @@ func (a *ACPAgent) ListClaudeModels(_ context.Context) ([]ClaudeModel, error) {
 	return models, nil
 }
 
-func (a *ACPAgent) configureClaudeSession(ctx context.Context, sessionID string, options []acpSessionConfigOption) error {
-	a.cacheClaudeConfigOptions(options)
-	status := a.ClaudeModelStatus()
-	selectedModel := firstNonEmptyString(status.Model, currentClaudeConfigModel(options))
-	if status.Model != "" {
-		request := claudeSessionConfigRequest{sessionID: sessionID, configID: claudeModelConfigID, value: status.Model}
-		if err := a.setClaudeSessionConfig(ctx, request); err != nil {
-			return fmt.Errorf("设置 claude model 失败: %w", err)
-		}
-	}
-	if status.Effort == "" {
-		return nil
-	}
-	if !a.claudeEffortSupported(selectedModel, status.Effort) {
-		return fmt.Errorf("claude 模型 %s 不支持推理强度 %s", selectedModel, status.Effort)
-	}
-	request := claudeSessionConfigRequest{sessionID: sessionID, configID: claudeEffortConfigID, value: status.Effort}
-	if err := a.setClaudeSessionConfig(ctx, request); err != nil {
-		return fmt.Errorf("设置 claude effort 失败: %w", err)
-	}
-	return nil
-}
-
-func (a *ACPAgent) setClaudeSessionConfig(ctx context.Context, request claudeSessionConfigRequest) error {
-	result, err := a.rpc(ctx, "session/set_config_option", sessionConfigOptionParams{
-		SessionID: request.sessionID,
-		ConfigID:  request.configID,
-		Value:     request.value,
-	})
-	if err != nil {
-		return err
-	}
-	var response sessionConfigOptionResult
-	if len(result) > 0 && json.Unmarshal(result, &response) == nil {
-		a.cacheClaudeConfigOptions(response.ConfigOptions)
-	}
-	return nil
-}
-
 func (a *ACPAgent) cacheClaudeConfigOptions(options []acpSessionConfigOption) {
 	modelOption, effortOption := findClaudeConfigOptions(options)
 	if modelOption == nil || len(modelOption.Options) == 0 {
@@ -110,7 +57,7 @@ func (a *ACPAgent) cacheClaudeConfigOptions(options []acpSessionConfigOption) {
 	a.mu.Lock()
 	previous := cloneClaudeModels(a.claudeModels)
 	a.mu.Unlock()
-	currentModel := strings.TrimSpace(modelOption.CurrentValue)
+	currentModel := configStringValue(modelOption.CurrentValue)
 	currentEfforts := configChoiceValues(effortOption)
 	models := make([]ClaudeModel, 0, len(modelOption.Options))
 	for _, option := range modelOption.Options {
@@ -153,24 +100,7 @@ func currentClaudeConfigModel(options []acpSessionConfigOption) string {
 	if modelOption == nil {
 		return ""
 	}
-	return strings.TrimSpace(modelOption.CurrentValue)
-}
-
-func (a *ACPAgent) claudeEffortSupported(model string, effort string) bool {
-	a.mu.Lock()
-	models := cloneClaudeModels(a.claudeModels)
-	a.mu.Unlock()
-	for _, candidate := range models {
-		if candidate.Alias != model && candidate.ID != model {
-			continue
-		}
-		for _, option := range candidate.EffortOptions {
-			if option == effort {
-				return true
-			}
-		}
-	}
-	return false
+	return configStringValue(modelOption.CurrentValue)
 }
 
 func claudeModelFromConfigChoice(option acpSessionConfigChoice, efforts []string) ClaudeModel {
@@ -193,14 +123,34 @@ func claudeModelFromConfigChoice(option acpSessionConfigChoice, efforts []string
 func findClaudeConfigOptions(options []acpSessionConfigOption) (*acpSessionConfigOption, *acpSessionConfigOption) {
 	var modelOption, effortOption *acpSessionConfigOption
 	for index := range options {
-		switch options[index].ID {
-		case claudeModelConfigID:
+		switch options[index].Category {
+		case "model":
+			if modelOption == nil {
+				modelOption = &options[index]
+			}
+		case "thought_level":
+			if effortOption == nil {
+				effortOption = &options[index]
+			}
+		}
+	}
+	for index := range options {
+		if modelOption == nil && options[index].ID == claudeModelConfigID {
 			modelOption = &options[index]
-		case claudeEffortConfigID:
+		}
+		if effortOption == nil && options[index].ID == claudeEffortConfigID {
 			effortOption = &options[index]
 		}
 	}
 	return modelOption, effortOption
+}
+
+func findClaudeConfigOption(options []acpSessionConfigOption, fallbackID string) *acpSessionConfigOption {
+	modelOption, effortOption := findClaudeConfigOptions(options)
+	if fallbackID == claudeModelConfigID {
+		return modelOption
+	}
+	return effortOption
 }
 
 func configChoiceValues(option *acpSessionConfigOption) []string {

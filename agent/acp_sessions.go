@@ -39,7 +39,7 @@ func (a *ACPAgent) hasLegacySessionCandidate(conversationID string) bool {
 func (a *ACPAgent) createSession(ctx context.Context, conversationID string) (string, error) {
 	revision := a.beginBindingIntent(conversationID)
 	cwd := a.cwdForConversation(conversationID)
-	result, err := a.rpc(ctx, "session/new", newSessionParams{
+	result, sequence, err := a.rpcWithSequence(ctx, "session/new", newSessionParams{
 		Cwd:        cwd,
 		McpServers: []interface{}{},
 	})
@@ -51,7 +51,8 @@ func (a *ACPAgent) createSession(ctx context.Context, conversationID string) (st
 		return "", err
 	}
 	if a.isClaudeACP() || supportsClaudeSessionConfig(session.ConfigOptions) {
-		if err := a.configureClaudeSession(ctx, session.SessionID, session.ConfigOptions); err != nil {
+		bootstrap := claudeSessionBootstrap{sessionID: session.SessionID, options: session.ConfigOptions, sequence: sequence}
+		if err := a.configureClaudeSession(ctx, bootstrap); err != nil {
 			return "", err
 		}
 	}
@@ -109,11 +110,14 @@ func (a *ACPAgent) resumeClaudeSessionIfStale(ctx context.Context, conversationI
 		return nil
 	}
 	params := acpSessionResumeParams{SessionID: state.sessionID, Cwd: state.cwd, McpServers: []interface{}{}}
-	result, err := a.rpc(ctx, "session/resume", params)
+	result, sequence, err := a.rpcWithSequence(ctx, "session/resume", params)
 	if err != nil {
 		return fmt.Errorf("session/resume 懒恢复失败: %w", err)
 	}
 	if err := validateACPObjectResult(result, "session/resume"); err != nil {
+		return err
+	}
+	if err := a.cacheClaudeResumeConfig(state.sessionID, result, sequence); err != nil {
 		return err
 	}
 	return a.commitClaudeSessionGeneration(conversationID, state)

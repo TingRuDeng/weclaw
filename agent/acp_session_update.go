@@ -6,10 +6,19 @@ import (
 )
 
 func (a *ACPAgent) handleSessionUpdate(params json.RawMessage) {
+	a.handleSessionUpdateAt(params, a.wireSequence.Add(1))
+}
+
+func (a *ACPAgent) handleSessionUpdateAt(params json.RawMessage, sequence uint64) {
 	var p sessionUpdateParams
 	if err := json.Unmarshal(params, &p); err != nil {
-		log.Printf("[acp] failed to parse session/update: %v (raw: %s)", err, string(params))
+		log.Printf("[acp] failed to parse session/update: %v", err)
 		return
+	}
+	if p.Update.SessionUpdate == "config_option_update" && a.isClaudeACP() {
+		if err := a.cacheClaudeSessionConfigAt(p.SessionID, p.Update.ConfigOptions, sequence); err != nil {
+			log.Printf("[acp] ignored invalid config_option_update (session=%s): %v", p.SessionID, err)
+		}
 	}
 
 	// Only log non-streaming events (skip chunks to reduce noise)
