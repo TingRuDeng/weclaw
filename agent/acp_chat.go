@@ -35,8 +35,8 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 		if _, ok := a.CurrentCodexThread(conversationID); !ok {
 			return "", fmt.Errorf("thread error: %w", ErrAgentSessionNotBound)
 		}
-	} else if _, err := a.requireSession(conversationID); err != nil {
-		return "", fmt.Errorf("session error: %w", err)
+	} else if !a.isRuntimeStarted() && !a.hasLegacySessionCandidate(conversationID) {
+		return "", fmt.Errorf("session error: %w", ErrAgentSessionNotBound)
 	}
 	if !a.isRuntimeStarted() {
 		if err := a.Start(ctx); err != nil {
@@ -47,6 +47,13 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 	// Route to codex app-server protocol if applicable
 	if a.protocol == protocolCodexAppServer {
 		return a.chatCodexAppServer(ctx, conversationID, message, onProgress)
+	}
+	sessionID, err := a.requireSession(conversationID)
+	if err != nil {
+		return "", fmt.Errorf("session error: %w", err)
+	}
+	if err := a.resumeClaudeSessionIfStale(ctx, conversationID, sessionID); err != nil {
+		return "", err
 	}
 
 	return a.chatLegacyACP(ctx, conversationID, message, onProgress)
@@ -70,13 +77,29 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 		return "", fmt.Errorf("session %s already has an active prompt", sessionID)
 	}
 	defer a.unregisterLegacySessionChannels(sessionID, notifyCh, approvalCh)
-
-	// Send prompt (this blocks until the prompt completes)
-	type promptDoneMsg struct {
-		result json.RawMessage
-		err    error
+	state := legacyPromptState{
+		ctx: ctx, sessionID: sessionID, notifyCh: notifyCh, approvalCh: approvalCh,
+		promptDone: a.startLegacyPrompt(ctx, sessionID, message),
 	}
-	promptDone := make(chan promptDoneMsg, 1)
+	return a.waitLegacyPrompt(state)
+}
+
+type legacyPromptDone struct {
+	result json.RawMessage
+	err    error
+}
+
+type legacyPromptState struct {
+	ctx        context.Context
+	sessionID  string
+	notifyCh   <-chan *sessionUpdate
+	approvalCh <-chan *codexTurnEvent
+	promptDone <-chan legacyPromptDone
+}
+
+// startLegacyPrompt 异步执行阻塞的 session/prompt RPC，让当前协程继续消费事件。
+func (a *ACPAgent) startLegacyPrompt(ctx context.Context, sessionID string, message string) <-chan legacyPromptDone {
+	done := make(chan legacyPromptDone, 1)
 	go func() {
 		result, err := a.rpc(ctx, "session/prompt", promptParams{
 			SessionID: sessionID,
@@ -85,67 +108,92 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 		if result != nil {
 			log.Printf("[acp] prompt result (session=%s): %s", sessionID, string(result))
 		}
-		promptDone <- promptDoneMsg{result: result, err: err}
+		done <- legacyPromptDone{result: result, err: err}
 	}()
+	return done
+}
 
-	// 普通 agent_message_chunk 是最终回复正文，不能作为进度推给飞书任务卡片。
+// waitLegacyPrompt 消费标准 ACP 更新，直到 prompt 返回终态。
+func (a *ACPAgent) waitLegacyPrompt(state legacyPromptState) (string, error) {
 	var textParts []string
-
 	for {
 		select {
-		case <-ctx.Done():
-			if err := a.notify("session/cancel", map[string]interface{}{"sessionId": sessionID}); err != nil {
-				return "", fmt.Errorf("%w: session/cancel failed: %v", ctx.Err(), err)
+		case <-state.ctx.Done():
+			if err := a.cancelLegacyPrompt(state); err != nil {
+				return "", err
 			}
-			return "", ctx.Err()
-		case update := <-notifyCh:
-			if update.SessionUpdate == "agent_message_chunk" {
-				text := extractChunkText(update)
-				if text != "" {
-					textParts = append(textParts, text)
-				}
+			return "", state.ctx.Err()
+		case update := <-state.notifyCh:
+			textParts = appendLegacyChunk(textParts, update)
+		case event := <-state.approvalCh:
+			if err := a.handleLegacyInteraction(state.ctx, event); err != nil {
+				return "", err
 			}
-		case evt := <-approvalCh:
-			if evt.Approval != nil {
-				if err := a.handleCodexApprovalEvent(ctx, evt); err != nil {
-					return "", fmt.Errorf("approval response error: %w", err)
-				}
-				continue
-			}
-			if evt.UserInput != nil {
-				if err := a.handleCodexUserInputEvent(ctx, evt); err != nil {
-					return "", fmt.Errorf("user input response error: %w", err)
-				}
-				continue
-			}
-		case done := <-promptDone:
-			// Drain remaining notifications
-			for {
-				select {
-				case update := <-notifyCh:
-					if update.SessionUpdate == "agent_message_chunk" {
-						text := extractChunkText(update)
-						if text != "" {
-							textParts = append(textParts, text)
-						}
-					}
-				default:
-					goto drained
-				}
-			}
-		drained:
-			if done.err != nil {
-				return "", fmt.Errorf("prompt error: %w", done.err)
-			}
-			result := strings.TrimSpace(strings.Join(textParts, ""))
-			if result == "" {
-				// Try extracting from prompt result (some agents return content here)
-				result = extractPromptResultText(done.result)
-			}
-			if result == "" {
-				return "", fmt.Errorf("agent returned empty response")
-			}
-			return result, nil
+		case done := <-state.promptDone:
+			return finishLegacyPrompt(state.notifyCh, textParts, done)
 		}
 	}
+}
+
+// cancelLegacyPrompt 将调用方取消同步通知给 ACP runtime。
+func (a *ACPAgent) cancelLegacyPrompt(state legacyPromptState) error {
+	err := a.notify("session/cancel", map[string]interface{}{"sessionId": state.sessionID})
+	if err != nil {
+		return fmt.Errorf("%w: session/cancel failed: %v", state.ctx.Err(), err)
+	}
+	return nil
+}
+
+// handleLegacyInteraction 复用统一审批与补充输入处理器。
+func (a *ACPAgent) handleLegacyInteraction(ctx context.Context, event *codexTurnEvent) error {
+	if event.Approval != nil {
+		if err := a.handleCodexApprovalEvent(ctx, event); err != nil {
+			return fmt.Errorf("approval response error: %w", err)
+		}
+		return nil
+	}
+	if event.UserInput != nil {
+		if err := a.handleCodexUserInputEvent(ctx, event); err != nil {
+			return fmt.Errorf("user input response error: %w", err)
+		}
+	}
+	return nil
+}
+
+// appendLegacyChunk 仅聚合最终正文，普通消息块不作为进度输出。
+func appendLegacyChunk(parts []string, update *sessionUpdate) []string {
+	if update.SessionUpdate != "agent_message_chunk" {
+		return parts
+	}
+	if text := extractChunkText(update); text != "" {
+		return append(parts, text)
+	}
+	return parts
+}
+
+// finishLegacyPrompt 排空已到达的正文更新并解析最终响应。
+func finishLegacyPrompt(notifyCh <-chan *sessionUpdate, parts []string, done legacyPromptDone) (string, error) {
+	for {
+		select {
+		case update := <-notifyCh:
+			parts = appendLegacyChunk(parts, update)
+		default:
+			return legacyPromptResult(parts, done)
+		}
+	}
+}
+
+// legacyPromptResult 统一处理 RPC 错误、正文聚合和空响应。
+func legacyPromptResult(parts []string, done legacyPromptDone) (string, error) {
+	if done.err != nil {
+		return "", fmt.Errorf("prompt error: %w", done.err)
+	}
+	result := strings.TrimSpace(strings.Join(parts, ""))
+	if result == "" {
+		result = extractPromptResultText(done.result)
+	}
+	if result == "" {
+		return "", fmt.Errorf("agent returned empty response")
+	}
+	return result, nil
 }

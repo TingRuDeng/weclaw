@@ -89,48 +89,6 @@ func (a *ACPAgent) ClearCodexThread(conversationID string) {
 	a.clearCodexThread(conversationID)
 }
 
-// requireSession 返回普通聊天已经绑定的 ACP session，不承担创建职责。
-func (a *ACPAgent) requireSession(conversationID string) (string, error) {
-	a.mu.Lock()
-	sid, exists := a.sessions[conversationID]
-	a.mu.Unlock()
-	if !exists || strings.TrimSpace(sid) == "" {
-		return "", fmt.Errorf("%w: conversation=%s", ErrAgentSessionNotBound, conversationID)
-	}
-	return sid, nil
-}
-
-// createSession 创建并保存一个由用户显式请求的新 ACP session。
-func (a *ACPAgent) createSession(ctx context.Context, conversationID string) (string, error) {
-	result, err := a.rpc(ctx, "session/new", newSessionParams{
-		Cwd:        a.cwdForConversation(conversationID),
-		McpServers: []interface{}{},
-	})
-	if err != nil {
-		return "", err
-	}
-
-	var sessionResult newSessionResult
-	if err := json.Unmarshal(result, &sessionResult); err != nil {
-		return "", fmt.Errorf("parse session result: %w", err)
-	}
-	if sessionResult.SessionID == "" {
-		return "", fmt.Errorf("session/new returned empty session id")
-	}
-	if a.isClaudeLegacyACP() {
-		if err := a.configureClaudeSession(ctx, sessionResult.SessionID, sessionResult.ConfigOptions); err != nil {
-			return "", err
-		}
-	}
-
-	a.mu.Lock()
-	a.sessions[conversationID] = sessionResult.SessionID
-	a.mu.Unlock()
-	a.persistState()
-
-	return sessionResult.SessionID, nil
-}
-
 // requireThread 返回普通聊天已经绑定的 Codex thread，必要时恢复同一 thread。
 func (a *ACPAgent) requireThread(ctx context.Context, conversationID string) (string, error) {
 	a.mu.Lock()

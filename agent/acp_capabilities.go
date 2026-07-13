@@ -29,13 +29,43 @@ func (a *ACPAgent) cacheAndValidateACPCapabilities(result json.RawMessage) error
 	if err != nil {
 		return err
 	}
-	a.mu.Lock()
-	a.capabilities = snapshot
-	a.mu.Unlock()
-	if !requiresClaudeSessionCapabilities(a.configuredName, snapshot.AgentInfo) {
-		return nil
+	if requiresClaudeSessionCapabilities(a.configuredName, snapshot.AgentInfo) {
+		if err := validateClaudeACPCapabilities(snapshot.Session); err != nil {
+			return err
+		}
 	}
-	return validateClaudeACPCapabilities(snapshot.Session)
+	a.mu.Lock()
+	identityChanged := a.legacyRuntimeGeneration > 0 &&
+		a.isClaudeACPIdentityLocked() != requiresClaudeSessionCapabilities(a.configuredName, snapshot.AgentInfo)
+	if identityChanged {
+		a.clearLegacyBindingsLocked()
+	}
+	a.capabilities = snapshot
+	a.legacyRuntimeGeneration++
+	a.resolvePersistedSessionsLocked()
+	a.mu.Unlock()
+	return nil
+}
+
+// clearLegacyBindingsLocked 清理身份切换后不再可信的运行时会话状态。
+func (a *ACPAgent) clearLegacyBindingsLocked() {
+	clear(a.sessions)
+	clear(a.sessionGenerations)
+	clear(a.bindingRevisions)
+}
+
+// resolvePersistedSessionsLocked 在握手身份确定后一次性恢复或丢弃旧标准 ACP session。
+func (a *ACPAgent) resolvePersistedSessionsLocked() {
+	if a.isClaudeACPIdentityLocked() {
+		clear(a.pendingPersistedSessions)
+		return
+	}
+	for conversationID, sessionID := range a.pendingPersistedSessions {
+		if strings.TrimSpace(a.sessions[conversationID]) == "" {
+			a.sessions[conversationID] = sessionID
+		}
+	}
+	clear(a.pendingPersistedSessions)
 }
 
 // requiresClaudeSessionCapabilities 合并显式配置身份与标准握手身份。

@@ -105,7 +105,6 @@ func TestACPAgentResetSessionRestartsAfterClosedCodexStdin(t *testing.T) {
 }
 
 func TestACPAgentLegacySessionNotFoundKeepsOriginalSession(t *testing.T) {
-	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	writeACPStateFile(t, stateFile, acpPersistedState{
 		Version:  acpPersistedStateVersion,
@@ -119,8 +118,10 @@ func TestACPAgentLegacySessionNotFoundKeepsOriginalSession(t *testing.T) {
 	})
 	a.mu.Lock()
 	a.started = true
-	a.cmd = nil
 	a.mu.Unlock()
+	if err := a.cacheAndValidateACPCapabilities(genericCapabilityPayload()); err != nil {
+		t.Fatalf("cache capabilities: %v", err)
+	}
 
 	promptCalls := 0
 	sessionStarts := 0
@@ -141,7 +142,7 @@ func TestACPAgentLegacySessionNotFoundKeepsOriginalSession(t *testing.T) {
 		}
 	}
 
-	_, err := a.Chat(ctx, "user-1", "hello")
+	_, err := a.Chat(context.Background(), "user-1", "hello")
 	if err == nil || !strings.Contains(err.Error(), "Session not found") {
 		t.Fatalf("Chat() error=%v, want Session not found", err)
 	}
@@ -159,8 +160,7 @@ func TestACPAgentLegacySessionNotFoundKeepsOriginalSession(t *testing.T) {
 
 func TestACPAgentCodexKeepsThreadOnEmptyResponse(t *testing.T) {
 	ctx := context.Background()
-	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
-	workspace := t.TempDir()
+	stateFile, workspace := filepath.Join(t.TempDir(), "acp-state.json"), t.TempDir()
 
 	a := NewACPAgent(ACPAgentConfig{
 		Command:   "codex",

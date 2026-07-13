@@ -37,7 +37,13 @@ type ACPAgent struct {
 	startErr  error
 	nextID    atomic.Int64
 	sessions  map[string]string // conversationID -> sessionID (legacy ACP)
-	threads   map[string]string // conversationID -> threadID (codex app-server)
+	// pendingPersistedSessions 在标准 ACP 握手确认身份前隔离磁盘中的旧 session。
+	pendingPersistedSessions map[string]string
+	legacyRuntimeGeneration  uint64
+	sessionGenerations       map[string]uint64 // conversationID -> legacy runtime generation
+	bindingRevisions         map[string]uint64 // conversationID -> latest binding intent revision
+	bindingRevisionCounter   uint64
+	threads                  map[string]string // conversationID -> threadID (codex app-server)
 	// resumeOnFirstUse marks restored thread mappings that should trigger a
 	// best-effort thread/resume call before first turn.
 	resumeOnFirstUse map[string]bool // conversationID -> resume needed

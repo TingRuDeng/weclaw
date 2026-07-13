@@ -59,10 +59,10 @@ func (a *ACPAgent) loadState() {
 
 	a.mu.Lock()
 	for conversationID, sessionID := range state.Sessions {
-		if conversationID == "" || sessionID == "" {
+		if strings.TrimSpace(conversationID) == "" || strings.TrimSpace(sessionID) == "" {
 			continue
 		}
-		a.sessions[conversationID] = sessionID
+		a.pendingPersistedSessions[conversationID] = sessionID
 		loadedSessions++
 	}
 	for conversationID, threadID := range state.Threads {
@@ -79,7 +79,7 @@ func (a *ACPAgent) loadState() {
 	}
 
 	if loadedSessions > 0 || loadedThreads > 0 || loadedBindings > 0 {
-		log.Printf("[acp] restored state (sessions=%d, threads=%d, bindings=%d, file=%s)", loadedSessions, loadedThreads, loadedBindings, a.stateFile)
+		log.Printf("[acp] loaded state (pending_sessions=%d, threads=%d, bindings=%d, file=%s)", loadedSessions, loadedThreads, loadedBindings, a.stateFile)
 	}
 }
 
@@ -117,13 +117,26 @@ func (a *ACPAgent) snapshotPersistedState() (acpPersistedState, string, bool) {
 	if a.codexOwners != nil {
 		state.LiveBindings = a.codexOwners.persistedBindings()
 	}
-	for k, v := range a.sessions {
-		state.Sessions[k] = v
+	if !a.isClaudeACPIdentityLocked() {
+		for k, v := range a.pendingPersistedSessions {
+			state.Sessions[k] = v
+		}
+		for k, v := range a.sessions {
+			state.Sessions[k] = v
+		}
 	}
 	for k, v := range a.threads {
 		state.Threads[k] = v
 	}
 	return state, a.stateFile, true
+}
+
+// isClaudeACPIdentityLocked 在持有 a.mu 时按显式身份判断，避免状态路径递归加锁。
+func (a *ACPAgent) isClaudeACPIdentityLocked() bool {
+	if a.protocol != protocolLegacyACP {
+		return false
+	}
+	return requiresClaudeSessionCapabilities(a.configuredName, a.capabilities.AgentInfo)
 }
 
 func writeACPStateAtomically(stateFile string, data []byte) error {

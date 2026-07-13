@@ -21,6 +21,8 @@ func detectACPProtocol(command string, args []string) string {
 
 type acpAgentOptions struct {
 	desktopProbe codexDesktopOwnerProbe
+	protocol     string
+	stateFile    string
 }
 
 // NewACPAgent creates a new ACP agent.
@@ -41,47 +43,64 @@ func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	if stateFile == "" {
 		stateFile = defaultACPStateFile(cfg.Command, cfg.Args, cfg.Cwd, protocol)
 	}
-	a := &ACPAgent{
-		configuredName:   strings.TrimSpace(cfg.ConfiguredName),
-		command:          cfg.Command,
-		args:             cfg.Args,
-		model:            cfg.Model,
-		effort:           cfg.Effort,
-		approvalPolicy:   strings.TrimSpace(cfg.ApprovalPolicy),
-		approvalReviewer: strings.TrimSpace(cfg.ApprovalReviewer),
-		sandboxMode:      strings.TrimSpace(cfg.SandboxMode),
-		systemPrompt:     cfg.SystemPrompt,
-		cwd:              cfg.Cwd,
-		env:              cfg.Env,
-		runAs:            runAsUserSpec{User: cfg.RunAsUser, PreserveEnv: cfg.RunAsEnv},
-		protocol:         protocol,
-		sessions:         make(map[string]string),
-		threads:          make(map[string]string),
-		resumeOnFirstUse: make(map[string]bool),
-		conversationCwds: make(map[string]string),
-		stateFile:        stateFile,
-		pending:          make(map[int64]chan *rpcResponse),
-		notifyCh:         make(map[string]chan *sessionUpdate),
-		turnCh:           make(map[string]chan *codexTurnEvent),
-		desktopProbe:     options.desktopProbe,
-	}
-	if protocol == protocolCodexAppServer {
-		probe := options.desktopProbe
-		if probe == nil {
-			a.desktopRuntime = newCodexDesktopRuntime()
-			probe = a.desktopRuntime
-		}
-		a.desktopProbe = probe
-		a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
-		if a.desktopRuntime != nil {
-			a.desktopRuntime.setOwnerRegistry(a.codexOwners)
-			a.desktopRuntime.setEventHandler(func(threadID string, events []*codexTurnEvent) {
-				for _, event := range events {
-					a.dispatchToTurnCh(threadID, event)
-				}
-			})
-		}
-	}
+	options.protocol = protocol
+	options.stateFile = stateFile
+	a := buildACPAgent(cfg, options)
+	a.configureCodexRuntime(options.desktopProbe)
 	a.loadState()
 	return a
+}
+
+// buildACPAgent 初始化不依赖外部运行时的进程内状态。
+func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
+	a := &ACPAgent{
+		configuredName:           strings.TrimSpace(cfg.ConfiguredName),
+		command:                  cfg.Command,
+		args:                     cfg.Args,
+		model:                    cfg.Model,
+		effort:                   cfg.Effort,
+		approvalPolicy:           strings.TrimSpace(cfg.ApprovalPolicy),
+		approvalReviewer:         strings.TrimSpace(cfg.ApprovalReviewer),
+		sandboxMode:              strings.TrimSpace(cfg.SandboxMode),
+		systemPrompt:             cfg.SystemPrompt,
+		cwd:                      cfg.Cwd,
+		env:                      cfg.Env,
+		runAs:                    runAsUserSpec{User: cfg.RunAsUser, PreserveEnv: cfg.RunAsEnv},
+		protocol:                 options.protocol,
+		sessions:                 make(map[string]string),
+		pendingPersistedSessions: make(map[string]string),
+		sessionGenerations:       make(map[string]uint64),
+		bindingRevisions:         make(map[string]uint64),
+		threads:                  make(map[string]string),
+		resumeOnFirstUse:         make(map[string]bool),
+		conversationCwds:         make(map[string]string),
+		stateFile:                options.stateFile,
+		pending:                  make(map[int64]chan *rpcResponse),
+		notifyCh:                 make(map[string]chan *sessionUpdate),
+		turnCh:                   make(map[string]chan *codexTurnEvent),
+		desktopProbe:             options.desktopProbe,
+	}
+	return a
+}
+
+// configureCodexRuntime 装配仅供 app-server 协议使用的 Desktop 所有权状态。
+func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
+	if a.protocol != protocolCodexAppServer {
+		return
+	}
+	if probe == nil {
+		a.desktopRuntime = newCodexDesktopRuntime()
+		probe = a.desktopRuntime
+	}
+	a.desktopProbe = probe
+	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
+	if a.desktopRuntime == nil {
+		return
+	}
+	a.desktopRuntime.setOwnerRegistry(a.codexOwners)
+	a.desktopRuntime.setEventHandler(func(threadID string, events []*codexTurnEvent) {
+		for _, event := range events {
+			a.dispatchToTurnCh(threadID, event)
+		}
+	})
 }

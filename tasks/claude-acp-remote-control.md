@@ -111,15 +111,15 @@ type ClaudeSessionConfigAgent interface {
 ### 任务 2：实现 ACP 会话目录与恢复
 
 **文件：**
-- 修改：`agent/acp_threads.go`、`agent/acp_chat.go`、`agent/acp_state.go`
+- 修改：`agent/acp_agent.go`、`agent/acp_constructor.go`、`agent/acp_capabilities.go`、`agent/acp_threads.go`、`agent/acp_chat.go`、`agent/acp_state.go`
 - 新建：`agent/acp_sessions.go`、`agent/acp_session_catalog.go`、`agent/acp_session_catalog_test.go`、`agent/acp_session_resume_test.go`
 
-- [ ] 写 list 分页、重复游标、空 ID、非法 cwd、resume 成功、resume 失败保留旧绑定测试。
-- [ ] 运行 `go test ./agent -run 'TestClaudeACP(List|Resume)' -count=1 -timeout 60s`，确认失败。
-- [ ] 将标准 ACP session 逻辑移入 `acp_sessions.go`；实现 list/resume 和只在成功后更新运行时映射。
-- [ ] Claude session 从 `acpPersistedState.Sessions` 排除，其他标准 ACP 行为保持不变。
-- [ ] 重跑定向测试和 `go test ./agent -count=1 -timeout 60s`。
-- [ ] 提交：`功能：实现 Claude ACP 会话目录与恢复`。
+- [x] 写 list 分页、重复游标、空 ID、非法 cwd、非法游标与 resume 结果、resume 成功、resume 失败保留旧绑定测试。
+- [x] 运行 `go test ./agent -run 'TestClaudeACP(List|Resume)' -count=1 -timeout 60s`，确认失败。
+- [x] 将标准 ACP session 逻辑移入 `acp_sessions.go`；实现 list/resume 和只在成功后更新运行时映射。
+- [x] Claude session 从 `acpPersistedState.Sessions` 排除；持久化 session 在握手身份确认前进入独立缓存，确认非 Claude 后一次性恢复，避免首次写回丢失其他标准 ACP 会话。
+- [x] 重跑定向测试和 `go test ./agent -count=1 -timeout 60s`。
+- [x] 提交：`功能：实现 Claude ACP 会话目录与恢复`。
 
 ### 任务 3：实现 session 配置与结构化进度
 

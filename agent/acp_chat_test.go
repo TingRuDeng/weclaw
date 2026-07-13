@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -42,29 +44,142 @@ func TestACPAgentChatRequiresCodexThread(t *testing.T) {
 // TestLegacyACPChatRequiresSession 验证普通消息不能隐式创建 Claude session。
 func TestLegacyACPChatRequiresSession(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
-		Command:   "claude-agent-acp",
-		StateFile: filepath.Join(t.TempDir(), "state.json"),
+		ConfiguredName: "generic",
+		Command:        filepath.Join(t.TempDir(), "missing-acp"),
+		StateFile:      filepath.Join(t.TempDir(), "state.json"),
 	})
-	sessionStarts := 0
-	rpcCalls := 0
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		rpcCalls++
-		if method == "session/new" {
-			sessionStarts++
+
+	_, err := a.Chat(context.Background(), "conversation-1", "hello")
+	if !errors.Is(err, ErrAgentSessionNotBound) {
+		t.Fatalf("Chat error=%v, want ErrAgentSessionNotBound", err)
+	}
+	if a.isRuntimeStarted() {
+		t.Fatal("Chat started runtime without binding or persisted candidate")
+	}
+}
+
+// TestLegacyACPChatStartsForPersistedCandidate 验证旧状态存在候选时允许先启动并识别握手身份。
+func TestLegacyACPChatStartsForPersistedCandidate(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	writeACPStateFile(t, stateFile, acpPersistedState{
+		Version:  acpPersistedStateVersion,
+		Sessions: map[string]string{"conversation-1": "persisted-session"},
+	})
+	command := filepath.Join(t.TempDir(), "missing-acp")
+	a := NewACPAgent(ACPAgentConfig{
+		ConfiguredName: "generic", Command: command, StateFile: stateFile,
+	})
+
+	_, err := a.Chat(context.Background(), "conversation-1", "hello")
+
+	if err == nil || errors.Is(err, ErrAgentSessionNotBound) || !strings.Contains(err.Error(), "start acp agent") {
+		t.Fatalf("Chat error=%v, want runtime startup attempt", err)
+	}
+}
+
+func TestClaudeACPChatLazyResumesAfterRuntimeGenerationChanges(t *testing.T) {
+	agent, workspace := prepareClaudeLazyResumeTest(t)
+	var methods []string
+	agent.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "session/resume":
+			assertLazyResumeParams(t, params, workspace)
+			return json.RawMessage(`{}`), nil
+		case "session/prompt":
+			sendLegacyTestReply(t, agent, "session-1", "done")
+			return json.RawMessage(`{}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	reply, err := agent.Chat(context.Background(), "conversation-1", "hello")
+
+	if err != nil || reply != "done" {
+		t.Fatalf("Chat=(%q,%v), want done nil", reply, err)
+	}
+	if !reflect.DeepEqual(methods, []string{"session/resume", "session/prompt"}) {
+		t.Fatalf("rpc methods=%v, want resume then prompt", methods)
+	}
+	if agent.sessionGenerations["conversation-1"] != agent.legacyRuntimeGeneration {
+		t.Fatalf("session generation=%d runtime=%d", agent.sessionGenerations["conversation-1"], agent.legacyRuntimeGeneration)
+	}
+}
+
+func TestClaudeACPChatLazyResumeFailureKeepsBinding(t *testing.T) {
+	agent, workspace := prepareClaudeLazyResumeTest(t)
+	oldGeneration := agent.sessionGenerations["conversation-1"]
+	calls := map[string]int{}
+	agent.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		calls[method]++
+		if method == "session/resume" {
+			assertLazyResumeParams(t, params, workspace)
+			return nil, errors.New("resume failed")
 		}
 		return nil, fmt.Errorf("unexpected rpc method: %s", method)
 	}
 
-	_, err := a.Chat(context.Background(), "conversation-1", "hello")
-	if err == nil {
-		t.Fatal("Chat error = nil, want session not bound")
+	_, err := agent.Chat(context.Background(), "conversation-1", "hello")
+
+	if err == nil || !containsAll(err.Error(), "session/resume", "resume failed") {
+		t.Fatalf("Chat error=%v, want lazy resume failure", err)
 	}
-	if sessionStarts != 0 {
-		t.Fatalf("session/new calls=%d, want 0", sessionStarts)
+	if calls["session/prompt"] != 0 || calls["session/new"] != 0 {
+		t.Fatalf("rpc calls=%#v, must not prompt or create", calls)
 	}
-	if rpcCalls != 0 {
-		t.Fatalf("rpc calls=%d, want 0", rpcCalls)
+	if agent.sessions["conversation-1"] != "session-1" || agent.conversationCwds["conversation-1"] != workspace {
+		t.Fatalf("binding=%q cwd=%q changed", agent.sessions["conversation-1"], agent.conversationCwds["conversation-1"])
 	}
+	if agent.sessionGenerations["conversation-1"] != oldGeneration {
+		t.Fatalf("session generation=%d, want %d", agent.sessionGenerations["conversation-1"], oldGeneration)
+	}
+}
+
+func prepareClaudeLazyResumeTest(t *testing.T) (*ACPAgent, string) {
+	t.Helper()
+	workspace := t.TempDir()
+	agent := newClaudeACPSessionTestAgent(t, workspace)
+	if err := agent.cacheAndValidateACPCapabilities(claudeCapabilityPayload()); err != nil {
+		t.Fatalf("first handshake: %v", err)
+	}
+	agent.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method == "session/list" {
+			return json.RawMessage(fmt.Sprintf(`{"sessions":[{"sessionId":"session-1","cwd":%q}]}`, workspace)), nil
+		}
+		return json.RawMessage(`{}`), nil
+	}
+	if err := agent.UseClaudeSession(context.Background(), "conversation-1", "session-1"); err != nil {
+		t.Fatalf("UseClaudeSession: %v", err)
+	}
+	if err := agent.cacheAndValidateACPCapabilities(claudeCapabilityPayload()); err != nil {
+		t.Fatalf("second handshake: %v", err)
+	}
+	agent.started = true
+	return agent, workspace
+}
+
+func assertLazyResumeParams(t *testing.T, params interface{}, workspace string) {
+	t.Helper()
+	values := marshalParamsForTest(t, params)
+	if values["sessionId"] != "session-1" || values["cwd"] != workspace {
+		t.Fatalf("session/resume params=%#v", values)
+	}
+	servers, ok := values["mcpServers"].([]interface{})
+	if !ok || len(servers) != 0 {
+		t.Fatalf("session/resume mcpServers=%#v, want []", values["mcpServers"])
+	}
+}
+
+func sendLegacyTestReply(t *testing.T, agent *ACPAgent, sessionID string, text string) {
+	t.Helper()
+	agent.notifyMu.Lock()
+	channel := agent.notifyCh[sessionID]
+	agent.notifyMu.Unlock()
+	if channel == nil {
+		t.Fatal("missing notify channel")
+	}
+	channel <- &sessionUpdate{SessionUpdate: "agent_message_chunk", Content: json.RawMessage(fmt.Sprintf(`{"type":"text","text":%q}`, text))}
 }
 
 func TestLegacyACPAgentMessageChunkDoesNotEmitProgress(t *testing.T) {
