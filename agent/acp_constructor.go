@@ -42,6 +42,7 @@ func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		stateFile = defaultACPStateFile(cfg.Command, cfg.Args, cfg.Cwd, protocol)
 	}
 	a := &ACPAgent{
+		configuredName:   strings.TrimSpace(cfg.ConfiguredName),
 		command:          cfg.Command,
 		args:             cfg.Args,
 		model:            cfg.Model,

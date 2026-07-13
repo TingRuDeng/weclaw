@@ -99,14 +99,14 @@ type ClaudeSessionConfigAgent interface {
 ### 任务 1：锁定 ACP 能力契约
 
 **文件：**
-- 修改：`agent/agent.go`、`agent/acp_agent.go`、`agent/acp_process.go`、`agent/acp_types.go`
+- 修改：`agent/agent.go`、`agent/acp_agent.go`、`agent/acp_constructor.go`、`agent/acp_process.go`、`agent/acp_types.go`、`cmd/start_agent.go`
 - 新建：`agent/acp_capabilities.go`、`agent/acp_capabilities_test.go`
 
-- [ ] 写 `TestClaudeACPStartupRequiresListAndResume`、`TestACPInitializeCachesAgentInfo`、`TestNonClaudeACPDoesNotRequireClaudeCapabilities`。
-- [ ] 运行 `go test ./agent -run 'Test(ClaudeACPStartup|ACPInitialize|NonClaudeACP)' -count=1 -timeout 60s`，确认因缺少解析和门禁失败。
-- [ ] 增加上述接口、`AgentInfo.LocalCommand`、能力解析和 Claude 专属门禁。
-- [ ] 重跑同一命令，确认全部通过。
-- [ ] 提交：`测试：锁定 Claude ACP 能力契约`。
+- [x] 写 `TestClaudeACPStartupRequiresListAndResume`、`TestACPInitializeCachesAgentInfo`、`TestNonClaudeACPDoesNotRequireClaudeCapabilities`。
+- [x] 运行 `go test ./agent -run 'Test(ClaudeACPStartup|ACPInitialize|NonClaudeACP)' -count=1 -timeout 60s`，确认因缺少解析和门禁失败。
+- [x] 增加上述接口、`AgentInfo.LocalCommand`、能力解析和 Claude 专属门禁；Claude 身份以配置 Agent 名称为主、ACP `agentInfo` 为补充，禁止从可执行文件名推断。
+- [x] 重跑同一命令，确认全部通过。
+- [x] 提交：`测试：锁定 Claude ACP 能力契约`。
 
 ### 任务 2：实现 ACP 会话目录与恢复
 
@@ -232,4 +232,3 @@ git diff --check
 - 当前仅完成设计与规划，未修改实现代码。
 - 用户再次明确批准后，才允许创建执行分支/worktree 并按任务 1 开始 TDD。
 - 执行中若协议能力、上游响应或现有状态模型与本 Spec 不一致，必须先更新本文件并重新确认。
-

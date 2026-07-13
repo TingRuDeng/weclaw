@@ -17,12 +17,13 @@ var ErrAgentSessionNotBound = errors.New("Agent 会话未绑定")
 
 // AgentInfo holds metadata about an agent for logging/debugging.
 type AgentInfo struct {
-	Name    string // e.g. "claude-acp", "claude", "gpt-4o"
-	Type    string // e.g. "acp", "cli", "http"
-	Model   string // e.g. "sonnet", "gpt-4o-mini"
-	Effort  string // e.g. "medium", "high"
-	Command string // binary path, e.g. "/usr/local/bin/claude-agent-acp"
-	PID     int    // subprocess PID (0 if not applicable, e.g. http agent)
+	Name         string // e.g. "claude-acp", "claude", "gpt-4o"
+	Type         string // e.g. "acp", "cli", "http"
+	Model        string // e.g. "sonnet", "gpt-4o-mini"
+	Effort       string // e.g. "medium", "high"
+	Command      string // binary path, e.g. "/usr/local/bin/claude-agent-acp"
+	LocalCommand string // 本地交接命令；ACP adapter 仍由 Command 表示
+	PID          int    // subprocess PID (0 if not applicable, e.g. http agent)
 }
 
 // String returns a human-readable summary for logging.
@@ -137,11 +138,44 @@ type ConversationWorkspaceAgent interface {
 	SetConversationCwd(conversationID string, cwd string)
 }
 
-// ClaudeSessionAgent 暴露 Claude Code CLI 的 session 控制能力。
+// ClaudeSession 描述 Claude ACP 返回的一个可恢复会话。
+type ClaudeSession struct {
+	ID        string
+	Cwd       string
+	Title     string
+	UpdatedAt string
+	Config    ClaudeSessionConfig
+}
+
+// ClaudeSessionConfig 描述 Claude session 当前模型与推理强度。
+type ClaudeSessionConfig struct {
+	Model  string
+	Effort string
+}
+
+// ClaudeSessionCatalogAgent 暴露 Claude ACP 的会话目录能力。
+type ClaudeSessionCatalogAgent interface {
+	ListClaudeSessions(ctx context.Context) ([]ClaudeSession, error)
+}
+
+// ClaudeSessionAgent 暴露 Claude session 的绑定与清理能力。
 type ClaudeSessionAgent interface {
 	CurrentClaudeSession(conversationID string) (string, bool)
 	UseClaudeSession(ctx context.Context, conversationID string, sessionID string) error
 	ClearClaudeSession(conversationID string)
+}
+
+// ClaudeSessionConfigUpdate 描述一次当前 Claude session 配置更新。
+type ClaudeSessionConfigUpdate struct {
+	ConversationID string
+	Model          string
+	Effort         string
+}
+
+// ClaudeSessionConfigAgent 暴露 Claude session 配置查询和更新能力。
+type ClaudeSessionConfigAgent interface {
+	ClaudeSessionConfig(conversationID string) (ClaudeSessionConfig, bool)
+	SetClaudeSessionConfig(ctx context.Context, update ClaudeSessionConfigUpdate) error
 }
 
 // ClaudeModelStatus 表示当前 WeClaw 传给 Claude Code 的模型配置。

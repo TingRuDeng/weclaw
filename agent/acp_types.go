@@ -7,6 +7,7 @@ import (
 )
 
 const (
+	acpProtocolVersion            = 1
 	acpScannerInitialBufferSize   = 4 * 1024 * 1024
 	acpScannerMaxTokenSize        = 64 * 1024 * 1024
 	acpUnhandledMethodLogInterval = 5 * time.Minute
@@ -46,6 +47,27 @@ type clientCapabilities struct {
 type fsCapabilities struct {
 	ReadTextFile  bool `json:"readTextFile"`
 	WriteTextFile bool `json:"writeTextFile"`
+}
+
+type acpInitializeResult struct {
+	ProtocolVersion   int                    `json:"protocolVersion"`
+	AgentInfo         acpInitializeAgentInfo `json:"agentInfo"`
+	AgentCapabilities acpAgentCapabilities   `json:"agentCapabilities"`
+}
+
+type acpInitializeAgentInfo struct {
+	Name    string `json:"name"`
+	Title   string `json:"title"`
+	Version string `json:"version"`
+}
+
+type acpAgentCapabilities struct {
+	Session acpInitializeSessionCapabilities `json:"sessionCapabilities"`
+}
+
+type acpInitializeSessionCapabilities struct {
+	List   json.RawMessage `json:"list"`
+	Resume json.RawMessage `json:"resume"`
 }
 
 type newSessionParams struct {

@@ -98,12 +98,16 @@ func (a *ACPAgent) initializeACPSubprocess(ctx context.Context, pid int) (json.R
 		}
 		return result, a.notify("initialized", nil)
 	}
-	return a.rpc(initCtx, "initialize", initParams{
-		ProtocolVersion: 1,
+	result, err := a.rpc(initCtx, "initialize", initParams{
+		ProtocolVersion: acpProtocolVersion,
 		ClientCapabilities: clientCapabilities{
 			FS: &fsCapabilities{ReadTextFile: true, WriteTextFile: true},
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	return result, a.cacheAndValidateACPCapabilities(result)
 }
 
 func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
@@ -117,7 +121,7 @@ func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
 	a.mu.Unlock()
 	stopACPProcess(stdin, cmd)
 	if detail := a.stderr.LastError(); detail != "" {
-		return fmt.Errorf("agent startup failed: %s", detail)
+		return fmt.Errorf("agent startup failed (pid=%d): %w; stderr: %s", pid, startErr, detail)
 	}
 	base := strings.ToLower(filepath.Base(a.command))
 	if base == "claude" || base == "claude.exe" {

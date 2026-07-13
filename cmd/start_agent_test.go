@@ -34,6 +34,46 @@ func TestCreateAgentByNamePassesClaudeModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestCreateAgentByNamePassesACPConfiguredName(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	t.Setenv("WECLAW_TEST_ACP_CONFIGURED_NAME", "1")
+	cfg := config.DefaultConfig()
+	cfg.Agents["claude"] = config.AgentConfig{
+		Type: "acp", Command: os.Args[0],
+		Args: []string{"-test.run=TestHelperACPConfiguredName"}, Cwd: t.TempDir(),
+	}
+
+	if ag := createAgentByName(context.Background(), cfg, "claude"); ag != nil {
+		if stopper, ok := ag.(interface{ Stop() }); ok {
+			stopper.Stop()
+		}
+		t.Fatalf("createAgentByName()=%T, want Claude capability gate", ag)
+	}
+}
+
+// TestHelperACPConfiguredName 返回缺少 list/resume 和 agentInfo 的合法握手。
+func TestHelperACPConfiguredName(t *testing.T) {
+	if os.Getenv("WECLAW_TEST_ACP_CONFIGURED_NAME") != "1" {
+		return
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadBytes('\n')
+	if err != nil {
+		os.Exit(2)
+	}
+	var request struct {
+		ID int64 `json:"id"`
+	}
+	if json.Unmarshal(line, &request) != nil {
+		os.Exit(3)
+	}
+	response := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":1,"agentCapabilities":{}}}`+"\n", request.ID)
+	if _, err := io.WriteString(os.Stdout, response); err != nil {
+		os.Exit(4)
+	}
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	os.Exit(0)
+}
+
 func TestCreateAgentByNameRetriesCodexSQLiteRuntimeStartup(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	t.Setenv("WECLAW_TEST_CODEX_RETRY_HELPER", "1")

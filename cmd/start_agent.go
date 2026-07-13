@@ -101,7 +101,7 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 	}
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		ag := newACPAgentFromConfig(agCfg)
+		ag := newACPAgentFromConfig(name, agCfg)
 		if err := ag.Start(ctx); err != nil {
 			lastErr = err
 			if attempt == attempts || !isRetryableCodexStateRuntimeError(err) {
@@ -118,8 +118,9 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 	return nil, lastErr
 }
 
-func newACPAgentFromConfig(agCfg config.AgentConfig) *agent.ACPAgent {
+func newACPAgentFromConfig(name string, agCfg config.AgentConfig) *agent.ACPAgent {
 	return agent.NewACPAgent(agent.ACPAgentConfig{
+		ConfiguredName:   name,
 		Command:          agCfg.Command,
 		Args:             agCfg.Args,
 		Cwd:              agCfg.Cwd,

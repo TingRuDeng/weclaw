@@ -13,6 +13,7 @@ import (
 
 // ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
 type ACPAgent struct {
+	configuredName   string
 	command          string
 	args             []string
 	model            string
@@ -43,6 +44,7 @@ type ACPAgent struct {
 	conversationCwds map[string]string
 	stateFile        string // optional persisted state file path
 	claudeModels     []ClaudeModel
+	capabilities     acpCapabilitySnapshot
 	stateSaveMu      sync.Mutex
 
 	// pending tracks in-flight JSON-RPC requests
@@ -70,6 +72,7 @@ type ACPAgent struct {
 
 // ACPAgentConfig holds configuration for the ACP agent.
 type ACPAgentConfig struct {
+	ConfiguredName   string   // 配置 map 中的 Agent 名称，用于稳定识别业务身份
 	Command          string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
 	Args             []string // extra args for command (e.g. ["acp"] for cursor)
 	Model            string
