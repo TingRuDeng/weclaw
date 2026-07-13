@@ -1,18 +1,9 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"log"
-	"os/signal"
-	"syscall"
 
-	"github.com/fastclaw-ai/weclaw/agent"
-	"github.com/fastclaw-ai/weclaw/api"
 	"github.com/fastclaw-ai/weclaw/config"
-	"github.com/fastclaw-ai/weclaw/ilink"
-	"github.com/fastclaw-ai/weclaw/messaging"
-	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +12,7 @@ var (
 	apiAddrFlag    string
 )
 
+// init 注册 start 命令及其前台运行、API 地址参数。
 func init() {
 	startCmd.Flags().BoolVarP(&foregroundFlag, "foreground", "f", false, "前台运行，默认后台运行")
 	startCmd.Flags().StringVar(&apiAddrFlag, "api-addr", "", "HTTP API 监听地址，默认 127.0.0.1:18011")
@@ -33,6 +25,7 @@ var startCmd = &cobra.Command{
 	RunE:  runStart,
 }
 
+// runStart 加载配置后按前台或后台模式进入对应启动流程。
 func runStart(cmd *cobra.Command, args []string) error {
 	daemonLog, err := configureDaemonLogging()
 	if err != nil {
@@ -41,207 +34,24 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if daemonLog != nil {
 		defer daemonLog.Close()
 	}
+	cfg, err := loadStartConfig()
+	if err != nil {
+		return err
+	}
+	if !foregroundFlag {
+		return runBackgroundStart(cfg)
+	}
+	return runForegroundStart(cfg)
+}
+
+// loadStartConfig 加载并校验启动配置，避免后台进程接收无效 Claude 配置。
+func loadStartConfig() (*config.Config, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 	if err := cfg.ValidateClaudeACPAgents(); err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
-
-	if !foregroundFlag {
-		// Check if login is needed — if so, do it in foreground first, then daemon
-		accounts, _ := ilink.LoadAllCredentials()
-		if wechatEnabled(cfg) && len(accounts) == 0 {
-			fmt.Println("未找到微信账号，正在启动微信扫码登录...")
-			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-			_, err := doLogin(ctx)
-			cancel()
-			if err != nil {
-				return fmt.Errorf("login failed: %w", err)
-			}
-		}
-		return runDaemon()
-	}
-
-	runtimeLock, err := acquireRuntimeLock()
-	if err != nil {
-		return err
-	}
-	defer runtimeLock.Close()
-	if err := writeCurrentRuntimeState(currentServiceMode()); err != nil {
-		return fmt.Errorf("write runtime state: %w", err)
-	}
-	defer removeRuntimeState()
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	// Load all accounts
-	accounts, err := ilink.LoadAllCredentials()
-	if err != nil {
-		return fmt.Errorf("failed to load credentials: %w", err)
-	}
-
-	// No accounts — trigger login
-	if wechatEnabled(cfg) && len(accounts) == 0 {
-		log.Println("未找到微信账号，正在启动微信扫码登录...")
-		creds, err := doLogin(ctx)
-		if err != nil {
-			return fmt.Errorf("login failed: %w", err)
-		}
-		accounts = append(accounts, creds)
-	}
-
-	if config.DetectAndConfigure(cfg) {
-		if err := config.Save(cfg); err != nil {
-			log.Printf("Warning: failed to save auto-detected config: %v", err)
-		} else {
-			path, _ := config.ConfigPath()
-			log.Printf("Auto-detected agents saved to %s", path)
-		}
-	}
-	if err := cfg.ValidateClaudeACPAgents(); err != nil {
-		return err
-	}
-
-	// Log all available agents
-	if len(cfg.Agents) > 0 {
-		names := make([]string, 0, len(cfg.Agents))
-		for name := range cfg.Agents {
-			names = append(names, name)
-		}
-		log.Printf("Available agents: %v (default: %s)", names, cfg.DefaultAgent)
-	}
-
-	// Create handler with an agent factory for on-demand agent creation
-	handler := messaging.NewHandler(
-		func(ctx context.Context, name string) agent.Agent {
-			return createAgentByName(ctx, cfg, name)
-		},
-		saveDefaultAgent,
-	)
-
-	// Populate agent metas for /status
-	var metas []messaging.AgentMeta
-	workDirs := make(map[string]string, len(cfg.Agents))
-	for name, agCfg := range cfg.Agents {
-		command := agCfg.Command
-		if agCfg.Type == "http" {
-			command = agCfg.Endpoint
-		}
-		metas = append(metas, messaging.AgentMeta{
-			Name:    name,
-			Type:    agCfg.Type,
-			Command: command,
-			Model:   agCfg.Model,
-			Effort:  agCfg.Effort,
-		})
-		if agCfg.Cwd != "" {
-			workDirs[name] = agCfg.Cwd
-		}
-	}
-	handler.SetAgentMetas(metas)
-	handler.SetAgentWorkDirs(workDirs)
-	handler.SetProgressConfig(cfg.Progress)
-	handler.SetAgentProgressConfigs(extractAgentProgressConfigs(cfg.Agents))
-	handler.SetPlatformProgressConfigs(extractPlatformProgressConfigs(cfg.Platforms))
-	handler.SetPlatformDefaultAgents(extractPlatformDefaultAgents(cfg.Platforms))
-	if err := handler.SetAgentSessionFile(messaging.DefaultAgentSessionFile()); err != nil {
-		log.Printf("加载会话 Agent 状态失败：%v", err)
-	}
-	handler.SetCodexSessionFile(messaging.DefaultCodexSessionFile())
-	handler.SetFeishuIdentityFile(messaging.DefaultFeishuIdentityFile())
-	if err := handler.SetClaudeSessionFile(messaging.DefaultClaudeSessionFile()); err != nil {
-		log.Printf("加载 Claude 会话状态失败：%v", err)
-	}
-
-	// Load custom aliases from agent configs
-	handler.SetCustomAliases(config.BuildAliasMap(cfg.Agents))
-
-	// Set save directory for images/files if configured
-	if cfg.SaveDir != "" {
-		handler.SetSaveDir(cfg.SaveDir)
-		log.Printf("Image save directory: %s", cfg.SaveDir)
-	}
-
-	handler.SetAllowedWorkspaceRoots(cfg.AllowedWorkspaceRoots)
-	if len(cfg.AllowedWorkspaceRoots) == 0 {
-		log.Printf("WARNING: allowed_workspace_roots 未配置，普通用户远程 /cwd 切换已禁用；管理员不受此限制。")
-	} else {
-		log.Printf("Allowed workspace roots: %v", cfg.AllowedWorkspaceRoots)
-	}
-	handler.SetAdminUsers(cfg.AdminUsers)
-	log.Printf("Admin users configured: %d", len(cfg.AdminUsers))
-	handler.SetRateLimitPerMinute(cfg.RateLimitPerMinute)
-	if cfg.RateLimitPerMinute > 0 {
-		log.Printf("Rate limit: %d agent invocations per user per minute", cfg.RateLimitPerMinute)
-	}
-	if cfg.AuditLog == nil || *cfg.AuditLog {
-		auditPath := cfg.AuditLogPath
-		if auditPath == "" {
-			auditPath = messaging.DefaultAuditLogPath()
-		}
-		handler.SetAuditLogger(messaging.NewFileAuditLogger(auditPath))
-		log.Printf("Audit log: %s", auditPath)
-	}
-
-	// Start default agent initialization in background so monitors can start immediately
-	go func() {
-		if cfg.DefaultAgent == "" {
-			log.Println("No default agent configured, staying in echo mode")
-			return
-		}
-		log.Printf("Initializing default agent %q in background...", cfg.DefaultAgent)
-		ag, err := handler.EnsureAgentStarted(ctx, cfg.DefaultAgent)
-		if err != nil {
-			log.Printf("Failed to initialize default agent %q, staying in echo mode: %v", cfg.DefaultAgent, err)
-		} else {
-			handler.SetDefaultAgent(cfg.DefaultAgent, ag)
-		}
-	}()
-
-	// Build platform registry before HTTP API so active sending and inbound bridge share the same platform set.
-	registry, err := buildPlatformRegistry(
-		accounts,
-		cfg,
-		platform.WithIdentityObserver(handler.ObserveFeishuIdentity),
-		platform.WithDenyNoticeProvider(handler.ObserveDeniedIdentity),
-	)
-	if err != nil {
-		return err
-	}
-	go runSoftConfigReloader(ctx, handler, registry)
-
-	// Resolve API addr: flag > env/config > default
-	apiAddr := cfg.APIAddr // already includes env override from loadEnv
-	if apiAddrFlag != "" {
-		apiAddr = apiAddrFlag
-	}
-	apiServer := api.NewServer(
-		nil,
-		apiAddr,
-		api.WithToken(cfg.APIToken),
-		api.WithRegistry(registry),
-		api.WithRuntimeStatusProvider(handler),
-	)
-	if err := apiServer.Validate(); err != nil {
-		return err
-	}
-	go func() {
-		if err := apiServer.Run(ctx); err != nil {
-			log.Printf("API server error: %v", err)
-		}
-	}()
-
-	// 新进程启动到可主动发送阶段后，回写上一次远程重启的完成通知。
-	go messaging.DeliverPendingRestartNotifications(ctx, registry, Version)
-
-	// Start platforms immediately — they will use echo mode until agent is ready
-	log.Printf("Starting message bridge...")
-	if err := registry.Run(ctx, handler.HandleMessage); err != nil {
-		return err
-	}
-	log.Println("All platforms stopped")
-	return nil
+	return cfg, nil
 }
