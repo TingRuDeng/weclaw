@@ -6,7 +6,28 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
+
+func TestStartConfiguredDaemonStopsOnConfigError(t *testing.T) {
+	wantErr := errors.New("Claude 仅支持 ACP")
+	started := false
+	err := startConfiguredDaemonWithOps(configuredDaemonStartOps{
+		loadConfig: func() (*config.Config, error) { return nil, wantErr },
+		start: func(*config.Config) error {
+			started = true
+			return nil
+		},
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("startConfiguredDaemonWithOps error=%v, want %v", err, wantErr)
+	}
+	if started {
+		t.Fatal("配置预检失败时不应派生后台进程")
+	}
+}
 
 func TestRunRestartStartsDirectlyWhenWeclawIsNotRunning(t *testing.T) {
 	var out bytes.Buffer

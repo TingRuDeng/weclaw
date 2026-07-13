@@ -406,3 +406,11 @@
 - 反例：`thread/start` 已返回新 thread，但 owner registry 仍指向旧 `desktop_disconnected` thread，导致后续消息绕过新 thread 并立即报断线；`/cx new` 只写 pending draft，在禁止隐式创建后永远无法完成。
 - 正确做法：提供 owner registry 原子 claim-and-bind 操作；`/new`、`/cx new` 立即创建并记录；空工作空间和恢复失败只提示显式选择，不伪装成已创建。
 - 来源：2026-07-12 用户反馈“飞书里切换会话、新建会话失败”，生产日志和状态文件显示 ACP thread 与 owner binding 指向不同 thread。
+
+## 2026-07-13 所有启动入口必须复用配置预检
+
+- 触发条件：`restart`、更新后重启或其他入口需要启动后台 WeClaw。
+- 规则：所有启动入口必须先执行与 `start` 相同的配置加载、Agent 后端校验和账号前置流程；禁止直接调用 `runDaemon` 绕过预检。
+- 反例：`restart` 直接派生后台子进程，旧 Claude CLI 配置只在子进程日志中失败；父进程把未回收的退出子进程当作存活，最终误报“未在超时内完成启动”。
+- 正确做法：统一通过 `startConfiguredDaemon` 加载并校验配置，预检失败时直接向用户返回根因且不创建子进程。
+- 来源：2026-07-13 用户反馈升级 v0.1.167 后 `weclaw restart` 误报后台子进程启动超时。

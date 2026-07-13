@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/spf13/cobra"
 )
 
@@ -32,14 +33,36 @@ type restartOps struct {
 	out        io.Writer
 }
 
+type configuredDaemonStartOps struct {
+	loadConfig func() (*config.Config, error)
+	start      func(*config.Config) error
+}
+
 func defaultRestartOps() restartOps {
 	return restartOps{
 		ensureSafe: ensureConfiguredRestartSafe,
 		isRunning:  weclawIsRunningForRestart,
 		stop:       stopAllWeclaw,
-		start:      runDaemon,
+		start:      startConfiguredDaemon,
 		out:        os.Stdout,
 	}
+}
+
+// startConfiguredDaemon 复用 start 命令的配置校验和登录前置流程。
+func startConfiguredDaemon() error {
+	return startConfiguredDaemonWithOps(configuredDaemonStartOps{
+		loadConfig: loadStartConfig,
+		start:      runBackgroundStart,
+	})
+}
+
+// startConfiguredDaemonWithOps 保证配置预检失败时不会派生后台子进程。
+func startConfiguredDaemonWithOps(ops configuredDaemonStartOps) error {
+	cfg, err := ops.loadConfig()
+	if err != nil {
+		return err
+	}
+	return ops.start(cfg)
 }
 
 func runRestart(ctx context.Context, force bool, ops restartOps) error {
