@@ -57,29 +57,30 @@ var (
 	detectCommandProbe = commandProbe
 )
 
-// DetectAndConfigure auto-detects local agents and populates the config.
-// For each agent name, it picks the highest-priority candidate；Claude 仅检测 ACP adapter。
-// Returns true if the config was modified.
+// DetectAndConfigure 自动检测本地 Agent，并统一执行特殊迁移与默认项选择。
 func DetectAndConfigure(cfg *Config) bool {
-	modified := false
+	modified := detectConfiguredAgents(cfg)
+	modified = normalizeDetectedOpenclaw(cfg) || modified
+	modified = detectOpenclawHTTPFallback(cfg) || modified
+	modified = selectDetectedDefault(cfg) || modified
+	return NormalizeCodexRemoteFirst(cfg) || modified
+}
 
+// detectConfiguredAgents 按候选优先级填充尚未配置的 Agent。
+func detectConfiguredAgents(cfg *Config) bool {
+	modified := false
 	for _, candidate := range agentCandidates {
-		// Skip if this agent name is already configured
 		if _, exists := cfg.Agents[candidate.Name]; exists {
 			continue
 		}
-
 		path, err := detectLookPath(candidate.Binary)
 		if err != nil {
 			continue
 		}
-
-		// Run capability probe if specified
 		if len(candidate.CheckArgs) > 0 && !detectCommandProbe(path, candidate.CheckArgs) {
 			log.Printf("[config] skipping %s at %s (type=%s): probe failed (%v)", candidate.Name, path, candidate.Type, candidate.CheckArgs)
 			continue
 		}
-
 		log.Printf("[config] auto-detected %s at %s (type=%s)", candidate.Name, path, candidate.Type)
 		cfg.Agents[candidate.Name] = AgentConfig{
 			Type:         candidate.Type,
@@ -90,90 +91,92 @@ func DetectAndConfigure(cfg *Config) bool {
 		}
 		modified = true
 	}
-
-	// Special handling for openclaw: prefer HTTP mode over ACP to avoid
-	// session routing conflicts with openclaw-weixin plugin (see #9).
-	// Priority: HTTP (gateway) > ACP (with user-configured --session) > skip.
-	if agCfg, exists := cfg.Agents["openclaw"]; exists && agCfg.Type == "acp" && len(agCfg.Args) == 0 {
-		gwURL, gwToken, gwPassword := loadOpenclawGateway()
-		if gwURL != "" {
-			// Prefer HTTP mode — no session routing issues
-			httpURL := gwURL
-			httpURL = strings.Replace(httpURL, "wss://", "https://", 1)
-			httpURL = strings.Replace(httpURL, "ws://", "http://", 1)
-			endpoint := strings.TrimRight(httpURL, "/") + "/v1/chat/completions"
-			log.Printf("[config] openclaw using HTTP mode: %s", endpoint)
-			cfg.Agents["openclaw"] = AgentConfig{
-				Type:     "http",
-				Endpoint: endpoint,
-				APIKey:   gwToken,
-				Headers:  map[string]string{"x-openclaw-scopes": "operator.write"},
-				Model:    "openclaw:main",
-			}
-			modified = true
-
-			// Also register openclaw-acp as a separate agent for users who want ACP
-			if _, apcExists := cfg.Agents["openclaw-acp"]; !apcExists {
-				cfg.Agents["openclaw-acp"] = openclawACPConfig(agCfg.Command, gwURL, gwToken, gwPassword)
-				log.Printf("[config] openclaw ACP also available as 'openclaw-acp' (use /openclaw-acp to switch)")
-			}
-		} else {
-			log.Printf("[config] openclaw binary found but no gateway config, skipping")
-			delete(cfg.Agents, "openclaw")
-			modified = true
-		}
-	}
-
-	// Fallback: if openclaw still not configured, try HTTP via gateway config.
-	if _, exists := cfg.Agents["openclaw"]; !exists {
-		gwURL, gwToken, _ := loadOpenclawGateway()
-		if gwURL != "" {
-			httpURL := gwURL
-			httpURL = strings.Replace(httpURL, "wss://", "https://", 1)
-			httpURL = strings.Replace(httpURL, "ws://", "http://", 1)
-			endpoint := strings.TrimRight(httpURL, "/") + "/v1/chat/completions"
-			log.Printf("[config] using openclaw HTTP: %s", endpoint)
-			cfg.Agents["openclaw"] = AgentConfig{
-				Type:     "http",
-				Endpoint: endpoint,
-				APIKey:   gwToken,
-				Headers:  map[string]string{"x-openclaw-scopes": "operator.write"},
-				Model:    "openclaw:main",
-			}
-			modified = true
-		}
-	}
-
-	// Pick the highest-priority default agent.
-	if cfg.DefaultAgent == "" || !agentExists(cfg, cfg.DefaultAgent) {
-		for _, name := range defaultOrder {
-			if _, ok := cfg.Agents[name]; ok {
-				if cfg.DefaultAgent != name {
-					log.Printf("[config] setting default agent: %s", name)
-					cfg.DefaultAgent = name
-					modified = true
-				}
-				break
-			}
-		}
-	}
-
-	if NormalizeCodexRemoteFirst(cfg) {
-		modified = true
-	}
-
 	return modified
 }
 
-func openclawACPConfig(command string, gatewayURL string, token string, password string) AgentConfig {
+// normalizeDetectedOpenclaw 将自动检测到的 OpenClaw 优先配置为 HTTP，并保留显式 ACP 入口。
+func normalizeDetectedOpenclaw(cfg *Config) bool {
+	agentCfg, exists := cfg.Agents["openclaw"]
+	if !exists || agentCfg.Type != "acp" || len(agentCfg.Args) != 0 {
+		return false
+	}
+	gwURL, token, password := loadOpenclawGateway()
+	if gwURL == "" {
+		log.Printf("[config] openclaw binary found but no gateway config, skipping")
+		delete(cfg.Agents, "openclaw")
+		return true
+	}
+	setOpenclawHTTP(cfg, gwURL, token)
+	if _, exists := cfg.Agents["openclaw-acp"]; !exists {
+		cfg.Agents["openclaw-acp"] = openclawACPConfig(openclawACPConfigRequest{
+			command: agentCfg.Command, gatewayURL: gwURL, token: token, password: password,
+		})
+		log.Printf("[config] openclaw ACP also available as 'openclaw-acp' (use /openclaw-acp to switch)")
+	}
+	return true
+}
+
+// detectOpenclawHTTPFallback 在未检测到二进制时从网关配置补充 HTTP Agent。
+func detectOpenclawHTTPFallback(cfg *Config) bool {
+	if _, exists := cfg.Agents["openclaw"]; exists {
+		return false
+	}
+	gwURL, token, _ := loadOpenclawGateway()
+	if gwURL == "" {
+		return false
+	}
+	setOpenclawHTTP(cfg, gwURL, token)
+	return true
+}
+
+// setOpenclawHTTP 统一生成 OpenClaw HTTP 配置，避免两条检测路径产生差异。
+func setOpenclawHTTP(cfg *Config, gatewayURL string, token string) {
+	httpURL := strings.Replace(gatewayURL, "wss://", "https://", 1)
+	httpURL = strings.Replace(httpURL, "ws://", "http://", 1)
+	endpoint := strings.TrimRight(httpURL, "/") + "/v1/chat/completions"
+	log.Printf("[config] openclaw using HTTP mode: %s", endpoint)
+	cfg.Agents["openclaw"] = AgentConfig{
+		Type: "http", Endpoint: endpoint, APIKey: token,
+		Headers: map[string]string{"x-openclaw-scopes": "operator.write"}, Model: "openclaw:main",
+	}
+}
+
+// selectDetectedDefault 选择优先级最高且已检测到的默认 Agent。
+func selectDetectedDefault(cfg *Config) bool {
+	if cfg.DefaultAgent != "" && agentExists(cfg, cfg.DefaultAgent) {
+		return false
+	}
+	for _, name := range defaultOrder {
+		if _, exists := cfg.Agents[name]; !exists {
+			continue
+		}
+		changed := cfg.DefaultAgent != name
+		if changed {
+			log.Printf("[config] setting default agent: %s", name)
+			cfg.DefaultAgent = name
+		}
+		return changed
+	}
+	return false
+}
+
+type openclawACPConfigRequest struct {
+	command    string
+	gatewayURL string
+	token      string
+	password   string
+}
+
+// openclawACPConfig 构造显式使用网关的 OpenClaw ACP 配置。
+func openclawACPConfig(req openclawACPConfigRequest) AgentConfig {
 	env := make(map[string]string)
-	if token != "" {
-		env["OPENCLAW_GATEWAY_TOKEN"] = token
-	} else if password != "" {
-		env["OPENCLAW_GATEWAY_PASSWORD"] = password
+	if req.token != "" {
+		env["OPENCLAW_GATEWAY_TOKEN"] = req.token
+	} else if req.password != "" {
+		env["OPENCLAW_GATEWAY_PASSWORD"] = req.password
 	}
 	return AgentConfig{
-		Type: "acp", Command: command, Args: []string{"acp", "--url", gatewayURL},
+		Type: "acp", Command: req.command, Args: []string{"acp", "--url", req.gatewayURL},
 		Env: env, Model: "openclaw:main",
 	}
 }

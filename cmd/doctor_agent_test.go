@@ -21,8 +21,9 @@ func (f *fakeDoctorACPClient) Start(context.Context) error {
 // TestProbeClaudeACPStopsAfterStartFailure 验证握手失败也不会遗留子进程。
 func TestProbeClaudeACPStopsAfterStartFailure(t *testing.T) {
 	fake := &fakeDoctorACPClient{startErr: context.DeadlineExceeded}
-	err := probeClaudeACP(context.Background(), "claude", config.AgentConfig{}, func(string, config.AgentConfig) doctorACPClient {
-		return fake
+	err := probeClaudeACP(doctorACPProbeRequest{
+		ctx: context.Background(), name: "claude", agentCfg: config.AgentConfig{},
+		factory: func(string, config.AgentConfig) doctorACPClient { return fake },
 	})
 	if err == nil || fake.started != 1 || fake.stopped != 1 {
 		t.Fatalf("error=%v started=%d stopped=%d", err, fake.started, fake.stopped)
@@ -30,8 +31,9 @@ func TestProbeClaudeACPStopsAfterStartFailure(t *testing.T) {
 }
 
 func TestProbeClaudeACPRejectsNilClient(t *testing.T) {
-	err := probeClaudeACP(context.Background(), "claude", config.AgentConfig{}, func(string, config.AgentConfig) doctorACPClient {
-		return nil
+	err := probeClaudeACP(doctorACPProbeRequest{
+		ctx: context.Background(), name: "claude", agentCfg: config.AgentConfig{},
+		factory: func(string, config.AgentConfig) doctorACPClient { return nil },
 	})
 	if err == nil {
 		t.Fatal("nil ACP client must fail")
@@ -45,8 +47,9 @@ func (f *fakeDoctorACPClient) Stop() {
 // TestProbeClaudeACPStartsAndStopsHandshake 验证诊断只握手并立即释放进程。
 func TestProbeClaudeACPStartsAndStopsHandshake(t *testing.T) {
 	fake := &fakeDoctorACPClient{}
-	err := probeClaudeACP(context.Background(), "claude", config.AgentConfig{Type: "acp"}, func(string, config.AgentConfig) doctorACPClient {
-		return fake
+	err := probeClaudeACP(doctorACPProbeRequest{
+		ctx: context.Background(), name: "claude", agentCfg: config.AgentConfig{Type: "acp"},
+		factory: func(string, config.AgentConfig) doctorACPClient { return fake },
 	})
 	if err != nil {
 		t.Fatalf("probeClaudeACP error: %v", err)

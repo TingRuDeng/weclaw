@@ -12,7 +12,7 @@ func TestACPInfoExposesLocalCommand(t *testing.T) {
 	})
 
 	info := agent.Info()
-	if info.Command != "claude-agent-acp" || info.LocalCommand != "claude" {
+	if info.Name != "claude" || info.Command != "claude-agent-acp" || info.LocalCommand != "claude" {
 		t.Fatalf("Info=%+v, want separate adapter and local commands", info)
 	}
 }

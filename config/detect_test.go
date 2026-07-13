@@ -137,7 +137,9 @@ func TestDetectAndConfigureOpenCodeUsesCompanion(t *testing.T) {
 }
 
 func TestOpenclawACPConfigKeepsSecretsOutOfArgs(t *testing.T) {
-	cfg := openclawACPConfig("openclaw", "ws://127.0.0.1:18789", "secret-token", "")
+	cfg := openclawACPConfig(openclawACPConfigRequest{
+		command: "openclaw", gatewayURL: "ws://127.0.0.1:18789", token: "secret-token",
+	})
 	joined := strings.Join(cfg.Args, " ")
 	if strings.Contains(joined, "secret-token") || strings.Contains(joined, "--token") {
 		t.Fatalf("args expose token: %#v", cfg.Args)
@@ -145,7 +147,9 @@ func TestOpenclawACPConfigKeepsSecretsOutOfArgs(t *testing.T) {
 	if cfg.Env["OPENCLAW_GATEWAY_TOKEN"] != "secret-token" {
 		t.Fatalf("env=%#v, want gateway token", cfg.Env)
 	}
-	passwordCfg := openclawACPConfig("openclaw", "ws://127.0.0.1:18789", "", "secret-password")
+	passwordCfg := openclawACPConfig(openclawACPConfigRequest{
+		command: "openclaw", gatewayURL: "ws://127.0.0.1:18789", password: "secret-password",
+	})
 	if strings.Contains(strings.Join(passwordCfg.Args, " "), "secret-password") ||
 		passwordCfg.Env["OPENCLAW_GATEWAY_PASSWORD"] != "secret-password" {
 		t.Fatalf("password config=%#v, want secret only in env", passwordCfg)

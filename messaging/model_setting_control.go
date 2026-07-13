@@ -146,6 +146,9 @@ func (h *Handler) sendFeishuModelSettingCard(ctx context.Context, req modelSetti
 	if !ok {
 		return false
 	}
+	control = h.withCurrentClaudeSessionStatus(modelSettingControllerRequest{
+		route: req.route, name: name, agent: ag, controller: control,
+	})
 	prompt, choices := modelSettingCard(ctx, control, req.setting)
 	if len(choices) == 0 {
 		return false

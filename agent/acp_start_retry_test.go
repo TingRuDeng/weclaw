@@ -4,17 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
-	"time"
 )
 
 const (
@@ -53,7 +49,9 @@ func TestClaudeACPConcurrentUseKeepsLatestIntent(t *testing.T) {
 	if err := <-firstDone; err == nil || !containsAll(err.Error(), "绑定", "过期") {
 		t.Fatalf("earlier UseClaudeSession error=%v, want stale binding conflict", err)
 	}
-	assertClaudeBinding(t, agent, "conversation-1", "session-b", workspaceB)
+	assertClaudeBinding(t, agent, claudeBindingExpectation{
+		conversationID: "conversation-1", sessionID: "session-b", cwd: workspaceB,
+	})
 }
 
 // TestClaudeACPCreateSessionClearInvalidatesCommit 验证清理动作使在途 session/new 失效。
@@ -173,11 +171,11 @@ func TestACPAgentStartRetriesAfterCapabilityFailure(t *testing.T) {
 	if err := agent.Start(context.Background()); err == nil || !strings.Contains(err.Error(), testACPResumeCapability) {
 		t.Fatalf("first Start error=%v, want missing resume", err)
 	}
-	assertRetryState(t, agent, 0, 1, "")
+	assertRetryState(t, agent, retryStateExpectation{generation: 0, pending: 1})
 	if err := agent.Start(context.Background()); err != nil {
 		t.Fatalf("second Start error: %v", err)
 	}
-	assertRetryState(t, agent, 1, 0, "persisted-session")
+	assertRetryState(t, agent, retryStateExpectation{generation: 1, session: "persisted-session"})
 	agent.Stop()
 	assertRetryProcessesExited(t, pidLog, 2)
 }
@@ -188,23 +186,35 @@ func newIdentitySwitchAgent(t *testing.T) *ACPAgent {
 	return NewACPAgent(ACPAgentConfig{ConfiguredName: "generic", Command: "mock-acp", Cwd: t.TempDir(), StateFile: filepath.Join(t.TempDir(), "state.json")})
 }
 
+type claudeBindingExpectation struct {
+	conversationID string
+	sessionID      string
+	cwd            string
+}
+
 // assertClaudeBinding 同时校验 session 与 cwd，确保绑定提交完整原子。
-func assertClaudeBinding(t *testing.T, agent *ACPAgent, conversationID string, sessionID string, cwd string) {
+func assertClaudeBinding(t *testing.T, agent *ACPAgent, want claudeBindingExpectation) {
 	t.Helper()
-	if got, ok := agent.CurrentClaudeSession(conversationID); !ok || got != sessionID {
-		t.Fatalf("binding=(%q,%v), want %q", got, ok, sessionID)
+	if got, ok := agent.CurrentClaudeSession(want.conversationID); !ok || got != want.sessionID {
+		t.Fatalf("binding=(%q,%v), want %q", got, ok, want.sessionID)
 	}
-	if got := agent.cwdForConversation(conversationID); got != cwd {
-		t.Fatalf("cwd=%q, want %q", got, cwd)
+	if got := agent.cwdForConversation(want.conversationID); got != want.cwd {
+		t.Fatalf("cwd=%q, want %q", got, want.cwd)
 	}
 }
 
+type retryStateExpectation struct {
+	generation uint64
+	pending    int
+	session    string
+}
+
 // assertRetryState 校验握手失败与重试成功后的核心状态。
-func assertRetryState(t *testing.T, agent *ACPAgent, generation uint64, pending int, session string) {
+func assertRetryState(t *testing.T, agent *ACPAgent, want retryStateExpectation) {
 	t.Helper()
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
-	if agent.legacyRuntimeGeneration != generation || len(agent.pendingPersistedSessions) != pending || agent.sessions["conversation-1"] != session {
+	if agent.legacyRuntimeGeneration != want.generation || len(agent.pendingPersistedSessions) != want.pending || agent.sessions["conversation-1"] != want.session {
 		t.Fatalf("generation=%d pending=%#v sessions=%#v", agent.legacyRuntimeGeneration, agent.pendingPersistedSessions, agent.sessions)
 	}
 }
@@ -276,25 +286,4 @@ func appendRetryPID(path string) {
 	if closeErr := file.Close(); err != nil || closeErr != nil {
 		os.Exit(7)
 	}
-}
-
-// assertProcessExited 使用 signal 0 等待指定测试子进程彻底退出。
-func assertProcessExited(t *testing.T, pid int) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Fatal("Windows 尚无可靠的 signal 0 进程退出探测")
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		t.Fatalf("find process %d: %v", pid, err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		signalErr := process.Signal(syscall.Signal(0))
-		if errors.Is(signalErr, os.ErrProcessDone) || errors.Is(signalErr, syscall.ESRCH) {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("helper process pid=%d still exists", pid)
 }

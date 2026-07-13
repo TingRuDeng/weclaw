@@ -77,8 +77,16 @@ func (h *Handler) handleModelCommandForRoute(ctx context.Context, route modelAge
 		return modelFixedByConfigHint(name)
 	}
 	arg = strings.TrimSpace(arg)
+	control = h.withCurrentClaudeSessionStatus(modelSettingControllerRequest{
+		route: route, name: name, agent: ag, controller: control,
+	})
 	if arg == "" {
 		return renderModelOverview(ctx, control)
+	}
+	if reply, handled := h.setCurrentClaudeSessionSetting(claudeModelSettingRequest{
+		ctx: ctx, route: route, name: name, agent: ag, model: arg,
+	}); handled {
+		return reply
 	}
 	control.SetModel(arg, "")
 	return wechatCommandText(
@@ -106,8 +114,16 @@ func (h *Handler) handleReasoningCommandForRoute(ctx context.Context, route mode
 		return modelFixedByConfigHint(name)
 	}
 	arg = strings.TrimSpace(arg)
+	control = h.withCurrentClaudeSessionStatus(modelSettingControllerRequest{
+		route: route, name: name, agent: ag, controller: control,
+	})
 	if arg == "" {
 		return renderReasoningOverview(ctx, control)
+	}
+	if reply, handled := h.setCurrentClaudeSessionSetting(claudeModelSettingRequest{
+		ctx: ctx, route: route, name: name, agent: ag, effort: arg,
+	}); handled {
+		return reply
 	}
 	control.SetModel("", arg)
 	return wechatCommandText(

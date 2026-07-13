@@ -10,8 +10,16 @@ import (
 // Info returns metadata about this agent.
 func (a *ACPAgent) Info() AgentInfo {
 	config := a.modelConfigSnapshot()
+	capabilities := a.acpCapabilitiesSnapshot()
+	name := strings.TrimSpace(capabilities.AgentInfo.Name)
+	if name == "" {
+		name = strings.TrimSpace(a.configuredName)
+	}
+	if name == "" {
+		name = a.command
+	}
 	info := AgentInfo{
-		Name:         a.command,
+		Name:         name,
 		Type:         "acp",
 		Model:        config.model,
 		Effort:       config.effort,

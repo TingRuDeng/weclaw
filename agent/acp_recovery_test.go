@@ -161,13 +161,7 @@ func TestACPAgentLegacySessionNotFoundKeepsOriginalSession(t *testing.T) {
 func TestACPAgentCodexKeepsThreadOnEmptyResponse(t *testing.T) {
 	ctx := context.Background()
 	stateFile, workspace := filepath.Join(t.TempDir(), "acp-state.json"), t.TempDir()
-
-	a := NewACPAgent(ACPAgentConfig{
-		Command:   "codex",
-		Args:      []string{"app-server", "--listen", "stdio://"},
-		Cwd:       workspace,
-		StateFile: stateFile,
-	})
+	a := newCodexRecoveryAgent(workspace, stateFile)
 
 	a.mu.Lock()
 	a.threads["user-1"] = "old-thread"
@@ -216,4 +210,12 @@ func TestACPAgentCodexKeepsThreadOnEmptyResponse(t *testing.T) {
 	if got := persisted.Threads["user-1"]; got != "old-thread" {
 		t.Fatalf("persisted thread for user-1 = %q, want old-thread", got)
 	}
+}
+
+// newCodexRecoveryAgent 创建使用独立状态文件的 Codex 恢复测试 Agent。
+func newCodexRecoveryAgent(workspace string, stateFile string) *ACPAgent {
+	return NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Cwd: workspace, StateFile: stateFile,
+	})
 }

@@ -28,7 +28,24 @@ func TestClaudeAgentTaskOpensCardAndReturnsImmediately(t *testing.T) {
 		t.Fatalf("ActiveTaskCount()=%d，期望后台任务已登记", h.ActiveTaskCount())
 	}
 	ag.release <- struct{}{}
-	waitForNoActiveTask(t, h, "route-1", ag)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
+}
+
+func TestClaudeAgentTaskRejectsCwdBindingChange(t *testing.T) {
+	h, ag := newClaudeAgentTaskFixture()
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.sendToNamedAgent(agentMessageRequest{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "user-1", routeUserID: "route-1", reply: reply,
+		name: "claude", message: "第一条", clientID: "client-1",
+	})
+	waitForAgentEnter(t, ag)
+	result := h.handleCwdWithAccess("/cwd "+t.TempDir(), []string{"route-1"}, true)
+	if !strings.Contains(result, "当前 Claude 任务正在运行") {
+		t.Fatalf("cwd result=%q，期望拒绝活动任务期间的绑定修改", result)
+	}
+	ag.release <- struct{}{}
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
 }
 
 func TestClaudeAgentTaskQueuesOneAndRunsAfterFailure(t *testing.T) {
@@ -45,7 +62,7 @@ func TestClaudeAgentTaskQueuesOneAndRunsAfterFailure(t *testing.T) {
 	ag.release <- struct{}{}
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
-	waitForNoActiveTask(t, h, "route-1", ag)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
 	started, maxActive := ag.stats()
 	if started != 2 || maxActive != 1 {
 		t.Fatalf("started=%d maxActive=%d，期望失败后串行续跑", started, maxActive)
@@ -73,7 +90,7 @@ func TestClaudeAgentTaskSurvivesRequestCancellation(t *testing.T) {
 		t.Fatalf("task context=%v，消息请求结束不应取消 Claude 后台任务", taskCtx.Err())
 	}
 	close(ag.release)
-	waitForNoActiveTask(t, h, "route-1", ag)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
 }
 
 func TestClaudeCancelWithdrawsQueuedMessage(t *testing.T) {
@@ -88,7 +105,7 @@ func TestClaudeCancelWithdrawsQueuedMessage(t *testing.T) {
 		t.Fatalf("result=%q", result)
 	}
 	ag.release <- struct{}{}
-	waitForNoActiveTask(t, h, "route-1", ag)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
 	if started, _ := ag.stats(); started != 1 {
 		t.Fatalf("started=%d，撤回后不应执行第二条", started)
 	}
@@ -111,7 +128,7 @@ func TestClaudeStopTargetsCurrentAgentOnly(t *testing.T) {
 	if result != "已停止当前任务。" {
 		t.Fatalf("result=%q", result)
 	}
-	waitForNoActiveTask(t, h, "route-1", claude)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: claude})
 	select {
 	case <-codexCtx.Done():
 		t.Fatal("停止 Claude 不应取消 Codex 任务")
@@ -143,7 +160,7 @@ func TestClaudeGuideReturnsUnsupportedAndKeepsQueue(t *testing.T) {
 	ag.release <- struct{}{}
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
-	waitForNoActiveTask(t, h, "route-1", ag)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
 }
 
 func newClaudeAgentTaskFixture() (*Handler, *blockingProgressAgent) {
@@ -164,11 +181,18 @@ func claudeTaskCommandRequest(h *Handler, reply platform.Replier) taskCommandReq
 	}
 }
 
-func waitForNoActiveTask(t *testing.T, h *Handler, routeUserID string, ag agent.Agent) {
+type noActiveTaskExpectation struct {
+	handler     *Handler
+	routeUserID string
+	agent       agent.Agent
+}
+
+// waitForNoActiveTask 等待指定路由上的后台任务完成。
+func waitForNoActiveTask(t *testing.T, want noActiveTaskExpectation) {
 	t.Helper()
-	key := h.agentExecutionKeyForRoute("user-1", routeUserID, "claude", ag)
+	key := want.handler.agentExecutionKeyForRoute("user-1", want.routeUserID, "claude", want.agent)
 	waitUntil(t, func() bool {
-		_, ok := h.activeTask(key)
+		_, ok := want.handler.activeTask(key)
 		return !ok
 	})
 }
@@ -204,7 +228,7 @@ func TestClaudeSecondQueuedMessageDoesNotAcceptThird(t *testing.T) {
 	ag.release <- struct{}{}
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
-	waitForNoActiveTask(t, h, "route-1", ag)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
 	if strings.Contains(strings.Join(reply.Texts, "\n"), "第3条结果") {
 		t.Fatalf("texts=%#v，第三条不应执行", reply.Texts)
 	}

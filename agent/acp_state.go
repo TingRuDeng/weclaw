@@ -14,7 +14,15 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
-func defaultACPStateFile(command string, args []string, cwd string, protocol string) string {
+type acpStateFileIdentity struct {
+	command  string
+	args     []string
+	cwd      string
+	protocol string
+}
+
+// defaultACPStateFile 根据运行时身份生成隔离的持久化状态路径。
+func defaultACPStateFile(identity acpStateFileIdentity) string {
 	home, err := config.DataDir()
 	if err != nil {
 		return ""
@@ -25,10 +33,10 @@ func defaultACPStateFile(command string, args []string, cwd string, protocol str
 		return ""
 	}
 	key := strings.Join([]string{
-		strings.ToLower(command),
-		strings.Join(args, "\x00"),
-		cwd,
-		protocol,
+		strings.ToLower(identity.command),
+		strings.Join(identity.args, "\x00"),
+		identity.cwd,
+		identity.protocol,
 	}, "\x00")
 	sum := sha1.Sum([]byte(key))
 	return filepath.Join(dir, "acp-"+hex.EncodeToString(sum[:])+".json")

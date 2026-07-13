@@ -34,6 +34,14 @@ type defaultSessionResetRequest struct {
 	accountID   string
 }
 
+type claudeDefaultSessionResetRequest struct {
+	ctx         context.Context
+	actorUserID string
+	userID      string
+	agentName   string
+	agent       agent.Agent
+}
+
 // resetDefaultSessionForMessage 按消息会话选择的 Agent 重置对应会话。
 func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req defaultSessionResetRequest) string {
 	actorUserID := req.actorUserID
@@ -50,7 +58,9 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 		return h.resetDefaultCodexSessionForRoute(ctx, actorUserID, routeUserID, name, ag)
 	}
 	if isClaudeAgent(name, ag.Info()) {
-		return h.resetDefaultClaudeSession(ctx, actorUserID, routeUserID, name, ag)
+		return h.resetDefaultClaudeSession(claudeDefaultSessionResetRequest{
+			ctx: ctx, actorUserID: actorUserID, userID: routeUserID, agentName: name, agent: ag,
+		})
 	}
 	sessionID, err := ag.ResetSession(ctx, routeUserID)
 	if err != nil {
@@ -91,12 +101,13 @@ func (h *Handler) recordResetCodexThread(userID string, agentName string, worksp
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 }
 
-func (h *Handler) resetDefaultClaudeSession(ctx context.Context, actorUserID string, userID string, name string, ag agent.Agent) string {
-	workspaceRoot := h.claudeWorkspaceRootForUser(userID, name, ag)
+// resetDefaultClaudeSession 使用当前工作空间创建并绑定新的 Claude ACP session。
+func (h *Handler) resetDefaultClaudeSession(req claudeDefaultSessionResetRequest) string {
+	workspaceRoot := h.claudeWorkspaceRootForUser(req.userID, req.agentName, req.agent)
 	route := claudeSessionRoute{
-		Context: ctx, ActorUserID: actorUserID, UserID: userID, AgentName: name,
-		Agent: ag, WorkspaceRoot: workspaceRoot, BindingKey: claudeBindingKey(userID, name),
-		Admin: h.isAdminUser(actorUserID),
+		Context: req.ctx, ActorUserID: req.actorUserID, UserID: req.userID, AgentName: req.agentName,
+		Agent: req.agent, WorkspaceRoot: workspaceRoot, BindingKey: claudeBindingKey(req.userID, req.agentName),
+		Admin: h.isAdminUser(req.actorUserID),
 	}
 	return h.handleClaudeNew(route)
 }

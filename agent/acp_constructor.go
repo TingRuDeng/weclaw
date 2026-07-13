@@ -41,7 +41,9 @@ func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	protocol := detectACPProtocol(cfg.Command, cfg.Args)
 	stateFile := cfg.StateFile
 	if stateFile == "" {
-		stateFile = defaultACPStateFile(cfg.Command, cfg.Args, cfg.Cwd, protocol)
+		stateFile = defaultACPStateFile(acpStateFileIdentity{
+			command: cfg.Command, args: cfg.Args, cwd: cfg.Cwd, protocol: protocol,
+		})
 	}
 	options.protocol = protocol
 	options.stateFile = stateFile

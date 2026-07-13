@@ -129,8 +129,13 @@ func buildClaudeSessionHelpText() string {
 }
 
 func isClaudeAgent(name string, info agent.AgentInfo) bool {
-	if strings.EqualFold(name, "claude") || strings.EqualFold(info.Name, "claude") {
+	if strings.EqualFold(strings.TrimSpace(name), "claude") {
 		return true
 	}
-	return strings.Contains(strings.ToLower(info.Command), "claude")
+	switch strings.ToLower(strings.TrimSpace(info.Name)) {
+	case "claude", "claude-agent-acp", "@agentclientprotocol/claude-agent-acp":
+		return true
+	default:
+		return false
+	}
 }

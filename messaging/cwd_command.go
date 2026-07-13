@@ -5,13 +5,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-// handleCwd handles the /cwd command. It updates the working directory for all running agents.
+// handleCwd 处理内部或测试调用的工作目录切换命令。
 func (h *Handler) handleCwd(trimmed string, userID ...string) string {
 	return h.handleCwdWithAccess(trimmed, userID, false)
 }
@@ -24,54 +25,72 @@ func (h *Handler) handleCwdForMessage(trimmed string, msg platform.IncomingMessa
 func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin bool) string {
 	arg := strings.TrimSpace(strings.TrimPrefix(trimmed, "/cwd"))
 	if arg == "" {
-		// 没有传路径时，只展示默认 agent 的 cwd 提示。
-		ag := h.getDefaultAgent()
-		if ag == nil {
-			return "No agent running."
-		}
-		info := ag.Info()
-		return wechatCommandText("cwd: (check agent config)", "agent: "+info.Name)
+		return h.currentCwdStatus()
 	}
-
-	if arg == "~" {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			arg = home
-		}
-	} else if strings.HasPrefix(arg, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			arg = filepath.Join(home, arg[2:])
-		}
-	}
-
-	absPath, err := filepath.Abs(arg)
+	absPath, err := resolveCwdPath(arg)
 	if err != nil {
-		return fmt.Sprintf("Invalid path: %v", err)
+		return err.Error()
 	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return fmt.Sprintf("Path not found: %s", absPath)
-	}
-	if !info.IsDir() {
-		return fmt.Sprintf("Not a directory: %s", absPath)
-	}
-
-	// 普通用户只能切到白名单根目录及其子目录；管理员已经通过 admin_users 显式授权，
-	// 可以绕过 allowed_workspace_roots 处理临时排障和本机维护场景。
 	if !admin && !h.isWorkspaceAllowed(absPath) {
 		log.Printf("[handler] rejected /cwd outside allowed workspace roots: %s", absPath)
 		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请联系管理员在 allowed_workspace_roots 中添加。", absPath)
 	}
+	agents := h.snapshotAgents()
+	release := h.lockClaudeCwdBindings(userID, agents)
+	defer release()
+	if h.hasActiveClaudeTaskForCwd(userID, agents) {
+		return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
+	}
+	h.updateAgentWorkingDirectories(absPath, agents)
+	h.recordActiveWorkspaceForUser(userID, agents, absPath)
+	return fmt.Sprintf("cwd: %s", absPath)
+}
 
+// currentCwdStatus 返回默认 Agent 的工作目录提示。
+func (h *Handler) currentCwdStatus() string {
+	ag := h.getDefaultAgent()
+	if ag == nil {
+		return "No agent running."
+	}
+	return wechatCommandText("cwd: (check agent config)", "agent: "+ag.Info().Name)
+}
+
+// resolveCwdPath 展开用户目录并校验目标确实是目录。
+func resolveCwdPath(arg string) (string, error) {
+	if home, err := os.UserHomeDir(); err == nil {
+		if arg == "~" {
+			arg = home
+		} else if strings.HasPrefix(arg, "~/") {
+			arg = filepath.Join(home, arg[2:])
+		}
+	}
+	absPath, err := filepath.Abs(arg)
+	if err != nil {
+		return "", fmt.Errorf("Invalid path: %v", err)
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("Path not found: %s", absPath)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("Not a directory: %s", absPath)
+	}
+	return absPath, nil
+}
+
+// snapshotAgents 复制 Agent 映射，避免后续流程持有 Handler 主锁。
+func (h *Handler) snapshotAgents() map[string]agent.Agent {
 	h.mu.RLock()
 	agents := make(map[string]agent.Agent, len(h.agents))
 	for name, ag := range h.agents {
 		agents[name] = ag
 	}
 	h.mu.RUnlock()
+	return agents
+}
 
+// updateAgentWorkingDirectories 更新运行时和 Handler 中记录的 Agent 工作目录。
+func (h *Handler) updateAgentWorkingDirectories(absPath string, agents map[string]agent.Agent) {
 	for name, ag := range agents {
 		ag.SetCwd(absPath)
 		log.Printf("[handler] updated cwd for agent %s: %s", name, absPath)
@@ -85,9 +104,47 @@ func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin boo
 		h.agentWorkDirs[name] = absPath
 	}
 	h.mu.Unlock()
-	h.recordActiveWorkspaceForUser(userID, agents, absPath)
+}
 
-	return fmt.Sprintf("cwd: %s", absPath)
+// lockClaudeCwdBindings 按固定顺序锁定当前用户的 Claude 绑定，避免与任务启动交错。
+func (h *Handler) lockClaudeCwdBindings(userIDs []string, agents map[string]agent.Agent) func() {
+	if len(userIDs) == 0 || strings.TrimSpace(userIDs[0]) == "" {
+		return func() {}
+	}
+	keys := make([]string, 0)
+	for name, ag := range agents {
+		if isClaudeAgent(name, ag.Info()) {
+			keys = append(keys, claudeBindingExecutionKey(claudeBindingKey(userIDs[0], name)))
+		}
+	}
+	sort.Strings(keys)
+	unlocks := make([]func(), 0, len(keys))
+	for _, key := range keys {
+		unlocks = append(unlocks, h.lockAgentExecution(key))
+	}
+	return func() {
+		for index := len(unlocks) - 1; index >= 0; index-- {
+			unlocks[index]()
+		}
+	}
+}
+
+// hasActiveClaudeTaskForCwd 判断工作目录切换是否会覆盖正在执行的 Claude 绑定。
+func (h *Handler) hasActiveClaudeTaskForCwd(userIDs []string, agents map[string]agent.Agent) bool {
+	if len(userIDs) == 0 || strings.TrimSpace(userIDs[0]) == "" {
+		return false
+	}
+	for name, ag := range agents {
+		if !isClaudeAgent(name, ag.Info()) {
+			continue
+		}
+		workspace := h.claudeWorkspaceRootForUser(userIDs[0], name, ag)
+		key := buildClaudeConversationID(userIDs[0], name, workspace)
+		if _, active := h.activeTask(key); active {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) recordActiveWorkspaceForUser(userIDs []string, agents map[string]agent.Agent, workspaceRoot string) {

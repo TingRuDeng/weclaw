@@ -29,6 +29,9 @@ func (h *Handler) claudeWorkspaceRootForUser(userID string, agentName string, _ 
 func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) string {
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
+	if reply := h.rejectActiveClaudeBindingChange(route); reply != "" {
+		return reply
+	}
 	selected, err := h.findClaudeSessionForRoute(route, target)
 	if err != nil {
 		return err.Error()
@@ -101,6 +104,9 @@ func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string
 	}
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
+	if reply := h.rejectActiveClaudeBindingChange(route); reply != "" {
+		return reply
+	}
 	group, err := h.findClaudeWorkspaceGroupForRoute(route, target)
 	if err != nil {
 		return err.Error()
@@ -121,6 +127,9 @@ func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
+	if reply := h.rejectActiveClaudeBindingChange(route); reply != "" {
+		return reply
+	}
 	previous := h.ensureClaudeSessions().binding(route.BindingKey)
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
 	h.bindConversationCwd(route.Agent, conversationID, route.WorkspaceRoot)
@@ -135,6 +144,19 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 		return fmt.Sprintf("新建 Claude 会话失败: %v", err)
 	}
 	return wechatCommandText("已创建新的 Claude 会话。", "工作空间: "+shortCodexWorkspaceName(route.WorkspaceRoot))
+}
+
+// rejectActiveClaudeBindingChange 防止活动任务因 workspace/session 漂移而失去控制键。
+func (h *Handler) rejectActiveClaudeBindingChange(route claudeSessionRoute) string {
+	binding := h.ensureClaudeSessions().binding(route.BindingKey)
+	workspaceRoot := binding.WorkspaceRoot
+	if workspaceRoot == "" {
+		workspaceRoot = route.WorkspaceRoot
+	}
+	if !h.hasActiveClaudeTask(route, workspaceRoot) {
+		return ""
+	}
+	return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
 }
 
 func (h *Handler) commitNewClaudeSelection(route claudeSessionRoute, conversationID string, selected agent.ClaudeSession) error {

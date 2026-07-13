@@ -95,6 +95,63 @@ func TestFeishuClaudeModelAndReasoningCommandsUseChoiceCards(t *testing.T) {
 	}
 }
 
+type fakeCurrentClaudeModelAgent struct {
+	fakeClaudeModelAgent
+	config  agent.ClaudeSessionConfig
+	updates []agent.ClaudeSessionConfigUpdate
+}
+
+// ClaudeSessionConfig 返回当前测试 session 的运行时配置。
+func (f *fakeCurrentClaudeModelAgent) ClaudeSessionConfig(string) (agent.ClaudeSessionConfig, bool) {
+	return f.config, true
+}
+
+// SetClaudeSessionConfig 记录消息层实际发送给当前 session 的配置更新。
+func (f *fakeCurrentClaudeModelAgent) SetClaudeSessionConfig(_ context.Context, update agent.ClaudeSessionConfigUpdate) error {
+	f.updates = append(f.updates, update)
+	if update.Model != "" {
+		f.config.Model = update.Model
+	}
+	if update.Effort != "" {
+		f.config.Effort = update.Effort
+	}
+	return nil
+}
+
+func TestFeishuClaudeSettingsUpdateCurrentSession(t *testing.T) {
+	claude := &fakeCurrentClaudeModelAgent{fakeClaudeModelAgent: fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp"}},
+		model:     "default-model", effort: "medium",
+		models: []agent.ClaudeModel{{ID: "opus", EffortOptions: []string{"medium", "high"}}},
+	}, config: agent.ClaudeSessionConfig{Model: "sonnet", Effort: "medium"}}
+	h := newClaudeModelHandler(&fakeCodexModelAgent{}, claude)
+	sessionKey := "feishu:tenant:dm:chat-current:user-1"
+	workspace := t.TempDir()
+	if err := h.claudeSessions.commitSelection(claudeBindingKey(sessionKey, "claude"), workspace, "session-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	for index, command := range []string{"/model opus", "/reasoning high"} {
+		reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, command, fmt.Sprintf("current-%d", index)})
+		if !containsText(reply.Texts, "当前 Claude session") {
+			t.Fatalf("command=%q texts=%#v", command, reply.Texts)
+		}
+	}
+	if len(claude.updates) != 2 || claude.config.Model != "opus" || claude.config.Effort != "high" {
+		t.Fatalf("updates=%#v config=%#v", claude.updates, claude.config)
+	}
+	if claude.model != "default-model" {
+		t.Fatalf("默认模型=%q，不应覆盖新会话默认值", claude.model)
+	}
+	card := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/model", "current-status"})
+	if len(card.Choices) != 1 || len(card.Choices[0].Choices) != 1 ||
+		!strings.Contains(card.Choices[0].Choices[0].Label, "当前") {
+		t.Fatalf("当前 session 模型卡片=%#v，期望 opus 标记为当前", card.Choices)
+	}
+}
+
 func newClaudeModelHandler(codex agent.Agent, claude agent.Agent) *Handler {
 	h := NewHandler(func(_ context.Context, name string) agent.Agent {
 		if name == "claude" {

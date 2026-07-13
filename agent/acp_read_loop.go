@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -18,84 +19,138 @@ func (a *ACPAgent) readLoop() {
 	}
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		var msg rpcResponse
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			log.Printf("[acp] failed to parse message: %v", err)
-			continue
-		}
-		msg.Sequence = a.wireSequence.Add(1)
-
-		// Response to a request we made (has id, no method)
-		if msg.ID != nil && msg.Method == "" {
-			a.pendingMu.Lock()
-			ch, ok := a.pending[*msg.ID]
-			a.pendingMu.Unlock()
-			if ok {
-				ch <- &msg
-			}
-			continue
-		}
-
-		// 处理 agent 主动发出的请求或通知。
-		switch msg.Method {
-		case "session/update":
-			a.handleSessionUpdateAt(msg.Params, msg.Sequence)
-
-		case "session/request_permission":
-			// 旧 ACP 权限请求会复用统一审批处理链路。
-			a.handlePermissionRequest(line)
-
-		// Codex app-server 事件，不同版本会发出不同 method。
-		case "codex/event/agent_message_delta":
-			a.handleCodexDelta(msg.Params)
-		case "item/agentMessage/delta":
-			a.handleCodexItemDelta(msg.Params)
-		case "item/started":
-			a.handleCodexItemStarted(msg.Params)
-		case "turn/started", "turn/completed", "turn/failed":
-			a.handleCodexTurnEvent(msg.Method, msg.Params)
-		case "turn/plan/updated":
-			a.handleCodexPlanUpdated(msg.Params)
-		case "warning":
-			a.handleCodexWarning(msg.Params)
-		case "error":
-			a.handleCodexError(msg.Params)
-		case "item/completed":
-			a.handleCodexItemCompleted(msg.Params)
-		case "item/autoApprovalReview/started":
-			a.handleCodexAutoApprovalReviewStarted(msg.Params)
-		case "item/autoApprovalReview/completed":
-			a.handleCodexAutoApprovalReviewCompleted(msg.Params)
-		case "guardianWarning":
-			a.handleCodexGuardianWarning(msg.Params)
-		case "item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction":
-			a.handleCodexCommandProgress(msg.Params)
-		case "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated":
-			a.handleCodexFileProgress(msg.Params)
-		case "codex/event/agent_message", "codex/event/task_complete",
-			"codex/event/item_completed", "codex/event/token_count",
-			"thread/tokenUsage/updated",
-			"account/rateLimits/updated", "thread/status/changed",
-			"mcpServer/startupStatus/updated":
-			// 这些是已知状态事件，当前桥接层不需要额外处理。
-		case "turn/approval/request",
-			"item/fileChange/requestApproval",
-			"item/commandExecution/requestApproval",
-			"item/permissions/requestApproval":
-			a.handlePermissionRequest(line)
-
-		default:
-			if a.shouldLogUnhandledMethod(msg.Method, time.Now()) {
-				log.Printf("[acp] unhandled method: %s", msg.Method)
-			}
-		}
+		a.handleACPWireLine(scanner.Text())
 	}
+	a.finishReadLoop(scanner)
+	log.Println("[acp] read loop ended")
+}
 
+// handleACPWireLine 解析单条 NDJSON，并区分请求响应与主动通知。
+func (a *ACPAgent) handleACPWireLine(line string) {
+	if line == "" {
+		return
+	}
+	var msg rpcResponse
+	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+		log.Printf("[acp] failed to parse message: %v", err)
+		return
+	}
+	msg.Sequence = a.wireSequence.Add(1)
+	if msg.ID != nil && msg.Method == "" {
+		a.dispatchACPResponse(&msg)
+		return
+	}
+	if a.dispatchACPNotification(msg, line) {
+		return
+	}
+	if a.shouldLogUnhandledMethod(msg.Method, time.Now()) {
+		log.Printf("[acp] unhandled method: %s", msg.Method)
+	}
+}
+
+// dispatchACPResponse 将响应投递给对应 RPC 等待者。
+func (a *ACPAgent) dispatchACPResponse(msg *rpcResponse) {
+	a.pendingMu.Lock()
+	ch, ok := a.pending[*msg.ID]
+	a.pendingMu.Unlock()
+	if ok {
+		ch <- msg
+	}
+}
+
+// dispatchACPNotification 处理标准 ACP 通知并转交 Codex 专属分组。
+func (a *ACPAgent) dispatchACPNotification(msg rpcResponse, line string) bool {
+	switch msg.Method {
+	case "session/update":
+		a.handleSessionUpdateAt(msg.Params, msg.Sequence)
+		return true
+	case "session/request_permission":
+		a.handlePermissionRequest(line)
+		return true
+	default:
+		return a.dispatchCodexNotification(msg, line)
+	}
+}
+
+// dispatchCodexNotification 按职责分组处理 Codex app-server 事件。
+func (a *ACPAgent) dispatchCodexNotification(msg rpcResponse, line string) bool {
+	return a.dispatchCodexMessageNotification(msg) ||
+		a.dispatchCodexTurnNotification(msg) ||
+		a.dispatchCodexProgressNotification(msg) ||
+		a.dispatchCodexKnownNotification(msg, line)
+}
+
+// dispatchCodexMessageNotification 处理消息增量和 item 生命周期事件。
+func (a *ACPAgent) dispatchCodexMessageNotification(msg rpcResponse) bool {
+	switch msg.Method {
+	case "codex/event/agent_message_delta":
+		a.handleCodexDelta(msg.Params)
+	case "item/agentMessage/delta":
+		a.handleCodexItemDelta(msg.Params)
+	case "item/started":
+		a.handleCodexItemStarted(msg.Params)
+	case "item/completed":
+		a.handleCodexItemCompleted(msg.Params)
+	default:
+		return false
+	}
+	return true
+}
+
+// dispatchCodexTurnNotification 处理 turn 终态、计划、warning 和 error。
+func (a *ACPAgent) dispatchCodexTurnNotification(msg rpcResponse) bool {
+	switch msg.Method {
+	case "turn/started", "turn/completed", "turn/failed":
+		a.handleCodexTurnEvent(msg.Method, msg.Params)
+	case "turn/plan/updated":
+		a.handleCodexPlanUpdated(msg.Params)
+	case "warning":
+		a.handleCodexWarning(msg.Params)
+	case "error":
+		a.handleCodexError(msg.Params)
+	default:
+		return false
+	}
+	return true
+}
+
+// dispatchCodexProgressNotification 处理审批审查、guardian、命令和文件进度。
+func (a *ACPAgent) dispatchCodexProgressNotification(msg rpcResponse) bool {
+	switch msg.Method {
+	case "item/autoApprovalReview/started":
+		a.handleCodexAutoApprovalReviewStarted(msg.Params)
+	case "item/autoApprovalReview/completed":
+		a.handleCodexAutoApprovalReviewCompleted(msg.Params)
+	case "guardianWarning":
+		a.handleCodexGuardianWarning(msg.Params)
+	case "item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction":
+		a.handleCodexCommandProgress(msg.Params)
+	case "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated":
+		a.handleCodexFileProgress(msg.Params)
+	default:
+		return false
+	}
+	return true
+}
+
+// dispatchCodexKnownNotification 消费已知状态事件和 Codex 审批请求。
+func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) bool {
+	switch msg.Method {
+	case "codex/event/agent_message", "codex/event/task_complete",
+		"codex/event/item_completed", "codex/event/token_count", "thread/tokenUsage/updated",
+		"account/rateLimits/updated", "thread/status/changed", "mcpServer/startupStatus/updated":
+		return true
+	case "turn/approval/request", "item/fileChange/requestApproval",
+		"item/commandExecution/requestApproval", "item/permissions/requestApproval":
+		a.handlePermissionRequest(line)
+		return true
+	default:
+		return false
+	}
+}
+
+// finishReadLoop 清理当前 runtime，并唤醒所有仍在等待的调用者。
+func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner) {
 	exitReason := "ACP runtime exited"
 	if err := scanner.Err(); err != nil {
 		exitReason = fmt.Sprintf("ACP runtime read error: %v", err)
@@ -113,7 +168,6 @@ func (a *ACPAgent) readLoop() {
 	if currentScanner {
 		a.failRuntimeWaiters(exitReason)
 	}
-	log.Println("[acp] read loop ended")
 }
 
 func (a *ACPAgent) shouldLogUnhandledMethod(method string, now time.Time) bool {

@@ -87,7 +87,7 @@ func TestClaudeACPChatLazyResumesAfterRuntimeGenerationChanges(t *testing.T) {
 			assertLazyResumeParams(t, params, workspace)
 			return claudeConfigResultForTest("sonnet", "medium"), nil
 		case "session/prompt":
-			sendLegacyTestReply(t, agent, "session-1", "done")
+			sendLegacyTestReply(t, agent, legacyTestReply{sessionID: "session-1", text: "done"})
 			return json.RawMessage(`{}`), nil
 		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
@@ -171,15 +171,21 @@ func assertLazyResumeParams(t *testing.T, params interface{}, workspace string) 
 	}
 }
 
-func sendLegacyTestReply(t *testing.T, agent *ACPAgent, sessionID string, text string) {
+type legacyTestReply struct {
+	sessionID string
+	text      string
+}
+
+// sendLegacyTestReply 模拟旧 ACP 服务端向指定会话返回文本块。
+func sendLegacyTestReply(t *testing.T, agent *ACPAgent, reply legacyTestReply) {
 	t.Helper()
 	agent.notifyMu.Lock()
-	channel := agent.notifyCh[sessionID]
+	channel := agent.notifyCh[reply.sessionID]
 	agent.notifyMu.Unlock()
 	if channel == nil {
 		t.Fatal("missing notify channel")
 	}
-	channel <- &sessionUpdate{SessionUpdate: "agent_message_chunk", Content: json.RawMessage(fmt.Sprintf(`{"type":"text","text":%q}`, text))}
+	channel <- &sessionUpdate{SessionUpdate: "agent_message_chunk", Content: json.RawMessage(fmt.Sprintf(`{"type":"text","text":%q}`, reply.text))}
 }
 
 func TestLegacyACPAgentMessageChunkDoesNotEmitProgress(t *testing.T) {

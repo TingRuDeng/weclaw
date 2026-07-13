@@ -87,7 +87,7 @@ func TestSendToNamedAgentTracksNonCodexActiveTask(t *testing.T) {
 
 	ag.release <- struct{}{}
 	waitDone(t, done, "Claude 任务")
-	waitForNoActiveTask(t, h, "user-1", ag)
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "user-1", agent: ag})
 	if got := h.ActiveTaskCount(); got != 0 {
 		t.Fatalf("ActiveTaskCount()=%d, want 0 after Claude completed", got)
 	}

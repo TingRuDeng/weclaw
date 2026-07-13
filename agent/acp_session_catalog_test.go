@@ -116,7 +116,9 @@ func TestACPCapabilityFailureKeepsStateAndAllowsRetry(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), testACPResumeCapability) {
 		t.Fatalf("cache capabilities error=%v, want missing resume", err)
 	}
-	assertACPHandshakeState(t, agent, original, 7, 2, 1)
+	assertACPHandshakeState(t, agent, acpHandshakeExpectation{
+		capabilities: original, generation: 7, pending: 2, sessions: 1,
+	})
 	if err := agent.cacheAndValidateACPCapabilities(genericCapabilityPayload()); err != nil {
 		t.Fatalf("generic retry error: %v", err)
 	}
@@ -128,14 +130,22 @@ func TestACPCapabilityFailureKeepsStateAndAllowsRetry(t *testing.T) {
 	}
 }
 
-func assertACPHandshakeState(t *testing.T, agent *ACPAgent, capabilities acpCapabilitySnapshot, generation uint64, pending int, sessions int) {
+type acpHandshakeExpectation struct {
+	capabilities acpCapabilitySnapshot
+	generation   uint64
+	pending      int
+	sessions     int
+}
+
+// assertACPHandshakeState 校验失败握手不会污染已提交状态。
+func assertACPHandshakeState(t *testing.T, agent *ACPAgent, want acpHandshakeExpectation) {
 	t.Helper()
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
-	if !reflect.DeepEqual(agent.capabilities, capabilities) || agent.legacyRuntimeGeneration != generation {
+	if !reflect.DeepEqual(agent.capabilities, want.capabilities) || agent.legacyRuntimeGeneration != want.generation {
 		t.Fatalf("capabilities=%+v generation=%d changed after failure", agent.capabilities, agent.legacyRuntimeGeneration)
 	}
-	if len(agent.pendingPersistedSessions) != pending || len(agent.sessions) != sessions {
+	if len(agent.pendingPersistedSessions) != want.pending || len(agent.sessions) != want.sessions {
 		t.Fatalf("pending=%#v sessions=%#v changed after failure", agent.pendingPersistedSessions, agent.sessions)
 	}
 }
