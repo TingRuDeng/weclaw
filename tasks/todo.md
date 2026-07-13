@@ -17,16 +17,16 @@
 - [x] P2 串行：写入 Spec、TDD 计划和并行文件所有权。
 - [x] P3 串行：最终 HARD-GATE 已批准。
 - [x] P4 串行：建立 ACP 能力与 Claude session 接口。
-- [ ] P5 并行（进行中）：实现 ACP session、配置、进度和配置迁移。
-- [ ] P6 并行：实现 Claude 会话导航与通用任务控制。
+- [x] P5 并行：实现 ACP session、配置、进度、配置迁移与 Claude 会话导航。
+- [ ] P6 串行（进行中）：统一 Claude 后台任务、队列与停止语义。
 - [ ] P7 串行：整合、删除死路径并同步文档。
 - [ ] P8 并行验证：定向测试、全量测试、race、vet、staticcheck、构建和文档门禁。
 - [ ] P9 串行：执行 `review-gate` 并记录 Review 小结。
 
 ## 当前状态
 
-任务 4 已完成并通过规格与质量独立复审；下一步执行任务 5“重写 Claude 会话选择链路”。
+任务 5 已完成实现与本地审查；下一步执行任务 6“统一后台任务、队列与停止”。
 
 ## Review 小结
 
-任务 1 至 4 已验证：定向测试、全包测试、Race、Vet、Staticcheck、构建、文档校验和 `git diff --check` 全部通过。任务 4 额外覆盖 ACP-only 检测与启动门禁、显式迁移、Doctor 能力握手、`local_command` 全链路和 Web 保存校验；质量复审提出的严格类型、位置参数、依赖注入和测试文件大小问题均已修复并复审 PASS。最终 Review Gate 将在全部实现完成后统一执行。
+任务 1 至 5 已验证。任务 5 将 Claude 会话目录收敛为 ACP `session/list`，实现显式选择/新建、重启恢复状态机、v1 确定性迁移、跨 ACP runtime/状态文件/窗口 Agent 的补偿事务，并删除本地 transcript 扫描。全仓测试、Vet、Staticcheck、构建和 `git diff --check` 均通过；独立审查因子进程线程额度已满未能启动，最终 Review Gate 将统一补做。

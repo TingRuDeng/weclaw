@@ -43,7 +43,6 @@ func (h *Handler) handleClaudeSessionCommandForRoute(ctx context.Context, actorU
 	}
 	workspaceRoot := h.claudeWorkspaceRootForUser(routeUserID, agentName, ag)
 	bindingKey := claudeBindingKey(routeUserID, agentName)
-	h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)
 	route := claudeSessionRoute{
 		Context:       ctx,
 		ActorUserID:   actorUserID,
@@ -54,7 +53,6 @@ func (h *Handler) handleClaudeSessionCommandForRoute(ctx context.Context, actorU
 		BindingKey:    bindingKey,
 		Admin:         admin,
 	}
-	h.syncClaudeSessionFromAgent(route)
 	return h.routeClaudeSessionCommand(fields, route)
 }
 
@@ -72,9 +70,9 @@ type claudeSessionRoute struct {
 func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSessionRoute) string {
 	switch fields[1] {
 	case "whoami":
-		return h.renderClaudeWhoami(route.BindingKey, route.WorkspaceRoot)
+		return h.renderClaudeWhoami(route)
 	case "ls":
-		return h.renderClaudeWorkspaceListForAccess(route.BindingKey, route.ActorUserID, route.Admin)
+		return h.renderClaudeWorkspaceList(route)
 	case "cd":
 		if len(fields) != 3 {
 			return "用法: /cc cd <工作空间编号|..>"

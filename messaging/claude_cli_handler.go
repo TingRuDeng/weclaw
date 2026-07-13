@@ -10,17 +10,15 @@ import (
 
 func (h *Handler) handleClaudeCLI(route claudeSessionRoute) string {
 	workspaceRoot := h.claudeWorkspaceRootForUser(route.UserID, route.AgentName, route.Agent)
-	route.WorkspaceRoot = workspaceRoot
-	h.syncClaudeSessionFromAgent(route)
-	sessionID, pending := h.ensureClaudeSessions().getSession(route.BindingKey, workspaceRoot)
-	if pending || strings.TrimSpace(sessionID) == "" {
-		return "当前还没有可接手的 Claude session，请先通过微信发送一条 Claude 任务。"
+	binding := h.ensureClaudeSessions().binding(route.BindingKey)
+	if binding.Status != claudeBindingReady || strings.TrimSpace(binding.SessionID) == "" {
+		return "当前还没有可接手的 Claude session，请先发送 /cc ls 选择或 /cc new 新建。"
 	}
 	command := strings.TrimSpace(route.Agent.Info().Command)
 	if command == "" {
 		return "当前 Claude Agent 未配置 command，无法打开 Claude CLI。"
 	}
-	if err := h.resolveClaudeCLIResumeOpener()(route.Context, command, workspaceRoot, sessionID); err != nil {
+	if err := h.resolveClaudeCLIResumeOpener()(route.Context, command, workspaceRoot, binding.SessionID); err != nil {
 		return fmt.Sprintf("打开 Claude CLI 失败: %v", err)
 	}
 	return wechatCommandText("已打开 Claude CLI。", "工作空间: "+workspaceRoot)

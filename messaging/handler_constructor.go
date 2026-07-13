@@ -29,7 +29,6 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		pendingApprovals:        make(map[string]*pendingApproval),
 		codexLocalSessionDir:    defaultCodexLocalSessionDir(),
 		claudeSessions:          newClaudeSessionStore(),
-		claudeLocalSessionDir:   defaultClaudeLocalSessionDir(),
 		codexBrowseWorkspaces:   make(map[string]string),
 		codexLocalEntries:       make(map[string]codexLocalEntryState),
 		codexAppOpener:          defaultCodexAppOpener,

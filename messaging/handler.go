@@ -89,7 +89,6 @@ type Handler struct {
 	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
 	codexLocalSessionDir    string
 	claudeSessions          *claudeSessionStore
-	claudeLocalSessionDir   string
 	codexBrowseMu           sync.Mutex
 	codexBrowseWorkspaces   map[string]string
 	codexLocalEntries       map[string]codexLocalEntryState

@@ -65,7 +65,9 @@ func TestClaudeConversationUsesRouteWorkspaceWithoutChangingGlobalCwd(t *testing
 	h.SetAgentWorkDirs(map[string]string{"claude": globalRoot})
 	h.SetAllowedWorkspaceRoots([]string{routeRoot})
 	bindingKey := claudeBindingKey("route-1", "claude")
-	h.ensureClaudeSessions().setActiveWorkspace(bindingKey, routeRoot)
+	if err := h.ensureClaudeSessions().commitSelection(bindingKey, routeRoot, "session-route"); err != nil {
+		t.Fatal(err)
+	}
 
 	conversationID, err := h.resolveClaudeConversationIDForRoute(context.Background(), "actor-1", "route-1", "claude", ag)
 	if err != nil {

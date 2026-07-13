@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -132,24 +133,41 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	claudeAg, ok := ag.(agent.ClaudeSessionAgent)
 	if !ok {
-		h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)
 		return conversationID, nil
 	}
-	sessionID, pending := h.ensureClaudeSessions().getSession(bindingKey, workspaceRoot)
-	if pending {
-		claudeAg.ClearClaudeSession(conversationID)
-		return conversationID, nil
+	unlock := h.lockAgentExecution("claude-binding:" + bindingKey)
+	defer unlock()
+	binding := h.ensureClaudeSessions().binding(bindingKey)
+	if binding.SessionID == "" || binding.Status == claudeBindingUnbound {
+		return "", fmt.Errorf("当前窗口没有有效的 Claude 会话，请发送 /cc ls 选择或 /cc new 新建")
 	}
-	if sessionID != "" {
-		current, hasCurrent := claudeAg.CurrentClaudeSession(conversationID)
-		if !hasCurrent || current != sessionID {
-			if err := claudeAg.UseClaudeSession(ctx, conversationID, sessionID); err != nil {
-				return "", fmt.Errorf("恢复 Claude 会话失败: %w", err)
-			}
-		}
+	if binding.Status == claudeBindingResumeFailed {
+		return "", fmt.Errorf("原 Claude 会话恢复失败，请发送 /cc ls 重新选择或 /cc new 新建")
 	}
-	h.ensureClaudeSessions().ensureWorkspace(bindingKey, workspaceRoot)
+	if binding.Status == claudeBindingPendingResume {
+		return h.resumePendingClaudeBinding(ctx, claudeResumeRequest{
+			bindingKey: bindingKey, conversationID: conversationID, sessionID: binding.SessionID, agent: claudeAg,
+		})
+	}
 	return conversationID, nil
+}
+
+type claudeResumeRequest struct {
+	bindingKey     string
+	conversationID string
+	sessionID      string
+	agent          agent.ClaudeSessionAgent
+}
+
+func (h *Handler) resumePendingClaudeBinding(ctx context.Context, req claudeResumeRequest) (string, error) {
+	if err := req.agent.UseClaudeSession(ctx, req.conversationID, req.sessionID); err != nil {
+		markErr := h.ensureClaudeSessions().markResumeFailed(req.bindingKey)
+		return "", fmt.Errorf("恢复 Claude 会话失败: %w；请发送 /cc ls 重新选择或 /cc new 新建", errors.Join(err, markErr))
+	}
+	if err := h.ensureClaudeSessions().markReady(req.bindingKey); err != nil {
+		return "", fmt.Errorf("保存 Claude 恢复状态失败: %w", err)
+	}
+	return req.conversationID, nil
 }
 
 func (h *Handler) recordCodexThread(userID string, agentName string, ag agent.Agent, conversationID string) {
@@ -178,30 +196,6 @@ func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string,
 	}
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 	return workspaceRoot, true
-}
-
-func (h *Handler) recordClaudeSessionForRoute(ownerUserID string, routeUserID string, agentName string, ag agent.Agent, conversationID string) {
-	if strings.TrimSpace(routeUserID) == "" {
-		routeUserID = ownerUserID
-	}
-	if !isClaudeAgent(agentName, ag.Info()) {
-		return
-	}
-	claudeAg, ok := ag.(agent.ClaudeSessionAgent)
-	if !ok {
-		return
-	}
-	sessionID, ok := claudeAg.CurrentClaudeSession(conversationID)
-	if !ok {
-		return
-	}
-	workspaceRoot := h.claudeWorkspaceRootForUser(ownerUserID, agentName, ag)
-	bindingKey := claudeBindingKey(routeUserID, agentName)
-	if ownerWorkspace, ok := h.ensureClaudeSessions().findWorkspaceBySession(bindingKey, sessionID); ok {
-		workspaceRoot = ownerWorkspace
-	}
-	h.ensureClaudeSessions().setSession(bindingKey, workspaceRoot, sessionID)
-	h.ensureClaudeSessions().setActiveWorkspace(bindingKey, workspaceRoot)
 }
 
 func (h *Handler) syncCodexThreadFromAgent(userID string, agentName string, workspaceRoot string, ag agent.Agent) {

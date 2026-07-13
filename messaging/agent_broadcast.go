@@ -172,7 +172,6 @@ func (h *Handler) recordBroadcastSession(req broadcastAgentsRequest, name string
 		return
 	}
 	h.recordCodexThread(req.routeUserID, name, ag, conversationID)
-	h.recordClaudeSessionForRoute(req.userID, req.routeUserID, name, ag, conversationID)
 }
 
 func (h *Handler) sendBroadcastAgentResult(req broadcastAgentsRequest, reply platform.Replier, result broadcastAgentResult) {

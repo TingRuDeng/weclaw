@@ -99,7 +99,9 @@ func (h *Handler) recordActiveWorkspaceForUser(userIDs []string, agents map[stri
 			h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(userIDs[0], name), workspaceRoot)
 		}
 		if isClaudeAgent(name, ag.Info()) {
-			h.ensureClaudeSessions().setActiveWorkspace(claudeBindingKey(userIDs[0], name), workspaceRoot)
+			if err := h.ensureClaudeSessions().commitWorkspace(claudeBindingKey(userIDs[0], name), workspaceRoot); err != nil {
+				log.Printf("[handler] failed to save Claude workspace: %v", err)
+			}
 		}
 	}
 }

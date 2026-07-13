@@ -1,25 +1,192 @@
 package messaging
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
+type claudeBindingStatus string
+
+const (
+	claudeBindingUnbound       claudeBindingStatus = "unbound"
+	claudeBindingPendingResume claudeBindingStatus = "pending_resume"
+	claudeBindingReady         claudeBindingStatus = "ready"
+	claudeBindingResumeFailed  claudeBindingStatus = "resume_failed"
+)
+
+type claudeSessionBinding struct {
+	WorkspaceRoot string              `json:"workspace_root,omitempty"`
+	SessionID     string              `json:"session_id,omitempty"`
+	Status        claudeBindingStatus `json:"status"`
+	UpdatedAt     string              `json:"updated_at"`
+}
+
+type claudeSessionState struct {
+	Version  int                             `json:"version"`
+	Bindings map[string]claudeSessionBinding `json:"bindings"`
+	Updated  string                          `json:"updated"`
+}
+
 type claudeSessionStore struct {
-	store *codexSessionStore
+	mu       sync.Mutex
+	saveMu   sync.Mutex
+	filePath string
+	bindings map[string]claudeSessionBinding
+	persist  func(claudeSessionState) error
 }
 
 func newClaudeSessionStore() *claudeSessionStore {
-	return &claudeSessionStore{store: newCodexSessionStore()}
+	return &claudeSessionStore{bindings: make(map[string]claudeSessionBinding)}
 }
 
-// DefaultClaudeSessionFile 返回 Claude workspace/session 列表的默认持久化路径。
+// DefaultClaudeSessionFile 返回 Claude route/session 绑定的默认持久化路径。
 func DefaultClaudeSessionFile() string {
 	return filepath.Join(defaultDataDir(), "claude-sessions.json")
 }
 
-func (s *claudeSessionStore) SetFilePath(filePath string) {
-	s.store.SetFilePath(filePath)
+// SetFilePath 设置持久化文件并加载状态；损坏文件只记录错误，不覆盖磁盘内容。
+func (s *claudeSessionStore) SetFilePath(filePath string) error {
+	s.mu.Lock()
+	s.filePath = strings.TrimSpace(filePath)
+	path := s.filePath
+	s.persist = func(state claudeSessionState) error {
+		return persistClaudeSessionState(path, state)
+	}
+	s.mu.Unlock()
+	return s.load()
+}
+
+// binding 返回 route 当前绑定快照。
+func (s *claudeSessionStore) binding(bindingKey string) claudeSessionBinding {
+	binding, _ := s.bindingSnapshot(bindingKey)
+	return binding
+}
+
+func (s *claudeSessionStore) bindingSnapshot(bindingKey string) (claudeSessionBinding, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding, ok := s.bindings[bindingKey]
+	return binding, ok
+}
+
+// commitWorkspace 切换浏览工作空间并清除旧 session，要求用户显式选择或新建。
+func (s *claudeSessionStore) commitWorkspace(bindingKey string, workspaceRoot string) error {
+	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
+	if workspaceRoot == "" {
+		return fmt.Errorf("Claude 工作空间不能为空")
+	}
+	return s.updateBinding(bindingKey, func(current claudeSessionBinding) claudeSessionBinding {
+		return newClaudeBinding(workspaceRoot, "", claudeBindingUnbound)
+	})
+}
+
+// commitSelection 原子提交已由 ACP 验证成功的 workspace/session 绑定。
+func (s *claudeSessionStore) commitSelection(bindingKey string, workspaceRoot string, sessionID string) error {
+	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
+	sessionID = strings.TrimSpace(sessionID)
+	if workspaceRoot == "" || sessionID == "" {
+		return fmt.Errorf("Claude workspace/session 不能为空")
+	}
+	return s.updateBinding(bindingKey, func(current claudeSessionBinding) claudeSessionBinding {
+		return newClaudeBinding(workspaceRoot, sessionID, claudeBindingReady)
+	})
+}
+
+// markPendingResume 标记重启后需要在首次普通消息前恢复真实 ACP session。
+func (s *claudeSessionStore) markPendingResume(bindingKey string) error {
+	return s.updateStatus(bindingKey, claudeBindingPendingResume)
+}
+
+// markResumeFailed 保留 session ID，阻止普通消息隐式新建或反复恢复。
+func (s *claudeSessionStore) markResumeFailed(bindingKey string) error {
+	return s.updateStatus(bindingKey, claudeBindingResumeFailed)
+}
+
+// markReady 标记 ACP runtime 已恢复当前 session。
+func (s *claudeSessionStore) markReady(bindingKey string) error {
+	return s.updateStatus(bindingKey, claudeBindingReady)
+}
+
+// restoreBinding 恢复事务开始前的绑定；用于跨 ACP 与状态文件的补偿回滚。
+func (s *claudeSessionStore) restoreBinding(bindingKey string, binding claudeSessionBinding, existed bool) error {
+	return s.replaceBinding(bindingKey, binding, existed)
+}
+
+func (s *claudeSessionStore) replaceBinding(bindingKey string, binding claudeSessionBinding, existed bool) error {
+	return s.updateBindings(func(bindings map[string]claudeSessionBinding) {
+		if existed {
+			bindings[bindingKey] = binding
+			return
+		}
+		delete(bindings, bindingKey)
+	})
+}
+
+func (s *claudeSessionStore) updateStatus(bindingKey string, status claudeBindingStatus) error {
+	return s.updateBinding(bindingKey, func(current claudeSessionBinding) claudeSessionBinding {
+		if current.SessionID == "" {
+			return current
+		}
+		current.Status = status
+		current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		return current
+	})
+}
+
+func newClaudeBinding(workspaceRoot string, sessionID string, status claudeBindingStatus) claudeSessionBinding {
+	return claudeSessionBinding{
+		WorkspaceRoot: workspaceRoot,
+		SessionID:     sessionID,
+		Status:        status,
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+// updateBinding 先写入克隆状态，成功后才发布内存，读者不会观察到未落盘状态。
+func (s *claudeSessionStore) updateBinding(bindingKey string, mutate func(claudeSessionBinding) claudeSessionBinding) error {
+	if strings.TrimSpace(bindingKey) == "" {
+		return fmt.Errorf("Claude binding key 不能为空")
+	}
+	return s.updateBindings(func(bindings map[string]claudeSessionBinding) {
+		bindings[bindingKey] = mutate(bindings[bindingKey])
+	})
+}
+
+func (s *claudeSessionStore) updateBindings(mutate func(map[string]claudeSessionBinding)) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	bindings := cloneClaudeBindings(s.bindings)
+	mutate(bindings)
+	state := newClaudeSessionState(bindings)
+	persist := s.persist
+	s.mu.Unlock()
+	if persist != nil {
+		if err := persist(state); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.bindings = bindings
+	s.mu.Unlock()
+	return nil
+}
+
+func cloneClaudeBindings(input map[string]claudeSessionBinding) map[string]claudeSessionBinding {
+	bindings := make(map[string]claudeSessionBinding, len(input))
+	for key, binding := range input {
+		bindings[key] = binding
+	}
+	return bindings
+}
+
+func newClaudeSessionState(bindings map[string]claudeSessionBinding) claudeSessionState {
+	return claudeSessionState{
+		Version: 2, Bindings: cloneClaudeBindings(bindings), Updated: time.Now().UTC().Format(time.RFC3339),
+	}
 }
 
 func claudeBindingKey(userID string, agentName string) string {
@@ -27,48 +194,9 @@ func claudeBindingKey(userID string, agentName string) string {
 }
 
 func buildClaudeConversationID(userID string, agentName string, workspaceRoot string) string {
-	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
-	return strings.Join([]string{"claude", normalizeConversationUserKey(userID), strings.TrimSpace(agentName), workspaceRoot}, "\x00")
+	return strings.Join([]string{"claude", normalizeConversationUserKey(userID), strings.TrimSpace(agentName), normalizeClaudeWorkspaceRoot(workspaceRoot)}, "\x00")
 }
 
 func normalizeClaudeWorkspaceRoot(workspaceRoot string) string {
 	return normalizeCodexWorkspaceRoot(workspaceRoot)
-}
-
-func (s *claudeSessionStore) getSession(bindingKey string, workspaceRoot string) (string, bool) {
-	return s.store.getThread(bindingKey, workspaceRoot)
-}
-
-func (s *claudeSessionStore) getActiveWorkspace(bindingKey string) (string, bool) {
-	return s.store.getActiveWorkspace(bindingKey)
-}
-
-func (s *claudeSessionStore) setActiveWorkspace(bindingKey string, workspaceRoot string) {
-	s.store.setActiveWorkspace(bindingKey, workspaceRoot)
-}
-
-func (s *claudeSessionStore) setSession(bindingKey string, workspaceRoot string, sessionID string) {
-	s.store.setThread(bindingKey, workspaceRoot, sessionID)
-}
-
-func (s *claudeSessionStore) setPendingNew(bindingKey string, workspaceRoot string) {
-	s.store.setPendingNew(bindingKey, workspaceRoot)
-}
-
-func (s *claudeSessionStore) ensureWorkspace(bindingKey string, workspaceRoot string) {
-	s.store.ensureWorkspace(bindingKey, workspaceRoot)
-}
-
-func (s *claudeSessionStore) listWorkspaces(bindingKey string) []codexWorkspaceView {
-	return s.store.listWorkspaces(bindingKey)
-}
-
-func (s *claudeSessionStore) clearStaleWorkspaceSessions(bindingKey string, visibleByWorkspace map[string]map[string]bool) {
-	for workspaceRoot, visibleSessionIDs := range visibleByWorkspace {
-		s.store.clearStaleWorkspaceThread(bindingKey, workspaceRoot, visibleSessionIDs)
-	}
-}
-
-func (s *claudeSessionStore) findWorkspaceBySession(bindingKey string, sessionID string) (string, bool) {
-	return s.store.findWorkspaceByThread(bindingKey, sessionID)
 }

@@ -71,19 +71,20 @@ func (h *Handler) sendFeishuClaudeNavigationChoices(req claudeFeishuCommandReque
 	if !isFeishuClaudeNavigationCommand(fields) || isCodexNavigationErrorReply(commandReply) {
 		return false
 	}
-	agentName, ok := h.claudeAgentName()
-	if !ok {
+	agentName, ag, err := h.getClaudeSessionAgent(req.Context)
+	if err != nil {
 		return false
 	}
 	msg := req.Message
-	route := claudeSessionRoute{ActorUserID: msg.UserID, UserID: req.RouteUserID, BindingKey: claudeBindingKey(req.RouteUserID, agentName), Admin: h.isAdminMessage(msg)}
+	workspaceRoot := h.claudeWorkspaceRootForUser(req.RouteUserID, agentName, ag)
+	route := claudeSessionRoute{
+		Context: req.Context, ActorUserID: msg.UserID, UserID: req.RouteUserID,
+		AgentName: agentName, Agent: ag, WorkspaceRoot: workspaceRoot,
+		BindingKey: claudeBindingKey(req.RouteUserID, agentName), Admin: h.isAdminMessage(msg),
+	}
 	choiceReq := claudeFeishuChoiceRequest{Context: req.Context, Reply: req.Reply, Route: route, Metadata: feishuChoiceSessionMetadata(msg, req.RouteUserID)}
 	if fields[1] == "ls" || fields[2] == ".." {
 		return h.sendFeishuClaudeWorkspaceChoices(choiceReq)
-	}
-	workspaceRoot, ok := h.ensureClaudeSessions().getActiveWorkspace(route.BindingKey)
-	if !ok {
-		return false
 	}
 	choiceReq.WorkspaceRoot = workspaceRoot
 	return h.sendFeishuClaudeSessionChoices(choiceReq)
@@ -99,7 +100,10 @@ func isFeishuClaudeNavigationCommand(fields []string) bool {
 
 // sendFeishuClaudeWorkspaceChoices 将权限过滤后的工作空间映射为稳定编号按钮。
 func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest) bool {
-	groups := h.claudeWorkspaceGroupsForAccess(req.Route.BindingKey, req.Route.ActorUserID, req.Route.Admin)
+	groups, err := h.claudeWorkspaceGroupsForRoute(req.Route)
+	if err != nil {
+		return false
+	}
 	choices := make([]platform.Choice, 0, len(groups))
 	for index, group := range groups {
 		choices = append(choices, platform.Choice{ID: fmt.Sprintf("/cc cd %d", index), Label: group.Name})
@@ -110,7 +114,10 @@ func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest
 
 // sendFeishuClaudeSessionChoices 使用稳定 sessionId 构造会话切换按钮。
 func (h *Handler) sendFeishuClaudeSessionChoices(req claudeFeishuChoiceRequest) bool {
-	sessions := h.claudeSessionsForWorkspace(req.Route, req.WorkspaceRoot)
+	sessions, err := h.claudeSessionsForWorkspace(req.Route, req.WorkspaceRoot)
+	if err != nil {
+		return false
+	}
 	choices := make([]platform.Choice, 0, len(sessions)+1)
 	for _, session := range sessions {
 		choices = append(choices, platform.Choice{ID: "/cc switch " + strings.TrimSpace(session.ThreadID), Label: codexSessionDisplayName(session)})

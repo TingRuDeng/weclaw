@@ -82,7 +82,6 @@ func (h *Handler) sendToDefaultAgentForAccount(ctx context.Context, platformName
 			reply = renderFinalFailure("", err)
 		} else {
 			h.recordCodexThread(routeUserID, defaultName, ag, conversationID)
-			h.recordClaudeSessionForRoute(userID, routeUserID, defaultName, ag, conversationID)
 			reply = renderFinalSuccess("", reply)
 		}
 		h.finishAndSendProgressReply(progressReplyDelivery{
@@ -175,7 +174,6 @@ func (h *Handler) sendToNamedAgentForAccount(ctx context.Context, platformName p
 		reply = renderFinalFailure("["+name+"] ", err)
 	} else {
 		h.recordCodexThread(routeUserID, name, ag, conversationID)
-		h.recordClaudeSessionForRoute(userID, routeUserID, name, ag, conversationID)
 		reply = renderFinalSuccess("["+name+"] ", reply)
 	}
 	h.finishAndSendProgressReply(progressReplyDelivery{

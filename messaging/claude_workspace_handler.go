@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -17,120 +18,136 @@ func (h *Handler) claudeWorkspaceRoot(agentName string) string {
 	return normalizeClaudeWorkspaceRoot(workspaceRoot)
 }
 
-func (h *Handler) claudeWorkspaceRootForUser(userID string, agentName string, ag agent.Agent) string {
-	bindingKey := claudeBindingKey(userID, agentName)
-	workspaceRoot, ok := h.ensureClaudeSessions().getActiveWorkspace(bindingKey)
-	if !ok {
-		return h.claudeWorkspaceRoot(agentName)
+func (h *Handler) claudeWorkspaceRootForUser(userID string, agentName string, _ agent.Agent) string {
+	binding := h.ensureClaudeSessions().binding(claudeBindingKey(userID, agentName))
+	if binding.WorkspaceRoot != "" {
+		return binding.WorkspaceRoot
 	}
-	return workspaceRoot
+	return h.claudeWorkspaceRoot(agentName)
 }
 
 func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) string {
-	claudeAg, ok := route.Agent.(agent.ClaudeSessionAgent)
-	if !ok {
-		return "当前 Claude Agent 不支持 session 切换。"
-	}
-	workspaceRoot, sessionID, err := h.resolveClaudeSwitchTarget(route, target)
+	unlock := h.lockAgentExecution("claude-binding:" + route.BindingKey)
+	defer unlock()
+	selected, err := h.findClaudeSessionForRoute(route, target)
 	if err != nil {
 		return err.Error()
 	}
-	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
-	h.bindConversationCwd(route.Agent, conversationID, workspaceRoot)
-	if err := claudeAg.UseClaudeSession(route.Context, conversationID, sessionID); err != nil {
+	if err := h.commitClaudeSelection(route, selected); err != nil {
 		return fmt.Sprintf("切换 Claude 会话失败: %v", err)
 	}
-	h.ensureClaudeSessions().setSession(route.BindingKey, workspaceRoot, sessionID)
-	h.ensureClaudeSessions().setActiveWorkspace(route.BindingKey, workspaceRoot)
-	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
-		return fmt.Sprintf("切换 Claude 会话失败: 保存当前窗口 Agent: %v", err)
+	return h.renderClaudeSelection(route, selected)
+}
+
+func (h *Handler) commitClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession) error {
+	claudeAgent, ok := route.Agent.(agent.ClaudeSessionAgent)
+	if !ok {
+		return fmt.Errorf("当前 Claude Agent 不支持 session 切换")
 	}
-	lines := []string{"已切换 Claude 会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
-	lines = append(lines, renderSessionModelStatus(h.claudeSessionModelStatus(sessionID))...)
+	store := h.ensureClaudeSessions()
+	previous, existed := store.bindingSnapshot(route.BindingKey)
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, selected.Cwd)
+	h.bindConversationCwd(route.Agent, conversationID, selected.Cwd)
+	if err := claudeAgent.UseClaudeSession(route.Context, conversationID, selected.ID); err != nil {
+		return err
+	}
+	if err := store.commitSelection(route.BindingKey, selected.Cwd, selected.ID); err != nil {
+		return errors.Join(err, h.rollbackClaudeRuntime(route, conversationID, previous))
+	}
+	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
+		storeErr := store.restoreBinding(route.BindingKey, previous, existed)
+		runtimeErr := h.rollbackClaudeRuntime(route, conversationID, previous)
+		return errors.Join(err, storeErr, runtimeErr)
+	}
+	return nil
+}
+
+func (h *Handler) rollbackClaudeRuntime(route claudeSessionRoute, currentConversationID string, previous claudeSessionBinding) error {
+	claudeAgent, ok := route.Agent.(agent.ClaudeSessionAgent)
+	if !ok {
+		return nil
+	}
+	claudeAgent.ClearClaudeSession(currentConversationID)
+	if previous.SessionID == "" {
+		return nil
+	}
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, previous.WorkspaceRoot)
+	h.bindConversationCwd(route.Agent, conversationID, previous.WorkspaceRoot)
+	return claudeAgent.UseClaudeSession(route.Context, conversationID, previous.SessionID)
+}
+
+func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession) string {
+	lines := []string{
+		"已切换 Claude 会话。",
+		"工作空间: " + shortCodexWorkspaceName(selected.Cwd),
+		"恢复状态: 已就绪",
+	}
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, selected.Cwd)
+	if configAgent, ok := route.Agent.(agent.ClaudeSessionConfigAgent); ok {
+		if config, found := configAgent.ClaudeSessionConfig(conversationID); found {
+			lines = append(lines, renderSessionModelStatus(sessionModelStatus{Model: config.Model, Effort: config.Effort})...)
+			return wechatCommandText(lines...)
+		}
+	}
+	lines = append(lines, renderSessionModelStatus(sessionModelStatus{Model: selected.Config.Model, Effort: selected.Config.Effort})...)
 	return wechatCommandText(lines...)
 }
 
-func (h *Handler) resolveClaudeSwitchTarget(route claudeSessionRoute, target string) (string, string, error) {
-	target = strings.TrimSpace(target)
-	if index, ok := parseCodexListIndex(target); ok {
-		return h.resolveClaudeSwitchIndex(route, index)
-	}
-	sessionID := target
-	workspaceRoot := h.resolveClaudeSwitchWorkspace(route, sessionID)
-	if !route.Admin && !h.isWorkspaceAllowed(workspaceRoot) {
-		return "", "", fmt.Errorf("该 Claude 会话工作空间不在 allowed_workspace_roots 范围内。")
-	}
-	return workspaceRoot, sessionID, nil
-}
-
-func (h *Handler) resolveClaudeSwitchIndex(route claudeSessionRoute, index int) (string, string, error) {
-	views := h.claudeSwitchTargetsForAccess(route.BindingKey, route.ActorUserID, route.Admin)
-	if index < 0 || index >= len(views) {
-		return "", "", fmt.Errorf("编号不存在，请先发送 /cc ls 查看可切换会话。")
-	}
-	view := views[index]
-	if strings.TrimSpace(view.ThreadID) == "" || view.PendingNewThread {
-		return "", "", fmt.Errorf("该编号当前没有可切换的会话。")
-	}
-	return h.switchClaudeWorkspace(route.AgentName, view.WorkspaceRoot, route.Agent), view.ThreadID, nil
-}
-
-func (h *Handler) resolveClaudeSwitchWorkspace(route claudeSessionRoute, sessionID string) string {
-	if workspaceRoot, ok := h.ensureClaudeSessions().findWorkspaceBySession(route.BindingKey, sessionID); ok {
-		return h.switchClaudeWorkspace(route.AgentName, workspaceRoot, route.Agent)
-	}
-	if workspaceRoot, ok := h.findLocalClaudeWorkspaceBySession(sessionID); ok {
-		return h.switchClaudeWorkspace(route.AgentName, workspaceRoot, route.Agent)
-	}
-	return route.WorkspaceRoot
-}
-
-func (h *Handler) switchClaudeWorkspace(agentName string, workspaceRoot string, ag agent.Agent) string {
-	return normalizeClaudeWorkspaceRoot(workspaceRoot)
-}
-
-// handleClaudeCd 只切换工作空间浏览上下文；会话必须由用户继续选择或显式新建。
+// handleClaudeCd 只切换浏览工作空间，并清除旧 session 绑定。
 func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string {
 	if strings.TrimSpace(target) == ".." {
-		return h.renderClaudeWorkspaceGroupsForAccess(route.BindingKey, route.ActorUserID, route.Admin)
+		return h.renderClaudeWorkspaceGroups(route)
 	}
-	group, err := h.findClaudeWorkspaceGroupForAccess(route, target)
+	unlock := h.lockAgentExecution("claude-binding:" + route.BindingKey)
+	defer unlock()
+	group, err := h.findClaudeWorkspaceGroupForRoute(route, target)
 	if err != nil {
 		return err.Error()
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(group.Root)
-	h.ensureClaudeSessions().setActiveWorkspace(route.BindingKey, workspaceRoot)
+	if err := h.ensureClaudeSessions().commitWorkspace(route.BindingKey, workspaceRoot); err != nil {
+		return fmt.Sprintf("切换 Claude 工作空间失败: %v", err)
+	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
 	h.bindConversationCwd(route.Agent, conversationID, workspaceRoot)
-	sessions := h.claudeSessionsForWorkspace(route, workspaceRoot)
+	sessions, err := h.claudeSessionsForWorkspace(route, workspaceRoot)
+	if err != nil {
+		return err.Error()
+	}
 	return renderClaudeSessionList(workspaceRoot, sessions)
 }
 
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
+	unlock := h.lockAgentExecution("claude-binding:" + route.BindingKey)
+	defer unlock()
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
 	h.bindConversationCwd(route.Agent, conversationID, route.WorkspaceRoot)
-	if claudeAg, ok := route.Agent.(agent.ClaudeSessionAgent); ok {
-		claudeAg.ClearClaudeSession(conversationID)
+	sessionID, err := route.Agent.ResetSession(route.Context, conversationID)
+	if err != nil || strings.TrimSpace(sessionID) == "" {
+		return fmt.Sprintf("新建 Claude 会话失败: %v", firstError(err, fmt.Errorf("session/new 未返回 sessionId")))
 	}
-	h.ensureClaudeSessions().setPendingNew(route.BindingKey, route.WorkspaceRoot)
-	h.ensureClaudeSessions().setActiveWorkspace(route.BindingKey, route.WorkspaceRoot)
-	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
-		return fmt.Sprintf("新建 Claude 会话失败: 保存当前窗口 Agent: %v", err)
+	selected := agent.ClaudeSession{ID: sessionID, Cwd: route.WorkspaceRoot}
+	if err := h.commitNewClaudeSelection(route, conversationID, selected); err != nil {
+		return fmt.Sprintf("新建 Claude 会话失败: %v", err)
 	}
-	return wechatCommandText("已切换到新的 Claude 会话。", "workspace: "+route.WorkspaceRoot)
+	return wechatCommandText("已创建新的 Claude 会话。", "工作空间: "+shortCodexWorkspaceName(route.WorkspaceRoot))
 }
 
-func (h *Handler) syncClaudeSessionFromAgent(route claudeSessionRoute) {
-	claudeAg, ok := route.Agent.(agent.ClaudeSessionAgent)
-	if !ok {
-		return
+func (h *Handler) commitNewClaudeSelection(route claudeSessionRoute, conversationID string, selected agent.ClaudeSession) error {
+	store := h.ensureClaudeSessions()
+	previous, existed := store.bindingSnapshot(route.BindingKey)
+	if err := store.commitSelection(route.BindingKey, selected.Cwd, selected.ID); err != nil {
+		return errors.Join(err, h.rollbackClaudeRuntime(route, conversationID, previous))
 	}
-	if _, pending := h.ensureClaudeSessions().getSession(route.BindingKey, route.WorkspaceRoot); pending {
-		return
+	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
+		return errors.Join(err, store.restoreBinding(route.BindingKey, previous, existed), h.rollbackClaudeRuntime(route, conversationID, previous))
 	}
-	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
-	sessionID, ok := claudeAg.CurrentClaudeSession(conversationID)
-	if ok {
-		h.ensureClaudeSessions().setSession(route.BindingKey, route.WorkspaceRoot, sessionID)
+	return nil
+}
+
+func firstError(primary error, fallback error) error {
+	if primary != nil {
+		return primary
 	}
+	return fallback
 }

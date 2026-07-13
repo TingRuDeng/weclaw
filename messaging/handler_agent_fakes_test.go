@@ -132,11 +132,21 @@ type fakeVisibleCodexAgent struct {
 type fakeClaudeSessionAgent struct {
 	fakeAgent
 	sessionID        string
+	catalogSessions  []agent.ClaudeSession
+	catalogErr       error
+	listCalls        int
 	useConversation  string
 	useSessionID     string
+	useCalls         []string
 	clearCalledWith  string
 	useErr           error
+	sessionConfig    agent.ClaudeSessionConfig
 	conversationCwds map[string]string
+}
+
+func (f *fakeClaudeSessionAgent) ListClaudeSessions(context.Context) ([]agent.ClaudeSession, error) {
+	f.listCalls++
+	return append([]agent.ClaudeSession(nil), f.catalogSessions...), f.catalogErr
 }
 
 func (f *fakeClaudeSessionAgent) SetConversationCwd(conversationID string, cwd string) {
@@ -156,10 +166,19 @@ func (f *fakeClaudeSessionAgent) CurrentClaudeSession(conversationID string) (st
 func (f *fakeClaudeSessionAgent) UseClaudeSession(_ context.Context, conversationID string, sessionID string) error {
 	f.useConversation = conversationID
 	f.useSessionID = sessionID
+	f.useCalls = append(f.useCalls, sessionID)
 	if f.useErr != nil {
 		return f.useErr
 	}
 	f.sessionID = sessionID
+	return nil
+}
+
+func (f *fakeClaudeSessionAgent) ClaudeSessionConfig(string) (agent.ClaudeSessionConfig, bool) {
+	return f.sessionConfig, f.sessionConfig.Model != "" || f.sessionConfig.Effort != ""
+}
+
+func (f *fakeClaudeSessionAgent) SetClaudeSessionConfig(context.Context, agent.ClaudeSessionConfigUpdate) error {
 	return nil
 }
 

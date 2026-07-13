@@ -156,7 +156,7 @@ type ClaudeSessionConfigAgent interface {
 **文件：**
 - 重写：`messaging/claude_sessions.go`、`messaging/claude_local_handler.go`、`messaging/claude_workspace_handler.go`
 - 新建：`messaging/claude_session_persistence.go`
-- 修改：`messaging/agent_conversation.go`、`messaging/claude_render.go`、`messaging/claude_feishu_cards.go`、`messaging/session_stores.go`、`cmd/start.go`
+- 修改：`messaging/agent_conversation.go`、`messaging/default_session.go`、`messaging/cwd_command.go`、`messaging/claude_render.go`、`messaging/claude_feishu_cards.go`、`messaging/session_stores.go`、`messaging/handler_agent_fakes_test.go`、`cmd/start.go`
 - 删除：`messaging/claude_local_sessions.go`、`messaging/claude_session_model.go`
 
 - [ ] 写 ACP 目录卡片、权限过滤、switch/new 原子提交、恢复失败、无绑定拒绝和 v1 active workspace 迁移测试。

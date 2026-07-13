@@ -152,7 +152,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	handler.SetCodexSessionFile(messaging.DefaultCodexSessionFile())
 	handler.SetFeishuIdentityFile(messaging.DefaultFeishuIdentityFile())
-	handler.SetClaudeSessionFile(messaging.DefaultClaudeSessionFile())
+	if err := handler.SetClaudeSessionFile(messaging.DefaultClaudeSessionFile()); err != nil {
+		log.Printf("加载 Claude 会话状态失败：%v", err)
+	}
 
 	// Load custom aliases from agent configs
 	handler.SetCustomAliases(config.BuildAliasMap(cfg.Agents))

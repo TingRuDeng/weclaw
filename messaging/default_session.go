@@ -50,7 +50,7 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 		return h.resetDefaultCodexSessionForRoute(ctx, actorUserID, routeUserID, name, ag)
 	}
 	if isClaudeAgent(name, ag.Info()) {
-		return h.resetDefaultClaudeSession(ctx, routeUserID, name, ag)
+		return h.resetDefaultClaudeSession(ctx, actorUserID, routeUserID, name, ag)
 	}
 	sessionID, err := ag.ResetSession(ctx, routeUserID)
 	if err != nil {
@@ -91,27 +91,12 @@ func (h *Handler) recordResetCodexThread(userID string, agentName string, worksp
 	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
 }
 
-func (h *Handler) resetDefaultClaudeSession(ctx context.Context, userID string, name string, ag agent.Agent) string {
+func (h *Handler) resetDefaultClaudeSession(ctx context.Context, actorUserID string, userID string, name string, ag agent.Agent) string {
 	workspaceRoot := h.claudeWorkspaceRootForUser(userID, name, ag)
-	conversationID := buildClaudeConversationID(userID, name, workspaceRoot)
-	sessionID, err := ag.ResetSession(ctx, conversationID)
-	if err != nil {
-		log.Printf("[handler] reset claude session failed for %s: %v", conversationID, err)
-		return fmt.Sprintf("Failed to reset session: %v", err)
+	route := claudeSessionRoute{
+		Context: ctx, ActorUserID: actorUserID, UserID: userID, AgentName: name,
+		Agent: ag, WorkspaceRoot: workspaceRoot, BindingKey: claudeBindingKey(userID, name),
+		Admin: h.isAdminUser(actorUserID),
 	}
-	h.recordResetClaudeSession(userID, name, workspaceRoot, sessionID)
-	if sessionID != "" {
-		return wechatCommandText(fmt.Sprintf("已创建新的%s会话", name), sessionID)
-	}
-	return fmt.Sprintf("已创建新的%s会话", name)
-}
-
-func (h *Handler) recordResetClaudeSession(userID string, agentName string, workspaceRoot string, sessionID string) {
-	bindingKey := claudeBindingKey(userID, agentName)
-	h.ensureClaudeSessions().setActiveWorkspace(bindingKey, workspaceRoot)
-	if strings.TrimSpace(sessionID) == "" {
-		h.ensureClaudeSessions().setPendingNew(bindingKey, workspaceRoot)
-		return
-	}
-	h.ensureClaudeSessions().setSession(bindingKey, workspaceRoot, sessionID)
+	return h.handleClaudeNew(route)
 }

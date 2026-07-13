@@ -52,6 +52,6 @@ func (h *Handler) ensureClaudeSessions() *claudeSessionStore {
 }
 
 // SetClaudeSessionFile 设置 Claude workspace/session 列表的持久化文件。
-func (h *Handler) SetClaudeSessionFile(filePath string) {
-	h.ensureClaudeSessions().SetFilePath(filePath)
+func (h *Handler) SetClaudeSessionFile(filePath string) error {
+	return h.ensureClaudeSessions().SetFilePath(filePath)
 }

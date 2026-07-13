@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -110,12 +111,14 @@ func TestCodexSessionNewBindsWindowToCodex(t *testing.T) {
 func newClaudeBindingHandler(t *testing.T) (*Handler, *fakeAgent, *fakeClaudeSessionAgent, string) {
 	t.Helper()
 	workspace := filepath.Join(t.TempDir(), "project")
-	claudeDir := t.TempDir()
-	writeLocalClaudeSession(t, claudeDir, "session-claude", workspace, "Claude 会话", "2026-07-13T07:00:00Z")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	codex := &fakeAgent{reply: "codex", info: agent.AgentInfo{Name: "codex", Type: "test"}}
-	claude := &fakeClaudeSessionAgent{fakeAgent: fakeAgent{
-		reply: "claude", info: agent.AgentInfo{Name: "claude", Type: "cli", Command: "claude"},
-	}}
+	claude := &fakeClaudeSessionAgent{
+		fakeAgent:       fakeAgent{reply: "claude", resetSessionID: "session-new", info: agent.AgentInfo{Name: "claude", Type: "acp", Command: "claude-agent-acp"}},
+		catalogSessions: []agent.ClaudeSession{{ID: "session-claude", Cwd: workspace, Title: "Claude 会话"}},
+	}
 	h := NewHandler(func(_ context.Context, name string) agent.Agent {
 		if name == "claude" {
 			return claude
@@ -128,6 +131,5 @@ func newClaudeBindingHandler(t *testing.T) (*Handler, *fakeAgent, *fakeClaudeSes
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_android"): "codex",
 	})
 	h.SetAllowedWorkspaceRoots([]string{workspace})
-	h.SetClaudeLocalSessionDir(claudeDir)
 	return h, codex, claude, "feishu:tenant:dm:chat:ou_user"
 }

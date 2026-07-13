@@ -7,26 +7,64 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-func (h *Handler) renderClaudeWhoami(bindingKey string, workspaceRoot string) string {
-	sessionID, pending := h.ensureClaudeSessions().getSession(bindingKey, workspaceRoot)
-	return wechatCommandText("workspace: "+workspaceRoot, "session: "+renderCodexThreadLabel(sessionID, pending))
-}
-
-func (h *Handler) renderClaudeStatus(route claudeSessionRoute) string {
-	workspaceRoot := h.claudeWorkspaceRootForUser(route.UserID, route.AgentName, route.Agent)
-	route.WorkspaceRoot = workspaceRoot
-	h.syncClaudeSessionFromAgent(route)
-	sessionID, pending := h.ensureClaudeSessions().getSession(route.BindingKey, workspaceRoot)
+func (h *Handler) renderClaudeWhoami(route claudeSessionRoute) string {
+	binding := h.ensureClaudeSessions().binding(route.BindingKey)
 	return wechatCommandText(
-		"Claude 状态:",
-		"工作空间: "+workspaceRoot,
-		"session: "+renderCodexThreadLabel(sessionID, pending),
-		"remote: 已配置 ("+route.Agent.Info().Type+")",
+		"workspace: "+route.WorkspaceRoot,
+		"session: "+renderClaudeBindingSession(binding),
 	)
 }
 
-func (h *Handler) renderClaudeWorkspaceListForAccess(bindingKey string, actorUserID string, admin bool) string {
-	views := h.claudeSwitchTargetsForAccess(bindingKey, actorUserID, admin)
+func (h *Handler) renderClaudeStatus(route claudeSessionRoute) string {
+	binding := h.ensureClaudeSessions().binding(route.BindingKey)
+	lines := []string{
+		"Claude 状态:",
+		"工作空间: " + route.WorkspaceRoot,
+		"session: " + renderClaudeBindingSession(binding),
+		"恢复状态: " + renderClaudeBindingStatus(binding.Status),
+		"remote: 已配置 (" + route.Agent.Info().Type + ")",
+	}
+	return wechatCommandText(append(lines, h.claudeConfigStatus(route)...)...)
+}
+
+func renderClaudeBindingStatus(status claudeBindingStatus) string {
+	switch status {
+	case claudeBindingPendingResume:
+		return "等待恢复"
+	case claudeBindingReady:
+		return "已就绪"
+	case claudeBindingResumeFailed:
+		return "恢复失败"
+	default:
+		return "未绑定"
+	}
+}
+
+func (h *Handler) claudeConfigStatus(route claudeSessionRoute) []string {
+	configAgent, ok := route.Agent.(agent.ClaudeSessionConfigAgent)
+	if !ok {
+		return nil
+	}
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
+	config, found := configAgent.ClaudeSessionConfig(conversationID)
+	if !found {
+		return nil
+	}
+	return renderSessionModelStatus(sessionModelStatus{Model: config.Model, Effort: config.Effort})
+}
+
+func renderClaudeBindingSession(binding claudeSessionBinding) string {
+	if strings.TrimSpace(binding.SessionID) == "" {
+		return "未绑定"
+	}
+	return binding.SessionID
+}
+
+func (h *Handler) renderClaudeWorkspaceList(route claudeSessionRoute) string {
+	views, err := h.claudeSwitchTargets(route)
+	if err != nil {
+		return err.Error()
+	}
 	if len(views) == 0 {
 		return "当前还没有可切换的 Claude 会话。"
 	}
@@ -37,9 +75,12 @@ func (h *Handler) renderClaudeWorkspaceListForAccess(bindingKey string, actorUse
 	return wechatCommandText(lines...)
 }
 
-// renderClaudeWorkspaceGroupsForAccess 渲染 `/cc cd ..` 使用的工作空间文本列表。
-func (h *Handler) renderClaudeWorkspaceGroupsForAccess(bindingKey string, actorUserID string, admin bool) string {
-	groups := h.claudeWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
+// renderClaudeWorkspaceGroups 渲染 `/cc cd ..` 使用的工作空间文本列表。
+func (h *Handler) renderClaudeWorkspaceGroups(route claudeSessionRoute) string {
+	groups, err := h.claudeWorkspaceGroupsForRoute(route)
+	if err != nil {
+		return err.Error()
+	}
 	if len(groups) == 0 {
 		return "当前还没有 Claude 工作空间。"
 	}
@@ -91,6 +132,5 @@ func isClaudeAgent(name string, info agent.AgentInfo) bool {
 	if strings.EqualFold(name, "claude") || strings.EqualFold(info.Name, "claude") {
 		return true
 	}
-	command := strings.ToLower(info.Command)
-	return strings.Contains(command, "claude")
+	return strings.Contains(strings.ToLower(info.Command), "claude")
 }
