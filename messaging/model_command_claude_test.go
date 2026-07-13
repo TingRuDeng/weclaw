@@ -78,6 +78,7 @@ func TestFeishuClaudeModelAndReasoningCommandsUseChoiceCards(t *testing.T) {
 	if !strings.Contains(modelCard.Prompt, "Claude") || modelCard.Choices[0].ID != "/model claude-sonnet-5" || !strings.Contains(modelCard.Choices[0].Label, "当前") {
 		t.Fatalf("model card=%#v，期望 Claude 当前模型和切换命令", modelCard)
 	}
+	assertModelCardSessionMetadata(t, modelCard.Choices, sessionKey)
 
 	reasoningReply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/reasoning", "claude-reasoning-card"})
 	if len(reasoningReply.Choices) != 1 {
@@ -91,6 +92,17 @@ func TestFeishuClaudeModelAndReasoningCommandsUseChoiceCards(t *testing.T) {
 	for index, want := range wantIDs {
 		if choices[index].ID != want {
 			t.Fatalf("choices[%d].ID=%q，期望 %q", index, choices[index].ID, want)
+		}
+	}
+	assertModelCardSessionMetadata(t, choices, sessionKey)
+}
+
+// assertModelCardSessionMetadata 验证卡片回调仍绑定生成卡片时的飞书会话。
+func assertModelCardSessionMetadata(t *testing.T, choices []platform.Choice, sessionKey string) {
+	t.Helper()
+	for _, choice := range choices {
+		if choice.Metadata[feishuSessionMetadataKey] != sessionKey {
+			t.Fatalf("choice=%#v，期望保留飞书会话键 %q", choice, sessionKey)
 		}
 	}
 }
