@@ -42,8 +42,8 @@
 - [x] P3：删除四张过时视觉资产及全部引用。
 - [x] P4：执行文档、差异、命令、链接和双语结构验证。
 - [x] P5：执行 Review Gate，修复计划内发现。
-- [ ] P6：提交、推送并检查 GitHub README 渲染。
-- [ ] P7：更新 GitHub About description 和 Topics，并回读确认。
+- [x] P6：提交、推送并检查 GitHub README 渲染。
+- [x] P7：更新 GitHub About description 和 Topics，并回读确认。
 
 ## 验证结果
 
@@ -51,6 +51,7 @@
 - `git diff --check`：通过。
 - `go test ./messaging -run 'Test(BuildHelpText|BuildCodexSessionHelpTextIncludesDescriptions|RemovedCompatibilityRoutesAreNotBuiltinCommands|CodexOwner|HandleProgressCommand|ModelCommand|ReasoningCommand)' -count=1 -timeout 60s`：通过。
 - CLI 帮助、GitHub Release 资产、关键链接、双语标题层级、Mermaid 和折叠区域检查：通过。
+- GitHub `main`、README 内容、公开页面渲染和 About API 回读：通过。
 
 ## 进度记录
 
@@ -61,6 +62,8 @@
 - 2026-07-14：P3 完成，删除四张过时视觉资产并改用 Mermaid 架构图。
 - 2026-07-14：P4 完成，文档、命令、链接、双语结构和 GitHub Markdown API 渲染验证通过。
 - 2026-07-14：P5 完成，Review Gate 结论为 finished / 通过。
+- 2026-07-14：P6 完成，提交 `066c597` 已推送，GitHub 公开页面显示新 README。
+- 2026-07-14：P7 完成，About description、10 个 Topics 和空 Homepage 回读一致。
 
 ## Review 小结
 
@@ -70,6 +73,6 @@
 - 测试与验证：最小充分验证全部通过。
 - 复杂度检查：所有修改后的文本文件均低于 300 行。
 - Document-refresh: not-needed；本轮已完成产品文档刷新且未修改代码。
-- 剩余风险：等待 GitHub 实际渲染和 About 回读确认。
+- 剩余风险：无阻塞风险；GitHub README 与 About 已通过公开页面和 API 回读。
 - 潜在技术债：当前没有可公开的真实产品截图，按决策暂不展示截图。
 - 结论：通过。

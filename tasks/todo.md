@@ -12,12 +12,12 @@
 - [x] P3 串行：删除过时截图和架构图。
 - [x] P4 串行：执行文档、命令、链接和双语结构验证。
 - [x] P5 串行：完成 Review Gate。
-- [ ] P6 串行：提交并推送 README 变更，检查 GitHub 渲染。
-- [ ] P7 串行：更新并回读 GitHub About。
+- [x] P6 串行：提交并推送 README 变更，检查 GitHub 渲染。
+- [x] P7 串行：更新并回读 GitHub About。
 
 ## 当前状态
 
-P0 至 P5 已完成，正在执行 P6。
+P0 至 P7 已完成，任务结束。
 
 ## Review 小结
 
@@ -27,6 +27,6 @@ P0 至 P5 已完成，正在执行 P6。
 - 测试与验证：文档门禁、命令相关单测、CLI 帮助、链接和 GitHub Markdown API 检查通过。
 - 复杂度检查：两份 README 均为 259 行，任务文件均低于 300 行。
 - Document-refresh: not-needed；本轮已完成产品文档刷新且未修改代码。
-- 剩余风险：GitHub 实际页面和 About 外部状态将在 P6、P7 验收。
+- 剩余风险：无阻塞风险；GitHub README 与 About 已通过公开页面和 API 回读。
 - 潜在技术债：当前没有可公开的真实产品截图，按已确认决策不使用替代假图。
 - 结论：通过。
