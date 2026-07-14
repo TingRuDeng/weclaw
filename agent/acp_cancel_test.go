@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestChatLegacyACPSendsSessionCancelWhenContextCancelled(t *testing.T) {
@@ -89,4 +90,51 @@ func TestChatCodexAppServerInterruptsTurnWhenContextCancelled(t *testing.T) {
 	default:
 		t.Fatal("turn/interrupt was not called")
 	}
+}
+
+func TestChatCodexAppServerReturnsStructuredInterruptedTurn(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir()})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+	createCodexThreadForTest(t, context.Background(), a, "conversation-1")
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.chatCodexAppServer(context.Background(), "conversation-1", "hello", nil)
+		done <- err
+	}()
+	waitForCodexTurnChannel(t, a, "thread-1")
+	a.handleCodexTurnEvent("turn/completed", json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"interrupted"}}`))
+
+	err := <-done
+	var interrupted *CodexTurnInterruptedError
+	if !errors.As(err, &interrupted) {
+		t.Fatalf("chat error=%v, want CodexTurnInterruptedError", err)
+	}
+	if interrupted.ThreadID != "thread-1" || interrupted.TurnID != "turn-1" {
+		t.Fatalf("interrupted=%#v, want thread-1 turn-1", interrupted)
+	}
+}
+
+func waitForCodexTurnChannel(t *testing.T, a *ACPAgent, threadID string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		a.notifyMu.Lock()
+		turnCh := a.turnCh[threadID]
+		a.notifyMu.Unlock()
+		if turnCh != nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("thread %s turn channel was not registered", threadID)
 }

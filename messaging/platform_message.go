@@ -152,7 +152,7 @@ func (h *Handler) acceptPreparedPlatformText(runtime platformMessageRuntime) boo
 	if runtime.msg.MessageID != "" && runtime.msg.MessageID != "0" {
 		return true
 	}
-	if !h.isDuplicateTextMessage(runtime.msg.UserID, runtime.msg.ContextToken, runtime.text) {
+	if !h.isDuplicateTextMessage(runtime.msg.UserID, runtime.msg.ContextToken, runtime.routeUserID, runtime.text) {
 		return true
 	}
 	runtime.sendText(duplicateTaskReply())

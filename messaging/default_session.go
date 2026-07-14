@@ -75,6 +75,9 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 
 // resetDefaultCodexSessionForRoute 按 route 当前工作空间创建新的 Codex thread。
 func (h *Handler) resetDefaultCodexSessionForRoute(ctx context.Context, actorUserID string, routeUserID string, name string, ag agent.Agent) string {
+	bindingKey := codexBindingKey(routeUserID, name)
+	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
+	defer unlockBinding()
 	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, name, ag)
 	conversationID := buildCodexConversationID(routeUserID, name, workspaceRoot)
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)

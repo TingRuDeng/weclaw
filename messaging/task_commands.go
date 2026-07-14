@@ -147,9 +147,10 @@ func (h *Handler) steerPendingGuideToExternalCodex(req externalCodexTaskCommand)
 		return "", false
 	}
 	if err := runtimeAg.SteerCodexThread(req.ctx, req.key, target.threadID, target.turnID, pending.message); err != nil {
-		h.restorePendingGuide(req.key, task, pending)
+		h.finishExternalCodexGuide(req.key, task, false)
 		return fmt.Sprintf("发送到当前 Codex App 任务失败: %v", err), true
 	}
+	h.finishExternalCodexGuide(req.key, task, true)
 	task.recordProgress(time.Now(), "已发送引导对话。")
 	return "已发送到当前 Codex App 任务。", true
 }

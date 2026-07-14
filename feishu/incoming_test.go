@@ -17,18 +17,39 @@ import (
 
 type fakeResourceDownloader struct {
 	attachments []platform.Attachment
+	errors      []error
 	seen        []types.Resource
 }
 
 // DownloadResource 记录资源下载请求，并返回预设附件。
 func (f *fakeResourceDownloader) DownloadResource(ctx context.Context, messageID string, resource types.Resource) (platform.Attachment, error) {
 	f.seen = append(f.seen, resource)
+	if len(f.errors) > 0 {
+		err := f.errors[0]
+		f.errors = f.errors[1:]
+		if err != nil {
+			return platform.Attachment{}, err
+		}
+	}
 	if len(f.attachments) == 0 {
 		return platform.Attachment{Kind: platform.AttachmentFile, Path: "/tmp/file", SourceID: resource.FileKey}, nil
 	}
 	attachment := f.attachments[0]
 	f.attachments = f.attachments[1:]
 	return attachment, nil
+}
+
+func TestPermanentFeishuResourceCodes(t *testing.T) {
+	for _, code := range []int{230110, 234003, 234037, 234043} {
+		if !isPermanentFeishuResourceCode(code) {
+			t.Fatalf("code=%d 应归类为不可重试资源错误", code)
+		}
+	}
+	for _, code := range []int{234019, 234042, 999999} {
+		if isPermanentFeishuResourceCode(code) {
+			t.Fatalf("code=%d 不应静默停止重试", code)
+		}
+	}
 }
 
 func TestToIncomingFromMessageParsesText(t *testing.T) {

@@ -44,8 +44,10 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 	if err != nil {
 		return err.Error()
 	}
-	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	bindingKey := codexBindingKey(routeUserID, agentName)
+	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
+	defer unlockBinding()
+	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
 	ownerBindingKey := codexBindingKey(actorUserID, agentName)
 	if reply := h.rejectDisallowedCodexWorkspace(bindingKey, agentName, workspaceRoot, fields, admin); reply != "" {
 		return reply

@@ -57,13 +57,13 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 	if !active {
 		return false
 	}
-	opts.cancel()
 	taskOpts.route = opts.route
-	_, exists := h.activeTask(opts.route.conversationID)
-	if !exists {
+	status := h.queuePendingActiveTask(opts.route.conversationID, h.pendingCodexTask(taskOpts))
+	if status == activeTaskMissing {
 		return false
 	}
-	if h.storePendingGuide(opts.route.conversationID, h.pendingCodexTask(taskOpts)) {
+	opts.cancel()
+	if status == activeTaskQueued {
 		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, queuedAgentMessage)
 		return true
 	}

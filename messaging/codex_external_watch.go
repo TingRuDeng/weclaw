@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -29,7 +30,11 @@ type externalCodexWatchRequest struct {
 // superviseExternalCodexWatch 把 Desktop 断线切换为 rollout/reconnect 观察。
 func (h *Handler) superviseExternalCodexWatch(runtime externalCodexTaskRuntime, onProgress func(string)) codexExternalWatchResult {
 	text, err := runtime.watch(runtime.ctx, onProgress)
-	result := classifyCodexWatchResult(text, err, "desktop")
+	source := "desktop"
+	if !runtime.state.Controllable {
+		source = "rollout"
+	}
+	result := classifyCodexWatchResult(text, err, source)
 	if result.Terminal {
 		return result
 	}
@@ -48,7 +53,7 @@ func (h *Handler) watchCodexAfterDesktopDisconnect(ctx context.Context, req exte
 	for {
 		state, found, err := h.bootstrapCodexRolloutAfterDisconnect(req.threadID, req.turnID)
 		if err != nil {
-			return codexExternalWatchResult{Err: err, Source: "rollout"}
+			return classifyCodexWatchResult("", err, "rollout")
 		}
 		if found && !state.Active {
 			return terminalCodexRolloutState(state)
@@ -115,7 +120,7 @@ func (h *Handler) bootstrapCodexRolloutAfterDisconnect(threadID string, turnID s
 	}
 	targetTurnID := strings.TrimSpace(turnID)
 	if state.TurnID == "" || (targetTurnID != "" && state.TurnID != targetTurnID) {
-		return codexRolloutTaskState{}, false, nil
+		return codexRolloutTaskState{}, false, fmt.Errorf("%w: %s", errCodexRolloutTurnChanged, state.TurnID)
 	}
 	return state, true, nil
 }
@@ -158,8 +163,8 @@ func classifyCodexWatchResult(text string, err error, source string) codexExtern
 		errors.Is(err, agent.ErrCodexDesktopDisconnected) || errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown) {
 		return codexExternalWatchResult{Err: err, Source: source}
 	}
-	if source == "rollout" && !errors.Is(err, errCodexRolloutAborted) {
-		return codexExternalWatchResult{Err: err, Source: source}
+	if source == "rollout" {
+		return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: source}
 	}
 	if errors.Is(err, errCodexRolloutAborted) || errors.Is(err, agent.ErrCodexTurnTerminal) {
 		return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: source}

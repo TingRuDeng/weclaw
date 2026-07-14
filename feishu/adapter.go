@@ -34,6 +34,7 @@ type Adapter struct {
 	wsFactory          func(*dispatcher.EventDispatcher) wsRunner
 	session            FeishuSessionOptions
 	deduper            *feishuEventDeduper
+	dispatches         *feishuDispatchSequencer
 	accessMu           sync.RWMutex
 	access             platform.AccessControl
 	accessSet          bool
@@ -59,6 +60,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		validate:      ValidateCredentials,
 		session:       DefaultFeishuSessionOptions(),
 		deduper:       newFeishuEventDeduper(feishuEventDedupTTL),
+		dispatches:    newFeishuDispatchSequencer(),
 		identities:    make(map[string]cachedFeishuIdentity),
 		approvals:     make(map[string]approvalRecord),
 		taskCards:     newTaskCardRegistry(),

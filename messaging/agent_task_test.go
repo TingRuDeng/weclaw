@@ -233,3 +233,35 @@ func TestClaudeSecondQueuedMessageDoesNotAcceptThird(t *testing.T) {
 		t.Fatalf("texts=%#v，第三条不应执行", reply.Texts)
 	}
 }
+
+func TestClaudeBroadcastQueuesWithoutWaitingForRunningTask(t *testing.T) {
+	h, ag := newClaudeAgentTaskFixture()
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.sendToNamedAgent(agentMessageRequest{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "user-1", routeUserID: "route-1", reply: reply,
+		name: "claude", message: "第一条", clientID: "client-1",
+	})
+	waitForAgentEnter(t, ag)
+	done := make(chan struct{})
+	go func() {
+		h.broadcastToAgents(broadcastAgentsRequest{
+			ctx: context.Background(), platformName: platform.PlatformFeishu,
+			userID: "user-1", routeUserID: "route-1", replyWriter: reply,
+			names: []string{"claude"}, message: "第二条",
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Claude 广播不应等待当前任务结束")
+	}
+	if !containsText(reply.Texts, queuedAgentMessage) {
+		t.Fatalf("texts=%#v，广播消息应进入统一暂存队列", reply.Texts)
+	}
+	ag.release <- struct{}{}
+	waitForAgentEnter(t, ag)
+	ag.release <- struct{}{}
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
+}

@@ -67,7 +67,7 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
 		t.Fatalf("response=%#v, want success toast", resp)
 	}
-	assertSelectedChoiceCard(t, resp.Card, "账本 App 开发")
+	assertSubmittedChoiceCard(t, resp.Card, "账本 App 开发")
 	select {
 	case msg := <-dispatched:
 		if msg.RawCommand == nil || msg.RawCommand.Action != cardActionChoice || msg.RawCommand.Value["choice"] != "1" {

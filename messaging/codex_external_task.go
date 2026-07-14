@@ -178,6 +178,13 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		onProgress(runtime.state.Progress)
 	}
 	result := h.superviseExternalCodexWatch(runtime, recordProgress)
+	if !result.Terminal && runtime.task.isStopping() {
+		result.Terminal = true
+		result.Failed = true
+		if result.Err == nil {
+			result.Err = context.Canceled
+		}
+	}
 	if !result.Terminal {
 		_ = finishProgress("", false)
 		return

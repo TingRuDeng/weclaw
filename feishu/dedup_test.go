@@ -150,6 +150,70 @@ func TestFeishuEventDedupStateDropsExpiredEntries(t *testing.T) {
 	}
 }
 
+func TestFeishuDedupReservationCannotReleaseNewerOwner(t *testing.T) {
+	base := time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)
+	deduper := newFeishuEventDeduper(time.Minute)
+	now := base
+	deduper.now = func() time.Time { return now }
+	event := newDMEvent(dedupTestEventOptions{
+		MessageID: "om_owner", EventID: "evt_owner",
+		CreateTime: "1719730000000", Text: "附件",
+	})
+	scope := ExtractFeishuSessionScope(event)
+	first, duplicate := deduper.reserve(event, scope)
+	if duplicate {
+		t.Fatal("首次预约不应判重")
+	}
+	now = base.Add(2 * time.Minute)
+	if _, duplicate = deduper.reserve(event, scope); duplicate {
+		t.Fatal("过期后新处理者应取得预约")
+	}
+	first.release()
+	if _, duplicate = deduper.reserve(event, scope); !duplicate {
+		t.Fatal("旧处理者释放操作删除了新处理者的记录")
+	}
+}
+
+func TestFeishuDedupReservationCannotCompleteAfterOwnershipChanged(t *testing.T) {
+	base := time.Date(2026, 7, 13, 22, 0, 0, 0, time.UTC)
+	deduper := newFeishuEventDeduper(time.Minute)
+	now := base
+	deduper.now = func() time.Time { return now }
+	event := newDMEvent(dedupTestEventOptions{MessageID: "om_stale", EventID: "evt_stale", Text: "附件"})
+	scope := ExtractFeishuSessionScope(event)
+	first, _ := deduper.reserve(event, scope)
+	now = base.Add(2 * time.Minute)
+	second, duplicate := deduper.reserve(event, scope)
+	if duplicate {
+		t.Fatal("过期后新处理者应取得预约")
+	}
+	if first.complete() {
+		t.Fatal("失去所有权的旧处理者不应提交完成状态")
+	}
+	if !second.complete() {
+		t.Fatal("当前所有者应能提交完成状态")
+	}
+}
+
+func TestFeishuDedupReservationIsNotPersistedBeforeCompletion(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "feishu-dedup.json")
+	first := newFeishuEventDeduper(time.Minute)
+	first.setStateFile(stateFile)
+	event := newDMEvent(dedupTestEventOptions{
+		MessageID: "om_processing", EventID: "evt_processing",
+		CreateTime: "1719730000000", Text: "附件",
+	})
+	scope := ExtractFeishuSessionScope(event)
+	if _, duplicate := first.reserve(event, scope); duplicate {
+		t.Fatal("首次预约不应判重")
+	}
+	second := newFeishuEventDeduper(time.Minute)
+	second.setStateFile(stateFile)
+	if _, duplicate := second.reserve(event, scope); duplicate {
+		t.Fatal("未完成的处理中预约不应跨重启持久化")
+	}
+}
+
 // dispatchFeishuEvents 统计事件进入 adapter 后实际分发到 messaging 的次数。
 func dispatchFeishuEvents(adapter *Adapter, events ...*larkim.P2MessageReceiveV1) int {
 	dispatches := 0

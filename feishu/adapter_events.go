@@ -2,13 +2,17 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"log"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
+
+const feishuCardActionTimeout = 2 * time.Minute
 
 // newEventDispatcher 注册飞书消息事件和卡片回调事件。
 func (a *Adapter) newEventDispatcher(dispatch platform.DispatchFunc) *dispatcher.EventDispatcher {
@@ -34,7 +38,7 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 	if a.shouldIgnoreStaleMessage(event) {
 		return nil
 	}
-	msg, resources, ok := a.toIncomingEnvelopeFromMessage(event)
+	msg, resources, reservation, ok := a.toIncomingEnvelopeFromMessage(event)
 	if !ok {
 		log.Printf("[feishu] ignored non-dispatchable message event")
 		return nil
@@ -44,9 +48,13 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		a.rememberUserIdentities(msg)
 		if err := a.attachMessageResources(ctx, &msg, resources); err != nil {
 			newTemporaryAttachmentCleanup(msg.Attachments)()
-			log.Printf("[feishu] ignored message with resource download failure: %v", err)
-			return nil
+			return a.handleResourceDownloadFailure(ctx, msg, reservation, err)
 		}
+	}
+	if !reservation.complete() {
+		newTemporaryAttachmentCleanup(msg.Attachments)()
+		log.Printf("[feishu] ignored message after dedup reservation ownership changed")
+		return nil
 	}
 	cleanup := newTemporaryAttachmentCleanup(msg.Attachments)
 	cleanupOwned := true
@@ -64,8 +72,36 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		cleanupOwned = false
 		return nil
 	}
-	a.dispatchIncomingMessage(ctx, msg, dispatch)
+	a.dispatchIncomingMessage(context.WithoutCancel(ctx), msg, dispatch)
 	return nil
+}
+
+// handleResourceDownloadFailure 区分可重试与永久错误，并始终给用户明确反馈。
+func (a *Adapter) handleResourceDownloadFailure(ctx context.Context, msg platform.IncomingMessage, reservation feishuDedupReservation, err error) error {
+	permanent := isPermanentResourceDownloadError(err)
+	notice := "附件获取失败，请稍后重试。"
+	if permanent {
+		notice = "附件获取失败：文件过大或资源不可用，请重新发送。"
+	}
+	target := firstNonEmpty(msg.ChatID, msg.UserID)
+	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit)
+	if sendErr := replier.SendText(ctx, notice); sendErr != nil {
+		log.Printf("[feishu] failed to send resource download failure notice: %v", sendErr)
+		reservation.release()
+		return sendErr
+	}
+	log.Printf("[feishu] message resource download failed: %v", err)
+	if permanent {
+		reservation.complete()
+		return nil
+	}
+	reservation.release()
+	return err
+}
+
+func isPermanentResourceDownloadError(err error) bool {
+	var permanent interface{ Permanent() bool }
+	return errors.As(err, &permanent) && permanent.Permanent()
 }
 
 // handleMirrorDedup 在 adapter 层消化飞书话题“同时发送到群”的群聊镜像。
@@ -85,8 +121,11 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
-	log.Printf("[feishu] message event parsed: account=%s user=%s chat=%s message=%s attachments=%d", msg.AccountID, msg.UserID, msg.ChatID, msg.MessageID, len(msg.Attachments))
-	dispatch(ctx, msg, a.newScopedReplier(msg))
+	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
+	ticket.run(ctx, func() {
+		log.Printf("[feishu] message event parsed: account=%s user=%s chat=%s message=%s attachments=%d", msg.AccountID, msg.UserID, msg.ChatID, msg.MessageID, len(msg.Attachments))
+		dispatch(ctx, msg, a.newScopedReplier(msg))
+	})
 }
 
 func (a *Adapter) allowIncomingMessage(msg platform.IncomingMessage) bool {
@@ -128,10 +167,17 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		},
 		Metadata: metadata,
 	}
-	go dispatch(context.WithoutCancel(ctx), msg, a.newScopedReplier(msg))
+	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
+	dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), feishuCardActionTimeout)
+	go func() {
+		defer cancel()
+		if !ticket.run(dispatchCtx, func() { dispatch(dispatchCtx, msg, a.newScopedReplier(msg)) }) {
+			log.Printf("[feishu] card action dispatch timed out: action=%s", action.Action)
+		}
+	}()
 	return &callback.CardActionTriggerResponse{
-		Toast: &callback.Toast{Type: "success", Content: "已收到"},
-		Card:  buildSelectedChoiceCard(action),
+		Toast: &callback.Toast{Type: "success", Content: "已提交，正在处理"},
+		Card:  buildSubmittedChoiceCard(action),
 	}, nil
 }
 

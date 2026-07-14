@@ -8,26 +8,41 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
 
-// sanitizeFileName removes characters unsafe for filenames.
+const maxLinkhoardBaseNameBytes = 200
+
+// sanitizeFileName 清理文件名并在 UTF-8 字符边界内控制字节预算。
 func sanitizeFileName(name string) string {
 	replacer := strings.NewReplacer(
 		"/", "", "\\", "", ":", "", "*", "",
 		"?", "", "\"", "", "<", "", ">", "", "|", "",
 	)
 	result := replacer.Replace(name)
-	// Trim and limit length
 	result = strings.TrimSpace(result)
-	if len(result) > 200 {
-		result = result[:200]
-	}
+	result = truncateUTF8Bytes(result, maxLinkhoardBaseNameBytes)
 	if result == "" {
 		result = "untitled"
 	}
 	return result
+}
+
+func truncateUTF8Bytes(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	used := 0
+	for index, current := range value {
+		size := utf8.RuneLen(current)
+		if used+size > maxBytes {
+			return value[:index]
+		}
+		used += size
+	}
+	return value
 }
 
 // isWeChatURL checks if a URL is a WeChat article.

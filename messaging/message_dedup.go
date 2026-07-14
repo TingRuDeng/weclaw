@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 )
@@ -43,7 +45,7 @@ func (h *Handler) duplicateTTL() time.Duration {
 	return durationSeconds(cfg.DuplicateTTLSeconds, 5*time.Minute)
 }
 
-func (h *Handler) isDuplicateTextMessage(userID string, contextToken string, text string) bool {
+func (h *Handler) isDuplicateTextMessage(userID string, contextToken string, routeUserID string, text string) bool {
 	key := buildTextDedupKey(userID, contextToken, text)
 	if key == "" {
 		return false
@@ -51,12 +53,43 @@ func (h *Handler) isDuplicateTextMessage(userID string, contextToken string, tex
 	now := time.Now()
 	if seenAt, loaded := h.seenTextMsgs.LoadOrStore(key, now); loaded {
 		if t, ok := seenAt.(time.Time); ok && now.Sub(t) <= h.duplicateTTL() {
-			return true
+			if h.hasMatchingActiveTextTask(userID, routeUserID, text) {
+				return true
+			}
+			h.seenTextMsgs.Store(key, now)
+			return false
 		}
 		h.seenTextMsgs.Store(key, now)
 	}
 	h.maybeCleanSeenMsgs(now)
 	return false
+}
+
+// hasMatchingActiveTextTask 只在同一用户的对应任务仍运行时拦截无消息 ID 的重复投递。
+func (h *Handler) hasMatchingActiveTextTask(userID string, routeUserID string, text string) bool {
+	owner := strings.TrimSpace(userID)
+	route := strings.TrimSpace(routeUserID)
+	fingerprint := normalizedTextFingerprint(text)
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	for _, task := range h.activeTasks {
+		task.mu.Lock()
+		matched := task.owner == owner && task.routeUserID == route && task.messageFingerprint == fingerprint && task.phase != codexTaskTerminal
+		task.mu.Unlock()
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedTextFingerprint(text string) string {
+	normalized := strings.Join(strings.Fields(text), " ")
+	if normalized == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:])
 }
 
 func buildTextDedupKey(userID string, contextToken string, text string) string {

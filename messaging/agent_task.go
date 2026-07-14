@@ -49,14 +49,17 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 		actorUserID: opts.userID, routeUserID: opts.routeUserID, reply: opts.reply,
 	})
 	key := h.agentExecutionKeyForRoute(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
-	task, taskCtx, started := h.beginActiveTask(agentCtx, key, activeTaskMeta{
-		owner: opts.userID, agentName: opts.agentName, message: opts.message,
-	})
-	if !started {
+	pending := pendingAgentTask{message: opts.message, run: func() { h.startAgentTask(opts) }}
+	admission := h.beginOrQueueActiveTask(agentCtx, key, activeTaskMeta{
+		owner: opts.userID, routeUserID: opts.routeUserID, agentName: opts.agentName, message: opts.message,
+	}, pending)
+	if admission.status != activeTaskStarted {
 		cancel()
-		h.queueAgentTask(opts, key)
+		h.replyAgentTaskAdmission(opts, admission.status)
 		return
 	}
+	task := admission.task
+	taskCtx := admission.taskCtx
 	onProgress, finish := h.startProgressSessionWithFinal(taskCtx, opts.reply, opts.replyPrefix, opts.message, opts.progressCfg)
 	runtime := agentTaskRuntime{
 		opts: opts, agentCtx: taskCtx, cancelTaskTimeout: cancel,
@@ -65,10 +68,9 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	go h.runAgentTask(runtime)
 }
 
-// queueAgentTask 每个活动任务最多暂存一条后续消息。
-func (h *Handler) queueAgentTask(opts agentTaskOptions, key string) {
-	pending := pendingAgentTask{message: opts.message, run: func() { h.startAgentTask(opts) }}
-	if h.storePendingGuide(key, pending) {
+// replyAgentTaskAdmission 根据原子准入结果反馈真实排队状态。
+func (h *Handler) replyAgentTaskAdmission(opts agentTaskOptions, status activeTaskAdmissionStatus) {
+	if status == activeTaskQueued {
 		sendPlatformText(opts.ctx, opts.reply, opts.userID, queuedAgentMessage)
 		return
 	}

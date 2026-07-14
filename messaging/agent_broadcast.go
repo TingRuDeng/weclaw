@@ -7,7 +7,6 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 type broadcastAgentsRequest struct {
@@ -78,9 +77,14 @@ func (h *Handler) beginBroadcastRuntime(req broadcastAgentsRequest, name string,
 	if isCodexAgent(name, ag.Info()) {
 		return h.beginCodexBroadcastRuntime(req, name, ag, ctx, reply, results)
 	}
+	if isBackgroundClaudeAgent(name, ag) {
+		return h.beginClaudeBroadcastRuntime(req, name, ag, ctx, reply, results)
+	}
 	key := h.agentExecutionKeyForRoute(req.userID, req.routeUserID, name, ag)
 	unlock := h.lockAgentExecution(key)
-	task, taskCtx, err := h.beginSynchronousActiveTask(ctx, key, activeTaskMeta{owner: req.userID, agentName: name, message: req.message})
+	task, taskCtx, err := h.beginSynchronousActiveTask(ctx, key, activeTaskMeta{
+		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
+	})
 	if err != nil {
 		unlock()
 		results <- broadcastAgentResult{name: name, reply: renderFinalFailure("["+name+"] ", err)}
@@ -93,14 +97,50 @@ func (h *Handler) beginBroadcastRuntime(req broadcastAgentsRequest, name string,
 	return broadcastAgentRuntime{ctx: taskCtx, executionKey: key, activeTask: task, finishRuntime: finish}, true
 }
 
-func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name string, ag agent.Agent, ctx context.Context, reply platform.Replier, results chan<- broadcastAgentResult) (broadcastAgentRuntime, bool) {
-	route := h.codexConversationRouteForSession(req.userID, req.routeUserID, name, ag)
-	key := route.conversationID
-	task, taskCtx, started := h.beginActiveTask(ctx, key, activeTaskMeta{owner: req.userID, agentName: name, message: req.message})
-	if !started {
-		h.deferBroadcastCodexMessage(req, name, ag, route, reply, key, task, results)
+// beginClaudeBroadcastRuntime 让 Claude ACP 广播与普通消息共享原子任务准入和单条暂存队列。
+func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name string, ag agent.Agent, ctx context.Context, reply platform.Replier, results chan<- broadcastAgentResult) (broadcastAgentRuntime, bool) {
+	key := h.agentExecutionKeyForRoute(req.userID, req.routeUserID, name, ag)
+	pending := pendingAgentTask{message: req.message, run: func() {
+		h.startAgentTask(agentTaskOptions{
+			ctx: req.ctx, platformName: req.platformName, accountID: req.accountID,
+			userID: req.userID, routeUserID: req.routeUserID, reply: reply,
+			agentName: name, message: req.message, replyPrefix: "[" + name + "] ",
+			agent: ag, progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name),
+		})
+	}}
+	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
+		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
+	}, pending)
+	if admission.status != activeTaskStarted {
+		h.replyBroadcastAdmission(name, admission.status, results)
 		return broadcastAgentRuntime{}, false
 	}
+	unlock := h.lockAgentExecution(key)
+	finish := func() {
+		unlock()
+		if next, ok := h.completeActiveTask(key, admission.task); ok {
+			next.run()
+		}
+	}
+	return broadcastAgentRuntime{ctx: admission.taskCtx, executionKey: key, activeTask: admission.task, finishRuntime: finish}, true
+}
+
+func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name string, ag agent.Agent, ctx context.Context, reply platform.Replier, results chan<- broadcastAgentResult) (broadcastAgentRuntime, bool) {
+	bindingKey := codexBindingKey(req.routeUserID, name)
+	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
+	defer unlockBinding()
+	route := h.codexConversationRouteForSession(req.userID, req.routeUserID, name, ag)
+	key := route.conversationID
+	pending := h.broadcastPendingCodexTask(req, name, ag, route, reply)
+	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
+		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
+	}, pending)
+	if admission.status != activeTaskStarted {
+		h.replyBroadcastAdmission(name, admission.status, results)
+		return broadcastAgentRuntime{}, false
+	}
+	task := admission.task
+	taskCtx := admission.taskCtx
 	unlock := h.lockAgentExecution(key)
 	finish := func() {
 		unlock()
@@ -111,15 +151,18 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	return broadcastAgentRuntime{ctx: taskCtx, executionKey: key, codexRoute: route, activeTask: task, finishRuntime: finish}, true
 }
 
-func (h *Handler) deferBroadcastCodexMessage(req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute, reply platform.Replier, key string, _ *activeAgentTask, results chan<- broadcastAgentResult) {
-	pending := h.pendingCodexTask(codexAgentTaskOptions{
+func (h *Handler) broadcastPendingCodexTask(req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute, reply platform.Replier) pendingAgentTask {
+	return h.pendingCodexTask(codexAgentTaskOptions{
 		ctx: req.ctx, userID: req.userID, routeUserID: req.routeUserID, reply: reply,
 		agentName: name, message: req.message, clientID: req.clientID,
 		replyPrefix: "[" + name + "] ", agent: ag,
 		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), route: route,
 	})
+}
+
+func (h *Handler) replyBroadcastAdmission(name string, status activeTaskAdmissionStatus, results chan<- broadcastAgentResult) {
 	text := "当前任务已有一条暂存消息，请先处理后再发送。"
-	if h.storePendingGuide(key, pending) {
+	if status == activeTaskQueued {
 		text = queuedAgentMessage
 	}
 	results <- broadcastAgentResult{name: name, reply: text}
@@ -177,9 +220,6 @@ func (h *Handler) recordBroadcastSession(req broadcastAgentsRequest, name string
 func (h *Handler) sendBroadcastAgentResult(req broadcastAgentsRequest, reply platform.Replier, result broadcastAgentResult) {
 	if result.skip {
 		return
-	}
-	if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
-		wxReply.ClientID = NewClientID()
 	}
 	h.sendReplyWithMediaAfterStreamForRoute(req.ctx, reply, req.userID, req.routeUserID, result.name, result.reply, false)
 }

@@ -193,6 +193,7 @@ func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, 
 	ext := detectImageExt(data)
 	if err := os.MkdirAll(h.saveDir, 0o755); err != nil {
 		log.Printf("[handler] failed to create save dir: %v", err)
+		sendPlatformText(ctx, reply, userID, fmt.Sprintf("Failed to save image: %v", err))
 		return
 	}
 	sidecarContent := fmt.Sprintf("---\nid: %s\n---\n", uuid.New().String())

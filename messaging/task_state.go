@@ -11,22 +11,25 @@ import (
 )
 
 type activeAgentTask struct {
-	mu             sync.Mutex
-	cancel         context.CancelFunc
-	done           chan struct{}
-	detached       bool
-	pending        pendingAgentTask
-	owner          string
-	agentName      string
-	preview        string
-	startedAt      time.Time
-	lastProgress   string
-	lastProgressAt time.Time
-	runtimeOwner   agent.CodexRuntimeOwner
-	ownerRevision  uint64
-	phase          codexTaskPhase
-	codexThreadID  string
-	codexTurnID    string
+	mu                 sync.Mutex
+	cancel             context.CancelFunc
+	done               chan struct{}
+	detached           bool
+	pending            pendingAgentTask
+	pendingSteering    bool
+	owner              string
+	routeUserID        string
+	agentName          string
+	preview            string
+	messageFingerprint string
+	startedAt          time.Time
+	lastProgress       string
+	lastProgressAt     time.Time
+	runtimeOwner       agent.CodexRuntimeOwner
+	ownerRevision      uint64
+	phase              codexTaskPhase
+	codexThreadID      string
+	codexTurnID        string
 }
 
 type pendingAgentTask struct {
@@ -44,26 +47,11 @@ func (t *activeAgentTask) pendingGuide() string {
 func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTaskMeta) (*activeAgentTask, context.Context, bool) {
 	h.activeTasksMu.Lock()
 	defer h.activeTasksMu.Unlock()
-	if h.activeTasks == nil {
-		h.activeTasks = make(map[string]*activeAgentTask)
-	}
+	h.ensureActiveTasksLocked()
 	if h.activeTasks[key] != nil {
 		return h.activeTasks[key], ctx, false
 	}
-	taskCtx, cancel := context.WithCancel(ctx)
-	task := &activeAgentTask{
-		cancel:        cancel,
-		done:          make(chan struct{}),
-		owner:         strings.TrimSpace(meta.owner),
-		agentName:     strings.TrimSpace(meta.agentName),
-		preview:       previewPendingCodexMessage(meta.message),
-		startedAt:     time.Now(),
-		runtimeOwner:  meta.runtimeOwner,
-		ownerRevision: meta.ownerRevision,
-		phase:         codexTaskRunning,
-		codexThreadID: strings.TrimSpace(meta.codexThreadID),
-		codexTurnID:   strings.TrimSpace(meta.codexTurnID),
-	}
+	task, taskCtx := newActiveAgentTask(ctx, meta)
 	h.activeTasks[key] = task
 	return task, taskCtx, true
 }
@@ -87,6 +75,7 @@ func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {
 // activeTaskMeta 描述一次后台任务的归属信息，供 /ps 和 /cancel 检索。
 type activeTaskMeta struct {
 	owner         string
+	routeUserID   string
 	agentName     string
 	message       string
 	runtimeOwner  agent.CodexRuntimeOwner
@@ -187,29 +176,40 @@ func (h *Handler) takeExternalCodexGuide(key string, actor string) (pendingAgent
 	if task.owner != strings.TrimSpace(actor) {
 		return pendingAgentTask{}, "", "", task, false, true
 	}
-	if !task.canControlExternalCodexLocked() || task.pending.message == "" {
+	if !task.canControlExternalCodexLocked() || task.pending.message == "" || task.pendingSteering {
 		return pendingAgentTask{}, "", "", task, false, false
 	}
 	pending := task.pending
-	task.pending = pendingAgentTask{}
+	task.pendingSteering = true
 	return pending, task.codexThreadID, task.codexTurnID, task, true, false
 }
 
-func (h *Handler) restorePendingGuide(key string, task *activeAgentTask, pending pendingAgentTask) {
-	if task == nil || strings.TrimSpace(pending.message) == "" {
+// finishExternalCodexGuide 提交或回滚引导发送；发送期间保留槽位，避免第三条消息抢占。
+func (h *Handler) finishExternalCodexGuide(key string, task *activeAgentTask, delivered bool) {
+	if task == nil {
 		return
 	}
 	h.activeTasksMu.Lock()
-	current := h.activeTasks[key]
-	h.activeTasksMu.Unlock()
-	if current != task {
+	active := h.activeTasks[key] == task
+	task.mu.Lock()
+	if !task.pendingSteering {
+		task.mu.Unlock()
+		h.activeTasksMu.Unlock()
 		return
 	}
-	task.mu.Lock()
-	if task.pending.message == "" {
-		task.pending = pending
+	task.pendingSteering = false
+	pending := pendingAgentTask{}
+	if delivered {
+		task.pending = pendingAgentTask{}
+	} else if !active {
+		pending = task.pending
+		task.pending = pendingAgentTask{}
 	}
 	task.mu.Unlock()
+	h.activeTasksMu.Unlock()
+	if pending.run != nil {
+		pending.run()
+	}
 }
 
 // completeActiveTask 原子移除运行任务并提升暂存消息，避免收尾时丢失并发输入。
@@ -249,10 +249,10 @@ func (h *Handler) finishClaimedActiveTask(key string, task *activeAgentTask) (pe
 	}
 	task.mu.Lock()
 	pending := pendingAgentTask{}
-	if task.phase == codexTaskTerminal {
+	if task.phase == codexTaskTerminal && !task.pendingSteering {
 		pending = task.pending
+		task.pending = pendingAgentTask{}
 	}
-	task.pending = pendingAgentTask{}
 	delete(h.activeTasks, key)
 	task.mu.Unlock()
 	close(task.done)

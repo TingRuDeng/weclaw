@@ -91,7 +91,7 @@ func codexCompletedEvent(turnID string, status string, rawError json.RawMessage)
 	case "completed":
 		return &codexTurnEvent{Kind: "completed", TurnID: turnID}
 	case "interrupted":
-		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: "Codex turn 已中断"}
+		return &codexTurnEvent{Kind: "interrupted", TurnID: turnID}
 	case "failed":
 		text := firstNonEmpty(formatCodexTurnError(rawError), "未知错误")
 		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: joinCodexErrorParts("Codex turn 执行失败", text, "")}

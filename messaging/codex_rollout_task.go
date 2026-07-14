@@ -77,6 +77,30 @@ func readCodexRolloutTaskState(path string) (codexRolloutTaskState, error) {
 	return state, err
 }
 
+// readCodexRolloutTaskStateForTurn 单次扫描目标 turn，忽略它之前的历史任务。
+func readCodexRolloutTaskStateForTurn(path string, turnID string) (codexRolloutTaskState, bool, error) {
+	state := codexRolloutTaskState{Path: strings.TrimSpace(path)}
+	target := strings.TrimSpace(turnID)
+	found := false
+	offset, err := readCodexRolloutEvents(state.Path, 0, func(event codexRolloutEvent) error {
+		if !found {
+			if event.Kind != codexRolloutTaskStarted || event.TurnID != target {
+				return nil
+			}
+			found = true
+		}
+		if event.Kind == codexRolloutTaskStarted && event.TurnID != target && state.Active {
+			return fmt.Errorf("%w: %s", errCodexRolloutTurnChanged, event.TurnID)
+		}
+		if event.Kind != codexRolloutTaskStarted || event.TurnID == target {
+			applyCodexRolloutEvent(&state, event)
+		}
+		return nil
+	})
+	state.Offset = offset
+	return state, found, err
+}
+
 // applyCodexRolloutEvent 将单个共享事件归并到最新 turn 状态。
 func applyCodexRolloutEvent(state *codexRolloutTaskState, event codexRolloutEvent) {
 	switch event.Kind {

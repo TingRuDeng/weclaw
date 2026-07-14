@@ -157,8 +157,8 @@ func TestHandleCodexTurnCompletedUsesNestedCompletedStatus(t *testing.T) {
 
 func TestHandleCodexTurnCompletedReportsNestedInterruptedStatus(t *testing.T) {
 	evt := handleCodexTurnEventForTest(t, `{"threadId":"thread-1","turn":{"id":"turn-1","status":"interrupted","items":[]}}`)
-	if evt.Kind != "error" || !strings.Contains(evt.Text, "已中断") {
-		t.Fatalf("event=%#v, want interrupted error", evt)
+	if evt.Kind != "interrupted" || evt.TurnID != "turn-1" {
+		t.Fatalf("event=%#v, want interrupted turn-1", evt)
 	}
 }
 

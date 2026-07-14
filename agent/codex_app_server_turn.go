@@ -145,6 +145,11 @@ func (a *ACPAgent) chatCodexAppServerTurn(ctx context.Context, conversationID st
 				}
 				continue
 			}
+			if evt.Kind == "interrupted" {
+				turnID := firstNonEmpty(evt.TurnID, activeTurnID)
+				log.Printf("[acp] turn observation interrupted (pid=%d, thread=%s, turn=%s, conversation=%s, elapsed=%s)", pid, threadID, turnID, conversationID, turnMetrics.elapsed(time.Now()))
+				return "", &CodexTurnInterruptedError{ThreadID: threadID, TurnID: turnID}
+			}
 			if evt.Kind == "error" {
 				errorText := diagnostics.withError(evt.Text)
 				log.Printf("[acp] turn failed (pid=%d, thread=%s, conversation=%s, elapsed=%s): %.200s", pid, threadID, conversationID, turnMetrics.elapsed(time.Now()), errorText)

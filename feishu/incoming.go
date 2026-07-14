@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -50,7 +51,11 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 		return platform.Attachment{}, err
 	}
 	if !resp.Success() {
-		return platform.Attachment{}, fmt.Errorf("download feishu resource %s failed: code=%d msg=%s", resource.FileKey, resp.Code, resp.Msg)
+		message := fmt.Sprintf("download feishu resource %s failed: code=%d msg=%s", resource.FileKey, resp.Code, resp.Msg)
+		if isPermanentFeishuResourceCode(resp.Code) {
+			return platform.Attachment{}, permanentResourceDownloadError{message: message}
+		}
+		return platform.Attachment{}, errors.New(message)
 	}
 	target := feishuResourceTarget(resource)
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
@@ -67,7 +72,9 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 	}
 	if info.Size() > maxFeishuResourceBytes {
 		os.Remove(target)
-		return platform.Attachment{}, fmt.Errorf("feishu resource exceeds %d MiB", maxFeishuResourceBytes/(1024*1024))
+		return platform.Attachment{}, permanentResourceDownloadError{
+			message: fmt.Sprintf("feishu resource exceeds %d MiB", maxFeishuResourceBytes/(1024*1024)),
+		}
 	}
 	if err := os.Chmod(target, 0o600); err != nil {
 		_ = os.Remove(target)
@@ -83,11 +90,16 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 }
 
 func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2MessageReceiveV1) (platform.IncomingMessage, bool) {
-	incoming, resources, ok := a.toIncomingEnvelopeFromMessage(event)
+	incoming, resources, reservation, ok := a.toIncomingEnvelopeFromMessage(event)
 	if !ok {
 		return platform.IncomingMessage{}, false
 	}
 	if err := a.attachMessageResources(ctx, &incoming, resources); err != nil {
+		newTemporaryAttachmentCleanup(incoming.Attachments)()
+		reservation.release()
+		return platform.IncomingMessage{}, false
+	}
+	if !reservation.complete() {
 		newTemporaryAttachmentCleanup(incoming.Attachments)()
 		return platform.IncomingMessage{}, false
 	}
@@ -98,10 +110,10 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 }
 
 // toIncomingEnvelopeFromMessage 只解析文本、身份和资源描述，不下载附件。
-func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1) (platform.IncomingMessage, []types.Resource, bool) {
+func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1) (platform.IncomingMessage, []types.Resource, feishuDedupReservation, bool) {
 	normalized := normalize.ParseMessage(event)
 	if normalized == nil || normalized.UserID == "" || normalized.MessageID == "" {
-		return platform.IncomingMessage{}, nil, false
+		return platform.IncomingMessage{}, nil, feishuDedupReservation{}, false
 	}
 	scope := ExtractFeishuSessionScope(event)
 	scope.AccountID = a.creds.AppID
@@ -111,11 +123,12 @@ func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1
 	}
 	if shouldIgnoreFeishuGroup(scope, a.session) {
 		log.Printf("[feishu] ignored group message without bot mention: account=%s chat=%s message=%s mention_count=%d", a.creds.AppID, scope.ChatID, scope.MessageID, len(feishuMessageMentions(event)))
-		return platform.IncomingMessage{}, nil, false
+		return platform.IncomingMessage{}, nil, feishuDedupReservation{}, false
 	}
-	if a.deduper != nil && a.deduper.isDuplicate(event, scope) {
+	reservation, duplicate := a.deduper.reserve(event, scope)
+	if duplicate {
 		log.Printf("[feishu] ignored duplicate message event")
-		return platform.IncomingMessage{}, nil, false
+		return platform.IncomingMessage{}, nil, feishuDedupReservation{}, false
 	}
 	text, resources := feishuMessageTextAndResources(event, normalized)
 	metadata := map[string]string{
@@ -140,7 +153,7 @@ func (a *Adapter) toIncomingEnvelopeFromMessage(event *larkim.P2MessageReceiveV1
 		Text:         text,
 		Metadata:     metadata,
 	}
-	return incoming, resources, true
+	return incoming, resources, reservation, true
 }
 
 func feishuMessageTextAndResources(event *larkim.P2MessageReceiveV1, normalized *types.NormalizedMessage) (string, []types.Resource) {

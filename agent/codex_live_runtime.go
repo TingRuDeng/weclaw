@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 var (
@@ -23,6 +24,16 @@ const (
 type CodexThreadRef struct {
 	ConversationID string `json:"conversationId"`
 	ThreadID       string `json:"threadId"`
+}
+
+// CodexTurnInterruptedError 表示 app-server 的观察流中断，最终结果仍需由调用方核对。
+type CodexTurnInterruptedError struct {
+	ThreadID string
+	TurnID   string
+}
+
+func (e *CodexTurnInterruptedError) Error() string {
+	return fmt.Sprintf("Codex turn 已中断（thread=%s, turn=%s）", e.ThreadID, e.TurnID)
 }
 
 type CodexThreadBinding struct {

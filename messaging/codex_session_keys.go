@@ -9,6 +9,11 @@ func codexBindingKey(userID string, agentName string) string {
 	return normalizeConversationUserKey(userID) + "\x00" + strings.TrimSpace(agentName)
 }
 
+// codexBindingExecutionKey 统一 Codex 绑定写入和任务 route 快照使用的串行键。
+func codexBindingExecutionKey(bindingKey string) string {
+	return "codex-binding:" + bindingKey
+}
+
 func migrateLegacyBindingKey(bindingKey string) (string, bool) {
 	parts := strings.SplitN(bindingKey, "\x00", 2)
 	migratedUserKey := normalizeConversationUserKey(parts[0])

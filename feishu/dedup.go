@@ -19,6 +19,7 @@ const feishuEventDedupTTL = 10 * time.Minute
 type feishuEventDeduper struct {
 	mu               sync.Mutex
 	seen             map[string]time.Time
+	processing       map[string]feishuDedupClaim
 	mirrorThreadSeen map[string][]feishuMirrorStamp
 	pendingMirrors   map[string][]*pendingGroupMirror
 	ttl              time.Duration
@@ -34,6 +35,19 @@ type feishuEventDedupState struct {
 	Updated string            `json:"updated"`
 }
 
+type feishuDedupReservation struct {
+	deduper *feishuEventDeduper
+	keys    []string
+	owner   *feishuDedupOwner
+}
+
+type feishuDedupClaim struct {
+	owner *feishuDedupOwner
+	at    time.Time
+}
+
+type feishuDedupOwner struct{ marker byte }
+
 // newFeishuEventDeduper 创建飞书事件短期去重器。
 func newFeishuEventDeduper(ttl time.Duration) *feishuEventDeduper {
 	if ttl <= 0 {
@@ -41,6 +55,7 @@ func newFeishuEventDeduper(ttl time.Duration) *feishuEventDeduper {
 	}
 	return &feishuEventDeduper{
 		seen:             make(map[string]time.Time),
+		processing:       make(map[string]feishuDedupClaim),
 		mirrorThreadSeen: make(map[string][]feishuMirrorStamp),
 		pendingMirrors:   make(map[string][]*pendingGroupMirror),
 		ttl:              ttl,
@@ -62,12 +77,21 @@ func (d *feishuEventDeduper) setStateFile(path string) {
 
 // isDuplicate 记录飞书事件短期指纹，避免长连接重投递导致同一输入重复进 agent。
 func (d *feishuEventDeduper) isDuplicate(event *larkim.P2MessageReceiveV1, scope FeishuSessionScope) bool {
+	reservation, duplicate := d.reserve(event, scope)
+	if !duplicate {
+		reservation.complete()
+	}
+	return duplicate
+}
+
+// reserve 原子登记事件指纹，并返回仅能释放本次写入的预约值。
+func (d *feishuEventDeduper) reserve(event *larkim.P2MessageReceiveV1, scope FeishuSessionScope) (feishuDedupReservation, bool) {
 	if d == nil {
-		return false
+		return feishuDedupReservation{}, false
 	}
 	keys := feishuDedupKeys(event, scope)
 	if len(keys) == 0 {
-		return false
+		return feishuDedupReservation{}, false
 	}
 	now := d.now()
 	d.mu.Lock()
@@ -78,14 +102,59 @@ func (d *feishuEventDeduper) isDuplicate(event *larkim.P2MessageReceiveV1, scope
 			if d.debug {
 				log.Printf("[feishu] ignored duplicate message event")
 			}
-			return true
+			return feishuDedupReservation{}, true
+		}
+		if claim, ok := d.processing[key]; ok && now.Sub(claim.at) <= d.ttl {
+			return feishuDedupReservation{}, true
 		}
 	}
+	owner := &feishuDedupOwner{marker: 1}
 	for _, key := range keys {
-		d.seen[key] = now
+		d.processing[key] = feishuDedupClaim{owner: owner, at: now}
 	}
-	d.persistStateLocked(now)
-	return false
+	return feishuDedupReservation{deduper: d, keys: keys, owner: owner}, false
+}
+
+// complete 把仍归当前处理者所有的预约提交为完成记录，并返回所有权是否有效。
+func (r feishuDedupReservation) complete() bool {
+	if r.deduper == nil || r.owner == nil {
+		return true
+	}
+	now := r.deduper.now()
+	r.deduper.mu.Lock()
+	owned := true
+	for _, key := range r.keys {
+		claim, ok := r.deduper.processing[key]
+		if !ok || claim.owner != r.owner {
+			owned = false
+			break
+		}
+	}
+	if !owned {
+		r.deduper.mu.Unlock()
+		return false
+	}
+	for _, key := range r.keys {
+		delete(r.deduper.processing, key)
+		r.deduper.seen[key] = now
+	}
+	r.deduper.persistStateLocked(now)
+	r.deduper.mu.Unlock()
+	return true
+}
+
+// release 仅回滚仍由当前预约持有的处理中指纹，避免删除并发处理者的新记录。
+func (r feishuDedupReservation) release() {
+	if r.deduper == nil || r.owner == nil {
+		return
+	}
+	r.deduper.mu.Lock()
+	for _, key := range r.keys {
+		if claim, ok := r.deduper.processing[key]; ok && claim.owner == r.owner {
+			delete(r.deduper.processing, key)
+		}
+	}
+	r.deduper.mu.Unlock()
 }
 
 // cleanupLocked 清理超过 TTL 的历史指纹，调用方必须持有锁。
@@ -94,6 +163,11 @@ func (d *feishuEventDeduper) cleanupLocked(now time.Time) {
 	for key, seenAt := range d.seen {
 		if seenAt.Before(cutoff) {
 			delete(d.seen, key)
+		}
+	}
+	for key, claim := range d.processing {
+		if claim.at.Before(cutoff) {
+			delete(d.processing, key)
 		}
 	}
 }

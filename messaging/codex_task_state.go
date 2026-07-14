@@ -49,16 +49,30 @@ func (t *activeAgentTask) syncCodexRuntime(binding agent.CodexThreadBinding) {
 func (t *activeAgentTask) markCodexDisconnected() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.phase != codexTaskTerminal {
-		t.phase = codexTaskDisconnected
-		t.runtimeOwner = agent.CodexOwnerDesktopDisconnected
+	if t.phase == codexTaskTerminal || t.phase == codexTaskStopping {
+		return
 	}
+	t.phase = codexTaskDisconnected
+	t.runtimeOwner = agent.CodexOwnerDesktopDisconnected
+}
+
+// markCodexObservationInterrupted 保存待核对 turn，并阻止控制命令沿用失效观察流。
+func (t *activeAgentTask) markCodexObservationInterrupted(threadID string, turnID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.phase == codexTaskTerminal || t.phase == codexTaskStopping {
+		return
+	}
+	t.phase = codexTaskDisconnected
+	t.runtimeOwner = agent.CodexOwnerDesktopDisconnected
+	t.codexThreadID = threadID
+	t.codexTurnID = turnID
 }
 
 func (t *activeAgentTask) markCodexRunning(binding agent.CodexThreadBinding) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.phase != codexTaskTerminal {
+	if t.phase != codexTaskTerminal && t.phase != codexTaskStopping {
 		t.phase = codexTaskRunning
 		t.runtimeOwner = binding.Owner
 		t.ownerRevision = binding.OwnerRevision
@@ -85,4 +99,10 @@ func (t *activeAgentTask) markStopping() {
 	if t.phase != codexTaskTerminal {
 		t.phase = codexTaskStopping
 	}
+}
+
+func (t *activeAgentTask) isStopping() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.phase == codexTaskStopping
 }

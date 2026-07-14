@@ -36,7 +36,7 @@ func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin boo
 		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请联系管理员在 allowed_workspace_roots 中添加。", absPath)
 	}
 	agents := h.snapshotAgents()
-	release := h.lockClaudeCwdBindings(userID, agents)
+	release := h.lockCwdBindings(userID, agents)
 	defer release()
 	if h.hasActiveClaudeTaskForCwd(userID, agents) {
 		return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
@@ -106,13 +106,16 @@ func (h *Handler) updateAgentWorkingDirectories(absPath string, agents map[strin
 	h.mu.Unlock()
 }
 
-// lockClaudeCwdBindings 按固定顺序锁定当前用户的 Claude 绑定，避免与任务启动交错。
-func (h *Handler) lockClaudeCwdBindings(userIDs []string, agents map[string]agent.Agent) func() {
+// lockCwdBindings 按固定顺序锁定当前用户的所有会话绑定，避免工作空间与任务快照交错。
+func (h *Handler) lockCwdBindings(userIDs []string, agents map[string]agent.Agent) func() {
 	if len(userIDs) == 0 || strings.TrimSpace(userIDs[0]) == "" {
 		return func() {}
 	}
 	keys := make([]string, 0)
 	for name, ag := range agents {
+		if isCodexAgent(name, ag.Info()) {
+			keys = append(keys, codexBindingExecutionKey(codexBindingKey(userIDs[0], name)))
+		}
 		if isClaudeAgent(name, ag.Info()) {
 			keys = append(keys, claudeBindingExecutionKey(claudeBindingKey(userIDs[0], name)))
 		}

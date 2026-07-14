@@ -56,6 +56,27 @@ func TestCodexDesktopTerminalDeliveredOnce(t *testing.T) {
 	}
 }
 
+func TestCodexRolloutTurnReplacementEndsSupervisor(t *testing.T) {
+	h, path := activeRolloutHandoffFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan codexExternalWatchResult, 1)
+	go func() {
+		result <- h.watchCodexAfterDesktopDisconnect(ctx, externalCodexWatchRequest{
+			threadID: "thread-1", turnID: "turn-1",
+		})
+	}()
+	appendCodexRolloutRecord(t, path, rolloutTaskStartedRecord("turn-2"))
+	select {
+	case got := <-result:
+		if !got.Terminal || !got.Failed {
+			t.Fatalf("result=%#v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("新 turn 替换后 supervisor 仍在等待旧 turn")
+	}
+}
+
 func activeRolloutHandoffFixture(t *testing.T) (*Handler, string) {
 	t.Helper()
 	h := NewHandler(nil, nil)

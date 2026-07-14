@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -13,6 +14,9 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	if strings.TrimSpace(opts.routeUserID) == "" {
 		opts.routeUserID = opts.userID
 	}
+	bindingKey := codexBindingKey(opts.routeUserID, opts.agentName)
+	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
+	defer unlockBinding()
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
 		actorUserID: opts.userID, routeUserID: opts.routeUserID, reply: opts.reply,
@@ -33,23 +37,26 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	}
 	executionKey := route.conversationID
 	runtimeOwner, ownerRevision := codexTaskOwnerSnapshot(opts.agent, route.conversationID)
-	task, taskCtx, started := h.beginActiveTask(agentCtx, executionKey, activeTaskMeta{
+	opts.route = route
+	admission := h.beginOrQueueActiveTask(agentCtx, executionKey, activeTaskMeta{
 		owner:        opts.userID,
+		routeUserID:  opts.routeUserID,
 		agentName:    opts.agentName,
 		message:      opts.message,
 		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
 		codexThreadID: route.threadID,
-	})
-	if !started {
+	}, h.pendingCodexTask(opts))
+	if admission.status != activeTaskStarted {
 		cancelTaskTimeout()
-		opts.route = route
-		if h.storePendingGuide(executionKey, h.pendingCodexTask(opts)) {
+		if admission.status == activeTaskQueued {
 			sendPlatformText(opts.ctx, opts.reply, opts.userID, queuedAgentMessage)
 		} else {
 			sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")
 		}
 		return
 	}
+	task := admission.task
+	taskCtx := admission.taskCtx
 
 	go h.runCodexAgentTask(codexAgentTaskRuntime{
 		opts:              opts,
@@ -101,7 +108,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 			runtime.task.syncCodexRuntime(binding)
 		}
 	}
-	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, recordProgress)
+	reply, err := h.executeCodexAgentTurn(runtime, recordProgress)
 	if err != nil {
 		reply = renderFinalFailure(opts.replyPrefix, err)
 	} else {
@@ -119,6 +126,25 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	} else {
 		_ = finishProgress("", false)
 	}
+}
+
+// executeCodexAgentTurn 在观察流中断时接续同一 rollout turn，不重复执行任务。
+func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(string)) (string, error) {
+	opts := runtime.opts
+	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, onProgress)
+	var interrupted *agent.CodexTurnInterruptedError
+	if !errors.As(err, &interrupted) {
+		return reply, err
+	}
+	runtime.task.markCodexObservationInterrupted(interrupted.ThreadID, interrupted.TurnID)
+	result := h.reconcileInterruptedCodexTurn(runtime.agentCtx, interrupted, onProgress)
+	if result.Terminal && !result.Failed {
+		return result.Final, nil
+	}
+	if result.Err != nil {
+		return "", result.Err
+	}
+	return "", interrupted
 }
 
 func codexTaskOwnerSnapshot(ag agent.Agent, conversationID string) (agent.CodexRuntimeOwner, uint64) {

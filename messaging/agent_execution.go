@@ -131,7 +131,8 @@ func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 	unlock := h.lockAgentExecution(key)
 	defer unlock()
 	task, trackedCtx, err := h.beginSynchronousActiveTask(runtime.agentCtx, key, activeTaskMeta{
-		owner: runtime.req.userID, agentName: runtime.req.name, message: runtime.req.message,
+		owner: runtime.req.userID, routeUserID: runtime.req.routeUserID,
+		agentName: runtime.req.name, message: runtime.req.message,
 	})
 	if err != nil {
 		h.sendSynchronousStartFailure(runtime, err)

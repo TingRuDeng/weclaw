@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-var errCodexRolloutAborted = errors.New("Codex rollout 任务已中断")
+var (
+	errCodexRolloutAborted     = errors.New("Codex rollout 任务已中断")
+	errCodexRolloutTurnChanged = errors.New("Codex rollout 已切换到新 turn")
+)
 
 const codexRolloutPollInterval = 200 * time.Millisecond
 
@@ -71,7 +74,7 @@ func readCodexRolloutTaskDelta(state codexRolloutTaskState, offset int64, onProg
 			}
 		case codexRolloutTaskStarted:
 			if event.TurnID != "" && event.TurnID != state.TurnID && !result.done {
-				return fmt.Errorf("codex rollout 在当前任务结束前切换到新 turn")
+				return fmt.Errorf("%w: %s", errCodexRolloutTurnChanged, event.TurnID)
 			}
 		}
 		return nil

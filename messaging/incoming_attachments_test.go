@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
 func TestReadAttachmentDataRejectsOversizedLocalFile(t *testing.T) {
@@ -23,6 +25,24 @@ func TestReadAttachmentDataRejectsOversizedLocalFile(t *testing.T) {
 	_, err = NewHandler(nil, nil).readAttachmentData(context.Background(), platform.Attachment{Path: path})
 	if err == nil {
 		t.Fatal("oversized attachment should be rejected")
+	}
+}
+
+func TestHandleImageAttachmentSaveReportsDirectoryCreationFailure(t *testing.T) {
+	h := NewHandler(nil, nil)
+	invalidDir := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(invalidDir, []byte("占位"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.saveDir = filepath.Join(invalidDir, "child")
+	imagePath := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(imagePath, []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.handleImageAttachmentSave(context.Background(), "user-1", reply, platform.Attachment{Path: imagePath})
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "Failed to save image") {
+		t.Fatalf("replies=%#v，期望目录创建失败反馈", reply.Texts)
 	}
 }
 
