@@ -2,29 +2,31 @@
 
 ## 目标
 
-为 Codex thread 增加显式的 Desktop/远程控制权移交，并通过运行时租约和新鲜度屏障消除双写上下文污染。
+更新 GitHub About、中文 README、英文 README 和视觉资产，使项目展示与当前远程接管能力一致。
 
 ## 任务清单
 
-- [x] P0 串行：建立 `tasks/codex-owner-handoff-2026-07-14.md`，完成方案与风险确认。
-- [x] P1 串行：新增持久化控制意图及迁移。
-- [x] P2 串行：建立实际运行时与写入租约状态机。
-- [x] P3 串行：实现共享 app-server drain gate 与 rollout 新鲜度屏障。
-- [x] P4 串行：识别 Desktop follower 正常事件与双写冲突。
-- [x] P5 串行：停止持久化实际运行时 owner，并迁移旧状态。
-- [x] P6 串行：实现 `/cx owner`、`/cx owner remote`、`/cx owner desktop`。
-- [x] P7 串行：实现飞书控制权选择卡片。
-- [x] P8 串行：让普通消息按控制意图执行，并在 turn 开始前再次校验。
-- [x] P9 串行：调整会话切换、外部任务观察和远程控制链路。
-- [x] P10 可并行验证：执行单测、Race、覆盖率、静态检查、构建和 Review Gate。
+- [x] P0 串行：建立 `tasks/github-presentation-refresh-2026-07-14.md`，记录已确认的 Spec。
+- [x] P1 串行：重构 `README_CN.md`，建立中文权威内容。
+- [x] P2 串行：同步 `README.md` 英文镜像。
+- [x] P3 串行：删除过时截图和架构图。
+- [x] P4 串行：执行文档、命令、链接和双语结构验证。
+- [x] P5 串行：完成 Review Gate。
+- [ ] P6 串行：提交并推送 README 变更，检查 GitHub 渲染。
+- [ ] P7 串行：更新并回读 GitHub About。
 
 ## 当前状态
 
-P0 至 P10 已完成，Review Gate 通过。
+P0 至 P5 已完成，正在执行 P6。
 
 ## Review 小结
 
-- 全仓测试、Race、`go vet`、`staticcheck`、构建、文档校验和差异检查均通过。
-- 覆盖率：`agent` 80.0%，`messaging` 81.0%。
-- Review Gate 在验收阶段补齐 thread 级控制锁、冲突态粘滞保护、普通用户工作空间限制和回滚错误反馈。
-- 结论：finished / 通过。完整记录见 `tasks/codex-owner-handoff-2026-07-14.md`。
+- 终态：finished。
+- Spec 符合度：通过；所有改动都位于已批准的 README、视觉资产和任务记录范围。
+- 安全检查：通过；未发现硬编码凭据、私钥或用户数据。
+- 测试与验证：文档门禁、命令相关单测、CLI 帮助、链接和 GitHub Markdown API 检查通过。
+- 复杂度检查：两份 README 均为 259 行，任务文件均低于 300 行。
+- Document-refresh: not-needed；本轮已完成产品文档刷新且未修改代码。
+- 剩余风险：GitHub 实际页面和 About 外部状态将在 P6、P7 验收。
+- 潜在技术债：当前没有可公开的真实产品截图，按已确认决策不使用替代假图。
+- 结论：通过。
