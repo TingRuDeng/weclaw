@@ -19,6 +19,14 @@ type pendingApproval struct {
 	userID  string
 }
 
+type approvalTextConsumeResult uint8
+
+const (
+	approvalTextUnmatched approvalTextConsumeResult = iota
+	approvalTextConsumed
+	approvalTextAmbiguous
+)
+
 func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, reply platform.Replier) agent.ApprovalHandler {
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
 		if err := validateAgentInteractionRoute(agentInteractionContextOptions{
@@ -89,7 +97,26 @@ func (h *Handler) clearPendingApproval(userID string, pending *pendingApproval) 
 }
 
 func (h *Handler) consumePendingApproval(userID string, choice string) bool {
-	return h.consumePendingApprovalForKey(userID, "", choice)
+	return h.consumePendingApprovalText(userID, choice) == approvalTextConsumed
+}
+
+// consumePendingApprovalText 只消费唯一匹配的文本审批，多个匹配项交给调用方提示用户选择卡片。
+func (h *Handler) consumePendingApprovalText(userID string, choice string) approvalTextConsumeResult {
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		return approvalTextUnmatched
+	}
+	h.pendingApprovalsMu.Lock()
+	pending, resolved, ambiguous := h.findPendingApprovalTextLocked(userID, choice)
+	h.pendingApprovalsMu.Unlock()
+	if ambiguous {
+		return approvalTextAmbiguous
+	}
+	if pending == nil {
+		return approvalTextUnmatched
+	}
+	deliverPendingApprovalChoice(pending, resolved)
+	return approvalTextConsumed
 }
 
 func (h *Handler) consumePendingApprovalForKey(userID string, approvalKey string, choice string) bool {
@@ -107,11 +134,37 @@ func (h *Handler) consumePendingApprovalForKey(userID string, approvalKey string
 	if resolved == "" {
 		return false
 	}
+	deliverPendingApprovalChoice(pending, resolved)
+	return true
+}
+
+// findPendingApprovalTextLocked 查找同一用户中唯一支持该文本选项的审批。
+func (h *Handler) findPendingApprovalTextLocked(userID string, choice string) (*pendingApproval, string, bool) {
+	var found *pendingApproval
+	resolvedChoice := ""
+	for _, pending := range h.pendingApprovals {
+		if pending.userID != strings.TrimSpace(userID) {
+			continue
+		}
+		resolved := pending.resolveChoice(choice)
+		if resolved == "" {
+			continue
+		}
+		if found != nil {
+			return nil, "", true
+		}
+		found = pending
+		resolvedChoice = resolved
+	}
+	return found, resolvedChoice, false
+}
+
+// deliverPendingApprovalChoice 非阻塞提交审批结果，避免重复平台回调卡住消息处理。
+func deliverPendingApprovalChoice(pending *pendingApproval, choice string) {
 	select {
-	case pending.choices <- resolved:
+	case pending.choices <- choice:
 	default:
 	}
-	return true
 }
 
 func (h *Handler) findPendingApprovalLocked(userID string, approvalKey string) *pendingApproval {

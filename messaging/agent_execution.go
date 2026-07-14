@@ -27,9 +27,9 @@ type synchronousAgentRuntime struct {
 	req         agentMessageRequest
 	agent       agent.Agent
 	prefix      string
-	agentCtx    context.Context
 	replyCtx    context.Context
 	progressCfg config.ProgressConfig
+	lifecycle   agentTaskLifecycle
 }
 
 type agentDispatchRuntime struct {
@@ -43,7 +43,6 @@ type synchronousAgentResult struct {
 	runtime synchronousAgentRuntime
 	reply   string
 	err     error
-	finish  func(string, bool) bool
 }
 
 // sendToDefaultAgent 解析当前窗口默认 Agent，并按其运行时能力分发消息。
@@ -123,70 +122,66 @@ func newAgentTaskOptions(runtime agentDispatchRuntime) agentTaskOptions {
 // runSynchronousAgentMessage 为非后台 Agent 建立互斥锁和可停止任务状态。
 func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 	agentCtx, cancel := contextWithTaskTimeout(runtime.req.ctx, runtime.progressCfg)
-	defer cancel()
-	runtime.agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
-		actorUserID: runtime.req.userID, routeUserID: runtime.req.routeUserID, reply: runtime.req.reply,
-	})
 	key := h.agentExecutionKeyForRoute(runtime.req.userID, runtime.req.routeUserID, runtime.req.name, runtime.agent)
-	unlock := h.lockAgentExecution(key)
-	defer unlock()
-	task, trackedCtx, err := h.beginSynchronousActiveTask(runtime.agentCtx, key, activeTaskMeta{
+	admission := h.beginOrQueueActiveTask(agentCtx, key, activeTaskMeta{
 		owner: runtime.req.userID, routeUserID: runtime.req.routeUserID,
 		agentName: runtime.req.name, message: runtime.req.message,
-	})
-	if err != nil {
-		h.sendSynchronousStartFailure(runtime, err)
+	}, h.pendingSynchronousAgentTask(runtime))
+	if admission.status != activeTaskStarted {
+		cancel()
+		replyAgentTaskAdmission(agentTaskAdmissionNotice{
+			ctx: runtime.replyCtx, reply: runtime.req.reply, userID: runtime.req.userID,
+		}, admission.status)
 		return
 	}
-	runtime.agentCtx = trackedCtx
-	defer h.finishActiveTask(key, task)
+	taskCtx := h.withAgentInteractions(admission.taskCtx, agentInteractionContextOptions{
+		actorUserID: runtime.req.userID, routeUserID: runtime.req.routeUserID, reply: runtime.req.reply,
+	})
+	unlock := h.lockAgentExecution(key)
+	runtime.lifecycle = h.startAgentTaskLifecycle(agentTaskLifecycleOptions{
+		taskCtx: taskCtx, replyCtx: runtime.replyCtx, reply: runtime.req.reply,
+		task: admission.task, cancel: cancel, executionKey: key,
+		userID: runtime.req.userID, agentName: runtime.req.name, message: runtime.req.message,
+		replyPrefix: runtime.prefix, progressConfig: runtime.progressCfg,
+	})
+	defer h.completeAgentTaskLifecycle(runtime.lifecycle)
+	defer unlock()
 	h.executeSynchronousAgentMessage(runtime)
 }
 
-// sendSynchronousStartFailure 统一发送同步任务登记失败结果。
-func (h *Handler) sendSynchronousStartFailure(runtime synchronousAgentRuntime, err error) {
-	reply := renderFinalFailure(runtime.prefix, err)
-	h.sendReplyWithMediaForRoute(
-		runtime.replyCtx, runtime.req.reply, runtime.req.userID,
-		runtime.req.routeUserID, runtime.req.name, reply,
-	)
+// pendingSynchronousAgentTask 冻结同步任务请求，供当前任务结束后异步续跑。
+func (h *Handler) pendingSynchronousAgentTask(runtime synchronousAgentRuntime) pendingAgentTask {
+	frozenCtx := context.WithoutCancel(runtime.req.ctx)
+	runtime.req.ctx = frozenCtx
+	runtime.replyCtx = frozenCtx
+	return pendingAgentTask{
+		message: runtime.req.message,
+		run:     func() { h.runSynchronousAgentMessage(runtime) },
+	}
 }
 
 // executeSynchronousAgentMessage 解析会话并执行一次同步对话。
 func (h *Handler) executeSynchronousAgentMessage(runtime synchronousAgentRuntime) {
-	onProgress, finish := h.startProgressSessionWithFinal(
-		runtime.agentCtx, runtime.req.reply, "", runtime.req.message, runtime.progressCfg,
-	)
 	conversationID, err := h.resolveAgentConversationIDForRoute(
-		runtime.agentCtx, runtime.req.userID, runtime.req.routeUserID, runtime.req.name, runtime.agent,
+		runtime.lifecycle.opts.taskCtx, runtime.req.userID, runtime.req.routeUserID, runtime.req.name, runtime.agent,
 	)
 	if err != nil {
-		h.finishSynchronousAgentMessage(synchronousAgentResult{runtime: runtime, err: err, finish: finish})
+		h.finishSynchronousAgentMessage(synchronousAgentResult{runtime: runtime, err: err})
 		return
 	}
 	reply, err := h.chatWithAgentWithProgress(
-		runtime.agentCtx, runtime.agent, conversationID, runtime.req.message, onProgress,
+		runtime.lifecycle.opts.taskCtx, runtime.agent, conversationID,
+		runtime.req.message, runtime.lifecycle.recordProgress,
 	)
 	if err == nil {
 		h.recordCodexThread(runtime.req.routeUserID, runtime.req.name, runtime.agent, conversationID)
 	}
 	h.finishSynchronousAgentMessage(synchronousAgentResult{
-		runtime: runtime, reply: reply, err: err, finish: finish,
+		runtime: runtime, reply: reply, err: err,
 	})
 }
 
 // finishSynchronousAgentMessage 统一收口同步任务的最终卡片和正文。
 func (h *Handler) finishSynchronousAgentMessage(result synchronousAgentResult) {
-	if result.err != nil {
-		result.reply = renderFinalFailure(result.runtime.prefix, result.err)
-	} else {
-		result.reply = renderFinalSuccess(result.runtime.prefix, result.reply)
-	}
-	h.finishAndSendProgressReply(progressReplyDelivery{
-		delivery: replyDeliveryRequest{
-			ctx: result.runtime.replyCtx, replyWriter: result.runtime.req.reply,
-			userID: result.runtime.req.userID, agentName: result.runtime.req.name, reply: result.reply,
-		},
-		failed: result.err != nil, finish: result.finish,
-	})
+	h.finishAgentTaskLifecycle(result.runtime.lifecycle, result.reply, result.err)
 }

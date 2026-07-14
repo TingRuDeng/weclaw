@@ -69,7 +69,7 @@ func TestQueuedMessageUsesDetachedEventContext(t *testing.T) {
 	}
 }
 
-func TestDispatchTimeoutReleasesLaterTickets(t *testing.T) {
+func TestDispatchWaitTimeoutPreservesPreviousTicket(t *testing.T) {
 	sequencer := newFeishuDispatchSequencer()
 	first := sequencer.reserve("session")
 	second := sequencer.reserve("session")
@@ -81,10 +81,86 @@ func TestDispatchTimeoutReleasesLaterTickets(t *testing.T) {
 		t.Fatal("等待超时的 ticket 不应报告执行成功")
 	}
 	third := sequencer.reserve("session")
-	if !third.run(context.Background(), func() {}) {
-		t.Fatal("超时 ticket 必须释放后续队列")
+	thirdDone := make(chan struct{})
+	go third.run(context.Background(), func() { close(thirdDone) })
+	select {
+	case <-thirdDone:
+		close(blocked)
+		t.Fatal("等待超时后后继票据越过了原前序操作")
+	case <-time.After(2 * testDispatchWaitTimeout):
 	}
 	close(blocked)
+	select {
+	case <-thirdDone:
+	case <-time.After(time.Second):
+		t.Fatal("原前序操作结束后后继票据仍未执行")
+	}
+}
+
+// TestDispatchWaitTimeoutRunsCurrentTicket 验证前序任务长期阻塞时当前消息仍会进入业务层。
+func TestDispatchWaitTimeoutRunsCurrentTicket(t *testing.T) {
+	sequencer := newFeishuDispatchSequencer()
+	first := sequencer.reserve("session")
+	second := sequencer.reserve("session")
+	blocked := make(chan struct{})
+	go first.run(context.Background(), func() { <-blocked })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	dispatched := false
+
+	if second.runAfterWaitTimeout(ctx, func() { dispatched = true }) {
+		t.Fatal("前序票据超时后不应报告有序执行")
+	}
+	if !dispatched {
+		t.Fatal("前序票据超时后当前消息未进入业务层")
+	}
+	third := sequencer.reserve("session")
+	thirdDone := make(chan struct{})
+	go third.run(context.Background(), func() { close(thirdDone) })
+	select {
+	case <-thirdDone:
+		close(blocked)
+		t.Fatal("旁路控制命令切断了原前序队列")
+	case <-time.After(2 * testDispatchWaitTimeout):
+	}
+	close(blocked)
+	select {
+	case <-thirdDone:
+	case <-time.After(time.Second):
+		t.Fatal("原前序操作结束后队列未恢复")
+	}
+}
+
+// TestDispatchTimeoutKeepsQueueBlockedUntilDispatchReturns 验证超时反馈不会放行仍在执行操作的后继票据。
+func TestDispatchTimeoutKeepsQueueBlockedUntilDispatchReturns(t *testing.T) {
+	sequencer := newFeishuDispatchSequencer()
+	first := sequencer.reserve("same-chat")
+	ctx, cancel := context.WithTimeout(context.Background(), testDispatchWaitTimeout)
+	defer cancel()
+	blocked := make(chan struct{})
+	firstResult := make(chan bool, 1)
+	go func() {
+		firstResult <- first.run(ctx, func() { <-blocked })
+	}()
+	if result := <-firstResult; result {
+		t.Fatal("前序操作超过期限后仍报告成功")
+	}
+
+	second := sequencer.reserve("same-chat")
+	secondDone := make(chan struct{})
+	go second.run(context.Background(), func() { close(secondDone) })
+	select {
+	case <-secondDone:
+		close(blocked)
+		t.Fatal("超时操作尚未退出时后继票据已执行")
+	case <-time.After(2 * testDispatchWaitTimeout):
+	}
+	close(blocked)
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("超时操作退出后后继票据仍未执行")
+	}
 }
 
 func cardChoiceEventForOrderTest(sessionKey string) *callback.CardActionTriggerEvent {

@@ -26,46 +26,52 @@ type cachedFeishuIdentity struct {
 
 // Adapter 将飞书长连接事件适配为平台无关消息。
 type Adapter struct {
-	creds              Credentials
-	downloader         resourceDownloader
-	sender             messageSender
-	cardKit            cardKitClient
-	validate           func(context.Context, Credentials) error
-	wsFactory          func(*dispatcher.EventDispatcher) wsRunner
-	session            FeishuSessionOptions
-	deduper            *feishuEventDeduper
-	dispatches         *feishuDispatchSequencer
-	accessMu           sync.RWMutex
-	access             platform.AccessControl
-	accessSet          bool
-	identityMu         sync.RWMutex
-	identities         map[string]cachedFeishuIdentity
-	identityCleanupAt  time.Time
-	approvalMu         sync.Mutex
-	approvals          map[string]approvalRecord
-	taskCards          *taskCardRegistry
-	now                func() time.Time
-	maxMessageAge      time.Duration
-	messageAcceptAfter time.Time
+	creds               Credentials
+	downloader          resourceDownloader
+	sender              messageSender
+	cardKit             cardKitClient
+	validate            func(context.Context, Credentials) error
+	wsFactory           func(*dispatcher.EventDispatcher) wsRunner
+	session             FeishuSessionOptions
+	deduper             *feishuEventDeduper
+	dispatches          *feishuDispatchSequencer
+	accessMu            sync.RWMutex
+	access              platform.AccessControl
+	accessSet           bool
+	identityMu          sync.RWMutex
+	identities          map[string]cachedFeishuIdentity
+	identityCleanupAt   time.Time
+	approvalMu          sync.Mutex
+	approvals           map[string]approvalRecord
+	taskCards           *taskCardRegistry
+	now                 func() time.Time
+	cardActionTimeout   time.Duration
+	dispatchWait        time.Duration
+	dispatchNoticeDelay time.Duration
+	maxMessageAge       time.Duration
+	messageAcceptAfter  time.Time
 }
 
 // NewAdapter 创建飞书平台 adapter。
 func NewAdapter(creds Credentials) *Adapter {
 	restClient := lark.NewClient(creds.AppID, creds.AppSecret)
 	adapter := &Adapter{
-		creds:         creds,
-		downloader:    newSDKResourceDownloader(restClient),
-		sender:        newSDKMessageSender(restClient, creds.AppID),
-		cardKit:       newSDKCardKitClient(restClient, creds.AppID),
-		validate:      ValidateCredentials,
-		session:       DefaultFeishuSessionOptions(),
-		deduper:       newFeishuEventDeduper(feishuEventDedupTTL),
-		dispatches:    newFeishuDispatchSequencer(),
-		identities:    make(map[string]cachedFeishuIdentity),
-		approvals:     make(map[string]approvalRecord),
-		taskCards:     newTaskCardRegistry(),
-		now:           time.Now,
-		maxMessageAge: DefaultMessageMaxAge,
+		creds:               creds,
+		downloader:          newSDKResourceDownloader(restClient),
+		sender:              newSDKMessageSender(restClient, creds.AppID),
+		cardKit:             newSDKCardKitClient(restClient, creds.AppID),
+		validate:            ValidateCredentials,
+		session:             DefaultFeishuSessionOptions(),
+		deduper:             newFeishuEventDeduper(feishuEventDedupTTL),
+		dispatches:          newFeishuDispatchSequencer(),
+		identities:          make(map[string]cachedFeishuIdentity),
+		approvals:           make(map[string]approvalRecord),
+		taskCards:           newTaskCardRegistry(),
+		now:                 time.Now,
+		cardActionTimeout:   feishuCardActionTimeout,
+		dispatchWait:        feishuMessageDispatchWaitTimeout,
+		dispatchNoticeDelay: feishuMessageDispatchNoticeDelay,
+		maxMessageAge:       DefaultMessageMaxAge,
 	}
 	adapter.wsFactory = func(eventDispatcher *dispatcher.EventDispatcher) wsRunner {
 		return larkws.NewClient(

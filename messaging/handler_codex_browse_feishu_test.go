@@ -59,6 +59,30 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	}
 }
 
+// TestFeishuCodexWorkspaceNameWithErrorWordStillSendsCard 验证业务文本不会被误判为命令错误。
+func TestFeishuCodexWorkspaceNameWithErrorWordStillSendsCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "失败案例")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user",
+		MessageID: "feishu-cx-error-word", Text: "/cx ls",
+	}, reply)
+
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v texts=%#v, want workspace choice card", reply.Choices, reply.Texts)
+	}
+}
+
 func TestFeishuCodexWorkspaceChoiceKeepsAliasAdminAccess(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()

@@ -55,7 +55,8 @@ ai_summary:
 
 - `tasks/todo.md` 只记录当前或正在执行的任务，不长期累积已完成流水账。
 - `tasks/lessons.md` 记录可复用的踩坑规则和高风险路径，清理文档时必须保留。
-- `docs/CODE_REVIEW_2026-07-13.md` 是一次性深度审查快照，记录缺陷清单、安全姿态与修复优先级；相关缺陷修复后按其 Stale when 判断是否过期。
+- `docs/CODE_REVIEW_2026-07-14.md` 是当前缺陷状态的权威来源：对修复提交 `9af1731` 的复审验收、interrupted 新缺陷与遗留项清单。
+- `docs/CODE_REVIEW_2026-07-13.md` 是 `9b42cda` 时点的深度审查快照；其缺陷清单已全部修复并通过复审验收，架构与测试盲区分析仍然有效。
 
 ## How to verify
 

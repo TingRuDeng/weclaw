@@ -22,136 +22,17 @@ type codexSessionCommandRequest struct {
 
 // handleCodexSessionCommandForRoute 让飞书内置会话命令操作 route session，同时继续按真实用户解析工作空间。
 func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req codexSessionCommandRequest) string {
-	actorUserID := strings.TrimSpace(req.ActorUserID)
-	routeUserID := strings.TrimSpace(req.RouteUserID)
-	if routeUserID == "" {
-		routeUserID = actorUserID
-	}
-	if actorUserID == "" {
-		actorUserID = routeUserID
-	}
-	trimmed := req.Trimmed
-	admin := req.Admin || h.isAdminUser(actorUserID)
-	fields := strings.Fields(trimmed)
-	if len(fields) < 2 || fields[1] == "help" {
-		return buildCodexSessionHelpText()
-	}
-	if fields[1] == "model" && isCodexModelStatusArgs(fields[2:]) {
-		return h.renderCodexModelStatusFromConfig()
-	}
+	return h.handleCodexSessionCommandForRouteResult(ctx, req).Reply
+}
 
-	agentName, ag, err := h.getCodexSessionAgent(ctx)
-	if err != nil {
-		return err.Error()
+// handleCodexSessionCommandForRouteResult 执行命令并显式标记是否可展示导航卡片。
+func (h *Handler) handleCodexSessionCommandForRouteResult(ctx context.Context, req codexSessionCommandRequest) navigationCommandResult {
+	prepared := h.prepareCodexSessionCommand(ctx, req)
+	if !prepared.ready {
+		return prepared.result
 	}
-	bindingKey := codexBindingKey(routeUserID, agentName)
-	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
-	defer unlockBinding()
-	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag)
-	ownerBindingKey := codexBindingKey(actorUserID, agentName)
-	if reply := h.rejectDisallowedCodexWorkspace(bindingKey, agentName, workspaceRoot, fields, admin); reply != "" {
-		return reply
-	}
-	h.ensureCodexSessions().ensureWorkspace(bindingKey, workspaceRoot)
-	h.syncCodexThreadFromAgent(routeUserID, agentName, workspaceRoot, ag)
-
-	if len(fields) == 2 && isCodexShortSelectionToken(fields[1]) {
-		return h.handleCodexShortSelection(ctx, codexShortSelectionRequest{
-			UserID:          routeUserID,
-			ActorUserID:     actorUserID,
-			AgentName:       agentName,
-			WorkspaceRoot:   workspaceRoot,
-			Agent:           ag,
-			BindingKey:      bindingKey,
-			Target:          fields[1],
-			OwnerBindingKey: ownerBindingKey,
-			Platform:        req.Platform,
-			AccountID:       req.AccountID,
-			Reply:           req.Reply,
-			Admin:           admin,
-		})
-	}
-
-	switch fields[1] {
-	case "whoami":
-		return h.renderCodexWhoami(bindingKey, workspaceRoot)
-	case "ls":
-		return h.renderCodexListForAccess(bindingKey, actorUserID, admin)
-	case "cd":
-		if len(fields) != 3 {
-			return "用法: /cx cd <编号|工作空间名|..>"
-		}
-		return h.handleCodexCd(codexWorkspaceCdRequest{
-			Context:         ctx,
-			UserID:          routeUserID,
-			ActorUserID:     actorUserID,
-			BindingKey:      bindingKey,
-			OwnerBindingKey: ownerBindingKey,
-			AgentName:       agentName,
-			Target:          fields[2],
-			Agent:           ag,
-			Platform:        req.Platform,
-			AccountID:       req.AccountID,
-			Reply:           req.Reply,
-			Admin:           admin,
-		})
-	case "pwd":
-		return h.renderCodexPwd(bindingKey)
-	case "status":
-		if len(fields) != 2 {
-			return "用法: /cx status"
-		}
-		return h.renderCodexStatusForRoute(actorUserID, routeUserID, agentName, ag)
-	case "quota":
-		if len(fields) != 2 {
-			return "用法: /cx quota"
-		}
-		return h.renderCodexQuota(ctx, ag)
-	case "clean":
-		if len(fields) != 2 {
-			return "用法: /cx clean"
-		}
-		return h.handleCodexClean(bindingKey)
-	case "app":
-		if len(fields) != 2 {
-			return "用法: /cx app"
-		}
-		return h.handleCodexOpenAppForRoute(ctx, actorUserID, routeUserID, agentName, ag)
-	case "cli":
-		if len(fields) != 2 {
-			return "用法: /cx cli"
-		}
-		return h.handleCodexCLIForRoute(ctx, actorUserID, routeUserID, agentName, ag)
-	case "attach":
-		if len(fields) != 2 {
-			return "用法: /cx attach"
-		}
-		return h.handleCodexAttachForRoute(ctx, actorUserID, routeUserID, agentName, ag)
-	case "detach":
-		if len(fields) != 2 {
-			return "用法: /cx detach"
-		}
-		return h.handleCodexDetach(ag)
-	case "model":
-		return h.handleCodexModelCommand(ctx, ag, fields[2:])
-	case "new":
-		return h.handleCodexNewForRoute(codexNewRequest{
-			ctx: ctx, userID: routeUserID, agentName: agentName,
-			workspaceRoot: workspaceRoot, agent: ag, ownerBindingKey: ownerBindingKey,
-		})
-	case "switch":
-		if len(fields) != 3 {
-			return "用法: /cx switch <编号|threadId>"
-		}
-		return h.handleCodexSwitchForRouteWithOptions(ctx, routeUserID, agentName, workspaceRoot, ag, fields[2], ownerBindingKey, codexSwitchOptions{
-			actorUserID: actorUserID,
-			platform:    req.Platform,
-			accountID:   req.AccountID,
-			reply:       req.Reply,
-		})
-	default:
-		return buildCodexSessionHelpText()
-	}
+	defer prepared.unlock()
+	return h.dispatchCodexSessionCommand(prepared.runtime)
 }
 
 func (h *Handler) rejectDisallowedCodexWorkspace(bindingKey string, agentName string, workspaceRoot string, fields []string, admin bool) string {
@@ -199,9 +80,10 @@ type codexShortSelectionRequest struct {
 	Admin           bool
 }
 
-func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortSelectionRequest) string {
+// handleCodexShortSelection 保留短编号工作空间导航的结构化卡片状态。
+func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortSelectionRequest) navigationCommandResult {
 	if req.Target == ".." {
-		return h.handleCodexCd(codexWorkspaceCdRequest{
+		return h.handleCodexCdResult(codexWorkspaceCdRequest{
 			Context:         ctx,
 			UserID:          req.UserID,
 			ActorUserID:     req.ActorUserID,
@@ -217,14 +99,14 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		})
 	}
 	if _, browsing := h.codexBrowseWorkspace(req.BindingKey); browsing {
-		return h.handleCodexSwitchForRouteWithOptions(ctx, req.UserID, req.AgentName, req.WorkspaceRoot, req.Agent, req.Target, req.OwnerBindingKey, codexSwitchOptions{
+		return textNavigationResult(h.handleCodexSwitchForRouteWithOptions(ctx, req.UserID, req.AgentName, req.WorkspaceRoot, req.Agent, req.Target, req.OwnerBindingKey, codexSwitchOptions{
 			actorUserID: req.ActorUserID,
 			platform:    req.Platform,
 			accountID:   req.AccountID,
 			reply:       req.Reply,
-		})
+		}))
 	}
-	return h.handleCodexCd(codexWorkspaceCdRequest{
+	return h.handleCodexCdResult(codexWorkspaceCdRequest{
 		Context:         ctx,
 		UserID:          req.UserID,
 		ActorUserID:     req.ActorUserID,

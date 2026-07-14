@@ -144,8 +144,8 @@ func writeIncomingAttachment(dir string, fileName string, data []byte) (string, 
 }
 
 func (h *Handler) incomingFileDir() string {
-	if strings.TrimSpace(h.saveDir) != "" {
-		return h.saveDir
+	if saveDir := strings.TrimSpace(h.saveDirectory()); saveDir != "" {
+		return saveDir
 	}
 	return defaultAttachmentWorkspace()
 }
@@ -177,7 +177,12 @@ func buildImageAgentMessage(userText string, file savedIncomingFile) string {
 }
 
 func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, reply platform.Replier, img platform.Attachment) {
-	log.Printf("[handler] received image from %s, saving to %s", userID, h.saveDir)
+	saveDir := h.saveDirectory()
+	if saveDir == "" {
+		sendPlatformText(ctx, reply, userID, "保存图片失败：保存目录未配置。")
+		return
+	}
+	log.Printf("[handler] received image from %s, saving to %s", userID, saveDir)
 	var data []byte
 	var err error
 	if img.SourceID != "" {
@@ -191,14 +196,14 @@ func (h *Handler) handleImageAttachmentSave(ctx context.Context, userID string, 
 		return
 	}
 	ext := detectImageExt(data)
-	if err := os.MkdirAll(h.saveDir, 0o755); err != nil {
+	if err := os.MkdirAll(saveDir, 0o755); err != nil {
 		log.Printf("[handler] failed to create save dir: %v", err)
 		sendPlatformText(ctx, reply, userID, fmt.Sprintf("Failed to save image: %v", err))
 		return
 	}
 	sidecarContent := fmt.Sprintf("---\nid: %s\n---\n", uuid.New().String())
 	filePath, err := writeUniqueArtifactPair(
-		h.saveDir,
+		saveDir,
 		time.Now().Format("20060102-150405"),
 		ext,
 		data,

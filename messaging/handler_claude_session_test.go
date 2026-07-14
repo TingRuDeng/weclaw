@@ -38,7 +38,8 @@ func TestHandleCwdClearsClaudeSessionBinding(t *testing.T) {
 
 	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
 	binding := h.ensureClaudeSessions().binding(key)
-	if !strings.Contains(text, newWorkspace) || binding.WorkspaceRoot != newWorkspace {
+	canonicalWorkspace := canonicalTestPath(t, newWorkspace)
+	if !strings.Contains(text, canonicalWorkspace) || binding.WorkspaceRoot != canonicalWorkspace {
 		t.Fatalf("text=%q binding=%+v", text, binding)
 	}
 	if binding.SessionID != "" || binding.Status != claudeBindingUnbound {

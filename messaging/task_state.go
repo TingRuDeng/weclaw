@@ -15,6 +15,7 @@ type activeAgentTask struct {
 	cancel             context.CancelFunc
 	done               chan struct{}
 	detached           bool
+	stopRequested      bool
 	pending            pendingAgentTask
 	pendingSteering    bool
 	owner              string

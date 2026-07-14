@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,70 @@ func TestCodexDesktopStopWaitsForTerminalAndKeepsPending(t *testing.T) {
 	}
 	if taskPhase(task) != codexTaskStopping || task.pendingGuide() != "下一条" {
 		t.Fatalf("phase=%s pending=%q", taskPhase(task), task.pendingGuide())
+	}
+}
+
+// TestCodexDesktopStopPrefersConcurrentTerminal 验证远程中断期间自然完成时不会误报停止成功。
+func TestCodexDesktopStopPrefersConcurrentTerminal(t *testing.T) {
+	h, ag, _, route := liveMessageFixture(t, true)
+	task, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
+		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		codexThreadID: "thread-1", codexTurnID: "turn-1",
+	})
+	ag.interruptHook = func() { task.claimTerminal() }
+
+	text, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{
+		ctx: context.Background(), key: route.conversationID, agent: ag, actor: "user-1",
+	})
+
+	if !handled || text != "当前任务已经结束，无需停止。" {
+		t.Fatalf("handled=%v text=%q", handled, text)
+	}
+	if taskPhase(task) != codexTaskTerminal {
+		t.Fatalf("phase=%s，停止请求不应覆盖并发终态", taskPhase(task))
+	}
+}
+
+// TestCodexDesktopStopRollsBackFailedRequest 验证协议拒绝中断后任务仍保持可控制状态。
+func TestCodexDesktopStopRollsBackFailedRequest(t *testing.T) {
+	h, ag, _, route := liveMessageFixture(t, true)
+	task, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
+		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		codexThreadID: "thread-1", codexTurnID: "turn-1",
+	})
+	ag.interruptErr = errors.New("interrupt rejected")
+
+	text, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{
+		ctx: context.Background(), key: route.conversationID, agent: ag, actor: "user-1",
+	})
+
+	if !handled || !strings.Contains(text, "interrupt rejected") {
+		t.Fatalf("handled=%v text=%q", handled, text)
+	}
+	if taskPhase(task) != codexTaskRunning || task.stopRequested {
+		t.Fatalf("phase=%s stopRequested=%v", taskPhase(task), task.stopRequested)
+	}
+}
+
+// TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt 验证重复停止只等待既有请求。
+func TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt(t *testing.T) {
+	h, ag, _, route := liveMessageFixture(t, true)
+	h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
+		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		codexThreadID: "thread-1", codexTurnID: "turn-1",
+	})
+	req := externalCodexTaskCommand{
+		ctx: context.Background(), key: route.conversationID, agent: ag, actor: "user-1",
+	}
+
+	first, firstHandled := h.interruptExternalCodexTask(req)
+	second, secondHandled := h.interruptExternalCodexTask(req)
+
+	if !firstHandled || !secondHandled || !strings.Contains(first, "等待任务终态") || !strings.Contains(second, "等待任务终态") {
+		t.Fatalf("first=%q second=%q", first, second)
+	}
+	if ag.interruptCalls != 1 {
+		t.Fatalf("interrupt calls=%d, want 1", ag.interruptCalls)
 	}
 }
 

@@ -41,10 +41,10 @@ func TestCodexSwitchDesktopIdleSkipsUseCodexThread(t *testing.T) {
 func TestCodexSingleSessionAutoSwitchDesktopOwnerSkipsUseCodexThread(t *testing.T) {
 	state := agent.CodexThreadState{ThreadID: "thread-1", Model: "gpt-live", Effort: "medium"}
 	h, ag, workspace := codexLiveSwitchFixture(t, state)
-	text := h.enterCodexWorkspaceWithSingleSession(codexWorkspaceCdRequest{
+	text := h.enterCodexWorkspaceWithSingleSessionResult(codexWorkspaceCdRequest{
 		Context: context.Background(), UserID: "user-1", ActorUserID: "user-1",
 		BindingKey: codexBindingKey("user-1", "codex"), AgentName: "codex", Agent: ag,
-	}, "workspace", workspace, codexWorkspaceView{WorkspaceRoot: workspace, ThreadID: "thread-1"})
+	}, "workspace", workspace, codexWorkspaceView{WorkspaceRoot: workspace, ThreadID: "thread-1"}).Reply
 	if ag.useThreadID != "" || !strings.Contains(text, "模型: gpt-live") {
 		t.Fatalf("use=%q text=%q", ag.useThreadID, text)
 	}

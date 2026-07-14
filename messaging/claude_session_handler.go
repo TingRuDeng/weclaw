@@ -30,13 +30,18 @@ func (h *Handler) handleClaudeSessionCommand(ctx context.Context, userID string,
 }
 
 func (h *Handler) handleClaudeSessionCommandForRoute(ctx context.Context, actorUserID string, routeUserID string, admin bool, trimmed string) string {
+	return h.handleClaudeSessionCommandForRouteResult(ctx, actorUserID, routeUserID, admin, trimmed).Reply
+}
+
+// handleClaudeSessionCommandForRouteResult 执行命令并显式标记是否可展示导航卡片。
+func (h *Handler) handleClaudeSessionCommandForRouteResult(ctx context.Context, actorUserID string, routeUserID string, admin bool, trimmed string) navigationCommandResult {
 	fields := strings.Fields(trimmed)
 	if len(fields) < 2 || fields[1] == "help" {
-		return buildClaudeSessionHelpText()
+		return textNavigationResult(buildClaudeSessionHelpText())
 	}
 	agentName, ag, err := h.getClaudeSessionAgent(ctx)
 	if err != nil {
-		return err.Error()
+		return textNavigationResult(err.Error())
 	}
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = actorUserID
@@ -67,34 +72,34 @@ type claudeSessionRoute struct {
 	Admin         bool
 }
 
-func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSessionRoute) string {
+func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSessionRoute) navigationCommandResult {
 	switch fields[1] {
 	case "whoami":
-		return h.renderClaudeWhoami(route)
+		return textNavigationResult(h.renderClaudeWhoami(route))
 	case "ls":
-		return h.renderClaudeWorkspaceList(route)
+		return cardNavigationResult(h.renderClaudeWorkspaceList(route))
 	case "cd":
 		if len(fields) != 3 {
-			return "用法: /cc cd <工作空间编号|..>"
+			return textNavigationResult("用法: /cc cd <工作空间编号|..>")
 		}
-		return h.handleClaudeCd(route, fields[2])
+		return h.handleClaudeCdResult(route, fields[2])
 	case "pwd":
-		return wechatCommandText("workspace: " + route.WorkspaceRoot)
+		return textNavigationResult(wechatCommandText("workspace: " + route.WorkspaceRoot))
 	case "status":
-		return h.renderClaudeStatus(route)
+		return textNavigationResult(h.renderClaudeStatus(route))
 	case "cli":
-		return h.handleClaudeCLI(route)
+		return textNavigationResult(h.handleClaudeCLI(route))
 	case "model":
-		return h.handleClaudeModelCommand(route.Context, route.Agent, fields[2:])
+		return textNavigationResult(h.handleClaudeModelCommand(route.Context, route.Agent, fields[2:]))
 	case "new":
-		return h.handleClaudeNew(route)
+		return textNavigationResult(h.handleClaudeNew(route))
 	case "switch":
 		if len(fields) != 3 {
-			return "用法: /cc switch <编号|sessionId>"
+			return textNavigationResult("用法: /cc switch <编号|sessionId>")
 		}
-		return h.handleClaudeSwitch(route, fields[2])
+		return textNavigationResult(h.handleClaudeSwitch(route, fields[2]))
 	default:
-		return buildClaudeSessionHelpText()
+		return textNavigationResult(buildClaudeSessionHelpText())
 	}
 }
 

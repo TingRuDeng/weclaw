@@ -170,10 +170,22 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 	if err != nil {
 		return err.Error(), true
 	}
+	stop := target.task.beginStopRequest(taskStopRequest{actor: req.actor, mode: taskStopRemote})
+	switch stop.status {
+	case taskStopDenied:
+		return "只有任务发起人可以控制当前任务", true
+	case taskStopTerminal:
+		return "当前任务已经结束，无需停止。", true
+	case taskStopAlreadyRequested:
+		return "已发送停止请求，等待任务终态。", true
+	}
 	if err := runtimeAg.InterruptCodexThread(req.ctx, req.key, target.threadID, target.turnID); err != nil {
+		target.task.rollbackRemoteStop()
 		return fmt.Sprintf("停止当前 Codex App 任务失败: %v", err), true
 	}
-	target.task.markStopping()
+	if target.task.commitRemoteStop() == taskStopTerminal {
+		return "当前任务已经结束，无需停止。", true
+	}
 	return "已发送停止请求，等待任务终态。", true
 }
 
@@ -186,19 +198,21 @@ func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
 		h.activeTasksMu.Unlock()
 		return false, false
 	}
-	task.mu.Lock()
-	if task.owner != strings.TrimSpace(actor) {
-		task.mu.Unlock()
-		h.activeTasksMu.Unlock()
-		return false, true
-	}
-	task.detached = true
-	task.phase = codexTaskStopping
-	cancel := task.cancel
-	task.mu.Unlock()
+	stop := task.beginStopRequest(taskStopRequest{
+		actor: strings.TrimSpace(actor), detach: true, mode: taskStopLocal,
+	})
 	h.activeTasksMu.Unlock()
-	cancel()
-	return true, false
+	switch stop.status {
+	case taskStopDenied:
+		return false, true
+	case taskStopTerminal:
+		return false, false
+	case taskStopAlreadyRequested:
+		return true, false
+	default:
+		stop.cancel()
+		return true, false
+	}
 }
 
 // resolveTaskCommandTarget 按当前窗口 Agent 定位任务，避免 Claude 控制命令误发给 Codex。

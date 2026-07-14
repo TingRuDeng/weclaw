@@ -114,6 +114,8 @@ type fakeCodexThreadAgent struct {
 	interruptThreadID string
 	interruptTurnID   string
 	interruptErr      error
+	interruptHook     func()
+	interruptCalls    int
 	modelStatus       agent.CodexModelStatus
 	models            []agent.CodexModel
 	modelErr          error
@@ -210,6 +212,10 @@ func (f *fakeCodexThreadAgent) SteerCodexThread(_ context.Context, _ string, thr
 func (f *fakeCodexThreadAgent) InterruptCodexThread(_ context.Context, _ string, threadID string, turnID string) error {
 	f.interruptThreadID = threadID
 	f.interruptTurnID = turnID
+	f.interruptCalls++
+	if f.interruptHook != nil {
+		f.interruptHook()
+	}
 	return f.interruptErr
 }
 

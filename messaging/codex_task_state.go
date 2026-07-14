@@ -22,6 +22,7 @@ func (t *activeAgentTask) claimTerminalLocked() bool {
 	if t.phase == codexTaskTerminal {
 		return false
 	}
+	t.stopRequested = false
 	t.phase = codexTaskTerminal
 	return true
 }
@@ -91,14 +92,6 @@ func (t *activeAgentTask) canControlExternalCodex() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.canControlExternalCodexLocked()
-}
-
-func (t *activeAgentTask) markStopping() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.phase != codexTaskTerminal {
-		t.phase = codexTaskStopping
-	}
 }
 
 func (t *activeAgentTask) isStopping() bool {

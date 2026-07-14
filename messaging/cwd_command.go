@@ -68,14 +68,19 @@ func resolveCwdPath(arg string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("Invalid path: %v", err)
 	}
-	info, err := os.Stat(absPath)
+	realPath, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		return "", fmt.Errorf("Path not found: %s", absPath)
 	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("Not a directory: %s", absPath)
+	realPath = filepath.Clean(realPath)
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return "", fmt.Errorf("Path not found: %s", realPath)
 	}
-	return absPath, nil
+	if !info.IsDir() {
+		return "", fmt.Errorf("Not a directory: %s", realPath)
+	}
+	return realPath, nil
 }
 
 // snapshotAgents 复制 Agent 映射，避免后续流程持有 Handler 主锁。

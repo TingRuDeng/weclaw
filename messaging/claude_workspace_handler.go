@@ -97,31 +97,31 @@ func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent
 	return wechatCommandText(lines...)
 }
 
-// handleClaudeCd 只切换浏览工作空间，并清除旧 session 绑定。
-func (h *Handler) handleClaudeCd(route claudeSessionRoute, target string) string {
+// handleClaudeCdResult 返回工作空间导航文本及卡片展示状态。
+func (h *Handler) handleClaudeCdResult(route claudeSessionRoute, target string) navigationCommandResult {
 	if strings.TrimSpace(target) == ".." {
-		return h.renderClaudeWorkspaceGroups(route)
+		return cardNavigationResult(h.renderClaudeWorkspaceGroups(route))
 	}
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
 	if reply := h.rejectActiveClaudeBindingChange(route); reply != "" {
-		return reply
+		return textNavigationResult(reply)
 	}
 	group, err := h.findClaudeWorkspaceGroupForRoute(route, target)
 	if err != nil {
-		return err.Error()
+		return textNavigationResult(err.Error())
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(group.Root)
 	if err := h.ensureClaudeSessions().commitWorkspace(route.BindingKey, workspaceRoot); err != nil {
-		return fmt.Sprintf("切换 Claude 工作空间失败: %v", err)
+		return textNavigationResult(fmt.Sprintf("切换 Claude 工作空间失败: %v", err))
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
 	h.bindConversationCwd(route.Agent, conversationID, workspaceRoot)
 	sessions, err := h.claudeSessionsForWorkspace(route, workspaceRoot)
 	if err != nil {
-		return err.Error()
+		return textNavigationResult(err.Error())
 	}
-	return renderClaudeSessionList(workspaceRoot, sessions)
+	return cardNavigationResult(renderClaudeSessionList(workspaceRoot, sessions))
 }
 
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {

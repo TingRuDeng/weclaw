@@ -4,15 +4,30 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/larksuite/oapi-sdk-go/v3/channel/types"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
-const feishuCardActionTimeout = 2 * time.Minute
+const (
+	feishuCardActionTimeout          = 2 * time.Minute
+	feishuCardActionNoticeTimeout    = 10 * time.Second
+	feishuMessageDispatchWaitTimeout = 30 * time.Second
+	feishuMessageDispatchNoticeDelay = 3 * time.Second
+	feishuMessageNoticeTimeout       = 10 * time.Second
+)
+
+type reservedResourceRequest struct {
+	ctx         context.Context
+	message     *platform.IncomingMessage
+	resources   []types.Resource
+	reservation feishuDedupReservation
+}
 
 // newEventDispatcher 注册飞书消息事件和卡片回调事件。
 func (a *Adapter) newEventDispatcher(dispatch platform.DispatchFunc) *dispatcher.EventDispatcher {
@@ -46,7 +61,14 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 	allowed := a.allowIncomingMessage(msg)
 	if allowed {
 		a.rememberUserIdentities(msg)
-		if err := a.attachMessageResources(ctx, &msg, resources); err != nil {
+		owned, err := a.attachReservedResources(reservedResourceRequest{
+			ctx: ctx, message: &msg, resources: resources, reservation: reservation,
+		})
+		if !owned {
+			newTemporaryAttachmentCleanup(msg.Attachments)()
+			return a.handleDedupOwnershipLoss(ctx, msg)
+		}
+		if err != nil {
 			newTemporaryAttachmentCleanup(msg.Attachments)()
 			return a.handleResourceDownloadFailure(ctx, msg, reservation, err)
 		}
@@ -73,6 +95,31 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		return nil
 	}
 	a.dispatchIncomingMessage(context.WithoutCancel(ctx), msg, dispatch)
+	return nil
+}
+
+// attachReservedResources 在附件下载期间维持去重处理权。
+func (a *Adapter) attachReservedResources(req reservedResourceRequest) (bool, error) {
+	if len(req.resources) == 0 {
+		return true, nil
+	}
+	if req.reservation.deduper == nil || req.reservation.owner == nil {
+		return true, a.attachMessageResources(req.ctx, req.message, req.resources)
+	}
+	leaseCtx, lease := req.reservation.startLease(req.ctx)
+	err := a.attachMessageResources(leaseCtx, req.message, req.resources)
+	return lease.stop(), err
+}
+
+// handleDedupOwnershipLoss 明确告知用户原处理者已失去消息处理权。
+func (a *Adapter) handleDedupOwnershipLoss(ctx context.Context, msg platform.IncomingMessage) error {
+	target := firstNonEmpty(msg.ChatID, msg.UserID)
+	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit)
+	if err := replier.SendText(ctx, "消息处理状态已失效，请重新发送。"); err != nil {
+		log.Printf("[feishu] failed to send dedup ownership loss notice: %v", err)
+		return err
+	}
+	log.Printf("[feishu] message dedup reservation ownership lost during resource download")
 	return nil
 }
 
@@ -122,10 +169,48 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
 	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
-	ticket.run(ctx, func() {
-		log.Printf("[feishu] message event parsed: account=%s user=%s chat=%s message=%s attachments=%d", msg.AccountID, msg.UserID, msg.ChatID, msg.MessageID, len(msg.Attachments))
-		dispatch(ctx, msg, a.newScopedReplier(msg))
+	if !isFeishuStopMessage(msg) {
+		ticket.runWithWaitNotice(ctx, dispatchWaitOptions{
+			delay:  a.dispatchNoticeDelay,
+			notice: func() { go a.sendQueueWaitNotice(msg) },
+			dispatch: func() {
+				a.dispatchMessage(ctx, msg, dispatch)
+			},
+		})
+		return
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, a.dispatchWait)
+	defer cancel()
+	ordered := ticket.runAfterWaitTimeout(waitCtx, func() {
+		a.dispatchMessage(ctx, msg, dispatch)
 	})
+	if !ordered {
+		log.Printf("[feishu] message dispatch bypassed stalled predecessor: account=%s chat=%s message=%s", msg.AccountID, msg.ChatID, msg.MessageID)
+	}
+}
+
+// sendQueueWaitNotice 独立反馈排队状态，避免平台事件 context 结束后提示被取消。
+func (a *Adapter) sendQueueWaitNotice(msg platform.IncomingMessage) {
+	ctx, cancel := context.WithTimeout(context.Background(), feishuMessageNoticeTimeout)
+	defer cancel()
+	text := "前一项操作仍在处理，本消息已排队，完成后将自动执行。"
+	if err := a.newScopedReplier(msg).SendText(ctx, text); err != nil {
+		log.Printf("[feishu] failed to send message queue notice: %v", err)
+	}
+}
+
+// dispatchMessage 统一记录飞书消息并调用平台分发函数。
+func (a *Adapter) dispatchMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
+	log.Printf("[feishu] message event parsed: account=%s user=%s chat=%s message=%s attachments=%d", msg.AccountID, msg.UserID, msg.ChatID, msg.MessageID, len(msg.Attachments))
+	dispatch(ctx, msg, a.newScopedReplier(msg))
+}
+
+// isFeishuStopMessage 仅允许明确的停止命令越过卡住的前序票据。
+func isFeishuStopMessage(msg platform.IncomingMessage) bool {
+	if strings.TrimSpace(msg.Text) == "/stop" {
+		return true
+	}
+	return msg.RawCommand != nil && strings.TrimSpace(msg.RawCommand.Value["choice"]) == "/stop"
 }
 
 func (a *Adapter) allowIncomingMessage(msg platform.IncomingMessage) bool {
@@ -168,17 +253,27 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		Metadata: metadata,
 	}
 	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
-	dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), feishuCardActionTimeout)
+	dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.cardActionTimeout)
 	go func() {
 		defer cancel()
 		if !ticket.run(dispatchCtx, func() { dispatch(dispatchCtx, msg, a.newScopedReplier(msg)) }) {
 			log.Printf("[feishu] card action dispatch timed out: action=%s", action.Action)
+			a.sendCardActionTimeoutNotice(msg)
 		}
 	}()
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已提交，正在处理"},
 		Card:  buildSubmittedChoiceCard(action),
 	}, nil
+}
+
+// sendCardActionTimeoutNotice 使用独立短 context 反馈超时，避免沿用已经取消的分发 context。
+func (a *Adapter) sendCardActionTimeoutNotice(msg platform.IncomingMessage) {
+	ctx, cancel := context.WithTimeout(context.Background(), feishuCardActionNoticeTimeout)
+	defer cancel()
+	if err := a.newScopedReplier(msg).SendText(ctx, "卡片操作等待超时，请检查当前状态后重试。"); err != nil {
+		log.Printf("[feishu] failed to send card action timeout notice: %v", err)
+	}
 }
 
 // regularCardActionValue 保留普通选择卡片的业务关联字段，避免并发问答失去精确目标。

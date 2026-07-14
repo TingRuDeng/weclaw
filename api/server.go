@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -129,8 +128,7 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 	if s.status != nil {
 		activeTasks = s.status.ActiveTaskCount()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	writeJSONResponse(w, map[string]any{
 		"status":       "ok",
 		"active_tasks": activeTasks,
 	})

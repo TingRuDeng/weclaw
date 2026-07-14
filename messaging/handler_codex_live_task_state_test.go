@@ -59,10 +59,44 @@ func TestCodexStopPhaseKeepsPendingMessage(t *testing.T) {
 	}
 }
 
+// TestCancelDoesNotOverrideClaimedTerminal 验证停止请求不会覆盖已认领终态并吞掉暂存消息。
+func TestCancelDoesNotOverrideClaimedTerminal(t *testing.T) {
+	h := NewHandler(nil, nil)
+	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{owner: "user-1"})
+	ran := false
+	pending := pendingAgentTask{message: "下一条", run: func() { ran = true }}
+	if !h.storePendingGuide("task-1", pending) || !h.claimActiveTaskTerminal("task-1", task) {
+		t.Fatal("测试前置状态建立失败")
+	}
+
+	if cancelled, denied := h.cancelActiveTask("task-1", "user-1"); cancelled || denied {
+		t.Fatalf("cancelled=%v denied=%v，已认领终态不应再接受停止", cancelled, denied)
+	}
+	if !task.shouldSendFinal() {
+		t.Fatal("停止请求不应抑制已经认领的最终回复")
+	}
+	got, ok := h.finishClaimedActiveTask("task-1", task)
+	if !ok {
+		t.Fatal("已认领终态的暂存消息未被提升")
+	}
+	got.run()
+	if !ran {
+		t.Fatal("暂存消息未执行")
+	}
+	if _, active := h.activeTask("task-1"); active {
+		t.Fatal("完成收尾后仍保留 active task")
+	}
+	select {
+	case <-task.done:
+	default:
+		t.Fatal("完成收尾后未关闭 task.done")
+	}
+}
+
 func TestCodexDisconnectDoesNotOverrideStopping(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{})
-	task.markStopping()
+	task.beginStopRequest(taskStopRequest{mode: taskStopLocal})
 	task.markCodexDisconnected()
 	if task.phase != codexTaskStopping {
 		t.Fatalf("phase=%q, want stopping", task.phase)
@@ -72,7 +106,7 @@ func TestCodexDisconnectDoesNotOverrideStopping(t *testing.T) {
 func TestCodexReconnectDoesNotOverrideStopping(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{})
-	task.markStopping()
+	task.beginStopRequest(taskStopRequest{mode: taskStopLocal})
 	task.markCodexRunning(agent.CodexThreadBinding{Owner: agent.CodexOwnerDesktopLive})
 	if task.phase != codexTaskStopping {
 		t.Fatalf("phase=%q, want stopping", task.phase)

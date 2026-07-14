@@ -41,11 +41,11 @@ func (h *Handler) handleFeishuClaudeSessionCommand(req claudeFeishuCommandReques
 		sendPlatformText(req.Context, req.Reply, msg.UserID, notice)
 		return true
 	}
-	result := h.handleClaudeSessionCommandForRoute(req.Context, msg.UserID, req.RouteUserID, h.isAdminMessage(msg), req.Trimmed)
+	result := h.handleClaudeSessionCommandForRouteResult(req.Context, msg.UserID, req.RouteUserID, h.isAdminMessage(msg), req.Trimmed)
 	if h.sendFeishuClaudeNavigationChoices(req, result) {
 		return true
 	}
-	sendPlatformText(req.Context, req.Reply, msg.UserID, result)
+	sendPlatformText(req.Context, req.Reply, msg.UserID, result.Reply)
 	return true
 }
 
@@ -66,9 +66,9 @@ func (h *Handler) runningClaudeNavigationNotice(req claudeFeishuCommandRequest) 
 }
 
 // sendFeishuClaudeNavigationChoices 根据命令层级发送工作空间或会话卡片。
-func (h *Handler) sendFeishuClaudeNavigationChoices(req claudeFeishuCommandRequest, commandReply string) bool {
+func (h *Handler) sendFeishuClaudeNavigationChoices(req claudeFeishuCommandRequest, result navigationCommandResult) bool {
 	fields := strings.Fields(req.Trimmed)
-	if !isFeishuClaudeNavigationCommand(fields) || isCodexNavigationErrorReply(commandReply) {
+	if !isFeishuClaudeNavigationCommand(fields) || !result.ShowCard {
 		return false
 	}
 	agentName, ag, err := h.getClaudeSessionAgent(req.Context)

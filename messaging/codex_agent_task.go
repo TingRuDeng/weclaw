@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
@@ -48,11 +47,9 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	}, h.pendingCodexTask(opts))
 	if admission.status != activeTaskStarted {
 		cancelTaskTimeout()
-		if admission.status == activeTaskQueued {
-			sendPlatformText(opts.ctx, opts.reply, opts.userID, queuedAgentMessage)
-		} else {
-			sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")
-		}
+		replyAgentTaskAdmission(agentTaskAdmissionNotice{
+			ctx: opts.ctx, reply: opts.reply, userID: opts.userID,
+		}, admission.status)
 		return
 	}
 	task := admission.task
@@ -81,26 +78,18 @@ func (h *Handler) pendingCodexTask(opts codexAgentTaskOptions) pendingAgentTask 
 // runCodexAgentTask 在后台完成 Codex 调用和最终回复发送。
 func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	opts := runtime.opts
-	defer h.finishCodexAgentTask(runtime)
-
 	unlock := h.lockAgentExecution(runtime.executionKey)
+	lifecycle := h.startAgentTaskLifecycle(agentTaskLifecycleOptions{
+		taskCtx: runtime.agentCtx, replyCtx: opts.ctx, reply: opts.reply,
+		task: runtime.task, cancel: runtime.cancelTaskTimeout, executionKey: runtime.executionKey,
+		userID: opts.userID, agentName: opts.agentName, message: opts.message,
+		replyPrefix: opts.replyPrefix, progressConfig: opts.progressCfg,
+	})
+	defer h.completeAgentTaskLifecycle(lifecycle)
 	defer unlock()
 
-	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.agentCtx, opts.reply, opts.replyPrefix, opts.message, opts.progressCfg)
-	recordProgress := func(delta string) {
-		runtime.task.recordProgress(time.Now(), delta)
-		onProgress(delta)
-	}
-
 	if err := h.prepareCodexConversation(runtime.agentCtx, runtime.route, opts.agent); err != nil {
-		reply := renderFinalFailure(opts.replyPrefix, err)
-		h.finishAndSendProgressReply(progressReplyDelivery{
-			delivery: replyDeliveryRequest{
-				ctx: opts.ctx, replyWriter: opts.reply, userID: opts.userID,
-				agentName: opts.agentName, reply: reply,
-			},
-			failed: true, finish: finishProgress,
-		})
+		h.finishAgentTaskLifecycle(lifecycle, "", err)
 		return
 	}
 	if liveAgent, ok := opts.agent.(agent.CodexLiveRuntimeAgent); ok {
@@ -108,24 +97,11 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 			runtime.task.syncCodexRuntime(binding)
 		}
 	}
-	reply, err := h.executeCodexAgentTurn(runtime, recordProgress)
-	if err != nil {
-		reply = renderFinalFailure(opts.replyPrefix, err)
-	} else {
+	reply, err := h.executeCodexAgentTurn(runtime, lifecycle.recordProgress)
+	if err == nil {
 		h.recordCodexThreadForWorkspace(opts.routeUserID, opts.agentName, opts.agent, runtime.route.conversationID, runtime.route.workspaceRoot)
-		reply = renderFinalSuccess(opts.replyPrefix, reply)
 	}
-	if runtime.task.shouldSendFinal() {
-		h.finishAndSendProgressReply(progressReplyDelivery{
-			delivery: replyDeliveryRequest{
-				ctx: opts.ctx, replyWriter: opts.reply, userID: opts.userID,
-				agentName: opts.agentName, reply: reply,
-			},
-			failed: err != nil, finish: finishProgress,
-		})
-	} else {
-		_ = finishProgress("", false)
-	}
+	h.finishAgentTaskLifecycle(lifecycle, reply, err)
 }
 
 // executeCodexAgentTurn 在观察流中断时接续同一 rollout turn，不重复执行任务。
@@ -157,14 +133,4 @@ func codexTaskOwnerSnapshot(ag agent.Agent, conversationID string) (agent.CodexR
 		return agent.CodexOwnerUnknown, 0
 	}
 	return binding.Owner, binding.OwnerRevision
-}
-
-// finishCodexAgentTask 收尾后台任务，并自动执行未被消费的暂存消息。
-func (h *Handler) finishCodexAgentTask(runtime codexAgentTaskRuntime) {
-	runtime.cancelTaskTimeout()
-	pending, ok := h.completeActiveTask(runtime.executionKey, runtime.task)
-	if !ok {
-		return
-	}
-	pending.run()
 }

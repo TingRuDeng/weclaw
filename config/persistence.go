@@ -36,19 +36,23 @@ func Load() (*Config, error) {
 	cfg := DefaultConfig()
 	path, err := ConfigPath()
 	if err != nil {
-		return cfg, nil
+		return nil, fmt.Errorf("resolve config path: %w", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			loadEnv(cfg)
-			return cfg, nil
+			return finalizeLoadedConfig(cfg)
 		}
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	return finalizeLoadedConfig(cfg)
+}
+
+// finalizeLoadedConfig 统一默认配置和文件配置的标准化、环境覆盖与校验顺序。
+func finalizeLoadedConfig(cfg *Config) (*Config, error) {
 	normalizeLoadedConfig(cfg)
 	loadEnv(cfg)
 	if err := cfg.Validate(); err != nil {

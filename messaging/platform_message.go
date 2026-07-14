@@ -105,7 +105,11 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 
 // preparePlatformMessage 依次消费审批、附件和文本去重，并创建客户端请求 ID。
 func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platformMessageRuntime, bool) {
-	if h.consumePendingApproval(runtime.msg.UserID, runtime.text) {
+	switch h.consumePendingApprovalText(runtime.msg.UserID, runtime.text) {
+	case approvalTextConsumed:
+		return runtime, false
+	case approvalTextAmbiguous:
+		runtime.sendText("当前有多个待审批操作，无法判断这条回复对应哪一个。请点击目标审批卡片中的按钮。")
 		return runtime, false
 	}
 	prepared, ok := h.preparePlatformAttachments(runtime)
@@ -142,7 +146,7 @@ func (h *Handler) preparePlatformAttachments(runtime platformMessageRuntime) (pl
 // acceptPreparedPlatformText 处理纯图片保存、空消息和无消息 ID 的文本去重。
 func (h *Handler) acceptPreparedPlatformText(runtime platformMessageRuntime) bool {
 	if runtime.text == "" {
-		if image, ok := firstAttachment(runtime.msg.Attachments, platform.AttachmentImage); ok && h.saveDir != "" {
+		if image, ok := firstAttachment(runtime.msg.Attachments, platform.AttachmentImage); ok && h.saveDirectory() != "" {
 			h.handleImageAttachmentSave(runtime.ctx, runtime.msg.UserID, runtime.reply, image)
 			return false
 		}
@@ -185,7 +189,8 @@ func (h *Handler) dispatchPlatformMessage(runtime platformMessageRuntime) {
 
 // trySavePlatformURL 在配置保存目录时优先收录单独发送的链接。
 func (h *Handler) trySavePlatformURL(runtime platformMessageRuntime, trimmed string) bool {
-	if h.saveDir == "" || !IsURL(trimmed) {
+	saveDir := h.saveDirectory()
+	if saveDir == "" || !IsURL(trimmed) {
 		return false
 	}
 	rawURL := ExtractURL(trimmed)
@@ -193,7 +198,7 @@ func (h *Handler) trySavePlatformURL(runtime platformMessageRuntime, trimmed str
 		return false
 	}
 	log.Printf("[handler] saving URL to linkhoard: %s", rawURL)
-	title, err := SaveLinkToLinkhoard(runtime.ctx, h.saveDir, rawURL)
+	title, err := SaveLinkToLinkhoard(runtime.ctx, saveDir, rawURL)
 	if err != nil {
 		log.Printf("[handler] link save failed: %v", err)
 		runtime.sendText(fmt.Sprintf("保存失败: %v", err))

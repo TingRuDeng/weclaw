@@ -347,7 +347,8 @@ func TestHandleMessageKeepsFeishuSenderUserIDForWorkspaceCommands(t *testing.T) 
 	}, reply)
 
 	ownerWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey("ou_user", "codex"))
-	if !ok || ownerWorkspace != normalizeCodexWorkspaceRoot(workspaceRoot) {
+	wantWorkspace := canonicalTestPath(t, workspaceRoot)
+	if !ok || ownerWorkspace != normalizeCodexWorkspaceRoot(wantWorkspace) {
 		t.Fatalf("owner workspace=%q ok=%v, want %q for true sender", ownerWorkspace, ok, workspaceRoot)
 	}
 	if sessionWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey("feishu:tenant_1:group:oc_1:om_root", "codex")); ok {

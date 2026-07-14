@@ -47,8 +47,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	writeJSONResponse(w, map[string]string{"status": "ok"})
 }
 
 func decodeSendRequest(w http.ResponseWriter, r *http.Request) (SendRequest, bool) {

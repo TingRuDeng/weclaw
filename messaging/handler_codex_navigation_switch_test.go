@@ -175,10 +175,10 @@ func TestCodexCxCdWorkspaceWithNoSessionsRequiresExplicitNew(t *testing.T) {
 		},
 	}
 	bindingKey := codexBindingKey("user-1", "codex")
-	text := h.enterCodexWorkspaceWithoutSessions(codexWorkspaceCdRequest{
+	text := h.enterCodexWorkspaceWithoutSessionsResult(codexWorkspaceCdRequest{
 		Context: context.Background(), UserID: "user-1", ActorUserID: "user-1",
 		BindingKey: bindingKey, AgentName: "codex", Agent: ag,
-	}, "empty", workspace)
+	}, "empty", workspace).Reply
 
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
 	if thread != "" || pending {

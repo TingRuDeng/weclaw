@@ -113,10 +113,10 @@ func (h *Handler) currentServiceAdminCommandExecutor() ServiceAdminCommandExecut
 
 func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command string, args []string, reply platform.Replier) {
 	userID := msg.UserID
-	runCtx, cancel := context.WithTimeout(context.Background(), adminCommandTimeout)
-	defer cancel()
 	h.serviceAdminMu.Lock()
 	defer h.serviceAdminMu.Unlock()
+	runCtx, cancel := context.WithTimeout(context.Background(), h.adminTimeout)
+	defer cancel()
 	executor := h.currentServiceAdminCommandExecutor()
 	if executor == nil {
 		sendPlatformText(runCtx, reply, userID, "管理命令执行器未配置，暂未执行。")

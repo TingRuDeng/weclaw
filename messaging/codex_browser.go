@@ -81,16 +81,16 @@ func (h *Handler) renderCodexSessionList(bindingKey string, workspaceRoot string
 	return wechatCommandText(lines...)
 }
 
-// handleCodexCd 在微信侧进入或退出工作空间浏览层。
-func (h *Handler) handleCodexCd(req codexWorkspaceCdRequest) string {
+// handleCodexCdResult 返回工作空间导航文本及卡片展示状态。
+func (h *Handler) handleCodexCdResult(req codexWorkspaceCdRequest) navigationCommandResult {
 	req.Target = strings.TrimSpace(req.Target)
 	if req.Target == ".." {
 		h.clearCodexBrowseWorkspace(req.BindingKey)
-		return wechatCommandText("已返回工作空间列表。", h.renderCodexWorkspaceListForAccess(req.BindingKey, req.ActorUserID, req.Admin))
+		return cardNavigationResult(wechatCommandText("已返回工作空间列表。", h.renderCodexWorkspaceListForAccess(req.BindingKey, req.ActorUserID, req.Admin)))
 	}
 	group, err := h.findCodexWorkspaceGroupForAccess(req.BindingKey, req.ActorUserID, req.Admin, req.Target)
 	if err != nil {
-		return err.Error()
+		return textNavigationResult(err.Error())
 	}
 	workspaceRoot := h.switchCodexWorkspaceForRoute(req.ActorUserID, req.UserID, req.AgentName, group.Root, req.Agent)
 	h.setCodexActiveWorkspaceForRoute(req.BindingKey, req.OwnerBindingKey, workspaceRoot)
@@ -104,32 +104,32 @@ func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, _ string, w
 }
 
 // enterCodexWorkspace 根据会话数量决定自动切换、创建草稿或展示列表。
-func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWorkspaceGroup, workspaceRoot string) string {
+func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWorkspaceGroup, workspaceRoot string) navigationCommandResult {
 	sessions := switchableCodexSessions(group.Sessions)
 	if len(sessions) == 0 {
-		return h.enterCodexWorkspaceWithoutSessions(req, group.Name, workspaceRoot)
+		return h.enterCodexWorkspaceWithoutSessionsResult(req, group.Name, workspaceRoot)
 	}
 	if len(sessions) == 1 {
-		return h.enterCodexWorkspaceWithSingleSession(req, group.Name, workspaceRoot, sessions[0])
+		return h.enterCodexWorkspaceWithSingleSessionResult(req, group.Name, workspaceRoot, sessions[0])
 	}
-	return wechatCommandText("工作空间: "+group.Name, h.renderCodexSessionList(req.BindingKey, workspaceRoot))
+	return cardNavigationResult(wechatCommandText("工作空间: "+group.Name, h.renderCodexSessionList(req.BindingKey, workspaceRoot)))
 }
 
-// enterCodexWorkspaceWithoutSessions 保持未绑定状态，由用户显式决定是否创建会话。
-func (h *Handler) enterCodexWorkspaceWithoutSessions(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string) string {
+// enterCodexWorkspaceWithoutSessionsResult 返回未绑定工作空间的导航结果。
+func (h *Handler) enterCodexWorkspaceWithoutSessionsResult(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string) navigationCommandResult {
 	h.ensureCodexSessions().ensureWorkspace(req.BindingKey, workspaceRoot)
-	return wechatCommandText(
+	return cardNavigationResult(wechatCommandText(
 		"当前工作空间没有可用会话。",
 		"工作空间: "+workspaceName,
 		"发送 /cx new 创建新会话。",
-	)
+	))
 }
 
-// enterCodexWorkspaceWithSingleSession 自动切换唯一会话；坏历史无法恢复时改为新会话草稿。
-func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string, session codexWorkspaceView) string {
+// enterCodexWorkspaceWithSingleSessionResult 返回自动切换唯一会话后的导航结果。
+func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string, session codexWorkspaceView) navigationCommandResult {
 	_, ok := req.Agent.(agent.CodexThreadAgent)
 	if !ok {
-		return wechatCommandText("工作空间: "+workspaceName, h.renderCodexSessionList(req.BindingKey, workspaceRoot))
+		return cardNavigationResult(wechatCommandText("工作空间: "+workspaceName, h.renderCodexSessionList(req.BindingKey, workspaceRoot)))
 	}
 	conversationID := buildCodexConversationID(req.UserID, req.AgentName, workspaceRoot)
 	h.bindConversationCwd(req.Agent, conversationID, workspaceRoot)
@@ -142,13 +142,13 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 	})
 	if err != nil {
 		if isCodexThreadStoreReadError(err) {
-			return wechatCommandText(
+			return textNavigationResult(wechatCommandText(
 				"切换会话失败。",
 				"工作空间: "+workspaceName,
 				"原会话无法被微信接手，请选择其他会话或发送 /cx new。",
-			)
+			))
 		}
-		return fmt.Sprintf("切换线程失败: %v", err)
+		return textNavigationResult(fmt.Sprintf("切换线程失败: %v", err))
 	}
 	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)
 	lines := []string{"已进入工作空间并切换会话。", "工作空间: " + workspaceName}
@@ -171,7 +171,7 @@ func (h *Handler) enterCodexWorkspaceWithSingleSession(req codexWorkspaceCdReque
 		lines = append(lines, renderExternalCodexActiveNotice(state)...)
 	}
 	lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
-	return wechatCommandText(lines...)
+	return cardNavigationResult(wechatCommandText(lines...))
 }
 
 // renderCodexPwd 显示当前浏览层级，帮助用户确认 /cx ls 会列什么。

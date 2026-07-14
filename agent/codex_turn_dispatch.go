@@ -1,6 +1,9 @@
 package agent
 
-import "log"
+import (
+	"log"
+	"strings"
+)
 
 const codexTurnControlReserve = 8
 
@@ -33,7 +36,12 @@ func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
 	}
 }
 
+// singleActiveTurnChannel 仅为空路由事件提供单活动通道兜底，明示未知 thread 必须丢弃。
 func (a *ACPAgent) singleActiveTurnChannel(threadID string, evt *codexTurnEvent) (chan *codexTurnEvent, bool) {
+	if strings.TrimSpace(threadID) != "" {
+		log.Printf("[acp] dropping turn event for inactive thread (thread=%q, activeTurns=%d, kind=%s)", threadID, len(a.turnCh), evt.Kind)
+		return nil, false
+	}
 	if len(a.turnCh) == 1 {
 		for _, ch := range a.turnCh {
 			return ch, true
@@ -49,7 +57,8 @@ func isCodexTurnControlEvent(evt *codexTurnEvent) bool {
 	if evt == nil {
 		return false
 	}
-	return evt.Approval != nil || evt.UserInput != nil || evt.Kind == "completed" || evt.Kind == "error" || evt.Kind == "started"
+	return evt.Approval != nil || evt.UserInput != nil || evt.Kind == "completed" ||
+		evt.Kind == "interrupted" || evt.Kind == "error" || evt.Kind == "started"
 }
 
 func dispatchCodexTurnControlEvent(ch chan *codexTurnEvent, evt *codexTurnEvent) bool {
@@ -60,7 +69,7 @@ func dispatchCodexTurnControlEvent(ch chan *codexTurnEvent, evt *codexTurnEvent)
 	}
 	select {
 	case queued := <-ch:
-		if isCodexTurnControlEvent(queued) {
+		if isCodexTurnControlEvent(queued) && !canEvictCodexControlEvent(queued, evt) {
 			select {
 			case ch <- queued:
 			default:
@@ -76,4 +85,17 @@ func dispatchCodexTurnControlEvent(ch chan *codexTurnEvent, evt *codexTurnEvent)
 	default:
 		return false
 	}
+}
+
+// canEvictCodexControlEvent 只允许终态淘汰已过时的启动通知，审批和输入事件必须保留。
+func canEvictCodexControlEvent(queued *codexTurnEvent, incoming *codexTurnEvent) bool {
+	return queued != nil && queued.Kind == "started" && isCodexTurnTerminalEvent(incoming)
+}
+
+// isCodexTurnTerminalEvent 标识不可被启动通知阻塞的最终事件。
+func isCodexTurnTerminalEvent(evt *codexTurnEvent) bool {
+	if evt == nil {
+		return false
+	}
+	return evt.Kind == "completed" || evt.Kind == "interrupted" || evt.Kind == "error"
 }

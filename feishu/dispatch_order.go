@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
 )
@@ -19,6 +20,12 @@ type feishuDispatchTicket struct {
 	key       string
 	previous  <-chan struct{}
 	current   chan struct{}
+}
+
+type dispatchWaitOptions struct {
+	delay    time.Duration
+	notice   func()
+	dispatch func()
 }
 
 func newFeishuDispatchSequencer() *feishuDispatchSequencer {
@@ -41,18 +48,24 @@ func (s *feishuDispatchSequencer) reserve(key string) feishuDispatchTicket {
 
 // run 等待前序分发完成；超时会释放队列，避免单个卡片命令永久阻塞整个窗口。
 func (t feishuDispatchTicket) run(ctx context.Context, dispatch func()) bool {
+	return t.runAfterOrderedWait(ctx, t.waitForPrevious, dispatch)
+}
+
+// runWithWaitNotice 在保持严格顺序的同时，对长时间等待只反馈一次。
+func (t feishuDispatchTicket) runWithWaitNotice(ctx context.Context, opts dispatchWaitOptions) bool {
+	wait := func(waitCtx context.Context) bool {
+		return t.waitForPreviousWithNotice(waitCtx, opts.delay, opts.notice)
+	}
+	return t.runAfterOrderedWait(ctx, wait, opts.dispatch)
+}
+
+func (t feishuDispatchTicket) runAfterOrderedWait(ctx context.Context, wait func(context.Context) bool, dispatch func()) bool {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if t.sequencer != nil {
-		defer t.finish()
-	}
-	if t.previous != nil {
-		select {
-		case <-t.previous:
-		case <-ctx.Done():
-			return false
-		}
+	if !wait(ctx) {
+		t.finishPreservingPrevious()
+		return false
 	}
 	if t.sequencer == nil {
 		dispatch()
@@ -60,8 +73,9 @@ func (t feishuDispatchTicket) run(ctx context.Context, dispatch func()) bool {
 	}
 	done := make(chan struct{})
 	go func() {
+		defer t.finish()
+		defer close(done)
 		dispatch()
-		close(done)
 	}()
 	select {
 	case <-done:
@@ -71,13 +85,92 @@ func (t feishuDispatchTicket) run(ctx context.Context, dispatch func()) bool {
 	}
 }
 
+// waitForPreviousWithNotice 只在前序票据持续阻塞时触发一次通知。
+func (t feishuDispatchTicket) waitForPreviousWithNotice(ctx context.Context, delay time.Duration, notice func()) bool {
+	if t.previous == nil || delay <= 0 {
+		return t.waitForPrevious(ctx)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-t.previous:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		if !channelClosed(t.previous) && notice != nil {
+			notice()
+		}
+	}
+	return t.waitForPrevious(ctx)
+}
+
+// runAfterWaitTimeout 仅限制前序等待；超时后仍执行当前消息并建立新的队尾。
+func (t feishuDispatchTicket) runAfterWaitTimeout(ctx context.Context, dispatch func()) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ordered := t.waitForPrevious(ctx)
+	if ordered {
+		defer t.finish()
+	} else {
+		defer t.finishPreservingPrevious()
+	}
+	dispatch()
+	return ordered
+}
+
+// waitForPrevious 等待同窗口前序票据完成，并明确区分等待超时。
+func (t feishuDispatchTicket) waitForPrevious(ctx context.Context) bool {
+	if t.previous == nil {
+		return true
+	}
+	select {
+	case <-t.previous:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (t feishuDispatchTicket) finish() {
+	if t.sequencer == nil {
+		return
+	}
 	close(t.current)
 	t.sequencer.mu.Lock()
 	if t.sequencer.tails[t.key] == t.current {
 		delete(t.sequencer.tails, t.key)
 	}
 	t.sequencer.mu.Unlock()
+}
+
+// finishPreservingPrevious 延迟关闭当前票据，让已预约和后续消息继续等待原前序操作。
+func (t feishuDispatchTicket) finishPreservingPrevious() {
+	if t.sequencer == nil {
+		return
+	}
+	if channelClosed(t.previous) {
+		t.finish()
+		return
+	}
+	go func() {
+		<-t.previous
+		t.finish()
+	}()
+}
+
+// channelClosed 非阻塞判断前序票据是否已经完成。
+func channelClosed(ch <-chan struct{}) bool {
+	if ch == nil {
+		return true
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func feishuDispatchKey(msg platform.IncomingMessage) string {

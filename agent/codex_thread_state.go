@@ -121,9 +121,19 @@ func codexThreadStateFromSnapshot(thread codexThreadSnapshot) CodexThreadState {
 	state.WaitingOnApproval = codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnApproval")
 	state.WaitingOnUserInput = codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnUserInput")
 	state.ActiveTurnID = activeCodexTurnID(thread.Turns)
+	state.LastTurnID, state.LastTurnStatus = latestCodexTurnState(thread.Turns)
 	state.Preview = latestCodexUserPreview(thread.Turns)
 	state.LastAgentMessageText = latestCodexAgentText(thread.Turns)
 	return state
+}
+
+// latestCodexTurnState 返回 thread/read 中最近 turn 的身份和权威状态。
+func latestCodexTurnState(turns []codexTurnSnapshot) (string, string) {
+	if len(turns) == 0 {
+		return "", ""
+	}
+	latest := turns[len(turns)-1]
+	return strings.TrimSpace(latest.ID), strings.TrimSpace(latest.Status)
 }
 
 func activeCodexTurnID(turns []codexTurnSnapshot) string {

@@ -35,6 +35,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		codexCLIResumeOpener:    defaultCodexCLIResumeOpener,
 		claudeCLIResumeOpener:   defaultClaudeCLIResumeOpener,
 		serviceAdminExecutor:    defaultServiceAdminCommandExecutor,
+		adminTimeout:            adminCommandTimeout,
 		startedAt:               time.Now(),
 	}
 }

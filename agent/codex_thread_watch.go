@@ -50,6 +50,9 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 	defer a.unregisterTurnChannel(opts.threadID, turnCh)
 	state, err := a.ReadCodexThreadState(ctx, opts.conversationID, opts.threadID)
 	if err == nil && !state.Active {
+		if interrupted := interruptedCodexThreadStateError(state, opts.threadID, ""); interrupted != nil {
+			return "", interrupted
+		}
 		if state.LastAgentMessageText != "" {
 			return state.LastAgentMessageText, nil
 		}
@@ -64,8 +67,7 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 }
 
 func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThreadWatchOptions) (string, error) {
-	assembler := newCodexFinalAssembler()
-	diagnostics := newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
+	assembler, diagnostics := newCodexFinalAssembler(), newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
 	progressState := newCodexProgressState()
 	ticksWithoutEvent := 0
 	for {
@@ -89,6 +91,9 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 				continue
 			}
 			ticksWithoutEvent = 0
+			if evt.Kind == "interrupted" {
+				return "", attachedCodexInterruptedError(opts, evt)
+			}
 			if evt.Approval != nil {
 				if err := a.handleAttachedCodexApproval(ctx, evt); err != nil {
 					return "", err
@@ -112,6 +117,14 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 	}
 }
 
+// attachedCodexInterruptedError 保留 watcher 后续核对 rollout 所需的 thread 和 turn 身份。
+func attachedCodexInterruptedError(opts codexThreadWatchOptions, evt *codexTurnEvent) error {
+	return &CodexTurnInterruptedError{
+		ThreadID: opts.threadID,
+		TurnID:   firstNonEmpty(evt.TurnID, opts.targetTurnID),
+	}
+}
+
 // refreshAttachedCodexThread 在 Desktop 事件静默时主动拉取带 revision 屏障的目标状态。
 func (a *ACPAgent) refreshAttachedCodexThread(ctx context.Context, conversationID string, threadID string) error {
 	binding, ok := a.desktopBindingForThread(conversationID, threadID)
@@ -132,6 +145,9 @@ func (a *ACPAgent) reconcileAttachedCodexTurn(ctx context.Context, opts codexThr
 	if state.Active && (opts.targetTurnID == "" || state.ActiveTurnID == "" || state.ActiveTurnID == opts.targetTurnID) {
 		return "", false, nil
 	}
+	if interrupted := interruptedCodexThreadStateError(state, opts.threadID, opts.targetTurnID); interrupted != nil {
+		return "", true, interrupted
+	}
 	if text := assembler.finalText(); text != "" {
 		return text, true, nil
 	}
@@ -139,6 +155,30 @@ func (a *ACPAgent) reconcileAttachedCodexTurn(ctx context.Context, opts codexThr
 		return state.LastAgentMessageText, true, nil
 	}
 	return "Codex App 本地任务已完成，但没有返回文本。", true, nil
+}
+
+// interruptedCodexThreadStateError 从权威快照识别漏收事件后的中断终态。
+func interruptedCodexThreadStateError(state CodexThreadState, threadID string, targetTurnID string) error {
+	if !isCodexInterruptedStatus(state.LastTurnStatus) {
+		return nil
+	}
+	if targetTurnID != "" && state.LastTurnID != "" && state.LastTurnID != targetTurnID {
+		return nil
+	}
+	return &CodexTurnInterruptedError{
+		ThreadID: firstNonEmpty(state.ThreadID, threadID),
+		TurnID:   firstNonEmpty(state.LastTurnID, targetTurnID),
+	}
+}
+
+// isCodexInterruptedStatus 兼容 app-server 与 Desktop 使用的中断状态名称。
+func isCodexInterruptedStatus(status string) bool {
+	switch status {
+	case "interrupted", "cancelled", "canceled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTurnEvent) error {

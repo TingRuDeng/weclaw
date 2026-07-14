@@ -18,7 +18,7 @@ func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platf
 		sendPlatformText(ctx, reply, msg.UserID, notice)
 		return true
 	}
-	result := h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
+	result := h.handleCodexSessionCommandForRouteResult(ctx, codexSessionCommandRequest{
 		ActorUserID: msg.UserID,
 		RouteUserID: routeUserID,
 		Trimmed:     trimmed,
@@ -30,7 +30,7 @@ func (h *Handler) handleFeishuCodexSessionCommand(ctx context.Context, msg platf
 	if h.sendFeishuCodexNavigationChoices(ctx, msg, routeUserID, reply, trimmed, result) {
 		return true
 	}
-	sendPlatformText(ctx, reply, msg.UserID, result)
+	sendPlatformText(ctx, reply, msg.UserID, result.Reply)
 	return true
 }
 
@@ -53,7 +53,7 @@ func runningCodexNavigationBlockedPrompt() string {
 	return "当前任务正在执行，请在完成后再发送 /cx ls。"
 }
 
-func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg platform.IncomingMessage, routeUserID string, reply platform.Replier, trimmed string, commandReply string) bool {
+func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg platform.IncomingMessage, routeUserID string, reply platform.Replier, trimmed string, result navigationCommandResult) bool {
 	agentName, ok := h.codexAgentName()
 	if !ok {
 		return false
@@ -62,7 +62,7 @@ func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg plat
 	if !isFeishuCodexNavigationCommand(fields) {
 		return false
 	}
-	if isCodexNavigationErrorReply(commandReply) {
+	if !result.ShowCard {
 		return false
 	}
 	bindingKey := codexBindingKey(routeUserID, agentName)
@@ -71,20 +71,6 @@ func (h *Handler) sendFeishuCodexNavigationChoices(ctx context.Context, msg plat
 		return h.sendFeishuCodexSessionChoices(ctx, msg.UserID, reply, bindingKey, workspaceRoot, fields, metadata)
 	}
 	return h.sendFeishuCodexWorkspaceChoices(ctx, msg.UserID, reply, bindingKey, h.isAdminMessage(msg), metadata)
-}
-
-func isCodexNavigationErrorReply(reply string) bool {
-	reply = strings.TrimSpace(reply)
-	if reply == "" {
-		return false
-	}
-	errorMarkers := []string{"用法:", "不存在", "失败", "不可用", "不支持", "没有配置"}
-	for _, marker := range errorMarkers {
-		if strings.Contains(reply, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func isFeishuCodexNavigationCommand(fields []string) bool {

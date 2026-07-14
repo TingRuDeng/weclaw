@@ -102,6 +102,7 @@ type Handler struct {
 	claudeCLIResumeOpener   ClaudeCLIResumeOpener
 	serviceAdminMu          sync.Mutex
 	serviceAdminExecutor    ServiceAdminCommandExecutor
+	adminTimeout            time.Duration
 }
 
 const (

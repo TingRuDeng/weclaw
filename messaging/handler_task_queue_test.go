@@ -34,12 +34,14 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	waitForAgentEnter(t, ag)
 
 	secondDone := make(chan struct{})
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
 	go func() {
 		reply := wechat.NewReplier(client, "user-1", "ctx-1", "client-2")
-		h.sendToNamedAgent(agentMessageRequest{ctx: ctx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "claude", message: "第二条", clientID: "client-2"})
+		h.sendToNamedAgent(agentMessageRequest{ctx: secondCtx, platformName: platform.PlatformWeChat, userID: "user-1", routeUserID: "user-1", reply: reply, name: "claude", message: "第二条", clientID: "client-2"})
 		close(secondDone)
 	}()
-	time.Sleep(50 * time.Millisecond)
+	waitDone(t, secondDone, "第二条进入队列")
+	cancelSecond()
 	started, maxActive := ag.stats()
 	if started != 1 || maxActive != 1 {
 		t.Fatalf("并发进入 Codex: started=%d maxActive=%d", started, maxActive)
@@ -49,7 +51,14 @@ func TestSendToNamedAgentSerializesSameExecutionKey(t *testing.T) {
 	waitDone(t, firstDone, "第一条任务")
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
-	waitDone(t, secondDone, "第二条任务")
+	key := h.agentExecutionKeyForRoute("user-1", "user-1", "claude", ag)
+	waitUntil(t, func() bool {
+		_, active := h.activeTask(key)
+		return !active
+	})
+	waitUntil(t, func() bool {
+		return textIndex(calls.texts(), "第2条结果") >= 0
+	})
 
 	texts := calls.texts()
 	firstIndex := textIndex(texts, "第1条结果")

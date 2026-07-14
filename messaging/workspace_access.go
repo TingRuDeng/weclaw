@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"context"
-	"path/filepath"
 )
 
 type workspaceAdminContextKey struct{}
@@ -24,27 +23,46 @@ func (h *Handler) workspaceAllowedForAgentContext(ctx context.Context, agentName
 }
 
 func (h *Handler) isConfiguredAgentWorkspace(agentName string, workspaceRoot string) bool {
-	normalized := filepath.Clean(workspaceRoot)
-	if normalized == filepath.Clean(defaultAttachmentWorkspace()) {
+	normalized, ok := canonicalWorkspacePath(workspaceRoot)
+	if !ok {
+		return false
+	}
+	defaultWorkspace, _ := canonicalWorkspacePath(defaultAttachmentWorkspace())
+	if normalized == defaultWorkspace {
 		return true
 	}
 	h.mu.RLock()
 	configured := h.configuredAgentWorkDirs[agentName]
 	h.mu.RUnlock()
-	return configured != "" && normalized == filepath.Clean(configured)
+	configuredPath, ok := canonicalWorkspacePath(configured)
+	return ok && normalized == configuredPath
 }
 
 func (h *Handler) isConfiguredWorkspace(workspaceRoot string) bool {
-	normalized := filepath.Clean(workspaceRoot)
-	if normalized == filepath.Clean(defaultAttachmentWorkspace()) {
+	normalized, ok := canonicalWorkspacePath(workspaceRoot)
+	if !ok {
+		return false
+	}
+	defaultWorkspace, _ := canonicalWorkspacePath(defaultAttachmentWorkspace())
+	if normalized == defaultWorkspace {
 		return true
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, configured := range h.configuredAgentWorkDirs {
-		if configured != "" && normalized == filepath.Clean(configured) {
+		configuredPath, valid := canonicalWorkspacePath(configured)
+		if valid && normalized == configuredPath {
 			return true
 		}
 	}
 	return false
+}
+
+// canonicalWorkspacePath 统一配置路径和会话真实路径的比较口径。
+func canonicalWorkspacePath(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	canonical, err := canonicalizePath(path, false)
+	return canonical, err == nil
 }

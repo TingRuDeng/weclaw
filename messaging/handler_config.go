@@ -7,7 +7,16 @@ import (
 
 // SetSaveDir sets the directory for saving images and files.
 func (h *Handler) SetSaveDir(dir string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.saveDir = dir
+}
+
+// saveDirectory 返回当前保存目录快照，避免在消息处理期间持有配置锁。
+func (h *Handler) saveDirectory() string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.saveDir
 }
 
 // SetAllowedWorkspaceRoots 设置普通用户 /cwd 允许切换的根目录白名单；空切片表示普通用户禁止远程切换目录。
