@@ -111,6 +111,8 @@ func (h *Handler) dispatchCodexNavigationCommand(runtime codexSessionCommandRunt
 func (h *Handler) dispatchCodexUtilityCommand(runtime codexSessionCommandRuntime) (navigationCommandResult, bool) {
 	fields := runtime.fields
 	switch fields[1] {
+	case "owner":
+		return h.handleCodexOwnerCommand(runtime), true
 	case "status":
 		if len(fields) != 2 {
 			return textNavigationResult("用法: /cx status"), true
@@ -170,12 +172,15 @@ func (h *Handler) dispatchCodexSwitchCommand(runtime codexSessionCommandRuntime)
 	if len(runtime.fields) != 3 {
 		return textNavigationResult("用法: /cx switch <编号|threadId>")
 	}
-	text := h.handleCodexSwitchForRouteWithOptions(
-		runtime.ctx, runtime.routeUserID, runtime.agentName, runtime.workspaceRoot,
-		runtime.agent, runtime.fields[2], runtime.ownerBindingKey, codexSwitchOptions{
+	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
+		ctx: runtime.ctx, userID: runtime.routeUserID, agentName: runtime.agentName,
+		workspaceRoot: runtime.workspaceRoot, agent: runtime.agent,
+		target: runtime.fields[2], ownerBindingKey: runtime.ownerBindingKey,
+		options: codexSwitchOptions{
 			actorUserID: runtime.actorUserID, platform: runtime.req.Platform,
 			accountID: runtime.req.AccountID, reply: runtime.req.Reply,
-		})
+		},
+	})
 	return textNavigationResult(text)
 }
 

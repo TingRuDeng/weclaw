@@ -34,6 +34,7 @@ type codexRolloutTaskState struct {
 	Final    string
 	Reason   string
 	Offset   int64
+	Size     int64
 	Active   bool
 	Aborted  bool
 }
@@ -74,7 +75,10 @@ func readCodexRolloutTaskState(path string) (codexRolloutTaskState, error) {
 		return nil
 	})
 	state.Offset = offset
-	return state, err
+	if err := finalizeCodexRolloutState(&state, err); err != nil {
+		return state, err
+	}
+	return state, nil
 }
 
 // readCodexRolloutTaskStateForTurn 单次扫描目标 turn，忽略它之前的历史任务。
@@ -98,7 +102,26 @@ func readCodexRolloutTaskStateForTurn(path string, turnID string) (codexRolloutT
 		return nil
 	})
 	state.Offset = offset
-	return state, found, err
+	if err := finalizeCodexRolloutState(&state, err); err != nil {
+		return state, found, err
+	}
+	return state, found, nil
+}
+
+// finalizeCodexRolloutState 记录扫描结束时的文件大小，供控制权移交核对稳定检查点。
+func finalizeCodexRolloutState(state *codexRolloutTaskState, scanErr error) error {
+	if scanErr != nil {
+		return scanErr
+	}
+	info, err := os.Stat(state.Path)
+	if err != nil {
+		return fmt.Errorf("读取 Codex rollout checkpoint 失败: %w", err)
+	}
+	if info.Size() < state.Offset {
+		return fmt.Errorf("codex rollout 已被截断")
+	}
+	state.Size = info.Size()
+	return nil
 }
 
 // applyCodexRolloutEvent 将单个共享事件归并到最新 turn 状态。

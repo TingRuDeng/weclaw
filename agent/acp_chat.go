@@ -20,22 +20,9 @@ func (a *ACPAgent) ChatWithProgress(ctx context.Context, conversationID string, 
 
 func (a *ACPAgent) chat(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
 	if a.protocol == protocolCodexAppServer {
-		if binding, ok := a.CurrentCodexThreadBinding(conversationID); ok {
-			switch binding.Owner {
-			case CodexOwnerDesktopLive:
-				return a.chatCodexDesktopWithRecovery(ctx, binding, message, onProgress)
-			case CodexOwnerDesktopDisconnected:
-				return "", ErrCodexDesktopDisconnected
-			case CodexOwnerUnknown:
-				return "", ErrCodexDesktopOwnershipUnknown
-			case CodexOwnerPersistedOnly:
-				return "", fmt.Errorf("Codex thread 必须先恢复再继续对话")
-			}
-		}
-		if _, ok := a.CurrentCodexThread(conversationID); !ok {
-			return "", fmt.Errorf("thread error: %w", ErrAgentSessionNotBound)
-		}
-	} else if !a.isRuntimeStarted() && !a.hasLegacySessionCandidate(conversationID) {
+		return "", fmt.Errorf("Codex app-server 必须通过受控 turn 执行: %w", ErrCodexControlRequired)
+	}
+	if !a.isRuntimeStarted() && !a.hasLegacySessionCandidate(conversationID) {
 		return "", fmt.Errorf("session error: %w", ErrAgentSessionNotBound)
 	}
 	if !a.isRuntimeStarted() {
@@ -44,10 +31,6 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 		}
 	}
 
-	// Route to codex app-server protocol if applicable
-	if a.protocol == protocolCodexAppServer {
-		return a.chatCodexAppServer(ctx, conversationID, message, onProgress)
-	}
 	sessionID, err := a.requireSession(conversationID)
 	if err != nil {
 		return "", fmt.Errorf("session error: %w", err)

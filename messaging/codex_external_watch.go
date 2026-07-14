@@ -62,12 +62,12 @@ func (h *Handler) watchCodexAfterDesktopDisconnect(ctx context.Context, req exte
 			if state.Progress != "" && req.onProgress != nil {
 				req.onProgress(state.Progress)
 			}
-			result, done := watchRolloutOrReconnect(ctx, req, state)
+			result, done := h.watchRolloutOrReconnect(ctx, req, state)
 			if done {
 				return result
 			}
 		}
-		if result, reconnected := watchReconnectedCodexDesktop(ctx, req); reconnected {
+		if result, reconnected := h.watchReconnectedCodexDesktop(ctx, req); reconnected {
 			if result.Terminal {
 				return result
 			}
@@ -83,7 +83,8 @@ func (h *Handler) watchCodexAfterDesktopDisconnect(ctx context.Context, req exte
 	}
 }
 
-func watchRolloutOrReconnect(ctx context.Context, req externalCodexWatchRequest, state codexRolloutTaskState) (codexExternalWatchResult, bool) {
+// watchRolloutOrReconnect 竞争 rollout 终态与重新探测到的 Desktop 连接。
+func (h *Handler) watchRolloutOrReconnect(ctx context.Context, req externalCodexWatchRequest, state codexRolloutTaskState) (codexExternalWatchResult, bool) {
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	resultCh := make(chan codexExternalWatchResult, 1)
@@ -98,13 +99,16 @@ func watchRolloutOrReconnect(ctx context.Context, req externalCodexWatchRequest,
 		case result := <-resultCh:
 			return result, result.Terminal
 		case <-ticker.C:
-			if _, reconnected := currentCodexDesktopBinding(req); reconnected {
+			if _, reconnected, probeErr := h.currentCodexDesktopBinding(ctx, req); reconnected || isCodexRuntimeConflict(probeErr) {
 				cancel()
 				rolloutResult := <-resultCh
 				if rolloutResult.Terminal {
 					return rolloutResult, true
 				}
-				result, _ := watchReconnectedCodexDesktop(ctx, req)
+				if probeErr != nil {
+					return failedCodexRuntimeWatch(probeErr), true
+				}
+				result, _ := h.watchReconnectedCodexDesktop(ctx, req)
 				return result, result.Terminal
 			}
 		case <-ctx.Done():
@@ -133,8 +137,12 @@ func terminalCodexRolloutState(state codexRolloutTaskState) codexExternalWatchRe
 	return codexExternalWatchResult{Final: firstNonBlank(state.Final, "Codex App 本地任务已完成，但没有返回文本。"), Terminal: true, Source: "rollout"}
 }
 
-func watchReconnectedCodexDesktop(ctx context.Context, req externalCodexWatchRequest) (codexExternalWatchResult, bool) {
-	binding, reconnected := currentCodexDesktopBinding(req)
+// watchReconnectedCodexDesktop 在重新探测确认后接续 Desktop 观察流。
+func (h *Handler) watchReconnectedCodexDesktop(ctx context.Context, req externalCodexWatchRequest) (codexExternalWatchResult, bool) {
+	binding, reconnected, probeErr := h.currentCodexDesktopBinding(ctx, req)
+	if isCodexRuntimeConflict(probeErr) {
+		return failedCodexRuntimeWatch(probeErr), true
+	}
 	runtimeAgent, runtimeOK := req.agent.(agent.CodexThreadRuntimeAgent)
 	if !reconnected || !runtimeOK {
 		return codexExternalWatchResult{}, false
@@ -146,13 +154,31 @@ func watchReconnectedCodexDesktop(ctx context.Context, req externalCodexWatchReq
 	return classifyCodexWatchResult(text, err, "desktop"), true
 }
 
-func currentCodexDesktopBinding(req externalCodexWatchRequest) (agent.CodexThreadBinding, bool) {
+// currentCodexDesktopBinding 每次重新探测 Desktop，避免把旧连接缓存当成重连事实。
+func (h *Handler) currentCodexDesktopBinding(ctx context.Context, req externalCodexWatchRequest) (agent.CodexThreadBinding, bool, error) {
 	liveAgent, ok := req.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
-		return agent.CodexThreadBinding{}, false
+		return agent.CodexThreadBinding{}, false, nil
 	}
-	binding, found := liveAgent.CurrentCodexThreadBinding(req.conversationID)
-	return binding, found && binding.Owner == agent.CodexOwnerDesktopLive
+	unlock := h.lockCodexThreadControl(req.threadID)
+	defer unlock()
+	intent := h.ensureCodexSessions().controlIntent(req.threadID)
+	request := agent.CodexRuntimeRequest{
+		Ref:    agent.CodexThreadRef{ConversationID: req.conversationID, ThreadID: req.threadID},
+		Intent: agentControlIntent(intent),
+	}
+	binding, err := liveAgent.InspectCodexRuntime(ctx, request)
+	return binding, err == nil && binding.Runtime == agent.CodexRuntimeDesktop, err
+}
+
+// isCodexRuntimeConflict 只把显式双写冲突视为观察终态。
+func isCodexRuntimeConflict(err error) bool {
+	return errors.Is(err, agent.ErrCodexRuntimeConflict)
+}
+
+// failedCodexRuntimeWatch 把运行时冲突转换为可回推的失败终态。
+func failedCodexRuntimeWatch(err error) codexExternalWatchResult {
+	return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: "runtime"}
 }
 
 func classifyCodexWatchResult(text string, err error, source string) codexExternalWatchResult {

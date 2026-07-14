@@ -33,11 +33,11 @@ func TestCodexAgentTaskUsesRolloutAfterInterruptedObservation(t *testing.T) {
 	codexDir := t.TempDir()
 	writeLocalCodexSession(t, codexDir, "thread-1", route.workspaceRoot, "会话", "2026-07-14T00:00:00Z")
 	path := localRolloutPathForTest(codexDir, "thread-1")
-	appendCodexRolloutRecord(t, path, rolloutTaskStartedRecord("turn-1"))
 	h.SetCodexLocalSessionDir(codexDir)
 	ag.err = &agent.CodexTurnInterruptedError{ThreadID: "thread-1", TurnID: "turn-1"}
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
+	appendCodexRolloutRecord(t, path, rolloutTaskStartedRecord("turn-1"))
 	appendCodexRolloutRecord(t, path, rolloutTaskCompleteRecord("turn-1", "恢复后的最终结果"))
 	waitUntil(t, func() bool {
 		_, active := h.activeTask(route.conversationID)
@@ -54,10 +54,11 @@ func TestCodexInterruptedAgentTaskStopsWithoutFailureReply(t *testing.T) {
 	codexDir := t.TempDir()
 	writeLocalCodexSession(t, codexDir, "thread-1", route.workspaceRoot, "会话", "2026-07-14T00:00:00Z")
 	path := localRolloutPathForTest(codexDir, "thread-1")
-	appendCodexRolloutRecord(t, path, rolloutTaskStartedRecord("turn-1"))
 	h.SetCodexLocalSessionDir(codexDir)
 	ag.err = &agent.CodexTurnInterruptedError{ThreadID: "thread-1", TurnID: "turn-1"}
 	h.startCodexAgentTask(opts)
+	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
+	appendCodexRolloutRecord(t, path, rolloutTaskStartedRecord("turn-1"))
 	waitUntil(t, func() bool {
 		task, active := h.activeTask(route.conversationID)
 		return active && taskPhase(task) == codexTaskDisconnected

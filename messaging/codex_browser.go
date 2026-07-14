@@ -30,6 +30,13 @@ type codexWorkspaceCdRequest struct {
 	Admin           bool
 }
 
+type codexSingleSessionEntryRequest struct {
+	command       codexWorkspaceCdRequest
+	workspaceName string
+	workspaceRoot string
+	session       codexWorkspaceView
+}
+
 // codexBrowseWorkspace 返回当前微信用户正在浏览的 Codex 工作空间。
 func (h *Handler) codexBrowseWorkspace(bindingKey string) (string, bool) {
 	h.codexBrowseMu.Lock()
@@ -110,7 +117,9 @@ func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWo
 		return h.enterCodexWorkspaceWithoutSessionsResult(req, group.Name, workspaceRoot)
 	}
 	if len(sessions) == 1 {
-		return h.enterCodexWorkspaceWithSingleSessionResult(req, group.Name, workspaceRoot, sessions[0])
+		return h.enterCodexWorkspaceWithSingleSessionResult(codexSingleSessionEntryRequest{
+			command: req, workspaceName: group.Name, workspaceRoot: workspaceRoot, session: sessions[0],
+		})
 	}
 	return cardNavigationResult(wechatCommandText("工作空间: "+group.Name, h.renderCodexSessionList(req.BindingKey, workspaceRoot)))
 }
@@ -126,7 +135,9 @@ func (h *Handler) enterCodexWorkspaceWithoutSessionsResult(req codexWorkspaceCdR
 }
 
 // enterCodexWorkspaceWithSingleSessionResult 返回自动切换唯一会话后的导航结果。
-func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(req codexWorkspaceCdRequest, workspaceName string, workspaceRoot string, session codexWorkspaceView) navigationCommandResult {
+func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(entry codexSingleSessionEntryRequest) navigationCommandResult {
+	req := entry.command
+	workspaceName, workspaceRoot, session := entry.workspaceName, entry.workspaceRoot, entry.session
 	_, ok := req.Agent.(agent.CodexThreadAgent)
 	if !ok {
 		return cardNavigationResult(wechatCommandText("工作空间: "+workspaceName, h.renderCodexSessionList(req.BindingKey, workspaceRoot)))
@@ -137,40 +148,33 @@ func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(req codexWorkspaceC
 		bindingKey: req.BindingKey, workspaceRoot: workspaceRoot,
 		conversationID: conversationID, threadID: session.ThreadID,
 	}
-	resolution, err := h.resolveCodexRuntime(req.Context, codexRuntimeResolveOptions{
-		route: route, threadID: session.ThreadID, ag: req.Agent, allowDisconnectedRecovery: true,
-	})
-	if err != nil {
-		if isCodexThreadStoreReadError(err) {
-			return textNavigationResult(wechatCommandText(
-				"切换会话失败。",
-				"工作空间: "+workspaceName,
-				"原会话无法被微信接手，请选择其他会话或发送 /cx new。",
-			))
-		}
-		return textNavigationResult(fmt.Sprintf("切换线程失败: %v", err))
-	}
 	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)
+	unlock := h.lockCodexThreadControl(session.ThreadID)
+	defer unlock()
+	resolution, runtimeErr := h.inspectSelectedCodexRuntimeLocked(req.Context, route, req.Agent)
 	lines := []string{"已进入工作空间并切换会话。", "工作空间: " + workspaceName}
 	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(session.ThreadID))
 	lines = append(lines, renderSessionModelStatus(modelStatus)...)
-	lines = append(lines, renderCodexOwnerNotice(resolution)...)
-	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
-		ctx:            req.Context,
-		actorUserID:    firstNonBlank(req.ActorUserID, req.UserID),
-		routeUserID:    req.UserID,
-		agentName:      req.AgentName,
-		agent:          req.Agent,
-		conversationID: conversationID,
-		threadID:       session.ThreadID,
-		platform:       req.Platform,
-		accountID:      req.AccountID,
-		reply:          req.Reply,
-	})
-	if active {
-		lines = append(lines, renderExternalCodexActiveNotice(state)...)
+	lines = append(lines, renderCodexOwnerNotice(resolution, route)...)
+	if canObserveCodexTask(resolution, route) {
+		state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
+			ctx:            req.Context,
+			actorUserID:    firstNonBlank(req.ActorUserID, req.UserID),
+			routeUserID:    req.UserID,
+			agentName:      req.AgentName,
+			agent:          req.Agent,
+			conversationID: conversationID,
+			threadID:       session.ThreadID,
+			platform:       req.Platform,
+			accountID:      req.AccountID,
+			reply:          req.Reply,
+		})
+		if active {
+			lines = append(lines, renderExternalCodexActiveNotice(state)...)
+		}
+		lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
 	}
-	lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
+	lines = append(lines, renderCodexRuntimeInspectError(runtimeErr)...)
 	return cardNavigationResult(wechatCommandText(lines...))
 }
 

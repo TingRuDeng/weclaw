@@ -43,9 +43,9 @@ func TestACPAgentCodexProgressCallbackReceivesOnlyStructuredStatus(t *testing.T)
 
 	createCodexThreadForTest(t, ctx, a, "user-1")
 	var got []string
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", func(delta string) {
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello", onProgress: func(delta string) {
 		got = append(got, delta)
-	})
+	}})
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
@@ -92,9 +92,9 @@ func TestACPAgentCodexProgressEventDoesNotBecomeFinalReply(t *testing.T) {
 
 	createCodexThreadForTest(t, ctx, a, "user-1")
 	var progress []string
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", func(delta string) {
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello", onProgress: func(delta string) {
 		progress = append(progress, delta)
-	})
+	}})
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
@@ -141,9 +141,9 @@ func TestACPAgentCodexDeltaEmitsGenericProgressWhenNoStatusEvent(t *testing.T) {
 
 	createCodexThreadForTest(t, ctx, a, "user-1")
 	var progress []string
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", func(delta string) {
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello", onProgress: func(delta string) {
 		progress = append(progress, delta)
-	})
+	}})
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestACPAgentCodexAssemblerPrefersDeltaOverSnapshot(t *testing.T) {
 	}
 
 	createCodexThreadForTest(t, ctx, a, "user-1")
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello"})
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestACPAgentCodexAssemblerUsesSnapshotWhenNoDelta(t *testing.T) {
 	}
 
 	createCodexThreadForTest(t, ctx, a, "user-1")
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello"})
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestACPAgentCodexAssemblerReturnsLastUserVisibleItem(t *testing.T) {
 	}
 
 	createCodexThreadForTest(t, ctx, a, "user-1")
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello"})
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}

@@ -165,7 +165,7 @@ func TestACPAgentCodexTurnStartIncludesEffort(t *testing.T) {
 		t.Fatalf("createThread error: %v", err)
 	}
 
-	if _, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil); err != nil {
+	if _, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello"}); err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
 }
@@ -221,7 +221,7 @@ func TestACPAgentConversationCwdOverridesGlobalCwdForCodexThreadAndTurn(t *testi
 		t.Fatalf("createThread error: %v", err)
 	}
 
-	if _, err := a.chatCodexAppServer(ctx, "conversation-a", "hello", nil); err != nil {
+	if _, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "conversation-a", message: "hello"}); err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
 }

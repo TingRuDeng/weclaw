@@ -175,7 +175,7 @@ const (
 	protocolCodexAppServer = "codex_app_server"
 )
 
-const acpPersistedStateVersion = 2
+const acpPersistedStateVersion = 3
 
 type acpPersistedState struct {
 	Version      int                           `json:"version"`

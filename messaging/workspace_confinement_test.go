@@ -133,6 +133,28 @@ func TestCodexCommandAllowsStaleWorkspaceForAdmin(t *testing.T) {
 	}
 }
 
+func TestCodexOwnerRemoteRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
+	h := NewHandler(nil, nil)
+	allowed := filepath.Join(t.TempDir(), "allowed")
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	mustCreateWorkspaceDirs(t, allowed, blocked)
+	h.SetAllowedWorkspaceRoots([]string{allowed})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{ThreadID: "thread-1"})
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, blocked)
+	h.ensureCodexSessions().setThread(bindingKey, blocked, "thread-1")
+
+	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
+	})
+
+	if ag.handoffCalls != 0 || !strings.Contains(reply, "不在允许范围") {
+		t.Fatalf("handoff=%d reply=%q，普通用户不应接管受限工作空间", ag.handoffCalls, reply)
+	}
+}
+
 func TestCodexMessageRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
 	h := NewHandler(nil, nil)
 	allowed := filepath.Join(t.TempDir(), "allowed")

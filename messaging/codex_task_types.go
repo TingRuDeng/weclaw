@@ -11,6 +11,7 @@ import (
 // codexAgentTaskOptions 保存 Codex 后台任务需要的上下文，避免长参数列表掩盖调用意图。
 type codexAgentTaskOptions struct {
 	ctx         context.Context
+	platform    platform.PlatformName
 	userID      string
 	routeUserID string
 	reply       platform.Replier

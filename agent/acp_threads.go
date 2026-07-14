@@ -67,7 +67,7 @@ func (a *ACPAgent) bindKnownDesktopThread(conversationID string, threadID string
 		return false, nil
 	}
 	binding, ok := a.codexOwners.threadBinding(threadID)
-	if !ok || (binding.Owner != CodexOwnerDesktopLive && binding.Owner != CodexOwnerDesktopDisconnected) {
+	if !ok || binding.Runtime != CodexRuntimeDesktop {
 		return false, nil
 	}
 	a.codexOwners.bindConversation(CodexThreadRef{
@@ -75,9 +75,6 @@ func (a *ACPAgent) bindKnownDesktopThread(conversationID string, threadID string
 		ThreadID:       threadID,
 	}, binding)
 	a.persistState()
-	if binding.Owner == CodexOwnerDesktopDisconnected {
-		return true, ErrCodexDesktopDisconnected
-	}
 	return true, nil
 }
 

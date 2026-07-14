@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -130,6 +131,21 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
 	defer unlockBinding()
 	route := h.codexConversationRouteForSession(req.userID, req.routeUserID, name, ag)
+	unlockControl := h.lockCodexThreadControl(route.threadID)
+	defer unlockControl()
+	taskOpts := codexAgentTaskOptions{
+		ctx: ctx, platform: req.platformName,
+		userID: req.userID, routeUserID: req.routeUserID, reply: reply,
+		agentName: name, message: req.message, clientID: req.clientID,
+		replyPrefix: "[" + name + "] ", agent: ag,
+		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), route: route,
+	}
+	if h.preflightCodexTaskStart(codexTaskPreflightOptions{
+		taskOpts: taskOpts, route: route, cancel: func() {},
+	}) {
+		results <- broadcastAgentResult{name: name, skip: true}
+		return broadcastAgentRuntime{}, false
+	}
 	key := route.conversationID
 	pending := h.broadcastPendingCodexTask(req, name, ag, route, reply)
 	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
@@ -153,7 +169,8 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 
 func (h *Handler) broadcastPendingCodexTask(req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute, reply platform.Replier) pendingAgentTask {
 	return h.pendingCodexTask(codexAgentTaskOptions{
-		ctx: req.ctx, userID: req.userID, routeUserID: req.routeUserID, reply: reply,
+		ctx: req.ctx, platform: req.platformName,
+		userID: req.userID, routeUserID: req.routeUserID, reply: reply,
 		agentName: name, message: req.message, clientID: req.clientID,
 		replyPrefix: "[" + name + "] ", agent: ag,
 		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), route: route,
@@ -185,7 +202,10 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 		send(renderFinalFailure("["+name+"] ", err), true)
 		return
 	}
-	text, err := h.chatWithAgentWithProgress(runtime.ctx, ag, conversationID, req.message, onProgress)
+	text, err := h.executeBroadcastAgentTurn(broadcastAgentTurnOptions{
+		request: req, name: name, agent: ag, runtime: runtime,
+		conversationID: conversationID, onProgress: onProgress,
+	})
 	if err != nil {
 		send(renderFinalFailure("["+name+"] ", err), true)
 		return
@@ -197,6 +217,48 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 		return
 	}
 	send(renderFinalSuccess("["+name+"] ", text), false)
+}
+
+type broadcastAgentTurnOptions struct {
+	request        broadcastAgentsRequest
+	name           string
+	agent          agent.Agent
+	runtime        broadcastAgentRuntime
+	conversationID string
+	onProgress     func(string)
+}
+
+// executeBroadcastAgentTurn 让广播中的 Codex 同样经过控制权和 writer lease。
+func (h *Handler) executeBroadcastAgentTurn(opts broadcastAgentTurnOptions) (string, error) {
+	if !isCodexAgent(opts.name, opts.agent.Info()) {
+		return h.chatWithAgentWithProgress(
+			opts.runtime.ctx, opts.agent, opts.conversationID, opts.request.message, opts.onProgress,
+		)
+	}
+	reply, err := h.runControlledCodexTurn(codexControlledTurnOptions{
+		ctx: opts.runtime.ctx, agent: opts.agent, route: opts.runtime.codexRoute,
+		message: opts.request.message, onProgress: opts.onProgress,
+	})
+	var interrupted *agent.CodexTurnInterruptedError
+	if !errors.As(err, &interrupted) {
+		return reply, err
+	}
+	if opts.runtime.activeTask != nil {
+		opts.runtime.activeTask.markCodexObservationInterrupted(interrupted.ThreadID, interrupted.TurnID)
+	}
+	result := h.reconcileInterruptedCodexTurn(opts.runtime.ctx, interrupted, opts.onProgress)
+	if result.Terminal && !result.Failed {
+		return result.Final, nil
+	}
+	return "", firstNonNilError(result.Err, interrupted)
+}
+
+// firstNonNilError 保留核对阶段的具体错误，否则返回原始中断。
+func firstNonNilError(primary error, fallback error) error {
+	if primary != nil {
+		return primary
+	}
+	return fallback
 }
 
 func (h *Handler) broadcastConversationID(ctx context.Context, req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute) (string, error) {

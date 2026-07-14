@@ -78,6 +78,7 @@ type ACPAgent struct {
 	desktopProbe              codexDesktopOwnerProbe
 	codexOwners               *codexRuntimeOwnerRegistry
 	desktopRuntime            *codexDesktopRuntime
+	appServerGate             *codexAppServerGate
 	restartCodexAppServerCall func(context.Context) error
 }
 

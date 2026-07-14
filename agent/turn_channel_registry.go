@@ -8,7 +8,7 @@ func (a *ACPAgent) failAppServerActiveTurns(reason string) {
 	for threadID, channel := range a.turnCh {
 		if a.codexOwners != nil {
 			binding, ok := a.codexOwners.threadBinding(threadID)
-			if ok && (binding.Owner == CodexOwnerDesktopLive || binding.Owner == CodexOwnerDesktopDisconnected) {
+			if ok && binding.Runtime == CodexRuntimeDesktop {
 				continue
 			}
 		}

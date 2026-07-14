@@ -17,6 +17,32 @@ type codexSwitchOptions struct {
 	reply       platform.Replier
 }
 
+type codexSwitchRequest struct {
+	ctx             context.Context
+	userID          string
+	agentName       string
+	workspaceRoot   string
+	agent           agent.Agent
+	target          string
+	ownerBindingKey string
+	options         codexSwitchOptions
+}
+
+type codexSwitchRenderRequest struct {
+	switchRequest codexSwitchRequest
+	route         codexConversationRoute
+	resolution    codexRuntimeResolution
+	runtimeErr    error
+}
+
+type codexSwitchTargetRequest struct {
+	bindingKey    string
+	agentName     string
+	workspaceRoot string
+	target        string
+	agent         agent.Agent
+}
+
 type codexNewRequest struct {
 	ctx             context.Context
 	userID          string
@@ -43,74 +69,128 @@ func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
 	return wechatCommandText("已创建新的"+req.agentName+"会话", threadID)
 }
 
-func (h *Handler) handleCodexSwitchForRouteWithOptions(ctx context.Context, userID string, agentName string, workspaceRoot string, ag agent.Agent, target string, ownerBindingKey string, opts codexSwitchOptions) string {
-	_, ok := ag.(agent.CodexThreadAgent)
+func (h *Handler) handleCodexSwitchForRouteWithOptions(req codexSwitchRequest) string {
+	_, ok := req.agent.(agent.CodexThreadAgent)
 	if !ok {
 		return "当前 Codex Agent 不支持 thread 切换。"
 	}
-	bindingKey := codexBindingKey(userID, agentName)
-	workspaceRoot, threadID, err := h.resolveCodexSwitchTarget(bindingKey, agentName, workspaceRoot, target, ag)
+	route, err := h.resolveCodexSwitchRoute(req)
 	if err != nil {
 		return err.Error()
 	}
-	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
-	h.bindConversationCwd(ag, conversationID, workspaceRoot)
-	route := codexConversationRoute{
-		bindingKey: bindingKey, workspaceRoot: workspaceRoot,
-		conversationID: conversationID, threadID: threadID,
-	}
-	resolution, err := h.resolveCodexRuntime(ctx, codexRuntimeResolveOptions{
-		route: route, threadID: threadID, ag: ag, allowDisconnectedRecovery: true,
-	})
-	if err != nil {
+	if err := h.guardCodexThreadSwitch(route, route.threadID); err != nil {
 		return renderCodexSwitchFailure(err)
 	}
-	h.switchCodexWorkspaceForRoute(firstNonBlank(opts.actorUserID, userID), userID, agentName, workspaceRoot, ag)
-	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
-	h.setCodexActiveWorkspaceForRoute(bindingKey, ownerBindingKey, workspaceRoot)
-	if err := h.ensureAgentSessions().Set(userID, agentName); err != nil {
+	if err := h.commitCodexSwitchSelection(req, route); err != nil {
 		return fmt.Sprintf("切换 Codex 会话失败: 保存当前窗口 Agent: %v", err)
 	}
-	lines := []string{"已切换会话。", "工作空间: " + shortCodexWorkspaceName(workspaceRoot)}
-	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(threadID))
-	lines = append(lines, renderSessionModelStatus(modelStatus)...)
-	lines = append(lines, renderCodexOwnerNotice(resolution)...)
-	state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
-		ctx:            ctx,
-		actorUserID:    firstNonBlank(opts.actorUserID, userID),
-		routeUserID:    userID,
-		agentName:      agentName,
-		agent:          ag,
-		conversationID: conversationID,
-		threadID:       threadID,
-		platform:       opts.platform,
-		accountID:      opts.accountID,
-		reply:          opts.reply,
+	unlock := h.lockCodexThreadControl(route.threadID)
+	defer unlock()
+	resolution, runtimeErr := h.inspectSelectedCodexRuntimeLocked(req.ctx, route, req.agent)
+	return h.renderCodexSwitchResult(codexSwitchRenderRequest{
+		switchRequest: req, route: route, resolution: resolution, runtimeErr: runtimeErr,
 	})
-	if active {
-		lines = append(lines, renderExternalCodexActiveNotice(state)...)
+}
+
+func (h *Handler) resolveCodexSwitchRoute(req codexSwitchRequest) (codexConversationRoute, error) {
+	bindingKey := codexBindingKey(req.userID, req.agentName)
+	workspaceRoot, threadID, err := h.resolveCodexSwitchTarget(codexSwitchTargetRequest{
+		bindingKey: bindingKey, agentName: req.agentName,
+		workspaceRoot: req.workspaceRoot, target: req.target, agent: req.agent,
+	})
+	if err != nil {
+		return codexConversationRoute{}, err
 	}
-	lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
+	return codexConversationRoute{
+		bindingKey: bindingKey, workspaceRoot: workspaceRoot,
+		conversationID: buildCodexConversationID(req.userID, req.agentName, workspaceRoot),
+		threadID:       threadID,
+	}, nil
+}
+
+func (h *Handler) commitCodexSwitchSelection(req codexSwitchRequest, route codexConversationRoute) error {
+	h.bindConversationCwd(req.agent, route.conversationID, route.workspaceRoot)
+	h.switchCodexWorkspaceForRoute(
+		firstNonBlank(req.options.actorUserID, req.userID), req.userID,
+		req.agentName, route.workspaceRoot, req.agent,
+	)
+	h.ensureCodexSessions().setThread(route.bindingKey, route.workspaceRoot, route.threadID)
+	h.setCodexActiveWorkspaceForRoute(route.bindingKey, req.ownerBindingKey, route.workspaceRoot)
+	return h.ensureAgentSessions().Set(req.userID, req.agentName)
+}
+
+func (h *Handler) renderCodexSwitchResult(render codexSwitchRenderRequest) string {
+	req := render.switchRequest
+	route := render.route
+	resolution := render.resolution
+	lines := []string{"已切换会话。", "工作空间: " + shortCodexWorkspaceName(route.workspaceRoot)}
+	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(route.threadID))
+	lines = append(lines, renderSessionModelStatus(modelStatus)...)
+	lines = append(lines, renderCodexOwnerNotice(resolution, route)...)
+	if canObserveCodexTask(resolution, route) {
+		state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
+			ctx: req.ctx, actorUserID: firstNonBlank(req.options.actorUserID, req.userID),
+			routeUserID: req.userID, agentName: req.agentName, agent: req.agent,
+			conversationID: route.conversationID, threadID: route.threadID,
+			platform: req.options.platform, accountID: req.options.accountID, reply: req.options.reply,
+		})
+		if active {
+			lines = append(lines, renderExternalCodexActiveNotice(state)...)
+		}
+		lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
+	}
+	lines = append(lines, renderCodexRuntimeInspectError(render.runtimeErr)...)
 	return wechatCommandText(lines...)
 }
 
-func (h *Handler) resolveCodexSwitchTarget(bindingKey string, agentName string, workspaceRoot string, target string, ag agent.Agent) (string, string, error) {
-	target = strings.TrimSpace(target)
+// inspectSelectedCodexRuntimeLocked 只读探测已选择会话，失败不回滚用户选择。
+func (h *Handler) inspectSelectedCodexRuntimeLocked(ctx context.Context, route codexConversationRoute, ag agent.Agent) (codexRuntimeResolution, error) {
+	resolution, err := h.resolveCodexRuntimeLocked(ctx, codexRuntimeResolveOptions{
+		route: route, threadID: route.threadID, ag: ag,
+	})
+	if err == nil {
+		return resolution, nil
+	}
+	intent := h.ensureCodexSessions().controlIntent(route.threadID)
+	return codexRuntimeResolution{
+		Request: agent.CodexRuntimeRequest{Ref: route.ref(route.threadID), Intent: agentControlIntent(intent)},
+		Binding: unknownCodexRuntimeBinding(agent.CodexRuntimeRequest{
+			Ref: route.ref(route.threadID), Intent: agentControlIntent(intent),
+		}), Live: true,
+	}, err
+}
+
+// renderCodexRuntimeInspectError 明确说明探测失败，但不把会话选择误报为失败。
+func renderCodexRuntimeInspectError(err error) []string {
+	if err == nil {
+		return nil
+	}
+	if isCodexThreadStoreReadError(err) {
+		return []string{"运行位置探测失败: 该会话暂时无法读取；会话选择已保留。"}
+	}
+	return []string{"运行位置探测失败: " + err.Error()}
+}
+
+func (h *Handler) resolveCodexSwitchTarget(req codexSwitchTargetRequest) (string, string, error) {
+	target := strings.TrimSpace(req.target)
 	if index, ok := parseCodexListIndex(target); ok {
-		if view, ok := h.resolveCodexSessionByIndex(bindingKey, index); ok {
-			return h.resolveCodexSessionView(agentName, view, ag)
+		if view, ok := h.resolveCodexSessionByIndex(req.bindingKey, index); ok {
+			return h.resolveCodexSessionView(req.agentName, view, req.agent)
 		}
-		if _, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
+		if _, browsing := h.codexBrowseWorkspace(req.bindingKey); browsing {
 			return "", "", fmt.Errorf("会话编号不存在，请先发送 /cx ls 查看当前工作空间会话。")
 		}
-		views := h.codexSwitchTargets(bindingKey)
+		views := h.codexSwitchTargets(req.bindingKey)
 		if index < 0 || index >= len(views) {
 			return "", "", fmt.Errorf("编号不存在，请先发送 /cx ls 查看可切换会话。")
 		}
-		return h.resolveCodexSessionView(agentName, views[index], ag)
+		return h.resolveCodexSessionView(req.agentName, views[index], req.agent)
 	}
 	threadID := target
-	workspaceRoot = h.resolveCodexSwitchWorkspace(bindingKey, agentName, workspaceRoot, threadID, ag)
+	workspaceRoot := h.resolveCodexSwitchWorkspace(codexSwitchTargetRequest{
+		bindingKey: req.bindingKey, agentName: req.agentName,
+		workspaceRoot: req.workspaceRoot, target: threadID, agent: req.agent,
+	})
 	return workspaceRoot, threadID, nil
 }
 
@@ -130,15 +210,15 @@ func parseCodexListIndex(value string) (int, bool) {
 	return index, err == nil
 }
 
-func (h *Handler) resolveCodexSwitchWorkspace(bindingKey string, agentName string, fallbackWorkspace string, threadID string, ag agent.Agent) string {
-	workspaceRoot, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID)
+func (h *Handler) resolveCodexSwitchWorkspace(req codexSwitchTargetRequest) string {
+	workspaceRoot, ok := h.ensureCodexSessions().findWorkspaceByThread(req.bindingKey, req.target)
 	if ok {
 		return normalizeCodexWorkspaceRoot(workspaceRoot)
 	}
-	if localWorkspace, ok := h.findLocalCodexWorkspaceByThread(threadID); ok {
+	if localWorkspace, ok := h.findLocalCodexWorkspaceByThread(req.target); ok {
 		return normalizeCodexWorkspaceRoot(localWorkspace)
 	}
-	return normalizeCodexWorkspaceRoot(fallbackWorkspace)
+	return normalizeCodexWorkspaceRoot(req.workspaceRoot)
 }
 
 func renderCodexSwitchFailure(err error) string {

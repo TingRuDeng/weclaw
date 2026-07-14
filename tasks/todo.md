@@ -2,22 +2,29 @@
 
 ## 目标
 
-按已确认 Spec 完成消息顺序、停止状态、工作空间安全、飞书去重和 Agent 生命周期五项可靠性加固。
+为 Codex thread 增加显式的 Desktop/远程控制权移交，并通过运行时租约和新鲜度屏障消除双写上下文污染。
 
 ## 任务清单
 
-- [x] P0 串行：建立 `tasks/reliability-hardening-2026-07-14.md` 并锁定执行基线。
-- [x] P1 串行：实现普通消息排队反馈并保持严格顺序。
-- [x] P2 串行：统一停止状态转换并修复终态竞态。
-- [x] P3 串行：规范工作空间真实路径并补配置加载契约。
-- [x] P4 串行：实现飞书去重所有权续租。
-- [x] P5 串行：抽取公共 Agent 任务生命周期。
-- [x] P6 可并行验证：执行测试、Race、静态检查、文档校验和 Review Gate。
+- [x] P0 串行：建立 `tasks/codex-owner-handoff-2026-07-14.md`，完成方案与风险确认。
+- [x] P1 串行：新增持久化控制意图及迁移。
+- [x] P2 串行：建立实际运行时与写入租约状态机。
+- [x] P3 串行：实现共享 app-server drain gate 与 rollout 新鲜度屏障。
+- [x] P4 串行：识别 Desktop follower 正常事件与双写冲突。
+- [x] P5 串行：停止持久化实际运行时 owner，并迁移旧状态。
+- [x] P6 串行：实现 `/cx owner`、`/cx owner remote`、`/cx owner desktop`。
+- [x] P7 串行：实现飞书控制权选择卡片。
+- [x] P8 串行：让普通消息按控制意图执行，并在 turn 开始前再次校验。
+- [x] P9 串行：调整会话切换、外部任务观察和远程控制链路。
+- [x] P10 可并行验证：执行单测、Race、覆盖率、静态检查、构建和 Review Gate。
 
 ## 当前状态
 
-P0 至 P6 已完成。
+P0 至 P10 已完成，Review Gate 通过。
 
 ## Review 小结
 
-Review Gate 终态为 `finished`，结论通过。五项可靠性加固均按已确认 Spec 实现；全仓测试、目标包 Race、Vet、Staticcheck、构建、文档契约和差异检查通过。新增核心函数覆盖率均达到 80% 以上。剩余风险是飞书独立排队提示在极端网络延迟下可能晚到，但不会改变严格执行顺序。完整决策与验证记录见 `tasks/reliability-hardening-2026-07-14.md`。
+- 全仓测试、Race、`go vet`、`staticcheck`、构建、文档校验和差异检查均通过。
+- 覆盖率：`agent` 80.0%，`messaging` 81.0%。
+- Review Gate 在验收阶段补齐 thread 级控制锁、冲突态粘滞保护、普通用户工作空间限制和回滚错误反馈。
+- 结论：finished / 通过。完整记录见 `tasks/codex-owner-handoff-2026-07-14.md`。

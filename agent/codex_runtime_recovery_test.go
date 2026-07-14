@@ -4,160 +4,54 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
-func TestACPAgentRecoverCodexThreadRejectsLiveOwner(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerDesktopLive)
-	err := a.RecoverCodexThread(context.Background(), CodexThreadRef{
-		ConversationID: "conversation-1", ThreadID: "thread-1",
-	})
-	if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) {
-		t.Fatalf("RecoverCodexThread() error = %v", err)
-	}
-}
-
-// TestACPAgentResetSessionRebindsNewThreadOwner 验证显式新建后不再沿用旧 Desktop owner。
-func TestACPAgentResetSessionRebindsNewThreadOwner(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerDesktopDisconnected)
+func TestACPAgentResetSessionRebindsNewThreadRuntime(t *testing.T) {
+	a := runtimeRecoveryTestAgent(t, CodexRuntimeUnknown)
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		if method != "thread/start" {
 			return nil, errors.New("unexpected rpc method: " + method)
 		}
 		return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil
 	}
-
 	threadID, err := a.ResetSession(context.Background(), "conversation-1")
 	if err != nil || threadID != "thread-new" {
 		t.Fatalf("ResetSession()=(%q,%v), want thread-new", threadID, err)
 	}
-	binding, ok := a.CurrentCodexThreadBinding("conversation-1")
-	if !ok || binding.Ref.ThreadID != "thread-new" || binding.Owner != CodexOwnerWeClawRuntime {
-		t.Fatalf("binding=%#v ok=%v, want new WeClaw owner", binding, ok)
+	binding, ok := a.runtimeBindingForThread("conversation-1", "thread-new")
+	if !ok || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("binding=%#v ok=%v", binding, ok)
 	}
 }
 
-// TestACPAgentClearCodexThreadUnbindsConversation 验证显式清理后旧 owner 不能继续拦截普通消息。
 func TestACPAgentClearCodexThreadUnbindsConversation(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerDesktopDisconnected)
-
+	a := runtimeRecoveryTestAgent(t, CodexRuntimeUnknown)
 	a.ClearCodexThread("conversation-1")
-
-	if binding, ok := a.CurrentCodexThreadBinding("conversation-1"); ok {
-		t.Fatalf("binding=%#v, want conversation unbound", binding)
+	if binding, ok := a.codexOwners.currentConversationBinding("conversation-1"); ok {
+		t.Fatalf("binding=%#v，期望解除 conversation", binding)
 	}
 }
 
-func TestACPAgentUseCodexThreadDoesNotResumeDesktopOwner(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerDesktopLive)
+func TestACPAgentUseCodexThreadDoesNotResumeDesktopRuntime(t *testing.T) {
+	a := runtimeRecoveryTestAgent(t, CodexRuntimeDesktop)
 	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
-		t.Fatal("Desktop owner 不应调用 app-server RPC")
+		t.Fatal("Desktop runtime 不应调用 app-server RPC")
 		return nil, nil
 	}
-	err := a.UseCodexThread(context.Background(), "conversation-2", "thread-1")
-	if err != nil {
-		t.Fatalf("UseCodexThread() error = %v", err)
+	if err := a.UseCodexThread(context.Background(), "conversation-2", "thread-1"); err != nil {
+		t.Fatalf("UseCodexThread() error=%v", err)
 	}
-	binding, ok := a.CurrentCodexThreadBinding("conversation-2")
-	if !ok || binding.Owner != CodexOwnerDesktopLive {
-		t.Fatalf("binding = %#v, ok = %v", binding, ok)
-	}
-}
-
-func TestACPAgentRecoverCodexThreadAllowsDisconnectedOwner(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerDesktopDisconnected)
-	a.restartCodexAppServerCall = func(context.Context) error { return nil }
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/resume" {
-			return nil, errors.New("unexpected rpc method: " + method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
-	}
-	err := a.RecoverCodexThread(context.Background(), CodexThreadRef{
-		ConversationID: "conversation-1", ThreadID: "thread-1",
-	})
-	if err != nil {
-		t.Fatalf("RecoverCodexThread() error = %v", err)
-	}
-	binding, ok := a.CurrentCodexThreadBinding("conversation-1")
-	if !ok || binding.Owner != CodexOwnerWeClawRuntime {
-		t.Fatalf("binding=%#v ok=%v, want WeClaw owner", binding, ok)
-	}
-}
-
-func TestACPAgentRecoverCodexThreadRejectsActiveACPTurn(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerPersistedOnly)
-	a.turnCh["thread-1"] = make(chan *codexTurnEvent, 1)
-	err := a.RecoverCodexThread(context.Background(), CodexThreadRef{
-		ConversationID: "conversation-1", ThreadID: "thread-1",
-	})
-	if err == nil {
-		t.Fatal("RecoverCodexThread() error = nil")
-	}
-}
-
-func TestACPAgentRecoverCodexThreadRestartsBeforeResume(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerPersistedOnly)
-	var order []string
-	a.restartCodexAppServerCall = func(context.Context) error {
-		order = append(order, "restart")
-		return nil
-	}
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		order = append(order, method)
-		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
-	}
-	err := a.RecoverCodexThread(context.Background(), CodexThreadRef{
-		ConversationID: "conversation-1", ThreadID: "thread-1",
-	})
-	if err != nil {
-		t.Fatalf("RecoverCodexThread() error = %v", err)
-	}
-	if len(order) != 2 || order[0] != "restart" || order[1] != "thread/resume" {
-		t.Fatalf("order = %#v", order)
-	}
-	if a.threads["conversation-1"] != "thread-1" {
-		t.Fatalf("threads = %#v", a.threads)
-	}
-}
-
-func TestACPAgentRecoversPersistedWeClawThreadAfterRestart(t *testing.T) {
-	stateFile := t.TempDir() + "/state.json"
-	source := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, StateFile: stateFile,
-	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
-	binding := source.codexOwners.claimWeClawThread(
-		"thread-1", CodexThreadState{ThreadID: "thread-1"},
-	)
-	ref := CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"}
-	source.codexOwners.bindConversation(ref, binding)
-	source.persistState()
-
-	restored := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, StateFile: stateFile,
-	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
-	var order []string
-	restored.restartCodexAppServerCall = func(context.Context) error {
-		order = append(order, "restart")
-		return nil
-	}
-	restored.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		order = append(order, method)
-		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
-	}
-	if err := restored.RecoverCodexThread(context.Background(), ref); err != nil {
-		t.Fatalf("RecoverCodexThread() error = %v", err)
-	}
-	if len(order) != 2 || order[0] != "restart" || order[1] != "thread/resume" {
-		t.Fatalf("order = %#v", order)
-	}
-	if restored.threads["conversation-1"] != "thread-1" {
-		t.Fatalf("threads = %#v", restored.threads)
+	binding, ok := a.runtimeBindingForThread("conversation-2", "thread-1")
+	if !ok || binding.Runtime != CodexRuntimeDesktop {
+		t.Fatalf("binding=%#v ok=%v", binding, ok)
 	}
 }
 
 func TestACPAgentRecoveryDoesNotFailDesktopWatchers(t *testing.T) {
-	a := recoveryTestAgent(t, CodexOwnerDesktopLive)
+	a := runtimeRecoveryTestAgent(t, CodexRuntimeDesktop)
 	desktopCh := make(chan *codexTurnEvent, 1)
 	appCh := make(chan *codexTurnEvent, 1)
 	a.turnCh["thread-1"] = desktopCh
@@ -171,10 +65,38 @@ func TestACPAgentRecoveryDoesNotFailDesktopWatchers(t *testing.T) {
 	select {
 	case event := <-appCh:
 		if event.Kind != "error" {
-			t.Fatalf("app event = %#v", event)
+			t.Fatalf("app event=%#v", event)
 		}
 	default:
 		t.Fatal("app-server turn did not receive restart error")
+	}
+}
+
+func TestACPAgentRestartWaitsForAppServerPermit(t *testing.T) {
+	a := runtimeRecoveryTestAgent(t, CodexRuntimeUnknown)
+	permit, err := a.appServerGate.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restarts atomic.Int32
+	a.restartCodexAppServerCall = func(context.Context) error {
+		restarts.Add(1)
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.restartCodexAppServer(context.Background()) }()
+	waitForCodexGateState(t, a.appServerGate, codexAppServerDraining)
+	if restarts.Load() != 0 {
+		t.Fatal("permit 释放前不应刷新 app-server")
+	}
+	permit.release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(codexGateTestTimeout):
+		t.Fatal("app-server 刷新未完成")
 	}
 }
 
@@ -188,32 +110,24 @@ func TestACPAgentRestoredThreadResumeFailureIsReturned(t *testing.T) {
 		return nil, errors.New("resume failed")
 	}
 	if _, err := a.requireThread(context.Background(), "conversation-1"); err == nil {
-		t.Fatal("requireThread() error = nil")
+		t.Fatal("requireThread() error=nil")
 	}
 	if !a.resumeOnFirstUse["conversation-1"] {
 		t.Fatal("resume failure cleared retry marker")
 	}
 }
 
-func recoveryTestAgent(t *testing.T, owner CodexRuntimeOwner) *ACPAgent {
+func runtimeRecoveryTestAgent(t *testing.T, runtime CodexRuntimeHolder) *ACPAgent {
 	t.Helper()
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
 	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
-	if owner == CodexOwnerDesktopLive {
-		binding := a.codexOwners.observeDesktopSnapshot(
-			"thread-1", 1, CodexThreadState{ThreadID: "thread-1"},
-		)
-		a.codexOwners.bindConversation(CodexThreadRef{
-			ConversationID: "conversation-1", ThreadID: "thread-1",
-		}, binding)
-		return a
+	request := CodexRuntimeRequest{
+		Ref:    CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"},
+		Intent: CodexControlIntent{Owner: CodexControlUnclaimed},
 	}
-	a.codexOwners.restoreBindings(map[string]CodexThreadBinding{
-		"conversation-1": {
-			Ref:   CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"},
-			Owner: owner, ReleaseConfirmed: owner == CodexOwnerPersistedOnly,
-		},
-	})
+	if _, err := a.codexOwners.activateRuntime(request, runtime, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
 	return a
 }

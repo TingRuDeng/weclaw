@@ -84,6 +84,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		notifyCh:                 make(map[string]chan *sessionUpdate),
 		turnCh:                   make(map[string]chan *codexTurnEvent),
 		desktopProbe:             options.desktopProbe,
+		appServerGate:            newCodexAppServerGate(),
 	}
 	return a
 }

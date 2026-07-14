@@ -198,7 +198,7 @@ func TestACPAgentCodexKeepsThreadOnEmptyResponse(t *testing.T) {
 		}
 	}
 
-	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	_, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello"})
 	if err == nil || !strings.Contains(err.Error(), "agent returned empty response") {
 		t.Fatalf("chatCodexAppServer error=%v, want empty response", err)
 	}

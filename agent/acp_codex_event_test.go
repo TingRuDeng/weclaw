@@ -444,7 +444,7 @@ func TestACPAgentKeepsCodexThreadOnAuthStateError(t *testing.T) {
 		}
 	}
 
-	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	_, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello"})
 	if err == nil {
 		t.Fatal("chatCodexAppServer error = nil, want auth state error")
 	}
@@ -489,7 +489,7 @@ func TestACPAgentKeepsRuntimeOnCodexUsageLimit(t *testing.T) {
 		}
 	}
 
-	_, err := a.chatCodexAppServer(ctx, "user-1", "hello", nil)
+	_, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello"})
 	if err == nil {
 		t.Fatal("chatCodexAppServer error = nil, want usage limit error")
 	}
@@ -516,6 +516,13 @@ func TestACPAgentContinuesSameThreadAfterUsageLimit(t *testing.T) {
 	a.threads["user-1"] = "old-thread"
 	a.mu.Unlock()
 	a.persistState()
+	request := remoteCodexRuntimeRequest("old-thread", "route-1", 1)
+	request.Ref.ConversationID = "user-1"
+	request.Intent.ConversationID = "user-1"
+	a.desktopProbe = &codexDesktopOwnerProbeFake{loadErr: ErrCodexDesktopNoClient}
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "old-thread"}); err != nil {
+		t.Fatal(err)
+	}
 
 	turnStarts := 0
 	threadStarts := 0
@@ -538,20 +545,20 @@ func TestACPAgentContinuesSameThreadAfterUsageLimit(t *testing.T) {
 					t.Fatalf("first turn thread=%q, want old-thread", p.ThreadID)
 				}
 				ch <- &codexTurnEvent{Kind: "error", Text: "Codex 账号额度已用完：You've hit your usage limit. (usageLimitExceeded)"}
-				return json.RawMessage(`{"ok":true}`), nil
+				return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
 			}
 			if p.ThreadID != "old-thread" {
 				t.Fatalf("second turn thread=%q, want old-thread", p.ThreadID)
 			}
 			ch <- &codexTurnEvent{Delta: "额度恢复后的回复"}
 			ch <- &codexTurnEvent{Kind: "completed"}
-			return json.RawMessage(`{"ok":true}`), nil
+			return json.RawMessage(`{"turn":{"id":"turn-2"}}`), nil
 		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
 	}
 
-	_, err := a.Chat(ctx, "user-1", "第一次请求")
+	_, err := a.RunCodexTurn(ctx, CodexTurnRequest{Runtime: request, Message: "第一次请求"})
 	if err == nil {
 		t.Fatal("first Chat error = nil, want usage limit")
 	}
@@ -559,7 +566,7 @@ func TestACPAgentContinuesSameThreadAfterUsageLimit(t *testing.T) {
 		t.Fatalf("usage limit error=%q, want usage detail", err.Error())
 	}
 
-	reply, err := a.Chat(ctx, "user-1", "切号后的请求")
+	reply, err := a.RunCodexTurn(ctx, CodexTurnRequest{Runtime: request, Message: "切号后的请求"})
 	if err != nil {
 		t.Fatalf("second Chat error: %v", err)
 	}
@@ -589,6 +596,13 @@ func TestACPAgentKeepsCodexThreadWhenResumeReportsMissing(t *testing.T) {
 	a.resumeOnFirstUse["user-1"] = true
 	a.mu.Unlock()
 	a.persistState()
+	request := remoteCodexRuntimeRequest("old-thread", "route-1", 1)
+	request.Ref.ConversationID = "user-1"
+	request.Intent.ConversationID = "user-1"
+	a.desktopProbe = &codexDesktopOwnerProbeFake{loadErr: ErrCodexDesktopNoClient}
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "old-thread"}); err != nil {
+		t.Fatal(err)
+	}
 	threadStarts := 0
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		if method == "thread/start" {
@@ -600,7 +614,7 @@ func TestACPAgentKeepsCodexThreadWhenResumeReportsMissing(t *testing.T) {
 		return nil, fmt.Errorf("unexpected rpc method: %s", method)
 	}
 
-	_, err := a.Chat(context.Background(), "user-1", "hello")
+	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{Runtime: request, Message: "hello"})
 	if err == nil || !strings.Contains(err.Error(), "thread not found") {
 		t.Fatalf("Chat error=%v, want thread not found", err)
 	}

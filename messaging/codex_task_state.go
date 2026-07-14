@@ -35,16 +35,7 @@ func (t *activeAgentTask) canControlExternalCodexLocked() bool {
 	if !t.isExternalCodexLocked() || t.phase != codexTaskRunning {
 		return false
 	}
-	return t.runtimeOwner == agent.CodexOwnerDesktopLive || t.runtimeOwner == agent.CodexOwnerWeClawRuntime
-}
-
-// syncCodexRuntime 保存当前任务实际绑定的 owner 快照。
-func (t *activeAgentTask) syncCodexRuntime(binding agent.CodexThreadBinding) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.runtimeOwner = binding.Owner
-	t.ownerRevision = binding.OwnerRevision
-	t.codexThreadID = binding.Ref.ThreadID
+	return t.runtimeOwner == agent.CodexRuntimeDesktop || t.runtimeOwner == agent.CodexRuntimeWeClaw
 }
 
 func (t *activeAgentTask) markCodexDisconnected() {
@@ -54,7 +45,7 @@ func (t *activeAgentTask) markCodexDisconnected() {
 		return
 	}
 	t.phase = codexTaskDisconnected
-	t.runtimeOwner = agent.CodexOwnerDesktopDisconnected
+	t.runtimeOwner = agent.CodexRuntimeUnknown
 }
 
 // markCodexObservationInterrupted 保存待核对 turn，并阻止控制命令沿用失效观察流。
@@ -65,7 +56,7 @@ func (t *activeAgentTask) markCodexObservationInterrupted(threadID string, turnI
 		return
 	}
 	t.phase = codexTaskDisconnected
-	t.runtimeOwner = agent.CodexOwnerDesktopDisconnected
+	t.runtimeOwner = agent.CodexRuntimeUnknown
 	t.codexThreadID = threadID
 	t.codexTurnID = turnID
 }
@@ -75,16 +66,16 @@ func (t *activeAgentTask) markCodexRunning(binding agent.CodexThreadBinding) {
 	defer t.mu.Unlock()
 	if t.phase != codexTaskTerminal && t.phase != codexTaskStopping {
 		t.phase = codexTaskRunning
-		t.runtimeOwner = binding.Owner
-		t.ownerRevision = binding.OwnerRevision
+		t.runtimeOwner = binding.Runtime
+		t.ownerRevision = binding.Control.Revision
 	}
 }
 
 func (t *activeAgentTask) refreshExternalCodexTurn(binding agent.CodexThreadBinding, turnID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.runtimeOwner = binding.Owner
-	t.ownerRevision = binding.OwnerRevision
+	t.runtimeOwner = binding.Runtime
+	t.ownerRevision = binding.Control.Revision
 	t.codexTurnID = turnID
 }
 

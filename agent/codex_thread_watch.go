@@ -35,15 +35,15 @@ func (a *ACPAgent) WatchCodexThread(ctx context.Context, conversationID string, 
 
 // watchCodexThreadWithReconcile 同时消费实时事件和权威状态，避免单个终态事件缺失后永久挂起。
 func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codexThreadWatchOptions) (string, error) {
-	if binding, ok := a.desktopBindingForThread(opts.conversationID, opts.threadID); ok {
-		if binding.Owner == CodexOwnerDesktopDisconnected {
-			return "", ErrCodexDesktopDisconnected
+	if binding, ok := a.runtimeBindingForThread(opts.conversationID, opts.threadID); ok {
+		if binding.Runtime == CodexRuntimeUnknown {
+			return "", ErrCodexRuntimeUnavailable
 		}
-		if binding.Owner == CodexOwnerUnknown {
-			return "", ErrCodexDesktopOwnershipUnknown
+		if binding.Runtime == CodexRuntimeConflict {
+			return "", ErrCodexRuntimeConflict
 		}
 	}
-	turnCh := make(chan *codexTurnEvent, 256)
+	turnCh := make(chan *codexTurnEvent, codexTurnEventBufferSize)
 	if !a.registerTurnChannel(opts.threadID, turnCh) {
 		return "", fmt.Errorf("thread %s already has an active watcher or turn", opts.threadID)
 	}
@@ -127,8 +127,8 @@ func attachedCodexInterruptedError(opts codexThreadWatchOptions, evt *codexTurnE
 
 // refreshAttachedCodexThread 在 Desktop 事件静默时主动拉取带 revision 屏障的目标状态。
 func (a *ACPAgent) refreshAttachedCodexThread(ctx context.Context, conversationID string, threadID string) error {
-	binding, ok := a.desktopBindingForThread(conversationID, threadID)
-	if !ok || binding.Owner != CodexOwnerDesktopLive || a.desktopRuntime == nil {
+	binding, ok := a.runtimeBindingForThread(conversationID, threadID)
+	if !ok || binding.Runtime != CodexRuntimeDesktop || a.desktopRuntime == nil {
 		return nil
 	}
 	return a.desktopRuntime.LoadHistory(ctx, CodexThreadRef{

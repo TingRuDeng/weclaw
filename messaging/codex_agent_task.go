@@ -29,13 +29,15 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		return
 	}
+	unlockControl := h.lockCodexThreadControl(route.threadID)
+	defer unlockControl()
 	if h.preflightCodexTaskStart(codexTaskPreflightOptions{
 		taskOpts: opts, route: route, cancel: cancelTaskTimeout,
 	}) {
 		return
 	}
 	executionKey := route.conversationID
-	runtimeOwner, ownerRevision := codexTaskOwnerSnapshot(opts.agent, route.conversationID)
+	runtimeOwner, ownerRevision := codexTaskOwnerSnapshot(opts.agent)
 	opts.route = route
 	admission := h.beginOrQueueActiveTask(agentCtx, executionKey, activeTaskMeta{
 		owner:        opts.userID,
@@ -92,11 +94,6 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		h.finishAgentTaskLifecycle(lifecycle, "", err)
 		return
 	}
-	if liveAgent, ok := opts.agent.(agent.CodexLiveRuntimeAgent); ok {
-		if binding, found := liveAgent.CurrentCodexThreadBinding(runtime.route.conversationID); found {
-			runtime.task.syncCodexRuntime(binding)
-		}
-	}
 	reply, err := h.executeCodexAgentTurn(runtime, lifecycle.recordProgress)
 	if err == nil {
 		h.recordCodexThreadForWorkspace(opts.routeUserID, opts.agentName, opts.agent, runtime.route.conversationID, runtime.route.workspaceRoot)
@@ -106,8 +103,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 
 // executeCodexAgentTurn 在观察流中断时接续同一 rollout turn，不重复执行任务。
 func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(string)) (string, error) {
-	opts := runtime.opts
-	reply, err := h.chatWithAgentWithProgress(runtime.agentCtx, opts.agent, runtime.route.conversationID, opts.message, onProgress)
+	reply, err := h.runCodexAgentTurn(runtime, onProgress)
 	var interrupted *agent.CodexTurnInterruptedError
 	if !errors.As(err, &interrupted) {
 		return reply, err
@@ -123,14 +119,42 @@ func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgres
 	return "", interrupted
 }
 
-func codexTaskOwnerSnapshot(ag agent.Agent, conversationID string) (agent.CodexRuntimeOwner, uint64) {
-	liveAgent, ok := ag.(agent.CodexLiveRuntimeAgent)
+// runCodexAgentTurn 让新版 Codex 在 writer lease 内执行，旧 Agent 保持原调用路径。
+func (h *Handler) runCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(string)) (string, error) {
+	return h.runControlledCodexTurn(codexControlledTurnOptions{
+		ctx: runtime.agentCtx, agent: runtime.opts.agent, route: runtime.route,
+		message: runtime.opts.message, onProgress: onProgress,
+	})
+}
+
+type codexControlledTurnOptions struct {
+	ctx        context.Context
+	agent      agent.Agent
+	route      codexConversationRoute
+	message    string
+	onProgress func(string)
+}
+
+// runControlledCodexTurn 是所有消息入口启动 Codex turn 的唯一业务层出口。
+func (h *Handler) runControlledCodexTurn(opts codexControlledTurnOptions) (string, error) {
+	liveAgent, ok := opts.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
-		return agent.CodexOwnerWeClawRuntime, 0
+		return h.chatWithAgentWithProgress(
+			opts.ctx, opts.agent, opts.route.conversationID, opts.message, opts.onProgress,
+		)
 	}
-	binding, found := liveAgent.CurrentCodexThreadBinding(conversationID)
-	if !found {
-		return agent.CodexOwnerUnknown, 0
+	request, _, err := h.buildCodexRuntimeRequest(opts.route, opts.route.threadID)
+	if err != nil {
+		return "", err
 	}
-	return binding.Owner, binding.OwnerRevision
+	return liveAgent.RunCodexTurn(opts.ctx, agent.CodexTurnRequest{
+		Runtime: request, Message: opts.message, OnProgress: opts.onProgress,
+	})
+}
+
+func codexTaskOwnerSnapshot(ag agent.Agent) (agent.CodexRuntimeHolder, uint64) {
+	if _, ok := ag.(agent.CodexLiveRuntimeAgent); !ok {
+		return agent.CodexRuntimeWeClaw, 0
+	}
+	return agent.CodexRuntimeUnknown, 0
 }

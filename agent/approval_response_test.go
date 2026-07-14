@@ -279,7 +279,7 @@ func TestCodexTurnStartUsesUntrustedApprovalPolicyWithHandler(t *testing.T) {
 	}
 
 	createCodexThreadForTest(t, ctx, a, "conversation-approval")
-	if _, err := a.chatCodexAppServer(ctx, "conversation-approval", "hello", nil); err != nil {
+	if _, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "conversation-approval", message: "hello"}); err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
 	if turnApprovalPolicy != "untrusted" {
@@ -337,7 +337,7 @@ func TestCodexAppServerUsesConfiguredApprovalAndSandbox(t *testing.T) {
 	}
 
 	createCodexThreadForTest(t, context.Background(), a, "conversation-configured")
-	if _, err := a.chatCodexAppServer(context.Background(), "conversation-configured", "hello", nil); err != nil {
+	if _, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: context.Background(), conversationID: "conversation-configured", message: "hello"}); err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
 	if threadApprovalPolicy != "on-request" || turnApprovalPolicy != "on-request" {
@@ -390,7 +390,7 @@ func TestCodexAppServerUsesConfiguredApprovalReviewer(t *testing.T) {
 	}
 
 	createCodexThreadForTest(t, context.Background(), a, "conversation-reviewer")
-	if _, err := a.chatCodexAppServer(context.Background(), "conversation-reviewer", "hello", nil); err != nil {
+	if _, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: context.Background(), conversationID: "conversation-reviewer", message: "hello"}); err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}
 	if threadApprovalReviewer != "auto_review" || turnApprovalReviewer != "auto_review" {

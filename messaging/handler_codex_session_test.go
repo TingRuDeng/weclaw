@@ -24,6 +24,7 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	}
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeOff
 	h.SetProgressConfig(cfg)

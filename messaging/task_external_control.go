@@ -59,9 +59,21 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 		}
 		return target, true, nil
 	}
-	binding, found := liveAgent.CurrentCodexThreadBinding(req.key)
-	if !found || binding.Owner != agent.CodexOwnerDesktopLive {
-		return target, true, fmt.Errorf("Codex Desktop 实时连接已断开，无法确认%s操作", req.action)
+	unlock := h.lockCodexThreadControl(target.threadID)
+	defer unlock()
+	intent := h.ensureCodexSessions().controlIntent(target.threadID)
+	if intent.Owner != codexControlRemote || intent.ConversationID != req.key {
+		return target, true, fmt.Errorf("当前窗口没有该 Codex 任务的远程控制权")
+	}
+	binding, err := liveAgent.InspectCodexRuntime(req.ctx, agent.CodexRuntimeRequest{
+		Ref:    agent.CodexThreadRef{ConversationID: req.key, ThreadID: target.threadID},
+		Intent: agentControlIntent(intent),
+	})
+	if err != nil {
+		return target, true, fmt.Errorf("无法确认 Codex 实时运行位置: %w", err)
+	}
+	if binding.Runtime != agent.CodexRuntimeDesktop && binding.Runtime != agent.CodexRuntimeWeClaw {
+		return target, true, fmt.Errorf("Codex 实时运行位置不可用，无法确认%s操作", req.action)
 	}
 	state, err := runtimeAgent.ReadCodexThreadState(req.ctx, req.key, target.threadID)
 	if err != nil {

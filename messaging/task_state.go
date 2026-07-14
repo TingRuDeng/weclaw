@@ -26,7 +26,7 @@ type activeAgentTask struct {
 	startedAt          time.Time
 	lastProgress       string
 	lastProgressAt     time.Time
-	runtimeOwner       agent.CodexRuntimeOwner
+	runtimeOwner       agent.CodexRuntimeHolder
 	ownerRevision      uint64
 	phase              codexTaskPhase
 	codexThreadID      string
@@ -79,7 +79,7 @@ type activeTaskMeta struct {
 	routeUserID   string
 	agentName     string
 	message       string
-	runtimeOwner  agent.CodexRuntimeOwner
+	runtimeOwner  agent.CodexRuntimeHolder
 	ownerRevision uint64
 	codexThreadID string
 	codexTurnID   string

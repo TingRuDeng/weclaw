@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -32,7 +33,8 @@ func (s *codexSessionStore) load() {
 	}
 
 	bindings := make(map[string]codexSessionBinding, len(state.Bindings))
-	changed := false
+	controls := make(map[string]codexControlIntent, len(state.Controls))
+	changed := state.Version != codexSessionStateVersion
 	for key, binding := range state.Bindings {
 		if strings.TrimSpace(key) == "" {
 			continue
@@ -54,9 +56,24 @@ func (s *codexSessionStore) load() {
 		}
 		bindings[migratedKey] = mergeCodexSessionBinding(bindings[migratedKey], normalized)
 	}
+	for threadID, intent := range state.Controls {
+		threadID = strings.TrimSpace(threadID)
+		normalized, err := normalizeCodexControlIntent(codexControlIntentUpdate{
+			ThreadID: threadID, Owner: intent.Owner,
+			RouteBindingKey: intent.RouteBindingKey, ConversationID: intent.ConversationID,
+		})
+		if err != nil || intent.Revision == 0 {
+			changed = true
+			continue
+		}
+		normalized.Revision = intent.Revision
+		normalized.UpdatedAt = strings.TrimSpace(intent.UpdatedAt)
+		controls[threadID] = normalized
+	}
 
 	s.mu.Lock()
 	s.bindings = bindings
+	s.controls = controls
 	s.mu.Unlock()
 	if changed {
 		s.save()
@@ -86,16 +103,35 @@ func mergeCodexWorkspaceSession(current codexWorkspaceSession, incoming codexWor
 func (s *codexSessionStore) save() {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
-
-	s.mu.Lock()
-	filePath := s.filePath
-	if filePath == "" {
-		s.mu.Unlock()
-		return
+	if err := s.persistStateLocked(); err != nil {
+		log.Printf("[codex-session] failed to save state: %v", err)
 	}
+}
+
+// persistStateLocked 在持有 saveMu 时原子写入当前快照。
+func (s *codexSessionStore) persistStateLocked() error {
+	filePath, state := s.snapshotCodexSessionState()
+	if filePath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
+		return fmt.Errorf("创建状态目录: %w", err)
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("编码状态: %w", err)
+	}
+	return writeCodexSessionStateFile(filePath, data)
+}
+
+func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	filePath := s.filePath
 	state := codexSessionState{
-		Version:  1,
+		Version:  codexSessionStateVersion,
 		Bindings: make(map[string]codexSessionBinding, len(s.bindings)),
+		Controls: make(map[string]codexControlIntent, len(s.controls)),
 		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
 	for key, binding := range s.bindings {
@@ -105,39 +141,32 @@ func (s *codexSessionStore) save() {
 		}
 		state.Bindings[key] = codexSessionBinding{ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces}
 	}
-	s.mu.Unlock()
+	for threadID, intent := range s.controls {
+		state.Controls[threadID] = intent
+	}
+	return filePath, state
+}
 
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
-		log.Printf("[codex-session] failed to create state dir: %v", err)
-		return
-	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		log.Printf("[codex-session] failed to marshal state: %v", err)
-		return
-	}
+func writeCodexSessionStateFile(filePath string, data []byte) error {
 	tmpFile, err := os.CreateTemp(filepath.Dir(filePath), filepath.Base(filePath)+".*.tmp")
 	if err != nil {
-		log.Printf("[codex-session] failed to create temp state file: %v", err)
-		return
+		return fmt.Errorf("创建临时状态文件: %w", err)
 	}
 	tmpName := tmpFile.Name()
 	defer os.Remove(tmpName)
 	if err := tmpFile.Chmod(0o600); err != nil {
 		_ = tmpFile.Close()
-		log.Printf("[codex-session] failed to chmod %s: %v", tmpName, err)
-		return
+		return fmt.Errorf("设置临时状态文件权限: %w", err)
 	}
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
-		log.Printf("[codex-session] failed to write %s: %v", tmpName, err)
-		return
+		return fmt.Errorf("写入临时状态文件: %w", err)
 	}
 	if err := tmpFile.Close(); err != nil {
-		log.Printf("[codex-session] failed to close %s: %v", tmpName, err)
-		return
+		return fmt.Errorf("关闭临时状态文件: %w", err)
 	}
 	if err := os.Rename(tmpName, filePath); err != nil {
-		log.Printf("[codex-session] failed to move %s into place: %v", filePath, err)
+		return fmt.Errorf("替换状态文件: %w", err)
 	}
+	return nil
 }

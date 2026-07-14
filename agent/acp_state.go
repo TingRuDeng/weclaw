@@ -82,7 +82,7 @@ func (a *ACPAgent) loadState() {
 		loadedThreads++
 	}
 	a.mu.Unlock()
-	if a.codexOwners != nil {
+	if a.codexOwners != nil && state.Version < acpPersistedStateVersion {
 		loadedBindings = a.codexOwners.restoreBindings(state.LiveBindings)
 	}
 
@@ -121,9 +121,6 @@ func (a *ACPAgent) snapshotPersistedState() (acpPersistedState, string, bool) {
 		Sessions: make(map[string]string, len(a.sessions)),
 		Threads:  make(map[string]string, len(a.threads)),
 		Updated:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if a.codexOwners != nil {
-		state.LiveBindings = a.codexOwners.persistedBindings()
 	}
 	if !a.isClaudeACPIdentityLocked() {
 		for k, v := range a.pendingPersistedSessions {

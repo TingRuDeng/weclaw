@@ -102,7 +102,8 @@ func (h *Handler) dispatchAgentMessage(req agentMessageRequest, ag agent.Agent, 
 // newCodexAgentTaskOptions 将统一消息请求转换为 Codex 专用后台任务参数。
 func newCodexAgentTaskOptions(runtime agentDispatchRuntime) codexAgentTaskOptions {
 	return codexAgentTaskOptions{
-		ctx: runtime.req.ctx, userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
+		ctx: runtime.req.ctx, platform: runtime.req.platformName,
+		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
 		reply: runtime.req.reply, agentName: runtime.req.name, message: runtime.req.message,
 		clientID: runtime.req.clientID, replyPrefix: runtime.prefix,
 		agent: runtime.agent, progressCfg: runtime.progressCfg,

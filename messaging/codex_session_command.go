@@ -99,11 +99,14 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 		})
 	}
 	if _, browsing := h.codexBrowseWorkspace(req.BindingKey); browsing {
-		return textNavigationResult(h.handleCodexSwitchForRouteWithOptions(ctx, req.UserID, req.AgentName, req.WorkspaceRoot, req.Agent, req.Target, req.OwnerBindingKey, codexSwitchOptions{
-			actorUserID: req.ActorUserID,
-			platform:    req.Platform,
-			accountID:   req.AccountID,
-			reply:       req.Reply,
+		return textNavigationResult(h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
+			ctx: ctx, userID: req.UserID, agentName: req.AgentName,
+			workspaceRoot: req.WorkspaceRoot, agent: req.Agent,
+			target: req.Target, ownerBindingKey: req.OwnerBindingKey,
+			options: codexSwitchOptions{
+				actorUserID: req.ActorUserID, platform: req.Platform,
+				accountID: req.AccountID, reply: req.Reply,
+			},
 		}))
 	}
 	return h.handleCodexCdResult(codexWorkspaceCdRequest{

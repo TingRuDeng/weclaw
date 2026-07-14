@@ -115,9 +115,9 @@ func TestACPAgentCodexTurnAggregatesCommandProgress(t *testing.T) {
 
 	createCodexThreadForTest(t, ctx, a, "user-1")
 	var progress []string
-	reply, err := a.chatCodexAppServer(ctx, "user-1", "hello", func(delta string) {
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "user-1", message: "hello", onProgress: func(delta string) {
 		progress = append(progress, delta)
-	})
+	}})
 	if err != nil {
 		t.Fatalf("chatCodexAppServer error: %v", err)
 	}

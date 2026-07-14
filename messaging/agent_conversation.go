@@ -100,21 +100,22 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 	threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
 	if pending {
 		codexAg.ClearCodexThread(route.conversationID)
-		return nil
+		return fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
 	}
 	if route.threadID != "" {
 		threadID = route.threadID
 	}
-	if threadID != "" {
-		resolution, err := h.resolveCodexRuntime(ctx, codexRuntimeResolveOptions{
-			route: route, threadID: threadID, ag: ag,
-		})
-		if err != nil {
-			return fmt.Errorf("恢复 Codex 会话失败: %w", err)
-		}
-		if err := ensureCodexRuntimeReady(resolution); err != nil {
-			return fmt.Errorf("恢复 Codex 会话失败: %w", err)
-		}
+	if threadID == "" {
+		return fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
+	}
+	resolution, err := h.resolveCodexRuntime(ctx, codexRuntimeResolveOptions{
+		route: route, threadID: threadID, ag: ag,
+	})
+	if err != nil {
+		return fmt.Errorf("恢复 Codex 会话失败: %w", err)
+	}
+	if err := ensureCodexRuntimeReady(resolution, route); err != nil {
+		return fmt.Errorf("恢复 Codex 会话失败: %w", err)
 	}
 	h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
 	return nil

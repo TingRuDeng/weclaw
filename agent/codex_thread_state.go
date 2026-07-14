@@ -40,14 +40,14 @@ func (a *ACPAgent) ReadCodexThreadState(ctx context.Context, conversationID stri
 	if a.protocol != protocolCodexAppServer {
 		return CodexThreadState{}, fmt.Errorf("agent is not codex app-server")
 	}
-	if binding, ok := a.desktopBindingForThread(conversationID, threadID); ok {
-		switch binding.Owner {
-		case CodexOwnerDesktopLive:
+	if binding, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
+		switch binding.Runtime {
+		case CodexRuntimeDesktop:
 			return a.desktopRuntime.threadState(threadID)
-		case CodexOwnerDesktopDisconnected:
-			return CodexThreadState{}, ErrCodexDesktopDisconnected
-		case CodexOwnerUnknown:
-			return CodexThreadState{}, ErrCodexDesktopOwnershipUnknown
+		case CodexRuntimeUnknown:
+			return CodexThreadState{}, ErrCodexRuntimeUnavailable
+		case CodexRuntimeConflict:
+			return CodexThreadState{}, ErrCodexRuntimeConflict
 		}
 	}
 	params := map[string]interface{}{"threadId": strings.TrimSpace(threadID), "includeTurns": true}
@@ -67,15 +67,13 @@ func (a *ACPAgent) SteerCodexThread(ctx context.Context, conversationID string, 
 	if a.protocol != protocolCodexAppServer {
 		return fmt.Errorf("agent is not codex app-server")
 	}
-	if binding, ok := a.desktopBindingForThread(conversationID, threadID); ok {
-		switch binding.Owner {
-		case CodexOwnerDesktopDisconnected:
-			return ErrCodexDesktopDisconnected
-		case CodexOwnerUnknown:
-			return ErrCodexDesktopOwnershipUnknown
-		case CodexOwnerPersistedOnly:
-			return fmt.Errorf("Codex thread 必须先恢复再引导")
-		case CodexOwnerDesktopLive:
+	if binding, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
+		switch binding.Runtime {
+		case CodexRuntimeUnknown:
+			return ErrCodexRuntimeUnavailable
+		case CodexRuntimeConflict:
+			return ErrCodexRuntimeConflict
+		case CodexRuntimeDesktop:
 			return a.desktopRuntime.steerTurn(ctx, codexDesktopSteerTurnSpec{
 				ConversationID: threadID, ExpectedTurnID: turnID, Message: message,
 			})
@@ -95,15 +93,13 @@ func (a *ACPAgent) InterruptCodexThread(ctx context.Context, conversationID stri
 	if a.protocol != protocolCodexAppServer {
 		return fmt.Errorf("agent is not codex app-server")
 	}
-	if binding, ok := a.desktopBindingForThread(conversationID, threadID); ok {
-		switch binding.Owner {
-		case CodexOwnerDesktopDisconnected:
-			return ErrCodexDesktopDisconnected
-		case CodexOwnerUnknown:
-			return ErrCodexDesktopOwnershipUnknown
-		case CodexOwnerPersistedOnly:
-			return fmt.Errorf("Codex thread 必须先恢复再停止")
-		case CodexOwnerDesktopLive:
+	if binding, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
+		switch binding.Runtime {
+		case CodexRuntimeUnknown:
+			return ErrCodexRuntimeUnavailable
+		case CodexRuntimeConflict:
+			return ErrCodexRuntimeConflict
+		case CodexRuntimeDesktop:
 			return a.desktopRuntime.interruptTurn(ctx, threadID, turnID)
 		}
 	}

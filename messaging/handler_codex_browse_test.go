@@ -162,7 +162,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	}
 }
 
-func TestHandleCodexSwitchFailureDoesNotLeakThreadStoreErrorOrSwitchWorkspace(t *testing.T) {
+func TestHandleCodexSwitchPreservesSelectionWithoutLeakingThreadStoreError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	currentWorkspace := filepath.Join(t.TempDir(), "current")
@@ -186,14 +186,18 @@ func TestHandleCodexSwitchFailureDoesNotLeakThreadStoreErrorOrSwitchWorkspace(t 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch 0"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "该 Codex 会话当前无法被微信接手") || !strings.Contains(text, "/cx app") {
-		t.Fatalf("reply should explain local thread resume failure, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已切换会话") || !strings.Contains(text, "会话选择已保留") {
+		t.Fatalf("reply should preserve selection and explain probe failure, messages=%#v", calls.texts())
 	}
 	if strings.Contains(text, "thread-store internal error") || strings.Contains(text, "session metadata") {
 		t.Fatalf("reply should hide internal thread-store details, messages=%#v", calls.texts())
 	}
-	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(currentWorkspace) {
-		t.Fatalf("codex cwd=%q, want unchanged %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(currentWorkspace))
+	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(localWorkspace) {
+		t.Fatalf("codex cwd=%q, want selected %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(localWorkspace))
+	}
+	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), localWorkspace)
+	if thread != "thread-bad" || pending {
+		t.Fatalf("stored thread=%q pending=%v, want thread-bad false", thread, pending)
 	}
 }
 

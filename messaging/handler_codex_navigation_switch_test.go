@@ -78,12 +78,13 @@ func TestCodexCxSwitchDoesNotCreateDraftWhenOtherSessionsExist(t *testing.T) {
 		t.Fatalf("有其他可选会话时不应清理当前会话，clear=%q", ag.clearCalledWith)
 	}
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
-	if thread != "" || pending {
-		t.Fatalf("有其他可选会话时不应创建新会话草稿，thread=%q pending=%v", thread, pending)
+	if thread != "thread-bad" || pending {
+		t.Fatalf("探测失败仍应保留选择且不创建草稿，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "切换会话失败") || strings.Contains(text, "已进入工作空间并创建新会话草稿") {
-		t.Fatalf("switch failure should not create draft, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已切换会话") || !strings.Contains(text, "会话选择已保留") ||
+		strings.Contains(text, "已进入工作空间并创建新会话草稿") || strings.Contains(text, "thread-store internal error") {
+		t.Fatalf("probe failure should preserve selection without a draft, messages=%#v", calls.texts())
 	}
 }
 
@@ -156,8 +157,8 @@ func TestCodexShortIndexPreservesBindingWhenSingleSessionCannotBeRestored(t *tes
 		t.Fatalf("坏 thread 应保留原绑定，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "原会话无法被微信接手") || !strings.Contains(text, "/cx new") ||
-		strings.Contains(text, "已进入工作空间并创建新会话草稿") {
+	if !strings.Contains(text, "已进入工作空间并切换会话") || !strings.Contains(text, "会话选择已保留") ||
+		strings.Contains(text, "已进入工作空间并创建新会话草稿") || strings.Contains(text, "thread-store internal error") {
 		t.Fatalf("reply should preserve user choice, messages=%#v", calls.texts())
 	}
 }

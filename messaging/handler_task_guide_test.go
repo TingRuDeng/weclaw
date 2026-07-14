@@ -90,7 +90,7 @@ func newFrozenWorkspaceFixture(t *testing.T) frozenWorkspaceFixture {
 	}
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setPendingNew(bindingKey, workspaceA)
+	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
 	h.codexSessions.setActiveWorkspace(bindingKey, workspaceA)
 	h.codexSessions.setThread(bindingKey, workspaceB, "thread-b")
 	return frozenWorkspaceFixture{

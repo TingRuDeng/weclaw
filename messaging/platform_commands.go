@@ -133,7 +133,10 @@ func (h *Handler) handleClaudeSessionPlatformCommand(ctx context.Context, req pl
 // handleCodexSessionPlatformCommand 隔离较长的 Codex 会话参数装配。
 func (h *Handler) handleCodexSessionPlatformCommand(ctx context.Context, req platformCommandRequest, routeUserID string) bool {
 	msg := req.Message
-	if h.handleFeishuCodexSessionCommand(ctx, msg, routeUserID, req.Reply, req.Trimmed) {
+	if h.handleFeishuCodexSessionCommand(feishuCodexSessionCommandRequest{
+		ctx: ctx, message: msg, routeUserID: routeUserID,
+		reply: req.Reply, trimmed: req.Trimmed,
+	}) {
 		return true
 	}
 	text := h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{

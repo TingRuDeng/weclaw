@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type codexTaskPreflightOptions struct {
@@ -21,21 +22,70 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	if _, ok := opts.taskOpts.agent.(agent.CodexLiveRuntimeAgent); !ok {
 		return false
 	}
-	resolution, err := h.resolveCodexRuntime(opts.taskOpts.ctx, codexRuntimeResolveOptions{
+	resolution, err := h.resolveCodexRuntimeLocked(opts.taskOpts.ctx, codexRuntimeResolveOptions{
 		route: opts.route, threadID: opts.route.threadID, ag: opts.taskOpts.agent,
 	})
 	if err != nil {
 		h.rejectCodexTaskStart(opts, err)
 		return true
 	}
+	if err := ensureCodexRouteOwnsControl(resolution.Request.Intent, opts.route); err != nil {
+		h.rejectCodexOwnerTaskStart(opts, err)
+		return true
+	}
 	if codexResolutionActive(resolution) {
 		return h.queueMessageBehindLiveTask(opts)
 	}
-	if err := ensureCodexRuntimeReady(resolution); err != nil {
-		h.rejectCodexTaskStart(opts, err)
+	resolution, err = h.realizePersistedCodexRemoteRuntime(opts, resolution)
+	if err != nil {
+		h.rejectCodexOwnerTaskStart(opts, err)
+		return true
+	}
+	if codexResolutionActive(resolution) {
+		return h.queueMessageBehindLiveTask(opts)
+	}
+	if err := ensureCodexRuntimeReady(resolution, opts.route); err != nil {
+		h.rejectCodexOwnerTaskStart(opts, err)
 		return true
 	}
 	return false
+}
+
+// realizePersistedCodexRemoteRuntime 恢复当前窗口已明确持久化的 remote 控制意图。
+func (h *Handler) realizePersistedCodexRemoteRuntime(opts codexTaskPreflightOptions, resolution codexRuntimeResolution) (codexRuntimeResolution, error) {
+	if !resolution.Live || resolution.Binding.Runtime != agent.CodexRuntimeUnknown {
+		return resolution, nil
+	}
+	liveAgent, ok := opts.taskOpts.agent.(agent.CodexLiveRuntimeAgent)
+	if !ok {
+		return resolution, agent.ErrCodexRuntimeUnavailable
+	}
+	binding, err := liveAgent.HandoffCodexRuntime(opts.taskOpts.ctx, resolution.Request)
+	resolution.Binding = binding
+	resolution.ProbeErr = err
+	return resolution, err
+}
+
+// rejectCodexOwnerTaskStart 在飞书中返回可直接操作的控制权卡片。
+func (h *Handler) rejectCodexOwnerTaskStart(opts codexTaskPreflightOptions, err error) {
+	opts.cancel()
+	message := fmt.Sprintf("当前 Codex 会话暂不能开始任务: %v", err)
+	taskOpts := opts.taskOpts
+	if taskOpts.platform != platform.PlatformFeishu || taskOpts.reply == nil || !taskOpts.reply.Capabilities().Buttons {
+		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, message)
+		return
+	}
+	metadata := map[string]string{}
+	if sessionKey := feishuSessionKeyFromRoute(taskOpts.routeUserID); sessionKey != "" {
+		metadata[feishuSessionMetadataKey] = sessionKey
+	}
+	choices := platformChoicesWithMetadata([]platform.Choice{
+		{ID: "/cx owner remote", Label: "交给当前远程窗口"},
+		{ID: "/cx owner desktop", Label: "交给 Codex Desktop"},
+	}, metadata)
+	if askErr := taskOpts.reply.AskChoices(taskOpts.ctx, message, choices); askErr != nil {
+		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, message)
+	}
 }
 
 func codexResolutionActive(resolution codexRuntimeResolution) bool {

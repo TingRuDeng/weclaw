@@ -68,7 +68,7 @@ func TestCodexDesktopQueuedMessageKeepsResolvedStreamProgress(t *testing.T) {
 
 func TestCodexDesktopDisconnectedRejectsStartGuideAndStop(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
-	ag.setBindingOwner(agent.CodexOwnerDesktopDisconnected)
+	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 	ag.bindErr = agent.ErrCodexDesktopDisconnected
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
@@ -86,7 +86,7 @@ func TestCodexDesktopGuideUsesCurrentTurn(t *testing.T) {
 	h.agents["codex"] = ag
 	h.defaultName = "codex"
 	task, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
 		codexThreadID: "thread-1", codexTurnID: "turn-old",
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "补充要求", run: func() {}})
@@ -100,7 +100,7 @@ func TestCodexDesktopGuideUsesCurrentTurn(t *testing.T) {
 func TestCodexDesktopStopWaitsForTerminalAndKeepsPending(t *testing.T) {
 	h, ag, _, route := liveMessageFixture(t, true)
 	task, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "下一条", run: func() {}})
@@ -117,7 +117,7 @@ func TestCodexDesktopStopWaitsForTerminalAndKeepsPending(t *testing.T) {
 func TestCodexDesktopStopPrefersConcurrentTerminal(t *testing.T) {
 	h, ag, _, route := liveMessageFixture(t, true)
 	task, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	ag.interruptHook = func() { task.claimTerminal() }
@@ -138,7 +138,7 @@ func TestCodexDesktopStopPrefersConcurrentTerminal(t *testing.T) {
 func TestCodexDesktopStopRollsBackFailedRequest(t *testing.T) {
 	h, ag, _, route := liveMessageFixture(t, true)
 	task, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	ag.interruptErr = errors.New("interrupt rejected")
@@ -159,7 +159,7 @@ func TestCodexDesktopStopRollsBackFailedRequest(t *testing.T) {
 func TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt(t *testing.T) {
 	h, ag, _, route := liveMessageFixture(t, true)
 	h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	req := externalCodexTaskCommand{
@@ -180,7 +180,7 @@ func TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt(t *testing.T) {
 func TestCodexPendingMessageRechecksOwnerBeforeAutorun(t *testing.T) {
 	h, ag, opts, _ := liveMessageFixture(t, false)
 	pending := h.pendingCodexTask(opts)
-	ag.setBindingOwner(agent.CodexOwnerDesktopDisconnected)
+	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 	ag.bindErr = agent.ErrCodexDesktopDisconnected
 	pending.run()
 	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
@@ -189,12 +189,28 @@ func TestCodexPendingMessageRechecksOwnerBeforeAutorun(t *testing.T) {
 	}
 }
 
+func TestCodexMessageRestoresPersistedRemoteRuntimeAfterRestart(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
+	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
+
+	h.startCodexAgentTask(opts)
+
+	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
+	waitUntil(t, func() bool {
+		_, active := h.activeTask(route.conversationID)
+		return !active
+	})
+	if ag.handoffCalls != 1 || ag.lastTurnReq.Runtime.Intent.RouteKey != route.bindingKey {
+		t.Fatalf("handoff=%d turn=%#v", ag.handoffCalls, ag.lastTurnReq)
+	}
+}
+
 func TestUnauthorizedUserCannotGuideStopOrReadPendingAction(t *testing.T) {
 	h, ag, _, route := liveMessageFixture(t, true)
 	h.agents["codex"] = ag
 	h.defaultName = "codex"
 	task, _, _ := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexOwnerDesktopLive,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "私有指令", run: func() {}})
@@ -216,13 +232,15 @@ func liveMessageFixture(t *testing.T, active bool) (*Handler, *fakeCodexLiveAgen
 	if active {
 		state.ActiveTurnID = "turn-1"
 	}
-	ag := newFakeCodexLiveAgent(agent.CodexOwnerDesktopLive, state)
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
-	route := h.codexConversationRouteForSession("user-1", "user-1", "codex", ag)
-	_, _ = ag.BindCodexThread(context.Background(), agent.CodexThreadRef{
-		ConversationID: route.conversationID, ThreadID: "thread-1",
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, workspace, "thread-1")
+	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
+		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
+		workspace: workspace, threadID: "thread-1",
 	})
+	route := h.codexConversationRouteForSession("user-1", "user-1", "codex", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeOff

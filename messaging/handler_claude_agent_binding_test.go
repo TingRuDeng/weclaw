@@ -80,10 +80,11 @@ func TestCodexSessionSwitchBindsWindowToCodex(t *testing.T) {
 		t.Fatalf("设置初始窗口 Agent 失败：%v", err)
 	}
 
-	h.handleCodexSwitchForRouteWithOptions(
-		context.Background(), "user-1", "codex", workspace, ag, "thread-1", "",
-		codexSwitchOptions{actorUserID: "user-1"},
-	)
+	h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
+		ctx: context.Background(), userID: "user-1", agentName: "codex",
+		workspaceRoot: workspace, agent: ag, target: "thread-1",
+		options: codexSwitchOptions{actorUserID: "user-1"},
+	})
 
 	if selected, ok := h.ensureAgentSessions().Get("user-1"); !ok || selected != "codex" {
 		t.Fatalf("窗口 Agent=(%q,%t)，期望成功切换后绑定 codex", selected, ok)

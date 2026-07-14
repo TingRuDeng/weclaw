@@ -125,7 +125,7 @@ func (h *Handler) startExternalCodexTaskWatcher(opts externalCodexTaskOptions, s
 	taskCtx := h.withAgentInteractions(context.Background(), agentInteractionContextOptions{
 		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID, reply: opts.reply,
 	})
-	runtimeOwner, ownerRevision := externalCodexTaskOwner(opts, state)
+	runtimeOwner, ownerRevision := externalCodexTaskOwner(state)
 	task, watchCtx, started := h.beginActiveTask(taskCtx, opts.conversationID, activeTaskMeta{
 		owner: opts.actorUserID, agentName: opts.agentName,
 		message:      firstNonBlank(state.Preview, "Codex App 本地任务"),
@@ -143,16 +143,11 @@ func (h *Handler) startExternalCodexTaskWatcher(opts externalCodexTaskOptions, s
 	})
 }
 
-func externalCodexTaskOwner(opts externalCodexTaskOptions, state externalCodexTaskState) (agent.CodexRuntimeOwner, uint64) {
-	if liveAgent, ok := opts.agent.(agent.CodexLiveRuntimeAgent); ok {
-		if binding, found := liveAgent.CurrentCodexThreadBinding(opts.conversationID); found {
-			return binding.Owner, binding.OwnerRevision
-		}
-	}
+func externalCodexTaskOwner(state externalCodexTaskState) (agent.CodexRuntimeHolder, uint64) {
 	if state.Controllable {
-		return agent.CodexOwnerWeClawRuntime, 0
+		return agent.CodexRuntimeDesktop, 0
 	}
-	return agent.CodexOwnerDesktopDisconnected, 0
+	return agent.CodexRuntimeUnknown, 0
 }
 
 type externalCodexTaskRuntime struct {

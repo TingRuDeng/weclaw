@@ -1,6 +1,11 @@
 package messaging
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
+
+const codexThreadControlExecutionPrefix = "codex-thread-control\x00"
 
 type executionLock struct {
 	mu    sync.Mutex
@@ -31,4 +36,13 @@ func (h *Handler) lockAgentExecution(key string) func() {
 		}
 		h.taskLocksMu.Unlock()
 	}
+}
+
+// lockCodexThreadControl 串行同一 thread 的控制权移交、运行时探测与任务准入。
+func (h *Handler) lockCodexThreadControl(threadID string) func() {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return func() {}
+	}
+	return h.lockAgentExecution(codexThreadControlExecutionPrefix + threadID)
 }

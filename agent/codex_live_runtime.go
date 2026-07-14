@@ -9,21 +9,62 @@ import (
 var (
 	ErrCodexDesktopOwnershipUnknown = errors.New("Codex Desktop thread 所有权未知")
 	ErrCodexTurnTerminal            = errors.New("Codex turn 已终止")
+	ErrCodexControlChanged          = errors.New("Codex 控制权已变化")
+	ErrCodexControlRequired         = errors.New("当前窗口没有 Codex 远程控制权")
+	ErrCodexRuntimeConflict         = errors.New("Codex Desktop 与 WeClaw 发生写入冲突")
+	ErrCodexRuntimeUnavailable      = errors.New("Codex 实际运行时不可用")
+	ErrCodexWriterBusy              = errors.New("Codex thread 已有写入任务")
+	ErrCodexCheckpointRequired      = errors.New("Codex rollout checkpoint 缺失")
+	ErrCodexCheckpointChanged       = errors.New("Codex rollout checkpoint 已变化")
 )
 
-type CodexRuntimeOwner string
+type CodexControlOwner string
 
 const (
-	CodexOwnerUnknown             CodexRuntimeOwner = "unknown"
-	CodexOwnerDesktopLive         CodexRuntimeOwner = "desktop_live"
-	CodexOwnerDesktopDisconnected CodexRuntimeOwner = "desktop_disconnected"
-	CodexOwnerWeClawRuntime       CodexRuntimeOwner = "weclaw_runtime"
-	CodexOwnerPersistedOnly       CodexRuntimeOwner = "persisted_only"
+	CodexControlUnclaimed CodexControlOwner = "unclaimed"
+	CodexControlDesktop   CodexControlOwner = "desktop"
+	CodexControlRemote    CodexControlOwner = "remote"
+)
+
+type CodexRuntimeHolder string
+
+const (
+	CodexRuntimeUnknown  CodexRuntimeHolder = "unknown"
+	CodexRuntimeDesktop  CodexRuntimeHolder = "desktop"
+	CodexRuntimeWeClaw   CodexRuntimeHolder = "weclaw"
+	CodexRuntimeConflict CodexRuntimeHolder = "conflict"
 )
 
 type CodexThreadRef struct {
 	ConversationID string `json:"conversationId"`
 	ThreadID       string `json:"threadId"`
+}
+
+type CodexControlIntent struct {
+	Owner          CodexControlOwner `json:"owner"`
+	RouteKey       string            `json:"routeKey,omitempty"`
+	ConversationID string            `json:"conversationId,omitempty"`
+	Revision       uint64            `json:"revision"`
+}
+
+type CodexRolloutCheckpoint struct {
+	Path   string `json:"path,omitempty"`
+	TurnID string `json:"turnId,omitempty"`
+	Offset int64  `json:"offset,omitempty"`
+	Size   int64  `json:"size,omitempty"`
+	Active bool   `json:"active,omitempty"`
+}
+
+type CodexRuntimeRequest struct {
+	Ref        CodexThreadRef
+	Intent     CodexControlIntent
+	Checkpoint CodexRolloutCheckpoint
+}
+
+type CodexTurnRequest struct {
+	Runtime    CodexRuntimeRequest
+	Message    string
+	OnProgress func(string)
 }
 
 // CodexTurnInterruptedError 表示 app-server 的观察流中断，最终结果仍需由调用方核对。
@@ -37,40 +78,22 @@ func (e *CodexTurnInterruptedError) Error() string {
 }
 
 type CodexThreadBinding struct {
-	Ref              CodexThreadRef    `json:"ref"`
-	Owner            CodexRuntimeOwner `json:"owner"`
-	OwnerRevision    uint64            `json:"ownerRevision"`
-	Connected        bool              `json:"connected"`
-	ReleaseConfirmed bool              `json:"releaseConfirmed"`
-	State            CodexThreadState  `json:"state"`
+	Ref               CodexThreadRef     `json:"ref"`
+	State             CodexThreadState   `json:"state"`
+	Control           CodexControlIntent `json:"-"`
+	Runtime           CodexRuntimeHolder `json:"-"`
+	RuntimeGeneration uint64             `json:"-"`
+	ConflictReason    string             `json:"-"`
 }
 
 type CodexLiveRuntimeAgent interface {
-	BindCodexThread(context.Context, CodexThreadRef) (CodexThreadBinding, error)
-	CurrentCodexThreadBinding(string) (CodexThreadBinding, bool)
-	RecoverCodexThread(context.Context, CodexThreadRef) error
+	InspectCodexRuntime(context.Context, CodexRuntimeRequest) (CodexThreadBinding, error)
+	HandoffCodexRuntime(context.Context, CodexRuntimeRequest) (CodexThreadBinding, error)
+	RunCodexTurn(context.Context, CodexTurnRequest) (string, error)
 }
 
 type codexDesktopOwnerProbe interface {
 	Discover(context.Context, CodexThreadRef) (bool, error)
 	LoadHistory(context.Context, CodexThreadRef) error
 	Presence() (socketExists bool, processExists bool)
-}
-
-// BindCodexThread 只读探测并保存 conversation 到 thread 的 owner binding。
-func (a *ACPAgent) BindCodexThread(ctx context.Context, ref CodexThreadRef) (CodexThreadBinding, error) {
-	if a.protocol != protocolCodexAppServer || a.codexOwners == nil {
-		return CodexThreadBinding{}, ErrCodexDesktopOwnershipUnknown
-	}
-	binding, err := a.codexOwners.bind(ctx, ref)
-	a.persistState()
-	return binding, err
-}
-
-// CurrentCodexThreadBinding 返回当前 conversation 的 live runtime binding。
-func (a *ACPAgent) CurrentCodexThreadBinding(conversationID string) (CodexThreadBinding, bool) {
-	if a.codexOwners == nil {
-		return CodexThreadBinding{}, false
-	}
-	return a.codexOwners.currentConversationBinding(conversationID)
 }

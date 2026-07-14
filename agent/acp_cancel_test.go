@@ -77,7 +77,7 @@ func TestChatCodexAppServerInterruptsTurnWhenContextCancelled(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.chatCodexAppServer(ctx, "conversation-1", "hello", nil)
+		_, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "conversation-1", message: "hello"})
 		done <- err
 	}()
 	<-turnStarted
@@ -108,7 +108,7 @@ func TestChatCodexAppServerReturnsStructuredInterruptedTurn(t *testing.T) {
 	createCodexThreadForTest(t, context.Background(), a, "conversation-1")
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.chatCodexAppServer(context.Background(), "conversation-1", "hello", nil)
+		_, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: context.Background(), conversationID: "conversation-1", message: "hello"})
 		done <- err
 	}()
 	waitForCodexTurnChannel(t, a, "thread-1")

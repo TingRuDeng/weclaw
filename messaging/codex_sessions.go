@@ -12,11 +12,13 @@ type codexSessionStore struct {
 	saveMu   sync.Mutex
 	filePath string
 	bindings map[string]codexSessionBinding
+	controls map[string]codexControlIntent
 }
 
 type codexSessionState struct {
 	Version  int                            `json:"version"`
 	Bindings map[string]codexSessionBinding `json:"bindings"`
+	Controls map[string]codexControlIntent  `json:"controls,omitempty"`
 	Updated  string                         `json:"updated"`
 }
 
@@ -33,9 +35,12 @@ type codexWorkspaceSession struct {
 
 const legacyBindingDefaultPlatform = "wechat"
 
+const codexSessionStateVersion = 2
+
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
 		bindings: make(map[string]codexSessionBinding),
+		controls: make(map[string]codexControlIntent),
 	}
 }
 
