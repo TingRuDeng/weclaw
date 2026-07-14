@@ -131,15 +131,33 @@ func pendingApprovalMapKey(userID string, approvalKey string) string {
 	return userID + "\x00" + approvalKey
 }
 
+// approvalChoiceLabel 根据上游选项 ID 保留授权范围，避免不同允许语义显示为同一按钮。
 func approvalChoiceLabel(option agent.ApprovalOption) string {
-	switch option.Kind {
+	switch approvalOptionKind(option) {
 	case "allow":
-		return "允许本次"
-	case "deny", "reject":
+		return approvalAllowChoiceLabel(option)
+	case "deny":
 		return "拒绝"
 	default:
 		return firstNonBlank(option.Name, option.Kind, option.ID)
 	}
+}
+
+// approvalAllowChoiceLabel 区分 Claude 的持久授权与单次授权，并保留持久授权的具体范围。
+func approvalAllowChoiceLabel(option agent.ApprovalOption) string {
+	id := strings.ToLower(strings.TrimSpace(option.ID))
+	name := strings.TrimSpace(option.Name)
+	if id == "allow_always" || strings.HasPrefix(strings.ToLower(name), "always allow") {
+		scope := strings.TrimSpace(name[len("Always Allow"):])
+		if scope == "" {
+			return "始终允许"
+		}
+		return "始终允许：" + scope
+	}
+	if id == "allow" || id == "allow_once" || id == "allow-once" {
+		return "仅本次允许"
+	}
+	return firstNonBlank(name, "允许")
 }
 
 func defaultDenyApprovalOption(options []agent.ApprovalOption) string {
