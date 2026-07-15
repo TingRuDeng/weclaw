@@ -14,10 +14,10 @@ func TestCodexUnclaimedMessageRequiresExplicitOwner(t *testing.T) {
 	setCodexControlForMessageTest(t, h, codexMessageControlFixture{opts: opts, owner: codexControlUnclaimed})
 	h.startCodexAgentTask(opts)
 	waitForCodexOwnerReply(t, opts)
-	if ag.runCalls != 0 {
-		t.Fatalf("未认领会话执行次数=%d", ag.runCalls)
+	if ag.runCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("未认领会话 run=%d handoff=%d", ag.runCalls, ag.handoffCalls)
 	}
-	if text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n"); !strings.Contains(text, "/cx owner remote") {
+	if text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n"); !strings.Contains(text, "未由本窗口控制") || !strings.Contains(text, "/cx owner remote") {
 		t.Fatalf("reply=%q", text)
 	}
 }
@@ -27,10 +27,32 @@ func TestCodexDesktopOwnedMessageRequiresRemoteHandoff(t *testing.T) {
 	setCodexControlForMessageTest(t, h, codexMessageControlFixture{opts: opts, owner: codexControlDesktop})
 	h.startCodexAgentTask(opts)
 	waitForCodexOwnerReply(t, opts)
-	if ag.runCalls != 0 {
-		t.Fatalf("Desktop 控制期间执行次数=%d", ag.runCalls)
+	if ag.runCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("Desktop 控制期间 run=%d handoff=%d", ag.runCalls, ag.handoffCalls)
 	}
-	if text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n"); !strings.Contains(text, "由 Codex Desktop 控制") {
+	if text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n"); !strings.Contains(text, "已归还 Codex Desktop") || !strings.Contains(text, "重新选择会话") {
+		t.Fatalf("reply=%q", text)
+	}
+}
+
+func TestCodexOwnerDesktopReleaseDoesNotAutoAcquireOnMessage(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
+	runtime := codexSessionCommandRuntime{
+		ctx: context.Background(), actorUserID: "user-1", routeUserID: "user-1",
+		fields: []string{"/cx", "owner", "desktop"}, agentName: "codex", agent: ag,
+		bindingKey: route.bindingKey, ownerBindingKey: route.bindingKey,
+		workspaceRoot: route.workspaceRoot,
+	}
+	result := h.handleCodexOwnerCommand(runtime)
+	if !strings.Contains(result.Reply, "已归还") {
+		t.Fatalf("release reply=%q", result.Reply)
+	}
+	h.startCodexAgentTask(opts)
+	waitForCodexOwnerReply(t, opts)
+	if ag.runCalls != 0 || ag.handoffCalls != 1 {
+		t.Fatalf("release 后普通消息 run=%d handoff=%d", ag.runCalls, ag.handoffCalls)
+	}
+	if text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n"); !strings.Contains(text, "已归还 Codex Desktop") {
 		t.Fatalf("reply=%q", text)
 	}
 }

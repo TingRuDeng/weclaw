@@ -151,9 +151,9 @@ func ensureCodexRuntimeReady(resolution codexRuntimeResolution, route codexConve
 func ensureCodexRouteOwnsControl(intent agent.CodexControlIntent, route codexConversationRoute) error {
 	switch intent.Owner {
 	case agent.CodexControlUnclaimed:
-		return fmt.Errorf("当前 Codex 会话尚未选择控制方，请发送 /cx owner remote 或 /cx owner desktop")
+		return fmt.Errorf("当前 Codex 会话未由本窗口控制；请重新选择会话或发送 /cx owner remote")
 	case agent.CodexControlDesktop:
-		return fmt.Errorf("当前 Codex 会话由 Codex Desktop 控制；如需远程执行，请发送 /cx owner remote")
+		return fmt.Errorf("当前 Codex 会话已归还 Codex Desktop；请重新选择会话或发送 /cx owner remote")
 	case agent.CodexControlRemote:
 		if intent.RouteKey != route.bindingKey || intent.ConversationID != route.conversationID {
 			return fmt.Errorf("当前 Codex 会话由另一个消息窗口远程控制")
