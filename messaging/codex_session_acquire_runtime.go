@@ -146,9 +146,13 @@ func (h *Handler) markCodexRuntimeConflict(req codexRuntimeConflictRequest) erro
 	return req.liveAgent.MarkCodexRuntimeConflict(req.ctx, request)
 }
 
-// newCodexSessionAcquireCleanupContext 保留 values，但不继承调用链取消信号。
+// newCodexSessionAcquireCleanupContext 仅为已取消调用脱离信号；有效 cleanup 继续继承绝对期限。
 func newCodexSessionAcquireCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(normalizeContext(ctx)), codexSessionAcquireCleanupTimeout)
+	parent := normalizeContext(ctx)
+	if parent.Err() != nil {
+		parent = context.WithoutCancel(parent)
+	}
+	return context.WithTimeout(parent, codexSessionAcquireCleanupTimeout)
 }
 
 // finishCodexSessionAcquire 激活观察后再更新不参与事务提交的辅助会话状态。

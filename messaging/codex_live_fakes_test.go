@@ -35,6 +35,7 @@ type fakeCodexLiveAgent struct {
 	handoffRelease        <-chan struct{}
 	turnEntered           chan struct{}
 	turnRelease           <-chan struct{}
+	recordRuntimeContext  func(string, context.Context, agent.CodexRuntimeRequest)
 }
 
 type fakeCodexWatchResult struct {
@@ -62,7 +63,11 @@ func (f *fakeCodexLiveAgent) InspectCodexRuntime(ctx context.Context, req agent.
 	f.mu.Lock()
 	entered, release := f.inspectEntered, f.inspectRelease
 	rejectCanceled := f.rejectCanceledContext
+	recordContext := f.recordRuntimeContext
 	f.mu.Unlock()
+	if recordContext != nil {
+		recordContext("inspect", ctx, req)
+	}
 	if rejectCanceled && ctx.Err() != nil {
 		return agent.CodexThreadBinding{}, ctx.Err()
 	}
@@ -102,11 +107,15 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 	}
 	hook := f.handoffHooks[req.Ref.ThreadID]
 	rejectCanceled := f.rejectCanceledContext
+	recordContext := f.recordRuntimeContext
 	handoffErr := f.handoffErr
 	if err, ok := f.handoffErrors[req.Ref.ThreadID]; ok {
 		handoffErr = err
 	}
 	f.mu.Unlock()
+	if recordContext != nil {
+		recordContext("handoff", ctx, req)
+	}
 	if hook != nil {
 		hook()
 	}
@@ -151,7 +160,12 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 
 // MarkCodexRuntimeConflict 模拟 ACP registry 的持续 fail-closed 标记。
 func (f *fakeCodexLiveAgent) MarkCodexRuntimeConflict(ctx context.Context, req agent.CodexRuntimeRequest) error {
-	_ = ctx
+	f.mu.Lock()
+	recordContext := f.recordRuntimeContext
+	f.mu.Unlock()
+	if recordContext != nil {
+		recordContext("mark", ctx, req)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	binding, ok := f.bindings[req.Ref.ThreadID]

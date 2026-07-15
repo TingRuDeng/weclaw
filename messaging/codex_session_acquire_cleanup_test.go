@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +106,81 @@ func TestAcquireCodexSessionExplicitHandoffRecoversMarkedConflict(t *testing.T) 
 	if result.resolution.Binding.Runtime == agent.CodexRuntimeConflict ||
 		result.resolution.Binding.ConflictReason != "" {
 		t.Fatalf("binding=%#v", result.resolution.Binding)
+	}
+}
+
+type recordedRuntimeContext struct {
+	operation string
+	threadID  string
+	deadline  time.Time
+}
+
+func TestRollbackCompensationsShareOneCleanupDeadline(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	fixture.h.codexSessions.SetFilePath(t.TempDir() + "/codex-sessions.json")
+	var recordsMu sync.Mutex
+	recording := false
+	records := make([]recordedRuntimeContext, 0, 8)
+	fixture.agent.recordRuntimeContext = func(operation string, ctx context.Context, req agent.CodexRuntimeRequest) {
+		recordsMu.Lock()
+		defer recordsMu.Unlock()
+		deadline, ok := ctx.Deadline()
+		if recording && ok {
+			records = append(records, recordedRuntimeContext{operation: operation, threadID: req.Ref.ThreadID, deadline: deadline})
+		}
+	}
+	fixture.h.codexSessions.writeState = func(string, []byte) error {
+		fixture.agent.mu.Lock()
+		fixture.agent.handoffErrors["thread-a"] = errors.New("恢复 A 失败")
+		fixture.agent.handoffErrors["thread-b"] = errors.New("恢复 B 失败")
+		fixture.agent.inspectErrors["thread-a"] = errors.New("校准 A 失败")
+		fixture.agent.inspectErrors["thread-b"] = errors.New("校准 B 失败")
+		fixture.agent.mu.Unlock()
+		recordsMu.Lock()
+		recording = true
+		recordsMu.Unlock()
+		return errors.New("写盘失败")
+	}
+	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if !errors.Is(err, errCodexSessionAcquireUncertain) {
+		t.Fatalf("error=%v", err)
+	}
+	assertSharedCleanupDeadline(t, records)
+}
+
+func assertSharedCleanupDeadline(t *testing.T, records []recordedRuntimeContext) {
+	t.Helper()
+	var outerDeadline time.Time
+	threads := make(map[string]bool)
+	seen := make(map[string]map[string]bool)
+	for _, record := range records {
+		if seen[record.threadID] == nil {
+			seen[record.threadID] = make(map[string]bool)
+		}
+		seen[record.threadID][record.operation] = true
+		if record.operation == "handoff" {
+			threads[record.threadID] = true
+			if outerDeadline.IsZero() {
+				outerDeadline = record.deadline
+			} else if !record.deadline.Equal(outerDeadline) {
+				t.Fatalf("handoff deadlines differ: %#v", records)
+			}
+		}
+	}
+	if len(threads) != 2 || outerDeadline.IsZero() {
+		t.Fatalf("records=%#v, want two compensation threads", records)
+	}
+	for threadID := range threads {
+		for _, operation := range []string{"handoff", "inspect", "mark"} {
+			if !seen[threadID][operation] {
+				t.Fatalf("records=%#v, %s缺少%s deadline", records, threadID, operation)
+			}
+		}
+	}
+	for _, record := range records {
+		if record.deadline.After(outerDeadline) {
+			t.Fatalf("%s/%s deadline延后: got=%v outer=%v", record.operation, record.threadID, record.deadline, outerDeadline)
+		}
 	}
 }
 
