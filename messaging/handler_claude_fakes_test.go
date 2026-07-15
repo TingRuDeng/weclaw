@@ -17,6 +17,7 @@ type fakeClaudeSessionAgent struct {
 	useCalls         []string
 	clearCalledWith  string
 	useErr           error
+	useErrors        []error
 	resetErr         error
 	resetClears      bool
 	sessionConfig    agent.ClaudeSessionConfig
@@ -61,6 +62,13 @@ func (f *fakeClaudeSessionAgent) UseClaudeSession(_ context.Context, conversatio
 	f.useConversation = conversationID
 	f.useSessionID = sessionID
 	f.useCalls = append(f.useCalls, sessionID)
+	if len(f.useErrors) > 0 {
+		err := f.useErrors[0]
+		f.useErrors = f.useErrors[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if f.useErr != nil {
 		return f.useErr
 	}

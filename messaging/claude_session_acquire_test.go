@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
@@ -99,7 +100,7 @@ func TestAcquireClaudeSessionStoreFailureRestoresOldRuntime(t *testing.T) {
 	}
 }
 
-func TestAcquireClaudeSessionRuntimeRollbackFailureFailsClosed(t *testing.T) {
+func TestAcquireClaudeSessionInitialUseFailurePreservesRuntimeAndOwner(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	key := claudeBindingKey("user-1", "claude")
 	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
@@ -107,7 +108,29 @@ func TestAcquireClaudeSessionRuntimeRollbackFailureFailsClosed(t *testing.T) {
 	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
 	store.controls["session-a"] = claudeControlIntent{Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1}
 	fake.sessionID = "session-a"
-	fake.useErr = errors.New("runtime unavailable")
+	fake.useErr = errors.New("resume failed before mutation")
+	route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", fake, workspace)
+
+	_, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
+	current, bound := fake.CurrentClaudeSession(conversationID)
+	if err == nil || errors.Is(err, errClaudeSessionAcquireUncertain) || len(fake.useCalls) != 1 {
+		t.Fatalf("error=%v useCalls=%v", err, fake.useCalls)
+	}
+	if !bound || current != "session-a" || store.controlIntent("session-a").Owner != claudeOwnerRemote {
+		t.Fatalf("runtime=(%q,%t) owner=%+v", current, bound, store.controlIntent("session-a"))
+	}
+}
+
+func TestAcquireClaudeSessionRuntimeRollbackFailureFailsClosed(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	store.controls["session-a"] = claudeControlIntent{Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1}
+	store.persist = func(claudeSessionState) error { return errors.New("disk full") }
+	fake.sessionID = "session-a"
+	fake.useErrors = []error{nil, errors.New("runtime unavailable during rollback")}
 	route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", fake, workspace)
 
 	_, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
@@ -116,6 +139,53 @@ func TestAcquireClaudeSessionRuntimeRollbackFailureFailsClosed(t *testing.T) {
 	}
 	if old := store.controlIntent("session-a"); old.Owner == claudeOwnerRemote {
 		t.Fatalf("old=%+v, uncertain runtime must fail closed", old)
+	}
+}
+
+func TestAcquireClaudeSessionEmptyRuntimeStaysEmptyAfterFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		failStore bool
+		failAgent bool
+	}{
+		{name: "store", failStore: true},
+		{name: "agent", failAgent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h, fake, workspace := newClaudeACPNavigationHandler(t)
+			key := claudeBindingKey("user-1", "claude")
+			conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+			store := h.ensureClaudeSessions()
+			store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+			store.controls["session-a"] = claudeControlIntent{Owner: claudeOwnerLocal, Revision: 1}
+			if test.failStore {
+				store.persist = func(claudeSessionState) error { return errors.New("disk full") }
+			}
+			if test.failAgent {
+				statePath := filepath.Join(t.TempDir(), "agent-sessions.json")
+				if err := h.SetAgentSessionFile(statePath); err != nil {
+					t.Fatal(err)
+				}
+				if err := h.ensureAgentSessions().Set("user-1", "codex"); err != nil {
+					t.Fatal(err)
+				}
+				invalidParent := filepath.Join(t.TempDir(), "not-a-directory")
+				if err := os.WriteFile(invalidParent, []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				h.ensureAgentSessions().filePath = filepath.Join(invalidParent, "state.json")
+			}
+			route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", fake, workspace)
+
+			_, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
+			current, bound := fake.CurrentClaudeSession(conversationID)
+			if err == nil || bound || current != "" {
+				t.Fatalf("error=%v runtime=(%q,%t)", err, current, bound)
+			}
+			if old := store.controlIntent("session-a"); old.Owner != claudeOwnerLocal {
+				t.Fatalf("old=%+v, local intent must survive compensation", old)
+			}
+		})
 	}
 }
 
@@ -183,6 +253,38 @@ func TestAcquireClaudeSessionCompensationFailureFailsClosed(t *testing.T) {
 	}
 	if target := store.controlIntent("session-b"); target.Owner == claudeOwnerRemote {
 		t.Fatalf("target=%+v, compensation failure must fail closed", target)
+	}
+}
+
+func TestForceClaudeRemoteFailClosedObeysSaveMuThenMuOrder(t *testing.T) {
+	h, _, workspace := newClaudeACPNavigationHandler(t)
+	store := h.ensureClaudeSessions()
+	key := claudeBindingKey("user-1", "claude")
+	store.controls["session-a"] = claudeControlIntent{Owner: claudeOwnerRemote, BindingKey: key, ConversationID: buildClaudeConversationID("user-1", "claude", workspace), Revision: 1}
+
+	store.saveMu.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		forceClaudeRemoteFailClosedInMemory(store, key)
+		close(done)
+	}()
+	<-started
+	select {
+	case <-done:
+		store.saveMu.Unlock()
+		t.Fatal("in-memory fail-closed bypassed saveMu")
+	case <-time.After(30 * time.Millisecond):
+	}
+	store.saveMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("in-memory fail-closed did not resume after saveMu release")
+	}
+	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerUnclaimed {
+		t.Fatalf("control=%+v", got)
 	}
 }
 
