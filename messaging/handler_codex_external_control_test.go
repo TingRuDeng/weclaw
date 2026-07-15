@@ -42,13 +42,11 @@ func newFeishuExternalProgressFixture(t *testing.T) feishuExternalProgressFixtur
 			close(watchDone)
 		}
 	})
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
-		threadState: agent.CodexThreadState{
-			ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
-		},
-		watchReply: "本地任务完成", watchDone: watchDone,
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
 	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag.watchReply, ag.watchDone = "本地任务完成", watchDone
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
@@ -81,14 +79,13 @@ func TestCodexSwitchShowsAppThreadStateReadError(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
-	h.agents["codex"] = &fakeCodexThreadAgent{
-		fakeAgent:      fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
-		threadStateErr: errors.New("app-server unavailable"),
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{ThreadID: "thread-active"})
+	ag.threadStateErr = errors.New("app-server unavailable")
+	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(169, "/cx cd weclaw"))
-	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "Codex App 当前任务状态读取失败: app-server unavailable") {
+	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "切换并接管 Codex 会话失败: app-server unavailable") {
 		t.Fatalf("切换响应应暴露状态读取失败，messages=%#v", calls.texts())
 	}
 }
@@ -101,10 +98,8 @@ func TestCodexSwitchShowsMissingActiveTurnError(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
-	h.agents["codex"] = &fakeCodexThreadAgent{
-		fakeAgent:   fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
-		threadState: agent.CodexThreadState{ThreadID: "thread-active", Active: true, Preview: "本地 App 发起的任务"},
-	}
+	state := agent.CodexThreadState{ThreadID: "thread-active", Active: true, Preview: "本地 App 发起的任务"}
+	h.agents["codex"] = newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(170, "/cx cd weclaw"))
@@ -124,13 +119,11 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
-		threadState: agent.CodexThreadState{
-			ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
-		},
-		watchDone: make(chan struct{}),
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
 	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag.watchDone = make(chan struct{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)

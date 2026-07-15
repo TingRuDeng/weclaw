@@ -131,7 +131,7 @@ func TestAcquireCodexSessionPersistenceFailureCancelsObserverReservation(t *test
 
 func TestRenderCodexSessionAcquireFailureHidesOtherRouteIdentity(t *testing.T) {
 	err := errors.Join(errCodexRemoteSelectionOtherRoute, errors.New("route-user-secret"))
-	if got := renderCodexSessionAcquireFailure(err); got != "其他远程窗口正在控制，请原窗口先释放。" {
+	if got := renderCodexSessionAcquireFailure(err); got != "其他远程窗口正在控制该会话，请原窗口先释放。" {
 		t.Fatalf("message=%q", got)
 	}
 }

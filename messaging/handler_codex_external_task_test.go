@@ -17,20 +17,12 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	appendLocalCodexTurnContext(t, codexDir, "thread-active", "gpt-5.5", "high")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-		threadState: agent.CodexThreadState{
-			ThreadID:             "thread-active",
-			Active:               true,
-			ActiveTurnID:         "turn-active",
-			WaitingOnUserInput:   true,
-			Preview:              "本地 App 发起的任务",
-			LastAgentMessageText: "",
-		},
-		watchDone: make(chan struct{}),
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active",
+		WaitingOnUserInput: true, Preview: "本地 App 发起的任务",
 	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag.watchDone = make(chan struct{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -71,19 +63,12 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info:  agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-			reply: "不应该新开 turn",
-		},
-		threadState: agent.CodexThreadState{
-			ThreadID:     "thread-active",
-			Active:       true,
-			ActiveTurnID: "turn-active",
-			Preview:      "本地 App 发起的任务",
-		},
-		watchDone: make(chan struct{}),
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true,
+		ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
 	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag.reply, ag.watchDone = "不应该新开 turn", make(chan struct{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -117,19 +102,12 @@ func TestCodexExternalAppTaskSendsFinalReply(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	watchDone := make(chan struct{})
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-		threadState: agent.CodexThreadState{
-			ThreadID:     "thread-active",
-			Active:       true,
-			ActiveTurnID: "turn-active",
-			Preview:      "本地 App 发起的任务",
-		},
-		watchReply: "本地任务完成",
-		watchDone:  watchDone,
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true,
+		ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
 	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag.watchReply, ag.watchDone = "本地任务完成", watchDone
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)

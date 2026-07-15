@@ -106,7 +106,7 @@ func TestCodexSessionCommandSwitchTimeoutDoesNotBlockOwnerPermanently(t *testing
 
 	select {
 	case reply := <-switchResult:
-		if !strings.Contains(reply, "运行位置探测超时") || !strings.Contains(reply, "会话选择已保留") {
+		if !strings.Contains(reply, "前一项会话操作仍在处理") || !strings.Contains(reply, "本次选择未执行") {
 			t.Fatalf("switch reply=%q", reply)
 		}
 	case <-time.After(500 * time.Millisecond):

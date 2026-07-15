@@ -200,13 +200,14 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 // commitCodexSessionAcquire 先预留观察槽，再只提交一次持久化状态。
 func (h *Handler) commitCodexSessionAcquire(commit codexSessionAcquireRuntimeCommit) (codexSessionAcquireResult, error) {
 	opts := externalCodexTaskOptionsFromAcquire(commit.plan.request)
-	// 首次运行时探测已确认 active 时，二次读取的 inactive 是合法终态证据。
-	opts.runtimeInactiveAuthoritative = codexResolutionActive(commit.resolution)
+	// 只有首次 runtime 本身确认 active，二次 inactive 才是合法终态证据。
+	// rollout-only active 表示 Desktop 断联后的共享任务，仍必须启动只读观察。
+	opts.runtimeInactiveAuthoritative = commit.resolution.Binding.State.Active
 	prepared, err := h.prepareExternalCodexTask(opts)
 	if err != nil {
 		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, externalCodexTaskReservation{}, err)
 	}
-	if codexResolutionActive(commit.resolution) &&
+	if commit.resolution.Binding.State.Active &&
 		!prepared.confirmedInactive && (!prepared.active || !prepared.state.Controllable) {
 		err = fmt.Errorf("活动 Desktop 任务尚不能由当前窗口控制")
 		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, externalCodexTaskReservation{}, err)
@@ -246,18 +247,18 @@ func renderCodexSessionAcquireFailure(err error) string {
 	}
 	switch {
 	case errors.Is(err, errCodexRemoteSelectionOtherRoute):
-		return "其他远程窗口正在控制，请原窗口先释放。"
+		return "其他远程窗口正在控制该会话，请原窗口先释放。"
 	case errors.Is(err, errCodexSessionAcquireActiveOld):
-		return "当前远程任务仍在执行，请等待完成或先 /stop。"
+		return "当前远程任务仍在执行，请等待完成或先发送 /stop。"
 	case errors.Is(err, errCodexRemoteSelectionChanged):
-		return "所有权已被并发修改，请重新查询。"
+		return "Codex 会话所有权已被并发修改，请重新查询后重试。"
 	case errors.Is(err, errCodexSessionAcquireUncertain):
-		return "移交结果未确认，当前禁止继续写入。"
+		return "Codex 控制权移交结果未确认，当前禁止继续写入。"
 	case isCodexSessionControlTimeout(err):
-		return "Desktop 运行位置未确认，本次切换未执行。"
+		return "前一项会话操作仍在处理，本次选择未执行。"
 	case errors.Is(err, errCodexSessionAcquireUnsupported):
 		return "当前 Codex Agent 不支持选择即接管。"
 	default:
-		return "Codex 会话接管失败: " + err.Error()
+		return "切换并接管 Codex 会话失败: " + err.Error()
 	}
 }

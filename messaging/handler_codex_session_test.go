@@ -120,11 +120,7 @@ func TestHandleGlobalNewResetsActiveCodexWorkspaceThread(t *testing.T) {
 func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
@@ -134,15 +130,15 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(103, "/cx switch thread-2"))
 
-	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-2" {
-		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-2)", ag.useConversation, ag.useThreadID, wantConversationID)
+	intent := h.codexSessions.controlIntent("thread-2")
+	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
+		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
 	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-2" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-2 false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已切换会话") {
+	if !containsText(calls.texts(), "已切换并接管") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
 	}
 }
@@ -151,11 +147,7 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	currentWorkspace := t.TempDir()
 	targetWorkspace := t.TempDir()
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
@@ -166,9 +158,9 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(106, "/cx switch thread-target"))
 
-	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
-	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-target" {
-		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-target)", ag.useConversation, ag.useThreadID, wantConversationID)
+	intent := h.codexSessions.controlIntent("thread-target")
+	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
+		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
 	}
 	if ag.lastWorkingDir() != targetWorkspace {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), targetWorkspace)
@@ -186,11 +178,7 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	root := t.TempDir()
 	currentWorkspace := filepath.Join(root, "a")
 	targetWorkspace := filepath.Join(root, "b")
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
@@ -203,9 +191,9 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/cx switch 1"))
 
-	wantConversationID := buildCodexConversationID("user-1", "codex", targetWorkspace)
-	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-b" {
-		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-b)", ag.useConversation, ag.useThreadID, wantConversationID)
+	intent := h.codexSessions.controlIntent("thread-b")
+	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
+		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
 	}
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(targetWorkspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(targetWorkspace))

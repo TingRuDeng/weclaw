@@ -69,7 +69,7 @@ type frozenWorkspaceFixture struct {
 	bindingKey string
 }
 
-// newFrozenWorkspaceFixture 创建任务运行期间切换工作空间的测试场景。
+// newFrozenWorkspaceFixture 创建任务运行期间尝试使用非 live Agent 切换的测试场景。
 func newFrozenWorkspaceFixture(t *testing.T) frozenWorkspaceFixture {
 	t.Helper()
 	h := NewHandler(nil, nil)
@@ -102,8 +102,8 @@ func newFrozenWorkspaceFixture(t *testing.T) frozenWorkspaceFixture {
 func assertFrozenWorkspaceState(t *testing.T, fixture frozenWorkspaceFixture) {
 	t.Helper()
 	active, ok := fixture.h.codexSessions.getActiveWorkspace(fixture.bindingKey)
-	if !ok || active != normalizeCodexWorkspaceRoot(fixture.workspaceB) {
-		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(fixture.workspaceB))
+	if !ok || active != normalizeCodexWorkspaceRoot(fixture.workspaceA) {
+		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(fixture.workspaceA))
 	}
 	threadA, pendingA := fixture.h.codexSessions.getThread(fixture.bindingKey, fixture.workspaceA)
 	if threadA != "thread-generated-1" || pendingA {
@@ -115,7 +115,7 @@ func assertFrozenWorkspaceState(t *testing.T, fixture frozenWorkspaceFixture) {
 	}
 }
 
-func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
+func TestCodexBackgroundTaskKeepsWorkspaceWhenSwitchAgentUnsupported(t *testing.T) {
 	fixture := newFrozenWorkspaceFixture(t)
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -136,6 +136,9 @@ func TestCodexBackgroundTaskRecordsFrozenWorkspaceAfterSwitch(t *testing.T) {
 	fixture.agent.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
 	assertFrozenWorkspaceState(t, fixture)
+	if !containsText(calls.texts(), "当前 Codex Agent 不支持选择即接管") {
+		t.Fatalf("非 live Agent 不应改变工作空间，messages=%#v", calls.texts())
+	}
 	if !containsText(calls.texts(), "当前没有可发送的引导对话") {
 		t.Fatalf("/guide should target current B session, messages=%#v", calls.texts())
 	}
