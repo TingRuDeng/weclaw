@@ -102,19 +102,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 
 		// Session expired — reset sync buf and reconnect silently
 		if resp.ErrCode == errCodeSessionExpired {
-			if m.getUpdatesBuf != "" {
-				log.Printf("[monitor] session expired, resetting sync buf")
-				m.getUpdatesBuf = ""
-				m.saveBuf()
-			} else {
-				// Sync buf already empty but still getting session expired:
-				// the bot token itself has expired. The user needs to re-login.
-				log.Printf("[monitor] WARNING: WeChat session expired and cannot be auto-recovered. Run `weclaw wechat login` to re-authenticate.")
-			}
-			backoff := sessionExpiredBackoff
-			if m.getUpdatesBuf == "" {
-				backoff = fatalSessionBackoff
-			}
+			backoff := m.recoverExpiredSession()
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
@@ -133,6 +121,18 @@ func (m *Monitor) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// recoverExpiredSession 根据清空前的游标状态选择恢复退避，并持久化游标重置。
+func (m *Monitor) recoverExpiredSession() time.Duration {
+	if m.getUpdatesBuf == "" {
+		log.Printf("[monitor] WARNING: WeChat session expired and cannot be auto-recovered. Run `weclaw wechat login` to re-authenticate.")
+		return fatalSessionBackoff
+	}
+	log.Printf("[monitor] session expired, resetting sync buf")
+	m.getUpdatesBuf = ""
+	m.saveBuf()
+	return sessionExpiredBackoff
 }
 
 // LastActivity 返回最近一次成功 GetUpdates 的时间，用于外部看门狗判断长轮询是否卡住。

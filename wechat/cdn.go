@@ -132,6 +132,9 @@ func decryptAESECB(ciphertext []byte, key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(ciphertext) == 0 {
+		return nil, fmt.Errorf("ciphertext is empty")
+	}
 	if len(ciphertext)%aes.BlockSize != 0 {
 		return nil, fmt.Errorf("ciphertext is not a multiple of block size")
 	}
@@ -139,12 +142,14 @@ func decryptAESECB(ciphertext []byte, key []byte) ([]byte, error) {
 	for i := 0; i < len(ciphertext); i += aes.BlockSize {
 		block.Decrypt(plaintext[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
 	}
-	if len(plaintext) == 0 {
-		return plaintext, nil
-	}
 	padLen := int(plaintext[len(plaintext)-1])
 	if padLen > aes.BlockSize || padLen == 0 {
 		return nil, fmt.Errorf("invalid PKCS7 padding")
+	}
+	for _, paddingByte := range plaintext[len(plaintext)-padLen:] {
+		if paddingByte != byte(padLen) {
+			return nil, fmt.Errorf("invalid PKCS7 padding")
+		}
 	}
 	return plaintext[:len(plaintext)-padLen], nil
 }

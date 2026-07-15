@@ -32,9 +32,11 @@ setup_case() {
   FAKE_BIN="$CASE_DIR/bin"
   INSTALL_DIR="$CASE_DIR/install"
   CALLS_FILE="$CASE_DIR/calls"
+  DOWNLOADS_FILE="$CASE_DIR/downloads"
   mkdir -p "$FAKE_BIN" "$INSTALL_DIR"
   : >"$CALLS_FILE"
-  export CASE_DIR FAKE_BIN INSTALL_DIR CALLS_FILE
+  : >"$DOWNLOADS_FILE"
+  export CASE_DIR FAKE_BIN INSTALL_DIR CALLS_FILE DOWNLOADS_FILE
   create_base_commands
 }
 
@@ -48,12 +50,23 @@ EOF
 #!/bin/sh
 output=''
 previous=''
+url=''
 for argument do
   [ "$previous" = "-o" ] && output=$argument
   previous=$argument
+  url=$argument
 done
 if [ "$output" = "/dev/null" ]; then
   printf 'https://github.com/test/weclaw/releases/tag/v1.2.3'
+  exit 0
+fi
+printf '%s\n' "$url" >>"$DOWNLOADS_FILE"
+if [ "${url##*/}" = "checksums.txt" ]; then
+  if [ "${FAKE_CHECKSUM_MISSING_ENTRY:-0}" = "1" ]; then
+    printf '%s  %s\n' "${FAKE_EXPECTED_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "unrelated_asset"
+  else
+    printf '%s  %s\n' "${FAKE_EXPECTED_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "weclaw_darwin_arm64"
+  fi >"$output"
   exit 0
 fi
 cat >"$output" <<'SCRIPT'
@@ -62,6 +75,14 @@ printf 'weclaw %s\n' "$*" >>"$CALLS_FILE"
 [ "${FAKE_WECLAW_CONFIG_FAIL:-0}" = "1" ] && exit 23
 exit 0
 SCRIPT
+EOF
+  cat >"$FAKE_BIN/shasum" <<'EOF'
+#!/bin/sh
+[ "${1:-}" = "-a" ] && [ "${2:-}" = "256" ] || exit 64
+shift 2
+for file do
+  printf '%s  %s\n' "${FAKE_ACTUAL_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "$file"
+done
 EOF
   cat >"$FAKE_BIN/xattr" <<'EOF'
 #!/bin/sh
@@ -72,7 +93,7 @@ EOF
 printf 'sudo %s\n' "$*" >>"$CALLS_FILE"
 exit 97
 EOF
-  chmod +x "$FAKE_BIN/uname" "$FAKE_BIN/curl" "$FAKE_BIN/xattr" "$FAKE_BIN/sudo"
+  chmod +x "$FAKE_BIN/uname" "$FAKE_BIN/curl" "$FAKE_BIN/shasum" "$FAKE_BIN/xattr" "$FAKE_BIN/sudo"
 }
 
 add_claude() {
@@ -222,6 +243,33 @@ test_config_failure_keeps_weclaw() {
   finish_case "配置失败保留 WeClaw 并给出修复命令"
 }
 
+test_checksum_success() {
+  setup_case
+  WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -eq 0 ] || fail "摘要匹配时安装失败：$output"
+  [ -x "$INSTALL_DIR/weclaw" ] || fail "摘要匹配时应安装 WeClaw"
+  assert_file_contains "$DOWNLOADS_FILE" "/v1.2.3/checksums.txt"
+  finish_case "校验发布资产 SHA-256"
+}
+test_checksum_mismatch_keeps_existing_binary() {
+  setup_case
+  printf 'existing binary\n' >"$INSTALL_DIR/weclaw"
+  FAKE_EXPECTED_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -ne 0 ] || fail "摘要不匹配时应非零退出"
+  assert_file_contains "$INSTALL_DIR/weclaw" "existing binary"
+  assert_contains "$output" "SHA-256 校验失败"
+  finish_case "摘要不匹配时不替换现有二进制"
+}
+test_checksum_missing_entry_keeps_existing_binary() {
+  setup_case
+  printf 'existing binary\n' >"$INSTALL_DIR/weclaw"
+  FAKE_CHECKSUM_MISSING_ENTRY=1 WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -ne 0 ] || fail "摘要文件缺少资产条目时应非零退出"
+  assert_file_contains "$INSTALL_DIR/weclaw" "existing binary"
+  assert_contains "$output" "未找到唯一的 SHA-256"
+  finish_case "摘要文件缺少资产条目时不替换现有二进制"
+}
 test_release_gate_runs_install_tests() {
   release_calls=$(/bin/bash -c '
     set -e
@@ -245,5 +293,8 @@ test_rejects_invalid_version
 test_install_failure_keeps_weclaw
 test_missing_npm_keeps_weclaw
 test_config_failure_keeps_weclaw
+test_checksum_success
+test_checksum_mismatch_keeps_existing_binary
+test_checksum_missing_entry_keeps_existing_binary
 test_release_gate_runs_install_tests
 printf '安装脚本测试全部通过：%s 个用例\n' "$PASS_COUNT"
