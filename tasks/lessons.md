@@ -478,3 +478,11 @@
 - 反例：根据 Desktop 进程、socket 或旧 owner 缓存自动选择 writer，导致两个进程各自持有不同内存上下文并向同一 rollout 写入。
 - 正确做法：分离持久化控制意图与进程内实际运行时；普通消息不得隐式接管；远程执行使用覆盖探测、刷新、`turn/start` 和终态的写入租约，发现本地双写时进入显式冲突态。
 - 来源：2026-07-14 用户提出在飞书增加明确的所有权移交指令，并确认由使用者主动选择 Desktop 或远程窗口。
+
+## 2026-07-15 WeClaw 测试必须共用持久化 Go 缓存
+
+- 触发条件：在本机运行 WeClaw 的 Go 测试、race 测试或其他会生成 Go 构建缓存的验证命令。
+- 规则：统一复用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw`，不得按任务、测试套件或并行进程创建多个独立缓存目录。
+- 反例：为核心测试、全仓测试、race 和 vet 分别创建 `/tmp/weclaw-*` 缓存；每个目录占用数百 MiB，最终并行耗尽磁盘并产生与代码无关的 `no space left on device` 失败。
+- 正确做法：普通全仓测试使用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw go test ./...`；其他 WeClaw Go 验证也复用同一个 `GOCACHE`，需要隔离时优先串行执行，不通过新增缓存目录隔离。
+- 来源：2026-07-15 最终发布前复验因多套临时 Go 缓存耗尽磁盘；用户明确要求以后所有 WeClaw 测试共用固定缓存。
