@@ -46,8 +46,8 @@ func (h *Handler) routeServicePlatformCommand(ctx context.Context, req platformC
 		replyPlatformCommand(ctx, req, h.handleFeishuIdentityCommand(msg, req.Trimmed))
 	case req.Trimmed == "/status":
 		replyPlatformCommand(ctx, req, h.buildStatusForRoute(msg.UserID, routeUserID, msg.Platform, msg.AccountID))
-	case req.Trimmed == "/help":
-		if h.handleFeishuHelpCommand(ctx, msg, req.Reply, routeUserID) {
+	case req.Trimmed == "/help" || strings.HasPrefix(req.Trimmed, "/help "):
+		if h.handleFeishuHelpCommand(ctx, msg, req.Reply, routeUserID, req.Trimmed) {
 			return true
 		}
 		replyPlatformCommand(ctx, req, buildHelpTextForAdmin(h.isAdminMessage(msg)))

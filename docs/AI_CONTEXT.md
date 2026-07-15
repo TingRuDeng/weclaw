@@ -79,7 +79,7 @@ ai_summary:
 - `/progress` 从飞书入口触发时必须按当前 `account_id` 写入账号级配置，广播、Codex 会话切换和 Codex App 外部任务 watcher 也必须读取账号级进度配置。
 - `/api/send` 在同一平台存在多个可主动发送账号时必须要求 `account_id`，不能静默选择第一个账号。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
-- 飞书推荐菜单以 Codex / Claude 高频命令为主，默认不把 `/cx app`、`/cc cli`、`/cancel` 放到常用菜单；普通计划确认仍回复“确认”，Codex 运行中的暂存消息未被 `/guide`、`/cancel` 或 `/stop` 消费时会在上一任务结束后自动执行。
+- 飞书推荐使用 7.22+ 悬浮菜单，菜单项通过“发送文字消息”触发命令，只保留 `/help`、状态/任务控制、Codex/Claude 列表与新建、模型/推理/确认模式等高频入口；可切换菜单受 3 个主菜单限制时移除“设置”主菜单。`/cx app`、`/cc cli`、`/cancel` 等低频命令由飞书 `/help` 二级分类卡片承载，管理员分类只对管理员显示。普通计划确认仍回复“确认”，Codex 运行中的暂存消息未被 `/guide`、`/cancel` 或 `/stop` 消费时会在上一任务结束后自动执行。
 - 命令入口只保留当前主路径：远程更新使用 `/update`，Codex 会话使用 `/cx ...`，Claude 会话使用 `/cc ...`；不要重新引入 `/info`、`/clear`、`/upgrade`、`/codex ...` 会话入口、`/claude ...` 会话入口、`/cx open-app` 或 `/cx attach app` 这类兼容路由。
 - Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。显式选择的 thread 是权威状态，`messaging/agent_conversation.go:syncCodexThreadFromAgent` 只在 session store 为空且不是 pending new 时回填 ACP 当前 thread。
 - Codex 的选择即接管入口包括 `/cx switch`、会话短编号、仅含一个会话的 `/cx cd`、飞书会话卡片、`/cx new`、默认 Agent 为 Codex 时的全局 `/new`，以及释放后的 `/cx owner remote`；这些入口最终复用 `messaging/codex_session_acquire.go:acquireCodexSessionWithBindingLocked`，新建入口先经过 `messaging/codex_session_new.go:createAndAcquireCodexSessionWithBindingLocked`。

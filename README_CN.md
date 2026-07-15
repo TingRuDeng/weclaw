@@ -201,10 +201,14 @@ Tenant scopes：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonl
 <details>
 <summary>飞书推荐菜单</summary>
 
-- 常用：`/help`、`/status`、`/model`、`/reasoning`、`/cwd`
-- Codex：`/cx ls`、`/cx status`、`/cx owner`、`/cx new`、`/cx quota`
-- Claude：`/cc ls`、`/cc status`、`/cc new`、`/cc pwd`、`/cc model ls`
-- 控制：`/ps`、`/cancel`、`/guide`、`/stop`、`/restart`
+- 常用：`/help`、`/status`、`/ps`、`/stop`
+- Codex：`/cx ls`、`/cx status`、`/cx new`
+- Claude：`/cc ls`、`/cc status`、`/cc new`
+- 设置：`/model`、`/reasoning`、`/mode`
+
+推荐使用飞书 7.22 及以上版本的悬浮菜单，并将每个菜单项的响应动作配置为“发送文字消息”。应用菜单只保留高频入口；`/help` 在飞书中按“常用与任务、Codex、Claude、设置与进度”分级展示其余命令，管理员还会看到独立的“管理员”分类。
+
+悬浮菜单最多支持 5 个主菜单、每个主菜单 10 个子菜单，上述配置可直接使用；如需兼容最多 3 个主菜单、每个主菜单 5 个子菜单的可切换菜单，请移除“设置”主菜单，通过 `/help` 进入设置命令。机器人菜单仅在单聊中展示，群聊仍需直接发送命令。限制与配置步骤见[飞书官方机器人菜单使用指南](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/bot-v3/bot-customized-menu)。
 
 </details>
 

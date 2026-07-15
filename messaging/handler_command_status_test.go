@@ -107,13 +107,10 @@ func TestFeishuHelpSendsChoiceCard(t *testing.T) {
 		t.Fatalf("prompt=%q, want help title", got.Prompt)
 	}
 	wants := map[string]string{
-		"/status":    "运行状态",
-		"/cx ls":     "Codex 工作空间",
-		"/cx status": "Codex 会话状态",
-		"/cx help":   "Codex 高级命令",
-		"/cc help":   "Claude 高级命令",
-		"/mode":      "确认模式",
-		"/stop":      "停止当前任务",
+		"/help common":   "常用与任务",
+		"/help codex":    "Codex",
+		"/help claude":   "Claude",
+		"/help settings": "设置与进度",
 	}
 	if len(got.Choices) != len(wants) {
 		t.Fatalf("choices=%#v, want %d entries", got.Choices, len(wants))
@@ -128,7 +125,7 @@ func TestFeishuHelpSendsChoiceCard(t *testing.T) {
 func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetAdminUsers([]string{"on_admin"})
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	rootReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
@@ -136,24 +133,65 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 		MessageID: "feishu-admin-help-1",
 		Text:      "/help",
 		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
+	}, rootReply)
+
+	if len(rootReply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want one help card", rootReply.Choices)
+	}
+	got := helpChoiceIDs(rootReply.Choices[0].Choices)
+	if !got["/help admin"] {
+		t.Fatalf("admin help choices=%#v, want admin category", rootReply.Choices[0].Choices)
+	}
+	for _, hidden := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list"} {
+		if got[hidden] || strings.Contains(rootReply.Choices[0].Prompt, hidden) {
+			t.Fatalf("admin help root=%#v, should keep commands in admin submenu", rootReply.Choices[0])
+		}
+	}
+
+	adminReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_admin",
+		MessageID: "feishu-admin-help-2",
+		Text:      "/help admin",
+		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
+	}, adminReply)
+	got = helpChoiceIDs(adminReply.Choices[0].Choices)
+	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users"} {
+		if !got[want] {
+			t.Fatalf("admin help choices=%#v, want %q", adminReply.Choices[0].Choices, want)
+		}
+	}
+	if !got["/help"] {
+		t.Fatalf("admin help choices=%#v, want return action", adminReply.Choices[0].Choices)
+	}
+	if !strings.Contains(adminReply.Choices[0].Prompt, "管理员") {
+		t.Fatalf("admin help prompt=%q, want admin title", adminReply.Choices[0].Prompt)
+	}
+}
+
+func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-codex-help-1",
+		Text:      "/help codex",
 	}, reply)
 
 	if len(reply.Choices) != 1 {
-		t.Fatalf("choices=%#v, want one help card", reply.Choices)
+		t.Fatalf("choices=%#v, want one codex help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users"} {
+	for _, want := range []string{"/cx ls", "/cx status", "/cx owner", "/cx cli", "/cx app", "/cx quota", "/cx model ls", "/cx clean", "/cx help", "/help"} {
 		if !got[want] {
-			t.Fatalf("admin help choices=%#v, want %q", reply.Choices[0].Choices, want)
+			t.Fatalf("codex help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
 	}
-	for _, hidden := range []string{"/update", "/restart", "/feishu users approve-code", "/feishu users revoke"} {
-		if strings.Contains(reply.Choices[0].Prompt, hidden) {
-			t.Fatalf("admin help prompt=%q, should keep command list in buttons, not prompt text", reply.Choices[0].Prompt)
-		}
-	}
-	if !strings.Contains(reply.Choices[0].Prompt, "授权和取消授权可从用户管理入口查看说明") {
-		t.Fatalf("admin help prompt=%q, want concise user management hint", reply.Choices[0].Prompt)
+	if !strings.Contains(reply.Choices[0].Prompt, "Codex") {
+		t.Fatalf("codex help prompt=%q, want section title", reply.Choices[0].Prompt)
 	}
 }
 
@@ -178,7 +216,7 @@ func TestHelpHidesAdminCommandsForNonAdmin(t *testing.T) {
 	}, wechatReply)
 
 	got := helpChoiceIDs(feishuReply.Choices[0].Choices)
-	for _, hidden := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list"} {
+	for _, hidden := range []string{"/help admin", "/update", "/restart", "/feishu users pending", "/feishu users list"} {
 		if got[hidden] {
 			t.Fatalf("non-admin feishu help choices=%#v, should hide %q", feishuReply.Choices[0].Choices, hidden)
 		}
@@ -188,6 +226,18 @@ func TestHelpHidesAdminCommandsForNonAdmin(t *testing.T) {
 		if strings.Contains(wechatReply.Texts[0], hidden) {
 			t.Fatalf("non-admin wechat help=%q, should hide %q", wechatReply.Texts[0], hidden)
 		}
+	}
+
+	directAdminReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-user-help-admin-1",
+		Text:      "/help admin",
+		Metadata:  map[string]string{"feishu_union_id": "on_user"},
+	}, directAdminReply)
+	if got := helpChoiceIDs(directAdminReply.Choices[0].Choices); got["/help admin"] || got["/update"] || got["/restart"] {
+		t.Fatalf("non-admin direct admin help=%#v, should fall back to public help root", directAdminReply.Choices[0].Choices)
 	}
 }
 
