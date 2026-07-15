@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -34,18 +33,16 @@ type externalCodexTaskWatch func(context.Context, func(string)) (string, error)
 
 // startExternalCodexTaskIfActive 在切换会话后登记可持续回推的外部任务。
 func (h *Handler) startExternalCodexTaskIfActive(opts externalCodexTaskOptions) (externalCodexTaskState, bool, error) {
-	state, watch, found, err := h.resolveExternalCodexTask(opts)
-	if err != nil || !found {
-		return state, false, err
+	prepared, err := h.prepareExternalCodexTask(opts)
+	if err != nil || !prepared.active {
+		return prepared.state, false, err
 	}
-	if state.ActiveTurnID == "" {
-		return state, false, fmt.Errorf("codex App thread 处于 active 状态，但未找到 active turn")
+	reservation, err := h.reserveExternalCodexTask(opts, prepared)
+	if err != nil {
+		return prepared.state, false, err
 	}
-	if opts.reply == nil {
-		return state, false, fmt.Errorf("codex App thread 正在运行，但当前入口无法接管回推")
-	}
-	h.startExternalCodexTaskWatcher(opts, state, watch)
-	return state, true, nil
+	h.activateExternalCodexTaskReservation(reservation)
+	return prepared.state, true, nil
 }
 
 // resolveExternalCodexTask 优先使用可控制的 app-server，跨进程时改读共享 rollout。
@@ -105,7 +102,7 @@ func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
 		lines = append(lines, "当前进展: "+previewPendingCodexMessage(state.Progress))
 	}
 	if state.Controllable {
-		lines = append(lines, "新消息会先暂存；回复 /guide 发送到当前任务，回复 /cancel 撤回。")
+		lines = append(lines, "新消息会先暂存；回复 /guide 发送到当前任务，回复 /stop 停止任务，回复 /cancel 撤回暂存。")
 	} else {
 		lines = append(lines, "任务完成后结果会自动返回当前会话。")
 	}
@@ -118,29 +115,6 @@ func renderExternalCodexStateReadError(err error) []string {
 		return nil
 	}
 	return []string{"Codex App 当前任务状态读取失败: " + err.Error()}
-}
-
-// startExternalCodexTaskWatcher 登记任务镜像并启动异步进度与终态回推。
-func (h *Handler) startExternalCodexTaskWatcher(opts externalCodexTaskOptions, state externalCodexTaskState, watch externalCodexTaskWatch) {
-	taskCtx := h.withAgentInteractions(context.Background(), agentInteractionContextOptions{
-		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID, reply: opts.reply,
-	})
-	runtimeOwner, ownerRevision := externalCodexTaskOwner(state)
-	task, watchCtx, started := h.beginActiveTask(taskCtx, opts.conversationID, activeTaskMeta{
-		owner: opts.actorUserID, agentName: opts.agentName,
-		message:      firstNonBlank(state.Preview, "Codex App 本地任务"),
-		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
-		codexThreadID: opts.threadID, codexTurnID: state.ActiveTurnID,
-	})
-	if !started {
-		return
-	}
-	if state.Progress != "" {
-		task.recordProgress(time.Now(), state.Progress)
-	}
-	go h.runExternalCodexTaskWatcher(externalCodexTaskRuntime{
-		opts: opts, state: state, watch: watch, task: task, ctx: watchCtx,
-	})
 }
 
 func externalCodexTaskOwner(state externalCodexTaskState) (agent.CodexRuntimeHolder, uint64) {
