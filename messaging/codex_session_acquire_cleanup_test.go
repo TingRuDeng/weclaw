@@ -148,6 +148,45 @@ func TestRollbackCompensationsShareOneCleanupDeadline(t *testing.T) {
 	assertSharedCleanupDeadline(t, records)
 }
 
+func TestCompensationExpiredCleanupDeadlineIsNeverRenewed(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	sharedCleanup, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	sharedDeadline, _ := sharedCleanup.Deadline()
+	records := make([]recordedRuntimeContext, 0, 4)
+	fixture.agent.recordRuntimeContext = func(operation string, ctx context.Context, req agent.CodexRuntimeRequest) {
+		deadline, ok := ctx.Deadline()
+		if ok {
+			records = append(records, recordedRuntimeContext{operation: operation, threadID: req.Ref.ThreadID, deadline: deadline})
+		}
+	}
+	fixture.agent.rejectCanceledContext = true
+	fixture.agent.handoffReleases["thread-a"] = make(chan struct{})
+	change := codexRuntimeIntentChange{
+		threadID: "thread-a", route: fixture.request("thread-a").route,
+		before: codexControlIntent{Owner: codexControlDesktop, Revision: 1},
+		after: codexControlIntent{
+			Owner: codexControlRemote, RouteBindingKey: fixture.bindingKey,
+			ConversationID: fixture.request("thread-a").route.conversationID, Revision: 2,
+		},
+	}
+	if err := fixture.h.compensateCodexRuntimeChanges(sharedCleanup, fixture.agent, []codexRuntimeIntentChange{change}); err == nil {
+		t.Fatal("已到期共享 cleanup 的补偿应失败并进入 conflict")
+	}
+	seen := make(map[string]bool)
+	for _, record := range records {
+		seen[record.operation] = true
+		if record.deadline.After(sharedDeadline) {
+			t.Fatalf("%s deadline被续期: got=%v shared=%v", record.operation, record.deadline, sharedDeadline)
+		}
+	}
+	for _, operation := range []string{"handoff", "inspect", "mark"} {
+		if !seen[operation] {
+			t.Fatalf("records=%#v, 缺少%s deadline", records, operation)
+		}
+	}
+}
+
 func assertSharedCleanupDeadline(t *testing.T, records []recordedRuntimeContext) {
 	t.Helper()
 	var outerDeadline time.Time

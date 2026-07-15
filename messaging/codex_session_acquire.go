@@ -50,6 +50,7 @@ type codexRuntimeIntentChange struct {
 // codexRuntimeHandoffRequest 描述一次副作用调用及失败后的权威校准意图。
 type codexRuntimeHandoffRequest struct {
 	ctx          context.Context
+	resyncCtx    context.Context
 	liveAgent    agent.CodexLiveRuntimeAgent
 	change       codexRuntimeIntentChange
 	resyncIntent codexControlIntent

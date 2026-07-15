@@ -88,7 +88,7 @@ func proposedCodexRemoteSelectionIntent(current codexControlIntent, route codexC
 	}
 }
 
-// handoffCodexRuntimeIntent 最多调用一次副作用；超时后仅用持久化意图校准。
+// handoffCodexRuntimeIntent 最多调用一次副作用；失败后仅用持久化意图和明确预算校准。
 func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (codexRuntimeResolution, error) {
 	request, rollout, err := h.buildCodexRuntimeRequest(req.change.route, req.change.threadID)
 	if err != nil {
@@ -104,11 +104,15 @@ func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (cod
 		return resolution, nil
 	}
 	request.Intent = agentControlIntent(req.resyncIntent)
-	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(req.ctx)
+	resyncCtx := req.resyncCtx
+	cancel := func() {}
+	if resyncCtx == nil {
+		resyncCtx, cancel = newCodexSessionAcquireCleanupContext(req.ctx)
+	}
 	defer cancel()
-	_, inspectErr := req.liveAgent.InspectCodexRuntime(cleanupCtx, request)
+	_, inspectErr := req.liveAgent.InspectCodexRuntime(resyncCtx, request)
 	if inspectErr != nil {
-		markErr := req.liveAgent.MarkCodexRuntimeConflict(cleanupCtx, request)
+		markErr := req.liveAgent.MarkCodexRuntimeConflict(resyncCtx, request)
 		return resolution, errors.Join(errCodexSessionAcquireUncertain, handoffErr, inspectErr, markErr)
 	}
 	return resolution, handoffErr
@@ -124,7 +128,7 @@ func (h *Handler) compensateCodexRuntimeChanges(ctx context.Context, liveAgent a
 			before: change.after, after: change.before,
 		}
 		_, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
-			ctx: ctx, liveAgent: liveAgent,
+			ctx: ctx, resyncCtx: ctx, liveAgent: liveAgent,
 			change: reverse, resyncIntent: reverse.after,
 		})
 		if err != nil {
@@ -146,7 +150,7 @@ func (h *Handler) markCodexRuntimeConflict(req codexRuntimeConflictRequest) erro
 	return req.liveAgent.MarkCodexRuntimeConflict(req.ctx, request)
 }
 
-// newCodexSessionAcquireCleanupContext 仅为已取消调用脱离信号；有效 cleanup 继续继承绝对期限。
+// newCodexSessionAcquireCleanupContext 为首次清理脱离已取消用户调用，并设置有限预算。
 func newCodexSessionAcquireCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	parent := normalizeContext(ctx)
 	if parent.Err() != nil {
