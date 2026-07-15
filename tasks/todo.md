@@ -11,7 +11,7 @@
 - [x] P1 串行：完成并确认“单窗口单所有权、其他窗口不可抢占”设计。
 - [x] P2 串行：补全当前默认 Agent 为 Codex 时的全局 `/new` 入口并形成文件级实施计划。
 - [x] P3 串行（5/5）：Task 1–5 已完成并通过独立审查，原子状态、锁、观察屏障与统一 saga 已闭合。
-- [ ] P4 串行：Task 6–8，接入 switch、短编号、`/cx cd`、两个 new 入口和 owner/消息门禁。
+- [ ] P4 串行（1/3）：Task 6 已完成；继续 Task 7–8，接入两个 new 入口和 owner/消息门禁。
 - [ ] P5 串行：Task 9，补齐平台、路由、并发与重启行为矩阵。
 - [ ] P6 串行：Task 10，同步公开语义，执行全量测试、race、vet、文档门禁和 Review Gate。
 
@@ -24,8 +24,8 @@
 ## 当前状态
 
 用户已通过 HARD-GATE 并选择 Subagent-Driven 执行；全仓基线测试已通过，
-当前 Task 1–5 已完成并通过任务级审查；Task 5 最终提交链为 `34107a1`、
-`00a6f81`、`46c9ee5`、`b60a064`、`32954c6`，正按严格 TDD 进入 Task 6。
+当前 Task 1–6 已完成并通过任务级审查；Task 6 最终提交为 `bf63a88`、
+`86c03b7`，正按严格 TDD 进入 Task 7。
 
 ## Review 小结
 
@@ -37,4 +37,5 @@
 - Task 3 已实现共享等待预算下的多 thread 去重排序、逆序释放与幂等解锁，并补齐确定性 ABBA 回归测试。
 - Task 4 已实现外部活动任务 prepare/reserve/activate/cancel 成功屏障、reserved 控制隔离与本进程任务兼容排队。
 - Task 5 已实现统一选择接管 saga、持续 conflict/fail-closed、全错误单次校准与共享 cleanup 预算。
+- Task 6 已让 switch、短编号、`/cx cd` 与飞书卡片共用统一事务，并保留 rollout-only 只读观察与控制边界。
 - 已执行 Task 1 定向 RED/GREEN 与 `messaging` 全包回归；全仓 race、vet 和文档门禁仍按 Task 10 统一验收。
