@@ -38,29 +38,40 @@ type codexSwitchTargetRequest struct {
 }
 
 type codexNewRequest struct {
-	ctx             context.Context
-	userID          string
-	agentName       string
-	workspaceRoot   string
-	agent           agent.Agent
-	ownerBindingKey string
+	ctx           context.Context
+	taskContext   context.Context
+	actorUserID   string
+	userID        string
+	agentName     string
+	workspaceRoot string
+	agent         agent.Agent
+	platform      platform.PlatformName
+	accountID     string
+	reply         platform.Replier
 }
 
-// handleCodexNewForRoute 立即创建 route session 的 thread，避免依赖下一条普通消息隐式创建。
+// handleCodexNewForRoute 创建 thread 后立即进入统一接管事务。
 func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
 	conversationID := buildCodexConversationID(req.userID, req.agentName, req.workspaceRoot)
-	h.bindConversationCwd(req.agent, conversationID, req.workspaceRoot)
-	threadID, err := req.agent.ResetSession(req.ctx, conversationID)
-	if err != nil {
-		return fmt.Sprintf("创建新的 Codex 会话失败: %v", err)
-	}
 	bindingKey := codexBindingKey(req.userID, req.agentName)
-	h.recordResetCodexThread(req.userID, req.agentName, req.workspaceRoot, threadID)
-	h.setCodexActiveWorkspaceForRoute(bindingKey, req.ownerBindingKey, req.workspaceRoot)
-	if err := h.ensureAgentSessions().Set(req.userID, req.agentName); err != nil {
-		return fmt.Sprintf("创建新的 Codex 会话失败: 保存当前窗口 Agent: %v", err)
+	result, err := h.createAndAcquireCodexSessionWithBindingLocked(codexSessionCreateRequest{
+		acquire: codexSessionAcquireRequest{
+			ctx: req.ctx, taskContext: req.taskContext,
+			actorUserID: firstNonBlank(req.actorUserID, req.userID),
+			routeUserID: req.userID, agentName: req.agentName, agent: req.agent,
+			route: codexConversationRoute{
+				bindingKey: bindingKey, workspaceRoot: req.workspaceRoot,
+				conversationID: conversationID,
+			},
+			platform: req.platform, accountID: req.accountID, reply: req.reply,
+		},
+	})
+	if err != nil {
+		return renderCodexSessionCreateFailure(result, err)
 	}
-	return wechatCommandText("已创建新的"+req.agentName+"会话", threadID)
+	return h.renderCodexSessionAcquireResult(
+		result.acquireResult, "已创建并接管。", shortCodexWorkspaceName(req.workspaceRoot),
+	)
 }
 
 func (h *Handler) handleCodexSwitchForRouteWithOptions(req codexSwitchRequest) string {

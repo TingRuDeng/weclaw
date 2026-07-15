@@ -32,6 +32,7 @@ type defaultSessionResetRequest struct {
 	routeUserID string
 	platform    platform.PlatformName
 	accountID   string
+	reply       platform.Replier
 }
 
 type claudeDefaultSessionResetRequest struct {
@@ -55,7 +56,10 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 		return "No agent running."
 	}
 	if isCodexAgent(name, ag.Info()) {
-		return h.resetDefaultCodexSessionForRoute(ctx, actorUserID, routeUserID, name, ag)
+		return h.resetDefaultCodexSessionForRoute(ctx, defaultCodexSessionCreateRequest{
+			actorUserID: actorUserID, routeUserID: routeUserID, agentName: name,
+			agent: ag, platform: req.platform, accountID: req.accountID, reply: req.reply,
+		})
 	}
 	if isClaudeAgent(name, ag.Info()) {
 		return h.resetDefaultClaudeSession(claudeDefaultSessionResetRequest{
@@ -73,35 +77,30 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 	return fmt.Sprintf("已创建新的%s会话", name)
 }
 
-// resetDefaultCodexSessionForRoute 按 route 当前工作空间创建新的 Codex thread。
-func (h *Handler) resetDefaultCodexSessionForRoute(ctx context.Context, actorUserID string, routeUserID string, name string, ag agent.Agent) string {
-	bindingKey := codexBindingKey(routeUserID, name)
-	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
-	defer unlockBinding()
-	workspaceRoot := h.codexWorkspaceRootForRoute(actorUserID, routeUserID, name, ag)
-	conversationID := buildCodexConversationID(routeUserID, name, workspaceRoot)
-	h.bindConversationCwd(ag, conversationID, workspaceRoot)
-	sessionID, err := ag.ResetSession(ctx, conversationID)
-	if err != nil {
-		log.Printf("[handler] reset codex session failed for %s: %v", conversationID, err)
-		return fmt.Sprintf("Failed to reset session: %v", err)
-	}
-	h.recordResetCodexThread(routeUserID, name, workspaceRoot, sessionID)
-	if sessionID != "" {
-		return wechatCommandText(fmt.Sprintf("已创建新的%s会话", name), sessionID)
-	}
-	return fmt.Sprintf("已创建新的%s会话", name)
+type defaultCodexSessionCreateRequest struct {
+	actorUserID string
+	routeUserID string
+	agentName   string
+	agent       agent.Agent
+	platform    platform.PlatformName
+	accountID   string
+	reply       platform.Replier
 }
 
-// recordResetCodexThread 同步 /new 后的新 thread，避免下一条消息恢复旧工作空间 thread。
-func (h *Handler) recordResetCodexThread(userID string, agentName string, workspaceRoot string, threadID string) {
-	bindingKey := codexBindingKey(userID, agentName)
-	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceRoot)
-	if strings.TrimSpace(threadID) == "" {
-		h.ensureCodexSessions().setPendingNew(bindingKey, workspaceRoot)
-		return
-	}
-	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
+// resetDefaultCodexSessionForRoute 按 route 当前工作空间创建并接管新的 Codex thread。
+func (h *Handler) resetDefaultCodexSessionForRoute(ctx context.Context, req defaultCodexSessionCreateRequest) string {
+	bindingKey := codexBindingKey(req.routeUserID, req.agentName)
+	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
+	defer unlockBinding()
+	workspaceRoot := h.codexWorkspaceRootForRoute(
+		req.actorUserID, req.routeUserID, req.agentName, req.agent,
+	)
+	return h.handleCodexNewForRoute(codexNewRequest{
+		ctx: ctx, taskContext: normalizeContext(ctx), actorUserID: req.actorUserID,
+		userID: req.routeUserID, agentName: req.agentName,
+		workspaceRoot: workspaceRoot, agent: req.agent,
+		platform: req.platform, accountID: req.accountID, reply: req.reply,
+	})
 }
 
 // resetDefaultClaudeSession 使用当前工作空间创建并绑定新的 Claude ACP session。

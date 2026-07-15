@@ -49,20 +49,23 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	}
 }
 
-func TestHandleCodexNewCommandImmediatelyCreatesWorkspaceThread(t *testing.T) {
+func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-			resetSessionID: "thread-new",
-		},
-		threadID: "thread-old",
-	}
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag.resetSessionID = "thread-new"
+	ag.fakeCodexThreadAgent.threadID = "thread-old"
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-old")
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
+	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
+		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
+		workspace: workspace, threadID: "thread-old",
+	})
+	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
+	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop})
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -70,49 +73,61 @@ func TestHandleCodexNewCommandImmediatelyCreatesWorkspaceThread(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(102, "/cx new"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.resetConversationID() != wantConversationID {
-		t.Fatalf("reset conversationID=%q, want %q", ag.resetConversationID(), wantConversationID)
+	_, resetConversation := ag.resetSnapshot()
+	if resetConversation != wantConversationID {
+		t.Fatalf("reset conversationID=%q, want %q", resetConversation, wantConversationID)
 	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-new" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已创建新的codex会话") {
+	if h.codexSessions.controlIntent("thread-new").Owner != codexControlRemote ||
+		h.codexSessions.controlIntent("thread-old").Owner != codexControlDesktop {
+		t.Fatalf("新旧所有权不正确: old=%#v new=%#v", h.codexSessions.controlIntent("thread-old"), h.codexSessions.controlIntent("thread-new"))
+	}
+	if !containsText(calls.texts(), "已创建并接管") {
 		t.Fatalf("reply should mention new session, messages=%#v", calls.texts())
 	}
 }
 
-func TestHandleGlobalNewResetsActiveCodexWorkspaceThread(t *testing.T) {
+func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info:           agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-			resetSessionID: "thread-new",
-		},
-		threadID: "thread-old",
-	}
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag.resetSessionID = "thread-new"
+	ag.fakeCodexThreadAgent.threadID = "thread-old"
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
 	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
+	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
+		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
+		workspace: workspace, threadID: "thread-old",
+	})
+	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
+	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop})
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(123, "/new"))
 
 	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.resetConversationID() != wantConversationID {
-		t.Fatalf("reset conversation=%q, want %q", ag.resetConversationID(), wantConversationID)
+	_, resetConversation := ag.resetSnapshot()
+	if resetConversation != wantConversationID {
+		t.Fatalf("reset conversation=%q, want %q", resetConversation, wantConversationID)
 	}
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
 	if thread != "thread-new" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已创建新的codex会话") || strings.Contains(text, "/Users/") {
+	if h.codexSessions.controlIntent("thread-new").Owner != codexControlRemote ||
+		h.codexSessions.controlIntent("thread-old").Owner != codexControlDesktop {
+		t.Fatalf("全局 /new 未原子接管: old=%#v new=%#v", h.codexSessions.controlIntent("thread-old"), h.codexSessions.controlIntent("thread-new"))
+	}
+	if !strings.Contains(text, "已创建并接管") || strings.Contains(text, "/Users/") {
 		t.Fatalf("reply should use default agent name, messages=%#v", calls.texts())
 	}
 }

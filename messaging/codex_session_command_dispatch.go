@@ -163,8 +163,12 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 		return textNavigationResult(h.handleCodexModelCommand(runtime.ctx, runtime.agent, fields[2:]))
 	case "new":
 		return textNavigationResult(h.handleCodexNewForRoute(codexNewRequest{
-			ctx: runtime.ctx, userID: runtime.routeUserID, agentName: runtime.agentName,
-			workspaceRoot: runtime.workspaceRoot, agent: runtime.agent, ownerBindingKey: runtime.ownerBindingKey,
+			ctx: runtime.ctx, taskContext: runtime.externalTaskCtx,
+			actorUserID: runtime.actorUserID, userID: runtime.routeUserID,
+			agentName: runtime.agentName, workspaceRoot: runtime.workspaceRoot,
+			agent:    runtime.agent,
+			platform: runtime.req.Platform, accountID: runtime.req.AccountID,
+			reply: runtime.req.Reply,
 		}))
 	case "switch":
 		return h.dispatchCodexSwitchCommand(runtime)

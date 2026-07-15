@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -22,6 +23,25 @@ func TestFeishuClaudeNewBindsWindowToClaude(t *testing.T) {
 
 	if selected, ok := h.ensureAgentSessions().Get(sessionKey); !ok || selected != "claude" {
 		t.Fatalf("窗口 Agent=(%q,%t)，期望新建 Claude 会话后绑定 claude", selected, ok)
+	}
+}
+
+func TestHandleGlobalNewKeepsClaudeResetBehavior(t *testing.T) {
+	h, codex, claude, sessionKey := newClaudeBindingHandler(t)
+	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
+		MessageID: "global-new-claude", Text: "/new",
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}, platformtest.NewReplier(platform.Capabilities{Text: true}))
+
+	if got := claude.resetConversationID(); !strings.Contains(got, sessionKey) {
+		t.Fatalf("Claude reset conversation=%q，期望包含 route %q", got, sessionKey)
+	}
+	if got := codex.resetConversationID(); got != "" {
+		t.Fatalf("Codex 不应被重置，实际 conversation=%q", got)
 	}
 }
 
@@ -93,16 +113,16 @@ func TestCodexSessionSwitchBindsWindowToCodex(t *testing.T) {
 
 func TestCodexSessionNewBindsWindowToCodex(t *testing.T) {
 	workspace := t.TempDir()
-	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
-		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}, resetSessionID: "thread-new",
-	}}
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag.resetSessionID = "thread-new"
 	h := NewHandler(nil, nil)
 	if err := h.ensureAgentSessions().Set("user-1", "claude"); err != nil {
 		t.Fatalf("设置初始窗口 Agent 失败：%v", err)
 	}
 
 	h.handleCodexNewForRoute(codexNewRequest{
-		ctx: context.Background(), userID: "user-1", agentName: "codex", workspaceRoot: workspace, agent: ag,
+		ctx: context.Background(), actorUserID: "user-1", userID: "user-1",
+		agentName: "codex", workspaceRoot: workspace, agent: ag,
 	})
 
 	if selected, ok := h.ensureAgentSessions().Get("user-1"); !ok || selected != "codex" {
