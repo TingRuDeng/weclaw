@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -82,7 +83,8 @@ func (h *Handler) renderCodexOwnerStatus(runtime codexSessionCommandRuntime, thr
 		if isCodexThreadStoreReadError(err) {
 			return cardNavigationResult("查询 Codex 控制权失败: 该会话暂时无法读取。")
 		}
-		return cardNavigationResult(fmt.Sprintf("查询 Codex 控制权失败: %v", err))
+		log.Printf("[codex-owner] 控制权查询失败 thread=%q: %v", threadID, err)
+		return cardNavigationResult("查询 Codex 控制权失败，请重试。")
 	}
 	return cardNavigationResult(renderCodexOwnerStatusText(runtime, resolution))
 }
@@ -150,7 +152,8 @@ func (h *Handler) compensateCodexOwnerRelease(compensation codexOwnerReleaseComp
 	if err := h.compensateCodexRuntimeChanges(cleanupCtx, compensation.liveAgent, changes); err != nil {
 		return renderCodexOwnerReleaseFailure(errors.Join(errCodexSessionAcquireUncertain, compensation.cause, err))
 	}
-	return fmt.Sprintf("Codex 控制权提交失败: %v", compensation.cause)
+	log.Printf("[codex-owner] 控制权提交失败 thread=%q: %v", compensation.change.threadID, compensation.cause)
+	return "Codex 控制权提交失败，本次释放未生效。"
 }
 
 // renderCodexOwnerReleaseFailure 区分已校准失败与无法确认的 fail-closed 状态。
@@ -161,7 +164,8 @@ func renderCodexOwnerReleaseFailure(err error) string {
 	if isCodexSessionControlTimeout(err) {
 		return "Codex 控制权移交超时，已按当前控制意图重新校准；请重试。"
 	}
-	return fmt.Sprintf("Codex 控制权移交失败: %v", err)
+	log.Printf("[codex-owner] 控制权移交失败: %v", err)
+	return "Codex 控制权移交失败，请重试。"
 }
 
 // activeCodexTaskConversation 返回同一 thread 当前登记的任务窗口。
@@ -202,12 +206,26 @@ func renderCodexOwnerStatusText(runtime codexSessionCommandRuntime, resolution c
 		lines = append(lines, "任务: 空闲")
 	}
 	if reason := strings.TrimSpace(resolution.Binding.ConflictReason); reason != "" {
-		lines = append(lines, "冲突: "+reason)
+		log.Printf("[codex-owner] 运行时冲突 thread=%q: %s", resolution.Request.Ref.ThreadID, reason)
+		lines = append(lines, "冲突: 运行时写入冲突")
 	}
 	if resolution.ProbeErr != nil {
-		lines = append(lines, "探测: "+resolution.ProbeErr.Error())
+		lines = append(lines, "探测: "+renderCodexOwnerProbeFailure(resolution.ProbeErr))
 	}
 	return wechatCommandText(lines...)
+}
+
+// renderCodexOwnerProbeFailure 只展示稳定分类，底层错误仅写内部日志。
+func renderCodexOwnerProbeFailure(err error) string {
+	log.Printf("[codex-owner] 运行位置探测异常: %v", err)
+	switch {
+	case errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown):
+		return "Desktop 控制权未确认"
+	case errors.Is(err, agent.ErrCodexRuntimeConflict):
+		return "运行时写入冲突"
+	default:
+		return "运行位置探测异常"
+	}
 }
 
 // renderCodexControlOwnerForRoute 区分当前远程窗口和其他远程窗口。

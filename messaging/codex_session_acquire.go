@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -259,6 +260,7 @@ func renderCodexSessionAcquireFailure(err error) string {
 	case errors.Is(err, errCodexSessionAcquireUnsupported):
 		return "当前 Codex Agent 不支持选择即接管。"
 	default:
-		return "切换并接管 Codex 会话失败: " + err.Error()
+		log.Printf("[codex-session-acquire] 切换并接管失败: %v", err)
+		return "切换并接管 Codex 会话失败，请重试。"
 	}
 }

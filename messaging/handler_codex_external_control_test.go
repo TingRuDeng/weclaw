@@ -71,7 +71,7 @@ func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
 	}
 }
 
-func TestCodexSwitchShowsAppThreadStateReadError(t *testing.T) {
+func TestCodexSwitchHidesAppThreadStateReadError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -85,12 +85,12 @@ func TestCodexSwitchShowsAppThreadStateReadError(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(169, "/cx cd weclaw"))
-	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "切换并接管 Codex 会话失败: app-server unavailable") {
-		t.Fatalf("切换响应应暴露状态读取失败，messages=%#v", calls.texts())
+	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "切换并接管 Codex 会话失败，请重试") || strings.Contains(text, "app-server unavailable") {
+		t.Fatalf("切换响应不得暴露状态读取失败，messages=%#v", calls.texts())
 	}
 }
 
-func TestCodexSwitchShowsMissingActiveTurnError(t *testing.T) {
+func TestCodexSwitchHidesMissingActiveTurnError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -107,8 +107,8 @@ func TestCodexSwitchShowsMissingActiveTurnError(t *testing.T) {
 	if _, ok := h.activeTask(key); ok {
 		t.Fatal("缺少 active turn 时不应登记外部任务镜像")
 	}
-	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "未找到 active turn") {
-		t.Fatalf("切换响应应提示无法接管 active thread，messages=%#v", calls.texts())
+	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "切换并接管 Codex 会话失败，请重试") || strings.Contains(text, "active turn") {
+		t.Fatalf("切换响应不得暴露 active turn 细节，messages=%#v", calls.texts())
 	}
 }
 

@@ -160,6 +160,7 @@ func TestCodexReselectAfterDesktopReleaseAcquiresAgain(t *testing.T) {
 
 func TestCodexOwnerDesktopTimeoutInspectsOnceWithoutRetryingHandoff(t *testing.T) {
 	h, ag, runtime := codexRemoteOwnerCommandFixture(t)
+	wantBinding := ag.threadBinding("thread-1")
 	ag.handoffRelease = make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -176,6 +177,11 @@ func TestCodexOwnerDesktopTimeoutInspectsOnceWithoutRetryingHandoff(t *testing.T
 	}
 	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlRemote {
 		t.Fatalf("intent=%#v", intent)
+	}
+	if binding := ag.threadBinding("thread-1"); binding.Runtime != wantBinding.Runtime ||
+		binding.Control != wantBinding.Control || binding.State != wantBinding.State ||
+		binding.Control.Owner != agent.CodexControlRemote {
+		t.Fatalf("binding=%#v want=%#v", binding, wantBinding)
 	}
 }
 
@@ -244,7 +250,7 @@ func codexRemoteOwnerCommandFixture(t *testing.T) (*Handler, *fakeCodexLiveAgent
 	h, ag, runtime := codexOwnerCommandFixture(t)
 	route := runtime.codexRoute("thread-1")
 	current := h.codexSessions.controlIntent("thread-1")
-	_, err := h.codexSessions.updateControlIntent(codexControlIntentUpdate{
+	committed, err := h.codexSessions.updateControlIntent(codexControlIntentUpdate{
 		ThreadID: "thread-1", Owner: codexControlRemote,
 		RouteBindingKey: runtime.bindingKey, ConversationID: route.conversationID,
 		ExpectedRevision: current.Revision,
@@ -254,7 +260,7 @@ func codexRemoteOwnerCommandFixture(t *testing.T) (*Handler, *fakeCodexLiveAgent
 	}
 	ag.setThreadBinding("thread-1", agent.CodexThreadBinding{
 		Runtime: agent.CodexRuntimeDesktop,
-		State:   agent.CodexThreadState{ThreadID: "thread-1"},
+		Control: agentControlIntent(committed), State: agent.CodexThreadState{ThreadID: "thread-1"},
 	})
 	return h, ag, runtime
 }
