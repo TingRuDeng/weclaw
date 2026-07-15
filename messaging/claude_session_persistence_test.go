@@ -1,14 +1,61 @@
 package messaging
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
-	"time"
 )
+
+func TestClaudeSessionStoreFailsClosedNormalizedSessionKeyCollision(t *testing.T) {
+	controls := map[string]claudeControlIntent{
+		"session-a":   {Owner: claudeOwnerLocal, Revision: 3, UpdatedAt: "2026-07-15T01:00:00Z"},
+		" session-a ": {Owner: claudeOwnerLocal, Revision: 9, UpdatedAt: "2026-07-15T02:00:00Z"},
+	}
+	for i := 0; i < 20; i++ {
+		got := normalizeClaudeControls(controls)["session-a"]
+		if got.Owner != claudeOwnerUnclaimed || got.Revision != 9 || got.UpdatedAt != "2026-07-15T02:00:00Z" {
+			t.Fatalf("iteration=%d intent=%+v, want stable fail-closed collision", i, got)
+		}
+	}
+}
+
+func TestClaudeSessionStoreLogsSanitizedControlDiagnostics(t *testing.T) {
+	workspace := t.TempDir()
+	key := claudeBindingKey("secret-route", "claude")
+	oldOutput := log.Writer()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(oldOutput)
+
+	controls := map[string]claudeControlIntent{
+		"   ":              {Owner: claudeOwnerLocal, Revision: 1},
+		"collision":        {Owner: claudeOwnerLocal, Revision: 2},
+		" collision ":      {Owner: claudeOwnerLocal, Revision: 3},
+		"invalid-control":  {Owner: claudeControlOwner("invalid"), Revision: 4},
+		"secret-session-a": {Owner: claudeOwnerRemote, BindingKey: key, ConversationID: "wrong", Revision: 5},
+	}
+	normalizeClaudeControlsForBindings(map[string]claudeSessionBinding{
+		key: newClaudeBinding(workspace, "secret-session-a", claudeBindingReady),
+	}, controls)
+
+	got := logs.String()
+	for _, reason := range []string{"blank_session_key", "session_key_collision", "invalid_control", "binding_mismatch"} {
+		if !strings.Contains(got, "reason="+reason) {
+			t.Fatalf("logs=%q, missing reason=%s", got, reason)
+		}
+	}
+	for _, secret := range []string{"secret-route", "secret-session-a", workspace} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("diagnostic leaked sensitive value %q: %q", secret, got)
+		}
+	}
+}
 
 func TestClaudeSessionStoreFailsClosedContradictoryV3Controls(t *testing.T) {
 	workspace := t.TempDir()
@@ -118,15 +165,18 @@ func TestClaudeSessionStorePreservesConsistentV3RemoteControl(t *testing.T) {
 func TestClaudeSessionStoreLoadSerializesWithSave(t *testing.T) {
 	store := newClaudeSessionStore()
 	store.saveMu.Lock()
+	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
+		close(started)
 		done <- store.load()
 	}()
+	<-started
 	select {
 	case err := <-done:
 		store.saveMu.Unlock()
 		t.Fatalf("load bypassed saveMu: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	store.saveMu.Unlock()
 	if err := <-done; err != nil {
@@ -139,15 +189,18 @@ func TestHandlerSetClaudeSessionFileSerializesWithSave(t *testing.T) {
 	store := h.ensureClaudeSessions()
 	path := filepath.Join(t.TempDir(), "claude-sessions.json")
 	store.saveMu.Lock()
+	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
+		close(started)
 		done <- h.SetClaudeSessionFile(path)
 	}()
+	<-started
 	select {
 	case err := <-done:
 		store.saveMu.Unlock()
 		t.Fatalf("SetClaudeSessionFile bypassed saveMu: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	store.saveMu.Unlock()
 	if err := <-done; err != nil {
@@ -217,16 +270,21 @@ func TestClaudeSessionStoreConcurrentLoadDoesNotOverwriteUpdate(t *testing.T) {
 	store.saveMu.Lock()
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
+	loadStarted := make(chan struct{})
+	updateStarted := make(chan struct{})
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		close(loadStarted)
 		errs <- store.load()
 	}()
 	go func() {
 		defer wg.Done()
+		close(updateStarted)
 		errs <- store.commitSelection(key, "/tmp/new", "session-new")
 	}()
-	time.Sleep(20 * time.Millisecond)
+	<-loadStarted
+	<-updateStarted
 	store.saveMu.Unlock()
 	wg.Wait()
 	close(errs)

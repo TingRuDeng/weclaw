@@ -3,6 +3,7 @@ package messaging
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -120,15 +121,70 @@ func latestClaudeBindingUpdate(refs []claudeBindingReference) string {
 }
 
 func normalizeClaudeControls(input map[string]claudeControlIntent) map[string]claudeControlIntent {
-	controls := make(map[string]claudeControlIntent, len(input))
-	for sessionID, intent := range input {
-		sessionID = strings.TrimSpace(sessionID)
+	rawKeys := make([]string, 0, len(input))
+	for rawSessionID := range input {
+		rawKeys = append(rawKeys, rawSessionID)
+	}
+	sort.Strings(rawKeys)
+	grouped := make(map[string][]claudeControlIntent, len(input))
+	for _, rawSessionID := range rawKeys {
+		sessionID := strings.TrimSpace(rawSessionID)
 		if sessionID == "" {
+			logClaudeControlDiagnostic("blank_session_key")
 			continue
 		}
-		controls[sessionID] = normalizeClaudeControlIntent(intent)
+		grouped[sessionID] = append(grouped[sessionID], input[rawSessionID])
+	}
+	sessionIDs := make([]string, 0, len(grouped))
+	for sessionID := range grouped {
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	sort.Strings(sessionIDs)
+	controls := make(map[string]claudeControlIntent, len(grouped))
+	for _, sessionID := range sessionIDs {
+		intents := grouped[sessionID]
+		if len(intents) != 1 {
+			controls[sessionID] = failClosedClaudeControlCollision(intents)
+			logClaudeControlDiagnostic("session_key_collision")
+			continue
+		}
+		if claudeControlNeedsDiagnostic(intents[0]) {
+			logClaudeControlDiagnostic("invalid_control")
+		}
+		controls[sessionID] = normalizeClaudeControlIntent(intents[0])
 	}
 	return controls
+}
+
+func failClosedClaudeControlCollision(intents []claudeControlIntent) claudeControlIntent {
+	var revision uint64
+	updatedAt := ""
+	for _, intent := range intents {
+		if intent.Revision > revision {
+			revision = intent.Revision
+		}
+		if intent.UpdatedAt > updatedAt {
+			updatedAt = intent.UpdatedAt
+		}
+	}
+	return claudeControlIntent{Owner: claudeOwnerUnclaimed, Revision: revision, UpdatedAt: updatedAt}
+}
+
+func claudeControlNeedsDiagnostic(intent claudeControlIntent) bool {
+	bindingKey := strings.TrimSpace(intent.BindingKey)
+	conversationID := strings.TrimSpace(intent.ConversationID)
+	switch intent.Owner {
+	case claudeOwnerRemote:
+		return bindingKey == "" || conversationID == ""
+	case claudeOwnerLocal, claudeOwnerUnclaimed:
+		return bindingKey != "" || conversationID != ""
+	default:
+		return true
+	}
+}
+
+func logClaudeControlDiagnostic(reason string) {
+	log.Printf("[claude-session] control state fail-closed reason=%s", reason)
 }
 
 func normalizeClaudeControlsForBindings(
@@ -154,6 +210,11 @@ func normalizeClaudeControlsForBindings(
 		}
 		if conflictingBinding || !ok || binding.SessionID != sessionID || expectedConversationID == "" ||
 			intent.ConversationID != expectedConversationID {
+			reason := "binding_mismatch"
+			if conflictingBinding {
+				reason = "binding_conflict"
+			}
+			logClaudeControlDiagnostic(reason)
 			controls[sessionID] = normalizeClaudeControlIntent(claudeControlIntent{
 				Owner: claudeOwnerUnclaimed, Revision: intent.Revision, UpdatedAt: intent.UpdatedAt,
 			})
