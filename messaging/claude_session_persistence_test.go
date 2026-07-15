@@ -1,11 +1,92 @@
 package messaging
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestClaudeSessionStoreMigratesV2SingleBindingToRemoteOwner(t *testing.T) {
+	workspace := t.TempDir()
+	key := claudeBindingKey("route-a", "claude")
+	path := filepath.Join(t.TempDir(), "claude-sessions.json")
+	state := map[string]any{
+		"version": 2,
+		"bindings": map[string]any{
+			key: map[string]any{
+				"workspace_root": workspace,
+				"session_id":     "session-a",
+				"status":         "ready",
+				"updated_at":     "2026-07-15T00:00:00Z",
+			},
+		},
+		"updated": "2026-07-15T00:00:00Z",
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newClaudeSessionStore()
+	if err := store.SetFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+	intent := store.controlIntent("session-a")
+	wantConversation := buildClaudeConversationID("route-a", "claude", workspace)
+	if intent.Owner != claudeOwnerRemote || intent.BindingKey != key ||
+		intent.ConversationID != wantConversation || intent.Revision != 1 {
+		t.Fatalf("intent=%+v", intent)
+	}
+}
+
+func TestClaudeSessionStoreMigratesV2ConflictingBindingsToUnclaimed(t *testing.T) {
+	workspace := t.TempDir()
+	bindings := map[string]claudeSessionBinding{
+		claudeBindingKey("route-a", "claude"): newClaudeBinding(workspace, "session-shared", claudeBindingReady),
+		claudeBindingKey("route-b", "claude"): newClaudeBinding(workspace, "session-shared", claudeBindingReady),
+	}
+	data, err := json.Marshal(claudeSessionState{Version: 2, Bindings: bindings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedBindings, controls, migrated, err := decodeClaudeSessionState(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !migrated || len(decodedBindings) != 2 {
+		t.Fatalf("migrated=%v bindings=%+v", migrated, decodedBindings)
+	}
+	intent := controls["session-shared"]
+	if intent.Owner != claudeOwnerUnclaimed || intent.BindingKey != "" || intent.ConversationID != "" {
+		t.Fatalf("intent=%+v", intent)
+	}
+}
+
+func TestClaudeSessionStoreReloadPreservesLocalOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude-sessions.json")
+	store := newClaudeSessionStore()
+	if err := store.SetFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.controls["session-local"] = claudeControlIntent{Owner: claudeOwnerLocal, Revision: 4}
+	state := newClaudeSessionState(store.bindings, store.controls)
+	store.mu.Unlock()
+	if err := persistClaudeSessionState(path, state); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := newClaudeSessionStore()
+	if err := reloaded.SetFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.controlIntent("session-local"); got.Owner != claudeOwnerLocal || got.Revision != 4 {
+		t.Fatalf("intent=%+v", got)
+	}
+}
 
 func TestClaudeSessionStoreLoadsReadyBindingAsPendingResume(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude-sessions.json")
@@ -77,7 +158,7 @@ func TestClaudeSessionStoreRejectsUnknownVersion(t *testing.T) {
 
 func TestClaudeSessionStoreMigrationPrefersCanonicalKey(t *testing.T) {
 	legacy := `{"version":1,"bindings":{"route":{"ActiveWorkspace":"/tmp/legacy"},"wechat:route":{"ActiveWorkspace":"/tmp/canonical"}}}`
-	bindings, migrated, err := decodeClaudeSessionState([]byte(legacy))
+	bindings, _, migrated, err := decodeClaudeSessionState([]byte(legacy))
 	if err != nil || !migrated {
 		t.Fatalf("migrated=%t err=%v", migrated, err)
 	}

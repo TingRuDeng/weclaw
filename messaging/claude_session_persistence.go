@@ -23,7 +23,7 @@ func (s *claudeSessionStore) load() error {
 		}
 		return nil
 	}
-	bindings, migrated, err := decodeClaudeSessionState(data)
+	bindings, controls, migrated, err := decodeClaudeSessionState(data)
 	if err != nil {
 		return fmt.Errorf("解析 Claude 状态失败: %w", err)
 	}
@@ -31,35 +31,98 @@ func (s *claudeSessionStore) load() error {
 	persist := s.persist
 	s.mu.Unlock()
 	if migrated && persist != nil {
-		if err := persist(newClaudeSessionState(bindings)); err != nil {
+		if err := persist(newClaudeSessionState(bindings, controls)); err != nil {
 			return fmt.Errorf("保存 Claude 迁移状态失败: %w", err)
 		}
 	}
 	s.mu.Lock()
 	s.bindings = bindings
+	s.controls = controls
 	s.mu.Unlock()
 	return nil
 }
 
-func decodeClaudeSessionState(data []byte) (map[string]claudeSessionBinding, bool, error) {
+func decodeClaudeSessionState(data []byte) (map[string]claudeSessionBinding, map[string]claudeControlIntent, bool, error) {
 	var header struct {
 		Version int `json:"version"`
 	}
 	if err := json.Unmarshal(data, &header); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if header.Version == 1 {
 		bindings, err := migrateClaudeSessionV1(data)
-		return bindings, true, err
+		return bindings, map[string]claudeControlIntent{}, true, err
 	}
-	if header.Version != 2 {
-		return nil, false, fmt.Errorf("不支持的 Claude 状态版本: %d", header.Version)
+	if header.Version != 2 && header.Version != claudeSessionStateVersion {
+		return nil, nil, false, fmt.Errorf("不支持的 Claude 状态版本: %d", header.Version)
 	}
 	var state claudeSessionState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
-	return normalizeClaudeBindings(state.Bindings), false, nil
+	bindings := normalizeClaudeBindings(state.Bindings)
+	if header.Version == 2 {
+		return bindings, migrateClaudeControlsV2(bindings), true, nil
+	}
+	return bindings, normalizeClaudeControls(state.Controls), false, nil
+}
+
+func migrateClaudeControlsV2(bindings map[string]claudeSessionBinding) map[string]claudeControlIntent {
+	references := make(map[string][]claudeBindingReference)
+	for key, binding := range bindings {
+		if binding.SessionID == "" || binding.WorkspaceRoot == "" {
+			continue
+		}
+		references[binding.SessionID] = append(references[binding.SessionID], claudeBindingReference{bindingKey: key, binding: binding})
+	}
+	controls := make(map[string]claudeControlIntent, len(references))
+	for sessionID, refs := range references {
+		if len(refs) != 1 {
+			controls[sessionID] = newMigratedClaudeControl(claudeOwnerUnclaimed, "", "", latestClaudeBindingUpdate(refs))
+			continue
+		}
+		ref := refs[0]
+		conversationID := claudeConversationIDForBinding(ref.bindingKey, ref.binding.WorkspaceRoot)
+		controls[sessionID] = newMigratedClaudeControl(
+			claudeOwnerRemote, ref.bindingKey, conversationID, ref.binding.UpdatedAt,
+		)
+	}
+	return controls
+}
+
+type claudeBindingReference struct {
+	bindingKey string
+	binding    claudeSessionBinding
+}
+
+func claudeConversationIDForBinding(bindingKey string, workspaceRoot string) string {
+	parts := strings.SplitN(bindingKey, "\x00", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return ""
+	}
+	return buildClaudeConversationID(parts[0], parts[1], workspaceRoot)
+}
+
+func latestClaudeBindingUpdate(refs []claudeBindingReference) string {
+	latest := ""
+	for _, ref := range refs {
+		if ref.binding.UpdatedAt > latest {
+			latest = ref.binding.UpdatedAt
+		}
+	}
+	return latest
+}
+
+func normalizeClaudeControls(input map[string]claudeControlIntent) map[string]claudeControlIntent {
+	controls := make(map[string]claudeControlIntent, len(input))
+	for sessionID, intent := range input {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
+			continue
+		}
+		controls[sessionID] = normalizeClaudeControlIntent(intent)
+	}
+	return controls
 }
 
 // migrateClaudeSessionV1 只迁移浏览工作空间，丢弃旧 CLI session ID。

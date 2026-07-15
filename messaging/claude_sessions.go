@@ -32,6 +32,7 @@ type claudeSessionBinding struct {
 type claudeSessionState struct {
 	Version  int                             `json:"version"`
 	Bindings map[string]claudeSessionBinding `json:"bindings"`
+	Controls map[string]claudeControlIntent  `json:"controls"`
 	Updated  string                          `json:"updated"`
 }
 
@@ -40,11 +41,15 @@ type claudeSessionStore struct {
 	saveMu   sync.Mutex
 	filePath string
 	bindings map[string]claudeSessionBinding
+	controls map[string]claudeControlIntent
 	persist  func(claudeSessionState) error
 }
 
 func newClaudeSessionStore() *claudeSessionStore {
-	return &claudeSessionStore{bindings: make(map[string]claudeSessionBinding)}
+	return &claudeSessionStore{
+		bindings: make(map[string]claudeSessionBinding),
+		controls: make(map[string]claudeControlIntent),
+	}
 }
 
 // DefaultClaudeSessionFile 返回 Claude route/session 绑定的默认持久化路径。
@@ -75,6 +80,12 @@ func (s *claudeSessionStore) bindingSnapshot(bindingKey string) (claudeSessionBi
 	defer s.mu.Unlock()
 	binding, ok := s.bindings[bindingKey]
 	return binding, ok
+}
+
+func (s *claudeSessionStore) controlIntent(sessionID string) claudeControlIntent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.controls[strings.TrimSpace(sessionID)]
 }
 
 // commitWorkspace 切换浏览工作空间并清除旧 session，要求用户显式选择或新建。
@@ -165,8 +176,9 @@ func (s *claudeSessionStore) updateBindings(mutate func(map[string]claudeSession
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	bindings := cloneClaudeBindings(s.bindings)
+	controls := cloneClaudeControls(s.controls)
 	mutate(bindings)
-	state := newClaudeSessionState(bindings)
+	state := newClaudeSessionState(bindings, controls)
 	persist := s.persist
 	s.mu.Unlock()
 	if persist != nil {
@@ -176,6 +188,7 @@ func (s *claudeSessionStore) updateBindings(mutate func(map[string]claudeSession
 	}
 	s.mu.Lock()
 	s.bindings = bindings
+	s.controls = controls
 	s.mu.Unlock()
 	return nil
 }
@@ -188,9 +201,12 @@ func cloneClaudeBindings(input map[string]claudeSessionBinding) map[string]claud
 	return bindings
 }
 
-func newClaudeSessionState(bindings map[string]claudeSessionBinding) claudeSessionState {
+func newClaudeSessionState(bindings map[string]claudeSessionBinding, controls map[string]claudeControlIntent) claudeSessionState {
 	return claudeSessionState{
-		Version: 2, Bindings: cloneClaudeBindings(bindings), Updated: time.Now().UTC().Format(time.RFC3339),
+		Version:  claudeSessionStateVersion,
+		Bindings: cloneClaudeBindings(bindings),
+		Controls: cloneClaudeControls(controls),
+		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
