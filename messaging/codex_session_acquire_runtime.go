@@ -3,9 +3,19 @@ package messaging
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
+
+const codexSessionAcquireCleanupTimeout = 3 * time.Second
+
+type codexRuntimeConflictRequest struct {
+	ctx       context.Context
+	liveAgent agent.CodexLiveRuntimeAgent
+	change    codexRuntimeIntentChange
+	intent    codexControlIntent
+}
 
 // applyCodexRuntimeIntentChanges 先接管目标，再按计划顺序释放旧 remote thread。
 func (h *Handler) applyCodexRuntimeIntentChanges(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, []codexRuntimeIntentChange, error) {
@@ -93,13 +103,13 @@ func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (cod
 	if handoffErr == nil {
 		return resolution, nil
 	}
-	if !isCodexSessionControlTimeout(handoffErr) {
-		return resolution, handoffErr
-	}
 	request.Intent = agentControlIntent(req.resyncIntent)
-	_, inspectErr := req.liveAgent.InspectCodexRuntime(req.ctx, request)
+	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(req.ctx)
+	defer cancel()
+	_, inspectErr := req.liveAgent.InspectCodexRuntime(cleanupCtx, request)
 	if inspectErr != nil {
-		return resolution, errors.Join(errCodexSessionAcquireUncertain, handoffErr, inspectErr)
+		markErr := req.liveAgent.MarkCodexRuntimeConflict(cleanupCtx, request)
+		return resolution, errors.Join(errCodexSessionAcquireUncertain, handoffErr, inspectErr, markErr)
 	}
 	return resolution, handoffErr
 }
@@ -118,10 +128,27 @@ func (h *Handler) compensateCodexRuntimeChanges(ctx context.Context, liveAgent a
 			change: reverse, resyncIntent: reverse.after,
 		})
 		if err != nil {
-			compensationErr = errors.Join(compensationErr, err)
+			markErr := h.markCodexRuntimeConflict(codexRuntimeConflictRequest{
+				ctx: ctx, liveAgent: liveAgent, change: reverse, intent: reverse.after,
+			})
+			compensationErr = errors.Join(compensationErr, err, markErr)
 		}
 	}
 	return compensationErr
+}
+
+// markCodexRuntimeConflict 为补偿失败的 thread 持续登记 fail-closed 状态。
+func (h *Handler) markCodexRuntimeConflict(req codexRuntimeConflictRequest) error {
+	request := agent.CodexRuntimeRequest{
+		Ref:    req.change.route.ref(req.change.threadID),
+		Intent: agentControlIntent(req.intent),
+	}
+	return req.liveAgent.MarkCodexRuntimeConflict(req.ctx, request)
+}
+
+// newCodexSessionAcquireCleanupContext 保留 values，但不继承调用链取消信号。
+func newCodexSessionAcquireCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(normalizeContext(ctx)), codexSessionAcquireCleanupTimeout)
 }
 
 // finishCodexSessionAcquire 激活观察后再更新不参与事务提交的辅助会话状态。
@@ -129,7 +156,7 @@ func (h *Handler) finishCodexSessionAcquire(commit codexSessionAcquireCommit) co
 	intent := agentControlIntent(commit.committed.Target)
 	commit.resolution.Request.Intent = intent
 	commit.resolution.Binding.Control = intent
-	h.activateExternalCodexTaskReservation(commit.reservation)
+	observerReady := h.activateExternalCodexTaskReservation(commit.reservation)
 	h.switchCodexWorkspaceForRoute(
 		firstNonBlank(commit.request.actorUserID, commit.request.routeUserID),
 		commit.request.routeUserID, commit.request.agentName,
@@ -140,7 +167,8 @@ func (h *Handler) finishCodexSessionAcquire(commit codexSessionAcquireCommit) co
 	)
 	return codexSessionAcquireResult{
 		route: commit.request.route, resolution: commit.resolution,
-		externalState: commit.prepared.state, externalActive: commit.prepared.active,
+		externalState:   commit.prepared.state,
+		externalActive:  commit.prepared.active && observerReady,
 		agentSessionErr: agentSessionErr,
 	}
 }
@@ -148,8 +176,10 @@ func (h *Handler) finishCodexSessionAcquire(commit codexSessionAcquireCommit) co
 // rollbackCodexAcquire 先撤销观察 reservation，再逆序补偿运行时副作用。
 func (h *Handler) rollbackCodexAcquire(rollback codexSessionAcquireRollback) error {
 	h.cancelExternalCodexTaskReservation(rollback.reservation)
+	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(rollback.plan.request.ctx)
+	defer cancel()
 	if err := h.compensateCodexRuntimeChanges(
-		rollback.plan.request.ctx, rollback.liveAgent, rollback.applied,
+		cleanupCtx, rollback.liveAgent, rollback.applied,
 	); err != nil {
 		return errors.Join(errCodexSessionAcquireUncertain, rollback.cause, err)
 	}

@@ -105,6 +105,19 @@ func TestCancelExternalCodexTaskReservationRemovesUnstartedTask(t *testing.T) {
 	}
 }
 
+func TestActivateExternalCodexTaskReservationReportsCanceledHandle(t *testing.T) {
+	h := NewHandler(nil, nil)
+	prepared, opts := testExternalCodexReservationInput(nil, nil)
+	reservation, err := h.reserveExternalCodexTask(opts, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cancelExternalCodexTaskReservation(reservation)
+	if h.activateExternalCodexTaskReservation(reservation) {
+		t.Fatal("已取消 reservation 不应报告激活成功")
+	}
+}
+
 func TestReserveExternalCodexTaskReusedHandleActivatesWatcher(t *testing.T) {
 	h := NewHandler(nil, nil)
 	watchStarted := make(chan struct{})

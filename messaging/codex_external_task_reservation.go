@@ -12,9 +12,10 @@ import (
 var errExternalCodexTaskReservationConflict = errors.New("当前窗口已有其他 Codex 活动任务")
 
 type preparedExternalCodexTask struct {
-	state  externalCodexTaskState
-	watch  externalCodexTaskWatch
-	active bool
+	state             externalCodexTaskState
+	watch             externalCodexTaskWatch
+	active            bool
+	confirmedInactive bool
 }
 
 type externalCodexTaskReservation struct {
@@ -41,17 +42,21 @@ type externalCodexTaskReservationControl struct {
 
 // prepareExternalCodexTask 只解析外部任务，不占用观察槽或启动观察器。
 func (h *Handler) prepareExternalCodexTask(opts externalCodexTaskOptions) (preparedExternalCodexTask, error) {
-	state, watch, found, err := h.resolveExternalCodexTask(opts)
-	if err != nil || !found {
-		return preparedExternalCodexTask{state: state}, err
+	resolved := h.resolveExternalCodexTask(opts)
+	if resolved.err != nil || !resolved.active {
+		return preparedExternalCodexTask{
+			state: resolved.state, confirmedInactive: resolved.confirmedInactive,
+		}, resolved.err
 	}
-	if state.ActiveTurnID == "" {
+	if resolved.state.ActiveTurnID == "" {
 		return preparedExternalCodexTask{}, fmt.Errorf("Codex App thread 处于 active 状态，但未找到 active turn")
 	}
 	if opts.reply == nil {
 		return preparedExternalCodexTask{}, fmt.Errorf("Codex App thread 正在运行，但当前入口无法接管回推")
 	}
-	return preparedExternalCodexTask{state: state, watch: watch, active: true}, nil
+	return preparedExternalCodexTask{
+		state: resolved.state, watch: resolved.watch, active: true,
+	}, nil
 }
 
 // reserveExternalCodexTask 原子占用 conversation 的观察槽，但暂不启动 goroutine。
@@ -128,13 +133,36 @@ func reusableExternalCodexTaskStatus(status externalCodexTaskReservationStatus) 
 	return status == externalCodexTaskReserved || status == externalCodexTaskActivated
 }
 
-// activateExternalCodexTaskReservation 允许任一共享句柄激活预留，但整个生命周期最多启动一个观察器。
-func (h *Handler) activateExternalCodexTaskReservation(reservation externalCodexTaskReservation) {
+// activateExternalCodexTaskReservation 激活或确认共享观察生命周期仍然有效。
+func (h *Handler) activateExternalCodexTaskReservation(reservation externalCodexTaskReservation) bool {
+	if reservation.task == nil {
+		return true
+	}
 	runtime, activated := h.claimExternalCodexTaskReservationActivation(reservation)
 	if !activated {
-		return
+		return h.externalCodexTaskReservationActive(reservation)
 	}
 	go h.runExternalCodexTaskWatcher(runtime)
+	return true
+}
+
+// externalCodexTaskReservationActive 区分已激活复用与已取消、已终态的失效句柄。
+func (h *Handler) externalCodexTaskReservationActive(reservation externalCodexTaskReservation) bool {
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	if h.activeTasks[reservation.key] != reservation.task {
+		return false
+	}
+	reservation.task.mu.Lock()
+	defer reservation.task.mu.Unlock()
+	if reservation.control == nil {
+		return reservation.reused && reservation.task.phase == codexTaskRunning
+	}
+	reservation.control.mu.Lock()
+	defer reservation.control.mu.Unlock()
+	return reservation.task.externalReservation == reservation.control &&
+		reservation.task.phase == codexTaskRunning &&
+		reservation.control.status == externalCodexTaskActivated
 }
 
 // cancelExternalCodexTaskReservation 只撤销由本预留新建且尚未激活的任务。

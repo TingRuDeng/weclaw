@@ -10,27 +10,31 @@ import (
 
 type fakeCodexLiveAgent struct {
 	*fakeCodexThreadAgent
-	mu             sync.Mutex
-	binding        agent.CodexThreadBinding
-	bindings       map[string]agent.CodexThreadBinding
-	bindErr        error
-	inspectErrors  map[string]error
-	handoffErr     error
-	handoffErrors  map[string]error
-	handoffHistory []agent.CodexRuntimeRequest
-	runErr         error
-	bindCalls      int
-	handoffCalls   int
-	runCalls       int
-	lastRuntimeReq agent.CodexRuntimeRequest
-	lastTurnReq    agent.CodexTurnRequest
-	watchResults   []fakeCodexWatchResult
-	inspectEntered chan struct{}
-	inspectRelease <-chan struct{}
-	handoffEntered chan struct{}
-	handoffRelease <-chan struct{}
-	turnEntered    chan struct{}
-	turnRelease    <-chan struct{}
+	mu                    sync.Mutex
+	binding               agent.CodexThreadBinding
+	bindings              map[string]agent.CodexThreadBinding
+	bindErr               error
+	inspectErrors         map[string]error
+	handoffErr            error
+	handoffErrors         map[string]error
+	handoffAfterErrors    map[string]error
+	handoffHistory        []agent.CodexRuntimeRequest
+	handoffReleases       map[string]<-chan struct{}
+	handoffHooks          map[string]func()
+	rejectCanceledContext bool
+	runErr                error
+	bindCalls             int
+	handoffCalls          int
+	runCalls              int
+	lastRuntimeReq        agent.CodexRuntimeRequest
+	lastTurnReq           agent.CodexTurnRequest
+	watchResults          []fakeCodexWatchResult
+	inspectEntered        chan struct{}
+	inspectRelease        <-chan struct{}
+	handoffEntered        chan struct{}
+	handoffRelease        <-chan struct{}
+	turnEntered           chan struct{}
+	turnRelease           <-chan struct{}
 }
 
 type fakeCodexWatchResult struct {
@@ -48,13 +52,20 @@ func newFakeCodexLiveAgent(runtime agent.CodexRuntimeHolder, state agent.CodexTh
 		bindings:             make(map[string]agent.CodexThreadBinding),
 		inspectErrors:        make(map[string]error),
 		handoffErrors:        make(map[string]error),
+		handoffAfterErrors:   make(map[string]error),
+		handoffReleases:      make(map[string]<-chan struct{}),
+		handoffHooks:         make(map[string]func()),
 	}
 }
 
 func (f *fakeCodexLiveAgent) InspectCodexRuntime(ctx context.Context, req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	f.mu.Lock()
 	entered, release := f.inspectEntered, f.inspectRelease
+	rejectCanceled := f.rejectCanceledContext
 	f.mu.Unlock()
+	if rejectCanceled && ctx.Err() != nil {
+		return agent.CodexThreadBinding{}, ctx.Err()
+	}
 	signalCodexLiveTestHook(entered)
 	if err := waitCodexLiveTestHook(ctx, release); err != nil {
 		return agent.CodexThreadBinding{}, err
@@ -86,11 +97,22 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 	f.lastRuntimeReq = req
 	f.handoffHistory = append(f.handoffHistory, req)
 	entered, release := f.handoffEntered, f.handoffRelease
+	if threadRelease, ok := f.handoffReleases[req.Ref.ThreadID]; ok {
+		release = threadRelease
+	}
+	hook := f.handoffHooks[req.Ref.ThreadID]
+	rejectCanceled := f.rejectCanceledContext
 	handoffErr := f.handoffErr
 	if err, ok := f.handoffErrors[req.Ref.ThreadID]; ok {
 		handoffErr = err
 	}
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if rejectCanceled && ctx.Err() != nil {
+		return agent.CodexThreadBinding{}, ctx.Err()
+	}
 	signalCodexLiveTestHook(entered)
 	if err := waitCodexLiveTestHook(ctx, release); err != nil {
 		return agent.CodexThreadBinding{}, err
@@ -106,6 +128,10 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 	}
 	binding.Ref = req.Ref
 	binding.Control = req.Intent
+	if binding.Runtime == agent.CodexRuntimeConflict {
+		binding.Runtime = agent.CodexRuntimeDesktop
+		binding.ConflictReason = ""
+	}
 	if req.Intent.Owner == agent.CodexControlRemote && binding.Runtime == agent.CodexRuntimeUnknown {
 		binding.Runtime = agent.CodexRuntimeWeClaw
 	}
@@ -117,7 +143,36 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 	} else {
 		f.binding = binding
 	}
+	if err := f.handoffAfterErrors[req.Ref.ThreadID]; err != nil {
+		return binding, err
+	}
 	return binding, nil
+}
+
+// MarkCodexRuntimeConflict 模拟 ACP registry 的持续 fail-closed 标记。
+func (f *fakeCodexLiveAgent) MarkCodexRuntimeConflict(ctx context.Context, req agent.CodexRuntimeRequest) error {
+	_ = ctx
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	binding, ok := f.bindings[req.Ref.ThreadID]
+	if !ok {
+		binding = f.binding
+	}
+	if binding.Ref.ThreadID == "" {
+		binding.Ref = req.Ref
+	}
+	if binding.Control.Owner == "" {
+		binding.Control = req.Intent
+	}
+	binding.State.ThreadID = req.Ref.ThreadID
+	binding.Runtime = agent.CodexRuntimeConflict
+	binding.ConflictReason = "控制权移交结果未确认"
+	if ok {
+		f.bindings[req.Ref.ThreadID] = binding
+	} else {
+		f.binding = binding
+	}
+	return nil
 }
 
 func (f *fakeCodexLiveAgent) RunCodexTurn(ctx context.Context, req agent.CodexTurnRequest) (string, error) {
@@ -188,6 +243,15 @@ func (f *fakeCodexLiveAgent) handoffRequests() []agent.CodexRuntimeRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]agent.CodexRuntimeRequest(nil), f.handoffHistory...)
+}
+
+func (f *fakeCodexLiveAgent) threadBinding(threadID string) agent.CodexThreadBinding {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if binding, ok := f.bindings[threadID]; ok {
+		return binding
+	}
+	return f.binding
 }
 
 // setBindingState 同步测试探针与 thread 读取结果，模拟 in-process turn 的实时状态变化。

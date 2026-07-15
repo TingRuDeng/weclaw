@@ -21,6 +21,8 @@ type externalCodexTaskOptions struct {
 	accountID      string
 	progressCfg    config.ProgressConfig
 	reply          platform.Replier
+	// runtimeInactiveAuthoritative 仅用于同一接管事务内的 active→terminal 二次确认。
+	runtimeInactiveAuthoritative bool
 }
 
 type externalCodexTaskState struct {
@@ -30,6 +32,14 @@ type externalCodexTaskState struct {
 }
 
 type externalCodexTaskWatch func(context.Context, func(string)) (string, error)
+
+type resolvedExternalCodexTask struct {
+	state             externalCodexTaskState
+	watch             externalCodexTaskWatch
+	active            bool
+	confirmedInactive bool
+	err               error
+}
 
 // startExternalCodexTaskIfActive 在切换会话后登记可持续回推的外部任务。
 func (h *Handler) startExternalCodexTaskIfActive(opts externalCodexTaskOptions) (externalCodexTaskState, bool, error) {
@@ -41,55 +51,79 @@ func (h *Handler) startExternalCodexTaskIfActive(opts externalCodexTaskOptions) 
 	if err != nil {
 		return prepared.state, false, err
 	}
-	h.activateExternalCodexTaskReservation(reservation)
+	if !h.activateExternalCodexTaskReservation(reservation) {
+		return prepared.state, false, errExternalCodexTaskReservationConflict
+	}
 	return prepared.state, true, nil
 }
 
-// resolveExternalCodexTask 优先使用可控制的 app-server，跨进程时改读共享 rollout。
-func (h *Handler) resolveExternalCodexTask(opts externalCodexTaskOptions) (externalCodexTaskState, externalCodexTaskWatch, bool, error) {
-	var runtimeErr error
-	var incompleteRuntimeState *externalCodexTaskState
-	if runtimeAg, ok := opts.agent.(agent.CodexThreadRuntimeAgent); ok {
-		runtimeState, err := runtimeAg.ReadCodexThreadState(opts.ctx, opts.conversationID, opts.threadID)
-		runtimeErr = err
-		if err == nil && runtimeState.Active && runtimeState.ActiveTurnID != "" {
-			state := externalCodexTaskState{CodexThreadState: runtimeState, Controllable: true}
-			watch := func(ctx context.Context, onProgress func(string)) (string, error) {
-				return runtimeAg.WatchCodexThread(ctx, opts.conversationID, opts.threadID, onProgress)
-			}
-			return state, watch, true, nil
+// resolveExternalCodexTask 优先使用可控制的 runtime，活动 rollout 作为跨进程补充证据。
+func (h *Handler) resolveExternalCodexTask(opts externalCodexTaskOptions) resolvedExternalCodexTask {
+	runtime := resolveExternalCodexRuntime(opts)
+	if runtime.active && runtime.state.ActiveTurnID != "" ||
+		opts.runtimeInactiveAuthoritative && runtime.confirmedInactive {
+		return runtime
+	}
+	rollout := h.resolveExternalCodexRollout(opts.threadID)
+	if rollout.err != nil || rollout.active {
+		return rollout
+	}
+	if runtime.active || runtime.err != nil {
+		return runtime
+	}
+	return rollout
+}
+
+// resolveExternalCodexRuntime 二次读取可控制 runtime，并显式记录 inactive 证据。
+func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternalCodexTask {
+	runtimeAg, ok := opts.agent.(agent.CodexThreadRuntimeAgent)
+	if !ok {
+		return resolvedExternalCodexTask{}
+	}
+	state, err := runtimeAg.ReadCodexThreadState(opts.ctx, opts.conversationID, opts.threadID)
+	resolved := resolvedExternalCodexTask{
+		state: externalCodexTaskState{CodexThreadState: state, Controllable: true},
+		err:   err,
+	}
+	if err != nil {
+		return resolved
+	}
+	if !state.Active {
+		resolved.confirmedInactive = true
+		return resolved
+	}
+	resolved.active = true
+	if state.ActiveTurnID != "" {
+		resolved.watch = func(ctx context.Context, onProgress func(string)) (string, error) {
+			return runtimeAg.WatchCodexThread(ctx, opts.conversationID, opts.threadID, onProgress)
 		}
-		if err == nil && runtimeState.Active {
-			state := externalCodexTaskState{CodexThreadState: runtimeState, Controllable: true}
-			incompleteRuntimeState = &state
-		}
 	}
-	rollout, rolloutFound, rolloutErr := h.readLocalCodexRolloutTaskState(opts.threadID)
-	if rolloutErr != nil {
-		return externalCodexTaskState{}, nil, false, rolloutErr
+	return resolved
+}
+
+// resolveExternalCodexRollout 读取共享 rollout，并只把真实文件中的终态当 inactive 证据。
+func (h *Handler) resolveExternalCodexRollout(threadID string) resolvedExternalCodexTask {
+	rollout, found, err := h.readLocalCodexRolloutTaskState(threadID)
+	resolved := resolvedExternalCodexTask{err: err}
+	if err != nil || !found {
+		return resolved
 	}
-	if rolloutFound && rollout.Active {
-		state := externalCodexTaskState{
-			CodexThreadState: agent.CodexThreadState{
-				ThreadID:     opts.threadID,
-				Active:       true,
-				ActiveTurnID: rollout.TurnID,
-				Preview:      firstNonBlank(rollout.Preview, "Codex App 本地任务"),
-			},
-			Progress: rollout.Progress,
-		}
-		watch := func(ctx context.Context, onProgress func(string)) (string, error) {
-			return watchCodexRolloutTask(ctx, rollout, onProgress)
-		}
-		return state, watch, true, nil
+	if !rollout.Active {
+		resolved.confirmedInactive = true
+		return resolved
 	}
-	if incompleteRuntimeState != nil {
-		return *incompleteRuntimeState, nil, true, nil
+	resolved.active = true
+	resolved.state = externalCodexTaskState{
+		CodexThreadState: agent.CodexThreadState{
+			ThreadID: threadID, Active: true, ActiveTurnID: rollout.TurnID,
+			Preview: firstNonBlank(rollout.Preview, "Codex App 本地任务"),
+		},
+		Progress: rollout.Progress,
 	}
-	if runtimeErr != nil {
-		return externalCodexTaskState{}, nil, false, runtimeErr
+	resolved.watch = func(ctx context.Context, onProgress func(string)) (string, error) {
+		return watchCodexRolloutTask(ctx, rollout, onProgress)
 	}
-	return externalCodexTaskState{}, nil, false, nil
+	return resolved
 }
 
 // renderExternalCodexActiveNotice 展示当前任务、最新进展和真实可用的控制方式。

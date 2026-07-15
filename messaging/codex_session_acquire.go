@@ -199,11 +199,14 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 // commitCodexSessionAcquire 先预留观察槽，再只提交一次持久化状态。
 func (h *Handler) commitCodexSessionAcquire(commit codexSessionAcquireRuntimeCommit) (codexSessionAcquireResult, error) {
 	opts := externalCodexTaskOptionsFromAcquire(commit.plan.request)
+	// 首次运行时探测已确认 active 时，二次读取的 inactive 是合法终态证据。
+	opts.runtimeInactiveAuthoritative = codexResolutionActive(commit.resolution)
 	prepared, err := h.prepareExternalCodexTask(opts)
 	if err != nil {
 		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, externalCodexTaskReservation{}, err)
 	}
-	if codexResolutionActive(commit.resolution) && (!prepared.active || !prepared.state.Controllable) {
+	if codexResolutionActive(commit.resolution) &&
+		!prepared.confirmedInactive && (!prepared.active || !prepared.state.Controllable) {
 		err = fmt.Errorf("活动 Desktop 任务尚不能由当前窗口控制")
 		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, externalCodexTaskReservation{}, err)
 	}

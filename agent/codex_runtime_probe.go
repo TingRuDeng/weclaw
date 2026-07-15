@@ -47,6 +47,16 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 	return a.recoverCodexRuntimeForRemote(ctx, req)
 }
 
+// MarkCodexRuntimeConflict 将无法确认 writer 的 thread 持续登记为冲突态。
+func (a *ACPAgent) MarkCodexRuntimeConflict(ctx context.Context, req CodexRuntimeRequest) error {
+	if err := a.validateCodexRuntimeSupport(req); err != nil {
+		return err
+	}
+	_ = ctx
+	a.codexOwners.markRuntimeConflict(req, "控制权移交结果未确认")
+	return nil
+}
+
 func (a *ACPAgent) validateCodexRuntimeSupport(req CodexRuntimeRequest) error {
 	if a.protocol != protocolCodexAppServer || a.codexOwners == nil {
 		return ErrCodexRuntimeUnavailable
