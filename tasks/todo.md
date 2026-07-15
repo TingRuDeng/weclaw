@@ -13,7 +13,7 @@ fail-closed 任务门禁。
 - [x] Task 4：收口工作空间切换与飞书入口。
 - [x] Task 5：让 `/cc new` 与全局 `/new` 创建后原子接管。
 - [x] Task 6：实现 owner 查询、远程接管与写入门禁。
-- [ ] Task 7：实现 `/cc cli` 本地交接与失败补偿。
+- [x] Task 7：实现 `/cc cli` 本地交接与失败补偿。
 - [ ] Task 8：补齐并发、重启、文档与全量验证。
 
 ## 并行说明
@@ -23,9 +23,8 @@ fail-closed 任务门禁。
 
 ## 当前状态
 
-Task 6 已完成：`/cc owner` 可脱敏展示控制方，`local` 复用统一 release，`remote`
-复用统一 acquire；普通 Claude ACP 消息在任务登记前校验 remote owner 并记录 session/revision，
-prompt 前再次复核，当前 session 的模型写入也执行相同门禁。状态、列表和帮助文本同步展示
-所有权边界，并提示重新接管前先结束本地 Claude CLI。复核后已把相同的准入与 revision
-复核扩展到 Claude 广播及其暂存续跑，并对不可准入 binding 状态、workspace、session 和
-conversation 不一致执行 fail-closed。
+Task 7 已完成：`/cc cli` 在 binding 锁内先复用统一 release，把 owner 持久化为 `local`
+并清理 ACP runtime，再调用本地 opener；成功后保留最近 session 选择并拒绝普通远程任务。
+opener 失败时从当前 binding 与 ACP 目录解析同一 session，复用统一 acquire 恢复 runtime 和
+remote owner；目录、runtime 或持久化补偿失败时保持当前 route fail-closed，只返回固定的
+“远程恢复未确认”脱敏提示。并发其他 route 已接管时不会被当前 route 的补偿覆盖。

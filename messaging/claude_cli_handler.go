@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -10,6 +11,12 @@ import (
 )
 
 const maxClaudeSessionIDLength = 256
+
+var (
+	errClaudeCLIOpenFailed             = errors.New("打开 Claude CLI 失败")
+	errClaudeCLIRemoteRestoreUncertain = errors.New("Claude CLI 失败后远程恢复未确认")
+	errClaudeCLILocalHandoffUncertain  = errors.New("Claude CLI 本地交接未确认")
+)
 
 var claudeSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
@@ -37,13 +44,87 @@ func (h *Handler) handleClaudeCLI(route claudeSessionRoute) string {
 		return "当前 Claude session ID 非法，无法打开 Claude CLI。"
 	}
 	if h.hasActiveClaudeTask(route, workspaceRoot) {
-		return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
+		return "当前 Claude 任务正在运行或已有暂存消息，请等待任务结束或先发送 /stop。"
 	}
-	request := ClaudeCLIResumeRequest{Command: command, WorkspaceRoot: workspaceRoot, SessionID: binding.SessionID}
-	if err := h.resolveClaudeCLIResumeOpener()(route.Context, request); err != nil {
-		return fmt.Sprintf("打开 Claude CLI 失败: %v", err)
+	if _, _, err := h.ensureClaudeSessions().requireRemoteControl(route.BindingKey); err != nil {
+		return renderClaudeRemoteControlError(err)
 	}
-	return wechatCommandText("已打开 Claude CLI。", "工作空间: "+workspaceRoot)
+	if err := h.handoffClaudeSessionToCLIWithBindingLocked(route); err != nil {
+		switch {
+		case errors.Is(err, errClaudeCLIRemoteRestoreUncertain):
+			return "打开 Claude CLI 失败；远程恢复未确认，已保持远程写入关闭，请检查状态后重试。"
+		case errors.Is(err, errClaudeCLIOpenFailed):
+			return "打开 Claude CLI 失败；已恢复远程控制，请稍后重试。"
+		case errors.Is(err, errClaudeCLILocalHandoffUncertain):
+			return "Claude CLI 交接未确认，已保持远程写入关闭，请检查状态后重试。"
+		default:
+			return renderClaudeOwnerMutationFailure(err)
+		}
+	}
+	return wechatCommandText("已释放远程控制并打开 Claude CLI。", "工作空间: "+workspaceRoot)
+}
+
+// handoffClaudeSessionToCLIWithBindingLocked 在 binding 外层锁内完成
+// remote -> local -> open；opener 失败时只通过统一 acquire 恢复远程控制。
+func (h *Handler) handoffClaudeSessionToCLIWithBindingLocked(route claudeSessionRoute) error {
+	store := h.ensureClaudeSessions()
+	binding := store.binding(route.BindingKey)
+	workspaceRoot := normalizeClaudeWorkspaceRoot(binding.WorkspaceRoot)
+	sessionID := strings.TrimSpace(binding.SessionID)
+	mutation, err := h.releaseClaudeSelectionWithBindingLocked(claudeSessionReleaseRequest{
+		Route: route, WorkspaceRoot: workspaceRoot, KeepSelection: true, Command: "cli",
+	})
+	if err != nil {
+		return err
+	}
+	if mutation.Target.Owner != claudeOwnerLocal || store.controlIntent(sessionID).Owner != claudeOwnerLocal {
+		return errClaudeCLILocalHandoffUncertain
+	}
+	unlockSession, lockErr := h.lockClaudeSessionControls(claudeSessionLockRequest{
+		ctx: route.Context, command: "cli open", sessionIDs: []string{sessionID},
+	})
+	if lockErr != nil {
+		return errors.Join(errClaudeCLILocalHandoffUncertain, lockErr)
+	}
+	lockedIntent := store.controlIntent(sessionID)
+	if lockedIntent != mutation.Target || lockedIntent.Owner != claudeOwnerLocal {
+		unlockSession()
+		return errClaudeCLILocalHandoffUncertain
+	}
+	if claudeAgent, ok := route.Agent.(interface {
+		CurrentClaudeSession(string) (string, bool)
+	}); ok {
+		conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
+		if _, bound := claudeAgent.CurrentClaudeSession(conversationID); bound {
+			unlockSession()
+			return errClaudeCLILocalHandoffUncertain
+		}
+	}
+
+	request := ClaudeCLIResumeRequest{
+		Command: strings.TrimSpace(route.Agent.Info().LocalCommand), WorkspaceRoot: workspaceRoot, SessionID: sessionID,
+	}
+	openErr := h.resolveClaudeCLIResumeOpener()(route.Context, request)
+	unlockSession()
+	if openErr == nil {
+		return nil
+	}
+	selected, catalogErr := h.findClaudeSessionForRoute(route, sessionID)
+	if catalogErr != nil {
+		return errors.Join(errClaudeCLIOpenFailed, errClaudeCLIRemoteRestoreUncertain, openErr, catalogErr)
+	}
+	if normalizeClaudeWorkspaceRoot(selected.Cwd) != workspaceRoot {
+		return errors.Join(
+			errClaudeCLIOpenFailed, errClaudeCLIRemoteRestoreUncertain, openErr,
+			fmt.Errorf("Claude session 目录与当前 binding 不一致"),
+		)
+	}
+	if _, acquireErr := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
+		Route: route, Selected: selected, Command: "cli compensate",
+	}); acquireErr != nil {
+		return errors.Join(errClaudeCLIOpenFailed, errClaudeCLIRemoteRestoreUncertain, openErr, acquireErr)
+	}
+	return errors.Join(errClaudeCLIOpenFailed, openErr)
 }
 
 // hasActiveClaudeTask 同时兼容会话规范键和当前后台执行器实际登记键。
