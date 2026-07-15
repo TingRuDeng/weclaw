@@ -431,12 +431,12 @@
 - 正确做法：延迟创建原生流卡；零延迟配置在非空进度到达时创建，正延迟配置只在进度实际发送时创建；排队外部任务直接传递调用入口已解析的 `ProgressConfig`；暂存状态只发送一行确认。
 - 来源：2026-07-12 用户截图反馈飞书回复混乱，实机记录显示同一流程叠加暂存提示、空完成卡和最终文本。
 
-## 2026-07-12 Codex Desktop no-client 的运行时恢复
+## 2026-07-12 Codex Desktop no-client 的显式 Handoff 恢复
 
-- 触发条件：session store 仍保存当前 route 的 `remote` 控制意图，但实际运行位置仍记录为 `desktop_live`，且 Desktop follower 对普通消息返回 `no-client-found`。
-- 规则：`no-client-found` 是请求未被任何 Desktop 客户端处理的确定性运行时 release 证据；可以保持用户的 `remote` 控制意图不变，把实际 runtime 恢复到 WeClaw app-server，并只重试原消息一次。
-- 反例：把 `/cx owner desktop` 的显式释放也当成自动恢复条件；或者把断线、超时、交付状态未知当成 release 自动重试，造成越权接管或消息重复执行。
-- 正确做法：只在持久化意图仍为当前 route `remote` 时，对 `ErrCodexDesktopNoClient` 执行 runtime release、recover 和单次 app-server 重试；`desktop` intent 的普通消息必须拒绝，直到用户重新选择会话或发送 `/cx owner remote`。`ErrCodexDesktopDisconnected` 与 `ErrCodexDesktopDeliveryUnknown` 保持原错误和 owner，不做回退。
+- 触发条件：session store 仍保存当前 route 的 `remote` 控制意图，用户重新选择会话或发送 `/cx owner remote`，显式 Handoff 探测确认没有 Desktop 客户端持有目标 thread。
+- 规则：`no-client-found` 只在显式 Handoff 中作为实际 runtime 的 release 证据；系统可以保持用户的 `remote` 控制意图不变，把目标 thread 恢复到 WeClaw app-server。
+- 反例：把普通消息的 no-client 错误自动改成 app-server 重试；或者把 `/cx owner desktop`、断线、超时、交付状态未知当成自动恢复条件，造成越权接管或消息重复执行。
+- 正确做法：仅由重新选择或 `/cx owner remote` 触发 Handoff 恢复；普通消息不自动恢复或重试。`desktop` intent 的普通消息必须拒绝，直到用户重新选择会话或发送 `/cx owner remote`。
 - 来源：2026-07-12 Android 飞书机器人发送普通消息后，日志立即返回 `没有 Codex Desktop 客户端可处理请求: no-client-found`。
 
 ## 2026-07-12 Agent 会话创建必须由用户显式授权
