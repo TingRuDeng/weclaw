@@ -23,6 +23,8 @@ type fakeCodexLiveAgent struct {
 	watchResults   []fakeCodexWatchResult
 	inspectEntered chan struct{}
 	inspectRelease <-chan struct{}
+	handoffEntered chan struct{}
+	handoffRelease <-chan struct{}
 	turnEntered    chan struct{}
 	turnRelease    <-chan struct{}
 }
@@ -59,13 +61,21 @@ func (f *fakeCodexLiveAgent) InspectCodexRuntime(ctx context.Context, req agent.
 	return f.binding, f.bindErr
 }
 
-func (f *fakeCodexLiveAgent) HandoffCodexRuntime(_ context.Context, req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
+func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.handoffCalls++
 	f.lastRuntimeReq = req
-	if f.handoffErr != nil {
-		return agent.CodexThreadBinding{}, f.handoffErr
+	entered, release := f.handoffEntered, f.handoffRelease
+	handoffErr := f.handoffErr
+	f.mu.Unlock()
+	signalCodexLiveTestHook(entered)
+	if err := waitCodexLiveTestHook(ctx, release); err != nil {
+		return agent.CodexThreadBinding{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if handoffErr != nil {
+		return agent.CodexThreadBinding{}, handoffErr
 	}
 	f.binding.Ref = req.Ref
 	f.binding.Control = req.Intent

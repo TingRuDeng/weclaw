@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -17,6 +18,7 @@ type codexWorkspaceGroup struct {
 
 type codexWorkspaceCdRequest struct {
 	Context         context.Context
+	TaskContext     context.Context
 	UserID          string
 	ActorUserID     string
 	BindingKey      string
@@ -149,16 +151,25 @@ func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(entry codexSingleSe
 		conversationID: conversationID, threadID: session.ThreadID,
 	}
 	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)
-	unlock := h.lockCodexThreadControl(session.ThreadID)
+	unlock, err := h.lockCodexSessionThread(req.Context, session.ThreadID, "cd")
+	if err != nil {
+		return cardNavigationResult(wechatCommandText(
+			"已进入工作空间并切换会话。",
+			"工作空间: "+workspaceName,
+			"运行位置探测超时；会话选择已保留。",
+		))
+	}
 	defer unlock()
+	started := time.Now()
 	resolution, runtimeErr := h.inspectSelectedCodexRuntimeLocked(req.Context, route, req.Agent)
+	logCodexSessionControlTimeout("cd", "runtime-inspect", session.ThreadID, started, runtimeErr)
 	lines := []string{"已进入工作空间并切换会话。", "工作空间: " + workspaceName}
 	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(session.ThreadID))
 	lines = append(lines, renderSessionModelStatus(modelStatus)...)
 	lines = append(lines, renderCodexOwnerNotice(resolution, route)...)
-	if canObserveCodexTask(resolution, route) {
+	if !isCodexSessionControlTimeout(runtimeErr) && canObserveCodexTask(resolution, route) {
 		state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
-			ctx:            req.Context,
+			ctx:            firstCodexContext(req.TaskContext, req.Context),
 			actorUserID:    firstNonBlank(req.ActorUserID, req.UserID),
 			routeUserID:    req.UserID,
 			agentName:      req.AgentName,
@@ -176,6 +187,13 @@ func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(entry codexSingleSe
 	}
 	lines = append(lines, renderCodexRuntimeInspectError(runtimeErr)...)
 	return cardNavigationResult(wechatCommandText(lines...))
+}
+
+func firstCodexContext(primary context.Context, fallback context.Context) context.Context {
+	if primary != nil {
+		return primary
+	}
+	return normalizeContext(fallback)
 }
 
 // renderCodexPwd 显示当前浏览层级，帮助用户确认 /cx ls 会列什么。

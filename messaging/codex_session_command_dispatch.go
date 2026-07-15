@@ -9,6 +9,7 @@ import (
 
 type codexSessionCommandRuntime struct {
 	ctx             context.Context
+	externalTaskCtx context.Context
 	req             codexSessionCommandRequest
 	actorUserID     string
 	routeUserID     string
@@ -50,7 +51,12 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 		ownerBindingKey: codexBindingKey(actorUserID, agentName),
 		workspaceRoot:   h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag),
 	}
-	unlock := h.lockAgentExecution(codexBindingExecutionKey(runtime.bindingKey))
+	unlock, err := h.lockCodexSessionBinding(ctx, runtime.bindingKey, fields[1])
+	if err != nil {
+		return codexSessionCommandPreparation{result: textNavigationResult(
+			"前一项 Codex 会话操作仍在处理，本次命令未执行。",
+		)}
+	}
 	if reply := h.rejectDisallowedCodexWorkspace(runtime.bindingKey, agentName, runtime.workspaceRoot, fields, runtime.admin); reply != "" {
 		unlock()
 		return codexSessionCommandPreparation{result: textNavigationResult(reply)}
@@ -179,6 +185,7 @@ func (h *Handler) dispatchCodexSwitchCommand(runtime codexSessionCommandRuntime)
 		options: codexSwitchOptions{
 			actorUserID: runtime.actorUserID, platform: runtime.req.Platform,
 			accountID: runtime.req.AccountID, reply: runtime.req.Reply,
+			externalTaskCtx: runtime.externalTaskCtx,
 		},
 	})
 	return textNavigationResult(text)
@@ -192,13 +199,15 @@ func (runtime codexSessionCommandRuntime) shortSelectionRequest() codexShortSele
 		Agent: runtime.agent, BindingKey: runtime.bindingKey, Target: runtime.fields[1],
 		OwnerBindingKey: runtime.ownerBindingKey, Platform: runtime.req.Platform,
 		AccountID: runtime.req.AccountID, Reply: runtime.req.Reply, Admin: runtime.admin,
+		TaskContext: runtime.externalTaskCtx,
 	}
 }
 
 // workspaceCdRequest 构造工作空间切换请求。
 func (runtime codexSessionCommandRuntime) workspaceCdRequest(target string) codexWorkspaceCdRequest {
 	return codexWorkspaceCdRequest{
-		Context: runtime.ctx, UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID,
+		Context: runtime.ctx, TaskContext: runtime.externalTaskCtx,
+		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID,
 		BindingKey: runtime.bindingKey, OwnerBindingKey: runtime.ownerBindingKey,
 		AgentName: runtime.agentName, Target: target, Agent: runtime.agent,
 		Platform: runtime.req.Platform, AccountID: runtime.req.AccountID,

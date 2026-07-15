@@ -3,6 +3,7 @@ package messaging
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
@@ -52,10 +53,20 @@ func (h *Handler) renderCodexOwnerStatus(runtime codexSessionCommandRuntime, thr
 	if _, ok := runtime.agent.(agent.CodexLiveRuntimeAgent); !ok {
 		return cardNavigationResult("当前 Codex Agent 不支持显式控制权状态。")
 	}
-	resolution, err := h.resolveCodexRuntime(runtime.ctx, codexRuntimeResolveOptions{
+	unlock, err := h.lockCodexSessionThread(runtime.ctx, threadID, "owner")
+	if err != nil {
+		return cardNavigationResult("前一项会话操作仍在处理，控制权查询未执行。")
+	}
+	defer unlock()
+	started := time.Now()
+	resolution, err := h.resolveCodexRuntimeLocked(runtime.ctx, codexRuntimeResolveOptions{
 		route: runtime.codexRoute(threadID), threadID: threadID, ag: runtime.agent,
 	})
+	logCodexSessionControlTimeout("owner", "runtime-inspect", threadID, started, err)
 	if err != nil {
+		if isCodexSessionControlTimeout(err) {
+			return cardNavigationResult("Codex 控制权查询超时，当前运行位置未确认；请重试。")
+		}
 		if isCodexThreadStoreReadError(err) {
 			return cardNavigationResult("查询 Codex 控制权失败: 该会话暂时无法读取。")
 		}
@@ -66,7 +77,10 @@ func (h *Handler) renderCodexOwnerStatus(runtime codexSessionCommandRuntime, thr
 
 // handoffCodexOwner 先完成实际移交，再用 revision 提交持久化控制意图。
 func (h *Handler) handoffCodexOwner(runtime codexSessionCommandRuntime, threadID string, owner codexControlOwner) navigationCommandResult {
-	unlock := h.lockCodexThreadControl(threadID)
+	unlock, err := h.lockCodexSessionThread(runtime.ctx, threadID, "owner")
+	if err != nil {
+		return cardNavigationResult("前一项会话操作仍在处理，Codex 控制权移交未执行。")
+	}
 	defer unlock()
 	current := h.ensureCodexSessions().controlIntent(threadID)
 	if err := h.validateCodexOwnerHandoff(codexOwnerHandoffValidation{
@@ -84,8 +98,13 @@ func (h *Handler) handoffCodexOwner(runtime codexSessionCommandRuntime, threadID
 	if !ok {
 		return cardNavigationResult("当前 Codex Agent 不支持显式控制权移交。")
 	}
+	started := time.Now()
 	binding, err := liveAgent.HandoffCodexRuntime(runtime.ctx, request)
+	logCodexSessionControlTimeout("owner", "runtime-handoff", threadID, started, err)
 	if err != nil {
+		if isCodexSessionControlTimeout(err) {
+			return cardNavigationResult("Codex 控制权移交结果未确认，控制意图未提交；请重新查询 /cx owner 后重试。")
+		}
 		return cardNavigationResult(fmt.Sprintf("Codex 控制权移交失败: %v", err))
 	}
 	committed, err := h.commitCodexControlIntent(threadID, current, proposed)

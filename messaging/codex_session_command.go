@@ -2,11 +2,19 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
+)
+
+const (
+	defaultCodexSessionCommandTimeout  = 90 * time.Second
+	defaultCodexSessionLockWaitTimeout = 5 * time.Second
 )
 
 // codexSessionCommandRequest 拆开真实用户和会话路由，避免飞书 thread 命令串到用户全局会话。
@@ -27,12 +35,66 @@ func (h *Handler) handleCodexSessionCommandForRoute(ctx context.Context, req cod
 
 // handleCodexSessionCommandForRouteResult 执行命令并显式标记是否可展示导航卡片。
 func (h *Handler) handleCodexSessionCommandForRouteResult(ctx context.Context, req codexSessionCommandRequest) navigationCommandResult {
-	prepared := h.prepareCodexSessionCommand(ctx, req)
+	requestCtx := normalizeContext(ctx)
+	commandCtx, cancel := context.WithTimeout(requestCtx, h.codexSessionCommandTimeoutValue())
+	defer cancel()
+	prepared := h.prepareCodexSessionCommand(commandCtx, req)
 	if !prepared.ready {
 		return prepared.result
 	}
 	defer prepared.unlock()
+	prepared.runtime.externalTaskCtx = requestCtx
 	return h.dispatchCodexSessionCommand(prepared.runtime)
+}
+
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func (h *Handler) codexSessionCommandTimeoutValue() time.Duration {
+	if h.codexCommandTimeout > 0 {
+		return h.codexCommandTimeout
+	}
+	return defaultCodexSessionCommandTimeout
+}
+
+func (h *Handler) codexSessionLockWaitTimeoutValue() time.Duration {
+	if h.codexLockWaitTimeout > 0 {
+		return h.codexLockWaitTimeout
+	}
+	return defaultCodexSessionLockWaitTimeout
+}
+
+func (h *Handler) lockCodexSessionBinding(ctx context.Context, key string, command string) (func(), error) {
+	started := time.Now()
+	waitCtx, cancel := context.WithTimeout(normalizeContext(ctx), h.codexSessionLockWaitTimeoutValue())
+	defer cancel()
+	unlock, err := h.lockAgentExecutionContext(waitCtx, codexBindingExecutionKey(key))
+	logCodexSessionControlTimeout(command, "binding", key, started, err)
+	return unlock, err
+}
+
+func (h *Handler) lockCodexSessionThread(ctx context.Context, threadID string, command string) (func(), error) {
+	started := time.Now()
+	waitCtx, cancel := context.WithTimeout(normalizeContext(ctx), h.codexSessionLockWaitTimeoutValue())
+	defer cancel()
+	unlock, err := h.lockCodexThreadControlContext(waitCtx, threadID)
+	logCodexSessionControlTimeout(command, "thread", threadID, started, err)
+	return unlock, err
+}
+
+func isCodexSessionControlTimeout(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
+func logCodexSessionControlTimeout(command string, phase string, target string, started time.Time, err error) {
+	if !isCodexSessionControlTimeout(err) {
+		return
+	}
+	log.Printf("[codex-session-control] command=%s phase=%s target=%q elapsed=%s error=%v", command, phase, target, time.Since(started), err)
 }
 
 func (h *Handler) rejectDisallowedCodexWorkspace(bindingKey string, agentName string, workspaceRoot string, fields []string, admin bool) string {
@@ -78,6 +140,7 @@ type codexShortSelectionRequest struct {
 	AccountID       string
 	Reply           platform.Replier
 	Admin           bool
+	TaskContext     context.Context
 }
 
 // handleCodexShortSelection 保留短编号工作空间导航的结构化卡片状态。
@@ -85,6 +148,7 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 	if req.Target == ".." {
 		return h.handleCodexCdResult(codexWorkspaceCdRequest{
 			Context:         ctx,
+			TaskContext:     req.TaskContext,
 			UserID:          req.UserID,
 			ActorUserID:     req.ActorUserID,
 			BindingKey:      req.BindingKey,
@@ -106,11 +170,13 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 			options: codexSwitchOptions{
 				actorUserID: req.ActorUserID, platform: req.Platform,
 				accountID: req.AccountID, reply: req.Reply,
+				externalTaskCtx: req.TaskContext,
 			},
 		}))
 	}
 	return h.handleCodexCdResult(codexWorkspaceCdRequest{
 		Context:         ctx,
+		TaskContext:     req.TaskContext,
 		UserID:          req.UserID,
 		ActorUserID:     req.ActorUserID,
 		BindingKey:      req.BindingKey,

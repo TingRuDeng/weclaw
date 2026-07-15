@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -92,6 +93,49 @@ func TestCodexSwitchProbeFailureKeepsSelection(t *testing.T) {
 	threadID, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
 	if threadID != "thread-1" || pending || !strings.Contains(text, "运行位置探测失败") {
 		t.Fatalf("thread=%q pending=%v text=%q", threadID, pending, text)
+	}
+}
+
+func TestCodexSwitchProbeTimeoutKeepsSelection(t *testing.T) {
+	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
+	ag.inspectRelease = make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
+		ctx: ctx, userID: "user-1", agentName: "codex",
+		workspaceRoot: workspace, agent: ag, target: "thread-1",
+		options: codexSwitchOptions{actorUserID: "user-1"},
+	})
+	threadID, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	if threadID != "thread-1" || pending || !strings.Contains(text, "运行位置探测超时") ||
+		!strings.Contains(text, "会话选择已保留") {
+		t.Fatalf("thread=%q pending=%v text=%q", threadID, pending, text)
+	}
+}
+
+func TestCodexSwitchThreadLockTimeoutKeepsSelection(t *testing.T) {
+	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
+	h.codexLockWaitTimeout = 20 * time.Millisecond
+	unlockHolder := h.lockCodexThreadControl("thread-1")
+	resultCh := make(chan string, 1)
+	go func() {
+		resultCh <- h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
+			ctx: context.Background(), userID: "user-1", agentName: "codex",
+			workspaceRoot: workspace, agent: ag, target: "thread-1",
+			options: codexSwitchOptions{actorUserID: "user-1"},
+		})
+	}()
+
+	select {
+	case text := <-resultCh:
+		unlockHolder()
+		if !strings.Contains(text, "运行位置探测超时") || !strings.Contains(text, "会话选择已保留") {
+			t.Fatalf("text=%q", text)
+		}
+	case <-time.After(500 * time.Millisecond):
+		unlockHolder()
+		t.Fatal("thread 控制锁等待未按时结束")
 	}
 }
 

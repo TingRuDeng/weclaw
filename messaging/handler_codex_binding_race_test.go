@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,65 @@ func TestCodexSessionCommandUsesBindingLock(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("释放绑定锁后会话命令仍未继续")
 	}
+}
+
+func TestCodexSessionCommandBindingLockTimeout(t *testing.T) {
+	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{})
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	h.agents["codex"] = ag
+	h.defaultName = "codex"
+	h.codexCommandTimeout = time.Second
+	h.codexLockWaitTimeout = 20 * time.Millisecond
+	bindingKey := codexBindingKey("user-1", "codex")
+	unlock := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
+	defer unlock()
+
+	started := time.Now()
+	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
+	})
+	if !strings.Contains(reply, "前一项 Codex 会话操作仍在处理") || !strings.Contains(reply, "本次命令未执行") {
+		t.Fatalf("reply=%q", reply)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("锁等待未及时结束: %v", elapsed)
+	}
+}
+
+func TestCodexSessionCommandSwitchTimeoutDoesNotBlockOwnerPermanently(t *testing.T) {
+	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	h.agents["codex"] = ag
+	h.defaultName = "codex"
+	h.codexCommandTimeout = 80 * time.Millisecond
+	h.codexLockWaitTimeout = 20 * time.Millisecond
+	ag.inspectEntered = make(chan struct{}, 1)
+	ag.inspectRelease = make(chan struct{})
+
+	switchResult := make(chan string, 1)
+	go func() {
+		switchResult <- h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+			ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx switch thread-1",
+		})
+	}()
+	waitDone(t, ag.inspectEntered, "switch runtime 探测")
+
+	ownerReply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
+	})
+	if !strings.Contains(ownerReply, "本次命令未执行") {
+		t.Fatalf("owner reply=%q", ownerReply)
+	}
+
+	select {
+	case reply := <-switchResult:
+		if !strings.Contains(reply, "运行位置探测超时") || !strings.Contains(reply, "会话选择已保留") {
+			t.Fatalf("switch reply=%q", reply)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("switch 未在总时限后释放 binding 锁")
+	}
+	assertExecutionLockReusable(t, h, codexBindingExecutionKey(codexBindingKey("user-1", "codex")))
 }
 
 func TestCodexNewUsesBindingLock(t *testing.T) {
