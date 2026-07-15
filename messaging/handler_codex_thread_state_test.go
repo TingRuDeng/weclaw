@@ -115,6 +115,40 @@ func TestRecordCodexThreadKeepsExistingThreadWorkspace(t *testing.T) {
 	}
 }
 
+func TestSyncCodexThreadFromAgentDoesNotOverwriteExplicitSelection(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-selected")
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		threadID:  "thread-stale",
+	}
+
+	h.syncCodexThreadFromAgent("user-1", "codex", workspace, ag)
+
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
+	if pending || threadID != "thread-selected" {
+		t.Fatalf("thread=%q pending=%v，显式选择不应被 ACP 旧映射覆盖", threadID, pending)
+	}
+}
+
+func TestSyncCodexThreadFromAgentBackfillsEmptySelection(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		threadID:  "thread-restored",
+	}
+
+	h.syncCodexThreadFromAgent("user-1", "codex", workspace, ag)
+
+	threadID, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
+	if pending || threadID != "thread-restored" {
+		t.Fatalf("thread=%q pending=%v，空状态应允许 ACP 回填", threadID, pending)
+	}
+}
+
 func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()

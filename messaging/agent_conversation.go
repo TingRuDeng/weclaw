@@ -205,12 +205,14 @@ func (h *Handler) syncCodexThreadFromAgent(userID string, agentName string, work
 		return
 	}
 	bindingKey := codexBindingKey(userID, agentName)
-	if _, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot); pending {
+	store := h.ensureCodexSessions()
+	threadID, pending := store.getThread(bindingKey, workspaceRoot)
+	if pending || strings.TrimSpace(threadID) != "" {
 		return
 	}
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
-	threadID, ok := codexAg.CurrentCodexThread(conversationID)
+	threadID, ok = codexAg.CurrentCodexThread(conversationID)
 	if ok {
-		h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
+		store.setThread(bindingKey, workspaceRoot, threadID)
 	}
 }
