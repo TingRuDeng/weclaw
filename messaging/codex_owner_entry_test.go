@@ -2,6 +2,8 @@ package messaging
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +20,15 @@ func TestCodexOwnerRemoteRealEntryHidesAgentSessionStoreError(t *testing.T) {
 	h, ag, runtime := codexOwnerCommandFixture(t)
 	h.SetDefaultAgent("codex", ag)
 	h.SetAgentWorkDirs(map[string]string{"codex": runtime.workspaceRoot})
+	blockingParent := filepath.Join(t.TempDir(), "blocked-parent")
+	if err := os.WriteFile(blockingParent, []byte("not-a-directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	internalSessionPath := filepath.Join(
+		blockingParent, "route-secret", "conversation-secret", "codex.sock", "state.json",
+	)
 	h.agentSessions.mu.Lock()
-	h.agentSessions.filePath = "/private/route-secret/conversation-secret/codex.sock/state.json"
+	h.agentSessions.filePath = internalSessionPath
 	h.agentSessions.mu.Unlock()
 
 	result := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
@@ -29,6 +38,9 @@ func TestCodexOwnerRemoteRealEntryHidesAgentSessionStoreError(t *testing.T) {
 	})
 
 	assertCodexOwnerReplySafe(t, result)
+	if strings.Contains(result, blockingParent) {
+		t.Fatalf("result=%q 泄露内部路径 %q", result, blockingParent)
+	}
 	if !strings.Contains(result, "已切换并接管") ||
 		!strings.Contains(result, "警告: 保存当前窗口 Agent 失败") {
 		t.Fatalf("result=%q", result)
