@@ -24,6 +24,21 @@ func TestCodexOwnerStatusReturnsCardState(t *testing.T) {
 	}
 }
 
+func TestCodexOwnerStatusTimeoutReleasesThreadLock(t *testing.T) {
+	h, ag, runtime := codexOwnerCommandFixture(t)
+	ag.inspectRelease = make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	runtime.ctx = ctx
+
+	result := h.handleCodexOwnerCommand(runtime)
+	if !strings.Contains(result.Reply, "控制权查询超时") ||
+		!strings.Contains(result.Reply, "运行位置未确认") {
+		t.Fatalf("reply=%q", result.Reply)
+	}
+	assertCodexThreadLockReusable(t, h, "thread-1")
+}
+
 func TestCodexOwnerRemoteCommitsAfterSuccessfulHandoff(t *testing.T) {
 	h, ag, runtime := codexOwnerCommandFixture(t)
 	runtime.fields = []string{"/cx", "owner", "remote"}
@@ -53,6 +68,63 @@ func TestCodexOwnerRemoteFailureDoesNotPersistIntent(t *testing.T) {
 	if !strings.Contains(result.Reply, "移交失败") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
+}
+
+func TestCodexOwnerHandoffTimeoutDoesNotPersistIntent(t *testing.T) {
+	h, ag, runtime := codexOwnerCommandFixture(t)
+	ag.handoffRelease = make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	runtime.ctx = ctx
+	runtime.fields = []string{"/cx", "owner", "remote"}
+
+	result, _ := h.dispatchCodexUtilityCommand(runtime)
+	intent := h.codexSessions.controlIntent("thread-1")
+	if intent.Owner != codexControlUnclaimed || intent.Revision != 0 {
+		t.Fatalf("超时后不应写入控制意图: %#v", intent)
+	}
+	if !strings.Contains(result.Reply, "移交结果未确认") ||
+		!strings.Contains(result.Reply, "控制意图未提交") || !strings.Contains(result.Reply, "重新查询") {
+		t.Fatalf("reply=%q", result.Reply)
+	}
+	assertCodexThreadLockReusable(t, h, "thread-1")
+}
+
+func TestCodexOwnerThreadLockTimeoutDoesNotExecuteHandoff(t *testing.T) {
+	h, ag, runtime := codexOwnerCommandFixture(t)
+	h.codexLockWaitTimeout = 20 * time.Millisecond
+	runtime.fields = []string{"/cx", "owner", "remote"}
+	unlockHolder := h.lockCodexThreadControl("thread-1")
+	resultCh := make(chan navigationCommandResult, 1)
+	go func() {
+		resultCh <- h.handleCodexOwnerCommand(runtime)
+	}()
+
+	select {
+	case result := <-resultCh:
+		unlockHolder()
+		if !strings.Contains(result.Reply, "前一项会话操作仍在处理") ||
+			!strings.Contains(result.Reply, "移交未执行") {
+			t.Fatalf("reply=%q", result.Reply)
+		}
+	case <-time.After(500 * time.Millisecond):
+		unlockHolder()
+		t.Fatal("owner thread 锁等待未按时结束")
+	}
+	if ag.handoffCalls != 0 {
+		t.Fatalf("handoff=%d，锁超时后不应执行移交", ag.handoffCalls)
+	}
+}
+
+func assertCodexThreadLockReusable(t *testing.T, h *Handler, threadID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	unlock, err := h.lockCodexThreadControlContext(ctx, threadID)
+	if err != nil {
+		t.Fatalf("thread 控制锁无法复用: %v", err)
+	}
+	unlock()
 }
 
 func TestCodexOwnerPersistenceFailureDoesNotReportSuccess(t *testing.T) {

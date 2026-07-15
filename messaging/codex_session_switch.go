@@ -2,19 +2,22 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type codexSwitchOptions struct {
-	actorUserID string
-	platform    platform.PlatformName
-	accountID   string
-	reply       platform.Replier
+	actorUserID     string
+	platform        platform.PlatformName
+	accountID       string
+	reply           platform.Replier
+	externalTaskCtx context.Context
 }
 
 type codexSwitchRequest struct {
@@ -84,9 +87,17 @@ func (h *Handler) handleCodexSwitchForRouteWithOptions(req codexSwitchRequest) s
 	if err := h.commitCodexSwitchSelection(req, route); err != nil {
 		return fmt.Sprintf("切换 Codex 会话失败: 保存当前窗口 Agent: %v", err)
 	}
-	unlock := h.lockCodexThreadControl(route.threadID)
+	unlock, err := h.lockCodexSessionThread(req.ctx, route.threadID, "switch")
+	if err != nil {
+		return renderCodexSwitchControlTimeout(route, err)
+	}
 	defer unlock()
+	started := time.Now()
 	resolution, runtimeErr := h.inspectSelectedCodexRuntimeLocked(req.ctx, route, req.agent)
+	logCodexSessionControlTimeout("switch", "runtime-inspect", route.threadID, started, runtimeErr)
+	if isCodexSessionControlTimeout(runtimeErr) {
+		return renderCodexSwitchControlTimeout(route, runtimeErr)
+	}
 	return h.renderCodexSwitchResult(codexSwitchRenderRequest{
 		switchRequest: req, route: route, resolution: resolution, runtimeErr: runtimeErr,
 	})
@@ -127,9 +138,9 @@ func (h *Handler) renderCodexSwitchResult(render codexSwitchRenderRequest) strin
 	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(route.threadID))
 	lines = append(lines, renderSessionModelStatus(modelStatus)...)
 	lines = append(lines, renderCodexOwnerNotice(resolution, route)...)
-	if canObserveCodexTask(resolution, route) {
+	if !isCodexSessionControlTimeout(render.runtimeErr) && canObserveCodexTask(resolution, route) {
 		state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
-			ctx: req.ctx, actorUserID: firstNonBlank(req.options.actorUserID, req.userID),
+			ctx: codexExternalTaskContext(req), actorUserID: firstNonBlank(req.options.actorUserID, req.userID),
 			routeUserID: req.userID, agentName: req.agentName, agent: req.agent,
 			conversationID: route.conversationID, threadID: route.threadID,
 			platform: req.options.platform, accountID: req.options.accountID, reply: req.options.reply,
@@ -141,6 +152,13 @@ func (h *Handler) renderCodexSwitchResult(render codexSwitchRenderRequest) strin
 	}
 	lines = append(lines, renderCodexRuntimeInspectError(render.runtimeErr)...)
 	return wechatCommandText(lines...)
+}
+
+func codexExternalTaskContext(req codexSwitchRequest) context.Context {
+	if req.options.externalTaskCtx != nil {
+		return req.options.externalTaskCtx
+	}
+	return normalizeContext(req.ctx)
 }
 
 // inspectSelectedCodexRuntimeLocked 只读探测已选择会话，失败不回滚用户选择。
@@ -165,10 +183,25 @@ func renderCodexRuntimeInspectError(err error) []string {
 	if err == nil {
 		return nil
 	}
+	if isCodexSessionControlTimeout(err) {
+		return []string{"运行位置探测超时；会话选择已保留。"}
+	}
 	if isCodexThreadStoreReadError(err) {
 		return []string{"运行位置探测失败: 该会话暂时无法读取；会话选择已保留。"}
 	}
 	return []string{"运行位置探测失败: " + err.Error()}
+}
+
+func renderCodexSwitchControlTimeout(route codexConversationRoute, err error) string {
+	message := "运行位置探测超时；会话选择已保留。"
+	if errors.Is(err, context.Canceled) {
+		message = "运行位置探测已取消；会话选择已保留。"
+	}
+	return wechatCommandText(
+		"已切换会话。",
+		"工作空间: "+shortCodexWorkspaceName(route.workspaceRoot),
+		message,
+	)
 }
 
 func (h *Handler) resolveCodexSwitchTarget(req codexSwitchTargetRequest) (string, string, error) {

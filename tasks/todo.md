@@ -2,31 +2,25 @@
 
 ## 目标
 
-按 `tasks/immediate-risk-fixes-2026-07-15.md` 修复第一批四个已确认的高价值问题，并补齐确定性回归测试。
+按 `tasks/codex-session-control-timeout.md` 修复 Codex 会话切换卡住后，普通消息和 `/cx owner remote` 永久等待的问题。
 
 ## 任务清单
 
-- [x] P0 串行：建立隔离分支和修复 Spec。
-- [x] HARD-GATE：用户已显式确认第一批修复方案。
-- [x] P1 串行：测试先行修复安装资产 checksum 校验。
-- [x] P2 串行：测试先行修复后台启动吞凭据加载错误。
-- [x] P3 串行：测试先行修复 iLink 会话过期退避判断。
-- [x] P4 串行：测试先行修复 CDN PKCS#7 填充校验。
+- [x] P0 串行：完成运行日志、部署版本、会话状态和锁链只读诊断。
+- [x] P1 串行：完成方案比较与修复 Spec。
+- [x] HARD-GATE：用户已显式确认修复计划。
+- [x] P2 串行：测试先行实现 context-aware keyed lock。
+- [x] P3 串行：接入 Codex 控制命令总时限与锁等待时限。
+- [x] P4 串行：补 switch/owner 超时语义和确定性并发测试。
 - [x] P5 串行：完成定向、全量、race、vet、构建和文档门禁验证。
 - [x] P6 串行：完成 Review Gate 并回填验证记录。
 
 ## 当前状态
 
-P0 至 P6 已完成，第一批高价值风险修复结束。
+修复、验证与 Review Gate 已完成；发布状态以 GitHub Release 和版本 tag 为准。
 
 ## Review 小结
 
-- 终态：finished。
-- Spec 符合度：通过；四项修复均在已批准范围。
-- 安全检查：通过；安装资产替换前校验 SHA-256，未引入凭据或静默降级。
-- 测试与验证：定向、受影响包、全仓、race、vet、build、文档和 diff 门禁全部通过。
-- 复杂度检查：通过；涉及文件和函数均符合硬约束。
-- Document-refresh: not-needed；未改变 CLI、配置结构或用户操作流程。
-- 剩余风险：checksum 尚无独立签名信任根，旧 Release 缺少摘要时安装会明确失败。
-- 潜在技术债：设计型项目风险继续保留，不在本批次扩大处理。
-- 结论：通过。
+- 消除了 Codex 会话控制命令的永久锁等待，并保留原有 binding/thread 状态顺序。
+- switch 超时明确保留已提交选择；owner 超时不提交控制意图、不误报成功。
+- 全仓测试、messaging race、vet、build、文档校验与差异门禁均通过。

@@ -103,6 +103,8 @@ type Handler struct {
 	serviceAdminMu          sync.Mutex
 	serviceAdminExecutor    ServiceAdminCommandExecutor
 	adminTimeout            time.Duration
+	codexCommandTimeout     time.Duration
+	codexLockWaitTimeout    time.Duration
 }
 
 const (
