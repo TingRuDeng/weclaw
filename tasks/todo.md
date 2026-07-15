@@ -12,7 +12,7 @@ fail-closed 任务门禁。
 - [x] Task 3：实现统一选择接管 saga。
 - [x] Task 4：收口工作空间切换与飞书入口。
 - [x] Task 5：让 `/cc new` 与全局 `/new` 创建后原子接管。
-- [ ] Task 6：实现 owner 查询、远程接管与写入门禁。
+- [x] Task 6：实现 owner 查询、远程接管与写入门禁。
 - [ ] Task 7：实现 `/cc cli` 本地交接与失败补偿。
 - [ ] Task 8：补齐并发、重启、文档与全量验证。
 
@@ -23,6 +23,7 @@ fail-closed 任务门禁。
 
 ## 当前状态
 
-Task 5 已完成：`/cc new` 与默认 Claude 的全局 `/new` 统一通过 create-and-acquire
-saga 创建并接管 session；创建后复用 ACP 已更新的 runtime，不重复 resume，持久化或默认
-Agent 写入失败时恢复事务前真实 runtime、binding 和 owner，新建孤立 session 保持无远程所有权。
+Task 6 已完成：`/cc owner` 可脱敏展示控制方，`local` 复用统一 release，`remote`
+复用统一 acquire；普通 Claude ACP 消息在任务登记前校验 remote owner 并记录 session/revision，
+prompt 前再次复核，当前 session 的模型写入也执行相同门禁。状态、列表和帮助文本同步展示
+所有权边界，并提示重新接管前先结束本地 Claude CLI。

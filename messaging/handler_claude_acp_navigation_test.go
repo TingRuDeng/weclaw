@@ -72,9 +72,7 @@ func TestClaudeNormalMessageRequiresExplicitBinding(t *testing.T) {
 func TestClaudeResumeFailureRetainsBinding(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-1", Cwd: workspace}}
-	if err := h.ensureClaudeSessions().commitSelection(claudeBindingKey("user-1", "claude"), workspace, "session-1"); err != nil {
-		t.Fatal(err)
-	}
+	seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-1", 1)
 	h.ensureClaudeSessions().markPendingResume(claudeBindingKey("user-1", "claude"))
 	fake.useErr = errors.New("resume failed")
 
@@ -88,9 +86,7 @@ func TestClaudeResumeFailureRetainsBinding(t *testing.T) {
 func TestClaudePendingResumeBecomesReady(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	key := claudeBindingKey("user-1", "claude")
-	if err := h.ensureClaudeSessions().commitSelection(key, workspace, "session-1"); err != nil {
-		t.Fatal(err)
-	}
+	seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-1", 1)
 	if err := h.ensureClaudeSessions().markPendingResume(key); err != nil {
 		t.Fatal(err)
 	}

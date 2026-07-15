@@ -14,7 +14,7 @@ func isClaudeSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "cli", "model", "help":
+	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "owner", "cli", "model", "help":
 		return true
 	default:
 		return false
@@ -87,6 +87,8 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 		return textNavigationResult(wechatCommandText("workspace: " + route.WorkspaceRoot))
 	case "status":
 		return textNavigationResult(h.renderClaudeStatus(route))
+	case "owner":
+		return textNavigationResult(h.handleClaudeOwnerCommand(route, fields[2:]))
 	case "cli":
 		return textNavigationResult(h.handleClaudeCLI(route))
 	case "model":
