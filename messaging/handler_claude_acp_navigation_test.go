@@ -113,7 +113,7 @@ func TestClaudeSwitchSaveFailureRollsBackRuntime(t *testing.T) {
 
 	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 0")
 	binding := h.ensureClaudeSessions().binding(key)
-	if !strings.Contains(text, "disk full") || binding.SessionID != "session-old" {
+	if !strings.Contains(text, "失败，请稍后重试") || strings.Contains(text, "disk full") || binding.SessionID != "session-old" {
 		t.Fatalf("text=%q binding=%+v", text, binding)
 	}
 	if len(fake.useCalls) != 2 || fake.useCalls[0] != "session-new" || fake.useCalls[1] != "session-old" {

@@ -21,6 +21,7 @@ type fakeClaudeSessionAgent struct {
 	resetClears      bool
 	sessionConfig    agent.ClaudeSessionConfig
 	conversationCwds map[string]string
+	runtimeSessions  map[string]string
 }
 
 func (f *fakeClaudeSessionAgent) ResetSession(_ context.Context, conversationID string) (string, error) {
@@ -46,7 +47,10 @@ func (f *fakeClaudeSessionAgent) SetConversationCwd(conversationID string, cwd s
 	f.conversationCwds[conversationID] = cwd
 }
 
-func (f *fakeClaudeSessionAgent) CurrentClaudeSession(string) (string, bool) {
+func (f *fakeClaudeSessionAgent) CurrentClaudeSession(conversationID string) (string, bool) {
+	if sessionID := f.runtimeSessions[conversationID]; sessionID != "" {
+		return sessionID, true
+	}
 	if f.sessionID == "" {
 		return "", false
 	}
@@ -61,6 +65,10 @@ func (f *fakeClaudeSessionAgent) UseClaudeSession(_ context.Context, conversatio
 		return f.useErr
 	}
 	f.sessionID = sessionID
+	if f.runtimeSessions == nil {
+		f.runtimeSessions = make(map[string]string)
+	}
+	f.runtimeSessions[conversationID] = sessionID
 	return nil
 }
 
@@ -74,7 +82,10 @@ func (f *fakeClaudeSessionAgent) SetClaudeSessionConfig(context.Context, agent.C
 
 func (f *fakeClaudeSessionAgent) ClearClaudeSession(conversationID string) {
 	f.clearCalledWith = conversationID
-	f.sessionID = ""
+	delete(f.runtimeSessions, conversationID)
+	if len(f.runtimeSessions) == 0 {
+		f.sessionID = ""
+	}
 }
 
 type recordedClaudeCLIResume struct {

@@ -9,7 +9,7 @@ fail-closed 任务门禁。
 
 - [x] Task 1：升级 Claude 状态模型并完成 v2 安全迁移。
 - [x] Task 2：实现原子选择、释放和 session 有序锁。
-- [ ] Task 3：实现统一选择接管 saga。
+- [x] Task 3：实现统一选择接管 saga。
 - [ ] Task 4：接入 switch、卡片、new 与全局 `/new`。
 - [ ] Task 5：实现 owner 查询、远程接管与本地释放。
 - [ ] Task 6：实现 `/cc cli` 本地交接与失败补偿。

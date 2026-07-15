@@ -3,6 +3,7 @@ package messaging
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -36,33 +37,13 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 	if err != nil {
 		return err.Error()
 	}
-	if err := h.commitClaudeSelection(route, selected); err != nil {
-		return fmt.Sprintf("切换 Claude 会话失败: %v", err)
+	if _, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
+		Route: route, Selected: selected, Command: "switch",
+	}); err != nil {
+		log.Printf("[claude-session-acquire] 切换并接管失败: %v", err)
+		return renderClaudeSessionAcquireFailure(err)
 	}
 	return h.renderClaudeSelection(route, selected)
-}
-
-func (h *Handler) commitClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession) error {
-	claudeAgent, ok := route.Agent.(agent.ClaudeSessionAgent)
-	if !ok {
-		return fmt.Errorf("当前 Claude Agent 不支持 session 切换")
-	}
-	store := h.ensureClaudeSessions()
-	previous, existed := store.bindingSnapshot(route.BindingKey)
-	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, selected.Cwd)
-	h.bindConversationCwd(route.Agent, conversationID, selected.Cwd)
-	if err := claudeAgent.UseClaudeSession(route.Context, conversationID, selected.ID); err != nil {
-		return err
-	}
-	if err := store.commitSelection(route.BindingKey, selected.Cwd, selected.ID); err != nil {
-		return errors.Join(err, h.rollbackClaudeRuntime(route, conversationID, previous))
-	}
-	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
-		storeErr := store.restoreBinding(route.BindingKey, previous, existed)
-		runtimeErr := h.rollbackClaudeRuntime(route, conversationID, previous)
-		return errors.Join(err, storeErr, runtimeErr)
-	}
-	return nil
 }
 
 func (h *Handler) rollbackClaudeRuntime(route claudeSessionRoute, currentConversationID string, previous claudeSessionBinding) error {
@@ -81,7 +62,7 @@ func (h *Handler) rollbackClaudeRuntime(route claudeSessionRoute, currentConvers
 
 func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession) string {
 	lines := []string{
-		"已切换 Claude 会话。",
+		"已切换并接管 Claude 会话。",
 		"工作空间: " + shortCodexWorkspaceName(selected.Cwd),
 		"session: " + selected.ID,
 		"恢复状态: 已就绪",
