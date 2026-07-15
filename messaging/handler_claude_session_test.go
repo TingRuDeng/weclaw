@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -107,12 +108,14 @@ func TestHandleCwdDoesNotChangeRuntimeCwdWhenClaudeReleaseFails(t *testing.T) {
 	store.controls["session-a"] = claudeControlIntent{
 		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
 	}
-	store.persist = func(claudeSessionState) error { return os.ErrPermission }
+	store.persist = func(claudeSessionState) error {
+		return errors.New("open /Users/private/claude-sessions.json: permission denied")
+	}
 	newWorkspace := t.TempDir()
 	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
 
 	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
-	if !strings.Contains(text, "切换 Claude 工作空间失败") {
+	if !strings.Contains(text, "切换 Claude 工作空间失败") || strings.Contains(text, "/Users/private") {
 		t.Fatalf("text=%q", text)
 	}
 	if got := fake.lastWorkingDir(); got != "" {
@@ -120,6 +123,49 @@ func TestHandleCwdDoesNotChangeRuntimeCwdWhenClaudeReleaseFails(t *testing.T) {
 	}
 	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerRemote {
 		t.Fatalf("intent=%+v", got)
+	}
+}
+
+func TestHandleCwdMultipleClaudeAgentsKeepsCwdWhenLaterReleaseFails(t *testing.T) {
+	h, first, workspace := newClaudeACPNavigationHandler(t)
+	second := &fakeClaudeSessionAgent{fakeAgent: fakeAgent{info: agent.AgentInfo{
+		Name: "@agentclientprotocol/claude-agent-acp", Type: "acp", Command: "claude-agent-acp",
+	}}}
+	h.agents["claude-2"] = second
+	h.SetAgentWorkDirs(map[string]string{"claude": workspace, "claude-2": workspace})
+	store := h.ensureClaudeSessions()
+	for _, name := range []string{"claude", "claude-2"} {
+		key := claudeBindingKey("user-1", name)
+		sessionID := "session-" + name
+		conversationID := buildClaudeConversationID("user-1", name, workspace)
+		store.bindings[key] = newClaudeBinding(workspace, sessionID, claudeBindingReady)
+		store.controls[sessionID] = claudeControlIntent{
+			Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
+		}
+	}
+	persistCalls := 0
+	store.persist = func(claudeSessionState) error {
+		persistCalls++
+		if persistCalls == 2 {
+			return os.ErrPermission
+		}
+		return nil
+	}
+	newWorkspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
+
+	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
+	if !strings.Contains(text, "切换 Claude 工作空间失败") {
+		t.Fatalf("text=%q", text)
+	}
+	if first.lastWorkingDir() != "" || second.lastWorkingDir() != "" {
+		t.Fatalf("first cwd=%q second cwd=%q", first.lastWorkingDir(), second.lastWorkingDir())
+	}
+	if got := store.controlIntent("session-claude"); got.Owner != claudeOwnerLocal {
+		t.Fatalf("first intent=%+v", got)
+	}
+	if got := store.controlIntent("session-claude-2"); got.Owner != claudeOwnerRemote {
+		t.Fatalf("second intent=%+v", got)
 	}
 }
 

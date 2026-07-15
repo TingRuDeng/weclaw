@@ -206,14 +206,3 @@ func codexLiveSwitchFixture(t *testing.T, state agent.CodexThreadState) (*Handle
 	})
 	return h, ag, workspace
 }
-
-func setSwitchControlIntent(t *testing.T, h *Handler, owner codexControlOwner) {
-	t.Helper()
-	current := h.codexSessions.controlIntent("thread-1")
-	_, err := h.codexSessions.updateControlIntent(codexControlIntentUpdate{
-		ThreadID: "thread-1", Owner: owner, ExpectedRevision: current.Revision,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}

@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -256,6 +257,95 @@ func TestClaudeRequireRemoteControlAllowsPendingResume(t *testing.T) {
 	}
 	if _, _, err := store.requireRemoteControl(key); err != nil {
 		t.Fatalf("pending_resume should be admissible: %v", err)
+	}
+}
+
+func TestClaudeOwnerCommandUsageAndStatusVariants(t *testing.T) {
+	h, _, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", h.agents["claude"], workspace)
+
+	for _, args := range [][]string{{"invalid"}, {"local", "extra"}} {
+		if text := h.handleClaudeOwnerCommand(route, args); !strings.Contains(text, "用法") {
+			t.Fatalf("args=%v text=%q", args, text)
+		}
+	}
+	owners := []struct {
+		intent claudeControlIntent
+		want   string
+	}{
+		{claudeControlIntent{Owner: claudeOwnerRemote, BindingKey: key, ConversationID: "conversation"}, "当前远程窗口"},
+		{claudeControlIntent{Owner: claudeOwnerRemote, BindingKey: "other", ConversationID: "conversation"}, "其他远程窗口"},
+		{claudeControlIntent{Owner: claudeOwnerLocal}, "本地 Claude CLI"},
+		{claudeControlIntent{Owner: claudeOwnerUnclaimed}, "未认领"},
+	}
+	for _, owner := range owners {
+		store.controls["session-a"] = owner.intent
+		if text := h.renderClaudeOwnerStatus(route); !strings.Contains(text, owner.want) {
+			t.Fatalf("intent=%+v text=%q want=%q", owner.intent, text, owner.want)
+		}
+	}
+}
+
+func TestClaudeOwnerRemoteRejectsMissingActiveAndCatalogFailure(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		h, _, _ := newClaudeACPNavigationHandler(t)
+		if text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc owner remote"); !strings.Contains(text, "没有有效") {
+			t.Fatalf("text=%q", text)
+		}
+	})
+
+	t.Run("active", func(t *testing.T) {
+		h, fake, workspace := newClaudeACPNavigationHandler(t)
+		key := seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-a", 1)
+		conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+		task, _, started := h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{owner: "user-1"})
+		if !started {
+			t.Fatal("active task not started")
+		}
+		defer h.finishActiveTask(conversationID, task)
+		fake.catalogSessions = []agent.ClaudeSession{{ID: "session-a", Cwd: workspace}}
+		route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", fake, workspace)
+		route.BindingKey = key
+		if text := h.reacquireClaudeOwner(route); !strings.Contains(text, "任务") {
+			t.Fatalf("text=%q", text)
+		}
+	})
+
+	t.Run("catalog", func(t *testing.T) {
+		h, fake, workspace := newClaudeACPNavigationHandler(t)
+		seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-a", 1)
+		fake.catalogErr = errors.New("catalog unavailable: /Users/private/claude-sessions.json")
+		text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc owner remote")
+		if !strings.Contains(text, "查询当前 Claude 会话失败") || strings.Contains(text, "/Users/private") {
+			t.Fatalf("text=%q", text)
+		}
+	})
+}
+
+func TestRenderClaudeRemoteControlErrorHidesInternalDetails(t *testing.T) {
+	text := renderClaudeRemoteControlError(errors.New("open /Users/private/claude-sessions.json: permission denied"))
+	if !strings.Contains(text, "检查 Claude 远程控制权失败") || strings.Contains(text, "/Users/private") {
+		t.Fatalf("text=%q", text)
+	}
+}
+
+func TestRenderClaudeOwnerMutationFailureVariants(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{errClaudeSessionReleaseActive, "任务正在运行"},
+		{errClaudeRemoteSelectionOtherRoute, "其他远程窗口"},
+		{errClaudeRemoteSelectionChanged, "状态刚刚发生变化"},
+		{errors.New("disk full"), "释放 Claude 远程控制失败"},
+	}
+	for _, test := range tests {
+		if text := renderClaudeOwnerMutationFailure(test.err); !strings.Contains(text, test.want) {
+			t.Fatalf("error=%v text=%q want=%q", test.err, text, test.want)
+		}
 	}
 }
 

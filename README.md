@@ -75,10 +75,15 @@ Session selection or creation completes runtime probing and state persistence be
 /cc switch <number|sessionId>
 /cc new
 /cc status
+/cc owner
+/cc owner local
+/cc owner remote
 /cc cli
 ```
 
-Claude uses ACP `session/list`, `session/resume`, and `session/new` to manage real sessions. A selected session keeps its context and is restored before the next message after WeClaw restarts. Claude ACP supports `/stop` and queued continuation, but not `/guide`.
+Claude uses ACP `session/list`, `session/resume`, and `session/new` to manage real sessions. Selecting or creating a session, choosing it from a Feishu card, or using global `/new` while Claude is the default agent immediately gives the current remote window ownership. `session/list` is the session-directory source of truth; WeClaw's persisted control intent is the remote-write source of truth. Bindings and control intent are restored before the next message after WeClaw restarts.
+
+`/cc owner local` explicitly releases remote control, while `/cc owner remote` reacquires it after the native Claude CLI has ended. `/cc cli` releases remote control before opening the native CLI; do not reacquire while that CLI is still active. Tasks running in an independent Claude CLI are outside WeClaw's runtime, so they cannot be observed, streamed, guided with `/guide`, or stopped remotely. Legacy state where multiple windows reference one session migrates to unclaimed instead of silently choosing a winner. Remote Claude ACP tasks support `/stop` and queued continuation, but not `/guide`.
 
 ### Control a Running Task
 

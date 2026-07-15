@@ -486,3 +486,11 @@
 - 反例：为核心测试、全仓测试、race 和 vet 分别创建 `/tmp/weclaw-*` 缓存；每个目录占用数百 MiB，最终并行耗尽磁盘并产生与代码无关的 `no space left on device` 失败。
 - 正确做法：普通全仓测试使用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw go test ./...`；其他 WeClaw Go 验证也复用同一个 `GOCACHE`，需要隔离时优先串行执行，不通过新增缓存目录隔离。
 - 来源：2026-07-15 最终发布前复验因多套临时 Go 缓存耗尽磁盘；用户明确要求以后所有 WeClaw 测试共用固定缓存。
+
+## 2026-07-15 Claude session 的目录事实与写入所有权必须分离
+
+- 触发条件：多个微信或飞书 route、WeClaw ACP runtime 和本地 Claude CLI 可能继续使用同一个 Claude session。
+- 规则：`session/list` 只回答有哪些真实 session；远程写入必须由持久化 control intent 的 owner tuple 和 revision 决定。选择或新建通过统一事务取得 `remote`，本地交接先提交 `local`；普通消息不得根据 ACP runtime 或最近 binding 隐式接管。
+- 反例：把 conversation runtime、session binding 或 `session/list` 中存在目标 session 当作写入授权；两个窗口会各自恢复同一 session 并并发写入，补偿失败还可能覆盖新赢家。
+- 正确做法：binding 锁外层配合排序 session 锁，copy-on-write 一次持久化 binding/control；任务登记前和 prompt 前复核 session/revision；失败补偿只在 after-image 仍匹配时回滚，否则保持 `local` 或 `unclaimed` fail-closed。v2 多 binding 冲突不选赢家。
+- 来源：2026-07-15 Claude 远程会话“选择即接管”治理。

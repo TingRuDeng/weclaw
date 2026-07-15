@@ -75,10 +75,15 @@ weclaw status
 /cc switch <编号|sessionId>
 /cc new
 /cc status
+/cc owner
+/cc owner local
+/cc owner remote
 /cc cli
 ```
 
-Claude 通过 ACP `session/list`、`session/resume` 和 `session/new` 管理真实 session。选择后会持续复用上下文，重启 WeClaw 后在下一条消息前恢复绑定。Claude ACP 支持 `/stop` 和排队续跑，不支持 `/guide`。
+Claude 通过 ACP `session/list`、`session/resume` 和 `session/new` 管理真实 session。选择、新建、飞书卡片切换或默认 Claude 的全局 `/new` 都会由当前远程窗口立即接管；`session/list` 是会话目录事实源，WeClaw 持久化的 control intent 是远程写入事实源。重启 WeClaw 后会在下一条消息前恢复绑定和控制意图。
+
+`/cc owner local` 只显式释放远程控制，`/cc owner remote` 在确认本地 Claude CLI 已结束后重新接管。`/cc cli` 会先释放远程控制再打开原生 CLI；本地 CLI 结束前不要重新接管。独立 Claude CLI 中的任务不属于 WeClaw 运行态，因此没有远程观察、进度回传、`/guide` 或远程停止能力。旧版状态若有多个窗口指向同一 session，会迁移为未认领状态，不会静默选择赢家。Claude ACP 远程任务支持 `/stop` 和排队续跑，不支持 `/guide`。
 
 ### 控制运行中任务
 

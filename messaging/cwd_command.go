@@ -43,7 +43,8 @@ func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin boo
 		return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
 	}
 	if err := h.releaseClaudeWorkspacesForCwd(userID, agents, absPath); err != nil {
-		return fmt.Sprintf("切换 Claude 工作空间失败: %v", err)
+		log.Printf("[handler] /cwd 切换前释放 Claude 控制权失败: %v", err)
+		return "切换 Claude 工作空间失败，请稍后重试。"
 	}
 	h.updateAgentWorkingDirectories(absPath, agents)
 	h.recordActiveWorkspaceForUser(userID, agents, absPath)

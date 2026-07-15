@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -31,7 +32,8 @@ func (h *Handler) renderClaudeModelStatus(ag agent.Agent) string {
 func (h *Handler) renderClaudeModelList(ctx context.Context, ag agent.Agent) string {
 	models, err := h.claudeModelsForAgent(ctx, ag)
 	if err != nil {
-		return fmt.Sprintf("查询 Claude 模型失败: %v", err)
+		log.Printf("[claude-model] 查询模型列表失败: %v", err)
+		return "查询 Claude 模型失败，请稍后重试。"
 	}
 	if len(models) == 0 {
 		return "Claude 当前没有可展示的模型。"

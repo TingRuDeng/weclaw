@@ -144,6 +144,7 @@ func TestHandleClaudeCLIRejectsNonOwnerWithoutOpening(t *testing.T) {
 		want   string
 	}{
 		{name: "local", intent: claudeControlIntent{Owner: claudeOwnerLocal, Revision: 2}, want: "/cc owner remote"},
+		{name: "unclaimed", intent: claudeControlIntent{Owner: claudeOwnerUnclaimed, Revision: 2}, want: "/cc owner remote"},
 		{name: "other route", intent: claudeControlIntent{
 			Owner: claudeOwnerRemote, BindingKey: claudeBindingKey("other", "claude"),
 			ConversationID: "other-conversation", Revision: 2,

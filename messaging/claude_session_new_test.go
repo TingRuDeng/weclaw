@@ -54,6 +54,22 @@ func TestClaudeNewCreatesAndOwnsSessionAtomically(t *testing.T) {
 	}
 }
 
+func TestClaudeNewRejectsEmptySessionIDWithoutOwner(t *testing.T) {
+	h, fake, _ := newClaudeSessionCreateHandler(t)
+	fake.resetSessionID = ""
+
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new")
+	if !strings.Contains(text, "新建 Claude 会话失败") || strings.Contains(text, "sessionId") || fake.resetCalls != 1 {
+		t.Fatalf("text=%q resetCalls=%d", text, fake.resetCalls)
+	}
+	store := h.ensureClaudeSessions()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.controls) != 0 {
+		t.Fatalf("controls=%+v", store.controls)
+	}
+}
+
 func TestClaudeNewStoreFailureRestoresTrueRuntimeAndOwner(t *testing.T) {
 	h, fake, workspace := newClaudeSessionCreateHandler(t)
 	key := claudeBindingKey("user-1", "claude")

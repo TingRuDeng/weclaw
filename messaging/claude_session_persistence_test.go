@@ -383,6 +383,38 @@ func TestClaudeSessionStoreReloadPreservesLocalOwner(t *testing.T) {
 	}
 }
 
+func TestClaudeRemoteAndLocalOwnersSurviveReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude-sessions.json")
+	workspace := t.TempDir()
+	key := claudeBindingKey("route-a", "claude")
+	bindings := map[string]claudeSessionBinding{
+		key: newClaudeBinding(workspace, "session-remote", claudeBindingReady),
+	}
+	controls := map[string]claudeControlIntent{
+		"session-remote": {
+			Owner: claudeOwnerRemote, BindingKey: key,
+			ConversationID: buildClaudeConversationID("route-a", "claude", workspace), Revision: 7,
+		},
+		"session-local": {Owner: claudeOwnerLocal, Revision: 3},
+	}
+	if err := persistClaudeSessionState(path, newClaudeSessionState(bindings, controls)); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := newClaudeSessionStore()
+	if err := reloaded.SetFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+	remote := reloaded.controlIntent("session-remote")
+	local := reloaded.controlIntent("session-local")
+	if remote.Owner != claudeOwnerRemote || remote.BindingKey != key || remote.Revision != 7 ||
+		local.Owner != claudeOwnerLocal || local.Revision != 3 {
+		t.Fatalf("remote=%+v local=%+v", remote, local)
+	}
+	if binding := reloaded.binding(key); binding.Status != claudeBindingPendingResume || binding.SessionID != "session-remote" {
+		t.Fatalf("binding=%+v", binding)
+	}
+}
+
 func TestClaudeSessionStoreLoadsReadyBindingAsPendingResume(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "claude-sessions.json")
 	first := newClaudeSessionStore()

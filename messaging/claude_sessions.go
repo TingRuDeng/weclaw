@@ -90,17 +90,6 @@ func (s *claudeSessionStore) controlIntent(sessionID string) claudeControlIntent
 	return s.controls[strings.TrimSpace(sessionID)]
 }
 
-// commitWorkspace 切换浏览工作空间并清除旧 session，要求用户显式选择或新建。
-func (s *claudeSessionStore) commitWorkspace(bindingKey string, workspaceRoot string) error {
-	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
-	if workspaceRoot == "" {
-		return fmt.Errorf("Claude 工作空间不能为空")
-	}
-	return s.updateBinding(bindingKey, func(current claudeSessionBinding) claudeSessionBinding {
-		return newClaudeBinding(workspaceRoot, "", claudeBindingUnbound)
-	})
-}
-
 // commitSelection 原子提交已由 ACP 验证成功的 workspace/session 绑定。
 func (s *claudeSessionStore) commitSelection(bindingKey string, workspaceRoot string, sessionID string) error {
 	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
@@ -126,21 +115,6 @@ func (s *claudeSessionStore) markResumeFailed(bindingKey string) error {
 // markReady 标记 ACP runtime 已恢复当前 session。
 func (s *claudeSessionStore) markReady(bindingKey string) error {
 	return s.updateStatus(bindingKey, claudeBindingReady)
-}
-
-// restoreBinding 恢复事务开始前的绑定；用于跨 ACP 与状态文件的补偿回滚。
-func (s *claudeSessionStore) restoreBinding(bindingKey string, binding claudeSessionBinding, existed bool) error {
-	return s.replaceBinding(bindingKey, binding, existed)
-}
-
-func (s *claudeSessionStore) replaceBinding(bindingKey string, binding claudeSessionBinding, existed bool) error {
-	return s.updateBindings(func(bindings map[string]claudeSessionBinding) {
-		if existed {
-			bindings[bindingKey] = binding
-			return
-		}
-		delete(bindings, bindingKey)
-	})
 }
 
 func (s *claudeSessionStore) updateStatus(bindingKey string, status claudeBindingStatus) error {

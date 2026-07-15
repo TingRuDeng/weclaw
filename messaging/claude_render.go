@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -65,7 +66,8 @@ func renderClaudeBindingSession(binding claudeSessionBinding) string {
 func (h *Handler) renderClaudeWorkspaceList(route claudeSessionRoute) string {
 	views, err := h.claudeSwitchTargets(route)
 	if err != nil {
-		return err.Error()
+		log.Printf("[claude-session] 查询会话列表失败: %v", err)
+		return "查询 Claude 会话失败，请稍后重试。"
 	}
 	if len(views) == 0 {
 		return "当前还没有可切换的 Claude 会话。"
@@ -82,7 +84,8 @@ func (h *Handler) renderClaudeWorkspaceList(route claudeSessionRoute) string {
 func (h *Handler) renderClaudeWorkspaceGroups(route claudeSessionRoute) string {
 	groups, err := h.claudeWorkspaceGroupsForRoute(route)
 	if err != nil {
-		return err.Error()
+		log.Printf("[claude-workspace] 查询工作空间列表失败: %v", err)
+		return "查询 Claude 工作空间失败，请稍后重试。"
 	}
 	if len(groups) == 0 {
 		return "当前还没有 Claude 工作空间。"

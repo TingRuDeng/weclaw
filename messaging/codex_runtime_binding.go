@@ -172,23 +172,6 @@ func codexResolutionModelStatus(resolution codexRuntimeResolution, fallback sess
 	return sessionModelStatus{Model: state.Model, Effort: state.Effort}
 }
 
-func renderCodexOwnerNotice(resolution codexRuntimeResolution, route codexConversationRoute) []string {
-	if !resolution.Live {
-		return nil
-	}
-	return []string{
-		"控制方: " + renderCodexControlOwnerForRoute(resolution.Request.Intent, route),
-		"运行位置: " + renderCodexRuntimeHolder(resolution.Binding.Runtime),
-	}
-}
-
-// canObserveCodexTask 防止非持有窗口镜像其他远程窗口的任务和最终结果。
-func canObserveCodexTask(resolution codexRuntimeResolution, route codexConversationRoute) bool {
-	intent := resolution.Request.Intent
-	return intent.Owner != agent.CodexControlRemote ||
-		(intent.RouteKey == route.bindingKey && intent.ConversationID == route.conversationID)
-}
-
 func renderCodexControlOwner(owner agent.CodexControlOwner) string {
 	switch owner {
 	case agent.CodexControlDesktop:

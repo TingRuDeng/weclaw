@@ -2,7 +2,7 @@ package messaging
 
 import (
 	"errors"
-	"fmt"
+	"log"
 	"strings"
 )
 
@@ -122,7 +122,8 @@ func (h *Handler) reacquireClaudeOwner(route claudeSessionRoute) string {
 	}
 	selected, err := h.findClaudeSessionForRoute(route, binding.SessionID)
 	if err != nil {
-		return err.Error()
+		log.Printf("[claude-owner] 查询当前会话失败: %v", err)
+		return "查询当前 Claude 会话失败，请稍后重试。"
 	}
 	if _, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
 		Route: route, Selected: selected, Command: "owner remote",
@@ -193,7 +194,7 @@ func renderClaudeRemoteControlError(err error) string {
 	case errors.Is(err, errClaudeTaskControlChanged), errors.Is(err, errClaudeRemoteSelectionChanged):
 		return "Claude 会话状态刚刚发生变化，请重新确认控制权后重试。"
 	default:
-		return fmt.Sprintf("检查 Claude 远程控制权失败: %v", err)
+		return "检查 Claude 远程控制权失败，请稍后重试。"
 	}
 }
 

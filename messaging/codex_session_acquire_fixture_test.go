@@ -4,7 +4,6 @@ import (
 	"context"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -137,8 +136,4 @@ func assertCodexAcquireOriginalState(t *testing.T, fixture *codexSessionAcquireF
 	}
 	want.handoffCount = handoffCount
 	assertCodexAcquireState(t, fixture, want)
-}
-
-func shortAcquireContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 20*time.Millisecond)
 }

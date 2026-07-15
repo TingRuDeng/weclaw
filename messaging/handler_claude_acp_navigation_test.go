@@ -129,11 +129,11 @@ func TestClaudeNewFailureRestoresPreviousRuntime(t *testing.T) {
 	}
 	fake.sessionID = "session-old"
 	fake.resetClears = true
-	fake.resetErr = errors.New("session/new failed")
+	fake.resetErr = errors.New("session/new failed: /Users/private/claude-runtime.json")
 
 	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new")
 	binding := h.ensureClaudeSessions().binding(key)
-	if !strings.Contains(text, "session/new failed") || binding.SessionID != "session-old" {
+	if !strings.Contains(text, "新建 Claude 会话失败") || strings.Contains(text, "/Users/private") || binding.SessionID != "session-old" {
 		t.Fatalf("text=%q binding=%+v", text, binding)
 	}
 	if fake.useSessionID != "session-old" || fake.sessionID != "session-old" {

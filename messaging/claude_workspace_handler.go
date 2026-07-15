@@ -35,7 +35,8 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 	}
 	selected, err := h.findClaudeSessionForRoute(route, target)
 	if err != nil {
-		return err.Error()
+		log.Printf("[claude-session-acquire] 查找待切换会话失败: %v", err)
+		return "查找 Claude 会话失败，请确认 sessionId 或稍后重试。"
 	}
 	if _, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
 		Route: route, Selected: selected, Command: "switch",
@@ -76,17 +77,20 @@ func (h *Handler) handleClaudeCdResult(route claudeSessionRoute, target string) 
 	}
 	group, err := h.findClaudeWorkspaceGroupForRoute(route, target)
 	if err != nil {
-		return textNavigationResult(err.Error())
+		log.Printf("[claude-workspace] 查找工作空间失败: %v", err)
+		return textNavigationResult("查找 Claude 工作空间失败，请发送 /cc ls 查看可选工作空间后重试。")
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(group.Root)
 	if _, err := h.releaseClaudeSelectionForWorkspaceWithBindingLocked(route, workspaceRoot, "cd"); err != nil {
-		return textNavigationResult(fmt.Sprintf("切换 Claude 工作空间失败: %v", err))
+		log.Printf("[claude-workspace] 切换前释放控制权失败: %v", err)
+		return textNavigationResult("切换 Claude 工作空间失败，请稍后重试。")
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
 	h.bindConversationCwd(route.Agent, conversationID, workspaceRoot)
 	sessions, err := h.claudeSessionsForWorkspace(route, workspaceRoot)
 	if err != nil {
-		return textNavigationResult(err.Error())
+		log.Printf("[claude-workspace] 查询工作空间会话失败: %v", err)
+		return textNavigationResult("查询 Claude 会话失败，请稍后重试。")
 	}
 	return cardNavigationResult(renderClaudeSessionList(workspaceRoot, sessions))
 }
@@ -98,7 +102,8 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 		return reply
 	}
 	if _, err := h.createAndAcquireClaudeSessionWithBindingLocked(route); err != nil {
-		return fmt.Sprintf("新建 Claude 会话失败: %v", err)
+		log.Printf("[claude-session-acquire] 新建并接管失败: %v", err)
+		return "新建 Claude 会话失败，请稍后重试。"
 	}
 	return wechatCommandText("已创建并接管 Claude 会话。", "工作空间: "+shortCodexWorkspaceName(route.WorkspaceRoot))
 }

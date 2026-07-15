@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -41,7 +42,8 @@ func (h *Handler) handleClaudeSessionCommandForRouteResult(ctx context.Context, 
 	}
 	agentName, ag, err := h.getClaudeSessionAgent(ctx)
 	if err != nil {
-		return textNavigationResult(err.Error())
+		log.Printf("[claude-session] 获取 Claude Agent 失败: %v", err)
+		return textNavigationResult("Claude Agent 当前不可用，请稍后重试。")
 	}
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = actorUserID
