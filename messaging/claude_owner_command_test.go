@@ -163,6 +163,122 @@ func TestClaudeModelWriteRequiresCurrentRemoteOwner(t *testing.T) {
 	}
 }
 
+func TestClaudeModelWriteRejectsInconsistentConversation(t *testing.T) {
+	ag := &fakeCurrentClaudeModelAgent{fakeClaudeModelAgent: fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp"}},
+	}, config: agent.ClaudeSessionConfig{Model: "sonnet"}}
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	key := claudeBindingKey("route-model", "claude")
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	store.controls["session-a"] = claudeControlIntent{
+		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: "wrong-conversation", Revision: 1,
+	}
+	text, handled := h.setCurrentClaudeSessionSetting(claudeModelSettingRequest{
+		ctx: context.Background(), route: modelAgentRoute{routeUserID: "route-model"},
+		name: "claude", agent: ag, model: "opus",
+	})
+	if !handled || !strings.Contains(text, "不一致") || len(ag.updates) != 0 {
+		t.Fatalf("handled=%v text=%q updates=%#v", handled, text, ag.updates)
+	}
+}
+
+func TestClaudeRequireRemoteControlFailsClosedOnInconsistentState(t *testing.T) {
+	workspace := t.TempDir()
+	key := claudeBindingKey("route-control", "claude")
+	wantConversation := buildClaudeConversationID("route-control", "claude", workspace)
+	for _, test := range []struct {
+		name     string
+		binding  claudeSessionBinding
+		controls map[string]claudeControlIntent
+		want     string
+	}{
+		{
+			name:     "unbound",
+			binding:  newClaudeBinding(workspace, "", claudeBindingUnbound),
+			controls: map[string]claudeControlIntent{},
+			want:     "/cc ls",
+		},
+		{
+			name:    "resume failed",
+			binding: newClaudeBinding(workspace, "session-a", claudeBindingResumeFailed),
+			controls: map[string]claudeControlIntent{"session-a": {
+				Owner: claudeOwnerRemote, BindingKey: key, ConversationID: wantConversation, Revision: 1,
+			}},
+			want: "重新选择",
+		},
+		{
+			name:    "conversation mismatch",
+			binding: newClaudeBinding(workspace, "session-a", claudeBindingReady),
+			controls: map[string]claudeControlIntent{"session-a": {
+				Owner: claudeOwnerRemote, BindingKey: key, ConversationID: "wrong-conversation", Revision: 1,
+			}},
+			want: "重新选择",
+		},
+		{
+			name:    "workspace mismatch",
+			binding: newClaudeBinding(t.TempDir(), "session-a", claudeBindingReady),
+			controls: map[string]claudeControlIntent{"session-a": {
+				Owner: claudeOwnerRemote, BindingKey: key, ConversationID: wantConversation, Revision: 1,
+			}},
+			want: "重新选择",
+		},
+		{
+			name:    "session mismatch",
+			binding: newClaudeBinding(workspace, "session-a", claudeBindingReady),
+			controls: map[string]claudeControlIntent{"session-b": {
+				Owner: claudeOwnerRemote, BindingKey: key, ConversationID: wantConversation, Revision: 1,
+			}},
+			want: "重新选择",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newClaudeSessionStore()
+			store.bindings[key] = test.binding
+			store.controls = test.controls
+			_, _, err := store.requireRemoteControl(key)
+			if err == nil || !strings.Contains(renderClaudeRemoteControlError(err), test.want) {
+				t.Fatalf("error=%v text=%q", err, renderClaudeRemoteControlError(err))
+			}
+		})
+	}
+}
+
+func TestClaudeRequireRemoteControlAllowsPendingResume(t *testing.T) {
+	store := newClaudeSessionStore()
+	workspace := t.TempDir()
+	key := claudeBindingKey("route-pending", "claude")
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingPendingResume)
+	store.controls["session-a"] = claudeControlIntent{
+		Owner: claudeOwnerRemote, BindingKey: key,
+		ConversationID: buildClaudeConversationID("route-pending", "claude", workspace), Revision: 2,
+	}
+	if _, _, err := store.requireRemoteControl(key); err != nil {
+		t.Fatalf("pending_resume should be admissible: %v", err)
+	}
+}
+
+func TestClaudeInconsistentControlBlocksTaskAdmission(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("route-inconsistent", "claude")
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	store.controls["session-a"] = claudeControlIntent{
+		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: "wrong-conversation", Revision: 1,
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.startAgentTask(agentTaskOptions{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "actor", routeUserID: "route-inconsistent", reply: reply,
+		agentName: "claude", message: "blocked", agent: fake,
+		progressCfg: config.DefaultProgressConfig(),
+	})
+	if h.ActiveTaskCount() != 0 || !containsText(reply.Texts, "不一致") {
+		t.Fatalf("active=%d texts=%#v", h.ActiveTaskCount(), reply.Texts)
+	}
+}
+
 func seedClaudeRemoteControl(t *testing.T, h *Handler, routeUserID, agentName, workspace, sessionID string, revision uint64) string {
 	t.Helper()
 	key := claudeBindingKey(routeUserID, agentName)

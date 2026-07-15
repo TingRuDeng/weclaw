@@ -26,4 +26,6 @@ fail-closed 任务门禁。
 Task 6 已完成：`/cc owner` 可脱敏展示控制方，`local` 复用统一 release，`remote`
 复用统一 acquire；普通 Claude ACP 消息在任务登记前校验 remote owner 并记录 session/revision，
 prompt 前再次复核，当前 session 的模型写入也执行相同门禁。状态、列表和帮助文本同步展示
-所有权边界，并提示重新接管前先结束本地 Claude CLI。
+所有权边界，并提示重新接管前先结束本地 Claude CLI。复核后已把相同的准入与 revision
+复核扩展到 Claude 广播及其暂存续跑，并对不可准入 binding 状态、workspace、session 和
+conversation 不一致执行 fail-closed。

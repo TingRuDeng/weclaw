@@ -86,13 +86,8 @@ func (h *Handler) runAgentTask(runtime agentTaskRuntime) {
 	defer unlock()
 	if runtime.opts.claudeControl.SessionID != "" {
 		bindingKey := claudeBindingKey(runtime.opts.routeUserID, runtime.opts.agentName)
-		binding, intent, controlErr := h.ensureClaudeSessions().requireRemoteControl(bindingKey)
-		if controlErr != nil {
+		if controlErr := h.ensureClaudeSessions().validateRemoteControlSnapshot(bindingKey, runtime.opts.claudeControl); controlErr != nil {
 			h.finishAgentTaskLifecycle(runtime.lifecycle, "", errors.New(renderClaudeRemoteControlError(controlErr)))
-			return
-		}
-		if binding.SessionID != runtime.opts.claudeControl.SessionID || intent.Revision != runtime.opts.claudeControl.Revision {
-			h.finishAgentTaskLifecycle(runtime.lifecycle, "", errors.New(renderClaudeRemoteControlError(errClaudeTaskControlChanged)))
 			return
 		}
 	}
