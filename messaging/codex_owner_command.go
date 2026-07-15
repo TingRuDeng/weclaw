@@ -158,13 +158,16 @@ func (h *Handler) compensateCodexOwnerRelease(compensation codexOwnerReleaseComp
 
 // renderCodexOwnerReleaseFailure 区分已校准失败与无法确认的 fail-closed 状态。
 func renderCodexOwnerReleaseFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	log.Printf("[codex-owner] 控制权移交失败: %v", err)
 	if errors.Is(err, errCodexSessionAcquireUncertain) {
 		return "Codex 控制权移交结果未确认，当前禁止继续写入。"
 	}
 	if isCodexSessionControlTimeout(err) {
 		return "Codex 控制权移交超时，已按当前控制意图重新校准；请重试。"
 	}
-	log.Printf("[codex-owner] 控制权移交失败: %v", err)
 	return "Codex 控制权移交失败，请重试。"
 }
 

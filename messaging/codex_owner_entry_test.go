@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,27 @@ import (
 )
 
 type codexOwnerEntryContextKey struct{}
+
+func TestCodexOwnerRemoteRealEntryHidesAgentSessionStoreError(t *testing.T) {
+	h, ag, runtime := codexOwnerCommandFixture(t)
+	h.SetDefaultAgent("codex", ag)
+	h.SetAgentWorkDirs(map[string]string{"codex": runtime.workspaceRoot})
+	h.agentSessions.mu.Lock()
+	h.agentSessions.filePath = "/private/route-secret/conversation-secret/codex.sock/state.json"
+	h.agentSessions.mu.Unlock()
+
+	result := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: runtime.actorUserID, RouteUserID: runtime.routeUserID,
+		Trimmed: "/cx owner remote", Platform: platform.PlatformWeChat,
+		Reply: platformtest.NewReplier(platform.Capabilities{Text: true}),
+	})
+
+	assertCodexOwnerReplySafe(t, result)
+	if !strings.Contains(result, "已切换并接管") ||
+		!strings.Contains(result, "警告: 保存当前窗口 Agent 失败") {
+		t.Fatalf("result=%q", result)
+	}
+}
 
 func TestCodexOwnerRemoteRealEntryCarriesTransactionContext(t *testing.T) {
 	h := NewHandler(nil, nil)

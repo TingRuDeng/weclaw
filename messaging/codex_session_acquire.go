@@ -246,6 +246,7 @@ func renderCodexSessionAcquireFailure(err error) string {
 	if err == nil {
 		return ""
 	}
+	log.Printf("[codex-session-acquire] 切换并接管失败: %v", err)
 	switch {
 	case errors.Is(err, errCodexRemoteSelectionOtherRoute):
 		return "其他远程窗口正在控制该会话，请原窗口先释放。"
@@ -260,7 +261,6 @@ func renderCodexSessionAcquireFailure(err error) string {
 	case errors.Is(err, errCodexSessionAcquireUnsupported):
 		return "当前 Codex Agent 不支持选择即接管。"
 	default:
-		log.Printf("[codex-session-acquire] 切换并接管失败: %v", err)
 		return "切换并接管 Codex 会话失败，请重试。"
 	}
 }

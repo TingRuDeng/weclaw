@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -138,7 +139,8 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		lines = append(lines, renderExternalCodexActiveNotice(result.externalState)...)
 	}
 	if result.agentSessionErr != nil {
-		lines = append(lines, "警告: 保存当前窗口 Agent 失败: "+result.agentSessionErr.Error())
+		log.Printf("[codex-session-acquire] 保存当前窗口 Agent 失败 thread=%q: %v", result.route.threadID, result.agentSessionErr)
+		lines = append(lines, "警告: 保存当前窗口 Agent 失败，请重试。")
 	}
 	return wechatCommandText(lines...)
 }
