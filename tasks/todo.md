@@ -13,7 +13,7 @@
 - [x] P3 串行（5/5）：Task 1–5 已完成并通过独立审查，原子状态、锁、观察屏障与统一 saga 已闭合。
 - [x] P4 串行（3/3）：Task 6–8 已完成，选择、新建、owner 与消息门禁均通过独立审查。
 - [x] P5 串行：Task 9 已补齐平台、路由、并发与重启行为矩阵，并通过 race 20 轮独立复核。
-- [ ] P6 串行：Task 10 已同步公开语义并完成预验证，等待主流程独立执行 Review Gate。
+- [x] P6 串行：Task 10 已同步公开语义，整条分支已通过独立 Review Gate。
 
 ## 并行说明
 
@@ -24,8 +24,8 @@
 ## 当前状态
 
 用户已通过 HARD-GATE 并选择 Subagent-Driven 执行；全仓基线测试已通过，
-当前 Task 1–9 已完成并通过任务级审查；Task 10 已完成帮助、README 中英文、
-AI 上下文和 lessons 同步，预验证全部通过，等待主流程独立 Review Gate。
+Task 1–10 已全部完成并通过任务级审查；帮助、README 中英文、AI 上下文和
+lessons 已同步，整条分支的独立 Review Gate 与最终验证均已通过。
 
 ## Review 小结
 
@@ -42,4 +42,5 @@ AI 上下文和 lessons 同步，预验证全部通过，等待主流程独立 R
 - Task 8 已让 owner remote 共用统一事务，显式释放保留选择，并收口活动任务控制、fail-closed 与错误信息隔离。
 - Task 9 已补齐六项真实入口矩阵，并用确定性锁 waiter barrier 验证单赢家和任务准入串行化。
 - Task 10 已先以帮助文本测试完成有效 RED/GREEN，再同步 README 中英文、AI 上下文和长期 lessons。
-- Task 10 预验证已通过 `messaging`、`agent` 常规与 race 测试、全仓测试、vet、文档门禁和差异检查；P6 仍等待主流程独立 Review Gate。
+- Task 10 与整条分支已通过独立 Review Gate，无 Critical、Important 或 Minor 问题。
+- 最终验证已通过 `messaging`、`agent` 常规与 race 测试、全仓测试、vet、文档门禁和差异检查；核心包覆盖率分别为 `messaging` 81.8%、`agent` 80.2%。
