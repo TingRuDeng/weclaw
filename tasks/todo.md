@@ -7,8 +7,8 @@ fail-closed 任务门禁。
 
 ## 任务清单
 
-- [ ] Task 1：升级 Claude 状态模型并完成 v2 安全迁移（进行中）。
-- [ ] Task 2：实现原子选择、释放和 session 有序锁。
+- [x] Task 1：升级 Claude 状态模型并完成 v2 安全迁移。
+- [x] Task 2：实现原子选择、释放和 session 有序锁。
 - [ ] Task 3：实现统一选择接管 saga。
 - [ ] Task 4：接入 switch、卡片、new 与全局 `/new`。
 - [ ] Task 5：实现 owner 查询、远程接管与本地释放。
@@ -23,5 +23,5 @@ fail-closed 任务门禁。
 
 ## 当前状态
 
-Task 1 进行中：先增加 v2 单绑定、冲突绑定与 local owner 重启的 RED 测试，
-再实现 v3 controls 持久化和 v1/v2/v3 安全解码。
+Task 2 已完成：原子选择与释放使用完整快照 CAS，写盘成功后才发布内存；
+session 锁按去重排序后获取、共享单一等待预算并逆序释放。

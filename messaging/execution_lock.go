@@ -6,7 +6,10 @@ import (
 	"sync"
 )
 
-const codexThreadControlExecutionPrefix = "codex-thread-control\x00"
+const (
+	codexThreadControlExecutionPrefix   = "codex-thread-control\x00"
+	claudeSessionControlExecutionPrefix = "claude-session-control\x00"
+)
 
 type executionLock struct {
 	token chan struct{}
@@ -84,4 +87,22 @@ func (h *Handler) lockCodexThreadControlContext(ctx context.Context, threadID st
 		return func() {}, nil
 	}
 	return h.lockAgentExecutionContext(ctx, codexThreadControlExecutionPrefix+threadID)
+}
+
+// lockClaudeSessionControl 串行同一 Claude session 的控制权变化与任务准入。
+func (h *Handler) lockClaudeSessionControl(sessionID string) func() {
+	unlock, err := h.lockClaudeSessionControlContext(context.Background(), sessionID)
+	if err != nil {
+		panic("background Claude session control lock was canceled")
+	}
+	return unlock
+}
+
+// lockClaudeSessionControlContext 串行 session 控制操作，并允许等待方取消。
+func (h *Handler) lockClaudeSessionControlContext(ctx context.Context, sessionID string) (func(), error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return func() {}, nil
+	}
+	return h.lockAgentExecutionContext(ctx, claudeSessionControlExecutionPrefix+sessionID)
 }
