@@ -379,7 +379,7 @@
 
 - 触发条件：`weclaw status`、`restart`、`update --restart` 或 stop 逻辑通过 `Signal(0)` 判断 pid 文件里的进程是否存在。
 - 规则：`Signal(0)` 返回 `EPERM` 表示进程存在但当前上下文无权探测，不能当成过期 pid 文件。
-- 反例：沙箱或受限权限下 `processExists` 把 `operation not permitted` 当成不存在，导致 `weclaw status` 显示“未运行（存在过期 pid 文件）”，但实际 pid 仍是 `/Users/dengtingru/.local/bin/weclaw start -f`。
+- 反例：沙箱或受限权限下 `processExists` 把 `operation not permitted` 当成不存在，导致 `weclaw status` 显示“未运行（存在过期 pid 文件）”，但实际 pid 仍是 `/path/to/weclaw start -f`。
 - 正确做法：进程存在性判断应把 `nil` 和 `syscall.EPERM` 都视为存在；只有明确 `ESRCH` 或其他不存在错误才视为不存在。
 - 来源：2026-07-09 用户纠正“但 weclaw 在运行中，是通过飞书重启的”。
 
@@ -431,12 +431,12 @@
 - 正确做法：延迟创建原生流卡；零延迟配置在非空进度到达时创建，正延迟配置只在进度实际发送时创建；排队外部任务直接传递调用入口已解析的 `ProgressConfig`；暂存状态只发送一行确认。
 - 来源：2026-07-12 用户截图反馈飞书回复混乱，实机记录显示同一流程叠加暂存提示、空完成卡和最终文本。
 
-## 2026-07-12 Codex Desktop 明确释放后的自动恢复
+## 2026-07-12 Codex Desktop no-client 的运行时恢复
 
-- 触发条件：飞书或微信会话仍保存 `desktop_live` 绑定，但 Desktop follower 对普通消息返回 `no-client-found`。
-- 规则：`no-client-found` 是请求未被任何 Desktop 客户端处理的确定性 release 证据；应把 owner 原子转为 `persisted_only`，恢复同一 thread 到 WeClaw app-server，并只重试原消息一次。
-- 反例：长期信任旧 `desktop_live` 绑定并直接返回错误；或者把断线、超时、交付状态未知也当成 release 自动重试，造成消息重复执行。
-- 正确做法：只对 `ErrCodexDesktopNoClient` 执行 release、recover 和单次 app-server 重试；`ErrCodexDesktopDisconnected` 与 `ErrCodexDesktopDeliveryUnknown` 保持原错误和 owner，不做回退。
+- 触发条件：session store 仍保存当前 route 的 `remote` 控制意图，但实际运行位置仍记录为 `desktop_live`，且 Desktop follower 对普通消息返回 `no-client-found`。
+- 规则：`no-client-found` 是请求未被任何 Desktop 客户端处理的确定性运行时 release 证据；可以保持用户的 `remote` 控制意图不变，把实际 runtime 恢复到 WeClaw app-server，并只重试原消息一次。
+- 反例：把 `/cx owner desktop` 的显式释放也当成自动恢复条件；或者把断线、超时、交付状态未知当成 release 自动重试，造成越权接管或消息重复执行。
+- 正确做法：只在持久化意图仍为当前 route `remote` 时，对 `ErrCodexDesktopNoClient` 执行 runtime release、recover 和单次 app-server 重试；`desktop` intent 的普通消息必须拒绝，直到用户重新选择会话或发送 `/cx owner remote`。`ErrCodexDesktopDisconnected` 与 `ErrCodexDesktopDeliveryUnknown` 保持原错误和 owner，不做回退。
 - 来源：2026-07-12 Android 飞书机器人发送普通消息后，日志立即返回 `没有 Codex Desktop 客户端可处理请求: no-client-found`。
 
 ## 2026-07-12 Agent 会话创建必须由用户显式授权

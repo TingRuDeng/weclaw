@@ -251,7 +251,7 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 	for _, want := range []string{
 		"/cx ls 查看工作空间或当前工作空间会话",
 		"/cx <编号|..> 选择当前列表项或返回上一级",
-		"/cx cd <编号|工作空间名|..> 进入工作空间或返回工作空间列表",
+		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动接管；.. 返回工作空间列表",
 		"/cx switch <编号> 切换当前工作空间会话并接管",
 		"/cx new 新建当前工作空间会话并接管",
 		"/cx pwd 查看当前工作空间",
@@ -271,6 +271,8 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 	}
 	for _, obsolete := range []string{
 		"选择后还需发送 owner remote",
+		"先选择再发送 owner remote",
+		"选择后发送 owner remote",
 		"移交给当前远程窗口",
 	} {
 		if strings.Contains(text, obsolete) {
