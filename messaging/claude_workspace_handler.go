@@ -93,7 +93,7 @@ func (h *Handler) handleClaudeCdResult(route claudeSessionRoute, target string) 
 		return textNavigationResult(err.Error())
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(group.Root)
-	if err := h.ensureClaudeSessions().commitWorkspace(route.BindingKey, workspaceRoot); err != nil {
+	if _, err := h.releaseClaudeSelectionForWorkspaceWithBindingLocked(route, workspaceRoot, "cd"); err != nil {
 		return textNavigationResult(fmt.Sprintf("切换 Claude 工作空间失败: %v", err))
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)

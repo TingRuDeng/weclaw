@@ -47,6 +47,82 @@ func TestHandleCwdClearsClaudeSessionBinding(t *testing.T) {
 	}
 }
 
+func TestClaudeCdReleasesSelectedRemoteSession(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	store.controls["session-a"] = claudeControlIntent{
+		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
+	}
+	fake.runtimeSessions = map[string]string{conversationID: "session-a"}
+	other := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspace, other})
+	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-b", Cwd: other}}
+
+	result := h.handleClaudeSessionCommandForRouteResult(context.Background(), "user-1", "user-1", true, "/cc cd 0")
+	if result.Reply == "" || store.binding(key).SessionID != "" {
+		t.Fatalf("result=%+v binding=%+v", result, store.binding(key))
+	}
+	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerLocal {
+		t.Fatalf("intent=%+v", got)
+	}
+	if _, ok := fake.CurrentClaudeSession(conversationID); ok {
+		t.Fatalf("runtime=%+v", fake.runtimeSessions)
+	}
+}
+
+func TestHandleCwdReleasesClaudeOwnerBeforeChangingRuntimeCwd(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	store.controls["session-a"] = claudeControlIntent{
+		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
+	}
+	fake.runtimeSessions = map[string]string{conversationID: "session-a"}
+	newWorkspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
+
+	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
+	if !strings.Contains(text, canonicalTestPath(t, newWorkspace)) {
+		t.Fatalf("text=%q", text)
+	}
+	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerLocal {
+		t.Fatalf("intent=%+v", got)
+	}
+	if got := fake.lastWorkingDir(); got != canonicalTestPath(t, newWorkspace) {
+		t.Fatalf("cwd=%q", got)
+	}
+}
+
+func TestHandleCwdDoesNotChangeRuntimeCwdWhenClaudeReleaseFails(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	store.controls["session-a"] = claudeControlIntent{
+		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
+	}
+	store.persist = func(claudeSessionState) error { return os.ErrPermission }
+	newWorkspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
+
+	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
+	if !strings.Contains(text, "切换 Claude 工作空间失败") {
+		t.Fatalf("text=%q", text)
+	}
+	if got := fake.lastWorkingDir(); got != "" {
+		t.Fatalf("release 失败后不应更新 runtime cwd: %q", got)
+	}
+	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerRemote {
+		t.Fatalf("intent=%+v", got)
+	}
+}
+
 func TestClaudeCcLsSortsACPSessionsAcrossWorkspaces(t *testing.T) {
 	h, ag, allowedRoot := newClaudeACPNavigationHandler(t)
 	workspaceA := allowedRoot + "/alpha"

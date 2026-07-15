@@ -56,6 +56,37 @@ func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 	if binding.WorkspaceRoot != workspace || binding.Status != claudeBindingUnbound {
 		t.Fatalf("binding=%+v，进入工作空间后应等待显式选择", binding)
 	}
+	if len(h.ensureClaudeSessions().controls) != 0 {
+		t.Fatalf("controls=%+v，工作空间卡片本身不应取得 session owner", h.ensureClaudeSessions().controls)
+	}
+}
+
+func TestFeishuClaudeSessionChoiceSwitchesRemoteOwner(t *testing.T) {
+	h, ag := newClaudeFeishuCardHandler(t)
+	workspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	ag.catalogSessions = []agent.ClaudeSession{
+		{ID: "session-b", Cwd: workspace, Title: "目标会话"},
+	}
+	key := claudeBindingKey("feishu:user", "claude")
+	conversationID := buildClaudeConversationID("feishu:user", "claude", workspace)
+	store := h.ensureClaudeSessions()
+	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	store.controls["session-a"] = claudeControlIntent{
+		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
+	}
+	ag.runtimeSessions = map[string]string{conversationID: "session-a"}
+
+	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc switch session-b"})
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "已切换并接管") {
+		t.Fatalf("texts=%#v choices=%#v", reply.Texts, reply.Choices)
+	}
+	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerLocal {
+		t.Fatalf("old intent=%+v", got)
+	}
+	if got := store.controlIntent("session-b"); got.Owner != claudeOwnerRemote || got.BindingKey != key {
+		t.Fatalf("new intent=%+v", got)
+	}
 }
 
 func TestFeishuClaudeCcLsAllowsAdminOutsideRoots(t *testing.T) {
