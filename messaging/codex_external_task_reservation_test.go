@@ -26,6 +26,71 @@ func TestReserveExternalCodexTaskRejectsDifferentTurn(t *testing.T) {
 	}
 }
 
+func TestReserveExternalCodexTaskRejectsUnmarkedInProcessTask(t *testing.T) {
+	h := NewHandler(nil, nil)
+	prepared, opts := testExternalCodexReservationInput(nil, nil)
+	task, _, started := h.beginActiveTask(context.Background(), opts.conversationID, activeTaskMeta{
+		owner: opts.actorUserID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		codexThreadID: opts.threadID,
+	})
+	if !started {
+		t.Fatal("未能建立来源不明的 active task")
+	}
+	defer h.finishActiveTask(opts.conversationID, task)
+	_, err := h.reserveExternalCodexTask(opts, prepared)
+	if !errors.Is(err, errExternalCodexTaskReservationConflict) {
+		t.Fatalf("来源不明的 control=nil task 不应复用，error=%v", err)
+	}
+}
+
+func TestReserveExternalCodexTaskRejectsNonRunningInProcessTask(t *testing.T) {
+	h := NewHandler(nil, nil)
+	prepared, opts := testExternalCodexReservationInput(nil, nil)
+	task, _, started := h.beginActiveTask(context.Background(), opts.conversationID, activeTaskMeta{
+		owner: opts.actorUserID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		codexThreadID: opts.threadID, inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("未能建立 in-process active task")
+	}
+	defer h.finishActiveTask(opts.conversationID, task)
+	task.mu.Lock()
+	task.phase = codexTaskStopping
+	task.mu.Unlock()
+	_, err := h.reserveExternalCodexTask(opts, prepared)
+	if !errors.Is(err, errExternalCodexTaskReservationConflict) {
+		t.Fatalf("非 running 的 in-process task 不应复用，error=%v", err)
+	}
+}
+
+func TestReserveExternalCodexTaskRequiresSameInProcessIdentity(t *testing.T) {
+	h := NewHandler(nil, nil)
+	prepared, opts := testExternalCodexReservationInput(nil, nil)
+	task, _, started := h.beginActiveTask(context.Background(), opts.conversationID, activeTaskMeta{
+		owner: opts.actorUserID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		codexThreadID: opts.threadID, inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("未能建立 in-process active task")
+	}
+	defer h.finishActiveTask(opts.conversationID, task)
+	for name, mutate := range map[string]func(*externalCodexTaskOptions){
+		"actor":  func(changed *externalCodexTaskOptions) { changed.actorUserID = "user-2" },
+		"route":  func(changed *externalCodexTaskOptions) { changed.routeUserID = "route-2" },
+		"agent":  func(changed *externalCodexTaskOptions) { changed.agentName = "codex-other" },
+		"thread": func(changed *externalCodexTaskOptions) { changed.threadID = "thread-2" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := opts
+			mutate(&changed)
+			_, err := h.reserveExternalCodexTask(changed, prepared)
+			if !errors.Is(err, errExternalCodexTaskReservationConflict) {
+				t.Fatalf("不同 %s 不应复用 in-process lifecycle，error=%v", name, err)
+			}
+		})
+	}
+}
+
 func TestCancelExternalCodexTaskReservationRemovesUnstartedTask(t *testing.T) {
 	h := NewHandler(nil, nil)
 	prepared, opts := testExternalCodexReservationInput(nil, nil)

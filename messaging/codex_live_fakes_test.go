@@ -145,6 +145,14 @@ func (f *fakeCodexLiveAgent) setBindingRuntime(runtime agent.CodexRuntimeHolder)
 	f.mu.Unlock()
 }
 
+// setBindingState 同步测试探针与 thread 读取结果，模拟 in-process turn 的实时状态变化。
+func (f *fakeCodexLiveAgent) setBindingState(state agent.CodexThreadState) {
+	f.mu.Lock()
+	f.binding.State = state
+	f.fakeCodexThreadAgent.threadState = state
+	f.mu.Unlock()
+}
+
 type fakeRemoteControlOptions struct {
 	routeUserID string
 	agentName   string

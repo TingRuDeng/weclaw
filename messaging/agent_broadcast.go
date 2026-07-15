@@ -150,6 +150,7 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	pending := h.broadcastPendingCodexTask(req, name, ag, route, reply)
 	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
 		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
+		codexThreadID: route.threadID, inProcessCodexLifecycle: true,
 	}, pending)
 	if admission.status != activeTaskStarted {
 		h.replyBroadcastAdmission(name, admission.status, results)

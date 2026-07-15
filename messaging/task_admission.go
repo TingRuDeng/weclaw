@@ -69,7 +69,7 @@ func newActiveAgentTask(ctx context.Context, meta activeTaskMeta) (*activeAgentT
 		preview: previewPendingCodexMessage(meta.message), messageFingerprint: normalizedTextFingerprint(meta.message),
 		startedAt: time.Now(), runtimeOwner: meta.runtimeOwner, ownerRevision: meta.ownerRevision,
 		phase: codexTaskRunning, codexThreadID: strings.TrimSpace(meta.codexThreadID),
-		codexTurnID: strings.TrimSpace(meta.codexTurnID),
+		codexTurnID: strings.TrimSpace(meta.codexTurnID), inProcessCodexLifecycle: meta.inProcessCodexLifecycle,
 	}
 	return task, taskCtx
 }

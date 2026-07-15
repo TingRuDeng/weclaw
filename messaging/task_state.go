@@ -11,27 +11,28 @@ import (
 )
 
 type activeAgentTask struct {
-	mu                  sync.Mutex
-	cancel              context.CancelFunc
-	done                chan struct{}
-	detached            bool
-	stopRequested       bool
-	pending             pendingAgentTask
-	pendingSteering     bool
-	owner               string
-	routeUserID         string
-	agentName           string
-	preview             string
-	messageFingerprint  string
-	startedAt           time.Time
-	lastProgress        string
-	lastProgressAt      time.Time
-	runtimeOwner        agent.CodexRuntimeHolder
-	ownerRevision       uint64
-	phase               codexTaskPhase
-	codexThreadID       string
-	codexTurnID         string
-	externalReservation *externalCodexTaskReservationControl
+	mu                      sync.Mutex
+	cancel                  context.CancelFunc
+	done                    chan struct{}
+	detached                bool
+	stopRequested           bool
+	pending                 pendingAgentTask
+	pendingSteering         bool
+	owner                   string
+	routeUserID             string
+	agentName               string
+	preview                 string
+	messageFingerprint      string
+	startedAt               time.Time
+	lastProgress            string
+	lastProgressAt          time.Time
+	runtimeOwner            agent.CodexRuntimeHolder
+	ownerRevision           uint64
+	phase                   codexTaskPhase
+	codexThreadID           string
+	codexTurnID             string
+	externalReservation     *externalCodexTaskReservationControl
+	inProcessCodexLifecycle bool
 }
 
 type pendingAgentTask struct {
@@ -76,14 +77,15 @@ func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {
 
 // activeTaskMeta 描述一次后台任务的归属信息，供 /ps 和 /cancel 检索。
 type activeTaskMeta struct {
-	owner         string
-	routeUserID   string
-	agentName     string
-	message       string
-	runtimeOwner  agent.CodexRuntimeHolder
-	ownerRevision uint64
-	codexThreadID string
-	codexTurnID   string
+	owner                   string
+	routeUserID             string
+	agentName               string
+	message                 string
+	runtimeOwner            agent.CodexRuntimeHolder
+	ownerRevision           uint64
+	codexThreadID           string
+	codexTurnID             string
+	inProcessCodexLifecycle bool
 }
 
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {

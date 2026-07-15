@@ -101,7 +101,7 @@ func (h *Handler) reuseExternalCodexTaskReservationLocked(opts externalCodexTask
 	defer task.mu.Unlock()
 	control := task.externalReservation
 	if control == nil {
-		return externalCodexTaskReservation{}, errExternalCodexTaskReservationConflict
+		return reuseInProcessCodexTaskReservationLocked(opts, task)
 	}
 	control.mu.Lock()
 	defer control.mu.Unlock()
@@ -110,6 +110,16 @@ func (h *Handler) reuseExternalCodexTaskReservationLocked(opts externalCodexTask
 	}
 	return externalCodexTaskReservation{
 		runtime: control.runtime, key: opts.conversationID, task: task, reused: true, control: control,
+	}, nil
+}
+
+// reuseInProcessCodexTaskReservationLocked 只复用显式由本进程 lifecycle 回推的 running 任务。
+func reuseInProcessCodexTaskReservationLocked(opts externalCodexTaskOptions, task *activeAgentTask) (externalCodexTaskReservation, error) {
+	if !sameInProcessCodexTaskIdentityLocked(task, opts) {
+		return externalCodexTaskReservation{}, errExternalCodexTaskReservationConflict
+	}
+	return externalCodexTaskReservation{
+		key: opts.conversationID, task: task, reused: true,
 	}, nil
 }
 
@@ -188,4 +198,13 @@ func sameExternalCodexTaskIdentityLocked(task *activeAgentTask, opts externalCod
 		task.codexThreadID == strings.TrimSpace(opts.threadID) &&
 		task.codexTurnID == strings.TrimSpace(state.ActiveTurnID) &&
 		task.phase != codexTaskTerminal
+}
+
+// sameInProcessCodexTaskIdentityLocked 排除来源不明、非 running 或跨窗口的 control=nil 任务。
+func sameInProcessCodexTaskIdentityLocked(task *activeAgentTask, opts externalCodexTaskOptions) bool {
+	return task.inProcessCodexLifecycle && task.phase == codexTaskRunning &&
+		task.owner == strings.TrimSpace(opts.actorUserID) &&
+		task.routeUserID == strings.TrimSpace(opts.routeUserID) &&
+		task.agentName == strings.TrimSpace(opts.agentName) &&
+		task.codexThreadID == strings.TrimSpace(opts.threadID)
 }
