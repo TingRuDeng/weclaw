@@ -44,6 +44,7 @@ func newFeishuOriginalRouteFixture(t *testing.T) feishuOriginalRouteFixture {
 	targetWorkspace := filepath.Join(root, "target")
 	h.SetAllowedWorkspaceRoots([]string{root})
 	h.SetAgentWorkDirs(map[string]string{"codex": routeWorkspace})
+	h.SetCodexLocalSessionDir(t.TempDir())
 	h.defaultName = "codex"
 	actor, route := "ou-actor", "feishu:tenant:group:chat:original"
 	actorBinding, routeBinding := codexBindingKey(actor, "codex"), codexBindingKey(route, "codex")
@@ -112,21 +113,33 @@ func TestCodexReadOnlyCommandsDoNotChangeOwnership(t *testing.T) {
 	h.agents["codex"] = ag
 	want := h.codexSessions.remoteSelectionSnapshot(bindingKey, "thread-readonly")
 
-	for index, command := range []string{"/cx ls", "/cx pwd", "/cx status", "/cx whoami"} {
+	commands := []struct {
+		command string
+		marker  string
+	}{
+		{command: "/cx ls", marker: "Codex 工作空间"},
+		{command: "/cx pwd", marker: "浏览层级: 工作空间"},
+		{command: "/cx status", marker: "Codex 状态:"},
+		{command: "/cx whoami", marker: "workspace:"},
+	}
+	for index, command := range commands {
 		reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 		h.HandleMessage(context.Background(), platform.IncomingMessage{
 			Platform: platform.PlatformWeChat, AccountID: "wx-readonly", UserID: route,
-			MessageID: "readonly-" + string(rune('0'+index)), Text: command,
+			MessageID: "readonly-" + string(rune('0'+index)), Text: command.command,
 		}, reply)
+		if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], command.marker) {
+			t.Fatalf("%s replies=%#v，want 单条包含 %q", command.command, reply.Texts, command.marker)
+		}
 		got := h.codexSessions.remoteSelectionSnapshot(bindingKey, "thread-readonly")
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s 修改了选择或控制权：got=%#v want=%#v", command, got, want)
+			t.Fatalf("%s 修改了选择或控制权：got=%#v want=%#v", command.command, got, want)
 		}
 		if len(ag.handoffRequests()) != 0 || ag.runCalls != 0 {
-			t.Fatalf("%s 触发写入：handoff=%d run=%d", command, len(ag.handoffRequests()), ag.runCalls)
+			t.Fatalf("%s 触发写入：handoff=%d run=%d", command.command, len(ag.handoffRequests()), ag.runCalls)
 		}
-		if _, active := h.activeTask(want.Target.ConversationID); active {
-			t.Fatalf("%s 创建了 observer/task", command)
+		if countActiveTasks(h) != 0 {
+			t.Fatalf("%s 创建了全局 observer/task", command.command)
 		}
 	}
 }

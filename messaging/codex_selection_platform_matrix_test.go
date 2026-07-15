@@ -106,6 +106,7 @@ func newPlatformSelectionFixture(t *testing.T, routeUserID string) (*Handler, *f
 	}
 	h.SetAllowedWorkspaceRoots([]string{root})
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
+	h.SetCodexLocalSessionDir(t.TempDir())
 	h.defaultName = "codex"
 	bindingKey := codexBindingKey(routeUserID, "codex")
 	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")

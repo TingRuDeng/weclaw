@@ -21,6 +21,7 @@ func TestCodexRemoteSelectionReloadKeepsSingleRouteOwner(t *testing.T) {
 	workspaceA, workspaceB := filepath.Join(root, "alpha"), filepath.Join(root, "beta")
 	h.SetAllowedWorkspaceRoots([]string{root})
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
+	h.SetCodexLocalSessionDir(t.TempDir())
 	h.defaultName = "codex"
 	route := "reload-route"
 	bindingKey := codexBindingKey(route, "codex")
