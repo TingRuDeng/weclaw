@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -101,8 +100,7 @@ func (h *Handler) handleCodexCdResult(req codexWorkspaceCdRequest) navigationCom
 	if err != nil {
 		return textNavigationResult(err.Error())
 	}
-	workspaceRoot := h.switchCodexWorkspaceForRoute(req.ActorUserID, req.UserID, req.AgentName, group.Root, req.Agent)
-	h.setCodexActiveWorkspaceForRoute(req.BindingKey, req.OwnerBindingKey, workspaceRoot)
+	workspaceRoot := normalizeCodexWorkspaceRoot(group.Root)
 	h.setCodexBrowseWorkspace(req.BindingKey, workspaceRoot)
 	return h.enterCodexWorkspace(req, group, workspaceRoot)
 }
@@ -115,13 +113,17 @@ func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, _ string, w
 // enterCodexWorkspace 根据会话数量决定自动切换、创建草稿或展示列表。
 func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWorkspaceGroup, workspaceRoot string) navigationCommandResult {
 	sessions := switchableCodexSessions(group.Sessions)
-	if len(sessions) == 0 {
-		return h.enterCodexWorkspaceWithoutSessionsResult(req, group.Name, workspaceRoot)
-	}
 	if len(sessions) == 1 {
 		return h.enterCodexWorkspaceWithSingleSessionResult(codexSingleSessionEntryRequest{
 			command: req, workspaceName: group.Name, workspaceRoot: workspaceRoot, session: sessions[0],
 		})
+	}
+	h.switchCodexWorkspaceForRoute(
+		req.ActorUserID, req.UserID, req.AgentName, workspaceRoot, req.Agent,
+	)
+	h.setCodexActiveWorkspaceForRoute(req.BindingKey, req.OwnerBindingKey, workspaceRoot)
+	if len(sessions) == 0 {
+		return h.enterCodexWorkspaceWithoutSessionsResult(req, group.Name, workspaceRoot)
 	}
 	return cardNavigationResult(wechatCommandText("工作空间: "+group.Name, h.renderCodexSessionList(req.BindingKey, workspaceRoot)))
 }
@@ -140,53 +142,23 @@ func (h *Handler) enterCodexWorkspaceWithoutSessionsResult(req codexWorkspaceCdR
 func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(entry codexSingleSessionEntryRequest) navigationCommandResult {
 	req := entry.command
 	workspaceName, workspaceRoot, session := entry.workspaceName, entry.workspaceRoot, entry.session
-	_, ok := req.Agent.(agent.CodexThreadAgent)
-	if !ok {
-		return cardNavigationResult(wechatCommandText("工作空间: "+workspaceName, h.renderCodexSessionList(req.BindingKey, workspaceRoot)))
-	}
 	conversationID := buildCodexConversationID(req.UserID, req.AgentName, workspaceRoot)
-	h.bindConversationCwd(req.Agent, conversationID, workspaceRoot)
 	route := codexConversationRoute{
 		bindingKey: req.BindingKey, workspaceRoot: workspaceRoot,
 		conversationID: conversationID, threadID: session.ThreadID,
 	}
-	h.ensureCodexSessions().setThread(req.BindingKey, workspaceRoot, session.ThreadID)
-	unlock, err := h.lockCodexSessionThread(req.Context, session.ThreadID, "cd")
+	result, err := h.acquireCodexSessionWithBindingLocked(codexSessionAcquireRequest{
+		ctx: req.Context, taskContext: firstCodexContext(req.TaskContext, req.Context),
+		actorUserID: firstNonBlank(req.ActorUserID, req.UserID),
+		routeUserID: req.UserID, agentName: req.AgentName, agent: req.Agent,
+		route: route, platform: req.Platform, accountID: req.AccountID, reply: req.Reply,
+	})
 	if err != nil {
-		return cardNavigationResult(wechatCommandText(
-			"已进入工作空间并切换会话。",
-			"工作空间: "+workspaceName,
-			"运行位置探测超时；会话选择已保留。",
-		))
+		return textNavigationResult(renderCodexSessionAcquireFailure(err))
 	}
-	defer unlock()
-	started := time.Now()
-	resolution, runtimeErr := h.inspectSelectedCodexRuntimeLocked(req.Context, route, req.Agent)
-	logCodexSessionControlTimeout("cd", "runtime-inspect", session.ThreadID, started, runtimeErr)
-	lines := []string{"已进入工作空间并切换会话。", "工作空间: " + workspaceName}
-	modelStatus := codexResolutionModelStatus(resolution, h.codexSessionModelStatus(session.ThreadID))
-	lines = append(lines, renderSessionModelStatus(modelStatus)...)
-	lines = append(lines, renderCodexOwnerNotice(resolution, route)...)
-	if !isCodexSessionControlTimeout(runtimeErr) && canObserveCodexTask(resolution, route) {
-		state, active, activeErr := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
-			ctx:            firstCodexContext(req.TaskContext, req.Context),
-			actorUserID:    firstNonBlank(req.ActorUserID, req.UserID),
-			routeUserID:    req.UserID,
-			agentName:      req.AgentName,
-			agent:          req.Agent,
-			conversationID: conversationID,
-			threadID:       session.ThreadID,
-			platform:       req.Platform,
-			accountID:      req.AccountID,
-			reply:          req.Reply,
-		})
-		if active {
-			lines = append(lines, renderExternalCodexActiveNotice(state)...)
-		}
-		lines = append(lines, renderExternalCodexStateReadError(activeErr)...)
-	}
-	lines = append(lines, renderCodexRuntimeInspectError(runtimeErr)...)
-	return cardNavigationResult(wechatCommandText(lines...))
+	return textNavigationResult(h.renderCodexSessionAcquireResult(
+		result, "已进入工作空间并接管唯一会话。", workspaceName,
+	))
 }
 
 func firstCodexContext(primary context.Context, fallback context.Context) context.Context {

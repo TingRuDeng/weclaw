@@ -19,11 +19,7 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-local-a", workspace, "实现两级会话浏览", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-local-b", workspace, "修复安全问题", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -134,11 +130,7 @@ func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 	}
 	writeFakeSQLite3(t, `[{"id":"thread-visible","title":"App 可见会话","recency_at_ms":2000}]`)
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	bindingKey := codexBindingKey("user-1", "codex")
@@ -148,9 +140,9 @@ func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(152, "/cx cd 0"))
 
-	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-visible" {
-		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-visible)", ag.useConversation, ag.useThreadID, wantConversationID)
+	intent := h.codexSessions.controlIntent("thread-visible")
+	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
+		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
 	}
 	if containsText(calls.texts(), "thread-archived") || containsText(calls.texts(), "已归档旧缓存") {
 		t.Fatalf("cd should ignore stored archived thread, messages=%#v", calls.texts())

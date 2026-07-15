@@ -94,9 +94,7 @@ func TestFeishuCodexWorkspaceChoiceKeepsAliasAdminAccess(t *testing.T) {
 	h.SetCodexLocalSessionDir(codexDir)
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
 	h.SetAdminUsers([]string{"on_admin"})
-	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
-		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-	}}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -211,9 +209,17 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 	if choices[2].ID != "/cx cd .." || choices[2].Label != "返回工作空间列表" {
 		t.Fatalf("last session choice=%#v, want back to workspace list", choices[2])
 	}
+	bindingKey := codexBindingKey("ou_user", "codex")
+	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
+	intentA := h.codexSessions.controlIntent("thread-a")
+	intentB := h.codexSessions.controlIntent("thread-b")
+	if active != normalizeCodexWorkspaceRoot(workspace) ||
+		intentA.Owner != codexControlUnclaimed || intentB.Owner != codexControlUnclaimed {
+		t.Fatalf("active=%q intents=(%#v,%#v)", active, intentA, intentB)
+	}
 }
 
-func TestFeishuCodexWorkspaceChoiceSendsSingleSessionChoiceCard(t *testing.T) {
+func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -221,11 +227,8 @@ func TestFeishuCodexWorkspaceChoiceSendsSingleSessionChoiceCard(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
-	h.agents["codex"] = &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
@@ -238,15 +241,16 @@ func TestFeishuCodexWorkspaceChoiceSendsSingleSessionChoiceCard(t *testing.T) {
 		},
 	}, reply)
 
-	if len(reply.Choices) != 1 {
-		t.Fatalf("choices=%#v, want single session choice card", reply.Choices)
+	if len(reply.Choices) != 0 {
+		t.Fatalf("choices=%#v, want no second choice card", reply.Choices)
 	}
-	choices := reply.Choices[0].Choices
-	if len(choices) != 2 || choices[0].ID != "/cx switch thread-a" {
-		t.Fatalf("single session choices=%#v, want switch choice and back choice", choices)
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "已进入工作空间并接管唯一会话") {
+		t.Fatalf("texts=%#v, want one acquire success reply", reply.Texts)
 	}
-	if choices[1].ID != "/cx cd .." || choices[1].Label != "返回工作空间列表" {
-		t.Fatalf("last single session choice=%#v, want back to workspace list", choices[1])
+	bindingKey := codexBindingKey("ou_user", "codex")
+	intent := h.codexSessions.controlIntent("thread-a")
+	if ag.useThreadID != "" || intent.Owner != codexControlRemote || intent.RouteBindingKey != bindingKey {
+		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
 	}
 }
 
@@ -309,11 +313,7 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-a2", workspaceA, "Alpha 会话 2", "2026-04-29T08:30:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -347,8 +347,10 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 		},
 	}, reply)
 
-	if ag.useThreadID != "thread-a" {
-		t.Fatalf("stale card switched thread=%q, want original thread-a", ag.useThreadID)
+	intentA := h.codexSessions.controlIntent("thread-a")
+	intentB := h.codexSessions.controlIntent("thread-b")
+	if ag.useThreadID != "" || intentA.Owner != codexControlRemote || intentB.Owner != codexControlDesktop {
+		t.Fatalf("use=%q intents=(%#v,%#v)", ag.useThreadID, intentA, intentB)
 	}
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspaceA) {
 		t.Fatalf("stale card cwd=%q, want original workspace %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspaceA))

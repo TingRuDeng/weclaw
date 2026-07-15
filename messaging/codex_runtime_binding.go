@@ -151,9 +151,9 @@ func ensureCodexRuntimeReady(resolution codexRuntimeResolution, route codexConve
 func ensureCodexRouteOwnsControl(intent agent.CodexControlIntent, route codexConversationRoute) error {
 	switch intent.Owner {
 	case agent.CodexControlUnclaimed:
-		return fmt.Errorf("当前 Codex 会话尚未选择控制方，请发送 /cx owner remote 或 /cx owner desktop")
+		return fmt.Errorf("当前 Codex 会话未由本窗口控制；请重新选择会话或发送 /cx owner remote")
 	case agent.CodexControlDesktop:
-		return fmt.Errorf("当前 Codex 会话由 Codex Desktop 控制；如需远程执行，请发送 /cx owner remote")
+		return fmt.Errorf("当前 Codex 会话已归还 Codex Desktop；请重新选择会话或发送 /cx owner remote")
 	case agent.CodexControlRemote:
 		if intent.RouteKey != route.bindingKey || intent.ConversationID != route.conversationID {
 			return fmt.Errorf("当前 Codex 会话由另一个消息窗口远程控制")
@@ -170,23 +170,6 @@ func codexResolutionModelStatus(resolution codexRuntimeResolution, fallback sess
 		return fallback
 	}
 	return sessionModelStatus{Model: state.Model, Effort: state.Effort}
-}
-
-func renderCodexOwnerNotice(resolution codexRuntimeResolution, route codexConversationRoute) []string {
-	if !resolution.Live {
-		return nil
-	}
-	return []string{
-		"控制方: " + renderCodexControlOwnerForRoute(resolution.Request.Intent, route),
-		"运行位置: " + renderCodexRuntimeHolder(resolution.Binding.Runtime),
-	}
-}
-
-// canObserveCodexTask 防止非持有窗口镜像其他远程窗口的任务和最终结果。
-func canObserveCodexTask(resolution codexRuntimeResolution, route codexConversationRoute) bool {
-	intent := resolution.Request.Intent
-	return intent.Owner != agent.CodexControlRemote ||
-		(intent.RouteKey == route.bindingKey && intent.ConversationID == route.conversationID)
 }
 
 func renderCodexControlOwner(owner agent.CodexControlOwner) string {

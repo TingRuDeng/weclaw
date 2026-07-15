@@ -131,14 +131,18 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	}
 	bindingKey := claudeBindingKey(routeUserID, agentName)
 	conversationID := buildClaudeConversationID(routeUserID, agentName, workspaceRoot)
-	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	claudeAg, ok := ag.(agent.ClaudeSessionAgent)
-	if !ok {
+	if !ok || !strings.EqualFold(ag.Info().Type, "acp") {
+		h.bindConversationCwd(ag, conversationID, workspaceRoot)
 		return conversationID, nil
 	}
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
 	defer unlock()
-	binding := h.ensureClaudeSessions().binding(bindingKey)
+	binding, _, controlErr := h.ensureClaudeSessions().requireRemoteControl(bindingKey)
+	if controlErr != nil {
+		return "", errors.New(renderClaudeRemoteControlError(controlErr))
+	}
+	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	if binding.SessionID == "" || binding.Status == claudeBindingUnbound {
 		return "", fmt.Errorf("当前窗口没有有效的 Claude 会话，请发送 /cc ls 选择或 /cc new 新建")
 	}
@@ -205,12 +209,14 @@ func (h *Handler) syncCodexThreadFromAgent(userID string, agentName string, work
 		return
 	}
 	bindingKey := codexBindingKey(userID, agentName)
-	if _, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot); pending {
+	store := h.ensureCodexSessions()
+	threadID, pending := store.getThread(bindingKey, workspaceRoot)
+	if pending || strings.TrimSpace(threadID) != "" {
 		return
 	}
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
-	threadID, ok := codexAg.CurrentCodexThread(conversationID)
+	threadID, ok = codexAg.CurrentCodexThread(conversationID)
 	if ok {
-		h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
+		store.setThread(bindingKey, workspaceRoot, threadID)
 	}
 }

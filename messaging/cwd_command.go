@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -41,9 +42,32 @@ func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin boo
 	if h.hasActiveClaudeTaskForCwd(userID, agents) {
 		return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
 	}
+	if err := h.releaseClaudeWorkspacesForCwd(userID, agents, absPath); err != nil {
+		log.Printf("[handler] /cwd 切换前释放 Claude 控制权失败: %v", err)
+		return "切换 Claude 工作空间失败，请稍后重试。"
+	}
 	h.updateAgentWorkingDirectories(absPath, agents)
 	h.recordActiveWorkspaceForUser(userID, agents, absPath)
 	return fmt.Sprintf("cwd: %s", absPath)
+}
+
+func (h *Handler) releaseClaudeWorkspacesForCwd(userIDs []string, agents map[string]agent.Agent, workspaceRoot string) error {
+	if len(userIDs) == 0 || strings.TrimSpace(userIDs[0]) == "" {
+		return nil
+	}
+	names := make([]string, 0, len(agents))
+	for name, ag := range agents {
+		if isClaudeAgent(name, ag.Info()) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := h.releaseClaudeWorkspaceForUser(context.Background(), userIDs[0], name, agents[name], workspaceRoot); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // currentCwdStatus 返回默认 Agent 的工作目录提示。
@@ -162,11 +186,6 @@ func (h *Handler) recordActiveWorkspaceForUser(userIDs []string, agents map[stri
 	for name, ag := range agents {
 		if isCodexAgent(name, ag.Info()) {
 			h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(userIDs[0], name), workspaceRoot)
-		}
-		if isClaudeAgent(name, ag.Info()) {
-			if err := h.ensureClaudeSessions().commitWorkspace(claudeBindingKey(userIDs[0], name), workspaceRoot); err != nil {
-				log.Printf("[handler] failed to save Claude workspace: %v", err)
-			}
 		}
 	}
 }

@@ -9,128 +9,110 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestCodexSwitchDesktopActiveOnlySelectsThread(t *testing.T) {
-	state := agent.CodexThreadState{
-		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
-		Preview: "正在审查", Model: "gpt-live", Effort: "high",
+func TestCodexSwitchDesktopActiveAcquiresAndObservesTask(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	fixture.setActiveTarget("turn-b")
+	fixture.agent.watchDone = make(chan struct{})
+	defer close(fixture.agent.watchDone)
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+	assertCodexSwitchAcquired(t, fixture, text)
+	if fixture.agent.useThreadID != "" || !strings.Contains(text, "已开始回传") ||
+		!strings.Contains(text, "/guide") || !strings.Contains(text, "/stop") {
+		t.Fatalf("use=%q text=%q", fixture.agent.useThreadID, text)
 	}
-	h, ag, workspace := codexLiveSwitchFixture(t, state)
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-		ctx: context.Background(), userID: "user-1", agentName: "codex",
-		workspaceRoot: workspace, agent: ag, target: "thread-1",
-		options: codexSwitchOptions{actorUserID: "user-1", platform: platform.PlatformFeishu, reply: reply},
-	})
-	if ag.useThreadID != "" || ag.handoffCalls != 0 || !strings.Contains(text, "任务正在进行") {
-		t.Fatalf("use=%q handoff=%d text=%q", ag.useThreadID, ag.handoffCalls, text)
-	}
-}
-
-func TestCodexSwitchDesktopIdleShowsModelWithoutHandoff(t *testing.T) {
-	state := agent.CodexThreadState{ThreadID: "thread-1", Model: "gpt-live", Effort: "high"}
-	h, ag, workspace := codexLiveSwitchFixture(t, state)
-	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-		ctx: context.Background(), userID: "user-1", agentName: "codex",
-		workspaceRoot: workspace, agent: ag, target: "thread-1",
-		options: codexSwitchOptions{actorUserID: "user-1"},
-	})
-	if ag.handoffCalls != 0 || !strings.Contains(text, "模型: gpt-live") || !strings.Contains(text, "推理强度: high") {
-		t.Fatalf("handoff=%d text=%q", ag.handoffCalls, text)
+	conversationID := buildCodexConversationID(fixture.routeUser, "codex", fixture.workspaceB)
+	if task, active := fixture.h.activeTask(conversationID); !active || task.codexThreadID != "thread-b" || task.codexTurnID != "turn-b" {
+		t.Fatalf("active=%t task=%#v", active, task)
 	}
 }
 
-func TestCodexSwitchUnclaimedDoesNotTakeControl(t *testing.T) {
-	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
-	setSwitchControlIntent(t, h, codexControlUnclaimed)
-	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-		ctx: context.Background(), userID: "user-1", agentName: "codex",
-		workspaceRoot: workspace, agent: ag, target: "thread-1",
-		options: codexSwitchOptions{actorUserID: "user-1"},
+func TestCodexSwitchDesktopIdleAcquiresWithoutUse(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	fixture.agent.setThreadBinding("thread-b", agent.CodexThreadBinding{
+		Runtime: agent.CodexRuntimeDesktop,
+		State:   agent.CodexThreadState{ThreadID: "thread-b", Model: "gpt-live", Effort: "high"},
 	})
-	if ag.handoffCalls != 0 || !strings.Contains(text, "控制方: 未认领") {
-		t.Fatalf("handoff=%d text=%q", ag.handoffCalls, text)
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+	assertCodexSwitchAcquired(t, fixture, text)
+	if fixture.agent.useThreadID != "" || !strings.Contains(text, "模型: gpt-live") ||
+		!strings.Contains(text, "推理强度: high") {
+		t.Fatalf("use=%q text=%q", fixture.agent.useThreadID, text)
 	}
 }
 
-func TestCodexSwitchDoesNotMirrorOtherRemoteRouteTask(t *testing.T) {
-	state := agent.CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1"}
-	h, ag, workspace := codexLiveSwitchFixture(t, state)
-	current := h.codexSessions.controlIntent("thread-1")
-	_, err := h.codexSessions.updateControlIntent(codexControlIntentUpdate{
-		ThreadID: "thread-1", Owner: codexControlRemote,
-		RouteBindingKey: "other-route", ConversationID: "other-conversation",
-		ExpectedRevision: current.Revision,
-	})
-	if err != nil {
+func TestCodexSwitchUnclaimedAcquiresRemoteControl(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	current := fixture.h.codexSessions.controlIntent("thread-b")
+	if _, err := fixture.h.codexSessions.updateControlIntent(codexControlIntentUpdate{
+		ThreadID: "thread-b", Owner: codexControlUnclaimed, ExpectedRevision: current.Revision,
+	}); err != nil {
 		t.Fatal(err)
 	}
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+	assertCodexSwitchAcquired(t, fixture, text)
+}
 
-	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-		ctx: context.Background(), userID: "user-1", agentName: "codex",
-		workspaceRoot: workspace, agent: ag, target: "thread-1",
-		options: codexSwitchOptions{actorUserID: "user-1"},
-	})
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if _, active := h.activeTask(conversationID); active {
-		t.Fatal("其他远程窗口的任务不应镜像到当前窗口")
+func TestCodexSwitchRejectsOtherRemoteAndKeepsA(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	current := fixture.h.codexSessions.controlIntent("thread-b")
+	if _, err := fixture.h.codexSessions.updateControlIntent(codexControlIntentUpdate{
+		ThreadID: "thread-b", Owner: codexControlRemote, RouteBindingKey: "other-route",
+		ConversationID: "other-conversation", ExpectedRevision: current.Revision,
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(text, "控制方: 其他远程窗口") {
+	want := fixture.snapshot()
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+	assertCodexAcquireState(t, fixture, want)
+	if !strings.Contains(text, "其他远程窗口正在控制") ||
+		strings.Contains(text, "other-route") || strings.Contains(text, "other-conversation") {
 		t.Fatalf("text=%q", text)
 	}
 }
 
-func TestCodexSwitchProbeFailureKeepsSelection(t *testing.T) {
-	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
-	ag.bindErr = errors.New("探测失败")
-	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-		ctx: context.Background(), userID: "user-1", agentName: "codex",
-		workspaceRoot: workspace, agent: ag, target: "thread-1",
-		options: codexSwitchOptions{actorUserID: "user-1"},
-	})
-	threadID, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
-	if threadID != "thread-1" || pending || !strings.Contains(text, "运行位置探测失败") {
-		t.Fatalf("thread=%q pending=%v text=%q", threadID, pending, text)
+func TestCodexSwitchProbeFailureKeepsA(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	setAcquireTargetRemoteForCurrentRoute(t, fixture)
+	fixture.agent.inspectErrors["thread-b"] = errors.New("探测失败")
+	want := fixture.snapshot()
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+	assertCodexAcquireState(t, fixture, want)
+	if !strings.Contains(text, "切换并接管") || !strings.Contains(text, "失败") || strings.Contains(text, "已保留") {
+		t.Fatalf("text=%q", text)
 	}
 }
 
-func TestCodexSwitchProbeTimeoutKeepsSelection(t *testing.T) {
-	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
-	ag.inspectRelease = make(chan struct{})
+func TestCodexSwitchProbeTimeoutKeepsA(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	setAcquireTargetRemoteForCurrentRoute(t, fixture)
+	fixture.agent.inspectRelease = make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-
-	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-		ctx: ctx, userID: "user-1", agentName: "codex",
-		workspaceRoot: workspace, agent: ag, target: "thread-1",
-		options: codexSwitchOptions{actorUserID: "user-1"},
-	})
-	threadID, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
-	if threadID != "thread-1" || pending || !strings.Contains(text, "运行位置探测超时") ||
-		!strings.Contains(text, "会话选择已保留") {
-		t.Fatalf("thread=%q pending=%v text=%q", threadID, pending, text)
+	want := fixture.snapshot()
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(ctx))
+	assertCodexAcquireState(t, fixture, want)
+	if !strings.Contains(text, "本次选择未执行") || strings.Contains(text, "已保留") {
+		t.Fatalf("text=%q", text)
 	}
 }
 
-func TestCodexSwitchThreadLockTimeoutKeepsSelection(t *testing.T) {
-	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
-	h.codexLockWaitTimeout = 20 * time.Millisecond
-	unlockHolder := h.lockCodexThreadControl("thread-1")
+func TestCodexSwitchThreadLockTimeoutKeepsA(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	fixture.h.codexLockWaitTimeout = 20 * time.Millisecond
+	unlockHolder := fixture.h.lockCodexThreadControl("thread-b")
+	want := fixture.snapshot()
 	resultCh := make(chan string, 1)
 	go func() {
-		resultCh <- h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-			ctx: context.Background(), userID: "user-1", agentName: "codex",
-			workspaceRoot: workspace, agent: ag, target: "thread-1",
-			options: codexSwitchOptions{actorUserID: "user-1"},
-		})
+		resultCh <- fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
 	}()
 
 	select {
 	case text := <-resultCh:
 		unlockHolder()
-		if !strings.Contains(text, "运行位置探测超时") || !strings.Contains(text, "会话选择已保留") {
+		assertCodexAcquireState(t, fixture, want)
+		if !strings.Contains(text, "本次选择未执行") || strings.Contains(text, "已保留") {
 			t.Fatalf("text=%q", text)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -139,23 +121,60 @@ func TestCodexSwitchThreadLockTimeoutKeepsSelection(t *testing.T) {
 	}
 }
 
+func (f *codexSessionAcquireFixture) switchRequest(ctx context.Context) codexSwitchRequest {
+	return codexSwitchRequest{
+		ctx: ctx, userID: f.routeUser, agentName: "codex", workspaceRoot: f.workspaceB,
+		agent: f.agent, target: "thread-b", ownerBindingKey: f.bindingKey,
+		options: codexSwitchOptions{
+			actorUserID: f.routeUser, platform: platform.PlatformFeishu, reply: f.reply,
+		},
+	}
+}
+
+func assertCodexSwitchAcquired(t *testing.T, fixture *codexSessionAcquireFixture, text string) {
+	t.Helper()
+	active, _ := fixture.h.codexSessions.getActiveWorkspace(fixture.bindingKey)
+	intentA := fixture.h.codexSessions.controlIntent("thread-a")
+	intentB := fixture.h.codexSessions.controlIntent("thread-b")
+	if active != fixture.workspaceB || intentA.Owner != codexControlDesktop ||
+		intentB.Owner != codexControlRemote || intentB.RouteBindingKey != fixture.bindingKey {
+		t.Fatalf("active=%q intentA=%#v intentB=%#v", active, intentA, intentB)
+	}
+	if !strings.HasPrefix(text, "已切换并接管。") || !strings.Contains(text, "控制方: 当前远程窗口") ||
+		!strings.Contains(text, "运行位置: Codex Desktop") {
+		t.Fatalf("text=%q", text)
+	}
+}
+
+func setAcquireTargetRemoteForCurrentRoute(t *testing.T, fixture *codexSessionAcquireFixture) {
+	t.Helper()
+	current := fixture.h.codexSessions.controlIntent("thread-b")
+	_, err := fixture.h.codexSessions.updateControlIntent(codexControlIntentUpdate{
+		ThreadID: "thread-b", Owner: codexControlRemote,
+		RouteBindingKey:  fixture.bindingKey,
+		ConversationID:   buildCodexConversationID(fixture.routeUser, "codex", fixture.workspaceB),
+		ExpectedRevision: current.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodexSwitchBlocksDifferentThreadWhileTaskRuns(t *testing.T) {
-	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-new"})
-	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
-	task, _, started := h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{owner: "user-1"})
+	fixture := newCodexSessionAcquireFixture(t)
+	conversationID := buildCodexConversationID(fixture.routeUser, "codex", fixture.workspaceA)
+	task, _, started := fixture.h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
+		owner: fixture.routeUser, codexThreadID: "thread-a", codexTurnID: "turn-a",
+	})
 	if !started {
 		t.Fatal("未能创建测试任务")
 	}
-	defer h.finishActiveTask(conversationID, task)
-	text := h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
-		ctx: context.Background(), userID: "user-1", agentName: "codex",
-		workspaceRoot: workspace, agent: ag, target: "thread-new",
-		options: codexSwitchOptions{actorUserID: "user-1"},
-	})
-	if !strings.Contains(text, "任务执行期间不能切换") || ag.bindCalls != 0 {
-		t.Fatalf("inspect=%d text=%q", ag.bindCalls, text)
+	defer fixture.h.finishActiveTask(conversationID, task)
+	want := fixture.snapshot()
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+	assertCodexAcquireState(t, fixture, want)
+	if !strings.Contains(text, "当前远程任务仍在执行") || fixture.agent.bindCalls != 0 {
+		t.Fatalf("inspect=%d text=%q", fixture.agent.bindCalls, text)
 	}
 }
 
@@ -186,15 +205,4 @@ func codexLiveSwitchFixture(t *testing.T, state agent.CodexThreadState) (*Handle
 		workspace: workspace, threadID: "thread-1",
 	})
 	return h, ag, workspace
-}
-
-func setSwitchControlIntent(t *testing.T, h *Handler, owner codexControlOwner) {
-	t.Helper()
-	current := h.codexSessions.controlIntent("thread-1")
-	_, err := h.codexSessions.updateControlIntent(codexControlIntentUpdate{
-		ThreadID: "thread-1", Owner: owner, ExpectedRevision: current.Revision,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 }

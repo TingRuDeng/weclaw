@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 
 const claudeCLIConcurrencyProbeDelay = 50 * time.Millisecond
 
-func TestHandleClaudeCliOpensCurrentSession(t *testing.T) {
+func TestHandleClaudeCLIOpensCurrentSession(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	ag := &fakeClaudeSessionAgent{
@@ -28,11 +29,19 @@ func TestHandleClaudeCliOpensCurrentSession(t *testing.T) {
 	h.defaultName = "claude"
 	h.agents["claude"] = ag
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
-	if err := h.claudeSessions.commitSelection(claudeBindingKey("user-1", "claude"), workspace, "session-current"); err != nil {
+	bindingKey := seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-current", 1)
+	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	if err := ag.UseClaudeSession(context.Background(), conversationID, "session-current"); err != nil {
 		t.Fatal(err)
 	}
 	var opened []recordedClaudeCLIResume
 	h.SetClaudeCLIResumeOpener(func(_ context.Context, request ClaudeCLIResumeRequest) error {
+		if intent := h.ensureClaudeSessions().controlIntent("session-current"); intent.Owner != claudeOwnerLocal {
+			t.Fatalf("opener intent=%+v, want local", intent)
+		}
+		if _, ok := ag.CurrentClaudeSession(conversationID); ok {
+			t.Fatal("opener 调用前 ACP runtime 未清理")
+		}
 		opened = append(opened, recordedClaudeCLIResume{
 			command: request.Command, workspace: request.WorkspaceRoot, sessionID: request.SessionID,
 		})
@@ -49,8 +58,25 @@ func TestHandleClaudeCliOpensCurrentSession(t *testing.T) {
 	if opened[0].command != "claude" {
 		t.Fatalf("command=%q, want local_command claude", opened[0].command)
 	}
-	if !containsText(calls.texts(), "已打开 Claude CLI") {
+	if !containsText(calls.texts(), "已释放远程控制并打开 Claude CLI") {
 		t.Fatalf("reply should mention opened cli, messages=%#v", calls.texts())
+	}
+	if intent := h.ensureClaudeSessions().controlIntent("session-current"); intent.Owner != claudeOwnerLocal || intent.BindingKey != "" {
+		t.Fatalf("intent=%+v, want local", intent)
+	}
+	if binding := h.ensureClaudeSessions().binding(bindingKey); binding.SessionID != "session-current" {
+		t.Fatalf("binding=%+v, want retained selection", binding)
+	}
+	replier := platformtest.NewReplier(platform.Capabilities{Text: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.startAgentTask(agentTaskOptions{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "user-1", routeUserID: "user-1", reply: replier,
+		agentName: "claude", message: "交接后的远程任务", agent: ag, progressCfg: cfg,
+	})
+	if h.ActiveTaskCount() != 0 || !containsText(replier.Texts, "/cc owner remote") {
+		t.Fatalf("active=%d texts=%#v, want local owner rejection", h.ActiveTaskCount(), replier.Texts)
 	}
 }
 
@@ -65,12 +91,134 @@ func newClaudeCLIEntryRoute(t *testing.T, workspace string, sessionID string) (*
 	h.agents["claude"] = ag
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
 	bindingKey := claudeBindingKey("user-1", "claude")
-	if err := h.claudeSessions.commitSelection(bindingKey, workspace, sessionID); err != nil {
+	seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, sessionID, 1)
+	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	if err := ag.UseClaudeSession(context.Background(), conversationID, sessionID); err != nil {
 		t.Fatal(err)
 	}
+	ag.catalogSessions = []agent.ClaudeSession{{ID: sessionID, Cwd: workspace}}
 	return h, claudeSessionRoute{
 		Context: context.Background(), ActorUserID: "user-1", UserID: "user-1",
-		AgentName: "claude", Agent: ag, WorkspaceRoot: workspace, BindingKey: bindingKey,
+		AgentName: "claude", Agent: ag, WorkspaceRoot: workspace, BindingKey: bindingKey, Admin: true,
+	}
+}
+
+func TestHandleClaudeCLIOpenerFailureRestoresRemoteOwner(t *testing.T) {
+	workspace := t.TempDir()
+	h, route := newClaudeCLIEntryRoute(t, workspace, "session-current")
+	h.SetClaudeCLIResumeOpener(func(context.Context, ClaudeCLIResumeRequest) error {
+		return errors.New("terminal unavailable")
+	})
+
+	reply := h.handleClaudeCLI(route)
+	intent := h.ensureClaudeSessions().controlIntent("session-current")
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspace)
+	current, bound := route.Agent.(*fakeClaudeSessionAgent).CurrentClaudeSession(conversationID)
+	if !strings.Contains(reply, "打开 Claude CLI 失败") || !strings.Contains(reply, "已恢复远程控制") ||
+		intent.Owner != claudeOwnerRemote || intent.BindingKey != route.BindingKey || intent.Revision <= 1 ||
+		!bound || current != "session-current" {
+		t.Fatalf("reply=%q intent=%+v runtime=%q/%v", reply, intent, current, bound)
+	}
+}
+
+func TestHandleClaudeCLICompensationFailureStaysFailClosed(t *testing.T) {
+	workspace := t.TempDir()
+	h, route := newClaudeCLIEntryRoute(t, workspace, "session-current")
+	route.Agent.(*fakeClaudeSessionAgent).useErr = errors.New("resume failed")
+	h.SetClaudeCLIResumeOpener(func(context.Context, ClaudeCLIResumeRequest) error {
+		return errors.New("terminal unavailable")
+	})
+
+	reply := h.handleClaudeCLI(route)
+	intent := h.ensureClaudeSessions().controlIntent("session-current")
+	if !strings.Contains(reply, "远程恢复未确认") || intent.Owner == claudeOwnerRemote ||
+		strings.Contains(reply, "terminal unavailable") || strings.Contains(reply, "resume failed") {
+		t.Fatalf("reply=%q intent=%+v", reply, intent)
+	}
+}
+
+func TestHandleClaudeCLIRejectsNonOwnerWithoutOpening(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		intent claudeControlIntent
+		want   string
+	}{
+		{name: "local", intent: claudeControlIntent{Owner: claudeOwnerLocal, Revision: 2}, want: "/cc owner remote"},
+		{name: "unclaimed", intent: claudeControlIntent{Owner: claudeOwnerUnclaimed, Revision: 2}, want: "/cc owner remote"},
+		{name: "other route", intent: claudeControlIntent{
+			Owner: claudeOwnerRemote, BindingKey: claudeBindingKey("other", "claude"),
+			ConversationID: "other-conversation", Revision: 2,
+		}, want: "其他远程窗口"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h, route := newClaudeCLIEntryRoute(t, t.TempDir(), "session-current")
+			h.ensureClaudeSessions().controls["session-current"] = test.intent
+			opened := false
+			h.SetClaudeCLIResumeOpener(func(context.Context, ClaudeCLIResumeRequest) error {
+				opened = true
+				return nil
+			})
+			reply := h.handleClaudeCLI(route)
+			if opened || !strings.Contains(reply, test.want) {
+				t.Fatalf("opened=%v reply=%q, want %q", opened, reply, test.want)
+			}
+		})
+	}
+}
+
+func TestHandleClaudeCLIRejectsMissingSessionWithoutOpening(t *testing.T) {
+	h, route := newClaudeCLIEntryRoute(t, t.TempDir(), "session-current")
+	store := h.ensureClaudeSessions()
+	store.bindings[route.BindingKey] = newClaudeBinding(route.WorkspaceRoot, "", claudeBindingUnbound)
+	opened := false
+	h.SetClaudeCLIResumeOpener(func(context.Context, ClaudeCLIResumeRequest) error {
+		opened = true
+		return nil
+	})
+	if reply := h.handleClaudeCLI(route); opened || !strings.Contains(reply, "没有可接手") {
+		t.Fatalf("opened=%v reply=%q", opened, reply)
+	}
+}
+
+func TestHandleClaudeCLICompensationDoesNotOverwriteConcurrentOwner(t *testing.T) {
+	workspace := t.TempDir()
+	h, route := newClaudeCLIEntryRoute(t, workspace, "session-current")
+	other := route
+	other.ActorUserID = "user-2"
+	other.UserID = "user-2"
+	other.BindingKey = claudeBindingKey("user-2", "claude")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	h.SetClaudeCLIResumeOpener(func(context.Context, ClaudeCLIResumeRequest) error {
+		close(entered)
+		<-release
+		return errors.New("terminal unavailable")
+	})
+	cliDone := make(chan string, 1)
+	go func() { cliDone <- h.handleClaudeCLI(route) }()
+	<-entered
+	acquireDone := make(chan error, 1)
+	go func() {
+		_, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
+			Route:    other,
+			Selected: agent.ClaudeSession{ID: "session-current", Cwd: workspace},
+			Command:  "concurrent test",
+		})
+		acquireDone <- err
+	}()
+	select {
+	case err := <-acquireDone:
+		t.Fatalf("concurrent acquire bypassed opener critical section: %v", err)
+	case <-time.After(claudeCLIConcurrencyProbeDelay):
+	}
+	close(release)
+	if err := <-acquireDone; err != nil {
+		t.Fatalf("concurrent acquire: %v", err)
+	}
+	reply := <-cliDone
+	intent := h.ensureClaudeSessions().controlIntent("session-current")
+	if !strings.Contains(reply, "远程恢复未确认") || intent.Owner != claudeOwnerRemote || intent.BindingKey != other.BindingKey {
+		t.Fatalf("reply=%q intent=%+v, want concurrent owner preserved", reply, intent)
 	}
 }
 
@@ -83,8 +231,13 @@ func TestHandleClaudeCLIRejectsRunningSession(t *testing.T) {
 		t.Fatal("活动任务登记失败")
 	}
 	defer h.finishActiveTask(key, task)
+	opened := false
+	h.SetClaudeCLIResumeOpener(func(context.Context, ClaudeCLIResumeRequest) error {
+		opened = true
+		return nil
+	})
 
-	if reply := h.handleClaudeCLI(route); !strings.Contains(reply, "任务正在运行") {
+	if reply := h.handleClaudeCLI(route); !strings.Contains(reply, "任务正在运行") || opened {
 		t.Fatalf("reply=%q, want running rejection", reply)
 	}
 }
@@ -100,6 +253,7 @@ func TestHandleClaudeCLIRejectsUnauthorizedWorkspace(t *testing.T) {
 	allowed := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside")
 	h, route := newClaudeCLIEntryRoute(t, outside, "session-current")
+	route.Admin = false
 	h.SetAllowedWorkspaceRoots([]string{allowed})
 	h.SetAgentWorkDirs(map[string]string{"claude": allowed})
 

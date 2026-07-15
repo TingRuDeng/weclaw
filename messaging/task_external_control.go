@@ -20,6 +20,7 @@ type externalCodexControlTarget struct {
 	task     *activeAgentTask
 	threadID string
 	turnID   string
+	reserved bool
 }
 
 // externalCodexControlState 返回外部任务是否存在、是否可控制以及当前用户是否无权操作。
@@ -48,15 +49,21 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 	if target.task == nil {
 		return target, false, nil
 	}
+	if target.reserved {
+		return target, true, fmt.Errorf("当前 Codex 任务观察尚未激活，暂不能执行%s操作", req.action)
+	}
+	if req.action == "停止" && target.task.isStopping() {
+		return target, true, nil
+	}
+	if !target.task.canControlExternalCodex() {
+		if req.action == "guide" {
+			return target, true, fmt.Errorf("当前 Codex App 本地任务不支持 /guide；暂存消息会在任务结束后自动执行")
+		}
+		return target, true, fmt.Errorf("当前任务由独立 Codex App 进程执行，暂不支持从飞书或微信停止")
+	}
 	liveAgent, live := req.ag.(agent.CodexLiveRuntimeAgent)
 	runtimeAgent, runtime := req.ag.(agent.CodexThreadRuntimeAgent)
 	if !live || !runtime {
-		if !target.task.canControlExternalCodex() {
-			if req.action == "guide" {
-				return target, true, fmt.Errorf("当前 Codex App 本地任务不支持 /guide；暂存消息会在任务结束后自动执行")
-			}
-			return target, true, fmt.Errorf("当前任务由独立 Codex App 进程执行，暂不支持从飞书或微信停止")
-		}
 		return target, true, nil
 	}
 	unlock := h.lockCodexThreadControl(target.threadID)
@@ -102,5 +109,8 @@ func (h *Handler) cachedExternalCodexTarget(key string, actor string) (externalC
 	if !task.isExternalCodexLocked() {
 		return externalCodexControlTarget{}, false
 	}
-	return externalCodexControlTarget{task: task, threadID: task.codexThreadID, turnID: task.codexTurnID}, false
+	return externalCodexControlTarget{
+		task: task, threadID: task.codexThreadID, turnID: task.codexTurnID,
+		reserved: task.phase == codexTaskReserved,
+	}, false
 }

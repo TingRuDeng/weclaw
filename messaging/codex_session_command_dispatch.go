@@ -29,6 +29,17 @@ type codexSessionCommandPreparation struct {
 	ready   bool
 }
 
+// acquireRequest 把 owner 兼容入口转换为统一选择接管事务输入。
+func (runtime codexSessionCommandRuntime) acquireRequest(threadID string) codexSessionAcquireRequest {
+	return codexSessionAcquireRequest{
+		ctx: runtime.ctx, taskContext: runtime.externalTaskCtx,
+		actorUserID: runtime.actorUserID, routeUserID: runtime.routeUserID,
+		agentName: runtime.agentName, agent: runtime.agent,
+		route: runtime.codexRoute(threadID), platform: runtime.req.Platform,
+		accountID: runtime.req.AccountID, reply: runtime.req.Reply,
+	}
+}
+
 // prepareCodexSessionCommand 解析路由并在同一绑定锁内准备命令运行状态。
 func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessionCommandRequest) codexSessionCommandPreparation {
 	actorUserID, routeUserID := normalizeCodexCommandUsers(req)
@@ -163,8 +174,12 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 		return textNavigationResult(h.handleCodexModelCommand(runtime.ctx, runtime.agent, fields[2:]))
 	case "new":
 		return textNavigationResult(h.handleCodexNewForRoute(codexNewRequest{
-			ctx: runtime.ctx, userID: runtime.routeUserID, agentName: runtime.agentName,
-			workspaceRoot: runtime.workspaceRoot, agent: runtime.agent, ownerBindingKey: runtime.ownerBindingKey,
+			ctx: runtime.ctx, taskContext: runtime.externalTaskCtx,
+			actorUserID: runtime.actorUserID, userID: runtime.routeUserID,
+			agentName: runtime.agentName, workspaceRoot: runtime.workspaceRoot,
+			agent:    runtime.agent,
+			platform: runtime.req.Platform, accountID: runtime.req.AccountID,
+			reply: runtime.req.Reply,
 		}))
 	case "switch":
 		return h.dispatchCodexSwitchCommand(runtime)

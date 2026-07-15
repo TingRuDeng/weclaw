@@ -1,7 +1,10 @@
 package messaging
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -10,11 +13,17 @@ import (
 
 const codexOwnerCommandUsage = "用法: /cx owner [remote|desktop]"
 
-type codexOwnerHandoffValidation struct {
+type codexOwnerReleaseValidation struct {
 	runtime  codexSessionCommandRuntime
 	threadID string
 	current  codexControlIntent
-	target   codexControlOwner
+}
+
+type codexOwnerReleaseCompensation struct {
+	ctx       context.Context
+	liveAgent agent.CodexLiveRuntimeAgent
+	change    codexRuntimeIntentChange
+	cause     error
 }
 
 // handleCodexOwnerCommand 查询或显式移交当前 thread 的控制权。
@@ -31,9 +40,13 @@ func (h *Handler) handleCodexOwnerCommand(runtime codexSessionCommandRuntime) na
 	}
 	switch strings.ToLower(runtime.fields[2]) {
 	case "remote":
-		return h.handoffCodexOwner(runtime, threadID, codexControlRemote)
+		result, err := h.acquireCodexSessionWithBindingLocked(runtime.acquireRequest(threadID))
+		if err != nil {
+			return textNavigationResult(renderCodexSessionAcquireFailure(err))
+		}
+		return textNavigationResult(h.renderCodexSessionAcquireSuccess(result))
 	case "desktop":
-		return h.handoffCodexOwner(runtime, threadID, codexControlDesktop)
+		return h.releaseCodexOwnerToDesktop(runtime, threadID)
 	default:
 		return cardNavigationResult(codexOwnerCommandUsage)
 	}
@@ -70,76 +83,92 @@ func (h *Handler) renderCodexOwnerStatus(runtime codexSessionCommandRuntime, thr
 		if isCodexThreadStoreReadError(err) {
 			return cardNavigationResult("查询 Codex 控制权失败: 该会话暂时无法读取。")
 		}
-		return cardNavigationResult(fmt.Sprintf("查询 Codex 控制权失败: %v", err))
+		log.Printf("[codex-owner] 控制权查询失败 thread=%q: %v", threadID, err)
+		return cardNavigationResult("查询 Codex 控制权失败，请重试。")
 	}
 	return cardNavigationResult(renderCodexOwnerStatusText(runtime, resolution))
 }
 
-// handoffCodexOwner 先完成实际移交，再用 revision 提交持久化控制意图。
-func (h *Handler) handoffCodexOwner(runtime codexSessionCommandRuntime, threadID string, owner codexControlOwner) navigationCommandResult {
+// releaseCodexOwnerToDesktop 只释放当前 thread，保留窗口的会话选择。
+func (h *Handler) releaseCodexOwnerToDesktop(runtime codexSessionCommandRuntime, threadID string) navigationCommandResult {
 	unlock, err := h.lockCodexSessionThread(runtime.ctx, threadID, "owner")
 	if err != nil {
-		return cardNavigationResult("前一项会话操作仍在处理，Codex 控制权移交未执行。")
+		return textNavigationResult("前一项会话操作仍在处理，Codex 控制权移交未执行。")
 	}
 	defer unlock()
 	current := h.ensureCodexSessions().controlIntent(threadID)
-	if err := h.validateCodexOwnerHandoff(codexOwnerHandoffValidation{
-		runtime: runtime, threadID: threadID, current: current, target: owner,
+	if err := h.validateCodexOwnerRelease(codexOwnerReleaseValidation{
+		runtime: runtime, threadID: threadID, current: current,
 	}); err != nil {
-		return cardNavigationResult(err.Error())
+		return textNavigationResult(err.Error())
 	}
-	proposed := proposedCodexControlIntent(runtime, current, owner)
-	request, _, err := h.buildCodexRuntimeRequest(runtime.codexRoute(threadID), threadID)
-	if err != nil {
-		return cardNavigationResult(fmt.Sprintf("Codex 控制权移交失败: %v", err))
-	}
-	request.Intent = agentControlIntent(proposed)
 	liveAgent, ok := runtime.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
-		return cardNavigationResult("当前 Codex Agent 不支持显式控制权移交。")
+		return textNavigationResult("当前 Codex Agent 不支持显式控制权移交。")
 	}
-	started := time.Now()
-	binding, err := liveAgent.HandoffCodexRuntime(runtime.ctx, request)
-	logCodexSessionControlTimeout("owner", "runtime-handoff", threadID, started, err)
+	change := codexRuntimeIntentChange{
+		threadID: threadID, route: runtime.codexRoute(threadID), before: current,
+		after: codexControlIntent{Owner: codexControlDesktop, Revision: current.Revision + 1},
+	}
+	resolution, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
+		ctx: runtime.ctx, liveAgent: liveAgent, change: change, resyncIntent: current,
+	})
 	if err != nil {
-		if isCodexSessionControlTimeout(err) {
-			return cardNavigationResult("Codex 控制权移交结果未确认，控制意图未提交；请重新查询 /cx owner 后重试。")
-		}
-		return cardNavigationResult(fmt.Sprintf("Codex 控制权移交失败: %v", err))
+		return textNavigationResult(renderCodexOwnerReleaseFailure(err))
 	}
-	committed, err := h.commitCodexControlIntent(threadID, current, proposed)
+	committed, err := h.commitCodexControlIntent(threadID, current, change.after)
 	if err != nil {
-		resyncErr := h.resyncCodexControlIntent(runtime, threadID, liveAgent)
-		message := fmt.Sprintf("Codex 控制权提交失败: %v", err)
-		if resyncErr != nil {
-			message += fmt.Sprintf("；运行时回滚失败: %v", resyncErr)
-		}
-		return cardNavigationResult(message)
+		return textNavigationResult(h.compensateCodexOwnerRelease(codexOwnerReleaseCompensation{
+			ctx: runtime.ctx, liveAgent: liveAgent, change: change, cause: err,
+		}))
 	}
-	request.Intent = agentControlIntent(committed)
-	binding.Control = request.Intent
-	return cardNavigationResult(renderCodexHandoffResult(runtime, request, binding))
+	resolution.Request.Intent = agentControlIntent(committed)
+	resolution.Binding.Control = resolution.Request.Intent
+	return textNavigationResult(renderCodexHandoffResult(runtime, resolution.Request, resolution.Binding))
 }
 
-// validateCodexOwnerHandoff 防止非持有窗口归还控制权或在任务中途移交。
-func (h *Handler) validateCodexOwnerHandoff(validation codexOwnerHandoffValidation) error {
-	runtime, current, target := validation.runtime, validation.current, validation.target
+// validateCodexOwnerRelease 防止非持有窗口归还控制权或在任务中途释放。
+func (h *Handler) validateCodexOwnerRelease(validation codexOwnerReleaseValidation) error {
+	runtime, current := validation.runtime, validation.current
 	targetConversationID := runtime.codexRoute("").conversationID
-	if activeConversationID, active := h.activeCodexTaskConversation(validation.threadID); active && activeConversationID != targetConversationID {
-		return fmt.Errorf("当前 Codex 会话正在另一个消息窗口执行或观察，不能接管")
+	if current.Owner != codexControlRemote || current.RouteBindingKey != runtime.bindingKey ||
+		current.ConversationID != targetConversationID {
+		return fmt.Errorf("当前窗口未控制该 Codex 会话，不能归还控制权")
 	}
-	if current.Owner == codexControlRemote && target == codexControlDesktop {
-		if current.RouteBindingKey != runtime.bindingKey || current.ConversationID != targetConversationID {
-			return fmt.Errorf("当前 Codex 会话由另一个消息窗口远程控制，只能在原窗口归还控制权")
-		}
-	}
-	if current.Owner != codexControlRemote || current.ConversationID == "" {
-		return nil
+	if _, active := h.activeCodexTaskConversation(validation.threadID); active {
+		return fmt.Errorf("请等待当前远程任务结束，或先发送 /stop，再归还控制权")
 	}
 	if _, active := h.activeTask(current.ConversationID); active {
 		return fmt.Errorf("请等待当前远程任务结束，或先发送 /stop，再归还控制权")
 	}
 	return nil
+}
+
+// compensateCodexOwnerRelease 在持久化失败后用独立预算恢复原运行时意图。
+func (h *Handler) compensateCodexOwnerRelease(compensation codexOwnerReleaseCompensation) string {
+	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(compensation.ctx)
+	defer cancel()
+	changes := []codexRuntimeIntentChange{compensation.change}
+	if err := h.compensateCodexRuntimeChanges(cleanupCtx, compensation.liveAgent, changes); err != nil {
+		return renderCodexOwnerReleaseFailure(errors.Join(errCodexSessionAcquireUncertain, compensation.cause, err))
+	}
+	log.Printf("[codex-owner] 控制权提交失败 thread=%q: %v", compensation.change.threadID, compensation.cause)
+	return "Codex 控制权提交失败，本次释放未生效。"
+}
+
+// renderCodexOwnerReleaseFailure 区分已校准失败与无法确认的 fail-closed 状态。
+func renderCodexOwnerReleaseFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	log.Printf("[codex-owner] 控制权移交失败: %v", err)
+	if errors.Is(err, errCodexSessionAcquireUncertain) {
+		return "Codex 控制权移交结果未确认，当前禁止继续写入。"
+	}
+	if isCodexSessionControlTimeout(err) {
+		return "Codex 控制权移交超时，已按当前控制意图重新校准；请重试。"
+	}
+	return "Codex 控制权移交失败，请重试。"
 }
 
 // activeCodexTaskConversation 返回同一 thread 当前登记的任务窗口。
@@ -158,16 +187,6 @@ func (h *Handler) activeCodexTaskConversation(threadID string) (string, bool) {
 	return "", false
 }
 
-// proposedCodexControlIntent 构造交给 Agent 校验的下一版意图，但尚不写入磁盘。
-func proposedCodexControlIntent(runtime codexSessionCommandRuntime, current codexControlIntent, owner codexControlOwner) codexControlIntent {
-	intent := codexControlIntent{Owner: owner, Revision: current.Revision + 1}
-	if owner == codexControlRemote {
-		intent.RouteBindingKey = runtime.bindingKey
-		intent.ConversationID = runtime.codexRoute("").conversationID
-	}
-	return intent
-}
-
 // commitCodexControlIntent 使用旧 revision 做 CAS，避免两个窗口同时认领成功。
 func (h *Handler) commitCodexControlIntent(threadID string, current codexControlIntent, proposed codexControlIntent) (codexControlIntent, error) {
 	return h.ensureCodexSessions().updateControlIntent(codexControlIntentUpdate{
@@ -175,16 +194,6 @@ func (h *Handler) commitCodexControlIntent(threadID string, current codexControl
 		RouteBindingKey: proposed.RouteBindingKey, ConversationID: proposed.ConversationID,
 		ExpectedRevision: current.Revision,
 	})
-}
-
-// resyncCodexControlIntent 在 CAS 失败时把 Agent 恢复到磁盘中的获胜意图。
-func (h *Handler) resyncCodexControlIntent(runtime codexSessionCommandRuntime, threadID string, liveAgent agent.CodexLiveRuntimeAgent) error {
-	request, _, err := h.buildCodexRuntimeRequest(runtime.codexRoute(threadID), threadID)
-	if err != nil {
-		return err
-	}
-	_, err = liveAgent.InspectCodexRuntime(runtime.ctx, request)
-	return err
 }
 
 // renderCodexOwnerStatusText 统一状态命令和卡片中的所有权信息。
@@ -200,12 +209,26 @@ func renderCodexOwnerStatusText(runtime codexSessionCommandRuntime, resolution c
 		lines = append(lines, "任务: 空闲")
 	}
 	if reason := strings.TrimSpace(resolution.Binding.ConflictReason); reason != "" {
-		lines = append(lines, "冲突: "+reason)
+		log.Printf("[codex-owner] 运行时冲突 thread=%q: %s", resolution.Request.Ref.ThreadID, reason)
+		lines = append(lines, "冲突: 运行时写入冲突")
 	}
 	if resolution.ProbeErr != nil {
-		lines = append(lines, "探测: "+resolution.ProbeErr.Error())
+		lines = append(lines, "探测: "+renderCodexOwnerProbeFailure(resolution.ProbeErr))
 	}
 	return wechatCommandText(lines...)
+}
+
+// renderCodexOwnerProbeFailure 只展示稳定分类，底层错误仅写内部日志。
+func renderCodexOwnerProbeFailure(err error) string {
+	log.Printf("[codex-owner] 运行位置探测异常: %v", err)
+	switch {
+	case errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown):
+		return "Desktop 控制权未确认"
+	case errors.Is(err, agent.ErrCodexRuntimeConflict):
+		return "运行时写入冲突"
+	default:
+		return "运行位置探测异常"
+	}
 }
 
 // renderCodexControlOwnerForRoute 区分当前远程窗口和其他远程窗口。

@@ -32,6 +32,7 @@ type claudeSessionBinding struct {
 type claudeSessionState struct {
 	Version  int                             `json:"version"`
 	Bindings map[string]claudeSessionBinding `json:"bindings"`
+	Controls map[string]claudeControlIntent  `json:"controls"`
 	Updated  string                          `json:"updated"`
 }
 
@@ -40,11 +41,15 @@ type claudeSessionStore struct {
 	saveMu   sync.Mutex
 	filePath string
 	bindings map[string]claudeSessionBinding
+	controls map[string]claudeControlIntent
 	persist  func(claudeSessionState) error
 }
 
 func newClaudeSessionStore() *claudeSessionStore {
-	return &claudeSessionStore{bindings: make(map[string]claudeSessionBinding)}
+	return &claudeSessionStore{
+		bindings: make(map[string]claudeSessionBinding),
+		controls: make(map[string]claudeControlIntent),
+	}
 }
 
 // DefaultClaudeSessionFile 返回 Claude route/session 绑定的默认持久化路径。
@@ -54,6 +59,8 @@ func DefaultClaudeSessionFile() string {
 
 // SetFilePath 设置持久化文件并加载状态；损坏文件只记录错误，不覆盖磁盘内容。
 func (s *claudeSessionStore) SetFilePath(filePath string) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	s.filePath = strings.TrimSpace(filePath)
 	path := s.filePath
@@ -61,7 +68,7 @@ func (s *claudeSessionStore) SetFilePath(filePath string) error {
 		return persistClaudeSessionState(path, state)
 	}
 	s.mu.Unlock()
-	return s.load()
+	return s.loadLocked()
 }
 
 // binding 返回 route 当前绑定快照。
@@ -77,15 +84,10 @@ func (s *claudeSessionStore) bindingSnapshot(bindingKey string) (claudeSessionBi
 	return binding, ok
 }
 
-// commitWorkspace 切换浏览工作空间并清除旧 session，要求用户显式选择或新建。
-func (s *claudeSessionStore) commitWorkspace(bindingKey string, workspaceRoot string) error {
-	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
-	if workspaceRoot == "" {
-		return fmt.Errorf("Claude 工作空间不能为空")
-	}
-	return s.updateBinding(bindingKey, func(current claudeSessionBinding) claudeSessionBinding {
-		return newClaudeBinding(workspaceRoot, "", claudeBindingUnbound)
-	})
+func (s *claudeSessionStore) controlIntent(sessionID string) claudeControlIntent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.controls[strings.TrimSpace(sessionID)]
 }
 
 // commitSelection 原子提交已由 ACP 验证成功的 workspace/session 绑定。
@@ -113,21 +115,6 @@ func (s *claudeSessionStore) markResumeFailed(bindingKey string) error {
 // markReady 标记 ACP runtime 已恢复当前 session。
 func (s *claudeSessionStore) markReady(bindingKey string) error {
 	return s.updateStatus(bindingKey, claudeBindingReady)
-}
-
-// restoreBinding 恢复事务开始前的绑定；用于跨 ACP 与状态文件的补偿回滚。
-func (s *claudeSessionStore) restoreBinding(bindingKey string, binding claudeSessionBinding, existed bool) error {
-	return s.replaceBinding(bindingKey, binding, existed)
-}
-
-func (s *claudeSessionStore) replaceBinding(bindingKey string, binding claudeSessionBinding, existed bool) error {
-	return s.updateBindings(func(bindings map[string]claudeSessionBinding) {
-		if existed {
-			bindings[bindingKey] = binding
-			return
-		}
-		delete(bindings, bindingKey)
-	})
 }
 
 func (s *claudeSessionStore) updateStatus(bindingKey string, status claudeBindingStatus) error {
@@ -165,8 +152,9 @@ func (s *claudeSessionStore) updateBindings(mutate func(map[string]claudeSession
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	bindings := cloneClaudeBindings(s.bindings)
+	controls := cloneClaudeControls(s.controls)
 	mutate(bindings)
-	state := newClaudeSessionState(bindings)
+	state := newClaudeSessionState(bindings, controls)
 	persist := s.persist
 	s.mu.Unlock()
 	if persist != nil {
@@ -176,6 +164,7 @@ func (s *claudeSessionStore) updateBindings(mutate func(map[string]claudeSession
 	}
 	s.mu.Lock()
 	s.bindings = bindings
+	s.controls = controls
 	s.mu.Unlock()
 	return nil
 }
@@ -188,9 +177,12 @@ func cloneClaudeBindings(input map[string]claudeSessionBinding) map[string]claud
 	return bindings
 }
 
-func newClaudeSessionState(bindings map[string]claudeSessionBinding) claudeSessionState {
+func newClaudeSessionState(bindings map[string]claudeSessionBinding, controls map[string]claudeControlIntent) claudeSessionState {
 	return claudeSessionState{
-		Version: 2, Bindings: cloneClaudeBindings(bindings), Updated: time.Now().UTC().Format(time.RFC3339),
+		Version:  claudeSessionStateVersion,
+		Bindings: cloneClaudeBindings(bindings),
+		Controls: cloneClaudeControls(controls),
+		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
 }
 

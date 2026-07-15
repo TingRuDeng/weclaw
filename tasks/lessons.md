@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-15 Codex 选择接管必须按完整 saga 验收
+
+- 触发条件：远程窗口通过切换、短编号、唯一工作空间会话、会话卡片或新建命令显式选择 Codex thread。
+- 权威边界：显式选择是 thread 权威状态；ACP 当前 thread 只能在 session store 为空且不是 pending new 时回填，不能覆盖已经持久化的选择。
+- 一致性规则：selection、唯一 remote owner 和 active observer 必须作为同一 saga 验收，不能在其中任一步完成后提前回复接管成功。
+- 失败边界：补偿必须同时覆盖 runtime、observer 和 store；不能只检查回复文本，也不能留下半提交控制意图。
+- 来源：2026-07-15 Codex 远程窗口“选择即接管”事务收口。
+
 ## 2026-07-14 Codex interrupted 不是可靠终态
 
 - 触发条件：Codex app-server 返回 `turn/completed status=interrupted`，但共享 rollout 中同一 turn 仍继续产生进展。
@@ -371,7 +379,7 @@
 
 - 触发条件：`weclaw status`、`restart`、`update --restart` 或 stop 逻辑通过 `Signal(0)` 判断 pid 文件里的进程是否存在。
 - 规则：`Signal(0)` 返回 `EPERM` 表示进程存在但当前上下文无权探测，不能当成过期 pid 文件。
-- 反例：沙箱或受限权限下 `processExists` 把 `operation not permitted` 当成不存在，导致 `weclaw status` 显示“未运行（存在过期 pid 文件）”，但实际 pid 仍是 `/Users/dengtingru/.local/bin/weclaw start -f`。
+- 反例：沙箱或受限权限下 `processExists` 把 `operation not permitted` 当成不存在，导致 `weclaw status` 显示“未运行（存在过期 pid 文件）”，但实际 pid 仍是 `/path/to/weclaw start -f`。
 - 正确做法：进程存在性判断应把 `nil` 和 `syscall.EPERM` 都视为存在；只有明确 `ESRCH` 或其他不存在错误才视为不存在。
 - 来源：2026-07-09 用户纠正“但 weclaw 在运行中，是通过飞书重启的”。
 
@@ -423,12 +431,12 @@
 - 正确做法：延迟创建原生流卡；零延迟配置在非空进度到达时创建，正延迟配置只在进度实际发送时创建；排队外部任务直接传递调用入口已解析的 `ProgressConfig`；暂存状态只发送一行确认。
 - 来源：2026-07-12 用户截图反馈飞书回复混乱，实机记录显示同一流程叠加暂存提示、空完成卡和最终文本。
 
-## 2026-07-12 Codex Desktop 明确释放后的自动恢复
+## 2026-07-12 Codex Desktop no-client 的非幂等 Handoff 恢复
 
-- 触发条件：飞书或微信会话仍保存 `desktop_live` 绑定，但 Desktop follower 对普通消息返回 `no-client-found`。
-- 规则：`no-client-found` 是请求未被任何 Desktop 客户端处理的确定性 release 证据；应把 owner 原子转为 `persisted_only`，恢复同一 thread 到 WeClaw app-server，并只重试原消息一次。
-- 反例：长期信任旧 `desktop_live` 绑定并直接返回错误；或者把断线、超时、交付状态未知也当成 release 自动重试，造成消息重复执行。
-- 正确做法：只对 `ErrCodexDesktopNoClient` 执行 release、recover 和单次 app-server 重试；`ErrCodexDesktopDisconnected` 与 `ErrCodexDesktopDeliveryUnknown` 保持原错误和 owner，不做回退。
+- 触发条件：用户重新选择会话或发送 `/cx owner remote`，且目标 remote 控制意图相对持久化状态发生变化，事务实际进入显式 Handoff，并确认没有 Desktop 客户端持有目标 thread。
+- 规则：`no-client-found` 只在这类非幂等显式 Handoff 中作为实际 runtime 的 release 证据；系统可以把目标 thread 恢复到 WeClaw app-server，再提交新的 remote 控制意图。
+- 反例：把普通消息的 no-client 错误自动改成 app-server 重试；或者把 `/cx owner desktop`、断线、超时、交付状态未知当成自动恢复条件，造成越权接管或消息重复执行。
+- 正确做法：只有控制意图变化并实际进入 Handoff 时才依赖 no-client 恢复 runtime；当前 route 已是同一 remote intent 的幂等重新选择只执行 Inspect，不承诺恢复。普通消息不自动恢复或重试，`desktop` intent 的普通消息也必须拒绝。
 - 来源：2026-07-12 Android 飞书机器人发送普通消息后，日志立即返回 `没有 Codex Desktop 客户端可处理请求: no-client-found`。
 
 ## 2026-07-12 Agent 会话创建必须由用户显式授权
@@ -470,3 +478,19 @@
 - 反例：根据 Desktop 进程、socket 或旧 owner 缓存自动选择 writer，导致两个进程各自持有不同内存上下文并向同一 rollout 写入。
 - 正确做法：分离持久化控制意图与进程内实际运行时；普通消息不得隐式接管；远程执行使用覆盖探测、刷新、`turn/start` 和终态的写入租约，发现本地双写时进入显式冲突态。
 - 来源：2026-07-14 用户提出在飞书增加明确的所有权移交指令，并确认由使用者主动选择 Desktop 或远程窗口。
+
+## 2026-07-15 WeClaw 测试必须共用持久化 Go 缓存
+
+- 触发条件：在本机运行 WeClaw 的 Go 测试、race 测试或其他会生成 Go 构建缓存的验证命令。
+- 规则：统一复用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw`，不得按任务、测试套件或并行进程创建多个独立缓存目录。
+- 反例：为核心测试、全仓测试、race 和 vet 分别创建 `/tmp/weclaw-*` 缓存；每个目录占用数百 MiB，最终并行耗尽磁盘并产生与代码无关的 `no space left on device` 失败。
+- 正确做法：普通全仓测试使用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw go test ./...`；其他 WeClaw Go 验证也复用同一个 `GOCACHE`，需要隔离时优先串行执行，不通过新增缓存目录隔离。
+- 来源：2026-07-15 最终发布前复验因多套临时 Go 缓存耗尽磁盘；用户明确要求以后所有 WeClaw 测试共用固定缓存。
+
+## 2026-07-15 Claude session 的目录事实与写入所有权必须分离
+
+- 触发条件：多个微信或飞书 route、WeClaw ACP runtime 和本地 Claude CLI 可能继续使用同一个 Claude session。
+- 规则：`session/list` 只回答有哪些真实 session；远程写入必须由持久化 control intent 的 owner tuple 和 revision 决定。选择或新建通过统一事务取得 `remote`，本地交接先提交 `local`；普通消息不得根据 ACP runtime 或最近 binding 隐式接管。
+- 反例：把 conversation runtime、session binding 或 `session/list` 中存在目标 session 当作写入授权；两个窗口会各自恢复同一 session 并并发写入，补偿失败还可能覆盖新赢家。
+- 正确做法：binding 锁外层配合排序 session 锁，copy-on-write 一次持久化 binding/control；任务登记前和 prompt 前复核 session/revision；失败补偿只在 after-image 仍匹配时回滚，否则保持 `local` 或 `unclaimed` fail-closed。v2 多 binding 冲突不选赢家。
+- 来源：2026-07-15 Claude 远程会话“选择即接管”治理。

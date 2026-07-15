@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -14,7 +15,7 @@ func isClaudeSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "cli", "model", "help":
+	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "owner", "cli", "model", "help":
 		return true
 	default:
 		return false
@@ -41,7 +42,8 @@ func (h *Handler) handleClaudeSessionCommandForRouteResult(ctx context.Context, 
 	}
 	agentName, ag, err := h.getClaudeSessionAgent(ctx)
 	if err != nil {
-		return textNavigationResult(err.Error())
+		log.Printf("[claude-session] 获取 Claude Agent 失败: %v", err)
+		return textNavigationResult("Claude Agent 当前不可用，请稍后重试。")
 	}
 	if strings.TrimSpace(routeUserID) == "" {
 		routeUserID = actorUserID
@@ -87,6 +89,8 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 		return textNavigationResult(wechatCommandText("workspace: " + route.WorkspaceRoot))
 	case "status":
 		return textNavigationResult(h.renderClaudeStatus(route))
+	case "owner":
+		return textNavigationResult(h.handleClaudeOwnerCommand(route, fields[2:]))
 	case "cli":
 		return textNavigationResult(h.handleClaudeCLI(route))
 	case "model":

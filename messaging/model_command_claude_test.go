@@ -192,9 +192,7 @@ func TestFeishuClaudeSettingsUpdateCurrentSession(t *testing.T) {
 	h := newClaudeModelHandler(&fakeCodexModelAgent{}, claude)
 	sessionKey := "feishu:tenant:dm:chat-current:user-1"
 	workspace := t.TempDir()
-	if err := h.claudeSessions.commitSelection(claudeBindingKey(sessionKey, "claude"), workspace, "session-1"); err != nil {
-		t.Fatal(err)
-	}
+	seedClaudeRemoteControl(t, h, sessionKey, "claude", workspace, "session-1", 1)
 	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
 		t.Fatal(err)
 	}

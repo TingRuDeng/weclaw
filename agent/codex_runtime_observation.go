@@ -92,6 +92,29 @@ func (r *codexRuntimeOwnerRegistry) markConflictLocked(threadID string, reason s
 	return fmt.Errorf("%w: %s", ErrCodexRuntimeConflict, binding.ConflictReason)
 }
 
+// markRuntimeConflict 保留已有 ref/control/state，并把无法确认的 runtime 持续登记为 conflict。
+func (r *codexRuntimeOwnerRegistry) markRuntimeConflict(req CodexRuntimeRequest, reason string) CodexThreadBinding {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	threadID := strings.TrimSpace(req.Ref.ThreadID)
+	binding := r.threads[threadID]
+	if binding.Ref.ThreadID == "" {
+		binding.Ref = req.Ref
+	}
+	if binding.Control.Owner == "" {
+		binding.Control = req.Intent
+	}
+	if binding.State.ThreadID == "" {
+		binding.State.ThreadID = threadID
+	}
+	r.threads[threadID] = binding
+	if conversationID := strings.TrimSpace(req.Ref.ConversationID); conversationID != "" {
+		r.conversations[conversationID] = threadID
+	}
+	_ = r.markConflictLocked(threadID, reason)
+	return r.threads[threadID]
+}
+
 func nextCodexRuntimeGeneration(binding CodexThreadBinding, runtime CodexRuntimeHolder) uint64 {
 	generation := binding.RuntimeGeneration
 	if generation == 0 || codexBindingRuntime(binding) != runtime {

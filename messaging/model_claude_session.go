@@ -63,6 +63,9 @@ func (h *Handler) setCurrentClaudeSessionSetting(req claudeModelSettingRequest) 
 	bindingKey := claudeBindingKey(req.route.routeUserID, req.name)
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
 	defer unlock()
+	if _, _, err := h.ensureClaudeSessions().requireRemoteControl(bindingKey); err != nil {
+		return renderClaudeRemoteControlError(err), true
+	}
 	target, ok := h.currentClaudeSessionSettingTarget(req.route, req.name, req.agent)
 	if !ok {
 		return "当前窗口没有有效 Claude session，请先发送 /cc ls 选择或 /cc new 新建。", true

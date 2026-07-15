@@ -97,11 +97,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	writeLocalCodexSession(t, codexDir, "thread-recorded", recordedWorkspace, "重复会话", "2026-04-29T08:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-local", localWorkspace, "桌面本机会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": recordedWorkspace})
@@ -129,11 +125,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	appendLocalCodexTurnContext(t, codexDir, "thread-desktop", "gpt-old", "low")
 	appendLocalCodexTurnContext(t, codexDir, "thread-desktop", "gpt-5.5", "high")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-		},
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 
@@ -142,9 +134,9 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(110, "/cx switch 0"))
 
-	wantConversationID := buildCodexConversationID("user-1", "codex", workspace)
-	if ag.useConversation != wantConversationID || ag.useThreadID != "thread-desktop" {
-		t.Fatalf("use conversation/thread=(%q,%q), want (%q,thread-desktop)", ag.useConversation, ag.useThreadID, wantConversationID)
+	intent := h.codexSessions.controlIntent("thread-desktop")
+	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
+		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
 	}
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
@@ -153,7 +145,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	if thread != "thread-desktop" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-desktop false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已切换会话") {
+	if !containsText(calls.texts(), "已切换并接管") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
 	}
 	text := strings.Join(calls.texts(), "\n")
@@ -162,42 +154,43 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	}
 }
 
-func TestHandleCodexSwitchPreservesSelectionWithoutLeakingThreadStoreError(t *testing.T) {
+func TestHandleCodexSwitchFailureKeepsOriginalSelection(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	currentWorkspace := filepath.Join(t.TempDir(), "current")
 	localWorkspace := filepath.Join(t.TempDir(), "desktop")
 	writeLocalCodexSession(t, codexDir, "thread-bad", localWorkspace, "桌面会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := &fakeCodexThreadAgent{
-		fakeAgent: fakeAgent{
-			info:    agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-			lastCwd: currentWorkspace,
-		},
-		useErr: fmt.Errorf("resume thread thread-bad: agent error: failed to read thread: thread-store internal error: failed to read thread /tmp/rollout.jsonl: rollout does not start with session metadata"),
-	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag.handoffErrors["thread-bad"] = fmt.Errorf("探测失败")
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, currentWorkspace, "thread-current")
+	h.codexSessions.setActiveWorkspace(bindingKey, currentWorkspace)
+	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
+		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
+		workspace: currentWorkspace, threadID: "thread-current",
+	})
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch thread-bad"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已切换会话") || !strings.Contains(text, "会话选择已保留") {
-		t.Fatalf("reply should preserve selection and explain probe failure, messages=%#v", calls.texts())
+	if !strings.Contains(text, "切换并接管") || !strings.Contains(text, "失败") {
+		t.Fatalf("reply should report acquire failure, messages=%#v", calls.texts())
 	}
-	if strings.Contains(text, "thread-store internal error") || strings.Contains(text, "session metadata") {
-		t.Fatalf("reply should hide internal thread-store details, messages=%#v", calls.texts())
-	}
-	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(localWorkspace) {
-		t.Fatalf("codex cwd=%q, want selected %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(localWorkspace))
-	}
-	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), localWorkspace)
-	if thread != "thread-bad" || pending {
-		t.Fatalf("stored thread=%q pending=%v, want thread-bad false", thread, pending)
+	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
+	currentThread, _ := h.codexSessions.getThread(bindingKey, currentWorkspace)
+	targetThread, pending := h.codexSessions.getThread(bindingKey, localWorkspace)
+	currentIntent := h.codexSessions.controlIntent("thread-current")
+	targetIntent := h.codexSessions.controlIntent("thread-bad")
+	if active != currentWorkspace || currentThread != "thread-current" || targetThread != "" || pending ||
+		currentIntent.Owner != codexControlRemote || targetIntent.Owner != codexControlUnclaimed {
+		t.Fatalf("active=%q current=%q target=%q pending=%t intents=(%#v,%#v)", active, currentThread, targetThread, pending, currentIntent, targetIntent)
 	}
 }
 

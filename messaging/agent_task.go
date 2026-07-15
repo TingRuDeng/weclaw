@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -10,17 +11,18 @@ import (
 )
 
 type agentTaskOptions struct {
-	ctx          context.Context
-	platformName platform.PlatformName
-	accountID    string
-	userID       string
-	routeUserID  string
-	reply        platform.Replier
-	agentName    string
-	message      string
-	replyPrefix  string
-	agent        agent.Agent
-	progressCfg  config.ProgressConfig
+	ctx           context.Context
+	platformName  platform.PlatformName
+	accountID     string
+	userID        string
+	routeUserID   string
+	reply         platform.Replier
+	agentName     string
+	message       string
+	replyPrefix   string
+	agent         agent.Agent
+	progressCfg   config.ProgressConfig
+	claudeControl claudeTaskControlSnapshot
 }
 
 type agentTaskRuntime struct {
@@ -36,6 +38,17 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	bindingKey := claudeBindingKey(opts.routeUserID, opts.agentName)
 	unlockBinding := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
 	defer unlockBinding()
+	store := h.ensureClaudeSessions()
+	_, hasBinding := store.bindingSnapshot(bindingKey)
+	_, sessionCapable := opts.agent.(agent.ClaudeSessionAgent)
+	if hasBinding || sessionCapable {
+		binding, intent, controlErr := store.requireRemoteControl(bindingKey)
+		if controlErr != nil {
+			sendPlatformText(opts.ctx, opts.reply, opts.userID, renderClaudeRemoteControlError(controlErr))
+			return
+		}
+		opts.claudeControl = claudeTaskControlSnapshot{SessionID: binding.SessionID, Revision: intent.Revision}
+	}
 	// 后台任务保留消息上下文值，但不能随平台请求返回而被取消。
 	opts.ctx = context.WithoutCancel(opts.ctx)
 	agentCtx, cancel := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
@@ -71,6 +84,13 @@ func (h *Handler) runAgentTask(runtime agentTaskRuntime) {
 	defer h.completeAgentTaskLifecycle(runtime.lifecycle)
 	unlock := h.lockAgentExecution(runtime.lifecycle.opts.executionKey)
 	defer unlock()
+	if runtime.opts.claudeControl.SessionID != "" {
+		bindingKey := claudeBindingKey(runtime.opts.routeUserID, runtime.opts.agentName)
+		if controlErr := h.ensureClaudeSessions().validateRemoteControlSnapshot(bindingKey, runtime.opts.claudeControl); controlErr != nil {
+			h.finishAgentTaskLifecycle(runtime.lifecycle, "", errors.New(renderClaudeRemoteControlError(controlErr)))
+			return
+		}
+	}
 	conversationID, err := h.resolveAgentConversationIDForRoute(
 		runtime.lifecycle.opts.taskCtx, runtime.opts.userID, runtime.opts.routeUserID,
 		runtime.opts.agentName, runtime.opts.agent,

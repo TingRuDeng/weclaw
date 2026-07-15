@@ -37,6 +37,41 @@ func TestCodexDesktopActiveMessageQueuesOnePending(t *testing.T) {
 	}
 }
 
+func TestCodexInProcessActiveTaskQueuesSecondMessage(t *testing.T) {
+	h, ag, first, route := liveMessageFixture(t, false)
+	turnEntered := make(chan struct{}, 1)
+	turnRelease := make(chan struct{})
+	ag.turnEntered, ag.turnRelease = turnEntered, turnRelease
+	first.message = "第一条"
+	h.startCodexAgentTask(first)
+	select {
+	case <-turnEntered:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("第一条 in-process Codex 任务未进入阻塞执行")
+	}
+	activeState := agent.CodexThreadState{
+		ThreadID: route.threadID, Active: true, ActiveTurnID: "turn-1", Model: "gpt-live",
+	}
+	ag.setBindingState(activeState)
+	secondReply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	second := first
+	second.message, second.reply = "第二条", secondReply
+	h.startCodexAgentTask(second)
+	text := strings.Join(secondReply.Texts, "\n")
+	if !strings.Contains(text, queuedAgentMessage) || strings.Contains(text, "reservation") || strings.Contains(text, "暂不能开始任务") {
+		t.Fatalf("第二条应进入现有 in-process 队列，reply=%q", text)
+	}
+	idleState := agent.CodexThreadState{ThreadID: route.threadID, Model: "gpt-live"}
+	ag.setBindingState(idleState)
+	close(turnRelease)
+	waitUntil(t, func() bool {
+		ag.mu.Lock()
+		defer ag.mu.Unlock()
+		return ag.runCalls == 2
+	})
+	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
+}
+
 func TestCodexDesktopQueuedMessageKeepsResolvedStreamProgress(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
 	ag.watchDone = make(chan struct{})

@@ -57,6 +57,7 @@ func (h *Handler) routeServicePlatformCommand(ctx context.Context, req platformC
 			routeUserID: routeUserID,
 			platform:    msg.Platform,
 			accountID:   msg.AccountID,
+			reply:       req.Reply,
 		}))
 	default:
 		return false

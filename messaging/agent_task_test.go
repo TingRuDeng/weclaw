@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -236,6 +237,7 @@ func TestClaudeSecondQueuedMessageDoesNotAcceptThird(t *testing.T) {
 
 func TestClaudeBroadcastQueuesWithoutWaitingForRunningTask(t *testing.T) {
 	h, ag := newClaudeAgentTaskFixture()
+	seedClaudeRemoteControl(t, h, "route-1", "claude", h.claudeWorkspaceRoot("claude"), "session-a", 1)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	h.sendToNamedAgent(agentMessageRequest{
 		ctx: context.Background(), platformName: platform.PlatformFeishu,
@@ -264,4 +266,146 @@ func TestClaudeBroadcastQueuesWithoutWaitingForRunningTask(t *testing.T) {
 	waitForAgentEnter(t, ag)
 	ag.release <- struct{}{}
 	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
+}
+
+func TestClaudeBroadcastOwnerFailureDoesNotRegisterTask(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		intent claudeControlIntent
+		want   string
+	}{
+		{name: "local", intent: claudeControlIntent{Owner: claudeOwnerLocal, Revision: 2}, want: "/cc owner remote"},
+		{name: "other", intent: claudeControlIntent{
+			Owner: claudeOwnerRemote, BindingKey: claudeBindingKey("other-route", "claude"),
+			ConversationID: "other-conversation", Revision: 2,
+		}, want: "其他远程窗口"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h, ag := newClaudeAgentTaskFixture()
+			workspace := h.claudeWorkspaceRoot("claude")
+			key := claudeBindingKey("route-1", "claude")
+			store := h.ensureClaudeSessions()
+			store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
+			store.controls["session-a"] = test.intent
+			reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+			h.broadcastToAgents(broadcastAgentsRequest{
+				ctx: context.Background(), platformName: platform.PlatformFeishu,
+				userID: "user-1", routeUserID: "route-1", replyWriter: reply,
+				names: []string{"claude"}, message: "blocked",
+			})
+			started, _ := ag.stats()
+			if h.ActiveTaskCount() != 0 || started != 0 || !containsText(reply.Texts, test.want) {
+				t.Fatalf("active=%d started=%d texts=%#v", h.ActiveTaskCount(), started, reply.Texts)
+			}
+		})
+	}
+}
+
+func TestClaudeBroadcastControlRevisionChangePreventsPrompt(t *testing.T) {
+	h, ag := newClaudeAgentTaskFixture()
+	workspace := h.claudeWorkspaceRoot("claude")
+	seedClaudeRemoteControl(t, h, "route-1", "claude", workspace, "session-a", 1)
+	conversationID := buildClaudeConversationID("route-1", "claude", workspace)
+	unblock := h.lockAgentExecution(conversationID)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	done := make(chan struct{})
+	go func() {
+		h.broadcastToAgents(broadcastAgentsRequest{
+			ctx: context.Background(), platformName: platform.PlatformFeishu,
+			userID: "user-1", routeUserID: "route-1", replyWriter: reply,
+			names: []string{"claude"}, message: "must not prompt",
+		})
+		close(done)
+	}()
+	waitUntil(t, func() bool { return h.ActiveTaskCount() == 1 })
+	store := h.ensureClaudeSessions()
+	store.mu.Lock()
+	intent := store.controls["session-a"]
+	intent.Revision++
+	store.controls["session-a"] = intent
+	store.mu.Unlock()
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("广播 revision 复核未返回")
+	}
+	started, _ := ag.stats()
+	if started != 0 || !containsText(reply.Texts, "状态刚刚发生变化") {
+		t.Fatalf("started=%d texts=%#v", started, reply.Texts)
+	}
+}
+
+func TestClaudeQueuedBroadcastRechecksOwnerBeforeAutomaticRun(t *testing.T) {
+	h, ag := newClaudeAgentTaskFixture()
+	workspace := h.claudeWorkspaceRoot("claude")
+	seedClaudeRemoteControl(t, h, "route-1", "claude", workspace, "session-a", 1)
+	reply := newSynchronizedTextReplier()
+	h.sendToNamedAgent(agentMessageRequest{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "user-1", routeUserID: "route-1", reply: reply,
+		name: "claude", message: "first",
+	})
+	waitForAgentEnter(t, ag)
+	h.broadcastToAgents(broadcastAgentsRequest{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "user-1", routeUserID: "route-1", replyWriter: reply,
+		names: []string{"claude"}, message: "queued broadcast",
+	})
+	store := h.ensureClaudeSessions()
+	store.mu.Lock()
+	intent := store.controls["session-a"]
+	store.controls["session-a"] = claudeControlIntent{Owner: claudeOwnerLocal, Revision: intent.Revision + 1}
+	store.mu.Unlock()
+	ag.release <- struct{}{}
+	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
+	if text := reply.waitForText(t); !strings.Contains(text, "/cc owner remote") {
+		t.Fatalf("text=%q，暂存广播应在续跑时重新校验 owner", text)
+	}
+	started, _ := ag.stats()
+	if started != 1 {
+		t.Fatalf("started=%d texts=%#v，暂存广播不应越过 owner 变化", started, reply.texts())
+	}
+}
+
+type synchronizedTextReplier struct {
+	*platformtest.Replier
+	mu     sync.Mutex
+	textCh chan string
+}
+
+func newSynchronizedTextReplier() *synchronizedTextReplier {
+	return &synchronizedTextReplier{
+		Replier: platformtest.NewReplier(platform.Capabilities{Text: true}),
+		textCh:  make(chan string, 8),
+	}
+}
+
+func (r *synchronizedTextReplier) SendText(_ context.Context, text string) error {
+	r.mu.Lock()
+	r.Texts = append(r.Texts, text)
+	r.mu.Unlock()
+	r.textCh <- text
+	return nil
+}
+
+func (r *synchronizedTextReplier) waitForText(t *testing.T) string {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case text := <-r.textCh:
+			if strings.Contains(text, "/cc owner remote") {
+				return text
+			}
+		case <-deadline:
+			t.Fatal("未等到暂存广播 owner 拒绝回复")
+		}
+	}
+}
+
+func (r *synchronizedTextReplier) texts() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.Texts...)
 }

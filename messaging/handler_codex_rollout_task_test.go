@@ -16,7 +16,7 @@ import (
 
 type rolloutMirrorFixture struct {
 	h              *Handler
-	agent          *fakeCodexThreadAgent
+	agent          *fakeCodexLiveAgent
 	rolloutPath    string
 	turnID         string
 	conversationID string
@@ -40,10 +40,9 @@ func newRolloutMirrorFixture(t *testing.T) rolloutMirrorFixture {
 	h.SetCodexLocalSessionDir(codexDir)
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.defaultName = "codex"
-	ag := &fakeCodexThreadAgent{
-		fakeAgent:   fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
-		threadState: agent.CodexThreadState{ThreadID: threadID},
-	}
+	ag := newFakeCodexLiveAgent(
+		agent.CodexRuntimeDesktop, agent.CodexThreadState{ThreadID: threadID},
+	)
 	h.agents["codex"] = ag
 	progressOff := config.DefaultProgressConfig()
 	progressOff.Mode = progressModeOff
@@ -70,7 +69,7 @@ func switchAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 		Metadata:  map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
 	}, fixture.reply)
 	if _, ok := fixture.h.activeTask(fixture.conversationID); !ok {
-		t.Fatal("切换到本地运行中 rollout 后应登记外部任务镜像")
+		t.Fatalf("切换到本地运行中 rollout 后应登记外部任务镜像，texts=%#v", fixture.reply.Texts)
 	}
 	notice := strings.Join(fixture.reply.Texts, "\n")
 	for _, want := range []string{"Codex App 任务正在进行", "修复跨进程任务反馈", "正在核对任务状态"} {

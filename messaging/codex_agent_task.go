@@ -45,7 +45,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		agentName:    opts.agentName,
 		message:      opts.message,
 		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
-		codexThreadID: route.threadID,
+		codexThreadID: route.threadID, inProcessCodexLifecycle: true,
 	}, h.pendingCodexTask(opts))
 	if admission.status != activeTaskStarted {
 		cancelTaskTimeout()
