@@ -81,7 +81,12 @@ ai_summary:
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - 飞书推荐菜单以 Codex / Claude 高频命令为主，默认不把 `/cx app`、`/cc cli`、`/cancel` 放到常用菜单；普通计划确认仍回复“确认”，Codex 运行中的暂存消息未被 `/guide`、`/cancel` 或 `/stop` 消费时会在上一任务结束后自动执行。
 - 命令入口只保留当前主路径：远程更新使用 `/update`，Codex 会话使用 `/cx ...`，Claude 会话使用 `/cc ...`；不要重新引入 `/info`、`/clear`、`/upgrade`、`/codex ...` 会话入口、`/claude ...` 会话入口、`/cx open-app` 或 `/cx attach app` 这类兼容路由。
-- Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。
+- Codex 推荐 remote-first；本地 Terminal 或 Codex App 是接手入口，不是权威状态源。显式选择的 thread 是权威状态，`messaging/agent_conversation.go:syncCodexThreadFromAgent` 只在 session store 为空且不是 pending new 时回填 ACP 当前 thread。
+- Codex 的选择即接管入口包括 `/cx switch`、会话短编号、仅含一个会话的 `/cx cd`、飞书会话卡片、`/cx new`、默认 Agent 为 Codex 时的全局 `/new`，以及释放后的 `/cx owner remote`；这些入口最终复用 `messaging/codex_session_acquire.go:acquireCodexSessionWithBindingLocked`，新建入口先经过 `messaging/codex_session_new.go:createAndAcquireCodexSessionWithBindingLocked`。
+- `messaging/codex_session_command_dispatch.go:prepareCodexSessionCommand` 在 route binding 锁内准备 `/cx` 命令；默认 Codex 的全局 `/new` 由 `messaging/default_session.go:resetDefaultCodexSessionForRoute` 持有相同 binding 执行锁。事务内部通过 `messaging/codex_session_locks.go:lockCodexSessionThreads` 按去重排序后的 thread ID 加锁，禁止反向获取 binding 锁。
+- `messaging/codex_remote_selection_store.go:commitRemoteSelection` 使用 copy-on-write 候选副本，一次提交选中 thread、active workspace、目标 remote intent 和同 route 旧 thread 的 desktop intent；持久化失败时不替换内存 maps。
+- `messaging/codex_session_acquire.go:acquireCodexSessionWithBindingLocked` 把 runtime handoff、外部活动任务 observer reservation 和 store commit 组成同一 saga；失败补偿覆盖 runtime、observer 与 store，成功提交前不能回复已接管。
+- `/cx owner desktop` 由 `messaging/codex_owner_command.go:releaseCodexOwnerToDesktop` 只释放当前 thread 的控制意图并保留窗口选择；普通消息不会自动重新接管，释放后必须显式重新选择或发送 `/cx owner remote`。
 - Claude 远程后端是 ACP-only；`session/list` 是目录事实源，`claudeSessionStore` 保存 route 绑定，`ACPAgent.sessions` 只保存可重建运行态。禁止重新引入 Claude CLI 聊天后端或 `~/.claude` transcript 扫描。
 - `/cc cli` 只允许通过 `AgentInfo.LocalCommand` 交接空闲 session；绑定切换、任务登记和本地交接必须共用 `claudeBindingExecutionKey`，避免 workspace/session 快照与任务启动发生竞态。
 - Claude ACP 复用通用后台任务队列：每个活动任务最多暂存一条消息，失败后仍自动续跑；`/cancel` 撤回暂存，`/stop` 按当前窗口 Agent 停止，`/guide` 对 Claude 明确不支持。

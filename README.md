@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black?logo=apple)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
-Remote-control local Codex and Claude from WeChat or Feishu. Keep real workspace and session context, receive live progress, approvals, and results, and explicitly hand Codex control between Desktop and a remote chat window.
+Remote-control local Codex and Claude from WeChat or Feishu. Keep real workspace and session context and receive live progress, approvals, and results. Selecting an existing Codex session or creating one gives the current remote chat window ownership; `/cx owner desktop` explicitly releases it to Codex Desktop.
 
 > Official releases currently support **macOS Apple Silicon (darwin/arm64)**. The source can be built on other Go-supported platforms, but those builds are outside the current release asset scope.
 
@@ -17,7 +17,7 @@ Remote-control local Codex and Claude from WeChat or Feishu. Keep real workspace
 - **Take over local work remotely**: continue Codex and Claude sessions from WeChat or Feishu after leaving your computer.
 - **Keep the original context**: reuse Codex workspaces/threads and Claude ACP sessions instead of starting a new conversation for every message.
 - **See progress and receive results**: Feishu uses CardKit updates, while WeChat provides typing state and task results.
-- **Use explicit ownership**: `/cx owner` hands a Codex session between Desktop and a remote chat window without concurrent writes.
+- **Use explicit ownership**: selecting or creating a Codex session gives the current remote chat window ownership; `/cx owner desktop` explicitly releases it without concurrent writes.
 - **Configure security boundaries**: user allowlists, workspace roots, admin access, audit logs, and Codex permission levels are independent controls.
 
 ## Quick Start
@@ -48,24 +48,25 @@ The configuration file is `~/.weclaw/config.json`, the runtime log is `~/.weclaw
 
 ```text
 /cwd /path/to/project
-/cx ls
-/cx new
-/cx owner remote
+/cx ls                 # List existing sessions
+/cx <number>           # Select a session and take ownership; Feishu also supports session cards
+# Or send /cx new      # Create a session and take ownership
 Inspect the current project and fix the failing tests
 ```
 
-Without a valid session binding, a regular message only asks the user to select a session or send `/cx new`; it never creates a session implicitly.
+After selecting an existing session or sending `/cx new`, send the task directly. Without a valid session binding, a regular message only asks the user to select a session or send `/cx new`; it never creates or takes ownership of a session implicitly.
 
 ### Take Over and Return a Codex Desktop Session
 
 ```text
-/cx ls                 # Select an existing local workspace and thread
+/cx ls                 # List existing local workspaces and threads
+/cx <number>           # Select the current list item; selecting a thread takes ownership
 /cx owner              # Inspect owner, runtime location, and task state
-/cx owner remote       # Hand control to the current WeChat or Feishu window
-/cx owner desktop      # Return control to Codex Desktop when idle
+/cx owner desktop      # Explicitly release ownership to Codex Desktop when idle
+/cx owner remote       # Reacquire from the current WeChat or Feishu window after release
 ```
 
-A handoff completes runtime probing and state persistence before reporting success. While a remote task is active, wait for completion or send `/stop` before returning control to Desktop.
+Session selection or creation completes runtime probing and state persistence before reporting successful ownership. `/cx owner remote` is only for reacquiring after an explicit release or for compatibility recovery. While a remote task is active, wait for completion or send `/stop` before releasing ownership to Desktop.
 
 ### Reuse Claude Code Sessions
 
@@ -99,7 +100,7 @@ flowchart LR
     Core --> Codex[Codex app-server]
     Core --> Claude[Claude ACP]
     Core --> Other[Other ACP / HTTP / Companion Agents]
-    Codex --> Owner{Explicit Ownership}
+    Codex --> Owner{Selection Takes Ownership · Explicit Release}
     Owner --> Remote[Current Remote Window]
     Owner --> Desktop[Codex Desktop]
     Claude --> Session[Claude Code Session]
@@ -132,19 +133,26 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | --- | --- |
 | `/help`, `/status` | Show help and WeClaw runtime status |
 | `/cwd [path]` | Show or switch the working directory; regular users are confined to allowed workspace roots |
-| `/new` | Explicitly create a session for the current default agent |
+| `/new` | Explicitly create a session for the current default agent; also take ownership when Codex is the default |
 | `/model`, `/reasoning` | Show or change the current session model and reasoning effort |
 | `/mode [default|yolo]` | Show or change Codex approval behavior for the current user |
 | `/progress [mode]` | Show or change progress mode |
 | `/ps`, `/stop` | List or stop current tasks |
 | `/cancel`, `/guide` | Remove a queued message or steer the active Codex task |
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
+| `/cx <number>`, `/cx switch <number>` | Select a Codex session in the current workspace and take ownership |
+| `/cx new` | Create a Codex session in the current workspace and take ownership |
+| `/cx owner remote`, `/cx owner desktop` | Reacquire after release, or explicitly release to Codex Desktop |
 | `/update`, `/restart [--force]` | Remotely update or restart WeClaw as an administrator |
 
 <details>
 <summary>Common Codex commands</summary>
 
-`/cx ls`, `/cx <number|..>`, `/cx cd <workspace|..>`, `/cx switch <session>`, `/cx new`, `/cx pwd`, `/cx status`, `/cx owner [remote|desktop]`, `/cx quota`, `/cx model status|ls`, `/cx cli`, `/cx app`, `/cx clean`, `/cx detach`.
+Select and take ownership: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`.
+
+Ownership: `/cx owner` shows status, `/cx owner desktop` explicitly releases, and `/cx owner remote` reacquires after release.
+
+Other commands: `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx model status|ls`, `/cx cli`, `/cx app`, `/cx clean`, `/cx detach`.
 
 </details>
 

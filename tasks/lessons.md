@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-15 Codex 选择接管必须按完整 saga 验收
+
+- 触发条件：远程窗口通过切换、短编号、唯一工作空间会话、会话卡片或新建命令显式选择 Codex thread。
+- 权威边界：显式选择是 thread 权威状态；ACP 当前 thread 只能在 session store 为空且不是 pending new 时回填，不能覆盖已经持久化的选择。
+- 一致性规则：selection、唯一 remote owner 和 active observer 必须作为同一 saga 验收，不能在其中任一步完成后提前回复接管成功。
+- 失败边界：补偿必须同时覆盖 runtime、observer 和 store；不能只检查回复文本，也不能留下半提交控制意图。
+- 来源：2026-07-15 Codex 远程窗口“选择即接管”事务收口。
+
 ## 2026-07-14 Codex interrupted 不是可靠终态
 
 - 触发条件：Codex app-server 返回 `turn/completed status=interrupted`，但共享 rollout 中同一 turn 仍继续产生进展。
