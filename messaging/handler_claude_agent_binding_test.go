@@ -14,7 +14,7 @@ import (
 )
 
 func TestFeishuClaudeNewBindsWindowToClaude(t *testing.T) {
-	h, _, _, sessionKey := newClaudeBindingHandler(t)
+	h, _, claude, sessionKey := newClaudeBindingHandler(t)
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "new-claude-session", Text: "/cc new",
@@ -23,6 +23,11 @@ func TestFeishuClaudeNewBindsWindowToClaude(t *testing.T) {
 
 	if selected, ok := h.ensureAgentSessions().Get(sessionKey); !ok || selected != "claude" {
 		t.Fatalf("窗口 Agent=(%q,%t)，期望新建 Claude 会话后绑定 claude", selected, ok)
+	}
+	sessionID := claude.resetSessionID
+	intent := h.ensureClaudeSessions().controlIntent(sessionID)
+	if intent.Owner != claudeOwnerRemote || intent.BindingKey != claudeBindingKey(sessionKey, "claude") {
+		t.Fatalf("intent=%+v，期望飞书窗口接管新会话", intent)
 	}
 }
 
@@ -42,6 +47,10 @@ func TestHandleGlobalNewKeepsClaudeResetBehavior(t *testing.T) {
 	}
 	if got := codex.resetConversationID(); got != "" {
 		t.Fatalf("Codex 不应被重置，实际 conversation=%q", got)
+	}
+	intent := h.ensureClaudeSessions().controlIntent("session-new")
+	if intent.Owner != claudeOwnerRemote || intent.BindingKey != claudeBindingKey(sessionKey, "claude") {
+		t.Fatalf("intent=%+v，全局 /new 应接管 Claude 会话", intent)
 	}
 }
 

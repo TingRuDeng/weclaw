@@ -11,7 +11,7 @@ fail-closed 任务门禁。
 - [x] Task 2：实现原子选择、释放和 session 有序锁。
 - [x] Task 3：实现统一选择接管 saga。
 - [x] Task 4：收口工作空间切换与飞书入口。
-- [ ] Task 5：让 `/cc new` 与全局 `/new` 创建后原子接管。
+- [x] Task 5：让 `/cc new` 与全局 `/new` 创建后原子接管。
 - [ ] Task 6：实现 owner 查询、远程接管与写入门禁。
 - [ ] Task 7：实现 `/cc cli` 本地交接与失败补偿。
 - [ ] Task 8：补齐并发、重启、文档与全量验证。
@@ -23,5 +23,6 @@ fail-closed 任务门禁。
 
 ## 当前状态
 
-Task 4 已完成：`/cc cd` 与全局 `/cwd` 通过统一 release helper 原子释放
-旧 session 远程所有权；状态提交成功后才清理 runtime 并更新 Agent cwd，飞书会话按钮继续复用统一接管。
+Task 5 已完成：`/cc new` 与默认 Claude 的全局 `/new` 统一通过 create-and-acquire
+saga 创建并接管 session；创建后复用 ACP 已更新的 runtime，不重复 resume，持久化或默认
+Agent 写入失败时恢复事务前真实 runtime、binding 和 owner，新建孤立 session 保持无远程所有权。

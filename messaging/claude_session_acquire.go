@@ -171,10 +171,10 @@ func (h *Handler) ensureClaudeRuntimeSelection(
 ) (bool, error) {
 	conversationID := runtimeBefore.ConversationID
 	h.bindConversationCwd(route.Agent, conversationID, selected.Cwd)
-	alreadyOwned := snapshot.Target.Owner == claudeOwnerRemote &&
-		snapshot.Target.BindingKey == route.BindingKey &&
-		snapshot.Target.ConversationID == conversationID
-	if alreadyOwned && runtimeBefore.Bound && runtimeBefore.SessionID == selected.ID {
+	// session/new 成功后 ACP 已把 conversation runtime 指向新 session；此时只需提交
+	// 所有权，不能再发一次 session/resume。普通 switch 若 runtime 已精确命中目标，
+	// 同样可以安全复用现状；其他远程 route 的冲突已在进入本函数前拒绝。
+	if runtimeBefore.Bound && runtimeBefore.SessionID == selected.ID {
 		return false, nil
 	}
 	if err := claudeAgent.UseClaudeSession(route.Context, conversationID, selected.ID); err != nil {

@@ -43,7 +43,7 @@ func TestClaudeSwitchCommitsACPBindingAndShowsConfig(t *testing.T) {
 	}
 }
 
-func TestClaudeNewCreatesAndCommitsImmediately(t *testing.T) {
+func TestClaudeNewCreatesAndOwnsImmediately(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	fake.resetSessionID = "session-new"
 
@@ -52,7 +52,11 @@ func TestClaudeNewCreatesAndCommitsImmediately(t *testing.T) {
 	if fake.resetConversationID() == "" || binding.WorkspaceRoot != workspace || binding.SessionID != "session-new" || binding.Status != claudeBindingReady {
 		t.Fatalf("reset=%q binding=%+v", fake.resetConversationID(), binding)
 	}
-	if !strings.Contains(text, "已创建新的 Claude 会话") {
+	intent := h.ensureClaudeSessions().controlIntent("session-new")
+	if intent.Owner != claudeOwnerRemote || intent.BindingKey != claudeBindingKey("user-1", "claude") {
+		t.Fatalf("intent=%+v", intent)
+	}
+	if !strings.Contains(text, "已创建并接管 Claude 会话") {
 		t.Fatalf("text=%q", text)
 	}
 }

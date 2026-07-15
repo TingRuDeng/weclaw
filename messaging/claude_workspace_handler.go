@@ -46,20 +46,6 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 	return h.renderClaudeSelection(route, selected)
 }
 
-func (h *Handler) rollbackClaudeRuntime(route claudeSessionRoute, currentConversationID string, previous claudeSessionBinding) error {
-	claudeAgent, ok := route.Agent.(agent.ClaudeSessionAgent)
-	if !ok {
-		return nil
-	}
-	claudeAgent.ClearClaudeSession(currentConversationID)
-	if previous.SessionID == "" {
-		return nil
-	}
-	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, previous.WorkspaceRoot)
-	h.bindConversationCwd(route.Agent, conversationID, previous.WorkspaceRoot)
-	return claudeAgent.UseClaudeSession(route.Context, conversationID, previous.SessionID)
-}
-
 func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession) string {
 	lines := []string{
 		"已切换并接管 Claude 会话。",
@@ -111,20 +97,54 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	if reply := h.rejectActiveClaudeBindingChange(route); reply != "" {
 		return reply
 	}
-	previous := h.ensureClaudeSessions().binding(route.BindingKey)
-	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
-	h.bindConversationCwd(route.Agent, conversationID, route.WorkspaceRoot)
-	sessionID, err := route.Agent.ResetSession(route.Context, conversationID)
-	if err != nil || strings.TrimSpace(sessionID) == "" {
-		createErr := firstError(err, fmt.Errorf("session/new 未返回 sessionId"))
-		rollbackErr := h.rollbackClaudeRuntime(route, conversationID, previous)
-		return fmt.Sprintf("新建 Claude 会话失败: %v", errors.Join(createErr, rollbackErr))
-	}
-	selected := agent.ClaudeSession{ID: sessionID, Cwd: route.WorkspaceRoot}
-	if err := h.commitNewClaudeSelection(route, conversationID, selected); err != nil {
+	if _, err := h.createAndAcquireClaudeSessionWithBindingLocked(route); err != nil {
 		return fmt.Sprintf("新建 Claude 会话失败: %v", err)
 	}
-	return wechatCommandText("已创建新的 Claude 会话。", "工作空间: "+shortCodexWorkspaceName(route.WorkspaceRoot))
+	return wechatCommandText("已创建并接管 Claude 会话。", "工作空间: "+shortCodexWorkspaceName(route.WorkspaceRoot))
+}
+
+// createAndAcquireClaudeSessionWithBindingLocked 在 binding 外层锁内把 session/new
+// 的 runtime 变更与统一 acquire saga 组合为一个可补偿事务。
+func (h *Handler) createAndAcquireClaudeSessionWithBindingLocked(route claudeSessionRoute) (claudeSessionAcquireResult, error) {
+	workspaceRoot := normalizeClaudeWorkspaceRoot(route.WorkspaceRoot)
+	if strings.TrimSpace(route.BindingKey) == "" || workspaceRoot == "" {
+		return claudeSessionAcquireResult{}, fmt.Errorf("Claude 新建会话缺少必要字段")
+	}
+	claudeAgent, ok := route.Agent.(agent.ClaudeSessionAgent)
+	if !ok {
+		return claudeSessionAcquireResult{}, fmt.Errorf("当前 Claude Agent 不支持 session 切换")
+	}
+	route.WorkspaceRoot = workspaceRoot
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
+	runtimeBefore := captureClaudeRuntimeSelection(claudeAgent, conversationID)
+	h.bindConversationCwd(route.Agent, conversationID, workspaceRoot)
+
+	sessionID, createErr := route.Agent.ResetSession(route.Context, conversationID)
+	sessionID = strings.TrimSpace(sessionID)
+	if createErr != nil || sessionID == "" {
+		if createErr == nil {
+			createErr = fmt.Errorf("session/new 未返回 sessionId")
+		}
+		rollbackErr := h.rollbackClaudeSessionAcquire(route, claudeAgent, runtimeBefore)
+		if rollbackErr != nil {
+			failClosedErr := h.failClosedClaudeSessionAcquire(h.ensureClaudeSessions(), route.BindingKey, sessionID, workspaceRoot)
+			return claudeSessionAcquireResult{}, errors.Join(errClaudeSessionAcquireUncertain, createErr, rollbackErr, failClosedErr)
+		}
+		return claudeSessionAcquireResult{}, errors.Join(createErr, rollbackErr)
+	}
+
+	result, acquireErr := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
+		Route: route, Selected: agent.ClaudeSession{ID: sessionID, Cwd: workspaceRoot}, Command: "new",
+	})
+	if acquireErr == nil {
+		return result, nil
+	}
+	rollbackErr := h.rollbackClaudeSessionAcquire(route, claudeAgent, runtimeBefore)
+	if rollbackErr != nil {
+		failClosedErr := h.failClosedClaudeSessionAcquire(h.ensureClaudeSessions(), route.BindingKey, sessionID, workspaceRoot)
+		return claudeSessionAcquireResult{}, errors.Join(errClaudeSessionAcquireUncertain, acquireErr, rollbackErr, failClosedErr)
+	}
+	return claudeSessionAcquireResult{}, acquireErr
 }
 
 // rejectActiveClaudeBindingChange 防止活动任务因 workspace/session 漂移而失去控制键。
@@ -138,23 +158,4 @@ func (h *Handler) rejectActiveClaudeBindingChange(route claudeSessionRoute) stri
 		return ""
 	}
 	return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
-}
-
-func (h *Handler) commitNewClaudeSelection(route claudeSessionRoute, conversationID string, selected agent.ClaudeSession) error {
-	store := h.ensureClaudeSessions()
-	previous, existed := store.bindingSnapshot(route.BindingKey)
-	if err := store.commitSelection(route.BindingKey, selected.Cwd, selected.ID); err != nil {
-		return errors.Join(err, h.rollbackClaudeRuntime(route, conversationID, previous))
-	}
-	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
-		return errors.Join(err, store.restoreBinding(route.BindingKey, previous, existed), h.rollbackClaudeRuntime(route, conversationID, previous))
-	}
-	return nil
-}
-
-func firstError(primary error, fallback error) error {
-	if primary != nil {
-		return primary
-	}
-	return fallback
 }

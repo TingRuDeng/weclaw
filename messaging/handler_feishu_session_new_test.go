@@ -118,4 +118,8 @@ func TestFeishuNewUsesSessionDefaultAgent(t *testing.T) {
 	if got := codex.resetConversationID(); got != "" {
 		t.Fatalf("Codex 不应被重置，实际 conversation=%q", got)
 	}
+	intent := h.ensureClaudeSessions().controlIntent("session-new")
+	if intent.Owner != claudeOwnerRemote || intent.BindingKey != claudeBindingKey(sessionKey, "claude") {
+		t.Fatalf("intent=%+v，会话默认 Claude 的 /new 应接管新会话", intent)
+	}
 }
