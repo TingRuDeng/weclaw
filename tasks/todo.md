@@ -2,28 +2,33 @@
 
 ## 目标
 
-修复 `/cx owner remote` 与 `/cx owner desktop` 未进入 Codex 会话命令处理链，反复提示“尚未选择控制方”的问题。
+实现 Codex 远程窗口“选择即接管”：切换 A→B 时原子释放 A、接管 B，
+活动 Desktop 任务继续在原进程执行并立即回传，当前窗口可使用 `/guide`、`/stop`。
 
 ## 任务清单
 
-- [x] P0 串行：完成运行日志、部署版本、状态文件与命令链路只读诊断。
-- [x] P1 串行：确认最小方案与测试范围，用户已显式批准。
-- [x] P2 串行：测试先行复现 owner 命令入口漏判。
-- [x] P3 串行：补齐 owner 命令识别并通过定向回归测试。
-- [x] P4 串行：完成全量测试、vet、构建与差异门禁验证。
-- [x] P5 串行：完成 Review Gate 并回填验证记录。
+- [x] P0 并行：只读核对 switch/new/owner/导航入口、store/锁和 active-task/runtime 边界。
+- [x] P1 串行：完成并确认“单窗口单所有权、其他窗口不可抢占”设计。
+- [x] P2 串行：补全当前默认 Agent 为 Codex 时的全局 `/new` 入口并形成文件级实施计划。
+- [ ] P3 串行：Task 1–5，先修 stale 回填，再建原子 store、有序锁、observer reservation 和统一 saga。
+- [ ] P4 串行：Task 6–8，接入 switch、短编号、`/cx cd`、两个 new 入口和 owner/消息门禁。
+- [ ] P5 串行：Task 9，补齐平台、路由、并发与重启行为矩阵。
+- [ ] P6 串行：Task 10，同步公开语义，执行全量测试、race、vet、文档门禁和 Review Gate。
 
 ## 并行说明
 
-命令识别与入口回归测试集中在同一条调用链，写入范围小且存在先后依赖，本轮不启用 subagent，统一串行执行。
+只读分析阶段已拆分三个互不冲突的 subagent：入口地图、store/锁、runtime/observer。
+实施会共享 session/control/runtime/active-task 状态与测试 fixture，写冲突风险高，
+因此按 Task 1–10 串行推进；只允许独立验证命令并行。
 
 ## 当前状态
 
-修复、验证与 Review Gate 已完成；发布状态以 GitHub Release 与版本 tag 为准。
+用户已通过 HARD-GATE 并选择 Subagent-Driven 执行；全仓基线测试已通过，
+当前正按严格 TDD 进入 Task 1。
 
 ## Review 小结
 
-- `owner` 已进入 Codex 会话命令分类链，既有控制权状态机保持不变。
-- 回归测试覆盖 `remote/desktop` 命令识别，以及 `HandleMessage` 到远程移交的完整入口。
-- 全仓测试、owner 定向 race、vet、build、文档校验与差异门禁均通过。
-- Document-refresh: not-needed；README 与 README_CN 已完整记录 `/cx owner` 用法，本次没有改变公开语义。
+- 计划覆盖所有已证实的真实入口，包括原设计遗漏的 Codex 默认 Agent 全局 `/new`。
+- 核心事务明确外层 binding 锁前提，内部只按 thread ID 有序持锁，避免自锁与 ABBA。
+- 运行时变更、observer 预留、copy-on-write 持久化和失败补偿均有对应自动化验证任务。
+- 本阶段只完成规划文档，未运行业务测试；正式实施验证命令已写入 Task 10。

@@ -43,6 +43,7 @@ WeClaw 当前把 Codex 会话选择与控制权移交拆成两个操作：
 - 飞书会话选择卡片按钮
 - `/cx cd` 在目标 workspace 只有一个可选会话时的自动选择
 - `/cx new` 创建出的新会话
+- 当前默认 Agent 为 Codex 时的全局 `/new`
 - `/cx owner remote` 兼容入口
 
 `/cx ls`、`/cx pwd`、`/cx status` 等只读命令不改变选择或控制权。
@@ -106,12 +107,17 @@ WeClaw 当前把 Codex 会话选择与控制权移交拆成两个操作：
 
 - 读取原选择和所有相关控制意图快照。
 - 计算当前 route 需要释放的 thread 集合。
-- 获取 binding 锁和 thread 锁。
+- 在调用方已持有 binding 锁的前提下获取 thread 锁。
 - 校验 workspace、活动任务和跨窗口冲突。
 - 调用 Agent 层探测、接管和释放运行时。
 - 调用 store 层一次性提交选择与控制意图。
 - 在目标活动时启动外部任务观察。
 - 失败时执行逆序补偿。
+
+`/cx` 会话命令由 `messaging/codex_session_command_dispatch.go` 的
+`prepareCodexSessionCommand` 在外层持有 binding 锁；全局 `/new` 由
+`messaging/default_session.go` 持有同一把 binding 锁。事务入口必须明确要求调用方已持有
+binding 锁，只在内部按 thread ID 排序获取一个或多个 thread 锁，避免重复加锁导致自锁。
 
 `messaging/codex_session_switch.go` 只保留目标解析、入口适配和结果渲染，不再提前提交选择。
 
@@ -168,9 +174,10 @@ WeClaw 当前把 Codex 会话选择与控制权移交拆成两个操作：
 6. 探测 B 的实际 runtime 和活动状态。
 7. 以 proposed revision 让当前 route 取得 B。
 8. 释放当前 route 持有的所有非目标 thread。
-9. 一次性持久化目标选择、B remote intent 和旧 thread desktop intents。
-10. B 活动时启动观察器；B 空闲时直接完成。
-11. 只有全部完成后返回“已切换并接管”。
+9. B 活动时先预留当前 conversation 的观察槽，不启动第二个 watcher。
+10. 一次性持久化目标选择、B remote intent 和旧 thread desktop intents。
+11. 激活已预留的观察器；B 空闲时跳过该步。
+12. 只有全部完成后返回“已切换并接管”。
 
 ### 7.2 幂等选择
 
@@ -183,7 +190,8 @@ B 已由当前 route 控制且已经是当前选择时：
 
 ### 7.3 新建会话
 
-`/cx new` 先通过 Agent 创建 thread，再把新 thread 作为 B 进入同一接管事务。如果接管失败：
+`/cx new` 与当前默认 Agent 为 Codex 时的全局 `/new` 先通过 Agent 创建 thread，再把新
+thread 作为 B 进入同一接管事务。如果接管失败：
 
 - 原选择和原所有权恢复。
 - 新 thread 不设为当前选择，不写入 remote intent。
@@ -264,7 +272,7 @@ B 已由当前 route 控制且已经是当前选择时：
 
 - 飞书与微信文本入口语义一致。
 - thread ID、编号、卡片按钮、`/cx cd` 自动选择统一接管。
-- `/cx new` 创建后自动接管。
+- `/cx new` 与当前默认 Agent 为 Codex 时的全局 `/new` 创建后自动接管。
 - `/cx ls`、`/cx pwd`、`/cx status` 不改变控制权。
 - `/cx owner remote` 复用统一事务。
 - `/cx owner desktop` 释放后普通消息拒绝，重新选择可以再次接管。
