@@ -5,6 +5,7 @@ import "github.com/fastclaw-ai/weclaw/agent"
 type codexTaskPhase string
 
 const (
+	codexTaskReserved     codexTaskPhase = "reserved"
 	codexTaskRunning      codexTaskPhase = "running"
 	codexTaskStopping     codexTaskPhase = "stopping"
 	codexTaskDisconnected codexTaskPhase = "disconnected"

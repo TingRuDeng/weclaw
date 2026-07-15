@@ -144,3 +144,37 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 		t.Fatalf("/stop should confirm interrupt and wait for terminal, messages=%#v", calls.texts())
 	}
 }
+
+func TestCodexReservedExternalTaskRejectsGuideAndStopBeforeRuntimeCall(t *testing.T) {
+	h := NewHandler(nil, nil)
+	state := agent.CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1"}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	prepared, opts := testExternalCodexReservationInput(nil, nil)
+	reservation, err := h.reserveExternalCodexTask(opts, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.cancelExternalCodexTaskReservation(reservation)
+	_, err = h.ensureCodexSessions().updateControlIntent(codexControlIntentUpdate{
+		ThreadID: opts.threadID, Owner: codexControlRemote,
+		RouteBindingKey: "route-1\x00codex", ConversationID: opts.conversationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.storePendingGuide(opts.conversationID, pendingAgentTask{message: "补充要求", run: func() {}})
+	guide, guideHandled := h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{
+		ctx: context.Background(), key: opts.conversationID, agentName: "codex", actor: opts.actorUserID,
+	})
+	stop, stopHandled := h.interruptExternalCodexTask(externalCodexTaskCommand{
+		ctx: context.Background(), key: opts.conversationID, agent: ag, actor: opts.actorUserID,
+	})
+	if !guideHandled || !stopHandled || !strings.Contains(guide, "观察尚未激活") || !strings.Contains(stop, "观察尚未激活") {
+		t.Fatalf("guide=(%v,%q) stop=(%v,%q)", guideHandled, guide, stopHandled, stop)
+	}
+	if ag.bindCalls != 0 || ag.steerThreadID != "" || ag.interruptCalls != 0 {
+		t.Fatalf("reserved 阶段调用了 runtime：inspect=%d steer=%q interrupt=%d", ag.bindCalls, ag.steerThreadID, ag.interruptCalls)
+	}
+}

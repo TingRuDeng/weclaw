@@ -11,26 +11,27 @@ import (
 )
 
 type activeAgentTask struct {
-	mu                 sync.Mutex
-	cancel             context.CancelFunc
-	done               chan struct{}
-	detached           bool
-	stopRequested      bool
-	pending            pendingAgentTask
-	pendingSteering    bool
-	owner              string
-	routeUserID        string
-	agentName          string
-	preview            string
-	messageFingerprint string
-	startedAt          time.Time
-	lastProgress       string
-	lastProgressAt     time.Time
-	runtimeOwner       agent.CodexRuntimeHolder
-	ownerRevision      uint64
-	phase              codexTaskPhase
-	codexThreadID      string
-	codexTurnID        string
+	mu                  sync.Mutex
+	cancel              context.CancelFunc
+	done                chan struct{}
+	detached            bool
+	stopRequested       bool
+	pending             pendingAgentTask
+	pendingSteering     bool
+	owner               string
+	routeUserID         string
+	agentName           string
+	preview             string
+	messageFingerprint  string
+	startedAt           time.Time
+	lastProgress        string
+	lastProgressAt      time.Time
+	runtimeOwner        agent.CodexRuntimeHolder
+	ownerRevision       uint64
+	phase               codexTaskPhase
+	codexThreadID       string
+	codexTurnID         string
+	externalReservation *externalCodexTaskReservationControl
 }
 
 type pendingAgentTask struct {
