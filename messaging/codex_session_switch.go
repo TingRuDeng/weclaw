@@ -189,17 +189,6 @@ func (h *Handler) resolveCodexSwitchWorkspace(req codexSwitchTargetRequest) stri
 	return normalizeCodexWorkspaceRoot(req.workspaceRoot)
 }
 
-func renderCodexSwitchFailure(err error) string {
-	if isCodexThreadStoreReadError(err) {
-		return wechatCommandText(
-			"切换会话失败。",
-			"该 Codex 会话当前无法被微信接手。",
-			"可发送 /cx app 在 Codex App 中打开当前工作空间，或发送 /cx new 创建微信侧新会话。",
-		)
-	}
-	return fmt.Sprintf("切换线程失败: %v", err)
-}
-
 func isCodexThreadStoreReadError(err error) bool {
 	if err == nil {
 		return false

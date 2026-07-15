@@ -143,14 +143,6 @@ func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
 	return lines
 }
 
-// renderExternalCodexStateReadError 将状态读取错误显式反馈给切换用户。
-func renderExternalCodexStateReadError(err error) []string {
-	if err == nil {
-		return nil
-	}
-	return []string{"Codex App 当前任务状态读取失败: " + err.Error()}
-}
-
 func externalCodexTaskOwner(state externalCodexTaskState) (agent.CodexRuntimeHolder, uint64) {
 	if state.Controllable {
 		return agent.CodexRuntimeDesktop, 0
