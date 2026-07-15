@@ -12,8 +12,12 @@ type fakeCodexLiveAgent struct {
 	*fakeCodexThreadAgent
 	mu             sync.Mutex
 	binding        agent.CodexThreadBinding
+	bindings       map[string]agent.CodexThreadBinding
 	bindErr        error
+	inspectErrors  map[string]error
 	handoffErr     error
+	handoffErrors  map[string]error
+	handoffHistory []agent.CodexRuntimeRequest
 	runErr         error
 	bindCalls      int
 	handoffCalls   int
@@ -41,6 +45,9 @@ func newFakeCodexLiveAgent(runtime agent.CodexRuntimeHolder, state agent.CodexTh
 	return &fakeCodexLiveAgent{
 		fakeCodexThreadAgent: base,
 		binding:              agent.CodexThreadBinding{Runtime: runtime, State: state},
+		bindings:             make(map[string]agent.CodexThreadBinding),
+		inspectErrors:        make(map[string]error),
+		handoffErrors:        make(map[string]error),
 	}
 }
 
@@ -56,17 +63,33 @@ func (f *fakeCodexLiveAgent) InspectCodexRuntime(ctx context.Context, req agent.
 	defer f.mu.Unlock()
 	f.bindCalls++
 	f.lastRuntimeReq = req
-	f.binding.Ref = req.Ref
-	f.binding.Control = req.Intent
-	return f.binding, f.bindErr
+	binding, ok := f.bindings[req.Ref.ThreadID]
+	if !ok {
+		binding = f.binding
+	}
+	binding.Ref = req.Ref
+	binding.Control = req.Intent
+	if ok {
+		f.bindings[req.Ref.ThreadID] = binding
+	} else {
+		f.binding = binding
+	}
+	if err, exists := f.inspectErrors[req.Ref.ThreadID]; exists {
+		return agent.CodexThreadBinding{}, err
+	}
+	return binding, f.bindErr
 }
 
 func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	f.mu.Lock()
 	f.handoffCalls++
 	f.lastRuntimeReq = req
+	f.handoffHistory = append(f.handoffHistory, req)
 	entered, release := f.handoffEntered, f.handoffRelease
 	handoffErr := f.handoffErr
+	if err, ok := f.handoffErrors[req.Ref.ThreadID]; ok {
+		handoffErr = err
+	}
 	f.mu.Unlock()
 	signalCodexLiveTestHook(entered)
 	if err := waitCodexLiveTestHook(ctx, release); err != nil {
@@ -77,15 +100,24 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 	if handoffErr != nil {
 		return agent.CodexThreadBinding{}, handoffErr
 	}
-	f.binding.Ref = req.Ref
-	f.binding.Control = req.Intent
-	if req.Intent.Owner == agent.CodexControlRemote && f.binding.Runtime == agent.CodexRuntimeUnknown {
-		f.binding.Runtime = agent.CodexRuntimeWeClaw
+	binding, ok := f.bindings[req.Ref.ThreadID]
+	if !ok {
+		binding = f.binding
 	}
-	if req.Intent.Owner == agent.CodexControlDesktop && f.binding.Runtime == agent.CodexRuntimeWeClaw {
-		f.binding.Runtime = agent.CodexRuntimeUnknown
+	binding.Ref = req.Ref
+	binding.Control = req.Intent
+	if req.Intent.Owner == agent.CodexControlRemote && binding.Runtime == agent.CodexRuntimeUnknown {
+		binding.Runtime = agent.CodexRuntimeWeClaw
 	}
-	return f.binding, nil
+	if req.Intent.Owner == agent.CodexControlDesktop && binding.Runtime == agent.CodexRuntimeWeClaw {
+		binding.Runtime = agent.CodexRuntimeUnknown
+	}
+	if ok {
+		f.bindings[req.Ref.ThreadID] = binding
+	} else {
+		f.binding = binding
+	}
+	return binding, nil
 }
 
 func (f *fakeCodexLiveAgent) RunCodexTurn(ctx context.Context, req agent.CodexTurnRequest) (string, error) {
@@ -143,6 +175,19 @@ func (f *fakeCodexLiveAgent) setBindingRuntime(runtime agent.CodexRuntimeHolder)
 	f.mu.Lock()
 	f.binding.Runtime = runtime
 	f.mu.Unlock()
+}
+
+func (f *fakeCodexLiveAgent) setThreadBinding(threadID string, binding agent.CodexThreadBinding) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	binding.State.ThreadID = threadID
+	f.bindings[threadID] = binding
+}
+
+func (f *fakeCodexLiveAgent) handoffRequests() []agent.CodexRuntimeRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]agent.CodexRuntimeRequest(nil), f.handoffHistory...)
 }
 
 // setBindingState 同步测试探针与 thread 读取结果，模拟 in-process turn 的实时状态变化。
