@@ -111,6 +111,11 @@ func (s *codexSessionStore) save() {
 // persistStateLocked 在持有 saveMu 时原子写入当前快照。
 func (s *codexSessionStore) persistStateLocked() error {
 	filePath, state := s.snapshotCodexSessionState()
+	return s.persistCandidate(filePath, state)
+}
+
+// persistCandidate 将候选快照交给可注入 writer，供原子提交在替换内存前验证写盘结果。
+func (s *codexSessionStore) persistCandidate(filePath string, state codexSessionState) error {
 	if filePath == "" {
 		return nil
 	}
@@ -121,7 +126,11 @@ func (s *codexSessionStore) persistStateLocked() error {
 	if err != nil {
 		return fmt.Errorf("编码状态: %w", err)
 	}
-	return writeCodexSessionStateFile(filePath, data)
+	writer := s.writeState
+	if writer == nil {
+		writer = writeCodexSessionStateFile
+	}
+	return writer(filePath, data)
 }
 
 func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionState) {

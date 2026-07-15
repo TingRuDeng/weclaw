@@ -7,12 +7,15 @@ import (
 	"time"
 )
 
+type codexSessionStateWriter func(filePath string, data []byte) error
+
 type codexSessionStore struct {
-	mu       sync.Mutex
-	saveMu   sync.Mutex
-	filePath string
-	bindings map[string]codexSessionBinding
-	controls map[string]codexControlIntent
+	mu         sync.Mutex
+	saveMu     sync.Mutex
+	filePath   string
+	bindings   map[string]codexSessionBinding
+	controls   map[string]codexControlIntent
+	writeState codexSessionStateWriter
 }
 
 type codexSessionState struct {
@@ -39,8 +42,9 @@ const codexSessionStateVersion = 2
 
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
-		bindings: make(map[string]codexSessionBinding),
-		controls: make(map[string]codexControlIntent),
+		bindings:   make(map[string]codexSessionBinding),
+		controls:   make(map[string]codexControlIntent),
+		writeState: writeCodexSessionStateFile,
 	}
 }
 
