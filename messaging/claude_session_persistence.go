@@ -10,6 +10,12 @@ import (
 )
 
 func (s *claudeSessionStore) load() error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	return s.loadLocked()
+}
+
+func (s *claudeSessionStore) loadLocked() error {
 	s.mu.Lock()
 	path := s.filePath
 	s.mu.Unlock()
@@ -64,7 +70,7 @@ func decodeClaudeSessionState(data []byte) (map[string]claudeSessionBinding, map
 	if header.Version == 2 {
 		return bindings, migrateClaudeControlsV2(bindings), true, nil
 	}
-	return bindings, normalizeClaudeControls(state.Controls), false, nil
+	return bindings, normalizeClaudeControlsForBindings(bindings, state.Controls), false, nil
 }
 
 func migrateClaudeControlsV2(bindings map[string]claudeSessionBinding) map[string]claudeControlIntent {
@@ -121,6 +127,37 @@ func normalizeClaudeControls(input map[string]claudeControlIntent) map[string]cl
 			continue
 		}
 		controls[sessionID] = normalizeClaudeControlIntent(intent)
+	}
+	return controls
+}
+
+func normalizeClaudeControlsForBindings(
+	bindings map[string]claudeSessionBinding,
+	input map[string]claudeControlIntent,
+) map[string]claudeControlIntent {
+	controls := normalizeClaudeControls(input)
+	remoteSessionsByBinding := make(map[string][]string)
+	for sessionID, intent := range controls {
+		if intent.Owner == claudeOwnerRemote {
+			remoteSessionsByBinding[intent.BindingKey] = append(remoteSessionsByBinding[intent.BindingKey], sessionID)
+		}
+	}
+	for sessionID, intent := range controls {
+		if intent.Owner != claudeOwnerRemote {
+			continue
+		}
+		binding, ok := bindings[intent.BindingKey]
+		conflictingBinding := len(remoteSessionsByBinding[intent.BindingKey]) != 1
+		expectedConversationID := ""
+		if ok {
+			expectedConversationID = claudeConversationIDForBinding(intent.BindingKey, binding.WorkspaceRoot)
+		}
+		if conflictingBinding || !ok || binding.SessionID != sessionID || expectedConversationID == "" ||
+			intent.ConversationID != expectedConversationID {
+			controls[sessionID] = normalizeClaudeControlIntent(claudeControlIntent{
+				Owner: claudeOwnerUnclaimed, Revision: intent.Revision, UpdatedAt: intent.UpdatedAt,
+			})
+		}
 	}
 	return controls
 }

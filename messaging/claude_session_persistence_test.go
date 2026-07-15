@@ -5,8 +5,245 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
+
+func TestClaudeSessionStoreFailsClosedContradictoryV3Controls(t *testing.T) {
+	workspace := t.TempDir()
+	key := claudeBindingKey("route-a", "claude")
+	binding := newClaudeBinding(workspace, "session-a", claudeBindingReady)
+	wantConversation := buildClaudeConversationID("route-a", "claude", workspace)
+
+	tests := []struct {
+		name     string
+		controls map[string]claudeControlIntent
+		wantIDs  []string
+	}{
+		{
+			name: "remote binding 未选中该 session",
+			controls: map[string]claudeControlIntent{
+				"session-other": {
+					Owner: claudeOwnerRemote, BindingKey: key, ConversationID: wantConversation, Revision: 2,
+				},
+			},
+			wantIDs: []string{"session-other"},
+		},
+		{
+			name: "conversation 与 route workspace 不匹配",
+			controls: map[string]claudeControlIntent{
+				"session-a": {
+					Owner: claudeOwnerRemote, BindingKey: key, ConversationID: "claude\x00wrong", Revision: 3,
+				},
+			},
+			wantIDs: []string{"session-a"},
+		},
+		{
+			name: "同一 binding 声明多个 remote session",
+			controls: map[string]claudeControlIntent{
+				"session-a": {
+					Owner: claudeOwnerRemote, BindingKey: key, ConversationID: wantConversation, Revision: 4,
+				},
+				"session-other": {
+					Owner: claudeOwnerRemote, BindingKey: key, ConversationID: wantConversation, Revision: 5,
+				},
+			},
+			wantIDs: []string{"session-a", "session-other"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(claudeSessionState{
+				Version: claudeSessionStateVersion,
+				Bindings: map[string]claudeSessionBinding{
+					key: binding,
+				},
+				Controls: tt.controls,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "claude-sessions.json")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := newClaudeSessionStore()
+			if err := store.SetFilePath(path); err != nil {
+				t.Fatal(err)
+			}
+			for _, sessionID := range tt.wantIDs {
+				intent := store.controlIntent(sessionID)
+				if intent.Owner != claudeOwnerUnclaimed || intent.BindingKey != "" || intent.ConversationID != "" {
+					t.Fatalf("session=%s intent=%+v, want fail-closed unclaimed", sessionID, intent)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeSessionStorePreservesConsistentV3RemoteControl(t *testing.T) {
+	workspace := t.TempDir()
+	key := claudeBindingKey("route-a", "claude")
+	want := claudeControlIntent{
+		Owner:          claudeOwnerRemote,
+		BindingKey:     key,
+		ConversationID: buildClaudeConversationID("route-a", "claude", workspace),
+		Revision:       6,
+	}
+	data, err := json.Marshal(claudeSessionState{
+		Version: claudeSessionStateVersion,
+		Bindings: map[string]claudeSessionBinding{
+			key: newClaudeBinding(workspace, "session-a", claudeBindingReady),
+		},
+		Controls: map[string]claudeControlIntent{"session-a": want},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "claude-sessions.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newClaudeSessionStore()
+	if err := store.SetFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.controlIntent("session-a"); got != want {
+		t.Fatalf("intent=%+v, want %+v", got, want)
+	}
+}
+
+func TestClaudeSessionStoreLoadSerializesWithSave(t *testing.T) {
+	store := newClaudeSessionStore()
+	store.saveMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- store.load()
+	}()
+	select {
+	case err := <-done:
+		store.saveMu.Unlock()
+		t.Fatalf("load bypassed saveMu: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	store.saveMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandlerSetClaudeSessionFileSerializesWithSave(t *testing.T) {
+	h := &Handler{}
+	store := h.ensureClaudeSessions()
+	path := filepath.Join(t.TempDir(), "claude-sessions.json")
+	store.saveMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- h.SetClaudeSessionFile(path)
+	}()
+	select {
+	case err := <-done:
+		store.saveMu.Unlock()
+		t.Fatalf("SetClaudeSessionFile bypassed saveMu: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	store.saveMu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaudeSessionStoreBindingUpdatePreservesControls(t *testing.T) {
+	store := newClaudeSessionStore()
+	store.controls["session-local"] = claudeControlIntent{Owner: claudeOwnerLocal, Revision: 7}
+	var persisted claudeSessionState
+	store.persist = func(state claudeSessionState) error {
+		persisted = state
+		return nil
+	}
+	if err := store.commitSelection("route", "/tmp/project", "session-new"); err != nil {
+		t.Fatal(err)
+	}
+	want := claudeControlIntent{Owner: claudeOwnerLocal, Revision: 7}
+	if got := store.controlIntent("session-local"); got != want {
+		t.Fatalf("memory control=%+v, want %+v", got, want)
+	}
+	if got := persisted.Controls["session-local"]; got != want {
+		t.Fatalf("persisted control=%+v, want %+v", got, want)
+	}
+}
+
+func TestClaudeSessionStoreSaveFailureRollsBackBindingsAndControls(t *testing.T) {
+	store := newClaudeSessionStore()
+	if err := store.commitSelection("route", "/tmp/old", "session-old"); err != nil {
+		t.Fatal(err)
+	}
+	wantControl := claudeControlIntent{Owner: claudeOwnerLocal, Revision: 8}
+	store.mu.Lock()
+	store.controls["session-local"] = wantControl
+	store.mu.Unlock()
+	store.persist = func(state claudeSessionState) error {
+		state.Controls["session-local"] = claudeControlIntent{Owner: claudeOwnerRemote, Revision: 99}
+		return errors.New("disk full")
+	}
+	if err := store.commitSelection("route", "/tmp/new", "session-new"); err == nil {
+		t.Fatal("commitSelection error=nil, want save failure")
+	}
+	if got := store.binding("route"); got.WorkspaceRoot != "/tmp/old" || got.SessionID != "session-old" {
+		t.Fatalf("binding=%+v, want original binding", got)
+	}
+	if got := store.controlIntent("session-local"); got != wantControl {
+		t.Fatalf("control=%+v, want %+v", got, wantControl)
+	}
+}
+
+func TestClaudeSessionStoreConcurrentLoadDoesNotOverwriteUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude-sessions.json")
+	key := claudeBindingKey("route", "claude")
+	initial := newClaudeSessionState(
+		map[string]claudeSessionBinding{key: newClaudeBinding("/tmp/old", "session-old", claudeBindingReady)},
+		map[string]claudeControlIntent{"session-old": {Owner: claudeOwnerLocal, Revision: 1}},
+	)
+	if err := persistClaudeSessionState(path, initial); err != nil {
+		t.Fatal(err)
+	}
+	store := newClaudeSessionStore()
+	if err := store.SetFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+
+	store.saveMu.Lock()
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		errs <- store.load()
+	}()
+	go func() {
+		defer wg.Done()
+		errs <- store.commitSelection(key, "/tmp/new", "session-new")
+	}()
+	time.Sleep(20 * time.Millisecond)
+	store.saveMu.Unlock()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reloaded := newClaudeSessionStore()
+	if err := reloaded.SetFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.binding(key); got.SessionID != store.binding(key).SessionID {
+		t.Fatalf("disk session=%q memory session=%q", got.SessionID, store.binding(key).SessionID)
+	}
+}
 
 func TestClaudeSessionStoreMigratesV2SingleBindingToRemoteOwner(t *testing.T) {
 	workspace := t.TempDir()

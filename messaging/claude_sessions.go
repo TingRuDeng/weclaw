@@ -59,6 +59,8 @@ func DefaultClaudeSessionFile() string {
 
 // SetFilePath 设置持久化文件并加载状态；损坏文件只记录错误，不覆盖磁盘内容。
 func (s *claudeSessionStore) SetFilePath(filePath string) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	s.filePath = strings.TrimSpace(filePath)
 	path := s.filePath
@@ -66,7 +68,7 @@ func (s *claudeSessionStore) SetFilePath(filePath string) error {
 		return persistClaudeSessionState(path, state)
 	}
 	s.mu.Unlock()
-	return s.load()
+	return s.loadLocked()
 }
 
 // binding 返回 route 当前绑定快照。
