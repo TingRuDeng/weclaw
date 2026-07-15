@@ -150,12 +150,9 @@ func (h *Handler) markCodexRuntimeConflict(req codexRuntimeConflictRequest) erro
 	return req.liveAgent.MarkCodexRuntimeConflict(req.ctx, request)
 }
 
-// newCodexSessionAcquireCleanupContext 为首次清理脱离已取消用户调用，并设置有限预算。
+// newCodexSessionAcquireCleanupContext 为首次清理保留 values、脱离父取消并设置有限预算。
 func newCodexSessionAcquireCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	parent := normalizeContext(ctx)
-	if parent.Err() != nil {
-		parent = context.WithoutCancel(parent)
-	}
+	parent := context.WithoutCancel(normalizeContext(ctx))
 	return context.WithTimeout(parent, codexSessionAcquireCleanupTimeout)
 }
 

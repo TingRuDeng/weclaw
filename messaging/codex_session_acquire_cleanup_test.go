@@ -240,6 +240,28 @@ func TestCodexSessionAcquireCleanupContextKeepsValuesWithoutCancellation(t *test
 	}
 }
 
+func TestCodexSessionAcquireCleanupContextIgnoresFutureParentCancel(t *testing.T) {
+	type cleanupContextKey struct{}
+	parent, cancelParent := context.WithCancel(context.WithValue(
+		context.Background(), cleanupContextKey{}, "trace-value",
+	))
+	cleanup, cancelCleanup := newCodexSessionAcquireCleanupContext(parent)
+	defer cancelCleanup()
+	deadlineBefore, ok := cleanup.Deadline()
+	if !ok {
+		t.Fatal("cleanup 必须有有限 deadline")
+	}
+	cancelParent()
+	deadlineAfter, stillHasDeadline := cleanup.Deadline()
+	if cleanup.Err() != nil || cleanup.Value(cleanupContextKey{}) != "trace-value" {
+		t.Fatalf("cleanup err=%v value=%v", cleanup.Err(), cleanup.Value(cleanupContextKey{}))
+	}
+	if !stillHasDeadline || !deadlineAfter.Equal(deadlineBefore) || time.Until(deadlineAfter) <= 0 ||
+		time.Until(deadlineAfter) > codexSessionAcquireCleanupTimeout {
+		t.Fatalf("deadline before=%v after=%v ok=%v", deadlineBefore, deadlineAfter, stillHasDeadline)
+	}
+}
+
 func assertFakeCodexBindingOwner(t *testing.T, ag *fakeCodexLiveAgent, threadID string, owner agent.CodexControlOwner) {
 	t.Helper()
 	if binding := ag.threadBinding(threadID); binding.Control.Owner != owner {
