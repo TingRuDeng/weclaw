@@ -24,6 +24,51 @@ github_latest_url() {
   fi
 }
 
+# 从发布摘要中提取目标资产的唯一 SHA-256，拒绝缺失、重复或非法摘要。
+release_sha256() {
+  checksum_file=$1
+  asset_name=$2
+  matches=$(awk -v target="$asset_name" '
+    $2 == target || $2 == "*" target { print $1 }
+  ' "$checksum_file")
+  match_count=$(printf '%s\n' "$matches" | awk 'NF { count++ } END { print count + 0 }')
+  if [ "$match_count" -ne 1 ]; then
+    echo "错误：checksums.txt 中未找到唯一的 SHA-256：${asset_name}" >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$matches" | grep -Eq '^[[:xdigit:]]{64}$'; then
+    echo "错误：${asset_name} 的 SHA-256 格式无效" >&2
+    return 1
+  fi
+  printf '%s\n' "$matches" | tr '[:upper:]' '[:lower:]'
+}
+
+# 使用系统现有工具计算摘要，避免因缺少校验能力而静默安装。
+file_sha256() {
+  target_file=$1
+  if command -v shasum >/dev/null 2>&1; then
+    checksum_output=$(shasum -a 256 "$target_file") || return 1
+  elif command -v sha256sum >/dev/null 2>&1; then
+    checksum_output=$(sha256sum "$target_file") || return 1
+  else
+    echo "错误：安装需要 shasum 或 sha256sum 才能校验 SHA-256" >&2
+    return 1
+  fi
+  printf '%s\n' "$checksum_output" | awk 'NR == 1 { print tolower($1) }'
+}
+
+verify_release_asset() {
+  asset_file=$1
+  checksum_file=$2
+  asset_name=$3
+  expected_sha=$(release_sha256 "$checksum_file" "$asset_name") || return 1
+  actual_sha=$(file_sha256 "$asset_file") || return 1
+  if [ "$actual_sha" != "$expected_sha" ]; then
+    echo "错误：${asset_name} 的 SHA-256 校验失败" >&2
+    return 1
+  fi
+}
+
 latest_version() {
   latest_url=$(github_latest_url "https://github.com/${REPO}/releases/latest")
   version=${latest_url##*/tag/}
@@ -145,10 +190,19 @@ if [ "$VERSION" = "latest" ]; then
   VERSION=$(latest_version)
 fi
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+CHECKSUM_URL="${URL%/*}/checksums.txt"
 
 echo "Downloading ${URL}..."
 TMP=$(mktemp)
+CHECKSUM_TMP=$(mktemp)
+cleanup_downloads() {
+  rm -f "$TMP" "$CHECKSUM_TMP"
+}
+trap cleanup_downloads 0
+trap 'exit 1' 1 2 15
 github_download "$URL" "$TMP"
+github_download "$CHECKSUM_URL" "$CHECKSUM_TMP"
+verify_release_asset "$TMP" "$CHECKSUM_TMP" "$FILENAME"
 
 # Install
 chmod +x "$TMP"
@@ -159,6 +213,8 @@ else
   sudo mkdir -p "$INSTALL_DIR"
   sudo mv "$TMP" "${INSTALL_DIR}/${BINARY}"
 fi
+cleanup_downloads
+trap - 0 1 2 15
 
 # Clear macOS quarantine attributes
 if [ "$OS" = "darwin" ]; then

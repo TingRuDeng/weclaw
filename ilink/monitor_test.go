@@ -248,6 +248,39 @@ func TestCalcBackoffUsesFixedSteps(t *testing.T) {
 	}
 }
 
+func TestRecoverSessionExpiredWithCursorUsesShortBackoff(t *testing.T) {
+	monitor := &Monitor{
+		getUpdatesBuf: "stale-cursor",
+		bufPath:       filepath.Join(t.TempDir(), "sync.json"),
+	}
+
+	backoff := monitor.recoverExpiredSession()
+
+	if backoff != sessionExpiredBackoff {
+		t.Fatalf("backoff=%s, want %s", backoff, sessionExpiredBackoff)
+	}
+	if monitor.getUpdatesBuf != "" {
+		t.Fatalf("cursor=%q, want empty", monitor.getUpdatesBuf)
+	}
+	data, err := os.ReadFile(monitor.bufPath)
+	if err != nil {
+		t.Fatalf("read persisted cursor: %v", err)
+	}
+	if string(data) != `{"get_updates_buf":""}` {
+		t.Fatalf("persisted cursor=%s, want empty", data)
+	}
+}
+
+func TestRecoverSessionExpiredWithoutCursorUsesFatalBackoff(t *testing.T) {
+	monitor := &Monitor{}
+
+	backoff := monitor.recoverExpiredSession()
+
+	if backoff != fatalSessionBackoff {
+		t.Fatalf("backoff=%s, want %s", backoff, fatalSessionBackoff)
+	}
+}
+
 func textMonitorMessage(userID string, text string) WeixinMessage {
 	return WeixinMessage{
 		FromUserID:   userID,

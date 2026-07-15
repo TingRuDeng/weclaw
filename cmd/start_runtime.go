@@ -22,19 +22,37 @@ type startRuntime struct {
 	registry *platform.Registry
 }
 
+type backgroundStartOps struct {
+	loadAccounts func() ([]*ilink.Credentials, error)
+	login        func(context.Context) (*ilink.Credentials, error)
+	runDaemon    func() error
+}
+
 // runBackgroundStart 在派生后台进程前完成必要的微信登录。
 func runBackgroundStart(cfg *config.Config) error {
-	accounts, _ := ilink.LoadAllCredentials()
+	return runBackgroundStartWithOps(cfg, backgroundStartOps{
+		loadAccounts: ilink.LoadAllCredentials,
+		login:        doLogin,
+		runDaemon:    runDaemon,
+	})
+}
+
+// runBackgroundStartWithOps 保证凭据加载、登录和 daemon 启动按失败边界顺序执行。
+func runBackgroundStartWithOps(cfg *config.Config, ops backgroundStartOps) error {
+	accounts, err := ops.loadAccounts()
+	if err != nil {
+		return fmt.Errorf("failed to load credentials: %w", err)
+	}
 	if !wechatEnabled(cfg) || len(accounts) > 0 {
-		return runDaemon()
+		return ops.runDaemon()
 	}
 	fmt.Println("未找到微信账号，正在启动微信扫码登录...")
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	if _, err := doLogin(ctx); err != nil {
+	if _, err := ops.login(ctx); err != nil {
 		return fmt.Errorf("login failed: %w", err)
 	}
-	return runDaemon()
+	return ops.runDaemon()
 }
 
 // runForegroundStart 依次准备状态、账号、Agent、平台与服务运行时。
