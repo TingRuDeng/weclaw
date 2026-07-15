@@ -92,20 +92,33 @@ func (h *Handler) restoreCodexSessionCreateFailure(failure codexSessionCreateFai
 
 // markCodexSessionCreateConflict 在 mapping 无法恢复时持久标记相关 thread 为冲突态。
 func (h *Handler) markCodexSessionCreateConflict(failure codexSessionCreateFailureRequest) error {
-	threadID := firstNonBlank(failure.createdThread, failure.previousThreadID)
-	if threadID == "" {
+	createdThread := strings.TrimSpace(failure.createdThread)
+	previousThread := strings.TrimSpace(failure.previousThreadID)
+	if createdThread == "" && previousThread == "" {
 		return nil
 	}
+	liveAgent := failure.createRequest.acquire.agent.(agent.CodexLiveRuntimeAgent)
 	route := failure.createRequest.acquire.route
-	route.threadID = threadID
 	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(failure.createRequest.acquire.ctx)
 	defer cancel()
-	return h.markCodexRuntimeConflict(codexRuntimeConflictRequest{
-		ctx:       cleanupCtx,
-		liveAgent: failure.createRequest.acquire.agent.(agent.CodexLiveRuntimeAgent),
-		change:    codexRuntimeIntentChange{threadID: threadID, route: route},
-		intent:    h.ensureCodexSessions().controlIntent(threadID),
-	})
+	seen := make(map[string]struct{}, 2)
+	var markErr error
+	for _, threadID := range []string{createdThread, previousThread} {
+		if threadID == "" {
+			continue
+		}
+		if _, duplicate := seen[threadID]; duplicate {
+			continue
+		}
+		seen[threadID] = struct{}{}
+		route.threadID = threadID
+		markErr = errors.Join(markErr, h.markCodexRuntimeConflict(codexRuntimeConflictRequest{
+			ctx: cleanupCtx, liveAgent: liveAgent,
+			change: codexRuntimeIntentChange{threadID: threadID, route: route},
+			intent: h.ensureCodexSessions().controlIntent(threadID),
+		}))
+	}
+	return markErr
 }
 
 // restoreCodexSessionAfterCreateFailure 使用独立清理预算恢复 ResetSession 改变的 mapping。
