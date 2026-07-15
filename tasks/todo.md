@@ -2,25 +2,28 @@
 
 ## 目标
 
-按 `tasks/codex-session-control-timeout.md` 修复 Codex 会话切换卡住后，普通消息和 `/cx owner remote` 永久等待的问题。
+修复 `/cx owner remote` 与 `/cx owner desktop` 未进入 Codex 会话命令处理链，反复提示“尚未选择控制方”的问题。
 
 ## 任务清单
 
-- [x] P0 串行：完成运行日志、部署版本、会话状态和锁链只读诊断。
-- [x] P1 串行：完成方案比较与修复 Spec。
-- [x] HARD-GATE：用户已显式确认修复计划。
-- [x] P2 串行：测试先行实现 context-aware keyed lock。
-- [x] P3 串行：接入 Codex 控制命令总时限与锁等待时限。
-- [x] P4 串行：补 switch/owner 超时语义和确定性并发测试。
-- [x] P5 串行：完成定向、全量、race、vet、构建和文档门禁验证。
-- [x] P6 串行：完成 Review Gate 并回填验证记录。
+- [x] P0 串行：完成运行日志、部署版本、状态文件与命令链路只读诊断。
+- [x] P1 串行：确认最小方案与测试范围，用户已显式批准。
+- [x] P2 串行：测试先行复现 owner 命令入口漏判。
+- [x] P3 串行：补齐 owner 命令识别并通过定向回归测试。
+- [x] P4 串行：完成全量测试、vet、构建与差异门禁验证。
+- [x] P5 串行：完成 Review Gate 并回填验证记录。
+
+## 并行说明
+
+命令识别与入口回归测试集中在同一条调用链，写入范围小且存在先后依赖，本轮不启用 subagent，统一串行执行。
 
 ## 当前状态
 
-修复、验证与 Review Gate 已完成；发布状态以 GitHub Release 和版本 tag 为准。
+修复、验证与 Review Gate 已完成；发布状态以 GitHub Release 与版本 tag 为准。
 
 ## Review 小结
 
-- 消除了 Codex 会话控制命令的永久锁等待，并保留原有 binding/thread 状态顺序。
-- switch 超时明确保留已提交选择；owner 超时不提交控制意图、不误报成功。
-- 全仓测试、messaging race、vet、build、文档校验与差异门禁均通过。
+- `owner` 已进入 Codex 会话命令分类链，既有控制权状态机保持不变。
+- 回归测试覆盖 `remote/desktop` 命令识别，以及 `HandleMessage` 到远程移交的完整入口。
+- 全仓测试、owner 定向 race、vet、build、文档校验与差异门禁均通过。
+- Document-refresh: not-needed；README 与 README_CN 已完整记录 `/cx owner` 用法，本次没有改变公开语义。
