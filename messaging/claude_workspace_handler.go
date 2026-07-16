@@ -85,6 +85,12 @@ func (h *Handler) handleClaudeCdResult(route claudeSessionRoute, target string) 
 		log.Printf("[claude-workspace] 查找工作空间失败: %v", err)
 		return textNavigationResult("查找 Claude 工作空间失败，请发送 /cc ls 查看可选工作空间后重试。")
 	}
+	if claudeWorkspaceGroupHasPendingCatalog(group) {
+		return textNavigationResult(wechatCommandText(
+			"当前新会话已创建并接管。",
+			"发送第一条消息后会进入 Claude 会话目录，再发送 /cc ls 即可浏览。",
+		))
+	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(group.Root)
 	if _, err := h.releaseClaudeSelectionForWorkspaceWithBindingLocked(route, workspaceRoot, "cd"); err != nil {
 		log.Printf("[claude-workspace] 切换前释放控制权失败: %v", err)

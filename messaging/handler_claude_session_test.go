@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -58,11 +59,16 @@ func TestClaudeCdReleasesSelectedRemoteSession(t *testing.T) {
 		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
 	}
 	fake.runtimeSessions = map[string]string{conversationID: "session-a"}
-	other := t.TempDir()
+	other := filepath.Join(t.TempDir(), "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	h.SetAllowedWorkspaceRoots([]string{workspace, other})
 	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-b", Cwd: other}}
 
-	result := h.handleClaudeSessionCommandForRouteResult(context.Background(), "user-1", "user-1", true, "/cc cd 0")
+	result := h.handleClaudeSessionCommandForRouteResult(
+		context.Background(), "user-1", "user-1", true, "/cc cd "+shortCodexWorkspaceName(other),
+	)
 	if result.Reply == "" || store.binding(key).SessionID != "" {
 		t.Fatalf("result=%+v binding=%+v", result, store.binding(key))
 	}

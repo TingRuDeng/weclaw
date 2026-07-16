@@ -66,6 +66,58 @@ func TestModeYoloIsolatedPerFeishuSession(t *testing.T) {
 	}
 }
 
+func TestFeishuModeCommandUsesSessionScopedChoiceCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := "feishu:tenant:dm:chat-a:ou_user"
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), modeCommandMessage("mode-card", route, "/mode"), reply)
+
+	if len(reply.Texts) != 0 || len(reply.Choices) != 1 {
+		t.Fatalf("texts=%#v choices=%#v，期望飞书 /mode 只发送一张选择卡", reply.Texts, reply.Choices)
+	}
+	card := reply.Choices[0]
+	if !strings.Contains(card.Prompt, "default") || len(card.Choices) != 2 {
+		t.Fatalf("card=%#v，期望显示当前模式和两个选项", card)
+	}
+	if card.Choices[0].ID != "/mode default" || !strings.Contains(card.Choices[0].Label, "当前") ||
+		card.Choices[1].ID != "/mode yolo" {
+		t.Fatalf("choices=%#v，期望 default/yolo 且标记当前项", card.Choices)
+	}
+	for _, choice := range card.Choices {
+		if choice.Metadata[feishuSessionMetadataKey] != route {
+			t.Fatalf("choice=%#v，期望透传飞书窗口路由", choice)
+		}
+	}
+}
+
+func TestFeishuModeCardChoiceReusesOriginalSessionRoute(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := "feishu:tenant:group:chat-b"
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_actor", MessageID: "mode-choice",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/mode yolo"}},
+		Metadata:   map[string]string{feishuSessionMetadataKey: route},
+	}, reply)
+
+	if !h.isYoloMode(route) || h.isYoloMode("ou_actor") {
+		t.Fatalf("route=%t actor=%t，卡片选择必须写入原飞书窗口", h.isYoloMode(route), h.isYoloMode("ou_actor"))
+	}
+	if len(reply.Choices) != 0 || !containsText(reply.Texts, "已切换为 yolo") {
+		t.Fatalf("texts=%#v choices=%#v，卡片回放应复用文本切换结果", reply.Texts, reply.Choices)
+	}
+}
+
+func TestModeCommandWithoutFeishuButtonsFallsBackToText(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), modeCommandMessage("mode-text", "feishu:tenant:dm:chat-a:ou_user", "/mode"), reply)
+
+	if len(reply.Choices) != 0 || !containsText(reply.Texts, "default") {
+		t.Fatalf("texts=%#v choices=%#v，缺少按钮能力时应回退文本", reply.Texts, reply.Choices)
+	}
+}
+
 // modeCommandMessage 构造指定飞书窗口的审批模式命令。
 func modeCommandMessage(messageID string, route string, text string) platform.IncomingMessage {
 	return platform.IncomingMessage{

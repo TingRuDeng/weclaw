@@ -8,7 +8,10 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-const claudeACPSource = "acp"
+const (
+	claudeACPSource     = "acp"
+	claudeBindingSource = "binding"
+)
 
 // claudeSwitchTargets 从 ACP 目录读取当前用户可访问的全部会话。
 func (h *Handler) claudeSwitchTargets(route claudeSessionRoute) ([]codexWorkspaceView, error) {
@@ -27,13 +30,50 @@ func (h *Handler) claudeSwitchTargets(route claudeSessionRoute) ([]codexWorkspac
 		}
 		views = append(views, claudeSessionView(session))
 	}
+	return sortClaudeSessionViews(views), nil
+}
+
+// claudeDisplayTargets 仅为导航补入当前已接管但尚未进入 ACP 目录的会话。
+// 切换仍使用 claudeSwitchTargets，不能让暂态投影绕过 session/list 校验。
+func (h *Handler) claudeDisplayTargets(route claudeSessionRoute) ([]codexWorkspaceView, error) {
+	views, err := h.claudeSwitchTargets(route)
+	if err != nil {
+		return nil, err
+	}
+	binding, intent := h.ensureClaudeSessions().bindingControlSnapshot(route.BindingKey)
+	if binding.Status != claudeBindingReady || strings.TrimSpace(binding.SessionID) == "" {
+		return views, nil
+	}
+	if intent.Owner != claudeOwnerRemote || intent.BindingKey != route.BindingKey {
+		return views, nil
+	}
+	workspaceRoot := normalizeClaudeWorkspaceRoot(binding.WorkspaceRoot)
+	if workspaceRoot == "" || !route.Admin && !h.isWorkspaceAllowed(workspaceRoot) {
+		return views, nil
+	}
+	for _, view := range views {
+		if view.ThreadID == binding.SessionID {
+			return views, nil
+		}
+	}
+	views = append(views, codexWorkspaceView{
+		WorkspaceRoot:  workspaceRoot,
+		ThreadID:       strings.TrimSpace(binding.SessionID),
+		PendingCatalog: true,
+		UpdatedAt:      strings.TrimSpace(binding.UpdatedAt),
+		Source:         claudeBindingSource,
+	})
+	return sortClaudeSessionViews(views), nil
+}
+
+func sortClaudeSessionViews(views []codexWorkspaceView) []codexWorkspaceView {
 	sort.SliceStable(views, func(i, j int) bool {
 		if views[i].UpdatedAt != views[j].UpdatedAt {
 			return views[i].UpdatedAt > views[j].UpdatedAt
 		}
 		return views[i].ThreadID < views[j].ThreadID
 	})
-	return views, nil
+	return views
 }
 
 func claudeSessionView(session agent.ClaudeSession) codexWorkspaceView {
@@ -46,9 +86,9 @@ func claudeSessionView(session agent.ClaudeSession) codexWorkspaceView {
 	}
 }
 
-// claudeWorkspaceGroupsForRoute 按工作空间聚合 ACP 目录。
+// claudeWorkspaceGroupsForRoute 按工作空间聚合 ACP 目录及当前暂态会话投影。
 func (h *Handler) claudeWorkspaceGroupsForRoute(route claudeSessionRoute) ([]codexWorkspaceGroup, error) {
-	views, err := h.claudeSwitchTargets(route)
+	views, err := h.claudeDisplayTargets(route)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +143,36 @@ func (h *Handler) claudeSessionsForWorkspace(route claudeSessionRoute, workspace
 	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
 	for _, group := range groups {
 		if group.Root == workspaceRoot {
-			return switchableCodexSessions(group.Sessions), nil
+			return switchableClaudeSessions(group.Sessions), nil
 		}
 	}
 	return nil, nil
+}
+
+func switchableClaudeSessions(sessions []codexWorkspaceView) []codexWorkspaceView {
+	result := make([]codexWorkspaceView, 0, len(sessions))
+	for _, session := range switchableCodexSessions(sessions) {
+		if !session.PendingCatalog {
+			result = append(result, session)
+		}
+	}
+	return result
+}
+
+func claudeWorkspaceGroupHasPendingCatalog(group codexWorkspaceGroup) bool {
+	for _, session := range group.Sessions {
+		if session.PendingCatalog {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeWorkspaceGroupLabel(group codexWorkspaceGroup) string {
+	if claudeWorkspaceGroupHasPendingCatalog(group) {
+		return group.Name + "（当前新会话）"
+	}
+	return group.Name
 }
 
 func (h *Handler) findClaudeSessionForRoute(route claudeSessionRoute, target string) (agent.ClaudeSession, error) {

@@ -83,6 +83,8 @@ Session selection or creation first persists the current window's session bindin
 
 Claude uses ACP `session/list`, `session/resume`, and `session/new` to manage real sessions. Selecting or creating a session, choosing it from a Feishu card, or using global `/new` while Claude is the default agent first persists the current remote window as owner. `session/list` is the session-directory source of truth; WeClaw's persisted control intent is the remote-write source of truth. If `session/resume` fails, the binding is marked runtime-unavailable without reverting to the previous agent or session or releasing ownership; regular writes stay blocked until recovery succeeds. Bindings and control intent are restored before the next message after WeClaw restarts.
 
+If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` marks the acquired binding as the “current new session.” This entry is display-only until the first message makes it part of the normal catalog, and it never bypasses `/cc switch` validation against `session/list`.
+
 `/cc owner local` explicitly releases remote control, while `/cc owner remote` reacquires it after the native Claude CLI has ended. `/cc cli` releases remote control before opening the native CLI; do not reacquire while that CLI is still active. Tasks running in an independent Claude CLI are outside WeClaw's runtime, so they cannot be observed, streamed, guided with `/guide`, or stopped remotely. Legacy state where multiple windows reference one session migrates to unclaimed instead of silently choosing a winner. Remote Claude ACP tasks support `/stop` and queued continuation, but not `/guide`.
 
 ### Control a Running Task
@@ -140,7 +142,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/cwd [path]` | Show or switch the working directory; regular users are confined to allowed workspace roots |
 | `/new` | Explicitly create a session for the current default agent; also take ownership when Codex is the default |
 | `/model`, `/reasoning` | Show or change the current session model and reasoning effort |
-| `/mode [default|yolo]` | Show or change Codex approval behavior for the current user |
+| `/mode [default|yolo]` | Show or change Codex approval behavior for the current conversation; bare `/mode` opens a Feishu choice card |
 | `/progress [mode]` | Show or change progress mode |
 | `/ps`, `/stop` | List or stop current tasks |
 | `/cancel`, `/guide` | Remove a queued message or steer the active Codex task |

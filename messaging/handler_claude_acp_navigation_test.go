@@ -61,6 +61,31 @@ func TestClaudeNewCreatesAndOwnsImmediately(t *testing.T) {
 	}
 }
 
+func TestClaudeDisplayTargetsDeduplicateCurrentACPSession(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-1", 1)
+	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-1", Cwd: workspace, Title: "已落盘会话"}}
+
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc ls")
+	if strings.Count(text, "已落盘会话") != 1 || strings.Contains(text, "当前新会话") || fake.listCalls != 1 {
+		t.Fatalf("text=%q listCalls=%d，ACP 目录出现后应去重并取消暂态标记", text, fake.listCalls)
+	}
+}
+
+func TestClaudePendingCatalogProjectionCannotBypassSwitchValidation(t *testing.T) {
+	h, fake, _ := newClaudeACPNavigationHandler(t)
+	fake.resetSessionID = "session-new"
+
+	if text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new"); !strings.Contains(text, "已创建并接管") {
+		t.Fatalf("new text=%q", text)
+	}
+	useCalls := len(fake.useCalls)
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch session-new")
+	if !strings.Contains(text, "查找 Claude 会话失败") || len(fake.useCalls) != useCalls {
+		t.Fatalf("text=%q useCalls=%#v，暂态投影不能绕过 session/list 执行切换", text, fake.useCalls)
+	}
+}
+
 func TestClaudeNormalMessageRequiresExplicitBinding(t *testing.T) {
 	h, fake, _ := newClaudeACPNavigationHandler(t)
 	_, err := h.resolveAgentConversationIDForRoute(context.Background(), "user-1", "user-1", "claude", fake)

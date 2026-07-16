@@ -36,6 +36,39 @@ func TestFeishuClaudeCcLsSendsAllowedACPWorkspaceChoices(t *testing.T) {
 	}
 }
 
+func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
+	h, ag := newClaudeFeishuCardHandler(t)
+	workspace := t.TempDir()
+	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	ag.resetSessionID = "session-new"
+
+	created := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc new"})
+	if len(created.Texts) != 1 || !strings.Contains(created.Texts[0], "已创建并接管") {
+		t.Fatalf("created texts=%#v choices=%#v", created.Texts, created.Choices)
+	}
+
+	listed := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc ls"})
+	if len(listed.Texts) != 0 || len(listed.Choices) != 1 || len(listed.Choices[0].Choices) != 1 {
+		t.Fatalf("listed texts=%#v choices=%#v，空会话落入 ACP 目录前也应显示当前工作空间", listed.Texts, listed.Choices)
+	}
+	if choice := listed.Choices[0].Choices[0]; choice.ID != "/cc cd 0" || !strings.Contains(choice.Label, "当前新会话") {
+		t.Fatalf("choice=%#v，期望标记当前暂态会话", choice)
+	}
+
+	opened := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc cd 0"})
+	if len(opened.Choices) != 0 || len(opened.Texts) != 1 || !strings.Contains(opened.Texts[0], "发送第一条消息") {
+		t.Fatalf("opened texts=%#v choices=%#v，暂态会话应提示先发送首条消息", opened.Texts, opened.Choices)
+	}
+	key := claudeBindingKey("feishu:user", "claude")
+	if binding := h.ensureClaudeSessions().binding(key); binding.SessionID != "session-new" || binding.Status != claudeBindingReady {
+		t.Fatalf("binding=%+v，浏览暂态工作空间不得释放当前会话", binding)
+	}
+	if intent := h.ensureClaudeSessions().controlIntent("session-new"); intent.Owner != claudeOwnerRemote || intent.BindingKey != key {
+		t.Fatalf("intent=%+v，浏览暂态工作空间不得释放 owner", intent)
+	}
+}
+
 func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()

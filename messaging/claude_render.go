@@ -64,7 +64,7 @@ func renderClaudeBindingSession(binding claudeSessionBinding) string {
 }
 
 func (h *Handler) renderClaudeWorkspaceList(route claudeSessionRoute) string {
-	views, err := h.claudeSwitchTargets(route)
+	views, err := h.claudeDisplayTargets(route)
 	if err != nil {
 		log.Printf("[claude-session] 查询会话列表失败: %v", err)
 		return "查询 Claude 会话失败，请稍后重试。"
@@ -73,9 +73,15 @@ func (h *Handler) renderClaudeWorkspaceList(route claudeSessionRoute) string {
 		return "当前还没有可切换的 Claude 会话。"
 	}
 	lines := []string{"Claude 会话:"}
-	for index, view := range views {
+	index := 0
+	for _, view := range views {
+		if view.PendingCatalog {
+			lines = append(lines, "当前新会话: "+shortCodexWorkspaceName(view.WorkspaceRoot)+"（发送第一条消息后进入历史目录）")
+			continue
+		}
 		owner := renderClaudeControlOwner(h.ensureClaudeSessions().controlIntent(view.ThreadID), route.BindingKey)
 		lines = append(lines, fmt.Sprintf("%d. %s · 控制方: %s", index, claudeSessionListLabel(view), owner))
+		index++
 	}
 	return wechatCommandText(lines...)
 }
@@ -92,7 +98,7 @@ func (h *Handler) renderClaudeWorkspaceGroups(route claudeSessionRoute) string {
 	}
 	lines := []string{"Claude 工作空间:"}
 	for index, group := range groups {
-		lines = append(lines, fmt.Sprintf("%d. %s", index, group.Name))
+		lines = append(lines, fmt.Sprintf("%d. %s", index, claudeWorkspaceGroupLabel(group)))
 	}
 	return wechatCommandText(lines...)
 }

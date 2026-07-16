@@ -98,7 +98,7 @@ func (h *Handler) routeTaskPlatformCommand(ctx context.Context, req platformComm
 	case req.Trimmed == "/ps":
 		replyPlatformCommand(ctx, req, h.handleListActiveTasks(msg.UserID))
 	case req.Trimmed == "/mode" || strings.HasPrefix(req.Trimmed, "/mode "):
-		replyPlatformCommand(ctx, req, h.handleModeCommandForActor(routeUserID, msg.UserID, req.Trimmed))
+		return h.handleModePlatformCommand(ctx, req, routeUserID)
 	default:
 		return false
 	}

@@ -106,7 +106,7 @@ func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest
 	}
 	choices := make([]platform.Choice, 0, len(groups))
 	for index, group := range groups {
-		choices = append(choices, platform.Choice{ID: fmt.Sprintf("/cc cd %d", index), Label: group.Name})
+		choices = append(choices, platform.Choice{ID: fmt.Sprintf("/cc cd %d", index), Label: claudeWorkspaceGroupLabel(group)})
 	}
 	card := claudeChoiceCard{Prompt: "Claude 工作空间\n请选择要进入的工作空间。", Choices: choices, Meta: req.Metadata}
 	return h.askFeishuClaudeChoices(req.Context, req.Reply, card)

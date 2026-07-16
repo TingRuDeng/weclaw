@@ -90,6 +90,14 @@ func (s *claudeSessionStore) controlIntent(sessionID string) claudeControlIntent
 	return s.controls[strings.TrimSpace(sessionID)]
 }
 
+// bindingControlSnapshot 在同一锁内读取 route 绑定及其对应会话的控制意图。
+func (s *claudeSessionStore) bindingControlSnapshot(bindingKey string) (claudeSessionBinding, claudeControlIntent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding := s.bindings[strings.TrimSpace(bindingKey)]
+	return binding, s.controls[strings.TrimSpace(binding.SessionID)]
+}
+
 // commitSelection 原子提交已由 ACP 验证成功的 workspace/session 绑定。
 func (s *claudeSessionStore) commitSelection(bindingKey string, workspaceRoot string, sessionID string) error {
 	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
