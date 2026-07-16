@@ -260,14 +260,6 @@ func (p *pendingApproval) resolveChoice(choice string) string {
 	return ""
 }
 
-// isApprovalChoiceCommand 判断卡片动作是否来自 Codex 审批按钮，避免过期审批落入普通消息队列。
-func isApprovalChoiceCommand(cmd *platform.CardAction) bool {
-	return cmd != nil &&
-		cmd.Action == "choice" &&
-		strings.TrimSpace(cmd.Value[platform.ChoiceMetadataInteractionKind]) == platform.ChoiceInteractionApproval &&
-		strings.TrimSpace(cmd.Value["approval_key"]) != ""
-}
-
 func isPendingInteractionChoiceCommand(cmd *platform.CardAction) bool {
 	if cmd == nil || cmd.Action != "choice" || strings.TrimSpace(cmd.Value["approval_key"]) == "" {
 		return false
