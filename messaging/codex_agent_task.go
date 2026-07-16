@@ -18,7 +18,8 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	defer unlockBinding()
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
-		actorUserID: opts.userID, routeUserID: opts.routeUserID, reply: opts.reply,
+		actorUserID: opts.userID, routeUserID: opts.routeUserID,
+		agentName: opts.agentName, reply: opts.reply,
 	})
 	route := opts.route
 	if route.conversationID == "" {

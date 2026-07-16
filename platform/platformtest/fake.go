@@ -78,11 +78,15 @@ type Stream struct {
 	Updates     []string
 	Completed   string
 	Failed      string
+	UpdateErr   error
 	CompleteErr error
 	FailErr     error
 }
 
 func (s *Stream) Update(ctx context.Context, content string) error {
+	if s.UpdateErr != nil {
+		return s.UpdateErr
+	}
 	s.Updates = append(s.Updates, content)
 	return nil
 }

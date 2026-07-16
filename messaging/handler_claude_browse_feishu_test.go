@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,39 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
+
+func TestFeishuClaudeSessionChoicesPaginateWithStableIDs(t *testing.T) {
+	h, ag := newClaudeFeishuCardHandler(t)
+	workspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	for index := 0; index < 9; index++ {
+		ag.catalogSessions = append(ag.catalogSessions, agent.ClaudeSession{
+			ID: fmt.Sprintf("session-%02d", index), Cwd: workspace,
+			Title: fmt.Sprintf("会话 %02d", index), UpdatedAt: fmt.Sprintf("2026-07-13T%02d:00:00Z", 20-index),
+		})
+	}
+
+	first := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc cd 0"})
+	if len(first.Choices) != 1 || len(first.Choices[0].Choices) != 9 {
+		t.Fatalf("first page=%#v，期望 7 个会话、下一页和返回", first.Choices)
+	}
+	if got := first.Choices[0].Choices[7].ID; got != "/cc page sessions 2" {
+		t.Fatalf("next id=%q，期望会话下一页", got)
+	}
+	back := first.Choices[0].Choices[8]
+	if back.Label != "← 返回上一级" || back.Metadata[platform.ChoiceMetadataButtonType] != platform.ChoiceButtonTypeDefault {
+		t.Fatalf("back=%#v，期望独立次级返回按钮", back)
+	}
+
+	second := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc page sessions 2"})
+	if len(second.Choices) != 1 || !strings.Contains(second.Choices[0].Prompt, "第 2/2 页") {
+		t.Fatalf("second page=%#v，期望第二页卡片", second.Choices)
+	}
+	choices := second.Choices[0].Choices
+	if len(choices) != 4 || choices[0].ID != "/cc switch session-07" || choices[1].ID != "/cc switch session-08" || choices[2].ID != "/cc page sessions 1" || choices[3].ID != "/cc cd .." {
+		t.Fatalf("second choices=%#v，会话分页必须保留稳定 sessionId", choices)
+	}
+}
 
 func TestFeishuClaudeCcLsSendsAllowedACPWorkspaceChoices(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)

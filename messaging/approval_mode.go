@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 
@@ -33,7 +34,7 @@ func (h *Handler) sendFeishuModeCard(ctx context.Context, req platformCommandReq
 		{ID: "/mode yolo", Label: markCurrentChoice("yolo · 自动同意审批", yolo)},
 	}
 	choices = platformChoicesWithMetadata(choices, feishuChoiceSessionMetadata(msg, modeKey))
-	prompt := "当前会话审批模式：" + current + "\n\n请选择 Codex 审批处理方式。yolo 只跳过本会话按钮确认，不改变全局 sandbox。"
+	prompt := "当前会话审批模式：" + current + "\n\n请选择 Agent 授权处理方式。yolo 只跳过本会话授权确认，不改变全局 sandbox；Agent 的普通提问仍会显示选择卡片。"
 	if err := req.Reply.AskChoices(ctx, prompt, choices); err != nil {
 		log.Printf("[handler] failed to send feishu mode choices: %v", err)
 		return false
@@ -51,18 +52,23 @@ func (h *Handler) handleModeCommandForActor(modeKey string, actorUserID string, 
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {
 		if h.isYoloMode(modeKey) {
-			return "当前会话审批模式：yolo（当前会话自动同意 Codex 审批请求）。\n发送 /mode default 恢复按钮确认。"
+			return "当前会话审批模式：yolo（当前会话自动同意 Agent 授权请求；普通提问仍需选择）。\n发送 /mode default 恢复授权确认。"
 		}
-		return "当前会话审批模式：default（Codex 审批请求会弹按钮确认）。\n发送 /mode yolo 改为当前会话自动同意。"
+		return "当前会话审批模式：default（Agent 授权请求会弹按钮确认）。\n发送 /mode yolo 改为当前会话自动同意授权。"
 	}
 	switch strings.ToLower(strings.TrimSpace(fields[1])) {
 	case "yolo":
 		h.setYoloMode(modeKey, true)
+		resolved := h.resolvePendingApprovalsForYolo(modeKey)
 		h.auditRecord(auditEntry{User: actorUserID, Action: "mode_yolo_enabled"})
-		return "已切换为 yolo 模式：当前会话会自动同意 Codex 审批请求。\n⚠️ 该模式不改变全局 sandbox，只跳过本会话按钮确认。发送 /mode default 可恢复确认。"
+		reply := "已切换为 yolo 模式：当前会话会自动同意 Agent 授权请求。\n⚠️ 该模式不改变全局 sandbox；Agent 的普通提问仍需选择。发送 /mode default 可恢复授权确认。"
+		if resolved > 0 {
+			reply += fmt.Sprintf("\n已同时放行 %d 个切换前待确认的授权请求。", resolved)
+		}
+		return reply
 	case "default":
 		h.setYoloMode(modeKey, false)
-		return "已切换为 default 模式：Codex 审批请求会弹按钮确认。"
+		return "已切换为 default 模式：Agent 授权请求会弹按钮确认。"
 	default:
 		return "用法：/mode 查看当前会话审批模式；/mode yolo 当前会话自动同意；/mode default 按钮确认。"
 	}

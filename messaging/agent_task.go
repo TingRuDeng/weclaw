@@ -53,7 +53,8 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	opts.ctx = context.WithoutCancel(opts.ctx)
 	agentCtx, cancel := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
-		actorUserID: opts.userID, routeUserID: opts.routeUserID, reply: opts.reply,
+		actorUserID: opts.userID, routeUserID: opts.routeUserID,
+		agentName: opts.agentName, reply: opts.reply,
 	})
 	key := h.agentExecutionKeyForRoute(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
 	pending := pendingAgentTask{message: opts.message, run: func() { h.startAgentTask(opts) }}

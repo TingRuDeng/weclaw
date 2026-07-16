@@ -17,6 +17,7 @@ func TestHandleCardActionEventPreservesQuestionCorrelation(t *testing.T) {
 		Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_question"},
 		Action: &callback.CallBackAction{Value: map[string]interface{}{
 			"action": cardActionChoice, "choice": "快速", "approval_key": "question-1",
+			"kind":         platform.ChoiceInteractionUserInput,
 			"task_card_id": "card-task-1", "feishu_session_key": "feishu:tenant:dm:oc_chat:ou_user",
 		}},
 	}}
@@ -30,7 +31,8 @@ func TestHandleCardActionEventPreservesQuestionCorrelation(t *testing.T) {
 	}
 	select {
 	case msg := <-dispatched:
-		if msg.RawCommand.Value["approval_key"] != "question-1" || msg.RawCommand.Value["task_card_id"] != "card-task-1" {
+		if msg.RawCommand.Value["approval_key"] != "question-1" || msg.RawCommand.Value["task_card_id"] != "card-task-1" ||
+			msg.RawCommand.Value[platform.ChoiceMetadataInteractionKind] != platform.ChoiceInteractionUserInput {
 			t.Fatalf("RawCommand=%#v，期望保留问题关联字段", msg.RawCommand)
 		}
 	case <-time.After(time.Second):

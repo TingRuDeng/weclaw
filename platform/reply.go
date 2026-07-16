@@ -41,6 +41,20 @@ type StreamOptions struct {
 	InitialContent string
 }
 
+const (
+	// ChoiceMetadataInteractionKind 标识选择卡承载的交互语义，供平台区分授权与普通提问。
+	ChoiceMetadataInteractionKind = "interaction_kind"
+	ChoiceInteractionApproval     = "approval"
+	ChoiceInteractionUserInput    = "user_input"
+	// ChoiceMetadataAgentName 保留产生当前交互的 Agent，避免多 Agent 窗口混淆来源。
+	ChoiceMetadataAgentName = "agent_name"
+	// ChoiceMetadataButtonType 与 ChoiceMetadataSection 允许平台区分数据项和导航项。
+	ChoiceMetadataButtonType = "button_type"
+	ChoiceButtonTypeDefault  = "default"
+	ChoiceMetadataSection    = "choice_section"
+	ChoiceSectionNavigation  = "navigation"
+)
+
 // Choice 表示一项可由用户选择的编号选项。
 type Choice struct {
 	ID       string

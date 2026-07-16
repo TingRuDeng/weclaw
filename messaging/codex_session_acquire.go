@@ -222,6 +222,15 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	if err != nil {
 		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
 	}
+	if prepared.state.Controllable && (prepared.active || result.resolution.Binding.State.Active) {
+		binding, reconcileErr := liveAgent.ReconcileCodexObservedTurn(
+			req.ctx, result.resolution.Request, prepared.state.CodexThreadState,
+		)
+		if reconcileErr != nil {
+			return h.failCodexAcquireRuntime(result, liveAgent, reconcileErr), nil
+		}
+		result.resolution.Binding = binding
+	}
 	if result.resolution.Binding.State.Active &&
 		!prepared.confirmedInactive && (!prepared.active || !prepared.state.Controllable) {
 		err = fmt.Errorf("活动 Desktop 任务尚不能由当前窗口控制")

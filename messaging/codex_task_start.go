@@ -34,6 +34,10 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 		h.rejectCodexOwnerTaskStart(opts, err)
 		return true
 	}
+	if resolution.Binding.Runtime == agent.CodexRuntimeConflict {
+		h.rejectCodexRuntimeTaskStart(opts, agent.ErrCodexRuntimeConflict)
+		return true
+	}
 	if codexResolutionActive(resolution) {
 		return h.queueMessageBehindLiveTask(opts)
 	}

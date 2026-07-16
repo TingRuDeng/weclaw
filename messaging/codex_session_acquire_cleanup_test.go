@@ -87,6 +87,36 @@ func TestAcquireCodexSessionTargetFailureMarksConflictAndKeepsOwner(t *testing.T
 	assertFakeCodexBindingOwner(t, fixture.agent, "thread-a", agent.CodexControlDesktop)
 }
 
+func TestFailCodexAcquireRuntimeDoesNotOverwriteNewerOwner(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	request := fixture.request("thread-b")
+	staleIntent := agent.CodexControlIntent{
+		Owner: agent.CodexControlRemote, RouteKey: fixture.bindingKey,
+		ConversationID: request.route.conversationID, Revision: 2,
+	}
+	newerIntent := agent.CodexControlIntent{
+		Owner: agent.CodexControlRemote, RouteKey: "new-route",
+		ConversationID: "new-conversation", Revision: 3,
+	}
+	fixture.agent.setThreadBinding("thread-b", agent.CodexThreadBinding{
+		Runtime: agent.CodexRuntimeDesktop, Control: newerIntent,
+		State: agent.CodexThreadState{ThreadID: "thread-b"},
+	})
+	result := codexSessionAcquireResult{resolution: codexRuntimeResolution{
+		Request: agent.CodexRuntimeRequest{Ref: request.route.ref("thread-b"), Intent: staleIntent},
+	}}
+
+	result = fixture.h.failCodexAcquireRuntime(result, fixture.agent, errors.New("观察状态已变化"))
+
+	if !errors.Is(result.runtimeErr, agent.ErrCodexControlChanged) {
+		t.Fatalf("runtimeErr=%v，旧请求应被识别为控制权已变化", result.runtimeErr)
+	}
+	binding := fixture.agent.threadBinding("thread-b")
+	if binding.Control != newerIntent || binding.Runtime != agent.CodexRuntimeDesktop {
+		t.Fatalf("binding=%#v，旧失败路径覆盖了新 owner", binding)
+	}
+}
+
 func TestAcquireCodexSessionStoreFailureDoesNotTouchRuntime(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.h.codexSessions.SetFilePath(t.TempDir() + "/codex-sessions.json")

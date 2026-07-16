@@ -63,18 +63,19 @@ func approvalOptionKind(option agent.ApprovalOption) string {
 	}
 }
 
-func approvalPrompt(req agent.ApprovalRequest) string {
+func approvalPrompt(req agent.ApprovalRequest, agentName string) string {
+	displayName := agentDisplayName(agentName)
 	toolCall := strings.TrimSpace(string(req.ToolCall))
 	if toolCall == "" {
-		toolCall = "Codex 请求执行一项需要确认的操作。"
+		toolCall = displayName + " 请求执行一项需要确认的操作。"
 	} else if len([]rune(toolCall)) > 1200 {
 		runes := []rune(toolCall)
 		toolCall = string(runes[:1200]) + "..."
 	}
-	return "Codex 请求执行敏感操作，请确认：\n\n" + toolCall
+	return displayName + " 请求执行敏感操作，请确认：\n\n" + toolCall
 }
 
-func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string, routeUserID string) []platform.Choice {
+func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string, routeUserID string, agentName string) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
 	for _, option := range options {
 		id := strings.TrimSpace(option.ID)
@@ -82,7 +83,10 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCar
 			continue
 		}
 		choice := platform.Choice{ID: id, Label: approvalChoiceLabel(option)}
-		metadata := approvalChoiceMetadata(approvalKey, taskCardID, ownerUserID, routeUserID)
+		metadata := approvalChoiceMetadata(
+			approvalKey, taskCardID, ownerUserID, routeUserID,
+			agentName, platform.ChoiceInteractionApproval,
+		)
 		if len(metadata) > 0 {
 			choice.Metadata = metadata
 		}
@@ -91,8 +95,8 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCar
 	return choices
 }
 
-func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string, routeUserID string) map[string]string {
-	metadata := make(map[string]string, 4)
+func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string, routeUserID string, agentName string, interactionKind string) map[string]string {
+	metadata := make(map[string]string, 6)
 	if approvalKey = strings.TrimSpace(approvalKey); approvalKey != "" {
 		metadata["approval_key"] = approvalKey
 	}
@@ -104,6 +108,12 @@ func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID s
 	}
 	if sessionKey := feishuSessionKeyFromRoute(routeUserID); sessionKey != "" {
 		metadata[feishuSessionMetadataKey] = sessionKey
+	}
+	if agentName = strings.TrimSpace(agentName); agentName != "" {
+		metadata[platform.ChoiceMetadataAgentName] = agentDisplayName(agentName)
+	}
+	if interactionKind = strings.TrimSpace(interactionKind); interactionKind != "" {
+		metadata[platform.ChoiceMetadataInteractionKind] = interactionKind
 	}
 	return metadata
 }
@@ -122,13 +132,15 @@ func approvalPendingKey(requestID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func pendingApprovalMapKey(userID string, approvalKey string) string {
+func pendingApprovalMapKey(userID string, routeUserID string, interactionKind string, approvalKey string) string {
 	userID = strings.TrimSpace(userID)
+	routeUserID = strings.TrimSpace(routeUserID)
+	interactionKind = strings.TrimSpace(interactionKind)
 	approvalKey = strings.TrimSpace(approvalKey)
 	if userID == "" || approvalKey == "" {
 		return ""
 	}
-	return userID + "\x00" + approvalKey
+	return strings.Join([]string{userID, routeUserID, interactionKind, approvalKey}, "\x00")
 }
 
 // approvalChoiceLabel 根据上游选项 ID 保留授权范围，避免不同允许语义显示为同一按钮。
@@ -148,7 +160,10 @@ func approvalAllowChoiceLabel(option agent.ApprovalOption) string {
 	id := strings.ToLower(strings.TrimSpace(option.ID))
 	name := strings.TrimSpace(option.Name)
 	if id == "allow_always" || strings.HasPrefix(strings.ToLower(name), "always allow") {
-		scope := strings.TrimSpace(name[len("Always Allow"):])
+		scope := ""
+		if strings.HasPrefix(strings.ToLower(name), "always allow") {
+			scope = strings.TrimSpace(name[len("Always Allow"):])
+		}
 		if scope == "" {
 			return "始终允许"
 		}

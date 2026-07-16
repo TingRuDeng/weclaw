@@ -90,6 +90,7 @@ type CodexLiveRuntimeAgent interface {
 	InspectCodexRuntime(context.Context, CodexRuntimeRequest) (CodexThreadBinding, error)
 	CurrentCodexRuntime(CodexRuntimeRequest) (CodexThreadBinding, error)
 	HandoffCodexRuntime(context.Context, CodexRuntimeRequest) (CodexThreadBinding, error)
+	ReconcileCodexObservedTurn(context.Context, CodexRuntimeRequest, CodexThreadState) (CodexThreadBinding, error)
 	MarkCodexRuntimeConflict(context.Context, CodexRuntimeRequest) error
 	RunCodexTurn(context.Context, CodexTurnRequest) (string, error)
 }

@@ -50,7 +50,8 @@ func (h *Handler) runBroadcastAgent(req broadcastAgentsRequest, reply platform.R
 	agentCtx, cancel := contextWithTaskTimeout(req.ctx, progressCfg)
 	defer cancel()
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
-		actorUserID: req.userID, routeUserID: req.routeUserID, reply: reply,
+		actorUserID: req.userID, routeUserID: req.routeUserID,
+		agentName: name, reply: reply,
 	})
 	runtime, ok := h.beginBroadcastRuntime(req, name, ag, agentCtx, reply, results)
 	if !ok {
@@ -211,7 +212,7 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 			return
 		}
 	}
-	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.ctx, reply, "["+name+"] ", req.message, progressCfg)
+	onProgress, finishProgress := h.startProgressSessionForAgentWithFinal(runtime.ctx, reply, "["+name+"] ", name, req.message, progressCfg)
 	send := func(text string, failed bool) {
 		h.finishAndSendProgressReply(progressReplyDelivery{
 			delivery: replyDeliveryRequest{

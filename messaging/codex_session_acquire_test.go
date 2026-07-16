@@ -118,4 +118,34 @@ func TestAcquireCodexSessionActiveDesktopStartsObserver(t *testing.T) {
 		_, active := fixture.h.activeTask(result.route.conversationID)
 		return !active
 	})
+	binding := fixture.agent.threadBinding("thread-b")
+	if binding.State.Active || binding.State.ActiveTurnID != "" || binding.State.LastTurnID != "turn-b" {
+		t.Fatalf("terminal binding=%#v，观察任务完成后应同步运行态", binding)
+	}
+}
+
+func TestAcquireCodexSessionAdoptsActiveTurnFoundAfterHandoff(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	fixture.agent.setThreadBinding("thread-b", desktopAcquireBinding("thread-b"))
+	fixture.agent.threadState = agent.CodexThreadState{
+		ThreadID: "thread-b", Active: true, ActiveTurnID: "turn-b",
+	}
+	fixture.agent.watchDone = make(chan struct{})
+
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.externalActive {
+		t.Fatalf("result=%#v，接管后二次发现的活动 turn 应启动观察", result)
+	}
+	binding := fixture.agent.threadBinding("thread-b")
+	if !binding.State.Active || binding.State.ActiveTurnID != "turn-b" {
+		t.Fatalf("binding=%#v，观察到的活动 turn 未同步到运行态", binding)
+	}
+	close(fixture.agent.watchDone)
+	waitUntil(t, func() bool {
+		_, active := fixture.h.activeTask(result.route.conversationID)
+		return !active
+	})
 }

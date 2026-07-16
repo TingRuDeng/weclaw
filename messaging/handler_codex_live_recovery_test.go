@@ -79,12 +79,20 @@ func TestCodexStoppedExternalWatcherReleasesTaskAndRunsPending(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("停止后未续跑 pending")
 	}
+	binding := runtime.opts.agent.(*fakeCodexLiveAgent).threadBinding("thread-1")
+	if !binding.State.Active || binding.State.ActiveTurnID != "turn-1" {
+		t.Fatalf("binding=%#v，断线取消不能伪造已确认终态", binding)
+	}
 }
 
 func TestCodexRolloutWatchErrorIsTerminal(t *testing.T) {
 	result := classifyCodexWatchResult("", errors.New("rollout 文件读取失败"), "rollout")
-	if !result.Terminal || !result.Failed {
+	if !result.Terminal || result.ConfirmedTerminal || !result.Failed {
 		t.Fatalf("result=%#v", result)
+	}
+	aborted := classifyCodexWatchResult("", errCodexRolloutAborted, "rollout")
+	if !aborted.Terminal || !aborted.ConfirmedTerminal || !aborted.Failed {
+		t.Fatalf("aborted=%#v", aborted)
 	}
 }
 

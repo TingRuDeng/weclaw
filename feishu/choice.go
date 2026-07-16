@@ -18,6 +18,7 @@ const (
 	approvalStatusExpired  = "expired"
 	approvalStatusArchived = "archived"
 	approvalPromptHead     = "Codex 请求执行敏感操作，请确认："
+	approvalPromptMarker   = "请求执行敏感操作，请确认："
 	approvalSummaryMaxRune = 160
 	modelSettingAgentKey   = "model_setting_agent"
 )
@@ -45,6 +46,7 @@ type parsedCardAction struct {
 type choiceButtonOptions struct {
 	ConversationKey string
 	Kind            string
+	AgentName       string
 	Summary         string
 }
 
@@ -54,11 +56,7 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 	if prompt == "" {
 		prompt = "请选择："
 	}
-	options := choiceButtonOptions{
-		ConversationKey: conversationKey,
-		Kind:            choiceCardKind(prompt),
-		Summary:         approvalSummaryFromPrompt(prompt),
-	}
+	options := choiceOptions(prompt, choices, conversationKey)
 	buttons := buildChoiceButtons(choices, options)
 	if len(buttons) == 0 {
 		return "", fmt.Errorf("choice card requires at least one valid choice")
@@ -71,6 +69,15 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 		},
 	}
 	elements = append(elements, buttons...)
+	headerTitle := "WeClaw"
+	if options.AgentName != "" {
+		switch options.Kind {
+		case cardKindApproval:
+			headerTitle = options.AgentName + " 授权"
+		case platform.ChoiceInteractionUserInput:
+			headerTitle = options.AgentName + " 提问"
+		}
+	}
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
@@ -80,7 +87,7 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 		"header": map[string]any{
 			"title": map[string]any{
 				"tag":     "plain_text",
-				"content": "WeClaw",
+				"content": headerTitle,
 			},
 			"template": "blue",
 		},
@@ -96,14 +103,38 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 	return string(data), nil
 }
 
+func choiceOptions(prompt string, choices []platform.Choice, conversationKey string) choiceButtonOptions {
+	options := choiceButtonOptions{ConversationKey: conversationKey}
+	for _, choice := range choices {
+		if options.Kind == "" {
+			options.Kind = strings.TrimSpace(choice.Metadata[platform.ChoiceMetadataInteractionKind])
+		}
+		if options.AgentName == "" {
+			options.AgentName = strings.TrimSpace(choice.Metadata[platform.ChoiceMetadataAgentName])
+		}
+	}
+	if options.Kind == "" {
+		options.Kind = choiceCardKind(prompt)
+	}
+	if options.Kind == cardKindApproval {
+		options.Summary = approvalSummaryFromPrompt(prompt)
+	}
+	return options
+}
+
 // buildChoiceButtons 过滤无效选项，并生成 CardKit 2.0 可点击按钮元素。
 func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) []map[string]any {
-	buttons := make([]map[string]any, 0, len(choices))
+	buttons := make([]map[string]any, 0, len(choices)+1)
+	navigationStarted := false
 	for _, choice := range choices {
 		id := strings.TrimSpace(choice.ID)
 		label := strings.TrimSpace(choice.Label)
 		if id == "" || label == "" {
 			continue
+		}
+		if choice.Metadata[platform.ChoiceMetadataSection] == platform.ChoiceSectionNavigation && !navigationStarted {
+			buttons = append(buttons, map[string]any{"tag": "hr"})
+			navigationStarted = true
 		}
 		value := map[string]string{
 			"action": cardActionChoice,
@@ -132,13 +163,17 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		if agentName := strings.TrimSpace(choice.Metadata[modelSettingAgentKey]); agentName != "" {
 			value[modelSettingAgentKey] = agentName
 		}
+		buttonType := "primary"
+		if choice.Metadata[platform.ChoiceMetadataButtonType] == platform.ChoiceButtonTypeDefault {
+			buttonType = platform.ChoiceButtonTypeDefault
+		}
 		buttons = append(buttons, map[string]any{
 			"tag": "button",
 			"text": map[string]any{
 				"tag":     "plain_text",
 				"content": label,
 			},
-			"type":  "primary",
+			"type":  buttonType,
 			"value": value,
 		})
 	}
@@ -163,7 +198,12 @@ func approvalSummaryFromPrompt(prompt string) string {
 	if choiceCardKind(prompt) != cardKindApproval {
 		return ""
 	}
-	raw := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(prompt), approvalPromptHead))
+	raw := strings.TrimSpace(prompt)
+	if marker := strings.Index(raw, approvalPromptMarker); marker >= 0 {
+		raw = raw[marker+len(approvalPromptMarker):]
+	} else {
+		raw = strings.TrimPrefix(raw, approvalPromptHead)
+	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
@@ -199,9 +239,9 @@ func compactOneLine(text string, maxRunes int) string {
 	return string(runes[:maxRunes-3]) + "..."
 }
 
-// choiceCardKind 只标记 Codex 审批卡片，避免普通导航/选择卡片点击后被改成审批状态。
+// choiceCardKind 只标记 Agent 授权卡片，避免普通导航/选择卡片点击后被改成授权状态。
 func choiceCardKind(prompt string) string {
-	if strings.HasPrefix(strings.TrimSpace(prompt), approvalPromptHead) {
+	if strings.Contains(strings.TrimSpace(prompt), approvalPromptMarker) {
 		return cardKindApproval
 	}
 	return ""

@@ -233,6 +233,70 @@ func TestCodexRuntimeRemoteIntentKeepsHandoffDesktopTurn(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeReconcilesObservedHandoffTurnBeforeTerminal(t *testing.T) {
+	registry := newCodexRuntimeOwnerRegistry(nil)
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	active := CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-existing",
+	}
+	if _, err := registry.reconcileObservedTurn(request, active); err != nil {
+		t.Fatalf("reconcile active: %v", err)
+	}
+
+	binding := registry.observeDesktopSnapshot("thread-1", 5, CodexThreadState{
+		ThreadID: "thread-1", LastTurnID: "turn-existing", LastTurnStatus: "completed",
+	})
+
+	if binding.Runtime != CodexRuntimeDesktop || binding.State.Active || binding.State.LastTurnID != "turn-existing" {
+		t.Fatalf("binding=%#v，已接管 turn 的终态不应触发冲突", binding)
+	}
+}
+
+func TestCodexRuntimeReconcileDoesNotClearExplicitConflict(t *testing.T) {
+	registry := newCodexRuntimeOwnerRegistry(nil)
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	state := CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-existing"}
+	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, state); err != nil {
+		t.Fatal(err)
+	}
+	registry.observeDesktopSnapshot("thread-1", 5, CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-other",
+	})
+
+	_, err := registry.reconcileObservedTurn(request, CodexThreadState{
+		ThreadID: "thread-1", LastTurnID: "turn-existing", LastTurnStatus: "completed",
+	})
+
+	if !errors.Is(err, ErrCodexRuntimeConflict) {
+		t.Fatalf("error=%v，冲突态不能由终态同步自动解除", err)
+	}
+	binding, _ := registry.threadBinding("thread-1")
+	if binding.Runtime != CodexRuntimeConflict {
+		t.Fatalf("binding=%#v，冲突态被错误清除", binding)
+	}
+}
+
+func TestCodexRuntimeReconcileTerminalAfterDesktopDisconnect(t *testing.T) {
+	registry := newCodexRuntimeOwnerRegistry(nil)
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	state := CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-existing"}
+	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, state); err != nil {
+		t.Fatal(err)
+	}
+	registry.markDesktopDisconnected()
+
+	binding, err := registry.reconcileObservedTurn(request, CodexThreadState{
+		ThreadID: "thread-1", LastTurnID: "turn-existing", LastTurnStatus: "completed",
+	})
+
+	if err != nil || binding.Runtime != CodexRuntimeUnknown || binding.State.Active || binding.State.LastTurnID != "turn-existing" {
+		t.Fatalf("binding=%#v error=%v，断线后的同 turn 终态应只收敛 state", binding, err)
+	}
+}
+
 func TestCodexRuntimeRemoteIntentRejectsCompletedDesktopTurn(t *testing.T) {
 	registry := newCodexRuntimeOwnerRegistry(nil)
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)

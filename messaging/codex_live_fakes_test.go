@@ -108,6 +108,33 @@ func (f *fakeCodexLiveAgent) CurrentCodexRuntime(req agent.CodexRuntimeRequest) 
 	return binding, nil
 }
 
+func (f *fakeCodexLiveAgent) ReconcileCodexObservedTurn(_ context.Context, req agent.CodexRuntimeRequest, state agent.CodexThreadState) (agent.CodexThreadBinding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	binding, ok := f.bindings[req.Ref.ThreadID]
+	if !ok {
+		binding = f.binding
+	}
+	if binding.Runtime == agent.CodexRuntimeConflict {
+		return binding, agent.ErrCodexRuntimeConflict
+	}
+	intentEstablished := binding.Control.Owner != "" || binding.Control.RouteKey != "" ||
+		binding.Control.ConversationID != "" || binding.Control.Revision != 0
+	if intentEstablished && binding.Control != req.Intent {
+		return binding, agent.ErrCodexControlChanged
+	}
+	state.ThreadID = req.Ref.ThreadID
+	binding.Ref = req.Ref
+	binding.Control = req.Intent
+	binding.State = state
+	if ok {
+		f.bindings[req.Ref.ThreadID] = binding
+	} else {
+		f.binding = binding
+	}
+	return binding, nil
+}
+
 func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	f.mu.Lock()
 	f.handoffCalls++
@@ -183,6 +210,14 @@ func (f *fakeCodexLiveAgent) MarkCodexRuntimeConflict(ctx context.Context, req a
 	binding, ok := f.bindings[req.Ref.ThreadID]
 	if !ok {
 		binding = f.binding
+	}
+	intentEstablished := binding.Control.Owner != "" || binding.Control.RouteKey != "" ||
+		binding.Control.ConversationID != "" || binding.Control.Revision != 0
+	if binding.Control.Revision > req.Intent.Revision ||
+		(binding.Control.Revision == req.Intent.Revision && intentEstablished &&
+			(binding.Control.Owner != req.Intent.Owner || binding.Control.RouteKey != req.Intent.RouteKey ||
+				binding.Control.ConversationID != req.Intent.ConversationID)) {
+		return agent.ErrCodexControlChanged
 	}
 	binding.Ref = req.Ref
 	binding.Control = req.Intent

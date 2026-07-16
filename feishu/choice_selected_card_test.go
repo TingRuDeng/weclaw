@@ -31,7 +31,7 @@ func TestReasoningChoiceCollapsesCardAndReplaysCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCardActionEvent error: %v", err)
 	}
-	assertPendingChoiceCard(t, resp.Card, "high", "正在处理")
+	assertInlineCardContent(t, resp.Card, "已完成：high")
 	select {
 	case msg := <-dispatched:
 		if msg.RawCommand == nil || msg.RawCommand.Value["choice"] != "/reasoning high" {

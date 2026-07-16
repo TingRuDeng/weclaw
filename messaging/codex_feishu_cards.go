@@ -16,6 +16,7 @@ type feishuCodexSessionCommandRequest struct {
 	reply       platform.Replier
 	trimmed     string
 	result      navigationCommandResult
+	page        feishuNavigationPageRequest
 }
 
 type feishuCodexChoiceRequest struct {
@@ -27,6 +28,7 @@ type feishuCodexChoiceRequest struct {
 	fields        []string
 	admin         bool
 	metadata      map[string]string
+	page          int
 }
 
 type feishuCodexChoicePrompt struct {
@@ -48,23 +50,28 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 		sendPlatformText(ctx, reply, msg.UserID, notice)
 		return true
 	}
-	result := h.handleCodexSessionCommandForRouteResult(ctx, codexSessionCommandRequest{
-		ActorUserID: msg.UserID,
-		RouteUserID: routeUserID,
-		Trimmed:     trimmed,
-		Platform:    msg.Platform,
-		AccountID:   msg.AccountID,
-		Reply:       reply,
-		Admin:       h.isAdminMessage(msg),
-	})
-	req.result = result
+	fields := strings.Fields(trimmed)
+	if page, ok := parseFeishuNavigationPage(fields, "/cx"); ok {
+		req.page = page
+		req.result = cardNavigationResult("当前导航状态已变化，请发送 /cx ls 重新打开。")
+	} else {
+		req.result = h.handleCodexSessionCommandForRouteResult(ctx, codexSessionCommandRequest{
+			ActorUserID: msg.UserID,
+			RouteUserID: routeUserID,
+			Trimmed:     trimmed,
+			Platform:    msg.Platform,
+			AccountID:   msg.AccountID,
+			Reply:       reply,
+			Admin:       h.isAdminMessage(msg),
+		})
+	}
 	if h.sendFeishuCodexOwnerChoices(req) {
 		return true
 	}
 	if h.sendFeishuCodexNavigationChoices(req) {
 		return true
 	}
-	sendPlatformText(ctx, reply, msg.UserID, result.Reply)
+	sendPlatformText(ctx, reply, msg.UserID, req.result.Reply)
 	return true
 }
 
@@ -126,7 +133,18 @@ func (h *Handler) sendFeishuCodexNavigationChoices(req feishuCodexSessionCommand
 	choiceReq := feishuCodexChoiceRequest{
 		ctx: req.ctx, userID: req.message.UserID, reply: req.reply,
 		bindingKey: bindingKey, fields: fields,
-		admin: h.isAdminMessage(req.message), metadata: metadata,
+		admin: h.isAdminMessage(req.message), metadata: metadata, page: req.page.Page,
+	}
+	if req.page.Kind == "workspaces" {
+		return h.sendFeishuCodexWorkspaceChoices(choiceReq)
+	}
+	if req.page.Kind == "sessions" {
+		workspaceRoot, browsing := h.codexBrowseWorkspace(bindingKey)
+		if !browsing {
+			return false
+		}
+		choiceReq.workspaceRoot = workspaceRoot
+		return h.sendFeishuCodexSessionChoices(choiceReq)
 	}
 	if workspaceRoot, browsing := h.codexBrowseWorkspace(bindingKey); browsing {
 		choiceReq.workspaceRoot = workspaceRoot
@@ -145,6 +163,9 @@ func isFeishuCodexNavigationCommand(fields []string) bool {
 	switch fields[1] {
 	case "ls", "cd":
 		return true
+	case "page":
+		_, ok := parseFeishuNavigationPage(fields, "/cx")
+		return ok
 	default:
 		return false
 	}
@@ -165,10 +186,12 @@ func (h *Handler) sendFeishuCodexWorkspaceChoices(req feishuCodexChoiceRequest) 
 	if len(choices) == 0 {
 		return false
 	}
+	choices, page := paginateFeishuChoices(choices, req.page)
+	choices = appendFeishuPageNavigation(choices, "/cx", "workspaces", page)
 	choices = platformChoicesWithMetadata(choices, req.metadata)
 	return h.askFeishuCodexChoices(feishuCodexChoicePrompt{
 		ctx: req.ctx, userID: req.userID, reply: req.reply,
-		prompt: "Codex 工作空间\n请选择要进入的工作空间。", choices: choices,
+		prompt: feishuPaginatedPrompt("Codex 工作空间\n请选择要进入的工作空间。", page), choices: choices,
 	})
 }
 
@@ -188,12 +211,13 @@ func (h *Handler) sendFeishuCodexSessionChoices(req feishuCodexChoiceRequest) bo
 	if sessionChoiceCount == 0 || !shouldShowFeishuSessionChoices(req.fields, sessionChoiceCount) {
 		return false
 	}
-	choices = append(choices, platform.Choice{
-		ID:    "/cx cd ..",
-		Label: "返回工作空间列表",
-	})
+	choices, page := paginateFeishuChoices(choices, req.page)
+	choices = appendFeishuPageNavigation(choices, "/cx", "sessions", page)
+	choices = append(choices, feishuNavigationChoice("/cx cd ..", "← 返回上一级"))
 	choices = platformChoicesWithMetadata(choices, req.metadata)
-	prompt := fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(req.workspaceRoot))
+	prompt := feishuPaginatedPrompt(
+		fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(req.workspaceRoot)), page,
+	)
 	return h.askFeishuCodexChoices(feishuCodexChoicePrompt{
 		ctx: req.ctx, userID: req.userID, reply: req.reply, prompt: prompt, choices: choices,
 	})
@@ -206,7 +230,7 @@ func shouldShowFeishuSessionChoices(fields []string, choiceCount int) bool {
 	if len(fields) < 2 {
 		return false
 	}
-	return fields[1] == "ls" || fields[1] == "cd"
+	return fields[1] == "ls" || fields[1] == "cd" || fields[1] == "page"
 }
 
 func (h *Handler) askFeishuCodexChoices(req feishuCodexChoicePrompt) bool {

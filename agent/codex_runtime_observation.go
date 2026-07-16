@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -81,6 +82,11 @@ func (r *codexRuntimeOwnerRegistry) observeDesktopLeaseLocked(observation codexD
 
 func (r *codexRuntimeOwnerRegistry) markConflictLocked(threadID string, reason string) error {
 	binding := r.threads[threadID]
+	if binding.Runtime != CodexRuntimeConflict {
+		log.Printf("[codex-runtime] 检测到写入冲突 thread=%q owner=%q revision=%d active=%t activeTurn=%q lastTurn=%q reason=%q",
+			threadID, binding.Control.Owner, binding.Control.Revision, binding.State.Active,
+			binding.State.ActiveTurnID, binding.State.LastTurnID, strings.TrimSpace(reason))
+	}
 	binding.RuntimeGeneration = nextCodexRuntimeGeneration(binding, CodexRuntimeConflict)
 	binding.Runtime = CodexRuntimeConflict
 	binding.ConflictReason = strings.TrimSpace(reason)
@@ -92,12 +98,18 @@ func (r *codexRuntimeOwnerRegistry) markConflictLocked(threadID string, reason s
 	return fmt.Errorf("%w: %s", ErrCodexRuntimeConflict, binding.ConflictReason)
 }
 
-// markRuntimeConflict 以持久化控制意图覆盖缓存，并把无法确认的 runtime 持续登记为 conflict。
-func (r *codexRuntimeOwnerRegistry) markRuntimeConflict(req CodexRuntimeRequest, reason string) CodexThreadBinding {
+// markRuntimeConflict 只允许同 revision 或更高 revision 的持久化控制意图登记 conflict。
+func (r *codexRuntimeOwnerRegistry) markRuntimeConflict(req CodexRuntimeRequest, reason string) (CodexThreadBinding, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	threadID := strings.TrimSpace(req.Ref.ThreadID)
 	binding := r.threads[threadID]
+	if codexControlIntentEstablished(binding.Control) {
+		if binding.Control.Revision > req.Intent.Revision ||
+			(binding.Control.Revision == req.Intent.Revision && !sameCodexControlIntent(binding.Control, req.Intent)) {
+			return binding, ErrCodexControlChanged
+		}
+	}
 	binding.Ref = req.Ref
 	binding.Control = req.Intent
 	if binding.State.ThreadID == "" {
@@ -108,7 +120,11 @@ func (r *codexRuntimeOwnerRegistry) markRuntimeConflict(req CodexRuntimeRequest,
 		r.conversations[conversationID] = threadID
 	}
 	_ = r.markConflictLocked(threadID, reason)
-	return r.threads[threadID]
+	return r.threads[threadID], nil
+}
+
+func codexControlIntentEstablished(intent CodexControlIntent) bool {
+	return intent.Owner != "" || intent.RouteKey != "" || intent.ConversationID != "" || intent.Revision != 0
 }
 
 func nextCodexRuntimeGeneration(binding CodexThreadBinding, runtime CodexRuntimeHolder) uint64 {

@@ -47,6 +47,7 @@ type progressSession struct {
 	reply               platform.Replier
 	stream              platform.Stream
 	prefix              string
+	agentName           string
 	taskText            string
 	cfg                 config.ProgressConfig
 	deltaCh             chan string
@@ -66,6 +67,11 @@ func (h *Handler) startProgressSession(ctx context.Context, reply platform.Repli
 
 // startProgressSessionWithFinal 启动进度会话，并允许原生流式平台把最终结果收敛进同一张卡片。
 func (h *Handler) startProgressSessionWithFinal(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
+	return h.startProgressSessionForAgentWithFinal(ctx, reply, prefix, "", taskText, cfg)
+}
+
+// startProgressSessionForAgentWithFinal 为任务卡标题补充 Agent 来源，正文和最终结果保持原样。
+func (h *Handler) startProgressSessionForAgentWithFinal(ctx context.Context, reply platform.Replier, prefix string, agentName string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
 	if cfg.Mode == "" {
 		cfg = config.DefaultProgressConfig()
 	}
@@ -76,7 +82,7 @@ func (h *Handler) startProgressSessionWithFinal(ctx context.Context, reply platf
 	progressCtx, cancel := context.WithCancel(ctx)
 	session := &progressSession{
 		handler: h, ctx: progressCtx, cancel: cancel, reply: reply,
-		prefix: prefix, taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
+		prefix: prefix, agentName: agentName, taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
 	}
 	session.start()
 	return session.onProgress, session.stopWithFinal
@@ -84,7 +90,7 @@ func (h *Handler) startProgressSessionWithFinal(ctx context.Context, reply platf
 
 func (s *progressSession) start() {
 	if boolValue(s.cfg.SendAcceptance) {
-		title := progressTaskTitle(s.taskText, 60)
+		title := progressTaskTitleForAgent(s.agentName, s.taskText, 60)
 		s.sendText(renderAcceptance(title))
 	}
 	usesNativeProgress := progressModeAllowsProgress(s.cfg.Mode) && s.reply.Capabilities().Streaming
@@ -200,30 +206,35 @@ func (s *progressSession) sendProgressIfAllowed(summary string, state *progressS
 	if !shouldSendProgress(now, *state, summary, s.cfg) {
 		return
 	}
-	s.send(summary)
+	if !s.send(summary) {
+		return
+	}
 	state.lastSentSummary = summary
 	state.lastSentAt = now
 	state.sentCount++
 }
 
-func (s *progressSession) send(text string) {
+func (s *progressSession) send(text string) bool {
 	stream := s.ensureStream()
 	if stream != nil {
 		if err := stream.Update(s.ctx, s.prefix+text); err != nil {
 			log.Printf("[handler] failed to update progress stream: %v", err)
+			return false
 		}
-		return
+		return true
 	}
 	if s.reply.Capabilities().Streaming {
-		return
+		return false
 	}
-	s.sendText(text)
+	return s.sendText(text)
 }
 
-func (s *progressSession) sendText(text string) {
+func (s *progressSession) sendText(text string) bool {
 	if err := s.reply.SendText(s.ctx, s.prefix+text); err != nil {
 		log.Printf("[handler] failed to send progress message: %v", err)
+		return false
 	}
+	return true
 }
 
 func (s *progressSession) ensureStream() platform.Stream {
@@ -234,7 +245,7 @@ func (s *progressSession) ensureStream() platform.Stream {
 	}
 	s.streamOpenAttempted = true
 	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{
-		Title: progressTaskTitle(s.taskText, 60), InitialContent: renderInitialCardProgress(),
+		Title: progressTaskTitleForAgent(s.agentName, s.taskText, 60), InitialContent: renderInitialCardProgress(),
 	})
 	if err != nil {
 		log.Printf("[handler] failed to open progress stream: %v", err)
@@ -242,6 +253,13 @@ func (s *progressSession) ensureStream() platform.Stream {
 	}
 	s.stream = stream
 	return stream
+}
+
+func progressTaskTitleForAgent(agentName string, taskText string, maxRunes int) string {
+	if strings.TrimSpace(agentName) == "" {
+		return progressTaskTitle(taskText, maxRunes)
+	}
+	return progressTaskTitle(agentDisplayName(agentName)+" · "+strings.TrimSpace(taskText), maxRunes)
 }
 
 func (s *progressSession) sendTyping() {

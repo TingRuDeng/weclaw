@@ -90,11 +90,15 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 	if command.Action != "choice" {
 		return false
 	}
-	if h.consumePendingApprovalForKey(runtime.msg.UserID, command.Value["approval_key"], command.Value["choice"]) {
+	if isPendingInteractionChoiceCommand(command) && h.consumePendingInteractionForKey(
+		runtime.msg.UserID, runtime.routeUserID,
+		command.Value[platform.ChoiceMetadataInteractionKind],
+		command.Value["approval_key"], command.Value["choice"],
+	) {
 		reportCardActionResult(command, platform.CardActionResultConsumed)
 		return true
 	}
-	if !isApprovalChoiceCommand(command) {
+	if !isPendingInteractionChoiceCommand(command) {
 		return false
 	}
 	if !reportCardActionResult(command, platform.CardActionResultExpired) {
@@ -105,7 +109,7 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 
 // preparePlatformMessage 依次消费审批、附件和文本去重，并创建客户端请求 ID。
 func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platformMessageRuntime, bool) {
-	switch h.consumePendingApprovalText(runtime.msg.UserID, runtime.text) {
+	switch h.consumePendingApprovalText(runtime.msg.UserID, runtime.routeUserID, runtime.text) {
 	case approvalTextConsumed:
 		return runtime, false
 	case approvalTextAmbiguous:

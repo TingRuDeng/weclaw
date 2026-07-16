@@ -18,6 +18,17 @@ func buildSubmittedChoiceCard(action parsedCardAction) *callback.Card {
 	return buildChoiceHandledStatusCard("blue", "已受理："+label+"\n\n"+choicePendingDetail(action.Choice))
 }
 
+func buildInlineChoiceCompletedCard(action parsedCardAction) *callback.Card {
+	label := strings.TrimSpace(action.Label)
+	if label == "" {
+		label = strings.TrimSpace(action.Choice)
+	}
+	if label == "" {
+		label = "该操作"
+	}
+	return buildChoiceHandledStatusCard("green", "已完成："+label)
+}
+
 func choicePendingDetail(choice string) string {
 	command := strings.ToLower(strings.TrimSpace(choice))
 	switch {

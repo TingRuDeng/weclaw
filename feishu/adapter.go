@@ -46,6 +46,7 @@ type Adapter struct {
 	taskCards           *taskCardRegistry
 	now                 func() time.Time
 	cardActionTimeout   time.Duration
+	cardInlineTimeout   time.Duration
 	dispatchWait        time.Duration
 	dispatchNoticeDelay time.Duration
 	maxMessageAge       time.Duration
@@ -69,6 +70,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		taskCards:           newTaskCardRegistry(),
 		now:                 time.Now,
 		cardActionTimeout:   feishuCardActionTimeout,
+		cardInlineTimeout:   feishuInlineCardActionTimeout,
 		dispatchWait:        feishuMessageDispatchWaitTimeout,
 		dispatchNoticeDelay: feishuMessageDispatchNoticeDelay,
 		maxMessageAge:       DefaultMessageMaxAge,

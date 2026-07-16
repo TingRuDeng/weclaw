@@ -30,7 +30,8 @@ func shouldSendProgress(now time.Time, state progressSendState, summary string, 
 	if strings.TrimSpace(summary) == "" {
 		return false
 	}
-	if cfg.MaxProgressMessages > 0 && state.sentCount >= cfg.MaxProgressMessages {
+	// stream 始终原地更新同一张卡片，不会制造额外消息，不能套用消息数量上限。
+	if cfg.Mode != progressModeStream && cfg.MaxProgressMessages > 0 && state.sentCount >= cfg.MaxProgressMessages {
 		return false
 	}
 	if summary != state.lastSentSummary {

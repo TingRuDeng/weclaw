@@ -13,6 +13,7 @@ import (
 type agentInteractionContextOptions struct {
 	actorUserID string
 	routeUserID string
+	agentName   string
 	reply       platform.Replier
 }
 
@@ -24,9 +25,7 @@ type userInputQuestionRequest struct {
 
 // withAgentInteractions 为同一任务注入审批和结构化问答能力。
 func (h *Handler) withAgentInteractions(ctx context.Context, opts agentInteractionContextOptions) context.Context {
-	ctx = agent.ContextWithApprovalHandler(ctx, h.approvalHandlerForUser(
-		opts.actorUserID, opts.routeUserID, opts.reply,
-	))
+	ctx = agent.ContextWithApprovalHandler(ctx, h.approvalHandlerForRoute(opts))
 	return agent.ContextWithUserInputHandler(ctx, h.userInputHandlerForRoute(opts))
 }
 
@@ -58,7 +57,9 @@ func (h *Handler) askUserInputQuestion(ctx context.Context, req userInputQuestio
 	if err != nil {
 		return "", err
 	}
-	pending, err := h.registerPendingApproval(req.opts.actorUserID, key, options)
+	pending, err := h.registerPendingApprovalForRoute(
+		req.opts.actorUserID, req.opts.routeUserID, key, options, "", platform.ChoiceInteractionUserInput,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -102,7 +103,10 @@ func userInputOptionLabel(option agent.UserInputOption) string {
 
 func userInputPlatformChoices(options []agent.ApprovalOption, key string, opts agentInteractionContextOptions) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(options))
-	metadata := approvalChoiceMetadata(key, taskCardIDFromReplier(opts.reply), opts.actorUserID, opts.routeUserID)
+	metadata := approvalChoiceMetadata(
+		key, taskCardIDFromReplier(opts.reply), opts.actorUserID, opts.routeUserID,
+		opts.agentName, platform.ChoiceInteractionUserInput,
+	)
 	for _, option := range options {
 		choices = append(choices, platform.Choice{ID: option.ID, Label: option.Name, Metadata: metadata})
 	}

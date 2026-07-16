@@ -2,6 +2,8 @@ package feishu
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,7 +89,7 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 	}
 }
 
-func TestHandleCardActionEventGroupReplyUsesFreshMessage(t *testing.T) {
+func TestHandleCardActionEventGroupResultUpdatesOriginalCard(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	sender := &fakeMessageSender{}
 	adapter.sender = sender
@@ -118,6 +120,7 @@ func TestHandleCardActionEventGroupReplyUsesFreshMessage(t *testing.T) {
 	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
 		t.Fatalf("response=%#v, want success toast", resp)
 	}
+	assertInlineCardContent(t, resp.Card, "已切换")
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -126,12 +129,12 @@ func TestHandleCardActionEventGroupReplyUsesFreshMessage(t *testing.T) {
 	if len(sender.replyTexts) != 0 {
 		t.Fatalf("replyTexts=%#v, want no card message thread reply", sender.replyTexts)
 	}
-	if len(sender.texts) != 1 || sender.texts[0] != "oc_chat:已切换" {
-		t.Fatalf("texts=%#v, want fresh group card callback message", sender.texts)
+	if len(sender.texts) != 0 {
+		t.Fatalf("texts=%#v, quick result should update original group card", sender.texts)
 	}
 }
 
-func TestHandleCardActionEventDMReplyUsesFreshMessage(t *testing.T) {
+func TestHandleCardActionEventDMResultUpdatesOriginalCard(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	sender := &fakeMessageSender{}
 	adapter.sender = sender
@@ -162,6 +165,7 @@ func TestHandleCardActionEventDMReplyUsesFreshMessage(t *testing.T) {
 	if resp == nil || resp.Toast == nil || resp.Toast.Type != "success" {
 		t.Fatalf("response=%#v, want success toast", resp)
 	}
+	assertInlineCardContent(t, resp.Card, "已切换")
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -170,8 +174,78 @@ func TestHandleCardActionEventDMReplyUsesFreshMessage(t *testing.T) {
 	if len(sender.replyTexts) != 0 {
 		t.Fatalf("replyTexts=%#v, want no DM reply thread", sender.replyTexts)
 	}
-	if len(sender.texts) != 1 || sender.texts[0] != "oc_chat:已切换" {
-		t.Fatalf("texts=%#v, want fresh DM card callback message", sender.texts)
+	if len(sender.texts) != 0 {
+		t.Fatalf("texts=%#v, quick result should update original DM card", sender.texts)
+	}
+}
+
+func TestHandleCardActionEventInlineChoiceCardReplacesOriginal(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	sender := &fakeMessageSender{}
+	adapter.sender = sender
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_user"},
+		Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_card"},
+		Action: &callback.CallBackAction{Value: map[string]interface{}{
+			"action": cardActionChoice, "choice": "/help codex", "label": "Codex",
+		}},
+	}}
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		if err := reply.AskChoices(ctx, "Codex 帮助", []platform.Choice{{ID: "/cx ls", Label: "工作空间"}}); err != nil {
+			t.Fatalf("AskChoices error: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInlineCardContent(t, resp.Card, "Codex 帮助")
+	data, _ := json.Marshal(resp.Card.Data)
+	if !strings.Contains(string(data), `"choice":"/cx ls"`) {
+		t.Fatalf("card=%s，期望原卡直接替换为下一层按钮", data)
+	}
+	if len(sender.texts) != 0 || len(sender.cards) != 0 {
+		t.Fatalf("sender=%#v，原卡更新不应再发新消息", sender)
+	}
+}
+
+func TestHandleCardActionEventInlineUsesLastSynchronousResult(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	sender := &fakeMessageSender{}
+	adapter.sender = sender
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_user"},
+		Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_card"},
+		Action: &callback.CallBackAction{Value: map[string]interface{}{
+			"action": cardActionChoice, "choice": "/status", "label": "状态",
+		}},
+	}}
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		_ = reply.SendText(ctx, "中间结果")
+		_ = reply.SendText(ctx, "最终结果")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInlineCardContent(t, resp.Card, "最终结果")
+	data, _ := json.Marshal(resp.Card.Data)
+	if strings.Contains(string(data), "中间结果") || len(sender.texts) != 0 {
+		t.Fatalf("card=%s texts=%#v，原卡应只展示同步命令最终结果", data, sender.texts)
+	}
+}
+
+func assertInlineCardContent(t *testing.T, card *callback.Card, want string) {
+	t.Helper()
+	if card == nil {
+		t.Fatal("response card is nil")
+	}
+	data, err := json.Marshal(card.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("card=%s，期望包含 %q", data, want)
 	}
 }
 

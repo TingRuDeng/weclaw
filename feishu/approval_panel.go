@@ -44,11 +44,7 @@ type approvalPanelRequest struct {
 
 // newApprovalPanelItem 把 Codex 审批选择转换为面板行，普通 AskChoices 不进入该路径。
 func newApprovalPanelItem(req approvalPanelRequest) (approvalPanelItem, bool) {
-	options := choiceButtonOptions{
-		ConversationKey: req.Conv,
-		Kind:            choiceCardKind(req.Prompt),
-		Summary:         approvalSummaryFromPrompt(req.Prompt),
-	}
+	options := choiceOptions(req.Prompt, req.Choices, req.Conv)
 	if options.Kind != cardKindApproval || strings.TrimSpace(req.TaskCard) == "" {
 		return approvalPanelItem{}, false
 	}

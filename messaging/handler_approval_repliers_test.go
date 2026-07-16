@@ -79,6 +79,36 @@ func approvalKeyFromChoices(choices []platform.Choice) string {
 	return strings.TrimSpace(choices[0].Metadata["approval_key"])
 }
 
+type choiceRequest struct {
+	prompt  string
+	choices []platform.Choice
+}
+
+type choiceRequestCaptureReplier struct {
+	approvalKeyCaptureReplier
+	choiceCh chan choiceRequest
+}
+
+func newChoiceRequestCaptureReplier() *choiceRequestCaptureReplier {
+	return &choiceRequestCaptureReplier{choiceCh: make(chan choiceRequest, 1)}
+}
+
+func (r *choiceRequestCaptureReplier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
+	r.choiceCh <- choiceRequest{prompt: prompt, choices: append([]platform.Choice(nil), choices...)}
+	return nil
+}
+
+func (r *choiceRequestCaptureReplier) waitChoiceRequest(t *testing.T, ctx context.Context) choiceRequest {
+	t.Helper()
+	select {
+	case request := <-r.choiceCh:
+		return request
+	case <-ctx.Done():
+		t.Fatal("choice request was not captured")
+		return choiceRequest{}
+	}
+}
+
 type taskCardMetadataReplier struct {
 	approvalKeyCaptureReplier
 	taskCardID string

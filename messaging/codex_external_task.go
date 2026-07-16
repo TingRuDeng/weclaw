@@ -2,6 +2,9 @@ package messaging
 
 import (
 	"context"
+	"errors"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -164,7 +167,9 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		progressCfg = h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
 	}
 	taskText := firstNonBlank(runtime.state.Preview, "Codex App 本地任务")
-	onProgress, finishProgress := h.startProgressSessionWithFinal(runtime.ctx, runtime.opts.reply, "", taskText, progressCfg)
+	onProgress, finishProgress := h.startProgressSessionForAgentWithFinal(
+		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, taskText, progressCfg,
+	)
 	recordProgress := func(delta string) {
 		runtime.task.recordProgress(time.Now(), delta)
 		onProgress(delta)
@@ -183,6 +188,17 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if !result.Terminal {
 		_ = finishProgress("", false)
 		return
+	}
+	if result.ConfirmedTerminal {
+		if reconcileErr := h.reconcileExternalCodexTerminal(runtime, result); reconcileErr != nil {
+			log.Printf("[codex-runtime] 外部任务终态同步失败 thread=%q turn=%q: %v",
+				runtime.opts.threadID, runtime.state.ActiveTurnID, reconcileErr)
+			if errors.Is(reconcileErr, agent.ErrCodexRuntimeConflict) {
+				result.Final = ""
+				result.Err = reconcileErr
+				result.Failed = true
+			}
+		}
 	}
 	if !h.claimActiveTaskTerminal(runtime.opts.conversationID, runtime.task) {
 		_ = finishProgress("", false)
@@ -207,4 +223,42 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if hasPending {
 		pending.run()
 	}
+}
+
+// reconcileExternalCodexTerminal 在消息层释放观察任务前，先收敛同一 turn 的运行态。
+func (h *Handler) reconcileExternalCodexTerminal(runtime externalCodexTaskRuntime, result codexExternalWatchResult) error {
+	turnID := strings.TrimSpace(runtime.state.ActiveTurnID)
+	if !runtime.state.Controllable || turnID == "" {
+		return nil
+	}
+	liveAgent, ok := runtime.opts.agent.(agent.CodexLiveRuntimeAgent)
+	if !ok {
+		return agent.ErrCodexRuntimeUnavailable
+	}
+	state := runtime.state.CodexThreadState
+	state.Active = false
+	state.ActiveTurnID = ""
+	state.LastTurnID = turnID
+	state.LastTurnStatus = "completed"
+	state.WaitingOnApproval = false
+	state.WaitingOnUserInput = false
+	if result.Failed {
+		state.LastTurnStatus = "failed"
+	}
+	if strings.TrimSpace(result.Final) != "" {
+		state.LastAgentMessageText = result.Final
+	}
+
+	unlock := h.lockCodexThreadControl(runtime.opts.threadID)
+	defer unlock()
+	intent := h.ensureCodexSessions().controlIntent(runtime.opts.threadID)
+	request := agent.CodexRuntimeRequest{
+		Ref: agent.CodexThreadRef{
+			ConversationID: runtime.opts.conversationID,
+			ThreadID:       runtime.opts.threadID,
+		},
+		Intent: agentControlIntent(intent),
+	}
+	_, err := liveAgent.ReconcileCodexObservedTurn(runtime.opts.ctx, request, state)
+	return err
 }

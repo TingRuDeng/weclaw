@@ -45,3 +45,31 @@ func TestCardActionTimeoutSendsConversationNotice(t *testing.T) {
 	}
 	close(blocked)
 }
+
+func TestInlineCardActionFallsBackToSeparateResultAfterCallbackBudget(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardInlineTimeout = 20 * time.Millisecond
+	sender := &cardTimeoutNoticeSender{texts: make(chan string, 1)}
+	adapter.sender = sender
+	release := make(chan struct{})
+	event := cardChoiceEventForOrderTest("feishu:tenant:dm:oc_1:ou_user")
+	event.Event.Action.Value["choice"] = "/cx ls"
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		<-release
+		_ = reply.SendText(ctx, "较慢的导航结果")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在处理")
+	close(release)
+	select {
+	case got := <-sender.texts:
+		if !strings.Contains(got, "较慢的导航结果") {
+			t.Fatalf("fallback result=%q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("超出回调预算后未单独发送最终结果")
+	}
+}

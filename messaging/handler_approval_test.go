@@ -14,7 +14,7 @@ import (
 
 func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 	h := NewHandler(nil, nil)
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	reply := newChoiceRequestCaptureReplier()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	resultCh := make(chan string, 1)
@@ -32,7 +32,8 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 		}
 		resultCh <- optionID
 	}()
-	waitUntil(t, func() bool { return hasPendingApprovalForTest(h, "ou_user") })
+	request := reply.waitChoiceRequest(t, ctx)
+	approvalKey := approvalKeyFromChoices(request.choices)
 
 	h.HandleMessage(ctx, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
@@ -56,7 +57,10 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 		MessageID: "feishu-approval-allow",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "allow_once"},
+			Value: map[string]string{
+				"choice": "allow_once", "approval_key": approvalKey,
+				platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
+			},
 		},
 	}, reply)
 
@@ -146,7 +150,10 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 		MessageID: "approval-card-a",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "accept", "approval_key": keyA},
+			Value: map[string]string{
+				"choice": "accept", "approval_key": keyA,
+				platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
+			},
 		},
 	}, replyA)
 
@@ -173,7 +180,10 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 		MessageID: "approval-card-b",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "cancel", "approval_key": keyB},
+			Value: map[string]string{
+				"choice": "cancel", "approval_key": keyB,
+				platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
+			},
 		},
 	}, replyB)
 
@@ -187,6 +197,71 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 	}
 	if texts := replyB.textsSnapshot(); len(texts) != 0 {
 		t.Fatalf("approval action was treated as normal message: %#v", texts)
+	}
+}
+
+func TestPendingInteractionsIsolateKindAndRoute(t *testing.T) {
+	h := NewHandler(nil, nil)
+	options := []agent.ApprovalOption{{ID: "allow", Kind: "allow"}}
+	approval, err := h.registerPendingApprovalForRoute(
+		"ou_user", "feishu:route-a", "shared-key", options, "allow", platform.ChoiceInteractionApproval,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	question, err := h.registerPendingApprovalForRoute(
+		"ou_user", "feishu:route-a", "shared-key", options, "", platform.ChoiceInteractionUserInput,
+	)
+	if err != nil {
+		t.Fatalf("不同交互类型不应发生 key 碰撞：%v", err)
+	}
+	if h.consumePendingInteractionForKey(
+		"ou_user", "feishu:route-b", platform.ChoiceInteractionApproval, "shared-key", "allow",
+	) {
+		t.Fatal("其他飞书窗口不应消费当前窗口授权")
+	}
+	if !h.consumePendingInteractionForKey(
+		"ou_user", "feishu:route-a", platform.ChoiceInteractionUserInput, "shared-key", "allow",
+	) {
+		t.Fatal("结构化提问应只消费同路由同类型 pending")
+	}
+	select {
+	case got := <-question.choices:
+		if got != "allow" {
+			t.Fatalf("question choice=%q", got)
+		}
+	default:
+		t.Fatal("结构化提问未收到选择")
+	}
+	select {
+	case got := <-approval.choices:
+		t.Fatalf("结构化提问误消费授权：%q", got)
+	default:
+	}
+	if !h.consumePendingInteractionForKey(
+		"ou_user", "feishu:route-a", platform.ChoiceInteractionApproval, "shared-key", "allow",
+	) {
+		t.Fatal("同路由授权应仍可消费")
+	}
+}
+
+func TestPendingApprovalTextIsolatedByRoute(t *testing.T) {
+	h := NewHandler(nil, nil)
+	pending, err := h.registerPendingApprovalForRoute(
+		"ou_user", "feishu:route-a", "approval-key",
+		[]agent.ApprovalOption{{ID: "allow", Kind: "allow"}}, "allow", platform.ChoiceInteractionApproval,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.consumePendingApprovalText("ou_user", "feishu:route-b", "allow"); got != approvalTextUnmatched {
+		t.Fatalf("other route result=%v，期望 unmatched", got)
+	}
+	if got := h.consumePendingApprovalText("ou_user", "feishu:route-a", "allow"); got != approvalTextConsumed {
+		t.Fatalf("same route result=%v，期望 consumed", got)
+	}
+	if got := <-pending.choices; got != "allow" {
+		t.Fatalf("choice=%q", got)
 	}
 }
 
@@ -236,6 +311,7 @@ func resolveApprovalForTest(t *testing.T, ctx context.Context, h *Handler, reply
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": choice, "approval_key": key,
+			platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
 		}},
 	}, reply)
 	select {
@@ -270,8 +346,9 @@ func TestExpiredApprovalActionDoesNotStartNewTask(t *testing.T) {
 		RawCommand: &platform.CardAction{
 			Action: "choice",
 			Value: map[string]string{
-				"choice":       "accept",
-				"approval_key": "approval-expired",
+				"choice":                               "accept",
+				"approval_key":                         "approval-expired",
+				platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
 			},
 		},
 	}, reply)
@@ -296,8 +373,9 @@ func TestExpiredApprovalActionReportsResultWhenCallbackWaits(t *testing.T) {
 		RawCommand: &platform.CardAction{
 			Action: "choice",
 			Value: map[string]string{
-				"choice":       "accept",
-				"approval_key": "approval-expired",
+				"choice":                               "accept",
+				"approval_key":                         "approval-expired",
+				platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
 			},
 			Result: resultCh,
 		},
@@ -351,9 +429,10 @@ func TestApprovalHandlerIncludesTaskCardIDMetadata(t *testing.T) {
 		RawCommand: &platform.CardAction{
 			Action: "choice",
 			Value: map[string]string{
-				"choice":       "accept",
-				"approval_key": choice.Metadata["approval_key"],
-				"task_card_id": choice.Metadata["task_card_id"],
+				"choice":                               "accept",
+				"approval_key":                         choice.Metadata["approval_key"],
+				"task_card_id":                         choice.Metadata["task_card_id"],
+				platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
 			},
 		},
 	}, reply)

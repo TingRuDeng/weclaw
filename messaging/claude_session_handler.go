@@ -15,7 +15,7 @@ func isClaudeSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "owner", "cli", "model", "help":
+	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "owner", "cli", "model", "help", "page":
 		return true
 	default:
 		return false

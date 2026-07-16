@@ -43,7 +43,8 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	}
 	select {
 	case msg := <-dispatched:
-		if msg.RawCommand.Value["approval_key"] != "approval-key-1" {
+		if msg.RawCommand.Value["approval_key"] != "approval-key-1" ||
+			msg.RawCommand.Value[platform.ChoiceMetadataInteractionKind] != platform.ChoiceInteractionApproval {
 			t.Fatalf("raw command=%#v, want approval key passthrough", msg.RawCommand.Value)
 		}
 	case <-time.After(time.Second):

@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -11,16 +12,22 @@ import (
 const cardkitThrottle = 500 * time.Millisecond
 
 type feishuStream struct {
-	cardKit     cardKitClient
-	taskCards   *taskCardRegistry
-	cardID      string
-	title       string
-	sequence    int
-	lastUpdate  time.Time
-	lastContent string
-	closed      bool
-	throttle    time.Duration
-	now         func() time.Time
+	mu                sync.Mutex
+	cardKit           cardKitClient
+	taskCards         *taskCardRegistry
+	cardID            string
+	title             string
+	sequence          int
+	lastUpdate        time.Time
+	lastContent       string
+	closed            bool
+	throttle          time.Duration
+	now               func() time.Time
+	pendingCtx        context.Context
+	pendingText       string
+	hasPending        bool
+	pendingTimer      *time.Timer
+	pendingGeneration uint64
 }
 
 // openCardKitStream 创建并发送 CardKit 卡片，然后开启流式模式。
@@ -74,13 +81,27 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 
 // Update 节流更新主内容组件，触发飞书打字机效果。
 func (s *feishuStream) Update(ctx context.Context, content string) error {
-	if s.closed || content == s.lastContent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if content == s.lastContent {
+		if s.hasPending {
+			s.cancelPendingUpdate()
+		}
 		return nil
 	}
 	now := s.now()
-	if !s.lastUpdate.IsZero() && now.Sub(s.lastUpdate) < s.throttle {
+	if delay := s.throttleDelay(now); delay > 0 {
+		s.queuePendingUpdate(ctx, content, delay)
 		return nil
 	}
+	s.cancelPendingUpdate()
+	return s.updateNow(ctx, content, now)
+}
+
+func (s *feishuStream) updateNow(ctx context.Context, content string, now time.Time) error {
 	if s.taskCards != nil {
 		return s.updateTaskCard(ctx, content, now)
 	}
@@ -103,6 +124,77 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 		s.taskCards.updateContent(s.cardID, content)
 	}
 	return nil
+}
+
+func (s *feishuStream) throttleDelay(now time.Time) time.Duration {
+	if s.throttle <= 0 || s.lastUpdate.IsZero() {
+		return 0
+	}
+	elapsed := now.Sub(s.lastUpdate)
+	if elapsed >= s.throttle {
+		return 0
+	}
+	if elapsed < 0 {
+		return s.throttle
+	}
+	return s.throttle - elapsed
+}
+
+func (s *feishuStream) queuePendingUpdate(ctx context.Context, content string, delay time.Duration) {
+	s.pendingCtx = ctx
+	s.pendingText = content
+	s.hasPending = true
+	if s.pendingTimer != nil {
+		return
+	}
+	s.schedulePendingUpdate(delay)
+}
+
+func (s *feishuStream) schedulePendingUpdate(delay time.Duration) {
+	s.pendingGeneration++
+	generation := s.pendingGeneration
+	s.pendingTimer = time.AfterFunc(delay, func() {
+		s.flushPendingUpdate(generation)
+	})
+}
+
+func (s *feishuStream) flushPendingUpdate(generation uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || generation != s.pendingGeneration || s.pendingTimer == nil {
+		return
+	}
+	s.pendingTimer = nil
+	if !s.hasPending {
+		return
+	}
+	now := s.now()
+	if delay := s.throttleDelay(now); delay > 0 {
+		s.schedulePendingUpdate(delay)
+		return
+	}
+	ctx := s.pendingCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	content := s.pendingText
+	s.pendingCtx = nil
+	s.pendingText = ""
+	s.hasPending = false
+	if err := s.updateNow(ctx, content, now); err != nil {
+		log.Printf("[feishu] failed to flush latest throttled card update: %v", err)
+	}
+}
+
+func (s *feishuStream) cancelPendingUpdate() {
+	s.pendingGeneration++
+	if s.pendingTimer != nil {
+		s.pendingTimer.Stop()
+	}
+	s.pendingTimer = nil
+	s.pendingCtx = nil
+	s.pendingText = ""
+	s.hasPending = false
 }
 
 func (s *feishuStream) updateTaskCard(ctx context.Context, content string, now time.Time) error {
@@ -130,10 +222,13 @@ func (s *feishuStream) updateTaskCard(ctx context.Context, content string, now t
 
 // Complete 关闭流式并全量更新为完成卡片。
 func (s *feishuStream) Complete(ctx context.Context, finalContent string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
 	s.closed = true
+	s.cancelPendingUpdate()
 	disableErr := s.disableStreaming(ctx)
 	opts := cardOptions{Status: cardStatusDone, Title: s.title, Content: finalContent}
 	if s.taskCards != nil {
@@ -152,10 +247,13 @@ func (s *feishuStream) Complete(ctx context.Context, finalContent string) error 
 
 // Fail 关闭流式并全量更新为失败卡片。
 func (s *feishuStream) Fail(ctx context.Context, errText string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
 	s.closed = true
+	s.cancelPendingUpdate()
 	disableErr := s.disableStreaming(ctx)
 	opts := cardOptions{Status: cardStatusError, Title: s.title, Content: errText}
 	if s.taskCards != nil {

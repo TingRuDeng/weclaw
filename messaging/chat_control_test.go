@@ -196,6 +196,59 @@ func TestApprovalHandlerYoloAutoApprovesCodexFileChangeDecision(t *testing.T) {
 	}
 }
 
+func TestModeYoloResolvesExistingClaudeApprovalForSameRoute(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := "feishu:tenant:dm:chat-a:ou_user"
+	reply := newChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan string, 1)
+	go func() {
+		decision, err := h.approvalHandlerForRoute(agentInteractionContextOptions{
+			actorUserID: "ou_user", routeUserID: route, agentName: "claude", reply: reply,
+		})(ctx, agent.ApprovalRequest{
+			Options: []agent.ApprovalOption{
+				{ID: "deny", Kind: "deny"},
+				{ID: "allow_always", Kind: "allow"},
+			},
+		})
+		if err != nil {
+			result <- "error:" + err.Error()
+			return
+		}
+		result <- decision
+	}()
+	card := reply.waitChoiceRequest(t, ctx)
+	if !strings.HasPrefix(card.prompt, "Claude 请求执行敏感操作") {
+		t.Fatalf("prompt=%q，授权卡应标明 Claude 来源", card.prompt)
+	}
+	if got := card.choices[0].Metadata[platform.ChoiceMetadataInteractionKind]; got != platform.ChoiceInteractionApproval {
+		t.Fatalf("interaction kind=%q，期望 approval", got)
+	}
+	if got := card.choices[0].Metadata[platform.ChoiceMetadataAgentName]; got != "Claude" {
+		t.Fatalf("agent name=%q，期望 Claude", got)
+	}
+
+	modeReply := h.handleModeCommand(route, "/mode yolo")
+	if !strings.Contains(modeReply, "放行 1 个") {
+		t.Fatalf("mode reply=%q，期望说明已放行待确认授权", modeReply)
+	}
+	select {
+	case got := <-result:
+		if got != "allow_always" {
+			t.Fatalf("decision=%q，期望放行 Claude 授权", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("切换 yolo 后待确认授权未被唤醒")
+	}
+}
+
+func TestApprovalAllowAlwaysWithoutNameDoesNotPanic(t *testing.T) {
+	if got := approvalChoiceLabel(agent.ApprovalOption{ID: "allow_always", Kind: "allow"}); got != "始终允许" {
+		t.Fatalf("label=%q，期望空名称的 allow_always 安全回退", got)
+	}
+}
+
 func TestListActiveTasksEmptyAndPopulated(t *testing.T) {
 	h := NewHandler(nil, nil)
 	user := "wechat:u1"

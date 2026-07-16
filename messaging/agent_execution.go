@@ -136,7 +136,8 @@ func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 		return
 	}
 	taskCtx := h.withAgentInteractions(admission.taskCtx, agentInteractionContextOptions{
-		actorUserID: runtime.req.userID, routeUserID: runtime.req.routeUserID, reply: runtime.req.reply,
+		actorUserID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
+		agentName: runtime.req.name, reply: runtime.req.reply,
 	})
 	unlock := h.lockAgentExecution(key)
 	runtime.lifecycle = h.startAgentTaskLifecycle(agentTaskLifecycleOptions{

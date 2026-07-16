@@ -90,6 +90,7 @@ func userInputCardMessage(messageID string, key string, choice string) platform.
 		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: messageID,
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": choice, "approval_key": key,
+			platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionUserInput,
 		}},
 	}
 }

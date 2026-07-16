@@ -42,6 +42,14 @@ func (a *ACPAgent) CurrentCodexRuntime(req CodexRuntimeRequest) (CodexThreadBind
 	return binding, nil
 }
 
+// ReconcileCodexObservedTurn 收敛显式接管后正在观察的 Desktop turn 状态。
+func (a *ACPAgent) ReconcileCodexObservedTurn(_ context.Context, req CodexRuntimeRequest, state CodexThreadState) (CodexThreadBinding, error) {
+	if err := a.validateCodexRuntimeSupport(req); err != nil {
+		return CodexThreadBinding{}, err
+	}
+	return a.codexOwners.reconcileObservedTurn(req, state)
+}
+
 func unknownCodexRuntimeSnapshot(req CodexRuntimeRequest, state CodexThreadState) CodexThreadBinding {
 	state.ThreadID = req.Ref.ThreadID
 	return CodexThreadBinding{
@@ -86,8 +94,8 @@ func (a *ACPAgent) MarkCodexRuntimeConflict(ctx context.Context, req CodexRuntim
 		return err
 	}
 	_ = ctx
-	a.codexOwners.markRuntimeConflict(req, "控制权移交结果未确认")
-	return nil
+	_, err := a.codexOwners.markRuntimeConflict(req, "控制权移交结果未确认")
+	return err
 }
 
 func (a *ACPAgent) validateCodexRuntimeSupport(req CodexRuntimeRequest) error {

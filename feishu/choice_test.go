@@ -53,6 +53,51 @@ func TestBuildChoiceCardMarksApprovalButtons(t *testing.T) {
 	}
 }
 
+func TestBuildChoiceCardLabelsClaudeApprovalSource(t *testing.T) {
+	cardJSON, err := buildChoiceCard("Claude 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{
+		ID: "allow", Label: "允许本次", Metadata: map[string]string{
+			platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
+			platform.ChoiceMetadataAgentName:       "Claude",
+		},
+	}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	header := card["header"].(map[string]any)
+	title := header["title"].(map[string]any)
+	if title["content"] != "Claude 授权" {
+		t.Fatalf("title=%#v，期望 Claude 授权", title["content"])
+	}
+	body := card["body"].(map[string]any)
+	value := body["elements"].([]any)[1].(map[string]any)["value"].(map[string]any)
+	if value["kind"] != cardKindApproval || !strings.Contains(value["summary"].(string), "date") {
+		t.Fatalf("value=%#v，期望保留 Claude 授权摘要", value)
+	}
+}
+
+func TestBuildChoiceCardExplicitUserInputKindOverridesPromptText(t *testing.T) {
+	cardJSON, err := buildChoiceCard("是否允许？请求执行敏感操作，请确认：", []platform.Choice{{
+		ID: "继续", Label: "继续", Metadata: map[string]string{
+			"approval_key":                         "question-1",
+			platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionUserInput,
+			platform.ChoiceMetadataAgentName:       "Claude",
+		},
+	}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	header := card["header"].(map[string]any)["title"].(map[string]any)
+	if header["content"] != "Claude 提问" {
+		t.Fatalf("title=%#v，显式 user_input 不应按授权卡处理", header["content"])
+	}
+	value := card["body"].(map[string]any)["elements"].([]any)[1].(map[string]any)["value"].(map[string]any)
+	if value["kind"] != platform.ChoiceInteractionUserInput || value["summary"] != nil {
+		t.Fatalf("value=%#v，显式交互类型应优先于 prompt 文案", value)
+	}
+}
+
 func TestBuildChoiceCardUsesApprovalKeyMetadata(t *testing.T) {
 	cardJSON, err := buildChoiceCard("Codex 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{
 		ID:       "accept",
@@ -125,6 +170,28 @@ func TestBuildChoiceCardDoesNotMarkNormalChoicesAsApproval(t *testing.T) {
 	value := button["value"].(map[string]any)
 	if value["kind"] != nil {
 		t.Fatalf("button value=%#v, want no approval kind", value)
+	}
+}
+
+func TestBuildChoiceCardSeparatesNavigationButtons(t *testing.T) {
+	cardJSON, err := buildChoiceCard("请选择会话", []platform.Choice{
+		{ID: "/cx switch thread-1", Label: "会话 1"},
+		{ID: "/cx cd ..", Label: "← 返回上一级", Metadata: map[string]string{
+			platform.ChoiceMetadataButtonType: platform.ChoiceButtonTypeDefault,
+			platform.ChoiceMetadataSection:    platform.ChoiceSectionNavigation,
+		}},
+	}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	body := decodeCardJSON(t, cardJSON)["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if elements[2].(map[string]any)["tag"] != "hr" {
+		t.Fatalf("elements=%#v，导航按钮前应有分隔线", elements)
+	}
+	button := elements[3].(map[string]any)
+	if button["type"] != platform.ChoiceButtonTypeDefault {
+		t.Fatalf("button=%#v，返回按钮应使用次级样式", button)
 	}
 }
 

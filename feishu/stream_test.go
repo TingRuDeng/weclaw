@@ -22,6 +22,7 @@ type fakeCardKitClient struct {
 	destroyed     []string
 	streamErrors  []error
 	updateErrors  []error
+	updateCardCh  chan string
 }
 
 // CreateCard 记录创建卡片 JSON 并返回固定 card_id。
@@ -61,6 +62,9 @@ func (f *fakeCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJ
 	f.updateCardIDs = append(f.updateCardIDs, cardID)
 	f.updateSeqs = append(f.updateSeqs, sequence)
 	f.updateCards = append(f.updateCards, cardJSON)
+	if f.updateCardCh != nil {
+		f.updateCardCh <- cardJSON
+	}
 	if len(f.updateErrors) == 0 {
 		return nil
 	}
@@ -176,6 +180,105 @@ func TestTaskCardStreamUpdateReplacesProgressContent(t *testing.T) {
 	}
 	if strings.Contains(main["content"].(string), first) {
 		t.Fatalf("main content=%q should not keep previous progress", main["content"])
+	}
+}
+
+func TestTaskCardStreamCoalescesThrottledUpdatesAndFlushesLatest(t *testing.T) {
+	cardKit := &fakeCardKitClient{updateCardCh: make(chan string, 3)}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
+	stream := &feishuStream{
+		cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex",
+		sequence: 1, throttle: 20 * time.Millisecond, now: time.Now,
+	}
+
+	if err := stream.Update(context.Background(), "进展一"); err != nil {
+		t.Fatalf("Update first error: %v", err)
+	}
+	select {
+	case <-cardKit.updateCardCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("first progress update was not written")
+	}
+	if err := stream.Update(context.Background(), "进展二"); err != nil {
+		t.Fatalf("Update second error: %v", err)
+	}
+	if err := stream.Update(context.Background(), "进展三"); err != nil {
+		t.Fatalf("Update third error: %v", err)
+	}
+
+	var latestCard string
+	select {
+	case latestCard = <-cardKit.updateCardCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("latest throttled progress was never flushed")
+	}
+	card := decodeCardJSON(t, latestCard)
+	body := card["body"].(map[string]any)
+	main := body["elements"].([]any)[1].(map[string]any)
+	if got := main["content"]; got != "进展三" {
+		t.Fatalf("coalesced progress=%q, want latest progress", got)
+	}
+}
+
+func TestTaskCardStreamCompleteCancelsPendingProgress(t *testing.T) {
+	cardKit := &fakeCardKitClient{updateCardCh: make(chan string, 3)}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
+	stream := &feishuStream{
+		cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex",
+		sequence: 1, throttle: 20 * time.Millisecond, now: time.Now,
+	}
+
+	if err := stream.Update(context.Background(), "进展一"); err != nil {
+		t.Fatalf("Update first error: %v", err)
+	}
+	<-cardKit.updateCardCh
+	if err := stream.Update(context.Background(), "待补发进展"); err != nil {
+		t.Fatalf("Update pending error: %v", err)
+	}
+	if err := stream.Complete(context.Background(), "最终结果"); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+
+	finalCard := <-cardKit.updateCardCh
+	card := decodeCardJSON(t, finalCard)
+	body := card["body"].(map[string]any)
+	main := body["elements"].([]any)[1].(map[string]any)
+	if got := main["content"]; got != "最终结果" {
+		t.Fatalf("final content=%q, want 最终结果", got)
+	}
+	select {
+	case lateCard := <-cardKit.updateCardCh:
+		t.Fatalf("pending progress overwrote completed card: %s", lateCard)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestTaskCardStreamDoesNotFlushStaleProgressAfterRevert(t *testing.T) {
+	cardKit := &fakeCardKitClient{updateCardCh: make(chan string, 3)}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
+	stream := &feishuStream{
+		cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex",
+		sequence: 1, throttle: 20 * time.Millisecond, now: time.Now,
+	}
+
+	if err := stream.Update(context.Background(), "进展 A"); err != nil {
+		t.Fatalf("Update A error: %v", err)
+	}
+	<-cardKit.updateCardCh
+	if err := stream.Update(context.Background(), "进展 B"); err != nil {
+		t.Fatalf("Update B error: %v", err)
+	}
+	if err := stream.Update(context.Background(), "进展 A"); err != nil {
+		t.Fatalf("Update reverted A error: %v", err)
+	}
+
+	select {
+	case staleCard := <-cardKit.updateCardCh:
+		t.Fatalf("stale pending progress was flushed after reverting to displayed content: %s", staleCard)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

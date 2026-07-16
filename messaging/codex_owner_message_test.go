@@ -109,6 +109,32 @@ func TestCodexRemoteOwnedRuntimeFailureDoesNotReturnOwnerCard(t *testing.T) {
 	}
 }
 
+func TestCodexRemoteOwnedConflictRejectsBeforeActiveObserver(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, true)
+	ag.mu.Lock()
+	ag.binding.Runtime = agent.CodexRuntimeConflict
+	ag.binding.ConflictReason = "测试冲突"
+	ag.binding.State = agent.CodexThreadState{
+		ThreadID: route.threadID, Active: true, ActiveTurnID: "turn-stale",
+	}
+	ag.fakeCodexThreadAgent.threadState = ag.binding.State
+	ag.mu.Unlock()
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	opts.platform = platform.PlatformFeishu
+	opts.reply = reply
+
+	h.startCodexAgentTask(opts)
+
+	waitUntil(t, func() bool { return len(reply.Texts) > 0 })
+	text := strings.Join(reply.Texts, "\n")
+	if !strings.Contains(text, "运行通道暂不可用") || strings.Contains(text, "发生写入冲突") {
+		t.Fatalf("reply=%q，冲突态应先走运行通道拒绝，不应尝试附加旧 active observer", text)
+	}
+	if _, active := h.activeTask(route.conversationID); active {
+		t.Fatal("冲突态不应登记活动任务观察器")
+	}
+}
+
 func TestCodexBroadcastQueuesBehindActiveDesktopTurn(t *testing.T) {
 	h, ag, _, route := liveMessageFixture(t, true)
 	h.agents["codex"] = ag

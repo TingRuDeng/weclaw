@@ -16,6 +16,7 @@ import (
 
 const (
 	feishuCardActionTimeout          = 2 * time.Minute
+	feishuInlineCardActionTimeout    = 1500 * time.Millisecond
 	feishuCardActionNoticeTimeout    = 10 * time.Second
 	feishuMessageDispatchWaitTimeout = 30 * time.Second
 	feishuMessageDispatchNoticeDelay = 3 * time.Second
@@ -271,18 +272,29 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		Metadata: metadata,
 	}
 	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
+	if isInlineCardCommand(action.Choice) {
+		return a.handleInlineCardAction(ctx, msg, action, dispatch, ticket), nil
+	}
+	a.dispatchCardActionAsync(ctx, msg, action, dispatch, ticket, a.newScopedReplier(msg))
+	return submittedCardActionResponse(action), nil
+}
+
+func (a *Adapter) dispatchCardActionAsync(ctx context.Context, msg platform.IncomingMessage, action parsedCardAction, dispatch platform.DispatchFunc, ticket feishuDispatchTicket, reply platform.Replier) {
 	dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.cardActionTimeout)
 	go func() {
 		defer cancel()
-		if !ticket.run(dispatchCtx, func() { dispatch(dispatchCtx, msg, a.newScopedReplier(msg)) }) {
+		if !ticket.run(dispatchCtx, func() { dispatch(dispatchCtx, msg, reply) }) {
 			log.Printf("[feishu] card action dispatch timed out: action=%s", action.Action)
 			a.sendCardActionTimeoutNotice(msg)
 		}
 	}()
+}
+
+func submittedCardActionResponse(action parsedCardAction) *callback.CardActionTriggerResponse {
 	return &callback.CardActionTriggerResponse{
 		Toast: &callback.Toast{Type: "success", Content: "已受理，正在处理"},
 		Card:  buildSubmittedChoiceCard(action),
-	}, nil
+	}
 }
 
 // sendCardActionTimeoutNotice 使用独立短 context 反馈超时，避免沿用已经取消的分发 context。
@@ -305,6 +317,9 @@ func regularCardActionValue(action parsedCardAction) map[string]string {
 	}
 	if action.AgentName != "" {
 		value[modelSettingAgentKey] = action.AgentName
+	}
+	if action.Kind != "" {
+		value[platform.ChoiceMetadataInteractionKind] = action.Kind
 	}
 	return value
 }

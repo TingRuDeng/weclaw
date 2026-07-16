@@ -16,7 +16,7 @@ func isCodexSessionCommand(trimmed string) bool {
 		return len(fields) == 2
 	}
 	switch fields[1] {
-	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "quota", "cli", "detach", "app", "status", "clean", "help", "owner":
+	case "whoami", "ls", "new", "switch", "cd", "pwd", "model", "quota", "cli", "detach", "app", "status", "clean", "help", "owner", "page":
 		return true
 	case "attach":
 		return len(fields) == 2

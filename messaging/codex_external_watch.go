@@ -11,11 +11,12 @@ import (
 )
 
 type codexExternalWatchResult struct {
-	Final    string
-	Err      error
-	Terminal bool
-	Failed   bool
-	Source   string
+	Final             string
+	Err               error
+	Terminal          bool
+	ConfirmedTerminal bool
+	Failed            bool
+	Source            string
 }
 
 type externalCodexWatchRequest struct {
@@ -132,9 +133,12 @@ func (h *Handler) bootstrapCodexRolloutAfterDisconnect(threadID string, turnID s
 func terminalCodexRolloutState(state codexRolloutTaskState) codexExternalWatchResult {
 	if state.Aborted {
 		err := errors.New(firstNonBlank(state.Reason, "Codex rollout 任务已中断"))
-		return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: "rollout"}
+		return codexExternalWatchResult{Err: err, Terminal: true, ConfirmedTerminal: true, Failed: true, Source: "rollout"}
 	}
-	return codexExternalWatchResult{Final: firstNonBlank(state.Final, "Codex App 本地任务已完成，但没有返回文本。"), Terminal: true, Source: "rollout"}
+	return codexExternalWatchResult{
+		Final:    firstNonBlank(state.Final, "Codex App 本地任务已完成，但没有返回文本。"),
+		Terminal: true, ConfirmedTerminal: true, Source: "rollout",
+	}
 }
 
 // watchReconnectedCodexDesktop 在重新探测确认后接续 Desktop 观察流。
@@ -183,16 +187,16 @@ func failedCodexRuntimeWatch(err error) codexExternalWatchResult {
 
 func classifyCodexWatchResult(text string, err error, source string) codexExternalWatchResult {
 	if err == nil {
-		return codexExternalWatchResult{Final: text, Terminal: true, Source: source}
+		return codexExternalWatchResult{Final: text, Terminal: true, ConfirmedTerminal: true, Source: source}
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, agent.ErrCodexDesktopDisconnected) || errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown) {
 		return codexExternalWatchResult{Err: err, Source: source}
 	}
-	if source == "rollout" {
-		return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: source}
-	}
 	if errors.Is(err, errCodexRolloutAborted) || errors.Is(err, agent.ErrCodexTurnTerminal) {
+		return codexExternalWatchResult{Err: err, Terminal: true, ConfirmedTerminal: true, Failed: true, Source: source}
+	}
+	if source == "rollout" {
 		return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: source}
 	}
 	return codexExternalWatchResult{Err: err, Source: source}

@@ -23,6 +23,7 @@ type claudeFeishuChoiceRequest struct {
 	Route         claudeSessionRoute
 	Metadata      map[string]string
 	WorkspaceRoot string
+	Page          int
 }
 
 type claudeChoiceCard struct {
@@ -41,7 +42,12 @@ func (h *Handler) handleFeishuClaudeSessionCommand(req claudeFeishuCommandReques
 		sendPlatformText(req.Context, req.Reply, msg.UserID, notice)
 		return true
 	}
-	result := h.handleClaudeSessionCommandForRouteResult(req.Context, msg.UserID, req.RouteUserID, h.isAdminMessage(msg), req.Trimmed)
+	fields := strings.Fields(req.Trimmed)
+	_, paginated := parseFeishuNavigationPage(fields, "/cc")
+	result := cardNavigationResult("当前导航状态已变化，请发送 /cc ls 重新打开。")
+	if !paginated {
+		result = h.handleClaudeSessionCommandForRouteResult(req.Context, msg.UserID, req.RouteUserID, h.isAdminMessage(msg), req.Trimmed)
+	}
 	if h.sendFeishuClaudeNavigationChoices(req, result) {
 		return true
 	}
@@ -83,6 +89,14 @@ func (h *Handler) sendFeishuClaudeNavigationChoices(req claudeFeishuCommandReque
 		BindingKey: claudeBindingKey(req.RouteUserID, agentName), Admin: h.isAdminMessage(msg),
 	}
 	choiceReq := claudeFeishuChoiceRequest{Context: req.Context, Reply: req.Reply, Route: route, Metadata: feishuChoiceSessionMetadata(msg, req.RouteUserID)}
+	if page, ok := parseFeishuNavigationPage(fields, "/cc"); ok {
+		choiceReq.Page = page.Page
+		if page.Kind == "workspaces" {
+			return h.sendFeishuClaudeWorkspaceChoices(choiceReq)
+		}
+		choiceReq.WorkspaceRoot = workspaceRoot
+		return h.sendFeishuClaudeSessionChoices(choiceReq)
+	}
 	if fields[1] == "ls" || fields[2] == ".." {
 		return h.sendFeishuClaudeWorkspaceChoices(choiceReq)
 	}
@@ -95,7 +109,11 @@ func isFeishuClaudeNavigationCommand(fields []string) bool {
 	if len(fields) < 2 || !isClaudeSessionCommandToken(fields[0]) {
 		return false
 	}
-	return fields[1] == "ls" || (fields[1] == "cd" && len(fields) == 3)
+	if fields[1] == "ls" || (fields[1] == "cd" && len(fields) == 3) {
+		return true
+	}
+	_, ok := parseFeishuNavigationPage(fields, "/cc")
+	return ok
 }
 
 // sendFeishuClaudeWorkspaceChoices 将权限过滤后的工作空间映射为稳定编号按钮。
@@ -108,7 +126,12 @@ func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest
 	for index, group := range groups {
 		choices = append(choices, platform.Choice{ID: fmt.Sprintf("/cc cd %d", index), Label: claudeWorkspaceGroupLabel(group)})
 	}
-	card := claudeChoiceCard{Prompt: "Claude 工作空间\n请选择要进入的工作空间。", Choices: choices, Meta: req.Metadata}
+	choices, page := paginateFeishuChoices(choices, req.Page)
+	choices = appendFeishuPageNavigation(choices, "/cc", "workspaces", page)
+	card := claudeChoiceCard{
+		Prompt:  feishuPaginatedPrompt("Claude 工作空间\n请选择要进入的工作空间。", page),
+		Choices: choices, Meta: req.Metadata,
+	}
 	return h.askFeishuClaudeChoices(req.Context, req.Reply, card)
 }
 
@@ -125,8 +148,12 @@ func (h *Handler) sendFeishuClaudeSessionChoices(req claudeFeishuChoiceRequest) 
 	if len(choices) == 0 {
 		return false
 	}
-	choices = append(choices, platform.Choice{ID: "/cc cd ..", Label: "返回工作空间列表"})
-	prompt := fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(req.WorkspaceRoot))
+	choices, page := paginateFeishuChoices(choices, req.Page)
+	choices = appendFeishuPageNavigation(choices, "/cc", "sessions", page)
+	choices = append(choices, feishuNavigationChoice("/cc cd ..", "← 返回上一级"))
+	prompt := feishuPaginatedPrompt(
+		fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(req.WorkspaceRoot)), page,
+	)
 	return h.askFeishuClaudeChoices(req.Context, req.Reply, claudeChoiceCard{Prompt: prompt, Choices: choices, Meta: req.Metadata})
 }
 

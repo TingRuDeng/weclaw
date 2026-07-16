@@ -101,6 +101,52 @@ func TestMarkCodexRuntimeConflictIgnoresCanceledCleanupContext(t *testing.T) {
 	}
 }
 
+func TestMarkCodexRuntimeConflictDoesNotOverwriteNewerControlIntent(t *testing.T) {
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+	stale := remoteCodexRuntimeRequest("thread-1", "route-old", 1)
+	newer := remoteCodexRuntimeRequest("thread-1", "route-new", 2)
+	if _, err := a.codexOwners.activateRuntime(newer, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := a.MarkCodexRuntimeConflict(context.Background(), stale)
+
+	if !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("error=%v，旧 revision 应被拒绝", err)
+	}
+	binding, _ := a.codexOwners.threadBinding("thread-1")
+	if binding.Control.RouteKey != newer.Intent.RouteKey || binding.Control.Revision != newer.Intent.Revision ||
+		binding.Runtime != CodexRuntimeDesktop {
+		t.Fatalf("binding=%#v，旧请求覆盖了新控制意图", binding)
+	}
+}
+
+func TestMarkCodexRuntimeConflictAcceptsNewerCommittedIntent(t *testing.T) {
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+	old := CodexRuntimeRequest{
+		Ref:    CodexThreadRef{ConversationID: "conversation-old", ThreadID: "thread-1"},
+		Intent: CodexControlIntent{Owner: CodexControlDesktop, Revision: 1},
+	}
+	if _, err := a.codexOwners.activateRuntime(old, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	newer := remoteCodexRuntimeRequest("thread-1", "route-new", 2)
+
+	if err := a.MarkCodexRuntimeConflict(context.Background(), newer); err != nil {
+		t.Fatalf("mark newer intent: %v", err)
+	}
+	binding, _ := a.codexOwners.threadBinding("thread-1")
+	if binding.Control.RouteKey != newer.Intent.RouteKey || binding.Runtime != CodexRuntimeConflict {
+		t.Fatalf("binding=%#v，新提交的控制意图应进入 conflict", binding)
+	}
+}
+
 func assertCodexConflictError(t *testing.T, err error) {
 	t.Helper()
 	if !errors.Is(err, ErrCodexRuntimeConflict) {

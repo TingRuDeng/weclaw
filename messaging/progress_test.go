@@ -283,6 +283,49 @@ func TestProgressMaxMessages(t *testing.T) {
 	}
 }
 
+func TestStreamProgressIgnoresMessageLimitAndKeepsLatestUpdate(t *testing.T) {
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.MaxProgressMessages = 4
+	session := &progressSession{
+		ctx: context.Background(), reply: reply, taskText: "长任务", cfg: cfg,
+	}
+	state := progressSendState{}
+	progresses := []string{"进展一", "进展二", "进展三", "进展四", "进展五", "进展六"}
+
+	for _, progress := range progresses {
+		session.sendProgressIfAllowed(progress, &state)
+	}
+
+	if len(reply.Stream.Updates) != len(progresses) {
+		t.Fatalf("stream updates=%#v, want all %d progress updates", reply.Stream.Updates, len(progresses))
+	}
+	if got := reply.Stream.Updates[len(reply.Stream.Updates)-1]; got != "进展六" {
+		t.Fatalf("latest stream update=%q, want 进展六", got)
+	}
+}
+
+func TestFailedProgressUpdateDoesNotConsumeMessageLimit(t *testing.T) {
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	reply.Stream.UpdateErr = errors.New("update failed")
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	session := &progressSession{
+		ctx: context.Background(), reply: reply, taskText: "长任务", cfg: cfg,
+	}
+	state := progressSendState{}
+
+	session.sendProgressIfAllowed("进展一", &state)
+
+	if state.sentCount != 0 {
+		t.Fatalf("sent count=%d, failed update must not consume progress limit", state.sentCount)
+	}
+	if state.lastSentSummary != "" {
+		t.Fatalf("last sent summary=%q, failed update must remain retryable", state.lastSentSummary)
+	}
+}
+
 func TestProgressDedupSameSummary(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.SummaryIntervalSeconds = 20
@@ -361,6 +404,20 @@ func TestNativeStreamOpensBeforeFirstAgentProgress(t *testing.T) {
 	if !consumed || reply.Stream.Completed != "最终结果" {
 		t.Fatalf("consumed = %v, stream = %#v", consumed, reply.Stream)
 	}
+}
+
+func TestNativeTaskCardTitleIncludesAgentSource(t *testing.T) {
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+
+	_, finish := NewHandler(nil, nil).startProgressSessionForAgentWithFinal(
+		context.Background(), reply, "", "claude-agent-acp", "修复登录流程", cfg,
+	)
+	if got := reply.Stream.Options.Title; got != "Claude · 修复登录流程" {
+		t.Fatalf("title=%q，期望带 Claude 来源前缀", got)
+	}
+	finish("完成", false)
 }
 
 func TestNativeStreamCreationFailureIsExplicitAndNotRetried(t *testing.T) {

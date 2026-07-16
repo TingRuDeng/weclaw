@@ -2,6 +2,8 @@ package messaging
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +12,58 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
+
+func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	for index := 0; index < 9; index++ {
+		workspace := filepath.Join(root, fmt.Sprintf("workspace-%02d", index))
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeLocalCodexSession(
+			t, codexDir, fmt.Sprintf("thread-%02d", index), workspace,
+			fmt.Sprintf("会话 %02d", index), fmt.Sprintf("2026-04-%02dT09:00:00Z", 29-index),
+		)
+	}
+	h.SetAllowedWorkspaceRoots([]string{root})
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}}
+	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
+
+	first := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", Text: "/cx ls",
+		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, first)
+	if len(first.Choices) != 1 || len(first.Choices[0].Choices) != 8 {
+		t.Fatalf("first page=%#v，期望 7 个工作空间和下一页", first.Choices)
+	}
+	next := first.Choices[0].Choices[7]
+	if next.ID != "/cx page workspaces 2" || next.Metadata[platform.ChoiceMetadataSection] != platform.ChoiceSectionNavigation {
+		t.Fatalf("next=%#v，期望次级样式的下一页动作", next)
+	}
+
+	second := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
+			"choice": "/cx page workspaces 2",
+		}},
+		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, second)
+	if len(second.Choices) != 1 || !strings.Contains(second.Choices[0].Prompt, "第 2/2 页") {
+		t.Fatalf("second page=%#v，期望第二页卡片", second.Choices)
+	}
+	choices := second.Choices[0].Choices
+	if len(choices) != 3 || choices[0].ID != "/cx cd 7" || choices[1].ID != "/cx cd 8" || choices[2].ID != "/cx page workspaces 1" {
+		t.Fatalf("second choices=%#v，分页后必须保留全局编号", choices)
+	}
+}
 
 func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	h := NewHandler(nil, nil)
@@ -206,7 +260,7 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 	if len(choices) != 3 || choices[0].ID != "/cx switch thread-a" || choices[0].Label != "会话 A" {
 		t.Fatalf("session choices=%#v, want switch choices", choices)
 	}
-	if choices[2].ID != "/cx cd .." || choices[2].Label != "返回工作空间列表" {
+	if choices[2].ID != "/cx cd .." || choices[2].Label != "← 返回上一级" {
 		t.Fatalf("last session choice=%#v, want back to workspace list", choices[2])
 	}
 	bindingKey := codexBindingKey("ou_user", "codex")

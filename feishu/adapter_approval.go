@@ -45,10 +45,11 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 			RawCommand: &platform.CardAction{
 				Action: handled.Action,
 				Value: map[string]string{
-					"choice":       handled.Choice,
-					"conv":         handled.Conv,
-					"approval_key": handled.Approval,
-					"task_card_id": handled.TaskCard,
+					"choice":                               handled.Choice,
+					"conv":                                 handled.Conv,
+					"approval_key":                         handled.Approval,
+					"task_card_id":                         handled.TaskCard,
+					platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
 				},
 				Result: resultCh,
 			},

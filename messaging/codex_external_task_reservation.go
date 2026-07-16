@@ -76,7 +76,8 @@ func (h *Handler) reserveExternalCodexTask(opts externalCodexTaskOptions, prepar
 // createExternalCodexTaskReservationLocked 在共享槽位锁内创建 reserved 任务及其唯一控制器。
 func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTaskOptions, prepared preparedExternalCodexTask) externalCodexTaskReservation {
 	taskCtx := h.withAgentInteractions(context.Background(), agentInteractionContextOptions{
-		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID, reply: opts.reply,
+		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID,
+		agentName: opts.agentName, reply: opts.reply,
 	})
 	runtimeOwner, ownerRevision := externalCodexTaskOwner(prepared.state)
 	task, watchCtx := newActiveAgentTask(taskCtx, activeTaskMeta{
