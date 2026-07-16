@@ -44,7 +44,7 @@ setup_case() {
 create_base_commands() {
   cat >"$FAKE_BIN/uname" <<'EOF'
 #!/bin/sh
-[ "${1:-}" = "-m" ] && printf 'arm64\n' || printf 'Darwin\n'
+[ "${1:-}" = "-m" ] && printf '%s\n' "${FAKE_UNAME_ARCH:-arm64}" || printf '%s\n' "${FAKE_UNAME_OS:-Darwin}"
 EOF
   cat >"$FAKE_BIN/curl" <<'EOF'
 #!/bin/sh
@@ -65,7 +65,7 @@ if [ "${url##*/}" = "checksums.txt" ]; then
   if [ "${FAKE_CHECKSUM_MISSING_ENTRY:-0}" = "1" ]; then
     printf '%s  %s\n' "${FAKE_EXPECTED_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "unrelated_asset"
   else
-    printf '%s  %s\n' "${FAKE_EXPECTED_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "weclaw_darwin_arm64"
+    printf '%s  %s\n' "${FAKE_EXPECTED_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "${FAKE_ASSET_NAME:-weclaw_darwin_arm64}"
   fi >"$output"
   exit 0
 fi
@@ -251,6 +251,26 @@ test_checksum_success() {
   assert_file_contains "$DOWNLOADS_FILE" "/v1.2.3/checksums.txt"
   finish_case "校验发布资产 SHA-256"
 }
+test_supported_release_targets() {
+  for spec in \
+    "Darwin arm64 weclaw_darwin_arm64" \
+    "Darwin x86_64 weclaw_darwin_amd64" \
+    "Linux aarch64 weclaw_linux_arm64" \
+    "Linux x86_64 weclaw_linux_amd64"
+  do
+    set -- $spec
+    setup_case
+    FAKE_UNAME_OS=$1
+    FAKE_UNAME_ARCH=$2
+    FAKE_ASSET_NAME=$3
+    export FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+    WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+    [ "$status" -eq 0 ] || fail "$1/$2 安装失败：$output"
+    assert_file_contains "$DOWNLOADS_FILE" "/v1.2.3/$3"
+    finish_case "支持正式资产 $3"
+    unset FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+  done
+}
 test_checksum_mismatch_keeps_existing_binary() {
   setup_case
   printf 'existing binary\n' >"$INSTALL_DIR/weclaw"
@@ -294,6 +314,7 @@ test_install_failure_keeps_weclaw
 test_missing_npm_keeps_weclaw
 test_config_failure_keeps_weclaw
 test_checksum_success
+test_supported_release_targets
 test_checksum_mismatch_keeps_existing_binary
 test_checksum_missing_entry_keeps_existing_binary
 test_release_gate_runs_install_tests

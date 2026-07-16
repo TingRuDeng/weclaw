@@ -56,6 +56,7 @@ func TestACPAgentRecoveryDoesNotFailDesktopWatchers(t *testing.T) {
 	appCh := make(chan *codexTurnEvent, 1)
 	a.turnCh["thread-1"] = desktopCh
 	a.turnCh["app-thread"] = appCh
+	appCh <- &codexTurnEvent{Kind: "started", TurnID: "turn-1"}
 	a.failAppServerActiveTurns("runtime restart")
 	select {
 	case event := <-desktopCh:

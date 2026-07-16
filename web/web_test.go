@@ -82,15 +82,21 @@ func TestParseRuntimePIDSupportsJSONAndLegacyFormat(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresTokenForNonLoopback(t *testing.T) {
+func TestValidateRequiresExplicitInsecureHTTPForNonLoopback(t *testing.T) {
 	if err := NewServer(Options{Addr: "0.0.0.0:39282"}).Validate(); err == nil {
 		t.Fatal("non-loopback without token must fail Validate")
 	}
 	if err := NewServer(Options{Addr: "127.0.0.1:39282"}).Validate(); err != nil {
 		t.Fatalf("loopback should be allowed: %v", err)
 	}
-	if err := NewServer(Options{Addr: "0.0.0.0:39282", Token: "t"}).Validate(); err != nil {
-		t.Fatalf("non-loopback with token should be allowed: %v", err)
+	if err := NewServer(Options{Addr: "0.0.0.0:39282", Token: "t"}).Validate(); err == nil {
+		t.Fatal("non-loopback plain HTTP must require an explicit insecure opt-in")
+	}
+	if err := NewServer(Options{Addr: "0.0.0.0:39282", Token: "t", AllowInsecureHTTP: true}).Validate(); err != nil {
+		t.Fatalf("explicit insecure non-loopback listener should be allowed: %v", err)
+	}
+	if err := NewServer(Options{Addr: "0.0.0.0:39282", AllowInsecureHTTP: true}).Validate(); err == nil {
+		t.Fatal("insecure non-loopback listener without token must still fail")
 	}
 }
 
@@ -114,6 +120,47 @@ func TestAuthMiddleware(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin: want 403 got %d", rec.Code)
+	}
+
+	// URL query 中的 token 会进入日志和历史，不能作为 API 凭证。
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status?token=secret", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("query token: want 401 got %d", rec.Code)
+	}
+}
+
+func TestWebResponsesSetSensitiveSecurityHeaders(t *testing.T) {
+	s := NewServer(Options{Addr: "127.0.0.1:39282", Token: "secret"})
+	mux := http.NewServeMux()
+	s.routes(mux)
+	rec := httptest.NewRecorder()
+	s.guard(mux).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	for header, want := range map[string]string{
+		"Cache-Control":          "no-store",
+		"Referrer-Policy":        "no-referrer",
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Fatalf("%s=%q, want %q", header, got, want)
+		}
+	}
+}
+
+func TestFrontendKeepsTokenOutOfQRURL(t *testing.T) {
+	data, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "&token=") || strings.Contains(text, "?token=") {
+		t.Fatal("app.js must not place the web token in request URLs")
+	}
+	for _, required := range []string{"window.location.hash", "X-WeClaw-Token", "URL.createObjectURL"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("secure token/QR flow missing %q", required)
+		}
 	}
 }
 

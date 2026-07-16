@@ -272,7 +272,8 @@ func TestHandleCodexItemStartedEmitsFileProgress(t *testing.T) {
 
 func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
+	// readLoop 在输入 EOF 后还会投递 runtime 终态，给两类事件分别保留容量。
+	turnCh := make(chan *codexTurnEvent, 2)
 	a.notifyMu.Lock()
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
@@ -290,6 +291,14 @@ func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
 		}
 	default:
 		t.Fatal("patchUpdated did not emit progress")
+	}
+	select {
+	case evt := <-turnCh:
+		if evt.Kind != "error" || evt.Text != "ACP runtime exited" {
+			t.Fatalf("event=%#v, want runtime terminal after patch progress", evt)
+		}
+	default:
+		t.Fatal("readLoop EOF did not emit runtime terminal")
 	}
 }
 

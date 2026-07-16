@@ -55,8 +55,8 @@ ai_summary:
 
 - `tasks/todo.md` 只记录当前或正在执行的任务，不长期累积已完成流水账。
 - `tasks/lessons.md` 记录可复用的踩坑规则和高风险路径，清理文档时必须保留。
-- `docs/CODE_REVIEW_2026-07-14.md` 是当前缺陷状态的权威来源：对修复提交 `9af1731` 的复审验收、interrupted 新缺陷与遗留项清单。
-- `docs/CODE_REVIEW_2026-07-13.md` 是 `9b42cda` 时点的深度审查快照；其缺陷清单已全部修复并通过复审验收，架构与测试盲区分析仍然有效。
+- `docs/CODE_REVIEW_2026-07-14.md` 是修复提交 `9af1731` 时点的历史复审快照；后续代码已继续演进，不能再作为当前缺陷状态来源。
+- `docs/CODE_REVIEW_2026-07-13.md` 是 `9b42cda` 时点的历史深度审查快照；其架构与测试盲区分析可作背景参考，当前状态必须回到代码、测试和本索引核验。
 
 ## How to verify
 
@@ -72,6 +72,8 @@ full:
 ```bash
 go test ./... -count=1 -timeout 120s
 go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 git diff --check
 ```
 

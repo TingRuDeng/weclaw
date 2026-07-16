@@ -39,6 +39,46 @@ func TestReleaseScriptNextPatchTag(t *testing.T) {
 	}
 }
 
+func TestReleaseScriptRequiresCurrentOriginMain(t *testing.T) {
+	script := releaseScriptPath(t)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	repo := t.TempDir()
+	runReleaseScriptTestCommand(t, "", "git", "init", "--bare", origin)
+	runReleaseScriptTestCommand(t, repo, "git", "init")
+	runReleaseScriptTestCommand(t, repo, "git", "config", "user.email", "test@example.com")
+	runReleaseScriptTestCommand(t, repo, "git", "config", "user.name", "测试用户")
+
+	readme := filepath.Join(repo, "README.md")
+	if err := os.WriteFile(readme, []byte("initial\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runReleaseScriptTestCommand(t, repo, "git", "add", "README.md")
+	runReleaseScriptTestCommand(t, repo, "git", "commit", "-m", "初始化")
+	runReleaseScriptTestCommand(t, repo, "git", "branch", "-M", "main")
+	runReleaseScriptTestCommand(t, repo, "git", "remote", "add", "origin", origin)
+	runReleaseScriptTestCommand(t, repo, "git", "push", "-u", "origin", "main")
+
+	checkCommand := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + " && check_release_source"
+	runReleaseScriptTestCommand(t, repo, "bash", "-c", checkCommand)
+
+	runReleaseScriptTestCommand(t, repo, "git", "switch", "-c", "feature")
+	output := runReleaseScriptTestCommandExpectFailure(t, repo, "bash", "-c", checkCommand)
+	if !strings.Contains(output, "main 分支") {
+		t.Fatalf("non-main rejection=%q, want branch hint", output)
+	}
+
+	runReleaseScriptTestCommand(t, repo, "git", "switch", "main")
+	if err := os.WriteFile(readme, []byte("ahead\n"), 0o644); err != nil {
+		t.Fatalf("update README: %v", err)
+	}
+	runReleaseScriptTestCommand(t, repo, "git", "add", "README.md")
+	runReleaseScriptTestCommand(t, repo, "git", "commit", "-m", "尚未推送")
+	output = runReleaseScriptTestCommandExpectFailure(t, repo, "bash", "-c", checkCommand)
+	if !strings.Contains(output, "origin/main") {
+		t.Fatalf("diverged main rejection=%q, want origin/main hint", output)
+	}
+}
+
 func TestReleaseScriptUpdateSmokeSkipsDryRun(t *testing.T) {
 	script := releaseScriptPath(t)
 
@@ -51,7 +91,7 @@ func TestReleaseScriptUpdateSmokeSkipsDryRun(t *testing.T) {
 func TestReleaseScriptUpdateSmokeSkipsUnsupportedHost(t *testing.T) {
 	script := releaseScriptPath(t)
 	command := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
-		`go() { if [[ "$1 $2" == "env GOHOSTOS" ]]; then echo linux; elif [[ "$1 $2" == "env GOHOSTARCH" ]]; then echo amd64; else echo unexpected-go-call >&2; return 9; fi; } && ` +
+		`go() { if [[ "$1 $2" == "env GOHOSTOS" ]]; then echo windows; elif [[ "$1 $2" == "env GOHOSTARCH" ]]; then echo amd64; else echo unexpected-go-call >&2; return 9; fi; } && ` +
 		`DRY_RUN=0 TAG=v9.9.9 verify_update_smoke`
 
 	output := runReleaseScriptTestCommand(t, "", "bash", "-c", command)
@@ -60,7 +100,13 @@ func TestReleaseScriptUpdateSmokeSkipsUnsupportedHost(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowsOnlyBuildDarwinArm64(t *testing.T) {
+func TestReleaseWorkflowsBuildOfficialMatrix(t *testing.T) {
+	requiredTargets := []string{
+		"- goos: darwin\n            goarch: arm64",
+		"- goos: darwin\n            goarch: amd64",
+		"- goos: linux\n            goarch: arm64",
+		"- goos: linux\n            goarch: amd64",
+	}
 	for _, path := range []string{
 		filepath.Join("..", ".github", "workflows", "ci.yml"),
 		filepath.Join("..", ".github", "workflows", "release.yml"),
@@ -70,14 +116,47 @@ func TestReleaseWorkflowsOnlyBuildDarwinArm64(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := string(content)
-		for _, unsupported := range []string{"goos: linux", "goos: windows", "goarch: amd64"} {
-			if strings.Contains(text, unsupported) {
-				t.Fatalf("%s contains unsupported release target %q", path, unsupported)
+		for _, target := range requiredTargets {
+			if !strings.Contains(text, target) {
+				t.Fatalf("%s missing official release target %q", path, target)
 			}
 		}
-		if !strings.Contains(text, "goos: darwin") || !strings.Contains(text, "goarch: arm64") {
-			t.Fatalf("%s missing darwin/arm64 target", path)
+		if strings.Contains(text, "goos: windows") {
+			t.Fatalf("%s must not publish Windows assets", path)
 		}
+	}
+
+	script, err := os.ReadFile(releaseScriptPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(script)
+	for _, target := range []string{`"darwin/arm64"`, `"darwin/amd64"`, `"linux/arm64"`, `"linux/amd64"`} {
+		if !strings.Contains(text, target) {
+			t.Fatalf("release script missing official target %s", target)
+		}
+	}
+	if !strings.Contains(text, "${#TARGETS[@]} + 1") {
+		t.Fatal("release asset verification must derive expected count from TARGETS")
+	}
+}
+
+func TestReleaseScriptVerifiesEveryOfficialAssetName(t *testing.T) {
+	script := releaseScriptPath(t)
+	assets := strings.Join([]string{
+		"weclaw_darwin_arm64",
+		"weclaw_darwin_amd64",
+		"weclaw_linux_arm64",
+		"weclaw_linux_amd64",
+		"checksums.txt",
+	}, `\n`)
+	command := releaseVerifyCommand(script, assets)
+	runReleaseScriptTestCommand(t, "", "bash", "-c", command)
+
+	wrongAssets := strings.Replace(assets, "weclaw_linux_amd64", "unexpected_asset", 1)
+	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, wrongAssets))
+	if !strings.Contains(output, "Release 缺少资产：weclaw_linux_amd64") {
+		t.Fatalf("missing asset rejection=%q", output)
 	}
 }
 
@@ -88,6 +167,24 @@ func TestReleaseValidationRunsGovulncheck(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "govulncheck@v1.6.0") {
 		t.Fatal("release validation must run pinned govulncheck v1.6.0")
+	}
+}
+
+func TestReleaseValidationRunsTidyAndStaticcheck(t *testing.T) {
+	const staticcheck = "honnef.co/go/tools/cmd/staticcheck@v0.7.0"
+	for _, path := range []string{
+		releaseScriptPath(t),
+		filepath.Join("..", ".github", "workflows", "ci.yml"),
+		filepath.Join("..", ".github", "workflows", "release.yml"),
+	} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		if !strings.Contains(text, "go mod tidy -diff") || !strings.Contains(text, staticcheck) {
+			t.Fatalf("%s must gate go.mod drift and pinned staticcheck", path)
+		}
 	}
 }
 
@@ -110,6 +207,26 @@ func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowsPinThirdPartyReleaseAction(t *testing.T) {
+	const pinnedReleaseAction = "softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2"
+	for _, path := range []string{
+		filepath.Join("..", ".github", "workflows", "ci.yml"),
+		filepath.Join("..", ".github", "workflows", "release.yml"),
+	} {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		if !strings.Contains(text, pinnedReleaseAction) {
+			t.Fatalf("%s must pin softprops/action-gh-release to reviewed v3.0.2 commit", path)
+		}
+		if strings.Contains(text, "softprops/action-gh-release@v") {
+			t.Fatalf("%s contains mutable softprops/action-gh-release tag", path)
+		}
+	}
+}
+
 func TestStableReleaseWorkflowIsManualOnlyAndBuildsRequestedTag(t *testing.T) {
 	path := filepath.Join("..", ".github", "workflows", "release.yml")
 	content, err := os.ReadFile(path)
@@ -125,6 +242,35 @@ func TestStableReleaseWorkflowIsManualOnlyAndBuildsRequestedTag(t *testing.T) {
 	}
 	if !strings.Contains(text, "ref: ${{ inputs.tag }}") {
 		t.Fatal("手动发布必须 checkout 输入 tag，禁止用默认分支内容冒充目标版本")
+	}
+	for _, required := range []string{
+		"fetch-depth: 0",
+		"refs/tags/$RELEASE_TAG^{commit}",
+		"refs/remotes/origin/main",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("手动发布缺少主分支来源校验 %q", required)
+		}
+	}
+}
+
+func TestPrereleaseWorkflowRecreatesMovingTagAtCurrentCommit(t *testing.T) {
+	path := filepath.Join("..", ".github", "workflows", "ci.yml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取 CI workflow 失败：%v", err)
+	}
+	text := string(content)
+	for _, required := range []string{
+		"group: prerelease-${{ github.ref }}",
+		"cancel-in-progress: true",
+		"--cleanup-tag",
+		"git/refs/tags/${RELEASE_TAG}",
+		"target_commitish: ${{ github.sha }}",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("预发布 moving tag 缺少 %q", required)
+		}
 	}
 }
 
@@ -150,6 +296,25 @@ func runReleaseScriptTestCommand(t *testing.T, dir string, name string, args ...
 	return string(output)
 }
 
+func runReleaseScriptTestCommandExpectFailure(t *testing.T, dir string, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("%s %s unexpectedly succeeded\n%s", name, strings.Join(args, " "), output)
+	}
+	return string(output)
+}
+
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func releaseVerifyCommand(script string, assets string) string {
+	return "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
+		`gh() { case "$*" in *".assets | length"*) echo 5 ;; *".assets[].name"*) printf '%b\n' "` + assets + `" ;; *"--json tagName"*) echo v9.9.9 ;; esac; } && ` +
+		`DRY_RUN=0 TAG=v9.9.9 verify_release`
 }

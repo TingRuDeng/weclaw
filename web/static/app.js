@@ -1,12 +1,13 @@
 'use strict';
 
-// 从 URL ?token= 读取并存入 sessionStorage，后续请求以 X-WeClaw-Token 携带。
+// 从 URL fragment 读取 token；fragment 不会被发送到服务端或代理日志。
 (function initToken() {
   const u = new URL(window.location.href);
-  const t = u.searchParams.get('token');
+  const fragment = new URLSearchParams(window.location.hash.slice(1));
+  const t = fragment.get('token');
   if (t) {
     sessionStorage.setItem('weclaw_token', t);
-    u.searchParams.delete('token');
+    u.hash = '';
     window.history.replaceState({}, '', u.toString());
   }
 })();
@@ -96,20 +97,31 @@ async function validateFeishu() {
 }
 
 let wechatTimer = null;
+let wechatQRObjectURL = null;
 
 async function startWeChatLogin() {
   const qrBox = document.getElementById('qr');
   qrBox.textContent = '正在获取二维码…';
   try {
     const r = await api('POST', '/api/wechat/login/start', {});
-    const qrSrc = `/api/wechat/login/qr?login_id=${encodeURIComponent(r.login_id)}&token=${encodeURIComponent(token())}`;
+    const qrResponse = await fetch(`/api/wechat/login/qr?login_id=${encodeURIComponent(r.login_id)}`, {
+      headers: { 'X-WeClaw-Token': token() },
+    });
+    if (!qrResponse.ok) throw new Error((await qrResponse.text()) || qrResponse.status);
+    if (wechatQRObjectURL) URL.revokeObjectURL(wechatQRObjectURL);
+    const qrObjectURL = URL.createObjectURL(await qrResponse.blob());
+    wechatQRObjectURL = qrObjectURL;
     const hint = document.createElement('div');
     hint.className = 'muted';
     hint.textContent = '用微信扫码并确认';
     const image = document.createElement('img');
     image.className = 'qr';
-    image.src = qrSrc;
+    image.src = qrObjectURL;
     image.alt = '二维码';
+    image.onload = () => {
+      URL.revokeObjectURL(qrObjectURL);
+      if (wechatQRObjectURL === qrObjectURL) wechatQRObjectURL = null;
+    };
     const state = document.createElement('div');
     state.id = 'wechat-state';
     state.className = 'muted';

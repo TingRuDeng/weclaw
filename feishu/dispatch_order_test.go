@@ -97,6 +97,48 @@ func TestDispatchWaitTimeoutPreservesPreviousTicket(t *testing.T) {
 	}
 }
 
+func TestRepeatedDispatchWaitTimeoutsCollapseToOriginalPredecessor(t *testing.T) {
+	sequencer := newFeishuDispatchSequencer()
+	first := sequencer.reserve("session")
+	blocked := make(chan struct{})
+	firstDone := make(chan struct{})
+	go func() {
+		first.run(context.Background(), func() { <-blocked })
+		close(firstDone)
+	}()
+
+	for i := 0; i < 100; i++ {
+		ticket := sequencer.reserve("session")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if ticket.run(ctx, func() {}) {
+			close(blocked)
+			t.Fatal("已取消票据不应执行")
+		}
+	}
+
+	sequencer.mu.Lock()
+	tail := sequencer.tails["session"]
+	sequencer.mu.Unlock()
+	if tail != first.current {
+		close(blocked)
+		t.Fatal("重复超时票据应折叠到原始未完成节点")
+	}
+
+	close(blocked)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("原始操作结束后队列未完成")
+	}
+	sequencer.mu.Lock()
+	_, exists := sequencer.tails["session"]
+	sequencer.mu.Unlock()
+	if exists {
+		t.Fatal("原始操作结束后队尾未清理")
+	}
+}
+
 // TestDispatchWaitTimeoutRunsCurrentTicket 验证前序任务长期阻塞时当前消息仍会进入业务层。
 func TestDispatchWaitTimeoutRunsCurrentTicket(t *testing.T) {
 	sequencer := newFeishuDispatchSequencer()

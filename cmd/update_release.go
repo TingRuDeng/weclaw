@@ -13,10 +13,12 @@ const updateHTTPTimeout = 60 * time.Second
 
 // releaseAssetNameForRuntime 返回当前发布策略支持的 release 资产名。
 func releaseAssetNameForRuntime(goos string, goarch string) (string, error) {
-	if goos == "darwin" && goarch == "arm64" {
-		return "weclaw_darwin_arm64", nil
+	switch goos + "/" + goarch {
+	case "darwin/arm64", "darwin/amd64", "linux/arm64", "linux/amd64":
+		return fmt.Sprintf("weclaw_%s_%s", goos, goarch), nil
+	default:
+		return "", fmt.Errorf("当前 release 支持 darwin/arm64、darwin/amd64、linux/arm64、linux/amd64，当前平台是 %s/%s", goos, goarch)
 	}
-	return "", fmt.Errorf("当前 release 只提供 darwin/arm64 包，当前平台是 %s/%s", goos, goarch)
 }
 
 func getLatestVersion() (string, error) {

@@ -16,10 +16,7 @@ func (a *ACPAgent) failAppServerActiveTurns(reason string) {
 	}
 	a.notifyMu.Unlock()
 	for _, channel := range channels {
-		select {
-		case channel <- event:
-		default:
-		}
+		dispatchCodexTurnControlEvent(channel, event)
 	}
 }
 

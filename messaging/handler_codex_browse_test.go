@@ -31,6 +31,33 @@ func TestDiscoverLocalCodexSessionsReadsIndexAndSessionMeta(t *testing.T) {
 	}
 }
 
+func TestReadLocalCodexSessionIndexContinuesAfterLargeRecord(t *testing.T) {
+	codexDir := t.TempDir()
+	writeLocalCodexIndex(t, codexDir, "thread-large", strings.Repeat("x", 70*1024), "2026-04-29T07:00:00Z")
+	writeLocalCodexIndex(t, codexDir, "thread-target", "App 当前会话名", "2026-04-29T08:00:00Z")
+
+	index := readLocalCodexSessionIndex(filepath.Join(codexDir, "session_index.jsonl"))
+
+	if got := index["thread-target"].ThreadName; got != "App 当前会话名" {
+		t.Fatalf("target thread name=%q, want App 当前会话名", got)
+	}
+}
+
+func TestReadLocalCodexSessionIndexSkipsBoundedOversizedRecord(t *testing.T) {
+	codexDir := t.TempDir()
+	writeLocalCodexIndex(t, codexDir, "thread-oversized", strings.Repeat("x", codexLocalIndexMaxRecordBytes+1), "2026-04-29T07:00:00Z")
+	writeLocalCodexIndex(t, codexDir, "thread-target", "超限记录后的会话", "2026-04-29T08:00:00Z")
+
+	index := readLocalCodexSessionIndex(filepath.Join(codexDir, "session_index.jsonl"))
+
+	if _, exists := index["thread-oversized"]; exists {
+		t.Fatal("oversized index record must be skipped")
+	}
+	if got := index["thread-target"].ThreadName; got != "超限记录后的会话" {
+		t.Fatalf("target thread name=%q, want 超限记录后的会话", got)
+	}
+}
+
 func TestDiscoverLocalCodexSessionsSkipsArchivedSessions(t *testing.T) {
 	codexDir := t.TempDir()
 	activeWorkspace := filepath.Join(t.TempDir(), "active")

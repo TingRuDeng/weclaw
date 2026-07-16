@@ -170,13 +170,18 @@ func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2Message
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
 	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
 	if !isFeishuStopMessage(msg) {
-		ticket.runWithWaitNotice(ctx, dispatchWaitOptions{
+		dispatchCtx, cancel := context.WithTimeout(ctx, a.dispatchWait)
+		defer cancel()
+		outcome := ticket.runWithWaitNotice(dispatchCtx, dispatchWaitOptions{
 			delay:  a.dispatchNoticeDelay,
 			notice: func() { go a.sendQueueWaitNotice(msg) },
 			dispatch: func() {
 				a.dispatchMessage(ctx, msg, dispatch)
 			},
 		})
+		if outcome == dispatchRunWaitCanceled || outcome == dispatchRunExecutionCanceled {
+			go a.sendQueueTimeoutNotice(msg, outcome)
+		}
 		return
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, a.dispatchWait)
@@ -186,6 +191,19 @@ func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.Inco
 	})
 	if !ordered {
 		log.Printf("[feishu] message dispatch bypassed stalled predecessor: account=%s chat=%s message=%s", msg.AccountID, msg.ChatID, msg.MessageID)
+	}
+}
+
+// sendQueueTimeoutNotice 区分尚未执行与执行未返回，避免超时后给出错误承诺。
+func (a *Adapter) sendQueueTimeoutNotice(msg platform.IncomingMessage, outcome dispatchRunOutcome) {
+	ctx, cancel := context.WithTimeout(context.Background(), feishuMessageNoticeTimeout)
+	defer cancel()
+	text := "前一项操作仍未结束，排队等待已超时，本消息未执行。请发送 /stop 或稍后重试。"
+	if outcome == dispatchRunExecutionCanceled {
+		text = "本消息处理超过等待上限，后台操作仍可能继续。请先检查当前状态，必要时发送 /stop。"
+	}
+	if err := a.newScopedReplier(msg).SendText(ctx, text); err != nil {
+		log.Printf("[feishu] failed to send message dispatch timeout notice: %v", err)
 	}
 }
 

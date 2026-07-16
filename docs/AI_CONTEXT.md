@@ -31,7 +31,7 @@ ai_summary:
 - 仓库类型：单一 Go 仓库，不是 coordination directory。
 - Go 模块：`github.com/fastclaw-ai/weclaw`，以 `main.go` 和 `cmd/root.go` 进入 CLI。
 - 产品定位：把微信个人号和飞书消息接入 AI Agent，业务层通过 `platform` 抽象隔离平台差异。
-- 发布目标：`scripts/release.sh` 当前只构建 `darwin/arm64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。
+- 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。
 - Android profile：未检测到 Gradle 或 `AndroidManifest.xml`，当前只适用 `generic` profile。
 
 ## Core Directories
@@ -109,11 +109,12 @@ ai_summary:
 - full: `go test ./... -count=1 -timeout 120s`
 - full: `go test -race ./agent ./cmd ./messaging -count=1 -timeout 60s`
 - full: `go vet ./...`
+- full: `go mod tidy -diff`
+- full: `go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`
 - release-side-effect: `scripts/release.sh --next-patch`
 
 ## Stale when
 
-- 新增平台目录、Agent 类型、配置字段、会话存储、命令入口或 API 端点。
-- 飞书 session routing、审批卡片、Codex permission bridge 或 active task 生命周期改变。
-- 发布目标不再只包含 `darwin/arm64`，或发布脚本验证命令变化。
+- 新增平台目录、Agent 类型、配置字段、会话存储、命令入口、API 端点，或飞书 session routing、审批卡片、Codex permission bridge、active task 生命周期改变。
+- 正式发布资产矩阵或发布脚本验证命令变化。
 - README 中的用户命令、配置示例或平台能力表更新。

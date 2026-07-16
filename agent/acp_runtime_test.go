@@ -132,6 +132,46 @@ func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
 	}
 }
 
+func TestACPAgentDispatchDuplicateResponseDoesNotBlock(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	id := int64(7)
+	responseCh := make(chan *rpcResponse, 1)
+	a.pending[id] = responseCh
+
+	first := &rpcResponse{ID: &id, Result: json.RawMessage(`{"value":"first"}`)}
+	duplicate := &rpcResponse{ID: &id, Result: json.RawMessage(`{"value":"duplicate"}`)}
+	a.dispatchACPResponse(first)
+
+	done := make(chan struct{})
+	go func() {
+		a.dispatchACPResponse(duplicate)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("duplicate RPC response blocked the ACP read loop")
+	}
+
+	if got := <-responseCh; got != first {
+		t.Fatalf("pending response=%#v, want first response", got)
+	}
+}
+
+func TestACPAgentRuntimeFailureEvictsQueuedStartedEvent(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	turnCh <- &codexTurnEvent{Kind: "started", TurnID: "turn-1"}
+	a.turnCh["thread-1"] = turnCh
+
+	a.failActiveTurns("runtime exited")
+
+	event := <-turnCh
+	if event.Kind != "error" || event.Text != "runtime exited" {
+		t.Fatalf("turn event=%#v, want runtime error terminal", event)
+	}
+}
+
 func TestACPAgentStopFailsPendingRequestsAndActiveTurns(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	pendingCh := make(chan *rpcResponse, 1)
