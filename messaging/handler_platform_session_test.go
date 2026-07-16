@@ -321,7 +321,7 @@ func TestHandleMessageKeepsFeishuSenderUserIDForLogs(t *testing.T) {
 	}
 }
 
-func TestHandleMessageKeepsFeishuSenderUserIDForWorkspaceCommands(t *testing.T) {
+func TestHandleMessageUsesFeishuSessionKeyForWorkspaceCommands(t *testing.T) {
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			reply: "ok",
@@ -346,12 +346,13 @@ func TestHandleMessageKeepsFeishuSenderUserIDForWorkspaceCommands(t *testing.T) 
 		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
 	}, reply)
 
-	ownerWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey("ou_user", "codex"))
+	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
+	sessionWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey(sessionKey, "codex"))
 	wantWorkspace := canonicalTestPath(t, workspaceRoot)
-	if !ok || ownerWorkspace != normalizeCodexWorkspaceRoot(wantWorkspace) {
-		t.Fatalf("owner workspace=%q ok=%v, want %q for true sender", ownerWorkspace, ok, workspaceRoot)
+	if !ok || sessionWorkspace != normalizeCodexWorkspaceRoot(wantWorkspace) {
+		t.Fatalf("session workspace=%q ok=%v, want %q for Feishu route", sessionWorkspace, ok, workspaceRoot)
 	}
-	if sessionWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey("feishu:tenant_1:group:oc_1:om_root", "codex")); ok {
-		t.Fatalf("session workspace=%q, should not bind /cwd to session key", sessionWorkspace)
+	if actorWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey("ou_user", "codex")); ok {
+		t.Fatalf("actor workspace=%q, should not bind /cwd to bare sender", actorWorkspace)
 	}
 }

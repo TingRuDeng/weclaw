@@ -18,9 +18,13 @@ func (h *Handler) handleCwd(trimmed string, userID ...string) string {
 	return h.handleCwdWithAccess(trimmed, userID, false)
 }
 
-// handleCwdForMessage 按消息身份判断 /cwd 权限：管理员可切任意本机目录，普通用户受白名单限制。
-func (h *Handler) handleCwdForMessage(trimmed string, msg platform.IncomingMessage) string {
-	return h.handleCwdWithAccess(trimmed, []string{msg.UserID}, h.isAdminMessage(msg))
+// handleCwdForMessage 按消息身份判断 /cwd 权限，并用窗口路由键更新会话绑定。
+func (h *Handler) handleCwdForMessage(trimmed string, msg platform.IncomingMessage, routeUserID string) string {
+	routeUserID = strings.TrimSpace(routeUserID)
+	if routeUserID == "" {
+		routeUserID = msg.UserID
+	}
+	return h.handleCwdWithAccess(trimmed, []string{routeUserID}, h.isAdminMessage(msg))
 }
 
 func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin bool) string {

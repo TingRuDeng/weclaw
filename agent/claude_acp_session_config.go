@@ -138,11 +138,40 @@ func (a *ACPAgent) setClaudeEffort(ctx context.Context, sessionID string, effort
 func (a *ACPAgent) setClaudeConfigValue(ctx context.Context, request claudeSessionConfigRequest) error {
 	options := a.claudeSessionConfigSnapshot(request.sessionID)
 	option := findClaudeConfigOption(options, request.configID)
-	if option == nil || !configOptionHasValue(option, request.value) {
+	if option == nil {
+		return fmt.Errorf("配置 %s 不支持值 %s", request.configID, request.value)
+	}
+	if option.Category == "model" || option.ID == claudeModelConfigID || request.configID == claudeModelConfigID {
+		value, ok := resolveClaudeModelConfigValue(option, request.value)
+		if !ok {
+			return fmt.Errorf("配置 %s 不支持值 %s", request.configID, request.value)
+		}
+		request.value = value
+	} else if !configOptionHasValue(option, request.value) {
 		return fmt.Errorf("配置 %s 不支持值 %s", request.configID, request.value)
 	}
 	request.configID = option.ID
 	return a.setClaudeSessionConfig(ctx, request)
+}
+
+// resolveClaudeModelConfigValue 把 WeClaw 展示用的规范 ID 或 alias 映射为
+// 当前 ACP session 实际公布的选项值，避免在 RPC 前误拒绝合法模型。
+func resolveClaudeModelConfigValue(option *acpSessionConfigOption, requested string) (string, bool) {
+	requested = strings.TrimSpace(requested)
+	if configOptionHasValue(option, requested) {
+		return requested, true
+	}
+	for _, known := range DefaultClaudeModels() {
+		if requested != known.ID && requested != known.Alias {
+			continue
+		}
+		for _, choice := range option.Options {
+			if choice.Value == known.ID || choice.Value == known.Alias {
+				return choice.Value, true
+			}
+		}
+	}
+	return "", false
 }
 
 func (a *ACPAgent) setClaudeSessionConfig(ctx context.Context, request claudeSessionConfigRequest) error {

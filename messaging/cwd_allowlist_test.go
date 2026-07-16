@@ -140,7 +140,7 @@ func TestCwdAdminBypassesWorkspaceRoots(t *testing.T) {
 	got := h.handleCwdForMessage("/cwd "+dir, platform.IncomingMessage{
 		Platform: platform.PlatformWeChat,
 		UserID:   "wx_admin",
-	})
+	}, "")
 
 	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
 		t.Fatalf("admin should bypass empty allowed_workspace_roots, got %q", got)
@@ -156,7 +156,7 @@ func TestCwdFeishuAdminUsesUnionIDBypass(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Metadata: map[string]string{"feishu_union_id": "on_admin"},
-	})
+	}, "")
 
 	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
 		t.Fatalf("feishu admin should bypass empty allowed_workspace_roots by union_id, got %q", got)

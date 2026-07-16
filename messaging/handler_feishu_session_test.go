@@ -109,6 +109,34 @@ func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
 	}
 }
 
+func TestFeishuCwdUsesChatSessionMetadataForClaudeBinding(t *testing.T) {
+	ag := &fakeClaudeSessionAgent{fakeAgent: fakeAgent{info: agent.AgentInfo{
+		Name: "claude", Type: "acp", Command: "claude-agent-acp",
+	}}}
+	h := NewHandler(nil, nil)
+	h.SetDefaultAgent("claude", ag)
+	workspace := t.TempDir()
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	sessionKey := "feishu:tenant_1:dm:oc_1:ou_user"
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/cwd " + workspace,
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}, reply)
+
+	routeBinding := h.ensureClaudeSessions().binding(claudeBindingKey(sessionKey, "claude"))
+	if routeBinding.WorkspaceRoot != canonicalTestPath(t, workspace) {
+		t.Fatalf("route binding=%+v，期望飞书窗口绑定工作空间 %q", routeBinding, workspace)
+	}
+	actorBinding := h.ensureClaudeSessions().binding(claudeBindingKey("ou_user", "claude"))
+	if actorBinding.WorkspaceRoot != "" {
+		t.Fatalf("actor binding=%+v，不应把飞书 /cwd 写入裸用户兼容绑定", actorBinding)
+	}
+}
+
 func TestFeishuHelpChoicesCarrySessionMetadata(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})

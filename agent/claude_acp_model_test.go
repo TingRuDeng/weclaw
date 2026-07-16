@@ -54,6 +54,46 @@ func TestClaudeACPConfiguresNewSessionModelThenEffort(t *testing.T) {
 	}
 }
 
+func TestClaudeACPMapsCanonicalModelIDToSessionConfigValue(t *testing.T) {
+	const initialOptions = `[
+		{"id":"model","currentValue":"sonnet","options":[
+			{"value":"sonnet","name":"Sonnet"},
+			{"value":"fable","name":"Fable"}
+		]}
+	]`
+	const configuredOptions = `[
+		{"id":"model","currentValue":"fable","options":[
+			{"value":"sonnet","name":"Sonnet"},
+			{"value":"fable","name":"Fable"}
+		]}
+	]`
+	ag := NewACPAgent(ACPAgentConfig{
+		ConfiguredName: "claude", Command: "claude-agent-acp", Model: "claude-fable-5",
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	var configured []string
+	ag.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "session/new":
+			return json.RawMessage(`{"sessionId":"session-1","configOptions":` + initialOptions + `}`), nil
+		case "session/set_config_option":
+			configured = append(configured, configOptionValue(params))
+			return json.RawMessage(`{"configOptions":` + configuredOptions + `}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	sessionID, err := ag.createSession(context.Background(), "conversation-1")
+
+	if err != nil || sessionID != "session-1" {
+		t.Fatalf("session=(%q,%v)，期望规范模型 ID 能创建新 session", sessionID, err)
+	}
+	if strings.Join(configured, ",") != "fable" {
+		t.Fatalf("configured=%#v，期望向 ACP 写入 session 实际选项 fable", configured)
+	}
+}
+
 func TestClaudeACPDoesNotReconfigureExistingSession(t *testing.T) {
 	ag := NewACPAgent(ACPAgentConfig{
 		ConfiguredName: "claude", Command: "claude-agent-acp", StateFile: filepath.Join(t.TempDir(), "state.json"),

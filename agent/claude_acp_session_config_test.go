@@ -136,6 +136,46 @@ func TestClaudeACPSessionConfigAllowsUnavailableRestoredModel(t *testing.T) {
 	})
 }
 
+func TestResolveClaudeModelConfigValueMapsCanonicalIDsAndAliases(t *testing.T) {
+	tests := []struct {
+		name      string
+		choices   []acpSessionConfigChoice
+		requested string
+		want      string
+		ok        bool
+	}{
+		{
+			name: "规范 ID 映射到 ACP alias",
+			choices: []acpSessionConfigChoice{
+				{Value: "sonnet"}, {Value: "fable"},
+			},
+			requested: "claude-fable-5", want: "fable", ok: true,
+		},
+		{
+			name: "alias 映射到 ACP 规范 ID",
+			choices: []acpSessionConfigChoice{
+				{Value: "claude-sonnet-5"}, {Value: "claude-fable-5"},
+			},
+			requested: "fable", want: "claude-fable-5", ok: true,
+		},
+		{
+			name: "未知模型保持拒绝",
+			choices: []acpSessionConfigChoice{
+				{Value: "sonnet"}, {Value: "fable"},
+			},
+			requested: "claude-unknown", ok: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := resolveClaudeModelConfigValue(&acpSessionConfigOption{Options: test.choices}, test.requested)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("resolve=%q,%t，期望 %q,%t", got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
 func TestClaudeACPSessionConfigUsesSemanticCategories(t *testing.T) {
 	ag := newClaudeConfigAgentForTest(t)
 	ag.sessions["conversation-1"] = "session-1"
