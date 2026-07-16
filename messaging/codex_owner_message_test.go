@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
@@ -83,6 +84,28 @@ func TestCodexUnclaimedFeishuMessageReturnsOwnerCard(t *testing.T) {
 	waitUntil(t, func() bool { return len(reply.Choices) == 1 })
 	if ag.runCalls != 0 || len(reply.Choices[0].Choices) != 2 {
 		t.Fatalf("run=%d choices=%#v", ag.runCalls, reply.Choices)
+	}
+}
+
+func TestCodexRemoteOwnedRuntimeFailureDoesNotReturnOwnerCard(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
+	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	opts.platform = platform.PlatformFeishu
+	opts.reply = reply
+
+	h.startCodexAgentTask(opts)
+
+	waitUntil(t, func() bool { return len(reply.Texts) > 0 })
+	intent := h.codexSessions.controlIntent(route.threadID)
+	if len(reply.Choices) != 0 || ag.runCalls != 0 || ag.bindCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("runtime 异常不应要求重选 owner，choices=%#v run=%d inspect=%d handoff=%d", reply.Choices, ag.runCalls, ag.bindCalls, ag.handoffCalls)
+	}
+	if intent.Owner != codexControlRemote || intent.RouteBindingKey != route.bindingKey || intent.ConversationID != route.conversationID {
+		t.Fatalf("runtime 异常不应修改 remote owner，intent=%#v", intent)
+	}
+	if text := strings.Join(reply.Texts, "\n"); !strings.Contains(text, "运行通道暂不可用") || !strings.Contains(text, "所有权保持不变") {
+		t.Fatalf("reply=%q", text)
 	}
 }
 

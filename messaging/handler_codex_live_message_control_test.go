@@ -17,7 +17,7 @@ func TestCodexDesktopIdleMessageStartsDesktopTurn(t *testing.T) {
 	h, ag, opts, _ := liveMessageFixture(t, false)
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
-	if ag.bindCalls == 0 || ag.lastChatMessage() != "继续任务" {
+	if ag.bindCalls != 0 || ag.handoffCalls != 0 || ag.lastChatMessage() != "继续任务" {
 		t.Fatalf("bind=%d message=%q", ag.bindCalls, ag.lastChatMessage())
 	}
 }
@@ -101,18 +101,20 @@ func TestCodexDesktopQueuedMessageKeepsResolvedStreamProgress(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopDisconnectedRejectsStartGuideAndStop(t *testing.T) {
+func TestCodexUnknownRuntimeRejectsStartWithoutChangingOwner(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
-	ag.bindErr = agent.ErrCodexDesktopDisconnected
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
 	text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n")
-	if ag.chatCallCount() != 0 || !strings.Contains(text, "连接已断开") {
-		t.Fatalf("chat=%d text=%q", ag.chatCallCount(), text)
+	if ag.chatCallCount() != 0 || ag.bindCalls != 0 || ag.handoffCalls != 0 || !strings.Contains(text, "运行通道暂不可用") {
+		t.Fatalf("chat=%d inspect=%d handoff=%d text=%q", ag.chatCallCount(), ag.bindCalls, ag.handoffCalls, text)
 	}
 	if _, active := h.activeTask(route.conversationID); active {
 		t.Fatal("断线拒绝后不应留下 active task")
+	}
+	if intent := h.codexSessions.controlIntent(route.threadID); intent.Owner != codexControlRemote || intent.RouteBindingKey != route.bindingKey {
+		t.Fatalf("runtime unknown 不应改变 owner，intent=%#v", intent)
 	}
 }
 
@@ -216,7 +218,6 @@ func TestCodexPendingMessageRechecksOwnerBeforeAutorun(t *testing.T) {
 	h, ag, opts, _ := liveMessageFixture(t, false)
 	pending := h.pendingCodexTask(opts)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
-	ag.bindErr = agent.ErrCodexDesktopDisconnected
 	pending.run()
 	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
 	if ag.chatCallCount() != 0 {
@@ -224,19 +225,18 @@ func TestCodexPendingMessageRechecksOwnerBeforeAutorun(t *testing.T) {
 	}
 }
 
-func TestCodexMessageRestoresPersistedRemoteRuntimeAfterRestart(t *testing.T) {
+func TestCodexMessageDoesNotRecoverUnknownRuntimeImplicitly(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 
 	h.startCodexAgentTask(opts)
 
-	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
-	waitUntil(t, func() bool {
-		_, active := h.activeTask(route.conversationID)
-		return !active
-	})
-	if ag.handoffCalls != 1 || ag.lastTurnReq.Runtime.Intent.RouteKey != route.bindingKey {
-		t.Fatalf("handoff=%d turn=%#v", ag.handoffCalls, ag.lastTurnReq)
+	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
+	if ag.chatCallCount() != 0 || ag.bindCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("普通消息不应恢复 runtime，chat=%d inspect=%d handoff=%d", ag.chatCallCount(), ag.bindCalls, ag.handoffCalls)
+	}
+	if intent := h.codexSessions.controlIntent(route.threadID); intent.Owner != codexControlRemote || intent.RouteBindingKey != route.bindingKey {
+		t.Fatalf("runtime unknown 不应改变 owner，intent=%#v", intent)
 	}
 }
 

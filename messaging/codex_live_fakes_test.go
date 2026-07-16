@@ -96,6 +96,18 @@ func (f *fakeCodexLiveAgent) InspectCodexRuntime(ctx context.Context, req agent.
 	return binding, f.bindErr
 }
 
+func (f *fakeCodexLiveAgent) CurrentCodexRuntime(req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	binding, ok := f.bindings[req.Ref.ThreadID]
+	if !ok {
+		binding = f.binding
+	}
+	binding.Ref = req.Ref
+	binding.Control = req.Intent
+	return binding, nil
+}
+
 func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	f.mu.Lock()
 	f.handoffCalls++

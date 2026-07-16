@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-15 Codex 普通消息必须以持久化 owner 为准
+
+- 触发条件：飞书或微信窗口已经成功选择并接管 Codex thread，后续普通消息启动前遇到 Desktop 探测超时、断线或 runtime unknown。
+- 规则：owner tuple 和 revision 是写入授权事实源；普通消息只读取接管事务已建立的 runtime binding，不重复探测 Desktop，也不根据运行通道异常释放 owner 或要求用户重新选择。
+- 失败边界：runtime 不可用时拒绝本次写入并保留 remote owner；只有显式选择、`/cx owner remote`、状态刷新和重连/冲突恢复可以发起探测或 Handoff。
+- 反例：把 `context deadline exceeded`、ownership unknown 或 runtime unavailable 统一渲染成“交给当前远程窗口 / 交给 Codex Desktop”卡片，让用户误以为所有权自动释放。
+- 来源：2026-07-15 飞书主机器人窗口在 22:45 已接管，22:53 普通消息因 Desktop IPC 超时再次弹出所有权选择。
+
 ## 2026-07-15 Codex 选择接管必须按完整 saga 验收
 
 - 触发条件：远程窗口通过切换、短编号、唯一工作空间会话、会话卡片或新建命令显式选择 Codex thread。
@@ -476,7 +484,7 @@
 - 触发条件：同一个 Codex thread 可能由 Codex Desktop 和 WeClaw 独立 app-server 继续执行。
 - 规则：用户通过明确命令选择 Desktop 或远程控制；自动探测只用于验证该选择能否安全执行，不能代替用户决定控制方。
 - 反例：根据 Desktop 进程、socket 或旧 owner 缓存自动选择 writer，导致两个进程各自持有不同内存上下文并向同一 rollout 写入。
-- 正确做法：分离持久化控制意图与进程内实际运行时；普通消息不得隐式接管；远程执行使用覆盖探测、刷新、`turn/start` 和终态的写入租约，发现本地双写时进入显式冲突态。
+- 正确做法：分离持久化控制意图与进程内实际运行时；普通消息不得隐式接管或同步探测，直接按 owner tuple、revision、已绑定 runtime 和写入租约执行；发现本地双写时进入显式冲突态。
 - 来源：2026-07-14 用户提出在飞书增加明确的所有权移交指令，并确认由使用者主动选择 Desktop 或远程窗口。
 
 ## 2026-07-15 WeClaw 测试必须共用持久化 Go 缓存

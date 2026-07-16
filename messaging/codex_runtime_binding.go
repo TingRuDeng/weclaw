@@ -61,6 +61,29 @@ func (h *Handler) resolveCodexRuntimeLocked(ctx context.Context, opts codexRunti
 	return resolution, nil
 }
 
+// resolveBoundCodexRuntimeLocked 以持久化控制意图读取已建立的 runtime，不同步探测 Desktop。
+func (h *Handler) resolveBoundCodexRuntimeLocked(opts codexRuntimeResolveOptions) (codexRuntimeResolution, error) {
+	threadID := strings.TrimSpace(opts.threadID)
+	if threadID == "" {
+		return codexRuntimeResolution{}, nil
+	}
+	if err := h.guardCodexThreadSwitch(opts.route, threadID); err != nil {
+		return codexRuntimeResolution{}, err
+	}
+	liveAgent, ok := opts.ag.(agent.CodexLiveRuntimeAgent)
+	if !ok {
+		return codexRuntimeResolution{}, agent.ErrCodexRuntimeUnavailable
+	}
+	request, rollout, err := h.buildCodexRuntimeRequest(opts.route, threadID)
+	if err != nil {
+		return codexRuntimeResolution{}, err
+	}
+	binding, snapshotErr := liveAgent.CurrentCodexRuntime(request)
+	return codexRuntimeResolution{
+		Request: request, Binding: binding, Rollout: rollout, Live: true, ProbeErr: snapshotErr,
+	}, snapshotErr
+}
+
 // buildCodexRuntimeRequest 组合 thread、控制 revision 与 rollout 检查点。
 func (h *Handler) buildCodexRuntimeRequest(route codexConversationRoute, threadID string) (agent.CodexRuntimeRequest, codexRolloutTaskState, error) {
 	intent := h.ensureCodexSessions().controlIntent(threadID)

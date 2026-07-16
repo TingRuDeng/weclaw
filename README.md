@@ -66,7 +66,7 @@ After selecting an existing session or sending `/cx new`, send the task directly
 /cx owner remote       # Reacquire from the current WeChat or Feishu window after release
 ```
 
-Session selection or creation completes runtime probing and state persistence before reporting successful ownership. `/cx owner remote` is only for reacquiring after an explicit release or for compatibility recovery. While a remote task is active, wait for completion or send `/stop` before releasing ownership to Desktop.
+Session selection or creation completes runtime probing and state persistence before reporting successful ownership. `/cx owner remote` is only for reacquiring after an explicit release or for compatibility recovery. Regular messages trust the persisted ownership binding for the current window and do not probe Desktop again; a temporarily unavailable runtime keeps the existing owner and reports a retryable runtime error instead of asking for ownership again. While a remote task is active, wait for completion or send `/stop` before releasing ownership to Desktop.
 
 ### Reuse Claude Code Sessions
 

@@ -108,9 +108,17 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 	if threadID == "" {
 		return fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
 	}
-	resolution, err := h.resolveCodexRuntime(ctx, codexRuntimeResolveOptions{
-		route: route, threadID: threadID, ag: ag,
-	})
+	resolveOpts := codexRuntimeResolveOptions{route: route, threadID: threadID, ag: ag}
+	var resolution codexRuntimeResolution
+	var err error
+	if _, live := ag.(agent.CodexLiveRuntimeAgent); live {
+		resolution, err = h.resolveBoundCodexRuntimeLocked(resolveOpts)
+		if err == nil {
+			err = ensureCodexRouteOwnsControl(resolution.Request.Intent, route)
+		}
+	} else {
+		resolution, err = h.resolveCodexRuntime(ctx, resolveOpts)
+	}
 	if err != nil {
 		return fmt.Errorf("恢复 Codex 会话失败: %w", err)
 	}

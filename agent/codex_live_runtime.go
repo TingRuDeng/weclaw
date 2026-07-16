@@ -88,6 +88,7 @@ type CodexThreadBinding struct {
 
 type CodexLiveRuntimeAgent interface {
 	InspectCodexRuntime(context.Context, CodexRuntimeRequest) (CodexThreadBinding, error)
+	CurrentCodexRuntime(CodexRuntimeRequest) (CodexThreadBinding, error)
 	HandoffCodexRuntime(context.Context, CodexRuntimeRequest) (CodexThreadBinding, error)
 	MarkCodexRuntimeConflict(context.Context, CodexRuntimeRequest) error
 	RunCodexTurn(context.Context, CodexTurnRequest) (string, error)

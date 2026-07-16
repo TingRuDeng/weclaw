@@ -178,7 +178,7 @@ func TestCodexSwitchBlocksDifferentThreadWhileTaskRuns(t *testing.T) {
 	}
 }
 
-func TestCodexPrepareConversationRechecksRuntimeEveryTurn(t *testing.T) {
+func TestCodexPrepareConversationUsesBoundRuntimeWithoutProbe(t *testing.T) {
 	h, ag, _ := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
 	route := h.codexConversationRouteForSession("user-1", "user-1", "codex", ag)
 	if err := h.prepareCodexConversation(context.Background(), route, ag); err != nil {
@@ -187,8 +187,8 @@ func TestCodexPrepareConversationRechecksRuntimeEveryTurn(t *testing.T) {
 	if err := h.prepareCodexConversation(context.Background(), route, ag); err != nil {
 		t.Fatal(err)
 	}
-	if ag.bindCalls != 2 {
-		t.Fatalf("inspect=%d，期望每轮重新探测", ag.bindCalls)
+	if ag.bindCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("prepare 不应探测或移交 runtime，inspect=%d handoff=%d", ag.bindCalls, ag.handoffCalls)
 	}
 }
 

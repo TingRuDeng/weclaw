@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -22,7 +23,7 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	if _, ok := opts.taskOpts.agent.(agent.CodexLiveRuntimeAgent); !ok {
 		return false
 	}
-	resolution, err := h.resolveCodexRuntimeLocked(opts.taskOpts.ctx, codexRuntimeResolveOptions{
+	resolution, err := h.resolveBoundCodexRuntimeLocked(codexRuntimeResolveOptions{
 		route: opts.route, threadID: opts.route.threadID, ag: opts.taskOpts.agent,
 	})
 	if err != nil {
@@ -36,34 +37,11 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	if codexResolutionActive(resolution) {
 		return h.queueMessageBehindLiveTask(opts)
 	}
-	resolution, err = h.realizePersistedCodexRemoteRuntime(opts, resolution)
-	if err != nil {
-		h.rejectCodexOwnerTaskStart(opts, err)
-		return true
-	}
-	if codexResolutionActive(resolution) {
-		return h.queueMessageBehindLiveTask(opts)
-	}
 	if err := ensureCodexRuntimeReady(resolution, opts.route); err != nil {
-		h.rejectCodexOwnerTaskStart(opts, err)
+		h.rejectCodexRuntimeTaskStart(opts, err)
 		return true
 	}
 	return false
-}
-
-// realizePersistedCodexRemoteRuntime 恢复当前窗口已明确持久化的 remote 控制意图。
-func (h *Handler) realizePersistedCodexRemoteRuntime(opts codexTaskPreflightOptions, resolution codexRuntimeResolution) (codexRuntimeResolution, error) {
-	if !resolution.Live || resolution.Binding.Runtime != agent.CodexRuntimeUnknown {
-		return resolution, nil
-	}
-	liveAgent, ok := opts.taskOpts.agent.(agent.CodexLiveRuntimeAgent)
-	if !ok {
-		return resolution, agent.ErrCodexRuntimeUnavailable
-	}
-	binding, err := liveAgent.HandoffCodexRuntime(opts.taskOpts.ctx, resolution.Request)
-	resolution.Binding = binding
-	resolution.ProbeErr = err
-	return resolution, err
 }
 
 // rejectCodexOwnerTaskStart 在飞书中返回可直接操作的控制权卡片。
@@ -125,4 +103,13 @@ func (h *Handler) rejectCodexTaskStart(opts codexTaskPreflightOptions, err error
 	opts.cancel()
 	message := fmt.Sprintf("当前 Codex 会话暂不能开始任务: %v", err)
 	sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID, message)
+}
+
+func (h *Handler) rejectCodexRuntimeTaskStart(opts codexTaskPreflightOptions, err error) {
+	opts.cancel()
+	log.Printf("[codex-task] 当前绑定的运行通道不可用 thread=%q: %v", opts.route.threadID, err)
+	sendPlatformText(
+		opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID,
+		"Codex 运行通道暂不可用；当前窗口的远程所有权保持不变，请稍后重试或发送 /cx status 查看状态。",
+	)
 }

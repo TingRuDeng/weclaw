@@ -23,6 +23,32 @@ func (a *ACPAgent) InspectCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 	return binding, err
 }
 
+// CurrentCodexRuntime 返回已建立的 runtime 绑定，不向 Desktop 发起同步探测。
+func (a *ACPAgent) CurrentCodexRuntime(req CodexRuntimeRequest) (CodexThreadBinding, error) {
+	if err := a.validateCodexRuntimeSupport(req); err != nil {
+		return CodexThreadBinding{}, err
+	}
+	binding, ok := a.codexOwners.threadBinding(req.Ref.ThreadID)
+	if !ok {
+		return unknownCodexRuntimeSnapshot(req, CodexThreadState{}), nil
+	}
+	if !sameCodexControlIntent(binding.Control, req.Intent) {
+		if a.codexOwners.hasWriterLease(req.Ref.ThreadID) {
+			return binding, ErrCodexControlChanged
+		}
+		return unknownCodexRuntimeSnapshot(req, binding.State), nil
+	}
+	binding.Ref = req.Ref
+	return binding, nil
+}
+
+func unknownCodexRuntimeSnapshot(req CodexRuntimeRequest, state CodexThreadState) CodexThreadBinding {
+	state.ThreadID = req.Ref.ThreadID
+	return CodexThreadBinding{
+		Ref: req.Ref, Control: req.Intent, Runtime: CodexRuntimeUnknown, State: state,
+	}
+}
+
 // HandoffCodexRuntime 执行用户已明确选择的控制权移交，不替用户自动决定控制方。
 func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	if err := a.validateCodexRuntimeSupport(req); err != nil {

@@ -87,6 +87,7 @@ ai_summary:
 - `messaging/codex_remote_selection_store.go:commitRemoteSelection` 使用 copy-on-write 候选副本，一次提交选中 thread、active workspace、目标 remote intent 和同 route 旧 thread 的 desktop intent；持久化失败时不替换内存 maps。
 - `messaging/codex_session_acquire.go:acquireCodexSessionWithBindingLocked` 把 runtime handoff、外部活动任务 observer reservation 和 store commit 组成同一 saga；失败补偿覆盖 runtime、observer 与 store，成功提交前不能回复已接管。
 - `/cx owner desktop` 由 `messaging/codex_owner_command.go:releaseCodexOwnerToDesktop` 只释放当前 thread 的控制意图并保留窗口选择；普通消息不会自动重新接管，释放后必须显式重新选择或发送 `/cx owner remote`。
+- Codex 普通消息以持久化的 owner tuple 和 revision 作为写入授权，只读取已经建立的 runtime binding，不同步探测 Desktop，也不因 runtime unknown、断线或超时弹出 owner 选择。运行通道不可用时 owner 保持不变；Desktop 探测只用于显式选择/接管、状态刷新和重连/冲突恢复。
 - Claude 远程后端是 ACP-only；`session/list` 是目录事实源，`claudeSessionStore` 同时持久化 route binding 和 session control intent（`remote`、`local`、`unclaimed`），后者是 WeClaw 远程写入事实源；`ACPAgent.sessions` 只保存可重建运行态。禁止重新引入 Claude CLI 聊天后端或 `~/.claude` transcript 扫描。
 - Claude 的 `/cc switch`、`/cc new`、飞书会话卡片、默认 Claude 的全局 `/new` 和 `/cc owner remote` 最终复用统一 acquire saga，选择或新建成功即由当前远程窗口接管；`/cc owner local` 只释放控制并保留选择，普通消息不会隐式重新接管。
 - `/cc cli` 只允许通过 `AgentInfo.LocalCommand` 交接空闲 session，且必须先把 owner 持久化为 `local` 并清理 ACP runtime；本地 CLI 结束前不要重新接管。独立 CLI 任务不属于 WeClaw active task，不能远程观察、回传进度、`/guide` 或停止。

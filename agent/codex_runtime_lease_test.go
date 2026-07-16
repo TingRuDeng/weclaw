@@ -142,6 +142,32 @@ func TestCodexRuntimeLeaseRejectsChangedControlRevision(t *testing.T) {
 	}
 }
 
+func TestCurrentCodexRuntimeRejectsControlChangeDuringWriterLease(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := a.codexOwners.beginTurn(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.finish()
+
+	next := remoteCodexRuntimeRequest("thread-1", "route-2", 2)
+	_, err = a.CurrentCodexRuntime(next)
+
+	if !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("error=%v，want control changed", err)
+	}
+	if probe.discoverCalls != 0 || probe.loadCalls != 0 {
+		t.Fatalf("读取绑定时不应探测 Desktop: discover=%d load=%d", probe.discoverCalls, probe.loadCalls)
+	}
+}
+
 func TestCodexRuntimeInspectAllowsOtherRouteButWriterLeaseRejectsIt(t *testing.T) {
 	registry := newCodexRuntimeOwnerRegistry(nil)
 	request := remoteCodexRuntimeRequest("thread-1", "route-owner", 1)
@@ -327,6 +353,9 @@ func TestRunCodexTurnUsesValidatedWeClawRuntime(t *testing.T) {
 	}
 	if a.codexOwners.hasWriterLease("thread-1") {
 		t.Fatal("turn 结束后 writer lease 未释放")
+	}
+	if probe.discoverCalls != 0 || probe.loadCalls != 0 {
+		t.Fatalf("普通 turn 不应重新探测 Desktop: discover=%d load=%d", probe.discoverCalls, probe.loadCalls)
 	}
 }
 

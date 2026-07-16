@@ -11,9 +11,9 @@ type codexLeasedTurnOptions struct {
 	lease   *codexWriterLease
 }
 
-// RunCodexTurn 在最终 Desktop 探测后持有 writer lease，直到 turn 到达终态。
+// RunCodexTurn 使用已建立的 runtime 绑定并持有 writer lease，直到 turn 到达终态。
 func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (string, error) {
-	binding, err := a.InspectCodexRuntime(ctx, req.Runtime)
+	binding, err := a.CurrentCodexRuntime(req.Runtime)
 	if err != nil {
 		return "", err
 	}
