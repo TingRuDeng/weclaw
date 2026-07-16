@@ -35,7 +35,7 @@ func TestCardActionBlocksLaterMessageDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertSubmittedChoiceCard(t, resp.Card, "会话 A")
+	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在切换并接管")
 	<-cardStarted
 	messageDone := make(chan error, 1)
 	go func() { messageDone <- adapter.handleMessageEvent(context.Background(), messageEvent, dispatch) }()
@@ -174,17 +174,17 @@ func cardChoiceEventForOrderTest(sessionKey string) *callback.CardActionTriggerE
 	}}
 }
 
-func assertSubmittedChoiceCard(t *testing.T, card *callback.Card, label string) {
+func assertPendingChoiceCard(t *testing.T, card *callback.Card, label string, detail string) {
 	t.Helper()
 	data, err := json.Marshal(card.Data)
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "已提交："+label) || !strings.Contains(content, "处理结果将单独发送") {
-		t.Fatalf("card=%s，期望展示已提交状态", content)
+	if !strings.Contains(content, "已受理："+label) || !strings.Contains(content, detail) {
+		t.Fatalf("card=%s，期望展示待处理状态", content)
 	}
-	if strings.Contains(content, "已选择：") || strings.Contains(content, `"tag":"button"`) {
+	if strings.Contains(content, "已提交：") || strings.Contains(content, "已选择：") || strings.Contains(content, `"tag":"button"`) {
 		t.Fatalf("card=%s，不应提前声明已选择或保留按钮", content)
 	}
 }

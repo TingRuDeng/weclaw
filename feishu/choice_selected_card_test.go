@@ -31,7 +31,7 @@ func TestReasoningChoiceCollapsesCardAndReplaysCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCardActionEvent error: %v", err)
 	}
-	assertSubmittedChoiceCard(t, resp.Card, "high")
+	assertPendingChoiceCard(t, resp.Card, "high", "正在处理")
 	select {
 	case msg := <-dispatched:
 		if msg.RawCommand == nil || msg.RawCommand.Value["choice"] != "/reasoning high" {
@@ -40,6 +40,15 @@ func TestReasoningChoiceCollapsesCardAndReplaysCommand(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("等待推理强度卡片回调超时")
 	}
+}
+
+func TestCodexWorkspaceChoiceShowsLoadingStatus(t *testing.T) {
+	card := buildSubmittedChoiceCard(parsedCardAction{
+		Choice: "/cx cd 9",
+		Label:  "card-manager-android",
+	})
+
+	assertPendingChoiceCard(t, card, "card-manager-android", "正在加载该工作空间的会话列表")
 }
 
 func TestHandleCardActionEventDoesNotCollapseUnrecognizedCard(t *testing.T) {

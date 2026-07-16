@@ -34,6 +34,27 @@ func TestCodexDesktopEnvelopeRejectsUnknownBroadcastVersion(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopEnvelopeAcceptsVersionlessClientStatusBroadcast(t *testing.T) {
+	payload := []byte(`{"type":"broadcast","method":"client-status-changed","params":{"clientId":"desktop-1","status":"connected"}}`)
+
+	envelope, err := decodeCodexDesktopEnvelope(payload)
+	if err != nil {
+		t.Fatalf("decodeCodexDesktopEnvelope() error = %v", err)
+	}
+	if envelope.Method != "client-status-changed" || envelope.Version != 0 {
+		t.Fatalf("method/version = %s@%d", envelope.Method, envelope.Version)
+	}
+}
+
+func TestCodexDesktopEnvelopeKeepsVersionRequiredForThreadBroadcast(t *testing.T) {
+	payload := []byte(`{"type":"broadcast","method":"thread-stream-state-changed","params":{}}`)
+
+	_, err := decodeCodexDesktopEnvelope(payload)
+	if err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("decodeCodexDesktopEnvelope() error = %v, want version error", err)
+	}
+}
+
 func TestCodexDesktopEnvelopeRejectsInvalidJSON(t *testing.T) {
 	_, err := decodeCodexDesktopEnvelope([]byte(`{"type":"request"`))
 	if err == nil {
@@ -52,6 +73,9 @@ func TestCodexDesktopEnvelopeRejectsMissingRequiredFields(t *testing.T) {
 		{"request non-object params", `{"type":"request","requestId":"request-1","version":1,"method":"initialize","params":[]}`, "params"},
 		{"broadcast missing params", `{"type":"broadcast","version":11,"method":"thread-stream-state-changed"}`, "params"},
 		{"broadcast null params", `{"type":"broadcast","version":11,"method":"thread-stream-state-changed","params":null}`, "params"},
+		{"versionless status broadcast missing params", `{"type":"broadcast","method":"client-status-changed"}`, "params"},
+		{"status broadcast negative version", `{"type":"broadcast","version":-1,"method":"client-status-changed","params":{}}`, "version"},
+		{"versionless status request remains invalid", `{"type":"request","requestId":"request-1","method":"client-status-changed","params":{}}`, "version"},
 		{"response missing resultType", `{"type":"response","requestId":"response-1"}`, "resultType"},
 		{"success response missing result", `{"type":"response","requestId":"response-1","resultType":"success"}`, "result"},
 		{"error response missing error", `{"type":"response","requestId":"response-1","resultType":"error"}`, "error"},

@@ -13,6 +13,7 @@ func TestReadLoopSuppressesKnownCodexNoiseMethods(t *testing.T) {
 	input := strings.Join([]string{
 		`{"method":"item/commandExecution/outputDelta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"noise"}}`,
 		`{"method":"turn/diff/updated","params":{"threadId":"thread-1","turnId":"turn-1","diff":"noise"}}`,
+		`{"method":"remoteControl/status/changed","params":{"threadId":"thread-1","status":"remote"}}`,
 		`{"method":"unknown/newEvent","params":{"threadId":"thread-1"}}`,
 	}, "\n") + "\n"
 
@@ -32,6 +33,9 @@ func TestReadLoopSuppressesKnownCodexNoiseMethods(t *testing.T) {
 	}
 	if strings.Contains(got, "turn/diff/updated") {
 		t.Fatalf("known diff update should not be logged: %s", got)
+	}
+	if strings.Contains(got, "remoteControl/status/changed") {
+		t.Fatalf("known remote control status should not be logged: %s", got)
 	}
 	if !strings.Contains(got, "unknown/newEvent") {
 		t.Fatalf("unknown method should still be logged: %s", got)

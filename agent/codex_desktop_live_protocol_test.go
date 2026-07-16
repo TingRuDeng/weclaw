@@ -65,6 +65,22 @@ func TestCodexDesktopStateIgnoresQueuedFollowupsBroadcast(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopStateIgnoresVersionlessClientStatusBroadcast(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	envelope := codexDesktopEnvelope{
+		Type: codexDesktopEnvelopeBroadcast, Method: "client-status-changed",
+		Params: json.RawMessage(`{"clientId":"desktop-1","status":"connected"}`),
+	}
+
+	update, err := store.applyEnvelope(1, envelope)
+	if err != nil {
+		t.Fatalf("applyEnvelope() error = %v", err)
+	}
+	if update.Applied {
+		t.Fatalf("update = %#v", update)
+	}
+}
+
 // TestCodexDesktopStateCompletesTurnAfterHistoryArchive 验证长会话分两次归档时不会丢失终态。
 func TestCodexDesktopStateCompletesTurnAfterHistoryArchive(t *testing.T) {
 	activeRaw := desktopHistoryTurnFixture("tail:1:local:active", "turn-active", "inProgress")

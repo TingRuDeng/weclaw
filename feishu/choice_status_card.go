@@ -6,7 +6,7 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
-// buildSubmittedChoiceCard 收纳已点击卡片，但不在后端完成前宣称选择成功。
+// buildSubmittedChoiceCard 收纳已点击卡片，并明确区分受理与最终业务成功。
 func buildSubmittedChoiceCard(action parsedCardAction) *callback.Card {
 	label := strings.TrimSpace(action.Label)
 	if label == "" {
@@ -15,7 +15,19 @@ func buildSubmittedChoiceCard(action parsedCardAction) *callback.Card {
 	if label == "" {
 		label = "已选择"
 	}
-	return buildChoiceHandledStatusCard("blue", "已提交："+label+"\n\n处理结果将单独发送。")
+	return buildChoiceHandledStatusCard("blue", "已受理："+label+"\n\n"+choicePendingDetail(action.Choice))
+}
+
+func choicePendingDetail(choice string) string {
+	command := strings.ToLower(strings.TrimSpace(choice))
+	switch {
+	case command == "/cx cd" || strings.HasPrefix(command, "/cx cd "):
+		return "正在加载该工作空间的会话列表，结果将单独发送。"
+	case command == "/cx switch" || strings.HasPrefix(command, "/cx switch "):
+		return "正在切换并接管，最终结果将单独发送。"
+	default:
+		return "正在处理，结果将单独发送。"
+	}
 }
 
 // buildChoiceHandledCard 构建按钮点击后的原卡片替换内容，让用户能区分已处理审批。

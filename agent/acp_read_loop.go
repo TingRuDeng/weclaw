@@ -138,7 +138,8 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 	switch msg.Method {
 	case "codex/event/agent_message", "codex/event/task_complete",
 		"codex/event/item_completed", "codex/event/token_count", "thread/tokenUsage/updated",
-		"account/rateLimits/updated", "thread/status/changed", "mcpServer/startupStatus/updated":
+		"account/rateLimits/updated", "thread/status/changed", "mcpServer/startupStatus/updated",
+		"remoteControl/status/changed":
 		return true
 	case "turn/approval/request", "item/fileChange/requestApproval",
 		"item/commandExecution/requestApproval", "item/permissions/requestApproval":

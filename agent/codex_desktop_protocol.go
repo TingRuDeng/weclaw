@@ -35,7 +35,7 @@ var (
 		"initialize":                                            1,
 		"thread-stream-state-changed":                           11,
 		"thread-read-state-changed":                             1,
-		"thread-queued-followups-changed":                        1,
+		"thread-queued-followups-changed":                       1,
 		"thread-follower-load-complete-history":                 1,
 		"thread-follower-start-turn":                            1,
 		"thread-follower-steer-turn":                            1,
@@ -44,6 +44,9 @@ var (
 		"thread-follower-file-approval-decision":                1,
 		"thread-follower-submit-user-input":                     1,
 		"thread-follower-permissions-request-approval-response": 1,
+	}
+	codexDesktopVersionlessBroadcasts = map[string]bool{
+		"client-status-changed": true,
 	}
 )
 
@@ -121,7 +124,7 @@ func validateCodexDesktopEnvelope(envelope codexDesktopEnvelope) error {
 }
 
 func validateCodexDesktopRequest(envelope codexDesktopEnvelope) error {
-	if err := validateCodexDesktopMethodEnvelope(envelope, true); err != nil {
+	if err := validateCodexDesktopMethodEnvelope(envelope, true, false); err != nil {
 		return err
 	}
 	if isMissingOrNullCodexDesktopJSON(envelope.Params) {
@@ -135,7 +138,9 @@ func validateCodexDesktopRequest(envelope codexDesktopEnvelope) error {
 }
 
 func validateCodexDesktopBroadcast(envelope codexDesktopEnvelope) error {
-	if err := validateCodexDesktopMethodEnvelope(envelope, false); err != nil {
+	if err := validateCodexDesktopMethodEnvelope(
+		envelope, false, codexDesktopVersionlessBroadcasts[envelope.Method],
+	); err != nil {
 		return err
 	}
 	if isMissingOrNullCodexDesktopJSON(envelope.Params) {
@@ -164,7 +169,7 @@ func validateCodexDesktopResponse(envelope codexDesktopEnvelope) error {
 	return nil
 }
 
-func validateCodexDesktopMethodEnvelope(envelope codexDesktopEnvelope, requestIDRequired bool) error {
+func validateCodexDesktopMethodEnvelope(envelope codexDesktopEnvelope, requestIDRequired bool, allowVersionless bool) error {
 	if requestIDRequired {
 		if err := requireCodexDesktopRequestID(envelope); err != nil {
 			return err
@@ -174,6 +179,9 @@ func validateCodexDesktopMethodEnvelope(envelope codexDesktopEnvelope, requestID
 		return fmt.Errorf("Codex Desktop %s envelope 缺少 method", envelope.Type)
 	}
 	if envelope.Version <= 0 {
+		if envelope.Version == 0 && allowVersionless {
+			return nil
+		}
 		return fmt.Errorf("Codex Desktop method %q 缺少有效 version", envelope.Method)
 	}
 	return validateCodexDesktopMethodVersion(envelope.Method, envelope.Version)

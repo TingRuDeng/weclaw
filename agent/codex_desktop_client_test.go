@@ -218,6 +218,43 @@ func TestCodexDesktopClientDispatchesValidatedBroadcastVersion(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopClientKeepsConnectionAfterVersionlessClientStatusBroadcast(t *testing.T) {
+	broadcasts := make(chan codexDesktopEnvelope, 1)
+	release := make(chan struct{})
+	defer close(release)
+	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "client-1")
+		status := []byte(`{"type":"broadcast","method":"client-status-changed","params":{"clientId":"desktop-1","status":"connected"}}`)
+		if err := writeCodexDesktopFrame(conn, status); err != nil {
+			t.Errorf("write client status broadcast: %v", err)
+			return
+		}
+		request := readCodexDesktopTestEnvelope(t, conn)
+		writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+			requestID: request.RequestID,
+			value:     map[string]bool{"ok": true},
+		})
+		<-release
+	})
+	options := codexDesktopTestOptions(dial)
+	options.onBroadcast = func(envelope codexDesktopEnvelope) { broadcasts <- envelope }
+	client := newCodexDesktopClient(options)
+	mustConnectCodexDesktopTestClient(t, client)
+
+	select {
+	case got := <-broadcasts:
+		if got.Method != "client-status-changed" || got.Version != 0 {
+			t.Fatalf("broadcast = %s@%d", got.Method, got.Version)
+		}
+	case <-time.After(codexDesktopTestTimeout):
+		t.Fatal("versionless client status broadcast was not dispatched")
+	}
+	result, err := client.Call(context.Background(), "thread-follower-load-complete-history", map[string]string{"conversationId": "thread-1"})
+	if err != nil || string(result) != `{"ok":true}` {
+		t.Fatalf("Call() after status broadcast = %s, %v", result, err)
+	}
+}
+
 func codexDesktopTestOptions(dial func(context.Context) (net.Conn, error)) codexDesktopClientOptions {
 	var next atomic.Int32
 	return codexDesktopClientOptions{

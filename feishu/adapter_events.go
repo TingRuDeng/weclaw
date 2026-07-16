@@ -262,7 +262,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		}
 	}()
 	return &callback.CardActionTriggerResponse{
-		Toast: &callback.Toast{Type: "success", Content: "已提交，正在处理"},
+		Toast: &callback.Toast{Type: "success", Content: "已受理，正在处理"},
 		Card:  buildSubmittedChoiceCard(action),
 	}, nil
 }
