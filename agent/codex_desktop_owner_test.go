@@ -225,6 +225,26 @@ func TestHandoffCodexRuntimeRemoteUsesLiveDesktop(t *testing.T) {
 	}
 }
 
+func TestHandoffCodexRuntimeRemoteReusesKnownWeClawWithoutDesktopProbe(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	ref := CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"}
+	a.codexOwners.claimWeClawConversation(ref, CodexThreadState{ThreadID: ref.ThreadID})
+	req := remoteCodexRuntimeRequest(ref.ThreadID, "route-1", 1)
+	req.Ref = ref
+
+	binding, err := a.HandoffCodexRuntime(context.Background(), req)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.Control != req.Intent {
+		t.Fatalf("binding=%#v error=%v", binding, err)
+	}
+	if probe.loadCalls != 0 || probe.discoverCalls != 0 {
+		t.Fatalf("known WeClaw runtime should not probe Desktop: load=%d discover=%d", probe.loadCalls, probe.discoverCalls)
+	}
+}
+
 func TestHandoffCodexRuntimeRemoteRefreshesReleasedThread(t *testing.T) {
 	rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
 	content := []byte("{\"type\":\"event_msg\"}\n")

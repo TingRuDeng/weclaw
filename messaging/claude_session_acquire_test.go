@@ -34,8 +34,8 @@ func TestAcquireClaudeSessionReleasesAAndOwnsB(t *testing.T) {
 	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerLocal {
 		t.Fatalf("old=%+v", got)
 	}
-	if persistCalls != 1 {
-		t.Fatalf("persistCalls=%d, want one atomic commit", persistCalls)
+	if persistCalls != 2 {
+		t.Fatalf("persistCalls=%d, want owner commit followed by runtime-ready commit", persistCalls)
 	}
 }
 
@@ -95,12 +95,12 @@ func TestAcquireClaudeSessionStoreFailureRestoresOldRuntime(t *testing.T) {
 	route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", fake, workspace)
 
 	_, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
-	if err == nil || fake.sessionID != "session-a" || store.binding(key).SessionID != "session-a" {
+	if err == nil || fake.sessionID != "session-a" || store.binding(key).SessionID != "session-a" || len(fake.useCalls) != 0 {
 		t.Fatalf("error=%v runtime=%q binding=%+v", err, fake.sessionID, store.binding(key))
 	}
 }
 
-func TestAcquireClaudeSessionInitialUseFailurePreservesRuntimeAndOwner(t *testing.T) {
+func TestAcquireClaudeSessionRuntimeFailureKeepsNewOwnerAndBlocksWrites(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	key := claudeBindingKey("user-1", "claude")
 	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
@@ -111,34 +111,52 @@ func TestAcquireClaudeSessionInitialUseFailurePreservesRuntimeAndOwner(t *testin
 	fake.useErr = errors.New("resume failed before mutation")
 	route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", fake, workspace)
 
-	_, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
+	result, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
 	current, bound := fake.CurrentClaudeSession(conversationID)
-	if err == nil || errors.Is(err, errClaudeSessionAcquireUncertain) || len(fake.useCalls) != 1 {
-		t.Fatalf("error=%v useCalls=%v", err, fake.useCalls)
+	if err != nil || result.RuntimeErr == nil || len(fake.useCalls) != 1 {
+		t.Fatalf("error=%v result=%+v useCalls=%v", err, result, fake.useCalls)
 	}
-	if !bound || current != "session-a" || store.controlIntent("session-a").Owner != claudeOwnerRemote {
-		t.Fatalf("runtime=(%q,%t) owner=%+v", current, bound, store.controlIntent("session-a"))
+	if !bound || current != "session-a" || store.controlIntent("session-a").Owner != claudeOwnerLocal {
+		t.Fatalf("runtime=(%q,%t) oldOwner=%+v", current, bound, store.controlIntent("session-a"))
+	}
+	if binding := store.binding(key); binding.SessionID != "session-b" || binding.Status != claudeBindingResumeFailed {
+		t.Fatalf("binding=%+v", binding)
+	}
+	if target := store.controlIntent("session-b"); target.Owner != claudeOwnerRemote || target.BindingKey != key {
+		t.Fatalf("target=%+v", target)
+	}
+	if _, _, controlErr := store.requireRemoteControl(key); !errors.Is(controlErr, errClaudeRuntimeUnavailable) {
+		t.Fatalf("controlErr=%v", controlErr)
 	}
 }
 
-func TestAcquireClaudeSessionRuntimeRollbackFailureFailsClosed(t *testing.T) {
+func TestAcquireClaudeSessionReadyPersistenceFailureKeepsOwnerFailClosed(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	key := claudeBindingKey("user-1", "claude")
 	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
 	store := h.ensureClaudeSessions()
 	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
 	store.controls["session-a"] = claudeControlIntent{Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1}
-	store.persist = func(claudeSessionState) error { return errors.New("disk full") }
+	persistCalls := 0
+	store.persist = func(claudeSessionState) error {
+		persistCalls++
+		if persistCalls == 2 {
+			return errors.New("disk full")
+		}
+		return nil
+	}
 	fake.sessionID = "session-a"
-	fake.useErrors = []error{nil, errors.New("runtime unavailable during rollback")}
 	route := newClaudeAcquireRoute(context.Background(), "user-1", "user-1", "claude", fake, workspace)
 
-	_, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
-	if !errors.Is(err, errClaudeSessionAcquireUncertain) {
-		t.Fatalf("error=%v, want uncertain", err)
+	result, err := acquireClaudeSessionForTest(h, claudeSessionAcquireRequest{Route: route, Selected: agent.ClaudeSession{ID: "session-b", Cwd: workspace}, Command: "switch"})
+	if err != nil || result.RuntimeErr == nil {
+		t.Fatalf("error=%v result=%+v", err, result)
 	}
-	if old := store.controlIntent("session-a"); old.Owner == claudeOwnerRemote {
-		t.Fatalf("old=%+v, uncertain runtime must fail closed", old)
+	if binding := store.binding(key); binding.SessionID != "session-b" || binding.Status != claudeBindingResumeFailed {
+		t.Fatalf("binding=%+v", binding)
+	}
+	if target := store.controlIntent("session-b"); target.Owner != claudeOwnerRemote {
+		t.Fatalf("target=%+v", target)
 	}
 }
 

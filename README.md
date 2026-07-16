@@ -66,7 +66,7 @@ After selecting an existing session or sending `/cx new`, send the task directly
 /cx owner remote       # Reacquire from the current WeChat or Feishu window after release
 ```
 
-Session selection or creation completes runtime probing and state persistence before reporting successful ownership. `/cx owner remote` is only for reacquiring after an explicit release or for compatibility recovery. Regular messages trust the persisted ownership binding for the current window and do not probe Desktop again; a temporarily unavailable runtime keeps the existing owner and reports a retryable runtime error instead of asking for ownership again. While a remote task is active, wait for completion or send `/stop` before releasing ownership to Desktop.
+Session selection or creation first persists the current window's session binding and ownership, then attempts to synchronize the runtime. A temporarily unavailable runtime does not undo that selection or ownership, but regular writes stay blocked until the runtime is ready. `/cx owner remote` reacquires after an explicit release or explicitly retries runtime recovery. Regular messages trust the persisted ownership and established runtime binding; they do not probe Desktop or ask the user to select again after a timeout or disconnect. `/cx owner desktop` also commits the release first, so remote writes remain disabled even if Desktop runtime confirmation fails. While a remote task is active, wait for completion or send `/stop` before releasing ownership to Desktop.
 
 ### Reuse Claude Code Sessions
 
@@ -81,7 +81,7 @@ Session selection or creation completes runtime probing and state persistence be
 /cc cli
 ```
 
-Claude uses ACP `session/list`, `session/resume`, and `session/new` to manage real sessions. Selecting or creating a session, choosing it from a Feishu card, or using global `/new` while Claude is the default agent immediately gives the current remote window ownership. `session/list` is the session-directory source of truth; WeClaw's persisted control intent is the remote-write source of truth. Bindings and control intent are restored before the next message after WeClaw restarts.
+Claude uses ACP `session/list`, `session/resume`, and `session/new` to manage real sessions. Selecting or creating a session, choosing it from a Feishu card, or using global `/new` while Claude is the default agent first persists the current remote window as owner. `session/list` is the session-directory source of truth; WeClaw's persisted control intent is the remote-write source of truth. If `session/resume` fails, the binding is marked runtime-unavailable without reverting to the previous agent or session or releasing ownership; regular writes stay blocked until recovery succeeds. Bindings and control intent are restored before the next message after WeClaw restarts.
 
 `/cc owner local` explicitly releases remote control, while `/cc owner remote` reacquires it after the native Claude CLI has ended. `/cc cli` releases remote control before opening the native CLI; do not reacquire while that CLI is still active. Tasks running in an independent Claude CLI are outside WeClaw's runtime, so they cannot be observed, streamed, guided with `/guide`, or stopped remotely. Legacy state where multiple windows reference one session migrates to unclaimed instead of silently choosing a winner. Remote Claude ACP tasks support `/stop` and queued continuation, but not `/guide`.
 

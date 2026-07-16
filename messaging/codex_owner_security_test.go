@@ -18,7 +18,7 @@ func TestCodexOwnerRemoteFailureDoesNotLeakInternalDetails(t *testing.T) {
 	result := h.handleCodexOwnerCommand(runtime)
 
 	assertCodexOwnerReplySafe(t, result.Reply)
-	if !strings.Contains(result.Reply, "切换并接管 Codex 会话失败") {
+	if !strings.Contains(result.Reply, "所有权已保留") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
 }
@@ -31,7 +31,7 @@ func TestCodexOwnerDesktopFailureDoesNotLeakInternalDetails(t *testing.T) {
 	result := h.handleCodexOwnerCommand(runtime)
 
 	assertCodexOwnerReplySafe(t, result.Reply)
-	if !strings.Contains(result.Reply, "Codex 控制权移交失败") {
+	if !strings.Contains(result.Reply, "已归还") || !strings.Contains(result.Reply, "远程写入已关闭") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
 }

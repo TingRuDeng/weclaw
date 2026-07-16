@@ -184,12 +184,8 @@ func (f *fakeCodexLiveAgent) MarkCodexRuntimeConflict(ctx context.Context, req a
 	if !ok {
 		binding = f.binding
 	}
-	if binding.Ref.ThreadID == "" {
-		binding.Ref = req.Ref
-	}
-	if binding.Control.Owner == "" {
-		binding.Control = req.Intent
-	}
+	binding.Ref = req.Ref
+	binding.Control = req.Intent
 	binding.State.ThreadID = req.Ref.ThreadID
 	binding.Runtime = agent.CodexRuntimeConflict
 	binding.ConflictReason = "控制权移交结果未确认"

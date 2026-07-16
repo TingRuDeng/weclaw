@@ -134,6 +134,13 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		"控制方: 当前远程窗口",
 		"运行位置: "+renderCodexRuntimeHolder(result.resolution.Binding.Runtime),
 	)
+	if result.runtimeErr != nil {
+		log.Printf("[codex-session-acquire] 所有权已提交但运行通道不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
+		lines = append(lines,
+			"运行通道: 暂不可用（所有权已保留）",
+			"普通消息暂不会写入；请稍后重试或发送 /cx status 查看状态。",
+		)
+	}
 	if result.externalActive {
 		lines = append(lines, "已开始回传当前任务的进度和结果。")
 		lines = append(lines, renderExternalCodexActiveNotice(result.externalState)...)

@@ -37,7 +37,7 @@ func renderClaudeBindingStatus(status claudeBindingStatus) string {
 	case claudeBindingReady:
 		return "已就绪"
 	case claudeBindingResumeFailed:
-		return "恢复失败"
+		return "运行通道暂不可用（所有权已保留）"
 	default:
 		return "未绑定"
 	}

@@ -16,13 +16,13 @@
 - 反例：把 `context deadline exceeded`、ownership unknown 或 runtime unavailable 统一渲染成“交给当前远程窗口 / 交给 Codex Desktop”卡片，让用户误以为所有权自动释放。
 - 来源：2026-07-15 飞书主机器人窗口在 22:45 已接管，22:53 普通消息因 Desktop IPC 超时再次弹出所有权选择。
 
-## 2026-07-15 Codex 选择接管必须按完整 saga 验收
+## 2026-07-16 会话所有权提交与运行通道恢复必须分层
 
-- 触发条件：远程窗口通过切换、短编号、唯一工作空间会话、会话卡片或新建命令显式选择 Codex thread。
-- 权威边界：显式选择是 thread 权威状态；ACP 当前 thread 只能在 session store 为空且不是 pending new 时回填，不能覆盖已经持久化的选择。
-- 一致性规则：selection、唯一 remote owner 和 active observer 必须作为同一 saga 验收，不能在其中任一步完成后提前回复接管成功。
-- 失败边界：补偿必须同时覆盖 runtime、observer 和 store；不能只检查回复文本，也不能留下半提交控制意图。
-- 来源：2026-07-15 Codex 远程窗口“选择即接管”事务收口。
+- 触发条件：微信或飞书窗口显式选择、新建或接管 Codex/Claude 会话，但 Desktop IPC、ACP resume 或外部任务 observer 暂时不可用。
+- 权威边界：窗口选择、Agent 和唯一 owner 是持久化控制事实；runtime binding 只回答当前能否安全写入，不能反向撤销用户选择。只有本地持久化失败、所有权冲突或活动任务冲突属于选择硬失败。
+- 一致性规则：先原子提交 binding/owner，再持久化窗口 Agent，最后同步 runtime；Agent 持久化失败用 after-image CAS 回滚 owner，runtime 失败则保留 owner 并进入 `conflict` 或 `resume_failed` 写入门禁。
+- 释放规则：显式归还 Desktop/Local 也先提交 owner，再尽力同步运行通道；同步失败不得恢复远程 owner。
+- 来源：2026-07-16 Android 飞书窗口反复切换 Codex/Claude 失败，用户确认以窗口绑定和显式释放为所有权事实源。
 
 ## 2026-07-14 Codex interrupted 不是可靠终态
 
@@ -452,7 +452,7 @@
 - 触发条件：用户重新选择会话或发送 `/cx owner remote`，且目标 remote 控制意图相对持久化状态发生变化，事务实际进入显式 Handoff，并确认没有 Desktop 客户端持有目标 thread。
 - 规则：`no-client-found` 只在这类非幂等显式 Handoff 中作为实际 runtime 的 release 证据；系统可以把目标 thread 恢复到 WeClaw app-server，再提交新的 remote 控制意图。
 - 反例：把普通消息的 no-client 错误自动改成 app-server 重试；或者把 `/cx owner desktop`、断线、超时、交付状态未知当成自动恢复条件，造成越权接管或消息重复执行。
-- 正确做法：只有控制意图变化并实际进入 Handoff 时才依赖 no-client 恢复 runtime；当前 route 已是同一 remote intent 的幂等重新选择只执行 Inspect，不承诺恢复。普通消息不自动恢复或重试，`desktop` intent 的普通消息也必须拒绝。
+- 正确做法：只有控制意图变化并实际进入 Handoff 时才依赖 no-client 恢复 runtime；当前 route 已是同一 remote intent 的幂等重新选择只读取本地 runtime binding，不探测 Desktop。普通消息不自动恢复或重试，`desktop` intent 的普通消息也必须拒绝。
 - 来源：2026-07-12 Android 飞书机器人发送普通消息后，日志立即返回 `没有 Codex Desktop 客户端可处理请求: no-client-found`。
 
 ## 2026-07-12 Agent 会话创建必须由用户显式授权
@@ -506,7 +506,7 @@
 ## 2026-07-15 Claude session 的目录事实与写入所有权必须分离
 
 - 触发条件：多个微信或飞书 route、WeClaw ACP runtime 和本地 Claude CLI 可能继续使用同一个 Claude session。
-- 规则：`session/list` 只回答有哪些真实 session；远程写入必须由持久化 control intent 的 owner tuple 和 revision 决定。选择或新建通过统一事务取得 `remote`，本地交接先提交 `local`；普通消息不得根据 ACP runtime 或最近 binding 隐式接管。
+- 规则：`session/list` 只回答有哪些真实 session；远程写入必须由持久化 control intent 的 owner tuple 和 revision 决定。选择或新建先提交 `remote`，再恢复 ACP runtime；恢复失败保留 owner 和选择并持久化 `resume_failed` 写入门禁。本地交接先提交 `local`；普通消息不得根据 ACP runtime 或最近 binding 隐式接管。
 - 反例：把 conversation runtime、session binding 或 `session/list` 中存在目标 session 当作写入授权；两个窗口会各自恢复同一 session 并并发写入，补偿失败还可能覆盖新赢家。
-- 正确做法：binding 锁外层配合排序 session 锁，copy-on-write 一次持久化 binding/control；任务登记前和 prompt 前复核 session/revision；失败补偿只在 after-image 仍匹配时回滚，否则保持 `local` 或 `unclaimed` fail-closed。v2 多 binding 冲突不选赢家。
+- 正确做法：binding 锁外层配合排序 session 锁，copy-on-write 一次持久化 binding/control；任务登记前和 prompt 前复核 session/revision；只有窗口 Agent 持久化失败才在 after-image 仍匹配时回滚选择，runtime 失败保持 `remote + resume_failed`。v2 多 binding 冲突不选赢家。
 - 来源：2026-07-15 Claude 远程会话“选择即接管”治理。

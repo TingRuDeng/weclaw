@@ -3,8 +3,12 @@ package messaging
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/agent"
 )
 
 func TestAcquireCodexSessionRejectsActiveOldRemoteTask(t *testing.T) {
@@ -25,7 +29,7 @@ func TestAcquireCodexSessionRejectsActiveOldRemoteTask(t *testing.T) {
 	assertCodexAcquireOriginalState(t, fixture, 0)
 }
 
-func TestAcquireCodexSessionPersistenceFailureCompensatesRuntime(t *testing.T) {
+func TestAcquireCodexSessionPersistenceFailureSkipsRuntime(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.h.codexSessions.SetFilePath(t.TempDir() + "/codex-sessions.json")
 	fixture.h.codexSessions.writeState = func(string, []byte) error { return errors.New("写盘失败") }
@@ -33,42 +37,55 @@ func TestAcquireCodexSessionPersistenceFailureCompensatesRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("持久化失败时事务不应成功")
 	}
-	assertCodexAcquireOriginalState(t, fixture, 4)
-	if got := len(fixture.agent.handoffRequests()); got != 4 {
-		t.Fatalf("handoff count=%d, want target/release/reverse release/reverse target", got)
+	assertCodexAcquireOriginalState(t, fixture, 0)
+	if got := len(fixture.agent.handoffRequests()); got != 0 {
+		t.Fatalf("handoff count=%d, 所有权落盘失败前不得触碰 runtime", got)
 	}
 }
 
-func TestAcquireCodexSessionCompensationFailureIsFailClosed(t *testing.T) {
+func TestAcquireCodexSessionAgentSelectionFailureRollsBackBeforeRuntime(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
-	fixture.h.codexSessions.SetFilePath(t.TempDir() + "/codex-sessions.json")
-	fixture.h.codexSessions.writeState = func(string, []byte) error {
-		fixture.agent.mu.Lock()
-		fixture.agent.handoffErrors["thread-b"] = errors.New("恢复失败")
-		fixture.agent.mu.Unlock()
-		return errors.New("写盘失败")
+	statePath := filepath.Join(t.TempDir(), "agent-sessions.json")
+	if err := fixture.h.SetAgentSessionFile(statePath); err != nil {
+		t.Fatal(err)
 	}
+	if err := fixture.h.ensureAgentSessions().Set(fixture.routeUser, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	invalidParent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(invalidParent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.h.ensureAgentSessions().filePath = filepath.Join(invalidParent, "state.json")
 	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if !errors.Is(err, errCodexSessionAcquireUncertain) {
-		t.Fatalf("error=%v", err)
+	if err == nil {
+		t.Fatal("Agent 选择持久化失败时应拒绝切换")
 	}
-	assertCodexAcquireOriginalState(t, fixture, 4)
+	assertCodexAcquireOriginalState(t, fixture, 0)
+	if selected, ok := fixture.h.ensureAgentSessions().Get(fixture.routeUser); !ok || selected != "claude" {
+		t.Fatalf("selected=%q ok=%t", selected, ok)
+	}
 }
 
 func TestAcquireCodexSessionHandoffTimeoutDoesNotRetrySideEffect(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.agent.handoffErrors["thread-b"] = context.DeadlineExceeded
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("error=%v", err)
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil || !errors.Is(result.runtimeErr, context.DeadlineExceeded) {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
-	if got := len(fixture.agent.handoffRequests()); got != 1 {
-		t.Fatalf("handoff count=%d, timeout 后不得重试副作用", got)
+	if got := len(fixture.agent.handoffRequests()); got != 2 {
+		t.Fatalf("handoff count=%d, 每个 target/release 最多各调用一次", got)
 	}
-	if fixture.agent.bindCalls != 1 {
-		t.Fatalf("inspect count=%d, want 1", fixture.agent.bindCalls)
+	if fixture.agent.bindCalls != 0 {
+		t.Fatalf("inspect count=%d, handoff 失败后不得二次探测", fixture.agent.bindCalls)
 	}
-	assertCodexAcquireOriginalState(t, fixture, 1)
+	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("target owner=%#v", got)
+	}
+	if got := fixture.agent.threadBinding("thread-b"); got.Runtime != agent.CodexRuntimeConflict {
+		t.Fatalf("runtime=%#v", got)
+	}
 }
 
 func TestAcquireCodexSessionLockTimeoutKeepsOriginalState(t *testing.T) {
@@ -83,18 +100,20 @@ func TestAcquireCodexSessionLockTimeoutKeepsOriginalState(t *testing.T) {
 	assertCodexAcquireOriginalState(t, fixture, 0)
 }
 
-func TestAcquireCodexSessionHandoffTimeoutInspectFailureIsUncertain(t *testing.T) {
+func TestAcquireCodexSessionIdempotentTargetDoesNotProbe(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
-	fixture.agent.handoffErrors["thread-b"] = context.DeadlineExceeded
+	setAcquireTargetRemoteForCurrentRoute(t, fixture)
 	fixture.agent.inspectErrors["thread-b"] = errors.New("校准失败")
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if !errors.Is(err, errCodexSessionAcquireUncertain) {
-		t.Fatalf("error=%v", err)
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
-	assertCodexAcquireOriginalState(t, fixture, 1)
+	if fixture.agent.bindCalls != 0 {
+		t.Fatalf("inspect count=%d, 幂等选择只应读取 CurrentCodexRuntime", fixture.agent.bindCalls)
+	}
 }
 
-func TestAcquireCodexSessionReservationConflictCompensatesRuntime(t *testing.T) {
+func TestAcquireCodexSessionReservationConflictKeepsOwnerAndBlocksRuntime(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.setActiveTarget("turn-b")
 	request := fixture.request("thread-b")
@@ -106,11 +125,13 @@ func TestAcquireCodexSessionReservationConflictCompensatesRuntime(t *testing.T) 
 		t.Fatal("未能建立冲突观察任务")
 	}
 	defer fixture.h.finishActiveTask(request.route.conversationID, task)
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(request)
-	if !errors.Is(err, errExternalCodexTaskReservationConflict) {
-		t.Fatalf("error=%v", err)
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || !errors.Is(result.runtimeErr, errExternalCodexTaskReservationConflict) {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
-	assertCodexAcquireOriginalState(t, fixture, 4)
+	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("target owner=%#v", got)
+	}
 }
 
 func TestAcquireCodexSessionPersistenceFailureCancelsObserverReservation(t *testing.T) {
@@ -126,7 +147,7 @@ func TestAcquireCodexSessionPersistenceFailureCancelsObserverReservation(t *test
 	if _, active := fixture.h.activeTask(request.route.conversationID); active {
 		t.Fatal("提交失败后不应残留未启动的观察 reservation")
 	}
-	assertCodexAcquireOriginalState(t, fixture, 4)
+	assertCodexAcquireOriginalState(t, fixture, 0)
 }
 
 func TestRenderCodexSessionAcquireFailureHidesOtherRouteIdentity(t *testing.T) {

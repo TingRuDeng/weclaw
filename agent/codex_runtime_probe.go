@@ -60,6 +60,13 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 	if req.Intent.Owner == CodexControlUnclaimed {
 		return a.codexOwners.activateRuntime(req, CodexRuntimeUnknown, CodexThreadState{ThreadID: req.Ref.ThreadID})
 	}
+	// thread/start/session resume 已经给出了当前 app-server 的本地 writer 证据。
+	// 窗口认领只需同步控制 revision，不应为此再次探测 Codex Desktop。
+	if req.Intent.Owner == CodexControlRemote {
+		if current, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok && current.Runtime == CodexRuntimeWeClaw {
+			return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, current.State)
+		}
+	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{allowConflictRecovery: true})
 	if err != nil && !(req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict) {
 		return CodexThreadBinding{}, err

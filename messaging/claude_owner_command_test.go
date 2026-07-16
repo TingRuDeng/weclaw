@@ -207,7 +207,7 @@ func TestClaudeRequireRemoteControlFailsClosedOnInconsistentState(t *testing.T) 
 			controls: map[string]claudeControlIntent{"session-a": {
 				Owner: claudeOwnerRemote, BindingKey: key, ConversationID: wantConversation, Revision: 1,
 			}},
-			want: "重新选择",
+			want: "运行通道暂不可用",
 		},
 		{
 			name:    "conversation mismatch",

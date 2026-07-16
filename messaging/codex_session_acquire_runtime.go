@@ -17,30 +17,29 @@ type codexRuntimeConflictRequest struct {
 	intent    codexControlIntent
 }
 
-// applyCodexRuntimeIntentChanges 先接管目标，再按计划顺序释放旧 remote thread。
+// applyCodexRuntimeIntentChanges 在所有权提交后同步目标和旧 thread；各项失败互不阻断。
 func (h *Handler) applyCodexRuntimeIntentChanges(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, []codexRuntimeIntentChange, error) {
-	resolution, targetChange, err := h.acquireCodexTargetRuntime(plan, liveAgent)
-	if err != nil {
-		return resolution, nil, err
-	}
+	resolution, targetChange, targetErr := h.acquireCodexTargetRuntime(plan, liveAgent)
 	applied := make([]codexRuntimeIntentChange, 0, len(plan.changes)+1)
 	if targetChange != nil {
 		applied = append(applied, *targetChange)
 	}
+	var cleanupErr error
 	for _, change := range plan.changes {
 		_, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
 			ctx: plan.request.ctx, liveAgent: liveAgent,
-			change: change, resyncIntent: change.before,
+			change: change,
 		})
 		if err != nil {
-			return resolution, applied, err
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
 		}
 		applied = append(applied, change)
 	}
-	return resolution, applied, nil
+	return resolution, applied, errors.Join(targetErr, cleanupErr)
 }
 
-// acquireCodexTargetRuntime 对幂等目标只探测，避免重复发出 handoff 副作用。
+// acquireCodexTargetRuntime 对幂等目标只读本地绑定；只有 owner remote 显式请求才强制恢复。
 func (h *Handler) acquireCodexTargetRuntime(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, *codexRuntimeIntentChange, error) {
 	before := plan.snapshot.Target
 	after := proposedCodexRemoteSelectionIntent(before, plan.request.route)
@@ -48,13 +47,13 @@ func (h *Handler) acquireCodexTargetRuntime(plan codexSessionAcquirePlan, liveAg
 		threadID: plan.request.route.threadID, route: plan.request.route,
 		before: before, after: after,
 	}
-	if before == after {
-		resolution, err := h.inspectCodexAcquireTarget(plan, liveAgent)
+	if before == after && !plan.request.forceRuntimeHandoff {
+		resolution, err := h.currentCodexAcquireTarget(plan, liveAgent)
 		return resolution, nil, err
 	}
 	resolution, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
 		ctx: plan.request.ctx, liveAgent: liveAgent,
-		change: change, resyncIntent: before,
+		change: change,
 	})
 	if err != nil {
 		return resolution, nil, err
@@ -62,13 +61,13 @@ func (h *Handler) acquireCodexTargetRuntime(plan codexSessionAcquirePlan, liveAg
 	return resolution, &change, nil
 }
 
-// inspectCodexAcquireTarget 读取幂等目标的实时运行位置和活动状态。
-func (h *Handler) inspectCodexAcquireTarget(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, error) {
+// currentCodexAcquireTarget 读取已建立的 runtime，不向 Desktop 发起探测。
+func (h *Handler) currentCodexAcquireTarget(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, error) {
 	request, rollout, err := h.buildCodexRuntimeRequest(plan.request.route, plan.request.route.threadID)
 	if err != nil {
 		return codexRuntimeResolution{}, err
 	}
-	binding, err := liveAgent.InspectCodexRuntime(plan.request.ctx, request)
+	binding, err := liveAgent.CurrentCodexRuntime(request)
 	return codexRuntimeResolution{
 		Request: request, Binding: binding, Rollout: rollout,
 		Live: true, ProbeErr: err,
@@ -88,7 +87,7 @@ func proposedCodexRemoteSelectionIntent(current codexControlIntent, route codexC
 	}
 }
 
-// handoffCodexRuntimeIntent 最多调用一次副作用；失败后仅用持久化意图和明确预算校准。
+// handoffCodexRuntimeIntent 最多调用一次副作用；失败后直接按已提交意图进入冲突态。
 func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (codexRuntimeResolution, error) {
 	request, rollout, err := h.buildCodexRuntimeRequest(req.change.route, req.change.threadID)
 	if err != nil {
@@ -103,19 +102,18 @@ func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (cod
 	if handoffErr == nil {
 		return resolution, nil
 	}
-	request.Intent = agentControlIntent(req.resyncIntent)
-	resyncCtx := req.resyncCtx
+	markCtx := req.resyncCtx
 	cancel := func() {}
-	if resyncCtx == nil {
-		resyncCtx, cancel = newCodexSessionAcquireCleanupContext(req.ctx)
+	if markCtx == nil {
+		markCtx, cancel = newCodexSessionAcquireCleanupContext(req.ctx)
 	}
 	defer cancel()
-	_, inspectErr := req.liveAgent.InspectCodexRuntime(resyncCtx, request)
-	if inspectErr != nil {
-		markErr := req.liveAgent.MarkCodexRuntimeConflict(resyncCtx, request)
-		return resolution, errors.Join(errCodexSessionAcquireUncertain, handoffErr, inspectErr, markErr)
+	markErr := req.liveAgent.MarkCodexRuntimeConflict(markCtx, request)
+	current, currentErr := req.liveAgent.CurrentCodexRuntime(request)
+	if currentErr == nil {
+		resolution.Binding = current
 	}
-	return resolution, handoffErr
+	return resolution, errors.Join(handoffErr, markErr, currentErr)
 }
 
 // compensateCodexRuntimeChanges 按已应用副作用的逆序恢复持久化权威意图。
@@ -129,7 +127,7 @@ func (h *Handler) compensateCodexRuntimeChanges(ctx context.Context, liveAgent a
 		}
 		_, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
 			ctx: ctx, resyncCtx: ctx, liveAgent: liveAgent,
-			change: reverse, resyncIntent: reverse.after,
+			change: reverse,
 		})
 		if err != nil {
 			markErr := h.markCodexRuntimeConflict(codexRuntimeConflictRequest{
@@ -156,37 +154,20 @@ func newCodexSessionAcquireCleanupContext(ctx context.Context) (context.Context,
 	return context.WithTimeout(parent, codexSessionAcquireCleanupTimeout)
 }
 
-// finishCodexSessionAcquire 激活观察后再更新不参与事务提交的辅助会话状态。
-func (h *Handler) finishCodexSessionAcquire(commit codexSessionAcquireCommit) codexSessionAcquireResult {
-	intent := agentControlIntent(commit.committed.Target)
-	commit.resolution.Request.Intent = intent
-	commit.resolution.Binding.Control = intent
-	observerReady := h.activateExternalCodexTaskReservation(commit.reservation)
-	h.switchCodexWorkspaceForRoute(
-		firstNonBlank(commit.request.actorUserID, commit.request.routeUserID),
-		commit.request.routeUserID, commit.request.agentName,
-		commit.request.route.workspaceRoot, commit.request.agent,
-	)
+// finishCodexOwnerSelection 在所有权落盘后立即切换窗口工作空间和默认 Agent。
+func (h *Handler) finishCodexOwnerSelection(request codexSessionAcquireRequest) codexSessionAcquireResult {
 	agentSessionErr := h.ensureAgentSessions().Set(
-		commit.request.routeUserID, commit.request.agentName,
+		request.routeUserID, request.agentName,
+	)
+	if agentSessionErr != nil {
+		return codexSessionAcquireResult{route: request.route, agentSessionErr: agentSessionErr}
+	}
+	h.switchCodexWorkspaceForRoute(
+		firstNonBlank(request.actorUserID, request.routeUserID),
+		request.routeUserID, request.agentName,
+		request.route.workspaceRoot, request.agent,
 	)
 	return codexSessionAcquireResult{
-		route: commit.request.route, resolution: commit.resolution,
-		externalState:   commit.prepared.state,
-		externalActive:  commit.prepared.active && observerReady,
-		agentSessionErr: agentSessionErr,
+		route: request.route, agentSessionErr: agentSessionErr,
 	}
-}
-
-// rollbackCodexAcquire 先撤销观察 reservation，再逆序补偿运行时副作用。
-func (h *Handler) rollbackCodexAcquire(rollback codexSessionAcquireRollback) error {
-	h.cancelExternalCodexTaskReservation(rollback.reservation)
-	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(rollback.plan.request.ctx)
-	defer cancel()
-	if err := h.compensateCodexRuntimeChanges(
-		cleanupCtx, rollback.liveAgent, rollback.applied,
-	); err != nil {
-		return errors.Join(errCodexSessionAcquireUncertain, rollback.cause, err)
-	}
-	return rollback.cause
 }

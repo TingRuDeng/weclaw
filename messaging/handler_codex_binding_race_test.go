@@ -81,15 +81,21 @@ func TestCodexSessionCommandBindingLockTimeout(t *testing.T) {
 	}
 }
 
-func TestCodexSessionCommandSwitchTimeoutDoesNotBlockOwnerPermanently(t *testing.T) {
+func TestCodexSessionCommandSwitchTimeoutKeepsOwnerAndReleasesBindingLock(t *testing.T) {
 	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.agents["codex"] = ag
 	h.defaultName = "codex"
 	h.codexCommandTimeout = 80 * time.Millisecond
 	h.codexLockWaitTimeout = 20 * time.Millisecond
-	ag.inspectEntered = make(chan struct{}, 1)
-	ag.inspectRelease = make(chan struct{})
+	current := h.codexSessions.controlIntent("thread-1")
+	if _, err := h.codexSessions.updateControlIntent(codexControlIntentUpdate{
+		ThreadID: "thread-1", Owner: codexControlDesktop, ExpectedRevision: current.Revision,
+	}); err != nil {
+		t.Fatalf("准备 desktop 所有权失败: %v", err)
+	}
+	ag.handoffEntered = make(chan struct{}, 1)
+	ag.handoffRelease = make(chan struct{})
 
 	switchResult := make(chan string, 1)
 	go func() {
@@ -97,7 +103,7 @@ func TestCodexSessionCommandSwitchTimeoutDoesNotBlockOwnerPermanently(t *testing
 			ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx switch thread-1",
 		})
 	}()
-	waitDone(t, ag.inspectEntered, "switch runtime 探测")
+	waitDone(t, ag.handoffEntered, "switch runtime 移交")
 
 	ownerReply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
@@ -108,11 +114,14 @@ func TestCodexSessionCommandSwitchTimeoutDoesNotBlockOwnerPermanently(t *testing
 
 	select {
 	case reply := <-switchResult:
-		if !strings.Contains(reply, "前一项会话操作仍在处理") || !strings.Contains(reply, "本次选择未执行") {
+		if !strings.Contains(reply, "已切换并接管") || !strings.Contains(reply, "所有权已保留") {
 			t.Fatalf("switch reply=%q", reply)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(codexBindingTestCompletionTimeout):
 		t.Fatal("switch 未在总时限后释放 binding 锁")
+	}
+	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlRemote {
+		t.Fatalf("运行通道超时后应保留当前窗口所有权，intent=%#v", intent)
 	}
 	assertExecutionLockReusable(t, h, codexBindingExecutionKey(codexBindingKey("user-1", "codex")))
 }

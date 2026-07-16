@@ -66,7 +66,7 @@ weclaw status
 /cx owner remote       # 释放后由当前微信或飞书窗口重新接管
 ```
 
-会话选择或新建会先完成运行时探测和状态提交，再返回接管成功；`/cx owner remote` 只用于显式释放后重新接管或兼容恢复。普通消息以当前窗口已持久化的所有权绑定为准，不重复探测 Desktop；运行通道暂时不可用时会保留所有权并提示重试，不要求重新选择。远程任务执行中必须先等待完成或发送 `/stop`，不能中途释放给 Desktop。
+会话选择或新建会先持久化当前窗口的会话绑定和所有权，再尝试同步运行通道；运行通道暂时不可用时不会撤销选择或所有权，但会禁止普通消息写入并提示稍后重试。`/cx owner remote` 用于显式释放后重新接管或主动重试运行通道。普通消息只信任已持久化的所有权和已建立的运行绑定，不探测 Desktop，也不会因超时或断线要求重新选择。`/cx owner desktop` 同样先提交释放；即使 Desktop 通道确认失败，远程写入仍保持关闭。远程任务执行中必须先等待完成或发送 `/stop`，不能中途释放给 Desktop。
 
 ### 复用 Claude Code 会话
 
@@ -81,7 +81,7 @@ weclaw status
 /cc cli
 ```
 
-Claude 通过 ACP `session/list`、`session/resume` 和 `session/new` 管理真实 session。选择、新建、飞书卡片切换或默认 Claude 的全局 `/new` 都会由当前远程窗口立即接管；`session/list` 是会话目录事实源，WeClaw 持久化的 control intent 是远程写入事实源。重启 WeClaw 后会在下一条消息前恢复绑定和控制意图。
+Claude 通过 ACP `session/list`、`session/resume` 和 `session/new` 管理真实 session。选择、新建、飞书卡片切换或默认 Claude 的全局 `/new` 都会先把当前远程窗口持久化为 owner；`session/list` 是会话目录事实源，WeClaw 持久化的 control intent 是远程写入事实源。`session/resume` 失败只会把绑定标记为运行通道不可用，不会切回旧 Agent、旧 session 或释放 owner；普通消息在恢复成功前保持禁止写入。重启 WeClaw 后会在下一条消息前恢复绑定和控制意图。
 
 `/cc owner local` 只显式释放远程控制，`/cc owner remote` 在确认本地 Claude CLI 已结束后重新接管。`/cc cli` 会先释放远程控制再打开原生 CLI；本地 CLI 结束前不要重新接管。独立 Claude CLI 中的任务不属于 WeClaw 运行态，因此没有远程观察、进度回传、`/guide` 或远程停止能力。旧版状态若有多个窗口指向同一 session，会迁移为未认领状态，不会静默选择赢家。Claude ACP 远程任务支持 `/stop` 和排队续跑，不支持 `/guide`。
 

@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -19,13 +18,6 @@ type codexOwnerReleaseValidation struct {
 	current  codexControlIntent
 }
 
-type codexOwnerReleaseCompensation struct {
-	ctx       context.Context
-	liveAgent agent.CodexLiveRuntimeAgent
-	change    codexRuntimeIntentChange
-	cause     error
-}
-
 // handleCodexOwnerCommand 查询或显式移交当前 thread 的控制权。
 func (h *Handler) handleCodexOwnerCommand(runtime codexSessionCommandRuntime) navigationCommandResult {
 	threadID, err := h.selectedCodexOwnerThread(runtime)
@@ -40,7 +32,9 @@ func (h *Handler) handleCodexOwnerCommand(runtime codexSessionCommandRuntime) na
 	}
 	switch strings.ToLower(runtime.fields[2]) {
 	case "remote":
-		result, err := h.acquireCodexSessionWithBindingLocked(runtime.acquireRequest(threadID))
+		request := runtime.acquireRequest(threadID)
+		request.forceRuntimeHandoff = true
+		result, err := h.acquireCodexSessionWithBindingLocked(request)
 		if err != nil {
 			return textNavigationResult(renderCodexSessionAcquireFailure(err))
 		}
@@ -110,17 +104,22 @@ func (h *Handler) releaseCodexOwnerToDesktop(runtime codexSessionCommandRuntime,
 		threadID: threadID, route: runtime.codexRoute(threadID), before: current,
 		after: codexControlIntent{Owner: codexControlDesktop, Revision: current.Revision + 1},
 	}
-	resolution, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
-		ctx: runtime.ctx, liveAgent: liveAgent, change: change, resyncIntent: current,
-	})
-	if err != nil {
-		return textNavigationResult(renderCodexOwnerReleaseFailure(err))
-	}
 	committed, err := h.commitCodexControlIntent(threadID, current, change.after)
 	if err != nil {
-		return textNavigationResult(h.compensateCodexOwnerRelease(codexOwnerReleaseCompensation{
-			ctx: runtime.ctx, liveAgent: liveAgent, change: change, cause: err,
-		}))
+		log.Printf("[codex-owner] 控制权提交失败 thread=%q: %v", threadID, err)
+		return textNavigationResult("Codex 控制权提交失败，本次释放未生效。")
+	}
+	change.after = committed
+	resolution, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
+		ctx: runtime.ctx, liveAgent: liveAgent, change: change,
+	})
+	if err != nil {
+		log.Printf("[codex-owner] 所有权已释放但运行通道确认失败 thread=%q: %v", threadID, err)
+		return textNavigationResult(wechatCommandText(
+			"已归还给 Codex Desktop。",
+			"运行通道: 暂不可用（远程写入已关闭）",
+			"请稍后发送 /cx owner 查看状态。",
+		))
 	}
 	resolution.Request.Intent = agentControlIntent(committed)
 	resolution.Binding.Control = resolution.Request.Intent
@@ -142,33 +141,6 @@ func (h *Handler) validateCodexOwnerRelease(validation codexOwnerReleaseValidati
 		return fmt.Errorf("请等待当前远程任务结束，或先发送 /stop，再归还控制权")
 	}
 	return nil
-}
-
-// compensateCodexOwnerRelease 在持久化失败后用独立预算恢复原运行时意图。
-func (h *Handler) compensateCodexOwnerRelease(compensation codexOwnerReleaseCompensation) string {
-	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(compensation.ctx)
-	defer cancel()
-	changes := []codexRuntimeIntentChange{compensation.change}
-	if err := h.compensateCodexRuntimeChanges(cleanupCtx, compensation.liveAgent, changes); err != nil {
-		return renderCodexOwnerReleaseFailure(errors.Join(errCodexSessionAcquireUncertain, compensation.cause, err))
-	}
-	log.Printf("[codex-owner] 控制权提交失败 thread=%q: %v", compensation.change.threadID, compensation.cause)
-	return "Codex 控制权提交失败，本次释放未生效。"
-}
-
-// renderCodexOwnerReleaseFailure 区分已校准失败与无法确认的 fail-closed 状态。
-func renderCodexOwnerReleaseFailure(err error) string {
-	if err == nil {
-		return ""
-	}
-	log.Printf("[codex-owner] 控制权移交失败: %v", err)
-	if errors.Is(err, errCodexSessionAcquireUncertain) {
-		return "Codex 控制权移交结果未确认，当前禁止继续写入。"
-	}
-	if isCodexSessionControlTimeout(err) {
-		return "Codex 控制权移交超时，已按当前控制意图重新校准；请重试。"
-	}
-	return "Codex 控制权移交失败，请重试。"
 }
 
 // activeCodexTaskConversation 返回同一 thread 当前登记的任务窗口。

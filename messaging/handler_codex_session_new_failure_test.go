@@ -14,29 +14,31 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestHandleCodexNewAcquireFailureRestoresPreviousThread(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureKeepsNewThreadAndOwner(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.handoffErrors["thread-new"] = fmt.Errorf("handoff failed")
-	oldIntent := h.codexSessions.controlIntent("thread-old")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(122, "/cx new"))
 
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
-	if thread != "thread-old" || pending || ag.threadID != "thread-old" {
-		t.Fatalf("失败后状态 thread=%q pending=%v mapping=%q", thread, pending, ag.threadID)
+	if thread != "thread-new" || pending || ag.threadID != "thread-new" {
+		t.Fatalf("运行通道失败后状态 thread=%q pending=%v mapping=%q", thread, pending, ag.threadID)
 	}
-	if h.codexSessions.controlIntent("thread-old") != oldIntent || h.codexSessions.controlIntent("thread-new").Owner != codexControlUnclaimed {
-		t.Fatalf("失败污染所有权: old=%#v new=%#v", h.codexSessions.controlIntent("thread-old"), h.codexSessions.controlIntent("thread-new"))
+	if old := h.codexSessions.controlIntent("thread-old"); old.Owner != codexControlDesktop {
+		t.Fatalf("old owner=%#v", old)
+	}
+	if target := h.codexSessions.controlIntent("thread-new"); target.Owner != codexControlRemote || target.RouteBindingKey != bindingKey {
+		t.Fatalf("target owner=%#v", target)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "原会话已恢复") || !strings.Contains(text, "仍保留在 Codex 历史中") {
-		t.Fatalf("失败回复=%q", text)
+	if !strings.Contains(text, "已创建并接管") || !strings.Contains(text, "所有权已保留") || strings.Contains(text, "原会话已恢复") {
+		t.Fatalf("回复=%q", text)
 	}
 }
 
-func TestHandleCodexNewAcquireFailureClearsMappingWithoutPreviousThread(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureKeepsMappingWithoutPreviousThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
@@ -49,46 +51,26 @@ func TestHandleCodexNewAcquireFailureClearsMappingWithoutPreviousThread(t *testi
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(124, "/cx new"))
 
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
-	if ag.clearCalledWith != conversationID || ag.threadID != "" || thread != "" || pending {
-		t.Fatalf("无旧会话恢复失败: clear=%q mapping=%q store=(%q,%v)", ag.clearCalledWith, ag.threadID, thread, pending)
+	if ag.clearCalledWith != "" || ag.threadID != "thread-new" || thread != "thread-new" || pending {
+		t.Fatalf("mapping clear=%q runtime=%q store=(%q,%v)", ag.clearCalledWith, ag.threadID, thread, pending)
 	}
-	if !containsText(calls.texts(), "仍保留在 Codex 历史中") {
-		t.Fatalf("失败回复未提示历史保留: %#v", calls.texts())
+	if !containsText(calls.texts(), "所有权已保留") {
+		t.Fatalf("回复未说明所有权状态: %#v", calls.texts())
 	}
 }
 
-func TestHandleCodexNewRestoreFailureFailsClosed(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureBlocksWritesUntilExplicitRecovery(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.handoffErrors["thread-new"] = fmt.Errorf("handoff failed")
-	ag.useErr = fmt.Errorf("restore failed")
-	oldIntent := h.codexSessions.controlIntent("thread-old")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(125, "/cx new"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "移交结果未确认") || strings.Contains(text, "原会话已恢复") {
-		t.Fatalf("恢复失败回复=%q", text)
-	}
-	if oldRuntime, newRuntime := ag.threadBinding("thread-old").Runtime, ag.threadBinding("thread-new").Runtime; oldRuntime != agent.CodexRuntimeConflict || newRuntime != agent.CodexRuntimeConflict {
-		t.Fatalf("恢复失败 runtime old=%q new=%q，期望均持久 fail-closed", oldRuntime, newRuntime)
-	}
-	marks, _ := ag.conflictSnapshot()
-	if !reflect.DeepEqual(marks, []string{"thread-new", "thread-old"}) || ag.threadID != "thread-old" {
-		t.Fatalf("conflict marks=%#v mapping=%q，期望先 B 后 A", marks, ag.threadID)
-	}
-	markIntents := ag.conflictIntentSnapshot()
-	if len(markIntents) != 2 || markIntents[0].Owner != agent.CodexControlUnclaimed || markIntents[1] != agentControlIntent(oldIntent) {
-		t.Fatalf("conflict intents=%#v，期望 B 未认领、A 保留原意图", markIntents)
-	}
-	if h.codexSessions.controlIntent("thread-old") != oldIntent || h.codexSessions.controlIntent("thread-new").Owner != codexControlUnclaimed {
-		t.Fatalf("fail-closed 污染 intent: old=%#v new=%#v", h.codexSessions.controlIntent("thread-old"), h.codexSessions.controlIntent("thread-new"))
-	}
-	if selected, pending := h.codexSessions.getThread(bindingKey, workspace); selected != "thread-old" || pending {
-		t.Fatalf("fail-closed 污染选择: thread=%q pending=%t", selected, pending)
+	if !strings.Contains(text, "所有权已保留") {
+		t.Fatalf("回复=%q", text)
 	}
 	assertCodexCreateConflictBlocksUntilExplicitSelection(t, h, ag, workspace, bindingKey)
 }
@@ -102,7 +84,7 @@ func assertCodexCreateConflictBlocksUntilExplicitSelection(t *testing.T, h *Hand
 	opts := codexAgentTaskOptions{
 		ctx: context.Background(), userID: "user-1", routeUserID: "user-1",
 		reply: reply, agentName: "codex", message: "继续任务", agent: ag, progressCfg: cfg,
-		route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID, threadID: "thread-old"},
+		route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID, threadID: "thread-new"},
 	}
 	h.startCodexAgentTask(opts)
 	if len(reply.Texts) == 0 || ag.runCallSnapshot() != 0 {
@@ -110,21 +92,21 @@ func assertCodexCreateConflictBlocksUntilExplicitSelection(t *testing.T, h *Hand
 	}
 	delete(ag.handoffErrors, "thread-new")
 	result := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx switch thread-new",
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
 	})
 	if !strings.Contains(result, "已切换并接管") {
 		t.Fatalf("显式重新选择失败: %q", result)
 	}
-	opts.route.threadID = "thread-new"
 	opts.reply = platformtest.NewReplier(platform.Capabilities{Text: true})
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return ag.runCallSnapshot() == 1 })
 }
 
-func TestCreateAndAcquireCodexSessionRestoresWithCanceledParent(t *testing.T) {
+func TestCreateAndAcquireCodexSessionRestoresAfterHardFailureWithCanceledParent(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
-	ag.rejectCanceledContext = true
 	ag.rejectCanceledUse = true
+	// 运行通道失败不再回滚新会话；用本地持久化硬失败进入创建补偿路径。
+	h.codexSessions.SetFilePath(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	conversationID := buildCodexConversationID("user-1", "codex", workspace)
@@ -137,8 +119,8 @@ func TestCreateAndAcquireCodexSessionRestoresWithCanceledParent(t *testing.T) {
 	})
 
 	_, useContextErrors := ag.conflictSnapshot()
-	if !errors.Is(err, context.Canceled) || errors.Is(err, errCodexSessionAcquireUncertain) {
-		t.Fatalf("err=%v，期望确定的 parent canceled", err)
+	if err == nil || errors.Is(err, errCodexSessionAcquireUncertain) {
+		t.Fatalf("err=%v，期望可确定的本地持久化失败", err)
 	}
 	if ag.threadID != "thread-old" || len(useContextErrors) != 1 || useContextErrors[0] != nil {
 		t.Fatalf("mapping=%q useCtx=%#v，恢复必须脱离 parent cancel", ag.threadID, useContextErrors)

@@ -42,7 +42,7 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	}
 }
 
-func TestCodexCxSwitchDoesNotCreateDraftWhenOtherSessionsExist(t *testing.T) {
+func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -63,13 +63,13 @@ func TestCodexCxSwitchDoesNotCreateDraftWhenOtherSessionsExist(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(148, "/cx switch 0"))
 
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
-	if thread != "" || pending || h.codexSessions.controlIntent("thread-bad").Owner != codexControlUnclaimed {
-		t.Fatalf("探测失败不应提交目标，thread=%q pending=%v", thread, pending)
+	if thread != "thread-bad" || pending || h.codexSessions.controlIntent("thread-bad").Owner != codexControlRemote {
+		t.Fatalf("运行通道失败后仍应提交目标，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "切换并接管") || !strings.Contains(text, "失败") ||
+	if !strings.Contains(text, "已切换并接管") || !strings.Contains(text, "所有权已保留") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") || strings.Contains(text, "thread-store internal error") {
-		t.Fatalf("probe failure should preserve selection without a draft, messages=%#v", calls.texts())
+		t.Fatalf("runtime failure should keep committed selection without a draft, messages=%#v", calls.texts())
 	}
 }
 
@@ -104,7 +104,7 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	}
 }
 
-func TestCodexShortIndexPreservesBindingWhenSingleSessionCannotBeRestored(t *testing.T) {
+func TestCodexShortIndexCommitsBindingWhenSingleSessionRuntimeCannotBeRestored(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	root := t.TempDir()
@@ -134,14 +134,14 @@ func TestCodexShortIndexPreservesBindingWhenSingleSessionCannotBeRestored(t *tes
 	targetThread, pending := h.codexSessions.getThread(bindingKey, targetWorkspace)
 	oldIntent := h.codexSessions.controlIntent("thread-old")
 	targetIntent := h.codexSessions.controlIntent("thread-bad")
-	if active != oldWorkspace || oldThread != "thread-old" || targetThread != "" || pending ||
-		oldIntent.Owner != codexControlRemote || targetIntent.Owner != codexControlUnclaimed {
+	if active != targetWorkspace || oldThread != "thread-old" || targetThread != "thread-bad" || pending ||
+		oldIntent.Owner != codexControlDesktop || targetIntent.Owner != codexControlRemote {
 		t.Fatalf("active=%q old=%q target=%q pending=%t intents=(%#v,%#v)", active, oldThread, targetThread, pending, oldIntent, targetIntent)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "切换并接管") || !strings.Contains(text, "失败") ||
+	if !strings.Contains(text, "已进入工作空间并接管唯一会话") || !strings.Contains(text, "所有权已保留") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") {
-		t.Fatalf("reply should preserve user choice, messages=%#v", calls.texts())
+		t.Fatalf("reply should report committed selection with unavailable runtime, messages=%#v", calls.texts())
 	}
 }
 

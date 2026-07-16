@@ -10,7 +10,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-func TestAcquireCodexSessionDeadlineCleanupCompensatesEarlierHandoff(t *testing.T) {
+func TestAcquireCodexSessionDeadlineDuringOldReleaseKeepsTarget(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -18,15 +18,17 @@ func TestAcquireCodexSessionDeadlineCleanupCompensatesEarlierHandoff(t *testing.
 	request.ctx = ctx
 	fixture.agent.rejectCanceledContext = true
 	fixture.agent.handoffReleases["thread-a"] = make(chan struct{})
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(request)
-	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errCodexSessionAcquireUncertain) {
-		t.Fatalf("error=%v", err)
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
-	assertCodexAcquireOriginalState(t, fixture, 3)
-	assertFakeCodexBindingOwner(t, fixture.agent, "thread-b", agent.CodexControlDesktop)
+	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("target owner=%#v", got)
+	}
+	assertFakeCodexBindingOwner(t, fixture.agent, "thread-b", agent.CodexControlRemote)
 }
 
-func TestAcquireCodexSessionCanceledCleanupCompensatesEarlierHandoff(t *testing.T) {
+func TestAcquireCodexSessionCanceledOldReleaseKeepsTarget(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	request := fixture.request("thread-b")
@@ -34,65 +36,74 @@ func TestAcquireCodexSessionCanceledCleanupCompensatesEarlierHandoff(t *testing.
 	fixture.agent.rejectCanceledContext = true
 	fixture.agent.handoffReleases["thread-a"] = make(chan struct{})
 	fixture.agent.handoffHooks["thread-a"] = cancel
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(request)
-	if !errors.Is(err, context.Canceled) || errors.Is(err, errCodexSessionAcquireUncertain) {
-		t.Fatalf("error=%v", err)
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
-	assertCodexAcquireOriginalState(t, fixture, 3)
-	assertFakeCodexBindingOwner(t, fixture.agent, "thread-b", agent.CodexControlDesktop)
+	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("target owner=%#v", got)
+	}
+	assertFakeCodexBindingOwner(t, fixture.agent, "thread-b", agent.CodexControlRemote)
 }
 
-func TestAcquireCodexSessionNonTimeoutAfterSideEffectIsCalibrated(t *testing.T) {
+func TestAcquireCodexSessionOldReleaseFailureDoesNotProbeOrRollback(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.agent.handoffAfterErrors["thread-a"] = errors.New("checkpoint 读取失败")
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if err == nil || errors.Is(err, errCodexSessionAcquireUncertain) {
-		t.Fatalf("error=%v", err)
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
-	if fixture.agent.bindCalls != 1 {
-		t.Fatalf("inspect count=%d, want 1", fixture.agent.bindCalls)
+	if fixture.agent.bindCalls != 0 {
+		t.Fatalf("inspect count=%d, 失败后不得校准探测", fixture.agent.bindCalls)
 	}
-	assertCodexAcquireOriginalState(t, fixture, 3)
-	assertFakeCodexBindingOwner(t, fixture.agent, "thread-a", agent.CodexControlRemote)
-	assertFakeCodexBindingOwner(t, fixture.agent, "thread-b", agent.CodexControlDesktop)
+	if got := fixture.h.codexSessions.controlIntent("thread-a"); got.Owner != codexControlDesktop {
+		t.Fatalf("old owner=%#v", got)
+	}
+	assertFakeCodexBindingOwner(t, fixture.agent, "thread-b", agent.CodexControlRemote)
 }
 
-func TestAcquireCodexSessionCalibrationFailureMarksConflict(t *testing.T) {
+func TestAcquireCodexSessionTargetFailureMarksConflictAndKeepsOwner(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.agent.handoffAfterErrors["thread-b"] = errors.New("恢复后读取失败")
 	fixture.agent.inspectErrors["thread-b"] = errors.New("校准失败")
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if !errors.Is(err, errCodexSessionAcquireUncertain) {
-		t.Fatalf("error=%v", err)
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil || result.runtimeErr == nil {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
 	binding := fixture.agent.threadBinding("thread-b")
 	if binding.Runtime != agent.CodexRuntimeConflict || binding.ConflictReason == "" {
 		t.Fatalf("binding=%#v", binding)
 	}
+	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("target owner=%#v", got)
+	}
+	if got := fixture.h.codexSessions.controlIntent("thread-a"); got.Owner != codexControlDesktop {
+		t.Fatalf("旧会话已释放的 owner 不得因目标 runtime 失败而恢复: %#v", got)
+	}
+	requests := fixture.agent.handoffRequests()
+	if len(requests) != 2 || requests[1].Ref.ThreadID != "thread-a" || requests[1].Intent.Owner != agent.CodexControlDesktop {
+		t.Fatalf("目标失败后仍必须关闭旧远程 writer，handoff=%#v", requests)
+	}
+	assertFakeCodexBindingOwner(t, fixture.agent, "thread-a", agent.CodexControlDesktop)
 }
 
-func TestAcquireCodexSessionCompensationFailureMarksTouchedThreadConflict(t *testing.T) {
+func TestAcquireCodexSessionStoreFailureDoesNotTouchRuntime(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.h.codexSessions.SetFilePath(t.TempDir() + "/codex-sessions.json")
-	fixture.h.codexSessions.writeState = func(string, []byte) error {
-		fixture.agent.mu.Lock()
-		fixture.agent.handoffErrors["thread-b"] = errors.New("恢复失败")
-		fixture.agent.mu.Unlock()
-		return errors.New("写盘失败")
-	}
+	fixture.h.codexSessions.writeState = func(string, []byte) error { return errors.New("写盘失败") }
 	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if !errors.Is(err, errCodexSessionAcquireUncertain) {
+	if err == nil {
 		t.Fatalf("error=%v", err)
 	}
-	binding := fixture.agent.threadBinding("thread-b")
-	if binding.Runtime != agent.CodexRuntimeConflict {
-		t.Fatalf("binding=%#v", binding)
+	if len(fixture.agent.handoffRequests()) != 0 {
+		t.Fatalf("handoff=%#v", fixture.agent.handoffRequests())
 	}
 }
 
 func TestAcquireCodexSessionExplicitHandoffRecoversMarkedConflict(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	request := fixture.request("thread-b")
+	request.forceRuntimeHandoff = true
 	if err := fixture.agent.MarkCodexRuntimeConflict(context.Background(), agent.CodexRuntimeRequest{
 		Ref:    request.route.ref("thread-b"),
 		Intent: agent.CodexControlIntent{Owner: agent.CodexControlDesktop, Revision: 1},
@@ -117,32 +128,33 @@ type recordedRuntimeContext struct {
 
 func TestRollbackCompensationsShareOneCleanupDeadline(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
-	fixture.h.codexSessions.SetFilePath(t.TempDir() + "/codex-sessions.json")
 	var recordsMu sync.Mutex
-	recording := false
 	records := make([]recordedRuntimeContext, 0, 8)
 	fixture.agent.recordRuntimeContext = func(operation string, ctx context.Context, req agent.CodexRuntimeRequest) {
 		recordsMu.Lock()
 		defer recordsMu.Unlock()
 		deadline, ok := ctx.Deadline()
-		if recording && ok {
+		if ok {
 			records = append(records, recordedRuntimeContext{operation: operation, threadID: req.Ref.ThreadID, deadline: deadline})
 		}
 	}
-	fixture.h.codexSessions.writeState = func(string, []byte) error {
-		fixture.agent.mu.Lock()
-		fixture.agent.handoffErrors["thread-a"] = errors.New("恢复 A 失败")
-		fixture.agent.handoffErrors["thread-b"] = errors.New("恢复 B 失败")
-		fixture.agent.inspectErrors["thread-a"] = errors.New("校准 A 失败")
-		fixture.agent.inspectErrors["thread-b"] = errors.New("校准 B 失败")
-		fixture.agent.mu.Unlock()
-		recordsMu.Lock()
-		recording = true
-		recordsMu.Unlock()
-		return errors.New("写盘失败")
+	fixture.agent.handoffErrors["thread-a"] = errors.New("恢复 A 失败")
+	fixture.agent.handoffErrors["thread-b"] = errors.New("恢复 B 失败")
+	changes := []codexRuntimeIntentChange{
+		{
+			threadID: "thread-a", route: fixture.request("thread-a").route,
+			before: codexControlIntent{Owner: codexControlDesktop, Revision: 1},
+			after:  fixture.h.codexSessions.controlIntent("thread-a"),
+		},
+		{
+			threadID: "thread-b", route: fixture.request("thread-b").route,
+			before: codexControlIntent{Owner: codexControlRemote, RouteBindingKey: fixture.bindingKey, ConversationID: fixture.request("thread-b").route.conversationID, Revision: 2},
+			after:  codexControlIntent{Owner: codexControlDesktop, Revision: 1},
+		},
 	}
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if !errors.Is(err, errCodexSessionAcquireUncertain) {
+	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(context.Background())
+	defer cancel()
+	if err := fixture.h.compensateCodexRuntimeChanges(cleanupCtx, fixture.agent, changes); err == nil {
 		t.Fatalf("error=%v", err)
 	}
 	assertSharedCleanupDeadline(t, records)
@@ -180,7 +192,7 @@ func TestCompensationExpiredCleanupDeadlineIsNeverRenewed(t *testing.T) {
 			t.Fatalf("%s deadline被续期: got=%v shared=%v", record.operation, record.deadline, sharedDeadline)
 		}
 	}
-	for _, operation := range []string{"handoff", "inspect", "mark"} {
+	for _, operation := range []string{"handoff", "mark"} {
 		if !seen[operation] {
 			t.Fatalf("records=%#v, 缺少%s deadline", records, operation)
 		}
@@ -210,7 +222,7 @@ func assertSharedCleanupDeadline(t *testing.T, records []recordedRuntimeContext)
 		t.Fatalf("records=%#v, want two compensation threads", records)
 	}
 	for threadID := range threads {
-		for _, operation := range []string{"handoff", "inspect", "mark"} {
+		for _, operation := range []string{"handoff", "mark"} {
 			if !seen[threadID][operation] {
 				t.Fatalf("records=%#v, %s缺少%s deadline", records, threadID, operation)
 			}
