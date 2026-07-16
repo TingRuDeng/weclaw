@@ -128,6 +128,70 @@ func TestCodexDesktopClientReconnectKeepsNewEpoch(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopClientNotifiesDisconnectBeforeReconnectInitialization(t *testing.T) {
+	closeFirst := make(chan struct{})
+	disconnectEntered := make(chan struct{})
+	releaseDisconnect := make(chan struct{})
+	secondInitialized := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+
+	dial := codexDesktopTestDial(t, func(conn net.Conn, session int) {
+		serveCodexDesktopTestInitialize(t, conn, fmt.Sprintf("client-%d", session))
+		if session == 1 {
+			<-closeFirst
+			return
+		}
+		close(secondInitialized)
+		<-releaseSecond
+	})
+	options := codexDesktopTestOptions(dial)
+	var disconnects atomic.Int32
+	options.onDisconnect = func(error) {
+		if disconnects.Add(1) != 1 {
+			return
+		}
+		close(disconnectEntered)
+		<-releaseDisconnect
+	}
+	client := newCodexDesktopClient(options)
+	defer func() { _ = client.Close() }()
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatalf("first Connect() error = %v", err)
+	}
+
+	close(closeFirst)
+	select {
+	case <-disconnectEntered:
+	case <-time.After(codexDesktopTestTimeout):
+		t.Fatal("disconnect callback not called")
+	}
+
+	reconnectDone := make(chan error, 1)
+	go func() { reconnectDone <- client.Connect(context.Background()) }()
+	select {
+	case <-secondInitialized:
+		close(releaseDisconnect)
+		t.Fatal("reconnect initialized before disconnect callback completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseDisconnect)
+
+	select {
+	case err := <-reconnectDone:
+		if err != nil {
+			t.Fatalf("second Connect() error = %v", err)
+		}
+	case <-time.After(codexDesktopTestTimeout):
+		t.Fatal("reconnect did not complete after disconnect callback")
+	}
+	select {
+	case <-secondInitialized:
+	case <-time.After(codexDesktopTestTimeout):
+		t.Fatal("second connection was not initialized")
+	}
+}
+
 func TestCodexDesktopClientDispatchesValidatedBroadcastVersion(t *testing.T) {
 	broadcasts := make(chan codexDesktopEnvelope, 1)
 	release := make(chan struct{})

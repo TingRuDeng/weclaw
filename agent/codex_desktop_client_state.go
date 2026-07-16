@@ -82,19 +82,29 @@ func (c *codexDesktopClient) connectionMatchesLocked(connection codexDesktopConn
 	return c.isConnectedLocked()
 }
 
-// disconnectEpoch 仅清理匹配代次，并一次性失败全部在途请求。
-func (c *codexDesktopClient) disconnectEpoch(connection codexDesktopConnectionRef, cause error) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return c.disconnectEpochLocked(connection, cause)
+type codexDesktopDisconnectResult struct {
+	disconnected bool
+	closeErr     error
+	pending      map[string]*codexDesktopPendingCall
+	discovery    map[string]*codexDesktopPendingDiscovery
 }
 
-// disconnectEpochLocked 在写锁内按完整写入状态分类所有等待者。
-func (c *codexDesktopClient) disconnectEpochLocked(connection codexDesktopConnectionRef, cause error) error {
+// disconnectEpoch 仅清理匹配代次；在重连初始化前先通知 runtime，再失败全部在途请求。
+func (c *codexDesktopClient) disconnectEpoch(connection codexDesktopConnectionRef, cause error) error {
+	c.writeMu.Lock()
+	result := c.disconnectEpochLocked(connection)
+	c.notifyDisconnectLocked(result, cause)
+	c.writeMu.Unlock()
+	c.failDisconnectedPending(result, cause)
+	return result.closeErr
+}
+
+// disconnectEpochLocked 在写锁内摘除匹配代次，并返回锁外收尾所需状态。
+func (c *codexDesktopClient) disconnectEpochLocked(connection codexDesktopConnectionRef) codexDesktopDisconnectResult {
 	c.mu.Lock()
 	if c.conn != connection.conn || c.epoch != connection.epoch {
 		c.mu.Unlock()
-		return nil
+		return codexDesktopDisconnectResult{}
 	}
 	state := c.connectionState
 	c.conn, c.connectionState, c.clientID, c.connecting = nil, nil, "", false
@@ -105,9 +115,30 @@ func (c *codexDesktopClient) disconnectEpochLocked(connection codexDesktopConnec
 
 	stateRef := codexDesktopConnectionRef{state: state}
 	stateRef.markReady(false)
-	closeErr := connection.conn.Close()
-	c.failPending(pending, discovery, cause)
-	return closeErr
+	return codexDesktopDisconnectResult{
+		disconnected: true,
+		closeErr:     connection.conn.Close(),
+		pending:      pending,
+		discovery:    discovery,
+	}
+}
+
+// notifyDisconnectLocked 在 writeMu 内同步 runtime；回调不得反向调用 client 方法。
+func (c *codexDesktopClient) notifyDisconnectLocked(result codexDesktopDisconnectResult, cause error) {
+	if !result.disconnected {
+		return
+	}
+	if c.onDisconnect != nil {
+		c.onDisconnect(cause)
+	}
+}
+
+// failDisconnectedPending 在断开通知完成后唤醒可能立即返回到消息层的请求。
+func (c *codexDesktopClient) failDisconnectedPending(result codexDesktopDisconnectResult, cause error) {
+	if !result.disconnected {
+		return
+	}
+	c.failPending(result.pending, result.discovery, cause)
 }
 
 // failPending 唤醒当前连接代次的全部调用和发现请求。

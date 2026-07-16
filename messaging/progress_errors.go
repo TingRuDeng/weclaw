@@ -12,6 +12,12 @@ func friendlyAgentError(err error) string {
 	if errors.Is(err, agent.ErrAgentSessionNotBound) {
 		return "当前窗口尚未绑定会话，请选择已有会话或发送 /new。"
 	}
+	if errors.Is(err, agent.ErrCodexDesktopDeliveryUnknown) {
+		return "Codex Desktop 连接在请求发送后中断，任务是否已开始暂时无法确认。当前窗口的远程所有权保持不变；请先发送 /cx status 确认状态，避免重复提交。"
+	}
+	if errors.Is(err, agent.ErrCodexDesktopDisconnected) {
+		return "Codex 运行通道暂不可用；当前窗口的远程所有权保持不变。请稍后重试，或发送 /cx status 查看状态。"
+	}
 	raw := sanitizeAgentError(err.Error())
 	lower := strings.ToLower(raw)
 	switch {
@@ -26,6 +32,11 @@ func friendlyAgentError(err error) string {
 	default:
 		return raw
 	}
+}
+
+func isCodexDesktopConnectionFailure(err error) bool {
+	return errors.Is(err, agent.ErrCodexDesktopDeliveryUnknown) ||
+		errors.Is(err, agent.ErrCodexDesktopDisconnected)
 }
 
 // sanitizeAgentError 清理终端控制字符，避免 ANSI 颜色码透出到微信消息。

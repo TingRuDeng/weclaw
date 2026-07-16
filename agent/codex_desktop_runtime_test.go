@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"testing"
 	"time"
 )
@@ -78,6 +79,48 @@ func TestACPAgentDesktopControlledTurnDoesNotAutoRecover(t *testing.T) {
 	if !errors.Is(err, ErrCodexDesktopNoClient) || restarts != 0 {
 		t.Fatalf("error=%v restarts=%d", err, restarts)
 	}
+}
+
+func TestACPAgentDesktopDisconnectInvalidatesRuntimeWithoutReleasingRemoteOwner(t *testing.T) {
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
+	}, acpAgentOptions{})
+	disconnect := make(chan struct{})
+	client := a.desktopRuntime.ensureInitialized()
+	client.dial = codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "client-1")
+		<-disconnect
+	})
+	mustConnectCodexDesktopTestClient(t, client)
+
+	req := desktopRuntimeRequest()
+	state := CodexThreadState{ThreadID: req.Ref.ThreadID, Model: "gpt-test"}
+	a.codexOwners.observeDesktopSnapshot(req.Ref.ThreadID, 1, state)
+	if _, err := a.codexOwners.activateRuntime(req, CodexRuntimeDesktop, state); err != nil {
+		t.Fatal(err)
+	}
+
+	close(disconnect)
+	waitCodexDesktopDisconnected(t, client)
+	deadline := time.Now().Add(codexDesktopTestTimeout)
+	for time.Now().Before(deadline) {
+		binding, err := a.CurrentCodexRuntime(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if binding.Runtime == CodexRuntimeUnknown {
+			if binding.Control != req.Intent {
+				t.Fatalf("control = %#v, want %#v", binding.Control, req.Intent)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	binding, err := a.CurrentCodexRuntime(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("runtime = %s, want %s; control = %#v", binding.Runtime, CodexRuntimeUnknown, binding.Control)
 }
 
 // TestACPAgentDesktopWatchReconcilesCompletedState 验证终态事件缺失时仍能从权威状态收尾。

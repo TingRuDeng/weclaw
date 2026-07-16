@@ -41,6 +41,8 @@ type codexDesktopClientOptions struct {
 	now                              func() time.Time
 	requestTimeout, discoveryTimeout time.Duration
 	onBroadcast                      func(codexDesktopEnvelope)
+	// onDisconnect 在 client 的写串行区内调用，不得反向调用 client 方法。
+	onDisconnect func(error)
 }
 
 type codexDesktopConnectionState struct {

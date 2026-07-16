@@ -25,6 +25,7 @@ type codexDesktopClient struct {
 	now                               func() time.Time
 	requestTimeout, discoveryTimeout  time.Duration
 	onBroadcast                       func(codexDesktopEnvelope)
+	onDisconnect                      func(error)
 	broadcastMu                       sync.Mutex
 	broadcasts                        []codexDesktopBroadcast
 	broadcastWake                     chan struct{}
@@ -49,7 +50,8 @@ func newCodexDesktopClient(options codexDesktopClientOptions) *codexDesktopClien
 	client := &codexDesktopClient{
 		dial: options.dial, requestID: options.requestID, now: options.now,
 		requestTimeout: options.requestTimeout, discoveryTimeout: options.discoveryTimeout,
-		onBroadcast: options.onBroadcast, pending: make(map[string]*codexDesktopPendingCall),
+		onBroadcast: options.onBroadcast, onDisconnect: options.onDisconnect,
+		pending:       make(map[string]*codexDesktopPendingCall),
 		discovery:     make(map[string]*codexDesktopPendingDiscovery),
 		broadcastWake: make(chan struct{}, 1),
 		broadcastStop: make(chan struct{}), broadcastDone: make(chan struct{}),

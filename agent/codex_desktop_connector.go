@@ -97,7 +97,8 @@ func (r *codexDesktopRuntime) ensureInitialized() *codexDesktopClient {
 		return r.client
 	}
 	client := newCodexDesktopClient(codexDesktopClientOptions{
-		onBroadcast: r.handleBroadcast,
+		onBroadcast:  r.handleBroadcast,
+		onDisconnect: r.handleDisconnect,
 	})
 	actions := newCodexDesktopActions(client, client.nextRequestID)
 	state := newCodexDesktopStateStore(codexDesktopStateOptions{
@@ -111,6 +112,17 @@ func (r *codexDesktopRuntime) ensureInitialized() *codexDesktopClient {
 	})
 	r.client, r.actions, r.state = client, actions, state
 	return client
+}
+
+// handleDisconnect 只降级实际运行位置；持久化远程控制方继续保持不变。
+func (r *codexDesktopRuntime) handleDisconnect(cause error) {
+	r.mu.Lock()
+	owners := r.owners
+	r.mu.Unlock()
+	if owners != nil {
+		owners.markDesktopDisconnected()
+	}
+	log.Printf("[acp] Codex Desktop IPC disconnected; cached runtime marked unknown, control owner unchanged: %v", cause)
 }
 
 // Discover 探测是否有 Desktop client 能处理目标 thread 的历史请求。

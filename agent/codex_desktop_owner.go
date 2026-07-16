@@ -66,7 +66,7 @@ func (r *codexRuntimeOwnerRegistry) unbindConversation(conversationID string) {
 	delete(r.conversations, strings.TrimSpace(conversationID))
 }
 
-// markDesktopDisconnected 降级 Desktop owner，但不产生 release evidence。
+// markDesktopDisconnected 降级 Desktop runtime，但不改变控制意图，也不产生 release evidence。
 func (r *codexRuntimeOwnerRegistry) markDesktopDisconnected() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

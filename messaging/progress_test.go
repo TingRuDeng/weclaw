@@ -23,6 +23,37 @@ func TestRenderFinalFailureExplainsAgentSessionNotBound(t *testing.T) {
 	}
 }
 
+func TestRenderFinalFailureExplainsCodexDesktopDisconnectWithoutReleasingOwner(t *testing.T) {
+	got := renderFinalFailure("", agent.ErrCodexDesktopDisconnected)
+
+	if !strings.Contains(got, "Codex 运行通道暂不可用") ||
+		!strings.Contains(got, "远程所有权保持不变") ||
+		!strings.Contains(got, "/cx status") {
+		t.Fatalf("Desktop disconnect should preserve owner and provide recovery hint, got %q", got)
+	}
+	if strings.Contains(got, "Codex Desktop 连接已断开") {
+		t.Fatalf("Desktop disconnect should not expose raw transport error, got %q", got)
+	}
+	if strings.Contains(got, "发送 /new") {
+		t.Fatalf("Desktop disconnect should keep the selected session, got %q", got)
+	}
+}
+
+func TestRenderFinalFailureWarnsWhenCodexDesktopDeliveryIsUnknown(t *testing.T) {
+	err := errors.Join(agent.ErrCodexDesktopDeliveryUnknown, agent.ErrCodexDesktopDisconnected)
+	got := renderFinalFailure("", err)
+
+	if !strings.Contains(got, "任务是否已开始暂时无法确认") ||
+		!strings.Contains(got, "远程所有权保持不变") ||
+		!strings.Contains(got, "避免重复提交") ||
+		!strings.Contains(got, "/cx status") {
+		t.Fatalf("unknown delivery should warn before retry, got %q", got)
+	}
+	if strings.Contains(got, "发送 /new") {
+		t.Fatalf("unknown delivery should keep the selected session, got %q", got)
+	}
+}
+
 func TestRenderAcceptance(t *testing.T) {
 	taskTitle := progressTaskTitle("修复 WeClaw 里 Codex 实时回复碎片化的问题，并保留 stream 兼容模式", 13)
 	got := renderAcceptance(taskTitle)

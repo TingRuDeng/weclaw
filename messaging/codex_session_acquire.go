@@ -255,7 +255,7 @@ func renderCodexSessionAcquireFailure(err error) string {
 	case errors.Is(err, errCodexRemoteSelectionChanged):
 		return "Codex 会话所有权已被并发修改，请重新查询后重试。"
 	case errors.Is(err, errCodexSessionAcquireUncertain):
-		return "Codex 控制权移交结果未确认，当前禁止继续写入。"
+		return "未切换到 Codex：目标会话的控制权移交结果未确认。当前窗口仍保持切换前的 Agent；在状态确认前不会向该 Codex 会话写入。"
 	case isCodexSessionControlTimeout(err):
 		return "前一项会话操作仍在处理，本次选择未执行。"
 	case errors.Is(err, errCodexSessionAcquireUnsupported):

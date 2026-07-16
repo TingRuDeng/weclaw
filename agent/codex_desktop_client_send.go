@@ -93,15 +93,19 @@ func (c *codexDesktopClient) writeEnvelope(connection codexDesktopConnectionRef,
 		return err
 	}
 	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	if !c.connectionMatches(connection) {
+		c.writeMu.Unlock()
 		return c.disconnectedError()
 	}
 	if err := writeCodexDesktopFrame(connection.conn, payload); err != nil {
-		_ = c.disconnectEpochLocked(connection, err)
+		result := c.disconnectEpochLocked(connection)
+		c.notifyDisconnectLocked(result, err)
+		c.writeMu.Unlock()
+		c.failDisconnectedPending(result, err)
 		return fmt.Errorf("%w: 写入 method=%s requestId=%s: %v", ErrCodexDesktopDisconnected, envelope.Method, envelope.RequestID, err)
 	}
 	c.markRequestWritten(envelope.RequestID)
+	c.writeMu.Unlock()
 	return nil
 }
 

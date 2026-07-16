@@ -98,6 +98,28 @@ func TestCodexSwitchProbeTimeoutKeepsA(t *testing.T) {
 	}
 }
 
+func TestCodexSwitchUncertainKeepsPreviousAgentAndExplainsScope(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	if err := fixture.h.ensureAgentSessions().Set(fixture.routeUser, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	fixture.agent.handoffErrors["thread-b"] = context.DeadlineExceeded
+	fixture.agent.inspectErrors["thread-b"] = errors.New("校准失败")
+	want := fixture.snapshot()
+	want.handoffCount = 1
+
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+
+	assertCodexAcquireState(t, fixture, want)
+	if selected, ok := fixture.h.ensureAgentSessions().Get(fixture.routeUser); !ok || selected != "claude" {
+		t.Fatalf("selected=%q ok=%t, want claude", selected, ok)
+	}
+	const wantText = "未切换到 Codex：目标会话的控制权移交结果未确认。当前窗口仍保持切换前的 Agent；在状态确认前不会向该 Codex 会话写入。"
+	if text != wantText {
+		t.Fatalf("text=%q, want %q", text, wantText)
+	}
+}
+
 func TestCodexSwitchThreadLockTimeoutKeepsA(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.h.codexLockWaitTimeout = 20 * time.Millisecond
