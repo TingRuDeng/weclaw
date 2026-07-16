@@ -19,17 +19,19 @@ var staticFS embed.FS
 
 // Options 配置 web 面板服务。
 type Options struct {
-	Addr  string
-	Token string
+	Addr              string
+	Token             string
+	AllowInsecureHTTP bool
 }
 
 // Server 提供本机配置面板的 HTTP 服务。
 type Server struct {
-	addr         string
-	token        string
-	cfg          *configService
-	wechatLogins *wechatLoginStore
-	authThrottle *authThrottle
+	addr              string
+	token             string
+	cfg               *configService
+	wechatLogins      *wechatLoginStore
+	authThrottle      *authThrottle
+	allowInsecureHTTP bool
 }
 
 const (
@@ -46,23 +48,30 @@ func NewServer(opts Options) *Server {
 		addr = "127.0.0.1:39282"
 	}
 	return &Server{
-		addr:         addr,
-		token:        strings.TrimSpace(opts.Token),
-		cfg:          newConfigService(),
-		wechatLogins: newWechatLoginStore(),
-		authThrottle: newAuthThrottle(),
+		addr:              addr,
+		token:             strings.TrimSpace(opts.Token),
+		cfg:               newConfigService(),
+		wechatLogins:      newWechatLoginStore(),
+		authThrottle:      newAuthThrottle(),
+		allowInsecureHTTP: opts.AllowInsecureHTTP,
 	}
 }
 
 // Addr 返回监听地址。
 func (s *Server) Addr() string { return s.addr }
 
-// Validate 在监听暴露到非回环地址前要求显式 token。
+// Validate 默认只允许回环监听；非回环明文 HTTP 必须同时显式确认风险并配置 token。
 func (s *Server) Validate() error {
-	if s.token != "" || isLoopbackListenAddr(s.addr) {
+	if isLoopbackListenAddr(s.addr) {
 		return nil
 	}
-	return fmt.Errorf("web panel token is required when addr %q is not loopback", s.addr)
+	if s.token == "" {
+		return fmt.Errorf("web panel token is required when addr %q is not loopback", s.addr)
+	}
+	if !s.allowInsecureHTTP {
+		return fmt.Errorf("web panel addr %q is non-loopback but the built-in server uses plain HTTP; pass --allow-insecure-http only on a trusted network or use an HTTPS tunnel", s.addr)
+	}
+	return nil
 }
 
 // Run 启动 HTTP 服务，阻塞直到 ctx 取消。
@@ -114,6 +123,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 // guard 应用同源防护 + 常量时间 token 校验；静态资源与首页放行 token 但仍做同源。
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSensitiveResponseHeaders(w)
 		if !s.sameOrigin(r) {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
@@ -166,7 +176,15 @@ func tokenFromRequest(r *http.Request) string {
 	if fields := strings.Fields(auth); len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
 		return strings.TrimSpace(fields[1])
 	}
-	return strings.TrimSpace(r.URL.Query().Get("token"))
+	return ""
+}
+
+func setSensitiveResponseHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 }
 
 func constantTimeEqual(got, want string) bool {

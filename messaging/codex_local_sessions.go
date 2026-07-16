@@ -3,6 +3,7 @@ package messaging
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"log"
@@ -13,7 +14,10 @@ import (
 	"strings"
 )
 
-const codexLocalSource = "local"
+const (
+	codexLocalSource              = "local"
+	codexLocalIndexMaxRecordBytes = 4 * 1024 * 1024
+)
 
 type localCodexIndexEntry struct {
 	ThreadName string `json:"thread_name"`
@@ -91,14 +95,55 @@ func readLocalCodexSessionIndex(indexPath string) map[string]localCodexIndexEntr
 	defer file.Close()
 
 	entries := map[string]localCodexIndexEntry{}
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		id, entry, ok := parseLocalCodexIndexLine(scanner.Bytes())
-		if ok {
+	reader := bufio.NewReader(file)
+	for {
+		line, oversized, readErr := readLocalCodexJSONLRecord(reader, codexLocalIndexMaxRecordBytes)
+		if oversized {
+			log.Printf("[codex-session] skipped oversized local session index record in %s (limit=%d bytes)", indexPath, codexLocalIndexMaxRecordBytes)
+		} else if id, entry, ok := parseLocalCodexIndexLine(line); ok {
 			entries[id] = entry
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				log.Printf("[codex-session] failed to read local session index %s: %v", indexPath, readErr)
+			}
+			break
 		}
 	}
 	return entries
+}
+
+// readLocalCodexJSONLRecord 有界读取一条 JSONL；超限时丢弃到换行并允许继续读取后续记录。
+func readLocalCodexJSONLRecord(reader *bufio.Reader, maxBytes int) ([]byte, bool, error) {
+	if reader == nil || maxBytes <= 0 {
+		return nil, false, io.EOF
+	}
+	line := make([]byte, 0, min(maxBytes, 64*1024))
+	oversized := false
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if !oversized {
+			if len(line)+len(fragment) > maxBytes {
+				line = nil
+				oversized = true
+			} else {
+				line = append(line, fragment...)
+			}
+		}
+		switch {
+		case err == nil:
+			return line, oversized, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			if len(fragment) == 0 && len(line) == 0 && !oversized {
+				return nil, false, io.EOF
+			}
+			return line, oversized, io.EOF
+		default:
+			return nil, oversized, err
+		}
+	}
 }
 
 // parseLocalCodexIndexLine 解析单行索引记录，异常行直接跳过。
@@ -166,11 +211,14 @@ func readLocalCodexSessionMeta(path string) (localCodexSessionMeta, bool) {
 	}
 	defer file.Close()
 
-	line, err := bufio.NewReader(file).ReadString('\n')
+	line, oversized, err := readLocalCodexJSONLRecord(bufio.NewReader(file), codexLocalIndexMaxRecordBytes)
+	if oversized {
+		return localCodexSessionMeta{}, false
+	}
 	if err != nil && err != io.EOF {
 		return localCodexSessionMeta{}, false
 	}
-	meta, ok := parseLocalCodexSessionMeta([]byte(line))
+	meta, ok := parseLocalCodexSessionMeta(line)
 	meta.Path = path
 	return meta, ok
 }

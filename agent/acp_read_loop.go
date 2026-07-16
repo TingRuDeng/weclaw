@@ -54,7 +54,10 @@ func (a *ACPAgent) dispatchACPResponse(msg *rpcResponse) {
 	ch, ok := a.pending[*msg.ID]
 	a.pendingMu.Unlock()
 	if ok {
-		ch <- msg
+		select {
+		case ch <- msg:
+		default:
+		}
 	}
 }
 
@@ -226,9 +229,6 @@ func (a *ACPAgent) failActiveTurns(reason string) {
 	a.notifyMu.Unlock()
 
 	for _, ch := range channels {
-		select {
-		case ch <- evt:
-		default:
-		}
+		dispatchCodexTurnControlEvent(ch, evt)
 	}
 }

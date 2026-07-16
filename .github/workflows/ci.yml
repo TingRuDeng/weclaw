@@ -23,8 +23,14 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Module tidy check
+        run: go mod tidy -diff
+
       - name: Test
         run: go test ./... -count=1 -race -v
+
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
@@ -38,6 +44,12 @@ jobs:
         include:
           - goos: darwin
             goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
 
     steps:
       - uses: actions/checkout@v4
@@ -73,6 +85,9 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    concurrency:
+      group: prerelease-${{ github.ref }}
+      cancel-in-progress: true
     permissions:
       contents: write
     steps:
@@ -100,10 +115,13 @@ jobs:
       - name: Delete existing release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete "${{ steps.tag.outputs.tag }}" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release delete "$RELEASE_TAG" --repo "${{ github.repository }}" --cleanup-tag --yes 2>/dev/null || true
+          gh api --method DELETE "repos/${{ github.repository }}/git/refs/tags/${RELEASE_TAG}" 2>/dev/null || true
 
       - name: Create pre-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.name }}

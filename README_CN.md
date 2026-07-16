@@ -5,12 +5,12 @@
 [![CI](https://github.com/TingRuDeng/weclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/TingRuDeng/weclaw/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/TingRuDeng/weclaw)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black?logo=apple)](https://github.com/TingRuDeng/weclaw/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
 通过微信和飞书远程接管本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果；选择已有 Codex 会话或新建会话即由当前远程窗口接管，发送 `/cx owner desktop` 可显式释放给 Codex Desktop。
 
-> 当前正式 Release 支持 **macOS Apple Silicon（darwin/arm64）**。源码可以在其他 Go 支持的平台构建，但不属于当前发布资产范围。
+> 当前正式 Release 支持 **macOS Apple Silicon / Intel（darwin/arm64、darwin/amd64）** 和 **Linux arm64 / amd64**。Windows 暂不提供正式资产。
 
 ## 为什么使用 WeClaw
 
@@ -225,7 +225,7 @@ weclaw config permission --agent codex --level default
 weclaw doctor
 ```
 
-`weclaw web` 默认只监听 `127.0.0.1:39282`，打印带 token 的本地地址并打开浏览器。Agent、进度、白名单、管理员和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。
+`weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、白名单、管理员和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
 
 关键安全规则：
 

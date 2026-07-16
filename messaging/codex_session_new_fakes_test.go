@@ -21,7 +21,6 @@ type fakeCodexSessionCreateAgent struct {
 	rejectCanceledUse bool
 	useContextErrors  []error
 	conflictMarks     []string
-	conflictIntents   []agent.CodexControlIntent
 	markErrors        map[string]error
 }
 
@@ -68,7 +67,6 @@ func (f *fakeCodexSessionCreateAgent) UseCodexThread(ctx context.Context, conver
 func (f *fakeCodexSessionCreateAgent) MarkCodexRuntimeConflict(ctx context.Context, req agent.CodexRuntimeRequest) error {
 	f.resetMu.Lock()
 	f.conflictMarks = append(f.conflictMarks, req.Ref.ThreadID)
-	f.conflictIntents = append(f.conflictIntents, req.Intent)
 	markErr := f.markErrors[req.Ref.ThreadID]
 	f.resetMu.Unlock()
 	f.mu.Lock()
@@ -92,12 +90,6 @@ func (f *fakeCodexSessionCreateAgent) conflictSnapshot() ([]string, []error) {
 	f.resetMu.Lock()
 	defer f.resetMu.Unlock()
 	return append([]string(nil), f.conflictMarks...), append([]error(nil), f.useContextErrors...)
-}
-
-func (f *fakeCodexSessionCreateAgent) conflictIntentSnapshot() []agent.CodexControlIntent {
-	f.resetMu.Lock()
-	defer f.resetMu.Unlock()
-	return append([]agent.CodexControlIntent(nil), f.conflictIntents...)
 }
 
 func (f *fakeCodexSessionCreateAgent) runCallSnapshot() int {

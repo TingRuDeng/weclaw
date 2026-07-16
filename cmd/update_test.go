@@ -77,21 +77,34 @@ func TestParseReleaseChecksumsFindsAsset(t *testing.T) {
 	}
 }
 
-func TestReleaseAssetNameOnlySupportsDarwinArm64(t *testing.T) {
-	name, err := releaseAssetNameForRuntime("darwin", "arm64")
-	if err != nil {
-		t.Fatalf("releaseAssetNameForRuntime supported target error: %v", err)
-	}
-	if name != "weclaw_darwin_arm64" {
-		t.Fatalf("asset name=%q, want weclaw_darwin_arm64", name)
+func TestReleaseAssetNameSupportsOfficialMatrix(t *testing.T) {
+	for _, test := range []struct {
+		goos string
+		arch string
+		want string
+	}{
+		{goos: "darwin", arch: "arm64", want: "weclaw_darwin_arm64"},
+		{goos: "darwin", arch: "amd64", want: "weclaw_darwin_amd64"},
+		{goos: "linux", arch: "arm64", want: "weclaw_linux_arm64"},
+		{goos: "linux", arch: "amd64", want: "weclaw_linux_amd64"},
+	} {
+		t.Run(test.goos+"_"+test.arch, func(t *testing.T) {
+			name, err := releaseAssetNameForRuntime(test.goos, test.arch)
+			if err != nil {
+				t.Fatalf("releaseAssetNameForRuntime error: %v", err)
+			}
+			if name != test.want {
+				t.Fatalf("asset name=%q, want %q", name, test.want)
+			}
+		})
 	}
 
-	_, err = releaseAssetNameForRuntime("linux", "amd64")
-	if err == nil {
-		t.Fatal("releaseAssetNameForRuntime unsupported target error = nil")
-	}
-	if !strings.Contains(err.Error(), "darwin/arm64") {
-		t.Fatalf("error=%v, want supported target hint", err)
+	for _, unsupported := range [][2]string{{"windows", "amd64"}, {"darwin", "386"}, {"linux", "riscv64"}} {
+		if _, err := releaseAssetNameForRuntime(unsupported[0], unsupported[1]); err == nil {
+			t.Fatalf("releaseAssetNameForRuntime(%q, %q) error=nil", unsupported[0], unsupported[1])
+		} else if !strings.Contains(err.Error(), "darwin/arm64") || !strings.Contains(err.Error(), "linux/amd64") {
+			t.Fatalf("error=%v, want official matrix hint", err)
+		}
 	}
 }
 

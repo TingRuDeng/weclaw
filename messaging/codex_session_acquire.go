@@ -244,7 +244,7 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 // failCodexAcquireRuntime 保留窗口所有权，并把无法安全写入的目标持续标记为冲突态。
 func (h *Handler) failCodexAcquireRuntime(result codexSessionAcquireResult, liveAgent agent.CodexLiveRuntimeAgent, cause error) codexSessionAcquireResult {
 	request := result.resolution.Request
-	markErr := liveAgent.MarkCodexRuntimeConflict(normalizeContext(nil), request)
+	markErr := liveAgent.MarkCodexRuntimeConflict(context.Background(), request)
 	binding, currentErr := liveAgent.CurrentCodexRuntime(request)
 	if currentErr == nil {
 		result.resolution.Binding = binding

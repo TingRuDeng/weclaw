@@ -18,7 +18,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/ilink"
 )
 
-const cdnBaseURL = "https://novac2c.cdn.weixin.qq.com/c2c"
+const defaultCDNBaseURL = "https://novac2c.cdn.weixin.qq.com/c2c"
 
 const maxCDNDownloadBytes = 25 * 1024 * 1024
 
@@ -81,6 +81,10 @@ func AESKeyToBase64(hexKey string) string {
 
 // DownloadFileFromCDN 从微信 CDN 下载并解密入站文件。
 func DownloadFileFromCDN(ctx context.Context, encryptQueryParam string, aesKeyBase64 string) ([]byte, error) {
+	return downloadFileFromCDN(ctx, encryptQueryParam, aesKeyBase64, defaultCDNBaseURL, newCDNHTTPClient())
+}
+
+func downloadFileFromCDN(ctx context.Context, encryptQueryParam string, aesKeyBase64 string, baseURL string, httpClient *http.Client) ([]byte, error) {
 	aesKeyHexBytes, err := base64.StdEncoding.DecodeString(aesKeyBase64)
 	if err != nil {
 		return nil, fmt.Errorf("decode AES key base64: %w", err)
@@ -90,14 +94,14 @@ func DownloadFileFromCDN(ctx context.Context, encryptQueryParam string, aesKeyBa
 		return nil, fmt.Errorf("decode AES key hex: %w", err)
 	}
 	downloadURL := fmt.Sprintf("%s/download?encrypted_query_param=%s",
-		cdnBaseURL, url.QueryEscape(encryptQueryParam))
+		baseURL, url.QueryEscape(encryptQueryParam))
 	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create download request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("download from CDN: %w", err)
 	}
@@ -111,6 +115,10 @@ func DownloadFileFromCDN(ctx context.Context, encryptQueryParam string, aesKeyBa
 		return nil, fmt.Errorf("read CDN response: %w", err)
 	}
 	return decryptAESECB(encrypted, aesKey)
+}
+
+func newCDNHTTPClient() *http.Client {
+	return &http.Client{Timeout: 60 * time.Second}
 }
 
 func readCDNBody(resp *http.Response, maxBytes int64) ([]byte, error) {
@@ -171,10 +179,14 @@ func cdnUploadURL(uploadResp *ilink.GetUploadURLResponse, filekeyHex string) str
 		return url
 	}
 	return fmt.Sprintf("%s/upload?encrypted_query_param=%s&filekey=%s",
-		cdnBaseURL, url.QueryEscape(uploadResp.UploadParam), url.QueryEscape(filekeyHex))
+		defaultCDNBaseURL, url.QueryEscape(uploadResp.UploadParam), url.QueryEscape(filekeyHex))
 }
 
 func uploadToCDN(ctx context.Context, encrypted []byte, cdnURL string) (string, error) {
+	return uploadToCDNWithClient(ctx, encrypted, cdnURL, newCDNHTTPClient())
+}
+
+func uploadToCDNWithClient(ctx context.Context, encrypted []byte, cdnURL string, httpClient *http.Client) (string, error) {
 	if strings.TrimSpace(cdnURL) == "" {
 		return "", fmt.Errorf("getuploadurl returned no upload URL")
 	}
@@ -183,8 +195,7 @@ func uploadToCDN(ctx context.Context, encrypted []byte, cdnURL string) (string, 
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

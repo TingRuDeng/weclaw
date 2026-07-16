@@ -2,9 +2,76 @@ package wechat
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestDownloadFileFromCDNRoundTripOverHTTP(t *testing.T) {
+	key := []byte("0123456789abcdef")
+	plaintext := []byte("wechat attachment payload")
+	encrypted, err := encryptAESECB(plaintext, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/download" {
+			t.Errorf("request=%s %s", r.Method, r.URL.Path)
+		}
+		if got := r.URL.Query().Get("encrypted_query_param"); got != "download token" {
+			t.Errorf("encrypted_query_param=%q", got)
+		}
+		_, _ = w.Write(encrypted)
+	}))
+	defer server.Close()
+
+	got, err := downloadFileFromCDN(context.Background(), "download token", AESKeyToBase64(hex.EncodeToString(key)), server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("DownloadFileFromCDN error: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("downloaded=%q, want %q", got, plaintext)
+	}
+}
+
+func TestDownloadFileFromCDNRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "26214401")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	_, err := downloadFileFromCDN(context.Background(), "download", AESKeyToBase64(hex.EncodeToString([]byte("0123456789abcdef"))), server.URL, server.Client())
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("DownloadFileFromCDN error=%v, want oversized rejection", err)
+	}
+}
+
+func TestUploadToCDNUsesBinaryBodyAndEncryptedParam(t *testing.T) {
+	payload := []byte("encrypted payload")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/octet-stream" {
+			t.Errorf("request method/content-type=%s/%s", r.Method, r.Header.Get("Content-Type"))
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !bytes.Equal(body, payload) {
+			t.Errorf("upload body=%q", body)
+		}
+		w.Header().Set("X-Encrypted-Param", "download-param")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	got, err := uploadToCDNWithClient(context.Background(), payload, server.URL+"/upload", server.Client())
+	if err != nil || got != "download-param" {
+		t.Fatalf("uploadToCDN=(%q,%v)", got, err)
+	}
+}
 
 func TestAESECBRoundTrip(t *testing.T) {
 	key := []byte("0123456789abcdef")

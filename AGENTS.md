@@ -46,7 +46,7 @@ ai_summary:
 - `messaging/handler.go` 是命令路由、会话、审批、进度、任务状态和 Agent 调用的主要业务入口。
 - `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；Codex remote-first 能力主要在 ACP 与 Companion 相关文件中。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
-- `scripts/release.sh` 当前只构建 `darwin/arm64` 发布资产，并会运行测试、race、vet 和 `git diff --check`。
+- `scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64` 四个正式资产，并会运行测试、race、vet 和 `git diff --check`。
 - `tasks/todo.md` 只保留当前或正在执行的任务记录；已完成历史流水账不长期保留。
 - `tasks/lessons.md` 是长期经验沉淀，清理文档时必须保留。
 - 不要把机器本地绝对路径写入项目上下文文档；配置示例可以使用 `/path/to/project` 这类占位路径。
@@ -66,6 +66,8 @@ full:
 ```bash
 go test ./... -count=1 -timeout 120s
 go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 ```
 
 release-side-effect:

@@ -9,6 +9,9 @@ TAG=""
 
 TARGETS=(
   "darwin/arm64"
+  "darwin/amd64"
+  "linux/arm64"
+  "linux/amd64"
 )
 
 usage() {
@@ -100,6 +103,18 @@ check_clean_tree() {
 	fi
 }
 
+check_release_source() {
+  local branch head remote_main
+  branch="$(git branch --show-current)"
+  [[ "$branch" == "main" ]] || fail "正式发布只能从 main 分支执行，当前分支：${branch:-detached HEAD}"
+
+  log "核对本地 main 与 origin/main"
+  git fetch --quiet origin main
+  head="$(git rev-parse HEAD)"
+  remote_main="$(git rev-parse FETCH_HEAD)"
+  [[ "$head" == "$remote_main" ]] || fail "本地 HEAD ($head) 与 origin/main ($remote_main) 不一致，请先完成主分支同步"
+}
+
 check_tag_available() {
 	git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && fail "本地 tag 已存在：$TAG"
   if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
@@ -111,9 +126,11 @@ run_validations() {
   [[ "$RUN_TESTS" -eq 1 ]] || return 0
   log "运行测试与静态检查"
   sh "$ROOT_DIR/scripts/install_test.sh"
+  go mod tidy -diff
   go test -count=1 -timeout 60s ./...
   go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging
   go vet ./...
+  go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
   go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
   git diff --check
 }
@@ -160,12 +177,27 @@ create_release() {
 
 verify_release() {
   [[ "$DRY_RUN" -eq 0 ]] || return 0
-  local asset_count latest_tag
+  local asset_count assets expected_asset expected_asset_count latest_tag target
   log "验证 GitHub Release"
   asset_count="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json assets --jq '.assets | length')"
-  [[ "$asset_count" == "2" ]] || fail "Release 资产数量异常：$asset_count"
+  expected_asset_count=$(( ${#TARGETS[@]} + 1 ))
+  [[ "$asset_count" == "$expected_asset_count" ]] || fail "Release 资产数量异常：$asset_count，期望 $expected_asset_count"
+  assets="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json assets --jq '.assets[].name')"
+  for target in "${TARGETS[@]}"; do
+    expected_asset="weclaw_${target//\//_}"
+    grep -Fxq "$expected_asset" <<<"$assets" || fail "Release 缺少资产：$expected_asset"
+  done
+  grep -Fxq "checksums.txt" <<<"$assets" || fail "Release 缺少资产：checksums.txt"
   latest_tag="$(gh release view --repo TingRuDeng/weclaw --json tagName --jq '.tagName')"
   [[ "$latest_tag" == "$TAG" ]] || fail "latest release 指向 $latest_tag，期望 $TAG"
+}
+
+release_target_supported() {
+  local candidate="$1" target
+  for target in "${TARGETS[@]}"; do
+    [[ "$candidate" == "$target" ]] && return 0
+  done
+  return 1
 }
 
 verify_update_smoke() {
@@ -174,8 +206,8 @@ verify_update_smoke() {
   local host_os host_arch
   host_os="$(go env GOHOSTOS)"
   host_arch="$(go env GOHOSTARCH)"
-  if [[ "$host_os/$host_arch" != "darwin/arm64" ]]; then
-    log "跳过 update smoke：当前主机是 ${host_os}/${host_arch}，无法执行 darwin/arm64 发布资产"
+  if ! release_target_supported "$host_os/$host_arch"; then
+		log "跳过 update smoke：当前主机 ${host_os}/${host_arch} 不在正式发布矩阵中"
     return 0
   fi
 
@@ -203,6 +235,7 @@ main() {
   parse_args "$@"
   check_dependencies
   check_clean_tree
+  check_release_source
   check_tag_available
   run_validations
   build_assets

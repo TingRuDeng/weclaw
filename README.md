@@ -5,12 +5,12 @@
 [![CI](https://github.com/TingRuDeng/weclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/TingRuDeng/weclaw/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/TingRuDeng/weclaw)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Platform](https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-black?logo=apple)](https://github.com/TingRuDeng/weclaw/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
 Remote-control local Codex and Claude from WeChat or Feishu. Keep real workspace and session context and receive live progress, approvals, and results. Selecting an existing Codex session or creating one gives the current remote chat window ownership; `/cx owner desktop` explicitly releases it to Codex Desktop.
 
-> Official releases currently support **macOS Apple Silicon (darwin/arm64)**. The source can be built on other Go-supported platforms, but those builds are outside the current release asset scope.
+> Official releases support **macOS Apple Silicon / Intel (darwin/arm64 and darwin/amd64)** plus **Linux arm64 / amd64**. Windows assets are not currently published.
 
 ## Why WeClaw
 
@@ -221,7 +221,7 @@ weclaw config permission --agent codex --level default
 weclaw doctor
 ```
 
-`weclaw web` binds to `127.0.0.1:39282` by default, prints a tokenized local URL, and opens the browser. Soft settings such as agents, progress, allowlists, administrators, and workspace roots support hot reload. Platform enablement, credentials, or account topology changes require a restart.
+`weclaw web` binds to `127.0.0.1:39282` by default, injects the token through a URL fragment that is never sent to the server, and opens the browser. Soft settings such as agents, progress, allowlists, administrators, and workspace roots support hot reload. Platform enablement, credentials, or account topology changes require a restart. The built-in server has no TLS: non-loopback listeners are rejected by default and require an explicit `--allow-insecure-http` opt-in on a trusted LAN (a strong random token is still generated when `--token` is omitted); use an HTTPS tunnel or reverse proxy for public access.
 
 Key security rules:
 
