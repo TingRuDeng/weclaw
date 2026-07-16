@@ -125,18 +125,6 @@ func (r *codexDesktopRuntime) handleDisconnect(cause error) {
 	log.Printf("[acp] Codex Desktop IPC disconnected; cached runtime marked unknown, control owner unchanged: %v", cause)
 }
 
-// Discover 探测是否有 Desktop client 能处理目标 thread 的历史请求。
-func (r *codexDesktopRuntime) Discover(ctx context.Context, ref CodexThreadRef) (bool, error) {
-	client := r.ensureInitialized()
-	if err := client.Connect(ctx); err != nil {
-		return false, err
-	}
-	return client.Discover(ctx, codexDesktopRequestSpec{
-		Method: "thread-follower-load-complete-history",
-		Params: map[string]string{"conversationId": ref.ThreadID},
-	})
-}
-
 // LoadHistory 请求 Desktop 广播目标 thread 的完整 conversation state。
 func (r *codexDesktopRuntime) LoadHistory(ctx context.Context, ref CodexThreadRef) error {
 	return r.requestHistory(ctx, ref, true)

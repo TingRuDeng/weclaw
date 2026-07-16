@@ -10,9 +10,12 @@ import (
 )
 
 const (
-	codexDesktopRequestTimeout   = 10 * time.Second
-	codexDesktopDiscoveryTimeout = 1500 * time.Millisecond
-	codexDesktopInitialClientID  = "initializing-client"
+	// Desktop Router 最多用 10 秒发现目标 handler，随后才返回 no-client-found。
+	// 本地等待必须留出余量，否则会先报交付状态未知，无法进入确定性的远程接管恢复。
+	codexDesktopRouterDefaultTimeout = 10 * time.Second
+	codexDesktopRequestTimeout       = codexDesktopRouterDefaultTimeout + 2*time.Second
+	codexDesktopDiscoveryTimeout     = 1500 * time.Millisecond
+	codexDesktopInitialClientID      = "initializing-client"
 )
 
 type codexDesktopCallResult struct {

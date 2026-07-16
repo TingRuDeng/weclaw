@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+func TestCodexDesktopClientDefaultTimeoutOutlivesRouterDefault(t *testing.T) {
+	if codexDesktopRequestTimeout <= codexDesktopRouterDefaultTimeout {
+		t.Fatalf("client timeout=%s，必须大于 Desktop Router timeout=%s", codexDesktopRequestTimeout, codexDesktopRouterDefaultTimeout)
+	}
+}
+
 func TestCodexDesktopClientClassifiesIncompleteFrameAsDisconnected(t *testing.T) {
 	tests := []struct {
 		name string

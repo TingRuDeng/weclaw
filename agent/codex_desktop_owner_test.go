@@ -125,7 +125,7 @@ func TestCodexRuntimeOwnerRestoredBindingMustProbeAgain(t *testing.T) {
 	}
 }
 
-func TestInspectCodexRuntimeProbesDesktopEveryTime(t *testing.T) {
+func TestInspectCodexRuntimeLoadsHistoryWithoutClientDiscovery(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{loadErr: ErrCodexDesktopNoClient}
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
@@ -144,24 +144,24 @@ func TestInspectCodexRuntimeProbesDesktopEveryTime(t *testing.T) {
 	if probe.loadCalls != 2 {
 		t.Fatalf("loadCalls=%d，want 2", probe.loadCalls)
 	}
+	if probe.discoverCalls != 0 {
+		t.Fatalf("Inspect 不应向 Desktop Router 发送 client discovery: calls=%d", probe.discoverCalls)
+	}
 }
 
 func TestCodexProbeErrorPreservesFailureCause(t *testing.T) {
 	loadErr := errors.New("load failed")
-	discoverErr := errors.New("discover failed")
 	tests := []struct {
 		name     string
-		discover error
 		load     error
 		contains string
 	}{
-		{name: "history", discover: discoverErr, load: loadErr, contains: "load failed"},
-		{name: "discover", discover: discoverErr, contains: "discover failed"},
+		{name: "history", load: loadErr, contains: "load failed"},
 		{name: "unknown", contains: ErrCodexDesktopOwnershipUnknown.Error()},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := codexProbeError(test.discover, test.load)
+			err := codexProbeError(test.load)
 			if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) || !strings.Contains(err.Error(), test.contains) {
 				t.Fatalf("error=%v", err)
 			}

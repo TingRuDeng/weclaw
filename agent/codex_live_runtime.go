@@ -95,7 +95,6 @@ type CodexLiveRuntimeAgent interface {
 }
 
 type codexDesktopOwnerProbe interface {
-	Discover(context.Context, CodexThreadRef) (bool, error)
 	LoadHistory(context.Context, CodexThreadRef) error
 	Presence() (socketExists bool, processExists bool)
 }

@@ -100,7 +100,6 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 	if a.desktopProbe == nil {
 		return CodexRuntimeUnknown, current.State, ErrCodexDesktopOwnershipUnknown
 	}
-	_, discoverErr := a.desktopProbe.Discover(ctx, req.Ref)
 	loadErr := a.desktopProbe.LoadHistory(ctx, req.Ref)
 	if binding, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok {
 		if binding.Runtime == CodexRuntimeConflict {
@@ -119,7 +118,7 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 		}
 		return CodexRuntimeUnknown, current.State, nil
 	}
-	return CodexRuntimeUnknown, current.State, codexProbeError(discoverErr, loadErr)
+	return CodexRuntimeUnknown, current.State, codexProbeError(loadErr)
 }
 
 func desktopReleaseConfirmed(probe codexDesktopOwnerProbe, loadErr error) bool {
@@ -130,12 +129,9 @@ func desktopReleaseConfirmed(probe codexDesktopOwnerProbe, loadErr error) bool {
 	return !socketExists && !processExists
 }
 
-func codexProbeError(discoverErr error, loadErr error) error {
+func codexProbeError(loadErr error) error {
 	if loadErr != nil {
 		return fmt.Errorf("%w: %v", ErrCodexDesktopOwnershipUnknown, loadErr)
-	}
-	if discoverErr != nil {
-		return fmt.Errorf("%w: %v", ErrCodexDesktopOwnershipUnknown, discoverErr)
 	}
 	return ErrCodexDesktopOwnershipUnknown
 }

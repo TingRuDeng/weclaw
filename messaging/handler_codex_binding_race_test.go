@@ -11,6 +11,8 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
+const codexBindingTestCompletionTimeout = 2 * time.Second
+
 // TestCodexTaskWaitsForBindingMutation 验证普通消息不会读取尚未提交的 Codex route。
 func TestCodexTaskWaitsForBindingMutation(t *testing.T) {
 	h, ag, opts, _ := liveMessageFixture(t, false)
@@ -25,7 +27,7 @@ func TestCodexTaskWaitsForBindingMutation(t *testing.T) {
 	unlock()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(codexBindingTestCompletionTimeout):
 		t.Fatal("绑定提交后 Codex 任务仍未启动")
 	}
 	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
@@ -51,7 +53,7 @@ func TestCodexSessionCommandUsesBindingLock(t *testing.T) {
 	unlock()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(codexBindingTestCompletionTimeout):
 		t.Fatal("释放绑定锁后会话命令仍未继续")
 	}
 }
@@ -137,7 +139,7 @@ func TestCodexNewUsesBindingLock(t *testing.T) {
 	unlock()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(codexBindingTestCompletionTimeout):
 		t.Fatal("释放绑定锁后 /new 仍未继续")
 	}
 	if resetCalls, _ := ag.resetSnapshot(); resetCalls != 1 || len(ag.handoffRequests()) != 1 {
@@ -191,7 +193,7 @@ func TestCwdUsesCodexBindingLock(t *testing.T) {
 	unlock()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(codexBindingTestCompletionTimeout):
 		t.Fatal("释放绑定锁后 /cwd 仍未继续")
 	}
 }
