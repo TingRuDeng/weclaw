@@ -83,23 +83,42 @@ func TestFeishuClaudeSessionSwitchBindsWindowToClaude(t *testing.T) {
 	}
 }
 
-func TestFailedClaudeSessionSwitchKeepsCurrentWindowAgent(t *testing.T) {
+func TestClaudeRuntimeFailureStillBindsCurrentWindowToClaude(t *testing.T) {
 	h, _, claude, sessionKey := newClaudeBindingHandler(t)
 	claude.useErr = errors.New("resume failed")
 	if err := h.ensureAgentSessions().Set(sessionKey, "codex"); err != nil {
 		t.Fatalf("设置初始窗口 Agent 失败：%v", err)
 	}
 
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "failed-switch-claude", RawCommand: &platform.CardAction{
 			Action: "choice", Value: map[string]string{"choice": "/cc switch session-claude"},
 		},
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
-	}, platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true}))
+	}, reply)
 
-	if selected, ok := h.ensureAgentSessions().Get(sessionKey); !ok || selected != "codex" {
-		t.Fatalf("窗口 Agent=(%q,%t)，失败切换不应覆盖原 codex 绑定", selected, ok)
+	if selected, ok := h.ensureAgentSessions().Get(sessionKey); !ok || selected != "claude" {
+		t.Fatalf("窗口 Agent=(%q,%t)，所有权提交后应绑定 claude", selected, ok)
+	}
+	if binding := h.ensureClaudeSessions().binding(claudeBindingKey(sessionKey, "claude")); binding.Status != claudeBindingResumeFailed {
+		t.Fatalf("binding=%+v", binding)
+	}
+	if text := strings.Join(reply.Texts, "\n"); !strings.Contains(text, "所有权已保留") {
+		t.Fatalf("reply=%q", text)
+	}
+	normalReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
+		MessageID: "message-after-runtime-failure", Text: "继续",
+		Metadata: map[string]string{"feishu_session_key": sessionKey},
+	}, normalReply)
+	if claude.wasChatCalled() || len(normalReply.Choices) != 0 {
+		t.Fatalf("runtime 不可用时不应写入或重选 owner: chat=%t choices=%#v", claude.wasChatCalled(), normalReply.Choices)
+	}
+	if text := strings.Join(normalReply.Texts, "\n"); !strings.Contains(text, "运行通道暂不可用") || !strings.Contains(text, "所有权保持不变") {
+		t.Fatalf("normal reply=%q", text)
 	}
 }
 

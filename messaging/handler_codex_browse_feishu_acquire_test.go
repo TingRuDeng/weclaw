@@ -12,8 +12,8 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-// TestFeishuCodexSingleSessionAcquireFailureKeepsOriginalState 验证单会话自动接管失败不发卡片也不污染原状态。
-func TestFeishuCodexSingleSessionAcquireFailureKeepsOriginalState(t *testing.T) {
+// TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection 验证运行通道失败不撤销窗口选择。
+func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir, root := t.TempDir(), t.TempDir()
 	oldWorkspace := filepath.Join(root, "old")
@@ -41,12 +41,13 @@ func TestFeishuCodexSingleSessionAcquireFailureKeepsOriginalState(t *testing.T) 
 	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
 	targetThread, pending := h.codexSessions.getThread(bindingKey, targetWorkspace)
 	if len(reply.Choices) != 0 || len(reply.Texts) != 1 ||
-		!strings.Contains(reply.Texts[0], "切换并接管 Codex 会话失败") {
+		!strings.Contains(reply.Texts[0], "已进入工作空间并接管唯一会话") ||
+		!strings.Contains(reply.Texts[0], "所有权已保留") {
 		t.Fatalf("choices=%#v texts=%#v", reply.Choices, reply.Texts)
 	}
-	if active != oldWorkspace || targetThread != "" || pending ||
-		h.codexSessions.controlIntent("thread-a").Owner != codexControlRemote ||
-		h.codexSessions.controlIntent("thread-b").Owner != codexControlUnclaimed {
+	if active != targetWorkspace || targetThread != "thread-b" || pending ||
+		h.codexSessions.controlIntent("thread-a").Owner != codexControlDesktop ||
+		h.codexSessions.controlIntent("thread-b").Owner != codexControlRemote {
 		t.Fatalf("active=%q target=%q pending=%t intents=(%#v,%#v)", active, targetThread, pending,
 			h.codexSessions.controlIntent("thread-a"), h.codexSessions.controlIntent("thread-b"))
 	}

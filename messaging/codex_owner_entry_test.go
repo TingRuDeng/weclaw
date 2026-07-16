@@ -41,8 +41,7 @@ func TestCodexOwnerRemoteRealEntryHidesAgentSessionStoreError(t *testing.T) {
 	if strings.Contains(result, blockingParent) {
 		t.Fatalf("result=%q 泄露内部路径 %q", result, blockingParent)
 	}
-	if !strings.Contains(result, "已切换并接管") ||
-		!strings.Contains(result, "警告: 保存当前窗口 Agent 失败") {
+	if !strings.Contains(result, "切换并接管 Codex 会话失败") || strings.Contains(result, "已切换并接管") {
 		t.Fatalf("result=%q", result)
 	}
 }

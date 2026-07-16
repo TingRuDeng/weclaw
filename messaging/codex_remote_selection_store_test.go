@@ -95,6 +95,54 @@ func TestCodexRemoteSelectionCommitKeepsLiveStateWhenWriteFails(t *testing.T) {
 		old: map[string]codexControlIntent{"thread-a": {Owner: codexControlRemote, RouteBindingKey: bindingKey, ConversationID: "conversation-a", Revision: 1}}, writes: 1,
 	})
 }
+
+func TestCodexRollbackRemoteSelectionRestoresCommittedState(t *testing.T) {
+	store, probe := newCodexRemoteTestStore(t)
+	bindingKey, workspaceA, workspaceB := "route-a\x00codex", "/workspace/a", "/workspace/b"
+	store.setActiveWorkspace(bindingKey, workspaceA)
+	store.setThread(bindingKey, workspaceA, "thread-a")
+	claimCodexStoreIntent(t, store, codexStoreIntentFixture{"thread-a", codexControlRemote, bindingKey, "conversation-a"})
+	store.writeState = probe.write
+	result, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
+		BindingKey: bindingKey, WorkspaceRoot: workspaceB, TargetThreadID: "thread-b",
+		ConversationID: "conversation-b", Expected: store.remoteSelectionSnapshot(bindingKey, "thread-b"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.rollbackRemoteSelection(result); err != nil {
+		t.Fatal(err)
+	}
+	probe.assertCodexRemoteStore(t, store, codexRemoteStoreExpectation{
+		bindingKey: bindingKey, active: workspaceA, targetID: "thread-b", writes: 2,
+		workspaces: map[string]codexWorkspaceSession{workspaceA: {ThreadID: "thread-a"}},
+		target:     codexControlIntent{Owner: codexControlUnclaimed},
+		old: map[string]codexControlIntent{
+			"thread-a": {Owner: codexControlRemote, RouteBindingKey: bindingKey, ConversationID: "conversation-a", Revision: 1},
+		},
+	})
+}
+
+func TestCodexRollbackRemoteSelectionRejectsConcurrentState(t *testing.T) {
+	store, probe := newCodexRemoteTestStore(t)
+	bindingKey := "route-a\x00codex"
+	result, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
+		BindingKey: bindingKey, WorkspaceRoot: "/workspace/b", TargetThreadID: "thread-b",
+		ConversationID: "conversation-b", Expected: store.remoteSelectionSnapshot(bindingKey, "thread-b"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.writeState = probe.write
+	claimCodexStoreIntent(t, store, codexStoreIntentFixture{"thread-b", codexControlRemote, bindingKey, "conversation-new"})
+	if err := store.rollbackRemoteSelection(result); !errors.Is(err, errCodexRemoteSelectionChanged) {
+		t.Fatalf("error=%v", err)
+	}
+	if got := store.controlIntent("thread-b"); got.ConversationID != "conversation-new" {
+		t.Fatalf("回滚覆盖了并发状态: %#v", got)
+	}
+}
+
 func TestCodexRemoteSelectionCommitRejectsStaleSnapshot(t *testing.T) {
 	store, probe := newCodexRemoteTestStore(t)
 	bindingKey, workspaceA := "route-a\x00codex", "/workspace/a"

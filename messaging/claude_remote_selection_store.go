@@ -29,6 +29,7 @@ type claudeRemoteSelectionUpdate struct {
 	WorkspaceRoot   string
 	TargetSessionID string
 	ConversationID  string
+	BindingStatus   claudeBindingStatus
 	Expected        claudeRemoteSelectionSnapshot
 }
 
@@ -189,12 +190,18 @@ func normalizeClaudeRemoteSelectionUpdate(update claudeRemoteSelectionUpdate) cl
 	update.WorkspaceRoot = normalizeClaudeWorkspaceRoot(update.WorkspaceRoot)
 	update.TargetSessionID = strings.TrimSpace(update.TargetSessionID)
 	update.ConversationID = strings.TrimSpace(update.ConversationID)
+	if update.BindingStatus == "" {
+		update.BindingStatus = claudeBindingReady
+	}
 	return update
 }
 
 func validateClaudeRemoteSelectionUpdate(update claudeRemoteSelectionUpdate) error {
 	if update.BindingKey == "" || update.WorkspaceRoot == "" || update.TargetSessionID == "" || update.ConversationID == "" {
 		return fmt.Errorf("Claude 选择提交缺少必要路由字段")
+	}
+	if update.BindingStatus != claudeBindingReady && update.BindingStatus != claudeBindingResumeFailed {
+		return fmt.Errorf("Claude 选择提交包含无效运行状态 %q", update.BindingStatus)
 	}
 	if update.Expected.TargetSessionID != update.TargetSessionID {
 		return errClaudeRemoteSelectionChanged
@@ -204,13 +211,13 @@ func validateClaudeRemoteSelectionUpdate(update claudeRemoteSelectionUpdate) err
 
 func selectClaudeRemoteBinding(bindings map[string]claudeSessionBinding, update claudeRemoteSelectionUpdate, now time.Time) {
 	current := bindings[update.BindingKey]
-	if current.WorkspaceRoot == update.WorkspaceRoot && current.SessionID == update.TargetSessionID && current.Status == claudeBindingReady {
+	if current.WorkspaceRoot == update.WorkspaceRoot && current.SessionID == update.TargetSessionID && current.Status == update.BindingStatus {
 		return
 	}
 	bindings[update.BindingKey] = claudeSessionBinding{
 		WorkspaceRoot: update.WorkspaceRoot,
 		SessionID:     update.TargetSessionID,
-		Status:        claudeBindingReady,
+		Status:        update.BindingStatus,
 		UpdatedAt:     now.Format(time.RFC3339),
 	}
 }

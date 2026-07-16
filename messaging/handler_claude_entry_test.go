@@ -131,9 +131,11 @@ func TestHandleClaudeCLICompensationFailureStaysFailClosed(t *testing.T) {
 
 	reply := h.handleClaudeCLI(route)
 	intent := h.ensureClaudeSessions().controlIntent("session-current")
-	if !strings.Contains(reply, "远程恢复未确认") || intent.Owner == claudeOwnerRemote ||
+	binding := h.ensureClaudeSessions().binding(route.BindingKey)
+	if !strings.Contains(reply, "远程恢复未确认") || intent.Owner != claudeOwnerRemote ||
+		binding.Status != claudeBindingResumeFailed ||
 		strings.Contains(reply, "terminal unavailable") || strings.Contains(reply, "resume failed") {
-		t.Fatalf("reply=%q intent=%+v", reply, intent)
+		t.Fatalf("reply=%q intent=%+v binding=%+v", reply, intent, binding)
 	}
 }
 

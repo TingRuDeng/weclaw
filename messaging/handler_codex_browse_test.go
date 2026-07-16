@@ -154,7 +154,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	}
 }
 
-func TestHandleCodexSwitchFailureKeepsOriginalSelection(t *testing.T) {
+func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	currentWorkspace := filepath.Join(t.TempDir(), "current")
@@ -180,16 +180,16 @@ func TestHandleCodexSwitchFailureKeepsOriginalSelection(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch thread-bad"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "切换并接管") || !strings.Contains(text, "失败") {
-		t.Fatalf("reply should report acquire failure, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已切换并接管") || !strings.Contains(text, "所有权已保留") {
+		t.Fatalf("reply should report committed ownership and unavailable runtime, messages=%#v", calls.texts())
 	}
 	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
 	currentThread, _ := h.codexSessions.getThread(bindingKey, currentWorkspace)
 	targetThread, pending := h.codexSessions.getThread(bindingKey, localWorkspace)
 	currentIntent := h.codexSessions.controlIntent("thread-current")
 	targetIntent := h.codexSessions.controlIntent("thread-bad")
-	if active != currentWorkspace || currentThread != "thread-current" || targetThread != "" || pending ||
-		currentIntent.Owner != codexControlRemote || targetIntent.Owner != codexControlUnclaimed {
+	if active != localWorkspace || currentThread != "thread-current" || targetThread != "thread-bad" || pending ||
+		currentIntent.Owner != codexControlDesktop || targetIntent.Owner != codexControlRemote {
 		t.Fatalf("active=%q current=%q target=%q pending=%t intents=(%#v,%#v)", active, currentThread, targetThread, pending, currentIntent, targetIntent)
 	}
 }

@@ -158,9 +158,8 @@ func TestCodexReselectAfterDesktopReleaseAcquiresAgain(t *testing.T) {
 	}
 }
 
-func TestCodexOwnerDesktopTimeoutInspectsOnceWithoutRetryingHandoff(t *testing.T) {
+func TestCodexOwnerDesktopTimeoutKeepsReleaseWithoutSecondProbe(t *testing.T) {
 	h, ag, runtime := codexRemoteOwnerCommandFixture(t)
-	wantBinding := ag.threadBinding("thread-1")
 	ag.handoffRelease = make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -169,23 +168,21 @@ func TestCodexOwnerDesktopTimeoutInspectsOnceWithoutRetryingHandoff(t *testing.T
 
 	result := h.handleCodexOwnerCommand(runtime)
 
-	if ag.handoffCalls != 1 || ag.bindCalls != 1 {
-		t.Fatalf("handoff=%d inspect=%d，超时后只能校准一次", ag.handoffCalls, ag.bindCalls)
+	if ag.handoffCalls != 1 || ag.bindCalls != 0 {
+		t.Fatalf("handoff=%d inspect=%d，超时后不得二次探测", ag.handoffCalls, ag.bindCalls)
 	}
-	if strings.Contains(result.Reply, "已归还") {
+	if !strings.Contains(result.Reply, "已归还") || !strings.Contains(result.Reply, "远程写入已关闭") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
-	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlRemote {
+	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlDesktop {
 		t.Fatalf("intent=%#v", intent)
 	}
-	if binding := ag.threadBinding("thread-1"); binding.Runtime != wantBinding.Runtime ||
-		binding.Control != wantBinding.Control || binding.State != wantBinding.State ||
-		binding.Control.Owner != agent.CodexControlRemote {
-		t.Fatalf("binding=%#v want=%#v", binding, wantBinding)
+	if binding := ag.threadBinding("thread-1"); binding.Runtime != agent.CodexRuntimeConflict || binding.Control.Owner != agent.CodexControlDesktop {
+		t.Fatalf("binding=%#v", binding)
 	}
 }
 
-func TestCodexOwnerDesktopUncertainResultStaysFailClosed(t *testing.T) {
+func TestCodexOwnerDesktopRuntimeFailureKeepsPersistedRelease(t *testing.T) {
 	h, ag, runtime := codexRemoteOwnerCommandFixture(t)
 	ag.handoffErrors["thread-1"] = errors.New("移交失败")
 	ag.inspectErrors["thread-1"] = errors.New("校准失败")
@@ -193,21 +190,21 @@ func TestCodexOwnerDesktopUncertainResultStaysFailClosed(t *testing.T) {
 
 	result := h.handleCodexOwnerCommand(runtime)
 
-	if !strings.Contains(result.Reply, "移交结果未确认") {
+	if !strings.Contains(result.Reply, "已归还") || !strings.Contains(result.Reply, "远程写入已关闭") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
-	if ag.handoffCalls != 1 || ag.bindCalls != 1 {
+	if ag.handoffCalls != 1 || ag.bindCalls != 0 {
 		t.Fatalf("handoff=%d inspect=%d", ag.handoffCalls, ag.bindCalls)
 	}
 	if binding := ag.threadBinding("thread-1"); binding.Runtime != agent.CodexRuntimeConflict {
 		t.Fatalf("binding=%#v", binding)
 	}
-	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlRemote {
+	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlDesktop {
 		t.Fatalf("intent=%#v", intent)
 	}
 }
 
-func TestCodexOwnerDesktopPersistenceFailureCompensatesRuntime(t *testing.T) {
+func TestCodexOwnerDesktopPersistenceFailureSkipsRuntime(t *testing.T) {
 	h, ag, runtime := codexRemoteOwnerCommandFixture(t)
 	h.codexSessions.SetFilePath(t.TempDir())
 	runtime.fields = []string{"/cx", "owner", "desktop"}
@@ -217,13 +214,8 @@ func TestCodexOwnerDesktopPersistenceFailureCompensatesRuntime(t *testing.T) {
 	if !strings.Contains(result.Reply, "控制权提交失败") || strings.Contains(result.Reply, "已归还") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
-	if ag.handoffCalls != 2 {
-		t.Fatalf("handoff=%d，持久化失败后应逆序恢复运行时", ag.handoffCalls)
-	}
-	requests := ag.handoffRequests()
-	if requests[0].Intent.Owner != agent.CodexControlDesktop ||
-		requests[1].Intent.Owner != agent.CodexControlRemote {
-		t.Fatalf("requests=%#v", requests)
+	if ag.handoffCalls != 0 {
+		t.Fatalf("handoff=%d，持久化失败前不得触碰 runtime", ag.handoffCalls)
 	}
 	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlRemote {
 		t.Fatalf("intent=%#v", intent)

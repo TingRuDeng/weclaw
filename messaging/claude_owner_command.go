@@ -10,6 +10,7 @@ var (
 	errClaudeSessionUnbound        = errors.New("Claude 会话未绑定")
 	errClaudeSessionNotRemoteOwner = errors.New("当前窗口没有 Claude 远程控制权")
 	errClaudeSessionControlInvalid = errors.New("Claude 会话控制状态不一致")
+	errClaudeRuntimeUnavailable    = errors.New("Claude 运行通道暂不可用")
 	errClaudeTaskControlChanged    = errors.New("Claude 会话控制状态已变化")
 )
 
@@ -27,7 +28,7 @@ func (s *claudeSessionStore) requireRemoteControl(bindingKey string) (claudeSess
 	if strings.TrimSpace(binding.SessionID) == "" {
 		return binding, claudeControlIntent{}, errClaudeSessionUnbound
 	}
-	if binding.Status != claudeBindingReady && binding.Status != claudeBindingPendingResume {
+	if binding.Status != claudeBindingReady && binding.Status != claudeBindingPendingResume && binding.Status != claudeBindingResumeFailed {
 		return binding, claudeControlIntent{}, errClaudeSessionControlInvalid
 	}
 	if workspaceRoot := normalizeClaudeWorkspaceRoot(binding.WorkspaceRoot); workspaceRoot == "" || workspaceRoot != binding.WorkspaceRoot {
@@ -45,6 +46,9 @@ func (s *claudeSessionStore) requireRemoteControl(bindingKey string) (claudeSess
 		expectedConversationID := claudeConversationIDForBinding(bindingKey, binding.WorkspaceRoot)
 		if expectedConversationID == "" || rawIntent.BindingKey != bindingKey || rawIntent.ConversationID != expectedConversationID {
 			return binding, intent, errClaudeSessionControlInvalid
+		}
+		if binding.Status == claudeBindingResumeFailed {
+			return binding, intent, errClaudeRuntimeUnavailable
 		}
 		return binding, intent, nil
 	}
@@ -125,10 +129,21 @@ func (h *Handler) reacquireClaudeOwner(route claudeSessionRoute) string {
 		log.Printf("[claude-owner] 查询当前会话失败: %v", err)
 		return "查询当前 Claude 会话失败，请稍后重试。"
 	}
-	if _, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
+	result, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
 		Route: route, Selected: selected, Command: "owner remote",
-	}); err != nil {
+	})
+	if err != nil {
 		return renderClaudeSessionAcquireFailure(err)
+	}
+	if result.RuntimeErr != nil {
+		log.Printf("[claude-owner] 所有权已提交但运行通道不可用 session=%q: %v", selected.ID, result.RuntimeErr)
+		return wechatCommandText(
+			"已接管 Claude 会话。",
+			"session: "+selected.ID,
+			"控制方: 当前远程窗口",
+			"运行通道: 暂不可用（所有权已保留）",
+			"普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。",
+		)
 	}
 	return wechatCommandText(
 		"已接管 Claude 会话。",
@@ -189,6 +204,8 @@ func renderClaudeRemoteControlError(err error) string {
 		return "该 Claude 会话正由其他远程窗口控制，请先在原窗口释放控制权。"
 	case errors.Is(err, errClaudeSessionNotRemoteOwner):
 		return "当前窗口没有 Claude 远程控制权。请先结束本地 Claude CLI，再发送 /cc owner remote 重新接管。"
+	case errors.Is(err, errClaudeRuntimeUnavailable):
+		return "Claude 运行通道暂不可用；当前窗口的远程所有权保持不变。请稍后重试，或发送 /cc status 查看状态。"
 	case errors.Is(err, errClaudeSessionControlInvalid):
 		return "Claude 会话控制状态不一致，请发送 /cc ls 重新选择或 /cc new 新建。"
 	case errors.Is(err, errClaudeTaskControlChanged), errors.Is(err, errClaudeRemoteSelectionChanged):

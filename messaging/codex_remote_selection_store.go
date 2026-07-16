@@ -36,6 +36,8 @@ type codexRemoteSelectionUpdate struct {
 type codexRemoteSelectionResult struct {
 	Target   codexControlIntent
 	Released map[string]codexControlIntent
+	before   codexRemoteSelectionState
+	after    codexRemoteSelectionState
 }
 
 // remoteSelectionSnapshot 返回绑定、目标意图和当前 route 全量所有权的深拷贝。
@@ -73,11 +75,14 @@ func (s *codexSessionStore) commitRemoteSelection(update codexRemoteSelectionUpd
 	if err := validateCodexRemoteSelectionSnapshotLocked(current, update); err != nil {
 		return codexRemoteSelectionResult{}, err
 	}
+	before := cloneCodexRemoteSelectionState(current)
 	nextBindings := cloneCodexSessionBindings(s.bindings)
 	nextControls := cloneCodexControlIntents(s.controls)
 	now := time.Now().UTC()
 	candidate := codexRemoteSelectionState{bindings: nextBindings, controls: nextControls}
 	result, changed := applyCodexRemoteSelection(candidate, update, now)
+	result.before = before
+	result.after = cloneCodexRemoteSelectionState(candidate)
 	if !changed {
 		return result, nil
 	}
@@ -90,6 +95,49 @@ func (s *codexSessionStore) commitRemoteSelection(update codexRemoteSelectionUpd
 	}
 	s.bindings, s.controls = nextBindings, nextControls
 	return result, nil
+}
+
+// rollbackRemoteSelection 只在 live 状态仍等于本次提交结果时恢复提交前快照。
+func (s *codexSessionStore) rollbackRemoteSelection(result codexRemoteSelectionResult) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := codexRemoteSelectionState{bindings: s.bindings, controls: s.controls}
+	if !sameCodexRemoteSelectionState(current, result.after) {
+		return errCodexRemoteSelectionChanged
+	}
+	bindings := cloneCodexSessionBindings(result.before.bindings)
+	controls := cloneCodexControlIntents(result.before.controls)
+	state := codexSessionState{
+		Version: codexSessionStateVersion, Bindings: bindings, Controls: controls,
+		Updated: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := s.persistCandidate(s.filePath, state); err != nil {
+		return fmt.Errorf("回滚 Codex 会话选择: %w", err)
+	}
+	s.bindings, s.controls = bindings, controls
+	return nil
+}
+
+func cloneCodexRemoteSelectionState(state codexRemoteSelectionState) codexRemoteSelectionState {
+	return codexRemoteSelectionState{
+		bindings: cloneCodexSessionBindings(state.bindings),
+		controls: cloneCodexControlIntents(state.controls),
+	}
+}
+
+func sameCodexRemoteSelectionState(left codexRemoteSelectionState, right codexRemoteSelectionState) bool {
+	if len(left.bindings) != len(right.bindings) || len(left.controls) != len(right.controls) {
+		return false
+	}
+	for key, binding := range left.bindings {
+		rightBinding, ok := right.bindings[key]
+		if !ok || !sameCodexSessionBinding(binding, rightBinding) {
+			return false
+		}
+	}
+	return sameCodexControlIntentMap(left.controls, right.controls)
 }
 
 // normalizeCodexRemoteSelectionUpdate 统一选择提交的外部输入边界。
@@ -174,7 +222,8 @@ func sameCodexControlIntentMap(left map[string]codexControlIntent, right map[str
 		return false
 	}
 	for threadID, intent := range left {
-		if right[threadID] != intent {
+		rightIntent, ok := right[threadID]
+		if !ok || rightIntent != intent {
 			return false
 		}
 	}

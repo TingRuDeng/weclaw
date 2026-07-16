@@ -119,10 +119,14 @@ func (h *Handler) handoffClaudeSessionToCLIWithBindingLocked(route claudeSession
 			fmt.Errorf("Claude session 目录与当前 binding 不一致"),
 		)
 	}
-	if _, acquireErr := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
+	result, acquireErr := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
 		Route: route, Selected: selected, Command: "cli compensate",
-	}); acquireErr != nil {
+	})
+	if acquireErr != nil {
 		return errors.Join(errClaudeCLIOpenFailed, errClaudeCLIRemoteRestoreUncertain, openErr, acquireErr)
+	}
+	if result.RuntimeErr != nil {
+		return errors.Join(errClaudeCLIOpenFailed, errClaudeCLIRemoteRestoreUncertain, openErr, result.RuntimeErr)
 	}
 	return errors.Join(errClaudeCLIOpenFailed, openErr)
 }

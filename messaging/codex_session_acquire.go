@@ -29,6 +29,8 @@ type codexSessionAcquireRequest struct {
 	accountID   string
 	reply       platform.Replier
 	taskContext context.Context
+	// forceRuntimeHandoff 只用于用户显式要求重新接管运行通道的 owner remote。
+	forceRuntimeHandoff bool
 }
 
 // codexSessionAcquireResult 返回已提交的路由、运行时和观察状态。
@@ -38,6 +40,7 @@ type codexSessionAcquireResult struct {
 	externalState   externalCodexTaskState
 	externalActive  bool
 	agentSessionErr error
+	runtimeErr      error
 }
 
 // codexRuntimeIntentChange 描述单个 thread 的可补偿控制意图变化。
@@ -50,11 +53,10 @@ type codexRuntimeIntentChange struct {
 
 // codexRuntimeHandoffRequest 描述一次副作用调用及失败后的权威校准意图。
 type codexRuntimeHandoffRequest struct {
-	ctx          context.Context
-	resyncCtx    context.Context
-	liveAgent    agent.CodexLiveRuntimeAgent
-	change       codexRuntimeIntentChange
-	resyncIntent codexControlIntent
+	ctx       context.Context
+	resyncCtx context.Context
+	liveAgent agent.CodexLiveRuntimeAgent
+	change    codexRuntimeIntentChange
 }
 
 // codexSessionAcquirePlan 固化锁内快照和有序旧所有权释放集合。
@@ -64,33 +66,7 @@ type codexSessionAcquirePlan struct {
 	changes  []codexRuntimeIntentChange
 }
 
-// codexSessionAcquireCommit 汇总 store 提交后的收尾输入。
-type codexSessionAcquireCommit struct {
-	request     codexSessionAcquireRequest
-	resolution  codexRuntimeResolution
-	committed   codexRemoteSelectionResult
-	prepared    preparedExternalCodexTask
-	reservation externalCodexTaskReservation
-}
-
-// codexSessionAcquireRuntimeCommit 汇总已应用运行时副作用和提交输入。
-type codexSessionAcquireRuntimeCommit struct {
-	plan       codexSessionAcquirePlan
-	liveAgent  agent.CodexLiveRuntimeAgent
-	resolution codexRuntimeResolution
-	applied    []codexRuntimeIntentChange
-}
-
-// codexSessionAcquireRollback 保存逆序补偿所需的完整上下文。
-type codexSessionAcquireRollback struct {
-	plan        codexSessionAcquirePlan
-	liveAgent   agent.CodexLiveRuntimeAgent
-	applied     []codexRuntimeIntentChange
-	reservation externalCodexTaskReservation
-	cause       error
-}
-
-// acquireCodexSessionWithBindingLocked 在外层 binding 锁内执行选择接管 saga。
+// acquireCodexSessionWithBindingLocked 在外层 binding 锁内先提交窗口所有权，再同步运行通道。
 func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRequest) (codexSessionAcquireResult, error) {
 	liveAgent, ok := req.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
@@ -114,15 +90,53 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		return codexSessionAcquireResult{}, err
 	}
 	h.bindConversationCwd(req.agent, req.route.conversationID, req.route.workspaceRoot)
-	resolution, applied, err := h.applyCodexRuntimeIntentChanges(plan, liveAgent)
-	if err != nil {
-		return codexSessionAcquireResult{}, h.rollbackCodexAcquire(codexSessionAcquireRollback{
-			plan: plan, liveAgent: liveAgent, applied: applied, cause: err,
-		})
-	}
-	return h.commitCodexSessionAcquire(codexSessionAcquireRuntimeCommit{
-		plan: plan, liveAgent: liveAgent, resolution: resolution, applied: applied,
+	committed, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
+		BindingKey:     req.route.bindingKey,
+		WorkspaceRoot:  req.route.workspaceRoot,
+		TargetThreadID: req.route.threadID,
+		ConversationID: req.route.conversationID,
+		Expected:       plan.snapshot,
 	})
+	if err != nil {
+		return codexSessionAcquireResult{}, err
+	}
+
+	result := h.finishCodexOwnerSelection(req)
+	if result.agentSessionErr != nil {
+		rollbackErr := store.rollbackRemoteSelection(committed)
+		if rollbackErr != nil {
+			return codexSessionAcquireResult{}, errors.Join(
+				errCodexSessionAcquireUncertain, result.agentSessionErr, rollbackErr,
+			)
+		}
+		return codexSessionAcquireResult{}, result.agentSessionErr
+	}
+	resolution, _, runtimeErr := h.applyCodexRuntimeIntentChanges(plan, liveAgent)
+	result.resolution = codexAcquireResolutionAfterCommit(req.route, committed.Target, resolution)
+	if readyErr := ensureCodexRuntimeReady(result.resolution, req.route); readyErr != nil {
+		result.runtimeErr = errors.Join(runtimeErr, readyErr)
+		return result, nil
+	}
+	if runtimeErr != nil {
+		// 目标通道已经可写时，旧会话释放失败只影响后台清理，不能撤销新所有权。
+		log.Printf("[codex-session-acquire] 旧运行通道清理失败 target=%q: %v", req.route.threadID, runtimeErr)
+	}
+	return h.attachCodexAcquireObserver(result, req, liveAgent)
+}
+
+// codexAcquireResolutionAfterCommit 确保结果始终展示已提交的权威控制意图。
+func codexAcquireResolutionAfterCommit(route codexConversationRoute, intent codexControlIntent, resolution codexRuntimeResolution) codexRuntimeResolution {
+	if strings.TrimSpace(resolution.Request.Ref.ThreadID) == "" {
+		resolution.Request = agent.CodexRuntimeRequest{Ref: route.ref(route.threadID)}
+		resolution.Live = true
+	}
+	resolution.Request.Intent = agentControlIntent(intent)
+	if strings.TrimSpace(resolution.Binding.Ref.ThreadID) == "" {
+		resolution.Binding = unknownCodexRuntimeBinding(resolution.Request)
+	}
+	resolution.Binding.Ref = resolution.Request.Ref
+	resolution.Binding.Control = resolution.Request.Intent
+	return resolution
 }
 
 // sameCodexRemoteSelectionLockSet 确认等待锁期间没有出现未纳入保护的新 thread。
@@ -198,47 +212,45 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 	}
 }
 
-// commitCodexSessionAcquire 先预留观察槽，再只提交一次持久化状态。
-func (h *Handler) commitCodexSessionAcquire(commit codexSessionAcquireRuntimeCommit) (codexSessionAcquireResult, error) {
-	opts := externalCodexTaskOptionsFromAcquire(commit.plan.request)
+// attachCodexAcquireObserver 在目标运行通道已就绪后附加活动任务观察；失败只关闭运行通道。
+func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, req codexSessionAcquireRequest, liveAgent agent.CodexLiveRuntimeAgent) (codexSessionAcquireResult, error) {
+	opts := externalCodexTaskOptionsFromAcquire(req)
 	// 只有首次 runtime 本身确认 active，二次 inactive 才是合法终态证据。
 	// rollout-only active 表示 Desktop 断联后的共享任务，仍必须启动只读观察。
-	opts.runtimeInactiveAuthoritative = commit.resolution.Binding.State.Active
+	opts.runtimeInactiveAuthoritative = result.resolution.Binding.State.Active
 	prepared, err := h.prepareExternalCodexTask(opts)
 	if err != nil {
-		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, externalCodexTaskReservation{}, err)
+		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
 	}
-	if commit.resolution.Binding.State.Active &&
+	if result.resolution.Binding.State.Active &&
 		!prepared.confirmedInactive && (!prepared.active || !prepared.state.Controllable) {
 		err = fmt.Errorf("活动 Desktop 任务尚不能由当前窗口控制")
-		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, externalCodexTaskReservation{}, err)
+		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
 	}
 	reservation, err := h.reserveExternalCodexTask(opts, prepared)
 	if err != nil {
-		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, externalCodexTaskReservation{}, err)
+		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
 	}
-	committed, err := h.ensureCodexSessions().commitRemoteSelection(codexRemoteSelectionUpdate{
-		BindingKey:     commit.plan.request.route.bindingKey,
-		WorkspaceRoot:  commit.plan.request.route.workspaceRoot,
-		TargetThreadID: commit.plan.request.route.threadID,
-		ConversationID: commit.plan.request.route.conversationID,
-		Expected:       commit.plan.snapshot,
-	})
-	if err != nil {
-		return codexSessionAcquireResult{}, h.rollbackPreparedCodexAcquire(commit, reservation, err)
+	observerReady := h.activateExternalCodexTaskReservation(reservation)
+	if prepared.active && !observerReady {
+		h.cancelExternalCodexTaskReservation(reservation)
+		return h.failCodexAcquireRuntime(result, liveAgent, errExternalCodexTaskReservationConflict), nil
 	}
-	return h.finishCodexSessionAcquire(codexSessionAcquireCommit{
-		request: commit.plan.request, resolution: commit.resolution, committed: committed,
-		prepared: prepared, reservation: reservation,
-	}), nil
+	result.externalState = prepared.state
+	result.externalActive = prepared.active && observerReady
+	return result, nil
 }
 
-// rollbackPreparedCodexAcquire 将提交阶段失败统一转换为完整补偿输入。
-func (h *Handler) rollbackPreparedCodexAcquire(commit codexSessionAcquireRuntimeCommit, reservation externalCodexTaskReservation, cause error) error {
-	return h.rollbackCodexAcquire(codexSessionAcquireRollback{
-		plan: commit.plan, liveAgent: commit.liveAgent, applied: commit.applied,
-		reservation: reservation, cause: cause,
-	})
+// failCodexAcquireRuntime 保留窗口所有权，并把无法安全写入的目标持续标记为冲突态。
+func (h *Handler) failCodexAcquireRuntime(result codexSessionAcquireResult, liveAgent agent.CodexLiveRuntimeAgent, cause error) codexSessionAcquireResult {
+	request := result.resolution.Request
+	markErr := liveAgent.MarkCodexRuntimeConflict(normalizeContext(nil), request)
+	binding, currentErr := liveAgent.CurrentCodexRuntime(request)
+	if currentErr == nil {
+		result.resolution.Binding = binding
+	}
+	result.runtimeErr = errors.Join(cause, markErr, currentErr)
+	return result
 }
 
 // renderCodexSessionAcquireFailure 将内部错误收敛为不泄露其他窗口身份的用户提示。

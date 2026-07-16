@@ -36,6 +36,29 @@ func TestClaudeCommitRemoteSelectionAtomicallySwapsAForB(t *testing.T) {
 	}
 }
 
+func TestClaudeCommitRemoteSelectionPersistsOwnerWhenRuntimeUnavailable(t *testing.T) {
+	store := newClaudeSessionStore()
+	key := claudeBindingKey("route-a", "claude")
+	workspace := t.TempDir()
+	mutation, err := store.commitRemoteSelection(claudeRemoteSelectionUpdate{
+		BindingKey: key, WorkspaceRoot: workspace, TargetSessionID: "session-b",
+		ConversationID: "conversation-b", BindingStatus: claudeBindingResumeFailed,
+		Expected: store.remoteSelectionSnapshot(key, "session-b"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.binding(key); got.SessionID != "session-b" || got.Status != claudeBindingResumeFailed {
+		t.Fatalf("binding=%+v", got)
+	}
+	if got := store.controlIntent("session-b"); got.Owner != claudeOwnerRemote || got.BindingKey != key {
+		t.Fatalf("control=%+v", got)
+	}
+	if got := mutation.After.Bindings[key]; got.Status != claudeBindingResumeFailed {
+		t.Fatalf("mutation=%+v", mutation)
+	}
+}
+
 func TestClaudeCommitRemoteSelectionRejectsOtherRoute(t *testing.T) {
 	store := newClaudeSessionStore()
 	ownerKey := claudeBindingKey("route-owner", "claude")

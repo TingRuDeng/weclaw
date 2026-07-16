@@ -2,24 +2,20 @@
 
 ## 目标
 
-为 Claude ACP session 增加唯一远程窗口所有权、选择即接管、显式本地释放和
-fail-closed 任务门禁。
+让 Codex 与 Claude 都以微信/飞书窗口持久化绑定和显式释放作为所有权事实源，
+将运行通道恢复从所有权提交中解耦。
 
 ## 任务清单
 
-- [x] Task 1：升级 Claude 状态模型并完成 v2 安全迁移。
-- [x] Task 2：实现原子选择、释放和 session 有序锁。
-- [x] Task 3：实现统一选择接管 saga。
-- [x] Task 4：收口工作空间切换与飞书入口。
-- [x] Task 5：让 `/cc new` 与全局 `/new` 创建后原子接管。
-- [x] Task 6：实现 owner 查询、远程接管与写入门禁。
-- [x] Task 7：实现 `/cc cli` 本地交接与失败补偿。
-- [x] Task 8：补齐并发、重启、文档与全量验证。
+- [x] Task 1：Codex 选择先提交 binding/owner，运行失败保留选择并关闭写入。
+- [x] Task 2：Codex 显式释放先提交 desktop owner，取消幂等选择的 Desktop 探测。
+- [x] Task 3：Claude 选择先提交 binding/owner，恢复失败持久化 `resume_failed`。
+- [x] Task 4：统一切换、新建、飞书卡片、owner 和普通消息提示。
+- [x] Task 5：补齐持久化回滚、并发保护、Android 飞书入口和运行失败回归。
+- [x] Task 6：完成全仓验证、独立复核和差异检查。
 
 ## 当前状态
 
-Claude “选择即接管”治理任务已完成：统一选择、新建、工作空间切换、飞书选择和 owner/CLI
-交接入口，写入前后都校验唯一远程 owner 与 revision；持久化、runtime 或补偿失败时按
-fail-closed 处理，用户回复不暴露底层错误。并发竞争、重启恢复、入口矩阵、失败补偿和只读
-命令不改控制权均已有自动化测试。最终门禁覆盖全仓测试、messaging/agent 竞态检测、vet、
-staticcheck、构建、文档校验与差异检查。
+Codex 与 Claude 的 owner-first 实现已完成。窗口选择和显式释放先落盘，runtime 恢复失败
+只进入写入门禁，不再回滚 Agent、会话或 owner；全仓测试、messaging/agent 竞态检测、vet、
+文档校验、独立复核和差异检查均已通过。

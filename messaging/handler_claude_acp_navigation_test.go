@@ -38,7 +38,7 @@ func TestClaudeSwitchCommitsACPBindingAndShowsConfig(t *testing.T) {
 	if !strings.Contains(text, "模型: opus") || !strings.Contains(text, "推理强度: high") {
 		t.Fatalf("text=%q, want current session config", text)
 	}
-	if !strings.Contains(text, "恢复状态: 已就绪") {
+	if !strings.Contains(text, "运行通道: 已就绪") {
 		t.Fatalf("text=%q, want ready status", text)
 	}
 }
@@ -81,6 +81,9 @@ func TestClaudeResumeFailureRetainsBinding(t *testing.T) {
 	if err == nil || binding.SessionID != "session-1" || binding.Status != claudeBindingResumeFailed {
 		t.Fatalf("error=%v binding=%+v", err, binding)
 	}
+	if !strings.Contains(err.Error(), "运行通道暂不可用") || strings.Contains(err.Error(), "重新选择") {
+		t.Fatalf("error=%v", err)
+	}
 }
 
 func TestClaudePendingResumeBecomesReady(t *testing.T) {
@@ -116,8 +119,8 @@ func TestClaudeSwitchSaveFailureRollsBackRuntime(t *testing.T) {
 	if !strings.Contains(text, "失败，请稍后重试") || strings.Contains(text, "disk full") || binding.SessionID != "session-old" {
 		t.Fatalf("text=%q binding=%+v", text, binding)
 	}
-	if len(fake.useCalls) != 2 || fake.useCalls[0] != "session-new" || fake.useCalls[1] != "session-old" {
-		t.Fatalf("useCalls=%#v，期望恢复旧 ACP runtime", fake.useCalls)
+	if len(fake.useCalls) != 0 || fake.sessionID != "session-old" {
+		t.Fatalf("useCalls=%#v runtime=%q，所有权落盘失败前不得切 runtime", fake.useCalls, fake.sessionID)
 	}
 }
 
@@ -168,8 +171,8 @@ func TestClaudeSwitchAgentSelectionSaveFailureRollsBack(t *testing.T) {
 	if !strings.Contains(text, "失败") || binding.SessionID != "session-old" || selected != "codex" {
 		t.Fatalf("text=%q binding=%+v selected=%q", text, binding, selected)
 	}
-	if fake.useSessionID != "session-old" {
-		t.Fatalf("runtime=%q，期望恢复旧 session", fake.useSessionID)
+	if len(fake.useCalls) != 0 || fake.sessionID != "session-old" {
+		t.Fatalf("useCalls=%#v runtime=%q，Agent 选择失败前不得切 runtime", fake.useCalls, fake.sessionID)
 	}
 }
 

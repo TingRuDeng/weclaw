@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -154,9 +155,6 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	if binding.SessionID == "" || binding.Status == claudeBindingUnbound {
 		return "", fmt.Errorf("当前窗口没有有效的 Claude 会话，请发送 /cc ls 选择或 /cc new 新建")
 	}
-	if binding.Status == claudeBindingResumeFailed {
-		return "", fmt.Errorf("原 Claude 会话恢复失败，请发送 /cc ls 重新选择或 /cc new 新建")
-	}
 	if binding.Status == claudeBindingPendingResume {
 		return h.resumePendingClaudeBinding(ctx, claudeResumeRequest{
 			bindingKey: bindingKey, conversationID: conversationID, sessionID: binding.SessionID, agent: claudeAg,
@@ -175,10 +173,13 @@ type claudeResumeRequest struct {
 func (h *Handler) resumePendingClaudeBinding(ctx context.Context, req claudeResumeRequest) (string, error) {
 	if err := req.agent.UseClaudeSession(ctx, req.conversationID, req.sessionID); err != nil {
 		markErr := h.ensureClaudeSessions().markResumeFailed(req.bindingKey)
-		return "", fmt.Errorf("恢复 Claude 会话失败: %w；请发送 /cc ls 重新选择或 /cc new 新建", errors.Join(err, markErr))
+		log.Printf("[claude-runtime] 恢复绑定失败 session=%q: %v", req.sessionID, errors.Join(err, markErr))
+		return "", errors.New(renderClaudeRemoteControlError(errClaudeRuntimeUnavailable))
 	}
 	if err := h.ensureClaudeSessions().markReady(req.bindingKey); err != nil {
-		return "", fmt.Errorf("保存 Claude 恢复状态失败: %w", err)
+		log.Printf("[claude-runtime] 保存恢复状态失败 session=%q: %v", req.sessionID, err)
+		_ = h.ensureClaudeSessions().markResumeFailed(req.bindingKey)
+		return "", errors.New(renderClaudeRemoteControlError(errClaudeRuntimeUnavailable))
 	}
 	return req.conversationID, nil
 }

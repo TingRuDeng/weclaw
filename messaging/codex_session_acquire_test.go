@@ -43,17 +43,22 @@ func TestAcquireCodexSessionRejectsOtherRemoteWithoutChanges(t *testing.T) {
 	assertCodexAcquireState(t, fixture, want)
 }
 
-func TestAcquireCodexSessionCompensatesTargetWhenOldReleaseFails(t *testing.T) {
+func TestAcquireCodexSessionKeepsTargetWhenOldReleaseFails(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.agent.handoffErrors["thread-a"] = errors.New("释放失败")
-	_, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if err == nil {
-		t.Fatal("旧 thread 释放失败时事务不应成功")
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("error=%v result=%#v", err, result)
 	}
-	assertCodexAcquireOriginalState(t, fixture, 3)
+	if got := fixture.h.ensureCodexSessions().controlIntent("thread-a"); got.Owner != codexControlDesktop {
+		t.Fatalf("旧 thread 的持久化所有权应已释放: %#v", got)
+	}
+	if got := fixture.h.ensureCodexSessions().controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("目标 thread 应保持远程所有权: %#v", got)
+	}
 	requests := fixture.agent.handoffRequests()
-	if len(requests) < 3 || requests[len(requests)-1].Intent.Owner != agent.CodexControlDesktop {
-		t.Fatalf("handoff history=%#v，最后应恢复 B 原 desktop intent", requests)
+	if len(requests) != 2 || requests[0].Ref.ThreadID != "thread-b" || requests[1].Ref.ThreadID != "thread-a" {
+		t.Fatalf("handoff history=%#v", requests)
 	}
 }
 

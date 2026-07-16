@@ -38,21 +38,26 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 		log.Printf("[claude-session-acquire] 查找待切换会话失败: %v", err)
 		return "查找 Claude 会话失败，请确认 sessionId 或稍后重试。"
 	}
-	if _, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
+	result, err := h.acquireClaudeSessionWithBindingLocked(claudeSessionAcquireRequest{
 		Route: route, Selected: selected, Command: "switch",
-	}); err != nil {
+	})
+	if err != nil {
 		log.Printf("[claude-session-acquire] 切换并接管失败: %v", err)
 		return renderClaudeSessionAcquireFailure(err)
 	}
-	return h.renderClaudeSelection(route, selected)
+	return h.renderClaudeSelection(route, selected, result)
 }
 
-func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession) string {
+func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession, result claudeSessionAcquireResult) string {
 	lines := []string{
 		"已切换并接管 Claude 会话。",
 		"工作空间: " + shortCodexWorkspaceName(selected.Cwd),
 		"session: " + selected.ID,
-		"恢复状态: 已就绪",
+		"运行通道: " + renderClaudeAcquireRuntimeStatus(result.RuntimeErr),
+	}
+	if result.RuntimeErr != nil {
+		log.Printf("[claude-session-acquire] 所有权已提交但运行通道不可用 session=%q: %v", selected.ID, result.RuntimeErr)
+		lines = append(lines, "普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, selected.Cwd)
 	if configAgent, ok := route.Agent.(agent.ClaudeSessionConfigAgent); ok {
@@ -101,15 +106,32 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	if reply := h.rejectActiveClaudeBindingChange(route); reply != "" {
 		return reply
 	}
-	if _, err := h.createAndAcquireClaudeSessionWithBindingLocked(route); err != nil {
+	result, err := h.createAndAcquireClaudeSessionWithBindingLocked(route)
+	if err != nil {
 		log.Printf("[claude-session-acquire] 新建并接管失败: %v", err)
 		return "新建 Claude 会话失败，请稍后重试。"
 	}
-	return wechatCommandText("已创建并接管 Claude 会话。", "工作空间: "+shortCodexWorkspaceName(route.WorkspaceRoot))
+	lines := []string{
+		"已创建并接管 Claude 会话。",
+		"工作空间: " + shortCodexWorkspaceName(route.WorkspaceRoot),
+		"运行通道: " + renderClaudeAcquireRuntimeStatus(result.RuntimeErr),
+	}
+	if result.RuntimeErr != nil {
+		log.Printf("[claude-session-acquire] 新会话所有权已提交但运行通道不可用 session=%q: %v", result.SessionID, result.RuntimeErr)
+		lines = append(lines, "普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
+	}
+	return wechatCommandText(lines...)
 }
 
-// createAndAcquireClaudeSessionWithBindingLocked 在 binding 外层锁内把 session/new
-// 的 runtime 变更与统一 acquire saga 组合为一个可补偿事务。
+func renderClaudeAcquireRuntimeStatus(err error) string {
+	if err != nil {
+		return "暂不可用（所有权已保留）"
+	}
+	return "已就绪"
+}
+
+// createAndAcquireClaudeSessionWithBindingLocked 先创建真实 session，再交给 owner-first acquire；
+// 只有所有权硬提交失败时才恢复创建前的 runtime。
 func (h *Handler) createAndAcquireClaudeSessionWithBindingLocked(route claudeSessionRoute) (claudeSessionAcquireResult, error) {
 	workspaceRoot := normalizeClaudeWorkspaceRoot(route.WorkspaceRoot)
 	if strings.TrimSpace(route.BindingKey) == "" || workspaceRoot == "" {

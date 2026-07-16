@@ -72,51 +72,49 @@ func TestCodexSwitchRejectsOtherRemoteAndKeepsA(t *testing.T) {
 	}
 }
 
-func TestCodexSwitchProbeFailureKeepsA(t *testing.T) {
+func TestCodexSwitchIdempotentSelectionIgnoresProbeFailure(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	setAcquireTargetRemoteForCurrentRoute(t, fixture)
 	fixture.agent.inspectErrors["thread-b"] = errors.New("探测失败")
-	want := fixture.snapshot()
 	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
-	assertCodexAcquireState(t, fixture, want)
-	if !strings.Contains(text, "切换并接管") || !strings.Contains(text, "失败") || strings.Contains(text, "已保留") {
+	if !strings.Contains(text, "已切换并接管") || fixture.agent.bindCalls != 0 {
 		t.Fatalf("text=%q", text)
+	}
+	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("target owner=%#v", got)
 	}
 }
 
-func TestCodexSwitchProbeTimeoutKeepsA(t *testing.T) {
+func TestCodexSwitchIdempotentSelectionDoesNotWaitForProbe(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	setAcquireTargetRemoteForCurrentRoute(t, fixture)
 	fixture.agent.inspectRelease = make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	want := fixture.snapshot()
 	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(ctx))
-	assertCodexAcquireState(t, fixture, want)
-	if !strings.Contains(text, "本次选择未执行") || strings.Contains(text, "已保留") {
+	if !strings.Contains(text, "已切换并接管") || fixture.agent.bindCalls != 0 {
 		t.Fatalf("text=%q", text)
 	}
 }
 
-func TestCodexSwitchUncertainKeepsPreviousAgentAndExplainsScope(t *testing.T) {
+func TestCodexSwitchRuntimeFailureKeepsNewOwnerAndAgent(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	if err := fixture.h.ensureAgentSessions().Set(fixture.routeUser, "claude"); err != nil {
 		t.Fatal(err)
 	}
 	fixture.agent.handoffErrors["thread-b"] = context.DeadlineExceeded
 	fixture.agent.inspectErrors["thread-b"] = errors.New("校准失败")
-	want := fixture.snapshot()
-	want.handoffCount = 1
-
 	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
 
-	assertCodexAcquireState(t, fixture, want)
-	if selected, ok := fixture.h.ensureAgentSessions().Get(fixture.routeUser); !ok || selected != "claude" {
-		t.Fatalf("selected=%q ok=%t, want claude", selected, ok)
+	if selected, ok := fixture.h.ensureAgentSessions().Get(fixture.routeUser); !ok || selected != "codex" {
+		t.Fatalf("selected=%q ok=%t, want codex", selected, ok)
 	}
-	const wantText = "未切换到 Codex：目标会话的控制权移交结果未确认。当前窗口仍保持切换前的 Agent；在状态确认前不会向该 Codex 会话写入。"
-	if text != wantText {
-		t.Fatalf("text=%q, want %q", text, wantText)
+	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote || got.RouteBindingKey != fixture.bindingKey {
+		t.Fatalf("target owner=%#v", got)
+	}
+	if !strings.Contains(text, "已切换并接管") || !strings.Contains(text, "所有权已保留") ||
+		strings.Contains(text, "仍保持切换前的 Agent") {
+		t.Fatalf("text=%q", text)
 	}
 }
 
