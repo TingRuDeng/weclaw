@@ -56,7 +56,7 @@ func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.In
 		sendPlatformText(ctx, reply, userID, "管理命令执行器未配置，暂未执行。")
 		return
 	}
-	sendPlatformText(ctx, reply, userID, "开始执行管理命令：/"+command)
+	sendPlatformText(ctx, reply, userID, "管理命令已受理：/"+command+"，正在后台执行；完成后会另行通知。")
 	go h.runServiceAdminCommand(msg, command, args, reply)
 }
 

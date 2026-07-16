@@ -250,7 +250,7 @@ weclaw update --restart
 weclaw version
 ```
 
-`restart` and `update --restart` validate configuration and agent dependencies before stopping the old service. A normal restart does not interrupt active tasks. Update official installations with `weclaw update`; never overwrite the binary in PATH with a local build.
+`weclaw update` returns immediately when the installed version is already current. Configuration and agent preflight runs only after installing a new version or when `update --restart` is explicitly requested. `restart` and `update --restart` finish preflight before stopping the old service, and a normal restart does not interrupt active tasks. Update official installations with `weclaw update`; never overwrite the binary in PATH with a local build.
 
 ## Build from Source
 

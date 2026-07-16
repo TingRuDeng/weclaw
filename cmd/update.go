@@ -44,12 +44,34 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("检查最新版本失败: %w", err)
 	}
-	if latest == Version {
-		fmt.Printf("已是最新版本 (%s)\n", Version)
-	} else if err := applyUpdate(latest); err != nil {
+	return finishUpdate(
+		cmd.Context(), Version, latest, updateRestartFlag, restartForceFlag,
+		applyUpdate, defaultUpdateCompletionOps(), os.Stdout,
+	)
+}
+
+// finishUpdate 只在实际替换二进制或显式要求重启时执行启动预检。
+func finishUpdate(
+	ctx context.Context,
+	current string,
+	latest string,
+	restart bool,
+	force bool,
+	apply func(string) error,
+	completion updateCompletionOps,
+	out io.Writer,
+) error {
+	if latest == current {
+		fmt.Fprintf(out, "已是最新版本 (%s)\n", current)
+		if !restart {
+			return nil
+		}
+		return completeUpdate(ctx, true, force, completion)
+	}
+	if err := apply(latest); err != nil {
 		return err
 	}
-	return completeUpdate(cmd.Context(), updateRestartFlag, restartForceFlag, defaultUpdateCompletionOps())
+	return completeUpdate(ctx, restart, force, completion)
 }
 
 // applyUpdate 下载、校验并原子替换当前可执行文件。

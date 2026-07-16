@@ -95,12 +95,12 @@ ai_summary:
 - Claude ACP 复用通用后台任务队列：每个活动任务最多暂存一条消息，失败后仍自动续跑；`/cancel` 撤回暂存，`/stop` 按当前窗口 Agent 停止，`/guide` 对 Claude 明确不支持。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。
 - 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。
-- 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。飞书管理员身份判断必须同时检查 `open_id/user_id/union_id`。
+- 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。飞书管理员身份判断必须同时检查 `open_id/user_id/union_id`。管理命令先明确回复后台受理，结束后另发最终结果；`/update` 摘要必须识别 CLI 当前使用的中文版本输出。
 - 微信同一条入站消息触发多次回复时，`wechat.Replier` 必须为后续 `SendText` 生成新的 `client_id`，避免微信端把结果消息按重复消息去重。
 - Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。
 - Web 配置保存必须保留 Agent 的 Codex 权限字段：`permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode`。
 - `api_addr` 监听非 loopback 地址时必须配置 `api_token`。
-- 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。
+- 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。普通 `weclaw update` 在已是最新版时不得启动 Claude ACP 预检；实际安装新版本或显式 `update --restart` 才执行启动预检。
 
 ## Validation Commands
 

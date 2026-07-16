@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -116,6 +117,94 @@ func TestDownloadFileRejectsOversizedContentLength(t *testing.T) {
 	_, err := downloadFile(server.URL)
 	if err == nil {
 		t.Fatal("downloadFile error = nil, want oversized download error")
+	}
+}
+
+func TestFinishUpdateSkipsApplyAndPreflightWhenAlreadyLatest(t *testing.T) {
+	applied := false
+	prepared := false
+	var out bytes.Buffer
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			prepared = true
+			return preparedStart{}, nil
+		},
+		out: &out,
+	}
+
+	err := finishUpdate(
+		context.Background(), "v0.1.181", "v0.1.181", false, false,
+		func(string) error { applied = true; return nil }, ops, &out,
+	)
+
+	if err != nil {
+		t.Fatalf("finishUpdate error=%v", err)
+	}
+	if applied || prepared {
+		t.Fatalf("applied=%t prepared=%t，最新版不应下载或执行启动预检", applied, prepared)
+	}
+	if !strings.Contains(out.String(), "已是最新版本 (v0.1.181)") {
+		t.Fatalf("output=%q，want latest version", out.String())
+	}
+}
+
+func TestFinishUpdateAlreadyLatestStillPreflightsExplicitRestart(t *testing.T) {
+	applied := false
+	prepared := false
+	var out bytes.Buffer
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			prepared = true
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
+		running:    func() bool { return false },
+		stop:       func() error { t.Fatal("服务未运行时不应停止"); return nil },
+		out:        &out,
+	}
+
+	err := finishUpdate(
+		context.Background(), "v0.1.181", "v0.1.181", true, false,
+		func(string) error { applied = true; return nil }, ops, &out,
+	)
+
+	if err != nil {
+		t.Fatalf("finishUpdate error=%v", err)
+	}
+	if applied || !prepared {
+		t.Fatalf("applied=%t prepared=%t，显式 restart 应跳过下载但保留预检", applied, prepared)
+	}
+}
+
+func TestFinishUpdateAppliesNewVersionBeforePreflight(t *testing.T) {
+	var calls []string
+	var out bytes.Buffer
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			calls = append(calls, "prepare")
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		out: &out,
+	}
+
+	err := finishUpdate(
+		context.Background(), "v0.1.180", "v0.1.181", false, false,
+		func(version string) error {
+			if version != "v0.1.181" {
+				t.Fatalf("apply version=%q", version)
+			}
+			calls = append(calls, "apply")
+			return nil
+		},
+		ops,
+		&out,
+	)
+
+	if err != nil {
+		t.Fatalf("finishUpdate error=%v", err)
+	}
+	if !reflect.DeepEqual(calls, []string{"apply", "prepare"}) {
+		t.Fatalf("calls=%v，want apply then prepare", calls)
 	}
 }
 

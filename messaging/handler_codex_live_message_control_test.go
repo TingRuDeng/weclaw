@@ -22,6 +22,23 @@ func TestCodexDesktopIdleMessageStartsDesktopTurn(t *testing.T) {
 	}
 }
 
+func TestCodexLiveTaskCompletionKeepsExplicitThreadSelection(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
+	ag.fakeCodexThreadAgent.threadID = "thread-stale"
+
+	h.startCodexAgentTask(opts)
+	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
+	waitUntil(t, func() bool {
+		_, active := h.activeTask(route.conversationID)
+		return !active
+	})
+
+	threadID, pending := h.codexSessions.getThread(route.bindingKey, route.workspaceRoot)
+	if pending || threadID != route.threadID {
+		t.Fatalf("thread=%q pending=%v，任务完成不应让 ACP 旧映射覆盖显式选择 %q", threadID, pending, route.threadID)
+	}
+}
+
 func TestCodexDesktopActiveMessageQueuesOnePending(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
 	ag.watchDone = make(chan struct{})

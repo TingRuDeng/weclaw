@@ -254,7 +254,7 @@ weclaw update --restart
 weclaw version
 ```
 
-`restart` 和 `update --restart` 会先执行配置与 Agent 预检，再停止旧服务；普通重启不会中断正在运行的任务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
+`weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`restart` 和 `update --restart` 会在停止旧服务前完成预检，普通重启不会中断正在运行的任务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
 
 ## 从源码构建
 

@@ -198,16 +198,23 @@ func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string,
 	if !ok {
 		return "", false
 	}
+	bindingKey := codexBindingKey(userID, agentName)
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	store := h.ensureCodexSessions()
+	if _, live := ag.(agent.CodexLiveRuntimeAgent); live {
+		// Live turn 已由 route 绑定到显式选择；ACP 的兼容映射可能仍指向旧 Desktop thread。
+		if selected, pending := store.getThread(bindingKey, workspaceRoot); !pending && strings.TrimSpace(selected) != "" {
+			return workspaceRoot, true
+		}
+	}
 	threadID, ok := codexAg.CurrentCodexThread(conversationID)
 	if !ok {
 		return "", false
 	}
-	bindingKey := codexBindingKey(userID, agentName)
-	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
-	if ownerWorkspace, ok := h.ensureCodexSessions().findWorkspaceByThread(bindingKey, threadID); ok {
+	if ownerWorkspace, ok := store.findWorkspaceByThread(bindingKey, threadID); ok {
 		workspaceRoot = ownerWorkspace
 	}
-	h.ensureCodexSessions().setThread(bindingKey, workspaceRoot, threadID)
+	store.setThread(bindingKey, workspaceRoot, threadID)
 	return workspaceRoot, true
 }
 

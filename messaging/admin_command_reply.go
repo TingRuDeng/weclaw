@@ -51,6 +51,15 @@ func summarizeServiceAdminOutput(command string, output string) string {
 	}
 	switch command {
 	case "update":
+		if version := findOutputVersion(lines, "已是最新版本 ("); version != "" {
+			return "当前已是最新版本：" + version
+		}
+		if hasOutputLinePrefix(lines, "已是最新版本") {
+			return "当前已是最新版本"
+		}
+		if version := findOutputVersion(lines, "已更新到 "); version != "" {
+			return "已更新到：" + version + "\n请执行 /restart --force 生效"
+		}
 		if version := findOutputVersion(lines, "Already up to date ("); version != "" {
 			return "当前已是最新版本：" + version
 		}

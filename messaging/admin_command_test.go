@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -79,8 +80,10 @@ func TestServiceAdminCommandRunsUpdateForWhitelistedUser(t *testing.T) {
 	if gotCommand != "update" || len(gotArgs) != 0 {
 		t.Fatalf("executor command=%q args=%#v, want update with no args", gotCommand, gotArgs)
 	}
-	if !strings.Contains(texts[0], "开始执行管理命令：/update") {
-		t.Fatalf("reply texts=%#v, want start notice", texts)
+	if !strings.Contains(texts[0], "管理命令已受理：/update") ||
+		!strings.Contains(texts[0], "后台执行") ||
+		!strings.Contains(texts[0], "另行通知") {
+		t.Fatalf("reply texts=%#v, want asynchronous acceptance notice", texts)
 	}
 	if !strings.Contains(texts[1], "当前已是最新版本") {
 		t.Fatalf("reply texts=%#v, want concise update result", texts)
@@ -111,8 +114,33 @@ func TestServiceAdminCommandAllowsFeishuUnionID(t *testing.T) {
 	if gotCommand != "update" {
 		t.Fatalf("executor command=%q, want update", gotCommand)
 	}
-	if !strings.Contains(texts[0], "开始执行管理命令：/update") {
-		t.Fatalf("reply texts=%#v, want start notice", texts)
+	if !strings.Contains(texts[0], "管理命令已受理：/update") || !strings.Contains(texts[0], "后台执行") {
+		t.Fatalf("reply texts=%#v, want asynchronous acceptance notice", texts)
+	}
+}
+
+func TestServiceAdminCommandReportsBackgroundUpdateFailure(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
+		return "正在检查更新...", errors.New("download failed")
+	})
+	reply := newAdminCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Text:     "/update",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+	}, reply)
+
+	texts := reply.waitTexts(t, 2)
+	if !strings.Contains(texts[0], "管理命令已受理：/update") {
+		t.Fatalf("reply texts=%#v, want acceptance notice", texts)
+	}
+	if !strings.Contains(texts[1], "管理命令执行失败：/update") ||
+		!strings.Contains(texts[1], "download failed") {
+		t.Fatalf("reply texts=%#v, want final update failure", texts)
 	}
 }
 
@@ -170,8 +198,8 @@ func TestServiceAdminCommandAllowsRestartForceOnly(t *testing.T) {
 	if gotCommand != "restart" || !reflect.DeepEqual(gotArgs, []string{"--force"}) {
 		t.Fatalf("executor command=%q args=%#v, want restart --force", gotCommand, gotArgs)
 	}
-	if !strings.Contains(texts[0], "开始执行管理命令：/restart") {
-		t.Fatalf("reply texts=%#v, want start notice", texts)
+	if !strings.Contains(texts[0], "管理命令已受理：/restart") || !strings.Contains(texts[0], "后台执行") {
+		t.Fatalf("reply texts=%#v, want asynchronous acceptance notice", texts)
 	}
 	if !strings.Contains(texts[1], "restart scheduled") {
 		t.Fatalf("reply texts=%#v, want restart output", texts)
@@ -330,6 +358,32 @@ func TestFormatServiceAdminCommandReplySummarizesUpdatedVersion(t *testing.T) {
 		t.Fatalf("reply=%q, want updated version summary with restart hint", reply)
 	}
 	if strings.Contains(reply, "Downloading") {
+		t.Fatalf("reply=%q, should not include raw download progress", reply)
+	}
+}
+
+func TestFormatServiceAdminCommandReplySummarizesChineseLatestVersion(t *testing.T) {
+	output := "正在检查更新...\n已是最新版本 (v0.1.181)\n更新完成；准备就绪后运行 weclaw restart。\n"
+
+	reply := formatServiceAdminCommandReply("update", output, nil)
+
+	if !strings.Contains(reply, "当前已是最新版本：v0.1.181") {
+		t.Fatalf("reply=%q, want Chinese latest version summary", reply)
+	}
+	if strings.Contains(reply, "准备就绪后") {
+		t.Fatalf("reply=%q, should not replace latest status with final progress line", reply)
+	}
+}
+
+func TestFormatServiceAdminCommandReplySummarizesChineseUpdatedVersion(t *testing.T) {
+	output := "正在检查更新...\n当前版本: v0.1.180 -> 最新版本: v0.1.181\n正在下载 https://example.invalid/weclaw...\n已更新到 v0.1.181\n更新完成；准备就绪后运行 weclaw restart。\n"
+
+	reply := formatServiceAdminCommandReply("update", output, nil)
+
+	if !strings.Contains(reply, "已更新到：v0.1.181") || !strings.Contains(reply, "请执行 /restart --force 生效") {
+		t.Fatalf("reply=%q, want Chinese updated version summary", reply)
+	}
+	if strings.Contains(reply, "正在下载") {
 		t.Fatalf("reply=%q, should not include raw download progress", reply)
 	}
 }
