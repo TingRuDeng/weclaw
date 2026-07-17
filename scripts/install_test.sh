@@ -294,7 +294,11 @@ test_release_gate_runs_install_tests() {
   release_calls=$(/bin/bash -c '
     set -e
     WECLAW_RELEASE_SOURCE_ONLY=1 source "$1/scripts/release.sh"
-    go() { :; }
+    go() {
+      if [ "${1:-}" = "list" ]; then
+        printf "%s\n" "github.com/fastclaw-ai/weclaw"
+      fi
+    }
     git() { :; }
     sh() { printf "sh %s\n" "$*"; }
     run_validations
