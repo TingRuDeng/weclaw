@@ -77,7 +77,7 @@ ai_summary:
 - 飞书 bot 的 `allowed_users`、`default_agent` 和 `progress` 按 `app_id` 隔离；`allowed_users` 支持应用级 `open_id` 和同开发商下稳定的 `union_id`，多机器人优先配置 `union_id`；新增、删除 bot 或修改 `app_id` 属于平台拓扑变化，需要重启。
 - 飞书未授权入站身份会在访问控制前写入 `~/.weclaw/feishu-identities.json`，但不会自动放行；管理员通过 `/feishu users pending/list/approve` 确认后才写入 `config.json`，本地只读查看使用 `weclaw feishu users pending/list`。
 - `/progress` 从飞书入口触发时必须按当前 `account_id` 写入账号级配置，广播、Codex 会话切换和 Codex App 外部任务 watcher 也必须读取账号级进度配置。
-- 飞书 `/cx ls`、`/cc ls` 的工作空间按钮只携带服务端生成的 5 分钟一次性 opaque token，并绑定 Agent、真实点击者和窗口 route；旧版数字索引卡片必须提示过期，用户手工输入数字命令仍保持兼容。
+- 飞书 `/cx ls`、`/cc ls` 的工作空间按钮只携带服务端生成的 5 分钟一次性 opaque token，并绑定 Agent、真实点击者和窗口 route；旧版数字索引卡片必须提示过期，用户手工输入数字命令仍保持兼容。分页使用绑定机器人账号、点击者、窗口、Agent 和列表层级的 5 分钟服务端快照，翻页只读取快照；卡片回调去重优先使用飞书 `event_id`，缺失时使用每次卡片渲染生成的 revision，不能仅用“原消息 ID + 页码命令”判断重复点击。
 - `/api/send` 在同一平台存在多个可主动发送账号时必须要求 `account_id`，不能静默选择第一个账号。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - 飞书推荐使用 7.22+ 悬浮菜单，菜单项通过“发送文字消息”触发命令，只保留 `/help`、状态/任务控制、Codex/Claude 列表与新建、模型/推理/确认模式等高频入口；可切换菜单受 3 个主菜单限制时移除“设置”主菜单。`/cx app`、`/cc cli`、`/cancel` 等低频命令由飞书 `/help` 二级分类卡片承载，管理员分类只对管理员显示。普通计划确认仍回复“确认”，Codex 运行中的暂存消息未被 `/guide`、`/cancel` 或 `/stop` 消费时会在上一任务结束后自动执行。

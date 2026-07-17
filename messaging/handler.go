@@ -97,6 +97,7 @@ type Handler struct {
 	codexBrowseMu           sync.Mutex
 	codexBrowseWorkspaces   map[string]string
 	feishuWorkspaceChoices  feishuWorkspaceChoiceStore
+	feishuNavSnapshots      feishuNavigationSnapshotStore
 	codexLocalEntries       map[string]codexLocalEntryState
 	codexAppOpener          CodexAppOpener
 	codexCLIResumeOpener    CodexCLIResumeOpener

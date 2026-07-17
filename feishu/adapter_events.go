@@ -264,7 +264,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		UserID:      action.UserID,
 		UserAliases: action.UserAliases,
 		ChatID:      action.ChatID,
-		MessageID:   action.MessageID + ":card:" + action.Action + ":" + action.Choice,
+		MessageID:   regularCardActionMessageID(action),
 		RawCommand: &platform.CardAction{
 			Action: action.Action,
 			Value:  regularCardActionValue(action),
@@ -321,7 +321,22 @@ func regularCardActionValue(action parsedCardAction) map[string]string {
 	if action.Kind != "" {
 		value[platform.ChoiceMetadataInteractionKind] = action.Kind
 	}
+	if action.NavigationSnapshot != "" {
+		value[platform.ChoiceMetadataNavigationSnapshot] = action.NavigationSnapshot
+	}
 	return value
+}
+
+// regularCardActionMessageID 优先使用飞书事件 ID；缺失时以卡片 revision 区分同一按钮的后续渲染。
+func regularCardActionMessageID(action parsedCardAction) string {
+	base := strings.TrimSpace(action.MessageID)
+	if eventID := strings.TrimSpace(action.EventID); eventID != "" {
+		return base + ":card-event:" + eventID
+	}
+	if revision := strings.TrimSpace(action.CardRevision); revision != "" {
+		return base + ":card-revision:" + revision + ":" + action.Action + ":" + action.Choice
+	}
+	return base + ":card:" + action.Action + ":" + action.Choice
 }
 
 func (a *Adapter) newScopedReplier(msg platform.IncomingMessage) platform.Replier {

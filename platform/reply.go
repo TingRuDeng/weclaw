@@ -53,6 +53,8 @@ const (
 	ChoiceButtonTypeDefault  = "default"
 	ChoiceMetadataSection    = "choice_section"
 	ChoiceSectionNavigation  = "navigation"
+	// ChoiceMetadataNavigationSnapshot 将分页按钮绑定到服务端短期快照。
+	ChoiceMetadataNavigationSnapshot = "navigation_snapshot"
 )
 
 // Choice 表示一项可由用户选择的编号选项。

@@ -19,11 +19,13 @@ type claudeFeishuCommandRequest struct {
 
 type claudeFeishuChoiceRequest struct {
 	Context       context.Context
+	AccountID     string
 	Reply         platform.Replier
 	Route         claudeSessionRoute
 	Metadata      map[string]string
 	WorkspaceRoot string
 	Page          int
+	Snapshot      string
 }
 
 type claudeChoiceCard struct {
@@ -92,7 +94,10 @@ func (h *Handler) sendFeishuClaudeNavigationChoices(req claudeFeishuCommandReque
 		AgentName: agentName, Agent: ag, WorkspaceRoot: workspaceRoot,
 		BindingKey: claudeBindingKey(req.RouteUserID, agentName), Admin: h.isAdminMessage(msg),
 	}
-	choiceReq := claudeFeishuChoiceRequest{Context: req.Context, Reply: req.Reply, Route: route, Metadata: feishuChoiceSessionMetadata(msg, req.RouteUserID)}
+	choiceReq := claudeFeishuChoiceRequest{
+		Context: req.Context, AccountID: msg.AccountID, Reply: req.Reply, Route: route,
+		Metadata: feishuChoiceSessionMetadata(msg, req.RouteUserID), Snapshot: feishuNavigationSnapshotFromMessage(msg),
+	}
 	if page, ok := parseFeishuNavigationPage(fields, "/cc"); ok {
 		choiceReq.Page = page.Page
 		if page.Kind == "workspaces" {
@@ -122,19 +127,22 @@ func isFeishuClaudeNavigationCommand(fields []string) bool {
 
 // sendFeishuClaudeWorkspaceChoices 将权限过滤后的工作空间映射为短期 opaque token 按钮。
 func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest) bool {
-	groups, err := h.claudeWorkspaceGroupsForRoute(req.Route)
-	if err != nil {
+	scope := feishuNavigationSnapshotScope{
+		AccountID: req.AccountID, ActorUserID: req.Route.ActorUserID, BindingKey: req.Route.BindingKey,
+		AgentKind: feishuWorkspaceChoiceClaude, Section: feishuNavigationSectionWorkspaces,
+	}
+	choices, snapshot, ok := h.loadFeishuClaudeWorkspaceSnapshot(req, scope)
+	if !ok {
 		return false
 	}
-	choices := make([]platform.Choice, 0, len(groups))
-	for _, group := range groups {
-		token := h.feishuWorkspaceChoices.issue(
-			feishuWorkspaceChoiceClaude, req.Route.ActorUserID, req.Route.BindingKey, normalizeClaudeWorkspaceRoot(group.Root),
-		)
-		choices = append(choices, platform.Choice{ID: "/cc cd " + token, Label: claudeWorkspaceGroupLabel(group)})
-	}
 	choices, page := paginateFeishuChoices(choices, req.Page)
-	choices = appendFeishuPageNavigation(choices, "/cc", "workspaces", page)
+	for index := range choices {
+		token := h.feishuWorkspaceChoices.issue(
+			feishuWorkspaceChoiceClaude, req.Route.ActorUserID, req.Route.BindingKey, normalizeClaudeWorkspaceRoot(choices[index].ID),
+		)
+		choices[index].ID = "/cc cd " + token
+	}
+	choices = appendFeishuPageNavigation(choices, "/cc", "workspaces", page, snapshot)
 	card := claudeChoiceCard{
 		Prompt:  feishuPaginatedPrompt("Claude 工作空间\n请选择要进入的工作空间。", page),
 		Choices: choices, Meta: req.Metadata,
@@ -142,26 +150,71 @@ func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest
 	return h.askFeishuClaudeChoices(req.Context, req.Reply, card)
 }
 
+func (h *Handler) loadFeishuClaudeWorkspaceSnapshot(req claudeFeishuChoiceRequest, scope feishuNavigationSnapshotScope) ([]platform.Choice, string, bool) {
+	if req.Page > 0 && req.Snapshot != "" {
+		choices, ok := h.feishuNavSnapshots.load(req.Snapshot, scope)
+		return choices, req.Snapshot, ok
+	}
+	groups, err := h.claudeWorkspaceGroupsForRoute(req.Route)
+	if err != nil {
+		return nil, "", false
+	}
+	choices := make([]platform.Choice, 0, len(groups))
+	for _, group := range groups {
+		choices = append(choices, platform.Choice{
+			ID: normalizeClaudeWorkspaceRoot(group.Root), Label: claudeWorkspaceGroupLabel(group),
+		})
+	}
+	if len(choices) == 0 {
+		return nil, "", false
+	}
+	snapshot := h.feishuNavSnapshots.issue(scope, choices)
+	return choices, snapshot, true
+}
+
 // sendFeishuClaudeSessionChoices 使用稳定 sessionId 构造会话切换按钮。
 func (h *Handler) sendFeishuClaudeSessionChoices(req claudeFeishuChoiceRequest) bool {
-	sessions, err := h.claudeSessionsForWorkspace(req.Route, req.WorkspaceRoot)
-	if err != nil {
-		return false
+	scope := feishuNavigationSnapshotScope{
+		AccountID: req.AccountID, ActorUserID: req.Route.ActorUserID, BindingKey: req.Route.BindingKey,
+		AgentKind: feishuWorkspaceChoiceClaude, Section: feishuNavigationSectionSessions,
+		WorkspaceRoot: normalizeClaudeWorkspaceRoot(req.WorkspaceRoot),
 	}
-	choices := make([]platform.Choice, 0, len(sessions)+1)
-	for _, session := range sessions {
-		choices = append(choices, platform.Choice{ID: "/cc switch " + strings.TrimSpace(session.ThreadID), Label: codexSessionDisplayName(session)})
+	choices, snapshot, ok := h.loadFeishuClaudeSessionSnapshot(req, scope)
+	if !ok {
+		return false
 	}
 	if len(choices) == 0 {
 		return false
 	}
 	choices, page := paginateFeishuChoices(choices, req.Page)
-	choices = appendFeishuPageNavigation(choices, "/cc", "sessions", page)
+	choices = appendFeishuPageNavigation(choices, "/cc", "sessions", page, snapshot)
 	choices = append(choices, feishuNavigationChoice("/cc cd ..", "← 返回上一级"))
 	prompt := feishuPaginatedPrompt(
 		fmt.Sprintf("%s 会话\n请选择要切换的会话。", shortCodexWorkspaceName(req.WorkspaceRoot)), page,
 	)
 	return h.askFeishuClaudeChoices(req.Context, req.Reply, claudeChoiceCard{Prompt: prompt, Choices: choices, Meta: req.Metadata})
+}
+
+func (h *Handler) loadFeishuClaudeSessionSnapshot(req claudeFeishuChoiceRequest, scope feishuNavigationSnapshotScope) ([]platform.Choice, string, bool) {
+	if req.Page > 0 && req.Snapshot != "" {
+		choices, ok := h.feishuNavSnapshots.load(req.Snapshot, scope)
+		return choices, req.Snapshot, ok
+	}
+	sessions, err := h.claudeSessionsForWorkspace(req.Route, req.WorkspaceRoot)
+	if err != nil {
+		return nil, "", false
+	}
+	choices := make([]platform.Choice, 0, len(sessions))
+	for _, session := range sessions {
+		choices = append(choices, platform.Choice{
+			ID: "/cc switch " + strings.TrimSpace(session.ThreadID), Label: codexSessionDisplayName(session),
+		})
+	}
+	if len(choices) == 0 {
+		return nil, "", false
+	}
+	snapshot := h.feishuNavSnapshots.issue(scope, choices)
+	return choices, snapshot, true
 }
 
 // askFeishuClaudeChoices 统一附加飞书会话路由并发送选择卡片。

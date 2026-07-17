@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/google/uuid"
 )
 
 const (
@@ -21,26 +22,30 @@ const (
 	approvalPromptMarker   = "请求执行敏感操作，请确认："
 	approvalSummaryMaxRune = 160
 	modelSettingAgentKey   = "model_setting_agent"
+	cardRevisionValueKey   = "card_revision"
 )
 
 type parsedCardAction struct {
-	Action      string
-	Choice      string
-	Kind        string
-	Label       string
-	Summary     string
-	TaskCard    string
-	Approval    string
-	Owner       string
-	Panel       bool
-	Conv        string
-	SessionKey  string
-	AgentName   string
-	UserID      string
-	UserAliases []string
-	ChatID      string
-	MessageID   string
-	Status      string
+	Action             string
+	Choice             string
+	Kind               string
+	Label              string
+	Summary            string
+	TaskCard           string
+	Approval           string
+	Owner              string
+	Panel              bool
+	Conv               string
+	SessionKey         string
+	AgentName          string
+	UserID             string
+	UserAliases        []string
+	ChatID             string
+	MessageID          string
+	EventID            string
+	CardRevision       string
+	NavigationSnapshot string
+	Status             string
 }
 
 type choiceButtonOptions struct {
@@ -48,6 +53,7 @@ type choiceButtonOptions struct {
 	Kind            string
 	AgentName       string
 	Summary         string
+	Revision        string
 }
 
 // buildChoiceCard 构建飞书按钮卡片，每个按钮携带可回放到业务层的动作值。
@@ -104,7 +110,7 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 }
 
 func choiceOptions(prompt string, choices []platform.Choice, conversationKey string) choiceButtonOptions {
-	options := choiceButtonOptions{ConversationKey: conversationKey}
+	options := choiceButtonOptions{ConversationKey: conversationKey, Revision: uuid.NewString()}
 	for _, choice := range choices {
 		if options.Kind == "" {
 			options.Kind = strings.TrimSpace(choice.Metadata[platform.ChoiceMetadataInteractionKind])
@@ -137,10 +143,11 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 			navigationStarted = true
 		}
 		value := map[string]string{
-			"action": cardActionChoice,
-			"choice": id,
-			"conv":   options.ConversationKey,
-			"label":  label,
+			"action":             cardActionChoice,
+			"choice":             id,
+			"conv":               options.ConversationKey,
+			"label":              label,
+			cardRevisionValueKey: options.Revision,
 		}
 		if options.Kind != "" {
 			value["kind"] = options.Kind
@@ -162,6 +169,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		}
 		if agentName := strings.TrimSpace(choice.Metadata[modelSettingAgentKey]); agentName != "" {
 			value[modelSettingAgentKey] = agentName
+		}
+		if snapshot := strings.TrimSpace(choice.Metadata[platform.ChoiceMetadataNavigationSnapshot]); snapshot != "" {
+			value[platform.ChoiceMetadataNavigationSnapshot] = snapshot
 		}
 		buttonType := "primary"
 		if choice.Metadata[platform.ChoiceMetadataButtonType] == platform.ChoiceButtonTypeDefault {
