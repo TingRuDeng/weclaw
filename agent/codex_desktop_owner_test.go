@@ -315,6 +315,81 @@ func TestHandoffCodexRuntimeRemoteRecoversWhenDesktopOwnershipIsUnknown(t *testi
 	}
 }
 
+func TestHandoffCodexRuntimeRemoteRecoversPendingFirstTurnWithoutCheckpoint(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr:      errors.New("dial unix codex-ipc.sock: connect: connection refused"),
+		socketExists: true, processExists: true,
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	a.restartCodexAppServerCall = func(context.Context) error { return nil }
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/resume":
+			return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil
+		case "thread/read":
+			return nil, errors.New("agent error: thread thread-new is not materialized yet; includeTurns is unavailable before first user message")
+		default:
+			t.Fatalf("unexpected rpc method %s", method)
+			return nil, nil
+		}
+	}
+	req := remoteCodexRuntimeRequest("thread-new", "route-1", 1)
+
+	binding, err := a.HandoffCodexRuntime(context.Background(), req)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.State.ThreadID != "thread-new" {
+		t.Fatalf("binding=%#v error=%v", binding, err)
+	}
+}
+
+func TestHandoffCodexRuntimeRemoteStillRequiresCheckpointForMaterializedThread(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr:      errors.New("dial unix codex-ipc.sock: connect: connection refused"),
+		socketExists: true, processExists: true,
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	a.restartCodexAppServerCall = func(context.Context) error { return nil }
+	a.rpcCall = codexHandoffRPCFake(t, "thread-old", "turn-1")
+	req := remoteCodexRuntimeRequest("thread-old", "route-1", 1)
+
+	_, err := a.HandoffCodexRuntime(context.Background(), req)
+
+	if !errors.Is(err, ErrCodexCheckpointRequired) {
+		t.Fatalf("error=%v, want checkpoint required", err)
+	}
+}
+
+func TestHandoffCodexRuntimeRemoteRejectsPartialCheckpointBeforeRecovery(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr:      errors.New("dial unix codex-ipc.sock: connect: connection refused"),
+		socketExists: true, processExists: true,
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	restarted := false
+	a.restartCodexAppServerCall = func(context.Context) error {
+		restarted = true
+		return nil
+	}
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		t.Fatal("partial checkpoint must fail before app-server recovery")
+		return nil, nil
+	}
+	req := remoteCodexRuntimeRequest("thread-new", "route-1", 1)
+	req.Checkpoint = CodexRolloutCheckpoint{TurnID: "turn-unbacked"}
+
+	_, err := a.HandoffCodexRuntime(context.Background(), req)
+
+	if !errors.Is(err, ErrCodexCheckpointRequired) || restarted {
+		t.Fatalf("error=%v restarted=%v", err, restarted)
+	}
+}
+
 func TestHandoffCodexRuntimeRejectsActiveWriter(t *testing.T) {
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),

@@ -163,8 +163,11 @@ func codexProbeError(loadErr error) error {
 }
 
 func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
-	if err := validateCodexRolloutCheckpoint(req.Checkpoint); err != nil {
-		return CodexThreadBinding{}, err
+	pendingFirstTurnCandidate := emptyCodexRolloutCheckpoint(req.Checkpoint)
+	if !pendingFirstTurnCandidate {
+		if err := validateCodexRolloutCheckpoint(req.Checkpoint); err != nil {
+			return CodexThreadBinding{}, err
+		}
 	}
 	if err := a.restartCodexAppServer(ctx); err != nil {
 		return CodexThreadBinding{}, err
@@ -172,15 +175,23 @@ func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRu
 	if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
 		return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)
 	}
-	if err := validateCodexRolloutCheckpoint(req.Checkpoint); err != nil {
-		return CodexThreadBinding{}, err
-	}
-	state, err := a.readCodexAppServerThreadState(ctx, req.Ref.ThreadID)
+	state, pendingFirstTurn, err := a.readCodexAppServerThreadStateResult(ctx, req.Ref.ThreadID)
 	if err != nil {
 		return CodexThreadBinding{}, err
 	}
-	if checkpointTurnChanged(req.Checkpoint, state) {
-		return CodexThreadBinding{}, ErrCodexCheckpointChanged
+	if pendingFirstTurnCandidate {
+		// thread/start 在首条用户消息前不会生成 rollout；协议返回的未 materialize
+		// 状态是比文件检查点更强的“从未写入”证据，不能把它误判成冲突。
+		if !pendingFirstTurn {
+			return CodexThreadBinding{}, ErrCodexCheckpointRequired
+		}
+	} else {
+		if err := validateCodexRolloutCheckpoint(req.Checkpoint); err != nil {
+			return CodexThreadBinding{}, err
+		}
+		if checkpointTurnChanged(req.Checkpoint, state) {
+			return CodexThreadBinding{}, ErrCodexCheckpointChanged
+		}
 	}
 	a.mu.Lock()
 	a.threads[req.Ref.ConversationID] = req.Ref.ThreadID
@@ -191,6 +202,11 @@ func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRu
 		a.persistState()
 	}
 	return binding, err
+}
+
+func emptyCodexRolloutCheckpoint(checkpoint CodexRolloutCheckpoint) bool {
+	return strings.TrimSpace(checkpoint.Path) == "" && strings.TrimSpace(checkpoint.TurnID) == "" &&
+		checkpoint.Offset == 0 && checkpoint.Size == 0 && !checkpoint.Active
 }
 
 func validateCodexRolloutCheckpoint(checkpoint CodexRolloutCheckpoint) error {
@@ -214,6 +230,11 @@ func checkpointTurnChanged(checkpoint CodexRolloutCheckpoint, state CodexThreadS
 }
 
 func (a *ACPAgent) readCodexAppServerThreadState(ctx context.Context, threadID string) (CodexThreadState, error) {
+	state, _, err := a.readCodexAppServerThreadStateResult(ctx, threadID)
+	return state, err
+}
+
+func (a *ACPAgent) readCodexAppServerThreadStateResult(ctx context.Context, threadID string) (CodexThreadState, bool, error) {
 	threadID = strings.TrimSpace(threadID)
 	result, err := a.rpc(ctx, "thread/read", map[string]interface{}{
 		"threadId": threadID, "includeTurns": true,
@@ -222,13 +243,13 @@ func (a *ACPAgent) readCodexAppServerThreadState(ctx context.Context, threadID s
 		// thread/start 返回的新 thread 在收到首条用户消息前尚未 materialize。
 		// 此时没有 turn 是确定的空闲态，不能把协议限制升级为写入冲突。
 		if isCodexThreadPendingFirstTurn(err) {
-			return CodexThreadState{ThreadID: threadID}, nil
+			return CodexThreadState{ThreadID: threadID}, true, nil
 		}
-		return CodexThreadState{}, err
+		return CodexThreadState{}, false, err
 	}
 	var response codexThreadReadResponse
 	if err := json.Unmarshal(result, &response); err != nil {
-		return CodexThreadState{}, fmt.Errorf("parse thread/read result: %w", err)
+		return CodexThreadState{}, false, fmt.Errorf("parse thread/read result: %w", err)
 	}
-	return codexThreadStateFromSnapshot(response.Thread), nil
+	return codexThreadStateFromSnapshot(response.Thread), false, nil
 }

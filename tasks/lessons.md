@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-17 Codex 首轮前跨重启恢复不能要求 rollout 文件
+
+- 触发条件：`thread/start` 已创建并接管新 thread，但尚未收到第一条用户消息；WeClaw 随后重启，用户显式执行 `/cx owner remote` 恢复运行通道。
+- 规则：普通已 materialize 会话的远程恢复仍必须前后校验稳定 rollout checkpoint；唯有 checkpoint 全空且 app-server 在 `thread/resume` 后明确返回“首条消息前未 materialize”时，才可把该协议结果作为“从未发生写入”的强证据恢复空会话。
+- 反例：对所有 remote 恢复统一先要求 rollout 路径；新会话按协议尚未生成 rollout，因此每次重启后都会被误标为写入冲突，即使 owner、ACP mapping 和 thread 均正确。
+- 正确做法：先区分“全空 checkpoint 候选”和非法/变化的 checkpoint；候选仅在 app-server 确认 pending first turn 后放行。若 thread/read 已有 turns、返回其他错误或 checkpoint 非空但无效，继续 fail-closed。回归测试必须同时覆盖空会话恢复成功和 materialized 会话无 checkpoint 仍拒绝。
+- 来源：2026-07-17 `v0.1.194` 实机 `/cx owner remote` 日志确认目标新 thread 的 owner 已提交、Desktop IPC 不可达，最终仅因 `Codex rollout checkpoint 缺失` 被标为写入冲突。
+
 ## 2026-07-17 Codex 展示目录不得清除远程会话绑定
 
 - 触发条件：`/cx new` 已创建并接管 thread，但首条用户消息尚未让该 thread 写入 Codex App 展示目录；随后执行 `/cx status`、`/cx ls` 或其他读取会话目录的命令。
