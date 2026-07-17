@@ -60,8 +60,10 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 		t.Fatalf("second page=%#v，期望第二页卡片", second.Choices)
 	}
 	choices := second.Choices[0].Choices
-	if len(choices) != 3 || choices[0].ID != "/cx cd 7" || choices[1].ID != "/cx cd 8" || choices[2].ID != "/cx page workspaces 1" {
-		t.Fatalf("second choices=%#v，分页后必须保留全局编号", choices)
+	if len(choices) != 3 || choices[0].Label != "workspace-07" || choices[1].Label != "workspace-08" ||
+		!isTestFeishuWorkspaceChoice(choices[0].ID, "/cx") || !isTestFeishuWorkspaceChoice(choices[1].ID, "/cx") ||
+		choices[2].ID != "/cx page workspaces 1" {
+		t.Fatalf("second choices=%#v，分页后必须使用稳定工作空间 token", choices)
 	}
 }
 
@@ -100,8 +102,11 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	if len(choices) != 2 {
 		t.Fatalf("workspace choices=%#v, want two workspaces", choices)
 	}
-	if choices[0].ID != "/cx cd 0" || choices[0].Label != "alpha" {
-		t.Fatalf("first workspace choice=%#v, want /cx cd 0 alpha", choices[0])
+	if !isTestFeishuWorkspaceChoice(choices[0].ID, "/cx") || choices[0].Label != "alpha" {
+		t.Fatalf("first workspace choice=%#v, want opaque alpha token", choices[0])
+	}
+	if strings.Contains(choices[0].ID, workspaceA) {
+		t.Fatalf("workspace choice leaked absolute path: %q", choices[0].ID)
 	}
 	for _, choice := range choices {
 		if choice.Metadata["feishu_session_key"] != sessionKey {
@@ -110,6 +115,45 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	}
 	if len(reply.Texts) != 0 {
 		t.Fatalf("texts=%#v, want no text reply when card choices are available", reply.Texts)
+	}
+}
+
+func TestFeishuCodexWorkspaceChoiceKeepsOriginalTargetAfterCatalogReorder(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir, root := t.TempDir(), t.TempDir()
+	beta := filepath.Join(root, "beta")
+	alpha := filepath.Join(root, "alpha")
+	h.SetAllowedWorkspaceRoots([]string{root})
+	writeLocalCodexSession(t, codexDir, "thread-beta-1", beta, "Beta 1", "2026-04-29T09:00:00Z")
+	writeLocalCodexSession(t, codexDir, "thread-beta-2", beta, "Beta 2", "2026-04-29T08:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	h.defaultName = "codex"
+	h.agents["codex"] = &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}}
+	sessionKey := "feishu:tenant_1:dm:oc_1:ou_user"
+	listed := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", Text: "/cx ls",
+		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, listed)
+	if len(listed.Choices) != 1 || len(listed.Choices[0].Choices) != 1 {
+		t.Fatalf("listed choices=%#v", listed.Choices)
+	}
+	staleChoice := listed.Choices[0].Choices[0].ID
+
+	writeLocalCodexSession(t, codexDir, "thread-alpha", alpha, "Alpha", "2026-04-29T10:00:00Z")
+	clicked := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": staleChoice}},
+		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, clicked)
+
+	bindingKey := codexBindingKey(sessionKey, "codex")
+	workspace, ok := h.codexBrowseWorkspace(bindingKey)
+	if !ok || workspace != normalizeCodexWorkspaceRoot(beta) {
+		t.Fatalf("workspace=%q ok=%t, want original beta %q; choice=%q texts=%#v", workspace, ok, beta, staleChoice, clicked.Texts)
 	}
 }
 
@@ -163,10 +207,11 @@ func TestFeishuCodexWorkspaceChoiceKeepsAliasAdminAccess(t *testing.T) {
 		t.Fatalf("workspace choices=%#v, want two admin-visible workspaces", reply.Choices)
 	}
 
+	workspaceChoice := reply.Choices[0].Choices[1].ID
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_open", UserAliases: []string{"on_admin"},
 		MessageID:  "feishu-alias-admin-choice",
-		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cx cd 1"}},
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": workspaceChoice}},
 		Metadata:   map[string]string{"feishu_session_key": sessionKey},
 	}, reply)
 
@@ -236,6 +281,7 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	workspaceChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "weclaw", nil)
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
@@ -243,7 +289,7 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 		MessageID: "feishu-cx-workspace",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "/cx cd 0"},
+			Value:  map[string]string{"choice": workspaceChoice},
 		},
 	}, reply)
 
@@ -284,6 +330,7 @@ func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t 
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	workspaceChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "weclaw", nil)
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
@@ -291,7 +338,7 @@ func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t 
 		MessageID: "feishu-cx-workspace-single",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "/cx cd 0"},
+			Value:  map[string]string{"choice": workspaceChoice},
 		},
 	}, reply)
 
@@ -326,6 +373,7 @@ func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 		},
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	workspaceChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "alpha", nil)
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
@@ -333,7 +381,7 @@ func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 		MessageID: "feishu-cx-workspace",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "/cx cd 0"},
+			Value:  map[string]string{"choice": workspaceChoice},
 		},
 	}, reply)
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
@@ -350,7 +398,7 @@ func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 		t.Fatalf("choices=%#v, want session card then workspace card", reply.Choices)
 	}
 	workspaceChoices := reply.Choices[1].Choices
-	if len(workspaceChoices) != 2 || workspaceChoices[0].ID != "/cx cd 0" || workspaceChoices[0].Label != "alpha" {
+	if len(workspaceChoices) != 2 || !isTestFeishuWorkspaceChoice(workspaceChoices[0].ID, "/cx") || workspaceChoices[0].Label != "alpha" {
 		t.Fatalf("workspace choices=%#v, want workspace list after back", workspaceChoices)
 	}
 }
@@ -371,6 +419,7 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	alphaChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "alpha", nil)
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
@@ -378,17 +427,22 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 		MessageID: "feishu-cx-alpha",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "/cx cd 0"},
+			Value:  map[string]string{"choice": alphaChoice},
 		},
 	}, reply)
 	staleAlphaChoice := reply.Choices[0].Choices[0].ID
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cx cd .."}},
+	}, platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true}))
+	betaChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "beta", nil)
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-beta",
 		RawCommand: &platform.CardAction{
 			Action: "choice",
-			Value:  map[string]string{"choice": "/cx cd 1"},
+			Value:  map[string]string{"choice": betaChoice},
 		},
 	}, reply)
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
@@ -412,6 +466,37 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	if len(reply.Texts) == 0 || !strings.Contains(reply.Texts[len(reply.Texts)-1], "模型: gpt-5.5") {
 		t.Fatalf("card switch should show session model status, texts=%#v", reply.Texts)
 	}
+}
+
+func requireFeishuCodexWorkspaceChoice(t *testing.T, h *Handler, userID string, sessionKey string, label string, aliases []string) string {
+	t.Helper()
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	metadata := map[string]string{}
+	if sessionKey != "" {
+		metadata[feishuSessionMetadataKey] = sessionKey
+	}
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: userID, UserAliases: aliases,
+		Text: "/cx ls", Metadata: metadata,
+	}, reply)
+	if len(reply.Choices) != 1 {
+		t.Fatalf("workspace choices=%#v texts=%#v", reply.Choices, reply.Texts)
+	}
+	for _, choice := range reply.Choices[0].Choices {
+		if choice.Label == label {
+			if !isTestFeishuWorkspaceChoice(choice.ID, "/cx") {
+				t.Fatalf("workspace choice=%#v, want opaque token", choice)
+			}
+			return choice.ID
+		}
+	}
+	t.Fatalf("workspace %q not found in %#v", label, reply.Choices[0].Choices)
+	return ""
+}
+
+func isTestFeishuWorkspaceChoice(command string, prefix string) bool {
+	fields := strings.Fields(command)
+	return len(fields) == 3 && fields[0] == prefix && fields[1] == "cd" && isFeishuWorkspaceChoiceToken(fields[2])
 }
 
 func TestFeishuCodexInvalidWorkspaceReturnsTextError(t *testing.T) {

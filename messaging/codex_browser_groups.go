@@ -118,6 +118,21 @@ func switchableCodexSessions(sessions []codexWorkspaceView) []codexWorkspaceView
 func (h *Handler) findCodexWorkspaceGroupForAccess(bindingKey string, actorUserID string, admin bool, target string) (codexWorkspaceGroup, error) {
 	target = strings.TrimSpace(target)
 	groups := h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
+	if isFeishuWorkspaceChoiceToken(target) {
+		workspaceRoot, ok := h.feishuWorkspaceChoices.consume(
+			target, feishuWorkspaceChoiceCodex, actorUserID, bindingKey,
+		)
+		if !ok {
+			return codexWorkspaceGroup{}, fmt.Errorf("工作空间卡片已过期，请重新发送 /cx ls。")
+		}
+		workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+		for _, group := range groups {
+			if normalizeCodexWorkspaceRoot(group.Root) == workspaceRoot {
+				return group, nil
+			}
+		}
+		return codexWorkspaceGroup{}, fmt.Errorf("工作空间卡片已过期，请重新发送 /cx ls。")
+	}
 	if index, ok := parseCodexListIndex(target); ok {
 		if index < 0 || index >= len(groups) {
 			return codexWorkspaceGroup{}, fmt.Errorf("工作空间编号不存在，请先发送 /cx ls 查看。")

@@ -51,6 +51,10 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 		return true
 	}
 	fields := strings.Fields(trimmed)
+	if isLegacyFeishuWorkspaceChoice(msg, trimmed) {
+		sendPlatformText(ctx, reply, msg.UserID, "工作空间卡片已过期，请重新发送 /cx ls。")
+		return true
+	}
 	if page, ok := parseFeishuNavigationPage(fields, "/cx"); ok {
 		req.page = page
 		req.result = cardNavigationResult("当前导航状态已变化，请发送 /cx ls 重新打开。")
@@ -174,12 +178,15 @@ func isFeishuCodexNavigationCommand(fields []string) bool {
 func (h *Handler) sendFeishuCodexWorkspaceChoices(req feishuCodexChoiceRequest) bool {
 	groups := h.codexWorkspaceGroupsForAccess(req.bindingKey, req.userID, req.admin)
 	choices := make([]platform.Choice, 0, len(groups))
-	for index, group := range groups {
+	for _, group := range groups {
 		if strings.TrimSpace(group.Name) == "" {
 			continue
 		}
+		token := h.feishuWorkspaceChoices.issue(
+			feishuWorkspaceChoiceCodex, req.userID, req.bindingKey, normalizeCodexWorkspaceRoot(group.Root),
+		)
 		choices = append(choices, platform.Choice{
-			ID:    fmt.Sprintf("/cx cd %d", index),
+			ID:    "/cx cd " + token,
 			Label: group.Name,
 		})
 	}

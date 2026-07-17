@@ -24,7 +24,8 @@ func TestFeishuClaudeSessionChoicesPaginateWithStableIDs(t *testing.T) {
 		})
 	}
 
-	first := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc cd 0"})
+	workspaceChoice := requireFeishuClaudeWorkspaceChoice(t, h, "feishu:user")
+	first := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: workspaceChoice})
 	if len(first.Choices) != 1 || len(first.Choices[0].Choices) != 9 {
 		t.Fatalf("first page=%#v，期望 7 个会话、下一页和返回", first.Choices)
 	}
@@ -68,6 +69,41 @@ func TestFeishuClaudeCcLsSendsAllowedACPWorkspaceChoices(t *testing.T) {
 	if len(reply.Texts) != 0 {
 		t.Fatalf("texts=%#v，卡片成功后不应重复文本", reply.Texts)
 	}
+	for _, choice := range reply.Choices[0].Choices {
+		if !isTestFeishuWorkspaceChoice(choice.ID, "/cc") || strings.Contains(choice.ID, allowedRoot) {
+			t.Fatalf("workspace choice=%#v，必须使用不泄露路径的 opaque token", choice)
+		}
+	}
+}
+
+func TestFeishuClaudeWorkspaceChoiceKeepsOriginalTargetAfterCatalogReorder(t *testing.T) {
+	h, ag := newClaudeFeishuCardHandler(t)
+	root := t.TempDir()
+	beta := filepath.Join(root, "beta")
+	alpha := filepath.Join(root, "alpha")
+	if err := os.MkdirAll(beta, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.SetAllowedWorkspaceRoots([]string{root})
+	ag.catalogSessions = []agent.ClaudeSession{
+		{ID: "session-beta-1", Cwd: beta, Title: "Beta 1"},
+		{ID: "session-beta-2", Cwd: beta, Title: "Beta 2"},
+	}
+	listed := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc ls"})
+	if len(listed.Choices) != 1 || len(listed.Choices[0].Choices) != 1 {
+		t.Fatalf("listed choices=%#v", listed.Choices)
+	}
+	staleChoice := listed.Choices[0].Choices[0].ID
+
+	if err := os.MkdirAll(alpha, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ag.catalogSessions = append(ag.catalogSessions, agent.ClaudeSession{ID: "session-alpha", Cwd: alpha, Title: "Alpha"})
+	clicked := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: staleChoice})
+	binding := h.ensureClaudeSessions().binding(claudeBindingKey("feishu:user", "claude"))
+	if binding.WorkspaceRoot != normalizeClaudeWorkspaceRoot(beta) {
+		t.Fatalf("binding=%+v, want original beta %q; choice=%q texts=%#v", binding, beta, staleChoice, clicked.Texts)
+	}
 }
 
 func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
@@ -86,11 +122,11 @@ func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
 	if len(listed.Texts) != 0 || len(listed.Choices) != 1 || len(listed.Choices[0].Choices) != 1 {
 		t.Fatalf("listed texts=%#v choices=%#v，空会话落入 ACP 目录前也应显示当前工作空间", listed.Texts, listed.Choices)
 	}
-	if choice := listed.Choices[0].Choices[0]; choice.ID != "/cc cd 0" || !strings.Contains(choice.Label, "当前新会话") {
+	if choice := listed.Choices[0].Choices[0]; !isTestFeishuWorkspaceChoice(choice.ID, "/cc") || !strings.Contains(choice.Label, "当前新会话") {
 		t.Fatalf("choice=%#v，期望标记当前暂态会话", choice)
 	}
 
-	opened := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc cd 0"})
+	opened := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: listed.Choices[0].Choices[0].ID})
 	if len(opened.Choices) != 0 || len(opened.Texts) != 1 || !strings.Contains(opened.Texts[0], "发送第一条消息") {
 		t.Fatalf("opened texts=%#v choices=%#v，暂态会话应提示先发送首条消息", opened.Texts, opened.Choices)
 	}
@@ -111,7 +147,8 @@ func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 		{ID: "session-new", Cwd: workspace, Title: "较新会话", UpdatedAt: "2026-07-13T10:00:00Z"},
 		{ID: "session-old", Cwd: workspace, Title: "较早会话", UpdatedAt: "2026-07-13T09:00:00Z"},
 	}
-	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc cd 0"})
+	workspaceChoice := requireFeishuClaudeWorkspaceChoice(t, h, "feishu:user")
+	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: workspaceChoice})
 
 	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 3 {
 		t.Fatalf("choices=%#v，期望会话与返回按钮", reply.Choices)
@@ -207,6 +244,19 @@ func newClaudeFeishuCardHandler(t *testing.T) (*Handler, *fakeClaudeSessionAgent
 	h.defaultName = "claude"
 	h.agents["claude"] = ag
 	return h, ag
+}
+
+func requireFeishuClaudeWorkspaceChoice(t *testing.T, h *Handler, sessionKey string) string {
+	t.Helper()
+	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: sessionKey, Text: "/cc ls"})
+	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) == 0 {
+		t.Fatalf("workspace choices=%#v texts=%#v", reply.Choices, reply.Texts)
+	}
+	choice := reply.Choices[0].Choices[0]
+	if !isTestFeishuWorkspaceChoice(choice.ID, "/cc") {
+		t.Fatalf("workspace choice=%#v, want opaque token", choice)
+	}
+	return choice.ID
 }
 
 type claudeFeishuTestRequest struct {

@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 DRY_RUN=0
-RUN_TESTS=1
 TAG=""
 
 TARGETS=(
@@ -24,7 +23,6 @@ usage() {
 选项:
   --next-patch   基于当前最大 vX.Y.Z tag 自动递增 patch 版本
   --dry-run      执行检查、测试和打包，但不创建 tag、不推送、不创建 release
-  --skip-tests   跳过测试，仅用于已经完成同等验证的紧急发布
   -h, --help     显示帮助
 EOF
 }
@@ -65,9 +63,6 @@ parse_args() {
         ;;
       --dry-run)
         DRY_RUN=1
-        ;;
-      --skip-tests)
-        RUN_TESTS=0
         ;;
       -h|--help)
         usage
@@ -123,12 +118,14 @@ check_tag_available() {
 }
 
 run_validations() {
-  [[ "$RUN_TESTS" -eq 1 ]] || return 0
+  local packages
   log "运行测试与静态检查"
   sh "$ROOT_DIR/scripts/install_test.sh"
   go mod tidy -diff
-  go test -count=1 -timeout 60s ./...
-  go test -race -count=1 -timeout 60s ./agent ./cmd ./messaging
+  packages="$(go list ./...)"
+  [[ -n "$packages" ]] || fail "go list ./... 未找到任何包，拒绝跳过测试"
+  go test -count=1 -timeout 120s ./...
+  go test -race -count=1 -timeout 180s ./...
   go vet ./...
   go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
   go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
@@ -177,8 +174,13 @@ create_release() {
 
 verify_release() {
   [[ "$DRY_RUN" -eq 0 ]] || return 0
-  local asset_count assets expected_asset expected_asset_count latest_tag target
+  local asset_count assets expected_asset expected_asset_count latest_tag release_info release_tag is_draft is_prerelease target
   log "验证 GitHub Release"
+  release_info="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json tagName,isDraft,isPrerelease --jq '[.tagName, (.isDraft | tostring), (.isPrerelease | tostring)] | @tsv')"
+  IFS=$'\t' read -r release_tag is_draft is_prerelease <<<"$release_info"
+  [[ "$release_tag" == "$TAG" ]] || fail "Release tag 为 $release_tag，期望 $TAG"
+  [[ "$is_draft" == "false" ]] || fail "Release 仍是 draft：$TAG"
+  [[ "$is_prerelease" == "false" ]] || fail "Release 仍是 prerelease：$TAG"
   asset_count="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json assets --jq '.assets | length')"
   expected_asset_count=$(( ${#TARGETS[@]} + 1 ))
   [[ "$asset_count" == "$expected_asset_count" ]] || fail "Release 资产数量异常：$asset_count，期望 $expected_asset_count"
@@ -190,6 +192,30 @@ verify_release() {
   grep -Fxq "checksums.txt" <<<"$assets" || fail "Release 缺少资产：checksums.txt"
   latest_tag="$(gh release view --repo TingRuDeng/weclaw --json tagName --jq '.tagName')"
   [[ "$latest_tag" == "$TAG" ]] || fail "latest release 指向 $latest_tag，期望 $TAG"
+
+  (
+    set -euo pipefail
+    local checksum_count checksum_names tmp_dir
+    tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/weclaw-release-verify.XXXXXX")"
+    cleanup() {
+      rm -rf "$tmp_dir"
+    }
+    trap cleanup EXIT
+
+    gh release download "$TAG" --repo TingRuDeng/weclaw --dir "$tmp_dir"
+    [[ -f "$tmp_dir/checksums.txt" ]] || fail "下载的 Release 缺少 checksums.txt"
+    checksum_names="$(awk 'NF >= 2 { name=$2; sub(/^\\*/, "", name); print name }' "$tmp_dir/checksums.txt")"
+    checksum_count="$(awk 'NF >= 2 { count++ } END { print count+0 }' "$tmp_dir/checksums.txt")"
+    [[ "$checksum_count" == "${#TARGETS[@]}" ]] || fail "checksums.txt 条目数异常：$checksum_count，期望 ${#TARGETS[@]}"
+    for target in "${TARGETS[@]}"; do
+      expected_asset="weclaw_${target//\//_}"
+      [[ -f "$tmp_dir/$expected_asset" ]] || fail "下载的 Release 缺少资产：$expected_asset"
+      grep -Fxq "$expected_asset" <<<"$checksum_names" || fail "checksums.txt 缺少资产：$expected_asset"
+    done
+    if ! (cd "$tmp_dir" && shasum -a 256 -c checksums.txt); then
+      fail "Release 资产 checksum 校验失败"
+    fi
+  )
 }
 
 release_target_supported() {

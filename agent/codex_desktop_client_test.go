@@ -255,6 +255,43 @@ func TestCodexDesktopClientKeepsConnectionAfterVersionlessClientStatusBroadcast(
 	}
 }
 
+func TestCodexDesktopClientKeepsConnectionAfterVersionlessQueryCacheInvalidateBroadcast(t *testing.T) {
+	broadcasts := make(chan codexDesktopEnvelope, 1)
+	release := make(chan struct{})
+	defer close(release)
+	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "client-1")
+		invalidate := []byte(`{"type":"broadcast","method":"query-cache-invalidate","params":{"queries":["thread-list"]}}`)
+		if err := writeCodexDesktopFrame(conn, invalidate); err != nil {
+			t.Errorf("write query cache invalidate broadcast: %v", err)
+			return
+		}
+		request := readCodexDesktopTestEnvelope(t, conn)
+		writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+			requestID: request.RequestID,
+			value:     map[string]bool{"ok": true},
+		})
+		<-release
+	})
+	options := codexDesktopTestOptions(dial)
+	options.onBroadcast = func(envelope codexDesktopEnvelope) { broadcasts <- envelope }
+	client := newCodexDesktopClient(options)
+	mustConnectCodexDesktopTestClient(t, client)
+
+	select {
+	case got := <-broadcasts:
+		if got.Method != "query-cache-invalidate" || got.Version != 0 {
+			t.Fatalf("broadcast = %s@%d", got.Method, got.Version)
+		}
+	case <-time.After(codexDesktopTestTimeout):
+		t.Fatal("versionless query cache invalidate broadcast was not dispatched")
+	}
+	result, err := client.Call(context.Background(), "thread-follower-load-complete-history", map[string]string{"conversationId": "thread-1"})
+	if err != nil || string(result) != `{"ok":true}` {
+		t.Fatalf("Call() after query cache invalidate broadcast = %s, %v", result, err)
+	}
+}
+
 func codexDesktopTestOptions(dial func(context.Context) (net.Conn, error)) codexDesktopClientOptions {
 	var next atomic.Int32
 	return codexDesktopClientOptions{

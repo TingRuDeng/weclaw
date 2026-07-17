@@ -49,6 +49,23 @@ func TestChatLegacyACPSendsSessionCancelWhenContextCancelled(t *testing.T) {
 	}
 }
 
+func TestFinishLegacyPromptSendsSessionCancelWhenRPCReturnsCanceled(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a := NewACPAgent(ACPAgentConfig{Command: "claude-agent-acp"})
+	var out bytes.Buffer
+	a.stdin = nopWriteCloser{Buffer: &out}
+
+	_, err := a.finishLegacyPrompt(legacyPromptState{ctx: ctx, sessionID: "session-1"}, nil, legacyPromptDone{err: context.Canceled})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("finish error=%v, want context canceled", err)
+	}
+	if got := out.String(); !strings.Contains(got, `"method":"session/cancel"`) || !strings.Contains(got, `"sessionId":"session-1"`) {
+		t.Fatalf("cancel notification missing: %s", got)
+	}
+}
+
 func TestChatCodexAppServerInterruptsTurnWhenContextCancelled(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())

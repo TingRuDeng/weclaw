@@ -46,7 +46,8 @@ var (
 		"thread-follower-permissions-request-approval-response": 1,
 	}
 	codexDesktopVersionlessBroadcasts = map[string]bool{
-		"client-status-changed": true,
+		"client-status-changed":  true,
+		"query-cache-invalidate": true,
 	}
 )
 

@@ -18,6 +18,22 @@ func TestReleaseScriptSyntaxAndHelp(t *testing.T) {
 	}
 }
 
+func TestReleaseScriptRejectsSkipTests(t *testing.T) {
+	script := releaseScriptPath(t)
+	content, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(content), "--skip-tests") || strings.Contains(string(content), "RUN_TESTS") {
+		t.Fatal("正式发布脚本不得保留跳过验证的入口")
+	}
+	command := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + " && parse_args v9.9.9 --skip-tests"
+	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", command)
+	if !strings.Contains(output, "未知参数") {
+		t.Fatalf("skip-tests rejection=%q", output)
+	}
+}
+
 func TestReleaseScriptNextPatchTag(t *testing.T) {
 	script := releaseScriptPath(t)
 	repo := t.TempDir()
@@ -143,20 +159,44 @@ func TestReleaseWorkflowsBuildOfficialMatrix(t *testing.T) {
 
 func TestReleaseScriptVerifiesEveryOfficialAssetName(t *testing.T) {
 	script := releaseScriptPath(t)
-	assets := strings.Join([]string{
+	fixture := validReleaseVerifyFixture()
+	fixture.assets = strings.Join([]string{
 		"weclaw_darwin_arm64",
 		"weclaw_darwin_amd64",
 		"weclaw_linux_arm64",
 		"weclaw_linux_amd64",
 		"checksums.txt",
 	}, `\n`)
-	command := releaseVerifyCommand(script, assets)
+	command := releaseVerifyCommand(script, fixture)
 	runReleaseScriptTestCommand(t, "", "bash", "-c", command)
 
-	wrongAssets := strings.Replace(assets, "weclaw_linux_amd64", "unexpected_asset", 1)
-	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, wrongAssets))
+	fixture.assets = strings.Replace(fixture.assets, "weclaw_linux_amd64", "unexpected_asset", 1)
+	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, fixture))
 	if !strings.Contains(output, "Release 缺少资产：weclaw_linux_amd64") {
 		t.Fatalf("missing asset rejection=%q", output)
+	}
+}
+
+func TestReleaseScriptRejectsDraftPrereleaseAndCorruptAsset(t *testing.T) {
+	script := releaseScriptPath(t)
+	tests := []struct {
+		name   string
+		mutate func(*releaseVerifyFixture)
+		want   string
+	}{
+		{"draft", func(f *releaseVerifyFixture) { f.draft = true }, "draft"},
+		{"prerelease", func(f *releaseVerifyFixture) { f.prerelease = true }, "prerelease"},
+		{"corrupt checksum", func(f *releaseVerifyFixture) { f.corrupt = true }, "checksum"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := validReleaseVerifyFixture()
+			test.mutate(&fixture)
+			output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, fixture))
+			if !strings.Contains(strings.ToLower(output), test.want) {
+				t.Fatalf("rejection=%q, want %q", output, test.want)
+			}
+		})
 	}
 }
 
@@ -185,6 +225,22 @@ func TestReleaseValidationRunsTidyAndStaticcheck(t *testing.T) {
 		if !strings.Contains(text, "go mod tidy -diff") || !strings.Contains(text, staticcheck) {
 			t.Fatalf("%s must gate go.mod drift and pinned staticcheck", path)
 		}
+	}
+}
+
+func TestReleaseValidationRunsFullRepositoryRaceAndRejectsNoPackages(t *testing.T) {
+	content, err := os.ReadFile(releaseScriptPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, required := range []string{`packages="$(go list ./...)"`, `[[ -n "$packages" ]]`, "go test -race -count=1 -timeout 180s ./..."} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("release validation missing %q", required)
+		}
+	}
+	if strings.Contains(text, "./agent ./cmd ./messaging") {
+		t.Fatal("release race gate must not use a scoped package list")
 	}
 }
 
@@ -313,8 +369,47 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func releaseVerifyCommand(script string, assets string) string {
+type releaseVerifyFixture struct {
+	assets     string
+	tag        string
+	draft      bool
+	prerelease bool
+	corrupt    bool
+}
+
+func validReleaseVerifyFixture() releaseVerifyFixture {
+	return releaseVerifyFixture{
+		assets: strings.Join([]string{
+			"weclaw_darwin_arm64",
+			"weclaw_darwin_amd64",
+			"weclaw_linux_arm64",
+			"weclaw_linux_amd64",
+			"checksums.txt",
+		}, `\n`),
+		tag: "v9.9.9",
+	}
+}
+
+func releaseVerifyCommand(script string, fixture releaseVerifyFixture) string {
+	draft := "false"
+	if fixture.draft {
+		draft = "true"
+	}
+	prerelease := "false"
+	if fixture.prerelease {
+		prerelease = "true"
+	}
+	corrupt := "0"
+	if fixture.corrupt {
+		corrupt = "1"
+	}
 	return "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
-		`gh() { case "$*" in *".assets | length"*) echo 5 ;; *".assets[].name"*) printf '%b\n' "` + assets + `" ;; *"--json tagName"*) echo v9.9.9 ;; esac; } && ` +
+		`FAKE_CORRUPT=` + corrupt + ` && ` +
+		`gh() { ` +
+		`if [[ "$1 $2" == "release download" ]]; then local dir=""; while (($#)); do if [[ "$1" == "--dir" ]]; then dir="$2"; shift 2; else shift; fi; done; mkdir -p "$dir"; ` +
+		`for name in weclaw_darwin_arm64 weclaw_darwin_amd64 weclaw_linux_arm64 weclaw_linux_amd64; do printf '%s\n' "$name" > "$dir/$name"; done; ` +
+		`(cd "$dir" && shasum -a 256 weclaw_* > checksums.txt); if [[ "$FAKE_CORRUPT" == 1 ]]; then printf 'corrupt\n' >> "$dir/weclaw_linux_amd64"; fi; return 0; fi; ` +
+		`case "$*" in *".assets | length"*) echo 5 ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
+		`*"@tsv"*) printf '%s\t%s\t%s\n' "` + fixture.tag + `" "` + draft + `" "` + prerelease + `" ;; *"--json tagName"*) echo "` + fixture.tag + `" ;; esac; } && ` +
 		`DRY_RUN=0 TAG=v9.9.9 verify_release`
 }
