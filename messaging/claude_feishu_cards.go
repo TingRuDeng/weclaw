@@ -43,6 +43,10 @@ func (h *Handler) handleFeishuClaudeSessionCommand(req claudeFeishuCommandReques
 		return true
 	}
 	fields := strings.Fields(req.Trimmed)
+	if isLegacyFeishuWorkspaceChoice(msg, req.Trimmed) {
+		sendPlatformText(req.Context, req.Reply, msg.UserID, "工作空间卡片已过期，请重新发送 /cc ls。")
+		return true
+	}
 	_, paginated := parseFeishuNavigationPage(fields, "/cc")
 	result := cardNavigationResult("当前导航状态已变化，请发送 /cc ls 重新打开。")
 	if !paginated {
@@ -116,15 +120,18 @@ func isFeishuClaudeNavigationCommand(fields []string) bool {
 	return ok
 }
 
-// sendFeishuClaudeWorkspaceChoices 将权限过滤后的工作空间映射为稳定编号按钮。
+// sendFeishuClaudeWorkspaceChoices 将权限过滤后的工作空间映射为短期 opaque token 按钮。
 func (h *Handler) sendFeishuClaudeWorkspaceChoices(req claudeFeishuChoiceRequest) bool {
 	groups, err := h.claudeWorkspaceGroupsForRoute(req.Route)
 	if err != nil {
 		return false
 	}
 	choices := make([]platform.Choice, 0, len(groups))
-	for index, group := range groups {
-		choices = append(choices, platform.Choice{ID: fmt.Sprintf("/cc cd %d", index), Label: claudeWorkspaceGroupLabel(group)})
+	for _, group := range groups {
+		token := h.feishuWorkspaceChoices.issue(
+			feishuWorkspaceChoiceClaude, req.Route.ActorUserID, req.Route.BindingKey, normalizeClaudeWorkspaceRoot(group.Root),
+		)
+		choices = append(choices, platform.Choice{ID: "/cc cd " + token, Label: claudeWorkspaceGroupLabel(group)})
 	}
 	choices, page := paginateFeishuChoices(choices, req.Page)
 	choices = appendFeishuPageNavigation(choices, "/cc", "workspaces", page)

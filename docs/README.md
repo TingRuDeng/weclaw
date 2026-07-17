@@ -71,9 +71,11 @@ full:
 
 ```bash
 go test ./... -count=1 -timeout 120s
+go test -race ./... -count=1 -timeout 180s
 go vet ./...
 go mod tidy -diff
 go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 git diff --check
 ```
 

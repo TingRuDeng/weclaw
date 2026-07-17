@@ -103,19 +103,35 @@ func (h *Handler) claudeWorkspaceGroupsForRoute(route claudeSessionRoute) ([]cod
 	return sortedCodexWorkspaceGroups(byRoot), nil
 }
 
-// findClaudeWorkspaceGroupForRoute 按稳定编号或名称解析可访问工作空间。
+// findClaudeWorkspaceGroupForRoute 按卡片 token、手工编号或名称解析可访问工作空间。
 func (h *Handler) findClaudeWorkspaceGroupForRoute(route claudeSessionRoute, target string) (codexWorkspaceGroup, error) {
 	groups, err := h.claudeWorkspaceGroupsForRoute(route)
 	if err != nil {
 		return codexWorkspaceGroup{}, err
 	}
-	if index, ok := parseCodexListIndex(strings.TrimSpace(target)); ok {
+	target = strings.TrimSpace(target)
+	if isFeishuWorkspaceChoiceToken(target) {
+		workspaceRoot, ok := h.feishuWorkspaceChoices.consume(
+			target, feishuWorkspaceChoiceClaude, route.ActorUserID, route.BindingKey,
+		)
+		if !ok {
+			return codexWorkspaceGroup{}, fmt.Errorf("工作空间卡片已过期，请重新发送 /cc ls。")
+		}
+		workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
+		for _, group := range groups {
+			if normalizeClaudeWorkspaceRoot(group.Root) == workspaceRoot {
+				return group, nil
+			}
+		}
+		return codexWorkspaceGroup{}, fmt.Errorf("工作空间卡片已过期，请重新发送 /cc ls。")
+	}
+	if index, ok := parseCodexListIndex(target); ok {
 		if index < 0 || index >= len(groups) {
 			return codexWorkspaceGroup{}, fmt.Errorf("工作空间编号不存在，请先发送 /cc ls 查看。")
 		}
 		return groups[index], nil
 	}
-	return findClaudeWorkspaceGroupByName(groups, strings.TrimSpace(target))
+	return findClaudeWorkspaceGroupByName(groups, target)
 }
 
 func findClaudeWorkspaceGroupByName(groups []codexWorkspaceGroup, target string) (codexWorkspaceGroup, error) {

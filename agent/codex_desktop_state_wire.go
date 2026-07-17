@@ -22,6 +22,7 @@ var codexDesktopIgnoredStateBroadcasts = map[string]bool{
 	"thread-read-state-changed":       true,
 	"thread-queued-followups-changed": true,
 	"client-status-changed":           true,
+	"query-cache-invalidate":          true,
 }
 
 // applyEnvelope 校验并分派 thread-stream-state-changed 广播。

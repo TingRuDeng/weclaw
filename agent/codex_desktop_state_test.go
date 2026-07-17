@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+func TestCodexDesktopStateIgnoresVersionlessQueryCacheInvalidate(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	update, err := store.applyEnvelope(1, codexDesktopEnvelope{
+		Type: codexDesktopEnvelopeBroadcast, Method: "query-cache-invalidate",
+		Params: json.RawMessage(`{"queries":["thread-list"]}`),
+	})
+	if err != nil {
+		t.Fatalf("applyEnvelope() error = %v", err)
+	}
+	if update.Applied || len(update.Events) != 0 {
+		t.Fatalf("update = %#v, want ignored broadcast", update)
+	}
+}
+
 func TestCodexDesktopStateRejectsPatchWithoutBaseline(t *testing.T) {
 	requested := make(chan string, 1)
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{

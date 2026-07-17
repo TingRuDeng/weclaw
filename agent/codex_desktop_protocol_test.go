@@ -46,6 +46,18 @@ func TestCodexDesktopEnvelopeAcceptsVersionlessClientStatusBroadcast(t *testing.
 	}
 }
 
+func TestCodexDesktopEnvelopeAcceptsVersionlessQueryCacheInvalidateBroadcast(t *testing.T) {
+	payload := []byte(`{"type":"broadcast","method":"query-cache-invalidate","params":{"queries":["thread-list"]}}`)
+
+	envelope, err := decodeCodexDesktopEnvelope(payload)
+	if err != nil {
+		t.Fatalf("decodeCodexDesktopEnvelope() error = %v", err)
+	}
+	if envelope.Method != "query-cache-invalidate" || envelope.Version != 0 {
+		t.Fatalf("method/version = %s@%d", envelope.Method, envelope.Version)
+	}
+}
+
 func TestCodexDesktopEnvelopeKeepsVersionRequiredForThreadBroadcast(t *testing.T) {
 	payload := []byte(`{"type":"broadcast","method":"thread-stream-state-changed","params":{}}`)
 
@@ -75,6 +87,8 @@ func TestCodexDesktopEnvelopeRejectsMissingRequiredFields(t *testing.T) {
 		{"broadcast null params", `{"type":"broadcast","version":11,"method":"thread-stream-state-changed","params":null}`, "params"},
 		{"versionless status broadcast missing params", `{"type":"broadcast","method":"client-status-changed"}`, "params"},
 		{"status broadcast negative version", `{"type":"broadcast","version":-1,"method":"client-status-changed","params":{}}`, "version"},
+		{"versionless query cache broadcast missing params", `{"type":"broadcast","method":"query-cache-invalidate"}`, "params"},
+		{"query cache broadcast negative version", `{"type":"broadcast","version":-1,"method":"query-cache-invalidate","params":{}}`, "version"},
 		{"versionless status request remains invalid", `{"type":"request","requestId":"request-1","method":"client-status-changed","params":{}}`, "version"},
 		{"response missing resultType", `{"type":"response","requestId":"response-1"}`, "resultType"},
 		{"success response missing result", `{"type":"response","requestId":"response-1","resultType":"success"}`, "result"},
