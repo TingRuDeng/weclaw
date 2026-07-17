@@ -269,6 +269,52 @@ func TestHandoffCodexRuntimeRemoteRefreshesReleasedThread(t *testing.T) {
 	}
 }
 
+func TestHandoffCodexRuntimeRemoteRecoversWhenDesktopOwnershipIsUnknown(t *testing.T) {
+	tests := []struct {
+		name     string
+		conflict bool
+		loadErr  error
+	}{
+		{name: "restart leaves runtime unknown", loadErr: errors.New("dial unix codex-ipc.sock: connect: connection refused")},
+		{name: "previous handoff marked conflict", conflict: true, loadErr: context.DeadlineExceeded},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
+			content := []byte("{\"type\":\"event_msg\"}\n")
+			if err := os.WriteFile(rollout, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			probe := &codexDesktopOwnerProbeFake{
+				loadErr: test.loadErr, socketExists: true, processExists: true,
+			}
+			a := newACPAgent(ACPAgentConfig{
+				Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+			}, acpAgentOptions{desktopProbe: probe})
+			a.restartCodexAppServerCall = func(context.Context) error { return nil }
+			a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
+			req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+			req.Checkpoint = CodexRolloutCheckpoint{
+				Path: rollout, Offset: int64(len(content)), Size: int64(len(content)), TurnID: "turn-1",
+			}
+			if test.conflict {
+				if _, err := a.codexOwners.markRuntimeConflict(req, "此前移交结果未确认"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			binding, err := a.HandoffCodexRuntime(context.Background(), req)
+
+			if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.ConflictReason != "" {
+				t.Fatalf("binding=%#v error=%v", binding, err)
+			}
+			if probe.loadCalls != 1 {
+				t.Fatalf("loadCalls=%d，显式接管应只探测一次后恢复 WeClaw", probe.loadCalls)
+			}
+		})
+	}
+}
+
 func TestHandoffCodexRuntimeRejectsActiveWriter(t *testing.T) {
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),

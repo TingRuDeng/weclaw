@@ -17,7 +17,7 @@
 - **远程接管本地任务**：离开电脑后，从微信或飞书继续 Codex、Claude 会话。
 - **上下文不中断**：复用 Codex workspace/thread 和 Claude ACP session，不把每条消息当成新对话。
 - **过程可见、结果可达**：飞书使用 CardKit 实时更新，微信提供输入状态和任务结果。
-- **控制权明确**：选择或新建 Codex 会话即由当前远程窗口接管；`/cx owner desktop` 显式释放，避免双写污染。
+- **控制权明确**：选择或新建 Codex 会话即由当前远程窗口接管；`/cx owner desktop` 显式释放，避免多个远程窗口争用。
 - **安全边界可配置**：用户白名单、工作目录白名单、管理员权限、审计日志和 Codex 权限档位均可独立配置。
 
 ## 快速开始
@@ -66,7 +66,7 @@ weclaw status
 /cx owner remote       # 释放后由当前微信或飞书窗口重新接管
 ```
 
-会话选择或新建会先持久化当前窗口的会话绑定和所有权，再尝试同步运行通道；运行通道暂时不可用时不会撤销选择或所有权，但会禁止普通消息写入并提示稍后重试。`/cx owner remote` 用于显式释放后重新接管或主动重试运行通道。普通消息只信任已持久化的所有权和已建立的运行绑定，不探测 Desktop，也不会因超时或断线要求重新选择。`/cx owner desktop` 同样先提交释放；即使 Desktop 通道确认失败，远程写入仍保持关闭。远程任务执行中必须先等待完成或发送 `/stop`，不能中途释放给 Desktop。
+会话选择或新建会先持久化当前窗口的会话绑定和所有权，再同步运行通道。Desktop 可达时继续通过 Desktop 运行；Desktop 探测超时、断线或遗留冲突不能证明存在另一 writer，显式选择或 `/cx owner remote` 会校验 rollout 后恢复 WeClaw app-server。Desktop 与 WeClaw 的 turn 可以在同一 thread 并存，WeClaw 只记录并存状态，不再把整个会话锁成冲突；WeClaw 自身仍会串行同一 thread 的远程写入。普通消息只信任已持久化的所有权和已建立的运行绑定，不会自行探测或接管；重启后若运行绑定尚未恢复，重新选择会话或发送 `/cx owner remote` 即可恢复。`/cx owner desktop` 仍会先提交释放，远程任务执行中必须先等待完成或发送 `/stop`。
 
 ### 复用 Claude Code 会话
 

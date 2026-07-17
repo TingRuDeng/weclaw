@@ -50,7 +50,7 @@ func TestCodexRuntimeInspectReturnsSnapshotDuringWriterLease(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeLeaseMarksUnexpectedDesktopTurnConflict(t *testing.T) {
+func TestCodexRuntimeLeaseAllowsConcurrentDesktopTurn(t *testing.T) {
 	registry := newCodexRuntimeOwnerRegistry(nil)
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
@@ -69,16 +69,17 @@ func TestCodexRuntimeLeaseMarksUnexpectedDesktopTurnConflict(t *testing.T) {
 	})
 
 	binding, _ := registry.threadBinding("thread-1")
-	if binding.Runtime != CodexRuntimeConflict || binding.ConflictReason == "" {
-		t.Fatalf("binding=%#v，want conflict", binding)
+	if binding.Runtime != CodexRuntimeDesktop || binding.ConflictReason != "" ||
+		!binding.State.Active || binding.State.ActiveTurnID != "turn-remote" {
+		t.Fatalf("binding=%#v，Desktop 的另一 turn 不应覆盖远程 lease", binding)
 	}
-	if err := lease.check(); !errors.Is(err, ErrCodexRuntimeConflict) {
-		t.Fatalf("lease error=%v，want conflict", err)
+	if err := lease.check(); err != nil {
+		t.Fatalf("lease error=%v，Desktop 与 WeClaw 并存不应取消远程 turn", err)
 	}
 	lease.finish()
 }
 
-func TestCodexRuntimeLeaseMarksCompletedDesktopTurnConflict(t *testing.T) {
+func TestCodexRuntimeLeaseAllowsConcurrentCompletedDesktopTurn(t *testing.T) {
 	registry := newCodexRuntimeOwnerRegistry(nil)
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-old"}
@@ -97,8 +98,12 @@ func TestCodexRuntimeLeaseMarksCompletedDesktopTurnConflict(t *testing.T) {
 		ThreadID: "thread-1", LastTurnID: "turn-local", LastTurnStatus: "completed",
 	})
 
-	if err := lease.check(); !errors.Is(err, ErrCodexRuntimeConflict) {
-		t.Fatalf("lease error=%v，want completed-turn conflict", err)
+	binding, _ := registry.threadBinding("thread-1")
+	if err := lease.check(); err != nil {
+		t.Fatalf("lease error=%v，Desktop 完成另一 turn 不应取消远程 turn", err)
+	}
+	if !binding.State.Active || binding.State.ActiveTurnID != "turn-remote" || binding.State.LastTurnID != "turn-old" {
+		t.Fatalf("binding=%#v，Desktop 终态不应覆盖远程 lease", binding)
 	}
 	lease.finish()
 }
@@ -204,7 +209,7 @@ func TestCodexRuntimeLeaseRejectsChangedGeneration(t *testing.T) {
 	lease.finish()
 }
 
-func TestCodexRuntimeRemoteIntentConflictsWithUnleasedDesktopTurn(t *testing.T) {
+func TestCodexRuntimeRemoteIntentAcceptsUnleasedDesktopTurn(t *testing.T) {
 	registry := newCodexRuntimeOwnerRegistry(nil)
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
@@ -215,8 +220,9 @@ func TestCodexRuntimeRemoteIntentConflictsWithUnleasedDesktopTurn(t *testing.T) 
 		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-local",
 	})
 
-	if binding.Runtime != CodexRuntimeConflict {
-		t.Fatalf("binding=%#v，want conflict", binding)
+	if binding.Runtime != CodexRuntimeDesktop || binding.ConflictReason != "" ||
+		!binding.State.Active || binding.State.ActiveTurnID != "turn-local" {
+		t.Fatalf("binding=%#v，空闲远程会话应接受 Desktop turn", binding)
 	}
 }
 
@@ -262,9 +268,9 @@ func TestCodexRuntimeReconcileDoesNotClearExplicitConflict(t *testing.T) {
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, state); err != nil {
 		t.Fatal(err)
 	}
-	registry.observeDesktopSnapshot("thread-1", 5, CodexThreadState{
-		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-other",
-	})
+	if _, err := registry.markRuntimeConflict(request, "显式移交结果未确认"); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := registry.reconcileObservedTurn(request, CodexThreadState{
 		ThreadID: "thread-1", LastTurnID: "turn-existing", LastTurnStatus: "completed",
@@ -297,7 +303,7 @@ func TestCodexRuntimeReconcileTerminalAfterDesktopDisconnect(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeRemoteIntentRejectsCompletedDesktopTurn(t *testing.T) {
+func TestCodexRuntimeRemoteIntentAcceptsCompletedDesktopTurn(t *testing.T) {
 	registry := newCodexRuntimeOwnerRegistry(nil)
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-old"}
@@ -309,8 +315,9 @@ func TestCodexRuntimeRemoteIntentRejectsCompletedDesktopTurn(t *testing.T) {
 		ThreadID: "thread-1", LastTurnID: "turn-local", LastTurnStatus: "completed",
 	})
 
-	if binding.Runtime != CodexRuntimeConflict {
-		t.Fatalf("binding=%#v，want completed-turn conflict", binding)
+	if binding.Runtime != CodexRuntimeDesktop || binding.ConflictReason != "" ||
+		binding.State.LastTurnID != "turn-local" || binding.State.LastTurnStatus != "completed" {
+		t.Fatalf("binding=%#v，空闲远程会话应接受 Desktop 终态", binding)
 	}
 }
 
@@ -324,9 +331,9 @@ func TestCodexRuntimeConflictRequiresExplicitHandoffToRecover(t *testing.T) {
 	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeDesktop, initial); err != nil {
 		t.Fatal(err)
 	}
-	a.codexOwners.observeDesktopSnapshot("thread-1", 7, CodexThreadState{
-		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-local",
-	})
+	if _, err := a.codexOwners.markRuntimeConflict(request, "显式移交结果未确认"); err != nil {
+		t.Fatal(err)
+	}
 
 	runtime, _, inspectErr := a.probeCodexRuntime(context.Background(), request, codexRuntimeProbeOptions{})
 	if runtime != CodexRuntimeConflict || !errors.Is(inspectErr, ErrCodexRuntimeConflict) {
@@ -338,7 +345,7 @@ func TestCodexRuntimeConflictRequiresExplicitHandoffToRecover(t *testing.T) {
 	}
 }
 
-func TestCodexRuntimeConflictSurvivesRepeatedDesktopSnapshot(t *testing.T) {
+func TestCodexRuntimeConflictClearsOnConfirmedDesktopSnapshot(t *testing.T) {
 	registry := newCodexRuntimeOwnerRegistry(&codexDesktopOwnerProbeFake{})
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := registry.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{
@@ -346,15 +353,16 @@ func TestCodexRuntimeConflictSurvivesRepeatedDesktopSnapshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	conflicting := CodexThreadState{
+	if _, err := registry.markRuntimeConflict(request, "显式移交结果未确认"); err != nil {
+		t.Fatal(err)
+	}
+	observed := CodexThreadState{
 		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-local",
 	}
-	registry.observeDesktopSnapshot("thread-1", 7, conflicting)
+	binding := registry.observeDesktopSnapshot("thread-1", 8, observed)
 
-	binding := registry.observeDesktopSnapshot("thread-1", 8, conflicting)
-
-	if binding.Runtime != CodexRuntimeConflict || binding.ConflictReason == "" {
-		t.Fatalf("binding=%#v，重复快照不应清除冲突态", binding)
+	if binding.Runtime != CodexRuntimeDesktop || binding.ConflictReason != "" || binding.State.ActiveTurnID != "turn-local" {
+		t.Fatalf("binding=%#v，已确认的 Desktop 快照应恢复可用 runtime", binding)
 	}
 }
 

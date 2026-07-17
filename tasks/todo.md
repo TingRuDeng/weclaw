@@ -7,8 +7,8 @@
 
 ## 任务清单
 
-- [x] Task 1：Codex 选择先提交 binding/owner，运行失败保留选择并关闭写入。
-- [x] Task 2：Codex 显式释放先提交 desktop owner，取消幂等选择的 Desktop 探测。
+- [x] Task 1：Codex 选择先提交 binding/owner，显式接管在 Desktop 不可确认时恢复 WeClaw。
+- [x] Task 2：Codex 显式释放先提交 desktop owner；幂等选择复用 ready runtime，并恢复 unknown/conflict。
 - [x] Task 3：Claude 选择先提交 binding/owner，恢复失败持久化 `resume_failed`。
 - [x] Task 4：统一切换、新建、飞书卡片、owner 和普通消息提示。
 - [x] Task 5：补齐持久化回滚、并发保护、Android 飞书入口和运行失败回归。
@@ -16,6 +16,6 @@
 
 ## 当前状态
 
-Codex 与 Claude 的 owner-first 实现已完成。窗口选择和显式释放先落盘，runtime 恢复失败
-只进入写入门禁，不再回滚 Agent、会话或 owner；全仓测试、messaging/agent 竞态检测、vet、
-文档校验、独立复核和差异检查均已通过。
+Codex 与 Claude 的 owner-first 实现已完成。Codex 的显式 remote 选择可在 Desktop timeout、断线、
+重启后 unknown 或旧 conflict 时恢复 WeClaw；Desktop 与 WeClaw turn 并存不再锁死会话，跨远程
+窗口 owner、WeClaw 单 thread lease 和活动任务门禁保持不变。Claude 继续使用 `resume_failed` 门禁。

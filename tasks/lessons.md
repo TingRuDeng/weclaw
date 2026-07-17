@@ -28,15 +28,15 @@
 
 - 触发条件：飞书或微信窗口已经成功选择并接管 Codex thread，后续普通消息启动前遇到 Desktop 探测超时、断线或 runtime unknown。
 - 规则：owner tuple 和 revision 是写入授权事实源；普通消息只读取接管事务已建立的 runtime binding，不重复探测 Desktop，也不根据运行通道异常释放 owner 或要求用户重新选择。
-- 失败边界：runtime 不可用时拒绝本次写入并保留 remote owner；只有显式选择、`/cx owner remote`、状态刷新和重连/冲突恢复可以发起探测或 Handoff。
+- 失败边界：runtime 不可用时普通消息拒绝本次写入并保留 remote owner；显式选择或 `/cx owner remote` 遇到 Desktop timeout、断线、重启后的 unknown 或旧 conflict 时，应校验 rollout 并恢复 WeClaw app-server。
 - 反例：把 `context deadline exceeded`、ownership unknown 或 runtime unavailable 统一渲染成“交给当前远程窗口 / 交给 Codex Desktop”卡片，让用户误以为所有权自动释放。
 - 来源：2026-07-15 飞书主机器人窗口在 22:45 已接管，22:53 普通消息因 Desktop IPC 超时再次弹出所有权选择。
 
 ## 2026-07-16 会话所有权提交与运行通道恢复必须分层
 
 - 触发条件：微信或飞书窗口显式选择、新建或接管 Codex/Claude 会话，但 Desktop IPC、ACP resume 或外部任务 observer 暂时不可用。
-- 权威边界：窗口选择、Agent 和唯一 owner 是持久化控制事实；runtime binding 只回答当前能否安全写入，不能反向撤销用户选择。只有本地持久化失败、所有权冲突或活动任务冲突属于选择硬失败。
-- 一致性规则：先原子提交 binding/owner，再持久化窗口 Agent，最后同步 runtime；Agent 持久化失败用 after-image CAS 回滚 owner，runtime 失败则保留 owner 并进入 `conflict` 或 `resume_failed` 写入门禁。
+- 权威边界：窗口选择、Agent 和唯一 remote owner 是持久化控制事实；runtime binding 只回答当前从哪里执行，不能反向撤销用户选择。只有本地持久化失败、跨远程窗口所有权冲突或活动远程任务冲突属于选择硬失败；Desktop 与 WeClaw 的 turn 可以并存。
+- 一致性规则：先原子提交 binding/owner，再持久化窗口 Agent，最后同步 runtime；Agent 持久化失败用 after-image CAS 回滚 owner。Codex 显式接管遇到 Desktop 探测不确定时恢复 WeClaw，Desktop 的不同 turn 不得取消当前 writer lease；真正的 runtime/observer 失败仍保留 owner 并报告通道不可用。Claude 的 `resume_failed` 门禁保持不变。
 - 释放规则：显式归还 Desktop/Local 也先提交 owner，再尽力同步运行通道；同步失败不得恢复远程 owner。
 - 来源：2026-07-16 Android 飞书窗口反复切换 Codex/Claude 失败，用户确认以窗口绑定和显式释放为所有权事实源。
 

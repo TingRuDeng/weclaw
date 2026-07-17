@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,10 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 		}
 	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{allowConflictRecovery: true})
+	if req.Intent.Owner == CodexControlRemote && canRecoverCodexRuntimeForExplicitRemote(err) {
+		log.Printf("[codex-runtime] 显式远程接管忽略 Desktop 探测不确定状态 thread=%q: %v", req.Ref.ThreadID, err)
+		runtime, err = CodexRuntimeUnknown, nil
+	}
 	if err != nil && !(req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict) {
 		return CodexThreadBinding{}, err
 	}
@@ -86,6 +91,12 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 		return a.codexOwners.activateRuntime(req, runtime, state)
 	}
 	return a.recoverCodexRuntimeForRemote(ctx, req)
+}
+
+// canRecoverCodexRuntimeForExplicitRemote 只放宽用户已明确选择 remote 的 Desktop 探测结果。
+// Desktop 不可达或旧 conflict 不能证明存在另一 writer；真正的 writer lease 仍在入口处拒绝移交。
+func canRecoverCodexRuntimeForExplicitRemote(err error) bool {
+	return errors.Is(err, ErrCodexDesktopOwnershipUnknown) || errors.Is(err, ErrCodexRuntimeConflict)
 }
 
 // MarkCodexRuntimeConflict 将无法确认 writer 的 thread 持续登记为冲突态。

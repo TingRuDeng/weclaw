@@ -100,16 +100,53 @@ func TestAcquireCodexSessionLockTimeoutKeepsOriginalState(t *testing.T) {
 	assertCodexAcquireOriginalState(t, fixture, 0)
 }
 
-func TestAcquireCodexSessionIdempotentTargetDoesNotProbe(t *testing.T) {
+func TestAcquireCodexSessionIdempotentDesktopTargetReusesFollowerRuntime(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	setAcquireTargetRemoteForCurrentRoute(t, fixture)
 	fixture.agent.inspectErrors["thread-b"] = errors.New("校准失败")
+	targetHandoffCount := func() int {
+		count := 0
+		for _, request := range fixture.agent.handoffRequests() {
+			if request.Ref.ThreadID == "thread-b" {
+				count++
+			}
+		}
+		return count
+	}
+	beforeHandoffs := targetHandoffCount()
 	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if err != nil || result.runtimeErr != nil {
+	if err != nil || result.runtimeErr != nil || result.resolution.Binding.Runtime != agent.CodexRuntimeDesktop {
 		t.Fatalf("error=%v result=%#v", err, result)
 	}
 	if fixture.agent.bindCalls != 0 {
 		t.Fatalf("inspect count=%d, 幂等选择只应读取 CurrentCodexRuntime", fixture.agent.bindCalls)
+	}
+	if got := targetHandoffCount(); got != beforeHandoffs {
+		t.Fatalf("handoff count=%d，Desktop follower runtime 已可写时不应重做 handoff", got-beforeHandoffs)
+	}
+}
+
+func TestAcquireCodexSessionIdempotentUnknownTargetForcesRecovery(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	setAcquireTargetRemoteForCurrentRoute(t, fixture)
+	fixture.agent.setThreadBinding("thread-b", agent.CodexThreadBinding{
+		Runtime: agent.CodexRuntimeUnknown,
+		State:   agent.CodexThreadState{ThreadID: "thread-b"},
+	})
+
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+
+	if err != nil || result.runtimeErr != nil || result.resolution.Binding.Runtime != agent.CodexRuntimeWeClaw {
+		t.Fatalf("error=%v result=%#v", err, result)
+	}
+	targetHandoffs := 0
+	for _, request := range fixture.agent.handoffRequests() {
+		if request.Ref.ThreadID == "thread-b" {
+			targetHandoffs++
+		}
+	}
+	if targetHandoffs != 1 {
+		t.Fatalf("target handoff count=%d，显式选择应恢复 unknown runtime", targetHandoffs)
 	}
 }
 

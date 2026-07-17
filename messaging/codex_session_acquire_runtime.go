@@ -39,7 +39,7 @@ func (h *Handler) applyCodexRuntimeIntentChanges(plan codexSessionAcquirePlan, l
 	return resolution, applied, errors.Join(targetErr, cleanupErr)
 }
 
-// acquireCodexTargetRuntime 对幂等目标只读本地绑定；只有 owner remote 显式请求才强制恢复。
+// acquireCodexTargetRuntime 对可写的幂等目标只读本地绑定；unknown/conflict 会按显式选择恢复。
 func (h *Handler) acquireCodexTargetRuntime(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, *codexRuntimeIntentChange, error) {
 	before := plan.snapshot.Target
 	after := proposedCodexRemoteSelectionIntent(before, plan.request.route)
@@ -49,7 +49,9 @@ func (h *Handler) acquireCodexTargetRuntime(plan codexSessionAcquirePlan, liveAg
 	}
 	if before == after && !plan.request.forceRuntimeHandoff {
 		resolution, err := h.currentCodexAcquireTarget(plan, liveAgent)
-		return resolution, nil, err
+		if err != nil || codexRuntimeReadyForRemoteTurn(resolution.Binding.Runtime) {
+			return resolution, nil, err
+		}
 	}
 	resolution, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
 		ctx: plan.request.ctx, liveAgent: liveAgent,
@@ -59,6 +61,11 @@ func (h *Handler) acquireCodexTargetRuntime(plan codexSessionAcquirePlan, liveAg
 		return resolution, nil, err
 	}
 	return resolution, &change, nil
+}
+
+func codexRuntimeReadyForRemoteTurn(runtime agent.CodexRuntimeHolder) bool {
+	// Desktop runtime 由 WeClaw 通过 follower IPC 写入；控制方仍是当前远程窗口。
+	return runtime == agent.CodexRuntimeDesktop || runtime == agent.CodexRuntimeWeClaw
 }
 
 // currentCodexAcquireTarget 读取已建立的 runtime，不向 Desktop 发起探测。

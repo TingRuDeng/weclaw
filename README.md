@@ -17,7 +17,7 @@ Remote-control local Codex and Claude from WeChat or Feishu. Keep real workspace
 - **Take over local work remotely**: continue Codex and Claude sessions from WeChat or Feishu after leaving your computer.
 - **Keep the original context**: reuse Codex workspaces/threads and Claude ACP sessions instead of starting a new conversation for every message.
 - **See progress and receive results**: Feishu uses CardKit updates, while WeChat provides typing state and task results.
-- **Use explicit ownership**: selecting or creating a Codex session gives the current remote chat window ownership; `/cx owner desktop` explicitly releases it without concurrent writes.
+- **Use explicit ownership**: selecting or creating a Codex session gives the current remote chat window ownership; `/cx owner desktop` explicitly releases it and prevents competing remote windows.
 - **Configure security boundaries**: user allowlists, workspace roots, admin access, audit logs, and Codex permission levels are independent controls.
 
 ## Quick Start
@@ -66,7 +66,7 @@ After selecting an existing session or sending `/cx new`, send the task directly
 /cx owner remote       # Reacquire from the current WeChat or Feishu window after release
 ```
 
-Session selection or creation first persists the current window's session binding and ownership, then attempts to synchronize the runtime. A temporarily unavailable runtime does not undo that selection or ownership, but regular writes stay blocked until the runtime is ready. `/cx owner remote` reacquires after an explicit release or explicitly retries runtime recovery. Regular messages trust the persisted ownership and established runtime binding; they do not probe Desktop or ask the user to select again after a timeout or disconnect. `/cx owner desktop` also commits the release first, so remote writes remain disabled even if Desktop runtime confirmation fails. While a remote task is active, wait for completion or send `/stop` before releasing ownership to Desktop.
+Session selection or creation first persists the current window's session binding and ownership, then synchronizes the runtime. A reachable Desktop remains the runtime. A Desktop timeout, disconnect, or stale conflict does not prove that another writer exists, so an explicit selection or `/cx owner remote` validates the rollout and recovers the WeClaw app-server. Desktop and WeClaw turns may coexist on the same thread; WeClaw records that condition instead of locking the whole session, while still serializing its own remote writes per thread. Regular messages trust persisted ownership and an established runtime binding and never probe or take over implicitly. After a restart leaves the runtime binding unknown, select the session again or send `/cx owner remote` to recover it. `/cx owner desktop` still commits the release first, and an active remote task must finish or be stopped with `/stop` before release.
 
 ### Reuse Claude Code Sessions
 

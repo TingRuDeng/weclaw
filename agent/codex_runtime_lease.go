@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 )
@@ -119,8 +120,8 @@ func (l *codexWriterLease) accept(turnID string) error {
 	if err := l.bindingErrorLocked(); err != nil {
 		return err
 	}
-	if l.state.candidateDesktopTurn != "" && l.state.candidateDesktopTurn != turnID {
-		return r.markConflictLocked(l.threadID, "Desktop 在远程 turn 启动期间开始了其他任务")
+	if candidate := l.state.candidateDesktopTurn; candidate != "" && candidate != turnID {
+		log.Printf("[codex-runtime] Desktop 与 WeClaw turn 并存 thread=%q remoteTurn=%q desktopTurn=%q", l.threadID, turnID, candidate)
 	}
 	l.state.turnID = turnID
 	binding := r.threads[l.threadID]

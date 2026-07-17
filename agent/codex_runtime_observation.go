@@ -21,17 +21,6 @@ func (r *codexRuntimeOwnerRegistry) observeDesktopSnapshotLocked(threadID string
 			threadID: threadID, state: state, current: current, lease: lease,
 		})
 	}
-	if current.Runtime == CodexRuntimeConflict {
-		current.State = state
-		r.threads[threadID] = current
-		return current
-	}
-	if current.Control.Owner == CodexControlRemote && !sameObservedDesktopTurn(current.State, state) {
-		current.State = state
-		r.threads[threadID] = current
-		_ = r.markConflictLocked(threadID, "Desktop 在远程控制期间开始了未授权任务")
-		return r.threads[threadID]
-	}
 	current.Ref.ThreadID = threadID
 	current.RuntimeGeneration = nextCodexRuntimeGeneration(current, CodexRuntimeDesktop)
 	current.Runtime = CodexRuntimeDesktop
@@ -39,17 +28,6 @@ func (r *codexRuntimeOwnerRegistry) observeDesktopSnapshotLocked(threadID string
 	current.ConflictReason = ""
 	r.threads[threadID] = current
 	return current
-}
-
-// sameObservedDesktopTurn 允许移交时已经存在的 Desktop turn 继续被远程观察。
-func sameObservedDesktopTurn(current CodexThreadState, observed CodexThreadState) bool {
-	activeTurnID := strings.TrimSpace(current.ActiveTurnID)
-	if observed.Active {
-		return current.Active && activeTurnID != "" && activeTurnID == strings.TrimSpace(observed.ActiveTurnID)
-	}
-	lastTurnID := strings.TrimSpace(observed.LastTurnID)
-	return lastTurnID == "" || lastTurnID == activeTurnID ||
-		lastTurnID == strings.TrimSpace(current.LastTurnID)
 }
 
 func (r *codexRuntimeOwnerRegistry) observeDesktopLeaseLocked(observation codexDesktopLeaseObservation) CodexThreadBinding {
@@ -62,22 +40,31 @@ func (r *codexRuntimeOwnerRegistry) observeDesktopLeaseLocked(observation codexD
 	if state.Active && lease.turnID == "" {
 		lease.candidateDesktopTurn = activeTurnID
 	} else if state.Active && (activeTurnID == "" || activeTurnID != lease.turnID) {
-		r.threads[threadID] = current
-		_ = r.markConflictLocked(threadID, "Desktop active turn 与远程 writer lease 不一致")
-		return r.threads[threadID]
+		r.logCoexistingDesktopTurnLocked(threadID, lease, activeTurnID)
+		return current
 	}
 	if !state.Active && lastTurnID != "" && lastTurnID != lease.baselineLastTurnID {
 		if lease.turnID == "" {
 			lease.candidateDesktopTurn = lastTurnID
 		} else if lastTurnID != lease.turnID {
-			r.threads[threadID] = current
-			_ = r.markConflictLocked(threadID, "Desktop completed turn 与远程 writer lease 不一致")
-			return r.threads[threadID]
+			r.logCoexistingDesktopTurnLocked(threadID, lease, lastTurnID)
+			return current
 		}
+	} else if lease.turnID != "" && !state.Active {
+		return current
 	}
 	current.State = state
 	r.threads[threadID] = current
 	return current
+}
+
+func (r *codexRuntimeOwnerRegistry) logCoexistingDesktopTurnLocked(threadID string, lease *codexWriterLeaseState, desktopTurnID string) {
+	desktopTurnID = strings.TrimSpace(desktopTurnID)
+	if desktopTurnID == "" || lease.candidateDesktopTurn == desktopTurnID {
+		return
+	}
+	lease.candidateDesktopTurn = desktopTurnID
+	log.Printf("[codex-runtime] Desktop 与 WeClaw turn 并存 thread=%q remoteTurn=%q desktopTurn=%q", threadID, lease.turnID, desktopTurnID)
 }
 
 func (r *codexRuntimeOwnerRegistry) markConflictLocked(threadID string, reason string) error {
