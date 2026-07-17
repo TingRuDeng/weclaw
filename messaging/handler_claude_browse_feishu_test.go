@@ -32,12 +32,22 @@ func TestFeishuClaudeSessionChoicesPaginateWithStableIDs(t *testing.T) {
 	if got := first.Choices[0].Choices[7].ID; got != "/cc page sessions 2" {
 		t.Fatalf("next id=%q，期望会话下一页", got)
 	}
+	snapshot := first.Choices[0].Choices[7].Metadata["navigation_snapshot"]
+	if snapshot == "" {
+		t.Fatalf("next=%#v，分页按钮必须绑定服务端快照", first.Choices[0].Choices[7])
+	}
 	back := first.Choices[0].Choices[8]
 	if back.Label != "← 返回上一级" || back.Metadata[platform.ChoiceMetadataButtonType] != platform.ChoiceButtonTypeDefault {
 		t.Fatalf("back=%#v，期望独立次级返回按钮", back)
 	}
 
-	second := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc page sessions 2"})
+	ag.catalogSessions = append(ag.catalogSessions, agent.ClaudeSession{
+		ID: "session-inserted", Cwd: workspace, Title: "插入会话", UpdatedAt: "2026-07-14T23:00:00Z",
+	})
+	second := sendClaudeFeishuCommand(claudeFeishuTestRequest{
+		Handler: h, SessionKey: "feishu:user", Choice: "/cc page sessions 2",
+		MessageID: "evt-page-2", Snapshot: snapshot,
+	})
 	if len(second.Choices) != 1 || !strings.Contains(second.Choices[0].Prompt, "第 2/2 页") {
 		t.Fatalf("second page=%#v，期望第二页卡片", second.Choices)
 	}
@@ -265,16 +275,20 @@ type claudeFeishuTestRequest struct {
 	Text       string
 	Choice     string
 	UnionID    string
+	MessageID  string
+	Snapshot   string
 }
 
 func sendClaudeFeishuCommand(req claudeFeishuTestRequest) *platformtest.Replier {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	msg := platform.IncomingMessage{
-		Platform: platform.PlatformFeishu, UserID: "user", MessageID: firstNonBlank(req.Text, req.Choice), Text: req.Text,
+		Platform: platform.PlatformFeishu, UserID: "user", MessageID: firstNonBlank(req.MessageID, req.Text, req.Choice), Text: req.Text,
 		Metadata: map[string]string{"feishu_session_key": req.SessionKey, "feishu_union_id": req.UnionID},
 	}
 	if req.Choice != "" {
-		msg.RawCommand = &platform.CardAction{Action: "choice", Value: map[string]string{"choice": req.Choice}}
+		msg.RawCommand = &platform.CardAction{Action: "choice", Value: map[string]string{
+			"choice": req.Choice, "navigation_snapshot": req.Snapshot,
+		}}
 	}
 	req.Handler.HandleMessage(context.Background(), msg, reply)
 	return reply

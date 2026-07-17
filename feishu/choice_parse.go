@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
@@ -34,13 +35,16 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 			callbackValueString(value, "action_key"),
 			callbackValueString(value, "actionKey"),
 		),
-		Owner:       callbackValueString(value, approvalOwnerValueKey),
-		Panel:       callbackValueString(value, "approval_panel") == "1",
-		Conv:        callbackValueString(value, "conv"),
-		SessionKey:  callbackValueString(value, feishuSessionMetadataKey),
-		AgentName:   callbackValueString(value, modelSettingAgentKey),
-		UserID:      strings.TrimSpace(event.Event.Operator.OpenID),
-		UserAliases: cardActionUserAliases(event.Event.Operator),
+		Owner:              callbackValueString(value, approvalOwnerValueKey),
+		Panel:              callbackValueString(value, "approval_panel") == "1",
+		Conv:               callbackValueString(value, "conv"),
+		SessionKey:         callbackValueString(value, feishuSessionMetadataKey),
+		AgentName:          callbackValueString(value, modelSettingAgentKey),
+		EventID:            cardActionEventID(event),
+		CardRevision:       callbackValueString(value, cardRevisionValueKey),
+		NavigationSnapshot: callbackValueString(value, platform.ChoiceMetadataNavigationSnapshot),
+		UserID:             strings.TrimSpace(event.Event.Operator.OpenID),
+		UserAliases:        cardActionUserAliases(event.Event.Operator),
 	}
 	if event.Event.Context != nil {
 		parsed.ChatID = strings.TrimSpace(event.Event.Context.OpenChatID)
@@ -50,6 +54,18 @@ func parseCardAction(event *callback.CardActionTriggerEvent) (parsedCardAction, 
 		return parsedCardAction{}, false
 	}
 	return parsed, true
+}
+
+func cardActionEventID(event *callback.CardActionTriggerEvent) string {
+	if event == nil {
+		return ""
+	}
+	if event.EventV2Base != nil && event.EventV2Base.Header != nil {
+		if eventID := strings.TrimSpace(event.EventV2Base.Header.EventID); eventID != "" {
+			return eventID
+		}
+	}
+	return ""
 }
 
 // cardActionUserAliases 抽取飞书卡片回调里除 open_id 外的用户身份。

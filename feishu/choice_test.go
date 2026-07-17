@@ -36,6 +36,9 @@ func TestBuildChoiceCardUsesCardKitV2ButtonValues(t *testing.T) {
 	if value["action"] != cardActionChoice || value["choice"] != "1" || value["conv"] != "feishu:ou_user" {
 		t.Fatalf("button value=%#v, want choice payload", value)
 	}
+	if strings.TrimSpace(value[cardRevisionValueKey].(string)) == "" {
+		t.Fatalf("button value=%#v, want card revision", value)
+	}
 }
 
 func TestBuildChoiceCardMarksApprovalButtons(t *testing.T) {
@@ -177,8 +180,9 @@ func TestBuildChoiceCardSeparatesNavigationButtons(t *testing.T) {
 	cardJSON, err := buildChoiceCard("请选择会话", []platform.Choice{
 		{ID: "/cx switch thread-1", Label: "会话 1"},
 		{ID: "/cx cd ..", Label: "← 返回上一级", Metadata: map[string]string{
-			platform.ChoiceMetadataButtonType: platform.ChoiceButtonTypeDefault,
-			platform.ChoiceMetadataSection:    platform.ChoiceSectionNavigation,
+			platform.ChoiceMetadataButtonType:         platform.ChoiceButtonTypeDefault,
+			platform.ChoiceMetadataSection:            platform.ChoiceSectionNavigation,
+			platform.ChoiceMetadataNavigationSnapshot: "snapshot-1",
 		}},
 	}, "feishu:ou_user")
 	if err != nil {
@@ -192,6 +196,10 @@ func TestBuildChoiceCardSeparatesNavigationButtons(t *testing.T) {
 	button := elements[3].(map[string]any)
 	if button["type"] != platform.ChoiceButtonTypeDefault {
 		t.Fatalf("button=%#v，返回按钮应使用次级样式", button)
+	}
+	value := button["value"].(map[string]any)
+	if value[platform.ChoiceMetadataNavigationSnapshot] != "snapshot-1" {
+		t.Fatalf("button value=%#v，导航快照必须进入回调 payload", value)
 	}
 }
 

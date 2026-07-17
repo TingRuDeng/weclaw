@@ -44,21 +44,31 @@ func paginateFeishuChoices(choices []platform.Choice, requestedPage int) ([]plat
 	return choices[start:end], feishuChoicePage{Number: requestedPage, TotalPages: totalPages, TotalItems: total}
 }
 
-func appendFeishuPageNavigation(choices []platform.Choice, command string, kind string, page feishuChoicePage) []platform.Choice {
+func appendFeishuPageNavigation(choices []platform.Choice, command string, kind string, page feishuChoicePage, snapshot string) []platform.Choice {
 	if page.TotalPages <= 1 {
 		return choices
 	}
 	if page.Number > 1 {
-		choices = append(choices, feishuNavigationChoice(
+		choices = append(choices, feishuSnapshotNavigationChoice(
 			fmt.Sprintf("%s page %s %d", command, kind, page.Number-1), "← 上一页",
+			snapshot,
 		))
 	}
 	if page.Number < page.TotalPages {
-		choices = append(choices, feishuNavigationChoice(
+		choices = append(choices, feishuSnapshotNavigationChoice(
 			fmt.Sprintf("%s page %s %d", command, kind, page.Number+1), "下一页 →",
+			snapshot,
 		))
 	}
 	return choices
+}
+
+func feishuSnapshotNavigationChoice(id string, label string, snapshot string) platform.Choice {
+	choice := feishuNavigationChoice(id, label)
+	if snapshot = strings.TrimSpace(snapshot); snapshot != "" {
+		choice.Metadata[platform.ChoiceMetadataNavigationSnapshot] = snapshot
+	}
+	return choice
 }
 
 func feishuNavigationChoice(id string, label string) platform.Choice {

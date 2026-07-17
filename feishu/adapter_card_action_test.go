@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
@@ -49,11 +50,12 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 			Operator: &callback.Operator{OpenID: "ou_user"},
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
-				"action":             cardActionChoice,
-				"choice":             "1",
-				"label":              "账本 App 开发",
-				"conv":               "feishu:ou_user",
-				"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root",
+				"action":              cardActionChoice,
+				"choice":              "1",
+				"label":               "账本 App 开发",
+				"conv":                "feishu:ou_user",
+				"feishu_session_key":  "feishu:tenant_1:group:oc_1:om_root",
+				"navigation_snapshot": "snapshot-1",
 			}},
 		},
 	}
@@ -84,8 +86,61 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 		if msg.Metadata["feishu_session_key"] != "feishu:tenant_1:group:oc_1:om_root" {
 			t.Fatalf("msg.Metadata=%#v, want feishu session key", msg.Metadata)
 		}
+		if msg.RawCommand.Value["navigation_snapshot"] != "snapshot-1" {
+			t.Fatalf("msg.RawCommand=%#v, want navigation snapshot", msg.RawCommand)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
+	}
+}
+
+func TestHandleCardActionEventUsesEventIDForRepeatedNavigation(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	messageIDs := make([]string, 0, 3)
+	dispatch := func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		messageIDs = append(messageIDs, msg.MessageID)
+	}
+	for _, eventID := range []string{"evt_page_2_first", "evt_page_2_again", "evt_page_2_again"} {
+		event := &callback.CardActionTriggerEvent{
+			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: eventID}},
+			Event: &callback.CardActionTriggerRequest{
+				Operator: &callback.Operator{OpenID: "ou_user"},
+				Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_card"},
+				Action: &callback.CallBackAction{Value: map[string]interface{}{
+					"action": cardActionChoice,
+					"choice": "/cx page workspaces 2",
+					"label":  "下一页 →",
+				}},
+			},
+		}
+		if _, err := adapter.handleCardActionEvent(context.Background(), event, dispatch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(messageIDs) != 3 || messageIDs[0] == messageIDs[1] || messageIDs[1] != messageIDs[2] {
+		t.Fatalf("messageIDs=%#v，不同点击必须区分，同一事件重投必须保持幂等", messageIDs)
+	}
+}
+
+func TestHandleCardActionEventFallsBackToCardRevision(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	messageIDs := make([]string, 0, 2)
+	for _, revision := range []string{"revision-page-1", "revision-page-1-again"} {
+		event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user"},
+			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_card"},
+			Action: &callback.CallBackAction{Value: map[string]interface{}{
+				"action": cardActionChoice, "choice": "/cx page workspaces 2", cardRevisionValueKey: revision,
+			}},
+		}}
+		if _, err := adapter.handleCardActionEvent(context.Background(), event, func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+			messageIDs = append(messageIDs, msg.MessageID)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(messageIDs) != 2 || messageIDs[0] == messageIDs[1] {
+		t.Fatalf("messageIDs=%#v，不带事件 ID 时必须按卡片 revision 区分后续点击", messageIDs)
 	}
 }
 

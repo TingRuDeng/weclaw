@@ -21,6 +21,7 @@ type feishuCodexSessionCommandRequest struct {
 
 type feishuCodexChoiceRequest struct {
 	ctx           context.Context
+	accountID     string
 	userID        string
 	reply         platform.Replier
 	bindingKey    string
@@ -29,6 +30,7 @@ type feishuCodexChoiceRequest struct {
 	admin         bool
 	metadata      map[string]string
 	page          int
+	snapshot      string
 }
 
 type feishuCodexChoicePrompt struct {
@@ -135,9 +137,10 @@ func (h *Handler) sendFeishuCodexNavigationChoices(req feishuCodexSessionCommand
 	bindingKey := codexBindingKey(req.routeUserID, agentName)
 	metadata := feishuChoiceSessionMetadata(req.message, req.routeUserID)
 	choiceReq := feishuCodexChoiceRequest{
-		ctx: req.ctx, userID: req.message.UserID, reply: req.reply,
+		ctx: req.ctx, accountID: req.message.AccountID, userID: req.message.UserID, reply: req.reply,
 		bindingKey: bindingKey, fields: fields,
 		admin: h.isAdminMessage(req.message), metadata: metadata, page: req.page.Page,
+		snapshot: feishuNavigationSnapshotFromMessage(req.message),
 	}
 	if req.page.Kind == "workspaces" {
 		return h.sendFeishuCodexWorkspaceChoices(choiceReq)
@@ -176,25 +179,25 @@ func isFeishuCodexNavigationCommand(fields []string) bool {
 }
 
 func (h *Handler) sendFeishuCodexWorkspaceChoices(req feishuCodexChoiceRequest) bool {
-	groups := h.codexWorkspaceGroupsForAccess(req.bindingKey, req.userID, req.admin)
-	choices := make([]platform.Choice, 0, len(groups))
-	for _, group := range groups {
-		if strings.TrimSpace(group.Name) == "" {
-			continue
-		}
-		token := h.feishuWorkspaceChoices.issue(
-			feishuWorkspaceChoiceCodex, req.userID, req.bindingKey, normalizeCodexWorkspaceRoot(group.Root),
-		)
-		choices = append(choices, platform.Choice{
-			ID:    "/cx cd " + token,
-			Label: group.Name,
-		})
+	scope := feishuNavigationSnapshotScope{
+		AccountID: req.accountID, ActorUserID: req.userID, BindingKey: req.bindingKey,
+		AgentKind: feishuWorkspaceChoiceCodex, Section: feishuNavigationSectionWorkspaces,
+	}
+	choices, snapshot, ok := h.loadFeishuCodexWorkspaceSnapshot(req, scope)
+	if !ok {
+		return false
 	}
 	if len(choices) == 0 {
 		return false
 	}
 	choices, page := paginateFeishuChoices(choices, req.page)
-	choices = appendFeishuPageNavigation(choices, "/cx", "workspaces", page)
+	for index := range choices {
+		token := h.feishuWorkspaceChoices.issue(
+			feishuWorkspaceChoiceCodex, req.userID, req.bindingKey, normalizeCodexWorkspaceRoot(choices[index].ID),
+		)
+		choices[index].ID = "/cx cd " + token
+	}
+	choices = appendFeishuPageNavigation(choices, "/cx", "workspaces", page, snapshot)
 	choices = platformChoicesWithMetadata(choices, req.metadata)
 	return h.askFeishuCodexChoices(feishuCodexChoicePrompt{
 		ctx: req.ctx, userID: req.userID, reply: req.reply,
@@ -202,24 +205,41 @@ func (h *Handler) sendFeishuCodexWorkspaceChoices(req feishuCodexChoiceRequest) 
 	})
 }
 
-func (h *Handler) sendFeishuCodexSessionChoices(req feishuCodexChoiceRequest) bool {
-	sessions := h.codexSessionsForWorkspace(req.bindingKey, req.workspaceRoot)
-	choices := make([]platform.Choice, 0, len(sessions))
-	for _, session := range sessions {
-		if strings.TrimSpace(session.ThreadID) == "" || session.PendingNewThread {
-			continue
+func (h *Handler) loadFeishuCodexWorkspaceSnapshot(req feishuCodexChoiceRequest, scope feishuNavigationSnapshotScope) ([]platform.Choice, string, bool) {
+	if req.page > 0 && req.snapshot != "" {
+		choices, ok := h.feishuNavSnapshots.load(req.snapshot, scope)
+		return choices, req.snapshot, ok
+	}
+	groups := h.codexWorkspaceGroupsForAccess(req.bindingKey, req.userID, req.admin)
+	choices := make([]platform.Choice, 0, len(groups))
+	for _, group := range groups {
+		if name := strings.TrimSpace(group.Name); name != "" {
+			choices = append(choices, platform.Choice{ID: normalizeCodexWorkspaceRoot(group.Root), Label: name})
 		}
-		choices = append(choices, platform.Choice{
-			ID:    fmt.Sprintf("/cx switch %s", strings.TrimSpace(session.ThreadID)),
-			Label: codexSessionDisplayName(session),
-		})
+	}
+	if len(choices) == 0 {
+		return nil, "", false
+	}
+	snapshot := h.feishuNavSnapshots.issue(scope, choices)
+	return choices, snapshot, true
+}
+
+func (h *Handler) sendFeishuCodexSessionChoices(req feishuCodexChoiceRequest) bool {
+	scope := feishuNavigationSnapshotScope{
+		AccountID: req.accountID, ActorUserID: req.userID, BindingKey: req.bindingKey,
+		AgentKind: feishuWorkspaceChoiceCodex, Section: feishuNavigationSectionSessions,
+		WorkspaceRoot: normalizeCodexWorkspaceRoot(req.workspaceRoot),
+	}
+	choices, snapshot, ok := h.loadFeishuCodexSessionSnapshot(req, scope)
+	if !ok {
+		return false
 	}
 	sessionChoiceCount := len(choices)
 	if sessionChoiceCount == 0 || !shouldShowFeishuSessionChoices(req.fields, sessionChoiceCount) {
 		return false
 	}
 	choices, page := paginateFeishuChoices(choices, req.page)
-	choices = appendFeishuPageNavigation(choices, "/cx", "sessions", page)
+	choices = appendFeishuPageNavigation(choices, "/cx", "sessions", page, snapshot)
 	choices = append(choices, feishuNavigationChoice("/cx cd ..", "← 返回上一级"))
 	choices = platformChoicesWithMetadata(choices, req.metadata)
 	prompt := feishuPaginatedPrompt(
@@ -228,6 +248,28 @@ func (h *Handler) sendFeishuCodexSessionChoices(req feishuCodexChoiceRequest) bo
 	return h.askFeishuCodexChoices(feishuCodexChoicePrompt{
 		ctx: req.ctx, userID: req.userID, reply: req.reply, prompt: prompt, choices: choices,
 	})
+}
+
+func (h *Handler) loadFeishuCodexSessionSnapshot(req feishuCodexChoiceRequest, scope feishuNavigationSnapshotScope) ([]platform.Choice, string, bool) {
+	if req.page > 0 && req.snapshot != "" {
+		choices, ok := h.feishuNavSnapshots.load(req.snapshot, scope)
+		return choices, req.snapshot, ok
+	}
+	sessions := h.codexSessionsForWorkspace(req.bindingKey, req.workspaceRoot)
+	choices := make([]platform.Choice, 0, len(sessions))
+	for _, session := range sessions {
+		if strings.TrimSpace(session.ThreadID) == "" || session.PendingNewThread {
+			continue
+		}
+		choices = append(choices, platform.Choice{
+			ID: fmt.Sprintf("/cx switch %s", strings.TrimSpace(session.ThreadID)), Label: codexSessionDisplayName(session),
+		})
+	}
+	if len(choices) == 0 {
+		return nil, "", false
+	}
+	snapshot := h.feishuNavSnapshots.issue(scope, choices)
+	return choices, snapshot, true
 }
 
 func shouldShowFeishuSessionChoices(fields []string, choiceCount int) bool {

@@ -47,12 +47,21 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 	if next.ID != "/cx page workspaces 2" || next.Metadata[platform.ChoiceMetadataSection] != platform.ChoiceSectionNavigation {
 		t.Fatalf("next=%#v，期望次级样式的下一页动作", next)
 	}
+	snapshot := next.Metadata["navigation_snapshot"]
+	if snapshot == "" {
+		t.Fatalf("next=%#v，分页按钮必须绑定服务端快照", next)
+	}
+	inserted := filepath.Join(root, "workspace--inserted")
+	if err := os.MkdirAll(inserted, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeLocalCodexSession(t, codexDir, "thread-inserted", inserted, "插入会话", "2026-04-30T09:00:00Z")
 
 	second := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformFeishu, UserID: "ou_user",
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "evt-page-2",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
-			"choice": "/cx page workspaces 2",
+			"choice": "/cx page workspaces 2", "navigation_snapshot": snapshot,
 		}},
 		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
 	}, second)
@@ -63,7 +72,31 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 	if len(choices) != 3 || choices[0].Label != "workspace-07" || choices[1].Label != "workspace-08" ||
 		!isTestFeishuWorkspaceChoice(choices[0].ID, "/cx") || !isTestFeishuWorkspaceChoice(choices[1].ID, "/cx") ||
 		choices[2].ID != "/cx page workspaces 1" {
-		t.Fatalf("second choices=%#v，分页后必须使用稳定工作空间 token", choices)
+		t.Fatalf("second choices=%#v，分页必须使用首次加载时的稳定快照", choices)
+	}
+
+	firstAgain := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "evt-page-1",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
+			"choice": "/cx page workspaces 1", "navigation_snapshot": snapshot,
+		}},
+		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, firstAgain)
+	if len(firstAgain.Choices) != 1 || !strings.Contains(firstAgain.Choices[0].Prompt, "第 1/2 页") {
+		t.Fatalf("first again=%#v，期望返回第一页", firstAgain.Choices)
+	}
+
+	secondAgain := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "evt-page-2-again",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
+			"choice": "/cx page workspaces 2", "navigation_snapshot": snapshot,
+		}},
+		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, secondAgain)
+	if len(secondAgain.Choices) != 1 || !strings.Contains(secondAgain.Choices[0].Prompt, "第 2/2 页") {
+		t.Fatalf("second again=%#v，往返后必须还能再次进入第二页", secondAgain.Choices)
 	}
 }
 
