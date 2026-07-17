@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -114,7 +115,7 @@ func (a *ACPAgent) waitLegacyPrompt(state legacyPromptState) (string, error) {
 				return "", err
 			}
 		case done := <-state.promptDone:
-			return finishLegacyPrompt(state, textParts, done)
+			return a.finishLegacyPrompt(state, textParts, done)
 		}
 	}
 }
@@ -155,8 +156,14 @@ func appendLegacyChunk(parts []string, update *sessionUpdate) []string {
 	return parts
 }
 
-// finishLegacyPrompt 排空已到达的正文更新并解析最终响应。
-func finishLegacyPrompt(state legacyPromptState, parts []string, done legacyPromptDone) (string, error) {
+// finishLegacyPrompt 在 RPC 先返回取消错误时补发 cancel，再解析其余终态响应。
+func (a *ACPAgent) finishLegacyPrompt(state legacyPromptState, parts []string, done legacyPromptDone) (string, error) {
+	if ctxErr := state.ctx.Err(); ctxErr != nil && errors.Is(done.err, ctxErr) {
+		if err := a.cancelLegacyPrompt(state); err != nil {
+			return "", err
+		}
+		return "", ctxErr
+	}
 	for {
 		select {
 		case update := <-state.notifyCh:
