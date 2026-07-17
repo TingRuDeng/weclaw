@@ -15,7 +15,7 @@ func isClaudeSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "owner", "cli", "model", "help", "page":
+	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "owner", "cli", "model", "quota", "help", "page":
 		return true
 	default:
 		return false
@@ -95,6 +95,8 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 		return textNavigationResult(h.handleClaudeCLI(route))
 	case "model":
 		return textNavigationResult(h.handleClaudeModelCommand(route.Context, route.Agent, fields[2:]))
+	case "quota":
+		return textNavigationResult(h.renderClaudeQuota(route.Context, route.Agent))
 	case "new":
 		return textNavigationResult(h.handleClaudeNew(route))
 	case "switch":

@@ -18,6 +18,7 @@ func TestBuildHelpText(t *testing.T) {
 		"WeClaw 帮助",
 		"常用：",
 		"Codex：",
+		"Claude：",
 		"发送消息：",
 		"更多：",
 		"/status 查看 WeClaw 运行态",
@@ -29,6 +30,7 @@ func TestBuildHelpText(t *testing.T) {
 		"/cx <编号|..> 选择或返回",
 		"/cx cli 打开本地 CLI",
 		"/cx app 打开 Codex App",
+		"/cc quota 查看 Claude 账号额度",
 		"/codex <内容> 发给 Codex",
 		"/cc <内容> 发给 Claude",
 		"@cc @cx <内容> 同时发送",
@@ -74,6 +76,7 @@ func TestBuildHelpText(t *testing.T) {
 		"常用：\n\n/status 查看 WeClaw 运行态",
 		"/status 查看 WeClaw 运行态\n\n/new 新建会话",
 		"Codex：\n\n/cx status 查看 Codex 会话状态",
+		"Claude：\n\n/cc quota 查看 Claude 账号额度",
 		"/cx ls 查看列表\n\n/cx <编号|..> 选择或返回",
 		"发送消息：\n\n/codex <内容> 发给 Codex",
 		"更多：\n\n/cx help Codex 高级命令",
@@ -192,6 +195,31 @@ func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
 	}
 	if !strings.Contains(reply.Choices[0].Prompt, "Codex") {
 		t.Fatalf("codex help prompt=%q, want section title", reply.Choices[0].Prompt)
+	}
+}
+
+func TestFeishuHelpClaudeSubmenuIncludesQuota(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "feishu-claude-help-1",
+		Text:      "/help claude",
+	}, reply)
+
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want one claude help card", reply.Choices)
+	}
+	got := helpChoiceIDs(reply.Choices[0].Choices)
+	for _, want := range []string{"/cc ls", "/cc status", "/cc owner", "/cc cli", "/cc pwd", "/cc quota", "/cc model ls", "/cc help", "/help"} {
+		if !got[want] {
+			t.Fatalf("claude help choices=%#v, want %q", reply.Choices[0].Choices, want)
+		}
+	}
+	if !strings.Contains(reply.Choices[0].Prompt, "Claude") {
+		t.Fatalf("claude help prompt=%q, want section title", reply.Choices[0].Prompt)
 	}
 }
 

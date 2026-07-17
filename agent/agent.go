@@ -22,7 +22,7 @@ type AgentInfo struct {
 	Model        string // e.g. "sonnet", "gpt-4o-mini"
 	Effort       string // e.g. "medium", "high"
 	Command      string // binary path, e.g. "/usr/local/bin/claude-agent-acp"
-	LocalCommand string // 本地交接命令；ACP adapter 仍由 Command 表示
+	LocalCommand string // 原生本地命令；ACP adapter 仍由 Command 表示
 	PID          int    // subprocess PID (0 if not applicable, e.g. http agent)
 }
 
@@ -205,6 +205,36 @@ type ClaudeModelAgent interface {
 type ClaudeModelControlAgent interface {
 	ClaudeModelAgent
 	SetClaudeModel(model string, effort string)
+}
+
+// ClaudeQuota 表示 Claude Code 登录账号的额度快照。
+type ClaudeQuota struct {
+	SubscriptionType    string
+	RateLimitsAvailable bool
+	Limits              []ClaudeRateLimit
+	ExtraUsage          *ClaudeExtraUsage
+}
+
+// ClaudeRateLimit 表示一个 Claude 订阅额度窗口。
+type ClaudeRateLimit struct {
+	ID          string
+	Name        string
+	UsedPercent *float64
+	ResetsAt    string
+}
+
+// ClaudeExtraUsage 表示 Claude 订阅的额外用量状态。
+type ClaudeExtraUsage struct {
+	Enabled      bool
+	UsedPercent  *float64
+	MonthlyLimit *float64
+	UsedCredits  *float64
+	Currency     string
+}
+
+// ClaudeQuotaAgent 暴露 Claude Code 登录账号的额度查询能力。
+type ClaudeQuotaAgent interface {
+	ReadClaudeQuota(ctx context.Context) (ClaudeQuota, error)
 }
 
 // CodexModelStatus 表示当前 WeClaw 传给 Codex 的模型配置。

@@ -7,7 +7,7 @@ import (
 
 // runAsUserSpec 描述以其他 Unix 用户运行 agent 的隔离配置。
 type runAsUserSpec struct {
-	User       string   // 目标 Unix 用户名；空表示不隔离
+	User        string   // 目标 Unix 用户名；空表示不隔离
 	PreserveEnv []string // 通过 sudo --preserve-env 透传的环境变量名白名单
 }
 
@@ -38,6 +38,20 @@ func (s runAsUserSpec) wrapCommand(command string, args []string) (string, []str
 	wrapped = append(wrapped, command)
 	wrapped = append(wrapped, args...)
 	return "sudo", wrapped
+}
+
+// preservesEnv 判断变量是否显式列入 sudo 透传白名单。
+func (s runAsUserSpec) preservesEnv(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.Contains(name, "=") {
+		return false
+	}
+	for _, candidate := range s.PreserveEnv {
+		if strings.TrimSpace(candidate) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanPreserveEnv 规整透传环境变量名，去除空白与非法（含 =）项。

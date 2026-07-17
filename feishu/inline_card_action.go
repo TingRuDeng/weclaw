@@ -200,7 +200,7 @@ func isInlineCardCommand(choice string) bool {
 			return false
 		}
 		switch fields[1] {
-		case "help", "ls", "cd", "page", "status", "whoami", "pwd", "model":
+		case "help", "ls", "cd", "page", "status", "whoami", "pwd", "model", "quota":
 			return true
 		}
 	}

@@ -138,6 +138,7 @@ func buildClaudeSessionHelpText() string {
 		"/cc status 查看 Claude session 状态",
 		"/cc owner [remote|local] 查看、接管或释放控制权",
 		"释放为 local 后普通消息会被拒绝；重新接管前请先结束本地 Claude CLI",
+		"/cc quota 查看 Claude 账号额度",
 		"/cc model ls 查看 Claude 可选模型",
 	)
 }

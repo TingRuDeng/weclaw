@@ -57,6 +57,7 @@ type ACPAgent struct {
 	capabilities          acpCapabilitySnapshot
 	stateSaveMu           sync.Mutex
 	claudeConfigMu        sync.Mutex
+	claudeQuotaMu         sync.Mutex
 
 	// pending tracks in-flight JSON-RPC requests
 	pendingMu sync.Mutex
@@ -74,6 +75,9 @@ type ACPAgent struct {
 
 	// rpcCall allows tests to stub JSON-RPC interactions without a subprocess.
 	rpcCall func(ctx context.Context, method string, params interface{}) (json.RawMessage, error)
+	// Claude quota hooks let tests replace local credential discovery and the fixed Anthropic request.
+	claudeQuotaOAuthToken func(context.Context) (string, error)
+	claudeQuotaOAuthQuery func(context.Context, string) (ClaudeQuota, error)
 
 	desktopProbe              codexDesktopOwnerProbe
 	codexOwners               *codexRuntimeOwnerRegistry
@@ -86,7 +90,7 @@ type ACPAgent struct {
 type ACPAgentConfig struct {
 	ConfiguredName   string   // 配置 map 中的 Agent 名称，用于稳定识别业务身份
 	Command          string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
-	LocalCommand     string   // 原生 Claude 命令，仅用于本地可见交接
+	LocalCommand     string   // 原生 Claude 命令，用于本地可见交接和账号额度查询回退
 	Args             []string // extra args for command (e.g. ["acp"] for cursor)
 	Model            string
 	Effort           string

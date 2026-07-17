@@ -37,3 +37,15 @@ func TestCleanPreserveEnvDedupAndFilter(t *testing.T) {
 		t.Fatalf("expected A,C got %q", got)
 	}
 }
+
+func TestRunAsUserPreservesOnlyExplicitEnvironment(t *testing.T) {
+	spec := runAsUserSpec{PreserveEnv: []string{"PATH", " CLAUDE_CODE_OAUTH_TOKEN ", "BAD=KEY"}}
+	if !spec.preservesEnv("CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatal("expected OAuth token to be preserved")
+	}
+	for _, name := range []string{"CLAUDE_CONFIG_DIR", "BAD=KEY", ""} {
+		if spec.preservesEnv(name) {
+			t.Fatalf("%q should not be preserved", name)
+		}
+	}
+}

@@ -60,7 +60,7 @@ ai_summary:
 
 - 修改启动、停止、更新、远程管理命令或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`messaging/admin_commands.go`、`scripts/release.sh`。
 - 修改消息命令或任务状态：先读 `messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`。
-- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/acp_sessions.go`、`agent/acp_session_catalog.go`、`messaging/codex_sessions.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`、`messaging/agent_task.go`。
+- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/acp_sessions.go`、`agent/acp_session_catalog.go`、`agent/claude_quota.go`、`agent/claude_quota_oauth.go`、`messaging/codex_sessions.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`、`messaging/claude_quota.go`、`messaging/agent_task.go`。
 - 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
 - 修改微信体验：先读 `wechat/`、`ilink/`、`messaging/progress.go`。
 - 修改配置：先读 `config/config.go`、`config/detect.go`、`web/view.go` 和相关测试。
@@ -91,7 +91,7 @@ ai_summary:
 - Codex 普通消息以持久化的 owner tuple 和 revision 作为写入授权，只读取已经建立的 runtime binding，不同步探测 Desktop，也不因 runtime unknown、断线或超时弹出 owner 选择。显式选择同一会话时，ready binding 直接复用，`unknown/conflict` binding 强制恢复；Desktop 与 WeClaw 的不同 turn 可以并存，Desktop 快照不会取消 WeClaw writer lease，也不会仅因 turn 不同把 runtime 标记为 conflict。跨远程窗口 owner/CAS、WeClaw 同 thread 单 lease 和活动任务 reservation 仍是硬门禁。
 - Claude 远程后端是 ACP-only；`session/list` 是目录事实源，`claudeSessionStore` 同时持久化 route binding 和 session control intent（`remote`、`local`、`unclaimed`），后者是 WeClaw 远程写入事实源；`ACPAgent.sessions` 只保存可重建运行态。`/cc new` 后尚未进入 ACP 目录的已接管空会话，只能由 `/cc ls` 从同一 route 的 ready binding + remote intent 暂态投影展示，不得进入 `/cc switch` 候选或绕过 `session/list` 校验。禁止重新引入 Claude CLI 聊天后端或 `~/.claude` transcript 扫描。
 - Claude 的 `/cc switch`、`/cc new`、飞书会话卡片、默认 Claude 的全局 `/new` 和 `/cc owner remote` 最终复用 owner-first acquire：先原子提交 route binding、目标 `remote` owner 和同 route 旧 session 的 `local` owner，再持久化窗口 Agent，最后执行 `session/resume`。恢复失败保留新选择和 owner，并把 binding 记为 `resume_failed` 以禁止普通写入；`/cc owner local` 只释放控制并保留选择，普通消息不会隐式重新接管。
-- `/cc cli` 只允许通过 `AgentInfo.LocalCommand` 交接空闲 session，且必须先把 owner 持久化为 `local` 并清理 ACP runtime；本地 CLI 结束前不要重新接管。独立 CLI 任务不属于 WeClaw active task，不能远程观察、回传进度、`/guide` 或停止。
+- `/cc cli` 只允许通过 `AgentInfo.LocalCommand` 交接空闲 session，且必须先把 owner 持久化为 `local` 并清理 ACP runtime；本地 CLI 结束前不要重新接管。独立 CLI 任务不属于 WeClaw active task，不能远程观察、回传进度、`/guide` 或停止。`/cc quota` 优先兼容 Claude Code 旧版 `Claude Code-credentials` Keychain 或 `CLAUDE_CONFIG_DIR/.credentials.json`（兼容 `claudeAiOauth`、`claude.ai_oauth`），只把内存中的 access token 发送到固定的 Anthropic OAuth usage 地址；禁止记录/持久化 token、回显响应体、跟随重定向、实现登录/刷新或复制新版 secure storage 解密逻辑。凭据不可读或请求失败时，通过 `AgentInfo.LocalCommand` 启动无会话持久化、禁用项目设置和 MCP 的短生命周期 Claude 原生进程，只发送 `initialize`、`get_usage` 两个控制消息。两条路径都不得发送模型提示词或扫描 transcript；相关上游契约可能变化，API key、第三方 provider 或缺少 profile 权限时必须明确展示订阅额度不可用。
 - Claude 绑定切换、任务登记和本地交接必须共用 `claudeBindingExecutionKey`，并通过 session 有序锁、owner tuple 和 revision 双重门禁避免双写。`local`、`unclaimed`、其他 route 的 `remote` 或 revision 变化都拒绝普通写入；v2 多 binding 冲突迁移为 `unclaimed`，不得静默选择赢家。
 - Claude ACP 复用通用后台任务队列：每个活动任务最多暂存一条消息，失败后仍自动续跑；`/cancel` 撤回暂存，`/stop` 按当前窗口 Agent 停止，`/guide` 对 Claude 明确不支持。
 - 微信 / 飞书显式切换到 Codex App 正在运行的会话后，WeClaw 会通过 app-server 读取 thread 状态、登记外部 active task，并在当前 turn 完成后回推结果。

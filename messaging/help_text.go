@@ -39,6 +39,10 @@ Codex：
 
 /cx app 打开 Codex App
 
+Claude：
+
+/cc quota 查看 Claude 账号额度
+
 发送消息：
 
 /codex <内容> 发给 Codex

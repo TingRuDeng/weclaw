@@ -58,7 +58,7 @@ func TestClaudeSelectionRouteMatrixWriteEntries(t *testing.T) {
 }
 
 func TestClaudeSelectionRouteMatrixReadOnlyCommandsPreserveControlSnapshot(t *testing.T) {
-	commands := []string{"/cc ls", "/cc pwd", "/cc status", "/cc owner", "/cc model ls"}
+	commands := []string{"/cc ls", "/cc pwd", "/cc status", "/cc owner", "/cc quota", "/cc model ls"}
 	for _, command := range commands {
 		t.Run(command, func(t *testing.T) {
 			h, fake, workspace := newClaudeACPNavigationHandler(t)

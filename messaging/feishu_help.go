@@ -89,6 +89,7 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/cc owner", Label: "控制权状态"},
 			{ID: "/cc cli", Label: "本地 CLI 接管"},
 			{ID: "/cc pwd", Label: "当前项目目录"},
+			{ID: "/cc quota", Label: "账号额度"},
 			{ID: "/cc model ls", Label: "可用模型"},
 			{ID: "/cc help", Label: "完整命令"},
 		}
