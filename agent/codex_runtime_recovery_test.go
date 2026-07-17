@@ -27,6 +27,68 @@ func TestACPAgentResetSessionRebindsNewThreadRuntime(t *testing.T) {
 	}
 }
 
+func TestACPAgentResetSessionKeepsFreshThreadWritableBeforeFirstTurn(t *testing.T) {
+	a := runtimeRecoveryTestAgent(t, CodexRuntimeUnknown)
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil
+		case "thread/read":
+			request := params.(map[string]interface{})
+			if request["threadId"] != "thread-new" || request["includeTurns"] != true {
+				t.Fatalf("thread/read params=%#v", request)
+			}
+			return nil, errors.New("agent error: thread thread-new is not materialized yet; includeTurns is unavailable before first user message")
+		default:
+			return nil, errors.New("unexpected rpc method: " + method)
+		}
+	}
+
+	threadID, err := a.ResetSession(context.Background(), "conversation-1")
+	if err != nil || threadID != "thread-new" {
+		t.Fatalf("ResetSession()=(%q,%v), want thread-new", threadID, err)
+	}
+	request := CodexRuntimeRequest{
+		Ref: CodexThreadRef{ConversationID: "conversation-1", ThreadID: threadID},
+		Intent: CodexControlIntent{
+			Owner: CodexControlRemote, RouteKey: "route-1",
+			ConversationID: "conversation-1", Revision: 1,
+		},
+	}
+	binding, err := a.HandoffCodexRuntime(context.Background(), request)
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("HandoffCodexRuntime() binding=%#v err=%v", binding, err)
+	}
+	state, err := a.ReadCodexThreadState(context.Background(), "conversation-1", threadID)
+	if err != nil {
+		t.Fatalf("ReadCodexThreadState() error=%v", err)
+	}
+	if state.ThreadID != threadID || state.Active || state.ActiveTurnID != "" {
+		t.Fatalf("fresh thread state=%#v", state)
+	}
+	lease, err := a.codexOwners.beginTurn(request)
+	if err != nil {
+		t.Fatalf("fresh thread must accept first turn: %v", err)
+	}
+	lease.finish()
+}
+
+func TestACPAgentReadCodexThreadStatePreservesOtherReadErrors(t *testing.T) {
+	a := runtimeRecoveryTestAgent(t, CodexRuntimeUnknown)
+	wantErr := errors.New("agent error: thread thread-new is not materialized yet")
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, errors.New("unexpected rpc method: " + method)
+		}
+		return nil, wantErr
+	}
+
+	_, err := a.ReadCodexThreadState(context.Background(), "conversation-new", "thread-new")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ReadCodexThreadState() error=%v, want %v", err, wantErr)
+	}
+}
+
 func TestACPAgentClearCodexThreadUnbindsConversation(t *testing.T) {
 	a := runtimeRecoveryTestAgent(t, CodexRuntimeUnknown)
 	a.ClearCodexThread("conversation-1")

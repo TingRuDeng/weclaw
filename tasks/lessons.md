@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-17 Codex 空会话不得误判为写入冲突
+
+- 触发条件：`thread/start` 已成功返回新 thread，但该 thread 尚未收到第一条用户消息；随后会话接管或外部任务观察读取 `thread/read(includeTurns=true)`。
+- 规则：Codex app-server 返回 `includeTurns is unavailable before first user message` 表示确定的空闲空会话，不是 runtime 故障，更不是 writer 冲突；只有 writer lease 重叠或不同 active turn 等实际写入证据才能进入 `CodexRuntimeConflict`。Desktop IPC 不可用只能影响旧通道清理或 runtime 可用性，不能污染新 thread。
+- 反例：`/new` 成功创建并接管新 thread 后，外部任务观察把“尚未 materialize”当成读取失败，调用 `MarkCodexRuntimeConflict`，导致首条普通消息被永久阻断。
+- 正确做法：在 Agent 协议边界把首条消息前的 turns 不可读归一化为空闲 `CodexThreadState`；回归测试必须覆盖 `ResetSession → HandoffCodexRuntime → 空会话读取 → 第一条 writer lease`，发布前再用真实 Codex app-server 验证 `thread/start → 空会话读取 → 第一条 turn`。
+- 来源：2026-07-17 用户执行 `/new` 后立即看到“运行位置: 写入冲突”；真实日志确认新 thread 没有 active turn，协议级冒烟复现并验证修复。
+
 ## 2026-07-17 飞书分页快照与回调幂等必须分离
 
 - 触发条件：用户在 `/cx ls` 或 `/cc ls` 卡片中反复点击上一页、下一页，重新进入之前访问过的页码。

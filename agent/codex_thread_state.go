@@ -50,16 +50,13 @@ func (a *ACPAgent) ReadCodexThreadState(ctx context.Context, conversationID stri
 			return CodexThreadState{}, ErrCodexRuntimeConflict
 		}
 	}
-	params := map[string]interface{}{"threadId": strings.TrimSpace(threadID), "includeTurns": true}
-	result, err := a.rpc(ctx, "thread/read", params)
-	if err != nil {
-		return CodexThreadState{}, err
-	}
-	var response codexThreadReadResponse
-	if err := json.Unmarshal(result, &response); err != nil {
-		return CodexThreadState{}, fmt.Errorf("parse thread/read result: %w", err)
-	}
-	return codexThreadStateFromSnapshot(response.Thread), nil
+	return a.readCodexAppServerThreadState(ctx, threadID)
+}
+
+func isCodexThreadPendingFirstTurn(err error) bool {
+	return err != nil && strings.Contains(
+		err.Error(), "includeTurns is unavailable before first user message",
+	)
 }
 
 // SteerCodexThread 把用户补充输入追加到当前 active turn。

@@ -214,10 +214,16 @@ func checkpointTurnChanged(checkpoint CodexRolloutCheckpoint, state CodexThreadS
 }
 
 func (a *ACPAgent) readCodexAppServerThreadState(ctx context.Context, threadID string) (CodexThreadState, error) {
+	threadID = strings.TrimSpace(threadID)
 	result, err := a.rpc(ctx, "thread/read", map[string]interface{}{
-		"threadId": strings.TrimSpace(threadID), "includeTurns": true,
+		"threadId": threadID, "includeTurns": true,
 	})
 	if err != nil {
+		// thread/start 返回的新 thread 在收到首条用户消息前尚未 materialize。
+		// 此时没有 turn 是确定的空闲态，不能把协议限制升级为写入冲突。
+		if isCodexThreadPendingFirstTurn(err) {
+			return CodexThreadState{ThreadID: threadID}, nil
+		}
 		return CodexThreadState{}, err
 	}
 	var response codexThreadReadResponse
