@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-17 Codex 展示目录不得清除远程会话绑定
+
+- 触发条件：`/cx new` 已创建并接管 thread，但首条用户消息尚未让该 thread 写入 Codex App 展示目录；随后执行 `/cx status`、`/cx ls` 或其他读取会话目录的命令。
+- 规则：持久化的 route binding 与 remote control intent 是当前窗口选择的权威状态；Codex App SQLite、会话索引等展示目录只能补充名称和列表，目录暂时看不到 thread 不能反向清空仍由该 route 远程持有的绑定。
+- 反例：状态查询为显示新会话名称读取 App SQLite，因新 thread 的 `preview` 为空而得到空列表，随后把当前 `ThreadID` 当成失效缓存清空；下一条普通消息因此错误提示“没有有效的 Codex 会话”。
+- 正确做法：清理展示目录中不可见的旧缓存前先核对 control intent；同一 binding 仍持有 remote owner 时保留 thread。回归测试覆盖 `/cx new → /cx status → 第一条普通消息`，同时保留“无 owner 的归档旧缓存仍会清除”的反向测试。
+- 来源：2026-07-17 用户执行 `/cx new` 后查询状态，下一条普通消息仍提示重新选择或新建；日志与状态文件时间戳确认 `/cx status` 清空了刚创建的 thread 绑定。
+
 ## 2026-07-17 Codex 空会话不得误判为写入冲突
 
 - 触发条件：`thread/start` 已成功返回新 thread，但该 thread 尚未收到第一条用户消息；随后会话接管或外部任务观察读取 `thread/read(includeTurns=true)`。

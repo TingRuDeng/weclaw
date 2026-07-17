@@ -2,11 +2,45 @@ package messaging
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
+
+func TestCodexStatusKeepsFreshRemoteThreadBeforeFirstTurn(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
+		t.Fatalf("write fake sqlite db: %v", err)
+	}
+	writeFakeSQLite3(t, `[]`)
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeUnknown, agent.CodexThreadState{})
+	ag.resetSessionID = "thread-new"
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(136, "/cx new"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(137, "/cx status"))
+
+	bindingKey := codexBindingKey("user-1", "codex")
+	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	if threadID != "thread-new" || pending {
+		t.Fatalf("status cleared fresh remote thread=%q pending=%v, messages=%#v", threadID, pending, calls.texts())
+	}
+	if _, err := h.resolveCodexConversationIDForRoute(
+		context.Background(), "user-1", "user-1", "codex", ag,
+	); err != nil {
+		t.Fatalf("first message should keep using fresh remote thread: %v", err)
+	}
+}
 
 func TestCodexStatusShowsWorkspaceThreadAndLocalEntryState(t *testing.T) {
 	h := NewHandler(nil, nil)
