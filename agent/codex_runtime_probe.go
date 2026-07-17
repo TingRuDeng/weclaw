@@ -71,7 +71,11 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 	// 窗口认领只需同步控制 revision，不应为此再次探测 Codex Desktop。
 	if req.Intent.Owner == CodexControlRemote {
 		if current, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok && current.Runtime == CodexRuntimeWeClaw {
-			return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, current.State)
+			binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, current.State)
+			if err == nil {
+				a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
+			}
+			return binding, err
 		}
 	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{allowConflictRecovery: true})
@@ -171,15 +175,24 @@ func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRu
 	if err != nil {
 		return CodexThreadBinding{}, err
 	}
-	a.mu.Lock()
-	a.threads[req.Ref.ConversationID] = req.Ref.ThreadID
-	delete(a.resumeOnFirstUse, req.Ref.ConversationID)
-	a.mu.Unlock()
 	binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
 	if err == nil {
-		a.persistState()
+		a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
 	}
 	return binding, err
+}
+
+func (a *ACPAgent) bindCodexAppServerThread(conversationID string, threadID string) {
+	conversationID = strings.TrimSpace(conversationID)
+	threadID = strings.TrimSpace(threadID)
+	if conversationID == "" || threadID == "" {
+		return
+	}
+	a.mu.Lock()
+	a.threads[conversationID] = threadID
+	delete(a.resumeOnFirstUse, conversationID)
+	a.mu.Unlock()
+	a.persistState()
 }
 
 func (a *ACPAgent) readCodexAppServerThreadState(ctx context.Context, threadID string) (CodexThreadState, error) {

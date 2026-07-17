@@ -245,6 +245,44 @@ func TestHandoffCodexRuntimeRemoteReusesKnownWeClawWithoutDesktopProbe(t *testin
 	}
 }
 
+func TestHandoffCodexRuntimeRemoteRebindsConversationWhenReusingKnownWeClaw(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: stateFile,
+	}, acpAgentOptions{desktopProbe: probe})
+	a.threads["conversation-1"] = "thread-old"
+	a.resumeOnFirstUse["conversation-1"] = true
+	a.codexOwners.claimWeClawConversation(CodexThreadRef{
+		ConversationID: "conversation-other", ThreadID: "thread-1",
+	}, CodexThreadState{ThreadID: "thread-1"})
+	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	req.Ref.ConversationID = "conversation-1"
+
+	binding, err := a.HandoffCodexRuntime(context.Background(), req)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("binding=%#v error=%v", binding, err)
+	}
+	if got := a.threads["conversation-1"]; got != "thread-1" {
+		t.Fatalf("conversation thread=%q, want thread-1", got)
+	}
+	if a.resumeOnFirstUse["conversation-1"] {
+		t.Fatal("rebound conversation should not keep stale resume marker")
+	}
+	tid, err := a.requireThread(context.Background(), "conversation-1")
+	if err != nil || tid != "thread-1" {
+		t.Fatalf("requireThread()=(%q,%v), want thread-1", tid, err)
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["conversation-1"]; got != "thread-1" {
+		t.Fatalf("persisted conversation thread=%q, want thread-1", got)
+	}
+	if probe.loadCalls != 0 || probe.discoverCalls != 0 {
+		t.Fatalf("known WeClaw runtime should not probe Desktop: load=%d discover=%d", probe.loadCalls, probe.discoverCalls)
+	}
+}
+
 func TestHandoffCodexRuntimeRemoteRefreshesReleasedThread(t *testing.T) {
 	rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
 	content := []byte("{\"type\":\"event_msg\"}\n")

@@ -558,3 +558,11 @@
 - 反例：`CurrentCodexRuntime=unknown/conflict` 直接拒绝普通消息，或把 `thread/resume: no rollout found`、Desktop IPC 不可达、checkpoint 变化统一写成 `RuntimeConflict`，导致飞书虽仍持有 owner 却无法写入。
 - 正确做法：同 route 的 remote owner 消息直接进入 writer 流程，unknown/conflict 在 `RunCodexTurn` 内自动恢复；只有真实 writer lease 或 observed turn 身份冲突保留并发保护。若 `/cx new` 已明确创建但首条 turn 前 thread 未 materialize，可原子补建并迁移 owner；已有历史的 thread 不得自动替换。
 - 来源：2026-07-17 用户再次明确“飞书是第一写入优先级，除非飞书释放控制权，不然不能阻止飞书写入”，并用 `no rollout found` 实机日志确认旧 runtime 门禁违背该规则。
+
+## 2026-07-17 Codex 切换必须同步 ACP conversation 指针
+
+- 触发条件：飞书窗口切换到一个已由 WeClaw app-server 持有的 Codex thread，而同一 conversation 在 ACP 持久化 state 中仍指向旧 thread。
+- 规则：显式切换或接管成功后，只要目标 runtime 确认为 `WeClaw app-server`，必须同步 ACP `conversationID -> threadID` 映射并清除旧 `resumeOnFirstUse` 标记；owner registry 更新不能替代 ACP thread map。
+- 反例：`/cx switch` 已把 owner 和 workspace 选到新 thread，但 `HandoffCodexRuntime` 因目标已是 WeClaw runtime 直接返回，没有更新 `a.threads`；下一条普通消息从旧 ACP 映射恢复已归档 thread，报 `session is archived`。
+- 正确做法：复用已知 WeClaw runtime 时仍调用同一绑定 helper；只有 runtime 激活成功后才持久化 ACP 映射。回归测试必须同时断言内存 `threads`、`resumeOnFirstUse` 和 state 文件。
+- 来源：2026-07-17 用户反馈“切换到 codex 会话后，发送信息一直报错”，实机日志显示切换到新 thread 后普通消息仍 `resume restored thread` 到旧归档 thread。

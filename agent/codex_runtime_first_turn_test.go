@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -39,10 +40,13 @@ func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
 	request.PendingFirstTurn = true
 	var replaced CodexThreadRef
 	var started CodexThreadRef
+	var refsMu sync.Mutex
 
 	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
 		Runtime: request, Message: "第一条消息",
 		OnThreadReplaced: func(_ CodexThreadRef, current CodexThreadRef) error {
+			refsMu.Lock()
+			defer refsMu.Unlock()
 			replaced = current
 			return nil
 		},
@@ -50,6 +54,8 @@ func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
 			if turnID != "turn-new" {
 				t.Fatalf("turnID=%q", turnID)
 			}
+			refsMu.Lock()
+			defer refsMu.Unlock()
 			started = thread
 			return nil
 		},
@@ -57,8 +63,11 @@ func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
 	if err != nil || reply != "补建后执行成功" {
 		t.Fatalf("reply=%q error=%v", reply, err)
 	}
-	if replaced.ThreadID != "thread-new" || started.ThreadID != "thread-new" {
-		t.Fatalf("replaced=%#v started=%#v", replaced, started)
+	refsMu.Lock()
+	replacedSnapshot, startedSnapshot := replaced, started
+	refsMu.Unlock()
+	if replacedSnapshot.ThreadID != "thread-new" || startedSnapshot.ThreadID != "thread-new" {
+		t.Fatalf("replaced=%#v started=%#v", replacedSnapshot, startedSnapshot)
 	}
 	if binding, ok := a.codexOwners.threadBinding("thread-new"); !ok ||
 		binding.Runtime != CodexRuntimeWeClaw || binding.Control != request.Intent {
