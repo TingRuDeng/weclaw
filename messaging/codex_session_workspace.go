@@ -80,6 +80,7 @@ func (s *codexSessionStore) clearStaleWorkspaceThread(bindingKey string, workspa
 	}
 	session.ThreadID = ""
 	session.PendingNewThread = false
+	session.PendingFirstTurn = false
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	binding.Workspaces[workspaceRoot] = session
 	s.bindings[bindingKey] = binding
@@ -125,6 +126,7 @@ func (s *codexSessionStore) updateWorkspace(bindingKey string, workspaceRoot str
 			}
 			existing.ThreadID = ""
 			existing.PendingNewThread = false
+			existing.PendingFirstTurn = false
 			existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 			binding.Workspaces[root] = existing
 		}

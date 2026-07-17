@@ -63,6 +63,7 @@ func (h *Handler) createAndAcquireCodexSessionWithBindingLocked(req codexSession
 		})
 	}
 	req.acquire.route.threadID = created
+	req.acquire.pendingFirstTurn = true
 	result, acquireErr := h.acquireCodexSessionWithBindingLocked(req.acquire)
 	if acquireErr == nil {
 		return codexSessionCreateResult{acquireResult: result, createdThread: created}, nil

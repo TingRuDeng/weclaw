@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -74,8 +75,27 @@ func (h *Handler) pendingCodexTask(opts codexAgentTaskOptions) pendingAgentTask 
 	return pendingAgentTask{
 		message:    opts.message,
 		codexRoute: opts.route,
-		run:        func() { h.startCodexAgentTask(opts) },
+		run: func() {
+			opts.route = h.refreshReplacedCodexRoute(opts.route)
+			h.startCodexAgentTask(opts)
+		},
 	}
+}
+
+// refreshReplacedCodexRoute 只跟随同 workspace 内由首写补建产生的 remote thread 迁移。
+func (h *Handler) refreshReplacedCodexRoute(route codexConversationRoute) codexConversationRoute {
+	threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
+	threadID = strings.TrimSpace(threadID)
+	if pending || threadID == "" || threadID == route.threadID {
+		return route
+	}
+	current := h.ensureCodexSessions().controlIntent(threadID)
+	previous := h.ensureCodexSessions().controlIntent(route.threadID)
+	if current.Owner == codexControlRemote && current.RouteBindingKey == route.bindingKey &&
+		current.ConversationID == route.conversationID && previous.Owner == codexControlDesktop {
+		route.threadID = threadID
+	}
+	return route
 }
 
 // runCodexAgentTask 在后台完成 Codex 调用和最终回复发送。
@@ -124,7 +144,7 @@ func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgres
 func (h *Handler) runCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(string)) (string, error) {
 	return h.runControlledCodexTurn(codexControlledTurnOptions{
 		ctx: runtime.agentCtx, agent: runtime.opts.agent, route: runtime.route,
-		message: runtime.opts.message, onProgress: onProgress,
+		message: runtime.opts.message, onProgress: onProgress, task: runtime.task,
 	})
 }
 
@@ -134,6 +154,7 @@ type codexControlledTurnOptions struct {
 	route      codexConversationRoute
 	message    string
 	onProgress func(string)
+	task       *activeAgentTask
 }
 
 // runControlledCodexTurn 是所有消息入口启动 Codex turn 的唯一业务层出口。
@@ -144,13 +165,50 @@ func (h *Handler) runControlledCodexTurn(opts codexControlledTurnOptions) (strin
 			opts.ctx, opts.agent, opts.route.conversationID, opts.message, opts.onProgress,
 		)
 	}
-	request, _, err := h.buildCodexRuntimeRequest(opts.route, opts.route.threadID)
-	if err != nil {
-		return "", err
-	}
+	request := h.buildCodexRuntimeRequestForTurn(opts.route, opts.route.threadID)
 	return liveAgent.RunCodexTurn(opts.ctx, agent.CodexTurnRequest{
 		Runtime: request, Message: opts.message, OnProgress: opts.onProgress,
+		OnThreadReplaced: func(previous agent.CodexThreadRef, current agent.CodexThreadRef) error {
+			return h.commitCodexFirstTurnReplacement(opts, previous, current)
+		},
+		OnTurnStarted: func(thread agent.CodexThreadRef, _ string) error {
+			if thread.ConversationID == opts.route.conversationID {
+				h.ensureCodexSessions().clearPendingFirstTurn(
+					opts.route.bindingKey, opts.route.workspaceRoot, thread.ThreadID,
+				)
+			}
+			return nil
+		},
 	})
+}
+
+func (h *Handler) commitCodexFirstTurnReplacement(
+	opts codexControlledTurnOptions,
+	previous agent.CodexThreadRef,
+	current agent.CodexThreadRef,
+) error {
+	if previous.ConversationID != opts.route.conversationID || current.ConversationID != opts.route.conversationID ||
+		previous.ThreadID != opts.route.threadID {
+		return fmt.Errorf("Codex 首次写入 thread 替换与当前路由不一致")
+	}
+	unlock, err := h.lockCodexSessionThreads(codexSessionThreadLockRequest{
+		ctx: opts.ctx, command: "first-turn-replace",
+		threadIDs: []string{previous.ThreadID, current.ThreadID},
+	})
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := h.ensureCodexSessions().replaceRemoteFirstTurnThread(
+		opts.route.bindingKey, opts.route.workspaceRoot, opts.route.conversationID,
+		previous.ThreadID, current.ThreadID,
+	); err != nil {
+		return err
+	}
+	if opts.task != nil {
+		opts.task.replaceCodexThread(previous.ThreadID, current.ThreadID)
+	}
+	return nil
 }
 
 func codexTaskOwnerSnapshot(ag agent.Agent) (agent.CodexRuntimeHolder, uint64) {

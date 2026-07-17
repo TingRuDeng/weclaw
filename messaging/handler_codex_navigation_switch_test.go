@@ -67,9 +67,9 @@ func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
 		t.Fatalf("运行通道失败后仍应提交目标，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已切换并接管") || !strings.Contains(text, "所有权已保留") ||
+	if !strings.Contains(text, "已切换并接管") || strings.Contains(text, "运行通道: 暂不可用") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") || strings.Contains(text, "thread-store internal error") {
-		t.Fatalf("runtime failure should keep committed selection without a draft, messages=%#v", calls.texts())
+		t.Fatalf("runtime failure should keep committed selection without false conflict or draft, messages=%#v", calls.texts())
 	}
 }
 
@@ -139,9 +139,9 @@ func TestCodexShortIndexCommitsBindingWhenSingleSessionRuntimeCannotBeRestored(t
 		t.Fatalf("active=%q old=%q target=%q pending=%t intents=(%#v,%#v)", active, oldThread, targetThread, pending, oldIntent, targetIntent)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已进入工作空间并接管唯一会话") || !strings.Contains(text, "所有权已保留") ||
+	if !strings.Contains(text, "已进入工作空间并接管唯一会话") || strings.Contains(text, "运行通道: 暂不可用") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") {
-		t.Fatalf("reply should report committed selection with unavailable runtime, messages=%#v", calls.texts())
+		t.Fatalf("reply should report committed selection without false conflict, messages=%#v", calls.texts())
 	}
 }
 

@@ -207,8 +207,8 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch thread-bad"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已切换并接管") || !strings.Contains(text, "所有权已保留") {
-		t.Fatalf("reply should report committed ownership and unavailable runtime, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已切换并接管") || strings.Contains(text, "运行通道: 暂不可用") {
+		t.Fatalf("reply should report committed ownership without a false conflict, messages=%#v", calls.texts())
 	}
 	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
 	currentThread, _ := h.codexSessions.getThread(bindingKey, currentWorkspace)

@@ -177,8 +177,8 @@ func TestCodexOwnerDesktopTimeoutKeepsReleaseWithoutSecondProbe(t *testing.T) {
 	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlDesktop {
 		t.Fatalf("intent=%#v", intent)
 	}
-	if binding := ag.threadBinding("thread-1"); binding.Runtime != agent.CodexRuntimeConflict || binding.Control.Owner != agent.CodexControlDesktop {
-		t.Fatalf("binding=%#v", binding)
+	if binding := ag.threadBinding("thread-1"); binding.Runtime == agent.CodexRuntimeConflict {
+		t.Fatalf("释放确认超时不能伪造写入冲突，binding=%#v", binding)
 	}
 }
 
@@ -196,8 +196,8 @@ func TestCodexOwnerDesktopRuntimeFailureKeepsPersistedRelease(t *testing.T) {
 	if ag.handoffCalls != 1 || ag.bindCalls != 0 {
 		t.Fatalf("handoff=%d inspect=%d", ag.handoffCalls, ag.bindCalls)
 	}
-	if binding := ag.threadBinding("thread-1"); binding.Runtime != agent.CodexRuntimeConflict {
-		t.Fatalf("binding=%#v", binding)
+	if binding := ag.threadBinding("thread-1"); binding.Runtime == agent.CodexRuntimeConflict {
+		t.Fatalf("释放确认失败不能伪造写入冲突，binding=%#v", binding)
 	}
 	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlDesktop {
 		t.Fatalf("intent=%#v", intent)

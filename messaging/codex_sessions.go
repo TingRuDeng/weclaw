@@ -33,12 +33,13 @@ type codexSessionBinding struct {
 type codexWorkspaceSession struct {
 	ThreadID         string
 	PendingNewThread bool
+	PendingFirstTurn bool
 	UpdatedAt        string
 }
 
 const legacyBindingDefaultPlatform = "wechat"
 
-const codexSessionStateVersion = 2
+const codexSessionStateVersion = 3
 
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
@@ -95,6 +96,7 @@ func (s *codexSessionStore) setThread(bindingKey string, workspaceRoot string, t
 	s.updateWorkspace(bindingKey, workspaceRoot, codexWorkspaceSession{
 		ThreadID:         strings.TrimSpace(threadID),
 		PendingNewThread: false,
+		PendingFirstTurn: false,
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	})
 }
@@ -103,8 +105,36 @@ func (s *codexSessionStore) setPendingNew(bindingKey string, workspaceRoot strin
 	s.updateWorkspace(bindingKey, workspaceRoot, codexWorkspaceSession{
 		ThreadID:         "",
 		PendingNewThread: true,
+		PendingFirstTurn: false,
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (s *codexSessionStore) isPendingFirstTurn(bindingKey string, workspaceRoot string, threadID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	session := s.bindings[bindingKey].Workspaces[workspaceRoot]
+	return session.PendingFirstTurn && strings.TrimSpace(session.ThreadID) == strings.TrimSpace(threadID)
+}
+
+// clearPendingFirstTurn 在首个 turn 已被 Codex 接受后清除空会话恢复标记。
+func (s *codexSessionStore) clearPendingFirstTurn(bindingKey string, workspaceRoot string, threadID string) bool {
+	s.mu.Lock()
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	binding := s.bindings[bindingKey]
+	session, ok := binding.Workspaces[workspaceRoot]
+	if !ok || !session.PendingFirstTurn || strings.TrimSpace(session.ThreadID) != strings.TrimSpace(threadID) {
+		s.mu.Unlock()
+		return false
+	}
+	session.PendingFirstTurn = false
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	binding.Workspaces[workspaceRoot] = session
+	s.bindings[bindingKey] = binding
+	s.mu.Unlock()
+	s.save()
+	return true
 }
 
 func (s *codexSessionStore) ensureWorkspace(bindingKey string, workspaceRoot string) {

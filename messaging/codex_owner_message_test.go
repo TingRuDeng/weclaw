@@ -87,29 +87,44 @@ func TestCodexUnclaimedFeishuMessageReturnsOwnerCard(t *testing.T) {
 	}
 }
 
-func TestCodexRemoteOwnedRuntimeFailureDoesNotReturnOwnerCard(t *testing.T) {
+func TestCodexRemoteOwnedRuntimeFailureDoesNotBlockMessage(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
+	snapshot := h.codexSessions.remoteSelectionSnapshot(route.bindingKey, route.threadID)
+	if _, err := h.codexSessions.commitRemoteSelection(codexRemoteSelectionUpdate{
+		BindingKey: route.bindingKey, WorkspaceRoot: route.workspaceRoot,
+		TargetThreadID: route.threadID, ConversationID: route.conversationID,
+		PendingFirstTurn: true, Expected: snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	opts.platform = platform.PlatformFeishu
 	opts.reply = reply
 
 	h.startCodexAgentTask(opts)
 
-	waitUntil(t, func() bool { return len(reply.Texts) > 0 })
+	waitUntil(t, func() bool {
+		runCalls, _ := ag.runCallSnapshot()
+		return runCalls == 1
+	})
+	runCalls, lastTurnReq := ag.runCallSnapshot()
 	intent := h.codexSessions.controlIntent(route.threadID)
-	if len(reply.Choices) != 0 || ag.runCalls != 0 || ag.bindCalls != 0 || ag.handoffCalls != 0 {
-		t.Fatalf("runtime 异常不应要求重选 owner，choices=%#v run=%d inspect=%d handoff=%d", reply.Choices, ag.runCalls, ag.bindCalls, ag.handoffCalls)
+	if len(reply.Choices) != 0 || ag.bindCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("remote owner 的普通消息不应被 runtime 快照阻断，choices=%#v run=%d inspect=%d handoff=%d", reply.Choices, runCalls, ag.bindCalls, ag.handoffCalls)
+	}
+	if !lastTurnReq.Runtime.PendingFirstTurn {
+		t.Fatal("无 rollout 的远程会话应允许在 missing thread 时安全补建")
 	}
 	if intent.Owner != codexControlRemote || intent.RouteBindingKey != route.bindingKey || intent.ConversationID != route.conversationID {
 		t.Fatalf("runtime 异常不应修改 remote owner，intent=%#v", intent)
 	}
-	if text := strings.Join(reply.Texts, "\n"); !strings.Contains(text, "运行通道暂不可用") || !strings.Contains(text, "所有权保持不变") {
-		t.Fatalf("reply=%q", text)
+	if text := strings.Join(reply.Texts, "\n"); strings.Contains(text, "运行通道暂不可用") {
+		t.Fatalf("reply=%q，remote owner 不应被技术门禁拒绝", text)
 	}
 }
 
-func TestCodexRemoteOwnedConflictRejectsBeforeActiveObserver(t *testing.T) {
+func TestCodexRemoteOwnedConflictDoesNotBlockMessage(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
 	ag.mu.Lock()
 	ag.binding.Runtime = agent.CodexRuntimeConflict
@@ -125,13 +140,13 @@ func TestCodexRemoteOwnedConflictRejectsBeforeActiveObserver(t *testing.T) {
 
 	h.startCodexAgentTask(opts)
 
-	waitUntil(t, func() bool { return len(reply.Texts) > 0 })
+	waitUntil(t, func() bool {
+		runCalls, _ := ag.runCallSnapshot()
+		return runCalls == 1
+	})
 	text := strings.Join(reply.Texts, "\n")
-	if !strings.Contains(text, "运行通道暂不可用") || strings.Contains(text, "发生写入冲突") {
-		t.Fatalf("reply=%q，冲突态应先走运行通道拒绝，不应尝试附加旧 active observer", text)
-	}
-	if _, active := h.activeTask(route.conversationID); active {
-		t.Fatal("冲突态不应登记活动任务观察器")
+	if strings.Contains(text, "运行通道暂不可用") {
+		t.Fatalf("reply=%q，持有 remote owner 时旧 conflict 快照不能阻断普通消息", text)
 	}
 }
 

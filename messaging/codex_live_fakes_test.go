@@ -246,6 +246,11 @@ func (f *fakeCodexLiveAgent) RunCodexTurn(ctx context.Context, req agent.CodexTu
 	if err := waitCodexLiveTestHook(ctx, release); err != nil {
 		return "", err
 	}
+	if req.OnTurnStarted != nil {
+		if err := req.OnTurnStarted(req.Runtime.Ref, "turn-fake"); err != nil {
+			return "", err
+		}
+	}
 	return f.fakeCodexThreadAgent.Chat(ctx, req.Runtime.Ref.ConversationID, req.Message)
 }
 
@@ -300,6 +305,12 @@ func (f *fakeCodexLiveAgent) handoffRequests() []agent.CodexRuntimeRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]agent.CodexRuntimeRequest(nil), f.handoffHistory...)
+}
+
+func (f *fakeCodexLiveAgent) runCallSnapshot() (int, agent.CodexTurnRequest) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.runCalls, f.lastTurnReq
 }
 
 func (f *fakeCodexLiveAgent) threadBinding(threadID string) agent.CodexThreadBinding {

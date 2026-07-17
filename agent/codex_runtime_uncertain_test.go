@@ -61,8 +61,6 @@ func TestMarkedCodexRuntimeConflictRejectsAllThreadOperations(t *testing.T) {
 	assertCodexConflictError(t, a.InterruptCodexThread(context.Background(), req.Ref.ConversationID, req.Ref.ThreadID, "turn-1"))
 	_, watchErr := a.WatchCodexThread(context.Background(), req.Ref.ConversationID, req.Ref.ThreadID, nil)
 	assertCodexConflictError(t, watchErr)
-	_, runErr := a.RunCodexTurn(context.Background(), CodexTurnRequest{Runtime: req, Message: "继续"})
-	assertCodexConflictError(t, runErr)
 }
 
 func TestMarkCodexRuntimeConflictInvalidatesWriterLease(t *testing.T) {

@@ -94,7 +94,7 @@ func proposedCodexRemoteSelectionIntent(current codexControlIntent, route codexC
 	}
 }
 
-// handoffCodexRuntimeIntent 最多调用一次副作用；失败后直接按已提交意图进入冲突态。
+// handoffCodexRuntimeIntent 最多调用一次副作用。技术恢复失败只返回错误，不能伪造写入冲突。
 func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (codexRuntimeResolution, error) {
 	request, rollout, err := h.buildCodexRuntimeRequest(req.change.route, req.change.threadID)
 	if err != nil {
@@ -109,18 +109,11 @@ func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (cod
 	if handoffErr == nil {
 		return resolution, nil
 	}
-	markCtx := req.resyncCtx
-	cancel := func() {}
-	if markCtx == nil {
-		markCtx, cancel = newCodexSessionAcquireCleanupContext(req.ctx)
-	}
-	defer cancel()
-	markErr := req.liveAgent.MarkCodexRuntimeConflict(markCtx, request)
 	current, currentErr := req.liveAgent.CurrentCodexRuntime(request)
 	if currentErr == nil {
 		resolution.Binding = current
 	}
-	return resolution, errors.Join(handoffErr, markErr, currentErr)
+	return resolution, errors.Join(handoffErr, currentErr)
 }
 
 // compensateCodexRuntimeChanges 按已应用副作用的逆序恢复持久化权威意图。
@@ -137,10 +130,7 @@ func (h *Handler) compensateCodexRuntimeChanges(ctx context.Context, liveAgent a
 			change: reverse,
 		})
 		if err != nil {
-			markErr := h.markCodexRuntimeConflict(codexRuntimeConflictRequest{
-				ctx: ctx, liveAgent: liveAgent, change: reverse, intent: reverse.after,
-			})
-			compensationErr = errors.Join(compensationErr, err, markErr)
+			compensationErr = errors.Join(compensationErr, err)
 		}
 	}
 	return compensationErr

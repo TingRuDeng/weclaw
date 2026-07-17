@@ -71,7 +71,7 @@ func TestAcquireCodexSessionHandoffTimeoutDoesNotRetrySideEffect(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.agent.handoffErrors["thread-b"] = context.DeadlineExceeded
 	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if err != nil || !errors.Is(result.runtimeErr, context.DeadlineExceeded) {
+	if err != nil || result.runtimeErr != nil {
 		t.Fatalf("error=%v result=%#v", err, result)
 	}
 	if got := len(fixture.agent.handoffRequests()); got != 2 {
@@ -83,8 +83,8 @@ func TestAcquireCodexSessionHandoffTimeoutDoesNotRetrySideEffect(t *testing.T) {
 	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
 		t.Fatalf("target owner=%#v", got)
 	}
-	if got := fixture.agent.threadBinding("thread-b"); got.Runtime != agent.CodexRuntimeConflict {
-		t.Fatalf("runtime=%#v", got)
+	if got := fixture.agent.threadBinding("thread-b"); got.Runtime == agent.CodexRuntimeConflict {
+		t.Fatalf("handoff 超时不能伪造冲突，runtime=%#v", got)
 	}
 }
 

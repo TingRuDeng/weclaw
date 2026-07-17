@@ -26,11 +26,12 @@ type codexRemoteSelectionState struct {
 }
 
 type codexRemoteSelectionUpdate struct {
-	BindingKey     string
-	WorkspaceRoot  string
-	TargetThreadID string
-	ConversationID string
-	Expected       codexRemoteSelectionSnapshot
+	BindingKey       string
+	WorkspaceRoot    string
+	TargetThreadID   string
+	ConversationID   string
+	PendingFirstTurn bool
+	Expected         codexRemoteSelectionSnapshot
 }
 
 type codexRemoteSelectionResult struct {
@@ -273,13 +274,18 @@ func selectCodexRemoteWorkspace(state codexRemoteSelectionState, update codexRem
 		if root == update.WorkspaceRoot || strings.TrimSpace(session.ThreadID) != update.TargetThreadID {
 			continue
 		}
-		session.ThreadID, session.PendingNewThread = "", false
+		session.ThreadID, session.PendingNewThread, session.PendingFirstTurn = "", false, false
 		session.UpdatedAt = now.Format(time.RFC3339)
 		binding.Workspaces[root], changed = session, true
 	}
 	target := binding.Workspaces[update.WorkspaceRoot]
 	if strings.TrimSpace(target.ThreadID) != update.TargetThreadID || target.PendingNewThread {
 		target.ThreadID, target.PendingNewThread = update.TargetThreadID, false
+		target.PendingFirstTurn = update.PendingFirstTurn
+		target.UpdatedAt, changed = now.Format(time.RFC3339), true
+		binding.Workspaces[update.WorkspaceRoot] = target
+	} else if update.PendingFirstTurn && !target.PendingFirstTurn {
+		target.PendingFirstTurn = true
 		target.UpdatedAt, changed = now.Format(time.RFC3339), true
 		binding.Workspaces[update.WorkspaceRoot] = target
 	}

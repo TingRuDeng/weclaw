@@ -114,7 +114,7 @@ func TestCodexSessionCommandSwitchTimeoutKeepsOwnerAndReleasesBindingLock(t *tes
 
 	select {
 	case reply := <-switchResult:
-		if !strings.Contains(reply, "已切换并接管") || !strings.Contains(reply, "所有权已保留") {
+		if !strings.Contains(reply, "已切换并接管") || strings.Contains(reply, "运行通道: 暂不可用") {
 			t.Fatalf("switch reply=%q", reply)
 		}
 	case <-time.After(codexBindingTestCompletionTimeout):

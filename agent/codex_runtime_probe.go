@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -163,35 +161,15 @@ func codexProbeError(loadErr error) error {
 }
 
 func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
-	pendingFirstTurnCandidate := emptyCodexRolloutCheckpoint(req.Checkpoint)
-	if !pendingFirstTurnCandidate {
-		if err := validateCodexRolloutCheckpoint(req.Checkpoint); err != nil {
-			return CodexThreadBinding{}, err
-		}
-	}
 	if err := a.restartCodexAppServer(ctx); err != nil {
 		return CodexThreadBinding{}, err
 	}
 	if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
 		return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)
 	}
-	state, pendingFirstTurn, err := a.readCodexAppServerThreadStateResult(ctx, req.Ref.ThreadID)
+	state, _, err := a.readCodexAppServerThreadStateResult(ctx, req.Ref.ThreadID)
 	if err != nil {
 		return CodexThreadBinding{}, err
-	}
-	if pendingFirstTurnCandidate {
-		// thread/start 在首条用户消息前不会生成 rollout；协议返回的未 materialize
-		// 状态是比文件检查点更强的“从未写入”证据，不能把它误判成冲突。
-		if !pendingFirstTurn {
-			return CodexThreadBinding{}, ErrCodexCheckpointRequired
-		}
-	} else {
-		if err := validateCodexRolloutCheckpoint(req.Checkpoint); err != nil {
-			return CodexThreadBinding{}, err
-		}
-		if checkpointTurnChanged(req.Checkpoint, state) {
-			return CodexThreadBinding{}, ErrCodexCheckpointChanged
-		}
 	}
 	a.mu.Lock()
 	a.threads[req.Ref.ConversationID] = req.Ref.ThreadID
@@ -202,31 +180,6 @@ func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRu
 		a.persistState()
 	}
 	return binding, err
-}
-
-func emptyCodexRolloutCheckpoint(checkpoint CodexRolloutCheckpoint) bool {
-	return strings.TrimSpace(checkpoint.Path) == "" && strings.TrimSpace(checkpoint.TurnID) == "" &&
-		checkpoint.Offset == 0 && checkpoint.Size == 0 && !checkpoint.Active
-}
-
-func validateCodexRolloutCheckpoint(checkpoint CodexRolloutCheckpoint) error {
-	path := strings.TrimSpace(checkpoint.Path)
-	if path == "" || !filepath.IsAbs(path) || checkpoint.Offset < 0 || checkpoint.Size != checkpoint.Offset || checkpoint.Active {
-		return ErrCodexCheckpointRequired
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("读取 Codex rollout checkpoint: %w", err)
-	}
-	if info.Size() != checkpoint.Size {
-		return ErrCodexCheckpointChanged
-	}
-	return nil
-}
-
-func checkpointTurnChanged(checkpoint CodexRolloutCheckpoint, state CodexThreadState) bool {
-	turnID := strings.TrimSpace(checkpoint.TurnID)
-	return turnID != "" && turnID != strings.TrimSpace(state.LastTurnID)
 }
 
 func (a *ACPAgent) readCodexAppServerThreadState(ctx context.Context, threadID string) (CodexThreadState, error) {

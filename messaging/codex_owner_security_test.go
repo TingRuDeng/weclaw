@@ -18,7 +18,7 @@ func TestCodexOwnerRemoteFailureDoesNotLeakInternalDetails(t *testing.T) {
 	result := h.handleCodexOwnerCommand(runtime)
 
 	assertCodexOwnerReplySafe(t, result.Reply)
-	if !strings.Contains(result.Reply, "所有权已保留") {
+	if !strings.Contains(result.Reply, "已切换并接管") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
 }

@@ -42,7 +42,7 @@ func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testin
 	targetThread, pending := h.codexSessions.getThread(bindingKey, targetWorkspace)
 	if len(reply.Choices) != 0 || len(reply.Texts) != 1 ||
 		!strings.Contains(reply.Texts[0], "已进入工作空间并接管唯一会话") ||
-		!strings.Contains(reply.Texts[0], "所有权已保留") {
+		strings.Contains(reply.Texts[0], "运行通道: 暂不可用") {
 		t.Fatalf("choices=%#v texts=%#v", reply.Choices, reply.Texts)
 	}
 	if active != targetWorkspace || targetThread != "thread-b" || pending ||

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -95,8 +96,27 @@ func (h *Handler) buildCodexRuntimeRequest(route codexConversationRoute, threadI
 		Ref:        agent.CodexThreadRef{ConversationID: route.conversationID, ThreadID: threadID},
 		Intent:     agentControlIntent(intent),
 		Checkpoint: agentRolloutCheckpoint(rollout),
+		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
+			route.bindingKey, route.workspaceRoot, threadID,
+		),
 	}
 	return request, rollout, nil
+}
+
+// buildCodexRuntimeRequestForTurn 让 rollout 读取失败降级为无 checkpoint 恢复，不能否决 remote owner 的写入。
+func (h *Handler) buildCodexRuntimeRequestForTurn(route codexConversationRoute, threadID string) agent.CodexRuntimeRequest {
+	request, _, err := h.buildCodexRuntimeRequest(route, threadID)
+	if err == nil {
+		return request
+	}
+	log.Printf("[codex-task] 首次写入忽略 rollout checkpoint 读取失败 thread=%q: %v", threadID, err)
+	return agent.CodexRuntimeRequest{
+		Ref:    route.ref(threadID),
+		Intent: agentControlIntent(h.ensureCodexSessions().controlIntent(threadID)),
+		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
+			route.bindingKey, route.workspaceRoot, threadID,
+		),
+	}
 }
 
 func agentControlIntent(intent codexControlIntent) agent.CodexControlIntent {

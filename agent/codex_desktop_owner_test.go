@@ -344,7 +344,7 @@ func TestHandoffCodexRuntimeRemoteRecoversPendingFirstTurnWithoutCheckpoint(t *t
 	}
 }
 
-func TestHandoffCodexRuntimeRemoteStillRequiresCheckpointForMaterializedThread(t *testing.T) {
+func TestHandoffCodexRuntimeRemoteDoesNotLetCheckpointVetoOwner(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{
 		loadErr:      errors.New("dial unix codex-ipc.sock: connect: connection refused"),
 		socketExists: true, processExists: true,
@@ -356,14 +356,14 @@ func TestHandoffCodexRuntimeRemoteStillRequiresCheckpointForMaterializedThread(t
 	a.rpcCall = codexHandoffRPCFake(t, "thread-old", "turn-1")
 	req := remoteCodexRuntimeRequest("thread-old", "route-1", 1)
 
-	_, err := a.HandoffCodexRuntime(context.Background(), req)
+	binding, err := a.HandoffCodexRuntime(context.Background(), req)
 
-	if !errors.Is(err, ErrCodexCheckpointRequired) {
-		t.Fatalf("error=%v, want checkpoint required", err)
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.State.LastTurnID != "turn-1" {
+		t.Fatalf("binding=%#v error=%v", binding, err)
 	}
 }
 
-func TestHandoffCodexRuntimeRemoteRejectsPartialCheckpointBeforeRecovery(t *testing.T) {
+func TestHandoffCodexRuntimeRemoteIgnoresPartialCheckpoint(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{
 		loadErr:      errors.New("dial unix codex-ipc.sock: connect: connection refused"),
 		socketExists: true, processExists: true,
@@ -376,17 +376,14 @@ func TestHandoffCodexRuntimeRemoteRejectsPartialCheckpointBeforeRecovery(t *test
 		restarted = true
 		return nil
 	}
-	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
-		t.Fatal("partial checkpoint must fail before app-server recovery")
-		return nil, nil
-	}
+	a.rpcCall = codexHandoffRPCFake(t, "thread-new", "turn-1")
 	req := remoteCodexRuntimeRequest("thread-new", "route-1", 1)
 	req.Checkpoint = CodexRolloutCheckpoint{TurnID: "turn-unbacked"}
 
-	_, err := a.HandoffCodexRuntime(context.Background(), req)
+	binding, err := a.HandoffCodexRuntime(context.Background(), req)
 
-	if !errors.Is(err, ErrCodexCheckpointRequired) || restarted {
-		t.Fatalf("error=%v restarted=%v", err, restarted)
+	if err != nil || !restarted || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("binding=%#v error=%v restarted=%v", binding, err, restarted)
 	}
 }
 

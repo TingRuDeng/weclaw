@@ -113,18 +113,18 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 	var resolution codexRuntimeResolution
 	var err error
 	if _, live := ag.(agent.CodexLiveRuntimeAgent); live {
-		resolution, err = h.resolveBoundCodexRuntimeLocked(resolveOpts)
-		if err == nil {
-			err = ensureCodexRouteOwnsControl(resolution.Request.Intent, route)
-		}
+		intent := h.ensureCodexSessions().controlIntent(threadID)
+		err = ensureCodexRouteOwnsControl(agentControlIntent(intent), route)
 	} else {
 		resolution, err = h.resolveCodexRuntime(ctx, resolveOpts)
 	}
 	if err != nil {
 		return fmt.Errorf("恢复 Codex 会话失败: %w", err)
 	}
-	if err := ensureCodexRuntimeReady(resolution, route); err != nil {
-		return fmt.Errorf("恢复 Codex 会话失败: %w", err)
+	if _, live := ag.(agent.CodexLiveRuntimeAgent); !live {
+		if err := ensureCodexRuntimeReady(resolution, route); err != nil {
+			return fmt.Errorf("恢复 Codex 会话失败: %w", err)
+		}
 	}
 	h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
 	return nil
@@ -205,6 +205,7 @@ func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string,
 	if _, live := ag.(agent.CodexLiveRuntimeAgent); live {
 		// Live turn 已由 route 绑定到显式选择；ACP 的兼容映射可能仍指向旧 Desktop thread。
 		if selected, pending := store.getThread(bindingKey, workspaceRoot); !pending && strings.TrimSpace(selected) != "" {
+			store.clearPendingFirstTurn(bindingKey, workspaceRoot, selected)
 			return workspaceRoot, true
 		}
 	}

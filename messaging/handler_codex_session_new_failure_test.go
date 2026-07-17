@@ -26,6 +26,9 @@ func TestHandleCodexNewRuntimeFailureKeepsNewThreadAndOwner(t *testing.T) {
 	if thread != "thread-new" || pending || ag.threadID != "thread-new" {
 		t.Fatalf("运行通道失败后状态 thread=%q pending=%v mapping=%q", thread, pending, ag.threadID)
 	}
+	if !h.codexSessions.isPendingFirstTurn(bindingKey, workspace, "thread-new") {
+		t.Fatal("/cx new 创建的 thread 在首条消息前必须持久标记 pending-first-turn")
+	}
 	if old := h.codexSessions.controlIntent("thread-old"); old.Owner != codexControlDesktop {
 		t.Fatalf("old owner=%#v", old)
 	}
@@ -33,7 +36,7 @@ func TestHandleCodexNewRuntimeFailureKeepsNewThreadAndOwner(t *testing.T) {
 		t.Fatalf("target owner=%#v", target)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已创建并接管") || !strings.Contains(text, "所有权已保留") || strings.Contains(text, "原会话已恢复") {
+	if !strings.Contains(text, "已创建并接管") || strings.Contains(text, "原会话已恢复") {
 		t.Fatalf("回复=%q", text)
 	}
 }
@@ -55,12 +58,12 @@ func TestHandleCodexNewRuntimeFailureKeepsMappingWithoutPreviousThread(t *testin
 	if ag.clearCalledWith != "" || ag.threadID != "thread-new" || thread != "thread-new" || pending {
 		t.Fatalf("mapping clear=%q runtime=%q store=(%q,%v)", ag.clearCalledWith, ag.threadID, thread, pending)
 	}
-	if !containsText(calls.texts(), "所有权已保留") {
-		t.Fatalf("回复未说明所有权状态: %#v", calls.texts())
+	if !containsText(calls.texts(), "已创建并接管") {
+		t.Fatalf("回复未说明接管状态: %#v", calls.texts())
 	}
 }
 
-func TestHandleCodexNewRuntimeFailureBlocksWritesUntilExplicitRecovery(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureDoesNotBlockRemoteWrites(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.handoffErrors["thread-new"] = fmt.Errorf("handoff failed")
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -69,13 +72,13 @@ func TestHandleCodexNewRuntimeFailureBlocksWritesUntilExplicitRecovery(t *testin
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(125, "/cx new"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "所有权已保留") {
+	if !strings.Contains(text, "已创建并接管") {
 		t.Fatalf("回复=%q", text)
 	}
-	assertCodexCreateConflictBlocksUntilExplicitSelection(t, h, ag, workspace, bindingKey)
+	assertCodexCreateRuntimeFailureAllowsRemoteWrite(t, h, ag, workspace, bindingKey)
 }
 
-func assertCodexCreateConflictBlocksUntilExplicitSelection(t *testing.T, h *Handler, ag *fakeCodexSessionCreateAgent, workspace string, bindingKey string) {
+func assertCodexCreateRuntimeFailureAllowsRemoteWrite(t *testing.T, h *Handler, ag *fakeCodexSessionCreateAgent, workspace string, bindingKey string) {
 	t.Helper()
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	cfg := config.DefaultProgressConfig()
@@ -87,19 +90,13 @@ func assertCodexCreateConflictBlocksUntilExplicitSelection(t *testing.T, h *Hand
 		route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID, threadID: "thread-new"},
 	}
 	h.startCodexAgentTask(opts)
-	if len(reply.Texts) == 0 || ag.runCallSnapshot() != 0 {
-		t.Fatalf("冲突态未拒绝普通消息: texts=%#v run=%d", reply.Texts, ag.runCallSnapshot())
-	}
-	delete(ag.handoffErrors, "thread-new")
-	result := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
-	})
-	if !strings.Contains(result, "已切换并接管") {
-		t.Fatalf("显式重新选择失败: %q", result)
-	}
-	opts.reply = platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return ag.runCallSnapshot() == 1 })
+	if h.codexSessions.isPendingFirstTurn(bindingKey, workspace, "thread-new") {
+		t.Fatal("Codex 接受首个 turn 后必须立即清除 pending-first-turn")
+	}
+	if text := strings.Join(reply.Texts, "\n"); strings.Contains(text, "运行通道暂不可用") {
+		t.Fatalf("remote owner 的普通消息被技术恢复失败阻断: %q", text)
+	}
 }
 
 func TestCreateAndAcquireCodexSessionRestoresAfterHardFailureWithCanceledParent(t *testing.T) {

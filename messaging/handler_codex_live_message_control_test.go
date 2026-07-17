@@ -118,20 +118,20 @@ func TestCodexDesktopQueuedMessageKeepsResolvedStreamProgress(t *testing.T) {
 	}
 }
 
-func TestCodexUnknownRuntimeRejectsStartWithoutChangingOwner(t *testing.T) {
+func TestCodexUnknownRuntimeStartsWithoutChangingOwner(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 	h.startCodexAgentTask(opts)
-	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
+	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
 	text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n")
-	if ag.chatCallCount() != 0 || ag.bindCalls != 0 || ag.handoffCalls != 0 || !strings.Contains(text, "运行通道暂不可用") {
+	if ag.bindCalls != 0 || ag.handoffCalls != 0 || strings.Contains(text, "运行通道暂不可用") {
 		t.Fatalf("chat=%d inspect=%d handoff=%d text=%q", ag.chatCallCount(), ag.bindCalls, ag.handoffCalls, text)
-	}
-	if _, active := h.activeTask(route.conversationID); active {
-		t.Fatal("断线拒绝后不应留下 active task")
 	}
 	if intent := h.codexSessions.controlIntent(route.threadID); intent.Owner != codexControlRemote || intent.RouteBindingKey != route.bindingKey {
 		t.Fatalf("runtime unknown 不应改变 owner，intent=%#v", intent)
+	}
+	if ag.lastTurnReq.Runtime.PendingFirstTurn {
+		t.Fatal("普通历史 thread 不能仅因本地 rollout 为空获得自动补建资格")
 	}
 }
 
@@ -231,26 +231,26 @@ func TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt(t *testing.T) {
 	}
 }
 
-func TestCodexPendingMessageRechecksOwnerBeforeAutorun(t *testing.T) {
+func TestCodexPendingMessageKeepsRemoteOwnerPriority(t *testing.T) {
 	h, ag, opts, _ := liveMessageFixture(t, false)
 	pending := h.pendingCodexTask(opts)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 	pending.run()
-	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
-	if ag.chatCallCount() != 0 {
-		t.Fatal("pending 在 owner 断线后仍开始了新 turn")
+	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
+	if ag.chatCallCount() != 1 {
+		t.Fatal("pending 在 remote owner 仍有效时应继续启动新 turn")
 	}
 }
 
-func TestCodexMessageDoesNotRecoverUnknownRuntimeImplicitly(t *testing.T) {
+func TestCodexMessageDoesNotLetUnknownRuntimeVetoRemoteOwner(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 
 	h.startCodexAgentTask(opts)
 
-	waitUntil(t, func() bool { return len(opts.reply.(*platformtest.Replier).Texts) > 0 })
-	if ag.chatCallCount() != 0 || ag.bindCalls != 0 || ag.handoffCalls != 0 {
-		t.Fatalf("普通消息不应恢复 runtime，chat=%d inspect=%d handoff=%d", ag.chatCallCount(), ag.bindCalls, ag.handoffCalls)
+	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
+	if ag.bindCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("handler 不应把 runtime 快照当授权门禁，chat=%d inspect=%d handoff=%d", ag.chatCallCount(), ag.bindCalls, ag.handoffCalls)
 	}
 	if intent := h.codexSessions.controlIntent(route.threadID); intent.Owner != codexControlRemote || intent.RouteBindingKey != route.bindingKey {
 		t.Fatalf("runtime unknown 不应改变 owner，intent=%#v", intent)

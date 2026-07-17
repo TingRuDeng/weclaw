@@ -62,6 +62,14 @@ func (t *activeAgentTask) markCodexObservationInterrupted(threadID string, turnI
 	t.codexTurnID = turnID
 }
 
+func (t *activeAgentTask) replaceCodexThread(previousThreadID string, currentThreadID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.codexThreadID == previousThreadID {
+		t.codexThreadID = currentThreadID
+	}
+}
+
 func (t *activeAgentTask) markCodexRunning(binding agent.CodexThreadBinding) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

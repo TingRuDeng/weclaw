@@ -263,7 +263,7 @@ func (h *Handler) executeBroadcastAgentTurn(opts broadcastAgentTurnOptions) (str
 	}
 	reply, err := h.runControlledCodexTurn(codexControlledTurnOptions{
 		ctx: opts.runtime.ctx, agent: opts.agent, route: opts.runtime.codexRoute,
-		message: opts.request.message, onProgress: opts.onProgress,
+		message: opts.request.message, onProgress: opts.onProgress, task: opts.runtime.activeTask,
 	})
 	var interrupted *agent.CodexTurnInterruptedError
 	if !errors.As(err, &interrupted) {

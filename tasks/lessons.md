@@ -550,3 +550,11 @@
 - 反例：把 conversation runtime、session binding 或 `session/list` 中存在目标 session 当作写入授权；两个窗口会各自恢复同一 session 并并发写入，补偿失败还可能覆盖新赢家。
 - 正确做法：binding 锁外层配合排序 session 锁，copy-on-write 一次持久化 binding/control；任务登记前和 prompt 前复核 session/revision；只有窗口 Agent 持久化失败才在 after-image 仍匹配时回滚选择，runtime 失败保持 `remote + resume_failed`。v2 多 binding 冲突不选赢家。
 - 来源：2026-07-15 Claude 远程会话“选择即接管”治理。
+
+## 2026-07-17 Codex remote owner 是飞书写入的唯一授权门禁
+
+- 触发条件：当前飞书 route 已持久化持有同一 Codex thread 的 `remote` owner，但 Desktop 探测、checkpoint、app-server 恢复或旧 conflict 快照异常。
+- 规则：owner tuple 决定“谁能写”，runtime 只决定“怎么写”；除非飞书显式释放为 `desktop`，技术探测和恢复失败不得撤销 owner、制造持久写入冲突或在普通消息入口拒绝飞书。该规则覆盖 2026-07-14 中“普通消息不得恢复 runtime”的旧约束。
+- 反例：`CurrentCodexRuntime=unknown/conflict` 直接拒绝普通消息，或把 `thread/resume: no rollout found`、Desktop IPC 不可达、checkpoint 变化统一写成 `RuntimeConflict`，导致飞书虽仍持有 owner 却无法写入。
+- 正确做法：同 route 的 remote owner 消息直接进入 writer 流程，unknown/conflict 在 `RunCodexTurn` 内自动恢复；只有真实 writer lease 或 observed turn 身份冲突保留并发保护。若 `/cx new` 已明确创建但首条 turn 前 thread 未 materialize，可原子补建并迁移 owner；已有历史的 thread 不得自动替换。
+- 来源：2026-07-17 用户再次明确“飞书是第一写入优先级，除非飞书释放控制权，不然不能阻止飞书写入”，并用 `no rollout found` 实机日志确认旧 runtime 门禁违背该规则。

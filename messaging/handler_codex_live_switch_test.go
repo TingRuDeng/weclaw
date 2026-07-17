@@ -112,7 +112,7 @@ func TestCodexSwitchRuntimeFailureKeepsNewOwnerAndAgent(t *testing.T) {
 	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote || got.RouteBindingKey != fixture.bindingKey {
 		t.Fatalf("target owner=%#v", got)
 	}
-	if !strings.Contains(text, "已切换并接管") || !strings.Contains(text, "所有权已保留") ||
+	if !strings.Contains(text, "已切换并接管") || strings.Contains(text, "运行通道: 暂不可用") ||
 		strings.Contains(text, "仍保持切换前的 Agent") {
 		t.Fatalf("text=%q", text)
 	}

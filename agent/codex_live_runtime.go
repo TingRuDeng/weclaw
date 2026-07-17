@@ -59,12 +59,18 @@ type CodexRuntimeRequest struct {
 	Ref        CodexThreadRef
 	Intent     CodexControlIntent
 	Checkpoint CodexRolloutCheckpoint
+	// PendingFirstTurn 表示该 thread 尚无已接受的用户 turn，可在协议确认不存在时安全补建。
+	PendingFirstTurn bool
 }
 
 type CodexTurnRequest struct {
 	Runtime    CodexRuntimeRequest
 	Message    string
 	OnProgress func(string)
+	// OnThreadReplaced 在空 thread 补建后、首个 turn 启动前原子迁移外层持久化选择。
+	OnThreadReplaced func(previous CodexThreadRef, current CodexThreadRef) error
+	// OnTurnStarted 在协议返回真实 turn ID 后同步外层首次写入生命周期。
+	OnTurnStarted func(thread CodexThreadRef, turnID string) error
 }
 
 // CodexTurnInterruptedError 表示 app-server 的观察流中断，最终结果仍需由调用方核对。

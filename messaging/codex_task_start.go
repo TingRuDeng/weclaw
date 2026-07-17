@@ -15,7 +15,8 @@ type codexTaskPreflightOptions struct {
 	cancel   context.CancelFunc
 }
 
-// preflightCodexTaskStart 在登记新任务前确认实时 owner 和 active turn。
+// preflightCodexTaskStart 在登记新任务前确认持久化 owner，并尽力识别可排队的 active turn。
+// runtime 快照只描述“如何写”，不能覆盖用户已经提交的 remote owner 授权。
 func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	if opts.route.threadID == "" {
 		return false
@@ -23,27 +24,20 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	if _, ok := opts.taskOpts.agent.(agent.CodexLiveRuntimeAgent); !ok {
 		return false
 	}
+	intent := h.ensureCodexSessions().controlIntent(opts.route.threadID)
+	if err := ensureCodexRouteOwnsControl(agentControlIntent(intent), opts.route); err != nil {
+		h.rejectCodexOwnerTaskStart(opts, err)
+		return true
+	}
 	resolution, err := h.resolveBoundCodexRuntimeLocked(codexRuntimeResolveOptions{
 		route: opts.route, threadID: opts.route.threadID, ag: opts.taskOpts.agent,
 	})
 	if err != nil {
-		h.rejectCodexTaskStart(opts, err)
-		return true
+		log.Printf("[codex-task] 忽略 remote owner 的运行时快照错误 thread=%q: %v", opts.route.threadID, err)
+		return false
 	}
-	if err := ensureCodexRouteOwnsControl(resolution.Request.Intent, opts.route); err != nil {
-		h.rejectCodexOwnerTaskStart(opts, err)
-		return true
-	}
-	if resolution.Binding.Runtime == agent.CodexRuntimeConflict {
-		h.rejectCodexRuntimeTaskStart(opts, agent.ErrCodexRuntimeConflict)
-		return true
-	}
-	if codexResolutionActive(resolution) {
+	if codexRuntimeReadyForRemoteTurn(resolution.Binding.Runtime) && codexResolutionActive(resolution) {
 		return h.queueMessageBehindLiveTask(opts)
-	}
-	if err := ensureCodexRuntimeReady(resolution, opts.route); err != nil {
-		h.rejectCodexRuntimeTaskStart(opts, err)
-		return true
 	}
 	return false
 }
@@ -107,13 +101,4 @@ func (h *Handler) rejectCodexTaskStart(opts codexTaskPreflightOptions, err error
 	opts.cancel()
 	message := fmt.Sprintf("当前 Codex 会话暂不能开始任务: %v", err)
 	sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID, message)
-}
-
-func (h *Handler) rejectCodexRuntimeTaskStart(opts codexTaskPreflightOptions, err error) {
-	opts.cancel()
-	log.Printf("[codex-task] 当前绑定的运行通道不可用 thread=%q: %v", opts.route.threadID, err)
-	sendPlatformText(
-		opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID,
-		"Codex 运行通道暂不可用；当前窗口的远程所有权保持不变，请稍后重试或发送 /cx status 查看状态。",
-	)
 }

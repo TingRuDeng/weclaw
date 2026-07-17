@@ -31,6 +31,8 @@ type codexSessionAcquireRequest struct {
 	taskContext context.Context
 	// forceRuntimeHandoff 只用于用户显式要求重新接管运行通道的 owner remote。
 	forceRuntimeHandoff bool
+	// pendingFirstTurn 标记 /cx new 创建但尚未接受首条用户消息的 thread。
+	pendingFirstTurn bool
 }
 
 // codexSessionAcquireResult 返回已提交的路由、运行时和观察状态。
@@ -91,11 +93,12 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 	}
 	h.bindConversationCwd(req.agent, req.route.conversationID, req.route.workspaceRoot)
 	committed, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
-		BindingKey:     req.route.bindingKey,
-		WorkspaceRoot:  req.route.workspaceRoot,
-		TargetThreadID: req.route.threadID,
-		ConversationID: req.route.conversationID,
-		Expected:       plan.snapshot,
+		BindingKey:       req.route.bindingKey,
+		WorkspaceRoot:    req.route.workspaceRoot,
+		TargetThreadID:   req.route.threadID,
+		ConversationID:   req.route.conversationID,
+		PendingFirstTurn: req.pendingFirstTurn,
+		Expected:         plan.snapshot,
 	})
 	if err != nil {
 		return codexSessionAcquireResult{}, err
@@ -250,15 +253,14 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	return result, nil
 }
 
-// failCodexAcquireRuntime 保留窗口所有权，并把无法安全写入的目标持续标记为冲突态。
+// failCodexAcquireRuntime 保留窗口所有权和真实 runtime；观察失败属于可重试技术错误。
 func (h *Handler) failCodexAcquireRuntime(result codexSessionAcquireResult, liveAgent agent.CodexLiveRuntimeAgent, cause error) codexSessionAcquireResult {
 	request := result.resolution.Request
-	markErr := liveAgent.MarkCodexRuntimeConflict(context.Background(), request)
 	binding, currentErr := liveAgent.CurrentCodexRuntime(request)
 	if currentErr == nil {
 		result.resolution.Binding = binding
 	}
-	result.runtimeErr = errors.Join(cause, markErr, currentErr)
+	result.runtimeErr = errors.Join(cause, currentErr)
 	return result
 }
 

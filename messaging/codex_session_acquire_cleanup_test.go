@@ -62,17 +62,17 @@ func TestAcquireCodexSessionOldReleaseFailureDoesNotProbeOrRollback(t *testing.T
 	assertFakeCodexBindingOwner(t, fixture.agent, "thread-b", agent.CodexControlRemote)
 }
 
-func TestAcquireCodexSessionTargetFailureMarksConflictAndKeepsOwner(t *testing.T) {
+func TestAcquireCodexSessionTargetFailureKeepsOwnerWithoutInventingConflict(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	fixture.agent.handoffAfterErrors["thread-b"] = errors.New("恢复后读取失败")
 	fixture.agent.inspectErrors["thread-b"] = errors.New("校准失败")
 	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
-	if err != nil || result.runtimeErr == nil {
+	if err != nil || result.runtimeErr != nil {
 		t.Fatalf("error=%v result=%#v", err, result)
 	}
 	binding := fixture.agent.threadBinding("thread-b")
-	if binding.Runtime != agent.CodexRuntimeConflict || binding.ConflictReason == "" {
-		t.Fatalf("binding=%#v", binding)
+	if binding.Runtime == agent.CodexRuntimeConflict || binding.ConflictReason != "" {
+		t.Fatalf("技术恢复失败不应伪造写入冲突，binding=%#v", binding)
 	}
 	if got := fixture.h.codexSessions.controlIntent("thread-b"); got.Owner != codexControlRemote {
 		t.Fatalf("target owner=%#v", got)
@@ -108,8 +108,8 @@ func TestFailCodexAcquireRuntimeDoesNotOverwriteNewerOwner(t *testing.T) {
 
 	result = fixture.h.failCodexAcquireRuntime(result, fixture.agent, errors.New("观察状态已变化"))
 
-	if !errors.Is(result.runtimeErr, agent.ErrCodexControlChanged) {
-		t.Fatalf("runtimeErr=%v，旧请求应被识别为控制权已变化", result.runtimeErr)
+	if result.runtimeErr == nil {
+		t.Fatalf("runtimeErr=%v，观察失败应保留为可重试技术错误", result.runtimeErr)
 	}
 	binding := fixture.agent.threadBinding("thread-b")
 	if binding.Control != newerIntent || binding.Runtime != agent.CodexRuntimeDesktop {
@@ -213,7 +213,7 @@ func TestCompensationExpiredCleanupDeadlineIsNeverRenewed(t *testing.T) {
 		},
 	}
 	if err := fixture.h.compensateCodexRuntimeChanges(sharedCleanup, fixture.agent, []codexRuntimeIntentChange{change}); err == nil {
-		t.Fatal("已到期共享 cleanup 的补偿应失败并进入 conflict")
+		t.Fatal("已到期共享 cleanup 的补偿应失败")
 	}
 	seen := make(map[string]bool)
 	for _, record := range records {
@@ -222,7 +222,7 @@ func TestCompensationExpiredCleanupDeadlineIsNeverRenewed(t *testing.T) {
 			t.Fatalf("%s deadline被续期: got=%v shared=%v", record.operation, record.deadline, sharedDeadline)
 		}
 	}
-	for _, operation := range []string{"handoff", "mark"} {
+	for _, operation := range []string{"handoff"} {
 		if !seen[operation] {
 			t.Fatalf("records=%#v, 缺少%s deadline", records, operation)
 		}
@@ -252,7 +252,7 @@ func assertSharedCleanupDeadline(t *testing.T, records []recordedRuntimeContext)
 		t.Fatalf("records=%#v, want two compensation threads", records)
 	}
 	for threadID := range threads {
-		for _, operation := range []string{"handoff", "mark"} {
+		for _, operation := range []string{"handoff"} {
 			if !seen[threadID][operation] {
 				t.Fatalf("records=%#v, %s缺少%s deadline", records, threadID, operation)
 			}
