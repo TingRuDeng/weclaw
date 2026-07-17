@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestCodexSessionStorePersistsWorkspaceThreads(t *testing.T) {
@@ -96,79 +94,29 @@ func TestCodexSessionStoreReplacesMissingFirstTurnThreadAtomically(t *testing.T)
 	}
 }
 
-func TestCodexSessionStoreMigratesJustCreatedV2RemoteThreadAsPendingFirstTurn(t *testing.T) {
+func TestCodexSessionStoreDoesNotGuessV2PendingFirstTurn(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
 	bindingKey := codexBindingKey("feishu:window-1", "codex")
 	workspace := filepath.Join(t.TempDir(), "project")
-	createdAt := time.Now().UTC().Truncate(time.Millisecond)
-	threadID := testCodexUUIDv7At(createdAt)
-	updatedAt := createdAt.Add(30 * time.Second).Format(time.RFC3339Nano)
-	writeCodexSessionState(t, stateFile, codexSessionState{
-		Version: 2,
-		Bindings: map[string]codexSessionBinding{bindingKey: {
-			ActiveWorkspace: workspace,
-			Workspaces: map[string]codexWorkspaceSession{workspace: {
-				ThreadID: threadID, UpdatedAt: updatedAt,
-			}},
-		}},
-		Controls: map[string]codexControlIntent{threadID: {
-			Owner: codexControlRemote, RouteBindingKey: bindingKey,
-			ConversationID: "conversation-1", Revision: 1, UpdatedAt: updatedAt,
-		}},
-	})
-
-	store := newCodexSessionStore()
-	store.SetFilePath(stateFile)
-	if !store.isPendingFirstTurn(bindingKey, workspace, threadID) {
-		t.Fatal("v2 中刚创建并首次认领的 UUIDv7 thread 应迁移 pending-first-turn")
-	}
-}
-
-func TestCodexSessionStoreDoesNotMigrateHistoricalV2ThreadAsPendingFirstTurn(t *testing.T) {
-	stateFile := filepath.Join(t.TempDir(), "codex-sessions.json")
-	bindingKey := codexBindingKey("feishu:window-1", "codex")
-	workspace := filepath.Join(t.TempDir(), "project")
-	threadID := testCodexUUIDv7At(time.Now().UTC().Add(-24 * time.Hour))
-	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	threadID := "019f6ff2-f2a1-7332-953f-0433233b9d91"
 	writeCodexSessionState(t, stateFile, codexSessionState{
 		Version: 2,
 		Bindings: map[string]codexSessionBinding{bindingKey: {
 			Workspaces: map[string]codexWorkspaceSession{workspace: {
-				ThreadID: threadID, UpdatedAt: updatedAt,
+				ThreadID: threadID, UpdatedAt: "2026-07-17T12:00:30Z",
 			}},
 		}},
 		Controls: map[string]codexControlIntent{threadID: {
 			Owner: codexControlRemote, RouteBindingKey: bindingKey,
-			ConversationID: "conversation-1", Revision: 1, UpdatedAt: updatedAt,
+			ConversationID: "conversation-1", Revision: 1, UpdatedAt: "2026-07-17T12:00:20Z",
 		}},
 	})
 
 	store := newCodexSessionStore()
 	store.SetFilePath(stateFile)
 	if store.isPendingFirstTurn(bindingKey, workspace, threadID) {
-		t.Fatal("历史 UUIDv7 thread 不得因 v2 升级被误判为 pending-first-turn")
+		t.Fatal("v2 缺少明确生命周期标记时不得靠 UUID 或时间戳猜测 pending-first-turn")
 	}
-}
-
-func TestCodexUUIDv7TimeRejectsInvalidVariantAndHex(t *testing.T) {
-	createdAt := time.Now().UTC().Truncate(time.Millisecond)
-	valid := testCodexUUIDv7At(createdAt)
-	if parsed, ok := codexUUIDv7Time(valid); !ok || !parsed.Equal(createdAt) {
-		t.Fatalf("valid UUIDv7 parsed=(%v,%v), want %v", parsed, ok, createdAt)
-	}
-	invalidVariant := strings.Replace(valid, "-8000-", "-7000-", 1)
-	if _, ok := codexUUIDv7Time(invalidVariant); ok {
-		t.Fatalf("invalid variant accepted: %s", invalidVariant)
-	}
-	invalidHex := valid[:len(valid)-1] + "z"
-	if _, ok := codexUUIDv7Time(invalidHex); ok {
-		t.Fatalf("invalid hex accepted: %s", invalidHex)
-	}
-}
-
-func testCodexUUIDv7At(createdAt time.Time) string {
-	timestamp := fmt.Sprintf("%012x", createdAt.UnixMilli())
-	return fmt.Sprintf("%s-%s-7000-8000-000000000000", timestamp[:8], timestamp[8:])
 }
 
 func TestCodexSessionStorePersistsActiveWorkspace(t *testing.T) {

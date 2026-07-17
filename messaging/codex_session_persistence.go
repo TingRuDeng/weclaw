@@ -70,10 +70,6 @@ func (s *codexSessionStore) load() {
 		normalized.UpdatedAt = strings.TrimSpace(intent.UpdatedAt)
 		controls[threadID] = normalized
 	}
-	if migrateLegacyCodexPendingFirstTurns(state.Version, bindings, controls) {
-		changed = true
-	}
-
 	s.mu.Lock()
 	s.bindings = bindings
 	s.controls = controls
