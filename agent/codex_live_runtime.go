@@ -14,8 +14,6 @@ var (
 	ErrCodexRuntimeConflict         = errors.New("Codex Desktop 与 WeClaw 发生写入冲突")
 	ErrCodexRuntimeUnavailable      = errors.New("Codex 实际运行时不可用")
 	ErrCodexWriterBusy              = errors.New("Codex thread 已有写入任务")
-	ErrCodexCheckpointRequired      = errors.New("Codex rollout checkpoint 缺失")
-	ErrCodexCheckpointChanged       = errors.New("Codex rollout checkpoint 已变化")
 )
 
 type CodexControlOwner string
