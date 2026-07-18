@@ -18,6 +18,7 @@ type agentTaskOptions struct {
 	routeUserID   string
 	reply         platform.Replier
 	agentName     string
+	workspaceRoot string
 	message       string
 	replyPrefix   string
 	agent         agent.Agent
@@ -48,6 +49,7 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 			return
 		}
 		opts.claudeControl = claudeTaskControlSnapshot{SessionID: binding.SessionID, Revision: intent.Revision}
+		opts.workspaceRoot = firstNonBlank(binding.WorkspaceRoot, h.claudeWorkspaceRootForUser(opts.userID, opts.agentName, opts.agent))
 	}
 	// 后台任务保留消息上下文值，但不能随平台请求返回而被取消。
 	opts.ctx = context.WithoutCancel(opts.ctx)
@@ -73,7 +75,7 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 		lifecycle: h.startAgentTaskLifecycle(agentTaskLifecycleOptions{
 			taskCtx: admission.taskCtx, replyCtx: opts.ctx, reply: opts.reply,
 			task: admission.task, cancel: cancel, executionKey: key,
-			userID: opts.userID, agentName: opts.agentName, message: opts.message,
+			userID: opts.userID, agentName: opts.agentName, workspaceRoot: opts.workspaceRoot, message: opts.message,
 			replyPrefix: opts.replyPrefix, progressConfig: opts.progressCfg,
 		}),
 	}

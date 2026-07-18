@@ -101,7 +101,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 	lifecycle := h.startAgentTaskLifecycle(agentTaskLifecycleOptions{
 		taskCtx: runtime.agentCtx, replyCtx: opts.ctx, reply: opts.reply,
 		task: runtime.task, cancel: runtime.cancelTaskTimeout, executionKey: runtime.executionKey,
-		userID: opts.userID, agentName: opts.agentName, message: opts.message,
+		userID: opts.userID, agentName: opts.agentName, workspaceRoot: runtime.route.workspaceRoot, message: opts.message,
 		replyPrefix: opts.replyPrefix, progressConfig: opts.progressCfg,
 	})
 	defer h.completeAgentTaskLifecycle(lifecycle)

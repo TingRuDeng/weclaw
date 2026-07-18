@@ -61,8 +61,7 @@ After selecting an existing session or sending `/cx new`, send the task directly
 ```text
 /cx ls                 # List existing local workspaces and threads
 /cx <number>           # Bind this frontend window to the selected thread
-/cx status             # Inspect the shared host, workspace, and thread
-/cx owner              # Inspect compatibility state; windows no longer own a writer
+/cx status             # Inspect the binding, shared host, workspace, thread, and task
 ```
 
 WeClaw exposes native `codex app-server` through a stable Unix socket and connects with the upstream WebSocket-over-UDS protocol; the socket is not a raw JSONL stream. The first client starts the host on demand, and later WeChat, Feishu, or other WeClaw frontends reuse that service. Each window persists its own workspace/thread binding. Multiple windows may bind the same thread, but only one turn may write to that thread at a time. A transport disconnect does not clear a frontend binding; an accepted turn keeps its writer guard until authoritative terminal confirmation, and the next operation reconnects to the shared host. Legacy Codex owner state is discarded on load, and legacy `type: companion` configuration migrates to the shared app-server.
@@ -151,7 +150,6 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
 | `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
 | `/cx new` | Create and bind a Codex session in the current workspace |
-| `/cx owner` | Show shared app-server compatibility status; it no longer moves a writer |
 | `/update`, `/restart [--force]` | Remotely update or restart WeClaw as an administrator |
 
 <details>
@@ -159,7 +157,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 
 Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`.
 
-Runtime boundary: `/cx status` shows the shared host and current binding; `/cx owner` remains as read-only compatibility status.
+Runtime boundary: `/cx status` is the single view for the current binding, shared host, writer, and task state.
 
 Other commands: `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx model status|ls`, `/cx clean`.
 
@@ -208,7 +206,7 @@ Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`
 <summary>Recommended Feishu menu</summary>
 
 - Common: `/help`, `/status`, `/model`, `/reasoning`, `/cwd`
-- Codex: `/cx ls`, `/cx status`, `/cx owner`, `/cx new`, `/cx quota`
+- Codex: `/cx ls`, `/cx status`, `/cx new`, `/cx quota`
 - Claude: `/cc ls`, `/cc status`, `/cc new`, `/cc pwd`, `/cc quota`, `/cc model ls`
 - Control: `/ps`, `/cancel`, `/guide`, `/stop`, `/restart`
 

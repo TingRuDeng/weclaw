@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,9 +49,34 @@ func TestFeishuGroupStatusUsesChatSessionMetadataForRouting(t *testing.T) {
 	}
 }
 
-func TestCodexNewThreadIsNotBuiltinSessionCommand(t *testing.T) {
-	if isCodexSessionCommand("/cx new-thread") {
-		t.Fatal("/cx new-thread should not be treated as a builtin Codex session command")
+func TestCodexNamespaceAlwaysUsesBuiltinSessionRouting(t *testing.T) {
+	for _, command := range []string{"/cx", "/cx new-thread", "/cx owner", "/cx arbitrary text"} {
+		if !isCodexSessionCommand(command) {
+			t.Fatalf("%q should stay in the builtin Codex session namespace", command)
+		}
+	}
+}
+
+func TestRemovedCodexOwnerAndUnknownSubcommandsNeverReachAgent(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
+		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
+	}}
+	h.SetDefaultAgent("codex", ag)
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+
+	for index, command := range []string{"/cx owner", "/cx owner desktop", "/cx arbitrary text", "/cx"} {
+		reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+		h.HandleMessage(context.Background(), platform.IncomingMessage{
+			Platform: platform.PlatformWeChat, UserID: "user-1", MessageID: fmt.Sprintf("cx-namespace-%d", index), Text: command,
+		}, reply)
+		if ag.chatCallCount() != 0 {
+			t.Fatalf("%q reached Codex as a prompt", command)
+		}
+		if !containsText(reply.Texts, "Codex 会话命令") {
+			t.Fatalf("%q reply=%#v, want session help", command, reply.Texts)
+		}
 	}
 }
 

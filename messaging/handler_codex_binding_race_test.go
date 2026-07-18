@@ -71,7 +71,7 @@ func TestCodexSessionCommandBindingLockTimeout(t *testing.T) {
 
 	started := time.Now()
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner",
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx status",
 	})
 	if !strings.Contains(reply, "前一项 Codex 会话操作仍在处理") || !strings.Contains(reply, "本次命令未执行") {
 		t.Fatalf("reply=%q", reply)
@@ -99,11 +99,11 @@ func TestCodexSessionCommandSwitchTimeoutKeepsBindingAndReleasesLock(t *testing.
 	}()
 	waitDone(t, ag.handoffEntered, "switch runtime 移交")
 
-	ownerReply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner",
+	statusReply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx status",
 	})
-	if !strings.Contains(ownerReply, "本次命令未执行") {
-		t.Fatalf("owner reply=%q", ownerReply)
+	if !strings.Contains(statusReply, "本次命令未执行") {
+		t.Fatalf("status reply=%q", statusReply)
 	}
 
 	select {

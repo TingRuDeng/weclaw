@@ -46,7 +46,8 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 		ctx: taskOpts.ctx, actorUserID: taskOpts.userID, routeUserID: taskOpts.routeUserID,
 		agentName: taskOpts.agentName, agent: taskOpts.agent,
 		conversationID: opts.route.conversationID, threadID: opts.route.threadID,
-		progressCfg: taskOpts.progressCfg, reply: taskOpts.reply,
+		workspaceRoot: opts.route.workspaceRoot,
+		progressCfg:   taskOpts.progressCfg, reply: taskOpts.reply,
 	})
 	if err != nil {
 		h.rejectCodexTaskStart(opts, err)

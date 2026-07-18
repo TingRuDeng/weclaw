@@ -17,6 +17,7 @@ type agentTaskLifecycleOptions struct {
 	executionKey   string
 	userID         string
 	agentName      string
+	workspaceRoot  string
 	message        string
 	replyPrefix    string
 	progressConfig config.ProgressConfig
@@ -36,8 +37,8 @@ type agentTaskAdmissionNotice struct {
 
 // startAgentTaskLifecycle 创建三类 Agent 共用的进度和终态交付器。
 func (h *Handler) startAgentTaskLifecycle(opts agentTaskLifecycleOptions) agentTaskLifecycle {
-	onProgress, finish := h.startProgressSessionForAgentWithFinal(
-		opts.taskCtx, opts.reply, opts.replyPrefix, opts.agentName, opts.message, opts.progressConfig,
+	onProgress, finish := h.startProgressSessionForWorkspaceAgentWithFinal(
+		opts.taskCtx, opts.reply, opts.replyPrefix, opts.agentName, opts.workspaceRoot, opts.message, opts.progressConfig,
 	)
 	return agentTaskLifecycle{opts: opts, onProgress: onProgress, finish: finish}
 }

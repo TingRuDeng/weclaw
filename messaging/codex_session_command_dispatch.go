@@ -117,13 +117,11 @@ func (h *Handler) dispatchCodexNavigationCommand(runtime codexSessionCommandRunt
 func (h *Handler) dispatchCodexUtilityCommand(runtime codexSessionCommandRuntime) (navigationCommandResult, bool) {
 	fields := runtime.fields
 	switch fields[1] {
-	case "owner":
-		return h.handleCodexOwnerCommand(runtime), true
 	case "status":
 		if len(fields) != 2 {
 			return textNavigationResult("用法: /cx status"), true
 		}
-		return textNavigationResult(h.renderCodexStatusForRoute(runtime.actorUserID, runtime.routeUserID, runtime.agentName, runtime.agent)), true
+		return h.renderCodexStatus(runtime), true
 	case "quota":
 		return h.codexNoArgCommandResult(fields, "/cx quota", func() string { return h.renderCodexQuota(runtime.ctx, runtime.agent) })
 	case "clean":

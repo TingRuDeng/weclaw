@@ -11,10 +11,10 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestCodexOwnerStatusReturnsSharedHostState(t *testing.T) {
-	h, ag, runtime := codexOwnerCommandFixture(t)
+func TestCodexStatusReturnsSharedHostState(t *testing.T) {
+	h, ag, runtime := codexRuntimeStatusFixture(t)
 	result, handled := h.dispatchCodexUtilityCommand(runtime)
-	if !handled || result.ShowCard || !strings.Contains(result.Reply, "Codex 共享会话") ||
+	if !handled || result.ShowCard || !strings.Contains(result.Reply, "Codex 状态") ||
 		!strings.Contains(result.Reply, "窗口绑定: 已绑定") {
 		t.Fatalf("handled=%v result=%#v", handled, result)
 	}
@@ -23,15 +23,15 @@ func TestCodexOwnerStatusReturnsSharedHostState(t *testing.T) {
 	}
 }
 
-func TestCodexOwnerStatusTimeoutReleasesThreadLock(t *testing.T) {
-	h, ag, runtime := codexOwnerCommandFixture(t)
+func TestCodexStatusTimeoutReleasesThreadLock(t *testing.T) {
+	h, ag, runtime := codexRuntimeStatusFixture(t)
 	ag.inspectRelease = make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	runtime.ctx = ctx
 
-	result := h.handleCodexOwnerCommand(runtime)
-	if !strings.Contains(result.Reply, "共享 Codex app-server 暂不可用") {
+	result := h.renderCodexStatus(runtime)
+	if !strings.Contains(result.Reply, "共享服务状态: 暂不可用") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
 	assertCodexThreadLockReusable(t, h, "thread-1")
@@ -48,11 +48,11 @@ func assertCodexThreadLockReusable(t *testing.T, h *Handler, threadID string) {
 	unlock()
 }
 
-func TestCodexOwnerDesktopCompatibilityDoesNotReleaseBinding(t *testing.T) {
-	h, _, runtime := codexOwnerCommandFixture(t)
+func TestRemovedCodexOwnerReturnsSessionHelp(t *testing.T) {
+	h, _, runtime := codexRuntimeStatusFixture(t)
 	runtime.fields = []string{"/cx", "owner", "desktop"}
-	result := h.handleCodexOwnerCommand(runtime)
-	if !strings.Contains(result.Reply, "无需释放 Codex 控制权") {
+	result := h.dispatchCodexSessionCommand(runtime)
+	if !strings.Contains(result.Reply, "Codex 会话命令") || strings.Contains(result.Reply, "无需释放 Codex 控制权") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
 	threadID, pending := h.codexSessions.getThread(runtime.bindingKey, runtime.workspaceRoot)
@@ -61,7 +61,7 @@ func TestCodexOwnerDesktopCompatibilityDoesNotReleaseBinding(t *testing.T) {
 	}
 }
 
-func codexOwnerCommandFixture(t *testing.T) (*Handler, *fakeCodexLiveAgent, codexSessionCommandRuntime) {
+func codexRuntimeStatusFixture(t *testing.T) (*Handler, *fakeCodexLiveAgent, codexSessionCommandRuntime) {
 	t.Helper()
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
@@ -70,7 +70,7 @@ func codexOwnerCommandFixture(t *testing.T) (*Handler, *fakeCodexLiveAgent, code
 	h.codexSessions.setThread(bindingKey, workspace, "thread-1")
 	runtime := codexSessionCommandRuntime{
 		ctx: context.Background(), actorUserID: "user-1", routeUserID: "route-1",
-		fields: []string{"/cx", "owner"}, agentName: "codex", agent: ag,
+		fields: []string{"/cx", "status"}, agentName: "codex", agent: ag,
 		bindingKey: bindingKey, workspaceRoot: workspace,
 		req: codexSessionCommandRequest{
 			ActorUserID: "user-1", RouteUserID: "route-1",

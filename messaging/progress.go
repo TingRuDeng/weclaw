@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ type progressSession struct {
 	stream              platform.Stream
 	prefix              string
 	agentName           string
+	workspaceRoot       string
 	taskText            string
 	cfg                 config.ProgressConfig
 	deltaCh             chan string
@@ -72,6 +74,11 @@ func (h *Handler) startProgressSessionWithFinal(ctx context.Context, reply platf
 
 // startProgressSessionForAgentWithFinal 为任务卡标题补充 Agent 来源，正文和最终结果保持原样。
 func (h *Handler) startProgressSessionForAgentWithFinal(ctx context.Context, reply platform.Replier, prefix string, agentName string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
+	return h.startProgressSessionForWorkspaceAgentWithFinal(ctx, reply, prefix, agentName, "", taskText, cfg)
+}
+
+// startProgressSessionForWorkspaceAgentWithFinal 使用任务启动时的工作空间快照生成稳定标题。
+func (h *Handler) startProgressSessionForWorkspaceAgentWithFinal(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
 	if cfg.Mode == "" {
 		cfg = config.DefaultProgressConfig()
 	}
@@ -82,7 +89,8 @@ func (h *Handler) startProgressSessionForAgentWithFinal(ctx context.Context, rep
 	progressCtx, cancel := context.WithCancel(ctx)
 	session := &progressSession{
 		handler: h, ctx: progressCtx, cancel: cancel, reply: reply,
-		prefix: prefix, agentName: agentName, taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
+		prefix: prefix, agentName: agentName, workspaceRoot: workspaceRoot,
+		taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
 	}
 	session.start()
 	return session.onProgress, session.stopWithFinal
@@ -90,7 +98,7 @@ func (h *Handler) startProgressSessionForAgentWithFinal(ctx context.Context, rep
 
 func (s *progressSession) start() {
 	if boolValue(s.cfg.SendAcceptance) {
-		title := progressTaskTitleForAgent(s.agentName, s.taskText, 60)
+		title := progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60)
 		s.sendText(renderAcceptance(title))
 	}
 	usesNativeProgress := progressModeAllowsProgress(s.cfg.Mode) && s.reply.Capabilities().Streaming
@@ -245,7 +253,7 @@ func (s *progressSession) ensureStream() platform.Stream {
 	}
 	s.streamOpenAttempted = true
 	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{
-		Title: progressTaskTitleForAgent(s.agentName, s.taskText, 60), InitialContent: renderInitialCardProgress(),
+		Title: progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60), InitialContent: renderInitialCardProgress(),
 	})
 	if err != nil {
 		log.Printf("[handler] failed to open progress stream: %v", err)
@@ -256,10 +264,30 @@ func (s *progressSession) ensureStream() platform.Stream {
 }
 
 func progressTaskTitleForAgent(agentName string, taskText string, maxRunes int) string {
+	return progressTaskTitleForAgentWorkspace(agentName, "", taskText, maxRunes)
+}
+
+func progressTaskTitleForAgentWorkspace(agentName string, workspaceRoot string, taskText string, maxRunes int) string {
 	if strings.TrimSpace(agentName) == "" {
 		return progressTaskTitle(taskText, maxRunes)
 	}
-	return progressTaskTitle(agentDisplayName(agentName)+" · "+strings.TrimSpace(taskText), maxRunes)
+	title := agentDisplayName(agentName)
+	if workspace := progressWorkspaceName(workspaceRoot); workspace != "" {
+		title += " · " + workspace
+	}
+	return progressTaskTitle(title, maxRunes)
+}
+
+func progressWorkspaceName(workspaceRoot string) string {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return ""
+	}
+	name := filepath.Base(filepath.Clean(workspaceRoot))
+	if name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	return name
 }
 
 func (s *progressSession) sendTyping() {

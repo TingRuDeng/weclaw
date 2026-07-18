@@ -66,6 +66,7 @@ type broadcastAgentRuntime struct {
 	executionKey  string
 	codexRoute    codexConversationRoute
 	claudeControl claudeTaskControlSnapshot
+	workspaceRoot string
 	activeTask    *activeAgentTask
 	finishRuntime func()
 }
@@ -138,7 +139,8 @@ func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name s
 	}
 	return broadcastAgentRuntime{
 		ctx: admission.taskCtx, executionKey: key, claudeControl: control,
-		activeTask: admission.task, finishRuntime: finish,
+		workspaceRoot: firstNonBlank(binding.WorkspaceRoot, h.claudeWorkspaceRootForUser(req.userID, name, ag)),
+		activeTask:    admission.task, finishRuntime: finish,
 	}, true
 }
 
@@ -181,7 +183,10 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 			pending.run()
 		}
 	}
-	return broadcastAgentRuntime{ctx: taskCtx, executionKey: key, codexRoute: route, activeTask: task, finishRuntime: finish}, true
+	return broadcastAgentRuntime{
+		ctx: taskCtx, executionKey: key, codexRoute: route, workspaceRoot: route.workspaceRoot,
+		activeTask: task, finishRuntime: finish,
+	}, true
 }
 
 func (h *Handler) broadcastPendingCodexTask(req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute, reply platform.Replier) pendingAgentTask {
@@ -212,7 +217,9 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 			return
 		}
 	}
-	onProgress, finishProgress := h.startProgressSessionForAgentWithFinal(runtime.ctx, reply, "["+name+"] ", name, req.message, progressCfg)
+	onProgress, finishProgress := h.startProgressSessionForWorkspaceAgentWithFinal(
+		runtime.ctx, reply, "["+name+"] ", name, runtime.workspaceRoot, req.message, progressCfg,
+	)
 	send := func(text string, failed bool) {
 		h.finishAndSendProgressReply(progressReplyDelivery{
 			delivery: replyDeliveryRequest{

@@ -121,7 +121,7 @@ func TestCodexCommandAllowsStaleWorkspaceForAdmin(t *testing.T) {
 	}
 }
 
-func TestCodexOwnerStatusRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
+func TestCodexStatusRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
 	h := NewHandler(nil, nil)
 	allowed := filepath.Join(t.TempDir(), "allowed")
 	blocked := filepath.Join(t.TempDir(), "blocked")
@@ -135,7 +135,7 @@ func TestCodexOwnerStatusRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
 	h.ensureCodexSessions().setThread(bindingKey, blocked, "thread-1")
 
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner",
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx status",
 	})
 
 	if ag.handoffCalls != 0 || !strings.Contains(reply, "不在允许范围") {

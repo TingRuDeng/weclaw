@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-18 Codex 会话命令与消息入口必须分离
+
+- 触发条件：单一 app-server 架构已经取消窗口 owner，但 `/cx owner` 仍作为主命令展示，同时 `/cx` 还可能回退成 Codex 消息别名。
+- 规则：`/cx` 只用于 Codex 会话命令；未知 `/cx` 子命令返回 `/cx help`。Codex 消息只使用 `/codex <内容>` 或 `@cx <内容>`，运行态统一由 `/cx status` 展示。
+- 反例：只删除 `/cx owner` 的处理分支，让旧命令回退成发送给 Codex 的普通提示词 `owner`；或者同时保留 `/cx status` 与名不副实的 `/cx owner`。
+- 正确做法：删除 `/cx owner` 的识别、处理、帮助和卡片入口，把 binding、共享 host、writer 与任务状态并入 `/cx status`，并用测试锁定 `/cx` 命名空间不会落入 Agent 消息路径。
+- 来源：单一 app-server、多前端 binding 架构收敛后，用户确认不再保留 `/cx owner` 兼容入口。
+
 ## 2026-07-18 Codex Unix socket 必须执行 WebSocket Upgrade
 
 - 触发条件：把原生 `codex app-server --listen unix://...` 改为共享 host，并让多个 WeClaw 客户端直接连接 Unix socket。
@@ -14,17 +22,17 @@
 - 规则：生产 Codex 只运行一个共享 app-server；窗口只持久化 workspace/thread binding，不持有独占 writer owner。多个前端可绑定同一 thread，真正写入时只按 thread 获取单一 writer lease。
 - 运行边界：socket 断开、启动失败或超时只影响 runtime availability，不能清除 binding、弹 owner 卡或写入 conflict；host 生命周期必须独立于触发启动的单次前端请求。
 - 断线边界：turn 已提交后失去客户端观察流属于交付状态未知，writer lease 必须 fail-closed 保留；只有同一 turn 的 rollout 终态或重连后的权威 thread 快照才能释放，禁止用普通 error/defer 直接清 active 状态。
-- 兼容边界：v1-v3 owner/control 仅用于读取迁移并丢弃；`/cx owner` 只读，`/cx app|cli|attach|detach` 与 Codex Companion 第二 writer 必须拒绝。后续本地 UI 只能连接同一 host。
+- 兼容边界：v1-v3 owner/control 仅用于读取迁移并丢弃；`/cx owner` 已删除，`/cx app|cli|attach|detach` 与 Codex Companion 第二 writer 必须拒绝。后续本地 UI 只能连接同一 host。
 - 路径边界：Unix socket 默认路径过长时使用原路径稳定哈希落到当前用户私有短目录；显式超长路径直接失败，socket 与父目录必须校验类型、权限和 owner。
 - 本节取代下文所有 Codex Desktop owner、选择即接管和 Codex Companion attach/detach 规则；旧条目仅保留为历史故障背景。Claude owner-first 规则不受影响。
 
 ## 2026-07-17 Codex 首轮前跨重启恢复不能要求 rollout 文件
 
-- 触发条件：`thread/start` 已创建并接管新 thread，但尚未收到第一条用户消息；WeClaw 随后重启，用户显式执行 `/cx owner remote` 恢复运行通道。
+- 触发条件：`thread/start` 已创建并绑定新 thread，但尚未收到第一条用户消息；WeClaw 随后重启，用户重新选择该会话以恢复运行通道。
 - 规则：普通已 materialize 会话的远程恢复仍必须前后校验稳定 rollout checkpoint；唯有 checkpoint 全空且 app-server 在 `thread/resume` 后明确返回“首条消息前未 materialize”时，才可把该协议结果作为“从未发生写入”的强证据恢复空会话。
 - 反例：对所有 remote 恢复统一先要求 rollout 路径；新会话按协议尚未生成 rollout，因此每次重启后都会被误标为写入冲突，即使 owner、ACP mapping 和 thread 均正确。
 - 正确做法：先区分“全空 checkpoint 候选”和非法/变化的 checkpoint；候选仅在 app-server 确认 pending first turn 后放行。若 thread/read 已有 turns、返回其他错误或 checkpoint 非空但无效，继续 fail-closed。回归测试必须同时覆盖空会话恢复成功和 materialized 会话无 checkpoint 仍拒绝。
-- 来源：2026-07-17 `v0.1.194` 实机 `/cx owner remote` 日志确认目标新 thread 的 owner 已提交、Desktop IPC 不可达，最终仅因 `Codex rollout checkpoint 缺失` 被标为写入冲突。
+- 来源：2026-07-17 `v0.1.194` 实机旧 owner 命令日志确认目标新 thread 的 binding 已提交，最终仅因 `Codex rollout checkpoint 缺失` 被标为写入冲突。
 
 ## 2026-07-17 Codex 展示目录不得清除远程会话绑定
 
@@ -70,7 +78,7 @@
 
 - 触发条件：飞书或微信窗口已经成功选择并接管 Codex thread，后续普通消息启动前遇到 Desktop 探测超时、断线或 runtime unknown。
 - 规则：owner tuple 和 revision 是写入授权事实源；普通消息只读取接管事务已建立的 runtime binding，不重复探测 Desktop，也不根据运行通道异常释放 owner 或要求用户重新选择。
-- 失败边界：runtime 不可用时普通消息拒绝本次写入并保留 remote owner；显式选择或 `/cx owner remote` 遇到 Desktop timeout、断线、重启后的 unknown 或旧 conflict 时，应校验 rollout 并恢复 WeClaw app-server。
+- 失败边界：runtime 不可用时普通消息拒绝本次写入并保留 binding；显式重新选择遇到断线、重启后的 unknown 或旧 conflict 时，应校验 rollout 并恢复 WeClaw app-server。
 - 反例：把 `context deadline exceeded`、ownership unknown 或 runtime unavailable 统一渲染成“交给当前远程窗口 / 交给 Codex Desktop”卡片，让用户误以为所有权自动释放。
 - 来源：2026-07-15 飞书主机器人窗口在 22:45 已接管，22:53 普通消息因 Desktop IPC 超时再次弹出所有权选择。
 
@@ -228,14 +236,14 @@
 
 ## 2026-04-28 Codex 会话命令
 
-- 会话列表必须带稳定编号，`/codex switch <编号>` 要使用与 `/codex ls` 相同的排序，避免用户复制长 threadId。
+- 会话列表必须带稳定编号，`/cx switch <编号>` 要使用与 `/cx ls` 相同的排序，避免用户复制长 threadId。
 - 修改命令命名时必须同步更新 `isCodexSessionCommand`、帮助文本、命令处理分支和回归测试。
 - 旧命令如果不再作为用户入口，就不要继续出现在 `/help`，防止微信侧形成两套说法。
 
 ## 2026-04-28 Codex 额度错误
 
 - `usageLimitExceeded` 只是额度耗尽，不代表登录态或工作区失效，不能自动 Stop Codex 进程或清理 thread。
-- 用户需要手动切换 Codex 账号时，WeClaw 必须保留当前进程和 thread 映射，避免切账号后 `/codex switch` 遇到已关闭 stdin。
+- 用户需要手动切换 Codex 账号时，WeClaw 必须保留当前进程和 thread 映射，避免切账号后 `/cx switch` 遇到已关闭 stdin。
 - 只有 `deactivated_workspace` 这类真实工作区/登录态异常才允许触发 runtime invalidation。
 
 ## 2026-05-28 Codex Companion attach/detach（历史，已废弃）
@@ -507,9 +515,9 @@
 
 ## 2026-07-12 Codex Desktop no-client 的非幂等 Handoff 恢复
 
-- 触发条件：用户重新选择会话或发送 `/cx owner remote`，且目标 remote 控制意图相对持久化状态发生变化，事务实际进入显式 Handoff，并确认没有 Desktop 客户端持有目标 thread。
+- 触发条件：旧架构中用户重新选择会话且目标控制意图相对持久化状态发生变化，事务实际进入显式 Handoff，并确认没有 Desktop 客户端持有目标 thread。
 - 规则：`no-client-found` 只在这类非幂等显式 Handoff 中作为实际 runtime 的 release 证据；系统可以把目标 thread 恢复到 WeClaw app-server，再提交新的 remote 控制意图。
-- 反例：把普通消息的 no-client 错误自动改成 app-server 重试；或者把 `/cx owner desktop`、断线、超时、交付状态未知当成自动恢复条件，造成越权接管或消息重复执行。
+- 反例：把普通消息的 no-client 错误自动改成 app-server 重试；或者把断线、超时、交付状态未知当成自动恢复条件，造成越权接管或消息重复执行。
 - 正确做法：只有控制意图变化并实际进入 Handoff 时才依赖 no-client 恢复 runtime；当前 route 已是同一 remote intent 的幂等重新选择只读取本地 runtime binding，不探测 Desktop。普通消息不自动恢复或重试，`desktop` intent 的普通消息也必须拒绝。
 - 来源：2026-07-12 Android 飞书机器人发送普通消息后，日志立即返回 `没有 Codex Desktop 客户端可处理请求: no-client-found`。
 

@@ -37,8 +37,6 @@ Codex：
 
 /cx new 新建共享会话
 
-/cx owner 查看共享 app-server 状态
-
 Claude：
 
 /cc quota 查看 Claude 账号额度
@@ -46,6 +44,8 @@ Claude：
 发送消息：
 
 /codex <内容> 发给 Codex
+
+@cx <内容> 发给 Codex
 
 /cc <内容> 发给 Claude
 

@@ -28,9 +28,9 @@ func TestBuildHelpText(t *testing.T) {
 		"/cx quota 查看 Codex 账号额度",
 		"/cx ls",
 		"/cx <编号|..> 选择或返回",
-		"/cx owner 查看共享 app-server 状态",
 		"/cc quota 查看 Claude 账号额度",
 		"/codex <内容> 发给 Codex",
+		"@cx <内容> 发给 Codex",
 		"/cc <内容> 发给 Claude",
 		"@cc @cx <内容> 同时发送",
 		"/cx help Codex 高级命令",
@@ -187,7 +187,7 @@ func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
 		t.Fatalf("choices=%#v, want one codex help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/cx ls", "/cx status", "/cx owner", "/cx pwd", "/cx quota", "/cx model ls", "/cx clean", "/cx help", "/help"} {
+	for _, want := range []string{"/cx ls", "/cx status", "/cx pwd", "/cx quota", "/cx model ls", "/cx clean", "/cx help", "/help"} {
 		if !got[want] {
 			t.Fatalf("codex help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
@@ -332,8 +332,7 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx switch <编号> 切换并绑定当前工作空间会话",
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx pwd 查看当前工作空间",
-		"/cx status 查看共享 app-server、workspace 和 thread 状态",
-		"/cx owner 查看兼容状态（窗口不再持有独占 writer）",
+		"/cx status 查看 binding、共享 app-server、workspace、thread 和任务状态",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看 Codex 模型状态",

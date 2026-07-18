@@ -411,11 +411,11 @@ func TestNativeTaskCardTitleIncludesAgentSource(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
 
-	_, finish := NewHandler(nil, nil).startProgressSessionForAgentWithFinal(
-		context.Background(), reply, "", "claude-agent-acp", "修复登录流程", cfg,
+	_, finish := NewHandler(nil, nil).startProgressSessionForWorkspaceAgentWithFinal(
+		context.Background(), reply, "", "claude-agent-acp", "/path/to/card-manager-android", "修复登录流程", cfg,
 	)
-	if got := reply.Stream.Options.Title; got != "Claude · 修复登录流程" {
-		t.Fatalf("title=%q，期望带 Claude 来源前缀", got)
+	if got := reply.Stream.Options.Title; got != "Claude · card-manager-android" {
+		t.Fatalf("title=%q，期望只包含 Agent 和工作空间", got)
 	}
 	finish("完成", false)
 }

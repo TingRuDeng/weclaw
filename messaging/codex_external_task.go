@@ -20,6 +20,7 @@ type externalCodexTaskOptions struct {
 	agent          agent.Agent
 	conversationID string
 	threadID       string
+	workspaceRoot  string
 	platform       platform.PlatformName
 	accountID      string
 	progressCfg    config.ProgressConfig
@@ -167,8 +168,8 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		progressCfg = h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
 	}
 	taskText := firstNonBlank(runtime.state.Preview, "共享 Codex 任务")
-	onProgress, finishProgress := h.startProgressSessionForAgentWithFinal(
-		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, taskText, progressCfg,
+	onProgress, finishProgress := h.startProgressSessionForWorkspaceAgentWithFinal(
+		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, runtime.opts.workspaceRoot, taskText, progressCfg,
 	)
 	recordProgress := func(delta string) {
 		runtime.task.recordProgress(time.Now(), delta)

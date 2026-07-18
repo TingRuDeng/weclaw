@@ -125,7 +125,7 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 		ctx: taskContext, actorUserID: req.actorUserID,
 		routeUserID: req.routeUserID, agentName: req.agentName,
 		agent: req.agent, conversationID: req.route.conversationID,
-		threadID: req.route.threadID, platform: req.platform,
+		threadID: req.route.threadID, workspaceRoot: req.route.workspaceRoot, platform: req.platform,
 		accountID: req.accountID, reply: req.reply,
 	}
 }

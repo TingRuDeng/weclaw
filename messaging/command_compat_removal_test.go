@@ -19,8 +19,6 @@ func TestRemovedCompatibilityRoutesAreNotBuiltinCommands(t *testing.T) {
 		"/upgrade",
 		"/codex ls",
 		"/claude ls",
-		"/cx open-app",
-		"/cx attach app",
 	} {
 		handled := h.handleBuiltInPlatformCommand(context.Background(), platformCommandRequest{
 			Message: platform.IncomingMessage{
