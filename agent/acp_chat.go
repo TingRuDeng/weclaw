@@ -169,6 +169,10 @@ func (a *ACPAgent) finishLegacyPrompt(state legacyPromptState, parts []string, d
 		case update := <-state.notifyCh:
 			parts = appendLegacyChunk(parts, update)
 			emitLegacyProgress(state, update)
+		case event := <-state.approvalCh:
+			if err := a.handleLegacyInteraction(state.ctx, event); err != nil {
+				return "", err
+			}
 		default:
 			return legacyPromptResult(parts, done)
 		}
