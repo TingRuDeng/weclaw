@@ -104,6 +104,44 @@ func TestACPAgentResetSessionRestartsAfterClosedCodexStdin(t *testing.T) {
 	}
 }
 
+// TestACPAgentCodexTurnRestartsStoppedRuntime 验证 Codex app-server 在切换后退出时，
+// 下一条普通消息会重启 runtime 并恢复原 thread，而不是直接写已关闭的 stdin。
+func TestACPAgentCodexTurnRestartsStoppedRuntime(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperCodexAppServer"},
+		Cwd:       tempDir,
+		StateFile: filepath.Join(tempDir, "acp-state.json"),
+		Env:       map[string]string{testCodexAppServerEnv: "1"},
+	})
+	a.protocol = protocolCodexAppServer
+
+	if err := a.Start(ctx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	createCodexThreadForTest(t, ctx, a, "user-1")
+	a.Stop()
+
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{
+		ctx: ctx, conversationID: "user-1", message: "继续",
+	})
+	if err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if reply != "ok" {
+		t.Fatalf("reply=%q, want ok", reply)
+	}
+
+	a.mu.Lock()
+	_, resumeStillPending := a.resumeOnFirstUse["user-1"]
+	a.mu.Unlock()
+	if resumeStillPending {
+		t.Fatal("resumeOnFirstUse still pending after recovered turn")
+	}
+}
+
 func TestACPAgentLegacySessionNotFoundKeepsOriginalSession(t *testing.T) {
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	writeACPStateFile(t, stateFile, acpPersistedState{

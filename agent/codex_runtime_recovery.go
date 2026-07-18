@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // restartCodexAppServer 仅刷新 ACP subprocess，不关闭独立 Desktop connector。
@@ -20,6 +21,23 @@ func (a *ACPAgent) restartCodexAppServerUnsafe(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	for conversationID := range a.threads {
+		a.resumeOnFirstUse[conversationID] = true
+	}
+	a.mu.Unlock()
+	return nil
+}
+
+// ensureCodexAppServerStartedForTurn 修复 app-server 在仅 resume 后退出的场景：
+// 下一条普通消息必须先重启 runtime，并重新 resume 已绑定 thread，而不是直接写已关闭的 stdin。
+func (a *ACPAgent) ensureCodexAppServerStartedForTurn(ctx context.Context, conversationID string) error {
+	if a.protocol != protocolCodexAppServer || a.rpcCall != nil || a.isRuntimeStarted() {
+		return nil
+	}
+	if err := a.ensureStarted(ctx); err != nil {
+		return fmt.Errorf("start Codex app-server runtime: %w", err)
+	}
+	a.mu.Lock()
+	if strings.TrimSpace(a.threads[conversationID]) != "" {
 		a.resumeOnFirstUse[conversationID] = true
 	}
 	a.mu.Unlock()

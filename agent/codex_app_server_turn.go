@@ -56,6 +56,9 @@ func (a *ACPAgent) chatCodexAppServer(opts codexAppServerTurnOptions) (string, e
 }
 
 func (a *ACPAgent) chatCodexAppServerControlledTurn(opts codexAppServerTurnOptions) (string, error) {
+	if err := a.ensureCodexAppServerStartedForTurn(opts.ctx, opts.conversationID); err != nil {
+		return "", err
+	}
 	permit, err := a.ensureCodexAppServerGate().acquire(opts.ctx)
 	if err != nil {
 		return "", err
