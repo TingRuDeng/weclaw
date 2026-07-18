@@ -66,7 +66,7 @@ weclaw status
 /cx owner remote       # 释放后由当前微信或飞书窗口重新接管
 ```
 
-会话选择或新建会先持久化当前窗口的会话绑定和所有权，再同步运行通道。Desktop 可达时继续通过 Desktop 运行；Desktop 探测超时、断线或遗留冲突不能证明存在另一 writer，显式选择或 `/cx owner remote` 会校验 rollout 后恢复 WeClaw app-server。Desktop 与 WeClaw 的 turn 可以在同一 thread 并存，WeClaw 只记录并存状态，不再把整个会话锁成冲突；WeClaw 自身仍会串行同一 thread 的远程写入。普通消息只信任已持久化的所有权和已建立的运行绑定，不会自行探测或接管；重启后若运行绑定尚未恢复，重新选择会话或发送 `/cx owner remote` 即可恢复。`/cx owner desktop` 仍会先提交释放，远程任务执行中必须先等待完成或发送 `/stop`。
+会话选择或新建会先持久化当前窗口的会话绑定和所有权，再同步运行通道。Desktop 可达时继续通过 Desktop 运行；Desktop 探测超时、断线、rollout/checkpoint 读取失败或遗留冲突不能证明存在另一 writer，显式选择、`/cx owner remote` 或已持久化 remote owner 的普通消息都会恢复 WeClaw app-server。Desktop 与 WeClaw 的 turn 可以在同一 thread 并存，WeClaw 只记录并存状态，不再把整个会话锁成冲突；WeClaw 自身仍会串行同一 thread 的远程写入。普通消息只信任已持久化的所有权，不会隐式新建或接管未授权会话；重启后若运行绑定尚未恢复，已接管窗口的首条普通消息会惰性恢复运行通道并继续写入。`/cx owner desktop` 仍会先提交释放，远程任务执行中必须先等待完成或发送 `/stop`。
 
 ### 复用 Claude Code 会话
 
