@@ -256,7 +256,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 	}
 	if a.isDuplicateCardActionEvent(action) {
 		log.Printf("[feishu] ignored duplicate card action event: event_id=%s", action.EventID)
-		return submittedCardActionResponse(action), nil
+		return duplicateCardActionResponse(), nil
 	}
 	metadata := map[string]string{"source": "card.action.trigger"}
 	if action.SessionKey != "" {
@@ -292,6 +292,13 @@ func (a *Adapter) dispatchCardActionAsync(ctx context.Context, msg platform.Inco
 			a.sendCardActionTimeoutNotice(msg)
 		}
 	}()
+}
+
+// duplicateCardActionResponse 不携带卡片，避免飞书重投旧事件时把终态覆盖回“处理中”。
+func duplicateCardActionResponse() *callback.CardActionTriggerResponse {
+	return &callback.CardActionTriggerResponse{
+		Toast: &callback.Toast{Type: "success", Content: "该操作已受理"},
+	}
 }
 
 func submittedCardActionResponse(action parsedCardAction) *callback.CardActionTriggerResponse {

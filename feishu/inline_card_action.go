@@ -147,14 +147,18 @@ func (r *inlineCardReplier) replayPendingAsync(pending []*inlineCardReply) {
 
 func (a *Adapter) handleInlineCardAction(ctx context.Context, msg platform.IncomingMessage, action parsedCardAction, dispatch platform.DispatchFunc, ticket feishuDispatchTicket) *callback.CardActionTriggerResponse {
 	conversationKey := firstNonEmpty(action.SessionKey, action.Conv, msg.ConversationKey())
-	reply := newInlineCardReplier(a.newScopedReplier(msg), conversationKey)
+	var resultReply platform.Replier = a.newScopedReplier(msg)
+	if isDeferredCardResultCommand(action.Choice) && strings.TrimSpace(action.MessageID) != "" {
+		resultReply = newDeferredCardResultReplier(resultReply, a.sender, action.MessageID)
+	}
+	reply := newInlineCardReplier(resultReply, conversationKey)
 	dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.cardActionTimeout)
 	done := make(chan bool, 1)
 	go func() {
 		completed := ticket.run(dispatchCtx, func() { dispatch(dispatchCtx, msg, reply) })
 		if !completed {
 			log.Printf("[feishu] inline card action dispatch timed out: action=%s", action.Action)
-			a.sendCardActionTimeoutNotice(msg)
+			a.sendInlineCardActionTimeout(action, msg)
 		}
 		done <- completed
 		cancel()
@@ -187,6 +191,19 @@ func (a *Adapter) handleInlineCardAction(ctx context.Context, msg platform.Incom
 	}
 }
 
+func (a *Adapter) sendInlineCardActionTimeout(action parsedCardAction, msg platform.IncomingMessage) {
+	if !isDeferredCardResultCommand(action.Choice) || strings.TrimSpace(action.MessageID) == "" {
+		a.sendCardActionTimeoutNotice(msg)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), feishuCardActionNoticeTimeout)
+	defer cancel()
+	reply := newDeferredCardResultReplier(a.newScopedReplier(msg), a.sender, action.MessageID)
+	if err := reply.SendText(ctx, "会话切换等待超时，请检查当前状态后重试。"); err != nil {
+		log.Printf("[feishu] failed to update timed out card action: message=%s err=%v", action.MessageID, err)
+	}
+}
+
 func isInlineCardCommand(choice string) bool {
 	fields := strings.Fields(strings.ToLower(strings.TrimSpace(choice)))
 	if len(fields) == 0 {
@@ -200,9 +217,17 @@ func isInlineCardCommand(choice string) bool {
 			return false
 		}
 		switch fields[1] {
-		case "help", "ls", "cd", "page", "status", "whoami", "pwd", "model", "quota":
+		case "help", "ls", "cd", "page", "status", "whoami", "pwd", "model", "quota", "switch":
 			return true
 		}
 	}
 	return false
+}
+
+func isDeferredCardResultCommand(choice string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(choice)))
+	if len(fields) < 2 || (fields[0] != "/cx" && fields[0] != "/cc") {
+		return false
+	}
+	return fields[1] == "switch"
 }

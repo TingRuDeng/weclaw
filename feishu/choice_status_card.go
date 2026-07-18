@@ -34,8 +34,9 @@ func choicePendingDetail(choice string) string {
 	switch {
 	case command == "/cx cd" || strings.HasPrefix(command, "/cx cd "):
 		return "正在加载该工作空间的会话列表，结果将单独发送。"
-	case command == "/cx switch" || strings.HasPrefix(command, "/cx switch "):
-		return "正在切换并接管，最终结果将单独发送。"
+	case command == "/cx switch" || strings.HasPrefix(command, "/cx switch ") ||
+		command == "/cc switch" || strings.HasPrefix(command, "/cc switch "):
+		return "正在切换并接管，完成后将在本卡片更新结果。"
 	default:
 		return "正在处理，结果将单独发送。"
 	}

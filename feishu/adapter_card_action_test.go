@@ -97,10 +97,11 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 func TestHandleCardActionEventUsesEventIDForRepeatedNavigation(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	messageIDs := make([]string, 0, 3)
+	var duplicateResponse *callback.CardActionTriggerResponse
 	dispatch := func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
 		messageIDs = append(messageIDs, msg.MessageID)
 	}
-	for _, eventID := range []string{"evt_page_2_first", "evt_page_2_again", "evt_page_2_again"} {
+	for index, eventID := range []string{"evt_page_2_first", "evt_page_2_again", "evt_page_2_again"} {
 		event := &callback.CardActionTriggerEvent{
 			EventV2Base: &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: eventID}},
 			Event: &callback.CardActionTriggerRequest{
@@ -113,12 +114,19 @@ func TestHandleCardActionEventUsesEventIDForRepeatedNavigation(t *testing.T) {
 				}},
 			},
 		}
-		if _, err := adapter.handleCardActionEvent(context.Background(), event, dispatch); err != nil {
+		resp, err := adapter.handleCardActionEvent(context.Background(), event, dispatch)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if index == 2 {
+			duplicateResponse = resp
 		}
 	}
 	if len(messageIDs) != 2 || messageIDs[0] == messageIDs[1] {
 		t.Fatalf("messageIDs=%#v，不同点击必须区分，同一事件重投不得重复分发", messageIDs)
+	}
+	if duplicateResponse == nil || duplicateResponse.Toast == nil || duplicateResponse.Card != nil {
+		t.Fatalf("duplicate response=%#v，旧事件重投不得覆盖当前卡片", duplicateResponse)
 	}
 }
 
@@ -231,6 +239,32 @@ func TestHandleCardActionEventDMResultUpdatesOriginalCard(t *testing.T) {
 	}
 	if len(sender.texts) != 0 {
 		t.Fatalf("texts=%#v, quick result should update original DM card", sender.texts)
+	}
+}
+
+func TestHandleCardActionEventFastSwitchUpdatesOriginalCard(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	sender := &fakeMessageSender{}
+	adapter.sender = sender
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_user"},
+		Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_switch"},
+		Action: &callback.CallBackAction{Value: map[string]interface{}{
+			"action": cardActionChoice, "choice": "/cx switch thread-1", "label": "会话 1",
+		}},
+	}}
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		if sendErr := reply.SendText(ctx, "已切换到会话 1"); sendErr != nil {
+			t.Errorf("SendText error: %v", sendErr)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInlineCardContent(t, resp.Card, "已切换到会话 1")
+	if len(sender.patchCards) != 0 || len(sender.texts) != 0 {
+		t.Fatalf("sender=%#v，快速切换应由回调直接替换原卡", sender)
 	}
 }
 

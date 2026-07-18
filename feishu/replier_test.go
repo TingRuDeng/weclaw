@@ -13,6 +13,7 @@ type fakeMessageSender struct {
 	images      []string
 	files       []string
 	cards       []string
+	patchCards  []string
 	replyTexts  []string
 	replyImages []string
 	replyFiles  []string
@@ -54,6 +55,12 @@ func (f *fakeMessageSender) SendFile(ctx context.Context, openID string, localPa
 // SendCard 记录测试发送的卡片 ID。
 func (f *fakeMessageSender) SendCard(ctx context.Context, openID string, cardID string) error {
 	f.cards = append(f.cards, openID+":"+cardID)
+	return nil
+}
+
+// PatchCard 记录原消息卡片更新。
+func (f *fakeMessageSender) PatchCard(_ context.Context, messageID string, cardJSON string) error {
+	f.patchCards = append(f.patchCards, messageID+":"+cardJSON)
 	return nil
 }
 
