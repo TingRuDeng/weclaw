@@ -98,7 +98,7 @@ func renderFinalFailure(prefix string, err error) string {
 		reason = friendlyAgentError(err)
 	}
 	message := prefix + "本次未完成。\n\n原因：" + reason
-	if isCodexDesktopConnectionFailure(err) {
+	if isCodexBindingPreservingTransportFailure(err) {
 		return message
 	}
 	return message + "\n\n你可以调整需求后重试，或发送 /new 开启新会话。"

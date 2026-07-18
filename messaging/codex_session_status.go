@@ -134,24 +134,14 @@ func (h *Handler) renderCodexStatusForRoute(actorUserID string, routeUserID stri
 	bindingKey := codexBindingKey(routeUserID, agentName)
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceRoot)
 	sessionLabel := h.codexSessionLabelForStatus(bindingKey, workspaceRoot, threadID, pending)
-	localEntry := h.codexLocalEntry(bindingKey, workspaceRoot)
 	return wechatCommandText(
 		"Codex 状态:",
 		"工作空间: "+workspaceRoot,
 		"会话: "+sessionLabel,
-		"remote: 已配置 ("+ag.Info().Type+")",
-		"本地入口:",
-		"CLI: "+renderCodexLocalEntry(localEntry.CLIOpened),
-		"App: "+renderCodexLocalEntry(localEntry.AppOpened),
-		"说明: 本地入口只记录最近打开动作，不实时检测手动关闭。",
+		"运行模式: 单一共享 app-server ("+ag.Info().Type+")",
+		"窗口角色: frontend binding",
+		"说明: 不再启动独立 Codex App、CLI 或 Companion writer。",
 	)
-}
-
-func renderCodexLocalEntry(opened bool) string {
-	if opened {
-		return "已打开过"
-	}
-	return "未打开过"
 }
 
 func (h *Handler) renderCodexListForAccess(bindingKey string, actorUserID string, admin bool) string {
@@ -180,19 +170,14 @@ func buildCodexSessionHelpText() string {
 		"Codex 会话命令:",
 		"/cx ls 查看工作空间或当前工作空间会话",
 		"/cx <编号|..> 选择当前列表项或返回上一级",
-		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动接管；.. 返回工作空间列表",
-		"/cx switch <编号> 切换当前工作空间会话并接管",
-		"/cx new 新建当前工作空间会话并接管",
+		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动绑定；.. 返回工作空间列表",
+		"/cx switch <编号> 切换并绑定当前工作空间会话",
+		"/cx new 新建并绑定当前工作空间会话",
 		"/cx pwd 查看当前工作空间",
-		"/cx cli 打开本地 CLI 接手当前 thread",
-		"/cx app 打开 Codex App 到当前工作空间",
-		"/cx status 查看 remote、thread 和本地入口状态",
-		"/cx owner 查看当前会话控制方和实际运行位置",
-		"/cx owner remote 重新接管当前会话",
-		"/cx owner desktop 显式释放当前会话给 Codex Desktop",
+		"/cx status 查看共享 app-server、workspace 和 thread 状态",
+		"/cx owner 查看兼容状态（窗口不再持有独占 writer）",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
-		"/cx detach 断开已连接的本地 Companion",
 		"/cx model status 查看 Codex 模型状态",
 		"/cx model ls 查看可用 Codex 模型",
 	)

@@ -55,7 +55,7 @@ func TestCodexNewThreadIsNotBuiltinSessionCommand(t *testing.T) {
 }
 
 func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
 		if name == "codex" {
 			return ag

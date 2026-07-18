@@ -24,7 +24,7 @@ type externalCodexTaskOptions struct {
 	accountID      string
 	progressCfg    config.ProgressConfig
 	reply          platform.Replier
-	// runtimeInactiveAuthoritative 仅用于同一接管事务内的 active→terminal 二次确认。
+	// runtimeInactiveAuthoritative 仅用于同一绑定事务内的 active→terminal 二次确认。
 	runtimeInactiveAuthoritative bool
 }
 
@@ -119,7 +119,7 @@ func (h *Handler) resolveExternalCodexRollout(threadID string) resolvedExternalC
 	resolved.state = externalCodexTaskState{
 		CodexThreadState: agent.CodexThreadState{
 			ThreadID: threadID, Active: true, ActiveTurnID: rollout.TurnID,
-			Preview: firstNonBlank(rollout.Preview, "Codex App 本地任务"),
+			Preview: firstNonBlank(rollout.Preview, "共享 Codex 任务"),
 		},
 		Progress: rollout.Progress,
 	}
@@ -131,7 +131,7 @@ func (h *Handler) resolveExternalCodexRollout(threadID string) resolvedExternalC
 
 // renderExternalCodexActiveNotice 展示当前任务、最新进展和真实可用的控制方式。
 func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
-	lines := []string{"Codex App 任务正在进行。"}
+	lines := []string{"共享 Codex 任务正在进行。"}
 	if state.Preview != "" {
 		lines = append(lines, "任务: "+previewPendingCodexMessage(state.Preview))
 	}
@@ -148,7 +148,7 @@ func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
 
 func externalCodexTaskOwner(state externalCodexTaskState) (agent.CodexRuntimeHolder, uint64) {
 	if state.Controllable {
-		return agent.CodexRuntimeDesktop, 0
+		return agent.CodexRuntimeWeClaw, 0
 	}
 	return agent.CodexRuntimeUnknown, 0
 }
@@ -166,7 +166,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if progressCfg.Mode == "" {
 		progressCfg = h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
 	}
-	taskText := firstNonBlank(runtime.state.Preview, "Codex App 本地任务")
+	taskText := firstNonBlank(runtime.state.Preview, "共享 Codex 任务")
 	onProgress, finishProgress := h.startProgressSessionForAgentWithFinal(
 		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, taskText, progressCfg,
 	)
@@ -254,13 +254,16 @@ func (h *Handler) reconcileExternalCodexTerminal(runtime externalCodexTaskRuntim
 
 	unlock := h.lockCodexThreadControl(runtime.opts.threadID)
 	defer unlock()
-	intent := h.ensureCodexSessions().controlIntent(runtime.opts.threadID)
+	route := codexConversationRoute{
+		bindingKey:     codexBindingKey(runtime.opts.routeUserID, runtime.opts.agentName),
+		conversationID: runtime.opts.conversationID,
+	}
 	request := agent.CodexRuntimeRequest{
 		Ref: agent.CodexThreadRef{
 			ConversationID: runtime.opts.conversationID,
 			ThreadID:       runtime.opts.threadID,
 		},
-		Intent: agentControlIntent(intent),
+		Intent: codexSharedHostIntent(route),
 	}
 	_, err := liveAgent.ReconcileCodexObservedTurn(runtime.opts.ctx, request, state)
 	return err

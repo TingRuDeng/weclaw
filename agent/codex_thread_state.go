@@ -43,6 +43,9 @@ func (a *ACPAgent) ReadCodexThreadState(ctx context.Context, conversationID stri
 	if binding, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
 		switch binding.Runtime {
 		case CodexRuntimeDesktop:
+			if a.desktopRuntime == nil {
+				return CodexThreadState{}, ErrCodexRuntimeUnavailable
+			}
 			return a.desktopRuntime.threadState(threadID)
 		case CodexRuntimeUnknown:
 			return CodexThreadState{}, ErrCodexRuntimeUnavailable
@@ -71,6 +74,9 @@ func (a *ACPAgent) SteerCodexThread(ctx context.Context, conversationID string, 
 		case CodexRuntimeConflict:
 			return ErrCodexRuntimeConflict
 		case CodexRuntimeDesktop:
+			if a.desktopRuntime == nil {
+				return ErrCodexRuntimeUnavailable
+			}
 			return a.desktopRuntime.steerTurn(ctx, codexDesktopSteerTurnSpec{
 				ConversationID: threadID, ExpectedTurnID: turnID, Message: message,
 			})
@@ -97,6 +103,9 @@ func (a *ACPAgent) InterruptCodexThread(ctx context.Context, conversationID stri
 		case CodexRuntimeConflict:
 			return ErrCodexRuntimeConflict
 		case CodexRuntimeDesktop:
+			if a.desktopRuntime == nil {
+				return ErrCodexRuntimeUnavailable
+			}
 			return a.desktopRuntime.interruptTurn(ctx, threadID, turnID)
 		}
 	}

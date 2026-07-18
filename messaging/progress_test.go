@@ -23,11 +23,11 @@ func TestRenderFinalFailureExplainsAgentSessionNotBound(t *testing.T) {
 	}
 }
 
-func TestRenderFinalFailureExplainsCodexDesktopDisconnectWithoutReleasingOwner(t *testing.T) {
+func TestRenderFinalFailureExplainsCodexTransportDisconnectWithoutClearingBinding(t *testing.T) {
 	got := renderFinalFailure("", agent.ErrCodexDesktopDisconnected)
 
 	if !strings.Contains(got, "Codex 运行通道暂不可用") ||
-		!strings.Contains(got, "远程所有权保持不变") ||
+		!strings.Contains(got, "窗口绑定保持不变") ||
 		!strings.Contains(got, "/cx status") {
 		t.Fatalf("Desktop disconnect should preserve owner and provide recovery hint, got %q", got)
 	}
@@ -39,12 +39,12 @@ func TestRenderFinalFailureExplainsCodexDesktopDisconnectWithoutReleasingOwner(t
 	}
 }
 
-func TestRenderFinalFailureWarnsWhenCodexDesktopDeliveryIsUnknown(t *testing.T) {
+func TestRenderFinalFailureWarnsWhenCodexDeliveryIsUnknown(t *testing.T) {
 	err := errors.Join(agent.ErrCodexDesktopDeliveryUnknown, agent.ErrCodexDesktopDisconnected)
 	got := renderFinalFailure("", err)
 
 	if !strings.Contains(got, "任务是否已开始暂时无法确认") ||
-		!strings.Contains(got, "远程所有权保持不变") ||
+		!strings.Contains(got, "窗口绑定保持不变") ||
 		!strings.Contains(got, "避免重复提交") ||
 		!strings.Contains(got, "/cx status") {
 		t.Fatalf("unknown delivery should warn before retry, got %q", got)

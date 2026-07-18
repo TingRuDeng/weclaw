@@ -81,6 +81,7 @@ type AgentConfig struct {
 	MaxHistory       int               `json:"max_history,omitempty"`       // max history (http type)
 	Progress         *ProgressConfig   `json:"progress,omitempty"`          // 微信进度反馈配置
 	AutoLaunch       *bool             `json:"auto_launch,omitempty"`       // companion 是否自动打开本地可见终端
+	AppServerSocket  string            `json:"app_server_socket,omitempty"` // Codex 单一 app-server 的共享 Unix socket
 	RunAsUser        string            `json:"run_as_user,omitempty"`       // 以独立 Unix 用户运行 agent，做文件系统隔离
 	RunAsEnv         []string          `json:"run_as_env,omitempty"`        // run_as_user 时需透传的环境变量名白名单
 }

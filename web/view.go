@@ -43,6 +43,7 @@ type agentView struct {
 	SystemPrompt     string            `json:"system_prompt,omitempty"`
 	Endpoint         string            `json:"endpoint,omitempty"`
 	APIKey           string            `json:"api_key,omitempty"`
+	AppServerSocket  string            `json:"app_server_socket,omitempty"`
 	RunAsUser        string            `json:"run_as_user,omitempty"`
 	RunAsEnv         []string          `json:"run_as_env,omitempty"`
 }
@@ -81,6 +82,7 @@ func redactConfig(cfg *config.Config) configView {
 			SandboxMode:      ag.SandboxMode,
 			SystemPrompt:     ag.SystemPrompt,
 			Endpoint:         ag.Endpoint,
+			AppServerSocket:  ag.AppServerSocket,
 			RunAsUser:        ag.RunAsUser,
 			RunAsEnv:         ag.RunAsEnv,
 		}
@@ -132,6 +134,7 @@ func mergeView(current *config.Config, v configView) *config.Config {
 			SandboxMode:      av.SandboxMode,
 			SystemPrompt:     av.SystemPrompt,
 			Endpoint:         av.Endpoint,
+			AppServerSocket:  av.AppServerSocket,
 			RunAsUser:        av.RunAsUser,
 			RunAsEnv:         av.RunAsEnv,
 			Progress:         prev.Progress,

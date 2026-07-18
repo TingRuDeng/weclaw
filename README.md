@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
-Remote-control local Codex and Claude from WeChat or Feishu. Keep real workspace and session context and receive live progress, approvals, and results. Selecting an existing Codex session or creating one gives the current remote chat window ownership; `/cx owner desktop` explicitly releases it to Codex Desktop.
+Use local Codex and Claude remotely from WeChat or Feishu while keeping real workspace and session context, live progress, approvals, and results. Codex runs as one shared local app-server; WeChat and Feishu windows are frontend clients bound to a workspace/thread.
 
 > Official releases support **macOS Apple Silicon / Intel (darwin/arm64 and darwin/amd64)** plus **Linux arm64 / amd64**. Windows assets are not currently published.
 
@@ -17,7 +17,7 @@ Remote-control local Codex and Claude from WeChat or Feishu. Keep real workspace
 - **Take over local work remotely**: continue Codex and Claude sessions from WeChat or Feishu after leaving your computer.
 - **Keep the original context**: reuse Codex workspaces/threads and Claude ACP sessions instead of starting a new conversation for every message.
 - **See progress and receive results**: Feishu uses CardKit updates, while WeChat provides typing state and task results.
-- **Use explicit ownership**: selecting or creating a Codex session gives the current remote chat window ownership; `/cx owner desktop` explicitly releases it and prevents competing remote windows.
+- **Use one Codex runtime boundary**: every remote window connects to the same app-server; windows keep session bindings, while the server serializes active turns on each thread.
 - **Configure security boundaries**: user allowlists, workspace roots, admin access, audit logs, and Codex permission levels are independent controls.
 
 ## Quick Start
@@ -49,24 +49,25 @@ The configuration file is `~/.weclaw/config.json`, the runtime log is `~/.weclaw
 ```text
 /cwd /path/to/project
 /cx ls                 # List existing sessions
-/cx <number>           # Select a session and take ownership; Feishu also supports session cards
-# Or send /cx new      # Create a session and take ownership
+/cx <number>           # Select and bind a session; Feishu also supports session cards
+# Or send /cx new      # Create and bind a session
 Inspect the current project and fix the failing tests
 ```
 
-After selecting an existing session or sending `/cx new`, send the task directly. Without a valid session binding, a regular message only asks the user to select a session or send `/cx new`; it never creates or takes ownership of a session implicitly.
+After selecting an existing session or sending `/cx new`, send the task directly. Without a valid session binding, a regular message only asks the user to select a session or send `/cx new`; it never creates or binds a session implicitly.
 
-### Take Over and Return a Codex Desktop Session
+### Use the Shared Codex app-server
 
 ```text
 /cx ls                 # List existing local workspaces and threads
-/cx <number>           # Select the current list item; selecting a thread takes ownership
-/cx owner              # Inspect owner, runtime location, and task state
-/cx owner desktop      # Explicitly release ownership to Codex Desktop when idle
-/cx owner remote       # Reacquire from the current WeChat or Feishu window after release
+/cx <number>           # Bind this frontend window to the selected thread
+/cx status             # Inspect the shared host, workspace, and thread
+/cx owner              # Inspect compatibility state; windows no longer own a writer
 ```
 
-Session selection or creation first persists the current window's session binding and ownership, then synchronizes the runtime. A reachable Desktop remains the runtime. A Desktop timeout, disconnect, rollout/checkpoint read failure, or stale conflict does not prove that another writer exists, so explicit selection, `/cx owner remote`, or a regular message from a persisted remote owner recovers the WeClaw app-server. Desktop and WeClaw turns may coexist on the same thread; WeClaw records that condition instead of locking the whole session, while still serializing its own remote writes per thread. Regular messages trust persisted ownership and never create or take over unauthorized sessions implicitly. After a restart leaves the runtime binding unknown, the first regular message from the owning remote window lazily restores the runtime channel and continues writing. `/cx owner desktop` still commits the release first, and an active remote task must finish or be stopped with `/stop` before release.
+WeClaw exposes native `codex app-server` through a stable Unix socket and starts the host when the first client needs it. Later WeChat, Feishu, or other WeClaw frontends reuse that service. Each window persists its own workspace/thread binding. Multiple windows may bind the same thread, but only one turn may write to that thread at a time. A transport disconnect does not clear a frontend binding; an accepted turn keeps its writer guard until authoritative terminal confirmation, and the next operation reconnects to the shared host. Legacy Codex owner state is discarded on load, and legacy `type: companion` configuration migrates to the shared app-server.
+
+`/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` are disabled because they would start an independent Codex writer. This version also does not treat a separately launched Codex Desktop as a shared-host client; a future local UI must connect to this same app-server rather than start a second one.
 
 ### Reuse Claude Code Sessions
 
@@ -105,12 +106,12 @@ flowchart LR
     WeChat --> Bridge[WeClaw]
     Feishu --> Bridge
     Bridge --> Core[Session Binding · Task Queue · Approval · Progress]
-    Core --> Codex[Codex app-server]
+    Core --> Codex[Single shared Codex app-server]
     Core --> Claude[Claude ACP]
     Core --> Other[Other ACP / HTTP / Companion Agents]
-    Codex --> Owner{Selection Takes Ownership · Explicit Release}
-    Owner --> Remote[Current Remote Window]
-    Owner --> Desktop[Codex Desktop]
+    Codex --> Bindings[Multiple frontend bindings]
+    Bindings --> WeChatClient[WeChat window]
+    Bindings --> FeishuClient[Feishu window]
     Claude --> Session[Claude Code Session]
 ```
 
@@ -130,7 +131,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 
 | Agent | Remote Backend | Session Reuse | Model / Reasoning | Local Handoff |
 | --- | --- | :---: | :---: | --- |
-| Codex | app-server | Workspace + thread | Yes | Codex CLI / Desktop |
+| Codex | Single shared app-server | Workspace + thread | Yes | No independent writer |
 | Claude | ACP | ACP session | Yes | Native Claude CLI |
 | OpenCode | Companion | Depends on local connection | Agent-dependent | Visible terminal |
 | Other agents | ACP / HTTP / Companion | Protocol-dependent | Agent-dependent | Configuration-dependent |
@@ -141,26 +142,26 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | --- | --- |
 | `/help`, `/status` | Show help and WeClaw runtime status |
 | `/cwd [path]` | Show or switch the working directory; regular users are confined to allowed workspace roots |
-| `/new` | Explicitly create a session for the current default agent; also take ownership when Codex is the default |
+| `/new` | Explicitly create a session for the current default agent; also bind it when Codex is the default |
 | `/model`, `/reasoning` | Show or change the current session model and reasoning effort |
 | `/mode [default|yolo]` | Show or change Codex approval behavior for the current conversation; bare `/mode` opens a Feishu choice card |
 | `/progress [mode]` | Show or change progress mode |
 | `/ps`, `/stop` | List or stop current tasks |
 | `/cancel`, `/guide` | Remove a queued message or steer the active Codex task |
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
-| `/cx <number>`, `/cx switch <number>` | Select a Codex session in the current workspace and take ownership |
-| `/cx new` | Create a Codex session in the current workspace and take ownership |
-| `/cx owner remote`, `/cx owner desktop` | Reacquire after release, or explicitly release to Codex Desktop |
+| `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
+| `/cx new` | Create and bind a Codex session in the current workspace |
+| `/cx owner` | Show shared app-server compatibility status; it no longer moves a writer |
 | `/update`, `/restart [--force]` | Remotely update or restart WeClaw as an administrator |
 
 <details>
 <summary>Common Codex commands</summary>
 
-Select and take ownership: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`.
+Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`.
 
-Ownership: `/cx owner` shows status, `/cx owner desktop` explicitly releases, and `/cx owner remote` reacquires after release.
+Runtime boundary: `/cx status` shows the shared host and current binding; `/cx owner` remains as read-only compatibility status.
 
-Other commands: `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx model status|ls`, `/cx cli`, `/cx app`, `/cx clean`, `/cx detach`.
+Other commands: `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx model status|ls`, `/cx clean`.
 
 </details>
 
@@ -234,6 +235,7 @@ Key security rules:
 - A non-loopback `api_addr` requires `api_token`.
 - Audit logging is enabled by default and never records secrets.
 - Codex `permission_level` accepts `default`, `auto_review`, and `full_access`; the effective default is `default`.
+- Codex manages the shared Unix socket automatically. Set `app_server_socket` only for multi-process or `run_as_user` deployments; its parent must be owned by the target user and no more permissive than `0700`.
 
 | Codex Permission Level | Behavior |
 | --- | --- |

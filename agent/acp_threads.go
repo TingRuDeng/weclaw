@@ -42,8 +42,10 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
-	if handled, err := a.bindKnownDesktopThread(conversationID, threadID); handled {
-		return err
+	if a.desktopProbe != nil {
+		if handled, err := a.bindKnownDesktopThread(conversationID, threadID); handled {
+			return err
+		}
 	}
 	if err := a.resumeThread(ctx, conversationID, threadID); err != nil {
 		return fmt.Errorf("resume thread %s: %w", threadID, err)

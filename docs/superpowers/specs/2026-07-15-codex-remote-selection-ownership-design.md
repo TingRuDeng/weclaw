@@ -1,5 +1,7 @@
 # Codex 远程会话“选择即接管”设计
 
+> 历史设计，已由 [`2026-07-18-codex-single-app-server-design.md`](2026-07-18-codex-single-app-server-design.md) 取代。本文只保留为迁移背景，不再描述当前 Codex 运行语义。
+
 ## 1. 背景
 
 WeClaw 当前把 Codex 会话选择与控制权移交拆成两个操作：

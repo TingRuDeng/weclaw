@@ -294,8 +294,8 @@ func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
 	}
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "error" || evt.Text != "ACP runtime exited" {
-			t.Fatalf("event=%#v, want runtime terminal after patch progress", evt)
+		if evt.Kind != "interrupted" || evt.Text != "ACP runtime exited" {
+			t.Fatalf("event=%#v, want runtime observation interruption after patch progress", evt)
 		}
 	default:
 		t.Fatal("readLoop EOF did not emit runtime terminal")

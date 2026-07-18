@@ -71,10 +71,9 @@ func (s *codexSessionStore) clearStaleWorkspaceThread(bindingKey string, workspa
 		s.mu.Unlock()
 		return false
 	}
-	intent := s.controls[threadID]
-	if intent.Owner == codexControlRemote && intent.RouteBindingKey == bindingKey {
+	if session.PendingFirstTurn {
 		// thread/start 创建的会话在首条消息前不会出现在 Codex App 的展示目录中。
-		// 展示目录的暂时缺失不能覆盖当前窗口已经持久化的远程所有权。
+		// 展示目录的暂时缺失不能覆盖当前 frontend 已持久化的 binding。
 		s.mu.Unlock()
 		return false
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -14,7 +13,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestHandleCodexNewRuntimeFailureKeepsNewThreadAndOwner(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureKeepsNewThreadBinding(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.handoffErrors["thread-new"] = fmt.Errorf("handoff failed")
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -29,14 +28,8 @@ func TestHandleCodexNewRuntimeFailureKeepsNewThreadAndOwner(t *testing.T) {
 	if !h.codexSessions.isPendingFirstTurn(bindingKey, workspace, "thread-new") {
 		t.Fatal("/cx new 创建的 thread 在首条消息前必须持久标记 pending-first-turn")
 	}
-	if old := h.codexSessions.controlIntent("thread-old"); old.Owner != codexControlDesktop {
-		t.Fatalf("old owner=%#v", old)
-	}
-	if target := h.codexSessions.controlIntent("thread-new"); target.Owner != codexControlRemote || target.RouteBindingKey != bindingKey {
-		t.Fatalf("target owner=%#v", target)
-	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已创建并接管") || strings.Contains(text, "原会话已恢复") {
+	if !strings.Contains(text, "已创建并绑定") || strings.Contains(text, "原会话已恢复") {
 		t.Fatalf("回复=%q", text)
 	}
 }
@@ -44,7 +37,7 @@ func TestHandleCodexNewRuntimeFailureKeepsNewThreadAndOwner(t *testing.T) {
 func TestHandleCodexNewRuntimeFailureKeepsMappingWithoutPreviousThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	ag.handoffErrors["thread-new"] = fmt.Errorf("handoff failed")
 	h.defaultName, h.agents["codex"] = "codex", ag
@@ -58,8 +51,8 @@ func TestHandleCodexNewRuntimeFailureKeepsMappingWithoutPreviousThread(t *testin
 	if ag.clearCalledWith != "" || ag.threadID != "thread-new" || thread != "thread-new" || pending {
 		t.Fatalf("mapping clear=%q runtime=%q store=(%q,%v)", ag.clearCalledWith, ag.threadID, thread, pending)
 	}
-	if !containsText(calls.texts(), "已创建并接管") {
-		t.Fatalf("回复未说明接管状态: %#v", calls.texts())
+	if !containsText(calls.texts(), "已创建并绑定") {
+		t.Fatalf("回复未说明绑定状态: %#v", calls.texts())
 	}
 }
 
@@ -72,7 +65,7 @@ func TestHandleCodexNewRuntimeFailureDoesNotBlockRemoteWrites(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(125, "/cx new"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已创建并接管") {
+	if !strings.Contains(text, "已创建并绑定") {
 		t.Fatalf("回复=%q", text)
 	}
 	assertCodexCreateRuntimeFailureAllowsRemoteWrite(t, h, ag, workspace, bindingKey)
@@ -148,32 +141,6 @@ func TestCreateAndAcquireCodexSessionResetFailureRestoresWithCanceledParent(t *t
 	}
 }
 
-func TestMarkCodexSessionCreateConflictContinuesAfterEachMarkFailure(t *testing.T) {
-	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
-	newMarkErr := errors.New("mark new failed")
-	oldMarkErr := errors.New("mark old failed")
-	ag.markErrors["thread-new"] = newMarkErr
-	ag.markErrors["thread-old"] = oldMarkErr
-	conversationID := buildCodexConversationID("user-1", "codex", workspace)
-
-	err := h.markCodexSessionCreateConflict(codexSessionCreateFailureRequest{
-		createRequest: codexSessionCreateRequest{acquire: codexSessionAcquireRequest{
-			ctx: context.Background(), agent: ag,
-			route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID},
-		}},
-		previousThreadID: "thread-old",
-		createdThread:    "thread-new",
-	})
-
-	marks, _ := ag.conflictSnapshot()
-	if !errors.Is(err, newMarkErr) || !errors.Is(err, oldMarkErr) {
-		t.Fatalf("err=%v，期望聚合两个标记错误", err)
-	}
-	if !reflect.DeepEqual(marks, []string{"thread-new", "thread-old"}) || ag.threadID != "thread-old" {
-		t.Fatalf("marks=%#v mapping=%q，标记失败仍须继续到 A", marks, ag.threadID)
-	}
-}
-
 func TestHandleCodexNewResetFailureRestoresMapping(t *testing.T) {
 	tests := []struct {
 		name, created, wantReply, forbidden string
@@ -209,16 +176,12 @@ func newCodexCreateFailureFixture(t *testing.T) (*Handler, *fakeCodexSessionCrea
 	t.Helper()
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	ag.fakeCodexThreadAgent.threadID = "thread-old"
 	h.defaultName, h.agents["codex"] = "codex", ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
-	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
-		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
-		workspace: workspace, threadID: "thread-old",
-	})
 	return h, ag, workspace, bindingKey
 }

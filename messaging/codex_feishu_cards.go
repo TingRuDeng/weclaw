@@ -67,36 +67,11 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 			Admin:       h.isAdminMessage(msg),
 		})
 	}
-	if h.sendFeishuCodexOwnerChoices(req) {
-		return true
-	}
 	if h.sendFeishuCodexNavigationChoices(req) {
 		return true
 	}
 	sendPlatformText(ctx, reply, msg.UserID, req.result.Reply)
 	return true
-}
-
-// sendFeishuCodexOwnerChoices 把显式控制权移交呈现为二选一卡片。
-func (h *Handler) sendFeishuCodexOwnerChoices(req feishuCodexSessionCommandRequest) bool {
-	if !req.result.ShowCard || !isFeishuCodexOwnerCommand(strings.Fields(req.trimmed)) {
-		return false
-	}
-	choices := []platform.Choice{
-		{ID: "/cx owner remote", Label: "交给当前远程窗口"},
-		{ID: "/cx owner desktop", Label: "交给 Codex Desktop"},
-	}
-	metadata := feishuChoiceSessionMetadata(req.message, req.routeUserID)
-	choices = platformChoicesWithMetadata(choices, metadata)
-	return h.askFeishuCodexChoices(feishuCodexChoicePrompt{
-		ctx: req.ctx, userID: req.message.UserID, reply: req.reply,
-		prompt: req.result.Reply, choices: choices,
-	})
-}
-
-// isFeishuCodexOwnerCommand 只让状态命令生成选择卡，移交结果直接返回确认文本。
-func isFeishuCodexOwnerCommand(fields []string) bool {
-	return len(fields) == 2 && isCodexSessionCommandToken(fields[0]) && fields[1] == "owner"
 }
 
 func (h *Handler) sendFeishuCodexNavigationChoices(req feishuCodexSessionCommandRequest) bool {

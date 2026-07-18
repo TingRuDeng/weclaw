@@ -132,20 +132,6 @@ func (h *Handler) SetPlatformDefaultAgents(defaults map[string]string) {
 	}
 }
 
-// SetCodexAppOpener 设置 Codex App 打开器，主要用于测试外部进程调用。
-func (h *Handler) SetCodexAppOpener(opener CodexAppOpener) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.codexAppOpener = opener
-}
-
-// SetCodexCLIResumeOpener 设置 Codex CLI resume 打开器，主要用于测试外部进程调用。
-func (h *Handler) SetCodexCLIResumeOpener(opener CodexCLIResumeOpener) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.codexCLIResumeOpener = opener
-}
-
 // SetClaudeCLIResumeOpener 设置 Claude CLI resume 打开器，主要用于测试外部进程调用。
 func (h *Handler) SetClaudeCLIResumeOpener(opener ClaudeCLIResumeOpener) {
 	h.mu.Lock()

@@ -141,6 +141,7 @@ func newACPAgentFromConfig(name string, agCfg config.AgentConfig) *agent.ACPAgen
 		ApprovalReviewer: agCfg.EffectiveApprovalReviewer(),
 		SandboxMode:      agCfg.EffectiveSandboxMode(),
 		SystemPrompt:     agCfg.SystemPrompt,
+		AppServerSocket:  agCfg.AppServerSocket,
 		RunAsUser:        agCfg.RunAsUser,
 		RunAsEnv:         agCfg.RunAsEnv,
 	})

@@ -23,12 +23,6 @@ type SaveDefaultFunc func(name string) error
 // CDNDownloader 用于下载微信 CDN 中的入站文件，便于测试注入。
 type CDNDownloader func(ctx context.Context, encryptQueryParam string, aesKey string) ([]byte, error)
 
-// CodexAppOpener 用于打开当前工作区的 Codex App，便于测试替换外部进程。
-type CodexAppOpener func(ctx context.Context, command string, workspaceRoot string) error
-
-// CodexCLIResumeOpener 用于把当前 Codex thread 打开到本地 CLI/TUI。
-type CodexCLIResumeOpener func(ctx context.Context, command string, workspaceRoot string, threadID string) error
-
 // ClaudeCLIResumeRequest 描述一次原生 Claude CLI 空闲会话交接。
 type ClaudeCLIResumeRequest struct {
 	Command       string
@@ -98,9 +92,6 @@ type Handler struct {
 	codexBrowseWorkspaces   map[string]string
 	feishuWorkspaceChoices  feishuWorkspaceChoiceStore
 	feishuNavSnapshots      feishuNavigationSnapshotStore
-	codexLocalEntries       map[string]codexLocalEntryState
-	codexAppOpener          CodexAppOpener
-	codexCLIResumeOpener    CodexCLIResumeOpener
 	claudeCLIResumeOpener   ClaudeCLIResumeOpener
 	serviceAdminMu          sync.Mutex
 	serviceAdminExecutor    ServiceAdminCommandExecutor

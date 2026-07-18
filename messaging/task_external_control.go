@@ -40,7 +40,7 @@ func (h *Handler) externalCodexControlState(key string, actor string) (bool, boo
 	return task.isExternalCodexLocked(), task.canControlExternalCodexLocked(), false
 }
 
-// resolveExternalCodexControl 每次控制前读取实时 owner 与 active turn。
+// resolveExternalCodexControl 每次控制前核对任务发起人、共享 runtime 与 active turn。
 func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (externalCodexControlTarget, bool, error) {
 	target, denied := h.cachedExternalCodexTarget(req.key, req.actor)
 	if denied {
@@ -57,9 +57,9 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 	}
 	if !target.task.canControlExternalCodex() {
 		if req.action == "guide" {
-			return target, true, fmt.Errorf("当前 Codex App 本地任务不支持 /guide；暂存消息会在任务结束后自动执行")
+			return target, true, fmt.Errorf("当前 Codex 任务不支持 /guide；暂存消息会在任务结束后自动执行")
 		}
-		return target, true, fmt.Errorf("当前任务由独立 Codex App 进程执行，暂不支持从飞书或微信停止")
+		return target, true, fmt.Errorf("当前 Codex 任务暂不支持从飞书或微信停止")
 	}
 	liveAgent, live := req.ag.(agent.CodexLiveRuntimeAgent)
 	runtimeAgent, runtime := req.ag.(agent.CodexThreadRuntimeAgent)
@@ -68,18 +68,18 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 	}
 	unlock := h.lockCodexThreadControl(target.threadID)
 	defer unlock()
-	intent := h.ensureCodexSessions().controlIntent(target.threadID)
-	if intent.Owner != codexControlRemote || intent.ConversationID != req.key {
-		return target, true, fmt.Errorf("当前窗口没有该 Codex 任务的远程控制权")
+	route := codexConversationRoute{
+		bindingKey:     codexBindingKey(target.task.routeUserID, target.task.agentName),
+		conversationID: req.key,
 	}
 	binding, err := liveAgent.InspectCodexRuntime(req.ctx, agent.CodexRuntimeRequest{
 		Ref:    agent.CodexThreadRef{ConversationID: req.key, ThreadID: target.threadID},
-		Intent: agentControlIntent(intent),
+		Intent: codexSharedHostIntent(route),
 	})
 	if err != nil {
 		return target, true, fmt.Errorf("无法确认 Codex 实时运行位置: %w", err)
 	}
-	if binding.Runtime != agent.CodexRuntimeDesktop && binding.Runtime != agent.CodexRuntimeWeClaw {
+	if binding.Runtime != agent.CodexRuntimeWeClaw {
 		return target, true, fmt.Errorf("Codex 实时运行位置不可用，无法确认%s操作", req.action)
 	}
 	state, err := runtimeAgent.ReadCodexThreadState(req.ctx, req.key, target.threadID)
@@ -87,7 +87,7 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 		return target, true, err
 	}
 	if !state.Active || state.ActiveTurnID == "" {
-		return target, true, fmt.Errorf("Codex Desktop 当前没有可控制的 active turn")
+		return target, true, fmt.Errorf("共享 Codex app-server 当前没有可控制的 active turn")
 	}
 	target.turnID = state.ActiveTurnID
 	target.task.refreshExternalCodexTurn(binding, state.ActiveTurnID)

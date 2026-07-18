@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -63,9 +64,9 @@ func createCompanionRuntime(endpoint agent.CompanionEndpoint) (companionRuntime,
 	case "opencode":
 		return newOpenCodeCompanionRuntime(endpoint), nil
 	case "codex":
-		return newCodexAppCompanionRuntime(endpoint), nil
+		return nil, errors.New("Codex Companion 已停用：请通过 WeClaw 的单一共享 app-server 使用 Codex")
 	default:
-		return nil, fmt.Errorf("暂不支持 %s Companion，本轮先支持 opencode 和 codex", endpoint.Agent)
+		return nil, fmt.Errorf("暂不支持 %s Companion，当前仅支持 opencode", endpoint.Agent)
 	}
 }
 

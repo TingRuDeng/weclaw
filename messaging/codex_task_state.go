@@ -36,7 +36,7 @@ func (t *activeAgentTask) canControlExternalCodexLocked() bool {
 	if !t.isExternalCodexLocked() || t.phase != codexTaskRunning {
 		return false
 	}
-	return t.runtimeOwner == agent.CodexRuntimeDesktop || t.runtimeOwner == agent.CodexRuntimeWeClaw
+	return t.runtimeOwner == agent.CodexRuntimeWeClaw
 }
 
 func (t *activeAgentTask) markCodexDisconnected() {

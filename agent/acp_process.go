@@ -45,6 +45,9 @@ func (a *ACPAgent) startACPProcess(ctx context.Context) error {
 }
 
 func (a *ACPAgent) launchACPSubprocess(ctx context.Context) (int, error) {
+	if a.usesCodexSharedHost() {
+		return a.launchCodexHostClient(ctx)
+	}
 	a.mu.Lock()
 	cmd := exec.CommandContext(ctx, a.command, a.args...)
 	cmd.Dir = a.cwd
@@ -114,6 +117,19 @@ func (a *ACPAgent) initializeACPSubprocess(ctx context.Context, pid int) (json.R
 }
 
 func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
+	if a.usesCodexSharedHost() {
+		connection, cmd, done := a.disconnectCodexHostClient(true)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		stopCodexHostProcess(cmd, done)
+		if a.stderr != nil {
+			if detail := a.stderr.LastError(); detail != "" {
+				return fmt.Errorf("agent startup failed (pid=%d): %w; stderr: %s", pid, startErr, detail)
+			}
+		}
+		return fmt.Errorf("agent startup failed (pid=%d): %w", pid, startErr)
+	}
 	a.mu.Lock()
 	a.started = false
 	stdin := a.stdin
@@ -232,6 +248,18 @@ func newACPScanner(reader io.Reader) *bufio.Scanner {
 
 // Stop terminates the subprocess.
 func (a *ACPAgent) Stop() {
+	if a.usesCodexSharedHost() {
+		connection, cmd, done := a.disconnectCodexHostClient(true)
+		if connection == nil && cmd == nil {
+			return
+		}
+		if connection != nil {
+			_ = connection.Close()
+		}
+		stopCodexHostProcess(cmd, done)
+		a.failRuntimeWaiters("Codex app-server client stopped")
+		return
+	}
 	a.mu.Lock()
 	if !a.started && a.stdin == nil && a.cmd == nil {
 		a.mu.Unlock()
@@ -274,6 +302,12 @@ func (a *ACPAgent) isRuntimeStarted() bool {
 func (a *ACPAgent) runtimePID() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.usesCodexSharedHost() {
+		if a.hostCmd == nil || a.hostCmd.Process == nil {
+			return 0
+		}
+		return a.hostCmd.Process.Pid
+	}
 	if a.cmd == nil || a.cmd.Process == nil {
 		return 0
 	}

@@ -10,161 +10,34 @@ import (
 
 const codexSessionAcquireCleanupTimeout = 3 * time.Second
 
-type codexRuntimeConflictRequest struct {
-	ctx       context.Context
-	liveAgent agent.CodexLiveRuntimeAgent
-	change    codexRuntimeIntentChange
-	intent    codexControlIntent
-}
-
-// applyCodexRuntimeIntentChanges 在所有权提交后同步目标和旧 thread；各项失败互不阻断。
-func (h *Handler) applyCodexRuntimeIntentChanges(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, []codexRuntimeIntentChange, error) {
-	resolution, targetChange, targetErr := h.acquireCodexTargetRuntime(plan, liveAgent)
-	applied := make([]codexRuntimeIntentChange, 0, len(plan.changes)+1)
-	if targetChange != nil {
-		applied = append(applied, *targetChange)
-	}
-	var cleanupErr error
-	for _, change := range plan.changes {
-		_, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
-			ctx: plan.request.ctx, liveAgent: liveAgent,
-			change: change,
-		})
-		if err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
-			continue
-		}
-		applied = append(applied, change)
-	}
-	return resolution, applied, errors.Join(targetErr, cleanupErr)
-}
-
-// acquireCodexTargetRuntime 对可写的幂等目标只读本地绑定；unknown/conflict 会按显式选择恢复。
-func (h *Handler) acquireCodexTargetRuntime(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, *codexRuntimeIntentChange, error) {
-	before := plan.snapshot.Target
-	after := proposedCodexRemoteSelectionIntent(before, plan.request.route)
-	change := codexRuntimeIntentChange{
-		threadID: plan.request.route.threadID, route: plan.request.route,
-		before: before, after: after,
-	}
-	if before == after && !plan.request.forceRuntimeHandoff {
-		resolution, err := h.currentCodexAcquireTarget(plan, liveAgent)
-		if err != nil || codexRuntimeReadyForRemoteTurn(resolution.Binding.Runtime) {
-			return resolution, nil, err
-		}
-	}
-	resolution, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
-		ctx: plan.request.ctx, liveAgent: liveAgent,
-		change: change,
-	})
-	if err != nil {
-		return resolution, nil, err
-	}
-	return resolution, &change, nil
-}
-
-func codexRuntimeReadyForRemoteTurn(runtime agent.CodexRuntimeHolder) bool {
-	// Desktop runtime 由 WeClaw 通过 follower IPC 写入；控制方仍是当前远程窗口。
-	return runtime == agent.CodexRuntimeDesktop || runtime == agent.CodexRuntimeWeClaw
-}
-
-// currentCodexAcquireTarget 读取已建立的 runtime，不向 Desktop 发起探测。
-func (h *Handler) currentCodexAcquireTarget(plan codexSessionAcquirePlan, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, error) {
-	request, rollout, err := h.buildCodexRuntimeRequest(plan.request.route, plan.request.route.threadID)
+// bindCodexSharedRuntime ensures this frontend conversation maps to the
+// selected thread on the one shared app-server. A transport failure does not
+// roll back the durable frontend binding and is never promoted to a writer
+// conflict without authoritative server evidence.
+func (h *Handler) bindCodexSharedRuntime(req codexSessionAcquireRequest, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, error) {
+	request, rollout, err := h.buildCodexRuntimeRequest(req.route, req.route.threadID)
 	if err != nil {
 		return codexRuntimeResolution{}, err
 	}
-	binding, err := liveAgent.CurrentCodexRuntime(request)
-	return codexRuntimeResolution{
-		Request: request, Binding: binding, Rollout: rollout,
-		Live: true, ProbeErr: err,
-	}, err
-}
-
-// proposedCodexRemoteSelectionIntent 仅在所有权三元组变化时推进 revision。
-func proposedCodexRemoteSelectionIntent(current codexControlIntent, route codexConversationRoute) codexControlIntent {
-	if current.Owner == codexControlRemote &&
-		current.RouteBindingKey == route.bindingKey &&
-		current.ConversationID == route.conversationID {
-		return current
-	}
-	return codexControlIntent{
-		Owner: codexControlRemote, RouteBindingKey: route.bindingKey,
-		ConversationID: route.conversationID, Revision: current.Revision + 1,
-	}
-}
-
-// handoffCodexRuntimeIntent 最多调用一次副作用。技术恢复失败只返回错误，不能伪造写入冲突。
-func (h *Handler) handoffCodexRuntimeIntent(req codexRuntimeHandoffRequest) (codexRuntimeResolution, error) {
-	request, rollout, err := h.buildCodexRuntimeRequest(req.change.route, req.change.threadID)
-	if err != nil {
-		return codexRuntimeResolution{}, err
-	}
-	request.Intent = agentControlIntent(req.change.after)
-	binding, handoffErr := req.liveAgent.HandoffCodexRuntime(req.ctx, request)
+	binding, bindErr := liveAgent.HandoffCodexRuntime(req.ctx, request)
 	resolution := codexRuntimeResolution{
 		Request: request, Binding: binding, Rollout: rollout,
-		Live: true, ProbeErr: handoffErr,
+		Live: true, ProbeErr: bindErr,
 	}
-	if handoffErr == nil {
-		return resolution, nil
-	}
-	current, currentErr := req.liveAgent.CurrentCodexRuntime(request)
-	if currentErr == nil {
-		resolution.Binding = current
-	}
-	return resolution, errors.Join(handoffErr, currentErr)
-}
-
-// compensateCodexRuntimeChanges 按已应用副作用的逆序恢复持久化权威意图。
-func (h *Handler) compensateCodexRuntimeChanges(ctx context.Context, liveAgent agent.CodexLiveRuntimeAgent, applied []codexRuntimeIntentChange) error {
-	var compensationErr error
-	for index := len(applied) - 1; index >= 0; index-- {
-		change := applied[index]
-		reverse := codexRuntimeIntentChange{
-			threadID: change.threadID, route: change.route,
-			before: change.after, after: change.before,
+	if bindErr != nil {
+		current, currentErr := liveAgent.CurrentCodexRuntime(request)
+		if currentErr == nil {
+			resolution.Binding = current
 		}
-		_, err := h.handoffCodexRuntimeIntent(codexRuntimeHandoffRequest{
-			ctx: ctx, resyncCtx: ctx, liveAgent: liveAgent,
-			change: reverse,
-		})
-		if err != nil {
-			compensationErr = errors.Join(compensationErr, err)
-		}
+		return resolution, errors.Join(bindErr, currentErr)
 	}
-	return compensationErr
+	if readyErr := ensureCodexRuntimeReady(resolution, req.route); readyErr != nil {
+		return resolution, readyErr
+	}
+	return resolution, nil
 }
 
-// markCodexRuntimeConflict 为补偿失败的 thread 持续登记 fail-closed 状态。
-func (h *Handler) markCodexRuntimeConflict(req codexRuntimeConflictRequest) error {
-	request := agent.CodexRuntimeRequest{
-		Ref:    req.change.route.ref(req.change.threadID),
-		Intent: agentControlIntent(req.intent),
-	}
-	return req.liveAgent.MarkCodexRuntimeConflict(req.ctx, request)
-}
-
-// newCodexSessionAcquireCleanupContext 为首次清理保留 values、脱离父取消并设置有限预算。
 func newCodexSessionAcquireCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	parent := context.WithoutCancel(normalizeContext(ctx))
 	return context.WithTimeout(parent, codexSessionAcquireCleanupTimeout)
-}
-
-// finishCodexOwnerSelection 在所有权落盘后立即切换窗口工作空间和默认 Agent。
-func (h *Handler) finishCodexOwnerSelection(request codexSessionAcquireRequest) codexSessionAcquireResult {
-	agentSessionErr := h.ensureAgentSessions().Set(
-		request.routeUserID, request.agentName,
-	)
-	if agentSessionErr != nil {
-		return codexSessionAcquireResult{route: request.route, agentSessionErr: agentSessionErr}
-	}
-	h.switchCodexWorkspaceForRoute(
-		firstNonBlank(request.actorUserID, request.routeUserID),
-		request.routeUserID, request.agentName,
-		request.route.workspaceRoot, request.agent,
-	)
-	return codexSessionAcquireResult{
-		route: request.route, agentSessionErr: agentSessionErr,
-	}
 }

@@ -74,14 +74,6 @@ func TestCodexSessionStoreReplacesMissingFirstTurnThreadAtomically(t *testing.T)
 	if threadID != "thread-new" || pending || !store.isPendingFirstTurn(bindingKey, workspace, "thread-new") {
 		t.Fatalf("thread=%q pendingNew=%v pendingFirstTurn=%v", threadID, pending, store.isPendingFirstTurn(bindingKey, workspace, "thread-new"))
 	}
-	if old := store.controlIntent("thread-old"); old.Owner != codexControlDesktop {
-		t.Fatalf("old owner=%#v", old)
-	}
-	if current := store.controlIntent("thread-new"); current.Owner != codexControlRemote ||
-		current.RouteBindingKey != bindingKey || current.ConversationID != conversationID {
-		t.Fatalf("new owner=%#v", current)
-	}
-
 	reloaded := newCodexSessionStore()
 	reloaded.SetFilePath(stateFile)
 	if threadID, _ := reloaded.getThread(bindingKey, workspace); threadID != "thread-new" ||
@@ -106,8 +98,8 @@ func TestCodexSessionStoreDoesNotGuessV2PendingFirstTurn(t *testing.T) {
 				ThreadID: threadID, UpdatedAt: "2026-07-17T12:00:30Z",
 			}},
 		}},
-		Controls: map[string]codexControlIntent{threadID: {
-			Owner: codexControlRemote, RouteBindingKey: bindingKey,
+		Controls: map[string]legacyCodexControlIntent{threadID: {
+			Owner: "remote", RouteBindingKey: bindingKey,
 			ConversationID: "conversation-1", Revision: 1, UpdatedAt: "2026-07-17T12:00:20Z",
 		}},
 	})

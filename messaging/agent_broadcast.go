@@ -273,6 +273,7 @@ func (h *Handler) executeBroadcastAgentTurn(opts broadcastAgentTurnOptions) (str
 		opts.runtime.activeTask.markCodexObservationInterrupted(interrupted.ThreadID, interrupted.TurnID)
 	}
 	result := h.reconcileInterruptedCodexTurn(opts.runtime.ctx, interrupted, opts.onProgress)
+	confirmInterruptedCodexTerminal(interrupted, result)
 	if result.Terminal && !result.Failed {
 		return result.Final, nil
 	}

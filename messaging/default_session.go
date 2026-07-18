@@ -87,7 +87,7 @@ type defaultCodexSessionCreateRequest struct {
 	reply       platform.Replier
 }
 
-// resetDefaultCodexSessionForRoute 按 route 当前工作空间创建并接管新的 Codex thread。
+// resetDefaultCodexSessionForRoute 按 route 当前工作空间创建并绑定新的 Codex thread。
 func (h *Handler) resetDefaultCodexSessionForRoute(ctx context.Context, req defaultCodexSessionCreateRequest) string {
 	bindingKey := codexBindingKey(req.routeUserID, req.agentName)
 	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))

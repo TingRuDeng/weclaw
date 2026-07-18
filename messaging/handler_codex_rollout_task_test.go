@@ -41,7 +41,7 @@ func newRolloutMirrorFixture(t *testing.T) rolloutMirrorFixture {
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.defaultName = "codex"
 	ag := newFakeCodexLiveAgent(
-		agent.CodexRuntimeDesktop, agent.CodexThreadState{ThreadID: threadID},
+		agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: threadID},
 	)
 	h.agents["codex"] = ag
 	progressOff := config.DefaultProgressConfig()
@@ -72,7 +72,7 @@ func switchAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 		t.Fatalf("切换到本地运行中 rollout 后应登记外部任务镜像，texts=%#v", fixture.reply.Texts)
 	}
 	notice := strings.Join(fixture.reply.Texts, "\n")
-	for _, want := range []string{"Codex App 任务正在进行", "修复跨进程任务反馈", "正在核对任务状态"} {
+	for _, want := range []string{"共享 Codex 任务正在进行", "修复跨进程任务反馈", "正在核对任务状态"} {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("switch notice=%q, want %q", notice, want)
 		}

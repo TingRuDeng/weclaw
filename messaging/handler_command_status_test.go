@@ -28,8 +28,7 @@ func TestBuildHelpText(t *testing.T) {
 		"/cx quota 查看 Codex 账号额度",
 		"/cx ls",
 		"/cx <编号|..> 选择或返回",
-		"/cx cli 打开本地 CLI",
-		"/cx app 打开 Codex App",
+		"/cx owner 查看共享 app-server 状态",
 		"/cc quota 查看 Claude 账号额度",
 		"/codex <内容> 发给 Codex",
 		"/cc <内容> 发给 Claude",
@@ -188,7 +187,7 @@ func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
 		t.Fatalf("choices=%#v, want one codex help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/cx ls", "/cx status", "/cx owner", "/cx cli", "/cx app", "/cx quota", "/cx model ls", "/cx clean", "/cx help", "/help"} {
+	for _, want := range []string{"/cx ls", "/cx status", "/cx owner", "/cx pwd", "/cx quota", "/cx model ls", "/cx clean", "/cx help", "/help"} {
 		if !got[want] {
 			t.Fatalf("codex help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
@@ -329,15 +328,12 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 	for _, want := range []string{
 		"/cx ls 查看工作空间或当前工作空间会话",
 		"/cx <编号|..> 选择当前列表项或返回上一级",
-		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动接管；.. 返回工作空间列表",
-		"/cx switch <编号> 切换当前工作空间会话并接管",
-		"/cx new 新建当前工作空间会话并接管",
+		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动绑定；.. 返回工作空间列表",
+		"/cx switch <编号> 切换并绑定当前工作空间会话",
+		"/cx new 新建并绑定当前工作空间会话",
 		"/cx pwd 查看当前工作空间",
-		"/cx cli 打开本地 CLI 接手当前 thread",
-		"/cx app 打开 Codex App 到当前工作空间",
-		"/cx status 查看 remote、thread 和本地入口状态",
-		"/cx owner remote 重新接管当前会话",
-		"/cx owner desktop 显式释放当前会话给 Codex Desktop",
+		"/cx status 查看共享 app-server、workspace 和 thread 状态",
+		"/cx owner 查看兼容状态（窗口不再持有独占 writer）",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看 Codex 模型状态",

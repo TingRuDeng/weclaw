@@ -141,17 +141,6 @@ func (f *fakeVisibleCodexAgent) DetachVisibleCompanion() bool {
 	return f.detachOK
 }
 
-type recordedCodexAppOpen struct {
-	command   string
-	workspace string
-}
-
-type recordedCodexCLIResume struct {
-	command   string
-	workspace string
-	threadID  string
-}
-
 func (f *fakeCodexThreadAgent) CurrentCodexThread(conversationID string) (string, bool) {
 	if f.threadID == "" {
 		return "", false

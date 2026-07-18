@@ -21,7 +21,7 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active",
 		WaitingOnUserInput: true, Preview: "本地 App 发起的任务",
 	}
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
 	ag.watchDone = make(chan struct{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
@@ -45,7 +45,7 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 		t.Fatalf("external task=(%v,%q,%q), want active thread/turn", external, threadID, turnID)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "Codex App 任务正在进行") || !strings.Contains(text, "本地 App 发起的任务") {
+	if !strings.Contains(text, "共享 Codex 任务正在进行") || !strings.Contains(text, "本地 App 发起的任务") {
 		t.Fatalf("switch reply should show active task, messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "/guide") || !strings.Contains(text, "/stop") || !strings.Contains(text, "/cancel") {
@@ -67,7 +67,7 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 		ThreadID: "thread-active", Active: true,
 		ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
 	}
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
 	ag.reply, ag.watchDone = "不应该新开 turn", make(chan struct{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
@@ -89,7 +89,7 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 	if !strings.Contains(text, queuedAgentMessage) {
 		t.Fatalf("普通消息应发送简洁排队提示，messages=%#v", calls.texts())
 	}
-	if !strings.Contains(text, "已发送到当前 Codex App 任务") {
+	if !strings.Contains(text, "已发送到当前共享 Codex 任务") {
 		t.Fatalf("/guide should confirm steer, messages=%#v", calls.texts())
 	}
 }
@@ -106,7 +106,7 @@ func TestCodexExternalAppTaskSendsFinalReply(t *testing.T) {
 		ThreadID: "thread-active", Active: true,
 		ActiveTurnID: "turn-active", Preview: "本地 App 发起的任务",
 	}
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
 	ag.watchReply, ag.watchDone = "本地任务完成", watchDone
 	h.defaultName = "codex"
 	h.agents["codex"] = ag

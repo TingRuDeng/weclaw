@@ -1,5 +1,15 @@
 # Lessons
 
+## 2026-07-18 Codex 必须是单一 app-server、多前端 binding
+
+- 触发条件：飞书、微信、Codex Desktop bridge 和 Companion 分别维护 owner/runtime，窗口切换、Desktop 探测、断线与 writer lease 被混成同一状态机。
+- 规则：生产 Codex 只运行一个共享 app-server；窗口只持久化 workspace/thread binding，不持有独占 writer owner。多个前端可绑定同一 thread，真正写入时只按 thread 获取单一 writer lease。
+- 运行边界：socket 断开、启动失败或超时只影响 runtime availability，不能清除 binding、弹 owner 卡或写入 conflict；host 生命周期必须独立于触发启动的单次前端请求。
+- 断线边界：turn 已提交后失去客户端观察流属于交付状态未知，writer lease 必须 fail-closed 保留；只有同一 turn 的 rollout 终态或重连后的权威 thread 快照才能释放，禁止用普通 error/defer 直接清 active 状态。
+- 兼容边界：v1-v3 owner/control 仅用于读取迁移并丢弃；`/cx owner` 只读，`/cx app|cli|attach|detach` 与 Codex Companion 第二 writer 必须拒绝。后续本地 UI 只能连接同一 host。
+- 路径边界：Unix socket 默认路径过长时使用原路径稳定哈希落到当前用户私有短目录；显式超长路径直接失败，socket 与父目录必须校验类型、权限和 owner。
+- 本节取代下文所有 Codex Desktop owner、选择即接管和 Codex Companion attach/detach 规则；旧条目仅保留为历史故障背景。Claude owner-first 规则不受影响。
+
 ## 2026-07-17 Codex 首轮前跨重启恢复不能要求 rollout 文件
 
 - 触发条件：`thread/start` 已创建并接管新 thread，但尚未收到第一条用户消息；WeClaw 随后重启，用户显式执行 `/cx owner remote` 恢复运行通道。
@@ -220,7 +230,7 @@
 - 用户需要手动切换 Codex 账号时，WeClaw 必须保留当前进程和 thread 映射，避免切账号后 `/codex switch` 遇到已关闭 stdin。
 - 只有 `deactivated_workspace` 这类真实工作区/登录态异常才允许触发 runtime invalidation。
 
-## 2026-05-28 Codex Companion attach/detach
+## 2026-05-28 Codex Companion attach/detach（历史，已废弃）
 
 - Codex Companion 默认应弱绑定本地终端，保持微信 remote 可独立使用；本地可见终端只能通过 `/cx attach` 或显式 `auto_launch: true` 打开。
 - `/cx detach` 只能断开当前可见 Companion 连接，不能清理后台 endpoint 或停止 WeClaw，否则微信 remote 会被误伤。

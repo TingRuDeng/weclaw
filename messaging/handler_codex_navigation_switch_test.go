@@ -21,7 +21,7 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T10:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -30,11 +30,12 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(114, "/cx cd alpha"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(115, "/cx switch 0"))
 
-	intent := h.codexSessions.controlIntent("thread-a")
-	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
-		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
+	bindingKey := codexBindingKey("user-1", "codex")
+	threadID, pending := h.codexSessions.getThread(bindingKey, workspaceA)
+	if ag.useThreadID != "" || pending || threadID != "thread-a" {
+		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
-	if !containsText(calls.texts(), "已切换并接管") {
+	if !containsText(calls.texts(), "已切换并绑定") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
 	}
 	if containsText(calls.texts(), "thread-a") {
@@ -50,7 +51,7 @@ func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-bad", workspace, "坏历史会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-good", workspace, "可选会话", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.handoffErrors["thread-bad"] = errors.New("探测失败")
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
@@ -63,11 +64,11 @@ func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(148, "/cx switch 0"))
 
 	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
-	if thread != "thread-bad" || pending || h.codexSessions.controlIntent("thread-bad").Owner != codexControlRemote {
+	if thread != "thread-bad" || pending {
 		t.Fatalf("运行通道失败后仍应提交目标，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已切换并接管") || strings.Contains(text, "运行通道: 暂不可用") ||
+	if !strings.Contains(text, "已切换并绑定") || !strings.Contains(text, "运行通道: 暂不可用") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") || strings.Contains(text, "thread-store internal error") {
 		t.Fatalf("runtime failure should keep committed selection without false conflict or draft, messages=%#v", calls.texts())
 	}
@@ -81,7 +82,7 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	appendLocalCodexTurnContext(t, codexDir, "thread-a", "gpt-5.5", "medium")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -92,11 +93,13 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("/cx 0 should enter workspace, got cwd=%q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
-	if ag.useThreadID != "" || h.codexSessions.controlIntent("thread-a").Owner != codexControlRemote {
-		t.Fatalf("use=%q intent=%#v", ag.useThreadID, h.codexSessions.controlIntent("thread-a"))
+	bindingKey := codexBindingKey("user-1", "codex")
+	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	if ag.useThreadID != "" || pending || threadID != "thread-a" {
+		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已进入工作空间并接管唯一会话") || strings.Contains(text, "0. 会话 A") {
+	if !strings.Contains(text, "已进入工作空间并绑定唯一会话") || strings.Contains(text, "0. 会话 A") {
 		t.Fatalf("/cx 0 should auto switch single session, messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "模型: gpt-5.5") || !strings.Contains(text, "推理强度: medium") {
@@ -113,17 +116,13 @@ func TestCodexShortIndexCommitsBindingWhenSingleSessionRuntimeCannotBeRestored(t
 	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-bad", targetWorkspace, "坏历史会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.handoffErrors["thread-bad"] = errors.New("探测失败")
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setThread(bindingKey, oldWorkspace, "thread-old")
 	h.codexSessions.setActiveWorkspace(bindingKey, oldWorkspace)
-	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
-		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
-		workspace: oldWorkspace, threadID: "thread-old",
-	})
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
@@ -132,14 +131,11 @@ func TestCodexShortIndexCommitsBindingWhenSingleSessionRuntimeCannotBeRestored(t
 	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
 	oldThread, _ := h.codexSessions.getThread(bindingKey, oldWorkspace)
 	targetThread, pending := h.codexSessions.getThread(bindingKey, targetWorkspace)
-	oldIntent := h.codexSessions.controlIntent("thread-old")
-	targetIntent := h.codexSessions.controlIntent("thread-bad")
-	if active != targetWorkspace || oldThread != "thread-old" || targetThread != "thread-bad" || pending ||
-		oldIntent.Owner != codexControlDesktop || targetIntent.Owner != codexControlRemote {
-		t.Fatalf("active=%q old=%q target=%q pending=%t intents=(%#v,%#v)", active, oldThread, targetThread, pending, oldIntent, targetIntent)
+	if active != targetWorkspace || oldThread != "thread-old" || targetThread != "thread-bad" || pending {
+		t.Fatalf("active=%q old=%q target=%q pending=%t", active, oldThread, targetThread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已进入工作空间并接管唯一会话") || strings.Contains(text, "运行通道: 暂不可用") ||
+	if !strings.Contains(text, "已进入工作空间并绑定唯一会话") || !strings.Contains(text, "运行通道: 暂不可用") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") {
 		t.Fatalf("reply should report committed selection without false conflict, messages=%#v", calls.texts())
 	}
@@ -161,10 +157,6 @@ func TestCodexCxCdWorkspaceWithNoSessionsRequiresExplicitNew(t *testing.T) {
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setThread(bindingKey, oldWorkspace, "thread-old")
 	h.codexSessions.setActiveWorkspace(bindingKey, oldWorkspace)
-	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
-		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
-		workspace: oldWorkspace, threadID: "thread-old",
-	})
 	result := h.enterCodexWorkspace(codexWorkspaceCdRequest{
 		Context: context.Background(), UserID: "user-1", ActorUserID: "user-1",
 		BindingKey: bindingKey, AgentName: "codex", Agent: ag,
@@ -175,8 +167,8 @@ func TestCodexCxCdWorkspaceWithNoSessionsRequiresExplicitNew(t *testing.T) {
 		t.Fatalf("thread=%q pending=%v, want unbound workspace", thread, pending)
 	}
 	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
-	if active != normalizeCodexWorkspaceRoot(workspace) || h.codexSessions.controlIntent("thread-old").Owner != codexControlRemote {
-		t.Fatalf("active=%q old intent=%#v", active, h.codexSessions.controlIntent("thread-old"))
+	if active != normalizeCodexWorkspaceRoot(workspace) {
+		t.Fatalf("active=%q", active)
 	}
 	if ag.resetConversationID() != "" {
 		t.Fatalf("cd workspace must not create session, reset=%q", ag.resetConversationID())
@@ -193,7 +185,7 @@ func TestCodexShortIndexSwitchesSessionInsideWorkspace(t *testing.T) {
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -202,10 +194,12 @@ func TestCodexShortIndexSwitchesSessionInsideWorkspace(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(141, "/cx cd weclaw"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(142, "/cx 0"))
 
-	if ag.useThreadID != "" || h.codexSessions.controlIntent("thread-a").Owner != codexControlRemote {
-		t.Fatalf("use=%q intent=%#v", ag.useThreadID, h.codexSessions.controlIntent("thread-a"))
+	bindingKey := codexBindingKey("user-1", "codex")
+	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	if ag.useThreadID != "" || pending || threadID != "thread-a" {
+		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
-	if !containsText(calls.texts(), "已切换并接管") {
+	if !containsText(calls.texts(), "已切换并绑定") {
 		t.Fatalf("/cx 0 should switch current workspace session, messages=%#v", calls.texts())
 	}
 }
@@ -217,7 +211,7 @@ func TestCodexShortDotDotReturnsToWorkspaceList(t *testing.T) {
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -239,7 +233,7 @@ func TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd(t *testing.T) {
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	client, calls, closeServer := newRecordingILinkClient(t)

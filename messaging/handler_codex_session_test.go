@@ -52,7 +52,7 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	ag.fakeCodexThreadAgent.threadID = "thread-old"
 	h.defaultName = "codex"
@@ -60,12 +60,8 @@ func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
-	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
-		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
-		workspace: workspace, threadID: "thread-old",
-	})
 	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
-	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop})
+	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -81,11 +77,7 @@ func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 	if thread != "thread-new" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
-	if h.codexSessions.controlIntent("thread-new").Owner != codexControlRemote ||
-		h.codexSessions.controlIntent("thread-old").Owner != codexControlDesktop {
-		t.Fatalf("新旧所有权不正确: old=%#v new=%#v", h.codexSessions.controlIntent("thread-old"), h.codexSessions.controlIntent("thread-new"))
-	}
-	if !containsText(calls.texts(), "已创建并接管") {
+	if !containsText(calls.texts(), "已创建并绑定") {
 		t.Fatalf("reply should mention new session, messages=%#v", calls.texts())
 	}
 }
@@ -93,7 +85,7 @@ func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	ag.fakeCodexThreadAgent.threadID = "thread-old"
 	h.defaultName = "codex"
@@ -102,12 +94,8 @@ func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
 	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
-	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
-		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
-		workspace: workspace, threadID: "thread-old",
-	})
 	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
-	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop})
+	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
@@ -123,11 +111,7 @@ func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if h.codexSessions.controlIntent("thread-new").Owner != codexControlRemote ||
-		h.codexSessions.controlIntent("thread-old").Owner != codexControlDesktop {
-		t.Fatalf("全局 /new 未原子接管: old=%#v new=%#v", h.codexSessions.controlIntent("thread-old"), h.codexSessions.controlIntent("thread-new"))
-	}
-	if !strings.Contains(text, "已创建并接管") || strings.Contains(text, "/Users/") {
+	if !strings.Contains(text, "已创建并绑定") || strings.Contains(text, "/Users/") {
 		t.Fatalf("reply should use default agent name, messages=%#v", calls.texts())
 	}
 }
@@ -135,7 +119,7 @@ func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
@@ -145,15 +129,11 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(103, "/cx switch thread-2"))
 
-	intent := h.codexSessions.controlIntent("thread-2")
-	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
-		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
-	}
 	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-2" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-2 false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已切换并接管") {
+	if !containsText(calls.texts(), "已切换并绑定") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
 	}
 }
@@ -162,7 +142,7 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	currentWorkspace := t.TempDir()
 	targetWorkspace := t.TempDir()
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
@@ -173,9 +153,9 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(106, "/cx switch thread-target"))
 
-	intent := h.codexSessions.controlIntent("thread-target")
-	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
-		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
+	threadID, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), targetWorkspace)
+	if ag.useThreadID != "" || pending || threadID != "thread-target" {
+		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
 	if ag.lastWorkingDir() != targetWorkspace {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), targetWorkspace)
@@ -193,7 +173,7 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	root := t.TempDir()
 	currentWorkspace := filepath.Join(root, "a")
 	targetWorkspace := filepath.Join(root, "b")
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
@@ -206,9 +186,9 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/cx switch 1"))
 
-	intent := h.codexSessions.controlIntent("thread-b")
-	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
-		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
+	threadID, pending := h.codexSessions.getThread(bindingKey, targetWorkspace)
+	if ag.useThreadID != "" || pending || threadID != "thread-b" {
+		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(targetWorkspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(targetWorkspace))

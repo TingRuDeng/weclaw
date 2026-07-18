@@ -35,9 +35,9 @@ Codex：
 
 /cx <编号|..> 选择或返回
 
-/cx cli 打开本地 CLI
+/cx new 新建共享会话
 
-/cx app 打开 Codex App
+/cx owner 查看共享 app-server 状态
 
 Claude：
 

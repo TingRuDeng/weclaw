@@ -156,7 +156,7 @@ func TestCodexReconnectRestoresControlAfterSnapshot(t *testing.T) {
 	done := make(chan struct{})
 	go func() { h.runExternalCodexTaskWatcher(runtime); close(done) }()
 	waitUntil(t, func() bool { return taskPhase(runtime.task) == codexTaskDisconnected })
-	ag.setBindingRuntime(agent.CodexRuntimeDesktop)
+	ag.setBindingRuntime(agent.CodexRuntimeWeClaw)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -176,7 +176,7 @@ func disconnectedExternalRuntimeFixture(t *testing.T) (*Handler, externalCodexTa
 	})
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	task, taskCtx, _ := h.beginActiveTask(ctx, "conversation-1", activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeWeClaw,
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	runtime := externalCodexTaskRuntime{

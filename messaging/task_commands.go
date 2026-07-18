@@ -148,14 +148,14 @@ func (h *Handler) steerPendingGuideToExternalCodex(req externalCodexTaskCommand)
 	}
 	if err := runtimeAg.SteerCodexThread(req.ctx, req.key, target.threadID, target.turnID, pending.message); err != nil {
 		h.finishExternalCodexGuide(req.key, task, false)
-		return fmt.Sprintf("发送到当前 Codex App 任务失败: %v", err), true
+		return fmt.Sprintf("发送到当前共享 Codex 任务失败: %v", err), true
 	}
 	h.finishExternalCodexGuide(req.key, task, true)
 	task.recordProgress(time.Now(), "已发送引导对话。")
-	return "已发送到当前 Codex App 任务。", true
+	return "已发送到当前共享 Codex 任务。", true
 }
 
-// interruptExternalCodexTask 停止 Codex App 中由当前窗口接管的活动 turn。
+// interruptExternalCodexTask 停止共享 host 中由当前任务发起人控制的活动 turn。
 func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (string, bool) {
 	runtimeAg, ok := req.agent.(agent.CodexThreadRuntimeAgent)
 	if !ok {
@@ -181,7 +181,7 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 	}
 	if err := runtimeAg.InterruptCodexThread(req.ctx, req.key, target.threadID, target.turnID); err != nil {
 		target.task.rollbackRemoteStop()
-		return fmt.Sprintf("停止当前 Codex App 任务失败: %v", err), true
+		return fmt.Sprintf("停止当前共享 Codex 任务失败: %v", err), true
 	}
 	if target.task.commitRemoteStop() == taskStopTerminal {
 		return "当前任务已经结束，无需停止。", true

@@ -82,19 +82,15 @@ func (h *Handler) pendingCodexTask(opts codexAgentTaskOptions) pendingAgentTask 
 	}
 }
 
-// refreshReplacedCodexRoute 只跟随同 workspace 内由首写补建产生的 remote thread 迁移。
+// refreshReplacedCodexRoute follows a first-turn replacement recorded in this
+// frontend's binding. No global owner transition is involved.
 func (h *Handler) refreshReplacedCodexRoute(route codexConversationRoute) codexConversationRoute {
 	threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
 	threadID = strings.TrimSpace(threadID)
 	if pending || threadID == "" || threadID == route.threadID {
 		return route
 	}
-	current := h.ensureCodexSessions().controlIntent(threadID)
-	previous := h.ensureCodexSessions().controlIntent(route.threadID)
-	if current.Owner == codexControlRemote && current.RouteBindingKey == route.bindingKey &&
-		current.ConversationID == route.conversationID && previous.Owner == codexControlDesktop {
-		route.threadID = threadID
-	}
+	route.threadID = threadID
 	return route
 }
 
@@ -131,6 +127,7 @@ func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgres
 	}
 	runtime.task.markCodexObservationInterrupted(interrupted.ThreadID, interrupted.TurnID)
 	result := h.reconcileInterruptedCodexTurn(runtime.agentCtx, interrupted, onProgress)
+	confirmInterruptedCodexTerminal(interrupted, result)
 	if result.Terminal && !result.Failed {
 		return result.Final, nil
 	}
@@ -138,6 +135,12 @@ func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgres
 		return "", result.Err
 	}
 	return "", interrupted
+}
+
+func confirmInterruptedCodexTerminal(interrupted *agent.CodexTurnInterruptedError, result codexExternalWatchResult) {
+	if interrupted != nil && result.ConfirmedTerminal {
+		interrupted.ConfirmTerminal()
+	}
 }
 
 // runCodexAgentTurn 让新版 Codex 在 writer lease 内执行，旧 Agent 保持原调用路径。

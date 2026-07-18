@@ -162,13 +162,34 @@ func TestAgentConfigUnmarshalAutoLaunch(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUnmarshalAppServerSocket(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"app_server_socket": "/run/user/1000/weclaw/codex.sock"
+			}
+		}
+	}`)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := cfg.Agents["codex"].AppServerSocket; got != "/run/user/1000/weclaw/codex.sock" {
+		t.Fatalf("AppServerSocket=%q", got)
+	}
+}
+
 func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
+	autoLaunch := true
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{
-		Type:    "companion",
-		Command: "codex",
-		Args:    []string{"-c", "model=\"gpt-test\""},
-		Cwd:     "/tmp/work",
+		Type:       "companion",
+		Command:    "codex",
+		Args:       []string{"-c", "model=\"gpt-test\""},
+		Cwd:        "/tmp/work",
+		AutoLaunch: &autoLaunch,
 	}
 
 	if !NormalizeCodexRemoteFirst(cfg) {

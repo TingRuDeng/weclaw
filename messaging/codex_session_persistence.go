@@ -33,7 +33,6 @@ func (s *codexSessionStore) load() {
 	}
 
 	bindings := make(map[string]codexSessionBinding, len(state.Bindings))
-	controls := make(map[string]codexControlIntent, len(state.Controls))
 	changed := state.Version != codexSessionStateVersion
 	for key, binding := range state.Bindings {
 		if strings.TrimSpace(key) == "" {
@@ -56,23 +55,13 @@ func (s *codexSessionStore) load() {
 		}
 		bindings[migratedKey] = mergeCodexSessionBinding(bindings[migratedKey], normalized)
 	}
-	for threadID, intent := range state.Controls {
-		threadID = strings.TrimSpace(threadID)
-		normalized, err := normalizeCodexControlIntent(codexControlIntentUpdate{
-			ThreadID: threadID, Owner: intent.Owner,
-			RouteBindingKey: intent.RouteBindingKey, ConversationID: intent.ConversationID,
-		})
-		if err != nil || intent.Revision == 0 {
-			changed = true
-			continue
-		}
-		normalized.Revision = intent.Revision
-		normalized.UpdatedAt = strings.TrimSpace(intent.UpdatedAt)
-		controls[threadID] = normalized
+	if len(state.Controls) > 0 {
+		// v1-v3 owner records described competing writers. They are deliberately
+		// discarded during v4 migration because every frontend now shares one host.
+		changed = true
 	}
 	s.mu.Lock()
 	s.bindings = bindings
-	s.controls = controls
 	s.mu.Unlock()
 	if changed {
 		s.save()
@@ -139,7 +128,6 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 	state := codexSessionState{
 		Version:  codexSessionStateVersion,
 		Bindings: make(map[string]codexSessionBinding, len(s.bindings)),
-		Controls: make(map[string]codexControlIntent, len(s.controls)),
 		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
 	for key, binding := range s.bindings {
@@ -148,9 +136,6 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 			workspaces[workspaceRoot] = session
 		}
 		state.Bindings[key] = codexSessionBinding{ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces}
-	}
-	for threadID, intent := range s.controls {
-		state.Controls[threadID] = intent
 	}
 	return filePath, state
 }

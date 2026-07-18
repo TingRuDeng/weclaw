@@ -15,6 +15,7 @@ type codexWriterLeaseState struct {
 	turnID               string
 	candidateDesktopTurn string
 	baselineLastTurnID   string
+	uncertain            bool
 	conflict             bool
 	conflictCh           chan struct{}
 	conflictOnce         sync.Once
@@ -44,6 +45,14 @@ func (r *codexRuntimeOwnerRegistry) activateRuntime(req CodexRuntimeRequest, run
 	defer r.mu.Unlock()
 	threadID := req.Ref.ThreadID
 	if r.leases[threadID] != nil {
+		if !r.enforceControl {
+			binding := r.threads[threadID]
+			if binding.Runtime != runtime {
+				return binding, ErrCodexWriterBusy
+			}
+			binding.Ref = req.Ref
+			return binding, nil
+		}
 		return r.bindingDuringWriterLease(req, runtime)
 	}
 	binding := r.threads[threadID]
@@ -72,19 +81,26 @@ func (r *codexRuntimeOwnerRegistry) bindingDuringWriterLease(req CodexRuntimeReq
 
 // beginTurn 原子核对控制 revision、route 和 runtime generation 后创建 writer lease。
 func (r *codexRuntimeOwnerRegistry) beginTurn(req CodexRuntimeRequest) (*codexWriterLease, error) {
-	if err := validateRemoteCodexRequest(req); err != nil {
+	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
 		return nil, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	binding, ok := r.threads[req.Ref.ThreadID]
-	if !ok || !sameCodexControlIntent(binding.Control, req.Intent) {
+	if !ok {
+		return nil, ErrCodexControlChanged
+	}
+	if r.enforceControl && !sameCodexControlIntent(binding.Control, req.Intent) {
 		return nil, ErrCodexControlChanged
 	}
 	if binding.Runtime == CodexRuntimeConflict {
 		return nil, ErrCodexRuntimeConflict
 	}
-	if binding.Runtime != CodexRuntimeDesktop && binding.Runtime != CodexRuntimeWeClaw {
+	if r.enforceControl {
+		if binding.Runtime != CodexRuntimeWeClaw && binding.Runtime != CodexRuntimeDesktop {
+			return nil, ErrCodexRuntimeUnavailable
+		}
+	} else if binding.Runtime != CodexRuntimeWeClaw {
 		return nil, ErrCodexRuntimeUnavailable
 	}
 	if r.leases[req.Ref.ThreadID] != nil {
@@ -103,6 +119,13 @@ func (r *codexRuntimeOwnerRegistry) hasWriterLease(threadID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.leases[strings.TrimSpace(threadID)] != nil
+}
+
+func (r *codexRuntimeOwnerRegistry) writerLeaseStatus(threadID string) (exists bool, uncertain bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lease := r.leases[strings.TrimSpace(threadID)]
+	return lease != nil, lease != nil && lease.uncertain
 }
 
 // accept 把实际 turn ID 绑定到租约，并核对启动响应前到达的 Desktop 快照。
@@ -144,15 +167,93 @@ func (l *codexWriterLease) check() error {
 	return l.bindingErrorLocked()
 }
 
+// markUncertain keeps the lease after the client observation channel is lost.
+// The app-server may still be executing the accepted turn, so a later frontend
+// must not start a replacement turn until terminal state is confirmed.
+func (l *codexWriterLease) markUncertain() {
+	if l == nil || l.registry == nil {
+		return
+	}
+	r := l.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.leases[l.threadID] != l.state {
+		return
+	}
+	l.state.uncertain = true
+	binding := r.threads[l.threadID]
+	binding.State.Active = true
+	if binding.State.ActiveTurnID == "" {
+		binding.State.ActiveTurnID = l.state.turnID
+	}
+	r.threads[l.threadID] = binding
+}
+
+// reconcileUncertainSharedHostLease releases an uncertain lease only when the
+// authoritative app-server state identifies the same turn as terminal. An
+// active or ambiguous snapshot remains fail-closed.
+func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLease(req CodexRuntimeRequest, state CodexThreadState) (CodexThreadBinding, bool, error) {
+	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+		return CodexThreadBinding{}, false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lease := r.leases[req.Ref.ThreadID]
+	if lease == nil || !lease.uncertain {
+		return r.threads[req.Ref.ThreadID], false, nil
+	}
+	if state.Active {
+		if lease.turnID == "" {
+			lease.turnID = strings.TrimSpace(state.ActiveTurnID)
+		}
+		binding := r.threads[req.Ref.ThreadID]
+		binding.Ref = req.Ref
+		binding.State = state
+		r.threads[req.Ref.ThreadID] = binding
+		return binding, true, nil
+	}
+	lastTurnID := strings.TrimSpace(state.LastTurnID)
+	terminalMatch := lease.turnID != "" && lastTurnID == lease.turnID
+	if lease.turnID == "" && lastTurnID != "" && lastTurnID != lease.baselineLastTurnID {
+		terminalMatch = true
+	}
+	if terminalMatch {
+		delete(r.leases, req.Ref.ThreadID)
+		binding := r.threads[req.Ref.ThreadID]
+		binding.Ref = req.Ref
+		binding.State = state
+		r.threads[req.Ref.ThreadID] = binding
+		return binding, false, nil
+	}
+	binding := r.threads[req.Ref.ThreadID]
+	binding.Ref = req.Ref
+	binding.State.Active = true
+	if binding.State.ActiveTurnID == "" {
+		binding.State.ActiveTurnID = lease.turnID
+	}
+	r.threads[req.Ref.ThreadID] = binding
+	return binding, true, nil
+}
+
 // bindingErrorLocked 核对租约创建后的控制 revision、route 与运行代次没有变化。
 func (l *codexWriterLease) bindingErrorLocked() error {
 	binding := l.registry.threads[l.threadID]
-	if binding.Control.Owner != CodexControlRemote || binding.Control.Revision != l.state.controlRevision ||
-		binding.Control.RouteKey != l.state.routeKey {
+	if l.registry.enforceControl && (binding.Control.Owner != CodexControlRemote || binding.Control.Revision != l.state.controlRevision ||
+		binding.Control.RouteKey != l.state.routeKey) {
 		return ErrCodexControlChanged
 	}
 	if binding.Runtime != l.state.runtime || binding.RuntimeGeneration != l.state.runtimeGeneration {
 		return ErrCodexRuntimeUnavailable
+	}
+	return nil
+}
+
+func validateCodexRuntimeRequestForRegistry(req CodexRuntimeRequest, enforceControl bool) error {
+	if enforceControl {
+		return validateRemoteCodexRequest(req)
+	}
+	if strings.TrimSpace(req.Ref.ThreadID) == "" || strings.TrimSpace(req.Ref.ConversationID) == "" {
+		return fmt.Errorf("Codex runtime 请求缺少 thread 或 conversation")
 	}
 	return nil
 }
