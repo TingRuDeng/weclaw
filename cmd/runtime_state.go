@@ -56,7 +56,10 @@ func writeRuntimeState(state runtimeState) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(pidFile(), data, 0o644)
+	if err := os.WriteFile(pidFile(), data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(pidFile(), 0o600)
 }
 
 // writeCurrentRuntimeState 记录当前前台服务进程，后台 daemon 子进程也走这里。

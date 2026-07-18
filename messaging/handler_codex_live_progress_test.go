@@ -56,6 +56,28 @@ func TestCodexDesktopTerminalDeliveredOnce(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopTerminalReturnsPendingGuide(t *testing.T) {
+	h := NewHandler(nil, nil)
+	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{})
+	if ok := h.storePendingGuide("task-1", pendingAgentTask{message: "继续", run: func() {}}); !ok {
+		t.Fatal("storePendingGuide=false, want pending guide stored")
+	}
+
+	pending, hasPending, claimed := h.claimAndCompleteActiveTask("task-1", task)
+
+	if !claimed || !hasPending || pending.message != "继续" {
+		t.Fatalf("pending=%#v hasPending=%v claimed=%v, want pending guide returned", pending, hasPending, claimed)
+	}
+	if _, ok := h.activeTask("task-1"); ok {
+		t.Fatal("active task should be removed after terminal claim")
+	}
+	select {
+	case <-task.done:
+	default:
+		t.Fatal("task.done should be closed after terminal claim")
+	}
+}
+
 func TestCodexRolloutTurnReplacementEndsSupervisor(t *testing.T) {
 	h, path := activeRolloutHandoffFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

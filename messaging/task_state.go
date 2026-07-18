@@ -92,8 +92,13 @@ func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
 	h.activeTasksMu.Lock()
 	removed := false
 	if h.activeTasks[key] == task {
-		delete(h.activeTasks, key)
-		removed = true
+		task.mu.Lock()
+		terminal := task.phase == codexTaskTerminal
+		task.mu.Unlock()
+		if !terminal {
+			delete(h.activeTasks, key)
+			removed = true
+		}
 	}
 	h.activeTasksMu.Unlock()
 	if removed {
@@ -224,11 +229,33 @@ func (h *Handler) completeActiveTask(key string, task *activeAgentTask) (pending
 
 // claimAndCompleteActiveTask 原子认领终态并移除任务，供多观察源竞争。
 func (h *Handler) claimAndCompleteActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool, bool) {
-	if !h.claimActiveTaskTerminal(key, task) {
+	if task == nil {
 		return pendingAgentTask{}, false, false
 	}
-	pending, hasPending := h.finishClaimedActiveTask(key, task)
-	return pending, hasPending, true
+	h.activeTasksMu.Lock()
+	if h.activeTasks[key] != task {
+		h.activeTasksMu.Unlock()
+		return pendingAgentTask{}, false, false
+	}
+	task.mu.Lock()
+	if !task.claimTerminalLocked() {
+		task.mu.Unlock()
+		h.activeTasksMu.Unlock()
+		return pendingAgentTask{}, false, false
+	}
+	pending := pendingAgentTask{}
+	if task.phase == codexTaskTerminal && !task.pendingSteering {
+		pending = task.pending
+		task.pending = pendingAgentTask{}
+	}
+	delete(h.activeTasks, key)
+	task.mu.Unlock()
+	h.activeTasksMu.Unlock()
+	close(task.done)
+	if pending.message == "" || pending.run == nil {
+		return pendingAgentTask{}, false, true
+	}
+	return pending, true, true
 }
 
 func (h *Handler) claimActiveTaskTerminal(key string, task *activeAgentTask) bool {

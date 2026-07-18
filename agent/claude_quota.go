@@ -117,6 +117,7 @@ func (a *ACPAgent) readClaudeQuotaFromCommand(queryCtx context.Context, localCom
 func (a *ACPAgent) newClaudeQuotaCommand(ctx context.Context, localCommand string) (*exec.Cmd, error) {
 	command, args := a.runAs.wrapCommand(localCommand, claudeQuotaCommandArgs)
 	cmd := exec.CommandContext(ctx, command, args...)
+	configureACPProcess(cmd)
 	a.mu.Lock()
 	cmd.Dir = a.cwd
 	extraEnv := make(map[string]string, len(a.env)+1)

@@ -296,6 +296,42 @@ func TestValidateUpdateTargetRejectsDifferentRunningExecutable(t *testing.T) {
 	}
 }
 
+func TestResolveSymlinkDetectsCycle(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first")
+	second := filepath.Join(dir, "second")
+	if err := os.Symlink(second, first); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.Symlink(first, second); err != nil {
+		t.Fatalf("create symlink cycle: %v", err)
+	}
+
+	if _, err := resolveSymlink(first); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("resolveSymlink error=%v, want cycle error", err)
+	}
+}
+
+func TestResolveSymlinkResolvesRelativeTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "link")
+	if err := os.WriteFile(target, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink("target", link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	got, err := resolveSymlink(link)
+	if err != nil {
+		t.Fatalf("resolveSymlink error: %v", err)
+	}
+	if got != target {
+		t.Fatalf("resolveSymlink=%q, want %q", got, target)
+	}
+}
+
 func TestRestartGuardBlocksWhenRuntimeHasActiveTasks(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/runtime" {
@@ -397,5 +433,11 @@ func TestRuntimeStatusURLDialLoopbackForWildcardListen(t *testing.T) {
 	}
 	if got != "http://127.0.0.1:18011/api/runtime" {
 		t.Fatalf("runtime status URL=%q, want loopback URL", got)
+	}
+}
+
+func TestRuntimeStatusURLRejectsNonLoopbackListenAddress(t *testing.T) {
+	if got, err := runtimeStatusURL("http://192.168.1.5:18011"); err == nil {
+		t.Fatalf("runtimeStatusURL=%q error=nil, want non-loopback rejection", got)
 	}
 }

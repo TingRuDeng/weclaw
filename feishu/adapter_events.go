@@ -254,6 +254,10 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 	if action.Kind == cardKindApproval {
 		return a.handleApprovalCardAction(ctx, action, dispatch), nil
 	}
+	if a.isDuplicateCardActionEvent(action) {
+		log.Printf("[feishu] ignored duplicate card action event: event_id=%s", action.EventID)
+		return submittedCardActionResponse(action), nil
+	}
 	metadata := map[string]string{"source": "card.action.trigger"}
 	if action.SessionKey != "" {
 		metadata[feishuSessionMetadataKey] = action.SessionKey
@@ -295,6 +299,37 @@ func submittedCardActionResponse(action parsedCardAction) *callback.CardActionTr
 		Toast: &callback.Toast{Type: "success", Content: "已受理，正在处理"},
 		Card:  buildSubmittedChoiceCard(action),
 	}
+}
+
+func (a *Adapter) isDuplicateCardActionEvent(action parsedCardAction) bool {
+	key := cardActionDedupKey(action)
+	if key == "" {
+		return false
+	}
+	now := a.nowOrDefault()
+	a.cardActionMu.Lock()
+	defer a.cardActionMu.Unlock()
+	if a.cardActionEvents == nil {
+		a.cardActionEvents = make(map[string]time.Time)
+	}
+	for seenKey, seenAt := range a.cardActionEvents {
+		if now.Sub(seenAt) > feishuEventDedupTTL {
+			delete(a.cardActionEvents, seenKey)
+		}
+	}
+	if seenAt, ok := a.cardActionEvents[key]; ok && now.Sub(seenAt) <= feishuEventDedupTTL {
+		return true
+	}
+	a.cardActionEvents[key] = now
+	return false
+}
+
+func cardActionDedupKey(action parsedCardAction) string {
+	eventID := strings.TrimSpace(action.EventID)
+	if eventID == "" {
+		return ""
+	}
+	return "card-event:" + eventID
 }
 
 // sendCardActionTimeoutNotice 使用独立短 context 反馈超时，避免沿用已经取消的分发 context。

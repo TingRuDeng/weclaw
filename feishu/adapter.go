@@ -41,6 +41,8 @@ type Adapter struct {
 	identityMu          sync.RWMutex
 	identities          map[string]cachedFeishuIdentity
 	identityCleanupAt   time.Time
+	cardActionMu        sync.Mutex
+	cardActionEvents    map[string]time.Time
 	approvalMu          sync.Mutex
 	approvals           map[string]approvalRecord
 	taskCards           *taskCardRegistry
@@ -66,6 +68,7 @@ func NewAdapter(creds Credentials) *Adapter {
 		deduper:             newFeishuEventDeduper(feishuEventDedupTTL),
 		dispatches:          newFeishuDispatchSequencer(),
 		identities:          make(map[string]cachedFeishuIdentity),
+		cardActionEvents:    make(map[string]time.Time),
 		approvals:           make(map[string]approvalRecord),
 		taskCards:           newTaskCardRegistry(),
 		now:                 time.Now,

@@ -23,6 +23,8 @@ type fakeCardKitClient struct {
 	streamErrors  []error
 	updateErrors  []error
 	updateCardCh  chan string
+	streamStarted chan struct{}
+	streamBlock   <-chan struct{}
 }
 
 // CreateCard 记录创建卡片 JSON 并返回固定 card_id。
@@ -49,6 +51,19 @@ func (f *fakeCardKitClient) SetStreaming(ctx context.Context, cardID string, ena
 func (f *fakeCardKitClient) StreamContent(ctx context.Context, cardID string, elementID string, content string, sequence int) error {
 	f.streamSeqs = append(f.streamSeqs, sequence)
 	f.streamTexts = append(f.streamTexts, content)
+	if f.streamStarted != nil {
+		select {
+		case f.streamStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.streamBlock != nil {
+		select {
+		case <-f.streamBlock:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if len(f.streamErrors) == 0 {
 		return nil
 	}
@@ -128,6 +143,45 @@ func TestFeishuStreamUpdateThrottlesAndIncrementsSequence(t *testing.T) {
 
 	if len(cardKit.streamSeqs) != 2 || cardKit.streamSeqs[0] != 2 || cardKit.streamSeqs[1] != 3 {
 		t.Fatalf("stream seqs=%#v, want [2 3]", cardKit.streamSeqs)
+	}
+}
+
+func TestFeishuStreamUpdateDoesNotHoldStateLockDuringNetwork(t *testing.T) {
+	started := make(chan struct{}, 1)
+	block := make(chan struct{})
+	cardKit := &fakeCardKitClient{streamStarted: started, streamBlock: block}
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	stream := &feishuStream{cardKit: cardKit, cardID: "card-1", sequence: 1, throttle: time.Hour, now: func() time.Time { return now }}
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- stream.Update(context.Background(), "one") }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first update did not enter cardKit call")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- stream.Update(context.Background(), "two") }()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second Update error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("second Update blocked on stream state lock while first network call was pending")
+	}
+	close(block)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first Update error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first Update did not finish after network unblock")
+	}
+	if err := stream.Complete(context.Background(), "done"); err != nil {
+		t.Fatalf("Complete error: %v", err)
 	}
 }
 

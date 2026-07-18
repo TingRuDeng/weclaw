@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const acpKillGrace = 5 * time.Second
+
 // Start launches the ACP subprocess；并发调用会等待同一次初始化结果。
 func (a *ACPAgent) Start(ctx context.Context) (err error) {
 	leader, done := a.beginACPStart()
@@ -50,6 +52,7 @@ func (a *ACPAgent) launchACPSubprocess(ctx context.Context) (int, error) {
 		cmd = exec.CommandContext(ctx, command, cmdArgs...)
 		cmd.Dir = a.cwd
 	}
+	configureACPProcess(cmd)
 	if len(a.env) > 0 {
 		cmdEnv, err := mergeEnv(os.Environ(), a.env)
 		if err != nil {
@@ -178,9 +181,37 @@ func stopACPProcess(stdin io.Closer, cmd *exec.Cmd) {
 		_ = stdin.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		if cmd.Cancel != nil {
+			_ = cmd.Cancel()
+		} else {
+			_ = cmd.Process.Kill()
+		}
+		done := make(chan struct{})
+		go func() {
+			_ = cmd.Wait()
+			close(done)
+		}()
+		timer := time.NewTimer(acpKillGrace)
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+			sweepProcessGroup(cmd)
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(acpKillGrace):
+		}
 	}
+}
+
+// configureACPProcess 让长生命周期 ACP runtime 独立成组，Stop/ctx 取消时可回收整棵进程树。
+func configureACPProcess(cmd *exec.Cmd) {
+	configureProcessGroup(cmd)
+	cmd.Cancel = gracefulCancel(cmd)
+	cmd.WaitDelay = acpKillGrace
 }
 
 func codexInitializeParams() map[string]interface{} {
