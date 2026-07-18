@@ -48,10 +48,6 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 	if msg.Platform != platform.PlatformFeishu || reply == nil || !reply.Capabilities().Buttons {
 		return false
 	}
-	if notice, blocked := h.runningCodexNavigationNotice(req); blocked {
-		sendPlatformText(ctx, reply, msg.UserID, notice)
-		return true
-	}
 	fields := strings.Fields(trimmed)
 	if isLegacyFeishuWorkspaceChoice(msg, trimmed) {
 		sendPlatformText(ctx, reply, msg.UserID, "工作空间卡片已过期，请重新发送 /cx ls。")
@@ -101,25 +97,6 @@ func (h *Handler) sendFeishuCodexOwnerChoices(req feishuCodexSessionCommandReque
 // isFeishuCodexOwnerCommand 只让状态命令生成选择卡，移交结果直接返回确认文本。
 func isFeishuCodexOwnerCommand(fields []string) bool {
 	return len(fields) == 2 && isCodexSessionCommandToken(fields[0]) && fields[1] == "owner"
-}
-
-func (h *Handler) runningCodexNavigationNotice(req feishuCodexSessionCommandRequest) (string, bool) {
-	if !isFeishuCodexNavigationCommand(strings.Fields(req.trimmed)) {
-		return "", false
-	}
-	_, _, key, err := h.codexGuideTargetForRoute(req.ctx, req.message.UserID, req.routeUserID)
-	if err != nil {
-		return "", false
-	}
-	_, ok := h.activeTask(key)
-	if !ok {
-		return "", false
-	}
-	return runningCodexNavigationBlockedPrompt(), true
-}
-
-func runningCodexNavigationBlockedPrompt() string {
-	return "当前任务正在执行，请在完成后再发送 /cx ls。"
 }
 
 func (h *Handler) sendFeishuCodexNavigationChoices(req feishuCodexSessionCommandRequest) bool {

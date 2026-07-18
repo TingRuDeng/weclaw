@@ -255,7 +255,7 @@ func TestFeishuCodexWorkspaceChoiceKeepsAliasAdminAccess(t *testing.T) {
 	}
 }
 
-func TestFeishuCodexCxLsDuringActiveTaskDoesNotSendNavigationCard(t *testing.T) {
+func TestFeishuCodexCxLsDuringActiveTaskStillSendsNavigationCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -290,11 +290,11 @@ func TestFeishuCodexCxLsDuringActiveTaskDoesNotSendNavigationCard(t *testing.T) 
 		Metadata:  map[string]string{"feishu_session_key": sessionKey},
 	}, reply)
 
-	if len(reply.Choices) != 0 {
-		t.Fatalf("choices=%#v, want no navigation card while task is running", reply.Choices)
+	if len(reply.Choices) == 0 {
+		t.Fatalf("choices=%#v, want navigation card while task is running", reply.Choices)
 	}
-	if len(reply.Texts) != 1 || reply.Texts[0] != "当前任务正在执行，请在完成后再发送 /cx ls。" {
-		t.Fatalf("texts=%#v, want running task notice", reply.Texts)
+	if len(reply.Texts) != 0 {
+		t.Fatalf("texts=%#v, want card without running task notice", reply.Texts)
 	}
 }
 

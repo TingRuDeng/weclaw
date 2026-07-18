@@ -24,6 +24,56 @@ func TestAcquireCodexSessionSwitchesAtoBAndReleasesA(t *testing.T) {
 	}
 }
 
+func TestAcquireCodexSessionAbandonsOldExternalObservation(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	conversationID, taskCtx, task := fixture.startExternalObservation("thread-a", fixture.workspaceA, "turn-a")
+	defer fixture.h.finishActiveTask(conversationID, task)
+
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("error=%v result=%#v", err, result)
+	}
+	if _, active := fixture.h.activeTask(conversationID); active {
+		t.Fatal("切换到新会话后不应继续占用旧外部观察任务")
+	}
+	select {
+	case <-taskCtx.Done():
+	default:
+		t.Fatal("旧外部观察任务应被取消")
+	}
+	if task.shouldSendFinal() {
+		t.Fatal("放弃观察后不应继续向旧会话发送最终结果")
+	}
+	if got := fixture.h.ensureCodexSessions().controlIntent("thread-a"); got.Owner != codexControlDesktop {
+		t.Fatalf("旧 thread 应归还 Desktop: %#v", got)
+	}
+	if got := fixture.h.ensureCodexSessions().controlIntent("thread-b"); got.Owner != codexControlRemote {
+		t.Fatalf("目标 thread 应切到 remote: %#v", got)
+	}
+}
+
+func TestAcquireCodexSessionDetachesOldInProcessTaskWithoutCancelingTurn(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	conversationID, taskCtx, task := fixture.startInProcessCodexTask("thread-a", fixture.workspaceA)
+	defer fixture.h.finishActiveTask(conversationID, task)
+
+	result, err := fixture.h.acquireCodexSessionWithBindingLocked(fixture.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("error=%v result=%#v", err, result)
+	}
+	if _, active := fixture.h.activeTask(conversationID); active {
+		t.Fatal("切换到新会话后不应继续占用旧本进程任务槽位")
+	}
+	select {
+	case <-taskCtx.Done():
+		t.Fatal("本进程 Codex turn 不应被切换操作取消")
+	default:
+	}
+	if task.shouldSendFinal() {
+		t.Fatal("切走后旧任务不应再向当前窗口发送最终结果")
+	}
+}
+
 func TestAcquireCodexSessionRejectsOtherRemoteWithoutChanges(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	current := fixture.h.ensureCodexSessions().controlIntent("thread-b")

@@ -172,10 +172,13 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	)
 	recordProgress := func(delta string) {
 		runtime.task.recordProgress(time.Now(), delta)
+		if !runtime.task.shouldSendFinal() {
+			return
+		}
 		onProgress(delta)
 	}
 	if runtime.state.Progress != "" {
-		onProgress(runtime.state.Progress)
+		recordProgress(runtime.state.Progress)
 	}
 	result := h.superviseExternalCodexWatch(runtime, recordProgress)
 	if !result.Terminal && runtime.task.isStopping() {

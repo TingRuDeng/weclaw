@@ -106,6 +106,75 @@ func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
 	}
 }
 
+func (h *Handler) abandonCodexTasks(abandonments []codexTaskAbandonment) {
+	for _, abandonment := range abandonments {
+		h.abandonCodexTask(abandonment)
+	}
+}
+
+// abandonCodexTask 只解除当前窗口与旧任务的回推关系；本进程 Codex turn 继续在后台自然结束。
+func (h *Handler) abandonCodexTask(abandonment codexTaskAbandonment) bool {
+	key := strings.TrimSpace(abandonment.key)
+	task := abandonment.task
+	if key == "" || task == nil {
+		return false
+	}
+	h.activeTasksMu.Lock()
+	if h.activeTasks[key] != task {
+		h.activeTasksMu.Unlock()
+		return false
+	}
+	task.mu.Lock()
+	if !task.canDetachCodexTaskForRouteLocked(codexSessionAcquireRequest{}, task.codexThreadID) {
+		task.mu.Unlock()
+		h.activeTasksMu.Unlock()
+		return false
+	}
+	if task.externalReservation != nil {
+		task.externalReservation.mu.Lock()
+		if task.externalReservation.status != externalCodexTaskCanceled {
+			task.externalReservation.status = externalCodexTaskCanceled
+		}
+		task.externalReservation.mu.Unlock()
+	}
+	task.detached = true
+	task.pending = pendingAgentTask{}
+	task.pendingSteering = false
+	task.claimTerminalLocked()
+	cancel := context.CancelFunc(nil)
+	if !task.inProcessCodexLifecycle {
+		cancel = task.cancel
+	}
+	delete(h.activeTasks, key)
+	task.mu.Unlock()
+	h.activeTasksMu.Unlock()
+	close(task.done)
+	if cancel != nil {
+		cancel()
+	}
+	return true
+}
+
+// canDetachCodexTaskForRouteLocked 确认只能切走当前窗口自己的 Codex 任务，不能清理其他窗口。
+func (t *activeAgentTask) canDetachCodexTaskForRouteLocked(req codexSessionAcquireRequest, threadID string) bool {
+	if t == nil || t.phase == codexTaskTerminal {
+		return false
+	}
+	if strings.TrimSpace(threadID) != "" && t.codexThreadID != strings.TrimSpace(threadID) {
+		return false
+	}
+	if actor := strings.TrimSpace(req.actorUserID); actor != "" && t.owner != actor {
+		return false
+	}
+	if routeUserID := strings.TrimSpace(req.routeUserID); routeUserID != "" && t.routeUserID != routeUserID {
+		return false
+	}
+	if agentName := strings.TrimSpace(req.agentName); agentName != "" && t.agentName != agentName {
+		return false
+	}
+	return true
+}
+
 func (h *Handler) storePendingGuide(key string, pending pendingAgentTask) bool {
 	h.activeTasksMu.Lock()
 	task := h.activeTasks[key]
