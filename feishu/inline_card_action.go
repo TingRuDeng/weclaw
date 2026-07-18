@@ -147,7 +147,7 @@ func (r *inlineCardReplier) replayPendingAsync(pending []*inlineCardReply) {
 
 func (a *Adapter) handleInlineCardAction(ctx context.Context, msg platform.IncomingMessage, action parsedCardAction, dispatch platform.DispatchFunc, ticket feishuDispatchTicket) *callback.CardActionTriggerResponse {
 	conversationKey := firstNonEmpty(action.SessionKey, action.Conv, msg.ConversationKey())
-	var resultReply platform.Replier = a.newScopedReplier(msg)
+	resultReply := platform.Replier(a.newScopedReplier(msg))
 	if isDeferredCardResultCommand(action.Choice) && strings.TrimSpace(action.MessageID) != "" {
 		resultReply = newDeferredCardResultReplier(resultReply, a.sender, action.MessageID)
 	}
