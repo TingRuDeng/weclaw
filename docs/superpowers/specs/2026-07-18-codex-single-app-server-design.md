@@ -34,13 +34,13 @@ flowchart LR
 `agent/codex_app_server_host.go` 负责 host 边界：
 
 1. 解析稳定 Unix socket；显式 `app_server_socket` 优先。
-2. 连接已存在且 owner 合法的 socket。
+2. 连接已存在且 owner 合法的 socket，并通过标准 HTTP Upgrade 建立 WebSocket-over-UDS；每个 JSON-RPC 消息使用一个 WebSocket frame，禁止直接读写 JSONL。
 3. 不存在 live host 时清理同 owner 的 stale socket，并启动 `codex app-server --listen unix://...`。
 4. stale socket 清理和 host 启动必须持有 socket 目录内的跨进程文件锁；等待者取得锁后先重新连接，不能直接删除赢家刚建立的 socket。
 5. host 启动 context 与触发它的前端请求解耦；只有拥有 host 进程的 `ACPAgent.Stop` 才终止进程。
 6. 仅连接既有 host 的客户端不记录 PID，也不能终止 host。
 
-默认 socket 位于 WeClaw 状态目录的 `runtime/` 下。若完整路径超过 Darwin `sockaddr_un` 安全上限，使用原目标路径的稳定哈希落到 `/tmp/weclaw-<uid>/`；目录必须为真实目录、owner 合法且禁止 group/other 访问。显式配置的超长路径直接报错，不能静默改写管理员配置。
+默认 socket 位于 WeClaw 状态目录的 `runtime/` 下。若完整路径超过 Darwin `sockaddr_un` 安全上限，使用原目标路径的稳定哈希落到真实系统临时目录下的 `weclaw-<uid>/`；macOS 将 `/tmp` 解析为 `/private/tmp`，避免 Codex 拒绝目录链中的软链接。目录必须为真实目录、owner 合法且禁止 group/other 访问。显式配置的超长路径直接报错，不能静默改写管理员配置。
 
 ## 状态模型
 
@@ -122,7 +122,7 @@ Runtime 只回答共享 host 当前能否服务：
 
 至少覆盖：
 
-- 两个 ACP client 通过同一 Unix socket看到同一 thread。
+- 两个 ACP client 通过同一 Unix socket 的 WebSocket 连接看到同一 thread；测试 server 必须执行真实 HTTP Upgrade，裸 NDJSON fake 不具备回归价值。
 - 两个独立客户端的 host 启动临界区必须串行，后取得锁者重新连接而不是启动第二 host。
 - 已存在 host 的客户端不拥有 PID，不能终止 host。
 - 非 socket、符号链接、错误 owner 或不安全目录被拒绝。

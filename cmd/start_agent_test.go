@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/gorilla/websocket"
 )
 
 func TestCreateAgentByNameRejectsClaudeCLI(t *testing.T) {
@@ -123,12 +125,23 @@ func TestHelperRetryingCodexAppServer(t *testing.T) {
 		t.Fatalf("listen retry helper socket: %v", err)
 	}
 	defer listener.Close()
-	conn, err := listener.Accept()
-	if err != nil {
-		t.Fatalf("accept retry helper connection: %v", err)
+	serveDone := make(chan error, 1)
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			conn, upgradeErr := (&websocket.Upgrader{}).Upgrade(writer, request, nil)
+			if upgradeErr != nil {
+				serveDone <- upgradeErr
+				return
+			}
+			defer conn.Close()
+			serveDone <- serveMinimalCodexInitialize(conn)
+		}),
 	}
-	defer conn.Close()
-	serveMinimalCodexInitialize(t, conn, conn)
+	go func() { _ = server.Serve(listener) }()
+	if err := <-serveDone; err != nil {
+		t.Fatalf("serve retry helper websocket: %v", err)
+	}
+	_ = server.Close()
 	os.Exit(0)
 }
 
@@ -159,25 +172,25 @@ func readRetryHelperAttempts(t *testing.T, path string) int {
 	return attempts
 }
 
-func serveMinimalCodexInitialize(t *testing.T, stdin io.Reader, stdout io.Writer) {
-	t.Helper()
-	line, err := bufio.NewReader(stdin).ReadBytes('\n')
+func serveMinimalCodexInitialize(conn *websocket.Conn) error {
+	_, line, err := conn.ReadMessage()
 	if err != nil {
-		t.Fatalf("read initialize request: %v", err)
+		return fmt.Errorf("read initialize request: %w", err)
 	}
 	var req struct {
 		ID int64 `json:"id"`
 	}
 	if err := json.Unmarshal(line, &req); err != nil {
-		t.Fatalf("parse initialize request: %v", err)
+		return fmt.Errorf("parse initialize request: %w", err)
 	}
-	resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos"}}`+"\n", req.ID)
-	if _, err := io.WriteString(stdout, resp); err != nil {
-		t.Fatalf("write initialize response: %v", err)
+	resp := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos"}}`, req.ID))
+	if err := conn.WriteMessage(websocket.TextMessage, resp); err != nil {
+		return fmt.Errorf("write initialize response: %w", err)
 	}
-	if _, err := bufio.NewReader(stdin).ReadBytes('\n'); err != nil {
-		t.Fatalf("read initialized notification: %v", err)
+	if _, _, err := conn.ReadMessage(); err != nil {
+		return fmt.Errorf("read initialized notification: %w", err)
 	}
+	return nil
 }
 
 func TestCompanionAutoLaunchDefaultsToRemoteOnly(t *testing.T) {

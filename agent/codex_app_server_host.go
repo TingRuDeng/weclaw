@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -15,15 +15,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/gorilla/websocket"
 )
 
 const (
 	codexHostConnectTimeout = 10 * time.Second
-	codexHostDialTimeout    = 250 * time.Millisecond
+	codexHostDialTimeout    = time.Second
+	codexHostWriteTimeout   = 10 * time.Second
 	codexHostLockPoll       = 25 * time.Millisecond
 	// Darwin has the smallest sockaddr_un.sun_path limit among release targets.
 	// Keeping a little headroom also makes the error deterministic before dial.
@@ -201,8 +205,15 @@ func (a *ACPAgent) resolveCodexHostSocket() (string, error) {
 // small sockaddr_un path limit on macOS. The per-user directory remains private.
 func fallbackCodexHostSocket(intendedPath string) string {
 	digest := sha256.Sum256([]byte(intendedPath))
+	tempRoot := filepath.Join(string(filepath.Separator), "tmp")
+	// Codex rejects a Unix socket whose directory chain contains a symlink.
+	// On macOS /tmp points to /private/tmp, so resolve the stable system temp
+	// root before creating the private per-user fallback directory.
+	if resolved, err := filepath.EvalSymlinks(tempRoot); err == nil && filepath.IsAbs(resolved) {
+		tempRoot = resolved
+	}
 	return filepath.Join(
-		string(filepath.Separator), "tmp", fmt.Sprintf("weclaw-%d", os.Geteuid()),
+		tempRoot, fmt.Sprintf("weclaw-%d", os.Geteuid()),
 		fmt.Sprintf("codex-%x.sock", digest[:8]),
 	)
 }
@@ -314,13 +325,27 @@ func (a *ACPAgent) removeStaleCodexHostSocket(socketPath string) error {
 	return nil
 }
 
-func dialCodexHost(ctx context.Context, socketPath string) (net.Conn, error) {
+func dialCodexHost(ctx context.Context, socketPath string) (*websocket.Conn, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, codexHostDialTimeout)
 	defer cancel()
-	return (&net.Dialer{}).DialContext(dialCtx, "unix", socketPath)
+	netDialer := &net.Dialer{}
+	dialer := websocket.Dialer{
+		HandshakeTimeout: codexHostDialTimeout,
+		NetDialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
+			return netDialer.DialContext(dialCtx, "unix", socketPath)
+		},
+	}
+	conn, response, err := dialer.DialContext(dialCtx, "ws://localhost/rpc", nil)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("connect codex app-server websocket: %w", err)
+	}
+	return conn, nil
 }
 
-func waitForCodexHost(ctx context.Context, socketPath string, done <-chan error) (net.Conn, error) {
+func waitForCodexHost(ctx context.Context, socketPath string, done <-chan error) (*websocket.Conn, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, codexHostConnectTimeout)
 	defer cancel()
 	ticker := time.NewTicker(25 * time.Millisecond)
@@ -410,20 +435,132 @@ func (a *ACPAgent) clearOwnedCodexHost(cmd *exec.Cmd) {
 	a.mu.Unlock()
 }
 
-func (a *ACPAgent) attachCodexHostConnection(conn net.Conn) error {
+func (a *ACPAgent) attachCodexHostConnection(conn *websocket.Conn) error {
 	if conn == nil {
 		return fmt.Errorf("codex app-server connection is nil")
 	}
+	transport := newCodexWebSocketTransport(conn)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.stdin != nil || a.scanner != nil || a.started {
+		_ = transport.Close()
 		return fmt.Errorf("codex app-server client is already connected")
 	}
-	a.stdin = conn
-	a.scanner = newACPScanner(bufio.NewReader(conn))
+	a.stdin = transport
+	a.scanner = newACPScanner(transport)
 	a.started = true
 	go a.readLoop()
 	return nil
+}
+
+// codexWebSocketTransport adapts the app-server's WebSocket-over-UDS protocol
+// to the existing newline-oriented JSON-RPC reader/writer. The upstream Unix
+// socket is not a raw JSONL stream: every request and response is one WebSocket
+// frame after a standard HTTP Upgrade handshake.
+type codexWebSocketTransport struct {
+	conn       *websocket.Conn
+	reader     *io.PipeReader
+	pipeWriter *io.PipeWriter
+	writeMu    sync.Mutex
+	writeBuf   bytes.Buffer
+	closed     atomic.Bool
+	closeOnce  sync.Once
+}
+
+func newCodexWebSocketTransport(conn *websocket.Conn) *codexWebSocketTransport {
+	reader, writer := io.Pipe()
+	transport := &codexWebSocketTransport{
+		conn:       conn,
+		reader:     reader,
+		pipeWriter: writer,
+	}
+	go transport.readMessages()
+	return transport
+}
+
+func (t *codexWebSocketTransport) Read(data []byte) (int, error) {
+	return t.reader.Read(data)
+}
+
+func (t *codexWebSocketTransport) Write(data []byte) (int, error) {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+	if t.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	_, _ = t.writeBuf.Write(data)
+	deadlineSet := false
+	for {
+		buffered := t.writeBuf.Bytes()
+		newline := bytes.IndexByte(buffered, '\n')
+		if newline < 0 {
+			break
+		}
+		message := bytes.TrimSuffix(buffered[:newline], []byte{'\r'})
+		if len(message) > 0 {
+			if !deadlineSet {
+				if err := t.conn.SetWriteDeadline(time.Now().Add(codexHostWriteTimeout)); err != nil {
+					_ = t.closeWithError(err)
+					return len(data), err
+				}
+				deadlineSet = true
+			}
+			if err := t.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				_ = t.closeWithError(err)
+				return len(data), err
+			}
+		}
+		t.writeBuf.Next(newline + 1)
+	}
+	if deadlineSet {
+		if err := t.conn.SetWriteDeadline(time.Time{}); err != nil {
+			_ = t.closeWithError(err)
+			return len(data), err
+		}
+	}
+	return len(data), nil
+}
+
+func (t *codexWebSocketTransport) Close() error {
+	return t.closeWithError(nil)
+}
+
+func (t *codexWebSocketTransport) readMessages() {
+	for {
+		messageType, message, err := t.conn.ReadMessage()
+		if err != nil {
+			_ = t.closeWithError(err)
+			return
+		}
+		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
+			continue
+		}
+		if _, err := t.pipeWriter.Write(message); err != nil {
+			_ = t.closeWithError(err)
+			return
+		}
+		if _, err := t.pipeWriter.Write([]byte{'\n'}); err != nil {
+			_ = t.closeWithError(err)
+			return
+		}
+	}
+}
+
+func (t *codexWebSocketTransport) closeWithError(streamErr error) error {
+	var closeErr error
+	t.closeOnce.Do(func() {
+		t.closed.Store(true)
+		// Gorilla permits Close concurrently with the single reader and writer.
+		// Closing before waiting on writeMu unblocks an in-flight local socket
+		// write instead of making shutdown depend on the peer draining frames.
+		closeErr = t.conn.Close()
+		if streamErr != nil {
+			_ = t.pipeWriter.CloseWithError(streamErr)
+		} else {
+			_ = t.pipeWriter.Close()
+		}
+	})
+	return closeErr
 }
 
 func (a *ACPAgent) disconnectCodexHostClient(stopHost bool) (io.Closer, *exec.Cmd, <-chan error) {

@@ -34,6 +34,71 @@ func TestReleaseScriptRejectsSkipTests(t *testing.T) {
 	}
 }
 
+func TestReleaseScriptConfiguresProjectGoCache(t *testing.T) {
+	script := releaseScriptPath(t)
+	sharedRoot := t.TempDir()
+	want := filepath.Join(sharedRoot, "weclaw")
+	command := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
+		`unset GOCACHE WECLAW_GOCACHE && ` +
+		`go() { echo unexpected-go-call >&2; return 9; } && ` +
+		`configure_go_cache darwin ` + shellQuote(sharedRoot) + ` && printf 'CACHE=%s\n' "$GOCACHE"`
+
+	output := runReleaseScriptTestCommand(t, "", "bash", "-c", command)
+	if !strings.Contains(output, "CACHE="+want+"\n") {
+		t.Fatalf("configured cache output=%q, want %q", output, want)
+	}
+	info, err := os.Stat(want)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("configured cache directory=%q info=%v err=%v", want, info, err)
+	}
+}
+
+func TestReleaseScriptGoCachePrecedenceAndPortableFallback(t *testing.T) {
+	script := releaseScriptPath(t)
+	override := filepath.Join(t.TempDir(), "override")
+	existing := filepath.Join(t.TempDir(), "existing")
+	fallback := filepath.Join(t.TempDir(), "fallback")
+	sharedRoot := t.TempDir()
+
+	tests := []struct {
+		name   string
+		setup  string
+		goFunc string
+		expect string
+	}{
+		{
+			name:   "weclaw override wins",
+			setup:  `export WECLAW_GOCACHE=` + shellQuote(override) + ` GOCACHE=` + shellQuote(existing),
+			goFunc: `go() { echo unexpected-go-call >&2; return 9; }`,
+			expect: override,
+		},
+		{
+			name:   "existing exported cache wins",
+			setup:  `unset WECLAW_GOCACHE && export GOCACHE=` + shellQuote(existing),
+			goFunc: `go() { echo unexpected-go-call >&2; return 9; }`,
+			expect: existing,
+		},
+		{
+			name:   "linux uses go default",
+			setup:  `unset WECLAW_GOCACHE GOCACHE`,
+			goFunc: `go() { case "$*" in "env GOHOSTOS") echo linux ;; "env GOCACHE") echo ` + shellQuote(fallback) + ` ;; *) return 9 ;; esac; }`,
+			expect: fallback,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			command := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
+				test.setup + ` && ` + test.goFunc + ` && ` +
+				`configure_go_cache linux ` + shellQuote(sharedRoot) + ` && printf 'CACHE=%s\n' "$GOCACHE"`
+			output := runReleaseScriptTestCommand(t, "", "bash", "-c", command)
+			if !strings.Contains(output, "CACHE="+test.expect+"\n") {
+				t.Fatalf("configured cache output=%q, want %q", output, test.expect)
+			}
+		})
+	}
+}
+
 func TestReleaseScriptNextPatchTag(t *testing.T) {
 	script := releaseScriptPath(t)
 	repo := t.TempDir()

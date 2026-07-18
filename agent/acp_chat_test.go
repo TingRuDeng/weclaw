@@ -279,3 +279,47 @@ func TestLegacyACPChatHandlesPermissionRequest(t *testing.T) {
 		t.Fatalf("reply=%q response=%s", reply, out.String())
 	}
 }
+
+func TestFinishLegacyPromptDrainsApprovalAfterPromptDone(t *testing.T) {
+	ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+		return "reject-once", nil
+	})
+	responded := make(chan string, 1)
+	approvalCh := make(chan *codexTurnEvent, 1)
+	approvalCh <- &codexTurnEvent{Approval: &codexApprovalRequest{
+		Request: ApprovalRequest{Options: []ApprovalOption{
+			{ID: "allow-once", Kind: "allow"},
+			{ID: "reject-once", Kind: "deny"},
+		}},
+		Respond: func(_ context.Context, optionID string) error {
+			responded <- optionID
+			return nil
+		},
+	}}
+	notifyCh := make(chan *sessionUpdate, 1)
+	notifyCh <- &sessionUpdate{
+		SessionUpdate: "agent_message_chunk",
+		Content:       json.RawMessage(`{"type":"text","text":"done"}`),
+	}
+
+	a := NewACPAgent(ACPAgentConfig{Command: "mock", StateFile: filepath.Join(t.TempDir(), "state.json")})
+	reply, err := a.finishLegacyPrompt(legacyPromptState{
+		ctx:        ctx,
+		notifyCh:   notifyCh,
+		approvalCh: approvalCh,
+	}, nil, legacyPromptDone{result: json.RawMessage(`{"ok":true}`)})
+	if err != nil {
+		t.Fatalf("finishLegacyPrompt error: %v", err)
+	}
+	if reply != "done" {
+		t.Fatalf("reply=%q, want done", reply)
+	}
+	select {
+	case optionID := <-responded:
+		if optionID != "reject-once" {
+			t.Fatalf("optionID=%q, want reject-once", optionID)
+		}
+	default:
+		t.Fatal("prompt completed without responding to queued approval")
+	}
+}
