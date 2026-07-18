@@ -179,6 +179,19 @@ func claudeCLIResumeCommand(command string, workspaceRoot string, sessionID stri
 	return strings.Join(parts, " ")
 }
 
+func shellQuoteForTerminal(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func appleScriptQuoteForTerminal(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	return "\"" + value + "\""
+}
+
 // validClaudeSessionID 拒绝空白、控制字符和 shell 元字符进入本地进程边界。
 func validClaudeSessionID(sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)

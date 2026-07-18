@@ -28,17 +28,24 @@ type ACPAgent struct {
 	runAs            runAsUserSpec
 	protocol         string // "legacy_acp" or "codex_app_server"
 
-	mu           sync.Mutex
-	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	scanner      *bufio.Scanner
-	started      bool
-	starting     bool
-	startDone    chan struct{}
-	startErr     error
-	nextID       atomic.Int64
-	wireSequence atomic.Uint64
-	sessions     map[string]string // conversationID -> sessionID (legacy ACP)
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	scanner *bufio.Scanner
+	// codexHostSocket is the stable Unix socket shared by every Codex frontend.
+	// hostCmd/hostDone are only populated when this ACPAgent launched the host;
+	// attaching to an already running host never gives this client lifecycle
+	// ownership of the external process.
+	codexHostSocket string
+	hostCmd         *exec.Cmd
+	hostDone        <-chan error
+	started         bool
+	starting        bool
+	startDone       chan struct{}
+	startErr        error
+	nextID          atomic.Int64
+	wireSequence    atomic.Uint64
+	sessions        map[string]string // conversationID -> sessionID (legacy ACP)
 	// pendingPersistedSessions 在标准 ACP 握手确认身份前隔离磁盘中的旧 session。
 	pendingPersistedSessions map[string]string
 	legacyRuntimeGeneration  uint64
@@ -101,6 +108,7 @@ type ACPAgentConfig struct {
 	Cwd              string            // working directory
 	Env              map[string]string // extra environment variables
 	StateFile        string            // optional persisted mapping file path
+	AppServerSocket  string            // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
 	RunAsUser        string            // 以独立 Unix 用户运行（文件系统隔离）
 	RunAsEnv         []string          // run_as_user 时透传的环境变量名白名单
 }

@@ -177,7 +177,7 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 	binding.Ref = req.Ref
 	binding.Control = req.Intent
 	if binding.Runtime == agent.CodexRuntimeConflict {
-		binding.Runtime = agent.CodexRuntimeDesktop
+		binding.Runtime = agent.CodexRuntimeWeClaw
 		binding.ConflictReason = ""
 	}
 	if req.Intent.Owner == agent.CodexControlRemote && binding.Runtime == agent.CodexRuntimeUnknown {
@@ -322,31 +322,26 @@ func (f *fakeCodexLiveAgent) threadBinding(threadID string) agent.CodexThreadBin
 	return f.binding
 }
 
+func codexLiveSwitchFixture(t *testing.T, state agent.CodexThreadState) (*Handler, *fakeCodexLiveAgent, string) {
+	t.Helper()
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	bindingKey := codexBindingKey("user-1", "codex")
+	h.codexSessions.setThread(bindingKey, workspace, "thread-1")
+	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
+	ag.setThreadBinding("thread-1", agent.CodexThreadBinding{
+		Runtime: agent.CodexRuntimeWeClaw,
+		State:   agent.CodexThreadState{ThreadID: "thread-1", Active: state.Active, ActiveTurnID: state.ActiveTurnID},
+	})
+	return h, ag, workspace
+}
+
 // setBindingState 同步测试探针与 thread 读取结果，模拟 in-process turn 的实时状态变化。
 func (f *fakeCodexLiveAgent) setBindingState(state agent.CodexThreadState) {
 	f.mu.Lock()
 	f.binding.State = state
 	f.fakeCodexThreadAgent.threadState = state
 	f.mu.Unlock()
-}
-
-type fakeRemoteControlOptions struct {
-	routeUserID string
-	agentName   string
-	bindingKey  string
-	workspace   string
-	threadID    string
-}
-
-// claimRemoteControlForTest 为测试窗口建立显式远程控制意图。
-func claimRemoteControlForTest(t *testing.T, h *Handler, opts fakeRemoteControlOptions) {
-	t.Helper()
-	conversationID := buildCodexConversationID(opts.routeUserID, opts.agentName, opts.workspace)
-	_, err := h.ensureCodexSessions().updateControlIntent(codexControlIntentUpdate{
-		ThreadID: opts.threadID, Owner: codexControlRemote,
-		RouteBindingKey: opts.bindingKey, ConversationID: conversationID,
-	})
-	if err != nil {
-		t.Fatalf("建立测试控制意图失败: %v", err)
-	}
 }

@@ -181,7 +181,7 @@ func openclawACPConfig(req openclawACPConfigRequest) AgentConfig {
 	}
 }
 
-// NormalizeCodexRemoteFirst 将旧的 Codex Companion 默认配置迁移到 app-server remote-first。
+// NormalizeCodexRemoteFirst 将所有旧 Codex Companion 配置迁移到单一共享 app-server。
 func NormalizeCodexRemoteFirst(cfg *Config) bool {
 	if cfg == nil || cfg.Agents == nil {
 		return false
@@ -190,14 +190,11 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 	if !ok || agCfg.Type != "companion" || agCfg.Command == "" {
 		return false
 	}
-	if agCfg.AutoLaunch != nil && *agCfg.AutoLaunch {
-		return false
-	}
 	agCfg.Type = "acp"
 	agCfg.Args = codexRemoteFirstArgs(agCfg.Args)
 	agCfg.AutoLaunch = nil
 	cfg.Agents["codex"] = agCfg
-	log.Printf("[config] migrated codex companion to remote-first app-server")
+	log.Printf("[config] migrated codex companion to single shared app-server")
 	return true
 }
 

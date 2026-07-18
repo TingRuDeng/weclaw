@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,8 +117,30 @@ func TestHelperRetryingCodexAppServer(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "Error: failed to initialize sqlite state runtime under /Users/dengtingru/.codex: failed to initialize state runtime at /Users/dengtingru/.codex")
 		os.Exit(1)
 	}
-	serveMinimalCodexInitialize(t, os.Stdin, os.Stdout)
+	socketPath := retryHelperCodexSocketPath(t, os.Args)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen retry helper socket: %v", err)
+	}
+	defer listener.Close()
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept retry helper connection: %v", err)
+	}
+	defer conn.Close()
+	serveMinimalCodexInitialize(t, conn, conn)
 	os.Exit(0)
+}
+
+func retryHelperCodexSocketPath(t *testing.T, args []string) string {
+	t.Helper()
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] == "--listen" && strings.HasPrefix(args[index+1], "unix://") {
+			return strings.TrimPrefix(args[index+1], "unix://")
+		}
+	}
+	t.Fatalf("missing unix app-server listen argument: %q", args)
+	return ""
 }
 
 func readRetryHelperAttempts(t *testing.T, path string) int {

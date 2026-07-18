@@ -53,13 +53,23 @@ func (a *ACPAgent) ensureCodexAppServerGate() *codexAppServerGate {
 	return a.appServerGate
 }
 
-// stopCodexAppServerProcess 停止 ACP 子进程和 app-server waiters，不触碰 Desktop runtime。
+// stopCodexAppServerProcess 只断开当前 app-server 客户端连接。共享 host
+// 是独立运行边界，普通恢复不能终止其他前端仍在使用的唯一服务进程。
 func (a *ACPAgent) stopCodexAppServerProcess() {
+	if a.usesCodexSharedHost() {
+		connection, _, _ := a.disconnectCodexHostClient(false)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		a.failAppServerActiveTurns("Codex app-server client disconnected for recovery")
+		a.failPendingRequests("Codex app-server client disconnected for recovery")
+		return
+	}
 	a.mu.Lock()
 	stdin, cmd := a.stdin, a.cmd
 	a.started, a.stdin, a.cmd, a.scanner = false, nil, nil, nil
 	a.mu.Unlock()
 	stopACPProcess(stdin, cmd)
-	a.failPendingRequests("ACP runtime stopped for recovery")
 	a.failAppServerActiveTurns("ACP runtime stopped for recovery")
+	a.failPendingRequests("ACP runtime stopped for recovery")
 }

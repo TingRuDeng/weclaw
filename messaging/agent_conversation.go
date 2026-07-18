@@ -112,10 +112,7 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 	resolveOpts := codexRuntimeResolveOptions{route: route, threadID: threadID, ag: ag}
 	var resolution codexRuntimeResolution
 	var err error
-	if _, live := ag.(agent.CodexLiveRuntimeAgent); live {
-		intent := h.ensureCodexSessions().controlIntent(threadID)
-		err = ensureCodexRouteOwnsControl(agentControlIntent(intent), route)
-	} else {
+	if _, live := ag.(agent.CodexLiveRuntimeAgent); !live {
 		resolution, err = h.resolveCodexRuntime(ctx, resolveOpts)
 	}
 	if err != nil {

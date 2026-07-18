@@ -11,7 +11,7 @@ import (
 )
 
 func TestFeishuNewUsesGroupSessionMetadataForReset(t *testing.T) {
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	h := NewHandler(func(_ context.Context, name string) agent.Agent {
 		if name == "codex" {
@@ -39,15 +39,15 @@ func TestFeishuNewUsesGroupSessionMetadataForReset(t *testing.T) {
 	if routeThread != "thread-new" || pending {
 		t.Fatalf("route thread=%q pending=%v, want thread-new false", routeThread, pending)
 	}
-	intent := h.ensureCodexSessions().controlIntent("thread-new")
-	if intent.Owner != codexControlRemote || intent.RouteBindingKey != bindingKey {
-		t.Fatalf("route intent=%#v，期望飞书窗口接管", intent)
+	requests := ag.handoffRequests()
+	if len(requests) != 1 || requests[0].Intent.RouteKey != bindingKey {
+		t.Fatalf("shared host bind requests=%#v", requests)
 	}
 }
 
 func TestHandleGlobalNewPassesFeishuObserverContext(t *testing.T) {
 	state := agent.CodexThreadState{ThreadID: "thread-new", Active: true, ActiveTurnID: "turn-new"}
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, state)
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, state)
 	ag.resetSessionID = "thread-new"
 	ag.watchDone = make(chan struct{})
 	h := NewHandler(func(_ context.Context, _ string) agent.Agent { return ag }, nil)

@@ -1,22 +1,32 @@
 package agent
 
-// failAppServerActiveTurns 仅终止 app-server turn，保留 Desktop watcher。
+// failAppServerActiveTurns 仅中断 app-server 观察流，保留 Desktop watcher；
+// 服务端 turn 是否终态必须由后续 rollout/thread 状态确认。
 func (a *ACPAgent) failAppServerActiveTurns(reason string) {
-	event := &codexTurnEvent{Kind: "error", Text: reason}
+	type turnTarget struct {
+		channel chan *codexTurnEvent
+		turnID  string
+	}
 	a.notifyMu.Lock()
-	channels := make([]chan *codexTurnEvent, 0, len(a.turnCh))
+	targets := make([]turnTarget, 0, len(a.turnCh))
 	for threadID, channel := range a.turnCh {
+		turnID := ""
 		if a.codexOwners != nil {
 			binding, ok := a.codexOwners.threadBinding(threadID)
 			if ok && binding.Runtime == CodexRuntimeDesktop {
 				continue
 			}
+			if ok {
+				turnID = binding.State.ActiveTurnID
+			}
 		}
-		channels = append(channels, channel)
+		targets = append(targets, turnTarget{channel: channel, turnID: turnID})
 	}
 	a.notifyMu.Unlock()
-	for _, channel := range channels {
-		dispatchCodexTurnControlEvent(channel, event)
+	for _, target := range targets {
+		dispatchCodexTurnControlEvent(target.channel, &codexTurnEvent{
+			Kind: "interrupted", TurnID: target.turnID, Text: reason,
+		})
 	}
 }
 

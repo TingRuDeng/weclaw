@@ -87,14 +87,14 @@ func (h *Handler) resolveBoundCodexRuntimeLocked(opts codexRuntimeResolveOptions
 
 // buildCodexRuntimeRequest 组合 thread、控制 revision 与 rollout 检查点。
 func (h *Handler) buildCodexRuntimeRequest(route codexConversationRoute, threadID string) (agent.CodexRuntimeRequest, codexRolloutTaskState, error) {
-	intent := h.ensureCodexSessions().controlIntent(threadID)
+	intent := codexSharedHostIntent(route)
 	rollout, _, err := h.readLocalCodexRolloutTaskState(threadID)
 	if err != nil {
 		return agent.CodexRuntimeRequest{}, codexRolloutTaskState{}, err
 	}
 	request := agent.CodexRuntimeRequest{
 		Ref:        agent.CodexThreadRef{ConversationID: route.conversationID, ThreadID: threadID},
-		Intent:     agentControlIntent(intent),
+		Intent:     intent,
 		Checkpoint: agentRolloutCheckpoint(rollout),
 		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
 			route.bindingKey, route.workspaceRoot, threadID,
@@ -112,17 +112,17 @@ func (h *Handler) buildCodexRuntimeRequestForTurn(route codexConversationRoute, 
 	log.Printf("[codex-task] 首次写入忽略 rollout checkpoint 读取失败 thread=%q: %v", threadID, err)
 	return agent.CodexRuntimeRequest{
 		Ref:    route.ref(threadID),
-		Intent: agentControlIntent(h.ensureCodexSessions().controlIntent(threadID)),
+		Intent: codexSharedHostIntent(route),
 		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
 			route.bindingKey, route.workspaceRoot, threadID,
 		),
 	}
 }
 
-func agentControlIntent(intent codexControlIntent) agent.CodexControlIntent {
+func codexSharedHostIntent(route codexConversationRoute) agent.CodexControlIntent {
 	return agent.CodexControlIntent{
-		Owner: agent.CodexControlOwner(intent.Owner), RouteKey: intent.RouteBindingKey,
-		ConversationID: intent.ConversationID, Revision: intent.Revision,
+		Owner: agent.CodexControlRemote, RouteKey: route.bindingKey,
+		ConversationID: route.conversationID, Revision: 1,
 	}
 }
 
@@ -172,17 +172,15 @@ func (h *Handler) guardCodexThreadSwitch(route codexConversationRoute, targetThr
 	return nil
 }
 
-// ensureCodexRuntimeReady 同时核对持久化控制方、当前窗口和实际 writer。
+// ensureCodexRuntimeReady 只核对单一 app-server 的真实可用性。消息 route
+// 是 frontend binding，不再是互斥 writer owner。
 func ensureCodexRuntimeReady(resolution codexRuntimeResolution, route codexConversationRoute) error {
 	if !resolution.Live {
 		return nil
 	}
-	intent := resolution.Request.Intent
-	if err := ensureCodexRouteOwnsControl(intent, route); err != nil {
-		return err
-	}
+	_ = route
 	switch resolution.Binding.Runtime {
-	case agent.CodexRuntimeDesktop, agent.CodexRuntimeWeClaw:
+	case agent.CodexRuntimeWeClaw:
 		return nil
 	case agent.CodexRuntimeConflict:
 		return agent.ErrCodexRuntimeConflict
@@ -191,20 +189,8 @@ func ensureCodexRuntimeReady(resolution codexRuntimeResolution, route codexConve
 	}
 }
 
-func ensureCodexRouteOwnsControl(intent agent.CodexControlIntent, route codexConversationRoute) error {
-	switch intent.Owner {
-	case agent.CodexControlUnclaimed:
-		return fmt.Errorf("当前 Codex 会话未由本窗口控制；请重新选择会话或发送 /cx owner remote")
-	case agent.CodexControlDesktop:
-		return fmt.Errorf("当前 Codex 会话已归还 Codex Desktop；请重新选择会话或发送 /cx owner remote")
-	case agent.CodexControlRemote:
-		if intent.RouteKey != route.bindingKey || intent.ConversationID != route.conversationID {
-			return fmt.Errorf("当前 Codex 会话由另一个消息窗口远程控制")
-		}
-		return nil
-	default:
-		return agent.ErrCodexControlRequired
-	}
+func codexRuntimeReadyForRemoteTurn(runtime agent.CodexRuntimeHolder) bool {
+	return runtime == agent.CodexRuntimeWeClaw
 }
 
 func codexResolutionModelStatus(resolution codexRuntimeResolution, fallback sessionModelStatus) sessionModelStatus {
@@ -215,23 +201,12 @@ func codexResolutionModelStatus(resolution codexRuntimeResolution, fallback sess
 	return sessionModelStatus{Model: state.Model, Effort: state.Effort}
 }
 
-func renderCodexControlOwner(owner agent.CodexControlOwner) string {
-	switch owner {
-	case agent.CodexControlDesktop:
-		return "Codex Desktop"
-	case agent.CodexControlRemote:
-		return "远程窗口"
-	default:
-		return "未认领"
-	}
-}
-
 func renderCodexRuntimeHolder(runtime agent.CodexRuntimeHolder) string {
 	switch runtime {
 	case agent.CodexRuntimeDesktop:
-		return "Codex Desktop"
+		return "旧版 Codex Desktop bridge"
 	case agent.CodexRuntimeWeClaw:
-		return "WeClaw app-server"
+		return "共享 Codex app-server"
 	case agent.CodexRuntimeConflict:
 		return "写入冲突"
 	default:

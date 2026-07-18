@@ -4,11 +4,19 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
+
+func TestCreateCompanionRuntimeRejectsCodexSecondWriter(t *testing.T) {
+	runtime, err := createCompanionRuntime(agent.CompanionEndpoint{Agent: "codex"})
+	if err == nil || !strings.Contains(err.Error(), "单一共享 app-server") {
+		t.Fatalf("createCompanionRuntime() runtime=%#v error=%v, want shared-host rejection", runtime, err)
+	}
+}
 
 func TestWaitForLiveCompanionEndpointRemovesStaleAndRetries(t *testing.T) {
 	stale := agent.CompanionEndpoint{Agent: "codex", Host: "127.0.0.1", Port: 11111, Cwd: "/tmp/work"}

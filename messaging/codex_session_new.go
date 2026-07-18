@@ -35,7 +35,7 @@ type codexSessionCreateFailureRequest struct {
 	cause            error
 }
 
-// createAndAcquireCodexSessionWithBindingLocked 在调用方持有 binding 锁时完成创建、接管和失败恢复。
+// createAndAcquireCodexSessionWithBindingLocked 在调用方持有 binding 锁时完成创建、绑定和失败恢复。
 func (h *Handler) createAndAcquireCodexSessionWithBindingLocked(req codexSessionCreateRequest) (codexSessionCreateResult, error) {
 	if err := h.validateCodexSessionCreatePreflight(req.acquire); err != nil {
 		return codexSessionCreateResult{}, err
@@ -85,41 +85,9 @@ func (h *Handler) restoreCodexSessionCreateFailure(failure codexSessionCreateFai
 		previousThreadID: failure.previousThreadID,
 	})
 	if restoreErr != nil {
-		markErr := h.markCodexSessionCreateConflict(failure)
-		return result, errors.Join(errCodexSessionAcquireUncertain, failure.cause, restoreErr, markErr)
+		return result, errors.Join(errCodexSessionAcquireUncertain, failure.cause, restoreErr)
 	}
 	return result, failure.cause
-}
-
-// markCodexSessionCreateConflict 在 mapping 无法恢复时持久标记相关 thread 为冲突态。
-func (h *Handler) markCodexSessionCreateConflict(failure codexSessionCreateFailureRequest) error {
-	createdThread := strings.TrimSpace(failure.createdThread)
-	previousThread := strings.TrimSpace(failure.previousThreadID)
-	if createdThread == "" && previousThread == "" {
-		return nil
-	}
-	liveAgent := failure.createRequest.acquire.agent.(agent.CodexLiveRuntimeAgent)
-	route := failure.createRequest.acquire.route
-	cleanupCtx, cancel := newCodexSessionAcquireCleanupContext(failure.createRequest.acquire.ctx)
-	defer cancel()
-	seen := make(map[string]struct{}, 2)
-	var markErr error
-	for _, threadID := range []string{createdThread, previousThread} {
-		if threadID == "" {
-			continue
-		}
-		if _, duplicate := seen[threadID]; duplicate {
-			continue
-		}
-		seen[threadID] = struct{}{}
-		route.threadID = threadID
-		markErr = errors.Join(markErr, h.markCodexRuntimeConflict(codexRuntimeConflictRequest{
-			ctx: cleanupCtx, liveAgent: liveAgent,
-			change: codexRuntimeIntentChange{threadID: threadID, route: route},
-			intent: h.ensureCodexSessions().controlIntent(threadID),
-		}))
-	}
-	return markErr
 }
 
 // restoreCodexSessionAfterCreateFailure 使用独立清理预算恢复 ResetSession 改变的 mapping。
@@ -133,13 +101,11 @@ func restoreCodexSessionAfterCreateFailure(req codexSessionRestoreRequest) error
 	return req.agent.UseCodexThread(cleanupCtx, req.conversationID, req.previousThreadID)
 }
 
-// validateCodexSessionCreatePreflight 确保不会在旧远程任务活动时先破坏 ACP mapping。
+// validateCodexSessionCreatePreflight prevents ResetSession from replacing the
+// conversation mapping while that same frontend conversation is running.
 func (h *Handler) validateCodexSessionCreatePreflight(req codexSessionAcquireRequest) error {
-	snapshot := h.ensureCodexSessions().remoteSelectionSnapshot(req.route.bindingKey, "")
-	for threadID := range snapshot.RouteOwned {
-		if _, active := h.activeCodexTaskConversation(threadID); active {
-			return errCodexSessionAcquireActiveOld
-		}
+	if _, active := h.activeTask(req.route.conversationID); active {
+		return errCodexSessionAcquireActiveOld
 	}
 	return nil
 }
@@ -158,7 +124,7 @@ func codexSessionCreateError(createErr error, created string) error {
 // renderCodexSessionCreateFailure 区分可确认恢复与不确定结果，避免虚假成功。
 func renderCodexSessionCreateFailure(result codexSessionCreateResult, err error) string {
 	if errors.Is(err, errCodexSessionAcquireUncertain) {
-		lines := []string{"Codex 控制权移交结果未确认，当前禁止继续写入。"}
+		lines := []string{"Codex 新会话绑定结果未确认，原会话映射可能未能恢复。"}
 		if result.createdThread != "" {
 			lines = append(lines, "新会话仍保留在 Codex 历史中。")
 		}
@@ -167,7 +133,6 @@ func renderCodexSessionCreateFailure(result codexSessionCreateResult, err error)
 	if result.createdThread == "" {
 		if errors.Is(err, errCodexSessionAcquireActiveOld) ||
 			errors.Is(err, errCodexSessionAcquireUnsupported) ||
-			errors.Is(err, errCodexRemoteSelectionOtherRoute) ||
 			errors.Is(err, errCodexRemoteSelectionChanged) || isCodexSessionControlTimeout(err) {
 			return renderCodexSessionAcquireFailure(err)
 		}
@@ -181,7 +146,7 @@ func renderCodexSessionCreateFailure(result codexSessionCreateResult, err error)
 		)
 	}
 	return wechatCommandText(
-		"新 Codex 会话已创建，但接管失败；原会话已恢复。",
+		"新 Codex 会话已创建，但绑定失败；原会话已恢复。",
 		"新会话仍保留在 Codex 历史中。",
 		renderCodexSessionAcquireFailure(err),
 	)

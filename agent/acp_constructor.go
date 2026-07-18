@@ -78,6 +78,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		resumeOnFirstUse:         make(map[string]bool),
 		conversationCwds:         make(map[string]string),
 		stateFile:                options.stateFile,
+		codexHostSocket:          strings.TrimSpace(cfg.AppServerSocket),
 		claudeSessionConfigs:     make(map[string][]acpSessionConfigOption),
 		claudeConfigRevisions:    make(map[string]uint64),
 		pending:                  make(map[int64]chan *rpcResponse),
@@ -89,17 +90,20 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	return a
 }
 
-// configureCodexRuntime 装配仅供 app-server 协议使用的 Desktop 所有权状态。
+// configureCodexRuntime 为原生 app-server 装配 thread 绑定与 writer lease。
+// 生产路径只连接共享 host；显式 probe 仅保留给旧 Desktop adapter 的隔离测试。
 func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 	if a.protocol != protocolCodexAppServer {
 		return
 	}
+	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
 	if probe == nil {
-		a.desktopRuntime = newCodexDesktopRuntime()
-		probe = a.desktopRuntime
+		return
 	}
 	a.desktopProbe = probe
-	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
+	if runtime, ok := probe.(*codexDesktopRuntime); ok {
+		a.desktopRuntime = runtime
+	}
 	if a.desktopRuntime == nil {
 		return
 	}

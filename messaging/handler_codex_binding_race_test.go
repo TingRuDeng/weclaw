@@ -71,7 +71,7 @@ func TestCodexSessionCommandBindingLockTimeout(t *testing.T) {
 
 	started := time.Now()
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner",
 	})
 	if !strings.Contains(reply, "前一项 Codex 会话操作仍在处理") || !strings.Contains(reply, "本次命令未执行") {
 		t.Fatalf("reply=%q", reply)
@@ -81,19 +81,13 @@ func TestCodexSessionCommandBindingLockTimeout(t *testing.T) {
 	}
 }
 
-func TestCodexSessionCommandSwitchTimeoutKeepsOwnerAndReleasesBindingLock(t *testing.T) {
+func TestCodexSessionCommandSwitchTimeoutKeepsBindingAndReleasesLock(t *testing.T) {
 	h, ag, workspace := codexLiveSwitchFixture(t, agent.CodexThreadState{ThreadID: "thread-1"})
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.agents["codex"] = ag
 	h.defaultName = "codex"
 	h.codexCommandTimeout = 80 * time.Millisecond
 	h.codexLockWaitTimeout = 20 * time.Millisecond
-	current := h.codexSessions.controlIntent("thread-1")
-	if _, err := h.codexSessions.updateControlIntent(codexControlIntentUpdate{
-		ThreadID: "thread-1", Owner: codexControlDesktop, ExpectedRevision: current.Revision,
-	}); err != nil {
-		t.Fatalf("准备 desktop 所有权失败: %v", err)
-	}
 	ag.handoffEntered = make(chan struct{}, 1)
 	ag.handoffRelease = make(chan struct{})
 
@@ -106,7 +100,7 @@ func TestCodexSessionCommandSwitchTimeoutKeepsOwnerAndReleasesBindingLock(t *tes
 	waitDone(t, ag.handoffEntered, "switch runtime 移交")
 
 	ownerReply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner",
 	})
 	if !strings.Contains(ownerReply, "本次命令未执行") {
 		t.Fatalf("owner reply=%q", ownerReply)
@@ -114,14 +108,14 @@ func TestCodexSessionCommandSwitchTimeoutKeepsOwnerAndReleasesBindingLock(t *tes
 
 	select {
 	case reply := <-switchResult:
-		if !strings.Contains(reply, "已切换并接管") || strings.Contains(reply, "运行通道: 暂不可用") {
+		if !strings.Contains(reply, "已切换并绑定") || !strings.Contains(reply, "运行通道: 暂不可用") {
 			t.Fatalf("switch reply=%q", reply)
 		}
 	case <-time.After(codexBindingTestCompletionTimeout):
 		t.Fatal("switch 未在总时限后释放 binding 锁")
 	}
-	if intent := h.codexSessions.controlIntent("thread-1"); intent.Owner != codexControlRemote {
-		t.Fatalf("运行通道超时后应保留当前窗口所有权，intent=%#v", intent)
+	if threadID, _ := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace); threadID != "thread-1" {
+		t.Fatalf("运行通道超时后窗口 binding=%q", threadID)
 	}
 	assertExecutionLockReusable(t, h, codexBindingExecutionKey(codexBindingKey("user-1", "codex")))
 }
@@ -129,7 +123,7 @@ func TestCodexSessionCommandSwitchTimeoutKeepsOwnerAndReleasesBindingLock(t *tes
 func TestCodexNewUsesBindingLock(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	h.defaultName, h.agents["codex"] = "codex", ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
@@ -159,23 +153,20 @@ func TestCodexNewUsesBindingLock(t *testing.T) {
 func TestHandleCodexNewRejectsActiveOldRemoteTaskBeforeReset(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	h.defaultName, h.agents["codex"] = "codex", ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
-	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
-		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
-		workspace: workspace, threadID: "thread-old",
-	})
-	task, _, started := h.beginActiveTask(context.Background(), "old-task", activeTaskMeta{
-		owner: "user-1", agentName: "codex", codexThreadID: "thread-old",
+	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+	task, _, started := h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
+		owner: "user-1", routeUserID: "user-1", agentName: "codex", codexThreadID: "thread-old",
 	})
 	if !started {
 		t.Fatal("未能建立旧会话 active task")
 	}
-	defer h.finishActiveTask("old-task", task)
+	defer h.finishActiveTask(conversationID, task)
 
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx new",
@@ -183,7 +174,7 @@ func TestHandleCodexNewRejectsActiveOldRemoteTaskBeforeReset(t *testing.T) {
 	if resetCalls, _ := ag.resetSnapshot(); resetCalls != 0 {
 		t.Fatalf("旧任务活动时 ResetSession 调用=%d，期望 0", resetCalls)
 	}
-	if !strings.Contains(reply, "当前远程任务仍在执行") {
+	if !strings.Contains(reply, "当前会话任务仍在执行") {
 		t.Fatalf("reply=%q", reply)
 	}
 }

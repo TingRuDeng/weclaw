@@ -30,21 +30,24 @@ func TestRedactConfigHidesSecrets(t *testing.T) {
 
 func TestMergeViewPreservesMaskedSecrets(t *testing.T) {
 	current := &config.Config{APIToken: "keep-token", Agents: map[string]config.AgentConfig{
-		"claude": {Type: "acp", Command: "claude-agent-acp", LocalCommand: "claude", APIKey: "keep-key", Env: map[string]string{"K": "keep-val"}, PermissionLevel: "auto_review", ApprovalPolicy: "on-request", ApprovalReviewer: "auto_review", SandboxMode: "workspace-write"},
+		"codex": {Type: "acp", Command: "codex", APIKey: "keep-key", Env: map[string]string{"K": "keep-val"}, PermissionLevel: "auto_review", ApprovalPolicy: "on-request", ApprovalReviewer: "auto_review", SandboxMode: "workspace-write", AppServerSocket: "/run/user/1000/weclaw/codex.sock"},
 	}}
 	view := redactConfig(current)
-	agentView := view.Agents["claude"]
-	agentView.Command = "claude-2"
-	view.Agents["claude"] = agentView
+	agentView := view.Agents["codex"]
+	agentView.Command = "codex-2"
+	view.Agents["codex"] = agentView
 	merged := mergeView(current, view)
-	agentCfg := merged.Agents["claude"]
+	agentCfg := merged.Agents["codex"]
 	if merged.APIToken != "keep-token" || agentCfg.APIKey != "keep-key" || agentCfg.Env["K"] != "keep-val" {
 		t.Fatalf("masked secrets must be preserved: %+v", agentCfg)
 	}
 	if agentCfg.PermissionLevel != "auto_review" || agentCfg.ApprovalPolicy != "on-request" || agentCfg.ApprovalReviewer != "auto_review" || agentCfg.SandboxMode != "workspace-write" {
 		t.Fatalf("permission fields must be preserved: %+v", agentCfg)
 	}
-	if agentCfg.Command != "claude-2" || agentCfg.LocalCommand != "claude" {
+	if agentCfg.AppServerSocket != "/run/user/1000/weclaw/codex.sock" {
+		t.Fatalf("app_server_socket must be preserved: %+v", agentCfg)
+	}
+	if agentCfg.Command != "codex-2" {
 		t.Fatalf("non-secret fields not round-tripped: %+v", agentCfg)
 	}
 }

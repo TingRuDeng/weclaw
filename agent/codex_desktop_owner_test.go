@@ -464,9 +464,9 @@ func codexHandoffRPCFake(t *testing.T, threadID string, turnID string) func(cont
 	}
 }
 
-func TestCodexAppServerConstructorCreatesDesktopRuntimeLazily(t *testing.T) {
+func TestCodexAppServerConstructorUsesSharedHostWithoutDesktopRuntime(t *testing.T) {
 	codex := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
-	if codex.desktopRuntime == nil || codex.desktopRuntime.client != nil {
+	if codex.desktopRuntime != nil || codex.desktopProbe != nil || codex.codexOwners == nil {
 		t.Fatalf("desktop runtime = %#v", codex.desktopRuntime)
 	}
 	legacy := NewACPAgent(ACPAgentConfig{Command: "claude-agent-acp"})

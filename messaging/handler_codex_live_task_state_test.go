@@ -10,10 +10,10 @@ import (
 func TestCodexTaskStoresOwnerRevisionAndThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, started := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeWeClaw,
 		ownerRevision: 7, codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
-	if !started || task.runtimeOwner != agent.CodexRuntimeDesktop || task.ownerRevision != 7 {
+	if !started || task.runtimeOwner != agent.CodexRuntimeWeClaw || task.ownerRevision != 7 {
 		t.Fatalf("task = %#v", task)
 	}
 	if task.codexThreadID != "thread-1" || task.phase != codexTaskRunning {
@@ -107,7 +107,7 @@ func TestCodexReconnectDoesNotOverrideStopping(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{})
 	task.beginStopRequest(taskStopRequest{mode: taskStopLocal})
-	task.markCodexRunning(agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop})
+	task.markCodexRunning(agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 	if task.phase != codexTaskStopping {
 		t.Fatalf("phase=%q, want stopping", task.phase)
 	}
@@ -116,7 +116,7 @@ func TestCodexReconnectDoesNotOverrideStopping(t *testing.T) {
 func TestRestorePendingGuideRunsAfterTaskWasRemoved(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{
-		owner: "user-1", runtimeOwner: agent.CodexRuntimeDesktop,
+		owner: "user-1", runtimeOwner: agent.CodexRuntimeWeClaw,
 		codexThreadID: "thread-1", codexTurnID: "turn-1",
 	})
 	ran := make(chan struct{}, 1)

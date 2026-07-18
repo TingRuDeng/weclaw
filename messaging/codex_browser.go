@@ -157,7 +157,7 @@ func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(entry codexSingleSe
 		return textNavigationResult(renderCodexSessionAcquireFailure(err))
 	}
 	return textNavigationResult(h.renderCodexSessionAcquireResult(
-		result, "已进入工作空间并接管唯一会话。", workspaceName,
+		result, "已进入工作空间并绑定唯一会话。", workspaceName,
 	))
 }
 

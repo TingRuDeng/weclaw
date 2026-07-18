@@ -14,6 +14,9 @@ func (a *ACPAgent) InspectCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
+	if a.desktopProbe == nil {
+		return a.activateSharedCodexHost(ctx, req)
+	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{})
 	binding, activateErr := a.codexOwners.activateRuntime(req, runtime, state)
 	if activateErr != nil {
@@ -31,6 +34,11 @@ func (a *ACPAgent) CurrentCodexRuntime(req CodexRuntimeRequest) (CodexThreadBind
 	if !ok {
 		return unknownCodexRuntimeSnapshot(req, CodexThreadState{}), nil
 	}
+	if a.desktopProbe == nil {
+		binding.Ref = req.Ref
+		binding.Control = req.Intent
+		return binding, nil
+	}
 	if !sameCodexControlIntent(binding.Control, req.Intent) {
 		if a.codexOwners.hasWriterLease(req.Ref.ThreadID) {
 			return binding, ErrCodexControlChanged
@@ -46,6 +54,16 @@ func (a *ACPAgent) ReconcileCodexObservedTurn(_ context.Context, req CodexRuntim
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
+	if a.desktopProbe == nil {
+		binding, retained, err := a.codexOwners.reconcileUncertainSharedHostLease(req, state)
+		if err != nil {
+			return binding, err
+		}
+		if retained {
+			return binding, nil
+		}
+		return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
+	}
 	return a.codexOwners.reconcileObservedTurn(req, state)
 }
 
@@ -60,6 +78,9 @@ func unknownCodexRuntimeSnapshot(req CodexRuntimeRequest, state CodexThreadState
 func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
+	}
+	if a.desktopProbe == nil {
+		return a.activateSharedCodexHost(ctx, req)
 	}
 	if a.codexOwners.hasWriterLease(req.Ref.ThreadID) {
 		return CodexThreadBinding{}, ErrCodexWriterBusy
@@ -107,8 +128,55 @@ func (a *ACPAgent) MarkCodexRuntimeConflict(ctx context.Context, req CodexRuntim
 		return err
 	}
 	_ = ctx
+	if a.desktopProbe == nil {
+		// A transport timeout is not evidence of a second writer. The single
+		// app-server remains authoritative and will reject conflicting turn IDs.
+		return nil
+	}
 	_, err := a.codexOwners.markRuntimeConflict(req, "控制权移交结果未确认")
 	return err
+}
+
+// activateSharedCodexHost binds a frontend route to the one authoritative
+// app-server. Repeated calls reuse the live connection and do not perform any
+// Desktop ownership probe.
+func (a *ACPAgent) activateSharedCodexHost(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
+	hasLease, uncertainLease := a.codexOwners.writerLeaseStatus(req.Ref.ThreadID)
+	if hasLease && !uncertainLease {
+		binding, ok := a.codexOwners.threadBinding(req.Ref.ThreadID)
+		if !ok {
+			return CodexThreadBinding{}, ErrCodexWriterBusy
+		}
+		binding.Ref = req.Ref
+		return binding, nil
+	}
+	if err := a.ensureCodexAppServerStartedForTurn(ctx, req.Ref.ConversationID); err != nil {
+		return CodexThreadBinding{}, err
+	}
+	a.mu.Lock()
+	boundThread := strings.TrimSpace(a.threads[req.Ref.ConversationID])
+	shouldResume := boundThread != strings.TrimSpace(req.Ref.ThreadID) || a.resumeOnFirstUse[req.Ref.ConversationID]
+	a.mu.Unlock()
+	if shouldResume {
+		if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
+			return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)
+		}
+		a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
+	}
+	state, _, err := a.readCodexAppServerThreadStateResult(ctx, req.Ref.ThreadID)
+	if err != nil {
+		return CodexThreadBinding{}, err
+	}
+	if uncertainLease {
+		binding, retained, reconcileErr := a.codexOwners.reconcileUncertainSharedHostLease(req, state)
+		if reconcileErr != nil {
+			return binding, reconcileErr
+		}
+		if retained {
+			return binding, nil
+		}
+	}
+	return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
 }
 
 func (a *ACPAgent) validateCodexRuntimeSupport(req CodexRuntimeRequest) error {

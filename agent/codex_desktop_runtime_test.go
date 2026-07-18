@@ -82,9 +82,10 @@ func TestACPAgentDesktopControlledTurnDoesNotAutoRecover(t *testing.T) {
 }
 
 func TestACPAgentDesktopDisconnectInvalidatesRuntimeWithoutReleasingRemoteOwner(t *testing.T) {
+	desktopRuntime := newCodexDesktopRuntime()
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
-	}, acpAgentOptions{})
+	}, acpAgentOptions{desktopProbe: desktopRuntime})
 	disconnect := make(chan struct{})
 	client := a.desktopRuntime.ensureInitialized()
 	client.dial = codexDesktopTestDial(t, func(conn net.Conn, _ int) {

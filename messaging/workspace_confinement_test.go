@@ -93,18 +93,12 @@ func TestCodexCommandRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("user-1", "codex"), blocked)
-	opened := false
-	h.SetCodexAppOpener(func(context.Context, string, string) error {
-		opened = true
-		return nil
-	})
-
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx app",
 	})
 
-	if opened || !strings.Contains(reply, "不在允许范围") {
-		t.Fatalf("opened=%v reply=%q, want confinement rejection", opened, reply)
+	if !strings.Contains(reply, "不在允许范围") {
+		t.Fatalf("reply=%q, want confinement rejection", reply)
 	}
 }
 
@@ -118,28 +112,22 @@ func TestCodexCommandAllowsStaleWorkspaceForAdmin(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("admin-1", "codex"), blocked)
-	opened := false
-	h.SetCodexAppOpener(func(context.Context, string, string) error {
-		opened = true
-		return nil
-	})
-
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "admin-1", RouteUserID: "admin-1", Trimmed: "/cx app", Admin: true,
 	})
 
-	if !opened || strings.Contains(reply, "不在允许范围") {
-		t.Fatalf("opened=%v reply=%q, want admin bypass", opened, reply)
+	if !strings.Contains(reply, "/cx app 已停用") || strings.Contains(reply, "不在允许范围") {
+		t.Fatalf("reply=%q, want shared-host entry rejection", reply)
 	}
 }
 
-func TestCodexOwnerRemoteRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
+func TestCodexOwnerStatusRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
 	h := NewHandler(nil, nil)
 	allowed := filepath.Join(t.TempDir(), "allowed")
 	blocked := filepath.Join(t.TempDir(), "blocked")
 	mustCreateWorkspaceDirs(t, allowed, blocked)
 	h.SetAllowedWorkspaceRoots([]string{allowed})
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{ThreadID: "thread-1"})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: "thread-1"})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	bindingKey := codexBindingKey("user-1", "codex")
@@ -147,7 +135,7 @@ func TestCodexOwnerRemoteRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
 	h.ensureCodexSessions().setThread(bindingKey, blocked, "thread-1")
 
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner remote",
+		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx owner",
 	})
 
 	if ag.handoffCalls != 0 || !strings.Contains(reply, "不在允许范围") {

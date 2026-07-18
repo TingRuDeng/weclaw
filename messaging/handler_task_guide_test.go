@@ -136,7 +136,7 @@ func TestCodexBackgroundTaskKeepsWorkspaceWhenSwitchAgentUnsupported(t *testing.
 	fixture.agent.release <- struct{}{}
 	waitForText(t, calls, "第1条结果")
 	assertFrozenWorkspaceState(t, fixture)
-	if !containsText(calls.texts(), "当前 Codex Agent 不支持选择即接管") {
+	if !containsText(calls.texts(), "当前 Codex Agent 不支持共享 app-server 会话绑定") {
 		t.Fatalf("非 live Agent 不应改变工作空间，messages=%#v", calls.texts())
 	}
 	if !containsText(calls.texts(), "当前没有可发送的引导对话") {

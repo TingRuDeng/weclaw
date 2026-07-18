@@ -10,13 +10,18 @@ type codexRuntimeOwnerRegistry struct {
 	threads       map[string]CodexThreadBinding
 	conversations map[string]string
 	leases        map[string]*codexWriterLeaseState
+	// enforceControl only exists for the retired Desktop bridge compatibility
+	// path. The shared app-server has one writer authority and does not assign
+	// exclusive ownership to individual frontend routes.
+	enforceControl bool
 }
 
 // newCodexRuntimeOwnerRegistry 创建独立于 ACP threads map 的 owner registry。
-func newCodexRuntimeOwnerRegistry(_ codexDesktopOwnerProbe) *codexRuntimeOwnerRegistry {
+func newCodexRuntimeOwnerRegistry(probe codexDesktopOwnerProbe) *codexRuntimeOwnerRegistry {
 	return &codexRuntimeOwnerRegistry{
 		threads:       make(map[string]CodexThreadBinding),
 		conversations: make(map[string]string), leases: make(map[string]*codexWriterLeaseState),
+		enforceControl: probe != nil,
 	}
 }
 

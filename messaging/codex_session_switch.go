@@ -51,7 +51,7 @@ type codexNewRequest struct {
 	reply         platform.Replier
 }
 
-// handleCodexNewForRoute 创建 thread 后立即进入统一接管事务。
+// handleCodexNewForRoute 创建 thread 后立即绑定当前 frontend。
 func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
 	conversationID := buildCodexConversationID(req.userID, req.agentName, req.workspaceRoot)
 	bindingKey := codexBindingKey(req.userID, req.agentName)
@@ -71,13 +71,13 @@ func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
 		return renderCodexSessionCreateFailure(result, err)
 	}
 	return h.renderCodexSessionAcquireResult(
-		result.acquireResult, "已创建并接管。", shortCodexWorkspaceName(req.workspaceRoot),
+		result.acquireResult, "已创建并绑定。", shortCodexWorkspaceName(req.workspaceRoot),
 	)
 }
 
 func (h *Handler) handleCodexSwitchForRouteWithOptions(req codexSwitchRequest) string {
 	if _, ok := req.agent.(agent.CodexLiveRuntimeAgent); !ok {
-		return "当前 Codex Agent 不支持选择即接管。"
+		return "当前 Codex Agent 不支持共享 app-server 会话绑定。"
 	}
 	route, err := h.resolveCodexSwitchRoute(req)
 	if err != nil {
@@ -116,14 +116,14 @@ func (req codexSwitchRequest) acquireRequest(route codexConversationRoute) codex
 	}
 }
 
-// renderCodexSessionAcquireSuccess 只在事务完整提交后宣告切换与接管成功。
+// renderCodexSessionAcquireSuccess 只在 frontend binding 已提交后宣告成功。
 func (h *Handler) renderCodexSessionAcquireSuccess(result codexSessionAcquireResult) string {
 	return h.renderCodexSessionAcquireResult(
-		result, "已切换并接管。", shortCodexWorkspaceName(result.route.workspaceRoot),
+		result, "已切换并绑定。", shortCodexWorkspaceName(result.route.workspaceRoot),
 	)
 }
 
-// renderCodexSessionAcquireResult 统一展示已提交事务的控制方、运行位置与观察状态。
+// renderCodexSessionAcquireResult 展示 frontend binding、共享 host 和观察状态。
 func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResult, headline string, workspaceName string) string {
 	lines := []string{headline, "工作空间: " + workspaceName}
 	modelStatus := codexResolutionModelStatus(
@@ -131,13 +131,13 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 	)
 	lines = append(lines, renderSessionModelStatus(modelStatus)...)
 	lines = append(lines,
-		"控制方: 当前远程窗口",
+		"窗口绑定: 当前消息窗口",
 		"运行位置: "+renderCodexRuntimeHolder(result.resolution.Binding.Runtime),
 	)
 	if result.runtimeErr != nil {
-		log.Printf("[codex-session-acquire] 所有权已提交但运行通道不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
+		log.Printf("[codex-session-bind] 绑定已提交但共享 host 暂不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
 		lines = append(lines,
-			"运行通道: 暂不可用（所有权已保留）",
+			"运行通道: 暂不可用（窗口绑定已保留）",
 			"普通消息暂不会写入；请稍后重试或发送 /cx status 查看状态。",
 		)
 	}
@@ -207,14 +207,4 @@ func (h *Handler) resolveCodexSwitchWorkspace(req codexSwitchTargetRequest) stri
 		return normalizeCodexWorkspaceRoot(localWorkspace)
 	}
 	return normalizeCodexWorkspaceRoot(req.workspaceRoot)
-}
-
-func isCodexThreadStoreReadError(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "thread-store internal error") ||
-		strings.Contains(text, "failed to read thread") ||
-		strings.Contains(text, "does not start with session metadata")
 }

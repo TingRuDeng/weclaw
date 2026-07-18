@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 var (
@@ -75,10 +76,33 @@ type CodexTurnRequest struct {
 type CodexTurnInterruptedError struct {
 	ThreadID string
 	TurnID   string
+
+	confirmOnce sync.Once
+	onConfirmed func()
 }
 
 func (e *CodexTurnInterruptedError) Error() string {
 	return fmt.Sprintf("Codex turn 已中断（thread=%s, turn=%s）", e.ThreadID, e.TurnID)
+}
+
+// ConfirmTerminal releases the fail-closed writer lease only after a watcher
+// has authoritative evidence that the interrupted turn reached a terminal
+// state. Errors created outside RunCodexTurn intentionally make this a no-op.
+func (e *CodexTurnInterruptedError) ConfirmTerminal() {
+	if e == nil {
+		return
+	}
+	e.confirmOnce.Do(func() {
+		if e.onConfirmed != nil {
+			e.onConfirmed()
+		}
+	})
+}
+
+func (e *CodexTurnInterruptedError) setTerminalConfirmation(confirm func()) {
+	if e != nil {
+		e.onConfirmed = confirm
+	}
 }
 
 type CodexThreadBinding struct {

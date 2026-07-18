@@ -13,10 +13,10 @@ func friendlyAgentError(err error) string {
 		return "当前窗口尚未绑定会话，请选择已有会话或发送 /new。"
 	}
 	if errors.Is(err, agent.ErrCodexDesktopDeliveryUnknown) {
-		return "Codex Desktop 连接在请求发送后中断，任务是否已开始暂时无法确认。当前窗口的远程所有权保持不变；请先发送 /cx status 确认状态，避免重复提交。"
+		return "共享 Codex 通道在请求发送后中断，任务是否已开始暂时无法确认。当前窗口绑定保持不变；请先发送 /cx status 确认状态，避免重复提交。"
 	}
 	if errors.Is(err, agent.ErrCodexDesktopDisconnected) {
-		return "Codex 运行通道暂不可用；当前窗口的远程所有权保持不变。请稍后重试，或发送 /cx status 查看状态。"
+		return "共享 Codex 运行通道暂不可用；当前窗口绑定保持不变。请稍后重试，或发送 /cx status 查看状态。"
 	}
 	raw := sanitizeAgentError(err.Error())
 	lower := strings.ToLower(raw)
@@ -34,7 +34,7 @@ func friendlyAgentError(err error) string {
 	}
 }
 
-func isCodexDesktopConnectionFailure(err error) bool {
+func isCodexBindingPreservingTransportFailure(err error) bool {
 	return errors.Is(err, agent.ErrCodexDesktopDeliveryUnknown) ||
 		errors.Is(err, agent.ErrCodexDesktopDisconnected)
 }

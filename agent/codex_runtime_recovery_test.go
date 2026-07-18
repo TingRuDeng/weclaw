@@ -127,11 +127,11 @@ func TestACPAgentRecoveryDoesNotFailDesktopWatchers(t *testing.T) {
 	}
 	select {
 	case event := <-appCh:
-		if event.Kind != "error" {
+		if event.Kind != "interrupted" {
 			t.Fatalf("app event=%#v", event)
 		}
 	default:
-		t.Fatal("app-server turn did not receive restart error")
+		t.Fatal("app-server turn did not receive restart interruption")
 	}
 }
 

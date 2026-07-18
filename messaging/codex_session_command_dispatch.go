@@ -29,17 +29,6 @@ type codexSessionCommandPreparation struct {
 	ready   bool
 }
 
-// acquireRequest 把 owner 兼容入口转换为统一选择接管事务输入。
-func (runtime codexSessionCommandRuntime) acquireRequest(threadID string) codexSessionAcquireRequest {
-	return codexSessionAcquireRequest{
-		ctx: runtime.ctx, taskContext: runtime.externalTaskCtx,
-		actorUserID: runtime.actorUserID, routeUserID: runtime.routeUserID,
-		agentName: runtime.agentName, agent: runtime.agent,
-		route: runtime.codexRoute(threadID), platform: runtime.req.Platform,
-		accountID: runtime.req.AccountID, reply: runtime.req.Reply,
-	}
-}
-
 // prepareCodexSessionCommand 解析路由并在同一绑定锁内准备命令运行状态。
 func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessionCommandRequest) codexSessionCommandPreparation {
 	actorUserID, routeUserID := normalizeCodexCommandUsers(req)
@@ -124,7 +113,7 @@ func (h *Handler) dispatchCodexNavigationCommand(runtime codexSessionCommandRunt
 	}
 }
 
-// dispatchCodexUtilityCommand 处理状态、配额和本地接管工具命令。
+// dispatchCodexUtilityCommand 处理状态、配额和兼容入口命令。
 func (h *Handler) dispatchCodexUtilityCommand(runtime codexSessionCommandRuntime) (navigationCommandResult, bool) {
 	fields := runtime.fields
 	switch fields[1] {
@@ -140,22 +129,24 @@ func (h *Handler) dispatchCodexUtilityCommand(runtime codexSessionCommandRuntime
 	case "clean":
 		return h.codexNoArgCommandResult(fields, "/cx clean", func() string { return h.handleCodexClean(runtime.bindingKey) })
 	case "app":
-		return h.codexNoArgCommandResult(fields, "/cx app", func() string {
-			return h.handleCodexOpenAppForRoute(runtime.ctx, runtime.actorUserID, runtime.routeUserID, runtime.agentName, runtime.agent)
-		})
+		return h.codexNoArgCommandResult(fields, "/cx app", func() string { return codexSingleHostEntryDisabled("app") })
 	case "cli":
-		return h.codexNoArgCommandResult(fields, "/cx cli", func() string {
-			return h.handleCodexCLIForRoute(runtime.ctx, runtime.actorUserID, runtime.routeUserID, runtime.agentName, runtime.agent)
-		})
+		return h.codexNoArgCommandResult(fields, "/cx cli", func() string { return codexSingleHostEntryDisabled("cli") })
 	case "attach":
-		return h.codexNoArgCommandResult(fields, "/cx attach", func() string {
-			return h.handleCodexAttachForRoute(runtime.ctx, runtime.actorUserID, runtime.routeUserID, runtime.agentName, runtime.agent)
-		})
+		return h.codexNoArgCommandResult(fields, "/cx attach", func() string { return codexSingleHostEntryDisabled("attach") })
 	case "detach":
-		return h.codexNoArgCommandResult(fields, "/cx detach", func() string { return h.handleCodexDetach(runtime.agent) })
+		return h.codexNoArgCommandResult(fields, "/cx detach", func() string { return codexSingleHostEntryDisabled("detach") })
 	default:
 		return navigationCommandResult{}, false
 	}
+}
+
+func codexSingleHostEntryDisabled(command string) string {
+	return wechatCommandText(
+		"/cx "+command+" 已停用。",
+		"Codex 现在由单一共享 app-server 执行；启动独立 App、CLI 或 Companion 会重新产生第二个 writer。",
+		"请使用 /cx ls、/cx new 和 /cx switch 管理共享会话。",
+	)
 }
 
 // codexNoArgCommandResult 统一校验无参数命令并返回纯文本结果。

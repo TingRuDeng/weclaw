@@ -7,7 +7,8 @@ import (
 )
 
 // replaceRemoteFirstTurnThread 原子替换已无法 materialize 的空 thread。
-// 只有当前 workspace 仍选中旧 thread 且同一路由持续持有 remote owner 时才允许执行。
+// 只有当前 workspace 仍选中旧 thread 时才允许执行；不同 frontend 的
+// bindings 彼此独立，不参与本次 CAS。
 func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 	bindingKey string,
 	workspaceRoot string,
@@ -37,18 +38,7 @@ func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 	if !ok || strings.TrimSpace(currentSession.ThreadID) != oldThreadID {
 		return errCodexRemoteSelectionChanged
 	}
-	oldIntent := s.controls[oldThreadID]
-	if oldIntent.Owner != codexControlRemote || oldIntent.RouteBindingKey != bindingKey ||
-		oldIntent.ConversationID != conversationID {
-		return errCodexRemoteSelectionChanged
-	}
-	if existing, exists := s.controls[newThreadID]; exists && existing.Owner == codexControlRemote &&
-		(existing.RouteBindingKey != bindingKey || existing.ConversationID != conversationID) {
-		return errCodexRemoteSelectionOtherRoute
-	}
-
 	nextBindings := cloneCodexSessionBindings(s.bindings)
-	nextControls := cloneCodexControlIntents(s.controls)
 	now := time.Now().UTC()
 	binding := nextBindings[bindingKey]
 	for root, session := range binding.Workspaces {
@@ -68,20 +58,13 @@ func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 	binding.Workspaces[workspaceRoot] = currentSession
 	nextBindings[bindingKey] = binding
 
-	nextControls[oldThreadID] = codexControlIntent{
-		Owner: codexControlDesktop, Revision: oldIntent.Revision + 1,
-		UpdatedAt: now.Format(time.RFC3339Nano),
-	}
-	oldIntent.UpdatedAt = now.Format(time.RFC3339Nano)
-	nextControls[newThreadID] = oldIntent
-
 	state := codexSessionState{
-		Version: codexSessionStateVersion, Bindings: nextBindings, Controls: nextControls,
+		Version: codexSessionStateVersion, Bindings: nextBindings,
 		Updated: now.Format(time.RFC3339),
 	}
 	if err := s.persistCandidate(s.filePath, state); err != nil {
 		return fmt.Errorf("保存 Codex 首次写入 thread 替换: %w", err)
 	}
-	s.bindings, s.controls = nextBindings, nextControls
+	s.bindings = nextBindings
 	return nil
 }

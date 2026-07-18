@@ -119,8 +119,8 @@ func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
 	}
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "error" || !strings.Contains(evt.Text, "ACP runtime exited") {
-			t.Fatalf("turn event=%#v, want runtime exit error", evt)
+		if evt.Kind != "interrupted" || !strings.Contains(evt.Text, "ACP runtime exited") {
+			t.Fatalf("turn event=%#v, want runtime observation interrupted", evt)
 		}
 	default:
 		t.Fatal("active turn did not receive runtime exit error")

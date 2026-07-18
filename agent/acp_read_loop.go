@@ -170,7 +170,7 @@ func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner) {
 	}
 	a.mu.Unlock()
 	if currentScanner {
-		a.failRuntimeWaiters(exitReason)
+		a.failRuntimeWaitersUncertain(exitReason)
 	}
 }
 
@@ -198,6 +198,15 @@ func (a *ACPAgent) failRuntimeWaiters(reason string) {
 	a.failActiveTurns(reason)
 }
 
+// failRuntimeWaitersUncertain wakes turn observers before pending RPCs. A
+// turn/start request may already have reached the shared app-server even when
+// its response was lost, so the observer must enter reconciliation instead of
+// reporting a confirmed failure and releasing the writer lease.
+func (a *ACPAgent) failRuntimeWaitersUncertain(reason string) {
+	a.interruptActiveTurns(reason)
+	a.failPendingRequests(reason)
+}
+
 func (a *ACPAgent) failPendingRequests(reason string) {
 	resp := &rpcResponse{
 		Error: &rpcError{Code: -32000, Message: reason},
@@ -221,6 +230,34 @@ func (a *ACPAgent) failPendingRequests(reason string) {
 
 func (a *ACPAgent) failActiveTurns(reason string) {
 	evt := &codexTurnEvent{Kind: "error", Text: reason}
+	a.dispatchActiveTurnControlEvent(evt)
+}
+
+func (a *ACPAgent) interruptActiveTurns(reason string) {
+	type turnTarget struct {
+		channel chan *codexTurnEvent
+		turnID  string
+	}
+	a.notifyMu.Lock()
+	targets := make([]turnTarget, 0, len(a.turnCh))
+	for threadID, channel := range a.turnCh {
+		turnID := ""
+		if a.codexOwners != nil {
+			if binding, ok := a.codexOwners.threadBinding(threadID); ok {
+				turnID = binding.State.ActiveTurnID
+			}
+		}
+		targets = append(targets, turnTarget{channel: channel, turnID: turnID})
+	}
+	a.notifyMu.Unlock()
+	for _, target := range targets {
+		dispatchCodexTurnControlEvent(target.channel, &codexTurnEvent{
+			Kind: "interrupted", TurnID: target.turnID, Text: reason,
+		})
+	}
+}
+
+func (a *ACPAgent) dispatchActiveTurnControlEvent(evt *codexTurnEvent) {
 	a.notifyMu.Lock()
 	channels := make([]chan *codexTurnEvent, 0, len(a.turnCh))
 	for _, ch := range a.turnCh {

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestCodexDesktopDisconnectRebootsRolloutFromCurrentTail(t *testing.T) {
+func TestCodexRuntimeDisconnectRebootsRolloutFromCurrentTail(t *testing.T) {
 	h, path := activeRolloutHandoffFixture(t)
 	before, _ := os.Stat(path)
 	appendCodexRolloutRecord(t, path, rolloutProgressRecord("断线期间的新进展"))
@@ -21,14 +21,14 @@ func TestCodexDesktopDisconnectRebootsRolloutFromCurrentTail(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopProgressSurvivesRolloutHandoff(t *testing.T) {
+func TestCodexRuntimeProgressSurvivesRolloutHandoff(t *testing.T) {
 	h, path := activeRolloutHandoffFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	progress := make(chan string, 2)
 	result := make(chan codexExternalWatchResult, 1)
 	go func() {
-		result <- h.watchCodexAfterDesktopDisconnect(ctx, externalCodexWatchRequest{
+		result <- h.watchCodexAfterRuntimeDisconnect(ctx, externalCodexWatchRequest{
 			threadID: "thread-1", turnID: "turn-1", onProgress: func(text string) { progress <- text },
 		})
 	}()
@@ -46,7 +46,7 @@ func TestCodexDesktopProgressSurvivesRolloutHandoff(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopTerminalDeliveredOnce(t *testing.T) {
+func TestCodexRuntimeTerminalDeliveredOnce(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{})
 	_, _, first := h.claimAndCompleteActiveTask("task-1", task)
@@ -56,7 +56,7 @@ func TestCodexDesktopTerminalDeliveredOnce(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopTerminalReturnsPendingGuide(t *testing.T) {
+func TestCodexRuntimeTerminalReturnsPendingGuide(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{})
 	if ok := h.storePendingGuide("task-1", pendingAgentTask{message: "继续", run: func() {}}); !ok {
@@ -84,7 +84,7 @@ func TestCodexRolloutTurnReplacementEndsSupervisor(t *testing.T) {
 	defer cancel()
 	result := make(chan codexExternalWatchResult, 1)
 	go func() {
-		result <- h.watchCodexAfterDesktopDisconnect(ctx, externalCodexWatchRequest{
+		result <- h.watchCodexAfterRuntimeDisconnect(ctx, externalCodexWatchRequest{
 			threadID: "thread-1", turnID: "turn-1",
 		})
 	}()

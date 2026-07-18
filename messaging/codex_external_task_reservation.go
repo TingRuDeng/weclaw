@@ -49,10 +49,10 @@ func (h *Handler) prepareExternalCodexTask(opts externalCodexTaskOptions) (prepa
 		}, resolved.err
 	}
 	if resolved.state.ActiveTurnID == "" {
-		return preparedExternalCodexTask{}, fmt.Errorf("Codex App thread 处于 active 状态，但未找到 active turn")
+		return preparedExternalCodexTask{}, fmt.Errorf("共享 Codex thread 处于 active 状态，但未找到 active turn")
 	}
 	if opts.reply == nil {
-		return preparedExternalCodexTask{}, fmt.Errorf("Codex App thread 正在运行，但当前入口无法接管回推")
+		return preparedExternalCodexTask{}, fmt.Errorf("共享 Codex thread 正在运行，但当前入口无法登记回推")
 	}
 	return preparedExternalCodexTask{
 		state: resolved.state, watch: resolved.watch, active: true,
@@ -82,7 +82,7 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 	runtimeOwner, ownerRevision := externalCodexTaskOwner(prepared.state)
 	task, watchCtx := newActiveAgentTask(taskCtx, activeTaskMeta{
 		owner: opts.actorUserID, routeUserID: opts.routeUserID, agentName: opts.agentName,
-		message:      firstNonBlank(prepared.state.Preview, "Codex App 本地任务"),
+		message:      firstNonBlank(prepared.state.Preview, "共享 Codex 任务"),
 		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
 		codexThreadID: opts.threadID, codexTurnID: prepared.state.ActiveTurnID,
 	})

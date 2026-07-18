@@ -52,7 +52,7 @@ func (r codexRolloutWatchResult) finalText() (string, error) {
 	if r.aborted {
 		return "", fmt.Errorf("%w: %s", errCodexRolloutAborted, firstNonBlank(r.reason, "interrupted"))
 	}
-	return firstNonBlank(r.final, "Codex App 本地任务已完成，但没有返回文本。"), nil
+	return firstNonBlank(r.final, "共享 Codex 任务已完成，但没有返回文本。"), nil
 }
 
 // readCodexRolloutTaskDelta 读取本轮新增事件，并且只接受目标 turn 的终态。

@@ -14,15 +14,23 @@ type codexSessionStore struct {
 	saveMu     sync.Mutex
 	filePath   string
 	bindings   map[string]codexSessionBinding
-	controls   map[string]codexControlIntent
 	writeState codexSessionStateWriter
 }
 
 type codexSessionState struct {
 	Version  int                            `json:"version"`
 	Bindings map[string]codexSessionBinding `json:"bindings"`
-	Controls map[string]codexControlIntent  `json:"controls,omitempty"`
-	Updated  string                         `json:"updated"`
+	// Controls is read only to migrate v1-v3 state. v4 never writes it.
+	Controls map[string]legacyCodexControlIntent `json:"controls,omitempty"`
+	Updated  string                              `json:"updated"`
+}
+
+type legacyCodexControlIntent struct {
+	Owner           string `json:"owner"`
+	RouteBindingKey string `json:"routeBindingKey,omitempty"`
+	ConversationID  string `json:"conversationId,omitempty"`
+	Revision        uint64 `json:"revision"`
+	UpdatedAt       string `json:"updatedAt,omitempty"`
 }
 
 type codexSessionBinding struct {
@@ -39,12 +47,13 @@ type codexWorkspaceSession struct {
 
 const legacyBindingDefaultPlatform = "wechat"
 
-const codexSessionStateVersion = 3
+// v4 persists frontend bindings only. Codex writer authority belongs to the
+// single app-server and is no longer assigned to an individual message route.
+const codexSessionStateVersion = 4
 
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
 		bindings:   make(map[string]codexSessionBinding),
-		controls:   make(map[string]codexControlIntent),
 		writeState: writeCodexSessionStateFile,
 	}
 }

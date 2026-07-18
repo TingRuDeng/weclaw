@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -13,11 +14,20 @@ type codexLeasedTurnOptions struct {
 
 // RunCodexTurn 使用已建立的 runtime 绑定并持有 writer lease，直到 turn 到达终态。
 func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (string, error) {
-	binding, err := a.CurrentCodexRuntime(req.Runtime)
+	var binding CodexThreadBinding
+	var err error
+	if a.desktopProbe == nil {
+		// Every frontend conversation has its own app-server mapping. Rebind on
+		// each admitted turn so a binding created while another client held the
+		// thread lease cannot accidentally reuse a stale conversation mapping.
+		binding, err = a.activateSharedCodexHost(ctx, req.Runtime)
+	} else {
+		binding, err = a.CurrentCodexRuntime(req.Runtime)
+	}
 	if err != nil {
 		return "", err
 	}
-	if binding.Runtime == CodexRuntimeUnknown || binding.Runtime == CodexRuntimeConflict {
+	if a.desktopProbe != nil && (binding.Runtime == CodexRuntimeUnknown || binding.Runtime == CodexRuntimeConflict) {
 		binding, err = a.HandoffCodexRuntime(ctx, req.Runtime)
 		if err != nil {
 			req, binding, err = a.replaceMissingFirstTurnThread(ctx, req, err)
@@ -30,7 +40,12 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 	if err != nil {
 		return "", err
 	}
-	defer lease.finish()
+	retainLease := false
+	defer func() {
+		if !retainLease {
+			lease.finish()
+		}
+	}()
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go cancelCodexTurnOnConflict(turnCtx, cancel, lease.conflictSignal())
@@ -40,6 +55,12 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 	})
 	if leaseErr := lease.check(); leaseErr != nil {
 		return "", leaseErr
+	}
+	var interrupted *CodexTurnInterruptedError
+	if errors.As(runErr, &interrupted) {
+		lease.markUncertain()
+		interrupted.setTerminalConfirmation(lease.finish)
+		retainLease = true
 	}
 	return reply, runErr
 }
@@ -85,6 +106,12 @@ func (a *ACPAgent) runCodexTurnWithLease(ctx context.Context, opts codexLeasedTu
 			return req.OnTurnStarted(req.Runtime.Ref, turnID)
 		}
 		return nil
+	}
+	if a.desktopProbe == nil {
+		return a.chatCodexAppServerControlledTurn(codexAppServerTurnOptions{
+			ctx: ctx, conversationID: req.Runtime.Ref.ConversationID,
+			message: req.Message, onProgress: req.OnProgress, onStarted: onStarted,
+		})
 	}
 	switch opts.binding.Runtime {
 	case CodexRuntimeDesktop:

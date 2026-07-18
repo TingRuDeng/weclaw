@@ -124,7 +124,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	writeLocalCodexSession(t, codexDir, "thread-recorded", recordedWorkspace, "重复会话", "2026-04-29T08:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-local", localWorkspace, "桌面本机会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": recordedWorkspace})
@@ -152,7 +152,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	appendLocalCodexTurnContext(t, codexDir, "thread-desktop", "gpt-old", "low")
 	appendLocalCodexTurnContext(t, codexDir, "thread-desktop", "gpt-5.5", "high")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 
@@ -161,10 +161,6 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(110, "/cx switch 0"))
 
-	intent := h.codexSessions.controlIntent("thread-desktop")
-	if ag.useThreadID != "" || intent.Owner != codexControlRemote {
-		t.Fatalf("use=%q intent=%#v", ag.useThreadID, intent)
-	}
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
@@ -172,7 +168,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	if thread != "thread-desktop" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-desktop false", thread, pending)
 	}
-	if !containsText(calls.texts(), "已切换并接管") {
+	if !containsText(calls.texts(), "已切换并绑定") {
 		t.Fatalf("reply should mention switched session, messages=%#v", calls.texts())
 	}
 	text := strings.Join(calls.texts(), "\n")
@@ -188,7 +184,7 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	localWorkspace := filepath.Join(t.TempDir(), "desktop")
 	writeLocalCodexSession(t, codexDir, "thread-bad", localWorkspace, "桌面会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.handoffErrors["thread-bad"] = fmt.Errorf("探测失败")
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
@@ -196,10 +192,6 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	bindingKey := codexBindingKey("user-1", "codex")
 	h.codexSessions.setThread(bindingKey, currentWorkspace, "thread-current")
 	h.codexSessions.setActiveWorkspace(bindingKey, currentWorkspace)
-	claimRemoteControlForTest(t, h, fakeRemoteControlOptions{
-		routeUserID: "user-1", agentName: "codex", bindingKey: bindingKey,
-		workspace: currentWorkspace, threadID: "thread-current",
-	})
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -207,17 +199,14 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch thread-bad"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已切换并接管") || strings.Contains(text, "运行通道: 暂不可用") {
-		t.Fatalf("reply should report committed ownership without a false conflict, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已切换并绑定") || !strings.Contains(text, "运行通道: 暂不可用") {
+		t.Fatalf("reply should preserve binding while reporting runtime failure, messages=%#v", calls.texts())
 	}
 	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
 	currentThread, _ := h.codexSessions.getThread(bindingKey, currentWorkspace)
 	targetThread, pending := h.codexSessions.getThread(bindingKey, localWorkspace)
-	currentIntent := h.codexSessions.controlIntent("thread-current")
-	targetIntent := h.codexSessions.controlIntent("thread-bad")
-	if active != localWorkspace || currentThread != "thread-current" || targetThread != "thread-bad" || pending ||
-		currentIntent.Owner != codexControlDesktop || targetIntent.Owner != codexControlRemote {
-		t.Fatalf("active=%q current=%q target=%q pending=%t intents=(%#v,%#v)", active, currentThread, targetThread, pending, currentIntent, targetIntent)
+	if active != localWorkspace || currentThread != "thread-current" || targetThread != "thread-bad" || pending {
+		t.Fatalf("active=%q current=%q target=%q pending=%t", active, currentThread, targetThread, pending)
 	}
 }
 

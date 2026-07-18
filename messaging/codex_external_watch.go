@@ -21,6 +21,8 @@ type codexExternalWatchResult struct {
 
 type externalCodexWatchRequest struct {
 	agent          agent.Agent
+	routeUserID    string
+	agentName      string
 	conversationID string
 	threadID       string
 	turnID         string
@@ -28,10 +30,10 @@ type externalCodexWatchRequest struct {
 	onProgress     func(string)
 }
 
-// superviseExternalCodexWatch 把 Desktop 断线切换为 rollout/reconnect 观察。
+// superviseExternalCodexWatch 把当前客户端断线切换为 rollout/reconnect 观察。
 func (h *Handler) superviseExternalCodexWatch(runtime externalCodexTaskRuntime, onProgress func(string)) codexExternalWatchResult {
 	text, err := runtime.watch(runtime.ctx, onProgress)
-	source := "desktop"
+	source := "runtime"
 	if !runtime.state.Controllable {
 		source = "rollout"
 	}
@@ -40,15 +42,16 @@ func (h *Handler) superviseExternalCodexWatch(runtime externalCodexTaskRuntime, 
 		return result
 	}
 	runtime.task.markCodexDisconnected()
-	return h.watchCodexAfterDesktopDisconnect(runtime.ctx, externalCodexWatchRequest{
-		agent: runtime.opts.agent, conversationID: runtime.opts.conversationID,
+	return h.watchCodexAfterRuntimeDisconnect(runtime.ctx, externalCodexWatchRequest{
+		agent: runtime.opts.agent, routeUserID: runtime.opts.routeUserID,
+		agentName: runtime.opts.agentName, conversationID: runtime.opts.conversationID,
 		threadID: runtime.opts.threadID, turnID: runtime.state.ActiveTurnID,
 		task: runtime.task, onProgress: onProgress,
 	})
 }
 
-// watchCodexAfterDesktopDisconnect 从最新 rollout 尾部或重连 Desktop 接续观察。
-func (h *Handler) watchCodexAfterDesktopDisconnect(ctx context.Context, req externalCodexWatchRequest) codexExternalWatchResult {
+// watchCodexAfterRuntimeDisconnect 从最新 rollout 尾部或重连共享 app-server 接续观察。
+func (h *Handler) watchCodexAfterRuntimeDisconnect(ctx context.Context, req externalCodexWatchRequest) codexExternalWatchResult {
 	ticker := time.NewTicker(codexRolloutPollInterval)
 	defer ticker.Stop()
 	for {
@@ -68,7 +71,7 @@ func (h *Handler) watchCodexAfterDesktopDisconnect(ctx context.Context, req exte
 				return result
 			}
 		}
-		if result, reconnected := h.watchReconnectedCodexDesktop(ctx, req); reconnected {
+		if result, reconnected := h.watchReconnectedCodexRuntime(ctx, req); reconnected {
 			if result.Terminal {
 				return result
 			}
@@ -84,7 +87,7 @@ func (h *Handler) watchCodexAfterDesktopDisconnect(ctx context.Context, req exte
 	}
 }
 
-// watchRolloutOrReconnect 竞争 rollout 终态与重新探测到的 Desktop 连接。
+// watchRolloutOrReconnect 竞争 rollout 终态与重新连上的共享 app-server 客户端。
 func (h *Handler) watchRolloutOrReconnect(ctx context.Context, req externalCodexWatchRequest, state codexRolloutTaskState) (codexExternalWatchResult, bool) {
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -100,7 +103,7 @@ func (h *Handler) watchRolloutOrReconnect(ctx context.Context, req externalCodex
 		case result := <-resultCh:
 			return result, result.Terminal
 		case <-ticker.C:
-			if _, reconnected, probeErr := h.currentCodexDesktopBinding(ctx, req); reconnected || isCodexRuntimeConflict(probeErr) {
+			if _, reconnected, probeErr := h.currentCodexSharedHostBinding(ctx, req); reconnected || isCodexRuntimeConflict(probeErr) {
 				cancel()
 				rolloutResult := <-resultCh
 				if rolloutResult.Terminal {
@@ -109,7 +112,7 @@ func (h *Handler) watchRolloutOrReconnect(ctx context.Context, req externalCodex
 				if probeErr != nil {
 					return failedCodexRuntimeWatch(probeErr), true
 				}
-				result, _ := h.watchReconnectedCodexDesktop(ctx, req)
+				result, _ := h.watchReconnectedCodexRuntime(ctx, req)
 				return result, result.Terminal
 			}
 		case <-ctx.Done():
@@ -136,14 +139,14 @@ func terminalCodexRolloutState(state codexRolloutTaskState) codexExternalWatchRe
 		return codexExternalWatchResult{Err: err, Terminal: true, ConfirmedTerminal: true, Failed: true, Source: "rollout"}
 	}
 	return codexExternalWatchResult{
-		Final:    firstNonBlank(state.Final, "Codex App 本地任务已完成，但没有返回文本。"),
+		Final:    firstNonBlank(state.Final, "共享 Codex 任务已完成，但没有返回文本。"),
 		Terminal: true, ConfirmedTerminal: true, Source: "rollout",
 	}
 }
 
-// watchReconnectedCodexDesktop 在重新探测确认后接续 Desktop 观察流。
-func (h *Handler) watchReconnectedCodexDesktop(ctx context.Context, req externalCodexWatchRequest) (codexExternalWatchResult, bool) {
-	binding, reconnected, probeErr := h.currentCodexDesktopBinding(ctx, req)
+// watchReconnectedCodexRuntime reconnects this frontend to the shared app-server.
+func (h *Handler) watchReconnectedCodexRuntime(ctx context.Context, req externalCodexWatchRequest) (codexExternalWatchResult, bool) {
+	binding, reconnected, probeErr := h.currentCodexSharedHostBinding(ctx, req)
 	if isCodexRuntimeConflict(probeErr) {
 		return failedCodexRuntimeWatch(probeErr), true
 	}
@@ -155,24 +158,28 @@ func (h *Handler) watchReconnectedCodexDesktop(ctx context.Context, req external
 		req.task.markCodexRunning(binding)
 	}
 	text, err := runtimeAgent.WatchCodexThread(ctx, req.conversationID, req.threadID, req.onProgress)
-	return classifyCodexWatchResult(text, err, "desktop"), true
+	return classifyCodexWatchResult(text, err, "runtime"), true
 }
 
-// currentCodexDesktopBinding 每次重新探测 Desktop，避免把旧连接缓存当成重连事实。
-func (h *Handler) currentCodexDesktopBinding(ctx context.Context, req externalCodexWatchRequest) (agent.CodexThreadBinding, bool, error) {
+// currentCodexSharedHostBinding refreshes authoritative shared-host state instead
+// of inferring availability from a stale frontend cache.
+func (h *Handler) currentCodexSharedHostBinding(ctx context.Context, req externalCodexWatchRequest) (agent.CodexThreadBinding, bool, error) {
 	liveAgent, ok := req.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
 		return agent.CodexThreadBinding{}, false, nil
 	}
 	unlock := h.lockCodexThreadControl(req.threadID)
 	defer unlock()
-	intent := h.ensureCodexSessions().controlIntent(req.threadID)
+	route := codexConversationRoute{
+		bindingKey:     codexBindingKey(req.routeUserID, req.agentName),
+		conversationID: req.conversationID,
+	}
 	request := agent.CodexRuntimeRequest{
 		Ref:    agent.CodexThreadRef{ConversationID: req.conversationID, ThreadID: req.threadID},
-		Intent: agentControlIntent(intent),
+		Intent: codexSharedHostIntent(route),
 	}
 	binding, err := liveAgent.InspectCodexRuntime(ctx, request)
-	return binding, err == nil && binding.Runtime == agent.CodexRuntimeDesktop, err
+	return binding, err == nil && binding.Runtime == agent.CodexRuntimeWeClaw, err
 }
 
 // isCodexRuntimeConflict 只把显式双写冲突视为观察终态。

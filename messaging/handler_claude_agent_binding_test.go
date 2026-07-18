@@ -141,7 +141,7 @@ func TestCodexSessionSwitchBindsWindowToCodex(t *testing.T) {
 
 func TestCodexSessionNewBindsWindowToCodex(t *testing.T) {
 	workspace := t.TempDir()
-	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeDesktop, agent.CodexThreadState{})
+	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
 	h := NewHandler(nil, nil)
 	if err := h.ensureAgentSessions().Set("user-1", "claude"); err != nil {
