@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -198,6 +200,23 @@ func TestACPAgentStopFailsPendingRequestsAndActiveTurns(t *testing.T) {
 		}
 	default:
 		t.Fatal("active turn was not failed by Stop")
+	}
+}
+
+func TestConfigureACPProcessSetsProcessGroupAndGracefulCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no process group on windows")
+	}
+	cmd := exec.Command("true")
+	configureACPProcess(cmd)
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+		t.Fatal("expected Setpgid to be enabled for ACP process")
+	}
+	if cmd.Cancel == nil {
+		t.Fatal("expected graceful Cancel to be set")
+	}
+	if cmd.WaitDelay != acpKillGrace {
+		t.Fatalf("expected WaitDelay=%s, got %s", acpKillGrace, cmd.WaitDelay)
 	}
 }
 

@@ -149,6 +149,16 @@ func TestApprovalHandlerYoloAutoApproves(t *testing.T) {
 	}
 }
 
+func TestAutoApproveApprovalOptionRequiresExplicitAllow(t *testing.T) {
+	options := []agent.ApprovalOption{
+		{ID: "deny-1", Kind: "deny"},
+		{ID: "cancel-1", Kind: "cancel"},
+	}
+	if got := autoApproveApprovalOption(options); got != "" {
+		t.Fatalf("autoApproveApprovalOption=%q, want empty without allow option", got)
+	}
+}
+
 // TestApprovalHandlerReadsRouteMode 验证审批只读取任务所属窗口的模式。
 func TestApprovalHandlerReadsRouteMode(t *testing.T) {
 	h := NewHandler(nil, nil)

@@ -216,6 +216,13 @@ func TestWriteRuntimeStatePersistsExecutableIdentity(t *testing.T) {
 	if state.PID != 1234 || state.Exe != "/tmp/weclaw" || state.Mode != "foreground" {
 		t.Fatalf("state=%+v, want persisted pid/exe/mode", state)
 	}
+	info, err := os.Stat(pidFile())
+	if err != nil {
+		t.Fatalf("stat runtime state: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("runtime state mode=%#o, want 0600", got)
+	}
 }
 
 func TestAcquireRuntimeLockRejectsSecondHolder(t *testing.T) {

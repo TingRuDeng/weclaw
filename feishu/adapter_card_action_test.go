@@ -117,8 +117,8 @@ func TestHandleCardActionEventUsesEventIDForRepeatedNavigation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(messageIDs) != 3 || messageIDs[0] == messageIDs[1] || messageIDs[1] != messageIDs[2] {
-		t.Fatalf("messageIDs=%#v，不同点击必须区分，同一事件重投必须保持幂等", messageIDs)
+	if len(messageIDs) != 2 || messageIDs[0] == messageIDs[1] {
+		t.Fatalf("messageIDs=%#v，不同点击必须区分，同一事件重投不得重复分发", messageIDs)
 	}
 }
 

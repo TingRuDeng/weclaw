@@ -103,7 +103,7 @@ func (a *Adapter) approvalActionExpired(ctx context.Context, resultCh <-chan pla
 func approvalActionOwnedByUser(action parsedCardAction) bool {
 	owner := strings.TrimSpace(action.Owner)
 	if owner == "" {
-		return true
+		return false
 	}
 	return owner == strings.TrimSpace(action.UserID)
 }

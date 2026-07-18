@@ -91,15 +91,12 @@ func (h *Handler) isYoloMode(modeKey string) bool {
 	return ok
 }
 
-// autoApproveApprovalOption 在 yolo 模式下选择允许类选项；没有显式 allow 时退回首个选项。
+// autoApproveApprovalOption 在 yolo 模式下只选择显式允许项，避免把拒绝/取消误当作自动同意。
 func autoApproveApprovalOption(options []agent.ApprovalOption) string {
 	for _, option := range options {
 		if option.Kind == "allow" && strings.TrimSpace(option.ID) != "" {
 			return option.ID
 		}
-	}
-	if len(options) > 0 {
-		return options[0].ID
 	}
 	return ""
 }

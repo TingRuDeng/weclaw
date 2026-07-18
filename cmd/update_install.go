@@ -12,6 +12,7 @@ import (
 )
 
 const maxUpdateDownloadBytes = 128 * 1024 * 1024
+const maxSymlinkDepth = 40
 
 var updateHTTPClient = &http.Client{Timeout: updateHTTPTimeout}
 
@@ -138,15 +139,33 @@ func sudoStageAndReplaceBinary(src string, dst string) error {
 }
 
 func resolveSymlink(path string) (string, error) {
-	for {
+	seen := make(map[string]struct{}, maxSymlinkDepth)
+	for depth := 0; depth < maxSymlinkDepth; depth++ {
+		if _, ok := seen[path]; ok {
+			return "", fmt.Errorf("resolve symlink %s: cycle detected", path)
+		}
+		seen[path] = struct{}{}
 		target, err := os.Readlink(path)
 		if err != nil {
-			return path, nil
+			if isReadlinkNonSymlink(err) {
+				return path, nil
+			}
+			return "", err
 		}
 		if !strings.HasPrefix(target, "/") {
-			dir := path[:strings.LastIndex(path, "/")+1]
-			target = dir + target
+			target = filepath.Join(filepath.Dir(path), target)
 		}
+		target = filepath.Clean(target)
 		path = target
 	}
+	return "", fmt.Errorf("resolve symlink %s: exceeded max depth %d", path, maxSymlinkDepth)
+}
+
+func isReadlinkNonSymlink(err error) bool {
+	pathErr, ok := err.(*os.PathError)
+	if !ok || pathErr.Err == nil {
+		return false
+	}
+	detail := strings.ToLower(pathErr.Err.Error())
+	return strings.Contains(detail, "invalid argument") || strings.Contains(detail, "not a symbolic link")
 }

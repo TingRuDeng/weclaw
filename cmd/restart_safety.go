@@ -100,23 +100,46 @@ func runtimeStatusURL(apiAddr string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		parsed.Host = loopbackDialAddr(parsed.Host)
+		host, err := loopbackDialAddr(parsed.Host)
+		if err != nil {
+			return "", err
+		}
+		parsed.Host = host
 		parsed.Path = "/api/runtime"
 		parsed.RawQuery = ""
 		return parsed.String(), nil
 	}
-	return "http://" + loopbackDialAddr(addr) + "/api/runtime", nil
+	host, err := loopbackDialAddr(addr)
+	if err != nil {
+		return "", err
+	}
+	return "http://" + host + "/api/runtime", nil
 }
 
-func loopbackDialAddr(addr string) string {
+func loopbackDialAddr(addr string) (string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return addr
+		if isRuntimeLoopbackHost(addr) {
+			return addr, nil
+		}
+		return "", fmt.Errorf("runtime API address %q is not loopback", addr)
 	}
 	switch strings.Trim(host, "[]") {
 	case "", "0.0.0.0", "::":
-		return net.JoinHostPort("127.0.0.1", port)
+		return net.JoinHostPort("127.0.0.1", port), nil
 	default:
-		return addr
+		if isRuntimeLoopbackHost(host) {
+			return addr, nil
+		}
+		return "", fmt.Errorf("runtime API address %q is not loopback", addr)
 	}
+}
+
+func isRuntimeLoopbackHost(host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

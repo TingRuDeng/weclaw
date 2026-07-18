@@ -247,11 +247,12 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 			Operator: &callback.Operator{OpenID: "ou_user"},
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
-				"action":  cardActionChoice,
-				"choice":  "allow",
-				"kind":    "approval",
-				"label":   "允许本次",
-				"summary": "command: date\ncwd: /tmp/work",
+				"action":         cardActionChoice,
+				"choice":         "allow",
+				"kind":           "approval",
+				"label":          "允许本次",
+				"summary":        "command: date\ncwd: /tmp/work",
+				"approval_owner": "ou_user",
 			}},
 		},
 	}

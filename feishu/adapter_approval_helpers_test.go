@@ -9,12 +9,13 @@ import (
 
 func approvalCardActionEvent(choice string, label string, taskCardID string) *callback.CardActionTriggerEvent {
 	value := map[string]interface{}{
-		"action":       cardActionChoice,
-		"choice":       choice,
-		"kind":         cardKindApproval,
-		"label":        label,
-		"summary":      "command: date",
-		"approval_key": "approval-key-1",
+		"action":         cardActionChoice,
+		"choice":         choice,
+		"kind":           cardKindApproval,
+		"label":          label,
+		"summary":        "command: date",
+		"approval_key":   "approval-key-1",
+		"approval_owner": "ou_user",
 	}
 	if taskCardID != "" {
 		value["task_card_id"] = taskCardID

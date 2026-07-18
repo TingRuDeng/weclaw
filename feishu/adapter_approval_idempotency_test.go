@@ -153,7 +153,9 @@ func TestHandleCardActionEventCrossUserSameApprovalKeyDispatchesOnce(t *testing.
 	}
 
 	assertApprovalCardContent(t, first, "✅ 已授权", "允许本次")
-	assertApprovalCardContent(t, second, "✅ 已授权", "允许本次")
+	if second == nil || second.Toast == nil || !strings.Contains(second.Toast.Content, "任务发起人") {
+		t.Fatalf("second response=%#v, want owner-only warning toast", second)
+	}
 	select {
 	case msg := <-dispatched:
 		if msg.UserID != "ou_user" || msg.RawCommand.Value["choice"] != "allow" {
@@ -206,6 +208,29 @@ func TestHandleCardActionEventNonOwnerDoesNotConsumeApproval(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for owner dispatch")
+	}
+}
+
+func TestHandleCardActionEventRejectsApprovalWithoutOwner(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := approvalCardActionEvent("allow", "允许本次", "")
+	delete(event.Event.Action.Value, "approval_owner")
+	dispatched := make(chan platform.IncomingMessage, 1)
+	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+	}
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, dispatch)
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Toast == nil || !strings.Contains(resp.Toast.Content, "任务发起人") {
+		t.Fatalf("response=%#v, want owner-only warning toast", resp)
+	}
+	select {
+	case msg := <-dispatched:
+		t.Fatalf("ownerless approval dispatched: %#v", msg)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
