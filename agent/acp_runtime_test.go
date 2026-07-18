@@ -284,15 +284,48 @@ func TestHelperCodexAppServer(t *testing.T) {
 	encoder := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
 		var req struct {
-			ID     *int64 `json:"id,omitempty"`
-			Method string `json:"method"`
+			ID     *int64          `json:"id,omitempty"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params,omitempty"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil || req.ID == nil {
 			continue
 		}
 		result := map[string]interface{}{}
-		if req.Method == "thread/start" {
+		switch req.Method {
+		case "thread/start":
 			result = map[string]interface{}{"thread": map[string]string{"id": testCodexThreadID}}
+		case "thread/resume":
+			threadID := testCodexThreadID
+			var params struct {
+				ThreadID string `json:"threadId"`
+			}
+			if err := json.Unmarshal(req.Params, &params); err == nil && params.ThreadID != "" {
+				threadID = params.ThreadID
+			}
+			result = map[string]interface{}{"thread": map[string]string{"id": threadID}}
+		case "turn/start":
+			threadID := testCodexThreadID
+			var params struct {
+				ThreadID string `json:"threadId"`
+			}
+			if err := json.Unmarshal(req.Params, &params); err == nil && params.ThreadID != "" {
+				threadID = params.ThreadID
+			}
+			_ = encoder.Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"method":  "item/agentMessage/delta",
+				"params":  map[string]string{"threadId": threadID, "itemId": "item-1", "delta": "ok"},
+			})
+			_ = encoder.Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"method":  "turn/completed",
+				"params": map[string]interface{}{
+					"threadId": threadID,
+					"turn":     map[string]string{"id": "turn-1", "status": "completed"},
+				},
+			})
+			result = map[string]interface{}{"turn": map[string]string{"id": "turn-1"}}
 		}
 		_ = encoder.Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
