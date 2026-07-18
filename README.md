@@ -26,7 +26,7 @@ Prerequisite: install the agents you plan to use. Codex uses `codex`, and Claude
 
 ```bash
 # Install the actively maintained distribution
-curl -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
 # Check agents, platform credentials, and access control
 weclaw doctor

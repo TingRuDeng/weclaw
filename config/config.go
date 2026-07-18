@@ -76,7 +76,7 @@ type AgentConfig struct {
 	SandboxMode      string            `json:"sandbox_mode,omitempty"`      // Codex sandbox：read-only / workspace-write / danger-full-access
 	SystemPrompt     string            `json:"system_prompt,omitempty"`     // system prompt
 	Endpoint         string            `json:"endpoint,omitempty"`          // API endpoint (http type)
-	APIKey           string            `json:"api_key,omitempty"`           // API key (http type)
+	APIKey           string            `json:"api_key,omitempty"`           // HTTP Agent 密钥；只能写入配置文件和 Authorization header，禁止日志/审计明文输出
 	Headers          map[string]string `json:"headers,omitempty"`           // extra HTTP headers (http type)
 	MaxHistory       int               `json:"max_history,omitempty"`       // max history (http type)
 	Progress         *ProgressConfig   `json:"progress,omitempty"`          // 微信进度反馈配置

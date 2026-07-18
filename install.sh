@@ -10,17 +10,17 @@ CLAUDE_ACP_VERSION="${CLAUDE_ACP_VERSION:-0.58.1}"
 
 github_download() {
   if [ -n "$TOKEN" ]; then
-    curl -fsSL -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" -o "$2" "$1"
+    curl -fsSL --proto '=https' --tlsv1.2 -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" -o "$2" "$1"
   else
-    curl -fsSL -H "User-Agent: weclaw-installer" -o "$2" "$1"
+    curl -fsSL --proto '=https' --tlsv1.2 -H "User-Agent: weclaw-installer" -o "$2" "$1"
   fi
 }
 
 github_latest_url() {
   if [ -n "$TOKEN" ]; then
-    curl -fsSLI -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "$1"
+    curl -fsSLI --proto '=https' --tlsv1.2 -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "$1"
   else
-    curl -fsSLI -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" "$1"
+    curl -fsSLI --proto '=https' --tlsv1.2 -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" "$1"
   fi
 }
 

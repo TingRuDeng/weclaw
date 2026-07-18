@@ -51,11 +51,17 @@ EOF
 output=''
 previous=''
 url=''
+saw_https_proto=0
+saw_tls12=0
 for argument do
   [ "$previous" = "-o" ] && output=$argument
+  [ "$previous" = "--proto" ] && [ "$argument" = "=https" ] && saw_https_proto=1
+  [ "$argument" = "--tlsv1.2" ] && saw_tls12=1
   previous=$argument
   url=$argument
 done
+[ "$saw_https_proto" -eq 1 ] || exit 62
+[ "$saw_tls12" -eq 1 ] || exit 63
 if [ "$output" = "/dev/null" ]; then
   printf 'https://github.com/test/weclaw/releases/tag/v1.2.3'
   exit 0

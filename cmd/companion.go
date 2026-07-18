@@ -91,6 +91,7 @@ func waitForLiveCompanionEndpoint(ctx context.Context, agentName string, cwd str
 				return endpoint, nil
 			} else {
 				lastErr = liveErr
+				// 端点文件可能来自已退出的 companion；删除后继续等待新进程重新登记。
 				opts.RemoveEndpoint(agentName, cwd)
 			}
 		} else {

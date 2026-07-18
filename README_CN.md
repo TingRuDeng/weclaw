@@ -26,7 +26,7 @@
 
 ```bash
 # 安装当前维护版
-curl -sSL https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
 # 检查 Agent、平台凭证和访问控制
 weclaw doctor
