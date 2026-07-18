@@ -263,10 +263,6 @@ func (s *progressSession) ensureStream() platform.Stream {
 	return stream
 }
 
-func progressTaskTitleForAgent(agentName string, taskText string, maxRunes int) string {
-	return progressTaskTitleForAgentWorkspace(agentName, "", taskText, maxRunes)
-}
-
 func progressTaskTitleForAgentWorkspace(agentName string, workspaceRoot string, taskText string, maxRunes int) string {
 	if strings.TrimSpace(agentName) == "" {
 		return progressTaskTitle(taskText, maxRunes)
