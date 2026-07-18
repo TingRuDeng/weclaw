@@ -18,6 +18,7 @@ type messageSender interface {
 	SendImage(ctx context.Context, openID string, localPath string) error
 	SendFile(ctx context.Context, openID string, localPath string) error
 	SendCard(ctx context.Context, openID string, cardID string) error
+	PatchCard(ctx context.Context, messageID string, cardJSON string) error
 	ReplyText(ctx context.Context, messageID string, text string) error
 	ReplyImage(ctx context.Context, messageID string, localPath string) error
 	ReplyFile(ctx context.Context, messageID string, localPath string) error
@@ -26,6 +27,7 @@ type messageSender interface {
 
 type createMessageFunc func(ctx context.Context, receiveID string, receiveIDType string, msgType string, content string) (int, string, error)
 type replyMessageFunc func(ctx context.Context, messageID string, msgType string, content string, replyInThread bool) (int, string, error)
+type patchMessageFunc func(ctx context.Context, messageID string, content string) (int, string, error)
 
 type sdkMessageSender struct {
 	client *lark.Client
@@ -33,6 +35,7 @@ type sdkMessageSender struct {
 	guide  *permissionGuideLimiter
 	create createMessageFunc
 	reply  replyMessageFunc
+	patch  patchMessageFunc
 }
 
 // newSDKMessageSender 创建基于飞书 REST client 的消息发送器。
@@ -140,6 +143,36 @@ func (s *sdkMessageSender) SendCard(ctx context.Context, openID string, cardID s
 		return err
 	}
 	return s.createMessage(ctx, openID, "interactive", string(content))
+}
+
+// PatchCard 更新应用已经发送的交互卡片，供耗时按钮操作回写原卡。
+func (s *sdkMessageSender) PatchCard(ctx context.Context, messageID string, cardJSON string) error {
+	code, msg, err := s.patchCardRaw(ctx, messageID, cardJSON)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return s.apiError(code, msg)
+	}
+	return nil
+}
+
+func (s *sdkMessageSender) patchCardRaw(ctx context.Context, messageID string, cardJSON string) (int, string, error) {
+	if s.patch != nil {
+		return s.patch(ctx, messageID, cardJSON)
+	}
+	req := larkim.NewPatchMessageReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewPatchMessageReqBodyBuilder().Content(cardJSON).Build()).
+		Build()
+	resp, err := s.client.Im.V1.Message.Patch(ctx, req)
+	if err != nil {
+		return 0, "", err
+	}
+	if !resp.Success() {
+		return resp.Code, resp.Msg, nil
+	}
+	return 0, "", nil
 }
 
 // createMessage 调用飞书消息创建接口，统一处理 API 错误。
