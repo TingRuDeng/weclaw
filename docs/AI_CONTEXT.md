@@ -31,7 +31,7 @@ ai_summary:
 - 仓库类型：单一 Go 仓库，不是 coordination directory。
 - Go 模块：`github.com/fastclaw-ai/weclaw`，以 `main.go` 和 `cmd/root.go` 进入 CLI。
 - 产品定位：把微信个人号和飞书消息接入 AI Agent，业务层通过 `platform` 抽象隔离平台差异。
-- 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。
+- 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。发布入口先统一配置持久化 `GOCACHE`：`WECLAW_GOCACHE` 优先，其次保留调用方显式导出的 `GOCACHE`；本机 Darwin 数据盘共享根目录存在时使用项目专属缓存，其他主机回退到 `go env GOCACHE`。
 - Android profile：未检测到 Gradle 或 `AndroidManifest.xml`，当前只适用 `generic` profile。
 
 ## Core Directories
@@ -82,7 +82,7 @@ ai_summary:
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。
 - 飞书推荐使用 7.22+ 悬浮菜单，菜单项通过“发送文字消息”触发命令，只保留 `/help`、状态/任务控制、Codex/Claude 列表与新建、模型/推理/确认模式等高频入口；可切换菜单受 3 个主菜单限制时移除“设置”主菜单。`/cc cli`、`/cancel` 等低频命令由飞书 `/help` 二级分类卡片承载，管理员分类只对管理员显示。普通计划确认仍回复“确认”，Codex 运行中的暂存消息未被 `/guide`、`/cancel` 或 `/stop` 消费时会在上一任务结束后自动执行。
 - 命令入口只保留当前主路径：远程更新使用 `/update`，Codex 会话使用 `/cx ...`，Claude 会话使用 `/cc ...`；不要重新引入 `/info`、`/clear`、`/upgrade`、`/codex ...` 会话入口、`/claude ...` 会话入口、`/cx open-app` 或 `/cx attach app` 这类兼容路由。
-- Codex 运行拓扑是单一 app-server、多前端客户端。`agent/codex_app_server_host.go` 通过稳定 Unix socket 复用或启动唯一 host；默认路径超过 `sockaddr_un` 限制时会稳定哈希到用户私有的 `/tmp/weclaw-<uid>` 目录。host 生命周期独立于单次前端请求，普通客户端断开和恢复不得终止其他前端正在使用的 host。
+- Codex 运行拓扑是单一 app-server、多前端客户端。`agent/codex_app_server_host.go` 通过稳定 Unix socket 复用或启动唯一 host，并按上游标准 HTTP Upgrade 建立 WebSocket-over-UDS；禁止把该 socket 当裸 JSONL `net.Conn`。默认路径超过 `sockaddr_un` 限制时会稳定哈希到真实系统临时目录下的用户私有 `weclaw-<uid>` 目录；macOS 必须解析 `/tmp` 到 `/private/tmp`，因为 Codex 拒绝 socket 目录链中的软链接。host 生命周期独立于单次前端请求，普通客户端断开和恢复不得终止其他前端正在使用的 host。
 - Codex 窗口只持久化 frontend binding，不持有独占 writer owner。`messaging/codex_remote_selection_store.go` v4 只保存 route 到 workspace/thread 的绑定；v1-v3 owner/control 字段仅用于读取迁移，加载后必须丢弃并重写。多个飞书或微信窗口可同时绑定同一 thread，不能互相释放或覆盖绑定。
 - Codex 的绑定入口包括 `/cx switch`、会话短编号、仅含一个会话的 `/cx cd`、飞书会话卡片、`/cx new` 和默认 Agent 为 Codex 时的全局 `/new`；这些入口最终复用 `messaging/codex_session_acquire.go:acquireCodexSessionWithBindingLocked`，新建入口先经过 `messaging/codex_session_new.go:createAndAcquireCodexSessionWithBindingLocked`。
 - `messaging/codex_session_command_dispatch.go:prepareCodexSessionCommand` 在 route binding 锁内准备 `/cx` 命令；默认 Codex 的全局 `/new` 由 `messaging/default_session.go:resetDefaultCodexSessionForRoute` 持有相同 binding 执行锁。事务内部通过 `messaging/codex_session_locks.go:lockCodexSessionThreads` 按去重排序后的 thread ID 加锁，禁止反向获取 binding 锁。

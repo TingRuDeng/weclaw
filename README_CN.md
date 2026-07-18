@@ -65,7 +65,7 @@ weclaw status
 /cx owner              # 查看兼容状态；窗口不再持有独占 writer
 ```
 
-WeClaw 为原生 `codex app-server` 建立稳定 Unix socket，并在第一个客户端需要时启动 host；之后的微信、飞书或其他 WeClaw 前端复用同一服务。每个窗口独立持久化 workspace/thread 绑定，多个窗口可以绑定同一 thread，但同一 thread 同时只允许一个活动 turn。运行通道断开不会清除窗口绑定；已提交 turn 的 writer 门禁会保留到权威终态确认，下一次操作会重新连接共享 host。旧版 Codex owner 状态会在加载时丢弃，旧 `type: companion` 配置会迁移为共享 app-server。
+WeClaw 为原生 `codex app-server` 建立稳定 Unix socket，并按上游协议通过 WebSocket-over-UDS 连接；该 socket 不是裸 JSONL 流。第一个客户端按需启动 host，之后的微信、飞书或其他 WeClaw 前端复用同一服务。每个窗口独立持久化 workspace/thread 绑定，多个窗口可以绑定同一 thread，但同一 thread 同时只允许一个活动 turn。运行通道断开不会清除窗口绑定；已提交 turn 的 writer 门禁会保留到权威终态确认，下一次操作会重新连接共享 host。旧版 Codex owner 状态会在加载时丢弃，旧 `type: companion` 配置会迁移为共享 app-server。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 已停用，因为它们会启动独立 Codex writer。当前版本也不把单独运行的 Codex Desktop 当作共享 host 客户端；若需要本地界面，应由该界面连接同一个 app-server，而不是再启动第二个 app-server。
 

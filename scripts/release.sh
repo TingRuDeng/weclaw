@@ -24,6 +24,10 @@ usage() {
   --next-patch   基于当前最大 vX.Y.Z tag 自动递增 patch 版本
   --dry-run      执行检查、测试和打包，但不创建 tag、不推送、不创建 release
   -h, --help     显示帮助
+
+环境:
+  WECLAW_GOCACHE 优先指定本项目的持久化 Go 构建缓存
+  GOCACHE        未设置 WECLAW_GOCACHE 时保留调用方显式导出的缓存
 EOF
 }
 
@@ -38,6 +42,36 @@ fail() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "缺少命令：$1"
+}
+
+configure_go_cache() {
+  local cache_dir cache_source host_os shared_root
+  host_os="${1:-}"
+  shared_root="${2:-/Volumes/Data/AppData/BuildCaches}"
+
+  if [[ -n "${WECLAW_GOCACHE:-}" ]]; then
+    cache_dir="$WECLAW_GOCACHE"
+    cache_source="WECLAW_GOCACHE"
+  elif [[ -n "${GOCACHE:-}" ]]; then
+    cache_dir="$GOCACHE"
+    cache_source="GOCACHE"
+  else
+    [[ -n "$host_os" ]] || host_os="$(go env GOHOSTOS)"
+    if [[ "$host_os" == "darwin" && -d "$shared_root" ]]; then
+      [[ -w "$shared_root" ]] || fail "WeClaw 共享缓存根目录不可写：$shared_root"
+      cache_dir="$shared_root/weclaw"
+      cache_source="WeClaw Darwin 共享缓存"
+    else
+      cache_dir="$(go env GOCACHE)"
+      cache_source="Go 默认缓存"
+    fi
+  fi
+
+  [[ -n "$cache_dir" && "$cache_dir" == /* ]] || fail "Go 构建缓存必须是绝对路径：${cache_dir:-<empty>}"
+  mkdir -p "$cache_dir" || fail "无法创建 Go 构建缓存：$cache_dir"
+  [[ -d "$cache_dir" && -w "$cache_dir" ]] || fail "Go 构建缓存不可写：$cache_dir"
+  export GOCACHE="$cache_dir"
+  log "Go 构建缓存：${GOCACHE}（${cache_source}）"
 }
 
 latest_version_tag() {
@@ -263,6 +297,7 @@ main() {
   check_clean_tree
   check_release_source
   check_tag_available
+  configure_go_cache
   run_validations
   build_assets
   create_release

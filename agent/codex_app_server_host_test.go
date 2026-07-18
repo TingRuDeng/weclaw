@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -39,12 +42,142 @@ func TestResolveCodexHostSocketFallsBackForLongDefaultPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCodexHostSocket() error=%v", err)
 	}
-	wantParent := filepath.Join(string(filepath.Separator), "tmp", "weclaw-"+strconv.Itoa(os.Geteuid()))
+	tempRoot := filepath.Join(string(filepath.Separator), "tmp")
+	if resolved, resolveErr := filepath.EvalSymlinks(tempRoot); resolveErr == nil {
+		tempRoot = resolved
+	}
+	wantParent := filepath.Join(tempRoot, "weclaw-"+strconv.Itoa(os.Geteuid()))
 	if filepath.Dir(got) != wantParent || len([]byte(got)) > codexHostSocketMaxBytes {
 		t.Fatalf("socket=%q parent=%q, want short path under %q", got, filepath.Dir(got), wantParent)
 	}
+	if info, statErr := os.Lstat(tempRoot); statErr != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("fallback temp root=%q must be a real directory: info=%v err=%v", tempRoot, info, statErr)
+	}
 	if again, err := a.resolveCodexHostSocket(); err != nil || again != got {
 		t.Fatalf("second resolve=(%q,%v), want deterministic %q", again, err, got)
+	}
+}
+
+func TestCodexWebSocketTransportBuffersFragmentedJSONLWrite(t *testing.T) {
+	client, server := newCodexWebSocketPair(t)
+	transport := newCodexWebSocketTransport(client)
+	t.Cleanup(func() { _ = transport.Close() })
+
+	received := make(chan []byte, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		_, payload, err := server.ReadMessage()
+		if err != nil {
+			readErr <- err
+			return
+		}
+		received <- payload
+	}()
+
+	first := []byte(`{"jsonrpc":"2.0","id":`)
+	if written, err := transport.Write(first); err != nil || written != len(first) {
+		t.Fatalf("first Write()=(%d,%v), want (%d,nil)", written, err, len(first))
+	}
+	select {
+	case payload := <-received:
+		t.Fatalf("received frame before newline: %q", payload)
+	case err := <-readErr:
+		t.Fatalf("ReadMessage() failed before newline: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	second := []byte("1}\n")
+	if written, err := transport.Write(second); err != nil || written != len(second) {
+		t.Fatalf("second Write()=(%d,%v), want (%d,nil)", written, err, len(second))
+	}
+	select {
+	case payload := <-received:
+		want := append(append([]byte(nil), first...), second[:len(second)-1]...)
+		if string(payload) != string(want) {
+			t.Fatalf("frame=%q, want %q", payload, want)
+		}
+	case err := <-readErr:
+		t.Fatalf("ReadMessage() error=%v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for buffered WebSocket frame")
+	}
+}
+
+func TestCodexWebSocketTransportFramesReadsAndUnblocksOnClose(t *testing.T) {
+	client, server := newCodexWebSocketPair(t)
+	transport := newCodexWebSocketTransport(client)
+	t.Cleanup(func() { _ = transport.Close() })
+
+	want := `{"jsonrpc":"2.0","id":1}`
+	if err := server.WriteMessage(websocket.TextMessage, []byte(want)); err != nil {
+		t.Fatalf("WriteMessage() error=%v", err)
+	}
+	line, err := bufio.NewReader(transport).ReadString('\n')
+	if err != nil || line != want+"\n" {
+		t.Fatalf("ReadString()=(%q,%v), want (%q,nil)", line, err, want+"\n")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 1)
+		_, err := transport.Read(buffer)
+		readDone <- err
+	}()
+	if err := server.Close(); err != nil {
+		t.Fatalf("server Close() error=%v", err)
+	}
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Fatal("transport Read() error=nil after WebSocket close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transport Read() remained blocked after WebSocket close")
+	}
+}
+
+func newCodexWebSocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "weclaw-codex-ws-pair-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	listener, err := net.Listen("unix", filepath.Join(dir, "app-server.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverConn := make(chan *websocket.Conn, 1)
+	httpServer := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/rpc" {
+			http.NotFound(writer, request)
+			return
+		}
+		conn, upgradeErr := (&websocket.Upgrader{}).Upgrade(writer, request, nil)
+		if upgradeErr == nil {
+			serverConn <- conn
+		}
+	})}
+	go func() { _ = httpServer.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = httpServer.Close()
+		_ = listener.Close()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, err := dialCodexHost(ctx, listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dialCodexHost() error=%v", err)
+	}
+	select {
+	case server := <-serverConn:
+		t.Cleanup(func() { _ = server.Close() })
+		return client, server
+	case <-ctx.Done():
+		_ = client.Close()
+		t.Fatal("timed out waiting for WebSocket Upgrade")
+		return nil, nil
 	}
 }
 
@@ -361,17 +494,20 @@ func newFakeCodexHost(listener net.Listener) *fakeCodexHost {
 
 func (s *fakeCodexHost) start(t *testing.T) {
 	t.Helper()
-	go func() {
-		for {
-			conn, err := s.listener.Accept()
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			conn, err := (&websocket.Upgrader{}).Upgrade(writer, request, nil)
 			if err != nil {
 				return
 			}
 			s.mu.Lock()
 			s.accepted++
 			s.mu.Unlock()
-			go s.serve(conn)
-		}
+			s.serve(conn)
+		}),
+	}
+	go func() {
+		_ = server.Serve(s.listener)
 	}()
 }
 
@@ -381,17 +517,19 @@ func (s *fakeCodexHost) connectionCount() int {
 	return s.accepted
 }
 
-func (s *fakeCodexHost) serve(conn net.Conn) {
+func (s *fakeCodexHost) serve(conn *websocket.Conn) {
 	defer conn.Close()
-	scanner := bufio.NewScanner(conn)
-	encoder := json.NewEncoder(conn)
-	for scanner.Scan() {
+	for {
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
 		var req struct {
 			ID     *int64          `json:"id,omitempty"`
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params,omitempty"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &req) != nil || req.ID == nil {
+		if json.Unmarshal(payload, &req) != nil || req.ID == nil {
 			continue
 		}
 		result := map[string]interface{}{}
@@ -415,6 +553,6 @@ func (s *fakeCodexHost) serve(conn net.Conn) {
 				result = map[string]interface{}{"thread": map[string]string{"id": params.ThreadID}}
 			}
 		}
-		_ = encoder.Encode(map[string]interface{}{"id": *req.ID, "result": result})
+		_ = conn.WriteJSON(map[string]interface{}{"id": *req.ID, "result": result})
 	}
 }

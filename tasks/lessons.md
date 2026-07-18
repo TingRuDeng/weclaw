@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-18 Codex Unix socket 必须执行 WebSocket Upgrade
+
+- 触发条件：把原生 `codex app-server --listen unix://...` 改为共享 host，并让多个 WeClaw 客户端直接连接 Unix socket。
+- 规则：Codex 的 Unix socket 承载标准 HTTP Upgrade 后的 WebSocket；每条 JSON-RPC 消息是一个 text frame。只有 stdio transport 才是逐行 JSONL，不能复用裸 `net.Conn` scanner/writer。
+- 反例：测试 fake 使用 `net.Listen("unix") + bufio.Scanner + json.Encoder`，即使多客户端、锁和 lease 测试全绿，也无法发现真实 Codex 会以 `failed to upgrade control socket websocket connection` 关闭连接，最终在飞书表现为 `agent "codex" not available`。
+- 正确做法：客户端通过 WebSocket dialer 的自定义 Unix `NetDialContext` 连接 `/rpc`；回归 fake 必须执行真实 HTTP Upgrade 并按 frame 收发。macOS 长路径回退还必须先把 `/tmp` 解析为真实的 `/private/tmp`，Codex 同样会拒绝 socket 目录链中的软链接。发布前至少对当前受支持的真实 Codex CLI 执行一次 `Start → initialize → Stop` 烟测，SQLite 初始化暂态仍走既有限次重试。
+- 来源：`v0.1.204` 更新重启后，飞书 `/cx ls` 实机失败；日志与隔离实验确认 Codex CLI 0.144.5 拒绝裸 JSONL Unix 连接，改用 WebSocket-over-UDS 后真实 initialize 成功。
+
 ## 2026-07-18 Codex 必须是单一 app-server、多前端 binding
 
 - 触发条件：飞书、微信、Codex Desktop bridge 和 Companion 分别维护 owner/runtime，窗口切换、Desktop 探测、断线与 writer lease 被混成同一状态机。
@@ -550,7 +558,7 @@
 - 触发条件：在本机运行 WeClaw 的 Go 测试、race 测试或其他会生成 Go 构建缓存的验证命令。
 - 规则：统一复用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw`，不得按任务、测试套件或并行进程创建多个独立缓存目录。
 - 反例：为核心测试、全仓测试、race 和 vet 分别创建 `/tmp/weclaw-*` 缓存；每个目录占用数百 MiB，最终并行耗尽磁盘并产生与代码无关的 `no space left on device` 失败。
-- 正确做法：普通全仓测试使用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw go test ./...`；其他 WeClaw Go 验证也复用同一个 `GOCACHE`，需要隔离时优先串行执行，不通过新增缓存目录隔离。
+- 正确做法：普通全仓测试使用 `GOCACHE=/Volumes/Data/AppData/BuildCaches/weclaw go test ./...`；其他 WeClaw Go 验证也复用同一个 `GOCACHE`，需要隔离时优先串行执行，不通过新增缓存目录隔离。正式发布入口必须统一执行缓存初始化：`WECLAW_GOCACHE` 优先于调用方 `GOCACHE`，本机 Darwin 自动选项目共享缓存，其他主机显式回退到 `go env GOCACHE`。
 - 来源：2026-07-15 最终发布前复验因多套临时 Go 缓存耗尽磁盘；用户明确要求以后所有 WeClaw 测试共用固定缓存。
 
 ## 2026-07-15 Claude session 的目录事实与写入所有权必须分离
