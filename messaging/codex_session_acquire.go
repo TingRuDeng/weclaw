@@ -53,6 +53,12 @@ type codexRuntimeIntentChange struct {
 	after    codexControlIntent
 }
 
+// codexTaskAbandonment 表示切换会话时要解除的旧窗口任务关联，不代表停止真实 Codex turn。
+type codexTaskAbandonment struct {
+	key  string
+	task *activeAgentTask
+}
+
 // codexRuntimeHandoffRequest 描述一次副作用调用及失败后的权威校准意图。
 type codexRuntimeHandoffRequest struct {
 	ctx       context.Context
@@ -63,9 +69,10 @@ type codexRuntimeHandoffRequest struct {
 
 // codexSessionAcquirePlan 固化锁内快照和有序旧所有权释放集合。
 type codexSessionAcquirePlan struct {
-	request  codexSessionAcquireRequest
-	snapshot codexRemoteSelectionSnapshot
-	changes  []codexRuntimeIntentChange
+	request      codexSessionAcquireRequest
+	snapshot     codexRemoteSelectionSnapshot
+	changes      []codexRuntimeIntentChange
+	abandonments []codexTaskAbandonment
 }
 
 // acquireCodexSessionWithBindingLocked 在外层 binding 锁内先提交窗口所有权，再同步运行通道。
@@ -114,6 +121,7 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		}
 		return codexSessionAcquireResult{}, result.agentSessionErr
 	}
+	h.abandonCodexTasks(plan.abandonments)
 	resolution, _, runtimeErr := h.applyCodexRuntimeIntentChanges(plan, liveAgent)
 	result.resolution = codexAcquireResolutionAfterCommit(req.route, committed.Target, resolution)
 	if readyErr := ensureCodexRuntimeReady(result.resolution, req.route); readyErr != nil {
@@ -168,12 +176,43 @@ func (h *Handler) buildCodexSessionAcquirePlan(req codexSessionAcquireRequest, s
 		if !owned || threadID == req.route.threadID {
 			continue
 		}
-		if _, active := h.activeCodexTaskConversation(threadID); active {
-			return codexSessionAcquirePlan{}, errCodexSessionAcquireActiveOld
+		if abandonment, active, ok := h.codexTaskAbandonmentForAcquire(req, threadID, before); active {
+			if !ok {
+				return codexSessionAcquirePlan{}, errCodexSessionAcquireActiveOld
+			}
+			plan.abandonments = append(plan.abandonments, abandonment)
 		}
 		plan.changes = append(plan.changes, oldCodexRuntimeIntentChange(req, snapshot, threadID, before))
 	}
 	return plan, nil
+}
+
+func (h *Handler) codexTaskAbandonmentForAcquire(req codexSessionAcquireRequest, threadID string, intent codexControlIntent) (codexTaskAbandonment, bool, bool) {
+	threadID = strings.TrimSpace(threadID)
+	key := strings.TrimSpace(intent.ConversationID)
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	if key != "" {
+		if task := h.activeTasks[key]; task != nil {
+			task.mu.Lock()
+			matched := task.codexThreadID == threadID && task.phase != codexTaskTerminal
+			ok := matched && task.canDetachCodexTaskForRouteLocked(req, threadID)
+			task.mu.Unlock()
+			if matched {
+				return codexTaskAbandonment{key: key, task: task}, true, ok
+			}
+		}
+	}
+	for conversationID, task := range h.activeTasks {
+		task.mu.Lock()
+		matched := task.codexThreadID == threadID && task.phase != codexTaskTerminal
+		ok := matched && task.canDetachCodexTaskForRouteLocked(req, threadID)
+		task.mu.Unlock()
+		if matched {
+			return codexTaskAbandonment{key: conversationID, task: task}, true, ok
+		}
+	}
+	return codexTaskAbandonment{}, false, false
 }
 
 // oldCodexRuntimeIntentChange 为旧 remote thread 构造可逆的归还变化。

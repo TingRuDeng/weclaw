@@ -566,3 +566,11 @@
 - 反例：`/cx switch` 已把 owner 和 workspace 选到新 thread，但 `HandoffCodexRuntime` 因目标已是 WeClaw runtime 直接返回，没有更新 `a.threads`；下一条普通消息从旧 ACP 映射恢复已归档 thread，报 `session is archived`。
 - 正确做法：复用已知 WeClaw runtime 时仍调用同一绑定 helper；只有 runtime 激活成功后才持久化 ACP 映射。回归测试必须同时断言内存 `threads`、`resumeOnFirstUse` 和 state 文件。
 - 来源：2026-07-17 用户反馈“切换到 codex 会话后，发送信息一直报错”，实机日志显示切换到新 thread 后普通消息仍 `resume restored thread` 到旧归档 thread。
+
+## 2026-07-18 Codex 切走即放弃旧任务关联
+
+- 触发条件：飞书或微信切换到 Codex App 正在执行的 thread 后，又需要浏览 `/cx ls` 或切换到其他 Codex 会话。
+- 规则：飞书窗口可以按用户选择自由浏览和切换 Codex 会话；只读导航命令不得被 active task 拦截，显式切换到新会话时应放弃当前窗口与旧 Codex 任务的关联，不需要后台继续回推旧任务结果。
+- 反例：把 `/cx ls`、`/cx cd` 或会话选择按钮一律挡在“当前任务正在执行”之后，导致用户切到运行中会话后无法再切走。
+- 正确做法：切走时标记 detached、清理 active task 槽位并抑制旧任务进度/最终回复；外部观察任务取消 watcher，本进程正在执行的 Codex turn 不因切换被取消。如果用户还需要旧任务进度，可以再切回原会话重新观察。其他窗口或其他 owner 的任务不能被当前窗口清理。
+- 来源：2026-07-18 用户明确“切走后其实不需要后台继续观察原任务，如果需要可以再切换回原会话就行”，并补充“飞书是可以随意切换会话的，可以按用户需求自己选择会话”。

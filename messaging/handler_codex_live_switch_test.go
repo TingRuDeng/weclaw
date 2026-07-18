@@ -42,6 +42,27 @@ func TestCodexSwitchDesktopIdleAcquiresWithoutUse(t *testing.T) {
 	}
 }
 
+func TestCodexSwitchAbandonsOldExternalObservation(t *testing.T) {
+	fixture := newCodexSessionAcquireFixture(t)
+	conversationID, taskCtx, task := fixture.startExternalObservation("thread-a", fixture.workspaceA, "turn-a")
+	defer fixture.h.finishActiveTask(conversationID, task)
+
+	text := fixture.h.handleCodexSwitchForRouteWithOptions(fixture.switchRequest(context.Background()))
+
+	assertCodexSwitchAcquired(t, fixture, text)
+	if _, active := fixture.h.activeTask(conversationID); active {
+		t.Fatal("切换到新会话后不应继续观察旧任务")
+	}
+	select {
+	case <-taskCtx.Done():
+	default:
+		t.Fatal("旧观察任务应被取消")
+	}
+	if task.shouldSendFinal() {
+		t.Fatal("旧观察任务被放弃后不应发送最终结果")
+	}
+}
+
 func TestCodexSwitchUnclaimedAcquiresRemoteControl(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	current := fixture.h.codexSessions.controlIntent("thread-b")
@@ -180,11 +201,12 @@ func setAcquireTargetRemoteForCurrentRoute(t *testing.T, fixture *codexSessionAc
 	}
 }
 
-func TestCodexSwitchBlocksDifferentThreadWhileTaskRuns(t *testing.T) {
+func TestCodexSwitchBlocksOtherRouteDifferentThreadWhileTaskRuns(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	conversationID := buildCodexConversationID(fixture.routeUser, "codex", fixture.workspaceA)
 	task, _, started := fixture.h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
-		owner: fixture.routeUser, codexThreadID: "thread-a", codexTurnID: "turn-a",
+		owner: "other-user", routeUserID: "other-route", agentName: "codex",
+		codexThreadID: "thread-a", codexTurnID: "turn-a",
 	})
 	if !started {
 		t.Fatal("未能创建测试任务")

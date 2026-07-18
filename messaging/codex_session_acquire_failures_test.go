@@ -11,11 +11,11 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-func TestAcquireCodexSessionRejectsActiveOldRemoteTask(t *testing.T) {
+func TestAcquireCodexSessionRejectsNonAbandonableActiveOldTask(t *testing.T) {
 	fixture := newCodexSessionAcquireFixture(t)
 	conversation := buildCodexConversationID(fixture.routeUser, "codex", fixture.workspaceA)
 	task, _, started := fixture.h.beginActiveTask(context.Background(), conversation, activeTaskMeta{
-		owner: fixture.routeUser, routeUserID: fixture.routeUser, agentName: "codex",
+		owner: "other-user", routeUserID: "other-route", agentName: "codex",
 		codexThreadID: "thread-a", codexTurnID: "turn-a",
 	})
 	if !started {

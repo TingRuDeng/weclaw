@@ -45,6 +45,9 @@ func (h *Handler) startAgentTaskLifecycle(opts agentTaskLifecycleOptions) agentT
 // recordProgress 同时更新任务状态快照和平台进度展示。
 func (l agentTaskLifecycle) recordProgress(delta string) {
 	l.opts.task.recordProgress(time.Now(), delta)
+	if !l.opts.task.shouldSendFinal() {
+		return
+	}
 	l.onProgress(delta)
 }
 

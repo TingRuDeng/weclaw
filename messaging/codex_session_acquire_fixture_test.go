@@ -102,6 +102,36 @@ func (f *codexSessionAcquireFixture) setActiveTarget(turnID string) {
 	})
 }
 
+func (f *codexSessionAcquireFixture) startExternalObservation(threadID string, workspace string, turnID string) (string, context.Context, *activeAgentTask) {
+	f.t.Helper()
+	conversationID := buildCodexConversationID(f.routeUser, "codex", workspace)
+	task, taskCtx, started := f.h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
+		owner: f.routeUser, routeUserID: f.routeUser, agentName: "codex",
+		runtimeOwner: agent.CodexRuntimeDesktop, codexThreadID: threadID, codexTurnID: turnID,
+	})
+	if !started {
+		f.t.Fatal("未能建立外部观察任务")
+	}
+	task.mu.Lock()
+	task.externalReservation = &externalCodexTaskReservationControl{status: externalCodexTaskActivated}
+	task.mu.Unlock()
+	return conversationID, taskCtx, task
+}
+
+func (f *codexSessionAcquireFixture) startInProcessCodexTask(threadID string, workspace string) (string, context.Context, *activeAgentTask) {
+	f.t.Helper()
+	conversationID := buildCodexConversationID(f.routeUser, "codex", workspace)
+	task, taskCtx, started := f.h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
+		owner: f.routeUser, routeUserID: f.routeUser, agentName: "codex",
+		runtimeOwner: agent.CodexRuntimeWeClaw, codexThreadID: threadID,
+		inProcessCodexLifecycle: true,
+	})
+	if !started {
+		f.t.Fatal("未能建立本进程 Codex 任务")
+	}
+	return conversationID, taskCtx, task
+}
+
 func (f *codexSessionAcquireFixture) snapshot() codexAcquireStateSnapshot {
 	active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey)
 	threadA, _ := f.h.ensureCodexSessions().getThread(f.bindingKey, f.workspaceA)

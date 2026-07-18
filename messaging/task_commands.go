@@ -229,19 +229,6 @@ func (h *Handler) resolveTaskCommandTarget(req taskCommandRequest) (taskCommandT
 	return taskCommandTarget{name: name, agent: ag, key: key}, nil
 }
 
-// codexGuideTargetForRoute 供显式 `/cx` 导航检查定位 Codex 专属任务。
-func (h *Handler) codexGuideTargetForRoute(ctx context.Context, actorUserID string, routeUserID string) (string, agent.Agent, string, error) {
-	name, ok := h.codexAgentName()
-	if !ok {
-		return "", nil, "", fmt.Errorf("当前没有配置 codex agent")
-	}
-	ag, err := h.getAgent(ctx, name)
-	if err != nil {
-		return "", nil, "", fmt.Errorf("codex agent 不可用: %v", err)
-	}
-	return name, ag, h.agentExecutionKeyForRoute(actorUserID, routeUserID, name, ag), nil
-}
-
 func waitForActiveTask(ctx context.Context, task *activeAgentTask) bool {
 	if task == nil {
 		return true
