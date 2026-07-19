@@ -24,6 +24,30 @@ func (s *Server) authorizeRead(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// authorizeLocalControl 对账号切换等高风险端点同时校验真实 TCP 来源、Host/Origin
+// 与已配置的现有 token。即使 API 监听 0.0.0.0，远端也不能伪造 Host 调用控制面。
+func (s *Server) authorizeLocalControl(w http.ResponseWriter, r *http.Request) bool {
+	if !isActualLoopbackRequest(r) || !isTrustedLoopbackRequest(r) {
+		writeJSONError(w, http.StatusForbidden, "forbidden", "该控制接口仅允许本机访问")
+		return false
+	}
+	if s.token == "" || constantTimeEqual(sendAuthToken(r), s.token) {
+		return true
+	}
+	writeJSONError(w, http.StatusUnauthorized, "unauthorized", "未授权")
+	return false
+}
+
+func isActualLoopbackRequest(r *http.Request) bool {
+	remote := strings.TrimSpace(r.RemoteAddr)
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = strings.Trim(remote, "[]")
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // isTrustedLoopbackRequest 拒绝 DNS rebinding Host，并限制浏览器请求必须同源。
 func isTrustedLoopbackRequest(r *http.Request) bool {
 	host, port, ok := parseRequestAuthority(r.Host)

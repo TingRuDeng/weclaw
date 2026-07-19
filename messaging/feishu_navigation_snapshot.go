@@ -14,6 +14,7 @@ const (
 	feishuNavigationSnapshotTokenPrefix = "@nav_"
 	feishuNavigationSectionWorkspaces   = "workspaces"
 	feishuNavigationSectionSessions     = "sessions"
+	feishuNavigationSectionAccounts     = "accounts"
 )
 
 type feishuNavigationSnapshotScope struct {

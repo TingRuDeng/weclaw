@@ -245,6 +245,7 @@ func (runtime startRuntime) startServices() error {
 		api.WithToken(runtime.cfg.APIToken),
 		api.WithRegistry(runtime.registry),
 		api.WithRuntimeStatusProvider(runtime.handler),
+		api.WithCodexAccountController(runtime.handler),
 	)
 	if err := apiServer.Validate(); err != nil {
 		return err

@@ -65,10 +65,13 @@ func (a *ACPAgent) stopCodexAppServerProcess() {
 		a.failPendingRequests("Codex app-server client disconnected for recovery")
 		return
 	}
+	a.wireDispatchMu.Lock()
 	a.mu.Lock()
 	stdin, cmd := a.stdin, a.cmd
 	a.started, a.stdin, a.cmd, a.scanner = false, nil, nil, nil
+	a.wireEpoch++
 	a.mu.Unlock()
+	a.wireDispatchMu.Unlock()
 	stopACPProcess(stdin, cmd)
 	a.failAppServerActiveTurns("ACP runtime stopped for recovery")
 	a.failPendingRequests("ACP runtime stopped for recovery")

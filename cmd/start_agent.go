@@ -128,7 +128,11 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 
 // newACPAgentFromConfig 将持久化配置转换为 ACP 运行时配置。
 func newACPAgentFromConfig(name string, agCfg config.AgentConfig) *agent.ACPAgent {
-	return agent.NewACPAgent(agent.ACPAgentConfig{
+	return agent.NewACPAgent(acpAgentConfigFromConfig(name, agCfg))
+}
+
+func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig) agent.ACPAgentConfig {
+	return agent.ACPAgentConfig{
 		ConfiguredName:   name,
 		Command:          agCfg.Command,
 		LocalCommand:     agCfg.LocalCommand,
@@ -144,7 +148,7 @@ func newACPAgentFromConfig(name string, agCfg config.AgentConfig) *agent.ACPAgen
 		AppServerSocket:  agCfg.AppServerSocket,
 		RunAsUser:        agCfg.RunAsUser,
 		RunAsEnv:         agCfg.RunAsEnv,
-	})
+	}
 }
 
 // isCodexAppServerAgent 判断配置是否启动 Codex app-server 协议。

@@ -148,6 +148,7 @@ func (h *Handler) handleCodexSessionPlatformCommand(ctx context.Context, req pla
 		AccountID:   msg.AccountID,
 		Reply:       req.Reply,
 		Admin:       h.isAdminMessage(msg),
+		Private:     isPrivateCodexCommandMessage(msg, routeUserID),
 	})
 	sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	return true

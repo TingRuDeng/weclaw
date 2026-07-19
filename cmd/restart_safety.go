@@ -91,6 +91,14 @@ func fetchRuntimeStatus(ctx context.Context, apiAddr string, token string) (runt
 }
 
 func runtimeStatusURL(apiAddr string) (string, error) {
+	return runtimeAPIURL(apiAddr, "/api/runtime")
+}
+
+func runtimeAPIURL(apiAddr string, path string) (string, error) {
+	requestPath, err := url.ParseRequestURI(path)
+	if err != nil || requestPath.IsAbs() || !strings.HasPrefix(requestPath.Path, "/") {
+		return "", fmt.Errorf("invalid runtime API path %q", path)
+	}
 	addr := strings.TrimSpace(apiAddr)
 	if addr == "" {
 		addr = "127.0.0.1:18011"
@@ -105,15 +113,15 @@ func runtimeStatusURL(apiAddr string) (string, error) {
 			return "", err
 		}
 		parsed.Host = host
-		parsed.Path = "/api/runtime"
-		parsed.RawQuery = ""
+		parsed.Path = requestPath.Path
+		parsed.RawQuery = requestPath.RawQuery
 		return parsed.String(), nil
 	}
 	host, err := loopbackDialAddr(addr)
 	if err != nil {
 		return "", err
 	}
-	return "http://" + host + "/api/runtime", nil
+	return "http://" + host + requestPath.RequestURI(), nil
 }
 
 func loopbackDialAddr(addr string) (string, error) {

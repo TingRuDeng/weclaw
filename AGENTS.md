@@ -11,6 +11,7 @@ ai_summary:
     - "tasks/lessons.md"
     - "tasks/todo.md"
     - "scripts/release.sh"
+    - "codexauth/store.go"
     - "go.mod"
   verify_with:
     - "python3 scripts/validate_docs.py . --profile generic"
@@ -34,6 +35,7 @@ ai_summary:
 - CLI 和服务入口：`cmd/`
 - 跨平台消息业务：`messaging/`
 - Agent 接入：`agent/`
+- Codex OAuth 账户存储：`codexauth/`
 - 平台 adapter：`wechat/`、`feishu/`、`platform/`
 - 配置结构：`config/config.go`
 - 发布脚本：`scripts/release.sh`
@@ -45,6 +47,7 @@ ai_summary:
 - `cmd/start.go` 负责加载配置、创建 `messaging.Handler`、启动 HTTP API 与平台 registry。
 - `messaging/handler.go` 是命令路由、会话、审批、进度、任务状态和 Agent 调用的主要业务入口。
 - `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；Codex 生产路径使用稳定 Unix socket 上的单一共享 app-server，客户端按上游 WebSocket-over-UDS 协议连接，窗口只保存 frontend binding，Codex Companion 第二 writer 已停用。
+- `codexauth/` 管理 shared-host 级 Codex ChatGPT OAuth profile：系统凭据库优先、受保护文件显式降级；在线切换由 `agent/codex_account.go` 在 task/lease/thread 空闲门禁内停止和验证真实受管 Host，不能修改窗口 workspace/thread binding。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
 - `scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64` 四个正式资产，并会运行测试、race、vet 和 `git diff --check`；本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。
 - `tasks/todo.md` 只保留当前或正在执行的任务记录；已完成历史流水账不长期保留。

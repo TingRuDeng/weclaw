@@ -11,6 +11,7 @@ const (
 	codexAppServerRunning    codexAppServerGateState = "running"
 	codexAppServerDraining   codexAppServerGateState = "draining"
 	codexAppServerRestarting codexAppServerGateState = "restarting"
+	codexAppServerFailed     codexAppServerGateState = "failed"
 )
 
 type codexAppServerGate struct {
@@ -43,6 +44,10 @@ func (g *codexAppServerGate) acquire(ctx context.Context) (*codexAppServerPermit
 			g.mu.Unlock()
 			return permit, nil
 		}
+		if g.state == codexAppServerFailed {
+			g.mu.Unlock()
+			return nil, ErrCodexRuntimeUnavailable
+		}
 		changed := g.changed
 		g.mu.Unlock()
 		if err := waitCodexGateChange(ctx, changed); err != nil {
@@ -51,18 +56,51 @@ func (g *codexAppServerGate) acquire(ctx context.Context) (*codexAppServerPermit
 	}
 }
 
+// beginExclusive 为账号切换提供非等待式独占门禁。已有 turn 或另一项维护操作时
+// 立即拒绝，避免账号命令看似成功却中断正在执行的任务。
+func (g *codexAppServerGate) beginExclusive() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.state == codexAppServerFailed {
+		return ErrCodexRuntimeUnavailable
+	}
+	if g.state != codexAppServerRunning || g.activeTurns != 0 {
+		return ErrCodexWriterBusy
+	}
+	g.state = codexAppServerDraining
+	g.notifyLocked()
+	return nil
+}
+
+// finishExclusive 收敛账号切换。committed 只在新账号已验证时增加 generation；
+// available=false 用于回滚也失败的情形，后续 turn 必须 fail-closed。
+func (g *codexAppServerGate) finishExclusive(committed bool, available bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !available {
+		g.state = codexAppServerFailed
+		g.notifyLocked()
+		return
+	}
+	if committed {
+		g.generationID++
+	}
+	g.state = codexAppServerRunning
+	g.notifyLocked()
+}
+
 // drain 阻止新 turn，等待已有 turn 结束，再执行一次共享运行时刷新。
 func (g *codexAppServerGate) drain(ctx context.Context, restart func(context.Context) error) error {
 	if err := g.beginDrain(ctx); err != nil {
 		return err
 	}
 	if err := g.waitUntilIdle(ctx); err != nil {
-		g.finishDrain(false)
+		g.abortDrain()
 		return err
 	}
 	g.markRestarting()
 	err := restart(ctx)
-	g.finishDrain(err == nil)
+	g.finishRestart(err == nil)
 	return err
 }
 
@@ -74,6 +112,10 @@ func (g *codexAppServerGate) beginDrain(ctx context.Context) error {
 			g.notifyLocked()
 			g.mu.Unlock()
 			return nil
+		}
+		if g.state == codexAppServerFailed {
+			g.mu.Unlock()
+			return ErrCodexRuntimeUnavailable
 		}
 		changed := g.changed
 		g.mu.Unlock()
@@ -105,12 +147,24 @@ func (g *codexAppServerGate) markRestarting() {
 	g.mu.Unlock()
 }
 
-func (g *codexAppServerGate) finishDrain(restarted bool) {
+// abortDrain 只用于尚未触碰运行时的等待失败；原 Host 仍然可写。
+func (g *codexAppServerGate) abortDrain() {
+	g.mu.Lock()
+	g.state = codexAppServerRunning
+	g.notifyLocked()
+	g.mu.Unlock()
+}
+
+// finishRestart 在已经进入运行时重启后收敛 gate。失败意味着 Host 状态不再
+// 可证明，必须禁止后续 turn，不能退回 running 伪装可用。
+func (g *codexAppServerGate) finishRestart(restarted bool) {
 	g.mu.Lock()
 	if restarted {
 		g.generationID++
+		g.state = codexAppServerRunning
+	} else {
+		g.state = codexAppServerFailed
 	}
-	g.state = codexAppServerRunning
 	g.notifyLocked()
 	g.mu.Unlock()
 }

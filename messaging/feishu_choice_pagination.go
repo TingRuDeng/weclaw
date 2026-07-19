@@ -87,7 +87,7 @@ func parseFeishuNavigationPage(fields []string, command string) (feishuNavigatio
 		return feishuNavigationPageRequest{}, false
 	}
 	kind := strings.TrimSpace(fields[2])
-	if kind != "workspaces" && kind != "sessions" {
+	if kind != "workspaces" && kind != "sessions" && kind != "accounts" {
 		return feishuNavigationPageRequest{}, false
 	}
 	page, err := strconv.Atoi(fields[3])

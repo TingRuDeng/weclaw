@@ -68,6 +68,27 @@ WeClaw exposes native `codex app-server` through a stable Unix socket and connec
 
 `/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` are disabled because they would start an independent Codex writer. This version also does not treat a separately launched Codex Desktop as a shared-host client; a future local UI must connect to this same app-server rather than start a second one.
 
+### Switch Codex OAuth Accounts Safely
+
+WeClaw can save multiple authenticated Codex ChatGPT OAuth accounts and switch the host-level identity of the single shared app-server. A switch never changes a workspace, thread, or frontend binding and never replays the previous message; the next message uses the new account.
+
+```bash
+weclaw codex account list
+weclaw codex account current
+weclaw codex account save <label> [--replace] [--allow-file-store]
+weclaw codex account use <id-or-label> [--yes]
+weclaw codex account remove <id-or-label>
+weclaw codex account doctor
+```
+
+The account index is isolated by a host ID derived from `CODEX_HOME + app-server socket` and stored under `~/.weclaw/codex-accounts/<host-id>/`. It contains only labels, masked email addresses, fingerprints, and secret references. Complete OAuth snapshots go to macOS Keychain or Linux Secret Service first. A `0600` file fallback is permitted only when the local user explicitly passes `--allow-file-store`. API keys, PATs, Bedrock, and other authentication modes are rejected.
+
+To collect several profiles, sign Codex into each target account and run `save`. While WeClaw is running, `save` accepts only the account actually used by the shared Host when it matches `auth.json`. If a manual sign-in has changed the file while the old Host still caches its previous token, stop WeClaw before saving the new account offline. A running service makes the CLI use the local control API; if the process exists but that API is unavailable, the CLI fails closed instead of editing authentication directly. With the service stopped, `use` only projects authentication atomically and updates the active profile for the next start.
+
+An online `use` first rejects active tasks, active or uncertain writer leases, and every active or unknown thread. It then stops the real managed Host, projects the target authentication, starts the unique Host, and verifies both account identity and rate limits. A target startup or verification failure restores the previous authentication and Host. If rollback also fails, writes remain disabled. WeClaw never terminates a legacy or otherwise unverified app-server; run `weclaw codex account doctor` and restart WeClaw as instructed.
+
+Use `/cx account` or `/cx account status` from Feishu or WeChat to inspect the masked current profile. Only an administrator in a direct chat may list profiles or run `/cx account use <id-or-label>`. A Feishu list selection adds a five-minute confirmation card scoped to the operator, route, target profile, and list revision. A WeClaw host has one globally active Codex account, not one account per chat window.
+
 ### Reuse Claude Code Sessions
 
 ```text
@@ -149,6 +170,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
 | `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
 | `/cx new` | Create and bind a Codex session in the current workspace |
+| `/cx account`, `/cx account status` | Inspect the host-level Codex account; administrator direct messages may select and switch |
 | `/update`, `/restart [--force]` | Remotely update or restart WeClaw as an administrator |
 
 <details>
@@ -158,7 +180,7 @@ Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` wh
 
 Runtime boundary: `/cx status` is the single view for the current binding, shared host, writer, and task state.
 
-Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx model status|ls`, `/cx clean`. `/cx model status` shows defaults for newly created Codex sessions; use `/model` and `/reasoning` for the bound session.
+Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx account`, `/cx account status`, `/cx account use <profile>`, `/cx model status|ls`, and `/cx clean`. `/cx model status` shows defaults for newly created Codex sessions; use `/model` and `/reasoning` for the bound session.
 
 </details>
 
@@ -205,7 +227,7 @@ Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`
 <summary>Recommended Feishu menu</summary>
 
 - Common: `/help`, `/status`, `/model`, `/reasoning`, `/cwd`
-- Codex: `/cx ls`, `/cx status`, `/cx new`, `/cx quota`
+- Codex: `/cx ls`, `/cx status`, `/cx new`, `/cx quota`, `/cx account`
 - Claude: `/cc ls`, `/cc status`, `/cc new`, `/cc pwd`, `/cc quota`, `/cc model ls`
 - Control: `/ps`, `/cancel`, `/guide`, `/stop`, `/restart`
 

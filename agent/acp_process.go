@@ -48,6 +48,8 @@ func (a *ACPAgent) launchACPSubprocess(ctx context.Context) (int, error) {
 	if a.usesCodexSharedHost() {
 		return a.launchCodexHostClient(ctx)
 	}
+	a.wireDispatchMu.Lock()
+	defer a.wireDispatchMu.Unlock()
 	a.mu.Lock()
 	// A message/request context only bounds startup and individual RPCs. The
 	// shared ClaudeHost must survive that frontend request and is stopped solely
@@ -89,6 +91,7 @@ func (a *ACPAgent) launchACPSubprocess(ctx context.Context) (int, error) {
 	a.cmd = cmd
 	a.stdin = stdin
 	a.scanner = newACPScanner(stdout)
+	a.wireEpoch++
 	a.started = true
 	pid := cmd.Process.Pid
 	a.mu.Unlock()
@@ -134,6 +137,7 @@ func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
 		}
 		return fmt.Errorf("agent startup failed (pid=%d): %w", pid, startErr)
 	}
+	a.wireDispatchMu.Lock()
 	a.mu.Lock()
 	a.started = false
 	stdin := a.stdin
@@ -141,7 +145,9 @@ func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
 	a.stdin = nil
 	a.cmd = nil
 	a.scanner = nil
+	a.wireEpoch++
 	a.mu.Unlock()
+	a.wireDispatchMu.Unlock()
 	stopACPProcess(stdin, cmd)
 	if detail := a.stderr.LastError(); detail != "" {
 		return fmt.Errorf("agent startup failed (pid=%d): %w; stderr: %s", pid, startErr, detail)
@@ -264,9 +270,11 @@ func (a *ACPAgent) Stop() {
 		a.failRuntimeWaiters("Codex app-server client stopped")
 		return
 	}
+	a.wireDispatchMu.Lock()
 	a.mu.Lock()
 	if !a.started && a.stdin == nil && a.cmd == nil {
 		a.mu.Unlock()
+		a.wireDispatchMu.Unlock()
 		return
 	}
 	stdin := a.stdin
@@ -275,7 +283,9 @@ func (a *ACPAgent) Stop() {
 	a.stdin = nil
 	a.cmd = nil
 	a.scanner = nil
+	a.wireEpoch++
 	a.mu.Unlock()
+	a.wireDispatchMu.Unlock()
 
 	stopACPProcess(stdin, cmd)
 	a.failRuntimeWaiters("ACP runtime stopped")

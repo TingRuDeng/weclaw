@@ -67,7 +67,11 @@ func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer releaseCodexHostStartupLock(startupLock)
+	return a.launchCodexHostClientLocked(ctx, socketPath)
+}
 
+// launchCodexHostClientLocked 仅在持有 socket lifecycle lock 时调用。
+func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath string) (int, error) {
 	// Another frontend may have won the startup race while this process waited
 	// for the cross-process lock. Revalidate the path and connect before ever
 	// removing a socket or launching another host.
@@ -107,6 +111,14 @@ func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {
 		a.clearOwnedCodexHost(cmd)
 		return 0, err
 	}
+	if err := a.writeManagedCodexHostMetadata(cmd, socketPath); err != nil {
+		connection, ownedCmd, ownedDone := a.disconnectCodexHostClient(true)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		stopCodexHostProcess(ownedCmd, ownedDone)
+		return 0, err
+	}
 	log.Printf("[codex-host] started shared app-server (socket=%s, pid=%d)", socketPath, cmd.Process.Pid)
 	return cmd.Process.Pid, nil
 }
@@ -138,7 +150,7 @@ func (a *ACPAgent) acquireCodexHostStartupLock(ctx context.Context, socketPath s
 	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG {
 		return closeWithError(fmt.Errorf("codex app-server startup lock must be a regular file: %s", lockPath))
 	}
-	if stat.Mode&0o077 != 0 {
+	if stat.Mode&0o777 != 0o600 {
 		return closeWithError(fmt.Errorf("codex app-server startup lock must not be accessible by group or others: %s", lockPath))
 	}
 	if _, ok := a.allowedCodexHostUIDs()[stat.Uid]; !ok {
@@ -393,7 +405,7 @@ func (a *ACPAgent) startCodexHostProcess(ctx context.Context, socketPath string)
 	a.hostCmd = cmd
 	a.hostDone = done
 	a.mu.Unlock()
-	go a.waitCodexHostProcess(cmd, done)
+	go a.waitCodexHostProcess(cmd, done, socketPath)
 	return cmd, done, nil
 }
 
@@ -414,11 +426,12 @@ func codexSharedHostArgs(args []string, socketPath string) []string {
 	return result
 }
 
-func (a *ACPAgent) waitCodexHostProcess(cmd *exec.Cmd, done chan<- error) {
+func (a *ACPAgent) waitCodexHostProcess(cmd *exec.Cmd, done chan<- error, socketPath string) {
 	err := cmd.Wait()
 	done <- err
 	close(done)
 	a.clearOwnedCodexHost(cmd)
+	a.markCodexHostMetadataStopped(socketPath, cmd.Process.Pid)
 	if err != nil {
 		log.Printf("[codex-host] app-server exited (pid=%d): %v", cmd.Process.Pid, err)
 	} else {
@@ -440,6 +453,8 @@ func (a *ACPAgent) attachCodexHostConnection(conn *websocket.Conn) error {
 		return fmt.Errorf("codex app-server connection is nil")
 	}
 	transport := newCodexWebSocketTransport(conn)
+	a.wireDispatchMu.Lock()
+	defer a.wireDispatchMu.Unlock()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.stdin != nil || a.scanner != nil || a.started {
@@ -448,6 +463,7 @@ func (a *ACPAgent) attachCodexHostConnection(conn *websocket.Conn) error {
 	}
 	a.stdin = transport
 	a.scanner = newACPScanner(transport)
+	a.wireEpoch++
 	a.started = true
 	go a.readLoop()
 	return nil
@@ -564,11 +580,14 @@ func (t *codexWebSocketTransport) closeWithError(streamErr error) error {
 }
 
 func (a *ACPAgent) disconnectCodexHostClient(stopHost bool) (io.Closer, *exec.Cmd, <-chan error) {
+	a.wireDispatchMu.Lock()
+	defer a.wireDispatchMu.Unlock()
 	a.mu.Lock()
 	connection := a.stdin
 	a.started = false
 	a.stdin = nil
 	a.scanner = nil
+	a.wireEpoch++
 	var cmd *exec.Cmd
 	var done <-chan error
 	if stopHost {

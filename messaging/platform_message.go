@@ -124,8 +124,18 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 	if wxReply, ok := prepared.reply.(*wechat.Replier); ok {
 		wxReply.ClientID = prepared.clientID
 	}
-	log.Printf("[handler] received from %s: %q", prepared.msg.UserID, truncate(prepared.text, 80))
+	log.Printf("[handler] received from %s: %q", prepared.msg.UserID, truncate(platformMessageLogText(prepared.text), 80))
 	return prepared, true
+}
+
+// platformMessageLogText 隐去一次性确认能力，避免卡片回调日志可被重放。
+func platformMessageLogText(text string) string {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 4 && strings.EqualFold(fields[0], "/cx") &&
+		strings.EqualFold(fields[1], "account") && strings.EqualFold(fields[2], "confirm") {
+		return "/cx account confirm <redacted>"
+	}
+	return text
 }
 
 // preparePlatformAttachments 将文件和带说明的图片转换为 Agent 可消费文本。

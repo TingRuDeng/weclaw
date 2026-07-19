@@ -333,6 +333,12 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 	if owned != 1 {
 		t.Fatalf("clients owning host=%d, want exactly 1", owned)
 	}
+	if status := first.InspectCodexHost(context.Background()); !status.Managed || !status.Running || status.PID == 0 {
+		t.Fatalf("first host status=%#v", status)
+	}
+	if status := second.InspectCodexHost(context.Background()); !status.Managed || !status.Running || status.PID == 0 {
+		t.Fatalf("second host status=%#v", status)
+	}
 }
 
 func TestACPAgentRejectsNonSocketCodexHostPath(t *testing.T) {

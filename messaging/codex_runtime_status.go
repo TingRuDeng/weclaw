@@ -4,11 +4,27 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/codexauth"
 )
 
 // renderCodexStatus 合并窗口 binding 与共享 app-server 运行态；没有有效会话时仍返回基础状态。
 func (h *Handler) renderCodexStatus(runtime codexSessionCommandRuntime) navigationCommandResult {
 	base := h.renderCodexStatusForRoute(runtime.actorUserID, runtime.routeUserID, runtime.agentName, runtime.agent)
+	if accountAgent, ok := runtime.agent.(agent.CodexAccountAgent); ok {
+		if status, err := accountAgent.CurrentCodexAccount(runtime.ctx, true); err == nil {
+			accountStatus := renderCodexAccountCurrent(status)
+			if runtime.admin && runtime.private {
+				accountStatus = renderCodexAccountStatus(status)
+			}
+			base = wechatCommandText(base, accountStatus)
+		} else {
+			code := codexauth.ErrorCode(err)
+			if code == "" {
+				code = codexauth.CodeRuntimeUnavailable
+			}
+			base = wechatCommandText(base, "Codex 账号状态: 暂不可用（"+code+"）")
+		}
+	}
 	threadID, pending := h.ensureCodexSessions().getThread(runtime.bindingKey, runtime.workspaceRoot)
 	threadID = strings.TrimSpace(threadID)
 	if pending || threadID == "" {

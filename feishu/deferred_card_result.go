@@ -15,19 +15,27 @@ type deferredCardResultReplier struct {
 	platform.Replier
 	sender    messageSender
 	messageID string
+	title     string
 }
 
 func newDeferredCardResultReplier(reply platform.Replier, sender messageSender, messageID string) platform.Replier {
+	return newDeferredCardResultReplierWithTitle(reply, sender, messageID, "会话切换结果")
+}
+
+func newDeferredCardResultReplierWithTitle(reply platform.Replier, sender messageSender, messageID string, title string) platform.Replier {
 	if reply == nil || sender == nil || strings.TrimSpace(messageID) == "" {
 		return reply
 	}
+	if title = strings.TrimSpace(title); title == "" {
+		title = "操作结果"
+	}
 	return &deferredCardResultReplier{
-		Replier: reply, sender: sender, messageID: strings.TrimSpace(messageID),
+		Replier: reply, sender: sender, messageID: strings.TrimSpace(messageID), title: title,
 	}
 }
 
 func (r *deferredCardResultReplier) SendText(ctx context.Context, content string) error {
-	card := buildChoiceHandledStatusCard("blue", "**会话切换结果**\n\n"+strings.TrimSpace(content))
+	card := buildChoiceHandledStatusCard("blue", "**"+r.title+"**\n\n"+strings.TrimSpace(content))
 	cardJSON, err := json.Marshal(card.Data)
 	if err == nil {
 		err = r.sender.PatchCard(ctx, r.messageID, string(cardJSON))

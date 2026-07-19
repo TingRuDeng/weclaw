@@ -67,6 +67,44 @@ func TestCodexAppServerGateTimeoutKeepsRuntimeRunning(t *testing.T) {
 	}
 }
 
+func TestCodexAppServerGateRestartFailureFailsClosed(t *testing.T) {
+	gate := newCodexAppServerGate()
+	restartErr := errors.New("restart failed")
+	if err := gate.drain(context.Background(), func(context.Context) error {
+		return restartErr
+	}); !errors.Is(err, restartErr) {
+		t.Fatalf("drain() error=%v", err)
+	}
+	if gate.stateSnapshot() != codexAppServerFailed || gate.generation() != 1 {
+		t.Fatalf("state=%s generation=%d", gate.stateSnapshot(), gate.generation())
+	}
+	if _, err := gate.acquire(context.Background()); !errors.Is(err, ErrCodexRuntimeUnavailable) {
+		t.Fatalf("acquire() error=%v", err)
+	}
+}
+
+func TestCodexAppServerGateExclusiveIsNonWaitingAndCanFailClosed(t *testing.T) {
+	gate := newCodexAppServerGate()
+	permit, err := gate.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.beginExclusive(); !errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("beginExclusive() error=%v", err)
+	}
+	permit.release()
+	if err := gate.beginExclusive(); err != nil {
+		t.Fatal(err)
+	}
+	gate.finishExclusive(false, false)
+	if gate.stateSnapshot() != codexAppServerFailed {
+		t.Fatalf("state=%s", gate.stateSnapshot())
+	}
+	if _, err := gate.acquire(context.Background()); !errors.Is(err, ErrCodexRuntimeUnavailable) {
+		t.Fatalf("acquire failed gate error=%v", err)
+	}
+}
+
 func waitForCodexGateState(t *testing.T, gate *codexAppServerGate, want codexAppServerGateState) {
 	t.Helper()
 	deadline := time.Now().Add(codexGateTestTimeout)

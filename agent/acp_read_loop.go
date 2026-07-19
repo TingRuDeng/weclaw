@@ -13,16 +13,34 @@ import (
 func (a *ACPAgent) readLoop() {
 	a.mu.Lock()
 	scanner := a.scanner
+	epoch := a.wireEpoch
 	a.mu.Unlock()
 	if scanner == nil {
 		return
 	}
 
 	for scanner.Scan() {
-		a.handleACPWireLine(scanner.Text())
+		if !a.handleCurrentACPWireLine(scanner, epoch, scanner.Text()) {
+			break
+		}
 	}
-	a.finishReadLoop(scanner)
+	a.finishReadLoop(scanner, epoch)
 	log.Println("[acp] read loop ended")
+}
+
+// handleCurrentACPWireLine 在同一临界区核对 reader generation 并完成分发。
+// 账号切换断开旧连接后，旧 reader 即使还读到缓存帧也只能丢弃。
+func (a *ACPAgent) handleCurrentACPWireLine(scanner *bufio.Scanner, epoch uint64, line string) bool {
+	a.wireDispatchMu.Lock()
+	defer a.wireDispatchMu.Unlock()
+	a.mu.Lock()
+	current := a.scanner == scanner && a.wireEpoch == epoch
+	a.mu.Unlock()
+	if !current {
+		return false
+	}
+	a.handleACPWireLine(line)
+	return true
 }
 
 // handleACPWireLine 解析单条 NDJSON，并区分请求响应与主动通知。
@@ -157,21 +175,23 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 }
 
 // finishReadLoop 清理当前 runtime，并唤醒所有仍在等待的调用者。
-func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner) {
+func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner, epoch uint64) {
 	exitReason := "ACP runtime exited"
 	if err := scanner.Err(); err != nil {
 		exitReason = fmt.Sprintf("ACP runtime read error: %v", err)
 		log.Printf("[acp] read loop error: %v", err)
 	}
+	a.wireDispatchMu.Lock()
 	a.mu.Lock()
-	currentScanner := a.scanner == scanner
-	if a.scanner == scanner {
+	currentScanner := a.scanner == scanner && a.wireEpoch == epoch
+	if currentScanner {
 		a.started = false
 		a.stdin = nil
 		a.cmd = nil
 		a.scanner = nil
 	}
 	a.mu.Unlock()
+	a.wireDispatchMu.Unlock()
 	if currentScanner {
 		a.failRuntimeWaitersUncertain(exitReason)
 	}

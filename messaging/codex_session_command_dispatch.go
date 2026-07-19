@@ -14,6 +14,7 @@ type codexSessionCommandRuntime struct {
 	actorUserID     string
 	routeUserID     string
 	admin           bool
+	private         bool
 	fields          []string
 	agentName       string
 	agent           agent.Agent
@@ -45,7 +46,7 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 	}
 	runtime := codexSessionCommandRuntime{
 		ctx: ctx, req: req, actorUserID: actorUserID, routeUserID: routeUserID,
-		admin: req.Admin || h.isAdminUser(actorUserID), fields: fields,
+		admin: req.Admin || h.isAdminUser(actorUserID), private: req.Private, fields: fields,
 		agentName: agentName, agent: ag,
 		bindingKey:      codexBindingKey(routeUserID, agentName),
 		ownerBindingKey: codexBindingKey(actorUserID, agentName),
@@ -124,6 +125,8 @@ func (h *Handler) dispatchCodexUtilityCommand(runtime codexSessionCommandRuntime
 		return h.renderCodexStatus(runtime), true
 	case "quota":
 		return h.codexNoArgCommandResult(fields, "/cx quota", func() string { return h.renderCodexQuota(runtime.ctx, runtime.agent) })
+	case "account":
+		return h.dispatchCodexAccountCommand(runtime), true
 	case "clean":
 		return h.codexNoArgCommandResult(fields, "/cx clean", func() string { return h.handleCodexClean(runtime.bindingKey) })
 	case "app":

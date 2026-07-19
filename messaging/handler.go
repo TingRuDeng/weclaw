@@ -82,6 +82,7 @@ type Handler struct {
 	codexBrowseWorkspaces   map[string]string
 	feishuWorkspaceChoices  feishuWorkspaceChoiceStore
 	feishuNavSnapshots      feishuNavigationSnapshotStore
+	feishuAccountConfirms   feishuCodexAccountConfirmStore
 	serviceAdminMu          sync.Mutex
 	serviceAdminExecutor    ServiceAdminCommandExecutor
 	adminTimeout            time.Duration

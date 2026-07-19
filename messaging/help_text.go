@@ -31,6 +31,8 @@ Codex：
 
 /cx quota 查看 Codex 账号额度
 
+/cx account 查看当前 Codex 账号，管理员私聊可切换
+
 /cx ls 查看列表
 
 /cx <编号|..> 选择或返回

@@ -37,6 +37,8 @@ func choicePendingDetail(choice string) string {
 	case command == "/cx switch" || strings.HasPrefix(command, "/cx switch ") ||
 		command == "/cc switch" || strings.HasPrefix(command, "/cc switch "):
 		return "正在切换并接管，完成后将在本卡片更新结果。"
+	case strings.HasPrefix(command, "/cx account confirm "):
+		return "正在检查全局任务和写入状态，并切换共享 Codex Host；完成后将在本卡片更新结果。"
 	default:
 		return "正在处理，结果将单独发送。"
 	}

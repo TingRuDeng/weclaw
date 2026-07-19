@@ -55,7 +55,11 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 	}
 	if page, ok := parseFeishuNavigationPage(fields, "/cx"); ok {
 		req.page = page
-		req.result = cardNavigationResult("当前导航状态已变化，请发送 /cx ls 重新打开。")
+		if page.Kind == "accounts" {
+			req.result = h.renderFeishuCodexAccountPage(req, page)
+		} else {
+			req.result = cardNavigationResult("当前导航状态已变化，请发送 /cx ls 重新打开。")
+		}
 	} else {
 		req.result = h.handleCodexSessionCommandForRouteResult(ctx, codexSessionCommandRequest{
 			ActorUserID: msg.UserID,
@@ -65,7 +69,20 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 			AccountID:   msg.AccountID,
 			Reply:       reply,
 			Admin:       h.isAdminMessage(msg),
+			Private:     isPrivateCodexCommandMessage(msg, routeUserID),
 		})
+	}
+	if len(req.result.Choices) > 0 {
+		choices := platformChoicesWithMetadata(req.result.Choices, feishuChoiceSessionMetadata(msg, routeUserID))
+		if err := reply.AskChoices(ctx, req.result.Prompt, choices); err == nil {
+			return true
+		} else {
+			log.Printf("[handler] failed to send feishu codex account choices to %s: %v", msg.UserID, err)
+		}
+		if strings.TrimSpace(req.result.Reply) != "" {
+			sendPlatformText(ctx, reply, msg.UserID, req.result.Reply)
+		}
+		return true
 	}
 	if h.sendFeishuCodexNavigationChoices(req) {
 		return true
@@ -120,7 +137,7 @@ func isFeishuCodexNavigationCommand(fields []string) bool {
 		return true
 	}
 	switch fields[1] {
-	case "ls", "cd":
+	case "ls", "cd", "account":
 		return true
 	case "page":
 		_, ok := parseFeishuNavigationPage(fields, "/cx")

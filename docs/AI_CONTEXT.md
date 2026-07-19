@@ -7,8 +7,8 @@ ai_summary:
   source_of_truth:
     - "cmd/start.go"
     - "messaging/handler.go"
-    - "messaging/codex_browser.go"
-    - "agent/agent.go"
+    - "agent/codex_account.go"
+    - "codexauth/store.go"
     - "platform/platform.go"
     - "platform/message.go"
     - "config/config.go"
@@ -36,7 +36,7 @@ ai_summary:
 
 - `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口；更新后重启与手动重启必须在停止旧服务前复用启动预检。
 - `config/`：配置结构、默认值、Agent 探测、工作目录白名单、管理员白名单和 API 安全校验。
-- `agent/`：统一 Agent 接口，以及 ACP、CLI、HTTP、Companion 等 runtime。
+- `agent/`：统一 Agent 接口与各类 runtime；`codexauth/`：按 shared-host namespace 隔离的 OAuth profile、系统凭据库/显式文件后端、安全文件与跨进程事务锁。
 - `platform/`：跨平台消息、回复、注册表和访问控制抽象。
 - `messaging/`：命令路由、会话、审批、进度、任务状态和 Agent 调用主业务。
 - `feishu/`：飞书事件解析、会话范围、卡片、按钮、审批和权限提示。
@@ -58,7 +58,7 @@ ai_summary:
 
 - 修改启动、停止、更新、远程管理命令或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`messaging/admin_commands.go`、`scripts/release.sh`。
 - 修改消息命令或任务状态：先读 `messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`。
-- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/codex_app_server_host.go`、`agent/codex_runtime_lease.go`、`agent/acp_sessions.go`、`agent/acp_session_catalog.go`、`agent/claude_quota.go`、`agent/claude_quota_oauth.go`、`messaging/codex_sessions.go`、`messaging/codex_remote_selection_store.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`、`messaging/claude_quota.go`、`messaging/agent_task.go`。
+- 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/codex_app_server_host.go`、`agent/codex_host_supervisor.go`、`agent/codex_account.go`、`agent/codex_runtime_lease.go`、`codexauth/store.go`、`agent/acp_sessions.go`、`agent/acp_session_catalog.go`、`agent/claude_quota.go`、`agent/claude_quota_oauth.go`、`messaging/codex_sessions.go`、`messaging/codex_account_command.go`、`messaging/codex_remote_selection_store.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`、`messaging/claude_quota.go`、`messaging/agent_task.go`。
 - 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
 - 修改微信体验：先读 `wechat/`、`ilink/`、`messaging/progress.go`。
 - 修改配置：先读 `config/config.go`、`config/detect.go`、`web/view.go` 和相关测试。
@@ -81,6 +81,9 @@ ai_summary:
 - 飞书推荐使用 7.22+ 悬浮菜单，菜单项通过“发送文字消息”触发命令，只保留 `/help`、状态/任务控制、Codex/Claude 列表与新建、模型/推理/确认模式等高频入口；可切换菜单受 3 个主菜单限制时移除“设置”主菜单。`/cancel` 等低频命令由飞书 `/help` 二级分类卡片承载，管理员分类只对管理员显示；已停用的 `/cc owner`、`/cc cli` 不得继续出现在帮助卡中。普通计划确认仍回复“确认”，Codex 运行中的暂存消息未被 `/guide`、`/cancel` 或 `/stop` 消费时会在上一任务结束后自动执行。
 - 命令入口只保留当前主路径：远程更新使用 `/update`，Codex 会话使用 `/cx ...`，Claude 会话使用 `/cc ...`；不要重新引入 `/info`、`/clear`、`/upgrade`、`/codex ...` 会话入口、`/claude ...` 会话入口、`/cx open-app` 或 `/cx attach app` 这类兼容路由。`/cc <内容>` 同时保留为 Claude 消息别名，因此 Claude 会话命令只能在子命令和参数数量完整匹配时消费；带额外正文的 `/cc status ...`、`/cc new ...` 等输入必须落回 Claude 消息路径。窗口已显式选择但当前不可用的 Agent 必须失败关闭，禁止静默回退到平台或全局默认 Agent。
 - Codex 运行拓扑是单一 app-server、多前端客户端。`agent/codex_app_server_host.go` 通过稳定 Unix socket 复用或启动唯一 host，并按上游标准 HTTP Upgrade 建立 WebSocket-over-UDS；禁止把该 socket 当裸 JSONL `net.Conn`。默认路径超过 `sockaddr_un` 限制时会稳定哈希到真实系统临时目录下的用户私有 `weclaw-<uid>` 目录；macOS 必须解析 `/tmp` 到 `/private/tmp`，因为 Codex 拒绝 socket 目录链中的软链接。host 生命周期独立于单次前端请求，普通客户端断开和恢复不得终止其他前端正在使用的 host。
+- Codex OAuth profile 是 shared-host 级身份，不属于窗口或 thread。`codexauth/` 只接受 ChatGPT OAuth，索引按解析后的 `CODEX_HOME + socket` 生成 host ID，完整快照优先进入 Keychain/Secret Service；文件后端必须由本机 `--allow-file-store` 明确授权。目录/文件固定为 `0700/0600`，拒绝符号链接、异常 owner/权限，并按 gate → account lock → host lifecycle lock 获取切换事务锁。
+- `agent/codex_host_supervisor.go` 通过 socket 相邻的 `0600` 元数据验证 PID、UID、启动时间、进程组、命令与 generation；未知或遗留进程不得被终止。`agent/codex_account.go` 切换前同时检查 Handler task、全局 writer lease 和分页后的全部 archived/unarchived thread，停止真实受管 Host 后投影目标认证，并以 `account/read` 和 `account/rateLimits/read` 验证。任一步失败都恢复旧认证与旧 Host；回滚失败必须把 app-server gate 留在 failed，旧 connection epoch 的 RPC/通知不得覆盖新 generation。
+- `weclaw codex account ...` 在服务运行时只走真实 loopback 的本机 API；已有 `api_token` 继续校验。服务存在但 API 不可达时禁止直接改认证；服务停止时只允许离线 list/save/remove/use。`/cx account` 的列表和切换只对管理员私聊开放，普通用户和群聊只能看到当前脱敏标签；飞书确认 token 绑定机器人、操作者、route、profile 与 revision，5 分钟过期且重复点击幂等。
 - Codex 窗口只持久化 frontend binding，不持有独占 writer owner。`messaging/codex_remote_selection_store.go` v4 只保存 route 到 workspace/thread 的绑定；v1-v3 owner/control 字段仅用于读取迁移，加载后必须丢弃并重写。多个飞书或微信窗口可同时绑定同一 thread，不能互相释放或覆盖绑定。
 - Codex 的绑定入口包括 `/cx switch`、会话短编号、仅含一个会话的 `/cx cd`、飞书会话卡片、`/cx new` 和默认 Agent 为 Codex 时的全局 `/new`；这些入口最终复用 `messaging/codex_session_acquire.go:acquireCodexSessionWithBindingLocked`，新建入口先经过 `messaging/codex_session_new.go:createAndAcquireCodexSessionWithBindingLocked`。
 - `messaging/codex_session_command_dispatch.go:prepareCodexSessionCommand` 在 route binding 锁内准备 `/cx` 命令；默认 Codex 的全局 `/new` 由 `messaging/default_session.go:resetDefaultCodexSessionForRoute` 持有相同 binding 执行锁。事务内部通过 `messaging/codex_session_locks.go:lockCodexSessionThreads` 按去重排序后的 thread ID 加锁，禁止反向获取 binding 锁。
@@ -103,15 +106,12 @@ ai_summary:
 - Web 配置保存必须保留 Agent 的 Codex 权限字段和共享 socket：`permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode`、`app_server_socket`。
 - `api_addr` 监听非 loopback 地址时必须配置 `api_token`。
 - 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。普通 `weclaw update` 在已是最新版时不得启动 Claude ACP 预检；实际安装新版本或显式 `update --restart` 才执行启动预检。
-
 ## Validation Commands
 
 - quick: `python3 scripts/validate_docs.py . --profile generic`、`git diff --check`
 - full: `go test ./... -count=1 -timeout 120s`
 - full: `go test -race ./... -count=1 -timeout 180s`
-- full: `go vet ./...`、`go mod tidy -diff`
-- full: `go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`
-- full: `go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`
+- full: `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`、`go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`
 - release-side-effect: `scripts/release.sh --next-patch`
 
 ## Stale when

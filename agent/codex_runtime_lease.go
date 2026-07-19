@@ -128,6 +128,23 @@ func (r *codexRuntimeOwnerRegistry) writerLeaseStatus(threadID string) (exists b
 	return lease != nil, lease != nil && lease.uncertain
 }
 
+// anyWriterLeaseStatus 返回整个 shared host 的 writer lease 快照。账号切换是
+// 主机级操作，不能只检查当前飞书窗口绑定的 thread。
+func (r *codexRuntimeOwnerRegistry) anyWriterLeaseStatus() (count int, uncertain bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, lease := range r.leases {
+		if lease == nil {
+			continue
+		}
+		count++
+		if lease.uncertain {
+			uncertain = true
+		}
+	}
+	return count, uncertain
+}
+
 // accept 把实际 turn ID 绑定到租约，并核对启动响应前到达的 Desktop 快照。
 func (l *codexWriterLease) accept(turnID string) error {
 	turnID = strings.TrimSpace(turnID)

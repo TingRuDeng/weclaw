@@ -1,5 +1,14 @@
 # Lessons
 
+## 2026-07-19 Codex 账号是共享 Host 身份，不是窗口或 thread 状态
+
+- 触发条件：本地 Codex 账号额度耗尽后手工登录另一个账号，但唯一 app-server 仍缓存旧 OAuth Token；飞书继续复用同一 workspace/thread 时返回旧账号 refresh 失败。
+- 规则：账号 profile 只属于由 `CODEX_HOME + app-server socket` 定义的 shared host namespace。切换账号不得清理、重建或迁移 thread，也不得修改任何飞书/微信 frontend binding；下一条新消息才使用新账号，失败消息不自动重放。
+- 安全边界：只接受 ChatGPT OAuth；索引只存脱敏身份、指纹和 secret 引用，完整快照优先存系统凭据库。文件降级必须由本机用户显式授权，并对目录、文件、owner、符号链接、原子写和跨进程锁执行严格校验。API、卡片、日志和 CLI 都不得输出凭据正文。
+- 生命周期边界：锁顺序固定为运行时 gate → account lock → host lifecycle lock。停止 Host 前必须确认 Handler task、全部 writer lease 以及分页后的 archived/unarchived thread 均为空闲；active、unknown、旧 revision 或无法验证的受管进程都拒绝切换且不写认证。
+- 回滚边界：目标认证写入后必须启动唯一 Host，并通过 `account/read` 与额度接口验证身份。任一步失败都停止失败 Host、恢复旧认证并重新验证；旧 Host 或账号索引未能完整恢复时 gate 保持 failed。连接 generation 切换必须与 wire dispatch 串行，旧 RPC 和晚到通知不能覆盖新运行态。
+- 远程边界：一个主机只有一个全局活动账号。普通用户和群聊只能看到当前脱敏标签；只有管理员私聊可以列出或切换，飞书确认能力必须绑定机器人、操作者、route、目标 profile 和 revision，并具备 TTL 与重复点击幂等。
+
 ## 2026-07-19 Claude 必须是单一 ClaudeHost、多前端 binding
 
 - 触发条件：每个飞书或微信窗口各自维护 Claude owner，并通过 `/cc cli` 把同一个 session 交给独立原生进程；窗口切换、ACP 恢复和 prompt 并发因此同时操作 session ownership，反复出现接管失败或潜在双写。

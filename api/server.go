@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/codexauth"
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
@@ -24,6 +26,7 @@ type Server struct {
 	clients  []*ilink.Client
 	registry *platform.Registry
 	status   RuntimeStatusProvider
+	accounts CodexAccountController
 	addr     string
 	token    string
 }
@@ -31,6 +34,16 @@ type Server struct {
 // RuntimeStatusProvider 暴露服务进程内的轻量运行态，供本机 CLI 做重启保护。
 type RuntimeStatusProvider interface {
 	ActiveTaskCount() int
+}
+
+// CodexAccountController 由消息层实现，统一协调运行中的任务、Agent 与账号事务。
+type CodexAccountController interface {
+	ListCodexAccounts(context.Context) (agent.CodexAccountStatus, error)
+	CurrentCodexAccount(context.Context, bool) (agent.CodexAccountStatus, error)
+	SaveCodexAccount(context.Context, agent.CodexAccountSaveOptions) (agent.CodexAccountProfile, error)
+	UseCodexAccount(context.Context, string, uint64) (agent.CodexAccountSwitchResult, error)
+	RemoveCodexAccount(context.Context, string) error
+	DoctorCodexAccounts(context.Context) codexauth.DoctorResult
 }
 
 // Option 调整 API 服务运行参数，避免构造函数继续膨胀。
@@ -57,6 +70,13 @@ func WithRuntimeStatusProvider(provider RuntimeStatusProvider) Option {
 	}
 }
 
+// WithCodexAccountController 配置仅本机可访问的 Codex 账号控制器。
+func WithCodexAccountController(controller CodexAccountController) Option {
+	return func(s *Server) {
+		s.accounts = controller
+	}
+}
+
 // NewServer creates an API server.
 func NewServer(clients []*ilink.Client, addr string, options ...Option) *Server {
 	if addr == "" {
@@ -78,6 +98,12 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/send", s.handleSend)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
+	mux.HandleFunc("/api/codex/accounts", s.handleCodexAccounts)
+	mux.HandleFunc("/api/codex/accounts/current", s.handleCodexAccountCurrent)
+	mux.HandleFunc("/api/codex/accounts/save", s.handleCodexAccountSave)
+	mux.HandleFunc("/api/codex/accounts/use", s.handleCodexAccountUse)
+	mux.HandleFunc("/api/codex/accounts/remove", s.handleCodexAccountRemove)
+	mux.HandleFunc("/api/codex/accounts/doctor", s.handleCodexAccountDoctor)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")

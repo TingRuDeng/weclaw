@@ -26,6 +26,7 @@ type codexSessionCommandRequest struct {
 	AccountID   string
 	Reply       platform.Replier
 	Admin       bool
+	Private     bool
 }
 
 // handleCodexSessionCommandForRoute 让飞书内置会话命令操作 route session，同时继续按真实用户解析工作空间。
@@ -120,7 +121,7 @@ func (h *Handler) rejectDisallowedCodexWorkspace(bindingKey string, agentName st
 
 func isCodexWorkspaceIndependentCommand(command string) bool {
 	switch command {
-	case "ls", "cd", "clean", "quota", "detach", "model":
+	case "ls", "cd", "clean", "quota", "detach", "model", "account":
 		return true
 	default:
 		return false

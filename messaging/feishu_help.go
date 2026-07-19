@@ -77,6 +77,7 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/cx status", Label: "会话状态"},
 			{ID: "/cx pwd", Label: "当前工作空间"},
 			{ID: "/cx quota", Label: "账号额度"},
+			{ID: "/cx account", Label: "Codex 账号"},
 			{ID: "/cx model ls", Label: "可用模型"},
 			{ID: "/cx clean", Label: "清理失效记录"},
 			{ID: "/cx help", Label: "完整命令"},

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/codexauth"
 )
 
 // ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
@@ -28,10 +30,14 @@ type ACPAgent struct {
 	runAs            runAsUserSpec
 	protocol         string // "legacy_acp" or "codex_app_server"
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	scanner *bufio.Scanner
+	mu sync.Mutex
+	// wireDispatchMu serializes connection generation changes with inbound wire
+	// dispatch, so an old app-server reader cannot mutate state after reconnect.
+	wireDispatchMu sync.Mutex
+	wireEpoch      uint64
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	scanner        *bufio.Scanner
 	// codexHostSocket is the stable Unix socket shared by every Codex frontend.
 	// hostCmd/hostDone are only populated when this ACPAgent launched the host;
 	// attaching to an already running host never gives this client lifecycle
@@ -93,6 +99,10 @@ type ACPAgent struct {
 	desktopRuntime            *codexDesktopRuntime
 	appServerGate             *codexAppServerGate
 	restartCodexAppServerCall func(context.Context) error
+	codexAccountStoreCall     func() (*codexauth.Store, error)
+	stopManagedHostCall       func(context.Context, string) error
+	startManagedHostCall      func(context.Context, string) error
+	updateHostIdentityCall    func(string, codexauth.Profile) error
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
