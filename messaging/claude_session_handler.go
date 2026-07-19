@@ -15,8 +15,18 @@ func isClaudeSessionCommand(trimmed string) bool {
 		return false
 	}
 	switch fields[1] {
-	case "whoami", "ls", "cd", "new", "switch", "pwd", "status", "owner", "cli", "model", "quota", "help", "page":
-		return true
+	case "whoami", "ls", "new", "pwd", "status", "cli", "quota", "help":
+		return len(fields) == 2
+	case "cd", "switch":
+		// 缺少目标时仍进入命令处理并返回用法；多余内容保留给 /cc 消息别名。
+		return len(fields) == 2 || len(fields) == 3
+	case "owner":
+		return len(fields) == 2 || len(fields) == 3 && (strings.EqualFold(fields[2], "remote") || strings.EqualFold(fields[2], "local"))
+	case "model":
+		return len(fields) == 2 || len(fields) == 3 && (fields[2] == "status" || fields[2] == "ls")
+	case "page":
+		_, ok := parseFeishuNavigationPage(fields, "/cc")
+		return ok
 	default:
 		return false
 	}
@@ -90,7 +100,7 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 	case "status":
 		return textNavigationResult(h.renderClaudeStatus(route))
 	case "owner":
-		return textNavigationResult(h.handleClaudeOwnerCommand(route, fields[2:]))
+		return textNavigationResult(claudeSingleHostEntryDisabled("owner"))
 	case "cli":
 		return textNavigationResult(h.handleClaudeCLI(route))
 	case "model":

@@ -97,7 +97,7 @@ func TestResolveConfigAgentOptions(t *testing.T) {
 	}
 }
 
-// TestResolveConfigAgentOptionsAllowsMissingAutoLocalCommand 验证本地交接缺失不阻断远程 ACP。
+// TestResolveConfigAgentOptionsAllowsMissingAutoLocalCommand 验证额度查询辅助命令缺失不阻断远程 ACP。
 func TestResolveConfigAgentOptionsAllowsMissingAutoLocalCommand(t *testing.T) {
 	lookPath := func(command string) (string, error) {
 		if command == "claude-agent-acp" {

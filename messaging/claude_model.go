@@ -9,7 +9,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-// handleClaudeModelCommand 处理微信侧 Claude Code 模型查询命令。
+// handleClaudeModelCommand 处理 Claude 模型目录与新会话默认配置查询命令。
 func (h *Handler) handleClaudeModelCommand(ctx context.Context, ag agent.Agent, args []string) string {
 	if len(args) == 0 || args[0] == "status" {
 		return h.renderClaudeModelStatus(ag)
@@ -20,7 +20,7 @@ func (h *Handler) handleClaudeModelCommand(ctx context.Context, ag agent.Agent, 
 	return "用法: /cc model status | /cc model ls"
 }
 
-// renderClaudeModelStatus 渲染当前 Claude Code 模型配置。
+// renderClaudeModelStatus 渲染后续新建 Claude session 使用的默认配置。
 func (h *Handler) renderClaudeModelStatus(ag agent.Agent) string {
 	if modelAg, ok := ag.(agent.ClaudeModelAgent); ok {
 		return renderClaudeModelStatusText(modelAg.ClaudeModelStatus())
@@ -60,11 +60,12 @@ func (h *Handler) claudeModelsForAgent(ctx context.Context, ag agent.Agent) ([]a
 	return agent.DefaultClaudeModels(), nil
 }
 
-// renderClaudeModelStatusText 用明确文案区分空配置和真实模型名。
+// renderClaudeModelStatusText 用明确文案和完整字段区分新会话默认值与当前 session 配置。
 func renderClaudeModelStatusText(status agent.ClaudeModelStatus) string {
 	return wechatCommandText(
-		"Claude 模型配置:",
+		"Claude 新会话默认模型配置:",
 		"model: "+claudeModelConfigValue(status.Model),
+		"effort: "+claudeModelConfigValue(status.Effort),
 	)
 }
 

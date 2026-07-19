@@ -7,291 +7,224 @@ import (
 	"time"
 )
 
-var (
-	errClaudeRemoteSelectionChanged    = errors.New("Claude 会话选择状态已变化")
-	errClaudeRemoteSelectionOtherRoute = errors.New("Claude 会话由其他远程窗口控制")
-)
+var errClaudeBindingSelectionChanged = errors.New("Claude 会话绑定状态已变化")
 
 type claudeSessionStoreImage struct {
 	Bindings map[string]claudeSessionBinding
-	Controls map[string]claudeControlIntent
 }
 
-type claudeRemoteSelectionSnapshot struct {
+type claudeBindingSelectionSnapshot struct {
 	TargetSessionID string
 	Binding         claudeSessionBinding
-	Target          claudeControlIntent
-	RouteOwned      map[string]claudeControlIntent
 }
 
-type claudeRemoteSelectionUpdate struct {
+type claudeBindingSelectionUpdate struct {
 	BindingKey      string
 	WorkspaceRoot   string
 	TargetSessionID string
-	ConversationID  string
 	BindingStatus   claudeBindingStatus
-	Expected        claudeRemoteSelectionSnapshot
+	Expected        claudeBindingSelectionSnapshot
 }
 
-type claudeRemoteReleaseUpdate struct {
+type claudeBindingReleaseUpdate struct {
 	BindingKey    string
 	WorkspaceRoot string
 	KeepSelection bool
-	Expected      claudeRemoteSelectionSnapshot
+	Expected      claudeBindingSelectionSnapshot
 }
 
-type claudeRemoteMutation struct {
+type claudeBindingMutation struct {
 	Before   claudeSessionStoreImage
 	After    claudeSessionStoreImage
-	Target   claudeControlIntent
-	Released map[string]claudeControlIntent
+	Previous claudeSessionBinding
+	Current  claudeSessionBinding
 }
 
-// remoteSelectionSnapshot 返回 route 绑定、目标控制意图和 route 全部远程所有权的不可变快照。
-func (s *claudeSessionStore) remoteSelectionSnapshot(bindingKey string, targetSessionID string) claudeRemoteSelectionSnapshot {
+// bindingSelectionSnapshot returns the immutable state used by the selection
+// CAS. It deliberately contains no cross-window owner: two routes may bind the
+// same Claude session.
+func (s *claudeSessionStore) bindingSelectionSnapshot(bindingKey string, targetSessionID string) claudeBindingSelectionSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return claudeRemoteSelectionSnapshotLocked(s.bindings, s.controls, bindingKey, targetSessionID)
+	return claudeBindingSelectionSnapshotLocked(s.bindings, bindingKey, targetSessionID)
 }
 
-func claudeRemoteSelectionSnapshotLocked(
+func claudeBindingSelectionSnapshotLocked(
 	bindings map[string]claudeSessionBinding,
-	controls map[string]claudeControlIntent,
 	bindingKey string,
 	targetSessionID string,
-) claudeRemoteSelectionSnapshot {
-	bindingKey = strings.TrimSpace(bindingKey)
-	targetSessionID = strings.TrimSpace(targetSessionID)
-	target, ok := controls[targetSessionID]
-	if !ok {
-		target = claudeControlIntent{Owner: claudeOwnerUnclaimed}
-	}
-	routeOwned := make(map[string]claudeControlIntent)
-	for sessionID, intent := range controls {
-		if intent.Owner == claudeOwnerRemote && intent.BindingKey == bindingKey {
-			routeOwned[sessionID] = intent
-		}
-	}
-	return claudeRemoteSelectionSnapshot{
-		TargetSessionID: targetSessionID,
-		Binding:         bindings[bindingKey],
-		Target:          target,
-		RouteOwned:      routeOwned,
+) claudeBindingSelectionSnapshot {
+	return claudeBindingSelectionSnapshot{
+		TargetSessionID: strings.TrimSpace(targetSessionID),
+		Binding:         bindings[strings.TrimSpace(bindingKey)],
 	}
 }
 
-// commitRemoteSelection 原子切换 binding、释放旧 session 并认领目标 session。
-func (s *claudeSessionStore) commitRemoteSelection(update claudeRemoteSelectionUpdate) (claudeRemoteMutation, error) {
-	update = normalizeClaudeRemoteSelectionUpdate(update)
-	if err := validateClaudeRemoteSelectionUpdate(update); err != nil {
-		return claudeRemoteMutation{}, err
+// commitBindingSelection atomically updates one frontend binding. It never
+// rejects another frontend that already references the target session; the
+// session writer lease is acquired only when a prompt starts.
+func (s *claudeSessionStore) commitBindingSelection(update claudeBindingSelectionUpdate) (claudeBindingMutation, error) {
+	update = normalizeClaudeBindingSelectionUpdate(update)
+	if err := validateClaudeBindingSelectionUpdate(update); err != nil {
+		return claudeBindingMutation{}, err
 	}
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current := claudeRemoteSelectionSnapshotLocked(s.bindings, s.controls, update.BindingKey, update.TargetSessionID)
-	if current.Target.Owner == claudeOwnerRemote && current.Target.BindingKey != update.BindingKey {
-		return claudeRemoteMutation{}, errClaudeRemoteSelectionOtherRoute
-	}
-	if !sameClaudeRemoteSelectionSnapshot(current, update.Expected) {
-		return claudeRemoteMutation{}, errClaudeRemoteSelectionChanged
+	current := claudeBindingSelectionSnapshotLocked(s.bindings, update.BindingKey, update.TargetSessionID)
+	if current != update.Expected {
+		return claudeBindingMutation{}, errClaudeBindingSelectionChanged
 	}
 
-	before := newClaudeSessionStoreImage(s.bindings, s.controls)
+	before := newClaudeSessionStoreImage(s.bindings)
 	nextBindings := cloneClaudeBindings(s.bindings)
-	nextControls := cloneClaudeControls(s.controls)
-	now := time.Now().UTC()
-	selectClaudeRemoteBinding(nextBindings, update, now)
-	released := releaseClaudeRemoteControls(nextControls, update.BindingKey, update.TargetSessionID, now)
-	target := claimClaudeRemoteControl(nextControls, update, now)
-	after := newClaudeSessionStoreImage(nextBindings, nextControls)
-	mutation := claudeRemoteMutation{Before: before, After: after, Target: target, Released: released}
+	selectClaudeBinding(nextBindings, update, time.Now().UTC())
+	after := newClaudeSessionStoreImage(nextBindings)
+	mutation := claudeBindingMutation{
+		Before: before, After: after,
+		Previous: before.Bindings[update.BindingKey], Current: after.Bindings[update.BindingKey],
+	}
 	if sameClaudeSessionStoreImage(before, after) {
 		return mutation, nil
 	}
-	if err := s.persistClaudeCandidate(nextBindings, nextControls); err != nil {
-		return claudeRemoteMutation{}, fmt.Errorf("保存 Claude 会话选择: %w", err)
+	if err := s.persistClaudeCandidate(nextBindings); err != nil {
+		return claudeBindingMutation{}, fmt.Errorf("保存 Claude 会话绑定: %w", err)
 	}
 	s.bindings = nextBindings
-	s.controls = nextControls
 	return mutation, nil
 }
 
-// commitRemoteRelease 原子释放 route 的全部远程所有权，并按需保留最近选择。
-func (s *claudeSessionStore) commitRemoteRelease(update claudeRemoteReleaseUpdate) (claudeRemoteMutation, error) {
+// commitBindingRelease changes only the calling frontend. Keeping a selection
+// is now a no-op because there is no persistent local/remote ownership to
+// release.
+func (s *claudeSessionStore) commitBindingRelease(update claudeBindingReleaseUpdate) (claudeBindingMutation, error) {
 	update.BindingKey = strings.TrimSpace(update.BindingKey)
 	update.WorkspaceRoot = normalizeClaudeWorkspaceRoot(update.WorkspaceRoot)
 	if update.BindingKey == "" || update.WorkspaceRoot == "" {
-		return claudeRemoteMutation{}, fmt.Errorf("Claude 释放提交缺少必要路由字段")
+		return claudeBindingMutation{}, fmt.Errorf("Claude 绑定释放缺少必要路由字段")
 	}
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current := claudeRemoteSelectionSnapshotLocked(
-		s.bindings, s.controls, update.BindingKey, update.Expected.TargetSessionID,
+	current := claudeBindingSelectionSnapshotLocked(
+		s.bindings, update.BindingKey, update.Expected.TargetSessionID,
 	)
-	if !sameClaudeRemoteSelectionSnapshot(current, update.Expected) {
-		return claudeRemoteMutation{}, errClaudeRemoteSelectionChanged
+	if current != update.Expected {
+		return claudeBindingMutation{}, errClaudeBindingSelectionChanged
 	}
 
-	before := newClaudeSessionStoreImage(s.bindings, s.controls)
+	before := newClaudeSessionStoreImage(s.bindings)
 	nextBindings := cloneClaudeBindings(s.bindings)
-	nextControls := cloneClaudeControls(s.controls)
-	now := time.Now().UTC()
 	if !update.KeepSelection {
-		currentBinding := nextBindings[update.BindingKey]
-		if currentBinding.WorkspaceRoot != update.WorkspaceRoot || currentBinding.SessionID != "" || currentBinding.Status != claudeBindingUnbound {
-			nextBindings[update.BindingKey] = claudeSessionBinding{
-				WorkspaceRoot: update.WorkspaceRoot,
-				Status:        claudeBindingUnbound,
-				UpdatedAt:     now.Format(time.RFC3339),
-			}
+		previous := nextBindings[update.BindingKey]
+		if previous.WorkspaceRoot != update.WorkspaceRoot || previous.SessionID != "" || previous.Status != claudeBindingUnbound {
+			nextBindings[update.BindingKey] = nextClaudeBinding(
+				previous, update.WorkspaceRoot, "", claudeBindingUnbound, time.Now().UTC(),
+			)
 		}
 	}
-	released := releaseClaudeRemoteControls(nextControls, update.BindingKey, "", now)
-	after := newClaudeSessionStoreImage(nextBindings, nextControls)
-	target := nextControls[strings.TrimSpace(update.Expected.TargetSessionID)]
-	mutation := claudeRemoteMutation{Before: before, After: after, Target: target, Released: released}
+	after := newClaudeSessionStoreImage(nextBindings)
+	mutation := claudeBindingMutation{
+		Before: before, After: after,
+		Previous: before.Bindings[update.BindingKey], Current: after.Bindings[update.BindingKey],
+	}
 	if sameClaudeSessionStoreImage(before, after) {
 		return mutation, nil
 	}
-	if err := s.persistClaudeCandidate(nextBindings, nextControls); err != nil {
-		return claudeRemoteMutation{}, fmt.Errorf("保存 Claude 会话释放: %w", err)
+	if err := s.persistClaudeCandidate(nextBindings); err != nil {
+		return claudeBindingMutation{}, fmt.Errorf("保存 Claude 会话解绑: %w", err)
 	}
 	s.bindings = nextBindings
-	s.controls = nextControls
 	return mutation, nil
 }
 
-// rollbackRemoteMutation 只补偿仍与 mutation.After 完全一致的状态，避免覆盖并发新提交。
-func (s *claudeSessionStore) rollbackRemoteMutation(mutation claudeRemoteMutation) error {
+// rollbackBindingMutation only compensates an unchanged after-image so an old
+// failure cannot overwrite a newer frontend choice.
+func (s *claudeSessionStore) rollbackBindingMutation(mutation claudeBindingMutation) error {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	current := newClaudeSessionStoreImage(s.bindings, s.controls)
+	current := newClaudeSessionStoreImage(s.bindings)
 	if !sameClaudeSessionStoreImage(current, mutation.After) {
-		return errClaudeRemoteSelectionChanged
+		return errClaudeBindingSelectionChanged
 	}
 	bindings := cloneClaudeBindings(mutation.Before.Bindings)
-	controls := cloneClaudeControls(mutation.Before.Controls)
-	if err := s.persistClaudeCandidate(bindings, controls); err != nil {
-		return fmt.Errorf("回滚 Claude 会话选择: %w", err)
+	if err := s.persistClaudeCandidate(bindings); err != nil {
+		return fmt.Errorf("回滚 Claude 会话绑定: %w", err)
 	}
 	s.bindings = bindings
-	s.controls = controls
 	return nil
 }
 
-func normalizeClaudeRemoteSelectionUpdate(update claudeRemoteSelectionUpdate) claudeRemoteSelectionUpdate {
+func normalizeClaudeBindingSelectionUpdate(update claudeBindingSelectionUpdate) claudeBindingSelectionUpdate {
 	update.BindingKey = strings.TrimSpace(update.BindingKey)
 	update.WorkspaceRoot = normalizeClaudeWorkspaceRoot(update.WorkspaceRoot)
 	update.TargetSessionID = strings.TrimSpace(update.TargetSessionID)
-	update.ConversationID = strings.TrimSpace(update.ConversationID)
 	if update.BindingStatus == "" {
 		update.BindingStatus = claudeBindingReady
 	}
 	return update
 }
 
-func validateClaudeRemoteSelectionUpdate(update claudeRemoteSelectionUpdate) error {
-	if update.BindingKey == "" || update.WorkspaceRoot == "" || update.TargetSessionID == "" || update.ConversationID == "" {
-		return fmt.Errorf("Claude 选择提交缺少必要路由字段")
+func validateClaudeBindingSelectionUpdate(update claudeBindingSelectionUpdate) error {
+	if update.BindingKey == "" || update.WorkspaceRoot == "" || update.TargetSessionID == "" {
+		return fmt.Errorf("Claude 绑定提交缺少必要路由字段")
 	}
 	if update.BindingStatus != claudeBindingReady && update.BindingStatus != claudeBindingResumeFailed {
-		return fmt.Errorf("Claude 选择提交包含无效运行状态 %q", update.BindingStatus)
+		return fmt.Errorf("Claude 绑定提交包含无效运行状态 %q", update.BindingStatus)
 	}
 	if update.Expected.TargetSessionID != update.TargetSessionID {
-		return errClaudeRemoteSelectionChanged
+		return errClaudeBindingSelectionChanged
 	}
 	return nil
 }
 
-func selectClaudeRemoteBinding(bindings map[string]claudeSessionBinding, update claudeRemoteSelectionUpdate, now time.Time) {
+func selectClaudeBinding(bindings map[string]claudeSessionBinding, update claudeBindingSelectionUpdate, now time.Time) {
 	current := bindings[update.BindingKey]
 	if current.WorkspaceRoot == update.WorkspaceRoot && current.SessionID == update.TargetSessionID && current.Status == update.BindingStatus {
 		return
 	}
-	bindings[update.BindingKey] = claudeSessionBinding{
-		WorkspaceRoot: update.WorkspaceRoot,
-		SessionID:     update.TargetSessionID,
-		Status:        update.BindingStatus,
-		UpdatedAt:     now.Format(time.RFC3339),
-	}
+	bindings[update.BindingKey] = nextClaudeBinding(
+		current, update.WorkspaceRoot, update.TargetSessionID, update.BindingStatus, now,
+	)
 }
 
-func releaseClaudeRemoteControls(
-	controls map[string]claudeControlIntent,
-	bindingKey string,
-	keepSessionID string,
+func nextClaudeBinding(
+	current claudeSessionBinding,
+	workspaceRoot string,
+	sessionID string,
+	status claudeBindingStatus,
 	now time.Time,
-) map[string]claudeControlIntent {
-	released := make(map[string]claudeControlIntent)
-	for sessionID, intent := range controls {
-		if intent.Owner != claudeOwnerRemote || intent.BindingKey != bindingKey || sessionID == keepSessionID {
-			continue
-		}
-		next := claudeControlIntent{
-			Owner: claudeOwnerLocal, Revision: intent.Revision + 1,
-			UpdatedAt: now.Format(time.RFC3339Nano),
-		}
-		controls[sessionID] = next
-		released[sessionID] = next
+) claudeSessionBinding {
+	revision := current.Revision + 1
+	if revision == 0 {
+		revision = 1
 	}
-	return released
+	return claudeSessionBinding{
+		WorkspaceRoot: workspaceRoot,
+		SessionID:     sessionID,
+		Status:        status,
+		Revision:      revision,
+		UpdatedAt:     now.Format(time.RFC3339Nano),
+	}
 }
 
-func claimClaudeRemoteControl(
-	controls map[string]claudeControlIntent,
-	update claudeRemoteSelectionUpdate,
-	now time.Time,
-) claudeControlIntent {
-	current, ok := controls[update.TargetSessionID]
-	if !ok {
-		current = claudeControlIntent{Owner: claudeOwnerUnclaimed}
-	}
-	if current.Owner == claudeOwnerRemote && current.BindingKey == update.BindingKey && current.ConversationID == update.ConversationID {
-		return current
-	}
-	next := claudeControlIntent{
-		Owner: claudeOwnerRemote, BindingKey: update.BindingKey, ConversationID: update.ConversationID,
-		Revision: current.Revision + 1, UpdatedAt: now.Format(time.RFC3339Nano),
-	}
-	controls[update.TargetSessionID] = next
-	return next
-}
-
-func (s *claudeSessionStore) persistClaudeCandidate(
-	bindings map[string]claudeSessionBinding,
-	controls map[string]claudeControlIntent,
-) error {
+func (s *claudeSessionStore) persistClaudeCandidate(bindings map[string]claudeSessionBinding) error {
 	if s.persist == nil {
 		return nil
 	}
-	return s.persist(newClaudeSessionState(bindings, controls))
+	return s.persist(newClaudeSessionState(bindings))
 }
 
-func newClaudeSessionStoreImage(
-	bindings map[string]claudeSessionBinding,
-	controls map[string]claudeControlIntent,
-) claudeSessionStoreImage {
-	return claudeSessionStoreImage{
-		Bindings: cloneClaudeBindings(bindings),
-		Controls: cloneClaudeControls(controls),
-	}
-}
-
-func sameClaudeRemoteSelectionSnapshot(left claudeRemoteSelectionSnapshot, right claudeRemoteSelectionSnapshot) bool {
-	return left.TargetSessionID == right.TargetSessionID &&
-		left.Binding == right.Binding && left.Target == right.Target &&
-		sameClaudeControlIntentMap(left.RouteOwned, right.RouteOwned)
+func newClaudeSessionStoreImage(bindings map[string]claudeSessionBinding) claudeSessionStoreImage {
+	return claudeSessionStoreImage{Bindings: cloneClaudeBindings(bindings)}
 }
 
 func sameClaudeSessionStoreImage(left claudeSessionStoreImage, right claudeSessionStoreImage) bool {
-	return sameClaudeBindingMap(left.Bindings, right.Bindings) &&
-		sameClaudeControlIntentMap(left.Controls, right.Controls)
+	return sameClaudeBindingMap(left.Bindings, right.Bindings)
 }
 
 func sameClaudeBindingMap(left map[string]claudeSessionBinding, right map[string]claudeSessionBinding) bool {
@@ -301,19 +234,6 @@ func sameClaudeBindingMap(left map[string]claudeSessionBinding, right map[string
 	for key, binding := range left {
 		rightBinding, ok := right[key]
 		if !ok || rightBinding != binding {
-			return false
-		}
-	}
-	return true
-}
-
-func sameClaudeControlIntentMap(left map[string]claudeControlIntent, right map[string]claudeControlIntent) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for sessionID, intent := range left {
-		rightIntent, ok := right[sessionID]
-		if !ok || rightIntent != intent {
 			return false
 		}
 	}

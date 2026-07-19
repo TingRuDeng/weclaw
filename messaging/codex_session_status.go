@@ -168,6 +168,7 @@ func renderCodexThreadLabel(threadID string, pending bool) string {
 func buildCodexSessionHelpText() string {
 	return wechatCommandText(
 		"Codex 会话命令:",
+		"/cx whoami 查看当前 workspace/thread 绑定",
 		"/cx ls 查看工作空间或当前工作空间会话",
 		"/cx <编号|..> 选择当前列表项或返回上一级",
 		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动绑定；.. 返回工作空间列表",
@@ -177,7 +178,7 @@ func buildCodexSessionHelpText() string {
 		"/cx status 查看 binding、共享 app-server、workspace、thread 和任务状态",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
-		"/cx model status 查看 Codex 模型状态",
+		"/cx model status 查看新建 Codex 会话的默认模型配置",
 		"/cx model ls 查看可用 Codex 模型",
 	)
 }

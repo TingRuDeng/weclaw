@@ -132,13 +132,6 @@ func (h *Handler) SetPlatformDefaultAgents(defaults map[string]string) {
 	}
 }
 
-// SetClaudeCLIResumeOpener 设置 Claude CLI resume 打开器，主要用于测试外部进程调用。
-func (h *Handler) SetClaudeCLIResumeOpener(opener ClaudeCLIResumeOpener) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.claudeCLIResumeOpener = opener
-}
-
 // SetServiceAdminCommandExecutor 设置 WeClaw 管理命令执行器，主要用于测试和平台隔离。
 func (h *Handler) SetServiceAdminCommandExecutor(executor ServiceAdminCommandExecutor) {
 	h.mu.Lock()

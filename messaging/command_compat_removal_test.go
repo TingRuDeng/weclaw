@@ -73,6 +73,22 @@ func TestRemovedModelListAliasIsRejected(t *testing.T) {
 	}
 }
 
+func TestClaudeModelStatusShowsCompleteNewSessionDefaults(t *testing.T) {
+	h := NewHandler(nil, nil)
+	claude := &fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp", Command: "claude-agent-acp"}},
+		model:     "claude-sonnet-5",
+		effort:    "high",
+	}
+
+	reply := h.handleClaudeModelCommand(context.Background(), claude, []string{"status"})
+	for _, want := range []string{"Claude 新会话默认模型配置", "model: claude-sonnet-5", "effort: high"} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("Claude model status=%q, want %q", reply, want)
+		}
+	}
+}
+
 type fakeClaudeModelAgent struct {
 	fakeAgent
 	model  string

@@ -114,7 +114,7 @@ func (a *ACPAgent) requireThread(ctx context.Context, conversationID string) (st
 func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (string, error) {
 	params := a.codexThreadStartParams(ctx, conversationID)
 	startedAt := time.Now()
-	result, err := a.rpc(ctx, "thread/start", params)
+	result, sequence, err := a.rpcWithSequence(ctx, "thread/start", params)
 	elapsed := time.Since(startedAt)
 	if err != nil {
 		log.Printf("[acp] thread/start failed (conversation=%s, elapsed=%s): %v", conversationID, elapsed, err)
@@ -126,6 +126,10 @@ func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (str
 	if err != nil {
 		return "", err
 	}
+	a.cacheCodexThreadConfigFromLifecycleResult(result, threadID, CodexThreadConfig{
+		Model:  stringMapValue(params, "model"),
+		Effort: stringMapValue(params, "effort"),
+	}, sequence)
 	a.mu.Lock()
 	a.threads[conversationID] = threadID
 	delete(a.resumeOnFirstUse, conversationID)
@@ -191,16 +195,8 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 	if reviewer := a.approvalReviewerForCodex(); reviewer != "" {
 		params["approvalsReviewer"] = reviewer
 	}
-	config := a.modelConfigSnapshot()
-	if config.model != "" {
-		params["model"] = config.model
-	}
-	if config.effort != "" {
-		params["effort"] = config.effort
-	}
-
 	startedAt := time.Now()
-	result, err := a.rpc(ctx, "thread/resume", params)
+	result, sequence, err := a.rpcWithSequence(ctx, "thread/resume", params)
 	elapsed := time.Since(startedAt)
 	if err != nil {
 		log.Printf("[acp] thread/resume failed (thread=%s, conversation=%s, elapsed=%s): %v", threadID, conversationID, elapsed, err)
@@ -213,8 +209,14 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
+	a.cacheCodexThreadConfigFromLifecycleResult(result, threadID, CodexThreadConfig{}, sequence)
 	if err := json.Unmarshal(result, &resumeResult); err == nil && resumeResult.Thread.ID != "" && resumeResult.Thread.ID != threadID {
 		log.Printf("[acp] thread/resume returned different id (requested=%s, returned=%s)", threadID, resumeResult.Thread.ID)
 	}
 	return nil
+}
+
+func stringMapValue(values map[string]interface{}, key string) string {
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
 }

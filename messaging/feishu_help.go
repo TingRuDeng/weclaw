@@ -84,9 +84,8 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 	case "claude":
 		choices = []platform.Choice{
 			{ID: "/cc ls", Label: "项目与会话"},
+			{ID: "/cc new", Label: "新建会话"},
 			{ID: "/cc status", Label: "会话状态"},
-			{ID: "/cc owner", Label: "控制权状态"},
-			{ID: "/cc cli", Label: "本地 CLI 接管"},
 			{ID: "/cc pwd", Label: "当前项目目录"},
 			{ID: "/cc quota", Label: "账号额度"},
 			{ID: "/cc model ls", Label: "可用模型"},
@@ -94,8 +93,8 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 		}
 	case "settings":
 		choices = []platform.Choice{
-			{ID: "/model", Label: "默认模型"},
-			{ID: "/reasoning", Label: "推理强度"},
+			{ID: "/model", Label: "模型（当前/默认）"},
+			{ID: "/reasoning", Label: "推理强度（当前/默认）"},
 			{ID: "/mode", Label: "确认模式"},
 			{ID: "/progress", Label: "进度模式"},
 		}

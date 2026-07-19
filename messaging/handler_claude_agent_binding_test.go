@@ -24,10 +24,9 @@ func TestFeishuClaudeNewBindsWindowToClaude(t *testing.T) {
 	if selected, ok := h.ensureAgentSessions().Get(sessionKey); !ok || selected != "claude" {
 		t.Fatalf("窗口 Agent=(%q,%t)，期望新建 Claude 会话后绑定 claude", selected, ok)
 	}
-	sessionID := claude.resetSessionID
-	intent := h.ensureClaudeSessions().controlIntent(sessionID)
-	if intent.Owner != claudeOwnerRemote || intent.BindingKey != claudeBindingKey(sessionKey, "claude") {
-		t.Fatalf("intent=%+v，期望飞书窗口接管新会话", intent)
+	binding := h.ensureClaudeSessions().binding(claudeBindingKey(sessionKey, "claude"))
+	if binding.SessionID != claude.resetSessionID || binding.Status != claudeBindingReady {
+		t.Fatalf("binding=%+v，期望飞书窗口绑定新会话", binding)
 	}
 }
 
@@ -48,9 +47,9 @@ func TestHandleGlobalNewKeepsClaudeResetBehavior(t *testing.T) {
 	if got := codex.resetConversationID(); got != "" {
 		t.Fatalf("Codex 不应被重置，实际 conversation=%q", got)
 	}
-	intent := h.ensureClaudeSessions().controlIntent("session-new")
-	if intent.Owner != claudeOwnerRemote || intent.BindingKey != claudeBindingKey(sessionKey, "claude") {
-		t.Fatalf("intent=%+v，全局 /new 应接管 Claude 会话", intent)
+	binding := h.ensureClaudeSessions().binding(claudeBindingKey(sessionKey, "claude"))
+	if binding.SessionID != "session-new" || binding.Status != claudeBindingReady {
+		t.Fatalf("binding=%+v，全局 /new 应绑定 Claude 会话", binding)
 	}
 }
 
@@ -100,12 +99,12 @@ func TestClaudeRuntimeFailureStillBindsCurrentWindowToClaude(t *testing.T) {
 	}, reply)
 
 	if selected, ok := h.ensureAgentSessions().Get(sessionKey); !ok || selected != "claude" {
-		t.Fatalf("窗口 Agent=(%q,%t)，所有权提交后应绑定 claude", selected, ok)
+		t.Fatalf("窗口 Agent=(%q,%t)，session 绑定提交后应使用 claude", selected, ok)
 	}
 	if binding := h.ensureClaudeSessions().binding(claudeBindingKey(sessionKey, "claude")); binding.Status != claudeBindingResumeFailed {
 		t.Fatalf("binding=%+v", binding)
 	}
-	if text := strings.Join(reply.Texts, "\n"); !strings.Contains(text, "所有权已保留") {
+	if text := strings.Join(reply.Texts, "\n"); !strings.Contains(text, "绑定已保留") {
 		t.Fatalf("reply=%q", text)
 	}
 	normalReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -117,7 +116,7 @@ func TestClaudeRuntimeFailureStillBindsCurrentWindowToClaude(t *testing.T) {
 	if claude.wasChatCalled() || len(normalReply.Choices) != 0 {
 		t.Fatalf("runtime 不可用时不应写入或重选 owner: chat=%t choices=%#v", claude.wasChatCalled(), normalReply.Choices)
 	}
-	if text := strings.Join(normalReply.Texts, "\n"); !strings.Contains(text, "运行通道暂不可用") || !strings.Contains(text, "所有权保持不变") {
+	if text := strings.Join(normalReply.Texts, "\n"); !strings.Contains(text, "ClaudeHost 暂不可用") || !strings.Contains(text, "绑定不会被释放") {
 		t.Fatalf("normal reply=%q", text)
 	}
 }

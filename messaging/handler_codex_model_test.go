@@ -26,7 +26,7 @@ func TestHandleCodexModelStatusCommandShowsCurrentConfig(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(121, "/cx model status"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "Codex 模型配置") ||
+	if !strings.Contains(text, "Codex 新会话默认模型配置") ||
 		!strings.Contains(text, "model: gpt-5.4") ||
 		!strings.Contains(text, "effort: high") {
 		t.Fatalf("model status reply mismatch, messages=%#v", calls.texts())

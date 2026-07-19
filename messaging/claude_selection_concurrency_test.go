@@ -2,18 +2,18 @@ package messaging
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-// TestClaudeSelectionConcurrencySingleRemoteWinner 验证两个 route 并发选择同一 session 时始终只有一个赢家。
-func TestClaudeSelectionConcurrencySingleRemoteWinner(t *testing.T) {
+func TestClaudeSelectionConcurrencyAllowsBothFrontendBindings(t *testing.T) {
 	for iteration := 0; iteration < 20; iteration++ {
 		h, _, workspace := newClaudeACPNavigationHandler(t)
-		store := h.ensureClaudeSessions()
 		start := make(chan struct{})
 		results := make(chan error, 2)
 		var wg sync.WaitGroup
@@ -36,36 +36,68 @@ func TestClaudeSelectionConcurrencySingleRemoteWinner(t *testing.T) {
 		close(start)
 		wg.Wait()
 		close(results)
-
-		successes := 0
-		conflicts := 0
 		for err := range results {
-			switch {
-			case err == nil:
-				successes++
-			case errors.Is(err, errClaudeRemoteSelectionOtherRoute), errors.Is(err, errClaudeRemoteSelectionChanged):
-				conflicts++
-			default:
-				t.Fatalf("iteration=%d unexpected error=%v", iteration, err)
+			if err != nil {
+				t.Fatalf("iteration=%d acquire=%v", iteration, err)
 			}
 		}
-		if successes != 1 || conflicts != 1 {
-			t.Fatalf("iteration=%d successes=%d conflicts=%d", iteration, successes, conflicts)
-		}
-		intent := store.controlIntent("session-shared")
-		if intent.Owner != claudeOwnerRemote || intent.BindingKey == "" || intent.Revision != 1 {
-			t.Fatalf("iteration=%d intent=%+v", iteration, intent)
-		}
-		remoteOwners := 0
-		store.mu.Lock()
-		for _, control := range store.controls {
-			if control.Owner == claudeOwnerRemote {
-				remoteOwners++
+		for _, routeID := range []string{"route-a", "route-b"} {
+			binding := h.ensureClaudeSessions().binding(claudeBindingKey(routeID, "claude"))
+			if binding.SessionID != "session-shared" || binding.Status != claudeBindingReady {
+				t.Fatalf("iteration=%d route=%s binding=%+v", iteration, routeID, binding)
 			}
 		}
-		store.mu.Unlock()
-		if remoteOwners != 1 {
-			t.Fatalf("iteration=%d remoteOwners=%d", iteration, remoteOwners)
-		}
+	}
+}
+
+func TestClaudeSameSessionWriterLeaseRejectsOtherFrontend(t *testing.T) {
+	h, ag := newClaudeAgentTaskFixture()
+	workspace := h.claudeWorkspaceRoot("claude")
+	seedClaudeBinding(t, h, "route-a", "claude", workspace, "session-shared", 1)
+	seedClaudeBinding(t, h, "route-b", "claude", workspace, "session-shared", 1)
+	replyA := platformtest.NewReplier(platform.Capabilities{Text: true})
+	replyB := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.startAgentTask(claudeTestTaskOptions("actor-a", "route-a", replyA, ag, "first"))
+	waitForAgentEnter(t, ag)
+	h.startAgentTask(claudeTestTaskOptions("actor-b", "route-b", replyB, ag, "second"))
+	if !containsText(replyB.Texts, "另一个窗口") {
+		t.Fatalf("reply=%#v, want foreign writer rejection", replyB.Texts)
+	}
+	if started, _ := ag.stats(); started != 1 {
+		t.Fatalf("started=%d, want one prompt", started)
+	}
+	ag.release <- struct{}{}
+	waitUntil(t, func() bool { return h.ActiveTaskCount() == 0 })
+}
+
+func TestClaudeDifferentSessionsCanRunConcurrently(t *testing.T) {
+	h, ag := newClaudeAgentTaskFixture()
+	workspace := h.claudeWorkspaceRoot("claude")
+	seedClaudeBinding(t, h, "route-a", "claude", workspace, "session-a", 1)
+	seedClaudeBinding(t, h, "route-b", "claude", workspace, "session-b", 1)
+	replyA := platformtest.NewReplier(platform.Capabilities{Text: true})
+	replyB := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.startAgentTask(claudeTestTaskOptions("actor-a", "route-a", replyA, ag, "first"))
+	h.startAgentTask(claudeTestTaskOptions("actor-b", "route-b", replyB, ag, "second"))
+	waitForAgentEnter(t, ag)
+	waitForAgentEnter(t, ag)
+	started, maxActive := ag.stats()
+	if started != 2 || maxActive != 2 {
+		t.Fatalf("started=%d maxActive=%d, want two concurrent sessions", started, maxActive)
+	}
+	ag.release <- struct{}{}
+	ag.release <- struct{}{}
+	waitUntil(t, func() bool { return h.ActiveTaskCount() == 0 })
+}
+
+func claudeTestTaskOptions(actor string, route string, reply platform.Replier, ag agent.Agent, message string) agentTaskOptions {
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	return agentTaskOptions{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: actor, routeUserID: route, reply: reply,
+		agentName: "claude", message: message, agent: ag, progressCfg: cfg,
 	}
 }

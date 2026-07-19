@@ -65,7 +65,7 @@ type broadcastAgentRuntime struct {
 	ctx           context.Context
 	executionKey  string
 	codexRoute    codexConversationRoute
-	claudeControl claudeTaskControlSnapshot
+	claudeBinding claudeTaskBindingSnapshot
 	workspaceRoot string
 	activeTask    *activeAgentTask
 	finishRuntime func()
@@ -105,13 +105,13 @@ func (h *Handler) beginBroadcastRuntime(req broadcastAgentsRequest, name string,
 func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name string, ag agent.Agent, ctx context.Context, reply platform.Replier, results chan<- broadcastAgentResult) (broadcastAgentRuntime, bool) {
 	bindingKey := claudeBindingKey(req.routeUserID, name)
 	unlockBinding := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
-	binding, intent, controlErr := h.ensureClaudeSessions().requireRemoteControl(bindingKey)
-	if controlErr != nil {
+	binding, bindingErr := h.ensureClaudeSessions().requireWritableBinding(bindingKey)
+	if bindingErr != nil {
 		unlockBinding()
-		results <- broadcastAgentResult{name: name, reply: renderFinalFailure("["+name+"] ", errors.New(renderClaudeRemoteControlError(controlErr)))}
+		results <- broadcastAgentResult{name: name, reply: renderFinalFailure("["+name+"] ", errors.New(renderClaudeBindingError(bindingErr)))}
 		return broadcastAgentRuntime{}, false
 	}
-	control := claudeTaskControlSnapshot{SessionID: binding.SessionID, Revision: intent.Revision}
+	bindingSnapshot := claudeTaskBindingSnapshot{SessionID: binding.SessionID, Revision: binding.Revision}
 	key := h.agentExecutionKeyForRoute(req.userID, req.routeUserID, name, ag)
 	pending := pendingAgentTask{message: req.message, run: func() {
 		h.startAgentTask(agentTaskOptions{
@@ -121,7 +121,7 @@ func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name s
 			agent: ag, progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name),
 		})
 	}}
-	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
+	admission := h.beginOrQueueClaudeTask(ctx, key, activeTaskMeta{
 		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
 	}, pending)
 	if admission.status != activeTaskStarted {
@@ -138,7 +138,7 @@ func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name s
 		}
 	}
 	return broadcastAgentRuntime{
-		ctx: admission.taskCtx, executionKey: key, claudeControl: control,
+		ctx: admission.taskCtx, executionKey: key, claudeBinding: bindingSnapshot,
 		workspaceRoot: firstNonBlank(binding.WorkspaceRoot, h.claudeWorkspaceRootForUser(req.userID, name, ag)),
 		activeTask:    admission.task, finishRuntime: finish,
 	}, true
@@ -203,16 +203,18 @@ func (h *Handler) replyBroadcastAdmission(name string, status activeTaskAdmissio
 	text := "当前任务已有一条暂存消息，请先处理后再发送。"
 	if status == activeTaskQueued {
 		text = queuedAgentMessage
+	} else if status == activeTaskForeignWriter {
+		text = "当前 Claude session 正由另一个窗口执行任务，请等待该任务结束后重试。"
 	}
 	results <- broadcastAgentResult{name: name, reply: text}
 }
 
 func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string, ag agent.Agent, runtime broadcastAgentRuntime, reply platform.Replier, progressCfg config.ProgressConfig, results chan<- broadcastAgentResult) {
-	if runtime.claudeControl.SessionID != "" {
+	if runtime.claudeBinding.SessionID != "" {
 		bindingKey := claudeBindingKey(req.routeUserID, name)
-		if err := h.ensureClaudeSessions().validateRemoteControlSnapshot(bindingKey, runtime.claudeControl); err != nil {
+		if err := h.ensureClaudeSessions().validateBindingSnapshot(bindingKey, runtime.claudeBinding); err != nil {
 			results <- broadcastAgentResult{
-				name: name, reply: renderFinalFailure("["+name+"] ", errors.New(renderClaudeRemoteControlError(err))),
+				name: name, reply: renderFinalFailure("["+name+"] ", errors.New(renderClaudeBindingError(err))),
 			}
 			return
 		}

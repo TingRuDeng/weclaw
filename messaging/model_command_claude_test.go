@@ -166,6 +166,269 @@ type fakeCurrentClaudeModelAgent struct {
 	updates []agent.ClaudeSessionConfigUpdate
 }
 
+type fakeCurrentCodexModelAgent struct {
+	fakeCodexModelAgent
+	config    agent.CodexThreadConfig
+	updates   []agent.CodexThreadConfigUpdate
+	updateErr error
+}
+
+func (f *fakeCurrentCodexModelAgent) CodexThreadConfig(context.Context, string, string) (agent.CodexThreadConfig, error) {
+	return f.config, nil
+}
+
+func (f *fakeCurrentCodexModelAgent) SetCodexThreadConfig(_ context.Context, update agent.CodexThreadConfigUpdate) error {
+	if f.updateErr != nil {
+		return f.updateErr
+	}
+	f.updates = append(f.updates, update)
+	if update.Model != "" {
+		f.config.Model = update.Model
+	}
+	if update.Effort != "" {
+		f.config.Effort = update.Effort
+	}
+	return nil
+}
+
+func TestFeishuCodexSettingsUpdateCurrentThread(t *testing.T) {
+	codex := &fakeCurrentCodexModelAgent{fakeCodexModelAgent: fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "new-thread-default",
+		effort:    "medium",
+		models: []agent.CodexModel{
+			{ID: "gpt-current", EffortOptions: []string{"medium", "high"}},
+			{ID: "gpt-next", EffortOptions: []string{"medium", "high"}},
+		},
+	}, config: agent.CodexThreadConfig{Model: "gpt-current", Effort: "medium"}}
+	h := newClaudeModelHandler(codex, &fakeClaudeModelAgent{})
+	sessionKey := "feishu:tenant:dm:chat-codex-current:user-1"
+	workspace := t.TempDir()
+	seedCurrentCodexModelSession(t, h, sessionKey, workspace, "thread-1")
+
+	for index, command := range []string{"/model gpt-next", "/reasoning high"} {
+		reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, command, fmt.Sprintf("codex-current-%d", index)})
+		if !containsText(reply.Texts, "当前 Codex 会话") || !containsText(reply.Texts, "从下一轮任务开始生效") {
+			t.Fatalf("command=%q texts=%#v", command, reply.Texts)
+		}
+	}
+	if len(codex.updates) != 2 || codex.config.Model != "gpt-next" || codex.config.Effort != "high" {
+		t.Fatalf("updates=%#v config=%#v", codex.updates, codex.config)
+	}
+	wantConversationID := buildCodexConversationID(sessionKey, "codex", workspace)
+	for _, update := range codex.updates {
+		if update.ConversationID != wantConversationID || update.ThreadID != "thread-1" {
+			t.Fatalf("update=%#v，期望更新当前 route 的 thread", update)
+		}
+	}
+	if codex.model != "new-thread-default" || codex.effort != "medium" {
+		t.Fatalf("新 thread 默认配置=(%q,%q)，不应被当前 thread 设置覆盖", codex.model, codex.effort)
+	}
+
+	card := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/model", "codex-current-status"})
+	if len(card.Choices) != 1 || len(card.Choices[0].Choices) != 2 ||
+		!strings.Contains(card.Choices[0].Choices[1].Label, "当前") {
+		t.Fatalf("当前 Codex thread 模型卡片=%#v，期望 gpt-next 标记为当前", card.Choices)
+	}
+	for _, choice := range card.Choices[0].Choices {
+		if choice.Metadata[modelSettingThreadMetadataKey] != "thread-1" {
+			t.Fatalf("choice=%#v，期望绑定当前 thread", choice)
+		}
+	}
+}
+
+func TestFeishuCodexCurrentThreadSettingFailureDoesNotChangeDefaults(t *testing.T) {
+	codex := &fakeCurrentCodexModelAgent{fakeCodexModelAgent: fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "new-thread-default",
+		models:    []agent.CodexModel{{ID: "gpt-next"}},
+	}, config: agent.CodexThreadConfig{Model: "gpt-current"}, updateErr: fmt.Errorf("app-server rejected")}
+	h := newClaudeModelHandler(codex, &fakeClaudeModelAgent{})
+	sessionKey := "feishu:tenant:dm:chat-codex-failure:user-1"
+	seedCurrentCodexModelSession(t, h, sessionKey, t.TempDir(), "thread-1")
+
+	reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/model gpt-next", "codex-setting-failure"})
+	if !containsText(reply.Texts, "切换当前 Codex 会话配置失败") || !containsText(reply.Texts, "app-server rejected") {
+		t.Fatalf("texts=%#v，期望显式返回 app-server 错误", reply.Texts)
+	}
+	if codex.model != "new-thread-default" || len(codex.updates) != 0 {
+		t.Fatalf("default=%q updates=%#v，失败时禁止回退修改全局默认值", codex.model, codex.updates)
+	}
+}
+
+func TestFeishuCodexBoundThreadDoesNotReportNewThreadDefaultsAsCurrent(t *testing.T) {
+	codex := &fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "new-thread-default",
+		models:    []agent.CodexModel{{ID: "new-thread-default"}},
+	}
+	h := newClaudeModelHandler(codex, &fakeClaudeModelAgent{})
+	sessionKey := "feishu:tenant:dm:chat-codex-unknown:user-1"
+	seedCurrentCodexModelSession(t, h, sessionKey, t.TempDir(), "thread-config-unknown-test")
+
+	reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/model", "codex-unknown-status"})
+	if len(reply.Choices) != 1 || strings.Contains(reply.Choices[0].Prompt, "当前会话模型: new-thread-default") ||
+		!strings.Contains(reply.Choices[0].Prompt, "当前会话模型: (Codex 默认)") {
+		t.Fatalf("choices=%#v，未知 thread 配置不能冒用新 thread 默认值", reply.Choices)
+	}
+}
+
+func TestFeishuCodexModelCardExpiresAfterThreadSwitch(t *testing.T) {
+	codex := &fakeCurrentCodexModelAgent{fakeCodexModelAgent: fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "new-thread-default",
+		models:    []agent.CodexModel{{ID: "gpt-current"}, {ID: "gpt-next"}},
+	}, config: agent.CodexThreadConfig{Model: "gpt-current"}}
+	h := newClaudeModelHandler(codex, &fakeClaudeModelAgent{})
+	sessionKey := "feishu:tenant:dm:chat-codex-stale:user-1"
+	workspace := t.TempDir()
+	seedCurrentCodexModelSession(t, h, sessionKey, workspace, "thread-a")
+
+	cardReply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/model", "codex-model-card"})
+	if len(cardReply.Choices) != 1 || len(cardReply.Choices[0].Choices) < 2 {
+		t.Fatalf("choices=%#v，期望生成模型卡片", cardReply.Choices)
+	}
+	choice := cardReply.Choices[0].Choices[1]
+	if choice.Metadata[modelSettingThreadMetadataKey] != "thread-a" {
+		t.Fatalf("choice=%#v，期望卡片绑定 thread-a", choice)
+	}
+	h.ensureCodexSessions().setThread(codexBindingKey(sessionKey, "codex"), workspace, "thread-b")
+
+	value := map[string]string{"choice": choice.ID}
+	for key, item := range choice.Metadata {
+		value[key] = item
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "codex-stale-choice",
+		RawCommand: &platform.CardAction{Action: "choice", Value: value},
+		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, reply)
+	if !containsText(reply.Texts, "卡片已失效") || len(codex.updates) != 0 {
+		t.Fatalf("texts=%#v updates=%#v，切换 thread 后必须拒绝旧卡", reply.Texts, codex.updates)
+	}
+}
+
+func TestCodexModelCardTargetIsRecheckedInsideBindingLock(t *testing.T) {
+	codex := &fakeCurrentCodexModelAgent{fakeCodexModelAgent: fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+	}, config: agent.CodexThreadConfig{Model: "gpt-current"}}
+	h := newClaudeModelHandler(codex, &fakeClaudeModelAgent{})
+	sessionKey := "feishu:tenant:dm:chat-codex-race:user-1"
+	seedCurrentCodexModelSession(t, h, sessionKey, t.TempDir(), "thread-b")
+
+	reply, handled := h.setCurrentCodexSessionSetting(codexModelSettingRequest{
+		ctx: context.Background(),
+		route: modelAgentRoute{
+			routeUserID:               sessionKey,
+			modelSettingCard:          true,
+			modelSettingCodexThreadID: "thread-a",
+		},
+		name: "codex", agent: codex, model: "gpt-next",
+	})
+	if !handled || !strings.Contains(reply, "卡片已失效") || len(codex.updates) != 0 {
+		t.Fatalf("handled=%v reply=%q updates=%#v，绑定锁内必须拒绝旧 thread 卡片", handled, reply, codex.updates)
+	}
+}
+
+func TestFeishuClaudeModelCardExpiresAfterSessionSwitch(t *testing.T) {
+	claude := &fakeCurrentClaudeModelAgent{fakeClaudeModelAgent: fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp"}},
+		model:     "default-model",
+		models:    []agent.ClaudeModel{{ID: "sonnet"}, {ID: "opus"}},
+	}, config: agent.ClaudeSessionConfig{Model: "sonnet"}}
+	h := newClaudeModelHandler(&fakeCodexModelAgent{}, claude)
+	sessionKey := "feishu:tenant:dm:chat-claude-stale:user-1"
+	workspace := t.TempDir()
+	seedClaudeBinding(t, h, sessionKey, "claude", workspace, "session-a", 1)
+	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	cardReply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/model", "claude-model-card"})
+	if len(cardReply.Choices) != 1 || len(cardReply.Choices[0].Choices) < 2 {
+		t.Fatalf("choices=%#v，期望生成 Claude 模型卡片", cardReply.Choices)
+	}
+	choice := cardReply.Choices[0].Choices[1]
+	if choice.Metadata[modelSettingClaudeSessionMetadataKey] != "session-a" {
+		t.Fatalf("choice=%#v，期望卡片绑定 session-a", choice)
+	}
+	seedClaudeBinding(t, h, sessionKey, "claude", workspace, "session-b", 2)
+
+	value := map[string]string{"choice": choice.ID}
+	for key, item := range choice.Metadata {
+		value[key] = item
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "claude-stale-choice",
+		RawCommand: &platform.CardAction{Action: "choice", Value: value},
+		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, reply)
+	if !containsText(reply.Texts, "卡片已失效") || len(claude.updates) != 0 {
+		t.Fatalf("texts=%#v updates=%#v，切换 session 后必须拒绝旧卡", reply.Texts, claude.updates)
+	}
+}
+
+func TestClaudeModelCardTargetIsRecheckedInsideBindingLock(t *testing.T) {
+	claude := &fakeCurrentClaudeModelAgent{fakeClaudeModelAgent: fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp"}},
+	}, config: agent.ClaudeSessionConfig{Model: "sonnet"}}
+	h := newClaudeModelHandler(&fakeCodexModelAgent{}, claude)
+	sessionKey := "feishu:tenant:dm:chat-claude-race:user-1"
+	workspace := t.TempDir()
+	seedClaudeBinding(t, h, sessionKey, "claude", workspace, "session-b", 2)
+
+	reply, handled := h.setCurrentClaudeSessionSetting(claudeModelSettingRequest{
+		ctx: context.Background(),
+		route: modelAgentRoute{
+			routeUserID:                 sessionKey,
+			modelSettingCard:            true,
+			modelSettingClaudeSessionID: "session-a",
+		},
+		name: "claude", agent: claude, model: "opus",
+	})
+	if !handled || !strings.Contains(reply, "卡片已失效") || len(claude.updates) != 0 {
+		t.Fatalf("handled=%v reply=%q updates=%#v，绑定锁内必须拒绝旧 session 卡片", handled, reply, claude.updates)
+	}
+}
+
+func TestClaudeSessionSettingRejectsActiveSessionWriter(t *testing.T) {
+	claude := &fakeCurrentClaudeModelAgent{fakeClaudeModelAgent: fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp"}},
+	}, config: agent.ClaudeSessionConfig{Model: "sonnet"}}
+	h := newClaudeModelHandler(&fakeCodexModelAgent{}, claude)
+	sessionKey := "feishu:tenant:dm:chat-claude-busy:user-1"
+	workspace := t.TempDir()
+	seedClaudeBinding(t, h, sessionKey, "claude", workspace, "session-shared", 1)
+	taskKey := claudeSessionExecutionKey("session-shared")
+	task, _, started := h.beginActiveTask(context.Background(), taskKey, activeTaskMeta{
+		owner: "other-user", routeUserID: "other-route", agentName: "claude",
+	})
+	if !started {
+		t.Fatal("active writer registration failed")
+	}
+	defer h.finishActiveTask(taskKey, task)
+
+	reply, handled := h.setCurrentClaudeSessionSetting(claudeModelSettingRequest{
+		ctx: context.Background(), route: modelAgentRoute{routeUserID: sessionKey},
+		name: "claude", agent: claude, model: "opus",
+	})
+	if !handled || !strings.Contains(reply, "正在执行任务") || len(claude.updates) != 0 {
+		t.Fatalf("handled=%v reply=%q updates=%#v", handled, reply, claude.updates)
+	}
+}
+
+func seedCurrentCodexModelSession(t *testing.T, h *Handler, sessionKey string, workspace string, threadID string) {
+	t.Helper()
+	bindingKey := codexBindingKey(sessionKey, "codex")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, threadID)
+	if err := h.ensureAgentSessions().Set(sessionKey, "codex"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // ClaudeSessionConfig 返回当前测试 session 的运行时配置。
 func (f *fakeCurrentClaudeModelAgent) ClaudeSessionConfig(string) (agent.ClaudeSessionConfig, bool) {
 	return f.config, true
@@ -192,13 +455,13 @@ func TestFeishuClaudeSettingsUpdateCurrentSession(t *testing.T) {
 	h := newClaudeModelHandler(&fakeCodexModelAgent{}, claude)
 	sessionKey := "feishu:tenant:dm:chat-current:user-1"
 	workspace := t.TempDir()
-	seedClaudeRemoteControl(t, h, sessionKey, "claude", workspace, "session-1", 1)
+	seedClaudeBinding(t, h, sessionKey, "claude", workspace, "session-1", 1)
 	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
 		t.Fatal(err)
 	}
 	for index, command := range []string{"/model opus", "/reasoning high"} {
 		reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, command, fmt.Sprintf("current-%d", index)})
-		if !containsText(reply.Texts, "当前 Claude session") {
+		if !containsText(reply.Texts, "当前 Claude session") || !containsText(reply.Texts, "从下一轮任务开始生效") {
 			t.Fatalf("command=%q texts=%#v", command, reply.Texts)
 		}
 	}

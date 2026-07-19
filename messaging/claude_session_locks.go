@@ -13,7 +13,7 @@ type claudeSessionLockRequest struct {
 	sessionIDs []string
 }
 
-// lockClaudeSessionControls 在统一等待预算内按稳定顺序获取多个 session 控制锁。
+// lockClaudeSessionControls 在统一等待预算内按稳定顺序获取多个 session 绑定/恢复锁。
 func (h *Handler) lockClaudeSessionControls(req claudeSessionLockRequest) (func(), error) {
 	sessionIDs := sortedUniqueClaudeSessionIDs(req.sessionIDs)
 	waitCtx, cancel := context.WithTimeout(normalizeContext(req.ctx), h.codexSessionLockWaitTimeoutValue())

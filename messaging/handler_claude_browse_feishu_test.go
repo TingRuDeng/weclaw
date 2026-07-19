@@ -124,7 +124,7 @@ func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
 	ag.resetSessionID = "session-new"
 
 	created := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc new"})
-	if len(created.Texts) != 1 || !strings.Contains(created.Texts[0], "已创建并接管") {
+	if len(created.Texts) != 1 || !strings.Contains(created.Texts[0], "已创建并绑定") {
 		t.Fatalf("created texts=%#v choices=%#v", created.Texts, created.Choices)
 	}
 
@@ -143,9 +143,6 @@ func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
 	key := claudeBindingKey("feishu:user", "claude")
 	if binding := h.ensureClaudeSessions().binding(key); binding.SessionID != "session-new" || binding.Status != claudeBindingReady {
 		t.Fatalf("binding=%+v，浏览暂态工作空间不得释放当前会话", binding)
-	}
-	if intent := h.ensureClaudeSessions().controlIntent("session-new"); intent.Owner != claudeOwnerRemote || intent.BindingKey != key {
-		t.Fatalf("intent=%+v，浏览暂态工作空间不得释放 owner", intent)
 	}
 }
 
@@ -170,9 +167,6 @@ func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 	if binding.WorkspaceRoot != workspace || binding.Status != claudeBindingUnbound {
 		t.Fatalf("binding=%+v，进入工作空间后应等待显式选择", binding)
 	}
-	if len(h.ensureClaudeSessions().controls) != 0 {
-		t.Fatalf("controls=%+v，工作空间卡片本身不应取得 session owner", h.ensureClaudeSessions().controls)
-	}
 }
 
 func TestFeishuClaudeSessionChoiceSwitchesRemoteOwner(t *testing.T) {
@@ -186,20 +180,14 @@ func TestFeishuClaudeSessionChoiceSwitchesRemoteOwner(t *testing.T) {
 	conversationID := buildClaudeConversationID("feishu:user", "claude", workspace)
 	store := h.ensureClaudeSessions()
 	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
-	store.controls["session-a"] = claudeControlIntent{
-		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
-	}
 	ag.runtimeSessions = map[string]string{conversationID: "session-a"}
 
 	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: "/cc switch session-b"})
-	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "已切换并接管") {
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "已切换 Claude 会话") {
 		t.Fatalf("texts=%#v choices=%#v", reply.Texts, reply.Choices)
 	}
-	if got := store.controlIntent("session-a"); got.Owner != claudeOwnerLocal {
-		t.Fatalf("old intent=%+v", got)
-	}
-	if got := store.controlIntent("session-b"); got.Owner != claudeOwnerRemote || got.BindingKey != key {
-		t.Fatalf("new intent=%+v", got)
+	if got := store.binding(key); got.SessionID != "session-b" || got.Status != claudeBindingReady {
+		t.Fatalf("binding=%+v", got)
 	}
 }
 

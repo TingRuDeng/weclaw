@@ -29,7 +29,7 @@ type configAgentOptions struct {
 
 var configAgentCmd = &cobra.Command{
 	Use:   "agent",
-	Short: "配置 ACP Agent 及本地交接命令",
+	Short: "配置 ACP Agent 及可选本地辅助命令",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runConfigAgent(configAgentOptions{
@@ -46,7 +46,7 @@ var configAgentCmd = &cobra.Command{
 func init() {
 	configAgentCmd.Flags().StringVar(&configAgentName, "name", defaultConfigAgentName, "Agent 名称")
 	configAgentCmd.Flags().StringVar(&configAgentCommand, "command", "", "ACP adapter 命令，Claude 默认自动查找 claude-agent-acp")
-	configAgentCmd.Flags().StringVar(&configAgentLocalCommand, "local-command", "", "本地交接命令，Claude 默认自动查找 claude")
+	configAgentCmd.Flags().StringVar(&configAgentLocalCommand, "local-command", "", "本地辅助命令，Claude 仅用于额度查询回退并默认查找 claude")
 }
 
 // runConfigAgent 读取旧配置并原地迁移，保留与 CLI 启动方式无关的业务字段。
@@ -134,7 +134,7 @@ func resolveOptionalLocalCommand(opts configAgentOptions, lookPath configAgentLo
 		if strings.TrimSpace(opts.LocalCommand) == "" {
 			return "", nil
 		}
-		return "", fmt.Errorf("找不到本地交接命令 %q: %w", localCommand, err)
+		return "", fmt.Errorf("找不到本地辅助命令 %q: %w", localCommand, err)
 	}
 	return resolved, nil
 }
@@ -157,7 +157,7 @@ func migrateACPAgentConfig(current config.AgentConfig, opts configAgentOptions) 
 func printConfigAgentResult(opts configAgentOptions) {
 	fmt.Printf("已将 %s 配置为 ACP 后端：%s\n", opts.Name, opts.Command)
 	if opts.LocalCommand != "" {
-		fmt.Printf("本地交接命令：%s\n", opts.LocalCommand)
+		fmt.Printf("本地辅助命令：%s\n", opts.LocalCommand)
 	}
 	if path, err := config.ConfigPath(); err == nil {
 		fmt.Printf("已写入：%s\n", path)

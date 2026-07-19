@@ -110,8 +110,8 @@ func TestFeishuModelCommandUsesChoiceCard(t *testing.T) {
 		t.Fatalf("texts=%#v choices=%#v，期望只发送一张模型卡片", reply.Texts, reply.Choices)
 	}
 	card := reply.Choices[0]
-	if !strings.Contains(card.Prompt, "当前模型: gpt-5.6-sol") {
-		t.Fatalf("prompt=%q，期望显示当前模型", card.Prompt)
+	if !strings.Contains(card.Prompt, "新会话默认模型: gpt-5.6-sol") {
+		t.Fatalf("prompt=%q，期望显示新会话默认模型", card.Prompt)
 	}
 	if len(card.Choices) != 2 || card.Choices[0].ID != "/model gpt-5.6-sol" || card.Choices[1].ID != "/model gpt-5.6-terra" {
 		t.Fatalf("choices=%#v，期望使用模型切换命令", card.Choices)
@@ -146,8 +146,8 @@ func TestFeishuReasoningCommandUsesCurrentModelEffortChoices(t *testing.T) {
 		t.Fatalf("texts=%#v choices=%#v，期望只发送一张推理强度卡片", reply.Texts, reply.Choices)
 	}
 	card := reply.Choices[0]
-	if !strings.Contains(card.Prompt, "当前推理强度: medium") {
-		t.Fatalf("prompt=%q，期望显示当前推理强度", card.Prompt)
+	if !strings.Contains(card.Prompt, "新会话默认推理强度: medium") {
+		t.Fatalf("prompt=%q，期望显示新会话默认推理强度", card.Prompt)
 	}
 	wantIDs := []string{"/reasoning low", "/reasoning medium", "/reasoning high"}
 	if len(card.Choices) != len(wantIDs) {
@@ -179,7 +179,7 @@ func TestFeishuModelCommandFallsBackToTextWithoutChoices(t *testing.T) {
 		Text:      "/model",
 	}, reply)
 
-	if len(reply.Choices) != 0 || len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "当前模型: gpt-5.6-sol") {
+	if len(reply.Choices) != 0 || len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "新会话默认模型: gpt-5.6-sol") {
 		t.Fatalf("texts=%#v choices=%#v，期望回退为模型文本概览", reply.Texts, reply.Choices)
 	}
 }

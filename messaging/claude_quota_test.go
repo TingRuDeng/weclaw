@@ -108,3 +108,41 @@ func TestClaudeQuotaCommandDetectionAndHelp(t *testing.T) {
 		t.Fatalf("Claude help=%q", buildClaudeSessionHelpText())
 	}
 }
+
+func TestClaudeSessionCommandDetectionPreservesReservedWordPrompts(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{command: "/cc status", want: true},
+		{command: "/cc status explain this", want: false},
+		{command: "/cc new", want: true},
+		{command: "/cc new session naming", want: false},
+		{command: "/cc cd", want: true},
+		{command: "/cc cd 2", want: true},
+		{command: "/cc cd this workspace", want: false},
+		{command: "/cc owner", want: true},
+		{command: "/cc owner remote", want: true},
+		{command: "/cc owner REMOTE", want: true},
+		{command: "/cc owner of this file", want: false},
+		{command: "/cc model", want: true},
+		{command: "/cc model status", want: true},
+		{command: "/cc model this package", want: false},
+		{command: "/cc help", want: true},
+		{command: "/cc help me", want: false},
+		{command: "/cc page sessions 2", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			if got := isClaudeSessionCommand(tt.command); got != tt.want {
+				t.Fatalf("isClaudeSessionCommand(%q)=%t, want %t", tt.command, got, tt.want)
+			}
+		})
+	}
+
+	h := newTestHandler()
+	names, message := h.parseCommand("/cc status explain this")
+	if len(names) != 1 || names[0] != "claude" || message != "status explain this" {
+		t.Fatalf("reserved-word prompt route=(%v,%q), want Claude message", names, message)
+	}
+}

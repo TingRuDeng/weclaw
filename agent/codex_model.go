@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-// CodexModelStatus 返回当前 WeClaw 侧配置，空值表示沿用 Codex 默认值。
+// CodexModelStatus 返回新建 Codex thread 的默认配置，空值表示沿用 Codex 默认值。
 func (a *ACPAgent) CodexModelStatus() CodexModelStatus {
 	config := a.modelConfigSnapshot()
 	return CodexModelStatus{Model: config.model, Effort: config.effort}
 }
 
-// SetCodexModel 运行时更新 Codex 模型/推理强度；空字符串表示保持原值。
-// 变更在下一个新建/恢复的 thread(即下一个新会话)生效，不影响已进行中的 thread。
+// SetCodexModel 更新新建 Codex thread 的默认模型/推理强度；空字符串表示保持原值。
+// 已存在的 thread 必须使用 SetCodexThreadConfig，禁止用共享默认值覆盖其他窗口。
 func (a *ACPAgent) SetCodexModel(model string, effort string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -24,6 +24,154 @@ func (a *ACPAgent) SetCodexModel(model string, effort string) {
 	if strings.TrimSpace(effort) != "" {
 		a.effort = strings.TrimSpace(effort)
 	}
+}
+
+// CodexThreadConfig 返回 app-server 生命周期响应或设置通知中的 thread 配置。
+func (a *ACPAgent) CodexThreadConfig(_ context.Context, _ string, threadID string) (CodexThreadConfig, error) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return CodexThreadConfig{}, fmt.Errorf("Codex thread ID 为空")
+	}
+	a.mu.Lock()
+	config, ok := a.codexThreadConfigs[threadID]
+	a.mu.Unlock()
+	if !ok {
+		return CodexThreadConfig{}, fmt.Errorf("Codex thread 配置尚未加载")
+	}
+	return config, nil
+}
+
+// SetCodexThreadConfig 通过官方 thread/settings/update 更新当前 thread 后续 turn 的配置。
+func (a *ACPAgent) SetCodexThreadConfig(ctx context.Context, update CodexThreadConfigUpdate) error {
+	if a.protocol != protocolCodexAppServer {
+		return fmt.Errorf("当前 Agent 不支持 Codex thread 配置")
+	}
+	threadID := strings.TrimSpace(update.ThreadID)
+	model := strings.TrimSpace(update.Model)
+	effort := strings.TrimSpace(update.Effort)
+	if threadID == "" {
+		return fmt.Errorf("Codex thread ID 为空")
+	}
+	if model == "" && effort == "" {
+		return fmt.Errorf("Codex thread 配置没有可更新字段")
+	}
+	params := map[string]interface{}{"threadId": threadID}
+	if model != "" {
+		params["model"] = model
+	}
+	if effort != "" {
+		params["effort"] = effort
+	}
+	if _, sequence, err := a.rpcWithSequence(ctx, "thread/settings/update", params); err != nil {
+		return fmt.Errorf("更新 Codex thread 配置: %w", err)
+	} else {
+		a.mergeCodexThreadConfigAt(threadID, CodexThreadConfig{Model: model, Effort: effort}, sequence)
+	}
+	return nil
+}
+
+// cacheCodexThreadConfigFromLifecycleResult 从 thread/start 或 thread/resume 响应同步权威配置。
+func (a *ACPAgent) cacheCodexThreadConfigFromLifecycleResult(result json.RawMessage, threadID string, fallback CodexThreadConfig, sequence uint64) {
+	var response struct {
+		Model           string          `json:"model"`
+		ReasoningEffort json.RawMessage `json:"reasoningEffort"`
+	}
+	if err := json.Unmarshal(result, &response); err != nil {
+		return
+	}
+	config := CodexThreadConfig{Model: strings.TrimSpace(response.Model)}
+	if len(response.ReasoningEffort) > 0 && string(response.ReasoningEffort) != "null" {
+		var effort string
+		if err := json.Unmarshal(response.ReasoningEffort, &effort); err != nil {
+			return
+		}
+		config.Effort = strings.TrimSpace(effort)
+	}
+	if config.Model == "" {
+		config.Model = strings.TrimSpace(fallback.Model)
+	}
+	if len(response.ReasoningEffort) == 0 {
+		config.Effort = strings.TrimSpace(fallback.Effort)
+	}
+	if config.Model == "" && config.Effort == "" {
+		return
+	}
+	a.setCodexThreadConfigAt(threadID, config, sequence)
+}
+
+// handleCodexThreadSettingsUpdated 接收其他 app-server 前端对同一 thread 的设置变更。
+func (a *ACPAgent) handleCodexThreadSettingsUpdated(params json.RawMessage, sequence uint64) {
+	var notification struct {
+		ThreadID       string `json:"threadId"`
+		ThreadSettings struct {
+			Model  string  `json:"model"`
+			Effort *string `json:"effort"`
+		} `json:"threadSettings"`
+	}
+	if err := json.Unmarshal(params, &notification); err != nil {
+		return
+	}
+	config := CodexThreadConfig{Model: strings.TrimSpace(notification.ThreadSettings.Model)}
+	if notification.ThreadSettings.Effort != nil {
+		config.Effort = strings.TrimSpace(*notification.ThreadSettings.Effort)
+	}
+	if strings.TrimSpace(notification.ThreadID) == "" || config.Model == "" {
+		return
+	}
+	a.setCodexThreadConfigAt(notification.ThreadID, config, sequence)
+}
+
+func (a *ACPAgent) setCodexThreadConfigAt(threadID string, config CodexThreadConfig, sequence uint64) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	a.mu.Lock()
+	if a.codexThreadConfigs == nil {
+		a.codexThreadConfigs = make(map[string]CodexThreadConfig)
+	}
+	if a.codexThreadConfigRevisions == nil {
+		a.codexThreadConfigRevisions = make(map[string]uint64)
+	}
+	if sequence > 0 && a.codexThreadConfigRevisions[threadID] > sequence {
+		a.mu.Unlock()
+		return
+	}
+	a.codexThreadConfigs[threadID] = config
+	if sequence > 0 {
+		a.codexThreadConfigRevisions[threadID] = sequence
+	}
+	a.mu.Unlock()
+}
+
+func (a *ACPAgent) mergeCodexThreadConfigAt(threadID string, update CodexThreadConfig, sequence uint64) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	a.mu.Lock()
+	if a.codexThreadConfigs == nil {
+		a.codexThreadConfigs = make(map[string]CodexThreadConfig)
+	}
+	if a.codexThreadConfigRevisions == nil {
+		a.codexThreadConfigRevisions = make(map[string]uint64)
+	}
+	if sequence > 0 && a.codexThreadConfigRevisions[threadID] > sequence {
+		a.mu.Unlock()
+		return
+	}
+	config := a.codexThreadConfigs[threadID]
+	if strings.TrimSpace(update.Model) != "" {
+		config.Model = strings.TrimSpace(update.Model)
+	}
+	if strings.TrimSpace(update.Effort) != "" {
+		config.Effort = strings.TrimSpace(update.Effort)
+	}
+	a.codexThreadConfigs[threadID] = config
+	if sequence > 0 {
+		a.codexThreadConfigRevisions[threadID] = sequence
+	}
+	a.mu.Unlock()
 }
 
 // ListCodexModels 通过 Codex app-server 的 model/list 查询可用模型。

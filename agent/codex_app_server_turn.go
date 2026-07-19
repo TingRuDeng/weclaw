@@ -102,13 +102,12 @@ func (a *ACPAgent) startCodexAppServerTurn(runtime *codexAppServerTurnRuntime) {
 
 func (a *ACPAgent) callCodexAppServerTurnStart(runtime *codexAppServerTurnRuntime) error {
 	startedAt := time.Now()
-	config := a.modelConfigSnapshot()
 	result, err := a.rpc(runtime.opts.ctx, "turn/start", codexTurnStartParams{
 		ThreadID: runtime.threadID, ApprovalPolicy: a.approvalPolicyForContext(runtime.opts.ctx),
 		ApprovalsReviewer: a.approvalReviewerForCodex(),
 		Input:             []codexUserInput{{Type: "text", Text: runtime.opts.message}},
 		SandboxPolicy:     map[string]interface{}{"type": a.sandboxPolicyTypeForCodex()},
-		Model:             config.model, Effort: config.effort, Cwd: a.cwdForConversation(runtime.opts.conversationID),
+		Cwd:               a.cwdForConversation(runtime.opts.conversationID),
 	})
 	if turnID := codexTurnIDFromStartResult(result); turnID != "" {
 		if runtime.opts.onStarted != nil {

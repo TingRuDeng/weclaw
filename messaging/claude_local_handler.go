@@ -33,18 +33,15 @@ func (h *Handler) claudeSwitchTargets(route claudeSessionRoute) ([]codexWorkspac
 	return sortClaudeSessionViews(views), nil
 }
 
-// claudeDisplayTargets 仅为导航补入当前已接管但尚未进入 ACP 目录的会话。
+// claudeDisplayTargets 仅为导航补入当前已绑定但尚未进入 ACP 目录的会话。
 // 切换仍使用 claudeSwitchTargets，不能让暂态投影绕过 session/list 校验。
 func (h *Handler) claudeDisplayTargets(route claudeSessionRoute) ([]codexWorkspaceView, error) {
 	views, err := h.claudeSwitchTargets(route)
 	if err != nil {
 		return nil, err
 	}
-	binding, intent := h.ensureClaudeSessions().bindingControlSnapshot(route.BindingKey)
+	binding := h.ensureClaudeSessions().binding(route.BindingKey)
 	if binding.Status != claudeBindingReady || strings.TrimSpace(binding.SessionID) == "" {
-		return views, nil
-	}
-	if intent.Owner != claudeOwnerRemote || intent.BindingKey != route.BindingKey {
 		return views, nil
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(binding.WorkspaceRoot)

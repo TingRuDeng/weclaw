@@ -89,7 +89,7 @@ func (h *Handler) lockCodexThreadControlContext(ctx context.Context, threadID st
 	return h.lockAgentExecutionContext(ctx, codexThreadControlExecutionPrefix+threadID)
 }
 
-// lockClaudeSessionControl 串行同一 Claude session 的控制权变化与任务准入。
+// lockClaudeSessionControl 串行同一 Claude session 的绑定恢复与切换操作。
 func (h *Handler) lockClaudeSessionControl(sessionID string) func() {
 	unlock, err := h.lockClaudeSessionControlContext(context.Background(), sessionID)
 	if err != nil {
@@ -98,7 +98,7 @@ func (h *Handler) lockClaudeSessionControl(sessionID string) func() {
 	return unlock
 }
 
-// lockClaudeSessionControlContext 串行 session 控制操作，并允许等待方取消。
+// lockClaudeSessionControlContext 串行 session 恢复/切换操作，并允许等待方取消。
 func (h *Handler) lockClaudeSessionControlContext(ctx context.Context, sessionID string) (func(), error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {

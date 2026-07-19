@@ -105,16 +105,6 @@ func waitAgentStart(ctx context.Context, name string, start *agentStartState) (a
 	}
 }
 
-// getDefaultAgent returns the default agent (may be nil if not ready yet).
-func (h *Handler) getDefaultAgent() agent.Agent {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.defaultName == "" {
-		return nil
-	}
-	return h.agents[h.defaultName]
-}
-
 // isKnownAgent checks if a name corresponds to a configured agent.
 func (h *Handler) isKnownAgent(name string) bool {
 	h.mu.RLock()

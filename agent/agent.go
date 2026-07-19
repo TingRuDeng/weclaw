@@ -22,7 +22,7 @@ type AgentInfo struct {
 	Model        string // e.g. "sonnet", "gpt-4o-mini"
 	Effort       string // e.g. "medium", "high"
 	Command      string // binary path, e.g. "/usr/local/bin/claude-agent-acp"
-	LocalCommand string // 原生本地命令；ACP adapter 仍由 Command 表示
+	LocalCommand string // 可选本地辅助命令；Claude 仅用于账号额度查询回退
 	PID          int    // subprocess PID (0 if not applicable, e.g. http agent)
 }
 
@@ -167,6 +167,21 @@ type ClaudeSessionAgent interface {
 	ClearClaudeSession(conversationID string)
 }
 
+// ClaudeHostStatus describes the one process-resident ACP host shared by all
+// WeClaw frontends. Bindings are frontend state; the host lifecycle is not.
+type ClaudeHostStatus struct {
+	Mode       string
+	Started    bool
+	PID        int
+	Generation uint64
+}
+
+// ClaudeHostRuntimeAgent exposes the shared host lifecycle without granting a
+// frontend permission to start an independent writer.
+type ClaudeHostRuntimeAgent interface {
+	ClaudeHostStatus() ClaudeHostStatus
+}
+
 // ClaudeSessionConfigUpdate 描述一次当前 Claude session 配置更新。
 type ClaudeSessionConfigUpdate struct {
 	ConversationID string
@@ -260,6 +275,26 @@ type CodexModelAgent interface {
 type CodexModelControlAgent interface {
 	CodexModelAgent
 	SetCodexModel(model string, effort string)
+}
+
+// CodexThreadConfig 表示单个 Codex thread 对后续 turn 生效的模型配置。
+type CodexThreadConfig struct {
+	Model  string
+	Effort string
+}
+
+// CodexThreadConfigUpdate 只更新非空字段，避免模型和推理强度互相覆盖。
+type CodexThreadConfigUpdate struct {
+	ConversationID string
+	ThreadID       string
+	Model          string
+	Effort         string
+}
+
+// CodexThreadConfigAgent 通过 app-server 管理单个 thread 的运行配置。
+type CodexThreadConfigAgent interface {
+	CodexThreadConfig(context.Context, string, string) (CodexThreadConfig, error)
+	SetCodexThreadConfig(context.Context, CodexThreadConfigUpdate) error
 }
 
 // CodexQuota 表示 Codex app-server 返回的账号额度快照。

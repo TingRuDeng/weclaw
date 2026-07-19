@@ -9,15 +9,20 @@ import (
 )
 
 const (
-	modelSettingModel            = "model"
-	modelSettingReasoning        = "reasoning"
-	modelSettingAgentMetadataKey = "model_setting_agent"
+	modelSettingModel                    = "model"
+	modelSettingReasoning                = "reasoning"
+	modelSettingAgentMetadataKey         = "model_setting_agent"
+	modelSettingThreadMetadataKey        = "model_setting_codex_thread"
+	modelSettingClaudeSessionMetadataKey = "model_setting_claude_session"
 )
 
 type modelAgentRoute struct {
-	routeUserID string
-	platform    platform.PlatformName
-	accountID   string
+	routeUserID                 string
+	platform                    platform.PlatformName
+	accountID                   string
+	modelSettingCard            bool
+	modelSettingCodexThreadID   string
+	modelSettingClaudeSessionID string
 }
 
 type modelSettingCardRequest struct {
@@ -35,8 +40,8 @@ func isModelSettingCommand(command string) bool {
 // handleModelSettingPlatformCommand 统一模型设置文本命令和飞书卡片入口。
 func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req platformCommandRequest) bool {
 	msg := req.Message
-	if !h.modelSettingCardAgentMatches(req) {
-		sendPlatformText(ctx, req.Reply, msg.UserID, "该模型设置卡片已失效，请重新发送 /model 或 /reasoning。")
+	if !h.modelSettingCardAgentMatches(ctx, req) {
+		sendPlatformText(ctx, req.Reply, msg.UserID, expiredModelSettingCardText())
 		return true
 	}
 	setting, prefix := modelSettingModel, "/model"
@@ -45,6 +50,11 @@ func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req pla
 	}
 	arg := strings.TrimSpace(strings.TrimPrefix(req.Trimmed, prefix))
 	route := modelAgentRoute{routeUserID: req.RouteUserID, platform: msg.Platform, accountID: msg.AccountID}
+	if command := msg.RawCommand; command != nil && command.Action == "choice" {
+		route.modelSettingCard = true
+		route.modelSettingCodexThreadID = strings.TrimSpace(command.Value[modelSettingThreadMetadataKey])
+		route.modelSettingClaudeSessionID = strings.TrimSpace(command.Value[modelSettingClaudeSessionMetadataKey])
+	}
 	if arg == "" && h.sendFeishuModelSettingCard(ctx, modelSettingCardRequest{
 		message: msg,
 		reply:   req.Reply,
@@ -63,8 +73,12 @@ func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req pla
 	return true
 }
 
+func expiredModelSettingCardText() string {
+	return "该模型设置卡片已失效，请重新发送 /model 或 /reasoning。"
+}
+
 // modelSettingCardAgentMatches 拒绝缺少目标或已切换 Agent 的旧模型卡片。
-func (h *Handler) modelSettingCardAgentMatches(req platformCommandRequest) bool {
+func (h *Handler) modelSettingCardAgentMatches(ctx context.Context, req platformCommandRequest) bool {
 	command := req.Message.RawCommand
 	if command == nil || command.Action != "choice" {
 		return true
@@ -74,7 +88,35 @@ func (h *Handler) modelSettingCardAgentMatches(req platformCommandRequest) bool 
 		return false
 	}
 	current := h.defaultAgentNameForRoute(req.RouteUserID, req.Message.Platform, req.Message.AccountID)
-	return expected == current
+	if expected != current {
+		return false
+	}
+	ag, err := h.getAgent(ctx, current)
+	if err != nil || ag == nil {
+		return false
+	}
+	route := modelAgentRoute{
+		routeUserID: req.RouteUserID,
+		platform:    req.Message.Platform,
+		accountID:   req.Message.AccountID,
+	}
+	if isCodexAgent(current, ag.Info()) {
+		expectedThread := strings.TrimSpace(command.Value[modelSettingThreadMetadataKey])
+		currentRef, bound := h.currentCodexSessionSettingRef(route, current)
+		if expectedThread == "" {
+			return !bound
+		}
+		return bound && currentRef.threadID == expectedThread
+	}
+	if isClaudeAgent(current, ag.Info()) {
+		expectedSession := strings.TrimSpace(command.Value[modelSettingClaudeSessionMetadataKey])
+		currentRef, bound := h.currentClaudeSessionSettingRef(route, current)
+		if expectedSession == "" {
+			return !bound
+		}
+		return bound && currentRef.sessionID == expectedSession
+	}
+	return true
 }
 
 // handleModelCommand 统一的 /model 入口：查看/切换当前会话 Agent 的模型。
@@ -96,13 +138,18 @@ func (h *Handler) handleModelCommandForRoute(ctx context.Context, route modelAge
 		return modelFixedByConfigHint(name)
 	}
 	arg = strings.TrimSpace(arg)
-	control = h.withCurrentClaudeSessionStatus(modelSettingControllerRequest{
-		route: route, name: name, agent: ag, controller: control,
+	control = h.withCurrentSessionStatus(modelSettingControllerRequest{
+		ctx: ctx, route: route, name: name, agent: ag, controller: control,
 	})
 	if arg == "" {
 		return renderModelOverview(ctx, control)
 	}
 	if reply, handled := h.setCurrentClaudeSessionSetting(claudeModelSettingRequest{
+		ctx: ctx, route: route, name: name, agent: ag, model: arg,
+	}); handled {
+		return reply
+	}
+	if reply, handled := h.setCurrentCodexSessionSetting(codexModelSettingRequest{
 		ctx: ctx, route: route, name: name, agent: ag, model: arg,
 	}); handled {
 		return reply
@@ -133,13 +180,18 @@ func (h *Handler) handleReasoningCommandForRoute(ctx context.Context, route mode
 		return modelFixedByConfigHint(name)
 	}
 	arg = strings.TrimSpace(arg)
-	control = h.withCurrentClaudeSessionStatus(modelSettingControllerRequest{
-		route: route, name: name, agent: ag, controller: control,
+	control = h.withCurrentSessionStatus(modelSettingControllerRequest{
+		ctx: ctx, route: route, name: name, agent: ag, controller: control,
 	})
 	if arg == "" {
 		return renderReasoningOverview(ctx, control)
 	}
 	if reply, handled := h.setCurrentClaudeSessionSetting(claudeModelSettingRequest{
+		ctx: ctx, route: route, name: name, agent: ag, effort: arg,
+	}); handled {
+		return reply
+	}
+	if reply, handled := h.setCurrentCodexSessionSetting(codexModelSettingRequest{
 		ctx: ctx, route: route, name: name, agent: ag, effort: arg,
 	}); handled {
 		return reply

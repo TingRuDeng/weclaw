@@ -1,5 +1,7 @@
 # Claude Remote Session Ownership Implementation Plan
 
+> **Superseded:** This historical owner-first plan was replaced on 2026-07-19 by the single process-resident ClaudeHost, multiple frontend bindings, and session writer lease design documented in `docs/AI_CONTEXT.md`. Do not reintroduce `/cc owner`, `/cc cli`, or a second Claude writer from this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 为 Claude ACP session 增加唯一远程窗口所有权、选择即接管、显式本地释放和 fail-closed 任务门禁。

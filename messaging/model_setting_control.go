@@ -28,6 +28,10 @@ type modelSettingController interface {
 	DefaultValue() string
 }
 
+type modelSettingScopeProvider interface {
+	SettingScope() string
+}
+
 type codexModelSettingController struct {
 	agent.CodexModelControlAgent
 }
@@ -96,27 +100,36 @@ func newModelSettingController(name string, ag agent.Agent) (modelSettingControl
 
 func renderModelOverview(ctx context.Context, control modelSettingController) string {
 	status := control.Status()
-	lines := []string{control.AgentLabel() + " 当前模型: " + modelSettingValue(status.Model, control)}
+	scope := modelSettingScope(control)
+	lines := []string{control.AgentLabel() + " " + scope + "模型: " + modelSettingValue(status.Model, control)}
 	if models, err := control.ListModels(ctx); err == nil && len(models) > 0 {
 		lines = append(lines, "可用模型:")
 		for _, model := range models {
 			lines = append(lines, "- "+model.Label)
 		}
 	}
-	lines = append(lines, "用 /model <模型ID> 切换。")
+	lines = append(lines, "用 /model <模型ID> 切换"+scope+"模型。")
 	return wechatCommandText(lines...)
 }
 
 func renderReasoningOverview(ctx context.Context, control modelSettingController) string {
 	status := control.Status()
-	lines := []string{control.AgentLabel() + " 当前推理强度: " + modelSettingValue(status.Effort, control)}
+	scope := modelSettingScope(control)
+	lines := []string{control.AgentLabel() + " " + scope + "推理强度: " + modelSettingValue(status.Effort, control)}
 	if models, err := control.ListModels(ctx); err == nil {
 		if options := modelEffortOptions(models, status.Model); len(options) > 0 {
 			lines = append(lines, "可选: "+strings.Join(options, ", "))
 		}
 	}
-	lines = append(lines, "用 /reasoning <强度> 切换。")
+	lines = append(lines, "用 /reasoning <强度> 切换"+scope+"推理强度。")
 	return wechatCommandText(lines...)
+}
+
+func modelSettingScope(control modelSettingController) string {
+	if scoped, ok := control.(modelSettingScopeProvider); ok {
+		return scoped.SettingScope()
+	}
+	return "新会话默认"
 }
 
 func modelSettingValue(value string, control modelSettingController) string {
@@ -146,14 +159,23 @@ func (h *Handler) sendFeishuModelSettingCard(ctx context.Context, req modelSetti
 	if !ok {
 		return false
 	}
-	control = h.withCurrentClaudeSessionStatus(modelSettingControllerRequest{
-		route: req.route, name: name, agent: ag, controller: control,
+	control = h.withCurrentSessionStatus(modelSettingControllerRequest{
+		ctx: ctx, route: req.route, name: name, agent: ag, controller: control,
 	})
 	prompt, choices := modelSettingCard(ctx, control, req.setting)
 	if len(choices) == 0 {
 		return false
 	}
 	metadata := map[string]string{modelSettingAgentMetadataKey: name}
+	if isCodexAgent(name, ag.Info()) {
+		if ref, ok := h.currentCodexSessionSettingRef(req.route, name); ok {
+			metadata[modelSettingThreadMetadataKey] = ref.threadID
+		}
+	} else if isClaudeAgent(name, ag.Info()) {
+		if ref, ok := h.currentClaudeSessionSettingRef(req.route, name); ok {
+			metadata[modelSettingClaudeSessionMetadataKey] = ref.sessionID
+		}
+	}
 	metadata = mergeChoiceMetadata(metadata, feishuChoiceSessionMetadata(req.message, req.route.routeUserID))
 	choices = platformChoicesWithMetadata(choices, metadata)
 	return req.reply.AskChoices(ctx, prompt, choices) == nil
@@ -177,7 +199,7 @@ func modelSelectionCard(control modelSettingController, status modelSettingStatu
 		label := markCurrentChoice(model.Label, modelOptionMatches(model, status.Model))
 		choices = append(choices, platform.Choice{ID: "/model " + model.ID, Label: label})
 	}
-	prompt := control.AgentLabel() + " 当前模型: " + modelSettingValue(status.Model, control) + "\n\n请选择要使用的模型。"
+	prompt := control.AgentLabel() + " " + modelSettingScope(control) + "模型: " + modelSettingValue(status.Model, control) + "\n\n请选择要使用的模型。"
 	return prompt, choices
 }
 
@@ -189,7 +211,7 @@ func reasoningSettingCard(control modelSettingController, status modelSettingSta
 			ID: "/reasoning " + effort, Label: markCurrentChoice(effort, effort == status.Effort),
 		})
 	}
-	prompt := control.AgentLabel() + " 当前推理强度: " + modelSettingValue(status.Effort, control) + "\n\n请选择要使用的推理强度。"
+	prompt := control.AgentLabel() + " " + modelSettingScope(control) + "推理强度: " + modelSettingValue(status.Effort, control) + "\n\n请选择要使用的推理强度。"
 	return prompt, choices
 }
 

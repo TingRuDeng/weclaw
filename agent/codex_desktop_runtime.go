@@ -24,14 +24,12 @@ func (a *ACPAgent) chatCodexDesktopTurn(opts codexDesktopTurnOptions) (string, e
 		return "", fmt.Errorf("thread %s already has an active turn", threadID)
 	}
 	defer a.unregisterTurnChannel(threadID, turnCh)
-	config := a.modelConfigSnapshot()
 	turnID, err := a.desktopRuntime.startTurn(opts.ctx, codexDesktopStartTurnSpec{
 		ConversationID: threadID, Input: []codexUserInput{{Type: "text", Text: opts.message}},
 		Cwd:               a.cwdForConversation(opts.binding.Ref.ConversationID),
 		ApprovalPolicy:    a.approvalPolicyForContext(opts.ctx),
 		ApprovalsReviewer: a.approvalReviewerForCodex(),
 		SandboxPolicy:     map[string]any{"type": a.sandboxPolicyTypeForCodex()},
-		Model:             config.model, Effort: config.effort,
 	})
 	if err != nil {
 		return "", err

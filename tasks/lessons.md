@@ -1,5 +1,15 @@
 # Lessons
 
+## 2026-07-19 Claude 必须是单一 ClaudeHost、多前端 binding
+
+- 触发条件：每个飞书或微信窗口各自维护 Claude owner，并通过 `/cc cli` 把同一个 session 交给独立原生进程；窗口切换、ACP 恢复和 prompt 并发因此同时操作 session ownership，反复出现接管失败或潜在双写。
+- 规则：一个 WeClaw 服务只运行一个进程驻留 ClaudeHost；窗口只保存 workspace/session binding，不持有独占 owner。多个前端可绑定同一 session，当前 host generation 中只执行一次有效 `session/resume`，真正 prompt 才按 session 获取唯一 writer lease。
+- 运行边界：单次消息 context 取消、ACP 连接失败、`session/resume` 超时或子进程重启只能改变 host/runtime availability，不能清除 durable binding 或覆盖其他 route。重启后的 binding 进入 `pending_resume`，恢复失败进入 `resume_failed` 并 fail-closed。
+- 并发边界：同 route 在活动任务后最多排队一条消息；绑定同一 session 的其他 route 必须收到明确 busy，不能把消息追加到现有任务，也不能通过重复 `session/resume` 建立第二个 host-side writer。绑定 CAS、session 有序锁和任务 lease 是不同层次，不能重新合并成 owner 状态机。
+- 兼容边界：Claude 状态 v1-v3 的 `remote`、`local`、`unclaimed` control intent 加载后丢弃并重写为 v4 binding-only；`/cc owner`、`/cc cli` 停用，原生 `claude` 仅保留给 `/cc quota` 的无提示词短生命周期回退。上游 adapter 当前是 stdio ACP，未实现的 Claude Unix socket 不能写成现有能力。
+- 本节取代下文所有 Claude owner-first、本地 CLI 交接和“多 binding 迁移为 unclaimed”规则；旧条目仅保留为历史故障背景。
+- 来源：用户确认 Claude 按 Codex 的单一 host、多前端客户端方向重构，并允许直接推进当前无人使用阶段的架构收敛。
+
 ## 2026-07-18 API 收敛后必须删除失去调用方的兼容包装
 
 - 触发条件：内部 API 增加新参数并迁移全部调用方后，旧签名只剩一个转发包装且生产代码、测试均不再使用。
@@ -32,7 +42,7 @@
 - 断线边界：turn 已提交后失去客户端观察流属于交付状态未知，writer lease 必须 fail-closed 保留；只有同一 turn 的 rollout 终态或重连后的权威 thread 快照才能释放，禁止用普通 error/defer 直接清 active 状态。
 - 兼容边界：v1-v3 owner/control 仅用于读取迁移并丢弃；`/cx owner` 已删除，`/cx app|cli|attach|detach` 与 Codex Companion 第二 writer 必须拒绝。后续本地 UI 只能连接同一 host。
 - 路径边界：Unix socket 默认路径过长时使用原路径稳定哈希落到当前用户私有短目录；显式超长路径直接失败，socket 与父目录必须校验类型、权限和 owner。
-- 本节取代下文所有 Codex Desktop owner、选择即接管和 Codex Companion attach/detach 规则；旧条目仅保留为历史故障背景。Claude owner-first 规则不受影响。
+- 本节取代下文所有 Codex Desktop owner、选择即接管和 Codex Companion attach/detach 规则；Claude 当前规则以 2026-07-19 的单一 ClaudeHost 条目为准。
 
 ## 2026-07-17 Codex 首轮前跨重启恢复不能要求 rollout 文件
 
@@ -616,3 +626,19 @@
 - 反例：按钮点击后原卡永久停在“已受理”，最终结果固定另发；或飞书重投旧事件时再次返回“处理中”卡片，覆盖已经写入的终态。
 - 正确做法：保留原消息关联，异步结果通过 `im.message.patch` 回写；同一窗口继续按分发顺序执行；重复事件只返回 toast、不携带卡片；回写错误记录日志并发送完整文本兜底。
 - 来源：2026-07-18 用户反馈“切换会话怎么没有在卡片里更新结果”。
+
+## 2026-07-18 Codex 模型配置必须绑定 thread
+
+- 触发条件：飞书或微信窗口已绑定 Codex thread，用户通过 `/model` 或 `/reasoning` 修改当前会话配置。
+- 规则：当前会话必须通过 app-server `thread/settings/update` 更新，且只影响该 thread 后续 turn；新会话默认值与当前 thread 配置是不同状态，禁止用进程级默认值覆盖所有 route。
+- 反例：命令只修改 `ACPAgent.model/effort`，再在每次 `turn/start` 或 `thread/resume` 注入共享值；表面上下一轮生效，实际会串到其他会话，卡片还会把新 thread 默认值误报为当前 thread 状态。
+- 正确做法：默认值只用于 `thread/start`；当前配置从 `thread/start`、`thread/resume` 响应和 `thread/settings/updated` 通知缓存，并按 wire sequence 拒绝旧通知。`thread/read` 不返回模型配置，缓存缺失时只能使用 rollout 作为展示回退，不能把全局默认值当权威当前值。
+- 来源：2026-07-18 用户反馈“切换 Codex 的模型及推理强度不能对当前会话生效”，协议核对确认 `thread/settings/update` 才是当前 thread 的正式配置入口。
+
+## 2026-07-18 内置命令必须区分精确语法、route 状态与配置作用域
+
+- 触发条件：同一个短入口既可以发送 Agent 消息又可以执行会话命令，或状态命令同时涉及当前绑定与新会话默认值。
+- 规则：内置命令只消费精确 token 和合法参数数量；无参数状态必须按当前窗口 route 读取真实 workspace；当前会话配置与新会话默认值必须在文案中明确区分。
+- 反例：`/cc status 请解释` 被吞成状态命令，`/cwdfoo` 被当成 `/cwd foo`，无参数 `/cwd` 返回占位值，或把 `/cx model status` 的新 thread 默认值标成当前 thread 配置。
+- 正确做法：保留 `/cc <内容>` 时为保留词命令建立严格 grammar；`/cwd` 使用独立 token 检测并按 route binding 只读查询；`/model`、`/reasoning` 显示当前/默认作用域，Agent 专用 `model status` 明确标为新会话默认配置。
+- 补充：route 已显式选择的 Agent 即使被移除或暂时不可用，也不能静默改用平台默认 Agent；状态和写入入口必须保留原选择并明确失败，避免跨 Agent 误操作。

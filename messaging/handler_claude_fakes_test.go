@@ -95,9 +95,3 @@ func (f *fakeClaudeSessionAgent) ClearClaudeSession(conversationID string) {
 		f.sessionID = ""
 	}
 }
-
-type recordedClaudeCLIResume struct {
-	command   string
-	workspace string
-	sessionID string
-}

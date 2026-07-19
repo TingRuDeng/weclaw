@@ -8,7 +8,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-// handleCodexModelCommand 处理微信侧 Codex 模型配置查询命令。
+// handleCodexModelCommand 处理 Codex 模型目录与新会话默认配置查询命令。
 func (h *Handler) handleCodexModelCommand(ctx context.Context, ag agent.Agent, args []string) string {
 	if len(args) == 0 || args[0] == "status" {
 		return h.renderCodexModelStatus(ag)
@@ -63,10 +63,10 @@ func (h *Handler) codexModelStatusFromMemory(agentName string) (agent.CodexModel
 	return agent.CodexModelStatus{}, false
 }
 
-// renderCodexModelStatusText 统一渲染 status 输出，避免运行态和配置态格式漂移。
+// renderCodexModelStatusText 明确展示新建 thread 默认值，避免与 /model 当前会话语义混淆。
 func renderCodexModelStatusText(status agent.CodexModelStatus) string {
 	return wechatCommandText(
-		"Codex 模型配置:",
+		"Codex 新会话默认模型配置:",
 		"model: "+codexModelConfigValue(status.Model),
 		"effort: "+codexModelConfigValue(status.Effort),
 	)

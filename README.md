@@ -75,18 +75,16 @@ WeClaw exposes native `codex app-server` through a stable Unix socket and connec
 /cc switch <number|sessionId>
 /cc new
 /cc status
-/cc owner
-/cc owner local
-/cc owner remote
 /cc quota
-/cc cli
 ```
 
-Claude uses ACP `session/list`, `session/resume`, and `session/new` to manage real sessions. Selecting or creating a session, choosing it from a Feishu card, or using global `/new` while Claude is the default agent first persists the current remote window as owner. `session/list` is the session-directory source of truth; WeClaw's persisted control intent is the remote-write source of truth. If `session/resume` fails, the binding is marked runtime-unavailable without reverting to the previous agent or session or releasing ownership; regular writes stay blocked until recovery succeeds. Bindings and control intent are restored before the next message after WeClaw restarts.
+Claude uses one process-resident shared ClaudeHost for real ACP sessions: each WeClaw service starts one `claude-agent-acp` process, while WeChat, Feishu, and other frontends persist only their own workspace/session bindings. `session/list` is the directory source of truth. Multiple frontends may bind the same session, the host performs only one effective `session/resume` for it, and a session-scoped writer lease is acquired only when a prompt starts. Another frontend cannot append work to the current writer's queue and receives an explicit busy result until that task ends.
+
+Selecting or creating a session, choosing it from a Feishu card, or using global `/new` while Claude is selected changes only the current frontend binding. It never overwrites or releases another frontend. A failed `session/resume`, ACP disconnect, or ClaudeHost startup marks that binding runtime-unavailable without reverting the selected agent/session or clearing the binding; regular writes stay blocked until recovery succeeds. After a WeClaw restart, durable bindings return as `pending_resume` and the shared runtime is restored on real use.
 
 If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` marks the acquired binding as the “current new session.” This entry is display-only until the first message makes it part of the normal catalog, and it never bypasses `/cc switch` validation against `session/list`.
 
-`/cc owner local` explicitly releases remote control, while `/cc owner remote` reacquires it after the native Claude CLI has ended. `/cc cli` releases remote control before opening the native CLI; do not reacquire while that CLI is still active. Tasks running in an independent Claude CLI are outside WeClaw's runtime, so they cannot be observed, streamed, guided with `/guide`, or stopped remotely. Legacy state where multiple windows reference one session migrates to unclaimed instead of silently choosing a winner. Remote Claude ACP tasks support `/stop` and queued continuation, but not `/guide`.
+`/cc owner` and `/cc cli` are disabled. ClaudeHost no longer has a frontend-exclusive owner, and an independent `claude --resume` would bypass the session writer lease and create a second writer. Legacy `remote`, `local`, and `unclaimed` control intents are discarded on load while every frontend binding is retained. Native `claude` is used only as a short-lived, prompt-free fallback for `/cc quota`, never for session writes. Claude tasks support `/stop` and one queued continuation from the same frontend, but not `/guide`.
 
 ### Control a Running Task
 
@@ -106,15 +104,16 @@ flowchart LR
     Feishu --> Bridge
     Bridge --> Core[Session Binding · Task Queue · Approval · Progress]
     Core --> Codex[Single shared Codex app-server]
-    Core --> Claude[Claude ACP]
+    Core --> Claude[Single shared ClaudeHost]
     Core --> Other[Other ACP / HTTP / Companion Agents]
     Codex --> Bindings[Multiple frontend bindings]
     Bindings --> WeChatClient[WeChat window]
     Bindings --> FeishuClient[Feishu window]
-    Claude --> Session[Claude Code Session]
+    Claude --> ClaudeBindings[Multiple frontend bindings]
+    ClaudeBindings --> Session[Claude Code session writer lease]
 ```
 
-WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and approvals, then renders text, typing state, or Feishu cards according to platform capabilities. The main Codex path uses its native app-server protocol. Claude is ACP-only for remote access; native `claude` is only used to hand off an idle session locally.
+WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and approvals, then renders text, typing state, or Feishu cards according to platform capabilities. The main Codex path uses its native app-server protocol. Claude uses one process-resident ACP ClaudeHost; native `claude` is only a prompt-free quota-query fallback.
 
 ## Capability Matrix
 
@@ -128,10 +127,10 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | Proactive send | Yes | Yes, text only today |
 | User authorization codes | Yes | Yes |
 
-| Agent | Remote Backend | Session Reuse | Model / Reasoning | Local Handoff |
+| Agent | Remote Backend | Session Reuse | Model / Reasoning | Independent Writer |
 | --- | --- | :---: | :---: | --- |
 | Codex | Single shared app-server | Workspace + thread | Yes | No independent writer |
-| Claude | ACP | ACP session | Yes | Native Claude CLI |
+| Claude | Single shared ClaudeHost (ACP) | ACP session + writer lease | Yes | Disabled |
 | OpenCode | Companion | Depends on local connection | Agent-dependent | Visible terminal |
 | Other agents | ACP / HTTP / Companion | Protocol-dependent | Agent-dependent | Configuration-dependent |
 
@@ -140,10 +139,10 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | Command | Description |
 | --- | --- |
 | `/help`, `/status` | Show help and WeClaw runtime status |
-| `/cwd [path]` | Show or switch the working directory; regular users are confined to allowed workspace roots |
+| `/cwd [path]` | Show or switch the current frontend workspace; switching also updates Agent default cwd values, and regular users are confined to allowed workspace roots |
 | `/new` | Explicitly create a session for the current default agent; also bind it when Codex is the default |
-| `/model`, `/reasoning` | Show or change the current session model and reasoning effort |
-| `/mode [default|yolo]` | Show or change Codex approval behavior for the current conversation; bare `/mode` opens a Feishu choice card |
+| `/model`, `/reasoning` | Show or change the bound session configuration, or the new-session defaults when no session is bound |
+| `/mode [default|yolo]` | Show or change Agent approval behavior for the current frontend; it applies to both Codex and Claude, and bare `/mode` opens a Feishu choice card |
 | `/progress [mode]` | Show or change progress mode |
 | `/ps`, `/stop` | List or stop current tasks |
 | `/cancel`, `/guide` | Remove a queued message or steer the active Codex task |
@@ -159,14 +158,14 @@ Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` wh
 
 Runtime boundary: `/cx status` is the single view for the current binding, shared host, writer, and task state.
 
-Other commands: `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx model status|ls`, `/cx clean`.
+Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx model status|ls`, `/cx clean`. `/cx model status` shows defaults for newly created Codex sessions; use `/model` and `/reasoning` for the bound session.
 
 </details>
 
 <details>
 <summary>Common Claude commands</summary>
 
-`/cc ls`, `/cc switch <number|sessionId>`, `/cc new`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls`, `/cc cli`.
+`/cc whoami`, `/cc ls`, `/cc switch <number|sessionId>`, `/cc new`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls`. `/cc status` is the unified binding, shared-ClaudeHost, and writer view. `/cc model status` shows defaults for newly created Claude sessions; use `/model` and `/reasoning` for the bound session. `/cc owner` and `/cc cli` are disabled.
 
 `/cc quota` reuses the local Claude Code OAuth login to read the 5-hour, 7-day, and model-scoped limits without sending a model request. WeClaw first supports Claude Code's legacy Keychain/credentials file and its Anthropic usage endpoint, then falls back to a short-lived native `get_usage` control query when those credentials are unavailable or the request fails. The token is kept in memory, sent only to the fixed Anthropic endpoint, never logged or persisted, and never forwarded through redirects. These credential, endpoint, and structured-control contracts are not stable public APIs and may change in later Claude Code releases. API key, Bedrock, Vertex, and sessions without profile scope report that subscription limits are unavailable.
 

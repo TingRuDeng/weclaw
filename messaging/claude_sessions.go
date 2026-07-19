@@ -26,13 +26,13 @@ type claudeSessionBinding struct {
 	WorkspaceRoot string              `json:"workspace_root,omitempty"`
 	SessionID     string              `json:"session_id,omitempty"`
 	Status        claudeBindingStatus `json:"status"`
+	Revision      uint64              `json:"revision"`
 	UpdatedAt     string              `json:"updated_at"`
 }
 
 type claudeSessionState struct {
 	Version  int                             `json:"version"`
 	Bindings map[string]claudeSessionBinding `json:"bindings"`
-	Controls map[string]claudeControlIntent  `json:"controls"`
 	Updated  string                          `json:"updated"`
 }
 
@@ -41,14 +41,12 @@ type claudeSessionStore struct {
 	saveMu   sync.Mutex
 	filePath string
 	bindings map[string]claudeSessionBinding
-	controls map[string]claudeControlIntent
 	persist  func(claudeSessionState) error
 }
 
 func newClaudeSessionStore() *claudeSessionStore {
 	return &claudeSessionStore{
 		bindings: make(map[string]claudeSessionBinding),
-		controls: make(map[string]claudeControlIntent),
 	}
 }
 
@@ -84,20 +82,6 @@ func (s *claudeSessionStore) bindingSnapshot(bindingKey string) (claudeSessionBi
 	return binding, ok
 }
 
-func (s *claudeSessionStore) controlIntent(sessionID string) claudeControlIntent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.controls[strings.TrimSpace(sessionID)]
-}
-
-// bindingControlSnapshot 在同一锁内读取 route 绑定及其对应会话的控制意图。
-func (s *claudeSessionStore) bindingControlSnapshot(bindingKey string) (claudeSessionBinding, claudeControlIntent) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	binding := s.bindings[strings.TrimSpace(bindingKey)]
-	return binding, s.controls[strings.TrimSpace(binding.SessionID)]
-}
-
 // commitSelection 原子提交已由 ACP 验证成功的 workspace/session 绑定。
 func (s *claudeSessionStore) commitSelection(bindingKey string, workspaceRoot string, sessionID string) error {
 	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)
@@ -131,7 +115,6 @@ func (s *claudeSessionStore) updateStatus(bindingKey string, status claudeBindin
 			return current
 		}
 		current.Status = status
-		current.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		return current
 	})
 }
@@ -141,6 +124,7 @@ func newClaudeBinding(workspaceRoot string, sessionID string, status claudeBindi
 		WorkspaceRoot: workspaceRoot,
 		SessionID:     sessionID,
 		Status:        status,
+		Revision:      1,
 		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
 	}
 }
@@ -151,7 +135,16 @@ func (s *claudeSessionStore) updateBinding(bindingKey string, mutate func(claude
 		return fmt.Errorf("Claude binding key 不能为空")
 	}
 	return s.updateBindings(func(bindings map[string]claudeSessionBinding) {
-		bindings[bindingKey] = mutate(bindings[bindingKey])
+		current := bindings[bindingKey]
+		next := mutate(current)
+		if next == current {
+			return
+		}
+		if next.Revision <= current.Revision {
+			next.Revision = current.Revision + 1
+		}
+		next.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		bindings[bindingKey] = next
 	})
 }
 
@@ -160,9 +153,8 @@ func (s *claudeSessionStore) updateBindings(mutate func(map[string]claudeSession
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	bindings := cloneClaudeBindings(s.bindings)
-	controls := cloneClaudeControls(s.controls)
 	mutate(bindings)
-	state := newClaudeSessionState(bindings, controls)
+	state := newClaudeSessionState(bindings)
 	persist := s.persist
 	s.mu.Unlock()
 	if persist != nil {
@@ -172,7 +164,6 @@ func (s *claudeSessionStore) updateBindings(mutate func(map[string]claudeSession
 	}
 	s.mu.Lock()
 	s.bindings = bindings
-	s.controls = controls
 	s.mu.Unlock()
 	return nil
 }
@@ -185,13 +176,18 @@ func cloneClaudeBindings(input map[string]claudeSessionBinding) map[string]claud
 	return bindings
 }
 
-func newClaudeSessionState(bindings map[string]claudeSessionBinding, controls map[string]claudeControlIntent) claudeSessionState {
+func newClaudeSessionState(bindings map[string]claudeSessionBinding) claudeSessionState {
 	return claudeSessionState{
 		Version:  claudeSessionStateVersion,
 		Bindings: cloneClaudeBindings(bindings),
-		Controls: cloneClaudeControls(controls),
 		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// claudeSessionExecutionKey 是共享 ClaudeHost 的 session 级 writer lease 键。
+// 多个窗口可以绑定同一 session，但只能有一个窗口在该键上启动 prompt。
+func claudeSessionExecutionKey(sessionID string) string {
+	return "claude-session:" + strings.TrimSpace(sessionID)
 }
 
 func claudeBindingKey(userID string, agentName string) string {

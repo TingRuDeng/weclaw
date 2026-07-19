@@ -144,6 +144,9 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 		"account/rateLimits/updated", "thread/status/changed", "mcpServer/startupStatus/updated",
 		"remoteControl/status/changed":
 		return true
+	case "thread/settings/updated":
+		a.handleCodexThreadSettingsUpdated(msg.Params, msg.Sequence)
+		return true
 	case "turn/approval/request", "item/fileChange/requestApproval",
 		"item/commandExecution/requestApproval", "item/permissions/requestApproval":
 		a.handlePermissionRequest(line)

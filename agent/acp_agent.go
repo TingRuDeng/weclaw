@@ -47,12 +47,14 @@ type ACPAgent struct {
 	wireSequence    atomic.Uint64
 	sessions        map[string]string // conversationID -> sessionID (legacy ACP)
 	// pendingPersistedSessions 在标准 ACP 握手确认身份前隔离磁盘中的旧 session。
-	pendingPersistedSessions map[string]string
-	legacyRuntimeGeneration  uint64
-	sessionGenerations       map[string]uint64 // conversationID -> legacy runtime generation
-	bindingRevisions         map[string]uint64 // conversationID -> latest binding intent revision
-	bindingRevisionCounter   uint64
-	threads                  map[string]string // conversationID -> threadID (codex app-server)
+	pendingPersistedSessions   map[string]string
+	legacyRuntimeGeneration    uint64
+	sessionGenerations         map[string]uint64 // conversationID -> legacy runtime generation
+	bindingRevisions           map[string]uint64 // conversationID -> latest binding intent revision
+	bindingRevisionCounter     uint64
+	threads                    map[string]string // conversationID -> threadID (codex app-server)
+	codexThreadConfigs         map[string]CodexThreadConfig
+	codexThreadConfigRevisions map[string]uint64
 	// resumeOnFirstUse marks restored thread mappings that should trigger a
 	// best-effort thread/resume call before first turn.
 	resumeOnFirstUse      map[string]bool // conversationID -> resume needed
@@ -97,7 +99,7 @@ type ACPAgent struct {
 type ACPAgentConfig struct {
 	ConfiguredName   string   // 配置 map 中的 Agent 名称，用于稳定识别业务身份
 	Command          string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
-	LocalCommand     string   // 原生 Claude 命令，用于本地可见交接和账号额度查询回退
+	LocalCommand     string   // 原生 Claude 命令，仅用于账号额度查询回退
 	Args             []string // extra args for command (e.g. ["acp"] for cursor)
 	Model            string
 	Effort           string

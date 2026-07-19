@@ -25,7 +25,7 @@ type agentCandidate struct {
 // agentCandidates is ordered by priority: for each agent name, earlier entries
 // are preferred. Claude 远程能力只允许 ACP，不提供 CLI 回退。
 var agentCandidates = []agentCandidate{
-	// claude: ACP-only，原生 CLI 只作为 local_command 使用
+	// claude: ACP-only，原生 CLI 只作为额度查询回退的 local_command 使用
 	{Name: "claude", Binary: "claude-agent-acp", Type: "acp", Model: "sonnet"},
 	// codex: prefer ACP, fallback to CLI
 	{Name: "codex", Binary: "codex-acp", Type: "acp", Model: ""},

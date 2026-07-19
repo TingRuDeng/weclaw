@@ -52,18 +52,14 @@ func TestClaudeNewCreatesAndOwnsImmediately(t *testing.T) {
 	if fake.resetConversationID() == "" || binding.WorkspaceRoot != workspace || binding.SessionID != "session-new" || binding.Status != claudeBindingReady {
 		t.Fatalf("reset=%q binding=%+v", fake.resetConversationID(), binding)
 	}
-	intent := h.ensureClaudeSessions().controlIntent("session-new")
-	if intent.Owner != claudeOwnerRemote || intent.BindingKey != claudeBindingKey("user-1", "claude") {
-		t.Fatalf("intent=%+v", intent)
-	}
-	if !strings.Contains(text, "已创建并接管 Claude 会话") {
+	if !strings.Contains(text, "已创建并绑定 Claude 会话") {
 		t.Fatalf("text=%q", text)
 	}
 }
 
 func TestClaudeDisplayTargetsDeduplicateCurrentACPSession(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
-	seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-1", 1)
+	seedClaudeBinding(t, h, "user-1", "claude", workspace, "session-1", 1)
 	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-1", Cwd: workspace, Title: "已落盘会话"}}
 
 	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc ls")
@@ -76,7 +72,7 @@ func TestClaudePendingCatalogProjectionCannotBypassSwitchValidation(t *testing.T
 	h, fake, _ := newClaudeACPNavigationHandler(t)
 	fake.resetSessionID = "session-new"
 
-	if text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new"); !strings.Contains(text, "已创建并接管") {
+	if text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new"); !strings.Contains(text, "已创建并绑定") {
 		t.Fatalf("new text=%q", text)
 	}
 	useCalls := len(fake.useCalls)
@@ -97,7 +93,7 @@ func TestClaudeNormalMessageRequiresExplicitBinding(t *testing.T) {
 func TestClaudeResumeFailureRetainsBinding(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-1", Cwd: workspace}}
-	seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-1", 1)
+	seedClaudeBinding(t, h, "user-1", "claude", workspace, "session-1", 1)
 	h.ensureClaudeSessions().markPendingResume(claudeBindingKey("user-1", "claude"))
 	fake.useErr = errors.New("resume failed")
 
@@ -106,7 +102,7 @@ func TestClaudeResumeFailureRetainsBinding(t *testing.T) {
 	if err == nil || binding.SessionID != "session-1" || binding.Status != claudeBindingResumeFailed {
 		t.Fatalf("error=%v binding=%+v", err, binding)
 	}
-	if !strings.Contains(err.Error(), "运行通道暂不可用") || strings.Contains(err.Error(), "重新选择") {
+	if !strings.Contains(err.Error(), "ClaudeHost 暂不可用") || strings.Contains(err.Error(), "重新选择") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -114,7 +110,7 @@ func TestClaudeResumeFailureRetainsBinding(t *testing.T) {
 func TestClaudePendingResumeBecomesReady(t *testing.T) {
 	h, fake, workspace := newClaudeACPNavigationHandler(t)
 	key := claudeBindingKey("user-1", "claude")
-	seedClaudeRemoteControl(t, h, "user-1", "claude", workspace, "session-1", 1)
+	seedClaudeBinding(t, h, "user-1", "claude", workspace, "session-1", 1)
 	if err := h.ensureClaudeSessions().markPendingResume(key); err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,11 @@ func isProgressCommand(trimmed string) bool {
 	return len(fields) > 0 && fields[0] == "/progress"
 }
 
+func isCwdCommand(trimmed string) bool {
+	fields := strings.Fields(trimmed)
+	return len(fields) > 0 && fields[0] == "/cwd"
+}
+
 func isCodexSessionCommand(trimmed string) bool {
 	fields := strings.Fields(trimmed)
 	return len(fields) > 0 && isCodexSessionCommandToken(fields[0])

@@ -21,9 +21,44 @@ const (
 	testACPCapabilitiesEnv  = "WECLAW_TEST_ACP_CAPABILITIES"
 	testACPPayloadEnv       = "WECLAW_TEST_ACP_INITIALIZE_PAYLOAD"
 	testACPPIDFileEnv       = "WECLAW_TEST_ACP_PID_FILE"
+	testACPListAfterInitEnv = "WECLAW_TEST_ACP_LIST_AFTER_INIT"
 	testACPListCapability   = "agentCapabilities.sessionCapabilities.list"
 	testACPResumeCapability = "agentCapabilities.sessionCapabilities.resume"
 )
+
+func TestClaudeSharedHostSurvivesFrontendStartContextCancellation(t *testing.T) {
+	a, pidFile := newCapabilityTestAgent(t, "claude-agent-acp", string(claudeCapabilityPayload()))
+	a.env[testACPListAfterInitEnv] = "1"
+	t.Cleanup(a.Stop)
+
+	frontendCtx, cancelFrontend := context.WithCancel(context.Background())
+	if err := a.Start(frontendCtx); err != nil {
+		t.Fatalf("Start error: %v", err)
+	}
+	started := a.ClaudeHostStatus()
+	if !started.Started || started.PID == 0 || started.Generation == 0 {
+		t.Fatalf("started status=%+v", started)
+	}
+
+	cancelFrontend()
+	<-frontendCtx.Done()
+	probeCtx, cancelProbe := context.WithTimeout(context.Background(), time.Second)
+	defer cancelProbe()
+	sessions, err := a.ListClaudeSessions(probeCtx)
+	if err != nil {
+		t.Fatalf("frontend context cancellation stopped shared ClaudeHost: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("sessions=%#v, want empty probe result", sessions)
+	}
+	afterCancel := a.ClaudeHostStatus()
+	if !afterCancel.Started || afterCancel.PID != started.PID || afterCancel.Generation != started.Generation {
+		t.Fatalf("after cancel status=%+v, started=%+v", afterCancel, started)
+	}
+
+	a.Stop()
+	assertCapabilityTestProcessExited(t, pidFile)
+}
 
 func TestClaudeACPStartupRequiresListAndResume(t *testing.T) {
 	tests := []struct {
@@ -269,6 +304,24 @@ func TestHelperACPCapabilities(t *testing.T) {
 		os.Exit(4)
 	}
 	for scanner.Scan() {
+		if os.Getenv(testACPListAfterInitEnv) != "1" {
+			continue
+		}
+		var request rpcRequest
+		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
+			os.Exit(6)
+		}
+		// Hold the response long enough for a request-scoped CommandContext to
+		// terminate the process. A process-resident host still completes it.
+		time.Sleep(50 * time.Millisecond)
+		response := rpcResponse{
+			JSONRPC: "2.0",
+			ID:      &request.ID,
+			Result:  json.RawMessage(`{"sessions":[]}`),
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(response); err != nil {
+			os.Exit(7)
+		}
 	}
 	os.Exit(0)
 }

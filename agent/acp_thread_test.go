@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,9 +128,13 @@ func TestACPAgentCodexThreadStartIncludesEffort(t *testing.T) {
 	if _, err := a.createThread(ctx, "user-1"); err != nil {
 		t.Fatalf("createThread error: %v", err)
 	}
+	config, err := a.CodexThreadConfig(ctx, "user-1", "thread-1")
+	if err != nil || config.Model != "gpt-5.4" || config.Effort != "high" {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), want thread/start defaults", config, err)
+	}
 }
 
-func TestACPAgentCodexTurnStartIncludesEffort(t *testing.T) {
+func TestACPAgentCodexTurnStartPreservesThreadSettings(t *testing.T) {
 	ctx := context.Background()
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",
@@ -148,7 +153,7 @@ func TestACPAgentCodexTurnStartIncludesEffort(t *testing.T) {
 			if !ok {
 				return nil, fmt.Errorf("unexpected turn/start params type %T", params)
 			}
-			if p.Model != "gpt-5.4" || p.Effort != "high" {
+			if p.Model != "" || p.Effort != "" {
 				return nil, fmt.Errorf("model=%q effort=%q", p.Model, p.Effort)
 			}
 			a.notifyMu.Lock()
@@ -170,6 +175,75 @@ func TestACPAgentCodexTurnStartIncludesEffort(t *testing.T) {
 	}
 }
 
+func TestACPAgentUpdatesCurrentCodexThreadConfig(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/settings/update" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p, ok := params.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("unexpected params type %T", params)
+		}
+		if p["threadId"] != "thread-current" || p["model"] != "gpt-5.6-sol" || p["effort"] != "max" {
+			return nil, fmt.Errorf("thread/settings/update params=%#v", p)
+		}
+		return json.RawMessage(`{}`), nil
+	}
+
+	err := a.SetCodexThreadConfig(context.Background(), CodexThreadConfigUpdate{
+		ConversationID: "conversation-1",
+		ThreadID:       "thread-current",
+		Model:          "gpt-5.6-sol",
+		Effort:         "max",
+	})
+	if err != nil {
+		t.Fatalf("SetCodexThreadConfig error: %v", err)
+	}
+	config, err := a.CodexThreadConfig(context.Background(), "conversation-1", "thread-current")
+	if err != nil || config.Model != "gpt-5.6-sol" || config.Effort != "max" {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), want updated settings", config, err)
+	}
+}
+
+func TestACPAgentCodexThreadConfigPropagatesUpdateFailure(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex",
+		Args:    []string{"app-server", "--listen", "stdio://"},
+	})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/settings/update" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		return nil, fmt.Errorf("rejected")
+	}
+
+	err := a.SetCodexThreadConfig(context.Background(), CodexThreadConfigUpdate{
+		ThreadID: "thread-current",
+		Model:    "gpt-5.6-sol",
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("SetCodexThreadConfig error=%v, want rejected detail", err)
+	}
+}
+
+func TestACPAgentCodexLifecycleConfigPreservesExplicitDefaultEffort(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.cacheCodexThreadConfigFromLifecycleResult(
+		json.RawMessage(`{"model":"gpt-current","reasoningEffort":null}`),
+		"thread-current",
+		CodexThreadConfig{Model: "gpt-fallback", Effort: "high"},
+		1,
+	)
+	config, err := a.CodexThreadConfig(context.Background(), "conversation-1", "thread-current")
+	if err != nil || config.Model != "gpt-current" || config.Effort != "" {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), explicit null effort must not use fallback", config, err)
+	}
+}
+
 func TestACPAgentConversationCwdOverridesGlobalCwdForCodexThreadAndTurn(t *testing.T) {
 	ctx := context.Background()
 	workspaceA := filepath.Join(t.TempDir(), "workspace-a")
@@ -184,6 +258,8 @@ func TestACPAgentConversationCwdOverridesGlobalCwdForCodexThreadAndTurn(t *testi
 		Command: "codex",
 		Args:    []string{"app-server", "--listen", "stdio://"},
 		Cwd:     workspaceB,
+		Model:   "gpt-5.4",
+		Effort:  "high",
 	})
 	a.SetConversationCwd("conversation-a", workspaceA)
 	a.SetCwd(workspaceB)
@@ -255,11 +331,21 @@ func TestACPAgentConversationCwdOverridesGlobalCwdForCodexResume(t *testing.T) {
 		if p["cwd"] != workspaceA {
 			return nil, fmt.Errorf("thread/resume cwd=%q, want %q", p["cwd"], workspaceA)
 		}
-		return json.RawMessage(`{"thread":{"id":"thread-a"}}`), nil
+		if _, ok := p["model"]; ok {
+			return nil, fmt.Errorf("thread/resume must preserve thread model: %#v", p)
+		}
+		if _, ok := p["effort"]; ok {
+			return nil, fmt.Errorf("thread/resume must preserve thread effort: %#v", p)
+		}
+		return json.RawMessage(`{"model":"gpt-thread","reasoningEffort":"max","thread":{"id":"thread-a"}}`), nil
 	}
 
 	if err := a.UseCodexThread(ctx, "conversation-a", "thread-a"); err != nil {
 		t.Fatalf("UseCodexThread error: %v", err)
+	}
+	config, err := a.CodexThreadConfig(ctx, "conversation-a", "thread-a")
+	if err != nil || config.Model != "gpt-thread" || config.Effort != "max" {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), want thread/resume settings", config, err)
 	}
 }
 

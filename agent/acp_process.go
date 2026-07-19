@@ -49,10 +49,14 @@ func (a *ACPAgent) launchACPSubprocess(ctx context.Context) (int, error) {
 		return a.launchCodexHostClient(ctx)
 	}
 	a.mu.Lock()
-	cmd := exec.CommandContext(ctx, a.command, a.args...)
+	// A message/request context only bounds startup and individual RPCs. The
+	// shared ClaudeHost must survive that frontend request and is stopped solely
+	// through ACPAgent.Stop or a real process exit.
+	hostCtx := context.WithoutCancel(ctx)
+	cmd := exec.CommandContext(hostCtx, a.command, a.args...)
 	cmd.Dir = a.cwd
 	if command, cmdArgs := a.runAs.wrapCommand(a.command, a.args); command != a.command {
-		cmd = exec.CommandContext(ctx, command, cmdArgs...)
+		cmd = exec.CommandContext(hostCtx, command, cmdArgs...)
 		cmd.Dir = a.cwd
 	}
 	configureACPProcess(cmd)
@@ -312,4 +316,19 @@ func (a *ACPAgent) runtimePID() int {
 		return 0
 	}
 	return a.cmd.Process.Pid
+}
+
+// ClaudeHostStatus reports the singleton legacy ACP runtime shared by every
+// Claude frontend in this WeClaw service process.
+func (a *ACPAgent) ClaudeHostStatus() ClaudeHostStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pid := 0
+	if a.cmd != nil && a.cmd.Process != nil {
+		pid = a.cmd.Process.Pid
+	}
+	return ClaudeHostStatus{
+		Mode: "shared_acp_host", Started: a.started && !a.starting,
+		PID: pid, Generation: a.legacyRuntimeGeneration,
+	}
 }

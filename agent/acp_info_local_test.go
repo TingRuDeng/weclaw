@@ -2,7 +2,7 @@ package agent
 
 import "testing"
 
-// TestACPInfoExposesLocalCommand 验证 adapter 命令与本地交接命令不会混用。
+// TestACPInfoExposesLocalCommand 验证 adapter 命令与额度查询辅助命令不会混用。
 func TestACPInfoExposesLocalCommand(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	agent := NewACPAgent(ACPAgentConfig{

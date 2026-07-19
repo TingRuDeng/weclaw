@@ -55,7 +55,7 @@ func (c *Config) PreflightClaudeACPAgents(opts ClaudeACPPreflightOptions) error 
 	return nil
 }
 
-// detectedLocalCommand 返回 ACP 会话可选的本地交接/账号能力回退命令，缺失不影响远程能力。
+// detectedLocalCommand 返回 Claude 账号额度查询可选的本地回退命令，缺失不影响远程能力。
 func detectedLocalCommand(agentName string) string {
 	if agentName != "claude" {
 		return ""

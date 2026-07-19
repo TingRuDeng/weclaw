@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
 var (
 	errClaudeSessionAcquireActiveOld = errors.New("当前 Claude 远程任务仍在执行")
-	errClaudeSessionAcquireUncertain = errors.New("Claude 控制权移交结果未确认")
+	errClaudeSessionAcquireUncertain = errors.New("Claude 会话绑定结果未确认")
 )
 
 type claudeSessionAcquireRequest struct {
@@ -23,9 +23,9 @@ type claudeSessionAcquireRequest struct {
 
 type claudeSessionAcquireResult struct {
 	SessionID      string
-	Control        claudeControlIntent
+	Binding        claudeSessionBinding
 	ConversationID string
-	Mutation       claudeRemoteMutation
+	Mutation       claudeBindingMutation
 	RuntimeErr     error
 }
 
@@ -35,14 +35,14 @@ type claudeRuntimeSelectionSnapshot struct {
 	Bound          bool
 }
 
-// acquireClaudeSessionWithBindingLocked 在 route binding 外层锁内先提交窗口所有权，再同步 ACP runtime。
+// acquireClaudeSessionWithBindingLocked 在 route binding 外层锁内先提交窗口绑定，再同步共享 ClaudeHost runtime。
 func (h *Handler) acquireClaudeSessionWithBindingLocked(request claudeSessionAcquireRequest) (claudeSessionAcquireResult, error) {
 	route := request.Route
 	selected := request.Selected
 	selected.ID = strings.TrimSpace(selected.ID)
 	selected.Cwd = normalizeClaudeWorkspaceRoot(selected.Cwd)
 	if strings.TrimSpace(route.BindingKey) == "" || selected.ID == "" || selected.Cwd == "" {
-		return claudeSessionAcquireResult{}, fmt.Errorf("Claude 选择接管缺少必要字段")
+		return claudeSessionAcquireResult{}, fmt.Errorf("Claude 会话绑定缺少必要字段")
 	}
 	claudeAgent, ok := route.Agent.(agent.ClaudeSessionAgent)
 	if !ok {
@@ -50,8 +50,8 @@ func (h *Handler) acquireClaudeSessionWithBindingLocked(request claudeSessionAcq
 	}
 
 	store := h.ensureClaudeSessions()
-	initial := store.remoteSelectionSnapshot(route.BindingKey, selected.ID)
-	initialSessionIDs := claudeRemoteSelectionSessionIDs(initial)
+	initial := store.bindingSelectionSnapshot(route.BindingKey, selected.ID)
+	initialSessionIDs := claudeBindingMutationSessionIDs(initial, selected.ID)
 	unlock, err := h.lockClaudeSessionControls(claudeSessionLockRequest{
 		ctx: route.Context, command: request.Command, sessionIDs: initialSessionIDs,
 	})
@@ -60,14 +60,11 @@ func (h *Handler) acquireClaudeSessionWithBindingLocked(request claudeSessionAcq
 	}
 	defer unlock()
 
-	locked := store.remoteSelectionSnapshot(route.BindingKey, selected.ID)
-	if !slices.Equal(initialSessionIDs, claudeRemoteSelectionSessionIDs(locked)) {
-		return claudeSessionAcquireResult{}, errClaudeRemoteSelectionChanged
+	locked := store.bindingSelectionSnapshot(route.BindingKey, selected.ID)
+	if locked != initial {
+		return claudeSessionAcquireResult{}, errClaudeBindingSelectionChanged
 	}
-	if locked.Target.Owner == claudeOwnerRemote && locked.Target.BindingKey != route.BindingKey {
-		return claudeSessionAcquireResult{}, errClaudeRemoteSelectionOtherRoute
-	}
-	if h.hasActiveReleasedClaudeSession(locked, selected.ID) {
+	if h.hasActiveClaudeBindingSession(route, locked.Binding.SessionID) && locked.Binding.SessionID != selected.ID {
 		return claudeSessionAcquireResult{}, errClaudeSessionAcquireActiveOld
 	}
 
@@ -79,94 +76,64 @@ func (h *Handler) acquireClaudeSessionWithBindingLocked(request claudeSessionAcq
 		bindingStatus = claudeBindingReady
 	}
 
-	mutation, err := store.commitRemoteSelection(claudeRemoteSelectionUpdate{
+	mutation, err := store.commitBindingSelection(claudeBindingSelectionUpdate{
 		BindingKey: route.BindingKey, WorkspaceRoot: selected.Cwd, TargetSessionID: selected.ID,
-		ConversationID: conversationID, BindingStatus: bindingStatus, Expected: locked,
+		BindingStatus: bindingStatus, Expected: locked,
 	})
 	if err != nil {
 		return claudeSessionAcquireResult{}, err
 	}
 
 	if err := h.ensureAgentSessions().Set(route.UserID, route.AgentName); err != nil {
-		storeErr := store.rollbackRemoteMutation(mutation)
+		storeErr := store.rollbackBindingMutation(mutation)
 		if storeErr != nil {
-			failClosedErr := h.failClosedClaudeSessionAcquire(store, route.BindingKey, selected.ID, selected.Cwd)
+			failClosedErr := forceClaudeBindingFailClosedInMemory(store, route.BindingKey)
 			return claudeSessionAcquireResult{}, errors.Join(errClaudeSessionAcquireUncertain, err, storeErr, failClosedErr)
 		}
 		return claudeSessionAcquireResult{}, err
 	}
 
 	result := claudeSessionAcquireResult{
-		SessionID: selected.ID, Control: mutation.Target,
+		SessionID: selected.ID, Binding: mutation.Current,
 		ConversationID: conversationID, Mutation: mutation,
 	}
 	if bindingStatus == claudeBindingReady {
-		h.clearReleasedClaudeRuntimeMappings(claudeAgent, mutation, conversationID)
+		h.clearPreviousClaudeRuntimeMapping(claudeAgent, route, mutation, conversationID)
 		return result, nil
 	}
 	if _, err := h.ensureClaudeRuntimeSelection(route, claudeAgent, runtimeBefore, selected); err != nil {
-		h.clearReleasedClaudeRuntimeMappings(claudeAgent, mutation, conversationID)
+		h.clearPreviousClaudeRuntimeMapping(claudeAgent, route, mutation, conversationID)
 		result.RuntimeErr = err
 		return result, nil
 	}
 	if err := store.markReady(route.BindingKey); err != nil {
-		h.clearReleasedClaudeRuntimeMappings(claudeAgent, mutation, conversationID)
+		h.clearPreviousClaudeRuntimeMapping(claudeAgent, route, mutation, conversationID)
 		result.RuntimeErr = fmt.Errorf("保存 Claude 运行通道状态: %w", err)
 		return result, nil
 	}
-	h.clearReleasedClaudeRuntimeMappings(claudeAgent, mutation, conversationID)
+	h.clearPreviousClaudeRuntimeMapping(claudeAgent, route, mutation, conversationID)
 	return result, nil
 }
 
-// failClosedClaudeSessionAcquire 在补偿不完整时尽力持久化释放该 route 的全部远程写入权。
-func (h *Handler) failClosedClaudeSessionAcquire(store *claudeSessionStore, bindingKey string, targetSessionID string, fallbackWorkspaceRoot string) error {
-	snapshot := store.remoteSelectionSnapshot(bindingKey, targetSessionID)
-	workspaceRoot := normalizeClaudeWorkspaceRoot(snapshot.Binding.WorkspaceRoot)
-	if workspaceRoot == "" {
-		workspaceRoot = normalizeClaudeWorkspaceRoot(fallbackWorkspaceRoot)
-	}
-	_, err := store.commitRemoteRelease(claudeRemoteReleaseUpdate{
-		BindingKey: bindingKey, WorkspaceRoot: workspaceRoot, KeepSelection: true, Expected: snapshot,
-	})
-	if err == nil {
-		return nil
-	}
-	// 持久化介质不可用时，至少让当前进程立即拒绝后续远程写入。
-	forceClaudeRemoteFailClosedInMemory(store, bindingKey)
-	return err
-}
-
-func forceClaudeRemoteFailClosedInMemory(store *claudeSessionStore, bindingKey string) {
+// forceClaudeBindingFailClosedInMemory makes an uncertain binding non-writable
+// without changing another frontend or pretending that persistence succeeded.
+func forceClaudeBindingFailClosedInMemory(store *claudeSessionStore, bindingKey string) error {
 	store.saveMu.Lock()
 	defer store.saveMu.Unlock()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	for sessionID, intent := range store.controls {
-		if intent.Owner == claudeOwnerRemote && intent.BindingKey == bindingKey {
-			store.controls[sessionID] = claudeControlIntent{Owner: claudeOwnerUnclaimed, Revision: intent.Revision + 1}
-		}
+	binding := store.bindings[strings.TrimSpace(bindingKey)]
+	if binding.SessionID == "" {
+		return nil
 	}
+	store.bindings[strings.TrimSpace(bindingKey)] = nextClaudeBinding(
+		binding, binding.WorkspaceRoot, binding.SessionID, claudeBindingResumeFailed, time.Now().UTC(),
+	)
+	return nil
 }
 
-func claudeRemoteSelectionSessionIDs(snapshot claudeRemoteSelectionSnapshot) []string {
-	sessionIDs := make([]string, 0, len(snapshot.RouteOwned)+1)
-	sessionIDs = append(sessionIDs, snapshot.TargetSessionID)
-	for sessionID := range snapshot.RouteOwned {
-		sessionIDs = append(sessionIDs, sessionID)
-	}
-	return sortedUniqueClaudeSessionIDs(sessionIDs)
-}
-
-func (h *Handler) hasActiveReleasedClaudeSession(snapshot claudeRemoteSelectionSnapshot, targetSessionID string) bool {
-	for sessionID, intent := range snapshot.RouteOwned {
-		if sessionID == targetSessionID {
-			continue
-		}
-		if _, active := h.activeTask(intent.ConversationID); active {
-			return true
-		}
-	}
-	return false
+func claudeBindingMutationSessionIDs(snapshot claudeBindingSelectionSnapshot, targetSessionID string) []string {
+	return sortedUniqueClaudeSessionIDs([]string{snapshot.Binding.SessionID, targetSessionID})
 }
 
 // ensureClaudeRuntimeSelection 确保目标 conversation 指向所选 session；已持有且 runtime 一致时保持幂等。
@@ -178,8 +145,8 @@ func (h *Handler) ensureClaudeRuntimeSelection(
 ) (bool, error) {
 	conversationID := runtimeBefore.ConversationID
 	// session/new 成功后 ACP 已把 conversation runtime 指向新 session；此时只需提交
-	// 所有权，不能再发一次 session/resume。普通 switch 若 runtime 已精确命中目标，
-	// 同样可以安全复用现状；其他远程 route 的冲突已在进入本函数前拒绝。
+	// binding，不能再发一次 session/resume。普通 switch 若 runtime 已精确命中目标，
+	// 同样可以安全复用现状。
 	if runtimeBefore.Bound && runtimeBefore.SessionID == selected.ID {
 		return false, nil
 	}
@@ -195,7 +162,7 @@ func captureClaudeRuntimeSelection(claudeAgent agent.ClaudeSessionAgent, convers
 	return claudeRuntimeSelectionSnapshot{ConversationID: conversationID, SessionID: sessionID, Bound: bound && sessionID != ""}
 }
 
-// rollbackClaudeSessionAcquire 严格恢复接管前从 ACP 读取到的真实 runtime 状态。
+// rollbackClaudeSessionAcquire 严格恢复绑定事务前从 ACP 读取到的真实 runtime 状态。
 func (h *Handler) rollbackClaudeSessionAcquire(route claudeSessionRoute, claudeAgent agent.ClaudeSessionAgent, before claudeRuntimeSelectionSnapshot) error {
 	if !before.Bound {
 		claudeAgent.ClearClaudeSession(before.ConversationID)
@@ -204,33 +171,31 @@ func (h *Handler) rollbackClaudeSessionAcquire(route claudeSessionRoute, claudeA
 	return claudeAgent.UseClaudeSession(route.Context, before.ConversationID, before.SessionID)
 }
 
-func (h *Handler) clearReleasedClaudeRuntimeMappings(claudeAgent agent.ClaudeSessionAgent, mutation claudeRemoteMutation, targetConversationID string) {
-	cleared := make(map[string]struct{}, len(mutation.Released))
-	for sessionID := range mutation.Released {
-		previous := mutation.Before.Controls[sessionID]
-		conversationID := strings.TrimSpace(previous.ConversationID)
-		if conversationID == "" || conversationID == targetConversationID {
-			continue
-		}
-		if _, exists := cleared[conversationID]; exists {
-			continue
-		}
+func (h *Handler) clearPreviousClaudeRuntimeMapping(
+	claudeAgent agent.ClaudeSessionAgent,
+	route claudeSessionRoute,
+	mutation claudeBindingMutation,
+	targetConversationID string,
+) {
+	previous := mutation.Previous
+	if previous.SessionID == "" || previous.WorkspaceRoot == "" {
+		return
+	}
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, previous.WorkspaceRoot)
+	if conversationID != targetConversationID {
 		claudeAgent.ClearClaudeSession(conversationID)
-		cleared[conversationID] = struct{}{}
 	}
 }
 
 func renderClaudeSessionAcquireFailure(err error) string {
 	switch {
-	case errors.Is(err, errClaudeRemoteSelectionOtherRoute):
-		return "该 Claude 会话正由其他远程窗口控制，请先在原窗口释放控制权。"
 	case errors.Is(err, errClaudeSessionAcquireActiveOld):
-		return "当前窗口的 Claude 远程任务仍在执行，请等待任务结束或先发送 /stop。"
+		return "当前窗口的 Claude 任务仍在执行，请等待任务结束或先发送 /stop。"
 	case errors.Is(err, errClaudeSessionAcquireUncertain):
-		return "Claude 控制权移交结果未确认，已停止继续操作；请检查状态后重试。"
-	case errors.Is(err, errClaudeRemoteSelectionChanged), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		return "Claude 会话状态刚刚发生变化，请重试。"
+		return "Claude 会话绑定结果未确认，已停止继续操作；请检查状态后重试。"
+	case errors.Is(err, errClaudeBindingSelectionChanged), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "Claude 会话绑定刚刚发生变化，请重试。"
 	default:
-		return "切换并接管 Claude 会话失败，请稍后重试。"
+		return "切换 Claude 会话失败，请稍后重试。"
 	}
 }

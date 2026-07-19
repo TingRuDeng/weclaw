@@ -33,18 +33,14 @@ func (f *fakeClaudeSessionCreateAgent) ResetSession(_ context.Context, conversat
 	return sessionID, f.resetErr
 }
 
-func TestClaudeNewCreatesAndOwnsSessionAtomically(t *testing.T) {
+func TestClaudeNewCreatesAndBindsSessionAtomically(t *testing.T) {
 	h, fake, workspace := newClaudeSessionCreateHandler(t)
 	fake.resetSessionID = "session-new"
 
 	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new")
 	key := claudeBindingKey("user-1", "claude")
-	intent := h.ensureClaudeSessions().controlIntent("session-new")
-	if !strings.Contains(text, "已创建并接管") {
+	if !strings.Contains(text, "已创建并绑定") {
 		t.Fatalf("text=%q", text)
-	}
-	if intent.Owner != claudeOwnerRemote || intent.BindingKey != key {
-		t.Fatalf("intent=%+v", intent)
 	}
 	if binding := h.ensureClaudeSessions().binding(key); binding.WorkspaceRoot != workspace || binding.SessionID != "session-new" {
 		t.Fatalf("binding=%+v", binding)
@@ -54,7 +50,7 @@ func TestClaudeNewCreatesAndOwnsSessionAtomically(t *testing.T) {
 	}
 }
 
-func TestClaudeNewRejectsEmptySessionIDWithoutOwner(t *testing.T) {
+func TestClaudeNewRejectsEmptySessionIDWithoutBinding(t *testing.T) {
 	h, fake, _ := newClaudeSessionCreateHandler(t)
 	fake.resetSessionID = ""
 
@@ -62,23 +58,17 @@ func TestClaudeNewRejectsEmptySessionIDWithoutOwner(t *testing.T) {
 	if !strings.Contains(text, "新建 Claude 会话失败") || strings.Contains(text, "sessionId") || fake.resetCalls != 1 {
 		t.Fatalf("text=%q resetCalls=%d", text, fake.resetCalls)
 	}
-	store := h.ensureClaudeSessions()
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if len(store.controls) != 0 {
-		t.Fatalf("controls=%+v", store.controls)
+	if binding := h.ensureClaudeSessions().binding(claudeBindingKey("user-1", "claude")); binding.SessionID != "" {
+		t.Fatalf("binding=%+v", binding)
 	}
 }
 
-func TestClaudeNewStoreFailureRestoresTrueRuntimeAndOwner(t *testing.T) {
+func TestClaudeNewStoreFailureRestoresTrueRuntimeAndBinding(t *testing.T) {
 	h, fake, workspace := newClaudeSessionCreateHandler(t)
 	key := claudeBindingKey("user-1", "claude")
 	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
 	store := h.ensureClaudeSessions()
 	store.bindings[key] = newClaudeBinding(workspace, "session-old", claudeBindingReady)
-	store.controls["session-old"] = claudeControlIntent{
-		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
-	}
 	fake.runtimeSessions = map[string]string{conversationID: "session-old"}
 	fake.sessionID = "session-old"
 	fake.resetSessionID = "session-new"
@@ -88,12 +78,6 @@ func TestClaudeNewStoreFailureRestoresTrueRuntimeAndOwner(t *testing.T) {
 	if !strings.Contains(text, "失败") || store.binding(key).SessionID != "session-old" {
 		t.Fatalf("text=%q binding=%+v", text, store.binding(key))
 	}
-	if got := store.controlIntent("session-old"); got.Owner != claudeOwnerRemote || got.BindingKey != key {
-		t.Fatalf("old intent=%+v", got)
-	}
-	if got := store.controlIntent("session-new"); got.Owner == claudeOwnerRemote {
-		t.Fatalf("orphan intent=%+v", got)
-	}
 	if current, ok := fake.CurrentClaudeSession(conversationID); !ok || current != "session-old" {
 		t.Fatalf("runtime=(%q,%t)", current, ok)
 	}
@@ -102,15 +86,12 @@ func TestClaudeNewStoreFailureRestoresTrueRuntimeAndOwner(t *testing.T) {
 	}
 }
 
-func TestClaudeNewAgentSelectionFailureRestoresTrueRuntimeAndOwner(t *testing.T) {
+func TestClaudeNewAgentSelectionFailureRestoresTrueRuntimeAndBinding(t *testing.T) {
 	h, fake, workspace := newClaudeSessionCreateHandler(t)
 	key := claudeBindingKey("user-1", "claude")
 	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
 	store := h.ensureClaudeSessions()
 	store.bindings[key] = newClaudeBinding(workspace, "session-old", claudeBindingReady)
-	store.controls["session-old"] = claudeControlIntent{
-		Owner: claudeOwnerRemote, BindingKey: key, ConversationID: conversationID, Revision: 1,
-	}
 	fake.runtimeSessions = map[string]string{conversationID: "session-old"}
 	fake.sessionID = "session-old"
 	fake.resetSessionID = "session-new"
@@ -131,12 +112,6 @@ func TestClaudeNewAgentSelectionFailureRestoresTrueRuntimeAndOwner(t *testing.T)
 	selected, _ := h.ensureAgentSessions().Get("user-1")
 	if !strings.Contains(text, "失败") || selected != "codex" || store.binding(key).SessionID != "session-old" {
 		t.Fatalf("text=%q selected=%q binding=%+v", text, selected, store.binding(key))
-	}
-	if got := store.controlIntent("session-old"); got.Owner != claudeOwnerRemote || got.BindingKey != key {
-		t.Fatalf("old intent=%+v", got)
-	}
-	if got := store.controlIntent("session-new"); got.Owner == claudeOwnerRemote {
-		t.Fatalf("orphan intent=%+v", got)
 	}
 	if current, ok := fake.CurrentClaudeSession(conversationID); !ok || current != "session-old" {
 		t.Fatalf("runtime=(%q,%t)", current, ok)

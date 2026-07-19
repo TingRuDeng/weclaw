@@ -1,5 +1,7 @@
 # Claude ACP 远程接管实施计划
 
+> **历史文档：** 本计划中的 owner-first 与 `/cc cli` 本地交接设计已被 2026-07-19 的单一 ClaudeHost、多前端 binding 架构取代。当前实现和约束以 `docs/AI_CONTEXT.md` 与 `tasks/lessons.md` 顶部条目为准，不得按本文重新引入第二 writer。
+
 > **执行要求：** 实现阶段必须使用 `seq-execute`，可结合 `subagent-driven-development` 按文件所有权并行；每个阶段先写失败测试，再写最小实现。
 
 **目标：** 将 Claude 远程能力收敛为 ACP 单后端，使飞书和微信可以列出、选择、新建、恢复并继续真实 Claude Code session，同时支持实时进度、审批、停止、排队续跑和当前 session 配置切换。

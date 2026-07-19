@@ -109,6 +109,11 @@ func (a *ACPAgent) resumeClaudeSessionIfStale(ctx context.Context, conversationI
 	if !stale {
 		return nil
 	}
+	if reusable, reuseErr := a.reusableClaudeSession(state.sessionID, state.cwd); reuseErr != nil {
+		return reuseErr
+	} else if reusable {
+		return a.commitClaudeSessionGeneration(conversationID, state)
+	}
 	params := acpSessionResumeParams{SessionID: state.sessionID, Cwd: state.cwd, McpServers: []interface{}{}}
 	result, sequence, err := a.rpcWithSequence(ctx, "session/resume", params)
 	if err != nil {

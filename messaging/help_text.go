@@ -15,11 +15,11 @@ func buildHelpTextForAdmin(isAdmin bool) string {
 
 /new 新建会话
 
-/cwd <路径> 切换工作目录
+/cwd [路径] 查看或切换当前窗口工作目录
 
-/mode 查看会话审批模式，/mode yolo 本用户自动同意，/mode default 按钮确认
+/mode 查看会话审批模式，/mode yolo 当前窗口自动同意 Agent 授权，/mode default 按钮确认
 
-/model 查看/切换模型，/reasoning 查看/切换推理强度
+/model、/reasoning 已绑定时修改当前会话，未绑定时修改新会话默认值
 
 /ps 查看运行中的任务
 
@@ -76,6 +76,8 @@ func adminHelpText() string {
 /feishu users pending 查看待授权飞书用户
 
 /feishu users list 查看已授权飞书用户
+
+/feishu users approve <用户ID> [--admin] 直接授权飞书用户
 
 /feishu users approve-code <授权码> 授权飞书用户
 

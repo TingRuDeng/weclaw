@@ -77,6 +77,37 @@ func TestClaudeSessionLocksUseSharedContextBudgetAndReleasePartialLocks(t *testi
 	unlockA()
 }
 
+func TestClaudePendingResumeUsesSharedSessionLock(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	h.codexLockWaitTimeout = 2 * time.Second
+	key := claudeBindingKey("user-1", "claude")
+	seedClaudeBinding(t, h, "user-1", "claude", workspace, "session-shared", 1)
+	if err := h.ensureClaudeSessions().markPendingResume(key); err != nil {
+		t.Fatal(err)
+	}
+	unblock := h.lockClaudeSessionControl("session-shared")
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.resolveAgentConversationIDForRoute(
+			context.Background(), "user-1", "user-1", "claude", fake,
+		)
+		done <- err
+	}()
+	waitForClaudeSessionLockWaiters(t, h, "session-shared", 2)
+	select {
+	case err := <-done:
+		t.Fatalf("pending resume bypassed shared session lock: %v", err)
+	default:
+	}
+	unblock()
+	if err := <-done; err != nil {
+		t.Fatalf("pending resume failed after session lock release: %v", err)
+	}
+	if fake.useSessionID != "session-shared" {
+		t.Fatalf("UseClaudeSession session=%q", fake.useSessionID)
+	}
+}
+
 func TestClaudeSessionLocksReleaseInReverseOrder(t *testing.T) {
 	order := make([]int, 0, 3)
 	releaseClaudeSessionControlLocks([]func(){

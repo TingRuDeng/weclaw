@@ -236,6 +236,8 @@ func feishuIdentityUsageText() string {
 		"飞书用户管理:",
 		"/feishu users pending 查看待授权用户，并显示可复制授权命令",
 		"/feishu users list 查看已授权用户、机器人范围和用户类型",
+		"/feishu users approve <union_id|user_id|open_id> 直接授权用户",
+		"/feishu users approve <union_id> --admin 直接授权并设为管理员",
 		"/feishu users approve-code <授权码> 授权用户",
 		"/feishu users approve-code <授权码> --admin 授权并设为管理员",
 		"/feishu users revoke <用户ID> 取消用户访问授权",

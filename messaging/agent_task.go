@@ -23,7 +23,7 @@ type agentTaskOptions struct {
 	replyPrefix   string
 	agent         agent.Agent
 	progressCfg   config.ProgressConfig
-	claudeControl claudeTaskControlSnapshot
+	claudeBinding claudeTaskBindingSnapshot
 }
 
 type agentTaskRuntime struct {
@@ -37,18 +37,18 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 		opts.routeUserID = opts.userID
 	}
 	bindingKey := claudeBindingKey(opts.routeUserID, opts.agentName)
-	unlockBinding := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
-	defer unlockBinding()
 	store := h.ensureClaudeSessions()
 	_, hasBinding := store.bindingSnapshot(bindingKey)
 	_, sessionCapable := opts.agent.(agent.ClaudeSessionAgent)
 	if hasBinding || sessionCapable {
-		binding, intent, controlErr := store.requireRemoteControl(bindingKey)
-		if controlErr != nil {
-			sendPlatformText(opts.ctx, opts.reply, opts.userID, renderClaudeRemoteControlError(controlErr))
+		unlockBinding := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
+		defer unlockBinding()
+		binding, bindingErr := store.requireWritableBinding(bindingKey)
+		if bindingErr != nil {
+			sendPlatformText(opts.ctx, opts.reply, opts.userID, renderClaudeBindingError(bindingErr))
 			return
 		}
-		opts.claudeControl = claudeTaskControlSnapshot{SessionID: binding.SessionID, Revision: intent.Revision}
+		opts.claudeBinding = claudeTaskBindingSnapshot{SessionID: binding.SessionID, Revision: binding.Revision}
 		opts.workspaceRoot = firstNonBlank(binding.WorkspaceRoot, h.claudeWorkspaceRootForUser(opts.userID, opts.agentName, opts.agent))
 	}
 	// 后台任务保留消息上下文值，但不能随平台请求返回而被取消。
@@ -60,7 +60,7 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	})
 	key := h.agentExecutionKeyForRoute(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
 	pending := pendingAgentTask{message: opts.message, run: func() { h.startAgentTask(opts) }}
-	admission := h.beginOrQueueActiveTask(agentCtx, key, activeTaskMeta{
+	admission := h.beginOrQueueClaudeTask(agentCtx, key, activeTaskMeta{
 		owner: opts.userID, routeUserID: opts.routeUserID, agentName: opts.agentName, message: opts.message,
 	}, pending)
 	if admission.status != activeTaskStarted {
@@ -87,10 +87,10 @@ func (h *Handler) runAgentTask(runtime agentTaskRuntime) {
 	defer h.completeAgentTaskLifecycle(runtime.lifecycle)
 	unlock := h.lockAgentExecution(runtime.lifecycle.opts.executionKey)
 	defer unlock()
-	if runtime.opts.claudeControl.SessionID != "" {
+	if runtime.opts.claudeBinding.SessionID != "" {
 		bindingKey := claudeBindingKey(runtime.opts.routeUserID, runtime.opts.agentName)
-		if controlErr := h.ensureClaudeSessions().validateRemoteControlSnapshot(bindingKey, runtime.opts.claudeControl); controlErr != nil {
-			h.finishAgentTaskLifecycle(runtime.lifecycle, "", errors.New(renderClaudeRemoteControlError(controlErr)))
+		if bindingErr := h.ensureClaudeSessions().validateBindingSnapshot(bindingKey, runtime.opts.claudeBinding); bindingErr != nil {
+			h.finishAgentTaskLifecycle(runtime.lifecycle, "", errors.New(renderClaudeBindingError(bindingErr)))
 			return
 		}
 	}

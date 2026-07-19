@@ -36,6 +36,25 @@ func TestACPAgentCodexErrorNotificationReachesActiveTurn(t *testing.T) {
 	}
 }
 
+func TestACPAgentConsumesCodexThreadSettingsUpdated(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	params := json.RawMessage(`{"threadId":"thread-1","threadSettings":{"model":"gpt-5.6-sol","effort":"max"}}`)
+	if !a.dispatchCodexKnownNotification(rpcResponse{Method: "thread/settings/updated", Params: params}, `{}`) {
+		t.Fatal("thread/settings/updated should be consumed as a known notification")
+	}
+	config, err := a.CodexThreadConfig(context.Background(), "conversation-1", "thread-1")
+	if err != nil || config.Model != "gpt-5.6-sol" || config.Effort != "max" {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), want notification settings", config, err)
+	}
+	a.setCodexThreadConfigAt("thread-1", CodexThreadConfig{Model: "gpt-new", Effort: "high"}, 12)
+	stale := json.RawMessage(`{"threadId":"thread-1","threadSettings":{"model":"gpt-old","effort":"low"}}`)
+	a.dispatchCodexKnownNotification(rpcResponse{Method: "thread/settings/updated", Params: stale, Sequence: 11}, `{}`)
+	config, err = a.CodexThreadConfig(context.Background(), "conversation-1", "thread-1")
+	if err != nil || config.Model != "gpt-new" || config.Effort != "high" {
+		t.Fatalf("stale notification overwrote config: (%#v,%v)", config, err)
+	}
+}
+
 func TestFormatCodexErrorHandlesDeactivatedWorkspace(t *testing.T) {
 	got := formatCodexError(json.RawMessage(`{"detail":{"code":"deactivated_workspace"}}`))
 

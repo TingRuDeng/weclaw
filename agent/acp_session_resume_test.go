@@ -58,6 +58,38 @@ func TestClaudeACPResumeUpdatesBindingOnlyAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestClaudeACPFrontendsReuseOneHostSideSessionResume(t *testing.T) {
+	workspace := t.TempDir()
+	agent := newClaudeACPSessionTestAgent(t, workspace)
+	if err := agent.cacheAndValidateACPCapabilities(claudeCapabilityPayload()); err != nil {
+		t.Fatalf("cache capabilities: %v", err)
+	}
+	resumeCalls := 0
+	agent.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "session/list":
+			return json.RawMessage(fmt.Sprintf(`{"sessions":[{"sessionId":"session-shared","cwd":%q}]}`, workspace)), nil
+		case "session/resume":
+			resumeCalls++
+			return claudeConfigResultForTest("sonnet", "medium"), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	for _, conversationID := range []string{"frontend-a", "frontend-b"} {
+		if err := agent.UseClaudeSession(context.Background(), conversationID, "session-shared"); err != nil {
+			t.Fatalf("UseClaudeSession(%s): %v", conversationID, err)
+		}
+		if sessionID, ok := agent.CurrentClaudeSession(conversationID); !ok || sessionID != "session-shared" {
+			t.Fatalf("CurrentClaudeSession(%s)=(%q,%v)", conversationID, sessionID, ok)
+		}
+	}
+	if resumeCalls != 1 {
+		t.Fatalf("session/resume calls=%d, want one shared host-side resume", resumeCalls)
+	}
+}
+
 func TestClaudeACPResumeFailureKeepsOldBinding(t *testing.T) {
 	oldWorkspace := t.TempDir()
 	selectedWorkspace := t.TempDir()

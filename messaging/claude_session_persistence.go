@@ -3,18 +3,11 @@ package messaging
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
-
-func (s *claudeSessionStore) load() error {
-	s.saveMu.Lock()
-	defer s.saveMu.Unlock()
-	return s.loadLocked()
-}
 
 func (s *claudeSessionStore) loadLocked() error {
 	s.mu.Lock()
@@ -30,7 +23,7 @@ func (s *claudeSessionStore) loadLocked() error {
 		}
 		return nil
 	}
-	bindings, controls, migrated, err := decodeClaudeSessionState(data)
+	bindings, migrated, err := decodeClaudeSessionState(data)
 	if err != nil {
 		return fmt.Errorf("解析 Claude 状态失败: %w", err)
 	}
@@ -38,189 +31,36 @@ func (s *claudeSessionStore) loadLocked() error {
 	persist := s.persist
 	s.mu.Unlock()
 	if migrated && persist != nil {
-		if err := persist(newClaudeSessionState(bindings, controls)); err != nil {
+		if err := persist(newClaudeSessionState(bindings)); err != nil {
 			return fmt.Errorf("保存 Claude 迁移状态失败: %w", err)
 		}
 	}
 	s.mu.Lock()
 	s.bindings = bindings
-	s.controls = controls
 	s.mu.Unlock()
 	return nil
 }
 
-func decodeClaudeSessionState(data []byte) (map[string]claudeSessionBinding, map[string]claudeControlIntent, bool, error) {
+func decodeClaudeSessionState(data []byte) (map[string]claudeSessionBinding, bool, error) {
 	var header struct {
 		Version int `json:"version"`
 	}
 	if err := json.Unmarshal(data, &header); err != nil {
-		return nil, nil, false, err
+		return nil, false, err
 	}
 	if header.Version == 1 {
 		bindings, err := migrateClaudeSessionV1(data)
-		return bindings, map[string]claudeControlIntent{}, true, err
+		return bindings, true, err
 	}
-	if header.Version != 2 && header.Version != claudeSessionStateVersion {
-		return nil, nil, false, fmt.Errorf("不支持的 Claude 状态版本: %d", header.Version)
+	if header.Version != 2 && header.Version != 3 && header.Version != claudeSessionStateVersion {
+		return nil, false, fmt.Errorf("不支持的 Claude 状态版本: %d", header.Version)
 	}
 	var state claudeSessionState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, nil, false, err
+		return nil, false, err
 	}
 	bindings := normalizeClaudeBindings(state.Bindings)
-	if header.Version == 2 {
-		return bindings, migrateClaudeControlsV2(bindings), true, nil
-	}
-	return bindings, normalizeClaudeControlsForBindings(bindings, state.Controls), false, nil
-}
-
-func migrateClaudeControlsV2(bindings map[string]claudeSessionBinding) map[string]claudeControlIntent {
-	references := make(map[string][]claudeBindingReference)
-	for key, binding := range bindings {
-		if binding.SessionID == "" || binding.WorkspaceRoot == "" {
-			continue
-		}
-		references[binding.SessionID] = append(references[binding.SessionID], claudeBindingReference{bindingKey: key, binding: binding})
-	}
-	controls := make(map[string]claudeControlIntent, len(references))
-	for sessionID, refs := range references {
-		if len(refs) != 1 {
-			controls[sessionID] = newMigratedClaudeControl(claudeOwnerUnclaimed, "", "", latestClaudeBindingUpdate(refs))
-			continue
-		}
-		ref := refs[0]
-		conversationID := claudeConversationIDForBinding(ref.bindingKey, ref.binding.WorkspaceRoot)
-		controls[sessionID] = newMigratedClaudeControl(
-			claudeOwnerRemote, ref.bindingKey, conversationID, ref.binding.UpdatedAt,
-		)
-	}
-	return controls
-}
-
-type claudeBindingReference struct {
-	bindingKey string
-	binding    claudeSessionBinding
-}
-
-func claudeConversationIDForBinding(bindingKey string, workspaceRoot string) string {
-	parts := strings.SplitN(bindingKey, "\x00", 2)
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return ""
-	}
-	return buildClaudeConversationID(parts[0], parts[1], workspaceRoot)
-}
-
-func latestClaudeBindingUpdate(refs []claudeBindingReference) string {
-	latest := ""
-	for _, ref := range refs {
-		if ref.binding.UpdatedAt > latest {
-			latest = ref.binding.UpdatedAt
-		}
-	}
-	return latest
-}
-
-func normalizeClaudeControls(input map[string]claudeControlIntent) map[string]claudeControlIntent {
-	rawKeys := make([]string, 0, len(input))
-	for rawSessionID := range input {
-		rawKeys = append(rawKeys, rawSessionID)
-	}
-	sort.Strings(rawKeys)
-	grouped := make(map[string][]claudeControlIntent, len(input))
-	for _, rawSessionID := range rawKeys {
-		sessionID := strings.TrimSpace(rawSessionID)
-		if sessionID == "" {
-			logClaudeControlDiagnostic("blank_session_key")
-			continue
-		}
-		grouped[sessionID] = append(grouped[sessionID], input[rawSessionID])
-	}
-	sessionIDs := make([]string, 0, len(grouped))
-	for sessionID := range grouped {
-		sessionIDs = append(sessionIDs, sessionID)
-	}
-	sort.Strings(sessionIDs)
-	controls := make(map[string]claudeControlIntent, len(grouped))
-	for _, sessionID := range sessionIDs {
-		intents := grouped[sessionID]
-		if len(intents) != 1 {
-			controls[sessionID] = failClosedClaudeControlCollision(intents)
-			logClaudeControlDiagnostic("session_key_collision")
-			continue
-		}
-		if claudeControlNeedsDiagnostic(intents[0]) {
-			logClaudeControlDiagnostic("invalid_control")
-		}
-		controls[sessionID] = normalizeClaudeControlIntent(intents[0])
-	}
-	return controls
-}
-
-func failClosedClaudeControlCollision(intents []claudeControlIntent) claudeControlIntent {
-	var revision uint64
-	updatedAt := ""
-	for _, intent := range intents {
-		if intent.Revision > revision {
-			revision = intent.Revision
-		}
-		if intent.UpdatedAt > updatedAt {
-			updatedAt = intent.UpdatedAt
-		}
-	}
-	return claudeControlIntent{Owner: claudeOwnerUnclaimed, Revision: revision, UpdatedAt: updatedAt}
-}
-
-func claudeControlNeedsDiagnostic(intent claudeControlIntent) bool {
-	bindingKey := strings.TrimSpace(intent.BindingKey)
-	conversationID := strings.TrimSpace(intent.ConversationID)
-	switch intent.Owner {
-	case claudeOwnerRemote:
-		return bindingKey == "" || conversationID == ""
-	case claudeOwnerLocal, claudeOwnerUnclaimed:
-		return bindingKey != "" || conversationID != ""
-	default:
-		return true
-	}
-}
-
-func logClaudeControlDiagnostic(reason string) {
-	log.Printf("[claude-session] control state fail-closed reason=%s", reason)
-}
-
-func normalizeClaudeControlsForBindings(
-	bindings map[string]claudeSessionBinding,
-	input map[string]claudeControlIntent,
-) map[string]claudeControlIntent {
-	controls := normalizeClaudeControls(input)
-	remoteSessionsByBinding := make(map[string][]string)
-	for sessionID, intent := range controls {
-		if intent.Owner == claudeOwnerRemote {
-			remoteSessionsByBinding[intent.BindingKey] = append(remoteSessionsByBinding[intent.BindingKey], sessionID)
-		}
-	}
-	for sessionID, intent := range controls {
-		if intent.Owner != claudeOwnerRemote {
-			continue
-		}
-		binding, ok := bindings[intent.BindingKey]
-		conflictingBinding := len(remoteSessionsByBinding[intent.BindingKey]) != 1
-		expectedConversationID := ""
-		if ok {
-			expectedConversationID = claudeConversationIDForBinding(intent.BindingKey, binding.WorkspaceRoot)
-		}
-		if conflictingBinding || !ok || binding.SessionID != sessionID || expectedConversationID == "" ||
-			intent.ConversationID != expectedConversationID {
-			reason := "binding_mismatch"
-			if conflictingBinding {
-				reason = "binding_conflict"
-			}
-			logClaudeControlDiagnostic(reason)
-			controls[sessionID] = normalizeClaudeControlIntent(claudeControlIntent{
-				Owner: claudeOwnerUnclaimed, Revision: intent.Revision, UpdatedAt: intent.UpdatedAt,
-			})
-		}
-	}
-	return controls
+	return bindings, header.Version != claudeSessionStateVersion || !sameClaudeBindingMap(bindings, state.Bindings), nil
 }
 
 // migrateClaudeSessionV1 只迁移浏览工作空间，丢弃旧 CLI session ID。
@@ -258,6 +98,7 @@ func migrateClaudeSessionV1(data []byte) (map[string]claudeSessionBinding, error
 func normalizeClaudeBindings(input map[string]claudeSessionBinding) map[string]claudeSessionBinding {
 	bindings := make(map[string]claudeSessionBinding, len(input))
 	for key, binding := range input {
+		previous := binding
 		binding.WorkspaceRoot = normalizeClaudeWorkspaceRoot(binding.WorkspaceRoot)
 		binding.SessionID = strings.TrimSpace(binding.SessionID)
 		if strings.TrimSpace(key) == "" || binding.WorkspaceRoot == "" {
@@ -267,6 +108,11 @@ func normalizeClaudeBindings(input map[string]claudeSessionBinding) map[string]c
 			binding.Status = claudeBindingUnbound
 		} else {
 			binding.Status = claudeBindingPendingResume
+		}
+		if binding.Revision == 0 {
+			binding.Revision = 1
+		} else if binding.Status != previous.Status || binding.WorkspaceRoot != previous.WorkspaceRoot || binding.SessionID != previous.SessionID {
+			binding.Revision++
 		}
 		bindings[key] = binding
 	}

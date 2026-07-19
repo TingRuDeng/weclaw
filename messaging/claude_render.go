@@ -18,16 +18,47 @@ func (h *Handler) renderClaudeWhoami(route claudeSessionRoute) string {
 
 func (h *Handler) renderClaudeStatus(route claudeSessionRoute) string {
 	binding := h.ensureClaudeSessions().binding(route.BindingKey)
-	intent := h.ensureClaudeSessions().controlIntent(binding.SessionID)
 	lines := []string{
 		"Claude 状态:",
 		"工作空间: " + route.WorkspaceRoot,
 		"session: " + renderClaudeBindingSession(binding),
 		"恢复状态: " + renderClaudeBindingStatus(binding.Status),
-		"控制方: " + renderClaudeControlOwner(intent, route.BindingKey),
-		"remote: 已配置 (" + route.Agent.Info().Type + ")",
+		"运行模式: 单一共享 ClaudeHost (" + route.Agent.Info().Type + ")",
+		"writer: " + h.renderClaudeWriterStatus(route, binding),
+		"写入规则: 多窗口可绑定，同一 session 单 writer",
+	}
+	if hostAgent, ok := route.Agent.(agent.ClaudeHostRuntimeAgent); ok {
+		host := hostAgent.ClaudeHostStatus()
+		hostState := "未连接"
+		if host.Started {
+			hostState = "已连接"
+		}
+		lines = append(lines, fmt.Sprintf("ClaudeHost: %s (pid=%d, generation=%d)", hostState, host.PID, host.Generation))
 	}
 	return wechatCommandText(append(lines, h.claudeConfigStatus(route)...)...)
+}
+
+func (h *Handler) renderClaudeWriterStatus(route claudeSessionRoute, binding claudeSessionBinding) string {
+	sessionID := strings.TrimSpace(binding.SessionID)
+	if sessionID == "" {
+		return "空闲（未绑定）"
+	}
+	task, active := h.activeTask(claudeSessionExecutionKey(sessionID))
+	if !active {
+		return "空闲"
+	}
+	task.mu.Lock()
+	writerRoute := task.routeUserID
+	hasPending := strings.TrimSpace(task.pending.message) != ""
+	task.mu.Unlock()
+	state := "其他窗口执行中"
+	if writerRoute == strings.TrimSpace(route.UserID) {
+		state = "当前窗口执行中"
+	}
+	if hasPending {
+		state += "（已有暂存消息）"
+	}
+	return state
 }
 
 func renderClaudeBindingStatus(status claudeBindingStatus) string {
@@ -37,7 +68,7 @@ func renderClaudeBindingStatus(status claudeBindingStatus) string {
 	case claudeBindingReady:
 		return "已就绪"
 	case claudeBindingResumeFailed:
-		return "运行通道暂不可用（所有权已保留）"
+		return "运行通道暂不可用（绑定已保留）"
 	default:
 		return "未绑定"
 	}
@@ -79,8 +110,7 @@ func (h *Handler) renderClaudeWorkspaceList(route claudeSessionRoute) string {
 			lines = append(lines, "当前新会话: "+shortCodexWorkspaceName(view.WorkspaceRoot)+"（发送第一条消息后进入历史目录）")
 			continue
 		}
-		owner := renderClaudeControlOwner(h.ensureClaudeSessions().controlIntent(view.ThreadID), route.BindingKey)
-		lines = append(lines, fmt.Sprintf("%d. %s · 控制方: %s", index, claudeSessionListLabel(view), owner))
+		lines = append(lines, fmt.Sprintf("%d. %s", index, claudeSessionListLabel(view)))
 		index++
 	}
 	return wechatCommandText(lines...)
@@ -129,16 +159,15 @@ func claudeSessionListLabel(view codexWorkspaceView) string {
 func buildClaudeSessionHelpText() string {
 	return wechatCommandText(
 		"Claude 会话命令:",
+		"/cc whoami 查看当前 workspace/session 绑定",
 		"/cc ls 查看可切换会话",
 		"/cc cd <编号|..> 进入工作空间或返回列表",
 		"/cc switch <编号|sessionId> 切换 Claude 会话",
 		"/cc new 新建当前工作空间会话",
 		"/cc pwd 查看当前工作空间",
-		"/cc cli 打开本地 CLI 接手当前 session",
-		"/cc status 查看 Claude session 状态",
-		"/cc owner [remote|local] 查看、接管或释放控制权",
-		"释放为 local 后普通消息会被拒绝；重新接管前请先结束本地 Claude CLI",
+		"/cc status 查看 binding、共享 ClaudeHost 和 writer 状态",
 		"/cc quota 查看 Claude 账号额度",
+		"/cc model status 查看新建 Claude 会话的默认模型配置",
 		"/cc model ls 查看 Claude 可选模型",
 	)
 }

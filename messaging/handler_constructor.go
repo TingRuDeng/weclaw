@@ -30,7 +30,6 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		codexLocalSessionDir:    defaultCodexLocalSessionDir(),
 		claudeSessions:          newClaudeSessionStore(),
 		codexBrowseWorkspaces:   make(map[string]string),
-		claudeCLIResumeOpener:   defaultClaudeCLIResumeOpener,
 		serviceAdminExecutor:    defaultServiceAdminCommandExecutor,
 		adminTimeout:            adminCommandTimeout,
 		codexCommandTimeout:     defaultCodexSessionCommandTimeout,

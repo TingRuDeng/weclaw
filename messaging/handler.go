@@ -23,16 +23,6 @@ type SaveDefaultFunc func(name string) error
 // CDNDownloader 用于下载微信 CDN 中的入站文件，便于测试注入。
 type CDNDownloader func(ctx context.Context, encryptQueryParam string, aesKey string) ([]byte, error)
 
-// ClaudeCLIResumeRequest 描述一次原生 Claude CLI 空闲会话交接。
-type ClaudeCLIResumeRequest struct {
-	Command       string
-	WorkspaceRoot string
-	SessionID     string
-}
-
-// ClaudeCLIResumeOpener 用于把当前 Claude session 打开到本地 CLI。
-type ClaudeCLIResumeOpener func(ctx context.Context, request ClaudeCLIResumeRequest) error
-
 // ProgressChatAgent 支持在聊天过程中输出增量内容。
 type ProgressChatAgent interface {
 	ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error)
@@ -92,7 +82,6 @@ type Handler struct {
 	codexBrowseWorkspaces   map[string]string
 	feishuWorkspaceChoices  feishuWorkspaceChoiceStore
 	feishuNavSnapshots      feishuNavigationSnapshotStore
-	claudeCLIResumeOpener   ClaudeCLIResumeOpener
 	serviceAdminMu          sync.Mutex
 	serviceAdminExecutor    ServiceAdminCommandExecutor
 	adminTimeout            time.Duration

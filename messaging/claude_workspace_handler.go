@@ -42,7 +42,7 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 		Route: route, Selected: selected, Command: "switch",
 	})
 	if err != nil {
-		log.Printf("[claude-session-acquire] 切换并接管失败: %v", err)
+		log.Printf("[claude-session-acquire] 切换绑定失败: %v", err)
 		return renderClaudeSessionAcquireFailure(err)
 	}
 	return h.renderClaudeSelection(route, selected, result)
@@ -50,14 +50,14 @@ func (h *Handler) handleClaudeSwitch(route claudeSessionRoute, target string) st
 
 func (h *Handler) renderClaudeSelection(route claudeSessionRoute, selected agent.ClaudeSession, result claudeSessionAcquireResult) string {
 	lines := []string{
-		"已切换并接管 Claude 会话。",
+		"已切换 Claude 会话。",
 		"工作空间: " + shortCodexWorkspaceName(selected.Cwd),
 		"session: " + selected.ID,
 		"运行通道: " + renderClaudeAcquireRuntimeStatus(result.RuntimeErr),
 	}
 	if result.RuntimeErr != nil {
-		log.Printf("[claude-session-acquire] 所有权已提交但运行通道不可用 session=%q: %v", selected.ID, result.RuntimeErr)
-		lines = append(lines, "普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
+		log.Printf("[claude-session-acquire] 绑定已提交但运行通道不可用 session=%q: %v", selected.ID, result.RuntimeErr)
+		lines = append(lines, "绑定已保留，普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, selected.Cwd)
 	if configAgent, ok := route.Agent.(agent.ClaudeSessionConfigAgent); ok {
@@ -87,13 +87,13 @@ func (h *Handler) handleClaudeCdResult(route claudeSessionRoute, target string) 
 	}
 	if claudeWorkspaceGroupHasPendingCatalog(group) {
 		return textNavigationResult(wechatCommandText(
-			"当前新会话已创建并接管。",
+			"当前新会话已创建并绑定。",
 			"发送第一条消息后会进入 Claude 会话目录，再发送 /cc ls 即可浏览。",
 		))
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(group.Root)
 	if _, err := h.releaseClaudeSelectionForWorkspaceWithBindingLocked(route, workspaceRoot, "cd"); err != nil {
-		log.Printf("[claude-workspace] 切换前释放控制权失败: %v", err)
+		log.Printf("[claude-workspace] 切换前更新绑定失败: %v", err)
 		return textNavigationResult("切换 Claude 工作空间失败，请稍后重试。")
 	}
 	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, workspaceRoot)
@@ -114,30 +114,30 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	}
 	result, err := h.createAndAcquireClaudeSessionWithBindingLocked(route)
 	if err != nil {
-		log.Printf("[claude-session-acquire] 新建并接管失败: %v", err)
+		log.Printf("[claude-session-acquire] 新建并绑定失败: %v", err)
 		return "新建 Claude 会话失败，请稍后重试。"
 	}
 	lines := []string{
-		"已创建并接管 Claude 会话。",
+		"已创建并绑定 Claude 会话。",
 		"工作空间: " + shortCodexWorkspaceName(route.WorkspaceRoot),
 		"运行通道: " + renderClaudeAcquireRuntimeStatus(result.RuntimeErr),
 	}
 	if result.RuntimeErr != nil {
-		log.Printf("[claude-session-acquire] 新会话所有权已提交但运行通道不可用 session=%q: %v", result.SessionID, result.RuntimeErr)
-		lines = append(lines, "普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
+		log.Printf("[claude-session-acquire] 新会话绑定已提交但运行通道不可用 session=%q: %v", result.SessionID, result.RuntimeErr)
+		lines = append(lines, "绑定已保留，普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
 	}
 	return wechatCommandText(lines...)
 }
 
 func renderClaudeAcquireRuntimeStatus(err error) string {
 	if err != nil {
-		return "暂不可用（所有权已保留）"
+		return "暂不可用（绑定已保留）"
 	}
 	return "已就绪"
 }
 
-// createAndAcquireClaudeSessionWithBindingLocked 先创建真实 session，再交给 owner-first acquire；
-// 只有所有权硬提交失败时才恢复创建前的 runtime。
+// createAndAcquireClaudeSessionWithBindingLocked 先创建真实 session，再提交 frontend binding；
+// 只有绑定硬提交失败时才恢复创建前的 runtime。
 func (h *Handler) createAndAcquireClaudeSessionWithBindingLocked(route claudeSessionRoute) (claudeSessionAcquireResult, error) {
 	workspaceRoot := normalizeClaudeWorkspaceRoot(route.WorkspaceRoot)
 	if strings.TrimSpace(route.BindingKey) == "" || workspaceRoot == "" {
@@ -160,7 +160,7 @@ func (h *Handler) createAndAcquireClaudeSessionWithBindingLocked(route claudeSes
 		}
 		rollbackErr := h.rollbackClaudeSessionAcquire(route, claudeAgent, runtimeBefore)
 		if rollbackErr != nil {
-			failClosedErr := h.failClosedClaudeSessionAcquire(h.ensureClaudeSessions(), route.BindingKey, sessionID, workspaceRoot)
+			failClosedErr := forceClaudeBindingFailClosedInMemory(h.ensureClaudeSessions(), route.BindingKey)
 			return claudeSessionAcquireResult{}, errors.Join(errClaudeSessionAcquireUncertain, createErr, rollbackErr, failClosedErr)
 		}
 		return claudeSessionAcquireResult{}, errors.Join(createErr, rollbackErr)
@@ -174,7 +174,7 @@ func (h *Handler) createAndAcquireClaudeSessionWithBindingLocked(route claudeSes
 	}
 	rollbackErr := h.rollbackClaudeSessionAcquire(route, claudeAgent, runtimeBefore)
 	if rollbackErr != nil {
-		failClosedErr := h.failClosedClaudeSessionAcquire(h.ensureClaudeSessions(), route.BindingKey, sessionID, workspaceRoot)
+		failClosedErr := forceClaudeBindingFailClosedInMemory(h.ensureClaudeSessions(), route.BindingKey)
 		return claudeSessionAcquireResult{}, errors.Join(errClaudeSessionAcquireUncertain, acquireErr, rollbackErr, failClosedErr)
 	}
 	return claudeSessionAcquireResult{}, acquireErr

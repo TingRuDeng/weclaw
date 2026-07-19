@@ -23,7 +23,11 @@ func (h *Handler) agentExecutionKeyForRoute(ownerUserID string, routeUserID stri
 		return h.codexConversationRouteForSession(ownerUserID, routeUserID, agentName, ag).conversationID
 	}
 	if isClaudeAgent(agentName, info) {
-		workspaceRoot := h.claudeWorkspaceRootForUser(ownerUserID, agentName, ag)
+		bindingKey := claudeBindingKey(routeUserID, agentName)
+		if binding, ok := h.ensureClaudeSessions().bindingSnapshot(bindingKey); ok && strings.TrimSpace(binding.SessionID) != "" {
+			return claudeSessionExecutionKey(binding.SessionID)
+		}
+		workspaceRoot := h.claudeWorkspaceRootForUser(routeUserID, agentName, ag)
 		return buildClaudeConversationID(routeUserID, agentName, workspaceRoot)
 	}
 	return strings.Join([]string{"agent", strings.TrimSpace(routeUserID), strings.TrimSpace(agentName)}, "\x00")
@@ -144,9 +148,9 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	}
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(bindingKey))
 	defer unlock()
-	binding, _, controlErr := h.ensureClaudeSessions().requireRemoteControl(bindingKey)
-	if controlErr != nil {
-		return "", errors.New(renderClaudeRemoteControlError(controlErr))
+	binding, bindingErr := h.ensureClaudeSessions().requireWritableBinding(bindingKey)
+	if bindingErr != nil {
+		return "", errors.New(renderClaudeBindingError(bindingErr))
 	}
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	if binding.SessionID == "" || binding.Status == claudeBindingUnbound {
@@ -154,29 +158,43 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	}
 	if binding.Status == claudeBindingPendingResume {
 		return h.resumePendingClaudeBinding(ctx, claudeResumeRequest{
-			bindingKey: bindingKey, conversationID: conversationID, sessionID: binding.SessionID, agent: claudeAg,
+			bindingKey: bindingKey, conversationID: conversationID, sessionID: binding.SessionID,
+			bindingRevision: binding.Revision, agent: claudeAg,
 		})
 	}
 	return conversationID, nil
 }
 
 type claudeResumeRequest struct {
-	bindingKey     string
-	conversationID string
-	sessionID      string
-	agent          agent.ClaudeSessionAgent
+	bindingKey      string
+	conversationID  string
+	sessionID       string
+	bindingRevision uint64
+	agent           agent.ClaudeSessionAgent
 }
 
 func (h *Handler) resumePendingClaudeBinding(ctx context.Context, req claudeResumeRequest) (string, error) {
+	unlockSession, lockErr := h.lockClaudeSessionControls(claudeSessionLockRequest{
+		ctx: ctx, command: "pending resume", sessionIDs: []string{req.sessionID},
+	})
+	if lockErr != nil {
+		return "", fmt.Errorf("等待共享 ClaudeHost session 恢复: %w", lockErr)
+	}
+	defer unlockSession()
+	if err := h.ensureClaudeSessions().validateBindingSnapshot(req.bindingKey, claudeTaskBindingSnapshot{
+		SessionID: req.sessionID, Revision: req.bindingRevision,
+	}); err != nil {
+		return "", errors.New(renderClaudeBindingError(err))
+	}
 	if err := req.agent.UseClaudeSession(ctx, req.conversationID, req.sessionID); err != nil {
 		markErr := h.ensureClaudeSessions().markResumeFailed(req.bindingKey)
 		log.Printf("[claude-runtime] 恢复绑定失败 session=%q: %v", req.sessionID, errors.Join(err, markErr))
-		return "", errors.New(renderClaudeRemoteControlError(errClaudeRuntimeUnavailable))
+		return "", errors.New(renderClaudeBindingError(errClaudeRuntimeUnavailable))
 	}
 	if err := h.ensureClaudeSessions().markReady(req.bindingKey); err != nil {
 		log.Printf("[claude-runtime] 保存恢复状态失败 session=%q: %v", req.sessionID, err)
 		_ = h.ensureClaudeSessions().markResumeFailed(req.bindingKey)
-		return "", errors.New(renderClaudeRemoteControlError(errClaudeRuntimeUnavailable))
+		return "", errors.New(renderClaudeBindingError(errClaudeRuntimeUnavailable))
 	}
 	return req.conversationID, nil
 }

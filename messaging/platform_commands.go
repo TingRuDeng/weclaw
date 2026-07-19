@@ -77,7 +77,7 @@ func (h *Handler) routeSessionPlatformCommand(ctx context.Context, req platformC
 		return h.handleCodexSessionPlatformCommand(ctx, req, routeUserID)
 	case isModelSettingCommand(req.Trimmed):
 		return h.handleModelSettingPlatformCommand(ctx, req)
-	case strings.HasPrefix(req.Trimmed, "/cwd"):
+	case isCwdCommand(req.Trimmed):
 		replyPlatformCommand(ctx, req, h.handleCwdForMessage(req.Trimmed, msg, routeUserID))
 	default:
 		return false

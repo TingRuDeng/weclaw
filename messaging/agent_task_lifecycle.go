@@ -86,5 +86,9 @@ func replyAgentTaskAdmission(notice agentTaskAdmissionNotice, status activeTaskA
 		sendPlatformText(notice.ctx, notice.reply, notice.userID, queuedAgentMessage)
 		return
 	}
+	if status == activeTaskForeignWriter {
+		sendPlatformText(notice.ctx, notice.reply, notice.userID, "当前 Claude session 正由另一个窗口执行任务，请等待该任务结束后重试。")
+		return
+	}
 	sendPlatformText(notice.ctx, notice.reply, notice.userID, "当前任务已有一条暂存消息，请先处理后再发送。")
 }

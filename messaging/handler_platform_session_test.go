@@ -356,3 +356,21 @@ func TestHandleMessageUsesFeishuSessionKeyForWorkspaceCommands(t *testing.T) {
 		t.Fatalf("actor workspace=%q, should not bind /cwd to bare sender", actorWorkspace)
 	}
 }
+
+func TestExplicitUnavailableRouteAgentDoesNotFallbackToPlatformDefault(t *testing.T) {
+	codex := &fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}}
+	h := NewHandler(nil, nil)
+	h.SetDefaultAgent("codex", codex)
+	route := "feishu:tenant:dm:chat-a:user-a"
+	if err := h.ensureAgentSessions().Set(route, "removed-agent"); err != nil {
+		t.Fatalf("set route agent: %v", err)
+	}
+
+	if got := h.defaultAgentNameForRoute(route, platform.PlatformFeishu, "main"); got != "removed-agent" {
+		t.Fatalf("route agent=%q, want explicit unavailable selection", got)
+	}
+	status := h.buildStatusForRoute("user-a", route, platform.PlatformFeishu, "main")
+	if !strings.Contains(status, "agent: removed-agent (not started)") || strings.Contains(status, "agent: codex") {
+		t.Fatalf("status=%q, must not silently fall back to codex", status)
+	}
+}

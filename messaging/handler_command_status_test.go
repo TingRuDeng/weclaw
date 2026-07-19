@@ -23,7 +23,7 @@ func TestBuildHelpText(t *testing.T) {
 		"更多：",
 		"/status 查看 WeClaw 运行态",
 		"/new 新建会话",
-		"/cwd <路径> 切换工作目录",
+		"/cwd [路径] 查看或切换当前窗口工作目录",
 		"/cx status 查看 Codex 会话状态",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx ls",
@@ -212,13 +212,38 @@ func TestFeishuHelpClaudeSubmenuIncludesQuota(t *testing.T) {
 		t.Fatalf("choices=%#v, want one claude help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/cc ls", "/cc status", "/cc owner", "/cc cli", "/cc pwd", "/cc quota", "/cc model ls", "/cc help", "/help"} {
+	for _, want := range []string{"/cc ls", "/cc new", "/cc status", "/cc pwd", "/cc quota", "/cc model ls", "/cc help", "/help"} {
 		if !got[want] {
 			t.Fatalf("claude help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
 	}
+	for _, disabled := range []string{"/cc owner", "/cc cli"} {
+		if got[disabled] {
+			t.Fatalf("claude help choices=%#v, disabled command %q must not be advertised", reply.Choices[0].Choices, disabled)
+		}
+	}
 	if !strings.Contains(reply.Choices[0].Prompt, "Claude") {
 		t.Fatalf("claude help prompt=%q, want section title", reply.Choices[0].Prompt)
+	}
+}
+
+func TestFeishuHelpSettingsLabelsModelScope(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/help settings",
+	}, reply)
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v, want one settings help card", reply.Choices)
+	}
+	labels := make(map[string]string)
+	for _, choice := range reply.Choices[0].Choices {
+		labels[choice.ID] = choice.Label
+	}
+	if labels["/model"] != "模型（当前/默认）" || labels["/reasoning"] != "推理强度（当前/默认）" {
+		t.Fatalf("settings labels=%#v, want explicit current/default scope", labels)
 	}
 }
 
@@ -326,6 +351,7 @@ func helpChoiceIDs(choices []platform.Choice) map[string]bool {
 func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 	text := buildCodexSessionHelpText()
 	for _, want := range []string{
+		"/cx whoami 查看当前 workspace/thread 绑定",
 		"/cx ls 查看工作空间或当前工作空间会话",
 		"/cx <编号|..> 选择当前列表项或返回上一级",
 		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动绑定；.. 返回工作空间列表",
@@ -335,7 +361,7 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx status 查看 binding、共享 app-server、workspace、thread 和任务状态",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
-		"/cx model status 查看 Codex 模型状态",
+		"/cx model status 查看新建 Codex 会话的默认模型配置",
 		"/cx model ls 查看可用 Codex 模型",
 	} {
 		if !strings.Contains(text, want) {
@@ -351,5 +377,28 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		if strings.Contains(text, obsolete) {
 			t.Errorf("Codex help should not keep obsolete two-step wording %q, got %q", obsolete, text)
 		}
+	}
+}
+
+func TestBuildClaudeSessionHelpTextIncludesCompleteCommands(t *testing.T) {
+	text := buildClaudeSessionHelpText()
+	for _, want := range []string{
+		"/cc whoami 查看当前 workspace/session 绑定",
+		"/cc new 新建当前工作空间会话",
+		"/cc status 查看 binding、共享 ClaudeHost 和 writer 状态",
+		"/cc quota 查看 Claude 账号额度",
+		"/cc model status 查看新建 Claude 会话的默认模型配置",
+		"/cc model ls 查看 Claude 可选模型",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Claude help should describe %q, got %q", want, text)
+		}
+	}
+}
+
+func TestAdminHelpDocumentsDirectFeishuApproval(t *testing.T) {
+	text := buildHelpTextForAdmin(true)
+	if !strings.Contains(text, "/feishu users approve <用户ID> [--admin]") {
+		t.Fatalf("admin help=%q, want direct Feishu approval command", text)
 	}
 }

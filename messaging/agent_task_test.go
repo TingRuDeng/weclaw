@@ -237,7 +237,7 @@ func TestClaudeSecondQueuedMessageDoesNotAcceptThird(t *testing.T) {
 
 func TestClaudeBroadcastQueuesWithoutWaitingForRunningTask(t *testing.T) {
 	h, ag := newClaudeAgentTaskFixture()
-	seedClaudeRemoteControl(t, h, "route-1", "claude", h.claudeWorkspaceRoot("claude"), "session-a", 1)
+	seedClaudeBinding(t, h, "route-1", "claude", h.claudeWorkspaceRoot("claude"), "session-a", 1)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	h.sendToNamedAgent(agentMessageRequest{
 		ctx: context.Background(), platformName: platform.PlatformFeishu,
@@ -268,25 +268,22 @@ func TestClaudeBroadcastQueuesWithoutWaitingForRunningTask(t *testing.T) {
 	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
 }
 
-func TestClaudeBroadcastOwnerFailureDoesNotRegisterTask(t *testing.T) {
+func TestClaudeBroadcastBindingFailureDoesNotRegisterTask(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		intent claudeControlIntent
-		want   string
+		name    string
+		binding claudeSessionBinding
+		want    string
 	}{
-		{name: "local", intent: claudeControlIntent{Owner: claudeOwnerLocal, Revision: 2}, want: "/cc owner remote"},
-		{name: "other", intent: claudeControlIntent{
-			Owner: claudeOwnerRemote, BindingKey: claudeBindingKey("other-route", "claude"),
-			ConversationID: "other-conversation", Revision: 2,
-		}, want: "其他远程窗口"},
+		{name: "unbound", binding: newClaudeBinding("/tmp", "", claudeBindingUnbound), want: "没有有效"},
+		{name: "runtime unavailable", binding: newClaudeBinding("/tmp", "session-a", claudeBindingResumeFailed), want: "ClaudeHost 暂不可用"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			h, ag := newClaudeAgentTaskFixture()
 			workspace := h.claudeWorkspaceRoot("claude")
 			key := claudeBindingKey("route-1", "claude")
 			store := h.ensureClaudeSessions()
-			store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
-			store.controls["session-a"] = test.intent
+			test.binding.WorkspaceRoot = workspace
+			store.bindings[key] = test.binding
 			reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 			h.broadcastToAgents(broadcastAgentsRequest{
 				ctx: context.Background(), platformName: platform.PlatformFeishu,
@@ -301,12 +298,11 @@ func TestClaudeBroadcastOwnerFailureDoesNotRegisterTask(t *testing.T) {
 	}
 }
 
-func TestClaudeBroadcastControlRevisionChangePreventsPrompt(t *testing.T) {
+func TestClaudeBroadcastBindingRevisionChangePreventsPrompt(t *testing.T) {
 	h, ag := newClaudeAgentTaskFixture()
 	workspace := h.claudeWorkspaceRoot("claude")
-	seedClaudeRemoteControl(t, h, "route-1", "claude", workspace, "session-a", 1)
-	conversationID := buildClaudeConversationID("route-1", "claude", workspace)
-	unblock := h.lockAgentExecution(conversationID)
+	seedClaudeBinding(t, h, "route-1", "claude", workspace, "session-a", 1)
+	unblock := h.lockAgentExecution(claudeSessionExecutionKey("session-a"))
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	done := make(chan struct{})
 	go func() {
@@ -320,9 +316,9 @@ func TestClaudeBroadcastControlRevisionChangePreventsPrompt(t *testing.T) {
 	waitUntil(t, func() bool { return h.ActiveTaskCount() == 1 })
 	store := h.ensureClaudeSessions()
 	store.mu.Lock()
-	intent := store.controls["session-a"]
-	intent.Revision++
-	store.controls["session-a"] = intent
+	binding := store.bindings[claudeBindingKey("route-1", "claude")]
+	binding.Revision++
+	store.bindings[claudeBindingKey("route-1", "claude")] = binding
 	store.mu.Unlock()
 	unblock()
 	select {
@@ -331,15 +327,15 @@ func TestClaudeBroadcastControlRevisionChangePreventsPrompt(t *testing.T) {
 		t.Fatal("广播 revision 复核未返回")
 	}
 	started, _ := ag.stats()
-	if started != 0 || !containsText(reply.Texts, "状态刚刚发生变化") {
+	if started != 0 || !containsText(reply.Texts, "绑定刚刚发生变化") {
 		t.Fatalf("started=%d texts=%#v", started, reply.Texts)
 	}
 }
 
-func TestClaudeQueuedBroadcastRechecksOwnerBeforeAutomaticRun(t *testing.T) {
+func TestClaudeQueuedBroadcastRechecksBindingBeforeAutomaticRun(t *testing.T) {
 	h, ag := newClaudeAgentTaskFixture()
 	workspace := h.claudeWorkspaceRoot("claude")
-	seedClaudeRemoteControl(t, h, "route-1", "claude", workspace, "session-a", 1)
+	seedClaudeBinding(t, h, "route-1", "claude", workspace, "session-a", 1)
 	reply := newSynchronizedTextReplier()
 	h.sendToNamedAgent(agentMessageRequest{
 		ctx: context.Background(), platformName: platform.PlatformFeishu,
@@ -353,14 +349,17 @@ func TestClaudeQueuedBroadcastRechecksOwnerBeforeAutomaticRun(t *testing.T) {
 		names: []string{"claude"}, message: "queued broadcast",
 	})
 	store := h.ensureClaudeSessions()
-	store.mu.Lock()
-	intent := store.controls["session-a"]
-	store.controls["session-a"] = claudeControlIntent{Owner: claudeOwnerLocal, Revision: intent.Revision + 1}
-	store.mu.Unlock()
+	if err := store.updateBinding(claudeBindingKey("route-1", "claude"), func(current claudeSessionBinding) claudeSessionBinding {
+		current.SessionID = ""
+		current.Status = claudeBindingUnbound
+		return current
+	}); err != nil {
+		t.Fatalf("update binding: %v", err)
+	}
 	ag.release <- struct{}{}
 	waitForNoActiveTask(t, noActiveTaskExpectation{handler: h, routeUserID: "route-1", agent: ag})
-	if text := reply.waitForText(t); !strings.Contains(text, "/cc owner remote") {
-		t.Fatalf("text=%q，暂存广播应在续跑时重新校验 owner", text)
+	if text := reply.waitForText(t); !strings.Contains(text, "没有有效") {
+		t.Fatalf("text=%q，暂存广播应在续跑时重新校验 binding", text)
 	}
 	started, _ := ag.stats()
 	if started != 1 {
@@ -395,11 +394,11 @@ func (r *synchronizedTextReplier) waitForText(t *testing.T) string {
 	for {
 		select {
 		case text := <-r.textCh:
-			if strings.Contains(text, "/cc owner remote") {
+			if strings.Contains(text, "没有有效") {
 				return text
 			}
 		case <-deadline:
-			t.Fatal("未等到暂存广播 owner 拒绝回复")
+			t.Fatal("未等到暂存广播 binding 拒绝回复")
 		}
 	}
 }

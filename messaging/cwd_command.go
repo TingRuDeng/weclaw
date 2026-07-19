@@ -15,7 +15,13 @@ import (
 
 // handleCwd 处理内部或测试调用的工作目录切换命令。
 func (h *Handler) handleCwd(trimmed string, userID ...string) string {
-	return h.handleCwdWithAccess(trimmed, userID, false)
+	return h.handleCwdWithRouteAccess(trimmed, userID, false, cwdRoute{})
+}
+
+type cwdRoute struct {
+	routeUserID string
+	platform    platform.PlatformName
+	accountID   string
 }
 
 // handleCwdForMessage 按消息身份判断 /cwd 权限，并用窗口路由键更新会话绑定。
@@ -24,13 +30,29 @@ func (h *Handler) handleCwdForMessage(trimmed string, msg platform.IncomingMessa
 	if routeUserID == "" {
 		routeUserID = msg.UserID
 	}
-	return h.handleCwdWithAccess(trimmed, []string{routeUserID}, h.isAdminMessage(msg))
+	return h.handleCwdWithRouteAccess(trimmed, []string{routeUserID}, h.isAdminMessage(msg), cwdRoute{
+		routeUserID: routeUserID,
+		platform:    msg.Platform,
+		accountID:   msg.AccountID,
+	})
 }
 
 func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin bool) string {
+	routeUserID := ""
+	if len(userID) > 0 {
+		routeUserID = userID[0]
+	}
+	return h.handleCwdWithRouteAccess(trimmed, userID, admin, cwdRoute{routeUserID: routeUserID})
+}
+
+func (h *Handler) handleCwdWithRouteAccess(trimmed string, userID []string, admin bool, route cwdRoute) string {
+	trimmed = strings.TrimSpace(trimmed)
+	if !isCwdCommand(trimmed) {
+		return "用法: /cwd [路径]"
+	}
 	arg := strings.TrimSpace(strings.TrimPrefix(trimmed, "/cwd"))
 	if arg == "" {
-		return h.currentCwdStatus()
+		return h.currentCwdStatusForRoute(route)
 	}
 	absPath, err := resolveCwdPath(arg)
 	if err != nil {
@@ -41,13 +63,19 @@ func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin boo
 		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请联系管理员在 allowed_workspace_roots 中添加。", absPath)
 	}
 	agents := h.snapshotAgents()
+	// Active Claude tasks hold the session execution lock for their whole
+	// prompt. Check before acquiring binding locks so /cwd rejects immediately
+	// instead of waiting behind that writer lease.
+	if h.hasActiveClaudeTaskForCwd(userID, agents) {
+		return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
+	}
 	release := h.lockCwdBindings(userID, agents)
 	defer release()
 	if h.hasActiveClaudeTaskForCwd(userID, agents) {
 		return "当前 Claude 任务正在运行，请等待任务结束或先发送 /stop。"
 	}
 	if err := h.releaseClaudeWorkspacesForCwd(userID, agents, absPath); err != nil {
-		log.Printf("[handler] /cwd 切换前释放 Claude 控制权失败: %v", err)
+		log.Printf("[handler] /cwd 切换前更新 Claude 绑定失败: %v", err)
 		return "切换 Claude 工作空间失败，请稍后重试。"
 	}
 	h.updateAgentWorkingDirectories(absPath, agents)
@@ -74,13 +102,35 @@ func (h *Handler) releaseClaudeWorkspacesForCwd(userIDs []string, agents map[str
 	return nil
 }
 
-// currentCwdStatus 返回默认 Agent 的工作目录提示。
-func (h *Handler) currentCwdStatus() string {
-	ag := h.getDefaultAgent()
-	if ag == nil {
+// currentCwdStatusForRoute 返回当前消息窗口实际选择的 Agent 与工作空间，不修改任何 binding 或运行时 cwd。
+func (h *Handler) currentCwdStatusForRoute(route cwdRoute) string {
+	name := h.defaultAgentNameForRoute(route.routeUserID, route.platform, route.accountID)
+	if strings.TrimSpace(name) == "" {
 		return "No agent running."
 	}
-	return wechatCommandText("cwd: (check agent config)", "agent: "+ag.Info().Name)
+	h.mu.RLock()
+	ag := h.agents[name]
+	workspaceRoot := h.agentWorkDirs[name]
+	h.mu.RUnlock()
+	if ag == nil {
+		return wechatCommandText("cwd: "+firstNonBlank(workspaceRoot, defaultAttachmentWorkspace()), "agent: "+name+" (not started)")
+	}
+	switch {
+	case isCodexAgent(name, ag.Info()):
+		if route.routeUserID != "" {
+			if current, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey(route.routeUserID, name)); ok {
+				workspaceRoot = normalizeCodexWorkspaceRoot(current)
+			}
+		}
+		if workspaceRoot == "" {
+			workspaceRoot = h.codexWorkspaceRoot(name)
+		}
+	case isClaudeAgent(name, ag.Info()):
+		workspaceRoot = h.claudeWorkspaceRootForUser(route.routeUserID, name, ag)
+	default:
+		workspaceRoot = firstNonBlank(workspaceRoot, defaultAttachmentWorkspace())
+	}
+	return wechatCommandText("cwd: "+workspaceRoot, "agent: "+name)
 }
 
 // resolveCwdPath 展开用户目录并校验目标确实是目录。
@@ -174,8 +224,7 @@ func (h *Handler) hasActiveClaudeTaskForCwd(userIDs []string, agents map[string]
 		if !isClaudeAgent(name, ag.Info()) {
 			continue
 		}
-		workspace := h.claudeWorkspaceRootForUser(userIDs[0], name, ag)
-		key := buildClaudeConversationID(userIDs[0], name, workspace)
+		key := h.agentExecutionKeyForRoute(userIDs[0], userIDs[0], name, ag)
 		if _, active := h.activeTask(key); active {
 			return true
 		}

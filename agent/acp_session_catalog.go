@@ -166,6 +166,14 @@ func (a *ACPAgent) UseClaudeSession(ctx context.Context, conversationID string, 
 	if !ok {
 		return fmt.Errorf("session/list 中不存在 sessionId %q", sessionID)
 	}
+	if reusable, reuseErr := a.reusableClaudeSession(selected.ID, selected.Cwd); reuseErr != nil {
+		return reuseErr
+	} else if reusable {
+		return a.commitBindingIntent(conversationID, revision, conversationBindingCommit{
+			sessionID: selected.ID,
+			cwd:       selected.Cwd,
+		})
+	}
 	params := acpSessionResumeParams{SessionID: selected.ID, Cwd: selected.Cwd, McpServers: []interface{}{}}
 	result, sequence, err := a.rpcWithSequence(ctx, "session/resume", params)
 	if err != nil {
@@ -179,6 +187,33 @@ func (a *ACPAgent) UseClaudeSession(ctx context.Context, conversationID string, 
 	}
 	commit := conversationBindingCommit{sessionID: selected.ID, cwd: selected.Cwd}
 	return a.commitBindingIntent(conversationID, revision, commit)
+}
+
+// reusableClaudeSession reports whether this process-resident ClaudeHost has
+// already resumed the session in the current runtime generation. Frontend
+// bindings then reuse that one host-side session instead of issuing a second
+// session/resume for the same durable session.
+func (a *ACPAgent) reusableClaudeSession(sessionID string, cwd string) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	generation := a.legacyRuntimeGeneration
+	if generation == 0 {
+		return false, nil
+	}
+	for conversationID, currentSessionID := range a.sessions {
+		if currentSessionID != sessionID || a.sessionGenerations[conversationID] < generation {
+			continue
+		}
+		currentCwd := a.legacySessionCwdLocked(conversationID)
+		if currentCwd != cwd {
+			return false, fmt.Errorf(
+				"ClaudeHost 中 sessionId %q 的工作目录不一致: %q != %q",
+				sessionID, currentCwd, cwd,
+			)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // validateACPObjectResult 要求事务型 ACP 调用返回非 null JSON object。

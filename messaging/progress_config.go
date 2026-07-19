@@ -84,10 +84,10 @@ func normalizePlatformProgressConfig(platformName platform.PlatformName, cfg con
 // defaultAgentNameForRoute 优先使用当前消息会话显式选择的 Agent。
 func (h *Handler) defaultAgentNameForRoute(routeUserID string, platformName platform.PlatformName, accountID string) string {
 	if agentName, ok := h.ensureAgentSessions().Get(routeUserID); ok {
-		if h.isKnownAgent(agentName) {
-			return agentName
+		if !h.isKnownAgent(agentName) {
+			log.Printf("[handler] session %q selected unavailable agent %q; keeping explicit selection", routeUserID, agentName)
 		}
-		log.Printf("[handler] session %q selected unavailable agent %q; using configured default", routeUserID, agentName)
+		return agentName
 	}
 	return h.defaultAgentNameForAccount(platformName, accountID)
 }

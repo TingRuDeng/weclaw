@@ -13,12 +13,35 @@ const (
 	activeTaskQueued
 	activeTaskMissing
 	activeTaskPendingOccupied
+	activeTaskForeignWriter
 )
 
 type activeTaskAdmission struct {
 	status  activeTaskAdmissionStatus
 	task    *activeAgentTask
 	taskCtx context.Context
+}
+
+// beginOrQueueClaudeTask turns the active-task slot into the Claude session
+// writer lease. The same frontend may queue one continuation; another frontend
+// bound to the same session gets an explicit busy result and cannot append work
+// to someone else's task lifecycle.
+func (h *Handler) beginOrQueueClaudeTask(ctx context.Context, key string, meta activeTaskMeta, pending pendingAgentTask) activeTaskAdmission {
+	h.activeTasksMu.Lock()
+	defer h.activeTasksMu.Unlock()
+	h.ensureActiveTasksLocked()
+	if task := h.activeTasks[key]; task != nil {
+		task.mu.Lock()
+		foreign := task.routeUserID != strings.TrimSpace(meta.routeUserID)
+		task.mu.Unlock()
+		if foreign {
+			return activeTaskAdmission{status: activeTaskForeignWriter, task: task, taskCtx: ctx}
+		}
+		return activeTaskAdmission{status: queuePendingOnTask(task, pending), task: task, taskCtx: ctx}
+	}
+	task, taskCtx := newActiveAgentTask(ctx, meta)
+	h.activeTasks[key] = task
+	return activeTaskAdmission{status: activeTaskStarted, task: task, taskCtx: taskCtx}
 }
 
 // beginOrQueueActiveTask 在同一临界区内完成任务启动或后续消息排队。
