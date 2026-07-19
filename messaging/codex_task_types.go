@@ -5,6 +5,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -22,6 +23,7 @@ type codexAgentTaskOptions struct {
 	agent       agent.Agent
 	progressCfg config.ProgressConfig
 	route       codexConversationRoute
+	trace       observability.TraceContext
 }
 
 // codexAgentTaskRuntime 保存已经登记 active task 后的运行时资源。

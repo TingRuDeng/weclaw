@@ -250,9 +250,9 @@ func TestReserveExternalCodexTaskRequiresSameIdentity(t *testing.T) {
 }
 
 func testExternalCodexReservationInput(watchStarted chan struct{}, watchDone <-chan struct{}) (preparedExternalCodexTask, externalCodexTaskOptions) {
-	watch := func(context.Context, func(string)) (string, error) { return "完成", nil }
+	watch := func(context.Context, func(agent.ProgressEvent)) (string, error) { return "完成", nil }
 	if watchStarted != nil {
-		watch = func(context.Context, func(string)) (string, error) {
+		watch = func(context.Context, func(agent.ProgressEvent)) (string, error) {
 			close(watchStarted)
 			<-watchDone
 			return "完成", nil

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 type activeAgentTask struct {
@@ -24,8 +25,7 @@ type activeAgentTask struct {
 	preview                 string
 	messageFingerprint      string
 	startedAt               time.Time
-	lastProgress            string
-	lastProgressAt          time.Time
+	view                    taskViewState
 	runtimeOwner            agent.CodexRuntimeHolder
 	ownerRevision           uint64
 	phase                   codexTaskPhase
@@ -33,6 +33,10 @@ type activeAgentTask struct {
 	codexTurnID             string
 	externalReservation     *externalCodexTaskReservationControl
 	inProcessCodexLifecycle bool
+	trace                   observability.TraceContext
+	taskID                  string
+	conversationID          string
+	sessionID               string
 }
 
 type pendingAgentTask struct {
@@ -86,6 +90,8 @@ type activeTaskMeta struct {
 	codexThreadID           string
 	codexTurnID             string
 	inProcessCodexLifecycle bool
+	trace                   observability.TraceContext
+	sessionID               string
 }
 
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
@@ -299,13 +305,49 @@ func (t *activeAgentTask) shouldSendFinal() bool {
 	return !t.detached
 }
 
-func (t *activeAgentTask) recordProgress(now time.Time, delta string) {
-	progress := previewPendingCodexMessage(delta)
-	if progress == "" {
+func (t *activeAgentTask) recordProgress(now time.Time, event agent.ProgressEvent) (string, bool) {
+	return t.recordProgressWithPolicy(now, event, false)
+}
+
+func (t *activeAgentTask) recordProgressWithPolicy(now time.Time, event agent.ProgressEvent, allowLocalUnsequenced bool) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	next, changed := reduceTaskView(t.view, taskViewEvent{
+		kind: taskViewProgress, at: now, progress: event, allowLocalUnsequenced: allowLocalUnsequenced,
+	})
+	if !changed {
+		return "", false
+	}
+	t.view = next
+	return next.lastProgress, true
+}
+
+func (t *activeAgentTask) recordProgressText(now time.Time, text string) (string, bool) {
+	return t.recordProgress(now, agent.TextProgressEvent(text))
+}
+
+// recordLocalProgressText 记录消息层自身产生的状态，不让旧 Agent 字符串回调绕过 source sequence 水位。
+func (t *activeAgentTask) recordLocalProgressText(now time.Time, text string) (string, bool) {
+	return t.recordProgressWithPolicy(now, agent.TextProgressEvent(text), true)
+}
+
+// closeProgress 建立终态水位线，阻止旧 watcher、timer 或回调覆盖最终状态。
+func (t *activeAgentTask) closeProgress() {
+	if t == nil {
 		return
 	}
 	t.mu.Lock()
-	t.lastProgress = progress
-	t.lastProgressAt = now
+	next, _ := reduceTaskView(t.view, taskViewEvent{kind: taskViewClosed, at: time.Now()})
+	t.view = next
+	t.mu.Unlock()
+}
+
+func (t *activeAgentTask) recordTerminalView(now time.Time, state string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	next, _ := reduceTaskView(t.view, taskViewEvent{kind: taskViewTerminal, at: now, terminalState: state})
+	t.view = next
 	t.mu.Unlock()
 }

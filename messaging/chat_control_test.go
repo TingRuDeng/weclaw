@@ -282,7 +282,7 @@ func TestListActiveTasksEmptyAndPopulated(t *testing.T) {
 	if !ok {
 		t.Fatal("expected active task to exist")
 	}
-	task.recordProgress(time.Now(), "正在修改表单组件")
+	task.recordProgressText(time.Now(), "正在修改表单组件")
 	got = h.handleListActiveTasks(user)
 	if !strings.Contains(got, "最近进展") || !strings.Contains(got, "正在修改表单组件") {
 		t.Fatalf("expected active task progress listed, got %q", got)

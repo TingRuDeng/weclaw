@@ -114,7 +114,7 @@ func TestCodexRolloutWatcherReadFailureReleasesTask(t *testing.T) {
 		}},
 		task: task,
 		ctx:  taskCtx,
-		watch: func(context.Context, func(string)) (string, error) {
+		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
 			return "", errors.New("rollout 文件读取失败")
 		},
 	}
@@ -183,7 +183,9 @@ func disconnectedExternalRuntimeFixture(t *testing.T) (*Handler, externalCodexTa
 		opts: externalCodexTaskOptions{ctx: ctx, actorUserID: "user-1", routeUserID: "user-1", agentName: "codex",
 			agent: ag, conversationID: "conversation-1", threadID: "thread-1", reply: reply},
 		state: agentStateForExternalTest(), task: task, ctx: taskCtx,
-		watch: func(context.Context, func(string)) (string, error) { return "", agent.ErrCodexDesktopDisconnected },
+		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
+			return "", agent.ErrCodexDesktopDisconnected
+		},
 	}
 	return h, runtime, cancel
 }

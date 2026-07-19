@@ -79,11 +79,19 @@ func (h *Handler) startProgressSessionForAgentWithFinal(ctx context.Context, rep
 
 // startProgressSessionForWorkspaceAgentWithFinal 使用任务启动时的工作空间快照生成稳定标题。
 func (h *Handler) startProgressSessionForWorkspaceAgentWithFinal(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
+	onProgress, finish, _ := h.startProgressSessionForWorkspaceAgentWithHandle(
+		ctx, reply, prefix, agentName, workspaceRoot, taskText, cfg,
+	)
+	return onProgress, finish
+}
+
+// startProgressSessionForWorkspaceAgentWithHandle 额外返回内部会话，供终态 outbox 在网络写入前导出 checkpoint。
+func (h *Handler) startProgressSessionForWorkspaceAgentWithHandle(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool, *progressSession) {
 	if cfg.Mode == "" {
 		cfg = config.DefaultProgressConfig()
 	}
 	if cfg.Mode == progressModeOff {
-		return func(string) {}, func(string, bool) bool { return false }
+		return func(string) {}, func(string, bool) bool { return false }, nil
 	}
 
 	progressCtx, cancel := context.WithCancel(ctx)
@@ -93,7 +101,7 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithFinal(ctx context.Con
 		taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
 	}
 	session.start()
-	return session.onProgress, session.stopWithFinal
+	return session.onProgress, session.stopWithFinal, session
 }
 
 func (s *progressSession) start() {
@@ -131,13 +139,93 @@ func (s *progressSession) onProgress(delta string) {
 }
 
 func (s *progressSession) stopWithFinal(finalText string, failed bool) bool {
+	parentCanceled := s.stopBackground()
+	return s.finishStream(parentCanceled, finalText, failed)
+}
+
+func (s *progressSession) stopBackground() bool {
 	parentCanceled := s.ctx.Err() != nil
 	s.cancel()
 	s.wg.Wait()
 	if s.typingStarted {
 		s.cancelTyping()
 	}
-	return s.finishStream(parentCanceled, finalText, failed)
+	return parentCanceled
+}
+
+type preparedProgressTerminal struct {
+	checkpoint   *platform.TerminalCheckpoint
+	consumed     bool
+	notification string
+}
+
+// canPrepareDurableTerminal 只在没有原生 stream，或 adapter 能导出 checkpoint 时进入 outbox 路径。
+func (s *progressSession) canPrepareDurableTerminal() bool {
+	if s == nil {
+		return true
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.stream == nil {
+		return true
+	}
+	_, ok := s.stream.(platform.DurableTerminalStream)
+	return ok
+}
+
+func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, finalText string, failed bool) (preparedProgressTerminal, error) {
+	if s == nil {
+		return preparedProgressTerminal{}, nil
+	}
+	parentCanceled := s.stopBackground()
+	s.streamMu.Lock()
+	stream := s.stream
+	s.streamMu.Unlock()
+	if stream == nil || !s.reply.Capabilities().Streaming {
+		return preparedProgressTerminal{}, nil
+	}
+	durable, ok := stream.(platform.DurableTerminalStream)
+	if !ok {
+		return preparedProgressTerminal{}, platform.ErrUnsupported
+	}
+	content, terminalFailed, consumed := progressTerminalArguments(replyWriter, parentCanceled, finalText, failed)
+	checkpoint, err := durable.PrepareTerminal(content, terminalFailed)
+	if err != nil {
+		return preparedProgressTerminal{}, err
+	}
+	prepared := preparedProgressTerminal{
+		checkpoint:   &checkpoint,
+		consumed:     consumed,
+		notification: renderStreamTerminalNotification(parentCanceled, failed, finalText),
+	}
+	return prepared, nil
+}
+
+func progressTerminalArguments(replyWriter platform.Replier, parentCanceled bool, finalText string, failed bool) (string, bool, bool) {
+	terminalFailed := parentCanceled || failed
+	if finalText == progressStatusOnlyComplete {
+		return "", terminalFailed, false
+	}
+	if shouldKeepFinalReplyOutsideStream(replyWriter, finalText) {
+		if failed {
+			return firstNonBlank(finalText, "任务执行失败。"), true, false
+		}
+		return "", terminalFailed, false
+	}
+	if !canConsumeFinalReplyInStream(finalText) {
+		fallback := progressDefaultCompletion
+		if parentCanceled {
+			fallback = "任务已停止。"
+		} else if failed {
+			fallback = "任务执行失败。"
+		}
+		return fallback, terminalFailed, false
+	}
+	content := strings.TrimSpace(finalText)
+	if content == "" {
+		content = progressDefaultCompletion
+	}
+	return content, terminalFailed, strings.TrimSpace(finalText) != "" && finalText != progressStatusOnlyComplete
 }
 
 func (s *progressSession) runTyping() {

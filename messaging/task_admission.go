@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/observability"
+	"github.com/google/uuid"
 )
 
 type activeTaskAdmissionStatus uint8
@@ -93,6 +96,12 @@ func newActiveAgentTask(ctx context.Context, meta activeTaskMeta) (*activeAgentT
 		startedAt: time.Now(), runtimeOwner: meta.runtimeOwner, ownerRevision: meta.ownerRevision,
 		phase: codexTaskRunning, codexThreadID: strings.TrimSpace(meta.codexThreadID),
 		codexTurnID: strings.TrimSpace(meta.codexTurnID), inProcessCodexLifecycle: meta.inProcessCodexLifecycle,
+		taskID: uuid.NewString(), conversationID: strings.TrimSpace(meta.trace.ConversationID),
+		sessionID: strings.TrimSpace(meta.sessionID),
 	}
+	task.trace = meta.trace.WithAgent(task.agentName).WithTask(task.taskID).
+		WithConversation(task.conversationID).WithSession(task.sessionID).
+		WithThreadTurn(task.codexThreadID, task.codexTurnID)
+	taskCtx = observability.ContextWithTrace(taskCtx, task.trace)
 	return task, taskCtx
 }

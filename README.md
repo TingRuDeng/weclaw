@@ -115,6 +115,25 @@ If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` 
 - `/stop`: stop the task running in the current chat window.
 - `/ps`: list tasks running for the current user.
 
+Native Codex and Claude plan, tool, command, and file signals are normalized into structured progress events. The task card and `/ps` read the same latest snapshot, and stale or late watcher events cannot overwrite a terminal task state.
+
+Terminal task text and Feishu card updates are atomically recorded in `~/.weclaw/state/terminal-outbox.json` before network delivery, then retried after transient failures or a WeClaw restart. Feishu CardKit operations keep stable UUIDs and monotonic sequences, while Feishu text and WeChat chunks use stable deduplication keys. Delivery is at-least-once rather than cross-platform exactly-once. Attachments and remote images remain outside the v1 outbox and use the existing validated best-effort path.
+
+### Query End-to-End Traces
+
+WeClaw records fixed-field events for the platform message, task, Agent turn, structured progress, reply, and terminal outbox in `~/.weclaw/state/trace.jsonl`. Route keys are stored only as irreversible digests, common credentials are removed from diagnostic text, and the `0600` file keeps three rotated 10 MiB backups.
+
+```bash
+weclaw trace <trace-id>
+weclaw trace --message-id <platform-message-id>
+weclaw trace --task-id <task-id> --limit 200
+weclaw trace --thread-id <thread-id> --turn-id <turn-id> --json
+```
+
+While the service is running, this command queries the API-token-protected, actual-loopback `/api/traces` endpoint. It fails closed if the process is alive but the API cannot be reached. With the service stopped, it reads the local trace files without modifying them.
+
+Codex wire data is excluded by default. Set `WECLAW_CODEX_PROTOCOL_TRACE=1` temporarily to record method, request ID, thread/turn, sequence, and connection epoch metadata. `WECLAW_CODEX_PROTOCOL_TRACE_PAYLOAD=1` additionally records recursively redacted, size-bounded JSON payloads. Those payloads may still contain user prompts or file content, so disable the option after diagnosis.
+
 ## How It Works
 
 ```mermaid

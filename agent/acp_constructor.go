@@ -88,6 +88,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		turnCh:                     make(map[string]chan *codexTurnEvent),
 		desktopProbe:               options.desktopProbe,
 		appServerGate:              newCodexAppServerGate(),
+		protocolTrace:              cfg.ProtocolTrace,
 	}
 	return a
 }

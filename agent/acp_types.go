@@ -130,6 +130,8 @@ type sessionUpdate struct {
 	// For agent_message_chunk
 	Type string `json:"type,omitempty"`
 	Text string `json:"text,omitempty"`
+	// Sequence 是当前 ACP 连接上的单调 wire 序号，不参与 JSON 编解码。
+	Sequence uint64 `json:"-"`
 }
 
 type acpPlanEntry struct {
@@ -206,6 +208,7 @@ type codexTurnEvent struct {
 	Kind      string
 	TurnID    string
 	ItemID    string
+	Sequence  uint64
 	Delta     string
 	Text      string
 	Progress  *codexProgressEvent
@@ -214,10 +217,12 @@ type codexTurnEvent struct {
 }
 
 type codexProgressEvent struct {
+	ID       string
 	Kind     string
 	Action   string
 	Detail   string
 	FilePath string
+	Status   string
 }
 
 type codexApprovalRequest struct {

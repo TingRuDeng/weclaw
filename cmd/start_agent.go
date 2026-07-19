@@ -9,12 +9,13 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 var codexACPStartupRetryDelay = 2 * time.Second
 
 // createAgentByName 按配置名称创建 Agent；配置缺失或启动失败时返回 nil。
-func createAgentByName(ctx context.Context, cfg *config.Config, name string) agent.Agent {
+func createAgentByName(ctx context.Context, cfg *config.Config, name string, protocolTrace ...observability.ProtocolRecorder) agent.Agent {
 	agCfg, ok := cfg.Agents[name]
 	if !ok {
 		log.Printf("[agent] %q not found in config", name)
@@ -27,7 +28,7 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 
 	switch agCfg.Type {
 	case "acp":
-		return createACPAgent(ctx, name, agCfg)
+		return createACPAgent(ctx, name, agCfg, protocolTrace...)
 	case "cli":
 		return createCLIAgent(name, agCfg)
 	case "http":
@@ -41,8 +42,8 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string) age
 }
 
 // createACPAgent 启动带重试策略的 ACP Agent。
-func createACPAgent(ctx context.Context, name string, agCfg config.AgentConfig) agent.Agent {
-	ag, err := startACPAgentWithRetry(ctx, name, agCfg)
+func createACPAgent(ctx context.Context, name string, agCfg config.AgentConfig, protocolTrace ...observability.ProtocolRecorder) agent.Agent {
+	ag, err := startACPAgentWithRetry(ctx, name, agCfg, protocolTrace...)
 	if err != nil {
 		log.Printf("[agent] failed to start ACP agent %q: %v", name, err)
 		return nil
@@ -99,7 +100,7 @@ func createCompanionAgent(ctx context.Context, name string, agCfg config.AgentCo
 }
 
 // startACPAgentWithRetry 为 Codex 状态库初始化错误提供有限次数重试。
-func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.AgentConfig) (*agent.ACPAgent, error) {
+func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.AgentConfig, protocolTrace ...observability.ProtocolRecorder) (*agent.ACPAgent, error) {
 	if err := agCfg.ValidateCodexPermissionConfig(); err != nil {
 		return nil, err
 	}
@@ -109,7 +110,7 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 	}
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		ag := newACPAgentFromConfig(name, agCfg)
+		ag := newACPAgentFromConfig(name, agCfg, protocolTrace...)
 		if err := ag.Start(ctx); err != nil {
 			lastErr = err
 			if attempt == attempts || !isRetryableCodexStateRuntimeError(err) {
@@ -127,12 +128,12 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 }
 
 // newACPAgentFromConfig 将持久化配置转换为 ACP 运行时配置。
-func newACPAgentFromConfig(name string, agCfg config.AgentConfig) *agent.ACPAgent {
-	return agent.NewACPAgent(acpAgentConfigFromConfig(name, agCfg))
+func newACPAgentFromConfig(name string, agCfg config.AgentConfig, protocolTrace ...observability.ProtocolRecorder) *agent.ACPAgent {
+	return agent.NewACPAgent(acpAgentConfigFromConfig(name, agCfg, protocolTrace...))
 }
 
-func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig) agent.ACPAgentConfig {
-	return agent.ACPAgentConfig{
+func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTrace ...observability.ProtocolRecorder) agent.ACPAgentConfig {
+	result := agent.ACPAgentConfig{
 		ConfiguredName:   name,
 		Command:          agCfg.Command,
 		LocalCommand:     agCfg.LocalCommand,
@@ -149,6 +150,10 @@ func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig) agent.ACPAg
 		RunAsUser:        agCfg.RunAsUser,
 		RunAsEnv:         agCfg.RunAsEnv,
 	}
+	if len(protocolTrace) > 0 {
+		result.ProtocolTrace = protocolTrace[0]
+	}
+	return result
 }
 
 // isCodexAppServerAgent 判断配置是否启动 Codex app-server 协议。

@@ -25,6 +25,11 @@ type messageSender interface {
 	ReplyCard(ctx context.Context, messageID string, cardID string) error
 }
 
+type idempotentMessageSender interface {
+	SendTextIdempotent(ctx context.Context, openID string, text string, operationID string) error
+	ReplyTextIdempotent(ctx context.Context, messageID string, text string, operationID string) error
+}
+
 type createMessageFunc func(ctx context.Context, receiveID string, receiveIDType string, msgType string, content string) (int, string, error)
 type replyMessageFunc func(ctx context.Context, messageID string, msgType string, content string, replyInThread bool) (int, string, error)
 type patchMessageFunc func(ctx context.Context, messageID string, content string) (int, string, error)
@@ -50,6 +55,15 @@ func (s *sdkMessageSender) SendText(ctx context.Context, receiveID string, text 
 		return err
 	}
 	return s.createMessage(ctx, receiveID, larkim.MsgTypeText, content)
+}
+
+// SendTextIdempotent 使用飞书消息 UUID 去重同一终态文本重试。
+func (s *sdkMessageSender) SendTextIdempotent(ctx context.Context, receiveID string, text string, operationID string) error {
+	content, err := buildTextMessageContent(text)
+	if err != nil {
+		return err
+	}
+	return s.createMessageWithUUID(ctx, receiveID, larkim.MsgTypeText, content, operationID)
 }
 
 // SendImage 上传本地图片并发送 image 消息。
@@ -177,7 +191,11 @@ func (s *sdkMessageSender) patchCardRaw(ctx context.Context, messageID string, c
 
 // createMessage 调用飞书消息创建接口，统一处理 API 错误。
 func (s *sdkMessageSender) createMessage(ctx context.Context, receiveID string, msgType string, content string) error {
-	code, msg, err := s.createMessageRaw(ctx, receiveID, msgType, content)
+	return s.createMessageWithUUID(ctx, receiveID, msgType, content, "")
+}
+
+func (s *sdkMessageSender) createMessageWithUUID(ctx context.Context, receiveID string, msgType string, content string, operationID string) error {
+	code, msg, err := s.createMessageRawWithUUID(ctx, receiveID, msgType, content, operationID)
 	if err != nil {
 		return err
 	}
@@ -189,17 +207,24 @@ func (s *sdkMessageSender) createMessage(ctx context.Context, receiveID string, 
 }
 
 func (s *sdkMessageSender) createMessageRaw(ctx context.Context, receiveID string, msgType string, content string) (int, string, error) {
+	return s.createMessageRawWithUUID(ctx, receiveID, msgType, content, "")
+}
+
+func (s *sdkMessageSender) createMessageRawWithUUID(ctx context.Context, receiveID string, msgType string, content string, operationID string) (int, string, error) {
 	receiveIDType := feishuReceiveIDType(receiveID)
 	if s.create != nil {
 		return s.create(ctx, receiveID, receiveIDType, msgType, content)
 	}
+	body := larkim.NewCreateMessageReqBodyBuilder().
+		ReceiveId(receiveID).
+		MsgType(msgType).
+		Content(content)
+	if strings.TrimSpace(operationID) != "" {
+		body.Uuid(operationID)
+	}
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType(receiveIDType).
-		Body(larkim.NewCreateMessageReqBodyBuilder().
-			ReceiveId(receiveID).
-			MsgType(msgType).
-			Content(content).
-			Build()).
+		Body(body.Build()).
 		Build()
 	resp, err := s.client.Im.Message.Create(ctx, req)
 	if err != nil {

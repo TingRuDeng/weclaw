@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -20,12 +22,19 @@ type broadcastAgentsRequest struct {
 	names        []string
 	message      string
 	clientID     string
+	trace        observability.TraceContext
 }
 
 type broadcastAgentResult struct {
+	ctx   context.Context
+	trace observability.TraceContext
 	name  string
 	reply string
 	skip  bool
+}
+
+func newBroadcastAgentResult(req broadcastAgentsRequest, name string, reply string, skip bool) broadcastAgentResult {
+	return broadcastAgentResult{ctx: req.ctx, trace: req.trace, name: name, reply: reply, skip: skip}
 }
 
 // broadcastToAgents 并行执行多个 Agent，并按完成顺序发送各自结果。
@@ -41,9 +50,12 @@ func (h *Handler) broadcastToAgents(req broadcastAgentsRequest) {
 }
 
 func (h *Handler) runBroadcastAgent(req broadcastAgentsRequest, reply platform.Replier, name string, results chan<- broadcastAgentResult) {
+	req.trace = req.trace.Branch(name)
+	req.ctx = observability.ContextWithTrace(req.ctx, req.trace)
+	h.recordTraceStage(req.trace, "agent.dispatched", "accepted", "agent="+name+" broadcast")
 	ag, err := h.getAgent(req.ctx, name)
 	if err != nil {
-		results <- broadcastAgentResult{name: name, reply: fmt.Sprintf("Error: %v", err)}
+		results <- newBroadcastAgentResult(req, name, fmt.Sprintf("Error: %v", err), false)
 		return
 	}
 	progressCfg := h.resolveProgressConfigForAccount(req.platformName, req.accountID, name)
@@ -87,11 +99,11 @@ func (h *Handler) beginBroadcastRuntime(req broadcastAgentsRequest, name string,
 	key := h.agentExecutionKeyForRoute(req.userID, req.routeUserID, name, ag)
 	unlock := h.lockAgentExecution(key)
 	task, taskCtx, err := h.beginSynchronousActiveTask(ctx, key, activeTaskMeta{
-		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
+		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message, trace: req.trace,
 	})
 	if err != nil {
 		unlock()
-		results <- broadcastAgentResult{name: name, reply: renderFinalFailure("["+name+"] ", err)}
+		results <- newBroadcastAgentResult(req, name, renderFinalFailure("["+name+"] ", err), false)
 		return broadcastAgentRuntime{}, false
 	}
 	finish := func() {
@@ -108,7 +120,7 @@ func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name s
 	binding, bindingErr := h.ensureClaudeSessions().requireWritableBinding(bindingKey)
 	if bindingErr != nil {
 		unlockBinding()
-		results <- broadcastAgentResult{name: name, reply: renderFinalFailure("["+name+"] ", errors.New(renderClaudeBindingError(bindingErr)))}
+		results <- newBroadcastAgentResult(req, name, renderFinalFailure("["+name+"] ", errors.New(renderClaudeBindingError(bindingErr))), false)
 		return broadcastAgentRuntime{}, false
 	}
 	bindingSnapshot := claudeTaskBindingSnapshot{SessionID: binding.SessionID, Revision: binding.Revision}
@@ -118,15 +130,16 @@ func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name s
 			ctx: req.ctx, platformName: req.platformName, accountID: req.accountID,
 			userID: req.userID, routeUserID: req.routeUserID, reply: reply,
 			agentName: name, message: req.message, replyPrefix: "[" + name + "] ",
-			agent: ag, progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name),
+			agent: ag, progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), trace: req.trace,
 		})
 	}}
 	admission := h.beginOrQueueClaudeTask(ctx, key, activeTaskMeta{
 		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
+		trace: req.trace.WithSession(binding.SessionID), sessionID: binding.SessionID,
 	}, pending)
 	if admission.status != activeTaskStarted {
 		unlockBinding()
-		h.replyBroadcastAdmission(name, admission.status, results)
+		h.replyBroadcastAdmission(req, name, admission.status, results)
 		return broadcastAgentRuntime{}, false
 	}
 	unlockBinding()
@@ -157,21 +170,22 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 		agentName: name, message: req.message, clientID: req.clientID,
 		replyPrefix: "[" + name + "] ", agent: ag,
 		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), route: route,
+		trace: req.trace.WithConversation(route.conversationID).WithThreadTurn(route.threadID, ""),
 	}
 	if h.preflightCodexTaskStart(codexTaskPreflightOptions{
 		taskOpts: taskOpts, route: route, cancel: func() {},
 	}) {
-		results <- broadcastAgentResult{name: name, skip: true}
+		results <- newBroadcastAgentResult(req, name, "", true)
 		return broadcastAgentRuntime{}, false
 	}
 	key := route.conversationID
 	pending := h.broadcastPendingCodexTask(req, name, ag, route, reply)
 	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
 		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
-		codexThreadID: route.threadID, inProcessCodexLifecycle: true,
+		codexThreadID: route.threadID, inProcessCodexLifecycle: true, trace: taskOpts.trace,
 	}, pending)
 	if admission.status != activeTaskStarted {
-		h.replyBroadcastAdmission(name, admission.status, results)
+		h.replyBroadcastAdmission(req, name, admission.status, results)
 		return broadcastAgentRuntime{}, false
 	}
 	task := admission.task
@@ -196,50 +210,88 @@ func (h *Handler) broadcastPendingCodexTask(req broadcastAgentsRequest, name str
 		agentName: name, message: req.message, clientID: req.clientID,
 		replyPrefix: "[" + name + "] ", agent: ag,
 		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), route: route,
+		trace: req.trace.WithConversation(route.conversationID).WithThreadTurn(route.threadID, ""),
 	})
 }
 
-func (h *Handler) replyBroadcastAdmission(name string, status activeTaskAdmissionStatus, results chan<- broadcastAgentResult) {
+func (h *Handler) replyBroadcastAdmission(req broadcastAgentsRequest, name string, status activeTaskAdmissionStatus, results chan<- broadcastAgentResult) {
 	text := "当前任务已有一条暂存消息，请先处理后再发送。"
 	if status == activeTaskQueued {
 		text = queuedAgentMessage
 	} else if status == activeTaskForeignWriter {
 		text = "当前 Claude session 正由另一个窗口执行任务，请等待该任务结束后重试。"
 	}
-	results <- broadcastAgentResult{name: name, reply: text}
+	results <- newBroadcastAgentResult(req, name, text, false)
 }
 
 func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string, ag agent.Agent, runtime broadcastAgentRuntime, reply platform.Replier, progressCfg config.ProgressConfig, results chan<- broadcastAgentResult) {
 	if runtime.claudeBinding.SessionID != "" {
 		bindingKey := claudeBindingKey(req.routeUserID, name)
 		if err := h.ensureClaudeSessions().validateBindingSnapshot(bindingKey, runtime.claudeBinding); err != nil {
-			results <- broadcastAgentResult{
-				name: name, reply: renderFinalFailure("["+name+"] ", errors.New(renderClaudeBindingError(err))),
-			}
+			results <- newBroadcastAgentResult(req, name, renderFinalFailure("["+name+"] ", errors.New(renderClaudeBindingError(err))), false)
 			return
 		}
 	}
-	onProgress, finishProgress := h.startProgressSessionForWorkspaceAgentWithFinal(
+	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithHandle(
 		runtime.ctx, reply, "["+name+"] ", name, runtime.workspaceRoot, req.message, progressCfg,
 	)
+	trace := traceWithReply(req.trace, reply)
+	if runtime.activeTask != nil {
+		runtime.activeTask.mu.Lock()
+		runtime.activeTask.trace = traceWithReply(runtime.activeTask.trace, reply)
+		runtime.activeTask.mu.Unlock()
+		trace = runtime.activeTask.traceSnapshot()
+	}
+	h.recordTraceStage(trace, "task.started", "running", "agent="+name+" broadcast")
+	onProgressEvent := func(event agent.ProgressEvent) {
+		text := event.DisplayText()
+		if runtime.activeTask != nil {
+			var recorded bool
+			text, recorded = runtime.activeTask.recordProgress(time.Now(), event)
+			if !recorded || !runtime.activeTask.shouldSendFinal() {
+				return
+			}
+		}
+		if text != "" {
+			progressTrace := trace
+			if runtime.activeTask != nil {
+				progressTrace = runtime.activeTask.traceSnapshot()
+			}
+			h.recordProgressTrace(progressTrace, event, text)
+			onProgress(text)
+		}
+	}
 	send := func(text string, failed bool) {
+		if runtime.activeTask != nil {
+			runtime.activeTask.closeProgress()
+			trace = runtime.activeTask.traceSnapshot()
+		}
+		state, stage := "completed", "task.completed"
+		if failed {
+			state, stage = "failed", "task.failed"
+		}
+		h.recordTraceStage(trace, stage, state, "broadcast agent terminal")
 		h.finishAndSendProgressReply(progressReplyDelivery{
 			delivery: replyDeliveryRequest{
 				ctx: req.ctx, replyWriter: reply, userID: req.userID,
-				agentName: name, reply: text,
+				agentName: name, reply: text, trace: trace,
 			},
-			failed: failed, finish: finishProgress,
+			failed: failed, finish: finishProgress, progress: progressSession,
 		})
-		results <- broadcastAgentResult{name: name, skip: true}
+		results <- newBroadcastAgentResult(req, name, "", true)
 	}
 	conversationID, err := h.broadcastConversationID(runtime.ctx, req, name, ag, runtime.codexRoute)
 	if err != nil {
 		send(renderFinalFailure("["+name+"] ", err), true)
 		return
 	}
+	if runtime.activeTask != nil {
+		runtime.activeTask.setTraceConversation(conversationID, runtime.claudeBinding.SessionID)
+		trace = runtime.activeTask.traceSnapshot()
+	}
 	text, err := h.executeBroadcastAgentTurn(broadcastAgentTurnOptions{
 		request: req, name: name, agent: ag, runtime: runtime,
-		conversationID: conversationID, onProgress: onProgress,
+		conversationID: conversationID, onProgress: onProgressEvent,
 	})
 	if err != nil {
 		send(renderFinalFailure("["+name+"] ", err), true)
@@ -248,7 +300,7 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 	h.recordBroadcastSession(req, name, ag, conversationID, runtime.codexRoute)
 	if runtime.activeTask != nil && !runtime.activeTask.shouldSendFinal() {
 		_ = finishProgress("", false)
-		results <- broadcastAgentResult{name: name, skip: true}
+		results <- newBroadcastAgentResult(req, name, "", true)
 		return
 	}
 	send(renderFinalSuccess("["+name+"] ", text), false)
@@ -260,13 +312,13 @@ type broadcastAgentTurnOptions struct {
 	agent          agent.Agent
 	runtime        broadcastAgentRuntime
 	conversationID string
-	onProgress     func(string)
+	onProgress     func(agent.ProgressEvent)
 }
 
 // executeBroadcastAgentTurn 让广播中的 Codex 同样经过控制权和 writer lease。
 func (h *Handler) executeBroadcastAgentTurn(opts broadcastAgentTurnOptions) (string, error) {
 	if !isCodexAgent(opts.name, opts.agent.Info()) {
-		return h.chatWithAgentWithProgress(
+		return h.chatWithAgentWithProgressEvents(
 			opts.runtime.ctx, opts.agent, opts.conversationID, opts.request.message, opts.onProgress,
 		)
 	}
@@ -319,5 +371,13 @@ func (h *Handler) sendBroadcastAgentResult(req broadcastAgentsRequest, reply pla
 	if result.skip {
 		return
 	}
-	h.sendReplyWithMediaAfterStreamForRoute(req.ctx, reply, req.userID, req.routeUserID, result.name, result.reply, false)
+	ctx := result.ctx
+	if ctx == nil {
+		ctx = req.ctx
+	}
+	trace := result.trace
+	if trace.TraceID != "" {
+		ctx = observability.ContextWithTrace(ctx, traceWithReply(trace, reply))
+	}
+	h.sendReplyWithMediaAfterStreamForRoute(ctx, reply, req.userID, req.routeUserID, result.name, result.reply, false)
 }

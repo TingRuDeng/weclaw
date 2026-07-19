@@ -48,8 +48,10 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		message:      opts.message,
 		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
 		codexThreadID: route.threadID, inProcessCodexLifecycle: true,
+		trace: opts.trace.WithConversation(route.conversationID).WithThreadTurn(route.threadID, ""),
 	}, h.pendingCodexTask(opts))
 	if admission.status != activeTaskStarted {
+		h.recordTaskAdmissionTrace(opts.trace, admission.status)
 		cancelTaskTimeout()
 		replyAgentTaskAdmission(agentTaskAdmissionNotice{
 			ctx: opts.ctx, reply: opts.reply, userID: opts.userID,
@@ -102,7 +104,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 		taskCtx: runtime.agentCtx, replyCtx: opts.ctx, reply: opts.reply,
 		task: runtime.task, cancel: runtime.cancelTaskTimeout, executionKey: runtime.executionKey,
 		userID: opts.userID, agentName: opts.agentName, workspaceRoot: runtime.route.workspaceRoot, message: opts.message,
-		replyPrefix: opts.replyPrefix, progressConfig: opts.progressCfg,
+		replyPrefix: opts.replyPrefix, progressConfig: opts.progressCfg, trace: runtime.task.traceSnapshot(),
 	})
 	defer h.completeAgentTaskLifecycle(lifecycle)
 	defer unlock()
@@ -119,7 +121,7 @@ func (h *Handler) runCodexAgentTask(runtime codexAgentTaskRuntime) {
 }
 
 // executeCodexAgentTurn 在观察流中断时接续同一 rollout turn，不重复执行任务。
-func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(string)) (string, error) {
+func (h *Handler) executeCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(agent.ProgressEvent)) (string, error) {
 	reply, err := h.runCodexAgentTurn(runtime, onProgress)
 	var interrupted *agent.CodexTurnInterruptedError
 	if !errors.As(err, &interrupted) {
@@ -144,7 +146,7 @@ func confirmInterruptedCodexTerminal(interrupted *agent.CodexTurnInterruptedErro
 }
 
 // runCodexAgentTurn 让新版 Codex 在 writer lease 内执行，旧 Agent 保持原调用路径。
-func (h *Handler) runCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(string)) (string, error) {
+func (h *Handler) runCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress func(agent.ProgressEvent)) (string, error) {
 	return h.runControlledCodexTurn(codexControlledTurnOptions{
 		ctx: runtime.agentCtx, agent: runtime.opts.agent, route: runtime.route,
 		message: runtime.opts.message, onProgress: onProgress, task: runtime.task,
@@ -156,7 +158,7 @@ type codexControlledTurnOptions struct {
 	agent      agent.Agent
 	route      codexConversationRoute
 	message    string
-	onProgress func(string)
+	onProgress func(agent.ProgressEvent)
 	task       *activeAgentTask
 }
 
@@ -164,17 +166,19 @@ type codexControlledTurnOptions struct {
 func (h *Handler) runControlledCodexTurn(opts codexControlledTurnOptions) (string, error) {
 	liveAgent, ok := opts.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
-		return h.chatWithAgentWithProgress(
+		return h.chatWithAgentWithProgressEvents(
 			opts.ctx, opts.agent, opts.route.conversationID, opts.message, opts.onProgress,
 		)
 	}
 	request := h.buildCodexRuntimeRequestForTurn(opts.route, opts.route.threadID)
 	return liveAgent.RunCodexTurn(opts.ctx, agent.CodexTurnRequest{
-		Runtime: request, Message: opts.message, OnProgress: opts.onProgress,
+		Runtime: request, Message: opts.message, OnProgressEvent: opts.onProgress,
 		OnThreadReplaced: func(previous agent.CodexThreadRef, current agent.CodexThreadRef) error {
 			return h.commitCodexFirstTurnReplacement(opts, previous, current)
 		},
-		OnTurnStarted: func(thread agent.CodexThreadRef, _ string) error {
+		OnTurnStarted: func(thread agent.CodexThreadRef, turnID string) error {
+			trace := opts.task.setTraceThreadTurn(thread.ThreadID, turnID)
+			h.recordTraceStage(trace, "turn.started", "running", "Codex turn accepted")
 			if thread.ConversationID == opts.route.conversationID {
 				h.ensureCodexSessions().clearPendingFirstTurn(
 					opts.route.bindingKey, opts.route.workspaceRoot, thread.ThreadID,

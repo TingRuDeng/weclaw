@@ -9,6 +9,10 @@ import (
 )
 
 func (a *ACPAgent) handlePermissionRequest(raw string) {
+	a.handlePermissionRequestAt(raw, 0)
+}
+
+func (a *ACPAgent) handlePermissionRequestAt(raw string, sequence uint64) {
 	var req struct {
 		ID     json.RawMessage         `json:"id"`
 		Method string                  `json:"method"`
@@ -39,7 +43,7 @@ func (a *ACPAgent) handlePermissionRequest(raw string) {
 			req.ID, optionID, responseFormat, req.Params.Permissions,
 		)
 	}
-	if a.dispatchToTurnCh(permissionRouteID(req.Params), &codexTurnEvent{Kind: "approval_request", Approval: approval}) {
+	if a.dispatchToTurnCh(permissionRouteID(req.Params), &codexTurnEvent{Kind: "approval_request", Sequence: sequence, Approval: approval}) {
 		return
 	}
 	optionID := selectPermissionOption(req.Params, defaultDenyDecision(approval.Request.Options))

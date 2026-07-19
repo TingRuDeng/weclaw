@@ -123,6 +123,22 @@ func TestReplierSendTextUsesUniqueClientIDPerSend(t *testing.T) {
 	}
 }
 
+func TestReplierSendTextIdempotentUsesStableClientIDsPerChunk(t *testing.T) {
+	client, calls, closeServer := newRecordingClient(t)
+	defer closeServer()
+	reply := NewReplier(client, "user-1", "ctx-1", "")
+	reply.ChunkRunes = 5
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := reply.SendTextIdempotent(context.Background(), "甲乙丙丁戊己", "delivery-1:text"); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	ids := calls.clientIDs()
+	if len(ids) != 4 || ids[0] == "" || ids[1] == "" || ids[0] == ids[1] || ids[0] != ids[2] || ids[1] != ids[3] {
+		t.Fatalf("client ids=%#v, want stable per-chunk retry IDs", ids)
+	}
+}
+
 func TestReplierSendTextChunksLongText(t *testing.T) {
 	client, calls, closeServer := newRecordingClient(t)
 	defer closeServer()

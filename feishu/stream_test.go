@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,37 @@ type fakeCardKitClient struct {
 	streamBlock   <-chan struct{}
 }
 
+type fakeIdempotentCardKitClient struct {
+	fakeCardKitClient
+	streamOperations []string
+	updateOperations []string
+	seen             map[string]bool
+}
+
+func (f *fakeIdempotentCardKitClient) SetStreamingIdempotent(ctx context.Context, cardID string, enabled bool, sequence int, operationID string) error {
+	f.streamOperations = append(f.streamOperations, operationID)
+	if f.seen == nil {
+		f.seen = make(map[string]bool)
+	}
+	if f.seen[operationID] {
+		return nil
+	}
+	f.seen[operationID] = true
+	return f.SetStreaming(ctx, cardID, enabled, sequence)
+}
+
+func (f *fakeIdempotentCardKitClient) UpdateCardIdempotent(ctx context.Context, cardID string, cardJSON string, sequence int, operationID string) error {
+	f.updateOperations = append(f.updateOperations, operationID)
+	if f.seen == nil {
+		f.seen = make(map[string]bool)
+	}
+	if f.seen[operationID] {
+		return nil
+	}
+	f.seen[operationID] = true
+	return f.UpdateCard(ctx, cardID, cardJSON, sequence)
+}
+
 // CreateCard 记录创建卡片 JSON 并返回固定 card_id。
 func (f *fakeCardKitClient) CreateCard(ctx context.Context, cardJSON string) (string, error) {
 	f.createdCards = append(f.createdCards, cardJSON)
@@ -45,6 +77,10 @@ func (f *fakeCardKitClient) CreateCard(ctx context.Context, cardJSON string) (st
 func (f *fakeCardKitClient) SetStreaming(ctx context.Context, cardID string, enabled bool, sequence int) error {
 	f.streamingSeqs = append(f.streamingSeqs, sequence)
 	return nil
+}
+
+func (f *fakeCardKitClient) SetStreamingIdempotent(ctx context.Context, cardID string, enabled bool, sequence int, _ string) error {
+	return f.SetStreaming(ctx, cardID, enabled, sequence)
 }
 
 // StreamContent 记录增量更新顺序号并按需返回错误。
@@ -86,6 +122,10 @@ func (f *fakeCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJ
 	err := f.updateErrors[0]
 	f.updateErrors = f.updateErrors[1:]
 	return err
+}
+
+func (f *fakeCardKitClient) UpdateCardIdempotent(ctx context.Context, cardID string, cardJSON string, sequence int, _ string) error {
+	return f.UpdateCard(ctx, cardID, cardJSON, sequence)
 }
 
 func (f *fakeCardKitClient) updateCountFor(cardID string) int {
@@ -453,5 +493,55 @@ func TestFeishuStreamCompleteIsIdempotentAndIgnoresLateUpdate(t *testing.T) {
 	}
 	if len(cardKit.updateCards) != 1 {
 		t.Fatalf("update cards=%d, want one terminal update", len(cardKit.updateCards))
+	}
+}
+
+func TestFeishuTerminalCheckpointKeepsOperationIDsAcrossRestartRetry(t *testing.T) {
+	cardKit := &fakeIdempotentCardKitClient{}
+	stream := &feishuStream{
+		cardKit: cardKit, cardID: "card-1", title: "Codex", sequence: 4,
+		throttle: cardkitThrottle, now: time.Now,
+	}
+	checkpoint, err := stream.PrepareTerminal("最终结果", false)
+	if err != nil {
+		t.Fatalf("PrepareTerminal: %v", err)
+	}
+	restarted := NewReplier(nil, "oc_chat", cardKit)
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := restarted.DeliverTerminal(context.Background(), checkpoint); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	if len(cardKit.streamOperations) != 2 || cardKit.streamOperations[0] == "" || cardKit.streamOperations[0] != cardKit.streamOperations[1] {
+		t.Fatalf("stream operations=%#v", cardKit.streamOperations)
+	}
+	if len(cardKit.updateOperations) != 2 || cardKit.updateOperations[0] == "" || cardKit.updateOperations[0] != cardKit.updateOperations[1] {
+		t.Fatalf("update operations=%#v", cardKit.updateOperations)
+	}
+	if len(cardKit.streamingSeqs) != 1 || len(cardKit.updateSeqs) != 1 || cardKit.updateSeqs[0] <= cardKit.streamingSeqs[0] {
+		t.Fatalf("stream seqs=%#v update seqs=%#v", cardKit.streamingSeqs, cardKit.updateSeqs)
+	}
+}
+
+func TestFeishuTerminalCheckpointRejectsNonIdempotentClient(t *testing.T) {
+	base := &fakeCardKitClient{}
+	stream := &feishuStream{
+		cardKit: base, cardID: "card-1", title: "Codex", sequence: 4,
+		throttle: cardkitThrottle, now: time.Now,
+	}
+	checkpoint, err := stream.PrepareTerminal("最终结果", false)
+	if err != nil {
+		t.Fatalf("PrepareTerminal: %v", err)
+	}
+	nonIdempotent := struct{ cardKitClient }{cardKitClient: base}
+	restarted := NewReplier(nil, "oc_chat", nonIdempotent)
+
+	err = restarted.DeliverTerminal(context.Background(), checkpoint)
+
+	if !errors.Is(err, platform.ErrUnsupported) {
+		t.Fatalf("err=%v, want ErrUnsupported", err)
+	}
+	if len(base.streamingSeqs) != 0 || len(base.updateSeqs) != 0 {
+		t.Fatalf("non-idempotent CardKit client must not be called: streaming=%#v updates=%#v", base.streamingSeqs, base.updateSeqs)
 	}
 }

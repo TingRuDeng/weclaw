@@ -66,6 +66,8 @@ type CodexTurnRequest struct {
 	Runtime    CodexRuntimeRequest
 	Message    string
 	OnProgress func(string)
+	// OnProgressEvent 优先于 OnProgress；保留旧字段供现有调用方兼容。
+	OnProgressEvent func(ProgressEvent)
 	// OnThreadReplaced 在空 thread 补建后、首个 turn 启动前原子迁移外层持久化选择。
 	OnThreadReplaced func(previous CodexThreadRef, current CodexThreadRef) error
 	// OnTurnStarted 在协议返回真实 turn ID 后同步外层首次写入生命周期。

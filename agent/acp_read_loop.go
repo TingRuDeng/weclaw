@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 // readLoop reads NDJSON lines from stdout and dispatches to pending requests or notification channels.
@@ -96,6 +98,10 @@ func (a *ACPAgent) handleACPWireLine(line string) {
 		return
 	}
 	msg.Sequence = a.wireSequence.Add(1)
+	a.mu.Lock()
+	epoch := a.wireEpoch
+	a.mu.Unlock()
+	a.recordProtocolTrace("inbound", epoch, msg.Sequence, observability.TraceContext{}, []byte(line))
 	if msg.ID != nil && msg.Method == "" {
 		a.dispatchACPResponse(&msg)
 		return
@@ -106,6 +112,16 @@ func (a *ACPAgent) handleACPWireLine(line string) {
 	if a.shouldLogUnhandledMethod(msg.Method, time.Now()) {
 		log.Printf("[acp] unhandled method: %s", msg.Method)
 	}
+}
+
+func (a *ACPAgent) recordProtocolTrace(direction string, epoch uint64, sequence uint64, trace observability.TraceContext, raw []byte) {
+	if a == nil || a.protocolTrace == nil || len(raw) == 0 {
+		return
+	}
+	_ = a.protocolTrace.RecordProtocol(observability.ProtocolRecord{
+		Trace: trace, Direction: direction, AgentName: a.configuredName,
+		Protocol: a.protocol, WireEpoch: epoch, Sequence: sequence, Raw: raw,
+	})
 }
 
 // dispatchACPResponse 将响应投递给对应 RPC 等待者。
@@ -128,7 +144,7 @@ func (a *ACPAgent) dispatchACPNotification(msg rpcResponse, line string) bool {
 		a.handleSessionUpdateAt(msg.Params, msg.Sequence)
 		return true
 	case "session/request_permission":
-		a.handlePermissionRequest(line)
+		a.handlePermissionRequestAt(line, msg.Sequence)
 		return true
 	default:
 		return a.dispatchCodexNotification(msg, line)
@@ -151,9 +167,9 @@ func (a *ACPAgent) dispatchCodexMessageNotification(msg rpcResponse) bool {
 	case "item/agentMessage/delta":
 		a.handleCodexItemDelta(msg.Params)
 	case "item/started":
-		a.handleCodexItemStarted(msg.Params)
+		a.handleCodexItemStartedAt(msg.Params, msg.Sequence)
 	case "item/completed":
-		a.handleCodexItemCompleted(msg.Params)
+		a.handleCodexItemCompletedAt(msg.Params, msg.Sequence)
 	default:
 		return false
 	}
@@ -166,9 +182,9 @@ func (a *ACPAgent) dispatchCodexTurnNotification(msg rpcResponse) bool {
 	case "turn/started", "turn/completed", "turn/failed":
 		a.handleCodexTurnEvent(msg.Method, msg.Params)
 	case "turn/plan/updated":
-		a.handleCodexPlanUpdated(msg.Params)
+		a.handleCodexPlanUpdatedAt(msg.Params, msg.Sequence)
 	case "warning":
-		a.handleCodexWarning(msg.Params)
+		a.handleCodexWarningAt(msg.Params, msg.Sequence)
 	case "error":
 		a.handleCodexError(msg.Params)
 	default:
@@ -181,15 +197,15 @@ func (a *ACPAgent) dispatchCodexTurnNotification(msg rpcResponse) bool {
 func (a *ACPAgent) dispatchCodexProgressNotification(msg rpcResponse) bool {
 	switch msg.Method {
 	case "item/autoApprovalReview/started":
-		a.handleCodexAutoApprovalReviewStarted(msg.Params)
+		a.handleCodexAutoApprovalReviewStartedAt(msg.Params, msg.Sequence)
 	case "item/autoApprovalReview/completed":
-		a.handleCodexAutoApprovalReviewCompleted(msg.Params)
+		a.handleCodexAutoApprovalReviewCompletedAt(msg.Params, msg.Sequence)
 	case "guardianWarning":
-		a.handleCodexGuardianWarning(msg.Params)
+		a.handleCodexGuardianWarningAt(msg.Params, msg.Sequence)
 	case "item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction":
-		a.handleCodexCommandProgress(msg.Params)
+		a.handleCodexCommandProgressAt(msg.Params, msg.Sequence)
 	case "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated":
-		a.handleCodexFileProgress(msg.Params)
+		a.handleCodexFileProgressAt(msg.Params, msg.Sequence)
 	default:
 		return false
 	}
@@ -209,7 +225,7 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 		return true
 	case "turn/approval/request", "item/fileChange/requestApproval",
 		"item/commandExecution/requestApproval", "item/permissions/requestApproval":
-		a.handlePermissionRequest(line)
+		a.handlePermissionRequestAt(line, msg.Sequence)
 		return true
 	default:
 		return false

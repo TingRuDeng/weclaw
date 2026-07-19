@@ -2,11 +2,14 @@ package feishu
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/google/uuid"
 )
 
 const cardkitThrottle = 500 * time.Millisecond
@@ -29,6 +32,8 @@ type feishuStream struct {
 	hasPending        bool
 	pendingTimer      *time.Timer
 	pendingGeneration uint64
+	terminal          *platform.TerminalCheckpoint
+	terminalDelivered bool
 }
 
 type feishuStreamUpdateOp struct {
@@ -39,10 +44,15 @@ type feishuStreamUpdateOp struct {
 }
 
 type feishuStreamTerminalOp struct {
-	disableSeq int
-	updateSeq  int
-	cardJSON   string
+	CardID           string `json:"card_id"`
+	DisableSeq       int    `json:"disable_sequence"`
+	DisableOperation string `json:"disable_operation"`
+	UpdateSeq        int    `json:"update_sequence"`
+	UpdateOperation  string `json:"update_operation"`
+	CardJSON         string `json:"card_json"`
 }
+
+const feishuTerminalCheckpointKind = "feishu.cardkit.terminal.v1"
 
 // openCardKitStream 创建并发送 CardKit 卡片，然后开启流式模式。
 func (r *Replier) openCardKitStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
@@ -269,47 +279,74 @@ func (s *feishuStream) cancelPendingUpdate() {
 
 // Complete 关闭流式并全量更新为完成卡片。
 func (s *feishuStream) Complete(ctx context.Context, finalContent string) error {
-	if !s.beginTerminalUpdate() {
-		return nil
+	checkpoint, err := s.PrepareTerminal(finalContent, false)
+	if err != nil || checkpoint.Kind == "" {
+		return err
 	}
-	s.ioMu.Lock()
-	defer s.ioMu.Unlock()
-	op, buildErr := s.prepareTerminalUpdate(cardStatusDone, finalContent)
-	if buildErr != nil {
-		return buildErr
-	}
-	disableErr := s.disableStreaming(ctx, op.disableSeq)
-	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, op.cardJSON, op.updateSeq)
-	destroyErr := s.cardKit.DestroyCard(ctx, s.cardID)
-	return firstErr(updateErr, disableErr, destroyErr)
+	return s.deliverPreparedTerminal(ctx, checkpoint)
 }
 
 // Fail 关闭流式并全量更新为失败卡片。
 func (s *feishuStream) Fail(ctx context.Context, errText string) error {
-	if !s.beginTerminalUpdate() {
-		return nil
+	checkpoint, err := s.PrepareTerminal(errText, true)
+	if err != nil || checkpoint.Kind == "" {
+		return err
 	}
-	s.ioMu.Lock()
-	defer s.ioMu.Unlock()
-	op, buildErr := s.prepareTerminalUpdate(cardStatusError, errText)
-	if buildErr != nil {
-		return buildErr
-	}
-	disableErr := s.disableStreaming(ctx, op.disableSeq)
-	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, op.cardJSON, op.updateSeq)
-	destroyErr := s.cardKit.DestroyCard(ctx, s.cardID)
-	return firstErr(updateErr, disableErr, destroyErr)
+	return s.deliverPreparedTerminal(ctx, checkpoint)
 }
 
-func (s *feishuStream) beginTerminalUpdate() bool {
+func (s *feishuStream) deliverPreparedTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {
+	s.ioMu.Lock()
+	defer s.ioMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.terminalDelivered {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	if err := deliverFeishuTerminalCheckpoint(ctx, s.cardKit, checkpoint); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.terminalDelivered = true
+	s.mu.Unlock()
+	return nil
+}
+
+// PrepareTerminal 冻结流并导出可跨进程重放的 CardKit 终态操作。
+func (s *feishuStream) PrepareTerminal(finalContent string, failed bool) (platform.TerminalCheckpoint, error) {
+	s.ioMu.Lock()
+	defer s.ioMu.Unlock()
+	s.mu.Lock()
+	if s.terminal != nil {
+		checkpoint := *s.terminal
+		s.mu.Unlock()
+		return checkpoint, nil
+	}
 	if s.closed {
-		return false
+		s.mu.Unlock()
+		return platform.TerminalCheckpoint{}, nil
 	}
 	s.closed = true
 	s.cancelPendingUpdate()
-	return true
+	s.mu.Unlock()
+	status := cardStatusDone
+	if failed {
+		status = cardStatusError
+	}
+	op, err := s.prepareTerminalUpdate(status, finalContent)
+	if err != nil {
+		return platform.TerminalCheckpoint{}, err
+	}
+	payload, err := json.Marshal(op)
+	if err != nil {
+		return platform.TerminalCheckpoint{}, err
+	}
+	checkpoint := platform.TerminalCheckpoint{Kind: feishuTerminalCheckpointKind, Payload: payload}
+	s.mu.Lock()
+	s.terminal = &checkpoint
+	s.mu.Unlock()
+	return checkpoint, nil
 }
 
 func (s *feishuStream) prepareTerminalUpdate(status string, content string) (feishuStreamTerminalOp, error) {
@@ -326,14 +363,37 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 		return feishuStreamTerminalOp{}, err
 	}
 	return feishuStreamTerminalOp{
-		disableSeq: s.nextSequence(),
-		updateSeq:  s.nextSequence(),
-		cardJSON:   cardJSON,
+		CardID:           s.cardID,
+		DisableSeq:       s.nextSequence(),
+		DisableOperation: uuid.NewString(),
+		UpdateSeq:        s.nextSequence(),
+		UpdateOperation:  uuid.NewString(),
+		CardJSON:         cardJSON,
 	}, nil
 }
 
-func (s *feishuStream) disableStreaming(ctx context.Context, sequence int) error {
-	return ignoreCardKitUpdateError(s.cardKit.SetStreaming(ctx, s.cardID, false, sequence))
+func deliverFeishuTerminalCheckpoint(ctx context.Context, client cardKitClient, checkpoint platform.TerminalCheckpoint) error {
+	if checkpoint.Kind != feishuTerminalCheckpointKind {
+		return fmt.Errorf("unsupported Feishu terminal checkpoint %q", checkpoint.Kind)
+	}
+	if client == nil {
+		return fmt.Errorf("CardKit client is unavailable")
+	}
+	var op feishuStreamTerminalOp
+	if err := json.Unmarshal(checkpoint.Payload, &op); err != nil {
+		return fmt.Errorf("decode Feishu terminal checkpoint: %w", err)
+	}
+	if op.CardID == "" || op.DisableSeq <= 0 || op.UpdateSeq <= op.DisableSeq || op.DisableOperation == "" || op.UpdateOperation == "" || op.CardJSON == "" {
+		return fmt.Errorf("invalid Feishu terminal checkpoint")
+	}
+	idempotent, ok := client.(idempotentCardKitClient)
+	if !ok {
+		return platform.ErrUnsupported
+	}
+	disableErr := idempotent.SetStreamingIdempotent(ctx, op.CardID, false, op.DisableSeq, op.DisableOperation)
+	updateErr := idempotent.UpdateCardIdempotent(ctx, op.CardID, op.CardJSON, op.UpdateSeq, op.UpdateOperation)
+	destroyErr := client.DestroyCard(ctx, op.CardID)
+	return firstErr(ignoreCardKitUpdateError(updateErr), ignoreCardKitUpdateError(disableErr), destroyErr)
 }
 
 func (s *feishuStream) nextSequence() int {

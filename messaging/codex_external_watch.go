@@ -27,11 +27,11 @@ type externalCodexWatchRequest struct {
 	threadID       string
 	turnID         string
 	task           *activeAgentTask
-	onProgress     func(string)
+	onProgress     func(agent.ProgressEvent)
 }
 
 // superviseExternalCodexWatch 把当前客户端断线切换为 rollout/reconnect 观察。
-func (h *Handler) superviseExternalCodexWatch(runtime externalCodexTaskRuntime, onProgress func(string)) codexExternalWatchResult {
+func (h *Handler) superviseExternalCodexWatch(runtime externalCodexTaskRuntime, onProgress func(agent.ProgressEvent)) codexExternalWatchResult {
 	text, err := runtime.watch(runtime.ctx, onProgress)
 	source := "runtime"
 	if !runtime.state.Controllable {
@@ -64,7 +64,7 @@ func (h *Handler) watchCodexAfterRuntimeDisconnect(ctx context.Context, req exte
 		}
 		if found {
 			if state.Progress != "" && req.onProgress != nil {
-				req.onProgress(state.Progress)
+				req.onProgress(agent.TextProgressEvent(state.Progress))
 			}
 			result, done := h.watchRolloutOrReconnect(ctx, req, state)
 			if done {
@@ -93,7 +93,7 @@ func (h *Handler) watchRolloutOrReconnect(ctx context.Context, req externalCodex
 	defer cancel()
 	resultCh := make(chan codexExternalWatchResult, 1)
 	go func() {
-		text, err := watchCodexRolloutTask(watchCtx, state, req.onProgress)
+		text, err := watchCodexRolloutTask(watchCtx, state, textProgressCallback(req.onProgress))
 		resultCh <- classifyCodexWatchResult(text, err, "rollout")
 	}()
 	ticker := time.NewTicker(codexRolloutPollInterval)
@@ -157,7 +157,13 @@ func (h *Handler) watchReconnectedCodexRuntime(ctx context.Context, req external
 	if req.task != nil {
 		req.task.markCodexRunning(binding)
 	}
-	text, err := runtimeAgent.WatchCodexThread(ctx, req.conversationID, req.threadID, req.onProgress)
+	var text string
+	var err error
+	if structured, ok := req.agent.(agent.CodexStructuredThreadRuntimeAgent); ok {
+		text, err = structured.WatchCodexThreadEvents(ctx, req.conversationID, req.threadID, req.onProgress)
+	} else {
+		text, err = runtimeAgent.WatchCodexThread(ctx, req.conversationID, req.threadID, textProgressCallback(req.onProgress))
+	}
 	return classifyCodexWatchResult(text, err, "runtime"), true
 }
 

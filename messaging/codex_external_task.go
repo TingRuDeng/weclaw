@@ -35,7 +35,7 @@ type externalCodexTaskState struct {
 	Controllable bool
 }
 
-type externalCodexTaskWatch func(context.Context, func(string)) (string, error)
+type externalCodexTaskWatch func(context.Context, func(agent.ProgressEvent)) (string, error)
 
 type resolvedExternalCodexTask struct {
 	state             externalCodexTaskState
@@ -98,8 +98,14 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 	}
 	resolved.active = true
 	if state.ActiveTurnID != "" {
-		resolved.watch = func(ctx context.Context, onProgress func(string)) (string, error) {
-			return runtimeAg.WatchCodexThread(ctx, opts.conversationID, opts.threadID, onProgress)
+		if structured, ok := opts.agent.(agent.CodexStructuredThreadRuntimeAgent); ok {
+			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+				return structured.WatchCodexThreadEvents(ctx, opts.conversationID, opts.threadID, onProgress)
+			}
+		} else {
+			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+				return runtimeAg.WatchCodexThread(ctx, opts.conversationID, opts.threadID, textProgressCallback(onProgress))
+			}
 		}
 	}
 	return resolved
@@ -124,8 +130,8 @@ func (h *Handler) resolveExternalCodexRollout(threadID string) resolvedExternalC
 		},
 		Progress: rollout.Progress,
 	}
-	resolved.watch = func(ctx context.Context, onProgress func(string)) (string, error) {
-		return watchCodexRolloutTask(ctx, rollout, onProgress)
+	resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+		return watchCodexRolloutTask(ctx, rollout, textProgressCallback(onProgress))
 	}
 	return resolved
 }
@@ -168,18 +174,26 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		progressCfg = h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
 	}
 	taskText := firstNonBlank(runtime.state.Preview, "共享 Codex 任务")
-	onProgress, finishProgress := h.startProgressSessionForWorkspaceAgentWithFinal(
+	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithHandle(
 		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, runtime.opts.workspaceRoot, taskText, progressCfg,
 	)
-	recordProgress := func(delta string) {
-		runtime.task.recordProgress(time.Now(), delta)
+	runtime.task.mu.Lock()
+	runtime.task.trace = traceWithReply(runtime.task.trace, runtime.opts.reply)
+	runtime.task.mu.Unlock()
+	trace := runtime.task.traceSnapshot()
+	recordProgress := func(event agent.ProgressEvent) {
+		delta, recorded := runtime.task.recordProgress(time.Now(), event)
+		if !recorded {
+			return
+		}
 		if !runtime.task.shouldSendFinal() {
 			return
 		}
+		h.recordProgressTrace(runtime.task.traceSnapshot(), event, delta)
 		onProgress(delta)
 	}
 	if runtime.state.Progress != "" {
-		recordProgress(runtime.state.Progress)
+		recordProgress(agent.TextProgressEvent(runtime.state.Progress))
 	}
 	result := h.superviseExternalCodexWatch(runtime, recordProgress)
 	if !result.Terminal && runtime.task.isStopping() {
@@ -190,6 +204,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		}
 	}
 	if !result.Terminal {
+		h.recordTraceStage(trace, "task.observer_disconnected", "unknown", "observer ended without authoritative terminal")
 		_ = finishProgress("", false)
 		return
 	}
@@ -204,6 +219,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 			}
 		}
 	}
+	runtime.task.closeProgress()
 	if !h.claimActiveTaskTerminal(runtime.opts.conversationID, runtime.task) {
 		_ = finishProgress("", false)
 		return
@@ -211,14 +227,21 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	reply := renderFinalSuccess("", result.Final)
 	if result.Failed {
 		reply = renderFinalFailure("", result.Err)
+		summary := "shared Codex task failed"
+		if result.Err != nil {
+			summary = result.Err.Error()
+		}
+		h.recordTraceStage(trace, "task.failed", "failed", summary)
+	} else {
+		h.recordTraceStage(trace, "task.completed", "completed", "shared Codex task completed")
 	}
 	if runtime.task.shouldSendFinal() {
 		h.finishAndSendProgressReply(progressReplyDelivery{
 			delivery: replyDeliveryRequest{
 				ctx: runtime.opts.ctx, replyWriter: runtime.opts.reply,
-				userID: runtime.opts.actorUserID, agentName: runtime.opts.agentName, reply: reply,
+				userID: runtime.opts.actorUserID, agentName: runtime.opts.agentName, reply: reply, trace: trace,
 			},
-			failed: result.Failed, finish: finishProgress,
+			failed: result.Failed, finish: finishProgress, progress: progressSession,
 		})
 	} else {
 		_ = finishProgress("", false)

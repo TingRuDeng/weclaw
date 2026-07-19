@@ -136,11 +136,11 @@ func TestHandleCodexAutoApprovalReviewStartedEmitsProgress(t *testing.T) {
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
 
-	a.handleCodexAutoApprovalReviewStarted(json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","reviewId":"review-1"}`))
+	a.handleCodexAutoApprovalReviewStartedAt(json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","reviewId":"review-1"}`), 41)
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || !strings.Contains(evt.Text, "自动审批审核中") {
+		if evt.Kind != "progress" || !strings.Contains(evt.Text, "自动审批审核中") || evt.Sequence != 41 || evt.Progress == nil || evt.Progress.ID != "review-1" || evt.Progress.Kind != "approval" || evt.Progress.Status != "running" {
 			t.Fatalf("event=%#v, want auto approval progress", evt)
 		}
 	default:
@@ -155,11 +155,11 @@ func TestHandleCodexGuardianWarningEmitsProgress(t *testing.T) {
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
 
-	a.handleCodexGuardianWarning(json.RawMessage(`{"threadId":"thread-1","message":"Automatic approval review approved (risk: medium)"}`))
+	a.handleCodexGuardianWarningAt(json.RawMessage(`{"threadId":"thread-1","id":"guardian-1","message":"Automatic approval review approved (risk: medium)"}`), 42)
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || !containsAll(evt.Text, "自动审批", "通过") {
+		if evt.Kind != "progress" || !containsAll(evt.Text, "自动审批", "通过") || evt.Sequence != 42 || evt.Progress == nil || evt.Progress.ID != "guardian-1" || evt.Progress.Kind != "approval" || evt.Progress.Status != "completed" {
 			t.Fatalf("event=%#v, want guardian approval progress", evt)
 		}
 	default:

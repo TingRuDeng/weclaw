@@ -16,6 +16,10 @@ const (
 
 type codexProgressParams struct {
 	ThreadID string            `json:"threadId"`
+	TurnID   string            `json:"turnId"`
+	ID       string            `json:"id"`
+	ItemID   string            `json:"itemId"`
+	ReviewID string            `json:"reviewId"`
 	Message  string            `json:"message"`
 	Status   string            `json:"status"`
 	Decision string            `json:"decision"`
@@ -81,39 +85,64 @@ func (d *codexTurnDiagnostics) withError(reason string) string {
 	return b.String()
 }
 
-func (a *ACPAgent) handleCodexAutoApprovalReviewStarted(params json.RawMessage) {
-	a.dispatchCodexProgress(params, "进展：Codex 自动审批审核中。")
+func (a *ACPAgent) handleCodexAutoApprovalReviewStartedAt(params json.RawMessage, sequence uint64) {
+	p := decodeCodexProgressParams(params)
+	a.dispatchProgressEventToThread(p.ThreadID, "进展：Codex 自动审批审核中。", &codexProgressEvent{
+		ID: firstNonEmpty(p.ReviewID, p.ItemID, p.ID, "auto-approval-review"), Kind: "approval",
+		Action: "Codex 自动审批审核中。", Status: "running",
+	}, sequence)
 }
 
-func (a *ACPAgent) handleCodexAutoApprovalReviewCompleted(params json.RawMessage) {
+func (a *ACPAgent) handleCodexAutoApprovalReviewCompletedAt(params json.RawMessage, sequence uint64) {
 	status := "进展：Codex 自动审批审核已完成。"
 	if isPositiveCodexReview(params) {
 		status = "进展：Codex 自动审批已通过。"
 	}
-	a.dispatchCodexProgress(params, status)
+	p := decodeCodexProgressParams(params)
+	a.dispatchProgressEventToThread(p.ThreadID, status, &codexProgressEvent{
+		ID: firstNonEmpty(p.ReviewID, p.ItemID, p.ID, "auto-approval-review"), Kind: "approval",
+		Action: strings.TrimPrefix(status, codexProgressPrefix), Status: "completed",
+	}, sequence)
 }
 
-func (a *ACPAgent) handleCodexGuardianWarning(params json.RawMessage) {
+func (a *ACPAgent) handleCodexGuardianWarningAt(params json.RawMessage, sequence uint64) {
 	p := decodeCodexProgressParams(params)
 	status := "进展：Codex 收到安全提示。"
+	eventStatus := "running"
 	if strings.Contains(strings.ToLower(p.Message), "approved") {
 		status = "进展：Codex 自动审批已通过。"
+		eventStatus = "completed"
 	} else if strings.TrimSpace(p.Message) != "" {
 		status = "进展：Codex 收到安全提示：" + trimRunes(p.Message, codexGuardianWarningMaxRunes)
 	}
-	a.dispatchProgressToThread(p.ThreadID, status)
+	a.dispatchProgressEventToThread(p.ThreadID, status, &codexProgressEvent{
+		ID: firstNonEmpty(p.ReviewID, p.ItemID, p.ID, "guardian-warning"), Kind: "approval",
+		Action: strings.TrimPrefix(status, codexProgressPrefix), Status: eventStatus,
+	}, sequence)
 }
 
 func (a *ACPAgent) handleCodexCommandProgress(params json.RawMessage) {
-	a.dispatchCodexCommandLine(params)
+	a.handleCodexCommandProgressAt(params, 0)
 }
 
 func (a *ACPAgent) handleCodexFileProgress(params json.RawMessage) {
-	a.dispatchCodexFileLine(params)
+	a.handleCodexFileProgressAt(params, 0)
+}
+
+func (a *ACPAgent) handleCodexCommandProgressAt(params json.RawMessage, sequence uint64) {
+	a.dispatchCodexCommandLine(params, sequence)
+}
+
+func (a *ACPAgent) handleCodexFileProgressAt(params json.RawMessage, sequence uint64) {
+	a.dispatchCodexFileLine(params, sequence)
 }
 
 // handleCodexPlanUpdated 把 Codex App 的计划状态转换成任务卡片可读的当前步骤。
 func (a *ACPAgent) handleCodexPlanUpdated(params json.RawMessage) {
+	a.handleCodexPlanUpdatedAt(params, 0)
+}
+
+func (a *ACPAgent) handleCodexPlanUpdatedAt(params json.RawMessage, sequence uint64) {
 	var p codexPlanUpdatedParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
@@ -122,7 +151,24 @@ func (a *ACPAgent) handleCodexPlanUpdated(params json.RawMessage) {
 	if step == "" {
 		return
 	}
-	a.dispatchProgressToThread(p.ThreadID, codexProgressPrefix+trimRunes(step, codexPlanStepMaxRunes))
+	status := currentCodexPlanStatus(p.Plan)
+	a.dispatchProgressEventToThread(
+		p.ThreadID,
+		codexProgressPrefix+trimRunes(step, codexPlanStepMaxRunes),
+		&codexProgressEvent{ID: "plan", Kind: "plan", Action: step, Status: status},
+		sequence,
+	)
+}
+
+func currentCodexPlanStatus(plan []codexPlanStep) string {
+	for _, status := range []string{"in_progress", "completed", "pending"} {
+		for _, item := range plan {
+			if codexPlanStatusMatches(item.Status, status) && strings.TrimSpace(item.Step) != "" {
+				return status
+			}
+		}
+	}
+	return ""
 }
 
 // currentCodexPlanStep 优先展示进行中步骤，缺失时回退到最近完成或即将开始的步骤。
@@ -164,46 +210,38 @@ func codexPlanStatusMatches(actual string, expected string) bool {
 	return normalize(actual) == normalize(expected)
 }
 
-func (a *ACPAgent) dispatchCodexProgress(params json.RawMessage, text string) {
+func (a *ACPAgent) dispatchCodexCommandLine(params json.RawMessage, sequence uint64) {
 	p := decodeCodexProgressParams(params)
-	a.dispatchProgressToThread(p.ThreadID, text)
+	a.dispatchCodexCommandProgress(p, sequence)
 }
 
-func (a *ACPAgent) dispatchCodexCommandLine(params json.RawMessage) {
+func (a *ACPAgent) dispatchCodexFileLine(params json.RawMessage, sequence uint64) {
 	p := decodeCodexProgressParams(params)
-	a.dispatchCodexCommandProgress(p)
+	a.dispatchCodexFileProgress(p, sequence)
 }
 
-func (a *ACPAgent) dispatchCodexFileLine(params json.RawMessage) {
-	p := decodeCodexProgressParams(params)
-	a.dispatchCodexFileProgress(p)
-}
-
-func (a *ACPAgent) dispatchCodexFileProgress(p codexProgressParams) {
+func (a *ACPAgent) dispatchCodexFileProgress(p codexProgressParams, sequence uint64) {
 	line := codexFileProgressLine(p)
 	if line == "" {
 		return
 	}
-	a.dispatchProgressEventToThread(p.ThreadID, line, codexFileProgressEvent(p, line))
+	a.dispatchProgressEventToThread(p.ThreadID, line, codexFileProgressEvent(p, line), sequence)
 }
 
-func (a *ACPAgent) dispatchCodexCommandProgress(p codexProgressParams) {
+func (a *ACPAgent) dispatchCodexCommandProgress(p codexProgressParams, sequence uint64) {
 	line := codexCommandProgressLine(p)
 	if line == "" {
 		return
 	}
-	a.dispatchProgressEventToThread(p.ThreadID, line, codexCommandProgressEvent(p, line))
+	a.dispatchProgressEventToThread(p.ThreadID, line, codexCommandProgressEvent(p, line), sequence)
 }
 
-func (a *ACPAgent) dispatchProgressToThread(threadID string, text string) {
-	a.dispatchToTurnCh(threadID, &codexTurnEvent{Kind: "progress", Text: text})
-}
-
-func (a *ACPAgent) dispatchProgressEventToThread(threadID string, text string, progress *codexProgressEvent) {
+func (a *ACPAgent) dispatchProgressEventToThread(threadID string, text string, progress *codexProgressEvent, sequence uint64) {
 	a.dispatchToTurnCh(threadID, &codexTurnEvent{
 		Kind:     "progress",
 		Text:     trimRunes(text, codexRealtimeLineMaxRunes),
 		Progress: progress,
+		Sequence: sequence,
 	})
 }
 
@@ -239,7 +277,9 @@ func codexCommandProgressLine(p codexProgressParams) string {
 
 // codexCommandProgressEvent 保留命令主动作，并把最新输出作为次要详情交给 turn 聚合器。
 func codexCommandProgressEvent(p codexProgressParams, line string) *codexProgressEvent {
-	event := &codexProgressEvent{Kind: "command"}
+	event := &codexProgressEvent{
+		ID: firstNonEmpty(p.ItemID, p.ID), Kind: "command", Status: p.Status,
+	}
 	if command := strings.TrimSpace(strings.Join(p.Command, " ")); command != "" {
 		event.Action = "运行 " + command
 		event.Detail = latestCodexRealtimeLine(p)

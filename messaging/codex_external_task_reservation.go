@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 var errExternalCodexTaskReservationConflict = errors.New("当前窗口已有其他 Codex 活动任务")
@@ -80,11 +82,15 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 		agentName: opts.agentName, reply: opts.reply,
 	})
 	runtimeOwner, ownerRevision := externalCodexTaskOwner(prepared.state)
+	trace, _ := observability.TraceFromContext(opts.ctx)
+	trace = trace.Branch(opts.agentName).WithConversation(opts.conversationID).
+		WithThreadTurn(opts.threadID, prepared.state.ActiveTurnID)
 	task, watchCtx := newActiveAgentTask(taskCtx, activeTaskMeta{
 		owner: opts.actorUserID, routeUserID: opts.routeUserID, agentName: opts.agentName,
 		message:      firstNonBlank(prepared.state.Preview, "共享 Codex 任务"),
 		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
 		codexThreadID: opts.threadID, codexTurnID: prepared.state.ActiveTurnID,
+		trace: trace,
 	})
 	control := &externalCodexTaskReservationControl{status: externalCodexTaskReserved}
 	task.phase = codexTaskReserved
@@ -93,7 +99,7 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 		opts: opts, state: prepared.state, watch: prepared.watch, task: task, ctx: watchCtx,
 	}
 	if prepared.state.Progress != "" {
-		task.recordProgress(time.Now(), prepared.state.Progress)
+		task.recordProgressText(time.Now(), prepared.state.Progress)
 	}
 	h.activeTasks[opts.conversationID] = task
 	return externalCodexTaskReservation{
@@ -143,6 +149,7 @@ func (h *Handler) activateExternalCodexTaskReservation(reservation externalCodex
 	if !activated {
 		return h.externalCodexTaskReservationActive(reservation)
 	}
+	h.recordTraceStage(runtime.task.traceSnapshot(), "task.observer_started", "running", "shared Codex turn observer started")
 	go h.runExternalCodexTaskWatcher(runtime)
 	return true
 }

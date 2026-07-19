@@ -7,6 +7,8 @@ ai_summary:
   source_of_truth:
     - "cmd/start.go"
     - "messaging/handler.go"
+    - "messaging/terminal_outbox.go"
+    - "observability/store.go"
     - "agent/codex_account.go"
     - "codexauth/store.go"
     - "platform/platform.go"
@@ -30,20 +32,16 @@ ai_summary:
 - Go 模块：`github.com/fastclaw-ai/weclaw`，以 `main.go` 和 `cmd/root.go` 进入 CLI。
 - 产品定位：把微信个人号和飞书消息接入 AI Agent，业务层通过 `platform` 抽象隔离平台差异。
 - 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。`.github/workflows/release.yml` 只负责从 `main` 调用该权威脚本，不得复制一套较弱的测试、构建或 Release 逻辑。发布入口先统一配置持久化 `GOCACHE`：`WECLAW_GOCACHE` 优先，其次保留调用方显式导出的 `GOCACHE`；本机 Darwin 数据盘共享根目录存在时使用项目专属缓存，其他主机回退到 `go env GOCACHE`。
-- Android profile：未检测到 Gradle 或 `AndroidManifest.xml`，当前只适用 `generic` profile。
 
 ## Core Directories
 
 - `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口；更新后重启与手动重启必须在停止旧服务前复用启动预检。
 - `config/`：配置结构、默认值、Agent 探测、工作目录白名单、管理员白名单和 API 安全校验。
 - `agent/`：统一 Agent 接口与各类 runtime；`codexauth/`：按 shared-host namespace 隔离的 OAuth profile、系统凭据库/显式文件后端、安全文件与跨进程事务锁。
-- `platform/`：跨平台消息、回复、注册表和访问控制抽象。
-- `messaging/`：命令路由、会话、审批、进度、任务状态和 Agent 调用主业务。
-- `feishu/`：飞书事件解析、会话范围、卡片、按钮、审批和权限提示。
-- `wechat/`、`ilink/`：微信个人号接入、入站消息、replier、token 和 monitor。
-- `api/`：本机 HTTP API，包含主动发送和 runtime 状态查询。
-- `web/`：Web 配置界面。
-- `docs/`、`tasks/`：上下文索引、当前任务记录和长期 lessons。
+- `platform/` 提供跨平台消息与回复抽象；`messaging/` 负责命令、会话、审批、结构化进展、任务状态、终态 outbox 和 Agent 调用。
+- `observability/`：端到端 Trace 上下文、固定字段事件、轮转 JSONL 存储、受保护查询和 Codex 线协议脱敏录制。
+- `feishu/` 负责飞书事件与交互；`wechat/`、`ilink/` 负责微信个人号接入、replier、token 和 monitor。
+- `api/` 提供本机 HTTP API；`web/` 提供配置界面；`docs/`、`tasks/` 保存上下文、当前任务和长期 lessons。
 
 ## Documentation Map
 
@@ -57,7 +55,7 @@ ai_summary:
 ## Common Task Reading Paths
 
 - 修改启动、停止、更新、远程管理命令或发布：先读 `cmd/start.go`、`cmd/update.go`、`cmd/restart_safety.go`、`messaging/admin_commands.go`、`scripts/release.sh`。
-- 修改消息命令或任务状态：先读 `messaging/handler.go`、`messaging/progress.go`、`messaging/codex_sessions.go`。
+- 修改消息、任务、终态投递或 Trace：先读 `messaging/handler.go`、`messaging/task_state.go`、`messaging/terminal_outbox.go`、`messaging/trace.go`、`observability/`、`agent/acp_rpc.go`、`agent/acp_read_loop.go`、`api/server.go` 和 `cmd/trace.go`。
 - 修改 Codex 或 Claude 行为：先读 `agent/acp_agent.go`、`agent/codex_app_server_host.go`、`agent/codex_host_supervisor.go`、`agent/codex_account.go`、`agent/codex_runtime_lease.go`、`codexauth/store.go`、`agent/acp_sessions.go`、`agent/acp_session_catalog.go`、`agent/claude_quota.go`、`agent/claude_quota_oauth.go`、`messaging/codex_sessions.go`、`messaging/codex_account_command.go`、`messaging/codex_remote_selection_store.go`、`messaging/codex_session_status.go`、`messaging/codex_browser.go`、`messaging/claude_sessions.go`、`messaging/claude_quota.go`、`messaging/agent_task.go`。
 - 修改飞书体验：先读 `feishu/adapter.go`、`feishu/session_scope.go`、`feishu/choice.go`、`feishu/approval_panel.go`。
 - 修改微信体验：先读 `wechat/`、`ilink/`、`messaging/progress.go`。
@@ -74,7 +72,9 @@ ai_summary:
 - 飞书最小权限应覆盖单聊入站、群聊 @ 入站、发消息、资源、会话、CardKit 和机器人菜单：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonly`、`im:message.group_at_msg.include_bot:readonly`、`im:message:send_as_bot`、`im:resource`、`im:chat`、`cardkit:card:read`、`cardkit:card:write`、`application:bot.basic_info:read`、`application:bot.menu:write`；`user` scopes 可为空。
 - 飞书 bot 的 `allowed_users`、`default_agent` 和 `progress` 按 `app_id` 隔离；`allowed_users` 支持应用级 `open_id` 和同开发商下稳定的 `union_id`，多机器人优先配置 `union_id`；新增、删除 bot 或修改 `app_id` 属于平台拓扑变化，需要重启。
 - 飞书未授权入站身份会在访问控制前写入 `~/.weclaw/feishu-identities.json`，但不会自动放行；管理员通过 `/feishu users pending/list/approve` 确认后才写入 `config.json`，本地只读查看使用 `weclaw feishu users pending/list`。
-- `/progress` 从飞书入口触发时必须按当前 `account_id` 写入账号级配置，广播、Codex 会话切换和共享 host 任务 watcher 也必须读取账号级进度配置。
+- `/progress` 从飞书入口触发时必须按当前 `account_id` 写入账号级配置，广播、Codex 会话切换和共享 host 任务 watcher 也必须读取账号级进度配置。Agent 到 messaging 使用 `agent.ProgressEvent` 传递 kind/state/id/path/sequence，旧字符串 Agent 只能在兼容边界包装；`Handler.activeTasks` 通过纯 reducer 保存唯一结构化视图，任务卡和 `/ps` 必须渲染同一 display text，终态水位线之后的旧 sequence 或晚到 watcher 不得覆盖终态。
+- 飞书任务卡成功写入完成终态后不再补发成功消息；失败或停止只有在卡片终态写入成功后才发送简短通知。任务终态卡片和文本先写入 `~/.weclaw/state/terminal-outbox.json` 再触发网络调用；文件固定为 `0600`、同目录原子 rename 并 fsync，启动后自动续投。CardKit checkpoint 固定 UUID 与单调 sequence，飞书文本固定消息 UUID，微信文本固定分片 client_id；语义是平台幂等辅助下的 at-least-once，不承诺 exactly-once。附件与远程图片不进入 v1 outbox，仍按原有校验和 best-effort 路径发送。
+- 每条入站消息创建一个 TraceID，排队续跑和广播 Agent 使用同根子 Span；message、task、turn、progress、reply 和 terminal outbox 只写固定字段事件到 `~/.weclaw/state/trace.jsonl`，路由键只落不可逆摘要，摘要和协议正文统一脱敏。文件固定 `0600`、目录固定 `0700`，单文件 10 MiB 后保留 3 个轮转备份。`weclaw trace` 在线只走真实 loopback 且继续校验 API token，服务存在但 API 不可达时失败关闭；离线仅只读本地 Trace。`WECLAW_CODEX_PROTOCOL_TRACE=1` 才记录 Codex 协议元数据，`WECLAW_CODEX_PROTOCOL_TRACE_PAYLOAD=1` 才额外记录有长度上限的脱敏 JSON；后者仍可能包含用户提示词和文件内容，只能临时诊断后关闭。
 - 飞书 `/cx ls`、`/cc ls` 的工作空间按钮只携带服务端生成的 5 分钟一次性 opaque token，并绑定 Agent、真实点击者和窗口 route；旧版数字索引卡片必须提示过期，用户手工输入数字命令仍保持兼容。分页使用绑定机器人账号、点击者、窗口、Agent 和列表层级的 5 分钟服务端快照，翻页只读取快照；卡片回调去重优先使用飞书 `event_id`，缺失时使用每次卡片渲染生成的 revision，不能仅用“原消息 ID + 页码命令”判断重复点击。
 - `/api/send` 在同一平台存在多个可主动发送账号时必须要求 `account_id`，不能静默选择第一个账号。
 - 飞书审批必须只发给任务发起人，并在回调写入幂等记录前校验点击者。

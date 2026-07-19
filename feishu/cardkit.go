@@ -18,6 +18,11 @@ type cardKitClient interface {
 	DestroyCard(ctx context.Context, cardID string) error
 }
 
+type idempotentCardKitClient interface {
+	SetStreamingIdempotent(ctx context.Context, cardID string, enabled bool, sequence int, operationID string) error
+	UpdateCardIdempotent(ctx context.Context, cardID string, cardJSON string, sequence int, operationID string) error
+}
+
 type sdkCardKitClient struct {
 	client *lark.Client
 	appID  string
@@ -48,6 +53,11 @@ func (c *sdkCardKitClient) CreateCard(ctx context.Context, cardJSON string) (str
 
 // SetStreaming 更新卡片 streaming_mode。
 func (c *sdkCardKitClient) SetStreaming(ctx context.Context, cardID string, enabled bool, sequence int) error {
+	return c.SetStreamingIdempotent(ctx, cardID, enabled, sequence, uuid.NewString())
+}
+
+// SetStreamingIdempotent 使用持久化 operation ID，使同一终态重试可由 CardKit 去重。
+func (c *sdkCardKitClient) SetStreamingIdempotent(ctx context.Context, cardID string, enabled bool, sequence int, operationID string) error {
 	settings, err := json.Marshal(map[string]any{"config": map[string]bool{"streaming_mode": enabled}})
 	if err != nil {
 		return err
@@ -55,7 +65,7 @@ func (c *sdkCardKitClient) SetStreaming(ctx context.Context, cardID string, enab
 	req := larkcardkit.NewSettingsCardReqBuilder().
 		CardId(cardID).
 		Body(larkcardkit.NewSettingsCardReqBodyBuilder().
-			Uuid(uuid.NewString()).
+			Uuid(operationID).
 			Sequence(sequence).
 			Settings(string(settings)).
 			Build()).
@@ -93,10 +103,15 @@ func (c *sdkCardKitClient) StreamContent(ctx context.Context, cardID string, ele
 
 // UpdateCard 全量更新卡片内容。
 func (c *sdkCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJSON string, sequence int) error {
+	return c.UpdateCardIdempotent(ctx, cardID, cardJSON, sequence, uuid.NewString())
+}
+
+// UpdateCardIdempotent 使用持久化 operation ID 重放同一张终态卡片。
+func (c *sdkCardKitClient) UpdateCardIdempotent(ctx context.Context, cardID string, cardJSON string, sequence int, operationID string) error {
 	req := larkcardkit.NewUpdateCardReqBuilder().
 		CardId(cardID).
 		Body(larkcardkit.NewUpdateCardReqBodyBuilder().
-			Uuid(uuid.NewString()).
+			Uuid(operationID).
 			Sequence(sequence).
 			Card(larkcardkit.NewCardBuilder().Type("card_json").Data(cardJSON).Build()).
 			Build()).

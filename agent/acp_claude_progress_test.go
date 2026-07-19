@@ -65,6 +65,23 @@ func TestClaudeACPProgressCarriesToolTitleAndSuppressesDuplicate(t *testing.T) {
 	}
 }
 
+func TestClaudeACPProgressEventCarriesIdentityStateAndSequence(t *testing.T) {
+	state := newClaudeACPProgressState()
+	event, ok := state.progressEvent(&sessionUpdate{
+		SessionUpdate: "tool_call", ToolCallID: "call-7", Title: "运行回归测试",
+		Status: "in_progress", Sequence: 42,
+	})
+	if !ok {
+		t.Fatal("structured tool progress must emit")
+	}
+	if event.ID != "tool:call-7" || event.Kind != ProgressKindTool || event.State != ProgressStateRunning || event.Sequence != 42 {
+		t.Fatalf("event=%#v", event)
+	}
+	if event.DisplayText() != "工具：运行回归测试（进行中）" || event.Summary != "运行回归测试" {
+		t.Fatalf("display=%q summary=%q", event.DisplayText(), event.Summary)
+	}
+}
+
 func TestClaudeACPProgressSuppressesNonAdjacentDuplicate(t *testing.T) {
 	state := newClaudeACPProgressState()
 	tool := &sessionUpdate{SessionUpdate: "tool_call", ToolCallID: "call-1", Title: "运行测试", Status: "in_progress"}

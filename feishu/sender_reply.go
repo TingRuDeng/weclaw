@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
@@ -14,6 +15,15 @@ func (s *sdkMessageSender) ReplyText(ctx context.Context, messageID string, text
 		return err
 	}
 	return s.replyMessage(ctx, messageID, larkim.MsgTypeText, content)
+}
+
+// ReplyTextIdempotent 使用飞书回复 UUID 去重同一终态文本重试。
+func (s *sdkMessageSender) ReplyTextIdempotent(ctx context.Context, messageID string, text string, operationID string) error {
+	content, err := buildTextMessageContent(text)
+	if err != nil {
+		return err
+	}
+	return s.replyMessageWithUUID(ctx, messageID, larkim.MsgTypeText, content, operationID)
 }
 
 // ReplyImage 上传本地图片并回复到原消息 / 话题。
@@ -48,7 +58,11 @@ func (s *sdkMessageSender) ReplyCard(ctx context.Context, messageID string, card
 
 // replyMessage 调用飞书消息回复接口，统一处理 API 错误。
 func (s *sdkMessageSender) replyMessage(ctx context.Context, messageID string, msgType string, content string) error {
-	code, msg, err := s.replyMessageRaw(ctx, messageID, msgType, content)
+	return s.replyMessageWithUUID(ctx, messageID, msgType, content, "")
+}
+
+func (s *sdkMessageSender) replyMessageWithUUID(ctx context.Context, messageID string, msgType string, content string, operationID string) error {
+	code, msg, err := s.replyMessageRawWithUUID(ctx, messageID, msgType, content, operationID)
 	if err != nil {
 		return err
 	}
@@ -58,17 +72,20 @@ func (s *sdkMessageSender) replyMessage(ctx context.Context, messageID string, m
 	return nil
 }
 
-func (s *sdkMessageSender) replyMessageRaw(ctx context.Context, messageID string, msgType string, content string) (int, string, error) {
+func (s *sdkMessageSender) replyMessageRawWithUUID(ctx context.Context, messageID string, msgType string, content string, operationID string) (int, string, error) {
 	if s.reply != nil {
 		return s.reply(ctx, messageID, msgType, content, true)
 	}
+	body := larkim.NewReplyMessageReqBodyBuilder().
+		MsgType(msgType).
+		Content(content).
+		ReplyInThread(true)
+	if strings.TrimSpace(operationID) != "" {
+		body.Uuid(operationID)
+	}
 	req := larkim.NewReplyMessageReqBuilder().
 		MessageId(messageID).
-		Body(larkim.NewReplyMessageReqBodyBuilder().
-			MsgType(msgType).
-			Content(content).
-			ReplyInThread(true).
-			Build()).
+		Body(body.Build()).
 		Build()
 	resp, err := s.client.Im.V1.Message.Reply(ctx, req)
 	if err != nil {

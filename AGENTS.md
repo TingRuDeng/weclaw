@@ -12,6 +12,7 @@ ai_summary:
     - "tasks/todo.md"
     - "scripts/release.sh"
     - "codexauth/store.go"
+    - "observability/store.go"
     - "go.mod"
   verify_with:
     - "python3 scripts/validate_docs.py . --profile generic"
@@ -46,6 +47,7 @@ ai_summary:
 - WeClaw 把微信个人号和飞书消息接入 AI Agent；业务层尽量通过 `platform` 抽象隔离平台差异。
 - `cmd/start.go` 负责加载配置、创建 `messaging.Handler`、启动 HTTP API 与平台 registry。
 - `messaging/handler.go` 是命令路由、会话、审批、进度、任务状态和 Agent 调用的主要业务入口。
+- `observability/` 提供固定字段、默认脱敏的端到端 Trace；本机 CLI/API 可按 message、task、thread、turn 或 stage 查询，Codex 协议正文只有显式启用后才会以脱敏形式记录。
 - `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；Codex 生产路径使用稳定 Unix socket 上的单一共享 app-server，客户端按上游 WebSocket-over-UDS 协议连接，窗口只保存 frontend binding，Codex Companion 第二 writer 已停用。
 - `codexauth/` 管理 shared-host 级 Codex ChatGPT OAuth profile：系统凭据库优先、受保护文件显式降级；在线切换由 `agent/codex_account.go` 在 task/lease/thread 空闲门禁内停止和验证真实受管 Host，不能修改窗口 workspace/thread binding。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。

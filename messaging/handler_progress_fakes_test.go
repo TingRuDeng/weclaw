@@ -16,6 +16,22 @@ type fakeProgressAgent struct {
 	delay          time.Duration
 }
 
+type fakeStructuredProgressAgent struct {
+	fakeProgressAgent
+	structuredCalled bool
+	events           []agent.ProgressEvent
+}
+
+func (f *fakeStructuredProgressAgent) ChatWithProgressEvents(_ context.Context, _ string, _ string, onProgress func(agent.ProgressEvent)) (string, error) {
+	f.structuredCalled = true
+	for _, event := range f.events {
+		if onProgress != nil {
+			onProgress(event)
+		}
+	}
+	return f.reply, f.err
+}
+
 func (f *fakeProgressAgent) ChatWithProgress(_ context.Context, _ string, _ string, onProgress func(delta string)) (string, error) {
 	f.progressCalled = true
 	for _, delta := range f.progressDeltas {

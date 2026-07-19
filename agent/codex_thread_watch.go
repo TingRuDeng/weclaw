@@ -12,12 +12,26 @@ const (
 )
 
 type codexThreadWatchOptions struct {
-	conversationID string
-	threadID       string
-	targetTurnID   string
-	turnCh         <-chan *codexTurnEvent
-	onProgress     func(string)
-	reconcile      <-chan time.Time
+	conversationID  string
+	threadID        string
+	targetTurnID    string
+	turnCh          <-chan *codexTurnEvent
+	onProgress      func(string)
+	onProgressEvent func(ProgressEvent)
+	reconcile       <-chan time.Time
+}
+
+// WatchCodexThreadEvents 观察已运行 turn，并保留结构化进展字段。
+func (a *ACPAgent) WatchCodexThreadEvents(ctx context.Context, conversationID string, threadID string, onProgress func(ProgressEvent)) (string, error) {
+	if a.protocol != protocolCodexAppServer {
+		return "", fmt.Errorf("agent is not codex app-server")
+	}
+	ticker := time.NewTicker(codexThreadWatchReconcileInterval)
+	defer ticker.Stop()
+	return a.watchCodexThreadWithReconcile(ctx, codexThreadWatchOptions{
+		conversationID: conversationID, threadID: threadID,
+		onProgressEvent: onProgress, reconcile: ticker.C,
+	})
 }
 
 // WatchCodexThread 接管已经运行的 Codex thread，并等待当前 turn 完成。
@@ -109,7 +123,11 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 			if evt.Kind == "error" {
 				return "", fmt.Errorf("%w: %s", ErrCodexTurnTerminal, diagnostics.withError(evt.Text))
 			}
-			collectCodexTurnText(assembler, evt, opts.onProgress, progressState, diagnostics)
+			collectCodexTurnText(
+				assembler, evt,
+				progressCallbacks{onText: opts.onProgress, onEvent: opts.onProgressEvent},
+				progressState, diagnostics,
+			)
 			if evt.Kind == "completed" {
 				return a.attachedCodexFinalText(ctx, opts.conversationID, opts.threadID, assembler)
 			}
@@ -188,20 +206,20 @@ func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTu
 	return nil
 }
 
-func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, onProgress func(string), progressState *codexProgressState, diagnostics *codexTurnDiagnostics) {
+func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, callbacks progressCallbacks, progressState *codexProgressState, diagnostics *codexTurnDiagnostics) {
 	if evt.Kind == "progress" {
-		if progressText, ok := progressState.record(evt); ok {
+		if event, ok := progressState.recordEvent(evt); ok {
+			progressText := event.DisplayText()
 			diagnostics.remember(progressText)
-			if onProgress != nil {
-				onProgress(progressText)
-			}
+			callbacks.emit(event)
 		}
 	}
 	if evt.Delta != "" {
-		if onProgress != nil {
-			if progressText, ok := progressState.emitGenerating(); ok {
+		if callbacks.enabled() {
+			if event, ok := progressState.emitGeneratingEvent(); ok {
+				progressText := event.DisplayText()
 				diagnostics.remember(progressText)
-				onProgress(progressText)
+				callbacks.emit(event)
 			}
 		}
 		assembler.addDelta(evt.ItemID, evt.Delta)

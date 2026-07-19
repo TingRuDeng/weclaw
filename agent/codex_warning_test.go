@@ -64,7 +64,7 @@ func TestReadLoopRoutesCodexWarningAsProgress(t *testing.T) {
 	a.readLoop()
 
 	evt := <-turnCh
-	if evt.Kind != "progress" || !strings.Contains(evt.Text, "HTTPS") {
+	if evt.Kind != "progress" || !strings.Contains(evt.Text, "HTTPS") || evt.Sequence != 1 || evt.Progress == nil || evt.Progress.Kind != "status" || evt.Progress.Status != "running" {
 		t.Fatalf("warning event=%#v，期望 HTTPS 非致命进度", evt)
 	}
 }

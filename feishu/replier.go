@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/google/uuid"
 )
 
 const feishuTextChunkRunes = 30000
@@ -15,6 +16,7 @@ const feishuTextChunkRunes = 30000
 type Replier struct {
 	sender       messageSender
 	cardKit      cardKitClient
+	accountID    string
 	openID       string
 	replyToID    string
 	taskCards    *taskCardRegistry
@@ -44,6 +46,11 @@ func newReplierWithTaskCards(sender messageSender, openID string, cardKit cardKi
 	return &Replier{sender: sender, cardKit: cardKit, openID: openID, taskCards: cards}
 }
 
+func (r *Replier) withDeliveryAccount(accountID string) *Replier {
+	r.accountID = strings.TrimSpace(accountID)
+	return r
+}
+
 // Capabilities 返回飞书回复器能力。
 func (r *Replier) Capabilities() platform.Capabilities {
 	streaming := r.cardKit != nil
@@ -68,6 +75,46 @@ func (r *Replier) SendText(ctx context.Context, text string) error {
 		}
 	}
 	return nil
+}
+
+// SendTextIdempotent 为每个文本分片派生稳定 UUID，供 outbox 安全重试。
+func (r *Replier) SendTextIdempotent(ctx context.Context, text string, deliveryKey string) error {
+	chunks := splitFeishuText(text)
+	sender, idempotent := r.sender.(idempotentMessageSender)
+	if !idempotent {
+		return platform.ErrUnsupported
+	}
+	for index, chunk := range chunks {
+		operationID := terminalTextOperationID(deliveryKey, index)
+		if r.replyToID != "" {
+			if err := sender.ReplyTextIdempotent(ctx, r.replyToID, chunk, operationID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := sender.SendTextIdempotent(ctx, r.openID, chunk, operationID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func terminalTextOperationID(deliveryKey string, index int) string {
+	seed := fmt.Sprintf("%s:%d", strings.TrimSpace(deliveryKey), index)
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(seed)).String()
+}
+
+// DeliveryRoute 返回 outbox 可持久化的最小飞书路由。
+func (r *Replier) DeliveryRoute() platform.DeliveryRoute {
+	return platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: r.accountID,
+		ChatID: r.openID, ReplyToID: r.replyToID,
+	}
+}
+
+// DeliverTerminal 重放已经持久化的 CardKit 终态操作。
+func (r *Replier) DeliverTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {
+	return deliverFeishuTerminalCheckpoint(ctx, r.cardKit, checkpoint)
 }
 
 // SendImage 上传并发送本地图片。

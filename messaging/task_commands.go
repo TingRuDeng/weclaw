@@ -151,7 +151,7 @@ func (h *Handler) steerPendingGuideToExternalCodex(req externalCodexTaskCommand)
 		return fmt.Sprintf("发送到当前共享 Codex 任务失败: %v", err), true
 	}
 	h.finishExternalCodexGuide(req.key, task, true)
-	task.recordProgress(time.Now(), "已发送引导对话。")
+	task.recordLocalProgressText(time.Now(), "已发送引导对话。")
 	return "已发送到当前共享 Codex 任务。", true
 }
 

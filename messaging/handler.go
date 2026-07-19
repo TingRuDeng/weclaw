@@ -11,6 +11,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -88,6 +89,16 @@ type Handler struct {
 	adminTimeout            time.Duration
 	codexCommandTimeout     time.Duration
 	codexLockWaitTimeout    time.Duration
+	terminalOutboxMu        sync.RWMutex
+	terminalOutbox          *terminalOutbox
+	traceRecorder           observability.Recorder
+	traceErrorMu            sync.Mutex
+	lastTraceErrorAt        time.Time
+}
+
+// SetTraceRecorder 配置固定字段的诊断 Trace；写入失败不得改变消息业务终态。
+func (h *Handler) SetTraceRecorder(recorder observability.Recorder) {
+	h.traceRecorder = recorder
 }
 
 const (
@@ -113,13 +124,18 @@ func (h *Handler) HandlePlatformMessage(ctx context.Context, incoming platform.I
 }
 
 func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.IncomingMessage, replyWriter platform.Replier) {
+	routeUserID := platformMessageRouteUserID(msg)
+	trace := newPlatformMessageTrace(msg, routeUserID)
+	ctx = observability.ContextWithTrace(ctx, trace)
+	h.recordTraceStage(trace, "message.received", "received", traceSummaryForIncoming(msg, platformMessageText(msg)))
 	if h.isDuplicatePlatformMessage(msg) {
+		h.recordTraceStage(trace, "message.duplicate", "dropped", "duplicate platform message")
 		return
 	}
 	runtime := platformMessageRuntime{
 		ctx: contextWithWorkspaceAdmin(ctx, h.isAdminMessage(msg)),
-		msg: msg, reply: replyWriter, routeUserID: platformMessageRouteUserID(msg),
-		text: strings.TrimSpace(platformMessageText(msg)),
+		msg: msg, reply: replyWriter, routeUserID: routeUserID,
+		text: strings.TrimSpace(platformMessageText(msg)), trace: trace,
 	}
 	if h.handlePlatformRawCommand(runtime) {
 		return

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 func (a *ACPAgent) rpc(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
@@ -44,12 +46,22 @@ func (a *ACPAgent) notify(method string, params interface{}) error {
 
 // writeJSONLine 在写入 ACP stdin 前检查 runtime 状态，避免读循环退出后 nil stdin 触发 panic。
 func (a *ACPAgent) writeJSONLine(data []byte) error {
+	return a.writeJSONLineWithTrace(data, observability.TraceContext{})
+}
+
+// writeJSONLineWithTrace 在显式诊断开启时把出站请求与当前消息 Trace 关联。
+func (a *ACPAgent) writeJSONLineWithTrace(data []byte, trace observability.TraceContext) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.stdin == nil {
+		a.mu.Unlock()
 		return fmt.Errorf("ACP runtime is not running")
 	}
 	_, err := fmt.Fprintf(a.stdin, "%s\n", data)
+	epoch := a.wireEpoch
+	a.mu.Unlock()
+	if err == nil {
+		a.recordProtocolTrace("outbound", epoch, 0, trace, data)
+	}
 	return err
 }
 
@@ -85,7 +97,8 @@ func (a *ACPAgent) callWithSequence(ctx context.Context, method string, params i
 		return nil, 0, fmt.Errorf("marshal request: %w", err)
 	}
 
-	err = a.writeJSONLine(data)
+	trace, _ := observability.TraceFromContext(ctx)
+	err = a.writeJSONLineWithTrace(data, trace)
 	if err != nil {
 		return nil, 0, fmt.Errorf("write to stdin: %w", err)
 	}

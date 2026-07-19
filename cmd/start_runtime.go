@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -12,6 +14,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/messaging"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -20,6 +23,7 @@ type startRuntime struct {
 	cfg      *config.Config
 	handler  *messaging.Handler
 	registry *platform.Registry
+	trace    *observability.Store
 }
 
 type backgroundStartOps struct {
@@ -75,13 +79,14 @@ func runForegroundStart(cfg *config.Config) error {
 	if err := detectStartAgents(cfg); err != nil {
 		return err
 	}
-	handler := newStartHandler(cfg)
+	traceStore := newStartTraceStore()
+	handler := newStartHandlerWithTrace(cfg, traceStore)
 	startDefaultAgent(ctx, handler, cfg)
 	registry, err := newStartRegistry(accounts, cfg, handler)
 	if err != nil {
 		return err
 	}
-	runtime := startRuntime{ctx: ctx, cfg: cfg, handler: handler, registry: registry}
+	runtime := startRuntime{ctx: ctx, cfg: cfg, handler: handler, registry: registry, trace: traceStore}
 	if err := runtime.startServices(); err != nil {
 		return err
 	}
@@ -118,16 +123,45 @@ func detectStartAgents(cfg *config.Config) error {
 	return cfg.ValidateClaudeACPAgents()
 }
 
-// newStartHandler 创建 Handler 并装载启动时所需的全部静态配置。
-func newStartHandler(cfg *config.Config) *messaging.Handler {
+func newStartHandlerWithTrace(cfg *config.Config, traceStore *observability.Store) *messaging.Handler {
+	var protocolTrace observability.ProtocolRecorder
+	if traceStore != nil && codexProtocolTraceEnabled() {
+		protocolTrace = traceStore
+	}
 	logAvailableAgents(cfg)
 	handler := messaging.NewHandler(func(ctx context.Context, name string) agent.Agent {
-		return createAgentByName(ctx, cfg, name)
+		return createAgentByName(ctx, cfg, name, protocolTrace)
 	}, saveDefaultAgent)
+	handler.SetTraceRecorder(traceStore)
 	configureHandlerMetadata(handler, cfg)
 	configureHandlerState(handler)
 	configureHandlerAccess(handler, cfg)
 	return handler
+}
+
+func newStartTraceStore() *observability.Store {
+	path := observability.DefaultPath()
+	store, err := observability.NewStore(observability.StoreOptions{
+		Path: path, IncludeProtocolPayload: envBool("WECLAW_CODEX_PROTOCOL_TRACE_PAYLOAD"),
+	})
+	if err != nil {
+		log.Printf("[trace] disabled: %v", err)
+		return nil
+	}
+	return store
+}
+
+func codexProtocolTraceEnabled() bool {
+	return envBool("WECLAW_CODEX_PROTOCOL_TRACE") || envBool("WECLAW_CODEX_PROTOCOL_TRACE_PAYLOAD")
+}
+
+func envBool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // logAvailableAgents 记录可用 Agent，便于确认自动探测结果。
@@ -240,12 +274,16 @@ func newStartRegistry(accounts []*ilink.Credentials, cfg *config.Config, handler
 
 // startServices 启动热加载、HTTP API 与重启完成通知。
 func (runtime startRuntime) startServices() error {
+	if err := runtime.handler.StartTerminalOutbox(runtime.ctx, runtime.registry, messaging.DefaultTerminalOutboxFile()); err != nil {
+		return fmt.Errorf("start terminal outbox: %w", err)
+	}
 	go runSoftConfigReloader(runtime.ctx, runtime.handler, runtime.registry)
 	apiServer := api.NewServer(nil, runtime.apiAddress(),
 		api.WithToken(runtime.cfg.APIToken),
 		api.WithRegistry(runtime.registry),
 		api.WithRuntimeStatusProvider(runtime.handler),
 		api.WithCodexAccountController(runtime.handler),
+		api.WithTraceQueryProvider(runtime.trace),
 	)
 	if err := apiServer.Validate(); err != nil {
 		return err

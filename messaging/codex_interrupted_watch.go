@@ -12,13 +12,13 @@ import (
 )
 
 // reconcileInterruptedCodexTurn 仅通过原 thread 和 turn 的 rollout 核对待确认中断。
-func (h *Handler) reconcileInterruptedCodexTurn(ctx context.Context, interrupted *agent.CodexTurnInterruptedError, onProgress func(string)) codexExternalWatchResult {
+func (h *Handler) reconcileInterruptedCodexTurn(ctx context.Context, interrupted *agent.CodexTurnInterruptedError, onProgress func(agent.ProgressEvent)) codexExternalWatchResult {
 	if interrupted == nil || strings.TrimSpace(interrupted.ThreadID) == "" || strings.TrimSpace(interrupted.TurnID) == "" {
 		err := errors.New("Codex 中断事件缺少 thread 或 turn，无法确认任务终态")
 		return codexExternalWatchResult{Err: err, Terminal: true, Failed: true, Source: "app_server"}
 	}
 	if onProgress != nil {
-		onProgress("Codex 连接发生切换，正在继续跟踪当前任务。")
+		onProgress(agent.TextProgressEvent("Codex 连接发生切换，正在继续跟踪当前任务。"))
 	}
 	log.Printf("[codex-watch] reconciling interrupted turn (thread=%s, turn=%s, source=app_server)", interrupted.ThreadID, interrupted.TurnID)
 	result := h.watchInterruptedCodexRollout(ctx, interrupted, onProgress)
@@ -27,7 +27,7 @@ func (h *Handler) reconcileInterruptedCodexTurn(ctx context.Context, interrupted
 }
 
 // watchInterruptedCodexRollout 等待目标 turn 出现后，从当前文件尾持续读取其终态。
-func (h *Handler) watchInterruptedCodexRollout(ctx context.Context, interrupted *agent.CodexTurnInterruptedError, onProgress func(string)) codexExternalWatchResult {
+func (h *Handler) watchInterruptedCodexRollout(ctx context.Context, interrupted *agent.CodexTurnInterruptedError, onProgress func(agent.ProgressEvent)) codexExternalWatchResult {
 	state, err := h.awaitInterruptedCodexTurn(ctx, interrupted.ThreadID, interrupted.TurnID)
 	if err != nil {
 		return classifyCodexWatchResult("", err, "rollout")
@@ -35,7 +35,7 @@ func (h *Handler) watchInterruptedCodexRollout(ctx context.Context, interrupted 
 	if !state.Active {
 		return terminalCodexRolloutState(state)
 	}
-	text, err := watchCodexRolloutTask(ctx, state, onProgress)
+	text, err := watchCodexRolloutTask(ctx, state, textProgressCallback(onProgress))
 	return classifyCodexWatchResult(text, err, "rollout")
 }
 

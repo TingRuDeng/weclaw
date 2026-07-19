@@ -137,7 +137,7 @@ func TestSendToNamedAgentNativeStreamConsumesFinalReply(t *testing.T) {
 	}
 }
 
-func TestSendToNamedAgentNativeStreamCompletesCardAndNotifies(t *testing.T) {
+func TestSendToNamedAgentNativeStreamCompletesCardWithoutSuccessNotice(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.agents["mock"] = &fakeProgressAgent{fakeAgent: fakeAgent{reply: "最终结果"}}
 	cfg := config.DefaultProgressConfig()
@@ -152,8 +152,8 @@ func TestSendToNamedAgentNativeStreamCompletesCardAndNotifies(t *testing.T) {
 	if reply.Stream.Completed != "[mock] 最终结果" {
 		t.Fatalf("completed = %q", reply.Stream.Completed)
 	}
-	if len(reply.Texts) != 1 || reply.Texts[0] != "任务已完成，请查看上方卡片。" {
-		t.Fatalf("texts = %#v", reply.Texts)
+	if len(reply.Texts) != 0 {
+		t.Fatalf("texts = %#v, want final result only in task card", reply.Texts)
 	}
 }
 
@@ -191,8 +191,8 @@ func TestClaudeTaskOpensNativeStreamBeforeAgentReturns(t *testing.T) {
 	if reply.Stream.Completed != "[claude] 第1条结果" {
 		t.Fatalf("completed = %q", reply.Stream.Completed)
 	}
-	if len(reply.Texts) != 1 || reply.Texts[0] != "任务已完成，请查看上方卡片。" {
-		t.Fatalf("texts = %#v", reply.Texts)
+	if len(reply.Texts) != 0 {
+		t.Fatalf("texts = %#v, want final result only in task card", reply.Texts)
 	}
 }
 

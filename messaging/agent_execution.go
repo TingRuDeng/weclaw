@@ -7,6 +7,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -21,6 +22,7 @@ type agentMessageRequest struct {
 	name         string
 	message      string
 	clientID     string
+	trace        observability.TraceContext
 }
 
 type synchronousAgentRuntime struct {
@@ -82,6 +84,9 @@ func (h *Handler) sendDefaultAgentEcho(req agentMessageRequest, agentErr error) 
 
 // dispatchAgentMessage 根据 Agent 能力选择专用后台执行器或通用同步执行器。
 func (h *Handler) dispatchAgentMessage(req agentMessageRequest, ag agent.Agent, prefix string) {
+	req.trace = req.trace.Branch(req.name)
+	req.ctx = observability.ContextWithTrace(req.ctx, req.trace)
+	h.recordTraceStage(req.trace, "agent.dispatched", "accepted", "agent="+req.name)
 	runtime := agentDispatchRuntime{
 		req: req, agent: ag, prefix: prefix,
 		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, req.name),
@@ -106,7 +111,7 @@ func newCodexAgentTaskOptions(runtime agentDispatchRuntime) codexAgentTaskOption
 		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
 		reply: runtime.req.reply, agentName: runtime.req.name, message: runtime.req.message,
 		clientID: runtime.req.clientID, replyPrefix: runtime.prefix,
-		agent: runtime.agent, progressCfg: runtime.progressCfg,
+		agent: runtime.agent, progressCfg: runtime.progressCfg, trace: runtime.req.trace,
 	}
 }
 
@@ -116,7 +121,7 @@ func newAgentTaskOptions(runtime agentDispatchRuntime) agentTaskOptions {
 		ctx: runtime.req.ctx, platformName: runtime.req.platformName, accountID: runtime.req.accountID,
 		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID, reply: runtime.req.reply,
 		agentName: runtime.req.name, message: runtime.req.message, replyPrefix: runtime.prefix,
-		agent: runtime.agent, progressCfg: runtime.progressCfg,
+		agent: runtime.agent, progressCfg: runtime.progressCfg, trace: runtime.req.trace,
 	}
 }
 
@@ -126,9 +131,10 @@ func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 	key := h.agentExecutionKeyForRoute(runtime.req.userID, runtime.req.routeUserID, runtime.req.name, runtime.agent)
 	admission := h.beginOrQueueActiveTask(agentCtx, key, activeTaskMeta{
 		owner: runtime.req.userID, routeUserID: runtime.req.routeUserID,
-		agentName: runtime.req.name, message: runtime.req.message,
+		agentName: runtime.req.name, message: runtime.req.message, trace: runtime.req.trace,
 	}, h.pendingSynchronousAgentTask(runtime))
 	if admission.status != activeTaskStarted {
+		h.recordTaskAdmissionTrace(runtime.req.trace, admission.status)
 		cancel()
 		replyAgentTaskAdmission(agentTaskAdmissionNotice{
 			ctx: runtime.replyCtx, reply: runtime.req.reply, userID: runtime.req.userID,
@@ -144,7 +150,7 @@ func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 		taskCtx: taskCtx, replyCtx: runtime.replyCtx, reply: runtime.req.reply,
 		task: admission.task, cancel: cancel, executionKey: key,
 		userID: runtime.req.userID, agentName: runtime.req.name, message: runtime.req.message,
-		replyPrefix: runtime.prefix, progressConfig: runtime.progressCfg,
+		replyPrefix: runtime.prefix, progressConfig: runtime.progressCfg, trace: admission.task.traceSnapshot(),
 	})
 	defer h.completeAgentTaskLifecycle(runtime.lifecycle)
 	defer unlock()
@@ -171,7 +177,8 @@ func (h *Handler) executeSynchronousAgentMessage(runtime synchronousAgentRuntime
 		h.finishSynchronousAgentMessage(synchronousAgentResult{runtime: runtime, err: err})
 		return
 	}
-	reply, err := h.chatWithAgentWithProgress(
+	runtime.lifecycle.opts.task.setTraceConversation(conversationID, "")
+	reply, err := h.chatWithAgentWithProgressEvents(
 		runtime.lifecycle.opts.taskCtx, runtime.agent, conversationID,
 		runtime.req.message, runtime.lifecycle.recordProgress,
 	)

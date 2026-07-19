@@ -23,28 +23,31 @@ type codexLifecycleItem struct {
 
 // handleCodexItemStarted 把完整 item 快照转换成最终文本或当前动作进度。
 func (a *ACPAgent) handleCodexItemStarted(params json.RawMessage) {
-	p, ok := decodeCodexItemLifecycle(params)
-	if !ok {
-		return
-	}
-	if p.Item.Type == "agentMessage" {
-		a.dispatchCodexItemText(p, "")
-		return
-	}
-	a.dispatchCodexItemProgress(p)
+	a.handleCodexItemStartedAt(params, 0)
 }
 
-// handleCodexItemCompleted 把最终 item 作为正文兜底，并刷新命令或文件终态。
-func (a *ACPAgent) handleCodexItemCompleted(params json.RawMessage) {
+func (a *ACPAgent) handleCodexItemStartedAt(params json.RawMessage, sequence uint64) {
 	p, ok := decodeCodexItemLifecycle(params)
 	if !ok {
 		return
 	}
 	if p.Item.Type == "agentMessage" {
-		a.dispatchCodexItemText(p, "item_completed")
+		a.dispatchCodexItemText(p, "", sequence)
 		return
 	}
-	a.dispatchCodexItemProgress(p)
+	a.dispatchCodexItemProgress(p, sequence)
+}
+
+func (a *ACPAgent) handleCodexItemCompletedAt(params json.RawMessage, sequence uint64) {
+	p, ok := decodeCodexItemLifecycle(params)
+	if !ok {
+		return
+	}
+	if p.Item.Type == "agentMessage" {
+		a.dispatchCodexItemText(p, "item_completed", sequence)
+		return
+	}
+	a.dispatchCodexItemProgress(p, sequence)
 }
 
 func decodeCodexItemLifecycle(params json.RawMessage) (codexItemLifecycleParams, bool) {
@@ -52,17 +55,18 @@ func decodeCodexItemLifecycle(params json.RawMessage) (codexItemLifecycleParams,
 	return p, json.Unmarshal(params, &p) == nil
 }
 
-func (a *ACPAgent) dispatchCodexItemText(p codexItemLifecycleParams, kind string) {
+func (a *ACPAgent) dispatchCodexItemText(p codexItemLifecycleParams, kind string, sequence uint64) {
 	for _, content := range p.Item.Content {
 		if content.Type == "text" && content.Text != "" {
-			a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: kind, ItemID: p.Item.ID, Text: content.Text})
+			a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: kind, ItemID: p.Item.ID, Text: content.Text, Sequence: sequence})
 		}
 	}
 }
 
-func (a *ACPAgent) dispatchCodexItemProgress(p codexItemLifecycleParams) {
+func (a *ACPAgent) dispatchCodexItemProgress(p codexItemLifecycleParams, sequence uint64) {
 	progress := codexProgressParams{
 		ThreadID: p.ThreadID,
+		ItemID:   p.Item.ID,
 		Status:   p.Item.Status,
 		Output:   p.Item.AggregatedOutput,
 		Command:  p.Item.Command,
@@ -71,8 +75,8 @@ func (a *ACPAgent) dispatchCodexItemProgress(p codexItemLifecycleParams) {
 	}
 	switch p.Item.Type {
 	case "commandExecution":
-		a.dispatchCodexCommandProgress(progress)
+		a.dispatchCodexCommandProgress(progress, sequence)
 	case "fileChange":
-		a.dispatchCodexFileProgress(progress)
+		a.dispatchCodexFileProgress(progress, sequence)
 	}
 }

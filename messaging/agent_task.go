@@ -7,6 +7,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -24,6 +25,7 @@ type agentTaskOptions struct {
 	agent         agent.Agent
 	progressCfg   config.ProgressConfig
 	claudeBinding claudeTaskBindingSnapshot
+	trace         observability.TraceContext
 }
 
 type agentTaskRuntime struct {
@@ -62,8 +64,10 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	pending := pendingAgentTask{message: opts.message, run: func() { h.startAgentTask(opts) }}
 	admission := h.beginOrQueueClaudeTask(agentCtx, key, activeTaskMeta{
 		owner: opts.userID, routeUserID: opts.routeUserID, agentName: opts.agentName, message: opts.message,
+		trace: opts.trace.WithSession(opts.claudeBinding.SessionID), sessionID: opts.claudeBinding.SessionID,
 	}, pending)
 	if admission.status != activeTaskStarted {
+		h.recordTaskAdmissionTrace(opts.trace, admission.status)
 		cancel()
 		replyAgentTaskAdmission(agentTaskAdmissionNotice{
 			ctx: opts.ctx, reply: opts.reply, userID: opts.userID,
@@ -76,7 +80,7 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 			taskCtx: admission.taskCtx, replyCtx: opts.ctx, reply: opts.reply,
 			task: admission.task, cancel: cancel, executionKey: key,
 			userID: opts.userID, agentName: opts.agentName, workspaceRoot: opts.workspaceRoot, message: opts.message,
-			replyPrefix: opts.replyPrefix, progressConfig: opts.progressCfg,
+			replyPrefix: opts.replyPrefix, progressConfig: opts.progressCfg, trace: admission.task.traceSnapshot(),
 		}),
 	}
 	go h.runAgentTask(runtime)
@@ -102,7 +106,8 @@ func (h *Handler) runAgentTask(runtime agentTaskRuntime) {
 		h.finishAgentTaskLifecycle(runtime.lifecycle, "", err)
 		return
 	}
-	reply, err := h.chatWithAgentWithProgress(
+	runtime.lifecycle.opts.task.setTraceConversation(conversationID, runtime.opts.claudeBinding.SessionID)
+	reply, err := h.chatWithAgentWithProgressEvents(
 		runtime.lifecycle.opts.taskCtx, runtime.opts.agent, conversationID,
 		runtime.opts.message, runtime.lifecycle.recordProgress,
 	)

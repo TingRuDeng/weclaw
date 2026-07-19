@@ -29,7 +29,9 @@ func codexFileProgressLine(p codexProgressParams) string {
 }
 
 func codexFileProgressEvent(p codexProgressParams, line string) *codexProgressEvent {
-	event := &codexProgressEvent{Kind: "file", Action: line}
+	event := &codexProgressEvent{
+		ID: firstNonEmpty(p.ItemID, p.ID), Kind: "file", Action: line, Status: p.Status,
+	}
 	if change, ok := firstCodexFileChange(p.Changes); ok {
 		event.FilePath = strings.TrimSpace(change.Path)
 		return event

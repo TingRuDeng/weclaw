@@ -115,7 +115,7 @@ func (a *Adapter) attachReservedResources(req reservedResourceRequest) (bool, er
 // handleDedupOwnershipLoss 明确告知用户原处理者已失去消息处理权。
 func (a *Adapter) handleDedupOwnershipLoss(ctx context.Context, msg platform.IncomingMessage) error {
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
-	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit)
+	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit).withDeliveryAccount(a.creds.AppID)
 	if err := replier.SendText(ctx, "消息处理状态已失效，请重新发送。"); err != nil {
 		log.Printf("[feishu] failed to send dedup ownership loss notice: %v", err)
 		return err
@@ -132,7 +132,7 @@ func (a *Adapter) handleResourceDownloadFailure(ctx context.Context, msg platfor
 		notice = "附件获取失败：文件过大或资源不可用，请重新发送。"
 	}
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
-	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit)
+	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit).withDeliveryAccount(a.creds.AppID)
 	if sendErr := replier.SendText(ctx, notice); sendErr != nil {
 		log.Printf("[feishu] failed to send resource download failure notice: %v", sendErr)
 		reservation.release()
@@ -383,5 +383,5 @@ func regularCardActionMessageID(action parsedCardAction) string {
 
 func (a *Adapter) newScopedReplier(msg platform.IncomingMessage) platform.Replier {
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
-	return newReplierWithTaskCards(a.sender, target, a.cardKit, a.taskCards)
+	return newReplierWithTaskCards(a.sender, target, a.cardKit, a.taskCards).withDeliveryAccount(a.creds.AppID)
 }

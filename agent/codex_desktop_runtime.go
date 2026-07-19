@@ -7,11 +7,12 @@ import (
 )
 
 type codexDesktopTurnOptions struct {
-	ctx        context.Context
-	binding    CodexThreadBinding
-	message    string
-	onProgress func(string)
-	onStarted  func(string) error
+	ctx             context.Context
+	binding         CodexThreadBinding
+	message         string
+	onProgress      func(string)
+	onProgressEvent func(ProgressEvent)
+	onStarted       func(string) error
 }
 
 func (a *ACPAgent) chatCodexDesktopTurn(opts codexDesktopTurnOptions) (string, error) {
@@ -48,7 +49,7 @@ func (a *ACPAgent) chatCodexDesktopTurn(opts codexDesktopTurnOptions) (string, e
 	defer ticker.Stop()
 	return a.collectAttachedCodexTurn(opts.ctx, codexThreadWatchOptions{
 		conversationID: opts.binding.Ref.ConversationID, threadID: threadID,
-		targetTurnID: turnID, turnCh: turnCh, onProgress: opts.onProgress, reconcile: ticker.C,
+		targetTurnID: turnID, turnCh: turnCh, onProgress: opts.onProgress, onProgressEvent: opts.onProgressEvent, reconcile: ticker.C,
 	})
 }
 

@@ -41,8 +41,8 @@ func (h *Handler) runningTasksForOwner(owner string, now time.Time) []runningTas
 		if task.owner == owner && !task.detached {
 			tasks = append(tasks, runningTaskView{
 				agentName: task.agentName, preview: task.preview,
-				elapsed: now.Sub(task.startedAt), lastProgress: task.lastProgress,
-				lastProgressAt: task.lastProgressAt,
+				elapsed: now.Sub(task.startedAt), lastProgress: task.view.lastProgress,
+				lastProgressAt: task.view.lastProgressAt,
 				stoppable:      !task.isExternalCodexLocked() || task.canControlExternalCodexLocked(),
 			})
 		}

@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/codexauth"
 	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -27,6 +29,7 @@ type Server struct {
 	registry *platform.Registry
 	status   RuntimeStatusProvider
 	accounts CodexAccountController
+	traces   observability.QueryProvider
 	addr     string
 	token    string
 }
@@ -77,6 +80,13 @@ func WithCodexAccountController(controller CodexAccountController) Option {
 	}
 }
 
+// WithTraceQueryProvider 配置只允许本机查询的结构化诊断 Trace。
+func WithTraceQueryProvider(provider observability.QueryProvider) Option {
+	return func(s *Server) {
+		s.traces = provider
+	}
+}
+
 // NewServer creates an API server.
 func NewServer(clients []*ilink.Client, addr string, options ...Option) *Server {
 	if addr == "" {
@@ -98,6 +108,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/send", s.handleSend)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
+	mux.HandleFunc("/api/traces", s.handleTraceQuery)
 	mux.HandleFunc("/api/codex/accounts", s.handleCodexAccounts)
 	mux.HandleFunc("/api/codex/accounts/current", s.handleCodexAccountCurrent)
 	mux.HandleFunc("/api/codex/accounts/save", s.handleCodexAccountSave)
@@ -154,8 +165,61 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 	if s.status != nil {
 		activeTasks = s.status.ActiveTaskCount()
 	}
-	writeJSONResponse(w, map[string]any{
+	response := map[string]any{
 		"status":       "ok",
 		"active_tasks": activeTasks,
-	})
+	}
+	if s.traces != nil {
+		response["trace"] = s.traces.Status()
+	}
+	writeJSONResponse(w, response)
+}
+
+func (s *Server) handleTraceQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeLocalControl(w, r) {
+		return
+	}
+	if s.traces == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "trace_unavailable", "Trace 未启用")
+		return
+	}
+	query, err := parseTraceQuery(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_trace_query", err.Error())
+		return
+	}
+	page, err := s.traces.Query(r.Context(), query)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "trace_query_failed", observability.SanitizeText(err.Error()))
+		return
+	}
+	writeJSONResponse(w, page)
+}
+
+func parseTraceQuery(r *http.Request) (observability.Query, error) {
+	values := r.URL.Query()
+	query := observability.Query{
+		TraceID: values.Get("trace_id"), MessageID: values.Get("message_id"),
+		TaskID: values.Get("task_id"), ThreadID: values.Get("thread_id"),
+		TurnID: values.Get("turn_id"), Stage: values.Get("stage"),
+	}
+	if raw := strings.TrimSpace(values.Get("limit")); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit <= 0 || limit > 1000 {
+			return observability.Query{}, fmt.Errorf("limit 必须在 1 到 1000 之间")
+		}
+		query.Limit = limit
+	}
+	if raw := strings.TrimSpace(values.Get("since")); raw != "" {
+		since, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return observability.Query{}, fmt.Errorf("since 必须是 RFC3339 时间")
+		}
+		query.Since = since
+	}
+	return query, nil
 }

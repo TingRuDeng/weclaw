@@ -74,6 +74,11 @@ func (a *Adapter) NewReplier(chatID string) platform.Replier {
 	return NewReplier(a.client, chatID, contextToken, "")
 }
 
+// NewReplierForRoute 复用持久化 context_token 恢复终态投递。
+func (a *Adapter) NewReplierForRoute(route platform.DeliveryRoute) platform.Replier {
+	return a.NewReplier(route.ChatID)
+}
+
 // Run 启动微信长轮询；入站消息转换将在后续任务接入。
 func (a *Adapter) Run(ctx context.Context, dispatch platform.DispatchFunc) error {
 	monitor, err := a.newMonitor(a.client, a.handleWeixinMessage(dispatch))

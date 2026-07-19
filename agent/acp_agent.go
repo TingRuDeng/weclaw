@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/codexauth"
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 // ACPAgent communicates with ACP-compatible agents (claude-agent-acp, codex-acp, cursor agent, etc.) via stdio JSON-RPC 2.0.
@@ -107,6 +108,7 @@ type ACPAgent struct {
 	stopManagedHostCall       func(context.Context, string) error
 	startManagedHostCall      func(context.Context, string) error
 	updateHostIdentityCall    func(string, codexauth.Profile) error
+	protocolTrace             observability.ProtocolRecorder
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.
@@ -121,10 +123,11 @@ type ACPAgentConfig struct {
 	ApprovalReviewer string
 	SandboxMode      string
 	SystemPrompt     string
-	Cwd              string            // working directory
-	Env              map[string]string // extra environment variables
-	StateFile        string            // optional persisted mapping file path
-	AppServerSocket  string            // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
-	RunAsUser        string            // 以独立 Unix 用户运行（文件系统隔离）
-	RunAsEnv         []string          // run_as_user 时透传的环境变量名白名单
+	Cwd              string                         // working directory
+	Env              map[string]string              // extra environment variables
+	StateFile        string                         // optional persisted mapping file path
+	AppServerSocket  string                         // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
+	RunAsUser        string                         // 以独立 Unix 用户运行（文件系统隔离）
+	RunAsEnv         []string                       // run_as_user 时透传的环境变量名白名单
+	ProtocolTrace    observability.ProtocolRecorder // 显式启用的 Codex 线协议诊断记录器
 }

@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -18,6 +19,37 @@ type fakeMessageSender struct {
 	replyImages []string
 	replyFiles  []string
 	replyCards  []string
+}
+
+type fakeIdempotentMessageSender struct {
+	fakeMessageSender
+	sendOperations  []string
+	replyOperations []string
+	seen            map[string]bool
+}
+
+func (f *fakeIdempotentMessageSender) SendTextIdempotent(ctx context.Context, openID string, text string, operationID string) error {
+	f.sendOperations = append(f.sendOperations, operationID)
+	if f.seen == nil {
+		f.seen = make(map[string]bool)
+	}
+	if f.seen[operationID] {
+		return nil
+	}
+	f.seen[operationID] = true
+	return f.SendText(ctx, openID, text)
+}
+
+func (f *fakeIdempotentMessageSender) ReplyTextIdempotent(ctx context.Context, messageID string, text string, operationID string) error {
+	f.replyOperations = append(f.replyOperations, operationID)
+	if f.seen == nil {
+		f.seen = make(map[string]bool)
+	}
+	if f.seen[operationID] {
+		return nil
+	}
+	f.seen[operationID] = true
+	return f.ReplyText(ctx, messageID, text)
 }
 
 func TestReplierCapabilitiesRequireCardKitForStreaming(t *testing.T) {
@@ -98,6 +130,36 @@ func TestReplierSendTextSplitsLongText(t *testing.T) {
 	}
 	if len(sender.texts) != 2 {
 		t.Fatalf("texts=%d, want 2 chunks", len(sender.texts))
+	}
+}
+
+func TestReplierSendTextIdempotentUsesStableFeishuUUID(t *testing.T) {
+	sender := &fakeIdempotentMessageSender{}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := reply.SendTextIdempotent(context.Background(), "终态通知", "delivery-1:notification"); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	if len(sender.replyOperations) != 2 || sender.replyOperations[0] == "" || sender.replyOperations[0] != sender.replyOperations[1] {
+		t.Fatalf("reply operations=%#v", sender.replyOperations)
+	}
+	if len(sender.replyTexts) != 1 || sender.replyTexts[0] != "om_root:终态通知" {
+		t.Fatalf("reply texts=%#v, want one deduplicated reply", sender.replyTexts)
+	}
+}
+
+func TestReplierSendTextIdempotentRejectsNonIdempotentSender(t *testing.T) {
+	sender := &fakeMessageSender{}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+
+	err := reply.SendTextIdempotent(context.Background(), "终态通知", "delivery-1:notification")
+
+	if !errors.Is(err, platform.ErrUnsupported) {
+		t.Fatalf("err=%v, want ErrUnsupported", err)
+	}
+	if len(sender.texts) != 0 || len(sender.replyTexts) != 0 {
+		t.Fatalf("non-idempotent sender must not be called: texts=%#v replies=%#v", sender.texts, sender.replyTexts)
 	}
 }
 

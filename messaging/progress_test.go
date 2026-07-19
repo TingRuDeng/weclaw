@@ -457,14 +457,14 @@ func TestProgressOffModeDoesNotOpenNativeStream(t *testing.T) {
 	}
 }
 
-func TestNativeStreamTerminalNotifications(t *testing.T) {
+func TestNativeStreamTerminalNotificationsOnlyForFailureOrStop(t *testing.T) {
 	tests := []struct {
 		name   string
 		cancel bool
 		failed bool
 		want   string
 	}{
-		{name: "success", want: "任务已完成，请查看上方卡片。"},
+		{name: "success"},
 		{name: "failure", failed: true, want: "任务执行失败，请查看上方卡片。"},
 		{name: "stopped", cancel: true, want: "任务已停止，请查看上方卡片。"},
 	}
@@ -482,7 +482,10 @@ func TestNativeStreamTerminalNotifications(t *testing.T) {
 				cancel()
 			}
 			finish("终态正文", tc.failed)
-			if len(reply.Texts) != 1 || reply.Texts[0] != tc.want {
+			if tc.want == "" && len(reply.Texts) != 0 {
+				t.Fatalf("texts = %#v, want no success notification", reply.Texts)
+			}
+			if tc.want != "" && (len(reply.Texts) != 1 || reply.Texts[0] != tc.want) {
 				t.Fatalf("texts = %#v", reply.Texts)
 			}
 		})

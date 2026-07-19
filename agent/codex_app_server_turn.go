@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -15,11 +16,12 @@ type codexTurnMetrics struct {
 const codexTurnEventBufferSize = 256
 
 type codexAppServerTurnOptions struct {
-	ctx            context.Context
-	conversationID string
-	message        string
-	onProgress     func(string)
-	onStarted      func(string) error
+	ctx             context.Context
+	conversationID  string
+	message         string
+	onProgress      func(string)
+	onProgressEvent func(ProgressEvent)
+	onStarted       func(string) error
 }
 
 type codexAppServerTurnRuntime struct {
@@ -178,20 +180,26 @@ func (a *ACPAgent) handleCodexAppServerEvent(runtime *codexAppServerTurnRuntime,
 
 func (a *ACPAgent) handleCodexAppServerInteraction(runtime *codexAppServerTurnRuntime, evt *codexTurnEvent) (bool, error) {
 	progressText := ""
+	progressKind := ProgressKindApproval
+	progressID := ""
 	var handle func() error
 	if evt.Approval != nil {
 		progressText = "进展：Codex 请求权限审批。"
+		progressID = strings.TrimSpace(evt.Approval.Request.RequestID)
 		handle = func() error { return a.handleCodexApprovalEvent(runtime.opts.ctx, evt) }
 	} else if evt.UserInput != nil {
 		progressText = "进展：Codex 请求补充信息。"
+		progressKind = ProgressKindUserInput
+		progressID = strings.TrimSpace(evt.UserInput.Request.RequestID)
 		handle = func() error { return a.handleCodexUserInputEvent(runtime.opts.ctx, evt) }
 	} else {
 		return false, nil
 	}
 	runtime.diagnostics.remember(progressText)
-	if runtime.opts.onProgress != nil {
-		runtime.opts.onProgress(progressText)
-	}
+	progressCallbacks{onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent}.emit(ProgressEvent{
+		ID: progressID, Kind: progressKind, State: ProgressStateRunning, Sequence: evt.Sequence,
+		Summary: strings.TrimSpace(strings.TrimPrefix(progressText, codexProgressPrefix)), Text: progressText,
+	})
 	runtime.progress.emitted = true
 	if err := handle(); err != nil {
 		return true, fmt.Errorf("Codex 交互响应失败: %w", err)
@@ -214,22 +222,22 @@ func handleCodexAppServerTerminal(runtime *codexAppServerTurnRuntime, evt *codex
 }
 
 func emitCodexAppServerProgress(runtime *codexAppServerTurnRuntime, evt *codexTurnEvent) {
-	progressText, ok := runtime.progress.record(evt)
+	event, ok := runtime.progress.recordEvent(evt)
 	if !ok {
 		return
 	}
+	progressText := event.DisplayText()
 	runtime.diagnostics.remember(progressText)
-	if runtime.opts.onProgress != nil {
-		runtime.opts.onProgress(progressText)
-	}
+	progressCallbacks{onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent}.emit(event)
 }
 
 func collectCodexAppServerContent(runtime *codexAppServerTurnRuntime, evt *codexTurnEvent) {
 	if evt.Delta != "" {
-		if runtime.opts.onProgress != nil {
-			if progressText, ok := runtime.progress.emitGenerating(); ok {
+		if runtime.opts.onProgress != nil || runtime.opts.onProgressEvent != nil {
+			if event, ok := runtime.progress.emitGeneratingEvent(); ok {
+				progressText := event.DisplayText()
 				runtime.diagnostics.remember(progressText)
-				runtime.opts.onProgress(progressText)
+				progressCallbacks{onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent}.emit(event)
 			}
 		}
 		runtime.assembler.addDelta(evt.ItemID, evt.Delta)

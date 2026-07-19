@@ -15,6 +15,7 @@ func (a *ACPAgent) handleSessionUpdateAt(params json.RawMessage, sequence uint64
 		log.Printf("[acp] failed to parse session/update: %v", err)
 		return
 	}
+	p.Update.Sequence = sequence
 	if p.Update.SessionUpdate == "config_option_update" && a.isClaudeACP() {
 		if err := a.cacheClaudeSessionConfigAt(p.SessionID, p.Update.ConfigOptions, sequence); err != nil {
 			log.Printf("[acp] ignored invalid config_option_update (session=%s): %v", p.SessionID, err)

@@ -65,6 +65,27 @@ func TestCodexProgressStateCountsChangedFiles(t *testing.T) {
 	}
 }
 
+func TestCodexProgressStateCarriesStructuredMetadata(t *testing.T) {
+	state := newCodexProgressState()
+	event, ok := state.recordEvent(&codexTurnEvent{
+		Kind: "progress", Sequence: 19, ItemID: "fallback-item",
+		Text: "修改 messaging/task_state.go",
+		Progress: &codexProgressEvent{
+			ID: "file-item", Kind: "file", Status: "completed",
+			Action: "修改 messaging/task_state.go", FilePath: "messaging/task_state.go",
+		},
+	})
+	if !ok {
+		t.Fatal("structured file progress must emit")
+	}
+	if event.ID != "file-item" || event.Kind != ProgressKindFile || event.State != ProgressStateCompleted || event.Sequence != 19 {
+		t.Fatalf("event=%#v", event)
+	}
+	if event.Path != "messaging/task_state.go" || event.DisplayText() != "进展：修改 messaging/task_state.go" {
+		t.Fatalf("path=%q display=%q", event.Path, event.DisplayText())
+	}
+}
+
 func TestACPAgentCodexTurnAggregatesCommandProgress(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")

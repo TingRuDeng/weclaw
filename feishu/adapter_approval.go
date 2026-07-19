@@ -55,7 +55,7 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 			},
 			Metadata: metadata,
 		}
-		dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, handled.UserID, a.cardKit, a.taskCards))
+		dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, handled.UserID, a.cardKit, a.taskCards).withDeliveryAccount(a.creds.AppID))
 		if a.approvalActionExpired(ctx, resultCh) {
 			handled.Status = approvalStatusExpired
 			a.updateApprovalActionRecord(handled)

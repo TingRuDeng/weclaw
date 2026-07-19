@@ -24,13 +24,74 @@ func (s *codexProgressState) hasEmitted() bool {
 }
 
 func (s *codexProgressState) record(evt *codexTurnEvent) (string, bool) {
-	if s == nil || evt == nil || evt.Kind != "progress" {
+	event, ok := s.recordEvent(evt)
+	if !ok {
 		return "", false
 	}
-	if evt.Progress != nil {
-		return s.recordStructured(evt.Progress, evt.Text)
+	return event.DisplayText(), true
+}
+
+func (s *codexProgressState) recordEvent(evt *codexTurnEvent) (ProgressEvent, bool) {
+	if s == nil || evt == nil || evt.Kind != "progress" {
+		return ProgressEvent{}, false
 	}
-	return s.recordText(evt.Text)
+	var (
+		text string
+		ok   bool
+	)
+	if evt.Progress != nil {
+		text, ok = s.recordStructured(evt.Progress, evt.Text)
+	} else {
+		text, ok = s.recordText(evt.Text)
+	}
+	if !ok {
+		return ProgressEvent{}, false
+	}
+	return codexStructuredProgressEvent(evt, text), true
+}
+
+func codexStructuredProgressEvent(evt *codexTurnEvent, text string) ProgressEvent {
+	event := ProgressEvent{
+		Kind:     ProgressKindStatus,
+		State:    ProgressStateRunning,
+		Sequence: evt.Sequence,
+		Text:     text,
+	}
+	if evt.Progress != nil {
+		event.ID = firstNonEmpty(evt.Progress.ID, evt.ItemID)
+		event.Kind = codexProgressKind(evt.Progress.Kind)
+		event.State = normalizeProgressState(evt.Progress.Status)
+		if event.State == ProgressStateUnknown {
+			event.State = ProgressStateRunning
+		}
+		event.Path = strings.TrimSpace(evt.Progress.FilePath)
+	}
+	display := strings.TrimSpace(strings.TrimPrefix(text, codexProgressPrefix))
+	event.Summary, event.Detail = splitProgressDisplay(display)
+	return event
+}
+
+func codexProgressKind(kind string) ProgressKind {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "command":
+		return ProgressKindCommand
+	case "file":
+		return ProgressKindFile
+	case "plan":
+		return ProgressKindPlan
+	case "approval":
+		return ProgressKindApproval
+	default:
+		return ProgressKindStatus
+	}
+}
+
+func splitProgressDisplay(text string) (string, string) {
+	parts := strings.SplitN(strings.TrimSpace(text), " · ", 2)
+	if len(parts) == 1 {
+		return parts[0], ""
+	}
+	return parts[0], parts[1]
 }
 
 // recordText 兼容旧进度事件；统一补上进度前缀，避免卡片把它当成普通正文。
@@ -121,10 +182,13 @@ func cleanCodexProgressDetail(text string) string {
 	return trimRunes(text, codexProgressDetailMaxRunes)
 }
 
-func (s *codexProgressState) emitGenerating() (string, bool) {
+func (s *codexProgressState) emitGeneratingEvent() (ProgressEvent, bool) {
 	if s.hasEmitted() {
-		return "", false
+		return ProgressEvent{}, false
 	}
 	s.emitted = true
-	return codexGeneratingProgress, true
+	return ProgressEvent{
+		Kind: ProgressKindGenerating, State: ProgressStateRunning,
+		Summary: strings.TrimPrefix(codexGeneratingProgress, codexProgressPrefix), Text: codexGeneratingProgress,
+	}, true
 }

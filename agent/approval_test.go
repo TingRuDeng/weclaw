@@ -27,12 +27,15 @@ func TestHandlePermissionRequestDispatchesApprovalToTurn(t *testing.T) {
 	a.notifyMu.Unlock()
 
 	raw := `{"jsonrpc":"2.0","id":7,"method":"turn/approval/request","params":{"threadId":"thread-1","toolCall":{"cmd":"rm file"},"options":[{"optionId":"allow_once","name":"Allow","kind":"allow"},{"optionId":"deny_once","name":"Deny","kind":"deny"}]}}`
-	a.handlePermissionRequest(raw)
+	a.handlePermissionRequestAt(raw, 37)
 
 	select {
 	case evt := <-turnCh:
 		if evt.Approval == nil {
 			t.Fatal("approval event missing")
+		}
+		if evt.Sequence != 37 {
+			t.Fatalf("approval sequence=%d, want 37", evt.Sequence)
 		}
 		if evt.Approval.Request.RequestID != "7" {
 			t.Fatalf("approval request id=%q, want 7", evt.Approval.Request.RequestID)

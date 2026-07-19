@@ -110,19 +110,19 @@ func (a *ACPAgent) runCodexTurnWithLease(ctx context.Context, opts codexLeasedTu
 	if a.desktopProbe == nil {
 		return a.chatCodexAppServerControlledTurn(codexAppServerTurnOptions{
 			ctx: ctx, conversationID: req.Runtime.Ref.ConversationID,
-			message: req.Message, onProgress: req.OnProgress, onStarted: onStarted,
+			message: req.Message, onProgress: req.OnProgress, onProgressEvent: req.OnProgressEvent, onStarted: onStarted,
 		})
 	}
 	switch opts.binding.Runtime {
 	case CodexRuntimeDesktop:
 		return a.chatCodexDesktopTurn(codexDesktopTurnOptions{
 			ctx: ctx, binding: opts.binding, message: req.Message,
-			onProgress: req.OnProgress, onStarted: onStarted,
+			onProgress: req.OnProgress, onProgressEvent: req.OnProgressEvent, onStarted: onStarted,
 		})
 	case CodexRuntimeWeClaw:
 		return a.chatCodexAppServerControlledTurn(codexAppServerTurnOptions{
 			ctx: ctx, conversationID: req.Runtime.Ref.ConversationID,
-			message: req.Message, onProgress: req.OnProgress, onStarted: onStarted,
+			message: req.Message, onProgress: req.OnProgress, onProgressEvent: req.OnProgressEvent, onStarted: onStarted,
 		})
 	case CodexRuntimeConflict:
 		return "", ErrCodexRuntimeConflict

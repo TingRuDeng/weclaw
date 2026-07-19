@@ -42,6 +42,52 @@ func (s *claudeACPProgressState) progressText(update *sessionUpdate) (string, bo
 	return s.uniqueStructuredProgress(claudeACPProgressText(update))
 }
 
+// progressEvent 在保留旧展示文案的同时透传 Claude ACP 的事件身份和状态。
+func (s *claudeACPProgressState) progressEvent(update *sessionUpdate) (ProgressEvent, bool) {
+	text, ok := s.progressText(update)
+	if !ok {
+		return ProgressEvent{}, false
+	}
+	event := ProgressEvent{
+		Kind:     ProgressKindStatus,
+		State:    ProgressStateRunning,
+		Sequence: update.Sequence,
+		Text:     text,
+		Summary:  strings.TrimSpace(text),
+	}
+	switch update.SessionUpdate {
+	case "agent_thought_chunk":
+		event.ID = progressEventID("thought", update.MessageID)
+		event.Kind = ProgressKindThought
+		event.Detail = strings.TrimSpace(strings.TrimPrefix(text, "思考："))
+		event.Summary = "思考"
+	case "tool_call", "tool_call_update":
+		event.ID = progressEventID("tool", update.ToolCallID)
+		event.Kind = ProgressKindTool
+		event.State = normalizeProgressState(update.Status)
+		if event.State == ProgressStateUnknown {
+			event.State = ProgressStateRunning
+		}
+		event.Summary = progressSummary(firstNonEmpty(update.Title, s.toolTitles[update.ToolCallID]))
+	case "plan":
+		event.ID = "plan"
+		event.Kind = ProgressKindPlan
+		if entry, found := currentPlanEntry(update.Entries); found {
+			event.State = normalizeProgressState(entry.Status)
+			event.Summary = progressSummary(entry.Content)
+		}
+	}
+	return event, true
+}
+
+func progressEventID(kind string, sourceID string) string {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return ""
+	}
+	return kind + ":" + sourceID
+}
+
 func (s *claudeACPProgressState) thoughtProgressText(update *sessionUpdate) (string, bool) {
 	chunk := extractChunkText(update)
 	if chunk == "" {

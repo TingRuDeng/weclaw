@@ -55,6 +55,31 @@ func (r *Replier) SendText(ctx context.Context, text string) error {
 	return nil
 }
 
+// SendTextIdempotent 使用稳定 client_id 重试同一终态文本分片。
+func (r *Replier) SendTextIdempotent(ctx context.Context, text string, deliveryKey string) error {
+	plainText := MarkdownToPlainText(text)
+	displayText := FormatTextForWeChatDisplay(plainText)
+	chunks := splitTextReplyChunks(displayText, r.ChunkRunes)
+	for index, chunk := range chunks {
+		operationID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%s:%d", strings.TrimSpace(deliveryKey), index)))
+		if err := r.sendPlainText(ctx, chunk, weclawClientIDPrefix+operationID.String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeliveryRoute 返回 outbox 可重建的微信会话路由；context_token 由 adapter 的受保护存储恢复。
+func (r *Replier) DeliveryRoute() platform.DeliveryRoute {
+	accountID := ""
+	if r != nil && r.Client != nil {
+		accountID = r.Client.BotID()
+	}
+	return platform.DeliveryRoute{
+		Platform: platform.PlatformWeChat, AccountID: accountID, ChatID: r.ToUserID,
+	}
+}
+
 func (r *Replier) clientIDsForTextChunks(count int) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -142,10 +167,18 @@ func NewClientID() string {
 }
 
 type textStream struct {
-	reply *Replier
+	reply  *Replier
+	mu     sync.Mutex
+	closed bool
 }
 
 func (s *textStream) Update(ctx context.Context, content string) error {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil
+	}
 	if err := s.reply.Typing(ctx, true); err != nil {
 		return err
 	}
@@ -153,6 +186,9 @@ func (s *textStream) Update(ctx context.Context, content string) error {
 }
 
 func (s *textStream) Complete(ctx context.Context, finalContent string) error {
+	if !s.beginTerminal() {
+		return nil
+	}
 	if err := s.reply.SendText(ctx, finalContent); err != nil {
 		return err
 	}
@@ -160,7 +196,20 @@ func (s *textStream) Complete(ctx context.Context, finalContent string) error {
 }
 
 func (s *textStream) Fail(ctx context.Context, errText string) error {
+	if !s.beginTerminal() {
+		return nil
+	}
 	return s.reply.SendText(ctx, errText)
+}
+
+func (s *textStream) beginTerminal() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.closed = true
+	return true
 }
 
 func splitTextReplyChunks(text string, maxRunes int) []string {

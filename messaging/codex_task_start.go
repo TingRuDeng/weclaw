@@ -58,6 +58,7 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 	}
 	taskOpts.route = opts.route
 	status := h.queuePendingActiveTask(opts.route.conversationID, h.pendingCodexTask(taskOpts))
+	h.recordTaskAdmissionTrace(taskOpts.trace, status)
 	if status == activeTaskMissing {
 		return false
 	}

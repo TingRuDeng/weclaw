@@ -104,6 +104,14 @@ func (r *Registry) Run(ctx context.Context, dispatch DispatchFunc) error {
 
 // ReplierFor 按平台、账号和会话 ID 查找主动发送回复器。
 func (r *Registry) ReplierFor(platformName PlatformName, accountID string, chatID string) (Replier, bool) {
+	return r.ReplierForRoute(DeliveryRoute{Platform: platformName, AccountID: accountID, ChatID: chatID})
+}
+
+// ReplierForRoute 按完整持久化路由重建回复器。
+func (r *Registry) ReplierForRoute(route DeliveryRoute) (Replier, bool) {
+	platformName := route.Platform
+	accountID := route.AccountID
+	chatID := route.ChatID
 	if r == nil || chatID == "" {
 		return nil, false
 	}
@@ -114,11 +122,12 @@ func (r *Registry) ReplierFor(platformName PlatformName, accountID string, chatI
 		if accountID != "" && entry.Platform.AccountID() != accountID {
 			continue
 		}
-		factory, ok := entry.Platform.(OutboundReplierFactory)
-		if !ok {
-			continue
+		if factory, ok := entry.Platform.(OutboundRouteReplierFactory); ok {
+			return factory.NewReplierForRoute(route), true
 		}
-		return factory.NewReplier(chatID), true
+		if factory, ok := entry.Platform.(OutboundReplierFactory); ok {
+			return factory.NewReplier(chatID), true
+		}
 	}
 	return nil, false
 }

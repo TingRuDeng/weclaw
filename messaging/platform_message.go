@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/wechat"
 )
@@ -18,6 +19,7 @@ type platformMessageRuntime struct {
 	routeUserID string
 	text        string
 	clientID    string
+	trace       observability.TraceContext
 }
 
 // sendText 向真实发送者回复文本，不使用会话路由键替代用户 ID。
@@ -30,7 +32,7 @@ func (runtime platformMessageRuntime) agentRequest(message string) agentMessageR
 	return agentMessageRequest{
 		ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
 		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, reply: runtime.reply,
-		message: message, clientID: runtime.clientID,
+		message: message, clientID: runtime.clientID, trace: runtime.trace,
 	}
 }
 
@@ -121,10 +123,13 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 		return prepared, false
 	}
 	prepared.clientID = NewClientID()
+	prepared.trace = prepared.trace.WithClientID(prepared.clientID)
+	prepared.ctx = observability.ContextWithTrace(prepared.ctx, prepared.trace)
 	if wxReply, ok := prepared.reply.(*wechat.Replier); ok {
 		wxReply.ClientID = prepared.clientID
 	}
 	log.Printf("[handler] received from %s: %q", prepared.msg.UserID, truncate(platformMessageLogText(prepared.text), 80))
+	h.recordTraceStage(prepared.trace, "message.accepted", "accepted", traceSummaryForIncoming(prepared.msg, prepared.text))
 	return prepared, true
 }
 
@@ -276,6 +281,6 @@ func newBroadcastAgentsRequest(runtime platformMessageRuntime, names []string, m
 	return broadcastAgentsRequest{
 		ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
 		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, replyWriter: runtime.reply,
-		names: names, message: message, clientID: runtime.clientID,
+		names: names, message: message, clientID: runtime.clientID, trace: runtime.trace,
 	}
 }

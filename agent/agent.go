@@ -135,6 +135,11 @@ type CodexThreadRuntimeAgent interface {
 	InterruptCodexThread(ctx context.Context, conversationID string, threadID string, turnID string) error
 }
 
+// CodexStructuredThreadRuntimeAgent 为已运行的 Codex turn 提供结构化观察事件。
+type CodexStructuredThreadRuntimeAgent interface {
+	WatchCodexThreadEvents(ctx context.Context, conversationID string, threadID string, onProgress func(ProgressEvent)) (string, error)
+}
+
 // ConversationWorkspaceAgent 允许 Agent 为单个 conversation 固定工作目录。
 type ConversationWorkspaceAgent interface {
 	SetConversationCwd(conversationID string, cwd string)

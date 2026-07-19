@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/agent"
 )
 
 func TestCodexRuntimeDisconnectRebootsRolloutFromCurrentTail(t *testing.T) {
@@ -29,7 +31,7 @@ func TestCodexRuntimeProgressSurvivesRolloutHandoff(t *testing.T) {
 	result := make(chan codexExternalWatchResult, 1)
 	go func() {
 		result <- h.watchCodexAfterRuntimeDisconnect(ctx, externalCodexWatchRequest{
-			threadID: "thread-1", turnID: "turn-1", onProgress: func(text string) { progress <- text },
+			threadID: "thread-1", turnID: "turn-1", onProgress: func(event agent.ProgressEvent) { progress <- event.DisplayText() },
 		})
 	}()
 	select {

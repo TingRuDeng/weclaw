@@ -11,15 +11,20 @@ import (
 
 // Chat sends a message and returns the full response.
 func (a *ACPAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
-	return a.chat(ctx, conversationID, message, nil)
+	return a.chat(ctx, conversationID, message, progressCallbacks{})
 }
 
 // ChatWithProgress sends a message and emits incremental deltas during generation.
 func (a *ACPAgent) ChatWithProgress(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
-	return a.chat(ctx, conversationID, message, onProgress)
+	return a.chat(ctx, conversationID, message, progressCallbacks{onText: onProgress})
 }
 
-func (a *ACPAgent) chat(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
+// ChatWithProgressEvents 保留 Agent 原生进展字段，供消息层统一渲染卡片和 /ps。
+func (a *ACPAgent) ChatWithProgressEvents(ctx context.Context, conversationID string, message string, onProgress func(ProgressEvent)) (string, error) {
+	return a.chat(ctx, conversationID, message, progressCallbacks{onEvent: onProgress})
+}
+
+func (a *ACPAgent) chat(ctx context.Context, conversationID string, message string, progress progressCallbacks) (string, error) {
 	if a.protocol == protocolCodexAppServer {
 		return "", fmt.Errorf("Codex app-server 必须通过受控 turn 执行: %w", ErrCodexControlRequired)
 	}
@@ -40,11 +45,15 @@ func (a *ACPAgent) chat(ctx context.Context, conversationID string, message stri
 		return "", err
 	}
 
-	return a.chatLegacyACP(ctx, conversationID, message, onProgress)
+	return a.chatLegacyACPWithCallbacks(ctx, conversationID, message, progress)
 }
 
 // chatLegacyACP 处理标准 ACP session/prompt 流程，任何失败都保留原 session 绑定。
-func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, message string, onProgress func(delta string)) (string, error) {
+func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, message string, onProgress func(string)) (string, error) {
+	return a.chatLegacyACPWithCallbacks(ctx, conversationID, message, progressCallbacks{onText: onProgress})
+}
+
+func (a *ACPAgent) chatLegacyACPWithCallbacks(ctx context.Context, conversationID string, message string, callbacks progressCallbacks) (string, error) {
 	// 普通消息只能使用已经由用户显式选择或创建的 session。
 	sessionID, err := a.requireSession(conversationID)
 	if err != nil {
@@ -63,7 +72,7 @@ func (a *ACPAgent) chatLegacyACP(ctx context.Context, conversationID string, mes
 	defer a.unregisterLegacySessionChannels(sessionID, notifyCh, approvalCh)
 	state := legacyPromptState{
 		ctx: ctx, sessionID: sessionID, notifyCh: notifyCh, approvalCh: approvalCh,
-		promptDone: a.startLegacyPrompt(ctx, sessionID, message), onProgress: onProgress,
+		promptDone: a.startLegacyPrompt(ctx, sessionID, message), callbacks: callbacks,
 		progress: newClaudeACPProgressState(),
 	}
 	return a.waitLegacyPrompt(state)
@@ -80,7 +89,7 @@ type legacyPromptState struct {
 	notifyCh   <-chan *sessionUpdate
 	approvalCh <-chan *codexTurnEvent
 	promptDone <-chan legacyPromptDone
-	onProgress func(string)
+	callbacks  progressCallbacks
 	progress   *claudeACPProgressState
 }
 
@@ -181,11 +190,11 @@ func (a *ACPAgent) finishLegacyPrompt(state legacyPromptState, parts []string, d
 
 // emitLegacyProgress 只把结构化 Claude ACP 事件发送到实时进度链路。
 func emitLegacyProgress(state legacyPromptState, update *sessionUpdate) {
-	if state.onProgress == nil || state.progress == nil {
+	if !state.callbacks.enabled() || state.progress == nil {
 		return
 	}
-	if text, ok := state.progress.progressText(update); ok {
-		state.onProgress(text)
+	if event, ok := state.progress.progressEvent(update); ok {
+		state.callbacks.emit(event)
 	}
 }
 

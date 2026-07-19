@@ -32,7 +32,7 @@ func renderStreamTerminalNotification(parentCanceled bool, failed bool, finalTex
 	if failed {
 		return "任务执行失败，请查看上方卡片。"
 	}
-	return "任务已完成，请查看上方卡片。"
+	return ""
 }
 
 func renderDeltaProgress(delta string, cfg config.ProgressConfig) string {

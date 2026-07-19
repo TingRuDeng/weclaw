@@ -2,7 +2,9 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 )
 
 var ErrUnsupported = errors.New("platform capability unsupported")
@@ -23,9 +25,53 @@ type TaskCardReporter interface {
 	CurrentTaskCardID() string
 }
 
+// DeliveryRoute 是跨进程恢复终态投递所需的最小平台路由。
+// 它不包含微信 context_token、飞书凭据或任何 Agent 认证信息。
+type DeliveryRoute struct {
+	Platform  PlatformName `json:"platform"`
+	AccountID string       `json:"account_id,omitempty"`
+	ChatID    string       `json:"chat_id"`
+	ReplyToID string       `json:"reply_to_id,omitempty"`
+}
+
+func (r DeliveryRoute) Valid() bool {
+	return strings.TrimSpace(string(r.Platform)) != "" && strings.TrimSpace(r.ChatID) != ""
+}
+
+// DeliveryRouteReporter 允许消息层把终态绑定到可重建的平台路由。
+type DeliveryRouteReporter interface {
+	DeliveryRoute() DeliveryRoute
+}
+
+// IdempotentTextReplier 使用稳定 delivery key 发送文本；重试同一 key 不应产生重复消息。
+type IdempotentTextReplier interface {
+	SendTextIdempotent(ctx context.Context, text string, deliveryKey string) error
+}
+
+// TerminalCheckpoint 是 adapter 自描述、可持久化的终态更新操作。
+type TerminalCheckpoint struct {
+	Kind    string          `json:"kind"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// DurableTerminalStream 在执行网络写入前冻结并导出终态操作。
+type DurableTerminalStream interface {
+	PrepareTerminal(finalContent string, failed bool) (TerminalCheckpoint, error)
+}
+
+// DurableTerminalReplier 用重建后的平台客户端重放持久化终态操作。
+type DurableTerminalReplier interface {
+	DeliverTerminal(ctx context.Context, checkpoint TerminalCheckpoint) error
+}
+
 // OutboundReplierFactory 表示平台可为主动发送 API 创建会话回复器。
 type OutboundReplierFactory interface {
 	NewReplier(chatID string) Replier
+}
+
+// OutboundRouteReplierFactory 在恢复投递时保留原消息 / 话题回复关系。
+type OutboundRouteReplierFactory interface {
+	NewReplierForRoute(route DeliveryRoute) Replier
 }
 
 // Stream 表示一次流式回复会话，adapter 负责平台状态机与节流。

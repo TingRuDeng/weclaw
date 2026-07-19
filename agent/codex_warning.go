@@ -17,7 +17,7 @@ type codexWarningParams struct {
 }
 
 // handleCodexWarning 展示 app-server 非致命警告，但不改变 turn 终态。
-func (a *ACPAgent) handleCodexWarning(params json.RawMessage) {
+func (a *ACPAgent) handleCodexWarningAt(params json.RawMessage, sequence uint64) {
 	var warning codexWarningParams
 	if err := json.Unmarshal(params, &warning); err != nil {
 		log.Printf("[acp] failed to parse codex warning: %v", err)
@@ -28,11 +28,13 @@ func (a *ACPAgent) handleCodexWarning(params json.RawMessage) {
 		return
 	}
 	log.Printf("[acp] codex warning (thread=%s): %.200s", warning.ThreadID, message)
+	status := "进展：Codex 警告：" + trimRunes(message, codexWarningMaxRunes)
 	if isCodexHTTPSFallbackWarning(message) {
-		a.dispatchProgressToThread(warning.ThreadID, codexHTTPSFallbackProgress)
-		return
+		status = codexHTTPSFallbackProgress
 	}
-	a.dispatchProgressToThread(warning.ThreadID, "进展：Codex 警告："+trimRunes(message, codexWarningMaxRunes))
+	a.dispatchProgressEventToThread(warning.ThreadID, status, &codexProgressEvent{
+		ID: "warning", Kind: "status", Action: strings.TrimPrefix(status, codexProgressPrefix), Status: "running",
+	}, sequence)
 }
 
 func isCodexHTTPSFallbackWarning(message string) bool {

@@ -149,6 +149,30 @@ func TestChatWithAgentWithProgress_FallbackToChat(t *testing.T) {
 	}
 }
 
+func TestChatWithAgentWithProgressEventsPrefersStructuredInterface(t *testing.T) {
+	h := newTestHandler()
+	ag := &fakeStructuredProgressAgent{
+		fakeProgressAgent: fakeProgressAgent{fakeAgent: fakeAgent{reply: "完成"}},
+		events: []agent.ProgressEvent{{
+			ID: "tool:1", Kind: agent.ProgressKindTool, State: agent.ProgressStateRunning,
+			Sequence: 8, Text: "工具：运行测试（进行中）",
+		}},
+	}
+	var got []agent.ProgressEvent
+	reply, err := h.chatWithAgentWithProgressEvents(context.Background(), ag, "user-1", "hello", func(event agent.ProgressEvent) {
+		got = append(got, event)
+	})
+	if err != nil || reply != "完成" {
+		t.Fatalf("reply=%q err=%v", reply, err)
+	}
+	if !ag.structuredCalled || ag.progressCalled || ag.wasChatCalled() {
+		t.Fatalf("structured=%v legacy=%v chat=%v", ag.structuredCalled, ag.progressCalled, ag.wasChatCalled())
+	}
+	if !reflect.DeepEqual(got, ag.events) {
+		t.Fatalf("events=%#v, want %#v", got, ag.events)
+	}
+}
+
 func TestTruncateTailRunes(t *testing.T) {
 	tests := []struct {
 		text  string
