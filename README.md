@@ -81,11 +81,11 @@ weclaw codex account remove <id-or-label>
 weclaw codex account doctor
 ```
 
-The account index is isolated by a host ID derived from `CODEX_HOME + app-server socket` and stored under `~/.weclaw/codex-accounts/<host-id>/`. It contains only labels, masked email addresses, fingerprints, and secret references. Complete OAuth snapshots go to macOS Keychain or Linux Secret Service first. A `0600` file fallback is permitted only when the local user explicitly passes `--allow-file-store`. API keys, PATs, Bedrock, and other authentication modes are rejected.
+The account index is isolated by a host ID derived from `CODEX_HOME + app-server socket` and stored under `~/.weclaw/codex-accounts/<host-id>/`. It contains only labels, masked email addresses, fingerprints, and secret references. Complete OAuth snapshots go to macOS Keychain or Linux Secret Service first. A `0600` file fallback is permitted only when the local user explicitly passes `--allow-file-store`. API keys, PATs, Bedrock, and other authentication modes are rejected. If Keychain or Secret Service cannot delete an old secret after a profile replacement or removal, the index retains a pending-cleanup record, retries it during later account transactions, and makes `doctor` report it instead of silently leaving OAuth material behind.
 
 To collect several profiles, sign Codex into each target account and run `save`. While WeClaw is running, `save` accepts only the account actually used by the shared Host when it matches `auth.json`. If a manual sign-in has changed the file while the old Host still caches its previous token, stop WeClaw before saving the new account offline. A running service makes the CLI use the local control API; if the process exists but that API is unavailable, the CLI fails closed instead of editing authentication directly. With the service stopped, `use` only projects authentication atomically and updates the active profile for the next start.
 
-An online `use` first rejects active tasks, active or uncertain writer leases, and every active or unknown thread. It then stops the real managed Host, projects the target authentication, starts the unique Host, and verifies both account identity and rate limits. A target startup or verification failure restores the previous authentication and Host. If rollback also fails, writes remain disabled. WeClaw never terminates a legacy or otherwise unverified app-server; run `weclaw codex account doctor` and restart WeClaw as instructed.
+An online `use` first rejects active tasks, active or uncertain writer leases, and every active or unknown thread. It persists a switch journal before stopping the real managed Host, projects the target authentication, starts the unique Host, and verifies both account identity and rate limits. A target startup or verification failure restores the previous authentication and Host. A mid-switch process exit or rollback failure remains fail-closed after restart instead of becoming writable when memory resets. Online `save` likewise commits the profile index and Host identity metadata as one compensated operation. WeClaw never terminates a legacy or otherwise unverified app-server; run `weclaw codex account doctor`. To clear an unsafe journal, stop the service, explicitly run offline `use`, then start it again.
 
 Use `/cx account` or `/cx account status` from Feishu or WeChat to inspect the masked current profile. Only an administrator in a direct chat may list profiles or run `/cx account use <id-or-label>`. A Feishu list selection adds a five-minute confirmation card scoped to the operator, route, target profile, and list revision. A WeClaw host has one globally active Codex account, not one account per chat window.
 
@@ -288,6 +288,8 @@ go build -o weclaw .
 ```
 
 The repository currently uses Go 1.26.5. No publicly pullable container image is currently published in sync with this maintained distribution.
+
+`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline.
 
 ## Upstream and License
 

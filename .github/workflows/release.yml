@@ -8,7 +8,7 @@ on:
         required: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   RELEASE_TAG: ${{ inputs.tag }}
@@ -18,109 +18,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate:
+  release:
     runs-on: ubuntu-latest
     steps:
+      # release.sh 的发布门禁要求 clean main 且 HEAD 与 origin/main 一致；
+      # 因此不能 checkout 尚未由脚本创建的 tag。
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: main
           fetch-depth: 0
 
-      - name: Verify stable release source
-        shell: bash
-        run: |
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "Invalid stable release tag: $RELEASE_TAG" >&2
-            exit 1
-          }
-          tag_commit="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
-          git fetch --force --no-tags origin main:refs/remotes/origin/main
-          main_commit="$(git rev-parse refs/remotes/origin/main)"
-          [[ "$tag_commit" == "$main_commit" ]] || {
-            echo "Tag $RELEASE_TAG ($tag_commit) is not current origin/main ($main_commit)" >&2
-            exit 1
-          }
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.5'
 
-      - name: Test
-        run: go test ./... -count=1 -timeout 120s
-
-      - name: Module tidy check
-        run: go mod tidy -diff
-
-      - name: Race test
-        run: go test -race ./... -count=1 -timeout 180s
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
-
-      - name: Vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-
-  build:
-    needs: validate
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: darwin
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: linux
-            goarch: amd64
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag }}
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.5'
-
-      - name: Build
+      - name: Run canonical release pipeline
         env:
-          CGO_ENABLED: 0
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=${RELEASE_TAG}" \
-            -o weclaw_${{ matrix.goos }}_${{ matrix.goarch }} .
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: weclaw_${{ matrix.goos }}_${{ matrix.goarch }}
-          path: weclaw_${{ matrix.goos }}_${{ matrix.goarch }}*
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Generate checksums
-        working-directory: dist
-        run: sha256sum weclaw_* > checksums.txt
-
-      - name: Create release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          generate_release_notes: true
-          files: |
-            dist/weclaw_*
-            dist/checksums.txt
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release.sh "$RELEASE_TAG"

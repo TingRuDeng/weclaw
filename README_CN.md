@@ -81,11 +81,11 @@ weclaw codex account remove <ID或标签>
 weclaw codex account doctor
 ```
 
-账号索引按 `CODEX_HOME + app-server socket` 计算的 host ID 隔离，保存在 `~/.weclaw/codex-accounts/<host-id>/`；索引只含标签、脱敏邮箱、指纹和 secret 引用。完整 OAuth 快照优先进入 macOS Keychain 或 Linux Secret Service。只有本机用户显式传入 `--allow-file-store` 时，系统凭据库失败才会降级到 `0600` 文件。API key、PAT、Bedrock 和其他认证模式不会保存。
+账号索引按 `CODEX_HOME + app-server socket` 计算的 host ID 隔离，保存在 `~/.weclaw/codex-accounts/<host-id>/`；索引只含标签、脱敏邮箱、指纹和 secret 引用。完整 OAuth 快照优先进入 macOS Keychain 或 Linux Secret Service。只有本机用户显式传入 `--allow-file-store` 时，系统凭据库失败才会降级到 `0600` 文件。API key、PAT、Bedrock 和其他认证模式不会保存。替换或删除 profile 后若系统凭据库暂时无法删除旧 secret，索引会保留待清理记录并在后续账号事务重试，`doctor` 会明确报告而不是静默遗留。
 
 保存多个账号时，先让 Codex 登录目标账号，再执行 `save`。如果 WeClaw 服务仍在运行，`save` 只接受共享 Host 当前实际使用且与 `auth.json` 一致的账号；手工登录已经改变但旧 Host 仍缓存旧 Token 时，应先停止 WeClaw，再离线保存该账号。服务运行时 CLI 必须通过本机控制 API 协调切换；服务存在但 API 不可达时会失败关闭，不会直接改认证文件。服务停止时 `use` 只原子投影认证并更新活动 profile，下次启动生效。
 
-在线 `use` 会先拒绝正在执行的任务、活动或不确定 writer lease，以及任何 active/unknown thread；随后停止真实受管 Host、投影目标认证、启动唯一 Host，并核对账号和额度。目标启动或验证失败时自动恢复旧认证和旧 Host；回滚也失败则保持禁止写入。旧版遗留或无法证明身份的 app-server 不会被终止，请先运行 `weclaw codex account doctor` 并按提示重启 WeClaw。
+在线 `use` 会先拒绝正在执行的任务、活动或不确定 writer lease，以及任何 active/unknown thread；随后在索引写入切换 journal，停止真实受管 Host、投影目标认证、启动唯一 Host，并核对账号和额度。目标启动或验证失败时自动恢复旧认证和旧 Host；中途进程退出或回滚失败会在重启后继续保持禁止写入，不能因内存重置伪装恢复。在线 `save` 也会把 profile 索引与 Host 身份元数据一起提交，任一侧失败就补偿另一侧。旧版遗留或无法证明身份的 app-server 不会被终止，请先运行 `weclaw codex account doctor`；需要解除不安全 journal 时，停服后显式执行一次离线 `use` 再启动服务。
 
 飞书或微信可用 `/cx account`、`/cx account status` 查看脱敏的当前账号。只有管理员私聊可以查看账号列表或执行 `/cx account use <ID或标签>`；飞书列表选择还会显示一次绑定操作者、窗口、目标 profile 和列表 revision 的 5 分钟确认卡。一个 WeClaw 主机只有一个全局活动 Codex 账号，不按聊天窗口分别切换。
 
@@ -292,6 +292,8 @@ go build -o weclaw .
 ```
 
 仓库当前使用 Go 1.26.5。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
+
+正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。
 
 ## 上游与许可
 

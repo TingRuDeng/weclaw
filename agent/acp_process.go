@@ -91,6 +91,7 @@ func (a *ACPAgent) launchACPSubprocess(ctx context.Context) (int, error) {
 	a.cmd = cmd
 	a.stdin = stdin
 	a.scanner = newACPScanner(stdout)
+	a.acpProcessDone = make(chan error, 1)
 	a.wireEpoch++
 	a.started = true
 	pid := cmd.Process.Pid
@@ -142,13 +143,15 @@ func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
 	a.started = false
 	stdin := a.stdin
 	cmd := a.cmd
+	processDone := a.acpProcessDone
 	a.stdin = nil
 	a.cmd = nil
 	a.scanner = nil
+	a.acpProcessDone = nil
 	a.wireEpoch++
 	a.mu.Unlock()
 	a.wireDispatchMu.Unlock()
-	stopACPProcess(stdin, cmd)
+	stopACPProcess(stdin, cmd, processDone)
 	if detail := a.stderr.LastError(); detail != "" {
 		return fmt.Errorf("agent startup failed (pid=%d): %w; stderr: %s", pid, startErr, detail)
 	}
@@ -202,7 +205,7 @@ func (a *ACPAgent) finishACPStart(startErr error) error {
 }
 
 // stopACPProcess 关闭 ACP 子进程资源；启动失败和显式 Stop 都必须容忍 readLoop 已经清理状态。
-func stopACPProcess(stdin io.Closer, cmd *exec.Cmd) {
+func stopACPProcess(stdin io.Closer, cmd *exec.Cmd, processDone ...<-chan error) {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
@@ -211,6 +214,10 @@ func stopACPProcess(stdin io.Closer, cmd *exec.Cmd) {
 			_ = cmd.Cancel()
 		} else {
 			_ = cmd.Process.Kill()
+		}
+		if len(processDone) > 0 && processDone[0] != nil {
+			waitForReapedACPProcess(cmd, processDone[0])
+			return
 		}
 		done := make(chan struct{})
 		go func() {
@@ -230,6 +237,22 @@ func stopACPProcess(stdin io.Closer, cmd *exec.Cmd) {
 		case <-done:
 		case <-time.After(acpKillGrace):
 		}
+	}
+}
+
+func waitForReapedACPProcess(cmd *exec.Cmd, done <-chan error) {
+	timer := time.NewTimer(acpKillGrace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+		sweepProcessGroup(cmd)
+		_ = cmd.Process.Kill()
+	}
+	select {
+	case <-done:
+	case <-time.After(acpKillGrace):
 	}
 }
 
@@ -279,15 +302,17 @@ func (a *ACPAgent) Stop() {
 	}
 	stdin := a.stdin
 	cmd := a.cmd
+	processDone := a.acpProcessDone
 	a.started = false
 	a.stdin = nil
 	a.cmd = nil
 	a.scanner = nil
+	a.acpProcessDone = nil
 	a.wireEpoch++
 	a.mu.Unlock()
 	a.wireDispatchMu.Unlock()
 
-	stopACPProcess(stdin, cmd)
+	stopACPProcess(stdin, cmd, processDone)
 	a.failRuntimeWaiters("ACP runtime stopped")
 }
 

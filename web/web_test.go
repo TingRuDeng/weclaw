@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/ilink"
 )
 
 func TestFrontendDoesNotRenderServerDataWithInnerHTML(t *testing.T) {
@@ -180,5 +182,66 @@ func TestWeChatLoginSessionIsolation(t *testing.T) {
 	store.now = func() time.Time { return time.Now().Add(wechatLoginTTL + time.Minute) }
 	if store.statusOf(id) != "expired" {
 		t.Fatal("expired session should report expired")
+	}
+}
+
+func TestWeChatLoginStartExpiresPreviousSession(t *testing.T) {
+	store := newWechatLoginStore()
+	first := store.begin("qr-content-1")
+	firstContext := store.contextOf(first)
+	second := store.begin("qr-content-2")
+	select {
+	case <-firstContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("previous login poll context was not canceled")
+	}
+	if got := store.statusOf(first); got != "expired" {
+		t.Fatalf("previous login status=%q", got)
+	}
+	if got := store.statusOf(second); got != "waiting" {
+		t.Fatalf("current login status=%q", got)
+	}
+	store.setStatus(first, "confirmed")
+	if got := store.statusOf(first); got != "expired" {
+		t.Fatalf("late previous callback changed terminal status to %q", got)
+	}
+}
+
+func TestWeChatLoginStatusRemainsReadableWhileCredentialsSave(t *testing.T) {
+	store := newWechatLoginStore()
+	id := store.begin("qr-content")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store.save = func(*ilink.Credentials) error {
+		close(started)
+		<-release
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- store.complete(id, &ilink.Credentials{ILinkBotID: "bot-1"}) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("credential save did not start")
+	}
+	store.now = func() time.Time { return time.Now().Add(wechatLoginTTL + time.Minute) }
+	statusDone := make(chan string, 1)
+	go func() { statusDone <- store.statusOf(id) }()
+	select {
+	case status := <-statusDone:
+		if status == "expired" || status == "confirmed" {
+			t.Fatalf("status while saving=%q", status)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("credential file IO blocked login status reads")
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("credential save did not finish")
 	}
 }

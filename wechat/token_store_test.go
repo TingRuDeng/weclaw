@@ -2,6 +2,7 @@ package wechat
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,22 @@ func TestContextTokenStorePersistsAndLoads(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "wechat:user-1") {
 		t.Fatalf("token file=%s, want platform-qualified key", string(data))
+	}
+}
+
+func TestContextTokenStorePathConfinesUntrustedBotID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	accountsDir := filepath.Join(home, "accounts")
+	for _, botID := range []string{"../escape", "/tmp/absolute", `..\windows\escape`, "bot/child"} {
+		path := contextTokenStorePath(botID)
+		rel, err := filepath.Rel(accountsDir, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			t.Fatalf("botID=%q escaped accounts dir: path=%q rel=%q", botID, path, rel)
+		}
 	}
 }
 

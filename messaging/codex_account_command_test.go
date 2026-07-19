@@ -118,6 +118,15 @@ func TestFeishuCodexAccountListUsesSnapshotPagination(t *testing.T) {
 	}
 }
 
+func TestCodexAccountStatusReportsPendingSecretCleanup(t *testing.T) {
+	_, accountAgent, _ := newMessagingAccountFixture(t, 2)
+	accountAgent.status.Store.PendingSecretDeletes = 2
+	got := renderCodexAccountStatus(accountAgent.status)
+	if !strings.Contains(got, "旧凭据待清理: 2 个") || strings.Contains(got, "secret_ref") {
+		t.Fatalf("status=%q", got)
+	}
+}
+
 func TestFeishuCodexAccountSelectionRequiresScopedConfirmationAndIsIdempotent(t *testing.T) {
 	h, accountAgent, msg := newMessagingAccountFixture(t, 2)
 	msg.Text, msg.MessageID = "/cx account", "account-list"

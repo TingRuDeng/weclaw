@@ -651,3 +651,31 @@
 - 反例：`/cc status 请解释` 被吞成状态命令，`/cwdfoo` 被当成 `/cwd foo`，无参数 `/cwd` 返回占位值，或把 `/cx model status` 的新 thread 默认值标成当前 thread 配置。
 - 正确做法：保留 `/cc <内容>` 时为保留词命令建立严格 grammar；`/cwd` 使用独立 token 检测并按 route binding 只读查询；`/model`、`/reasoning` 显示当前/默认作用域，Agent 专用 `model status` 明确标为新会话默认配置。
 - 补充：route 已显式选择的 Agent 即使被移除或暂时不可用，也不能静默改用平台默认 Agent；状态和写入入口必须保留原选择并明确失败，避免跨 Agent 误操作。
+
+## 2026-07-19 认证切换的未知终态必须跨重启失败关闭
+
+- 触发条件：共享 Codex Host 在认证切换的 stop、auth 投影、start、验证或回滚阶段崩溃，或者 profile 索引与 Host 身份元数据只有一侧提交成功。
+- 规则：触碰 Host 前必须持久化 `switching` journal；`switching` 和 `rollback_failed` 在新进程中仍是不可写状态。跨索引与 Host 元数据的在线保存必须先在同一账户锁内准备，再以补偿恢复旧元数据；补偿失败也要持久化失败终态。
+- 反例：只把 gate failed 放在进程内存，重启后构造新 gate 自动变成 running；或先 `store.Save` 再写 Host 元数据，第二步失败却保留新 active profile。
+- 正确做法：把非终态 journal 作为持久化安全门禁；只有成功、完整回滚或停服后的显式离线 `use` 才恢复可写。替换/删除旧 secret 的失败也必须保留待清理引用并重试，不得忽略 `Delete` 错误。
+
+## 2026-07-19 stdio ACP 子进程只能有一个 Wait 所有者
+
+- 触发条件：ClaudeHost 或其他标准 ACP 子进程自然 EOF、初始化失败、显式 Stop 或进程组强制清理并发发生。
+- 规则：stdout reader 负责唯一一次 `Cmd.Wait` 并发布完成 channel；其他路径只发出关闭/终止信号并等待同一 channel。旧 reader 必须按 wire epoch 隔离，不能清理新 generation。
+- 反例：readLoop 在 EOF 时先清空 `a.cmd` 而不 Wait，之后 Stop 已拿不到进程句柄，留下 zombie；或者 readLoop 与 Stop 各自 Wait 同一个 `exec.Cmd`。
+- 正确做法：自然退出先等待短暂收敛，异常只关闭 stdout 时再优雅终止并最终清理进程组；所有等待者共享同一完成结果。
+
+## 2026-07-19 外部账号标识与扫码登录都必须在边界收敛
+
+- 触发条件：微信返回的 `ILinkBotID` 参与凭据/context-token 文件名，或 Web 用户重复点击扫码登录。
+- 规则：所有账号文件路径统一使用同一个受限字符编码加哈希的安全 ID，禁止把外部原文交给 `filepath.Join`；兼容映射造成的文件名碰撞必须在保存和加载时失败关闭。同一 Web 服务只允许一个 active 登录 poll，新会话取消旧 context 并把旧状态固定为 expired。
+- 反例：只替换 `@`、`.`、`:`，却保留 `/`、`\\` 或绝对路径；每次点击都启动独立五分钟后台 poll，晚到旧回调仍可保存旧凭据。
+- 正确做法：在 `ilink` 边界规范化并复用到所有持久化路径；active session、cancel 和 terminal status 在同一锁下更新，保存凭据前再次确认会话仍是当前 active。
+
+## 2026-07-19 正式发布只能有一个权威执行入口
+
+- 触发条件：本地发布脚本和 GitHub Actions workflow 分别实现测试、构建、上传与校验。
+- 规则：`scripts/release.sh` 是唯一稳定版发布实现；workflow 只配置权限、checkout clean `main`、Go 版本和 `GH_TOKEN`，然后调用该脚本。
+- 反例：workflow 自己 checkout 既有 tag、运行较少门禁并直接用 Release action 上传，导致本地与远端发布语义漂移。
+- 正确做法：测试 workflow 的“委托权威脚本”契约，而不是要求 workflow 复制脚本里的矩阵、staticcheck、govulncheck 和资产校验文本。

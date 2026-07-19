@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/codexauth"
 )
@@ -179,6 +182,35 @@ func newAccountSwitchFixture(t *testing.T) *accountSwitchFixture {
 	return fixture
 }
 
+func markAccountFixtureHostManaged(t *testing.T, fixture *accountSwitchFixture) codexHostMetadata {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "sleep", "30")
+	configureACPProcess(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	identity, err := inspectCodexHostProcess(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := codexHostMetadata{
+		Version: codexHostMetadataVersion, State: "running", PID: cmd.Process.Pid,
+		ProcessGroupID: identity.pgid, UID: identity.uid, ProcessStart: identity.start,
+		ObservedCommandHash: identity.commandHash,
+		CommandFingerprint:  fixture.agent.configuredCodexHostCommandFingerprint(fixture.store.SocketPath()),
+		SocketPath:          fixture.store.SocketPath(), Generation: 3, StartedAt: time.Now().UTC(),
+		ActiveProfileID: string(fixture.oldProfile.ID), AccountFingerprint: fixture.oldProfile.AccountFingerprint,
+	}
+	if err := fixture.agent.writeCodexHostMetadata(fixture.store.SocketPath(), metadata); err != nil {
+		t.Fatal(err)
+	}
+	return metadata
+}
+
 func TestReadCodexAccountAcceptsLoggedInChatGPTAccountWhenProviderRequiresAuth(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
@@ -279,6 +311,82 @@ func TestSaveCodexAccountRejectsUnmanagedHostWithoutStoreMutation(t *testing.T) 
 	}
 }
 
+func TestRemoveCodexAccountUsesRuntimeGate(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	permit, err := fixture.agent.ensureCodexAppServerGate().acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer permit.release()
+	before, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.agent.RemoveCodexAccount(context.Background(), fixture.target.Label); codexauth.ErrorCode(err) != codexauth.CodeBusy {
+		t.Fatalf("RemoveCodexAccount() error=%v", err)
+	}
+	after, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("busy remove changed store:\nbefore=%#v\nafter=%#v", before, after)
+	}
+}
+
+func TestDoctorCodexAccountsPreservesUnsafeStoreResult(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	if err := fixture.store.WithTransaction(context.Background(), func(tx *codexauth.Transaction) error {
+		tx.SetLastSwitch(codexauth.SwitchRecord{
+			ProfileID: fixture.oldProfile.ID, Status: "rollback_failed", Message: "rollback failed", At: time.Now(),
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := fixture.agent.DoctorCodexAccounts(context.Background())
+	if result.OK || !strings.Contains(result.Message, "禁止写入") {
+		t.Fatalf("DoctorCodexAccounts()=%#v", result)
+	}
+}
+
+func TestSaveCodexAccountRollsBackStoreAndHostMetadataTogether(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	beforeMetadata := markAccountFixtureHostManaged(t, fixture)
+	before, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.agent.updateHostIdentityCall = func(socketPath string, profile codexauth.Profile) error {
+		partial := beforeMetadata
+		partial.ActiveProfileID = string(profile.ID)
+		partial.AccountFingerprint = profile.AccountFingerprint
+		if err := fixture.agent.writeCodexHostMetadata(socketPath, partial); err != nil {
+			return err
+		}
+		return errors.New("metadata fsync outcome unknown")
+	}
+
+	_, err = fixture.agent.SaveCodexAccount(context.Background(), CodexAccountSaveOptions{Label: "待补偿账号"})
+	if err == nil {
+		t.Fatal("SaveCodexAccount() unexpectedly succeeded")
+	}
+	after, statusErr := fixture.store.Status()
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed save changed account store:\nbefore=%#v\nafter=%#v", before, after)
+	}
+	afterMetadata, metadataErr := fixture.agent.readCodexHostMetadata(fixture.store.SocketPath())
+	if metadataErr != nil {
+		t.Fatal(metadataErr)
+	}
+	if !reflect.DeepEqual(afterMetadata, beforeMetadata) {
+		t.Fatalf("failed save changed host metadata:\nbefore=%#v\nafter=%#v", beforeMetadata, afterMetadata)
+	}
+}
+
 func TestUseCodexAccountRollsBackTargetMismatch(t *testing.T) {
 	fixture := newAccountSwitchFixture(t)
 	fixture.startHook = func(f *accountSwitchFixture) error {
@@ -344,6 +452,52 @@ func TestUseCodexAccountRollbackFailureFailsClosed(t *testing.T) {
 	}
 	if _, acquireErr := fixture.agent.ensureCodexAppServerGate().acquire(context.Background()); !errors.Is(acquireErr, ErrCodexRuntimeUnavailable) {
 		t.Fatalf("failed gate acquire error=%v", acquireErr)
+	}
+
+	// fail-closed 不能只存在于当前进程内存；服务重启后仍必须从账户索引恢复。
+	restarted := NewACPAgent(ACPAgentConfig{
+		ConfiguredName:  "codex",
+		Command:         "codex",
+		Args:            []string{"app-server"},
+		AppServerSocket: fixture.store.SocketPath(),
+	})
+	restarted.codexAccountStoreCall = func() (*codexauth.Store, error) { return fixture.store, nil }
+	if restarted.ensureCodexAppServerGate().stateSnapshot() != codexAppServerFailed {
+		t.Fatalf("restarted gate state=%s", restarted.ensureCodexAppServerGate().stateSnapshot())
+	}
+	if _, acquireErr := restarted.ensureCodexAppServerGate().acquire(context.Background()); !errors.Is(acquireErr, ErrCodexRuntimeUnavailable) {
+		t.Fatalf("restarted failed gate acquire error=%v", acquireErr)
+	}
+}
+
+func TestUseCodexAccountPersistsSwitchJournalBeforeStoppingHost(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	fixture.agent.stopManagedHostCall = func(context.Context, string) error {
+		status, err := fixture.store.Status()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.LastSwitch == nil || status.LastSwitch.Status != "switching" || status.LastSwitch.ProfileID != fixture.target.ID {
+			t.Fatalf("switch journal=%#v", status.LastSwitch)
+		}
+		return errors.New("host stop outcome unknown")
+	}
+	before, _ := fixture.store.Status()
+	_, err := fixture.agent.UseCodexAccount(context.Background(), fixture.target.Label, before.Revision)
+	if err == nil {
+		t.Fatal("UseCodexAccount() unexpectedly succeeded")
+	}
+	if fixture.agent.ensureCodexAppServerGate().stateSnapshot() != codexAppServerFailed {
+		t.Fatalf("gate state=%s", fixture.agent.ensureCodexAppServerGate().stateSnapshot())
+	}
+
+	restarted := NewACPAgent(ACPAgentConfig{
+		ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"},
+		AppServerSocket: fixture.store.SocketPath(), StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	restarted.codexAccountStoreCall = func() (*codexauth.Store, error) { return fixture.store, nil }
+	if restarted.ensureCodexAppServerGate().stateSnapshot() != codexAppServerFailed {
+		t.Fatalf("restarted gate state=%s", restarted.ensureCodexAppServerGate().stateSnapshot())
 	}
 }
 

@@ -426,7 +426,8 @@ func useOfflineCodexAccount(ctx context.Context, store *codexauth.Store, referen
 func offlinePublicCodexAccountStatus(status codexauth.Status) agent.CodexAccountStatus {
 	result := agent.CodexAccountStatus{Store: agent.CodexAccountStoreStatus{
 		HostID: status.HostID, Revision: status.Revision, LastSwitch: status.LastSwitch,
-		Profiles: make([]agent.CodexAccountProfile, 0, len(status.Profiles)),
+		PendingSecretDeletes: status.PendingSecretDeletes,
+		Profiles:             make([]agent.CodexAccountProfile, 0, len(status.Profiles)),
 	}}
 	for _, profile := range status.Profiles {
 		public := offlinePublicCodexAccountProfile(profile)
@@ -479,6 +480,7 @@ func printCodexAccountList(status agent.CodexAccountStatus) {
 		return
 	}
 	fmt.Printf("Codex 账号（shared Host，全局生效，revision=%d）：\n", status.Store.Revision)
+	printCodexAccountCleanupWarning(status)
 	for _, profile := range status.Store.Profiles {
 		marker := " "
 		if status.Store.Current != nil && status.Store.Current.ID == profile.ID {
@@ -495,6 +497,7 @@ func printCurrentCodexAccount(status agent.CodexAccountStatus) {
 	}
 	current := status.Store.Current
 	fmt.Printf("当前 Codex 账号：%s（%s，%s）\n", current.Label, current.EmailMasked, current.SecretBackend)
+	printCodexAccountCleanupWarning(status)
 	if status.Quota != nil {
 		fmt.Printf("额度桶：%d\n", len(status.Quota.Limits))
 	}
@@ -502,6 +505,12 @@ func printCurrentCodexAccount(status agent.CodexAccountStatus) {
 		fmt.Printf("shared Host：受管，pid=%d，generation=%d\n", status.Host.PID, status.Host.Generation)
 	} else if status.Host.Reason != "" {
 		fmt.Printf("shared Host：不可切换（%s）\n", status.Host.Reason)
+	}
+}
+
+func printCodexAccountCleanupWarning(status agent.CodexAccountStatus) {
+	if status.Store.PendingSecretDeletes > 0 {
+		fmt.Printf("警告：%d 个旧 OAuth 凭据等待清理，请运行 weclaw codex account doctor。\n", status.Store.PendingSecretDeletes)
 	}
 }
 

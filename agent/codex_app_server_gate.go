@@ -89,6 +89,15 @@ func (g *codexAppServerGate) finishExclusive(committed bool, available bool) {
 	g.notifyLocked()
 }
 
+// fail 把共享 Host 置为不可写。该状态只能由已经证明运行时不安全的路径设置；
+// 普通连接失败和探测超时不得调用它。
+func (g *codexAppServerGate) fail() {
+	g.mu.Lock()
+	g.state = codexAppServerFailed
+	g.notifyLocked()
+	g.mu.Unlock()
+}
+
 // drain 阻止新 turn，等待已有 turn 结束，再执行一次共享运行时刷新。
 func (g *codexAppServerGate) drain(ctx context.Context, restart func(context.Context) error) error {
 	if err := g.beginDrain(ctx); err != nil {

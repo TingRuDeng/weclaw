@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -31,7 +32,11 @@ func newContextTokenStore(botID string) *contextTokenStore {
 
 func contextTokenStorePath(botID string) string {
 	home, _ := config.DataDir()
-	return filepath.Join(home, "accounts", strings.TrimSpace(botID)+".tokens.json")
+	accountID := ilink.NormalizeAccountID(botID)
+	if accountID == "" {
+		accountID = "invalid-account"
+	}
+	return filepath.Join(home, "accounts", accountID+".tokens.json")
 }
 
 func (s *contextTokenStore) Get(userID string) string {

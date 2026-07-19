@@ -38,6 +38,9 @@ type ACPAgent struct {
 	cmd            *exec.Cmd
 	stdin          io.WriteCloser
 	scanner        *bufio.Scanner
+	// acpProcessDone 由 readLoop 的唯一 Wait 所有者关闭；Stop/启动失败只
+	// 负责发出终止信号并等待它，避免双重 Wait 或自然退出留下 zombie。
+	acpProcessDone chan error
 	// codexHostSocket is the stable Unix socket shared by every Codex frontend.
 	// hostCmd/hostDone are only populated when this ACPAgent launched the host;
 	// attaching to an already running host never gives this client lifecycle
@@ -98,6 +101,7 @@ type ACPAgent struct {
 	codexOwners               *codexRuntimeOwnerRegistry
 	desktopRuntime            *codexDesktopRuntime
 	appServerGate             *codexAppServerGate
+	codexAccountSafetyOnce    sync.Once
 	restartCodexAppServerCall func(context.Context) error
 	codexAccountStoreCall     func() (*codexauth.Store, error)
 	stopManagedHostCall       func(context.Context, string) error

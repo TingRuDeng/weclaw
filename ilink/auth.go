@@ -2,10 +2,12 @@ package ilink
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -90,35 +92,47 @@ func AccountsDir() (string, error) {
 
 // NormalizeAccountID converts raw bot ID to filesystem-safe format.
 func NormalizeAccountID(raw string) string {
-	s := raw
-	for _, ch := range []string{"@", ".", ":"} {
-		s = filepath.Clean(s)
-		s = replaceAll(s, ch, "-")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
 	}
-	return s
-}
-
-func replaceAll(s, old, new string) string {
-	for {
-		i := indexOf(s, old)
-		if i < 0 {
-			return s
-		}
-		s = s[:i] + new + s[i+len(old):]
-	}
-}
-
-func indexOf(s, sub string) int {
-	for i := range s {
-		if i+len(sub) <= len(s) && s[i:i+len(sub)] == sub {
-			return i
+	const hexDigits = "0123456789abcdef"
+	var builder strings.Builder
+	encodedUnsafe := false
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9', ch == '-', ch == '_':
+			builder.WriteByte(ch)
+		case ch == '@', ch == '.', ch == ':':
+			// 保持既有正常账号文件名兼容。
+			builder.WriteByte('-')
+		default:
+			encodedUnsafe = true
+			builder.WriteByte('_')
+			builder.WriteByte(hexDigits[ch>>4])
+			builder.WriteByte(hexDigits[ch&0x0f])
 		}
 	}
-	return -1
+	result := builder.String()
+	if result == "" {
+		return ""
+	}
+	if encodedUnsafe || len(result) > 120 {
+		sum := sha256.Sum256([]byte(raw))
+		if len(result) > 96 {
+			result = result[:96]
+		}
+		result += fmt.Sprintf("-%x", sum[:8])
+	}
+	return result
 }
 
 // SaveCredentials saves credentials to disk under ~/.weclaw/accounts/{id}.json.
 func SaveCredentials(creds *Credentials) error {
+	if creds == nil {
+		return fmt.Errorf("save credentials: nil credentials")
+	}
 	dir, err := AccountsDir()
 	if err != nil {
 		return err
@@ -128,7 +142,20 @@ func SaveCredentials(creds *Credentials) error {
 	}
 
 	id := NormalizeAccountID(creds.ILinkBotID)
+	if id == "" {
+		return fmt.Errorf("save credentials: empty bot id")
+	}
 	path := filepath.Join(dir, id+".json")
+	if existingData, readErr := os.ReadFile(path); readErr == nil {
+		var existing Credentials
+		if json.Unmarshal(existingData, &existing) == nil &&
+			strings.TrimSpace(existing.ILinkBotID) != "" &&
+			strings.TrimSpace(existing.ILinkBotID) != strings.TrimSpace(creds.ILinkBotID) {
+			return fmt.Errorf("save credentials: bot id filename collision for %q", id)
+		}
+	} else if !os.IsNotExist(readErr) {
+		return fmt.Errorf("read existing credentials: %w", readErr)
+	}
 
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
@@ -157,6 +184,7 @@ func LoadAllCredentials() ([]*Credentials, error) {
 	}
 
 	var result []*Credentials
+	loadedIDs := make(map[string]string)
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
@@ -166,7 +194,19 @@ func LoadAllCredentials() ([]*Credentials, error) {
 			continue
 		}
 		var creds Credentials
-		if json.Unmarshal(data, &creds) == nil && creds.BotToken != "" {
+		if json.Unmarshal(data, &creds) == nil && strings.TrimSpace(creds.BotToken) != "" {
+			id := NormalizeAccountID(creds.ILinkBotID)
+			if id == "" {
+				continue
+			}
+			rawID := strings.TrimSpace(creds.ILinkBotID)
+			if previous, exists := loadedIDs[id]; exists {
+				if previous != rawID {
+					return nil, fmt.Errorf("load credentials: multiple bot IDs map to %q", id)
+				}
+				continue
+			}
+			loadedIDs[id] = rawID
 			result = append(result, &creds)
 		}
 	}

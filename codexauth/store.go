@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,6 +96,7 @@ func (s *Store) CodexHome() string  { return s.codexHome }
 func (s *Store) SocketPath() string { return s.socketPath }
 func (s *Store) Root() string       { return s.root }
 func (s *Store) AuthPath() string   { return s.authPath }
+func (s *Store) IndexPath() string  { return s.indexPath }
 
 func (s *Store) List() (Index, error) {
 	return s.readIndex()
@@ -182,13 +184,23 @@ func (s *Store) WithTransaction(ctx context.Context, fn func(*Transaction) error
 	if err != nil {
 		return err
 	}
-	tx := &Transaction{store: s, index: index}
+	tx := &Transaction{store: s, index: index, baseIndex: cloneIndex(index)}
+	if err := tx.retryPendingSecretDeletes(); err != nil {
+		if ErrorCode(err) != CodeCleanupPending {
+			return err
+		}
+		tx.reportDeferredSecretCleanup()
+	}
 	if err := fn(tx); err != nil {
-		tx.cleanupNewSecrets()
+		if cleanupErr := tx.cleanupNewSecrets(); cleanupErr != nil {
+			return errors.Join(err, cleanupErr)
+		}
 		return err
 	}
 	if err := tx.Flush(); err != nil {
-		tx.cleanupNewSecrets()
+		if cleanupErr := tx.cleanupNewSecrets(); cleanupErr != nil {
+			return errors.Join(err, cleanupErr)
+		}
 		return err
 	}
 	return nil
@@ -196,8 +208,17 @@ func (s *Store) WithTransaction(ctx context.Context, fn func(*Transaction) error
 
 func (s *Store) Doctor() DoctorResult {
 	result := DoctorResult{HostID: s.hostID, Store: s.root, Auth: s.authPath}
-	if _, err := s.readIndex(); err != nil {
+	index, err := s.readIndex()
+	if err != nil {
 		result.Message = err.Error()
+		return result
+	}
+	if IsUnsafeSwitchRecord(index.LastSwitch) {
+		result.Message = "Codex 上次账号切换终态不安全，当前必须禁止写入；请停服后显式执行离线 account use 恢复认证"
+		return result
+	}
+	if len(index.PendingSecretDeletes) > 0 {
+		result.Message = fmt.Sprintf("Codex 账号索引仍有 %d 个旧凭据等待清理；请在凭据库恢复后重试账号操作", len(index.PendingSecretDeletes))
 		return result
 	}
 	if _, err := ReadAuthFile(s.authPath); err != nil {
@@ -295,6 +316,20 @@ func validateIndex(index Index) error {
 			return fmt.Errorf("active profile does not exist")
 		}
 	}
+	cleanupRefs := make(map[string]struct{}, len(index.PendingSecretDeletes))
+	for _, pending := range index.PendingSecretDeletes {
+		if pending.Backend != SecretBackendKeyring && pending.Backend != SecretBackendFile {
+			return fmt.Errorf("unsupported pending secret backend")
+		}
+		if _, err := uuid.Parse(pending.Ref); err != nil {
+			return fmt.Errorf("invalid pending secret reference")
+		}
+		key := string(pending.Backend) + "\x00" + pending.Ref
+		if _, exists := cleanupRefs[key]; exists {
+			return fmt.Errorf("duplicate pending secret reference")
+		}
+		cleanupRefs[key] = struct{}{}
+	}
 	return nil
 }
 
@@ -325,6 +360,7 @@ type pendingSecret struct {
 type Transaction struct {
 	store          *Store
 	index          Index
+	baseIndex      Index
 	dirty          bool
 	newSecrets     []pendingSecret
 	pendingDeletes []pendingSecret
@@ -536,19 +572,71 @@ func (tx *Transaction) Remove(reference string) error {
 }
 
 func (tx *Transaction) Flush() error {
-	if !tx.dirty {
-		return nil
+	if len(tx.pendingDeletes) > 0 {
+		existing := make(map[string]struct{}, len(tx.index.PendingSecretDeletes)+len(tx.pendingDeletes))
+		for _, pending := range tx.index.PendingSecretDeletes {
+			existing[string(pending.Backend)+"\x00"+pending.Ref] = struct{}{}
+		}
+		for _, secret := range tx.pendingDeletes {
+			key := string(secret.backend) + "\x00" + secret.ref
+			if _, found := existing[key]; found {
+				continue
+			}
+			tx.index.PendingSecretDeletes = append(tx.index.PendingSecretDeletes, PendingSecretDelete{Backend: secret.backend, Ref: secret.ref})
+			existing[key] = struct{}{}
+		}
+		tx.pendingDeletes = nil
+		tx.dirty = true
 	}
-	if err := tx.store.writeIndex(tx.index); err != nil {
+	if tx.dirty {
+		if err := tx.store.writeIndex(tx.index); err != nil {
+			return err
+		}
+		tx.index.Revision++
+		tx.dirty = false
+		tx.newSecrets = nil
+		tx.baseIndex = cloneIndex(tx.index)
+	}
+	if err := tx.retryPendingSecretDeletes(); err != nil {
+		if ErrorCode(err) == CodeCleanupPending {
+			// 主索引已提交，不能把成功操作伪装成完全回滚；待清理引用仍在
+			// 0600 索引中，Status/Doctor 会暴露数量，下一次事务先重试。
+			tx.reportDeferredSecretCleanup()
+			return nil
+		}
 		return err
 	}
-	tx.index.Revision++
-	tx.dirty = false
-	tx.newSecrets = nil
-	for _, secret := range tx.pendingDeletes {
-		_ = tx.deleteSecret(secret)
+	return nil
+}
+
+func (tx *Transaction) reportDeferredSecretCleanup() {
+	log.Printf("[codexauth] OAuth secret cleanup deferred (pending=%d)", len(tx.index.PendingSecretDeletes))
+}
+
+func (tx *Transaction) retryPendingSecretDeletes() error {
+	if len(tx.index.PendingSecretDeletes) == 0 {
+		return nil
 	}
-	tx.pendingDeletes = nil
+	remaining := make([]PendingSecretDelete, 0, len(tx.index.PendingSecretDeletes))
+	var cleanupErrs []error
+	for _, pending := range tx.index.PendingSecretDeletes {
+		secret := pendingSecret{backend: pending.Backend, ref: pending.Ref}
+		if err := tx.deleteSecret(secret); err != nil {
+			remaining = append(remaining, pending)
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	if len(remaining) != len(tx.index.PendingSecretDeletes) {
+		tx.index.PendingSecretDeletes = remaining
+		if err := tx.store.writeIndex(tx.index); err != nil {
+			return NewError(CodeCleanupPending, "旧 Codex 凭据已删除，但清理记录未能提交；后续会安全重试", err)
+		}
+		tx.index.Revision++
+		tx.baseIndex = cloneIndex(tx.index)
+	}
+	if len(cleanupErrs) > 0 {
+		return NewError(CodeCleanupPending, "Codex 账号索引已更新，但旧凭据清理仍待重试", errors.Join(cleanupErrs...))
+	}
 	return nil
 }
 
@@ -584,16 +672,53 @@ func (tx *Transaction) deleteSecret(secret pendingSecret) error {
 	}
 }
 
-func (tx *Transaction) cleanupNewSecrets() {
+func (tx *Transaction) cleanupNewSecrets() error {
+	if len(tx.newSecrets) == 0 {
+		return nil
+	}
+	failed := make([]pendingSecret, 0, len(tx.newSecrets))
+	var cleanupErrs []error
 	for _, secret := range tx.newSecrets {
-		_ = tx.deleteSecret(secret)
+		if err := tx.deleteSecret(secret); err != nil {
+			failed = append(failed, secret)
+			cleanupErrs = append(cleanupErrs, err)
+		}
 	}
 	tx.newSecrets = nil
+	if len(failed) == 0 {
+		return nil
+	}
+	// 事务主体尚未提交，不能把 tx.index 中的 profile 变化写入磁盘；只在
+	// 最近一次成功提交的 baseIndex 上追加 orphan cleanup tombstone。
+	cleanupIndex := cloneIndex(tx.baseIndex)
+	existing := make(map[string]struct{}, len(cleanupIndex.PendingSecretDeletes)+len(failed))
+	for _, pending := range cleanupIndex.PendingSecretDeletes {
+		existing[string(pending.Backend)+"\x00"+pending.Ref] = struct{}{}
+	}
+	for _, secret := range failed {
+		key := string(secret.backend) + "\x00" + secret.ref
+		if _, found := existing[key]; found {
+			continue
+		}
+		cleanupIndex.PendingSecretDeletes = append(cleanupIndex.PendingSecretDeletes, PendingSecretDelete{Backend: secret.backend, Ref: secret.ref})
+		existing[key] = struct{}{}
+	}
+	writeErr := tx.store.writeIndex(cleanupIndex)
+	if writeErr == nil {
+		cleanupIndex.Revision++
+		tx.baseIndex = cloneIndex(cleanupIndex)
+	}
+	return NewError(
+		CodeCleanupPending,
+		"Codex 账号事务已回滚，但新凭据清理仍待重试",
+		errors.Join(append(cleanupErrs, writeErr)...),
+	)
 }
 
 func cloneIndex(index Index) Index {
 	clone := index
 	clone.Profiles = append([]Profile(nil), index.Profiles...)
+	clone.PendingSecretDeletes = append([]PendingSecretDelete(nil), index.PendingSecretDeletes...)
 	if index.LastSwitch != nil {
 		record := *index.LastSwitch
 		clone.LastSwitch = &record
@@ -636,14 +761,15 @@ func (s *Store) Status() (Status, error) {
 		return Status{}, err
 	}
 	status := Status{
-		HostID:     s.hostID,
-		Revision:   index.Revision,
-		Profiles:   append([]Profile(nil), index.Profiles...),
-		LastSwitch: index.LastSwitch,
-		CodexHome:  s.codexHome,
-		SocketPath: s.socketPath,
-		StorePath:  s.root,
-		AuthPath:   s.authPath,
+		HostID:               s.hostID,
+		Revision:             index.Revision,
+		Profiles:             append([]Profile(nil), index.Profiles...),
+		LastSwitch:           index.LastSwitch,
+		PendingSecretDeletes: len(index.PendingSecretDeletes),
+		CodexHome:            s.codexHome,
+		SocketPath:           s.socketPath,
+		StorePath:            s.root,
+		AuthPath:             s.authPath,
 	}
 	if index.ActiveProfileID != "" {
 		profile, ok := profileByID(index.Profiles, index.ActiveProfileID)

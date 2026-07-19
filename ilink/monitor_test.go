@@ -28,6 +28,14 @@ func TestWriteSyncDataAtomicallyReplacesFile(t *testing.T) {
 	}
 }
 
+func TestNewMonitorRejectsEmptyBotID(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	client := NewClient(&Credentials{BotToken: "secret"})
+	if _, err := NewMonitor(client, nil); err == nil {
+		t.Fatal("NewMonitor should reject an empty bot id")
+	}
+}
+
 func TestSortMessagesForDispatchUsesSeqThenMessageID(t *testing.T) {
 	messages := []WeixinMessage{
 		{Seq: 2, MessageID: 20, FromUserID: "u1"},

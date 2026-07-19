@@ -1,6 +1,9 @@
 package codexauth
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const indexVersion = 1
 
@@ -34,25 +37,46 @@ type SwitchRecord struct {
 	At        time.Time `json:"at"`
 }
 
+func IsUnsafeSwitchRecord(record *SwitchRecord) bool {
+	if record == nil {
+		return false
+	}
+	switch strings.TrimSpace(record.Status) {
+	case "switching", "rollback_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+// PendingSecretDelete 是索引提交后仍待删除的旧凭据引用。它只存在于权限为
+// 0600 的主机级索引中，公开状态只暴露数量，不返回 secret ref。
+type PendingSecretDelete struct {
+	Backend SecretBackend `json:"backend"`
+	Ref     string        `json:"ref"`
+}
+
 type Index struct {
-	Version         int           `json:"version"`
-	Revision        uint64        `json:"revision"`
-	ActiveProfileID ProfileID     `json:"active_profile_id,omitempty"`
-	Profiles        []Profile     `json:"profiles"`
-	LastSwitch      *SwitchRecord `json:"last_switch,omitempty"`
+	Version              int                   `json:"version"`
+	Revision             uint64                `json:"revision"`
+	ActiveProfileID      ProfileID             `json:"active_profile_id,omitempty"`
+	Profiles             []Profile             `json:"profiles"`
+	LastSwitch           *SwitchRecord         `json:"last_switch,omitempty"`
+	PendingSecretDeletes []PendingSecretDelete `json:"pending_secret_deletes,omitempty"`
 }
 
 type Status struct {
-	HostID      string        `json:"host_id"`
-	Revision    uint64        `json:"revision"`
-	Current     *Profile      `json:"current,omitempty"`
-	Profiles    []Profile     `json:"profiles,omitempty"`
-	LastSwitch  *SwitchRecord `json:"last_switch,omitempty"`
-	CodexHome   string        `json:"-"`
-	SocketPath  string        `json:"-"`
-	StorePath   string        `json:"-"`
-	AuthPath    string        `json:"-"`
-	ManagedHost bool          `json:"managed_host"`
+	HostID               string        `json:"host_id"`
+	Revision             uint64        `json:"revision"`
+	Current              *Profile      `json:"current,omitempty"`
+	Profiles             []Profile     `json:"profiles,omitempty"`
+	LastSwitch           *SwitchRecord `json:"last_switch,omitempty"`
+	PendingSecretDeletes int           `json:"pending_secret_deletes"`
+	CodexHome            string        `json:"-"`
+	SocketPath           string        `json:"-"`
+	StorePath            string        `json:"-"`
+	AuthPath             string        `json:"-"`
+	ManagedHost          bool          `json:"managed_host"`
 }
 
 type SaveOptions struct {

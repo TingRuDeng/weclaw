@@ -27,12 +27,13 @@ type CodexAccountProfile struct {
 }
 
 type CodexAccountStoreStatus struct {
-	HostID      string                  `json:"host_id"`
-	Revision    uint64                  `json:"revision"`
-	Current     *CodexAccountProfile    `json:"current,omitempty"`
-	Profiles    []CodexAccountProfile   `json:"profiles,omitempty"`
-	LastSwitch  *codexauth.SwitchRecord `json:"last_switch,omitempty"`
-	ManagedHost bool                    `json:"managed_host"`
+	HostID               string                  `json:"host_id"`
+	Revision             uint64                  `json:"revision"`
+	Current              *CodexAccountProfile    `json:"current,omitempty"`
+	Profiles             []CodexAccountProfile   `json:"profiles,omitempty"`
+	LastSwitch           *codexauth.SwitchRecord `json:"last_switch,omitempty"`
+	PendingSecretDeletes int                     `json:"pending_secret_deletes"`
+	ManagedHost          bool                    `json:"managed_host"`
 }
 
 type CodexAccountStatus struct {
@@ -130,7 +131,8 @@ func (a *ACPAgent) SaveCodexAccount(ctx context.Context, options CodexAccountSav
 	if err := gate.beginExclusive(); err != nil {
 		return CodexAccountProfile{}, mapCodexAccountBusy(err)
 	}
-	defer gate.finishExclusive(false, true)
+	available := true
+	defer func() { gate.finishExclusive(false, available) }()
 	if err := a.ensureStarted(ctx); err != nil {
 		return CodexAccountProfile{}, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "启动 Codex app-server 失败", err)
 	}
@@ -152,22 +154,73 @@ func (a *ACPAgent) SaveCodexAccount(ctx context.Context, options CodexAccountSav
 	// 在线保存会把当前运行时身份写入主机级账户索引。必须先确认这里连接的
 	// 是当前配置启动的唯一受管 Host，避免旧版或外部 app-server 被误登记为
 	// WeClaw 的活动账户来源。
-	if _, err := a.validateManagedCodexHost(store.SocketPath()); err != nil {
-		return CodexAccountProfile{}, err
-	}
-	profile, err := store.Save(ctx, snapshot, codexauth.SaveOptions{
-		Label: options.Label, Replace: options.Replace, AllowFileStore: options.AllowFileStore,
-	})
+	previousMetadata, err := a.validateManagedCodexHost(store.SocketPath())
 	if err != nil {
 		return CodexAccountProfile{}, err
 	}
-	if err := a.setManagedCodexHostAccountIdentity(store.SocketPath(), profile); err != nil {
+	var profile codexauth.Profile
+	hostMutationAttempted := false
+	err = store.WithTransaction(ctx, func(tx *codexauth.Transaction) error {
+		var putErr error
+		profile, putErr = tx.PutSnapshot(snapshot, codexauth.SaveOptions{
+			Label: options.Label, Replace: options.Replace, AllowFileStore: options.AllowFileStore,
+		})
+		if putErr != nil {
+			return putErr
+		}
+		if err := tx.SetActive(profile.ID); err != nil {
+			return err
+		}
+		hostMutationAttempted = true
+		return a.setManagedCodexHostAccountIdentity(store.SocketPath(), profile)
+	})
+	if err != nil {
+		if hostMutationAttempted {
+			restoreErr := a.restoreManagedCodexHostMetadata(store.SocketPath(), previousMetadata)
+			if restoreErr != nil {
+				available = false
+				recordErr := store.WithTransaction(ctx, func(tx *codexauth.Transaction) error {
+					tx.SetLastSwitch(codexauth.SwitchRecord{
+						ProfileID: profile.ID, Status: "rollback_failed",
+						Message: "保存账号失败且 Host 身份元数据未能恢复", At: time.Now(),
+					})
+					return nil
+				})
+				return CodexAccountProfile{}, codexauth.NewError(
+					codexauth.CodeRollbackFailed,
+					"Codex 账号保存失败，Host 身份元数据未能恢复；当前已禁止继续写入",
+					errors.Join(err, restoreErr, recordErr),
+				)
+			}
+		}
 		return CodexAccountProfile{}, err
+	}
+	if current, _, currentErr := store.Current(); currentErr == nil && current != nil {
+		profile = *current
 	}
 	return publicCodexAccountProfile(profile), nil
 }
 
+// restoreManagedCodexHostMetadata 只在受管进程身份仍与事务开始时一致时恢复元数据，
+// 防止 PID 复用或 Host 已退出后把旧 running 记录重新写回。
+func (a *ACPAgent) restoreManagedCodexHostMetadata(socketPath string, previous codexHostMetadata) error {
+	current, err := a.validateManagedCodexHost(socketPath)
+	if err != nil {
+		return err
+	}
+	if current.PID != previous.PID || current.ProcessGroupID != previous.ProcessGroupID ||
+		current.ProcessStart != previous.ProcessStart || current.ObservedCommandHash != previous.ObservedCommandHash {
+		return codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程身份在保存期间发生变化", nil)
+	}
+	return a.writeCodexHostMetadata(socketPath, previous)
+}
+
 func (a *ACPAgent) RemoveCodexAccount(ctx context.Context, reference string) error {
+	gate := a.ensureCodexAppServerGate()
+	if err := gate.beginExclusive(); err != nil {
+		return mapCodexAccountBusy(err)
+	}
+	defer gate.finishExclusive(false, true)
 	store, err := a.codexAccountStore()
 	if err != nil {
 		return err
@@ -181,6 +234,11 @@ func (a *ACPAgent) DoctorCodexAccounts(ctx context.Context) codexauth.DoctorResu
 		return codexauth.DoctorResult{Message: err.Error()}
 	}
 	result := store.Doctor()
+	// 存储层的不安全 journal、待清理 secret 或认证损坏是更直接的安全
+	// 根因，不能被随后“Host 未运行/未受管”的次生状态覆盖。
+	if !result.OK {
+		return result
+	}
 	host := a.InspectCodexHost(ctx)
 	if !host.Managed || !host.Running {
 		result.OK = false
@@ -299,9 +357,19 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 			return err
 		}
 		reportCodexAccountSwitchProgress(ctx, CodexAccountSwitchSwitching)
+		// 在触碰真实 Host 之前先持久化切换意图。进程若在 stop/write/start
+		// 任一步骤中崩溃，下一次启动会从该记录恢复 fail-closed，而不是把
+		// 未知认证状态误判为可写。
+		tx.SetLastSwitch(codexauth.SwitchRecord{
+			ProfileID: target.ID, Status: "switching", Message: "账号切换进行中", At: time.Now(),
+		})
+		if err := tx.Flush(); err != nil {
+			return err
+		}
+		available = false
 
 		if err := a.stopManagedHost(ctx, store.SocketPath()); err != nil {
-			return err
+			return codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法确认 Codex Host 已安全停止；当前已禁止继续写入", err)
 		}
 		hostStopped := true
 		rollback := func(switchErr error) error {
@@ -310,16 +378,16 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 			activeRestoreErr := tx.RestoreActive(index.ActiveProfileID)
 			rollbackErr := a.rollbackCodexAccountSwitch(ctx, store, liveSnapshot, previous)
 			if usageRestoreErr != nil || activeRestoreErr != nil || rollbackErr != nil {
-				available = false
 				tx.SetLastSwitch(codexauth.SwitchRecord{ProfileID: index.ActiveProfileID, Status: "rollback_failed", Message: "账号切换失败且旧运行时恢复失败", At: time.Now()})
-				_ = tx.Flush()
-				return codexauth.NewError(codexauth.CodeRollbackFailed, "Codex 账号切换失败，旧账号或账号索引未能完整恢复；当前已禁止继续写入", errors.Join(switchErr, usageRestoreErr, activeRestoreErr, rollbackErr))
+				recordErr := tx.Flush()
+				return codexauth.NewError(codexauth.CodeRollbackFailed, "Codex 账号切换失败，旧账号或账号索引未能完整恢复；当前已禁止继续写入", errors.Join(switchErr, usageRestoreErr, activeRestoreErr, rollbackErr, recordErr))
 			}
 			hostStopped = false
 			tx.SetLastSwitch(codexauth.SwitchRecord{ProfileID: index.ActiveProfileID, Status: "rolled_back", Message: "目标账号不可用，已恢复原账号", At: time.Now()})
 			if flushErr := tx.Flush(); flushErr != nil {
 				return codexauth.NewError(codexauth.CodeRuntimeUnavailable, "旧账号已恢复，但切换结果记录失败", flushErr)
 			}
+			available = true
 			return switchErr
 		}
 
@@ -354,6 +422,7 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 		if err := tx.Flush(); err != nil {
 			return rollback(err)
 		}
+		available = true
 		a.markAllCodexThreadsResumeOnFirstUse()
 		latest := tx.Index()
 		result = CodexAccountSwitchResult{
@@ -552,7 +621,8 @@ func publicCodexAccountProfilePtr(profile *codexauth.Profile) *CodexAccountProfi
 func publicCodexAccountStatus(status codexauth.Status) CodexAccountStoreStatus {
 	result := CodexAccountStoreStatus{
 		HostID: status.HostID, Revision: status.Revision, LastSwitch: status.LastSwitch,
-		ManagedHost: status.ManagedHost, Profiles: make([]CodexAccountProfile, 0, len(status.Profiles)),
+		PendingSecretDeletes: status.PendingSecretDeletes,
+		ManagedHost:          status.ManagedHost, Profiles: make([]CodexAccountProfile, 0, len(status.Profiles)),
 	}
 	for _, profile := range status.Profiles {
 		result.Profiles = append(result.Profiles, publicCodexAccountProfile(profile))

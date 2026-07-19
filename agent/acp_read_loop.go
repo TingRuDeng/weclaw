@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -13,6 +14,8 @@ import (
 func (a *ACPAgent) readLoop() {
 	a.mu.Lock()
 	scanner := a.scanner
+	cmd := a.cmd
+	processDone := a.acpProcessDone
 	epoch := a.wireEpoch
 	a.mu.Unlock()
 	if scanner == nil {
@@ -24,8 +27,47 @@ func (a *ACPAgent) readLoop() {
 			break
 		}
 	}
-	a.finishReadLoop(scanner, epoch)
+	var waitErr error
+	if cmd != nil && processDone != nil {
+		waitErr = reapACPProcess(cmd)
+		processDone <- waitErr
+		close(processDone)
+	}
+	a.finishReadLoop(scanner, epoch, waitErr)
 	log.Println("[acp] read loop ended")
+}
+
+// reapACPProcess 是标准 ACP 子进程唯一调用 Cmd.Wait 的位置。正常退出先给
+// Wait 一个很短的收敛窗口；若进程只关闭 stdout 却仍存活，再按优雅终止、
+// 进程组清理的顺序回收。
+func reapACPProcess(cmd *exec.Cmd) error {
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(50 * time.Millisecond):
+	}
+	if cmd.Cancel != nil {
+		_ = cmd.Cancel()
+	} else if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(acpKillGrace):
+	}
+	sweepProcessGroup(cmd)
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(acpKillGrace):
+		return fmt.Errorf("ACP process did not exit after kill")
+	}
 }
 
 // handleCurrentACPWireLine 在同一临界区核对 reader generation 并完成分发。
@@ -175,11 +217,13 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 }
 
 // finishReadLoop 清理当前 runtime，并唤醒所有仍在等待的调用者。
-func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner, epoch uint64) {
+func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner, epoch uint64, waitErr error) {
 	exitReason := "ACP runtime exited"
 	if err := scanner.Err(); err != nil {
 		exitReason = fmt.Sprintf("ACP runtime read error: %v", err)
 		log.Printf("[acp] read loop error: %v", err)
+	} else if waitErr != nil {
+		exitReason = fmt.Sprintf("ACP runtime exited: %v", waitErr)
 	}
 	a.wireDispatchMu.Lock()
 	a.mu.Lock()
@@ -189,6 +233,7 @@ func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner, epoch uint64) {
 		a.stdin = nil
 		a.cmd = nil
 		a.scanner = nil
+		a.acpProcessDone = nil
 	}
 	a.mu.Unlock()
 	a.wireDispatchMu.Unlock()

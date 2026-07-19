@@ -45,6 +45,9 @@ type Monitor struct {
 
 // NewMonitor creates a new long-poll monitor.
 func NewMonitor(client *Client, handler MessageHandler) (*Monitor, error) {
+	if client == nil || NormalizeAccountID(client.BotID()) == "" {
+		return nil, fmt.Errorf("create monitor: empty bot id")
+	}
 	home, err := config.DataDir()
 	if err != nil {
 		return nil, err

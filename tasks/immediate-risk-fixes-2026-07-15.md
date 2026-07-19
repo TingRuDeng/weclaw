@@ -30,7 +30,7 @@
 
 - `install.sh:github_download` 负责带可选 GitHub Token 下载资产；主流程下载 `${BINARY}_${OS}_${ARCH}` 后直接 `chmod` 并移动到安装目录，没有读取或验证摘要。
 - `scripts/release.sh:build_release_assets` 已生成与二进制同目录的 `checksums.txt`。
-- `.github/workflows/ci.yml` 与 `.github/workflows/release.yml` 也会生成并上传 `checksums.txt`。
+- `.github/workflows/ci.yml` 会生成并上传预发布 `checksums.txt`；稳定版 `.github/workflows/release.yml` 委托 `scripts/release.sh` 生成、上传并验证正式 `checksums.txt`。
 - `scripts/install_test.sh` 已覆盖平台识别、Token、安装目录和错误分支，但未覆盖资产完整性校验。
 
 ### 后台启动

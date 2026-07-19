@@ -15,6 +15,7 @@ import (
 )
 
 const testACPDelayedInitEnv = "WECLAW_TEST_ACP_DELAYED_INIT"
+const testACPNaturalExitEnv = "WECLAW_TEST_ACP_NATURAL_EXIT"
 
 func TestACPAgentStartReturnsErrorWhenSubprocessExitsDuringInitialize(t *testing.T) {
 	ctx := context.Background()
@@ -131,6 +132,49 @@ func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
 	a.pendingMu.Unlock()
 	if pendingExists {
 		t.Fatal("pending RPC should be removed after runtime exit")
+	}
+}
+
+func TestACPAgentNaturalExitReapsSubprocess(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=^TestHelperACPNaturalExit$"},
+		Env:     map[string]string{testACPNaturalExitEnv: "1"},
+	})
+	if _, err := a.launchACPSubprocess(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	cmd := a.cmd
+	done := a.acpProcessDone
+	a.mu.Unlock()
+	if cmd == nil || done == nil {
+		t.Fatalf("launched process state cmd=%v done=%v", cmd, done)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("natural ACP exit was not reaped")
+	}
+	if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+		t.Fatalf("process state=%v", cmd.ProcessState)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		cleared := a.cmd == nil && !a.started
+		a.mu.Unlock()
+		if cleared {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("natural ACP exit did not clear runtime state")
+}
+
+func TestHelperACPNaturalExit(t *testing.T) {
+	if os.Getenv(testACPNaturalExitEnv) != "1" {
+		return
 	}
 }
 

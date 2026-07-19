@@ -190,7 +190,6 @@ func TestReleaseWorkflowsBuildOfficialMatrix(t *testing.T) {
 	}
 	for _, path := range []string{
 		filepath.Join("..", ".github", "workflows", "ci.yml"),
-		filepath.Join("..", ".github", "workflows", "release.yml"),
 	} {
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -220,6 +219,7 @@ func TestReleaseWorkflowsBuildOfficialMatrix(t *testing.T) {
 	if !strings.Contains(text, "${#TARGETS[@]} + 1") {
 		t.Fatal("release asset verification must derive expected count from TARGETS")
 	}
+	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }
 
 func TestReleaseScriptVerifiesEveryOfficialAssetName(t *testing.T) {
@@ -280,7 +280,6 @@ func TestReleaseValidationRunsTidyAndStaticcheck(t *testing.T) {
 	for _, path := range []string{
 		releaseScriptPath(t),
 		filepath.Join("..", ".github", "workflows", "ci.yml"),
-		filepath.Join("..", ".github", "workflows", "release.yml"),
 	} {
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -291,6 +290,7 @@ func TestReleaseValidationRunsTidyAndStaticcheck(t *testing.T) {
 			t.Fatalf("%s must gate go.mod drift and pinned staticcheck", path)
 		}
 	}
+	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }
 
 func TestReleaseValidationRunsFullRepositoryRaceAndRejectsNoPackages(t *testing.T) {
@@ -312,7 +312,6 @@ func TestReleaseValidationRunsFullRepositoryRaceAndRejectsNoPackages(t *testing.
 func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", ".github", "workflows", "ci.yml"),
-		filepath.Join("..", ".github", "workflows", "release.yml"),
 	} {
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -326,13 +325,20 @@ func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 			t.Fatalf("%s must run pinned govulncheck v1.6.0", path)
 		}
 	}
+	release, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(release), "go-version: '1.26.5'") {
+		t.Fatal("stable release workflow must use Go 1.26.5")
+	}
+	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }
 
 func TestReleaseWorkflowsPinThirdPartyReleaseAction(t *testing.T) {
 	const pinnedReleaseAction = "softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2"
 	for _, path := range []string{
 		filepath.Join("..", ".github", "workflows", "ci.yml"),
-		filepath.Join("..", ".github", "workflows", "release.yml"),
 	} {
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -346,6 +352,7 @@ func TestReleaseWorkflowsPinThirdPartyReleaseAction(t *testing.T) {
 			t.Fatalf("%s contains mutable softprops/action-gh-release tag", path)
 		}
 	}
+	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }
 
 func TestStableReleaseWorkflowIsManualOnlyAndBuildsRequestedTag(t *testing.T) {
@@ -361,16 +368,37 @@ func TestStableReleaseWorkflowIsManualOnlyAndBuildsRequestedTag(t *testing.T) {
 	if !strings.Contains(text, "workflow_dispatch:") {
 		t.Fatal("稳定版 workflow 应保留手动兜底入口")
 	}
-	if !strings.Contains(text, "ref: ${{ inputs.tag }}") {
-		t.Fatal("手动发布必须 checkout 输入 tag，禁止用默认分支内容冒充目标版本")
+	if !strings.Contains(text, "ref: main") {
+		t.Fatal("手动发布必须 checkout main，由权威脚本校验 origin/main 后创建目标 tag")
 	}
 	for _, required := range []string{
 		"fetch-depth: 0",
-		"refs/tags/$RELEASE_TAG^{commit}",
-		"refs/remotes/origin/main",
+		`scripts/release.sh "$RELEASE_TAG"`,
+		"GH_TOKEN: ${{ github.token }}",
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("手动发布缺少主分支来源校验 %q", required)
+		}
+	}
+	if strings.Contains(text, "ref: ${{ inputs.tag }}") {
+		t.Fatal("目标 tag 必须由 release.sh 在完成门禁后创建，不能预先 checkout")
+	}
+}
+
+func assertReleaseWorkflowDelegatesCanonicalScript(t *testing.T) {
+	t.Helper()
+	path := filepath.Join("..", ".github", "workflows", "release.yml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `scripts/release.sh "$RELEASE_TAG"`) {
+		t.Fatal("stable release workflow must delegate to scripts/release.sh")
+	}
+	for _, duplicatedGate := range []string{"go test ./...", "govulncheck@", "softprops/action-gh-release@"} {
+		if strings.Contains(text, duplicatedGate) {
+			t.Fatalf("stable release workflow duplicates canonical release logic %q", duplicatedGate)
 		}
 	}
 }

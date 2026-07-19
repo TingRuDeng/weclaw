@@ -3,7 +3,10 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/codexauth"
 )
 
 // restartCodexAppServer 仅刷新 ACP subprocess，不关闭独立 Desktop connector。
@@ -46,11 +49,34 @@ func (a *ACPAgent) ensureCodexAppServerStartedForTurn(ctx context.Context, conve
 
 func (a *ACPAgent) ensureCodexAppServerGate() *codexAppServerGate {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.appServerGate == nil {
 		a.appServerGate = newCodexAppServerGate()
 	}
-	return a.appServerGate
+	gate := a.appServerGate
+	a.mu.Unlock()
+
+	if a.usesCodexSharedHost() {
+		a.codexAccountSafetyOnce.Do(func() {
+			store, err := a.codexAccountStore()
+			if err != nil {
+				gate.fail()
+				return
+			}
+			// 没有账户索引表示尚未启用多账户功能，不应因此创建目录或阻止
+			// 既有单账户运行时。索引一旦存在，损坏或不安全终态都必须失败关闭。
+			if _, err := os.Lstat(store.IndexPath()); err != nil {
+				if !os.IsNotExist(err) {
+					gate.fail()
+				}
+				return
+			}
+			status, err := store.Status()
+			if err != nil || codexauth.IsUnsafeSwitchRecord(status.LastSwitch) {
+				gate.fail()
+			}
+		})
+	}
+	return gate
 }
 
 // stopCodexAppServerProcess 只断开当前 app-server 客户端连接。共享 host
@@ -68,11 +94,13 @@ func (a *ACPAgent) stopCodexAppServerProcess() {
 	a.wireDispatchMu.Lock()
 	a.mu.Lock()
 	stdin, cmd := a.stdin, a.cmd
+	processDone := a.acpProcessDone
 	a.started, a.stdin, a.cmd, a.scanner = false, nil, nil, nil
+	a.acpProcessDone = nil
 	a.wireEpoch++
 	a.mu.Unlock()
 	a.wireDispatchMu.Unlock()
-	stopACPProcess(stdin, cmd)
+	stopACPProcess(stdin, cmd, processDone)
 	a.failAppServerActiveTurns("ACP runtime stopped for recovery")
 	a.failPendingRequests("ACP runtime stopped for recovery")
 }

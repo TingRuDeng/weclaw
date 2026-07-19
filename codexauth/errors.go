@@ -12,6 +12,7 @@ const (
 	CodeTargetMismatch           = "codex_account_target_mismatch"
 	CodeRuntimeUnavailable       = "codex_account_runtime_unavailable"
 	CodeRollbackFailed           = "codex_account_rollback_failed"
+	CodeCleanupPending           = "codex_account_cleanup_pending"
 	CodeFileStoreConsentRequired = "codex_account_file_store_consent_required"
 	CodeNotFound                 = "codex_account_not_found"
 	CodeConflict                 = "codex_account_conflict"

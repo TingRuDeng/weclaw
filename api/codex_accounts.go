@@ -176,7 +176,7 @@ func writeCodexAccountError(w http.ResponseWriter, err error) {
 		status = http.StatusUnprocessableEntity
 	case codexauth.CodeFileStoreConsentRequired:
 		status = http.StatusPreconditionRequired
-	case codexauth.CodeUnmanagedHost, codexauth.CodeRuntimeUnavailable:
+	case codexauth.CodeUnmanagedHost, codexauth.CodeRuntimeUnavailable, codexauth.CodeCleanupPending:
 		status = http.StatusServiceUnavailable
 	case codexauth.CodeRollbackFailed:
 		status = http.StatusInternalServerError

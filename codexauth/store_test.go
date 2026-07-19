@@ -14,9 +14,10 @@ import (
 )
 
 type fakeKeyring struct {
-	mu     sync.Mutex
-	values map[string]string
-	setErr error
+	mu        sync.Mutex
+	values    map[string]string
+	setErr    error
+	deleteErr error
 }
 
 func newFakeKeyring() *fakeKeyring {
@@ -46,6 +47,9 @@ func (f *fakeKeyring) Set(service, user, password string) error {
 func (f *fakeKeyring) Delete(service, user string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	delete(f.values, service+"\x00"+user)
 	return nil
 }
@@ -118,6 +122,110 @@ func TestStoreSaveListReplaceAndRemove(t *testing.T) {
 	}
 	if err := store.Remove(ctx, string(profile.ID)); ErrorCode(err) != CodeConflict {
 		t.Fatalf("remove active error=%v", err)
+	}
+}
+
+func TestStorePersistsAndRetriesFailedSecretDeletion(t *testing.T) {
+	keyring := newFakeKeyring()
+	store := newTestStore(t, keyring)
+	ctx := context.Background()
+	oldProfile, err := store.SaveAuthFile(ctx, SaveOptions{Label: "旧账号"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveAuthFile(ctx, SaveOptions{Label: "当前账号"}); err != nil {
+		t.Fatal(err)
+	}
+	keyring.deleteErr = errors.New("keyring locked")
+	if err := store.Remove(ctx, oldProfile.Label); err != nil {
+		t.Fatalf("Remove() error=%v", err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingSecretDeletes != 1 || len(status.Profiles) != 1 {
+		t.Fatalf("status after cleanup failure=%#v", status)
+	}
+
+	keyring.deleteErr = nil
+	if err := store.WithTransaction(ctx, func(*Transaction) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	status, err = store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingSecretDeletes != 0 {
+		t.Fatalf("pending secret deletes=%d", status.PendingSecretDeletes)
+	}
+	keyring.mu.Lock()
+	_, leaked := keyring.values[keyringService+"\x00"+store.HostID()+":"+oldProfile.SecretRef]
+	keyring.mu.Unlock()
+	if leaked {
+		t.Fatal("old OAuth secret was not deleted after retry")
+	}
+}
+
+func TestStorePersistsFailedCleanupForAbortedNewSecret(t *testing.T) {
+	keyring := newFakeKeyring()
+	store := newTestStore(t, keyring)
+	snapshot, err := ReadAuthFile(store.AuthPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring.deleteErr = errors.New("keyring locked")
+	err = store.WithTransaction(context.Background(), func(tx *Transaction) error {
+		if _, err := tx.PutSnapshot(snapshot, SaveOptions{Label: "不会提交"}); err != nil {
+			return err
+		}
+		return errors.New("abort transaction")
+	})
+	if ErrorCode(err) != CodeCleanupPending {
+		t.Fatalf("WithTransaction() error=%v code=%q", err, ErrorCode(err))
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Profiles) != 0 || status.PendingSecretDeletes != 1 {
+		t.Fatalf("aborted transaction status=%#v", status)
+	}
+
+	keyring.deleteErr = nil
+	if err := store.WithTransaction(context.Background(), func(*Transaction) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	status, err = store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingSecretDeletes != 0 {
+		t.Fatalf("pending secret deletes=%d", status.PendingSecretDeletes)
+	}
+	keyring.mu.Lock()
+	remaining := len(keyring.values)
+	keyring.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("aborted transaction leaked %d OAuth secrets", remaining)
+	}
+}
+
+func TestStoreDoctorReportsUnsafeSwitchJournal(t *testing.T) {
+	store := newTestStore(t, newFakeKeyring())
+	profile, err := store.SaveAuthFile(context.Background(), SaveOptions{Label: "当前账号"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WithTransaction(context.Background(), func(tx *Transaction) error {
+		tx.SetLastSwitch(SwitchRecord{ProfileID: profile.ID, Status: "rollback_failed", Message: "rollback failed", At: time.Now()})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := store.Doctor()
+	if result.OK || !strings.Contains(result.Message, "禁止写入") {
+		t.Fatalf("Doctor()=%#v", result)
 	}
 }
 
