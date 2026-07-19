@@ -179,6 +179,44 @@ func newAccountSwitchFixture(t *testing.T) *accountSwitchFixture {
 	return fixture
 }
 
+func TestReadCodexAccountAcceptsLoggedInChatGPTAccountWhenProviderRequiresAuth(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "account/read" {
+			t.Fatalf("method=%q, want account/read", method)
+		}
+		refresh, ok := params.(map[string]bool)
+		if !ok || !refresh["refreshToken"] {
+			t.Fatalf("params=%#v, want refreshToken=true", params)
+		}
+		return json.RawMessage(`{"account":{"type":"chatgpt","email":"user@example.com","planType":"pro"},"requiresOpenaiAuth":true}`), nil
+	}
+
+	account, err := a.readCodexAccount(context.Background(), true)
+	if err != nil {
+		t.Fatalf("readCodexAccount() error=%v", err)
+	}
+	if account.Email != "user@example.com" || account.PlanType != "pro" {
+		t.Fatalf("readCodexAccount()=%+v", account)
+	}
+}
+
+func TestReadCodexAccountRejectsMissingAccount(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		return json.RawMessage(`{"account":null,"requiresOpenaiAuth":true}`), nil
+	}
+
+	_, err := a.readCodexAccount(context.Background(), false)
+	if codexauth.ErrorCode(err) != codexauth.CodeRuntimeUnavailable {
+		t.Fatalf("readCodexAccount() error=%v, code=%q", err, codexauth.ErrorCode(err))
+	}
+}
+
 func TestUseCodexAccountRestartsHostAndPreservesThreadBindings(t *testing.T) {
 	fixture := newAccountSwitchFixture(t)
 	var phases []CodexAccountSwitchPhase

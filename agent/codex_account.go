@@ -435,6 +435,9 @@ type codexAccountReadResponse struct {
 		Email    string `json:"email"`
 		PlanType string `json:"planType"`
 	} `json:"account"`
+	// RequiresOpenAIAuth describes whether the active provider needs OpenAI
+	// credentials. A logged-in ChatGPT account normally returns true here, so
+	// login state must be determined exclusively from Account.
 	RequiresOpenAIAuth bool `json:"requiresOpenaiAuth"`
 }
 
@@ -452,7 +455,7 @@ func (a *ACPAgent) readCodexAccount(ctx context.Context, refresh bool) (codexRun
 	if err := json.Unmarshal(result, &response); err != nil {
 		return codexRuntimeAccount{}, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "解析 Codex 当前账号失败", err)
 	}
-	if response.Account == nil || response.RequiresOpenAIAuth {
+	if response.Account == nil {
 		return codexRuntimeAccount{}, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "Codex 当前未登录", nil)
 	}
 	if response.Account.Type != "chatgpt" {
