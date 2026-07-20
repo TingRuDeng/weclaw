@@ -282,3 +282,37 @@ func TestCodexCxLsUsesCodexAppWorkspaceOrder(t *testing.T) {
 		t.Fatalf("ls should hide workspaces not in Codex App project order, messages=%#v", calls.texts())
 	}
 }
+
+func TestCodexCxLsIncludesProjectStoredOnlyInLocalProjects(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	legacyWorkspace := filepath.Join(root, "weclaw")
+	chatGPTWorkspace := filepath.Join(root, ".codex", ".chatgpt-projects", "g-p-smart-home")
+	mustCreateWorkspaceDirs(t, legacyWorkspace, chatGPTWorkspace)
+	writeCodexAppWorkspaceStateWithProjects(t, codexDir,
+		[]string{"local-weclaw"},
+		[]string{legacyWorkspace},
+		map[string]any{
+			"local-weclaw": map[string]any{
+				"name":      "weclaw",
+				"rootPaths": []string{legacyWorkspace},
+				"updatedAt": 1,
+			},
+			"g-p-smart-home": map[string]any{
+				"name":      "智能家居总控",
+				"rootPaths": []string{chatGPTWorkspace},
+				"updatedAt": 2,
+			},
+		},
+	)
+	h.SetCodexLocalSessionDir(codexDir)
+
+	text := h.renderCodexWorkspaceListForAccess(codexBindingKey("admin-1", "codex"), "admin-1", true)
+	if !strings.Contains(text, "0. weclaw") || !strings.Contains(text, "1. 智能家居总控") {
+		t.Fatalf("ls should include project stored only in local-projects, text=%q", text)
+	}
+	if strings.Contains(text, "g-p-smart-home") {
+		t.Fatalf("ls should use the Codex App project name instead of its internal id, text=%q", text)
+	}
+}

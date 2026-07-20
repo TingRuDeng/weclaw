@@ -9,8 +9,8 @@ import (
 
 // codexWorkspaceGroups 按 Codex App 项目列表聚合会话，缺少 App 状态时回退历史会话聚合。
 func (h *Handler) codexWorkspaceGroups(bindingKey string) []codexWorkspaceGroup {
-	if roots := h.codexAppWorkspaceRoots(); len(roots) > 0 {
-		return h.codexWorkspaceGroupsForRoots(bindingKey, roots)
+	if workspaces := h.codexAppWorkspaces(); len(workspaces) > 0 {
+		return h.codexWorkspaceGroupsForAppWorkspaces(bindingKey, workspaces)
 	}
 	byRoot := map[string]*codexWorkspaceGroup{}
 	for _, view := range h.codexSwitchTargets(bindingKey) {
@@ -44,15 +44,19 @@ func (h *Handler) codexWorkspaceGroupsForAccess(bindingKey string, actorUserID s
 	return filtered
 }
 
-func (h *Handler) codexWorkspaceGroupsForRoots(bindingKey string, roots []string) []codexWorkspaceGroup {
+func (h *Handler) codexWorkspaceGroupsForAppWorkspaces(bindingKey string, workspaces []codexAppWorkspace) []codexWorkspaceGroup {
 	byRoot := map[string]*codexWorkspaceGroup{}
-	order := make([]string, 0, len(roots))
-	for _, root := range roots {
-		root = normalizeCodexWorkspaceRoot(root)
+	order := make([]string, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		root := normalizeCodexWorkspaceRoot(workspace.Root)
 		if root == "" || byRoot[root] != nil {
 			continue
 		}
-		byRoot[root] = &codexWorkspaceGroup{Name: shortCodexWorkspaceName(root), Root: root}
+		name := strings.TrimSpace(workspace.Name)
+		if name == "" {
+			name = shortCodexWorkspaceName(root)
+		}
+		byRoot[root] = &codexWorkspaceGroup{Name: name, Root: root}
 		order = append(order, root)
 	}
 	groups := make([]codexWorkspaceGroup, 0, len(order))

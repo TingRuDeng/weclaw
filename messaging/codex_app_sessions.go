@@ -5,13 +5,27 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 type codexAppWorkspaceState struct {
-	ProjectOrder        []string `json:"project-order"`
-	SavedWorkspaceRoots []string `json:"electron-saved-workspace-roots"`
+	ProjectOrder        []string                   `json:"project-order"`
+	SavedWorkspaceRoots []string                   `json:"electron-saved-workspace-roots"`
+	LocalProjects       map[string]codexAppProject `json:"local-projects"`
+}
+
+type codexAppProject struct {
+	Name      string   `json:"name"`
+	RootPaths []string `json:"rootPaths"`
+	CreatedAt int64    `json:"createdAt"`
+	UpdatedAt int64    `json:"updatedAt"`
+}
+
+type codexAppWorkspace struct {
+	Name string
+	Root string
 }
 
 type codexAppThreadRow struct {
@@ -22,8 +36,8 @@ type codexAppThreadRow struct {
 	ThreadSource string `json:"thread_source"`
 }
 
-// readCodexAppWorkspaceRoots 读取 Codex App 侧真实保存的项目列表，作为微信顶层空间来源。
-func readCodexAppWorkspaceRoots(codexDir string) []string {
+// readCodexAppWorkspaces 读取 Codex App 侧真实保存的项目列表，作为远程窗口顶层空间来源。
+func readCodexAppWorkspaces(codexDir string) []codexAppWorkspace {
 	codexDir = strings.TrimSpace(codexDir)
 	if codexDir == "" {
 		return nil
@@ -36,7 +50,7 @@ func readCodexAppWorkspaceRoots(codexDir string) []string {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil
 	}
-	return mergeCodexAppWorkspaceRoots(state.ProjectOrder, state.SavedWorkspaceRoots)
+	return mergeCodexAppWorkspaces(state.ProjectOrder, state.SavedWorkspaceRoots, state.LocalProjects)
 }
 
 // readCodexAppWorkspaceThreads 读取 Codex App 当前项目内实际可见会话。
@@ -109,16 +123,66 @@ func strconvFormatInt(value int64) string {
 	return strconv.FormatInt(value, 10)
 }
 
-func mergeCodexAppWorkspaceRoots(projectOrder []string, savedRoots []string) []string {
-	seen := map[string]bool{}
-	roots := make([]string, 0, len(projectOrder)+len(savedRoots))
-	for _, root := range append(projectOrder, savedRoots...) {
+func mergeCodexAppWorkspaces(projectOrder []string, savedRoots []string, projects map[string]codexAppProject) []codexAppWorkspace {
+	seenRoots := map[string]bool{}
+	seenProjects := map[string]bool{}
+	workspaces := make([]codexAppWorkspace, 0, len(projectOrder)+len(savedRoots)+len(projects))
+	appendWorkspace := func(name string, root string) {
 		normalized := normalizeCodexWorkspaceRoot(root)
-		if normalized == "" || seen[normalized] || !localCodexWorkspaceExists(normalized) {
+		if normalized == "" || seenRoots[normalized] || !localCodexWorkspaceExists(normalized) {
+			return
+		}
+		seenRoots[normalized] = true
+		name = strings.TrimSpace(name)
+		if name == "" {
+			name = shortCodexWorkspaceName(normalized)
+		}
+		workspaces = append(workspaces, codexAppWorkspace{Name: name, Root: normalized})
+	}
+	appendProject := func(project codexAppProject) {
+		for _, root := range project.RootPaths {
+			appendWorkspace(project.Name, root)
+		}
+	}
+
+	for _, projectRef := range projectOrder {
+		projectRef = strings.TrimSpace(projectRef)
+		if project, ok := projects[projectRef]; ok {
+			seenProjects[projectRef] = true
+			appendProject(project)
 			continue
 		}
-		seen[normalized] = true
-		roots = append(roots, normalized)
+		appendWorkspace("", projectRef)
 	}
-	return roots
+
+	type unorderedProject struct {
+		id      string
+		project codexAppProject
+	}
+	unordered := make([]unorderedProject, 0, len(projects))
+	for id, project := range projects {
+		if !seenProjects[id] {
+			unordered = append(unordered, unorderedProject{id: id, project: project})
+		}
+	}
+	sort.SliceStable(unordered, func(i, j int) bool {
+		if unordered[i].project.UpdatedAt != unordered[j].project.UpdatedAt {
+			return unordered[i].project.UpdatedAt > unordered[j].project.UpdatedAt
+		}
+		if unordered[i].project.CreatedAt != unordered[j].project.CreatedAt {
+			return unordered[i].project.CreatedAt > unordered[j].project.CreatedAt
+		}
+		if unordered[i].project.Name != unordered[j].project.Name {
+			return unordered[i].project.Name < unordered[j].project.Name
+		}
+		return unordered[i].id < unordered[j].id
+	})
+	for _, entry := range unordered {
+		appendProject(entry.project)
+	}
+
+	for _, root := range savedRoots {
+		appendWorkspace("", root)
+	}
+	return workspaces
 }

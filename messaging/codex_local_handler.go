@@ -51,12 +51,12 @@ func (h *Handler) localCodexSessions() []codexWorkspaceView {
 	return discoverLocalCodexSessions(dir)
 }
 
-// codexAppWorkspaceRoots 返回 Codex App 左侧项目列表使用的工作空间顺序。
-func (h *Handler) codexAppWorkspaceRoots() []string {
+// codexAppWorkspaces 返回 Codex App 左侧项目列表使用的工作空间顺序和名称。
+func (h *Handler) codexAppWorkspaces() []codexAppWorkspace {
 	h.mu.RLock()
 	dir := h.codexLocalSessionDir
 	h.mu.RUnlock()
-	return readCodexAppWorkspaceRoots(dir)
+	return readCodexAppWorkspaces(dir)
 }
 
 // codexAppWorkspaceThreads 返回 Codex App 在指定工作空间下展示的会话列表。

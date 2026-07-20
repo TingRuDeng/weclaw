@@ -18,10 +18,15 @@ func writeLocalCodexSession(t *testing.T, codexDir string, threadID string, work
 }
 
 func writeCodexAppWorkspaceState(t *testing.T, codexDir string, projectOrder []string, savedRoots []string) {
+	writeCodexAppWorkspaceStateWithProjects(t, codexDir, projectOrder, savedRoots, nil)
+}
+
+func writeCodexAppWorkspaceStateWithProjects(t *testing.T, codexDir string, projectOrder []string, savedRoots []string, projects map[string]any) {
 	t.Helper()
-	state := map[string][]string{
+	state := map[string]any{
 		"project-order":                  projectOrder,
 		"electron-saved-workspace-roots": savedRoots,
+		"local-projects":                 projects,
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
