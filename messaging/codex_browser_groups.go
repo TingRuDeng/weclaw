@@ -31,7 +31,21 @@ func (h *Handler) codexWorkspaceGroupsForUser(bindingKey string, actorUserID str
 }
 
 func (h *Handler) codexWorkspaceGroupsForAccess(bindingKey string, actorUserID string, admin bool) []codexWorkspaceGroup {
-	groups := h.codexWorkspaceGroups(bindingKey)
+	return h.filterCodexWorkspaceGroupsForAccess(h.codexWorkspaceGroups(bindingKey), admin)
+}
+
+// codexWorkspaceListForAccess 只读取顶层项目，不为 /cx ls 预加载每个项目的会话。
+func (h *Handler) codexWorkspaceListForAccess(bindingKey string, admin bool) []codexWorkspaceGroup {
+	var groups []codexWorkspaceGroup
+	if workspaces := h.codexAppWorkspaces(); len(workspaces) > 0 {
+		groups = codexWorkspaceHeadersForAppWorkspaces(workspaces)
+	} else {
+		groups = h.codexWorkspaceGroups(bindingKey)
+	}
+	return h.filterCodexWorkspaceGroupsForAccess(groups, admin)
+}
+
+func (h *Handler) filterCodexWorkspaceGroupsForAccess(groups []codexWorkspaceGroup, admin bool) []codexWorkspaceGroup {
 	if admin {
 		return groups
 	}
@@ -45,24 +59,27 @@ func (h *Handler) codexWorkspaceGroupsForAccess(bindingKey string, actorUserID s
 }
 
 func (h *Handler) codexWorkspaceGroupsForAppWorkspaces(bindingKey string, workspaces []codexAppWorkspace) []codexWorkspaceGroup {
-	byRoot := map[string]*codexWorkspaceGroup{}
-	order := make([]string, 0, len(workspaces))
+	groups := codexWorkspaceHeadersForAppWorkspaces(workspaces)
+	for index := range groups {
+		groups[index].Sessions = h.codexSessionsForWorkspace(bindingKey, groups[index].Root)
+	}
+	return groups
+}
+
+func codexWorkspaceHeadersForAppWorkspaces(workspaces []codexAppWorkspace) []codexWorkspaceGroup {
+	seenRoots := make(map[string]bool, len(workspaces))
+	groups := make([]codexWorkspaceGroup, 0, len(workspaces))
 	for _, workspace := range workspaces {
 		root := normalizeCodexWorkspaceRoot(workspace.Root)
-		if root == "" || byRoot[root] != nil {
+		if root == "" || seenRoots[root] {
 			continue
 		}
+		seenRoots[root] = true
 		name := strings.TrimSpace(workspace.Name)
 		if name == "" {
 			name = shortCodexWorkspaceName(root)
 		}
-		byRoot[root] = &codexWorkspaceGroup{Name: name, Root: root}
-		order = append(order, root)
-	}
-	groups := make([]codexWorkspaceGroup, 0, len(order))
-	for _, root := range order {
-		byRoot[root].Sessions = h.codexSessionsForWorkspace(bindingKey, root)
-		groups = append(groups, *byRoot[root])
+		groups = append(groups, codexWorkspaceGroup{Name: name, Root: root})
 	}
 	return groups
 }
@@ -121,7 +138,8 @@ func switchableCodexSessions(sessions []codexWorkspaceView) []codexWorkspaceView
 
 func (h *Handler) findCodexWorkspaceGroupForAccess(bindingKey string, actorUserID string, admin bool, target string) (codexWorkspaceGroup, error) {
 	target = strings.TrimSpace(target)
-	groups := h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
+	groups := h.codexWorkspaceListForAccess(bindingKey, admin)
+	var group codexWorkspaceGroup
 	if isFeishuWorkspaceChoiceToken(target) {
 		workspaceRoot, ok := h.feishuWorkspaceChoices.consume(
 			target, feishuWorkspaceChoiceCodex, actorUserID, bindingKey,
@@ -130,20 +148,31 @@ func (h *Handler) findCodexWorkspaceGroupForAccess(bindingKey string, actorUserI
 			return codexWorkspaceGroup{}, fmt.Errorf("工作空间卡片已过期，请重新发送 /cx ls。")
 		}
 		workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
-		for _, group := range groups {
-			if normalizeCodexWorkspaceRoot(group.Root) == workspaceRoot {
-				return group, nil
+		found := false
+		for _, candidate := range groups {
+			if normalizeCodexWorkspaceRoot(candidate.Root) == workspaceRoot {
+				group = candidate
+				found = true
+				break
 			}
 		}
-		return codexWorkspaceGroup{}, fmt.Errorf("工作空间卡片已过期，请重新发送 /cx ls。")
-	}
-	if index, ok := parseCodexListIndex(target); ok {
+		if !found {
+			return codexWorkspaceGroup{}, fmt.Errorf("工作空间卡片已过期，请重新发送 /cx ls。")
+		}
+	} else if index, ok := parseCodexListIndex(target); ok {
 		if index < 0 || index >= len(groups) {
 			return codexWorkspaceGroup{}, fmt.Errorf("工作空间编号不存在，请先发送 /cx ls 查看。")
 		}
-		return groups[index], nil
+		group = groups[index]
+	} else {
+		matched, err := findCodexWorkspaceGroupByName(groups, target)
+		if err != nil {
+			return codexWorkspaceGroup{}, err
+		}
+		group = matched
 	}
-	return findCodexWorkspaceGroupByName(groups, target)
+	group.Sessions = h.codexSessionsForWorkspace(bindingKey, group.Root)
+	return group, nil
 }
 
 func findCodexWorkspaceGroupByName(groups []codexWorkspaceGroup, target string) (codexWorkspaceGroup, error) {

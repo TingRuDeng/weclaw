@@ -316,3 +316,66 @@ func TestCodexCxLsIncludesProjectStoredOnlyInLocalProjects(t *testing.T) {
 		t.Fatalf("ls should use the Codex App project name instead of its internal id, text=%q", text)
 	}
 }
+
+func TestRenderCodexWorkspaceListDoesNotEagerlyLoadWorkspaceSessions(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	root := t.TempDir()
+	workspaceA := filepath.Join(root, "project-a")
+	workspaceB := filepath.Join(root, "project-b")
+	mustCreateWorkspaceDirs(t, workspaceA, workspaceB)
+	writeCodexAppWorkspaceStateWithProjects(t, codexDir,
+		[]string{"project-a", "project-b"},
+		[]string{workspaceA, workspaceB},
+		map[string]any{
+			"project-a": map[string]any{"name": "project-a", "rootPaths": []string{workspaceA}, "updatedAt": 2},
+			"project-b": map[string]any{"name": "project-b", "rootPaths": []string{workspaceB}, "updatedAt": 1},
+		},
+	)
+	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
+		t.Fatalf("write fake state database: %v", err)
+	}
+	callLog := filepath.Join(t.TempDir(), "sqlite-calls")
+	writeCountingFakeSQLite3(t, callLog)
+	h.SetCodexLocalSessionDir(codexDir)
+
+	text := h.renderCodexWorkspaceListForAccess(codexBindingKey("admin-1", "codex"), "admin-1", true)
+	if !strings.Contains(text, "project-a") || !strings.Contains(text, "project-b") {
+		t.Fatalf("workspace list=%q", text)
+	}
+	data, err := os.ReadFile(callLog)
+	if err != nil {
+		t.Fatalf("read sqlite call log: %v", err)
+	}
+	if calls := strings.Count(string(data), "\n"); calls != 1 {
+		t.Fatalf("sqlite calls=%d, want one project-recency query without per-workspace session loading", calls)
+	}
+
+	if err := os.WriteFile(callLog, nil, 0o600); err != nil {
+		t.Fatalf("reset sqlite call log: %v", err)
+	}
+	group, err := h.findCodexWorkspaceGroupForAccess(
+		codexBindingKey("admin-1", "codex"), "admin-1", true, "project-b",
+	)
+	if err != nil || group.Name != "project-b" {
+		t.Fatalf("selected group=%#v err=%v", group, err)
+	}
+	data, err = os.ReadFile(callLog)
+	if err != nil {
+		t.Fatalf("read selected-workspace sqlite call log: %v", err)
+	}
+	if calls := strings.Count(string(data), "\n"); calls != 2 {
+		t.Fatalf("sqlite calls=%d, want project-recency plus only the selected workspace session query", calls)
+	}
+}
+
+func writeCountingFakeSQLite3(t *testing.T, callLog string) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\nprintf 'call\\n' >> %q\nprintf '[]\\n'\n", callLog)
+	path := filepath.Join(binDir, "sqlite3")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write counting fake sqlite3: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}

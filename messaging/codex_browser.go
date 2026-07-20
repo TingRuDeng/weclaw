@@ -64,7 +64,7 @@ func (h *Handler) clearCodexBrowseWorkspace(bindingKey string) {
 }
 
 func (h *Handler) renderCodexWorkspaceListForAccess(bindingKey string, actorUserID string, admin bool) string {
-	groups := h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, admin)
+	groups := h.codexWorkspaceListForAccess(bindingKey, admin)
 	if len(groups) == 0 {
 		return "当前还没有 Codex 工作空间。"
 	}

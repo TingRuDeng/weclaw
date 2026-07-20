@@ -179,7 +179,7 @@ func (h *Handler) loadFeishuCodexWorkspaceSnapshot(req feishuCodexChoiceRequest,
 		choices, ok := h.feishuNavSnapshots.load(req.snapshot, scope)
 		return choices, req.snapshot, ok
 	}
-	groups := h.codexWorkspaceGroupsForAccess(req.bindingKey, req.userID, req.admin)
+	groups := h.codexWorkspaceListForAccess(req.bindingKey, req.admin)
 	choices := make([]platform.Choice, 0, len(groups))
 	for _, group := range groups {
 		if name := strings.TrimSpace(group.Name); name != "" {
