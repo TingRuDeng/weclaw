@@ -256,6 +256,11 @@ func (r *Replier) setCurrentTaskCardID(cardID string) {
 	r.taskCardMu.Unlock()
 }
 
+// BindTaskCard 把后续审批和结构化问答关联到当前任务卡。
+func (r *Replier) BindTaskCard(cardID string) {
+	r.setCurrentTaskCardID(cardID)
+}
+
 func attachTaskCardID(choices []platform.Choice, cardID string) []platform.Choice {
 	cardID = strings.TrimSpace(cardID)
 	if cardID == "" {

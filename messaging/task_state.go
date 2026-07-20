@@ -37,6 +37,7 @@ type activeAgentTask struct {
 	taskID                  string
 	conversationID          string
 	sessionID               string
+	progress                *progressSession
 }
 
 type pendingAgentTask struct {
@@ -303,6 +304,40 @@ func (t *activeAgentTask) shouldSendFinal() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return !t.detached
+}
+
+func (t *activeAgentTask) attachProgressSession(progress *progressSession) {
+	if t == nil || progress == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.phase != codexTaskTerminal && !t.view.closed {
+		t.progress = progress
+	}
+	t.mu.Unlock()
+}
+
+func (t *activeAgentTask) detachProgressSession(progress *progressSession) {
+	if t == nil || progress == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.progress == progress {
+		t.progress = nil
+	}
+	t.mu.Unlock()
+}
+
+func (t *activeAgentTask) progressReanchorSnapshot() (*progressSession, string, bool) {
+	if t == nil {
+		return nil, "", false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.progress == nil || t.detached || t.phase == codexTaskTerminal || t.view.closed {
+		return nil, "", false
+	}
+	return t.progress, t.view.lastProgress, true
 }
 
 func (t *activeAgentTask) recordProgress(now time.Time, event agent.ProgressEvent) (string, bool) {

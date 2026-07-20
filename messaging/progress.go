@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -56,8 +57,13 @@ type progressSession struct {
 	wg                  sync.WaitGroup
 	streamMu            sync.Mutex
 	streamOpenAttempted bool
+	lastContent         string
+	finished            bool
+	terminalClaimed     bool
 	typingStarted       bool
 }
+
+const progressSupersededNotice = "已在新位置继续展示；后续进展和最终结果将更新到新卡片。"
 
 // startProgressSession 启动平台进度会话，保持旧语义：最终回复由调用方单独发送。
 func (h *Handler) startProgressSession(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func()) {
@@ -179,8 +185,8 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 	}
 	parentCanceled := s.stopBackground()
 	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
 	stream := s.stream
-	s.streamMu.Unlock()
 	if stream == nil || !s.reply.Capabilities().Streaming {
 		return preparedProgressTerminal{}, nil
 	}
@@ -189,6 +195,8 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 		return preparedProgressTerminal{}, platform.ErrUnsupported
 	}
 	content, terminalFailed, consumed := progressTerminalArguments(replyWriter, parentCanceled, finalText, failed)
+	s.terminalClaimed = true
+	s.finished = true
 	checkpoint, err := durable.PrepareTerminal(content, terminalFailed)
 	if err != nil {
 		return preparedProgressTerminal{}, err
@@ -311,12 +319,19 @@ func (s *progressSession) sendProgressIfAllowed(summary string, state *progressS
 }
 
 func (s *progressSession) send(text string) bool {
-	stream := s.ensureStream()
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.finished || s.terminalClaimed {
+		return false
+	}
+	stream := s.ensureStreamLocked()
 	if stream != nil {
-		if err := stream.Update(s.ctx, s.prefix+text); err != nil {
+		content := s.prefix + text
+		if err := stream.Update(s.ctx, content); err != nil {
 			log.Printf("[handler] failed to update progress stream: %v", err)
 			return false
 		}
+		s.lastContent = content
 		return true
 	}
 	if s.reply.Capabilities().Streaming {
@@ -336,6 +351,10 @@ func (s *progressSession) sendText(text string) bool {
 func (s *progressSession) ensureStream() platform.Stream {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
+	return s.ensureStreamLocked()
+}
+
+func (s *progressSession) ensureStreamLocked() platform.Stream {
 	if s.stream != nil || s.streamOpenAttempted || !progressModeAllowsProgress(s.cfg.Mode) {
 		return s.stream
 	}
@@ -349,6 +368,96 @@ func (s *progressSession) ensureStream() platform.Stream {
 	}
 	s.stream = stream
 	return stream
+}
+
+// reanchor 在消息底部创建新任务卡，并把后续进展与终态原子切换到新流。
+func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, latestProgress string) (bool, error) {
+	if s == nil || reply == nil || !reply.Capabilities().Streaming {
+		return false, nil
+	}
+	reply = progressReplier(reply)
+	if reply == nil || !reply.Capabilities().Streaming {
+		return false, nil
+	}
+
+	moveCtx, cancel := context.WithTimeout(context.WithoutCancel(normalizeContext(ctx)), 5*time.Second)
+	defer cancel()
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.finished || s.terminalClaimed || s.stream == nil {
+		return false, nil
+	}
+	oldStream, ok := s.stream.(platform.SupersedableStream)
+	if !ok {
+		return false, nil
+	}
+	initialContent := strings.TrimSpace(renderDeltaProgress(latestProgress, s.cfg))
+	if initialContent != "" {
+		initialContent = s.prefix + initialContent
+	} else {
+		initialContent = strings.TrimSpace(s.lastContent)
+	}
+	if initialContent == "" {
+		initialContent = renderInitialCardProgress()
+	}
+	stream, err := reply.OpenStream(moveCtx, platform.StreamOptions{
+		Title:          progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60),
+		InitialContent: initialContent,
+	})
+	if err != nil {
+		return false, err
+	}
+	if stream == nil {
+		return false, fmt.Errorf("progress reanchor returned nil stream")
+	}
+	rebindProgressTaskCard(s.reply, reply)
+	s.stream = stream
+	s.reply = reply
+	s.streamOpenAttempted = true
+	s.lastContent = initialContent
+	if err := oldStream.Supersede(moveCtx, progressSupersededNotice); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func rebindProgressTaskCard(previous platform.Replier, current platform.Replier) {
+	reporter, ok := current.(platform.TaskCardReporter)
+	if !ok {
+		return
+	}
+	cardID := strings.TrimSpace(reporter.CurrentTaskCardID())
+	if cardID == "" {
+		return
+	}
+	if binder, ok := previous.(platform.TaskCardBinder); ok {
+		binder.BindTaskCard(cardID)
+	}
+}
+
+func progressReplier(reply platform.Replier) platform.Replier {
+	for depth := 0; depth < 4 && reply != nil; depth++ {
+		provider, ok := reply.(platform.ProgressReplierProvider)
+		if !ok {
+			return reply
+		}
+		next := provider.ProgressReplier()
+		if next == nil {
+			return reply
+		}
+		reply = next
+	}
+	return reply
+}
+
+func (s *progressSession) claimTerminalReply() platform.Replier {
+	if s == nil {
+		return nil
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	s.terminalClaimed = true
+	return s.reply
 }
 
 func progressTaskTitleForAgentWorkspace(agentName string, workspaceRoot string, taskText string, maxRunes int) string {
@@ -390,11 +499,13 @@ func (s *progressSession) cancelTyping() {
 
 func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool) bool {
 	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
 	stream := s.stream
-	s.streamMu.Unlock()
 	if stream == nil || !s.reply.Capabilities().Streaming {
 		return false
 	}
+	s.terminalClaimed = true
+	s.finished = true
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var err error

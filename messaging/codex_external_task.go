@@ -177,6 +177,8 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithHandle(
 		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, runtime.opts.workspaceRoot, taskText, progressCfg,
 	)
+	runtime.task.attachProgressSession(progressSession)
+	defer runtime.task.detachProgressSession(progressSession)
 	runtime.task.mu.Lock()
 	runtime.task.trace = traceWithReply(runtime.task.trace, runtime.opts.reply)
 	runtime.task.mu.Unlock()

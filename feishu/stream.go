@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,8 @@ type feishuStreamTerminalOp struct {
 }
 
 const feishuTerminalCheckpointKind = "feishu.cardkit.terminal.v1"
+
+const defaultSupersededTaskCardNotice = "已在新位置继续展示；后续进展和最终结果将更新到新卡片。"
 
 // openCardKitStream 创建并发送 CardKit 卡片，然后开启流式模式。
 func (r *Replier) openCardKitStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
@@ -293,6 +296,51 @@ func (s *feishuStream) Fail(ctx context.Context, errText string) error {
 		return err
 	}
 	return s.deliverPreparedTerminal(ctx, checkpoint)
+}
+
+// Supersede 退役旧任务卡但不生成任务终态；新卡将独立承接后续进展和结果。
+func (s *feishuStream) Supersede(ctx context.Context, notice string) error {
+	s.ioMu.Lock()
+	defer s.ioMu.Unlock()
+
+	s.mu.Lock()
+	if s.closed || s.terminal != nil || s.terminalDelivered {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.cancelPendingUpdate()
+	s.mu.Unlock()
+
+	notice = strings.TrimSpace(notice)
+	if notice == "" {
+		notice = defaultSupersededTaskCardNotice
+	}
+	op, err := s.prepareSupersedeUpdate(notice)
+	if err != nil {
+		return err
+	}
+	disableErr := s.cardKit.SetStreaming(ctx, s.cardID, false, op.DisableSeq)
+	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, op.CardJSON, op.UpdateSeq)
+	return firstErr(ignoreCardKitUpdateError(updateErr), ignoreCardKitUpdateError(disableErr))
+}
+
+func (s *feishuStream) prepareSupersedeUpdate(content string) (feishuStreamTerminalOp, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	opts := cardOptions{Status: cardStatusSuperseded, Title: s.title, Content: content}
+	if s.taskCards != nil {
+		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, cardStatusSuperseded, content); ok {
+			opts = snapshot
+		}
+	}
+	cardJSON, err := buildCardV2(opts)
+	if err != nil {
+		return feishuStreamTerminalOp{}, err
+	}
+	return feishuStreamTerminalOp{
+		CardID: s.cardID, DisableSeq: s.nextSequence(), UpdateSeq: s.nextSequence(), CardJSON: cardJSON,
+	}, nil
 }
 
 func (s *feishuStream) deliverPreparedTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {

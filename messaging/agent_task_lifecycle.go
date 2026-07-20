@@ -52,6 +52,9 @@ func (h *Handler) startAgentTaskLifecycle(opts agentTaskLifecycleOptions) agentT
 	onProgress, finish, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
 		opts.taskCtx, opts.reply, opts.replyPrefix, opts.agentName, opts.workspaceRoot, opts.message, opts.progressConfig,
 	)
+	if opts.task != nil {
+		opts.task.attachProgressSession(progress)
+	}
 	h.recordTraceStage(opts.trace, "task.started", "running", "agent="+opts.agentName)
 	return agentTaskLifecycle{handler: h, opts: opts, onProgress: onProgress, finish: finish, progress: progress}
 }
@@ -73,6 +76,7 @@ func (l agentTaskLifecycle) recordProgress(event agent.ProgressEvent) {
 
 // finishAgentTaskLifecycle 统一最终文本、进度卡收口和停止后的回复抑制。
 func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply string, err error) {
+	defer lifecycle.opts.task.detachProgressSession(lifecycle.progress)
 	lifecycle.opts.task.closeProgress()
 	trace := lifecycle.opts.task.traceSnapshot()
 	if err != nil {

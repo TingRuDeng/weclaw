@@ -235,6 +235,10 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithHandle(
 		runtime.ctx, reply, "["+name+"] ", name, runtime.workspaceRoot, req.message, progressCfg,
 	)
+	if runtime.activeTask != nil {
+		runtime.activeTask.attachProgressSession(progressSession)
+		defer runtime.activeTask.detachProgressSession(progressSession)
+	}
 	trace := traceWithReply(req.trace, reply)
 	if runtime.activeTask != nil {
 		runtime.activeTask.mu.Lock()

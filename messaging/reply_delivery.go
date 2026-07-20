@@ -133,6 +133,12 @@ func (h *Handler) sendReplyProjection(req replyDeliveryRequest, projection reply
 }
 
 func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
+	if req.progress != nil {
+		if current := req.progress.claimTerminalReply(); current != nil {
+			req.delivery.replyWriter = current
+			req.delivery.trace = traceWithReply(req.delivery.trace, current)
+		}
+	}
 	projection := h.prepareReplyDelivery(req.delivery)
 	if consumed, handled := h.finishProgressReplyWithOutbox(req, projection); handled {
 		h.sendReplyProjection(req.delivery, replyDeliveryProjection{imageURLs: projection.imageURLs}, true)

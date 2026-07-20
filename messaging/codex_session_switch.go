@@ -142,6 +142,14 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		)
 	}
 	if result.externalActive {
+		if result.progressReanchored {
+			lines = append(lines, "任务卡: 已移到当前消息底部继续更新。")
+			if result.progressReanchorErr != nil {
+				lines = append(lines, "旧卡停止状态更新失败；后续进展和结果以新卡为准。")
+			}
+		} else if result.progressReanchorErr != nil {
+			lines = append(lines, "任务仍在执行，但任务卡暂时无法移到消息底部；可发送 /ps 查看最新进展。")
+		}
 		lines = append(lines, "已开始回传当前任务的进度和结果。")
 		lines = append(lines, renderExternalCodexActiveNotice(result.externalState)...)
 	}

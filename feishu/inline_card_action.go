@@ -103,12 +103,23 @@ func (r *inlineCardReplier) OpenStream(ctx context.Context, opts platform.Stream
 	return r.Replier.OpenStream(ctx, opts)
 }
 
+// ProgressReplier 让任务重锚直接创建新卡，不把当前导航卡的回调结果降级为另发消息。
+func (r *inlineCardReplier) ProgressReplier() platform.Replier {
+	return r.Replier
+}
+
 func (r *inlineCardReplier) CurrentTaskCardID() string {
 	reporter, ok := r.Replier.(platform.TaskCardReporter)
 	if !ok {
 		return ""
 	}
 	return reporter.CurrentTaskCardID()
+}
+
+func (r *inlineCardReplier) BindTaskCard(cardID string) {
+	if binder, ok := r.Replier.(platform.TaskCardBinder); ok {
+		binder.BindTaskCard(cardID)
+	}
 }
 
 func (r *inlineCardReplier) capture(result *inlineCardReply) bool {

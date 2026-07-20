@@ -349,6 +349,57 @@ func TestTaskCardStreamCompleteCancelsPendingProgress(t *testing.T) {
 	}
 }
 
+func TestTaskCardStreamSupersedeStopsOldCardWithoutCompletingTask(t *testing.T) {
+	cardKit := &fakeCardKitClient{updateCardCh: make(chan string, 4)}
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex · project-a", Content: "处理中"})
+	stream := &feishuStream{
+		cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex · project-a",
+		sequence: 1, throttle: 20 * time.Millisecond, now: time.Now,
+	}
+
+	if err := stream.Update(context.Background(), "进展 A"); err != nil {
+		t.Fatalf("Update first error: %v", err)
+	}
+	<-cardKit.updateCardCh
+	if err := stream.Update(context.Background(), "待补发进展"); err != nil {
+		t.Fatalf("Update pending error: %v", err)
+	}
+	if err := stream.Supersede(context.Background(), "已在新位置继续展示"); err != nil {
+		t.Fatalf("Supersede error: %v", err)
+	}
+
+	cardJSON := <-cardKit.updateCardCh
+	card := decodeCardJSON(t, cardJSON)
+	config := card["config"].(map[string]any)
+	if streaming, _ := config["streaming_mode"].(bool); streaming {
+		t.Fatalf("superseded card must stop streaming: %#v", config)
+	}
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if got := elements[0].(map[string]any)["content"]; got != "**已转移**" {
+		t.Fatalf("status=%q, want 已转移", got)
+	}
+	if got := elements[1].(map[string]any)["content"]; got != "已在新位置继续展示" {
+		t.Fatalf("content=%q", got)
+	}
+	if stream.terminal != nil || len(cardKit.destroyed) != 0 {
+		t.Fatalf("supersede must not create terminal checkpoint or destroy card: terminal=%#v destroyed=%#v", stream.terminal, cardKit.destroyed)
+	}
+
+	if err := stream.Update(context.Background(), "迟到进展"); err != nil {
+		t.Fatalf("late Update error: %v", err)
+	}
+	if err := stream.Complete(context.Background(), "错误终态"); err != nil {
+		t.Fatalf("late Complete error: %v", err)
+	}
+	select {
+	case late := <-cardKit.updateCardCh:
+		t.Fatalf("superseded card received late update: %s", late)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestTaskCardStreamDoesNotFlushStaleProgressAfterRevert(t *testing.T) {
 	cardKit := &fakeCardKitClient{updateCardCh: make(chan string, 3)}
 	registry := newTaskCardRegistry()

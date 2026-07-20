@@ -25,6 +25,17 @@ type TaskCardReporter interface {
 	CurrentTaskCardID() string
 }
 
+// TaskCardBinder 允许长任务在展示卡重锚后，把后续审批和问答指向新卡。
+type TaskCardBinder interface {
+	BindTaskCard(cardID string)
+}
+
+// ProgressReplierProvider 允许临时交互包装器提供独立的进度卡回复器。
+// 典型场景是卡片回调：命令结果仍原地更新，运行任务则另发到消息底部。
+type ProgressReplierProvider interface {
+	ProgressReplier() Replier
+}
+
 // DeliveryRoute 是跨进程恢复终态投递所需的最小平台路由。
 // 它不包含微信 context_token、飞书凭据或任何 Agent 认证信息。
 type DeliveryRoute struct {
@@ -79,6 +90,11 @@ type Stream interface {
 	Update(ctx context.Context, content string) error
 	Complete(ctx context.Context, finalContent string) error
 	Fail(ctx context.Context, errText string) error
+}
+
+// SupersedableStream 是流的可选能力，用于停止旧展示位置但不宣告任务终态。
+type SupersedableStream interface {
+	Supersede(ctx context.Context, notice string) error
 }
 
 // StreamOptions 描述流式回复的初始化参数。

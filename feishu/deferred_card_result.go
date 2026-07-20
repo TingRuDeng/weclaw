@@ -46,3 +46,14 @@ func (r *deferredCardResultReplier) SendText(ctx context.Context, content string
 	log.Printf("[feishu] failed to update deferred card result, falling back to message: message=%s err=%v", r.messageID, err)
 	return r.Replier.SendText(ctx, content)
 }
+
+// ProgressReplier 将任务卡和终态 outbox 绑定到真实会话回复器，原卡 patch 只处理命令结果。
+func (r *deferredCardResultReplier) ProgressReplier() platform.Replier {
+	return r.Replier
+}
+
+func (r *deferredCardResultReplier) BindTaskCard(cardID string) {
+	if binder, ok := r.Replier.(platform.TaskCardBinder); ok {
+		binder.BindTaskCard(cardID)
+	}
+}

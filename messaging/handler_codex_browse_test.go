@@ -309,7 +309,7 @@ func TestCodexCxLsIncludesProjectStoredOnlyInLocalProjects(t *testing.T) {
 	h.SetCodexLocalSessionDir(codexDir)
 
 	text := h.renderCodexWorkspaceListForAccess(codexBindingKey("admin-1", "codex"), "admin-1", true)
-	if !strings.Contains(text, "0. weclaw") || !strings.Contains(text, "1. 智能家居总控") {
+	if !strings.Contains(text, "0. 智能家居总控") || !strings.Contains(text, "1. weclaw") {
 		t.Fatalf("ls should include project stored only in local-projects, text=%q", text)
 	}
 	if strings.Contains(text, "g-p-smart-home") {

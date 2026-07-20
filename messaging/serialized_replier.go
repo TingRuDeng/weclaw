@@ -68,6 +68,14 @@ func (r *serializedReplier) CurrentTaskCardID() string {
 	return reporter.CurrentTaskCardID()
 }
 
+func (r *serializedReplier) BindTaskCard(cardID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if binder, ok := r.inner.(platform.TaskCardBinder); ok {
+		binder.BindTaskCard(cardID)
+	}
+}
+
 type serializedStream struct {
 	inner platform.Stream
 	mu    *sync.Mutex

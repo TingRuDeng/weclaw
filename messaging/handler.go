@@ -81,6 +81,8 @@ type Handler struct {
 	claudeSessions          *claudeSessionStore
 	codexBrowseMu           sync.Mutex
 	codexBrowseWorkspaces   map[string]string
+	codexTaskCardFocusMu    sync.Mutex
+	codexTaskCardFocus      map[string]string
 	feishuWorkspaceChoices  feishuWorkspaceChoiceStore
 	feishuNavSnapshots      feishuNavigationSnapshotStore
 	feishuAccountConfirms   feishuCodexAccountConfirmStore

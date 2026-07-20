@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -35,12 +36,15 @@ type codexSessionAcquireRequest struct {
 }
 
 type codexSessionAcquireResult struct {
-	route           codexConversationRoute
-	resolution      codexRuntimeResolution
-	externalState   externalCodexTaskState
-	externalActive  bool
-	agentSessionErr error
-	runtimeErr      error
+	route               codexConversationRoute
+	resolution          codexRuntimeResolution
+	externalState       externalCodexTaskState
+	externalActive      bool
+	agentSessionErr     error
+	runtimeErr          error
+	selectionChanged    bool
+	progressReanchored  bool
+	progressReanchorErr error
 }
 
 // acquireCodexSessionWithBindingLocked atomically commits one frontend's
@@ -93,12 +97,21 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		}
 		return codexSessionAcquireResult{}, result.agentSessionErr
 	}
+	storeSelectionChanged := !codexRemoteSelectionMatchesRoute(locked, req.route)
+	result.selectionChanged = h.codexTaskCardSelectionChanged(
+		req.route.bindingKey, req.route.conversationID, storeSelectionChanged,
+	)
 
 	result.resolution, result.runtimeErr = h.bindCodexSharedRuntime(req, liveAgent)
 	if result.runtimeErr != nil {
 		return result, nil
 	}
-	return h.attachCodexAcquireObserver(result, req, liveAgent)
+	result, err = h.attachCodexAcquireObserver(result, req, liveAgent)
+	if err == nil && result.runtimeErr == nil &&
+		(result.progressReanchorErr == nil || result.progressReanchored) {
+		h.commitCodexTaskCardFocus(req.route.bindingKey, req.route.conversationID)
+	}
+	return result, err
 }
 
 // finishCodexFrontendBinding switches only this message route's workspace and
@@ -164,7 +177,73 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	}
 	result.externalState = prepared.state
 	result.externalActive = prepared.active && observerReady
+	if result.selectionChanged && reservation.reused && observerReady {
+		result.progressReanchored, result.progressReanchorErr = h.reanchorActiveCodexTask(
+			req.ctx, reservation.task, req.reply,
+		)
+	}
 	return result, nil
+}
+
+func codexRemoteSelectionMatchesRoute(snapshot codexRemoteSelectionSnapshot, route codexConversationRoute) bool {
+	workspaceRoot := normalizeCodexWorkspaceRoot(route.workspaceRoot)
+	if normalizeCodexWorkspaceRoot(snapshot.Binding.ActiveWorkspace) != workspaceRoot {
+		return false
+	}
+	session := snapshot.Binding.Workspaces[workspaceRoot]
+	return !session.PendingNewThread && strings.TrimSpace(session.ThreadID) == strings.TrimSpace(route.threadID)
+}
+
+// codexTaskCardSelectionChanged compares the target with the last session that
+// completed frontend acquisition. Browsing a workspace may update the persisted
+// selection before the user chooses a session, so that store alone cannot tell
+// whether a running task card needs to be moved back to the message bottom.
+func (h *Handler) codexTaskCardSelectionChanged(bindingKey string, conversationID string, fallback bool) bool {
+	bindingKey = strings.TrimSpace(bindingKey)
+	conversationID = strings.TrimSpace(conversationID)
+	if bindingKey == "" || conversationID == "" {
+		return fallback
+	}
+	h.codexTaskCardFocusMu.Lock()
+	defer h.codexTaskCardFocusMu.Unlock()
+	previous, tracked := h.codexTaskCardFocus[bindingKey]
+	if !tracked {
+		return fallback
+	}
+	return previous != conversationID
+}
+
+func (h *Handler) commitCodexTaskCardFocus(bindingKey string, conversationID string) {
+	bindingKey = strings.TrimSpace(bindingKey)
+	conversationID = strings.TrimSpace(conversationID)
+	if bindingKey == "" || conversationID == "" {
+		return
+	}
+	h.codexTaskCardFocusMu.Lock()
+	defer h.codexTaskCardFocusMu.Unlock()
+	if h.codexTaskCardFocus == nil {
+		h.codexTaskCardFocus = make(map[string]string)
+	}
+	h.codexTaskCardFocus[bindingKey] = conversationID
+}
+
+func (h *Handler) reanchorActiveCodexTask(ctx context.Context, task *activeAgentTask, reply platform.Replier) (bool, error) {
+	progress, latest, ok := task.progressReanchorSnapshot()
+	if !ok {
+		return false, nil
+	}
+	moved, err := progress.reanchor(ctx, reply, latest)
+	if moved {
+		task.mu.Lock()
+		task.trace = traceWithReply(task.trace, progressReplier(reply))
+		trace := task.trace
+		task.mu.Unlock()
+		h.recordTraceStage(trace, "task.card_reanchored", "running", "progress card moved to latest message position")
+	}
+	if err != nil {
+		log.Printf("[codex-session-bind] 任务卡重锚失败 moved=%t: %v", moved, err)
+	}
+	return moved, err
 }
 
 func (h *Handler) failCodexAcquireRuntime(result codexSessionAcquireResult, liveAgent agent.CodexLiveRuntimeAgent, cause error) codexSessionAcquireResult {
