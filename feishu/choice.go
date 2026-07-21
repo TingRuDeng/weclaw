@@ -11,18 +11,20 @@ import (
 )
 
 const (
-	cardActionChoice       = "choice"
-	cardActionStop         = "stop"
-	cardKindApproval       = "approval"
-	approvalOwnerValueKey  = "approval_owner"
-	approvalStatusHandled  = "handled"
-	approvalStatusExpired  = "expired"
-	approvalStatusArchived = "archived"
-	approvalPromptHead     = "Codex 请求执行敏感操作，请确认："
-	approvalPromptMarker   = "请求执行敏感操作，请确认："
-	approvalSummaryMaxRune = 160
-	modelSettingAgentKey   = "model_setting_agent"
-	cardRevisionValueKey   = "card_revision"
+	cardActionChoice          = "choice"
+	cardActionStop            = "stop"
+	cardKindApproval          = "approval"
+	approvalOwnerValueKey     = "approval_owner"
+	approvalStatusPending     = "pending"
+	approvalStatusHandled     = "handled"
+	approvalStatusExpired     = "expired"
+	approvalStatusArchived    = "archived"
+	approvalStatusUnconfirmed = "unconfirmed"
+	approvalPromptHead        = "Codex 请求执行敏感操作，请确认："
+	approvalPromptMarker      = "请求执行敏感操作，请确认："
+	approvalSummaryMaxRune    = 160
+	modelSettingAgentKey      = "model_setting_agent"
+	cardRevisionValueKey      = "card_revision"
 )
 
 type parsedCardAction struct {

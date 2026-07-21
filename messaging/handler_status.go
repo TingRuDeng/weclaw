@@ -67,7 +67,7 @@ func (h *Handler) activeTaskCounts(userID string) (total int, forUser int) {
 	defer h.activeTasksMu.Unlock()
 	for _, task := range h.activeTasks {
 		task.mu.Lock()
-		running := !task.detached
+		running := taskIsRunningForStatusLocked(task)
 		taskOwner := task.owner
 		task.mu.Unlock()
 		if !running {

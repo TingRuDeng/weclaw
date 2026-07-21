@@ -47,6 +47,63 @@ func TestGitHubAuthTokenFallsBackToGHToken(t *testing.T) {
 	}
 }
 
+func TestUpdateReleaseTagOverrideAcceptsStableTag(t *testing.T) {
+	t.Setenv(updateReleaseTagEnv, " v9.8.7 ")
+
+	tag, overridden, err := updateReleaseTagOverride()
+
+	if err != nil || !overridden || tag != "v9.8.7" {
+		t.Fatalf("override=(%q,%t,%v), want stable explicit tag", tag, overridden, err)
+	}
+}
+
+func TestUpdateReleaseTagOverrideRejectsUnsafeTag(t *testing.T) {
+	t.Setenv(updateReleaseTagEnv, `v1.2.3/../../asset`)
+
+	if _, overridden, err := updateReleaseTagOverride(); err == nil || !overridden {
+		t.Fatalf("override=(%t,%v), want validation failure", overridden, err)
+	}
+}
+
+func TestUpdateReleaseTagOverrideIsOptional(t *testing.T) {
+	t.Setenv(updateReleaseTagEnv, "")
+
+	if tag, overridden, err := updateReleaseTagOverride(); err != nil || overridden || tag != "" {
+		t.Fatalf("override=(%q,%t,%v), want latest-release path", tag, overridden, err)
+	}
+}
+
+func TestFindGitHubReleaseAssetAPIURLRejectsUnexpectedHost(t *testing.T) {
+	release := githubRelease{Assets: []githubReleaseAsset{
+		{Name: "checksums.txt", URL: "https://attacker.invalid/checksums.txt"},
+		{Name: "weclaw_darwin_arm64", URL: "https://api.github.com/repos/TingRuDeng/weclaw/releases/assets/42"},
+	}}
+
+	got, err := findGitHubReleaseAssetAPIURL(release, "v1.2.3", "weclaw_darwin_arm64")
+	if err != nil || got != release.Assets[1].URL {
+		t.Fatalf("asset URL=(%q,%v), want GitHub API asset", got, err)
+	}
+	if _, err := findGitHubReleaseAssetAPIURL(release, "v1.2.3", "checksums.txt"); err == nil {
+		t.Fatal("unexpected asset host must be rejected")
+	}
+}
+
+func TestDownloadFileWithAcceptSetsReleaseAssetHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Accept"); got != "application/octet-stream" {
+			t.Fatalf("Accept=%q, want release asset media type", got)
+		}
+		_, _ = w.Write([]byte("asset"))
+	}))
+	defer server.Close()
+
+	path, err := downloadFileWithAccept(server.URL, "application/octet-stream")
+	if err != nil {
+		t.Fatalf("downloadFileWithAccept error=%v", err)
+	}
+	defer os.Remove(path)
+}
+
 func TestReleaseTagFromLatestRedirect(t *testing.T) {
 	location := "https://github.com/TingRuDeng/weclaw/releases/tag/v0.1.3"
 

@@ -265,6 +265,77 @@ func TestReleaseScriptRejectsDraftPrereleaseAndCorruptAsset(t *testing.T) {
 	}
 }
 
+func TestReleaseScriptAcceptsDraftAssetsBeforePromotion(t *testing.T) {
+	script := releaseScriptPath(t)
+	fixture := validReleaseVerifyFixture()
+	fixture.draft = true
+
+	runReleaseScriptTestCommand(t, "", "bash", "-c", releaseVerifyCommandForInvocation(
+		script, fixture, `DRY_RUN=0 TAG=v9.9.9 verify_release_assets true`,
+	))
+
+	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, fixture))
+	if !strings.Contains(output, "draft") {
+		t.Fatalf("final verification=%q, want draft rejection", output)
+	}
+}
+
+func TestReleaseScriptStagesBeforeSmokeAndPromotion(t *testing.T) {
+	content, err := os.ReadFile(releaseScriptPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	ordered := []string{
+		"stage_release\n", "verify_release_assets true\n", "verify_update_smoke\n",
+		"promote_release\n", "verify_release\n", "RELEASE_COMMITTED=1\n",
+	}
+	previous := -1
+	for _, marker := range ordered {
+		index := strings.LastIndex(text, marker)
+		if index <= previous {
+			t.Fatalf("release order invalid at %q", marker)
+		}
+		previous = index
+	}
+	for _, required := range []string{"--draft", "--draft=false --latest", `WECLAW_UPDATE_RELEASE_TAG="$TAG"`} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("release transaction missing %q", required)
+		}
+	}
+}
+
+func TestReleaseScriptCleansDraftAndTagAfterFailure(t *testing.T) {
+	script := releaseScriptPath(t)
+	command := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
+		`gh() { printf 'GH:%s\n' "$*"; } && ` +
+		`git() { printf 'GIT:%s\n' "$*"; } && ` +
+		`DRY_RUN=0 TAG=v9.9.9 RELEASE_TAG_CREATED=1 RELEASE_TAG_PUSHED=1 RELEASE_DRAFT_ATTEMPTED=1 RELEASE_COMMITTED=0 && ` +
+		`set +e; false; cleanup_failed_release`
+
+	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", command)
+	if !strings.Contains(output, "GH:release delete v9.9.9 --repo TingRuDeng/weclaw --cleanup-tag --yes") {
+		t.Fatalf("cleanup output=%q, want draft release cleanup", output)
+	}
+}
+
+func TestReleaseScriptAuthenticatesDraftUpdateSmoke(t *testing.T) {
+	content, err := os.ReadFile(releaseScriptPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, required := range []string{
+		`RELEASE_DRAFT_ATTEMPTED=1`,
+		`github_token="$(gh auth token)"`,
+		`GITHUB_TOKEN="$github_token" WECLAW_HOME=`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("draft smoke transaction missing %q", required)
+		}
+	}
+}
+
 func TestReleaseValidationRunsGovulncheck(t *testing.T) {
 	content, err := os.ReadFile(releaseScriptPath(t))
 	if err != nil {
@@ -423,6 +494,27 @@ func TestPrereleaseWorkflowRecreatesMovingTagAtCurrentCommit(t *testing.T) {
 	}
 }
 
+func TestPrereleaseWorkflowPassesRefNameThroughEnvironment(t *testing.T) {
+	path := filepath.Join("..", ".github", "workflows", "ci.yml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read CI workflow: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "REF_NAME: ${{ github.ref_name }}") {
+		t.Fatal("CI workflow must pass ref_name through an environment variable")
+	}
+	for _, unsafe := range []string{
+		`if [ "${{ github.ref_name }}"`,
+		`echo "${{ github.ref_name }}" | sed`,
+		`echo ${{ github.sha }} | cut`,
+	} {
+		if strings.Contains(text, unsafe) {
+			t.Fatalf("CI workflow interpolates untrusted context inside shell: %q", unsafe)
+		}
+	}
+}
+
 func releaseScriptPath(t *testing.T) string {
 	t.Helper()
 	abs, err := filepath.Abs(filepath.Join("..", "scripts", "release.sh"))
@@ -484,6 +576,10 @@ func validReleaseVerifyFixture() releaseVerifyFixture {
 }
 
 func releaseVerifyCommand(script string, fixture releaseVerifyFixture) string {
+	return releaseVerifyCommandForInvocation(script, fixture, `DRY_RUN=0 TAG=v9.9.9 verify_release`)
+}
+
+func releaseVerifyCommandForInvocation(script string, fixture releaseVerifyFixture, invocation string) string {
 	draft := "false"
 	if fixture.draft {
 		draft = "true"
@@ -504,5 +600,5 @@ func releaseVerifyCommand(script string, fixture releaseVerifyFixture) string {
 		`(cd "$dir" && shasum -a 256 weclaw_* > checksums.txt); if [[ "$FAKE_CORRUPT" == 1 ]]; then printf 'corrupt\n' >> "$dir/weclaw_linux_amd64"; fi; return 0; fi; ` +
 		`case "$*" in *".assets | length"*) echo 5 ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
 		`*"@tsv"*) printf '%s\t%s\t%s\n' "` + fixture.tag + `" "` + draft + `" "` + prerelease + `" ;; *"--json tagName"*) echo "` + fixture.tag + `" ;; esac; } && ` +
-		`DRY_RUN=0 TAG=v9.9.9 verify_release`
+		invocation
 }

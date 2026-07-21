@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -46,6 +47,34 @@ func TestHandleMessageEventDropsPendingGroupMirrorWhenThreadArrives(t *testing.T
 
 	recorder.requireCount(t, 1, 120*time.Millisecond)
 	recorder.requireSessionEquals(t, "feishu:cli_a:tenant_1:group:oc_1")
+}
+
+func TestCanceledGroupMirrorReleasesReservationWhenPersistenceFails(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.deduper.mirrorWindow = 50 * time.Millisecond
+	// 目录不能作为状态文件，确保取消镜像时的去重提交失败。
+	adapter.SetDedupStateFile(t.TempDir())
+	mirror := newDispatchableGroupEvent(dedupTestEventOptions{
+		MessageID: "om_mirror_retry", EventID: "evt_mirror_retry",
+		CreateTime: "1719730000000", Text: "@_user_1 D 线程的水果是什么？",
+	})
+	thread := newDispatchableGroupEvent(dedupTestEventOptions{
+		MessageID: "om_thread_retry", EventID: "evt_thread_retry", ThreadID: "omt_thread_retry",
+		CreateTime: "1719730000000", Text: "@_user_1 D 线程的水果是什么？",
+	})
+
+	if err := adapter.handleMessageEvent(context.Background(), mirror, newDispatchRecorder().dispatch); err != nil {
+		t.Fatalf("defer mirror: %v", err)
+	}
+	if err := adapter.handleMessageEvent(context.Background(), thread, newDispatchRecorder().dispatch); err == nil {
+		t.Fatal("thread admission should expose the configured persistence failure")
+	}
+	adapter.SetDedupStateFile(filepath.Join(t.TempDir(), "dedup.json"))
+	reservation, duplicate := adapter.deduper.reserve(mirror, ExtractFeishuSessionScope(mirror))
+	if duplicate {
+		t.Fatal("failed mirror persistence must release its reservation for retry")
+	}
+	reservation.release()
 }
 
 func TestHandleMessageEventDispatchesPendingGroupWithoutThreadMirror(t *testing.T) {

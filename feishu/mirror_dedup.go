@@ -17,6 +17,7 @@ type pendingGroupMirror struct {
 	timer    *time.Timer
 	canceled bool
 	dispatch func()
+	consume  func() error
 	cleanup  func()
 }
 
@@ -31,13 +32,13 @@ type feishuMirrorStamp struct {
 }
 
 // recordThreadMirrorFingerprint 记录 thread 消息，并取消同一意图的群聊镜像 pending。
-func (d *feishuEventDeduper) recordThreadMirrorFingerprint(event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, content string) {
+func (d *feishuEventDeduper) recordThreadMirrorFingerprint(event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, content string) error {
 	if d == nil || !hasThreadFields(scope) {
-		return
+		return nil
 	}
 	fp, ok := feishuMirrorFingerprintFor(event, scope, content)
 	if !ok {
-		return
+		return nil
 	}
 	now := d.now()
 	var canceled []*pendingGroupMirror
@@ -50,30 +51,40 @@ func (d *feishuEventDeduper) recordThreadMirrorFingerprint(event *larkim.P2Messa
 		if pending.timer != nil {
 			pending.timer.Stop()
 		}
+		if err := pending.consume(); err != nil {
+			pending.cleanup()
+			log.Printf("[feishu] failed to consume canceled group mirror: %v", err)
+			continue
+		}
 		pending.cleanup()
 		log.Printf("[feishu] dropped group mirror after thread event")
 	}
+	return nil
 }
 
 // deferPossibleGroupMirror 将疑似群聊镜像延迟一个短窗口；若窗口内未出现 thread，则正常分发。
-func (d *feishuEventDeduper) deferPossibleGroupMirror(event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, content string, dispatch func(), cleanup func()) bool {
+func (d *feishuEventDeduper) deferPossibleGroupMirror(event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, content string, dispatch func(), consume func() error, cleanup func()) (bool, error) {
 	if d == nil || !isPossibleGroupMirror(scope, content) {
-		return false
+		return false, nil
 	}
 	fp, ok := feishuMirrorFingerprintFor(event, scope, content)
 	if !ok {
-		return false
+		return false, nil
 	}
 	now := d.now()
 	d.mu.Lock()
 	d.cleanupMirrorLocked(now)
 	if d.hasMatchingThreadLocked(fp) {
 		d.mu.Unlock()
+		if err := consume(); err != nil {
+			cleanup()
+			return true, err
+		}
 		cleanup()
 		log.Printf("[feishu] dropped group mirror after thread event")
-		return true
+		return true, nil
 	}
-	pending := &pendingGroupMirror{base: fp.base, eventAt: fp.eventAt, dispatch: dispatch, cleanup: cleanup}
+	pending := &pendingGroupMirror{base: fp.base, eventAt: fp.eventAt, dispatch: dispatch, consume: consume, cleanup: cleanup}
 	pending.timer = time.AfterFunc(d.mirrorWindow, func() {
 		if d.releasePendingMirror(pending) {
 			log.Printf("[feishu] dispatching pending group message")
@@ -83,7 +94,7 @@ func (d *feishuEventDeduper) deferPossibleGroupMirror(event *larkim.P2MessageRec
 	d.pendingMirrors[fp.base] = append(d.pendingMirrors[fp.base], pending)
 	d.mu.Unlock()
 	log.Printf("[feishu] pending possible group mirror")
-	return true
+	return true, nil
 }
 
 // releasePendingMirror 在等待窗口结束后释放未被 thread 取消的群消息。

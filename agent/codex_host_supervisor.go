@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,19 +63,19 @@ func (a *ACPAgent) configuredCodexHostCommandFingerprint(socketPath string) stri
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *ACPAgent) writeManagedCodexHostMetadata(cmd *exec.Cmd, socketPath string) error {
+func (a *ACPAgent) newManagedCodexHostMetadata(cmd *exec.Cmd, socketPath string) (codexHostMetadata, error) {
 	if cmd == nil || cmd.Process == nil {
-		return fmt.Errorf("codex managed host process is unavailable")
+		return codexHostMetadata{}, fmt.Errorf("codex managed host process is unavailable")
 	}
 	identity, err := inspectCodexHostProcess(cmd.Process.Pid)
 	if err != nil {
-		return fmt.Errorf("inspect started codex host: %w", err)
+		return codexHostMetadata{}, fmt.Errorf("inspect started codex host: %w", err)
 	}
 	generation := uint64(1)
 	if previous, readErr := a.readCodexHostMetadata(socketPath); readErr == nil && previous.Generation > 0 {
 		generation = previous.Generation + 1
 	}
-	metadata := codexHostMetadata{
+	return codexHostMetadata{
 		Version:             codexHostMetadataVersion,
 		State:               "running",
 		PID:                 cmd.Process.Pid,
@@ -86,12 +87,17 @@ func (a *ACPAgent) writeManagedCodexHostMetadata(cmd *exec.Cmd, socketPath strin
 		SocketPath:          socketPath,
 		Generation:          generation,
 		StartedAt:           time.Now().UTC(),
-	}
+	}, nil
+}
+
+func (a *ACPAgent) writeManagedCodexHostMetadata(socketPath string, metadata codexHostMetadata) error {
 	if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
 		return fmt.Errorf("write codex managed host metadata: %w", err)
 	}
 	if !codexHostProcessAlive(metadata.PID) {
-		a.markCodexHostMetadataStopped(socketPath, metadata.PID)
+		if err := a.markCodexHostMetadataStoppedLocked(socketPath, metadata); err != nil {
+			return fmt.Errorf("codex managed host exited while recording metadata; mark stopped: %w", err)
+		}
 		return fmt.Errorf("codex managed host exited while recording metadata")
 	}
 	return nil
@@ -187,14 +193,45 @@ func (a *ACPAgent) writeCodexHostMetadata(socketPath string, metadata codexHostM
 	return dirFile.Sync()
 }
 
-func (a *ACPAgent) markCodexHostMetadataStopped(socketPath string, pid int) {
-	metadata, err := a.readCodexHostMetadata(socketPath)
-	if err != nil || metadata.PID != pid {
+func (a *ACPAgent) markCodexHostMetadataStopped(socketPath string, expected codexHostMetadata) {
+	lifecycleLock, err := a.acquireCodexHostStartupLock(context.Background(), socketPath)
+	if err != nil {
+		log.Printf("[codex-host] failed to lock stopped metadata update (socket=%s): %v", socketPath, err)
 		return
+	}
+	defer releaseCodexHostStartupLock(lifecycleLock)
+	if err := a.markCodexHostMetadataStoppedLocked(socketPath, expected); err != nil {
+		log.Printf("[codex-host] failed to record stopped metadata (socket=%s): %v", socketPath, err)
+	}
+}
+
+// markCodexHostMetadataStoppedLocked 的比较与写入必须和 Host 启停共用同一把
+// lifecycle lock，否则新一代 Host 仍可能插入 read/check 与 write 之间。
+func (a *ACPAgent) markCodexHostMetadataStoppedLocked(socketPath string, expected codexHostMetadata) error {
+	metadata, err := a.readCodexHostMetadata(socketPath)
+	if err != nil {
+		return err
+	}
+	if !sameCodexHostGeneration(metadata, expected) {
+		return nil
 	}
 	metadata.State = "stopped"
 	metadata.StoppedAt = time.Now().UTC()
-	_ = a.writeCodexHostMetadata(socketPath, metadata)
+	return a.writeCodexHostMetadata(socketPath, metadata)
+}
+
+// sameCodexHostGeneration 对受管进程身份和代次执行完整 CAS，避免旧 waiter
+// 在 PID 被复用或新 Host 已经写入元数据后覆盖新一代状态。
+func sameCodexHostGeneration(current codexHostMetadata, expected codexHostMetadata) bool {
+	return current.PID == expected.PID &&
+		current.ProcessGroupID == expected.ProcessGroupID &&
+		current.UID == expected.UID &&
+		current.ProcessStart == expected.ProcessStart &&
+		current.ObservedCommandHash == expected.ObservedCommandHash &&
+		current.CommandFingerprint == expected.CommandFingerprint &&
+		filepath.Clean(current.SocketPath) == filepath.Clean(expected.SocketPath) &&
+		current.Generation == expected.Generation &&
+		current.StartedAt.Equal(expected.StartedAt)
 }
 
 func (a *ACPAgent) updateCodexHostAccountIdentity(socketPath string, profile codexauth.Profile) error {
@@ -279,7 +316,9 @@ func (a *ACPAgent) stopManagedCodexHostLocked(ctx context.Context, socketPath st
 			}
 		}
 	}
-	a.markCodexHostMetadataStopped(socketPath, metadata.PID)
+	if err := a.markCodexHostMetadataStoppedLocked(socketPath, metadata); err != nil {
+		return fmt.Errorf("record managed codex host stopped: %w", err)
+	}
 	return nil
 }
 

@@ -293,6 +293,15 @@ func TestListActiveTasksEmptyAndPopulated(t *testing.T) {
 	if other := h.handleListActiveTasks("wechat:u2"); !strings.Contains(other, "没有运行中的任务") {
 		t.Fatalf("tasks must be scoped per owner, got %q", other)
 	}
+	if !task.claimTerminal() {
+		t.Fatal("expected task terminal claim")
+	}
+	if got := h.handleListActiveTasks(user); !strings.Contains(got, "没有运行中的任务") {
+		t.Fatalf("terminal task must not remain in /ps, got %q", got)
+	}
+	if got := h.ActiveTaskCount(); got != 0 {
+		t.Fatalf("ActiveTaskCount=%d, want terminal task excluded", got)
+	}
 }
 
 func TestRunningTasksFooterDoesNotPromptCodexAppOperation(t *testing.T) {

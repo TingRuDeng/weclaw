@@ -170,7 +170,11 @@ func codexExternalTaskContext(req codexSwitchRequest) context.Context {
 func (h *Handler) resolveCodexSwitchTarget(req codexSwitchTargetRequest) (string, string, error) {
 	target := strings.TrimSpace(req.target)
 	if index, ok := parseCodexListIndex(target); ok {
-		if view, ok := h.resolveCodexSessionByIndex(req.bindingKey, index); ok {
+		view, found, err := h.resolveCodexSessionByIndex(req.bindingKey, index)
+		if err != nil {
+			return "", "", err
+		}
+		if found {
 			return h.resolveCodexSessionView(req.agentName, view, req.agent)
 		}
 		if _, browsing := h.codexBrowseWorkspace(req.bindingKey); browsing {

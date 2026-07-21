@@ -34,6 +34,7 @@ type feishuDispatchTicket struct {
 type dispatchWaitOptions struct {
 	delay    time.Duration
 	notice   func()
+	admit    func() bool
 	dispatch func()
 }
 
@@ -43,6 +44,7 @@ const (
 	dispatchRunCompleted dispatchRunOutcome = iota
 	dispatchRunWaitCanceled
 	dispatchRunExecutionCanceled
+	dispatchRunAdmissionRejected
 )
 
 func newFeishuDispatchSequencer() *feishuDispatchSequencer {
@@ -65,7 +67,7 @@ func (s *feishuDispatchSequencer) reserve(key string) feishuDispatchTicket {
 
 // run 等待前序分发完成；超时会释放队列，避免单个卡片命令永久阻塞整个窗口。
 func (t feishuDispatchTicket) run(ctx context.Context, dispatch func()) bool {
-	return t.runAfterOrderedWait(ctx, t.waitForPrevious, dispatch) == dispatchRunCompleted
+	return t.runAfterOrderedWait(ctx, t.waitForPrevious, nil, dispatch) == dispatchRunCompleted
 }
 
 // runWithWaitNotice 在保持严格顺序的同时，对长时间等待只反馈一次。
@@ -73,16 +75,20 @@ func (t feishuDispatchTicket) runWithWaitNotice(ctx context.Context, opts dispat
 	wait := func(waitCtx context.Context) bool {
 		return t.waitForPreviousWithNotice(waitCtx, opts.delay, opts.notice)
 	}
-	return t.runAfterOrderedWait(ctx, wait, opts.dispatch)
+	return t.runAfterOrderedWait(ctx, wait, opts.admit, opts.dispatch)
 }
 
-func (t feishuDispatchTicket) runAfterOrderedWait(ctx context.Context, wait func(context.Context) bool, dispatch func()) dispatchRunOutcome {
+func (t feishuDispatchTicket) runAfterOrderedWait(ctx context.Context, wait func(context.Context) bool, admit func() bool, dispatch func()) dispatchRunOutcome {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if !wait(ctx) {
 		t.finishPreservingPrevious()
 		return dispatchRunWaitCanceled
+	}
+	if admit != nil && !admit() {
+		t.finish()
+		return dispatchRunAdmissionRejected
 	}
 	if t.sequencer == nil {
 		dispatch()
@@ -123,6 +129,12 @@ func (t feishuDispatchTicket) waitForPreviousWithNotice(ctx context.Context, del
 
 // runAfterWaitTimeout 仅限制前序等待；超时后仍执行当前消息并建立新的队尾。
 func (t feishuDispatchTicket) runAfterWaitTimeout(ctx context.Context, dispatch func()) bool {
+	ordered, admitted := t.runAfterWaitTimeoutWithAdmission(ctx, nil, dispatch)
+	return ordered && admitted
+}
+
+// runAfterWaitTimeoutWithAdmission 允许 stop 越过卡住的前序票据，但仍在业务分发前同步提交接管状态。
+func (t feishuDispatchTicket) runAfterWaitTimeoutWithAdmission(ctx context.Context, admit func() bool, dispatch func()) (bool, bool) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -132,8 +144,11 @@ func (t feishuDispatchTicket) runAfterWaitTimeout(ctx context.Context, dispatch 
 	} else {
 		defer t.finishPreservingPrevious()
 	}
+	if admit != nil && !admit() {
+		return ordered, false
+	}
 	dispatch()
-	return ordered
+	return ordered, true
 }
 
 // waitForPrevious 等待同窗口前序票据完成，并明确区分等待超时。

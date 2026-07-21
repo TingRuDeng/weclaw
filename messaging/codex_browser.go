@@ -64,7 +64,10 @@ func (h *Handler) clearCodexBrowseWorkspace(bindingKey string) {
 }
 
 func (h *Handler) renderCodexWorkspaceListForAccess(bindingKey string, actorUserID string, admin bool) string {
-	groups := h.codexWorkspaceListForAccess(bindingKey, admin)
+	groups, err := h.codexWorkspaceListForAccess(bindingKey, admin)
+	if err != nil {
+		return err.Error()
+	}
 	if len(groups) == 0 {
 		return "当前还没有 Codex 工作空间。"
 	}
@@ -77,7 +80,10 @@ func (h *Handler) renderCodexWorkspaceListForAccess(bindingKey string, actorUser
 
 // renderCodexSessionList 只展示当前工作空间内的会话名称，thread id 仅内部使用。
 func (h *Handler) renderCodexSessionList(bindingKey string, workspaceRoot string) string {
-	sessions := h.codexSessionsForWorkspace(bindingKey, workspaceRoot)
+	sessions, err := h.codexSessionsForWorkspace(bindingKey, workspaceRoot)
+	if err != nil {
+		return err.Error()
+	}
 	if len(sessions) == 0 {
 		return wechatCommandText(shortCodexWorkspaceName(workspaceRoot)+" 会话", "当前工作空间还没有可切换会话。")
 	}

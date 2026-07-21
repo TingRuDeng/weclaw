@@ -38,7 +38,7 @@ func (h *Handler) runningTasksForOwner(owner string, now time.Time) []runningTas
 	defer h.activeTasksMu.Unlock()
 	for _, task := range h.activeTasks {
 		task.mu.Lock()
-		if task.owner == owner && !task.detached {
+		if task.owner == owner && taskIsRunningForStatusLocked(task) {
 			tasks = append(tasks, runningTaskView{
 				agentName: task.agentName, preview: task.preview,
 				elapsed: now.Sub(task.startedAt), lastProgress: task.view.lastProgress,
@@ -49,6 +49,10 @@ func (h *Handler) runningTasksForOwner(owner string, now time.Time) []runningTas
 		task.mu.Unlock()
 	}
 	return tasks
+}
+
+func taskIsRunningForStatusLocked(task *activeAgentTask) bool {
+	return task != nil && !task.detached && task.phase != codexTaskTerminal
 }
 
 // renderRunningTask 渲染单个任务的耗时、摘要和最近进展。

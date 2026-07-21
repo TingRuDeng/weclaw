@@ -4,8 +4,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
+
+func consumeApprovalForTest(msg platform.IncomingMessage) {
+	if msg.RawCommand != nil && msg.RawCommand.Result != nil {
+		msg.RawCommand.Result <- platform.CardActionResultConsumed
+	}
+}
 
 func approvalCardActionEvent(choice string, label string, taskCardID string) *callback.CardActionTriggerEvent {
 	value := map[string]interface{}{

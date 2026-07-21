@@ -1,15 +1,31 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const githubUserAgent = "weclaw-updater"
 const updateHTTPTimeout = 60 * time.Second
+const updateReleaseTagEnv = "WECLAW_UPDATE_RELEASE_TAG"
+
+var stableUpdateReleaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+type githubReleaseAsset struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+type githubRelease struct {
+	Assets []githubReleaseAsset `json:"assets"`
+}
 
 // releaseAssetNameForRuntime 返回当前发布策略支持的 release 资产名。
 func releaseAssetNameForRuntime(goos string, goarch string) (string, error) {
@@ -43,6 +59,68 @@ func getLatestVersion() (string, error) {
 	}
 
 	return releaseTagFromLatestRedirect(resp.Header.Get("Location"))
+}
+
+// updateReleaseTagOverride 仅供正式发布烟测选择尚处于 draft 的目标 tag。
+// 严格限制为稳定版语义化 tag，避免把环境变量直接拼入下载路径。
+func updateReleaseTagOverride() (string, bool, error) {
+	tag := strings.TrimSpace(os.Getenv(updateReleaseTagEnv))
+	if tag == "" {
+		return "", false, nil
+	}
+	if !stableUpdateReleaseTagPattern.MatchString(tag) {
+		return "", true, fmt.Errorf("%s 必须是 vX.Y.Z 格式", updateReleaseTagEnv)
+	}
+	return tag, true, nil
+}
+
+// downloadReleaseAsset 让普通更新走公开下载地址，让 draft 烟测通过 GitHub API
+// 下载受保护资产；两条路径最终仍复用相同的大小限制、checksum 和原子替换。
+func downloadReleaseAsset(version string, filename string) (string, error) {
+	tag, overridden, err := updateReleaseTagOverride()
+	if err != nil {
+		return "", err
+	}
+	if !overridden || tag != version {
+		return downloadFile(fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, version, filename))
+	}
+	assetURL, err := githubReleaseAssetAPIURL(version, filename)
+	if err != nil {
+		return "", err
+	}
+	return downloadFileWithAccept(assetURL, "application/octet-stream")
+}
+
+func githubReleaseAssetAPIURL(version string, filename string) (string, error) {
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", githubRepo, url.PathEscape(version))
+	req, err := newGitHubRequest(http.MethodGet, endpoint)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	client := &http.Client{Timeout: updateHTTPTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub release metadata returned %d", resp.StatusCode)
+	}
+	var release githubRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&release); err != nil {
+		return "", fmt.Errorf("decode GitHub release metadata: %w", err)
+	}
+	return findGitHubReleaseAssetAPIURL(release, version, filename)
+}
+
+func findGitHubReleaseAssetAPIURL(release githubRelease, version string, filename string) (string, error) {
+	for _, asset := range release.Assets {
+		if asset.Name == filename && strings.HasPrefix(asset.URL, "https://api.github.com/repos/") {
+			return asset.URL, nil
+		}
+	}
+	return "", fmt.Errorf("release asset %s not found for %s", filename, version)
 }
 
 func releaseTagFromLatestRedirect(location string) (string, error) {

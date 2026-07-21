@@ -46,6 +46,9 @@ func choicePendingDetail(choice string) string {
 
 // buildChoiceHandledCard 构建按钮点击后的原卡片替换内容，让用户能区分已处理审批。
 func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
+	if strings.TrimSpace(action.Status) == approvalStatusPending {
+		return buildSubmittedChoiceCard(action)
+	}
 	label := strings.TrimSpace(action.Label)
 	if label == "" {
 		label = strings.TrimSpace(action.Choice)
@@ -95,6 +98,9 @@ func approvalHandledStatus(action parsedCardAction) (string, string) {
 	}
 	if strings.TrimSpace(action.Status) == approvalStatusExpired {
 		return "⚠️ 已过期", "yellow"
+	}
+	if strings.TrimSpace(action.Status) == approvalStatusUnconfirmed {
+		return "⚠️ 处理结果未确认", "yellow"
 	}
 	choice := strings.ToLower(strings.TrimSpace(action.Choice))
 	label := strings.ToLower(strings.TrimSpace(action.Label))

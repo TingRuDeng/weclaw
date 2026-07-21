@@ -11,8 +11,7 @@ import (
 
 // verifyReleaseAssetChecksum 校验 release 资产，避免下载内容被截断或替换后直接安装。
 func verifyReleaseAssetChecksum(version string, filename string, assetPath string) error {
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/checksums.txt", githubRepo, version)
-	checksumFile, err := downloadFile(url)
+	checksumFile, err := downloadReleaseAsset(version, "checksums.txt")
 	if err != nil {
 		return fmt.Errorf("download checksums: %w", err)
 	}

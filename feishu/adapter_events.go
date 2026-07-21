@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -74,11 +75,6 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 			return a.handleResourceDownloadFailure(ctx, msg, reservation, err)
 		}
 	}
-	if !reservation.complete() {
-		newTemporaryAttachmentCleanup(msg.Attachments)()
-		log.Printf("[feishu] ignored message after dedup reservation ownership changed")
-		return nil
-	}
 	cleanup := newTemporaryAttachmentCleanup(msg.Attachments)
 	cleanupOwned := true
 	defer func() {
@@ -87,16 +83,27 @@ func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2Messag
 		}
 	}()
 	if allowed && incomingMessageEmpty(msg) {
+		if err := completeFeishuDedupReservation(reservation); err != nil {
+			reservation.release()
+			return err
+		}
 		log.Printf("[feishu] ignored non-dispatchable message event")
 		return nil
 	}
 	scope := ExtractFeishuSessionScope(event)
-	if a.handleMirrorDedup(ctx, event, scope, msg, dispatch, cleanup) {
+	handled, err := a.handleMirrorDedup(ctx, event, scope, msg, dispatch, reservation, cleanup)
+	if handled {
 		cleanupOwned = false
-		return nil
+		return err
 	}
-	a.dispatchIncomingMessage(context.WithoutCancel(ctx), msg, dispatch)
-	return nil
+	cleanupTransferred, err := a.dispatchReservedIncomingMessage(context.WithoutCancel(ctx), msg, dispatch, reservation, cleanup)
+	if cleanupTransferred {
+		cleanupOwned = false
+	}
+	if err != nil {
+		reservation.release()
+	}
+	return err
 }
 
 // attachReservedResources 在附件下载期间维持去重处理权。
@@ -140,7 +147,10 @@ func (a *Adapter) handleResourceDownloadFailure(ctx context.Context, msg platfor
 	}
 	log.Printf("[feishu] message resource download failed: %v", err)
 	if permanent {
-		reservation.complete()
+		if completeErr := completeFeishuDedupReservation(reservation); completeErr != nil {
+			reservation.release()
+			return completeErr
+		}
 		return nil
 	}
 	reservation.release()
@@ -153,46 +163,95 @@ func isPermanentResourceDownloadError(err error) bool {
 }
 
 // handleMirrorDedup 在 adapter 层消化飞书话题“同时发送到群”的群聊镜像。
-func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, msg platform.IncomingMessage, dispatch platform.DispatchFunc, cleanup func()) bool {
+func (a *Adapter) handleMirrorDedup(ctx context.Context, event *larkim.P2MessageReceiveV1, scope FeishuSessionScope, msg platform.IncomingMessage, dispatch platform.DispatchFunc, reservation feishuDedupReservation, cleanup func()) (bool, error) {
 	if a.deduper == nil {
-		return false
+		return false, nil
 	}
 	if hasThreadFields(scope) {
-		a.deduper.recordThreadMirrorFingerprint(event, scope, msg.Text)
-		return false
+		if err := a.deduper.recordThreadMirrorFingerprint(event, scope, msg.Text); err != nil {
+			return true, err
+		}
+		return false, nil
+	}
+	consume := func() error {
+		err := completeFeishuDedupReservation(reservation)
+		if err != nil {
+			reservation.release()
+		}
+		return err
 	}
 	return a.deduper.deferPossibleGroupMirror(event, scope, msg.Text, func() {
-		defer cleanup()
-		a.dispatchIncomingMessage(context.WithoutCancel(ctx), msg, dispatch)
-	}, cleanup)
+		transferred, err := a.dispatchReservedIncomingMessage(context.WithoutCancel(ctx), msg, dispatch, reservation, cleanup)
+		if !transferred {
+			cleanup()
+		}
+		if err != nil {
+			reservation.release()
+			log.Printf("[feishu] failed to dispatch pending group message: %v", err)
+		}
+	}, consume, cleanup)
 }
 
 // dispatchIncomingMessage 统一记录飞书消息解析结果并分发到业务层。
 func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc) {
+	_, _ = a.dispatchReservedIncomingMessage(ctx, msg, dispatch, feishuDedupReservation{}, func() {})
+}
+
+// dispatchReservedIncomingMessage 在真正轮到本消息进入业务层时才提交去重记录。
+// 返回 cleanup 是否已交给正在执行（或已经执行完）的业务调用。
+func (a *Adapter) dispatchReservedIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc, reservation feishuDedupReservation, cleanup func()) (bool, error) {
 	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
+	var admissionErr error
+	admit := func() bool {
+		admissionErr = completeFeishuDedupReservation(reservation)
+		return admissionErr == nil
+	}
+	dispatchMessage := func() {
+		defer cleanup()
+		a.dispatchMessage(ctx, msg, dispatch)
+	}
 	if !isFeishuStopMessage(msg) {
 		dispatchCtx, cancel := context.WithTimeout(ctx, a.dispatchWait)
 		defer cancel()
 		outcome := ticket.runWithWaitNotice(dispatchCtx, dispatchWaitOptions{
-			delay:  a.dispatchNoticeDelay,
-			notice: func() { go a.sendQueueWaitNotice(msg) },
-			dispatch: func() {
-				a.dispatchMessage(ctx, msg, dispatch)
-			},
+			delay:    a.dispatchNoticeDelay,
+			notice:   func() { go a.sendQueueWaitNotice(msg) },
+			admit:    admit,
+			dispatch: dispatchMessage,
 		})
 		if outcome == dispatchRunWaitCanceled || outcome == dispatchRunExecutionCanceled {
 			go a.sendQueueTimeoutNotice(msg, outcome)
 		}
-		return
+		switch outcome {
+		case dispatchRunCompleted, dispatchRunExecutionCanceled:
+			return true, nil
+		case dispatchRunAdmissionRejected:
+			return false, admissionErr
+		default:
+			return false, errors.New("message dispatch did not start before queue timeout")
+		}
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, a.dispatchWait)
 	defer cancel()
-	ordered := ticket.runAfterWaitTimeout(waitCtx, func() {
-		a.dispatchMessage(ctx, msg, dispatch)
-	})
+	ordered, admitted := ticket.runAfterWaitTimeoutWithAdmission(waitCtx, admit, dispatchMessage)
+	if !admitted {
+		return false, admissionErr
+	}
 	if !ordered {
 		log.Printf("[feishu] message dispatch bypassed stalled predecessor: account=%s chat=%s message=%s", msg.AccountID, msg.ChatID, msg.MessageID)
 	}
+	return true, nil
+}
+
+func completeFeishuDedupReservation(reservation feishuDedupReservation) error {
+	owned, err := reservation.complete()
+	if err != nil {
+		return fmt.Errorf("persist feishu event dedup state: %w", err)
+	}
+	if !owned {
+		return errors.New("feishu event dedup reservation ownership changed")
+	}
+	return nil
 }
 
 // sendQueueTimeoutNotice 区分尚未执行与执行未返回，避免超时后给出错误承诺。

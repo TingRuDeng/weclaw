@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,38 +45,49 @@ type codexAppThreadRow struct {
 }
 
 // readCodexAppWorkspaces 读取 Codex App 侧真实保存的项目列表，作为远程窗口顶层空间来源。
-func readCodexAppWorkspaces(codexDir string) []codexAppWorkspace {
+func readCodexAppWorkspaces(codexDir string) ([]codexAppWorkspace, bool, error) {
 	codexDir = strings.TrimSpace(codexDir)
 	if codexDir == "" {
-		return nil
+		return nil, false, nil
 	}
 	data, err := os.ReadFile(filepath.Join(codexDir, ".codex-global-state.json"))
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("read Codex App workspace state: %w", err)
 	}
 	var state codexAppWorkspaceState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil
+		return nil, true, fmt.Errorf("parse Codex App workspace state: %w", err)
 	}
-	projectRecency := readCodexAppProjectRecency(codexDir, state)
-	return mergeCodexAppWorkspaces(state, projectRecency)
+	projectRecency, err := readCodexAppProjectRecency(codexDir, state)
+	if err != nil {
+		return nil, true, err
+	}
+	return mergeCodexAppWorkspaces(state, projectRecency), true, nil
 }
 
 // readCodexAppProjectRecency 还原 Codex App 顶层项目排序使用的最近会话时间。
-func readCodexAppProjectRecency(codexDir string, state codexAppWorkspaceState) map[string]int64 {
+func readCodexAppProjectRecency(codexDir string, state codexAppWorkspaceState) (map[string]int64, error) {
 	dbPath := filepath.Join(codexDir, "state_5.sqlite")
 	if _, err := os.Stat(dbPath); err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("inspect Codex App thread database: %w", err)
 	}
 	query := "select id, cwd, recency_at_ms, source, thread_source from threads where archived=0 and preview<>'' and " +
 		"(thread_source is null or thread_source='' or thread_source='user')"
 	output, err := exec.Command("sqlite3", "-json", dbPath, query).Output()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("query Codex App project recency: %w", err)
 	}
 	var rows []codexAppThreadRow
-	if err := json.Unmarshal(output, &rows); err != nil {
-		return nil
+	if len(strings.TrimSpace(string(output))) > 0 {
+		if err := json.Unmarshal(output, &rows); err != nil {
+			return nil, fmt.Errorf("parse Codex App project recency: %w", err)
+		}
 	}
 
 	projectByRoot := make(map[string]string, len(state.LocalProjects))
@@ -107,29 +119,34 @@ func readCodexAppProjectRecency(codexDir string, state codexAppWorkspaceState) m
 			projectRecency[projectID] = row.RecencyAtMS
 		}
 	}
-	return projectRecency
+	return projectRecency, nil
 }
 
 // readCodexAppWorkspaceThreads 读取 Codex App 当前项目内实际可见会话。
-func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codexWorkspaceView {
+func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) ([]codexWorkspaceView, bool, error) {
 	codexDir = strings.TrimSpace(codexDir)
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	if codexDir == "" || workspaceRoot == "" {
-		return nil
+		return nil, false, nil
 	}
 	dbPath := filepath.Join(codexDir, "state_5.sqlite")
 	if _, err := os.Stat(dbPath); err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("inspect Codex App thread database: %w", err)
 	}
 	query := "select id, title, recency_at_ms, source, thread_source from threads where archived=0 and preview<>'' and cwd=" +
 		sqliteString(workspaceRoot) + " and (thread_source is null or thread_source='' or thread_source='user') order by recency_at_ms desc, id desc"
 	output, err := exec.Command("sqlite3", "-json", dbPath, query).Output()
 	if err != nil {
-		return nil
+		return nil, true, fmt.Errorf("query Codex App workspace threads: %w", err)
 	}
 	var rows []codexAppThreadRow
-	if err := json.Unmarshal(output, &rows); err != nil {
-		return nil
+	if len(strings.TrimSpace(string(output))) > 0 {
+		if err := json.Unmarshal(output, &rows); err != nil {
+			return nil, true, fmt.Errorf("parse Codex App workspace threads: %w", err)
+		}
 	}
 	index := readLocalCodexSessionIndex(filepath.Join(codexDir, "session_index.jsonl"))
 	views := make([]codexWorkspaceView, 0, len(rows))
@@ -149,7 +166,7 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) []codex
 			Source:        codexLocalSource,
 		})
 	}
-	return views
+	return views, true, nil
 }
 
 func isVisibleCodexAppThread(row codexAppThreadRow) bool {

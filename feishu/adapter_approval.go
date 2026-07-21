@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"strings"
 	"time"
@@ -28,43 +29,120 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 			Toast: &callback.Toast{Type: "warning", Content: "只有任务发起人可以审批"},
 		}
 	}
+	action.Status = approvalStatusPending
 	handled, first := a.recordApprovalAction(action)
 	if first {
 		resultCh := make(chan platform.CardActionResult, 1)
-		metadata := map[string]string{"source": "card.action.trigger"}
-		if handled.SessionKey != "" {
-			metadata[feishuSessionMetadataKey] = handled.SessionKey
+		msg := a.approvalActionMessage(handled, resultCh)
+		resolved := make(chan parsedCardAction, 1)
+		dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.cardActionTimeout)
+		go func() {
+			defer cancel()
+			resolved <- a.resolveApprovalCardAction(dispatchCtx, handled, msg, resultCh, dispatch)
+		}()
+		timer := time.NewTimer(approvalActionResultTimeout)
+		defer timer.Stop()
+		select {
+		case handled = <-resolved:
+		case <-timer.C:
+			go a.patchResolvedApprovalCard(resolved)
+		case <-ctx.Done():
+			go a.patchResolvedApprovalCard(resolved)
 		}
-		msg := platform.IncomingMessage{
-			Platform:    platform.PlatformFeishu,
-			AccountID:   a.creds.AppID,
-			UserID:      handled.UserID,
-			UserAliases: handled.UserAliases,
-			ChatID:      handled.ChatID,
-			MessageID:   handled.MessageID + ":card:" + handled.Action + ":" + handled.Choice,
-			RawCommand: &platform.CardAction{
-				Action: handled.Action,
-				Value: map[string]string{
-					"choice":                               handled.Choice,
-					"conv":                                 handled.Conv,
-					"approval_key":                         handled.Approval,
-					"task_card_id":                         handled.TaskCard,
-					platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
-				},
-				Result: resultCh,
+	}
+	return a.approvalCardActionResponse(handled)
+}
+
+func (a *Adapter) approvalActionMessage(action parsedCardAction, resultCh chan platform.CardActionResult) platform.IncomingMessage {
+	metadata := map[string]string{"source": "card.action.trigger"}
+	if action.SessionKey != "" {
+		metadata[feishuSessionMetadataKey] = action.SessionKey
+	}
+	return platform.IncomingMessage{
+		Platform:    platform.PlatformFeishu,
+		AccountID:   a.creds.AppID,
+		UserID:      action.UserID,
+		UserAliases: action.UserAliases,
+		ChatID:      action.ChatID,
+		MessageID:   action.MessageID + ":card:" + action.Action + ":" + action.Choice,
+		RawCommand: &platform.CardAction{
+			Action: action.Action,
+			Value: map[string]string{
+				"choice":                               action.Choice,
+				"conv":                                 action.Conv,
+				"approval_key":                         action.Approval,
+				"task_card_id":                         action.TaskCard,
+				platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
 			},
-			Metadata: metadata,
+			Result: resultCh,
+		},
+		Metadata: metadata,
+	}
+}
+
+func (a *Adapter) resolveApprovalCardAction(ctx context.Context, action parsedCardAction, msg platform.IncomingMessage, resultCh <-chan platform.CardActionResult, dispatch platform.DispatchFunc) parsedCardAction {
+	dispatchDone := make(chan struct{})
+	go func() {
+		defer close(dispatchDone)
+		dispatch(ctx, msg, newReplierWithTaskCards(a.sender, action.UserID, a.cardKit, a.taskCards).withDeliveryAccount(a.creds.AppID))
+	}()
+
+	result, confirmed := waitForApprovalActionResult(ctx, resultCh, dispatchDone)
+	switch {
+	case !confirmed:
+		action.Status = approvalStatusUnconfirmed
+	case result == platform.CardActionResultExpired:
+		action.Status = approvalStatusExpired
+	case result == platform.CardActionResultConsumed && a.updateTaskCardWithApproval(ctx, action):
+		action.Status = approvalStatusArchived
+	case result == platform.CardActionResultConsumed:
+		action.Status = approvalStatusHandled
+	default:
+		action.Status = approvalStatusUnconfirmed
+	}
+	a.updateApprovalActionRecord(action)
+	return action
+}
+
+func waitForApprovalActionResult(ctx context.Context, resultCh <-chan platform.CardActionResult, dispatchDone <-chan struct{}) (platform.CardActionResult, bool) {
+	select {
+	case result := <-resultCh:
+		return result, true
+	case <-dispatchDone:
+		select {
+		case result := <-resultCh:
+			return result, true
+		default:
+			return "", false
 		}
-		dispatch(context.WithoutCancel(ctx), msg, newReplierWithTaskCards(a.sender, handled.UserID, a.cardKit, a.taskCards).withDeliveryAccount(a.creds.AppID))
-		if a.approvalActionExpired(ctx, resultCh) {
-			handled.Status = approvalStatusExpired
-			a.updateApprovalActionRecord(handled)
-		} else if a.updateTaskCardWithApproval(ctx, handled) {
-			handled.Status = approvalStatusArchived
-			a.updateApprovalActionRecord(handled)
-		} else {
-			handled.Status = approvalStatusHandled
-			a.updateApprovalActionRecord(handled)
+	case <-ctx.Done():
+		return "", false
+	}
+}
+
+func (a *Adapter) patchResolvedApprovalCard(resolved <-chan parsedCardAction) {
+	action := <-resolved
+	response := a.approvalCardActionResponse(action)
+	if response == nil || response.Card == nil || a.sender == nil || strings.TrimSpace(action.MessageID) == "" {
+		return
+	}
+	cardJSON, err := json.Marshal(response.Card.Data)
+	if err != nil {
+		log.Printf("[feishu] failed to marshal resolved approval card: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), feishuCardActionNoticeTimeout)
+	defer cancel()
+	if err := a.sender.PatchCard(ctx, action.MessageID, string(cardJSON)); err != nil {
+		log.Printf("[feishu] failed to patch resolved approval card: %v", err)
+	}
+}
+
+func (a *Adapter) approvalCardActionResponse(handled parsedCardAction) *callback.CardActionTriggerResponse {
+	if strings.TrimSpace(handled.Status) == approvalStatusPending {
+		return &callback.CardActionTriggerResponse{
+			Toast: approvalActionToast(handled),
+			Card:  buildSubmittedChoiceCard(handled),
 		}
 	}
 	if panelCard := a.updateApprovalPanelWithAction(handled); panelCard != nil {
@@ -80,22 +158,15 @@ func (a *Adapter) handleApprovalCardAction(ctx context.Context, action parsedCar
 }
 
 func approvalActionToast(action parsedCardAction) *callback.Toast {
-	if strings.TrimSpace(action.Status) == approvalStatusExpired {
+	switch strings.TrimSpace(action.Status) {
+	case approvalStatusPending:
+		return &callback.Toast{Type: "info", Content: "已受理，正在处理"}
+	case approvalStatusExpired:
 		return &callback.Toast{Type: "warning", Content: "授权请求已过期，请重新发起任务"}
-	}
-	return &callback.Toast{Type: "success", Content: "已处理"}
-}
-
-func (a *Adapter) approvalActionExpired(ctx context.Context, resultCh <-chan platform.CardActionResult) bool {
-	timer := time.NewTimer(approvalActionResultTimeout)
-	defer timer.Stop()
-	select {
-	case result := <-resultCh:
-		return result == platform.CardActionResultExpired
-	case <-timer.C:
-		return false
-	case <-ctx.Done():
-		return false
+	case approvalStatusUnconfirmed:
+		return &callback.Toast{Type: "warning", Content: "授权处理结果未确认，请重新发起任务"}
+	default:
+		return &callback.Toast{Type: "success", Content: "已处理"}
 	}
 }
 

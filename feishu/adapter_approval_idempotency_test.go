@@ -43,6 +43,7 @@ func TestHandleCardActionEventIsIdempotentForApproval(t *testing.T) {
 	dispatched := make(chan platform.IncomingMessage, 2)
 	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 
 	first, err := adapter.handleCardActionEvent(context.Background(), event, dispatch)
@@ -68,12 +69,56 @@ func TestHandleCardActionEventIsIdempotentForApproval(t *testing.T) {
 	}
 }
 
+func TestHandleCardActionEventDoesNotTreatMissingResultAsSuccess(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := approvalCardActionEvent("allow", "允许本次", "")
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "warning" {
+		t.Fatalf("response=%#v, want unconfirmed warning", resp)
+	}
+	assertApprovalCardContent(t, resp, "⚠️ 处理结果未确认")
+}
+
+func TestHandleCardActionEventReturnsPendingThenPatchesConfirmedResult(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	sender := &deferredPatchSender{patches: make(chan string, 1), texts: make(chan string, 1)}
+	adapter.sender = sender
+	event := approvalCardActionEvent("allow", "允许本次", "")
+	release := make(chan struct{})
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		<-release
+		consumeApprovalForTest(msg)
+	})
+	if err != nil {
+		t.Fatalf("handleCardActionEvent error: %v", err)
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Content != "已受理，正在处理" {
+		t.Fatalf("response=%#v, want pending callback", resp)
+	}
+	assertApprovalCardContent(t, resp, "已受理：允许本次")
+	close(release)
+	select {
+	case patch := <-sender.patches:
+		if !strings.Contains(patch, "✅ 已授权") {
+			t.Fatalf("patch=%q, want confirmed terminal card", patch)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("confirmed approval did not patch original card")
+	}
+}
+
 func TestHandleCardActionEventConcurrentApprovalDispatchesOnce(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := approvalCardActionEvent("allow", "允许本次", "")
 	dispatched := make(chan platform.IncomingMessage, 16)
 	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 	var wg sync.WaitGroup
 
@@ -105,6 +150,7 @@ func TestHandleCardActionEventSecondApprovalDoesNotOverwriteFirstDecision(t *tes
 	dispatched := make(chan platform.IncomingMessage, 2)
 	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 
 	first, err := adapter.handleCardActionEvent(context.Background(), allowEvent, dispatch)
@@ -141,6 +187,7 @@ func TestHandleCardActionEventCrossUserSameApprovalKeyDispatchesOnce(t *testing.
 	dispatched := make(chan platform.IncomingMessage, 2)
 	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 
 	first, err := adapter.handleCardActionEvent(context.Background(), firstEvent, dispatch)
@@ -181,6 +228,7 @@ func TestHandleCardActionEventNonOwnerDoesNotConsumeApproval(t *testing.T) {
 	dispatched := make(chan platform.IncomingMessage, 2)
 	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 
 	intruder, err := adapter.handleCardActionEvent(context.Background(), intruderEvent, dispatch)
@@ -218,6 +266,7 @@ func TestHandleCardActionEventRejectsApprovalWithoutOwner(t *testing.T) {
 	dispatched := make(chan platform.IncomingMessage, 1)
 	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, dispatch)
@@ -241,6 +290,7 @@ func TestHandleCardActionEventUsesApprovalKeyWhenMessageIDMissing(t *testing.T) 
 	dispatched := make(chan platform.IncomingMessage, 2)
 	dispatch := func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 
 	if _, err := adapter.handleCardActionEvent(context.Background(), event, dispatch); err != nil {
@@ -273,6 +323,7 @@ func TestSameApprovalKeyOnDifferentCardsDispatchesIndependently(t *testing.T) {
 	dispatched := make(chan platform.IncomingMessage, 2)
 	dispatch := func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}
 
 	if _, err := adapter.handleCardActionEvent(context.Background(), first, dispatch); err != nil {

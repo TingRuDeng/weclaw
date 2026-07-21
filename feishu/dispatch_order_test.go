@@ -97,6 +97,32 @@ func TestDispatchWaitTimeoutPreservesPreviousTicket(t *testing.T) {
 	}
 }
 
+func TestDispatchWaitTimeoutDoesNotRunAdmission(t *testing.T) {
+	sequencer := newFeishuDispatchSequencer()
+	first := sequencer.reserve("session")
+	second := sequencer.reserve("session")
+	blocked := make(chan struct{})
+	go first.run(context.Background(), func() { <-blocked })
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	admitted := false
+
+	outcome := second.runWithWaitNotice(ctx, dispatchWaitOptions{
+		admit: func() bool {
+			admitted = true
+			return true
+		},
+		dispatch: func() {},
+	})
+	close(blocked)
+	if outcome != dispatchRunWaitCanceled {
+		t.Fatalf("outcome=%v, want wait canceled", outcome)
+	}
+	if admitted {
+		t.Fatal("排队超时前不应提交消息去重状态")
+	}
+}
+
 func TestRepeatedDispatchWaitTimeoutsCollapseToOriginalPredecessor(t *testing.T) {
 	sequencer := newFeishuDispatchSequencer()
 	first := sequencer.reserve("session")

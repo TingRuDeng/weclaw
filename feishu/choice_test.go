@@ -260,6 +260,7 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	})
 
 	if err != nil {

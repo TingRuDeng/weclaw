@@ -85,7 +85,11 @@ func TestMergeCodexAppWorkspacesUsesAssignedThreadRecencyForNewProjects(t *testi
 		},
 	}
 
-	workspaces := mergeCodexAppWorkspaces(state, readCodexAppProjectRecency(codexDir, state))
+	projectRecency, err := readCodexAppProjectRecency(codexDir, state)
+	if err != nil {
+		t.Fatalf("read project recency: %v", err)
+	}
+	workspaces := mergeCodexAppWorkspaces(state, projectRecency)
 	wantNames := []string{"active", "stale", "ordered"}
 	if len(workspaces) != len(wantNames) {
 		t.Fatalf("workspace count = %d, want %d: %#v", len(workspaces), len(wantNames), workspaces)
@@ -94,5 +98,57 @@ func TestMergeCodexAppWorkspacesUsesAssignedThreadRecencyForNewProjects(t *testi
 		if workspaces[i].Name != want {
 			t.Fatalf("workspace[%d].Name = %q, want %q; all=%#v", i, workspaces[i].Name, want, workspaces)
 		}
+	}
+}
+
+func TestReadCodexAppWorkspacesDistinguishesMissingAndCorruptState(t *testing.T) {
+	missingDir := t.TempDir()
+	workspaces, available, err := readCodexAppWorkspaces(missingDir)
+	if err != nil || available || workspaces != nil {
+		t.Fatalf("missing state=(%#v,%t,%v), want unavailable without error", workspaces, available, err)
+	}
+
+	corruptDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(corruptDir, ".codex-global-state.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaces, available, err = readCodexAppWorkspaces(corruptDir)
+	if err == nil || !available || workspaces != nil {
+		t.Fatalf("corrupt state=(%#v,%t,%v), want available catalog with explicit error", workspaces, available, err)
+	}
+}
+
+func TestCodexAppCatalogTreatsEmptySQLiteOutputAsValidEmptyResult(t *testing.T) {
+	codexDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexDir, "state_5.sqlite"), []byte("fake"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFakeSQLite3(t, "")
+
+	recency, err := readCodexAppProjectRecency(codexDir, codexAppWorkspaceState{})
+	if err != nil || len(recency) != 0 {
+		t.Fatalf("recency=(%#v,%v), want valid empty result", recency, err)
+	}
+	sessions, available, err := readCodexAppWorkspaceThreads(codexDir, workspace)
+	if err != nil || !available || len(sessions) != 0 {
+		t.Fatalf("sessions=(%#v,%t,%v), want authoritative empty result", sessions, available, err)
+	}
+}
+
+func TestCodexWorkspaceListDoesNotFallbackWhenAppStateIsCorrupt(t *testing.T) {
+	codexDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexDir, ".codex-global-state.json"), []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(nil, nil)
+	h.SetCodexLocalSessionDir(codexDir)
+
+	groups, err := h.codexWorkspaceListForAccess("binding", true)
+	if err == nil || groups != nil {
+		t.Fatalf("groups=%#v err=%v, corrupt authoritative state must not use historical fallback", groups, err)
+	}
+	if got := h.renderCodexWorkspaceListForAccess("binding", "admin", true); got == "" || got == "当前还没有 Codex 工作空间。" {
+		t.Fatalf("render=%q, want explicit degraded-state message", got)
 	}
 }

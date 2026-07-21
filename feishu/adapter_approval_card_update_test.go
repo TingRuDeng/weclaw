@@ -25,6 +25,7 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	})
 
 	if err != nil {
@@ -61,6 +62,7 @@ func TestHandleApprovalCardActionPreservesSessionKey(t *testing.T) {
 
 	if _, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	}); err != nil {
 		t.Fatalf("handleCardActionEvent error: %v", err)
 	}
@@ -89,6 +91,7 @@ func TestHandleCardActionEventAppendsApprovalToTaskCardState(t *testing.T) {
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	})
 
 	if err != nil {
@@ -150,6 +153,7 @@ func TestHandleCardActionEventUpdatesApprovalPanelCard(t *testing.T) {
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	})
 
 	if err != nil {
@@ -198,6 +202,7 @@ func TestHandleCardActionEventKeepsPanelRecordWhenTaskCardUpdateFails(t *testing
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	})
 
 	if err != nil {
@@ -215,6 +220,21 @@ func TestHandleCardActionEventKeepsPanelRecordWhenTaskCardUpdateFails(t *testing
 	}
 }
 
+func TestApprovalPanelShowsWarningForUnconfirmedResult(t *testing.T) {
+	snapshot := approvalPanelSnapshot{Items: []approvalPanelItem{{
+		Key: "approval-key-1", Choice: "allow", Label: "允许本次", Status: approvalStatusUnconfirmed,
+	}}}
+	card := buildApprovalPanelCardData(snapshot)
+	header := card["header"].(map[string]any)
+	if got := header["template"]; got != "yellow" {
+		t.Fatalf("template=%v, want warning", got)
+	}
+	content := approvalPanelTitle(snapshot) + "\n" + approvalPanelItemStatus(snapshot.Items[0])
+	if !strings.Contains(content, "1 个结果未确认或已过期") || !strings.Contains(content, "处理结果未确认") {
+		t.Fatalf("content=%q, want explicit unconfirmed warning", content)
+	}
+}
+
 func TestHandleCardActionEventIgnoresTaskCardUpdateFailure(t *testing.T) {
 	cardKit := &fakeCardKitClient{updateErrors: []error{context.Canceled}}
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
@@ -224,6 +244,7 @@ func TestHandleCardActionEventIgnoresTaskCardUpdateFailure(t *testing.T) {
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	})
 
 	if err != nil {
@@ -251,6 +272,7 @@ func TestHandleCardActionEventDoesNotOverwriteUnknownTaskCard(t *testing.T) {
 
 	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
 		dispatched <- msg
+		consumeApprovalForTest(msg)
 	})
 
 	if err != nil {

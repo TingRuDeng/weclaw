@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -79,7 +80,10 @@ func (d *feishuEventDeduper) setStateFile(path string) {
 func (d *feishuEventDeduper) isDuplicate(event *larkim.P2MessageReceiveV1, scope FeishuSessionScope) bool {
 	reservation, duplicate := d.reserve(event, scope)
 	if !duplicate {
-		reservation.complete()
+		if _, err := reservation.complete(); err != nil {
+			log.Printf("[feishu] failed to persist event dedup state: %v", err)
+			reservation.release()
+		}
 	}
 	return duplicate
 }
@@ -115,13 +119,15 @@ func (d *feishuEventDeduper) reserve(event *larkim.P2MessageReceiveV1, scope Fei
 	return feishuDedupReservation{deduper: d, keys: keys, owner: owner}, false
 }
 
-// complete 把仍归当前处理者所有的预约提交为完成记录，并返回所有权是否有效。
-func (r feishuDedupReservation) complete() bool {
+// complete 把仍归当前处理者所有的预约提交为完成记录。
+// 持久化失败时回滚内存状态，确保后续重投递仍可重新取得处理权。
+func (r feishuDedupReservation) complete() (bool, error) {
 	if r.deduper == nil || r.owner == nil {
-		return true
+		return true, nil
 	}
 	now := r.deduper.now()
 	r.deduper.mu.Lock()
+	defer r.deduper.mu.Unlock()
 	owned := true
 	for _, key := range r.keys {
 		claim, ok := r.deduper.processing[key]
@@ -131,16 +137,22 @@ func (r feishuDedupReservation) complete() bool {
 		}
 	}
 	if !owned {
-		r.deduper.mu.Unlock()
-		return false
+		return false, nil
 	}
+	claims := make(map[string]feishuDedupClaim, len(r.keys))
 	for _, key := range r.keys {
+		claims[key] = r.deduper.processing[key]
 		delete(r.deduper.processing, key)
 		r.deduper.seen[key] = now
 	}
-	r.deduper.persistStateLocked(now)
-	r.deduper.mu.Unlock()
-	return true
+	if err := r.deduper.persistStateLocked(now); err != nil {
+		for _, key := range r.keys {
+			delete(r.deduper.seen, key)
+			r.deduper.processing[key] = claims[key]
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // release 仅回滚仍由当前预约持有的处理中指纹，避免删除并发处理者的新记录。
@@ -197,9 +209,9 @@ func (d *feishuEventDeduper) loadStateLocked(now time.Time) {
 	d.cleanupLocked(now)
 }
 
-func (d *feishuEventDeduper) persistStateLocked(now time.Time) {
+func (d *feishuEventDeduper) persistStateLocked(now time.Time) error {
 	if d.stateFile == "" {
-		return
+		return nil
 	}
 	state := feishuEventDedupState{
 		Version: 1,
@@ -209,28 +221,60 @@ func (d *feishuEventDeduper) persistStateLocked(now time.Time) {
 	for key, seenAt := range d.seen {
 		state.Seen[key] = seenAt.UTC().Format(time.RFC3339Nano)
 	}
-	writeFeishuEventDedupState(d.stateFile, state)
+	return writeFeishuEventDedupState(d.stateFile, state)
 }
 
-func writeFeishuEventDedupState(path string, state feishuEventDedupState) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		log.Printf("[feishu] failed to create event dedup state dir %s: %v", filepath.Dir(path), err)
-		return
+func writeFeishuEventDedupState(path string, state feishuEventDedupState) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create event dedup state dir %s: %w", dir, err)
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		log.Printf("[feishu] failed to marshal event dedup state: %v", err)
-		return
+		return fmt.Errorf("marshal event dedup state: %w", err)
 	}
-	tmpFile := path + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
-		log.Printf("[feishu] failed to write event dedup state %s: %v", tmpFile, err)
-		return
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create event dedup temp file: %w", err)
 	}
-	if err := os.Rename(tmpFile, path); err != nil {
-		log.Printf("[feishu] failed to move event dedup state into place %s: %v", path, err)
-		_ = os.Remove(tmpFile)
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("protect event dedup temp file: %w", err)
 	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write event dedup state: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync event dedup state: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close event dedup state: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("move event dedup state into place %s: %w", path, err)
+	}
+	committed = true
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		log.Printf("[feishu] failed to open event dedup state dir for sync: %v", err)
+		return nil
+	}
+	if err := dirFile.Sync(); err != nil {
+		_ = dirFile.Close()
+		log.Printf("[feishu] failed to sync event dedup state dir: %v", err)
+		return nil
+	}
+	if err := dirFile.Close(); err != nil {
+		log.Printf("[feishu] failed to close event dedup state dir: %v", err)
+	}
+	return nil
 }
 
 // feishuDedupKeys 生成多层去重 key：事件、消息、群聊 thread 内容指纹。

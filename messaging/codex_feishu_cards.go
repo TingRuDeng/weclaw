@@ -179,7 +179,10 @@ func (h *Handler) loadFeishuCodexWorkspaceSnapshot(req feishuCodexChoiceRequest,
 		choices, ok := h.feishuNavSnapshots.load(req.snapshot, scope)
 		return choices, req.snapshot, ok
 	}
-	groups := h.codexWorkspaceListForAccess(req.bindingKey, req.admin)
+	groups, err := h.codexWorkspaceListForAccess(req.bindingKey, req.admin)
+	if err != nil {
+		return nil, "", false
+	}
 	choices := make([]platform.Choice, 0, len(groups))
 	for _, group := range groups {
 		if name := strings.TrimSpace(group.Name); name != "" {
@@ -224,7 +227,10 @@ func (h *Handler) loadFeishuCodexSessionSnapshot(req feishuCodexChoiceRequest, s
 		choices, ok := h.feishuNavSnapshots.load(req.snapshot, scope)
 		return choices, req.snapshot, ok
 	}
-	sessions := h.codexSessionsForWorkspace(req.bindingKey, req.workspaceRoot)
+	sessions, err := h.codexSessionsForWorkspace(req.bindingKey, req.workspaceRoot)
+	if err != nil {
+		return nil, "", false
+	}
 	choices := make([]platform.Choice, 0, len(sessions))
 	for _, session := range sessions {
 		if strings.TrimSpace(session.ThreadID) == "" || session.PendingNewThread {

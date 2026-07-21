@@ -90,12 +90,25 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 	if err := a.removeStaleCodexHostSocket(socketPath); err != nil {
 		return 0, err
 	}
-	cmd, done, err := a.startCodexHostProcess(ctx, socketPath)
+	cmd, done, metadataReady, err := a.startCodexHostProcess(ctx, socketPath)
 	if err != nil {
 		return 0, err
 	}
+	closeMetadataReady := func() {
+		if metadataReady != nil {
+			close(metadataReady)
+			metadataReady = nil
+		}
+	}
+	sendMetadataReady := func(metadata codexHostMetadata) {
+		if metadataReady != nil {
+			metadataReady <- metadata
+			closeMetadataReady()
+		}
+	}
 	conn, err := waitForCodexHost(ctx, socketPath, done)
 	if err != nil {
+		closeMetadataReady()
 		stopCodexHostProcess(cmd, done)
 		a.clearOwnedCodexHost(cmd)
 		if a.stderr != nil {
@@ -107,11 +120,14 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 	}
 	if err := a.attachCodexHostConnection(conn); err != nil {
 		_ = conn.Close()
+		closeMetadataReady()
 		stopCodexHostProcess(cmd, done)
 		a.clearOwnedCodexHost(cmd)
 		return 0, err
 	}
-	if err := a.writeManagedCodexHostMetadata(cmd, socketPath); err != nil {
+	metadata, err := a.newManagedCodexHostMetadata(cmd, socketPath)
+	if err != nil {
+		closeMetadataReady()
 		connection, ownedCmd, ownedDone := a.disconnectCodexHostClient(true)
 		if connection != nil {
 			_ = connection.Close()
@@ -119,6 +135,16 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 		stopCodexHostProcess(ownedCmd, ownedDone)
 		return 0, err
 	}
+	if err := a.writeManagedCodexHostMetadata(socketPath, metadata); err != nil {
+		closeMetadataReady()
+		connection, ownedCmd, ownedDone := a.disconnectCodexHostClient(true)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		stopCodexHostProcess(ownedCmd, ownedDone)
+		return 0, err
+	}
+	sendMetadataReady(metadata)
 	log.Printf("[codex-host] started shared app-server (socket=%s, pid=%d)", socketPath, cmd.Process.Pid)
 	return cmd.Process.Pid, nil
 }
@@ -379,7 +405,7 @@ func waitForCodexHost(ctx context.Context, socketPath string, done <-chan error)
 	}
 }
 
-func (a *ACPAgent) startCodexHostProcess(ctx context.Context, socketPath string) (*exec.Cmd, <-chan error, error) {
+func (a *ACPAgent) startCodexHostProcess(ctx context.Context, socketPath string) (*exec.Cmd, <-chan error, chan codexHostMetadata, error) {
 	args := codexSharedHostArgs(a.args, socketPath)
 	command, args := a.runAs.wrapCommand(a.command, args)
 	// The host outlives the request that happened to start it; its lifecycle is
@@ -390,7 +416,7 @@ func (a *ACPAgent) startCodexHostProcess(ctx context.Context, socketPath string)
 	if len(a.env) > 0 {
 		cmdEnv, err := mergeEnv(os.Environ(), a.env)
 		if err != nil {
-			return nil, nil, fmt.Errorf("build codex app-server env: %w", err)
+			return nil, nil, nil, fmt.Errorf("build codex app-server env: %w", err)
 		}
 		cmd.Env = cmdEnv
 	}
@@ -398,15 +424,16 @@ func (a *ACPAgent) startCodexHostProcess(ctx context.Context, socketPath string)
 	cmd.Stderr = a.stderr
 	cmd.Stdout = io.Discard
 	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("start codex app-server host %s: %w", a.command, err)
+		return nil, nil, nil, fmt.Errorf("start codex app-server host %s: %w", a.command, err)
 	}
 	done := make(chan error, 1)
+	metadataReady := make(chan codexHostMetadata, 1)
 	a.mu.Lock()
 	a.hostCmd = cmd
 	a.hostDone = done
 	a.mu.Unlock()
-	go a.waitCodexHostProcess(cmd, done, socketPath)
-	return cmd, done, nil
+	go a.waitCodexHostProcess(cmd, done, socketPath, metadataReady)
+	return cmd, done, metadataReady, nil
 }
 
 func codexSharedHostArgs(args []string, socketPath string) []string {
@@ -426,12 +453,14 @@ func codexSharedHostArgs(args []string, socketPath string) []string {
 	return result
 }
 
-func (a *ACPAgent) waitCodexHostProcess(cmd *exec.Cmd, done chan<- error, socketPath string) {
+func (a *ACPAgent) waitCodexHostProcess(cmd *exec.Cmd, done chan<- error, socketPath string, metadataReady <-chan codexHostMetadata) {
 	err := cmd.Wait()
 	done <- err
 	close(done)
 	a.clearOwnedCodexHost(cmd)
-	a.markCodexHostMetadataStopped(socketPath, cmd.Process.Pid)
+	if expected, ok := <-metadataReady; ok {
+		a.markCodexHostMetadataStopped(socketPath, expected)
+	}
 	if err != nil {
 		log.Printf("[codex-host] app-server exited (pid=%d): %v", cmd.Process.Pid, err)
 	} else {

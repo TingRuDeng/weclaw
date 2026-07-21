@@ -24,7 +24,10 @@ func TestCodexWorkspaceGroupsRespectAllowedRootsForOrdinaryUser(t *testing.T) {
 	h.SetCodexLocalSessionDir(codexDir)
 	h.SetAllowedWorkspaceRoots([]string{allowed})
 
-	groups := h.codexWorkspaceGroupsForUser(codexBindingKey("user-1", "codex"), "user-1")
+	groups, err := h.codexWorkspaceGroupsForUser(codexBindingKey("user-1", "codex"), "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(groups) != 1 || groups[0].Root != normalizeCodexWorkspaceRoot(allowed) {
 		t.Fatalf("groups=%#v, want only allowed workspace", groups)
 	}
@@ -41,7 +44,10 @@ func TestCodexWorkspaceGroupsBypassAllowedRootsForAdmin(t *testing.T) {
 	h.SetAllowedWorkspaceRoots([]string{allowed})
 	h.SetAdminUsers([]string{"admin-1"})
 
-	groups := h.codexWorkspaceGroupsForUser(codexBindingKey("admin-1", "codex"), "admin-1")
+	groups, err := h.codexWorkspaceGroupsForUser(codexBindingKey("admin-1", "codex"), "admin-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(groups) != 2 {
 		t.Fatalf("groups=%#v, want admin to see both workspaces", groups)
 	}

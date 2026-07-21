@@ -126,11 +126,18 @@ func buildApprovalPanelCardData(snapshot approvalPanelSnapshot) map[string]any {
 
 func approvalPanelTitle(snapshot approvalPanelSnapshot) string {
 	pending, handled := approvalPanelCounts(snapshot.Items)
+	warnings := approvalPanelWarningCount(snapshot.Items)
 	if pending == 0 && handled == 0 {
 		return "✅ 本轮审批已处理，记录已收纳到任务卡片。"
 	}
 	if pending == 0 {
+		if warnings > 0 {
+			return fmt.Sprintf("⚠️ 已处理审批：%d 个，其中 %d 个结果未确认或已过期", handled, warnings)
+		}
 		return fmt.Sprintf("✅ 已处理审批：%d 个", handled)
+	}
+	if warnings > 0 {
+		return fmt.Sprintf("**待处理审批：%d 个**\n\n已处理：%d 个，其中 %d 个结果未确认或已过期", pending, handled, warnings)
 	}
 	return fmt.Sprintf("**待处理审批：%d 个**\n\n已处理：%d 个", pending, handled)
 }
@@ -138,9 +145,23 @@ func approvalPanelTitle(snapshot approvalPanelSnapshot) string {
 func approvalPanelTemplate(snapshot approvalPanelSnapshot) string {
 	pending, _ := approvalPanelCounts(snapshot.Items)
 	if pending == 0 {
+		if approvalPanelWarningCount(snapshot.Items) > 0 {
+			return "yellow"
+		}
 		return "green"
 	}
 	return "blue"
+}
+
+func approvalPanelWarningCount(items []approvalPanelItem) int {
+	warnings := 0
+	for _, item := range items {
+		switch strings.TrimSpace(item.Status) {
+		case approvalStatusExpired, approvalStatusUnconfirmed:
+			warnings++
+		}
+	}
+	return warnings
 }
 
 func approvalPanelCounts(items []approvalPanelItem) (int, int) {

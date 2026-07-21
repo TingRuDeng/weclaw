@@ -40,9 +40,15 @@ var updateCmd = &cobra.Command{
 
 func runUpdate(cmd *cobra.Command, args []string) error {
 	fmt.Println("正在检查更新...")
-	latest, err := getLatestVersion()
+	latest, overridden, err := updateReleaseTagOverride()
 	if err != nil {
-		return fmt.Errorf("检查最新版本失败: %w", err)
+		return fmt.Errorf("检查目标版本失败: %w", err)
+	}
+	if !overridden {
+		latest, err = getLatestVersion()
+		if err != nil {
+			return fmt.Errorf("检查最新版本失败: %w", err)
+		}
 	}
 	return finishUpdate(
 		cmd.Context(), Version, latest, updateRestartFlag, restartForceFlag,
@@ -81,10 +87,9 @@ func applyUpdate(latest string) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, latest, filename)
 
-	fmt.Printf("正在下载 %s...\n", url)
-	tmpFile, err := downloadFile(url)
+	fmt.Printf("正在下载 %s/%s...\n", latest, filename)
+	tmpFile, err := downloadReleaseAsset(latest, filename)
 	if err != nil {
 		return fmt.Errorf("下载失败: %w", err)
 	}

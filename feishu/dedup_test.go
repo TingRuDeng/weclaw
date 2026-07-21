@@ -187,10 +187,10 @@ func TestFeishuDedupReservationCannotCompleteAfterOwnershipChanged(t *testing.T)
 	if duplicate {
 		t.Fatal("过期后新处理者应取得预约")
 	}
-	if first.complete() {
+	if owned, err := first.complete(); err != nil || owned {
 		t.Fatal("失去所有权的旧处理者不应提交完成状态")
 	}
-	if !second.complete() {
+	if owned, err := second.complete(); err != nil || !owned {
 		t.Fatal("当前所有者应能提交完成状态")
 	}
 }
@@ -211,6 +211,51 @@ func TestFeishuDedupReservationIsNotPersistedBeforeCompletion(t *testing.T) {
 	second.setStateFile(stateFile)
 	if _, duplicate := second.reserve(event, scope); duplicate {
 		t.Fatal("未完成的处理中预约不应跨重启持久化")
+	}
+}
+
+func TestFeishuDedupReservationRollsBackWhenPersistenceFails(t *testing.T) {
+	deduper := newFeishuEventDeduper(time.Minute)
+	// 把目标文件设置成已存在的目录，确保最终 rename 失败。
+	deduper.setStateFile(t.TempDir())
+	event := newDMEvent(dedupTestEventOptions{
+		MessageID: "om_persist_failure", EventID: "evt_persist_failure", Text: "/cx ls",
+	})
+	scope := ExtractFeishuSessionScope(event)
+	reservation, duplicate := deduper.reserve(event, scope)
+	if duplicate {
+		t.Fatal("首次预约不应判重")
+	}
+	if owned, err := reservation.complete(); err == nil || owned {
+		t.Fatalf("complete=(%t,%v), want persistence failure", owned, err)
+	}
+	reservation.release()
+	if _, duplicate := deduper.reserve(event, scope); duplicate {
+		t.Fatal("持久化失败后事件必须可重新取得处理权")
+	}
+}
+
+func TestHandleMessageEventDoesNotDispatchWhenDedupPersistenceFails(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.SetDedupStateFile(t.TempDir())
+	event := newDMEvent(dedupTestEventOptions{
+		MessageID: "om_persist_retry", EventID: "evt_persist_retry", Text: "/cx ls",
+	})
+	dispatches := 0
+	dispatch := func(context.Context, platform.IncomingMessage, platform.Replier) { dispatches++ }
+
+	if err := adapter.handleMessageEvent(context.Background(), event, dispatch); err == nil {
+		t.Fatal("去重状态持久化失败时必须把事件交回平台重试")
+	}
+	if dispatches != 0 {
+		t.Fatalf("dispatches=%d, want no business dispatch before durable admission", dispatches)
+	}
+	adapter.SetDedupStateFile(filepath.Join(t.TempDir(), "dedup.json"))
+	if err := adapter.handleMessageEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatalf("retry error=%v", err)
+	}
+	if dispatches != 1 {
+		t.Fatalf("dispatches=%d, want retry dispatched once", dispatches)
 	}
 }
 

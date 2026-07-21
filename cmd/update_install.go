@@ -17,9 +17,16 @@ const maxSymlinkDepth = 40
 var updateHTTPClient = &http.Client{Timeout: updateHTTPTimeout}
 
 func downloadFile(url string) (string, error) {
+	return downloadFileWithAccept(url, "")
+}
+
+func downloadFileWithAccept(url string, accept string) (string, error) {
 	req, err := newGitHubRequest(http.MethodGet, url)
 	if err != nil {
 		return "", err
+	}
+	if strings.TrimSpace(accept) != "" {
+		req.Header.Set("Accept", accept)
 	}
 	resp, err := updateHTTPClient.Do(req)
 	if err != nil {

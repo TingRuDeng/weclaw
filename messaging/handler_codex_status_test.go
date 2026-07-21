@@ -44,6 +44,8 @@ func TestCodexStatusKeepsFreshRemoteThreadBeforeFirstTurn(t *testing.T) {
 
 func TestCodexStatusShowsWorkspaceThreadAndSharedHostState(t *testing.T) {
 	h := NewHandler(nil, nil)
+	// 隔离开发机上的真实 Codex App 数据；本用例验证的是运行状态渲染。
+	h.SetCodexLocalSessionDir(t.TempDir())
 	workspace := t.TempDir()
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{

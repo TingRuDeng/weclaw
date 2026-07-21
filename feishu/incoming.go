@@ -99,7 +99,8 @@ func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2Mes
 		reservation.release()
 		return platform.IncomingMessage{}, false
 	}
-	if !reservation.complete() {
+	owned, err := reservation.complete()
+	if err != nil || !owned {
 		newTemporaryAttachmentCleanup(incoming.Attachments)()
 		return platform.IncomingMessage{}, false
 	}

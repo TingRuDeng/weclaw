@@ -85,3 +85,58 @@ func TestCodexHostSupervisorRejectsMissingAndStoppedMetadata(t *testing.T) {
 		t.Fatalf("stopped metadata error=%v", err)
 	}
 }
+
+func TestMarkCodexHostStoppedRejectsStaleGenerationWithSamePID(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "codex.sock")
+	a := NewACPAgent(ACPAgentConfig{ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"}, AppServerSocket: socketPath})
+	current := codexHostMetadata{
+		Version: codexHostMetadataVersion, State: "running", PID: 4242, ProcessGroupID: 4242,
+		UID: uint32(os.Geteuid()), ProcessStart: "current-start", ObservedCommandHash: "current-command",
+		CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath), SocketPath: socketPath,
+		Generation: 8, StartedAt: time.Date(2026, 7, 21, 15, 0, 0, 0, time.UTC),
+	}
+	if err := a.writeCodexHostMetadata(socketPath, current); err != nil {
+		t.Fatal(err)
+	}
+	stale := current
+	stale.Generation = 7
+	stale.ProcessStart = "previous-start"
+	a.markCodexHostMetadataStopped(socketPath, stale)
+
+	got, err := a.readCodexHostMetadata(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "running" || got.Generation != current.Generation {
+		t.Fatalf("metadata=%#v, stale waiter must not stop current generation", got)
+	}
+	a.markCodexHostMetadataStopped(socketPath, current)
+	got, err = a.readCodexHostMetadata(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != "stopped" || got.StoppedAt.IsZero() {
+		t.Fatalf("metadata=%#v, current generation should be stopped", got)
+	}
+}
+
+func TestMarkCodexHostStoppedReturnsMetadataWritePreconditionError(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "codex.sock")
+	a := NewACPAgent(ACPAgentConfig{ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"}, AppServerSocket: socketPath})
+	metadata := codexHostMetadata{
+		Version: codexHostMetadataVersion, State: "running", PID: 4242, ProcessGroupID: 4242,
+		UID: uint32(os.Geteuid()), ProcessStart: "start", ObservedCommandHash: "command",
+		CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath), SocketPath: socketPath,
+		Generation: 1, StartedAt: time.Date(2026, 7, 21, 16, 0, 0, 0, time.UTC),
+	}
+	if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := codexHostMetadataPath(socketPath)
+	if err := os.Chmod(metadataPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.markCodexHostMetadataStoppedLocked(socketPath, metadata); err == nil {
+		t.Fatal("invalid metadata permissions must not be swallowed")
+	}
+}
