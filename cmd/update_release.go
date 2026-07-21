@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -15,6 +14,7 @@ import (
 const githubUserAgent = "weclaw-updater"
 const updateHTTPTimeout = 60 * time.Second
 const updateReleaseTagEnv = "WECLAW_UPDATE_RELEASE_TAG"
+const githubAPIBaseURL = "https://api.github.com"
 
 var stableUpdateReleaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
@@ -24,7 +24,8 @@ type githubReleaseAsset struct {
 }
 
 type githubRelease struct {
-	Assets []githubReleaseAsset `json:"assets"`
+	TagName string               `json:"tag_name"`
+	Assets  []githubReleaseAsset `json:"assets"`
 }
 
 // releaseAssetNameForRuntime 返回当前发布策略支持的 release 资产名。
@@ -92,7 +93,13 @@ func downloadReleaseAsset(version string, filename string) (string, error) {
 }
 
 func githubReleaseAssetAPIURL(version string, filename string) (string, error) {
-	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", githubRepo, url.PathEscape(version))
+	return githubReleaseAssetAPIURLFromBase(githubAPIBaseURL, version, filename)
+}
+
+// githubReleaseAssetAPIURLFromBase 通过 release list 查找目标 draft。
+// GitHub 的 releases/tags/{tag} 端点只返回已发布版本，认证后的 list 才包含 draft。
+func githubReleaseAssetAPIURLFromBase(apiBaseURL string, version string, filename string) (string, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=100", strings.TrimRight(apiBaseURL, "/"), githubRepo)
 	req, err := newGitHubRequest(http.MethodGet, endpoint)
 	if err != nil {
 		return "", err
@@ -105,13 +112,18 @@ func githubReleaseAssetAPIURL(version string, filename string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub release metadata returned %d", resp.StatusCode)
+		return "", fmt.Errorf("GitHub release list returned %d", resp.StatusCode)
 	}
-	var release githubRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&release); err != nil {
-		return "", fmt.Errorf("decode GitHub release metadata: %w", err)
+	var releases []githubRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&releases); err != nil {
+		return "", fmt.Errorf("decode GitHub release list: %w", err)
 	}
-	return findGitHubReleaseAssetAPIURL(release, version, filename)
+	for _, release := range releases {
+		if release.TagName == version {
+			return findGitHubReleaseAssetAPIURL(release, version, filename)
+		}
+	}
+	return "", fmt.Errorf("release %s not found in authenticated GitHub release list", version)
 }
 
 func findGitHubReleaseAssetAPIURL(release githubRelease, version string, filename string) (string, error) {

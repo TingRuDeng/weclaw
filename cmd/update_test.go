@@ -88,6 +88,42 @@ func TestFindGitHubReleaseAssetAPIURLRejectsUnexpectedHost(t *testing.T) {
 	}
 }
 
+func TestGitHubReleaseAssetAPIURLFindsDraftFromAuthenticatedReleaseList(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "draft-token")
+	t.Setenv("GH_TOKEN", "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/TingRuDeng/weclaw/releases" {
+			t.Fatalf("path=%q, want releases collection", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("per_page"); got != "100" {
+			t.Fatalf("per_page=%q, want 100", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer draft-token" {
+			t.Fatalf("Authorization=%q, want draft token", got)
+		}
+		_ = json.NewEncoder(w).Encode([]githubRelease{
+			{TagName: "v1.2.2"},
+			{
+				TagName: "v1.2.3",
+				Assets: []githubReleaseAsset{{
+					Name: "weclaw_darwin_arm64",
+					URL:  "https://api.github.com/repos/TingRuDeng/weclaw/releases/assets/42",
+				}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	got, err := githubReleaseAssetAPIURLFromBase(server.URL, "v1.2.3", "weclaw_darwin_arm64")
+	if err != nil {
+		t.Fatalf("githubReleaseAssetAPIURLFromBase error=%v", err)
+	}
+	if want := "https://api.github.com/repos/TingRuDeng/weclaw/releases/assets/42"; got != want {
+		t.Fatalf("asset URL=%q, want %q", got, want)
+	}
+}
+
 func TestDownloadFileWithAcceptSetsReleaseAssetHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Accept"); got != "application/octet-stream" {
