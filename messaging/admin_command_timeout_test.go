@@ -24,7 +24,7 @@ func TestAdminCommandTimeoutStartsAfterQueueLock(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.runServiceAdminCommand(platform.IncomingMessage{UserID: "admin"}, "update", nil, newAdminCommandTestReplier())
+		h.runServiceAdminCommand(platform.IncomingMessage{UserID: "admin"}, "update", nil, newAdminCommandTestReplier(), nil)
 	}()
 	time.Sleep(2 * testAdminCommandTimeout)
 	h.serviceAdminMu.Unlock()

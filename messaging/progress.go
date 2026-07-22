@@ -63,6 +63,10 @@ type progressSession struct {
 	typingStarted       bool
 }
 
+func (s *progressSession) usesNativeProgressCard() bool {
+	return s != nil && s.reply != nil && s.reply.Capabilities().Streaming && progressModeAllowsProgress(s.cfg.Mode)
+}
+
 const progressSupersededNotice = "已在新位置继续展示；后续进展和最终结果将更新到新卡片。"
 
 // startProgressSession 启动平台进度会话，保持旧语义：最终回复由调用方单独发送。

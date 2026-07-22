@@ -129,11 +129,7 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 	modelStatus := codexResolutionModelStatus(
 		result.resolution, h.codexSessionModelStatus(result.route.threadID),
 	)
-	lines = append(lines, renderSessionModelStatus(modelStatus)...)
-	lines = append(lines,
-		"窗口绑定: 当前消息窗口",
-		"运行位置: "+renderCodexRuntimeHolder(result.resolution.Binding.Runtime),
-	)
+	lines = append(lines, renderCompactSessionModelStatus(modelStatus))
 	if result.runtimeErr != nil {
 		log.Printf("[codex-session-bind] 绑定已提交但共享 host 暂不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
 		lines = append(lines,
@@ -142,16 +138,21 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		)
 	}
 	if result.externalActive {
-		if result.progressReanchored {
-			lines = append(lines, "任务卡: 已移到当前消息底部继续更新。")
-			if result.progressReanchorErr != nil {
-				lines = append(lines, "旧卡停止状态更新失败；后续进展和结果以新卡为准。")
+		if result.externalProgressCard {
+			if result.progressReanchorErr != nil && !result.progressReanchored {
+				lines = append(lines, "运行中任务: 任务卡暂时无法移到消息底部；可发送 /ps 查看最新进展。")
+			} else if result.progressReanchored {
+				lines = append(lines, "运行中任务: 已移到当前消息底部继续更新。")
+			} else {
+				lines = append(lines, "运行中任务: 进度和结果见下方任务卡。")
+				if result.progressReanchorErr != nil {
+					lines = append(lines, "旧任务卡停止更新失败；后续以新任务卡为准。")
+				}
 			}
-		} else if result.progressReanchorErr != nil {
-			lines = append(lines, "任务仍在执行，但任务卡暂时无法移到消息底部；可发送 /ps 查看最新进展。")
+		} else {
+			lines = append(lines, "已开始回传当前任务的进度和结果。")
+			lines = append(lines, renderExternalCodexActiveNotice(result.externalState)...)
 		}
-		lines = append(lines, "已开始回传当前任务的进度和结果。")
-		lines = append(lines, renderExternalCodexActiveNotice(result.externalState)...)
 	}
 	if result.agentSessionErr != nil {
 		log.Printf("[codex-session-acquire] 保存当前窗口 Agent 失败 thread=%q: %v", result.route.threadID, result.agentSessionErr)

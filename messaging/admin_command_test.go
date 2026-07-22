@@ -93,6 +93,62 @@ func TestServiceAdminCommandRunsUpdateForWhitelistedUser(t *testing.T) {
 	}
 }
 
+func TestServiceAdminCommandUpdatesStreamingCardInPlace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
+		return "正在检查更新...\n已是最新版本 (v0.1.217)\n", nil
+	})
+	reply := newAdminStreamingCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Text:     "/update",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+	}, reply)
+
+	completed := reply.stream.waitCompleted(t)
+	if reply.options.Title != "WeClaw · 更新" {
+		t.Fatalf("stream title=%q, want update title", reply.options.Title)
+	}
+	if !strings.Contains(reply.options.InitialContent, "正在检查本地版本与最新版本") ||
+		!strings.Contains(reply.options.InitialContent, "此卡片中更新") {
+		t.Fatalf("stream initial content=%q, want in-place status explanation", reply.options.InitialContent)
+	}
+	if !strings.Contains(completed, "当前已是最新版本：v0.1.217") {
+		t.Fatalf("stream completed=%q, want latest version result", completed)
+	}
+	if texts := reply.snapshotTexts(); len(texts) != 0 {
+		t.Fatalf("reply texts=%#v, want no separate acceptance or completion message", texts)
+	}
+}
+
+func TestServiceAdminCommandFailsStreamingCardInPlace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
+		return "正在检查更新...", errors.New("release unavailable")
+	})
+	reply := newAdminStreamingCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Text:     "/update",
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+	}, reply)
+
+	failed := reply.stream.waitFailed(t)
+	if !strings.Contains(failed, "管理命令执行失败：/update") ||
+		!strings.Contains(failed, "release unavailable") {
+		t.Fatalf("stream failed=%q, want update failure", failed)
+	}
+	if texts := reply.snapshotTexts(); len(texts) != 0 {
+		t.Fatalf("reply texts=%#v, want no separate failure message", texts)
+	}
+}
+
 func TestServiceAdminCommandAllowsFeishuUnionID(t *testing.T) {
 	var gotCommand string
 	h := NewHandler(nil, nil)
@@ -409,16 +465,29 @@ func TestDefaultServiceAdminRestartReportsInvalidExecutable(t *testing.T) {
 }
 
 type adminCommandTestReplier struct {
-	mu    sync.Mutex
-	texts []string
+	mu           sync.Mutex
+	texts        []string
+	capabilities platform.Capabilities
+	options      platform.StreamOptions
+	stream       *adminCommandTestStream
 }
 
 func newAdminCommandTestReplier() *adminCommandTestReplier {
 	return &adminCommandTestReplier{}
 }
 
+func newAdminStreamingCommandTestReplier() *adminCommandTestReplier {
+	return &adminCommandTestReplier{
+		capabilities: platform.Capabilities{Text: true, Streaming: true},
+		stream:       &adminCommandTestStream{},
+	}
+}
+
 func (r *adminCommandTestReplier) Capabilities() platform.Capabilities {
-	return platform.Capabilities{Text: true}
+	if r.capabilities == (platform.Capabilities{}) {
+		return platform.Capabilities{Text: true}
+	}
+	return r.capabilities
 }
 
 func (r *adminCommandTestReplier) SendText(ctx context.Context, text string) error {
@@ -441,7 +510,70 @@ func (r *adminCommandTestReplier) Typing(ctx context.Context, on bool) error {
 }
 
 func (r *adminCommandTestReplier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
-	return nil, nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.options = opts
+	return r.stream, nil
+}
+
+func (r *adminCommandTestReplier) snapshotTexts() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.texts...)
+}
+
+type adminCommandTestStream struct {
+	mu        sync.Mutex
+	completed string
+	failed    string
+}
+
+func (s *adminCommandTestStream) Update(context.Context, string) error { return nil }
+
+func (s *adminCommandTestStream) Complete(_ context.Context, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completed = content
+	return nil
+}
+
+func (s *adminCommandTestStream) Fail(_ context.Context, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failed = content
+	return nil
+}
+
+func (s *adminCommandTestStream) waitCompleted(t *testing.T) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		completed := s.completed
+		s.mu.Unlock()
+		if completed != "" {
+			return completed
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timeout waiting for stream completion")
+	return ""
+}
+
+func (s *adminCommandTestStream) waitFailed(t *testing.T) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		failed := s.failed
+		s.mu.Unlock()
+		if failed != "" {
+			return failed
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timeout waiting for stream failure")
+	return ""
 }
 
 func (r *adminCommandTestReplier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {

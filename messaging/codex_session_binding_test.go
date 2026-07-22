@@ -198,12 +198,42 @@ func TestAcquireCodexSessionActiveSharedTurnStartsObserver(t *testing.T) {
 	if err != nil || result.runtimeErr != nil || !result.externalActive {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+	if result.externalProgressCard {
+		t.Fatal("text-only WeChat observer should keep inline task details")
+	}
 	task, active := f.h.activeTask(result.route.conversationID)
 	if !active || task.codexThreadID != "thread-b" || task.codexTurnID != "turn-b" {
 		t.Fatalf("active=%v task=%#v", active, task)
 	}
 	closeTestChannel(f.ag.watchDone)
 	waitDone(t, task.done, "shared host observer cleanup")
+}
+
+func TestAcquireCodexSessionFeishuActiveTurnUsesDedicatedProgressCard(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.reply = platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	f.setActiveTarget("turn-b")
+	f.ag.watchDone = make(chan struct{})
+	t.Cleanup(func() { closeTestChannel(f.ag.watchDone) })
+	request := f.request("thread-b")
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = f.reply
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || result.runtimeErr != nil || !result.externalActive || !result.externalProgressCard {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	text := f.h.renderCodexSessionAcquireSuccess(result)
+	if !strings.Contains(text, "进度和结果见下方任务卡") || strings.Contains(text, "共享 Codex 任务正在进行") {
+		t.Fatalf("text=%q, want compact dedicated task card notice", text)
+	}
+
+	closeTestChannel(f.ag.watchDone)
+	task, active := f.h.activeTask(result.route.conversationID)
+	if active {
+		waitDone(t, task.done, "feishu shared host observer cleanup")
+	}
 }
 
 func TestCodexSwitchCommandRendersBindingSemantics(t *testing.T) {
@@ -213,9 +243,62 @@ func TestCodexSwitchCommandRendersBindingSemantics(t *testing.T) {
 		workspaceRoot: f.workspaceB, agent: f.ag, target: "thread-b",
 		options: codexSwitchOptions{actorUserID: f.routeUser, platform: platform.PlatformFeishu, reply: f.reply},
 	})
-	if !strings.Contains(text, "已切换并绑定") || !strings.Contains(text, "共享 Codex app-server") ||
+	if !strings.Contains(text, "已切换并绑定") ||
+		strings.Contains(text, "窗口绑定") || strings.Contains(text, "运行位置") ||
 		strings.Contains(text, "控制方") || strings.Contains(text, "接管") {
 		t.Fatalf("text=%q", text)
+	}
+}
+
+func TestRenderCodexSessionAcquireResultKeepsProgressInDedicatedTaskCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	result := codexSessionAcquireResult{
+		route:                codexConversationRoute{workspaceRoot: "/workspace/card-manager-android", threadID: "thread-active"},
+		externalActive:       true,
+		externalProgressCard: true,
+		externalState: externalCodexTaskState{
+			CodexThreadState: agent.CodexThreadState{Preview: "好，你推进吧"},
+			Progress:         "正在精简活动卡片",
+		},
+	}
+
+	text := h.renderCodexSessionAcquireSuccess(result)
+	for _, want := range []string{
+		"已切换并绑定", "工作空间: card-manager-android",
+		"模型: 未知（会话未记录） · 推理强度: 未知（会话未记录）",
+		"运行中任务: 进度和结果见下方任务卡",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text=%q, want %q", text, want)
+		}
+	}
+	for _, duplicate := range []string{
+		"窗口绑定:", "运行位置:", "共享 Codex 任务正在进行", "任务: 好，你推进吧",
+		"当前进展:", "任务完成后结果会自动返回",
+	} {
+		if strings.Contains(text, duplicate) {
+			t.Fatalf("text=%q, should not repeat %q", text, duplicate)
+		}
+	}
+}
+
+func TestRenderCodexSessionAcquireResultExplainsReanchoredTaskCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	result := codexSessionAcquireResult{
+		route:                codexConversationRoute{workspaceRoot: "/workspace/card-manager-android", threadID: "thread-active"},
+		externalActive:       true,
+		externalProgressCard: true,
+		progressReanchored:   true,
+	}
+
+	text := h.renderCodexSessionAcquireSuccess(result)
+	if !strings.Contains(text, "运行中任务: 已移到当前消息底部继续更新") {
+		t.Fatalf("text=%q, want reanchored task card notice", text)
+	}
+	for _, duplicate := range []string{"共享 Codex 任务正在进行", "\n\n任务:", "当前进展:"} {
+		if strings.Contains(text, duplicate) {
+			t.Fatalf("text=%q, should not repeat %q", text, duplicate)
+		}
 	}
 }
 

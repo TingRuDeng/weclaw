@@ -36,15 +36,16 @@ type codexSessionAcquireRequest struct {
 }
 
 type codexSessionAcquireResult struct {
-	route               codexConversationRoute
-	resolution          codexRuntimeResolution
-	externalState       externalCodexTaskState
-	externalActive      bool
-	agentSessionErr     error
-	runtimeErr          error
-	selectionChanged    bool
-	progressReanchored  bool
-	progressReanchorErr error
+	route                codexConversationRoute
+	resolution           codexRuntimeResolution
+	externalState        externalCodexTaskState
+	externalActive       bool
+	externalProgressCard bool
+	agentSessionErr      error
+	runtimeErr           error
+	selectionChanged     bool
+	progressReanchored   bool
+	progressReanchorErr  error
 }
 
 // acquireCodexSessionWithBindingLocked atomically commits one frontend's
@@ -177,6 +178,8 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	}
 	result.externalState = prepared.state
 	result.externalActive = prepared.active && observerReady
+	result.externalProgressCard = result.externalActive &&
+		h.externalTaskReservationUsesProgressCard(reservation, opts)
 	if result.selectionChanged && reservation.reused && observerReady {
 		result.progressReanchored, result.progressReanchorErr = h.reanchorActiveCodexTask(
 			req.ctx, reservation.task, req.reply,

@@ -45,6 +45,26 @@ type resolvedExternalCodexTask struct {
 	err               error
 }
 
+// externalTaskReservationUsesProgressCard 判断活动任务是否由独立原生任务卡承载。
+// 复用任务优先读取其启动时的进度会话，避免配置变更后误判展示位置。
+func (h *Handler) externalTaskReservationUsesProgressCard(reservation externalCodexTaskReservation, fallback externalCodexTaskOptions) bool {
+	if progress, _, ok := reservation.task.progressReanchorSnapshot(); ok {
+		return progress.usesNativeProgressCard()
+	}
+	opts := reservation.runtime.opts
+	if opts.reply == nil {
+		opts = fallback
+	}
+	if opts.reply == nil || !opts.reply.Capabilities().Streaming {
+		return false
+	}
+	cfg := opts.progressCfg
+	if cfg.Mode == "" {
+		cfg = h.resolveProgressConfigForAccount(opts.platform, opts.accountID, opts.agentName)
+	}
+	return progressModeAllowsProgress(cfg.Mode)
+}
+
 // startExternalCodexTaskIfActive 在切换会话后登记可持续回推的外部任务。
 func (h *Handler) startExternalCodexTaskIfActive(opts externalCodexTaskOptions) (externalCodexTaskState, bool, error) {
 	prepared, err := h.prepareExternalCodexTask(opts)

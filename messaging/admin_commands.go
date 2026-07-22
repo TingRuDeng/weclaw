@@ -56,8 +56,28 @@ func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.In
 		sendPlatformText(ctx, reply, userID, "管理命令执行器未配置，暂未执行。")
 		return
 	}
-	sendPlatformText(ctx, reply, userID, "管理命令已受理：/"+command+"，正在后台执行；完成后会另行通知。")
-	go h.runServiceAdminCommand(msg, command, args, reply)
+	statusStream := h.openServiceAdminCommandStatus(ctx, command, reply)
+	if statusStream == nil {
+		sendPlatformText(ctx, reply, userID, "管理命令已受理：/"+command+"，正在后台执行；完成后会另行通知。")
+	}
+	go h.runServiceAdminCommand(msg, command, args, reply, statusStream)
+}
+
+// openServiceAdminCommandStatus 让 /update 在支持流式卡片的平台原地展示检查结果，
+// 避免“已是最新版本”被拆到另一条消息后难以发现。
+func (h *Handler) openServiceAdminCommandStatus(ctx context.Context, command string, reply platform.Replier) platform.Stream {
+	if command != "update" || !reply.Capabilities().Streaming {
+		return nil
+	}
+	stream, err := reply.OpenStream(ctx, platform.StreamOptions{
+		Title:          "WeClaw · 更新",
+		InitialContent: "更新命令已受理，正在检查本地版本与最新版本，请稍候。\n\n最终结果会在此卡片中更新。",
+	})
+	if err != nil {
+		log.Printf("[admin-update] failed to open status stream, falling back to text: %v", err)
+		return nil
+	}
+	return stream
 }
 
 // isAdminUser 判断当前用户是否在管理命令白名单中。
@@ -111,7 +131,7 @@ func (h *Handler) currentServiceAdminCommandExecutor() ServiceAdminCommandExecut
 	return h.serviceAdminExecutor
 }
 
-func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command string, args []string, reply platform.Replier) {
+func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command string, args []string, reply platform.Replier, statusStream platform.Stream) {
 	userID := msg.UserID
 	h.serviceAdminMu.Lock()
 	defer h.serviceAdminMu.Unlock()
@@ -119,18 +139,36 @@ func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command s
 	defer cancel()
 	executor := h.currentServiceAdminCommandExecutor()
 	if executor == nil {
-		sendPlatformText(runCtx, reply, userID, "管理命令执行器未配置，暂未执行。")
+		h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, "管理命令执行器未配置，暂未执行。", true)
 		return
 	}
 	output, err := executor(runCtx, command, args)
 	if command == "restart" && err == nil {
 		if notifyErr := recordAdminRestartNotification(msg); notifyErr != nil {
 			log.Printf("[admin-restart] failed to persist completion notification: %v", notifyErr)
-			sendPlatformText(runCtx, reply, userID, formatServiceAdminRestartNotificationUnavailable(output))
+			h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, formatServiceAdminRestartNotificationUnavailable(output), true)
 			return
 		}
 	}
-	sendPlatformText(runCtx, reply, userID, formatServiceAdminCommandReply(command, output, err))
+	h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, formatServiceAdminCommandReply(command, output, err), err != nil)
+}
+
+func (h *Handler) finishServiceAdminCommand(ctx context.Context, reply platform.Replier, userID string, stream platform.Stream, content string, failed bool) {
+	if stream == nil {
+		sendPlatformText(ctx, reply, userID, content)
+		return
+	}
+	var err error
+	if failed {
+		err = stream.Fail(ctx, content)
+	} else {
+		err = stream.Complete(ctx, content)
+	}
+	if err == nil {
+		return
+	}
+	log.Printf("[admin-update] failed to update status stream, falling back to text: %v", err)
+	sendPlatformText(ctx, reply, userID, content)
 }
 
 func parseServiceAdminCommand(trimmed string) (string, []string, error) {

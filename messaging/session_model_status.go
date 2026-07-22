@@ -22,6 +22,11 @@ func renderSessionModelStatus(status sessionModelStatus) []string {
 	}
 }
 
+// renderCompactSessionModelStatus 用于导航结果，把相关配置压缩到同一行。
+func renderCompactSessionModelStatus(status sessionModelStatus) string {
+	return "模型: " + recordedSessionValue(status.Model) + " · 推理强度: " + recordedSessionValue(status.Effort)
+}
+
 func recordedSessionValue(value string) string {
 	if value = strings.TrimSpace(value); value != "" {
 		return value
