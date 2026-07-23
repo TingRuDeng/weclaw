@@ -24,6 +24,13 @@ func TestIncomingMessageConversationKeyTrimsValues(t *testing.T) {
 	}
 }
 
+func TestIncomingMessageSessionRouteKeyTrimsValue(t *testing.T) {
+	msg := IncomingMessage{Route: SessionRoute{Key: " feishu:tenant:group:chat "}}
+	if got := msg.SessionRouteKey(); got != "feishu:tenant:group:chat" {
+		t.Fatalf("SessionRouteKey=%q", got)
+	}
+}
+
 func TestAttachmentKindConstants(t *testing.T) {
 	kinds := []AttachmentKind{
 		AttachmentImage,

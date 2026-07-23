@@ -255,8 +255,8 @@ func pendingFeishuDispatchNode(node *feishuDispatchNode) *feishuDispatchNode {
 }
 
 func feishuDispatchKey(msg platform.IncomingMessage) string {
-	sessionKey := ""
-	if msg.Metadata != nil {
+	sessionKey := msg.SessionRouteKey()
+	if sessionKey == "" && msg.Metadata != nil {
 		sessionKey = strings.TrimSpace(msg.Metadata[feishuSessionMetadataKey])
 	}
 	if sessionKey == "" {

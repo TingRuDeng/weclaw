@@ -58,6 +58,7 @@ func TestProgressCommandShowsPlatformEffectiveMode(t *testing.T) {
 
 func TestProgressCommandChangesPlatformOverride(t *testing.T) {
 	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
 		string(platform.PlatformFeishu): {Mode: progressModeStream},
 	})
@@ -68,6 +69,7 @@ func TestProgressCommandChangesPlatformOverride(t *testing.T) {
 			Platform: platform.PlatformFeishu,
 			UserID:   "ou_user",
 			Text:     "/progress typing",
+			Metadata: map[string]string{"feishu_union_id": "on_admin"},
 		},
 		RouteUserID: "ou_user",
 		Reply:       reply,
@@ -84,6 +86,7 @@ func TestProgressCommandChangesPlatformOverride(t *testing.T) {
 
 func TestProgressCommandChangesOnlyCurrentFeishuAccount(t *testing.T) {
 	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): {Mode: progressModeSummary},
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_b"): {Mode: progressModeStream},
@@ -96,6 +99,7 @@ func TestProgressCommandChangesOnlyCurrentFeishuAccount(t *testing.T) {
 			AccountID: "cli_a",
 			UserID:    "ou_user",
 			Text:      "/progress typing",
+			Metadata:  map[string]string{"feishu_union_id": "on_admin"},
 		},
 		RouteUserID: "ou_user",
 		Reply:       reply,
@@ -110,6 +114,30 @@ func TestProgressCommandChangesOnlyCurrentFeishuAccount(t *testing.T) {
 	}
 	if got := h.resolveProgressConfigForAccount(platform.PlatformFeishu, "cli_b", "codex").Mode; got != progressModeStream {
 		t.Fatalf("cli_b progress mode=%q, want unchanged stream", got)
+	}
+}
+
+func TestProgressCommandRejectsNonAdminMutationWithoutChangingAccount(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): {Mode: progressModeSummary},
+	})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.handleBuiltInPlatformCommand(context.Background(), platformCommandRequest{
+		Message: platform.IncomingMessage{
+			Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/progress typing",
+		},
+		RouteUserID: "feishu:cli_a:tenant:group:oc_group",
+		Reply:       reply,
+		Trimmed:     "/progress typing",
+	})
+
+	if !containsText(reply.Texts, "仅管理员可以修改") {
+		t.Fatalf("reply=%#v, want admin-only mutation notice", reply.Texts)
+	}
+	if got := h.resolveProgressConfigForAccount(platform.PlatformFeishu, "cli_a", "codex").Mode; got != progressModeSummary {
+		t.Fatalf("progress mode=%q, want unchanged summary", got)
 	}
 }
 

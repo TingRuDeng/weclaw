@@ -28,6 +28,18 @@ func TestReadAttachmentDataRejectsOversizedLocalFile(t *testing.T) {
 	}
 }
 
+func TestReadAttachmentDataRequiresInjectedRemoteDownloader(t *testing.T) {
+	_, err := NewHandler(nil, nil).readAttachmentData(context.Background(), platform.Attachment{
+		Metadata: map[string]string{
+			"encrypt_query_param": "download-param",
+			"aes_key":             "aes-key",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "平台未配置附件下载能力") {
+		t.Fatalf("err=%v, want missing platform downloader error", err)
+	}
+}
+
 func TestHandleImageAttachmentSaveReportsDirectoryCreationFailure(t *testing.T) {
 	h := NewHandler(nil, nil)
 	invalidDir := filepath.Join(t.TempDir(), "not-a-directory")

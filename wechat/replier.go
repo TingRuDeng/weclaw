@@ -42,10 +42,25 @@ func (r *Replier) Capabilities() platform.Capabilities {
 	return platform.Capabilities{Text: true, Typing: true, Image: true, File: true, LongText: true}
 }
 
+// SetClientID 设置首条回复使用的幂等客户端 ID。
+func (r *Replier) SetClientID(clientID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ClientID = strings.TrimSpace(clientID)
+	r.clientIDUsed = false
+}
+
+// SetTextChunkLimit 调整后续文本回复的分片上限。
+func (r *Replier) SetTextChunkLimit(maxRunes int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ChunkRunes = maxRunes
+}
+
 func (r *Replier) SendText(ctx context.Context, text string) error {
 	plainText := MarkdownToPlainText(text)
 	displayText := FormatTextForWeChatDisplay(plainText)
-	chunks := splitTextReplyChunks(displayText, r.ChunkRunes)
+	chunks := splitTextReplyChunks(displayText, r.textChunkLimit())
 	clientIDs := r.clientIDsForTextChunks(len(chunks))
 	for i, chunk := range chunks {
 		if err := r.sendPlainText(ctx, chunk, clientIDs[i]); err != nil {
@@ -59,7 +74,7 @@ func (r *Replier) SendText(ctx context.Context, text string) error {
 func (r *Replier) SendTextIdempotent(ctx context.Context, text string, deliveryKey string) error {
 	plainText := MarkdownToPlainText(text)
 	displayText := FormatTextForWeChatDisplay(plainText)
-	chunks := splitTextReplyChunks(displayText, r.ChunkRunes)
+	chunks := splitTextReplyChunks(displayText, r.textChunkLimit())
 	for index, chunk := range chunks {
 		operationID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%s:%d", strings.TrimSpace(deliveryKey), index)))
 		if err := r.sendPlainText(ctx, chunk, weclawClientIDPrefix+operationID.String()); err != nil {
@@ -93,6 +108,12 @@ func (r *Replier) clientIDsForTextChunks(count int) []string {
 		ids[i] = NewClientID()
 	}
 	return ids
+}
+
+func (r *Replier) textChunkLimit() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ChunkRunes
 }
 
 func (r *Replier) SendImage(ctx context.Context, localPath string) error {

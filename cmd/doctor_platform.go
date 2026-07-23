@@ -106,8 +106,13 @@ func checkAPIToken(cfg *config.Config) doctorResult {
 	result := doctorResult{Name: "api server"}
 	addr := strings.TrimSpace(cfg.APIAddr)
 	if addr == "" || isLoopbackAddr(addr) {
+		if strings.TrimSpace(cfg.APIToken) == "" {
+			result.Status = doctorWarn
+			result.Detail = "loopback api_token is empty; other local processes can call privileged control endpoints"
+			return result
+		}
 		result.Status = doctorOK
-		result.Detail = "loopback or default address"
+		result.Detail = "token configured for loopback address"
 		return result
 	}
 	if strings.TrimSpace(cfg.APIToken) == "" {

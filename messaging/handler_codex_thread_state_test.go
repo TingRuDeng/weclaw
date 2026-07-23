@@ -20,8 +20,8 @@ func TestResolveAgentConversationIDRestoresActiveWorkspaceAfterRestart(t *testin
 
 	first := NewHandler(nil, nil)
 	first.SetCodexSessionFile(stateFile)
-	first.codexSessions.setThread(bindingKey, activeWorkspace, "thread-active")
-	first.codexSessions.setActiveWorkspace(bindingKey, activeWorkspace)
+	first.ensureCodexSessions().setThread(bindingKey, activeWorkspace, "thread-active")
+	first.ensureCodexSessions().setActiveWorkspace(bindingKey, activeWorkspace)
 
 	second := NewHandler(nil, nil)
 	second.SetCodexSessionFile(stateFile)
@@ -61,7 +61,7 @@ func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
 	}
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-old")
+	h.ensureCodexSessions().setThread(codexBindingKey("user-1", "codex"), workspace, "thread-old")
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeOff
 	h.SetProgressConfig(cfg)
@@ -79,7 +79,7 @@ func TestSendToNamedCodexDoesNotCreateNewThreadWhenResumeFails(t *testing.T) {
 	if ag.useThreadID != "thread-old" {
 		t.Fatalf("恢复 thread=%q，want thread-old", ag.useThreadID)
 	}
-	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-old" || pending {
 		t.Fatalf("不应覆盖旧 thread，thread=%q pending=%v", thread, pending)
 	}
@@ -97,19 +97,19 @@ func TestRecordCodexThreadKeepsExistingThreadWorkspace(t *testing.T) {
 	}
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, ownerWorkspace, "thread-owner")
+	h.ensureCodexSessions().setThread(bindingKey, ownerWorkspace, "thread-owner")
 
 	h.recordCodexThread("user-1", "codex", ag, buildCodexConversationID("user-1", "codex", currentWorkspace))
 
-	currentThread, currentPending := h.codexSessions.getThread(bindingKey, currentWorkspace)
+	currentThread, currentPending := h.ensureCodexSessions().getThread(bindingKey, currentWorkspace)
 	if currentThread != "" || currentPending {
 		t.Fatalf("不应把已有 thread 移动到当前 workspace，thread=%q pending=%v", currentThread, currentPending)
 	}
-	ownerThread, ownerPending := h.codexSessions.getThread(bindingKey, ownerWorkspace)
+	ownerThread, ownerPending := h.ensureCodexSessions().getThread(bindingKey, ownerWorkspace)
 	if ownerThread != "thread-owner" || ownerPending {
 		t.Fatalf("原 workspace thread=%q pending=%v，want thread-owner false", ownerThread, ownerPending)
 	}
-	active, ok := h.codexSessions.getActiveWorkspace(bindingKey)
+	active, ok := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
 	if !ok || active != normalizeCodexWorkspaceRoot(ownerWorkspace) {
 		t.Fatalf("active workspace=(%q,%v)，want %q true", active, ok, normalizeCodexWorkspaceRoot(ownerWorkspace))
 	}
@@ -162,7 +162,7 @@ func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	h.agents["codex"] = ag
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
+	h.ensureCodexSessions().setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()

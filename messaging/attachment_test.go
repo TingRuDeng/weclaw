@@ -68,6 +68,14 @@ func TestIsAllowedAttachmentPath(t *testing.T) {
 	if isAllowedAttachmentPath(deniedPath, []string{workspaceRoot}) {
 		t.Fatalf("expected %q to be denied", deniedPath)
 	}
+
+	symlinkPath := filepath.Join(workspaceRoot, "artifacts", "outside.pdf")
+	if err := os.Symlink(deniedPath, symlinkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if isAllowedAttachmentPath(symlinkPath, []string{workspaceRoot}) {
+		t.Fatalf("expected symlink escape %q -> %q to be denied", symlinkPath, deniedPath)
+	}
 }
 
 func TestRewriteReplyWithAttachmentResults(t *testing.T) {

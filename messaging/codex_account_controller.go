@@ -93,9 +93,9 @@ func (h *Handler) activeCodexTaskCount() int {
 	h.mu.RUnlock()
 
 	count := 0
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	for _, task := range h.activeTasks {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	for _, task := range h.tasks.active {
 		if task == nil {
 			continue
 		}

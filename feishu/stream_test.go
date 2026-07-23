@@ -338,7 +338,7 @@ func TestTaskCardStreamCompleteCancelsPendingProgress(t *testing.T) {
 	finalCard := <-cardKit.updateCardCh
 	card := decodeCardJSON(t, finalCard)
 	body := card["body"].(map[string]any)
-	main := body["elements"].([]any)[1].(map[string]any)
+	main := body["elements"].([]any)[0].(map[string]any)
 	if got := main["content"]; got != "最终结果" {
 		t.Fatalf("final content=%q, want 最终结果", got)
 	}
@@ -445,7 +445,7 @@ func TestFeishuStreamCompleteUpdatesDoneAndDestroys(t *testing.T) {
 	}
 	card := decodeCardJSON(t, cardKit.updateCards[0])
 	body := card["body"].(map[string]any)
-	main := body["elements"].([]any)[1].(map[string]any)
+	main := body["elements"].([]any)[0].(map[string]any)
 	if main["content"] != "done" {
 		t.Fatalf("final content=%#v, want done", main["content"])
 	}
@@ -464,10 +464,10 @@ func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 	card := decodeCardJSON(t, cardKit.updateCards[0])
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if len(elements) != 3 {
+	if len(elements) != 2 {
 		t.Fatalf("elements=%d, want approval record element", len(elements))
 	}
-	approval := elements[2].(map[string]any)
+	approval := elements[1].(map[string]any)
 	if !strings.Contains(approval["content"].(string), "command: date") {
 		t.Fatalf("approval content=%q, want approval record", approval["content"])
 	}
@@ -485,14 +485,12 @@ func TestFeishuStreamCompleteWithEmptyContentClearsTaskCardProgress(t *testing.T
 	}
 
 	card := decodeCardJSON(t, cardKit.updateCards[0])
-	body := card["body"].(map[string]any)
-	elements := body["elements"].([]any)
-	if len(elements) != 1 {
-		t.Fatalf("elements=%d, want status-only done card: %#v", len(elements), elements)
+	if _, ok := card["body"]; ok {
+		t.Fatalf("done card body=%#v, want green header only", card["body"])
 	}
-	status := elements[0].(map[string]any)
-	if status["element_id"] != "status" || status["content"] != "**已完成**" {
-		t.Fatalf("status element=%#v, want done status only", status)
+	header := card["header"].(map[string]any)
+	if header["template"] != "green" {
+		t.Fatalf("template=%v, want green", header["template"])
 	}
 }
 

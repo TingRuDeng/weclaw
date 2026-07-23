@@ -25,17 +25,7 @@ func (a *ACPAgent) rpcWithSequence(ctx context.Context, method string, params in
 
 // notify sends a JSON-RPC notification (no id, no response expected).
 func (a *ACPAgent) notify(method string, params interface{}) error {
-	msg := struct {
-		JSONRPC string      `json:"jsonrpc"`
-		Method  string      `json:"method"`
-		Params  interface{} `json:"params,omitempty"`
-	}{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-	}
-
-	data, err := json.Marshal(msg)
+	data, err := marshalRPCNotification(method, params)
 	if err != nil {
 		return fmt.Errorf("marshal notification: %w", err)
 	}
@@ -73,26 +63,10 @@ func (a *ACPAgent) call(ctx context.Context, method string, params interface{}) 
 
 func (a *ACPAgent) callWithSequence(ctx context.Context, method string, params interface{}) (json.RawMessage, uint64, error) {
 	id := a.nextID.Add(1)
+	ch := a.pending.register(id)
+	defer a.pending.remove(id)
 
-	ch := make(chan *rpcResponse, 1)
-	a.pendingMu.Lock()
-	a.pending[id] = ch
-	a.pendingMu.Unlock()
-
-	defer func() {
-		a.pendingMu.Lock()
-		delete(a.pending, id)
-		a.pendingMu.Unlock()
-	}()
-
-	req := rpcRequest{
-		JSONRPC: "2.0",
-		ID:      id,
-		Method:  method,
-		Params:  params,
-	}
-
-	data, err := json.Marshal(req)
+	data, err := marshalRPCRequest(id, method, params)
 	if err != nil {
 		return nil, 0, fmt.Errorf("marshal request: %w", err)
 	}

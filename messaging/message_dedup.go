@@ -70,9 +70,9 @@ func (h *Handler) hasMatchingActiveTextTask(userID string, routeUserID string, t
 	owner := strings.TrimSpace(userID)
 	route := strings.TrimSpace(routeUserID)
 	fingerprint := normalizedTextFingerprint(text)
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	for _, task := range h.activeTasks {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	for _, task := range h.tasks.active {
 		task.mu.Lock()
 		matched := task.owner == owner && task.routeUserID == route && task.messageFingerprint == fingerprint && task.phase != codexTaskTerminal
 		task.mu.Unlock()

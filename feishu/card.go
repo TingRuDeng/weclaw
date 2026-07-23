@@ -34,12 +34,13 @@ func buildCardV2(opts cardOptions) (string, error) {
 	if content == "" && !omitMainContent {
 		content = statusDefaultContent(status)
 	}
-	elements := []map[string]any{
-		{
+	elements := make([]map[string]any, 0, 3)
+	if label := statusLabel(status); label != "" {
+		elements = append(elements, map[string]any{
 			"tag":        "markdown",
 			"element_id": "status",
-			"content":    statusLabel(status),
-		},
+			"content":    label,
+		})
 	}
 	if !omitMainContent {
 		elements = append(elements, map[string]any{
@@ -69,10 +70,12 @@ func buildCardV2(opts cardOptions) (string, error) {
 			},
 			"template": statusTemplate(status),
 		},
-		"body": map[string]any{
+	}
+	if len(elements) > 0 {
+		card["body"] = map[string]any{
 			"direction": "vertical",
 			"elements":  elements,
-		},
+		}
 	}
 	data, err := json.Marshal(card)
 	if err != nil {
@@ -110,7 +113,8 @@ func statusLabel(status string) string {
 	case cardStatusStreaming:
 		return "**生成中**"
 	case cardStatusDone:
-		return "**已完成**"
+		// 成功终态由绿色标题和最终内容表达，避免重复显示“已完成”。
+		return ""
 	case cardStatusError:
 		return "**执行失败**"
 	case cardStatusSuperseded:
@@ -138,7 +142,7 @@ func statusTemplate(status string) string {
 func statusDefaultContent(status string) string {
 	switch status {
 	case cardStatusDone:
-		return "任务已完成。"
+		return ""
 	case cardStatusError:
 		return "任务执行失败。"
 	case cardStatusStreaming:

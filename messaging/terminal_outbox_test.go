@@ -87,9 +87,11 @@ func (r *outboxTestReplier) DeliverTerminal(_ context.Context, checkpoint platfo
 }
 
 type outboxTestStream struct {
-	mu       sync.Mutex
-	prepared int
-	updates  []string
+	mu            sync.Mutex
+	prepared      int
+	updates       []string
+	beforePrepare func()
+	prepareErr    error
 }
 
 func (s *outboxTestStream) Update(_ context.Context, content string) error {
@@ -105,9 +107,15 @@ func (s *outboxTestStream) Fail(context.Context, string) error {
 	return errors.New("legacy Fail must not run")
 }
 func (s *outboxTestStream) PrepareTerminal(content string, failed bool) (platform.TerminalCheckpoint, error) {
+	if s.beforePrepare != nil {
+		s.beforePrepare()
+	}
 	s.mu.Lock()
 	s.prepared++
 	s.mu.Unlock()
+	if s.prepareErr != nil {
+		return platform.TerminalCheckpoint{}, s.prepareErr
+	}
 	payload, err := json.Marshal(map[string]any{"content": content, "failed": failed})
 	return platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: payload}, err
 }
@@ -138,6 +146,24 @@ func newOutboxTestRegistry(route platform.DeliveryRoute, reply *outboxTestReplie
 		Platform: &outboxTestPlatform{name: route.Platform, account: route.AccountID, reply: reply},
 		Access:   platform.NewAccessControl([]string{"test-user"}),
 	}})
+}
+
+func waitForTerminalOutboxEmpty(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		entries, err := loadTerminalOutbox(path)
+		if err != nil {
+			t.Fatalf("load terminal outbox: %v", err)
+		}
+		if len(entries) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("terminal outbox still contains %#v", entries)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestTerminalOutboxPersistsAtomicallyWithPrivatePermissions(t *testing.T) {
@@ -314,6 +340,45 @@ func TestTerminalOutboxWorkerDeliversPendingEntryOnStartup(t *testing.T) {
 	}
 }
 
+func TestTerminalOutboxReservedRecoveryDraftBecomesDeliverableAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "bot-1", ChatID: "wx-user"}
+	reply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, reply)
+	beforeCrash, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := beforeCrash.reserve(terminalOutboxDraft{Route: route, AgentName: "codex", Text: "可恢复终态"})
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if ids := beforeCrash.dueIDs(); len(ids) != 0 {
+		t.Fatalf("reservation became deliverable before preparation finished: %#v", ids)
+	}
+	persisted, err := loadTerminalOutbox(path)
+	if err != nil || len(persisted) != 1 || persisted[0].ID != reservation.ID || persisted[0].Text != "可恢复终态" {
+		t.Fatalf("persisted=%#v err=%v", persisted, err)
+	}
+
+	afterCrash, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := afterCrash.attempt(context.Background(), reservation.ID, nil); err != nil {
+		t.Fatalf("restart attempt: %v", err)
+	}
+	remaining, err := loadTerminalOutbox(path)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("remaining=%#v err=%v", remaining, err)
+	}
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if len(reply.accepted) != 1 {
+		t.Fatalf("accepted=%#v, want one recovered terminal text", reply.accepted)
+	}
+}
+
 func TestTerminalOutboxDoesNotReplayCompletedCheckpointAfterNotificationFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
@@ -390,6 +455,18 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
 	reply := newOutboxTestReplier(route)
 	reply.stream = &outboxTestStream{}
+	var observedRecoveryDraft bool
+	var recoveryObserveErr error
+	reply.stream.beforePrepare = func() {
+		entries, err := loadTerminalOutbox(path)
+		if err != nil {
+			recoveryObserveErr = err
+			return
+		}
+		observedRecoveryDraft = len(entries) == 1 &&
+			entries[0].Checkpoint == nil &&
+			entries[0].Text == "发布检查已通过"
+	}
 	var observedPersisted bool
 	var observeErr error
 	reply.beforeCheckpoint = func() {
@@ -422,6 +499,9 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	if !consumed {
 		t.Fatal("terminal reply should be consumed by durable card checkpoint")
 	}
+	if recoveryObserveErr != nil || !observedRecoveryDraft {
+		t.Fatalf("stream was frozen before durable recovery draft: observed=%v err=%v", observedRecoveryDraft, recoveryObserveErr)
+	}
 	if observeErr != nil || !observedPersisted {
 		t.Fatalf("checkpoint was delivered before durable persistence: observed=%v err=%v", observedPersisted, observeErr)
 	}
@@ -434,4 +514,44 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	if reply.checkpointCalls != 1 || len(reply.accepted) != 0 || len(reply.checkpointPayloadSeen) != 1 || !strings.Contains(string(reply.checkpointPayloadSeen[0]), "发布检查已通过") {
 		t.Fatalf("checkpoint calls=%d accepted=%#v payloads=%q", reply.checkpointCalls, reply.accepted, reply.checkpointPayloadSeen)
 	}
+}
+
+func TestFinishProgressReplyDoesNotPersistStatusSentinelWhenCheckpointPreparationFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "bot-1", ChatID: "wx-user"}
+	reply := newOutboxTestReplier(route)
+	reply.stream = &outboxTestStream{prepareErr: errors.New("checkpoint unavailable")}
+	reply.textDelivered = make(chan string, 1)
+	registry := newOutboxTestRegistry(route, reply)
+	h := NewHandler(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := h.StartTerminalOutbox(ctx, registry, path); err != nil {
+		t.Fatalf("StartTerminalOutbox: %v", err)
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	_, finish, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "codex", "/workspace/weclaw", "运行发布检查", cfg,
+	)
+
+	consumed := h.finishAndSendProgressReply(progressReplyDelivery{
+		delivery: replyDeliveryRequest{
+			ctx: context.Background(), replyWriter: reply, userID: "user-1", agentName: "codex", reply: progressStatusOnlyComplete,
+		},
+		finish: finish, progress: progress,
+	})
+	if consumed {
+		t.Fatal("status-only fallback should not be reported as consumed by a checkpoint")
+	}
+	select {
+	case text := <-reply.textDelivered:
+		if text != progressDefaultCompletion || strings.ContainsRune(text, '\x00') {
+			t.Fatalf("recovery text=%q, want default completion without internal sentinel", text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery text was not delivered")
+	}
+	waitForTerminalOutboxEmpty(t, path)
 }

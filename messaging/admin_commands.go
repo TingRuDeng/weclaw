@@ -36,10 +36,14 @@ func isServiceAdminCommand(trimmed string) bool {
 }
 
 // handleServiceAdminCommand 先校验权限和参数，再后台执行受控的 WeClaw 管理命令。
-func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.IncomingMessage, trimmed string, reply platform.Replier) {
+func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.IncomingMessage, routeUserID string, trimmed string, reply platform.Replier) {
 	userID := msg.UserID
 	if !h.isAdminMessage(msg) {
 		sendPlatformText(ctx, reply, userID, adminCommandDeniedText)
+		return
+	}
+	if !isPrivatePlatformMessage(msg, routeUserID) {
+		sendPlatformText(ctx, reply, userID, "为避免在群聊中触发主机级操作，请在机器人私聊窗口执行 /update 或 /restart。")
 		return
 	}
 	command, args, err := parseServiceAdminCommand(trimmed)

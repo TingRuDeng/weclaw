@@ -1,13 +1,29 @@
 package remotefetch
 
 import (
+	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
 )
+
+type sequenceResolver struct {
+	results [][]net.IPAddr
+	calls   int
+}
+
+func (r *sequenceResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	index := r.calls
+	r.calls++
+	if index >= len(r.results) {
+		index = len(r.results) - 1
+	}
+	return r.results[index], nil
+}
 
 func TestValidateURLRejectsUnsafeHosts(t *testing.T) {
 	for _, rawURL := range []string{
@@ -52,6 +68,32 @@ func TestValidateIPAllowsPublicAddresses(t *testing.T) {
 		if err := validateIP(netip.MustParseAddr(rawIP)); err != nil {
 			t.Fatalf("validateIP(%s) error=%v, want public address allowed", rawIP, err)
 		}
+	}
+}
+
+func TestResolveSafeIPRejectsDNSRebindingOnLaterLookup(t *testing.T) {
+	resolver := &sequenceResolver{results: [][]net.IPAddr{
+		{{IP: net.ParseIP("8.8.8.8")}},
+		{{IP: net.ParseIP("127.0.0.1")}},
+	}}
+	if ip, err := resolveSafeIPWithResolver(context.Background(), resolver, "media.example"); err != nil || ip.String() != "8.8.8.8" {
+		t.Fatalf("first lookup ip=%s err=%v, want public address", ip, err)
+	}
+	if _, err := resolveSafeIPWithResolver(context.Background(), resolver, "media.example"); err == nil {
+		t.Fatal("later lookup after DNS rebinding must reject loopback")
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("resolver calls=%d, want a fresh lookup per dial", resolver.calls)
+	}
+}
+
+func TestResolveSafeIPRejectsMixedPublicAndPrivateAnswers(t *testing.T) {
+	resolver := &sequenceResolver{results: [][]net.IPAddr{{
+		{IP: net.ParseIP("8.8.8.8")},
+		{IP: net.ParseIP("10.0.0.1")},
+	}}}
+	if _, err := resolveSafeIPWithResolver(context.Background(), resolver, "mixed.example"); err == nil {
+		t.Fatal("mixed public and private DNS answers must fail closed")
 	}
 }
 

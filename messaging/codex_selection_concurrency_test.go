@@ -13,7 +13,7 @@ import (
 
 func TestCodexConcurrentFrontendsCanBindSameSharedThread(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.codexSessions.SetFilePath(filepath.Join(t.TempDir(), "codex-sessions.json"))
+	h.ensureCodexSessions().SetFilePath(filepath.Join(t.TempDir(), "codex-sessions.json"))
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: "thread-shared"})
 	ag.setThreadBinding("thread-shared", agent.CodexThreadBinding{
 		Runtime: agent.CodexRuntimeWeClaw,
@@ -57,14 +57,14 @@ func TestCodexConcurrentFrontendsCanBindSameSharedThread(t *testing.T) {
 		}
 	}
 	for _, route := range routes {
-		threadID, pending := h.codexSessions.getThread(route.bindingKey, route.workspaceRoot)
+		threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
 		if pending || threadID != "thread-shared" {
 			t.Fatalf("route %q thread=%q pending=%v", route.bindingKey, threadID, pending)
 		}
 	}
 
 	reloaded := newCodexSessionStore()
-	reloaded.SetFilePath(h.codexSessions.filePath)
+	reloaded.SetFilePath(h.ensureCodexSessions().filePath)
 	for _, route := range routes {
 		threadID, _ := reloaded.getThread(route.bindingKey, route.workspaceRoot)
 		if threadID != "thread-shared" {

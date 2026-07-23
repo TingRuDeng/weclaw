@@ -33,7 +33,7 @@ func TestCodexLiveTaskCompletionKeepsExplicitThreadSelection(t *testing.T) {
 		return !active
 	})
 
-	threadID, pending := h.codexSessions.getThread(route.bindingKey, route.workspaceRoot)
+	threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
 	if pending || threadID != route.threadID {
 		t.Fatalf("thread=%q pending=%v，任务完成不应让 ACP 旧映射覆盖显式选择 %q", threadID, pending, route.threadID)
 	}
@@ -281,7 +281,7 @@ func liveMessageFixture(t *testing.T, active bool) (*Handler, *fakeCodexLiveAgen
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-1")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-1")
 	route := h.codexConversationRouteForSession("user-1", "user-1", "codex", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	cfg := config.DefaultProgressConfig()

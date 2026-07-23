@@ -1,12 +1,31 @@
 package messaging
 
-func (h *Handler) ensureAgentSessions() *agentSessionStore {
+// sessionService 收拢 Handler 的会话状态仓库归属；各 store 继续自行维护锁和持久化事务。
+type sessionService struct {
+	agent  *agentSessionStore
+	codex  *codexSessionStore
+	claude *claudeSessionStore
+}
+
+func newSessionService() *sessionService {
+	return &sessionService{
+		agent:  newAgentSessionStore(),
+		codex:  newCodexSessionStore(),
+		claude: newClaudeSessionStore(),
+	}
+}
+
+func (h *Handler) ensureSessionService() *sessionService {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.agentSessions == nil {
-		h.agentSessions = newAgentSessionStore()
+	if h.sessions == nil {
+		h.sessions = newSessionService()
 	}
-	return h.agentSessions
+	return h.sessions
+}
+
+func (h *Handler) ensureAgentSessions() *agentSessionStore {
+	return h.ensureSessionService().agent
 }
 
 // SetAgentSessionFile 设置会话级默认 Agent 的持久化文件。
@@ -15,12 +34,7 @@ func (h *Handler) SetAgentSessionFile(filePath string) error {
 }
 
 func (h *Handler) ensureCodexSessions() *codexSessionStore {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.codexSessions == nil {
-		h.codexSessions = newCodexSessionStore()
-	}
-	return h.codexSessions
+	return h.ensureSessionService().codex
 }
 
 // SetCodexSessionFile 设置 Codex workspace/thread 列表的持久化文件。
@@ -43,12 +57,7 @@ func (h *Handler) SetFeishuIdentityFile(filePath string) {
 }
 
 func (h *Handler) ensureClaudeSessions() *claudeSessionStore {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.claudeSessions == nil {
-		h.claudeSessions = newClaudeSessionStore()
-	}
-	return h.claudeSessions
+	return h.ensureSessionService().claude
 }
 
 // SetClaudeSessionFile 设置 Claude workspace/session 列表的持久化文件。

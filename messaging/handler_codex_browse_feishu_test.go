@@ -343,7 +343,7 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 		t.Fatalf("last session choice=%#v, want back to workspace list", choices[2])
 	}
 	bindingKey := codexBindingKey("ou_user", "codex")
-	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
+	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
 	if active != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("active=%q", active)
 	}
@@ -379,7 +379,7 @@ func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t 
 		t.Fatalf("texts=%#v, want one binding success reply", reply.Texts)
 	}
 	bindingKey := codexBindingKey("ou_user", "codex")
-	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if ag.useThreadID != "" || pending || threadID != "thread-a" {
 		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
@@ -486,8 +486,8 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	}, reply)
 
 	bindingKey := codexBindingKey("ou_user", "codex")
-	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
-	threadID, pending := h.codexSessions.getThread(bindingKey, workspaceA)
+	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceA)
 	if ag.useThreadID != "" || active != normalizeCodexWorkspaceRoot(workspaceA) || pending || threadID != "thread-a" {
 		t.Fatalf("use=%q active=%q thread=%q pending=%v", ag.useThreadID, active, threadID, pending)
 	}

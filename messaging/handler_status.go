@@ -47,7 +47,7 @@ func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platfor
 	)
 
 	mode := "default"
-	if h.isYoloMode(routeUserID) {
+	if h.isYoloMode(approvalModeKey(userID, routeUserID)) {
 		mode = "yolo"
 	}
 	rateText := "off"
@@ -63,9 +63,9 @@ func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platfor
 // activeTaskCounts 返回当前运行中的任务总数与指定用户的任务数。
 func (h *Handler) activeTaskCounts(userID string) (total int, forUser int) {
 	owner := strings.TrimSpace(userID)
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	for _, task := range h.activeTasks {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	for _, task := range h.tasks.active {
 		task.mu.Lock()
 		running := taskIsRunningForStatusLocked(task)
 		taskOwner := task.owner

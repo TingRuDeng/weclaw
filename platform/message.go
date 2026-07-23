@@ -9,6 +9,7 @@ type IncomingMessage struct {
 	UserID       string
 	UserAliases  []string
 	ChatID       string
+	Route        SessionRoute
 	MessageID    string
 	Text         string
 	Attachments  []Attachment
@@ -16,6 +17,16 @@ type IncomingMessage struct {
 	ReplyToID    string
 	ContextToken string
 	Metadata     map[string]string
+}
+
+// SessionRoute 是平台 adapter 解析出的稳定会话路由；它与真实发送者 UserID 分离。
+type SessionRoute struct {
+	Key string
+}
+
+// SessionRouteKey 返回规范化后的会话路由 key。
+func (m IncomingMessage) SessionRouteKey() string {
+	return strings.TrimSpace(m.Route.Key)
 }
 
 // UserIdentityKeys 返回可用于访问控制的用户身份，保留 UserID 作为主身份。

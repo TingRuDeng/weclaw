@@ -235,14 +235,14 @@ func TestCodexReturnToRunningTaskReanchorsOnce(t *testing.T) {
 	workspaceA, workspaceB := "/workspace/project-a", "/workspace/project-b"
 	threadA, threadB := "thread-a", "thread-b"
 	bindingKey := codexBindingKey("route-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspaceA, threadA)
-	h.codexSessions.setThread(bindingKey, workspaceB, threadB)
+	h.ensureCodexSessions().setThread(bindingKey, workspaceA, threadA)
+	h.ensureCodexSessions().setThread(bindingKey, workspaceB, threadB)
 	conversationA := buildCodexConversationID("route-1", "codex", workspaceA)
 	conversationB := buildCodexConversationID("route-1", "codex", workspaceB)
 	h.commitCodexTaskCardFocus(bindingKey, conversationB)
 	// 工作空间卡会在用户选择具体会话前预先更新持久化 workspace；任务卡
 	// 重锚必须以最后一次完整接管的会话为准，不能被这一步导航状态吞掉。
-	h.codexSessions.setActiveWorkspace(bindingKey, workspaceA)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceA)
 
 	state := agent.CodexThreadState{
 		ThreadID: threadA, Active: true, ActiveTurnID: "turn-a", Preview: "项目 A 任务",

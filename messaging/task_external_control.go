@@ -25,14 +25,14 @@ type externalCodexControlTarget struct {
 
 // externalCodexControlState 返回外部任务是否存在、是否可控制以及当前用户是否无权操作。
 func (h *Handler) externalCodexControlState(key string, actor string) (bool, bool, bool) {
-	h.activeTasksMu.Lock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	task := h.tasks.active[key]
 	if task == nil {
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return false, false, false
 	}
 	task.mu.Lock()
-	defer h.activeTasksMu.Unlock()
+	defer h.tasks.mu.Unlock()
 	defer task.mu.Unlock()
 	if task.owner != strings.TrimSpace(actor) {
 		return task.isExternalCodexLocked(), task.canControlExternalCodexLocked(), true
@@ -95,9 +95,9 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 }
 
 func (h *Handler) cachedExternalCodexTarget(key string, actor string) (externalCodexControlTarget, bool) {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	task := h.tasks.active[key]
 	if task == nil {
 		return externalCodexControlTarget{}, false
 	}

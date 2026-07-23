@@ -24,7 +24,7 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	}
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
+	h.ensureCodexSessions().setThread(codexBindingKey("user-1", "codex"), workspace, "thread-1")
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeOff
 	h.SetProgressConfig(cfg)
@@ -43,7 +43,7 @@ func TestSendToNamedCodexUsesWorkspaceConversationAndRecordsThread(t *testing.T)
 	if ag.lastChatConversationID() != wantConversationID {
 		t.Fatalf("conversationID=%q, want %q", ag.lastChatConversationID(), wantConversationID)
 	}
-	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-1" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-1 false", thread, pending)
 	}
@@ -59,7 +59,7 @@ func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
 	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 
@@ -73,7 +73,7 @@ func TestHandleCodexNewCreatesSelectsAndAcquiresThread(t *testing.T) {
 	if resetConversation != wantConversationID {
 		t.Fatalf("reset conversationID=%q, want %q", resetConversation, wantConversationID)
 	}
-	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-new" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
@@ -92,8 +92,8 @@ func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
-	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
 	ag.setThreadBinding("thread-old", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 	ag.setThreadBinding("thread-new", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw})
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -106,7 +106,7 @@ func TestHandleGlobalNewCreatesSelectsAndAcquiresCodexThread(t *testing.T) {
 	if resetConversation != wantConversationID {
 		t.Fatalf("reset conversation=%q, want %q", resetConversation, wantConversationID)
 	}
-	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
+	thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if thread != "thread-new" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-new false", thread, pending)
 	}
@@ -129,7 +129,7 @@ func TestHandleCodexSwitchCommandSetsWorkspaceThread(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(103, "/cx switch thread-2"))
 
-	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-2" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-2 false", thread, pending)
 	}
@@ -146,14 +146,14 @@ func TestHandleCodexSwitchCommandSwitchesWorkspaceForKnownThread(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
-	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), targetWorkspace, "thread-target")
+	h.ensureCodexSessions().setThread(codexBindingKey("user-1", "codex"), targetWorkspace, "thread-target")
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(106, "/cx switch thread-target"))
 
-	threadID, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), targetWorkspace)
+	threadID, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), targetWorkspace)
 	if ag.useThreadID != "" || pending || threadID != "thread-target" {
 		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
@@ -178,15 +178,15 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, currentWorkspace, "thread-a")
-	h.codexSessions.setThread(bindingKey, targetWorkspace, "thread-b")
+	h.ensureCodexSessions().setThread(bindingKey, currentWorkspace, "thread-a")
+	h.ensureCodexSessions().setThread(bindingKey, targetWorkspace, "thread-b")
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/cx switch 1"))
 
-	threadID, pending := h.codexSessions.getThread(bindingKey, targetWorkspace)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, targetWorkspace)
 	if ag.useThreadID != "" || pending || threadID != "thread-b" {
 		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}

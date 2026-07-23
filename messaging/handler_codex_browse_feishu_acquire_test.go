@@ -25,8 +25,8 @@ func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testin
 	ag.handoffErrors["thread-b"] = errors.New("探测失败")
 	h.defaultName, h.agents["codex"] = "codex", ag
 	bindingKey := codexBindingKey("ou_user", "codex")
-	h.codexSessions.setThread(bindingKey, oldWorkspace, "thread-a")
-	h.codexSessions.setActiveWorkspace(bindingKey, oldWorkspace)
+	h.ensureCodexSessions().setThread(bindingKey, oldWorkspace, "thread-a")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, oldWorkspace)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
@@ -34,8 +34,8 @@ func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testin
 		MessageID: "feishu-cx-single-failure", Text: "/cx cd weclaw",
 	}, reply)
 
-	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
-	targetThread, pending := h.codexSessions.getThread(bindingKey, targetWorkspace)
+	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
+	targetThread, pending := h.ensureCodexSessions().getThread(bindingKey, targetWorkspace)
 	if len(reply.Choices) != 0 || len(reply.Texts) != 1 ||
 		!strings.Contains(reply.Texts[0], "已进入工作空间并绑定唯一会话") ||
 		!strings.Contains(reply.Texts[0], "运行通道: 暂不可用") {

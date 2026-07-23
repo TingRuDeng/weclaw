@@ -83,7 +83,6 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		codexHostSocket:            strings.TrimSpace(cfg.AppServerSocket),
 		claudeSessionConfigs:       make(map[string][]acpSessionConfigOption),
 		claudeConfigRevisions:      make(map[string]uint64),
-		pending:                    make(map[int64]chan *rpcResponse),
 		notifyCh:                   make(map[string]chan *sessionUpdate),
 		turnCh:                     make(map[string]chan *codexTurnEvent),
 		desktopProbe:               options.desktopProbe,

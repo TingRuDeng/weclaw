@@ -14,6 +14,13 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
+func privateFeishuAdminMetadata(unionID string) map[string]string {
+	return map[string]string{
+		"feishu_union_id":  unionID,
+		"feishu_chat_type": "p2p",
+	}
+}
+
 func TestServiceAdminCommandRequiresWhitelistedUser(t *testing.T) {
 	ag := &fakeAgent{reply: "agent reply", info: agent.AgentInfo{Name: "mock", Type: "test"}}
 	calls := 0
@@ -105,7 +112,7 @@ func TestServiceAdminCommandUpdatesStreamingCardInPlace(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 
 	completed := reply.stream.waitCompleted(t)
@@ -136,7 +143,7 @@ func TestServiceAdminCommandFailsStreamingCardInPlace(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 
 	failed := reply.stream.waitFailed(t)
@@ -163,7 +170,7 @@ func TestServiceAdminCommandAllowsFeishuUnionID(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin_for_this_bot",
 		Text:     "/update",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 
 	texts := reply.waitTexts(t, 2)
@@ -172,6 +179,66 @@ func TestServiceAdminCommandAllowsFeishuUnionID(t *testing.T) {
 	}
 	if !strings.Contains(texts[0], "管理命令已受理：/update") || !strings.Contains(texts[0], "后台执行") {
 		t.Fatalf("reply texts=%#v, want asynchronous acceptance notice", texts)
+	}
+}
+
+func TestServiceAdminCommandRejectsFeishuGroupEvenForAdmin(t *testing.T) {
+	calls := 0
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
+		calls++
+		return "should not run", nil
+	})
+	reply := newAdminCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Text:     "/update",
+		Route:    platform.SessionRoute{Key: "feishu:cli_a:tenant:group:oc_group"},
+		Metadata: map[string]string{
+			"feishu_union_id":  "on_admin",
+			"feishu_chat_type": "group",
+		},
+	}, reply)
+
+	texts := reply.waitTexts(t, 1)
+	if calls != 0 {
+		t.Fatalf("admin executor calls=%d, want 0 for group command", calls)
+	}
+	if !strings.Contains(texts[0], "请在机器人私聊窗口执行") {
+		t.Fatalf("reply texts=%#v, want private-chat requirement", texts)
+	}
+}
+
+func TestServiceAdminCommandRejectsFeishuGroupCardCallbackEvenForAdmin(t *testing.T) {
+	calls := 0
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
+		calls++
+		return "should not run", nil
+	})
+	reply := newAdminCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_admin",
+		Route:    platform.SessionRoute{Key: "feishu:cli_a:tenant:group:oc_group"},
+		RawCommand: &platform.CardAction{
+			Action: "choice",
+			Value:  map[string]string{"choice": "/update"},
+		},
+		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+	}, reply)
+
+	texts := reply.waitTexts(t, 1)
+	if calls != 0 {
+		t.Fatalf("admin executor calls=%d, want 0 for group card callback", calls)
+	}
+	if !strings.Contains(texts[0], "请在机器人私聊窗口执行") {
+		t.Fatalf("reply texts=%#v, want private-chat requirement", texts)
 	}
 }
 
@@ -187,7 +254,7 @@ func TestServiceAdminCommandReportsBackgroundUpdateFailure(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 
 	texts := reply.waitTexts(t, 2)
@@ -285,7 +352,7 @@ func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/restart",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 
 	if calls != 0 {
@@ -344,14 +411,14 @@ func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 	waitForClosedChannel(t, updateStarted, "update start")
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/restart --force",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 	assertChannelNotClosed(t, restartStarted, "restart should wait for update")
 
@@ -380,7 +447,7 @@ func TestServiceAdminCommandRejectsUnsupportedArgs(t *testing.T) {
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update --restart",
-		Metadata: map[string]string{"feishu_union_id": "on_admin"},
+		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 
 	if calls != 0 {

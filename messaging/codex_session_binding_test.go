@@ -27,16 +27,15 @@ type codexSessionBindingFixture struct {
 func newCodexSessionBindingFixture(t *testing.T) *codexSessionBindingFixture {
 	t.Helper()
 	h := NewHandler(nil, nil)
-	h.codexSessions = newCodexSessionStore()
 	f := &codexSessionBindingFixture{
 		h: h, routeUser: "route-user",
 		workspaceA: "/workspace/a", workspaceB: "/workspace/b",
 		reply: platformtest.NewReplier(platform.Capabilities{Text: true}),
 	}
 	f.bindingKey = codexBindingKey(f.routeUser, "codex")
-	h.codexSessions.setThread(f.bindingKey, f.workspaceA, "thread-a")
-	h.codexSessions.setThread(f.bindingKey, f.workspaceB, "thread-b")
-	h.codexSessions.setActiveWorkspace(f.bindingKey, f.workspaceA)
+	h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceA, "thread-a")
+	h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceB, "thread-b")
+	h.ensureCodexSessions().setActiveWorkspace(f.bindingKey, f.workspaceA)
 	f.ag = newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	for _, threadID := range []string{"thread-a", "thread-b"} {
 		f.ag.setThreadBinding(threadID, agent.CodexThreadBinding{
@@ -76,10 +75,10 @@ func TestAcquireCodexSessionCommitsFrontendBindingAndSharedRuntime(t *testing.T)
 	if err != nil || result.runtimeErr != nil {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	if active, _ := f.h.codexSessions.getActiveWorkspace(f.bindingKey); active != f.workspaceB {
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceB {
 		t.Fatalf("active workspace=%q", active)
 	}
-	if threadID, pending := f.h.codexSessions.getThread(f.bindingKey, f.workspaceB); pending || threadID != "thread-b" {
+	if threadID, pending := f.h.ensureCodexSessions().getThread(f.bindingKey, f.workspaceB); pending || threadID != "thread-b" {
 		t.Fatalf("thread=%q pending=%v", threadID, pending)
 	}
 	requests := f.ag.handoffRequests()
@@ -99,7 +98,7 @@ func TestAcquireCodexSessionRuntimeFailureKeepsFrontendBinding(t *testing.T) {
 	if err != nil || !errors.Is(result.runtimeErr, context.DeadlineExceeded) {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	if threadID, _ := f.h.codexSessions.getThread(f.bindingKey, f.workspaceB); threadID != "thread-b" {
+	if threadID, _ := f.h.ensureCodexSessions().getThread(f.bindingKey, f.workspaceB); threadID != "thread-b" {
 		t.Fatalf("binding rolled back to %q", threadID)
 	}
 	if got := len(f.ag.handoffRequests()); got != 1 {
@@ -112,13 +111,13 @@ func TestAcquireCodexSessionRuntimeFailureKeepsFrontendBinding(t *testing.T) {
 
 func TestAcquireCodexSessionPersistenceFailureSkipsRuntime(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
-	f.h.codexSessions.SetFilePath(filepath.Join(t.TempDir(), "codex-sessions.json"))
-	f.h.codexSessions.writeState = func(string, []byte) error { return errors.New("disk full") }
+	f.h.ensureCodexSessions().SetFilePath(filepath.Join(t.TempDir(), "codex-sessions.json"))
+	f.h.ensureCodexSessions().writeState = func(string, []byte) error { return errors.New("disk full") }
 	_, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
 	if err == nil {
 		t.Fatal("persistence failure was ignored")
 	}
-	if active, _ := f.h.codexSessions.getActiveWorkspace(f.bindingKey); active != f.workspaceA {
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceA {
 		t.Fatalf("live binding changed to %q", active)
 	}
 	if len(f.ag.handoffRequests()) != 0 {
@@ -144,7 +143,7 @@ func TestAcquireCodexSessionAgentSelectionFailureRollsBackBinding(t *testing.T) 
 	if err == nil {
 		t.Fatal("agent selection failure was ignored")
 	}
-	if active, _ := f.h.codexSessions.getActiveWorkspace(f.bindingKey); active != f.workspaceA {
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceA {
 		t.Fatalf("binding was not rolled back: %q", active)
 	}
 	if len(f.ag.handoffRequests()) != 0 {
@@ -155,7 +154,7 @@ func TestAcquireCodexSessionAgentSelectionFailureRollsBackBinding(t *testing.T) 
 func TestAcquireCodexSessionSameConversationActiveTurnBlocksRebind(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	request := f.request("thread-b")
-	f.h.codexSessions.setThread(f.bindingKey, f.workspaceB, "thread-a")
+	f.h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceB, "thread-a")
 	task, _, started := f.h.beginActiveTask(context.Background(), request.route.conversationID, activeTaskMeta{
 		owner: f.routeUser, routeUserID: f.routeUser, agentName: "codex",
 		codexThreadID: "thread-a", codexTurnID: "turn-a",
@@ -311,7 +310,7 @@ func TestAcquireCodexSessionTargetLockTimeoutKeepsBinding(t *testing.T) {
 	if !isCodexSessionControlTimeout(err) {
 		t.Fatalf("error=%v", err)
 	}
-	if active, _ := f.h.codexSessions.getActiveWorkspace(f.bindingKey); active != f.workspaceA {
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceA {
 		t.Fatalf("binding changed to %q", active)
 	}
 }

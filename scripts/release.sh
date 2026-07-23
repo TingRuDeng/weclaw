@@ -124,6 +124,7 @@ check_dependencies() {
   require_command git
   require_command go
   require_command gh
+  require_command python3
   require_command shasum
 }
 
@@ -159,6 +160,7 @@ run_validations() {
   local packages
   log "运行测试与静态检查"
   sh "$ROOT_DIR/scripts/install_test.sh"
+  python3 "$ROOT_DIR/scripts/validate_docs.py" . --profile generic
   go mod tidy -diff
   packages="$(go list ./...)"
   [[ -n "$packages" ]] || fail "go list ./... 未找到任何包，拒绝跳过测试"

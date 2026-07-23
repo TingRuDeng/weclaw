@@ -9,7 +9,6 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 type platformMessageRuntime struct {
@@ -45,6 +44,9 @@ func platformMessageText(msg platform.IncomingMessage) string {
 
 // platformMessageSessionKey 返回平台 adapter 明确传入的会话 key。
 func platformMessageSessionKey(msg platform.IncomingMessage) string {
+	if sessionKey := msg.SessionRouteKey(); sessionKey != "" {
+		return sessionKey
+	}
 	if msg.Platform == platform.PlatformFeishu && msg.Metadata != nil {
 		return strings.TrimSpace(msg.Metadata[feishuSessionMetadataKey])
 	}
@@ -125,8 +127,8 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 	prepared.clientID = NewClientID()
 	prepared.trace = prepared.trace.WithClientID(prepared.clientID)
 	prepared.ctx = observability.ContextWithTrace(prepared.ctx, prepared.trace)
-	if wxReply, ok := prepared.reply.(*wechat.Replier); ok {
-		wxReply.ClientID = prepared.clientID
+	if setter, ok := prepared.reply.(platform.ClientIDSetter); ok {
+		setter.SetClientID(prepared.clientID)
 	}
 	log.Printf("[handler] received from %s: %q", prepared.msg.UserID, truncate(platformMessageLogText(prepared.text), 80))
 	h.recordTraceStage(prepared.trace, "message.accepted", "accepted", traceSummaryForIncoming(prepared.msg, prepared.text))

@@ -72,6 +72,9 @@ func TestHandleApprovalCardActionPreservesSessionKey(t *testing.T) {
 		if got := msg.Metadata[feishuSessionMetadataKey]; got != sessionKey {
 			t.Fatalf("metadata=%#v, want session key %q", msg.Metadata, sessionKey)
 		}
+		if got := msg.SessionRouteKey(); got != sessionKey {
+			t.Fatalf("route=%q, want session key %q", got, sessionKey)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")
 	}

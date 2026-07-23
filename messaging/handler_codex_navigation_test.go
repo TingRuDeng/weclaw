@@ -134,13 +134,13 @@ func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-archived")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-archived")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(152, "/cx cd 0"))
 
-	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if ag.useThreadID != "" || pending || threadID != "thread-visible" {
 		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
@@ -168,13 +168,13 @@ func TestCodexCxCdWorkspaceClearsStaleStoredThread(t *testing.T) {
 		},
 	}
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-archived")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-archived")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(153, "/cx cd 0"))
 
-	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if threadID != "" || pending {
 		t.Fatalf("stale stored thread=%q pending=%v, want empty false", threadID, pending)
 	}

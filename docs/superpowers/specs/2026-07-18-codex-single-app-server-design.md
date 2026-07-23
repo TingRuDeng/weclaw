@@ -17,7 +17,7 @@
 - 不把当前独立运行的 Codex Desktop 自动改造成共享 host 客户端。
 - 不通过 Desktop IPC、rollout 或进程探测推断前端所有权。
 - 不允许普通消息在没有显式 binding 时隐式创建 thread。
-- 不改变 Claude 的 owner-first ACP/CLI 交接模型。
+- 本文不定义 Claude 运行拓扑；Claude 已独立收敛为单一 ClaudeHost、多前端 binding，当前约束以 `docs/AI_CONTEXT.md` 为准。
 
 ## 拓扑
 

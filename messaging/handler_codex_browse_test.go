@@ -128,7 +128,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": recordedWorkspace})
-	h.codexSessions.setThread(codexBindingKey("user-1", "codex"), recordedWorkspace, "thread-recorded")
+	h.ensureCodexSessions().setThread(codexBindingKey("user-1", "codex"), recordedWorkspace, "thread-recorded")
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -164,7 +164,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
-	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
 	if thread != "thread-desktop" || pending {
 		t.Fatalf("stored thread=%q pending=%v, want thread-desktop false", thread, pending)
 	}
@@ -190,8 +190,8 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	h.agents["codex"] = ag
 	h.SetAgentWorkDirs(map[string]string{"codex": currentWorkspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, currentWorkspace, "thread-current")
-	h.codexSessions.setActiveWorkspace(bindingKey, currentWorkspace)
+	h.ensureCodexSessions().setThread(bindingKey, currentWorkspace, "thread-current")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, currentWorkspace)
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
@@ -202,9 +202,9 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	if !strings.Contains(text, "已切换并绑定") || !strings.Contains(text, "运行通道: 暂不可用") {
 		t.Fatalf("reply should preserve binding while reporting runtime failure, messages=%#v", calls.texts())
 	}
-	active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
-	currentThread, _ := h.codexSessions.getThread(bindingKey, currentWorkspace)
-	targetThread, pending := h.codexSessions.getThread(bindingKey, localWorkspace)
+	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
+	currentThread, _ := h.ensureCodexSessions().getThread(bindingKey, currentWorkspace)
+	targetThread, pending := h.ensureCodexSessions().getThread(bindingKey, localWorkspace)
 	if active != localWorkspace || currentThread != "thread-current" || targetThread != "thread-bad" || pending {
 		t.Fatalf("active=%q current=%q target=%q pending=%t", active, currentThread, targetThread, pending)
 	}
@@ -231,8 +231,8 @@ func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
-	h.codexSessions.setThread(bindingKey, workspaceB, "thread-b")
+	h.ensureCodexSessions().setThread(bindingKey, workspaceA, "thread-a")
+	h.ensureCodexSessions().setThread(bindingKey, workspaceB, "thread-b")
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 

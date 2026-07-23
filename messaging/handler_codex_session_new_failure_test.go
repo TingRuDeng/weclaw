@@ -21,11 +21,11 @@ func TestHandleCodexNewRuntimeFailureKeepsNewThreadBinding(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(122, "/cx new"))
 
-	thread, pending := h.codexSessions.getThread(bindingKey, workspace)
+	thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if thread != "thread-new" || pending || ag.threadID != "thread-new" {
 		t.Fatalf("运行通道失败后状态 thread=%q pending=%v mapping=%q", thread, pending, ag.threadID)
 	}
-	if !h.codexSessions.isPendingFirstTurn(bindingKey, workspace, "thread-new") {
+	if !h.ensureCodexSessions().isPendingFirstTurn(bindingKey, workspace, "thread-new") {
 		t.Fatal("/cx new 创建的 thread 在首条消息前必须持久标记 pending-first-turn")
 	}
 	text := strings.Join(calls.texts(), "\n")
@@ -47,7 +47,7 @@ func TestHandleCodexNewRuntimeFailureKeepsMappingWithoutPreviousThread(t *testin
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(124, "/cx new"))
 
-	thread, pending := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace)
+	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
 	if ag.clearCalledWith != "" || ag.threadID != "thread-new" || thread != "thread-new" || pending {
 		t.Fatalf("mapping clear=%q runtime=%q store=(%q,%v)", ag.clearCalledWith, ag.threadID, thread, pending)
 	}
@@ -84,7 +84,7 @@ func assertCodexCreateRuntimeFailureAllowsRemoteWrite(t *testing.T, h *Handler, 
 	}
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return ag.runCallSnapshot() == 1 })
-	if h.codexSessions.isPendingFirstTurn(bindingKey, workspace, "thread-new") {
+	if h.ensureCodexSessions().isPendingFirstTurn(bindingKey, workspace, "thread-new") {
 		t.Fatal("Codex 接受首个 turn 后必须立即清除 pending-first-turn")
 	}
 	if text := strings.Join(reply.Texts, "\n"); strings.Contains(text, "运行通道暂不可用") {
@@ -96,7 +96,7 @@ func TestCreateAndAcquireCodexSessionRestoresAfterHardFailureWithCanceledParent(
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.rejectCanceledUse = true
 	// 运行通道失败不再回滚新会话；用本地持久化硬失败进入创建补偿路径。
-	h.codexSessions.SetFilePath(t.TempDir())
+	h.ensureCodexSessions().SetFilePath(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	conversationID := buildCodexConversationID("user-1", "codex", workspace)
@@ -158,7 +158,7 @@ func TestHandleCodexNewResetFailureRestoresMapping(t *testing.T) {
 
 			handleTestWeChatMessage(h, context.Background(), client, newTextMessage(126, "/cx new"))
 
-			thread, pending := h.codexSessions.getThread(bindingKey, workspace)
+			thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 			if thread != "thread-old" || pending || ag.threadID != "thread-old" || len(ag.handoffRequests()) != 0 {
 				t.Fatalf("Reset 失败后 thread=%q pending=%v mapping=%q handoff=%d", thread, pending, ag.threadID, len(ag.handoffRequests()))
 			}
@@ -182,6 +182,6 @@ func newCodexCreateFailureFixture(t *testing.T) (*Handler, *fakeCodexSessionCrea
 	h.defaultName, h.agents["codex"] = "codex", ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
 	return h, ag, workspace, bindingKey
 }

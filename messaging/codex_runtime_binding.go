@@ -200,16 +200,3 @@ func codexResolutionModelStatus(resolution codexRuntimeResolution, fallback sess
 	}
 	return sessionModelStatus{Model: state.Model, Effort: state.Effort}
 }
-
-func renderCodexRuntimeHolder(runtime agent.CodexRuntimeHolder) string {
-	switch runtime {
-	case agent.CodexRuntimeDesktop:
-		return "旧版 Codex Desktop bridge"
-	case agent.CodexRuntimeWeClaw:
-		return "共享 Codex app-server"
-	case agent.CodexRuntimeConflict:
-		return "写入冲突"
-	default:
-		return "未确认"
-	}
-}

@@ -6,9 +6,9 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-// isPrivateCodexCommandMessage 只把可证明为私聊的窗口用于主机级账号切换。
+// isPrivatePlatformMessage 只把可证明为私聊的窗口用于主机级控制命令。
 // 飞书卡片回调不再携带 chat_type，因此必须从 adapter 固定的 route key 恢复范围。
-func isPrivateCodexCommandMessage(msg platform.IncomingMessage, routeUserID string) bool {
+func isPrivatePlatformMessage(msg platform.IncomingMessage, routeUserID string) bool {
 	if msg.Platform != platform.PlatformFeishu {
 		return true
 	}
@@ -27,4 +27,8 @@ func isPrivateCodexCommandMessage(msg platform.IncomingMessage, routeUserID stri
 		return false
 	}
 	return strings.Contains(route, ":dm:")
+}
+
+func isPrivateCodexCommandMessage(msg platform.IncomingMessage, routeUserID string) bool {
+	return isPrivatePlatformMessage(msg, routeUserID)
 }

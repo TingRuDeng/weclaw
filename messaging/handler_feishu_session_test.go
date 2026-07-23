@@ -118,7 +118,7 @@ func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
 		Reply:       platformtest.NewReplier(platform.Capabilities{Text: true}),
 	})
 
-	if !strings.Contains(status, "工作空间: "+workspaceB) {
+	if !strings.Contains(status, "工作空间: "+filepath.Base(workspaceB)) {
 		t.Fatalf("route status=%q, want workspace B after chat session switch", status)
 	}
 
@@ -302,5 +302,21 @@ func TestPlatformMessageSessionKeyIgnoresWechatMetadata(t *testing.T) {
 
 	if got := platformMessageSessionKey(msg); got != "" {
 		t.Fatalf("wechat session key=%q, want empty", got)
+	}
+}
+
+func TestPlatformMessageSessionKeyPrefersFirstClassRoute(t *testing.T) {
+	msg := platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Route:    platform.SessionRoute{Key: " feishu:new-route "},
+		Metadata: map[string]string{"feishu_session_key": "feishu:legacy-route"},
+	}
+
+	if got := platformMessageSessionKey(msg); got != "feishu:new-route" {
+		t.Fatalf("session key=%q, want first-class route", got)
+	}
+	if got := platformMessageRouteUserID(msg); got != "feishu:new-route" {
+		t.Fatalf("route user id=%q, want first-class route", got)
 	}
 }

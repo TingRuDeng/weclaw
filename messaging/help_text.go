@@ -17,7 +17,7 @@ func buildHelpTextForAdmin(isAdmin bool) string {
 
 /cwd [路径] 查看或切换当前窗口工作目录
 
-/mode 查看会话审批模式，/mode yolo 当前窗口自动同意 Agent 授权，/mode default 按钮确认
+/mode 查看审批模式，/mode yolo 自动同意当前操作者的 Agent 授权，/mode default 按钮确认
 
 /model、/reasoning 已绑定时修改当前会话，未绑定时修改新会话默认值
 
@@ -69,11 +69,11 @@ Claude：
 func adminHelpText() string {
 	return `管理员：
 
-/update 远程更新 WeClaw
+/update 远程更新 WeClaw（飞书仅管理员私聊）
 
-/restart 重启 WeClaw
+/restart 重启 WeClaw（飞书仅管理员私聊）
 
-/restart --force 强制重启 WeClaw
+/restart --force 强制重启 WeClaw（飞书仅管理员私聊）
 
 /feishu users pending 查看待授权飞书用户
 

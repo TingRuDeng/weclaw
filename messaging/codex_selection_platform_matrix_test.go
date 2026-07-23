@@ -44,8 +44,8 @@ func TestCodexSelectionBindsForWeChatAndFeishu(t *testing.T) {
 			conversationID := buildCodexConversationID(test.route, "codex", workspaceB)
 			reply := &codexSelectionProbeReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true})}
 			reply.beforeText = func(_ string) {
-				active, _ := h.codexSessions.getActiveWorkspace(bindingKey)
-				threadID, pending := h.codexSessions.getThread(bindingKey, workspaceB)
+				active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
+				threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceB)
 				if active != workspaceB || pending || threadID != "thread-b" {
 					t.Fatalf("reply before binding commit: active=%q thread=%q pending=%v", active, threadID, pending)
 				}
@@ -66,7 +66,7 @@ func TestCodexSelectionBindsForWeChatAndFeishu(t *testing.T) {
 			if strings.Contains(reply.Texts[0], test.route) || strings.Contains(reply.Texts[0], test.account) {
 				t.Fatalf("reply leaked route/account: %q", reply.Texts[0])
 			}
-			if active, _ := h.codexSessions.getActiveWorkspace(bindingKey); active != workspaceB {
+			if active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey); active != workspaceB {
 				t.Fatalf("active=%q want=%q (old=%q)", active, workspaceB, workspaceA)
 			}
 			if _, active := h.activeTask(conversationID); active {
@@ -91,9 +91,9 @@ func newPlatformBindingFixture(t *testing.T, routeUserID string) (*Handler, *fak
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.defaultName = "codex"
 	bindingKey := codexBindingKey(routeUserID, "codex")
-	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
-	h.codexSessions.setThread(bindingKey, workspaceB, "thread-b")
-	h.codexSessions.setActiveWorkspace(bindingKey, workspaceA)
+	h.ensureCodexSessions().setThread(bindingKey, workspaceA, "thread-a")
+	h.ensureCodexSessions().setThread(bindingKey, workspaceB, "thread-b")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceA)
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	for _, threadID := range []string{"thread-a", "thread-b"} {
 		ag.setThreadBinding(threadID, agent.CodexThreadBinding{

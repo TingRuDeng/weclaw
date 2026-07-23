@@ -70,6 +70,7 @@ type terminalOutbox struct {
 	path       string
 	registry   *platform.Registry
 	entries    []*terminalOutboxEntry
+	preparing  map[string]bool
 	processing map[string]bool
 	wake       chan struct{}
 	now        func() time.Time
@@ -117,7 +118,7 @@ func (h *Handler) currentTerminalOutbox() *terminalOutbox {
 
 func newTerminalOutbox(path string, registry *platform.Registry, traceRecorders ...observability.Recorder) (*terminalOutbox, error) {
 	outbox := &terminalOutbox{
-		path: path, registry: registry, processing: make(map[string]bool),
+		path: path, registry: registry, preparing: make(map[string]bool), processing: make(map[string]bool),
 		wake: make(chan struct{}, 1), now: time.Now,
 	}
 	if len(traceRecorders) > 0 {
@@ -145,6 +146,16 @@ func (o *terminalOutbox) enqueueAndAttempt(ctx context.Context, draft terminalOu
 }
 
 func (o *terminalOutbox) enqueue(draft terminalOutboxDraft) (*terminalOutboxEntry, error) {
+	return o.enqueueWithState(draft, false)
+}
+
+// reserve 先持久化可恢复文本，但在当前进程完成 checkpoint 替换前不允许 worker 投递。
+// preparing 只保存在内存中；若进程退出，重启后的 outbox 会立即投递磁盘上的恢复文本。
+func (o *terminalOutbox) reserve(draft terminalOutboxDraft) (*terminalOutboxEntry, error) {
+	return o.enqueueWithState(draft, true)
+}
+
+func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing bool) (*terminalOutboxEntry, error) {
 	if !draft.Route.Valid() {
 		return nil, fmt.Errorf("invalid terminal delivery route")
 	}
@@ -172,8 +183,12 @@ func (o *terminalOutbox) enqueue(draft terminalOutboxDraft) (*terminalOutboxEntr
 		return nil, fmt.Errorf("terminal outbox capacity exceeded")
 	}
 	o.entries = append(o.entries, entry)
+	if preparing {
+		o.preparing[entry.ID] = true
+	}
 	if err := o.persistLocked(); err != nil {
 		o.entries = o.entries[:len(o.entries)-1]
+		delete(o.preparing, entry.ID)
 		o.mu.Unlock()
 		return nil, fmt.Errorf("persist terminal delivery: %w", err)
 	}
@@ -181,6 +196,67 @@ func (o *terminalOutbox) enqueue(draft terminalOutboxDraft) (*terminalOutboxEntr
 	o.mu.Unlock()
 	o.recordTrace(clone, "terminal.outbox.enqueued", "pending", "terminal delivery queued")
 	return clone, nil
+}
+
+// commitReservation 用 checkpoint 终态替换恢复文本；持久化失败时保留原草稿并允许重试投递。
+func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft) error {
+	if !draft.Route.Valid() {
+		o.releaseReservation(id)
+		return fmt.Errorf("invalid terminal delivery route")
+	}
+	if draft.Checkpoint == nil && strings.TrimSpace(draft.Text) == "" && strings.TrimSpace(draft.Notification) == "" {
+		o.releaseReservation(id)
+		return fmt.Errorf("terminal delivery has no payload")
+	}
+	o.mu.Lock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		delete(o.preparing, id)
+		o.mu.Unlock()
+		return fmt.Errorf("terminal outbox reservation not found")
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	entry.Route = draft.Route
+	entry.AgentName = strings.TrimSpace(draft.AgentName)
+	entry.Failed = draft.Failed
+	entry.Checkpoint = cloneTerminalCheckpoint(draft.Checkpoint)
+	entry.Text = draft.Text
+	entry.Notification = draft.Notification
+	entry.UpdatedAt = o.now()
+	entry.NextAttempt = entry.UpdatedAt
+	entry.LastError = ""
+	if strings.TrimSpace(draft.Trace.TraceID) != "" {
+		trace := draft.Trace
+		trace.RouteKey = ""
+		entry.Trace = &trace
+	} else {
+		entry.Trace = nil
+	}
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		delete(o.preparing, id)
+		o.mu.Unlock()
+		o.signal()
+		return err
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		delete(o.preparing, id)
+		o.mu.Unlock()
+		o.signal()
+		return fmt.Errorf("persist prepared terminal delivery: %w", err)
+	}
+	delete(o.preparing, id)
+	o.mu.Unlock()
+	o.signal()
+	return nil
+}
+
+func (o *terminalOutbox) releaseReservation(id string) {
+	o.mu.Lock()
+	delete(o.preparing, id)
+	o.mu.Unlock()
+	o.signal()
 }
 
 func (o *terminalOutbox) run(ctx context.Context) {
@@ -215,7 +291,7 @@ func (o *terminalOutbox) dueIDs() []string {
 	defer o.mu.Unlock()
 	ids := make([]string, 0, len(o.entries))
 	for _, entry := range o.entries {
-		if !o.processing[entry.ID] && !entry.NextAttempt.After(now) {
+		if !o.preparing[entry.ID] && !o.processing[entry.ID] && !entry.NextAttempt.After(now) {
 			ids = append(ids, entry.ID)
 		}
 	}
@@ -433,15 +509,20 @@ func cloneTerminalOutboxEntry(entry *terminalOutboxEntry) *terminalOutboxEntry {
 		return nil
 	}
 	clone := *entry
-	if entry.Checkpoint != nil {
-		checkpoint := *entry.Checkpoint
-		checkpoint.Payload = append(json.RawMessage(nil), entry.Checkpoint.Payload...)
-		clone.Checkpoint = &checkpoint
-	}
+	clone.Checkpoint = cloneTerminalCheckpoint(entry.Checkpoint)
 	if entry.Trace != nil {
 		trace := *entry.Trace
 		clone.Trace = &trace
 	}
+	return &clone
+}
+
+func cloneTerminalCheckpoint(checkpoint *platform.TerminalCheckpoint) *platform.TerminalCheckpoint {
+	if checkpoint == nil {
+		return nil
+	}
+	clone := *checkpoint
+	clone.Payload = append(json.RawMessage(nil), checkpoint.Payload...)
 	return &clone
 }
 

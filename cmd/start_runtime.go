@@ -16,6 +16,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 type startRuntime struct {
@@ -132,6 +133,7 @@ func newStartHandlerWithTrace(cfg *config.Config, traceStore *observability.Stor
 	handler := messaging.NewHandler(func(ctx context.Context, name string) agent.Agent {
 		return createAgentByName(ctx, cfg, name, protocolTrace)
 	}, saveDefaultAgent)
+	handler.SetCDNDownloader(wechat.DownloadFileFromCDN)
 	handler.SetTraceRecorder(traceStore)
 	configureHandlerMetadata(handler, cfg)
 	configureHandlerState(handler)

@@ -30,10 +30,10 @@ type activeTaskAdmission struct {
 // bound to the same session gets an explicit busy result and cannot append work
 // to someone else's task lifecycle.
 func (h *Handler) beginOrQueueClaudeTask(ctx context.Context, key string, meta activeTaskMeta, pending pendingAgentTask) activeTaskAdmission {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
-	if task := h.activeTasks[key]; task != nil {
+	if task := h.tasks.active[key]; task != nil {
 		task.mu.Lock()
 		foreign := task.routeUserID != strings.TrimSpace(meta.routeUserID)
 		task.mu.Unlock()
@@ -43,28 +43,28 @@ func (h *Handler) beginOrQueueClaudeTask(ctx context.Context, key string, meta a
 		return activeTaskAdmission{status: queuePendingOnTask(task, pending), task: task, taskCtx: ctx}
 	}
 	task, taskCtx := newActiveAgentTask(ctx, meta)
-	h.activeTasks[key] = task
+	h.tasks.active[key] = task
 	return activeTaskAdmission{status: activeTaskStarted, task: task, taskCtx: taskCtx}
 }
 
 // beginOrQueueActiveTask 在同一临界区内完成任务启动或后续消息排队。
 func (h *Handler) beginOrQueueActiveTask(ctx context.Context, key string, meta activeTaskMeta, pending pendingAgentTask) activeTaskAdmission {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
-	if task := h.activeTasks[key]; task != nil {
+	if task := h.tasks.active[key]; task != nil {
 		return activeTaskAdmission{status: queuePendingOnTask(task, pending), task: task, taskCtx: ctx}
 	}
 	task, taskCtx := newActiveAgentTask(ctx, meta)
-	h.activeTasks[key] = task
+	h.tasks.active[key] = task
 	return activeTaskAdmission{status: activeTaskStarted, task: task, taskCtx: taskCtx}
 }
 
 // queuePendingActiveTask 只向仍存在的活动任务排队，不把任务消失误报成队列占用。
 func (h *Handler) queuePendingActiveTask(key string, pending pendingAgentTask) activeTaskAdmissionStatus {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	task := h.tasks.active[key]
 	if task == nil {
 		return activeTaskMissing
 	}
@@ -82,9 +82,7 @@ func queuePendingOnTask(task *activeAgentTask, pending pendingAgentTask) activeT
 }
 
 func (h *Handler) ensureActiveTasksLocked() {
-	if h.activeTasks == nil {
-		h.activeTasks = make(map[string]*activeAgentTask)
-	}
+	h.tasks.ensureLocked()
 }
 
 func newActiveAgentTask(ctx context.Context, meta activeTaskMeta) (*activeAgentTask, context.Context) {

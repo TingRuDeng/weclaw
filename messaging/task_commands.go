@@ -192,16 +192,16 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 // handleCancelCommand 已并入 /cancel(撤回暂存) 与 /stop(停止运行) 两个独立命令，保留占位以便检索历史语义。
 
 func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
-	h.activeTasksMu.Lock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	task := h.tasks.active[key]
 	if task == nil {
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return false, false
 	}
 	stop := task.beginStopRequest(taskStopRequest{
 		actor: strings.TrimSpace(actor), detach: true, mode: taskStopLocal,
 	})
-	h.activeTasksMu.Unlock()
+	h.tasks.mu.Unlock()
 	switch stop.status {
 	case taskStopDenied:
 		return false, true

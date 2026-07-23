@@ -10,8 +10,7 @@ func TestStaleACPReadEpochCannotDispatchAfterReconnect(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"}})
 	oldScanner := bufio.NewScanner(strings.NewReader(""))
 	currentScanner := bufio.NewScanner(strings.NewReader(""))
-	responseCh := make(chan *rpcResponse, 1)
-	a.pending[7] = responseCh
+	responseCh := a.pending.register(7)
 	a.mu.Lock()
 	a.scanner = currentScanner
 	a.wireEpoch = 2

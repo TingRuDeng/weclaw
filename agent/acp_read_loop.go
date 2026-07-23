@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os/exec"
@@ -92,8 +91,8 @@ func (a *ACPAgent) handleACPWireLine(line string) {
 	if line == "" {
 		return
 	}
-	var msg rpcResponse
-	if err := json.Unmarshal([]byte(line), &msg); err != nil {
+	msg, kind, err := unmarshalRPCMessage(line)
+	if err != nil {
 		log.Printf("[acp] failed to parse message: %v", err)
 		return
 	}
@@ -102,7 +101,7 @@ func (a *ACPAgent) handleACPWireLine(line string) {
 	epoch := a.wireEpoch
 	a.mu.Unlock()
 	a.recordProtocolTrace("inbound", epoch, msg.Sequence, observability.TraceContext{}, []byte(line))
-	if msg.ID != nil && msg.Method == "" {
+	if kind == rpcMessageResponse {
 		a.dispatchACPResponse(&msg)
 		return
 	}
@@ -126,15 +125,7 @@ func (a *ACPAgent) recordProtocolTrace(direction string, epoch uint64, sequence 
 
 // dispatchACPResponse 将响应投递给对应 RPC 等待者。
 func (a *ACPAgent) dispatchACPResponse(msg *rpcResponse) {
-	a.pendingMu.Lock()
-	ch, ok := a.pending[*msg.ID]
-	a.pendingMu.Unlock()
-	if ok {
-		select {
-		case ch <- msg:
-		default:
-		}
-	}
+	a.pending.deliver(msg)
 }
 
 // dispatchACPNotification 处理标准 ACP 通知并转交 Codex 专属分组。
@@ -292,24 +283,7 @@ func (a *ACPAgent) failRuntimeWaitersUncertain(reason string) {
 }
 
 func (a *ACPAgent) failPendingRequests(reason string) {
-	resp := &rpcResponse{
-		Error: &rpcError{Code: -32000, Message: reason},
-	}
-
-	a.pendingMu.Lock()
-	channels := make([]chan *rpcResponse, 0, len(a.pending))
-	for id, ch := range a.pending {
-		delete(a.pending, id)
-		channels = append(channels, ch)
-	}
-	a.pendingMu.Unlock()
-
-	for _, ch := range channels {
-		select {
-		case ch <- resp:
-		default:
-		}
-	}
+	a.pending.failAll(reason)
 }
 
 func (a *ACPAgent) failActiveTurns(reason string) {

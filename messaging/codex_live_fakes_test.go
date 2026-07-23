@@ -329,8 +329,8 @@ func codexLiveSwitchFixture(t *testing.T, state agent.CodexThreadState) (*Handle
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-1")
-	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-1")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
 	ag.setThreadBinding("thread-1", agent.CodexThreadBinding{
 		Runtime: agent.CodexRuntimeWeClaw,
 		State:   agent.CodexThreadState{ThreadID: "thread-1", Active: state.Active, ActiveTurnID: state.ActiveTurnID},

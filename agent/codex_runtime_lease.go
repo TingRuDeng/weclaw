@@ -231,9 +231,6 @@ func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLease(req CodexR
 	}
 	lastTurnID := strings.TrimSpace(state.LastTurnID)
 	terminalMatch := lease.turnID != "" && lastTurnID == lease.turnID
-	if lease.turnID == "" && lastTurnID != "" && lastTurnID != lease.baselineLastTurnID {
-		terminalMatch = true
-	}
 	if terminalMatch {
 		delete(r.leases, req.Ref.ThreadID)
 		binding := r.threads[req.Ref.ThreadID]

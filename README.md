@@ -61,7 +61,7 @@ After selecting an existing session or sending `/cx new`, send the task directly
 ```text
 /cx ls                 # List existing local workspaces and threads
 /cx <number>           # Bind this frontend window to the selected thread
-/cx status             # Inspect the binding, shared host, workspace, thread, and task
+/cx status             # Inspect the current workspace, session, task, account, and runtime
 ```
 
 WeClaw exposes native `codex app-server` through a stable Unix socket and connects with the upstream WebSocket-over-UDS protocol; the socket is not a raw JSONL stream. The first client starts the host on demand, and later WeChat, Feishu, or other WeClaw frontends reuse that service. Each window persists its own workspace/thread binding. Multiple windows may bind the same thread, but only one turn may write to that thread at a time. A transport disconnect does not clear a frontend binding; an accepted turn keeps its writer guard until authoritative terminal confirmation, and the next operation reconnects to the shared host. Legacy Codex owner state is discarded on load, and legacy `type: companion` configuration migrates to the shared app-server.
@@ -117,7 +117,7 @@ If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` 
 
 Native Codex and Claude plan, tool, command, and file signals are normalized into structured progress events. The task card and `/ps` read the same latest snapshot, and stale or late watcher events cannot overwrite a terminal task state.
 
-Terminal task text and Feishu card updates are atomically recorded in `~/.weclaw/state/terminal-outbox.json` before network delivery, then retried after transient failures or a WeClaw restart. Feishu CardKit operations keep stable UUIDs and monotonic sequences, while Feishu text and WeChat chunks use stable deduplication keys. Delivery is at-least-once rather than cross-platform exactly-once. Attachments and remote images remain outside the v1 outbox and use the existing validated best-effort path.
+Terminal delivery first records a recoverable text draft in `~/.weclaw/state/terminal-outbox.json`, then freezes the Feishu task card and replaces the draft with its CardKit checkpoint. If WeClaw exits between those steps, the text terminal is retried after restart. Feishu CardKit operations keep stable UUIDs and monotonic sequences, while Feishu text and WeChat chunks use stable deduplication keys. Delivery is at-least-once rather than cross-platform exactly-once. Attachments and remote images remain outside the v1 outbox and use the existing validated best-effort path.
 
 ### Query End-to-End Traces
 
@@ -182,22 +182,22 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/cwd [path]` | Show or switch the current frontend workspace; switching also updates Agent default cwd values, and regular users are confined to allowed workspace roots |
 | `/new` | Explicitly create a session for the current default agent; also bind it when Codex is the default |
 | `/model`, `/reasoning` | Show or change the bound session configuration, or the new-session defaults when no session is bound |
-| `/mode [default|yolo]` | Show or change Agent approval behavior for the current frontend; it applies to both Codex and Claude, and bare `/mode` opens a Feishu choice card |
-| `/progress [mode]` | Show or change progress mode |
+| `/mode [default|yolo]` | Show or change Agent approval behavior; group chats isolate the setting by actor, and bare `/mode` opens a Feishu choice card |
+| `/progress [mode]` | Show progress mode; only administrators may change the account-level mode |
 | `/ps`, `/stop` | List or stop current tasks |
 | `/cancel`, `/guide` | Remove a queued message or steer the active Codex task |
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
 | `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
 | `/cx new` | Create and bind a Codex session in the current workspace |
 | `/cx account`, `/cx account status` | Inspect the host-level Codex account; administrator direct messages may select and switch |
-| `/update`, `/restart [--force]` | Remotely update or restart WeClaw as an administrator |
+| `/update`, `/restart [--force]` | Remotely update or restart WeClaw from an administrator direct message |
 
 <details>
 <summary>Common Codex commands</summary>
 
 Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`.
 
-Runtime boundary: `/cx status` is the single view for the current binding, shared host, writer, and task state.
+Runtime boundary: `/cx status` is a compact view of the current workspace, session, task, account, and runtime. Use `/cx pwd` for the full path, `/cx account status` for account diagnostics, and `/cx quota` for usage limits.
 
 Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx account`, `/cx account status`, `/cx account use <profile>`, `/cx model status|ls`, and `/cx clean`. `/cx model status` shows defaults for newly created Codex sessions; use `/model` and `/reasoning` for the bound session.
 
@@ -271,6 +271,7 @@ Key security rules:
 - `admin_users` grants only WeClaw management access; the user must still belong to the relevant platform allowlist.
 - Regular users may only `/cwd` into `allowed_workspace_roots` and their descendants; administrators are exempt.
 - A non-loopback `api_addr` requires `api_token`.
+- Loopback listeners may omit `api_token`, but other local processes can then call administrative endpoints; `weclaw doctor` reports this risk, and a random token is still recommended.
 - Audit logging is enabled by default and never records secrets.
 - Codex `permission_level` accepts `default`, `auto_review`, and `full_access`; the effective default is `default`.
 - Codex manages the shared Unix socket automatically. Set `app_server_socket` only for multi-process or `run_as_user` deployments; its parent must be owned by the target user and no more permissive than `0700`.

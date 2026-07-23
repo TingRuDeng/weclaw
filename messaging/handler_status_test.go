@@ -25,8 +25,8 @@ func TestCodexCleanRemovesMissingStoredWorkspaces(t *testing.T) {
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, missingWorkspace, "thread-missing")
-	h.codexSessions.setActiveWorkspace(bindingKey, missingWorkspace)
+	h.ensureCodexSessions().setThread(bindingKey, missingWorkspace, "thread-missing")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, missingWorkspace)
 	h.setCodexBrowseWorkspace(bindingKey, missingWorkspace)
 
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -41,7 +41,7 @@ func TestCodexCleanRemovesMissingStoredWorkspaces(t *testing.T) {
 	if !containsText(texts, filepath.Base(missingWorkspace)) {
 		t.Fatalf("clean reply should include removed workspace name, messages=%#v", texts)
 	}
-	if thread, _ := h.codexSessions.getThread(bindingKey, missingWorkspace); thread != "" {
+	if thread, _ := h.ensureCodexSessions().getThread(bindingKey, missingWorkspace); thread != "" {
 		t.Fatalf("missing workspace thread=%q, want empty after clean", thread)
 	}
 	if browse, ok := h.codexBrowseWorkspace(bindingKey); ok || browse != "" {
@@ -136,8 +136,8 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
 	h.SetAllowedWorkspaceRoots([]string{workspaceA, workspaceB})
-	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
-	h.codexSessions.setPendingNew(bindingKey, workspaceB)
+	h.ensureCodexSessions().setThread(bindingKey, workspaceA, "thread-a")
+	h.ensureCodexSessions().setPendingNew(bindingKey, workspaceB)
 
 	where := h.renderCodexWhoami(bindingKey, workspaceA)
 	if !strings.Contains(where, "workspace: "+workspaceA+"\n\nthread: thread-a") {

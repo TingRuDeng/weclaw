@@ -90,9 +90,9 @@ func newFrozenWorkspaceFixture(t *testing.T) frozenWorkspaceFixture {
 	}
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspaceA, "thread-a")
-	h.codexSessions.setActiveWorkspace(bindingKey, workspaceA)
-	h.codexSessions.setThread(bindingKey, workspaceB, "thread-b")
+	h.ensureCodexSessions().setThread(bindingKey, workspaceA, "thread-a")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspaceA)
+	h.ensureCodexSessions().setThread(bindingKey, workspaceB, "thread-b")
 	return frozenWorkspaceFixture{
 		h: h, agent: ag, workspaceA: workspaceA, workspaceB: workspaceB, bindingKey: bindingKey,
 	}
@@ -101,15 +101,15 @@ func newFrozenWorkspaceFixture(t *testing.T) frozenWorkspaceFixture {
 // assertFrozenWorkspaceState 验证任务结果仍写回启动时工作空间。
 func assertFrozenWorkspaceState(t *testing.T, fixture frozenWorkspaceFixture) {
 	t.Helper()
-	active, ok := fixture.h.codexSessions.getActiveWorkspace(fixture.bindingKey)
+	active, ok := fixture.h.ensureCodexSessions().getActiveWorkspace(fixture.bindingKey)
 	if !ok || active != normalizeCodexWorkspaceRoot(fixture.workspaceA) {
 		t.Fatalf("active workspace=(%q,%v), want %q true", active, ok, normalizeCodexWorkspaceRoot(fixture.workspaceA))
 	}
-	threadA, pendingA := fixture.h.codexSessions.getThread(fixture.bindingKey, fixture.workspaceA)
+	threadA, pendingA := fixture.h.ensureCodexSessions().getThread(fixture.bindingKey, fixture.workspaceA)
 	if threadA != "thread-generated-1" || pendingA {
 		t.Fatalf("workspace A thread=%q pending=%v, want thread-generated-1 false", threadA, pendingA)
 	}
-	threadB, pendingB := fixture.h.codexSessions.getThread(fixture.bindingKey, fixture.workspaceB)
+	threadB, pendingB := fixture.h.ensureCodexSessions().getThread(fixture.bindingKey, fixture.workspaceB)
 	if threadB != "thread-b" || pendingB {
 		t.Fatalf("workspace B thread=%q pending=%v, want thread-b false", threadB, pendingB)
 	}

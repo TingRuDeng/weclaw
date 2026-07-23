@@ -167,6 +167,7 @@ type preparedProgressTerminal struct {
 	checkpoint   *platform.TerminalCheckpoint
 	consumed     bool
 	notification string
+	reply        platform.Replier
 }
 
 // canPrepareDurableTerminal 只在没有原生 stream，或 adapter 能导出 checkpoint 时进入 outbox 路径。
@@ -178,6 +179,19 @@ func (s *progressSession) canPrepareDurableTerminal() bool {
 	defer s.streamMu.Unlock()
 	if s.stream == nil {
 		return true
+	}
+	_, ok := s.stream.(platform.DurableTerminalStream)
+	return ok
+}
+
+func (s *progressSession) hasDurableTerminalStream() bool {
+	if s == nil {
+		return false
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.stream == nil {
+		return false
 	}
 	_, ok := s.stream.(platform.DurableTerminalStream)
 	return ok
@@ -198,7 +212,11 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 	if !ok {
 		return preparedProgressTerminal{}, platform.ErrUnsupported
 	}
-	content, terminalFailed, consumed := progressTerminalArguments(replyWriter, parentCanceled, finalText, failed)
+	currentReply := s.reply
+	if currentReply == nil {
+		currentReply = replyWriter
+	}
+	content, terminalFailed, consumed := progressTerminalArguments(currentReply, parentCanceled, finalText, failed)
 	s.terminalClaimed = true
 	s.finished = true
 	checkpoint, err := durable.PrepareTerminal(content, terminalFailed)
@@ -209,6 +227,7 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 		checkpoint:   &checkpoint,
 		consumed:     consumed,
 		notification: renderStreamTerminalNotification(parentCanceled, failed, finalText),
+		reply:        currentReply,
 	}
 	return prepared, nil
 }
@@ -454,13 +473,12 @@ func progressReplier(reply platform.Replier) platform.Replier {
 	return reply
 }
 
-func (s *progressSession) claimTerminalReply() platform.Replier {
+func (s *progressSession) currentTerminalReply() platform.Replier {
 	if s == nil {
 		return nil
 	}
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
-	s.terminalClaimed = true
 	return s.reply
 }
 

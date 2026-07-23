@@ -18,6 +18,7 @@ type fakeCodexAccountAgent struct {
 	*fakeCodexThreadAgent
 	mu       sync.Mutex
 	status   agent.CodexAccountStatus
+	quota    []bool
 	useCalls int
 	usedRef  string
 	usedRev  uint64
@@ -29,9 +30,10 @@ func (f *fakeCodexAccountAgent) ListCodexAccounts(context.Context) (agent.CodexA
 	defer f.mu.Unlock()
 	return f.status, nil
 }
-func (f *fakeCodexAccountAgent) CurrentCodexAccount(context.Context, bool) (agent.CodexAccountStatus, error) {
+func (f *fakeCodexAccountAgent) CurrentCodexAccount(_ context.Context, withQuota bool) (agent.CodexAccountStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.quota = append(f.quota, withQuota)
 	return f.status, nil
 }
 func (f *fakeCodexAccountAgent) SaveCodexAccount(context.Context, agent.CodexAccountSaveOptions) (agent.CodexAccountProfile, error) {
@@ -60,6 +62,12 @@ func (f *fakeCodexAccountAgent) UseCodexAccount(_ context.Context, reference str
 func (f *fakeCodexAccountAgent) RemoveCodexAccount(context.Context, string) error { return nil }
 func (f *fakeCodexAccountAgent) DoctorCodexAccounts(context.Context) codexauth.DoctorResult {
 	return codexauth.DoctorResult{OK: true}
+}
+
+func (f *fakeCodexAccountAgent) quotaRequests() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.quota...)
 }
 
 func newMessagingAccountFixture(t *testing.T, profileCount int) (*Handler, *fakeCodexAccountAgent, platform.IncomingMessage) {
@@ -181,14 +189,42 @@ func TestFeishuCodexAccountSwitchDeniedOutsideAdminPrivateChat(t *testing.T) {
 		t.Fatalf("calls=%d texts=%#v", accountAgent.useCalls, used.Texts)
 	}
 
-	for _, command := range []string{"/cx account status", "/cx status"} {
-		msg.Text, msg.MessageID, msg.RawCommand = command, "account-group-status-"+command, nil
+	for _, testCase := range []struct {
+		command string
+		account string
+	}{
+		{command: "/cx account status", account: "当前 Codex 账号"},
+		{command: "/cx status", account: "账号: 账号-01"},
+	} {
+		msg.Text, msg.MessageID, msg.RawCommand = testCase.command, "account-group-status-"+testCase.command, nil
 		statusReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 		h.HandleMessage(context.Background(), msg, statusReply)
 		joined := strings.Join(statusReply.Texts, "\n")
-		if !strings.Contains(joined, "当前 Codex 账号") || strings.Contains(joined, "凭据后端") || strings.Contains(joined, "generation") {
-			t.Fatalf("command=%q texts=%#v", command, statusReply.Texts)
+		if !strings.Contains(joined, testCase.account) || strings.Contains(joined, "凭据后端") || strings.Contains(joined, "generation") {
+			t.Fatalf("command=%q texts=%#v", testCase.command, statusReply.Texts)
 		}
+	}
+}
+
+func TestCodexStatusDoesNotFetchQuotaOrExposeAccountDetails(t *testing.T) {
+	h, accountAgent, msg := newMessagingAccountFixture(t, 2)
+	msg.Text, msg.MessageID = "/cx status", "compact-account-status"
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), msg, reply)
+
+	joined := strings.Join(reply.Texts, "\n")
+	if !strings.Contains(joined, "账号: 账号-01") {
+		t.Fatalf("texts=%#v, want compact account label", reply.Texts)
+	}
+	for _, detail := range []string{"u***1@example.com", "凭据后端", "共享 Host", "generation", "最近切换", "额度"} {
+		if strings.Contains(joined, detail) {
+			t.Fatalf("texts=%#v, should omit %q", reply.Texts, detail)
+		}
+	}
+	requests := accountAgent.quotaRequests()
+	if len(requests) == 0 || requests[len(requests)-1] {
+		t.Fatalf("quota requests=%#v, /cx status must not fetch quota", requests)
 	}
 }
 

@@ -13,29 +13,6 @@ const (
 	acpUnhandledMethodLogInterval = 5 * time.Minute
 )
 
-type rpcRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int64       `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-}
-
-type rpcResponse struct {
-	JSONRPC  string          `json:"jsonrpc"`
-	ID       *int64          `json:"id,omitempty"`
-	Method   string          `json:"method,omitempty"`
-	Result   json.RawMessage `json:"result,omitempty"`
-	Error    *rpcError       `json:"error,omitempty"`
-	Params   json.RawMessage `json:"params,omitempty"`
-	Sequence uint64          `json:"-"`
-}
-
-type rpcError struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data,omitempty"`
-}
-
 type initParams struct {
 	ProtocolVersion    int                `json:"protocolVersion"`
 	ClientCapabilities clientCapabilities `json:"clientCapabilities"`

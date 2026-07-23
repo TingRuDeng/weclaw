@@ -64,6 +64,7 @@ func (a *Adapter) approvalActionMessage(action parsedCardAction, resultCh chan p
 		UserID:      action.UserID,
 		UserAliases: action.UserAliases,
 		ChatID:      action.ChatID,
+		Route:       platform.SessionRoute{Key: action.SessionKey},
 		MessageID:   action.MessageID + ":card:" + action.Action + ":" + action.Choice,
 		RawCommand: &platform.CardAction{
 			Action: action.Action,

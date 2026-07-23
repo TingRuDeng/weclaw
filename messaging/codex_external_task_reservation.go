@@ -66,10 +66,10 @@ func (h *Handler) reserveExternalCodexTask(opts externalCodexTaskOptions, prepar
 	if !prepared.active {
 		return externalCodexTaskReservation{}, nil
 	}
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
-	if task := h.activeTasks[opts.conversationID]; task != nil {
+	if task := h.tasks.active[opts.conversationID]; task != nil {
 		return h.reuseExternalCodexTaskReservationLocked(opts, prepared.state, task)
 	}
 	return h.createExternalCodexTaskReservationLocked(opts, prepared), nil
@@ -101,7 +101,7 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 	if prepared.state.Progress != "" {
 		task.recordProgressText(time.Now(), prepared.state.Progress)
 	}
-	h.activeTasks[opts.conversationID] = task
+	h.tasks.active[opts.conversationID] = task
 	return externalCodexTaskReservation{
 		key: opts.conversationID, task: task, control: control, runtime: control.runtime,
 	}
@@ -156,9 +156,9 @@ func (h *Handler) activateExternalCodexTaskReservation(reservation externalCodex
 
 // externalCodexTaskReservationActive 区分已激活复用与已取消、已终态的失效句柄。
 func (h *Handler) externalCodexTaskReservationActive(reservation externalCodexTaskReservation) bool {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	if h.activeTasks[reservation.key] != reservation.task {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	if h.tasks.active[reservation.key] != reservation.task {
 		return false
 	}
 	reservation.task.mu.Lock()
@@ -186,9 +186,9 @@ func (h *Handler) claimExternalCodexTaskReservationActivation(reservation extern
 	if reservation.task == nil || reservation.control == nil {
 		return externalCodexTaskRuntime{}, false
 	}
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	if h.activeTasks[reservation.key] != reservation.task {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	if h.tasks.active[reservation.key] != reservation.task {
 		return externalCodexTaskRuntime{}, false
 	}
 	reservation.task.mu.Lock()
@@ -206,9 +206,9 @@ func (h *Handler) claimExternalCodexTaskReservationActivation(reservation extern
 
 // cancelReservedExternalCodexTask 在线性化临界区内标记终态并移除尚未激活的槽位。
 func (h *Handler) cancelReservedExternalCodexTask(reservation externalCodexTaskReservation) {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	if h.activeTasks[reservation.key] != reservation.task {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	if h.tasks.active[reservation.key] != reservation.task {
 		return
 	}
 	reservation.task.mu.Lock()
@@ -222,7 +222,7 @@ func (h *Handler) cancelReservedExternalCodexTask(reservation externalCodexTaskR
 	reservation.control.status = externalCodexTaskCanceled
 	reservation.task.claimTerminalLocked()
 	reservation.task.cancel()
-	delete(h.activeTasks, reservation.key)
+	delete(h.tasks.active, reservation.key)
 	close(reservation.task.done)
 }
 

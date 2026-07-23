@@ -364,6 +364,35 @@ func TestReleaseValidationRunsTidyAndStaticcheck(t *testing.T) {
 	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }
 
+func TestCIAndReleaseRunRepositoryHygieneGates(t *testing.T) {
+	checks := map[string][]string{
+		filepath.Join("..", ".github", "workflows", "ci.yml"): {
+			"sh scripts/install_test.sh",
+			"python3 scripts/validate_docs.py . --profile generic",
+			"go vet ./...",
+			"git diff --check",
+		},
+		releaseScriptPath(t): {
+			`sh "$ROOT_DIR/scripts/install_test.sh"`,
+			`python3 "$ROOT_DIR/scripts/validate_docs.py" . --profile generic`,
+			"go vet ./...",
+			"git diff --check",
+		},
+	}
+	for path, required := range checks {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		for _, marker := range required {
+			if !strings.Contains(text, marker) {
+				t.Fatalf("%s missing repository hygiene gate %q", path, marker)
+			}
+		}
+	}
+}
+
 func TestReleaseValidationRunsFullRepositoryRaceAndRejectsNoPackages(t *testing.T) {
 	content, err := os.ReadFile(releaseScriptPath(t))
 	if err != nil {

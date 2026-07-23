@@ -36,6 +36,9 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 			}
 		}
 	}
+	if a.desktopProbe == nil && binding.State.Active {
+		return "", ErrCodexWriterBusy
+	}
 	lease, err := a.codexOwners.beginTurn(req.Runtime)
 	if err != nil {
 		return "", err

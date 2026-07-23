@@ -41,7 +41,7 @@ func (h *Handler) routeServicePlatformCommand(ctx context.Context, req platformC
 	msg := req.Message
 	switch {
 	case isServiceAdminCommand(req.Trimmed):
-		h.handleServiceAdminCommand(ctx, msg, req.Trimmed, req.Reply)
+		h.handleServiceAdminCommand(ctx, msg, routeUserID, req.Trimmed, req.Reply)
 	case isFeishuIdentityCommand(req.Trimmed):
 		replyPlatformCommand(ctx, req, h.handleFeishuIdentityCommand(msg, req.Trimmed))
 	case req.Trimmed == "/status":
@@ -70,6 +70,10 @@ func (h *Handler) routeSessionPlatformCommand(ctx context.Context, req platformC
 	msg := req.Message
 	switch {
 	case isProgressCommand(req.Trimmed):
+		if len(strings.Fields(req.Trimmed)) > 1 && !h.isAdminMessage(msg) {
+			replyPlatformCommand(ctx, req, "仅管理员可以修改当前机器人账号的进度模式。")
+			return true
+		}
 		replyPlatformCommand(ctx, req, h.handleProgressCommandForAccount(req.Trimmed, msg.Platform, msg.AccountID))
 	case isClaudeSessionCommand(req.Trimmed):
 		return h.handleClaudeSessionPlatformCommand(ctx, req, routeUserID)

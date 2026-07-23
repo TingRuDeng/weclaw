@@ -31,7 +31,7 @@ func TestCodexStatusKeepsFreshRemoteThreadBeforeFirstTurn(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(137, "/cx status"))
 
 	bindingKey := codexBindingKey("user-1", "codex")
-	threadID, pending := h.codexSessions.getThread(bindingKey, workspace)
+	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if threadID != "thread-new" || pending {
 		t.Fatalf("status cleared fresh remote thread=%q pending=%v, messages=%#v", threadID, pending, calls.texts())
 	}
@@ -42,7 +42,7 @@ func TestCodexStatusKeepsFreshRemoteThreadBeforeFirstTurn(t *testing.T) {
 	}
 }
 
-func TestCodexStatusShowsWorkspaceThreadAndSharedHostState(t *testing.T) {
+func TestCodexStatusShowsCompactWorkspaceAndSessionState(t *testing.T) {
 	h := NewHandler(nil, nil)
 	// 隔离开发机上的真实 Codex App 数据；本用例验证的是运行状态渲染。
 	h.SetCodexLocalSessionDir(t.TempDir())
@@ -64,14 +64,18 @@ func TestCodexStatusShowsWorkspaceThreadAndSharedHostState(t *testing.T) {
 	text := strings.Join(calls.texts(), "\n")
 	for _, want := range []string{
 		"Codex 状态",
-		"工作空间: " + workspace,
+		"工作空间: " + filepath.Base(workspace),
 		"会话: 未命名会话",
-		"运行模式: 单一共享 app-server",
-		"窗口角色: frontend binding",
-		"不再启动独立 Codex App、CLI 或 Companion writer",
+		"任务: 未确认",
+		"运行: 兼容模式",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status should contain %q, messages=%#v", want, calls.texts())
+		}
+	}
+	for _, obsolete := range []string{workspace, "运行模式:", "窗口角色:", "不再启动独立 Codex App"} {
+		if strings.Contains(text, obsolete) {
+			t.Fatalf("status should omit %q, messages=%#v", obsolete, calls.texts())
 		}
 	}
 }

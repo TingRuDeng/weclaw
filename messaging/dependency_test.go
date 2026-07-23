@@ -18,6 +18,7 @@ func TestMessagingProductionCodeDoesNotImportPlatformAdapters(t *testing.T) {
 			`github.com/fastclaw-ai/weclaw/ilink`,
 			`github.com/fastclaw-ai/weclaw/feishu`,
 			`github.com/fastclaw-ai/weclaw/lark`,
+			`github.com/fastclaw-ai/weclaw/wechat`,
 			`github.com/larksuite/oapi-sdk-go`,
 		} {
 			if strings.Contains(source, forbidden) {

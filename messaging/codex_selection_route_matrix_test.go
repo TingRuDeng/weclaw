@@ -48,11 +48,11 @@ func newFeishuOriginalRouteFixture(t *testing.T) feishuOriginalRouteFixture {
 	h.defaultName = "codex"
 	actor, route := "ou-actor", "feishu:tenant:group:chat:original"
 	actorBinding, routeBinding := codexBindingKey(actor, "codex"), codexBindingKey(route, "codex")
-	h.codexSessions.setThread(actorBinding, privateWorkspace, "thread-private")
-	h.codexSessions.setActiveWorkspace(actorBinding, privateWorkspace)
-	h.codexSessions.setThread(routeBinding, routeWorkspace, "thread-route")
-	h.codexSessions.setThread(routeBinding, targetWorkspace, "thread-target")
-	h.codexSessions.setActiveWorkspace(routeBinding, routeWorkspace)
+	h.ensureCodexSessions().setThread(actorBinding, privateWorkspace, "thread-private")
+	h.ensureCodexSessions().setActiveWorkspace(actorBinding, privateWorkspace)
+	h.ensureCodexSessions().setThread(routeBinding, routeWorkspace, "thread-route")
+	h.ensureCodexSessions().setThread(routeBinding, targetWorkspace, "thread-target")
+	h.ensureCodexSessions().setActiveWorkspace(routeBinding, routeWorkspace)
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	for _, threadID := range []string{"thread-private", "thread-route", "thread-target"} {
 		ag.setThreadBinding(threadID, agent.CodexThreadBinding{
@@ -70,8 +70,8 @@ func newFeishuOriginalRouteFixture(t *testing.T) feishuOriginalRouteFixture {
 
 func assertFeishuOriginalRouteBound(t *testing.T, fixture feishuOriginalRouteFixture, reply *platformtest.Replier) {
 	t.Helper()
-	privateActive, _ := fixture.h.codexSessions.getActiveWorkspace(fixture.actorBinding)
-	routeActive, _ := fixture.h.codexSessions.getActiveWorkspace(fixture.routeBinding)
+	privateActive, _ := fixture.h.ensureCodexSessions().getActiveWorkspace(fixture.actorBinding)
+	routeActive, _ := fixture.h.ensureCodexSessions().getActiveWorkspace(fixture.routeBinding)
 	if privateActive != fixture.privateWorkspace {
 		t.Fatalf("actor 私聊状态被误写：active=%q", privateActive)
 	}
@@ -102,15 +102,15 @@ func TestCodexReadOnlyCommandsDoNotChangeBinding(t *testing.T) {
 	h.defaultName = "codex"
 	route := "readonly-route"
 	bindingKey := codexBindingKey(route, "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-readonly")
-	h.codexSessions.setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-readonly")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: "thread-readonly"})
 	ag.setThreadBinding("thread-readonly", agent.CodexThreadBinding{
 		Runtime: agent.CodexRuntimeWeClaw,
 		State:   agent.CodexThreadState{ThreadID: "thread-readonly"},
 	})
 	h.agents["codex"] = ag
-	want := h.codexSessions.remoteSelectionSnapshot(bindingKey, "thread-readonly")
+	want := h.ensureCodexSessions().remoteSelectionSnapshot(bindingKey, "thread-readonly")
 
 	commands := []struct {
 		command string
@@ -130,7 +130,7 @@ func TestCodexReadOnlyCommandsDoNotChangeBinding(t *testing.T) {
 		if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], command.marker) {
 			t.Fatalf("%s replies=%#v，want 单条包含 %q", command.command, reply.Texts, command.marker)
 		}
-		got := h.codexSessions.remoteSelectionSnapshot(bindingKey, "thread-readonly")
+		got := h.ensureCodexSessions().remoteSelectionSnapshot(bindingKey, "thread-readonly")
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s 修改了 frontend binding：got=%#v want=%#v", command.command, got, want)
 		}

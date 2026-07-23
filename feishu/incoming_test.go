@@ -71,6 +71,9 @@ func TestToIncomingFromMessageParsesText(t *testing.T) {
 	if incoming.Metadata["feishu_session_key"] != "feishu:cli_a:tenant_1:dm:oc_1:ou_user" {
 		t.Fatalf("metadata=%#v, want scoped DM session", incoming.Metadata)
 	}
+	if incoming.SessionRouteKey() != incoming.Metadata["feishu_session_key"] {
+		t.Fatalf("route=%q metadata=%#v, want first-class route mirrored to legacy metadata", incoming.SessionRouteKey(), incoming.Metadata)
+	}
 	if incoming.Metadata["original_user_id"] != "ou_user" {
 		t.Fatalf("metadata=%#v, want original_user_id=ou_user", incoming.Metadata)
 	}

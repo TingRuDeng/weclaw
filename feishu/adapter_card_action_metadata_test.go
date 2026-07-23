@@ -35,6 +35,10 @@ func TestHandleCardActionEventPreservesQuestionCorrelation(t *testing.T) {
 			msg.RawCommand.Value[platform.ChoiceMetadataInteractionKind] != platform.ChoiceInteractionUserInput {
 			t.Fatalf("RawCommand=%#v，期望保留问题关联字段", msg.RawCommand)
 		}
+		if msg.SessionRouteKey() != "feishu:tenant:dm:oc_chat:ou_user" ||
+			msg.Metadata[feishuSessionMetadataKey] != msg.SessionRouteKey() {
+			t.Fatalf("route=%q metadata=%#v，期望一等路由与兼容 metadata 一致", msg.SessionRouteKey(), msg.Metadata)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("等待结构化问答回调超时")
 	}

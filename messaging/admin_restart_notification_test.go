@@ -27,7 +27,7 @@ func TestServiceAdminRestartPersistsCompletionNotice(t *testing.T) {
 		UserID:    "ou_admin",
 		ChatID:    "oc_chat",
 		Text:      "/restart --force",
-		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
+		Metadata:  privateFeishuAdminMetadata("on_admin"),
 	}, reply)
 
 	texts := reply.waitTexts(t, 2)

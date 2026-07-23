@@ -143,6 +143,37 @@ func TestDoctorFailsNonLoopbackWithoutToken(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsLoopbackWithoutToken(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = "127.0.0.1:18011"
+	cfg.APIToken = ""
+	results := runDoctorChecks(cfg, testDoctorDeps())
+	r, ok := findResult(results, "api server")
+	if !ok {
+		t.Fatal("missing api server check")
+	}
+	if r.Status != doctorWarn {
+		t.Fatalf("status=%v, want warning for loopback without token", r.Status)
+	}
+	if !strings.Contains(r.Detail, "privileged control endpoints") {
+		t.Fatalf("detail=%q, want local privilege warning", r.Detail)
+	}
+}
+
+func TestDoctorPassesLoopbackWithToken(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = "127.0.0.1:18011"
+	cfg.APIToken = "configured-token"
+	results := runDoctorChecks(cfg, testDoctorDeps())
+	r, ok := findResult(results, "api server")
+	if !ok {
+		t.Fatal("missing api server check")
+	}
+	if r.Status != doctorOK {
+		t.Fatalf("status=%v, want ok for loopback with token", r.Status)
+	}
+}
+
 func TestDoctorWarnsEmptyWorkspaceRoots(t *testing.T) {
 	cfg := config.DefaultConfig()
 	results := runDoctorChecks(cfg, testDoctorDeps())

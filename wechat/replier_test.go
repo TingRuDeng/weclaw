@@ -123,6 +123,29 @@ func TestReplierSendTextUsesUniqueClientIDPerSend(t *testing.T) {
 	}
 }
 
+func TestReplierOptionalSettersApplyToNextReply(t *testing.T) {
+	client, calls, closeServer := newRecordingClient(t)
+	defer closeServer()
+	reply := NewReplier(client, "user-1", "ctx-1", "old-client")
+
+	if err := reply.SendText(context.Background(), "旧回复"); err != nil {
+		t.Fatalf("old SendText error: %v", err)
+	}
+	reply.SetClientID("new-client")
+	reply.SetTextChunkLimit(2)
+	if err := reply.SendText(context.Background(), "甲乙丙"); err != nil {
+		t.Fatalf("new SendText error: %v", err)
+	}
+
+	ids := calls.clientIDs()
+	if len(ids) != 3 || ids[1] != "new-client" || ids[2] == "" || ids[2] == ids[1] {
+		t.Fatalf("client ids=%#v, want reset client id followed by unique chunk id", ids)
+	}
+	if texts := calls.texts(); len(texts) != 3 || texts[1] != "甲乙" || texts[2] != "丙" {
+		t.Fatalf("texts=%#v, want chunk limit applied", texts)
+	}
+}
+
 func TestReplierSendTextIdempotentUsesStableClientIDsPerChunk(t *testing.T) {
 	client, calls, closeServer := newRecordingClient(t)
 	defer closeServer()

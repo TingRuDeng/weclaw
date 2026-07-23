@@ -52,8 +52,10 @@ func TestModeYoloIsolatedPerFeishuSession(t *testing.T) {
 	replyB := platformtest.NewReplier(platform.Capabilities{Text: true})
 	h.HandleMessage(context.Background(), modeCommandMessage("mode-b", routeB, "/mode"), replyB)
 
-	if !h.isYoloMode(routeA) || h.isYoloMode(routeB) {
-		t.Fatalf("routeA=%t routeB=%t，期望审批模式按飞书窗口隔离", h.isYoloMode(routeA), h.isYoloMode(routeB))
+	modeA := approvalModeKey("ou_user", routeA)
+	modeB := approvalModeKey("ou_user", routeB)
+	if !h.isYoloMode(modeA) || h.isYoloMode(modeB) {
+		t.Fatalf("routeA=%t routeB=%t，期望审批模式按飞书窗口隔离", h.isYoloMode(modeA), h.isYoloMode(modeB))
 	}
 	if !containsText(replyB.Texts, "default") {
 		t.Fatalf("窗口 B 回复=%#v，期望保持 default", replyB.Texts)
@@ -100,11 +102,37 @@ func TestFeishuModeCardChoiceReusesOriginalSessionRoute(t *testing.T) {
 		Metadata:   map[string]string{feishuSessionMetadataKey: route},
 	}, reply)
 
-	if !h.isYoloMode(route) || h.isYoloMode("ou_actor") {
-		t.Fatalf("route=%t actor=%t，卡片选择必须写入原飞书窗口", h.isYoloMode(route), h.isYoloMode("ou_actor"))
+	modeKey := approvalModeKey("ou_actor", route)
+	if !h.isYoloMode(modeKey) || h.isYoloMode(route) {
+		t.Fatalf("actor route=%t shared route=%t，卡片选择必须只写入当前操作者", h.isYoloMode(modeKey), h.isYoloMode(route))
 	}
 	if len(reply.Choices) != 0 || !containsText(reply.Texts, "已切换为 yolo") {
 		t.Fatalf("texts=%#v choices=%#v，卡片回放应复用文本切换结果", reply.Texts, reply.Choices)
+	}
+}
+
+func TestGroupModeYoloIsolatedPerActor(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := "feishu:tenant:group:chat-b"
+	replyA := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_actor_a", MessageID: "mode-a", Text: "/mode yolo",
+		Route: platform.SessionRoute{Key: route},
+	}, replyA)
+
+	if !h.isYoloMode(approvalModeKey("ou_actor_a", route)) {
+		t.Fatal("actor A should have yolo enabled")
+	}
+	if h.isYoloMode(approvalModeKey("ou_actor_b", route)) {
+		t.Fatal("actor B must not inherit actor A yolo mode in the same group")
+	}
+	options := []agent.ApprovalOption{{ID: "deny", Kind: "deny"}, {ID: "allow", Kind: "allow"}}
+	replyB := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = h.approvalHandlerForUser("ou_actor_b", route, replyB)(ctx, agent.ApprovalRequest{Options: options})
+	if len(replyB.Choices) != 1 {
+		t.Fatalf("actor B choices=%#v, want explicit approval card", replyB.Choices)
 	}
 }
 
@@ -164,7 +192,7 @@ func TestApprovalHandlerReadsRouteMode(t *testing.T) {
 	h := NewHandler(nil, nil)
 	routeA := "feishu:tenant:dm:chat-a:ou_user"
 	routeB := "feishu:tenant:group:chat-b"
-	h.setYoloMode(routeA, true)
+	h.setYoloMode(approvalModeKey("ou_user", routeA), true)
 	options := []agent.ApprovalOption{{ID: "deny-1", Kind: "deny"}, {ID: "allow-1", Kind: "allow"}}
 
 	replyA := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -239,7 +267,7 @@ func TestModeYoloResolvesExistingClaudeApprovalForSameRoute(t *testing.T) {
 		t.Fatalf("agent name=%q，期望 Claude", got)
 	}
 
-	modeReply := h.handleModeCommand(route, "/mode yolo")
+	modeReply := h.handleModeCommandForActor(route, "ou_user", "/mode yolo")
 	if !strings.Contains(modeReply, "放行 1 个") {
 		t.Fatalf("mode reply=%q，期望说明已放行待确认授权", modeReply)
 	}

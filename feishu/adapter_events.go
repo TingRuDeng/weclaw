@@ -327,6 +327,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		UserID:      action.UserID,
 		UserAliases: action.UserAliases,
 		ChatID:      action.ChatID,
+		Route:       platform.SessionRoute{Key: action.SessionKey},
 		MessageID:   regularCardActionMessageID(action),
 		RawCommand: &platform.CardAction{
 			Action: action.Action,

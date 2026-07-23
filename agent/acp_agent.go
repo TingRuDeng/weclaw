@@ -78,9 +78,9 @@ type ACPAgent struct {
 	claudeConfigMu        sync.Mutex
 	claudeQuotaMu         sync.Mutex
 
-	// pending tracks in-flight JSON-RPC requests
-	pendingMu sync.Mutex
-	pending   map[int64]chan *rpcResponse
+	// pending tracks in-flight JSON-RPC requests without owning transport or
+	// runtime lifecycle state.
+	pending rpcPendingRegistry
 
 	// notifications channel for session/update events
 	notifyMu sync.Mutex

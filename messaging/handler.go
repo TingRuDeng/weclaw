@@ -66,19 +66,16 @@ type Handler struct {
 	agentProgressConfigs    map[string]config.ProgressConfig
 	platformProgressConfigs map[string]config.ProgressConfig
 	platformDefaultAgents   map[string]string
-	agentSessions           *agentSessionStore
+	sessions                *sessionService
 	seenTextMsgs            sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
-	codexSessions           *codexSessionStore
 	feishuIdentities        *feishuIdentityStore
 	taskLocksMu             sync.Mutex
 	taskLocks               map[string]*executionLock
-	activeTasksMu           sync.Mutex
-	activeTasks             map[string]*activeAgentTask
+	tasks                   taskService
 	pendingApprovalsMu      sync.Mutex
 	pendingApprovals        map[string]*pendingApproval
 	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
 	codexLocalSessionDir    string
-	claudeSessions          *claudeSessionStore
 	codexBrowseMu           sync.Mutex
 	codexBrowseWorkspaces   map[string]string
 	codexTaskCardFocusMu    sync.Mutex

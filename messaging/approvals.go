@@ -52,7 +52,7 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
-		if h.isYoloMode(opts.routeUserID) {
+		if h.isYoloMode(approvalModeKey(opts.actorUserID, opts.routeUserID)) {
 			decision := autoApproveApprovalOption(req.Options)
 			log.Printf("[handler] yolo mode auto-approving sensitive operation for %s -> %q", opts.actorUserID, decision)
 			h.auditRecord(auditEntry{User: opts.actorUserID, Action: "approval_auto_yolo", Summary: decision})
@@ -199,16 +199,17 @@ func deliverPendingApprovalChoice(pending *pendingApproval, choice string) bool 
 	}
 }
 
-// resolvePendingApprovalsForYolo 放行当前窗口切换前已经弹出的授权请求；结构化提问不会进入该集合。
-func (h *Handler) resolvePendingApprovalsForYolo(routeUserID string) int {
+// resolvePendingApprovalsForYolo 只放行当前操作者在当前窗口切换前已经弹出的授权请求。
+func (h *Handler) resolvePendingApprovalsForYolo(actorUserID string, routeUserID string) int {
+	actorUserID = strings.TrimSpace(actorUserID)
 	routeUserID = strings.TrimSpace(routeUserID)
-	if routeUserID == "" {
+	if actorUserID == "" || routeUserID == "" {
 		return 0
 	}
 	h.pendingApprovalsMu.Lock()
 	pending := make([]*pendingApproval, 0)
 	for _, item := range h.pendingApprovals {
-		if item.route == routeUserID && item.yolo != "" {
+		if item.userID == actorUserID && item.route == routeUserID && item.yolo != "" {
 			pending = append(pending, item)
 		}
 	}

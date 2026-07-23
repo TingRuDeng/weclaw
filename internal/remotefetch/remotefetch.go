@@ -194,7 +194,15 @@ func safeDialContext(opts Options) func(context.Context, string, string) (net.Co
 
 // resolveSafeIP 返回第一个可用公网 IP，并拒绝任何解析到内网地址的主机。
 func resolveSafeIP(ctx context.Context, host string) (netip.Addr, error) {
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	return resolveSafeIPWithResolver(ctx, net.DefaultResolver, host)
+}
+
+type ipResolver interface {
+	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
+}
+
+func resolveSafeIPWithResolver(ctx context.Context, resolver ipResolver, host string) (netip.Addr, error) {
+	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return netip.Addr{}, err
 	}

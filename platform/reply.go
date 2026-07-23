@@ -20,6 +20,22 @@ type Replier interface {
 	AskChoices(ctx context.Context, prompt string, choices []Choice) error
 }
 
+// ClientIDSetter 允许消息层把当前入站消息的稳定客户端 ID 交给平台 adapter。
+// adapter 可用它为首条回复提供幂等键；不支持的平台无需实现。
+type ClientIDSetter interface {
+	SetClientID(clientID string)
+}
+
+// TextChunkLimitSetter 允许消息层按当前 Agent 上下文调整长文本分片上限。
+type TextChunkLimitSetter interface {
+	SetTextChunkLimit(maxRunes int)
+}
+
+// RemoteMediaSender 允许平台 adapter 直接下载并发送远程媒体。
+type RemoteMediaSender interface {
+	SendMediaFromURL(ctx context.Context, mediaURL string) error
+}
+
 // TaskCardReporter 是平台可选能力，用于把后续交互绑定到当前任务卡片。
 type TaskCardReporter interface {
 	CurrentTaskCardID() string

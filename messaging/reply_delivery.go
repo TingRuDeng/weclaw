@@ -7,7 +7,6 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
 // sendReplyWithMedia sends a text reply and any extracted image URLs.
@@ -94,8 +93,8 @@ func (h *Handler) sendLocalAttachments(req replyDeliveryRequest, paths []string)
 }
 
 func (h *Handler) sendReplyProjection(req replyDeliveryRequest, projection replyDeliveryProjection, finalInStream bool) {
-	if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
-		wxReply.ChunkRunes = textReplyChunkLimit(req.ctx)
+	if setter, ok := optionalTextChunkLimitSetter(req.replyWriter); ok {
+		setter.SetTextChunkLimit(textReplyChunkLimit(req.ctx))
 	}
 	attempted := (!finalInStream && strings.TrimSpace(projection.text) != "") || len(projection.imageURLs) > 0
 	if attempted {
@@ -110,8 +109,8 @@ func (h *Handler) sendReplyProjection(req replyDeliveryRequest, projection reply
 	}
 
 	for _, imgURL := range projection.imageURLs {
-		if wxReply, ok := req.replyWriter.(*wechat.Replier); ok {
-			if err := wxReply.SendMediaFromURL(req.ctx, imgURL); err != nil {
+		if sender, ok := optionalRemoteMediaSender(req.replyWriter); ok {
+			if err := sender.SendMediaFromURL(req.ctx, imgURL); err != nil {
 				log.Printf("[handler] failed to send image to %s: %v", req.userID, err)
 				deliveryFailure = err.Error()
 			}
@@ -132,9 +131,55 @@ func (h *Handler) sendReplyProjection(req replyDeliveryRequest, projection reply
 	h.recordTraceStage(req.trace, "reply.delivery.completed", "completed", "reply projection sent")
 }
 
+func optionalTextChunkLimitSetter(reply platform.Replier) (platform.TextChunkLimitSetter, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		setter, supported := optionalTextChunkLimitSetter(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedTextChunkLimitSetter{reply: serialized, setter: setter}, true
+	}
+	setter, ok := reply.(platform.TextChunkLimitSetter)
+	return setter, ok
+}
+
+func optionalRemoteMediaSender(reply platform.Replier) (platform.RemoteMediaSender, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		sender, supported := optionalRemoteMediaSender(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedRemoteMediaSender{reply: serialized, sender: sender}, true
+	}
+	sender, ok := reply.(platform.RemoteMediaSender)
+	return sender, ok
+}
+
+type serializedTextChunkLimitSetter struct {
+	reply  *serializedReplier
+	setter platform.TextChunkLimitSetter
+}
+
+func (s serializedTextChunkLimitSetter) SetTextChunkLimit(maxRunes int) {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	s.setter.SetTextChunkLimit(maxRunes)
+}
+
+type serializedRemoteMediaSender struct {
+	reply  *serializedReplier
+	sender platform.RemoteMediaSender
+}
+
+func (s serializedRemoteMediaSender) SendMediaFromURL(ctx context.Context, mediaURL string) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.sender.SendMediaFromURL(ctx, mediaURL)
+}
+
 func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
 	if req.progress != nil {
-		if current := req.progress.claimTerminalReply(); current != nil {
+		if current := req.progress.currentTerminalReply(); current != nil {
 			req.delivery.replyWriter = current
 			req.delivery.trace = traceWithReply(req.delivery.trace, current)
 		}
@@ -160,10 +205,30 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 	if req.progress != nil && !req.progress.canPrepareDurableTerminal() {
 		return false, false
 	}
+	if strings.TrimSpace(projection.text) == "" && !req.progress.hasDurableTerminalStream() {
+		return false, false
+	}
+	recoveryDraft := terminalOutboxDraft{
+		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed,
+		Text: terminalRecoveryText(req.progress, projection.text, req.failed), Trace: req.delivery.trace,
+	}
+	reservation, err := outbox.reserve(recoveryDraft)
+	if err != nil {
+		h.recordTraceStage(req.delivery.trace, "terminal.outbox", "failed", err.Error())
+		log.Printf("[terminal-outbox] failed to persist terminal recovery draft; using legacy terminal path: %v", err)
+		return false, false
+	}
 	prepared, err := req.progress.prepareDurableTerminal(req.delivery.replyWriter, projection.text, req.failed)
 	if err != nil {
 		log.Printf("[terminal-outbox] failed to prepare stream checkpoint; falling back to durable text: %v", err)
 		prepared = preparedProgressTerminal{}
+	}
+	if prepared.reply != nil {
+		req.delivery.replyWriter = prepared.reply
+		req.delivery.trace = traceWithReply(req.delivery.trace, prepared.reply)
+		if latestReporter, ok := prepared.reply.(platform.DeliveryRouteReporter); ok && latestReporter.DeliveryRoute().Valid() {
+			reporter = latestReporter
+		}
 	}
 	if !req.delivery.replyWriter.Capabilities().StreamCompletionNotification {
 		prepared.notification = ""
@@ -173,7 +238,8 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 		checkpoint = nil
 	}
 	text := ""
-	if !prepared.consumed || checkpoint == nil && strings.TrimSpace(projection.text) != "" {
+	if projection.text != progressStatusOnlyComplete &&
+		(!prepared.consumed || checkpoint == nil && strings.TrimSpace(projection.text) != "") {
 		text = projection.text
 	}
 	draft := terminalOutboxDraft{
@@ -181,46 +247,39 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 		Checkpoint: checkpoint, Text: text, Notification: prepared.notification, Trace: req.delivery.trace,
 	}
 	if checkpoint == nil && strings.TrimSpace(text) == "" && strings.TrimSpace(draft.Notification) == "" {
-		return false, false
+		outbox.releaseReservation(reservation.ID)
+		return false, true
 	}
 	ctx := context.WithoutCancel(req.delivery.ctx)
-	if err := outbox.enqueueAndAttempt(ctx, draft, req.delivery.replyWriter); err != nil {
+	if err := outbox.commitReservation(reservation.ID, draft); err != nil {
 		h.recordTraceStage(req.delivery.trace, "terminal.outbox", "failed", err.Error())
-		log.Printf("[terminal-outbox] failed to persist terminal delivery; using immediate fallback: %v", err)
-		h.deliverTerminalDraftImmediately(ctx, req.delivery.replyWriter, draft, projection.text)
-	} else {
-		h.recordTraceStage(req.delivery.trace, "terminal.outbox", "persisted", "terminal delivery persisted")
+		log.Printf("[terminal-outbox] failed to persist prepared terminal delivery; recovery text remains queued: %v", err)
+		if attemptErr := outbox.attempt(ctx, reservation.ID, req.delivery.replyWriter); attemptErr != nil {
+			log.Printf("[terminal-outbox] recovery text remains pending id=%s: %v", reservation.ID, attemptErr)
+		}
+		outbox.signal()
+		return false, true
 	}
+	h.recordTraceStage(req.delivery.trace, "terminal.outbox", "persisted", "terminal delivery persisted")
+	if err := outbox.attempt(ctx, reservation.ID, req.delivery.replyWriter); err != nil {
+		log.Printf("[terminal-outbox] delivery pending id=%s platform=%s account=%s: %v",
+			reservation.ID, draft.Route.Platform, draft.Route.AccountID, err)
+	}
+	outbox.signal()
 	return prepared.consumed && checkpoint != nil, true
 }
 
-func (h *Handler) deliverTerminalDraftImmediately(ctx context.Context, reply platform.Replier, draft terminalOutboxDraft, fallbackText string) {
-	deliveryCtx, cancel := context.WithTimeout(ctx, terminalOutboxDeliveryTimeout)
-	defer cancel()
-	checkpointDelivered := false
-	if draft.Checkpoint != nil {
-		if durable, ok := reply.(platform.DurableTerminalReplier); ok {
-			if err := durable.DeliverTerminal(deliveryCtx, *draft.Checkpoint); err == nil {
-				checkpointDelivered = true
-			} else {
-				log.Printf("[terminal-outbox] immediate checkpoint fallback failed: %v", err)
-			}
-		}
+func terminalRecoveryText(progress *progressSession, finalText string, failed bool) string {
+	if finalText != progressStatusOnlyComplete && strings.TrimSpace(finalText) != "" {
+		return finalText
 	}
-	text := draft.Text
-	if !checkpointDelivered && strings.TrimSpace(text) == "" {
-		text = fallbackText
+	if progress != nil && progress.ctx != nil && progress.ctx.Err() != nil {
+		return "任务已停止。"
 	}
-	if strings.TrimSpace(text) != "" {
-		if err := reply.SendText(deliveryCtx, text); err != nil {
-			log.Printf("[terminal-outbox] immediate text fallback failed: %v", err)
-		}
+	if failed {
+		return "任务执行失败。"
 	}
-	if checkpointDelivered && strings.TrimSpace(draft.Notification) != "" {
-		if err := reply.SendText(deliveryCtx, draft.Notification); err != nil {
-			log.Printf("[terminal-outbox] immediate notification fallback failed: %v", err)
-		}
-	}
+	return progressDefaultCompletion
 }
 
 func finishProgressWithReply(finish func(string, bool) bool, reply string, failed bool) bool {

@@ -53,14 +53,14 @@ func (t *activeAgentTask) pendingGuide() string {
 }
 
 func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTaskMeta) (*activeAgentTask, context.Context, bool) {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
-	if h.activeTasks[key] != nil {
-		return h.activeTasks[key], ctx, false
+	if h.tasks.active[key] != nil {
+		return h.tasks.active[key], ctx, false
 	}
 	task, taskCtx := newActiveAgentTask(ctx, meta)
-	h.activeTasks[key] = task
+	h.tasks.active[key] = task
 	return task, taskCtx, true
 }
 
@@ -74,9 +74,9 @@ func (h *Handler) beginSynchronousActiveTask(ctx context.Context, key string, me
 }
 
 func (h *Handler) activeTask(key string) (*activeAgentTask, bool) {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	task := h.tasks.active[key]
 	return task, task != nil
 }
 
@@ -96,32 +96,32 @@ type activeTaskMeta struct {
 }
 
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
-	h.activeTasksMu.Lock()
+	h.tasks.mu.Lock()
 	removed := false
-	if h.activeTasks[key] == task {
+	if h.tasks.active[key] == task {
 		task.mu.Lock()
 		terminal := task.phase == codexTaskTerminal
 		task.mu.Unlock()
 		if !terminal {
-			delete(h.activeTasks, key)
+			delete(h.tasks.active, key)
 			removed = true
 		}
 	}
-	h.activeTasksMu.Unlock()
+	h.tasks.mu.Unlock()
 	if removed {
 		close(task.done)
 	}
 }
 
 func (h *Handler) storePendingGuide(key string, pending pendingAgentTask) bool {
-	h.activeTasksMu.Lock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	task := h.tasks.active[key]
 	if task == nil {
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return false
 	}
 	task.mu.Lock()
-	defer h.activeTasksMu.Unlock()
+	defer h.tasks.mu.Unlock()
 	defer task.mu.Unlock()
 	if task.pending.message != "" {
 		return false
@@ -131,43 +131,43 @@ func (h *Handler) storePendingGuide(key string, pending pendingAgentTask) bool {
 }
 
 func (h *Handler) detachPendingGuide(key string, actor string) (string, *activeAgentTask, bool, bool) {
-	h.activeTasksMu.Lock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	task := h.tasks.active[key]
 	if task == nil {
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return "", nil, false, false
 	}
 
 	task.mu.Lock()
 	if task.owner != strings.TrimSpace(actor) {
 		task.mu.Unlock()
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return "", task, false, true
 	}
 	message := task.pending.message
 	if message == "" {
 		task.mu.Unlock()
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return "", nil, false, false
 	}
 	task.pending = pendingAgentTask{}
 	task.detached = true
 	cancel := task.cancel
 	task.mu.Unlock()
-	h.activeTasksMu.Unlock()
+	h.tasks.mu.Unlock()
 	cancel()
 	return message, task, true, false
 }
 
 func (h *Handler) clearPendingGuide(key string, actor string) (bool, bool) {
-	h.activeTasksMu.Lock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	task := h.tasks.active[key]
 	if task == nil {
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return false, false
 	}
 	task.mu.Lock()
-	defer h.activeTasksMu.Unlock()
+	defer h.tasks.mu.Unlock()
 	defer task.mu.Unlock()
 	if task.owner != strings.TrimSpace(actor) {
 		return false, true
@@ -180,14 +180,14 @@ func (h *Handler) clearPendingGuide(key string, actor string) (bool, bool) {
 }
 
 func (h *Handler) takeExternalCodexGuide(key string, actor string) (pendingAgentTask, string, string, *activeAgentTask, bool, bool) {
-	h.activeTasksMu.Lock()
-	task := h.activeTasks[key]
+	h.tasks.mu.Lock()
+	task := h.tasks.active[key]
 	if task == nil {
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return pendingAgentTask{}, "", "", nil, false, false
 	}
 	task.mu.Lock()
-	defer h.activeTasksMu.Unlock()
+	defer h.tasks.mu.Unlock()
 	defer task.mu.Unlock()
 	if task.owner != strings.TrimSpace(actor) {
 		return pendingAgentTask{}, "", "", task, false, true
@@ -205,12 +205,12 @@ func (h *Handler) finishExternalCodexGuide(key string, task *activeAgentTask, de
 	if task == nil {
 		return
 	}
-	h.activeTasksMu.Lock()
-	active := h.activeTasks[key] == task
+	h.tasks.mu.Lock()
+	active := h.tasks.active[key] == task
 	task.mu.Lock()
 	if !task.pendingSteering {
 		task.mu.Unlock()
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return
 	}
 	task.pendingSteering = false
@@ -222,7 +222,7 @@ func (h *Handler) finishExternalCodexGuide(key string, task *activeAgentTask, de
 		task.pending = pendingAgentTask{}
 	}
 	task.mu.Unlock()
-	h.activeTasksMu.Unlock()
+	h.tasks.mu.Unlock()
 	if pending.run != nil {
 		pending.run()
 	}
@@ -239,15 +239,15 @@ func (h *Handler) claimAndCompleteActiveTask(key string, task *activeAgentTask) 
 	if task == nil {
 		return pendingAgentTask{}, false, false
 	}
-	h.activeTasksMu.Lock()
-	if h.activeTasks[key] != task {
-		h.activeTasksMu.Unlock()
+	h.tasks.mu.Lock()
+	if h.tasks.active[key] != task {
+		h.tasks.mu.Unlock()
 		return pendingAgentTask{}, false, false
 	}
 	task.mu.Lock()
 	if !task.claimTerminalLocked() {
 		task.mu.Unlock()
-		h.activeTasksMu.Unlock()
+		h.tasks.mu.Unlock()
 		return pendingAgentTask{}, false, false
 	}
 	pending := pendingAgentTask{}
@@ -255,9 +255,9 @@ func (h *Handler) claimAndCompleteActiveTask(key string, task *activeAgentTask) 
 		pending = task.pending
 		task.pending = pendingAgentTask{}
 	}
-	delete(h.activeTasks, key)
+	delete(h.tasks.active, key)
 	task.mu.Unlock()
-	h.activeTasksMu.Unlock()
+	h.tasks.mu.Unlock()
 	close(task.done)
 	if pending.message == "" || pending.run == nil {
 		return pendingAgentTask{}, false, true
@@ -269,9 +269,9 @@ func (h *Handler) claimActiveTaskTerminal(key string, task *activeAgentTask) boo
 	if task == nil {
 		return false
 	}
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	if h.activeTasks[key] != task {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	if h.tasks.active[key] != task {
 		return false
 	}
 	task.mu.Lock()
@@ -280,9 +280,9 @@ func (h *Handler) claimActiveTaskTerminal(key string, task *activeAgentTask) boo
 }
 
 func (h *Handler) finishClaimedActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool) {
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	if task == nil || h.activeTasks[key] != task {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	if task == nil || h.tasks.active[key] != task {
 		return pendingAgentTask{}, false
 	}
 	task.mu.Lock()
@@ -291,7 +291,7 @@ func (h *Handler) finishClaimedActiveTask(key string, task *activeAgentTask) (pe
 		pending = task.pending
 		task.pending = pendingAgentTask{}
 	}
-	delete(h.activeTasks, key)
+	delete(h.tasks.active, key)
 	task.mu.Unlock()
 	close(task.done)
 	if pending.message == "" || pending.run == nil {

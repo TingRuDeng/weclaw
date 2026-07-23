@@ -471,6 +471,42 @@ func TestRunCodexTurnUsesValidatedWeClawRuntime(t *testing.T) {
 	}
 }
 
+func TestRunCodexTurnRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	turnStartCalls := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeTurnId":"turn-existing"},"turns":[{"id":"turn-existing","status":"inProgress"}]}}`), nil
+		case "turn/start":
+			turnStartCalls++
+			return nil, fmt.Errorf("turn/start must not be called while host thread is active")
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+
+	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "不能重叠执行",
+	})
+
+	if !errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("RunCodexTurn error=%v, want ErrCodexWriterBusy", err)
+	}
+	if turnStartCalls != 0 {
+		t.Fatalf("turn/start calls=%d, want 0", turnStartCalls)
+	}
+	binding, ok := a.codexOwners.threadBinding(request.Ref.ThreadID)
+	if !ok || !binding.State.Active || binding.State.ActiveTurnID != "turn-existing" {
+		t.Fatalf("binding=%#v ok=%v, want authoritative active host state", binding, ok)
+	}
+}
+
 func TestRunCodexTurnRetainsWriterLeaseAfterObservationDisconnect(t *testing.T) {
 	a, request, _ := sharedHostObservationLossFixture(t)
 
@@ -527,6 +563,34 @@ func TestInspectCodexRuntimeReconcilesUncertainWriterLease(t *testing.T) {
 	}
 	if binding.State.Active || binding.State.LastTurnID != "turn-1" || binding.State.LastTurnStatus != "completed" {
 		t.Fatalf("binding=%#v, want reconciled terminal turn", binding)
+	}
+}
+
+func TestUncertainLeaseWithoutTurnIDDoesNotReleaseForUnmatchedTerminal(t *testing.T) {
+	registry := newCodexRuntimeOwnerRegistry(nil)
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-before", LastTurnStatus: "completed"}
+	if _, err := registry.activateRuntime(request, CodexRuntimeWeClaw, initial); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := registry.beginTurn(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.markUncertain()
+
+	binding, retained, err := registry.reconcileUncertainSharedHostLease(request, CodexThreadState{
+		ThreadID: "thread-1", LastTurnID: "turn-unmatched", LastTurnStatus: "completed",
+	})
+
+	if err != nil {
+		t.Fatalf("reconcile error=%v", err)
+	}
+	if !retained || !registry.hasWriterLease(request.Ref.ThreadID) {
+		t.Fatalf("retained=%v lease=%v, empty turn ID must remain fail-closed", retained, registry.hasWriterLease(request.Ref.ThreadID))
+	}
+	if !binding.State.Active {
+		t.Fatalf("binding=%#v, ambiguous terminal must remain active until explicit confirmation", binding)
 	}
 }
 

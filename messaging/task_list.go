@@ -34,9 +34,9 @@ func (h *Handler) handleListActiveTasks(userID string) string {
 // runningTasksForOwner 复制指定用户可展示的任务状态，避免渲染阶段持锁。
 func (h *Handler) runningTasksForOwner(owner string, now time.Time) []runningTaskView {
 	var tasks []runningTaskView
-	h.activeTasksMu.Lock()
-	defer h.activeTasksMu.Unlock()
-	for _, task := range h.activeTasks {
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	for _, task := range h.tasks.active {
 		task.mu.Lock()
 		if task.owner == owner && taskIsRunningForStatusLocked(task) {
 			tasks = append(tasks, runningTaskView{

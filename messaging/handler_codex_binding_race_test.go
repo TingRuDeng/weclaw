@@ -114,7 +114,7 @@ func TestCodexSessionCommandSwitchTimeoutKeepsBindingAndReleasesLock(t *testing.
 	case <-time.After(codexBindingTestCompletionTimeout):
 		t.Fatal("switch 未在总时限后释放 binding 锁")
 	}
-	if threadID, _ := h.codexSessions.getThread(codexBindingKey("user-1", "codex"), workspace); threadID != "thread-1" {
+	if threadID, _ := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace); threadID != "thread-1" {
 		t.Fatalf("运行通道超时后窗口 binding=%q", threadID)
 	}
 	assertExecutionLockReusable(t, h, codexBindingExecutionKey(codexBindingKey("user-1", "codex")))
@@ -158,7 +158,7 @@ func TestHandleCodexNewRejectsActiveOldRemoteTaskBeforeReset(t *testing.T) {
 	h.defaultName, h.agents["codex"] = "codex", ag
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	bindingKey := codexBindingKey("user-1", "codex")
-	h.codexSessions.setThread(bindingKey, workspace, "thread-old")
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
 	conversationID := buildCodexConversationID("user-1", "codex", workspace)
 	task, _, started := h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
 		owner: "user-1", routeUserID: "user-1", agentName: "codex", codexThreadID: "thread-old",

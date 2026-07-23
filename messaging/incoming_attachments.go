@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/wechat"
 	"github.com/google/uuid"
 )
 
@@ -84,7 +83,7 @@ func (h *Handler) readAttachmentData(ctx context.Context, attachment platform.At
 	}
 	downloader := h.cdnDownloader
 	if downloader == nil {
-		downloader = wechat.DownloadFileFromCDN
+		return nil, fmt.Errorf("平台未配置附件下载能力")
 	}
 	data, err := downloader(ctx, encryptQueryParam, aesKey)
 	if err != nil {

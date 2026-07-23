@@ -358,7 +358,7 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx switch <编号> 切换并绑定当前工作空间会话",
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx pwd 查看当前工作空间",
-		"/cx status 查看 binding、共享 app-server、workspace、thread 和任务状态",
+		"/cx status 查看当前工作空间、会话、任务、账号和运行状态",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看新建 Codex 会话的默认模型配置",

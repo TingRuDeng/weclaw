@@ -94,12 +94,8 @@ func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
 		Command: "codex",
 		Args:    []string{"app-server", "--listen", "stdio://"},
 	})
-	pendingCh := make(chan *rpcResponse, 1)
+	pendingCh := a.pending.register(7)
 	turnCh := make(chan *codexTurnEvent, 1)
-
-	a.pendingMu.Lock()
-	a.pending[7] = pendingCh
-	a.pendingMu.Unlock()
 	a.notifyMu.Lock()
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
@@ -127,10 +123,7 @@ func TestACPAgentReadLoopFailsPendingRequestsAndActiveTurnsOnEOF(t *testing.T) {
 		t.Fatal("active turn did not receive runtime exit error")
 	}
 
-	a.pendingMu.Lock()
-	_, pendingExists := a.pending[7]
-	a.pendingMu.Unlock()
-	if pendingExists {
+	if a.pending.contains(7) {
 		t.Fatal("pending RPC should be removed after runtime exit")
 	}
 }
@@ -181,8 +174,7 @@ func TestHelperACPNaturalExit(t *testing.T) {
 func TestACPAgentDispatchDuplicateResponseDoesNotBlock(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	id := int64(7)
-	responseCh := make(chan *rpcResponse, 1)
-	a.pending[id] = responseCh
+	responseCh := a.pending.register(id)
 
 	first := &rpcResponse{ID: &id, Result: json.RawMessage(`{"value":"first"}`)}
 	duplicate := &rpcResponse{ID: &id, Result: json.RawMessage(`{"value":"duplicate"}`)}
@@ -220,9 +212,8 @@ func TestACPAgentRuntimeFailureEvictsQueuedStartedEvent(t *testing.T) {
 
 func TestACPAgentStopFailsPendingRequestsAndActiveTurns(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
-	pendingCh := make(chan *rpcResponse, 1)
+	pendingCh := a.pending.register(9)
 	turnCh := make(chan *codexTurnEvent, 1)
-	a.pending[9] = pendingCh
 	a.turnCh["thread-1"] = turnCh
 	a.started = true
 	a.stdin = nopWriteCloser{Buffer: &bytes.Buffer{}}

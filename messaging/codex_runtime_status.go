@@ -10,56 +10,77 @@ import (
 // renderCodexStatus 合并窗口 binding 与共享 app-server 运行态；没有有效会话时仍返回基础状态。
 func (h *Handler) renderCodexStatus(runtime codexSessionCommandRuntime) navigationCommandResult {
 	base := h.renderCodexStatusForRoute(runtime.actorUserID, runtime.routeUserID, runtime.agentName, runtime.agent)
-	if accountAgent, ok := runtime.agent.(agent.CodexAccountAgent); ok {
-		if status, err := accountAgent.CurrentCodexAccount(runtime.ctx, true); err == nil {
-			accountStatus := renderCodexAccountCurrent(status)
-			if runtime.admin && runtime.private {
-				accountStatus = renderCodexAccountStatus(status)
-			}
-			base = wechatCommandText(base, accountStatus)
-		} else {
-			code := codexauth.ErrorCode(err)
-			if code == "" {
-				code = codexauth.CodeRuntimeUnavailable
-			}
-			base = wechatCommandText(base, "Codex 账号状态: 暂不可用（"+code+"）")
-		}
-	}
+	accountLine := renderCodexStatusAccountLine(runtime)
 	threadID, pending := h.ensureCodexSessions().getThread(runtime.bindingKey, runtime.workspaceRoot)
 	threadID = strings.TrimSpace(threadID)
 	if pending || threadID == "" {
-		return textNavigationResult(base)
+		runtimeLine := "运行: 未绑定会话"
+		if pending {
+			runtimeLine = "运行: 等待首条消息"
+		}
+		return compactCodexStatusResult(base, "任务: 空闲", accountLine, runtimeLine)
 	}
 	if _, ok := runtime.agent.(agent.CodexLiveRuntimeAgent); !ok {
-		return textNavigationResult(base)
+		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 兼容模式")
 	}
 
 	unlock, err := h.lockCodexSessionThread(runtime.ctx, threadID, "status")
 	if err != nil {
-		return textNavigationResult(wechatCommandText(base, "共享服务状态: 查询繁忙，请稍后重试。"))
+		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 查询繁忙，请稍后重试")
 	}
 	defer unlock()
 	resolution, err := h.resolveCodexRuntimeLocked(runtime.ctx, codexRuntimeResolveOptions{
 		route: runtime.codexRoute(threadID), threadID: threadID, ag: runtime.agent,
 	})
 	if err != nil {
-		return textNavigationResult(wechatCommandText(base, "共享服务状态: 暂不可用，请稍后重试。"))
+		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 暂不可用，请稍后重试")
 	}
-	return textNavigationResult(wechatCommandText(base, renderCodexRuntimeStatusText(resolution)))
+	taskLine, runtimeLine := compactCodexRuntimeStatusLines(resolution)
+	return compactCodexStatusResult(base, taskLine, accountLine, runtimeLine)
 }
 
-func renderCodexRuntimeStatusText(resolution codexRuntimeResolution) string {
-	lines := []string{
-		"窗口绑定: 已绑定",
-		"写入服务: " + renderCodexRuntimeHolder(resolution.Binding.Runtime),
+func renderCodexStatusAccountLine(runtime codexSessionCommandRuntime) string {
+	accountAgent, ok := runtime.agent.(agent.CodexAccountAgent)
+	if !ok {
+		return ""
 	}
+	status, err := accountAgent.CurrentCodexAccount(runtime.ctx, false)
+	if err != nil {
+		code := codexauth.ErrorCode(err)
+		if code == "" {
+			code = codexauth.CodeRuntimeUnavailable
+		}
+		return "账号: 暂不可用（" + code + "）"
+	}
+	if status.Store.Current == nil {
+		return "账号: 未保存"
+	}
+	label := strings.TrimSpace(status.Store.Current.Label)
+	if label == "" {
+		label = "已保存"
+	}
+	return "账号: " + label
+}
+
+func compactCodexRuntimeStatusLines(resolution codexRuntimeResolution) (string, string) {
+	taskLine := "任务: 空闲"
 	if resolution.Binding.State.Active || resolution.Rollout.Active {
-		lines = append(lines, "任务: 正在执行")
-	} else {
-		lines = append(lines, "任务: 空闲")
+		taskLine = "任务: 正在执行"
 	}
-	lines = append(lines, "说明: 多个前端可绑定同一会话；app-server 统一串行化 turn。")
-	return wechatCommandText(lines...)
+	runtimeLine := "运行: 未确认"
+	switch resolution.Binding.Runtime {
+	case agent.CodexRuntimeWeClaw:
+		runtimeLine = "运行: 正常"
+	case agent.CodexRuntimeConflict:
+		runtimeLine = "运行: 异常（写入冲突）"
+	case agent.CodexRuntimeDesktop:
+		runtimeLine = "运行: 异常（旧版 Codex Desktop bridge）"
+	}
+	return taskLine, runtimeLine
+}
+
+func compactCodexStatusResult(base string, taskLine string, accountLine string, runtimeLine string) navigationCommandResult {
+	return textNavigationResult(wechatCommandText(base, taskLine, accountLine, runtimeLine))
 }
 
 func (runtime codexSessionCommandRuntime) codexRoute(threadID string) codexConversationRoute {

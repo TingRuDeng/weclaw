@@ -55,6 +55,19 @@ func TestCardActionBlocksLaterMessageDispatch(t *testing.T) {
 	}
 }
 
+func TestFeishuDispatchKeyPrefersFirstClassRoute(t *testing.T) {
+	msg := platform.IncomingMessage{
+		AccountID: "cli_a",
+		UserID:    "ou_user",
+		ChatID:    "oc_chat",
+		Route:     platform.SessionRoute{Key: "feishu:new-route"},
+		Metadata:  map[string]string{feishuSessionMetadataKey: "feishu:legacy-route"},
+	}
+	if got := feishuDispatchKey(msg); got != "cli_a\x00feishu:new-route" {
+		t.Fatalf("dispatch key=%q", got)
+	}
+}
+
 func TestQueuedMessageUsesDetachedEventContext(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := newMessageEvent("p2p", "text", `{"text":"继续"}`)

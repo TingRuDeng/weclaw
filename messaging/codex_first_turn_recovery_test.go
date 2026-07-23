@@ -13,8 +13,8 @@ func TestCommitCodexFirstTurnReplacementUpdatesSelectionAndActiveTask(t *testing
 	workspace := filepath.Join(t.TempDir(), "project")
 	bindingKey := codexBindingKey("feishu:window-1", "codex")
 	conversationID := buildCodexConversationID("feishu:window-1", "codex", workspace)
-	snapshot := h.codexSessions.remoteSelectionSnapshot(bindingKey, "thread-old")
-	_, err := h.codexSessions.commitRemoteSelection(codexRemoteSelectionUpdate{
+	snapshot := h.ensureCodexSessions().remoteSelectionSnapshot(bindingKey, "thread-old")
+	_, err := h.ensureCodexSessions().commitRemoteSelection(codexRemoteSelectionUpdate{
 		BindingKey: bindingKey, WorkspaceRoot: workspace, TargetThreadID: "thread-old",
 		ConversationID: conversationID, PendingFirstTurn: true, Expected: snapshot,
 	})
@@ -37,9 +37,9 @@ func TestCommitCodexFirstTurnReplacementUpdatesSelectionAndActiveTask(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	threadID, pendingNew := h.codexSessions.getThread(bindingKey, workspace)
-	if threadID != "thread-new" || pendingNew || !h.codexSessions.isPendingFirstTurn(bindingKey, workspace, threadID) {
-		t.Fatalf("thread=%q pendingNew=%v pendingFirstTurn=%v", threadID, pendingNew, h.codexSessions.isPendingFirstTurn(bindingKey, workspace, threadID))
+	threadID, pendingNew := h.ensureCodexSessions().getThread(bindingKey, workspace)
+	if threadID != "thread-new" || pendingNew || !h.ensureCodexSessions().isPendingFirstTurn(bindingKey, workspace, threadID) {
+		t.Fatalf("thread=%q pendingNew=%v pendingFirstTurn=%v", threadID, pendingNew, h.ensureCodexSessions().isPendingFirstTurn(bindingKey, workspace, threadID))
 	}
 	task.mu.Lock()
 	activeThreadID := task.codexThreadID

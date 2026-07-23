@@ -136,11 +136,8 @@ func (h *Handler) renderCodexStatusForRoute(actorUserID string, routeUserID stri
 	sessionLabel := h.codexSessionLabelForStatus(bindingKey, workspaceRoot, threadID, pending)
 	return wechatCommandText(
 		"Codex 状态:",
-		"工作空间: "+workspaceRoot,
+		"工作空间: "+shortCodexWorkspaceName(workspaceRoot),
 		"会话: "+sessionLabel,
-		"运行模式: 单一共享 app-server ("+ag.Info().Type+")",
-		"窗口角色: frontend binding",
-		"说明: 不再启动独立 Codex App、CLI 或 Companion writer。",
 	)
 }
 
@@ -175,7 +172,7 @@ func buildCodexSessionHelpText() string {
 		"/cx switch <编号> 切换并绑定当前工作空间会话",
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx pwd 查看当前工作空间",
-		"/cx status 查看 binding、共享 app-server、workspace、thread 和任务状态",
+		"/cx status 查看当前工作空间、会话、任务、账号和运行状态",
 		"/cx quota 查看 Codex 账号额度",
 		"/cx account 查看当前账号；管理员私聊可列出账号并确认切换",
 		"/cx account status 查看脱敏账号、受管 Host、最近切换和额度摘要",
