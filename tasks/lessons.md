@@ -12,6 +12,7 @@
 
 - 触发条件：本地 Codex 账号额度耗尽后手工登录另一个账号，但唯一 app-server 仍缓存旧 OAuth Token；飞书继续复用同一 workspace/thread 时返回旧账号 refresh 失败。
 - 规则：账号 profile 只属于由 `CODEX_HOME + app-server socket` 定义的 shared host namespace。切换账号不得清理、重建或迁移 thread，也不得修改任何飞书/微信 frontend binding；下一条新消息才使用新账号，失败消息不自动重放。
+- 一致性边界：Codex App 写入新的 `auth.json` 只表示本地目标身份，不证明运行中的 shared Host 已刷新 Token。状态展示必须区分已记录 profile、本地 auth、Host 元数据和实时 `account/read`；已保存目标只在真实 turn 前且全局空闲时自动收敛，未知目标保持不可写并要求显式保存。
 - 安全边界：只接受 ChatGPT OAuth；索引只存脱敏身份、指纹和 secret 引用，完整快照优先存系统凭据库。文件降级必须由本机用户显式授权，并对目录、文件、owner、符号链接、原子写和跨进程锁执行严格校验。API、卡片、日志和 CLI 都不得输出凭据正文。
 - 生命周期边界：锁顺序固定为运行时 gate → account lock → host lifecycle lock。停止 Host 前必须确认 Handler task、全部 writer lease 以及分页后的 archived/unarchived thread 均为空闲；active、unknown、旧 revision 或无法验证的受管进程都拒绝切换且不写认证。
 - 回滚边界：目标认证写入后必须启动唯一 Host，并通过 `account/read` 与额度接口验证身份。任一步失败都停止失败 Host、恢复旧认证并重新验证；旧 Host 或账号索引未能完整恢复时 gate 保持 failed。连接 generation 切换必须与 wire dispatch 串行，旧 RPC 和晚到通知不能覆盖新运行态。

@@ -53,14 +53,44 @@ func renderCodexStatusAccountLine(runtime codexSessionCommandRuntime) string {
 		}
 		return "账号: 暂不可用（" + code + "）"
 	}
-	if status.Store.Current == nil {
-		return "账号: 未保存"
+	return "账号: " + compactCodexStatusAccountIdentity(status)
+}
+
+// compactCodexStatusAccountIdentity 只保留 /cx status 做运行判断所需的标签。
+// 账号管理命令仍可展示脱敏邮箱，但日常状态卡不应重复暴露账号详情。
+func compactCodexStatusAccountIdentity(status agent.CodexAccountStatus) string {
+	current := status.Store.Current
+	auth := status.Sync.AuthProfile
+	switch status.Sync.State {
+	case agent.CodexAccountSyncPending:
+		if auth == nil {
+			return "等待自动同步"
+		}
+		if current == nil || current.ID == auth.ID {
+			return auth.Label + "（待自动同步）"
+		}
+		return current.Label + " → " + auth.Label + "（待自动同步）"
+	case agent.CodexAccountSyncUnsaved:
+		return "本地账号未保存"
+	case agent.CodexAccountSyncRuntimeMismatch:
+		if auth != nil {
+			return auth.Label + "（运行账号不一致）"
+		}
+		return "运行账号不一致"
+	case agent.CodexAccountSyncRuntimeUnavailable:
+		if auth != nil {
+			return auth.Label + "（运行账号未确认）"
+		}
+		return "运行账号未确认"
+	case agent.CodexAccountSyncSynced:
+		if auth != nil {
+			return auth.Label
+		}
 	}
-	label := strings.TrimSpace(status.Store.Current.Label)
-	if label == "" {
-		label = "已保存"
+	if current == nil {
+		return "未保存"
 	}
-	return "账号: " + label
+	return current.Label
 }
 
 func compactCodexRuntimeStatusLines(resolution codexRuntimeResolution) (string, string) {

@@ -78,6 +78,7 @@ type accountSwitchFixture struct {
 	oldSnapshot     *codexauth.Snapshot
 	newSnapshot     *codexauth.Snapshot
 	runtimeMail     string
+	accountReadHook func() (json.RawMessage, error)
 	threadState     string
 	threadListCalls int
 	threadListHook  func(int, interface{}) (json.RawMessage, error)
@@ -93,7 +94,12 @@ func newAccountSwitchFixture(t *testing.T) *accountSwitchFixture {
 	if err := os.MkdirAll(codexHome, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	socketPath := filepath.Join(t.TempDir(), "codex.sock")
+	socketDir, err := os.MkdirTemp("", "weclaw-account-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "codex.sock")
 	keyring := &accountTestKeyring{values: make(map[string]string)}
 	store, err := codexauth.NewStore(codexauth.StoreOptions{
 		DataDir: dataDir, CodexHome: codexHome, SocketPath: socketPath, Keyring: keyring,
@@ -162,6 +168,9 @@ func newAccountSwitchFixture(t *testing.T) *accountSwitchFixture {
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		switch method {
 		case "account/read":
+			if fixture.accountReadHook != nil {
+				return fixture.accountReadHook()
+			}
 			return json.RawMessage(`{"account":{"type":"chatgpt","email":"` + fixture.runtimeMail + `","planType":"plus"},"requiresOpenaiAuth":false}`), nil
 		case "account/rateLimits/read":
 			return json.RawMessage(`{"rateLimitsByLimitId":{}}`), nil
@@ -287,6 +296,284 @@ func TestUseCodexAccountRestartsHostAndPreservesThreadBindings(t *testing.T) {
 	wantPhases := []CodexAccountSwitchPhase{CodexAccountSwitchChecking, CodexAccountSwitchSwitching, CodexAccountSwitchVerifying}
 	if !reflect.DeepEqual(phases, wantPhases) {
 		t.Fatalf("phases=%v want=%v", phases, wantPhases)
+	}
+}
+
+func TestExternalCodexAccountProjectionCommitsAlreadyLiveAccountWithoutRestart(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	fixture.runtimeMail = "new@example.com"
+
+	before, err := fixture.agent.CurrentCodexAccount(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Sync.State != CodexAccountSyncPending ||
+		before.Sync.AuthProfile == nil || before.Sync.AuthProfile.ID != fixture.target.ID ||
+		before.Sync.LiveProfile == nil || before.Sync.LiveProfile.ID != fixture.target.ID {
+		t.Fatalf("before sync=%#v", before.Sync)
+	}
+
+	result, err := fixture.agent.reconcileExternallyProjectedCodexAccount(context.Background(), before.Store.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.Current.ID != fixture.target.ID || fixture.stopCalls != 0 || fixture.startCalls != 0 {
+		t.Fatalf("result=%#v stop=%d start=%d", result, fixture.stopCalls, fixture.startCalls)
+	}
+	current, _, err := fixture.store.Current()
+	if err != nil || current == nil || current.ID != fixture.target.ID {
+		t.Fatalf("current=%#v error=%v", current, err)
+	}
+	metadata, err := fixture.agent.readCodexHostMetadata(fixture.store.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.ActiveProfileID != string(fixture.target.ID) ||
+		metadata.AccountFingerprint != fixture.target.AccountFingerprint {
+		t.Fatalf("metadata=%#v", metadata)
+	}
+	after, err := fixture.agent.CurrentCodexAccount(context.Background(), false)
+	if err != nil || after.Sync.State != CodexAccountSyncSynced {
+		t.Fatalf("after store=%#v host=%#v sync=%#v error=%v", after.Store, after.Host, after.Sync, err)
+	}
+}
+
+func TestUseCodexAccountReconcilesCodexAppSelectedAccount(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	fixture.runtimeMail = "new@example.com"
+	before, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := fixture.agent.UseCodexAccount(context.Background(), fixture.target.Label, before.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.Current.ID != fixture.target.ID ||
+		fixture.stopCalls != 0 || fixture.startCalls != 0 {
+		t.Fatalf("result=%#v stop=%d start=%d", result, fixture.stopCalls, fixture.startCalls)
+	}
+	current, _, err := fixture.store.Current()
+	if err != nil || current == nil || current.ID != fixture.target.ID {
+		t.Fatalf("current=%#v error=%v", current, err)
+	}
+}
+
+func TestExternalCodexAccountProjectionRestartsStaleHostBeforeTurn(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := fixture.agent.ensureCodexAccountForTurn(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.stopCalls != 1 || fixture.startCalls != 1 || fixture.runtimeMail != "new@example.com" {
+		t.Fatalf("stop=%d start=%d runtime=%q", fixture.stopCalls, fixture.startCalls, fixture.runtimeMail)
+	}
+	current, _, err := fixture.store.Current()
+	if err != nil || current == nil || current.ID != fixture.target.ID {
+		t.Fatalf("current=%#v error=%v", current, err)
+	}
+	fixture.agent.mu.Lock()
+	resume := fixture.agent.resumeOnFirstUse["conversation-1"]
+	fixture.agent.mu.Unlock()
+	if !resume {
+		t.Fatal("restarted threads were not marked for resume")
+	}
+}
+
+func TestExternalCodexAccountProjectionRestartsWhenOldTokenCannotBeRead(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	fixture.accountReadHook = func() (json.RawMessage, error) {
+		if fixture.startCalls == 0 {
+			return nil, errors.New("old access token expired")
+		}
+		return json.RawMessage(`{"account":{"type":"chatgpt","email":"new@example.com","planType":"plus"},"requiresOpenaiAuth":false}`), nil
+	}
+
+	status, err := fixture.agent.CurrentCodexAccount(context.Background(), false)
+	if err != nil || status.Sync.State != CodexAccountSyncPending {
+		t.Fatalf("status=%#v error=%v", status.Sync, err)
+	}
+	if err := fixture.agent.ensureCodexAccountForTurn(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.stopCalls != 1 || fixture.startCalls != 1 {
+		t.Fatalf("stop=%d start=%d", fixture.stopCalls, fixture.startCalls)
+	}
+	current, _, err := fixture.store.Current()
+	if err != nil || current == nil || current.ID != fixture.target.ID {
+		t.Fatalf("current=%#v error=%v", current, err)
+	}
+}
+
+func TestExternalCodexAccountProjectionDefersWhileTurnIsActive(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	permit, err := fixture.agent.ensureCodexAppServerGate().acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer permit.release()
+
+	err = fixture.agent.ensureCodexAccountForTurn(context.Background())
+	if codexauth.ErrorCode(err) != codexauth.CodeBusy {
+		t.Fatalf("error=%v", err)
+	}
+	if fixture.stopCalls != 0 || fixture.startCalls != 0 {
+		t.Fatalf("busy sync touched host: stop=%d start=%d", fixture.stopCalls, fixture.startCalls)
+	}
+	current, _, currentErr := fixture.store.Current()
+	if currentErr != nil || current == nil || current.ID != fixture.oldProfile.ID {
+		t.Fatalf("busy sync changed current=%#v error=%v", current, currentErr)
+	}
+	auth, authErr := codexauth.ReadAuthFile(fixture.store.AuthPath())
+	if authErr != nil || !auth.MatchesEmail("new@example.com") {
+		t.Fatalf("busy sync changed external auth: %v", authErr)
+	}
+}
+
+func TestExternalCodexAccountProjectionRejectsUnsavedAccount(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	unknown := accountTestAuth(t, "unknown@example.com", "unknown-account")
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), unknown); err != nil {
+		t.Fatal(err)
+	}
+
+	err := fixture.agent.ensureCodexAccountForTurn(context.Background())
+	if codexauth.ErrorCode(err) != codexauth.CodeTargetMismatch {
+		t.Fatalf("error=%v", err)
+	}
+	if fixture.stopCalls != 0 || fixture.startCalls != 0 {
+		t.Fatalf("unsaved sync touched host: stop=%d start=%d", fixture.stopCalls, fixture.startCalls)
+	}
+}
+
+func TestCodexAccountTurnGateRejectsUnmanagedHostWhenProfilesExist(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+
+	err := fixture.agent.ensureCodexAccountForTurn(context.Background())
+	if codexauth.ErrorCode(err) != codexauth.CodeUnmanagedHost {
+		t.Fatalf("error=%v", err)
+	}
+	if fixture.stopCalls != 0 || fixture.startCalls != 0 {
+		t.Fatalf("unmanaged gate touched host: stop=%d start=%d", fixture.stopCalls, fixture.startCalls)
+	}
+}
+
+func TestExternalCodexAccountProjectionRollsBackFailedTargetStart(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	fixture.startHook = func(f *accountSwitchFixture) error {
+		if f.startCalls == 1 {
+			return errors.New("target start failed")
+		}
+		return nil
+	}
+
+	err := fixture.agent.ensureCodexAccountForTurn(context.Background())
+	if codexauth.ErrorCode(err) != codexauth.CodeRuntimeUnavailable {
+		t.Fatalf("error=%v", err)
+	}
+	if fixture.stopCalls != 1 || fixture.startCalls != 2 || fixture.runtimeMail != "old@example.com" {
+		t.Fatalf("stop=%d start=%d runtime=%q", fixture.stopCalls, fixture.startCalls, fixture.runtimeMail)
+	}
+	current, _, currentErr := fixture.store.Current()
+	if currentErr != nil || current == nil || current.ID != fixture.oldProfile.ID {
+		t.Fatalf("current=%#v error=%v", current, currentErr)
+	}
+	auth, authErr := codexauth.ReadAuthFile(fixture.store.AuthPath())
+	if authErr != nil || !auth.MatchesEmail("old@example.com") {
+		t.Fatalf("rollback auth error=%v", authErr)
+	}
+	if fixture.agent.ensureCodexAppServerGate().stateSnapshot() != codexAppServerRunning {
+		t.Fatalf("gate=%s", fixture.agent.ensureCodexAppServerGate().stateSnapshot())
+	}
+}
+
+func TestExternalCodexAccountRollbackRestoresProfileFromManagedHost(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.store.WithTransaction(context.Background(), func(tx *codexauth.Transaction) error {
+		return tx.SetActive(fixture.target.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.startHook = func(f *accountSwitchFixture) error {
+		if f.startCalls == 1 {
+			return errors.New("target start failed")
+		}
+		return nil
+	}
+
+	err := fixture.agent.ensureCodexAccountForTurn(context.Background())
+	if codexauth.ErrorCode(err) != codexauth.CodeRuntimeUnavailable {
+		t.Fatalf("error=%v", err)
+	}
+	current, _, currentErr := fixture.store.Current()
+	if currentErr != nil || current == nil || current.ID != fixture.oldProfile.ID {
+		t.Fatalf("current=%#v error=%v", current, currentErr)
+	}
+}
+
+func TestDoctorCodexAccountsReportsExternalAccountDrift(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := fixture.agent.CurrentCodexAccount(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Sync.State != CodexAccountSyncPending ||
+		status.Sync.AuthProfile == nil || status.Sync.AuthProfile.ID != fixture.target.ID ||
+		status.Sync.LiveProfile == nil || status.Sync.LiveProfile.ID != fixture.oldProfile.ID {
+		t.Fatalf("sync=%#v", status.Sync)
+	}
+
+	result := fixture.agent.DoctorCodexAccounts(context.Background())
+	if result.OK || !strings.Contains(result.Message, "自动收敛") {
+		t.Fatalf("DoctorCodexAccounts()=%#v", result)
+	}
+	if fixture.stopCalls != 0 || fixture.startCalls != 0 {
+		t.Fatalf("doctor mutated host: stop=%d start=%d", fixture.stopCalls, fixture.startCalls)
+	}
+	current, _, err := fixture.store.Current()
+	if err != nil || current == nil || current.ID != fixture.oldProfile.ID {
+		t.Fatalf("doctor mutated current=%#v error=%v", current, err)
 	}
 }
 

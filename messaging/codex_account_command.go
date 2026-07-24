@@ -254,9 +254,10 @@ func renderCodexAccountList(status agent.CodexAccountStatus) string {
 	if status.Store.PendingSecretDeletes > 0 {
 		lines = append(lines, fmt.Sprintf("安全提醒: %d 个旧凭据等待清理，请在本机运行 account doctor", status.Store.PendingSecretDeletes))
 	}
+	currentID := codexEffectiveAccountProfileID(status)
 	for _, profile := range status.Store.Profiles {
 		marker := "- "
-		if status.Store.Current != nil && profile.ID == status.Store.Current.ID {
+		if currentID != "" && profile.ID == currentID {
 			marker = "- 当前: "
 		}
 		lines = append(lines, marker+profile.Label+formatMaskedEmailSuffix(profile.EmailMasked)+" ["+string(profile.SecretBackend)+"]")
@@ -266,28 +267,56 @@ func renderCodexAccountList(status agent.CodexAccountStatus) string {
 }
 
 func renderCodexAccountCurrent(status agent.CodexAccountStatus) string {
-	if status.Store.Current == nil {
-		return "当前 Codex 账号: 未保存 profile"
+	return "当前 Codex 账号: " + compactCodexAccountIdentity(status)
+}
+
+func compactCodexAccountIdentity(status agent.CodexAccountStatus) string {
+	current := status.Store.Current
+	auth := status.Sync.AuthProfile
+	switch status.Sync.State {
+	case agent.CodexAccountSyncPending:
+		if auth == nil {
+			return "等待自动同步"
+		}
+		if current == nil || current.ID == auth.ID {
+			return auth.Label + "（待自动同步）"
+		}
+		return current.Label + " → " + auth.Label + "（待自动同步）"
+	case agent.CodexAccountSyncUnsaved:
+		return "本地账号未保存"
+	case agent.CodexAccountSyncRuntimeMismatch:
+		if auth != nil {
+			return auth.Label + "（运行账号不一致）"
+		}
+		return "运行账号不一致"
+	case agent.CodexAccountSyncRuntimeUnavailable:
+		if auth != nil {
+			return auth.Label + "（运行账号未确认）"
+		}
+		return "运行账号未确认"
+	case agent.CodexAccountSyncSynced:
+		if auth != nil {
+			return auth.Label + formatMaskedEmailSuffix(auth.EmailMasked)
+		}
 	}
-	return "当前 Codex 账号: " + status.Store.Current.Label + formatMaskedEmailSuffix(status.Store.Current.EmailMasked)
+	if current == nil {
+		return "未保存 profile"
+	}
+	return current.Label + formatMaskedEmailSuffix(current.EmailMasked)
 }
 
 func renderCodexAccountChoicePrompt(status agent.CodexAccountStatus) string {
-	current := "未保存 profile"
-	if status.Store.Current != nil {
-		current = status.Store.Current.Label + formatMaskedEmailSuffix(status.Store.Current.EmailMasked)
-	}
 	return wechatCommandText(
 		"Codex 账号",
-		"当前账号: "+current,
+		"当前账号: "+compactCodexAccountIdentity(status),
 		"可切换账号显示为按钮；选择后还需要再次确认。",
 	)
 }
 
 func renderCodexAccountStatus(status agent.CodexAccountStatus) string {
 	lines := []string{renderCodexAccountCurrent(status)}
-	if status.Store.Current != nil {
-		lines = append(lines, "凭据后端: "+string(status.Store.Current.SecretBackend))
+	if current := codexEffectiveAccountProfile(status); current != nil {
+		lines = append(lines, "凭据后端: "+string(current.SecretBackend))
 	}
 	if status.Host.Managed && status.Host.Running {
 		lines = append(lines, fmt.Sprintf("共享 Host: 受管、运行中（generation %d）", status.Host.Generation))
@@ -296,6 +325,11 @@ func renderCodexAccountStatus(status agent.CodexAccountStatus) string {
 	}
 	if status.Store.LastSwitch != nil {
 		lines = append(lines, "最近切换: "+codexAccountSwitchStatusLabel(status.Store.LastSwitch.Status))
+	}
+	if status.Sync.State != "" &&
+		status.Sync.State != agent.CodexAccountSyncUnmanaged &&
+		status.Sync.State != agent.CodexAccountSyncSynced {
+		lines = append(lines, "账号同步: "+status.Sync.Message)
 	}
 	if status.Store.PendingSecretDeletes > 0 {
 		lines = append(lines, fmt.Sprintf("旧凭据待清理: %d 个（请在本机运行 account doctor）", status.Store.PendingSecretDeletes))
@@ -308,8 +342,9 @@ func renderCodexAccountStatus(status agent.CodexAccountStatus) string {
 
 func codexAccountSwitchChoices(status agent.CodexAccountStatus) []platform.Choice {
 	choices := make([]platform.Choice, 0, len(status.Store.Profiles))
+	currentID := codexEffectiveAccountProfileID(status)
 	for _, profile := range status.Store.Profiles {
-		if status.Store.Current != nil && status.Store.Current.ID == profile.ID {
+		if currentID != "" && currentID == profile.ID {
 			continue
 		}
 		choices = append(choices, platform.Choice{
@@ -318,6 +353,21 @@ func codexAccountSwitchChoices(status agent.CodexAccountStatus) []platform.Choic
 		})
 	}
 	return choices
+}
+
+func codexEffectiveAccountProfileID(status agent.CodexAccountStatus) agent.CodexAccountProfileID {
+	if current := codexEffectiveAccountProfile(status); current != nil {
+		return current.ID
+	}
+	return ""
+}
+
+func codexEffectiveAccountProfile(status agent.CodexAccountStatus) *agent.CodexAccountProfile {
+	if status.Sync.AuthProfile != nil &&
+		(status.Sync.State == agent.CodexAccountSyncPending || status.Sync.State == agent.CodexAccountSyncSynced) {
+		return status.Sync.AuthProfile
+	}
+	return status.Store.Current
 }
 
 func findCodexAccountProfile(profiles []agent.CodexAccountProfile, id string) (agent.CodexAccountProfile, bool) {
@@ -367,6 +417,12 @@ func codexAccountSwitchStatusLabel(status string) string {
 		return "目标与当前账号相同"
 	case "rolled_back":
 		return "失败，已恢复旧账号"
+	case "external_sync_success":
+		return "已自动同步本地账号"
+	case "external_sync_rolled_back":
+		return "自动同步失败，已恢复旧账号"
+	case "external_syncing":
+		return "正在自动同步"
 	case "rollback_failed":
 		return "回滚失败，已禁止写入"
 	default:

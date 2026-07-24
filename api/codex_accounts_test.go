@@ -71,6 +71,9 @@ func TestCodexAccountAPIResponseIsRedacted(t *testing.T) {
 	}
 	controller := &fakeCodexAccountController{status: agent.CodexAccountStatus{
 		Store: agent.CodexAccountStoreStatus{Revision: 3, Current: &profile, Profiles: []agent.CodexAccountProfile{profile}},
+		Sync: agent.CodexAccountSyncStatus{
+			State: agent.CodexAccountSyncSynced, AuthProfile: &profile, LiveProfile: &profile,
+		},
 	}}
 	server := NewServer(nil, "127.0.0.1:18011", WithToken("secret-token"), WithCodexAccountController(controller))
 	req := httptest.NewRequest(http.MethodGet, "/api/codex/accounts", nil)

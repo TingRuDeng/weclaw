@@ -42,7 +42,7 @@ func IsUnsafeSwitchRecord(record *SwitchRecord) bool {
 		return false
 	}
 	switch strings.TrimSpace(record.Status) {
-	case "switching", "rollback_failed":
+	case "switching", "external_syncing", "rollback_failed":
 		return true
 	default:
 		return false

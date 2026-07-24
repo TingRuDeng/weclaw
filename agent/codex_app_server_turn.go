@@ -66,6 +66,9 @@ func (a *ACPAgent) chatCodexAppServerControlledTurn(opts codexAppServerTurnOptio
 		return "", err
 	}
 	defer permit.release()
+	if err := a.validateCodexAccountForWrite(opts.ctx); err != nil {
+		return "", err
+	}
 	threadID, err := a.requireThread(opts.ctx, opts.conversationID)
 	if err != nil {
 		return "", fmt.Errorf("thread error: %w", err)

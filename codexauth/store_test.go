@@ -229,6 +229,16 @@ func TestStoreDoctorReportsUnsafeSwitchJournal(t *testing.T) {
 	}
 }
 
+func TestExternalAccountSyncJournalIsUnsafeAcrossRestart(t *testing.T) {
+	for _, status := range []string{"external_syncing", "rollback_failed"} {
+		t.Run(status, func(t *testing.T) {
+			if !IsUnsafeSwitchRecord(&SwitchRecord{Status: status}) {
+				t.Fatalf("status %q should fail closed", status)
+			}
+		})
+	}
+}
+
 func TestStoreFileFallbackRequiresExplicitConsent(t *testing.T) {
 	keyring := newFakeKeyring()
 	keyring.setErr = errors.New("keyring unavailable")

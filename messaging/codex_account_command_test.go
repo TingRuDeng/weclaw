@@ -101,6 +101,50 @@ func newMessagingAccountFixture(t *testing.T, profileCount int) (*Handler, *fake
 	return h, accountAgent, msg
 }
 
+func TestCompactCodexAccountIdentityShowsExternalSwitchWithoutMisreportingCurrent(t *testing.T) {
+	oldProfile := agent.CodexAccountProfile{ID: "old", Label: "gpt-5x-pro"}
+	target := agent.CodexAccountProfile{ID: "target", Label: "gpt-20x-pro"}
+	status := agent.CodexAccountStatus{
+		Store: agent.CodexAccountStoreStatus{Current: &oldProfile},
+		Sync: agent.CodexAccountSyncStatus{
+			State: agent.CodexAccountSyncPending, AuthProfile: &target,
+			Message: "检测到本地 Codex 已切换账号，下一次任务将在空闲时自动同步",
+		},
+	}
+	if got := compactCodexAccountIdentity(status); got != "gpt-5x-pro → gpt-20x-pro（待自动同步）" {
+		t.Fatalf("identity=%q", got)
+	}
+	if got := renderCodexStatusAccountLine(codexSessionCommandRuntime{
+		ctx: context.Background(),
+		agent: &fakeCodexAccountAgent{
+			fakeCodexThreadAgent: &fakeCodexThreadAgent{},
+			status:               status,
+		},
+	}); got != "账号: gpt-5x-pro → gpt-20x-pro（待自动同步）" {
+		t.Fatalf("status line=%q", got)
+	}
+}
+
+func TestCodexAccountChoicesTreatExternallySelectedProfileAsCurrent(t *testing.T) {
+	oldProfile := agent.CodexAccountProfile{ID: "old", Label: "旧账号"}
+	target := agent.CodexAccountProfile{ID: "target", Label: "本地当前账号"}
+	status := agent.CodexAccountStatus{
+		Store: agent.CodexAccountStoreStatus{
+			Current: &oldProfile, Profiles: []agent.CodexAccountProfile{oldProfile, target},
+		},
+		Sync: agent.CodexAccountSyncStatus{State: agent.CodexAccountSyncPending, AuthProfile: &target},
+	}
+	choices := codexAccountSwitchChoices(status)
+	if len(choices) != 1 || !strings.Contains(choices[0].Label, "旧账号") {
+		t.Fatalf("choices=%#v", choices)
+	}
+	list := renderCodexAccountList(status)
+	if !strings.Contains(list, "- 当前: 本地当前账号") ||
+		strings.Contains(list, "- 当前: 旧账号") {
+		t.Fatalf("list=%q", list)
+	}
+}
+
 func TestFeishuCodexAccountListUsesSnapshotPagination(t *testing.T) {
 	h, _, msg := newMessagingAccountFixture(t, 10)
 	msg.Text, msg.MessageID = "/cx account", "account-list"

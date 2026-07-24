@@ -36,9 +36,30 @@ type CodexAccountStoreStatus struct {
 	ManagedHost          bool                    `json:"managed_host"`
 }
 
+type CodexAccountSyncState string
+
+const (
+	CodexAccountSyncUnmanaged          CodexAccountSyncState = "unmanaged"
+	CodexAccountSyncSynced             CodexAccountSyncState = "synced"
+	CodexAccountSyncPending            CodexAccountSyncState = "pending"
+	CodexAccountSyncUnsaved            CodexAccountSyncState = "unsaved"
+	CodexAccountSyncRuntimeMismatch    CodexAccountSyncState = "runtime_mismatch"
+	CodexAccountSyncRuntimeUnavailable CodexAccountSyncState = "runtime_unavailable"
+)
+
+// CodexAccountSyncStatus 只暴露可安全展示的 profile 与一致性结论，不返回
+// auth.json、Token 或账号原始邮箱。
+type CodexAccountSyncStatus struct {
+	State       CodexAccountSyncState `json:"state"`
+	AuthProfile *CodexAccountProfile  `json:"auth_profile,omitempty"`
+	LiveProfile *CodexAccountProfile  `json:"live_profile,omitempty"`
+	Message     string                `json:"message,omitempty"`
+}
+
 type CodexAccountStatus struct {
 	Store CodexAccountStoreStatus `json:"store"`
 	Host  CodexHostStatus         `json:"host"`
+	Sync  CodexAccountSyncStatus  `json:"sync"`
 	Quota *CodexQuota             `json:"quota,omitempty"`
 }
 
@@ -97,25 +118,16 @@ func (a *ACPAgent) codexAccountStore() (*codexauth.Store, error) {
 }
 
 func (a *ACPAgent) ListCodexAccounts(ctx context.Context) (CodexAccountStatus, error) {
-	store, err := a.codexAccountStore()
-	if err != nil {
-		return CodexAccountStatus{}, err
-	}
-	status, err := store.Status()
-	if err != nil {
-		return CodexAccountStatus{}, err
-	}
-	host := a.InspectCodexHost(ctx)
-	status.ManagedHost = host.Managed && host.Running
-	return CodexAccountStatus{Store: publicCodexAccountStatus(status), Host: host}, nil
+	return a.inspectCodexAccountStatus(ctx, false)
 }
 
 func (a *ACPAgent) CurrentCodexAccount(ctx context.Context, withQuota bool) (CodexAccountStatus, error) {
-	status, err := a.ListCodexAccounts(ctx)
+	status, err := a.inspectCodexAccountStatus(ctx, true)
 	if err != nil {
 		return CodexAccountStatus{}, err
 	}
-	if !withQuota || status.Store.Current == nil || !a.isRuntimeStarted() {
+	if !withQuota || status.Sync.State != CodexAccountSyncSynced ||
+		status.Sync.LiveProfile == nil || !a.isRuntimeStarted() {
 		return status, nil
 	}
 	quota, err := a.ReadCodexQuota(ctx)
@@ -243,11 +255,36 @@ func (a *ACPAgent) DoctorCodexAccounts(ctx context.Context) codexauth.DoctorResu
 	if !host.Managed || !host.Running {
 		result.OK = false
 		result.Message = "Codex 账号存储可读，但 shared app-server 不是可切换的受管 Host: " + host.Reason
+		return result
+	}
+	status, statusErr := a.inspectCodexAccountStatus(ctx, true)
+	if statusErr != nil {
+		result.OK = false
+		result.Message = "Codex 账号一致性检查失败: " + statusErr.Error()
+		return result
+	}
+	switch status.Sync.State {
+	case CodexAccountSyncUnmanaged, CodexAccountSyncSynced:
+	case CodexAccountSyncPending:
+		result.OK = false
+		result.Message = "本地 Codex 账号与 WeClaw 记录尚未同步；下一次任务会在全局空闲时自动收敛"
+	case CodexAccountSyncUnsaved:
+		result.OK = false
+		result.Message = "本地 Codex 当前账号尚未保存到 WeClaw"
+	case CodexAccountSyncRuntimeMismatch:
+		result.OK = false
+		result.Message = "Codex shared Host、auth.json 与活动 profile 不一致，当前禁止写入"
+	default:
+		result.OK = false
+		result.Message = "无法确认 Codex shared Host 当前账号"
 	}
 	return result
 }
 
 func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expectedRevision uint64) (result CodexAccountSwitchResult, err error) {
+	if a.authProjectionMatchesReference(reference) {
+		return a.reconcileExternallyProjectedCodexAccount(ctx, expectedRevision)
+	}
 	gate := a.ensureCodexAppServerGate()
 	if gateErr := gate.beginExclusive(); gateErr != nil {
 		return result, mapCodexAccountBusy(gateErr)

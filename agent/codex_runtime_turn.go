@@ -17,6 +17,14 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 	var binding CodexThreadBinding
 	var err error
 	if a.desktopProbe == nil {
+		if a.usesCodexSharedHost() {
+			if err := a.ensureStarted(ctx); err != nil {
+				return "", err
+			}
+		}
+		if err := a.ensureCodexAccountForTurn(ctx); err != nil {
+			return "", err
+		}
 		// Every frontend conversation has its own app-server mapping. Rebind on
 		// each admitted turn so a binding created while another client held the
 		// thread lease cannot accidentally reuse a stale conversation mapping.

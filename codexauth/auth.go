@@ -116,7 +116,17 @@ func (s *Snapshot) AccountFingerprint() string { return s.accountFingerprint }
 func (s *Snapshot) EmailMasked() string        { return s.emailMasked }
 func (s *Snapshot) EmailFingerprint() string   { return s.emailFingerprint }
 func (s *Snapshot) MatchesEmail(email string) bool {
-	return s != nil && s.emailFingerprint != "" && fingerprint(strings.ToLower(strings.TrimSpace(email))) == s.emailFingerprint
+	return s != nil && s.emailFingerprint != "" && EmailFingerprint(email) == s.emailFingerprint
+}
+
+// EmailFingerprint 返回与 profile 索引相同的脱敏邮箱指纹，供账户运行态
+// 一致性校验使用；调用方不得据此输出原始邮箱。
+func EmailFingerprint(email string) string {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" {
+		return ""
+	}
+	return fingerprint(normalized)
 }
 
 func emailFromIDToken(token string) (string, error) {

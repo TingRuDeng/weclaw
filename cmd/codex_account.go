@@ -481,22 +481,26 @@ func printCodexAccountList(status agent.CodexAccountStatus) {
 	}
 	fmt.Printf("Codex 账号（shared Host，全局生效，revision=%d）：\n", status.Store.Revision)
 	printCodexAccountCleanupWarning(status)
+	current := effectiveCodexAccountProfile(status)
 	for _, profile := range status.Store.Profiles {
 		marker := " "
-		if status.Store.Current != nil && status.Store.Current.ID == profile.ID {
+		if current != nil && current.ID == profile.ID {
 			marker = "*"
 		}
 		fmt.Printf("%s %s  %s  %s  id=%s\n", marker, profile.Label, profile.EmailMasked, profile.SecretBackend, profile.ID)
 	}
+	printCodexAccountSyncNotice(status)
 }
 
 func printCurrentCodexAccount(status agent.CodexAccountStatus) {
-	if status.Store.Current == nil {
+	current := effectiveCodexAccountProfile(status)
+	if current == nil {
 		fmt.Println("当前 Codex 账号尚未纳入 WeClaw 管理。")
+		printCodexAccountSyncNotice(status)
 		return
 	}
-	current := status.Store.Current
 	fmt.Printf("当前 Codex 账号：%s（%s，%s）\n", current.Label, current.EmailMasked, current.SecretBackend)
+	printCodexAccountSyncNotice(status)
 	printCodexAccountCleanupWarning(status)
 	if status.Quota != nil {
 		fmt.Printf("额度桶：%d\n", len(status.Quota.Limits))
@@ -505,6 +509,27 @@ func printCurrentCodexAccount(status agent.CodexAccountStatus) {
 		fmt.Printf("shared Host：受管，pid=%d，generation=%d\n", status.Host.PID, status.Host.Generation)
 	} else if status.Host.Reason != "" {
 		fmt.Printf("shared Host：不可切换（%s）\n", status.Host.Reason)
+	}
+}
+
+func effectiveCodexAccountProfile(status agent.CodexAccountStatus) *agent.CodexAccountProfile {
+	if status.Sync.AuthProfile != nil &&
+		(status.Sync.State == agent.CodexAccountSyncPending || status.Sync.State == agent.CodexAccountSyncSynced) {
+		return status.Sync.AuthProfile
+	}
+	return status.Store.Current
+}
+
+func printCodexAccountSyncNotice(status agent.CodexAccountStatus) {
+	switch status.Sync.State {
+	case agent.CodexAccountSyncPending:
+		fmt.Println("账号同步：检测到本地 Codex 已切号；下一次任务将在 shared Host 空闲时自动同步。")
+	case agent.CodexAccountSyncUnsaved:
+		fmt.Println("账号同步：本地 Codex 当前账号尚未保存到 WeClaw。")
+	case agent.CodexAccountSyncRuntimeMismatch:
+		fmt.Println("账号同步：shared Host 与本地 Codex 认证不一致，当前已禁止写入。")
+	case agent.CodexAccountSyncRuntimeUnavailable:
+		fmt.Println("账号同步：无法确认 shared Host 当前账号。")
 	}
 }
 
