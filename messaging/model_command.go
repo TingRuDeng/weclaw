@@ -11,6 +11,7 @@ import (
 const (
 	modelSettingModel                    = "model"
 	modelSettingReasoning                = "reasoning"
+	modelSettingFast                     = "fast"
 	modelSettingAgentMetadataKey         = "model_setting_agent"
 	modelSettingThreadMetadataKey        = "model_setting_codex_thread"
 	modelSettingClaudeSessionMetadataKey = "model_setting_claude_session"
@@ -34,7 +35,8 @@ type modelSettingCardRequest struct {
 
 func isModelSettingCommand(command string) bool {
 	return command == "/model" || strings.HasPrefix(command, "/model ") ||
-		command == "/reasoning" || strings.HasPrefix(command, "/reasoning ")
+		command == "/reasoning" || strings.HasPrefix(command, "/reasoning ") ||
+		command == "/fast" || strings.HasPrefix(command, "/fast ")
 }
 
 // handleModelSettingPlatformCommand 统一模型设置文本命令和飞书卡片入口。
@@ -45,8 +47,11 @@ func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req pla
 		return true
 	}
 	setting, prefix := modelSettingModel, "/model"
-	if strings.HasPrefix(req.Trimmed, "/reasoning") {
+	switch {
+	case strings.HasPrefix(req.Trimmed, "/reasoning"):
 		setting, prefix = modelSettingReasoning, "/reasoning"
+	case strings.HasPrefix(req.Trimmed, "/fast"):
+		setting, prefix = modelSettingFast, "/fast"
 	}
 	arg := strings.TrimSpace(strings.TrimPrefix(req.Trimmed, prefix))
 	route := modelAgentRoute{routeUserID: req.RouteUserID, platform: msg.Platform, accountID: msg.AccountID}
@@ -64,9 +69,12 @@ func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req pla
 		return true
 	}
 	var text string
-	if setting == modelSettingReasoning {
+	switch setting {
+	case modelSettingReasoning:
 		text = h.handleReasoningCommandForRoute(ctx, route, arg)
-	} else {
+	case modelSettingFast:
+		text = h.handleFastCommandForRoute(ctx, route, arg)
+	default:
 		text = h.handleModelCommandForRoute(ctx, route, arg)
 	}
 	sendPlatformText(ctx, req.Reply, msg.UserID, text)
@@ -74,7 +82,7 @@ func (h *Handler) handleModelSettingPlatformCommand(ctx context.Context, req pla
 }
 
 func expiredModelSettingCardText() string {
-	return "该模型设置卡片已失效，请重新发送 /model 或 /reasoning。"
+	return "该会话设置卡片已失效，请重新发送 /model、/reasoning 或 /fast。"
 }
 
 // modelSettingCardAgentMatches 拒绝缺少目标或已切换 Agent 的旧模型卡片。

@@ -22,6 +22,7 @@ type ACPAgent struct {
 	args             []string
 	model            string
 	effort           string
+	serviceTier      string
 	approvalPolicy   string
 	approvalReviewer string
 	sandboxMode      string

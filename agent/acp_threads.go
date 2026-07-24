@@ -127,8 +127,10 @@ func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (str
 		return "", err
 	}
 	a.cacheCodexThreadConfigFromLifecycleResult(result, threadID, CodexThreadConfig{
-		Model:  stringMapValue(params, "model"),
-		Effort: stringMapValue(params, "effort"),
+		Model:            stringMapValue(params, "model"),
+		Effort:           stringMapValue(params, "effort"),
+		ServiceTier:      stringMapValue(params, "serviceTier"),
+		ServiceTierKnown: mapHasKey(params, "serviceTier"),
 	}, sequence)
 	a.mu.Lock()
 	a.threads[conversationID] = threadID
@@ -160,6 +162,13 @@ func (a *ACPAgent) codexThreadStartParams(ctx context.Context, conversationID st
 	}
 	if config.effort != "" {
 		params["effort"] = config.effort
+	}
+	if config.serviceTier != "" {
+		if config.serviceTier == CodexServiceTierStandard {
+			params["serviceTier"] = nil
+		} else {
+			params["serviceTier"] = config.serviceTier
+		}
 	}
 	return params
 }
@@ -219,4 +228,9 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 func stringMapValue(values map[string]interface{}, key string) string {
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func mapHasKey(values map[string]interface{}, key string) bool {
+	_, ok := values[key]
+	return ok
 }

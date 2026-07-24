@@ -110,6 +110,7 @@ func TestACPAgentCodexThreadStartIncludesEffort(t *testing.T) {
 		Model:   "gpt-5.4",
 		Effort:  "high",
 	})
+	a.SetCodexServiceTier("fast")
 
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		if method != "thread/start" {
@@ -119,18 +120,45 @@ func TestACPAgentCodexThreadStartIncludesEffort(t *testing.T) {
 		if !ok {
 			return nil, fmt.Errorf("unexpected thread/start params type %T", params)
 		}
-		if p["model"] != "gpt-5.4" || p["effort"] != "high" {
-			return nil, fmt.Errorf("model/effort params=%#v", p)
+		if p["model"] != "gpt-5.4" || p["effort"] != "high" || p["serviceTier"] != CodexServiceTierFast {
+			return nil, fmt.Errorf("model/effort/serviceTier params=%#v", p)
 		}
-		return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		return json.RawMessage(`{"thread":{"id":"thread-1"},"serviceTier":"priority"}`), nil
 	}
 
 	if _, err := a.createThread(ctx, "user-1"); err != nil {
 		t.Fatalf("createThread error: %v", err)
 	}
 	config, err := a.CodexThreadConfig(ctx, "user-1", "thread-1")
-	if err != nil || config.Model != "gpt-5.4" || config.Effort != "high" {
+	if err != nil || config.Model != "gpt-5.4" || config.Effort != "high" ||
+		!config.ServiceTierKnown || config.ServiceTier != CodexServiceTierFast {
 		t.Fatalf("CodexThreadConfig=(%#v,%v), want thread/start defaults", config, err)
+	}
+}
+
+func TestACPAgentCodexThreadStartExplicitStandardUsesNull(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	a.SetCodexServiceTier(CodexServiceTierStandard)
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/start" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p := params.(map[string]interface{})
+		value, exists := p["serviceTier"]
+		if !exists || value != nil {
+			return nil, fmt.Errorf("serviceTier=%#v exists=%v, want explicit null", value, exists)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-standard"},"serviceTier":null}`), nil
+	}
+
+	if _, err := a.createThread(context.Background(), "conversation-standard"); err != nil {
+		t.Fatalf("createThread error: %v", err)
+	}
+	config, err := a.CodexThreadConfig(context.Background(), "", "thread-standard")
+	if err != nil || !config.ServiceTierKnown || config.ServiceTier != "" {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), want explicit standard", config, err)
 	}
 }
 
@@ -188,24 +216,57 @@ func TestACPAgentUpdatesCurrentCodexThreadConfig(t *testing.T) {
 		if !ok {
 			return nil, fmt.Errorf("unexpected params type %T", params)
 		}
-		if p["threadId"] != "thread-current" || p["model"] != "gpt-5.6-sol" || p["effort"] != "max" {
+		if p["threadId"] != "thread-current" || p["model"] != "gpt-5.6-sol" ||
+			p["effort"] != "max" || p["serviceTier"] != CodexServiceTierFast {
 			return nil, fmt.Errorf("thread/settings/update params=%#v", p)
 		}
 		return json.RawMessage(`{}`), nil
 	}
 
+	serviceTier := CodexServiceTierFast
 	err := a.SetCodexThreadConfig(context.Background(), CodexThreadConfigUpdate{
 		ConversationID: "conversation-1",
 		ThreadID:       "thread-current",
 		Model:          "gpt-5.6-sol",
 		Effort:         "max",
+		ServiceTier:    &serviceTier,
 	})
 	if err != nil {
 		t.Fatalf("SetCodexThreadConfig error: %v", err)
 	}
 	config, err := a.CodexThreadConfig(context.Background(), "conversation-1", "thread-current")
-	if err != nil || config.Model != "gpt-5.6-sol" || config.Effort != "max" {
+	if err != nil || config.Model != "gpt-5.6-sol" || config.Effort != "max" ||
+		!config.ServiceTierKnown || config.ServiceTier != CodexServiceTierFast {
 		t.Fatalf("CodexThreadConfig=(%#v,%v), want updated settings", config, err)
+	}
+}
+
+func TestACPAgentDisablesCurrentCodexFastModeWithExplicitNull(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.setCodexThreadConfigAt("thread-current", CodexThreadConfig{
+		Model: "gpt-current", ServiceTier: CodexServiceTierFast, ServiceTierKnown: true,
+	}, 1)
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "thread/settings/update" {
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+		p := params.(map[string]interface{})
+		value, exists := p["serviceTier"]
+		if !exists || value != nil {
+			return nil, fmt.Errorf("serviceTier=%#v exists=%v, want explicit null", value, exists)
+		}
+		return json.RawMessage(`{}`), nil
+	}
+
+	serviceTier := CodexServiceTierStandard
+	if err := a.SetCodexThreadConfig(context.Background(), CodexThreadConfigUpdate{
+		ThreadID: "thread-current", ServiceTier: &serviceTier,
+	}); err != nil {
+		t.Fatalf("SetCodexThreadConfig error: %v", err)
+	}
+	config, err := a.CodexThreadConfig(context.Background(), "", "thread-current")
+	if err != nil || !config.ServiceTierKnown || config.ServiceTier != CodexServiceTierStandard {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), want explicit standard", config, err)
 	}
 }
 
@@ -241,6 +302,20 @@ func TestACPAgentCodexLifecycleConfigPreservesExplicitDefaultEffort(t *testing.T
 	config, err := a.CodexThreadConfig(context.Background(), "conversation-1", "thread-current")
 	if err != nil || config.Model != "gpt-current" || config.Effort != "" {
 		t.Fatalf("CodexThreadConfig=(%#v,%v), explicit null effort must not use fallback", config, err)
+	}
+}
+
+func TestACPAgentCodexLifecycleConfigPreservesExplicitStandardServiceTier(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.cacheCodexThreadConfigFromLifecycleResult(
+		json.RawMessage(`{"model":"gpt-current","serviceTier":null}`),
+		"thread-current",
+		CodexThreadConfig{ServiceTier: CodexServiceTierFast, ServiceTierKnown: true},
+		1,
+	)
+	config, err := a.CodexThreadConfig(context.Background(), "", "thread-current")
+	if err != nil || !config.ServiceTierKnown || config.ServiceTier != "" {
+		t.Fatalf("CodexThreadConfig=(%#v,%v), explicit null must remain standard", config, err)
 	}
 }
 

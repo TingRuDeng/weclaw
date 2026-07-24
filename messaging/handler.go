@@ -74,6 +74,7 @@ type Handler struct {
 	tasks                   taskService
 	pendingApprovalsMu      sync.Mutex
 	pendingApprovals        map[string]*pendingApproval
+	resolvedApprovalCodes   map[string]time.Time
 	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
 	codexLocalSessionDir    string
 	codexBrowseMu           sync.Mutex

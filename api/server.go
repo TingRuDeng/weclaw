@@ -12,6 +12,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/codexauth"
 	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
@@ -30,6 +31,7 @@ type Server struct {
 	status   RuntimeStatusProvider
 	accounts CodexAccountController
 	traces   observability.QueryProvider
+	outbox   TerminalOutboxController
 	addr     string
 	token    string
 }
@@ -47,6 +49,12 @@ type CodexAccountController interface {
 	UseCodexAccount(context.Context, string, uint64) (agent.CodexAccountSwitchResult, error)
 	RemoveCodexAccount(context.Context, string) error
 	DoctorCodexAccounts(context.Context) codexauth.DoctorResult
+}
+
+// TerminalOutboxController 仅暴露脱敏状态和幂等重投调度，不允许读取消息正文或路由。
+type TerminalOutboxController interface {
+	TerminalOutboxStatus(context.Context) (messaging.TerminalOutboxStatus, error)
+	RedriveTerminalOutbox(context.Context, string) (messaging.TerminalOutboxRedriveResult, error)
 }
 
 // Option 调整 API 服务运行参数，避免构造函数继续膨胀。
@@ -87,6 +95,13 @@ func WithTraceQueryProvider(provider observability.QueryProvider) Option {
 	}
 }
 
+// WithTerminalOutboxController 配置仅本机可访问的终态投递运维控制器。
+func WithTerminalOutboxController(controller TerminalOutboxController) Option {
+	return func(s *Server) {
+		s.outbox = controller
+	}
+}
+
 // NewServer creates an API server.
 func NewServer(clients []*ilink.Client, addr string, options ...Option) *Server {
 	if addr == "" {
@@ -109,6 +124,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/send", s.handleSend)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/traces", s.handleTraceQuery)
+	mux.HandleFunc("/api/terminal-outbox", s.handleTerminalOutboxStatus)
+	mux.HandleFunc("/api/terminal-outbox/redrive", s.handleTerminalOutboxRedrive)
 	mux.HandleFunc("/api/codex/accounts", s.handleCodexAccounts)
 	mux.HandleFunc("/api/codex/accounts/current", s.handleCodexAccountCurrent)
 	mux.HandleFunc("/api/codex/accounts/save", s.handleCodexAccountSave)

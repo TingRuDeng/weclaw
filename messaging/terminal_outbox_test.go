@@ -200,6 +200,139 @@ func TestTerminalOutboxPersistsAtomicallyWithPrivatePermissions(t *testing.T) {
 	}
 }
 
+func TestTerminalOutboxStatusIsBoundedAndOmitsPayloadAndRoute(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return now }
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "secret-account", ChatID: "secret-chat",
+	}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Text: "secret-terminal-payload",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.mu.Lock()
+	entry = outbox.entryLocked(entry.ID)
+	entry.Attempts = 3
+	entry.LastError = "temporary failure"
+	entry.UpdatedAt = now.Add(time.Minute)
+	entry.NextAttempt = now.Add(2 * time.Minute)
+	if err := outbox.persistLocked(); err != nil {
+		outbox.mu.Unlock()
+		t.Fatal(err)
+	}
+	outbox.mu.Unlock()
+
+	status := outbox.status()
+	if status.Pending != 1 || len(status.Entries) != 1 || status.Entries[0].Attempts != 3 {
+		t.Fatalf("status=%#v", status)
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"secret-account", "secret-chat", "secret-terminal-payload"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("status leaked %q: %s", forbidden, data)
+		}
+	}
+}
+
+func TestTerminalOutboxRedrivePersistsScheduleAndPreservesAttempts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "结果"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.mu.Lock()
+	stored := outbox.entryLocked(entry.ID)
+	stored.Attempts = 4
+	stored.NextAttempt = base.Add(time.Hour)
+	stored.UpdatedAt = base
+	if err := outbox.persistLocked(); err != nil {
+		outbox.mu.Unlock()
+		t.Fatal(err)
+	}
+	outbox.mu.Unlock()
+	redriveAt := base.Add(5 * time.Minute)
+	outbox.now = func() time.Time { return redriveAt }
+
+	result, err := outbox.redrive(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Requested != 1 || result.Status.Entries[0].Attempts != 4 {
+		t.Fatalf("result=%#v", result)
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+	if !loaded[0].NextAttempt.Equal(redriveAt) || loaded[0].Attempts != 4 {
+		t.Fatalf("entry=%#v", loaded[0])
+	}
+	if _, err := outbox.redrive("00000000-0000-4000-8000-000000000000"); !errors.Is(err, ErrTerminalOutboxNotFound) {
+		t.Fatalf("missing id error=%v", err)
+	}
+}
+
+func TestTerminalOutboxDueIDsUseRetryOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	first, _ := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "first"})
+	second, _ := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "second"})
+	outbox.mu.Lock()
+	outbox.entryLocked(first.ID).NextAttempt = base.Add(-time.Second)
+	outbox.entryLocked(second.ID).NextAttempt = base.Add(-time.Minute)
+	outbox.mu.Unlock()
+	ids := outbox.dueIDs()
+	if len(ids) != 2 || ids[0] != second.ID || ids[1] != first.ID {
+		t.Fatalf("due ids=%#v", ids)
+	}
+}
+
+func TestTerminalOutboxCancelledWorkerDoesNotMutateDueEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "result"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	outbox.run(ctx)
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+	if loaded[0].ID != entry.ID || loaded[0].Attempts != 0 || loaded[0].LastError != "" {
+		t.Fatalf("cancelled worker mutated entry: %#v", loaded[0])
+	}
+}
+
 func TestTerminalOutboxRejectsCorruptBroadAndSymlinkFiles(t *testing.T) {
 	t.Run("corrupt", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "outbox.json")

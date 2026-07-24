@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/messaging"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -18,6 +20,9 @@ func testDoctorDeps() doctorDeps {
 		feishuCredsOK:  func(string) error { return nil },
 		sudoProbe:      func(string) error { return nil },
 		claudeACPProbe: func(context.Context, string, config.AgentConfig) error { return nil },
+		terminalOutboxStatus: func() (messaging.TerminalOutboxStatus, error) {
+			return messaging.TerminalOutboxStatus{}, nil
+		},
 	}
 }
 
@@ -211,6 +216,32 @@ func TestDoctorPassesHealthyConfig(t *testing.T) {
 		if r.Status == doctorFail {
 			t.Fatalf("unexpected fail: %s — %s", r.Name, r.Detail)
 		}
+	}
+}
+
+func TestDoctorWarnsForPendingTerminalOutbox(t *testing.T) {
+	cfg := config.DefaultConfig()
+	deps := testDoctorDeps()
+	deps.terminalOutboxStatus = func() (messaging.TerminalOutboxStatus, error) {
+		return messaging.TerminalOutboxStatus{
+			Pending: 2, OldestCreatedAt: time.Now().Add(-5 * time.Minute), RecentError: "temporary failure",
+		}, nil
+	}
+	result, ok := findResult(runDoctorChecks(cfg, deps), "terminal outbox")
+	if !ok || result.Status != doctorWarn || !strings.Contains(result.Detail, "2 pending") {
+		t.Fatalf("result=%#v ok=%v", result, ok)
+	}
+}
+
+func TestDoctorFailsForUnreadableTerminalOutbox(t *testing.T) {
+	cfg := config.DefaultConfig()
+	deps := testDoctorDeps()
+	deps.terminalOutboxStatus = func() (messaging.TerminalOutboxStatus, error) {
+		return messaging.TerminalOutboxStatus{}, fmt.Errorf("corrupt")
+	}
+	result, ok := findResult(runDoctorChecks(cfg, deps), "terminal outbox")
+	if !ok || result.Status != doctorFail || !strings.Contains(result.Detail, "corrupt") {
+		t.Fatalf("result=%#v ok=%v", result, ok)
 	}
 }
 

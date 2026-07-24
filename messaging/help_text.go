@@ -19,7 +19,11 @@ func buildHelpTextForAdmin(isAdmin bool) string {
 
 /mode 查看审批模式，/mode yolo 自动同意当前操作者的 Agent 授权，/mode default 按钮确认
 
+/approve <短码>、/deny <短码> 在审批按钮不可用时提交或拒绝当前窗口审批
+
 /model、/reasoning 已绑定时修改当前会话，未绑定时修改新会话默认值
+
+/fast 切换 Codex 当前会话或新会话默认速度
 
 /ps 查看运行中的任务
 

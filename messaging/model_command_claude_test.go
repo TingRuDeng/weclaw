@@ -188,6 +188,10 @@ func (f *fakeCurrentCodexModelAgent) SetCodexThreadConfig(_ context.Context, upd
 	if update.Effort != "" {
 		f.config.Effort = update.Effort
 	}
+	if update.ServiceTier != nil {
+		f.config.ServiceTier = *update.ServiceTier
+		f.config.ServiceTierKnown = true
+	}
 	return nil
 }
 
@@ -234,6 +238,85 @@ func TestFeishuCodexSettingsUpdateCurrentThread(t *testing.T) {
 		if choice.Metadata[modelSettingThreadMetadataKey] != "thread-1" {
 			t.Fatalf("choice=%#v，期望绑定当前 thread", choice)
 		}
+	}
+}
+
+func TestFeishuCodexFastUpdatesCurrentThreadWithoutChangingDefaults(t *testing.T) {
+	codex := &fakeCurrentCodexModelAgent{fakeCodexModelAgent: fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "gpt-5.5",
+		models: []agent.CodexModel{{
+			ID: "gpt-5.5", ServiceTiers: []agent.CodexServiceTier{{ID: agent.CodexServiceTierFast, Name: "Fast"}},
+		}},
+	}, config: agent.CodexThreadConfig{
+		Model: "gpt-5.5", ServiceTierKnown: true,
+	}}
+	h := newClaudeModelHandler(codex, &fakeClaudeModelAgent{})
+	sessionKey := "feishu:tenant:dm:chat-codex-fast:user-1"
+	seedCurrentCodexModelSession(t, h, sessionKey, t.TempDir(), "thread-fast")
+
+	reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/fast on", "codex-fast-on"})
+	if !containsText(reply.Texts, "当前 Codex 会话速度切换为: Fast") ||
+		len(codex.updates) != 1 || codex.updates[0].ServiceTier == nil ||
+		*codex.updates[0].ServiceTier != agent.CodexServiceTierFast {
+		t.Fatalf("texts=%#v updates=%#v", reply.Texts, codex.updates)
+	}
+	if codex.serviceTier != "" || codex.config.ServiceTier != agent.CodexServiceTierFast {
+		t.Fatalf("default=%q config=%#v, current setting must not change default", codex.serviceTier, codex.config)
+	}
+
+	card := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/fast", "codex-fast-status"})
+	if len(card.Choices) != 1 || len(card.Choices[0].Choices) != 2 ||
+		!strings.Contains(card.Choices[0].Choices[1].Label, "当前") {
+		t.Fatalf("card=%#v, want Fast marked current", card.Choices)
+	}
+}
+
+func TestFeishuCodexFastCardExpiresAfterThreadSwitch(t *testing.T) {
+	codex := &fakeCurrentCodexModelAgent{fakeCodexModelAgent: fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "gpt-5.5",
+		models: []agent.CodexModel{{
+			ID: "gpt-5.5", ServiceTiers: []agent.CodexServiceTier{{ID: agent.CodexServiceTierFast, Name: "Fast"}},
+		}},
+	}, config: agent.CodexThreadConfig{Model: "gpt-5.5", ServiceTierKnown: true}}
+	h := newClaudeModelHandler(codex, &fakeClaudeModelAgent{})
+	sessionKey := "feishu:tenant:dm:chat-codex-fast-stale:user-1"
+	workspace := t.TempDir()
+	seedCurrentCodexModelSession(t, h, sessionKey, workspace, "thread-a")
+
+	cardReply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, "/fast", "codex-fast-card"})
+	if len(cardReply.Choices) != 1 || len(cardReply.Choices[0].Choices) != 2 {
+		t.Fatalf("choices=%#v, want Fast card", cardReply.Choices)
+	}
+	choice := cardReply.Choices[0].Choices[1]
+	h.ensureCodexSessions().setThread(codexBindingKey(sessionKey, "codex"), workspace, "thread-b")
+
+	value := map[string]string{"choice": choice.ID}
+	for key, item := range choice.Metadata {
+		value[key] = item
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "codex-fast-stale-choice",
+		RawCommand: &platform.CardAction{Action: "choice", Value: value},
+		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
+	}, reply)
+	if !containsText(reply.Texts, "卡片已失效") || len(codex.updates) != 0 {
+		t.Fatalf("texts=%#v updates=%#v, stale Fast card must not update new thread", reply.Texts, codex.updates)
+	}
+}
+
+func TestCodexFastStatusLineOnlyShowsActiveFastThread(t *testing.T) {
+	codex := &fakeCurrentCodexModelAgent{
+		config: agent.CodexThreadConfig{ServiceTier: agent.CodexServiceTierFast, ServiceTierKnown: true},
+	}
+	if got := codexFastStatusLine(context.Background(), codex, "thread-fast"); got != "速度: Fast" {
+		t.Fatalf("fast status line=%q", got)
+	}
+	codex.config = agent.CodexThreadConfig{ServiceTierKnown: true}
+	if got := codexFastStatusLine(context.Background(), codex, "thread-standard"); got != "" {
+		t.Fatalf("standard status line=%q, want omitted", got)
 	}
 }
 

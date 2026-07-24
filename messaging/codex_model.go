@@ -69,6 +69,7 @@ func renderCodexModelStatusText(status agent.CodexModelStatus) string {
 		"Codex 新会话默认模型配置:",
 		"model: "+codexModelConfigValue(status.Model),
 		"effort: "+codexModelConfigValue(status.Effort),
+		"speed: "+codexServiceTierDefaultLabel(status.ServiceTier),
 	)
 }
 

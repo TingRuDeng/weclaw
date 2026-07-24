@@ -2,6 +2,8 @@ package messaging
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base32"
 	"fmt"
 	"log"
 	"strings"
@@ -13,16 +15,28 @@ import (
 )
 
 type pendingApproval struct {
-	choices  chan string
-	allowed  map[string]bool
-	aliases  map[string]string
-	key      string
-	userID   string
-	route    string
-	kind     string
-	yolo     string
-	resolved atomic.Bool
+	choices   chan string
+	allowed   map[string]bool
+	aliases   map[string]string
+	key       string
+	userID    string
+	route     string
+	kind      string
+	yolo      string
+	deny      string
+	code      string
+	expiresAt time.Time
+	resolved  atomic.Bool
 }
+
+type approvalCodeConsumeResult uint8
+
+const (
+	approvalCodeNotFound approvalCodeConsumeResult = iota
+	approvalCodeConsumed
+	approvalCodeAlreadyResolved
+	approvalCodeDecisionUnavailable
+)
 
 type approvalTextConsumeResult uint8
 
@@ -43,7 +57,6 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		if err := validateAgentInteractionRoute(opts); err != nil {
 			return "", err
 		}
-		prompt := approvalPrompt(req, opts.agentName)
 		approvalKey := approvalPendingKey(req.RequestID)
 		choices := approvalChoices(
 			req.Options, approvalKey, taskCardIDFromReplier(opts.reply),
@@ -66,10 +79,15 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 			return "", err
 		}
 		defer h.clearPendingApproval(opts.actorUserID, pending)
+		prompt := approvalPromptWithTextFallback(approvalPrompt(req, opts.agentName), pending)
 		if err := opts.reply.AskChoices(ctx, prompt, choices); err != nil {
 			return "", err
 		}
-		timer := time.NewTimer(pendingApprovalTimeout)
+		wait := time.Until(pending.expiresAt)
+		if wait < 0 {
+			wait = 0
+		}
+		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		select {
 		case choice := <-pending.choices:
@@ -88,18 +106,29 @@ func (h *Handler) registerPendingApproval(userID string, approvalKey string, opt
 
 func (h *Handler) registerPendingApprovalForRoute(userID string, routeUserID string, approvalKey string, options []agent.ApprovalOption, yoloDecision string, interactionKind string) (*pendingApproval, error) {
 	pending := &pendingApproval{
-		choices: make(chan string, 1),
-		allowed: approvalOptionSet(options),
-		aliases: approvalOptionAliases(options),
-		key:     pendingApprovalMapKey(userID, routeUserID, interactionKind, approvalKey),
-		userID:  strings.TrimSpace(userID),
-		route:   strings.TrimSpace(routeUserID),
-		kind:    strings.TrimSpace(interactionKind),
-		yolo:    strings.TrimSpace(yoloDecision),
+		choices:   make(chan string, 1),
+		allowed:   approvalOptionSet(options),
+		aliases:   approvalOptionAliases(options),
+		key:       pendingApprovalMapKey(userID, routeUserID, interactionKind, approvalKey),
+		userID:    strings.TrimSpace(userID),
+		route:     strings.TrimSpace(routeUserID),
+		kind:      strings.TrimSpace(interactionKind),
+		yolo:      strings.TrimSpace(yoloDecision),
+		deny:      defaultDenyApprovalOption(options),
+		expiresAt: time.Now().Add(pendingApprovalTimeout),
 	}
 	h.pendingApprovalsMu.Lock()
+	h.cleanupResolvedApprovalCodesLocked(time.Now())
 	if h.pendingApprovals == nil {
 		h.pendingApprovals = make(map[string]*pendingApproval)
+	}
+	if pending.kind == platform.ChoiceInteractionApproval {
+		code, err := h.newApprovalCodeLocked(pending.userID, pending.route)
+		if err != nil {
+			h.pendingApprovalsMu.Unlock()
+			return nil, err
+		}
+		pending.code = code
 	}
 	if h.pendingApprovals[pending.key] != nil {
 		h.pendingApprovalsMu.Unlock()
@@ -111,10 +140,20 @@ func (h *Handler) registerPendingApprovalForRoute(userID string, routeUserID str
 }
 
 func (h *Handler) clearPendingApproval(userID string, pending *pendingApproval) {
+	if pending == nil {
+		return
+	}
 	h.pendingApprovalsMu.Lock()
 	if h.pendingApprovals[pending.key] == pending {
 		delete(h.pendingApprovals, pending.key)
 	}
+	if pending.resolved.Load() && pending.code != "" {
+		if h.resolvedApprovalCodes == nil {
+			h.resolvedApprovalCodes = make(map[string]time.Time)
+		}
+		h.resolvedApprovalCodes[approvalCodeMapKey(pending.userID, pending.route, pending.code)] = time.Now().Add(pendingApprovalTimeout)
+	}
+	h.cleanupResolvedApprovalCodesLocked(time.Now())
 	h.pendingApprovalsMu.Unlock()
 }
 
@@ -145,6 +184,51 @@ func (h *Handler) consumePendingApprovalText(userID string, routeUserID string, 
 
 func (h *Handler) consumePendingApprovalForKey(userID string, approvalKey string, choice string) bool {
 	return h.consumePendingInteractionForKey(userID, userID, "", approvalKey, choice)
+}
+
+func (h *Handler) consumePendingApprovalCode(userID string, routeUserID string, code string, approve bool) approvalCodeConsumeResult {
+	userID = strings.TrimSpace(userID)
+	routeUserID = strings.TrimSpace(routeUserID)
+	code = normalizeApprovalCode(code)
+	if userID == "" || code == "" {
+		return approvalCodeNotFound
+	}
+	h.pendingApprovalsMu.Lock()
+	h.cleanupResolvedApprovalCodesLocked(time.Now())
+	if expiresAt := h.resolvedApprovalCodes[approvalCodeMapKey(userID, routeUserID, code)]; !expiresAt.IsZero() {
+		h.pendingApprovalsMu.Unlock()
+		return approvalCodeAlreadyResolved
+	}
+	var found *pendingApproval
+	now := time.Now()
+	for _, pending := range h.pendingApprovals {
+		if pending.userID == userID && pending.route == routeUserID &&
+			pending.kind == platform.ChoiceInteractionApproval && pending.code == code {
+			if !pending.expiresAt.After(now) {
+				break
+			}
+			found = pending
+			break
+		}
+	}
+	h.pendingApprovalsMu.Unlock()
+	if found == nil {
+		return approvalCodeNotFound
+	}
+	choice := found.deny
+	if approve {
+		choice = found.yolo
+	}
+	if strings.TrimSpace(choice) == "" {
+		return approvalCodeDecisionUnavailable
+	}
+	if !deliverPendingApprovalChoice(found, choice) {
+		if found.resolved.Load() {
+			return approvalCodeAlreadyResolved
+		}
+		return approvalCodeNotFound
+	}
+	return approvalCodeConsumed
 }
 
 func (h *Handler) consumePendingInteractionForKey(userID string, routeUserID string, interactionKind string, approvalKey string, choice string) bool {
@@ -259,6 +343,79 @@ func (p *pendingApproval) resolveChoice(choice string) string {
 		return resolved
 	}
 	return ""
+}
+
+var approvalCodeEncoding = base32.NewEncoding("ABCDEFGHJKLMNPQRSTUVWXYZ23456789").WithPadding(base32.NoPadding)
+
+func (h *Handler) newApprovalCodeLocked(userID string, routeUserID string) (string, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		raw := make([]byte, 5)
+		if _, err := rand.Read(raw); err != nil {
+			return "", fmt.Errorf("generate approval fallback code: %w", err)
+		}
+		code := approvalCodeEncoding.EncodeToString(raw)
+		if !h.approvalCodeInUseLocked(userID, routeUserID, code) {
+			return code, nil
+		}
+	}
+	return "", fmt.Errorf("generate unique approval fallback code")
+}
+
+func (h *Handler) approvalCodeInUseLocked(userID string, routeUserID string, code string) bool {
+	code = normalizeApprovalCode(code)
+	for _, pending := range h.pendingApprovals {
+		if pending.userID == userID && pending.route == routeUserID && pending.code == code {
+			return true
+		}
+	}
+	_, resolved := h.resolvedApprovalCodes[approvalCodeMapKey(userID, routeUserID, code)]
+	return resolved
+}
+
+func (h *Handler) cleanupResolvedApprovalCodesLocked(now time.Time) {
+	for key, expiresAt := range h.resolvedApprovalCodes {
+		if !expiresAt.After(now) {
+			delete(h.resolvedApprovalCodes, key)
+		}
+	}
+}
+
+func approvalCodeMapKey(userID string, routeUserID string, code string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(userID),
+		strings.TrimSpace(routeUserID),
+		normalizeApprovalCode(code),
+	}, "\x00")
+}
+
+func normalizeApprovalCode(code string) string {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if len(code) != 8 {
+		return ""
+	}
+	for _, char := range code {
+		if !strings.ContainsRune("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", char) {
+			return ""
+		}
+	}
+	return code
+}
+
+func approvalPromptWithTextFallback(prompt string, pending *pendingApproval) string {
+	if pending == nil || pending.code == "" {
+		return prompt
+	}
+	commands := make([]string, 0, 2)
+	if pending.yolo != "" {
+		commands = append(commands, "/approve "+pending.code)
+	}
+	if pending.deny != "" {
+		commands = append(commands, "/deny "+pending.code)
+	}
+	if len(commands) == 0 {
+		return prompt
+	}
+	return strings.TrimSpace(prompt) + "\n\n按钮不可用时，可发送：" + strings.Join(commands, " 或 ")
 }
 
 func isPendingInteractionChoiceCommand(cmd *platform.CardAction) bool {

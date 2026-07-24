@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,15 +20,51 @@ import (
 )
 
 const (
-	terminalOutboxVersion         = 1
-	terminalOutboxFileName        = "terminal-outbox.json"
-	terminalOutboxMaxEntries      = 10000
-	terminalOutboxDeliveryTimeout = 10 * time.Second
-	terminalOutboxRetryMin        = 2 * time.Second
-	terminalOutboxRetryMax        = time.Minute
-	terminalOutboxPollInterval    = time.Second
-	terminalOutboxErrorMaxRunes   = 500
+	terminalOutboxVersion          = 1
+	terminalOutboxFileName         = "terminal-outbox.json"
+	terminalOutboxMaxEntries       = 10000
+	terminalOutboxDeliveryTimeout  = 10 * time.Second
+	terminalOutboxRetryMin         = 2 * time.Second
+	terminalOutboxRetryMax         = time.Minute
+	terminalOutboxErrorMaxRunes    = 500
+	terminalOutboxStatusMaxEntries = 100
 )
+
+var (
+	ErrTerminalOutboxUnavailable = errors.New("terminal outbox unavailable")
+	ErrTerminalOutboxNotFound    = errors.New("terminal outbox entry not found")
+)
+
+// TerminalOutboxEntryStatus 是仅供本机运维使用的脱敏投递状态，不包含平台路由和消息正文。
+type TerminalOutboxEntryStatus struct {
+	ID          string    `json:"id"`
+	AgentName   string    `json:"agent_name,omitempty"`
+	Attempts    int       `json:"attempts"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	NextAttempt time.Time `json:"next_attempt"`
+	LastError   string    `json:"last_error,omitempty"`
+	Preparing   bool      `json:"preparing,omitempty"`
+	Processing  bool      `json:"processing,omitempty"`
+}
+
+// TerminalOutboxStatus 汇总终态投递积压；Entries 最多返回最早的 100 条。
+type TerminalOutboxStatus struct {
+	Pending         int                         `json:"pending"`
+	Preparing       int                         `json:"preparing"`
+	Processing      int                         `json:"processing"`
+	OldestCreatedAt time.Time                   `json:"oldest_created_at,omitempty"`
+	NextAttempt     time.Time                   `json:"next_attempt,omitempty"`
+	RecentError     string                      `json:"recent_error,omitempty"`
+	AtCapacity      bool                        `json:"at_capacity"`
+	Truncated       bool                        `json:"truncated,omitempty"`
+	Entries         []TerminalOutboxEntryStatus `json:"entries,omitempty"`
+}
+
+type TerminalOutboxRedriveResult struct {
+	Requested int                  `json:"requested"`
+	Status    TerminalOutboxStatus `json:"status"`
+}
 
 type terminalOutboxState struct {
 	Version int                    `json:"version"`
@@ -116,6 +153,37 @@ func (h *Handler) currentTerminalOutbox() *terminalOutbox {
 	return h.terminalOutbox
 }
 
+// TerminalOutboxStatus 返回运行中 outbox 的脱敏状态。
+func (h *Handler) TerminalOutboxStatus(context.Context) (TerminalOutboxStatus, error) {
+	outbox := h.currentTerminalOutbox()
+	if outbox == nil {
+		return TerminalOutboxStatus{}, ErrTerminalOutboxUnavailable
+	}
+	return outbox.status(), nil
+}
+
+// RedriveTerminalOutbox 将指定或全部待投递项提前到当前时间，并唤醒 worker。
+func (h *Handler) RedriveTerminalOutbox(_ context.Context, id string) (TerminalOutboxRedriveResult, error) {
+	outbox := h.currentTerminalOutbox()
+	if outbox == nil {
+		return TerminalOutboxRedriveResult{}, ErrTerminalOutboxUnavailable
+	}
+	return outbox.redrive(id)
+}
+
+// InspectTerminalOutbox 只读检查磁盘状态，供服务停止时的 CLI 和 doctor 使用。
+func InspectTerminalOutbox(path string) (TerminalOutboxStatus, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return TerminalOutboxStatus{}, fmt.Errorf("terminal outbox path is empty")
+	}
+	entries, err := loadTerminalOutbox(path)
+	if err != nil {
+		return TerminalOutboxStatus{}, err
+	}
+	return terminalOutboxStatus(entries, nil, nil), nil
+}
+
 func newTerminalOutbox(path string, registry *platform.Registry, traceRecorders ...observability.Recorder) (*terminalOutbox, error) {
 	outbox := &terminalOutbox{
 		path: path, registry: registry, preparing: make(map[string]bool), processing: make(map[string]bool),
@@ -138,8 +206,8 @@ func (o *terminalOutbox) enqueueAndAttempt(ctx context.Context, draft terminalOu
 		return err
 	}
 	if err := o.attempt(ctx, entry.ID, preferred); err != nil {
-		log.Printf("[terminal-outbox] delivery pending id=%s platform=%s account=%s: %v",
-			entry.ID, entry.Route.Platform, entry.Route.AccountID, err)
+		log.Printf("[terminal-outbox] delivery pending id=%s platform=%s: %s",
+			entry.ID, entry.Route.Platform, observability.SanitizeText(err.Error()))
 	}
 	o.signal()
 	return nil
@@ -260,21 +328,46 @@ func (o *terminalOutbox) releaseReservation(id string) {
 }
 
 func (o *terminalOutbox) run(ctx context.Context) {
-	ticker := time.NewTicker(terminalOutboxPollInterval)
-	defer ticker.Stop()
-	o.signal()
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		case <-ticker.C:
-		case <-o.wake:
 		}
 		for _, id := range o.dueIDs() {
+			if ctx.Err() != nil {
+				return
+			}
 			if err := o.attempt(ctx, id, nil); err != nil && ctx.Err() == nil {
-				log.Printf("[terminal-outbox] retry pending id=%s: %v", id, err)
+				log.Printf("[terminal-outbox] retry pending id=%s: %s", id, observability.SanitizeText(err.Error()))
 			}
 		}
+		delay, scheduled := o.nextAttemptDelay()
+		if !scheduled {
+			select {
+			case <-ctx.Done():
+				return
+			case <-o.wake:
+			}
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			stopAndDrainTimer(timer)
+			return
+		case <-o.wake:
+			stopAndDrainTimer(timer)
+		case <-timer.C:
+		}
+	}
+}
+
+func stopAndDrainTimer(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
 	}
 }
 
@@ -289,13 +382,139 @@ func (o *terminalOutbox) dueIDs() []string {
 	now := o.now()
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	ids := make([]string, 0, len(o.entries))
+	due := make([]*terminalOutboxEntry, 0, len(o.entries))
 	for _, entry := range o.entries {
 		if !o.preparing[entry.ID] && !o.processing[entry.ID] && !entry.NextAttempt.After(now) {
-			ids = append(ids, entry.ID)
+			due = append(due, entry)
 		}
 	}
+	sort.SliceStable(due, func(i, j int) bool {
+		if !due[i].NextAttempt.Equal(due[j].NextAttempt) {
+			return due[i].NextAttempt.Before(due[j].NextAttempt)
+		}
+		if !due[i].CreatedAt.Equal(due[j].CreatedAt) {
+			return due[i].CreatedAt.Before(due[j].CreatedAt)
+		}
+		return due[i].ID < due[j].ID
+	})
+	ids := make([]string, 0, len(due))
+	for _, entry := range due {
+		ids = append(ids, entry.ID)
+	}
 	return ids
+}
+
+func (o *terminalOutbox) nextAttemptDelay() (time.Duration, bool) {
+	now := o.now()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var next time.Time
+	for _, entry := range o.entries {
+		if o.preparing[entry.ID] || o.processing[entry.ID] {
+			continue
+		}
+		if next.IsZero() || entry.NextAttempt.Before(next) {
+			next = entry.NextAttempt
+		}
+	}
+	if next.IsZero() {
+		return 0, false
+	}
+	if !next.After(now) {
+		return 0, true
+	}
+	return next.Sub(now), true
+}
+
+func (o *terminalOutbox) status() TerminalOutboxStatus {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return terminalOutboxStatus(o.entries, o.preparing, o.processing)
+}
+
+func (o *terminalOutbox) redrive(id string) (TerminalOutboxRedriveResult, error) {
+	id = strings.TrimSpace(id)
+	now := o.now()
+	o.mu.Lock()
+	type previousSchedule struct {
+		entry       *terminalOutboxEntry
+		updatedAt   time.Time
+		nextAttempt time.Time
+	}
+	previous := make([]previousSchedule, 0, len(o.entries))
+	requested := 0
+	for _, entry := range o.entries {
+		if id != "" && entry.ID != id {
+			continue
+		}
+		previous = append(previous, previousSchedule{
+			entry: entry, updatedAt: entry.UpdatedAt, nextAttempt: entry.NextAttempt,
+		})
+		entry.NextAttempt = now
+		entry.UpdatedAt = now
+		requested++
+	}
+	if id != "" && requested == 0 {
+		o.mu.Unlock()
+		return TerminalOutboxRedriveResult{}, ErrTerminalOutboxNotFound
+	}
+	if requested > 0 {
+		if err := o.persistLocked(); err != nil {
+			for _, state := range previous {
+				state.entry.UpdatedAt = state.updatedAt
+				state.entry.NextAttempt = state.nextAttempt
+			}
+			o.mu.Unlock()
+			return TerminalOutboxRedriveResult{}, fmt.Errorf("persist terminal outbox redrive: %w", err)
+		}
+	}
+	status := terminalOutboxStatus(o.entries, o.preparing, o.processing)
+	o.mu.Unlock()
+	if requested > 0 {
+		o.signal()
+	}
+	return TerminalOutboxRedriveResult{Requested: requested, Status: status}, nil
+}
+
+func terminalOutboxStatus(entries []*terminalOutboxEntry, preparing map[string]bool, processing map[string]bool) TerminalOutboxStatus {
+	status := TerminalOutboxStatus{Pending: len(entries), AtCapacity: len(entries) >= terminalOutboxMaxEntries}
+	sorted := append([]*terminalOutboxEntry(nil), entries...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
+			return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
+		}
+		return sorted[i].ID < sorted[j].ID
+	})
+	var recentErrorAt time.Time
+	for _, entry := range sorted {
+		isPreparing := preparing != nil && preparing[entry.ID]
+		isProcessing := processing != nil && processing[entry.ID]
+		if isPreparing {
+			status.Preparing++
+		}
+		if isProcessing {
+			status.Processing++
+		}
+		if status.OldestCreatedAt.IsZero() || entry.CreatedAt.Before(status.OldestCreatedAt) {
+			status.OldestCreatedAt = entry.CreatedAt
+		}
+		if !isPreparing && !isProcessing && (status.NextAttempt.IsZero() || entry.NextAttempt.Before(status.NextAttempt)) {
+			status.NextAttempt = entry.NextAttempt
+		}
+		if entry.LastError != "" && (recentErrorAt.IsZero() || entry.UpdatedAt.After(recentErrorAt)) {
+			recentErrorAt = entry.UpdatedAt
+			status.RecentError = observability.SanitizeText(entry.LastError)
+		}
+		if len(status.Entries) < terminalOutboxStatusMaxEntries {
+			status.Entries = append(status.Entries, TerminalOutboxEntryStatus{
+				ID: entry.ID, AgentName: entry.AgentName, Attempts: entry.Attempts,
+				CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, NextAttempt: entry.NextAttempt,
+				LastError: observability.SanitizeText(entry.LastError), Preparing: isPreparing, Processing: isProcessing,
+			})
+		}
+	}
+	status.Truncated = len(sorted) > len(status.Entries)
+	return status
 }
 
 func (o *terminalOutbox) attempt(parent context.Context, id string, preferred platform.Replier) error {
@@ -371,7 +590,7 @@ func (o *terminalOutbox) resolveReplier(route platform.DeliveryRoute, preferred 
 	if reply, ok := o.registry.ReplierForRoute(route); ok && reply != nil {
 		return reply, nil
 	}
-	return nil, fmt.Errorf("no outbound replier for platform=%s account=%s", route.Platform, route.AccountID)
+	return nil, fmt.Errorf("no outbound replier for platform=%s", route.Platform)
 }
 
 func sameDeliveryRoute(left platform.DeliveryRoute, right platform.DeliveryRoute) bool {

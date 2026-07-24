@@ -135,12 +135,15 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 	return prepared, true
 }
 
-// platformMessageLogText 隐去一次性确认能力，避免卡片回调日志可被重放。
+// platformMessageLogText 隐去一次性确认能力，避免日志中的短期凭据被重放。
 func platformMessageLogText(text string) string {
 	fields := strings.Fields(strings.TrimSpace(text))
 	if len(fields) == 4 && strings.EqualFold(fields[0], "/cx") &&
 		strings.EqualFold(fields[1], "account") && strings.EqualFold(fields[2], "confirm") {
 		return "/cx account confirm <redacted>"
+	}
+	if len(fields) == 2 && (strings.EqualFold(fields[0], "/approve") || strings.EqualFold(fields[0], "/deny")) {
+		return fields[0] + " <redacted>"
 	}
 	return text
 }

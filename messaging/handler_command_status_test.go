@@ -242,7 +242,9 @@ func TestFeishuHelpSettingsLabelsModelScope(t *testing.T) {
 	for _, choice := range reply.Choices[0].Choices {
 		labels[choice.ID] = choice.Label
 	}
-	if labels["/model"] != "模型（当前/默认）" || labels["/reasoning"] != "推理强度（当前/默认）" {
+	if labels["/model"] != "模型（当前/默认）" ||
+		labels["/reasoning"] != "推理强度（当前/默认）" ||
+		labels["/fast"] != "Codex 速度（当前/默认）" {
 		t.Fatalf("settings labels=%#v, want explicit current/default scope", labels)
 	}
 }
@@ -363,6 +365,7 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看新建 Codex 会话的默认模型配置",
 		"/cx model ls 查看可用 Codex 模型",
+		"/fast 切换当前 Codex 会话或新会话默认速度",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Codex help should describe %q, got %q", want, text)

@@ -96,6 +96,7 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 		choices = []platform.Choice{
 			{ID: "/model", Label: "模型（当前/默认）"},
 			{ID: "/reasoning", Label: "推理强度（当前/默认）"},
+			{ID: "/fast", Label: "Codex 速度（当前/默认）"},
 			{ID: "/mode", Label: "确认模式"},
 			{ID: "/progress", Label: "进度模式"},
 		}

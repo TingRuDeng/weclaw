@@ -180,6 +180,7 @@ func buildCodexSessionHelpText() string {
 		"/cx clean 清理已不存在的 WeClaw 工作空间记录",
 		"/cx model status 查看新建 Codex 会话的默认模型配置",
 		"/cx model ls 查看可用 Codex 模型",
+		"/fast 切换当前 Codex 会话或新会话默认速度",
 	)
 }
 

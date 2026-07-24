@@ -20,6 +20,8 @@ type codexModelSettingRequest struct {
 	agent  agent.Agent
 	model  string
 	effort string
+	// serviceTier 为 nil 时不修改速度档位。
+	serviceTier *string
 }
 
 // withCurrentCodexSessionStatus 用当前 thread 配置覆盖新 thread 默认值。
@@ -59,6 +61,10 @@ func (h *Handler) codexSessionStatus(control modelSettingController, threadID st
 	if strings.TrimSpace(config.Effort) != "" {
 		status.Effort = config.Effort
 	}
+	if config.ServiceTierKnown {
+		status.ServiceTier = config.ServiceTier
+		status.ServiceTierKnown = true
+	}
 	return modelSettingStatusOverride{
 		modelSettingController: control,
 		status:                 status,
@@ -97,12 +103,12 @@ func (h *Handler) setCurrentCodexSessionSetting(req codexModelSettingRequest) (s
 	defer unlockThread()
 	update := agent.CodexThreadConfigUpdate{
 		ConversationID: ref.conversationID, ThreadID: ref.threadID,
-		Model: req.model, Effort: req.effort,
+		Model: req.model, Effort: req.effort, ServiceTier: req.serviceTier,
 	}
 	if err := configAgent.SetCodexThreadConfig(req.ctx, update); err != nil {
 		return fmt.Sprintf("切换当前 Codex 会话配置失败: %v", err), true
 	}
-	return renderCurrentCodexSessionSetting(req.model, req.effort), true
+	return renderCurrentCodexSessionSetting(req.model, req.effort, req.serviceTier), true
 }
 
 func (h *Handler) currentCodexSessionSettingRef(route modelAgentRoute, name string) (codexSessionSettingRef, bool) {
@@ -125,9 +131,15 @@ func (h *Handler) currentCodexSessionSettingRef(route modelAgentRoute, name stri
 	}, true
 }
 
-func renderCurrentCodexSessionSetting(model string, effort string) string {
+func renderCurrentCodexSessionSetting(model string, effort string, serviceTier *string) string {
 	if strings.TrimSpace(model) != "" {
 		return wechatCommandText("已将当前 Codex 会话模型切换为: "+model, "从下一轮任务开始生效。")
 	}
-	return wechatCommandText("已将当前 Codex 会话推理强度切换为: "+effort, "从下一轮任务开始生效。")
+	if strings.TrimSpace(effort) != "" {
+		return wechatCommandText("已将当前 Codex 会话推理强度切换为: "+effort, "从下一轮任务开始生效。")
+	}
+	if serviceTier != nil {
+		return wechatCommandText("已将当前 Codex 会话速度切换为: "+codexServiceTierLabel(*serviceTier), "从下一轮任务开始生效。")
+	}
+	return "Codex 会话配置没有可更新字段。"
 }

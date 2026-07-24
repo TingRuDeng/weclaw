@@ -92,6 +92,121 @@ func TestApprovalCancellationNeverFallsBackToAllowOnlyOption(t *testing.T) {
 	}
 }
 
+func TestApprovalTextFallbackConsumesOnceAndRedactsCommand(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resultCh := make(chan string, 1)
+	go func() {
+		optionID, err := h.approvalHandlerForUser("ou_user", "ou_user", reply)(ctx, agent.ApprovalRequest{
+			ToolCall: json.RawMessage(`{"cmd":"deploy"}`),
+			Options: []agent.ApprovalOption{
+				{ID: "allow_once", Name: "允许", Kind: "allow"},
+				{ID: "deny_once", Name: "拒绝", Kind: "deny"},
+			},
+		})
+		if err != nil {
+			resultCh <- "error:" + err.Error()
+			return
+		}
+		resultCh <- optionID
+	}()
+
+	request := reply.waitChoiceRequest(t, ctx)
+	code := approvalCodeFromPrompt(request.prompt)
+	if code == "" || !strings.Contains(request.prompt, "/deny "+code) {
+		t.Fatalf("prompt=%q, want approve and deny fallback commands", request.prompt)
+	}
+	command := "/approve " + code
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "approval-text-1", Text: command,
+	}, reply)
+	select {
+	case got := <-resultCh:
+		if got != "allow_once" {
+			t.Fatalf("approval result=%q, want allow_once", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval text fallback did not resolve")
+	}
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "approval-text-2", Text: command,
+	}, reply)
+	texts := reply.textsSnapshot()
+	if len(texts) != 2 || !strings.Contains(texts[0], "已提交审批") || !strings.Contains(texts[1], "已处理") {
+		t.Fatalf("texts=%#v", texts)
+	}
+	if got := platformMessageLogText(command); got != "/approve <redacted>" {
+		t.Fatalf("log text=%q", got)
+	}
+}
+
+func TestApprovalTextFallbackIsolatesActorAndRoute(t *testing.T) {
+	h := NewHandler(nil, nil)
+	pending, err := h.registerPendingApprovalForRoute(
+		"ou_owner", "feishu:route-a", "approval-key",
+		[]agent.ApprovalOption{
+			{ID: "allow_once", Kind: "allow"},
+			{ID: "deny_once", Kind: "deny"},
+		},
+		"allow_once", platform.ChoiceInteractionApproval,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.consumePendingApprovalCode("ou_other", "feishu:route-a", pending.code, true); got != approvalCodeNotFound {
+		t.Fatalf("other actor consumed approval: %v", got)
+	}
+	if got := h.consumePendingApprovalCode("ou_owner", "feishu:route-b", pending.code, true); got != approvalCodeNotFound {
+		t.Fatalf("other route consumed approval: %v", got)
+	}
+	if got := h.consumePendingApprovalCode("ou_owner", "feishu:route-a", pending.code, false); got != approvalCodeConsumed {
+		t.Fatalf("same actor and route result=%v", got)
+	}
+	if got := <-pending.choices; got != "deny_once" {
+		t.Fatalf("choice=%q", got)
+	}
+	h.clearPendingApproval("ou_owner", pending)
+	if got := h.consumePendingApprovalCode("ou_owner", "feishu:route-a", pending.code, false); got != approvalCodeAlreadyResolved {
+		t.Fatalf("resolved code result=%v", got)
+	}
+}
+
+func TestApprovalTextFallbackRejectsExpiredCode(t *testing.T) {
+	h := NewHandler(nil, nil)
+	pending, err := h.registerPendingApprovalForRoute(
+		"ou_owner", "feishu:route-a", "approval-key",
+		[]agent.ApprovalOption{{ID: "allow_once", Kind: "allow"}},
+		"allow_once", platform.ChoiceInteractionApproval,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending.expiresAt = time.Now().Add(-time.Second)
+	if got := h.consumePendingApprovalCode("ou_owner", "feishu:route-a", pending.code, true); got != approvalCodeNotFound {
+		t.Fatalf("expired code result=%v", got)
+	}
+	select {
+	case got := <-pending.choices:
+		t.Fatalf("expired code delivered choice %q", got)
+	default:
+	}
+	h.clearPendingApproval("ou_owner", pending)
+}
+
+func approvalCodeFromPrompt(prompt string) string {
+	index := strings.Index(prompt, "/approve ")
+	if index < 0 {
+		return ""
+	}
+	fields := strings.Fields(prompt[index+len("/approve "):])
+	if len(fields) == 0 {
+		return ""
+	}
+	return normalizeApprovalCode(strings.Trim(fields[0], "，。；;"))
+}
+
 func TestDefaultDenyApprovalOptionRecognizesDenyAlias(t *testing.T) {
 	options := []agent.ApprovalOption{
 		{ID: "accept", Name: "允许"},

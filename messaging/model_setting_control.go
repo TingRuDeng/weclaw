@@ -9,8 +9,10 @@ import (
 )
 
 type modelSettingStatus struct {
-	Model  string
-	Effort string
+	Model            string
+	Effort           string
+	ServiceTier      string
+	ServiceTierKnown bool
 }
 
 type modelSettingOption struct {
@@ -18,6 +20,8 @@ type modelSettingOption struct {
 	Alias         string
 	Label         string
 	EffortOptions []string
+	ServiceTiers  []agent.CodexServiceTier
+	Default       bool
 }
 
 type modelSettingController interface {
@@ -39,7 +43,7 @@ type codexModelSettingController struct {
 func (c codexModelSettingController) AgentLabel() string { return "Codex" }
 func (c codexModelSettingController) Status() modelSettingStatus {
 	status := c.CodexModelStatus()
-	return modelSettingStatus{Model: status.Model, Effort: status.Effort}
+	return modelSettingStatus{Model: status.Model, Effort: status.Effort, ServiceTier: status.ServiceTier}
 }
 func (c codexModelSettingController) ListModels(ctx context.Context) ([]modelSettingOption, error) {
 	models, err := c.ListCodexModels(ctx)
@@ -50,6 +54,7 @@ func (c codexModelSettingController) ListModels(ctx context.Context) ([]modelSet
 	for _, model := range models {
 		result = append(result, modelSettingOption{
 			ID: model.ID, Label: codexModelLabel(model), EffortOptions: model.EffortOptions,
+			ServiceTiers: model.ServiceTiers, Default: model.Default,
 		})
 	}
 	return result, nil
@@ -189,6 +194,9 @@ func modelSettingCard(ctx context.Context, control modelSettingController, setti
 	}
 	if setting == modelSettingReasoning {
 		return reasoningSettingCard(control, status, models)
+	}
+	if setting == modelSettingFast {
+		return fastSettingCard(control, status, models)
 	}
 	return modelSelectionCard(control, status, models)
 }

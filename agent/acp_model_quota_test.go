@@ -18,7 +18,7 @@ func TestACPAgentListCodexModelsParsesEffortOptions(t *testing.T) {
 		if method != "model/list" {
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
-		return json.RawMessage(`{"data":[{"id":"gpt-5.4","displayName":"GPT-5.4","supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}]},{"id":"gpt-5.3-codex","effortOptions":["low","medium"]}]}`), nil
+		return json.RawMessage(`{"data":[{"id":"gpt-5.4","displayName":"GPT-5.4","isDefault":true,"supportedReasoningEfforts":[{"reasoningEffort":"medium"},{"reasoningEffort":"high"}],"serviceTiers":[{"id":"priority","name":"Fast","description":"increased speed"}],"defaultServiceTier":"default"},{"id":"gpt-5.3-codex","effortOptions":["low","medium"],"additionalSpeedTiers":["fast"]}]}`), nil
 	}
 
 	models, err := a.ListCodexModels(context.Background())
@@ -31,8 +31,16 @@ func TestACPAgentListCodexModelsParsesEffortOptions(t *testing.T) {
 	if models[0].ID != "gpt-5.4" || strings.Join(models[0].EffortOptions, ",") != "medium,high" {
 		t.Fatalf("first model=%#v", models[0])
 	}
+	if !models[0].Default || len(models[0].ServiceTiers) != 1 ||
+		models[0].ServiceTiers[0].ID != CodexServiceTierFast ||
+		models[0].ServiceTiers[0].Name != "Fast" {
+		t.Fatalf("first model service tiers=%#v", models[0])
+	}
 	if models[1].ID != "gpt-5.3-codex" || strings.Join(models[1].EffortOptions, ",") != "low,medium" {
 		t.Fatalf("second model=%#v", models[1])
+	}
+	if len(models[1].ServiceTiers) != 1 || models[1].ServiceTiers[0].ID != CodexServiceTierFast {
+		t.Fatalf("legacy service tiers=%#v", models[1].ServiceTiers)
 	}
 }
 

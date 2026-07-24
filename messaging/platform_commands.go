@@ -93,6 +93,8 @@ func (h *Handler) routeSessionPlatformCommand(ctx context.Context, req platformC
 func (h *Handler) routeTaskPlatformCommand(ctx context.Context, req platformCommandRequest, routeUserID string) bool {
 	msg := req.Message
 	switch {
+	case isApprovalFallbackCommand(req.Trimmed):
+		replyPlatformCommand(ctx, req, h.handleApprovalFallbackCommand(msg.UserID, routeUserID, req.Trimmed))
 	case req.Trimmed == "/guide":
 		h.handleGuideCommand(newTaskCommandRequest(ctx, req, routeUserID))
 	case req.Trimmed == "/cancel":
@@ -107,6 +109,38 @@ func (h *Handler) routeTaskPlatformCommand(ctx context.Context, req platformComm
 		return false
 	}
 	return true
+}
+
+func isApprovalFallbackCommand(trimmed string) bool {
+	fields := strings.Fields(strings.TrimSpace(trimmed))
+	if len(fields) == 0 {
+		return false
+	}
+	return strings.EqualFold(fields[0], "/approve") || strings.EqualFold(fields[0], "/deny")
+}
+
+func (h *Handler) handleApprovalFallbackCommand(actorUserID string, routeUserID string, trimmed string) string {
+	fields := strings.Fields(strings.TrimSpace(trimmed))
+	if len(fields) != 2 {
+		return "用法：/approve <审批短码> 允许操作；/deny <审批短码> 拒绝操作。"
+	}
+	approve := strings.EqualFold(fields[0], "/approve")
+	result := h.consumePendingApprovalCode(actorUserID, routeUserID, fields[1], approve)
+	switch result {
+	case approvalCodeConsumed:
+		action := "拒绝"
+		if approve {
+			action = "允许"
+		}
+		h.auditRecord(auditEntry{User: actorUserID, Action: "approval_text_fallback", Summary: action})
+		return "已提交审批：" + action + "。"
+	case approvalCodeAlreadyResolved:
+		return "该审批已处理，无需重复操作。"
+	case approvalCodeDecisionUnavailable:
+		return "该审批不支持这个操作，请使用审批卡片中的可用选项。"
+	default:
+		return "审批短码无效、已过期，或不属于当前窗口。"
+	}
 }
 
 // replyPlatformCommand 始终向真实发送者回复命令结果。

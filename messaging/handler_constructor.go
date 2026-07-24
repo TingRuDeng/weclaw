@@ -23,6 +23,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		feishuIdentities:        newFeishuIdentityStore(),
 		taskLocks:               make(map[string]*executionLock),
 		pendingApprovals:        make(map[string]*pendingApproval),
+		resolvedApprovalCodes:   make(map[string]time.Time),
 		codexLocalSessionDir:    defaultCodexLocalSessionDir(),
 		codexBrowseWorkspaces:   make(map[string]string),
 		codexTaskCardFocus:      make(map[string]string),

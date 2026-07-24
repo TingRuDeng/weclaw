@@ -119,6 +119,8 @@ Native Codex and Claude plan, tool, command, and file signals are normalized int
 
 Terminal delivery first records a recoverable text draft in `~/.weclaw/state/terminal-outbox.json`, then freezes the Feishu task card and replaces the draft with its CardKit checkpoint. If WeClaw exits between those steps, the text terminal is retried after restart. Feishu CardKit operations keep stable UUIDs and monotonic sequences, while Feishu text and WeChat chunks use stable deduplication keys. Delivery is at-least-once rather than cross-platform exactly-once. Attachments and remote images remain outside the v1 outbox and use the existing validated best-effort path.
 
+Operators can inspect the redacted queue with `weclaw outbox status [--json]` and wake one or all pending deliveries with `weclaw outbox redrive [entry-id]`. Redrive is online-only, preserves attempt counters and payloads, and fails closed when the service API is unreachable. `weclaw doctor` also reports unreadable, pending, or capacity-exhausted outbox state.
+
 ### Query End-to-End Traces
 
 WeClaw records fixed-field events for the platform message, task, Agent turn, structured progress, reply, and terminal outbox in `~/.weclaw/state/trace.jsonl`. Route keys are stored only as irreversible digests, common credentials are removed from diagnostic text, and the `0600` file keeps three rotated 10 MiB backups.
@@ -182,7 +184,9 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/cwd [path]` | Show or switch the current frontend workspace; switching also updates Agent default cwd values, and regular users are confined to allowed workspace roots |
 | `/new` | Explicitly create a session for the current default agent; also bind it when Codex is the default |
 | `/model`, `/reasoning` | Show or change the bound session configuration, or the new-session defaults when no session is bound |
+| `/fast [on|off]` | Show or change the bound Codex session speed, or the new-session default when no session is bound |
 | `/mode [default|yolo]` | Show or change Agent approval behavior; group chats isolate the setting by actor, and bare `/mode` opens a Feishu choice card |
+| `/approve <code>`, `/deny <code>` | Allow or deny the matching approval when card buttons are unavailable; codes are actor-, window-, and expiry-bound |
 | `/progress [mode]` | Show progress mode; only administrators may change the account-level mode |
 | `/ps`, `/stop` | List or stop current tasks |
 | `/cancel`, `/guide` | Remove a queued message or steer the active Codex task |
@@ -199,7 +203,7 @@ Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` wh
 
 Runtime boundary: `/cx status` is a compact view of the current workspace, session, task, account, and runtime. Use `/cx pwd` for the full path, `/cx account status` for account diagnostics, and `/cx quota` for usage limits.
 
-Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx account`, `/cx account status`, `/cx account use <profile>`, `/cx model status|ls`, and `/cx clean`. `/cx model status` shows defaults for newly created Codex sessions; use `/model` and `/reasoning` for the bound session.
+Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx account`, `/cx account status`, `/cx account use <profile>`, `/cx model status|ls`, and `/cx clean`. `/cx model status` shows defaults for newly created Codex sessions; use `/model`, `/reasoning`, and `/fast` for the bound session. Fast availability is read from the current model catalog and unsupported accounts or models fail explicitly.
 
 </details>
 
@@ -245,7 +249,7 @@ Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`
 <details>
 <summary>Recommended Feishu menu</summary>
 
-- Common: `/help`, `/status`, `/model`, `/reasoning`, `/cwd`
+- Common: `/help`, `/status`, `/model`, `/reasoning`, `/fast`, `/cwd`
 - Codex: `/cx ls`, `/cx status`, `/cx new`, `/cx quota`, `/cx account`
 - Claude: `/cc ls`, `/cc status`, `/cc new`, `/cc pwd`, `/cc quota`, `/cc model ls`
 - Control: `/ps`, `/cancel`, `/guide`, `/stop`, `/restart`

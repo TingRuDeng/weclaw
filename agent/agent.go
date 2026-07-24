@@ -257,10 +257,24 @@ type ClaudeQuotaAgent interface {
 	ReadClaudeQuota(ctx context.Context) (ClaudeQuota, error)
 }
 
-// CodexModelStatus 表示当前 WeClaw 传给 Codex 的模型配置。
+const (
+	// CodexServiceTierFast 是当前 model/list 为用户可见 Fast 档返回的规范 ID。
+	CodexServiceTierFast     = "priority"
+	CodexServiceTierStandard = "default"
+)
+
+// CodexModelStatus 表示当前 WeClaw 传给新建 Codex thread 的默认配置。
 type CodexModelStatus struct {
-	Model  string
-	Effort string
+	Model       string
+	Effort      string
+	ServiceTier string
+}
+
+// CodexServiceTier 表示 Codex model/list 返回的一个速度档位。
+type CodexServiceTier struct {
+	ID          string
+	Name        string
+	Description string
 }
 
 // CodexModel 表示 Codex app-server 暴露的一个可用模型。
@@ -268,6 +282,8 @@ type CodexModel struct {
 	ID            string
 	Name          string
 	EffortOptions []string
+	ServiceTiers  []CodexServiceTier
+	Default       bool
 }
 
 // CodexModelAgent 暴露 Codex app-server 的模型查询能力。
@@ -282,18 +298,28 @@ type CodexModelControlAgent interface {
 	SetCodexModel(model string, effort string)
 }
 
-// CodexThreadConfig 表示单个 Codex thread 对后续 turn 生效的模型配置。
-type CodexThreadConfig struct {
-	Model  string
-	Effort string
+// CodexFastControlAgent 暴露新建 Codex thread 的 Fast 默认值切换能力。
+type CodexFastControlAgent interface {
+	CodexModelAgent
+	SetCodexServiceTier(serviceTier string)
 }
 
-// CodexThreadConfigUpdate 只更新非空字段，避免模型和推理强度互相覆盖。
+// CodexThreadConfig 表示单个 Codex thread 对后续 turn 生效的运行配置。
+type CodexThreadConfig struct {
+	Model            string
+	Effort           string
+	ServiceTier      string
+	ServiceTierKnown bool
+}
+
+// CodexThreadConfigUpdate 只更新显式字段，避免不同运行设置互相覆盖。
 type CodexThreadConfigUpdate struct {
 	ConversationID string
 	ThreadID       string
 	Model          string
 	Effort         string
+	// ServiceTier 为 nil 时保持不变；priority（兼容 fast）表示 Fast，default 表示明确切回标准。
+	ServiceTier *string
 }
 
 // CodexThreadConfigAgent 通过 app-server 管理单个 thread 的运行配置。

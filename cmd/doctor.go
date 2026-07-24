@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/feishu"
@@ -43,11 +44,12 @@ type doctorResult struct {
 
 // doctorDeps 注入外部探测，便于单测无副作用地验证检查逻辑。
 type doctorDeps struct {
-	lookPath       func(string) (string, error)
-	wechatAccounts func() (int, error)
-	feishuCredsOK  func(string) error
-	sudoProbe      func(user string) error
-	claudeACPProbe func(context.Context, string, config.AgentConfig) error
+	lookPath             func(string) (string, error)
+	wechatAccounts       func() (int, error)
+	feishuCredsOK        func(string) error
+	sudoProbe            func(user string) error
+	claudeACPProbe       func(context.Context, string, config.AgentConfig) error
+	terminalOutboxStatus func() (messaging.TerminalOutboxStatus, error)
 }
 
 func defaultDoctorDeps() doctorDeps {
@@ -65,6 +67,9 @@ func defaultDoctorDeps() doctorDeps {
 			return exec.Command("sudo", "-n", "-u", user, "true").Run()
 		},
 		claudeACPProbe: defaultClaudeACPProbe,
+		terminalOutboxStatus: func() (messaging.TerminalOutboxStatus, error) {
+			return messaging.InspectTerminalOutbox(messaging.DefaultTerminalOutboxFile())
+		},
 	}
 }
 
@@ -110,7 +115,44 @@ func runDoctorChecks(cfg *config.Config, deps doctorDeps) []doctorResult {
 	results = append(results, checkAPIToken(cfg))
 	results = append(results, checkWorkspaceRoots(cfg))
 	results = append(results, checkAuditLog(cfg))
+	results = append(results, checkTerminalOutbox(deps))
 	return results
+}
+
+func checkTerminalOutbox(deps doctorDeps) doctorResult {
+	result := doctorResult{Name: "terminal outbox"}
+	if deps.terminalOutboxStatus == nil {
+		result.Status = doctorWarn
+		result.Detail = "status probe unavailable"
+		return result
+	}
+	status, err := deps.terminalOutboxStatus()
+	if err != nil {
+		result.Status = doctorFail
+		result.Detail = fmt.Sprintf("state unreadable: %v", err)
+		return result
+	}
+	if status.Pending == 0 {
+		result.Status = doctorOK
+		result.Detail = "no pending terminal deliveries"
+		return result
+	}
+	result.Status = doctorWarn
+	if status.AtCapacity {
+		result.Status = doctorFail
+	}
+	parts := []string{fmt.Sprintf("%d pending", status.Pending)}
+	if !status.OldestCreatedAt.IsZero() {
+		parts = append(parts, "oldest "+humanOutboxAge(time.Since(status.OldestCreatedAt)))
+	}
+	if status.RecentError != "" {
+		parts = append(parts, "last error: "+status.RecentError)
+	}
+	if status.AtCapacity {
+		parts = append(parts, "capacity reached")
+	}
+	result.Detail = strings.Join(parts, "; ")
+	return result
 }
 
 // checkAuditLog 校验审计日志目录可写（默认开启时）。

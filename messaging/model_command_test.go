@@ -13,13 +13,17 @@ import (
 // fakeCodexModelAgent 实现 CodexModelControlAgent，用于测试 /model /reasoning。
 type fakeCodexModelAgent struct {
 	fakeAgent
-	model  string
-	effort string
-	models []agent.CodexModel
+	model       string
+	effort      string
+	serviceTier string
+	models      []agent.CodexModel
 }
 
 func (f *fakeCodexModelAgent) CodexModelStatus() agent.CodexModelStatus {
-	return agent.CodexModelStatus{Model: f.model, Effort: f.effort}
+	return agent.CodexModelStatus{Model: f.model, Effort: f.effort, ServiceTier: f.serviceTier}
+}
+func (f *fakeCodexModelAgent) SetCodexServiceTier(serviceTier string) {
+	f.serviceTier = serviceTier
 }
 func (f *fakeCodexModelAgent) ListCodexModels(context.Context) ([]agent.CodexModel, error) {
 	return f.models, nil
@@ -73,6 +77,52 @@ func TestReasoningCommandShowsAndSwitches(t *testing.T) {
 	out := h.handleReasoningCommand(context.Background(), platform.PlatformWeChat, "high")
 	if !strings.Contains(out, "high") || ag.effort != "high" {
 		t.Fatalf("effort not switched: out=%q effort=%q", out, ag.effort)
+	}
+}
+
+func TestFastCommandShowsAndSwitchesNewThreadDefault(t *testing.T) {
+	ag := &fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "gpt-5.5",
+		models: []agent.CodexModel{{
+			ID: "gpt-5.5", Default: true,
+			ServiceTiers: []agent.CodexServiceTier{{ID: agent.CodexServiceTierFast, Name: "Fast"}},
+		}},
+	}
+	h := newModelHandler(ag)
+
+	overview := h.handleFastCommandForRoute(context.Background(), modelAgentRoute{platform: platform.PlatformWeChat}, "")
+	if !strings.Contains(overview, "新会话默认速度") || !strings.Contains(overview, "Fast") {
+		t.Fatalf("overview=%q, want Fast capability", overview)
+	}
+	if out := h.handleFastCommandForRoute(context.Background(), modelAgentRoute{platform: platform.PlatformWeChat}, "on"); !strings.Contains(out, "Fast") ||
+		ag.serviceTier != agent.CodexServiceTierFast {
+		t.Fatalf("out=%q serviceTier=%q, want Fast default", out, ag.serviceTier)
+	}
+	if out := h.handleFastCommandForRoute(context.Background(), modelAgentRoute{platform: platform.PlatformWeChat}, "off"); !strings.Contains(out, "标准") ||
+		ag.serviceTier != agent.CodexServiceTierStandard {
+		t.Fatalf("out=%q serviceTier=%q, want standard default", out, ag.serviceTier)
+	}
+}
+
+func TestFastCommandRejectsUnsupportedModelAndClaude(t *testing.T) {
+	codex := &fakeCodexModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:     "gpt-legacy",
+		models:    []agent.CodexModel{{ID: "gpt-legacy"}},
+	}
+	h := newModelHandler(codex)
+	out := h.handleFastCommandForRoute(context.Background(), modelAgentRoute{platform: platform.PlatformWeChat}, "on")
+	if !strings.Contains(out, "不支持 Fast") || codex.serviceTier != "" {
+		t.Fatalf("out=%q serviceTier=%q, unsupported model must not change", out, codex.serviceTier)
+	}
+
+	claude := &fakeClaudeModelAgent{}
+	h = NewHandler(nil, nil)
+	h.SetDefaultAgent("claude", claude)
+	out = h.handleFastCommandForRoute(context.Background(), modelAgentRoute{platform: platform.PlatformWeChat}, "on")
+	if !strings.Contains(out, "仅支持 Codex") {
+		t.Fatalf("out=%q, Claude must reject Fast", out)
 	}
 }
 
@@ -160,6 +210,34 @@ func TestFeishuReasoningCommandUsesCurrentModelEffortChoices(t *testing.T) {
 	}
 	if !strings.Contains(card.Choices[1].Label, "当前") {
 		t.Fatalf("choices=%#v，期望标记当前推理强度", card.Choices)
+	}
+}
+
+func TestFeishuFastCommandUsesChoiceCard(t *testing.T) {
+	ag := &fakeCodexModelAgent{
+		fakeAgent:   fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		model:       "gpt-5.5",
+		serviceTier: agent.CodexServiceTierStandard,
+		models: []agent.CodexModel{{
+			ID: "gpt-5.5", Default: true,
+			ServiceTiers: []agent.CodexServiceTier{{ID: agent.CodexServiceTierFast, Name: "Fast"}},
+		}},
+	}
+	h := newModelHandler(ag)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "fast-card", Text: "/fast",
+	}, reply)
+
+	if len(reply.Texts) != 0 || len(reply.Choices) != 1 {
+		t.Fatalf("texts=%#v choices=%#v, want one Fast card", reply.Texts, reply.Choices)
+	}
+	card := reply.Choices[0]
+	if !strings.Contains(card.Prompt, "新会话默认速度: 标准") || len(card.Choices) != 2 ||
+		card.Choices[0].ID != "/fast off" || card.Choices[1].ID != "/fast on" ||
+		!strings.Contains(card.Choices[0].Label, "当前") {
+		t.Fatalf("card=%#v, want Standard/Fast choices", card)
 	}
 }
 

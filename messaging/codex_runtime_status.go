@@ -13,6 +13,7 @@ func (h *Handler) renderCodexStatus(runtime codexSessionCommandRuntime) navigati
 	accountLine := renderCodexStatusAccountLine(runtime)
 	threadID, pending := h.ensureCodexSessions().getThread(runtime.bindingKey, runtime.workspaceRoot)
 	threadID = strings.TrimSpace(threadID)
+	speedLine := codexFastStatusLine(runtime.ctx, runtime.agent, threadID)
 	if pending || threadID == "" {
 		runtimeLine := "运行: 未绑定会话"
 		if pending {
@@ -21,22 +22,22 @@ func (h *Handler) renderCodexStatus(runtime codexSessionCommandRuntime) navigati
 		return compactCodexStatusResult(base, "任务: 空闲", accountLine, runtimeLine)
 	}
 	if _, ok := runtime.agent.(agent.CodexLiveRuntimeAgent); !ok {
-		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 兼容模式")
+		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 兼容模式", speedLine)
 	}
 
 	unlock, err := h.lockCodexSessionThread(runtime.ctx, threadID, "status")
 	if err != nil {
-		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 查询繁忙，请稍后重试")
+		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 查询繁忙，请稍后重试", speedLine)
 	}
 	defer unlock()
 	resolution, err := h.resolveCodexRuntimeLocked(runtime.ctx, codexRuntimeResolveOptions{
 		route: runtime.codexRoute(threadID), threadID: threadID, ag: runtime.agent,
 	})
 	if err != nil {
-		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 暂不可用，请稍后重试")
+		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 暂不可用，请稍后重试", speedLine)
 	}
 	taskLine, runtimeLine := compactCodexRuntimeStatusLines(resolution)
-	return compactCodexStatusResult(base, taskLine, accountLine, runtimeLine)
+	return compactCodexStatusResult(base, taskLine, accountLine, runtimeLine, speedLine)
 }
 
 func renderCodexStatusAccountLine(runtime codexSessionCommandRuntime) string {
@@ -79,8 +80,10 @@ func compactCodexRuntimeStatusLines(resolution codexRuntimeResolution) (string, 
 	return taskLine, runtimeLine
 }
 
-func compactCodexStatusResult(base string, taskLine string, accountLine string, runtimeLine string) navigationCommandResult {
-	return textNavigationResult(wechatCommandText(base, taskLine, accountLine, runtimeLine))
+func compactCodexStatusResult(base string, taskLine string, accountLine string, runtimeLine string, extraLines ...string) navigationCommandResult {
+	lines := []string{base, taskLine, accountLine, runtimeLine}
+	lines = append(lines, extraLines...)
+	return textNavigationResult(wechatCommandText(lines...))
 }
 
 func (runtime codexSessionCommandRuntime) codexRoute(threadID string) codexConversationRoute {
