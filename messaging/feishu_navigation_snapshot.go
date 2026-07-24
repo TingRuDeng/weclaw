@@ -29,6 +29,7 @@ type feishuNavigationSnapshotScope struct {
 type feishuNavigationSnapshotRecord struct {
 	scope     feishuNavigationSnapshotScope
 	choices   []platform.Choice
+	prompt    string
 	expiresAt time.Time
 }
 
@@ -40,6 +41,10 @@ type feishuNavigationSnapshotStore struct {
 }
 
 func (s *feishuNavigationSnapshotStore) issue(scope feishuNavigationSnapshotScope, choices []platform.Choice) string {
+	return s.issueWithPrompt(scope, choices, "")
+}
+
+func (s *feishuNavigationSnapshotStore) issueWithPrompt(scope feishuNavigationSnapshotScope, choices []platform.Choice, prompt string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.nowOrDefault()
@@ -51,21 +56,27 @@ func (s *feishuNavigationSnapshotStore) issue(scope feishuNavigationSnapshotScop
 	s.records[token] = feishuNavigationSnapshotRecord{
 		scope:     normalizeFeishuNavigationSnapshotScope(scope),
 		choices:   clonePlatformChoices(choices),
+		prompt:    strings.TrimSpace(prompt),
 		expiresAt: now.Add(feishuNavigationSnapshotTTL),
 	}
 	return token
 }
 
 func (s *feishuNavigationSnapshotStore) load(token string, scope feishuNavigationSnapshotScope) ([]platform.Choice, bool) {
+	choices, _, ok := s.loadWithPrompt(token, scope)
+	return choices, ok
+}
+
+func (s *feishuNavigationSnapshotStore) loadWithPrompt(token string, scope feishuNavigationSnapshotScope) ([]platform.Choice, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.nowOrDefault()
 	s.purgeExpiredLocked(now)
 	record, ok := s.records[strings.TrimSpace(token)]
 	if !ok || record.scope != normalizeFeishuNavigationSnapshotScope(scope) {
-		return nil, false
+		return nil, "", false
 	}
-	return clonePlatformChoices(record.choices), true
+	return clonePlatformChoices(record.choices), record.prompt, true
 }
 
 func (s *feishuNavigationSnapshotStore) purgeExpiredLocked(now time.Time) {

@@ -67,12 +67,11 @@ func (h *Handler) renderCodexAccountListCommand(runtime codexSessionCommandRunti
 		AccountID: runtime.req.AccountID, ActorUserID: runtime.actorUserID, BindingKey: runtime.bindingKey,
 		AgentKind: feishuWorkspaceChoiceCodex, Section: feishuNavigationSectionAccounts,
 	}
-	snapshot := h.feishuNavSnapshots.issue(scope, choices)
+	prompt := renderCodexAccountChoicePrompt(status)
+	snapshot := h.feishuNavSnapshots.issueWithPrompt(scope, choices, prompt)
 	choices, page := paginateFeishuChoices(choices, 1)
 	choices = appendFeishuPageNavigation(choices, "/cx", "accounts", page, snapshot)
-	return choiceNavigationResult(text, feishuPaginatedPrompt(
-		"Codex 账号\n请选择目标账号。选择后还需要再次确认。", page,
-	), choices)
+	return choiceNavigationResult(text, feishuPaginatedPrompt(prompt, page), choices)
 }
 
 func (h *Handler) renderCodexAccountStatusCommand(runtime codexSessionCommandRuntime) navigationCommandResult {
@@ -273,6 +272,18 @@ func renderCodexAccountCurrent(status agent.CodexAccountStatus) string {
 	return "当前 Codex 账号: " + status.Store.Current.Label + formatMaskedEmailSuffix(status.Store.Current.EmailMasked)
 }
 
+func renderCodexAccountChoicePrompt(status agent.CodexAccountStatus) string {
+	current := "未保存 profile"
+	if status.Store.Current != nil {
+		current = status.Store.Current.Label + formatMaskedEmailSuffix(status.Store.Current.EmailMasked)
+	}
+	return wechatCommandText(
+		"Codex 账号",
+		"当前账号: "+current,
+		"可切换账号显示为按钮；选择后还需要再次确认。",
+	)
+}
+
 func renderCodexAccountStatus(status agent.CodexAccountStatus) string {
 	lines := []string{renderCodexAccountCurrent(status)}
 	if status.Store.Current != nil {
@@ -393,13 +404,14 @@ func (h *Handler) renderFeishuCodexAccountPage(req feishuCodexSessionCommandRequ
 		Section: feishuNavigationSectionAccounts,
 	}
 	snapshot := feishuNavigationSnapshotFromMessage(req.message)
-	choices, loaded := h.feishuNavSnapshots.load(snapshot, scope)
+	choices, prompt, loaded := h.feishuNavSnapshots.loadWithPrompt(snapshot, scope)
 	if !loaded {
+		return textNavigationResult("Codex 账号卡片已过期，请重新发送 /cx account。")
+	}
+	if prompt == "" {
 		return textNavigationResult("Codex 账号卡片已过期，请重新发送 /cx account。")
 	}
 	choices, pageInfo := paginateFeishuChoices(choices, page.Page)
 	choices = appendFeishuPageNavigation(choices, "/cx", "accounts", pageInfo, snapshot)
-	return choiceNavigationResult("", feishuPaginatedPrompt(
-		"Codex 账号\n请选择目标账号。选择后还需要再次确认。", pageInfo,
-	), choices)
+	return choiceNavigationResult("", feishuPaginatedPrompt(prompt, pageInfo), choices)
 }

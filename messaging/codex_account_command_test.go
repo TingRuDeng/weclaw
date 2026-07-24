@@ -109,6 +109,14 @@ func TestFeishuCodexAccountListUsesSnapshotPagination(t *testing.T) {
 	if len(first.Choices) != 1 || len(first.Choices[0].Choices) != 8 {
 		t.Fatalf("choices=%#v", first.Choices)
 	}
+	if !strings.Contains(first.Choices[0].Prompt, "当前账号: 账号-01（u***1@example.com）") {
+		t.Fatalf("prompt=%q, want current account as text", first.Choices[0].Prompt)
+	}
+	for _, choice := range first.Choices[0].Choices {
+		if strings.Contains(choice.Label, "账号-01") {
+			t.Fatalf("current account must not be rendered as a button: %#v", choice)
+		}
+	}
 	next := first.Choices[0].Choices[7]
 	if next.ID != "/cx page accounts 2" || next.Metadata[platform.ChoiceMetadataNavigationSnapshot] == "" {
 		t.Fatalf("next=%#v", next)
@@ -123,6 +131,33 @@ func TestFeishuCodexAccountListUsesSnapshotPagination(t *testing.T) {
 	h.HandleMessage(context.Background(), msg, second)
 	if len(second.Choices) != 1 || !strings.Contains(second.Choices[0].Prompt, "第 2/2 页") {
 		t.Fatalf("second=%#v", second.Choices)
+	}
+	if !strings.Contains(second.Choices[0].Prompt, "当前账号: 账号-01（u***1@example.com）") {
+		t.Fatalf("second prompt=%q, want cached current account as text", second.Choices[0].Prompt)
+	}
+}
+
+func TestFeishuCodexAccountListShowsEverySavedAccount(t *testing.T) {
+	h, _, msg := newMessagingAccountFixture(t, 3)
+	msg.Text, msg.MessageID = "/cx account", "account-list-all"
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+
+	h.HandleMessage(context.Background(), msg, reply)
+
+	if len(reply.Choices) != 1 {
+		t.Fatalf("choices=%#v", reply.Choices)
+	}
+	card := reply.Choices[0]
+	if !strings.Contains(card.Prompt, "当前账号: 账号-01（u***1@example.com）") {
+		t.Fatalf("prompt=%q, want current account text", card.Prompt)
+	}
+	if len(card.Choices) != 2 {
+		t.Fatalf("buttons=%#v, want two switchable accounts", card.Choices)
+	}
+	for index, want := range []string{"账号-02（u***2@example.com）", "账号-03（u***3@example.com）"} {
+		if card.Choices[index].Label != want {
+			t.Fatalf("button[%d]=%#v, want %q", index, card.Choices[index], want)
+		}
 	}
 }
 
