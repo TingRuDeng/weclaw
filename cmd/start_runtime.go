@@ -296,7 +296,7 @@ func (runtime startRuntime) startServices() error {
 			log.Printf("API server error: %v", err)
 		}
 	}()
-	go messaging.DeliverPendingRestartNotifications(runtime.ctx, runtime.registry, Version)
+	go runtime.handler.DeliverPendingRestartNotifications(runtime.ctx, runtime.registry, Version)
 	return nil
 }
 

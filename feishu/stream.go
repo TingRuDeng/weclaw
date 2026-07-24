@@ -54,6 +54,13 @@ type feishuStreamTerminalOp struct {
 }
 
 const feishuTerminalCheckpointKind = "feishu.cardkit.terminal.v1"
+const feishuStreamReferenceKind = "feishu.cardkit.stream.v1"
+
+type feishuStreamReferencePayload struct {
+	CardID   string `json:"card_id"`
+	Title    string `json:"title"`
+	Sequence int    `json:"sequence"`
+}
 
 const defaultSupersededTaskCardNotice = "已在新位置继续展示；后续进展和最终结果将更新到新卡片。"
 
@@ -289,6 +296,25 @@ func (s *feishuStream) Complete(ctx context.Context, finalContent string) error 
 	return s.deliverPreparedTerminal(ctx, checkpoint)
 }
 
+// DurableReference 导出仍在进行中的 CardKit 卡片，供新进程生成同卡终态。
+func (s *feishuStream) DurableReference() (platform.DurableStreamReference, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.terminal != nil || s.terminalDelivered {
+		return platform.DurableStreamReference{}, fmt.Errorf("Feishu stream is already terminal")
+	}
+	if s.cardID == "" || s.title == "" || s.sequence <= 0 {
+		return platform.DurableStreamReference{}, fmt.Errorf("Feishu stream reference is incomplete")
+	}
+	payload, err := json.Marshal(feishuStreamReferencePayload{
+		CardID: s.cardID, Title: s.title, Sequence: s.sequence,
+	})
+	if err != nil {
+		return platform.DurableStreamReference{}, err
+	}
+	return platform.DurableStreamReference{Kind: feishuStreamReferenceKind, Payload: payload}, nil
+}
+
 // Fail 关闭流式并全量更新为失败卡片。
 func (s *feishuStream) Fail(ctx context.Context, errText string) error {
 	checkpoint, err := s.PrepareTerminal(errText, true)
@@ -296,6 +322,26 @@ func (s *feishuStream) Fail(ctx context.Context, errText string) error {
 		return err
 	}
 	return s.deliverPreparedTerminal(ctx, checkpoint)
+}
+
+// PrepareTerminalFromReference 在新进程中恢复卡片定位与序列，并生成同卡终态操作。
+func (r *Replier) PrepareTerminalFromReference(reference platform.DurableStreamReference, finalContent string, failed bool) (platform.TerminalCheckpoint, error) {
+	if reference.Kind != feishuStreamReferenceKind {
+		return platform.TerminalCheckpoint{}, fmt.Errorf("unsupported Feishu stream reference %q", reference.Kind)
+	}
+	var payload feishuStreamReferencePayload
+	if err := json.Unmarshal(reference.Payload, &payload); err != nil {
+		return platform.TerminalCheckpoint{}, fmt.Errorf("decode Feishu stream reference: %w", err)
+	}
+	if payload.CardID == "" || payload.Title == "" || payload.Sequence <= 0 {
+		return platform.TerminalCheckpoint{}, fmt.Errorf("invalid Feishu stream reference")
+	}
+	stream := &feishuStream{
+		cardKit: r.cardKit, taskCards: r.taskCards,
+		cardID: payload.CardID, title: payload.Title, sequence: payload.Sequence,
+		now: time.Now,
+	}
+	return stream.PrepareTerminal(finalContent, failed)
 }
 
 // Supersede 退役旧任务卡但不生成任务终态；新卡将独立承接后续进展和结果。

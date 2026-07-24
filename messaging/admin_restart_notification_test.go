@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +80,92 @@ func TestDeliverPendingRestartNotificationsSendsCompletionNotice(t *testing.T) {
 	}
 }
 
+func TestServiceAdminRestartCompletesOriginalStreamingCardAfterRestart(t *testing.T) {
+	path := useAdminRestartNotificationPath(t)
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
+		return "restart scheduled", nil
+	})
+	accepted := newAdminStreamingCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_admin", ChatID: "oc_chat",
+		Text: "/restart --force", Metadata: privateFeishuAdminMetadata("on_admin"),
+	}, accepted)
+
+	notifications := waitForAdminRestartNotifications(t, path, 1)
+	if notifications[0].Stream == nil || notifications[0].Stream.Kind != "admin.test.stream.v1" {
+		t.Fatalf("notification=%#v, want durable stream reference", notifications[0])
+	}
+	if accepted.options.Title != "WeClaw · 重启" {
+		t.Fatalf("title=%q, want restart card", accepted.options.Title)
+	}
+	accepted.stream.mu.Lock()
+	completed, failed := accepted.stream.completed, accepted.stream.failed
+	accepted.stream.mu.Unlock()
+	if completed != "" || failed != "" {
+		t.Fatalf("old process terminal completed=%q failed=%q, want card left pending", completed, failed)
+	}
+
+	recovered := newAdminStreamingCommandTestReplier()
+	fakePlatform := &adminRestartNotifyPlatform{
+		platformName: platform.PlatformFeishu, accountID: "cli_a", reply: recovered,
+	}
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: fakePlatform, Access: platform.NewAccessControl([]string{"ou_admin"}),
+	}})
+
+	DeliverPendingRestartNotifications(context.Background(), registry, "v0.1.test")
+
+	recovered.mu.Lock()
+	prepared, preparedText, delivered := recovered.prepared, recovered.preparedText, recovered.delivered
+	recovered.mu.Unlock()
+	if prepared == nil || delivered == nil || !strings.Contains(preparedText, "版本：v0.1.test") {
+		t.Fatalf("prepared=%#v delivered=%#v text=%q", prepared, delivered, preparedText)
+	}
+	if texts := recovered.snapshotTexts(); len(texts) != 0 {
+		t.Fatalf("texts=%#v, want original card update only", texts)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pending notification file still exists, stat err=%v", err)
+	}
+}
+
+func TestRestartCardDeliveryFailureMovesCheckpointToTerminalOutbox(t *testing.T) {
+	path := useAdminRestartNotificationPath(t)
+	writeAdminRestartNotificationsForTest(t, path, []adminRestartNotification{{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat", UserID: "ou_admin",
+		CreatedAt: time.Now(), Stream: &platform.DurableStreamReference{
+			Kind: "admin.test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-restart","sequence":1}`),
+		},
+	}})
+	recovered := newAdminStreamingCommandTestReplier()
+	recovered.deliverErr = errors.New("cardkit unavailable")
+	fakePlatform := &adminRestartNotifyPlatform{
+		platformName: platform.PlatformFeishu, accountID: "cli_a", reply: recovered,
+	}
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: fakePlatform, Access: platform.NewAccessControl([]string{"ou_admin"}),
+	}})
+	outbox, err := newTerminalOutbox(filepath.Join(t.TempDir(), "terminal-outbox.json"), registry)
+	if err != nil {
+		t.Fatalf("newTerminalOutbox: %v", err)
+	}
+	h := NewHandler(nil, nil)
+	h.terminalOutbox = outbox
+
+	h.DeliverPendingRestartNotifications(context.Background(), registry, "v0.1.test")
+
+	status := outbox.status()
+	if status.Pending != 1 || len(outbox.entries) != 1 || outbox.entries[0].Checkpoint == nil || outbox.entries[0].Text != "" {
+		t.Fatalf("status=%#v entries=%#v, want one checkpoint-only retry", status, outbox.entries)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("restart notification should be handed off to outbox, stat err=%v", err)
+	}
+}
+
 func TestDeliverPendingRestartNotificationsKeepsRecordWithoutReplier(t *testing.T) {
 	path := useAdminRestartNotificationPath(t)
 	writeAdminRestartNotificationsForTest(t, path, []adminRestartNotification{
@@ -133,6 +220,19 @@ func readAdminRestartNotifications(t *testing.T, path string) []adminRestartNoti
 		t.Fatalf("decode pending notification file: %v", err)
 	}
 	return notifications
+}
+
+func waitForAdminRestartNotifications(t *testing.T, path string, count int) []adminRestartNotification {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		notifications, err := loadAdminRestartNotifications()
+		if err == nil && len(notifications) == count {
+			return notifications
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return readAdminRestartNotifications(t, path)
 }
 
 func writeAdminRestartNotificationsForTest(t *testing.T, path string, notifications []adminRestartNotification) {

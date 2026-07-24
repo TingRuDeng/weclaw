@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -537,6 +538,10 @@ type adminCommandTestReplier struct {
 	capabilities platform.Capabilities
 	options      platform.StreamOptions
 	stream       *adminCommandTestStream
+	prepared     *platform.DurableStreamReference
+	preparedText string
+	delivered    *platform.TerminalCheckpoint
+	deliverErr   error
 }
 
 func newAdminCommandTestReplier() *adminCommandTestReplier {
@@ -583,6 +588,24 @@ func (r *adminCommandTestReplier) OpenStream(ctx context.Context, opts platform.
 	return r.stream, nil
 }
 
+func (r *adminCommandTestReplier) PrepareTerminalFromReference(reference platform.DurableStreamReference, finalContent string, failed bool) (platform.TerminalCheckpoint, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	copied := reference
+	r.prepared = &copied
+	r.preparedText = finalContent
+	payload, err := json.Marshal(map[string]any{"content": finalContent, "failed": failed})
+	return platform.TerminalCheckpoint{Kind: "admin.test.terminal.v1", Payload: payload}, err
+}
+
+func (r *adminCommandTestReplier) DeliverTerminal(_ context.Context, checkpoint platform.TerminalCheckpoint) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	copied := checkpoint
+	r.delivered = &copied
+	return r.deliverErr
+}
+
 func (r *adminCommandTestReplier) snapshotTexts() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -596,6 +619,13 @@ type adminCommandTestStream struct {
 }
 
 func (s *adminCommandTestStream) Update(context.Context, string) error { return nil }
+
+func (s *adminCommandTestStream) DurableReference() (platform.DurableStreamReference, error) {
+	return platform.DurableStreamReference{
+		Kind:    "admin.test.stream.v1",
+		Payload: json.RawMessage(`{"card_id":"card-restart","sequence":1}`),
+	}, nil
+}
 
 func (s *adminCommandTestStream) Complete(_ context.Context, content string) error {
 	s.mu.Lock()

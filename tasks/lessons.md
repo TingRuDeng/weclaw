@@ -703,3 +703,11 @@
 - 规则：`scripts/release.sh` 是唯一稳定版发布实现；workflow 只配置权限、checkout clean `main`、Go 版本和 `GH_TOKEN`，然后调用该脚本。
 - 反例：workflow 自己 checkout 既有 tag、运行较少门禁并直接用 Release action 上传，导致本地与远端发布语义漂移。
 - 正确做法：测试 workflow 的“委托权威脚本”契约，而不是要求 workflow 复制脚本里的矩阵、staticcheck、govulncheck 和资产校验文本。
+
+## 2026-07-24 会终止自身进程的管理命令必须由新进程确认终态
+
+- 触发条件：飞书执行 `/restart`，旧 WeClaw 进程需要退出，而用户期望像 `/update` 一样在同一卡片中看到最终结果。
+- 规则：旧进程只能创建进行态卡片并持久化 adapter 自描述的卡片引用；只有新进程完成平台和服务启动后才能把原卡更新为成功。卡片终态必须使用固定操作 ID 和单调 sequence，直接更新失败后交给 terminal outbox 重试。
+- 反例：旧进程在延迟启动 restart 子进程后立刻把卡片标绿，虚构“重启完成”；或只保存聊天路由，让新进程另发文本，造成原卡永久停留在处理中并刷出额外消息。
+- 正确做法：持久化不含凭据的 card ID、标题和当前 sequence；新进程按当前版本生成 CardKit terminal checkpoint 并优先直接回写，失败时将同一 checkpoint 移交 outbox。旧格式或不支持流式卡片的平台继续使用完整文本通知。
+- 来源：2026-07-24 用户指出飞书 `/restart` 不像 `/update` 一样使用卡片。

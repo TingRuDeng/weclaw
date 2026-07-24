@@ -572,6 +572,48 @@ func TestFeishuTerminalCheckpointKeepsOperationIDsAcrossRestartRetry(t *testing.
 	}
 }
 
+func TestFeishuStreamReferenceCompletesOriginalCardAfterRestart(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeIdempotentCardKitClient{}
+	beforeRestart := NewReplier(sender, "oc_chat", cardKit)
+	stream, err := beforeRestart.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "WeClaw · 重启", InitialContent: "正在重启",
+	})
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	exporter, ok := stream.(platform.DurableStreamReferenceExporter)
+	if !ok {
+		t.Fatalf("stream=%T, want DurableStreamReferenceExporter", stream)
+	}
+	reference, err := exporter.DurableReference()
+	if err != nil {
+		t.Fatalf("DurableReference: %v", err)
+	}
+
+	afterRestart := NewReplier(nil, "oc_chat", cardKit)
+	checkpoint, err := afterRestart.PrepareTerminalFromReference(reference, "WeClaw 已重启完成。\n版本：v0.1.test", false)
+	if err != nil {
+		t.Fatalf("PrepareTerminalFromReference: %v", err)
+	}
+	if err := afterRestart.DeliverTerminal(context.Background(), checkpoint); err != nil {
+		t.Fatalf("DeliverTerminal: %v", err)
+	}
+
+	if len(cardKit.updateCardIDs) != 1 || cardKit.updateCardIDs[0] != "card-1" {
+		t.Fatalf("updated card IDs=%#v, want original card", cardKit.updateCardIDs)
+	}
+	if len(cardKit.streamingSeqs) != 2 || cardKit.streamingSeqs[0] != 1 || cardKit.streamingSeqs[1] != 2 {
+		t.Fatalf("streaming seqs=%#v, want enable 1 then disable 2", cardKit.streamingSeqs)
+	}
+	if len(cardKit.updateSeqs) != 1 || cardKit.updateSeqs[0] != 3 {
+		t.Fatalf("update seqs=%#v, want terminal update 3", cardKit.updateSeqs)
+	}
+	if !strings.Contains(cardKit.updateCards[0], "v0.1.test") {
+		t.Fatalf("terminal card=%q, want restarted version", cardKit.updateCards[0])
+	}
+}
+
 func TestFeishuTerminalCheckpointRejectsNonIdempotentClient(t *testing.T) {
 	base := &fakeCardKitClient{}
 	stream := &feishuStream{

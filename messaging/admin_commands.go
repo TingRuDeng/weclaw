@@ -67,18 +67,30 @@ func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.In
 	go h.runServiceAdminCommand(msg, command, args, reply, statusStream)
 }
 
-// openServiceAdminCommandStatus 让 /update 在支持流式卡片的平台原地展示检查结果，
-// 避免“已是最新版本”被拆到另一条消息后难以发现。
+// openServiceAdminCommandStatus 让管理命令在支持流式卡片的平台原地展示状态。
+// /restart 的终态由新进程根据持久化卡片引用回写，不能在旧进程中提前宣告成功。
 func (h *Handler) openServiceAdminCommandStatus(ctx context.Context, command string, reply platform.Replier) platform.Stream {
-	if command != "update" || !reply.Capabilities().Streaming {
+	if !reply.Capabilities().Streaming {
 		return nil
 	}
-	stream, err := reply.OpenStream(ctx, platform.StreamOptions{
-		Title:          "WeClaw · 更新",
-		InitialContent: "更新命令已受理，正在检查本地版本与最新版本，请稍候。\n\n最终结果会在此卡片中更新。",
-	})
+	var options platform.StreamOptions
+	switch command {
+	case "update":
+		options = platform.StreamOptions{
+			Title:          "WeClaw · 更新",
+			InitialContent: "更新命令已受理，正在检查本地版本与最新版本，请稍候。\n\n最终结果会在此卡片中更新。",
+		}
+	case "restart":
+		options = platform.StreamOptions{
+			Title:          "WeClaw · 重启",
+			InitialContent: "重启命令已受理，正在准备安全重启。\n\n服务恢复后，此卡片会更新为最终结果。",
+		}
+	default:
+		return nil
+	}
+	stream, err := reply.OpenStream(ctx, options)
 	if err != nil {
-		log.Printf("[admin-update] failed to open status stream, falling back to text: %v", err)
+		log.Printf("[admin-%s] failed to open status stream, falling back to text: %v", command, err)
 		return nil
 	}
 	return stream
@@ -148,9 +160,13 @@ func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command s
 	}
 	output, err := executor(runCtx, command, args)
 	if command == "restart" && err == nil {
-		if notifyErr := recordAdminRestartNotification(msg); notifyErr != nil {
+		cardPending, notifyErr := recordAdminRestartNotification(msg, statusStream)
+		if notifyErr != nil {
 			log.Printf("[admin-restart] failed to persist completion notification: %v", notifyErr)
 			h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, formatServiceAdminRestartNotificationUnavailable(output), true)
+			return
+		}
+		if cardPending {
 			return
 		}
 	}
@@ -171,7 +187,7 @@ func (h *Handler) finishServiceAdminCommand(ctx context.Context, reply platform.
 	if err == nil {
 		return
 	}
-	log.Printf("[admin-update] failed to update status stream, falling back to text: %v", err)
+	log.Printf("[admin-command] failed to update status stream, falling back to text: %v", err)
 	sendPlatformText(ctx, reply, userID, content)
 }
 

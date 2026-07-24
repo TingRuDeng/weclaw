@@ -81,6 +81,23 @@ type TerminalCheckpoint struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// DurableStreamReference 是可跨进程恢复同一张流式卡片的 adapter 自描述引用。
+// 引用只保存平台卡片定位和单调序列，不包含平台凭据。
+type DurableStreamReference struct {
+	Kind    string          `json:"kind"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// DurableStreamReferenceExporter 在进程退出前导出仍处于进行态的卡片引用。
+type DurableStreamReferenceExporter interface {
+	DurableReference() (DurableStreamReference, error)
+}
+
+// DurableStreamTerminalPreparer 在新进程中根据持久化引用生成终态操作。
+type DurableStreamTerminalPreparer interface {
+	PrepareTerminalFromReference(reference DurableStreamReference, finalContent string, failed bool) (TerminalCheckpoint, error)
+}
+
 // DurableTerminalStream 在执行网络写入前冻结并导出终态操作。
 type DurableTerminalStream interface {
 	PrepareTerminal(finalContent string, failed bool) (TerminalCheckpoint, error)
