@@ -92,6 +92,38 @@ func buildChoiceHandledStatusCard(template string, content string) *callback.Car
 	return &callback.Card{Type: "raw", Data: card}
 }
 
+// choiceCommandResultTemplate 只为具备明确终态的切换命令着色；普通信息卡保持蓝色。
+func choiceCommandResultTemplate(command string, content string) string {
+	if !isDeferredCardResultCommand(command) {
+		return "blue"
+	}
+	content = strings.TrimSpace(content)
+	if strings.Contains(content, "等待超时") {
+		return "yellow"
+	}
+	if choiceCommandSucceeded(content) {
+		if strings.Contains(content, "暂不可用") || strings.Contains(content, "运行通道: 不可用") {
+			return "yellow"
+		}
+		return "green"
+	}
+	return "red"
+}
+
+func choiceCommandSucceeded(content string) bool {
+	for _, marker := range []string{
+		"已切换",
+		"切换成功",
+		"已进入工作空间并绑定",
+		"当前已经是目标 Codex 账号",
+	} {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func approvalHandledStatus(action parsedCardAction) (string, string) {
 	if strings.TrimSpace(action.Status) == approvalStatusArchived {
 		return "✅ 已收纳到任务卡片", "green"

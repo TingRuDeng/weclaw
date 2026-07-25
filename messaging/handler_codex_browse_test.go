@@ -144,6 +144,34 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	}
 }
 
+func TestCodexLsDoesNotStartSharedAgent(t *testing.T) {
+	started := false
+	h := NewHandler(func(context.Context, string) agent.Agent {
+		started = true
+		return nil
+	}, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "local")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	h.SetAgentMetas([]AgentMeta{{Name: "codex", Type: "acp", Command: "codex"}})
+	h.SetCodexLocalSessionDir(codexDir)
+	writeLocalCodexSession(t, codexDir, "thread-local", workspace, "本机会话", "2026-04-29T09:00:00Z")
+
+	result := h.handleCodexSessionCommandForRouteResult(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "user-1",
+		RouteUserID: "user-1",
+		Trimmed:     "/cx ls",
+		Admin:       true,
+	})
+
+	if started {
+		t.Fatal("/cx ls must read the local catalog without starting the shared Codex agent")
+	}
+	if !result.ShowCard || !strings.Contains(result.Reply, "local") {
+		t.Fatalf("result=%#v, want local workspace navigation result", result)
+	}
+}
+
 func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()

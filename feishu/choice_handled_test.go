@@ -84,6 +84,30 @@ func TestBuildChoiceHandledCardCompactsHandledApprovalSummary(t *testing.T) {
 	}
 }
 
+func TestChoiceCommandResultTemplateUsesTerminalStateColors(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		content string
+		want    string
+	}{
+		{name: "ordinary information", command: "/cx status", content: "Codex 状态", want: "blue"},
+		{name: "codex switch success", command: "/cx switch thread-1", content: "已切换并绑定。", want: "green"},
+		{name: "claude switch success", command: "/cc switch session-1", content: "已切换 Claude 会话。", want: "green"},
+		{name: "account switch success", command: "/cx account confirm token", content: "Codex 账号切换成功", want: "green"},
+		{name: "runtime unavailable", command: "/cx switch thread-1", content: "已切换并绑定。\n运行通道: 暂不可用", want: "yellow"},
+		{name: "timeout", command: "/cx switch thread-1", content: "会话切换等待超时，请重试。", want: "yellow"},
+		{name: "switch failure", command: "/cx switch thread-1", content: "绑定 Codex 会话失败，请重试。", want: "red"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := choiceCommandResultTemplate(tt.command, tt.content); got != tt.want {
+				t.Fatalf("template=%q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildChoiceHandledCardCallbackJSONUsesRawType(t *testing.T) {
 	resp := &callback.CardActionTriggerResponse{
 		Card: buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date"}),

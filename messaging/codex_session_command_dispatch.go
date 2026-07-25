@@ -40,6 +40,9 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 	if fields[1] == "model" && isCodexModelStatusArgs(fields[2:]) {
 		return codexSessionCommandPreparation{result: textNavigationResult(h.renderCodexModelStatusFromConfig())}
 	}
+	if fields[1] == "ls" {
+		return h.prepareCodexListCommand(req, actorUserID, routeUserID)
+	}
 	agentName, ag, err := h.getCodexSessionAgent(ctx)
 	if err != nil {
 		return codexSessionCommandPreparation{result: textNavigationResult(err.Error())}
@@ -65,6 +68,19 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 	h.ensureCodexSessions().ensureWorkspace(runtime.bindingKey, runtime.workspaceRoot)
 	h.syncCodexThreadFromAgent(routeUserID, agentName, runtime.workspaceRoot, ag)
 	return codexSessionCommandPreparation{runtime: runtime, unlock: unlock, ready: true}
+}
+
+// prepareCodexListCommand 直接读取本地 Codex App 目录，避免只读列表冷启动共享 Host。
+func (h *Handler) prepareCodexListCommand(req codexSessionCommandRequest, actorUserID string, routeUserID string) codexSessionCommandPreparation {
+	agentName, ok := h.codexAgentName()
+	if !ok {
+		return codexSessionCommandPreparation{result: textNavigationResult("当前没有配置 codex agent")}
+	}
+	bindingKey := codexBindingKey(routeUserID, agentName)
+	admin := req.Admin || h.isAdminUser(actorUserID)
+	return codexSessionCommandPreparation{result: cardNavigationResult(
+		h.renderCodexListForAccess(bindingKey, actorUserID, admin),
+	)}
 }
 
 // normalizeCodexCommandUsers 补齐真实用户和平台路由用户。

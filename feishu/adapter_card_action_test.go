@@ -263,6 +263,7 @@ func TestHandleCardActionEventFastSwitchUpdatesOriginalCard(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertInlineCardContent(t, resp.Card, "已切换到会话 1")
+	assertInlineCardTemplate(t, resp.Card, "green")
 	if len(sender.patchCards) != 0 || len(sender.texts) != 0 {
 		t.Fatalf("sender=%#v，快速切换应由回调直接替换原卡", sender)
 	}
@@ -335,6 +336,24 @@ func assertInlineCardContent(t *testing.T, card *callback.Card, want string) {
 	}
 	if !strings.Contains(string(data), want) {
 		t.Fatalf("card=%s，期望包含 %q", data, want)
+	}
+}
+
+func assertInlineCardTemplate(t *testing.T, card *callback.Card, want string) {
+	t.Helper()
+	if card == nil {
+		t.Fatal("card is nil")
+	}
+	data, ok := card.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("card data=%T, want map", card.Data)
+	}
+	header, ok := data["header"].(map[string]any)
+	if !ok {
+		t.Fatalf("card header=%#v, want map", data["header"])
+	}
+	if got := header["template"]; got != want {
+		t.Fatalf("card template=%v, want %s", got, want)
 	}
 }
 
