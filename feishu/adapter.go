@@ -60,7 +60,7 @@ func NewAdapter(creds Credentials) *Adapter {
 	restClient := lark.NewClient(creds.AppID, creds.AppSecret)
 	adapter := &Adapter{
 		creds:               creds,
-		downloader:          newSDKResourceDownloader(restClient),
+		downloader:          newSDKResourceDownloader(restClient, creds.AppID),
 		sender:              newSDKMessageSender(restClient, creds.AppID),
 		cardKit:             newSDKCardKitClient(restClient, creds.AppID),
 		validate:            ValidateCredentials,

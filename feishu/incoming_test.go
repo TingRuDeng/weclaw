@@ -52,6 +52,28 @@ func TestPermanentFeishuResourceCodes(t *testing.T) {
 	}
 }
 
+func TestFeishuResourceAPIErrorPreservesPermissionCode(t *testing.T) {
+	err := newFeishuResourceAPIError("cli_a", "img_1", 99991672, "missing message scope")
+
+	if !IsPermissionError(err) {
+		t.Fatalf("error=%v, want structured permission error", err)
+	}
+	if isPermanentResourceDownloadError(err) {
+		t.Fatalf("permission error should use its own terminal policy, not permanent resource policy")
+	}
+}
+
+func TestFeishuResourceAPIErrorPreservesPermanentCause(t *testing.T) {
+	err := newFeishuResourceAPIError("cli_a", "img_1", 234003, "invalid resource type")
+
+	if !isPermanentResourceDownloadError(err) {
+		t.Fatalf("error=%v, want permanent resource error", err)
+	}
+	if code, ok := feishuErrorCode(err); !ok || code != 234003 {
+		t.Fatalf("code=%d ok=%v, want wrapped feishu code", code, ok)
+	}
+}
+
 func TestToIncomingFromMessageParsesText(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.downloader = &fakeResourceDownloader{}

@@ -54,6 +54,16 @@ func TestPermissionGuideMessageIncludesAppPermissionURL(t *testing.T) {
 	}
 }
 
+func TestResourcePermissionGuideMessageIncludesReadonlyScope(t *testing.T) {
+	msg := ResourcePermissionGuideMessage("cli_a")
+
+	for _, want := range []string{"im:message:readonly", "https://open.feishu.cn/app/cli_a/permission", "发布"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("message=%q, want %q", msg, want)
+		}
+	}
+}
+
 func TestBuildPermissionGuideTextIncludesScopesAndNoSecret(t *testing.T) {
 	msg := buildPermissionGuideText("cli_a", true)
 

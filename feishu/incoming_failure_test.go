@@ -13,6 +13,16 @@ type permanentFakeResourceError struct{ error }
 
 func (permanentFakeResourceError) Permanent() bool { return true }
 
+type failingDirectTextSender struct {
+	fakeMessageSender
+	err error
+}
+
+func (s *failingDirectTextSender) SendText(ctx context.Context, openID string, text string) error {
+	s.fakeMessageSender.SendText(ctx, openID, text)
+	return s.err
+}
+
 func TestHandleMessageEventRetriesTransientAttachmentFailure(t *testing.T) {
 	downloader := &fakeResourceDownloader{errors: []error{errors.New("temporary network failure"), nil}}
 	sender := &fakeMessageSender{}
@@ -56,6 +66,57 @@ func TestHandleMessageEventConsumesPermanentAttachmentFailure(t *testing.T) {
 	}
 	if dispatches != 0 || len(downloader.seen) != 1 {
 		t.Fatalf("dispatches=%d downloads=%d", dispatches, len(downloader.seen))
+	}
+}
+
+func TestHandleMessageEventConsumesAttachmentPermissionFailureInParentChat(t *testing.T) {
+	downloader := &fakeResourceDownloader{errors: []error{
+		newFeishuResourceAPIError("cli_a", "img_1", 99991672, "missing message scope"),
+	}}
+	sender := &fakeMessageSender{}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = downloader
+	adapter.sender = sender
+	event := newMessageEvent("p2p", "image", `{"image_key":"img_1"}`)
+	dispatches := 0
+	dispatch := func(context.Context, platform.IncomingMessage, platform.Replier) { dispatches++ }
+
+	if err := adapter.handleMessageEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatalf("permission error should be consumed: %v", err)
+	}
+	if len(sender.replyTexts) != 0 {
+		t.Fatalf("replyTexts=%#v, permission guide must not create a child thread", sender.replyTexts)
+	}
+	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "im:message:readonly") {
+		t.Fatalf("texts=%#v, want direct resource permission guide", sender.texts)
+	}
+	if err := adapter.handleMessageEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatalf("duplicate event error: %v", err)
+	}
+	if dispatches != 0 || len(downloader.seen) != 1 {
+		t.Fatalf("dispatches=%d downloads=%d", dispatches, len(downloader.seen))
+	}
+}
+
+func TestHandleMessageEventConsumesPermissionFailureWhenNoticeFails(t *testing.T) {
+	downloader := &fakeResourceDownloader{errors: []error{
+		newFeishuResourceAPIError("cli_a", "img_1", 99991672, "missing message scope"),
+	}}
+	sender := &failingDirectTextSender{err: errors.New("send notice failed")}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.downloader = downloader
+	adapter.sender = sender
+	event := newMessageEvent("p2p", "image", `{"image_key":"img_1"}`)
+	dispatch := func(context.Context, platform.IncomingMessage, platform.Replier) {}
+
+	if err := adapter.handleMessageEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatalf("terminal permission error should be consumed even when notice fails: %v", err)
+	}
+	if err := adapter.handleMessageEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatalf("duplicate event error: %v", err)
+	}
+	if len(downloader.seen) != 1 {
+		t.Fatalf("downloads=%d, permission event should remain deduplicated", len(downloader.seen))
 	}
 }
 

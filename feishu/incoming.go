@@ -2,7 +2,6 @@ package feishu
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -31,11 +30,12 @@ type resourceDownloader interface {
 
 type sdkResourceDownloader struct {
 	client *lark.Client
+	appID  string
 }
 
 // newSDKResourceDownloader 创建基于飞书 REST client 的资源下载器。
-func newSDKResourceDownloader(client *lark.Client) resourceDownloader {
-	return &sdkResourceDownloader{client: client}
+func newSDKResourceDownloader(client *lark.Client, appID string) resourceDownloader {
+	return &sdkResourceDownloader{client: client, appID: appID}
 }
 
 // DownloadResource 下载飞书消息资源并转换为统一附件模型。
@@ -51,11 +51,7 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 		return platform.Attachment{}, err
 	}
 	if !resp.Success() {
-		message := fmt.Sprintf("download feishu resource %s failed: code=%d msg=%s", resource.FileKey, resp.Code, resp.Msg)
-		if isPermanentFeishuResourceCode(resp.Code) {
-			return platform.Attachment{}, permanentResourceDownloadError{message: message}
-		}
-		return platform.Attachment{}, errors.New(message)
+		return platform.Attachment{}, newFeishuResourceAPIError(d.appID, resource.FileKey, resp.Code, resp.Msg)
 	}
 	target := feishuResourceTarget(resource)
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {

@@ -131,29 +131,41 @@ func (a *Adapter) handleDedupOwnershipLoss(ctx context.Context, msg platform.Inc
 	return nil
 }
 
-// handleResourceDownloadFailure 区分可重试与永久错误，并始终给用户明确反馈。
+// handleResourceDownloadFailure 区分可重试、权限和永久错误，并始终给用户明确反馈。
 func (a *Adapter) handleResourceDownloadFailure(ctx context.Context, msg platform.IncomingMessage, reservation feishuDedupReservation, err error) error {
+	permission := IsPermissionError(err)
 	permanent := isPermanentResourceDownloadError(err)
 	notice := "附件获取失败，请稍后重试。"
-	if permanent {
+	if permission {
+		notice = ResourcePermissionGuideMessage(a.creds.AppID)
+	} else if permanent {
 		notice = "附件获取失败：文件过大或资源不可用，请重新发送。"
 	}
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
-	replier := NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit).withDeliveryAccount(a.creds.AppID)
-	if sendErr := replier.SendText(ctx, notice); sendErr != nil {
+	var replier *Replier
+	if permission {
+		// 权限错误提示发送到当前聊天，避免回复原图片后创建飞书子会话。
+		replier = NewReplier(a.sender, target, a.cardKit).withDeliveryAccount(a.creds.AppID)
+	} else {
+		replier = NewReplierForMessage(a.sender, target, msg.ReplyToID, a.cardKit).withDeliveryAccount(a.creds.AppID)
+	}
+	sendErr := replier.SendText(ctx, notice)
+	if sendErr != nil {
 		log.Printf("[feishu] failed to send resource download failure notice: %v", sendErr)
-		reservation.release()
-		return sendErr
 	}
 	log.Printf("[feishu] message resource download failed: %v", err)
-	if permanent {
+	if permission || permanent {
 		if completeErr := completeFeishuDedupReservation(reservation); completeErr != nil {
 			reservation.release()
 			return completeErr
 		}
+		// 同一事件重投不会修复权限或永久资源错误；即使提示发送失败也应完成去重。
 		return nil
 	}
 	reservation.release()
+	if sendErr != nil {
+		return sendErr
+	}
 	return err
 }
 

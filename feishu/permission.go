@@ -74,6 +74,15 @@ func PermissionGuideMessage(appID string) string {
 	return buildPermissionGuideText(appID, true)
 }
 
+// ResourcePermissionGuideMessage 返回下载消息附件所需的最小权限引导。
+func ResourcePermissionGuideMessage(appID string) string {
+	return strings.Join([]string{
+		"附件获取失败：飞书应用缺少读取消息资源所需权限。",
+		"请为应用身份开通 im:message:readonly，并创建版本、发布后重试。",
+		"权限设置页：" + buildPermissionURL(appID),
+	}, "\n")
+}
+
 func buildPermissionURL(appID string) string {
 	return fmt.Sprintf("https://open.feishu.cn/app/%s/permission", strings.TrimSpace(appID))
 }
