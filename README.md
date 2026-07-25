@@ -281,6 +281,7 @@ Key security rules:
 - Audit logging is enabled by default and never records secrets.
 - Codex `permission_level` accepts `default`, `auto_review`, and `full_access`; the effective default is `default`.
 - Codex manages the shared Unix socket automatically. Set `app_server_socket` only for multi-process or `run_as_user` deployments; its parent must be owned by the target user and no more permissive than `0700`.
+- Native Codex shared app-server configurations default to `codex_auto_update: incompatible`. WeClaw invokes the official `codex update` only after repeated state-runtime initialization failures, while no writer lease exists, and accepts the update only when the CLI version actually changes. Set it to `off` to disable this behavior. A failed or unchanged update remains fail-closed and never falls back to another Agent.
 
 | Codex Permission Level | Behavior |
 | --- | --- |

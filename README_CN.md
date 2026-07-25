@@ -282,6 +282,7 @@ weclaw doctor
 - 审计日志默认开启，不记录密钥。
 - Codex `permission_level` 支持 `default`、`auto_review`、`full_access`；默认档位为 `default`。
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。
+- 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有状态库初始化连续失败、没有 writer lease 且确认 CLI 版本实际变化时，才调用官方 `codex update` 并重启 Host；设为 `off` 可完全禁用。更新失败或版本未变化时保持不可写，不回退到其他 Agent。
 
 | Codex 权限档位 | 行为 |
 | --- | --- |

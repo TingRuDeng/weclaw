@@ -82,6 +82,7 @@ type AgentConfig struct {
 	Progress         *ProgressConfig   `json:"progress,omitempty"`          // 微信进度反馈配置
 	AutoLaunch       *bool             `json:"auto_launch,omitempty"`       // companion 是否自动打开本地可见终端
 	AppServerSocket  string            `json:"app_server_socket,omitempty"` // Codex 单一 app-server 的共享 Unix socket
+	CodexAutoUpdate  string            `json:"codex_auto_update,omitempty"` // Codex CLI 自动更新：off / incompatible
 	RunAsUser        string            `json:"run_as_user,omitempty"`       // 以独立 Unix 用户运行 agent，做文件系统隔离
 	RunAsEnv         []string          `json:"run_as_env,omitempty"`        // run_as_user 时需透传的环境变量名白名单
 }
@@ -148,6 +149,27 @@ func (c AgentConfig) ValidateCodexPermissionConfig() error {
 	}
 }
 
+// EffectiveCodexAutoUpdate 返回 Codex CLI 自动更新策略。未显式迁移的自定义
+// Agent 保持关闭；NormalizeCodexRemoteFirst 会为原生 shared app-server 写入推荐值。
+func (c AgentConfig) EffectiveCodexAutoUpdate() string {
+	return normalizeCodexAutoUpdate(c.CodexAutoUpdate)
+}
+
+// ValidateCodexAutoUpdateConfig 拒绝未知策略，避免把拼写错误静默当成关闭。
+func (c AgentConfig) ValidateCodexAutoUpdateConfig() error {
+	switch policy := c.EffectiveCodexAutoUpdate(); policy {
+	case "", "off", "incompatible":
+		return nil
+	default:
+		return fmt.Errorf("invalid codex_auto_update %q: use off or incompatible", c.CodexAutoUpdate)
+	}
+}
+
+func normalizeCodexAutoUpdate(policy string) string {
+	policy = strings.ToLower(strings.TrimSpace(policy))
+	return strings.ReplaceAll(policy, "-", "_")
+}
+
 func normalizePermissionLevel(level string) string {
 	level = strings.ToLower(strings.TrimSpace(level))
 	return strings.ReplaceAll(level, "-", "_")
@@ -212,6 +234,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("agent %q: max_history must be >= 0", name)
 		}
 		if err := agentCfg.ValidateCodexPermissionConfig(); err != nil {
+			return fmt.Errorf("agent %q: %w", name, err)
+		}
+		if err := agentCfg.ValidateCodexAutoUpdateConfig(); err != nil {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
 	}

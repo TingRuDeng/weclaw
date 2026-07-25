@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -181,21 +182,47 @@ func openclawACPConfig(req openclawACPConfigRequest) AgentConfig {
 	}
 }
 
-// NormalizeCodexRemoteFirst 将所有旧 Codex Companion 配置迁移到单一共享 app-server。
+// NormalizeCodexRemoteFirst 将所有旧 Codex Companion 配置迁移到单一共享 app-server，
+// 并为原生 shared Host 写入受控的兼容性自动更新默认值。
 func NormalizeCodexRemoteFirst(cfg *Config) bool {
 	if cfg == nil || cfg.Agents == nil {
 		return false
 	}
 	agCfg, ok := cfg.Agents["codex"]
-	if !ok || agCfg.Type != "companion" || agCfg.Command == "" {
+	if !ok || agCfg.Command == "" {
 		return false
 	}
-	agCfg.Type = "acp"
-	agCfg.Args = codexRemoteFirstArgs(agCfg.Args)
-	agCfg.AutoLaunch = nil
-	cfg.Agents["codex"] = agCfg
-	log.Printf("[config] migrated codex companion to single shared app-server")
-	return true
+	modified := false
+	if agCfg.Type == "companion" {
+		agCfg.Type = "acp"
+		agCfg.Args = codexRemoteFirstArgs(agCfg.Args)
+		agCfg.AutoLaunch = nil
+		modified = true
+		log.Printf("[config] migrated codex companion to single shared app-server")
+	}
+	if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
+		strings.TrimSpace(agCfg.CodexAutoUpdate) == "" {
+		agCfg.CodexAutoUpdate = "incompatible"
+		modified = true
+		log.Printf("[config] enabled controlled Codex CLI updates for incompatible state runtimes")
+	}
+	if modified {
+		cfg.Agents["codex"] = agCfg
+	}
+	return modified
+}
+
+func isNativeCodexAppServerConfig(cfg AgentConfig) bool {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(cfg.Command)))
+	if base != "codex" && base != "codex.exe" {
+		return false
+	}
+	for _, arg := range cfg.Args {
+		if arg == "app-server" {
+			return true
+		}
+	}
+	return false
 }
 
 func codexRemoteFirstArgs(args []string) []string {

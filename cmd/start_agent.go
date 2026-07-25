@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"log"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -108,12 +108,13 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 	if isCodexAppServerAgent(agCfg) {
 		attempts = 3
 	}
+	ag := newACPAgentFromConfig(name, agCfg, protocolTrace...)
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		ag := newACPAgentFromConfig(name, agCfg, protocolTrace...)
 		if err := ag.Start(ctx); err != nil {
 			lastErr = err
-			if attempt == attempts || !isRetryableCodexStateRuntimeError(err) {
+			if attempt == attempts || !isRetryableCodexStateRuntimeError(err) ||
+				errors.Is(err, agent.ErrCodexCLIAutoUpdateFailed) {
 				return nil, err
 			}
 			log.Printf("[agent] retrying Codex ACP startup after sqlite state runtime error (agent=%s, attempt=%d/%d): %v", name, attempt+1, attempts, err)
@@ -147,6 +148,7 @@ func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTra
 		SandboxMode:      agCfg.EffectiveSandboxMode(),
 		SystemPrompt:     agCfg.SystemPrompt,
 		AppServerSocket:  agCfg.AppServerSocket,
+		CodexAutoUpdate:  agCfg.EffectiveCodexAutoUpdate(),
 		RunAsUser:        agCfg.RunAsUser,
 		RunAsEnv:         agCfg.RunAsEnv,
 	}
@@ -171,12 +173,7 @@ func isCodexAppServerAgent(agCfg config.AgentConfig) bool {
 
 // isRetryableCodexStateRuntimeError 识别可通过重新启动恢复的 Codex 状态库错误。
 func isRetryableCodexStateRuntimeError(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := err.Error()
-	return strings.Contains(text, "failed to initialize sqlite state runtime") ||
-		strings.Contains(text, "failed to initialize state runtime")
+	return agent.IsCodexStateRuntimeError(err)
 }
 
 // companionAutoLaunchEnabled 读取 Companion 的显式自动启动开关。

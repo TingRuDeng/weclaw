@@ -102,8 +102,8 @@ ai_summary:
 - 运行中 Codex 长任务登记在 `Handler.activeTasks`；`restart` 和 `update --restart` 默认不能中断 active task。
 - 微信 / 飞书远程管理命令由 `messaging/admin_commands.go` 执行 WeClaw 自身命令，不应进入 Codex / Claude；必须先校验顶层 `admin_users`，且管理员也必须在平台 `allowed_users` 内。飞书管理员身份只接受跨应用稳定的 `union_id`，`/update` 与 `/restart` 还必须在可证明的私聊窗口执行。支持流式卡片的平台执行 `/update` 时必须在同一卡片内从版本检查收敛到“已是最新版本 / 更新成功 / 失败”终态；`/restart` 必须在旧进程保存 CardKit 卡片引用，由新进程确认恢复后回写同卡成功终态，直接更新失败才把固定 checkpoint 交给 terminal outbox 重试。不支持流式卡片的平台降级为先回复后台受理、结束后另发最终结果。`/update` 摘要必须识别 CLI 当前使用的中文版本输出。群聊 `/mode yolo` 按真实操作者和 route 的组合键隔离，不能让同群其他成员继承自动审批。
 - 微信同一条入站消息触发多次回复时，`wechat.Replier` 必须为后续 `SendText` 生成新的 `client_id`，避免微信端把结果消息按重复消息去重。外部 `ILinkBotID` 写入凭据或 context token 路径前必须统一通过 `ilink.NormalizeAccountID` 编码，不能把 `/`、`\\`、绝对路径或 Unicode 原文直接交给 `filepath.Join`；旧版兼容映射发生文件名碰撞时，保存和加载都必须失败关闭。Web 扫码登录同一服务只允许一个 active poll，新登录必须取消并终态化旧会话，晚到回调不得保存旧凭据或覆盖新状态。
-- Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。
-- Web 配置保存必须保留 Agent 的 Codex 权限字段和共享 socket：`permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode`、`app_server_socket`。
+- Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。原生 Codex shared app-server 规范化后默认写入 `codex_auto_update: incompatible`，只在状态库初始化连续失败且没有 writer lease 时持有 Host 生命周期锁调用官方 `codex update`；更新前后版本必须可验证且真实变化，失败、版本未变或更新后仍无法启动都保持 fail-closed。显式 `off` 永久关闭该行为。
+- Web 配置保存必须保留 Agent 的 Codex 权限字段、共享 socket 和更新策略：`permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode`、`app_server_socket`、`codex_auto_update`。
 - `api_addr` 监听非 loopback 地址时必须配置 `api_token`；loopback 地址允许留空，但 `weclaw doctor` 必须告警本机其他进程可调用管理接口，不能显示为安全通过。
 - 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。普通 `weclaw update` 在已是最新版时不得启动 Claude ACP 预检；实际安装新版本或显式 `update --restart` 才执行启动预检。
 ## Validation Commands

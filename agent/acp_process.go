@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -28,7 +29,35 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 	defer func() {
 		err = a.finishACPStart(err)
 	}()
-	return a.startACPProcess(ctx)
+	for attempt := 1; attempt <= codexStateRuntimeUpdateThreshold; attempt++ {
+		startErr := a.startACPProcess(ctx)
+		if startErr == nil {
+			a.resetCodexStateRuntimeFailures()
+			return nil
+		}
+		retryAfterUpdate, updateErr := a.maybeAutoUpdateCodexCLI(ctx, startErr)
+		if updateErr != nil {
+			return errors.Join(startErr, updateErr)
+		}
+		if retryAfterUpdate {
+			if err := a.startACPProcess(ctx); err != nil {
+				return errors.Join(
+					fmt.Errorf("Codex CLI 自动更新后 app-server 仍无法启动: %w", err),
+					ErrCodexCLIAutoUpdateFailed,
+				)
+			}
+			a.resetCodexStateRuntimeFailures()
+			return nil
+		}
+		if a.codexAutoUpdate != "incompatible" || !IsCodexStateRuntimeError(startErr) ||
+			attempt == codexStateRuntimeUpdateThreshold {
+			return startErr
+		}
+		if err := a.waitCodexStateRuntimeRetry(ctx); err != nil {
+			return errors.Join(startErr, err)
+		}
+	}
+	return fmt.Errorf("Codex app-server 启动未收敛")
 }
 
 func (a *ACPAgent) startACPProcess(ctx context.Context) error {

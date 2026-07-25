@@ -50,13 +50,19 @@ type ACPAgent struct {
 	codexHostSocket string
 	hostCmd         *exec.Cmd
 	hostDone        <-chan error
-	started         bool
-	starting        bool
-	startDone       chan struct{}
-	startErr        error
-	nextID          atomic.Int64
-	wireSequence    atomic.Uint64
-	sessions        map[string]string // conversationID -> sessionID (legacy ACP)
+	codexAutoUpdate string
+	// Codex 状态库错误只有连续出现后才触发更新，避免把瞬时锁争用或 IO
+	// 抖动误判为版本不兼容。更新时间用于抑制同一故障上的更新风暴。
+	codexStateRuntimeFailures int
+	codexLastAutoUpdateAt     time.Time
+	codexStateRetryDelay      time.Duration
+	started                   bool
+	starting                  bool
+	startDone                 chan struct{}
+	startErr                  error
+	nextID                    atomic.Int64
+	wireSequence              atomic.Uint64
+	sessions                  map[string]string // conversationID -> sessionID (legacy ACP)
 	// pendingPersistedSessions 在标准 ACP 握手确认身份前隔离磁盘中的旧 session。
 	pendingPersistedSessions   map[string]string
 	legacyRuntimeGeneration    uint64
@@ -109,6 +115,7 @@ type ACPAgent struct {
 	stopManagedHostCall       func(context.Context, string) error
 	startManagedHostCall      func(context.Context, string) error
 	updateHostIdentityCall    func(string, codexauth.Profile) error
+	codexCLIUpdaterCall       func(context.Context) (codexCLIUpdateResult, error)
 	protocolTrace             observability.ProtocolRecorder
 }
 
@@ -128,6 +135,7 @@ type ACPAgentConfig struct {
 	Env              map[string]string              // extra environment variables
 	StateFile        string                         // optional persisted mapping file path
 	AppServerSocket  string                         // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
+	CodexAutoUpdate  string                         // Codex CLI 自动更新策略：off / incompatible
 	RunAsUser        string                         // 以独立 Unix 用户运行（文件系统隔离）
 	RunAsEnv         []string                       // run_as_user 时透传的环境变量名白名单
 	ProtocolTrace    observability.ProtocolRecorder // 显式启用的 Codex 线协议诊断记录器

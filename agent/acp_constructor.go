@@ -81,6 +81,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		conversationCwds:           make(map[string]string),
 		stateFile:                  options.stateFile,
 		codexHostSocket:            strings.TrimSpace(cfg.AppServerSocket),
+		codexAutoUpdate:            strings.ToLower(strings.TrimSpace(cfg.CodexAutoUpdate)),
 		claudeSessionConfigs:       make(map[string][]acpSessionConfigOption),
 		claudeConfigRevisions:      make(map[string]uint64),
 		notifyCh:                   make(map[string]chan *sessionUpdate),

@@ -181,6 +181,35 @@ func TestAgentConfigUnmarshalAppServerSocket(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUnmarshalCodexAutoUpdate(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server"],
+				"codex_auto_update": "incompatible"
+			}
+		}
+	}`)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := cfg.Agents["codex"].EffectiveCodexAutoUpdate(); got != "incompatible" {
+		t.Fatalf("EffectiveCodexAutoUpdate()=%q, want incompatible", got)
+	}
+}
+
+func TestValidateRejectsUnknownCodexAutoUpdate(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{CodexAutoUpdate: "always"}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), `invalid codex_auto_update "always"`) {
+		t.Fatalf("Validate() error=%v, want invalid codex_auto_update", err)
+	}
+}
+
 func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
 	autoLaunch := true
 	cfg := DefaultConfig()
@@ -205,6 +234,42 @@ func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
 	}
 	if got.AutoLaunch != nil {
 		t.Fatalf("AutoLaunch=%#v, want nil", got.AutoLaunch)
+	}
+	if got.CodexAutoUpdate != "incompatible" {
+		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got.CodexAutoUpdate)
+	}
+}
+
+func TestNormalizeCodexRemoteFirstEnablesControlledUpdateForExistingSharedHost(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type: "acp", Command: "/usr/local/bin/codex",
+		Args: []string{"app-server", "--listen", "stdio://"},
+	}
+
+	if !NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() = false, want controlled update default")
+	}
+	if got := cfg.Agents["codex"].CodexAutoUpdate; got != "incompatible" {
+		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got)
+	}
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")
+	}
+}
+
+func TestNormalizeCodexRemoteFirstKeepsExplicitUpdatePolicy(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		CodexAutoUpdate: "off",
+	}
+
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() changed explicit off policy")
+	}
+	if got := cfg.Agents["codex"].CodexAutoUpdate; got != "off" {
+		t.Fatalf("CodexAutoUpdate=%q, want off", got)
 	}
 }
 
