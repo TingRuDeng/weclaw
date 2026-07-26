@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -49,26 +48,23 @@ func (a *ACPAgent) waitCodexCompatibilityRetry(ctx context.Context) error {
 }
 
 // IsCodexStateRuntimeError 识别 app-server 在打开共享 CODEX_HOME 状态库前退出的
-// 上游错误。该错误可能是短暂 IO，也可能是 Codex App 已升级数据库后的版本不兼容。
+// 上游错误。具体原因必须再由 classifyCodexStateRuntimeFailure 区分。
 func IsCodexStateRuntimeError(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := err.Error()
-	return strings.Contains(text, "failed to initialize sqlite state runtime") ||
-		strings.Contains(text, "failed to initialize state runtime")
+	return classifyCodexStateRuntimeFailure(err) != ""
 }
 
 // isCodexCLICompatibilityFailure only accepts failures that point to a CLI
-// unable to initialize the shared Host. Generic exits, caller cancellation and
+// explicitly rejecting a newer state schema. Generic sqlite wrappers, lock
+// contention, corruption, readiness timeouts, caller cancellation and
 // connection errors remain fail-closed and never authorize a binary update.
 func isCodexCLICompatibilityFailure(err error) bool {
-	return IsCodexStateRuntimeError(err) || errors.Is(err, errCodexHostStartupTimeout)
+	return classifyCodexStateRuntimeFailure(err) == codexStateRuntimeFailureIncompatible
 }
 
 func (a *ACPAgent) maybeAutoUpdateCodexCLI(ctx context.Context, startErr error) (bool, error) {
 	compatibilityFailure := isCodexCLICompatibilityFailure(startErr)
 	if a.codexAutoUpdate != "incompatible" || !a.usesCodexSharedHost() ||
+		a.usesOfficialCodexDaemon() ||
 		!compatibilityFailure {
 		if !compatibilityFailure {
 			a.resetCodexCompatibilityFailures()

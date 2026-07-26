@@ -52,6 +52,9 @@ func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if a.usesOfficialCodexDaemon() {
+		return a.launchCodexDaemonClient(ctx, socketPath)
+	}
 	if err := a.prepareCodexHostSocket(socketPath); err != nil {
 		return 0, err
 	}
@@ -75,6 +78,9 @@ func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {
 
 // launchCodexHostClientLocked 仅在持有 socket lifecycle lock 时调用。
 func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath string) (int, error) {
+	if a.usesOfficialCodexDaemon() {
+		return a.launchCodexDaemonClientLocked(ctx, socketPath)
+	}
 	// Another frontend may have won the startup race while this process waited
 	// for the cross-process lock. Revalidate the path and connect before ever
 	// removing a socket or launching another host.
@@ -222,6 +228,9 @@ func releaseCodexHostStartupLock(lockFile *os.File) {
 }
 
 func (a *ACPAgent) resolveCodexHostSocket() (string, error) {
+	if a.usesOfficialCodexDaemon() {
+		return a.resolveCodexDaemonSocket()
+	}
 	configured := strings.TrimSpace(a.codexHostSocket)
 	useDefault := configured == ""
 	if configured == "" {

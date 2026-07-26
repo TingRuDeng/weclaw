@@ -234,9 +234,6 @@ func (a *ACPAgent) codexAccountIndexEnabled() (bool, error) {
 	if a.codexAccountStoreCall == nil && a.rpcCall != nil {
 		return false, nil
 	}
-	if _, err := a.validateManagedCodexHost(store.SocketPath()); err != nil {
-		return false, err
-	}
 	return true, nil
 }
 
@@ -474,15 +471,43 @@ func (a *ACPAgent) reconcileExternallyProjectedCodexAccount(
 		rollback := func(syncErr error) error {
 			reportCodexAccountSwitchProgress(ctx, CodexAccountSwitchRollback)
 			if rollbackProfile == nil || rollbackSnapshot == nil {
+				// auth.json was changed outside WeClaw, so there is no
+				// authoritative old credential snapshot to restore. This is not
+				// a failed rollback: keep the externally selected target and
+				// leave the Host stopped so a later turn can retry startup.
+				// Only an inability to stop a partially started target or to
+				// persist this recoverable terminal state is fail-closed.
+				if a.isRuntimeStarted() {
+					if stopErr := a.stopManagedHost(ctx, store.SocketPath()); stopErr != nil {
+						tx.SetLastSwitch(codexauth.SwitchRecord{
+							ProfileID: target.ID, Status: "rollback_failed",
+							Message: "外部账号同步失败且目标 Host 未能安全停止", At: time.Now(),
+						})
+						recordErr := tx.Flush()
+						return codexauth.NewError(
+							codexauth.CodeRollbackFailed,
+							"Codex 外部账号同步失败，目标 Host 未能安全停止；当前已禁止继续写入",
+							errors.Join(syncErr, stopErr, recordErr),
+						)
+					}
+				}
 				tx.SetLastSwitch(codexauth.SwitchRecord{
-					ProfileID: target.ID, Status: "rollback_failed",
-					Message: "外部账号同步失败且没有可验证的旧账号回滚点", At: time.Now(),
+					ProfileID: target.ID, Status: "external_sync_deferred",
+					Message: "本地目标账号已保留，等待 Codex Host 恢复后重试", At: time.Now(),
 				})
-				recordErr := tx.Flush()
+				if recordErr := tx.Flush(); recordErr != nil {
+					available = false
+					return codexauth.NewError(
+						codexauth.CodeRollbackFailed,
+						"Codex 外部账号同步失败，且无法记录可重试状态；当前已禁止继续写入",
+						errors.Join(syncErr, recordErr),
+					)
+				}
+				available = true
 				return codexauth.NewError(
-					codexauth.CodeRollbackFailed,
-					"Codex 外部账号同步失败且无法恢复旧运行时；当前已禁止继续写入",
-					errors.Join(syncErr, recordErr),
+					codexauth.CodeRuntimeUnavailable,
+					"Codex Host 暂未恢复；已保留本地目标账号，可在运行通道恢复后重试",
+					syncErr,
 				)
 			}
 			rollbackErr := a.rollbackCodexAccountSwitch(ctx, store, rollbackSnapshot, rollbackProfile)

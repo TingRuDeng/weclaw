@@ -239,6 +239,13 @@ func TestExternalAccountSyncJournalIsUnsafeAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestExternalAccountDeferredSyncIsRetryableAcrossRestart(t *testing.T) {
+	record := &SwitchRecord{Status: "external_sync_deferred"}
+	if IsUnsafeSwitchRecord(record) {
+		t.Fatalf("status %q must allow a later controlled retry", record.Status)
+	}
+}
+
 func TestStoreFileFallbackRequiresExplicitConsent(t *testing.T) {
 	keyring := newFakeKeyring()
 	keyring.setErr = errors.New("keyring unavailable")

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestCodexCLIAutoUpdateRequiresRepeatedStateRuntimeFailure(t *testing.T) {
+func TestCodexCLIAutoUpdateRequiresRepeatedExplicitCompatibilityFailure(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, CodexAutoUpdate: "incompatible",
 	})
@@ -22,7 +22,9 @@ func TestCodexCLIAutoUpdateRequiresRepeatedStateRuntimeFailure(t *testing.T) {
 		calls++
 		return codexCLIUpdateResult{Before: "0.1.0", After: "0.2.0"}, nil
 	}
-	stateErr := errors.New("failed to initialize sqlite state runtime")
+	stateErr := errors.New(
+		"failed to initialize sqlite state runtime: unsupported schema version; database schema version is newer",
+	)
 
 	retry, err := a.maybeAutoUpdateCodexCLI(context.Background(), stateErr)
 	if err != nil || retry || calls != 0 {
@@ -34,11 +36,40 @@ func TestCodexCLIAutoUpdateRequiresRepeatedStateRuntimeFailure(t *testing.T) {
 	}
 }
 
+func TestCodexCLIAutoUpdateRejectsAmbiguousStateRuntimeFailures(t *testing.T) {
+	failures := map[string]error{
+		"generic wrapper": errors.New("failed to initialize sqlite state runtime under test CODEX_HOME"),
+		"contention": errors.New(
+			"failed to initialize sqlite state runtime: database is locked",
+		),
+		"corruption": errors.New(
+			"failed to initialize sqlite state runtime: database disk image is malformed",
+		),
+		"readiness timeout": fmt.Errorf("%w after test deadline", errCodexHostStartupTimeout),
+	}
+	for name, failure := range failures {
+		t.Run(name, func(t *testing.T) {
+			a := NewACPAgent(ACPAgentConfig{
+				Command: "codex", Args: []string{"app-server"}, CodexAutoUpdate: "incompatible",
+			})
+			a.codexCompatibilityFailures = codexCompatibilityUpdateThreshold - 1
+			called := false
+			a.codexCLIUpdaterCall = func(context.Context) (codexCLIUpdateResult, error) {
+				called = true
+				return codexCLIUpdateResult{Before: "0.1.0", After: "0.2.0"}, nil
+			}
+			retry, err := a.maybeAutoUpdateCodexCLI(context.Background(), failure)
+			if err != nil || retry || called {
+				t.Fatalf("result=(retry=%v, err=%v, called=%v), want no update", retry, err, called)
+			}
+		})
+	}
+}
+
 func TestCodexCLIAutoUpdateFailsClosedWithWriterLease(t *testing.T) {
 	failures := map[string]error{
-		"state runtime": errors.New("failed to initialize state runtime"),
-		"host readiness": fmt.Errorf(
-			"%w after test deadline", errCodexHostStartupTimeout,
+		"explicit incompatibility": errors.New(
+			"failed to initialize state runtime: unsupported database version",
 		),
 	}
 	for name, failure := range failures {
@@ -75,7 +106,8 @@ func TestCodexCLIAutoUpdateFailsClosedWhenVersionDoesNotChange(t *testing.T) {
 	}
 
 	retry, err := a.maybeAutoUpdateCodexCLI(
-		context.Background(), errors.New("failed to initialize sqlite state runtime"),
+		context.Background(),
+		errors.New("failed to initialize sqlite state runtime: requires a newer codex-cli"),
 	)
 	if retry || !errors.Is(err, ErrCodexCLIAutoUpdateFailed) {
 		t.Fatalf("result=(retry=%v, err=%v), want unchanged-version failure", retry, err)
@@ -110,7 +142,7 @@ if [ "$1" = "update" ]; then
   exit 0
 fi
 if [ ! -f "$WECLAW_TEST_CODEX_UPDATE_MARKER" ]; then
-  echo "Error: failed to initialize sqlite state runtime under test CODEX_HOME" >&2
+  echo "Error: failed to initialize sqlite state runtime under test CODEX_HOME: unsupported schema version; database schema version is newer" >&2
   exit 1
 fi
 socket=""
@@ -152,9 +184,9 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 	}
 }
 
-func TestACPAgentAutoUpdatesCodexCLIAfterRepeatedHostReadinessTimeout(t *testing.T) {
+func TestACPAgentDoesNotAutoUpdateCodexCLIAfterHostReadinessTimeout(t *testing.T) {
 	a, markerPath, countPath := newCodexHostHangingUntilUpdate(t)
-	a.codexHostConnectTimeout = 500 * time.Millisecond
+	a.codexHostConnectTimeout = 150 * time.Millisecond
 	a.codexCompatibilityRetryWait = time.Millisecond
 	updateCalls := 0
 	a.codexCLIUpdaterCall = func(context.Context) (codexCLIUpdateResult, error) {
@@ -167,14 +199,18 @@ func TestACPAgentAutoUpdatesCodexCLIAfterRepeatedHostReadinessTimeout(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := a.Start(ctx); err != nil {
-		t.Fatalf("Start() error=%v, want timeout-triggered auto-update recovery", err)
+	err := a.Start(ctx)
+	if err == nil {
+		t.Fatal("Start() error=nil, want readiness timeout")
 	}
-	if updateCalls != 1 {
-		t.Fatalf("update calls=%d, want 1", updateCalls)
+	if updateCalls != 0 {
+		t.Fatalf("update calls=%d, want 0", updateCalls)
 	}
-	if got := readCodexHostStartCount(t, countPath); got != 1 {
-		t.Fatalf("compatible host starts=%d, want 1", got)
+	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+		t.Fatalf("update marker unexpectedly exists: %v", statErr)
+	}
+	if _, statErr := os.Stat(countPath); !os.IsNotExist(statErr) {
+		t.Fatalf("compatible host unexpectedly started: %v", statErr)
 	}
 }
 

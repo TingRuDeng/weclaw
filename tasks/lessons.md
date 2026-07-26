@@ -1,12 +1,20 @@
 # Lessons
 
-## 2026-07-25 Codex App 切号会暴露共享状态库的 CLI 版本不兼容
+## 2026-07-26 Codex App 界面账号不能由 CLI 认证状态反推
 
-- 触发条件：Codex App 与 WeClaw 使用同一个 `CODEX_HOME`，App 的内置 Codex 已把 SQLite 状态库迁移到更新版本；较旧的 WeClaw CLI Host 原本持续运行，但本地切换账号导致连接重启。
-- 规则：账号切换只应触发受控身份收敛，不能把 `failed to initialize sqlite state runtime` 直接解释为 Token、图片权限或数据库损坏。必须同时核对 App/CLI 版本、状态库完整性和已应用 migration；旧 Host 退出后无法重新打开新版数据库属于运行时兼容问题。
-- 自动恢复边界：原生 shared app-server 只有在同类初始化错误连续出现，或子进程连续存活但未在启动期限内创建 socket，且没有 active/uncertain writer lease 并持有 Host 生命周期锁时，才能调用官方 `codex update`。调用方取消、普通进程退出和连接错误不是版本不兼容证据。更新前后必须识别 `codex-cli` 版本且版本真实变化；更新失败、版本未变或更新后仍无法启动都失败关闭，不重复更新、不回退 Agent，也不修改账号、workspace/thread binding。
-- 反例：只匹配 SQLite 错误文案；旧 CLI 在状态库初始化阶段永久阻塞时，WeClaw 先按固定期限终止进程并只得到 socket 超时，自动更新永远不会启动。也不能把所有超时都当成版本不兼容，否则用户取消请求也会替换本机 CLI。
-- 来源：Android 飞书窗口图片已下载成功后，用户在 Codex App 切换账号；日志显示原 Host 断开，WeClaw 的 Codex CLI `0.144.5` 无法初始化已由 App `0.146.0-alpha.3.1` 升级到 migration 42 的状态库。
+- 触发条件：用户已在 Codex App 中切换账号，但 WeClaw 的 `account current`、`auth.json` 或 shared Host 仍显示另一个 profile。
+- 规则：Codex App UI 会话、`CODEX_HOME/auth.json`、WeClaw active profile、Host 元数据和运行时 `account/read` 是不同证据；只能分别陈述各层当前值，不能用磁盘认证或 Host 状态反推 App UI。
+- 反例：看到 `auth.json` 与 `account/read` 都匹配 `gpt-20x-pro`，就断言 Codex App 当前也是 `gpt-20x-pro`，忽略用户界面已切到 `gpt-5x-pro`。
+- 正确做法：以用户或界面观察确认 App UI，以脱敏指纹确认 auth/profile，以 `account/read` 确认 shared Host；发现分叉时明确报告，并按用户期望账号执行显式恢复，状态文案不得承诺当前失败关闭状态下无法执行的自动同步。
+- 来源：2026-07-26 用户纠正“当前 Codex App 使用的是 gpt-5x-pro”；只读核验发现 App UI 与 `auth.json`、WeClaw profile 及 shared Host 发生分叉。
+
+## 2026-07-25 通用 Codex SQLite 初始化错误不能证明版本不兼容
+
+- 触发条件：Codex App 与 WeClaw 共用 `CODEX_HOME`，本地 App 正持有状态库时另一个 app-server 启动失败并只返回 `failed to initialize sqlite state runtime`。
+- 规则：该上游包装同时可能代表多进程争用、IO、损坏或 schema 不兼容，不能仅凭文案、App/CLI 版本差或 socket 就绪超时决定更新 CLI。必须用明确的 lock/corruption/schema 原因、真实进程和副本实验分别分类；无法分类时保持 unknown。
+- 自动恢复边界：只有错误正文明确报告不支持的 schema/version、较新数据库版本或缺失 migration，且没有 active/uncertain writer lease并持有 Host 生命周期锁时，兼容 managed Host 才能调用官方 `codex update`。官方 daemon 模式、通用包装、数据库锁、损坏、就绪超时、调用方取消、普通退出和连接错误都不得触发更新。更新前后版本必须可验证且真实变化；失败时保持不可写，不回退 Agent，也不修改账号或 workspace/thread binding。
+- 正确做法：优先收敛为一个受管 app-server、多前端客户端。官方 standalone 可用时只通过 `codex app-server daemon` 管理全局 Host，并验证 backend、PID 记录、启动时间和受管路径；旧版兼容 Host 也只能在进程身份可证明时停止。Codex Desktop 尚未连接同一 control socket 时仍是独立 writer，不能宣称已共享。
+- 来源：同一 live `CODEX_HOME` 启动第二个 app-server 失败，而复制后的状态目录能够启动，证据支持多进程争用；此前把 migration 版本直接认定为根因属于过度推断。
 
 ## 2026-07-19 运行态诊断必须沿同一 Trace 串联协议与用户可见状态
 

@@ -82,6 +82,7 @@ type AgentConfig struct {
 	Progress         *ProgressConfig   `json:"progress,omitempty"`          // 微信进度反馈配置
 	AutoLaunch       *bool             `json:"auto_launch,omitempty"`       // companion 是否自动打开本地可见终端
 	AppServerSocket  string            `json:"app_server_socket,omitempty"` // Codex 单一 app-server 的共享 Unix socket
+	CodexHostMode    string            `json:"codex_host_mode,omitempty"`   // Codex Host：auto / daemon / managed
 	CodexAutoUpdate  string            `json:"codex_auto_update,omitempty"` // Codex CLI 自动更新：off / incompatible
 	RunAsUser        string            `json:"run_as_user,omitempty"`       // 以独立 Unix 用户运行 agent，做文件系统隔离
 	RunAsEnv         []string          `json:"run_as_env,omitempty"`        // run_as_user 时需透传的环境变量名白名单
@@ -165,6 +166,41 @@ func (c AgentConfig) ValidateCodexAutoUpdateConfig() error {
 	}
 }
 
+// EffectiveCodexHostMode 返回 Codex Host 生命周期策略。auto 会在运行时仅当
+// 官方 standalone daemon 可用时启用 daemon；否则保留兼容的 WeClaw managed
+// Host。显式 daemon 从不静默回退到第二个 Host。
+func (c AgentConfig) EffectiveCodexHostMode() string {
+	mode := normalizeCodexHostMode(c.CodexHostMode)
+	if mode == "" {
+		return "auto"
+	}
+	return mode
+}
+
+// ValidateCodexHostModeConfig 拒绝 daemon 与自定义 socket/run_as_user 混用；
+// 官方 daemon 的 socket 与 Unix 用户命名空间由 CODEX_HOME 决定。
+func (c AgentConfig) ValidateCodexHostModeConfig() error {
+	switch mode := c.EffectiveCodexHostMode(); mode {
+	case "auto", "managed":
+		return nil
+	case "daemon":
+		if strings.TrimSpace(c.AppServerSocket) != "" {
+			return fmt.Errorf("codex_host_mode daemon cannot be combined with app_server_socket")
+		}
+		if strings.TrimSpace(c.RunAsUser) != "" {
+			return fmt.Errorf("codex_host_mode daemon cannot be combined with run_as_user")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid codex_host_mode %q: use auto, daemon, or managed", c.CodexHostMode)
+	}
+}
+
+func normalizeCodexHostMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	return strings.ReplaceAll(mode, "-", "_")
+}
+
 func normalizeCodexAutoUpdate(policy string) string {
 	policy = strings.ToLower(strings.TrimSpace(policy))
 	return strings.ReplaceAll(policy, "-", "_")
@@ -237,6 +273,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
 		if err := agentCfg.ValidateCodexAutoUpdateConfig(); err != nil {
+			return fmt.Errorf("agent %q: %w", name, err)
+		}
+		if err := agentCfg.ValidateCodexHostModeConfig(); err != nil {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
 	}

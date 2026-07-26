@@ -32,7 +32,7 @@ func TestRedactConfigHidesSecrets(t *testing.T) {
 
 func TestMergeViewPreservesMaskedSecrets(t *testing.T) {
 	current := &config.Config{APIToken: "keep-token", Agents: map[string]config.AgentConfig{
-		"codex": {Type: "acp", Command: "codex", APIKey: "keep-key", Env: map[string]string{"K": "keep-val"}, PermissionLevel: "auto_review", ApprovalPolicy: "on-request", ApprovalReviewer: "auto_review", SandboxMode: "workspace-write", AppServerSocket: "/run/user/1000/weclaw/codex.sock", CodexAutoUpdate: "incompatible"},
+		"codex": {Type: "acp", Command: "codex", APIKey: "keep-key", Env: map[string]string{"K": "keep-val"}, PermissionLevel: "auto_review", ApprovalPolicy: "on-request", ApprovalReviewer: "auto_review", SandboxMode: "workspace-write", AppServerSocket: "/run/user/1000/weclaw/codex.sock", CodexHostMode: "managed", CodexAutoUpdate: "incompatible"},
 	}}
 	view := redactConfig(current)
 	agentView := view.Agents["codex"]
@@ -48,6 +48,9 @@ func TestMergeViewPreservesMaskedSecrets(t *testing.T) {
 	}
 	if agentCfg.AppServerSocket != "/run/user/1000/weclaw/codex.sock" {
 		t.Fatalf("app_server_socket must be preserved: %+v", agentCfg)
+	}
+	if agentCfg.CodexHostMode != "managed" {
+		t.Fatalf("codex_host_mode must be preserved: %+v", agentCfg)
 	}
 	if agentCfg.CodexAutoUpdate != "incompatible" {
 		t.Fatalf("codex_auto_update must be preserved: %+v", agentCfg)

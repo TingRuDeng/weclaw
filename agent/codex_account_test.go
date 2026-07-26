@@ -518,6 +518,59 @@ func TestExternalCodexAccountProjectionRollsBackFailedTargetStart(t *testing.T) 
 	}
 }
 
+func TestExternalCodexAccountProjectionWithoutRollbackPointStaysRetryable(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	metadata := markAccountFixtureHostManaged(t, fixture)
+	metadata.ActiveProfileID = ""
+	metadata.AccountFingerprint = ""
+	if err := fixture.agent.writeCodexHostMetadata(fixture.store.SocketPath(), metadata); err != nil {
+		t.Fatal(err)
+	}
+	fixture.agent.updateHostIdentityCall = nil
+	if err := codexauth.WriteAuthFile(fixture.store.AuthPath(), fixture.newSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	fixture.startHook = func(f *accountSwitchFixture) error {
+		if f.startCalls == 1 {
+			return errors.New("target state runtime is temporarily unavailable")
+		}
+		return nil
+	}
+
+	err := fixture.agent.ensureCodexAccountForTurn(context.Background())
+	if codexauth.ErrorCode(err) != codexauth.CodeRuntimeUnavailable {
+		t.Fatalf("first sync error=%v, want retryable runtime unavailable", err)
+	}
+	status, statusErr := fixture.store.Status()
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.LastSwitch == nil || status.LastSwitch.Status != "external_sync_deferred" {
+		t.Fatalf("last switch=%#v, want external_sync_deferred", status.LastSwitch)
+	}
+	if codexauth.IsUnsafeSwitchRecord(status.LastSwitch) {
+		t.Fatalf("external_sync_deferred must remain retryable: %#v", status.LastSwitch)
+	}
+	if fixture.agent.ensureCodexAppServerGate().stateSnapshot() != codexAppServerRunning {
+		t.Fatalf("gate=%s, want running retry gate", fixture.agent.ensureCodexAppServerGate().stateSnapshot())
+	}
+	auth, authErr := codexauth.ReadAuthFile(fixture.store.AuthPath())
+	if authErr != nil || !auth.MatchesEmail("new@example.com") {
+		t.Fatalf("external target auth was not preserved: %v", authErr)
+	}
+
+	if err := fixture.agent.ensureCodexAccountForTurn(context.Background()); err != nil {
+		t.Fatalf("retry sync error=%v", err)
+	}
+	current, _, currentErr := fixture.store.Current()
+	if currentErr != nil || current == nil || current.ID != fixture.target.ID {
+		t.Fatalf("current=%#v error=%v", current, currentErr)
+	}
+	if fixture.stopCalls != 2 || fixture.startCalls != 2 {
+		t.Fatalf("stop=%d start=%d, want one failed attempt and one retry", fixture.stopCalls, fixture.startCalls)
+	}
+}
+
 func TestExternalCodexAccountRollbackRestoresProfileFromManagedHost(t *testing.T) {
 	fixture := newAccountSwitchFixture(t)
 	markAccountFixtureHostManaged(t, fixture)

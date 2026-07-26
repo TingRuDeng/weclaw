@@ -23,6 +23,7 @@ const codexHostMetadataVersion = 1
 
 type codexHostMetadata struct {
 	Version             int       `json:"version"`
+	Manager             string    `json:"manager,omitempty"`
 	State               string    `json:"state"`
 	PID                 int       `json:"pid"`
 	ProcessGroupID      int       `json:"process_group_id"`
@@ -34,6 +35,8 @@ type codexHostMetadata struct {
 	Generation          uint64    `json:"generation"`
 	ActiveProfileID     string    `json:"active_profile_id,omitempty"`
 	AccountFingerprint  string    `json:"account_fingerprint,omitempty"`
+	ManagedCodexPath    string    `json:"managed_codex_path,omitempty"`
+	AppServerVersion    string    `json:"app_server_version,omitempty"`
 	StartedAt           time.Time `json:"started_at"`
 	StoppedAt           time.Time `json:"stopped_at,omitempty"`
 }
@@ -56,6 +59,11 @@ type CodexHostSupervisor interface {
 func codexHostMetadataPath(socketPath string) string { return socketPath + ".pid.json" }
 
 func (a *ACPAgent) configuredCodexHostCommandFingerprint(socketPath string) string {
+	if a.usesOfficialCodexDaemon() {
+		value := codexHostManagerDaemon + "\x00" + filepath.Clean(socketPath)
+		sum := sha256.Sum256([]byte(value))
+		return hex.EncodeToString(sum[:])
+	}
 	args := codexSharedHostArgs(a.args, socketPath)
 	command, args := a.runAs.wrapCommand(a.command, args)
 	value := command + "\x00" + strings.Join(args, "\x00")
@@ -77,6 +85,7 @@ func (a *ACPAgent) newManagedCodexHostMetadata(cmd *exec.Cmd, socketPath string)
 	}
 	return codexHostMetadata{
 		Version:             codexHostMetadataVersion,
+		Manager:             codexHostManagerWeClaw,
 		State:               "running",
 		PID:                 cmd.Process.Pid,
 		ProcessGroupID:      identity.pgid,
@@ -223,12 +232,14 @@ func (a *ACPAgent) markCodexHostMetadataStoppedLocked(socketPath string, expecte
 // sameCodexHostGeneration 对受管进程身份和代次执行完整 CAS，避免旧 waiter
 // 在 PID 被复用或新 Host 已经写入元数据后覆盖新一代状态。
 func sameCodexHostGeneration(current codexHostMetadata, expected codexHostMetadata) bool {
-	return current.PID == expected.PID &&
+	return current.Manager == expected.Manager &&
+		current.PID == expected.PID &&
 		current.ProcessGroupID == expected.ProcessGroupID &&
 		current.UID == expected.UID &&
 		current.ProcessStart == expected.ProcessStart &&
 		current.ObservedCommandHash == expected.ObservedCommandHash &&
 		current.CommandFingerprint == expected.CommandFingerprint &&
+		current.ManagedCodexPath == expected.ManagedCodexPath &&
 		filepath.Clean(current.SocketPath) == filepath.Clean(expected.SocketPath) &&
 		current.Generation == expected.Generation &&
 		current.StartedAt.Equal(expected.StartedAt)
@@ -266,6 +277,21 @@ func (a *ACPAgent) validateManagedCodexHost(socketPath string) (codexHostMetadat
 	}
 	if metadata.State != "running" || metadata.PID <= 0 || metadata.ProcessGroupID <= 0 {
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "当前没有可安全切换的 WeClaw 受管 Codex Host", nil)
+	}
+	if a.usesOfficialCodexDaemon() {
+		if metadata.Manager != codexHostManagerDaemon {
+			return codexHostMetadata{}, codexauth.NewError(
+				codexauth.CodeUnmanagedHost,
+				"当前 Codex control socket 不是官方 daemon 受管 Host",
+				nil,
+			)
+		}
+	} else if metadata.Manager != "" && metadata.Manager != codexHostManagerWeClaw {
+		return codexHostMetadata{}, codexauth.NewError(
+			codexauth.CodeUnmanagedHost,
+			"当前 Codex Host 管理方式与配置不一致",
+			nil,
+		)
 	}
 	if metadata.CommandFingerprint != a.configuredCodexHostCommandFingerprint(socketPath) {
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 启动配置已变化；请先重启 WeClaw", nil)
@@ -309,6 +335,27 @@ func (a *ACPAgent) stopManagedCodexHostLocked(ctx context.Context, socketPath st
 	metadata, err := a.validateManagedCodexHost(socketPath)
 	if err != nil {
 		return err
+	}
+	if a.usesOfficialCodexDaemon() {
+		if err := a.validateCodexDaemonManagement(ctx, socketPath, metadata); err != nil {
+			return err
+		}
+		connection, _, _ := a.disconnectCodexHostClient(false)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		a.failAppServerActiveTurns("Codex app-server stopped for account switch")
+		a.failPendingRequests("Codex app-server stopped for account switch")
+		if _, err := a.runAndValidateCodexDaemonLifecycle(ctx, "stop", socketPath); err != nil {
+			return err
+		}
+		if err := a.verifyCodexDaemonStopped(ctx, socketPath, metadata); err != nil {
+			return err
+		}
+		if err := a.markCodexHostMetadataStoppedLocked(socketPath, metadata); err != nil {
+			return fmt.Errorf("record official Codex daemon stopped: %w", err)
+		}
+		return nil
 	}
 	connection, ownedCmd, ownedDone := a.disconnectCodexHostClient(true)
 	if connection != nil {

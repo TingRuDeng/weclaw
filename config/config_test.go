@@ -201,6 +201,46 @@ func TestAgentConfigUnmarshalCodexAutoUpdate(t *testing.T) {
 	}
 }
 
+func TestAgentConfigCodexHostMode(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server"],
+				"codex_host_mode": "daemon"
+			}
+		}
+	}`)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := cfg.Agents["codex"].EffectiveCodexHostMode(); got != "daemon" {
+		t.Fatalf("EffectiveCodexHostMode()=%q, want daemon", got)
+	}
+	if got := (AgentConfig{}).EffectiveCodexHostMode(); got != "auto" {
+		t.Fatalf("default EffectiveCodexHostMode()=%q, want auto", got)
+	}
+}
+
+func TestValidateRejectsInvalidCodexHostModeCombinations(t *testing.T) {
+	tests := map[string]AgentConfig{
+		"unknown":       {CodexHostMode: "external"},
+		"custom socket": {CodexHostMode: "daemon", AppServerSocket: "/tmp/codex.sock"},
+		"run as user":   {CodexHostMode: "daemon", RunAsUser: "codex"},
+	}
+	for name, agentCfg := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Agents["codex"] = agentCfg
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error=nil, want invalid codex_host_mode")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsUnknownCodexAutoUpdate(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{CodexAutoUpdate: "always"}

@@ -86,6 +86,53 @@ func TestCodexHostSupervisorRejectsMissingAndStoppedMetadata(t *testing.T) {
 	}
 }
 
+func TestCodexHostSupervisorRejectsConfiguredManagerMismatch(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            string
+		metadataManager string
+	}{
+		{name: "managed rejects daemon", mode: codexHostModeManaged, metadataManager: codexHostManagerDaemon},
+		{name: "daemon rejects weclaw", mode: codexHostModeDaemon, metadataManager: codexHostManagerWeClaw},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			home, err := os.MkdirTemp("/tmp", "weclaw-manager-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(home) })
+			socketPath := filepath.Join(home, "codex.sock")
+			cfg := ACPAgentConfig{
+				ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"},
+				CodexHostMode: tc.mode, Env: map[string]string{"CODEX_HOME": home},
+			}
+			if tc.mode == codexHostModeManaged {
+				cfg.AppServerSocket = socketPath
+			} else {
+				socketPath = codexDaemonSocketPath(home)
+				if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a := NewACPAgent(cfg)
+			metadata := codexHostMetadata{
+				Version: codexHostMetadataVersion, Manager: tc.metadataManager,
+				State: "running", PID: 4242, ProcessGroupID: 4242, UID: uint32(os.Geteuid()),
+				ProcessStart: "start", ObservedCommandHash: "command",
+				CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath),
+				SocketPath:         socketPath, Generation: 1, StartedAt: time.Now().UTC(),
+			}
+			if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.validateManagedCodexHost(socketPath); codexauth.ErrorCode(err) != codexauth.CodeUnmanagedHost {
+				t.Fatalf("manager mismatch error=%v", err)
+			}
+		})
+	}
+}
+
 func TestMarkCodexHostStoppedRejectsStaleGenerationWithSamePID(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "codex.sock")
 	a := NewACPAgent(ACPAgentConfig{ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"}, AppServerSocket: socketPath})
@@ -101,6 +148,11 @@ func TestMarkCodexHostStoppedRejectsStaleGenerationWithSamePID(t *testing.T) {
 	stale := current
 	stale.Generation = 7
 	stale.ProcessStart = "previous-start"
+	changedManagerPath := current
+	changedManagerPath.ManagedCodexPath = "/tmp/other-codex"
+	if sameCodexHostGeneration(changedManagerPath, current) {
+		t.Fatal("managed Codex path change must create a different generation identity")
+	}
 	a.markCodexHostMetadataStopped(socketPath, stale)
 
 	got, err := a.readCodexHostMetadata(socketPath)

@@ -48,6 +48,10 @@ type ACPAgent struct {
 	// attaching to an already running host never gives this client lifecycle
 	// ownership of the external process.
 	codexHostSocket string
+	// codexHostMode is resolved once during construction. "daemon" uses the
+	// official Codex lifecycle and never falls back to a WeClaw-owned process;
+	// "managed" preserves the compatibility backend.
+	codexHostMode   string
 	hostCmd         *exec.Cmd
 	hostDone        <-chan error
 	codexAutoUpdate string
@@ -120,6 +124,8 @@ type ACPAgent struct {
 	updateHostIdentityCall     func(string, codexauth.Profile) error
 	codexHostLockContendedCall func()
 	codexCLIUpdaterCall        func(context.Context) (codexCLIUpdateResult, error)
+	codexDaemonLifecycleCall   func(context.Context, string) (codexDaemonLifecycleOutput, error)
+	codexDaemonMetadataCall    func(context.Context, codexDaemonLifecycleOutput, string) (codexHostMetadata, error)
 	protocolTrace              observability.ProtocolRecorder
 }
 
@@ -139,6 +145,7 @@ type ACPAgentConfig struct {
 	Env              map[string]string              // extra environment variables
 	StateFile        string                         // optional persisted mapping file path
 	AppServerSocket  string                         // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
+	CodexHostMode    string                         // auto / daemon / managed
 	CodexAutoUpdate  string                         // Codex CLI 自动更新策略：off / incompatible
 	RunAsUser        string                         // 以独立 Unix 用户运行（文件系统隔离）
 	RunAsEnv         []string                       // run_as_user 时透传的环境变量名白名单

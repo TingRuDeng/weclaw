@@ -30,6 +30,19 @@ func TestCreateAgentByNameRejectsClaudeCLI(t *testing.T) {
 	}
 }
 
+func TestACPAgentConfigFromConfigPassesCodexHostMode(t *testing.T) {
+	got := acpAgentConfigFromConfig("codex", config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		CodexHostMode: "daemon",
+	})
+	if got.CodexHostMode != "daemon" {
+		t.Fatalf("CodexHostMode=%q, want daemon", got.CodexHostMode)
+	}
+	if defaulted := acpAgentConfigFromConfig("codex", config.AgentConfig{}).CodexHostMode; defaulted != "auto" {
+		t.Fatalf("default CodexHostMode=%q, want auto", defaulted)
+	}
+}
+
 func TestCreateAgentByNamePassesACPConfiguredName(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	t.Setenv("WECLAW_TEST_ACP_CONFIGURED_NAME", "1")

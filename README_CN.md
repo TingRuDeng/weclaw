@@ -64,7 +64,7 @@ weclaw status
 /cx status             # 查看当前工作空间、会话、任务、账号和运行状态
 ```
 
-WeClaw 为原生 `codex app-server` 建立稳定 Unix socket，并按上游协议通过 WebSocket-over-UDS 连接；该 socket 不是裸 JSONL 流。第一个客户端按需启动 host，之后的微信、飞书或其他 WeClaw 前端复用同一服务。每个窗口独立持久化 workspace/thread 绑定，多个窗口可以绑定同一 thread，但同一 thread 同时只允许一个活动 turn。运行通道断开不会清除窗口绑定；已提交 turn 的 writer 门禁会保留到权威终态确认，下一次操作会重新连接共享 host。旧版 Codex owner 状态会在加载时丢弃，旧 `type: companion` 配置会迁移为共享 app-server。
+WeClaw 为原生 `codex app-server` 建立稳定 Unix socket，并按上游协议通过 WebSocket-over-UDS 连接；该 socket 不是裸 JSONL 流。默认 `codex_host_mode: auto` 会优先连接或启动官方 standalone 安装提供的 `codex app-server daemon`；未安装 standalone 时保留 WeClaw 自管 Host 兼容路径。之后的微信、飞书或其他 WeClaw 前端复用同一服务。每个窗口独立持久化 workspace/thread 绑定，多个窗口可以绑定同一 thread，但同一 thread 同时只允许一个活动 turn。运行通道断开不会清除窗口绑定；已提交 turn 的 writer 门禁会保留到权威终态确认，下一次操作会重新连接共享 host。旧版 Codex owner 状态会在加载时丢弃，旧 `type: companion` 配置会迁移为共享 app-server。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 已停用，因为它们会启动独立 Codex writer。当前版本也不把单独运行的 Codex Desktop 当作共享 host 客户端；若需要本地界面，应由该界面连接同一个 app-server，而不是再启动第二个 app-server。
 
@@ -282,7 +282,8 @@ weclaw doctor
 - 审计日志默认开启，不记录密钥。
 - Codex `permission_level` 支持 `default`、`auto_review`、`full_access`；默认档位为 `default`。
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。
-- 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有状态库初始化连续失败，或 Host 进程连续存活但未在启动期限内创建 socket，且没有 writer lease、确认 CLI 版本实际变化时，才调用官方 `codex update` 并重启 Host；调用方取消、普通进程退出和连接错误不会触发更新。设为 `off` 可完全禁用。更新失败或版本未变化时保持不可写，不回退到其他 Agent。
+- `codex_host_mode` 支持 `auto`、`daemon`、`managed`。默认 `auto` 仅在 `CODEX_HOME` 存在官方 control socket 或可执行的 standalone Codex 时选择 `daemon`，否则使用兼容的 `managed`；显式 `daemon` 缺少 standalone、发现非官方 socket 或生命周期校验失败时直接失败，不静默启动第二个 Host。`daemon` 的 socket 和进程由官方生命周期命令管理，不能与 `app_server_socket` 或 `run_as_user` 混用。
+- 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。官方 `daemon` 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
 
 | Codex 权限档位 | 行为 |
 | --- | --- |

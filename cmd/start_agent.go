@@ -148,6 +148,7 @@ func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTra
 		SandboxMode:      agCfg.EffectiveSandboxMode(),
 		SystemPrompt:     agCfg.SystemPrompt,
 		AppServerSocket:  agCfg.AppServerSocket,
+		CodexHostMode:    agCfg.EffectiveCodexHostMode(),
 		CodexAutoUpdate:  agCfg.EffectiveCodexAutoUpdate(),
 		RunAsUser:        agCfg.RunAsUser,
 		RunAsEnv:         agCfg.RunAsEnv,
