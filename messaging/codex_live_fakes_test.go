@@ -325,6 +325,7 @@ func (f *fakeCodexLiveAgent) threadBinding(threadID string) agent.CodexThreadBin
 func codexLiveSwitchFixture(t *testing.T, state agent.CodexThreadState) (*Handler, *fakeCodexLiveAgent, string) {
 	t.Helper()
 	h := NewHandler(nil, nil)
+	h.SetCodexLocalSessionDir(t.TempDir())
 	workspace := t.TempDir()
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})

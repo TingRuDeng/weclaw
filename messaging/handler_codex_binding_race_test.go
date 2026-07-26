@@ -122,6 +122,7 @@ func TestCodexSessionCommandSwitchTimeoutKeepsBindingAndReleasesLock(t *testing.
 
 func TestCodexNewUsesBindingLock(t *testing.T) {
 	h := NewHandler(nil, nil)
+	h.SetCodexLocalSessionDir(t.TempDir())
 	workspace := t.TempDir()
 	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	ag.resetSessionID = "thread-new"
