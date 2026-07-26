@@ -99,10 +99,11 @@ func TestCreateAgentByNameRetriesCodexSQLiteRuntimeStartup(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Agents["codex"] = config.AgentConfig{
-		Type:    "acp",
-		Command: codexPath,
-		Args:    []string{"-test.run=TestHelperRetryingCodexAppServer", "app-server", "--listen", "stdio://"},
-		Cwd:     t.TempDir(),
+		Type:          "acp",
+		Command:       codexPath,
+		Args:          []string{"-test.run=TestHelperRetryingCodexAppServer", "app-server", "--listen", "stdio://"},
+		Cwd:           t.TempDir(),
+		CodexHostMode: "managed",
 	}
 
 	ag := createAgentByName(context.Background(), cfg, "codex")

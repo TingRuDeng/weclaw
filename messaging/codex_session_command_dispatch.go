@@ -43,6 +43,9 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 	if fields[1] == "ls" {
 		return h.prepareCodexListCommand(req, actorUserID, routeUserID)
 	}
+	if fields[1] == "cd" {
+		return h.prepareCodexCdCommand(ctx, req, actorUserID, routeUserID, fields)
+	}
 	agentName, ag, err := h.getCodexSessionAgent(ctx)
 	if err != nil {
 		return codexSessionCommandPreparation{result: textNavigationResult(err.Error())}
@@ -67,6 +70,38 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 	}
 	h.ensureCodexSessions().ensureWorkspace(runtime.bindingKey, runtime.workspaceRoot)
 	h.syncCodexThreadFromAgent(routeUserID, agentName, runtime.workspaceRoot, ag)
+	return codexSessionCommandPreparation{runtime: runtime, unlock: unlock, ready: true}
+}
+
+// prepareCodexCdCommand 先用本地目录解析工作空间；只有唯一会话需要自动绑定时才延迟启动共享 Host。
+func (h *Handler) prepareCodexCdCommand(
+	ctx context.Context,
+	req codexSessionCommandRequest,
+	actorUserID string,
+	routeUserID string,
+	fields []string,
+) codexSessionCommandPreparation {
+	if len(fields) != 3 {
+		return codexSessionCommandPreparation{result: textNavigationResult("用法: /cx cd <编号|工作空间名|..>")}
+	}
+	agentName, ok := h.codexAgentName()
+	if !ok {
+		return codexSessionCommandPreparation{result: textNavigationResult("当前没有配置 codex agent")}
+	}
+	runtime := codexSessionCommandRuntime{
+		ctx: ctx, req: req, actorUserID: actorUserID, routeUserID: routeUserID,
+		admin: req.Admin || h.isAdminUser(actorUserID), private: req.Private, fields: fields,
+		agentName:       agentName,
+		agent:           h.AgentByName(agentName),
+		bindingKey:      codexBindingKey(routeUserID, agentName),
+		ownerBindingKey: codexBindingKey(actorUserID, agentName),
+	}
+	unlock, err := h.lockCodexSessionBinding(ctx, runtime.bindingKey, fields[1])
+	if err != nil {
+		return codexSessionCommandPreparation{result: textNavigationResult(
+			"前一项 Codex 会话操作仍在处理，本次命令未执行。",
+		)}
+	}
 	return codexSessionCommandPreparation{runtime: runtime, unlock: unlock, ready: true}
 }
 

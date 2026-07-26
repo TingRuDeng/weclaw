@@ -166,6 +166,50 @@ func TestCodexDaemonClientStartsOfficialDaemonWithoutLegacyFallback(t *testing.T
 	}
 }
 
+func TestCodexDaemonClientWaitsForManagedHostAfterOfficialStartTimeout(t *testing.T) {
+	a, socketPath := newCodexDaemonTestAgent(t)
+	a.codexHostConnectTimeout = 100 * time.Millisecond
+	var actions []string
+	var listener net.Listener
+	a.codexDaemonLifecycleCall = func(_ context.Context, action string) (codexDaemonLifecycleOutput, error) {
+		actions = append(actions, action)
+		switch action {
+		case "start":
+			var err error
+			listener, err = net.Listen("unix", socketPath)
+			if err != nil {
+				return codexDaemonLifecycleOutput{}, err
+			}
+			server := newFakeCodexHost(listener)
+			server.start(t)
+			return codexDaemonLifecycleOutput{}, errors.New(
+				"codex app-server daemon start: app server did not become ready on " + socketPath,
+			)
+		case "version":
+			return testCodexDaemonOutput("running", "pid", socketPath), nil
+		default:
+			t.Fatalf("unexpected lifecycle action %q", action)
+			return codexDaemonLifecycleOutput{}, nil
+		}
+	}
+	a.codexDaemonMetadataCall = testCodexDaemonMetadata
+	t.Cleanup(func() {
+		if listener != nil {
+			_ = listener.Close()
+		}
+	})
+
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(actions, []string{"start", "version"}) {
+		t.Fatalf("actions=%v, want start followed by validating version", actions)
+	}
+	if a.hostCmd != nil {
+		t.Fatal("late official daemon readiness unexpectedly started a legacy Host")
+	}
+}
+
 func TestCodexDaemonStartFailureNeverFallsBackToLegacyHost(t *testing.T) {
 	a, _ := newCodexDaemonTestAgent(t)
 	var actions []string

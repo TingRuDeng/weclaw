@@ -23,6 +23,10 @@ const (
 
 	codexHostManagerWeClaw = "weclaw"
 	codexHostManagerDaemon = "codex_daemon"
+
+	// 官方 daemon 的 start 子命令只等待约十秒；首次模型目录刷新较慢时，
+	// 受管进程可能仍在继续启动。额外等待仍必须通过 version 和进程元数据复核。
+	codexDaemonLateReadyMultiplier = 6
 )
 
 var (
@@ -192,7 +196,34 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 
 	output, err := a.runAndValidateCodexDaemonLifecycle(ctx, "start", socketPath)
 	if err != nil {
-		return 0, err
+		if !isCodexDaemonStartReadinessTimeout(err, socketPath) {
+			return 0, err
+		}
+		conn, waitErr := waitForCodexHost(
+			ctx,
+			socketPath,
+			0,
+			nil,
+			time.Duration(codexDaemonLateReadyMultiplier)*a.effectiveCodexHostConnectTimeout(),
+		)
+		if waitErr != nil {
+			return 0, fmt.Errorf("%v; wait for managed Codex daemon after startup timeout: %w", err, waitErr)
+		}
+		output, err = a.runAndValidateCodexDaemonLifecycle(ctx, "version", socketPath)
+		if err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
+		metadata, metadataErr := a.recordCodexDaemonMetadata(ctx, output, socketPath)
+		if metadataErr != nil {
+			_ = conn.Close()
+			return 0, metadataErr
+		}
+		if err := a.attachCodexHostConnection(conn); err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
+		return metadata.PID, nil
 	}
 	metadata, err := a.recordCodexDaemonMetadata(ctx, output, socketPath)
 	if err != nil {
@@ -213,6 +244,15 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 		return 0, err
 	}
 	return metadata.PID, nil
+}
+
+func isCodexDaemonStartReadinessTimeout(err error, socketPath string) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "app server did not become ready on") &&
+		strings.Contains(text, strings.ToLower(filepath.Clean(socketPath)))
 }
 
 func (a *ACPAgent) runAndValidateCodexDaemonLifecycle(

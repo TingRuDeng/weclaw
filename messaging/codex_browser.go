@@ -120,13 +120,23 @@ func (h *Handler) setCodexActiveWorkspaceForRoute(bindingKey string, _ string, w
 func (h *Handler) enterCodexWorkspace(req codexWorkspaceCdRequest, group codexWorkspaceGroup, workspaceRoot string) navigationCommandResult {
 	sessions := switchableCodexSessions(group.Sessions)
 	if len(sessions) == 1 {
+		if req.Agent == nil {
+			agentName, ag, err := h.getCodexSessionAgent(req.Context)
+			if err != nil {
+				return textNavigationResult(err.Error())
+			}
+			req.AgentName = agentName
+			req.Agent = ag
+		}
 		return h.enterCodexWorkspaceWithSingleSessionResult(codexSingleSessionEntryRequest{
 			command: req, workspaceName: group.Name, workspaceRoot: workspaceRoot, session: sessions[0],
 		})
 	}
-	h.switchCodexWorkspaceForRoute(
-		req.ActorUserID, req.UserID, req.AgentName, workspaceRoot, req.Agent,
-	)
+	if req.Agent != nil {
+		h.switchCodexWorkspaceForRoute(
+			req.ActorUserID, req.UserID, req.AgentName, workspaceRoot, req.Agent,
+		)
+	}
 	h.setCodexActiveWorkspaceForRoute(req.BindingKey, req.OwnerBindingKey, workspaceRoot)
 	if len(sessions) == 0 {
 		return h.enterCodexWorkspaceWithoutSessionsResult(req, group.Name, workspaceRoot)
