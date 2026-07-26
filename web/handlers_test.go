@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,6 +44,21 @@ func TestHandleConfigPUTValidatesAndPersistsSoftChange(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"restart_required":false`) {
 		t.Fatalf("response=%s, want soft reload result", recorder.Body.String())
+	}
+}
+
+func TestHandleStatusReturnsFailureWhenConfigCannotBeLoaded(t *testing.T) {
+	server := NewServer(Options{})
+	server.cfg = &configService{
+		load: func() (*config.Config, error) { return nil, errors.New("config unavailable") },
+		save: func(*config.Config) error { return nil },
+	}
+	recorder := httptest.NewRecorder()
+	server.handleStatus(recorder, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+
+	if recorder.Code != http.StatusInternalServerError ||
+		!strings.Contains(recorder.Body.String(), "config unavailable") {
+		t.Fatalf("status=%d body=%q, want explicit config load failure", recorder.Code, recorder.Body.String())
 	}
 }
 

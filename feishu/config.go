@@ -34,6 +34,8 @@ type CredentialRecord struct {
 	Path        string
 }
 
+var ErrCredentialsNotFound = errors.New("feishu credentials not found")
+
 // CredentialsPath 返回飞书凭证文件路径。
 func CredentialsPath() (string, error) {
 	home, err := weclawconfig.DataDir()
@@ -110,7 +112,7 @@ func LoadCredentialsWithSource() (CredentialRecord, error) {
 	record, err := readCredentialsFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return CredentialRecord{}, fmt.Errorf("feishu credentials not found, run `weclaw feishu login --app-id <id> --app-secret <secret>`")
+			return CredentialRecord{}, fmt.Errorf("%w; run `weclaw feishu login --app-id <id> --app-secret <secret>`", ErrCredentialsNotFound)
 		}
 		return CredentialRecord{}, err
 	}
@@ -126,7 +128,12 @@ func LoadCredentialsWithSourceForBot(name string) (CredentialRecord, error) {
 	record, err := readCredentialsFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return CredentialRecord{}, fmt.Errorf("feishu bot %q credentials not found, run `weclaw feishu login --name %s --app-id <id> --app-secret <secret>`", name, name)
+			return CredentialRecord{}, fmt.Errorf(
+				"%w for bot %q; run `weclaw feishu login --name %s --app-id <id> --app-secret <secret>`",
+				ErrCredentialsNotFound,
+				name,
+				name,
+			)
 		}
 		return CredentialRecord{}, err
 	}

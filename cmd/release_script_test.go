@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -455,6 +457,53 @@ func TestReleaseWorkflowsPinThirdPartyReleaseAction(t *testing.T) {
 	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }
 
+func TestWorkflowsPinAllGitHubActionsToReviewedCommits(t *testing.T) {
+	required := []string{
+		"actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0",
+		"actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0",
+	}
+	workflows := []string{
+		filepath.Join("..", ".github", "workflows", "ci.yml"),
+		filepath.Join("..", ".github", "workflows", "release.yml"),
+	}
+	for _, path := range workflows {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := string(content)
+		for _, action := range required {
+			if !strings.Contains(text, action) {
+				t.Fatalf("%s must pin reviewed action %q", path, action)
+			}
+		}
+		for _, mutable := range []string{"actions/checkout@v", "actions/setup-go@v"} {
+			if strings.Contains(text, mutable) {
+				t.Fatalf("%s contains mutable action ref %q", path, mutable)
+			}
+		}
+	}
+
+	ci, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciText := string(ci)
+	for _, action := range []string{
+		"actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+		"actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0",
+	} {
+		if !strings.Contains(ciText, action) {
+			t.Fatalf("CI workflow must pin reviewed action %q", action)
+		}
+	}
+	for _, mutable := range []string{"actions/upload-artifact@v", "actions/download-artifact@v"} {
+		if strings.Contains(ciText, mutable) {
+			t.Fatalf("CI workflow contains mutable action ref %q", mutable)
+		}
+	}
+}
+
 func TestStableReleaseWorkflowIsManualOnlyAndBuildsRequestedTag(t *testing.T) {
 	path := filepath.Join("..", ".github", "workflows", "release.yml")
 	content, err := os.ReadFile(path)
@@ -523,25 +572,67 @@ func TestPrereleaseWorkflowRecreatesMovingTagAtCurrentCommit(t *testing.T) {
 	}
 }
 
-func TestPrereleaseWorkflowPassesRefNameThroughEnvironment(t *testing.T) {
+func TestPrereleaseWorkflowUsesCollisionResistantRefKey(t *testing.T) {
 	path := filepath.Join("..", ".github", "workflows", "ci.yml")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read CI workflow: %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, "REF_NAME: ${{ github.ref_name }}") {
-		t.Fatal("CI workflow must pass ref_name through an environment variable")
+	for _, required := range []string{
+		"REF_NAME: ${{ github.ref_name }}",
+		"FULL_REF: ${{ github.ref }}",
+		`SAFE_BRANCH=$(printf '%s' "$REF_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | cut -c1-64)`,
+		`BRANCH_HASH=$(printf '%s' "$FULL_REF" | sha256sum | cut -c1-12)`,
+		`tag=alpha-${SAFE_BRANCH}-${BRANCH_HASH}`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("CI workflow missing collision-resistant prerelease key %q", required)
+		}
+	}
+	if strings.Contains(text, `tag=alpha-${SAFE_BRANCH}"`) {
+		t.Fatal("CI workflow still uses the lossy branch name as the complete prerelease tag")
 	}
 	for _, unsafe := range []string{
 		`if [ "${{ github.ref_name }}"`,
 		`echo "${{ github.ref_name }}" | sed`,
+		`printf '%s' "${{ github.ref }}"`,
 		`echo ${{ github.sha }} | cut`,
 	} {
 		if strings.Contains(text, unsafe) {
 			t.Fatalf("CI workflow interpolates untrusted context inside shell: %q", unsafe)
 		}
 	}
+}
+
+func TestPrereleaseRefKeySeparatesNormalizedBranchCollisions(t *testing.T) {
+	first := prereleaseRefKeyForTest("refs/heads/feature/a-b", "feature/a-b")
+	second := prereleaseRefKeyForTest("refs/heads/feature-a-b", "feature-a-b")
+	if first == second {
+		t.Fatalf("normalized branch collision: %q", first)
+	}
+	for _, key := range []string{first, second} {
+		if !strings.HasPrefix(key, "alpha-feature-a-b-") || len(key) > len("alpha-")+64+1+12 {
+			t.Fatalf("unexpected prerelease key %q", key)
+		}
+	}
+}
+
+func prereleaseRefKeyForTest(fullRef string, refName string) string {
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, refName)
+	if len(safe) > 64 {
+		safe = safe[:64]
+	}
+	sum := sha256.Sum256([]byte(fullRef))
+	return fmt.Sprintf("alpha-%s-%x", safe, sum[:6])
 }
 
 func releaseScriptPath(t *testing.T) string {

@@ -2,6 +2,8 @@ package web
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -138,11 +140,57 @@ func TestPlatformStatusesIncludeEachFeishuBot(t *testing.T) {
 	enabled := true
 	cfg := config.DefaultConfig()
 	cfg.Platforms["feishu"] = config.PlatformConfig{Enabled: &enabled, Bots: []config.FeishuBotConfig{{Name: "project-a", AppID: "cli_a", AllowedUsers: []string{"ou_a"}}, {Name: "project-b", AppID: "cli_b"}}}
-	statuses := platformStatuses(cfg)
+	statuses, err := platformStatuses(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	first, firstOK := findPlatformStatus(statuses, "feishu/project-a")
 	second, secondOK := findPlatformStatus(statuses, "feishu/project-b")
 	if !firstOK || !first.CredentialsPresent || first.AllowedUsersCount != 1 || !secondOK || second.CredentialsPresent || second.AllowedUsersCount != 0 {
 		t.Fatalf("platform statuses=%#v", statuses)
+	}
+}
+
+func TestPlatformStatusesPropagateWeChatCredentialReadFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "accounts"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := platformStatuses(config.DefaultConfig()); err == nil ||
+		!strings.Contains(err.Error(), "WeChat credential status") {
+		t.Fatalf("platformStatuses() error=%v, want WeChat credential read failure", err)
+	}
+}
+
+func TestFeishuPlatformStatusesDistinguishMissingAndMalformedCredentials(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	enabled := true
+	cfg := config.PlatformConfig{
+		Enabled: &enabled,
+		Bots:    []config.FeishuBotConfig{{Name: "project-a", AppID: "cli_a"}},
+	}
+
+	statuses, err := feishuPlatformStatuses(cfg)
+	if err != nil || len(statuses) != 1 || statuses[0].CredentialsPresent {
+		t.Fatalf("missing credentials statuses=%#v error=%v", statuses, err)
+	}
+
+	path, err := feishu.CredentialsPathForBot("project-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{malformed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := feishuPlatformStatuses(cfg); err == nil ||
+		!strings.Contains(err.Error(), "project-a") {
+		t.Fatalf("feishuPlatformStatuses() error=%v, want malformed credential failure", err)
 	}
 }
 

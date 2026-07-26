@@ -184,11 +184,13 @@ func (a *ACPAgent) SaveCodexAccount(ctx context.Context, options CodexAccountSav
 			return err
 		}
 		hostMutationAttempted = true
-		return a.setManagedCodexHostAccountIdentity(store.SocketPath(), profile)
+		return a.setManagedCodexHostAccountIdentity(ctx, store.SocketPath(), &previousMetadata, profile)
 	})
 	if err != nil {
-		if hostMutationAttempted {
-			restoreErr := a.restoreManagedCodexHostMetadata(store.SocketPath(), previousMetadata)
+		// A generation conflict is detected before metadata is written. Only
+		// failures with an unknown write outcome need compensating restoration.
+		if hostMutationAttempted && codexauth.ErrorCode(err) != codexauth.CodeConflict {
+			restoreErr := a.restoreManagedCodexHostMetadata(ctx, store.SocketPath(), previousMetadata)
 			if restoreErr != nil {
 				available = false
 				recordErr := store.WithTransaction(ctx, func(tx *codexauth.Transaction) error {
@@ -215,14 +217,29 @@ func (a *ACPAgent) SaveCodexAccount(ctx context.Context, options CodexAccountSav
 
 // restoreManagedCodexHostMetadata 只在受管进程身份仍与事务开始时一致时恢复元数据，
 // 防止 PID 复用或 Host 已退出后把旧 running 记录重新写回。
-func (a *ACPAgent) restoreManagedCodexHostMetadata(socketPath string, previous codexHostMetadata) error {
+func (a *ACPAgent) restoreManagedCodexHostMetadata(
+	ctx context.Context,
+	socketPath string,
+	previous codexHostMetadata,
+) error {
+	lifecycleLock, err := a.acquireCodexHostStartupLock(ctx, socketPath)
+	if err != nil {
+		return codexauth.NewError(codexauth.CodeBusy, "Codex Host 正在执行其他生命周期操作", err)
+	}
+	defer releaseCodexHostStartupLock(lifecycleLock)
+	return a.restoreManagedCodexHostMetadataLocked(socketPath, previous)
+}
+
+func (a *ACPAgent) restoreManagedCodexHostMetadataLocked(
+	socketPath string,
+	previous codexHostMetadata,
+) error {
 	current, err := a.validateManagedCodexHost(socketPath)
 	if err != nil {
 		return err
 	}
-	if current.PID != previous.PID || current.ProcessGroupID != previous.ProcessGroupID ||
-		current.ProcessStart != previous.ProcessStart || current.ObservedCommandHash != previous.ObservedCommandHash {
-		return codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程身份在保存期间发生变化", nil)
+	if !sameCodexHostGeneration(current, previous) {
+		return codexauth.NewError(codexauth.CodeConflict, "Codex Host 代次在账号事务期间发生变化", nil)
 	}
 	return a.writeCodexHostMetadata(socketPath, previous)
 }
@@ -325,6 +342,14 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 	if !liveSnapshot.MatchesEmail(currentAccount.Email) {
 		return result, codexauth.NewError(codexauth.CodeTargetMismatch, "Codex 运行时账号与 auth.json 不一致", nil)
 	}
+	var expectedHostMetadata *codexHostMetadata
+	if a.updateHostIdentityCall == nil {
+		metadata, metadataErr := a.validateManagedCodexHost(store.SocketPath())
+		if metadataErr != nil {
+			return result, metadataErr
+		}
+		expectedHostMetadata = &metadata
+	}
 
 	err = store.WithTransaction(ctx, func(tx *codexauth.Transaction) error {
 		index := tx.Index()
@@ -364,7 +389,12 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 			if refreshed, found := tx.Find(string(target.ID)); found {
 				target = refreshed
 			}
-			if err := a.setManagedCodexHostAccountIdentity(store.SocketPath(), target); err != nil {
+			if err := a.setManagedCodexHostAccountIdentity(
+				ctx,
+				store.SocketPath(),
+				expectedHostMetadata,
+				target,
+			); err != nil {
 				return err
 			}
 			quota, quotaErr := a.ReadCodexQuota(ctx)
@@ -388,6 +418,15 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 			return codexauth.NewError(codexauth.CodeBusy, "Codex Host 正在执行其他生命周期操作", lockErr)
 		}
 		defer releaseCodexHostStartupLock(lifecycleLock)
+		if expectedHostMetadata != nil {
+			currentMetadata, metadataErr := a.validateManagedCodexHost(store.SocketPath())
+			if metadataErr != nil {
+				return metadataErr
+			}
+			if !sameCodexHostGeneration(currentMetadata, *expectedHostMetadata) {
+				return codexauth.NewError(codexauth.CodeConflict, "Codex Host 已切换到新一代，请重试账号操作", nil)
+			}
+		}
 		// 刷新当前账号并回填 profile 可能涉及系统凭据库，真正停止 Host 前必须
 		// 再确认一次全局 thread 状态，避免使用过期的空闲结论切断晚到任务。
 		if err := a.ensureAllCodexThreadsIdle(ctx); err != nil {
@@ -449,7 +488,7 @@ func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expect
 		if quotaErr != nil {
 			return rollback(codexauth.NewError(codexauth.CodeRuntimeUnavailable, "目标账号额度验证失败", quotaErr))
 		}
-		if err := a.setManagedCodexHostAccountIdentity(store.SocketPath(), target); err != nil {
+		if err := a.setManagedCodexHostAccountIdentityLocked(store.SocketPath(), nil, target); err != nil {
 			return rollback(err)
 		}
 		if err := tx.SetActive(target.ID); err != nil {
@@ -512,7 +551,7 @@ func (a *ACPAgent) rollbackCodexAccountSwitch(ctx context.Context, store *codexa
 		return fmt.Errorf("verify previous quota: %w", err)
 	}
 	if previous != nil {
-		if err := a.setManagedCodexHostAccountIdentity(store.SocketPath(), *previous); err != nil {
+		if err := a.setManagedCodexHostAccountIdentityLocked(store.SocketPath(), nil, *previous); err != nil {
 			return err
 		}
 	}
@@ -528,11 +567,29 @@ func (a *ACPAgent) markAllCodexThreadsResumeOnFirstUse() {
 	a.mu.Unlock()
 }
 
-func (a *ACPAgent) setManagedCodexHostAccountIdentity(socketPath string, profile codexauth.Profile) error {
+func (a *ACPAgent) setManagedCodexHostAccountIdentity(
+	ctx context.Context,
+	socketPath string,
+	expected *codexHostMetadata,
+	profile codexauth.Profile,
+) error {
+	lifecycleLock, err := a.acquireCodexHostStartupLock(ctx, socketPath)
+	if err != nil {
+		return codexauth.NewError(codexauth.CodeBusy, "Codex Host 正在执行其他生命周期操作", err)
+	}
+	defer releaseCodexHostStartupLock(lifecycleLock)
+	return a.setManagedCodexHostAccountIdentityLocked(socketPath, expected, profile)
+}
+
+func (a *ACPAgent) setManagedCodexHostAccountIdentityLocked(
+	socketPath string,
+	expected *codexHostMetadata,
+	profile codexauth.Profile,
+) error {
 	if a.updateHostIdentityCall != nil {
 		return a.updateHostIdentityCall(socketPath, profile)
 	}
-	return a.updateCodexHostAccountIdentity(socketPath, profile)
+	return a.updateCodexHostAccountIdentityLocked(socketPath, expected, profile)
 }
 
 type codexAccountReadResponse struct {

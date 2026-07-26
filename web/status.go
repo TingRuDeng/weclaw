@@ -37,22 +37,29 @@ type statusView struct {
 	Agents        []agentStatus    `json:"agents"`
 }
 
-func (s *Server) buildStatus() statusView {
+func (s *Server) buildStatus() (statusView, error) {
 	cfg, err := s.cfg.load()
 	if err != nil {
-		return statusView{}
+		return statusView{}, fmt.Errorf("load config status: %w", err)
+	}
+	platforms, err := platformStatuses(cfg)
+	if err != nil {
+		return statusView{}, err
 	}
 	return statusView{
 		DaemonRunning: daemonRunning(),
-		Platforms:     platformStatuses(cfg),
+		Platforms:     platforms,
 		Agents:        agentStatuses(cfg),
-	}
+	}, nil
 }
 
-func platformStatuses(cfg *config.Config) []platformStatus {
+func platformStatuses(cfg *config.Config) ([]platformStatus, error) {
 	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
 	wechatEnabled := wechatCfg.Enabled == nil || *wechatCfg.Enabled
-	accounts, _ := ilink.LoadAllCredentials()
+	accounts, err := ilink.LoadAllCredentials()
+	if err != nil {
+		return nil, fmt.Errorf("load WeChat credential status: %w", err)
+	}
 
 	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
 	statuses := []platformStatus{
@@ -63,17 +70,24 @@ func platformStatuses(cfg *config.Config) []platformStatus {
 			AllowedUsersCount:  len(wechatCfg.AllowedUsers),
 		},
 	}
-	return append(statuses, feishuPlatformStatuses(feishuCfg)...)
+	feishuStatuses, err := feishuPlatformStatuses(feishuCfg)
+	if err != nil {
+		return nil, err
+	}
+	return append(statuses, feishuStatuses...), nil
 }
 
-func feishuPlatformStatuses(feishuCfg config.PlatformConfig) []platformStatus {
+func feishuPlatformStatuses(feishuCfg config.PlatformConfig) ([]platformStatus, error) {
 	enabled := feishuCfg.Enabled != nil && *feishuCfg.Enabled
 	if len(feishuCfg.Bots) == 0 {
-		return []platformStatus{{Name: string(platform.PlatformFeishu), Enabled: enabled}}
+		return []platformStatus{{Name: string(platform.PlatformFeishu), Enabled: enabled}}, nil
 	}
 	statuses := make([]platformStatus, 0, len(feishuCfg.Bots))
 	for _, bot := range feishuCfg.Bots {
 		_, err := feishu.LoadCredentialsForBot(bot.Name)
+		if err != nil && !errors.Is(err, feishu.ErrCredentialsNotFound) {
+			return nil, fmt.Errorf("load Feishu bot %q credential status: %w", bot.Name, err)
+		}
 		statuses = append(statuses, platformStatus{
 			Name:               string(platform.PlatformFeishu) + "/" + bot.Name,
 			AccountID:          bot.AppID,
@@ -82,7 +96,7 @@ func feishuPlatformStatuses(feishuCfg config.PlatformConfig) []platformStatus {
 			AllowedUsersCount:  len(bot.AllowedUsers),
 		})
 	}
-	return statuses
+	return statuses, nil
 }
 
 func agentStatuses(cfg *config.Config) []agentStatus {

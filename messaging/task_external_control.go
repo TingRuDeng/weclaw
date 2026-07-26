@@ -66,13 +66,18 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 	if !live || !runtime {
 		return target, true, nil
 	}
-	unlock := h.lockCodexThreadControl(target.threadID)
+	controlCtx, cancel := h.codexThreadControlContext(req.ctx)
+	defer cancel()
+	unlock, err := h.lockCodexThreadControlContext(controlCtx, target.threadID)
+	if err != nil {
+		return target, true, fmt.Errorf("等待 Codex 会话控制超时: %w", err)
+	}
 	defer unlock()
 	route := codexConversationRoute{
 		bindingKey:     codexBindingKey(target.task.routeUserID, target.task.agentName),
 		conversationID: req.key,
 	}
-	binding, err := liveAgent.InspectCodexRuntime(req.ctx, agent.CodexRuntimeRequest{
+	binding, err := liveAgent.InspectCodexRuntime(controlCtx, agent.CodexRuntimeRequest{
 		Ref:    agent.CodexThreadRef{ConversationID: req.key, ThreadID: target.threadID},
 		Intent: codexSharedHostIntent(route),
 	})
@@ -82,7 +87,7 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 	if binding.Runtime != agent.CodexRuntimeWeClaw {
 		return target, true, fmt.Errorf("Codex 实时运行位置不可用，无法确认%s操作", req.action)
 	}
-	state, err := runtimeAgent.ReadCodexThreadState(req.ctx, req.key, target.threadID)
+	state, err := runtimeAgent.ReadCodexThreadState(controlCtx, req.key, target.threadID)
 	if err != nil {
 		return target, true, err
 	}

@@ -77,7 +77,10 @@ func (c *codexDesktopClient) connectionMatchesLocked(connection codexDesktopConn
 		return false
 	}
 	if connection.connecting {
-		return c.connecting
+		// readLoop 与 initialize 共享同一连接快照。该快照既要能在
+		// 握手期回复 peer discovery，也要在 finishInitialize 后继续
+		// 服务同一 epoch；conn/epoch 校验仍会拒绝旧连接。
+		return c.connecting || c.isConnectedLocked()
 	}
 	return c.isConnectedLocked()
 }
@@ -193,7 +196,9 @@ func (c *codexDesktopClient) installConnection(conn net.Conn) (codexDesktopConne
 	}
 	state := &codexDesktopConnectionState{ready: make(chan struct{})}
 	c.epoch, c.conn, c.connectionState, c.clientID = c.epoch+1, conn, state, ""
-	return codexDesktopConnectionRef{conn: conn, epoch: c.epoch, state: state}, nil
+	return codexDesktopConnectionRef{
+		conn: conn, epoch: c.epoch, connecting: true, state: state,
+	}, nil
 }
 
 // finishInitialize 先发布 connected 状态，再放行握手期间到达的广播。

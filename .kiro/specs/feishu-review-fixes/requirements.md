@@ -6,7 +6,7 @@
 
 每条修复以 `go build ./...`、`go vet ./...`、`go test ./...`（含 `-race`）全绿为验收门槛。
 
-权威参考：工作区外参考项目 `/Volumes/Data/code/tmp/open-im/src/feishu/permission.ts`（已在生产使用，含权威权限错误码集合与降级发送链），Codex 执行时用终端访问。
+权威参考：工作区外参考项目 `/path/to/open-im/src/feishu/permission.ts`（已在生产使用，含权威权限错误码集合与降级发送链；路径由执行环境提供）。
 
 ## Glossary
 

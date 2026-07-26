@@ -51,18 +51,21 @@ type ACPAgent struct {
 	hostCmd         *exec.Cmd
 	hostDone        <-chan error
 	codexAutoUpdate string
-	// Codex 状态库错误只有连续出现后才触发更新，避免把瞬时锁争用或 IO
-	// 抖动误判为版本不兼容。更新时间用于抑制同一故障上的更新风暴。
-	codexStateRuntimeFailures int
-	codexLastAutoUpdateAt     time.Time
-	codexStateRetryDelay      time.Duration
-	started                   bool
-	starting                  bool
-	startDone                 chan struct{}
-	startErr                  error
-	nextID                    atomic.Int64
-	wireSequence              atomic.Uint64
-	sessions                  map[string]string // conversationID -> sessionID (legacy ACP)
+	// Codex 兼容性启动错误只有连续出现后才触发更新，避免把瞬时锁争用或
+	// IO 抖动误判为版本不兼容。更新时间用于抑制同一故障上的更新风暴。
+	codexCompatibilityFailures  int
+	codexLastAutoUpdateAt       time.Time
+	codexCompatibilityRetryWait time.Duration
+	// codexHostConnectTimeout is a test seam for the fixed production startup
+	// deadline. It must be set before Start and remains immutable afterwards.
+	codexHostConnectTimeout time.Duration
+	started                 bool
+	starting                bool
+	startDone               chan struct{}
+	startErr                error
+	nextID                  atomic.Int64
+	wireSequence            atomic.Uint64
+	sessions                map[string]string // conversationID -> sessionID (legacy ACP)
 	// pendingPersistedSessions 在标准 ACP 握手确认身份前隔离磁盘中的旧 session。
 	pendingPersistedSessions   map[string]string
 	legacyRuntimeGeneration    uint64
@@ -105,18 +108,19 @@ type ACPAgent struct {
 	claudeQuotaOAuthToken func(context.Context) (string, error)
 	claudeQuotaOAuthQuery func(context.Context, string) (ClaudeQuota, error)
 
-	desktopProbe              codexDesktopOwnerProbe
-	codexOwners               *codexRuntimeOwnerRegistry
-	desktopRuntime            *codexDesktopRuntime
-	appServerGate             *codexAppServerGate
-	codexAccountSafetyOnce    sync.Once
-	restartCodexAppServerCall func(context.Context) error
-	codexAccountStoreCall     func() (*codexauth.Store, error)
-	stopManagedHostCall       func(context.Context, string) error
-	startManagedHostCall      func(context.Context, string) error
-	updateHostIdentityCall    func(string, codexauth.Profile) error
-	codexCLIUpdaterCall       func(context.Context) (codexCLIUpdateResult, error)
-	protocolTrace             observability.ProtocolRecorder
+	desktopProbe               codexDesktopOwnerProbe
+	codexOwners                *codexRuntimeOwnerRegistry
+	desktopRuntime             *codexDesktopRuntime
+	appServerGate              *codexAppServerGate
+	codexAccountSafetyOnce     sync.Once
+	restartCodexAppServerCall  func(context.Context) error
+	codexAccountStoreCall      func() (*codexauth.Store, error)
+	stopManagedHostCall        func(context.Context, string) error
+	startManagedHostCall       func(context.Context, string) error
+	updateHostIdentityCall     func(string, codexauth.Profile) error
+	codexHostLockContendedCall func()
+	codexCLIUpdaterCall        func(context.Context) (codexCLIUpdateResult, error)
+	protocolTrace              observability.ProtocolRecorder
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.

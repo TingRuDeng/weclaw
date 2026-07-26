@@ -2,7 +2,7 @@
 
 ## Overview
 
-针对 `multi-platform-feishu` 审查发现的遗留问题做收口修复，聚焦飞书权限处理、CardKit 生命周期、富文本解析噪声及工程打磨。不改平台抽象与微信行为、不加新功能。每个任务以 `go build/vet/test ./...`（含 `-race`）全绿为门槛。权威参考 `/Volumes/Data/code/tmp/open-im/src/feishu/permission.ts`（终端访问）。带 `*` 为可选/调查类。
+针对 `multi-platform-feishu` 审查发现的遗留问题做收口修复，聚焦飞书权限处理、CardKit 生命周期、富文本解析噪声及工程打磨。不改平台抽象与微信行为、不加新功能。每个任务以 `go build/vet/test ./...`（含 `-race`）全绿为门槛。权威参考 `/path/to/open-im/src/feishu/permission.ts`（路径由执行环境提供）。带 `*` 为可选/调查类。
 
 > 执行前先把 `multi-platform-feishu` 当前未提交的工作树改动（feishu/incoming.go、feishu/incoming_test.go、messaging/handler.go、messaging/handler_test.go）commit 或确认保留，避免与本批修复混在一起。
 

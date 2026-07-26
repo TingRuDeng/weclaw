@@ -26,9 +26,14 @@ type codexRuntimeResolveOptions struct {
 
 // resolveCodexRuntime 每次从持久化控制意图出发重新探测实际运行位置。
 func (h *Handler) resolveCodexRuntime(ctx context.Context, opts codexRuntimeResolveOptions) (codexRuntimeResolution, error) {
-	unlock := h.lockCodexThreadControl(strings.TrimSpace(opts.threadID))
+	controlCtx, cancel := h.codexThreadControlContext(ctx)
+	defer cancel()
+	unlock, err := h.lockCodexThreadControlContext(controlCtx, strings.TrimSpace(opts.threadID))
+	if err != nil {
+		return codexRuntimeResolution{}, err
+	}
 	defer unlock()
-	return h.resolveCodexRuntimeLocked(ctx, opts)
+	return h.resolveCodexRuntimeLocked(controlCtx, opts)
 }
 
 // resolveCodexRuntimeLocked 要求调用方已持有 thread 控制锁。
@@ -37,18 +42,20 @@ func (h *Handler) resolveCodexRuntimeLocked(ctx context.Context, opts codexRunti
 	if threadID == "" {
 		return codexRuntimeResolution{}, nil
 	}
+	controlCtx, cancel := h.codexThreadControlContext(ctx)
+	defer cancel()
 	if err := h.guardCodexThreadSwitch(opts.route, threadID); err != nil {
 		return codexRuntimeResolution{}, err
 	}
 	liveAgent, ok := opts.ag.(agent.CodexLiveRuntimeAgent)
 	if !ok {
-		return h.resolveLegacyCodexRuntime(ctx, opts)
+		return h.resolveLegacyCodexRuntime(controlCtx, opts)
 	}
 	request, rollout, err := h.buildCodexRuntimeRequest(opts.route, threadID)
 	if err != nil {
 		return codexRuntimeResolution{}, err
 	}
-	binding, probeErr := liveAgent.InspectCodexRuntime(ctx, request)
+	binding, probeErr := liveAgent.InspectCodexRuntime(controlCtx, request)
 	resolution := codexRuntimeResolution{
 		Request: request, Binding: binding, Rollout: rollout, Live: true, ProbeErr: probeErr,
 	}

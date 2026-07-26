@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
@@ -136,6 +137,48 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	if !containsText(calls.texts(), "已发送停止请求，等待任务终态") {
 		t.Fatalf("/stop should confirm interrupt and wait for terminal, messages=%#v", calls.texts())
 	}
+}
+
+func TestCodexStopRuntimeProbeTimeoutKeepsTaskControllable(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.codexControlTimeout = 20 * time.Millisecond
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active",
+	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
+	ag.inspectRelease = make(chan struct{})
+	task, _, _ := h.beginActiveTask(context.Background(), "conversation-1", activeTaskMeta{
+		owner: "user-1", routeUserID: "route-1", agentName: "codex",
+		runtimeOwner:  agent.CodexRuntimeWeClaw,
+		codexThreadID: "thread-active", codexTurnID: "turn-active",
+	})
+
+	result := make(chan struct {
+		text    string
+		handled bool
+	}, 1)
+	go func() {
+		text, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{
+			ctx: context.Background(), key: "conversation-1", agent: ag, actor: "user-1",
+		})
+		result <- struct {
+			text    string
+			handled bool
+		}{text: text, handled: handled}
+	}()
+
+	select {
+	case got := <-result:
+		if !got.handled || !strings.Contains(got.text, "无法确认 Codex 实时运行位置") {
+			t.Fatalf("handled=%v text=%q", got.handled, got.text)
+		}
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("/stop did not return after the internal control timeout")
+	}
+	if taskPhase(task) != codexTaskRunning || task.stopRequested {
+		t.Fatalf("phase=%s stopRequested=%v", taskPhase(task), task.stopRequested)
+	}
+	assertCodexThreadLockReusable(t, h, "thread-active")
 }
 
 func TestCodexReservedExternalTaskRejectsGuideAndStopBeforeRuntimeCall(t *testing.T) {

@@ -162,7 +162,13 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
 	defer unlockBinding()
 	route := h.codexConversationRouteForSession(req.userID, req.routeUserID, name, ag)
-	unlockControl := h.lockCodexThreadControl(route.threadID)
+	controlCtx, cancelControl := h.codexThreadControlContext(ctx)
+	defer cancelControl()
+	unlockControl, err := h.lockCodexThreadControlContext(controlCtx, route.threadID)
+	if err != nil {
+		results <- newBroadcastAgentResult(req, name, "Codex 会话控制繁忙，请稍后重试。", false)
+		return broadcastAgentRuntime{}, false
+	}
 	defer unlockControl()
 	taskOpts := codexAgentTaskOptions{
 		ctx: ctx, platform: req.platformName,

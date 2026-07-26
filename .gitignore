@@ -4,6 +4,9 @@ weclaw
 # 发布产物
 dist/
 
+# 本地导出和用户附件
+output/
+
 # Air hot reload
 tmp/
 

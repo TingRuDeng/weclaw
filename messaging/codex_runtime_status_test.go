@@ -54,6 +54,19 @@ func TestCodexStatusTimeoutReleasesThreadLock(t *testing.T) {
 	assertCodexThreadLockReusable(t, h, "thread-1")
 }
 
+func TestCodexStatusInternalControlTimeoutReleasesThreadLock(t *testing.T) {
+	h, ag, runtime := codexRuntimeStatusFixture(t)
+	h.codexControlTimeout = 20 * time.Millisecond
+	ag.inspectRelease = make(chan struct{})
+
+	result := h.renderCodexStatus(runtime)
+	if !strings.Contains(result.Reply, "任务: 未确认") ||
+		!strings.Contains(result.Reply, "运行: 暂不可用") {
+		t.Fatalf("reply=%q", result.Reply)
+	}
+	assertCodexThreadLockReusable(t, h, "thread-1")
+}
+
 func TestCompactCodexRuntimeStatusLinesPreserveTaskAndRuntimeFailures(t *testing.T) {
 	tests := []struct {
 		name       string

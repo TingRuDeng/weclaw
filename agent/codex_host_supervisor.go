@@ -234,10 +234,25 @@ func sameCodexHostGeneration(current codexHostMetadata, expected codexHostMetada
 		current.StartedAt.Equal(expected.StartedAt)
 }
 
-func (a *ACPAgent) updateCodexHostAccountIdentity(socketPath string, profile codexauth.Profile) error {
+// updateCodexHostAccountIdentityLocked must run while holding the shared Host
+// lifecycle lock. When expected is non-nil, the full Host generation is
+// compared before writing so an account transaction started on an older Host
+// cannot stamp its identity onto a replacement process.
+func (a *ACPAgent) updateCodexHostAccountIdentityLocked(
+	socketPath string,
+	expected *codexHostMetadata,
+	profile codexauth.Profile,
+) error {
 	metadata, err := a.validateManagedCodexHost(socketPath)
 	if err != nil {
 		return err
+	}
+	if expected != nil && !sameCodexHostGeneration(metadata, *expected) {
+		return codexauth.NewError(
+			codexauth.CodeConflict,
+			"Codex Host 已切换到新一代，请重试账号操作",
+			nil,
+		)
 	}
 	metadata.ActiveProfileID = string(profile.ID)
 	metadata.AccountFingerprint = profile.AccountFingerprint
@@ -388,6 +403,28 @@ func codexHostProcessAlive(pid int) bool {
 	}
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// codexHostProcessRunning is stricter than signal 0: a zombie still has a PID
+// but cannot create the app-server socket and must not authorize a CLI update.
+func codexHostProcessRunning(pid int) bool {
+	if !codexHostProcessAlive(pid) {
+		return false
+	}
+	state, err := psProcessField(pid, "state=")
+	if err != nil {
+		return false
+	}
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return false
+	}
+	switch state[0] {
+	case 'Z', 'X':
+		return false
+	default:
+		return true
+	}
 }
 
 func waitCodexHostProcessExit(ctx context.Context, pid int, timeout time.Duration) error {

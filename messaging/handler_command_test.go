@@ -93,7 +93,7 @@ func TestParseCommand_CustomAlias(t *testing.T) {
 
 func TestParseCommand_AbsolutePathIsPlainText(t *testing.T) {
 	h := newTestHandler()
-	text := "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh看下具体实现"
+	text := "/path/to/cc-switch/codex-switch.sh看下具体实现"
 
 	names, msg := h.parseCommand(text)
 

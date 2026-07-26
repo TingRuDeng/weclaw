@@ -426,11 +426,12 @@ func TestResolveSymlinkResolvesRelativeTarget(t *testing.T) {
 }
 
 func TestRestartGuardBlocksWhenRuntimeHasActiveTasks(t *testing.T) {
+	activeTasks := 1
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/runtime" {
 			t.Fatalf("path=%q, want /api/runtime", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(runtimeStatusResponse{ActiveTasks: 1})
+		json.NewEncoder(w).Encode(runtimeStatusResponse{Status: "ok", ActiveTasks: &activeTasks})
 	}))
 	defer server.Close()
 
@@ -469,6 +470,14 @@ func TestRestartGuardBlocksInvalidRuntimeResponses(t *testing.T) {
 	}{
 		{name: "unauthorized", status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`},
 		{name: "invalid json", status: http.StatusOK, body: `{`},
+		{name: "empty object", status: http.StatusOK, body: `{}`},
+		{name: "missing active tasks", status: http.StatusOK, body: `{"status":"ok"}`},
+		{name: "missing status", status: http.StatusOK, body: `{"active_tasks":0}`},
+		{name: "null active tasks", status: http.StatusOK, body: `{"status":"ok","active_tasks":null}`},
+		{name: "negative active tasks", status: http.StatusOK, body: `{"status":"ok","active_tasks":-1}`},
+		{name: "wrong status", status: http.StatusOK, body: `{"status":"degraded","active_tasks":0}`},
+		{name: "multiple objects", status: http.StatusOK, body: `{"status":"ok","active_tasks":0}{}`},
+		{name: "trailing garbage", status: http.StatusOK, body: `{"status":"ok","active_tasks":0}x`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -486,6 +495,21 @@ func TestRestartGuardBlocksInvalidRuntimeResponses(t *testing.T) {
 				t.Fatalf("ensureRestartSafe error=%v, want runtime rejection", err)
 			}
 		})
+	}
+}
+
+func TestRestartGuardAllowsValidatedIdleRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok","active_tasks":0,"trace":{"enabled":false}}`))
+	}))
+	defer server.Close()
+
+	err := ensureRestartSafe(context.Background(), restartSafetyOptions{
+		apiAddr:       strings.TrimPrefix(server.URL, "http://"),
+		processExists: true,
+	})
+	if err != nil {
+		t.Fatalf("ensureRestartSafe error=%v, want validated idle runtime", err)
 	}
 }
 
@@ -526,6 +550,18 @@ func TestRuntimeStatusURLDialLoopbackForWildcardListen(t *testing.T) {
 	}
 	if got != "http://127.0.0.1:18011/api/runtime" {
 		t.Fatalf("runtime status URL=%q, want loopback URL", got)
+	}
+}
+
+func TestRuntimeStatusURLProjectsLocalhostToNumericLoopback(t *testing.T) {
+	for _, addr := range []string{"localhost:18011", "http://localhost:18011"} {
+		got, err := runtimeStatusURL(addr)
+		if err != nil {
+			t.Fatalf("runtimeStatusURL(%q) error: %v", addr, err)
+		}
+		if got != "http://127.0.0.1:18011/api/runtime" {
+			t.Fatalf("runtimeStatusURL(%q)=%q, want numeric loopback URL", addr, got)
+		}
 	}
 }
 

@@ -4,8 +4,8 @@
 
 - 触发条件：Codex App 与 WeClaw 使用同一个 `CODEX_HOME`，App 的内置 Codex 已把 SQLite 状态库迁移到更新版本；较旧的 WeClaw CLI Host 原本持续运行，但本地切换账号导致连接重启。
 - 规则：账号切换只应触发受控身份收敛，不能把 `failed to initialize sqlite state runtime` 直接解释为 Token、图片权限或数据库损坏。必须同时核对 App/CLI 版本、状态库完整性和已应用 migration；旧 Host 退出后无法重新打开新版数据库属于运行时兼容问题。
-- 自动恢复边界：原生 shared app-server 只有在同类初始化错误连续出现、没有 active/uncertain writer lease 且持有 Host 生命周期锁时，才能调用官方 `codex update`。更新前后必须识别 `codex-cli` 版本且版本真实变化；更新失败、版本未变或更新后仍无法启动都失败关闭，不重复更新、不回退 Agent，也不修改账号、workspace/thread binding。
-- 反例：把所有 SQLite 初始化错误无条件重试三次，最终只返回 `agent "codex" not available`；或者每次启动都静默升级 CLI，使运行版本不可预测并可能在任务执行中替换二进制。
+- 自动恢复边界：原生 shared app-server 只有在同类初始化错误连续出现，或子进程连续存活但未在启动期限内创建 socket，且没有 active/uncertain writer lease 并持有 Host 生命周期锁时，才能调用官方 `codex update`。调用方取消、普通进程退出和连接错误不是版本不兼容证据。更新前后必须识别 `codex-cli` 版本且版本真实变化；更新失败、版本未变或更新后仍无法启动都失败关闭，不重复更新、不回退 Agent，也不修改账号、workspace/thread binding。
+- 反例：只匹配 SQLite 错误文案；旧 CLI 在状态库初始化阶段永久阻塞时，WeClaw 先按固定期限终止进程并只得到 socket 超时，自动更新永远不会启动。也不能把所有超时都当成版本不兼容，否则用户取消请求也会替换本机 CLI。
 - 来源：Android 飞书窗口图片已下载成功后，用户在 Codex App 切换账号；日志显示原 Host 断开，WeClaw 的 Codex CLI `0.144.5` 无法初始化已由 App `0.146.0-alpha.3.1` 升级到 migration 42 的状态库。
 
 ## 2026-07-19 运行态诊断必须沿同一 Trace 串联协议与用户可见状态

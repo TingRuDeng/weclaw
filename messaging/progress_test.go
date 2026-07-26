@@ -86,7 +86,7 @@ func TestSummaryModeDoesNotRenderTextPreview(t *testing.T) {
 }
 
 func TestRenderFinalSuccessReturnsReplyWithoutWrapperAndKeepsNewlines(t *testing.T) {
-	reply := "🧩 步骤：查询当前工作目录\n🎯 目的：准确返回你当前会话路径\n▶️ 执行：运行 pwd 命令。\n/Volumes/Data/code/MyCode"
+	reply := "🧩 步骤：查询当前工作目录\n🎯 目的：准确返回你当前会话路径\n▶️ 执行：运行 pwd 命令。\n/path/to/project"
 
 	got := renderFinalSuccess("", reply)
 

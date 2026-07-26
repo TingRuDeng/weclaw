@@ -127,7 +127,7 @@ Spec 符合度：通过。本轮只按职责拆分 `cmd/start.go`，未改变 `r
 
 安全检查：通过。未新增 secret、权限放宽、外部输入处理、shell 拼接或静默 fallback。
 
-测试与验证：通过最小充分验证。`PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/validate_docs.py`、`python3 scripts/validate_docs.py . --profile generic`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./agent ./messaging ./feishu ./cmd ./config -run TestNonExistent -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`git diff --check` 均通过。`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s` 失败，原因是当前沙箱禁止 `httptest`/companion 监听本地端口，并拒绝写 `/Users/dengtingru/.weclaw/state/*.tmp`。
+测试与验证：通过最小充分验证。`PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/validate_docs.py`、`python3 scripts/validate_docs.py . --profile generic`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./agent ./messaging ./feishu ./cmd ./config -run TestNonExistent -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`git diff --check` 均通过。`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s` 失败，原因是当前沙箱禁止 `httptest`/companion 监听本地端口，并拒绝写 `~/.weclaw/state/*.tmp`。
 
 复杂度检查：通过。`cmd/start.go` 从 789 行降到 220 行；新增文件中最大的是 `cmd/start_daemon.go` 240 行，均低于 300 行。
 

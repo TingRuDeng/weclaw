@@ -69,7 +69,7 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
-	text := "/Volumes/Data/code/MyCode/cc-switch/codex-switch.sh看下具体实现"
+	text := "/path/to/cc-switch/codex-switch.sh看下具体实现"
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(100, text))
 

@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	codexStateRuntimeUpdateThreshold = 2
-	codexCLIAutoUpdateCooldown       = 5 * time.Minute
-	codexCLIAutoUpdateTimeout        = 3 * time.Minute
-	codexCLICommandOutputLimit       = 32 << 10
-	codexStateRuntimeRetryDelay      = 2 * time.Second
+	codexCompatibilityUpdateThreshold = 2
+	codexCLIAutoUpdateCooldown        = 5 * time.Minute
+	codexCLIAutoUpdateTimeout         = 3 * time.Minute
+	codexCLICommandOutputLimit        = 32 << 10
+	codexCompatibilityRetryDelay      = 2 * time.Second
 )
 
 var (
@@ -33,10 +33,10 @@ type codexCLIUpdateResult struct {
 	RuntimeAvailable bool
 }
 
-func (a *ACPAgent) waitCodexStateRuntimeRetry(ctx context.Context) error {
-	delay := a.codexStateRetryDelay
+func (a *ACPAgent) waitCodexCompatibilityRetry(ctx context.Context) error {
+	delay := a.codexCompatibilityRetryWait
 	if delay <= 0 {
-		delay = codexStateRuntimeRetryDelay
+		delay = codexCompatibilityRetryDelay
 	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -59,20 +59,28 @@ func IsCodexStateRuntimeError(err error) bool {
 		strings.Contains(text, "failed to initialize state runtime")
 }
 
+// isCodexCLICompatibilityFailure only accepts failures that point to a CLI
+// unable to initialize the shared Host. Generic exits, caller cancellation and
+// connection errors remain fail-closed and never authorize a binary update.
+func isCodexCLICompatibilityFailure(err error) bool {
+	return IsCodexStateRuntimeError(err) || errors.Is(err, errCodexHostStartupTimeout)
+}
+
 func (a *ACPAgent) maybeAutoUpdateCodexCLI(ctx context.Context, startErr error) (bool, error) {
+	compatibilityFailure := isCodexCLICompatibilityFailure(startErr)
 	if a.codexAutoUpdate != "incompatible" || !a.usesCodexSharedHost() ||
-		!IsCodexStateRuntimeError(startErr) {
-		if !IsCodexStateRuntimeError(startErr) {
-			a.resetCodexStateRuntimeFailures()
+		!compatibilityFailure {
+		if !compatibilityFailure {
+			a.resetCodexCompatibilityFailures()
 		}
 		return false, nil
 	}
 
 	a.mu.Lock()
-	a.codexStateRuntimeFailures++
-	failures := a.codexStateRuntimeFailures
+	a.codexCompatibilityFailures++
+	failures := a.codexCompatibilityFailures
 	lastAttempt := a.codexLastAutoUpdateAt
-	if failures < codexStateRuntimeUpdateThreshold ||
+	if failures < codexCompatibilityUpdateThreshold ||
 		(!lastAttempt.IsZero() && time.Since(lastAttempt) < codexCLIAutoUpdateCooldown) {
 		a.mu.Unlock()
 		return false, nil
@@ -95,7 +103,7 @@ func (a *ACPAgent) maybeAutoUpdateCodexCLI(ctx context.Context, startErr error) 
 	}
 	if result.RuntimeAvailable {
 		log.Printf("[codex-update] compatible app-server became available while waiting for update lock")
-		a.resetCodexStateRuntimeFailures()
+		a.resetCodexCompatibilityFailures()
 		return true, nil
 	}
 	if result.Before == "" || result.After == "" {
@@ -107,14 +115,14 @@ func (a *ACPAgent) maybeAutoUpdateCodexCLI(ctx context.Context, startErr error) 
 			ErrCodexCLIAutoUpdateFailed, result.After,
 		)
 	}
-	log.Printf("[codex-update] Codex CLI updated after repeated state runtime failures (%s -> %s)", result.Before, result.After)
-	a.resetCodexStateRuntimeFailures()
+	log.Printf("[codex-update] Codex CLI updated after repeated compatibility startup failures (%s -> %s)", result.Before, result.After)
+	a.resetCodexCompatibilityFailures()
 	return true, nil
 }
 
-func (a *ACPAgent) resetCodexStateRuntimeFailures() {
+func (a *ACPAgent) resetCodexCompatibilityFailures() {
 	a.mu.Lock()
-	a.codexStateRuntimeFailures = 0
+	a.codexCompatibilityFailures = 0
 	a.mu.Unlock()
 }
 
@@ -160,7 +168,7 @@ func (a *ACPAgent) updateCodexCLI(ctx context.Context) (codexCLIUpdateResult, er
 	if err != nil {
 		return codexCLIUpdateResult{}, fmt.Errorf("读取当前 Codex CLI 版本: %w", err)
 	}
-	log.Printf("[codex-update] repeated state runtime failures; running controlled Codex CLI update (version=%s)", before)
+	log.Printf("[codex-update] repeated compatibility startup failures; running controlled Codex CLI update (version=%s)", before)
 	if _, err := a.runCodexCLICommand(updateCtx, "update"); err != nil {
 		return codexCLIUpdateResult{}, fmt.Errorf("执行 codex update: %w", err)
 	}

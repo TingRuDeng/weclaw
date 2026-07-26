@@ -29,10 +29,10 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 	defer func() {
 		err = a.finishACPStart(err)
 	}()
-	for attempt := 1; attempt <= codexStateRuntimeUpdateThreshold; attempt++ {
+	for attempt := 1; attempt <= codexCompatibilityUpdateThreshold; attempt++ {
 		startErr := a.startACPProcess(ctx)
 		if startErr == nil {
-			a.resetCodexStateRuntimeFailures()
+			a.resetCodexCompatibilityFailures()
 			return nil
 		}
 		retryAfterUpdate, updateErr := a.maybeAutoUpdateCodexCLI(ctx, startErr)
@@ -46,14 +46,14 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 					ErrCodexCLIAutoUpdateFailed,
 				)
 			}
-			a.resetCodexStateRuntimeFailures()
+			a.resetCodexCompatibilityFailures()
 			return nil
 		}
-		if a.codexAutoUpdate != "incompatible" || !IsCodexStateRuntimeError(startErr) ||
-			attempt == codexStateRuntimeUpdateThreshold {
+		if a.codexAutoUpdate != "incompatible" || !isCodexCLICompatibilityFailure(startErr) ||
+			attempt == codexCompatibilityUpdateThreshold {
 			return startErr
 		}
-		if err := a.waitCodexStateRuntimeRetry(ctx); err != nil {
+		if err := a.waitCodexCompatibilityRetry(ctx); err != nil {
 			return errors.Join(startErr, err)
 		}
 	}

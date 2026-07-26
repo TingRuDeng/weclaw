@@ -364,9 +364,17 @@ func (a *ACPAgent) reconcileExternallyProjectedCodexAccount(
 			if setErr := tx.SetActive(updated.ID); setErr != nil {
 				return setErr
 			}
-			setMetadataErr := a.setManagedCodexHostAccountIdentity(store.SocketPath(), updated)
+			setMetadataErr := a.setManagedCodexHostAccountIdentity(
+				ctx,
+				store.SocketPath(),
+				&metadata,
+				updated,
+			)
 			if setMetadataErr != nil {
-				restoreErr := a.restoreManagedCodexHostMetadata(store.SocketPath(), metadata)
+				if codexauth.ErrorCode(setMetadataErr) == codexauth.CodeConflict {
+					return setMetadataErr
+				}
+				restoreErr := a.restoreManagedCodexHostMetadata(ctx, store.SocketPath(), metadata)
 				if restoreErr != nil {
 					available = false
 					tx.SetLastSwitch(codexauth.SwitchRecord{
@@ -387,7 +395,7 @@ func (a *ACPAgent) reconcileExternallyProjectedCodexAccount(
 				Message: "已同步本地 Codex 当前账号", At: time.Now(),
 			})
 			if flushErr := tx.Flush(); flushErr != nil {
-				restoreErr := a.restoreManagedCodexHostMetadata(store.SocketPath(), metadata)
+				restoreErr := a.restoreManagedCodexHostMetadata(ctx, store.SocketPath(), metadata)
 				if restoreErr != nil {
 					available = false
 					return codexauth.NewError(
@@ -427,6 +435,13 @@ func (a *ACPAgent) reconcileExternallyProjectedCodexAccount(
 			return codexauth.NewError(codexauth.CodeBusy, "Codex Host 正在执行其他生命周期操作", lockErr)
 		}
 		defer releaseCodexHostStartupLock(lifecycleLock)
+		currentMetadata, metadataErr := a.validateManagedCodexHost(store.SocketPath())
+		if metadataErr != nil {
+			return metadataErr
+		}
+		if !sameCodexHostGeneration(currentMetadata, metadata) {
+			return codexauth.NewError(codexauth.CodeConflict, "Codex Host 已切换到新一代，请重试账号同步", nil)
+		}
 		if err := a.ensureAllCodexThreadsIdle(ctx); err != nil {
 			return err
 		}
@@ -526,7 +541,7 @@ func (a *ACPAgent) reconcileExternallyProjectedCodexAccount(
 		if updateErr != nil {
 			return rollback(updateErr)
 		}
-		if metadataErr := a.setManagedCodexHostAccountIdentity(store.SocketPath(), updated); metadataErr != nil {
+		if metadataErr := a.setManagedCodexHostAccountIdentityLocked(store.SocketPath(), nil, updated); metadataErr != nil {
 			return rollback(metadataErr)
 		}
 		if activeErr := tx.SetActive(updated.ID); activeErr != nil {

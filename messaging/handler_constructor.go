@@ -31,6 +31,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		adminTimeout:            adminCommandTimeout,
 		codexCommandTimeout:     defaultCodexSessionCommandTimeout,
 		codexLockWaitTimeout:    defaultCodexSessionLockWaitTimeout,
+		codexControlTimeout:     defaultCodexThreadControlTimeout,
 		startedAt:               time.Now(),
 	}
 }

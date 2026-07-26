@@ -154,9 +154,11 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
 	}
 	if prepared.state.Controllable && (prepared.active || result.resolution.Binding.State.Active) {
+		controlCtx, cancel := h.codexThreadControlContext(req.ctx)
 		binding, reconcileErr := liveAgent.ReconcileCodexObservedTurn(
-			req.ctx, result.resolution.Request, prepared.state.CodexThreadState,
+			controlCtx, result.resolution.Request, prepared.state.CodexThreadState,
 		)
+		cancel()
 		if reconcileErr != nil {
 			return h.failCodexAcquireRuntime(result, liveAgent, reconcileErr), nil
 		}

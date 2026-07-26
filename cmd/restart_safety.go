@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,7 +19,8 @@ const restartSafetyTimeout = 2 * time.Second
 var restartSafetyHTTPClient = &http.Client{Timeout: restartSafetyTimeout}
 
 type runtimeStatusResponse struct {
-	ActiveTasks int `json:"active_tasks"`
+	Status      string `json:"status"`
+	ActiveTasks *int   `json:"active_tasks"`
 }
 
 type restartSafetyOptions struct {
@@ -57,10 +59,11 @@ func ensureRestartSafe(ctx context.Context, opts restartSafetyOptions) error {
 	if !ok {
 		return fmt.Errorf("无法确认运行中任务状态，已取消重启；请检查 WeClaw API 和配置，如确认要中断可加 --force")
 	}
-	if status.ActiveTasks <= 0 {
+	activeTasks := *status.ActiveTasks
+	if activeTasks == 0 {
 		return nil
 	}
-	return fmt.Errorf("当前还有 %d 个运行中的任务，已取消重启；请等待完成或在飞书发送 /stop 后重试，如确认要中断可加 --force", status.ActiveTasks)
+	return fmt.Errorf("当前还有 %d 个运行中的任务，已取消重启；请等待完成或在飞书发送 /stop 后重试，如确认要中断可加 --force", activeTasks)
 }
 
 func fetchRuntimeStatus(ctx context.Context, apiAddr string, token string) (runtimeStatusResponse, bool) {
@@ -84,7 +87,15 @@ func fetchRuntimeStatus(ctx context.Context, apiAddr string, token string) (runt
 		return runtimeStatusResponse{}, false
 	}
 	var status runtimeStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&status); err != nil {
+		return runtimeStatusResponse{}, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return runtimeStatusResponse{}, false
+	}
+	if status.Status != "ok" || status.ActiveTasks == nil || *status.ActiveTasks < 0 {
 		return runtimeStatusResponse{}, false
 	}
 	return status, true
@@ -127,13 +138,19 @@ func runtimeAPIURL(apiAddr string, path string) (string, error) {
 func loopbackDialAddr(addr string) (string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
+		if strings.EqualFold(strings.TrimSpace(addr), "localhost") {
+			return "127.0.0.1", nil
+		}
 		if isRuntimeLoopbackHost(addr) {
 			return addr, nil
 		}
 		return "", fmt.Errorf("runtime API address %q is not loopback", addr)
 	}
-	switch strings.Trim(host, "[]") {
-	case "", "0.0.0.0", "::":
+	host = strings.Trim(host, "[]")
+	switch {
+	case strings.EqualFold(host, "localhost"):
+		return net.JoinHostPort("127.0.0.1", port), nil
+	case host == "" || host == "0.0.0.0" || host == "::":
 		return net.JoinHostPort("127.0.0.1", port), nil
 	default:
 		if isRuntimeLoopbackHost(host) {
@@ -145,9 +162,6 @@ func loopbackDialAddr(addr string) (string, error) {
 
 func isRuntimeLoopbackHost(host string) bool {
 	host = strings.Trim(strings.TrimSpace(host), "[]")
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }

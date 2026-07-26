@@ -25,14 +25,17 @@ import (
 )
 
 const (
-	codexHostConnectTimeout = 10 * time.Second
-	codexHostDialTimeout    = time.Second
-	codexHostWriteTimeout   = 10 * time.Second
-	codexHostLockPoll       = 25 * time.Millisecond
+	codexHostConnectTimeout       = 10 * time.Second
+	codexHostDialTimeout          = time.Second
+	codexHostWriteTimeout         = 10 * time.Second
+	codexHostLockPoll             = 25 * time.Millisecond
+	codexHostExitObservationGrace = 250 * time.Millisecond
 	// Darwin has the smallest sockaddr_un.sun_path limit among release targets.
 	// Keeping a little headroom also makes the error deterministic before dial.
 	codexHostSocketMaxBytes = 100
 )
+
+var errCodexHostStartupTimeout = errors.New("codex app-server did not create its socket before the startup deadline")
 
 // usesCodexSharedHost keeps test-only protocol overrides and legacy ACP wrappers
 // on stdio. The shared socket is only valid for the native `codex app-server`.
@@ -106,7 +109,13 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 			closeMetadataReady()
 		}
 	}
-	conn, err := waitForCodexHost(ctx, socketPath, done)
+	conn, err := waitForCodexHost(
+		ctx,
+		socketPath,
+		cmd.Process.Pid,
+		done,
+		a.effectiveCodexHostConnectTimeout(),
+	)
 	if err != nil {
 		closeMetadataReady()
 		stopCodexHostProcess(cmd, done)
@@ -192,6 +201,9 @@ func (a *ACPAgent) acquireCodexHostStartupLock(ctx context.Context, socketPath s
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
 			return closeWithError(fmt.Errorf("lock codex app-server startup: %w", err))
+		}
+		if a.codexHostLockContendedCall != nil {
+			a.codexHostLockContendedCall()
 		}
 		select {
 		case <-ctx.Done():
@@ -383,8 +395,24 @@ func dialCodexHost(ctx context.Context, socketPath string) (*websocket.Conn, err
 	return conn, nil
 }
 
-func waitForCodexHost(ctx context.Context, socketPath string, done <-chan error) (*websocket.Conn, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, codexHostConnectTimeout)
+func (a *ACPAgent) effectiveCodexHostConnectTimeout() time.Duration {
+	if a.codexHostConnectTimeout > 0 {
+		return a.codexHostConnectTimeout
+	}
+	return codexHostConnectTimeout
+}
+
+func waitForCodexHost(
+	ctx context.Context,
+	socketPath string,
+	pid int,
+	done <-chan error,
+	connectTimeout time.Duration,
+) (*websocket.Conn, error) {
+	if connectTimeout <= 0 {
+		connectTimeout = codexHostConnectTimeout
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
@@ -399,9 +427,73 @@ func waitForCodexHost(ctx context.Context, socketPath string, done <-chan error)
 			}
 			return nil, fmt.Errorf("codex app-server exited before socket became ready: %w", err)
 		case <-waitCtx.Done():
-			return nil, fmt.Errorf("wait for codex app-server socket: %w", waitCtx.Err())
+			// Prefer a concurrently observed process exit over the readiness
+			// timeout, because only a still-running Host is an update candidate.
+			if err, exited := codexHostExitResult(done); exited {
+				return nil, err
+			}
+			// A caller cancellation bounds this request and must never authorize
+			// replacing the Codex CLI binary.
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("wait for codex app-server socket: %w", err)
+			}
+			if conn, err := observeCodexHostAfterReadinessDeadline(ctx, socketPath, pid, done); conn != nil || err != nil {
+				return conn, err
+			}
+			return nil, fmt.Errorf("%w after %s", errCodexHostStartupTimeout, connectTimeout)
 		case <-ticker.C:
 		}
+	}
+}
+
+// observeCodexHostAfterReadinessDeadline resolves the deadline/Wait race before
+// a readiness timeout is allowed to trigger a CLI update. Signal 0 alone is not
+// sufficient because zombie processes retain their PID.
+func observeCodexHostAfterReadinessDeadline(
+	ctx context.Context,
+	socketPath string,
+	pid int,
+	done <-chan error,
+) (*websocket.Conn, error) {
+	timer := time.NewTimer(codexHostExitObservationGrace)
+	defer timer.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err, exited := codexHostExitResult(done); exited {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("wait for codex app-server socket: %w", ctx.Err())
+		case <-timer.C:
+			if err, exited := codexHostExitResult(done); exited {
+				return nil, err
+			}
+			if !codexHostProcessRunning(pid) {
+				return nil, fmt.Errorf("codex app-server exited before socket became ready: process is no longer running")
+			}
+			return nil, nil
+		case <-ticker.C:
+			probeCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+			conn, err := dialCodexHost(probeCtx, socketPath)
+			cancel()
+			if err == nil {
+				return conn, nil
+			}
+		}
+	}
+}
+
+func codexHostExitResult(done <-chan error) (error, bool) {
+	select {
+	case err, ok := <-done:
+		if !ok || err == nil {
+			err = fmt.Errorf("process exited")
+		}
+		return fmt.Errorf("codex app-server exited before socket became ready: %w", err), true
+	default:
+		return nil, false
 	}
 }
 

@@ -54,6 +54,33 @@ func TestCodexDesktopActiveMessageQueuesOnePending(t *testing.T) {
 	}
 }
 
+func TestCodexActivePreflightTimeoutReleasesThreadLock(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, true)
+	h.codexControlTimeout = 20 * time.Millisecond
+	ag.threadStateEntered = make(chan struct{}, 1)
+	ag.threadStateRelease = make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		h.startCodexAgentTask(opts)
+		close(done)
+	}()
+
+	select {
+	case <-ag.threadStateEntered:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("preflight did not start thread/read")
+	}
+	select {
+	case <-done:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("preflight did not return after the internal control timeout")
+	}
+	if _, active := h.activeTask(route.conversationID); active {
+		t.Fatal("timed out preflight must not register an active task")
+	}
+	assertCodexThreadLockReusable(t, h, route.threadID)
+}
+
 func TestCodexInProcessActiveTaskQueuesSecondMessage(t *testing.T) {
 	h, ag, first, route := liveMessageFixture(t, false)
 	turnEntered := make(chan struct{}, 1)

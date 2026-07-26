@@ -19,7 +19,9 @@ func (h *Handler) bindCodexSharedRuntime(req codexSessionAcquireRequest, liveAge
 	if err != nil {
 		return codexRuntimeResolution{}, err
 	}
-	binding, bindErr := liveAgent.HandoffCodexRuntime(req.ctx, request)
+	controlCtx, cancel := h.codexThreadControlContext(req.ctx)
+	defer cancel()
+	binding, bindErr := liveAgent.HandoffCodexRuntime(controlCtx, request)
 	resolution := codexRuntimeResolution{
 		Request: request, Binding: binding, Rollout: rollout,
 		Live: true, ProbeErr: bindErr,

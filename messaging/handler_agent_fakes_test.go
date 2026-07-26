@@ -96,31 +96,33 @@ func (f *fakeAgent) resetConversationID() string {
 
 type fakeCodexThreadAgent struct {
 	fakeAgent
-	threadID          string
-	useConversation   string
-	useThreadID       string
-	clearCalledWith   string
-	useErr            error
-	threadState       agent.CodexThreadState
-	threadStateErr    error
-	watchReply        string
-	watchErr          error
-	watchDone         chan struct{}
-	watchProgress     string
-	steerThreadID     string
-	steerTurnID       string
-	steerMessage      string
-	steerErr          error
-	interruptThreadID string
-	interruptTurnID   string
-	interruptErr      error
-	interruptHook     func()
-	interruptCalls    int
-	modelStatus       agent.CodexModelStatus
-	models            []agent.CodexModel
-	modelErr          error
-	quota             agent.CodexQuota
-	quotaErr          error
+	threadID           string
+	useConversation    string
+	useThreadID        string
+	clearCalledWith    string
+	useErr             error
+	threadState        agent.CodexThreadState
+	threadStateErr     error
+	threadStateEntered chan struct{}
+	threadStateRelease <-chan struct{}
+	watchReply         string
+	watchErr           error
+	watchDone          chan struct{}
+	watchProgress      string
+	steerThreadID      string
+	steerTurnID        string
+	steerMessage       string
+	steerErr           error
+	interruptThreadID  string
+	interruptTurnID    string
+	interruptErr       error
+	interruptHook      func()
+	interruptCalls     int
+	modelStatus        agent.CodexModelStatus
+	models             []agent.CodexModel
+	modelErr           error
+	quota              agent.CodexQuota
+	quotaErr           error
 }
 
 type fakeVisibleCodexAgent struct {
@@ -163,7 +165,11 @@ func (f *fakeCodexThreadAgent) ClearCodexThread(conversationID string) {
 	f.threadID = ""
 }
 
-func (f *fakeCodexThreadAgent) ReadCodexThreadState(_ context.Context, _ string, threadID string) (agent.CodexThreadState, error) {
+func (f *fakeCodexThreadAgent) ReadCodexThreadState(ctx context.Context, _ string, threadID string) (agent.CodexThreadState, error) {
+	signalCodexLiveTestHook(f.threadStateEntered)
+	if err := waitCodexLiveTestHook(ctx, f.threadStateRelease); err != nil {
+		return agent.CodexThreadState{}, err
+	}
 	if f.threadStateErr != nil {
 		return agent.CodexThreadState{}, f.threadStateErr
 	}

@@ -44,6 +44,9 @@ type externalCodexTaskReservationControl struct {
 
 // prepareExternalCodexTask 只解析外部任务，不占用观察槽或启动观察器。
 func (h *Handler) prepareExternalCodexTask(opts externalCodexTaskOptions) (preparedExternalCodexTask, error) {
+	controlCtx, cancel := h.codexThreadControlContext(opts.ctx)
+	defer cancel()
+	opts.ctx = controlCtx
 	resolved := h.resolveExternalCodexTask(opts)
 	if resolved.err != nil || !resolved.active {
 		return preparedExternalCodexTask{

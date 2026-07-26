@@ -31,7 +31,14 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		return
 	}
-	unlockControl := h.lockCodexThreadControl(route.threadID)
+	controlCtx, cancelControl := h.codexThreadControlContext(agentCtx)
+	defer cancelControl()
+	unlockControl, err := h.lockCodexThreadControlContext(controlCtx, route.threadID)
+	if err != nil {
+		cancelTaskTimeout()
+		sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前 Codex 会话控制繁忙，请稍后重试。")
+		return
+	}
 	defer unlockControl()
 	if h.preflightCodexTaskStart(codexTaskPreflightOptions{
 		taskOpts: opts, route: route, cancel: cancelTaskTimeout,

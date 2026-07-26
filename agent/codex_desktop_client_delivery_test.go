@@ -82,6 +82,8 @@ func TestCodexDesktopClientDoesNotRetryAmbiguousStartTurn(t *testing.T) {
 
 func TestCodexDesktopClientAnswersDiscoveryFalse(t *testing.T) {
 	response := make(chan codexDesktopEnvelope, 1)
+	release := make(chan struct{})
+	defer close(release)
 	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		serveCodexDesktopTestInitialize(t, conn, "client-1")
 		discovery, err := newCodexDesktopDiscoveryRequest(codexDesktopDiscoverySpec{
@@ -93,6 +95,7 @@ func TestCodexDesktopClientAnswersDiscoveryFalse(t *testing.T) {
 		}
 		writeCodexDesktopTestEnvelope(t, conn, discovery)
 		response <- readCodexDesktopTestEnvelope(t, conn)
+		<-release
 	})
 	client := newCodexDesktopClient(codexDesktopTestOptions(dial))
 	mustConnectCodexDesktopTestClient(t, client)
@@ -100,6 +103,42 @@ func TestCodexDesktopClientAnswersDiscoveryFalse(t *testing.T) {
 	got := <-response
 	if got.Type != codexDesktopEnvelopeDiscoveryResponse || got.RequestID != "peer-discovery" || string(got.Response) != `{"canHandle":false}` {
 		t.Fatalf("discovery response = %+v", got)
+	}
+}
+
+func TestCodexDesktopClientAnswersDiscoveryWhileInitializing(t *testing.T) {
+	response := make(chan codexDesktopEnvelope, 1)
+	release := make(chan struct{})
+	defer close(release)
+	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		initialize := readCodexDesktopTestEnvelope(t, conn)
+		discovery, err := newCodexDesktopDiscoveryRequest(codexDesktopDiscoverySpec{
+			RequestID: "peer-during-initialize", SourceClientID: "peer",
+			Method: "thread-follower-start-turn", Params: map[string]string{"id": "turn-1"},
+		})
+		if err != nil {
+			t.Errorf("new discovery: %v", err)
+			return
+		}
+		writeCodexDesktopTestEnvelope(t, conn, discovery)
+		response <- readCodexDesktopTestEnvelope(t, conn)
+		writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+			requestID: initialize.RequestID,
+			value:     map[string]string{"clientId": "client-1"},
+		})
+		<-release
+	})
+	client := newCodexDesktopClient(codexDesktopTestOptions(dial))
+	mustConnectCodexDesktopTestClient(t, client)
+
+	got := <-response
+	if got.Type != codexDesktopEnvelopeDiscoveryResponse ||
+		got.RequestID != "peer-during-initialize" ||
+		string(got.Response) != `{"canHandle":false}` {
+		t.Fatalf("discovery response = %+v", got)
+	}
+	if !client.IsConnected() {
+		t.Fatal("client disconnected while answering discovery during initialize")
 	}
 }
 

@@ -674,6 +674,138 @@ func TestSaveCodexAccountRollsBackStoreAndHostMetadataTogether(t *testing.T) {
 	}
 }
 
+func TestCodexAccountIdentityUpdateRejectsStaleHostGeneration(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	expected := markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+
+	replacement := expected
+	replacement.Generation++
+	replacement.StartedAt = replacement.StartedAt.Add(time.Second)
+	if err := fixture.agent.writeCodexHostMetadata(fixture.store.SocketPath(), replacement); err != nil {
+		t.Fatal(err)
+	}
+
+	err := fixture.agent.setManagedCodexHostAccountIdentity(
+		context.Background(),
+		fixture.store.SocketPath(),
+		&expected,
+		fixture.target,
+	)
+	if codexauth.ErrorCode(err) != codexauth.CodeConflict {
+		t.Fatalf("setManagedCodexHostAccountIdentity() error=%v, want conflict", err)
+	}
+	got, err := fixture.agent.readCodexHostMetadata(fixture.store.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Generation != replacement.Generation ||
+		got.ActiveProfileID != replacement.ActiveProfileID ||
+		got.AccountFingerprint != replacement.AccountFingerprint {
+		t.Fatalf("stale account transaction overwrote replacement Host: got=%#v replacement=%#v", got, replacement)
+	}
+}
+
+func TestSaveCodexAccountGenerationConflictDoesNotFailClosed(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = func(string, codexauth.Profile) error {
+		return codexauth.NewError(codexauth.CodeConflict, "Host generation changed", nil)
+	}
+	before, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = fixture.agent.SaveCodexAccount(
+		context.Background(),
+		CodexAccountSaveOptions{Label: "并发冲突账号"},
+	)
+	if codexauth.ErrorCode(err) != codexauth.CodeConflict {
+		t.Fatalf("SaveCodexAccount() error=%v, want conflict", err)
+	}
+	after, statusErr := fixture.store.Status()
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("generation conflict changed account store:\nbefore=%#v\nafter=%#v", before, after)
+	}
+	if fixture.agent.ensureCodexAppServerGate().stateSnapshot() != codexAppServerRunning {
+		t.Fatalf("gate=%s, write-before conflict must remain available", fixture.agent.ensureCodexAppServerGate().stateSnapshot())
+	}
+}
+
+func TestCodexAccountIdentityUpdateWaitsForHostLifecycleLock(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	expected := markAccountFixtureHostManaged(t, fixture)
+	fixture.agent.updateHostIdentityCall = nil
+
+	blocker := NewACPAgent(ACPAgentConfig{
+		ConfiguredName: "codex", Command: "codex", Args: []string{"app-server"},
+		AppServerSocket: fixture.store.SocketPath(),
+	})
+	lockFile, err := blocker.acquireCodexHostStartupLock(context.Background(), fixture.store.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if lockFile != nil {
+			releaseCodexHostStartupLock(lockFile)
+		}
+	}()
+
+	updateDone := make(chan error, 1)
+	lockContended := make(chan struct{}, 1)
+	fixture.agent.codexHostLockContendedCall = func() {
+		select {
+		case lockContended <- struct{}{}:
+		default:
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() {
+		updateDone <- fixture.agent.setManagedCodexHostAccountIdentity(
+			ctx,
+			fixture.store.SocketPath(),
+			&expected,
+			fixture.target,
+		)
+	}()
+
+	select {
+	case <-lockContended:
+	case <-ctx.Done():
+		t.Fatal("identity update did not contend on the held lifecycle lock")
+	}
+	select {
+	case err := <-updateDone:
+		t.Fatalf("identity update completed while lifecycle lock remained held: %v", err)
+	default:
+	}
+
+	releaseCodexHostStartupLock(lockFile)
+	lockFile = nil
+	select {
+	case err := <-updateDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("identity update did not complete after lifecycle lock release")
+	}
+
+	got, err := fixture.agent.readCodexHostMetadata(fixture.store.SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ActiveProfileID != string(fixture.target.ID) ||
+		got.AccountFingerprint != fixture.target.AccountFingerprint {
+		t.Fatalf("metadata=%#v, want target account identity", got)
+	}
+}
+
 func TestUseCodexAccountRollsBackTargetMismatch(t *testing.T) {
 	fixture := newAccountSwitchFixture(t)
 	fixture.startHook = func(f *accountSwitchFixture) error {

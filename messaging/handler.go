@@ -89,6 +89,7 @@ type Handler struct {
 	adminTimeout            time.Duration
 	codexCommandTimeout     time.Duration
 	codexLockWaitTimeout    time.Duration
+	codexControlTimeout     time.Duration
 	terminalOutboxMu        sync.RWMutex
 	terminalOutbox          *terminalOutbox
 	traceRecorder           observability.Recorder

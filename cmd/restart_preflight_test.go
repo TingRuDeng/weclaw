@@ -23,8 +23,9 @@ func TestEnsureRestartSafeWithConfigAllowsMissingRuntime(t *testing.T) {
 // TestEnsureRestartSafeWithConfigUsesValidatedSnapshot 验证安全检查读取已预检配置中的 API 地址。
 func TestEnsureRestartSafeWithConfigUsesValidatedSnapshot(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
+	activeTasks := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(runtimeStatusResponse{})
+		_ = json.NewEncoder(w).Encode(runtimeStatusResponse{Status: "ok", ActiveTasks: &activeTasks})
 	}))
 	defer server.Close()
 	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw"}); err != nil {

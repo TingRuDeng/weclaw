@@ -298,7 +298,12 @@ func (h *Handler) reconcileExternalCodexTerminal(runtime externalCodexTaskRuntim
 		state.LastAgentMessageText = result.Final
 	}
 
-	unlock := h.lockCodexThreadControl(runtime.opts.threadID)
+	controlCtx, cancel := h.codexThreadControlContext(runtime.opts.ctx)
+	defer cancel()
+	unlock, err := h.lockCodexThreadControlContext(controlCtx, runtime.opts.threadID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	route := codexConversationRoute{
 		bindingKey:     codexBindingKey(runtime.opts.routeUserID, runtime.opts.agentName),
@@ -311,6 +316,6 @@ func (h *Handler) reconcileExternalCodexTerminal(runtime externalCodexTaskRuntim
 		},
 		Intent: codexSharedHostIntent(route),
 	}
-	_, err := liveAgent.ReconcileCodexObservedTurn(runtime.opts.ctx, request, state)
+	_, err = liveAgent.ReconcileCodexObservedTurn(controlCtx, request, state)
 	return err
 }

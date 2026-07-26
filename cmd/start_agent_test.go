@@ -116,7 +116,7 @@ func TestHelperRetryingCodexAppServer(t *testing.T) {
 		t.Fatalf("write retry helper attempts: %v", err)
 	}
 	if attempt < 3 {
-		fmt.Fprintln(os.Stderr, "Error: failed to initialize sqlite state runtime under /Users/dengtingru/.codex: failed to initialize state runtime at /Users/dengtingru/.codex")
+		fmt.Fprintln(os.Stderr, "Error: failed to initialize sqlite state runtime under /Users/example/.codex: failed to initialize state runtime at /Users/example/.codex")
 		os.Exit(1)
 	}
 	socketPath := retryHelperCodexSocketPath(t, os.Args)

@@ -127,7 +127,7 @@ Spec 符合度：通过。本轮只拆测试文件和任务记录，不修改生
 
 安全检查：通过。未新增 secret、外部输入处理、网络访问或权限放宽逻辑。
 
-测试与验证：通过最小充分验证。`PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/validate_docs.py`、`python3 scripts/validate_docs.py . --profile generic`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./agent ./messaging ./feishu ./cmd ./config -run TestNonExistent -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`git diff --check` 均通过。`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s` 失败，原因是当前沙箱禁止 `httptest`/companion 监听本地端口，并拒绝写 `/Users/dengtingru/.weclaw/state/*.tmp`。
+测试与验证：通过最小充分验证。`PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/validate_docs.py`、`python3 scripts/validate_docs.py . --profile generic`、`GOCACHE=/private/tmp/weclaw-go-cache go test ./agent ./messaging ./feishu ./cmd ./config -run TestNonExistent -count=1 -timeout 60s`、`GOCACHE=/private/tmp/weclaw-go-cache go vet ./...`、`git diff --check` 均通过。`GOCACHE=/private/tmp/weclaw-go-cache go test ./... -count=1 -timeout 120s` 失败，原因是当前沙箱禁止 `httptest`/companion 监听本地端口，并拒绝写 `~/.weclaw/state/*.tmp`。
 
 复杂度检查：通过。原 `messaging/handler_test.go`、`agent/acp_agent_persistence_test.go`、`agent/approval_test.go`、`feishu/adapter_test.go`、`cmd/start_test.go`、`cmd/codex_app_companion_test.go`、`config/config_test.go` 已拆散；当前最高测试文件为 `agent/acp_thread_test.go` 300 行、`messaging/handler_task_guide_test.go` 296 行、`feishu/replier_test.go` 291 行。
 

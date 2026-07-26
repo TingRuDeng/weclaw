@@ -405,6 +405,13 @@ func TestCodexHostStartupLockSerializesClients(t *testing.T) {
 
 	secondAcquired := make(chan *os.File, 1)
 	secondErr := make(chan error, 1)
+	secondContended := make(chan struct{}, 1)
+	secondAgent.codexHostLockContendedCall = func() {
+		select {
+		case secondContended <- struct{}{}:
+		default:
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	go func() {
@@ -417,12 +424,19 @@ func TestCodexHostStartupLockSerializesClients(t *testing.T) {
 	}()
 
 	select {
+	case <-secondContended:
+	case err := <-secondErr:
+		t.Fatalf("second startup lock failed before contention: %v", err)
+	case <-ctx.Done():
+		t.Fatal("second client did not contend on the held startup lock")
+	}
+	select {
 	case lockFile := <-secondAcquired:
 		releaseCodexHostStartupLock(lockFile)
 		t.Fatal("second client acquired startup lock before first released it")
 	case err := <-secondErr:
 		t.Fatalf("second startup lock failed early: %v", err)
-	case <-time.After(75 * time.Millisecond):
+	default:
 	}
 
 	releaseCodexHostStartupLock(first)
