@@ -110,6 +110,10 @@ func writeAtomic0600(filePath string, data []byte) error {
 		_ = tmpFile.Close()
 		return err
 	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
 	if err := tmpFile.Close(); err != nil {
 		return err
 	}

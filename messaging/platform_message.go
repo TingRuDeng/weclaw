@@ -142,7 +142,7 @@ func platformMessageLogText(text string) string {
 		strings.EqualFold(fields[1], "account") && strings.EqualFold(fields[2], "confirm") {
 		return "/cx account confirm <redacted>"
 	}
-	if len(fields) == 2 && (strings.EqualFold(fields[0], "/approve") || strings.EqualFold(fields[0], "/deny")) {
+	if len(fields) > 0 && (strings.EqualFold(fields[0], "/approve") || strings.EqualFold(fields[0], "/deny")) {
 		return fields[0] + " <redacted>"
 	}
 	return text
@@ -221,7 +221,7 @@ func (h *Handler) trySavePlatformURL(runtime platformMessageRuntime, trimmed str
 	if rawURL == "" {
 		return false
 	}
-	log.Printf("[handler] saving URL to linkhoard: %s", rawURL)
+	log.Printf("[handler] saving URL to linkhoard")
 	title, err := SaveLinkToLinkhoard(runtime.ctx, saveDir, rawURL)
 	if err != nil {
 		log.Printf("[handler] link save failed: %v", err)

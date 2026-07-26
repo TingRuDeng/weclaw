@@ -67,10 +67,16 @@ func reduceTaskView(current taskViewState, event taskViewEvent) (taskViewState, 
 		next.closed = true
 		return next, true
 	case taskViewTerminal:
+		if current.closed && strings.TrimSpace(current.terminalState) != "" {
+			return current, false
+		}
 		next.closed = true
 		next.terminalState = strings.TrimSpace(event.terminalState)
 		next.terminalAt = event.at
-		return next, next != current
+		changed := next.closed != current.closed ||
+			next.terminalState != current.terminalState ||
+			!next.terminalAt.Equal(current.terminalAt)
+		return next, changed
 	default:
 		return current, false
 	}

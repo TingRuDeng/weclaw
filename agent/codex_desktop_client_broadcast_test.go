@@ -25,7 +25,7 @@ func TestCodexDesktopClientBroadcastCallbackCanCall(t *testing.T) {
 	options := codexDesktopTestOptions(dial)
 	options.requestTimeout = 50 * time.Millisecond
 	var client *codexDesktopClient
-	options.onBroadcast = func(codexDesktopEnvelope) {
+	options.onBroadcast = func(_ uint64, _ codexDesktopEnvelope) {
 		_, err := client.Call(context.Background(), "thread-follower-load-complete-history", map[string]string{
 			"conversationId": "thread-1",
 		})
@@ -61,7 +61,7 @@ func TestCodexDesktopClientBroadcastsKeepArrivalOrder(t *testing.T) {
 		<-release
 	})
 	options := codexDesktopTestOptions(dial)
-	options.onBroadcast = func(envelope codexDesktopEnvelope) { methods <- envelope.Method }
+	options.onBroadcast = func(_ uint64, envelope codexDesktopEnvelope) { methods <- envelope.Method }
 	client := newCodexDesktopClient(options)
 	mustConnectCodexDesktopTestClient(t, client)
 
@@ -85,7 +85,7 @@ func TestCodexDesktopClientDropsBroadcastWhenInitializeFails(t *testing.T) {
 		})
 	})
 	options := codexDesktopTestOptions(dial)
-	options.onBroadcast = func(envelope codexDesktopEnvelope) { broadcasts <- envelope }
+	options.onBroadcast = func(_ uint64, envelope codexDesktopEnvelope) { broadcasts <- envelope }
 	client := newCodexDesktopClient(options)
 	defer client.Close()
 
@@ -96,6 +96,29 @@ func TestCodexDesktopClientDropsBroadcastWhenInitializeFails(t *testing.T) {
 	case broadcast := <-broadcasts:
 		t.Fatalf("unexpected broadcast = %s", broadcast.Method)
 	case <-time.After(codexDesktopTestTimeout):
+	}
+}
+
+func TestCodexDesktopClientBroadcastQueueIsBoundedAndKeepsLatestState(t *testing.T) {
+	client := &codexDesktopClient{
+		onBroadcast:   func(uint64, codexDesktopEnvelope) {},
+		broadcastWake: make(chan struct{}, 1),
+	}
+	connection := codexDesktopConnectionRef{epoch: 1}
+	for revision := 1; revision <= codexDesktopBroadcastQueueLimit*2; revision++ {
+		client.enqueueBroadcast(connection, codexDesktopEnvelope{
+			Type: codexDesktopEnvelopeBroadcast, Method: "thread-stream-state-changed",
+			Version: revision, Params: json.RawMessage(`{"conversationId":"thread-1"}`),
+		})
+	}
+
+	client.broadcastMu.Lock()
+	defer client.broadcastMu.Unlock()
+	if len(client.broadcasts) != codexDesktopBroadcastQueueLimit {
+		t.Fatalf("broadcast queue length = %d, want %d", len(client.broadcasts), codexDesktopBroadcastQueueLimit)
+	}
+	if latest := client.broadcasts[len(client.broadcasts)-1].envelope.Version; latest != codexDesktopBroadcastQueueLimit*2 {
+		t.Fatalf("latest queued revision = %d, want %d", latest, codexDesktopBroadcastQueueLimit*2)
 	}
 }
 

@@ -10,10 +10,18 @@ type codexLeasedTurnOptions struct {
 	binding CodexThreadBinding
 	request CodexTurnRequest
 	lease   *codexWriterLease
+	permit  *codexAppServerPermit
 }
 
 // RunCodexTurn 使用已建立的 runtime 绑定并持有 writer lease，直到 turn 到达终态。
 func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (string, error) {
+	a.codexAdmissionMu.Lock()
+	admissionLocked := true
+	defer func() {
+		if admissionLocked {
+			a.codexAdmissionMu.Unlock()
+		}
+	}()
 	var binding CodexThreadBinding
 	var err error
 	if a.desktopProbe == nil {
@@ -44,6 +52,18 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 			}
 		}
 	}
+	// Runtime discovery, account reconciliation, and handoff may restart the
+	// shared Host by draining this gate. Admit the turn only after those
+	// maintenance paths finish, then acquire the writer lease while the permit
+	// is held so account switching cannot observe a lease-free admitted turn.
+	var permit *codexAppServerPermit
+	if a.protocol == protocolCodexAppServer {
+		permit, err = a.ensureCodexAppServerGate().acquire(ctx)
+		if err != nil {
+			return "", err
+		}
+		defer permit.release()
+	}
 	if a.desktopProbe == nil && binding.State.Active {
 		return "", ErrCodexWriterBusy
 	}
@@ -51,6 +71,8 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 	if err != nil {
 		return "", err
 	}
+	a.codexAdmissionMu.Unlock()
+	admissionLocked = false
 	retainLease := false
 	defer func() {
 		if !retainLease {
@@ -62,7 +84,7 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 	go cancelCodexTurnOnConflict(turnCtx, cancel, lease.conflictSignal())
 
 	reply, runErr := a.runCodexTurnWithLease(turnCtx, codexLeasedTurnOptions{
-		binding: binding, request: req, lease: lease,
+		binding: binding, request: req, lease: lease, permit: permit,
 	})
 	if leaseErr := lease.check(); leaseErr != nil {
 		return "", leaseErr
@@ -122,6 +144,7 @@ func (a *ACPAgent) runCodexTurnWithLease(ctx context.Context, opts codexLeasedTu
 		return a.chatCodexAppServerControlledTurn(codexAppServerTurnOptions{
 			ctx: ctx, conversationID: req.Runtime.Ref.ConversationID,
 			message: req.Message, onProgress: req.OnProgress, onProgressEvent: req.OnProgressEvent, onStarted: onStarted,
+			permit: opts.permit,
 		})
 	}
 	switch opts.binding.Runtime {
@@ -134,6 +157,7 @@ func (a *ACPAgent) runCodexTurnWithLease(ctx context.Context, opts codexLeasedTu
 		return a.chatCodexAppServerControlledTurn(codexAppServerTurnOptions{
 			ctx: ctx, conversationID: req.Runtime.Ref.ConversationID,
 			message: req.Message, onProgress: req.OnProgress, onProgressEvent: req.OnProgressEvent, onStarted: onStarted,
+			permit: opts.permit,
 		})
 	case CodexRuntimeConflict:
 		return "", ErrCodexRuntimeConflict

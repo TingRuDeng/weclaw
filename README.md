@@ -121,6 +121,8 @@ Native Codex and Claude plan, tool, command, and file signals are normalized int
 
 Terminal delivery first records a recoverable text draft in `~/.weclaw/state/terminal-outbox.json`, then freezes the Feishu task card and replaces the draft with its CardKit checkpoint. If WeClaw exits between those steps, the text terminal is retried after restart. Feishu CardKit operations keep stable UUIDs and monotonic sequences, while Feishu text and WeChat chunks use stable deduplication keys. Delivery is at-least-once rather than cross-platform exactly-once. Attachments and remote images remain outside the v1 outbox and use the existing validated best-effort path.
 
+When `save_dir` is configured, a message containing only one URL triggers link archiving. WeChat articles are fetched directly; every other URL is first sent in full to the third-party Jina Reader service, with a direct WeClaw fetch only if Jina fails. The URL path, query, and fragment are therefore disclosed to Jina. Do not use this feature for private links containing signatures, credentials, or other sensitive data.
+
 Operators can inspect the redacted queue with `weclaw outbox status [--json]` and wake one or all pending deliveries with `weclaw outbox redrive [entry-id]`. Redrive is online-only, preserves attempt counters and payloads, and fails closed when the service API is unreachable. `weclaw doctor` also reports unreadable, pending, or capacity-exhausted outbox state.
 
 ### Query End-to-End Traces

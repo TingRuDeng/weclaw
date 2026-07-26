@@ -41,5 +41,5 @@ func approvalPolicyForContext(ctx context.Context) string {
 	if approvalHandlerFromContext(ctx) != nil {
 		return "untrusted"
 	}
-	return "never"
+	return "on-request"
 }

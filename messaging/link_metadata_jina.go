@@ -6,9 +6,16 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+const jinaReaderBaseURL = "https://r.jina.ai/"
+
+func jinaReaderURL(rawURL string) string {
+	return jinaReaderBaseURL + url.PathEscape(rawURL)
+}
 
 // FetchViaJina fetches a URL via Jina Reader API and returns metadata + markdown body.
 func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
@@ -19,7 +26,7 @@ func FetchViaJina(ctx context.Context, rawURL string) (*LinkMetadata, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	jinaURL := "https://r.jina.ai/" + rawURL
+	jinaURL := jinaReaderURL(rawURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jinaURL, nil)
 	if err != nil {
 		return nil, err

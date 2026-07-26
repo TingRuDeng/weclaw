@@ -3,12 +3,21 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/observability"
 )
+
+const acpStdinWriteTimeout = 10 * time.Second
+
+type acpWriteDeadlineSetter interface {
+	SetWriteDeadline(time.Time) error
+}
 
 func (a *ACPAgent) rpc(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	result, _, err := a.rpcWithSequence(ctx, method, params)
@@ -36,19 +45,63 @@ func (a *ACPAgent) notify(method string, params interface{}) error {
 
 // writeJSONLine 在写入 ACP stdin 前检查 runtime 状态，避免读循环退出后 nil stdin 触发 panic。
 func (a *ACPAgent) writeJSONLine(data []byte) error {
-	return a.writeJSONLineWithTrace(data, observability.TraceContext{})
+	return a.writeJSONLineWithContext(context.Background(), data, observability.TraceContext{})
 }
 
 // writeJSONLineWithTrace 在显式诊断开启时把出站请求与当前消息 Trace 关联。
 func (a *ACPAgent) writeJSONLineWithTrace(data []byte, trace observability.TraceContext) error {
-	a.mu.Lock()
-	if a.stdin == nil {
-		a.mu.Unlock()
-		return fmt.Errorf("ACP runtime is not running")
+	return a.writeJSONLineWithContext(context.Background(), data, trace)
+}
+
+func (a *ACPAgent) writeJSONLineWithContext(ctx context.Context, data []byte, trace observability.TraceContext) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	_, err := fmt.Fprintf(a.stdin, "%s\n", data)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	stdin := a.stdin
 	epoch := a.wireEpoch
 	a.mu.Unlock()
+	if stdin == nil {
+		return fmt.Errorf("ACP runtime is not running")
+	}
+
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	current := a.stdin != nil && a.wireEpoch == epoch
+	a.mu.Unlock()
+	if !current {
+		return fmt.Errorf("ACP runtime changed while waiting to write")
+	}
+
+	deadline := time.Now().Add(acpStdinWriteTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	deadlineWriter, supportsDeadline := stdin.(acpWriteDeadlineSetter)
+	deadlineArmed := false
+	if supportsDeadline {
+		if err := deadlineWriter.SetWriteDeadline(deadline); err != nil {
+			if !errors.Is(err, os.ErrNoDeadline) {
+				return fmt.Errorf("set ACP stdin write deadline: %w", err)
+			}
+		} else {
+			deadlineArmed = true
+		}
+	}
+
+	_, err := fmt.Fprintf(stdin, "%s\n", data)
+	if deadlineArmed {
+		if resetErr := deadlineWriter.SetWriteDeadline(time.Time{}); err == nil && resetErr != nil {
+			err = fmt.Errorf("clear ACP stdin write deadline: %w", resetErr)
+		}
+	}
 	if err == nil {
 		a.recordProtocolTrace("outbound", epoch, 0, trace, data)
 	}
@@ -72,7 +125,7 @@ func (a *ACPAgent) callWithSequence(ctx context.Context, method string, params i
 	}
 
 	trace, _ := observability.TraceFromContext(ctx)
-	err = a.writeJSONLineWithTrace(data, trace)
+	err = a.writeJSONLineWithContext(ctx, data, trace)
 	if err != nil {
 		return nil, 0, fmt.Errorf("write to stdin: %w", err)
 	}
@@ -82,7 +135,7 @@ func (a *ACPAgent) callWithSequence(ctx context.Context, method string, params i
 		return nil, 0, ctx.Err()
 	case resp := <-ch:
 		if resp.Error != nil {
-			msg := formatRPCErrorMessage(resp.Error, a.stderr)
+			msg := formatRPCErrorMessage(resp.Error, a.stderrSnapshot())
 			return nil, resp.Sequence, fmt.Errorf("agent error: %s", msg)
 		}
 		return resp.Result, resp.Sequence, nil

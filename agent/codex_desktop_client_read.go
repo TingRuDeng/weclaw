@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -33,7 +34,7 @@ func (c *codexDesktopClient) dispatchEnvelope(connection codexDesktopConnectionR
 	case codexDesktopEnvelopeDiscoveryResponse:
 		return c.dispatchDiscoveryResponse(envelope)
 	case codexDesktopEnvelopeDiscoveryRequest:
-		return c.answerDiscovery(connection, envelope.RequestID)
+		return c.enqueueDiscoveryReply(connection, envelope.RequestID)
 	case codexDesktopEnvelopeBroadcast:
 		c.enqueueBroadcast(connection, envelope)
 	}
@@ -82,8 +83,22 @@ func (c *codexDesktopClient) dispatchDiscoveryResponse(envelope codexDesktopEnve
 	return nil
 }
 
+// enqueueDiscoveryReply 把 peer discovery 应答移出读取循环，并限制在途数量。
+func (c *codexDesktopClient) enqueueDiscoveryReply(connection codexDesktopConnectionRef, requestID string) error {
+	select {
+	case c.discoveryReplySlots <- struct{}{}:
+		go func(reply codexDesktopDiscoveryReply) {
+			defer func() { <-c.discoveryReplySlots }()
+			_ = c.answerDiscovery(context.Background(), reply.connection, reply.requestID)
+		}(codexDesktopDiscoveryReply{connection: connection, requestID: requestID})
+		return nil
+	default:
+		return fmt.Errorf("Codex Desktop discovery 应答队列已满")
+	}
+}
+
 // answerDiscovery 在第一阶段始终声明本 client 不能处理 peer 请求。
-func (c *codexDesktopClient) answerDiscovery(connection codexDesktopConnectionRef, requestID string) error {
+func (c *codexDesktopClient) answerDiscovery(ctx context.Context, connection codexDesktopConnectionRef, requestID string) error {
 	response, err := json.Marshal(map[string]bool{"canHandle": false})
 	if err != nil {
 		return err
@@ -91,5 +106,5 @@ func (c *codexDesktopClient) answerDiscovery(connection codexDesktopConnectionRe
 	envelope := codexDesktopEnvelope{
 		Type: codexDesktopEnvelopeDiscoveryResponse, RequestID: requestID, Response: response,
 	}
-	return c.writeEnvelope(connection, envelope)
+	return c.writeEnvelope(ctx, connection, envelope)
 }

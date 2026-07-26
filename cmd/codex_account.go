@@ -426,6 +426,7 @@ func useOfflineCodexAccount(ctx context.Context, store *codexauth.Store, referen
 func offlinePublicCodexAccountStatus(status codexauth.Status) agent.CodexAccountStatus {
 	result := agent.CodexAccountStatus{Store: agent.CodexAccountStoreStatus{
 		HostID: status.HostID, Revision: status.Revision, LastSwitch: status.LastSwitch,
+		PendingSecretCreates: status.PendingSecretCreates,
 		PendingSecretDeletes: status.PendingSecretDeletes,
 		Profiles:             make([]agent.CodexAccountProfile, 0, len(status.Profiles)),
 	}}
@@ -534,6 +535,9 @@ func printCodexAccountSyncNotice(status agent.CodexAccountStatus) {
 }
 
 func printCodexAccountCleanupWarning(status agent.CodexAccountStatus) {
+	if status.Store.PendingSecretCreates > 0 {
+		fmt.Printf("警告：%d 个未提交 OAuth 凭据等待清理，请运行 weclaw codex account doctor。\n", status.Store.PendingSecretCreates)
+	}
 	if status.Store.PendingSecretDeletes > 0 {
 		fmt.Printf("警告：%d 个旧 OAuth 凭据等待清理，请运行 weclaw codex account doctor。\n", status.Store.PendingSecretDeletes)
 	}

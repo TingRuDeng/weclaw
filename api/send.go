@@ -32,7 +32,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.authorizeRead(w, r) {
+	if !s.authorizeSend(w, r) {
 		return
 	}
 	req, ok := decodeSendRequest(w, r)

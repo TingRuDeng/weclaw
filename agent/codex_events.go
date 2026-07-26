@@ -119,8 +119,8 @@ func (a *ACPAgent) handleCodexError(params json.RawMessage) {
 		return
 	}
 	text := formatCodexError(params)
-	if text == "" && a.stderr != nil {
-		stderrText := a.stderr.LastError()
+	if stderr := a.stderrSnapshot(); text == "" && stderr != nil {
+		stderrText := stderr.LastError()
 		if isRecoverableCodexTransportText(stderrText) {
 			log.Printf("[acp] ignoring recoverable codex stderr transport error: %.200s", stderrText)
 			return

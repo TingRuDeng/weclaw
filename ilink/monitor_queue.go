@@ -68,12 +68,20 @@ func (m *Monitor) enqueueQueuedMessage(ctx context.Context, msg WeixinMessage, d
 		m.queues[key] = queue
 		go m.runMessageQueue(ctx, key, queue)
 	}
+	queued := queuedWeixinMessage{message: msg, done: done}
+	// 快路径在持锁时入队，保持与 idle queue 删除互斥；队列满时先释放
+	// 全局 map 锁再等待容量，避免一个用户阻塞其他用户的队列创建与发送。
 	select {
-	case queue <- queuedWeixinMessage{message: msg, done: done}:
+	case queue <- queued:
 		m.queuesMu.Unlock()
 		return done, true
-	case <-ctx.Done():
+	default:
 		m.queuesMu.Unlock()
+	}
+	select {
+	case queue <- queued:
+		return done, true
+	case <-ctx.Done():
 		return done, false
 	}
 }

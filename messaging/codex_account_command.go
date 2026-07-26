@@ -251,6 +251,9 @@ func renderCodexAccountList(status agent.CodexAccountStatus) string {
 		return wechatCommandText(lines[0], "尚未保存账号。请在本机执行 weclaw codex account save <标签>。")
 	}
 	lines = append(lines, fmt.Sprintf("已保存账号: %d 个", len(status.Store.Profiles)))
+	if status.Store.PendingSecretCreates > 0 {
+		lines = append(lines, fmt.Sprintf("安全提醒: %d 个未提交凭据等待清理，请在本机运行 account doctor", status.Store.PendingSecretCreates))
+	}
 	if status.Store.PendingSecretDeletes > 0 {
 		lines = append(lines, fmt.Sprintf("安全提醒: %d 个旧凭据等待清理，请在本机运行 account doctor", status.Store.PendingSecretDeletes))
 	}
@@ -333,6 +336,9 @@ func renderCodexAccountStatus(status agent.CodexAccountStatus) string {
 	}
 	if status.Store.PendingSecretDeletes > 0 {
 		lines = append(lines, fmt.Sprintf("旧凭据待清理: %d 个（请在本机运行 account doctor）", status.Store.PendingSecretDeletes))
+	}
+	if status.Store.PendingSecretCreates > 0 {
+		lines = append(lines, fmt.Sprintf("未提交凭据待清理: %d 个（请在本机运行 account doctor）", status.Store.PendingSecretCreates))
 	}
 	if status.Quota != nil {
 		lines = append(lines, compactCodexQuotaSummary(*status.Quota))

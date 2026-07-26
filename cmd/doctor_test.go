@@ -233,6 +233,18 @@ func TestDoctorWarnsForPendingTerminalOutbox(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsForTerminalOutboxDeadLetter(t *testing.T) {
+	cfg := config.DefaultConfig()
+	deps := testDoctorDeps()
+	deps.terminalOutboxStatus = func() (messaging.TerminalOutboxStatus, error) {
+		return messaging.TerminalOutboxStatus{DeadLetter: 1, RecentError: "permanent failure"}, nil
+	}
+	result, ok := findResult(runDoctorChecks(cfg, deps), "terminal outbox")
+	if !ok || result.Status != doctorWarn || !strings.Contains(result.Detail, "1 dead letter") {
+		t.Fatalf("result=%#v ok=%v", result, ok)
+	}
+}
+
 func TestDoctorFailsForUnreadableTerminalOutbox(t *testing.T) {
 	cfg := config.DefaultConfig()
 	deps := testDoctorDeps()

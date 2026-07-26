@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestCodexRuntimeLeaseAcceptsExpectedDesktopTurn(t *testing.T) {
@@ -468,6 +470,132 @@ func TestRunCodexTurnUsesValidatedWeClawRuntime(t *testing.T) {
 	}
 	if probe.discoverCalls != 0 || probe.loadCalls != 0 {
 		t.Fatalf("普通 turn 不应重新探测 Desktop: discover=%d load=%d", probe.discoverCalls, probe.loadCalls)
+	}
+}
+
+func TestRunCodexTurnDoesNotCreateWriterLeaseWhileAccountGateIsExclusive(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{loadErr: ErrCodexDesktopNoClient}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	a.threads[req.Ref.ConversationID] = req.Ref.ThreadID
+	turnStarted := make(chan struct{}, 1)
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method != "turn/start" {
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+		turn := params.(codexTurnStartParams)
+		turnStarted <- struct{}{}
+		a.notifyMu.Lock()
+		ch := a.turnCh[turn.ThreadID]
+		a.notifyMu.Unlock()
+		ch <- &codexTurnEvent{Delta: "切号后执行"}
+		ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-1"}
+		return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+	}
+	gate := a.ensureCodexAppServerGate()
+	if err := gate.beginExclusive(); err != nil {
+		t.Fatal(err)
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{Runtime: req, Message: "等待切号完成"})
+		runDone <- err
+	}()
+	waitForCodexGateState(t, gate, codexAppServerDraining)
+	time.Sleep(20 * time.Millisecond)
+	if count, uncertain := a.codexOwners.anyWriterLeaseStatus(); count != 0 || uncertain {
+		t.Fatalf("draining gate admitted writer lease: count=%d uncertain=%t", count, uncertain)
+	}
+	select {
+	case <-turnStarted:
+		t.Fatal("turn/start ran while account gate was exclusive")
+	default:
+	}
+
+	gate.finishExclusive(false, true)
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunCodexTurn did not continue after account gate reopened")
+	}
+}
+
+func TestRunCodexTurnPreflightSerializesAccountMaintenance(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	preflightStarted := make(chan struct{})
+	releasePreflight := make(chan struct{})
+	turnStartCalled := make(chan struct{})
+	releaseTurn := make(chan struct{})
+	var preflightOnce sync.Once
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			preflightOnce.Do(func() { close(preflightStarted) })
+			<-releasePreflight
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`), nil
+		case "turn/start":
+			close(turnStartCalled)
+			<-releaseTurn
+			turn := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[turn.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Delta: "完成"}
+			ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-1"}
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+			Runtime: request, Message: "执行任务",
+		})
+		runDone <- err
+	}()
+	<-preflightStarted
+
+	maintenanceResult := make(chan error, 1)
+	go func() {
+		a.codexAdmissionMu.Lock()
+		defer a.codexAdmissionMu.Unlock()
+		maintenanceResult <- a.ensureCodexAppServerGate().beginExclusive()
+	}()
+	select {
+	case err := <-maintenanceResult:
+		t.Fatalf("account maintenance entered during turn preflight: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releasePreflight)
+	<-turnStartCalled
+	if err := <-maintenanceResult; !errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("account maintenance error=%v, want ErrCodexWriterBusy after turn admission", err)
+	}
+	close(releaseTurn)
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunCodexTurn did not finish")
 	}
 }
 

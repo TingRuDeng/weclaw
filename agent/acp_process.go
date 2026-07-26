@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-const acpKillGrace = 5 * time.Second
+const (
+	acpKillGrace      = 5 * time.Second
+	acpStartupTimeout = 2 * time.Minute
+)
 
 // Start launches the ACP subprocess；并发调用会等待同一次初始化结果。
 func (a *ACPAgent) Start(ctx context.Context) (err error) {
@@ -26,21 +29,26 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 		}
 		return a.waitACPStart(ctx, done)
 	}
+	// ACPAgent is a shared runtime. Once a caller becomes the startup leader,
+	// cancellation of that frontend request must not tear down the Host for
+	// other waiters. A fixed owner timeout still bounds the lifecycle.
+	startupCtx, cancelStartup := context.WithTimeout(context.WithoutCancel(ctx), acpStartupTimeout)
+	defer cancelStartup()
 	defer func() {
 		err = a.finishACPStart(err)
 	}()
 	for attempt := 1; attempt <= codexCompatibilityUpdateThreshold; attempt++ {
-		startErr := a.startACPProcess(ctx)
+		startErr := a.startACPProcess(startupCtx)
 		if startErr == nil {
 			a.resetCodexCompatibilityFailures()
 			return nil
 		}
-		retryAfterUpdate, updateErr := a.maybeAutoUpdateCodexCLI(ctx, startErr)
+		retryAfterUpdate, updateErr := a.maybeAutoUpdateCodexCLI(startupCtx, startErr)
 		if updateErr != nil {
 			return errors.Join(startErr, updateErr)
 		}
 		if retryAfterUpdate {
-			if err := a.startACPProcess(ctx); err != nil {
+			if err := a.startACPProcess(startupCtx); err != nil {
 				return errors.Join(
 					fmt.Errorf("Codex CLI 自动更新后 app-server 仍无法启动: %w", err),
 					ErrCodexCLIAutoUpdateFailed,
@@ -53,7 +61,7 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 			attempt == codexCompatibilityUpdateThreshold {
 			return startErr
 		}
-		if err := a.waitCodexCompatibilityRetry(ctx); err != nil {
+		if err := a.waitCodexCompatibilityRetry(startupCtx); err != nil {
 			return errors.Join(startErr, err)
 		}
 	}
@@ -160,8 +168,8 @@ func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
 			_ = connection.Close()
 		}
 		stopCodexHostProcess(cmd, done)
-		if a.stderr != nil {
-			if detail := a.stderr.LastError(); detail != "" {
+		if stderr := a.stderrSnapshot(); stderr != nil {
+			if detail := stderr.LastError(); detail != "" {
 				return fmt.Errorf("agent startup failed (pid=%d): %w; stderr: %s", pid, startErr, detail)
 			}
 		}
@@ -181,8 +189,10 @@ func (a *ACPAgent) failACPStartup(pid int, startErr error) error {
 	a.mu.Unlock()
 	a.wireDispatchMu.Unlock()
 	stopACPProcess(stdin, cmd, processDone)
-	if detail := a.stderr.LastError(); detail != "" {
-		return fmt.Errorf("agent startup failed (pid=%d): %w; stderr: %s", pid, startErr, detail)
+	if stderr := a.stderrSnapshot(); stderr != nil {
+		if detail := stderr.LastError(); detail != "" {
+			return fmt.Errorf("agent startup failed (pid=%d): %w; stderr: %s", pid, startErr, detail)
+		}
 	}
 	base := strings.ToLower(filepath.Base(a.command))
 	if base == "claude" || base == "claude.exe" {

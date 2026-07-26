@@ -22,6 +22,7 @@ type codexAppServerTurnOptions struct {
 	onProgress      func(string)
 	onProgressEvent func(ProgressEvent)
 	onStarted       func(string) error
+	permit          *codexAppServerPermit
 }
 
 type codexAppServerTurnRuntime struct {
@@ -58,14 +59,18 @@ func (a *ACPAgent) chatCodexAppServer(opts codexAppServerTurnOptions) (string, e
 }
 
 func (a *ACPAgent) chatCodexAppServerControlledTurn(opts codexAppServerTurnOptions) (string, error) {
+	permit := opts.permit
+	if permit == nil {
+		var err error
+		permit, err = a.ensureCodexAppServerGate().acquire(opts.ctx)
+		if err != nil {
+			return "", err
+		}
+		defer permit.release()
+	}
 	if err := a.ensureCodexAppServerStartedForTurn(opts.ctx, opts.conversationID); err != nil {
 		return "", err
 	}
-	permit, err := a.ensureCodexAppServerGate().acquire(opts.ctx)
-	if err != nil {
-		return "", err
-	}
-	defer permit.release()
 	if err := a.validateCodexAccountForWrite(opts.ctx); err != nil {
 		return "", err
 	}

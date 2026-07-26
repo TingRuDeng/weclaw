@@ -71,6 +71,7 @@ type Status struct {
 	Current              *Profile      `json:"current,omitempty"`
 	Profiles             []Profile     `json:"profiles,omitempty"`
 	LastSwitch           *SwitchRecord `json:"last_switch,omitempty"`
+	PendingSecretCreates int           `json:"pending_secret_creates"`
 	PendingSecretDeletes int           `json:"pending_secret_deletes"`
 	CodexHome            string        `json:"-"`
 	SocketPath           string        `json:"-"`

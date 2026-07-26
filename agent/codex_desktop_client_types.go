@@ -15,6 +15,9 @@ const (
 	codexDesktopRouterDefaultTimeout = 10 * time.Second
 	codexDesktopRequestTimeout       = codexDesktopRouterDefaultTimeout + 2*time.Second
 	codexDesktopDiscoveryTimeout     = 1500 * time.Millisecond
+	codexDesktopWriteTimeout         = 10 * time.Second
+	codexDesktopBroadcastQueueLimit  = 256
+	codexDesktopDiscoveryReplyLimit  = 4
 	codexDesktopInitialClientID      = "initializing-client"
 )
 
@@ -43,7 +46,8 @@ type codexDesktopClientOptions struct {
 	requestID                        func() string
 	now                              func() time.Time
 	requestTimeout, discoveryTimeout time.Duration
-	onBroadcast                      func(codexDesktopEnvelope)
+	writeTimeout                     time.Duration
+	onBroadcast                      func(uint64, codexDesktopEnvelope)
 	// onDisconnect 在 client 的写串行区内调用，不得反向调用 client 方法。
 	onDisconnect func(error)
 }
@@ -80,4 +84,9 @@ type codexDesktopCallOptions struct {
 type codexDesktopBroadcast struct {
 	connection codexDesktopConnectionRef
 	envelope   codexDesktopEnvelope
+}
+
+type codexDesktopDiscoveryReply struct {
+	connection codexDesktopConnectionRef
+	requestID  string
 }

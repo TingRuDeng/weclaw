@@ -88,11 +88,12 @@ func writeTerminalOutboxStatus(cmd *cobra.Command, status messaging.TerminalOutb
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(status)
 	}
-	if status.Pending == 0 {
+	if status.Pending == 0 && status.DeadLetter == 0 {
 		_, err := fmt.Fprintln(cmd.OutOrStdout(), "终态 outbox 无积压。")
 		return err
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "待投递: %d（准备中 %d，投递中 %d）\n", status.Pending, status.Preparing, status.Processing); err != nil {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "待投递: %d（准备中 %d，投递中 %d），死信: %d\n",
+		status.Pending, status.Preparing, status.Processing, status.DeadLetter); err != nil {
 		return err
 	}
 	if !status.OldestCreatedAt.IsZero() {
@@ -113,7 +114,9 @@ func writeTerminalOutboxStatus(cmd *cobra.Command, status messaging.TerminalOutb
 	}
 	for _, entry := range status.Entries {
 		state := "等待重试"
-		if entry.Preparing {
+		if entry.DeadLetter {
+			state = "死信（需 redrive）"
+		} else if entry.Preparing {
 			state = "准备中"
 		} else if entry.Processing {
 			state = "投递中"

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/internal/auththrottle"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -29,6 +31,39 @@ func TestHandleSendRequiresConfiguredToken(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleSendRateLimitsFailedAuthenticationByRemoteAddr(t *testing.T) {
+	server := NewServer(nil, "0.0.0.0:18011", WithToken("secret-token"))
+
+	for i := 0; i < auththrottle.DefaultMaxFailures; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"to":"u","text":"hi"}`))
+		req.RemoteAddr = "203.0.113.7:4000"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i))
+		rec := httptest.NewRecorder()
+		server.handleSend(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d status=%d, want 401", i+1, rec.Code)
+		}
+	}
+
+	blockedReq := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"to":"u","text":"hi"}`))
+	blockedReq.RemoteAddr = "203.0.113.7:4999"
+	blockedReq.Header.Set("Authorization", "Bearer secret-token")
+	blockedRec := httptest.NewRecorder()
+	server.handleSend(blockedRec, blockedReq)
+	if blockedRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("blocked status=%d, want 429", blockedRec.Code)
+	}
+
+	otherReq := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(`{"to":"u","text":"hi"}`))
+	otherReq.RemoteAddr = "203.0.113.8:4000"
+	otherReq.Header.Set("Authorization", "Bearer secret-token")
+	otherRec := httptest.NewRecorder()
+	server.handleSend(otherRec, otherReq)
+	if otherRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("other source status=%d, want authenticated 503", otherRec.Code)
 	}
 }
 

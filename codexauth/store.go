@@ -42,6 +42,7 @@ type Store struct {
 	hostID     string
 	root       string
 	indexPath  string
+	intentPath string
 	authPath   string
 	keyring    KeyringClient
 	now        func() time.Time
@@ -85,6 +86,7 @@ func NewStore(options StoreOptions) (*Store, error) {
 		hostID:     hostID,
 		root:       root,
 		indexPath:  filepath.Join(root, "index.json"),
+		intentPath: filepath.Join(root, "secret-create-intents.json"),
 		authPath:   filepath.Join(codexHome, "auth.json"),
 		keyring:    client,
 		now:        now,
@@ -184,12 +186,31 @@ func (s *Store) WithTransaction(ctx context.Context, fn func(*Transaction) error
 	if err != nil {
 		return err
 	}
-	tx := &Transaction{store: s, index: index, baseIndex: cloneIndex(index)}
+	intents, err := s.readSecretCreateIntents()
+	if err != nil {
+		return err
+	}
+	tx := &Transaction{
+		store: s, index: index, baseIndex: cloneIndex(index),
+		secretIntents: intents,
+	}
+	if err := tx.retryPendingSecretCreates(); err != nil {
+		if ErrorCode(err) != CodeCleanupPending {
+			return err
+		}
+		tx.reportDeferredSecretCreateCleanup()
+	}
 	if err := tx.retryPendingSecretDeletes(); err != nil {
 		if ErrorCode(err) != CodeCleanupPending {
 			return err
 		}
 		tx.reportDeferredSecretCleanup()
+	}
+	if err := tx.cleanupOrphanFileSecrets(); err != nil {
+		if ErrorCode(err) != CodeCleanupPending {
+			return err
+		}
+		log.Printf("[codexauth] orphan OAuth file cleanup deferred")
 	}
 	if err := fn(tx); err != nil {
 		if cleanupErr := tx.cleanupNewSecrets(); cleanupErr != nil {
@@ -215,6 +236,15 @@ func (s *Store) Doctor() DoctorResult {
 	}
 	if IsUnsafeSwitchRecord(index.LastSwitch) {
 		result.Message = "Codex 上次账号切换终态不安全，当前必须禁止写入；请停服后显式执行离线 account use 恢复认证"
+		return result
+	}
+	intents, err := s.readSecretCreateIntents()
+	if err != nil {
+		result.Message = err.Error()
+		return result
+	}
+	if len(intents) > 0 {
+		result.Message = fmt.Sprintf("Codex 账号存储仍有 %d 个未提交凭据等待清理；请在凭据库恢复后重试账号操作", len(intents))
 		return result
 	}
 	if len(index.PendingSecretDeletes) > 0 {
@@ -318,13 +348,10 @@ func validateIndex(index Index) error {
 	}
 	cleanupRefs := make(map[string]struct{}, len(index.PendingSecretDeletes))
 	for _, pending := range index.PendingSecretDeletes {
-		if pending.Backend != SecretBackendKeyring && pending.Backend != SecretBackendFile {
-			return fmt.Errorf("unsupported pending secret backend")
+		if err := validateSecretReference(pending.Backend, pending.Ref); err != nil {
+			return err
 		}
-		if _, err := uuid.Parse(pending.Ref); err != nil {
-			return fmt.Errorf("invalid pending secret reference")
-		}
-		key := string(pending.Backend) + "\x00" + pending.Ref
+		key := secretReferenceKey(pending.Backend, pending.Ref)
 		if _, exists := cleanupRefs[key]; exists {
 			return fmt.Errorf("duplicate pending secret reference")
 		}
@@ -363,6 +390,7 @@ type Transaction struct {
 	baseIndex      Index
 	dirty          bool
 	newSecrets     []pendingSecret
+	secretIntents  []pendingSecret
 	pendingDeletes []pendingSecret
 }
 
@@ -439,22 +467,13 @@ func (tx *Transaction) ReplaceProfileSnapshot(profile Profile, snapshot *Snapsho
 		snapshot.EmailFingerprint() != profile.EmailFingerprint {
 		return Profile{}, NewError(CodeTargetMismatch, "当前 Codex 运行时与活动账号记录不匹配", nil)
 	}
-	ref := uuid.NewString()
-	secret := pendingSecret{backend: profile.SecretBackend, ref: ref}
-	switch profile.SecretBackend {
-	case SecretBackendKeyring:
-		if err := tx.store.keyring.Set(keyringService, tx.store.hostID+":"+ref, string(snapshot.Bytes())); err != nil {
-			return Profile{}, NewError(CodeRuntimeUnavailable, "无法回填当前 Codex 账号凭据", err)
-		}
-	case SecretBackendFile:
-		path := filepath.Join(tx.store.root, "secrets", ref+".json")
-		if err := atomicWriteSecureFile(path, snapshot.Bytes()); err != nil {
-			return Profile{}, wrapInvalid("回填当前凭据", err)
-		}
-	default:
+	if profile.SecretBackend != SecretBackendKeyring && profile.SecretBackend != SecretBackendFile {
 		return Profile{}, NewError(CodeInvalid, "Codex 账号使用了未知凭据后端", nil)
 	}
-	tx.newSecrets = append(tx.newSecrets, secret)
+	ref, err := tx.materializeSecret(snapshot, profile.SecretBackend)
+	if err != nil {
+		return Profile{}, NewError(CodeRuntimeUnavailable, "无法回填当前 Codex 账号凭据", err)
+	}
 	now := tx.store.now().UTC()
 	updated := profile
 	updated.SecretRef = ref
@@ -594,8 +613,14 @@ func (tx *Transaction) Flush() error {
 		}
 		tx.index.Revision++
 		tx.dirty = false
-		tx.newSecrets = nil
 		tx.baseIndex = cloneIndex(tx.index)
+		committedSecrets := append([]pendingSecret(nil), tx.newSecrets...)
+		tx.newSecrets = nil
+		if err := tx.removeSecretCreateIntents(committedSecrets); err != nil {
+			// 主索引已提交并引用新凭据。保留 intent 只会在下次恢复时被
+			// 识别为已提交并移除，不能把它误当作事务失败再删除 secret。
+			log.Printf("[codexauth] committed OAuth secret intent cleanup deferred (pending=%d)", len(tx.secretIntents))
+		}
 	}
 	if err := tx.retryPendingSecretDeletes(); err != nil {
 		if ErrorCode(err) == CodeCleanupPending {
@@ -611,6 +636,115 @@ func (tx *Transaction) Flush() error {
 
 func (tx *Transaction) reportDeferredSecretCleanup() {
 	log.Printf("[codexauth] OAuth secret cleanup deferred (pending=%d)", len(tx.index.PendingSecretDeletes))
+}
+
+func (tx *Transaction) reportDeferredSecretCreateCleanup() {
+	log.Printf("[codexauth] uncommitted OAuth secret cleanup deferred (pending=%d)", len(tx.secretIntents))
+}
+
+// retryPendingSecretCreates 恢复 write-ahead intent：
+// 已被 profile 索引引用的 secret 已提交，只清 intent；未引用的 secret
+// 属于中断事务，执行幂等删除后再清 intent。
+func (tx *Transaction) retryPendingSecretCreates() error {
+	if len(tx.secretIntents) == 0 {
+		return nil
+	}
+	remaining := make([]pendingSecret, 0, len(tx.secretIntents))
+	var cleanupErrs []error
+	for _, intent := range tx.secretIntents {
+		// baseIndex is the last durable commit. tx.index may already contain
+		// uncommitted profile mutations when an aborted transaction cleans up.
+		if indexReferencesSecret(tx.baseIndex, intent) {
+			continue
+		}
+		if err := tx.deleteSecret(intent); err != nil {
+			remaining = append(remaining, intent)
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	if len(remaining) != len(tx.secretIntents) {
+		if err := tx.store.writeSecretCreateIntents(remaining); err != nil {
+			return NewError(CodeCleanupPending, "Codex 凭据恢复已执行，但创建意图未能提交；后续会安全重试", err)
+		}
+		tx.secretIntents = remaining
+	}
+	if len(cleanupErrs) > 0 {
+		return NewError(CodeCleanupPending, "未提交的 Codex 凭据清理仍待重试", errors.Join(cleanupErrs...))
+	}
+	return nil
+}
+
+func indexReferencesSecret(index Index, secret pendingSecret) bool {
+	for _, profile := range index.Profiles {
+		if profile.SecretBackend == secret.backend && profile.SecretRef == secret.ref {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanupOrphanFileSecrets 扫描可枚举的文件后端，删除既不被 profile、
+// pending delete，也不被 write-ahead intent 保护的严格 UUID 凭据文件。
+func (tx *Transaction) cleanupOrphanFileSecrets() error {
+	secretDir := filepath.Join(tx.store.root, "secrets")
+	if _, err := os.Lstat(secretDir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return wrapInvalid("检查凭据目录", err)
+	}
+	if err := ensureSecureDir(secretDir); err != nil {
+		return wrapInvalid("检查凭据目录", err)
+	}
+	entries, err := os.ReadDir(secretDir)
+	if err != nil {
+		return wrapInvalid("扫描凭据目录", err)
+	}
+	protected := make(map[string]struct{}, len(tx.index.Profiles)+len(tx.index.PendingSecretDeletes)+len(tx.secretIntents))
+	for _, profile := range tx.index.Profiles {
+		if profile.SecretBackend == SecretBackendFile {
+			protected[profile.SecretRef] = struct{}{}
+		}
+	}
+	for _, pending := range tx.index.PendingSecretDeletes {
+		if pending.Backend == SecretBackendFile {
+			protected[pending.Ref] = struct{}{}
+		}
+	}
+	for _, intent := range tx.secretIntents {
+		if intent.backend == SecretBackendFile {
+			protected[intent.ref] = struct{}{}
+		}
+	}
+	var cleanupErrs []error
+	for _, entry := range entries {
+		name := entry.Name()
+		if filepath.Ext(name) != ".json" {
+			continue
+		}
+		ref := strings.TrimSuffix(name, ".json")
+		if _, err := uuid.Parse(ref); err != nil {
+			continue
+		}
+		if _, keep := protected[ref]; keep {
+			continue
+		}
+		path := filepath.Join(secretDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+			continue
+		}
+		if err := validateSecureFileInfo(info); err != nil {
+			return wrapInvalid("检查孤儿凭据", err)
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	if len(cleanupErrs) > 0 {
+		return NewError(CodeCleanupPending, "孤儿 Codex 凭据文件清理仍待重试", errors.Join(cleanupErrs...))
+	}
+	return nil
 }
 
 func (tx *Transaction) retryPendingSecretDeletes() error {
@@ -641,20 +775,79 @@ func (tx *Transaction) retryPendingSecretDeletes() error {
 }
 
 func (tx *Transaction) writeSecret(snapshot *Snapshot, allowFile bool) (SecretBackend, string, error) {
-	ref := uuid.NewString()
-	value := string(snapshot.Bytes())
-	if err := tx.store.keyring.Set(keyringService, tx.store.hostID+":"+ref, value); err == nil {
-		tx.newSecrets = append(tx.newSecrets, pendingSecret{backend: SecretBackendKeyring, ref: ref})
+	ref, keyringErr := tx.materializeSecret(snapshot, SecretBackendKeyring)
+	if keyringErr == nil {
 		return SecretBackendKeyring, ref, nil
-	} else if !allowFile {
-		return "", "", NewError(CodeFileStoreConsentRequired, "系统凭据库不可用；如确认使用 0600 文件存储，请加 --allow-file-store", err)
 	}
-	path := filepath.Join(tx.store.root, "secrets", ref+".json")
-	if err := atomicWriteSecureFile(path, snapshot.Bytes()); err != nil {
+	if !allowFile {
+		return "", "", NewError(CodeFileStoreConsentRequired, "系统凭据库不可用；如确认使用 0600 文件存储，请加 --allow-file-store", keyringErr)
+	}
+	ref, err := tx.materializeSecret(snapshot, SecretBackendFile)
+	if err != nil {
 		return "", "", wrapInvalid("保存凭据", err)
 	}
-	tx.newSecrets = append(tx.newSecrets, pendingSecret{backend: SecretBackendFile, ref: ref})
 	return SecretBackendFile, ref, nil
+}
+
+func (tx *Transaction) materializeSecret(snapshot *Snapshot, backend SecretBackend) (string, error) {
+	ref := uuid.NewString()
+	secret := pendingSecret{backend: backend, ref: ref}
+	if err := tx.addSecretCreateIntent(secret); err != nil {
+		return "", err
+	}
+	var writeErr error
+	switch backend {
+	case SecretBackendKeyring:
+		writeErr = tx.store.keyring.Set(keyringService, tx.store.hostID+":"+ref, string(snapshot.Bytes()))
+	case SecretBackendFile:
+		writeErr = atomicWriteSecureFile(filepath.Join(tx.store.root, "secrets", ref+".json"), snapshot.Bytes())
+	default:
+		writeErr = fmt.Errorf("unknown secret backend")
+	}
+	if writeErr != nil {
+		clearErr := tx.removeSecretCreateIntents([]pendingSecret{secret})
+		return "", errors.Join(writeErr, clearErr)
+	}
+	tx.newSecrets = append(tx.newSecrets, secret)
+	return ref, nil
+}
+
+func (tx *Transaction) addSecretCreateIntent(secret pendingSecret) error {
+	for _, existing := range tx.secretIntents {
+		if secretReferenceKey(existing.backend, existing.ref) == secretReferenceKey(secret.backend, secret.ref) {
+			return nil
+		}
+	}
+	next := append(append([]pendingSecret(nil), tx.secretIntents...), secret)
+	if err := tx.store.writeSecretCreateIntents(next); err != nil {
+		return err
+	}
+	tx.secretIntents = next
+	return nil
+}
+
+func (tx *Transaction) removeSecretCreateIntents(secrets []pendingSecret) error {
+	if len(secrets) == 0 || len(tx.secretIntents) == 0 {
+		return nil
+	}
+	remove := make(map[string]struct{}, len(secrets))
+	for _, secret := range secrets {
+		remove[secretReferenceKey(secret.backend, secret.ref)] = struct{}{}
+	}
+	next := make([]pendingSecret, 0, len(tx.secretIntents))
+	for _, intent := range tx.secretIntents {
+		if _, found := remove[secretReferenceKey(intent.backend, intent.ref)]; !found {
+			next = append(next, intent)
+		}
+	}
+	if len(next) == len(tx.secretIntents) {
+		return nil
+	}
+	if err := tx.store.writeSecretCreateIntents(next); err != nil {
+		return err
+	}
+	tx.secretIntents = next
+	return nil
 }
 
 func (tx *Transaction) deleteSecret(secret pendingSecret) error {
@@ -674,44 +867,34 @@ func (tx *Transaction) deleteSecret(secret pendingSecret) error {
 
 func (tx *Transaction) cleanupNewSecrets() error {
 	if len(tx.newSecrets) == 0 {
-		return nil
+		return tx.retryPendingSecretCreates()
 	}
+	newSecrets := append([]pendingSecret(nil), tx.newSecrets...)
 	failed := make([]pendingSecret, 0, len(tx.newSecrets))
+	deleted := make([]pendingSecret, 0, len(tx.newSecrets))
 	var cleanupErrs []error
-	for _, secret := range tx.newSecrets {
+	for _, secret := range newSecrets {
 		if err := tx.deleteSecret(secret); err != nil {
 			failed = append(failed, secret)
 			cleanupErrs = append(cleanupErrs, err)
+		} else {
+			deleted = append(deleted, secret)
 		}
 	}
 	tx.newSecrets = nil
-	if len(failed) == 0 {
+	if err := tx.removeSecretCreateIntents(deleted); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	if err := tx.retryPendingSecretCreates(); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	if len(failed) == 0 && len(cleanupErrs) == 0 {
 		return nil
-	}
-	// 事务主体尚未提交，不能把 tx.index 中的 profile 变化写入磁盘；只在
-	// 最近一次成功提交的 baseIndex 上追加 orphan cleanup tombstone。
-	cleanupIndex := cloneIndex(tx.baseIndex)
-	existing := make(map[string]struct{}, len(cleanupIndex.PendingSecretDeletes)+len(failed))
-	for _, pending := range cleanupIndex.PendingSecretDeletes {
-		existing[string(pending.Backend)+"\x00"+pending.Ref] = struct{}{}
-	}
-	for _, secret := range failed {
-		key := string(secret.backend) + "\x00" + secret.ref
-		if _, found := existing[key]; found {
-			continue
-		}
-		cleanupIndex.PendingSecretDeletes = append(cleanupIndex.PendingSecretDeletes, PendingSecretDelete{Backend: secret.backend, Ref: secret.ref})
-		existing[key] = struct{}{}
-	}
-	writeErr := tx.store.writeIndex(cleanupIndex)
-	if writeErr == nil {
-		cleanupIndex.Revision++
-		tx.baseIndex = cloneIndex(cleanupIndex)
 	}
 	return NewError(
 		CodeCleanupPending,
 		"Codex 账号事务已回滚，但新凭据清理仍待重试",
-		errors.Join(append(cleanupErrs, writeErr)...),
+		errors.Join(cleanupErrs...),
 	)
 }
 
@@ -760,11 +943,16 @@ func (s *Store) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	intents, err := s.readSecretCreateIntents()
+	if err != nil {
+		return Status{}, err
+	}
 	status := Status{
 		HostID:               s.hostID,
 		Revision:             index.Revision,
 		Profiles:             append([]Profile(nil), index.Profiles...),
 		LastSwitch:           index.LastSwitch,
+		PendingSecretCreates: len(intents),
 		PendingSecretDeletes: len(index.PendingSecretDeletes),
 		CodexHome:            s.codexHome,
 		SocketPath:           s.socketPath,

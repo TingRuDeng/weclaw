@@ -63,6 +63,22 @@ func TestTaskViewReducerTerminalDominatesLateProgress(t *testing.T) {
 	}
 }
 
+func TestTaskViewReducerKeepsFirstTerminalEvent(t *testing.T) {
+	firstAt := time.Now()
+	state, changed := reduceTaskView(taskViewState{}, taskViewEvent{
+		kind: taskViewTerminal, at: firstAt, terminalState: "completed",
+	})
+	if !changed {
+		t.Fatal("first terminal event must change state")
+	}
+	late, changed := reduceTaskView(state, taskViewEvent{
+		kind: taskViewTerminal, at: firstAt.Add(time.Second), terminalState: "failed",
+	})
+	if changed || late.terminalState != "completed" || !late.terminalAt.Equal(firstAt) {
+		t.Fatalf("late terminal replaced first terminal: before=%#v after=%#v changed=%v", state, late, changed)
+	}
+}
+
 func TestActiveTaskLocalProgressCanFollowSequencedAgentProgress(t *testing.T) {
 	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{owner: "user-1", agentName: "codex"})
 	now := time.Now()

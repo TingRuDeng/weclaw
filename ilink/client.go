@@ -17,15 +17,17 @@ const (
 	defaultBaseURL  = "https://ilinkai.weixin.qq.com"
 	longPollTimeout = 35 * time.Second
 	sendTimeout     = 15 * time.Second
+	maxResponseBody = 16 << 20
 )
 
 // Client is an iLink HTTP API client.
 type Client struct {
-	baseURL    string
-	botToken   string
-	botID      string
-	httpClient *http.Client
-	wechatUIN  string
+	baseURL          string
+	botToken         string
+	botID            string
+	httpClient       *http.Client
+	wechatUIN        string
+	maxResponseBytes int64
 }
 
 // NewClient creates a new iLink API client.
@@ -35,20 +37,22 @@ func NewClient(creds *Credentials) *Client {
 		baseURL = defaultBaseURL
 	}
 	return &Client{
-		baseURL:    baseURL,
-		botToken:   creds.BotToken,
-		botID:      creds.ILinkBotID,
-		httpClient: &http.Client{},
-		wechatUIN:  generateWechatUIN(),
+		baseURL:          baseURL,
+		botToken:         creds.BotToken,
+		botID:            creds.ILinkBotID,
+		httpClient:       &http.Client{},
+		wechatUIN:        generateWechatUIN(),
+		maxResponseBytes: maxResponseBody,
 	}
 }
 
 // NewUnauthenticatedClient creates a client without credentials for login flow.
 func NewUnauthenticatedClient() *Client {
 	return &Client{
-		baseURL:    defaultBaseURL,
-		httpClient: &http.Client{Timeout: 40 * time.Second},
-		wechatUIN:  generateWechatUIN(),
+		baseURL:          defaultBaseURL,
+		httpClient:       &http.Client{Timeout: 40 * time.Second},
+		wechatUIN:        generateWechatUIN(),
+		maxResponseBytes: maxResponseBody,
 	}
 }
 
@@ -174,7 +178,7 @@ func (c *Client) doPost(ctx context.Context, path string, body interface{}, resu
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := c.readResponseBody(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
@@ -201,7 +205,7 @@ func (c *Client) doGet(ctx context.Context, url string, result interface{}) erro
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := c.readResponseBody(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
@@ -214,6 +218,21 @@ func (c *Client) doGet(ctx context.Context, url string, result interface{}) erro
 		return fmt.Errorf("unmarshal response: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) readResponseBody(body io.Reader) ([]byte, error) {
+	limit := c.maxResponseBytes
+	if limit <= 0 {
+		limit = maxResponseBody
+	}
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("body exceeds %d byte limit", limit)
+	}
+	return data, nil
 }
 
 func (c *Client) setHeaders(req *http.Request) {

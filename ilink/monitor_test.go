@@ -130,6 +130,45 @@ func TestMonitorAllowsDifferentUsersInParallel(t *testing.T) {
 	close(releaseFirst)
 }
 
+func TestFullUserQueueDoesNotHoldGlobalQueueLock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fullQueue := make(chan queuedWeixinMessage, 1)
+	fullQueue <- queuedWeixinMessage{message: textMonitorMessage("u1", "queued")}
+	secondHandled := make(chan struct{})
+	monitor := &Monitor{
+		queues: map[string]chan queuedWeixinMessage{"u1": fullQueue},
+		handler: func(_ context.Context, _ *Client, msg WeixinMessage) {
+			if msg.FromUserID == "u2" {
+				close(secondHandled)
+			}
+		},
+	}
+	blockedSendDone := make(chan struct{})
+	go func() {
+		monitor.enqueueMessage(ctx, textMonitorMessage("u1", "blocked"))
+		close(blockedSendDone)
+	}()
+
+	secondEnqueueDone := make(chan struct{})
+	go func() {
+		monitor.enqueueMessage(ctx, textMonitorMessage("u2", "independent"))
+		close(secondEnqueueDone)
+	}()
+	select {
+	case <-secondHandled:
+	case <-time.After(time.Second):
+		t.Fatal("full u1 queue blocked independent u2 queue")
+	}
+	<-secondEnqueueDone
+	cancel()
+	select {
+	case <-blockedSendDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked u1 enqueue did not observe cancellation")
+	}
+}
+
 func TestProcessUpdateResponseAdvancesCursorAfterDispatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

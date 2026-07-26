@@ -1,11 +1,21 @@
 package codexauth
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 )
+
+var syncSecureFileDirectory = func(dir string) error {
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	return errors.Join(dirFile.Sync(), dirFile.Close())
+}
 
 func ensureSecureDir(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
@@ -75,13 +85,11 @@ func atomicWriteSecureFile(path string, data []byte) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("replace secure file: %w", err)
 	}
-	dirFile, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open secure directory for sync: %w", err)
-	}
-	defer dirFile.Close()
-	if err := dirFile.Sync(); err != nil {
-		return fmt.Errorf("sync secure directory: %w", err)
+	// Rename is the transaction commit point. A parent-directory sync failure
+	// weakens crash durability, but reporting the write as uncommitted would make
+	// callers roll back bookkeeping for data that is already visible on disk.
+	if err := syncSecureFileDirectory(dir); err != nil {
+		log.Printf("[codexauth] secure file replaced but parent directory sync failed: %v", err)
 	}
 	return nil
 }

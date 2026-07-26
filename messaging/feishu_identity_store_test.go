@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -113,19 +112,18 @@ func TestFeishuIdentityStoreSkipsDuplicateSave(t *testing.T) {
 	store.SetFilePath(stateFile)
 	msg := feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person")
 	store.Remember(msg)
-	first, err := os.ReadFile(stateFile)
+	first, err := os.Stat(stateFile)
 	if err != nil {
-		t.Fatalf("read first state: %v", err)
+		t.Fatalf("stat first state: %v", err)
 	}
 
-	time.Sleep(1100 * time.Millisecond)
 	store.Remember(msg)
 
-	second, err := os.ReadFile(stateFile)
+	second, err := os.Stat(stateFile)
 	if err != nil {
-		t.Fatalf("read second state: %v", err)
+		t.Fatalf("stat second state: %v", err)
 	}
-	if !bytes.Equal(first, second) {
+	if !os.SameFile(first, second) {
 		t.Fatal("duplicate identity should not rewrite state file")
 	}
 }

@@ -74,6 +74,39 @@ func TestACPAgentConcurrentStartWaitsForInitialize(t *testing.T) {
 	}
 }
 
+func TestACPAgentInitializeSurvivesStartupLeaderContextCancellation(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestHelperACPDelayedInitialize"},
+		Env:     map[string]string{testACPDelayedInitEnv: "1"},
+	})
+	a.protocol = protocolCodexAppServer
+	t.Cleanup(a.Stop)
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() { leaderDone <- a.Start(leaderCtx) }()
+	waitForACPProcessStarted(t, a)
+
+	waiterDone := make(chan error, 1)
+	go func() { waiterDone <- a.Start(context.Background()) }()
+	cancelLeader()
+
+	for name, done := range map[string]<-chan error{"leader": leaderDone, "waiter": waiterDone} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s Start error after leader cancellation=%v", name, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s Start did not finish after shared initialize", name)
+		}
+	}
+	if !a.isRuntimeStarted() {
+		t.Fatal("shared ACP runtime stopped when startup leader context was cancelled")
+	}
+}
+
 func waitForACPProcessStarted(t *testing.T, a *ACPAgent) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

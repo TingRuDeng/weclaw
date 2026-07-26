@@ -155,6 +155,42 @@ func optionalRemoteMediaSender(reply platform.Replier) (platform.RemoteMediaSend
 	return sender, ok
 }
 
+func optionalDeliveryRouteReporter(reply platform.Replier) (platform.DeliveryRouteReporter, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		reporter, supported := optionalDeliveryRouteReporter(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedDeliveryRouteReporter{reply: serialized, reporter: reporter}, true
+	}
+	reporter, ok := reply.(platform.DeliveryRouteReporter)
+	return reporter, ok
+}
+
+func optionalIdempotentTextReplier(reply platform.Replier) (platform.IdempotentTextReplier, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		idempotent, supported := optionalIdempotentTextReplier(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedIdempotentTextReplier{reply: serialized, idempotent: idempotent}, true
+	}
+	idempotent, ok := reply.(platform.IdempotentTextReplier)
+	return idempotent, ok
+}
+
+func optionalDurableTerminalReplier(reply platform.Replier) (platform.DurableTerminalReplier, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		durable, supported := optionalDurableTerminalReplier(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedDurableTerminalReplier{reply: serialized, durable: durable}, true
+	}
+	durable, ok := reply.(platform.DurableTerminalReplier)
+	return durable, ok
+}
+
 type serializedTextChunkLimitSetter struct {
 	reply  *serializedReplier
 	setter platform.TextChunkLimitSetter
@@ -175,6 +211,39 @@ func (s serializedRemoteMediaSender) SendMediaFromURL(ctx context.Context, media
 	s.reply.mu.Lock()
 	defer s.reply.mu.Unlock()
 	return s.sender.SendMediaFromURL(ctx, mediaURL)
+}
+
+type serializedDeliveryRouteReporter struct {
+	reply    *serializedReplier
+	reporter platform.DeliveryRouteReporter
+}
+
+func (s serializedDeliveryRouteReporter) DeliveryRoute() platform.DeliveryRoute {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.reporter.DeliveryRoute()
+}
+
+type serializedIdempotentTextReplier struct {
+	reply      *serializedReplier
+	idempotent platform.IdempotentTextReplier
+}
+
+func (s serializedIdempotentTextReplier) SendTextIdempotent(ctx context.Context, text string, deliveryKey string) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.idempotent.SendTextIdempotent(ctx, text, deliveryKey)
+}
+
+type serializedDurableTerminalReplier struct {
+	reply   *serializedReplier
+	durable platform.DurableTerminalReplier
+}
+
+func (s serializedDurableTerminalReplier) DeliverTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.durable.DeliverTerminal(ctx, checkpoint)
 }
 
 func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
@@ -198,7 +267,7 @@ func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
 
 func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, projection replyDeliveryProjection) (bool, bool) {
 	outbox := h.currentTerminalOutbox()
-	reporter, routeOK := req.delivery.replyWriter.(platform.DeliveryRouteReporter)
+	reporter, routeOK := optionalDeliveryRouteReporter(req.delivery.replyWriter)
 	if outbox == nil || !routeOK || !reporter.DeliveryRoute().Valid() {
 		return false, false
 	}
@@ -226,7 +295,7 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 	if prepared.reply != nil {
 		req.delivery.replyWriter = prepared.reply
 		req.delivery.trace = traceWithReply(req.delivery.trace, prepared.reply)
-		if latestReporter, ok := prepared.reply.(platform.DeliveryRouteReporter); ok && latestReporter.DeliveryRoute().Valid() {
+		if latestReporter, ok := optionalDeliveryRouteReporter(prepared.reply); ok && latestReporter.DeliveryRoute().Valid() {
 			reporter = latestReporter
 		}
 	}

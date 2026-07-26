@@ -226,8 +226,8 @@ func TestACPAgentDoesNotAutoUpdateCodexCLIWhenCallerDeadlineExpires(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancel()
 	err := a.Start(ctx)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Start() error=%v, want caller deadline", err)
+	if !errors.Is(err, errCodexHostStartupTimeout) {
+		t.Fatalf("Start() error=%v, want detached shared startup readiness timeout", err)
 	}
 	if updateCalls != 0 {
 		t.Fatalf("update calls=%d, want 0 for caller cancellation", updateCalls)

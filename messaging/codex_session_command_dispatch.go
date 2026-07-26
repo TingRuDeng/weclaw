@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type codexSessionCommandRuntime struct {
@@ -52,7 +53,7 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 	}
 	runtime := codexSessionCommandRuntime{
 		ctx: ctx, req: req, actorUserID: actorUserID, routeUserID: routeUserID,
-		admin: req.Admin || h.isAdminUser(actorUserID), private: req.Private, fields: fields,
+		admin: h.codexSessionCommandAdmin(req, actorUserID), private: req.Private, fields: fields,
 		agentName: agentName, agent: ag,
 		bindingKey:      codexBindingKey(routeUserID, agentName),
 		ownerBindingKey: codexBindingKey(actorUserID, agentName),
@@ -90,7 +91,7 @@ func (h *Handler) prepareCodexCdCommand(
 	}
 	runtime := codexSessionCommandRuntime{
 		ctx: ctx, req: req, actorUserID: actorUserID, routeUserID: routeUserID,
-		admin: req.Admin || h.isAdminUser(actorUserID), private: req.Private, fields: fields,
+		admin: h.codexSessionCommandAdmin(req, actorUserID), private: req.Private, fields: fields,
 		agentName:       agentName,
 		agent:           h.AgentByName(agentName),
 		bindingKey:      codexBindingKey(routeUserID, agentName),
@@ -112,10 +113,22 @@ func (h *Handler) prepareCodexListCommand(req codexSessionCommandRequest, actorU
 		return codexSessionCommandPreparation{result: textNavigationResult("当前没有配置 codex agent")}
 	}
 	bindingKey := codexBindingKey(routeUserID, agentName)
-	admin := req.Admin || h.isAdminUser(actorUserID)
+	admin := h.codexSessionCommandAdmin(req, actorUserID)
 	return codexSessionCommandPreparation{result: cardNavigationResult(
 		h.renderCodexListForAccess(bindingKey, actorUserID, admin),
 	)}
+}
+
+// codexSessionCommandAdmin keeps Feishu's union_id-only decision from being
+// widened later by comparing the app-scoped open_id against admin_users.
+func (h *Handler) codexSessionCommandAdmin(req codexSessionCommandRequest, actorUserID string) bool {
+	if req.Admin {
+		return true
+	}
+	if req.Platform == platform.PlatformFeishu {
+		return false
+	}
+	return h.isAdminUser(actorUserID)
 }
 
 // normalizeCodexCommandUsers 补齐真实用户和平台路由用户。

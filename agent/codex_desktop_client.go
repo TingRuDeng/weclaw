@@ -24,8 +24,10 @@ type codexDesktopClient struct {
 	requestID                         func() string
 	now                               func() time.Time
 	requestTimeout, discoveryTimeout  time.Duration
-	onBroadcast                       func(codexDesktopEnvelope)
+	writeTimeout                      time.Duration
+	onBroadcast                       func(uint64, codexDesktopEnvelope)
 	onDisconnect                      func(error)
+	discoveryReplySlots               chan struct{}
 	broadcastMu                       sync.Mutex
 	broadcasts                        []codexDesktopBroadcast
 	broadcastWake                     chan struct{}
@@ -47,14 +49,19 @@ func newCodexDesktopClient(options codexDesktopClientOptions) *codexDesktopClien
 	if options.discoveryTimeout <= 0 {
 		options.discoveryTimeout = codexDesktopDiscoveryTimeout
 	}
+	if options.writeTimeout <= 0 {
+		options.writeTimeout = codexDesktopWriteTimeout
+	}
 	client := &codexDesktopClient{
 		dial: options.dial, requestID: options.requestID, now: options.now,
 		requestTimeout: options.requestTimeout, discoveryTimeout: options.discoveryTimeout,
-		onBroadcast: options.onBroadcast, onDisconnect: options.onDisconnect,
-		pending:       make(map[string]*codexDesktopPendingCall),
-		discovery:     make(map[string]*codexDesktopPendingDiscovery),
-		broadcastWake: make(chan struct{}, 1),
-		broadcastStop: make(chan struct{}), broadcastDone: make(chan struct{}),
+		writeTimeout: options.writeTimeout,
+		onBroadcast:  options.onBroadcast, onDisconnect: options.onDisconnect,
+		pending:             make(map[string]*codexDesktopPendingCall),
+		discovery:           make(map[string]*codexDesktopPendingDiscovery),
+		discoveryReplySlots: make(chan struct{}, codexDesktopDiscoveryReplyLimit),
+		broadcastWake:       make(chan struct{}, 1),
+		broadcastStop:       make(chan struct{}), broadcastDone: make(chan struct{}),
 	}
 	client.startBroadcastWorker()
 	return client
@@ -151,4 +158,19 @@ func (c *codexDesktopClient) Epoch() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.epoch
+}
+
+// publishForEpoch makes the final epoch check and downstream publication one
+// critical section with connection replacement. publish must not call back
+// into this client.
+func (c *codexDesktopClient) publishForEpoch(epoch uint64, publish func()) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.conn == nil || c.epoch != epoch {
+		return false
+	}
+	if publish != nil {
+		publish()
+	}
+	return true
 }

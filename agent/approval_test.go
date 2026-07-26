@@ -14,8 +14,12 @@ func TestApprovalPolicyForContextUsesUntrustedWithHandler(t *testing.T) {
 	if got := approvalPolicyForContext(ctx); got != "untrusted" {
 		t.Fatalf("approval policy=%q, want untrusted", got)
 	}
-	if got := approvalPolicyForContext(context.Background()); got != "never" {
-		t.Fatalf("default approval policy=%q, want never", got)
+	if got := approvalPolicyForContext(context.Background()); got != "on-request" {
+		t.Fatalf("default approval policy=%q, want on-request", got)
+	}
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	if got := a.approvalPolicyForContext(context.Background()); got != "on-request" {
+		t.Fatalf("empty ACP approval policy=%q, want fail-closed on-request", got)
 	}
 }
 

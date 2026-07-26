@@ -32,6 +32,7 @@ type CodexAccountStoreStatus struct {
 	Current              *CodexAccountProfile    `json:"current,omitempty"`
 	Profiles             []CodexAccountProfile   `json:"profiles,omitempty"`
 	LastSwitch           *codexauth.SwitchRecord `json:"last_switch,omitempty"`
+	PendingSecretCreates int                     `json:"pending_secret_creates"`
 	PendingSecretDeletes int                     `json:"pending_secret_deletes"`
 	ManagedHost          bool                    `json:"managed_host"`
 }
@@ -139,6 +140,10 @@ func (a *ACPAgent) CurrentCodexAccount(ctx context.Context, withQuota bool) (Cod
 }
 
 func (a *ACPAgent) SaveCodexAccount(ctx context.Context, options CodexAccountSaveOptions) (CodexAccountProfile, error) {
+	if !a.codexAdmissionMu.TryLock() {
+		return CodexAccountProfile{}, mapCodexAccountBusy(ErrCodexWriterBusy)
+	}
+	defer a.codexAdmissionMu.Unlock()
 	gate := a.ensureCodexAppServerGate()
 	if err := gate.beginExclusive(); err != nil {
 		return CodexAccountProfile{}, mapCodexAccountBusy(err)
@@ -245,6 +250,10 @@ func (a *ACPAgent) restoreManagedCodexHostMetadataLocked(
 }
 
 func (a *ACPAgent) RemoveCodexAccount(ctx context.Context, reference string) error {
+	if !a.codexAdmissionMu.TryLock() {
+		return mapCodexAccountBusy(ErrCodexWriterBusy)
+	}
+	defer a.codexAdmissionMu.Unlock()
 	gate := a.ensureCodexAppServerGate()
 	if err := gate.beginExclusive(); err != nil {
 		return mapCodexAccountBusy(err)
@@ -299,6 +308,10 @@ func (a *ACPAgent) DoctorCodexAccounts(ctx context.Context) codexauth.DoctorResu
 }
 
 func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expectedRevision uint64) (result CodexAccountSwitchResult, err error) {
+	if !a.codexAdmissionMu.TryLock() {
+		return result, mapCodexAccountBusy(ErrCodexWriterBusy)
+	}
+	defer a.codexAdmissionMu.Unlock()
 	if a.authProjectionMatchesReference(reference) {
 		return a.reconcileExternallyProjectedCodexAccount(ctx, expectedRevision)
 	}
@@ -715,6 +728,7 @@ func publicCodexAccountProfilePtr(profile *codexauth.Profile) *CodexAccountProfi
 func publicCodexAccountStatus(status codexauth.Status) CodexAccountStoreStatus {
 	result := CodexAccountStoreStatus{
 		HostID: status.HostID, Revision: status.Revision, LastSwitch: status.LastSwitch,
+		PendingSecretCreates: status.PendingSecretCreates,
 		PendingSecretDeletes: status.PendingSecretDeletes,
 		ManagedHost:          status.ManagedHost, Profiles: make([]CodexAccountProfile, 0, len(status.Profiles)),
 	}

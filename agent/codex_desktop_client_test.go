@@ -38,6 +38,50 @@ func TestCodexDesktopClientInitializesBeforeRequests(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopClientPublishesOnlyWithinCurrentEpoch(t *testing.T) {
+	currentClient, currentPeer := net.Pipe()
+	defer currentClient.Close()
+	defer currentPeer.Close()
+	client := &codexDesktopClient{conn: currentClient, epoch: 1}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	published := make(chan bool, 1)
+	go func() {
+		published <- client.publishForEpoch(1, func() {
+			close(entered)
+			<-release
+		})
+	}()
+	<-entered
+
+	nextClient, nextPeer := net.Pipe()
+	defer nextClient.Close()
+	defer nextPeer.Close()
+	installed := make(chan codexDesktopConnectionRef, 1)
+	go func() {
+		connection, _ := client.installConnection(nextClient)
+		installed <- connection
+	}()
+	select {
+	case <-installed:
+		t.Fatal("connection epoch advanced before current-epoch publication finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if ok := <-published; !ok {
+		t.Fatal("current epoch publication was rejected")
+	}
+	connection := <-installed
+	if connection.epoch != 2 {
+		t.Fatalf("installed epoch=%d, want 2", connection.epoch)
+	}
+	if client.publishForEpoch(1, func() {
+		t.Fatal("stale epoch callback executed")
+	}) {
+		t.Fatal("stale epoch publication was accepted")
+	}
+}
+
 func TestCodexDesktopClientCorrelatesConcurrentResponses(t *testing.T) {
 	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		serveCodexDesktopTestInitialize(t, conn, "client-1")
@@ -204,7 +248,7 @@ func TestCodexDesktopClientDispatchesValidatedBroadcastVersion(t *testing.T) {
 		<-release
 	})
 	options := codexDesktopTestOptions(dial)
-	options.onBroadcast = func(envelope codexDesktopEnvelope) { broadcasts <- envelope }
+	options.onBroadcast = func(_ uint64, envelope codexDesktopEnvelope) { broadcasts <- envelope }
 	client := newCodexDesktopClient(options)
 	mustConnectCodexDesktopTestClient(t, client)
 
@@ -237,7 +281,7 @@ func TestCodexDesktopClientKeepsConnectionAfterVersionlessClientStatusBroadcast(
 		<-release
 	})
 	options := codexDesktopTestOptions(dial)
-	options.onBroadcast = func(envelope codexDesktopEnvelope) { broadcasts <- envelope }
+	options.onBroadcast = func(_ uint64, envelope codexDesktopEnvelope) { broadcasts <- envelope }
 	client := newCodexDesktopClient(options)
 	mustConnectCodexDesktopTestClient(t, client)
 
@@ -274,7 +318,7 @@ func TestCodexDesktopClientKeepsConnectionAfterVersionlessQueryCacheInvalidateBr
 		<-release
 	})
 	options := codexDesktopTestOptions(dial)
-	options.onBroadcast = func(envelope codexDesktopEnvelope) { broadcasts <- envelope }
+	options.onBroadcast = func(_ uint64, envelope codexDesktopEnvelope) { broadcasts <- envelope }
 	client := newCodexDesktopClient(options)
 	mustConnectCodexDesktopTestClient(t, client)
 

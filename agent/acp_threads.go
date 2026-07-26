@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 )
@@ -16,7 +18,9 @@ func isClosedStdinError(err error) bool {
 	}
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "write to stdin") &&
-		(strings.Contains(text, "file already closed") ||
+		(errors.Is(err, os.ErrClosed) ||
+			strings.Contains(text, "file already closed") ||
+			strings.Contains(text, "use of closed file") ||
 			strings.Contains(text, "broken pipe") ||
 			strings.Contains(text, "closed pipe") ||
 			strings.Contains(text, "acp runtime is not running"))

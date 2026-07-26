@@ -61,6 +61,34 @@ func TestCodexDesktopClientReturnsDeliveryUnknownAfterWrite(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopClientWriteTimeoutDisconnectsBlockedPeer(t *testing.T) {
+	serverReady := make(chan struct{})
+	releaseServer := make(chan struct{})
+	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "client-1")
+		close(serverReady)
+		<-releaseServer
+	})
+	options := codexDesktopTestOptions(dial)
+	options.writeTimeout = 20 * time.Millisecond
+	client := newCodexDesktopClient(options)
+	mustConnectCodexDesktopTestClient(t, client)
+	<-serverReady
+
+	started := time.Now()
+	_, err := client.Call(context.Background(), "thread-follower-start-turn", map[string]string{"prompt": "blocked"})
+	close(releaseServer)
+	if !errors.Is(err, ErrCodexDesktopDisconnected) {
+		t.Fatalf("Call() error = %v, want disconnected", err)
+	}
+	if elapsed := time.Since(started); elapsed > codexDesktopTestTimeout {
+		t.Fatalf("blocked write returned after %s, want <= %s", elapsed, codexDesktopTestTimeout)
+	}
+	if client.IsConnected() {
+		t.Fatal("client remained connected after write timeout")
+	}
+}
+
 func TestCodexDesktopClientDoesNotRetryAmbiguousStartTurn(t *testing.T) {
 	var requests atomic.Int32
 	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {

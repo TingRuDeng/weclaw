@@ -132,7 +132,7 @@ func checkTerminalOutbox(deps doctorDeps) doctorResult {
 		result.Detail = fmt.Sprintf("state unreadable: %v", err)
 		return result
 	}
-	if status.Pending == 0 {
+	if status.Pending == 0 && status.DeadLetter == 0 {
 		result.Status = doctorOK
 		result.Detail = "no pending terminal deliveries"
 		return result
@@ -142,6 +142,9 @@ func checkTerminalOutbox(deps doctorDeps) doctorResult {
 		result.Status = doctorFail
 	}
 	parts := []string{fmt.Sprintf("%d pending", status.Pending)}
+	if status.DeadLetter > 0 {
+		parts = append(parts, fmt.Sprintf("%d dead letter", status.DeadLetter))
+	}
 	if !status.OldestCreatedAt.IsZero() {
 		parts = append(parts, "oldest "+humanOutboxAge(time.Since(status.OldestCreatedAt)))
 	}

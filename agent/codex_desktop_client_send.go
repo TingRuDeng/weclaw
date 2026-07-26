@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // initialize 完成固定 clientType 的首帧握手并提取 clientId。
@@ -47,7 +48,7 @@ func (c *codexDesktopClient) sendCallOnConnection(ctx context.Context, options c
 	if err := c.registerCall(requestID, pending, options.connection); err != nil {
 		return nil, err
 	}
-	if err := c.writeEnvelope(options.connection, options.envelope); err != nil {
+	if err := c.writeEnvelope(ctx, options.connection, options.envelope); err != nil {
 		c.removeCall(requestID, pending)
 		return nil, err
 	}
@@ -71,7 +72,7 @@ func (c *codexDesktopClient) sendDiscovery(ctx context.Context, envelope codexDe
 	if err := c.registerDiscovery(envelope.RequestID, pending, connection); err != nil {
 		return false, err
 	}
-	if err := c.writeEnvelope(connection, envelope); err != nil {
+	if err := c.writeEnvelope(ctx, connection, envelope); err != nil {
 		c.removeDiscovery(envelope.RequestID, pending)
 		return false, err
 	}
@@ -87,24 +88,42 @@ func (c *codexDesktopClient) sendDiscovery(ctx context.Context, envelope codexDe
 }
 
 // writeEnvelope 串行化整帧写入，并在写入失败时终止对应 epoch。
-func (c *codexDesktopClient) writeEnvelope(connection codexDesktopConnectionRef, envelope codexDesktopEnvelope) error {
+func (c *codexDesktopClient) writeEnvelope(ctx context.Context, connection codexDesktopConnectionRef, envelope codexDesktopEnvelope) error {
 	payload, err := encodeCodexDesktopEnvelope(envelope)
 	if err != nil {
 		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	c.writeMu.Lock()
 	if !c.connectionMatches(connection) {
 		c.writeMu.Unlock()
 		return c.disconnectedError()
 	}
-	if err := writeCodexDesktopFrame(connection.conn, payload); err != nil {
-		result := c.disconnectEpochLocked(connection)
-		c.notifyDisconnectLocked(result, err)
-		c.writeMu.Unlock()
-		c.failDisconnectedPending(result, err)
-		return fmt.Errorf("%w: 写入 method=%s requestId=%s: %v", ErrCodexDesktopDisconnected, envelope.Method, envelope.RequestID, err)
+	deadline := time.Now().Add(c.writeTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
 	}
-	c.markRequestWritten(envelope.RequestID)
+	writeErr := connection.conn.SetWriteDeadline(deadline)
+	if writeErr == nil {
+		writeErr = writeCodexDesktopFrame(connection.conn, payload)
+		if writeErr == nil {
+			c.markRequestWritten(envelope.RequestID)
+		}
+		// A peer may close immediately after receiving and answering the frame.
+		// Deadline cleanup is local bookkeeping and must not overwrite a
+		// successful delivery; the read loop still classifies any real
+		// post-write disconnect through the pending request's written state.
+		_ = connection.conn.SetWriteDeadline(time.Time{})
+	}
+	if writeErr != nil {
+		result := c.disconnectEpochLocked(connection)
+		c.notifyDisconnectLocked(result, writeErr)
+		c.writeMu.Unlock()
+		c.failDisconnectedPending(result, writeErr)
+		return fmt.Errorf("%w: 写入 method=%s requestId=%s: %v", ErrCodexDesktopDisconnected, envelope.Method, envelope.RequestID, writeErr)
+	}
 	c.writeMu.Unlock()
 	return nil
 }

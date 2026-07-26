@@ -15,12 +15,35 @@ func (c *codexDesktopClient) enqueueBroadcast(connection codexDesktopConnectionR
 		return
 	}
 	c.broadcastMu.Lock()
-	c.broadcasts = append(c.broadcasts, codexDesktopBroadcast{connection: connection, envelope: envelope})
+	pending := codexDesktopBroadcast{connection: connection, envelope: envelope}
+	if len(c.broadcasts) < codexDesktopBroadcastQueueLimit {
+		c.broadcasts = append(c.broadcasts, pending)
+	} else if index := c.coalescibleBroadcastIndexLocked(pending); index >= 0 {
+		c.broadcasts[index] = pending
+	} else {
+		copy(c.broadcasts, c.broadcasts[1:])
+		c.broadcasts[len(c.broadcasts)-1] = pending
+	}
 	c.broadcastMu.Unlock()
 	select {
 	case c.broadcastWake <- struct{}{}:
 	default:
 	}
+}
+
+// coalescibleBroadcastIndexLocked 找到同一连接、方法和 thread 的最新待投影项。
+// 若中间 patch 被合并，state store 会通过 revision 缺口请求全量快照。
+func (c *codexDesktopClient) coalescibleBroadcastIndexLocked(pending codexDesktopBroadcast) int {
+	pendingThread := codexDesktopBroadcastThreadID(pending.envelope)
+	for index := len(c.broadcasts) - 1; index >= 0; index-- {
+		current := c.broadcasts[index]
+		if current.connection.epoch == pending.connection.epoch &&
+			current.envelope.Method == pending.envelope.Method &&
+			codexDesktopBroadcastThreadID(current.envelope) == pendingThread {
+			return index
+		}
+	}
+	return -1
 }
 
 // runBroadcastWorker 串行调用回调，保持 Desktop 广播到达顺序。
@@ -48,13 +71,15 @@ func (c *codexDesktopClient) drainBroadcasts() bool {
 		if !c.waitBroadcastReady(broadcast.connection) {
 			return false
 		}
-		if broadcast.connection.state != nil && broadcast.connection.state.initialized.Load() {
-			c.onBroadcast(broadcast.envelope)
+		if broadcast.connection.state != nil &&
+			broadcast.connection.state.initialized.Load() &&
+			c.connectionMatches(broadcast.connection) {
+			c.onBroadcast(broadcast.connection.epoch, broadcast.envelope)
 		}
 	}
 }
 
-// nextBroadcast 从无界内存队列取出最早事件，读取循环不会因队列容量反向阻塞。
+// nextBroadcast 从有界内存队列取出最早事件，读取循环不会因投影速度反向阻塞。
 func (c *codexDesktopClient) nextBroadcast() (codexDesktopBroadcast, bool) {
 	c.broadcastMu.Lock()
 	defer c.broadcastMu.Unlock()

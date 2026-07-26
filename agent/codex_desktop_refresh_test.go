@@ -31,14 +31,31 @@ func TestCodexDesktopRuntimeIgnoresUntrackedThreads(t *testing.T) {
 	runtime := newCodexDesktopRuntime()
 	runtime.client = &codexDesktopClient{epoch: 1}
 	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
-	runtime.handleBroadcast(desktopRefreshEnvelope(t, 1))
+	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 1))
 	if runtime.state.threadCount() != 0 {
 		t.Fatalf("untracked thread count = %d", runtime.state.threadCount())
 	}
 	runtime.trackThread("thread-1")
-	runtime.handleBroadcast(desktopRefreshEnvelope(t, 2))
+	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 2))
 	if runtime.state.threadCount() != 1 {
 		t.Fatalf("tracked thread count = %d", runtime.state.threadCount())
+	}
+}
+
+func TestCodexDesktopRuntimeDropsBroadcastFromPreviousConnectionEpoch(t *testing.T) {
+	runtime := newCodexDesktopRuntime()
+	runtime.client = &codexDesktopClient{epoch: 2}
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	runtime.trackThread("thread-1")
+
+	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 99))
+	if runtime.state.threadCount() != 0 {
+		t.Fatalf("stale epoch changed projected state, thread count = %d", runtime.state.threadCount())
+	}
+
+	runtime.handleBroadcast(2, desktopRefreshEnvelope(t, 1))
+	if runtime.state.threadCount() != 1 {
+		t.Fatalf("current epoch was not projected, thread count = %d", runtime.state.threadCount())
 	}
 }
 

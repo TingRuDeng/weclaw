@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type fakeKeyring struct {
@@ -18,6 +20,7 @@ type fakeKeyring struct {
 	values    map[string]string
 	setErr    error
 	deleteErr error
+	beforeSet func(service, user string)
 }
 
 func newFakeKeyring() *fakeKeyring {
@@ -37,6 +40,9 @@ func (f *fakeKeyring) Get(service, user string) (string, error) {
 func (f *fakeKeyring) Set(service, user, password string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.beforeSet != nil {
+		f.beforeSet(service, user)
+	}
 	if f.setErr != nil {
 		return f.setErr
 	}
@@ -188,7 +194,7 @@ func TestStorePersistsFailedCleanupForAbortedNewSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Profiles) != 0 || status.PendingSecretDeletes != 1 {
+	if len(status.Profiles) != 0 || status.PendingSecretCreates != 1 || status.PendingSecretDeletes != 0 {
 		t.Fatalf("aborted transaction status=%#v", status)
 	}
 
@@ -200,14 +206,119 @@ func TestStorePersistsFailedCleanupForAbortedNewSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.PendingSecretDeletes != 0 {
-		t.Fatalf("pending secret deletes=%d", status.PendingSecretDeletes)
+	if status.PendingSecretCreates != 0 || status.PendingSecretDeletes != 0 {
+		t.Fatalf("pending secret cleanup creates=%d deletes=%d", status.PendingSecretCreates, status.PendingSecretDeletes)
 	}
 	keyring.mu.Lock()
 	remaining := len(keyring.values)
 	keyring.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("aborted transaction leaked %d OAuth secrets", remaining)
+	}
+}
+
+func TestStorePersistsCreateIntentBeforeKeyringMaterialization(t *testing.T) {
+	keyring := newFakeKeyring()
+	store := newTestStore(t, keyring)
+	keyring.beforeSet = func(_ string, user string) {
+		intents, err := store.readSecretCreateIntents()
+		if err != nil {
+			t.Fatalf("readSecretCreateIntents during Set: %v", err)
+		}
+		if len(intents) != 1 || !strings.HasSuffix(user, ":"+intents[0].ref) ||
+			intents[0].backend != SecretBackendKeyring {
+			t.Fatalf("write-ahead intents=%#v user=%q", intents, user)
+		}
+	}
+
+	if _, err := store.SaveAuthFile(context.Background(), SaveOptions{Label: "write-ahead"}); err != nil {
+		t.Fatalf("SaveAuthFile: %v", err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingSecretCreates != 0 {
+		t.Fatalf("committed create intents=%d", status.PendingSecretCreates)
+	}
+}
+
+func TestStoreRecoversUncommittedCreateIntentAfterRestart(t *testing.T) {
+	keyring := newFakeKeyring()
+	store := newTestStore(t, keyring)
+	if err := store.ensureStoreRoot(); err != nil {
+		t.Fatal(err)
+	}
+	ref := uuid.NewString()
+	intent := pendingSecret{backend: SecretBackendKeyring, ref: ref}
+	if err := store.writeSecretCreateIntents([]pendingSecret{intent}); err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Set(keyringService, store.HostID()+":"+ref, "orphan-secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.WithTransaction(context.Background(), func(*Transaction) error { return nil }); err != nil {
+		t.Fatalf("recover transaction: %v", err)
+	}
+	if _, err := keyring.Get(keyringService, store.HostID()+":"+ref); !errors.Is(err, errSecretNotFound) {
+		t.Fatalf("uncommitted keyring secret still exists: %v", err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingSecretCreates != 0 {
+		t.Fatalf("pending create intents=%d", status.PendingSecretCreates)
+	}
+}
+
+func TestStoreRecoveryKeepsSecretReferencedByCommittedIndex(t *testing.T) {
+	keyring := newFakeKeyring()
+	store := newTestStore(t, keyring)
+	profile, err := store.SaveAuthFile(context.Background(), SaveOptions{Label: "committed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := pendingSecret{backend: profile.SecretBackend, ref: profile.SecretRef}
+	if err := store.writeSecretCreateIntents([]pendingSecret{intent}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.WithTransaction(context.Background(), func(*Transaction) error { return nil }); err != nil {
+		t.Fatalf("recover committed intent: %v", err)
+	}
+	if _, err := keyring.Get(keyringService, store.HostID()+":"+profile.SecretRef); err != nil {
+		t.Fatalf("committed keyring secret was deleted: %v", err)
+	}
+	status, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingSecretCreates != 0 {
+		t.Fatalf("pending create intents=%d", status.PendingSecretCreates)
+	}
+}
+
+func TestStoreRemovesUnreferencedFileSecretDuringTransaction(t *testing.T) {
+	store := newTestStore(t, newFakeKeyring())
+	if err := store.ensureStoreRoot(); err != nil {
+		t.Fatal(err)
+	}
+	secretDir := filepath.Join(store.Root(), "secrets")
+	if err := os.MkdirAll(secretDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orphanPath := filepath.Join(secretDir, uuid.NewString()+".json")
+	if err := os.WriteFile(orphanPath, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.WithTransaction(context.Background(), func(*Transaction) error { return nil }); err != nil {
+		t.Fatalf("cleanup transaction: %v", err)
+	}
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Fatalf("orphan file still exists: %v", err)
 	}
 }
 

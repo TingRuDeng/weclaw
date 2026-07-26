@@ -179,28 +179,33 @@ func (r *codexDesktopRuntime) Presence() (bool, bool) {
 }
 
 // handleBroadcast 把状态广播投影到 owner registry 和统一 turn events。
-func (r *codexDesktopRuntime) handleBroadcast(envelope codexDesktopEnvelope) {
+// sourceEpoch 必须随广播跨过异步队列，旧连接事件不能借用当前连接代次。
+func (r *codexDesktopRuntime) handleBroadcast(sourceEpoch uint64, envelope codexDesktopEnvelope) {
 	r.mu.Lock()
 	client, state, owners, onEvents := r.client, r.state, r.owners, r.onEvents
 	tracked := r.tracked[codexDesktopBroadcastThreadID(envelope)]
 	r.mu.Unlock()
-	if client == nil || state == nil {
+	if client == nil || state == nil || client.Epoch() != sourceEpoch {
 		return
 	}
 	if envelope.Method == "thread-stream-state-changed" && !tracked {
 		return
 	}
-	update, err := state.applyEnvelope(client.Epoch(), envelope)
+	update, err := state.applyEnvelope(sourceEpoch, envelope)
 	if err != nil {
 		log.Printf("[acp] Desktop state projection failed: %v", err)
 		return
 	}
-	if owners != nil && update.Applied {
-		owners.observeDesktopSnapshot(update.Snapshot.ThreadID, update.Snapshot.Revision, update.Snapshot.State)
-	}
-	if onEvents != nil && len(update.Events) > 0 {
-		onEvents(update.Snapshot.ThreadID, update.Events)
-	}
+	// Publish while the client holds its epoch lock so installConnection cannot
+	// advance the generation between validation and owner/task notification.
+	client.publishForEpoch(sourceEpoch, func() {
+		if owners != nil && update.Applied {
+			owners.observeDesktopSnapshot(update.Snapshot.ThreadID, update.Snapshot.Revision, update.Snapshot.State)
+		}
+		if onEvents != nil && len(update.Events) > 0 {
+			onEvents(update.Snapshot.ThreadID, update.Events)
+		}
+	})
 }
 
 // codexDesktopBroadcastThreadID 只提取广播路由字段，不解析大型 conversationState。

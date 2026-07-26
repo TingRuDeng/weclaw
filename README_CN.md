@@ -121,6 +121,8 @@ Codex 和 Claude 的原生计划、工具、命令与文件事件会先归一为
 
 任务终态会先把可恢复文本草稿原子写入 `~/.weclaw/state/terminal-outbox.json`，再冻结飞书任务卡并以 CardKit checkpoint 替换草稿；即使 WeClaw 在两步之间退出，重启后也能续投文本终态。飞书 CardKit 使用固定 UUID 和单调 sequence，飞书文本与微信分片也使用稳定去重键；交付语义是 at-least-once，不承诺跨平台 exactly-once。附件和远程图片暂不进入 outbox，仍按原有安全校验和 best-effort 路径发送。
 
+配置 `save_dir` 后，单独发送一个 URL 会触发链接归档。微信文章直接抓取；其他 URL 会先把完整目标 URL 交给第三方 Jina Reader 处理，Jina 失败时再由 WeClaw 直接抓取。URL 中的路径、查询参数和片段都会随请求发送给 Jina，请勿用此功能提交带签名、凭据或其他敏感信息的私有链接。
+
 ### 查询端到端 Trace
 
 WeClaw 默认把平台消息、任务、Agent turn、结构化进展、回复和终态 outbox 的固定字段事件写入 `~/.weclaw/state/trace.jsonl`。路由键只保存不可逆摘要，诊断文本会清理常见凭据；文件为 `0600`，达到 10 MiB 后保留 3 个轮转备份。

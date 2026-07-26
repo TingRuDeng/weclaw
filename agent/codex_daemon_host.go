@@ -75,7 +75,7 @@ func (a *ACPAgent) resolveAgentCodexHostMode() string {
 	case codexHostModeDaemon, codexHostModeManaged:
 		return a.codexHostMode
 	}
-	if strings.TrimSpace(a.codexHostSocket) != "" || a.runAs.shouldIsolate() {
+	if strings.TrimSpace(a.codexHostSocketSnapshot()) != "" || a.runAs.shouldIsolate() {
 		return codexHostModeManaged
 	}
 	codexHome, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
@@ -139,7 +139,7 @@ func (a *ACPAgent) resolveCodexDaemonSocket() (string, error) {
 		return "", fmt.Errorf("resolve CODEX_HOME for official daemon: %w", err)
 	}
 	socketPath := filepath.Clean(codexDaemonSocketPath(codexHome))
-	if configured := strings.TrimSpace(a.codexHostSocket); configured != "" &&
+	if configured := strings.TrimSpace(a.codexHostSocketSnapshot()); configured != "" &&
 		filepath.Clean(configured) != socketPath {
 		return "", fmt.Errorf("official Codex daemon does not accept app_server_socket overrides")
 	}

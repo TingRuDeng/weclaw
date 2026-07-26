@@ -3,6 +3,7 @@ package codexauth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -48,6 +49,25 @@ func TestParseSnapshotAcceptsChatGPTOAuthAndRedactsIdentity(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "access-secret") || strings.Contains(string(encoded), "refresh-secret") {
 		t.Fatalf("snapshot JSON leaked credentials: %s", encoded)
+	}
+}
+
+func TestSnapshotFmtRepresentationsRemainRedacted(t *testing.T) {
+	snapshot, err := ParseSnapshot(testAuthJSON(t, "alice@example.com", "acct-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{"%v", "%+v", "%#v"} {
+		rendered := fmt.Sprintf(format, snapshot)
+		for _, forbidden := range []string{"access-secret", "refresh-secret", "alice@example.com", "acct-1", "signature"} {
+			if strings.Contains(rendered, forbidden) {
+				t.Fatalf("format %s leaked %q: %s", format, forbidden, rendered)
+			}
+		}
+		if !strings.Contains(rendered, `"auth_mode":"chatgpt"`) ||
+			!strings.Contains(rendered, `"email_masked":"a***e@example.com"`) {
+			t.Fatalf("format %s missing redacted view: %s", format, rendered)
+		}
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/internal/auththrottle"
 )
 
 func (s *Server) authorizeRead(w http.ResponseWriter, r *http.Request) bool {
@@ -22,6 +24,26 @@ func (s *Server) authorizeRead(w http.ResponseWriter, r *http.Request) bool {
 	}
 	http.Error(w, "unauthorized", http.StatusUnauthorized)
 	return false
+}
+
+// authorizeSend adds per-source failure throttling to the externally reachable
+// send endpoint. The key always comes from RemoteAddr, never forwarded headers.
+func (s *Server) authorizeSend(w http.ResponseWriter, r *http.Request) bool {
+	if s.token == "" {
+		return s.authorizeRead(w, r)
+	}
+	client := auththrottle.ClientKey(r)
+	if s.sendAuth.Blocked(client) {
+		http.Error(w, "too many failed auth attempts, slow down", http.StatusTooManyRequests)
+		return false
+	}
+	if !constantTimeEqual(sendAuthToken(r), s.token) {
+		s.sendAuth.Fail(client)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	s.sendAuth.Reset(client)
+	return true
 }
 
 // authorizeLocalControl 对账号切换等高风险端点同时校验真实 TCP 来源、Host/Origin

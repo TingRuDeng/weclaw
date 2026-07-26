@@ -33,6 +33,9 @@ type ACPAgent struct {
 	protocol         string // "legacy_acp" or "codex_app_server"
 
 	mu sync.Mutex
+	// writeMu serializes outbound ACP frames without coupling blocking I/O to
+	// runtime state. Stop must remain able to close stdin while a write stalls.
+	writeMu sync.Mutex
 	// wireDispatchMu serializes connection generation changes with inbound wire
 	// dispatch, so an old app-server reader cannot mutate state after reconnect.
 	wireDispatchMu sync.Mutex
@@ -112,10 +115,15 @@ type ACPAgent struct {
 	claudeQuotaOAuthToken func(context.Context) (string, error)
 	claudeQuotaOAuthQuery func(context.Context, string) (ClaudeQuota, error)
 
-	desktopProbe               codexDesktopOwnerProbe
-	codexOwners                *codexRuntimeOwnerRegistry
-	desktopRuntime             *codexDesktopRuntime
-	appServerGate              *codexAppServerGate
+	desktopProbe   codexDesktopOwnerProbe
+	codexOwners    *codexRuntimeOwnerRegistry
+	desktopRuntime *codexDesktopRuntime
+	appServerGate  *codexAppServerGate
+	// codexAdmissionMu serializes turn preflight with host-level account
+	// maintenance. A turn releases it only after holding both the app-server
+	// permit and writer lease; account operations then either run before the
+	// preflight or observe the admitted turn and fail busy.
+	codexAdmissionMu           sync.Mutex
 	codexAccountSafetyOnce     sync.Once
 	restartCodexAppServerCall  func(context.Context) error
 	codexAccountStoreCall      func() (*codexauth.Store, error)
@@ -150,4 +158,16 @@ type ACPAgentConfig struct {
 	RunAsUser        string                         // 以独立 Unix 用户运行（文件系统隔离）
 	RunAsEnv         []string                       // run_as_user 时透传的环境变量名白名单
 	ProtocolTrace    observability.ProtocolRecorder // 显式启用的 Codex 线协议诊断记录器
+}
+
+func (a *ACPAgent) codexHostSocketSnapshot() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.codexHostSocket
+}
+
+func (a *ACPAgent) stderrSnapshot() *acpStderrWriter {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stderr
 }

@@ -22,6 +22,25 @@ type accountTestKeyring struct {
 	values map[string]string
 }
 
+func TestCodexAccountMutationsRejectWhileTurnAdmissionIsInProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.codexAdmissionMu.Lock()
+	defer a.codexAdmissionMu.Unlock()
+
+	_, saveErr := a.SaveCodexAccount(context.Background(), CodexAccountSaveOptions{Label: "profile"})
+	_, useErr := a.UseCodexAccount(context.Background(), "profile", 0)
+	removeErr := a.RemoveCodexAccount(context.Background(), "profile")
+	for operation, err := range map[string]error{
+		"save":   saveErr,
+		"use":    useErr,
+		"remove": removeErr,
+	} {
+		if codexauth.ErrorCode(err) != codexauth.CodeBusy {
+			t.Fatalf("%s error=%v code=%q, want busy", operation, err, codexauth.ErrorCode(err))
+		}
+	}
+}
+
 func (f *accountTestKeyring) Get(service, user string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

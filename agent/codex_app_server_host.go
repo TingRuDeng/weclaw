@@ -126,8 +126,8 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 		closeMetadataReady()
 		stopCodexHostProcess(cmd, done)
 		a.clearOwnedCodexHost(cmd)
-		if a.stderr != nil {
-			if detail := a.stderr.LastError(); detail != "" {
+		if stderr := a.stderrSnapshot(); stderr != nil {
+			if detail := stderr.LastError(); detail != "" {
 				return 0, fmt.Errorf("%w; stderr: %s", err, detail)
 			}
 		}
@@ -231,7 +231,7 @@ func (a *ACPAgent) resolveCodexHostSocket() (string, error) {
 	if a.usesOfficialCodexDaemon() {
 		return a.resolveCodexDaemonSocket()
 	}
-	configured := strings.TrimSpace(a.codexHostSocket)
+	configured := strings.TrimSpace(a.codexHostSocketSnapshot())
 	useDefault := configured == ""
 	if configured == "" {
 		if a.runAs.shouldIsolate() {
@@ -521,8 +521,8 @@ func (a *ACPAgent) startCodexHostProcess(ctx context.Context, socketPath string)
 		}
 		cmd.Env = cmdEnv
 	}
-	a.stderr = &acpStderrWriter{prefix: "[codex-host]"}
-	cmd.Stderr = a.stderr
+	stderr := &acpStderrWriter{prefix: "[codex-host]"}
+	cmd.Stderr = stderr
 	cmd.Stdout = io.Discard
 	if err := cmd.Start(); err != nil {
 		return nil, nil, nil, fmt.Errorf("start codex app-server host %s: %w", a.command, err)
@@ -530,6 +530,7 @@ func (a *ACPAgent) startCodexHostProcess(ctx context.Context, socketPath string)
 	done := make(chan error, 1)
 	metadataReady := make(chan codexHostMetadata, 1)
 	a.mu.Lock()
+	a.stderr = stderr
 	a.hostCmd = cmd
 	a.hostDone = done
 	a.mu.Unlock()

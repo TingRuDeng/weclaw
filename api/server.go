@@ -12,6 +12,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/codexauth"
 	"github.com/fastclaw-ai/weclaw/ilink"
+	"github.com/fastclaw-ai/weclaw/internal/auththrottle"
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -34,6 +35,7 @@ type Server struct {
 	outbox   TerminalOutboxController
 	addr     string
 	token    string
+	sendAuth *auththrottle.Throttle
 }
 
 // RuntimeStatusProvider 暴露服务进程内的轻量运行态，供本机 CLI 做重启保护。
@@ -107,7 +109,7 @@ func NewServer(clients []*ilink.Client, addr string, options ...Option) *Server 
 	if addr == "" {
 		addr = "127.0.0.1:18011"
 	}
-	server := &Server{clients: clients, addr: addr}
+	server := &Server{clients: clients, addr: addr, sendAuth: auththrottle.New()}
 	for _, option := range options {
 		option(server)
 	}

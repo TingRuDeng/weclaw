@@ -15,7 +15,7 @@ func TestWriteTerminalOutboxStatusRendersOperationalSummary(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetOut(buffer)
 	status := messaging.TerminalOutboxStatus{
-		Pending: 2, Preparing: 1, RecentError: "temporary failure",
+		Pending: 2, Preparing: 1, DeadLetter: 1, RecentError: "temporary failure",
 		OldestCreatedAt: time.Now().Add(-5 * time.Minute),
 		NextAttempt:     time.Now().Add(time.Minute),
 		Entries: []messaging.TerminalOutboxEntryStatus{{
@@ -26,7 +26,7 @@ func TestWriteTerminalOutboxStatusRendersOperationalSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := buffer.String()
-	for _, want := range []string{"待投递: 2", "准备中 1", "最近错误: temporary failure", "entry-1", "attempts=3"} {
+	for _, want := range []string{"待投递: 2", "准备中 1", "死信: 1", "最近错误: temporary failure", "entry-1", "attempts=3"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output=%q missing %q", output, want)
 		}

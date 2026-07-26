@@ -200,6 +200,37 @@ func TestTerminalOutboxPersistsAtomicallyWithPrivatePermissions(t *testing.T) {
 	}
 }
 
+func TestTerminalOutboxKeepsCommittedEntryWhenDirectorySyncFails(t *testing.T) {
+	originalSync := syncTerminalOutboxDirectory
+	syncTerminalOutboxDirectory = func(string) error {
+		return errors.New("injected directory sync failure")
+	}
+	t.Cleanup(func() {
+		syncTerminalOutboxDirectory = originalSync
+	})
+
+	path := filepath.Join(t.TempDir(), "state", terminalOutboxFileName)
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("newTerminalOutbox: %v", err)
+	}
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, AgentName: "codex", Text: "最终结果"})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if len(outbox.entries) != 1 || outbox.entries[0].ID != entry.ID {
+		t.Fatalf("committed in-memory entries=%#v", outbox.entries)
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatalf("loadTerminalOutbox: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != entry.ID {
+		t.Fatalf("committed disk entries=%#v", loaded)
+	}
+}
+
 func TestTerminalOutboxStatusIsBoundedAndOmitsPayloadAndRoute(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
 	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
@@ -286,6 +317,87 @@ func TestTerminalOutboxRedrivePersistsScheduleAndPreservesAttempts(t *testing.T)
 	}
 	if _, err := outbox.redrive("00000000-0000-4000-8000-000000000000"); !errors.Is(err, ErrTerminalOutboxNotFound) {
 		t.Fatalf("missing id error=%v", err)
+	}
+}
+
+func TestTerminalOutboxMovesPermanentFailureToDeadLetterAndRedrives(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.maxAttempts = 2
+	base := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "removed", ChatID: "oc_chat"}
+	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "结果"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 0; attempt < outbox.maxAttempts; attempt++ {
+		if err := outbox.attempt(context.Background(), entry.ID, nil); err == nil {
+			t.Fatal("attempt unexpectedly succeeded")
+		}
+	}
+	status := outbox.status()
+	if status.Pending != 0 || status.DeadLetter != 1 || len(status.Entries) != 1 ||
+		!status.Entries[0].DeadLetter || status.Entries[0].Attempts != outbox.maxAttempts {
+		t.Fatalf("dead-letter status=%#v", status)
+	}
+	if due := outbox.dueIDs(); len(due) != 0 {
+		t.Fatalf("dead letter remained due: %#v", due)
+	}
+
+	result, err := outbox.redrive(entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Requested != 1 || result.Status.Pending != 1 || result.Status.DeadLetter != 0 ||
+		result.Status.Entries[0].Attempts != outbox.maxAttempts {
+		t.Fatalf("redrive result=%#v", result)
+	}
+	if due := outbox.dueIDs(); len(due) != 1 || due[0] != entry.ID {
+		t.Fatalf("redriven due ids=%#v", due)
+	}
+}
+
+func TestTerminalOutboxEvictsDeadLetterToReserveNewDelivery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.maxEntries = 2
+	base := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	old, err := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "旧死信"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "仍待投递"}); err != nil {
+		t.Fatal(err)
+	}
+	outbox.mu.Lock()
+	stored := outbox.entryLocked(old.ID)
+	stored.DeadLetter = true
+	stored.DeadLetterAt = base
+	if err := outbox.persistLocked(); err != nil {
+		outbox.mu.Unlock()
+		t.Fatal(err)
+	}
+	outbox.mu.Unlock()
+
+	fresh, err := outbox.reserve(terminalOutboxDraft{Route: route, Text: "新终态"})
+	if err != nil {
+		t.Fatalf("reserve with dead letter at capacity: %v", err)
+	}
+	outbox.mu.Lock()
+	defer outbox.mu.Unlock()
+	if len(outbox.entries) != outbox.maxEntries || outbox.entryLocked(old.ID) != nil ||
+		outbox.entryLocked(fresh.ID) == nil {
+		t.Fatalf("entries after dead-letter eviction=%#v", outbox.entries)
 	}
 }
 
@@ -588,27 +700,17 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
 	reply := newOutboxTestReplier(route)
 	reply.stream = &outboxTestStream{}
-	var observedRecoveryDraft bool
-	var recoveryObserveErr error
+	prepareReached := make(chan struct{})
+	continuePrepare := make(chan struct{})
 	reply.stream.beforePrepare = func() {
-		entries, err := loadTerminalOutbox(path)
-		if err != nil {
-			recoveryObserveErr = err
-			return
-		}
-		observedRecoveryDraft = len(entries) == 1 &&
-			entries[0].Checkpoint == nil &&
-			entries[0].Text == "发布检查已通过"
+		close(prepareReached)
+		<-continuePrepare
 	}
-	var observedPersisted bool
-	var observeErr error
+	checkpointReached := make(chan struct{})
+	continueCheckpoint := make(chan struct{})
 	reply.beforeCheckpoint = func() {
-		entries, err := loadTerminalOutbox(path)
-		if err != nil {
-			observeErr = err
-			return
-		}
-		observedPersisted = len(entries) == 1 && entries[0].Checkpoint != nil && !entries[0].CheckpointDelivered
+		close(checkpointReached)
+		<-continueCheckpoint
 	}
 	registry := newOutboxTestRegistry(route, reply)
 	h := NewHandler(nil, nil)
@@ -623,20 +725,41 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	_, finish, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
 		context.Background(), reply, "", "codex", "/workspace/weclaw", "运行发布检查", cfg,
 	)
-	consumed := h.finishAndSendProgressReply(progressReplyDelivery{
-		delivery: replyDeliveryRequest{
-			ctx: context.Background(), replyWriter: reply, userID: "user-1", agentName: "codex", reply: "发布检查已通过",
-		},
-		finish: finish, progress: progress,
-	})
+	finished := make(chan bool, 1)
+	go func() {
+		finished <- h.finishAndSendProgressReply(progressReplyDelivery{
+			delivery: replyDeliveryRequest{
+				ctx: context.Background(), replyWriter: reply, userID: "user-1", agentName: "codex", reply: "发布检查已通过",
+			},
+			finish: finish, progress: progress,
+		})
+	}()
+	<-prepareReached
+	recoveryEntries, recoveryErr := loadTerminalOutbox(path)
+	observedRecoveryDraft := recoveryErr == nil &&
+		len(recoveryEntries) == 1 &&
+		recoveryEntries[0].Checkpoint == nil &&
+		recoveryEntries[0].Text == "发布检查已通过"
+	close(continuePrepare)
+
+	<-checkpointReached
+	checkpointEntries, checkpointErr := loadTerminalOutbox(path)
+	observedPersisted := checkpointErr == nil &&
+		len(checkpointEntries) == 1 &&
+		checkpointEntries[0].Checkpoint != nil &&
+		!checkpointEntries[0].CheckpointDelivered
+	close(continueCheckpoint)
+	consumed := <-finished
 	if !consumed {
 		t.Fatal("terminal reply should be consumed by durable card checkpoint")
 	}
-	if recoveryObserveErr != nil || !observedRecoveryDraft {
-		t.Fatalf("stream was frozen before durable recovery draft: observed=%v err=%v", observedRecoveryDraft, recoveryObserveErr)
+	if !observedRecoveryDraft {
+		t.Fatalf("stream was frozen before durable recovery draft: observed=%v entries=%#v err=%v",
+			observedRecoveryDraft, recoveryEntries, recoveryErr)
 	}
-	if observeErr != nil || !observedPersisted {
-		t.Fatalf("checkpoint was delivered before durable persistence: observed=%v err=%v", observedPersisted, observeErr)
+	if !observedPersisted {
+		t.Fatalf("checkpoint was delivered before durable persistence: observed=%v entries=%#v err=%v",
+			observedPersisted, checkpointEntries, checkpointErr)
 	}
 	remaining, err := loadTerminalOutbox(path)
 	if err != nil || len(remaining) != 0 {

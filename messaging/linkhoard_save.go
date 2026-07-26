@@ -92,36 +92,13 @@ func SaveLinkToLinkhoard(ctx context.Context, saveDir, rawURL string) (string, e
 		body = strings.ReplaceAll(body, "\n\n\n", "\n\n")
 	}
 
-	// Build author field
-	authorField := "author: []\n"
-	if meta.Author != "" {
-		authorField = fmt.Sprintf("author:\n  - '[[%s]]'\n", meta.Author)
-	}
-
-	// Build markdown content
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("title: '%s'\n", strings.ReplaceAll(meta.Title, "'", "''")))
-	sb.WriteString(fmt.Sprintf("source: '%s'\n", rawURL))
-	sb.WriteString(fmt.Sprintf("published: '%s'\n", meta.Published))
-	sb.WriteString(fmt.Sprintf("created: '%s'\n", created))
-	sb.WriteString(fmt.Sprintf("description: '%s'\n", strings.ReplaceAll(meta.Description, "'", "''")))
-	if meta.OGImage != "" {
-		sb.WriteString(fmt.Sprintf("openGraphImage: '%s'\n", meta.OGImage))
-	}
-	sb.WriteString(authorField)
-	sb.WriteString("---\n\n")
-	if body != "" {
-		sb.WriteString(body)
-		sb.WriteString("\n")
-	}
-
+	content := buildLinkhoardDocument(meta, rawURL, created, body)
 	sidecarContent := fmt.Sprintf("---\nid: %s\n---\n", itemID)
 	filePath, err := writeUniqueArtifactPair(
 		saveDir,
 		title,
 		".md",
-		[]byte(sb.String()),
+		[]byte(content),
 		[]byte(sidecarContent),
 	)
 	if err != nil {
@@ -130,4 +107,32 @@ func SaveLinkToLinkhoard(ctx context.Context, saveDir, rawURL string) (string, e
 
 	log.Printf("[linkhoard] saved %q to %s", meta.Title, filePath)
 	return meta.Title, nil
+}
+
+func yamlSingleQuoted(value string) string {
+	return strings.ReplaceAll(value, "'", "''")
+}
+
+func buildLinkhoardDocument(meta *LinkMetadata, rawURL string, created string, body string) string {
+	authorField := "author: []\n"
+	if meta.Author != "" {
+		authorField = fmt.Sprintf("author:\n  - '[[%s]]'\n", yamlSingleQuoted(meta.Author))
+	}
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	sb.WriteString(fmt.Sprintf("title: '%s'\n", yamlSingleQuoted(meta.Title)))
+	sb.WriteString(fmt.Sprintf("source: '%s'\n", yamlSingleQuoted(rawURL)))
+	sb.WriteString(fmt.Sprintf("published: '%s'\n", yamlSingleQuoted(meta.Published)))
+	sb.WriteString(fmt.Sprintf("created: '%s'\n", yamlSingleQuoted(created)))
+	sb.WriteString(fmt.Sprintf("description: '%s'\n", yamlSingleQuoted(meta.Description)))
+	if meta.OGImage != "" {
+		sb.WriteString(fmt.Sprintf("openGraphImage: '%s'\n", yamlSingleQuoted(meta.OGImage)))
+	}
+	sb.WriteString(authorField)
+	sb.WriteString("---\n\n")
+	if body != "" {
+		sb.WriteString(body)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }

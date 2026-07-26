@@ -13,6 +13,10 @@ type optionalCapabilityTestReplier struct {
 	clientID       string
 	textChunkLimit int
 	remoteMedia    []string
+	route          platform.DeliveryRoute
+	idempotentText []string
+	deliveryKeys   []string
+	checkpoints    []platform.TerminalCheckpoint
 }
 
 func newOptionalCapabilityTestReplier() *optionalCapabilityTestReplier {
@@ -31,6 +35,21 @@ func (r *optionalCapabilityTestReplier) SetTextChunkLimit(maxRunes int) {
 
 func (r *optionalCapabilityTestReplier) SendMediaFromURL(_ context.Context, mediaURL string) error {
 	r.remoteMedia = append(r.remoteMedia, mediaURL)
+	return nil
+}
+
+func (r *optionalCapabilityTestReplier) DeliveryRoute() platform.DeliveryRoute {
+	return r.route
+}
+
+func (r *optionalCapabilityTestReplier) SendTextIdempotent(_ context.Context, text string, deliveryKey string) error {
+	r.idempotentText = append(r.idempotentText, text)
+	r.deliveryKeys = append(r.deliveryKeys, deliveryKey)
+	return nil
+}
+
+func (r *optionalCapabilityTestReplier) DeliverTerminal(_ context.Context, checkpoint platform.TerminalCheckpoint) error {
+	r.checkpoints = append(r.checkpoints, checkpoint)
 	return nil
 }
 
@@ -78,5 +97,45 @@ func TestSendReplyProjectionUsesOptionalAdapterCapabilitiesThroughSerializedRepl
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "done" {
 		t.Fatalf("texts=%#v", reply.Texts)
+	}
+}
+
+func TestSerializedReplierPreservesDurableDeliveryCapabilities(t *testing.T) {
+	reply := newOptionalCapabilityTestReplier()
+	reply.route = platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "account-1", ChatID: "chat-1", ReplyToID: "message-1",
+	}
+	serialized := newSerializedReplier(reply)
+
+	reporter, ok := optionalDeliveryRouteReporter(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost DeliveryRouteReporter")
+	}
+	if route := reporter.DeliveryRoute(); route != reply.route {
+		t.Fatalf("delivery route=%+v, want %+v", route, reply.route)
+	}
+	idempotent, ok := optionalIdempotentTextReplier(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost IdempotentTextReplier")
+	}
+	if err := idempotent.SendTextIdempotent(context.Background(), "done", "delivery-1"); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := platform.TerminalCheckpoint{Kind: "feishu-card", Payload: []byte(`{"sequence":2}`)}
+	durable, ok := optionalDurableTerminalReplier(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost DurableTerminalReplier")
+	}
+	if err := durable.DeliverTerminal(context.Background(), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(reply.idempotentText) != 1 || reply.idempotentText[0] != "done" ||
+		len(reply.deliveryKeys) != 1 || reply.deliveryKeys[0] != "delivery-1" {
+		t.Fatalf("idempotent delivery: texts=%#v keys=%#v", reply.idempotentText, reply.deliveryKeys)
+	}
+	if len(reply.checkpoints) != 1 || reply.checkpoints[0].Kind != checkpoint.Kind ||
+		string(reply.checkpoints[0].Payload) != string(checkpoint.Payload) {
+		t.Fatalf("checkpoints=%#v", reply.checkpoints)
 	}
 }

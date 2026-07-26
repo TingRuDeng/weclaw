@@ -155,6 +155,10 @@ func writeCodexSessionStateFile(filePath string, data []byte) error {
 		_ = tmpFile.Close()
 		return fmt.Errorf("写入临时状态文件: %w", err)
 	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("同步临时状态文件: %w", err)
+	}
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("关闭临时状态文件: %w", err)
 	}

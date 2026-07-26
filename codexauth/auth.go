@@ -42,6 +42,19 @@ func (s Snapshot) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// String 和 GoString 保证 fmt 的 %v/%+v/%#v 与 JSON 一样只暴露脱敏视图。
+func (s Snapshot) String() string {
+	data, err := s.MarshalJSON()
+	if err != nil {
+		return `{"auth_mode":"redacted"}`
+	}
+	return string(data)
+}
+
+func (s Snapshot) GoString() string {
+	return s.String()
+}
+
 func ParseSnapshot(data []byte) (*Snapshot, error) {
 	var parsed authFile
 	decoder := json.NewDecoder(strings.NewReader(string(data)))

@@ -130,16 +130,16 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			client := clientKey(r)
-			if s.authThrottle.blocked(client) {
+			if s.authThrottle.Blocked(client) {
 				http.Error(w, "too many failed auth attempts, slow down", http.StatusTooManyRequests)
 				return
 			}
 			if !s.authorized(r) {
-				s.authThrottle.fail(client)
+				s.authThrottle.Fail(client)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			s.authThrottle.reset(client)
+			s.authThrottle.Reset(client)
 		}
 		next.ServeHTTP(w, r)
 	})
