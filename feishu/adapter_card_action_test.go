@@ -50,12 +50,15 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 			Operator: &callback.Operator{OpenID: "ou_user"},
 			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_msg"},
 			Action: &callback.CallBackAction{Value: map[string]interface{}{
-				"action":              cardActionChoice,
-				"choice":              "1",
-				"label":               "账本 App 开发",
-				"conv":                "feishu:ou_user",
-				"feishu_session_key":  "feishu:tenant_1:group:oc_1:om_root",
-				"navigation_snapshot": "snapshot-1",
+				"action":                     cardActionChoice,
+				"choice":                     "1",
+				"label":                      "账本 App 开发",
+				"conv":                       "feishu:ou_user",
+				"feishu_session_key":         "feishu:tenant_1:group:oc_1:om_root",
+				modelSettingAgentKey:         "codex",
+				modelSettingCodexThreadKey:   "thread-1",
+				modelSettingClaudeSessionKey: "session-1",
+				"navigation_snapshot":        "snapshot-1",
 			}},
 		},
 	}
@@ -88,6 +91,12 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 		}
 		if msg.RawCommand.Value["navigation_snapshot"] != "snapshot-1" {
 			t.Fatalf("msg.RawCommand=%#v, want navigation snapshot", msg.RawCommand)
+		}
+		if msg.RawCommand.Value[modelSettingCodexThreadKey] != "thread-1" {
+			t.Fatalf("msg.RawCommand=%#v, want model setting Codex thread", msg.RawCommand)
+		}
+		if msg.RawCommand.Value[modelSettingClaudeSessionKey] != "session-1" {
+			t.Fatalf("msg.RawCommand=%#v, want model setting Claude session", msg.RawCommand)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for callback dispatch")

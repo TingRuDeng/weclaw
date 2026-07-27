@@ -432,6 +432,12 @@ func regularCardActionValue(action parsedCardAction) map[string]string {
 	if action.AgentName != "" {
 		value[modelSettingAgentKey] = action.AgentName
 	}
+	if action.CodexThreadID != "" {
+		value[modelSettingCodexThreadKey] = action.CodexThreadID
+	}
+	if action.ClaudeSessionID != "" {
+		value[modelSettingClaudeSessionKey] = action.ClaudeSessionID
+	}
 	if action.Kind != "" {
 		value[platform.ChoiceMetadataInteractionKind] = action.Kind
 	}

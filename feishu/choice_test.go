@@ -142,8 +142,10 @@ func TestBuildChoiceCardUsesFeishuSessionMetadata(t *testing.T) {
 		ID:    "/cx cd 0",
 		Label: "weclaw",
 		Metadata: map[string]string{
-			"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root",
-			modelSettingAgentKey: "claude",
+			"feishu_session_key":         "feishu:tenant_1:group:oc_1:om_root",
+			modelSettingAgentKey:         "claude",
+			modelSettingCodexThreadKey:   "thread-1",
+			modelSettingClaudeSessionKey: "session-1",
 		},
 	}}, "feishu:ou_user")
 	if err != nil {
@@ -158,6 +160,12 @@ func TestBuildChoiceCardUsesFeishuSessionMetadata(t *testing.T) {
 	}
 	if value[modelSettingAgentKey] != "claude" {
 		t.Fatalf("button value=%#v, want model setting agent", value)
+	}
+	if value[modelSettingCodexThreadKey] != "thread-1" {
+		t.Fatalf("button value=%#v, want model setting Codex thread", value)
+	}
+	if value[modelSettingClaudeSessionKey] != "session-1" {
+		t.Fatalf("button value=%#v, want model setting Claude session", value)
 	}
 }
 

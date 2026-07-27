@@ -35,9 +35,9 @@ func (h *Handler) externalCodexControlState(key string, actor string) (bool, boo
 	defer h.tasks.mu.Unlock()
 	defer task.mu.Unlock()
 	if task.owner != strings.TrimSpace(actor) {
-		return task.isExternalCodexLocked(), task.canControlExternalCodexLocked(), true
+		return task.isExternalCodexLocked(), task.canResolveExternalCodexControlLocked(), true
 	}
-	return task.isExternalCodexLocked(), task.canControlExternalCodexLocked(), false
+	return task.isExternalCodexLocked(), task.canResolveExternalCodexControlLocked(), false
 }
 
 // resolveExternalCodexControl 每次控制前核对任务发起人、共享 runtime 与 active turn。
@@ -55,7 +55,7 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 	if req.action == "停止" && target.task.isStopping() {
 		return target, true, nil
 	}
-	if !target.task.canControlExternalCodex() {
+	if !target.task.canResolveExternalCodexControl() {
 		if req.action == "guide" {
 			return target, true, fmt.Errorf("当前 Codex 任务不支持 /guide；暂存消息会在任务结束后自动执行")
 		}

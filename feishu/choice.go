@@ -11,20 +11,22 @@ import (
 )
 
 const (
-	cardActionChoice          = "choice"
-	cardActionStop            = "stop"
-	cardKindApproval          = "approval"
-	approvalOwnerValueKey     = "approval_owner"
-	approvalStatusPending     = "pending"
-	approvalStatusHandled     = "handled"
-	approvalStatusExpired     = "expired"
-	approvalStatusArchived    = "archived"
-	approvalStatusUnconfirmed = "unconfirmed"
-	approvalPromptHead        = "Codex 请求执行敏感操作，请确认："
-	approvalPromptMarker      = "请求执行敏感操作，请确认："
-	approvalSummaryMaxRune    = 160
-	modelSettingAgentKey      = "model_setting_agent"
-	cardRevisionValueKey      = "card_revision"
+	cardActionChoice             = "choice"
+	cardActionStop               = "stop"
+	cardKindApproval             = "approval"
+	approvalOwnerValueKey        = "approval_owner"
+	approvalStatusPending        = "pending"
+	approvalStatusHandled        = "handled"
+	approvalStatusExpired        = "expired"
+	approvalStatusArchived       = "archived"
+	approvalStatusUnconfirmed    = "unconfirmed"
+	approvalPromptHead           = "Codex 请求执行敏感操作，请确认："
+	approvalPromptMarker         = "请求执行敏感操作，请确认："
+	approvalSummaryMaxRune       = 160
+	modelSettingAgentKey         = "model_setting_agent"
+	modelSettingCodexThreadKey   = "model_setting_codex_thread"
+	modelSettingClaudeSessionKey = "model_setting_claude_session"
+	cardRevisionValueKey         = "card_revision"
 )
 
 type parsedCardAction struct {
@@ -40,6 +42,8 @@ type parsedCardAction struct {
 	Conv               string
 	SessionKey         string
 	AgentName          string
+	CodexThreadID      string
+	ClaudeSessionID    string
 	UserID             string
 	UserAliases        []string
 	ChatID             string
@@ -171,6 +175,12 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		}
 		if agentName := strings.TrimSpace(choice.Metadata[modelSettingAgentKey]); agentName != "" {
 			value[modelSettingAgentKey] = agentName
+		}
+		if threadID := strings.TrimSpace(choice.Metadata[modelSettingCodexThreadKey]); threadID != "" {
+			value[modelSettingCodexThreadKey] = threadID
+		}
+		if sessionID := strings.TrimSpace(choice.Metadata[modelSettingClaudeSessionKey]); sessionID != "" {
+			value[modelSettingClaudeSessionKey] = sessionID
 		}
 		if snapshot := strings.TrimSpace(choice.Metadata[platform.ChoiceMetadataNavigationSnapshot]); snapshot != "" {
 			value[platform.ChoiceMetadataNavigationSnapshot] = snapshot

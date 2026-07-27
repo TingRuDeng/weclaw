@@ -39,6 +39,18 @@ func (t *activeAgentTask) canControlExternalCodexLocked() bool {
 	return t.runtimeOwner == agent.CodexRuntimeWeClaw
 }
 
+// canResolveExternalCodexControlLocked 允许本进程已启动的 turn 在缓存 owner 尚未回填时
+// 进入权威 runtime 探测；只读镜像、断线和已知非 WeClaw owner 仍保持不可控。
+func (t *activeAgentTask) canResolveExternalCodexControlLocked() bool {
+	if t.canControlExternalCodexLocked() {
+		return true
+	}
+	return t.inProcessCodexLifecycle &&
+		t.isExternalCodexLocked() &&
+		t.phase == codexTaskRunning &&
+		t.runtimeOwner == agent.CodexRuntimeUnknown
+}
+
 func (t *activeAgentTask) markCodexDisconnected() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -83,15 +95,18 @@ func (t *activeAgentTask) markCodexRunning(binding agent.CodexThreadBinding) {
 func (t *activeAgentTask) refreshExternalCodexTurn(binding agent.CodexThreadBinding, turnID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.phase != codexTaskRunning {
+		return
+	}
 	t.runtimeOwner = binding.Runtime
 	t.ownerRevision = binding.Control.Revision
 	t.codexTurnID = turnID
 }
 
-func (t *activeAgentTask) canControlExternalCodex() bool {
+func (t *activeAgentTask) canResolveExternalCodexControl() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.canControlExternalCodexLocked()
+	return t.canResolveExternalCodexControlLocked()
 }
 
 func (t *activeAgentTask) isStopping() bool {

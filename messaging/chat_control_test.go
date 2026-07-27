@@ -345,3 +345,19 @@ func TestRunningTasksFooterDoesNotPromptCodexAppOperation(t *testing.T) {
 		t.Fatalf("mixed footer must not prompt app operation, got %q", mixed)
 	}
 }
+
+func TestListInProcessUnknownCodexTaskAdvertisesStop(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.beginActiveTask(context.Background(), "codex-task", activeTaskMeta{
+		owner: "user-1", agentName: "codex",
+		runtimeOwner:  agent.CodexRuntimeUnknown,
+		codexThreadID: "thread-1", codexTurnID: "turn-1",
+		inProcessCodexLifecycle: true,
+	})
+
+	got := h.handleListActiveTasks("user-1")
+
+	if !strings.Contains(got, "/stop") {
+		t.Fatalf("in-process task with resolvable runtime should advertise /stop, got %q", got)
+	}
+}

@@ -139,6 +139,121 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	}
 }
 
+func TestFeishuStopResolvesInProcessUnknownRuntime(t *testing.T) {
+	h, ag, _, route := liveMessageFixture(t, false)
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	ag.setBindingState(agent.CodexThreadState{
+		ThreadID: route.threadID, Active: true, ActiveTurnID: "turn-fake",
+	})
+	task, _, started := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
+		owner: "user-1", routeUserID: "user-1", agentName: "codex",
+		runtimeOwner:  agent.CodexRuntimeUnknown,
+		codexThreadID: route.threadID, codexTurnID: "turn-fake",
+		inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("failed to register in-process Codex task")
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_android",
+		UserID: "user-1", MessageID: "stop-in-process", Text: "/stop",
+	}, reply)
+
+	if ag.interruptThreadID != route.threadID || ag.interruptTurnID != "turn-fake" {
+		t.Fatalf("interrupt=(%q,%q), want (%q,%q)", ag.interruptThreadID, ag.interruptTurnID, route.threadID, "turn-fake")
+	}
+	if !containsText(reply.Texts, "已发送停止请求，等待任务终态") {
+		t.Fatalf("reply=%#v, want remote stop confirmation", reply.Texts)
+	}
+	if taskPhase(task) != codexTaskStopping || task.runtimeOwner != agent.CodexRuntimeWeClaw {
+		t.Fatalf("phase=%s runtime=%s, want stopping/weclaw", taskPhase(task), task.runtimeOwner)
+	}
+}
+
+func TestCodexStopRejectsUnknownInProcessTaskWhenProbeFindsDesktop(t *testing.T) {
+	h := NewHandler(nil, nil)
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active",
+	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeDesktop, state)
+	task, _, started := h.beginActiveTask(context.Background(), "conversation-1", activeTaskMeta{
+		owner: "user-1", routeUserID: "route-1", agentName: "codex",
+		runtimeOwner:  agent.CodexRuntimeUnknown,
+		codexThreadID: "thread-active", codexTurnID: "turn-active",
+		inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("failed to register in-process Codex task")
+	}
+
+	text, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{
+		ctx: context.Background(), key: "conversation-1", agent: ag, actor: "user-1",
+	})
+
+	if !handled || !strings.Contains(text, "实时运行位置不可用") {
+		t.Fatalf("handled=%v text=%q, want fail-closed runtime error", handled, text)
+	}
+	if ag.interruptCalls != 0 {
+		t.Fatalf("interrupt calls=%d, Desktop runtime must not be interrupted through WeClaw", ag.interruptCalls)
+	}
+	if taskPhase(task) != codexTaskRunning || task.runtimeOwner != agent.CodexRuntimeUnknown {
+		t.Fatalf("phase=%s runtime=%s, failed probe must not mutate task", taskPhase(task), task.runtimeOwner)
+	}
+}
+
+func TestCodexStopDoesNotRefreshRuntimeAfterConcurrentTerminal(t *testing.T) {
+	h := NewHandler(nil, nil)
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active",
+	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
+	ag.threadStateEntered = make(chan struct{}, 1)
+	threadStateRelease := make(chan struct{})
+	ag.threadStateRelease = threadStateRelease
+	task, _, started := h.beginActiveTask(context.Background(), "conversation-1", activeTaskMeta{
+		owner: "user-1", routeUserID: "route-1", agentName: "codex",
+		runtimeOwner:  agent.CodexRuntimeUnknown,
+		codexThreadID: "thread-active", codexTurnID: "turn-active",
+		inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("failed to register in-process Codex task")
+	}
+	result := make(chan string, 1)
+	go func() {
+		text, _ := h.interruptExternalCodexTask(externalCodexTaskCommand{
+			ctx: context.Background(), key: "conversation-1", agent: ag, actor: "user-1",
+		})
+		result <- text
+	}()
+	select {
+	case <-ag.threadStateEntered:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("runtime state read did not start")
+	}
+	if !task.claimTerminal() {
+		t.Fatal("failed to claim concurrent terminal")
+	}
+	close(threadStateRelease)
+	select {
+	case text := <-result:
+		if !strings.Contains(text, "已经结束") {
+			t.Fatalf("text=%q, want terminal result", text)
+		}
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("/stop did not finish after terminal")
+	}
+	if ag.interruptCalls != 0 {
+		t.Fatalf("interrupt calls=%d, terminal task must not be interrupted", ag.interruptCalls)
+	}
+	if task.runtimeOwner != agent.CodexRuntimeUnknown {
+		t.Fatalf("runtime=%s, terminal task metadata must not be refreshed", task.runtimeOwner)
+	}
+}
+
 func TestCodexStopRuntimeProbeTimeoutKeepsTaskControllable(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.codexControlTimeout = 20 * time.Millisecond

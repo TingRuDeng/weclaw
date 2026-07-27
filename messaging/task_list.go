@@ -43,7 +43,7 @@ func (h *Handler) runningTasksForOwner(owner string, now time.Time) []runningTas
 				agentName: task.agentName, preview: task.preview,
 				elapsed: now.Sub(task.startedAt), lastProgress: task.view.lastProgress,
 				lastProgressAt: task.view.lastProgressAt,
-				stoppable:      !task.isExternalCodexLocked() || task.canControlExternalCodexLocked(),
+				stoppable:      !task.isExternalCodexLocked() || task.canResolveExternalCodexControlLocked(),
 			})
 		}
 		task.mu.Unlock()
