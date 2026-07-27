@@ -61,6 +61,14 @@ func (a *ACPAgent) SetClaudeModel(model string, effort string) {
 	}
 }
 
+// ResetClaudeModel 恢复 Claude Code 自己决定新 session 的模型和推理强度。
+func (a *ACPAgent) ResetClaudeModel() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.model = ""
+	a.effort = ""
+}
+
 // ListClaudeModels 优先返回 Claude ACP 最近一次 session 暴露的模型目录。
 func (a *ACPAgent) ListClaudeModels(_ context.Context) ([]ClaudeModel, error) {
 	if !a.isClaudeACP() {

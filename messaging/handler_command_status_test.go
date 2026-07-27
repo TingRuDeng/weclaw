@@ -212,7 +212,7 @@ func TestFeishuHelpClaudeSubmenuIncludesQuota(t *testing.T) {
 		t.Fatalf("choices=%#v, want one claude help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/cc ls", "/cc new", "/cc status", "/cc pwd", "/cc quota", "/cc model ls", "/cc help", "/help"} {
+	for _, want := range []string{"/cc ls", "/cc new", "/cc status", "/cc pwd", "/cc quota", "/cc model ls", "/cc model reset", "/cc help", "/help"} {
 		if !got[want] {
 			t.Fatalf("claude help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
@@ -392,6 +392,7 @@ func TestBuildClaudeSessionHelpTextIncludesCompleteCommands(t *testing.T) {
 		"/cc quota 查看 Claude 账号额度",
 		"/cc model status 查看新建 Claude 会话的默认模型配置",
 		"/cc model ls 查看 Claude 可选模型",
+		"/cc model reset 清除新建 Claude 会话的默认模型和推理强度",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Claude help should describe %q, got %q", want, text)

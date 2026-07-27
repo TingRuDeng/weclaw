@@ -63,6 +63,32 @@ func TestClaudeNewRejectsEmptySessionIDWithoutBinding(t *testing.T) {
 	}
 }
 
+func TestClaudeNewUnsupportedDefaultKeepsOldBindingAndReturnsRecoveryCommand(t *testing.T) {
+	h, fake, workspace := newClaudeSessionCreateHandler(t)
+	key := claudeBindingKey("user-1", "claude")
+	conversationID := buildClaudeConversationID("user-1", "claude", workspace)
+	h.ensureClaudeSessions().bindings[key] = newClaudeBinding(workspace, "session-old", claudeBindingReady)
+	fake.runtimeSessions = map[string]string{conversationID: "session-old"}
+	fake.sessionID = "session-old"
+	fake.resetErr = &agent.ClaudeSessionConfigUnsupportedError{
+		ConfigID: "model", Value: "fable", Available: []string{"default", "sonnet", "opus"},
+	}
+
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc new")
+
+	if !strings.Contains(text, "默认模型 fable 当前不可用") ||
+		!strings.Contains(text, "/cc model reset") ||
+		!strings.Contains(text, "default, sonnet, opus") {
+		t.Fatalf("text=%q", text)
+	}
+	if binding := h.ensureClaudeSessions().binding(key); binding.SessionID != "session-old" {
+		t.Fatalf("binding=%+v，失败后必须保留旧绑定", binding)
+	}
+	if current, ok := fake.CurrentClaudeSession(conversationID); !ok || current != "session-old" {
+		t.Fatalf("runtime=(%q,%t)，失败后必须恢复旧 session", current, ok)
+	}
+}
+
 func TestClaudeNewStoreFailureRestoresTrueRuntimeAndBinding(t *testing.T) {
 	h, fake, workspace := newClaudeSessionCreateHandler(t)
 	key := claudeBindingKey("user-1", "claude")

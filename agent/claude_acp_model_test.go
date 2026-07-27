@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -139,6 +140,42 @@ func TestClaudeACPConfigFailureDoesNotStoreSession(t *testing.T) {
 	ag.mu.Unlock()
 	if stored != "" {
 		t.Fatalf("stored=%q，配置失败的 session 不应写入映射", stored)
+	}
+}
+
+func TestClaudeACPUnsupportedDefaultReturnsTypedError(t *testing.T) {
+	ag := NewACPAgent(ACPAgentConfig{
+		ConfiguredName: "claude", Command: "claude-agent-acp", Model: "fable",
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	setCalls := 0
+	ag.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "session/new":
+			return json.RawMessage(`{"sessionId":"session-1","configOptions":` + claudeACPConfigOptionsJSON + `}`), nil
+		case "session/set_config_option":
+			setCalls++
+			return nil, fmt.Errorf("unsupported call")
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	_, err := ag.createSession(context.Background(), "conversation-1")
+
+	var unsupported *ClaudeSessionConfigUnsupportedError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("err=%v，期望可识别的不支持配置错误", err)
+	}
+	if unsupported.ConfigID != "model" || unsupported.Value != "fable" ||
+		strings.Join(unsupported.Available, ",") != "sonnet,opus" {
+		t.Fatalf("unsupported=%+v", unsupported)
+	}
+	if setCalls != 0 {
+		t.Fatalf("setCalls=%d，不支持值不得发送到 ACP", setCalls)
+	}
+	if _, requireErr := ag.requireSession("conversation-1"); !errors.Is(requireErr, ErrAgentSessionNotBound) {
+		t.Fatalf("require session error=%v，失败 session 不得提交绑定", requireErr)
 	}
 }
 

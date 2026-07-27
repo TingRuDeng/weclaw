@@ -19,6 +19,18 @@ type claudeSessionBootstrap struct {
 	sequence  uint64
 }
 
+// ClaudeSessionConfigUnsupportedError 表示显式新会话配置不在 ACP 公布的选项内。
+// Available 仅包含公开的配置选项，不携带认证信息或协议正文。
+type ClaudeSessionConfigUnsupportedError struct {
+	ConfigID  string
+	Value     string
+	Available []string
+}
+
+func (e *ClaudeSessionConfigUnsupportedError) Error() string {
+	return fmt.Sprintf("配置 %s 不支持值 %s", e.ConfigID, e.Value)
+}
+
 // configureClaudeSession 只在新建 session 时应用 Agent 默认配置。
 func (a *ACPAgent) configureClaudeSession(ctx context.Context, bootstrap claudeSessionBootstrap) error {
 	a.claudeConfigMu.Lock()
@@ -139,19 +151,29 @@ func (a *ACPAgent) setClaudeConfigValue(ctx context.Context, request claudeSessi
 	options := a.claudeSessionConfigSnapshot(request.sessionID)
 	option := findClaudeConfigOption(options, request.configID)
 	if option == nil {
-		return fmt.Errorf("配置 %s 不支持值 %s", request.configID, request.value)
+		return newClaudeSessionConfigUnsupportedError(request.configID, request.value, nil)
 	}
 	if option.Category == "model" || option.ID == claudeModelConfigID || request.configID == claudeModelConfigID {
 		value, ok := resolveClaudeModelConfigValue(option, request.value)
 		if !ok {
-			return fmt.Errorf("配置 %s 不支持值 %s", request.configID, request.value)
+			return newClaudeSessionConfigUnsupportedError(request.configID, request.value, option)
 		}
 		request.value = value
 	} else if !configOptionHasValue(option, request.value) {
-		return fmt.Errorf("配置 %s 不支持值 %s", request.configID, request.value)
+		return newClaudeSessionConfigUnsupportedError(request.configID, request.value, option)
 	}
 	request.configID = option.ID
 	return a.setClaudeSessionConfig(ctx, request)
+}
+
+func newClaudeSessionConfigUnsupportedError(configID string, value string, option *acpSessionConfigOption) error {
+	var available []string
+	if option != nil {
+		available = configChoiceValues(option)
+	}
+	return &ClaudeSessionConfigUnsupportedError{
+		ConfigID: strings.TrimSpace(configID), Value: strings.TrimSpace(value), Available: available,
+	}
 }
 
 // resolveClaudeModelConfigValue 把 WeClaw 展示用的规范 ID 或 alias 映射为

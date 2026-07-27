@@ -211,7 +211,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 <details>
 <summary>Claude 常用命令</summary>
 
-`/cc whoami`、`/cc ls`、`/cc switch <编号|sessionId>`、`/cc new`、`/cc pwd`、`/cc status`、`/cc quota`、`/cc model status|ls`。其中 `/cc status` 统一展示 binding、共享 ClaudeHost 和 writer 状态；`/cc model status` 查看后续新建 Claude 会话的默认配置，当前绑定会话请用 `/model`、`/reasoning`。`/cc owner`、`/cc cli` 已停用。
+`/cc whoami`、`/cc ls`、`/cc switch <编号|sessionId>`、`/cc new`、`/cc pwd`、`/cc status`、`/cc quota`、`/cc model status|ls|reset`。其中 `/cc status` 统一展示 binding、共享 ClaudeHost 和 writer 状态；`/cc model status` 查看后续新建 Claude 会话的默认配置，`/cc model reset` 清除该默认配置，当前绑定会话请用 `/model`、`/reasoning`。`/cc owner`、`/cc cli` 已停用。
 
 `/cc quota` 复用本机 Claude Code OAuth 登录读取 5 小时、7 天和模型分项额度，且不发送模型请求；WeClaw 会优先兼容 Claude Code 旧版 Keychain/凭据文件并请求其 Anthropic 用量接口，凭据不可读或请求失败时再回退到短生命周期的 Claude 原生 `get_usage` 控制查询。Token 只在内存中发送到固定的 Anthropic 地址，不写日志、不持久化，也不会跟随重定向。相关凭据格式、用量接口和结构化控制能力都不是稳定公开契约，后续 Claude Code 版本可能调整；API key、Bedrock、Vertex 或缺少 profile 权限时只会返回“订阅额度不可用”。
 

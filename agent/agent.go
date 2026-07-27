@@ -227,6 +227,11 @@ type ClaudeModelControlAgent interface {
 	SetClaudeModel(model string, effort string)
 }
 
+// ClaudeModelResetAgent 清除后续新建 Claude session 的显式默认配置。
+type ClaudeModelResetAgent interface {
+	ResetClaudeModel()
+}
+
 // ClaudeQuota 表示 Claude Code 登录账号的额度快照。
 type ClaudeQuota struct {
 	SubscriptionType    string

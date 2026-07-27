@@ -169,6 +169,7 @@ func buildClaudeSessionHelpText() string {
 		"/cc quota 查看 Claude 账号额度",
 		"/cc model status 查看新建 Claude 会话的默认模型配置",
 		"/cc model ls 查看 Claude 可选模型",
+		"/cc model reset 清除新建 Claude 会话的默认模型和推理强度",
 	)
 }
 

@@ -214,7 +214,7 @@ Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx 
 <details>
 <summary>Common Claude commands</summary>
 
-`/cc whoami`, `/cc ls`, `/cc switch <number|sessionId>`, `/cc new`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls`. `/cc status` is the unified binding, shared-ClaudeHost, and writer view. `/cc model status` shows defaults for newly created Claude sessions; use `/model` and `/reasoning` for the bound session. `/cc owner` and `/cc cli` are disabled.
+`/cc whoami`, `/cc ls`, `/cc switch <number|sessionId>`, `/cc new`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls|reset`. `/cc status` is the unified binding, shared-ClaudeHost, and writer view. `/cc model status` shows defaults for newly created Claude sessions, while `/cc model reset` clears them; use `/model` and `/reasoning` for the bound session. `/cc owner` and `/cc cli` are disabled.
 
 `/cc quota` reuses the local Claude Code OAuth login to read the 5-hour, 7-day, and model-scoped limits without sending a model request. WeClaw first supports Claude Code's legacy Keychain/credentials file and its Anthropic usage endpoint, then falls back to a short-lived native `get_usage` control query when those credentials are unavailable or the request fails. The token is kept in memory, sent only to the fixed Anthropic endpoint, never logged or persisted, and never forwarded through redirects. These credential, endpoint, and structured-control contracts are not stable public APIs and may change in later Claude Code releases. API key, Bedrock, Vertex, and sessions without profile scope report that subscription limits are unavailable.
 

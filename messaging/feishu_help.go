@@ -90,6 +90,7 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/cc pwd", Label: "当前项目目录"},
 			{ID: "/cc quota", Label: "账号额度"},
 			{ID: "/cc model ls", Label: "可用模型"},
+			{ID: "/cc model reset", Label: "重置新会话模型"},
 			{ID: "/cc help", Label: "完整命令"},
 		}
 	case "settings":

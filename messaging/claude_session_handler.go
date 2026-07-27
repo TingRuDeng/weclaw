@@ -23,7 +23,8 @@ func isClaudeSessionCommand(trimmed string) bool {
 	case "owner":
 		return len(fields) == 2 || len(fields) == 3 && (strings.EqualFold(fields[2], "remote") || strings.EqualFold(fields[2], "local"))
 	case "model":
-		return len(fields) == 2 || len(fields) == 3 && (fields[2] == "status" || fields[2] == "ls")
+		return len(fields) == 2 || len(fields) == 3 &&
+			(fields[2] == "status" || fields[2] == "ls" || fields[2] == "reset")
 	case "page":
 		_, ok := parseFeishuNavigationPage(fields, "/cc")
 		return ok

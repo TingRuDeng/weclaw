@@ -127,6 +127,7 @@ func TestClaudeSessionCommandDetectionPreservesReservedWordPrompts(t *testing.T)
 		{command: "/cc owner of this file", want: false},
 		{command: "/cc model", want: true},
 		{command: "/cc model status", want: true},
+		{command: "/cc model reset", want: true},
 		{command: "/cc model this package", want: false},
 		{command: "/cc help", want: true},
 		{command: "/cc help me", want: false},

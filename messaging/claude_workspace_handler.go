@@ -115,7 +115,7 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	result, err := h.createAndAcquireClaudeSessionWithBindingLocked(route)
 	if err != nil {
 		log.Printf("[claude-session-acquire] 新建并绑定失败: %v", err)
-		return "新建 Claude 会话失败，请稍后重试。"
+		return renderClaudeNewFailure(err)
 	}
 	lines := []string{
 		"已创建并绑定 Claude 会话。",
@@ -125,6 +125,32 @@ func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
 	if result.RuntimeErr != nil {
 		log.Printf("[claude-session-acquire] 新会话绑定已提交但运行通道不可用 session=%q: %v", result.SessionID, result.RuntimeErr)
 		lines = append(lines, "绑定已保留，普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
+	}
+	return wechatCommandText(lines...)
+}
+
+func renderClaudeNewFailure(err error) string {
+	if errors.Is(err, errClaudeSessionAcquireUncertain) {
+		return "Claude 会话绑定结果未确认，已停止继续操作；请检查状态后重试。"
+	}
+	var unsupported *agent.ClaudeSessionConfigUnsupportedError
+	if !errors.As(err, &unsupported) {
+		return "新建 Claude 会话失败，请稍后重试。"
+	}
+	configName := "配置"
+	switch unsupported.ConfigID {
+	case "model":
+		configName = "默认模型"
+	case "effort":
+		configName = "默认推理强度"
+	}
+	lines := []string{
+		fmt.Sprintf("新建 Claude 会话失败：%s %s 当前不可用。", configName, unsupported.Value),
+		"当前窗口绑定未切换。",
+		"发送 /cc model reset 清除新会话默认配置，再重试 /cc new。",
+	}
+	if len(unsupported.Available) > 0 {
+		lines = append(lines, "当前可用值: "+strings.Join(unsupported.Available, ", "))
 	}
 	return wechatCommandText(lines...)
 }

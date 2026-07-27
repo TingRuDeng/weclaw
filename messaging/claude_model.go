@@ -17,7 +17,18 @@ func (h *Handler) handleClaudeModelCommand(ctx context.Context, ag agent.Agent, 
 	if args[0] == "ls" {
 		return h.renderClaudeModelList(ctx, ag)
 	}
-	return "用法: /cc model status | /cc model ls"
+	if args[0] == "reset" {
+		resetter, ok := ag.(agent.ClaudeModelResetAgent)
+		if !ok {
+			return "当前 Claude Agent 不支持重置新会话默认配置。"
+		}
+		resetter.ResetClaudeModel()
+		return wechatCommandText(
+			"已清除 Claude 新会话的默认模型和推理强度。",
+			"下一次 /cc new 将使用 Claude Code 默认配置。",
+		)
+	}
+	return "用法: /cc model status | /cc model ls | /cc model reset"
 }
 
 // renderClaudeModelStatus 渲染后续新建 Claude session 使用的默认配置。

@@ -112,3 +112,28 @@ func (f *fakeClaudeModelAgent) SetClaudeModel(model string, effort string) {
 		f.effort = effort
 	}
 }
+
+func (f *fakeClaudeModelAgent) ResetClaudeModel() {
+	f.model = ""
+	f.effort = ""
+}
+
+func TestClaudeModelResetClearsNewSessionDefaults(t *testing.T) {
+	h := NewHandler(nil, nil)
+	claude := &fakeClaudeModelAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "acp", Command: "claude-agent-acp"}},
+		model:     "fable",
+		effort:    "max",
+	}
+
+	reply := h.handleClaudeModelCommand(context.Background(), claude, []string{"reset"})
+
+	if claude.model != "" || claude.effort != "" {
+		t.Fatalf("model=%q effort=%q，期望清除新会话默认配置", claude.model, claude.effort)
+	}
+	for _, want := range []string{"已清除", "下一次 /cc new", "Claude Code 默认配置"} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("reply=%q, want %q", reply, want)
+		}
+	}
+}
