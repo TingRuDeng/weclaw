@@ -212,7 +212,7 @@ func TestFeishuCodexSettingsUpdateCurrentThread(t *testing.T) {
 
 	for index, command := range []string{"/model gpt-next", "/reasoning high"} {
 		reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, command, fmt.Sprintf("codex-current-%d", index)})
-		if !containsText(reply.Texts, "当前 Codex 会话") || !containsText(reply.Texts, "从下一轮任务开始生效") {
+		if !containsText(reply.Texts, "当前 Codex 会话") || containsText(reply.Texts, "从下一轮任务开始生效") {
 			t.Fatalf("command=%q texts=%#v", command, reply.Texts)
 		}
 	}
@@ -544,7 +544,7 @@ func TestFeishuClaudeSettingsUpdateCurrentSession(t *testing.T) {
 	}
 	for index, command := range []string{"/model opus", "/reasoning high"} {
 		reply := handleModelCardMessage(t, h, modelCardTestRequest{sessionKey, command, fmt.Sprintf("current-%d", index)})
-		if !containsText(reply.Texts, "当前 Claude session") || !containsText(reply.Texts, "从下一轮任务开始生效") {
+		if !containsText(reply.Texts, "当前 Claude session") || containsText(reply.Texts, "从下一轮任务开始生效") {
 			t.Fatalf("command=%q texts=%#v", command, reply.Texts)
 		}
 	}
