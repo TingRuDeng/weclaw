@@ -77,7 +77,7 @@ func queuePendingOnTask(task *activeAgentTask, pending pendingAgentTask) activeT
 	if task.pending.message != "" || task.pendingSteering {
 		return activeTaskPendingOccupied
 	}
-	task.pending = pending
+	task.pending = ensurePendingTaskControlRevision(pending)
 	return activeTaskQueued
 }
 

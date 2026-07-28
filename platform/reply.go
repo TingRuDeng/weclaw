@@ -150,6 +150,9 @@ const (
 	ChoiceSectionNavigation  = "navigation"
 	// ChoiceMetadataNavigationSnapshot 将分页按钮绑定到服务端短期快照。
 	ChoiceMetadataNavigationSnapshot = "navigation_snapshot"
+	// ChoiceMetadataTaskControlToken 将任务控制按钮绑定到服务端暂存消息快照。
+	ChoiceMetadataTaskControlToken = "task_control_token"
+	ChoiceInteractionTaskControl   = "task_control"
 )
 
 // Choice 表示一项可由用户选择的编号选项。

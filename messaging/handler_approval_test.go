@@ -142,6 +142,48 @@ func TestApprovalTextFallbackConsumesOnceAndRedactsCommand(t *testing.T) {
 	}
 }
 
+func TestApprovalTextFallbackDenyCommandConsumesOnce(t *testing.T) {
+	h := NewHandler(nil, nil)
+	pending, err := h.registerPendingApprovalForRoute(
+		"ou_user", "ou_user", "approval-deny-command",
+		[]agent.ApprovalOption{
+			{ID: "allow_once", Kind: "allow"},
+			{ID: "deny_once", Kind: "deny"},
+		},
+		"allow_once", platform.ChoiceInteractionApproval,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	command := "/deny " + pending.code
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     command,
+	}, reply)
+	select {
+	case got := <-pending.choices:
+		if got != "deny_once" {
+			t.Fatalf("deny command choice=%q, want deny_once", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deny command did not resolve pending approval")
+	}
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     command,
+	}, reply)
+	if len(reply.Texts) != 2 ||
+		!strings.Contains(reply.Texts[0], "已提交审批：拒绝") ||
+		!strings.Contains(reply.Texts[1], "已处理") {
+		t.Fatalf("deny command replies=%#v", reply.Texts)
+	}
+}
+
 func TestApprovalTextFallbackIsolatesActorAndRoute(t *testing.T) {
 	h := NewHandler(nil, nil)
 	pending, err := h.registerPendingApprovalForRoute(

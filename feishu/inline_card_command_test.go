@@ -28,6 +28,20 @@ func TestCodexAccountCardsAreInlineAndConfirmationIsDeferred(t *testing.T) {
 	}
 }
 
+func TestTaskControlCommandsAreInlineAndDeferred(t *testing.T) {
+	for _, command := range []string{"/guide", "/cancel", "/stop"} {
+		if !isInlineCardCommand(command) || !isDeferredCardResultCommand(command) {
+			t.Fatalf("%s must update the original card even after callback timeout", command)
+		}
+	}
+	action := parsedCardAction{
+		Choice: "/cancel", Kind: platform.ChoiceInteractionTaskControl, AgentName: "Claude",
+	}
+	if got := deferredCardResultTitleForAction(action); got != "Claude · 暂存消息" {
+		t.Fatalf("title=%q", got)
+	}
+}
+
 func TestInlineCardProgressReplierKeepsCommandResultInline(t *testing.T) {
 	sender := &fakeMessageSender{}
 	cardKit := &fakeCardKitClient{cardID: "card-progress"}

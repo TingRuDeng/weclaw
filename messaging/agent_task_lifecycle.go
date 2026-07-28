@@ -35,9 +35,16 @@ type agentTaskLifecycle struct {
 }
 
 type agentTaskAdmissionNotice struct {
-	ctx    context.Context
-	reply  platform.Replier
-	userID string
+	ctx            context.Context
+	platformName   platform.PlatformName
+	accountID      string
+	reply          platform.Replier
+	userID         string
+	routeUserID    string
+	agentName      string
+	executionKey   string
+	task           *activeAgentTask
+	guideSupported bool
 }
 
 // startAgentTaskLifecycle 创建三类 Agent 共用的进度和终态交付器。
@@ -112,8 +119,11 @@ func (h *Handler) completeAgentTaskLifecycle(lifecycle agentTaskLifecycle) {
 }
 
 // replyAgentTaskAdmission 统一三类 Agent 的排队和队列占用提示。
-func replyAgentTaskAdmission(notice agentTaskAdmissionNotice, status activeTaskAdmissionStatus) {
+func (h *Handler) replyAgentTaskAdmission(notice agentTaskAdmissionNotice, status activeTaskAdmissionStatus) {
 	if status == activeTaskQueued {
+		if h.sendPendingTaskControlCard(notice) {
+			return
+		}
 		sendPlatformText(notice.ctx, notice.reply, notice.userID, queuedAgentMessage)
 		return
 	}

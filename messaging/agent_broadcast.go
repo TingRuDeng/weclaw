@@ -171,7 +171,7 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	}
 	defer unlockControl()
 	taskOpts := codexAgentTaskOptions{
-		ctx: ctx, platform: req.platformName,
+		ctx: ctx, platform: req.platformName, accountID: req.accountID,
 		userID: req.userID, routeUserID: req.routeUserID, reply: reply,
 		agentName: name, message: req.message, clientID: req.clientID,
 		replyPrefix: "[" + name + "] ", agent: ag,
@@ -211,7 +211,7 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 
 func (h *Handler) broadcastPendingCodexTask(req broadcastAgentsRequest, name string, ag agent.Agent, route codexConversationRoute, reply platform.Replier) pendingAgentTask {
 	return h.pendingCodexTask(codexAgentTaskOptions{
-		ctx: req.ctx, platform: req.platformName,
+		ctx: req.ctx, platform: req.platformName, accountID: req.accountID,
 		userID: req.userID, routeUserID: req.routeUserID, reply: reply,
 		agentName: name, message: req.message, clientID: req.clientID,
 		replyPrefix: "[" + name + "] ", agent: ag,

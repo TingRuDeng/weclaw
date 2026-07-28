@@ -51,6 +51,7 @@ type parsedCardAction struct {
 	EventID            string
 	CardRevision       string
 	NavigationSnapshot string
+	TaskControlToken   string
 	Status             string
 }
 
@@ -88,6 +89,8 @@ func buildChoiceCard(prompt string, choices []platform.Choice, conversationKey s
 			headerTitle = options.AgentName + " 授权"
 		case platform.ChoiceInteractionUserInput:
 			headerTitle = options.AgentName + " 提问"
+		case platform.ChoiceInteractionTaskControl:
+			headerTitle = options.AgentName + " · 暂存消息"
 		}
 	}
 	card := map[string]any{
@@ -158,6 +161,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		if options.Kind != "" {
 			value["kind"] = options.Kind
 		}
+		if options.AgentName != "" {
+			value[platform.ChoiceMetadataAgentName] = options.AgentName
+		}
 		if options.Summary != "" {
 			value["summary"] = options.Summary
 		}
@@ -184,6 +190,9 @@ func buildChoiceButtons(choices []platform.Choice, options choiceButtonOptions) 
 		}
 		if snapshot := strings.TrimSpace(choice.Metadata[platform.ChoiceMetadataNavigationSnapshot]); snapshot != "" {
 			value[platform.ChoiceMetadataNavigationSnapshot] = snapshot
+		}
+		if token := strings.TrimSpace(choice.Metadata[platform.ChoiceMetadataTaskControlToken]); token != "" {
+			value[platform.ChoiceMetadataTaskControlToken] = token
 		}
 		buttonType := "primary"
 		if choice.Metadata[platform.ChoiceMetadataButtonType] == platform.ChoiceButtonTypeDefault {

@@ -9,12 +9,36 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/spf13/cobra"
 )
 
 func TestCreateCompanionRuntimeRejectsCodexSecondWriter(t *testing.T) {
 	runtime, err := createCompanionRuntime(agent.CompanionEndpoint{Agent: "codex"})
 	if err == nil || !strings.Contains(err.Error(), "单一共享 app-server") {
 		t.Fatalf("createCompanionRuntime() runtime=%#v error=%v, want shared-host rejection", runtime, err)
+	}
+}
+
+func TestRunCompanionCommandRejectsCodexBeforeEndpointWait(t *testing.T) {
+	previousAgent, previousCwd := companionAgentFlag, companionCwdFlag
+	t.Cleanup(func() {
+		companionAgentFlag = previousAgent
+		companionCwdFlag = previousCwd
+	})
+	companionAgentFlag = "codex"
+	companionCwdFlag = "."
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd := &cobra.Command{}
+	cmd.SetContext(ctx)
+
+	err := runCompanionCommand(cmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "Codex Companion 已停用") {
+		t.Fatalf("runCompanionCommand() error=%v, want immediate Codex rejection", err)
+	}
+	if strings.Contains(err.Error(), "等待 Companion") {
+		t.Fatalf("runCompanionCommand() error=%v, must reject before endpoint wait", err)
 	}
 }
 

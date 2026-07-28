@@ -107,7 +107,7 @@ func (h *Handler) dispatchAgentMessage(req agentMessageRequest, ag agent.Agent, 
 // newCodexAgentTaskOptions 将统一消息请求转换为 Codex 专用后台任务参数。
 func newCodexAgentTaskOptions(runtime agentDispatchRuntime) codexAgentTaskOptions {
 	return codexAgentTaskOptions{
-		ctx: runtime.req.ctx, platform: runtime.req.platformName,
+		ctx: runtime.req.ctx, platform: runtime.req.platformName, accountID: runtime.req.accountID,
 		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
 		reply: runtime.req.reply, agentName: runtime.req.name, message: runtime.req.message,
 		clientID: runtime.req.clientID, replyPrefix: runtime.prefix,
@@ -136,8 +136,10 @@ func (h *Handler) runSynchronousAgentMessage(runtime synchronousAgentRuntime) {
 	if admission.status != activeTaskStarted {
 		h.recordTaskAdmissionTrace(runtime.req.trace, admission.status)
 		cancel()
-		replyAgentTaskAdmission(agentTaskAdmissionNotice{
-			ctx: runtime.replyCtx, reply: runtime.req.reply, userID: runtime.req.userID,
+		h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
+			ctx: runtime.replyCtx, platformName: runtime.req.platformName, accountID: runtime.req.accountID,
+			reply: runtime.req.reply, userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
+			agentName: runtime.req.name, executionKey: key, task: admission.task,
 		}, admission.status)
 		return
 	}

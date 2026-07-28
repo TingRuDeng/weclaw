@@ -74,6 +74,23 @@ func TestDoctorReportsClaudeACPProbeFailure(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsOnlyVerifiedClaudeACPCapability(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents["claude"] = config.AgentConfig{Type: "acp", Command: "claude-agent-acp"}
+	deps := testDoctorDeps()
+	deps.claudeACPProbe = func(context.Context, string, config.AgentConfig) error {
+		return nil
+	}
+
+	result, ok := findResult(runDoctorChecks(cfg, deps), `agent "claude" ACP capabilities`)
+	if !ok || result.Status != doctorOK {
+		t.Fatalf("result=%+v found=%v, want successful initialize probe", result, ok)
+	}
+	if result.Detail != "ACP initialize verified; session list/resume not probed" {
+		t.Fatalf("detail=%q, must not claim unprobed session capabilities", result.Detail)
+	}
+}
+
 // TestDoctorReportsLegacyClaudeMigration 验证 Doctor 对旧后端给出迁移入口。
 func TestDoctorReportsLegacyClaudeMigration(t *testing.T) {
 	cfg := config.DefaultConfig()

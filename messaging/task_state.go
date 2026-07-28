@@ -41,9 +41,10 @@ type activeAgentTask struct {
 }
 
 type pendingAgentTask struct {
-	message    string
-	run        func()
-	codexRoute codexConversationRoute
+	message         string
+	run             func()
+	codexRoute      codexConversationRoute
+	controlRevision string
 }
 
 func (t *activeAgentTask) pendingGuide() string {
@@ -126,11 +127,15 @@ func (h *Handler) storePendingGuide(key string, pending pendingAgentTask) bool {
 	if task.pending.message != "" {
 		return false
 	}
-	task.pending = pending
+	task.pending = ensurePendingTaskControlRevision(pending)
 	return true
 }
 
 func (h *Handler) detachPendingGuide(key string, actor string) (string, *activeAgentTask, bool, bool) {
+	return h.detachPendingGuideExpected(key, actor, pendingTaskControlExpectation{})
+}
+
+func (h *Handler) detachPendingGuideExpected(key string, actor string, expectation pendingTaskControlExpectation) (string, *activeAgentTask, bool, bool) {
 	h.tasks.mu.Lock()
 	task := h.tasks.active[key]
 	if task == nil {
@@ -143,6 +148,11 @@ func (h *Handler) detachPendingGuide(key string, actor string) (string, *activeA
 		task.mu.Unlock()
 		h.tasks.mu.Unlock()
 		return "", task, false, true
+	}
+	if !task.matchesPendingTaskControlLocked(expectation) {
+		task.mu.Unlock()
+		h.tasks.mu.Unlock()
+		return "", task, false, false
 	}
 	message := task.pending.message
 	if message == "" {
@@ -160,6 +170,10 @@ func (h *Handler) detachPendingGuide(key string, actor string) (string, *activeA
 }
 
 func (h *Handler) clearPendingGuide(key string, actor string) (bool, bool) {
+	return h.clearPendingGuideExpected(key, actor, pendingTaskControlExpectation{})
+}
+
+func (h *Handler) clearPendingGuideExpected(key string, actor string, expectation pendingTaskControlExpectation) (bool, bool) {
 	h.tasks.mu.Lock()
 	task := h.tasks.active[key]
 	if task == nil {
@@ -172,6 +186,9 @@ func (h *Handler) clearPendingGuide(key string, actor string) (bool, bool) {
 	if task.owner != strings.TrimSpace(actor) {
 		return false, true
 	}
+	if !task.matchesPendingTaskControlLocked(expectation) {
+		return false, false
+	}
 	if task.pending.message == "" {
 		return false, false
 	}
@@ -180,6 +197,10 @@ func (h *Handler) clearPendingGuide(key string, actor string) (bool, bool) {
 }
 
 func (h *Handler) takeExternalCodexGuide(key string, actor string) (pendingAgentTask, string, string, *activeAgentTask, bool, bool) {
+	return h.takeExternalCodexGuideExpected(key, actor, pendingTaskControlExpectation{})
+}
+
+func (h *Handler) takeExternalCodexGuideExpected(key string, actor string, expectation pendingTaskControlExpectation) (pendingAgentTask, string, string, *activeAgentTask, bool, bool) {
 	h.tasks.mu.Lock()
 	task := h.tasks.active[key]
 	if task == nil {
@@ -191,6 +212,9 @@ func (h *Handler) takeExternalCodexGuide(key string, actor string) (pendingAgent
 	defer task.mu.Unlock()
 	if task.owner != strings.TrimSpace(actor) {
 		return pendingAgentTask{}, "", "", task, false, true
+	}
+	if !task.matchesPendingTaskControlLocked(expectation) {
+		return pendingAgentTask{}, "", "", task, false, false
 	}
 	if !task.canControlExternalCodexLocked() || task.pending.message == "" || task.pendingSteering {
 		return pendingAgentTask{}, "", "", task, false, false

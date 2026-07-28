@@ -51,6 +51,10 @@ ai_summary:
 | `docs/README.md` | 查找项目文档和验证命令时 | 索引权威文档、任务记录和验证命令 |
 | `docs/AI_CONTEXT.md` | 理解模块、数据流、命令、测试和发布路径时 | 描述当前事实，必须有源码依据 |
 
+## Detail docs
+
+- `docs/superpowers/specs/2026-07-18-codex-single-app-server-design.md` 是当前 Codex 共享 Host 的详细设计；日常项目事实仍以 `docs/AI_CONTEXT.md` 为准，Host 拓扑、writer lease 或协议边界变化时应同步复核。
+
 ## Task records
 
 - `tasks/todo.md` 只记录当前或正在执行的任务，不长期累积已完成流水账。

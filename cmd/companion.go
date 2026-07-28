@@ -38,11 +38,15 @@ var companionCmd = &cobra.Command{
 
 func runCompanionCommand(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+	agentName, err := resolveCompanionAgent(companionAgentFlag)
+	if err != nil {
+		return err
+	}
 	cwd, err := resolveCompanionCwd(companionCwdFlag)
 	if err != nil {
 		return err
 	}
-	endpoint, err := waitForLiveCompanionEndpoint(ctx, companionAgentFlag, cwd, companionEndpointWaitOptions{})
+	endpoint, err := waitForLiveCompanionEndpoint(ctx, agentName, cwd, companionEndpointWaitOptions{})
 	if err != nil {
 		return err
 	}
@@ -60,13 +64,27 @@ type companionRuntime interface {
 }
 
 func createCompanionRuntime(endpoint agent.CompanionEndpoint) (companionRuntime, error) {
-	switch strings.ToLower(endpoint.Agent) {
+	agentName, err := resolveCompanionAgent(endpoint.Agent)
+	if err != nil {
+		return nil, err
+	}
+	switch agentName {
 	case "opencode":
 		return newOpenCodeCompanionRuntime(endpoint), nil
-	case "codex":
-		return nil, errors.New("Codex Companion 已停用：请通过 WeClaw 的单一共享 app-server 使用 Codex")
 	default:
 		return nil, fmt.Errorf("暂不支持 %s Companion，当前仅支持 opencode", endpoint.Agent)
+	}
+}
+
+func resolveCompanionAgent(value string) (string, error) {
+	agentName := strings.ToLower(strings.TrimSpace(value))
+	switch agentName {
+	case "opencode":
+		return agentName, nil
+	case "codex":
+		return "", errors.New("Codex Companion 已停用：请通过 WeClaw 的单一共享 app-server 使用 Codex")
+	default:
+		return "", fmt.Errorf("暂不支持 %s Companion，当前仅支持 opencode", value)
 	}
 }
 

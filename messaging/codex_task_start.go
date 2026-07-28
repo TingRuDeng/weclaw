@@ -64,7 +64,12 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 	}
 	opts.cancel()
 	if status == activeTaskQueued {
-		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, queuedAgentMessage)
+		task, _ := h.activeTask(opts.route.conversationID)
+		h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
+			ctx: taskOpts.ctx, platformName: taskOpts.platform, accountID: taskOpts.accountID,
+			reply: taskOpts.reply, userID: taskOpts.userID, routeUserID: taskOpts.routeUserID,
+			agentName: taskOpts.agentName, executionKey: opts.route.conversationID, task: task, guideSupported: true,
+		}, status)
 		return true
 	}
 	sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, "当前任务已有一条暂存消息，请先处理后再发送。")

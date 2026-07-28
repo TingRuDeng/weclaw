@@ -84,6 +84,7 @@ type Handler struct {
 	feishuWorkspaceChoices  feishuWorkspaceChoiceStore
 	feishuNavSnapshots      feishuNavigationSnapshotStore
 	feishuAccountConfirms   feishuCodexAccountConfirmStore
+	pendingTaskControls     pendingTaskControlStore
 	serviceAdminMu          sync.Mutex
 	serviceAdminExecutor    ServiceAdminCommandExecutor
 	adminTimeout            time.Duration

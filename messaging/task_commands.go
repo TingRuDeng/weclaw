@@ -13,13 +13,16 @@ import (
 const queuedAgentMessage = "已排队，将在当前任务结束后自动执行。"
 
 type taskCommandRequest struct {
-	ctx          context.Context
-	platformName platform.PlatformName
-	accountID    string
-	actorUserID  string
-	routeUserID  string
-	reply        platform.Replier
-	clientID     string
+	ctx             context.Context
+	platformName    platform.PlatformName
+	accountID       string
+	actorUserID     string
+	routeUserID     string
+	reply           platform.Replier
+	clientID        string
+	targetKey       string
+	targetAgentName string
+	expectation     pendingTaskControlExpectation
 }
 
 type taskCommandTarget struct {
@@ -29,11 +32,12 @@ type taskCommandTarget struct {
 }
 
 type externalCodexTaskCommand struct {
-	ctx       context.Context
-	key       string
-	agentName string
-	agent     agent.Agent
-	actor     string
+	ctx         context.Context
+	key         string
+	agentName   string
+	agent       agent.Agent
+	actor       string
+	expectation pendingTaskControlExpectation
 }
 
 // previewPendingCodexMessage 限制微信提示里的消息预览长度，避免长输入刷屏。
@@ -63,11 +67,12 @@ func (h *Handler) handleGuideCommand(req taskCommandRequest) {
 	if external {
 		text, _ := h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{
 			ctx: req.ctx, key: target.key, agentName: target.name, actor: req.actorUserID,
+			expectation: req.expectation,
 		})
 		sendPlatformText(req.ctx, req.reply, req.actorUserID, text)
 		return
 	}
-	message, task, ok, denied := h.detachPendingGuide(target.key, req.actorUserID)
+	message, task, ok, denied := h.detachPendingGuideExpected(target.key, req.actorUserID, req.expectation)
 	if denied {
 		sendPlatformText(req.ctx, req.reply, req.actorUserID, "只有任务发起人可以发送引导消息。")
 		return
@@ -88,7 +93,7 @@ func (h *Handler) handleCancelPendingGuide(req taskCommandRequest) string {
 	if err != nil {
 		return err.Error()
 	}
-	cleared, guideDenied := h.clearPendingGuide(target.key, req.actorUserID)
+	cleared, guideDenied := h.clearPendingGuideExpected(target.key, req.actorUserID, req.expectation)
 	if guideDenied {
 		return "只有任务发起人可以撤回暂存消息。"
 	}
@@ -106,11 +111,12 @@ func (h *Handler) handleStopActiveTask(req taskCommandRequest) string {
 	if isCodexAgent(target.name, target.agent.Info()) {
 		if reply, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{
 			ctx: req.ctx, key: target.key, agent: target.agent, actor: req.actorUserID,
+			expectation: req.expectation,
 		}); handled {
 			return reply
 		}
 	}
-	cancelled, denied := h.cancelActiveTask(target.key, req.actorUserID)
+	cancelled, denied := h.cancelActiveTaskExpected(target.key, req.actorUserID, req.expectation)
 	if denied {
 		return "只有任务发起人可以停止当前任务。"
 	}
@@ -139,7 +145,7 @@ func (h *Handler) steerPendingGuideToExternalCodex(req externalCodexTaskCommand)
 	if !handled {
 		return "", false
 	}
-	pending, _, _, task, ok, denied := h.takeExternalCodexGuide(req.key, req.actor)
+	pending, _, _, task, ok, denied := h.takeExternalCodexGuideExpected(req.key, req.actor, req.expectation)
 	if denied {
 		return "只有任务发起人可以发送引导消息。", true
 	}
@@ -170,6 +176,12 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 	if err != nil {
 		return err.Error(), true
 	}
+	target.task.mu.Lock()
+	matches := target.task.matchesPendingTaskControlLocked(req.expectation)
+	target.task.mu.Unlock()
+	if !matches {
+		return "该暂存消息已处理，或操作卡片已经过期。", true
+	}
 	stop := target.task.beginStopRequest(taskStopRequest{actor: req.actor, mode: taskStopRemote})
 	switch stop.status {
 	case taskStopDenied:
@@ -192,9 +204,20 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 // handleCancelCommand 已并入 /cancel(撤回暂存) 与 /stop(停止运行) 两个独立命令，保留占位以便检索历史语义。
 
 func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
+	return h.cancelActiveTaskExpected(key, actor, pendingTaskControlExpectation{})
+}
+
+func (h *Handler) cancelActiveTaskExpected(key string, actor string, expectation pendingTaskControlExpectation) (bool, bool) {
 	h.tasks.mu.Lock()
 	task := h.tasks.active[key]
 	if task == nil {
+		h.tasks.mu.Unlock()
+		return false, false
+	}
+	task.mu.Lock()
+	matches := task.matchesPendingTaskControlLocked(expectation)
+	task.mu.Unlock()
+	if !matches {
 		h.tasks.mu.Unlock()
 		return false, false
 	}
@@ -217,6 +240,13 @@ func (h *Handler) cancelActiveTask(key string, actor string) (bool, bool) {
 
 // resolveTaskCommandTarget 按当前窗口 Agent 定位任务，避免 Claude 控制命令误发给 Codex。
 func (h *Handler) resolveTaskCommandTarget(req taskCommandRequest) (taskCommandTarget, error) {
+	if strings.TrimSpace(req.targetKey) != "" && strings.TrimSpace(req.targetAgentName) != "" {
+		ag, err := h.getAgent(req.ctx, req.targetAgentName)
+		if err != nil {
+			return taskCommandTarget{}, fmt.Errorf("%s Agent 不可用: %w", req.targetAgentName, err)
+		}
+		return taskCommandTarget{name: req.targetAgentName, agent: ag, key: req.targetKey}, nil
+	}
 	name := h.defaultAgentNameForRoute(req.routeUserID, req.platformName, req.accountID)
 	if strings.TrimSpace(name) == "" {
 		return taskCommandTarget{}, fmt.Errorf("当前窗口没有可控制的 Agent")

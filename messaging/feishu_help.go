@@ -65,7 +65,6 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/status", Label: "运行状态"},
 			{ID: "/ps", Label: "运行中任务"},
 			{ID: "/stop", Label: "停止当前任务"},
-			{ID: "/guide", Label: "暂存下一步指令"},
 			{ID: "/cancel", Label: "撤回暂存消息"},
 			{ID: "/cwd", Label: "当前工作空间"},
 			{ID: "/new", Label: "新建默认会话"},
@@ -80,6 +79,7 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/cx account", Label: "Codex 账号"},
 			{ID: "/cx model ls", Label: "可用模型"},
 			{ID: "/cx clean", Label: "清理失效记录"},
+			{ID: "/guide", Label: "引导当前 Codex 任务"},
 			{ID: "/cx help", Label: "完整命令"},
 		}
 	case "claude":

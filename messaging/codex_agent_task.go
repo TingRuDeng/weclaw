@@ -60,8 +60,10 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	if admission.status != activeTaskStarted {
 		h.recordTaskAdmissionTrace(opts.trace, admission.status)
 		cancelTaskTimeout()
-		replyAgentTaskAdmission(agentTaskAdmissionNotice{
-			ctx: opts.ctx, reply: opts.reply, userID: opts.userID,
+		h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
+			ctx: opts.ctx, platformName: opts.platform, accountID: opts.accountID,
+			reply: opts.reply, userID: opts.userID, routeUserID: opts.routeUserID,
+			agentName: opts.agentName, executionKey: executionKey, task: admission.task, guideSupported: true,
 		}, admission.status)
 		return
 	}

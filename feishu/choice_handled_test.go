@@ -98,6 +98,11 @@ func TestChoiceCommandResultTemplateUsesTerminalStateColors(t *testing.T) {
 		{name: "runtime unavailable", command: "/cx switch thread-1", content: "已切换并绑定。\n运行通道: 暂不可用", want: "yellow"},
 		{name: "timeout", command: "/cx switch thread-1", content: "会话切换等待超时，请重试。", want: "yellow"},
 		{name: "switch failure", command: "/cx switch thread-1", content: "绑定 Codex 会话失败，请重试。", want: "red"},
+		{name: "guide success", command: "/guide", content: "已发送到当前共享 Codex 任务。", want: "green"},
+		{name: "cancel success", command: "/cancel", content: "已撤回该消息。", want: "green"},
+		{name: "stop pending", command: "/stop", content: "已发送停止请求，等待任务终态。", want: "yellow"},
+		{name: "stale task card", command: "/cancel", content: "该暂存消息已处理，或操作卡片已经过期。", want: "yellow"},
+		{name: "task control failure", command: "/guide", content: "发送到当前共享 Codex 任务失败。", want: "red"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -105,6 +110,18 @@ func TestChoiceCommandResultTemplateUsesTerminalStateColors(t *testing.T) {
 				t.Fatalf("template=%q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTaskControlHandledCardKeepsContextualTitle(t *testing.T) {
+	action := parsedCardAction{
+		Choice: "/cancel", Kind: platform.ChoiceInteractionTaskControl, AgentName: "Codex",
+	}
+	card := buildSubmittedChoiceCard(action)
+	data := card.Data.(map[string]any)
+	title := data["header"].(map[string]any)["title"].(map[string]any)["content"]
+	if title != "Codex · 暂存消息" {
+		t.Fatalf("title=%#v, want contextual task control title", title)
 	}
 }
 

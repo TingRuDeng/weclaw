@@ -21,6 +21,7 @@ type inlineCardReplier struct {
 	platform.Replier
 	conversationKey string
 	command         string
+	title           string
 	mu              sync.Mutex
 	capturing       bool
 	pending         []*inlineCardReply
@@ -36,7 +37,9 @@ func newInlineCardReplier(reply platform.Replier, conversationKey string, comman
 
 func (r *inlineCardReplier) SendText(ctx context.Context, content string) error {
 	result := &inlineCardReply{
-		card: buildChoiceHandledStatusCard(choiceCommandResultTemplate(r.command, content), strings.TrimSpace(content)),
+		card: buildChoiceHandledStatusCardWithTitle(
+			choiceCommandResultTemplate(r.command, content), r.title, strings.TrimSpace(content),
+		),
 		replay: func(replayCtx context.Context) error {
 			return r.Replier.SendText(replayCtx, content)
 		},
@@ -213,10 +216,11 @@ func (a *Adapter) handleInlineCardAction(ctx context.Context, msg platform.Incom
 	resultReply := platform.Replier(a.newScopedReplier(msg))
 	if isDeferredCardResultCommand(action.Choice) && strings.TrimSpace(action.MessageID) != "" {
 		resultReply = newDeferredCardResultReplierWithTitle(
-			resultReply, a.sender, action.MessageID, deferredCardResultTitle(action.Choice), action.Choice,
+			resultReply, a.sender, action.MessageID, deferredCardResultTitleForAction(action), action.Choice,
 		)
 	}
 	reply := newInlineCardReplier(resultReply, conversationKey, action.Choice)
+	reply.title = choiceHandledCardTitle(action)
 	dispatchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.cardActionTimeout)
 	done := make(chan bool, 1)
 	go func() {
@@ -264,7 +268,7 @@ func (a *Adapter) sendInlineCardActionTimeout(action parsedCardAction, msg platf
 	ctx, cancel := context.WithTimeout(context.Background(), feishuCardActionNoticeTimeout)
 	defer cancel()
 	reply := newDeferredCardResultReplierWithTitle(
-		a.newScopedReplier(msg), a.sender, action.MessageID, deferredCardResultTitle(action.Choice), action.Choice,
+		a.newScopedReplier(msg), a.sender, action.MessageID, deferredCardResultTitleForAction(action), action.Choice,
 	)
 	if err := reply.SendText(ctx, deferredCardTimeoutText(action.Choice)); err != nil {
 		log.Printf("[feishu] failed to update timed out card action: message=%s err=%v", action.MessageID, err)
@@ -277,7 +281,7 @@ func isInlineCardCommand(choice string) bool {
 		return false
 	}
 	switch fields[0] {
-	case "/help", "/status", "/ps", "/cwd", "/mode", "/progress", "/model", "/reasoning":
+	case "/help", "/status", "/ps", "/cwd", "/mode", "/progress", "/model", "/reasoning", "/guide", "/cancel", "/stop":
 		return true
 	case "/cx", "/cc":
 		if len(fields) < 2 {
@@ -292,6 +296,9 @@ func isInlineCardCommand(choice string) bool {
 }
 
 func isDeferredCardResultCommand(choice string) bool {
+	if isTaskControlCommand(choice) {
+		return true
+	}
 	fields := strings.Fields(strings.ToLower(strings.TrimSpace(choice)))
 	if len(fields) < 2 || (fields[0] != "/cx" && fields[0] != "/cc") {
 		return false
@@ -299,7 +306,17 @@ func isDeferredCardResultCommand(choice string) bool {
 	return fields[1] == "switch" || fields[0] == "/cx" && fields[1] == "account" && len(fields) >= 3 && fields[2] == "confirm"
 }
 
+func deferredCardResultTitleForAction(action parsedCardAction) string {
+	if strings.TrimSpace(action.Kind) == platform.ChoiceInteractionTaskControl {
+		return choiceHandledCardTitle(action)
+	}
+	return deferredCardResultTitle(action.Choice)
+}
+
 func deferredCardResultTitle(choice string) string {
+	if isTaskControlCommand(choice) {
+		return "任务操作结果"
+	}
 	fields := strings.Fields(strings.ToLower(strings.TrimSpace(choice)))
 	if len(fields) >= 3 && fields[0] == "/cx" && fields[1] == "account" && fields[2] == "confirm" {
 		return "Codex 账号切换结果"
@@ -308,6 +325,9 @@ func deferredCardResultTitle(choice string) string {
 }
 
 func deferredCardTimeoutText(choice string) string {
+	if isTaskControlCommand(choice) {
+		return "任务操作等待超时，请发送 /ps 检查当前状态后再操作。"
+	}
 	if deferredCardResultTitle(choice) == "Codex 账号切换结果" {
 		return "Codex 账号切换等待超时，请发送 /cx account status 检查当前状态，确认后再重试。"
 	}

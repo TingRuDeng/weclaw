@@ -3,6 +3,7 @@ package feishu
 import (
 	"strings"
 
+	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
@@ -15,7 +16,10 @@ func buildSubmittedChoiceCard(action parsedCardAction) *callback.Card {
 	if label == "" {
 		label = "已选择"
 	}
-	return buildChoiceHandledStatusCard("blue", "已受理："+label+"\n\n"+choicePendingDetail(action.Choice))
+	return buildChoiceHandledStatusCardWithTitle(
+		"blue", choiceHandledCardTitle(action),
+		"已受理："+label+"\n\n"+choicePendingDetail(action.Choice),
+	)
 }
 
 func buildInlineChoiceCompletedCard(action parsedCardAction) *callback.Card {
@@ -26,7 +30,9 @@ func buildInlineChoiceCompletedCard(action parsedCardAction) *callback.Card {
 	if label == "" {
 		label = "该操作"
 	}
-	return buildChoiceHandledStatusCard("green", "已完成："+label)
+	return buildChoiceHandledStatusCardWithTitle(
+		"green", choiceHandledCardTitle(action), "已完成："+label,
+	)
 }
 
 func choicePendingDetail(choice string) string {
@@ -65,6 +71,14 @@ func buildChoiceHandledCard(action parsedCardAction) *callback.Card {
 }
 
 func buildChoiceHandledStatusCard(template string, content string) *callback.Card {
+	return buildChoiceHandledStatusCardWithTitle(template, "WeClaw", content)
+}
+
+func buildChoiceHandledStatusCardWithTitle(template string, title string, content string) *callback.Card {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "WeClaw"
+	}
 	card := map[string]any{
 		"schema": "2.0",
 		"config": map[string]any{
@@ -74,7 +88,7 @@ func buildChoiceHandledStatusCard(template string, content string) *callback.Car
 		"header": map[string]any{
 			"title": map[string]any{
 				"tag":     "plain_text",
-				"content": "WeClaw",
+				"content": title,
 			},
 			"template": template,
 		},
@@ -92,8 +106,22 @@ func buildChoiceHandledStatusCard(template string, content string) *callback.Car
 	return &callback.Card{Type: "raw", Data: card}
 }
 
-// choiceCommandResultTemplate 只为具备明确终态的切换命令着色；普通信息卡保持蓝色。
+func choiceHandledCardTitle(action parsedCardAction) string {
+	if strings.TrimSpace(action.Kind) == platform.ChoiceInteractionTaskControl {
+		agentName := strings.TrimSpace(action.AgentName)
+		if agentName == "" {
+			agentName = "Agent"
+		}
+		return agentName + " · 暂存消息"
+	}
+	return "WeClaw"
+}
+
+// choiceCommandResultTemplate 为具备明确处理结果的切换和任务控制命令着色。
 func choiceCommandResultTemplate(command string, content string) string {
+	if isTaskControlCommand(command) {
+		return taskControlCommandResultTemplate(command, content)
+	}
 	if !isDeferredCardResultCommand(command) {
 		return "blue"
 	}
@@ -108,6 +136,32 @@ func choiceCommandResultTemplate(command string, content string) string {
 		return "green"
 	}
 	return "red"
+}
+
+func isTaskControlCommand(command string) bool {
+	switch strings.ToLower(strings.TrimSpace(command)) {
+	case "/guide", "/cancel", "/stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func taskControlCommandResultTemplate(command string, content string) string {
+	content = strings.TrimSpace(content)
+	switch {
+	case strings.Contains(content, "已处理") || strings.Contains(content, "已经过期") ||
+		strings.Contains(content, "当前没有") || strings.Contains(content, "已经结束"):
+		return "yellow"
+	case strings.EqualFold(strings.TrimSpace(command), "/stop") &&
+		(strings.Contains(content, "等待任务终态") || strings.Contains(content, "已受理")):
+		return "yellow"
+	case strings.Contains(content, "已发送到") || strings.Contains(content, "已撤回") ||
+		strings.Contains(content, "已停止"):
+		return "green"
+	default:
+		return "red"
+	}
 }
 
 func choiceCommandSucceeded(content string) bool {

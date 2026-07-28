@@ -172,6 +172,41 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 	}
 }
 
+func TestFeishuHelpKeepsGuideInCodexSection(t *testing.T) {
+	h := NewHandler(nil, nil)
+	commonReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/help common",
+	}, commonReply)
+	if len(commonReply.Choices) != 1 {
+		t.Fatalf("common choices=%#v, want one help card", commonReply.Choices)
+	}
+	if helpChoiceIDs(commonReply.Choices[0].Choices)["/guide"] {
+		t.Fatalf("common choices=%#v, Codex-only /guide must not be advertised as generic", commonReply.Choices[0].Choices)
+	}
+
+	codexReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu,
+		UserID:   "ou_user",
+		Text:     "/help codex",
+	}, codexReply)
+	if len(codexReply.Choices) != 1 {
+		t.Fatalf("codex choices=%#v, want one help card", codexReply.Choices)
+	}
+	for _, choice := range codexReply.Choices[0].Choices {
+		if choice.ID == "/guide" {
+			if choice.Label != "引导当前 Codex 任务" {
+				t.Fatalf("/guide label=%q, want explicit Codex scope", choice.Label)
+			}
+			return
+		}
+	}
+	t.Fatalf("codex choices=%#v, want /guide", codexReply.Choices[0].Choices)
+}
+
 func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -187,7 +222,7 @@ func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
 		t.Fatalf("choices=%#v, want one codex help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/cx ls", "/cx status", "/cx pwd", "/cx quota", "/cx model ls", "/cx clean", "/cx help", "/help"} {
+	for _, want := range []string{"/cx ls", "/cx status", "/cx pwd", "/cx quota", "/cx model ls", "/cx clean", "/guide", "/cx help", "/help"} {
 		if !got[want] {
 			t.Fatalf("codex help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}

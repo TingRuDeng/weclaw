@@ -37,9 +37,8 @@ func newDeferredCardResultReplierWithTitle(reply platform.Replier, sender messag
 }
 
 func (r *deferredCardResultReplier) SendText(ctx context.Context, content string) error {
-	card := buildChoiceHandledStatusCard(
-		choiceCommandResultTemplate(r.command, content),
-		"**"+r.title+"**\n\n"+strings.TrimSpace(content),
+	card := buildChoiceHandledStatusCardWithTitle(
+		choiceCommandResultTemplate(r.command, content), r.title, strings.TrimSpace(content),
 	)
 	cardJSON, err := json.Marshal(card.Data)
 	if err == nil {

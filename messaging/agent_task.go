@@ -69,8 +69,10 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 	if admission.status != activeTaskStarted {
 		h.recordTaskAdmissionTrace(opts.trace, admission.status)
 		cancel()
-		replyAgentTaskAdmission(agentTaskAdmissionNotice{
-			ctx: opts.ctx, reply: opts.reply, userID: opts.userID,
+		h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
+			ctx: opts.ctx, platformName: opts.platformName, accountID: opts.accountID,
+			reply: opts.reply, userID: opts.userID, routeUserID: opts.routeUserID,
+			agentName: opts.agentName, executionKey: key, task: admission.task,
 		}, admission.status)
 		return
 	}

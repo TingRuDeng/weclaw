@@ -124,6 +124,45 @@ func TestSlowSessionSwitchUpdatesOriginalCardAfterCallbackBudget(t *testing.T) {
 	}
 }
 
+func TestSlowTaskControlUpdatesOriginalCardAfterCallbackBudget(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardInlineTimeout = 20 * time.Millisecond
+	sender := &deferredPatchSender{patches: make(chan string, 1), texts: make(chan string, 1)}
+	adapter.sender = sender
+	release := make(chan struct{})
+	event := cardChoiceEventForOrderTest("feishu:tenant:dm:oc_1:ou_user")
+	event.Event.Action.Value["choice"] = "/stop"
+	event.Event.Action.Value["label"] = "停止当前任务"
+	event.Event.Action.Value["kind"] = platform.ChoiceInteractionTaskControl
+	event.Event.Action.Value[platform.ChoiceMetadataAgentName] = "Codex"
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		<-release
+		_ = reply.SendText(ctx, "已发送停止请求，等待任务终态。")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPendingChoiceCard(t, resp.Card, "停止当前任务", "正在处理")
+	close(release)
+	select {
+	case got := <-sender.patches:
+		if !strings.Contains(got, "om_card:") ||
+			!strings.Contains(got, "Codex · 暂存消息") ||
+			!strings.Contains(got, "已发送停止请求") ||
+			!strings.Contains(got, `"template":"yellow"`) {
+			t.Fatalf("patched task-control card=%q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("慢任务控制完成后未更新原卡")
+	}
+	select {
+	case got := <-sender.texts:
+		t.Fatalf("更新原卡成功后不应单独发送结果: %q", got)
+	default:
+	}
+}
+
 func TestTimedOutSessionSwitchUpdatesOriginalCard(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.cardInlineTimeout = 5 * time.Millisecond

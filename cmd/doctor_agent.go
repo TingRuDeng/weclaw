@@ -65,6 +65,6 @@ func checkClaudeACP(name string, agentCfg config.AgentConfig, deps doctorDeps) d
 		return result
 	}
 	result.Status = doctorOK
-	result.Detail = "session list/resume verified"
+	result.Detail = "ACP initialize verified; session list/resume not probed"
 	return result
 }

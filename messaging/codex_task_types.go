@@ -13,6 +13,7 @@ import (
 type codexAgentTaskOptions struct {
 	ctx         context.Context
 	platform    platform.PlatformName
+	accountID   string
 	userID      string
 	routeUserID string
 	reply       platform.Replier

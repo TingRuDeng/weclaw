@@ -64,7 +64,7 @@ After selecting an existing session or sending `/cx new`, send the task directly
 /cx status             # Inspect the current workspace, session, task, account, and runtime
 ```
 
-WeClaw exposes native `codex app-server` through a stable Unix socket and connects with the upstream WebSocket-over-UDS protocol; the socket is not a raw JSONL stream. The default `codex_host_mode: auto` first uses the official `codex app-server daemon` when a managed standalone installation is available, and otherwise keeps the WeClaw-managed compatibility host. WeChat, Feishu, and other WeClaw frontends then reuse that service. Each window persists its own workspace/thread binding. Multiple windows may bind the same thread, but only one turn may write to that thread at a time. A transport disconnect does not clear a frontend binding; an accepted turn keeps its writer guard until authoritative terminal confirmation, and the next operation reconnects to the shared host. Legacy Codex owner state is discarded on load, and legacy `type: companion` configuration migrates to the shared app-server.
+WeClaw exposes native `codex app-server` through a stable Unix socket and connects with the upstream WebSocket-over-UDS protocol; the socket is not a raw JSONL stream. The default `codex_host_mode: auto` first uses the official `codex app-server daemon` when a managed standalone installation is available, and otherwise keeps the WeClaw-managed compatibility host. WeChat, Feishu, and other WeClaw frontends then reuse that service. Each window persists its own workspace/thread binding. Multiple windows may bind the same thread, but only one turn may write to that thread at a time. A transport disconnect does not clear a frontend binding; an accepted turn keeps its writer guard until authoritative terminal confirmation, and the next operation reconnects to the shared host. Legacy Codex owner state is discarded on load, and legacy `type: companion` configuration migrates to the shared app-server; `weclaw companion --agent codex` fails immediately so it cannot start a second Codex writer.
 
 `/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` are disabled because they would start an independent Codex writer. This version also does not treat a separately launched Codex Desktop as a shared-host client; a future local UI must connect to this same app-server rather than start a second one.
 
@@ -116,6 +116,8 @@ If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` 
 - `/guide`: steer the active Codex task with the queued message; Claude does not support it.
 - `/stop`: stop the task running in the current chat window.
 - `/ps`: list tasks running for the current user.
+
+In Feishu, queuing a second message immediately opens a compact contextual card. A Codex card offers **Send as guidance**, **Remove queued message**, and **Stop current task**; a Claude card omits guidance because Claude does not support it. The card is bound to the bot account, operator, chat route, active task, and exact queued-message revision, so an expired card cannot alter a later task or replacement message. Button results replace the same card instead of creating a separate command-result message.
 
 Native Codex and Claude plan, tool, command, and file signals are normalized into structured progress events. The task card and `/ps` read the same latest snapshot, and stale or late watcher events cannot overwrite a terminal task state.
 
@@ -214,7 +216,7 @@ Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx 
 <details>
 <summary>Common Claude commands</summary>
 
-`/cc whoami`, `/cc ls`, `/cc switch <number|sessionId>`, `/cc new`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls|reset`. `/cc status` is the unified binding, shared-ClaudeHost, and writer view. `/cc model status` shows defaults for newly created Claude sessions, while `/cc model reset` clears them; use `/model` and `/reasoning` for the bound session. `/cc owner` and `/cc cli` are disabled.
+`/cc whoami`, `/cc ls`, `/cc cd <number|..>`, `/cc switch <number|sessionId>`, `/cc new`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls|reset`. `/cc cd` enters a workspace or returns to the workspace list. `/cc status` is the unified binding, shared-ClaudeHost, and writer view. `/cc model status` shows defaults for newly created Claude sessions, while `/cc model reset` clears them; use `/model` and `/reasoning` for the bound session. `/cc owner` and `/cc cli` are disabled.
 
 `/cc quota` reuses the local Claude Code OAuth login to read the 5-hour, 7-day, and model-scoped limits without sending a model request. WeClaw first supports Claude Code's legacy Keychain/credentials file and its Anthropic usage endpoint, then falls back to a short-lived native `get_usage` control query when those credentials are unavailable or the request fails. The token is kept in memory, sent only to the fixed Anthropic endpoint, never logged or persisted, and never forwarded through redirects. These credential, endpoint, and structured-control contracts are not stable public APIs and may change in later Claude Code releases. API key, Bedrock, Vertex, and sessions without profile scope report that subscription limits are unavailable.
 
@@ -253,10 +255,12 @@ Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`
 <details>
 <summary>Recommended Feishu menu</summary>
 
-- Common: `/help`, `/status`, `/model`, `/reasoning`, `/fast`, `/cwd`
-- Codex: `/cx ls`, `/cx status`, `/cx new`, `/cx quota`, `/cx account`
-- Claude: `/cc ls`, `/cc status`, `/cc new`, `/cc pwd`, `/cc quota`, `/cc model ls`
-- Control: `/ps`, `/cancel`, `/guide`, `/stop`, `/restart`
+- Common: `/help`, `/status`, `/ps`, `/stop`
+- Codex: `/cx ls`, `/cx status`, `/cx new`, `/cx account`
+- Claude: `/cc ls`, `/cc status`, `/cc new`, `/cc quota`
+- Settings: `/model`, `/reasoning`, `/fast`, `/mode`
+
+Keep `/guide` and `/cancel` out of the permanent menu: Feishu presents them contextually when a message is actually queued, and `/help` remains the fallback command index.
 
 </details>
 
@@ -272,6 +276,8 @@ weclaw doctor
 ```
 
 `weclaw web` binds to `127.0.0.1:39282` by default, injects the token through a URL fragment that is never sent to the server, and opens the browser. Soft settings such as agents, progress, allowlists, administrators, and workspace roots support hot reload. Platform enablement, credentials, or account topology changes require a restart. The built-in server has no TLS: non-loopback listeners are rejected by default and require an explicit `--allow-insecure-http` opt-in on a trusted LAN (a strong random token is still generated when `--token` is omitted); use an HTTPS tunnel or reverse proxy for public access.
+
+A successful Claude ACP check in `weclaw doctor` proves only that the `initialize` handshake works. It does not probe `session/list` or `session/resume`; use the real session commands to verify listing and recovery.
 
 Key security rules:
 

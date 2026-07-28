@@ -94,6 +94,9 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 	if command.Action != "choice" {
 		return false
 	}
+	if h.handlePendingTaskControlChoice(runtime) {
+		return true
+	}
 	if isPendingInteractionChoiceCommand(command) && h.consumePendingInteractionForKey(
 		runtime.msg.UserID, runtime.routeUserID,
 		command.Value[platform.ChoiceMetadataInteractionKind],

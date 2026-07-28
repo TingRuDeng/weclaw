@@ -64,7 +64,7 @@ weclaw status
 /cx status             # 查看当前工作空间、会话、任务、账号和运行状态
 ```
 
-WeClaw 为原生 `codex app-server` 建立稳定 Unix socket，并按上游协议通过 WebSocket-over-UDS 连接；该 socket 不是裸 JSONL 流。默认 `codex_host_mode: auto` 会优先连接或启动官方 standalone 安装提供的 `codex app-server daemon`；未安装 standalone 时保留 WeClaw 自管 Host 兼容路径。之后的微信、飞书或其他 WeClaw 前端复用同一服务。每个窗口独立持久化 workspace/thread 绑定，多个窗口可以绑定同一 thread，但同一 thread 同时只允许一个活动 turn。运行通道断开不会清除窗口绑定；已提交 turn 的 writer 门禁会保留到权威终态确认，下一次操作会重新连接共享 host。旧版 Codex owner 状态会在加载时丢弃，旧 `type: companion` 配置会迁移为共享 app-server。
+WeClaw 为原生 `codex app-server` 建立稳定 Unix socket，并按上游协议通过 WebSocket-over-UDS 连接；该 socket 不是裸 JSONL 流。默认 `codex_host_mode: auto` 会优先连接或启动官方 standalone 安装提供的 `codex app-server daemon`；未安装 standalone 时保留 WeClaw 自管 Host 兼容路径。之后的微信、飞书或其他 WeClaw 前端复用同一服务。每个窗口独立持久化 workspace/thread 绑定，多个窗口可以绑定同一 thread，但同一 thread 同时只允许一个活动 turn。运行通道断开不会清除窗口绑定；已提交 turn 的 writer 门禁会保留到权威终态确认，下一次操作会重新连接共享 host。旧版 Codex owner 状态会在加载时丢弃，旧 `type: companion` 配置会迁移为共享 app-server；`weclaw companion --agent codex` 会立即拒绝，不能用它启动第二个 Codex writer。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 已停用，因为它们会启动独立 Codex writer。当前版本也不把单独运行的 Codex Desktop 当作共享 host 客户端；若需要本地界面，应由该界面连接同一个 app-server，而不是再启动第二个 app-server。
 
@@ -116,6 +116,8 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 - `/guide`：把暂存消息作为 Codex 当前任务的引导信息；Claude 不支持。
 - `/stop`：停止当前窗口正在运行的任务。
 - `/ps`：查看当前用户运行中的任务。
+
+飞书中暂存第二条消息后会立即出现紧凑操作卡：Codex 提供“作为引导发送”“撤回暂存消息”“停止当前任务”，Claude 因不支持引导而只显示后两项。卡片同时绑定机器人账号、操作者、消息窗口、活动任务和该条暂存消息的 revision；旧卡片不能操作后来任务或替换后的消息。点击结果会直接更新原卡片，不再另发一条命令结果。
 
 Codex 和 Claude 的原生计划、工具、命令与文件事件会先归一为结构化进展；任务卡和 `/ps` 始终读取同一份最新快照。任务进入完成、失败或停止终态后，旧事件和晚到 watcher 不会再覆盖终态。
 
@@ -188,6 +190,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | `/model`、`/reasoning` | 已绑定时查看或切换当前会话配置；未绑定时查看或切换新会话默认值 |
 | `/fast [on|off]` | 查看或切换当前 Codex 会话速度；未绑定时切换新会话默认速度 |
 | `/mode [default|yolo]` | 查看或切换 Agent 授权处理方式；群聊按当前操作者隔离，飞书无参数 `/mode` 会弹出选择卡 |
+| `/approve <短码>`、`/deny <短码>` | 审批按钮不可用时允许或拒绝对应操作；短码与操作者、窗口和有效期绑定 |
 | `/progress [模式]` | 查看进度模式；只有管理员可以修改账号级模式 |
 | `/ps`、`/stop` | 查看或停止当前任务 |
 | `/cancel`、`/guide` | 撤回暂存消息，或引导 Codex 当前任务 |
@@ -211,7 +214,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 <details>
 <summary>Claude 常用命令</summary>
 
-`/cc whoami`、`/cc ls`、`/cc switch <编号|sessionId>`、`/cc new`、`/cc pwd`、`/cc status`、`/cc quota`、`/cc model status|ls|reset`。其中 `/cc status` 统一展示 binding、共享 ClaudeHost 和 writer 状态；`/cc model status` 查看后续新建 Claude 会话的默认配置，`/cc model reset` 清除该默认配置，当前绑定会话请用 `/model`、`/reasoning`。`/cc owner`、`/cc cli` 已停用。
+`/cc whoami`、`/cc ls`、`/cc cd <编号|..>`、`/cc switch <编号|sessionId>`、`/cc new`、`/cc pwd`、`/cc status`、`/cc quota`、`/cc model status|ls|reset`。其中 `/cc cd` 进入工作空间或返回工作空间列表；`/cc status` 统一展示 binding、共享 ClaudeHost 和 writer 状态；`/cc model status` 查看后续新建 Claude 会话的默认配置，`/cc model reset` 清除该默认配置，当前绑定会话请用 `/model`、`/reasoning`。`/cc owner`、`/cc cli` 已停用。
 
 `/cc quota` 复用本机 Claude Code OAuth 登录读取 5 小时、7 天和模型分项额度，且不发送模型请求；WeClaw 会优先兼容 Claude Code 旧版 Keychain/凭据文件并请求其 Anthropic 用量接口，凭据不可读或请求失败时再回退到短生命周期的 Claude 原生 `get_usage` 控制查询。Token 只在内存中发送到固定的 Anthropic 地址，不写日志、不持久化，也不会跟随重定向。相关凭据格式、用量接口和结构化控制能力都不是稳定公开契约，后续 Claude Code 版本可能调整；API key、Bedrock、Vertex 或缺少 profile 权限时只会返回“订阅额度不可用”。
 
@@ -255,7 +258,7 @@ Tenant scopes：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonl
 - Claude：`/cc ls`、`/cc status`、`/cc new`、`/cc quota`
 - 设置：`/model`、`/reasoning`、`/fast`、`/mode`
 
-推荐使用飞书 7.22 及以上版本的悬浮菜单，并将每个菜单项的响应动作配置为“发送文字消息”。应用菜单只保留高频入口；`/help` 在飞书中按“常用与任务、Codex、Claude、设置与进度”分级展示其余命令，管理员还会看到独立的“管理员”分类。
+推荐使用飞书 7.22 及以上版本的悬浮菜单，并将每个菜单项的响应动作配置为“发送文字消息”。应用菜单只保留高频入口；`/guide` 和 `/cancel` 不进入常驻菜单，在消息真实暂存时由上下文操作卡提供，`/help` 仍按“常用与任务、Codex、Claude、设置与进度”分级展示完整命令，管理员还会看到独立的“管理员”分类。
 
 悬浮菜单最多支持 5 个主菜单、每个主菜单 10 个子菜单，上述配置可直接使用；如需兼容最多 3 个主菜单、每个主菜单 5 个子菜单的可切换菜单，请移除“设置”主菜单，通过 `/help` 进入设置命令。机器人菜单仅在单聊中展示，群聊仍需直接发送命令。限制与配置步骤见[飞书官方机器人菜单使用指南](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/bot-v3/bot-customized-menu)。
 
@@ -273,6 +276,8 @@ weclaw doctor
 ```
 
 `weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、白名单、管理员和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
+
+`weclaw doctor` 对 Claude ACP 的成功检查只证明 `initialize` 握手可用，不会探测 `session/list` 或 `session/resume`；真实会话列举和恢复仍以对应命令的运行结果为准。
 
 关键安全规则：
 

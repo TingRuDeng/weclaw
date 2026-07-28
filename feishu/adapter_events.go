@@ -430,7 +430,10 @@ func regularCardActionValue(action parsedCardAction) map[string]string {
 		value["task_card_id"] = action.TaskCard
 	}
 	if action.AgentName != "" {
-		value[modelSettingAgentKey] = action.AgentName
+		value[platform.ChoiceMetadataAgentName] = action.AgentName
+		if action.Kind == "" {
+			value[modelSettingAgentKey] = action.AgentName
+		}
 	}
 	if action.CodexThreadID != "" {
 		value[modelSettingCodexThreadKey] = action.CodexThreadID
@@ -443,6 +446,9 @@ func regularCardActionValue(action parsedCardAction) map[string]string {
 	}
 	if action.NavigationSnapshot != "" {
 		value[platform.ChoiceMetadataNavigationSnapshot] = action.NavigationSnapshot
+	}
+	if action.TaskControlToken != "" {
+		value[platform.ChoiceMetadataTaskControlToken] = action.TaskControlToken
 	}
 	return value
 }
