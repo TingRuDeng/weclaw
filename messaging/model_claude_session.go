@@ -151,7 +151,7 @@ func (h *Handler) currentClaudeSessionSettingRef(route modelAgentRoute, name str
 // renderCurrentClaudeSessionSetting 返回当前 session 已生效的明确反馈。
 func renderCurrentClaudeSessionSetting(model string, effort string) string {
 	if strings.TrimSpace(model) != "" {
-		return wechatCommandText("已将当前 Claude session 模型切换为: "+model, "从下一轮任务开始生效。")
+		return wechatCommandText("已将当前 Claude session 模型切换为: " + model)
 	}
-	return wechatCommandText("已将当前 Claude session 推理强度切换为: "+effort, "从下一轮任务开始生效。")
+	return wechatCommandText("已将当前 Claude session 推理强度切换为: " + effort)
 }

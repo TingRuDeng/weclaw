@@ -133,13 +133,13 @@ func (h *Handler) currentCodexSessionSettingRef(route modelAgentRoute, name stri
 
 func renderCurrentCodexSessionSetting(model string, effort string, serviceTier *string) string {
 	if strings.TrimSpace(model) != "" {
-		return wechatCommandText("已将当前 Codex 会话模型切换为: "+model, "从下一轮任务开始生效。")
+		return wechatCommandText("已将当前 Codex 会话模型切换为: " + model)
 	}
 	if strings.TrimSpace(effort) != "" {
-		return wechatCommandText("已将当前 Codex 会话推理强度切换为: "+effort, "从下一轮任务开始生效。")
+		return wechatCommandText("已将当前 Codex 会话推理强度切换为: " + effort)
 	}
 	if serviceTier != nil {
-		return wechatCommandText("已将当前 Codex 会话速度切换为: "+codexServiceTierLabel(*serviceTier), "从下一轮任务开始生效。")
+		return wechatCommandText("已将当前 Codex 会话速度切换为: " + codexServiceTierLabel(*serviceTier))
 	}
 	return "Codex 会话配置没有可更新字段。"
 }
