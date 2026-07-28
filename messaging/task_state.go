@@ -131,10 +131,6 @@ func (h *Handler) storePendingGuide(key string, pending pendingAgentTask) bool {
 	return true
 }
 
-func (h *Handler) detachPendingGuide(key string, actor string) (string, *activeAgentTask, bool, bool) {
-	return h.detachPendingGuideExpected(key, actor, pendingTaskControlExpectation{})
-}
-
 func (h *Handler) detachPendingGuideExpected(key string, actor string, expectation pendingTaskControlExpectation) (string, *activeAgentTask, bool, bool) {
 	h.tasks.mu.Lock()
 	task := h.tasks.active[key]
@@ -167,10 +163,6 @@ func (h *Handler) detachPendingGuideExpected(key string, actor string, expectati
 	h.tasks.mu.Unlock()
 	cancel()
 	return message, task, true, false
-}
-
-func (h *Handler) clearPendingGuide(key string, actor string) (bool, bool) {
-	return h.clearPendingGuideExpected(key, actor, pendingTaskControlExpectation{})
 }
 
 func (h *Handler) clearPendingGuideExpected(key string, actor string, expectation pendingTaskControlExpectation) (bool, bool) {
