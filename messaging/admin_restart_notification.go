@@ -27,15 +27,15 @@ type adminRestartNotification struct {
 }
 
 // recordAdminRestartNotification 保存重启前的会话路由，供新进程启动后回写完成通知。
-func recordAdminRestartNotification(msg platform.IncomingMessage, stream platform.Stream) (bool, error) {
+func recordAdminRestartNotification(msg platform.IncomingMessage, stream platform.Stream) (adminRestartNotification, bool, error) {
 	notification, ok := newAdminRestartNotification(msg)
 	if !ok {
-		return false, fmt.Errorf("缺少重启完成通知的会话路由")
+		return adminRestartNotification{}, false, fmt.Errorf("缺少重启完成通知的会话路由")
 	}
 	if exporter, ok := stream.(platform.DurableStreamReferenceExporter); ok {
 		reference, err := exporter.DurableReference()
 		if err != nil {
-			return false, fmt.Errorf("导出重启卡片引用: %w", err)
+			return adminRestartNotification{}, false, fmt.Errorf("导出重启卡片引用: %w", err)
 		}
 		if reference.Kind != "" {
 			notification.Stream = &reference
@@ -43,13 +43,13 @@ func recordAdminRestartNotification(msg platform.IncomingMessage, stream platfor
 	}
 	notifications, err := loadAdminRestartNotifications()
 	if err != nil {
-		return false, err
+		return adminRestartNotification{}, false, err
 	}
 	notifications = append(notifications, notification)
 	if err := writeAdminRestartNotifications(notifications); err != nil {
-		return false, err
+		return adminRestartNotification{}, false, err
 	}
-	return notification.Stream != nil, nil
+	return notification, notification.Stream != nil, nil
 }
 
 // DeliverPendingRestartNotifications 在新进程启动后发送上一次远程重启的完成通知。
@@ -149,6 +149,29 @@ func replaceAdminRestartNotifications(notifications []adminRestartNotification) 
 	return nil
 }
 
+func removeAdminRestartNotification(target adminRestartNotification) error {
+	notifications, err := loadAdminRestartNotifications()
+	if err != nil {
+		return err
+	}
+	remaining := make([]adminRestartNotification, 0, len(notifications))
+	for _, notification := range notifications {
+		if sameAdminRestartNotification(notification, target) {
+			continue
+		}
+		remaining = append(remaining, notification)
+	}
+	return replaceAdminRestartNotifications(remaining)
+}
+
+func sameAdminRestartNotification(left adminRestartNotification, right adminRestartNotification) bool {
+	return left.Platform == right.Platform &&
+		left.AccountID == right.AccountID &&
+		left.ChatID == right.ChatID &&
+		left.UserID == right.UserID &&
+		left.CreatedAt.Equal(right.CreatedAt)
+}
+
 // sendAdminRestartCompletion 向原平台会话发送重启完成通知，返回值用于决定是否保留记录重试。
 func sendAdminRestartCompletion(ctx context.Context, registry *platform.Registry, version string, notification adminRestartNotification, outbox *terminalOutbox) bool {
 	reply, ok := registry.ReplierFor(notification.Platform, notification.AccountID, notification.ChatID)
@@ -158,7 +181,7 @@ func sendAdminRestartCompletion(ctx context.Context, registry *platform.Registry
 	}
 	content := adminRestartCompletionText(version)
 	if notification.Stream != nil {
-		if deliverAdminRestartCard(ctx, reply, notification, content, outbox) {
+		if deliverAdminRestartCard(ctx, reply, notification, content, false, outbox) {
 			return true
 		}
 		log.Printf("[admin-restart] failed to update original restart card for %s", notification.UserID)
@@ -171,12 +194,12 @@ func sendAdminRestartCompletion(ctx context.Context, registry *platform.Registry
 	return true
 }
 
-func deliverAdminRestartCard(ctx context.Context, reply platform.Replier, notification adminRestartNotification, content string, outbox *terminalOutbox) bool {
+func deliverAdminRestartCard(ctx context.Context, reply platform.Replier, notification adminRestartNotification, content string, failed bool, outbox *terminalOutbox) bool {
 	preparer, ok := reply.(platform.DurableStreamTerminalPreparer)
 	if !ok {
 		return deliverAdminRestartTextFallback(ctx, reply, notification, content, outbox)
 	}
-	checkpoint, err := preparer.PrepareTerminalFromReference(*notification.Stream, content, false)
+	checkpoint, err := preparer.PrepareTerminalFromReference(*notification.Stream, content, failed)
 	if err != nil || checkpoint.Kind == "" {
 		if err != nil {
 			log.Printf("[admin-restart] failed to prepare original card terminal: %v", err)

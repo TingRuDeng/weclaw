@@ -38,6 +38,90 @@ func TestSaveAndLoadCredentialsUsesSecureFile(t *testing.T) {
 	}
 }
 
+func TestSaveCredentialsRepairsExistingFilePermissions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path, err := CredentialsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"app_id":"old","app_secret":"old-secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveCredentials(Credentials{AppID: "new", AppSecret: "new-secret"}); err != nil {
+		t.Fatalf("SaveCredentials error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("credentials mode=%o, want 600", mode)
+	}
+}
+
+func TestLoadCredentialsRejectsInsecureFilePermissions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path, err := CredentialsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"app_id":"cli_a","app_secret":"secret-a"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadCredentials(); err == nil {
+		t.Fatal("LoadCredentials should reject credentials readable by other users")
+	}
+}
+
+func TestCredentialsRejectSymlinkTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path, err := CredentialsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, "outside.json")
+	original := []byte(`{"app_id":"outside","app_secret":"unchanged"}`)
+	if err := os.WriteFile(target, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadCredentials(); err == nil {
+		t.Fatal("LoadCredentials should reject a symlink credentials path")
+	}
+	if err := SaveCredentials(Credentials{AppID: "cli_a", AppSecret: "secret-a"}); err == nil {
+		t.Fatal("SaveCredentials should reject a symlink credentials path")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(original) {
+		t.Fatalf("symlink target changed: %q", data)
+	}
+}
+
 func TestSaveAndLoadCredentialsForBotUsesIsolatedFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

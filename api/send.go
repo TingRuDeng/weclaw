@@ -27,6 +27,18 @@ type SendRequest struct {
 	MediaURL  string `json:"media_url,omitempty"`
 }
 
+type sendResult struct {
+	textSent  bool
+	mediaSent bool
+}
+
+type partialSendResponse struct {
+	Status    string `json:"status"`
+	TextSent  bool   `json:"text_sent"`
+	MediaSent bool   `json:"media_sent"`
+	Error     string `json:"error"`
+}
+
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -43,7 +55,17 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.sendRequest(r.Context(), reply, req); err != nil {
+	result, err := s.sendRequest(r.Context(), reply, req)
+	if err != nil {
+		if result.textSent || result.mediaSent {
+			writeJSONStatus(w, http.StatusMultiStatus, partialSendResponse{
+				Status:    "partial",
+				TextSent:  result.textSent,
+				MediaSent: result.mediaSent,
+				Error:     err.Error(),
+			})
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -102,28 +124,33 @@ func (s *Server) replierFor(w http.ResponseWriter, req SendRequest) (platform.Re
 	return reply, true
 }
 
-func (s *Server) sendRequest(ctx context.Context, reply platform.Replier, req SendRequest) error {
+func (s *Server) sendRequest(ctx context.Context, reply platform.Replier, req SendRequest) (sendResult, error) {
+	var result sendResult
+	var remoteReply platform.RemoteMediaSender
+	if req.MediaURL != "" {
+		var ok bool
+		remoteReply, ok = reply.(platform.RemoteMediaSender)
+		if !ok {
+			return result, fmt.Errorf("target platform does not support remote media URL sending")
+		}
+	}
 	if req.Text != "" {
 		if err := reply.SendText(ctx, req.Text); err != nil {
-			return fmt.Errorf("send text failed: %w", err)
+			return result, fmt.Errorf("send text failed: %w", err)
 		}
+		result.textSent = true
 		log.Printf("[api] sent text to %s (runes=%d)", req.To, utf8.RuneCountInString(req.Text))
 		s.sendExtractedImages(ctx, reply, req)
 	}
 	if req.MediaURL == "" {
-		return nil
-	}
-	remoteReply, ok := reply.(interface {
-		SendMediaFromURL(context.Context, string) error
-	})
-	if !ok {
-		return fmt.Errorf("target platform does not support remote media URL sending")
+		return result, nil
 	}
 	if err := remoteReply.SendMediaFromURL(ctx, req.MediaURL); err != nil {
-		return fmt.Errorf("send media failed: %w", err)
+		return result, fmt.Errorf("send media failed: %w", err)
 	}
+	result.mediaSent = true
 	log.Printf("[api] sent media to %s", req.To)
-	return nil
+	return result, nil
 }
 
 func (s *Server) sendExtractedImages(ctx context.Context, reply platform.Replier, req SendRequest) {

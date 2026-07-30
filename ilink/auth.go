@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 const (
@@ -137,7 +139,7 @@ func SaveCredentials(creds *Credentials) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := securefile.EnsureDir(dir); err != nil {
 		return fmt.Errorf("create accounts dir: %w", err)
 	}
 
@@ -146,7 +148,7 @@ func SaveCredentials(creds *Credentials) error {
 		return fmt.Errorf("save credentials: empty bot id")
 	}
 	path := filepath.Join(dir, id+".json")
-	if existingData, readErr := os.ReadFile(path); readErr == nil {
+	if existingData, readErr := securefile.ReadForUpdate(path); readErr == nil {
 		var existing Credentials
 		if json.Unmarshal(existingData, &existing) == nil &&
 			strings.TrimSpace(existing.ILinkBotID) != "" &&
@@ -162,7 +164,7 @@ func SaveCredentials(creds *Credentials) error {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := securefile.Write(path, data); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	return nil
@@ -175,11 +177,14 @@ func LoadAllCredentials() ([]*Credentials, error) {
 		return nil, err
 	}
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
+	if err := securefile.ValidateDir(dir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
+		return nil, fmt.Errorf("validate accounts dir: %w", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return nil, fmt.Errorf("read accounts dir: %w", err)
 	}
 
@@ -189,9 +194,12 @@ func LoadAllCredentials() ([]*Credentials, error) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		data, err := securefile.Read(filepath.Join(dir, e.Name()))
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read credentials %q: %w", e.Name(), err)
 		}
 		var creds Credentials
 		if json.Unmarshal(data, &creds) == nil && strings.TrimSpace(creds.BotToken) != "" {

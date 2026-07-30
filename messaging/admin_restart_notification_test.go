@@ -132,6 +132,47 @@ func TestServiceAdminRestartCompletesOriginalStreamingCardAfterRestart(t *testin
 	}
 }
 
+func TestServiceAdminRestartStartFailureFailsPendingCardAndClearsNotification(t *testing.T) {
+	path := useAdminRestartNotificationPath(t)
+	oldExecutable := currentExecutablePathFunc
+	currentExecutablePathFunc = func() (string, error) {
+		return "/bin/echo", nil
+	}
+	oldStart := startDelayedRestartCommandFunc
+	startDelayedRestartCommandFunc = func(string, []string) error {
+		return errors.New("process start rejected")
+	}
+	t.Cleanup(func() {
+		currentExecutablePathFunc = oldExecutable
+		startDelayedRestartCommandFunc = oldStart
+	})
+
+	h := NewHandler(nil, nil)
+	h.SetAdminUsers([]string{"on_admin"})
+	reply := newAdminStreamingCommandTestReplier()
+
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_admin", ChatID: "oc_chat",
+		Text: "/restart --force", Metadata: privateFeishuAdminMetadata("on_admin"),
+	}, reply)
+
+	checkpoint := waitForAdminRestartTerminal(t, reply)
+	var payload struct {
+		Content string `json:"content"`
+		Failed  bool   `json:"failed"`
+	}
+	if err := json.Unmarshal(checkpoint.Payload, &payload); err != nil {
+		t.Fatalf("decode terminal checkpoint: %v", err)
+	}
+	if !payload.Failed || !strings.Contains(payload.Content, "重启进程启动失败") ||
+		!strings.Contains(payload.Content, "process start rejected") {
+		t.Fatalf("terminal payload=%+v, want delayed start failure", payload)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("pending notification should be removed after start failure, stat err=%v", err)
+	}
+}
+
 func TestRestartCardDeliveryFailureMovesCheckpointToTerminalOutbox(t *testing.T) {
 	path := useAdminRestartNotificationPath(t)
 	writeAdminRestartNotificationsForTest(t, path, []adminRestartNotification{{
@@ -233,6 +274,22 @@ func waitForAdminRestartNotifications(t *testing.T, path string, count int) []ad
 		time.Sleep(10 * time.Millisecond)
 	}
 	return readAdminRestartNotifications(t, path)
+}
+
+func waitForAdminRestartTerminal(t *testing.T, reply *adminCommandTestReplier) platform.TerminalCheckpoint {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		reply.mu.Lock()
+		delivered := reply.delivered
+		reply.mu.Unlock()
+		if delivered != nil {
+			return *delivered
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timeout waiting for restart terminal checkpoint")
+	return platform.TerminalCheckpoint{}
 }
 
 func writeAdminRestartNotificationsForTest(t *testing.T, path string, notifications []adminRestartNotification) {
