@@ -15,8 +15,34 @@ import (
 const adminCommandDeniedText = "当前账号未授权执行 WeClaw 管理命令，请联系管理员配置 admin_users。"
 const adminCommandTimeout = 5 * time.Minute
 const adminRestartDelay = 1200 * time.Millisecond
+const adminRestartFailureNotifyTimeout = 30 * time.Second
 
 var currentExecutablePathFunc = os.Executable
+var startDelayedRestartCommandFunc = func(exe string, args []string) error {
+	time.Sleep(adminRestartDelay)
+	return buildRestartCommand(exe, args).Start()
+}
+
+type restartStartObserverContextKey struct{}
+
+type restartStartObserver struct {
+	armed   bool
+	proceed chan bool
+	result  chan error
+}
+
+func newRestartStartObserver() *restartStartObserver {
+	return &restartStartObserver{
+		proceed: make(chan bool, 1),
+		result:  make(chan error, 1),
+	}
+}
+
+func (o *restartStartObserver) release(proceed bool) {
+	if o != nil && o.armed {
+		o.proceed <- proceed
+	}
+}
 
 // ServiceAdminCommandExecutor 执行经过白名单校验的 WeClaw 管理命令。
 type ServiceAdminCommandExecutor func(ctx context.Context, command string, args []string) (string, error)
@@ -153,6 +179,11 @@ func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command s
 	defer h.serviceAdminMu.Unlock()
 	runCtx, cancel := context.WithTimeout(context.Background(), h.adminTimeout)
 	defer cancel()
+	var restartObserver *restartStartObserver
+	if command == "restart" {
+		restartObserver = newRestartStartObserver()
+		runCtx = context.WithValue(runCtx, restartStartObserverContextKey{}, restartObserver)
+	}
 	executor := h.currentServiceAdminCommandExecutor()
 	if executor == nil {
 		h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, "管理命令执行器未配置，暂未执行。", true)
@@ -160,17 +191,45 @@ func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command s
 	}
 	output, err := executor(runCtx, command, args)
 	if command == "restart" && err == nil {
-		cardPending, notifyErr := recordAdminRestartNotification(msg, statusStream)
+		notification, cardPending, notifyErr := recordAdminRestartNotification(msg, statusStream)
 		if notifyErr != nil {
+			restartObserver.release(false)
 			log.Printf("[admin-restart] failed to persist completion notification: %v", notifyErr)
 			h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, formatServiceAdminRestartNotificationUnavailable(output), true)
 			return
+		}
+		if restartObserver != nil && restartObserver.armed {
+			go h.observeDelayedRestartStart(restartObserver, notification, cardPending, reply, userID)
+			restartObserver.release(true)
 		}
 		if cardPending {
 			return
 		}
 	}
+	if err != nil {
+		restartObserver.release(false)
+	}
 	h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, formatServiceAdminCommandReply(command, output, err), err != nil)
+}
+
+func (h *Handler) observeDelayedRestartStart(observer *restartStartObserver, notification adminRestartNotification, cardPending bool, reply platform.Replier, userID string) {
+	err := <-observer.result
+	if err == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), adminRestartFailureNotifyTimeout)
+	defer cancel()
+	if removeErr := removeAdminRestartNotification(notification); removeErr != nil {
+		log.Printf("[admin-restart] failed to remove notification after delayed start failure: %v", removeErr)
+	}
+	content := fmt.Sprintf("WeClaw 重启进程启动失败，当前服务仍在运行。\n错误：%v", err)
+	if cardPending {
+		if !deliverAdminRestartCard(ctx, reply, notification, content, true, h.currentTerminalOutbox()) {
+			log.Printf("[admin-restart] failed to deliver delayed start failure to %s", userID)
+		}
+		return
+	}
+	sendPlatformText(ctx, reply, userID, content)
 }
 
 func (h *Handler) finishServiceAdminCommand(ctx context.Context, reply platform.Replier, userID string, stream platform.Stream, content string, failed bool) {
@@ -234,7 +293,7 @@ func (h *Handler) activeTaskCount() int {
 
 func defaultServiceAdminCommandExecutor(ctx context.Context, command string, args []string) (string, error) {
 	if command == "restart" {
-		return scheduleRestartCommand(args)
+		return scheduleRestartCommand(ctx, args)
 	}
 	cliArgs := append([]string{command}, args...)
 	cmd := exec.CommandContext(ctx, currentExecutablePath(), cliArgs...)
@@ -243,16 +302,25 @@ func defaultServiceAdminCommandExecutor(ctx context.Context, command string, arg
 }
 
 // scheduleRestartCommand 先校验可执行文件，再延迟触发 restart，确保回复能暴露启动前错误。
-func scheduleRestartCommand(args []string) (string, error) {
+func scheduleRestartCommand(ctx context.Context, args []string) (string, error) {
 	exe, err := resolveRestartExecutable(currentExecutablePath())
 	if err != nil {
 		return "", err
 	}
+	observer, _ := ctx.Value(restartStartObserverContextKey{}).(*restartStartObserver)
+	if observer != nil {
+		observer.armed = true
+	}
 	go func() {
-		time.Sleep(adminRestartDelay)
-		cmd := buildRestartCommand(exe, args)
-		if err := cmd.Start(); err != nil {
+		if observer != nil && !<-observer.proceed {
+			return
+		}
+		err := startDelayedRestartCommandFunc(exe, args)
+		if err != nil {
 			log.Printf("[admin] failed to start delayed restart: %v", err)
+		}
+		if observer != nil {
+			observer.result <- err
 		}
 	}()
 	return "已触发 weclaw restart；服务会在消息发出后尝试重启。", nil

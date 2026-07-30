@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	weclawconfig "github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 const (
@@ -194,21 +195,18 @@ func credentialsFromEnv() (CredentialRecord, bool, error) {
 }
 
 func writeCredentialsFile(path string, creds Credentials) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create feishu credentials dir: %w", err)
-	}
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal feishu credentials: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := securefile.Write(path, data); err != nil {
 		return fmt.Errorf("write feishu credentials: %w", err)
 	}
 	return nil
 }
 
 func readCredentialsFile(path string) (CredentialRecord, error) {
-	data, err := os.ReadFile(path)
+	data, err := securefile.Read(path)
 	if err != nil {
 		return CredentialRecord{}, fmt.Errorf("read feishu credentials: %w", err)
 	}

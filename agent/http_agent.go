@@ -11,7 +11,11 @@ import (
 	"time"
 )
 
-const maxHTTPAgentResponseBytes = 8 * 1024 * 1024
+const (
+	maxHTTPAgentResponseBytes        = 8 * 1024 * 1024
+	defaultHTTPAgentMaxConversations = 256
+	defaultHTTPAgentHistoryTTL       = 24 * time.Hour
+)
 
 // ChatMessage represents a single message in a conversation.
 type ChatMessage struct {
@@ -19,17 +23,25 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+type httpConversationHistory struct {
+	messages []ChatMessage
+	lastUsed time.Time
+}
+
 // HTTPAgent is an OpenAI-compatible chat completions API client.
 type HTTPAgent struct {
-	endpoint     string
-	apiKey       string
-	headers      map[string]string
-	model        string
-	systemPrompt string
-	httpClient   *http.Client
-	mu           sync.Mutex
-	history      map[string][]ChatMessage // conversationID -> messages
-	maxHistory   int
+	endpoint         string
+	apiKey           string
+	headers          map[string]string
+	model            string
+	systemPrompt     string
+	httpClient       *http.Client
+	mu               sync.Mutex
+	history          map[string]httpConversationHistory
+	maxHistory       int
+	maxConversations int
+	historyTTL       time.Duration
+	now              func() time.Time
 }
 
 // HTTPAgentConfig holds configuration for the HTTP agent.
@@ -54,14 +66,17 @@ func NewHTTPAgent(cfg HTTPAgentConfig) (*HTTPAgent, error) {
 		cfg.Model = "gpt-4o-mini"
 	}
 	return &HTTPAgent{
-		endpoint:     cfg.Endpoint,
-		apiKey:       cfg.APIKey,
-		headers:      cfg.Headers,
-		model:        cfg.Model,
-		systemPrompt: cfg.SystemPrompt,
-		httpClient:   &http.Client{Timeout: 120 * time.Second},
-		history:      make(map[string][]ChatMessage),
-		maxHistory:   cfg.MaxHistory,
+		endpoint:         cfg.Endpoint,
+		apiKey:           cfg.APIKey,
+		headers:          cfg.Headers,
+		model:            cfg.Model,
+		systemPrompt:     cfg.SystemPrompt,
+		httpClient:       &http.Client{Timeout: 120 * time.Second},
+		history:          make(map[string]httpConversationHistory),
+		maxHistory:       cfg.MaxHistory,
+		maxConversations: defaultHTTPAgentMaxConversations,
+		historyTTL:       defaultHTTPAgentHistoryTTL,
+		now:              time.Now,
 	}, nil
 }
 
@@ -90,7 +105,9 @@ func (a *HTTPAgent) ResetSession(_ context.Context, conversationID string) (stri
 // Chat sends a message to the OpenAI-compatible API and returns the response.
 func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
 	a.mu.Lock()
-	messages := a.buildMessages(conversationID, message)
+	now := a.now()
+	a.expireIdleHistoryLocked(now)
+	messages := a.buildMessages(conversationID, message, now)
 	a.mu.Unlock()
 
 	reqBody := map[string]interface{}{
@@ -149,14 +166,20 @@ func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message str
 
 	// Save to history
 	a.mu.Lock()
-	a.history[conversationID] = append(a.history[conversationID],
+	now = a.now()
+	a.expireIdleHistoryLocked(now)
+	history := a.history[conversationID]
+	history.messages = append(history.messages,
 		ChatMessage{Role: "user", Content: message},
 		ChatMessage{Role: "assistant", Content: reply},
 	)
 	// Trim history
-	if len(a.history[conversationID]) > a.maxHistory*2 {
-		a.history[conversationID] = a.history[conversationID][len(a.history[conversationID])-a.maxHistory*2:]
+	if len(history.messages) > a.maxHistory*2 {
+		history.messages = history.messages[len(history.messages)-a.maxHistory*2:]
 	}
+	history.lastUsed = now
+	a.history[conversationID] = history
+	a.evictOverflowHistoryLocked(conversationID)
 	a.mu.Unlock()
 
 	return reply, nil
@@ -177,14 +200,45 @@ func readHTTPAgentBody(resp *http.Response, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
-func (a *HTTPAgent) buildMessages(conversationID string, message string) []ChatMessage {
+func (a *HTTPAgent) buildMessages(conversationID string, message string, now time.Time) []ChatMessage {
 	var messages []ChatMessage
 	if a.systemPrompt != "" {
 		messages = append(messages, ChatMessage{Role: "system", Content: a.systemPrompt})
 	}
 	if hist, ok := a.history[conversationID]; ok {
-		messages = append(messages, hist...)
+		hist.lastUsed = now
+		a.history[conversationID] = hist
+		messages = append(messages, hist.messages...)
 	}
 	messages = append(messages, ChatMessage{Role: "user", Content: message})
 	return messages
+}
+
+func (a *HTTPAgent) expireIdleHistoryLocked(now time.Time) {
+	for conversationID, history := range a.history {
+		if !now.Before(history.lastUsed.Add(a.historyTTL)) {
+			delete(a.history, conversationID)
+		}
+	}
+}
+
+func (a *HTTPAgent) evictOverflowHistoryLocked(preserveConversationID string) {
+	for len(a.history) > a.maxConversations {
+		oldestID := ""
+		var oldestTime time.Time
+		for conversationID, history := range a.history {
+			if conversationID == preserveConversationID && len(a.history) > 1 {
+				continue
+			}
+			if oldestID == "" || history.lastUsed.Before(oldestTime) ||
+				history.lastUsed.Equal(oldestTime) && conversationID < oldestID {
+				oldestID = conversationID
+				oldestTime = history.lastUsed
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		delete(a.history, oldestID)
+	}
 }

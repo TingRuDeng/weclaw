@@ -193,6 +193,40 @@ func TestHandleSendUsesRegistryTarget(t *testing.T) {
 	}
 }
 
+func TestHandleSendReportsPartialSuccessWhenMediaFailsAfterText(t *testing.T) {
+	reply := &recordingReplier{mediaErr: fmt.Errorf("remote media unavailable")}
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
+		Access:   platform.NewAccessControl([]string{"ignored"}),
+	}})
+	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(
+		`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"hi","media_url":"https://example.com/image.png"}`,
+	))
+	req.Host = "127.0.0.1:18011"
+	rec := httptest.NewRecorder()
+	server.handleSend(rec, req)
+
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("status=%d, body=%q, want %d", rec.Code, rec.Body.String(), http.StatusMultiStatus)
+	}
+	var response struct {
+		Status    string `json:"status"`
+		TextSent  bool   `json:"text_sent"`
+		MediaSent bool   `json:"media_sent"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "partial" || !response.TextSent || response.MediaSent {
+		t.Fatalf("response=%+v, want partial text-only success", response)
+	}
+	if len(reply.texts) != 1 || len(reply.mediaURLs) != 1 {
+		t.Fatalf("reply=%#v, want one text and one media attempt", reply)
+	}
+}
+
 func TestHandleSendLogDoesNotContainMessageBody(t *testing.T) {
 	reply := &recordingReplier{}
 	registry := platform.NewRegistry([]platform.RegistryEntry{{
@@ -310,8 +344,10 @@ func (p *outboundPlatform) NewReplier(chatID string) platform.Replier {
 }
 
 type recordingReplier struct {
-	to    string
-	texts []string
+	to        string
+	texts     []string
+	mediaURLs []string
+	mediaErr  error
 }
 
 func (r *recordingReplier) Capabilities() platform.Capabilities {
@@ -321,6 +357,11 @@ func (r *recordingReplier) Capabilities() platform.Capabilities {
 func (r *recordingReplier) SendText(ctx context.Context, text string) error {
 	r.texts = append(r.texts, text)
 	return nil
+}
+
+func (r *recordingReplier) SendMediaFromURL(ctx context.Context, mediaURL string) error {
+	r.mediaURLs = append(r.mediaURLs, mediaURL)
+	return r.mediaErr
 }
 
 func (r *recordingReplier) SendImage(ctx context.Context, localPath string) error {
