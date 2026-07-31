@@ -34,7 +34,7 @@ func TestMarshalRPCNotificationOmitsIDAndEmptyParams(t *testing.T) {
 	}
 }
 
-func TestUnmarshalRPCMessageClassifiesResponseAndNotification(t *testing.T) {
+func TestUnmarshalRPCMessageClassifiesResponseNotificationAndRequest(t *testing.T) {
 	tests := []struct {
 		name string
 		line string
@@ -51,9 +51,14 @@ func TestUnmarshalRPCMessageClassifiesResponseAndNotification(t *testing.T) {
 			kind: rpcMessageNotification,
 		},
 		{
-			name: "server request remains notification path",
+			name: "approval server request",
 			line: `{"jsonrpc":"2.0","id":4,"method":"session/request_permission","params":{}}`,
-			kind: rpcMessageNotification,
+			kind: rpcMessageRequest,
+		},
+		{
+			name: "dynamic tool server request",
+			line: `{"jsonrpc":"2.0","id":5,"method":"item/tool/call","params":{"tool":"list_projects"}}`,
+			kind: rpcMessageRequest,
 		},
 	}
 	for _, test := range tests {

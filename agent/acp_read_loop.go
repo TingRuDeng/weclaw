@@ -86,7 +86,7 @@ func (a *ACPAgent) handleCurrentACPWireLine(scanner *bufio.Scanner, epoch uint64
 	return true
 }
 
-// handleACPWireLine 解析单条 NDJSON，并区分请求响应与主动通知。
+// handleACPWireLine 解析单条 NDJSON，并区分响应、服务端请求与主动通知。
 func (a *ACPAgent) handleACPWireLine(line string) {
 	if line == "" {
 		return
@@ -103,6 +103,12 @@ func (a *ACPAgent) handleACPWireLine(line string) {
 	a.recordProtocolTrace("inbound", epoch, msg.Sequence, observability.TraceContext{}, []byte(line))
 	if kind == rpcMessageResponse {
 		a.dispatchACPResponse(&msg)
+		return
+	}
+	if kind == rpcMessageRequest {
+		if err := a.dispatchACPServerRequest(msg, line); err != nil {
+			log.Printf("[acp] failed to respond to server request %q: %v", msg.Method, err)
+		}
 		return
 	}
 	if a.dispatchACPNotification(msg, line) {
