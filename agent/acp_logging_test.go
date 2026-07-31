@@ -63,6 +63,49 @@ func TestShouldLogUnhandledMethodRateLimitsByMethod(t *testing.T) {
 	}
 }
 
+func TestInactiveThreadLoggingSuppressesNonControlNoise(t *testing.T) {
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.turnCh["active-thread"] = make(chan *codexTurnEvent, 1)
+	for index := 0; index < 32; index++ {
+		if a.dispatchToTurnCh("inactive-thread", &codexTurnEvent{Delta: "noise"}) {
+			t.Fatal("inactive thread delta was dispatched")
+		}
+		if a.dispatchToTurnCh("inactive-thread", &codexTurnEvent{Kind: "progress", Text: "running"}) {
+			t.Fatal("inactive thread progress was dispatched")
+		}
+	}
+	if got := strings.Count(logs.String(), "dropping turn event for inactive thread"); got != 0 {
+		t.Fatalf("non-control inactive events produced %d log lines, want 0", got)
+	}
+
+	controlEvents := []struct {
+		name  string
+		event *codexTurnEvent
+	}{
+		{name: "started", event: &codexTurnEvent{Kind: "started"}},
+		{name: "completed", event: &codexTurnEvent{Kind: "completed"}},
+		{name: "interrupted", event: &codexTurnEvent{Kind: "interrupted"}},
+		{name: "error", event: &codexTurnEvent{Kind: "error"}},
+		{name: "approval", event: &codexTurnEvent{Approval: &codexApprovalRequest{}}},
+		{name: "user input", event: &codexTurnEvent{UserInput: &codexUserInputEvent{}}},
+	}
+	for _, testCase := range controlEvents {
+		logs.Reset()
+		if a.dispatchToTurnCh("inactive-thread", testCase.event) {
+			t.Fatalf("inactive thread %s event was dispatched", testCase.name)
+		}
+		got := logs.String()
+		if count := strings.Count(got, "dropping turn event for inactive thread"); count != 1 {
+			t.Fatalf("inactive %s event produced %d log lines, want 1: %s", testCase.name, count, got)
+		}
+	}
+}
+
 func TestCodexTurnMetricsRecordsFirstEventOnce(t *testing.T) {
 	started := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
 	metrics := newCodexTurnMetrics(started)
