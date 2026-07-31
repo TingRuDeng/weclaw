@@ -451,6 +451,34 @@ func TestFeishuStreamCompleteUpdatesDoneAndDestroys(t *testing.T) {
 	}
 }
 
+func TestFeishuStreamStopUpdatesNeutralStoppedCard(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	stream := &feishuStream{cardKit: cardKit, cardID: "card-1", sequence: 4, throttle: cardkitThrottle, now: time.Now}
+
+	if err := stream.Stop(context.Background(), "任务已按请求停止。"); err != nil {
+		t.Fatalf("Stop error: %v", err)
+	}
+	if len(cardKit.updateCards) != 1 {
+		t.Fatalf("update cards=%d, want one stopped terminal update", len(cardKit.updateCards))
+	}
+	card := decodeCardJSON(t, cardKit.updateCards[0])
+	header := card["header"].(map[string]any)
+	if header["template"] != "grey" {
+		t.Fatalf("template=%v, want grey", header["template"])
+	}
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if got := elements[0].(map[string]any)["content"]; got != "**已停止**" {
+		t.Fatalf("status=%q, want 已停止", got)
+	}
+	if got := elements[1].(map[string]any)["content"]; got != "任务已按请求停止。" {
+		t.Fatalf("content=%q, want stopped explanation", got)
+	}
+	if strings.Contains(cardKit.updateCards[0], "执行失败") {
+		t.Fatalf("stopped card must not contain failure wording: %s", cardKit.updateCards[0])
+	}
+}
+
 func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	registry := newTaskCardRegistry()

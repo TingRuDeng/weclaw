@@ -98,3 +98,12 @@ func (s *serializedStream) Fail(ctx context.Context, content string) error {
 	defer s.mu.Unlock()
 	return s.inner.Fail(ctx, content)
 }
+
+func (s *serializedStream) Stop(ctx context.Context, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if stoppable, ok := s.inner.(platform.StoppableStream); ok {
+		return stoppable.Stop(ctx, content)
+	}
+	return s.inner.Complete(ctx, content)
+}

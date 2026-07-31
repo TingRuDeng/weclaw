@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -489,6 +490,83 @@ func TestNativeStreamTerminalNotificationsOnlyForFailureOrStop(t *testing.T) {
 				t.Fatalf("texts = %#v", reply.Texts)
 			}
 		})
+	}
+}
+
+func TestRequestedStopRendersStoppedTerminalInsteadOfFailure(t *testing.T) {
+	h := NewHandler(nil, nil)
+	task, taskCtx, started := h.beginActiveTask(context.Background(), "conversation-1", activeTaskMeta{
+		owner: "user-1", agentName: "codex",
+	})
+	if !started {
+		t.Fatal("failed to register active task")
+	}
+	task.mu.Lock()
+	task.phase = codexTaskStopping
+	task.mu.Unlock()
+
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, StreamCompletionNotification: true,
+	})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	lifecycle := h.startAgentTaskLifecycle(agentTaskLifecycleOptions{
+		taskCtx: taskCtx, replyCtx: context.Background(), reply: reply,
+		task: task, cancel: func() {}, executionKey: "conversation-1",
+		userID: "user-1", agentName: "codex", message: "运行任务", progressConfig: cfg,
+	})
+
+	h.finishAgentTaskLifecycle(lifecycle, "", fmt.Errorf("%w: interrupted", errCodexRolloutAborted))
+
+	if reply.Stream.Failed != "" {
+		t.Fatalf("stopped task rendered as failure: %q", reply.Stream.Failed)
+	}
+	if reply.Stream.Completed != "任务已按请求停止。" {
+		t.Fatalf("completed=%q, want stopped terminal content", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 1 || reply.Texts[0] != "任务已停止，请查看上方卡片。" {
+		t.Fatalf("texts=%#v, want explicit stopped notification", reply.Texts)
+	}
+	task.mu.Lock()
+	terminalState := task.view.terminalState
+	task.mu.Unlock()
+	if terminalState != "stopped" {
+		t.Fatalf("terminal state=%q, want stopped", terminalState)
+	}
+}
+
+func TestAbortWithoutStopRequestStillRendersFailure(t *testing.T) {
+	h := NewHandler(nil, nil)
+	task, taskCtx, started := h.beginActiveTask(context.Background(), "conversation-1", activeTaskMeta{
+		owner: "user-1", agentName: "codex",
+	})
+	if !started {
+		t.Fatal("failed to register active task")
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, StreamCompletionNotification: true,
+	})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	lifecycle := h.startAgentTaskLifecycle(agentTaskLifecycleOptions{
+		taskCtx: taskCtx, replyCtx: context.Background(), reply: reply,
+		task: task, cancel: func() {}, executionKey: "conversation-1",
+		userID: "user-1", agentName: "codex", message: "运行任务", progressConfig: cfg,
+	})
+
+	h.finishAgentTaskLifecycle(lifecycle, "", fmt.Errorf("%w: interrupted", errCodexRolloutAborted))
+
+	if !strings.Contains(reply.Stream.Failed, "interrupted") || reply.Stream.Completed != "" {
+		t.Fatalf("failed=%q completed=%q, abort without stop must remain failure", reply.Stream.Failed, reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 1 || reply.Texts[0] != "任务执行失败，请查看上方卡片。" {
+		t.Fatalf("texts=%#v, want failure notification", reply.Texts)
+	}
+	task.mu.Lock()
+	terminalState := task.view.terminalState
+	task.mu.Unlock()
+	if terminalState != "failed" {
+		t.Fatalf("terminal state=%q, want failed", terminalState)
 	}
 }
 

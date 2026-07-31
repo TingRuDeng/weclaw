@@ -33,6 +33,7 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 		{cardStatusStreaming, "blue", "**生成中**"},
 		{cardStatusDone, "green", ""},
 		{cardStatusError, "red", "**执行失败**"},
+		{"stopped", "grey", "**已停止**"},
 	}
 	for _, tt := range cases {
 		raw, err := buildCardV2(cardOptions{Status: tt.status})

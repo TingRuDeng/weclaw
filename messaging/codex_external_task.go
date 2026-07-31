@@ -225,6 +225,11 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 			result.Err = context.Canceled
 		}
 	}
+	if runtime.task.stoppedByRequest(result.Err) {
+		result.Stopped = true
+		result.Failed = false
+		result.Final = ""
+	}
 	if !result.Terminal {
 		h.recordTraceStage(trace, "task.observer_disconnected", "unknown", "observer ended without authoritative terminal")
 		_ = finishProgress("", false)
@@ -238,6 +243,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 				result.Final = ""
 				result.Err = reconcileErr
 				result.Failed = true
+				result.Stopped = false
 			}
 		}
 	}
@@ -247,7 +253,10 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		return
 	}
 	reply := renderFinalSuccess("", result.Final)
-	if result.Failed {
+	if result.Stopped {
+		reply = renderFinalStopped("")
+		h.recordTraceStage(trace, "task.stopped", "stopped", "shared Codex task stopped by user request")
+	} else if result.Failed {
 		reply = renderFinalFailure("", result.Err)
 		summary := "shared Codex task failed"
 		if result.Err != nil {
@@ -263,10 +272,15 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 				ctx: runtime.opts.ctx, replyWriter: runtime.opts.reply,
 				userID: runtime.opts.actorUserID, agentName: runtime.opts.agentName, reply: reply, trace: trace,
 			},
-			failed: result.Failed, finish: finishProgress, progress: progressSession,
+			failed: result.Failed, stopped: result.Stopped,
+			finish: finishProgress, progress: progressSession,
 		})
 	} else {
-		_ = finishProgress("", false)
+		if result.Stopped && progressSession != nil {
+			_ = progressSession.stopWithTerminal("", false, true)
+		} else {
+			_ = finishProgress("", false)
+		}
 	}
 	pending, hasPending := h.finishClaimedActiveTask(runtime.opts.conversationID, runtime.task)
 	if hasPending {
@@ -291,7 +305,9 @@ func (h *Handler) reconcileExternalCodexTerminal(runtime externalCodexTaskRuntim
 	state.LastTurnStatus = "completed"
 	state.WaitingOnApproval = false
 	state.WaitingOnUserInput = false
-	if result.Failed {
+	if result.Stopped {
+		state.LastTurnStatus = "interrupted"
+	} else if result.Failed {
 		state.LastTurnStatus = "failed"
 	}
 	if strings.TrimSpace(result.Final) != "" {

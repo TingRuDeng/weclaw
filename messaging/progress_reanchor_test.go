@@ -220,7 +220,7 @@ func TestProgressSessionDurableTerminalUsesReanchoredStream(t *testing.T) {
 	if moved, err := session.reanchor(context.Background(), newReply, "最新进展"); err != nil || !moved {
 		t.Fatalf("reanchor moved=%t err=%v", moved, err)
 	}
-	prepared, err := session.prepareDurableTerminal(newReply, "最终结果", false)
+	prepared, err := session.prepareDurableTerminal(newReply, "最终结果", false, false)
 	if err != nil || prepared.checkpoint == nil || prepared.checkpoint.Kind != "reanchor.test.terminal" {
 		t.Fatalf("prepared=%#v err=%v", prepared, err)
 	}

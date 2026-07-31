@@ -149,8 +149,12 @@ func (s *progressSession) onProgress(delta string) {
 }
 
 func (s *progressSession) stopWithFinal(finalText string, failed bool) bool {
+	return s.stopWithTerminal(finalText, failed, false)
+}
+
+func (s *progressSession) stopWithTerminal(finalText string, failed bool, stopped bool) bool {
 	parentCanceled := s.stopBackground()
-	return s.finishStream(parentCanceled, finalText, failed)
+	return s.finishStream(parentCanceled, finalText, failed, stopped)
 }
 
 func (s *progressSession) stopBackground() bool {
@@ -197,11 +201,12 @@ func (s *progressSession) hasDurableTerminalStream() bool {
 	return ok
 }
 
-func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, finalText string, failed bool) (preparedProgressTerminal, error) {
+func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, finalText string, failed bool, stopped bool) (preparedProgressTerminal, error) {
 	if s == nil {
 		return preparedProgressTerminal{}, nil
 	}
 	parentCanceled := s.stopBackground()
+	stopped = stopped || parentCanceled
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	stream := s.stream
@@ -216,26 +221,43 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 	if currentReply == nil {
 		currentReply = replyWriter
 	}
-	content, terminalFailed, consumed := progressTerminalArguments(currentReply, parentCanceled, finalText, failed)
+	content, terminalFailed, consumed := progressTerminalArguments(currentReply, parentCanceled, finalText, failed, stopped)
 	s.terminalClaimed = true
 	s.finished = true
-	checkpoint, err := durable.PrepareTerminal(content, terminalFailed)
+	var checkpoint platform.TerminalCheckpoint
+	var err error
+	if stateful, ok := stream.(platform.StatefulDurableTerminalStream); ok {
+		state := platform.StreamTerminalCompleted
+		switch {
+		case stopped:
+			state = platform.StreamTerminalStopped
+		case terminalFailed:
+			state = platform.StreamTerminalFailed
+		}
+		checkpoint, err = stateful.PrepareTerminalWithState(content, state)
+	} else {
+		checkpoint, err = durable.PrepareTerminal(content, terminalFailed)
+	}
 	if err != nil {
 		return preparedProgressTerminal{}, err
 	}
 	prepared := preparedProgressTerminal{
 		checkpoint:   &checkpoint,
 		consumed:     consumed,
-		notification: renderStreamTerminalNotification(parentCanceled, failed, finalText),
+		notification: renderStreamTerminalNotification(parentCanceled, failed, stopped, finalText),
 		reply:        currentReply,
 	}
 	return prepared, nil
 }
 
-func progressTerminalArguments(replyWriter platform.Replier, parentCanceled bool, finalText string, failed bool) (string, bool, bool) {
-	terminalFailed := parentCanceled || failed
+func progressTerminalArguments(replyWriter platform.Replier, parentCanceled bool, finalText string, failed bool, stopped bool) (string, bool, bool) {
+	stopped = stopped || parentCanceled
+	terminalFailed := failed && !stopped
 	if finalText == progressStatusOnlyComplete {
 		return "", terminalFailed, false
+	}
+	if stopped {
+		return firstNonBlank(finalText, "任务已按请求停止。"), false, strings.TrimSpace(finalText) != ""
 	}
 	if shouldKeepFinalReplyOutsideStream(replyWriter, finalText) {
 		if failed {
@@ -245,9 +267,7 @@ func progressTerminalArguments(replyWriter platform.Replier, parentCanceled bool
 	}
 	if !canConsumeFinalReplyInStream(finalText) {
 		fallback := progressDefaultCompletion
-		if parentCanceled {
-			fallback = "任务已停止。"
-		} else if failed {
+		if failed {
 			fallback = "任务执行失败。"
 		}
 		return fallback, terminalFailed, false
@@ -519,7 +539,7 @@ func (s *progressSession) cancelTyping() {
 	}
 }
 
-func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool) bool {
+func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool, stopped bool) bool {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	stream := s.stream
@@ -530,10 +550,16 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 	s.finished = true
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	stopped = stopped || parentCanceled
 	var err error
 	switch {
-	case parentCanceled:
-		err = stream.Fail(ctx, firstNonBlank(finalText, "任务已停止。"))
+	case stopped:
+		content := firstNonBlank(finalText, "任务已按请求停止。")
+		if stoppable, ok := stream.(platform.StoppableStream); ok {
+			err = stoppable.Stop(ctx, content)
+		} else {
+			err = stream.Complete(ctx, content)
+		}
 	case failed:
 		err = stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
 	case finalText == progressStatusOnlyComplete:
@@ -547,7 +573,7 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 		log.Printf("[handler] failed to finish progress stream: %v", err)
 		return false
 	}
-	notification := renderStreamTerminalNotification(parentCanceled, failed, finalText)
+	notification := renderStreamTerminalNotification(parentCanceled, failed, stopped, finalText)
 	if notification != "" && s.reply.Capabilities().StreamCompletionNotification {
 		if notifyErr := s.reply.SendText(ctx, notification); notifyErr != nil {
 			log.Printf("[handler] failed to send stream terminal notification: %v", notifyErr)

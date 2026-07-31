@@ -86,7 +86,12 @@ func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply s
 	defer lifecycle.opts.task.detachProgressSession(lifecycle.progress)
 	lifecycle.opts.task.closeProgress()
 	trace := lifecycle.opts.task.traceSnapshot()
-	if err != nil {
+	stopped := lifecycle.opts.task.stoppedByRequest(err)
+	if stopped {
+		lifecycle.opts.task.recordTerminalView(time.Now(), "stopped")
+		reply = renderFinalStopped(lifecycle.opts.replyPrefix)
+		h.recordTraceStage(trace, "task.stopped", "stopped", "task stopped by user request")
+	} else if err != nil {
 		lifecycle.opts.task.recordTerminalView(time.Now(), "failed")
 		reply = renderFinalFailure(lifecycle.opts.replyPrefix, err)
 		h.recordTraceStage(trace, "task.failed", "failed", err.Error())
@@ -97,7 +102,11 @@ func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply s
 	}
 	if !lifecycle.opts.task.shouldSendFinal() {
 		h.recordTraceStage(trace, "task.delivery_suppressed", "detached", "final reply suppressed")
-		_ = lifecycle.finish("", false)
+		if stopped && lifecycle.progress != nil {
+			_ = lifecycle.progress.stopWithTerminal("", false, true)
+		} else {
+			_ = lifecycle.finish("", false)
+		}
 		return
 	}
 	h.finishAndSendProgressReply(progressReplyDelivery{
@@ -106,7 +115,8 @@ func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply s
 			userID: lifecycle.opts.userID, agentName: lifecycle.opts.agentName, reply: reply,
 			trace: trace,
 		},
-		failed: err != nil, finish: lifecycle.finish, progress: lifecycle.progress,
+		failed: err != nil && !stopped, stopped: stopped,
+		finish: lifecycle.finish, progress: lifecycle.progress,
 	})
 }
 

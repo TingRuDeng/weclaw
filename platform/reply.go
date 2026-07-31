@@ -81,6 +81,15 @@ type TerminalCheckpoint struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// StreamTerminalState 区分完成、失败和用户主动停止，避免 adapter 把停止渲染成错误。
+type StreamTerminalState string
+
+const (
+	StreamTerminalCompleted StreamTerminalState = "completed"
+	StreamTerminalFailed    StreamTerminalState = "failed"
+	StreamTerminalStopped   StreamTerminalState = "stopped"
+)
+
 // DurableStreamReference 是可跨进程恢复同一张流式卡片的 adapter 自描述引用。
 // 引用只保存平台卡片定位和单调序列，不包含平台凭据。
 type DurableStreamReference struct {
@@ -103,6 +112,13 @@ type DurableTerminalStream interface {
 	PrepareTerminal(finalContent string, failed bool) (TerminalCheckpoint, error)
 }
 
+// StatefulDurableTerminalStream 为支持独立停止样式的 adapter 提供三态终态操作。
+// DurableTerminalStream 保留为兼容降级；不支持三态的平台把 stopped 当作非失败完成。
+type StatefulDurableTerminalStream interface {
+	DurableTerminalStream
+	PrepareTerminalWithState(finalContent string, state StreamTerminalState) (TerminalCheckpoint, error)
+}
+
 // DurableTerminalReplier 用重建后的平台客户端重放持久化终态操作。
 type DurableTerminalReplier interface {
 	DeliverTerminal(ctx context.Context, checkpoint TerminalCheckpoint) error
@@ -123,6 +139,11 @@ type Stream interface {
 	Update(ctx context.Context, content string) error
 	Complete(ctx context.Context, finalContent string) error
 	Fail(ctx context.Context, errText string) error
+}
+
+// StoppableStream 允许平台把用户主动停止渲染为独立终态，而不是 Complete 或 Fail。
+type StoppableStream interface {
+	Stop(ctx context.Context, finalContent string) error
 }
 
 // SupersedableStream 是流的可选能力，用于停止旧展示位置但不宣告任务终态。

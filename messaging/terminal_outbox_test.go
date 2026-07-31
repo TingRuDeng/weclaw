@@ -93,6 +93,7 @@ type outboxTestStream struct {
 	updates       []string
 	beforePrepare func()
 	prepareErr    error
+	terminalState platform.StreamTerminalState
 }
 
 func (s *outboxTestStream) Update(_ context.Context, content string) error {
@@ -108,16 +109,31 @@ func (s *outboxTestStream) Fail(context.Context, string) error {
 	return errors.New("legacy Fail must not run")
 }
 func (s *outboxTestStream) PrepareTerminal(content string, failed bool) (platform.TerminalCheckpoint, error) {
+	state := platform.StreamTerminalCompleted
+	if failed {
+		state = platform.StreamTerminalFailed
+	}
+	return s.prepareTerminalWithState(content, state)
+}
+func (s *outboxTestStream) PrepareTerminalWithState(content string, state platform.StreamTerminalState) (platform.TerminalCheckpoint, error) {
+	return s.prepareTerminalWithState(content, state)
+}
+func (s *outboxTestStream) prepareTerminalWithState(content string, state platform.StreamTerminalState) (platform.TerminalCheckpoint, error) {
 	if s.beforePrepare != nil {
 		s.beforePrepare()
 	}
 	s.mu.Lock()
 	s.prepared++
+	s.terminalState = state
 	s.mu.Unlock()
 	if s.prepareErr != nil {
 		return platform.TerminalCheckpoint{}, s.prepareErr
 	}
-	payload, err := json.Marshal(map[string]any{"content": content, "failed": failed})
+	payload, err := json.Marshal(map[string]any{
+		"content": content,
+		"failed":  state == platform.StreamTerminalFailed,
+		"state":   state,
+	})
 	return platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: payload}, err
 }
 
@@ -737,6 +753,33 @@ func TestTerminalOutboxDoesNotReplayCompletedCheckpointAfterNotificationFailure(
 	}
 }
 
+func TestTerminalOutboxDoesNotNotifyBeforeStoppedCheckpointSucceeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.failCheckpoint = 1
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"state":"stopped"}`)}
+	if err := outbox.enqueueAndAttempt(context.Background(), terminalOutboxDraft{
+		Route: route, Stopped: true, Checkpoint: checkpoint,
+		Notification: "任务已停止，请查看上方卡片。",
+	}, reply); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := loadTerminalOutbox(path)
+	if err != nil || len(pending) != 1 || pending[0].CheckpointDelivered || pending[0].NotificationDelivered {
+		t.Fatalf("pending=%#v err=%v, failed checkpoint must keep notification pending", pending, err)
+	}
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if len(reply.accepted) != 0 || len(reply.textKeys) != 0 {
+		t.Fatalf("accepted=%#v keys=%#v, notification must not precede stopped checkpoint", reply.accepted, reply.textKeys)
+	}
+}
+
 func TestTerminalOutboxPreservesTraceAcrossDurableDelivery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
 	route := platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "bot-1", ChatID: "wx-user"}
@@ -845,6 +888,51 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	defer reply.mu.Unlock()
 	if reply.checkpointCalls != 1 || len(reply.accepted) != 0 || len(reply.checkpointPayloadSeen) != 1 || !strings.Contains(string(reply.checkpointPayloadSeen[0]), "发布检查已通过") {
 		t.Fatalf("checkpoint calls=%d accepted=%#v payloads=%q", reply.checkpointCalls, reply.accepted, reply.checkpointPayloadSeen)
+	}
+}
+
+func TestFinishStoppedProgressPersistsStoppedCheckpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.stream = &outboxTestStream{}
+	registry := newOutboxTestRegistry(route, reply)
+	h := NewHandler(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := h.StartTerminalOutbox(ctx, registry, path); err != nil {
+		t.Fatalf("StartTerminalOutbox: %v", err)
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	_, finish, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "codex", "/workspace/weclaw", "运行任务", cfg,
+	)
+
+	consumed := h.finishAndSendProgressReply(progressReplyDelivery{
+		delivery: replyDeliveryRequest{
+			ctx: context.Background(), replyWriter: reply, userID: "user-1",
+			agentName: "codex", reply: "任务已按请求停止。",
+		},
+		stopped: true, finish: finish, progress: progress,
+	})
+	if !consumed {
+		t.Fatal("stopped terminal reply should be consumed by durable checkpoint")
+	}
+	waitForTerminalOutboxEmpty(t, path)
+	reply.stream.mu.Lock()
+	state := reply.stream.terminalState
+	reply.stream.mu.Unlock()
+	if state != platform.StreamTerminalStopped {
+		t.Fatalf("terminal state=%q, want stopped", state)
+	}
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if len(reply.checkpointPayloadSeen) != 1 ||
+		!strings.Contains(string(reply.checkpointPayloadSeen[0]), `"state":"stopped"`) ||
+		strings.Contains(string(reply.checkpointPayloadSeen[0]), `"failed":true`) {
+		t.Fatalf("checkpoint payloads=%q, want stopped non-failure state", reply.checkpointPayloadSeen)
 	}
 }
 

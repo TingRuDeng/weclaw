@@ -113,6 +113,21 @@ func TestCodexReconnectDoesNotOverrideStopping(t *testing.T) {
 	}
 }
 
+func TestStoppedByRequestRequiresAcceptedExpectedInterruption(t *testing.T) {
+	h := NewHandler(nil, nil)
+	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{})
+	if task.stoppedByRequest(errCodexRolloutAborted) {
+		t.Fatal("abort without accepted stop must not be classified as stopped")
+	}
+	task.beginStopRequest(taskStopRequest{mode: taskStopLocal})
+	if !task.stoppedByRequest(context.Canceled) || !task.stoppedByRequest(errCodexRolloutAborted) {
+		t.Fatal("accepted stop must classify expected cancellation and rollout abort as stopped")
+	}
+	if task.stoppedByRequest(agent.ErrCodexTurnTerminal) {
+		t.Fatal("real turn error must remain a failure even after a stop request")
+	}
+}
+
 func TestRestorePendingGuideRunsAfterTaskWasRemoved(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{

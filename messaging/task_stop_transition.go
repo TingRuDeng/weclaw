@@ -1,6 +1,11 @@
 package messaging
 
-import "context"
+import (
+	"context"
+	"errors"
+
+	"github.com/fastclaw-ai/weclaw/agent"
+)
 
 type taskStopStatus uint8
 
@@ -71,4 +76,16 @@ func (t *activeAgentTask) rollbackRemoteStop() {
 	t.mu.Lock()
 	t.stopRequested = false
 	t.mu.Unlock()
+}
+
+// stoppedByRequest 只把已接受停止请求后的预期中断识别为 stopped；
+// 普通运行中的同类异常仍保持失败或观察中断语义。
+func (t *activeAgentTask) stoppedByRequest(err error) bool {
+	if t == nil || err == nil || !t.isStopping() {
+		return false
+	}
+	var interrupted *agent.CodexTurnInterruptedError
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, errCodexRolloutAborted) ||
+		errors.As(err, &interrupted)
 }

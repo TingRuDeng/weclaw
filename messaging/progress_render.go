@@ -22,11 +22,11 @@ func renderCardCreationFallback() string {
 	return "任务已开始，卡片创建失败，将以普通消息返回结果。"
 }
 
-func renderStreamTerminalNotification(parentCanceled bool, failed bool, finalText string) string {
+func renderStreamTerminalNotification(parentCanceled bool, failed bool, stopped bool, finalText string) string {
 	if strings.TrimSpace(finalText) == "" || finalText == progressStatusOnlyComplete {
 		return ""
 	}
-	if parentCanceled {
+	if parentCanceled || stopped {
 		return "任务已停止，请查看上方卡片。"
 	}
 	if failed {
@@ -90,6 +90,10 @@ func latestStructuredProgressInLine(line string) string {
 func renderFinalSuccess(prefix string, reply string) string {
 	reply = strings.TrimSpace(reply)
 	return prefix + reply
+}
+
+func renderFinalStopped(prefix string) string {
+	return prefix + "任务已按请求停止。"
 }
 
 func renderFinalFailure(prefix string, err error) string {

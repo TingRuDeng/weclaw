@@ -11,6 +11,7 @@ const (
 	cardStatusStreaming  = "streaming"
 	cardStatusDone       = "done"
 	cardStatusError      = "error"
+	cardStatusStopped    = "stopped"
 	cardStatusSuperseded = "superseded"
 	cardMainContentID    = "main_content"
 )
@@ -100,7 +101,7 @@ func approvalRecordsContent(records []string) string {
 // normalizeCardStatus 收敛未知状态，避免生成不可识别样式。
 func normalizeCardStatus(status string) string {
 	switch status {
-	case cardStatusThinking, cardStatusStreaming, cardStatusDone, cardStatusError, cardStatusSuperseded:
+	case cardStatusThinking, cardStatusStreaming, cardStatusDone, cardStatusError, cardStatusStopped, cardStatusSuperseded:
 		return status
 	default:
 		return cardStatusThinking
@@ -117,6 +118,8 @@ func statusLabel(status string) string {
 		return ""
 	case cardStatusError:
 		return "**执行失败**"
+	case cardStatusStopped:
+		return "**已停止**"
 	case cardStatusSuperseded:
 		return "**已转移**"
 	default:
@@ -131,6 +134,8 @@ func statusTemplate(status string) string {
 		return "green"
 	case cardStatusError:
 		return "red"
+	case cardStatusStopped:
+		return "grey"
 	case cardStatusSuperseded:
 		return "grey"
 	default:
@@ -145,6 +150,8 @@ func statusDefaultContent(status string) string {
 		return ""
 	case cardStatusError:
 		return "任务执行失败。"
+	case cardStatusStopped:
+		return "任务已按请求停止。"
 	case cardStatusStreaming:
 		return "正在生成结果，请稍候。"
 	case cardStatusSuperseded:
