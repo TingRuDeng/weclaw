@@ -36,6 +36,7 @@ type rpcMessageKind uint8
 const (
 	rpcMessageNotification rpcMessageKind = iota
 	rpcMessageResponse
+	rpcMessageRequest
 )
 
 func marshalRPCRequest(id int64, method string, params interface{}) ([]byte, error) {
@@ -60,7 +61,10 @@ func unmarshalRPCMessage(line string) (rpcResponse, rpcMessageKind, error) {
 	if err := json.Unmarshal([]byte(line), &message); err != nil {
 		return rpcResponse{}, rpcMessageNotification, err
 	}
-	if message.ID != nil && message.Method == "" {
+	if message.ID != nil {
+		if message.Method != "" {
+			return message, rpcMessageRequest, nil
+		}
 		return message, rpcMessageResponse, nil
 	}
 	return message, rpcMessageNotification, nil
