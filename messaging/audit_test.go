@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,5 +80,25 @@ func TestAgentMessageAuditSummaryContainsOnlyMetadata(t *testing.T) {
 	}
 	if got != "text_runes=18" {
 		t.Fatalf("audit summary=%q, want rune count metadata", got)
+	}
+}
+
+func TestAuditRecordLogsPersistenceFailureWithoutPropagating(t *testing.T) {
+	dir := t.TempDir()
+	blockedParent := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blockedParent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(nil, nil)
+	h.SetAuditLogger(newFileAuditLogger(filepath.Join(blockedParent, "audit.log")))
+	var logs strings.Builder
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(oldOutput)
+
+	h.auditRecord(auditEntry{User: "u1", Action: "agent_message"})
+
+	if !strings.Contains(logs.String(), "[audit] record failed") {
+		t.Fatalf("logs=%q, want observable audit failure", logs.String())
 	}
 }

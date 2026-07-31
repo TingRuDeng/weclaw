@@ -308,7 +308,7 @@ func TestHandleMessageKeepsFeishuSenderUserIDForLogs(t *testing.T) {
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
-		Text:     "hello",
+		Text:     "top-secret-message",
 		Metadata: map[string]string{"feishu_session_key": "feishu:tenant_1:group:oc_1:om_root"},
 	}, reply)
 
@@ -318,6 +318,12 @@ func TestHandleMessageKeepsFeishuSenderUserIDForLogs(t *testing.T) {
 	}
 	if strings.Contains(output, "received from feishu:tenant_1:group:oc_1:om_root") {
 		t.Fatalf("logs=%q, should not expose session key as sender", output)
+	}
+	if strings.Contains(output, "top-secret-message") {
+		t.Fatalf("logs=%q, should not expose message body", output)
+	}
+	if !strings.Contains(output, "text_runes=18") {
+		t.Fatalf("logs=%q, want bounded message metadata", output)
 	}
 }
 

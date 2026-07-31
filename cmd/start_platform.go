@@ -69,7 +69,11 @@ func buildFeishuRegistryEntry(bot config.FeishuBotConfig) (platform.RegistryEntr
 	log.Printf("[platform] registering feishu bot name=%s display=%s account=%s", bot.Name, config.FeishuBotDisplayName(bot), bot.AppID)
 	adapter := feishuplatform.NewAdapter(creds)
 	adapter.SetMaxMessageAge(resolveFeishuMaxMessageAge(bot))
-	adapter.SetDedupStateFile(feishuDedupStateFile(creds.AppID))
+	dedupStateFile, err := feishuDedupStateFile(creds.AppID)
+	if err != nil {
+		return platform.RegistryEntry{}, fmt.Errorf("resolve feishu dedup state for %q: %w", bot.Name, err)
+	}
+	adapter.SetDedupStateFile(dedupStateFile)
 	adapter.SetSessionOptions(feishuplatform.FeishuSessionOptions{
 		RequireMentionInGroup: bot.EffectiveRequireMentionInGroup(),
 	})
@@ -107,10 +111,10 @@ func wechatAggregationWindow(cfg config.PlatformConfig) time.Duration {
 	return time.Duration(*cfg.MessageAggregationMs) * time.Millisecond
 }
 
-func feishuDedupStateFile(appID string) string {
+func feishuDedupStateFile(appID string) (string, error) {
 	name := strings.Trim(feishuStateFileUnsafeChars.ReplaceAllString(strings.TrimSpace(appID), "-"), "-")
 	if name == "" {
 		name = "default"
 	}
-	return filepath.Join(weclawDir(), "state", "feishu-dedup-"+name+".json")
+	return resolveWeclawFile(filepath.Join("state", "feishu-dedup-"+name+".json"))
 }

@@ -3,6 +3,7 @@ package feishu
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"testing"
@@ -22,6 +23,13 @@ type stubbornWSRunner struct {
 	release chan struct{}
 	closed  chan struct{}
 }
+
+type failingWSRunner struct {
+	err error
+}
+
+func (f *failingWSRunner) Start(context.Context) error { return f.err }
+func (f *failingWSRunner) Close()                      {}
 
 func (f *stubbornWSRunner) Start(context.Context) error {
 	close(f.started)
@@ -114,6 +122,7 @@ func TestAdapterRunLogsPermissionGuideAfterValidation(t *testing.T) {
 	output := logs.String()
 	if !strings.Contains(output, "https://open.feishu.cn/app/cli_a/permission") ||
 		!strings.Contains(output, "im:message") ||
+		!strings.Contains(output, "im:message:readonly") ||
 		!strings.Contains(output, "cardkit:card") {
 		t.Fatalf("logs=%q, want permission guide", output)
 	}
@@ -133,6 +142,25 @@ func TestAdapterRunStopsWhenValidationFails(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("Run error=nil, want validation failure")
+	}
+}
+
+func TestAdapterRunDoesNotReturnSDKControlledErrorDetails(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.validate = func(context.Context, Credentials) error { return nil }
+	adapter.wsFactory = func(*dispatcher.EventDispatcher) wsRunner {
+		return &failingWSRunner{err: errors.New("connect failed: access_key=secret&ticket=secret")}
+	}
+
+	err := adapter.Run(context.Background(), func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	if err == nil {
+		t.Fatal("Run error=nil, want websocket lifecycle error")
+	}
+	if strings.Contains(err.Error(), "access_key") || strings.Contains(err.Error(), "ticket") {
+		t.Fatalf("Run returned SDK-controlled details: %v", err)
+	}
+	if !strings.Contains(err.Error(), "websocket") {
+		t.Fatalf("Run error=%v, want sanitized websocket context", err)
 	}
 }
 

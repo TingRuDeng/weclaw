@@ -76,3 +76,53 @@ func TestLoadEnvironmentOverridesNormalizedFile(t *testing.T) {
 		t.Fatalf("progress=%#v", cfg.Progress)
 	}
 }
+
+func TestLoadRejectsBroadConfigPermissions(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WECLAW_HOME", dir)
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"agents":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "0600") ||
+		!strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("Load() error=%v, want actionable private-mode rejection", err)
+	}
+}
+
+func TestLoadRejectsConfigSymlink(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WECLAW_HOME", dir)
+	target := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(target, []byte(`{"agents":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted config symlink")
+	}
+}
+
+func TestLoadRejectsSymlinkDataDir(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "weclaw-home")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WECLAW_HOME", link)
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("Load() error=%v, want data-dir symlink rejection", err)
+	}
+}

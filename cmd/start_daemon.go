@@ -11,24 +11,18 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
-func weclawDir() string {
-	dir, _ := config.DataDir()
-	return dir
-}
-
-func pidFile() string {
-	return filepath.Join(weclawDir(), "weclaw.pid")
-}
-
-// daemonLaunchLockFile 返回后台启动父进程的短生命周期锁文件路径。
-func daemonLaunchLockFile() string {
-	return filepath.Join(weclawDir(), "weclaw.start.lock")
-}
-
-func logFile() string {
-	return filepath.Join(weclawDir(), "weclaw.log")
+func resolveWeclawFile(name string) (string, error) {
+	dir, err := config.DataDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve WeClaw data directory: %w", err)
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("WeClaw data directory must be absolute")
+	}
+	return filepath.Join(dir, name), nil
 }
 
 const (
@@ -57,13 +51,12 @@ func runDaemon() error {
 		return fmt.Errorf("cleanup companion endpoints: %w", err)
 	}
 
-	// 确保日志目录存在。
-	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
-		return fmt.Errorf("create weclaw dir: %w", err)
-	}
-
 	// 后台子进程 stdout/stderr 都写入统一日志文件。
-	lf, err := os.OpenFile(logFile(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logPath, err := resolveWeclawFile("weclaw.log")
+	if err != nil {
+		return err
+	}
+	lf, err := securefile.OpenAppend(logPath)
 	if err != nil {
 		return fmt.Errorf("open log file: %w", err)
 	}
@@ -71,6 +64,7 @@ func runDaemon() error {
 	// 复用当前二进制启动真正的前台服务进程。
 	exe, err := os.Executable()
 	if err != nil {
+		_ = lf.Close()
 		return fmt.Errorf("find executable: %w", err)
 	}
 
@@ -115,7 +109,7 @@ func runDaemon() error {
 	lf.Close()
 
 	fmt.Printf("weclaw started in background (pid=%d)\n", pid)
-	fmt.Printf("Log: %s\n", logFile())
+	fmt.Printf("Log: %s\n", logPath)
 	fmt.Printf("Stop: weclaw stop\n")
 	return nil
 }
@@ -199,7 +193,11 @@ func defaultStopProcessOps() stopProcessOps {
 
 // removePIDFile 清理运行态文件；服务进程可能已在退出 defer 中先删掉它。
 func removePIDFile() error {
-	err := os.Remove(pidFile())
+	path, err := resolveWeclawFile("weclaw.pid")
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
 	if os.IsNotExist(err) {
 		return nil
 	}

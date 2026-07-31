@@ -248,7 +248,7 @@ weclaw feishu users approve-code <authorization-code> [--bot <name|app_id>] [--a
 <details>
 <summary>Minimum Feishu application permissions</summary>
 
-Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`, `im:message.group_at_msg.include_bot:readonly`, `im:message:send_as_bot`, `im:resource`, `im:chat`, `cardkit:card:read`, `cardkit:card:write`, `application:bot.basic_info:read`, and `application:bot.menu:write`. WeClaw runtime does not require user scopes. Publish a new Feishu application version and complete approval after changing permissions.
+Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`, `im:message.group_at_msg.include_bot:readonly`, `im:message:readonly`, `im:message:send_as_bot`, `im:resource`, `im:chat`, `cardkit:card:read`, `cardkit:card:write`, `application:bot.basic_info:read`, and `application:bot.menu:write`. The `im:message:readonly` scope is required to read image and file resources attached to messages. WeClaw runtime does not require user scopes. Publish a new Feishu application version and complete approval after changing permissions.
 
 </details>
 

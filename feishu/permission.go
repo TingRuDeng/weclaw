@@ -37,6 +37,7 @@ type permissionScope struct {
 
 var requiredPermissionScopes = []permissionScope{
 	{Name: "im:message", Label: "获取与发送单聊、群组消息"},
+	{Name: "im:message:readonly", Label: "读取消息资源"},
 	{Name: "im:message:send_as_bot", Label: "以应用身份发消息"},
 	{Name: "im:resource", Label: "获取与上传图片或文件资源"},
 	{Name: "im:chat", Label: "获取会话信息"},

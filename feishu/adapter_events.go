@@ -10,6 +10,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/larksuite/oapi-sdk-go/v3/channel/types"
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
@@ -33,7 +34,9 @@ type reservedResourceRequest struct {
 
 // newEventDispatcher 注册飞书消息事件和卡片回调事件。
 func (a *Adapter) newEventDispatcher(dispatch platform.DispatchFunc) *dispatcher.EventDispatcher {
-	return dispatcher.NewEventDispatcher("", "").
+	eventDispatcher := dispatcher.NewEventDispatcher("", "")
+	eventDispatcher.InitConfig(larkevent.WithLogger(silentFeishuSDKLogger{}))
+	return eventDispatcher.
 		OnP2MessageReadV1(func(ctx context.Context, event *larkim.P2MessageReadV1) error {
 			return a.handleMessageReadEvent(ctx, event)
 		}).

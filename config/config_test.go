@@ -51,6 +51,46 @@ func TestConfigPathUsesWECLAWHome(t *testing.T) {
 	}
 }
 
+func TestDataDirMakesRelativeOverrideAbsolute(t *testing.T) {
+	parent := t.TempDir()
+	t.Chdir(parent)
+	t.Setenv("WECLAW_HOME", filepath.Join("state", "..", "weclaw-home"))
+
+	dir, err := DataDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(parent, "weclaw-home")
+	if dir != want {
+		t.Fatalf("DataDir=%q, want %q", dir, want)
+	}
+}
+
+func TestSaveRejectsConfigSymlinkAndPreservesTarget(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WECLAW_HOME", dir)
+	target := filepath.Join(dir, "target.json")
+	original := []byte(`{"default_agent":"original"}`)
+	if err := os.WriteFile(target, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Save(DefaultConfig()); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("Save() error=%v, want symlink rejection", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("target changed through symlink: %q", got)
+	}
+}
+
 func TestConfigValidateRejectsNegativeHTTPMaxHistory(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents["http"] = AgentConfig{Type: "http", Endpoint: "https://example.com", MaxHistory: -1}

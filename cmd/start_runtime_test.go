@@ -3,10 +3,13 @@ package cmd
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/config"
 )
 
 func TestStopAllWeclawRemovesPidFileAfterProcessExit(t *testing.T) {
@@ -178,10 +181,11 @@ func TestStopAllWeclawDoesNotSignalWhenRuntimeLockIsFree(t *testing.T) {
 
 func TestReadRuntimeStateSupportsLegacyPidFile(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
-	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
+	path := mustResolveWeclawFile(t, "weclaw.pid")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("create weclaw dir: %v", err)
 	}
-	if err := os.WriteFile(pidFile(), []byte("1234"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("1234"), 0o600); err != nil {
 		t.Fatalf("write legacy pid: %v", err)
 	}
 
@@ -216,12 +220,186 @@ func TestWriteRuntimeStatePersistsExecutableIdentity(t *testing.T) {
 	if state.PID != 1234 || state.Exe != "/tmp/weclaw" || state.Mode != "foreground" {
 		t.Fatalf("state=%+v, want persisted pid/exe/mode", state)
 	}
-	info, err := os.Stat(pidFile())
+	info, err := os.Stat(mustResolveWeclawFile(t, "weclaw.pid"))
 	if err != nil {
 		t.Fatalf("stat runtime state: %v", err)
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("runtime state mode=%#o, want 0600", got)
+	}
+}
+
+func TestWriteRuntimeStateRejectsSymlinkAndPreservesTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	target := filepath.Join(home, "runtime-target")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, mustResolveWeclawFile(t, "weclaw.pid")); err != nil {
+		t.Fatalf("create runtime state symlink: %v", err)
+	}
+
+	err := writeRuntimeState(runtimeState{PID: 1234})
+	if err == nil {
+		t.Error("writeRuntimeState error = nil, want symlink rejection")
+	}
+	data, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if got := string(data); got != "original" {
+		t.Fatalf("target=%q, want original", got)
+	}
+}
+
+func TestReadRuntimeStateRejectsSymlink(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	target := filepath.Join(home, "runtime-target")
+	if err := os.WriteFile(target, []byte("1234"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, mustResolveWeclawFile(t, "weclaw.pid")); err != nil {
+		t.Fatalf("create runtime state symlink: %v", err)
+	}
+
+	if _, err := readRuntimeState(); err == nil {
+		t.Fatal("readRuntimeState error = nil, want symlink rejection")
+	}
+}
+
+func TestAcquireRuntimeLockRejectsSymlinkAndPreservesTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	target := filepath.Join(home, "lock-target")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, mustResolveWeclawFile(t, "weclaw.lock")); err != nil {
+		t.Fatalf("create runtime lock symlink: %v", err)
+	}
+
+	lock, err := acquireRuntimeLock()
+	if err == nil {
+		if lock != nil {
+			_ = lock.Close()
+		}
+		t.Error("acquireRuntimeLock error = nil, want symlink rejection")
+	}
+	data, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target: %v", readErr)
+	}
+	if got := string(data); got != "original" {
+		t.Fatalf("target=%q, want original", got)
+	}
+}
+
+func TestRuntimeStateWriteFailsClosedWhenDataDirUnavailable(t *testing.T) {
+	t.Setenv("WECLAW_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := config.DataDir(); err == nil {
+		t.Skip("platform still resolves a home directory without HOME or USERPROFILE")
+	}
+	workingDir := t.TempDir()
+	if err := os.Chmod(workingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workingDir)
+	decoy := filepath.Join(workingDir, "weclaw.pid")
+	if err := os.WriteFile(decoy, []byte("do-not-touch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeRuntimeState(runtimeState{PID: 1234}); err == nil {
+		t.Error("writeRuntimeState error = nil, want data-dir resolution failure")
+	}
+	data, err := os.ReadFile(decoy)
+	if err != nil {
+		t.Fatalf("read decoy: %v", err)
+	}
+	if got := string(data); got != "do-not-touch" {
+		t.Fatalf("decoy=%q, want unchanged", got)
+	}
+	info, err := os.Stat(workingDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("working directory mode=%#o, want 0755", got)
+	}
+}
+
+func TestRuntimeLockFailsClosedWhenDataDirUnavailable(t *testing.T) {
+	t.Setenv("WECLAW_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := config.DataDir(); err == nil {
+		t.Skip("platform still resolves a home directory without HOME or USERPROFILE")
+	}
+	workingDir := t.TempDir()
+	if err := os.Chmod(workingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workingDir)
+
+	lock, err := acquireRuntimeLock()
+	if err == nil {
+		if lock != nil {
+			_ = lock.Close()
+		}
+		t.Error("acquireRuntimeLock error = nil, want data-dir resolution failure")
+	}
+	if _, statErr := os.Lstat(filepath.Join(workingDir, "weclaw.lock")); !os.IsNotExist(statErr) {
+		t.Fatalf("runtime lock created in working directory: %v", statErr)
+	}
+	info, statErr := os.Stat(workingDir)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("working directory mode=%#o, want 0755", got)
+	}
+}
+
+func TestRemoveRuntimeStateFailsClosedWhenDataDirUnavailable(t *testing.T) {
+	t.Setenv("WECLAW_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := config.DataDir(); err == nil {
+		t.Skip("platform still resolves a home directory without HOME or USERPROFILE")
+	}
+	workingDir := t.TempDir()
+	t.Chdir(workingDir)
+	decoy := filepath.Join(workingDir, "weclaw.pid")
+	if err := os.WriteFile(decoy, []byte("do-not-remove"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeRuntimeState(); err == nil {
+		t.Error("removeRuntimeState error = nil, want data-dir resolution failure")
+	}
+	data, err := os.ReadFile(decoy)
+	if err != nil {
+		t.Fatalf("read decoy: %v", err)
+	}
+	if got := string(data); got != "do-not-remove" {
+		t.Fatalf("decoy=%q, want unchanged", got)
+	}
+}
+
+func TestFeishuDedupStateFileFailsClosedWhenDataDirUnavailable(t *testing.T) {
+	t.Setenv("WECLAW_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	if _, err := config.DataDir(); err == nil {
+		t.Skip("platform still resolves a home directory without HOME or USERPROFILE")
+	}
+
+	if path, err := feishuDedupStateFile("cli_test"); err == nil || path != "" {
+		t.Fatalf("feishuDedupStateFile=(%q, %v), want empty path and data-dir error", path, err)
 	}
 }
 
@@ -242,6 +420,15 @@ func TestAcquireRuntimeLockRejectsSecondHolder(t *testing.T) {
 	if !strings.Contains(err.Error(), "weclaw 已在运行") {
 		t.Fatalf("error=%v, want running hint", err)
 	}
+}
+
+func mustResolveWeclawFile(t *testing.T, name string) string {
+	t.Helper()
+	path, err := resolveWeclawFile(name)
+	if err != nil {
+		t.Fatalf("resolve WeClaw file %q: %v", name, err)
+	}
+	return path
 }
 
 func TestAcquireDaemonLaunchLockRejectsSecondLauncher(t *testing.T) {

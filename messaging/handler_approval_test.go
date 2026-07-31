@@ -137,9 +137,6 @@ func TestApprovalTextFallbackConsumesOnceAndRedactsCommand(t *testing.T) {
 	if len(texts) != 2 || !strings.Contains(texts[0], "已提交审批") || !strings.Contains(texts[1], "已处理") {
 		t.Fatalf("texts=%#v", texts)
 	}
-	if got := platformMessageLogText(command); got != "/approve <redacted>" {
-		t.Fatalf("log text=%q", got)
-	}
 }
 
 func TestApprovalTextFallbackDenyCommandConsumesOnce(t *testing.T) {

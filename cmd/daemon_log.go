@@ -5,8 +5,9 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"sync"
+
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 const (
@@ -25,9 +26,6 @@ type daemonLogWriter struct {
 }
 
 func newDaemonLogWriter(path string, max int64, backups int, rebind func(*os.File) error) (*daemonLogWriter, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create daemon log dir: %w", err)
-	}
 	w := &daemonLogWriter{path: path, max: max, backups: backups, rebind: rebind}
 	if err := w.openLocked(); err != nil {
 		return nil, err
@@ -77,7 +75,7 @@ func (w *daemonLogWriter) rotateLocked() error {
 }
 
 func (w *daemonLogWriter) openLocked() error {
-	file, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := securefile.OpenAppend(w.path)
 	if err != nil {
 		return fmt.Errorf("open daemon log: %w", err)
 	}
@@ -113,7 +111,11 @@ func configureDaemonLogging() (io.Closer, error) {
 	if os.Getenv(daemonChildEnv) != "1" {
 		return nil, nil
 	}
-	w, err := newDaemonLogWriter(logFile(), daemonLogMaxBytes, daemonLogBackups, rebindDaemonStandardFiles)
+	path, err := resolveWeclawFile("weclaw.log")
+	if err != nil {
+		return nil, err
+	}
+	w, err := newDaemonLogWriter(path, daemonLogMaxBytes, daemonLogBackups, rebindDaemonStandardFiles)
 	if err != nil {
 		return nil, err
 	}

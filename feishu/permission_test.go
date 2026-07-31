@@ -70,6 +70,7 @@ func TestBuildPermissionGuideTextIncludesScopesAndNoSecret(t *testing.T) {
 	for _, want := range []string{
 		"https://open.feishu.cn/app/cli_a/permission",
 		"im:message",
+		"im:message:readonly",
 		"im:message:send_as_bot",
 		"im:resource",
 		"im:chat",

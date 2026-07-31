@@ -96,6 +96,8 @@ type Handler struct {
 	traceRecorder           observability.Recorder
 	traceErrorMu            sync.Mutex
 	lastTraceErrorAt        time.Time
+	auditErrorMu            sync.Mutex
+	lastAuditErrorAt        time.Time
 }
 
 // SetTraceRecorder 配置固定字段的诊断 Trace；写入失败不得改变消息业务终态。

@@ -133,22 +133,9 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 	if setter, ok := prepared.reply.(platform.ClientIDSetter); ok {
 		setter.SetClientID(prepared.clientID)
 	}
-	log.Printf("[handler] received from %s: %q", prepared.msg.UserID, truncate(platformMessageLogText(prepared.text), 80))
+	log.Printf("[handler] received from %s: %s", prepared.msg.UserID, traceSummaryForIncoming(prepared.msg, prepared.text))
 	h.recordTraceStage(prepared.trace, "message.accepted", "accepted", traceSummaryForIncoming(prepared.msg, prepared.text))
 	return prepared, true
-}
-
-// platformMessageLogText 隐去一次性确认能力，避免日志中的短期凭据被重放。
-func platformMessageLogText(text string) string {
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) == 4 && strings.EqualFold(fields[0], "/cx") &&
-		strings.EqualFold(fields[1], "account") && strings.EqualFold(fields[2], "confirm") {
-		return "/cx account confirm <redacted>"
-	}
-	if len(fields) > 0 && (strings.EqualFold(fields[0], "/approve") || strings.EqualFold(fields[0], "/deny")) {
-		return fields[0] + " <redacted>"
-	}
-	return text
 }
 
 // preparePlatformAttachments 将文件和带说明的图片转换为 Agent 可消费文本。

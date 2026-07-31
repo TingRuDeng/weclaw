@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -26,15 +27,18 @@ func TestCodexSessionCommandAdminDoesNotReacceptFeishuOpenID(t *testing.T) {
 	}
 }
 
-func TestPlatformMessageLogTextRedactsApprovalCommandsWithExtraFields(t *testing.T) {
-	tests := map[string]string{
-		"/approve ABCD2345":         "/approve <redacted>",
-		"/approve ABCD2345 ignored": "/approve <redacted>",
-		"  /DeNy secret extra  ":    "/DeNy <redacted>",
+func TestIncomingMessageLogSummaryContainsOnlyMetadata(t *testing.T) {
+	secret := "/approve ABCD2345 ignored"
+	got := traceSummaryForIncoming(platform.IncomingMessage{
+		Attachments: []platform.Attachment{{Kind: platform.AttachmentFile}},
+	}, secret)
+
+	if strings.Contains(got, secret) || strings.Contains(got, "ABCD2345") {
+		t.Fatalf("trace summary contains message body: %q", got)
 	}
-	for input, want := range tests {
-		if got := platformMessageLogText(input); got != want {
-			t.Fatalf("platformMessageLogText(%q)=%q, want %q", input, got, want)
+	for _, want := range []string{"text_runes=25", "attachments=1", "card_action=false"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trace summary=%q, want %q", got, want)
 		}
 	}
 }
