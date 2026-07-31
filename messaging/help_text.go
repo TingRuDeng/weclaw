@@ -43,6 +43,8 @@ Codex：
 
 /cx new 新建共享会话
 
+/cx archive current 归档当前空闲会话
+
 Claude：
 
 /cc quota 查看 Claude 账号额度

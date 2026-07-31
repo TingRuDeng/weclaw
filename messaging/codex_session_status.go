@@ -171,6 +171,7 @@ func buildCodexSessionHelpText() string {
 		"/cx cd <编号|工作空间名|..> 进入工作空间；唯一会话时自动绑定；.. 返回工作空间列表",
 		"/cx switch <编号> 切换并绑定当前工作空间会话",
 		"/cx new 新建并绑定当前工作空间会话",
+		"/cx archive current|<编号> 归档当前或列表中的空闲会话",
 		"/cx pwd 查看当前工作空间",
 		"/cx status 查看当前工作空间、会话、任务、账号和运行状态",
 		"/cx quota 查看 Codex 账号额度",

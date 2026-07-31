@@ -199,6 +199,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
 | `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
 | `/cx new` | Create and bind a Codex session in the current workspace |
+| `/cx archive current`, `/cx archive <number>` | Archive the current or listed idle Codex session while preserving its history |
 | `/cx account`, `/cx account status` | Inspect the host-level Codex account; administrator direct messages may select and switch |
 | `/update`, `/restart [--force]` | Remotely update or restart WeClaw from an administrator direct message |
 
@@ -206,6 +207,8 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 <summary>Common Codex commands</summary>
 
 Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`.
+
+Archive: `/cx archive current` archives the bound session; after entering a workspace session list, `/cx archive <number>` archives that entry. Only idle sessions with no other WeClaw frontend binding can be archived. History is preserved and can be restored from the Codex App archive.
 
 Runtime boundary: `/cx status` is a compact view of the current workspace, session, task, account, and runtime. Use `/cx pwd` for the full path, `/cx account status` for account diagnostics, and `/cx quota` for usage limits.
 

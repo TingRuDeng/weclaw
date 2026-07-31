@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-var errCodexRemoteSelectionChanged = errors.New("Codex 会话绑定状态已变化")
+var (
+	errCodexRemoteSelectionChanged = errors.New("Codex 会话绑定状态已变化")
+	errCodexRemoteThreadArchived   = errors.New("Codex 会话已归档")
+)
 
 // codexRemoteSelectionSnapshot is the compare-and-swap image for one
 // frontend. Other frontends are deliberately absent: they may bind the same
@@ -60,6 +63,9 @@ func (s *codexSessionStore) commitRemoteSelection(update codexRemoteSelectionUpd
 	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, archived := s.archived[update.TargetThreadID]; archived {
+		return codexRemoteSelectionResult{}, errCodexRemoteThreadArchived
+	}
 	if err := validateCodexRemoteSelectionSnapshotLocked(s.bindings, update); err != nil {
 		return codexRemoteSelectionResult{}, err
 	}
@@ -76,7 +82,7 @@ func (s *codexSessionStore) commitRemoteSelection(update codexRemoteSelectionUpd
 	}
 	state := codexSessionState{
 		Version: codexSessionStateVersion, Bindings: nextBindings,
-		Updated: now.Format(time.RFC3339),
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: now.Format(time.RFC3339),
 	}
 	if err := s.persistCandidate(s.filePath, state); err != nil {
 		return codexRemoteSelectionResult{}, fmt.Errorf("保存 Codex 会话绑定: %w", err)
@@ -98,7 +104,8 @@ func (s *codexSessionStore) rollbackRemoteSelection(result codexRemoteSelectionR
 	bindings := cloneCodexSessionBindings(result.before.bindings)
 	state := codexSessionState{
 		Version: codexSessionStateVersion, Bindings: bindings,
-		Updated: time.Now().UTC().Format(time.RFC3339),
+		Archived: sortedCodexArchivedThreadIDs(s.archived),
+		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := s.persistCandidate(s.filePath, state); err != nil {
 		return fmt.Errorf("回滚 Codex 会话绑定: %w", err)

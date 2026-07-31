@@ -38,7 +38,7 @@ func TestCodexRemoteSelectionPersistsFrontendBindingOnly(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Version != 4 || len(state.Controls) != 0 {
+	if state.Version != codexSessionStateVersion || len(state.Controls) != 0 {
 		t.Fatalf("persisted state version=%d controls=%#v", state.Version, state.Controls)
 	}
 }

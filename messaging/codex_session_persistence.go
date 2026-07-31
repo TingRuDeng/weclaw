@@ -32,8 +32,20 @@ func (s *codexSessionStore) load() {
 		return
 	}
 
-	bindings := make(map[string]codexSessionBinding, len(state.Bindings))
 	changed := state.Version != codexSessionStateVersion
+	archived := make(map[string]struct{}, len(state.Archived))
+	for _, persistedThreadID := range state.Archived {
+		threadID := strings.TrimSpace(persistedThreadID)
+		if threadID == "" {
+			changed = true
+			continue
+		}
+		if _, duplicate := archived[threadID]; duplicate || threadID != persistedThreadID {
+			changed = true
+		}
+		archived[threadID] = struct{}{}
+	}
+	bindings := make(map[string]codexSessionBinding, len(state.Bindings))
 	for key, binding := range state.Bindings {
 		if strings.TrimSpace(key) == "" {
 			continue
@@ -51,17 +63,26 @@ func (s *codexSessionStore) load() {
 			if workspaceRoot == "" {
 				continue
 			}
+			if threadID := strings.TrimSpace(session.ThreadID); threadID != "" {
+				if _, isArchived := archived[threadID]; isArchived {
+					session.ThreadID = ""
+					session.PendingNewThread = false
+					session.PendingFirstTurn = false
+					changed = true
+				}
+			}
 			normalized.Workspaces[workspaceRoot] = session
 		}
 		bindings[migratedKey] = mergeCodexSessionBinding(bindings[migratedKey], normalized)
 	}
 	if len(state.Controls) > 0 {
 		// v1-v3 owner records described competing writers. They are deliberately
-		// discarded during v4 migration because every frontend now shares one host.
+		// discarded during v4+ migration because every frontend now shares one host.
 		changed = true
 	}
 	s.mu.Lock()
 	s.bindings = bindings
+	s.archived = archived
 	s.mu.Unlock()
 	if changed {
 		s.save()
@@ -128,6 +149,7 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 	state := codexSessionState{
 		Version:  codexSessionStateVersion,
 		Bindings: make(map[string]codexSessionBinding, len(s.bindings)),
+		Archived: sortedCodexArchivedThreadIDs(s.archived),
 		Updated:  time.Now().UTC().Format(time.RFC3339),
 	}
 	for key, binding := range s.bindings {

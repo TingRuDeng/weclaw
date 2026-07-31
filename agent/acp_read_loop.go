@@ -220,6 +220,11 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 	case "thread/settings/updated":
 		a.handleCodexThreadSettingsUpdated(msg.Params, msg.Sequence)
 		return true
+	case "thread/archived":
+		a.handleCodexThreadArchivedNotification(msg.Params)
+		return true
+	case "thread/unarchived":
+		return true
 	case "turn/approval/request", "item/fileChange/requestApproval",
 		"item/commandExecution/requestApproval", "item/permissions/requestApproval":
 		a.handlePermissionRequestAt(line, msg.Sequence)

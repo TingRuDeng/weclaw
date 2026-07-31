@@ -222,7 +222,7 @@ func (h *Handler) codexNoArgCommandResult(fields []string, usage string, run fun
 	return textNavigationResult(run()), true
 }
 
-// dispatchCodexMutationCommand 处理模型、新建和切换会话命令。
+// dispatchCodexMutationCommand 处理模型、新建、归档和切换会话命令。
 func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntime) navigationCommandResult {
 	fields := runtime.fields
 	switch fields[1] {
@@ -237,6 +237,8 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 			platform: runtime.req.Platform, accountID: runtime.req.AccountID,
 			reply: runtime.req.Reply,
 		}))
+	case "archive":
+		return textNavigationResult(h.handleCodexArchiveCommand(runtime))
 	case "switch":
 		return h.dispatchCodexSwitchCommand(runtime)
 	default:

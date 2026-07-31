@@ -46,7 +46,7 @@ func TestCodexSessionV3MigrationKeepsBindingsAndDropsOwners(t *testing.T) {
 	if err := json.Unmarshal(data, &migrated); err != nil {
 		t.Fatal(err)
 	}
-	if migrated.Version != 4 || len(migrated.Controls) != 0 {
+	if migrated.Version != codexSessionStateVersion || len(migrated.Controls) != 0 {
 		t.Fatalf("migrated version=%d controls=%#v", migrated.Version, migrated.Controls)
 	}
 }
