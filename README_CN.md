@@ -246,7 +246,7 @@ weclaw feishu users approve-code <授权码> [--bot <名称|app_id>] [--admin]
 <details>
 <summary>飞书应用最小权限</summary>
 
-Tenant scopes：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonly`、`im:message.group_at_msg.include_bot:readonly`、`im:message:send_as_bot`、`im:resource`、`im:chat`、`cardkit:card:read`、`cardkit:card:write`、`application:bot.basic_info:read`、`application:bot.menu:write`。WeClaw 运行时不需要 user scopes。修改权限后必须重新发布飞书应用版本并完成审批。
+Tenant scopes：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonly`、`im:message.group_at_msg.include_bot:readonly`、`im:message:readonly`、`im:message:send_as_bot`、`im:resource`、`im:chat`、`cardkit:card:read`、`cardkit:card:write`、`application:bot.basic_info:read`、`application:bot.menu:write`。其中 `im:message:readonly` 用于读取消息中的图片和文件资源。WeClaw 运行时不需要 user scopes。修改权限后必须重新发布飞书应用版本并完成审批。
 
 </details>
 

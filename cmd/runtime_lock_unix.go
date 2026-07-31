@@ -6,25 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"syscall"
+
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 type runtimeLock struct {
 	file *os.File
 }
 
-// runtimeLockFile 返回单实例锁文件路径，锁文件本身可长期保留。
-func runtimeLockFile() string {
-	return filepath.Join(weclawDir(), "weclaw.lock")
-}
-
 // acquireLockFile 对指定锁文件加非阻塞排他锁，供运行锁和启动锁复用。
 func acquireLockFile(path string, busyError func() string) (*runtimeLock, error) {
-	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := securefile.OpenAppend(path)
 	if err != nil {
 		return nil, err
 	}
@@ -40,14 +33,22 @@ func acquireLockFile(path string, busyError func() string) (*runtimeLock, error)
 
 // acquireRuntimeLock 使用系统文件锁保证同一用户目录下只有一个服务实例。
 func acquireRuntimeLock() (*runtimeLock, error) {
-	return acquireLockFile(runtimeLockFile(), func() string {
+	path, err := resolveWeclawFile("weclaw.lock")
+	if err != nil {
+		return nil, err
+	}
+	return acquireLockFile(path, func() string {
 		return "weclaw 已在运行" + runtimeLockHolderHint()
 	})
 }
 
 // acquireDaemonLaunchLock 串行化后台启动父进程，避免锁交接窗口内互相 stop/start。
 func acquireDaemonLaunchLock() (*runtimeLock, error) {
-	return acquireLockFile(daemonLaunchLockFile(), func() string {
+	path, err := resolveWeclawFile("weclaw.start.lock")
+	if err != nil {
+		return nil, err
+	}
+	return acquireLockFile(path, func() string {
 		return "weclaw 正在启动，请稍后重试"
 	})
 }

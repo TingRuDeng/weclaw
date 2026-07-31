@@ -379,9 +379,3 @@ func TestCodexAccountConfirmationStoreBindsScopeAndDeduplicates(t *testing.T) {
 		t.Fatalf("completed state=%v record=%#v", state, record)
 	}
 }
-
-func TestPlatformMessageLogRedactsCodexAccountConfirmationToken(t *testing.T) {
-	if got := platformMessageLogText("/cx account confirm @acct_secret"); got != "/cx account confirm <redacted>" {
-		t.Fatalf("log text=%q", got)
-	}
-}

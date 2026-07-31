@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -499,6 +500,81 @@ func TestTerminalOutboxPersistenceFailureDoesNotCommitMemoryEntry(t *testing.T) 
 	}
 	if len(outbox.entries) != 0 {
 		t.Fatalf("entries=%#v, failed persistence must roll back memory", outbox.entries)
+	}
+}
+
+func TestTerminalOutboxMarkDeliveredRollsBackMemoryOnPersistenceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "bot-1", ChatID: "wx-user"},
+		Text:  "result",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	outbox.path = filepath.Join(path, "blocked")
+
+	if err := outbox.markDelivered(entry.ID, terminalOutboxTextStage); err == nil {
+		t.Fatal("markDelivered error=nil, want persistence failure")
+	}
+	after := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("entry changed after failed persistence:\nbefore=%#v\nafter=%#v", before, after)
+	}
+}
+
+func TestTerminalOutboxRecordFailureRollsBackMemoryOnPersistenceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "bot-1", ChatID: "wx-user"},
+		Text:  "result",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	outbox.path = filepath.Join(path, "blocked")
+
+	if err := outbox.recordFailure(entry.ID, errors.New("delivery failed")); err == nil {
+		t.Fatal("recordFailure error=nil, want persistence failure")
+	}
+	after := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("entry changed after failed persistence:\nbefore=%#v\nafter=%#v", before, after)
+	}
+}
+
+func TestTerminalOutboxRemoveDeliveredRollsBackMemoryOnPersistenceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "bot-1", ChatID: "wx-user"},
+		Text:  "result",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	outbox.path = filepath.Join(path, "blocked")
+
+	if err := outbox.removeDelivered(entry.ID); err == nil {
+		t.Fatal("removeDelivered error=nil, want persistence failure")
+	}
+	after := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("entry changed after failed persistence:\nbefore=%#v\nafter=%#v", before, after)
 	}
 }
 

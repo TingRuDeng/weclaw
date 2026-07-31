@@ -696,6 +696,7 @@ func (o *terminalOutbox) markDelivered(id string, stage terminalOutboxStage) err
 	if entry == nil {
 		return nil
 	}
+	before := cloneTerminalOutboxEntry(entry)
 	switch stage {
 	case terminalOutboxCheckpointStage:
 		entry.CheckpointDelivered = true
@@ -706,7 +707,11 @@ func (o *terminalOutbox) markDelivered(id string, stage terminalOutboxStage) err
 	}
 	entry.UpdatedAt = o.now()
 	entry.LastError = ""
-	return o.persistLocked()
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		return err
+	}
+	return nil
 }
 
 func (o *terminalOutbox) recordFailure(id string, deliveryErr error) error {
@@ -716,6 +721,7 @@ func (o *terminalOutbox) recordFailure(id string, deliveryErr error) error {
 		o.mu.Unlock()
 		return deliveryErr
 	}
+	before := cloneTerminalOutboxEntry(entry)
 	entry.Attempts++
 	entry.UpdatedAt = o.now()
 	entry.LastError = truncateTerminalOutboxError(deliveryErr)
@@ -727,6 +733,7 @@ func (o *terminalOutbox) recordFailure(id string, deliveryErr error) error {
 		entry.NextAttempt = entry.UpdatedAt.Add(terminalOutboxBackoff(entry.Attempts))
 	}
 	if err := o.persistLocked(); err != nil {
+		*entry = *before
 		o.mu.Unlock()
 		return fmt.Errorf("delivery failed: %v; persist retry state: %w", deliveryErr, err)
 	}
@@ -772,8 +779,15 @@ func (o *terminalOutbox) removeDelivered(id string) error {
 			continue
 		}
 		clone := cloneTerminalOutboxEntry(entry)
-		o.entries = append(o.entries[:index], o.entries[index+1:]...)
+		previous := o.entries
+		remaining := make([]*terminalOutboxEntry, 0, len(o.entries)-1)
+		remaining = append(remaining, o.entries[:index]...)
+		remaining = append(remaining, o.entries[index+1:]...)
+		o.entries = remaining
 		err := o.persistLocked()
+		if err != nil {
+			o.entries = previous
+		}
 		o.mu.Unlock()
 		if err == nil {
 			o.recordTrace(clone, "terminal.delivery.completed", "completed", "terminal delivery committed")

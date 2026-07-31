@@ -28,7 +28,11 @@ var statusCmd = &cobra.Command{
 			if state.Mode != "" {
 				fmt.Printf("模式: %s\n", state.Mode)
 			}
-			fmt.Printf("日志: %s\n", logFile())
+			logPath, err := resolveWeclawFile("weclaw.log")
+			if err != nil {
+				return err
+			}
+			fmt.Printf("日志: %s\n", logPath)
 		} else {
 			fmt.Println("WeClaw 未运行（存在过期 pid 文件）")
 		}

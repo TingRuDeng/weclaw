@@ -57,6 +57,29 @@ func ReadForUpdate(path string) ([]byte, error) {
 	return read(path, false)
 }
 
+// OpenAppend opens a current-user-owned regular file for append without
+// following its final symlink and tightens its mode to 0600.
+func OpenAppend(path string) (*os.File, error) {
+	if err := EnsureDir(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	file, info, err := openAppendNoFollow(path)
+	if err != nil {
+		return nil, fmt.Errorf("open secure append file: %w", err)
+	}
+	if err := validateFileInfo(info, false); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if info.Mode().Perm() != 0o600 {
+		if err := file.Chmod(0o600); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("chmod secure append file: %w", err)
+		}
+	}
+	return file, nil
+}
+
 func read(path string, requirePrivateMode bool) ([]byte, error) {
 	if err := ValidateDir(filepath.Dir(path)); err != nil {
 		return nil, err

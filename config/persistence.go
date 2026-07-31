@@ -2,12 +2,15 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 // ConfigPath 返回配置文件路径。
@@ -22,7 +25,11 @@ func ConfigPath() (string, error) {
 // DataDir 返回 WeClaw 自有状态根目录，显式 WECLAW_HOME 优先。
 func DataDir() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("WECLAW_HOME")); override != "" {
-		return filepath.Clean(override), nil
+		dir, err := filepath.Abs(filepath.Clean(override))
+		if err != nil {
+			return "", fmt.Errorf("resolve WECLAW_HOME: %w", err)
+		}
+		return dir, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -38,10 +45,16 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve config path: %w", err)
 	}
-	data, err := os.ReadFile(path)
+	if err := securefile.EnsureDir(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("secure config directory: %w", err)
+	}
+	data, err := securefile.Read(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return finalizeLoadedConfig(cfg)
+		}
+		if strings.Contains(err.Error(), "permissions must be 0600") {
+			return nil, fmt.Errorf("read config: %w; fix with chmod 600 %q", err, path)
 		}
 		return nil, fmt.Errorf("read config: %w", err)
 	}
@@ -114,47 +127,12 @@ func Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return replaceConfig(path, data)
-}
-
-func replaceConfig(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create config temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := writeConfigTemp(tmp, data); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("replace config: %w", err)
-	}
-	return nil
-}
-
-func writeConfigTemp(tmp *os.File, data []byte) error {
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("chmod config temp file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write config temp file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("sync config temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close config temp file: %w", err)
+	if err := securefile.Write(path, data); err != nil {
+		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
 }

@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 const daemonChildEnv = "WECLAW_DAEMON_CHILD"
@@ -21,7 +24,14 @@ type runtimeState struct {
 
 // readRuntimeState 同时兼容旧版纯数字 pid 文件和新版 JSON 状态文件。
 func readRuntimeState() (runtimeState, error) {
-	data, err := os.ReadFile(pidFile())
+	path, err := resolveWeclawFile("weclaw.pid")
+	if err != nil {
+		return runtimeState{}, err
+	}
+	if err := securefile.EnsureDir(filepath.Dir(path)); err != nil {
+		return runtimeState{}, err
+	}
+	data, err := securefile.Read(path)
 	if err != nil {
 		return runtimeState{}, err
 	}
@@ -48,18 +58,16 @@ func writeRuntimeState(state runtimeState) error {
 	if state.PID <= 0 {
 		return fmt.Errorf("runtime state missing pid")
 	}
-	if err := os.MkdirAll(weclawDir(), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(pidFile(), data, 0o600); err != nil {
+	path, err := resolveWeclawFile("weclaw.pid")
+	if err != nil {
 		return err
 	}
-	return os.Chmod(pidFile(), 0o600)
+	return securefile.Write(path, data)
 }
 
 // writeCurrentRuntimeState 记录当前前台服务进程，后台 daemon 子进程也走这里。
@@ -75,7 +83,11 @@ func writeCurrentRuntimeState(mode string) error {
 }
 
 func removeRuntimeState() error {
-	err := os.Remove(pidFile())
+	path, err := resolveWeclawFile("weclaw.pid")
+	if err != nil {
+		return err
+	}
+	err = os.Remove(path)
 	if os.IsNotExist(err) {
 		return nil
 	}

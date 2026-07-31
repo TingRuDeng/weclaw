@@ -1,9 +1,12 @@
 package messaging
 
 import (
+	"log"
 	"strings"
 	"time"
 )
+
+const auditErrorLogInterval = time.Minute
 
 // SetSaveDir sets the directory for saving images and files.
 func (h *Handler) SetSaveDir(dir string) {
@@ -66,7 +69,18 @@ func (h *Handler) auditRecord(entry auditEntry) {
 	logger := h.audit
 	h.mu.RUnlock()
 	if logger != nil {
-		logger.Log(entry)
+		if err := logger.Log(entry); err != nil {
+			h.auditErrorMu.Lock()
+			now := time.Now()
+			shouldLog := h.lastAuditErrorAt.IsZero() || now.Sub(h.lastAuditErrorAt) >= auditErrorLogInterval
+			if shouldLog {
+				h.lastAuditErrorAt = now
+			}
+			h.auditErrorMu.Unlock()
+			if shouldLog {
+				log.Printf("[audit] record failed: %v", err)
+			}
+		}
 	}
 }
 

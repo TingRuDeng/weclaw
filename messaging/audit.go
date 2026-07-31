@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
 const auditSummaryRunes = 200
@@ -30,7 +32,7 @@ type auditEntry struct {
 
 // auditLogger 记录敏感操作以供追责。
 type auditLogger interface {
-	Log(entry auditEntry)
+	Log(entry auditEntry) error
 }
 
 // fileAuditLogger 以 JSON Lines 形式把审计写入本地文件。
@@ -46,9 +48,9 @@ func newFileAuditLogger(path string) *fileAuditLogger {
 	return &fileAuditLogger{path: path, now: time.Now, maxBytes: auditMaxBytes, backups: auditBackups}
 }
 
-func (l *fileAuditLogger) Log(entry auditEntry) {
+func (l *fileAuditLogger) Log(entry auditEntry) error {
 	if l == nil {
-		return
+		return nil
 	}
 	if entry.Time == "" {
 		entry.Time = l.now().UTC().Format(time.RFC3339)
@@ -56,42 +58,63 @@ func (l *fileAuditLogger) Log(entry auditEntry) {
 	entry.Summary = auditSanitizeSummary(entry.Summary)
 	data, err := json.Marshal(entry)
 	if err != nil {
-		return
+		return fmt.Errorf("marshal audit entry: %w", err)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
-		return
-	}
-	l.rotateIfNeeded(int64(len(data) + 1))
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := securefile.OpenAppend(l.path)
 	if err != nil {
-		return
+		return fmt.Errorf("open audit log: %w", err)
 	}
-	defer f.Close()
-	_, _ = f.Write(append(data, '\n'))
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("stat audit log: %w", err)
+	}
+	if l.maxBytes > 0 && info.Size()+int64(len(data)+1) > l.maxBytes {
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close audit log before rotation: %w", err)
+		}
+		if err := l.rotateLocked(); err != nil {
+			return err
+		}
+		f, err = securefile.OpenAppend(l.path)
+		if err != nil {
+			return fmt.Errorf("open rotated audit log: %w", err)
+		}
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write audit log: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close audit log: %w", err)
+	}
+	return nil
 }
 
-// rotateIfNeeded 在写入将使文件超过上限时轮转：path→path.1→path.2…，超出 backups 的丢弃。
-func (l *fileAuditLogger) rotateIfNeeded(incoming int64) {
-	if l.maxBytes <= 0 {
-		return
-	}
-	info, err := os.Stat(l.path)
-	if err != nil || info.Size()+incoming <= l.maxBytes {
-		return
-	}
+// rotateLocked 按 path→path.1→path.2… 轮转，调用方必须持有 l.mu。
+func (l *fileAuditLogger) rotateLocked() error {
 	// 从最旧往新挪：.(n-1)→.n，最终 path→.1
 	oldest := fmt.Sprintf("%s.%d", l.path, l.backups)
-	_ = os.Remove(oldest)
+	if err := os.Remove(oldest); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove oldest audit backup: %w", err)
+	}
 	for i := l.backups - 1; i >= 1; i-- {
-		_ = os.Rename(fmt.Sprintf("%s.%d", l.path, i), fmt.Sprintf("%s.%d", l.path, i+1))
+		if err := os.Rename(fmt.Sprintf("%s.%d", l.path, i), fmt.Sprintf("%s.%d", l.path, i+1)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("rotate audit backup: %w", err)
+		}
 	}
 	if l.backups >= 1 {
-		_ = os.Rename(l.path, l.path+".1")
+		if err := os.Rename(l.path, l.path+".1"); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("rotate audit log: %w", err)
+		}
 	} else {
-		_ = os.Remove(l.path)
+		if err := os.Remove(l.path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove rotated audit log: %w", err)
+		}
 	}
+	return nil
 }
 
 // auditSanitizeSummary 截断摘要并清理换行，避免单条日志过长或被注入。

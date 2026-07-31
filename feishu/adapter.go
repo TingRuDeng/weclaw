@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,8 @@ type wsRunner interface {
 }
 
 const feishuIdentityCacheTTL = 24 * time.Hour
+
+var errFeishuWebSocketStopped = errors.New("feishu websocket connection stopped")
 
 type cachedFeishuIdentity struct {
 	keys   []string
@@ -57,7 +60,7 @@ type Adapter struct {
 
 // NewAdapter 创建飞书平台 adapter。
 func NewAdapter(creds Credentials) *Adapter {
-	restClient := lark.NewClient(creds.AppID, creds.AppSecret)
+	restClient := lark.NewClient(creds.AppID, creds.AppSecret, lark.WithLogger(silentFeishuSDKLogger{}))
 	adapter := &Adapter{
 		creds:               creds,
 		downloader:          newSDKResourceDownloader(restClient, creds.AppID),
@@ -83,6 +86,7 @@ func NewAdapter(creds Credentials) *Adapter {
 			creds.AppID,
 			creds.AppSecret,
 			larkws.WithEventHandler(eventDispatcher),
+			larkws.WithLogger(silentFeishuSDKLogger{}),
 		)
 	}
 	return adapter
@@ -163,7 +167,10 @@ func (a *Adapter) Run(ctx context.Context, dispatch platform.DispatchFunc) error
 		if ctx.Err() != nil {
 			return nil
 		}
-		return err
+		if err == nil {
+			return nil
+		}
+		return errFeishuWebSocketStopped
 	case <-ctx.Done():
 		wsClient.Close()
 		return nil
