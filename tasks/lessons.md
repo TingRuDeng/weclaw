@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-07-31 用户主动停止必须是独立终态
+
+- 触发条件：用户发送 `/stop`，协议已接受停止请求，随后 Agent、rollout 或任务 context 以 `interrupted`、turn terminal 或 `context canceled` 结束。
+- 规则：只有活动任务已经进入 `stopping` 且错误属于预期中断时，才归类为 `stopped`；飞书卡片、普通文本、Trace、任务快照、广播路径和 terminal outbox 必须共同保持停止语义，不能降级成 `failed`。
+- 反例：停止请求先回复“等待任务终态”，随后 watcher 把 rollout abort 统一设为 `Failed=true`，最终发送红色“执行失败”卡片和“任务执行失败”通知，让用户误以为停止操作失败。
+- 正确做法：保留中断 sentinel，在任务生命周期边界结合已提交的停止意图分类；支持三态的平台渲染灰色“已停止”，旧平台降级为非失败完成，并同时覆盖普通 Agent、广播任务、外部 watcher 与持久化 checkpoint 回归测试。
+- 来源：2026-07-31 用户反馈 `/stop` 后飞书卡片显示“执行失败”，真实 Trace 证明停止请求已接受但 `interrupted` 被错误归类为任务失败。
+
 ## 2026-07-26 Codex App 界面账号不能由 CLI 认证状态反推
 
 - 触发条件：用户已在 Codex App 中切换账号，但 WeClaw 的 `account current`、`auth.json` 或 shared Host 仍显示另一个 profile。

@@ -81,6 +81,7 @@ type terminalOutboxEntry struct {
 	Route        platform.DeliveryRoute       `json:"route"`
 	AgentName    string                       `json:"agent_name,omitempty"`
 	Failed       bool                         `json:"failed,omitempty"`
+	Stopped      bool                         `json:"stopped,omitempty"`
 	Checkpoint   *platform.TerminalCheckpoint `json:"checkpoint,omitempty"`
 	Text         string                       `json:"text,omitempty"`
 	Notification string                       `json:"notification,omitempty"`
@@ -103,6 +104,7 @@ type terminalOutboxDraft struct {
 	Route        platform.DeliveryRoute
 	AgentName    string
 	Failed       bool
+	Stopped      bool
 	Checkpoint   *platform.TerminalCheckpoint
 	Text         string
 	Notification string
@@ -243,7 +245,7 @@ func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing b
 	now := o.now()
 	entry := &terminalOutboxEntry{
 		ID: uuid.NewString(), Route: draft.Route,
-		AgentName: strings.TrimSpace(draft.AgentName), Failed: draft.Failed,
+		AgentName: strings.TrimSpace(draft.AgentName), Failed: draft.Failed, Stopped: draft.Stopped,
 		Checkpoint: draft.Checkpoint, Text: draft.Text, Notification: draft.Notification,
 		CreatedAt: now, UpdatedAt: now, NextAttempt: now,
 	}
@@ -341,6 +343,7 @@ func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft)
 	entry.Route = draft.Route
 	entry.AgentName = strings.TrimSpace(draft.AgentName)
 	entry.Failed = draft.Failed
+	entry.Stopped = draft.Stopped
 	entry.Checkpoint = cloneTerminalCheckpoint(draft.Checkpoint)
 	entry.Text = draft.Text
 	entry.Notification = draft.Notification

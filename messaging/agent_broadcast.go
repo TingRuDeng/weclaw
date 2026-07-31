@@ -271,28 +271,48 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 			onProgress(text)
 		}
 	}
-	send := func(text string, failed bool) {
+	send := func(text string, failed bool, stopped bool) {
 		if runtime.activeTask != nil {
 			runtime.activeTask.closeProgress()
+			terminalState := "completed"
+			if stopped {
+				terminalState = "stopped"
+			} else if failed {
+				terminalState = "failed"
+			}
+			runtime.activeTask.recordTerminalView(time.Now(), terminalState)
 			trace = runtime.activeTask.traceSnapshot()
 		}
 		state, stage := "completed", "task.completed"
-		if failed {
+		if stopped {
+			state, stage = "stopped", "task.stopped"
+		} else if failed {
 			state, stage = "failed", "task.failed"
 		}
 		h.recordTraceStage(trace, stage, state, "broadcast agent terminal")
+		if stopped && runtime.activeTask != nil && !runtime.activeTask.shouldSendFinal() {
+			h.recordTraceStage(trace, "task.delivery_suppressed", "detached", "final reply suppressed")
+			if progressSession != nil {
+				_ = progressSession.stopWithTerminal("", false, true)
+			} else {
+				_ = finishProgress("", false)
+			}
+			results <- newBroadcastAgentResult(req, name, "", true)
+			return
+		}
 		h.finishAndSendProgressReply(progressReplyDelivery{
 			delivery: replyDeliveryRequest{
 				ctx: req.ctx, replyWriter: reply, userID: req.userID,
 				agentName: name, reply: text, trace: trace,
 			},
-			failed: failed, finish: finishProgress, progress: progressSession,
+			failed: failed, stopped: stopped,
+			finish: finishProgress, progress: progressSession,
 		})
 		results <- newBroadcastAgentResult(req, name, "", true)
 	}
 	conversationID, err := h.broadcastConversationID(runtime.ctx, req, name, ag, runtime.codexRoute)
 	if err != nil {
-		send(renderFinalFailure("["+name+"] ", err), true)
+		send(renderFinalFailure("["+name+"] ", err), true, false)
 		return
 	}
 	if runtime.activeTask != nil {
@@ -304,7 +324,11 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 		conversationID: conversationID, onProgress: onProgressEvent,
 	})
 	if err != nil {
-		send(renderFinalFailure("["+name+"] ", err), true)
+		if runtime.activeTask != nil && runtime.activeTask.stoppedByRequest(err) {
+			send(renderFinalStopped("["+name+"] "), false, true)
+			return
+		}
+		send(renderFinalFailure("["+name+"] ", err), true, false)
 		return
 	}
 	h.recordBroadcastSession(req, name, ag, conversationID, runtime.codexRoute)
@@ -313,7 +337,7 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 		results <- newBroadcastAgentResult(req, name, "", true)
 		return
 	}
-	send(renderFinalSuccess("["+name+"] ", text), false)
+	send(renderFinalSuccess("["+name+"] ", text), false, false)
 }
 
 type broadcastAgentTurnOptions struct {

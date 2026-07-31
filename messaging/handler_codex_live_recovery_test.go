@@ -3,10 +3,12 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
@@ -127,6 +129,57 @@ func TestCodexRolloutWatcherReadFailureReleasesTask(t *testing.T) {
 	}
 	if _, active := h.activeTask("conversation-1"); active {
 		t.Fatal("rollout 读取失败后仍保留 active task")
+	}
+}
+
+func TestRequestedStopExternalWatcherRendersStoppedTerminal(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	task, taskCtx, started := h.beginActiveTask(ctx, "conversation-1", activeTaskMeta{
+		owner: "user-1", codexThreadID: "thread-1", codexTurnID: "turn-1",
+	})
+	if !started {
+		t.Fatal("failed to register active task")
+	}
+	task.mu.Lock()
+	task.phase = codexTaskStopping
+	task.mu.Unlock()
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, StreamCompletionNotification: true,
+	})
+	progressCfg := config.DefaultProgressConfig()
+	progressCfg.Mode = progressModeStream
+	progressCfg.SendAcceptance = boolPtr(false)
+	runtime := externalCodexTaskRuntime{
+		opts: externalCodexTaskOptions{
+			ctx: ctx, actorUserID: "user-1", agentName: "codex",
+			conversationID: "conversation-1", threadID: "thread-1",
+			progressCfg: progressCfg, reply: reply,
+		},
+		state: externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
+			ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
+		}},
+		task: task,
+		ctx:  taskCtx,
+		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
+			return "", fmt.Errorf("%w: interrupted", errCodexRolloutAborted)
+		},
+	}
+
+	h.runExternalCodexTaskWatcher(runtime)
+
+	if reply.Stream.Failed != "" {
+		t.Fatalf("stopped task rendered as failure: %q", reply.Stream.Failed)
+	}
+	if reply.Stream.Completed != "任务已按请求停止。" {
+		t.Fatalf("completed=%q, want stopped terminal content", reply.Stream.Completed)
+	}
+	if len(reply.Texts) != 1 || reply.Texts[0] != "任务已停止，请查看上方卡片。" {
+		t.Fatalf("texts=%#v, want explicit stopped notification", reply.Texts)
+	}
+	if _, active := h.activeTask("conversation-1"); active {
+		t.Fatal("stopped external task was not released")
 	}
 }
 

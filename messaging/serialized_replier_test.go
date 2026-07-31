@@ -15,6 +15,18 @@ type reentryDetectingReplier struct {
 	reentered atomic.Bool
 }
 
+type stoppableTestStream struct {
+	stopped string
+}
+
+func (s *stoppableTestStream) Update(context.Context, string) error   { return nil }
+func (s *stoppableTestStream) Complete(context.Context, string) error { return nil }
+func (s *stoppableTestStream) Fail(context.Context, string) error     { return nil }
+func (s *stoppableTestStream) Stop(_ context.Context, content string) error {
+	s.stopped = content
+	return nil
+}
+
 func (r *reentryDetectingReplier) call() error {
 	if r.inFlight.Add(1) != 1 {
 		r.reentered.Store(true)
@@ -52,5 +64,17 @@ func TestSerializedReplierPreventsConcurrentCalls(t *testing.T) {
 	wg.Wait()
 	if inner.reentered.Load() {
 		t.Fatal("serialized replier allowed concurrent calls")
+	}
+}
+
+func TestSerializedStreamPreservesStoppedTerminalCapability(t *testing.T) {
+	inner := &stoppableTestStream{}
+	stream := &serializedStream{inner: inner, mu: &sync.Mutex{}}
+
+	if err := stream.Stop(context.Background(), "任务已按请求停止。"); err != nil {
+		t.Fatalf("Stop error: %v", err)
+	}
+	if inner.stopped != "任务已按请求停止。" {
+		t.Fatalf("stopped=%q, want forwarded stopped terminal", inner.stopped)
 	}
 }

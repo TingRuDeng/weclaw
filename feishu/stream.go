@@ -289,7 +289,7 @@ func (s *feishuStream) cancelPendingUpdate() {
 
 // Complete 关闭流式并全量更新为完成卡片。
 func (s *feishuStream) Complete(ctx context.Context, finalContent string) error {
-	checkpoint, err := s.PrepareTerminal(finalContent, false)
+	checkpoint, err := s.PrepareTerminalWithState(finalContent, platform.StreamTerminalCompleted)
 	if err != nil || checkpoint.Kind == "" {
 		return err
 	}
@@ -317,7 +317,16 @@ func (s *feishuStream) DurableReference() (platform.DurableStreamReference, erro
 
 // Fail 关闭流式并全量更新为失败卡片。
 func (s *feishuStream) Fail(ctx context.Context, errText string) error {
-	checkpoint, err := s.PrepareTerminal(errText, true)
+	checkpoint, err := s.PrepareTerminalWithState(errText, platform.StreamTerminalFailed)
+	if err != nil || checkpoint.Kind == "" {
+		return err
+	}
+	return s.deliverPreparedTerminal(ctx, checkpoint)
+}
+
+// Stop 关闭流式并全量更新为用户主动停止卡片。
+func (s *feishuStream) Stop(ctx context.Context, finalContent string) error {
+	checkpoint, err := s.PrepareTerminalWithState(finalContent, platform.StreamTerminalStopped)
 	if err != nil || checkpoint.Kind == "" {
 		return err
 	}
@@ -409,6 +418,15 @@ func (s *feishuStream) deliverPreparedTerminal(ctx context.Context, checkpoint p
 
 // PrepareTerminal 冻结流并导出可跨进程重放的 CardKit 终态操作。
 func (s *feishuStream) PrepareTerminal(finalContent string, failed bool) (platform.TerminalCheckpoint, error) {
+	state := platform.StreamTerminalCompleted
+	if failed {
+		state = platform.StreamTerminalFailed
+	}
+	return s.PrepareTerminalWithState(finalContent, state)
+}
+
+// PrepareTerminalWithState 冻结流并保留完成、失败、停止三种终态语义。
+func (s *feishuStream) PrepareTerminalWithState(finalContent string, state platform.StreamTerminalState) (platform.TerminalCheckpoint, error) {
 	s.ioMu.Lock()
 	defer s.ioMu.Unlock()
 	s.mu.Lock()
@@ -421,13 +439,20 @@ func (s *feishuStream) PrepareTerminal(finalContent string, failed bool) (platfo
 		s.mu.Unlock()
 		return platform.TerminalCheckpoint{}, nil
 	}
+	status := cardStatusDone
+	switch state {
+	case platform.StreamTerminalCompleted:
+	case platform.StreamTerminalFailed:
+		status = cardStatusError
+	case platform.StreamTerminalStopped:
+		status = cardStatusStopped
+	default:
+		s.mu.Unlock()
+		return platform.TerminalCheckpoint{}, fmt.Errorf("unsupported stream terminal state %q", state)
+	}
 	s.closed = true
 	s.cancelPendingUpdate()
 	s.mu.Unlock()
-	status := cardStatusDone
-	if failed {
-		status = cardStatusError
-	}
 	op, err := s.prepareTerminalUpdate(status, finalContent)
 	if err != nil {
 		return platform.TerminalCheckpoint{}, err

@@ -106,7 +106,8 @@ func TestCodexInterruptedTurnReportsExplicitAbort(t *testing.T) {
 	result := h.reconcileInterruptedCodexTurn(context.Background(), &agent.CodexTurnInterruptedError{
 		ThreadID: "thread-1", TurnID: "turn-1",
 	}, nil)
-	if !result.Terminal || !result.Failed || !strings.Contains(result.Err.Error(), "interrupted") {
+	if !result.Terminal || !result.Failed || !strings.Contains(result.Err.Error(), "interrupted") ||
+		!errors.Is(result.Err, errCodexRolloutAborted) {
 		t.Fatalf("result=%#v", result)
 	}
 }

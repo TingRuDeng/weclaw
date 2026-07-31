@@ -38,6 +38,7 @@ type replyDeliveryRequest struct {
 type progressReplyDelivery struct {
 	delivery replyDeliveryRequest
 	failed   bool
+	stopped  bool
 	finish   func(string, bool) bool
 	progress *progressSession
 }
@@ -258,8 +259,14 @@ func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {
 		h.sendReplyProjection(req.delivery, replyDeliveryProjection{imageURLs: projection.imageURLs}, true)
 		return consumed
 	}
+	finish := req.finish
+	if req.stopped && req.progress != nil {
+		finish = func(text string, _ bool) bool {
+			return req.progress.stopWithTerminal(text, false, true)
+		}
+	}
 	consumed := finishProgressWithReplyForPlatform(
-		req.delivery.replyWriter, req.finish, projection.text, req.failed,
+		req.delivery.replyWriter, finish, projection.text, req.failed,
 	)
 	h.sendReplyProjection(req.delivery, projection, consumed)
 	return consumed
@@ -278,8 +285,8 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 		return false, false
 	}
 	recoveryDraft := terminalOutboxDraft{
-		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed,
-		Text: terminalRecoveryText(req.progress, projection.text, req.failed), Trace: req.delivery.trace,
+		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed, Stopped: req.stopped,
+		Text: terminalRecoveryText(req.progress, projection.text, req.failed, req.stopped), Trace: req.delivery.trace,
 	}
 	reservation, err := outbox.reserve(recoveryDraft)
 	if err != nil {
@@ -287,7 +294,7 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 		log.Printf("[terminal-outbox] failed to persist terminal recovery draft; using legacy terminal path: %v", err)
 		return false, false
 	}
-	prepared, err := req.progress.prepareDurableTerminal(req.delivery.replyWriter, projection.text, req.failed)
+	prepared, err := req.progress.prepareDurableTerminal(req.delivery.replyWriter, projection.text, req.failed, req.stopped)
 	if err != nil {
 		log.Printf("[terminal-outbox] failed to prepare stream checkpoint; falling back to durable text: %v", err)
 		prepared = preparedProgressTerminal{}
@@ -312,7 +319,7 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 		text = projection.text
 	}
 	draft := terminalOutboxDraft{
-		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed,
+		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed, Stopped: req.stopped,
 		Checkpoint: checkpoint, Text: text, Notification: prepared.notification, Trace: req.delivery.trace,
 	}
 	if checkpoint == nil && strings.TrimSpace(text) == "" && strings.TrimSpace(draft.Notification) == "" {
@@ -338,12 +345,12 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 	return prepared.consumed && checkpoint != nil, true
 }
 
-func terminalRecoveryText(progress *progressSession, finalText string, failed bool) string {
+func terminalRecoveryText(progress *progressSession, finalText string, failed bool, stopped bool) string {
 	if finalText != progressStatusOnlyComplete && strings.TrimSpace(finalText) != "" {
 		return finalText
 	}
-	if progress != nil && progress.ctx != nil && progress.ctx.Err() != nil {
-		return "任务已停止。"
+	if stopped || progress != nil && progress.ctx != nil && progress.ctx.Err() != nil {
+		return "任务已按请求停止。"
 	}
 	if failed {
 		return "任务执行失败。"

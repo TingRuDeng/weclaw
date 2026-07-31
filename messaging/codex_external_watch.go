@@ -16,6 +16,7 @@ type codexExternalWatchResult struct {
 	Terminal          bool
 	ConfirmedTerminal bool
 	Failed            bool
+	Stopped           bool
 	Source            string
 }
 
@@ -135,7 +136,7 @@ func (h *Handler) bootstrapCodexRolloutAfterDisconnect(threadID string, turnID s
 
 func terminalCodexRolloutState(state codexRolloutTaskState) codexExternalWatchResult {
 	if state.Aborted {
-		err := errors.New(firstNonBlank(state.Reason, "Codex rollout 任务已中断"))
+		err := fmt.Errorf("%w: %s", errCodexRolloutAborted, firstNonBlank(state.Reason, "Codex rollout 任务已中断"))
 		return codexExternalWatchResult{Err: err, Terminal: true, ConfirmedTerminal: true, Failed: true, Source: "rollout"}
 	}
 	return codexExternalWatchResult{

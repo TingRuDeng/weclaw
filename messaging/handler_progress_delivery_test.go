@@ -252,3 +252,45 @@ func TestBroadcastProgressUsesFeishuAccountOverride(t *testing.T) {
 		t.Fatalf("reply=%#v, want timeout from account progress config", reply.Texts)
 	}
 }
+
+func TestStoppedBroadcastTaskDoesNotRenderFailureCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := newBlockingProgressAgent()
+	ag.fakeAgent.info = agent.AgentInfo{Name: "slow", Type: "cli", Command: "slow"}
+	h.agents["slow"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	h.SetProgressConfig(cfg)
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, StreamCompletionNotification: true,
+	})
+	done := make(chan struct{})
+	go func() {
+		h.broadcastToAgents(broadcastAgentsRequest{
+			ctx: context.Background(), platformName: platform.PlatformFeishu,
+			userID: "user-1", routeUserID: "route-1", replyWriter: reply,
+			names: []string{"slow"}, message: "运行任务",
+		})
+		close(done)
+	}()
+	waitForAgentEnter(t, ag)
+	key := h.agentExecutionKeyForRoute("user-1", "route-1", "slow", ag)
+	if cancelled, denied := h.cancelActiveTask(key, "user-1"); !cancelled || denied {
+		t.Fatalf("cancelled=%v denied=%v", cancelled, denied)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stopped broadcast task did not finish")
+	}
+	if reply.Stream.Failed != "" {
+		t.Fatalf("stopped broadcast rendered as failure: %q", reply.Stream.Failed)
+	}
+	if reply.Stream.Completed != "任务已按请求停止。" {
+		t.Fatalf("completed=%q, want stopped terminal content", reply.Stream.Completed)
+	}
+	if strings.Contains(strings.Join(reply.Texts, "\n"), "执行失败") {
+		t.Fatalf("texts=%#v, stopped broadcast must not emit failure wording", reply.Texts)
+	}
+}
