@@ -39,7 +39,9 @@ func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
 // singleActiveTurnChannel 仅为空路由事件提供单活动通道兜底，明示未知 thread 必须丢弃。
 func (a *ACPAgent) singleActiveTurnChannel(threadID string, evt *codexTurnEvent) (chan *codexTurnEvent, bool) {
 	if strings.TrimSpace(threadID) != "" {
-		log.Printf("[acp] dropping turn event for inactive thread (thread=%q, activeTurns=%d, kind=%s)", threadID, len(a.turnCh), evt.Kind)
+		if isCodexTurnControlEvent(evt) {
+			log.Printf("[acp] dropping turn event for inactive thread (thread=%q, activeTurns=%d, kind=%s)", threadID, len(a.turnCh), evt.Kind)
+		}
 		return nil, false
 	}
 	if len(a.turnCh) == 1 {
