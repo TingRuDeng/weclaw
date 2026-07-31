@@ -18,6 +18,7 @@ type agentStartState struct {
 
 // SetDefaultAgent 设置已经启动完成的默认 agent。
 func (h *Handler) SetDefaultAgent(name string, ag agent.Agent) {
+	h.bindCodexThreadArchiveEvents(ag)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.defaultName = name
@@ -66,6 +67,9 @@ func (h *Handler) getAgent(ctx context.Context, name string) (agent.Agent, error
 
 	log.Printf("[handler] starting agent %q on demand...", name)
 	ag = factory(ctx, name)
+	if ag != nil {
+		h.bindCodexThreadArchiveEvents(ag)
+	}
 
 	h.mu.Lock()
 	if existing, ok := h.agents[name]; ok {

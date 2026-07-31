@@ -197,6 +197,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | `/cx help`、`/cc help` | 查看 Codex、Claude 完整会话命令 |
 | `/cx <编号>`、`/cx switch <编号>` | 选择并绑定当前工作空间的 Codex 会话 |
 | `/cx new` | 新建并绑定当前工作空间的 Codex 会话 |
+| `/cx archive current`、`/cx archive <编号>` | 归档当前或列表中的空闲 Codex 会话；保留历史，不做硬删除 |
 | `/cx account`、`/cx account status` | 查看主机级 Codex 账号；管理员私聊可选择和切换 |
 | `/update`、`/restart [--force]` | 管理员在机器人私聊中远程更新或重启 WeClaw |
 
@@ -204,6 +205,8 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 <summary>Codex 常用命令</summary>
 
 选择并绑定：`/cx <编号>`、`/cx switch <会话>`、进入仅有一个会话的 `/cx cd <工作空间>`、`/cx new`。
+
+归档：`/cx archive current` 归档当前绑定会话；进入工作空间会话列表后可用 `/cx archive <编号>` 归档指定会话。归档只允许空闲且未被其他 WeClaw 窗口绑定的会话，历史仍保留，可在 Codex App 的归档列表恢复。
 
 运行边界：`/cx status` 紧凑展示当前工作空间、会话、任务、账号和运行状态；完整路径使用 `/cx pwd`，账号诊断使用 `/cx account status`，额度使用 `/cx quota`。
 

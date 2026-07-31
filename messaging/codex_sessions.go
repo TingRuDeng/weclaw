@@ -14,13 +14,15 @@ type codexSessionStore struct {
 	saveMu     sync.Mutex
 	filePath   string
 	bindings   map[string]codexSessionBinding
+	archived   map[string]struct{}
 	writeState codexSessionStateWriter
 }
 
 type codexSessionState struct {
 	Version  int                            `json:"version"`
 	Bindings map[string]codexSessionBinding `json:"bindings"`
-	// Controls is read only to migrate v1-v3 state. v4 never writes it.
+	Archived []string                       `json:"archived,omitempty"`
+	// Controls is read only to migrate v1-v3 state. v4+ never writes it.
 	Controls map[string]legacyCodexControlIntent `json:"controls,omitempty"`
 	Updated  string                              `json:"updated"`
 }
@@ -47,13 +49,14 @@ type codexWorkspaceSession struct {
 
 const legacyBindingDefaultPlatform = "wechat"
 
-// v4 persists frontend bindings only. Codex writer authority belongs to the
-// single app-server and is no longer assigned to an individual message route.
-const codexSessionStateVersion = 4
+// v5 persists frontend bindings and archive tombstones. Codex writer authority
+// belongs to the single app-server and is never assigned to a message route.
+const codexSessionStateVersion = 5
 
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
 		bindings:   make(map[string]codexSessionBinding),
+		archived:   make(map[string]struct{}),
 		writeState: writeCodexSessionStateFile,
 	}
 }
@@ -76,6 +79,9 @@ func (s *codexSessionStore) getThread(bindingKey string, workspaceRoot string) (
 	defer s.mu.Unlock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	session := s.bindings[bindingKey].Workspaces[workspaceRoot]
+	if _, archived := s.archived[strings.TrimSpace(session.ThreadID)]; archived {
+		return "", false
+	}
 	return session.ThreadID, session.PendingNewThread
 }
 

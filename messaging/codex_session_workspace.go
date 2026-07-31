@@ -116,6 +116,11 @@ func (s *codexSessionStore) updateWorkspace(bindingKey string, workspaceRoot str
 	s.mu.Lock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	session.ThreadID = strings.TrimSpace(session.ThreadID)
+	// 归档墓碑必须压过晚到的 Agent 同步，不能把已归档 thread 写回持久化 binding。
+	if _, archived := s.archived[session.ThreadID]; session.ThreadID != "" && archived {
+		s.mu.Unlock()
+		return
+	}
 	binding := s.ensureBindingLocked(bindingKey)
 	if session.ThreadID != "" {
 		// 同一个 Codex thread 只能属于一个 workspace，避免后续切换时按错误 cwd 恢复。

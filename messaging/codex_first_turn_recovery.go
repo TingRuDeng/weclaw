@@ -33,6 +33,9 @@ func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if _, archived := s.archived[newThreadID]; archived {
+		return errCodexRemoteThreadArchived
+	}
 	currentBinding := s.bindings[bindingKey]
 	currentSession, ok := currentBinding.Workspaces[workspaceRoot]
 	if !ok || strings.TrimSpace(currentSession.ThreadID) != oldThreadID {
@@ -60,7 +63,7 @@ func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 
 	state := codexSessionState{
 		Version: codexSessionStateVersion, Bindings: nextBindings,
-		Updated: now.Format(time.RFC3339),
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: now.Format(time.RFC3339),
 	}
 	if err := s.persistCandidate(s.filePath, state); err != nil {
 		return fmt.Errorf("保存 Codex 首次写入 thread 替换: %w", err)

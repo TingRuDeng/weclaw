@@ -126,7 +126,11 @@ func (h *Handler) codexSessionsForWorkspace(bindingKey string, workspaceRoot str
 		return nil, codexAppCatalogReadError("会话目录", err)
 	}
 	if available {
-		h.ensureCodexSessions().clearStaleWorkspaceThread(bindingKey, workspaceRoot, codexVisibleThreadSet(sessions))
+		visible := codexVisibleThreadSet(sessions)
+		if err := h.ensureCodexSessions().reconcileVisibleRemoteThreads(visible); err != nil {
+			return nil, err
+		}
+		h.ensureCodexSessions().clearStaleWorkspaceThread(bindingKey, workspaceRoot, visible)
 		return sessions, nil
 	}
 	sessions = make([]codexWorkspaceView, 0)

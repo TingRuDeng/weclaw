@@ -112,6 +112,16 @@ type CodexThreadAgent interface {
 	ClearCodexThread(conversationID string)
 }
 
+// CodexThreadArchiveAgent 暴露 Codex app-server 的可恢复归档能力。
+type CodexThreadArchiveAgent interface {
+	ArchiveCodexThread(ctx context.Context, threadID string) error
+}
+
+// CodexThreadArchiveEventSource 把 app-server 的外部归档事件同步给 frontend 状态层。
+type CodexThreadArchiveEventSource interface {
+	SetCodexThreadArchivedHandler(handler func(threadID string))
+}
+
 // CodexThreadState 描述 app-server 或 Desktop 持有的 Codex thread 当前运行态。
 type CodexThreadState struct {
 	ThreadID             string

@@ -104,6 +104,9 @@ type ACPAgent struct {
 	notifyCh map[string]chan *sessionUpdate // sessionID -> channel
 	turnCh   map[string]chan *codexTurnEvent
 
+	codexThreadArchiveHandlerMu sync.RWMutex
+	codexThreadArchivedHandler  func(string)
+
 	unhandledLogMu sync.Mutex
 	unhandledLogAt map[string]time.Time
 
