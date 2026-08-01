@@ -1,6 +1,9 @@
 package agent
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type codexItemLifecycleParams struct {
 	ThreadID string             `json:"threadId"`
@@ -15,6 +18,8 @@ type codexLifecycleItem struct {
 	Status           string            `json:"status"`
 	AggregatedOutput string            `json:"aggregatedOutput"`
 	Changes          json.RawMessage   `json:"changes"`
+	Server           string            `json:"server"`
+	Tool             string            `json:"tool"`
 	Content          []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -35,6 +40,9 @@ func (a *ACPAgent) handleCodexItemStartedAt(params json.RawMessage, sequence uin
 		a.dispatchCodexItemText(p, "", sequence)
 		return
 	}
+	if strings.TrimSpace(p.Item.Status) == "" {
+		p.Item.Status = "running"
+	}
 	a.dispatchCodexItemProgress(p, sequence)
 }
 
@@ -46,6 +54,9 @@ func (a *ACPAgent) handleCodexItemCompletedAt(params json.RawMessage, sequence u
 	if p.Item.Type == "agentMessage" {
 		a.dispatchCodexItemText(p, "item_completed", sequence)
 		return
+	}
+	if strings.TrimSpace(p.Item.Status) == "" {
+		p.Item.Status = "completed"
 	}
 	a.dispatchCodexItemProgress(p, sequence)
 }
@@ -78,5 +89,64 @@ func (a *ACPAgent) dispatchCodexItemProgress(p codexItemLifecycleParams, sequenc
 		a.dispatchCodexCommandProgress(progress, sequence)
 	case "fileChange":
 		a.dispatchCodexFileProgress(progress, sequence)
+	case "mcpToolCall", "webSearch", "collabAgentToolCall":
+		a.dispatchCodexLifecycleToolProgress(p, sequence)
 	}
+}
+
+func (a *ACPAgent) dispatchCodexLifecycleToolProgress(p codexItemLifecycleParams, sequence uint64) {
+	action := codexLifecycleToolAction(p.Item)
+	if action == "" {
+		return
+	}
+	a.dispatchProgressEventToThread(p.ThreadID, codexProgressPrefix+action, &codexProgressEvent{
+		ID: p.Item.ID, Kind: "tool", Action: action, Status: p.Item.Status,
+	}, sequence)
+}
+
+// codexLifecycleToolAction 只展示协议声明的工具类型和名称，不透传参数、查询、结果或子智能体提示词。
+func codexLifecycleToolAction(item codexLifecycleItem) string {
+	switch item.Type {
+	case "mcpToolCall":
+		server := strings.TrimSpace(item.Server)
+		if strings.EqualFold(server, "codegraph") {
+			server = "CodeGraph"
+		}
+		tool := strings.TrimSpace(item.Tool)
+		switch {
+		case server != "" && tool != "":
+			return "使用 " + server + " · " + tool
+		case server != "":
+			return "使用 " + server
+		case tool != "":
+			return "使用工具 " + tool
+		default:
+			return "调用工具"
+		}
+	case "webSearch":
+		return "执行网页搜索"
+	case "collabAgentToolCall":
+		switch normalizeCodexLifecycleToolName(item.Tool) {
+		case "spawnagent":
+			return "启动子智能体"
+		case "sendmessage":
+			return "向子智能体发送消息"
+		case "wait":
+			return "等待子智能体"
+		case "resumeagent":
+			return "恢复子智能体"
+		case "interruptagent":
+			return "中断子智能体"
+		case "closeagent":
+			return "关闭子智能体"
+		default:
+			return "调用子智能体"
+		}
+	default:
+		return ""
+	}
+}
+
+func normalizeCodexLifecycleToolName(name string) string {
+	return strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(name)))
 }

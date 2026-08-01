@@ -353,24 +353,36 @@ func (t *activeAgentTask) progressReanchorSnapshot() (*progressSession, string, 
 	if t.progress == nil || t.detached || t.phase == codexTaskTerminal || t.view.closed {
 		return nil, "", false
 	}
-	return t.progress, t.view.lastProgress, true
+	card, _ := renderTaskProgressCard(t.view)
+	return t.progress, card, true
 }
 
 func (t *activeAgentTask) recordProgress(now time.Time, event agent.ProgressEvent) (string, bool) {
-	return t.recordProgressWithPolicy(now, event, false)
+	update, recorded := t.recordProgressUpdateWithPolicy(now, event, false)
+	return update.latest, recorded
+}
+
+func (t *activeAgentTask) recordProgressUpdate(now time.Time, event agent.ProgressEvent) (taskProgressUpdate, bool) {
+	return t.recordProgressUpdateWithPolicy(now, event, false)
 }
 
 func (t *activeAgentTask) recordProgressWithPolicy(now time.Time, event agent.ProgressEvent, allowLocalUnsequenced bool) (string, bool) {
+	update, recorded := t.recordProgressUpdateWithPolicy(now, event, allowLocalUnsequenced)
+	return update.latest, recorded
+}
+
+func (t *activeAgentTask) recordProgressUpdateWithPolicy(now time.Time, event agent.ProgressEvent, allowLocalUnsequenced bool) (taskProgressUpdate, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	next, changed := reduceTaskView(t.view, taskViewEvent{
 		kind: taskViewProgress, at: now, progress: event, allowLocalUnsequenced: allowLocalUnsequenced,
 	})
 	if !changed {
-		return "", false
+		return taskProgressUpdate{}, false
 	}
 	t.view = next
-	return next.lastProgress, true
+	card, timeline := renderTaskProgressCard(next)
+	return taskProgressUpdate{latest: next.lastProgress, card: card, timeline: timeline}, true
 }
 
 func (t *activeAgentTask) recordProgressText(now time.Time, text string) (string, bool) {

@@ -293,6 +293,75 @@ func TestHandleCodexItemStartedEmitsFileProgress(t *testing.T) {
 	}
 }
 
+func TestHandleCodexItemLifecycleEmitsSafeToolProgress(t *testing.T) {
+	tests := []struct {
+		name       string
+		params     string
+		wantAction string
+	}{
+		{
+			name:       "mcp tool",
+			params:     `{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"codegraph_explore","arguments":{"query":"secret source"},"status":"inProgress"}}`,
+			wantAction: "使用 CodeGraph · codegraph_explore",
+		},
+		{
+			name:       "web search",
+			params:     `{"threadId":"thread-1","item":{"id":"search-1","type":"webSearch","query":"private search text"}}`,
+			wantAction: "执行网页搜索",
+		},
+		{
+			name:       "collab agent",
+			params:     `{"threadId":"thread-1","item":{"id":"collab-1","type":"collabAgentToolCall","tool":"spawnAgent","prompt":"private delegated prompt","status":"inProgress"}}`,
+			wantAction: "启动子智能体",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+			turnCh := make(chan *codexTurnEvent, 1)
+			a.notifyMu.Lock()
+			a.turnCh["thread-1"] = turnCh
+			a.notifyMu.Unlock()
+
+			a.handleCodexItemStarted(json.RawMessage(tt.params))
+
+			select {
+			case evt := <-turnCh:
+				if evt.Progress == nil || evt.Progress.Kind != "tool" || evt.Progress.Action != tt.wantAction || normalizeProgressState(evt.Progress.Status) != ProgressStateRunning {
+					t.Fatalf("event=%#v, want safe running tool progress", evt)
+				}
+				for _, secret := range []string{"secret source", "private search text", "private delegated prompt"} {
+					if strings.Contains(evt.Text, secret) || strings.Contains(evt.Progress.Action, secret) || strings.Contains(evt.Progress.Detail, secret) {
+						t.Fatalf("event leaked private payload %q: %#v", secret, evt)
+					}
+				}
+			default:
+				t.Fatal("tool item did not emit progress")
+			}
+		})
+	}
+}
+
+func TestHandleCodexItemCompletedMarksToolProgressCompleted(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexItemCompletedAt(json.RawMessage(`{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"codegraph_explore","arguments":{},"status":"completed"}}`), 17)
+
+	select {
+	case evt := <-turnCh:
+		if evt.Progress == nil || evt.Progress.Status != "completed" || evt.Sequence != 17 {
+			t.Fatalf("event=%#v, want completed tool progress", evt)
+		}
+	default:
+		t.Fatal("completed tool item did not emit progress")
+	}
+}
+
 func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	// readLoop 在输入 EOF 后还会投递 runtime 终态，给两类事件分别保留容量。

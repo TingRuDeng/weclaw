@@ -29,6 +29,9 @@ func (f *fakeStructuredProgressAgent) ChatWithProgressEvents(_ context.Context, 
 			onProgress(event)
 		}
 	}
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	return f.reply, f.err
 }
 

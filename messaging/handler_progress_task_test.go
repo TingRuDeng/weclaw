@@ -272,3 +272,71 @@ func TestNativeStreamProgressCollapsesRepeatedStructuredStatus(t *testing.T) {
 		t.Fatalf("stream update should contain one latest status, updates=%#v", reply.Stream.Updates)
 	}
 }
+
+func TestNativeStreamKeepsStructuredTimelineThroughTerminal(t *testing.T) {
+	h := NewHandler(nil, nil)
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	_, finish, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "codex", "/workspace/project", "修复进度卡", cfg,
+	)
+	timeline := "**执行进度**\n\n- ✅ 定位问题\n- • 运行回归测试"
+	session.onTaskProgress(taskProgressUpdate{
+		latest: "运行回归测试", card: timeline, timeline: true,
+	})
+	time.Sleep(taskQueueProbeDelay)
+	_ = finish(progressStatusOnlyComplete, false)
+
+	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != timeline {
+		t.Fatalf("updates=%#v, want complete compact timeline", reply.Stream.Updates)
+	}
+	if reply.Stream.Completed != timeline {
+		t.Fatalf("completed=%q, want timeline retained at terminal", reply.Stream.Completed)
+	}
+}
+
+func TestStructuredAgentNativeStreamBuildsCompactTimeline(t *testing.T) {
+	h := NewHandler(nil, nil)
+	h.agents["mock"] = &fakeStructuredProgressAgent{
+		fakeProgressAgent: fakeProgressAgent{
+			fakeAgent: fakeAgent{reply: "最终结果"}, delay: taskQueueProbeDelay,
+		},
+		events: []agent.ProgressEvent{
+			{ID: "plan", Kind: agent.ProgressKindPlan, State: agent.ProgressStateRunning, Sequence: 1, Text: "定位问题"},
+			{ID: "command:test", Kind: agent.ProgressKindCommand, State: agent.ProgressStateRunning, Sequence: 2, Text: "运行 go test ./messaging"},
+			{ID: "command:test", Kind: agent.ProgressKindCommand, State: agent.ProgressStateCompleted, Sequence: 3, Text: "运行 go test ./messaging"},
+		},
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	h.SetProgressConfig(cfg)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+
+	h.sendToNamedAgent(agentMessageRequest{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply,
+		name: "mock", message: "检查进度", clientID: "client-1",
+	})
+
+	if len(reply.Stream.Updates) == 0 {
+		t.Fatal("structured task should update the native stream")
+	}
+	last := reply.Stream.Updates[len(reply.Stream.Updates)-1]
+	if !strings.Contains(last, "**执行进度**") || !strings.Contains(last, "定位问题") ||
+		!strings.Contains(last, "✅ 运行 go test ./messaging") {
+		t.Fatalf("last update=%q, want compact structured timeline", last)
+	}
+	if !strings.Contains(reply.Stream.Completed, "**执行进度**") ||
+		!strings.Contains(reply.Stream.Completed, "**处理结果**") ||
+		!strings.Contains(reply.Stream.Completed, "[mock] 最终结果") {
+		t.Fatalf("completed=%q, want retained timeline and final result", reply.Stream.Completed)
+	}
+}

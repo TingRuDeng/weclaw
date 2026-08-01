@@ -255,12 +255,14 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 	h.recordTraceStage(trace, "task.started", "running", "agent="+name+" broadcast")
 	onProgressEvent := func(event agent.ProgressEvent) {
 		text := event.DisplayText()
+		update := taskProgressUpdate{latest: text, card: text}
 		if runtime.activeTask != nil {
 			var recorded bool
-			text, recorded = runtime.activeTask.recordProgress(time.Now(), event)
+			update, recorded = runtime.activeTask.recordProgressUpdate(time.Now(), event)
 			if !recorded || !runtime.activeTask.shouldSendFinal() {
 				return
 			}
+			text = update.latest
 		}
 		if text != "" {
 			progressTrace := trace
@@ -268,7 +270,11 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 				progressTrace = runtime.activeTask.traceSnapshot()
 			}
 			h.recordProgressTrace(progressTrace, event, text)
-			onProgress(text)
+			if progressSession != nil {
+				progressSession.onTaskProgress(update)
+			} else {
+				onProgress(text)
+			}
 		}
 	}
 	send := func(text string, failed bool, stopped bool) {

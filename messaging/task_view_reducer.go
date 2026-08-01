@@ -25,14 +25,16 @@ type taskViewEvent struct {
 
 // taskViewState 是任务卡和 /ps 的唯一进程内展示快照。
 type taskViewState struct {
-	lastProgress          string
-	lastProgressEvent     agent.ProgressEvent
-	lastProgressAt        time.Time
-	lastProgressSourceSeq uint64
-	revision              uint64
-	closed                bool
-	terminalState         string
-	terminalAt            time.Time
+	lastProgress            string
+	lastProgressEvent       agent.ProgressEvent
+	lastProgressAt          time.Time
+	lastProgressSourceSeq   uint64
+	progressTimeline        []agent.ProgressEvent
+	progressTimelineEnabled bool
+	revision                uint64
+	closed                  bool
+	terminalState           string
+	terminalAt              time.Time
 }
 
 // reduceTaskView 是无副作用 reducer；旧 sequence 和终态后的进展在此统一拒绝。
@@ -59,6 +61,8 @@ func reduceTaskView(current taskViewState, event taskViewEvent) (taskViewState, 
 		next.lastProgress = display
 		next.lastProgressEvent = event.progress
 		next.lastProgressAt = event.at
+		next.progressTimeline = appendTaskProgressTimeline(current.progressTimeline, event.progress)
+		next.progressTimelineEnabled = current.progressTimelineEnabled || isStructuredTaskProgress(event.progress)
 		return next, true
 	case taskViewClosed:
 		if current.closed {
