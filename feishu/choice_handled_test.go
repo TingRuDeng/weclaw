@@ -92,6 +92,9 @@ func TestChoiceCommandResultTemplateUsesTerminalStateColors(t *testing.T) {
 		want    string
 	}{
 		{name: "ordinary information", command: "/cx status", content: "Codex 状态", want: "blue"},
+		{name: "model switch success", command: "/model gpt-5.2", content: "已将 Codex 模型切换为: gpt-5.2", want: "green"},
+		{name: "reasoning switch success", command: "/reasoning high", content: "已将当前 Codex 会话推理强度切换为: high", want: "green"},
+		{name: "model switch failure remains informational", command: "/model gpt-5.2", content: "切换模型失败，请重试。", want: "blue"},
 		{name: "codex switch success", command: "/cx switch thread-1", content: "已切换并绑定。", want: "green"},
 		{name: "claude switch success", command: "/cc switch session-1", content: "已切换 Claude 会话。", want: "green"},
 		{name: "account switch success", command: "/cx account confirm token", content: "Codex 账号切换成功", want: "green"},

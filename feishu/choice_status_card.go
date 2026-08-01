@@ -122,6 +122,9 @@ func choiceCommandResultTemplate(command string, content string) string {
 	if isTaskControlCommand(command) {
 		return taskControlCommandResultTemplate(command, content)
 	}
+	if isModelSettingCommand(command) && modelSettingCommandSucceeded(content) {
+		return "green"
+	}
 	if !isDeferredCardResultCommand(command) {
 		return "blue"
 	}
@@ -136,6 +139,24 @@ func choiceCommandResultTemplate(command string, content string) string {
 		return "green"
 	}
 	return "red"
+}
+
+func isModelSettingCommand(command string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(command)))
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "/model", "/reasoning":
+		return true
+	default:
+		return false
+	}
+}
+
+func modelSettingCommandSucceeded(content string) bool {
+	content = strings.TrimSpace(content)
+	return strings.HasPrefix(content, "已将") && strings.Contains(content, "切换为")
 }
 
 func isTaskControlCommand(command string) bool {
