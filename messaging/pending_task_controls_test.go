@@ -35,6 +35,12 @@ func TestFeishuQueuedCodexMessageUsesBoundTaskControlCard(t *testing.T) {
 	if !strings.Contains(card.Prompt, "补充要求") || len(card.Choices) != 3 {
 		t.Fatalf("card=%#v, want pending preview and three controls", card)
 	}
+	if !strings.Contains(card.Prompt, "无需操作") ||
+		!strings.Contains(card.Prompt, "当前任务结束后会自动执行") ||
+		!strings.Contains(card.Prompt, "如需改变默认处理方式") ||
+		strings.Contains(card.Prompt, "请选择如何处理") {
+		t.Fatalf("prompt=%q, want automatic execution presented as the default instead of a required choice", card.Prompt)
+	}
 	wantIDs := []string{"/guide", "/cancel", "/stop"}
 	token := ""
 	for index, choice := range card.Choices {

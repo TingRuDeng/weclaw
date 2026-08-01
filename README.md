@@ -111,13 +111,13 @@ If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` 
 
 ### Control a Running Task
 
-- Send one regular message while a task is active: queue it and run it automatically after the current task succeeds or fails.
+- Send one regular message while a task is active: queue it and run it automatically after the current task ends.
 - `/cancel`: remove the queued message without stopping the active task.
 - `/guide`: steer the active Codex task with the queued message; Claude does not support it.
 - `/stop`: stop the task running in the current chat window.
 - `/ps`: list tasks running for the current user.
 
-In Feishu, queuing a second message immediately opens a compact contextual card. A Codex card offers **Send as guidance**, **Remove queued message**, and **Stop current task**; a Claude card omits guidance because Claude does not support it. The card is bound to the bot account, operator, chat route, active task, and exact queued-message revision, so an expired card cannot alter a later task or replacement message. Button results replace the same card instead of creating a separate command-result message.
+In Feishu, queuing a second message immediately opens a compact contextual card. No click is required: by default, the message runs automatically after the current task ends, and the buttons are only for changing that default handling. A Codex card offers **Send as guidance**, **Remove queued message**, and **Stop current task**; a Claude card omits guidance because Claude does not support it. The card is bound to the bot account, operator, chat route, active task, and exact queued-message revision, so an expired card cannot alter a later task or replacement message. Button results replace the same card instead of creating a separate command-result message.
 
 Native Codex and Claude plan, tool, command, and file signals are normalized into structured progress events. The task card and `/ps` read the same latest snapshot, and stale or late watcher events cannot overwrite a terminal task state.
 
