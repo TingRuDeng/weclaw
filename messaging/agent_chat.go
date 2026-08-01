@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
@@ -52,7 +53,7 @@ func (h *Handler) chatWithAgentWithProgressEvents(ctx context.Context, ag agent.
 		return "", err
 	}
 
-	log.Printf("[handler] agent replied (%s, elapsed=%s): %q", info, elapsed, truncate(reply, 100))
+	log.Printf("[handler] agent replied (%s, elapsed=%s, runes=%d)", info, elapsed, utf8.RuneCountInString(reply))
 	return reply, nil
 }
 

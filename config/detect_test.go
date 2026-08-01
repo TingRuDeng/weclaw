@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,24 +82,30 @@ func TestLoginShellWhichCommandPassesBinaryAsArg(t *testing.T) {
 // PATH is stripped to system-only dirs (no nvm), so exec.LookPath fails,
 // but lookPath resolves claude via login shell fallback.
 func TestLookPath_LoginShellFallback(t *testing.T) {
-	// Precondition: claude must be discoverable via login shell (i.e. nvm in .zshrc)
-	fullPath, err := exec.LookPath("claude")
-	if err != nil {
-		t.Skip("claude not installed, skipping login shell fallback test")
+	home := t.TempDir()
+	binDir := filepath.Join(home, "bin")
+	if err := os.Mkdir(binDir, 0o700); err != nil {
+		t.Fatal(err)
 	}
+	fullPath := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(fullPath, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := []byte(`export PATH="$HOME/bin:$PATH"` + "\n")
+	for _, name := range []string{".zshrc", ".bash_profile"} {
+		if err := os.WriteFile(filepath.Join(home, name), profile, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("ZDOTDIR", home)
+	t.Setenv("PATH", "/usr/bin:/bin")
 
-	// Simulate daemon environment: strip PATH to system-only dirs
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
-	defer os.Setenv("PATH", origPath)
-
-	// Reproduce the bug: exec.LookPath must fail under stripped PATH
-	_, err = exec.LookPath("claude")
+	_, err := exec.LookPath("claude")
 	if err == nil {
-		t.Skip("claude found in minimal PATH, cannot reproduce nvm issue")
+		t.Fatal("claude unexpectedly found in stripped PATH")
 	}
 
-	// Verify fix: lookPath should find claude via login shell
 	p, err := lookPath("claude")
 	if err != nil {
 		t.Fatalf("lookPath should find claude via login shell, got: %v", err)

@@ -315,7 +315,7 @@ weclaw update --restart
 weclaw version
 ```
 
-`weclaw update` returns immediately when the installed version is already current. Configuration and agent preflight runs only after installing a new version or when `update --restart` is explicitly requested. `restart` and `update --restart` finish preflight before stopping the old service, and a normal restart does not interrupt active tasks. Update official installations with `weclaw update`; never overwrite the binary in PATH with a local build.
+`weclaw update` returns immediately when the installed version is already current. Configuration and agent preflight runs only after installing a new version or when `update --restart` is explicitly requested. `restart` and `update --restart` finish preflight before stopping the old service, and a normal restart does not interrupt active tasks. If preflight fails after installing a new version, WeClaw restores the previous binary. During `update --restart`, safety-check, shutdown, or startup failures likewise restore the previous binary and restart the previous service if it had already stopped; rollback failures are reported together with the original update error. Update official installations with `weclaw update`; never overwrite the binary in PATH with a local build.
 
 ## Build from Source
 

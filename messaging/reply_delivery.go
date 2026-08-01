@@ -397,10 +397,3 @@ func sendPlatformText(ctx context.Context, reply platform.Replier, userID string
 		log.Printf("[handler] failed to send reply to %s: %v", userID, err)
 	}
 }
-
-func truncate(text string, limit int) string {
-	if len(text) <= limit {
-		return text
-	}
-	return text[:limit] + "..."
-}

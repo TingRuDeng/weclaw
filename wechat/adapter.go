@@ -2,6 +2,7 @@ package wechat
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -81,6 +82,11 @@ func (a *Adapter) NewReplierForRoute(route platform.DeliveryRoute) platform.Repl
 
 // Run 启动微信长轮询；入站消息转换将在后续任务接入。
 func (a *Adapter) Run(ctx context.Context, dispatch platform.DispatchFunc) error {
+	if a != nil && a.tokenStore != nil {
+		if err := a.tokenStore.loadError(); err != nil {
+			return fmt.Errorf("load context token store: %w", err)
+		}
+	}
 	monitor, err := a.newMonitor(a.client, a.handleWeixinMessage(dispatch))
 	if err != nil {
 		return err
@@ -107,7 +113,7 @@ func (a *Adapter) handleWeixinMessage(dispatch platform.DispatchFunc) ilink.Mess
 			return
 		}
 		if a.tokenStore != nil {
-			if err := a.tokenStore.Set(msg.FromUserID, msg.ContextToken); err != nil {
+			if err := a.tokenStore.SetContext(ctx, msg.FromUserID, msg.ContextToken); err != nil {
 				log.Printf("[wechat] failed to persist context_token for %s: %v", msg.FromUserID, err)
 			}
 		}

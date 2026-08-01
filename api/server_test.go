@@ -227,6 +227,81 @@ func TestHandleSendReportsPartialSuccessWhenMediaFailsAfterText(t *testing.T) {
 	}
 }
 
+func TestHandleSendReportsPartialSuccessWhenExtractedImageFailsAfterText(t *testing.T) {
+	reply := &recordingReplier{mediaErr: fmt.Errorf("remote media unavailable")}
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
+		Access:   platform.NewAccessControl([]string{"ignored"}),
+	}})
+	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(
+		`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"hi ![image](https://example.com/image.png)"}`,
+	))
+	req.Host = "127.0.0.1:18011"
+	rec := httptest.NewRecorder()
+	server.handleSend(rec, req)
+
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("status=%d, body=%q, want %d", rec.Code, rec.Body.String(), http.StatusMultiStatus)
+	}
+	var response partialSendResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "partial" || !response.TextSent || response.MediaSent {
+		t.Fatalf("response=%+v, want partial text-only success", response)
+	}
+	if len(reply.texts) != 1 || len(reply.mediaURLs) != 1 {
+		t.Fatalf("reply=%#v, want one text and one extracted media attempt", reply)
+	}
+}
+
+func TestHandleSendReportsSuccessfulMediaWhenOnlySomeExtractedImagesFail(t *testing.T) {
+	reply := &recordingReplier{mediaErrs: []error{nil, fmt.Errorf("second image unavailable")}}
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &outboundPlatform{name: platform.PlatformFeishu, account: "cli_a", reply: reply},
+		Access:   platform.NewAccessControl([]string{"ignored"}),
+	}})
+	server := NewServer(nil, "127.0.0.1:18011", WithRegistry(registry))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/send", strings.NewReader(
+		`{"platform":"feishu","account_id":"cli_a","to":"ou_user","text":"![one](https://example.com/one.png) ![two](https://example.com/two.png)"}`,
+	))
+	req.Host = "127.0.0.1:18011"
+	rec := httptest.NewRecorder()
+	server.handleSend(rec, req)
+
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("status=%d, body=%q, want %d", rec.Code, rec.Body.String(), http.StatusMultiStatus)
+	}
+	var response partialSendResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "partial" || !response.TextSent || !response.MediaSent {
+		t.Fatalf("response=%+v, want partial text and media success", response)
+	}
+	if len(reply.mediaURLs) != 2 {
+		t.Fatalf("media attempts=%d, want 2", len(reply.mediaURLs))
+	}
+}
+
+func TestSendRequestPreflightsExtractedImageCapability(t *testing.T) {
+	reply := &textOnlyRecordingReplier{}
+	result, err := (&Server{}).sendRequest(context.Background(), reply, SendRequest{
+		To:   "ou_user",
+		Text: "hi ![image](https://example.com/image.png)",
+	})
+
+	if err == nil {
+		t.Fatal("sendRequest error=nil, want unsupported media error")
+	}
+	if result.textSent || len(reply.texts) != 0 {
+		t.Fatalf("result=%+v texts=%#v, media capability must be checked before sending text", result, reply.texts)
+	}
+}
+
 func TestHandleSendLogDoesNotContainMessageBody(t *testing.T) {
 	reply := &recordingReplier{}
 	registry := platform.NewRegistry([]platform.RegistryEntry{{
@@ -348,6 +423,40 @@ type recordingReplier struct {
 	texts     []string
 	mediaURLs []string
 	mediaErr  error
+	mediaErrs []error
+}
+
+type textOnlyRecordingReplier struct {
+	texts []string
+}
+
+func (r *textOnlyRecordingReplier) Capabilities() platform.Capabilities {
+	return platform.Capabilities{Text: true}
+}
+
+func (r *textOnlyRecordingReplier) SendText(ctx context.Context, text string) error {
+	r.texts = append(r.texts, text)
+	return nil
+}
+
+func (r *textOnlyRecordingReplier) SendImage(ctx context.Context, localPath string) error {
+	return platform.ErrUnsupported
+}
+
+func (r *textOnlyRecordingReplier) SendFile(ctx context.Context, localPath string) error {
+	return platform.ErrUnsupported
+}
+
+func (r *textOnlyRecordingReplier) Typing(ctx context.Context, on bool) error {
+	return nil
+}
+
+func (r *textOnlyRecordingReplier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
+	return nil, platform.ErrUnsupported
+}
+
+func (r *textOnlyRecordingReplier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
+	return platform.ErrUnsupported
 }
 
 func (r *recordingReplier) Capabilities() platform.Capabilities {
@@ -360,7 +469,11 @@ func (r *recordingReplier) SendText(ctx context.Context, text string) error {
 }
 
 func (r *recordingReplier) SendMediaFromURL(ctx context.Context, mediaURL string) error {
+	attempt := len(r.mediaURLs)
 	r.mediaURLs = append(r.mediaURLs, mediaURL)
+	if attempt < len(r.mediaErrs) {
+		return r.mediaErrs[attempt]
+	}
 	return r.mediaErr
 }
 

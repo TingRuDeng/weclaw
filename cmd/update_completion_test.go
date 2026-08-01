@@ -109,3 +109,132 @@ func TestRestartUpdatedServiceReturnsStartError(t *testing.T) {
 		t.Fatalf("restartUpdatedService error=%v, want %v", err, wantErr)
 	}
 }
+
+func TestFinishUpdateRestartFailureRestoresPreviousVersionAndService(t *testing.T) {
+	wantErr := errors.New("new version failed to start")
+	var calls []string
+	running := true
+	rolledBack := false
+	committed := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			calls = append(calls, "prepare")
+			return preparedStart{
+				cfg: config.DefaultConfig(),
+				run: func() error {
+					if !rolledBack {
+						calls = append(calls, "start-new")
+						return wantErr
+					}
+					calls = append(calls, "start-old")
+					running = true
+					return nil
+				},
+			}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			calls = append(calls, "safe")
+			return nil
+		},
+		running: func() bool {
+			calls = append(calls, "running")
+			return running
+		},
+		stop: func() error {
+			calls = append(calls, "stop")
+			running = false
+			return nil
+		},
+		out: &bytes.Buffer{},
+	}
+	transaction := updateTransaction{
+		commit: func() { committed = true },
+		rollback: func() error {
+			calls = append(calls, "rollback")
+			rolledBack = true
+			return nil
+		},
+	}
+
+	err := finishUpdate(
+		context.Background(), "v1", "v2", true, false,
+		func(string) (updateTransaction, error) {
+			calls = append(calls, "apply")
+			return transaction, nil
+		},
+		ops,
+		&bytes.Buffer{},
+	)
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("finishUpdate error=%v, want %v", err, wantErr)
+	}
+	wantCalls := []string{"apply", "prepare", "safe", "running", "stop", "start-new", "rollback", "running", "start-old"}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("calls=%v, want %v", calls, wantCalls)
+	}
+	if !rolledBack || committed || !running {
+		t.Fatalf("rolledBack=%t committed=%t running=%t, want recovered old service", rolledBack, committed, running)
+	}
+}
+
+func TestFinishUpdatePreflightFailureRestoresPreviousBinary(t *testing.T) {
+	wantErr := errors.New("preflight failed")
+	rolledBack := false
+	stopped := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) { return preparedStart{}, wantErr },
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			t.Fatal("preflight failure must stop before safety check")
+			return nil
+		},
+		running: func() bool { t.Fatal("preflight failure must not inspect service"); return false },
+		stop:    func() error { stopped = true; return nil },
+		out:     &bytes.Buffer{},
+	}
+
+	err := finishUpdate(
+		context.Background(), "v1", "v2", true, false,
+		func(string) (updateTransaction, error) {
+			return updateTransaction{rollback: func() error { rolledBack = true; return nil }}, nil
+		},
+		ops,
+		&bytes.Buffer{},
+	)
+
+	if !errors.Is(err, wantErr) || !rolledBack || stopped {
+		t.Fatalf("error=%v rolledBack=%t stopped=%t, want rollback before stop", err, rolledBack, stopped)
+	}
+}
+
+func TestFinishUpdateWithoutRestartStillRollsBackPreflightFailure(t *testing.T) {
+	wantErr := errors.New("preflight failed")
+	rolledBack := false
+	committed := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) { return preparedStart{}, wantErr },
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			t.Fatal("preflight failure must stop before safety check")
+			return nil
+		},
+		running: func() bool { t.Fatal("preflight failure must not inspect service"); return false },
+		stop:    func() error { t.Fatal("preflight failure must not stop service"); return nil },
+		out:     &bytes.Buffer{},
+	}
+
+	err := finishUpdate(
+		context.Background(), "v1", "v2", false, false,
+		func(string) (updateTransaction, error) {
+			return updateTransaction{
+				commit:   func() { committed = true },
+				rollback: func() error { rolledBack = true; return nil },
+			}, nil
+		},
+		ops,
+		&bytes.Buffer{},
+	)
+
+	if !errors.Is(err, wantErr) || !rolledBack || committed {
+		t.Fatalf("error=%v rolledBack=%t committed=%t, want rollback without commit", err, rolledBack, committed)
+	}
+}

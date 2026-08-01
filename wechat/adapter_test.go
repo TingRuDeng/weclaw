@@ -129,3 +129,35 @@ func TestAdapterSkipsSelfEchoMessage(t *testing.T) {
 		t.Fatalf("dispatched=%d, want only normal user message", dispatched)
 	}
 }
+
+func TestAdapterPersistsContextTokenBeforeDispatch(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	adapter := NewAdapter(&ilink.Credentials{ILinkBotID: "bot-1"})
+	client := ilink.NewClient(&ilink.Credentials{ILinkBotID: "bot-1"})
+	dispatched := false
+	handler := adapter.handleWeixinMessage(func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched = true
+		if got := adapter.tokenStore.Get("user-1"); got != "ctx-1" {
+			t.Fatalf("token at dispatch=%q, want ctx-1", got)
+		}
+	})
+
+	handler(context.Background(), client, ilink.WeixinMessage{
+		FromUserID:   "user-1",
+		ToUserID:     "bot-1",
+		MessageType:  ilink.MessageTypeUser,
+		MessageState: ilink.MessageStateFinish,
+		ContextToken: "ctx-1",
+	})
+
+	if !dispatched {
+		t.Fatal("message was not dispatched")
+	}
+	loaded := newContextTokenStore("bot-1")
+	if err := loaded.loadError(); err != nil {
+		t.Fatalf("reload context token: %v", err)
+	}
+	if got := loaded.Get("user-1"); got != "ctx-1" {
+		t.Fatalf("persisted token=%q, want ctx-1", got)
+	}
+}

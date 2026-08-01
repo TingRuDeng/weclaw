@@ -178,7 +178,7 @@ func (r *Replier) sendPlainText(ctx context.Context, plainText string, clientID 
 	if resp.Ret != 0 {
 		return fmt.Errorf("send message failed: ret=%d errmsg=%s", resp.Ret, resp.ErrMsg)
 	}
-	log.Printf("[wechat] sent reply to %s: %q", r.ToUserID, truncate(plainText, 50))
+	log.Printf("[wechat] sent reply to %s (runes=%d)", r.ToUserID, utf8.RuneCountInString(plainText))
 	return nil
 }
 
@@ -279,11 +279,4 @@ func appendChunkWithSeparator(chunks []string, part string, maxRunes int) []stri
 func splitRunesAt(text string, limit int) (string, string) {
 	runes := []rune(text)
 	return string(runes[:limit]), string(runes[limit:])
-}
-
-func truncate(text string, limit int) string {
-	if len(text) <= limit {
-		return text
-	}
-	return text[:limit] + "..."
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/internal/accountstore"
 	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
 
@@ -22,6 +23,8 @@ const (
 	statusScanned   = "scaned"
 	statusConfirmed = "confirmed"
 	statusExpired   = "expired"
+
+	accountStoreWriteTimeout = 5 * time.Second
 )
 
 // FetchQRCode retrieves a new QR code for login.
@@ -132,6 +135,12 @@ func NormalizeAccountID(raw string) string {
 
 // SaveCredentials saves credentials to disk under ~/.weclaw/accounts/{id}.json.
 func SaveCredentials(creds *Credentials) error {
+	ctx, cancel := context.WithTimeout(context.Background(), accountStoreWriteTimeout)
+	defer cancel()
+	return saveCredentials(ctx, creds)
+}
+
+func saveCredentials(ctx context.Context, creds *Credentials) error {
 	if creds == nil {
 		return fmt.Errorf("save credentials: nil credentials")
 	}
@@ -139,35 +148,33 @@ func SaveCredentials(creds *Credentials) error {
 	if err != nil {
 		return err
 	}
-	if err := securefile.EnsureDir(dir); err != nil {
-		return fmt.Errorf("create accounts dir: %w", err)
-	}
-
-	id := NormalizeAccountID(creds.ILinkBotID)
-	if id == "" {
-		return fmt.Errorf("save credentials: empty bot id")
-	}
-	path := filepath.Join(dir, id+".json")
-	if existingData, readErr := securefile.ReadForUpdate(path); readErr == nil {
-		var existing Credentials
-		if json.Unmarshal(existingData, &existing) == nil &&
-			strings.TrimSpace(existing.ILinkBotID) != "" &&
-			strings.TrimSpace(existing.ILinkBotID) != strings.TrimSpace(creds.ILinkBotID) {
-			return fmt.Errorf("save credentials: bot id filename collision for %q", id)
+	return accountstore.WithWriteLock(ctx, dir, func() error {
+		id := NormalizeAccountID(creds.ILinkBotID)
+		if id == "" {
+			return fmt.Errorf("save credentials: empty bot id")
 		}
-	} else if !os.IsNotExist(readErr) {
-		return fmt.Errorf("read existing credentials: %w", readErr)
-	}
+		path := filepath.Join(dir, id+".json")
+		if existingData, readErr := securefile.ReadForUpdate(path); readErr == nil {
+			var existing Credentials
+			if json.Unmarshal(existingData, &existing) == nil &&
+				strings.TrimSpace(existing.ILinkBotID) != "" &&
+				strings.TrimSpace(existing.ILinkBotID) != strings.TrimSpace(creds.ILinkBotID) {
+				return fmt.Errorf("save credentials: bot id filename collision for %q", id)
+			}
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			return fmt.Errorf("read existing credentials: %w", readErr)
+		}
 
-	data, err := json.MarshalIndent(creds, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal credentials: %w", err)
-	}
+		data, err := json.MarshalIndent(creds, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal credentials: %w", err)
+		}
 
-	if err := securefile.Write(path, data); err != nil {
-		return fmt.Errorf("write credentials: %w", err)
-	}
-	return nil
+		if err := securefile.Write(path, data); err != nil {
+			return fmt.Errorf("write credentials: %w", err)
+		}
+		return nil
+	})
 }
 
 // LoadAllCredentials loads all saved account credentials.
@@ -196,7 +203,7 @@ func LoadAllCredentials() ([]*Credentials, error) {
 		}
 		data, err := securefile.Read(filepath.Join(dir, e.Name()))
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return nil, fmt.Errorf("read credentials %q: %w", e.Name(), err)

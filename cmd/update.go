@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"runtime"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -56,6 +56,24 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	)
 }
 
+type updateTransaction struct {
+	commit   func()
+	rollback func() error
+}
+
+func (transaction updateTransaction) Commit() {
+	if transaction.commit != nil {
+		transaction.commit()
+	}
+}
+
+func (transaction updateTransaction) Rollback() error {
+	if transaction.rollback == nil {
+		return nil
+	}
+	return transaction.rollback()
+}
+
 // finishUpdate 只在实际替换二进制或显式要求重启时执行启动预检。
 func finishUpdate(
 	ctx context.Context,
@@ -63,7 +81,7 @@ func finishUpdate(
 	latest string,
 	restart bool,
 	force bool,
-	apply func(string) error,
+	apply func(string) (updateTransaction, error),
 	completion updateCompletionOps,
 	out io.Writer,
 ) error {
@@ -74,49 +92,51 @@ func finishUpdate(
 		}
 		return completeUpdate(ctx, true, force, completion)
 	}
-	if err := apply(latest); err != nil {
+	transaction, err := apply(latest)
+	if err != nil {
 		return err
 	}
-	return completeUpdate(ctx, restart, force, completion)
+	if err := completeUpdateWithRollback(ctx, restart, force, completion, transaction.Rollback); err != nil {
+		return err
+	}
+	transaction.Commit()
+	return nil
 }
 
 // applyUpdate 下载、校验并原子替换当前可执行文件。
-func applyUpdate(latest string) error {
+func applyUpdate(latest string) (updateTransaction, error) {
 	fmt.Printf("当前版本: %s -> 最新版本: %s\n", Version, latest)
 	filename, err := releaseAssetNameForRuntime(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		return err
+		return updateTransaction{}, err
 	}
 
 	fmt.Printf("正在下载 %s/%s...\n", latest, filename)
 	tmpFile, err := downloadReleaseAsset(latest, filename)
 	if err != nil {
-		return fmt.Errorf("下载失败: %w", err)
+		return updateTransaction{}, fmt.Errorf("下载失败: %w", err)
 	}
 	defer os.Remove(tmpFile)
 	if err := verifyReleaseAssetChecksum(latest, filename, tmpFile); err != nil {
-		return fmt.Errorf("校验发布文件摘要失败: %w", err)
+		return updateTransaction{}, fmt.Errorf("校验发布文件摘要失败: %w", err)
 	}
 	exePath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("定位当前可执行文件失败: %w", err)
+		return updateTransaction{}, fmt.Errorf("定位当前可执行文件失败: %w", err)
 	}
 	if resolved, err := resolveSymlink(exePath); err == nil {
 		exePath = resolved
 	}
 	if err := validateUpdateTargetMatchesRuntime(exePath); err != nil {
-		return err
+		return updateTransaction{}, err
 	}
 
-	if err := replaceBinary(tmpFile, exePath); err != nil {
-		return fmt.Errorf("替换可执行文件失败: %w", err)
-	}
-	if runtime.GOOS == "darwin" {
-		exec.Command("xattr", "-d", "com.apple.quarantine", exePath).Run()
-		exec.Command("xattr", "-d", "com.apple.provenance", exePath).Run()
+	transaction, err := installBinaryWithRollback(tmpFile, exePath)
+	if err != nil {
+		return updateTransaction{}, fmt.Errorf("替换可执行文件失败: %w", err)
 	}
 	fmt.Printf("已更新到 %s\n", latest)
-	return nil
+	return transaction, nil
 }
 
 type updateCompletionOps struct {
@@ -142,10 +162,20 @@ func defaultUpdateCompletionOps() updateCompletionOps {
 
 // completeUpdate 根据重启选项把预检错误转换为警告或停止前硬失败。
 func completeUpdate(ctx context.Context, restart bool, force bool, ops updateCompletionOps) error {
+	return completeUpdateWithRollback(ctx, restart, force, ops, nil)
+}
+
+func completeUpdateWithRollback(
+	ctx context.Context,
+	restart bool,
+	force bool,
+	ops updateCompletionOps,
+	rollback func() error,
+) error {
 	prepared, err := ops.prepare(ctx)
 	if err != nil {
-		if restart {
-			return err
+		if restart || rollback != nil {
+			return rollbackUpdatedBinary(err, rollback, ops.out)
 		}
 		fmt.Fprintf(ops.out, "警告：Claude ACP 依赖预检失败：%v\n", err)
 		fmt.Fprintln(ops.out, "更新完成；修复依赖后运行 weclaw restart。")
@@ -156,13 +186,17 @@ func completeUpdate(ctx context.Context, restart bool, force bool, ops updateCom
 		return nil
 	}
 	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
-		return err
+		return rollbackUpdatedBinary(err, rollback, ops.out)
 	}
-	return restartUpdatedService(prepared, ops)
+	return restartUpdatedServiceWithRollback(prepared, ops, rollback)
 }
 
 // restartUpdatedService 仅在旧服务实际运行时执行停止与已预检启动闭包。
 func restartUpdatedService(prepared preparedStart, ops updateCompletionOps) error {
+	return restartUpdatedServiceWithRollback(prepared, ops, nil)
+}
+
+func restartUpdatedServiceWithRollback(prepared preparedStart, ops updateCompletionOps, rollback func() error) error {
 	if !ops.running() {
 		fmt.Fprintln(ops.out, "更新完成；当前服务未运行，请执行 weclaw start。")
 		return nil
@@ -170,12 +204,42 @@ func restartUpdatedService(prepared preparedStart, ops updateCompletionOps) erro
 	fmt.Fprintln(ops.out, "正在停止旧服务...")
 	if err := ops.stop(); err != nil {
 		log.Printf("停止旧服务失败：%v", err)
-		return fmt.Errorf("更新完成，但停止旧服务失败: %w", err)
+		return recoverPreviousUpdate(prepared, ops, fmt.Errorf("更新完成，但停止旧服务失败: %w", err), rollback)
 	}
 	fmt.Fprintln(ops.out, "正在启动新版本...")
 	if err := prepared.run(); err != nil {
 		log.Printf("启动新版本失败：%v", err)
-		return fmt.Errorf("更新完成，但启动新服务失败: %w", err)
+		return recoverPreviousUpdate(prepared, ops, fmt.Errorf("更新完成，但启动新服务失败: %w", err), rollback)
 	}
 	return nil
+}
+
+func rollbackUpdatedBinary(cause error, rollback func() error, out io.Writer) error {
+	if rollback == nil {
+		return cause
+	}
+	if err := rollback(); err != nil {
+		return errors.Join(cause, fmt.Errorf("恢复旧版本失败: %w", err))
+	}
+	fmt.Fprintln(out, "更新未完成；已恢复旧版本。")
+	return cause
+}
+
+func recoverPreviousUpdate(prepared preparedStart, ops updateCompletionOps, cause error, rollback func() error) error {
+	if rollback == nil {
+		return cause
+	}
+	if err := rollback(); err != nil {
+		return errors.Join(cause, fmt.Errorf("恢复旧版本失败: %w", err))
+	}
+	if ops.running() {
+		fmt.Fprintln(ops.out, "已恢复旧版本可执行文件；原服务仍在运行。")
+		return cause
+	}
+	fmt.Fprintln(ops.out, "已恢复旧版本，正在重新启动原服务...")
+	if err := prepared.run(); err != nil {
+		return errors.Join(cause, fmt.Errorf("旧版本已恢复，但原服务重新启动失败: %w", err))
+	}
+	fmt.Fprintln(ops.out, "旧版本服务已恢复运行。")
+	return cause
 }
