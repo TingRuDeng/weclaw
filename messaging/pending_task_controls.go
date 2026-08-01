@@ -153,11 +153,11 @@ func (h *Handler) sendPendingTaskControlCard(notice agentTaskAdmissionNotice) bo
 			}),
 		},
 	)
-	prompt := "新消息已暂存，将在当前任务结束后自动执行。"
+	prompt := "新消息已暂存。无需操作，当前任务结束后会自动执行。"
 	if preview != "" {
 		prompt += "\n\n消息：" + preview
 	}
-	prompt += "\n\n请选择如何处理："
+	prompt += "\n\n如需改变默认处理方式，可选择以下操作："
 	return notice.reply.AskChoices(notice.ctx, prompt, choices) == nil
 }
 
