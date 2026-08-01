@@ -1,10 +1,17 @@
 package ilink
 
 import (
+	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/fastclaw-ai/weclaw/internal/accountstore"
 )
 
 func TestNormalizeAccountIDIsFilesystemSafe(t *testing.T) {
@@ -58,6 +65,85 @@ func TestLoadAllCredentialsReturnsEmptyWhenAccountsDirIsMissing(t *testing.T) {
 func TestSaveCredentialsRejectsNil(t *testing.T) {
 	if err := SaveCredentials(nil); err == nil {
 		t.Fatal("SaveCredentials(nil) should fail")
+	}
+}
+
+func TestSaveCredentialsCreatesFirstAccountFile(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	creds := &Credentials{BotToken: "token", ILinkBotID: "bot-1"}
+	if err := SaveCredentials(creds); err != nil {
+		t.Fatalf("SaveCredentials first account: %v", err)
+	}
+	accounts, err := LoadAllCredentials()
+	if err != nil {
+		t.Fatalf("LoadAllCredentials: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].ILinkBotID != creds.ILinkBotID {
+		t.Fatalf("accounts=%#v, want bot-1", accounts)
+	}
+}
+
+func TestSaveCredentialsSerializesNormalizedBotIDCollision(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	start := make(chan struct{})
+	errorsByID := make(chan error, 2)
+	for _, botID := range []string{"bot@example.com:1", "bot-example-com-1"} {
+		botID := botID
+		go func() {
+			<-start
+			errorsByID <- SaveCredentials(&Credentials{BotToken: "token", ILinkBotID: botID})
+		}()
+	}
+	close(start)
+	firstErr := <-errorsByID
+	secondErr := <-errorsByID
+	if firstErr == nil && secondErr == nil {
+		t.Fatal("both colliding credential saves succeeded")
+	}
+	if firstErr != nil && secondErr != nil {
+		t.Fatalf("both colliding credential saves failed: first=%v second=%v", firstErr, secondErr)
+	}
+	accounts, err := LoadAllCredentials()
+	if err != nil {
+		t.Fatalf("LoadAllCredentials: %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("accounts=%#v, want one collision winner", accounts)
+	}
+}
+
+func TestSaveCredentialsHonorsCrossProcessAccountLock(t *testing.T) {
+	if os.Getenv("WECLAW_ILINK_SAVE_LOCK_WAITER") == "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := saveCredentials(ctx, &Credentials{BotToken: "token", ILinkBotID: "bot-lock"})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("saveCredentials error=%v, want deadline exceeded", err)
+		}
+		return
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("official credential-store assets are Unix-only")
+	}
+
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	dir, err := AccountsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := accountstore.WithWriteLock(context.Background(), dir, func() error {
+		command := exec.Command(os.Args[0], "-test.run=^TestSaveCredentialsHonorsCrossProcessAccountLock$")
+		command.Env = append(os.Environ(), "WECLAW_ILINK_SAVE_LOCK_WAITER=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("cross-process save waiter error=%v output=%s", err, output)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveCredentials(&Credentials{BotToken: "token", ILinkBotID: "bot-lock"}); err != nil {
+		t.Fatalf("SaveCredentials after lock release: %v", err)
 	}
 }
 

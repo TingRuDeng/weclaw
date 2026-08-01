@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -94,6 +95,82 @@ func replaceBinary(src, dst string) error {
 	}
 
 	return fmt.Errorf("cannot write to %s", dst)
+}
+
+func installBinaryWithRollback(src string, dst string) (updateTransaction, error) {
+	backupPath, err := backupUpdateBinary(dst)
+	if err != nil {
+		return updateTransaction{}, fmt.Errorf("backup current binary: %w", err)
+	}
+	cleanupBackup := func() {
+		if backupPath == "" {
+			return
+		}
+		path := backupPath
+		backupPath = ""
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Printf("[update] failed to remove binary backup %s: %v", path, err)
+		}
+	}
+	if err := replaceBinary(src, dst); err != nil {
+		cleanupBackup()
+		return updateTransaction{}, err
+	}
+	clearUpdateExtendedAttributes(dst)
+	return updateTransaction{
+		commit: cleanupBackup,
+		rollback: func() error {
+			if backupPath == "" {
+				return nil
+			}
+			if err := replaceBinary(backupPath, dst); err != nil {
+				return fmt.Errorf("restore previous binary from %q: %w", backupPath, err)
+			}
+			clearUpdateExtendedAttributes(dst)
+			cleanupBackup()
+			return nil
+		},
+	}, nil
+}
+
+func backupUpdateBinary(path string) (string, error) {
+	source, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer source.Close()
+	backup, err := os.CreateTemp("", "weclaw-update-backup-*")
+	if err != nil {
+		return "", err
+	}
+	backupPath := backup.Name()
+	removeBackup := true
+	defer func() {
+		if removeBackup {
+			_ = os.Remove(backupPath)
+		}
+	}()
+	if _, err := io.Copy(backup, source); err != nil {
+		_ = backup.Close()
+		return "", err
+	}
+	if err := backup.Sync(); err != nil {
+		_ = backup.Close()
+		return "", err
+	}
+	if err := backup.Close(); err != nil {
+		return "", err
+	}
+	removeBackup = false
+	return backupPath, nil
+}
+
+func clearUpdateExtendedAttributes(path string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	_ = exec.Command("xattr", "-d", "com.apple.quarantine", path).Run()
+	_ = exec.Command("xattr", "-d", "com.apple.provenance", path).Run()
 }
 
 func stageAndReplaceBinary(src string, dst string) error {

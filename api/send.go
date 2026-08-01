@@ -126,8 +126,10 @@ func (s *Server) replierFor(w http.ResponseWriter, req SendRequest) (platform.Re
 
 func (s *Server) sendRequest(ctx context.Context, reply platform.Replier, req SendRequest) (sendResult, error) {
 	var result sendResult
+	imageURLs := messaging.ExtractImageURLs(req.Text)
+	hasMedia := req.MediaURL != "" || len(imageURLs) > 0
 	var remoteReply platform.RemoteMediaSender
-	if req.MediaURL != "" {
+	if hasMedia {
 		var ok bool
 		remoteReply, ok = reply.(platform.RemoteMediaSender)
 		if !ok {
@@ -140,31 +142,40 @@ func (s *Server) sendRequest(ctx context.Context, reply platform.Replier, req Se
 		}
 		result.textSent = true
 		log.Printf("[api] sent text to %s (runes=%d)", req.To, utf8.RuneCountInString(req.Text))
-		s.sendExtractedImages(ctx, reply, req)
 	}
-	if req.MediaURL == "" {
-		return result, nil
+	var mediaErrors []error
+	if len(imageURLs) > 0 {
+		mediaSent, err := s.sendExtractedImages(ctx, remoteReply, req.To, imageURLs)
+		result.mediaSent = result.mediaSent || mediaSent
+		if err != nil {
+			mediaErrors = append(mediaErrors, err)
+		}
 	}
-	if err := remoteReply.SendMediaFromURL(ctx, req.MediaURL); err != nil {
-		return result, fmt.Errorf("send media failed: %w", err)
+	if req.MediaURL != "" {
+		if err := remoteReply.SendMediaFromURL(ctx, req.MediaURL); err != nil {
+			mediaErrors = append(mediaErrors, fmt.Errorf("send media failed: %w", err))
+		} else {
+			result.mediaSent = true
+			log.Printf("[api] sent media to %s", req.To)
+		}
 	}
-	result.mediaSent = true
-	log.Printf("[api] sent media to %s", req.To)
+	if len(mediaErrors) > 0 {
+		return result, errors.Join(mediaErrors...)
+	}
 	return result, nil
 }
 
-func (s *Server) sendExtractedImages(ctx context.Context, reply platform.Replier, req SendRequest) {
-	remoteReply, ok := reply.(interface {
-		SendMediaFromURL(context.Context, string) error
-	})
-	if !ok {
-		return
-	}
-	for _, imageURL := range messaging.ExtractImageURLs(req.Text) {
-		if err := remoteReply.SendMediaFromURL(ctx, imageURL); err != nil {
+func (s *Server) sendExtractedImages(ctx context.Context, reply platform.RemoteMediaSender, to string, imageURLs []string) (bool, error) {
+	mediaSent := false
+	var sendErrors []error
+	for index, imageURL := range imageURLs {
+		if err := reply.SendMediaFromURL(ctx, imageURL); err != nil {
 			log.Printf("[api] send extracted image failed: %v", err)
+			sendErrors = append(sendErrors, fmt.Errorf("send extracted image %d failed: %w", index+1, err))
 			continue
 		}
-		log.Printf("[api] sent extracted image to %s", req.To)
+		mediaSent = true
+		log.Printf("[api] sent extracted image to %s", to)
 	}
+	return mediaSent, errors.Join(sendErrors...)
 }

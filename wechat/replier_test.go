@@ -1,9 +1,11 @@
 package wechat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -96,6 +98,27 @@ func TestReplierSendTextFormatsForWeChat(t *testing.T) {
 	texts := calls.texts()
 	if len(texts) != 1 || texts[0] != "标题\n\n正文 code" {
 		t.Fatalf("texts=%#v, want formatted plain text", texts)
+	}
+}
+
+func TestReplierSendTextLogDoesNotContainReplyBody(t *testing.T) {
+	client, _, closeServer := newRecordingClient(t)
+	defer closeServer()
+	reply := NewReplier(client, "user-1", "ctx-1", "client-1")
+	message := "top-secret-wechat-reply-微信正文"
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+
+	if err := reply.SendText(context.Background(), message); err != nil {
+		t.Fatalf("SendText error: %v", err)
+	}
+	if strings.Contains(logs.String(), message) || strings.Contains(logs.String(), "top-secret-wechat-reply") {
+		t.Fatalf("wechat log contains reply body: %q", logs.String())
+	}
+	if !strings.Contains(logs.String(), "runes=") {
+		t.Fatalf("wechat log=%q, want reply length metadata", logs.String())
 	}
 }
 

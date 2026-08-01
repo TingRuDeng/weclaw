@@ -240,7 +240,7 @@ func TestFinishUpdateSkipsApplyAndPreflightWhenAlreadyLatest(t *testing.T) {
 
 	err := finishUpdate(
 		context.Background(), "v0.1.181", "v0.1.181", false, false,
-		func(string) error { applied = true; return nil }, ops, &out,
+		func(string) (updateTransaction, error) { applied = true; return updateTransaction{}, nil }, ops, &out,
 	)
 
 	if err != nil {
@@ -271,7 +271,7 @@ func TestFinishUpdateAlreadyLatestStillPreflightsExplicitRestart(t *testing.T) {
 
 	err := finishUpdate(
 		context.Background(), "v0.1.181", "v0.1.181", true, false,
-		func(string) error { applied = true; return nil }, ops, &out,
+		func(string) (updateTransaction, error) { applied = true; return updateTransaction{}, nil }, ops, &out,
 	)
 
 	if err != nil {
@@ -284,6 +284,7 @@ func TestFinishUpdateAlreadyLatestStillPreflightsExplicitRestart(t *testing.T) {
 
 func TestFinishUpdateAppliesNewVersionBeforePreflight(t *testing.T) {
 	var calls []string
+	committed := false
 	var out bytes.Buffer
 	ops := updateCompletionOps{
 		prepare: func(context.Context) (preparedStart, error) {
@@ -295,12 +296,15 @@ func TestFinishUpdateAppliesNewVersionBeforePreflight(t *testing.T) {
 
 	err := finishUpdate(
 		context.Background(), "v0.1.180", "v0.1.181", false, false,
-		func(version string) error {
+		func(version string) (updateTransaction, error) {
 			if version != "v0.1.181" {
 				t.Fatalf("apply version=%q", version)
 			}
 			calls = append(calls, "apply")
-			return nil
+			return updateTransaction{commit: func() {
+				calls = append(calls, "commit")
+				committed = true
+			}}, nil
 		},
 		ops,
 		&out,
@@ -309,8 +313,8 @@ func TestFinishUpdateAppliesNewVersionBeforePreflight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finishUpdate error=%v", err)
 	}
-	if !reflect.DeepEqual(calls, []string{"apply", "prepare"}) {
-		t.Fatalf("calls=%v，want apply then prepare", calls)
+	if !reflect.DeepEqual(calls, []string{"apply", "prepare", "commit"}) || !committed {
+		t.Fatalf("calls=%v committed=%t，want apply, prepare, then commit", calls, committed)
 	}
 }
 
@@ -362,6 +366,58 @@ func TestReplaceBinaryUsesAtomicTargetDirectoryStage(t *testing.T) {
 	matches, err := filepath.Glob(filepath.Join(targetDir, ".weclaw-update-*"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("staged files=%#v err=%v", matches, err)
+	}
+}
+
+func TestInstallBinaryWithRollbackRestoresPreviousBinary(t *testing.T) {
+	sourceDir := t.TempDir()
+	targetDir := t.TempDir()
+	src := filepath.Join(sourceDir, "downloaded")
+	dst := filepath.Join(targetDir, "weclaw")
+	if err := os.WriteFile(src, []byte("new-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	transaction, err := installBinaryWithRollback(src, dst)
+	if err != nil {
+		t.Fatalf("installBinaryWithRollback error: %v", err)
+	}
+	if data, err := os.ReadFile(dst); err != nil || string(data) != "new-binary" {
+		t.Fatalf("installed target=%q err=%v", data, err)
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatalf("Rollback error: %v", err)
+	}
+	if data, err := os.ReadFile(dst); err != nil || string(data) != "old-binary" {
+		t.Fatalf("restored target=%q err=%v", data, err)
+	}
+}
+
+func TestInstallBinaryCommitKeepsNewBinary(t *testing.T) {
+	sourceDir := t.TempDir()
+	targetDir := t.TempDir()
+	src := filepath.Join(sourceDir, "downloaded")
+	dst := filepath.Join(targetDir, "weclaw")
+	if err := os.WriteFile(src, []byte("new-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, []byte("old-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	transaction, err := installBinaryWithRollback(src, dst)
+	if err != nil {
+		t.Fatalf("installBinaryWithRollback error: %v", err)
+	}
+	transaction.Commit()
+	if err := transaction.Rollback(); err != nil {
+		t.Fatalf("Rollback after commit error: %v", err)
+	}
+	if data, err := os.ReadFile(dst); err != nil || string(data) != "new-binary" {
+		t.Fatalf("committed target=%q err=%v", data, err)
 	}
 }
 

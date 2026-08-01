@@ -880,6 +880,7 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 		t.Fatalf("checkpoint was delivered before durable persistence: observed=%v entries=%#v err=%v",
 			observedPersisted, checkpointEntries, checkpointErr)
 	}
+	waitForTerminalOutboxEmpty(t, path)
 	remaining, err := loadTerminalOutbox(path)
 	if err != nil || len(remaining) != 0 {
 		t.Fatalf("remaining=%#v err=%v", remaining, err)
