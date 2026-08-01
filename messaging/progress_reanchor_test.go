@@ -206,6 +206,30 @@ func TestProgressSessionReanchorMovesUpdatesAndTerminalToNewStream(t *testing.T)
 	}
 }
 
+func TestProgressSessionReanchorPreservesStructuredTimeline(t *testing.T) {
+	h := NewHandler(nil, nil)
+	oldReply := newReanchorTestReplier()
+	newReply := newReanchorTestReplier()
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+
+	_, _, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), oldReply, "", "codex", "/workspace/project-a", "执行任务", cfg,
+	)
+	if !session.send("进展 A") {
+		t.Fatal("initial progress should be sent")
+	}
+	timeline := "**执行进度**\n- ✅ 定位问题\n- • 运行回归测试"
+	moved, err := session.reanchor(context.Background(), newReply, timeline)
+	if err != nil || !moved {
+		t.Fatalf("reanchor moved=%t err=%v", moved, err)
+	}
+	if newReply.lastOptions.InitialContent != timeline {
+		t.Fatalf("initial content=%q, want full structured timeline", newReply.lastOptions.InitialContent)
+	}
+}
+
 func TestProgressSessionDurableTerminalUsesReanchoredStream(t *testing.T) {
 	h := NewHandler(nil, nil)
 	oldReply := newReanchorTestReplier()

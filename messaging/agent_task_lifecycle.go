@@ -68,7 +68,7 @@ func (h *Handler) startAgentTaskLifecycle(opts agentTaskLifecycleOptions) agentT
 
 // recordProgress 同时更新唯一结构化任务快照和平台进度展示。
 func (l agentTaskLifecycle) recordProgress(event agent.ProgressEvent) {
-	delta, recorded := l.opts.task.recordProgress(time.Now(), event)
+	update, recorded := l.opts.task.recordProgressUpdate(time.Now(), event)
 	if !recorded {
 		return
 	}
@@ -76,9 +76,13 @@ func (l agentTaskLifecycle) recordProgress(event agent.ProgressEvent) {
 		return
 	}
 	if l.handler != nil {
-		l.handler.recordProgressTrace(l.opts.task.traceSnapshot(), event, delta)
+		l.handler.recordProgressTrace(l.opts.task.traceSnapshot(), event, update.latest)
 	}
-	l.onProgress(delta)
+	if l.progress != nil {
+		l.progress.onTaskProgress(update)
+		return
+	}
+	l.onProgress(update.latest)
 }
 
 // finishAgentTaskLifecycle 统一最终文本、进度卡收口和停止后的回复抑制。

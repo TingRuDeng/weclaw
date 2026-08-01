@@ -86,6 +86,24 @@ func TestCodexProgressStateCarriesStructuredMetadata(t *testing.T) {
 	}
 }
 
+func TestCodexProgressStateCarriesToolMetadata(t *testing.T) {
+	state := newCodexProgressState()
+	event, ok := state.recordEvent(&codexTurnEvent{
+		Kind: "progress", Sequence: 23,
+		Text: "使用 CodeGraph · codegraph_explore",
+		Progress: &codexProgressEvent{
+			ID: "tool-item", Kind: "tool", Status: "completed",
+			Action: "使用 CodeGraph · codegraph_explore",
+		},
+	})
+	if !ok {
+		t.Fatal("structured tool progress must emit")
+	}
+	if event.ID != "tool-item" || event.Kind != ProgressKindTool || event.State != ProgressStateCompleted || event.Sequence != 23 {
+		t.Fatalf("event=%#v", event)
+	}
+}
+
 func TestACPAgentCodexTurnAggregatesCommandProgress(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")

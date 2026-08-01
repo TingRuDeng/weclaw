@@ -204,15 +204,19 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	runtime.task.mu.Unlock()
 	trace := runtime.task.traceSnapshot()
 	recordProgress := func(event agent.ProgressEvent) {
-		delta, recorded := runtime.task.recordProgress(time.Now(), event)
+		update, recorded := runtime.task.recordProgressUpdate(time.Now(), event)
 		if !recorded {
 			return
 		}
 		if !runtime.task.shouldSendFinal() {
 			return
 		}
-		h.recordProgressTrace(runtime.task.traceSnapshot(), event, delta)
-		onProgress(delta)
+		h.recordProgressTrace(runtime.task.traceSnapshot(), event, update.latest)
+		if progressSession != nil {
+			progressSession.onTaskProgress(update)
+			return
+		}
+		onProgress(update.latest)
 	}
 	if runtime.state.Progress != "" {
 		recordProgress(agent.TextProgressEvent(runtime.state.Progress))

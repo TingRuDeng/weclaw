@@ -81,6 +81,8 @@ func codexProgressKind(kind string) ProgressKind {
 		return ProgressKindPlan
 	case "approval":
 		return ProgressKindApproval
+	case "tool":
+		return ProgressKindTool
 	default:
 		return ProgressKindStatus
 	}

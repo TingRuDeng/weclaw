@@ -40,6 +40,7 @@ type progressSendState struct {
 	sentCount       int
 	sawDelta        bool
 	sentDeltaNotice bool
+	latestSnapshot  string
 }
 
 type progressSession struct {
@@ -54,8 +55,11 @@ type progressSession struct {
 	taskText            string
 	cfg                 config.ProgressConfig
 	deltaCh             chan string
+	snapshotCh          chan string
 	wg                  sync.WaitGroup
 	streamMu            sync.Mutex
+	snapshotMu          sync.Mutex
+	latestTimeline      string
 	streamOpenAttempted bool
 	lastContent         string
 	finished            bool
@@ -109,6 +113,7 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithHandle(ctx context.Co
 		handler: h, ctx: progressCtx, cancel: cancel, reply: reply,
 		prefix: prefix, agentName: agentName, workspaceRoot: workspaceRoot,
 		taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
+		snapshotCh: make(chan string, 1),
 	}
 	session.start()
 	return session.onProgress, session.stopWithFinal, session
@@ -146,6 +151,46 @@ func (s *progressSession) onProgress(delta string) {
 	case <-s.ctx.Done():
 	default:
 	}
+}
+
+func (s *progressSession) onTaskProgress(update taskProgressUpdate) {
+	if !update.timeline || s.cfg.Mode != progressModeStream || !s.reply.Capabilities().Streaming {
+		s.onProgress(update.latest)
+		return
+	}
+	s.snapshotMu.Lock()
+	s.latestTimeline = strings.TrimSpace(update.card)
+	s.snapshotMu.Unlock()
+	if s.cfg.InitialDelaySeconds <= 0 {
+		s.ensureStream()
+	}
+	offerLatestProgressSnapshot(s.snapshotCh, update.card)
+}
+
+func offerLatestProgressSnapshot(ch chan string, snapshot string) {
+	snapshot = strings.TrimSpace(snapshot)
+	if snapshot == "" {
+		return
+	}
+	select {
+	case ch <- snapshot:
+		return
+	default:
+	}
+	select {
+	case <-ch:
+	default:
+	}
+	select {
+	case ch <- snapshot:
+	default:
+	}
+}
+
+func (s *progressSession) currentTaskTimeline() string {
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+	return strings.TrimSpace(s.latestTimeline)
 }
 
 func (s *progressSession) stopWithFinal(finalText string, failed bool) bool {
@@ -222,6 +267,7 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 		currentReply = replyWriter
 	}
 	content, terminalFailed, consumed := progressTerminalArguments(currentReply, parentCanceled, finalText, failed, stopped)
+	content = combineTaskProgressTimeline(s.currentTaskTimeline(), content)
 	s.terminalClaimed = true
 	s.finished = true
 	var checkpoint platform.TerminalCheckpoint
@@ -309,10 +355,25 @@ func (s *progressSession) runProgressLoop() {
 			return
 		case delta := <-s.deltaCh:
 			tail = s.handleProgressDelta(delta, tail, startedAt, &state)
+		case snapshot := <-s.snapshotCh:
+			s.handleProgressSnapshot(snapshot, startedAt, &state)
 		case now := <-ticker.C:
 			s.handleTimedProgress(now, startedAt, &stageIndex, &state)
 		}
 	}
+}
+
+func (s *progressSession) handleProgressSnapshot(snapshot string, startedAt time.Time, state *progressSendState) {
+	snapshot = strings.TrimSpace(snapshot)
+	if snapshot == "" {
+		return
+	}
+	state.sawDelta = true
+	state.latestSnapshot = snapshot
+	if time.Since(startedAt) < durationSeconds(s.cfg.InitialDelaySeconds, 0) {
+		return
+	}
+	s.sendProgressIfAllowed(snapshot, state)
 }
 
 func (s *progressSession) handleProgressDelta(delta string, tail string, startedAt time.Time, state *progressSendState) string {
@@ -336,6 +397,12 @@ func (s *progressSession) handleProgressDelta(delta string, tail string, started
 func (s *progressSession) handleTimedProgress(now time.Time, startedAt time.Time, stageIndex *int, state *progressSendState) {
 	elapsed := now.Sub(startedAt)
 	if elapsed < durationSeconds(s.cfg.InitialDelaySeconds, 0) {
+		return
+	}
+	if state.latestSnapshot != "" {
+		if state.sentCount == 0 {
+			s.sendProgressIfAllowed(state.latestSnapshot, state)
+		}
 		return
 	}
 	if state.sentCount == 0 && !state.sawDelta {
@@ -434,7 +501,10 @@ func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, 
 	if !ok {
 		return false, nil
 	}
-	initialContent := strings.TrimSpace(renderDeltaProgress(latestProgress, s.cfg))
+	initialContent := strings.TrimSpace(latestProgress)
+	if initialContent != "" && !strings.HasPrefix(initialContent, "**执行进度**") {
+		initialContent = strings.TrimSpace(renderDeltaProgress(initialContent, s.cfg))
+	}
 	if initialContent != "" {
 		initialContent = s.prefix + initialContent
 	} else {
@@ -540,6 +610,7 @@ func (s *progressSession) cancelTyping() {
 }
 
 func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool, stopped bool) bool {
+	timeline := s.currentTaskTimeline()
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	stream := s.stream
@@ -554,20 +625,20 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 	var err error
 	switch {
 	case stopped:
-		content := firstNonBlank(finalText, "任务已按请求停止。")
+		content := combineTaskProgressTimeline(timeline, firstNonBlank(finalText, "任务已按请求停止。"))
 		if stoppable, ok := stream.(platform.StoppableStream); ok {
 			err = stoppable.Stop(ctx, content)
 		} else {
 			err = stream.Complete(ctx, content)
 		}
 	case failed:
-		err = stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
+		err = stream.Fail(ctx, combineTaskProgressTimeline(timeline, firstNonBlank(finalText, "任务执行失败。")))
 	case finalText == progressStatusOnlyComplete:
-		err = stream.Complete(ctx, "")
+		err = stream.Complete(ctx, combineTaskProgressTimeline(timeline, ""))
 	case strings.TrimSpace(finalText) != "":
-		err = stream.Complete(ctx, finalText)
+		err = stream.Complete(ctx, combineTaskProgressTimeline(timeline, finalText))
 	default:
-		err = stream.Complete(ctx, progressDefaultCompletion)
+		err = stream.Complete(ctx, combineTaskProgressTimeline(timeline, progressDefaultCompletion))
 	}
 	if err != nil {
 		log.Printf("[handler] failed to finish progress stream: %v", err)
