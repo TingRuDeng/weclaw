@@ -18,6 +18,7 @@ const (
 	ProgressKindApproval   ProgressKind = "approval"
 	ProgressKindUserInput  ProgressKind = "user_input"
 	ProgressKindGenerating ProgressKind = "generating"
+	ProgressKindMessage    ProgressKind = "message"
 )
 
 // ProgressState 标识单条进展事件的生命周期状态。

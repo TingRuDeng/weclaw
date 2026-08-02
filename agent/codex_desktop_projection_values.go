@@ -108,60 +108,6 @@ func codexDesktopItemText(item map[string]any) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
-// codexDesktopItemProgress 将命令和文件 item 映射为结构化进度。
-func codexDesktopItemProgress(itemType string, item map[string]any) *codexProgressEvent {
-	switch strings.ToLower(itemType) {
-	case "commandexecution":
-		stage, ok := codexCommandProgressStage(codexDesktopPermissionCommand(item["command"]))
-		if !ok {
-			return nil
-		}
-		return &codexProgressEvent{
-			ID: "command:" + stage.id, Kind: "command", Action: stage.action,
-			Status: codexDesktopString(item["status"]),
-		}
-	case "filechange":
-		path := codexDesktopFilePath(item)
-		if path == "" {
-			return nil
-		}
-		return &codexProgressEvent{
-			ID: "file:changes", Kind: "file", Action: "修改代码", FilePath: path,
-			Status: codexDesktopString(item["status"]),
-		}
-	default:
-		return nil
-	}
-}
-
-func codexDesktopPermissionCommand(value any) permissionCommand {
-	if text := codexDesktopString(value); text != "" {
-		return permissionCommand{text}
-	}
-	values, _ := value.([]any)
-	command := make(permissionCommand, 0, len(values))
-	for _, entry := range values {
-		if text := codexDesktopString(entry); text != "" {
-			command = append(command, text)
-		}
-	}
-	return command
-}
-
-func codexDesktopFilePath(item map[string]any) string {
-	if path := firstNonEmpty(codexDesktopString(item["filePath"]), codexDesktopString(item["path"])); path != "" {
-		return path
-	}
-	changes, _ := item["changes"].([]any)
-	for _, value := range changes {
-		change, _ := value.(map[string]any)
-		if path := codexDesktopString(change["path"]); path != "" {
-			return path
-		}
-	}
-	return ""
-}
-
 // codexDesktopPreviousTurn 安全读取上一 revision 的同名 turn。
 func codexDesktopPreviousTurn(previous *codexDesktopProjectionState, turnID string) (codexDesktopProjectedTurn, bool) {
 	if previous == nil {
@@ -205,14 +151,10 @@ func cloneCodexDesktopProjection(source codexDesktopProjectionState) codexDeskto
 	return clone
 }
 
-// cloneCodexDesktopProjectedItems 复制 item map 和进度指针。
+// cloneCodexDesktopProjectedItems 复制 item map。
 func cloneCodexDesktopProjectedItems(source map[string]codexDesktopProjectedItem) map[string]codexDesktopProjectedItem {
 	result := make(map[string]codexDesktopProjectedItem, len(source))
 	for itemID, item := range source {
-		if item.progress != nil {
-			progress := *item.progress
-			item.progress = &progress
-		}
 		result[itemID] = item
 	}
 	return result
@@ -266,17 +208,6 @@ func isCodexDesktopTerminalStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-// codexDesktopProjectedItemsEqual 判断进度 item 是否产生可见变化。
-func codexDesktopProjectedItemsEqual(left codexDesktopProjectedItem, right codexDesktopProjectedItem) bool {
-	if left.status != right.status || left.text != right.text {
-		return false
-	}
-	if left.progress == nil || right.progress == nil {
-		return left.progress == nil && right.progress == nil
-	}
-	return *left.progress == *right.progress
 }
 
 // codexDesktopErrorText 从字符串或 error 对象提取可读错误。

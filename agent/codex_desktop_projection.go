@@ -23,7 +23,6 @@ type codexDesktopProjectedTurn struct {
 
 type codexDesktopProjectedItem struct {
 	id, itemType, status, text string
-	progress                   *codexProgressEvent
 }
 
 type codexDesktopTextEventSpec struct {
@@ -167,7 +166,6 @@ func buildCodexDesktopProjectedItem(item map[string]any) codexDesktopProjectedIt
 	return codexDesktopProjectedItem{
 		id: codexDesktopID(item["id"]), itemType: itemType,
 		status: codexDesktopString(item["status"]), text: codexDesktopItemText(item),
-		progress: codexDesktopItemProgress(itemType, item),
 	}
 }
 
@@ -221,13 +219,6 @@ func projectCodexDesktopItems(turnID string, previous *codexDesktopProjectedTurn
 			}
 			if event := codexDesktopTextEvent(spec); event != nil {
 				events = append(events, event)
-			}
-		case "commandexecution", "filechange":
-			if item.progress != nil && (!hadItem || !codexDesktopProjectedItemsEqual(old, item)) {
-				events = append(events, &codexTurnEvent{
-					Kind: "progress", TurnID: turnID, ItemID: item.id,
-					Text: item.progress.Detail, Progress: item.progress,
-				})
 			}
 		}
 	}

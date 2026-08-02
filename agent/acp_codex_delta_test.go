@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestACPAgentCodexProgressCallbackReceivesOnlyStructuredStatus(t *testing.T) {
+func TestACPAgentCodexProgressCallbackIgnoresSyntheticStatus(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	workspace := t.TempDir()
@@ -52,8 +52,8 @@ func TestACPAgentCodexProgressCallbackReceivesOnlyStructuredStatus(t *testing.T)
 	if reply != "最终回复" {
 		t.Fatalf("reply=%q, want=%q", reply, "最终回复")
 	}
-	if len(got) != 1 || got[0] != "进展：Codex 正在分析请求。" {
-		t.Fatalf("progress=%v, want only structured status", got)
+	if len(got) != 0 {
+		t.Fatalf("synthetic status leaked into progress: %v", got)
 	}
 }
 
@@ -101,12 +101,12 @@ func TestACPAgentCodexProgressEventDoesNotBecomeFinalReply(t *testing.T) {
 	if reply != "最终结果" {
 		t.Fatalf("reply=%q, want final agent text only", reply)
 	}
-	if len(progress) != 1 || progress[0] != "进展：Codex 已产生代码或文件变更。" {
-		t.Fatalf("progress=%#v, want only status event", progress)
+	if len(progress) != 0 {
+		t.Fatalf("synthetic status leaked into progress: %#v", progress)
 	}
 }
 
-func TestACPAgentCodexDeltaEmitsGenericProgressWhenNoStatusEvent(t *testing.T) {
+func TestACPAgentCodexDeltaDoesNotEmitGenericProgress(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
 	workspace := t.TempDir()
@@ -150,8 +150,55 @@ func TestACPAgentCodexDeltaEmitsGenericProgressWhenNoStatusEvent(t *testing.T) {
 	if reply != "最终回复" {
 		t.Fatalf("reply=%q, want final agent text only", reply)
 	}
-	if len(progress) != 1 || progress[0] != codexGeneratingProgress {
-		t.Fatalf("progress=%#v, want generic generating progress", progress)
+	if len(progress) != 0 {
+		t.Fatalf("delta leaked into progress: %#v", progress)
+	}
+}
+
+func TestACPAgentCodexCompletedMessagesBecomeNativeProgress(t *testing.T) {
+	ctx := context.Background()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"},
+		Cwd: t.TempDir(), StateFile: filepath.Join(t.TempDir(), "acp-state.json"),
+	})
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			p := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[p.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Kind: "item_completed", ItemID: "message-1", Sequence: 11, Text: "我先检查当前实现。"}
+			ch <- &codexTurnEvent{Kind: "item_completed", ItemID: "message-2", Sequence: 12, Text: "已经完成修复。"}
+			ch <- &codexTurnEvent{Kind: "completed", Sequence: 13}
+			return json.RawMessage(`{"ok":true}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+
+	createCodexThreadForTest(t, ctx, a, "user-1")
+	var progress []ProgressEvent
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{
+		ctx: ctx, conversationID: "user-1", message: "hello",
+		onProgressEvent: func(event ProgressEvent) { progress = append(progress, event) },
+	})
+	if err != nil {
+		t.Fatalf("chatCodexAppServer error: %v", err)
+	}
+	if reply != "已经完成修复。" {
+		t.Fatalf("reply=%q", reply)
+	}
+	if len(progress) != 2 {
+		t.Fatalf("progress=%#v", progress)
+	}
+	if progress[0].Kind != ProgressKindMessage || progress[0].Text != "我先检查当前实现。" || progress[0].Sequence != 11 {
+		t.Fatalf("first progress=%#v", progress[0])
+	}
+	if progress[1].Kind != ProgressKindMessage || progress[1].Text != "已经完成修复。" || progress[1].Sequence != 12 {
+		t.Fatalf("second progress=%#v", progress[1])
 	}
 }
 

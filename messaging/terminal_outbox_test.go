@@ -145,11 +145,10 @@ func TestPrepareDurableTerminalCollapsesProgressTimeline(t *testing.T) {
 	session := &progressSession{
 		ctx: ctx, cancel: cancel, reply: reply, stream: stream,
 		cfg:        config.ProgressConfig{Mode: progressModeStream, InitialDelaySeconds: 1},
-		snapshotCh: make(chan string, 1),
+		snapshotCh: make(chan progressCardSnapshot, 1),
 	}
 	session.onTaskProgress(taskProgressUpdate{
-		timeline: true,
-		card:     "**执行进度**\n- ✅ 检查项目\n- • 运行测试",
+		card: "**执行进度**\n- ✅ 检查项目\n- • 运行测试", timeline: true,
 	})
 
 	prepared, err := session.prepareDurableTerminal(reply, "最终结果", false, false)

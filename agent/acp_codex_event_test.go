@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -133,48 +132,51 @@ func TestFormatCodexErrorIgnoresRecoverableWebSocketMessage(t *testing.T) {
 	}
 }
 
-func TestHandleCodexAutoApprovalReviewStartedEmitsOneSemanticSecurityStage(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexAutoApprovalReviewStartedAt(json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","reviewId":"review-1"}`), 41)
-
-	select {
-	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "进展：安全检查" || evt.Sequence != 41 || evt.Progress == nil || evt.Progress.ID != "security-check" || evt.Progress.Kind != "approval" || evt.Progress.Status != "running" {
-			t.Fatalf("event=%#v, want semantic security stage", evt)
-		}
-	default:
-		t.Fatal("expected auto approval progress event")
-	}
-}
-
-func TestHandleCodexGuardianWarningEmitsProgress(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexGuardianWarningAt(json.RawMessage(`{"threadId":"thread-1","id":"guardian-1","message":"Automatic approval review approved (risk: medium)"}`), 42)
-
-	select {
-	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "进展：安全检查" || evt.Sequence != 42 || evt.Progress == nil || evt.Progress.ID != "security-check" || evt.Progress.Kind != "approval" || evt.Progress.Status != "completed" {
-			t.Fatalf("event=%#v, want guardian approval progress", evt)
-		}
-	default:
-		t.Fatal("expected guardian progress event")
-	}
-}
-
 func TestHandleCodexTurnCompletedUsesNestedCompletedStatus(t *testing.T) {
 	evt := handleCodexTurnEventForTest(t, `{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}`)
 	if evt.Kind != "completed" || evt.TurnID != "turn-1" {
 		t.Fatalf("event=%#v, want completed turn-1", evt)
+	}
+}
+
+func TestHandleCodexItemCompletedAcceptsOfficialAgentMessageText(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexItemCompletedAt(json.RawMessage(`{"threadId":"thread-1","item":{"id":"message-1","type":"agentMessage","text":"Codex 原文","status":"completed"}}`), 19)
+
+	select {
+	case event := <-turnCh:
+		if event.Kind != "item_completed" || event.ItemID != "message-1" || event.Text != "Codex 原文" || event.Sequence != 19 {
+			t.Fatalf("event=%#v", event)
+		}
+	default:
+		t.Fatal("official agentMessage.text was not dispatched")
+	}
+}
+
+func TestCodexSyntheticItemsDoNotEmitUserProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 4)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	for _, params := range []string{
+		`{"threadId":"thread-1","item":{"id":"cmd-1","type":"commandExecution","command":["go","test","./..."],"status":"inProgress"}}`,
+		`{"threadId":"thread-1","item":{"id":"file-1","type":"fileChange","changes":[{"path":"secret.go"}],"status":"inProgress"}}`,
+		`{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"explore","status":"inProgress"}}`,
+	} {
+		a.handleCodexItemStarted(json.RawMessage(params))
+	}
+
+	select {
+	case event := <-turnCh:
+		t.Fatalf("synthetic item leaked into user progress: %#v", event)
+	default:
 	}
 }
 
@@ -209,303 +211,32 @@ func handleCodexTurnEventForTest(t *testing.T, params string) *codexTurnEvent {
 	}
 }
 
-func TestHandleCodexPlanUpdatedEmitsCurrentStepProgress(t *testing.T) {
+func TestCodexInternalProgressNotificationsAreConsumedWithoutUserProgress(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexPlanUpdated(json.RawMessage(`{
-		"threadId":"thread-1",
-		"turnId":"turn-1",
-		"plan":[
-			{"step":"读取日志定位错误事件","status":"completed"},
-			{"step":"修复实时状态渲染","status":"in_progress"},
-			{"step":"运行回归测试","status":"pending"}
-		]
-	}`))
-
-	select {
-	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "进展：修复实时状态渲染" {
-			t.Fatalf("event=%#v, want current plan step progress", evt)
-		}
-	default:
-		t.Fatal("expected plan progress event")
-	}
-}
-
-func TestHandleCodexPlanUpdatedAcceptsCamelCaseStatus(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexPlanUpdated(json.RawMessage(`{"threadId":"thread-1","plan":[{"step":"对齐 Codex v2 协议","status":"inProgress"}]}`))
-
-	select {
-	case evt := <-turnCh:
-		if evt.Text != "进展：对齐 Codex v2 协议" {
-			t.Fatalf("event=%#v", evt)
-		}
-	default:
-		t.Fatal("camelCase plan status did not emit progress")
-	}
-}
-
-func TestHandleCodexItemStartedEmitsCommandProgress(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexItemStarted(json.RawMessage(`{"threadId":"thread-1","item":{"id":"cmd-1","type":"commandExecution","command":["go","test","./agent"],"cwd":"/workspace","status":"inProgress"}}`))
-
-	select {
-	case evt := <-turnCh:
-		if evt.Progress == nil || evt.Progress.Action != "运行测试" || evt.Progress.ID != "command:test" {
-			t.Fatalf("event=%#v, want command progress", evt)
-		}
-	default:
-		t.Fatal("commandExecution item did not emit progress")
-	}
-}
-
-func TestHandleCodexItemStartedEmitsFileProgress(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexItemStarted(json.RawMessage(`{"threadId":"thread-1","item":{"id":"file-1","type":"fileChange","changes":[{"path":"agent/new.go","kind":{"type":"add"},"diff":"+package agent"}],"status":"inProgress"}}`))
-
-	select {
-	case evt := <-turnCh:
-		if evt.Progress == nil || evt.Progress.Action != "修改代码" || evt.Progress.ID != "file:changes" || evt.Progress.FilePath != "agent/new.go" {
-			t.Fatalf("event=%#v, want file progress", evt)
-		}
-	default:
-		t.Fatal("fileChange item did not emit progress")
-	}
-}
-
-func TestHandleCodexItemLifecycleEmitsSafeToolProgress(t *testing.T) {
-	tests := []struct {
-		name       string
-		params     string
-		wantAction string
-	}{
-		{
-			name:       "mcp tool",
-			params:     `{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"codegraph_explore","arguments":{"query":"secret source"},"status":"inProgress"}}`,
-			wantAction: "分析项目",
-		},
-		{
-			name:       "web search",
-			params:     `{"threadId":"thread-1","item":{"id":"search-1","type":"webSearch","query":"private search text"}}`,
-			wantAction: "检索资料",
-		},
-		{
-			name:       "collab agent",
-			params:     `{"threadId":"thread-1","item":{"id":"collab-1","type":"collabAgentToolCall","tool":"spawnAgent","prompt":"private delegated prompt","status":"inProgress"}}`,
-			wantAction: "启动子智能体",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-			turnCh := make(chan *codexTurnEvent, 1)
-			a.notifyMu.Lock()
-			a.turnCh["thread-1"] = turnCh
-			a.notifyMu.Unlock()
-
-			a.handleCodexItemStarted(json.RawMessage(tt.params))
-
-			select {
-			case evt := <-turnCh:
-				if evt.Progress == nil || evt.Progress.Kind != "tool" || evt.Progress.Action != tt.wantAction || normalizeProgressState(evt.Progress.Status) != ProgressStateRunning {
-					t.Fatalf("event=%#v, want safe running tool progress", evt)
-				}
-				for _, secret := range []string{"secret source", "private search text", "private delegated prompt"} {
-					if strings.Contains(evt.Text, secret) || strings.Contains(evt.Progress.Action, secret) || strings.Contains(evt.Progress.Detail, secret) {
-						t.Fatalf("event leaked private payload %q: %#v", secret, evt)
-					}
-				}
-			default:
-				t.Fatal("tool item did not emit progress")
-			}
-		})
-	}
-}
-
-func TestHandleCodexItemCompletedMarksToolProgressCompleted(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexItemCompletedAt(json.RawMessage(`{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"codegraph_explore","arguments":{},"status":"completed"}}`), 17)
-
-	select {
-	case evt := <-turnCh:
-		if evt.Progress == nil || evt.Progress.Status != "completed" || evt.Sequence != 17 {
-			t.Fatalf("event=%#v, want completed tool progress", evt)
-		}
-	default:
-		t.Fatal("completed tool item did not emit progress")
-	}
-}
-
-func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	// readLoop 在输入 EOF 后还会投递 runtime 终态，给两类事件分别保留容量。
 	turnCh := make(chan *codexTurnEvent, 2)
 	a.notifyMu.Lock()
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
-	raw := `{"jsonrpc":"2.0","method":"item/fileChange/patchUpdated","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"file-1","changes":[{"path":"agent/old.go","kind":{"type":"delete"},"diff":"-package agent"}]}}`
-	a.mu.Lock()
-	a.scanner = bufio.NewScanner(strings.NewReader(raw + "\n"))
-	a.mu.Unlock()
 
-	a.readLoop()
-
-	select {
-	case evt := <-turnCh:
-		if evt.Progress == nil || evt.Progress.Action != "修改代码" || evt.Progress.ID != "file:changes" || evt.Progress.FilePath != "agent/old.go" {
-			t.Fatalf("event=%#v, want patchUpdated progress", evt)
+	for _, method := range []string{
+		"turn/plan/updated",
+		"item/autoApprovalReview/started",
+		"guardianWarning",
+		"item/commandExecution/outputDelta",
+		"item/fileChange/patchUpdated",
+	} {
+		message := rpcResponse{
+			Method: method,
+			Params: json.RawMessage(`{"threadId":"thread-1","message":"private payload"}`),
 		}
-	default:
-		t.Fatal("patchUpdated did not emit progress")
-	}
-	select {
-	case evt := <-turnCh:
-		if evt.Kind != "interrupted" || evt.Text != "ACP runtime exited" {
-			t.Fatalf("event=%#v, want runtime observation interruption after patch progress", evt)
+		if !a.dispatchCodexNotification(message, "") {
+			t.Fatalf("%s was not consumed", method)
 		}
-	default:
-		t.Fatal("readLoop EOF did not emit runtime terminal")
 	}
-}
-
-func TestHandleCodexCommandProgressUsesSemanticCategory(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexCommandProgress(json.RawMessage(`{
-		"threadId":"thread-1",
-		"command":["go","test","./agent"],
-		"delta":"go test ./agent\nok github.com/fastclaw-ai/weclaw/agent 0.231s\n"
-	}`))
 
 	select {
-	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "运行测试" || evt.Progress == nil || evt.Progress.ID != "command:test" {
-			t.Fatalf("event=%#v, want semantic command category", evt)
-		}
-	default:
-		t.Fatal("expected raw command progress event")
-	}
-}
-
-func TestHandleCodexCommandProgressDropsOutputOnlyDelta(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexCommandProgress(json.RawMessage(`{
-		"threadId":"thread-1",
-		"delta":"go test ./agent\nok github.com/fastclaw-ai/weclaw/agent 0.231s\n"
-	}`))
-
-	select {
-	case evt := <-turnCh:
-		t.Fatalf("command output must not become user-visible progress: %#v", evt)
-	default:
-	}
-}
-
-func TestHandleCodexFileProgressPrefersFilePath(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexFileProgress(json.RawMessage(`{
-		"threadId":"thread-1",
-		"filePath":"agent/codex_progress_events.go",
-		"message":"*** Begin Patch\n*** Update File: agent/codex_progress_events.go\n+读取 Codex App 最新输出行\n"
-	}`))
-
-	select {
-	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "修改代码" || evt.Progress == nil || evt.Progress.ID != "file:changes" {
-			t.Fatalf("event=%#v, want semantic file stage", evt)
-		}
-	default:
-		t.Fatal("expected raw file progress event")
-	}
-}
-
-func TestHandleCodexFileProgressDropsRawPatchOnlyDelta(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexFileProgress(json.RawMessage(`{
-		"threadId":"thread-1",
-		"message":"*** Begin Patch\n*** Update File: agent/codex_progress_events.go\n+读取 Codex App 最新输出行\n"
-	}`))
-
-	select {
-	case evt := <-turnCh:
-		t.Fatalf("raw patch must not become user-visible progress: %#v", evt)
-	default:
-	}
-}
-
-func TestHandleCodexFileProgressDropsPatchFragment(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexFileProgress(json.RawMessage(`{"threadId":"thread-1","delta":"@Test"}`))
-
-	select {
-	case evt := <-turnCh:
-		t.Fatalf("patch fragment must not become user-visible progress: %#v", evt)
-	default:
-	}
-}
-
-func TestHandleCodexProgressSkipsEmptyRawLine(t *testing.T) {
-	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 1)
-	a.notifyMu.Lock()
-	a.turnCh["thread-1"] = turnCh
-	a.notifyMu.Unlock()
-
-	a.handleCodexCommandProgress(json.RawMessage(`{"threadId":"thread-1"}`))
-
-	select {
-	case evt := <-turnCh:
-		t.Fatalf("empty raw progress should not emit synthetic status, got %#v", evt)
+	case event := <-turnCh:
+		t.Fatalf("internal notification leaked into user progress: %#v", event)
 	default:
 	}
 }

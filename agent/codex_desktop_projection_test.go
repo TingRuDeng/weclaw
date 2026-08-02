@@ -142,7 +142,7 @@ func TestCodexDesktopProjectionKeepsParallelSiblingTurnsSeparate(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopProjectionEmitsItemCompletedAndProgress(t *testing.T) {
+func TestCodexDesktopProjectionEmitsCompletedAgentMessageOnly(t *testing.T) {
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
 	items := []any{
 		map[string]any{"id": "agent-1", "type": "agentMessage", "status": "inProgress", "text": "Done"},
@@ -160,19 +160,43 @@ func TestCodexDesktopProjectionEmitsItemCompletedAndProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyPatchSet() error = %v", err)
 	}
-	assertCodexDesktopEvent(t, update.Events, "item_completed", "turn-1")
-	progress := assertCodexDesktopEvent(t, update.Events, "progress", "turn-1")
-	if progress.Progress == nil || progress.Progress.Kind != "command" || progress.Progress.ID != "command:inspect" || progress.Progress.Action != "检查项目" || progress.Progress.Detail != "" || progress.Progress.Status != "completed" {
-		t.Fatalf("progress = %#v", progress)
+	event := assertCodexDesktopEvent(t, update.Events, "item_completed", "turn-1")
+	if event.ItemID != "agent-1" || event.Text != "Done" {
+		t.Fatalf("event = %#v", event)
+	}
+	if len(update.Events) != 1 {
+		t.Fatalf("events = %#v, want only completed agentMessage", update.Events)
 	}
 }
 
-func TestCodexDesktopFileProgressUsesSemanticStage(t *testing.T) {
-	progress := codexDesktopItemProgress("fileChange", map[string]any{
-		"status":  "completed",
-		"changes": []any{map[string]any{"path": "/private/workspace/secret.go", "diff": "@Test"}},
-	})
-	if progress == nil || progress.ID != "file:changes" || progress.Action != "修改代码" || progress.FilePath != "/private/workspace/secret.go" || progress.Detail != "" {
+func TestCodexDesktopProjectionDoesNotEmitSyntheticItemProgress(t *testing.T) {
+	previousRaw := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "running", nil)})
+	_, _, previous, _ := projectCodexDesktopSnapshot("thread-1", previousRaw, nil)
+	currentRaw := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "running", []any{
+		map[string]any{"id": "command-1", "type": "commandExecution", "status": "inProgress", "command": []any{"go", "test", "./..."}},
+		map[string]any{"id": "file-1", "type": "fileChange", "status": "inProgress", "changes": []any{map[string]any{"path": "/private/workspace/secret.go"}}},
+	})})
+	_, _, _, events := projectCodexDesktopSnapshot("thread-1", currentRaw, &previous)
+	for _, event := range events {
+		if event.Kind == "progress" {
+			t.Fatalf("synthetic Desktop item leaked into progress: %#v", event)
+		}
+	}
+}
+
+func TestCollectCodexDesktopTurnEmitsCompletedMessageAsNativeProgress(t *testing.T) {
+	assembler := newCodexFinalAssembler()
+	var progress []ProgressEvent
+	collectCodexTurnText(
+		assembler,
+		&codexTurnEvent{Kind: "item_completed", ItemID: "message-1", Text: "我先读取当前实现。"},
+		progressCallbacks{onEvent: func(event ProgressEvent) { progress = append(progress, event) }},
+		newCodexTurnDiagnostics(codexTurnDiagnosticsLimit),
+	)
+	if assembler.finalText() != "我先读取当前实现。" {
+		t.Fatalf("final text=%q", assembler.finalText())
+	}
+	if len(progress) != 1 || progress[0].Kind != ProgressKindMessage || progress[0].Text != "我先读取当前实现。" {
 		t.Fatalf("progress=%#v", progress)
 	}
 }

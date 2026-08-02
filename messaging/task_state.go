@@ -382,7 +382,10 @@ func (t *activeAgentTask) recordProgressUpdateWithPolicy(now time.Time, event ag
 	}
 	t.view = next
 	card, timeline := renderTaskProgressCard(next)
-	return taskProgressUpdate{latest: next.lastProgress, card: card, timeline: timeline}, true
+	return taskProgressUpdate{
+		latest: next.lastProgress, card: card, timeline: timeline,
+		verbatim: next.lastProgressEvent.Kind == agent.ProgressKindMessage,
+	}, true
 }
 
 func (t *activeAgentTask) recordProgressText(now time.Time, text string) (string, bool) {

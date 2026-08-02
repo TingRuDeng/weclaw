@@ -157,6 +157,29 @@ func TestTaskViewReducerBuildsCompactStructuredTimeline(t *testing.T) {
 	}
 }
 
+func TestNativeAgentMessageReplacesStructuredTimeline(t *testing.T) {
+	now := time.Now()
+	state, changed := reduceTaskView(taskViewState{}, taskViewEvent{
+		kind: taskViewProgress, at: now,
+		progress: agent.ProgressEvent{ID: "command:test", Kind: agent.ProgressKindCommand, Sequence: 1, Text: "运行测试"},
+	})
+	if !changed {
+		t.Fatal("command progress was not recorded")
+	}
+	const native = "我先检查当前实现。\n\n接下来运行回归测试。"
+	state, changed = reduceTaskView(state, taskViewEvent{
+		kind: taskViewProgress, at: now.Add(time.Second),
+		progress: agent.ProgressEvent{ID: "agent-message:message-1", Kind: agent.ProgressKindMessage, Sequence: 2, Text: native},
+	})
+	if !changed {
+		t.Fatal("native message was not recorded")
+	}
+	card, timeline := renderTaskProgressCard(state)
+	if timeline || card != native {
+		t.Fatalf("card=%q timeline=%t", card, timeline)
+	}
+}
+
 func TestTaskViewReducerBoundsCompactTimeline(t *testing.T) {
 	state := taskViewState{}
 	for index := 0; index < taskProgressTimelineLimit+3; index++ {
