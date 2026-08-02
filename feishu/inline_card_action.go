@@ -66,7 +66,7 @@ func (r *inlineCardReplier) AskChoices(ctx context.Context, prompt string, choic
 	result := &inlineCardReply{
 		card: &callback.Card{Type: "raw", Data: card},
 		replay: func(replayCtx context.Context) error {
-			return r.Replier.AskChoices(replayCtx, prompt, copied)
+			return r.sendChoices(replayCtx, prompt, copied)
 		},
 	}
 	if r.capture(result) {
@@ -74,6 +74,17 @@ func (r *inlineCardReplier) AskChoices(ctx context.Context, prompt string, choic
 	}
 	if err := r.waitForFallback(ctx); err != nil {
 		return err
+	}
+	return r.sendChoices(ctx, prompt, choices)
+}
+
+type deferredChoiceCardPatcher interface {
+	patchChoiceCard(context.Context, string, []platform.Choice, string) error
+}
+
+func (r *inlineCardReplier) sendChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
+	if patcher, ok := r.Replier.(deferredChoiceCardPatcher); ok {
+		return patcher.patchChoiceCard(ctx, prompt, choices, r.conversationKey)
 	}
 	return r.Replier.AskChoices(ctx, prompt, choices)
 }
@@ -303,7 +314,13 @@ func isDeferredCardResultCommand(choice string) bool {
 	if len(fields) < 2 || (fields[0] != "/cx" && fields[0] != "/cc") {
 		return false
 	}
-	return fields[1] == "switch" || fields[0] == "/cx" && fields[1] == "account" && len(fields) >= 3 && fields[2] == "confirm"
+	if fields[1] == "switch" {
+		return true
+	}
+	if fields[0] != "/cx" {
+		return false
+	}
+	return fields[1] == "cd" || fields[1] == "account" && len(fields) >= 3 && fields[2] == "confirm"
 }
 
 func deferredCardResultTitleForAction(action parsedCardAction) string {

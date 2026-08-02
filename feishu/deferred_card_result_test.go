@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type failingPatchSender struct {
@@ -26,6 +28,27 @@ func TestDeferredCardResultFallsBackToMessageWhenPatchFails(t *testing.T) {
 	}
 	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "切换失败") {
 		t.Fatalf("texts=%#v，原卡更新失败时必须保留单独消息兜底", sender.texts)
+	}
+}
+
+func TestDeferredChoiceCardFallsBackToMessageWhenPatchFails(t *testing.T) {
+	sender := &failingPatchSender{patchErr: errors.New("patch unavailable")}
+	base := NewReplier(sender, "oc_chat")
+	reply := newDeferredCardResultReplierWithTitle(
+		base, sender, "om_card", "会话切换结果", "/cx cd @workspace-token",
+	)
+	patcher, ok := reply.(deferredChoiceCardPatcher)
+	if !ok {
+		t.Fatalf("reply=%T, want deferred choice card patcher", reply)
+	}
+	if err := patcher.patchChoiceCard(context.Background(), "请选择会话", []platform.Choice{
+		{ID: "/cx switch thread-a", Label: "会话 A"},
+	}, "feishu:oc_chat"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "请选择会话") ||
+		!strings.Contains(sender.texts[0], "会话 A") {
+		t.Fatalf("texts=%#v，原卡更新失败时必须保留会话列表消息兜底", sender.texts)
 	}
 }
 
