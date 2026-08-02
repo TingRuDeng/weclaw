@@ -78,3 +78,22 @@ func TestFormatCodexTurnErrorIncludesAdditionalDetails(t *testing.T) {
 		t.Fatalf("formatCodexTurnError=%q，期望保留 additionalDetails", got)
 	}
 }
+
+func TestHandleCodexWarningDoesNotExposeRawMessage(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexWarningAt(json.RawMessage(`{"threadId":"thread-1","message":"Authorization: Bearer private-token"}`), 7)
+
+	select {
+	case evt := <-turnCh:
+		if evt.Text != "进展：Codex 正在处理连接异常。" || evt.Progress == nil || strings.Contains(evt.Progress.Action, "private-token") {
+			t.Fatalf("warning progress=%#v", evt)
+		}
+	default:
+		t.Fatal("warning progress was not emitted")
+	}
+}

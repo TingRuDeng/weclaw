@@ -133,7 +133,7 @@ func TestFormatCodexErrorIgnoresRecoverableWebSocketMessage(t *testing.T) {
 	}
 }
 
-func TestHandleCodexAutoApprovalReviewStartedEmitsProgress(t *testing.T) {
+func TestHandleCodexAutoApprovalReviewStartedEmitsOneSemanticSecurityStage(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
@@ -144,8 +144,8 @@ func TestHandleCodexAutoApprovalReviewStartedEmitsProgress(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || !strings.Contains(evt.Text, "自动审批审核中") || evt.Sequence != 41 || evt.Progress == nil || evt.Progress.ID != "review-1" || evt.Progress.Kind != "approval" || evt.Progress.Status != "running" {
-			t.Fatalf("event=%#v, want auto approval progress", evt)
+		if evt.Kind != "progress" || evt.Text != "进展：安全检查" || evt.Sequence != 41 || evt.Progress == nil || evt.Progress.ID != "security-check" || evt.Progress.Kind != "approval" || evt.Progress.Status != "running" {
+			t.Fatalf("event=%#v, want semantic security stage", evt)
 		}
 	default:
 		t.Fatal("expected auto approval progress event")
@@ -163,7 +163,7 @@ func TestHandleCodexGuardianWarningEmitsProgress(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || !containsAll(evt.Text, "自动审批", "通过") || evt.Sequence != 42 || evt.Progress == nil || evt.Progress.ID != "guardian-1" || evt.Progress.Kind != "approval" || evt.Progress.Status != "completed" {
+		if evt.Kind != "progress" || evt.Text != "进展：安全检查" || evt.Sequence != 42 || evt.Progress == nil || evt.Progress.ID != "security-check" || evt.Progress.Kind != "approval" || evt.Progress.Status != "completed" {
 			t.Fatalf("event=%#v, want guardian approval progress", evt)
 		}
 	default:
@@ -266,7 +266,7 @@ func TestHandleCodexItemStartedEmitsCommandProgress(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Progress == nil || evt.Progress.Action != "运行 go test ./agent" {
+		if evt.Progress == nil || evt.Progress.Action != "运行测试" || evt.Progress.ID != "command:test" {
 			t.Fatalf("event=%#v, want command progress", evt)
 		}
 	default:
@@ -285,7 +285,7 @@ func TestHandleCodexItemStartedEmitsFileProgress(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Progress == nil || evt.Progress.Action != "新增 agent/new.go" || evt.Progress.FilePath != "agent/new.go" {
+		if evt.Progress == nil || evt.Progress.Action != "修改代码" || evt.Progress.ID != "file:changes" || evt.Progress.FilePath != "agent/new.go" {
 			t.Fatalf("event=%#v, want file progress", evt)
 		}
 	default:
@@ -302,12 +302,12 @@ func TestHandleCodexItemLifecycleEmitsSafeToolProgress(t *testing.T) {
 		{
 			name:       "mcp tool",
 			params:     `{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"codegraph_explore","arguments":{"query":"secret source"},"status":"inProgress"}}`,
-			wantAction: "使用 CodeGraph · codegraph_explore",
+			wantAction: "分析项目",
 		},
 		{
 			name:       "web search",
 			params:     `{"threadId":"thread-1","item":{"id":"search-1","type":"webSearch","query":"private search text"}}`,
-			wantAction: "执行网页搜索",
+			wantAction: "检索资料",
 		},
 		{
 			name:       "collab agent",
@@ -378,7 +378,7 @@ func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Progress == nil || evt.Progress.Action != "删除 agent/old.go" {
+		if evt.Progress == nil || evt.Progress.Action != "修改代码" || evt.Progress.ID != "file:changes" || evt.Progress.FilePath != "agent/old.go" {
 			t.Fatalf("event=%#v, want patchUpdated progress", evt)
 		}
 	default:
@@ -394,7 +394,7 @@ func TestReadLoopHandlesFileChangePatchUpdated(t *testing.T) {
 	}
 }
 
-func TestHandleCodexCommandProgressPrefersCommandLine(t *testing.T) {
+func TestHandleCodexCommandProgressUsesSemanticCategory(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
@@ -409,15 +409,15 @@ func TestHandleCodexCommandProgressPrefersCommandLine(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "运行 go test ./agent" {
-			t.Fatalf("event=%#v, want readable command line", evt)
+		if evt.Kind != "progress" || evt.Text != "运行测试" || evt.Progress == nil || evt.Progress.ID != "command:test" {
+			t.Fatalf("event=%#v, want semantic command category", evt)
 		}
 	default:
 		t.Fatal("expected raw command progress event")
 	}
 }
 
-func TestHandleCodexCommandProgressFallsBackToLatestOutputLine(t *testing.T) {
+func TestHandleCodexCommandProgressDropsOutputOnlyDelta(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
@@ -431,11 +431,8 @@ func TestHandleCodexCommandProgressFallsBackToLatestOutputLine(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "ok github.com/fastclaw-ai/weclaw/agent 0.231s" {
-			t.Fatalf("event=%#v, want latest command output line", evt)
-		}
+		t.Fatalf("command output must not become user-visible progress: %#v", evt)
 	default:
-		t.Fatal("expected raw command progress event")
 	}
 }
 
@@ -454,15 +451,15 @@ func TestHandleCodexFileProgressPrefersFilePath(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "修改 agent/codex_progress_events.go" {
-			t.Fatalf("event=%#v, want readable file line", evt)
+		if evt.Kind != "progress" || evt.Text != "修改代码" || evt.Progress == nil || evt.Progress.ID != "file:changes" {
+			t.Fatalf("event=%#v, want semantic file stage", evt)
 		}
 	default:
 		t.Fatal("expected raw file progress event")
 	}
 }
 
-func TestHandleCodexFileProgressExtractsPatchPath(t *testing.T) {
+func TestHandleCodexFileProgressDropsRawPatchOnlyDelta(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
@@ -476,11 +473,24 @@ func TestHandleCodexFileProgressExtractsPatchPath(t *testing.T) {
 
 	select {
 	case evt := <-turnCh:
-		if evt.Kind != "progress" || evt.Text != "修改 agent/codex_progress_events.go" {
-			t.Fatalf("event=%#v, want readable patch file line", evt)
-		}
+		t.Fatalf("raw patch must not become user-visible progress: %#v", evt)
 	default:
-		t.Fatal("expected raw file progress event")
+	}
+}
+
+func TestHandleCodexFileProgressDropsPatchFragment(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	a.handleCodexFileProgress(json.RawMessage(`{"threadId":"thread-1","delta":"@Test"}`))
+
+	select {
+	case evt := <-turnCh:
+		t.Fatalf("patch fragment must not become user-visible progress: %#v", evt)
+	default:
 	}
 }
 

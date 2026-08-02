@@ -110,15 +110,3 @@ func taskProgressMarker(state agent.ProgressState) string {
 		return "•"
 	}
 }
-
-func combineTaskProgressTimeline(timeline string, content string) string {
-	timeline = strings.TrimSpace(timeline)
-	content = strings.TrimSpace(content)
-	if timeline == "" {
-		return content
-	}
-	if content == "" {
-		return timeline
-	}
-	return timeline + "\n\n---\n\n**处理结果**\n\n" + content
-}

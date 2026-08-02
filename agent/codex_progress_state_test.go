@@ -8,18 +8,19 @@ import (
 	"testing"
 )
 
-func TestCodexProgressStateCombinesCommandAndLatestOutput(t *testing.T) {
+func TestCodexProgressStateKeepsCommandSemanticAndDropsOutput(t *testing.T) {
 	state := newCodexProgressState()
 
 	got, ok := state.record(&codexTurnEvent{
 		Kind: "progress",
-		Text: "运行 go test ./agent",
+		Text: "运行测试",
 		Progress: &codexProgressEvent{
+			ID:     "command:test",
 			Kind:   "command",
-			Action: "运行 go test ./agent",
+			Action: "运行测试",
 		},
 	})
-	if !ok || got != "进展：运行 go test ./agent" {
+	if !ok || got != "进展：运行测试" {
 		t.Fatalf("progress=%q ok=%v, want command action", got, ok)
 	}
 
@@ -31,9 +32,8 @@ func TestCodexProgressStateCombinesCommandAndLatestOutput(t *testing.T) {
 			Detail: "ok github.com/fastclaw-ai/weclaw/agent 0.231s",
 		},
 	})
-	want := "进展：运行 go test ./agent · ok github.com/fastclaw-ai/weclaw/agent 0.231s"
-	if !ok || got != want {
-		t.Fatalf("progress=%q ok=%v, want %q", got, ok, want)
+	if ok || got != "" {
+		t.Fatalf("raw command output leaked into progress=%q ok=%v", got, ok)
 	}
 }
 
@@ -59,7 +59,7 @@ func TestCodexProgressStateCountsChangedFiles(t *testing.T) {
 		},
 	})
 
-	want := "进展：修改 agent/b.go · 已变更 2 个文件"
+	want := "进展：修改代码 · 已变更 2 个文件"
 	if !ok || got != want {
 		t.Fatalf("progress=%q ok=%v, want %q", got, ok, want)
 	}
@@ -69,19 +69,19 @@ func TestCodexProgressStateCarriesStructuredMetadata(t *testing.T) {
 	state := newCodexProgressState()
 	event, ok := state.recordEvent(&codexTurnEvent{
 		Kind: "progress", Sequence: 19, ItemID: "fallback-item",
-		Text: "修改 messaging/task_state.go",
+		Text: "修改代码",
 		Progress: &codexProgressEvent{
-			ID: "file-item", Kind: "file", Status: "completed",
-			Action: "修改 messaging/task_state.go", FilePath: "messaging/task_state.go",
+			ID: "file:changes", Kind: "file", Status: "completed",
+			Action: "修改代码", FilePath: "messaging/task_state.go",
 		},
 	})
 	if !ok {
 		t.Fatal("structured file progress must emit")
 	}
-	if event.ID != "file-item" || event.Kind != ProgressKindFile || event.State != ProgressStateCompleted || event.Sequence != 19 {
+	if event.ID != "file:changes" || event.Kind != ProgressKindFile || event.State != ProgressStateCompleted || event.Sequence != 19 {
 		t.Fatalf("event=%#v", event)
 	}
-	if event.Path != "messaging/task_state.go" || event.DisplayText() != "进展：修改 messaging/task_state.go" {
+	if event.Path != "messaging/task_state.go" || event.DisplayText() != "进展：修改代码 · 已变更 1 个文件" {
 		t.Fatalf("path=%q display=%q", event.Path, event.DisplayText())
 	}
 }
@@ -90,10 +90,10 @@ func TestCodexProgressStateCarriesToolMetadata(t *testing.T) {
 	state := newCodexProgressState()
 	event, ok := state.recordEvent(&codexTurnEvent{
 		Kind: "progress", Sequence: 23,
-		Text: "使用 CodeGraph · codegraph_explore",
+		Text: "分析项目",
 		Progress: &codexProgressEvent{
 			ID: "tool-item", Kind: "tool", Status: "completed",
-			Action: "使用 CodeGraph · codegraph_explore",
+			Action: "分析项目",
 		},
 	})
 	if !ok {
@@ -130,10 +130,11 @@ func TestACPAgentCodexTurnAggregatesCommandProgress(t *testing.T) {
 			}
 			ch <- &codexTurnEvent{
 				Kind: "progress",
-				Text: "运行 go test ./agent",
+				Text: "运行测试",
 				Progress: &codexProgressEvent{
+					ID:     "command:test",
 					Kind:   "command",
-					Action: "运行 go test ./agent",
+					Action: "运行测试",
 				},
 			}
 			ch <- &codexTurnEvent{
@@ -164,8 +165,7 @@ func TestACPAgentCodexTurnAggregatesCommandProgress(t *testing.T) {
 		t.Fatalf("reply=%q, want final reply", reply)
 	}
 	want := []string{
-		"进展：运行 go test ./agent",
-		"进展：运行 go test ./agent · ok github.com/fastclaw-ai/weclaw/agent 0.231s",
+		"进展：运行测试",
 	}
 	if fmt.Sprint(progress) != fmt.Sprint(want) {
 		t.Fatalf("progress=%#v, want %#v", progress, want)

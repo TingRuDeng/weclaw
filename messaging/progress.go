@@ -58,8 +58,6 @@ type progressSession struct {
 	snapshotCh          chan string
 	wg                  sync.WaitGroup
 	streamMu            sync.Mutex
-	snapshotMu          sync.Mutex
-	latestTimeline      string
 	streamOpenAttempted bool
 	lastContent         string
 	finished            bool
@@ -158,9 +156,6 @@ func (s *progressSession) onTaskProgress(update taskProgressUpdate) {
 		s.onProgress(update.latest)
 		return
 	}
-	s.snapshotMu.Lock()
-	s.latestTimeline = strings.TrimSpace(update.card)
-	s.snapshotMu.Unlock()
 	if s.cfg.InitialDelaySeconds <= 0 {
 		s.ensureStream()
 	}
@@ -185,12 +180,6 @@ func offerLatestProgressSnapshot(ch chan string, snapshot string) {
 	case ch <- snapshot:
 	default:
 	}
-}
-
-func (s *progressSession) currentTaskTimeline() string {
-	s.snapshotMu.Lock()
-	defer s.snapshotMu.Unlock()
-	return strings.TrimSpace(s.latestTimeline)
 }
 
 func (s *progressSession) stopWithFinal(finalText string, failed bool) bool {
@@ -267,7 +256,6 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 		currentReply = replyWriter
 	}
 	content, terminalFailed, consumed := progressTerminalArguments(currentReply, parentCanceled, finalText, failed, stopped)
-	content = combineTaskProgressTimeline(s.currentTaskTimeline(), content)
 	s.terminalClaimed = true
 	s.finished = true
 	var checkpoint platform.TerminalCheckpoint
@@ -610,7 +598,6 @@ func (s *progressSession) cancelTyping() {
 }
 
 func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool, stopped bool) bool {
-	timeline := s.currentTaskTimeline()
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	stream := s.stream
@@ -625,20 +612,20 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 	var err error
 	switch {
 	case stopped:
-		content := combineTaskProgressTimeline(timeline, firstNonBlank(finalText, "任务已按请求停止。"))
+		content := firstNonBlank(finalText, "任务已按请求停止。")
 		if stoppable, ok := stream.(platform.StoppableStream); ok {
 			err = stoppable.Stop(ctx, content)
 		} else {
 			err = stream.Complete(ctx, content)
 		}
 	case failed:
-		err = stream.Fail(ctx, combineTaskProgressTimeline(timeline, firstNonBlank(finalText, "任务执行失败。")))
+		err = stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
 	case finalText == progressStatusOnlyComplete:
-		err = stream.Complete(ctx, combineTaskProgressTimeline(timeline, ""))
+		err = stream.Complete(ctx, "")
 	case strings.TrimSpace(finalText) != "":
-		err = stream.Complete(ctx, combineTaskProgressTimeline(timeline, finalText))
+		err = stream.Complete(ctx, finalText)
 	default:
-		err = stream.Complete(ctx, combineTaskProgressTimeline(timeline, progressDefaultCompletion))
+		err = stream.Complete(ctx, progressDefaultCompletion)
 	}
 	if err != nil {
 		log.Printf("[handler] failed to finish progress stream: %v", err)

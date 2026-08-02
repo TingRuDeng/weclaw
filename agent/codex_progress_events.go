@@ -6,31 +6,19 @@ import (
 )
 
 const (
-	codexProgressPrefix          = "进展："
-	codexTurnDiagnosticsLimit    = 5
-	codexGuardianWarningMaxRunes = 120
-	codexPlanStepMaxRunes        = 120
-	codexRealtimeLineMaxRunes    = 240
-	codexGeneratingProgress      = "进展：Codex 正在生成回复。"
+	codexProgressPrefix       = "进展："
+	codexTurnDiagnosticsLimit = 5
+	codexPlanStepMaxRunes     = 120
+	codexRealtimeLineMaxRunes = 240
+	codexGeneratingProgress   = "进展：Codex 正在生成回复。"
 )
 
 type codexProgressParams struct {
 	ThreadID string            `json:"threadId"`
-	TurnID   string            `json:"turnId"`
-	ID       string            `json:"id"`
-	ItemID   string            `json:"itemId"`
-	ReviewID string            `json:"reviewId"`
 	Message  string            `json:"message"`
 	Status   string            `json:"status"`
-	Decision string            `json:"decision"`
-	Outcome  string            `json:"outcome"`
-	Delta    string            `json:"delta"`
-	Output   string            `json:"output"`
-	Text     string            `json:"text"`
-	Diff     string            `json:"diff"`
 	Changes  json.RawMessage   `json:"changes"`
 	Command  permissionCommand `json:"command"`
-	Cwd      string            `json:"cwd"`
 	Path     string            `json:"path"`
 	FilePath string            `json:"filePath"`
 	Files    []string          `json:"files"`
@@ -87,37 +75,26 @@ func (d *codexTurnDiagnostics) withError(reason string) string {
 
 func (a *ACPAgent) handleCodexAutoApprovalReviewStartedAt(params json.RawMessage, sequence uint64) {
 	p := decodeCodexProgressParams(params)
-	a.dispatchProgressEventToThread(p.ThreadID, "进展：Codex 自动审批审核中。", &codexProgressEvent{
-		ID: firstNonEmpty(p.ReviewID, p.ItemID, p.ID, "auto-approval-review"), Kind: "approval",
-		Action: "Codex 自动审批审核中。", Status: "running",
+	a.dispatchProgressEventToThread(p.ThreadID, "进展：安全检查", &codexProgressEvent{
+		ID: "security-check", Kind: "approval", Action: "安全检查", Status: "running",
 	}, sequence)
 }
 
 func (a *ACPAgent) handleCodexAutoApprovalReviewCompletedAt(params json.RawMessage, sequence uint64) {
-	status := "进展：Codex 自动审批审核已完成。"
-	if isPositiveCodexReview(params) {
-		status = "进展：Codex 自动审批已通过。"
-	}
 	p := decodeCodexProgressParams(params)
-	a.dispatchProgressEventToThread(p.ThreadID, status, &codexProgressEvent{
-		ID: firstNonEmpty(p.ReviewID, p.ItemID, p.ID, "auto-approval-review"), Kind: "approval",
-		Action: strings.TrimPrefix(status, codexProgressPrefix), Status: "completed",
+	a.dispatchProgressEventToThread(p.ThreadID, "进展：安全检查", &codexProgressEvent{
+		ID: "security-check", Kind: "approval", Action: "安全检查", Status: "completed",
 	}, sequence)
 }
 
 func (a *ACPAgent) handleCodexGuardianWarningAt(params json.RawMessage, sequence uint64) {
 	p := decodeCodexProgressParams(params)
-	status := "进展：Codex 收到安全提示。"
 	eventStatus := "running"
 	if strings.Contains(strings.ToLower(p.Message), "approved") {
-		status = "进展：Codex 自动审批已通过。"
 		eventStatus = "completed"
-	} else if strings.TrimSpace(p.Message) != "" {
-		status = "进展：Codex 收到安全提示：" + trimRunes(p.Message, codexGuardianWarningMaxRunes)
 	}
-	a.dispatchProgressEventToThread(p.ThreadID, status, &codexProgressEvent{
-		ID: firstNonEmpty(p.ReviewID, p.ItemID, p.ID, "guardian-warning"), Kind: "approval",
-		Action: strings.TrimPrefix(status, codexProgressPrefix), Status: eventStatus,
+	a.dispatchProgressEventToThread(p.ThreadID, "进展：安全检查", &codexProgressEvent{
+		ID: "security-check", Kind: "approval", Action: "安全检查", Status: eventStatus,
 	}, sequence)
 }
 
@@ -229,11 +206,13 @@ func (a *ACPAgent) dispatchCodexFileProgress(p codexProgressParams, sequence uin
 }
 
 func (a *ACPAgent) dispatchCodexCommandProgress(p codexProgressParams, sequence uint64) {
-	line := codexCommandProgressLine(p)
-	if line == "" {
+	stage, ok := codexCommandProgressStage(p.Command)
+	if !ok {
 		return
 	}
-	a.dispatchProgressEventToThread(p.ThreadID, line, codexCommandProgressEvent(p, line), sequence)
+	a.dispatchProgressEventToThread(p.ThreadID, stage.action, &codexProgressEvent{
+		ID: "command:" + stage.id, Kind: "command", Action: stage.action, Status: p.Status,
+	}, sequence)
 }
 
 func (a *ACPAgent) dispatchProgressEventToThread(threadID string, text string, progress *codexProgressEvent, sequence uint64) {
@@ -249,57 +228,6 @@ func decodeCodexProgressParams(params json.RawMessage) codexProgressParams {
 	var p codexProgressParams
 	_ = json.Unmarshal(params, &p)
 	return p
-}
-
-func isPositiveCodexReview(params json.RawMessage) bool {
-	p := decodeCodexProgressParams(params)
-	text := strings.ToLower(strings.Join([]string{p.Status, p.Decision, p.Outcome, p.Message}, " "))
-	return strings.Contains(text, "approved") || strings.Contains(text, "accept") || strings.Contains(text, "allow")
-}
-
-// latestCodexRealtimeLine 从 Codex App 的原始事件中取最后一条可读输出。
-func latestCodexRealtimeLine(p codexProgressParams) string {
-	for _, value := range []string{p.Delta, p.Output, p.Text, p.Message, p.Status, p.Diff} {
-		if line := lastNonEmptyCodexLine(value); line != "" {
-			return line
-		}
-	}
-	return ""
-}
-
-// codexCommandProgressLine 把命令进度转换成 Codex App 风格的可读行。
-func codexCommandProgressLine(p codexProgressParams) string {
-	if command := strings.TrimSpace(strings.Join(p.Command, " ")); command != "" {
-		return "运行 " + command
-	}
-	return latestCodexRealtimeLine(p)
-}
-
-// codexCommandProgressEvent 保留命令主动作，并把最新输出作为次要详情交给 turn 聚合器。
-func codexCommandProgressEvent(p codexProgressParams, line string) *codexProgressEvent {
-	event := &codexProgressEvent{
-		ID: firstNonEmpty(p.ItemID, p.ID), Kind: "command", Status: p.Status,
-	}
-	if command := strings.TrimSpace(strings.Join(p.Command, " ")); command != "" {
-		event.Action = "运行 " + command
-		event.Detail = latestCodexRealtimeLine(p)
-		return event
-	}
-	event.Detail = line
-	return event
-}
-
-func lastNonEmptyCodexLine(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-	lines := strings.Split(text, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			return line
-		}
-	}
-	return ""
 }
 
 func trimRunes(text string, limit int) string {

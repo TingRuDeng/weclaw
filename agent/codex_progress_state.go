@@ -5,8 +5,6 @@ import (
 	"strings"
 )
 
-const codexProgressDetailMaxRunes = 160
-
 type codexProgressState struct {
 	emitted       bool
 	currentKind   string
@@ -120,33 +118,35 @@ func (s *codexProgressState) recordStructured(evt *codexProgressEvent, fallback 
 	}
 }
 
-// recordCommand 保留当前运行命令，把后续输出行合并为同一条动作详情。
+// recordCommand 只保留归一化动作；命令参数和输出不属于用户进度。
 func (s *codexProgressState) recordCommand(evt *codexProgressEvent, fallback string) (string, bool) {
-	action := firstNonEmpty(evt.Action, fallback)
-	if strings.HasPrefix(action, codexProgressPrefix) {
-		return s.recordText(action)
+	action := strings.TrimSpace(evt.Action)
+	if action == "" {
+		return "", false
 	}
-	if strings.HasPrefix(action, "运行 ") {
-		s.currentKind = "command"
-		s.currentAction = action
-	}
-	if detail := cleanCodexProgressDetail(evt.Detail); detail != "" {
-		s.currentDetail = detail
-	}
-	if s.currentKind != "command" || s.currentAction == "" {
-		return s.recordText(firstNonEmpty(evt.Detail, fallback))
-	}
+	s.currentKind = "command"
+	s.currentAction = safeCodexCommandAction(action)
+	s.currentDetail = ""
 	return s.emitCurrent()
 }
 
-// recordFile 记录本轮触达的文件集合，用最新文件作为主动作，并展示变更计数。
+func safeCodexCommandAction(action string) string {
+	switch strings.TrimSpace(action) {
+	case "检查项目", "运行测试", "运行代码检查", "构建项目", "准备发布", "执行工具操作":
+		return strings.TrimSpace(action)
+	default:
+		return "执行工具操作"
+	}
+}
+
+// recordFile 记录本轮触达的文件集合，只展示聚合数量。
 func (s *codexProgressState) recordFile(evt *codexProgressEvent, fallback string) (string, bool) {
-	action := firstNonEmpty(evt.Action, fallback)
+	action := strings.TrimSpace(evt.Action)
 	if action == "" {
 		return "", false
 	}
 	s.currentKind = "file"
-	s.currentAction = action
+	s.currentAction = "修改代码"
 	s.currentDetail = ""
 	if path := strings.TrimSpace(evt.FilePath); path != "" {
 		s.changedFiles[path] = struct{}{}
@@ -170,18 +170,10 @@ func (s *codexProgressState) emitCurrent() (string, bool) {
 }
 
 func (s *codexProgressState) currentDetailText() string {
-	if s.currentKind == "file" && len(s.changedFiles) > 1 {
+	if s.currentKind == "file" && len(s.changedFiles) > 0 {
 		return "已变更 " + strconv.Itoa(len(s.changedFiles)) + " 个文件"
 	}
 	return s.currentDetail
-}
-
-func cleanCodexProgressDetail(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" || strings.HasPrefix(text, "运行 ") {
-		return ""
-	}
-	return trimRunes(text, codexProgressDetailMaxRunes)
 }
 
 func (s *codexProgressState) emitGeneratingEvent() (ProgressEvent, bool) {
