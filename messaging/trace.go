@@ -56,7 +56,11 @@ func (h *Handler) recordProgressTrace(trace observability.TraceContext, event ag
 	record.EventID = strings.TrimSpace(event.ID)
 	record.Sequence = event.Sequence
 	record.Kind = string(event.Kind)
-	record.Summary = display
+	if event.Kind == agent.ProgressKindMessage {
+		record.Summary = fmt.Sprintf("text_runes=%d", len([]rune(display)))
+	} else {
+		record.Summary = display
+	}
 	h.recordTrace(record)
 }
 

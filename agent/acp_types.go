@@ -188,18 +188,8 @@ type codexTurnEvent struct {
 	Sequence  uint64
 	Delta     string
 	Text      string
-	Progress  *codexProgressEvent
 	Approval  *codexApprovalRequest
 	UserInput *codexUserInputEvent
-}
-
-type codexProgressEvent struct {
-	ID       string
-	Kind     string
-	Action   string
-	Detail   string
-	FilePath string
-	Status   string
 }
 
 type codexApprovalRequest struct {

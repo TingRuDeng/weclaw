@@ -15,6 +15,7 @@ type taskProgressUpdate struct {
 	latest   string
 	card     string
 	timeline bool
+	verbatim bool
 }
 
 func appendTaskProgressTimeline(current []agent.ProgressEvent, incoming agent.ProgressEvent) []agent.ProgressEvent {
@@ -70,6 +71,9 @@ func isStructuredTaskProgress(event agent.ProgressEvent) bool {
 }
 
 func renderTaskProgressCard(state taskViewState) (string, bool) {
+	if state.lastProgressEvent.Kind == agent.ProgressKindMessage {
+		return strings.TrimSpace(state.lastProgress), false
+	}
 	if !state.progressTimelineEnabled || len(state.progressTimeline) == 0 {
 		return strings.TrimSpace(state.lastProgress), false
 	}

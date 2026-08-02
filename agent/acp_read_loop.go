@@ -173,15 +173,15 @@ func (a *ACPAgent) dispatchCodexMessageNotification(msg rpcResponse) bool {
 	return true
 }
 
-// dispatchCodexTurnNotification 处理 turn 终态、计划、warning 和 error。
+// dispatchCodexTurnNotification 处理 turn 终态、warning 和 error。
 func (a *ACPAgent) dispatchCodexTurnNotification(msg rpcResponse) bool {
 	switch msg.Method {
 	case "turn/started", "turn/completed", "turn/failed":
 		a.handleCodexTurnEvent(msg.Method, msg.Params)
 	case "turn/plan/updated":
-		a.handleCodexPlanUpdatedAt(msg.Params, msg.Sequence)
+		// 计划属于 Codex 内部执行细节；用户进度由 agentMessage 提供。
 	case "warning":
-		a.handleCodexWarningAt(msg.Params, msg.Sequence)
+		a.handleCodexWarning(msg.Params)
 	case "error":
 		a.handleCodexError(msg.Params)
 	default:
@@ -190,19 +190,12 @@ func (a *ACPAgent) dispatchCodexTurnNotification(msg rpcResponse) bool {
 	return true
 }
 
-// dispatchCodexProgressNotification 处理审批审查、guardian、命令和文件进度。
+// dispatchCodexProgressNotification 消费 Codex 内部执行通知，避免将其合成为用户进度。
 func (a *ACPAgent) dispatchCodexProgressNotification(msg rpcResponse) bool {
 	switch msg.Method {
-	case "item/autoApprovalReview/started":
-		a.handleCodexAutoApprovalReviewStartedAt(msg.Params, msg.Sequence)
-	case "item/autoApprovalReview/completed":
-		a.handleCodexAutoApprovalReviewCompletedAt(msg.Params, msg.Sequence)
-	case "guardianWarning":
-		a.handleCodexGuardianWarningAt(msg.Params, msg.Sequence)
-	case "item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction":
-		a.handleCodexCommandProgressAt(msg.Params, msg.Sequence)
-	case "item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated":
-		a.handleCodexFileProgressAt(msg.Params, msg.Sequence)
+	case "item/autoApprovalReview/started", "item/autoApprovalReview/completed", "guardianWarning",
+		"item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction",
+		"item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated":
 	default:
 		return false
 	}

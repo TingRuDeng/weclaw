@@ -299,6 +299,71 @@ func TestNativeStreamCollapsesStructuredTimelineAtTerminal(t *testing.T) {
 	}
 }
 
+func TestNativeMessageProgressPreservesFullCardText(t *testing.T) {
+	h := NewHandler(nil, nil)
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	_, finish, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "[codex] ", "codex", "/workspace/project", "原生进度", cfg,
+	)
+	const native = "我先检查当前实现。\n\n- 保留 Codex 原文\n- 不生成工具时间线"
+	session.onTaskProgress(taskProgressUpdate{latest: native, card: native, verbatim: true})
+	time.Sleep(taskQueueProbeDelay)
+	_ = finish("最终结果", false)
+
+	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != native {
+		t.Fatalf("updates=%#v", reply.Stream.Updates)
+	}
+	if reply.Stream.Completed != "最终结果" {
+		t.Fatalf("completed=%q", reply.Stream.Completed)
+	}
+}
+
+func TestCodexNativeMessageProgressUsesVerbatimCard(t *testing.T) {
+	const native = "我先检查当前实现。\n\n- 保留 Codex 原文\n- 不生成工具时间线"
+	h := NewHandler(nil, nil)
+	ag := &fakeStructuredProgressAgent{
+		fakeProgressAgent: fakeProgressAgent{
+			fakeAgent: fakeAgent{reply: "最终结果"}, delay: taskQueueProbeDelay,
+		},
+		events: []agent.ProgressEvent{{
+			ID: "agent-message:message-1", Kind: agent.ProgressKindMessage,
+			State: agent.ProgressStateCompleted, Sequence: 1, Text: native,
+		}},
+	}
+	h.agents["codex"] = ag
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	h.SetProgressConfig(cfg)
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	executionKey := h.agentExecutionKeyForRoute("feishu:ou_user", "feishu:ou_user", "codex", ag)
+
+	h.sendToNamedAgent(agentMessageRequest{
+		ctx: context.Background(), platformName: platform.PlatformFeishu,
+		userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply,
+		name: "codex", message: "检查进度", clientID: "client-1",
+	})
+	waitUntil(t, func() bool {
+		_, active := h.activeTask(executionKey)
+		return !active
+	})
+
+	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != native {
+		t.Fatalf("updates=%#v", reply.Stream.Updates)
+	}
+	if reply.Stream.Completed != "[codex] 最终结果" {
+		t.Fatalf("completed=%q", reply.Stream.Completed)
+	}
+}
+
 func TestStructuredAgentNativeStreamBuildsCompactTimeline(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.agents["mock"] = &fakeStructuredProgressAgent{
@@ -330,7 +395,7 @@ func TestStructuredAgentNativeStreamBuildsCompactTimeline(t *testing.T) {
 		t.Fatal("structured task should update the native stream")
 	}
 	last := reply.Stream.Updates[len(reply.Stream.Updates)-1]
-	if !strings.Contains(last, "**执行进度**") || !strings.Contains(last, "定位问题") ||
+	if !strings.HasPrefix(last, "[mock] ") || !strings.Contains(last, "**执行进度**") || !strings.Contains(last, "定位问题") ||
 		!strings.Contains(last, "✅ 运行 go test ./messaging") {
 		t.Fatalf("last update=%q, want compact structured timeline", last)
 	}

@@ -40,7 +40,12 @@ type progressSendState struct {
 	sentCount       int
 	sawDelta        bool
 	sentDeltaNotice bool
-	latestSnapshot  string
+	latestSnapshot  progressCardSnapshot
+}
+
+type progressCardSnapshot struct {
+	text       string
+	withPrefix bool
 }
 
 type progressSession struct {
@@ -55,7 +60,7 @@ type progressSession struct {
 	taskText            string
 	cfg                 config.ProgressConfig
 	deltaCh             chan string
-	snapshotCh          chan string
+	snapshotCh          chan progressCardSnapshot
 	wg                  sync.WaitGroup
 	streamMu            sync.Mutex
 	streamOpenAttempted bool
@@ -111,7 +116,7 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithHandle(ctx context.Co
 		handler: h, ctx: progressCtx, cancel: cancel, reply: reply,
 		prefix: prefix, agentName: agentName, workspaceRoot: workspaceRoot,
 		taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
-		snapshotCh: make(chan string, 1),
+		snapshotCh: make(chan progressCardSnapshot, 1),
 	}
 	session.start()
 	return session.onProgress, session.stopWithFinal, session
@@ -152,19 +157,23 @@ func (s *progressSession) onProgress(delta string) {
 }
 
 func (s *progressSession) onTaskProgress(update taskProgressUpdate) {
-	if !update.timeline || s.cfg.Mode != progressModeStream || !s.reply.Capabilities().Streaming {
+	if (!update.timeline && !update.verbatim) || s.cfg.Mode != progressModeStream || !s.reply.Capabilities().Streaming {
 		s.onProgress(update.latest)
 		return
 	}
 	if s.cfg.InitialDelaySeconds <= 0 {
 		s.ensureStream()
 	}
-	offerLatestProgressSnapshot(s.snapshotCh, update.card)
+	snapshot := update.card
+	if strings.TrimSpace(snapshot) == "" {
+		snapshot = update.latest
+	}
+	offerLatestProgressSnapshot(s.snapshotCh, progressCardSnapshot{text: snapshot, withPrefix: !update.verbatim})
 }
 
-func offerLatestProgressSnapshot(ch chan string, snapshot string) {
-	snapshot = strings.TrimSpace(snapshot)
-	if snapshot == "" {
+func offerLatestProgressSnapshot(ch chan progressCardSnapshot, snapshot progressCardSnapshot) {
+	snapshot.text = strings.TrimSpace(snapshot.text)
+	if snapshot.text == "" {
 		return
 	}
 	select {
@@ -351,9 +360,9 @@ func (s *progressSession) runProgressLoop() {
 	}
 }
 
-func (s *progressSession) handleProgressSnapshot(snapshot string, startedAt time.Time, state *progressSendState) {
-	snapshot = strings.TrimSpace(snapshot)
-	if snapshot == "" {
+func (s *progressSession) handleProgressSnapshot(snapshot progressCardSnapshot, startedAt time.Time, state *progressSendState) {
+	snapshot.text = strings.TrimSpace(snapshot.text)
+	if snapshot.text == "" {
 		return
 	}
 	state.sawDelta = true
@@ -361,7 +370,7 @@ func (s *progressSession) handleProgressSnapshot(snapshot string, startedAt time
 	if time.Since(startedAt) < durationSeconds(s.cfg.InitialDelaySeconds, 0) {
 		return
 	}
-	s.sendProgressIfAllowed(snapshot, state)
+	s.sendSnapshotIfAllowed(snapshot.text, state, snapshot.withPrefix)
 }
 
 func (s *progressSession) handleProgressDelta(delta string, tail string, startedAt time.Time, state *progressSendState) string {
@@ -387,9 +396,9 @@ func (s *progressSession) handleTimedProgress(now time.Time, startedAt time.Time
 	if elapsed < durationSeconds(s.cfg.InitialDelaySeconds, 0) {
 		return
 	}
-	if state.latestSnapshot != "" {
+	if state.latestSnapshot.text != "" {
 		if state.sentCount == 0 {
-			s.sendProgressIfAllowed(state.latestSnapshot, state)
+			s.sendSnapshotIfAllowed(state.latestSnapshot.text, state, state.latestSnapshot.withPrefix)
 		}
 		return
 	}
@@ -404,11 +413,19 @@ func (s *progressSession) handleTimedProgress(now time.Time, startedAt time.Time
 }
 
 func (s *progressSession) sendProgressIfAllowed(summary string, state *progressSendState) {
+	s.sendContentIfAllowed(summary, state, true)
+}
+
+func (s *progressSession) sendSnapshotIfAllowed(summary string, state *progressSendState, withPrefix bool) {
+	s.sendContentIfAllowed(summary, state, withPrefix)
+}
+
+func (s *progressSession) sendContentIfAllowed(summary string, state *progressSendState, withPrefix bool) {
 	now := time.Now()
 	if !shouldSendProgress(now, *state, summary, s.cfg) {
 		return
 	}
-	if !s.send(summary) {
+	if !s.sendContent(summary, withPrefix) {
 		return
 	}
 	state.lastSentSummary = summary
@@ -417,6 +434,10 @@ func (s *progressSession) sendProgressIfAllowed(summary string, state *progressS
 }
 
 func (s *progressSession) send(text string) bool {
+	return s.sendContent(text, true)
+}
+
+func (s *progressSession) sendContent(text string, withPrefix bool) bool {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	if s.finished || s.terminalClaimed {
@@ -424,7 +445,10 @@ func (s *progressSession) send(text string) bool {
 	}
 	stream := s.ensureStreamLocked()
 	if stream != nil {
-		content := s.prefix + text
+		content := text
+		if withPrefix {
+			content = s.prefix + text
+		}
 		if err := stream.Update(s.ctx, content); err != nil {
 			log.Printf("[handler] failed to update progress stream: %v", err)
 			return false
@@ -490,12 +514,7 @@ func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, 
 		return false, nil
 	}
 	initialContent := strings.TrimSpace(latestProgress)
-	if initialContent != "" && !strings.HasPrefix(initialContent, "**执行进度**") {
-		initialContent = strings.TrimSpace(renderDeltaProgress(initialContent, s.cfg))
-	}
-	if initialContent != "" {
-		initialContent = s.prefix + initialContent
-	} else {
+	if initialContent == "" {
 		initialContent = strings.TrimSpace(s.lastContent)
 	}
 	if initialContent == "" {

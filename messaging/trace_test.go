@@ -74,6 +74,22 @@ func TestHandleMessageRecordsOneTraceAcrossTaskProgressAndTerminal(t *testing.T)
 	}
 }
 
+func TestNativeAgentMessageTraceRecordsLengthWithoutBody(t *testing.T) {
+	h := NewHandler(nil, nil)
+	capture := &traceCapture{}
+	h.SetTraceRecorder(capture)
+	trace := observability.NewTraceContext(observability.TraceSeed{Platform: string(platform.PlatformFeishu)})
+	h.recordProgressTrace(trace, agent.ProgressEvent{
+		ID: "agent-message:message-1", Kind: agent.ProgressKindMessage,
+		State: agent.ProgressStateCompleted, Sequence: 9,
+	}, "private agent reply")
+
+	events := capture.snapshot()
+	if len(events) != 1 || events[0].Summary != "text_runes=19" || events[0].Kind != string(agent.ProgressKindMessage) {
+		t.Fatalf("events=%#v", events)
+	}
+}
+
 func TestHandleMessageRecordsDuplicateWithoutAcceptingIt(t *testing.T) {
 	h := NewHandler(nil, nil)
 	capture := &traceCapture{}

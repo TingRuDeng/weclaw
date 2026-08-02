@@ -82,7 +82,6 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 
 func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThreadWatchOptions) (string, error) {
 	assembler, diagnostics := newCodexFinalAssembler(), newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
-	progressState := newCodexProgressState()
 	ticksWithoutEvent := 0
 	for {
 		select {
@@ -126,7 +125,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 			collectCodexTurnText(
 				assembler, evt,
 				progressCallbacks{onText: opts.onProgress, onEvent: opts.onProgressEvent},
-				progressState, diagnostics,
+				diagnostics,
 			)
 			if evt.Kind == "completed" {
 				return a.attachedCodexFinalText(ctx, opts.conversationID, opts.threadID, assembler)
@@ -206,27 +205,16 @@ func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTu
 	return nil
 }
 
-func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, callbacks progressCallbacks, progressState *codexProgressState, diagnostics *codexTurnDiagnostics) {
-	if evt.Kind == "progress" {
-		if event, ok := progressState.recordEvent(evt); ok {
-			progressText := event.DisplayText()
-			diagnostics.remember(progressText)
-			callbacks.emit(event)
-		}
-	}
+func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, callbacks progressCallbacks, diagnostics *codexTurnDiagnostics) {
 	if evt.Delta != "" {
-		if callbacks.enabled() {
-			if event, ok := progressState.emitGeneratingEvent(); ok {
-				progressText := event.DisplayText()
-				diagnostics.remember(progressText)
-				callbacks.emit(event)
-			}
-		}
 		assembler.addDelta(evt.ItemID, evt.Delta)
 	}
 	if evt.Text != "" {
 		if evt.Kind == "item_completed" {
 			assembler.addCompleted(evt.ItemID, evt.Text)
+			if event, ok := codexNativeMessageProgressEvent(evt); ok {
+				callbacks.emit(event)
+			}
 		} else {
 			assembler.addSnapshot(evt.ItemID, evt.Text)
 		}

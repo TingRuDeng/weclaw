@@ -54,7 +54,7 @@ func TestHandleCodexErrorIgnoresReconnectObject(t *testing.T) {
 	}
 }
 
-func TestReadLoopRoutesCodexWarningAsProgress(t *testing.T) {
+func TestReadLoopConsumesCodexWarningWithoutUserProgress(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 2)
 	a.turnCh["thread-1"] = turnCh
@@ -63,9 +63,14 @@ func TestReadLoopRoutesCodexWarningAsProgress(t *testing.T) {
 
 	a.readLoop()
 
-	evt := <-turnCh
-	if evt.Kind != "progress" || !strings.Contains(evt.Text, "HTTPS") || evt.Sequence != 1 || evt.Progress == nil || evt.Progress.Kind != "status" || evt.Progress.Status != "running" {
-		t.Fatalf("warning event=%#v，期望 HTTPS 非致命进度", evt)
+	event := <-turnCh
+	if event.Kind != "interrupted" || event.Text != "ACP runtime exited" {
+		t.Fatalf("event=%#v, want only runtime terminal", event)
+	}
+	select {
+	case extra := <-turnCh:
+		t.Fatalf("warning leaked into user progress: %#v", extra)
+	default:
 	}
 }
 
@@ -79,21 +84,18 @@ func TestFormatCodexTurnErrorIncludesAdditionalDetails(t *testing.T) {
 	}
 }
 
-func TestHandleCodexWarningDoesNotExposeRawMessage(t *testing.T) {
+func TestHandleCodexWarningDoesNotEmitUserProgress(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
 
-	a.handleCodexWarningAt(json.RawMessage(`{"threadId":"thread-1","message":"Authorization: Bearer private-token"}`), 7)
+	a.handleCodexWarning(json.RawMessage(`{"threadId":"thread-1","message":"Authorization: Bearer private-token"}`))
 
 	select {
-	case evt := <-turnCh:
-		if evt.Text != "进展：Codex 正在处理连接异常。" || evt.Progress == nil || strings.Contains(evt.Progress.Action, "private-token") {
-			t.Fatalf("warning progress=%#v", evt)
-		}
+	case event := <-turnCh:
+		t.Fatalf("warning leaked into user progress: %#v", event)
 	default:
-		t.Fatal("warning progress was not emitted")
 	}
 }
