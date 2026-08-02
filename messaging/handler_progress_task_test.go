@@ -273,7 +273,7 @@ func TestNativeStreamProgressCollapsesRepeatedStructuredStatus(t *testing.T) {
 	}
 }
 
-func TestNativeStreamKeepsStructuredTimelineThroughTerminal(t *testing.T) {
+func TestNativeStreamCollapsesStructuredTimelineAtTerminal(t *testing.T) {
 	h := NewHandler(nil, nil)
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
@@ -294,8 +294,8 @@ func TestNativeStreamKeepsStructuredTimelineThroughTerminal(t *testing.T) {
 	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != timeline {
 		t.Fatalf("updates=%#v, want complete compact timeline", reply.Stream.Updates)
 	}
-	if reply.Stream.Completed != timeline {
-		t.Fatalf("completed=%q, want timeline retained at terminal", reply.Stream.Completed)
+	if reply.Stream.Completed != "" {
+		t.Fatalf("completed=%q, want progress collapsed at status-only terminal", reply.Stream.Completed)
 	}
 }
 
@@ -334,9 +334,7 @@ func TestStructuredAgentNativeStreamBuildsCompactTimeline(t *testing.T) {
 		!strings.Contains(last, "✅ 运行 go test ./messaging") {
 		t.Fatalf("last update=%q, want compact structured timeline", last)
 	}
-	if !strings.Contains(reply.Stream.Completed, "**执行进度**") ||
-		!strings.Contains(reply.Stream.Completed, "**处理结果**") ||
-		!strings.Contains(reply.Stream.Completed, "[mock] 最终结果") {
-		t.Fatalf("completed=%q, want retained timeline and final result", reply.Stream.Completed)
+	if reply.Stream.Completed != "[mock] 最终结果" {
+		t.Fatalf("completed=%q, want final result without progress timeline", reply.Stream.Completed)
 	}
 }

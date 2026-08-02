@@ -110,23 +110,56 @@ func codexDesktopItemText(item map[string]any) string {
 
 // codexDesktopItemProgress 将命令和文件 item 映射为结构化进度。
 func codexDesktopItemProgress(itemType string, item map[string]any) *codexProgressEvent {
-	kind := ""
 	switch strings.ToLower(itemType) {
 	case "commandexecution":
-		kind = "command"
+		stage, ok := codexCommandProgressStage(codexDesktopPermissionCommand(item["command"]))
+		if !ok {
+			return nil
+		}
+		return &codexProgressEvent{
+			ID: "command:" + stage.id, Kind: "command", Action: stage.action,
+			Status: codexDesktopString(item["status"]),
+		}
 	case "filechange":
-		kind = "file"
+		path := codexDesktopFilePath(item)
+		if path == "" {
+			return nil
+		}
+		return &codexProgressEvent{
+			ID: "file:changes", Kind: "file", Action: "修改代码", FilePath: path,
+			Status: codexDesktopString(item["status"]),
+		}
 	default:
 		return nil
 	}
-	detail := firstNonEmpty(
-		codexDesktopString(item["aggregatedOutput"]), codexDesktopString(item["output"]),
-		codexDesktopString(item["message"]), codexDesktopString(item["status"]),
-	)
-	return &codexProgressEvent{
-		Kind: kind, Action: codexDesktopDisplayValue(item["command"]), Detail: detail,
-		FilePath: firstNonEmpty(codexDesktopString(item["filePath"]), codexDesktopString(item["path"])),
+}
+
+func codexDesktopPermissionCommand(value any) permissionCommand {
+	if text := codexDesktopString(value); text != "" {
+		return permissionCommand{text}
 	}
+	values, _ := value.([]any)
+	command := make(permissionCommand, 0, len(values))
+	for _, entry := range values {
+		if text := codexDesktopString(entry); text != "" {
+			command = append(command, text)
+		}
+	}
+	return command
+}
+
+func codexDesktopFilePath(item map[string]any) string {
+	if path := firstNonEmpty(codexDesktopString(item["filePath"]), codexDesktopString(item["path"])); path != "" {
+		return path
+	}
+	changes, _ := item["changes"].([]any)
+	for _, value := range changes {
+		change, _ := value.(map[string]any)
+		if path := codexDesktopString(change["path"]); path != "" {
+			return path
+		}
+	}
+	return ""
 }
 
 // codexDesktopPreviousTurn 安全读取上一 revision 的同名 turn。
@@ -253,18 +286,6 @@ func codexDesktopErrorText(value any) string {
 	}
 	object, _ := value.(map[string]any)
 	return codexDesktopString(object["message"])
-}
-
-// codexDesktopDisplayValue 把结构化命令转换成稳定显示文本。
-func codexDesktopDisplayValue(value any) string {
-	if value == nil {
-		return ""
-	}
-	if text := codexDesktopString(value); text != "" {
-		return text
-	}
-	encoded, _ := json.Marshal(value)
-	return strings.TrimSpace(string(encoded))
 }
 
 // codexDesktopID 兼容字符串和 JSON 数字 request/item ID。

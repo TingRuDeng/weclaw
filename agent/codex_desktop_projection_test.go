@@ -146,7 +146,7 @@ func TestCodexDesktopProjectionEmitsItemCompletedAndProgress(t *testing.T) {
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
 	items := []any{
 		map[string]any{"id": "agent-1", "type": "agentMessage", "status": "inProgress", "text": "Done"},
-		map[string]any{"id": "command-1", "type": "commandExecution", "status": "inProgress", "aggregatedOutput": "building"},
+		map[string]any{"id": "command-1", "type": "commandExecution", "status": "inProgress", "command": []any{"git", "status"}, "aggregatedOutput": "private output"},
 	}
 	raw := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "running", items)})
 	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{threadID: "thread-1", epoch: 1, revision: 1, raw: raw}); err != nil {
@@ -155,15 +155,25 @@ func TestCodexDesktopProjectionEmitsItemCompletedAndProgress(t *testing.T) {
 	update, err := store.applyPatchSet(codexDesktopPatchSetSpec{
 		threadID: "thread-1", epoch: 1, baseRevision: 1, revision: 2, patches: []codexDesktopPatch{
 			{Op: "replace", Path: []any{"turns", 0, "items", 0, "status"}, Value: "completed"},
-			{Op: "replace", Path: []any{"turns", 0, "items", 1, "aggregatedOutput"}, Value: "built"},
+			{Op: "replace", Path: []any{"turns", 0, "items", 1, "status"}, Value: "completed"},
 		}})
 	if err != nil {
 		t.Fatalf("applyPatchSet() error = %v", err)
 	}
 	assertCodexDesktopEvent(t, update.Events, "item_completed", "turn-1")
 	progress := assertCodexDesktopEvent(t, update.Events, "progress", "turn-1")
-	if progress.Progress == nil || progress.Progress.Kind != "command" || progress.Progress.Action != "" {
+	if progress.Progress == nil || progress.Progress.Kind != "command" || progress.Progress.ID != "command:inspect" || progress.Progress.Action != "检查项目" || progress.Progress.Detail != "" || progress.Progress.Status != "completed" {
 		t.Fatalf("progress = %#v", progress)
+	}
+}
+
+func TestCodexDesktopFileProgressUsesSemanticStage(t *testing.T) {
+	progress := codexDesktopItemProgress("fileChange", map[string]any{
+		"status":  "completed",
+		"changes": []any{map[string]any{"path": "/private/workspace/secret.go", "diff": "@Test"}},
+	})
+	if progress == nil || progress.ID != "file:changes" || progress.Action != "修改代码" || progress.FilePath != "/private/workspace/secret.go" || progress.Detail != "" {
+		t.Fatalf("progress=%#v", progress)
 	}
 }
 

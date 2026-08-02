@@ -137,6 +137,39 @@ func (s *outboxTestStream) prepareTerminalWithState(content string, state platfo
 	return platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: payload}, err
 }
 
+func TestPrepareDurableTerminalCollapsesProgressTimeline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	reply := newOutboxTestReplier(platform.DeliveryRoute{Platform: platform.PlatformFeishu, ChatID: "chat-1"})
+	stream := &outboxTestStream{}
+	reply.stream = stream
+	session := &progressSession{
+		ctx: ctx, cancel: cancel, reply: reply, stream: stream,
+		cfg:        config.ProgressConfig{Mode: progressModeStream, InitialDelaySeconds: 1},
+		snapshotCh: make(chan string, 1),
+	}
+	session.onTaskProgress(taskProgressUpdate{
+		timeline: true,
+		card:     "**执行进度**\n- ✅ 检查项目\n- • 运行测试",
+	})
+
+	prepared, err := session.prepareDurableTerminal(reply, "最终结果", false, false)
+	if err != nil {
+		t.Fatalf("prepareDurableTerminal: %v", err)
+	}
+	if prepared.checkpoint == nil {
+		t.Fatal("durable terminal checkpoint is nil")
+	}
+	var payload struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(prepared.checkpoint.Payload, &payload); err != nil {
+		t.Fatalf("decode checkpoint: %v", err)
+	}
+	if payload.Content != "最终结果" {
+		t.Fatalf("content=%q, want final result without progress timeline", payload.Content)
+	}
+}
+
 type outboxTestPlatform struct {
 	name    platform.PlatformName
 	account string

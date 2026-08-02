@@ -6,10 +6,7 @@ import (
 	"strings"
 )
 
-const (
-	codexWarningMaxRunes       = 160
-	codexHTTPSFallbackProgress = "进展：Codex 正在切换到 HTTPS 传输。"
-)
+const codexHTTPSFallbackProgress = "进展：Codex 正在切换到 HTTPS 传输。"
 
 type codexWarningParams struct {
 	ThreadID string `json:"threadId"`
@@ -27,8 +24,8 @@ func (a *ACPAgent) handleCodexWarningAt(params json.RawMessage, sequence uint64)
 	if message == "" {
 		return
 	}
-	log.Printf("[acp] codex warning (thread=%s): %.200s", warning.ThreadID, message)
-	status := "进展：Codex 警告：" + trimRunes(message, codexWarningMaxRunes)
+	log.Printf("[acp] codex warning (thread=%s)", warning.ThreadID)
+	status := "进展：Codex 正在处理连接异常。"
 	if isCodexHTTPSFallbackWarning(message) {
 		status = codexHTTPSFallbackProgress
 	}

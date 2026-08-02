@@ -11,16 +11,14 @@ type codexItemLifecycleParams struct {
 }
 
 type codexLifecycleItem struct {
-	ID               string            `json:"id"`
-	Type             string            `json:"type"`
-	Command          permissionCommand `json:"command"`
-	Cwd              string            `json:"cwd"`
-	Status           string            `json:"status"`
-	AggregatedOutput string            `json:"aggregatedOutput"`
-	Changes          json.RawMessage   `json:"changes"`
-	Server           string            `json:"server"`
-	Tool             string            `json:"tool"`
-	Content          []struct {
+	ID      string            `json:"id"`
+	Type    string            `json:"type"`
+	Command permissionCommand `json:"command"`
+	Status  string            `json:"status"`
+	Changes json.RawMessage   `json:"changes"`
+	Server  string            `json:"server"`
+	Tool    string            `json:"tool"`
+	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -77,11 +75,8 @@ func (a *ACPAgent) dispatchCodexItemText(p codexItemLifecycleParams, kind string
 func (a *ACPAgent) dispatchCodexItemProgress(p codexItemLifecycleParams, sequence uint64) {
 	progress := codexProgressParams{
 		ThreadID: p.ThreadID,
-		ItemID:   p.Item.ID,
 		Status:   p.Item.Status,
-		Output:   p.Item.AggregatedOutput,
 		Command:  p.Item.Command,
-		Cwd:      p.Item.Cwd,
 		Changes:  p.Item.Changes,
 	}
 	switch p.Item.Type {
@@ -100,7 +95,7 @@ func (a *ACPAgent) dispatchCodexLifecycleToolProgress(p codexItemLifecycleParams
 		return
 	}
 	a.dispatchProgressEventToThread(p.ThreadID, codexProgressPrefix+action, &codexProgressEvent{
-		ID: p.Item.ID, Kind: "tool", Action: action, Status: p.Item.Status,
+		ID: codexLifecycleToolProgressID(p.Item), Kind: "tool", Action: action, Status: p.Item.Status,
 	}, sequence)
 }
 
@@ -108,23 +103,12 @@ func (a *ACPAgent) dispatchCodexLifecycleToolProgress(p codexItemLifecycleParams
 func codexLifecycleToolAction(item codexLifecycleItem) string {
 	switch item.Type {
 	case "mcpToolCall":
-		server := strings.TrimSpace(item.Server)
-		if strings.EqualFold(server, "codegraph") {
-			server = "CodeGraph"
+		if strings.EqualFold(strings.TrimSpace(item.Server), "codegraph") {
+			return "分析项目"
 		}
-		tool := strings.TrimSpace(item.Tool)
-		switch {
-		case server != "" && tool != "":
-			return "使用 " + server + " · " + tool
-		case server != "":
-			return "使用 " + server
-		case tool != "":
-			return "使用工具 " + tool
-		default:
-			return "调用工具"
-		}
+		return "调用工具"
 	case "webSearch":
-		return "执行网页搜索"
+		return "检索资料"
 	case "collabAgentToolCall":
 		switch normalizeCodexLifecycleToolName(item.Tool) {
 		case "spawnagent":
@@ -144,6 +128,22 @@ func codexLifecycleToolAction(item codexLifecycleItem) string {
 		}
 	default:
 		return ""
+	}
+}
+
+func codexLifecycleToolProgressID(item codexLifecycleItem) string {
+	switch item.Type {
+	case "mcpToolCall":
+		if strings.EqualFold(strings.TrimSpace(item.Server), "codegraph") {
+			return "tool:analysis"
+		}
+		return "tool:external"
+	case "webSearch":
+		return "tool:research"
+	case "collabAgentToolCall":
+		return "tool:collaboration"
+	default:
+		return "tool"
 	}
 }
 
