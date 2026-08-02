@@ -39,7 +39,7 @@ func choicePendingDetail(choice string) string {
 	command := strings.ToLower(strings.TrimSpace(choice))
 	switch {
 	case command == "/cx cd" || strings.HasPrefix(command, "/cx cd "):
-		return "正在加载该工作空间的会话列表，结果将单独发送。"
+		return "正在加载该工作空间的会话；如只有一个会话将自动切换，完成后将在本卡片更新结果。"
 	case command == "/cx switch" || strings.HasPrefix(command, "/cx switch ") ||
 		command == "/cc switch" || strings.HasPrefix(command, "/cc switch "):
 		return "正在切换并接管，完成后将在本卡片更新结果。"
@@ -130,6 +130,9 @@ func choiceCommandResultTemplate(command string, content string) string {
 	}
 	content = strings.TrimSpace(content)
 	if strings.Contains(content, "等待超时") {
+		return "yellow"
+	}
+	if strings.Contains(content, "当前工作空间没有可用会话") {
 		return "yellow"
 	}
 	if choiceCommandSucceeded(content) {

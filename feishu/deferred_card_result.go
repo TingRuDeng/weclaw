@@ -51,6 +51,18 @@ func (r *deferredCardResultReplier) SendText(ctx context.Context, content string
 	return r.Replier.SendText(ctx, content)
 }
 
+func (r *deferredCardResultReplier) patchChoiceCard(ctx context.Context, prompt string, choices []platform.Choice, conversationKey string) error {
+	cardJSON, err := buildChoiceCard(prompt, choices, conversationKey)
+	if err == nil {
+		err = r.sender.PatchCard(ctx, r.messageID, cardJSON)
+	}
+	if err == nil {
+		return nil
+	}
+	log.Printf("[feishu] failed to update deferred choice card, falling back to message: message=%s err=%v", r.messageID, err)
+	return r.Replier.AskChoices(ctx, prompt, choices)
+}
+
 // ProgressReplier 将任务卡和终态 outbox 绑定到真实会话回复器，原卡 patch 只处理命令结果。
 func (r *deferredCardResultReplier) ProgressReplier() platform.Replier {
 	return r.Replier

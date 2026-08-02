@@ -28,6 +28,15 @@ func TestCodexAccountCardsAreInlineAndConfirmationIsDeferred(t *testing.T) {
 	}
 }
 
+func TestCodexWorkspaceChoiceIsInlineAndDeferred(t *testing.T) {
+	if !isInlineCardCommand("/cx cd @workspace-token") {
+		t.Fatal("Codex 工作空间选择必须在原卡内处理")
+	}
+	if !isDeferredCardResultCommand("/cx cd @workspace-token") {
+		t.Fatal("Codex 工作空间选择超过回调预算后必须继续回写原卡")
+	}
+}
+
 func TestTaskControlCommandsAreInlineAndDeferred(t *testing.T) {
 	for _, command := range []string{"/guide", "/cancel", "/stop"} {
 		if !isInlineCardCommand(command) || !isDeferredCardResultCommand(command) {

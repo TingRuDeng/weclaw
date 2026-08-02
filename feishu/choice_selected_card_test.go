@@ -48,7 +48,7 @@ func TestCodexWorkspaceChoiceShowsLoadingStatus(t *testing.T) {
 		Label:  "card-manager-android",
 	})
 
-	assertPendingChoiceCard(t, card, "card-manager-android", "正在加载该工作空间的会话列表")
+	assertPendingChoiceCard(t, card, "card-manager-android", "本卡片更新结果")
 }
 
 func TestHandleCardActionEventDoesNotCollapseUnrecognizedCard(t *testing.T) {

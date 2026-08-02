@@ -124,6 +124,83 @@ func TestSlowSessionSwitchUpdatesOriginalCardAfterCallbackBudget(t *testing.T) {
 	}
 }
 
+func TestSlowCodexWorkspaceChoiceUpdatesOriginalCardAfterCallbackBudget(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardInlineTimeout = 20 * time.Millisecond
+	sender := &deferredPatchSender{patches: make(chan string, 1), texts: make(chan string, 1)}
+	adapter.sender = sender
+	release := make(chan struct{})
+	event := cardChoiceEventForOrderTest("feishu:tenant:dm:oc_1:ou_user")
+	event.Event.Action.Value["choice"] = "/cx cd @workspace-token"
+	event.Event.Action.Value["label"] = "codex-environment"
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		<-release
+		_ = reply.SendText(ctx, "已进入工作空间并绑定唯一会话。\n工作空间: codex-environment")
+	})
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	close(release)
+	assertPendingChoiceCard(t, resp.Card, "codex-environment", "本卡片更新结果")
+	select {
+	case got := <-sender.patches:
+		if !strings.Contains(got, "om_card:") ||
+			!strings.Contains(got, "已进入工作空间并绑定唯一会话") ||
+			!strings.Contains(got, `"template":"green"`) {
+			t.Fatalf("patched workspace card=%q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("慢工作空间切换完成后未更新原卡")
+	}
+	select {
+	case got := <-sender.texts:
+		t.Fatalf("更新原卡成功后不应单独发送结果: %q", got)
+	default:
+	}
+}
+
+func TestSlowCodexWorkspaceChoicePatchesSessionChoicesAfterCallbackBudget(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardInlineTimeout = 20 * time.Millisecond
+	sender := &deferredPatchSender{patches: make(chan string, 1), texts: make(chan string, 1)}
+	adapter.sender = sender
+	release := make(chan struct{})
+	event := cardChoiceEventForOrderTest("feishu:tenant:dm:oc_1:ou_user")
+	event.Event.Action.Value["choice"] = "/cx cd @workspace-token"
+	event.Event.Action.Value["label"] = "codex-environment"
+
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(ctx context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		<-release
+		_ = reply.AskChoices(ctx, "codex-environment 会话", []platform.Choice{
+			{ID: "/cx switch thread-a", Label: "会话 A"},
+			{ID: "/cx switch thread-b", Label: "会话 B"},
+		})
+	})
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	close(release)
+	assertPendingChoiceCard(t, resp.Card, "codex-environment", "本卡片更新结果")
+	select {
+	case got := <-sender.patches:
+		if !strings.Contains(got, "om_card:") ||
+			!strings.Contains(got, "codex-environment 会话") ||
+			!strings.Contains(got, "会话 A") || !strings.Contains(got, "会话 B") {
+			t.Fatalf("patched session choices=%q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("慢工作空间加载完成后未在原卡展示会话列表")
+	}
+	select {
+	case got := <-sender.texts:
+		t.Fatalf("更新原卡成功后不应单独发送会话列表: %q", got)
+	default:
+	}
+}
+
 func TestSlowTaskControlUpdatesOriginalCardAfterCallbackBudget(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.cardInlineTimeout = 20 * time.Millisecond
