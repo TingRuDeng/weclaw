@@ -127,6 +127,40 @@ func TestHandlePlatformMessagePassesTextAndImageToAgent(t *testing.T) {
 	}
 }
 
+func TestHandlePlatformMessagePassesImageOnlyToAgent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	imagePath := filepath.Join(t.TempDir(), "mobile-input.png")
+	if err := os.WriteFile(imagePath, []byte{0x89, 0x50, 0x4e, 0x47}, 0o600); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	ag := &fakeAgent{reply: "ok", info: agent.AgentInfo{Name: "mock", Type: "test"}}
+	h := NewHandler(func(ctx context.Context, name string) agent.Agent { return ag }, nil)
+	h.SetDefaultAgent("mock", ag)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		UserID:    "ou_user",
+		MessageID: "om_image_only",
+		Attachments: []platform.Attachment{{
+			Kind:     platform.AttachmentImage,
+			Path:     imagePath,
+			FileName: "mobile-input.png",
+			Metadata: map[string]string{"temporary": "true"},
+		}},
+	}, reply)
+
+	if !strings.Contains(ag.lastChatMessage(), "用户发送了一张图片") ||
+		!strings.Contains(ag.lastChatMessage(), "文件名：mobile-input.png") ||
+		!strings.Contains(ag.lastChatMessage(), filepath.Join(home, "workspace")) {
+		t.Fatalf("agent message=%q, want image-only message with saved local path", ag.lastChatMessage())
+	}
+	if _, err := os.Stat(imagePath); !os.IsNotExist(err) {
+		t.Fatalf("temporary mobile image still exists: %v", err)
+	}
+}
+
 func TestFinishProgressWithReplyKeepsAttachmentReplyOutsideStream(t *testing.T) {
 	dir := t.TempDir()
 	reportPath := filepath.Join(dir, "report.pdf")

@@ -138,7 +138,7 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 	return prepared, true
 }
 
-// preparePlatformAttachments 将文件和带说明的图片转换为 Agent 可消费文本。
+// preparePlatformAttachments 将文件和图片转换为 Agent 可消费文本。
 func (h *Handler) preparePlatformAttachments(runtime platformMessageRuntime) (platformMessageRuntime, bool) {
 	if file, ok := firstAttachment(runtime.msg.Attachments, platform.AttachmentFile); ok {
 		text, handled := h.handleFileAttachment(runtime.ctx, runtime.msg.UserID, runtime.reply, file, runtime.text)
@@ -147,7 +147,7 @@ func (h *Handler) preparePlatformAttachments(runtime platformMessageRuntime) (pl
 		}
 		runtime.text = strings.TrimSpace(text)
 	}
-	if image, ok := firstAttachment(runtime.msg.Attachments, platform.AttachmentImage); ok && runtime.text != "" {
+	if image, ok := firstAttachment(runtime.msg.Attachments, platform.AttachmentImage); ok && (runtime.text != "" || h.saveDirectory() == "") {
 		text, handled := h.handleImageAttachment(runtime.ctx, runtime.msg.UserID, runtime.reply, image, runtime.text)
 		if !handled {
 			return runtime, false
