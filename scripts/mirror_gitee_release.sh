@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GITEE_REPO="${GITEE_REPO:-jimdeng891/weclaw}"
+GITEE_API_BASE="${GITEE_API_BASE:-https://gitee.com/api/v5}"
+GITEE_WEB_BASE="${GITEE_WEB_BASE:-https://gitee.com}"
+
+usage() {
+  cat <<'EOF'
+用法:
+  scripts/mirror_gitee_release.sh <vX.Y.Z> <asset-dir>
+
+将当前 Git main/tag 和 asset-dir 中已由 GitHub 权威发布流程验证的资产镜像到 Gitee。
+
+环境:
+  GITEE_TOKEN  必需；仅从外部 Secret 注入，不写入仓库或命令参数
+  GITEE_REPO   可选，默认 jimdeng891/weclaw
+EOF
+}
+
+fail() {
+  printf 'Gitee 镜像失败：%s\n' "$*" >&2
+  exit 1
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+[[ $# -eq 2 ]] || { usage >&2; exit 1; }
+
+TAG="$1"
+ASSET_DIR="$2"
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag 必须是 vX.Y.Z"
+[[ -d "$ASSET_DIR" ]] || fail "asset-dir 不存在：$ASSET_DIR"
+[[ -n "${GITEE_TOKEN:-}" ]] || fail "缺少 GITEE_TOKEN"
+[[ "$GITEE_TOKEN" != *$'\n'* && "$GITEE_TOKEN" != *$'\r'* ]] || fail "GITEE_TOKEN 格式无效"
+
+for command_name in git curl python3 shasum cmp; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令：$command_name"
+done
+
+EXPECTED_ASSETS=(
+  weclaw_darwin_arm64
+  weclaw_darwin_amd64
+  weclaw_linux_arm64
+  weclaw_linux_amd64
+  checksums.txt
+)
+
+actual_count="$(find "$ASSET_DIR" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+[[ "$actual_count" == "${#EXPECTED_ASSETS[@]}" ]] || fail "asset-dir 文件数为 $actual_count，期望 ${#EXPECTED_ASSETS[@]}"
+for asset_name in "${EXPECTED_ASSETS[@]}"; do
+  [[ -f "$ASSET_DIR/$asset_name" ]] || fail "缺少资产：$asset_name"
+done
+(cd "$ASSET_DIR" && shasum -a 256 -c checksums.txt) >/dev/null || fail "本地资产摘要校验失败"
+
+umask 077
+TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/weclaw-gitee-mirror.XXXXXX")"
+cleanup() {
+  rm -rf "$TEMP_DIR"
+}
+trap cleanup EXIT
+
+TOKEN_FILE="$TEMP_DIR/token"
+ASKPASS_FILE="$TEMP_DIR/askpass.sh"
+printf '%s' "$GITEE_TOKEN" >"$TOKEN_FILE"
+cat >"$ASKPASS_FILE" <<'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\n' "${GITEE_USERNAME:?}" ;;
+  *Password*) printf '%s\n' "${GITEE_TOKEN:?}" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod 700 "$ASKPASS_FILE"
+
+GITEE_OWNER="${GITEE_REPO%%/*}"
+export GITEE_USERNAME="${GITEE_USERNAME:-$GITEE_OWNER}"
+export GIT_ASKPASS="$ASKPASS_FILE"
+export GIT_TERMINAL_PROMPT=0
+
+printf '==> 同步 main 和 %s 到 Gitee\n' "$TAG"
+git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || fail "本地 tag 不存在：$TAG"
+gitee_git_url="${GITEE_WEB_BASE}/${GITEE_REPO}.git"
+git push "$gitee_git_url" HEAD:refs/heads/main "refs/tags/$TAG:refs/tags/$TAG"
+local_head="$(git rev-parse HEAD)"
+local_tag="$(git rev-parse "refs/tags/$TAG")"
+remote_refs="$(git ls-remote "$gitee_git_url" refs/heads/main "refs/tags/$TAG")"
+remote_main="$(awk '$2 == "refs/heads/main" { print $1 }' <<<"$remote_refs")"
+remote_tag="$(awk -v ref="refs/tags/$TAG" '$2 == ref { print $1 }' <<<"$remote_refs")"
+[[ "$remote_main" == "$local_head" ]] || fail "Gitee main 未同步到当前提交"
+[[ "$remote_tag" == "$local_tag" ]] || fail "Gitee tag 未同步到当前 tag"
+
+printf '==> 创建 Gitee Release：%s\n' "$TAG"
+release_json="$TEMP_DIR/release.json"
+curl -fsS --proto '=https' --tlsv1.2 \
+  --form "access_token=<${TOKEN_FILE}" \
+  --form-string "tag_name=$TAG" \
+  --form-string "target_commitish=main" \
+  --form-string "name=$TAG" \
+  --form-string "body=GitHub 权威 Release $TAG 的校验后镜像。" \
+  --form-string "prerelease=false" \
+  -o "$release_json" \
+  "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases"
+
+release_id="$(python3 - "$release_json" "$TAG" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    release = json.load(handle)
+if release.get("tag_name") != sys.argv[2] or not release.get("id"):
+    raise SystemExit("Gitee release response tag/id invalid")
+print(release["id"])
+PY
+)" || fail "无法确认新建 Gitee Release"
+
+for asset_name in "${EXPECTED_ASSETS[@]}"; do
+  printf '==> 上传 Gitee 资产：%s\n' "$asset_name"
+  curl -fsS --proto '=https' --tlsv1.2 \
+    --form "access_token=<${TOKEN_FILE}" \
+    --form "file=@${ASSET_DIR}/${asset_name}" \
+    -o "$TEMP_DIR/upload-${asset_name}.json" \
+    "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
+done
+
+printf '==> 回下载并验证 Gitee Release 资产\n'
+verified_dir="$TEMP_DIR/verified"
+mkdir -p "$verified_dir"
+release_check="$TEMP_DIR/release-check.json"
+curl -fsS --proto '=https' --tlsv1.2 --get \
+  --data-urlencode "access_token@${TOKEN_FILE}" \
+  -o "$release_check" \
+  "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/tags/${TAG}"
+
+python3 - "$release_check" "$TAG" "$TEMP_DIR/assets.tsv" <<'PY'
+import json
+import sys
+from urllib.parse import urlparse
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    release = json.load(handle)
+if release.get("tag_name") != sys.argv[2]:
+    raise SystemExit("Gitee verified release tag mismatch")
+assets = release.get("assets") or []
+seen = set()
+with open(sys.argv[3], "w", encoding="utf-8") as output:
+    for asset in assets:
+        name = asset.get("name", "")
+        url = asset.get("browser_download_url", "")
+        parsed = urlparse(url)
+        if not name or name in seen or any(char in name for char in "\t\r\n"):
+            raise SystemExit("Gitee release contains invalid or duplicate asset name")
+        if parsed.scheme != "https" or parsed.hostname != "gitee.com":
+            raise SystemExit("Gitee release contains unexpected asset URL")
+        seen.add(name)
+        output.write(f"{name}\t{url}\n")
+PY
+
+asset_count="$(wc -l <"$TEMP_DIR/assets.tsv" | tr -d '[:space:]')"
+[[ "$asset_count" == "${#EXPECTED_ASSETS[@]}" ]] || fail "Gitee Release 资产数为 $asset_count，期望 ${#EXPECTED_ASSETS[@]}"
+for asset_name in "${EXPECTED_ASSETS[@]}"; do
+  asset_url="$(awk -F '\t' -v name="$asset_name" '$1 == name { print $2 }' "$TEMP_DIR/assets.tsv")"
+  [[ -n "$asset_url" ]] || fail "Gitee Release 缺少资产：$asset_name"
+  curl -fsSL --proto '=https' --tlsv1.2 --max-filesize 134217728 -o "$verified_dir/$asset_name" "$asset_url"
+  cmp "$ASSET_DIR/$asset_name" "$verified_dir/$asset_name" >/dev/null || fail "Gitee 回下载资产与权威资产不同：$asset_name"
+done
+(cd "$verified_dir" && shasum -a 256 -c checksums.txt) >/dev/null || fail "Gitee 回下载摘要校验失败"
+
+printf 'Gitee 镜像完成：%s\n' "$TAG"

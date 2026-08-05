@@ -14,6 +14,7 @@ type Config struct {
 	DefaultAgent          string                    `json:"default_agent"`
 	APIAddr               string                    `json:"api_addr,omitempty"`
 	APIToken              string                    `json:"api_token,omitempty"`
+	UpdateSource          string                    `json:"update_source,omitempty"`
 	SaveDir               string                    `json:"save_dir,omitempty"`
 	AllowedWorkspaceRoots []string                  `json:"allowed_workspace_roots,omitempty"`
 	AdminUsers            []string                  `json:"admin_users,omitempty"`           // 可执行 WeClaw 管理命令的用户白名单；空=禁用远程管理
@@ -246,9 +247,10 @@ func BuildAliasMap(agents map[string]AgentConfig) map[string]string {
 // DefaultConfig returns an empty configuration.
 func DefaultConfig() *Config {
 	return &Config{
-		Progress:  DefaultProgressConfig(),
-		Agents:    make(map[string]AgentConfig),
-		Platforms: make(map[string]PlatformConfig),
+		UpdateSource: "auto",
+		Progress:     DefaultProgressConfig(),
+		Agents:       make(map[string]AgentConfig),
+		Platforms:    make(map[string]PlatformConfig),
 	}
 }
 
@@ -264,6 +266,11 @@ func boolValueDefault(value *bool, fallback bool) bool {
 func (c *Config) Validate() error {
 	if c == nil {
 		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(c.UpdateSource)) {
+	case "", "auto", "github", "gitee":
+	default:
+		return fmt.Errorf("update_source must be auto, github, or gitee; got %q", c.UpdateSource)
 	}
 	for name, agentCfg := range c.Agents {
 		if agentCfg.MaxHistory < 0 {

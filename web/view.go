@@ -14,6 +14,7 @@ type configView struct {
 	DefaultAgent          string                           `json:"default_agent"`
 	APIAddr               string                           `json:"api_addr"`
 	APIToken              string                           `json:"api_token"`
+	UpdateSource          string                           `json:"update_source"`
 	SaveDir               string                           `json:"save_dir"`
 	AllowedWorkspaceRoots []string                         `json:"allowed_workspace_roots"`
 	AdminUsers            []string                         `json:"admin_users"`
@@ -55,6 +56,7 @@ func redactConfig(cfg *config.Config) configView {
 	v := configView{
 		DefaultAgent:          cfg.DefaultAgent,
 		APIAddr:               cfg.APIAddr,
+		UpdateSource:          cfg.UpdateSource,
 		SaveDir:               cfg.SaveDir,
 		AllowedWorkspaceRoots: cfg.AllowedWorkspaceRoots,
 		AdminUsers:            cfg.AdminUsers,
@@ -109,6 +111,7 @@ func mergeView(current *config.Config, v configView) *config.Config {
 	merged := *current // 浅拷贝顶层标量
 	merged.DefaultAgent = v.DefaultAgent
 	merged.APIAddr = v.APIAddr
+	merged.UpdateSource = v.UpdateSource
 	merged.SaveDir = v.SaveDir
 	merged.AllowedWorkspaceRoots = v.AllowedWorkspaceRoots
 	merged.AdminUsers = v.AdminUsers

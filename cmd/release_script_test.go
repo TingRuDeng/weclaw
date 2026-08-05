@@ -20,6 +20,141 @@ func TestReleaseScriptSyntaxAndHelp(t *testing.T) {
 	}
 }
 
+func TestGiteeMirrorScriptSyntaxAndHelp(t *testing.T) {
+	script := filepath.Join("..", "scripts", "mirror_gitee_release.sh")
+	runReleaseScriptTestCommand(t, "", "bash", "-n", script)
+	output := runReleaseScriptTestCommand(t, "", script, "--help")
+	if !strings.Contains(output, "GITEE_TOKEN") || !strings.Contains(output, "asset-dir") {
+		t.Fatalf("mirror help missing token or asset-dir contract: %s", output)
+	}
+}
+
+func TestReleasePipelineMirrorsOnlyAfterGitHubCommit(t *testing.T) {
+	releaseContent, err := os.ReadFile(releaseScriptPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(releaseContent)
+	committed := strings.LastIndex(text, "RELEASE_COMMITTED=1")
+	mirror := strings.LastIndex(text, "mirror_gitee_release")
+	if committed < 0 || mirror < 0 || mirror < committed {
+		t.Fatalf("Gitee mirror must run after GitHub release is committed: committed=%d mirror=%d", committed, mirror)
+	}
+
+	workflow, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(workflow), "GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}") {
+		t.Fatal("release workflow must inject GITEE_TOKEN from Actions Secrets")
+	}
+}
+
+func TestGiteeMirrorUsesVerifiedAssetsWithoutLeakingToken(t *testing.T) {
+	root := t.TempDir()
+	assetsDir := filepath.Join(root, "assets")
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	assetNames := []string{"weclaw_darwin_arm64", "weclaw_darwin_amd64", "weclaw_linux_arm64", "weclaw_linux_amd64"}
+	var checksums strings.Builder
+	for _, name := range assetNames {
+		content := []byte("verified-" + name + "\n")
+		if err := os.WriteFile(filepath.Join(assetsDir, name), content, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(content)
+		fmt.Fprintf(&checksums, "%x  %s\n", sum, name)
+	}
+	if err := os.WriteFile(filepath.Join(assetsDir, "checksums.txt"), []byte(checksums.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	checkJSON := filepath.Join(root, "release-check.json")
+	var assetsJSON strings.Builder
+	assetsJSON.WriteString(`{"tag_name":"v9.9.9","assets":[`)
+	allAssets := append(append([]string{}, assetNames...), "checksums.txt")
+	for index, name := range allAssets {
+		if index > 0 {
+			assetsJSON.WriteByte(',')
+		}
+		fmt.Fprintf(&assetsJSON, `{"name":%q,"browser_download_url":%q}`, name, "https://gitee.com/download/"+name)
+	}
+	assetsJSON.WriteString(`]}`)
+	if err := os.WriteFile(checkJSON, []byte(assetsJSON.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gitCalls := filepath.Join(root, "git-calls")
+	fakeGit := `#!/bin/sh
+if [ "$1" = "rev-parse" ]; then printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'; exit 0; fi
+if [ "$1" = "ls-remote" ]; then
+  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n'
+  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v9.9.9\n'
+  exit 0
+fi
+printf '%s\n' "$*" >>"$TEST_GIT_CALLS"
+`
+	fakeCurl := `#!/bin/sh
+output=''
+previous=''
+url=''
+for argument do
+  [ "$previous" = "-o" ] && output="$argument"
+  previous="$argument"
+  url="$argument"
+done
+printf '%s\n' "$*" >>"$TEST_CURL_CALLS"
+case "$url" in
+  */releases) printf '{"id":42,"tag_name":"v9.9.9"}' >"$output" ;;
+  */releases/tags/*) cp "$TEST_RELEASE_JSON" "$output" ;;
+  */attach_files) printf '{}' >"$output" ;;
+  https://gitee.com/download/*) cp "$TEST_ASSET_DIR/${url##*/}" "$output" ;;
+  *) exit 91 ;;
+esac
+`
+	for name, content := range map[string]string{"git": fakeGit, "curl": fakeCurl} {
+		path := filepath.Join(fakeBin, name)
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	script, err := filepath.Abs(filepath.Join("..", "scripts", "mirror_gitee_release.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := "gitee-secret-must-not-leak"
+	cmd := exec.Command(script, "v9.9.9", assetsDir)
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeBin+":"+os.Getenv("PATH"),
+		"GITEE_TOKEN="+secret,
+		"TEST_ASSET_DIR="+assetsDir,
+		"TEST_RELEASE_JSON="+checkJSON,
+		"TEST_GIT_CALLS="+gitCalls,
+		"TEST_CURL_CALLS="+filepath.Join(root, "curl-calls"),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mirror script failed: %v\n%s", err, output)
+	}
+	gitOutput, err := os.ReadFile(gitCalls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(output) + string(gitOutput)
+	if strings.Contains(combined, secret) {
+		t.Fatal("Gitee token leaked to output or git arguments")
+	}
+	if !strings.Contains(string(gitOutput), "HEAD:refs/heads/main") || !strings.Contains(string(output), "Gitee 镜像完成") {
+		t.Fatalf("mirror evidence missing: output=%s git=%s", output, gitOutput)
+	}
+}
+
 func TestReleaseScriptRejectsSkipTests(t *testing.T) {
 	script := releaseScriptPath(t)
 	content, err := os.ReadFile(script)

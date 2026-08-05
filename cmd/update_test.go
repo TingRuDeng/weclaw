@@ -22,6 +22,127 @@ func TestGitHubRepoUsesProjectFork(t *testing.T) {
 	}
 }
 
+func TestParseReleaseSource(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  releaseSource
+	}{
+		{input: "", want: releaseSourceAuto},
+		{input: " auto ", want: releaseSourceAuto},
+		{input: "github", want: releaseSourceGitHub},
+		{input: "GITEE", want: releaseSourceGitee},
+	} {
+		got, err := parseReleaseSource(test.input)
+		if err != nil || got != test.want {
+			t.Fatalf("parseReleaseSource(%q)=(%q,%v), want %q", test.input, got, err, test.want)
+		}
+	}
+
+	if _, err := parseReleaseSource("proxy"); err == nil {
+		t.Fatal("parseReleaseSource(proxy) error=nil, want unsupported source")
+	}
+}
+
+func TestGiteeLatestVersionFromBase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/jimdeng891/weclaw/releases/latest" {
+			t.Fatalf("path=%q, want Gitee latest release endpoint", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.2.3"})
+	}))
+	defer server.Close()
+
+	got, err := getGiteeLatestVersionFromBase(server.URL)
+	if err != nil || got != "v1.2.3" {
+		t.Fatalf("getGiteeLatestVersionFromBase=(%q,%v), want v1.2.3", got, err)
+	}
+}
+
+func TestReleaseAssetURLForSource(t *testing.T) {
+	for _, test := range []struct {
+		source releaseSource
+		want   string
+	}{
+		{source: releaseSourceGitHub, want: "https://github.com/TingRuDeng/weclaw/releases/download/v1.2.3/weclaw_linux_amd64"},
+		{source: releaseSourceGitee, want: "https://gitee.com/jimdeng891/weclaw/releases/download/v1.2.3/weclaw_linux_amd64"},
+	} {
+		got, err := releaseAssetURLForSource(test.source, "v1.2.3", "weclaw_linux_amd64")
+		if err != nil || got != test.want {
+			t.Fatalf("releaseAssetURLForSource(%q)=(%q,%v), want %q", test.source, got, err, test.want)
+		}
+	}
+}
+
+func TestResolveLatestReleaseAutoFallsBackOnlyOnAvailabilityError(t *testing.T) {
+	githubCalls := 0
+	giteeCalls := 0
+	version, sources, err := resolveLatestRelease(
+		releaseSourceAuto,
+		func() (string, error) {
+			githubCalls++
+			return "", releaseUnavailable(errors.New("TLS handshake timeout"))
+		},
+		func() (string, error) {
+			giteeCalls++
+			return "v1.2.3", nil
+		},
+	)
+	if err != nil || version != "v1.2.3" || !reflect.DeepEqual(sources, []releaseSource{releaseSourceGitee}) {
+		t.Fatalf("resolveLatestRelease=(%q,%v,%v), want Gitee v1.2.3", version, sources, err)
+	}
+	if githubCalls != 1 || giteeCalls != 1 {
+		t.Fatalf("calls=(github:%d,gitee:%d), want one each", githubCalls, giteeCalls)
+	}
+}
+
+func TestResolveLatestReleaseAutoDoesNotHideGitHubIntegrityError(t *testing.T) {
+	giteeCalls := 0
+	_, _, err := resolveLatestRelease(
+		releaseSourceAuto,
+		func() (string, error) { return "", errors.New("invalid latest tag") },
+		func() (string, error) { giteeCalls++; return "v1.2.3", nil },
+	)
+	if err == nil || giteeCalls != 0 {
+		t.Fatalf("error=%v giteeCalls=%d, want fail closed without fallback", err, giteeCalls)
+	}
+}
+
+func TestResolveLatestReleaseKeepsGiteeAsAssetFallback(t *testing.T) {
+	version, sources, err := resolveLatestRelease(
+		releaseSourceAuto,
+		func() (string, error) { return "v1.2.3", nil },
+		func() (string, error) { t.Fatal("latest must not query Gitee after GitHub succeeds"); return "", nil },
+	)
+	if err != nil || version != "v1.2.3" || !reflect.DeepEqual(sources, []releaseSource{releaseSourceGitHub, releaseSourceGitee}) {
+		t.Fatalf("resolveLatestRelease=(%q,%v,%v), want GitHub then Gitee asset candidates", version, sources, err)
+	}
+}
+
+func TestTryReleaseSourcesDoesNotFallbackOnChecksumFailure(t *testing.T) {
+	var calls []releaseSource
+	_, err := tryReleaseSources([]releaseSource{releaseSourceGitHub, releaseSourceGitee}, func(source releaseSource) (string, error) {
+		calls = append(calls, source)
+		return "", errors.New("checksum mismatch")
+	})
+	if err == nil || !reflect.DeepEqual(calls, []releaseSource{releaseSourceGitHub}) {
+		t.Fatalf("error=%v calls=%v, want integrity failure without fallback", err, calls)
+	}
+}
+
+func TestTryReleaseSourcesFallsBackOnAvailabilityError(t *testing.T) {
+	var calls []releaseSource
+	got, err := tryReleaseSources([]releaseSource{releaseSourceGitHub, releaseSourceGitee}, func(source releaseSource) (string, error) {
+		calls = append(calls, source)
+		if source == releaseSourceGitHub {
+			return "", releaseUnavailable(errors.New("connection reset"))
+		}
+		return "verified-gitee-asset", nil
+	})
+	if err != nil || got != "verified-gitee-asset" || !reflect.DeepEqual(calls, []releaseSource{releaseSourceGitHub, releaseSourceGitee}) {
+		t.Fatalf("got=%q error=%v calls=%v, want Gitee fallback", got, err, calls)
+	}
+}
+
 func TestNewGitHubRequestUsesGitHubToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "token-1")
 	t.Setenv("GH_TOKEN", "")
@@ -44,6 +165,17 @@ func TestGitHubAuthTokenFallsBackToGHToken(t *testing.T) {
 
 	if got := githubAuthToken(); got != "token-2" {
 		t.Fatalf("githubAuthToken = %q, want token-2", got)
+	}
+}
+
+func TestNewGitHubRequestDoesNotLeakTokenToGitee(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "must-not-leak")
+	req, err := newGitHubRequest(http.MethodGet, "https://gitee.com/jimdeng891/weclaw/releases/latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Authorization"); got != "" {
+		t.Fatalf("Authorization=%q, want empty for non-GitHub host", got)
 	}
 }
 
@@ -167,6 +299,43 @@ func TestParseReleaseChecksumsFindsAsset(t *testing.T) {
 	}
 	if got != "abc123" {
 		t.Fatalf("checksum = %q, want abc123", got)
+	}
+}
+
+func TestParseReleaseChecksumsRejectsDuplicateAsset(t *testing.T) {
+	checksums := "abc123  weclaw_linux_amd64\ndef456  weclaw_linux_amd64\n"
+	if _, err := parseReleaseChecksums(checksums, "weclaw_linux_amd64"); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("parseReleaseChecksums error=%v, want duplicate rejection", err)
+	}
+}
+
+func TestDownloadFileClassifiesOnlyServerFailuresAsUnavailable(t *testing.T) {
+	for _, test := range []struct {
+		status      int
+		unavailable bool
+	}{
+		{status: http.StatusBadGateway, unavailable: true},
+		{status: http.StatusNotFound, unavailable: false},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(test.status)
+		}))
+		_, err := downloadFile(server.URL)
+		server.Close()
+		if err == nil || isReleaseUnavailable(err) != test.unavailable {
+			t.Fatalf("HTTP %d error=%v unavailable=%t, want %t", test.status, err, isReleaseUnavailable(err), test.unavailable)
+		}
+	}
+}
+
+func TestEffectiveReleaseSourceFlagOverridesConfig(t *testing.T) {
+	got, err := effectiveReleaseSource("github", "gitee")
+	if err != nil || got != releaseSourceGitHub {
+		t.Fatalf("effectiveReleaseSource=(%q,%v), want github", got, err)
+	}
+	got, err = effectiveReleaseSource("", "gitee")
+	if err != nil || got != releaseSourceGitee {
+		t.Fatalf("effectiveReleaseSource=(%q,%v), want configured gitee", got, err)
 	}
 }
 
@@ -315,6 +484,26 @@ func TestFinishUpdateAppliesNewVersionBeforePreflight(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, []string{"apply", "prepare", "commit"}) || !committed {
 		t.Fatalf("calls=%v committed=%t，want apply, prepare, then commit", calls, committed)
+	}
+}
+
+func TestFinishUpdateRejectsDowngrade(t *testing.T) {
+	applied := false
+	err := finishUpdate(
+		context.Background(), "v0.1.10", "v0.1.9", false, false,
+		func(string) (updateTransaction, error) {
+			applied = true
+			return updateTransaction{}, nil
+		},
+		updateCompletionOps{},
+		&bytes.Buffer{},
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "降级") {
+		t.Fatalf("finishUpdate error=%v, want downgrade rejection", err)
+	}
+	if applied {
+		t.Fatal("downgrade must not replace the binary")
 	}
 }
 

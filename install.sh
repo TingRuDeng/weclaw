@@ -1,26 +1,131 @@
 #!/bin/sh
 set -e
 
-REPO="${WECLAW_REPO:-TingRuDeng/weclaw}"
+GITHUB_REPO="${WECLAW_GITHUB_REPO:-${WECLAW_REPO:-TingRuDeng/weclaw}}"
+GITEE_REPO="${WECLAW_GITEE_REPO:-jimdeng891/weclaw}"
+RELEASE_SOURCE=$(printf '%s' "${WECLAW_SOURCE:-auto}" | tr '[:upper:]' '[:lower:]')
 BINARY="weclaw"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 CLAUDE_ACP_PACKAGE="@agentclientprotocol/claude-agent-acp"
 CLAUDE_ACP_VERSION="${CLAUDE_ACP_VERSION:-0.58.1}"
 
-github_download() {
-  if [ -n "$TOKEN" ]; then
-    curl -fsSL --proto '=https' --tlsv1.2 -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" -o "$2" "$1"
-  else
-    curl -fsSL --proto '=https' --tlsv1.2 -H "User-Agent: weclaw-installer" -o "$2" "$1"
-  fi
+case "$RELEASE_SOURCE" in
+  auto|github|gitee) ;;
+  *)
+    echo "错误：WECLAW_SOURCE 必须是 auto、github 或 gitee" >&2
+    exit 1
+    ;;
+esac
+
+classify_curl_failure() {
+  curl_status=$1
+  curl_context=$2
+  case "$curl_status" in
+    5|6|7|28|35|47|52|55|56|60|77|92)
+      CURL_FAILURE_STATUS=75
+      ;;
+    18)
+      echo "错误：${curl_context} 下载截断" >&2
+      CURL_FAILURE_STATUS=1
+      ;;
+    *)
+      echo "错误：${curl_context} 下载失败（curl ${curl_status}）" >&2
+      CURL_FAILURE_STATUS=1
+      ;;
+  esac
 }
 
-github_latest_url() {
-  if [ -n "$TOKEN" ]; then
-    curl -fsSLI --proto '=https' --tlsv1.2 -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "$1"
+# 返回 75 表示网络、TLS、超时或 5xx，可由 auto 策略换源；其他 HTTP 错误失败关闭。
+release_download() {
+  download_source=$1
+  download_url=$2
+  download_output=$3
+  if [ "$download_source" = "github" ] && [ -n "$TOKEN" ]; then
+    if http_code=$(curl -sSL --proto '=https' --tlsv1.2 -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" -o "$download_output" -w '%{http_code}' "$download_url"); then
+      :
+    else
+      classify_curl_failure "$?" "$download_source"
+      return "$CURL_FAILURE_STATUS"
+    fi
   else
-    curl -fsSLI --proto '=https' --tlsv1.2 -o /dev/null -w "%{url_effective}" -H "User-Agent: weclaw-installer" "$1"
+    if http_code=$(curl -sSL --proto '=https' --tlsv1.2 -H "User-Agent: weclaw-installer" -o "$download_output" -w '%{http_code}' "$download_url"); then
+      :
+    else
+      classify_curl_failure "$?" "$download_source"
+      return "$CURL_FAILURE_STATUS"
+    fi
+  fi
+  case "$http_code" in
+    200)
+      download_bytes=$(wc -c <"$download_output" | tr -d '[:space:]')
+      if [ "$download_bytes" -gt 134217728 ]; then
+        echo "错误：下载超过 128 MiB 限制" >&2
+        return 1
+      fi
+      return 0
+      ;;
+    5??)
+      echo "${download_source} 发布源服务端暂不可用（HTTP ${http_code}）" >&2
+      return 75
+      ;;
+    *)
+      echo "${download_source} 发布源返回 HTTP ${http_code}" >&2
+      return 1
+      ;;
+  esac
+}
+
+github_latest_version() {
+  if [ -n "$TOKEN" ]; then
+    if latest_result=$(curl -sSLI --proto '=https' --tlsv1.2 -o /dev/null -w '%{http_code}\n%{url_effective}' -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "https://github.com/${GITHUB_REPO}/releases/latest"); then
+      :
+    else
+      classify_curl_failure "$?" "GitHub latest"
+      return "$CURL_FAILURE_STATUS"
+    fi
+  else
+    if latest_result=$(curl -sSLI --proto '=https' --tlsv1.2 -o /dev/null -w '%{http_code}\n%{url_effective}' -H "User-Agent: weclaw-installer" "https://github.com/${GITHUB_REPO}/releases/latest"); then
+      :
+    else
+      classify_curl_failure "$?" "GitHub latest"
+      return "$CURL_FAILURE_STATUS"
+    fi
+  fi
+  latest_code=$(printf '%s\n' "$latest_result" | sed -n '1p')
+  latest_url=$(printf '%s\n' "$latest_result" | sed -n '2p')
+  case "$latest_code" in
+    200) ;;
+    5??) return 75 ;;
+    *) echo "GitHub latest 返回 HTTP ${latest_code}" >&2; return 1 ;;
+  esac
+  version=${latest_url##*/tag/}
+  validate_release_version "$version" || return 1
+  VERSION=$version
+}
+
+gitee_latest_version() {
+  latest_file=$(mktemp)
+  release_download gitee "https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/latest" "$latest_file" || {
+    latest_status=$?
+    rm -f "$latest_file"
+    return "$latest_status"
+  }
+  tag_matches=$(tr '{},' '\n' <"$latest_file" | sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p')
+  rm -f "$latest_file"
+  tag_count=$(printf '%s\n' "$tag_matches" | awk 'NF { count++ } END { print count + 0 }')
+  if [ "$tag_count" -ne 1 ]; then
+    echo "错误：无法从 Gitee latest 响应取得唯一 tag_name" >&2
+    return 1
+  fi
+  validate_release_version "$tag_matches" || return 1
+  VERSION=$tag_matches
+}
+
+validate_release_version() {
+  if ! printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "错误：发布版本必须是 vX.Y.Z，实际为 $1" >&2
+    return 1
   fi
 }
 
@@ -69,14 +174,49 @@ verify_release_asset() {
   fi
 }
 
-latest_version() {
-  latest_url=$(github_latest_url "https://github.com/${REPO}/releases/latest")
-  version=${latest_url##*/tag/}
-  if [ -z "$version" ] || [ "$version" = "$latest_url" ]; then
-    echo "Error: could not determine latest version from ${latest_url}" >&2
-    exit 1
-  fi
-  echo "$version"
+select_latest_version() {
+  case "$RELEASE_SOURCE" in
+    github)
+      github_latest_version
+      ACTIVE_SOURCE=github
+      ;;
+    gitee)
+      gitee_latest_version
+      ACTIVE_SOURCE=gitee
+      ;;
+    auto)
+      if github_latest_version; then
+        ACTIVE_SOURCE=github
+      else
+        latest_status=$?
+        [ "$latest_status" -eq 75 ] || return "$latest_status"
+        echo "GitHub 发布源不可用，切换到 Gitee 镜像。"
+        gitee_latest_version
+        ACTIVE_SOURCE=gitee
+      fi
+      ;;
+  esac
+}
+
+release_asset_url() {
+  asset_source=$1
+  asset_name=$2
+  case "$asset_source" in
+    github) printf 'https://github.com/%s/releases/download/%s/%s\n' "$GITHUB_REPO" "$VERSION" "$asset_name" ;;
+    gitee) printf 'https://gitee.com/%s/releases/download/%s/%s\n' "$GITEE_REPO" "$VERSION" "$asset_name" ;;
+  esac
+}
+
+download_verified_release() {
+  pair_source=$1
+  asset_url=$(release_asset_url "$pair_source" "$FILENAME")
+  checksum_url=$(release_asset_url "$pair_source" checksums.txt)
+  echo "Downloading ${asset_url}..."
+  : >"$TMP"
+  : >"$CHECKSUM_TMP"
+  release_download "$pair_source" "$asset_url" "$TMP" || return $?
+  release_download "$pair_source" "$checksum_url" "$CHECKSUM_TMP" || return $?
+  verify_release_asset "$TMP" "$CHECKSUM_TMP" "$FILENAME"
 }
 
 # 从 PATH 中解析真实可执行文件，并统一返回绝对路径。
@@ -187,12 +327,14 @@ echo "Detected: ${OS}/${ARCH}"
 FILENAME="${BINARY}_${OS}_${ARCH}"
 VERSION="${WECLAW_VERSION:-latest}"
 if [ "$VERSION" = "latest" ]; then
-  VERSION=$(latest_version)
+  select_latest_version
+else
+  validate_release_version "$VERSION"
+  case "$RELEASE_SOURCE" in
+    gitee) ACTIVE_SOURCE=gitee ;;
+    *) ACTIVE_SOURCE=github ;;
+  esac
 fi
-URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
-CHECKSUM_URL="${URL%/*}/checksums.txt"
-
-echo "Downloading ${URL}..."
 TMP=$(mktemp)
 CHECKSUM_TMP=$(mktemp)
 cleanup_downloads() {
@@ -200,9 +342,18 @@ cleanup_downloads() {
 }
 trap cleanup_downloads 0
 trap 'exit 1' 1 2 15
-github_download "$URL" "$TMP"
-github_download "$CHECKSUM_URL" "$CHECKSUM_TMP"
-verify_release_asset "$TMP" "$CHECKSUM_TMP" "$FILENAME"
+if download_verified_release "$ACTIVE_SOURCE"; then
+  :
+else
+  download_status=$?
+  if [ "$RELEASE_SOURCE" = "auto" ] && [ "$ACTIVE_SOURCE" = "github" ] && [ "$download_status" -eq 75 ]; then
+    echo "GitHub 发布资产不可用，切换到 Gitee 镜像。"
+    ACTIVE_SOURCE=gitee
+    download_verified_release "$ACTIVE_SOURCE"
+  else
+    exit "$download_status"
+  fi
+fi
 
 # Install
 chmod +x "$TMP"

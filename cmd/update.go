@@ -8,18 +8,22 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/spf13/cobra"
 )
 
 const githubRepo = "TingRuDeng/weclaw"
+const giteeRepo = "jimdeng891/weclaw"
 
 var updateRestartFlag bool
+var updateSourceFlag string
 
 func init() {
 	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后重启 WeClaw")
 	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
+	updateCmd.Flags().StringVar(&updateSourceFlag, "source", "", "更新来源：auto、github 或 gitee（默认读取配置）")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 }
@@ -44,16 +48,37 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("检查目标版本失败: %w", err)
 	}
+	sources := []releaseSource{releaseSourceGitHub}
 	if !overridden {
-		latest, err = getLatestVersion()
+		cfg, loadErr := config.Load()
+		if loadErr != nil {
+			return fmt.Errorf("读取更新来源配置失败: %w", loadErr)
+		}
+		source, sourceErr := effectiveReleaseSource(updateSourceFlag, cfg.UpdateSource)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		latest, sources, err = resolveLatestRelease(source, getLatestVersion, func() (string, error) {
+			return getGiteeLatestVersionFromBase(giteeAPIBaseURL)
+		})
 		if err != nil {
 			return fmt.Errorf("检查最新版本失败: %w", err)
 		}
 	}
 	return finishUpdate(
 		cmd.Context(), Version, latest, updateRestartFlag, restartForceFlag,
-		applyUpdate, defaultUpdateCompletionOps(), os.Stdout,
+		func(version string) (updateTransaction, error) {
+			return applyUpdateFromSources(version, sources)
+		},
+		defaultUpdateCompletionOps(), os.Stdout,
 	)
+}
+
+func effectiveReleaseSource(flagValue string, configured string) (releaseSource, error) {
+	if strings.TrimSpace(flagValue) != "" {
+		return parseReleaseSource(flagValue)
+	}
+	return parseReleaseSource(configured)
 }
 
 type updateTransaction struct {
@@ -92,6 +117,15 @@ func finishUpdate(
 		}
 		return completeUpdate(ctx, true, force, completion)
 	}
+	if stableUpdateReleaseTagPattern.MatchString(current) && stableUpdateReleaseTagPattern.MatchString(latest) {
+		comparison, err := compareStableReleaseTags(current, latest)
+		if err != nil {
+			return fmt.Errorf("比较更新版本失败: %w", err)
+		}
+		if comparison > 0 {
+			return fmt.Errorf("拒绝从 %s 降级到 %s", current, latest)
+		}
+	}
 	transaction, err := apply(latest)
 	if err != nil {
 		return err
@@ -103,8 +137,37 @@ func finishUpdate(
 	return nil
 }
 
-// applyUpdate 下载、校验并原子替换当前可执行文件。
-func applyUpdate(latest string) (updateTransaction, error) {
+func compareStableReleaseTags(left string, right string) (int, error) {
+	parse := func(tag string) ([3]int, error) {
+		var version [3]int
+		if !stableUpdateReleaseTagPattern.MatchString(tag) {
+			return version, fmt.Errorf("版本 %q 必须是 vX.Y.Z 格式", tag)
+		}
+		if _, err := fmt.Sscanf(tag, "v%d.%d.%d", &version[0], &version[1], &version[2]); err != nil {
+			return version, fmt.Errorf("解析版本 %q: %w", tag, err)
+		}
+		return version, nil
+	}
+	leftVersion, err := parse(left)
+	if err != nil {
+		return 0, err
+	}
+	rightVersion, err := parse(right)
+	if err != nil {
+		return 0, err
+	}
+	for index := range leftVersion {
+		if leftVersion[index] < rightVersion[index] {
+			return -1, nil
+		}
+		if leftVersion[index] > rightVersion[index] {
+			return 1, nil
+		}
+	}
+	return 0, nil
+}
+
+func applyUpdateFromSources(latest string, sources []releaseSource) (updateTransaction, error) {
 	fmt.Printf("当前版本: %s -> 最新版本: %s\n", Version, latest)
 	filename, err := releaseAssetNameForRuntime(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
@@ -112,14 +175,21 @@ func applyUpdate(latest string) (updateTransaction, error) {
 	}
 
 	fmt.Printf("正在下载 %s/%s...\n", latest, filename)
-	tmpFile, err := downloadReleaseAsset(latest, filename)
+	tmpFile, err := tryReleaseSources(sources, func(source releaseSource) (string, error) {
+		assetPath, err := downloadReleaseAssetFromSource(source, latest, filename)
+		if err != nil {
+			return "", err
+		}
+		if err := verifyReleaseAssetChecksumFromSource(source, latest, filename, assetPath); err != nil {
+			_ = os.Remove(assetPath)
+			return "", fmt.Errorf("校验发布文件摘要失败: %w", err)
+		}
+		return assetPath, nil
+	})
 	if err != nil {
 		return updateTransaction{}, fmt.Errorf("下载失败: %w", err)
 	}
 	defer os.Remove(tmpFile)
-	if err := verifyReleaseAssetChecksum(latest, filename, tmpFile); err != nil {
-		return updateTransaction{}, fmt.Errorf("校验发布文件摘要失败: %w", err)
-	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return updateTransaction{}, fmt.Errorf("定位当前可执行文件失败: %w", err)

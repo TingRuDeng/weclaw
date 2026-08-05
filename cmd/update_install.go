@@ -31,12 +31,16 @@ func downloadFileWithAccept(url string, accept string) (string, error) {
 	}
 	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", releaseUnavailable(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		err := fmt.Errorf("HTTP %d", resp.StatusCode)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return "", releaseUnavailable(err)
+		}
+		return "", err
 	}
 	if resp.ContentLength > maxUpdateDownloadBytes {
 		return "", fmt.Errorf("download is too large: %d > %d", resp.ContentLength, maxUpdateDownloadBytes)

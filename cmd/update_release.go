@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -15,6 +17,34 @@ const githubUserAgent = "weclaw-updater"
 const updateHTTPTimeout = 60 * time.Second
 const updateReleaseTagEnv = "WECLAW_UPDATE_RELEASE_TAG"
 const githubAPIBaseURL = "https://api.github.com"
+const giteeAPIBaseURL = "https://gitee.com/api/v5"
+
+type releaseSource string
+
+const (
+	releaseSourceAuto   releaseSource = "auto"
+	releaseSourceGitHub releaseSource = "github"
+	releaseSourceGitee  releaseSource = "gitee"
+)
+
+type releaseAvailabilityError struct {
+	err error
+}
+
+func (e releaseAvailabilityError) Error() string { return e.err.Error() }
+func (e releaseAvailabilityError) Unwrap() error { return e.err }
+
+func releaseUnavailable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return releaseAvailabilityError{err: err}
+}
+
+func isReleaseUnavailable(err error) bool {
+	var unavailable releaseAvailabilityError
+	return errors.As(err, &unavailable)
+}
 
 var stableUpdateReleaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
@@ -26,6 +56,115 @@ type githubReleaseAsset struct {
 type githubRelease struct {
 	TagName string               `json:"tag_name"`
 	Assets  []githubReleaseAsset `json:"assets"`
+}
+
+func parseReleaseSource(value string) (releaseSource, error) {
+	source := releaseSource(strings.ToLower(strings.TrimSpace(value)))
+	if source == "" {
+		source = releaseSourceAuto
+	}
+	switch source {
+	case releaseSourceAuto, releaseSourceGitHub, releaseSourceGitee:
+		return source, nil
+	default:
+		return "", fmt.Errorf("不支持的更新来源 %q；可选 auto、github、gitee", value)
+	}
+}
+
+func resolveLatestRelease(
+	source releaseSource,
+	githubLatest func() (string, error),
+	giteeLatest func() (string, error),
+) (string, []releaseSource, error) {
+	switch source {
+	case releaseSourceGitHub:
+		version, err := githubLatest()
+		return version, []releaseSource{releaseSourceGitHub}, err
+	case releaseSourceGitee:
+		version, err := giteeLatest()
+		return version, []releaseSource{releaseSourceGitee}, err
+	case releaseSourceAuto:
+		version, err := githubLatest()
+		if err == nil {
+			return version, []releaseSource{releaseSourceGitHub, releaseSourceGitee}, nil
+		}
+		if !isReleaseUnavailable(err) {
+			return "", nil, err
+		}
+		fmt.Printf("GitHub 发布源不可用（%v），切换到 Gitee 镜像。\n", err)
+		version, err = giteeLatest()
+		if err != nil {
+			return "", nil, err
+		}
+		return version, []releaseSource{releaseSourceGitee}, nil
+	default:
+		return "", nil, fmt.Errorf("不支持的更新来源 %q", source)
+	}
+}
+
+func tryReleaseSources(sources []releaseSource, attempt func(releaseSource) (string, error)) (string, error) {
+	if len(sources) == 0 {
+		return "", fmt.Errorf("没有可用的 release 来源")
+	}
+	for index, source := range sources {
+		result, err := attempt(source)
+		if err == nil {
+			return result, nil
+		}
+		if !isReleaseUnavailable(err) || index == len(sources)-1 {
+			return "", err
+		}
+		fmt.Printf("%s 发布资产不可用（%v），切换到 %s。\n", source, err, sources[index+1])
+	}
+	return "", fmt.Errorf("没有可用的 release 来源")
+}
+
+func getGiteeLatestVersionFromBase(apiBaseURL string) (string, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimRight(apiBaseURL, "/"), giteeRepo)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", githubUserAgent)
+	resp, err := (&http.Client{Timeout: updateHTTPTimeout}).Do(req)
+	if err != nil {
+		return "", releaseUnavailable(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("Gitee latest release returned %d", resp.StatusCode)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return "", releaseUnavailable(err)
+		}
+		return "", err
+	}
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&release); err != nil {
+		return "", fmt.Errorf("decode Gitee latest release: %w", err)
+	}
+	if !stableUpdateReleaseTagPattern.MatchString(release.TagName) {
+		return "", fmt.Errorf("Gitee latest release tag %q 必须是 vX.Y.Z 格式", release.TagName)
+	}
+	return release.TagName, nil
+}
+
+func releaseAssetURLForSource(source releaseSource, version string, filename string) (string, error) {
+	if !stableUpdateReleaseTagPattern.MatchString(version) {
+		return "", fmt.Errorf("release tag %q 必须是 vX.Y.Z 格式", version)
+	}
+	if filename == "" || strings.ContainsAny(filename, `/\\`) {
+		return "", fmt.Errorf("无效的 release 资产名 %q", filename)
+	}
+	switch source {
+	case releaseSourceGitHub:
+		return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, version, filename), nil
+	case releaseSourceGitee:
+		return fmt.Sprintf("https://gitee.com/%s/releases/download/%s/%s", giteeRepo, version, filename), nil
+	default:
+		return "", fmt.Errorf("来源 %q 不能生成 release 资产地址", source)
+	}
 }
 
 // releaseAssetNameForRuntime 返回当前发布策略支持的 release 资产名。
@@ -51,12 +190,16 @@ func getLatestVersion() (string, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", releaseUnavailable(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusSeeOther && resp.StatusCode != http.StatusTemporaryRedirect && resp.StatusCode != http.StatusPermanentRedirect {
-		return "", fmt.Errorf("GitHub latest redirect returned %d", resp.StatusCode)
+		err := fmt.Errorf("GitHub latest redirect returned %d", resp.StatusCode)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return "", releaseUnavailable(err)
+		}
+		return "", err
 	}
 
 	return releaseTagFromLatestRedirect(resp.Header.Get("Location"))
@@ -92,6 +235,17 @@ func downloadReleaseAsset(version string, filename string) (string, error) {
 	return downloadFileWithAccept(assetURL, "application/octet-stream")
 }
 
+func downloadReleaseAssetFromSource(source releaseSource, version string, filename string) (string, error) {
+	if source == releaseSourceGitHub {
+		return downloadReleaseAsset(version, filename)
+	}
+	url, err := releaseAssetURLForSource(source, version, filename)
+	if err != nil {
+		return "", err
+	}
+	return downloadFile(url)
+}
+
 func githubReleaseAssetAPIURL(version string, filename string) (string, error) {
 	return githubReleaseAssetAPIURLFromBase(githubAPIBaseURL, version, filename)
 }
@@ -103,6 +257,9 @@ func githubReleaseAssetAPIURLFromBase(apiBaseURL string, version string, filenam
 	req, err := newGitHubRequest(http.MethodGet, endpoint)
 	if err != nil {
 		return "", err
+	}
+	if token := githubAuthToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	client := &http.Client{Timeout: updateHTTPTimeout}
@@ -158,10 +315,22 @@ func newGitHubRequest(method string, url string) (*http.Request, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", githubUserAgent)
-	if token := githubAuthToken(); token != "" {
+	if token := githubAuthToken(); token != "" && isGitHubHost(req.URL) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	return req, nil
+}
+
+func isGitHubHost(parsed *url.URL) bool {
+	if parsed == nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "github.com", "api.github.com", "objects.githubusercontent.com":
+		return true
+	default:
+		return false
+	}
 }
 
 func githubAuthToken() string {

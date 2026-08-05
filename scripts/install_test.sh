@@ -25,6 +25,10 @@ assert_file_contains() {
   grep -F "$2" "$1" >/dev/null || fail "文件 $1 缺少：$2"
 }
 
+assert_file_not_contains() {
+  ! grep -F "$2" "$1" >/dev/null || fail "文件 $1 不应包含：$2"
+}
+
 # 为每个用例构造完全隔离的命令目录和安装目录。
 setup_case() {
   CASE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/weclaw-install-test.XXXXXX")
@@ -62,17 +66,31 @@ for argument do
 done
 [ "$saw_https_proto" -eq 1 ] || exit 62
 [ "$saw_tls12" -eq 1 ] || exit 63
+printf '%s\n' "$url" >>"$DOWNLOADS_FILE"
+case "$url" in
+  https://github.com/*)
+    [ -z "${FAKE_GITHUB_CURL_EXIT:-}" ] || exit "$FAKE_GITHUB_CURL_EXIT"
+    [ "${FAKE_GITHUB_NETWORK_FAIL:-0}" != "1" ] || exit 7
+    ;;
+esac
 if [ "$output" = "/dev/null" ]; then
-  printf 'https://github.com/test/weclaw/releases/tag/v1.2.3'
+  printf '%s\nhttps://github.com/test/weclaw/releases/tag/v1.2.3' "${FAKE_GITHUB_HTTP_CODE:-200}"
   exit 0
 fi
-printf '%s\n' "$url" >>"$DOWNLOADS_FILE"
+case "$url" in
+  https://gitee.com/api/v5/repos/*/releases/latest)
+    printf '{"tag_name":"v1.2.3"}\n' >"$output"
+    printf '200'
+    exit 0
+    ;;
+esac
 if [ "${url##*/}" = "checksums.txt" ]; then
   if [ "${FAKE_CHECKSUM_MISSING_ENTRY:-0}" = "1" ]; then
     printf '%s  %s\n' "${FAKE_EXPECTED_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "unrelated_asset"
   else
     printf '%s  %s\n' "${FAKE_EXPECTED_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" "${FAKE_ASSET_NAME:-weclaw_darwin_arm64}"
   fi >"$output"
+  printf '%s' "${FAKE_GITHUB_HTTP_CODE:-200}"
   exit 0
 fi
 cat >"$output" <<'SCRIPT'
@@ -81,6 +99,7 @@ printf 'weclaw %s\n' "$*" >>"$CALLS_FILE"
 [ "${FAKE_WECLAW_CONFIG_FAIL:-0}" = "1" ] && exit 23
 exit 0
 SCRIPT
+printf '%s' "${FAKE_GITHUB_HTTP_CODE:-200}"
 EOF
   cat >"$FAKE_BIN/shasum" <<'EOF'
 #!/bin/sh
@@ -136,7 +155,9 @@ EOF
 run_installer() {
   output_file="$CASE_DIR/output"
   set +e
-  PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw INSTALL_DIR="$INSTALL_DIR" \
+  PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw \
+    WECLAW_GITHUB_REPO=test/weclaw WECLAW_GITEE_REPO=test/weclaw \
+    WECLAW_SOURCE="${WECLAW_SOURCE:-auto}" INSTALL_DIR="$INSTALL_DIR" \
     sh "$ROOT_DIR/install.sh" >"$output_file" 2>&1
   status=$?
   set -e
@@ -257,6 +278,57 @@ test_checksum_success() {
   assert_file_contains "$DOWNLOADS_FILE" "/v1.2.3/checksums.txt"
   finish_case "校验发布资产 SHA-256"
 }
+test_explicit_gitee_source_is_isolated() {
+  setup_case
+  WECLAW_SOURCE=gitee WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -eq 0 ] || fail "显式 Gitee 安装失败：$output"
+  assert_file_contains "$DOWNLOADS_FILE" "https://gitee.com/api/v5/repos/test/weclaw/releases/latest"
+  assert_file_contains "$DOWNLOADS_FILE" "https://gitee.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64"
+  assert_file_not_contains "$DOWNLOADS_FILE" "github.com"
+  finish_case "显式 Gitee 来源不访问 GitHub"
+}
+test_auto_falls_back_on_github_network_failure() {
+  setup_case
+  FAKE_GITHUB_NETWORK_FAIL=1 WECLAW_SOURCE=auto WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -eq 0 ] || fail "GitHub 网络失败后未切换 Gitee：$output"
+  assert_file_contains "$DOWNLOADS_FILE" "github.com/test/weclaw/releases/latest"
+  assert_file_contains "$DOWNLOADS_FILE" "gitee.com/api/v5/repos/test/weclaw/releases/latest"
+  assert_contains "$output" "切换到 Gitee"
+  finish_case "auto 仅在 GitHub 网络失败时切换 Gitee"
+}
+test_auto_asset_falls_back_on_network_failure() {
+  setup_case
+  FAKE_GITHUB_NETWORK_FAIL=1 WECLAW_VERSION=v1.2.3 WECLAW_SOURCE=auto WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -eq 0 ] || fail "GitHub 资产网络失败后未切换 Gitee：$output"
+  assert_file_contains "$DOWNLOADS_FILE" "github.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64"
+  assert_file_contains "$DOWNLOADS_FILE" "gitee.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64"
+  assert_contains "$output" "发布资产不可用"
+  finish_case "auto 在资产网络失败时整组切换 Gitee"
+}
+test_auto_does_not_fallback_on_http_404() {
+  setup_case
+  FAKE_GITHUB_HTTP_CODE=404 WECLAW_VERSION=v1.2.3 WECLAW_SOURCE=auto WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -ne 0 ] || fail "GitHub 404 应失败关闭"
+  assert_file_not_contains "$DOWNLOADS_FILE" "gitee.com"
+  assert_contains "$output" "HTTP 404"
+  finish_case "auto 不对 4xx 换源"
+}
+test_auto_does_not_fallback_on_truncated_download() {
+  setup_case
+  FAKE_GITHUB_CURL_EXIT=18 WECLAW_VERSION=v1.2.3 WECLAW_SOURCE=auto WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -ne 0 ] || fail "截断下载应失败关闭"
+  assert_file_not_contains "$DOWNLOADS_FILE" "gitee.com"
+  assert_contains "$output" "截断"
+  finish_case "auto 不对截断下载换源"
+}
+test_rejects_unknown_source() {
+  setup_case
+  WECLAW_SOURCE=proxy WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -ne 0 ] || fail "未知来源应非零退出"
+  assert_contains "$output" "WECLAW_SOURCE"
+  assert_empty_file "$DOWNLOADS_FILE"
+  finish_case "拒绝未知安装来源"
+}
 test_supported_release_targets() {
   for spec in \
     "Darwin arm64 weclaw_darwin_arm64" \
@@ -285,6 +357,7 @@ test_checksum_mismatch_keeps_existing_binary() {
   [ "$status" -ne 0 ] || fail "摘要不匹配时应非零退出"
   assert_file_contains "$INSTALL_DIR/weclaw" "existing binary"
   assert_contains "$output" "SHA-256 校验失败"
+  assert_file_not_contains "$DOWNLOADS_FILE" "gitee.com"
   finish_case "摘要不匹配时不替换现有二进制"
 }
 test_checksum_missing_entry_keeps_existing_binary() {
@@ -324,6 +397,12 @@ test_install_failure_keeps_weclaw
 test_missing_npm_keeps_weclaw
 test_config_failure_keeps_weclaw
 test_checksum_success
+test_explicit_gitee_source_is_isolated
+test_auto_falls_back_on_github_network_failure
+test_auto_asset_falls_back_on_network_failure
+test_auto_does_not_fallback_on_http_404
+test_auto_does_not_fallback_on_truncated_download
+test_rejects_unknown_source
 test_supported_release_targets
 test_checksum_mismatch_keeps_existing_binary
 test_checksum_missing_entry_keeps_existing_binary

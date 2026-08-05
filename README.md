@@ -28,6 +28,9 @@ Prerequisite: install the agents you plan to use. Codex uses `codex`, and Claude
 # Install the actively maintained distribution
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
+# If GitHub is unreachable, fetch the same installer and verified mirror assets from Gitee
+curl -fsSL --proto '=https' --tlsv1.2 https://gitee.com/jimdeng891/weclaw/raw/main/install.sh | WECLAW_SOURCE=gitee sh
+
 # Check agents, platform credentials, and access control
 weclaw doctor
 
@@ -313,9 +316,12 @@ weclaw restart
 weclaw restart --force       # Explicitly interrupt active tasks
 weclaw stop
 weclaw update
+weclaw update --source gitee  # Explicit Gitee mirror for restricted networks
 weclaw update --restart
 weclaw version
 ```
+
+Update sources are `auto` (default), `github`, and `gitee`. Use `--source` for one command, set `"update_source": "gitee"` in `~/.weclaw/config.json` for a persistent choice, or override it with `WECLAW_UPDATE_SOURCE`. `auto` falls back from GitHub to Gitee only for DNS, connection, TLS, timeout, or HTTP 5xx failures. HTTP 4xx, invalid versions, and SHA-256 failures stop immediately instead of being hidden by a mirror fallback. The updater also rejects a stale mirror that would downgrade the installed stable version.
 
 `weclaw update` returns immediately when the installed version is already current. Configuration and agent preflight runs only after installing a new version or when `update --restart` is explicitly requested. `restart` and `update --restart` finish preflight before stopping the old service, and a normal restart does not interrupt active tasks. If preflight fails after installing a new version, WeClaw restores the previous binary. During `update --restart`, safety-check, shutdown, or startup failures likewise restore the previous binary and restart the previous service if it had already stopped; rollback failures are reported together with the original update error. Update official installations with `weclaw update`; never overwrite the binary in PATH with a local build.
 
@@ -330,7 +336,7 @@ go build -o weclaw .
 
 The repository currently uses Go 1.26.5. No publicly pullable container image is currently published in sync with this maintained distribution.
 
-`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline.
+`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline. GitHub Release remains authoritative for versions and builds. Only after that release is public and verified are the exact binaries and `checksums.txt` mirrored to [Gitee](https://gitee.com/jimdeng891/weclaw). A mirror failure visibly fails the release job without deleting the already verified GitHub Release.
 
 ## Upstream and License
 

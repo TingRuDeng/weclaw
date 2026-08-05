@@ -9,9 +9,8 @@ import (
 	"strings"
 )
 
-// verifyReleaseAssetChecksum 校验 release 资产，避免下载内容被截断或替换后直接安装。
-func verifyReleaseAssetChecksum(version string, filename string, assetPath string) error {
-	checksumFile, err := downloadReleaseAsset(version, "checksums.txt")
+func verifyReleaseAssetChecksumFromSource(source releaseSource, version string, filename string, assetPath string) error {
+	checksumFile, err := downloadReleaseAssetFromSource(source, version, "checksums.txt")
 	if err != nil {
 		return fmt.Errorf("download checksums: %w", err)
 	}
@@ -30,14 +29,21 @@ func verifyReleaseAssetChecksum(version string, filename string, assetPath strin
 
 // parseReleaseChecksums 从 checksums.txt 中查找指定资产的 sha256。
 func parseReleaseChecksums(content string, filename string) (string, error) {
+	found := ""
 	for _, line := range strings.Split(content, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
 		}
 		if fields[1] == filename {
-			return fields[0], nil
+			if found != "" {
+				return "", fmt.Errorf("duplicate checksum for %s", filename)
+			}
+			found = fields[0]
 		}
+	}
+	if found != "" {
+		return found, nil
 	}
 	return "", fmt.Errorf("checksum for %s not found", filename)
 }

@@ -534,6 +534,7 @@ func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	t.Setenv("WECLAW_DEFAULT_AGENT", "codex")
 	t.Setenv("WECLAW_API_ADDR", "127.0.0.1:18011")
 	t.Setenv("WECLAW_API_TOKEN", "secret-token")
+	t.Setenv("WECLAW_UPDATE_SOURCE", "gitee")
 
 	cfg := DefaultConfig()
 	cfg.Agents["claude"] = AgentConfig{
@@ -554,7 +555,18 @@ func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	if cfg.APIToken != "secret-token" {
 		t.Fatalf("APIToken = %q, want %q", cfg.APIToken, "secret-token")
 	}
+	if cfg.UpdateSource != "gitee" {
+		t.Fatalf("UpdateSource = %q, want gitee", cfg.UpdateSource)
+	}
 	if got := cfg.Agents["claude"].Env["KEEP"]; got != "value" {
 		t.Fatalf("agent env = %q, want preserved value", got)
+	}
+}
+
+func TestConfigRejectsUnknownUpdateSource(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.UpdateSource = "proxy"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "update_source") {
+		t.Fatalf("Validate error=%v, want update_source validation failure", err)
 	}
 }

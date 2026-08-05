@@ -35,4 +35,5 @@ jobs:
       - name: Run canonical release pipeline
         env:
           GH_TOKEN: ${{ github.token }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: scripts/release.sh "$RELEASE_TAG"

@@ -78,6 +78,20 @@ func TestMergeViewUpdatesAdminUsers(t *testing.T) {
 	}
 }
 
+func TestUpdateSourceRoundTripsWithoutRestart(t *testing.T) {
+	current := config.DefaultConfig()
+	view := redactConfig(current)
+	view.UpdateSource = "gitee"
+	merged := mergeView(current, view)
+
+	if merged.UpdateSource != "gitee" {
+		t.Fatalf("UpdateSource=%q, want gitee", merged.UpdateSource)
+	}
+	if restartRequiredConfigChanged(current, merged) {
+		t.Fatal("update_source change must not require service restart")
+	}
+}
+
 func TestPlatformTopologyChanged(t *testing.T) {
 	current := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {Enabled: boolPtr(false)}}}
 	soft := &config.Config{Platforms: map[string]config.PlatformConfig{"feishu": {Enabled: boolPtr(false), AllowedUsers: []string{"u1"}}}}

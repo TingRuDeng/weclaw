@@ -31,7 +31,7 @@ ai_summary:
 - 仓库类型：单一 Go 仓库，不是 coordination directory。
 - Go 模块：`github.com/fastclaw-ai/weclaw`，以 `main.go` 和 `cmd/root.go` 进入 CLI。
 - 产品定位：把微信个人号和飞书消息接入 AI Agent，业务层通过 `platform` 抽象隔离平台差异。
-- 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。`.github/workflows/release.yml` 只负责从 `main` 调用该权威脚本，不得复制一套较弱的测试、构建或 Release 逻辑。发布入口先统一配置持久化 `GOCACHE`：`WECLAW_GOCACHE` 优先，其次保留调用方显式导出的 `GOCACHE`；本机 Darwin 数据盘共享根目录存在时使用项目专属缓存，其他主机回退到 `go env GOCACHE`。
+- 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。GitHub Release 是版本和构建权威；公开并回下载验证后，`scripts/mirror_gitee_release.sh` 才通过外部 `GITEE_TOKEN` 把同一 main/tag、四个二进制和 `checksums.txt` 镜像到 Gitee，再次回下载逐文件比较和校验摘要。镜像失败不得清理已提交的 GitHub Release，但必须让发布任务可观察地失败。`.github/workflows/release.yml` 只负责从 `main` 调用该权威脚本，不得复制一套较弱的测试、构建或 Release 逻辑。发布入口先统一配置持久化 `GOCACHE`：`WECLAW_GOCACHE` 优先，其次保留调用方显式导出的 `GOCACHE`；本机 Darwin 数据盘共享根目录存在时使用项目专属缓存，其他主机回退到 `go env GOCACHE`。
 
 ## Core Directories
 
@@ -105,7 +105,7 @@ ai_summary:
 - Agent `permission_level` 省略时等同 `default`；显式配置只接受 `default`、`auto_review`、`full_access`，分别映射 Codex `approvalPolicy`、`sandboxMode` 与 `approvalsReviewer`；旧值必须 fail-fast。`codex_host_mode` 只接受 `auto`、`daemon`、`managed`；显式 daemon 禁止自定义 socket 和 `run_as_user`。原生 Codex shared app-server 规范化后默认写入 `codex_auto_update: incompatible`，但只有上游明确报告 schema/version 不兼容且没有 writer lease 时，兼容 managed Host 才能持有生命周期锁调用官方 `codex update`。通用 SQLite 初始化错误、锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误不得触发更新；官方 daemon 模式也不得由 WeClaw 更新。更新前后版本必须可验证且真实变化，失败、版本未变或更新后仍无法启动都保持 fail-closed。显式 `off` 永久关闭该行为。
 - Web 配置保存必须保留 Agent 的 Codex 权限字段、Host 模式、共享 socket 和更新策略：`permission_level`、`approval_policy`、`approval_reviewer`、`sandbox_mode`、`codex_host_mode`、`app_server_socket`、`codex_auto_update`。
 - `api_addr` 监听非 loopback 地址时必须配置 `api_token`；loopback 地址允许留空，但 `weclaw doctor` 必须告警本机其他进程可调用管理接口，不能显示为安全通过。
-- 发布后本机更新必须走 GitHub Release 资产和 `weclaw update` 校验，不要手工覆盖二进制。普通 `weclaw update` 在已是最新版时不得启动 Claude ACP 预检；实际安装新版本或显式 `update --restart` 才执行启动预检。安装新版本时必须保留临时旧二进制直到完成边界提交，预检失败必须恢复旧二进制；`update --restart` 的安全检查、停止或新版本启动失败也必须恢复旧二进制，旧服务已停止则重新启动旧版本，恢复失败必须同时保留原始错误和回滚错误。
+- 发布后本机更新必须走 GitHub 权威 Release 或 Gitee 同资产镜像，并由 `weclaw update` 校验，不要手工覆盖二进制。`update_source`/`WECLAW_UPDATE_SOURCE`/`--source` 支持 `auto`、`github`、`gitee`，命令行优先于环境覆盖后的配置；`auto` 只允许对网络、TLS、超时和 5xx 换源，4xx、非法 tag、摘要缺失/重复/不匹配必须失败关闭，稳定版本不得降级。普通 `weclaw update` 在已是最新版时不得启动 Claude ACP 预检；实际安装新版本或显式 `update --restart` 才执行启动预检。安装新版本时必须保留临时旧二进制直到完成边界提交，预检失败必须恢复旧二进制；`update --restart` 的安全检查、停止或新版本启动失败也必须恢复旧二进制，旧服务已停止则重新启动旧版本，恢复失败必须同时保留原始错误和回滚错误。
 ## Validation Commands
 
 - quick: `python3 scripts/validate_docs.py . --profile generic`、`git diff --check`

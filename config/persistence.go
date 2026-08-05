@@ -81,6 +81,11 @@ func normalizeLoadedConfig(cfg *Config) {
 	if cfg.Platforms == nil {
 		cfg.Platforms = make(map[string]PlatformConfig)
 	}
+	if strings.TrimSpace(cfg.UpdateSource) == "" {
+		cfg.UpdateSource = "auto"
+	} else {
+		cfg.UpdateSource = strings.ToLower(strings.TrimSpace(cfg.UpdateSource))
+	}
 	cfg.Progress = NormalizeProgressConfig(DefaultProgressConfig(), &cfg.Progress)
 }
 
@@ -91,6 +96,7 @@ func loadEnv(cfg *Config) {
 	}{
 		{"WECLAW_DEFAULT_AGENT", &cfg.DefaultAgent}, {"WECLAW_API_ADDR", &cfg.APIAddr},
 		{"WECLAW_API_TOKEN", &cfg.APIToken}, {"WECLAW_SAVE_DIR", &cfg.SaveDir},
+		{"WECLAW_UPDATE_SOURCE", &cfg.UpdateSource},
 	}
 	for _, item := range envStrings {
 		if value := os.Getenv(item.name); value != "" {

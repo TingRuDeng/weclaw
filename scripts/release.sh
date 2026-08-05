@@ -306,6 +306,12 @@ verify_release() {
 	[[ "$latest_tag" == "$TAG" ]] || fail "latest release 指向 $latest_tag，期望 $TAG"
 }
 
+mirror_gitee_release() {
+	[[ "$DRY_RUN" -eq 0 ]] || return 0
+	log "镜像已验证资产到 Gitee：$TAG"
+	"$ROOT_DIR/scripts/mirror_gitee_release.sh" "$TAG" "$DIST_DIR/$TAG"
+}
+
 release_target_supported() {
   local candidate="$1" target
   for target in "${TARGETS[@]}"; do
@@ -367,6 +373,7 @@ main() {
 	verify_release
 	RELEASE_COMMITTED=1
 	trap - EXIT
+	mirror_gitee_release
 	log "发布完成：$TAG"
 }
 
