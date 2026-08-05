@@ -209,12 +209,33 @@ release_asset_url() {
 
 download_verified_release() {
   pair_source=$1
-  asset_url=$(release_asset_url "$pair_source" "$FILENAME")
+  download_name=$FILENAME
+  [ "$pair_source" != "gitee" ] || download_name="${FILENAME}.gz"
+  asset_url=$(release_asset_url "$pair_source" "$download_name")
   checksum_url=$(release_asset_url "$pair_source" checksums.txt)
   echo "Downloading ${asset_url}..."
   : >"$TMP"
+  : >"$ARCHIVE_TMP"
   : >"$CHECKSUM_TMP"
-  release_download "$pair_source" "$asset_url" "$TMP" || return $?
+  if [ "$pair_source" = "gitee" ]; then
+    command -v gzip >/dev/null 2>&1 || {
+      echo "错误：从 Gitee 安装需要 gzip" >&2
+      return 1
+    }
+    release_download "$pair_source" "$asset_url" "$ARCHIVE_TMP" || return $?
+    gzip -t "$ARCHIVE_TMP" || {
+      echo "错误：Gitee gzip 资产损坏：${download_name}" >&2
+      return 1
+    }
+    gzip -dc "$ARCHIVE_TMP" | head -c 134217729 >"$TMP"
+    unpacked_size=$(wc -c <"$TMP" | tr -d '[:space:]')
+    if [ "$unpacked_size" -gt 134217728 ]; then
+      echo "错误：Gitee gzip 资产解压后超过 128 MiB" >&2
+      return 1
+    fi
+  else
+    release_download "$pair_source" "$asset_url" "$TMP" || return $?
+  fi
   release_download "$pair_source" "$checksum_url" "$CHECKSUM_TMP" || return $?
   verify_release_asset "$TMP" "$CHECKSUM_TMP" "$FILENAME"
 }
@@ -336,9 +357,10 @@ else
   esac
 fi
 TMP=$(mktemp)
+ARCHIVE_TMP=$(mktemp)
 CHECKSUM_TMP=$(mktemp)
 cleanup_downloads() {
-  rm -f "$TMP" "$CHECKSUM_TMP"
+  rm -f "$TMP" "$ARCHIVE_TMP" "$CHECKSUM_TMP"
 }
 trap cleanup_downloads 0
 trap 'exit 1' 1 2 15

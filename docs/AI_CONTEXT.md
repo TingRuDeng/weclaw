@@ -31,7 +31,7 @@ ai_summary:
 - 仓库类型：单一 Go 仓库，不是 coordination directory。
 - Go 模块：`github.com/fastclaw-ai/weclaw`，以 `main.go` 和 `cmd/root.go` 进入 CLI。
 - 产品定位：把微信个人号和飞书消息接入 AI Agent，业务层通过 `platform` 抽象隔离平台差异。
-- 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。GitHub Release 是版本和构建权威；公开并回下载验证后，`scripts/mirror_gitee_release.sh` 才通过外部 `GITEE_TOKEN` 把同一 main/tag、四个二进制和 `checksums.txt` 镜像到 Gitee，再从 `attach_files` 端点回下载逐文件比较和校验摘要。脚本必须复用已有 Release、跳过已存在附件并为 curl 传输设置上限；`.github/workflows/mirror-gitee.yml` 只从既有 GitHub Release 下载权威资产，用于失败后的幂等续传。镜像失败不得清理已提交的 GitHub Release，但必须让发布任务可观察地失败。`.github/workflows/release.yml` 只负责从 `main` 调用该权威脚本，不得复制一套较弱的测试、构建或 Release 逻辑。发布入口先统一配置持久化 `GOCACHE`：`WECLAW_GOCACHE` 优先，其次保留调用方显式导出的 `GOCACHE`；本机 Darwin 数据盘共享根目录存在时使用项目专属缓存，其他主机回退到 `go env GOCACHE`。
+- 发布目标：`scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64`，本机安装必须走 `weclaw update`；发布门禁同时验证一键安装脚本，测试只能使用隔离的伪命令环境。GitHub Release 是版本和构建权威；公开并回下载验证后，`scripts/mirror_gitee_release.sh` 才通过外部 `GITEE_TOKEN` 把同一 main/tag、四个二进制的确定性 `.gz` 表示和原始 `checksums.txt` 镜像到 Gitee，再从 `attach_files` 端点回下载、解压、逐文件比较并校验原始摘要。安装器和更新器只对 Gitee 二进制附件执行有大小上限的解压，完整性仍以 GitHub 权威 `checksums.txt` 中的原始文件名为准。镜像脚本必须复用已有 Release、跳过已存在附件并为 curl 传输设置上限；`.github/workflows/mirror-gitee.yml` 只从既有 GitHub Release 下载权威资产，用于失败后的幂等续传。镜像失败不得清理已提交的 GitHub Release，但必须让发布任务可观察地失败。`.github/workflows/release.yml` 只负责从 `main` 调用该权威脚本，不得复制一套较弱的测试、构建或 Release 逻辑。发布入口先统一配置持久化 `GOCACHE`：`WECLAW_GOCACHE` 优先，其次保留调用方显式导出的 `GOCACHE`；本机 Darwin 数据盘共享根目录存在时使用项目专属缓存，其他主机回退到 `go env GOCACHE`。
 
 ## Core Directories
 

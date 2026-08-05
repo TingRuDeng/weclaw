@@ -336,7 +336,7 @@ go build -o weclaw .
 
 仓库当前使用 Go 1.26.5。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
 
-正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源；正式 Release 验证通过后，同一批二进制和 `checksums.txt` 才会镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 续传缺失附件并重新验证。
+正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源；正式 Release 验证通过后，四个二进制会以可还原的 `.gz` 附件连同原始 `checksums.txt` 镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)，安装器和更新器解压后仍按 GitHub 权威摘要校验。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 续传缺失附件并重新验证。
 
 ## 上游与许可
 

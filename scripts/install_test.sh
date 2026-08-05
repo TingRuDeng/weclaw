@@ -99,6 +99,13 @@ printf 'weclaw %s\n' "$*" >>"$CALLS_FILE"
 [ "${FAKE_WECLAW_CONFIG_FAIL:-0}" = "1" ] && exit 23
 exit 0
 SCRIPT
+case "$url" in
+  *.gz)
+    mv "$output" "$output.raw"
+    /usr/bin/gzip -n -9 -c "$output.raw" >"$output"
+    rm -f "$output.raw"
+    ;;
+esac
 printf '%s' "${FAKE_GITHUB_HTTP_CODE:-200}"
 EOF
   cat >"$FAKE_BIN/shasum" <<'EOF'
@@ -283,8 +290,9 @@ test_explicit_gitee_source_is_isolated() {
   WECLAW_SOURCE=gitee WECLAW_SKIP_CLAUDE_ACP=1 run_installer
   [ "$status" -eq 0 ] || fail "显式 Gitee 安装失败：$output"
   assert_file_contains "$DOWNLOADS_FILE" "https://gitee.com/api/v5/repos/test/weclaw/releases/latest"
-  assert_file_contains "$DOWNLOADS_FILE" "https://gitee.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64"
+  assert_file_contains "$DOWNLOADS_FILE" "https://gitee.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64.gz"
   assert_file_not_contains "$DOWNLOADS_FILE" "github.com"
+  assert_file_contains "$INSTALL_DIR/weclaw" "#!/bin/sh"
   finish_case "显式 Gitee 来源不访问 GitHub"
 }
 test_auto_falls_back_on_github_network_failure() {
@@ -301,7 +309,7 @@ test_auto_asset_falls_back_on_network_failure() {
   FAKE_GITHUB_NETWORK_FAIL=1 WECLAW_VERSION=v1.2.3 WECLAW_SOURCE=auto WECLAW_SKIP_CLAUDE_ACP=1 run_installer
   [ "$status" -eq 0 ] || fail "GitHub 资产网络失败后未切换 Gitee：$output"
   assert_file_contains "$DOWNLOADS_FILE" "github.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64"
-  assert_file_contains "$DOWNLOADS_FILE" "gitee.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64"
+  assert_file_contains "$DOWNLOADS_FILE" "gitee.com/test/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64.gz"
   assert_contains "$output" "发布资产不可用"
   finish_case "auto 在资产网络失败时整组切换 Gitee"
 }

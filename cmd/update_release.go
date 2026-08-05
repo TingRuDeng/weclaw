@@ -161,6 +161,9 @@ func releaseAssetURLForSource(source releaseSource, version string, filename str
 	case releaseSourceGitHub:
 		return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", githubRepo, version, filename), nil
 	case releaseSourceGitee:
+		if strings.HasPrefix(filename, "weclaw_") {
+			filename += ".gz"
+		}
 		return fmt.Sprintf("https://gitee.com/%s/releases/download/%s/%s", giteeRepo, version, filename), nil
 	default:
 		return "", fmt.Errorf("来源 %q 不能生成 release 资产地址", source)
@@ -243,7 +246,15 @@ func downloadReleaseAssetFromSource(source releaseSource, version string, filena
 	if err != nil {
 		return "", err
 	}
-	return downloadFile(url)
+	path, err := downloadFile(url)
+	if err != nil {
+		return "", err
+	}
+	if source != releaseSourceGitee || !strings.HasPrefix(filename, "weclaw_") {
+		return path, nil
+	}
+	defer os.Remove(path)
+	return decompressGiteeReleaseAsset(path)
 }
 
 func githubReleaseAssetAPIURL(version string, filename string) (string, error) {

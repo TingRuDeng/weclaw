@@ -39,6 +39,7 @@ func TestGiteeMirrorUsesAttachmentEndpointAndBoundedTransfers(t *testing.T) {
 	for _, required := range []string{
 		`attachment_json=`,
 		`releases/${release_id}/attach_files`,
+		`gzip -n -9`,
 		`--connect-timeout`,
 		`--max-time`,
 	} {
@@ -118,7 +119,11 @@ func TestGiteeMirrorUsesVerifiedAssetsWithoutLeakingToken(t *testing.T) {
 	checkJSON := filepath.Join(root, "release-check.json")
 	var assetsJSON strings.Builder
 	assetsJSON.WriteString(`[`)
-	allAssets := append(append([]string{}, assetNames...), "checksums.txt")
+	compressedAssetNames := make([]string, 0, len(assetNames))
+	for _, name := range assetNames {
+		compressedAssetNames = append(compressedAssetNames, name+".gz")
+	}
+	allAssets := append(compressedAssetNames, "checksums.txt")
 	for index, name := range allAssets {
 		if index > 0 {
 			assetsJSON.WriteByte(',')
@@ -161,6 +166,10 @@ case "$url" in
       upload-*) : >"$TEST_ATTACH_READY"; printf '{}' >"$output" ;;
       *) if [ -f "$TEST_ATTACH_READY" ]; then cp "$TEST_RELEASE_JSON" "$output"; else printf '[]' >"$output"; fi ;;
     esac
+    ;;
+  https://gitee.com/download/*.gz)
+    download_name=${url##*/}
+    /usr/bin/gzip -n -9 -c "$TEST_ASSET_DIR/${download_name%.gz}" >"$output"
     ;;
   https://gitee.com/download/*) cp "$TEST_ASSET_DIR/${url##*/}" "$output" ;;
   *) exit 91 ;;

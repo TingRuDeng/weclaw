@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"compress/gzip"
 	"fmt"
 	"io"
 	"log"
@@ -69,6 +70,47 @@ func downloadFileWithAccept(url string, accept string) (string, error) {
 		return "", err
 	}
 
+	return tmp.Name(), nil
+}
+
+func decompressGiteeReleaseAsset(archivePath string) (string, error) {
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer archive.Close()
+	reader, err := gzip.NewReader(archive)
+	if err != nil {
+		return "", fmt.Errorf("打开 Gitee gzip 资产失败: %w", err)
+	}
+	defer reader.Close()
+
+	tmp, err := os.CreateTemp("", "weclaw-update-unpacked-*")
+	if err != nil {
+		return "", err
+	}
+	remove := true
+	defer func() {
+		if remove {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	written, err := io.Copy(tmp, io.LimitReader(reader, maxUpdateDownloadBytes+1))
+	if err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("解压 Gitee 资产失败: %w", err)
+	}
+	if written > maxUpdateDownloadBytes {
+		_ = tmp.Close()
+		return "", fmt.Errorf("解压后的 Gitee 资产超过 %d 字节", maxUpdateDownloadBytes)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
+		return "", err
+	}
+	remove = false
 	return tmp.Name(), nil
 }
 

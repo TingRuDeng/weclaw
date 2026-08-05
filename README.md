@@ -336,7 +336,7 @@ go build -o weclaw .
 
 The repository currently uses Go 1.26.5. No publicly pullable container image is currently published in sync with this maintained distribution.
 
-`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline. GitHub Release remains authoritative for versions and builds. Only after that release is public and verified are the exact binaries and `checksums.txt` mirrored to [Gitee](https://gitee.com/jimdeng891/weclaw). A mirror failure visibly fails the release job without deleting the already verified GitHub Release; the manual `Repair Gitee Mirror` workflow resumes missing attachments from that GitHub Release and verifies them again.
+`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline. GitHub Release remains authoritative for versions and builds. Only after that release is public and verified are the four binaries mirrored to [Gitee](https://gitee.com/jimdeng891/weclaw) as reversible `.gz` attachments alongside the original `checksums.txt`; the installer and updater still verify the unpacked files against the authoritative GitHub checksums. A mirror failure visibly fails the release job without deleting the already verified GitHub Release; the manual `Repair Gitee Mirror` workflow resumes missing attachments from that GitHub Release and verifies them again.
 
 ## Upstream and License
 

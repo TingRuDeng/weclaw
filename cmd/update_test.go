@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,15 +62,45 @@ func TestGiteeLatestVersionFromBase(t *testing.T) {
 func TestReleaseAssetURLForSource(t *testing.T) {
 	for _, test := range []struct {
 		source releaseSource
+		name   string
 		want   string
 	}{
-		{source: releaseSourceGitHub, want: "https://github.com/TingRuDeng/weclaw/releases/download/v1.2.3/weclaw_linux_amd64"},
-		{source: releaseSourceGitee, want: "https://gitee.com/jimdeng891/weclaw/releases/download/v1.2.3/weclaw_linux_amd64"},
+		{source: releaseSourceGitHub, name: "weclaw_linux_amd64", want: "https://github.com/TingRuDeng/weclaw/releases/download/v1.2.3/weclaw_linux_amd64"},
+		{source: releaseSourceGitee, name: "weclaw_linux_amd64", want: "https://gitee.com/jimdeng891/weclaw/releases/download/v1.2.3/weclaw_linux_amd64.gz"},
+		{source: releaseSourceGitee, name: "checksums.txt", want: "https://gitee.com/jimdeng891/weclaw/releases/download/v1.2.3/checksums.txt"},
 	} {
-		got, err := releaseAssetURLForSource(test.source, "v1.2.3", "weclaw_linux_amd64")
+		got, err := releaseAssetURLForSource(test.source, "v1.2.3", test.name)
 		if err != nil || got != test.want {
 			t.Fatalf("releaseAssetURLForSource(%q)=(%q,%v), want %q", test.source, got, err, test.want)
 		}
+	}
+}
+
+func TestDecompressGiteeReleaseAsset(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "weclaw_linux_amd64.gz")
+	archive, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := gzip.NewWriter(archive)
+	if _, err := writer.Write([]byte("verified-binary")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := decompressGiteeReleaseAsset(archivePath)
+	if err != nil {
+		t.Fatalf("decompressGiteeReleaseAsset error: %v", err)
+	}
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "verified-binary" {
+		t.Fatalf("decompressed=(%q,%v), want verified binary", data, err)
 	}
 }
 

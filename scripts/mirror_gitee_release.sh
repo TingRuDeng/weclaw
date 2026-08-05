@@ -38,21 +38,27 @@ ASSET_DIR="$2"
 [[ "$GITEE_TOKEN" != *$'\n'* && "$GITEE_TOKEN" != *$'\r'* ]] || fail "GITEE_TOKEN 格式无效"
 [[ "$GITEE_CURL_MAX_TIME" =~ ^[1-9][0-9]*$ ]] || fail "GITEE_CURL_MAX_TIME 必须是正整数秒"
 
-for command_name in git curl python3 shasum cmp; do
+for command_name in git curl python3 shasum cmp gzip cp; do
   command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令：$command_name"
 done
 
-EXPECTED_ASSETS=(
+SOURCE_ASSETS=(
   weclaw_darwin_arm64
   weclaw_darwin_amd64
   weclaw_linux_arm64
   weclaw_linux_amd64
+)
+EXPECTED_ASSETS=(
   checksums.txt
+  weclaw_darwin_arm64.gz
+  weclaw_darwin_amd64.gz
+  weclaw_linux_arm64.gz
+  weclaw_linux_amd64.gz
 )
 
 actual_count="$(find "$ASSET_DIR" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
-[[ "$actual_count" == "${#EXPECTED_ASSETS[@]}" ]] || fail "asset-dir 文件数为 $actual_count，期望 ${#EXPECTED_ASSETS[@]}"
-for asset_name in "${EXPECTED_ASSETS[@]}"; do
+[[ "$actual_count" == "$((${#SOURCE_ASSETS[@]} + 1))" ]] || fail "asset-dir 文件数为 $actual_count，期望 $((${#SOURCE_ASSETS[@]} + 1))"
+for asset_name in "${SOURCE_ASSETS[@]}" checksums.txt; do
   [[ -f "$ASSET_DIR/$asset_name" ]] || fail "缺少资产：$asset_name"
 done
 (cd "$ASSET_DIR" && shasum -a 256 -c checksums.txt) >/dev/null || fail "本地资产摘要校验失败"
@@ -63,6 +69,13 @@ cleanup() {
   rm -rf "$TEMP_DIR"
 }
 trap cleanup EXIT
+
+MIRROR_DIR="$TEMP_DIR/mirror-assets"
+mkdir -p "$MIRROR_DIR"
+for asset_name in "${SOURCE_ASSETS[@]}"; do
+  gzip -n -9 -c "$ASSET_DIR/$asset_name" >"$MIRROR_DIR/$asset_name.gz"
+done
+cp "$ASSET_DIR/checksums.txt" "$MIRROR_DIR/checksums.txt"
 
 TOKEN_FILE="$TEMP_DIR/token"
 ASKPASS_FILE="$TEMP_DIR/askpass.sh"
@@ -159,7 +172,7 @@ for asset_name in "${EXPECTED_ASSETS[@]}"; do
   printf '==> 上传 Gitee 资产：%s\n' "$asset_name"
   curl -fsS "${CURL_SECURE[@]}" \
     --form "access_token=<${TOKEN_FILE}" \
-    --form "file=@${ASSET_DIR}/${asset_name}" \
+    --form "file=@${MIRROR_DIR}/${asset_name}" \
     -o "$TEMP_DIR/upload-${asset_name}.json" \
     "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
 done
@@ -199,8 +212,15 @@ for asset_name in "${EXPECTED_ASSETS[@]}"; do
   asset_url="$(awk -F '\t' -v name="$asset_name" '$1 == name { print $2 }' "$TEMP_DIR/assets.tsv")"
   [[ -n "$asset_url" ]] || fail "Gitee Release 缺少资产：$asset_name"
   curl -fsSL "${CURL_SECURE[@]}" --max-filesize 134217728 -o "$verified_dir/$asset_name" "$asset_url"
-  cmp "$ASSET_DIR/$asset_name" "$verified_dir/$asset_name" >/dev/null || fail "Gitee 回下载资产与权威资产不同：$asset_name"
+  cmp "$MIRROR_DIR/$asset_name" "$verified_dir/$asset_name" >/dev/null || fail "Gitee 回下载资产与镜像资产不同：$asset_name"
 done
-(cd "$verified_dir" && shasum -a 256 -c checksums.txt) >/dev/null || fail "Gitee 回下载摘要校验失败"
+verified_original_dir="$TEMP_DIR/verified-original"
+mkdir -p "$verified_original_dir"
+for asset_name in "${SOURCE_ASSETS[@]}"; do
+  gzip -dc "$verified_dir/$asset_name.gz" >"$verified_original_dir/$asset_name" || fail "Gitee 回下载 gzip 资产损坏：$asset_name.gz"
+  cmp "$ASSET_DIR/$asset_name" "$verified_original_dir/$asset_name" >/dev/null || fail "Gitee 解压资产与权威资产不同：$asset_name"
+done
+cp "$verified_dir/checksums.txt" "$verified_original_dir/checksums.txt"
+(cd "$verified_original_dir" && shasum -a 256 -c checksums.txt) >/dev/null || fail "Gitee 回下载摘要校验失败"
 
 printf 'Gitee 镜像完成：%s\n' "$TAG"
