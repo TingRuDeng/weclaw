@@ -336,6 +336,50 @@ func TestCodexDesktopClientKeepsConnectionAfterVersionlessQueryCacheInvalidateBr
 	}
 }
 
+func TestCodexDesktopClientKeepsConnectionAfterReadStateBroadcastVersions(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			broadcasts := make(chan codexDesktopEnvelope, 1)
+			release := make(chan struct{})
+			defer close(release)
+			dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+				serveCodexDesktopTestInitialize(t, conn, "client-1")
+				readState := []byte(fmt.Sprintf(
+					`{"type":"broadcast","version":%d,"method":"thread-read-state-changed","params":{"conversationId":"thread-1","hasUnreadTurn":false}}`,
+					version,
+				))
+				if err := writeCodexDesktopFrame(conn, readState); err != nil {
+					t.Errorf("write read state broadcast: %v", err)
+					return
+				}
+				request := readCodexDesktopTestEnvelope(t, conn)
+				writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+					requestID: request.RequestID,
+					value:     map[string]bool{"ok": true},
+				})
+				<-release
+			})
+			options := codexDesktopTestOptions(dial)
+			options.onBroadcast = func(_ uint64, envelope codexDesktopEnvelope) { broadcasts <- envelope }
+			client := newCodexDesktopClient(options)
+			mustConnectCodexDesktopTestClient(t, client)
+
+			select {
+			case got := <-broadcasts:
+				if got.Method != "thread-read-state-changed" || got.Version != version {
+					t.Fatalf("broadcast = %s@%d", got.Method, got.Version)
+				}
+			case <-time.After(codexDesktopTestTimeout):
+				t.Fatal("read state broadcast was not dispatched")
+			}
+			result, err := client.Call(context.Background(), "thread-follower-load-complete-history", map[string]string{"conversationId": "thread-1"})
+			if err != nil || string(result) != `{"ok":true}` {
+				t.Fatalf("Call() after read state broadcast = %s, %v", result, err)
+			}
+		})
+	}
+}
+
 func codexDesktopTestOptions(dial func(context.Context) (net.Conn, error)) codexDesktopClientOptions {
 	var next atomic.Int32
 	return codexDesktopClientOptions{

@@ -19,6 +19,7 @@ type codexDesktopStateChange struct {
 }
 
 var codexDesktopIgnoredStateBroadcasts = map[string]bool{
+	"thread-stream-following-changed": true,
 	"thread-read-state-changed":       true,
 	"thread-queued-followups-changed": true,
 	"client-status-changed":           true,

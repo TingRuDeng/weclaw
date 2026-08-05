@@ -34,7 +34,7 @@ var (
 	codexDesktopMethodVersions = map[string]int{
 		"initialize":                                            1,
 		"thread-stream-state-changed":                           11,
-		"thread-read-state-changed":                             1,
+		"thread-read-state-changed":                             2,
 		"thread-queued-followups-changed":                       1,
 		"thread-follower-load-complete-history":                 1,
 		"thread-follower-start-turn":                            1,
@@ -45,6 +45,10 @@ var (
 		"thread-follower-file-approval-decision":                1,
 		"thread-follower-submit-user-input":                     1,
 		"thread-follower-permissions-request-approval-response": 1,
+	}
+	// Desktop 会升级只读广播的版本；WeClaw 不消费其 payload，但仍需兼容旧 App。
+	codexDesktopCompatibleLegacyMethodVersions = map[string]map[int]struct{}{
+		"thread-read-state-changed": {1: {}},
 	}
 	codexDesktopVersionlessBroadcasts = map[string]bool{
 		"client-status-changed":  true,
@@ -192,6 +196,9 @@ func validateCodexDesktopMethodEnvelope(envelope codexDesktopEnvelope, requestID
 func validateCodexDesktopMethodVersion(method string, version int) error {
 	expected, known := codexDesktopMethodVersions[method]
 	if !known || version == expected {
+		return nil
+	}
+	if _, compatible := codexDesktopCompatibleLegacyMethodVersions[method][version]; compatible {
 		return nil
 	}
 	return fmt.Errorf("%w: method %s@%d，要求 @%d", ErrCodexDesktopIncompatible, method, version, expected)

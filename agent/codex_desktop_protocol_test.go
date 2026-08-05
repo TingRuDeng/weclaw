@@ -34,6 +34,15 @@ func TestCodexDesktopEnvelopeRejectsUnknownBroadcastVersion(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopEnvelopeRejectsUnsupportedReadStateVersion(t *testing.T) {
+	payload := []byte(`{"type":"broadcast","version":3,"method":"thread-read-state-changed","params":{}}`)
+
+	_, err := decodeCodexDesktopEnvelope(payload)
+	if !errors.Is(err, ErrCodexDesktopIncompatible) {
+		t.Fatalf("decodeCodexDesktopEnvelope() error = %v, want incompatible", err)
+	}
+}
+
 func TestCodexDesktopEnvelopeAcceptsVersionlessClientStatusBroadcast(t *testing.T) {
 	payload := []byte(`{"type":"broadcast","method":"client-status-changed","params":{"clientId":"desktop-1","status":"connected"}}`)
 
