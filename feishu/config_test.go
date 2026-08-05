@@ -67,7 +67,52 @@ func TestSaveCredentialsRepairsExistingFilePermissions(t *testing.T) {
 	}
 }
 
-func TestLoadCredentialsRejectsInsecureFilePermissions(t *testing.T) {
+func TestLoadCredentialsForBotRepairsOwnedPermissionsBeforeReading(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path, err := CredentialsPathForBot("project-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`{"app_id":"cli_a","app_secret":"secret-a"}`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadCredentialsForBot("project-a")
+	if err != nil {
+		t.Fatalf("LoadCredentialsForBot error=%v, want owned permissions repaired", err)
+	}
+	if loaded != (Credentials{AppID: "cli_a", AppSecret: "secret-a"}) {
+		t.Fatalf("credentials=%#v, want original credentials", loaded)
+	}
+	dirInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := dirInfo.Mode().Perm(); mode != 0o700 {
+		t.Fatalf("credentials directory mode=%o, want 700", mode)
+	}
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := fileInfo.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("credentials file mode=%o, want 600", mode)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("credentials content changed: %q", got)
+	}
+}
+
+func TestLoadCredentialsRepairsInsecureFilePermissions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	path, err := CredentialsPath()
 	if err != nil {
@@ -83,8 +128,15 @@ func TestLoadCredentialsRejectsInsecureFilePermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := LoadCredentials(); err == nil {
-		t.Fatal("LoadCredentials should reject credentials readable by other users")
+	if _, err := LoadCredentials(); err != nil {
+		t.Fatalf("LoadCredentials error=%v, want insecure file permissions repaired", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("credentials mode=%o, want 600 after repair", mode)
 	}
 }
 

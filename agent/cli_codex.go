@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 // chatCodex handles codex CLI invocation using "codex exec".
@@ -38,7 +40,7 @@ func (a *CLIAgent) chatCodex(ctx context.Context, conversationID string, message
 
 	out, err := cmd.Output()
 	if err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
+		errMsg := observability.SanitizeText(stderr.String())
 		if errMsg != "" {
 			return "", fmt.Errorf("codex error: %w, stderr: %s", err, errMsg)
 		}

@@ -74,6 +74,15 @@ func TestFormatCodexErrorHandlesRawMessage(t *testing.T) {
 	}
 }
 
+func TestFormatCodexErrorRedactsCredentials(t *testing.T) {
+	secret := "super-secret-value"
+	got := formatCodexError(json.RawMessage(`{"message":"request failed api_key=` + secret + `"}`))
+
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("formatCodexError=%q, want sanitized credentials", got)
+	}
+}
+
 func TestHandleCodexErrorUsesStderrWhenPayloadUnknown(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex",

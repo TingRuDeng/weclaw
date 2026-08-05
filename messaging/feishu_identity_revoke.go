@@ -29,7 +29,7 @@ type FeishuIdentityRevokeResult struct {
 	Admin    bool
 }
 
-func (h *Handler) handleFeishuIdentityRevoke(args []string) string {
+func (h *Handler) handleFeishuIdentityRevoke(msg platform.IncomingMessage, args []string) string {
 	opts, err := parseFeishuIdentityRevokeOptions(args)
 	if err != nil {
 		return err.Error()
@@ -38,6 +38,7 @@ func (h *Handler) handleFeishuIdentityRevoke(args []string) string {
 	if err != nil {
 		return err.Error()
 	}
+	h.auditFeishuIdentityMutation(msg, "feishu_identity_revoke", result.Identity, result.Bots, result.Admin)
 	return RenderFeishuIdentityRevoke(result)
 }
 

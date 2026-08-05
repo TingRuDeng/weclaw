@@ -208,7 +208,7 @@ func EventFor(trace TraceContext, stage string, state string) Event {
 
 var (
 	bearerPattern           = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]+`)
-	secretAssignmentPattern = regexp.MustCompile(`(?i)\b(access_token|refresh_token|id_token|api[_-]?key|authorization|cookie|password|secret|token)\b\s*[:=]\s*[^\s,;]+`)
+	secretAssignmentPattern = regexp.MustCompile(`(?i)["']?\b(access_token|refresh_token|id_token|api[_-]?key|authorization|cookie|password|secret|token)\b["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)`)
 	jwtPattern              = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}(?:\.[a-zA-Z0-9_-]{4,})?\b`)
 )
 

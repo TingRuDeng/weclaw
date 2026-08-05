@@ -2,6 +2,7 @@ package wechat
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -130,9 +131,10 @@ func TestAdapterSkipsSelfEchoMessage(t *testing.T) {
 	}
 }
 
-func TestAdapterPersistsContextTokenBeforeDispatch(t *testing.T) {
+func TestAdapterPersistsAuthorizedContextTokenBeforeDispatch(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	adapter := NewAdapter(&ilink.Credentials{ILinkBotID: "bot-1"})
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"user-1"}))
 	client := ilink.NewClient(&ilink.Credentials{ILinkBotID: "bot-1"})
 	dispatched := false
 	handler := adapter.handleWeixinMessage(func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
@@ -159,5 +161,36 @@ func TestAdapterPersistsContextTokenBeforeDispatch(t *testing.T) {
 	}
 	if got := loaded.Get("user-1"); got != "ctx-1" {
 		t.Fatalf("persisted token=%q, want ctx-1", got)
+	}
+}
+
+func TestAdapterDoesNotPersistUnauthorizedContextToken(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	adapter := NewAdapter(&ilink.Credentials{ILinkBotID: "bot-1"})
+	adapter.SetAccessControl(platform.NewAccessControl([]string{"allowed-user"}))
+	client := ilink.NewClient(&ilink.Credentials{ILinkBotID: "bot-1"})
+	dispatched := false
+	handler := adapter.handleWeixinMessage(func(_ context.Context, _ platform.IncomingMessage, reply platform.Replier) {
+		dispatched = true
+		wechatReply, ok := reply.(*Replier)
+		if !ok || wechatReply.ContextToken != "untrusted-context" {
+			t.Fatalf("current-message reply=%#v, want immediate context token", reply)
+		}
+	})
+
+	handler(context.Background(), client, ilink.WeixinMessage{
+		FromUserID: "unknown-user", ToUserID: "bot-1",
+		MessageType: ilink.MessageTypeUser, MessageState: ilink.MessageStateFinish,
+		ContextToken: "untrusted-context",
+	})
+
+	if !dispatched {
+		t.Fatal("adapter should leave authoritative denial to registry")
+	}
+	if got := adapter.tokenStore.Get("unknown-user"); got != "" {
+		t.Fatalf("in-memory token=%q, unauthorized identity must not persist", got)
+	}
+	if _, err := os.Stat(contextTokenStorePath("bot-1")); !os.IsNotExist(err) {
+		t.Fatalf("unauthorized token file stat error=%v, want not exist", err)
 	}
 }

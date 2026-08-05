@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/ilink"
@@ -30,6 +31,9 @@ type Adapter struct {
 	watchdogMaxIdle   time.Duration
 	aggregationWindow time.Duration
 	tokenStore        *contextTokenStore
+	accessMu          sync.RWMutex
+	access            platform.AccessControl
+	accessSet         bool
 }
 
 // NewAdapter 使用微信凭证创建 adapter。
@@ -64,6 +68,15 @@ func (a *Adapter) Capabilities() platform.Capabilities {
 		File:     true,
 		LongText: true,
 	}
+}
+
+// SetAccessControl 接收 Registry 的权威白名单。adapter 只用它约束
+// context_token 持久化；消息是否分发仍由 Registry 统一判定。
+func (a *Adapter) SetAccessControl(access platform.AccessControl) {
+	a.accessMu.Lock()
+	a.access = access
+	a.accessSet = true
+	a.accessMu.Unlock()
 }
 
 // NewReplier 为主动发送 API 创建微信回复器。
@@ -112,7 +125,7 @@ func (a *Adapter) handleWeixinMessage(dispatch platform.DispatchFunc) ilink.Mess
 		if !ShouldDispatchWeixinMessage(client.BotID(), msg) {
 			return
 		}
-		if a.tokenStore != nil {
+		if a.tokenStore != nil && a.contextTokenPersistenceAllowed(msg.FromUserID) {
 			if err := a.tokenStore.SetContext(ctx, msg.FromUserID, msg.ContextToken); err != nil {
 				log.Printf("[wechat] failed to persist context_token for %s: %v", msg.FromUserID, err)
 			}
@@ -120,6 +133,17 @@ func (a *Adapter) handleWeixinMessage(dispatch platform.DispatchFunc) ilink.Mess
 		reply := NewReplier(client, msg.FromUserID, msg.ContextToken, "")
 		dispatch(ctx, IncomingFromWeixin(msg), reply)
 	}
+}
+
+func (a *Adapter) contextTokenPersistenceAllowed(userID string) bool {
+	if a == nil {
+		return false
+	}
+	a.accessMu.RLock()
+	access := a.access
+	accessSet := a.accessSet
+	a.accessMu.RUnlock()
+	return accessSet && access.Allowed(userID)
 }
 
 func newIlinkMonitor(client *ilink.Client, handler ilink.MessageHandler) (monitorRunner, error) {

@@ -215,8 +215,30 @@ func (a *ACPAgent) validateCodexAccountForWrite(ctx context.Context) error {
 }
 
 func (a *ACPAgent) codexAccountIndexEnabled() (bool, error) {
-	if a.codexAccountStoreCall == nil && !a.usesCodexSharedHost() {
-		return false, nil
+	if a.codexAccountStoreCall == nil {
+		if !a.usesCodexSharedHost() {
+			return false, nil
+		}
+		options, err := a.codexAccountStoreOptions()
+		if err != nil {
+			return false, err
+		}
+		indexPath, err := codexauth.IndexPath(options)
+		if err != nil {
+			return false, err
+		}
+		if _, err := os.Lstat(indexPath); err != nil {
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return false, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法检查 Codex 账号索引", err)
+		}
+		// rpcCall 是包内协议测试的显式替身，不能让这些测试意外读取开发机的
+		// 真实账号索引。生产 shared Host 没有该 hook；一旦已经启用账号索引，
+		// Host 身份不可验证时必须失败关闭，不能绕过账号写入门禁。
+		if a.rpcCall != nil {
+			return false, nil
+		}
 	}
 	store, err := a.codexAccountStore()
 	if err != nil {
@@ -227,12 +249,6 @@ func (a *ACPAgent) codexAccountIndexEnabled() (bool, error) {
 			return false, nil
 		}
 		return false, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法检查 Codex 账号索引", err)
-	}
-	// rpcCall 是包内协议测试的显式替身，不能让这些测试意外读取开发机的
-	// 真实账号索引。生产 shared Host 没有该 hook；一旦已经启用账号索引，
-	// Host 身份不可验证时必须失败关闭，不能绕过账号写入门禁。
-	if a.codexAccountStoreCall == nil && a.rpcCall != nil {
-		return false, nil
 	}
 	return true, nil
 }

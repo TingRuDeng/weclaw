@@ -23,6 +23,29 @@ type StoreOptions struct {
 	Now        func() time.Time
 }
 
+// IndexPath 只根据规范化后的存储参数计算账号索引位置，不读取或创建任何
+// 文件。调用方可用它在启用账号存储前探测索引是否存在；真正打开 Store
+// 时仍必须通过 NewStore 完成 CODEX_HOME 与存储边界校验。
+func IndexPath(options StoreOptions) (string, error) {
+	dataDir, err := absoluteCleanPath(options.DataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve WeClaw data dir: %w", err)
+	}
+	codexHome, err := absoluteCleanPath(options.CodexHome)
+	if err != nil {
+		return "", fmt.Errorf("resolve CODEX_HOME: %w", err)
+	}
+	socketPath, err := absoluteCleanPath(options.SocketPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve Codex app-server socket: %w", err)
+	}
+	hostID, err := HostID(codexHome, socketPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dataDir, "codex-accounts", hostID, "index.json"), nil
+}
+
 // CodexAccountStore 描述单个 shared-host namespace 的账号索引能力。
 type CodexAccountStore interface {
 	List() (Index, error)

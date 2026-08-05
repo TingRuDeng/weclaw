@@ -4,6 +4,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 const auditErrorLogInterval = time.Minute
@@ -85,7 +87,7 @@ func (h *Handler) auditRecord(entry auditEntry) {
 }
 
 // allowAgentInvocation 在触发 agent 前做每用户限流；返回 false 表示已超限。
-func (h *Handler) allowAgentInvocation(routeUserID string) bool {
+func (h *Handler) allowAgentInvocation(platformName platform.PlatformName, accountID string, userID string) bool {
 	h.mu.RLock()
 	limit := h.rateLimitPerMinute
 	limiter := h.rateLimiter
@@ -93,7 +95,14 @@ func (h *Handler) allowAgentInvocation(routeUserID string) bool {
 	if limit <= 0 || limiter == nil {
 		return true
 	}
-	return limiter.Allow(routeUserID, limit)
+	return limiter.Allow(agentRateLimitKey(platformName, accountID, userID), limit)
+}
+
+func agentRateLimitKey(platformName platform.PlatformName, accountID string, userID string) string {
+	if strings.TrimSpace(userID) == "" {
+		return ""
+	}
+	return strings.TrimSpace(string(platformName)) + "\x00" + strings.TrimSpace(accountID) + "\x00" + strings.TrimSpace(userID)
 }
 
 // isWorkspaceAllowed 判断目标目录是否落在普通用户 /cwd 白名单内；白名单为空时默认拒绝。

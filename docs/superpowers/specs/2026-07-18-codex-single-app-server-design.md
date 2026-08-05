@@ -1,4 +1,4 @@
-# Codex 单一 app-server、多前端设计
+# Codex 单一 Host、多前端设计
 
 ## 状态
 
@@ -6,17 +6,19 @@
 
 ## 目标
 
-- 本机任一时刻只由一个 WeClaw 管理的原生 `codex app-server` 提供 Codex 运行能力。
+- 本机任一时刻只允许一个 Codex Host 成为写入权威；该 Host 可以是 Codex App、官方 standalone daemon 或 WeClaw-managed 兼容 Host。
 - 微信、飞书和后续本地 UI 都是前端客户端；前端只保存 workspace/thread 绑定。
 - 多个前端可以绑定同一个 thread，但同一个 thread 同时只执行一个写 turn。
 - 运行通道断开、重连、超时或旧状态迁移不能清除前端绑定，也不能伪造 writer 冲突。
-- 旧版 Desktop/Companion/CLI 第二 writer 入口必须显式停用或迁移。
+- Host 切换必须证明全局空闲并持有 admission、writer lease 与 lifecycle lock 门禁；无法证明时失败关闭。
+- Companion/独立 CLI 等第二 writer 入口必须显式停用或迁移。
 
 ## 非目标
 
-- 不把当前独立运行的 Codex Desktop 自动改造成共享 host 客户端。
-- 不通过 Desktop IPC、rollout 或进程探测推断前端所有权。
+- 不修改 Codex App 本身，也不让 WeClaw 管理或终止 App 进程。
+- 不把进程存在等同于 IPC 可用；App 存在但受保护 IPC 不可达时不得回退启动第二个 Host。
 - 不允许普通消息在没有显式 binding 时隐式创建 thread。
+- 不把 Desktop follower 未暴露的 thread/start、archive、model/list、账号或额度能力伪装为可用。
 - 本文不定义 Claude 运行拓扑；Claude 已独立收敛为单一 ClaudeHost、多前端 binding，当前约束以 `docs/AI_CONTEXT.md` 为准。
 
 ## 拓扑
@@ -25,22 +27,42 @@
 flowchart LR
     W[微信窗口] --> M[Messaging frontend binding]
     F[飞书窗口] --> M
-    L[后续本地 UI] --> S
-    M --> C[ACP client connection]
-    C --> S[单一 Codex app-server]
-    S --> T[Codex threads / turns]
+    M --> R[Codex Host 选择与生命周期门禁]
+    R -->|auto 且 App 已运行| D[Codex App Desktop IPC]
+    R -->|App 不在且 standalone 可用| O[官方 daemon]
+    R -->|兼容回退| C[WeClaw-managed app-server]
+    D --> T[Codex threads / turns]
+    O --> T
+    C --> T
 ```
 
-`agent/codex_app_server_host.go` 负责 host 边界：
+### Host 选择
+
+`codex_host_mode` 接受 `auto`、`daemon` 和 `managed`：
+
+1. macOS 默认 `auto` 先探测 Codex App。App 已运行时，`agent/codex_desktop_connector.go` 通过受保护 Desktop IPC 复用 App Host。
+2. App 不在时，`auto` 在 `CODEX_HOME` 已有官方 control socket 或 standalone Codex 可执行时使用 `agent/codex_daemon_host.go`；否则使用 WeClaw-managed 兼容路径。
+3. 显式 `daemon` 只使用官方生命周期命令和固定 control socket，不允许自定义 `app_server_socket` 或 `run_as_user`，失败时不回退 managed。
+4. 显式 `managed` 使用 `agent/codex_app_server_host.go` 管理兼容 Host，不主动接入 Desktop。
+
+共享 Host 已运行后若探测到 App，只能在所有 thread 全局 idle、没有 active/uncertain writer lease，并串行持有 gate 与 socket lifecycle lock 时切换。停止结果、App 状态或 IPC 身份任一不可确认，当前 runtime 都进入不可写状态，不能并行保留两个 Host。
+
+### Shared Host 边界
+
+`agent/codex_app_server_host.go` 与 `agent/codex_daemon_host.go` 共同负责 shared Host 边界：
 
 1. 解析稳定 Unix socket；显式 `app_server_socket` 优先。
 2. 连接已存在且 owner 合法的 socket，并通过标准 HTTP Upgrade 建立 WebSocket-over-UDS；每个 JSON-RPC 消息使用一个 WebSocket frame，禁止直接读写 JSONL。
-3. 不存在 live host 时清理同 owner 的 stale socket，并启动 `codex app-server --listen unix://...`。
+3. managed 路径在不存在 live host 时清理同 owner 的 stale socket，并启动 `codex app-server --listen unix://...`；daemon 路径只调用官方 lifecycle。
 4. stale socket 清理和 host 启动必须持有 socket 目录内的跨进程文件锁；等待者取得锁后先重新连接，不能直接删除赢家刚建立的 socket。
-5. host 启动 context 与触发它的前端请求解耦；只有拥有 host 进程的 `ACPAgent.Stop` 才终止进程。
+5. host 启动 context 与触发它的前端请求解耦；只有拥有 managed host 进程的 `ACPAgent.Stop` 才终止进程，daemon 停止必须走官方 lifecycle。
 6. 仅连接既有 host 的客户端不记录 PID，也不能终止 host。
 
-默认 socket 位于 WeClaw 状态目录的 `runtime/` 下。若完整路径超过 Darwin `sockaddr_un` 安全上限，使用原目标路径的稳定哈希落到真实系统临时目录下的 `weclaw-<uid>/`；macOS 将 `/tmp` 解析为 `/private/tmp`，避免 Codex 拒绝目录链中的软链接。目录必须为真实目录、owner 合法且禁止 group/other 访问。显式配置的超长路径直接报错，不能静默改写管理员配置。
+managed 默认 socket 位于 WeClaw 状态目录的 `runtime/` 下。若完整路径超过 Darwin `sockaddr_un` 安全上限，使用原目标路径的稳定哈希落到真实系统临时目录下的 `weclaw-<uid>/`；macOS 将 `/tmp` 解析为 `/private/tmp`，避免 Codex 拒绝目录链中的软链接。目录必须为真实目录、owner 合法且禁止 group/other 访问。显式配置的超长路径直接报错。daemon 固定使用 `CODEX_HOME/app-server-control/app-server-control.sock`，不能被自定义 socket 覆盖。
+
+### Desktop follower 边界
+
+`agent/codex_desktop_connector.go` 和 `agent/codex_desktop_runtime.go` 只连接已验证的 App IPC endpoint，并把 Desktop 作为唯一 Host 权威。它支持读取已有 thread、启动/观察 turn、steer、interrupt、审批、用户输入和当前 thread settings；不提供新建/归档 thread、完整模型列表、账号或额度操作。上述缺失能力必须提示用户在 Codex App 执行，不能静默启动 shared Host 补齐。
 
 ## 状态模型
 
@@ -60,16 +82,17 @@ flowchart LR
 
 Runtime 只回答共享 host 当前能否服务：
 
-- `weclaw_runtime`：已由共享 host 确认，可开始 writer lease。
+- `weclaw`：官方 daemon 或 managed shared Host 已确认，可开始 writer lease。
+- `desktop`：Codex App IPC 已确认，App 是当前唯一写入权威，可开始 writer lease。
 - `unknown`：通道未确认或已断开，不可写，但 binding 保留。
-- `conflict`、`desktop`：只供显式注入的旧 Desktop bridge 测试兼容；生产共享模式不能由 probe 或 watcher进入这些状态。
+- `conflict`：观察到无法归属于当前权威 Host 的活动或状态冲突，不可写，必须由权威终态证据收敛。
 
 ### Writer lease
 
 `agent/codex_runtime_lease.go` 按 thread 串行 turn：
 
 - lease 与 frontend route、旧 owner revision 无关。
-- runtime 必须为 `weclaw_runtime`。
+- runtime 必须为 `weclaw` 或 `desktop`，且 lease 绑定当前 Host generation。
 - 已有 lease 时第二个 turn 返回 writer busy；不会清除第二个前端的 binding。
 - Complete、Fail、Stop 或取消最终都必须释放同一 lease；晚到状态不能覆盖新代次。
 - 客户端断线或交付状态未知时必须保留 fail-closed lease；只有 rollout 或重连后的 `thread/read` 明确确认同一 turn 终态后才能释放。
@@ -91,7 +114,7 @@ Runtime 只回答共享 host 当前能否服务：
 
 1. 必须已有 frontend binding。
 2. 每次已准入 turn 前重新确认 `conversationID -> threadID` 映射，避免其他前端最近的绑定污染当前映射。
-3. 连接或恢复共享 host。
+3. 连接或恢复当前唯一 Host；`auto` 下先按 Desktop/daemon/managed 顺序确认权威。
 4. 获取 thread writer lease。
 5. 启动 turn，并在唯一终态释放 lease。
 
@@ -102,14 +125,16 @@ Runtime 只回答共享 host 当前能否服务：
 ## 命令契约
 
 - `/cx ls`、`/cx cd`、`/cx switch`、`/cx new`：浏览、选择或创建 frontend binding。
-- `/cx status`：显示共享 host、workspace、thread 和 frontend 角色。
-- `/cx owner`：只读兼容状态，不再移交 writer。
+- `/cx status`：显示当前 Host、workspace、thread 和 frontend binding 状态。
+- `/cx status` 在 Desktop 模式显示 `Codex App`；`/cx owner` 已删除，不再移交 writer。
 - `/cx app`、`/cx cli`、`/cx attach`、`/cx detach`：拒绝并说明第二 writer 风险。
 - 旧 `type: companion` Codex 配置无论 `auto_launch` 值如何都迁移为 ACP app-server；`weclaw companion --agent codex` 明确拒绝。
+- Desktop Host 下 `/cx new`、归档、账号、额度和完整模型目录明确提示在 App 执行；已有 thread 的 `/model`、`/reasoning` 走 Desktop follower settings 能力。
 
 ## 故障边界
 
 - socket 连接失败：保留 binding；允许下一次操作重连或重启 host。
+- App 进程或 IPC endpoint 存在但安全连接失败：保留 binding 并失败关闭，不得回退 daemon/managed。
 - turn 观察流断开：保留 binding、active turn 和 writer lease；其他前端继续收到 writer busy，直到权威终态收敛。
 - host 启动失败：暴露经过清洗的真实错误；SQLite 状态初始化错误仍进入有限重试。
 - 持久化失败：内存 binding 不提交；不能继续 runtime 映射。
@@ -117,6 +142,7 @@ Runtime 只回答共享 host 当前能否服务：
 - host client recovery：只断开当前 client，不终止其他客户端正在使用的 host。
 - host owner 停止：终止其启动的 host；其他客户端必须感知断线并按正常重连路径恢复。
 - 两个前端并发首次连接：由跨进程启动锁选出唯一启动者；等待者复用赢家的 socket。
+- shared Host 切换到后来出现的 App：只有 admission、全局 idle、writer lease 和 lifecycle lock 全部通过才停止 shared Host；任何不确定结果保持不可写。
 
 ## 验证契约
 
@@ -132,4 +158,7 @@ Runtime 只回答共享 host 当前能否服务：
 - turn 已接受后连接断开不能释放 lease；rollout 确认终态或重连读取到匹配终态后才可继续写。
 - v1-v3 owner 状态迁移后不再影响 v4 binding。
 - `/cx app|cli|attach|detach` 和 Codex Companion 都不能启动第二 writer。
+- `auto` 在 App 已运行时只连接 Desktop IPC；App 不在时才选择 daemon/managed，App 存在但 IPC 不可达时失败关闭。
+- Desktop follower 支持已有 thread turn/steer/interrupt/settings，明确拒绝未暴露的 thread/start、archive、model/list、账号与额度能力。
+- daemon 与 managed 的 socket、生命周期和失败回退边界分别验证；显式 daemon 失败不能启动 managed。
 - runtime 失败保留 binding，持久化失败回滚，切换失败不破坏原会话。

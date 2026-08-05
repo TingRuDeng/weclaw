@@ -5,6 +5,8 @@ import (
 	"log"
 	"strings"
 	"sync"
+
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 // Info returns metadata about this agent.
@@ -100,10 +102,11 @@ func (w *acpStderrWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	for _, line := range lines {
 		if line != "" {
-			log.Printf("%s %s", w.prefix, line)
+			sanitized := observability.SanitizeText(line)
+			log.Printf("%s %s", w.prefix, sanitized)
 			// Capture lines that look like actual error messages (not traceback frames)
 			if !strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "Traceback") && !strings.HasPrefix(line, "...") {
-				w.last = line
+				w.last = sanitized
 			}
 		}
 	}

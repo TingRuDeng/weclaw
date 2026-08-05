@@ -93,11 +93,20 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		case choice := <-pending.choices:
 			return strings.TrimSpace(choice), nil
 		case <-timer.C:
+			h.auditDefaultDenyApproval(opts, "timeout")
 			return defaultDenyApprovalOption(req.Options), nil
 		case <-ctx.Done():
+			h.auditDefaultDenyApproval(opts, "context_cancelled")
 			return defaultDenyApprovalOption(req.Options), ctx.Err()
 		}
 	}
+}
+
+func (h *Handler) auditDefaultDenyApproval(opts agentInteractionContextOptions, reason string) {
+	h.auditRecord(auditEntry{
+		User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_default_deny",
+		Summary: "decision=deny reason=" + strings.TrimSpace(reason),
+	})
 }
 
 func (h *Handler) registerPendingApproval(userID string, approvalKey string, options []agent.ApprovalOption) (*pendingApproval, error) {

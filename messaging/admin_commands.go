@@ -86,6 +86,10 @@ func (h *Handler) handleServiceAdminCommand(ctx context.Context, msg platform.In
 		sendPlatformText(ctx, reply, userID, "管理命令执行器未配置，暂未执行。")
 		return
 	}
+	h.auditRecord(auditEntry{
+		Platform: string(msg.Platform), User: userID,
+		Action: "admin_command_accepted", Summary: adminCommandAuditSummary(command, args),
+	})
 	statusStream := h.openServiceAdminCommandStatus(ctx, command, reply)
 	if statusStream == nil {
 		sendPlatformText(ctx, reply, userID, "管理命令已受理：/"+command+"，正在后台执行；完成后会另行通知。")
@@ -186,10 +190,22 @@ func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command s
 	}
 	executor := h.currentServiceAdminCommandExecutor()
 	if executor == nil {
+		h.auditRecord(auditEntry{
+			Platform: string(msg.Platform), User: userID,
+			Action: "admin_command_failed", Summary: adminCommandAuditSummary(command, args),
+		})
 		h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, "管理命令执行器未配置，暂未执行。", true)
 		return
 	}
 	output, err := executor(runCtx, command, args)
+	resultAction := "admin_command_succeeded"
+	if err != nil {
+		resultAction = "admin_command_failed"
+	}
+	h.auditRecord(auditEntry{
+		Platform: string(msg.Platform), User: userID,
+		Action: resultAction, Summary: adminCommandAuditSummary(command, args),
+	})
 	if command == "restart" && err == nil {
 		notification, cardPending, notifyErr := recordAdminRestartNotification(msg, statusStream)
 		if notifyErr != nil {
@@ -210,6 +226,10 @@ func (h *Handler) runServiceAdminCommand(msg platform.IncomingMessage, command s
 		restartObserver.release(false)
 	}
 	h.finishServiceAdminCommand(runCtx, reply, userID, statusStream, formatServiceAdminCommandReply(command, output, err), err != nil)
+}
+
+func adminCommandAuditSummary(command string, args []string) string {
+	return fmt.Sprintf("command=%s force=%t", strings.TrimSpace(command), hasRestartForceArg(args))
 }
 
 func (h *Handler) observeDelayedRestartStart(observer *restartStartObserver, notification adminRestartNotification, cardPending bool, reply platform.Replier, userID string) {

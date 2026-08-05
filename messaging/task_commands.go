@@ -113,6 +113,9 @@ func (h *Handler) handleStopActiveTask(req taskCommandRequest) string {
 			ctx: req.ctx, key: target.key, agent: target.agent, actor: req.actorUserID,
 			expectation: req.expectation,
 		}); handled {
+			if taskStopAuditAccepted(reply) {
+				h.auditAcceptedTaskStop(req, target.name)
+			}
 			return reply
 		}
 	}
@@ -123,7 +126,19 @@ func (h *Handler) handleStopActiveTask(req taskCommandRequest) string {
 	if !cancelled {
 		return "当前没有可停止的任务。"
 	}
+	h.auditAcceptedTaskStop(req, target.name)
 	return "已停止当前任务。"
+}
+
+func (h *Handler) auditAcceptedTaskStop(req taskCommandRequest, agentName string) {
+	h.auditRecord(auditEntry{
+		Platform: string(req.platformName), User: req.actorUserID, Agent: strings.TrimSpace(agentName),
+		Action: "task_stop", Summary: "outcome=accepted",
+	})
+}
+
+func taskStopAuditAccepted(reply string) bool {
+	return reply == "已停止当前任务。" || strings.HasPrefix(reply, "已发送停止请求")
 }
 
 // steerPendingGuideToExternalCodex 将暂存消息发送到 Codex App 的活动 turn。

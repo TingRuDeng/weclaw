@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
+	"github.com/fastclaw-ai/weclaw/internal/securefile"
 	"github.com/fastclaw-ai/weclaw/platform"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	"github.com/larksuite/oapi-sdk-go/v3/channel/normalize"
@@ -53,27 +54,8 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 	if !resp.Success() {
 		return platform.Attachment{}, newFeishuResourceAPIError(d.appID, resource.FileKey, resp.Code, resp.Msg)
 	}
-	target := feishuResourceTarget(resource)
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return platform.Attachment{}, err
-	}
-	if err := resp.WriteFile(target); err != nil {
-		_ = os.Remove(target)
-		return platform.Attachment{}, err
-	}
-	info, err := os.Stat(target)
+	target, _, err := writeFeishuResourceFile(filepath.Join(os.TempDir(), "weclaw-feishu"), resp.File)
 	if err != nil {
-		os.Remove(target)
-		return platform.Attachment{}, err
-	}
-	if info.Size() > maxFeishuResourceBytes {
-		os.Remove(target)
-		return platform.Attachment{}, permanentResourceDownloadError{
-			message: fmt.Sprintf("feishu resource exceeds %d MiB", maxFeishuResourceBytes/(1024*1024)),
-		}
-	}
-	if err := os.Chmod(target, 0o600); err != nil {
-		_ = os.Remove(target)
 		return platform.Attachment{}, err
 	}
 	return platform.Attachment{
@@ -83,6 +65,51 @@ func (d *sdkResourceDownloader) DownloadResource(ctx context.Context, messageID 
 		SourceID: resource.FileKey,
 		Metadata: map[string]string{"resource_type": resource.Type, "temporary": "true"},
 	}, nil
+}
+
+func writeFeishuResourceFile(dir string, reader io.Reader) (string, int64, error) {
+	if reader == nil {
+		return "", 0, fmt.Errorf("feishu resource has no content")
+	}
+	if err := securefile.EnsureDir(dir); err != nil {
+		return "", 0, fmt.Errorf("secure feishu attachment directory: %w", err)
+	}
+	file, err := os.CreateTemp(dir, ".attachment-*.tmp")
+	if err != nil {
+		return "", 0, fmt.Errorf("create feishu attachment: %w", err)
+	}
+	path := file.Name()
+	keep := false
+	defer func() {
+		_ = file.Close()
+		if !keep {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return "", 0, fmt.Errorf("chmod feishu attachment: %w", err)
+	}
+	written, err := io.Copy(file, io.LimitReader(reader, maxFeishuResourceBytes+1))
+	if err != nil {
+		return "", 0, fmt.Errorf("write feishu attachment: %w", err)
+	}
+	if written > maxFeishuResourceBytes {
+		return "", written, permanentResourceDownloadError{
+			message: fmt.Sprintf("feishu resource exceeds %d MiB", maxFeishuResourceBytes/(1024*1024)),
+		}
+	}
+	if err := file.Close(); err != nil {
+		return "", 0, fmt.Errorf("close feishu attachment: %w", err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("inspect feishu attachment: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || info.Size() != written {
+		return "", 0, fmt.Errorf("feishu attachment failed regular-file validation")
+	}
+	keep = true
+	return path, written, nil
 }
 
 func (a *Adapter) toIncomingFromMessage(ctx context.Context, event *larkim.P2MessageReceiveV1) (platform.IncomingMessage, bool) {
@@ -262,26 +289,6 @@ func attachmentKindForResource(resourceType string) platform.AttachmentKind {
 	default:
 		return platform.AttachmentFile
 	}
-}
-
-// feishuResourceTarget 生成本地资源落盘路径，避免使用原始 key 以外的非可信路径。
-func feishuResourceTarget(resource types.Resource) string {
-	name := sanitizeFilePart(firstNonEmpty(resource.FileName, resource.FileKey))
-	if name == "" {
-		name = fmt.Sprintf("resource-%d", time.Now().UnixNano())
-	}
-	uniqueName := fmt.Sprintf("%d-%s", time.Now().UnixNano(), name)
-	return filepath.Join(os.TempDir(), "weclaw-feishu", uniqueName)
-}
-
-// sanitizeFilePart 清理文件名中的路径分隔符，避免平台资源 key 影响本地路径。
-func sanitizeFilePart(name string) string {
-	name = filepath.Base(strings.TrimSpace(name))
-	name = strings.ReplaceAll(name, string(filepath.Separator), "_")
-	if name == "." || name == string(filepath.Separator) {
-		return ""
-	}
-	return name
 }
 
 // firstNonEmpty 返回第一个非空字符串。

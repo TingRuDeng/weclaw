@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -20,6 +21,7 @@ type codexAppServerGate struct {
 	generationID uint64
 	activeTurns  int
 	changed      chan struct{}
+	failure      error
 }
 
 type codexAppServerPermit struct {
@@ -45,8 +47,9 @@ func (g *codexAppServerGate) acquire(ctx context.Context) (*codexAppServerPermit
 			return permit, nil
 		}
 		if g.state == codexAppServerFailed {
+			err := g.unavailableErrorLocked()
 			g.mu.Unlock()
-			return nil, ErrCodexRuntimeUnavailable
+			return nil, err
 		}
 		changed := g.changed
 		g.mu.Unlock()
@@ -62,7 +65,7 @@ func (g *codexAppServerGate) beginExclusive() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.state == codexAppServerFailed {
-		return ErrCodexRuntimeUnavailable
+		return g.unavailableErrorLocked()
 	}
 	if g.state != codexAppServerRunning || g.activeTurns != 0 {
 		return ErrCodexWriterBusy
@@ -85,14 +88,16 @@ func (g *codexAppServerGate) finishExclusive(committed bool, available bool) {
 	if committed {
 		g.generationID++
 	}
+	g.failure = nil
 	g.state = codexAppServerRunning
 	g.notifyLocked()
 }
 
 // fail 把共享 Host 置为不可写。该状态只能由已经证明运行时不安全的路径设置；
 // 普通连接失败和探测超时不得调用它。
-func (g *codexAppServerGate) fail() {
+func (g *codexAppServerGate) fail(cause error) {
 	g.mu.Lock()
+	g.failure = cause
 	g.state = codexAppServerFailed
 	g.notifyLocked()
 	g.mu.Unlock()
@@ -123,8 +128,9 @@ func (g *codexAppServerGate) beginDrain(ctx context.Context) error {
 			return nil
 		}
 		if g.state == codexAppServerFailed {
+			err := g.unavailableErrorLocked()
 			g.mu.Unlock()
-			return ErrCodexRuntimeUnavailable
+			return err
 		}
 		changed := g.changed
 		g.mu.Unlock()
@@ -159,6 +165,7 @@ func (g *codexAppServerGate) markRestarting() {
 // abortDrain 只用于尚未触碰运行时的等待失败；原 Host 仍然可写。
 func (g *codexAppServerGate) abortDrain() {
 	g.mu.Lock()
+	g.failure = nil
 	g.state = codexAppServerRunning
 	g.notifyLocked()
 	g.mu.Unlock()
@@ -170,12 +177,20 @@ func (g *codexAppServerGate) finishRestart(restarted bool) {
 	g.mu.Lock()
 	if restarted {
 		g.generationID++
+		g.failure = nil
 		g.state = codexAppServerRunning
 	} else {
 		g.state = codexAppServerFailed
 	}
 	g.notifyLocked()
 	g.mu.Unlock()
+}
+
+func (g *codexAppServerGate) unavailableErrorLocked() error {
+	if g.failure == nil {
+		return ErrCodexRuntimeUnavailable
+	}
+	return fmt.Errorf("%w: %w", ErrCodexRuntimeUnavailable, g.failure)
 }
 
 func (g *codexAppServerGate) notifyLocked() {

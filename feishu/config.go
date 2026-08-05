@@ -206,6 +206,9 @@ func writeCredentialsFile(path string, creds Credentials) error {
 }
 
 func readCredentialsFile(path string) (CredentialRecord, error) {
+	if err := securefile.RepairPermissions(path); err != nil {
+		return CredentialRecord{}, fmt.Errorf("repair feishu credential permissions: %w", err)
+	}
 	data, err := securefile.Read(path)
 	if err != nil {
 		return CredentialRecord{}, fmt.Errorf("read feishu credentials: %w", err)

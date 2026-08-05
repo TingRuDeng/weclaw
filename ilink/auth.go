@@ -25,7 +25,12 @@ const (
 	statusExpired   = "expired"
 
 	accountStoreWriteTimeout = 5 * time.Second
+	qrTransportErrorBackoff  = time.Second
 )
+
+type qrStatusClient interface {
+	doGet(context.Context, string, any) error
+}
 
 // FetchQRCode retrieves a new QR code for login.
 func FetchQRCode(ctx context.Context) (*QRCodeResponse, error) {
@@ -42,7 +47,10 @@ func FetchQRCode(ctx context.Context) (*QRCodeResponse, error) {
 func PollQRStatus(ctx context.Context, qrcode string, onStatus func(status string)) (*Credentials, error) {
 	c := NewUnauthenticatedClient()
 	url := qrStatusURL + qrcode
+	return pollQRStatus(ctx, c, url, onStatus)
+}
 
+func pollQRStatus(ctx context.Context, c qrStatusClient, url string, onStatus func(status string)) (*Credentials, error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -56,9 +64,12 @@ func PollQRStatus(ctx context.Context, qrcode string, onStatus func(status strin
 		cancel()
 
 		if err != nil {
-			// Timeout is normal for long-poll, retry
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
+			}
+			// 长轮询超时和即时传输错误都要进入可取消退避，避免网络快速失败时忙循环。
+			if err := waitForRetry(ctx, qrTransportErrorBackoff); err != nil {
+				return nil, err
 			}
 			continue
 		}

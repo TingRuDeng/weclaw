@@ -14,7 +14,10 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-const accessCodeTTL = 30 * time.Minute
+const (
+	accessCodeTTL        = 30 * time.Minute
+	maxAccessCodeRecords = 1024
+)
 
 var accessCodeStateMu sync.Mutex
 
@@ -92,6 +95,14 @@ func issueAccessCode(filePath string, msg platform.IncomingMessage, now time.Tim
 			}
 		}
 		return record, nil
+	}
+	if len(state.Records) >= maxAccessCodeRecords {
+		if purged {
+			if err := saveAccessCodeState(filePath, state); err != nil {
+				return accessCodeRecord{}, err
+			}
+		}
+		return accessCodeRecord{}, fmt.Errorf("授权码状态已达到容量上限 %d，请先处理现有授权码", maxAccessCodeRecords)
 	}
 	code, ok := newUniqueAccessCode(state, now)
 	if !ok {

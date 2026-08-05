@@ -2,9 +2,13 @@ package ilink
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -292,6 +296,46 @@ func TestCalcBackoffUsesFixedSteps(t *testing.T) {
 		if got := monitor.calcBackoff(); got != expected {
 			t.Fatalf("failures=%d backoff=%s, want %s", monitor.failures, got, expected)
 		}
+	}
+}
+
+func TestMonitorBusinessErrorsUseOrSemanticsAndBackoff(t *testing.T) {
+	for _, response := range []string{
+		`{"ret":1,"errcode":0,"errmsg":"busy"}`,
+		`{"ret":0,"errcode":123,"errmsg":"busy"}`,
+	} {
+		t.Run(response, func(t *testing.T) {
+			t.Setenv("WECLAW_HOME", t.TempDir())
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				_, _ = w.Write([]byte(response))
+			}))
+			defer server.Close()
+			monitor, err := NewMonitor(NewClient(&Credentials{
+				BotToken: "token", ILinkBotID: "bot-1", BaseURL: server.URL,
+			}), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sentinel := time.Unix(123, 0)
+			monitor.setLastActivity(sentinel)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer cancel()
+
+			if err := monitor.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Run() error=%v, want deadline", err)
+			}
+			if monitor.failures != 1 {
+				t.Fatalf("failures=%d, want one business failure", monitor.failures)
+			}
+			if got := monitor.LastActivity(); !got.Equal(sentinel) {
+				t.Fatalf("lastActivity=%v, business error must not refresh success activity", got)
+			}
+			if got := requests.Load(); got != 1 {
+				t.Fatalf("requests=%d, business error should enter backoff before retry", got)
+			}
+		})
 	}
 }
 

@@ -184,3 +184,72 @@ func TestIssueAccessCodePurgesExpiredRecordWhenReusingValidCode(t *testing.T) {
 		t.Fatalf("复用有效授权码时未清理过期状态：%#v", loaded.Records)
 	}
 }
+
+func TestIssueAccessCodeRejectsNewIdentityAtCapacityWithoutEviction(t *testing.T) {
+	const capacity = 1024
+	filePath := filepath.Join(t.TempDir(), "access-codes.json")
+	now := time.Now().UTC()
+	state := accessCodeState{Records: make(map[string]accessCodeRecord, capacity)}
+	for index := 0; index < capacity; index++ {
+		code := fmt.Sprintf("CODE%04d", index)
+		state.Records[code] = accessCodeRecord{
+			Code: code, Platform: string(platform.PlatformWeChat), UserID: fmt.Sprintf("user-%d", index),
+			ExpiresAt: now.Add(time.Minute).Format(time.RFC3339),
+		}
+	}
+	if err := saveAccessCodeState(filePath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := issueAccessCode(filePath, platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, UserID: "new-user",
+	}, now)
+	if err == nil || !strings.Contains(err.Error(), "容量") {
+		t.Fatalf("issueAccessCode() error=%v, want capacity rejection", err)
+	}
+	loaded, loadErr := loadAccessCodeState(filePath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(loaded.Records) != capacity {
+		t.Fatalf("records=%d, capacity rejection must retain existing valid codes", len(loaded.Records))
+	}
+}
+
+func TestIssueAccessCodePersistsExpiredPurgeWhenValidRecordsRemainAtCapacity(t *testing.T) {
+	const capacity = 1024
+	filePath := filepath.Join(t.TempDir(), "access-codes.json")
+	now := time.Now().UTC()
+	state := accessCodeState{Records: make(map[string]accessCodeRecord, capacity+1)}
+	for index := 0; index < capacity; index++ {
+		code := fmt.Sprintf("CODE%04d", index)
+		state.Records[code] = accessCodeRecord{
+			Code: code, Platform: string(platform.PlatformWeChat), UserID: fmt.Sprintf("user-%d", index),
+			ExpiresAt: now.Add(time.Minute).Format(time.RFC3339),
+		}
+	}
+	state.Records["EXPIRED"] = accessCodeRecord{
+		Code: "EXPIRED", Platform: string(platform.PlatformWeChat), UserID: "expired-user",
+		ExpiresAt: now.Add(-time.Minute).Format(time.RFC3339),
+	}
+	if err := saveAccessCodeState(filePath, state); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := issueAccessCode(filePath, platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, UserID: "new-user",
+	}, now)
+	if err == nil || !strings.Contains(err.Error(), "容量") {
+		t.Fatalf("issueAccessCode() error=%v, want capacity rejection", err)
+	}
+	loaded, loadErr := loadAccessCodeState(filePath)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(loaded.Records) != capacity {
+		t.Fatalf("records=%d, want expired record purged while valid capacity is retained", len(loaded.Records))
+	}
+	if _, exists := loaded.Records["EXPIRED"]; exists {
+		t.Fatal("capacity rejection left expired record persisted")
+	}
+}

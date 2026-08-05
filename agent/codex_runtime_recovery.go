@@ -66,22 +66,53 @@ func (a *ACPAgent) ensureCodexAppServerGate() *codexAppServerGate {
 
 	if a.usesCodexSharedHost() {
 		a.codexAccountSafetyOnce.Do(func() {
-			store, err := a.codexAccountStore()
+			var (
+				store     *codexauth.Store
+				indexPath string
+				err       error
+			)
+			if a.codexAccountStoreCall != nil {
+				store, err = a.codexAccountStore()
+				if err == nil && store == nil {
+					err = fmt.Errorf("Codex 账号 Store 为空")
+				}
+				if err == nil {
+					indexPath = store.IndexPath()
+				}
+			} else {
+				options, optionsErr := a.codexAccountStoreOptions()
+				if optionsErr != nil {
+					err = optionsErr
+				} else {
+					indexPath, err = codexauth.IndexPath(options)
+				}
+			}
 			if err != nil {
-				gate.fail()
+				gate.fail(fmt.Errorf("检查 Codex 账号索引: %w", err))
 				return
 			}
 			// 没有账户索引表示尚未启用多账户功能，不应因此创建目录或阻止
 			// 既有单账户运行时。索引一旦存在，损坏或不安全终态都必须失败关闭。
-			if _, err := os.Lstat(store.IndexPath()); err != nil {
+			if _, err := os.Lstat(indexPath); err != nil {
 				if !os.IsNotExist(err) {
-					gate.fail()
+					gate.fail(fmt.Errorf("检查 Codex 账号索引 %q: %w", indexPath, err))
 				}
 				return
 			}
+			if store == nil {
+				store, err = a.codexAccountStore()
+				if err != nil {
+					gate.fail(fmt.Errorf("打开 Codex 账号索引: %w", err))
+					return
+				}
+			}
 			status, err := store.Status()
-			if err != nil || codexauth.IsUnsafeSwitchRecord(status.LastSwitch) {
-				gate.fail()
+			if err != nil {
+				gate.fail(fmt.Errorf("读取 Codex 账号状态: %w", err))
+				return
+			}
+			if codexauth.IsUnsafeSwitchRecord(status.LastSwitch) {
+				gate.fail(fmt.Errorf("Codex 账号切换记录处于不安全状态 %q", status.LastSwitch.Status))
 			}
 		})
 	}

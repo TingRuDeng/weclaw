@@ -1,8 +1,13 @@
 package messaging
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
 func TestUserRateLimiterWindow(t *testing.T) {
@@ -59,16 +64,59 @@ func TestUserRateLimiterRemovesExpiredKeys(t *testing.T) {
 func TestHandlerRateLimitGate(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetRateLimitPerMinute(2)
-	if !h.allowAgentInvocation("wechat:u1") {
+	if !h.allowAgentInvocation(platform.PlatformWeChat, "account-1", "u1") {
 		t.Fatal("first invocation should pass")
 	}
-	if !h.allowAgentInvocation("wechat:u1") {
+	if !h.allowAgentInvocation(platform.PlatformWeChat, "account-1", "u1") {
 		t.Fatal("second invocation should pass")
 	}
-	if h.allowAgentInvocation("wechat:u1") {
+	if h.allowAgentInvocation(platform.PlatformWeChat, "account-1", "u1") {
 		t.Fatal("third invocation should be throttled")
 	}
-	if !h.allowAgentInvocation("wechat:u2") {
+	if !h.allowAgentInvocation(platform.PlatformWeChat, "account-1", "u2") {
 		t.Fatal("other user must be independent")
 	}
+}
+
+func TestHandlerRateLimitUsesRealActorInsteadOfConversationRoute(t *testing.T) {
+	newRuntime := func(userID, routeUserID string, reply platform.Replier) platformMessageRuntime {
+		return platformMessageRuntime{
+			ctx: context.Background(),
+			msg: platform.IncomingMessage{
+				Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: userID,
+			},
+			reply: reply, routeUserID: routeUserID, text: "普通问题",
+		}
+	}
+	t.Run("同群不同用户额度独立", func(t *testing.T) {
+		h := NewHandler(nil, nil)
+		h.SetRateLimitPerMinute(1)
+		first := platformtest.NewReplier(platform.Capabilities{Text: true})
+		second := platformtest.NewReplier(platform.Capabilities{Text: true})
+		h.dispatchPlatformMessage(newRuntime("ou_a", "feishu:chat:group-1", first))
+		h.dispatchPlatformMessage(newRuntime("ou_b", "feishu:chat:group-1", second))
+		if replyContains(second.Texts, "请求过于频繁") {
+			t.Fatalf("同群不同用户不应共享限流额度，replies=%#v", second.Texts)
+		}
+	})
+	t.Run("同一用户跨会话共享额度", func(t *testing.T) {
+		h := NewHandler(nil, nil)
+		h.SetRateLimitPerMinute(1)
+		first := platformtest.NewReplier(platform.Capabilities{Text: true})
+		second := platformtest.NewReplier(platform.Capabilities{Text: true})
+		h.dispatchPlatformMessage(newRuntime("ou_a", "feishu:chat:group-1", first))
+		h.dispatchPlatformMessage(newRuntime("ou_a", "feishu:chat:group-2", second))
+		if !replyContains(second.Texts, "请求过于频繁") {
+			t.Fatalf("同一平台账号用户跨会话应共享限流额度，replies=%#v", second.Texts)
+		}
+	})
+}
+
+func replyContains(replies []string, text string) bool {
+	for _, reply := range replies {
+		if strings.Contains(reply, text) {
+			return true
+		}
+	}
+	return false
 }

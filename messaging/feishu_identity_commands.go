@@ -50,17 +50,17 @@ func (h *Handler) handleFeishuIdentityCommand(msg platform.IncomingMessage, trim
 	case "list":
 		return h.renderFeishuIdentityViews("已授权飞书用户", false)
 	case "approve":
-		return h.handleFeishuIdentityApprove(fields[3:])
+		return h.handleFeishuIdentityApprove(msg, fields[3:])
 	case "approve-code":
-		return h.handleFeishuIdentityApproveCode(fields[3:])
+		return h.handleFeishuIdentityApproveCode(msg, fields[3:])
 	case "revoke":
-		return h.handleFeishuIdentityRevoke(fields[3:])
+		return h.handleFeishuIdentityRevoke(msg, fields[3:])
 	default:
 		return feishuIdentityUsageText()
 	}
 }
 
-func (h *Handler) handleFeishuIdentityApprove(args []string) string {
+func (h *Handler) handleFeishuIdentityApprove(msg platform.IncomingMessage, args []string) string {
 	opts, err := parseFeishuIdentityApproveOptions(args)
 	if err != nil {
 		return err.Error()
@@ -69,7 +69,19 @@ func (h *Handler) handleFeishuIdentityApprove(args []string) string {
 	if err != nil {
 		return err.Error()
 	}
+	h.auditFeishuIdentityMutation(msg, "feishu_identity_approve", result.Identity, result.Bots, result.Admin)
 	return RenderFeishuIdentityApproval(result)
+}
+
+func (h *Handler) auditFeishuIdentityMutation(msg platform.IncomingMessage, action string, identity string, bots []string, admin bool) {
+	actor := strings.TrimSpace(msg.UserID)
+	if identities := adminIdentityKeysForMessage(msg); len(identities) > 0 {
+		actor = strings.TrimSpace(identities[0])
+	}
+	h.auditRecord(auditEntry{
+		Platform: string(msg.Platform), User: actor, Action: action,
+		Summary: fmt.Sprintf("target=%s bots=%s admin=%t", strings.TrimSpace(identity), strings.Join(bots, ","), admin),
+	})
 }
 
 func parseFeishuIdentityApproveOptions(args []string) (feishuIdentityApproveOptions, error) {

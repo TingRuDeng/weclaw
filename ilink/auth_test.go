@@ -14,6 +14,34 @@ import (
 	"github.com/fastclaw-ai/weclaw/internal/accountstore"
 )
 
+type failingQRStatusClient struct {
+	calls int
+}
+
+func (c *failingQRStatusClient) doGet(context.Context, string, any) error {
+	c.calls++
+	return errors.New("network unavailable")
+}
+
+func TestPollQRStatusBacksOffImmediateTransportErrors(t *testing.T) {
+	client := &failingQRStatusClient{}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+
+	_, err := pollQRStatus(ctx, client, "https://example.invalid/status", nil)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("pollQRStatus() error=%v, want deadline", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("transport calls=%d, immediate errors should back off before retry", client.calls)
+	}
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+		t.Fatalf("poll returned too quickly without cancellable backoff: %s", elapsed)
+	}
+}
+
 func TestNormalizeAccountIDIsFilesystemSafe(t *testing.T) {
 	for _, raw := range []string{"../escape", "/tmp/absolute", `..\windows\escape`, "bot/child", "机器人/一"} {
 		got := NormalizeAccountID(raw)

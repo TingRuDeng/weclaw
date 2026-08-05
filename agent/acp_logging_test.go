@@ -122,3 +122,22 @@ func TestCodexTurnMetricsRecordsFirstEventOnce(t *testing.T) {
 		t.Fatalf("elapsed=%s, want 5s", got)
 	}
 }
+
+func TestACPStderrWriterRedactsSecretsFromLogAndLastError(t *testing.T) {
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+	writer := &acpStderrWriter{prefix: "[test]"}
+	secret := "super-secret-value"
+
+	_, _ = writer.Write([]byte("request failed api_key=" + secret + "\n"))
+	last := writer.LastError()
+
+	if strings.Contains(logs.String(), secret) || strings.Contains(last, secret) {
+		t.Fatalf("secret leaked: logs=%q last=%q", logs.String(), last)
+	}
+	if !strings.Contains(logs.String(), "[REDACTED]") || !strings.Contains(last, "[REDACTED]") {
+		t.Fatalf("redaction marker missing: logs=%q last=%q", logs.String(), last)
+	}
+}

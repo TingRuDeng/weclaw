@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 func (a *ACPAgent) handleCodexDelta(params json.RawMessage) {
@@ -81,7 +83,7 @@ func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
 	}
 	if method == "turn/failed" {
 		text := firstNonEmpty(formatCodexTurnError(p.Error), p.Message, p.Code, p.Status)
-		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "error", TurnID: turnID, Text: joinCodexErrorParts("Codex turn 执行失败", text, "")})
+		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "error", TurnID: turnID, Text: observability.SanitizeText(joinCodexErrorParts("Codex turn 执行失败", text, ""))})
 	}
 }
 
@@ -94,9 +96,9 @@ func codexCompletedEvent(turnID string, status string, rawError json.RawMessage)
 		return &codexTurnEvent{Kind: "interrupted", TurnID: turnID}
 	case "failed":
 		text := firstNonEmpty(formatCodexTurnError(rawError), "未知错误")
-		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: joinCodexErrorParts("Codex turn 执行失败", text, "")}
+		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: observability.SanitizeText(joinCodexErrorParts("Codex turn 执行失败", text, ""))}
 	default:
-		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: joinCodexErrorParts("Codex turn 终态无效", status, "")}
+		return &codexTurnEvent{Kind: "error", TurnID: turnID, Text: observability.SanitizeText(joinCodexErrorParts("Codex turn 终态无效", status, ""))}
 	}
 }
 
@@ -115,7 +117,7 @@ func formatCodexTurnError(rawError json.RawMessage) string {
 
 func (a *ACPAgent) handleCodexError(params json.RawMessage) {
 	if isRecoverableCodexTransportText(string(params)) {
-		log.Printf("[acp] ignoring recoverable codex transport error: %.200s", string(params))
+		log.Printf("[acp] ignoring recoverable codex transport error: %.200s", observability.SanitizeText(string(params)))
 		return
 	}
 	text := formatCodexError(params)
@@ -129,7 +131,7 @@ func (a *ACPAgent) handleCodexError(params json.RawMessage) {
 	}
 	if text == "" {
 		// 新版 app-server 可能在传输回退前发送空 error，权威终态仍由 turn/completed 给出。
-		log.Printf("[acp] ignoring codex error without actionable details: %.200s", string(params))
+		log.Printf("[acp] ignoring codex error without actionable details: %.200s", observability.SanitizeText(string(params)))
 		return
 	}
 	a.dispatchToTurnCh("", &codexTurnEvent{Kind: "error", Text: text})
@@ -160,7 +162,7 @@ func formatCodexError(params json.RawMessage) string {
 		return ""
 	}
 	summary := formatCodexErrorSummary(message, info)
-	return appendCodexAdditionalDetails(summary, p.Error.AdditionalDetails)
+	return observability.SanitizeText(appendCodexAdditionalDetails(summary, p.Error.AdditionalDetails))
 }
 
 func formatCodexErrorSummary(message string, info string) string {
@@ -202,13 +204,13 @@ func formatCodexStderrError(text string) string {
 	}
 	lower := strings.ToLower(text)
 	if strings.Contains(lower, "deactivated_workspace") {
-		return joinCodexErrorParts("Codex 工作区不可用", text, "deactivated_workspace")
+		return observability.SanitizeText(joinCodexErrorParts("Codex 工作区不可用", text, "deactivated_workspace"))
 	}
 	if strings.Contains(lower, "402 payment required") {
-		return joinCodexErrorParts("Codex 认证或工作区不可用", text, "")
+		return observability.SanitizeText(joinCodexErrorParts("Codex 认证或工作区不可用", text, ""))
 	}
 	if isCodexUsageLimitError(text) {
-		return text
+		return observability.SanitizeText(text)
 	}
 	// 普通 stderr 可能属于更早的请求，不能替代当前 turn/completed 的权威终态。
 	return ""

@@ -98,24 +98,32 @@ func (a *ACPAgent) codexAccountStore() (*codexauth.Store, error) {
 	if a.codexAccountStoreCall != nil {
 		return a.codexAccountStoreCall()
 	}
-	if !a.usesCodexSharedHost() {
-		return nil, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "当前 Agent 不是 Codex shared app-server", nil)
-	}
-	socketPath, err := a.resolveCodexHostSocket()
-	if err != nil {
-		return nil, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法解析 Codex Host socket", err)
-	}
-	codexHome, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
+	options, err := a.codexAccountStoreOptions()
 	if err != nil {
 		return nil, err
 	}
+	return codexauth.NewStore(options)
+}
+
+func (a *ACPAgent) codexAccountStoreOptions() (codexauth.StoreOptions, error) {
+	if !a.usesCodexSharedHost() {
+		return codexauth.StoreOptions{}, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "当前 Agent 不是 Codex shared app-server", nil)
+	}
+	socketPath, err := a.resolveCodexHostSocket()
+	if err != nil {
+		return codexauth.StoreOptions{}, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法解析 Codex Host socket", err)
+	}
+	codexHome, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
+	if err != nil {
+		return codexauth.StoreOptions{}, err
+	}
 	dataDir, err := config.DataDir()
 	if err != nil {
-		return nil, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法解析 WeClaw 状态目录", err)
+		return codexauth.StoreOptions{}, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "无法解析 WeClaw 状态目录", err)
 	}
-	return codexauth.NewStore(codexauth.StoreOptions{
+	return codexauth.StoreOptions{
 		DataDir: dataDir, CodexHome: codexHome, SocketPath: socketPath,
-	})
+	}, nil
 }
 
 func (a *ACPAgent) ListCodexAccounts(ctx context.Context) (CodexAccountStatus, error) {

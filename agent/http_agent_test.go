@@ -27,6 +27,24 @@ func TestHTTPAgentRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
+func TestHTTPAgentRedactsNonOKResponseBody(t *testing.T) {
+	secret := "super-secret-value"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"api_key":"` + secret + `"}`))
+	}))
+	defer server.Close()
+	ag, err := NewHTTPAgent(HTTPAgentConfig{Endpoint: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ag.Chat(context.Background(), "u1", "hello")
+	if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("Chat() error=%v, want sanitized HTTP body", err)
+	}
+}
+
 func TestNewHTTPAgentRejectsNegativeMaxHistory(t *testing.T) {
 	if _, err := NewHTTPAgent(HTTPAgentConfig{Endpoint: "https://example.com", MaxHistory: -1}); err == nil {
 		t.Fatal("NewHTTPAgent error=nil, want negative max_history rejection")

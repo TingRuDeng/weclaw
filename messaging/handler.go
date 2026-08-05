@@ -67,7 +67,7 @@ type Handler struct {
 	platformProgressConfigs map[string]config.ProgressConfig
 	platformDefaultAgents   map[string]string
 	sessions                *sessionService
-	seenTextMsgs            sync.Map // map[string]time.Time — MessageID 为 0 时按文本去重
+	seenTextMsgs            sync.Map // map[string]textDedupEntry — MessageID 为 0 时按文本去重与 reservation
 	feishuIdentities        *feishuIdentityStore
 	taskLocksMu             sync.Mutex
 	taskLocks               map[string]*executionLock
@@ -148,5 +148,6 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 	if !ready {
 		return
 	}
+	defer h.releaseTextMessageReservation(runtime.textDedupReservation)
 	h.dispatchPlatformMessage(runtime)
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type feishuIdentityApproveCodeOptions struct {
@@ -23,7 +25,7 @@ type FeishuIdentityApproveCodeRequest struct {
 	FilePath    string
 }
 
-func (h *Handler) handleFeishuIdentityApproveCode(args []string) string {
+func (h *Handler) handleFeishuIdentityApproveCode(msg platform.IncomingMessage, args []string) string {
 	opts, err := parseFeishuIdentityApproveCodeOptions(args)
 	if err != nil {
 		return err.Error()
@@ -32,6 +34,7 @@ func (h *Handler) handleFeishuIdentityApproveCode(args []string) string {
 	if err != nil {
 		return err.Error()
 	}
+	h.auditFeishuIdentityMutation(msg, "feishu_identity_approve", result.Identity, result.Bots, result.Admin)
 	return RenderFeishuIdentityApproval(result)
 }
 

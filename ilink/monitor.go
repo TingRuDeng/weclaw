@@ -84,45 +84,61 @@ func (m *Monitor) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			m.failures++
-			backoff := m.calcBackoff()
+			backoff := m.recordFailureBackoff()
 			log.Printf("[monitor] GetUpdates error (%d/%d, backoff=%s): %v",
 				m.failures, maxConsecutiveFailures, backoff, err)
-			if m.failures == maxConsecutiveFailures {
-				log.Printf("[monitor] WARNING: %d consecutive failures. If this persists, run `weclaw wechat login` to re-authenticate.", maxConsecutiveFailures)
-			}
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
+			if err := waitForRetry(ctx, backoff); err != nil {
 				return ctx.Err()
 			}
 			continue
 		}
 
-		// Reset failure counter on any successful response
-		m.failures = 0
-		m.setLastActivity(time.Now())
-
 		// Session expired — reset sync buf and reconnect silently
 		if resp.ErrCode == errCodeSessionExpired {
 			backoff := m.recoverExpiredSession()
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
+			if err := waitForRetry(ctx, backoff); err != nil {
 				return ctx.Err()
 			}
 			continue
 		}
 
 		// Other server errors
-		if resp.Ret != 0 && resp.ErrCode != 0 {
-			log.Printf("[monitor] server error: ret=%d errcode=%d errmsg=%s", resp.Ret, resp.ErrCode, resp.ErrMsg)
+		if resp.Ret != 0 || resp.ErrCode != 0 {
+			backoff := m.recordFailureBackoff()
+			log.Printf("[monitor] server error (%d/%d, backoff=%s): ret=%d errcode=%d errmsg=%s",
+				m.failures, maxConsecutiveFailures, backoff, resp.Ret, resp.ErrCode, resp.ErrMsg)
+			if err := waitForRetry(ctx, backoff); err != nil {
+				return ctx.Err()
+			}
 			continue
 		}
+
+		// 只有业务成功响应才刷新健康活动时间并清空连续失败计数。
+		m.failures = 0
+		m.setLastActivity(time.Now())
 
 		if !m.processUpdateResponse(ctx, resp) {
 			return ctx.Err()
 		}
+	}
+}
+
+func (m *Monitor) recordFailureBackoff() time.Duration {
+	m.failures++
+	if m.failures == maxConsecutiveFailures {
+		log.Printf("[monitor] WARNING: %d consecutive failures. If this persists, run `weclaw wechat login` to re-authenticate.", maxConsecutiveFailures)
+	}
+	return m.calcBackoff()
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

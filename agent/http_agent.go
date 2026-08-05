@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/observability"
 )
 
 const (
@@ -144,7 +146,7 @@ func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message str
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API error HTTP %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("API error HTTP %d: %s", resp.StatusCode, observability.SanitizeText(string(body)))
 	}
 
 	var result struct {

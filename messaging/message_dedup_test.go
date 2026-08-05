@@ -11,9 +11,11 @@ func TestTextDedupOnlyBlocksMatchingActiveTask(t *testing.T) {
 	if h.isDuplicateTextMessage("user-1", "ctx-1", "route-1", "继续") {
 		t.Fatal("首次消息不应判重")
 	}
+	h.releaseTextMessageReservation(buildTextDedupKey("user-1", "ctx-1", "继续"))
 	if h.isDuplicateTextMessage("user-1", "ctx-1", "route-1", "继续") {
 		t.Fatal("没有活动任务时，合法重复消息不应被吞")
 	}
+	h.releaseTextMessageReservation(buildTextDedupKey("user-1", "ctx-1", "继续"))
 	task, _, started := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{
 		owner: "user-1", routeUserID: "route-1", message: "继续",
 	})
@@ -27,6 +29,19 @@ func TestTextDedupOnlyBlocksMatchingActiveTask(t *testing.T) {
 	if h.isDuplicateTextMessage("user-1", "ctx-1", "route-1", "继续") {
 		t.Fatal("任务结束后应允许再次发送相同文本")
 	}
+	h.releaseTextMessageReservation(buildTextDedupKey("user-1", "ctx-1", "继续"))
+}
+
+func TestTextDedupReservesBeforeTaskAdmission(t *testing.T) {
+	h := NewHandler(nil, nil)
+	if h.isDuplicateTextMessage("user-1", "ctx-1", "route-1", "并发任务") {
+		t.Fatal("首次消息不应判重")
+	}
+	// 第一条消息已经通过 prepare、但尚未来得及登记 active task 时，第二条
+	// 同文投递也必须被 reservation 拦截，不能同时穿过任务准入窗口。
+	if !h.isDuplicateTextMessage("user-1", "ctx-1", "route-1", "并发任务") {
+		t.Fatal("任务准入前的并发重复投递应被 reservation 拦截")
+	}
 }
 
 func TestTextDedupDoesNotCrossRoutesOrTruncatedPrefixes(t *testing.T) {
@@ -36,6 +51,7 @@ func TestTextDedupDoesNotCrossRoutesOrTruncatedPrefixes(t *testing.T) {
 	if h.isDuplicateTextMessage("user-1", "ctx-1", "route-1", first) {
 		t.Fatal("首次消息不应判重")
 	}
+	h.releaseTextMessageReservation(buildTextDedupKey("user-1", "ctx-1", first))
 	task, _, _ := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{
 		owner: "user-1", routeUserID: "route-1", message: first,
 	})

@@ -12,13 +12,14 @@ import (
 )
 
 type platformMessageRuntime struct {
-	ctx         context.Context
-	msg         platform.IncomingMessage
-	reply       platform.Replier
-	routeUserID string
-	text        string
-	clientID    string
-	trace       observability.TraceContext
+	ctx                  context.Context
+	msg                  platform.IncomingMessage
+	reply                platform.Replier
+	routeUserID          string
+	text                 string
+	clientID             string
+	trace                observability.TraceContext
+	textDedupReservation string
 }
 
 // sendText 向真实发送者回复文本，不使用会话路由键替代用户 ID。
@@ -102,6 +103,7 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 		command.Value[platform.ChoiceMetadataInteractionKind],
 		command.Value["approval_key"], command.Value["choice"],
 	) {
+		h.auditApprovalDecision(runtime, "approval_card_decision", command.Value["choice"])
 		reportCardActionResult(command, platform.CardActionResultConsumed)
 		return true
 	}
@@ -118,13 +120,14 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platformMessageRuntime, bool) {
 	switch h.consumePendingApprovalText(runtime.msg.UserID, runtime.routeUserID, runtime.text) {
 	case approvalTextConsumed:
+		h.auditApprovalDecision(runtime, "approval_text_decision", runtime.text)
 		return runtime, false
 	case approvalTextAmbiguous:
 		runtime.sendText("当前有多个待审批操作，无法判断这条回复对应哪一个。请点击目标审批卡片中的按钮。")
 		return runtime, false
 	}
 	prepared, ok := h.preparePlatformAttachments(runtime)
-	if !ok || !h.acceptPreparedPlatformText(prepared) {
+	if !ok || !h.acceptPreparedPlatformText(&prepared) {
 		return prepared, false
 	}
 	prepared.clientID = NewClientID()
@@ -136,6 +139,27 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 	log.Printf("[handler] received from %s: %s", prepared.msg.UserID, traceSummaryForIncoming(prepared.msg, prepared.text))
 	h.recordTraceStage(prepared.trace, "message.accepted", "accepted", traceSummaryForIncoming(prepared.msg, prepared.text))
 	return prepared, true
+}
+
+func (h *Handler) auditApprovalDecision(runtime platformMessageRuntime, action string, choice string) {
+	h.auditRecord(auditEntry{
+		Platform: string(runtime.msg.Platform), User: runtime.msg.UserID, Action: action,
+		Summary: "decision=" + approvalDecisionAuditValue(choice),
+	})
+}
+
+func approvalDecisionAuditValue(choice string) string {
+	normalized := strings.ToLower(strings.TrimSpace(choice))
+	switch {
+	case strings.Contains(normalized, "deny"), strings.Contains(normalized, "decline"),
+		strings.Contains(normalized, "reject"), strings.Contains(normalized, "拒绝"):
+		return "deny"
+	case strings.Contains(normalized, "allow"), strings.Contains(normalized, "approve"),
+		strings.Contains(normalized, "accept"), strings.Contains(normalized, "允许"):
+		return "allow"
+	default:
+		return "other"
+	}
 }
 
 // preparePlatformAttachments 将文件和图片转换为 Agent 可消费文本。
@@ -158,7 +182,7 @@ func (h *Handler) preparePlatformAttachments(runtime platformMessageRuntime) (pl
 }
 
 // acceptPreparedPlatformText 处理纯图片保存、空消息和无消息 ID 的文本去重。
-func (h *Handler) acceptPreparedPlatformText(runtime platformMessageRuntime) bool {
+func (h *Handler) acceptPreparedPlatformText(runtime *platformMessageRuntime) bool {
 	if runtime.text == "" {
 		if image, ok := firstAttachment(runtime.msg.Attachments, platform.AttachmentImage); ok && h.saveDirectory() != "" {
 			h.handleImageAttachmentSave(runtime.ctx, runtime.msg.UserID, runtime.reply, image)
@@ -170,7 +194,9 @@ func (h *Handler) acceptPreparedPlatformText(runtime platformMessageRuntime) boo
 	if runtime.msg.MessageID != "" && runtime.msg.MessageID != "0" {
 		return true
 	}
-	if !h.isDuplicateTextMessage(runtime.msg.UserID, runtime.msg.ContextToken, runtime.routeUserID, runtime.text) {
+	reservation, duplicate := h.reserveTextMessage(runtime.msg.UserID, runtime.msg.ContextToken, runtime.routeUserID, runtime.text)
+	if !duplicate {
+		runtime.textDedupReservation = reservation
 		return true
 	}
 	runtime.sendText(duplicateTaskReply())
@@ -189,8 +215,8 @@ func (h *Handler) dispatchPlatformMessage(runtime platformMessageRuntime) {
 	}) {
 		return
 	}
-	if !h.allowAgentInvocation(runtime.routeUserID) {
-		log.Printf("[handler] rate limit exceeded for %s", runtime.routeUserID)
+	if !h.allowAgentInvocation(runtime.msg.Platform, runtime.msg.AccountID, runtime.msg.UserID) {
+		log.Printf("[handler] rate limit exceeded for %s", agentRateLimitKey(runtime.msg.Platform, runtime.msg.AccountID, runtime.msg.UserID))
 		runtime.sendText("请求过于频繁，请稍后再试。")
 		return
 	}

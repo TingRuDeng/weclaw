@@ -47,6 +47,33 @@ func ValidateDir(path string) error {
 	return nil
 }
 
+// RepairPermissions tightens an existing current-user-owned secure file and
+// its parent directory without changing file contents. Missing files remain
+// missing so callers can preserve their normal not-found behavior.
+func RepairPermissions(path string) error {
+	dir := filepath.Dir(path)
+	if err := EnsureDir(dir); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect secure file: %w", err)
+	}
+	if err := validateFileInfo(info, false); err != nil {
+		return err
+	}
+	if info.Mode().Perm() == 0o600 {
+		return nil
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("chmod secure file: %w", err)
+	}
+	return nil
+}
+
 // Read opens a protected file without following its final symlink and requires mode 0600.
 func Read(path string) ([]byte, error) {
 	return read(path, true)

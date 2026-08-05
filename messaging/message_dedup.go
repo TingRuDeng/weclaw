@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+type textDedupEntry struct {
+	seenAt   time.Time
+	reserved bool
+}
+
 // cleanSeenMsgs 清理超过 TTL 的消息去重缓存。
 func (h *Handler) cleanSeenMsgs(ttl time.Duration) {
 	if ttl <= 0 {
@@ -20,7 +25,8 @@ func (h *Handler) cleanSeenMsgs(ttl time.Duration) {
 		return true
 	})
 	h.seenTextMsgs.Range(func(key, value any) bool {
-		if t, ok := value.(time.Time); ok && t.Before(cutoff) {
+		entry, ok := value.(textDedupEntry)
+		if ok && !entry.reserved && entry.seenAt.Before(cutoff) {
 			h.seenTextMsgs.Delete(key)
 		}
 		return true
@@ -46,23 +52,64 @@ func (h *Handler) duplicateTTL() time.Duration {
 }
 
 func (h *Handler) isDuplicateTextMessage(userID string, contextToken string, routeUserID string, text string) bool {
+	_, duplicate := h.reserveTextMessage(userID, contextToken, routeUserID, text)
+	return duplicate
+}
+
+// reserveTextMessage 在 prepare 阶段原子占住无稳定 MessageID 的文本。reservation
+// 持续到 dispatch 返回，覆盖文本去重检查与 active task 登记之间的准入窗口。
+func (h *Handler) reserveTextMessage(userID string, contextToken string, routeUserID string, text string) (string, bool) {
 	key := buildTextDedupKey(userID, contextToken, text)
 	if key == "" {
-		return false
+		return "", false
 	}
 	now := time.Now()
-	if seenAt, loaded := h.seenTextMsgs.LoadOrStore(key, now); loaded {
-		if t, ok := seenAt.(time.Time); ok && now.Sub(t) <= h.duplicateTTL() {
-			if h.hasMatchingActiveTextTask(userID, routeUserID, text) {
-				return true
-			}
-			h.seenTextMsgs.Store(key, now)
-			return false
+	reserved := textDedupEntry{seenAt: now, reserved: true}
+	for {
+		seen, loaded := h.seenTextMsgs.LoadOrStore(key, reserved)
+		if !loaded {
+			h.maybeCleanSeenMsgs(now)
+			return key, false
 		}
-		h.seenTextMsgs.Store(key, now)
+		entry, ok := seen.(textDedupEntry)
+		if !ok {
+			if h.seenTextMsgs.CompareAndSwap(key, seen, reserved) {
+				h.maybeCleanSeenMsgs(now)
+				return key, false
+			}
+			continue
+		}
+		if entry.reserved {
+			return "", true
+		}
+		if now.Sub(entry.seenAt) <= h.duplicateTTL() && h.hasMatchingActiveTextTask(userID, routeUserID, text) {
+			return "", true
+		}
+		if h.seenTextMsgs.CompareAndSwap(key, entry, reserved) {
+			h.maybeCleanSeenMsgs(now)
+			return key, false
+		}
 	}
-	h.maybeCleanSeenMsgs(now)
-	return false
+}
+
+func (h *Handler) releaseTextMessageReservation(key string) {
+	if key == "" {
+		return
+	}
+	for {
+		seen, ok := h.seenTextMsgs.Load(key)
+		if !ok {
+			return
+		}
+		entry, ok := seen.(textDedupEntry)
+		if !ok || !entry.reserved {
+			return
+		}
+		released := textDedupEntry{seenAt: time.Now()}
+		if h.seenTextMsgs.CompareAndSwap(key, entry, released) {
+			return
+		}
+	}
 }
 
 // hasMatchingActiveTextTask 只在同一用户的对应任务仍运行时拦截无消息 ID 的重复投递。
