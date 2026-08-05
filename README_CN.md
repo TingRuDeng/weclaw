@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
-通过微信和飞书远程使用本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果。Codex 在本机只运行一个共享 app-server，微信和飞书窗口都是绑定 workspace/thread 的前端客户端。
+通过微信和飞书远程使用本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果。Codex 始终只保留一个 Host 写入权威；Codex App 已运行时，WeClaw 可通过 Desktop IPC 复用同一上下文。
 
 > 当前正式 Release 支持 **macOS Apple Silicon / Intel（darwin/arm64、darwin/amd64）** 和 **Linux arm64 / amd64**。Windows 暂不提供正式资产。
 
@@ -17,7 +17,7 @@
 - **远程接管本地任务**：离开电脑后，从微信或飞书继续 Codex、Claude 会话。
 - **上下文不中断**：复用 Codex workspace/thread 和 Claude ACP session，不把每条消息当成新对话。
 - **过程可见、结果可达**：飞书使用 CardKit 实时更新，微信提供输入状态和任务结果。
-- **单一 Codex 运行边界**：所有远程窗口连接同一个 app-server；窗口只保存会话绑定，同一 thread 的活动 turn 由服务端串行化。
+- **单一 Codex 运行边界**：Codex App 或共享 app-server 二选一成为 Host；窗口只保存会话绑定，同一 thread 的活动 turn 由服务端串行化。
 - **安全边界可配置**：用户白名单、工作目录白名单、管理员权限、审计日志和 Codex 权限档位均可独立配置。
 
 ## 快速开始
@@ -56,7 +56,7 @@ weclaw status
 
 选择已有会话或发送 `/cx new` 后即可直接发送任务。没有有效会话绑定时，普通消息只会提示选择会话或发送 `/cx new`，不会隐式创建或绑定会话。
 
-### 使用共享 Codex app-server
+### 同时使用 Codex App 与 WeClaw
 
 ```text
 /cx ls                 # 查看本机已有 workspace 和 thread
@@ -64,9 +64,11 @@ weclaw status
 /cx status             # 查看当前工作空间、会话、任务、账号和运行状态
 ```
 
-WeClaw 为原生 `codex app-server` 建立稳定 Unix socket，并按上游协议通过 WebSocket-over-UDS 连接；该 socket 不是裸 JSONL 流。默认 `codex_host_mode: auto` 会优先连接或启动官方 standalone 安装提供的 `codex app-server daemon`；未安装 standalone 时保留 WeClaw 自管 Host 兼容路径。之后的微信、飞书或其他 WeClaw 前端复用同一服务。每个窗口独立持久化 workspace/thread 绑定，多个窗口可以绑定同一 thread，但同一 thread 同时只允许一个活动 turn。运行通道断开不会清除窗口绑定；已提交 turn 的 writer 门禁会保留到权威终态确认，下一次操作会重新连接共享 host。旧版 Codex owner 状态会在加载时丢弃，旧 `type: companion` 配置会迁移为共享 app-server；`weclaw companion --agent codex` 会立即拒绝，不能用它启动第二个 Codex writer。
+macOS 默认 `codex_host_mode: auto` 下，如果启动 WeClaw 时 Codex App 已运行，WeClaw 会通过受保护的 Desktop IPC 复用 App 的 Host，不再启动第二个 app-server；App 不在时，才连接或启动官方 standalone daemon（不可用时使用 WeClaw 自管兼容 Host）。如果共享 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；无法确认空闲或 App 存在但 IPC 不可达时直接失败，不会并行写入。
 
-`/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 已停用，因为它们会启动独立 Codex writer。当前版本也不把单独运行的 Codex Desktop 当作共享 host 客户端；若需要本地界面，应由该界面连接同一个 app-server，而不是再启动第二个 app-server。
+App Host 支持选择已有会话、继续任务、进度、审批、`/guide`、`/stop`，以及修改当前 thread 的模型和推理强度。Desktop IPC 暂未暴露新建/归档会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 会明确拒绝且保留当前绑定。
+
+`/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用；它们会额外启动进程，而默认 auto 拓扑已经能安全复用正在运行的 Codex App。
 
 ### 安全切换 Codex OAuth 账号
 
@@ -149,7 +151,7 @@ flowchart LR
     WeChat --> Bridge[WeClaw]
     Feishu --> Bridge
     Bridge --> Core[会话绑定 · 任务队列 · 审批 · 进度]
-    Core --> Codex[单一共享 Codex app-server]
+    Core --> Codex[单一 Codex Host 权威]
     Core --> Claude[单一共享 ClaudeHost]
     Core --> Other[其他 ACP / HTTP / Companion Agent]
     Codex --> Bindings[多个 frontend binding]
@@ -175,7 +177,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 
 | Agent | 远程后端 | 会话复用 | 模型 / 推理强度 | 独立 writer |
 | --- | --- | :---: | :---: | --- |
-| Codex | 单一共享 app-server | workspace + thread | ✅ | 不启动独立 writer |
+| Codex | Codex App IPC / 共享 app-server | workspace + thread | ✅ | 不启动独立 writer |
 | Claude | 单一共享 ClaudeHost（ACP） | ACP session + writer lease | ✅ | 禁止 |
 | OpenCode | Companion | 取决于本地连接 | 取决于 Agent | 可见终端 |
 | 其他 Agent | ACP / HTTP / Companion | 取决于协议能力 | 取决于 Agent | 取决于配置 |

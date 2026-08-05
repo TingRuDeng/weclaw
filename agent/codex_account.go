@@ -140,6 +140,9 @@ func (a *ACPAgent) CurrentCodexAccount(ctx context.Context, withQuota bool) (Cod
 }
 
 func (a *ACPAgent) SaveCodexAccount(ctx context.Context, options CodexAccountSaveOptions) (CodexAccountProfile, error) {
+	if err := a.requireCodexSharedHostCapability("保存运行账号"); err != nil {
+		return CodexAccountProfile{}, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "Codex App 运行期间不能保存 shared Host 账号", err)
+	}
 	if !a.codexAdmissionMu.TryLock() {
 		return CodexAccountProfile{}, mapCodexAccountBusy(ErrCodexWriterBusy)
 	}
@@ -308,6 +311,9 @@ func (a *ACPAgent) DoctorCodexAccounts(ctx context.Context) codexauth.DoctorResu
 }
 
 func (a *ACPAgent) UseCodexAccount(ctx context.Context, reference string, expectedRevision uint64) (result CodexAccountSwitchResult, err error) {
+	if capabilityErr := a.requireCodexSharedHostCapability("切换运行账号"); capabilityErr != nil {
+		return result, codexauth.NewError(codexauth.CodeRuntimeUnavailable, "请先在 Codex App 中切换账号", capabilityErr)
+	}
 	if !a.codexAdmissionMu.TryLock() {
 		return result, mapCodexAccountBusy(ErrCodexWriterBusy)
 	}

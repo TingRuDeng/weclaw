@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
-Use local Codex and Claude remotely from WeChat or Feishu while keeping real workspace and session context, live progress, approvals, and results. Codex runs as one shared local app-server; WeChat and Feishu windows are frontend clients bound to a workspace/thread.
+Use local Codex and Claude remotely from WeChat or Feishu while keeping real workspace and session context, live progress, approvals, and results. Codex always has one authoritative Host; when Codex App is already running, WeClaw reuses its context through Desktop IPC.
 
 > Official releases support **macOS Apple Silicon / Intel (darwin/arm64 and darwin/amd64)** plus **Linux arm64 / amd64**. Windows assets are not currently published.
 
@@ -17,7 +17,7 @@ Use local Codex and Claude remotely from WeChat or Feishu while keeping real wor
 - **Take over local work remotely**: continue Codex and Claude sessions from WeChat or Feishu after leaving your computer.
 - **Keep the original context**: reuse Codex workspaces/threads and Claude ACP sessions instead of starting a new conversation for every message.
 - **See progress and receive results**: Feishu uses CardKit updates, while WeChat provides typing state and task results.
-- **Use one Codex runtime boundary**: every remote window connects to the same app-server; windows keep session bindings, while the server serializes active turns on each thread.
+- **Use one Codex runtime boundary**: either Codex App or the shared app-server is the Host; windows keep session bindings, while the Host serializes active turns on each thread.
 - **Configure security boundaries**: user allowlists, workspace roots, admin access, audit logs, and Codex permission levels are independent controls.
 
 ## Quick Start
@@ -56,7 +56,7 @@ Inspect the current project and fix the failing tests
 
 After selecting an existing session or sending `/cx new`, send the task directly. Without a valid session binding, a regular message only asks the user to select a session or send `/cx new`; it never creates or binds a session implicitly.
 
-### Use the Shared Codex app-server
+### Use Codex App and WeClaw Together
 
 ```text
 /cx ls                 # List existing local workspaces and threads
@@ -64,9 +64,11 @@ After selecting an existing session or sending `/cx new`, send the task directly
 /cx status             # Inspect the current workspace, session, task, account, and runtime
 ```
 
-WeClaw exposes native `codex app-server` through a stable Unix socket and connects with the upstream WebSocket-over-UDS protocol; the socket is not a raw JSONL stream. The default `codex_host_mode: auto` first uses the official `codex app-server daemon` when a managed standalone installation is available, and otherwise keeps the WeClaw-managed compatibility host. WeChat, Feishu, and other WeClaw frontends then reuse that service. Each window persists its own workspace/thread binding. Multiple windows may bind the same thread, but only one turn may write to that thread at a time. A transport disconnect does not clear a frontend binding; an accepted turn keeps its writer guard until authoritative terminal confirmation, and the next operation reconnects to the shared host. Legacy Codex owner state is discarded on load, and legacy `type: companion` configuration migrates to the shared app-server; `weclaw companion --agent codex` fails immediately so it cannot start a second Codex writer.
+With the default `codex_host_mode: auto` on macOS, WeClaw uses protected Desktop IPC when Codex App is already running and does not start a second app-server. When the App is absent, it connects to or starts the official standalone daemon, with the WeClaw-managed Host as the compatibility backend. If a shared Host is already active, WeClaw switches to a newly detected App only after every thread is globally idle and no writer lease exists. An ambiguous App endpoint or non-idle Host fails closed and never falls back to parallel writes.
 
-`/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` are disabled because they would start an independent Codex writer. This version also does not treat a separately launched Codex Desktop as a shared-host client; a future local UI must connect to this same app-server rather than start a second one.
+The App Host supports selecting existing sessions, turns, progress, approvals, `/guide`, `/stop`, and current-thread model or reasoning changes. Desktop IPC does not currently expose session creation/archive, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` fails clearly in App mode without deleting the current binding.
+
+`/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` remain disabled because they launch extra processes; the default auto topology already reuses a running Codex App safely.
 
 ### Switch Codex OAuth Accounts Safely
 
@@ -151,7 +153,7 @@ flowchart LR
     WeChat --> Bridge[WeClaw]
     Feishu --> Bridge
     Bridge --> Core[Session Binding · Task Queue · Approval · Progress]
-    Core --> Codex[Single shared Codex app-server]
+    Core --> Codex[Single authoritative Codex Host]
     Core --> Claude[Single shared ClaudeHost]
     Core --> Other[Other ACP / HTTP / Companion Agents]
     Codex --> Bindings[Multiple frontend bindings]
@@ -177,7 +179,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 
 | Agent | Remote Backend | Session Reuse | Model / Reasoning | Independent Writer |
 | --- | --- | :---: | :---: | --- |
-| Codex | Single shared app-server | Workspace + thread | Yes | No independent writer |
+| Codex | Codex App IPC / shared app-server | Workspace + thread | Yes | No independent writer |
 | Claude | Single shared ClaudeHost (ACP) | ACP session + writer lease | Yes | Disabled |
 | OpenCode | Companion | Depends on local connection | Agent-dependent | Visible terminal |
 | Other agents | ACP / HTTP / Companion | Protocol-dependent | Agent-dependent | Configuration-dependent |

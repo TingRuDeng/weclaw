@@ -635,6 +635,39 @@ func TestRunCodexTurnRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
 	}
 }
 
+func TestDesktopBridgeRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-existing",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	turnStartCalls := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method == "turn/start" {
+			turnStartCalls++
+		}
+		return nil, fmt.Errorf("unexpected rpc method %s", method)
+	}
+
+	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "不能重叠执行",
+	})
+
+	if !errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("RunCodexTurn error=%v, want ErrCodexWriterBusy", err)
+	}
+	if turnStartCalls != 0 {
+		t.Fatalf("turn/start calls=%d, want 0", turnStartCalls)
+	}
+}
+
 func TestRunCodexTurnRetainsWriterLeaseAfterObservationDisconnect(t *testing.T) {
 	a, request, _ := sharedHostObservationLossFixture(t)
 

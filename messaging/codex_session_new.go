@@ -79,6 +79,11 @@ func (h *Handler) restoreCodexSessionCreateFailure(failure codexSessionCreateFai
 	result := codexSessionCreateResult{
 		createdThread: failure.createdThread, acquireTried: failure.acquireTried,
 	}
+	// Desktop IPC 会在 ResetSession 修改 conversation mapping 之前返回能力错误。
+	// 此时继续调用 UseCodexThread 既无补偿对象，也可能把确定失败误报为恢复不确定。
+	if failure.createdThread == "" && errors.Is(failure.cause, agent.ErrCodexDesktopCapabilityUnavailable) {
+		return result, failure.cause
+	}
 	restoreErr := restoreCodexSessionAfterCreateFailure(codexSessionRestoreRequest{
 		ctx: failure.createRequest.acquire.ctx, agent: failure.threadAgent,
 		conversationID:   failure.createRequest.acquire.route.conversationID,

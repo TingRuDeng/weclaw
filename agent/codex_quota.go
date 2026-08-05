@@ -13,6 +13,9 @@ func (a *ACPAgent) ReadCodexQuota(ctx context.Context) (CodexQuota, error) {
 	if a.protocol != protocolCodexAppServer {
 		return CodexQuota{}, fmt.Errorf("当前 Agent 不支持 Codex 额度查询")
 	}
+	if err := a.requireCodexSharedHostCapability("查询在线额度"); err != nil {
+		return CodexQuota{}, err
+	}
 	result, err := a.rpc(ctx, "account/rateLimits/read", json.RawMessage("null"))
 	if err != nil {
 		return CodexQuota{}, err

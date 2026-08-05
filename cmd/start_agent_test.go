@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -38,8 +39,24 @@ func TestACPAgentConfigFromConfigPassesCodexHostMode(t *testing.T) {
 	if got.CodexHostMode != "daemon" {
 		t.Fatalf("CodexHostMode=%q, want daemon", got.CodexHostMode)
 	}
+	if got.CodexDesktopBridge {
+		t.Fatal("explicit daemon mode must not enable the Codex Desktop bridge")
+	}
 	if defaulted := acpAgentConfigFromConfig("codex", config.AgentConfig{}).CodexHostMode; defaulted != "auto" {
 		t.Fatalf("default CodexHostMode=%q, want auto", defaulted)
+	}
+	auto := acpAgentConfigFromConfig("codex", config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+	})
+	if auto.CodexDesktopBridge != (runtime.GOOS == "darwin") {
+		t.Fatalf("CodexDesktopBridge=%v, want Darwin-only auto bridge", auto.CodexDesktopBridge)
+	}
+	custom := acpAgentConfigFromConfig("codex", config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		AppServerSocket: "/tmp/codex.sock",
+	})
+	if custom.CodexDesktopBridge {
+		t.Fatal("custom app-server socket must keep the explicitly selected shared Host")
 	}
 }
 

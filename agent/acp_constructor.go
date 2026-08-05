@@ -20,9 +20,10 @@ func detectACPProtocol(command string, args []string) string {
 }
 
 type acpAgentOptions struct {
-	desktopProbe codexDesktopOwnerProbe
-	protocol     string
-	stateFile    string
+	desktopProbe  codexDesktopOwnerProbe
+	desktopBridge bool
+	protocol      string
+	stateFile     string
 }
 
 // NewACPAgent creates a new ACP agent.
@@ -47,6 +48,9 @@ func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	}
 	options.protocol = protocol
 	options.stateFile = stateFile
+	if cfg.CodexDesktopBridge {
+		options.desktopBridge = true
+	}
 	a := buildACPAgent(cfg, options)
 	a.configureCodexRuntime(options.desktopProbe)
 	a.loadState()
@@ -88,6 +92,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		notifyCh:                   make(map[string]chan *sessionUpdate),
 		turnCh:                     make(map[string]chan *codexTurnEvent),
 		desktopProbe:               options.desktopProbe,
+		codexDesktopBridge:         options.desktopBridge,
 		appServerGate:              newCodexAppServerGate(),
 		protocolTrace:              cfg.ProtocolTrace,
 	}
@@ -96,14 +101,22 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 }
 
 // configureCodexRuntime 为原生 app-server 装配 thread 绑定与 writer lease。
-// 生产路径只连接共享 host；显式 probe 仅保留给旧 Desktop adapter 的隔离测试。
+// 默认 macOS auto 拓扑恢复 Desktop IPC；显式 probe 继续供隔离测试使用。
 func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 	if a.protocol != protocolCodexAppServer {
 		return
 	}
+	if probe == nil && a.codexDesktopBridge {
+		probe = newSystemCodexDesktopRuntime()
+	}
 	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
 	if probe == nil {
 		return
+	}
+	// 生产 bridge 仍沿用“多 frontend binding + 单 thread lease”，不恢复
+	// 已退役的 route 独占 owner；测试注入默认保留旧控制语义。
+	if a.codexDesktopBridge {
+		a.codexOwners.enforceControl = false
 	}
 	a.desktopProbe = probe
 	if runtime, ok := probe.(*codexDesktopRuntime); ok {
@@ -113,6 +126,10 @@ func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 		return
 	}
 	a.desktopRuntime.setOwnerRegistry(a.codexOwners)
+	a.desktopRuntime.setAuthoritative(func() bool {
+		return a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop
+	})
+	a.desktopRuntime.setDisconnectHandler(a.handleCodexDesktopDisconnect)
 	a.desktopRuntime.setEventHandler(func(threadID string, events []*codexTurnEvent) {
 		for _, event := range events {
 			a.dispatchToTurnCh(threadID, event)

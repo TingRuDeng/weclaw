@@ -425,6 +425,63 @@ func TestHandoffCodexRuntimeRemoteIgnoresPartialCheckpoint(t *testing.T) {
 	}
 }
 
+func TestDesktopBridgeDoesNotFallbackWhileCodexAppIsPresent(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	restarted := false
+	a.restartCodexAppServerCall = func(context.Context) error {
+		restarted = true
+		return nil
+	}
+
+	_, err := a.HandoffCodexRuntime(context.Background(), remoteCodexRuntimeRequest("thread-1", "route-1", 1))
+
+	if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) {
+		t.Fatalf("HandoffCodexRuntime() error = %v, want ownership unknown", err)
+	}
+	if restarted {
+		t.Fatal("running Codex App must prevent fallback to a second app-server")
+	}
+}
+
+func TestDesktopBridgeStopsIdleSharedHostBeforeActivation(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+		CodexHostMode: "managed",
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	probe.loadHook = func(ref CodexThreadRef) {
+		a.codexOwners.observeDesktopSnapshot(ref.ThreadID, 1, CodexThreadState{ThreadID: ref.ThreadID})
+	}
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/list" {
+			t.Fatalf("unexpected RPC method %q", method)
+		}
+		return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+	}
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+
+	binding, err := a.InspectCodexRuntime(context.Background(), req)
+
+	if err != nil || !stopped || binding.Runtime != CodexRuntimeDesktop {
+		t.Fatalf("binding=%#v error=%v stopped=%v", binding, err, stopped)
+	}
+}
+
 func TestHandoffCodexRuntimeRejectsActiveWriter(t *testing.T) {
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),

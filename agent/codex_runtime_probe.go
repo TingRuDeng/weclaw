@@ -11,6 +11,12 @@ import (
 
 // InspectCodexRuntime 每次重新探测 Desktop，并同步已持久化的用户控制意图。
 func (a *ACPAgent) InspectCodexRuntime(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
+	a.codexAdmissionMu.Lock()
+	defer a.codexAdmissionMu.Unlock()
+	return a.inspectCodexRuntimeLocked(ctx, req)
+}
+
+func (a *ACPAgent) inspectCodexRuntimeLocked(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
@@ -18,6 +24,14 @@ func (a *ACPAgent) InspectCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 		return a.activateSharedCodexHost(ctx, req)
 	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{})
+	if runtime == CodexRuntimeDesktop && a.codexDesktopBridge {
+		if transitionErr := a.transitionCodexRuntimeToDesktop(ctx); transitionErr != nil {
+			if a.desktopRuntime != nil {
+				_ = a.desktopRuntime.disconnect()
+			}
+			return unknownCodexRuntimeSnapshot(req, state), transitionErr
+		}
+	}
 	binding, activateErr := a.codexOwners.activateRuntime(req, runtime, state)
 	if activateErr != nil {
 		return binding, activateErr
@@ -39,7 +53,7 @@ func (a *ACPAgent) CurrentCodexRuntime(req CodexRuntimeRequest) (CodexThreadBind
 		binding.Control = req.Intent
 		return binding, nil
 	}
-	if !sameCodexControlIntent(binding.Control, req.Intent) {
+	if a.codexOwners.enforcesControl() && !sameCodexControlIntent(binding.Control, req.Intent) {
 		if a.codexOwners.hasWriterLease(req.Ref.ThreadID) {
 			return binding, ErrCodexControlChanged
 		}
@@ -76,6 +90,12 @@ func unknownCodexRuntimeSnapshot(req CodexRuntimeRequest, state CodexThreadState
 
 // HandoffCodexRuntime 执行用户已明确选择的控制权移交，不替用户自动决定控制方。
 func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
+	a.codexAdmissionMu.Lock()
+	defer a.codexAdmissionMu.Unlock()
+	return a.handoffCodexRuntimeLocked(ctx, req)
+}
+
+func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
@@ -90,7 +110,7 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 	}
 	// thread/start/session resume 已经给出了当前 app-server 的本地 writer 证据。
 	// 窗口认领只需同步控制 revision，不应为此再次探测 Codex Desktop。
-	if req.Intent.Owner == CodexControlRemote {
+	if req.Intent.Owner == CodexControlRemote && !a.codexDesktopBridge {
 		if current, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok && current.Runtime == CodexRuntimeWeClaw {
 			binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, current.State)
 			if err == nil {
@@ -100,7 +120,8 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 		}
 	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{allowConflictRecovery: true})
-	if req.Intent.Owner == CodexControlRemote && canRecoverCodexRuntimeForRemoteOwner(err) {
+	if req.Intent.Owner == CodexControlRemote && canRecoverCodexRuntimeForRemoteOwner(err) &&
+		(!a.codexDesktopBridge || desktopHostDefinitelyAbsent(a.desktopProbe)) {
 		log.Printf("[codex-runtime] remote owner 忽略 Desktop 探测不确定状态 thread=%q: %v", req.Ref.ThreadID, err)
 		runtime, err = CodexRuntimeUnknown, nil
 	}
@@ -109,6 +130,14 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 	}
 	if req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict {
 		runtime = CodexRuntimeDesktop
+	}
+	if runtime == CodexRuntimeDesktop && a.codexDesktopBridge {
+		if transitionErr := a.transitionCodexRuntimeToDesktop(ctx); transitionErr != nil {
+			if a.desktopRuntime != nil {
+				_ = a.desktopRuntime.disconnect()
+			}
+			return CodexThreadBinding{}, transitionErr
+		}
 	}
 	if req.Intent.Owner == CodexControlDesktop || runtime != CodexRuntimeUnknown {
 		return a.codexOwners.activateRuntime(req, runtime, state)
@@ -196,7 +225,18 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 	if a.desktopProbe == nil {
 		return CodexRuntimeUnknown, current.State, ErrCodexDesktopOwnershipUnknown
 	}
+	if a.codexDesktopBridge && desktopHostDefinitelyAbsent(a.desktopProbe) {
+		if current.Runtime == CodexRuntimeWeClaw {
+			return CodexRuntimeWeClaw, current.State, nil
+		}
+		return CodexRuntimeUnknown, current.State, nil
+	}
 	loadErr := a.desktopProbe.LoadHistory(ctx, req.Ref)
+	if a.codexDesktopBridge && loadErr == nil && a.desktopRuntime != nil {
+		if state, stateErr := a.desktopRuntime.threadState(req.Ref.ThreadID); stateErr == nil {
+			return CodexRuntimeDesktop, state, nil
+		}
+	}
 	if binding, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok {
 		if binding.Runtime == CodexRuntimeConflict {
 			if opts.allowConflictRecovery && desktopReleaseConfirmed(a.desktopProbe, loadErr) {
@@ -208,7 +248,11 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 			return CodexRuntimeDesktop, binding.State, nil
 		}
 	}
-	if desktopReleaseConfirmed(a.desktopProbe, loadErr) {
+	released := desktopReleaseConfirmed(a.desktopProbe, loadErr)
+	if a.codexDesktopBridge {
+		released = desktopHostDefinitelyAbsent(a.desktopProbe)
+	}
+	if released {
 		if current.Runtime == CodexRuntimeWeClaw {
 			return CodexRuntimeWeClaw, current.State, nil
 		}
@@ -235,6 +279,9 @@ func codexProbeError(loadErr error) error {
 func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	if err := a.restartCodexAppServer(ctx); err != nil {
 		return CodexThreadBinding{}, err
+	}
+	if a.codexDesktopBridge && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+		return CodexThreadBinding{}, ErrCodexRuntimeUnavailable
 	}
 	if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
 		return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)

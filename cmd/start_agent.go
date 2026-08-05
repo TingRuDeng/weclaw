@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -135,28 +137,39 @@ func newACPAgentFromConfig(name string, agCfg config.AgentConfig, protocolTrace 
 
 func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTrace ...observability.ProtocolRecorder) agent.ACPAgentConfig {
 	result := agent.ACPAgentConfig{
-		ConfiguredName:   name,
-		Command:          agCfg.Command,
-		LocalCommand:     agCfg.LocalCommand,
-		Args:             agCfg.Args,
-		Cwd:              agCfg.Cwd,
-		Env:              agCfg.Env,
-		Model:            agCfg.Model,
-		Effort:           agCfg.Effort,
-		ApprovalPolicy:   agCfg.EffectiveApprovalPolicy(),
-		ApprovalReviewer: agCfg.EffectiveApprovalReviewer(),
-		SandboxMode:      agCfg.EffectiveSandboxMode(),
-		SystemPrompt:     agCfg.SystemPrompt,
-		AppServerSocket:  agCfg.AppServerSocket,
-		CodexHostMode:    agCfg.EffectiveCodexHostMode(),
-		CodexAutoUpdate:  agCfg.EffectiveCodexAutoUpdate(),
-		RunAsUser:        agCfg.RunAsUser,
-		RunAsEnv:         agCfg.RunAsEnv,
+		ConfiguredName:     name,
+		Command:            agCfg.Command,
+		LocalCommand:       agCfg.LocalCommand,
+		Args:               agCfg.Args,
+		Cwd:                agCfg.Cwd,
+		Env:                agCfg.Env,
+		Model:              agCfg.Model,
+		Effort:             agCfg.Effort,
+		ApprovalPolicy:     agCfg.EffectiveApprovalPolicy(),
+		ApprovalReviewer:   agCfg.EffectiveApprovalReviewer(),
+		SandboxMode:        agCfg.EffectiveSandboxMode(),
+		SystemPrompt:       agCfg.SystemPrompt,
+		AppServerSocket:    agCfg.AppServerSocket,
+		CodexHostMode:      agCfg.EffectiveCodexHostMode(),
+		CodexAutoUpdate:    agCfg.EffectiveCodexAutoUpdate(),
+		CodexDesktopBridge: codexDesktopBridgeEnabled(agCfg),
+		RunAsUser:          agCfg.RunAsUser,
+		RunAsEnv:           agCfg.RunAsEnv,
 	}
 	if len(protocolTrace) > 0 {
 		result.ProtocolTrace = protocolTrace[0]
 	}
 	return result
+}
+
+// codexDesktopBridgeEnabled 只为原生 Codex 的默认 auto 拓扑启用 App IPC。
+// 显式 Host、socket 或 run_as_user 配置始终保持用户选定的共享 Host。
+func codexDesktopBridgeEnabled(agCfg config.AgentConfig) bool {
+	return runtime.GOOS == "darwin" &&
+		isCodexAppServerAgent(agCfg) &&
+		agCfg.EffectiveCodexHostMode() == "auto" &&
+		strings.TrimSpace(agCfg.AppServerSocket) == "" &&
+		strings.TrimSpace(agCfg.RunAsUser) == ""
 }
 
 // isCodexAppServerAgent 判断配置是否启动 Codex app-server 协议。

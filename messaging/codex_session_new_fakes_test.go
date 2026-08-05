@@ -18,6 +18,7 @@ type fakeCodexSessionCreateAgent struct {
 	resetConversation string
 	resetEntered      chan struct{}
 	resetRelease      <-chan struct{}
+	resetKeepsMapping bool
 	rejectCanceledUse bool
 	useContextErrors  []error
 	conflictMarks     []string
@@ -42,8 +43,11 @@ func (f *fakeCodexSessionCreateAgent) ResetSession(ctx context.Context, conversa
 	if err := waitCodexLiveTestHook(ctx, release); err != nil {
 		return "", err
 	}
-	// 真实 ACP 在创建失败或成功时都可能已改变旧 conversation mapping。
-	f.fakeCodexThreadAgent.threadID = created
+	// 真实 ACP 在创建失败或成功时都可能已改变旧 conversation mapping；
+	// 明确的前置能力错误则会在任何 mapping 写入前返回。
+	if !f.resetKeepsMapping {
+		f.fakeCodexThreadAgent.threadID = created
+	}
 	return created, resetErr
 }
 

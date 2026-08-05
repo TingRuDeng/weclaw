@@ -13,18 +13,24 @@ import (
 const codexDesktopStateApplyTimeout = 10 * time.Second
 
 type codexDesktopRuntime struct {
-	mu       sync.Mutex
-	client   *codexDesktopClient
-	state    *codexDesktopStateStore
-	actions  *codexDesktopActions
-	owners   *codexRuntimeOwnerRegistry
-	onEvents func(string, []*codexTurnEvent)
-	tracked  map[string]bool
+	mu            sync.Mutex
+	client        *codexDesktopClient
+	state         *codexDesktopStateStore
+	actions       *codexDesktopActions
+	owners        *codexRuntimeOwnerRegistry
+	presence      func() (bool, bool)
+	authoritative func() bool
+	onDisconnect  func()
+	onEvents      func(string, []*codexTurnEvent)
+	tracked       map[string]bool
 }
 
 // newCodexDesktopRuntime 创建尚未连接 socket 的懒初始化 runtime。
 func newCodexDesktopRuntime() *codexDesktopRuntime {
-	return &codexDesktopRuntime{tracked: make(map[string]bool)}
+	return &codexDesktopRuntime{
+		presence: codexDesktopPresence,
+		tracked:  make(map[string]bool),
+	}
 }
 
 // setOwnerRegistry 建立 snapshot 到 owner registry 的单向通知。
@@ -32,6 +38,34 @@ func (r *codexDesktopRuntime) setOwnerRegistry(owners *codexRuntimeOwnerRegistry
 	r.mu.Lock()
 	r.owners = owners
 	r.mu.Unlock()
+}
+
+// setAuthoritative 决定 Desktop 广播当前是否可更新 Host 级 runtime 权威。
+func (r *codexDesktopRuntime) setAuthoritative(authoritative func() bool) {
+	r.mu.Lock()
+	r.authoritative = authoritative
+	r.mu.Unlock()
+}
+
+// setDisconnectHandler 在 IPC 丢失后同步 Host 级 runtime 模式。
+func (r *codexDesktopRuntime) setDisconnectHandler(handler func()) {
+	r.mu.Lock()
+	r.onDisconnect = handler
+	r.mu.Unlock()
+}
+
+func (r *codexDesktopRuntime) connect(ctx context.Context) error {
+	return r.ensureInitialized().Connect(ctx)
+}
+
+func (r *codexDesktopRuntime) disconnect() error {
+	r.mu.Lock()
+	client := r.client
+	r.mu.Unlock()
+	if client == nil {
+		return nil
+	}
+	return client.Disconnect()
 }
 
 // setEventHandler 注入 ACPAgent 的统一 turn event 分发器。
@@ -89,6 +123,16 @@ func (r *codexDesktopRuntime) interruptTurn(ctx context.Context, threadID string
 	return actions.interruptTurn(ctx, threadID, turnID)
 }
 
+func (r *codexDesktopRuntime) updateThreadSettings(ctx context.Context, threadID string, settings map[string]any) error {
+	r.mu.Lock()
+	actions := r.actions
+	r.mu.Unlock()
+	if actions == nil {
+		return ErrCodexDesktopUnavailable
+	}
+	return actions.updateThreadSettings(ctx, threadID, settings)
+}
+
 // ensureInitialized 首次使用时才创建 IPC client、actions 和 state store。
 func (r *codexDesktopRuntime) ensureInitialized() *codexDesktopClient {
 	r.mu.Lock()
@@ -117,10 +161,13 @@ func (r *codexDesktopRuntime) ensureInitialized() *codexDesktopClient {
 // handleDisconnect 只降级实际运行位置；持久化远程控制方继续保持不变。
 func (r *codexDesktopRuntime) handleDisconnect(cause error) {
 	r.mu.Lock()
-	owners := r.owners
+	owners, onDisconnect := r.owners, r.onDisconnect
 	r.mu.Unlock()
 	if owners != nil {
 		owners.markDesktopDisconnected()
+	}
+	if onDisconnect != nil {
+		onDisconnect()
 	}
 	log.Printf("[acp] Codex Desktop IPC disconnected; cached runtime marked unknown, control owner unchanged: %v", cause)
 }
@@ -175,14 +222,20 @@ func (r *codexDesktopRuntime) trackThread(threadID string) {
 
 // Presence 返回 socket 与 Codex 主进程存在性。
 func (r *codexDesktopRuntime) Presence() (bool, bool) {
-	return codexDesktopPresence()
+	r.mu.Lock()
+	presence := r.presence
+	r.mu.Unlock()
+	if presence == nil {
+		return codexDesktopPresence()
+	}
+	return presence()
 }
 
 // handleBroadcast 把状态广播投影到 owner registry 和统一 turn events。
 // sourceEpoch 必须随广播跨过异步队列，旧连接事件不能借用当前连接代次。
 func (r *codexDesktopRuntime) handleBroadcast(sourceEpoch uint64, envelope codexDesktopEnvelope) {
 	r.mu.Lock()
-	client, state, owners, onEvents := r.client, r.state, r.owners, r.onEvents
+	client, state, owners, authoritative, onEvents := r.client, r.state, r.owners, r.authoritative, r.onEvents
 	tracked := r.tracked[codexDesktopBroadcastThreadID(envelope)]
 	r.mu.Unlock()
 	if client == nil || state == nil || client.Epoch() != sourceEpoch {
@@ -199,10 +252,11 @@ func (r *codexDesktopRuntime) handleBroadcast(sourceEpoch uint64, envelope codex
 	// Publish while the client holds its epoch lock so installConnection cannot
 	// advance the generation between validation and owner/task notification.
 	client.publishForEpoch(sourceEpoch, func() {
-		if owners != nil && update.Applied {
+		isAuthoritative := authoritative == nil || authoritative()
+		if owners != nil && update.Applied && isAuthoritative {
 			owners.observeDesktopSnapshot(update.Snapshot.ThreadID, update.Snapshot.Revision, update.Snapshot.State)
 		}
-		if onEvents != nil && len(update.Events) > 0 {
+		if onEvents != nil && len(update.Events) > 0 && isAuthoritative {
 			onEvents(update.Snapshot.ThreadID, update.Events)
 		}
 	})

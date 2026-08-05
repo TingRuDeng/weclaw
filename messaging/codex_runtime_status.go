@@ -105,7 +105,7 @@ func compactCodexRuntimeStatusLines(resolution codexRuntimeResolution) (string, 
 	case agent.CodexRuntimeConflict:
 		runtimeLine = "运行: 异常（写入冲突）"
 	case agent.CodexRuntimeDesktop:
-		runtimeLine = "运行: 异常（旧版 Codex Desktop bridge）"
+		runtimeLine = "运行: 正常（Codex App）"
 	}
 	return taskLine, runtimeLine
 }

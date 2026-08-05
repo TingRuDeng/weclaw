@@ -74,6 +74,38 @@ func (a *ACPAgent) SetCodexThreadConfig(ctx context.Context, update CodexThreadC
 	if model == "" && effort == "" && !serviceTierSet {
 		return fmt.Errorf("Codex thread 配置没有可更新字段")
 	}
+	desktopRuntime := a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop
+	if !desktopRuntime && a.codexOwners != nil {
+		if binding, ok := a.codexOwners.threadBinding(threadID); ok {
+			desktopRuntime = binding.Runtime == CodexRuntimeDesktop
+		}
+	}
+	if desktopRuntime {
+		if a.desktopRuntime == nil {
+			return ErrCodexRuntimeUnavailable
+		}
+		settings := make(map[string]any, 3)
+		if model != "" {
+			settings["model"] = model
+		}
+		if effort != "" {
+			settings["effort"] = effort
+		}
+		if serviceTierSet {
+			if serviceTier == CodexServiceTierStandard {
+				settings["serviceTier"] = nil
+			} else {
+				settings["serviceTier"] = serviceTier
+			}
+		}
+		if err := a.desktopRuntime.updateThreadSettings(ctx, threadID, settings); err != nil {
+			return fmt.Errorf("更新 Codex App thread 配置: %w", err)
+		}
+		a.mergeCodexThreadConfigAt(threadID, CodexThreadConfig{
+			Model: model, Effort: effort, ServiceTier: serviceTier, ServiceTierKnown: serviceTierSet,
+		}, 0)
+		return nil
+	}
 	params := map[string]interface{}{"threadId": threadID}
 	if model != "" {
 		params["model"] = model
@@ -233,6 +265,9 @@ func (a *ACPAgent) mergeCodexThreadConfigAt(threadID string, update CodexThreadC
 func (a *ACPAgent) ListCodexModels(ctx context.Context) ([]CodexModel, error) {
 	if a.protocol != protocolCodexAppServer {
 		return nil, fmt.Errorf("当前 Agent 不支持 Codex model/list")
+	}
+	if err := a.requireCodexSharedHostCapability("查询完整模型列表"); err != nil {
+		return nil, err
 	}
 	result, err := a.rpc(ctx, "model/list", map[string]interface{}{})
 	if err != nil {

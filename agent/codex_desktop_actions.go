@@ -41,7 +41,12 @@ type codexDesktopSteerTurnPayload struct {
 
 type codexDesktopInterruptTurnPayload struct {
 	ConversationID string `json:"conversationId"`
-	TurnID         string `json:"turnId"`
+	ExpectedTurnID string `json:"expectedTurnId"`
+}
+
+type codexDesktopUpdateThreadSettingsPayload struct {
+	ConversationID string         `json:"conversationId"`
+	ThreadSettings map[string]any `json:"threadSettings"`
 }
 
 // newCodexDesktopActions 创建不自动重试变更请求的 Desktop 操作入口。
@@ -98,12 +103,20 @@ func (a *codexDesktopActions) steerTurn(ctx context.Context, spec codexDesktopSt
 	return err
 }
 
-// interruptTurn 使用 v2 follower 方法停止指定 turn。
+// interruptTurn 使用当前 v4 follower 方法停止调用方确认的 active turn。
 func (a *codexDesktopActions) interruptTurn(ctx context.Context, conversationID string, turnID string) error {
 	payload := codexDesktopInterruptTurnPayload{
-		ConversationID: strings.TrimSpace(conversationID), TurnID: strings.TrimSpace(turnID),
+		ConversationID: strings.TrimSpace(conversationID), ExpectedTurnID: strings.TrimSpace(turnID),
 	}
 	_, err := a.client.Call(ctx, "thread-follower-interrupt-turn", payload)
+	return err
+}
+
+func (a *codexDesktopActions) updateThreadSettings(ctx context.Context, conversationID string, settings map[string]any) error {
+	payload := codexDesktopUpdateThreadSettingsPayload{
+		ConversationID: strings.TrimSpace(conversationID), ThreadSettings: settings,
+	}
+	_, err := a.client.Call(ctx, "thread-follower-update-thread-settings", payload)
 	return err
 }
 

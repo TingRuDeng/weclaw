@@ -48,7 +48,7 @@ ai_summary:
 - `cmd/start.go` 负责加载配置、创建 `messaging.Handler`、启动 HTTP API 与平台 registry。
 - `messaging/handler.go` 是命令路由、会话、审批、进度、任务状态和 Agent 调用的主要业务入口。
 - `observability/` 提供固定字段、默认脱敏的端到端 Trace；本机 CLI/API 可按 message、task、thread、turn 或 stage 查询，Codex 协议正文只有显式启用后才会以脱敏形式记录。
-- `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；Codex 生产路径使用稳定 Unix socket 上的单一共享 app-server，默认在官方 standalone 可用时由 `codex app-server daemon` 管理 Host，否则使用 WeClaw-managed 兼容路径；客户端按上游 WebSocket-over-UDS 协议连接，窗口只保存 frontend binding，Codex Companion 第二 writer 已停用。
+- `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；macOS 默认 `auto` 拓扑在 Codex App 已运行时通过受保护 Desktop IPC 复用 App 的 Host，App 不在时才连接或启动稳定 Unix socket 上的共享 app-server（官方 standalone daemon 优先，否则使用 WeClaw-managed 兼容路径）。切换前必须经过全局空闲门禁，任何时刻只能有一个写入权威；窗口只保存 frontend binding，Codex Companion 第二 writer 已停用。
 - `codexauth/` 管理 shared-host 级 Codex ChatGPT OAuth profile：系统凭据库优先、受保护文件显式降级；在线切换由 `agent/codex_account.go` 在 task/lease/thread 空闲门禁内停止和验证真实受管 Host，不能修改窗口 workspace/thread binding。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
 - `scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64` 四个正式资产，并会运行测试、race、vet 和 `git diff --check`；本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。

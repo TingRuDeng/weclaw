@@ -166,8 +166,8 @@ func TestCodexDesktopDiscoveryCarriesNestedMethodVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nested request decode error = %v", err)
 	}
-	if nested.Method != "thread-follower-interrupt-turn" || nested.Version != 2 {
-		t.Fatalf("nested method/version = %s@%d, want thread-follower-interrupt-turn@2", nested.Method, nested.Version)
+	if nested.Method != "thread-follower-interrupt-turn" || nested.Version != 4 {
+		t.Fatalf("nested method/version = %s@%d, want thread-follower-interrupt-turn@4", nested.Method, nested.Version)
 	}
 }
 

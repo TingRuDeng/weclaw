@@ -82,7 +82,7 @@ func TestCodexDesktopSteerMapsExpectedTurn(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopInterruptUsesVersionTwo(t *testing.T) {
+func TestCodexDesktopInterruptUsesVersionFourAndExpectedTurn(t *testing.T) {
 	caller := &codexDesktopActionCaller{result: json.RawMessage(`{}`)}
 	actions := newCodexDesktopActions(caller, func() string { return "sender" })
 	if err := actions.interruptTurn(context.Background(), "thread-1", "turn-1"); err != nil {
@@ -91,8 +91,28 @@ func TestCodexDesktopInterruptUsesVersionTwo(t *testing.T) {
 	if caller.calls[0].method != "thread-follower-interrupt-turn" {
 		t.Fatalf("method = %s", caller.calls[0].method)
 	}
-	if codexDesktopMethodVersions[caller.calls[0].method] != 2 {
+	if codexDesktopMethodVersions[caller.calls[0].method] != 4 {
 		t.Fatalf("method version = %d", codexDesktopMethodVersions[caller.calls[0].method])
+	}
+	payload := caller.calls[0].params.(codexDesktopInterruptTurnPayload)
+	if payload.ConversationID != "thread-1" || payload.ExpectedTurnID != "turn-1" {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestCodexDesktopUpdateThreadSettingsMapsFollowerPayload(t *testing.T) {
+	caller := &codexDesktopActionCaller{result: json.RawMessage(`{}`)}
+	actions := newCodexDesktopActions(caller, func() string { return "sender" })
+	settings := map[string]any{"model": "gpt-test", "effort": "high", "serviceTier": nil}
+	if err := actions.updateThreadSettings(context.Background(), "thread-1", settings); err != nil {
+		t.Fatalf("updateThreadSettings() error = %v", err)
+	}
+	if caller.calls[0].method != "thread-follower-update-thread-settings" {
+		t.Fatalf("method = %s", caller.calls[0].method)
+	}
+	payload := caller.calls[0].params.(codexDesktopUpdateThreadSettingsPayload)
+	if payload.ConversationID != "thread-1" || payload.ThreadSettings["model"] != "gpt-test" {
+		t.Fatalf("payload = %#v", payload)
 	}
 }
 

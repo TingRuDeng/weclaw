@@ -146,6 +146,20 @@ func (c *codexDesktopClient) Close() error {
 	return err
 }
 
+// Disconnect 只关闭当前连接，保留 client 与广播 worker 以便后续安全重连。
+func (c *codexDesktopClient) Disconnect() error {
+	c.mu.Lock()
+	conn, epoch, state := c.conn, c.epoch, c.connectionState
+	c.mu.Unlock()
+	if conn == nil {
+		return nil
+	}
+	return c.disconnectEpoch(
+		codexDesktopConnectionRef{conn: conn, epoch: epoch, state: state},
+		ErrCodexDesktopDisconnected,
+	)
+}
+
 // IsConnected 返回 initialize 已成功且连接仍属于当前 epoch 的状态。
 func (c *codexDesktopClient) IsConnected() bool {
 	c.mu.Lock()

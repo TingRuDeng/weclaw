@@ -22,6 +22,9 @@ func (a *ACPAgent) ArchiveCodexThread(ctx context.Context, threadID string) erro
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
+	if err := a.requireCodexSharedHostCapability("归档会话"); err != nil {
+		return err
+	}
 	if !a.codexAdmissionMu.TryLock() {
 		return ErrCodexWriterBusy
 	}

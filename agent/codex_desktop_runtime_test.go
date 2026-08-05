@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -32,6 +34,148 @@ func TestACPAgentDesktopControlledTurnDoesNotStartAppServer(t *testing.T) {
 	}
 }
 
+func TestACPAgentStartPrefersDesktopBridgeWithoutStartingSharedHost(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	hold := make(chan struct{})
+	runtime.client = newCodexDesktopClient(codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "desktop-client")
+		<-hold
+	})))
+	t.Cleanup(func() { close(hold) })
+
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(a.Stop)
+	if a.isRuntimeStarted() {
+		t.Fatal("Desktop bridge startup must not start or attach a second app-server")
+	}
+	if got := a.codexRuntimeModeSnapshot(); got != CodexRuntimeDesktop {
+		t.Fatalf("runtime mode = %q, want desktop", got)
+	}
+}
+
+func TestACPAgentStartFailsClosedWhenDesktopIsPresentButUnreachable(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	runtime.client = newCodexDesktopClient(codexDesktopTestOptions(func(context.Context) (net.Conn, error) {
+		return nil, errors.New("desktop socket refused")
+	}))
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+
+	err := a.Start(context.Background())
+
+	if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) {
+		t.Fatalf("Start() error = %v, want ownership unknown", err)
+	}
+	if a.isRuntimeStarted() {
+		t.Fatal("unreachable running Desktop must not fall back to a second app-server")
+	}
+}
+
+func TestACPAgentStartRejectsUnverifiedExistingSharedHostBeforeDesktopActivation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	hold := make(chan struct{})
+	runtime.client = newCodexDesktopClient(codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "desktop-client")
+		<-hold
+	})))
+	t.Cleanup(func() { close(hold) })
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	sharedSocket, err := a.resolveCodexHostSocket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(sharedSocket), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", sharedSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	err = a.Start(context.Background())
+
+	if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) {
+		t.Fatalf("Start() error = %v, want ownership unknown", err)
+	}
+	if got := a.codexRuntimeModeSnapshot(); got == CodexRuntimeDesktop {
+		t.Fatalf("runtime mode = %q, unverified shared Host must prevent Desktop activation", got)
+	}
+}
+
+func TestACPAgentStartStopsVerifiedIdleSharedHostBeforeDesktopActivation(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "weclaw-desktop-handoff-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "app-server.sock")
+	commandPath := filepath.Join(dir, "codex")
+	countPath := filepath.Join(dir, "starts.log")
+	script := `#!/bin/sh
+socket=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--listen" ]; then
+    shift
+    socket="${1#unix://}"
+  fi
+  shift
+done
+WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -test.run='^TestHelperCodexUnixHost$'
+`
+	if err := os.WriteFile(commandPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := ACPAgentConfig{
+		Command: commandPath, Args: []string{"app-server"}, AppServerSocket: socketPath,
+		Env: map[string]string{
+			"WECLAW_TEST_CODEX_BINARY": os.Args[0], testCodexUnixHostCountEnv: countPath,
+		},
+	}
+	shared := NewACPAgent(config)
+	if err := shared.Start(context.Background()); err != nil {
+		t.Fatalf("start shared Host: %v", err)
+	}
+	t.Cleanup(shared.Stop)
+
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	hold := make(chan struct{})
+	runtime.client = newCodexDesktopClient(codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "desktop-client")
+		<-hold
+	})))
+	t.Cleanup(func() { close(hold) })
+	config.StateFile = filepath.Join(dir, "desktop-state.json")
+	desktop := newACPAgent(config, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	if err := desktop.Start(context.Background()); err != nil {
+		t.Fatalf("start Desktop bridge: %v", err)
+	}
+	t.Cleanup(desktop.Stop)
+
+	if got := desktop.codexRuntimeModeSnapshot(); got != CodexRuntimeDesktop {
+		t.Fatalf("runtime mode = %q, want desktop", got)
+	}
+	if desktop.isRuntimeStarted() {
+		t.Fatal("shared Host connection must be stopped before Desktop activation")
+	}
+}
+
 func TestACPAgentDesktopReadStateDoesNotCallThreadRead(t *testing.T) {
 	a, caller := desktopRuntimeTestAgent(t)
 	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
@@ -55,6 +199,47 @@ func TestACPAgentDesktopControlsUseFollowerMethods(t *testing.T) {
 	}
 	if caller.calls[0].method != "thread-follower-steer-turn" || caller.calls[1].method != "thread-follower-interrupt-turn" {
 		t.Fatalf("calls = %#v", caller.calls)
+	}
+}
+
+func TestACPAgentDesktopThreadSettingsUseFollowerMethod(t *testing.T) {
+	a, caller := desktopRuntimeTestAgent(t)
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		t.Fatal("Desktop thread settings must not call app-server RPC")
+		return nil, nil
+	}
+	serviceTier := CodexServiceTierStandard
+	if err := a.SetCodexThreadConfig(context.Background(), CodexThreadConfigUpdate{
+		ThreadID: "thread-1", Model: "gpt-next", Effort: "max", ServiceTier: &serviceTier,
+	}); err != nil {
+		t.Fatalf("SetCodexThreadConfig() error = %v", err)
+	}
+	if len(caller.calls) != 1 || caller.calls[0].method != "thread-follower-update-thread-settings" {
+		t.Fatalf("calls = %#v", caller.calls)
+	}
+}
+
+func TestACPAgentDesktopResetSessionFailsWithoutDeletingBinding(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	a.setCodexRuntimeMode(CodexRuntimeDesktop)
+	a.mu.Lock()
+	a.threads["conversation-1"] = "thread-1"
+	a.mu.Unlock()
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		t.Fatal("Desktop /new must not call app-server RPC")
+		return nil, nil
+	}
+
+	_, err := a.ResetSession(context.Background(), "conversation-1")
+
+	if !errors.Is(err, ErrCodexDesktopCapabilityUnavailable) {
+		t.Fatalf("ResetSession() error = %v", err)
+	}
+	a.mu.Lock()
+	threadID := a.threads["conversation-1"]
+	a.mu.Unlock()
+	if threadID != "thread-1" {
+		t.Fatalf("binding = %q, must remain unchanged", threadID)
 	}
 }
 

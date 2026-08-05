@@ -187,7 +187,7 @@ func ensureCodexRuntimeReady(resolution codexRuntimeResolution, route codexConve
 	}
 	_ = route
 	switch resolution.Binding.Runtime {
-	case agent.CodexRuntimeWeClaw:
+	case agent.CodexRuntimeWeClaw, agent.CodexRuntimeDesktop:
 		return nil
 	case agent.CodexRuntimeConflict:
 		return agent.ErrCodexRuntimeConflict
@@ -197,7 +197,7 @@ func ensureCodexRuntimeReady(resolution codexRuntimeResolution, route codexConve
 }
 
 func codexRuntimeReadyForRemoteTurn(runtime agent.CodexRuntimeHolder) bool {
-	return runtime == agent.CodexRuntimeWeClaw
+	return runtime == agent.CodexRuntimeWeClaw || runtime == agent.CodexRuntimeDesktop
 }
 
 func codexResolutionModelStatus(resolution codexRuntimeResolution, fallback sessionModelStatus) sessionModelStatus {

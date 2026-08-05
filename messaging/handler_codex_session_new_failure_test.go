@@ -141,6 +141,33 @@ func TestCreateAndAcquireCodexSessionResetFailureRestoresWithCanceledParent(t *t
 	}
 }
 
+func TestCreateAndAcquireCodexSessionDesktopCapabilityFailureKeepsExistingMapping(t *testing.T) {
+	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
+	ag.resetSessionID = ""
+	ag.resetErr = agent.ErrCodexDesktopCapabilityUnavailable
+	ag.resetKeepsMapping = true
+	conversationID := buildCodexConversationID("user-1", "codex", workspace)
+
+	_, err := h.createAndAcquireCodexSessionWithBindingLocked(codexSessionCreateRequest{
+		acquire: codexSessionAcquireRequest{
+			ctx: context.Background(), actorUserID: "user-1", routeUserID: "user-1", agentName: "codex", agent: ag,
+			route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID},
+		},
+	})
+
+	_, useContextErrors := ag.conflictSnapshot()
+	thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
+	if !errors.Is(err, agent.ErrCodexDesktopCapabilityUnavailable) || errors.Is(err, errCodexSessionAcquireUncertain) {
+		t.Fatalf("err=%v，期望确定的 Desktop IPC 能力错误", err)
+	}
+	if ag.threadID != "thread-old" || thread != "thread-old" || pending {
+		t.Fatalf("Desktop 能力错误后 mapping=%q store=(%q,%v)", ag.threadID, thread, pending)
+	}
+	if len(useContextErrors) != 0 {
+		t.Fatalf("Desktop 能力错误不应触发恢复写操作: %#v", useContextErrors)
+	}
+}
+
 func TestHandleCodexNewResetFailureRestoresMapping(t *testing.T) {
 	tests := []struct {
 		name, created, wantReply, forbidden string

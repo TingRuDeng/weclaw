@@ -8,13 +8,14 @@ import (
 )
 
 var (
-	ErrCodexDesktopOwnershipUnknown = errors.New("Codex Desktop thread 所有权未知")
-	ErrCodexTurnTerminal            = errors.New("Codex turn 已终止")
-	ErrCodexControlChanged          = errors.New("Codex 控制权已变化")
-	ErrCodexControlRequired         = errors.New("当前窗口没有 Codex 远程控制权")
-	ErrCodexRuntimeConflict         = errors.New("Codex Desktop 与 WeClaw 发生写入冲突")
-	ErrCodexRuntimeUnavailable      = errors.New("Codex 实际运行时不可用")
-	ErrCodexWriterBusy              = errors.New("Codex thread 已有写入任务")
+	ErrCodexDesktopOwnershipUnknown      = errors.New("Codex Desktop thread 所有权未知")
+	ErrCodexDesktopCapabilityUnavailable = errors.New("Codex App IPC 不支持该操作")
+	ErrCodexTurnTerminal                 = errors.New("Codex turn 已终止")
+	ErrCodexControlChanged               = errors.New("Codex 控制权已变化")
+	ErrCodexControlRequired              = errors.New("当前窗口没有 Codex 远程控制权")
+	ErrCodexRuntimeConflict              = errors.New("Codex Desktop 与 WeClaw 发生写入冲突")
+	ErrCodexRuntimeUnavailable           = errors.New("Codex 实际运行时不可用")
+	ErrCodexWriterBusy                   = errors.New("Codex thread 已有写入任务")
 )
 
 type CodexControlOwner string

@@ -99,7 +99,7 @@ func TestCompactCodexRuntimeStatusLinesPreserveTaskAndRuntimeFailures(t *testing
 			name:       "desktop",
 			resolution: codexRuntimeResolution{Binding: agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop}},
 			task:       "任务: 空闲",
-			runtime:    "运行: 异常（旧版 Codex Desktop bridge）",
+			runtime:    "运行: 正常（Codex App）",
 		},
 		{
 			name:       "unknown",
@@ -115,6 +115,16 @@ func TestCompactCodexRuntimeStatusLinesPreserveTaskAndRuntimeFailures(t *testing
 				t.Fatalf("task=%q runtime=%q, want task=%q runtime=%q", task, runtime, test.task, test.runtime)
 			}
 		})
+	}
+}
+
+func TestCodexDesktopRuntimeIsReadyForRemoteTurn(t *testing.T) {
+	resolution := codexRuntimeResolution{Binding: agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop}}
+	if err := ensureCodexRuntimeReady(resolution, codexConversationRoute{}); err != nil {
+		t.Fatalf("ensureCodexRuntimeReady() error = %v", err)
+	}
+	if !codexRuntimeReadyForRemoteTurn(agent.CodexRuntimeDesktop) {
+		t.Fatal("Codex Desktop runtime must be writable through the IPC bridge")
 	}
 }
 

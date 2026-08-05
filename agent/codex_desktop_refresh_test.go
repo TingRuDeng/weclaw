@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"testing"
 	"time"
 )
@@ -56,6 +57,33 @@ func TestCodexDesktopRuntimeDropsBroadcastFromPreviousConnectionEpoch(t *testing
 	runtime.handleBroadcast(2, desktopRefreshEnvelope(t, 1))
 	if runtime.state.threadCount() != 1 {
 		t.Fatalf("current epoch was not projected, thread count = %d", runtime.state.threadCount())
+	}
+}
+
+func TestCodexDesktopRuntimeDoesNotPublishBeforeDesktopBecomesAuthoritative(t *testing.T) {
+	runtime := newCodexDesktopRuntime()
+	clientConn, peerConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = peerConn.Close()
+	})
+	runtime.client = &codexDesktopClient{epoch: 1, conn: clientConn}
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	owners := newCodexRuntimeOwnerRegistry(nil)
+	runtime.setOwnerRegistry(owners)
+	mode := CodexRuntimeUnknown
+	runtime.setAuthoritative(func() bool { return mode == CodexRuntimeDesktop })
+	runtime.trackThread("thread-1")
+
+	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 1))
+	if _, exists := owners.threadBinding("thread-1"); exists {
+		t.Fatal("未完成 Host 切换前的 Desktop 广播不得改写 owner registry")
+	}
+
+	mode = CodexRuntimeDesktop
+	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 2))
+	if binding, exists := owners.threadBinding("thread-1"); !exists || binding.Runtime != CodexRuntimeDesktop {
+		t.Fatalf("Desktop 成为权威后的 binding=%#v exists=%v", binding, exists)
 	}
 }
 

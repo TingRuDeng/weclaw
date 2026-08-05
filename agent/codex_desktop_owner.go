@@ -85,6 +85,27 @@ func (r *codexRuntimeOwnerRegistry) markDesktopDisconnected() {
 	}
 }
 
+// switchRuntimeAuthority 废止不属于新 Host 的缓存 runtime；冲突态不会被静默清除。
+func (r *codexRuntimeOwnerRegistry) switchRuntimeAuthority(runtime CodexRuntimeHolder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for threadID, binding := range r.threads {
+		current := codexBindingRuntime(binding)
+		if current == CodexRuntimeConflict || current == CodexRuntimeUnknown || current == runtime {
+			continue
+		}
+		binding.Runtime = CodexRuntimeUnknown
+		binding.RuntimeGeneration++
+		r.threads[threadID] = binding
+	}
+}
+
+func (r *codexRuntimeOwnerRegistry) enforcesControl() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.enforceControl
+}
+
 // threadBinding 返回指定 thread 的当前权威 owner 快照。
 func (r *codexRuntimeOwnerRegistry) threadBinding(threadID string) (CodexThreadBinding, bool) {
 	r.mu.Lock()

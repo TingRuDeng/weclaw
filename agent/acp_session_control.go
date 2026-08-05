@@ -42,6 +42,11 @@ func (a *ACPAgent) cwdForConversation(conversationID string) string {
 // ResetSession clears the existing session for the given conversationID and
 // immediately creates a new one, returning the new session ID.
 func (a *ACPAgent) ResetSession(ctx context.Context, conversationID string) (string, error) {
+	if a.protocol == protocolCodexAppServer {
+		if err := a.requireCodexSharedHostCapability("新建会话"); err != nil {
+			return "", fmt.Errorf("%w；新建后可在 WeClaw 中重新选择该会话", err)
+		}
+	}
 	if err := a.ensureStarted(ctx); err != nil {
 		return "", err
 	}

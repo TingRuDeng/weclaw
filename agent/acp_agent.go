@@ -121,7 +121,11 @@ type ACPAgent struct {
 	desktopProbe   codexDesktopOwnerProbe
 	codexOwners    *codexRuntimeOwnerRegistry
 	desktopRuntime *codexDesktopRuntime
-	appServerGate  *codexAppServerGate
+	// codexDesktopBridge 只在默认单用户 macOS auto 拓扑启用。运行时模式是
+	// Host 级事实：Desktop 与共享 app-server 不能同时成为写入权威。
+	codexDesktopBridge bool
+	codexRuntimeMode   CodexRuntimeHolder
+	appServerGate      *codexAppServerGate
 	// codexAdmissionMu serializes turn preflight with host-level account
 	// maintenance. A turn releases it only after holding both the app-server
 	// permit and writer lease; account operations then either run before the
@@ -142,25 +146,26 @@ type ACPAgent struct {
 
 // ACPAgentConfig holds configuration for the ACP agent.
 type ACPAgentConfig struct {
-	ConfiguredName   string   // 配置 map 中的 Agent 名称，用于稳定识别业务身份
-	Command          string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
-	LocalCommand     string   // 原生 Claude 命令，仅用于账号额度查询回退
-	Args             []string // extra args for command (e.g. ["acp"] for cursor)
-	Model            string
-	Effort           string
-	ApprovalPolicy   string
-	ApprovalReviewer string
-	SandboxMode      string
-	SystemPrompt     string
-	Cwd              string                         // working directory
-	Env              map[string]string              // extra environment variables
-	StateFile        string                         // optional persisted mapping file path
-	AppServerSocket  string                         // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
-	CodexHostMode    string                         // auto / daemon / managed
-	CodexAutoUpdate  string                         // Codex CLI 自动更新策略：off / incompatible
-	RunAsUser        string                         // 以独立 Unix 用户运行（文件系统隔离）
-	RunAsEnv         []string                       // run_as_user 时透传的环境变量名白名单
-	ProtocolTrace    observability.ProtocolRecorder // 显式启用的 Codex 线协议诊断记录器
+	ConfiguredName     string   // 配置 map 中的 Agent 名称，用于稳定识别业务身份
+	Command            string   // path to ACP agent binary (claude-agent-acp, codex-acp, cursor agent, etc.)
+	LocalCommand       string   // 原生 Claude 命令，仅用于账号额度查询回退
+	Args               []string // extra args for command (e.g. ["acp"] for cursor)
+	Model              string
+	Effort             string
+	ApprovalPolicy     string
+	ApprovalReviewer   string
+	SandboxMode        string
+	SystemPrompt       string
+	Cwd                string                         // working directory
+	Env                map[string]string              // extra environment variables
+	StateFile          string                         // optional persisted mapping file path
+	AppServerSocket    string                         // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
+	CodexHostMode      string                         // auto / daemon / managed
+	CodexAutoUpdate    string                         // Codex CLI 自动更新策略：off / incompatible
+	CodexDesktopBridge bool                           // 默认 auto 拓扑优先复用本机 Codex App IPC
+	RunAsUser          string                         // 以独立 Unix 用户运行（文件系统隔离）
+	RunAsEnv           []string                       // run_as_user 时透传的环境变量名白名单
+	ProtocolTrace      observability.ProtocolRecorder // 显式启用的 Codex 线协议诊断记录器
 }
 
 func (a *ACPAgent) codexHostSocketSnapshot() string {

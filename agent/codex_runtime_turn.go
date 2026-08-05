@@ -37,6 +37,8 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 		// each admitted turn so a binding created while another client held the
 		// thread lease cannot accidentally reuse a stale conversation mapping.
 		binding, err = a.activateSharedCodexHost(ctx, req.Runtime)
+	} else if a.codexDesktopBridge {
+		binding, err = a.inspectCodexRuntimeLocked(ctx, req.Runtime)
 	} else {
 		binding, err = a.CurrentCodexRuntime(req.Runtime)
 	}
@@ -44,7 +46,7 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 		return "", err
 	}
 	if a.desktopProbe != nil && (binding.Runtime == CodexRuntimeUnknown || binding.Runtime == CodexRuntimeConflict) {
-		binding, err = a.HandoffCodexRuntime(ctx, req.Runtime)
+		binding, err = a.handoffCodexRuntimeLocked(ctx, req.Runtime)
 		if err != nil {
 			req, binding, err = a.replaceMissingFirstTurnThread(ctx, req, err)
 			if err != nil {
@@ -64,7 +66,7 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 		}
 		defer permit.release()
 	}
-	if a.desktopProbe == nil && binding.State.Active {
+	if binding.State.Active {
 		return "", ErrCodexWriterBusy
 	}
 	lease, err := a.codexOwners.beginTurn(req.Runtime)

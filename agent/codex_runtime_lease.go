@@ -100,7 +100,7 @@ func (r *codexRuntimeOwnerRegistry) beginTurn(req CodexRuntimeRequest) (*codexWr
 		if binding.Runtime != CodexRuntimeWeClaw && binding.Runtime != CodexRuntimeDesktop {
 			return nil, ErrCodexRuntimeUnavailable
 		}
-	} else if binding.Runtime != CodexRuntimeWeClaw {
+	} else if binding.Runtime != CodexRuntimeWeClaw && binding.Runtime != CodexRuntimeDesktop {
 		return nil, ErrCodexRuntimeUnavailable
 	}
 	if r.leases[req.Ref.ThreadID] != nil {

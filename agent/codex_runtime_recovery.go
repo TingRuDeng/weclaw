@@ -22,6 +22,9 @@ func (a *ACPAgent) restartCodexAppServerUnsafe(ctx context.Context) error {
 	if err := a.ensureStarted(ctx); err != nil {
 		return fmt.Errorf("restart Codex app-server: %w", err)
 	}
+	if a.codexDesktopBridge && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+		return fmt.Errorf("restart Codex app-server: %w", ErrCodexRuntimeUnavailable)
+	}
 	a.mu.Lock()
 	for conversationID := range a.threads {
 		a.resumeOnFirstUse[conversationID] = true
@@ -33,11 +36,17 @@ func (a *ACPAgent) restartCodexAppServerUnsafe(ctx context.Context) error {
 // ensureCodexAppServerStartedForTurn 修复 app-server 在仅 resume 后退出的场景：
 // 下一条普通消息必须先重启 runtime，并重新 resume 已绑定 thread，而不是直接写已关闭的 stdin。
 func (a *ACPAgent) ensureCodexAppServerStartedForTurn(ctx context.Context, conversationID string) error {
+	if a.codexDesktopBridge && a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop {
+		return ErrCodexRuntimeUnavailable
+	}
 	if a.protocol != protocolCodexAppServer || a.rpcCall != nil || a.isRuntimeStarted() {
 		return nil
 	}
 	if err := a.ensureStarted(ctx); err != nil {
 		return fmt.Errorf("start Codex app-server runtime: %w", err)
+	}
+	if a.codexDesktopBridge && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+		return ErrCodexRuntimeUnavailable
 	}
 	a.mu.Lock()
 	if strings.TrimSpace(a.threads[conversationID]) != "" {

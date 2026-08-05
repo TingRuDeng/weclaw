@@ -37,6 +37,15 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 	defer func() {
 		err = a.finishACPStart(err)
 	}()
+	if selected, selectErr := a.tryStartCodexDesktopRuntime(startupCtx); selectErr != nil {
+		return selectErr
+	} else if selected {
+		log.Printf("[acp] using Codex App Desktop IPC; shared app-server not started")
+		return nil
+	}
+	if a.codexDesktopBridge {
+		a.setCodexRuntimeMode(CodexRuntimeUnknown)
+	}
 	for attempt := 1; attempt <= codexCompatibilityUpdateThreshold; attempt++ {
 		startErr := a.startACPProcess(startupCtx)
 		if startErr == nil {
@@ -76,6 +85,9 @@ func (a *ACPAgent) startACPProcess(ctx context.Context) error {
 	_, err = a.initializeACPSubprocess(ctx, pid)
 	if err != nil {
 		return a.failACPStartup(pid, err)
+	}
+	if a.protocol == protocolCodexAppServer {
+		a.setCodexRuntimeMode(CodexRuntimeWeClaw)
 	}
 	log.Printf("[acp] initialized (pid=%d, protocol=%s)", pid, a.protocol)
 	return nil
@@ -229,7 +241,7 @@ func (a *ACPAgent) waitACPStart(ctx context.Context, done <-chan struct{}) error
 
 func (a *ACPAgent) finishACPStart(startErr error) error {
 	a.mu.Lock()
-	if startErr == nil && !a.started {
+	if startErr == nil && !a.started && a.codexRuntimeMode != CodexRuntimeDesktop {
 		startErr = fmt.Errorf("ACP runtime exited during startup")
 	}
 	a.starting = false
@@ -320,6 +332,12 @@ func newACPScanner(reader io.Reader) *bufio.Scanner {
 
 // Stop terminates the subprocess.
 func (a *ACPAgent) Stop() {
+	if a.desktopRuntime != nil {
+		_ = a.desktopRuntime.disconnect()
+	}
+	if a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop {
+		a.setCodexRuntimeMode(CodexRuntimeUnknown)
+	}
 	if a.usesCodexSharedHost() {
 		connection, cmd, done := a.disconnectCodexHostClient(true)
 		if connection == nil && cmd == nil {

@@ -17,6 +17,10 @@ import (
 
 const codexDesktopProcessName = "Codex"
 
+func newSystemCodexDesktopRuntime() *codexDesktopRuntime {
+	return newCodexDesktopRuntime()
+}
+
 type codexDesktopEndpointDeps struct {
 	lstat func(string) (os.FileInfo, error)
 	uid   func() int
