@@ -113,26 +113,54 @@ probe_status="$(curl -sS "${CURL_SECURE[@]}" --get \
   --data-urlencode "access_token@${TOKEN_FILE}" \
   -o "$release_json" -w '%{http_code}' \
   "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/tags/${TAG}")"
+create_release=false
 case "$probe_status" in
   200)
-    printf '==> 复用已有 Gitee Release：%s\n' "$TAG"
+    release_probe_state="$(python3 - "$release_json" "$TAG" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    release = json.load(handle)
+if release is None:
+    print("missing")
+elif isinstance(release, dict) and release.get("tag_name") == sys.argv[2] and release.get("id"):
+    print("existing")
+else:
+    print("invalid")
+PY
+)" || fail "无法解析 Gitee Release 查询结果"
+    case "$release_probe_state" in
+      existing)
+        printf '==> 复用已有 Gitee Release：%s\n' "$TAG"
+        ;;
+      missing)
+        create_release=true
+        ;;
+      *)
+        fail "Gitee Release 查询结果无效"
+        ;;
+    esac
     ;;
   404)
-    printf '==> 创建 Gitee Release：%s\n' "$TAG"
-    curl -fsS "${CURL_SECURE[@]}" \
-      --form "access_token=<${TOKEN_FILE}" \
-      --form-string "tag_name=$TAG" \
-      --form-string "target_commitish=main" \
-      --form-string "name=$TAG" \
-      --form-string "body=GitHub 权威 Release $TAG 的校验后镜像。" \
-      --form-string "prerelease=false" \
-      -o "$release_json" \
-      "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases"
+    create_release=true
     ;;
   *)
     fail "查询 Gitee Release 返回 HTTP ${probe_status}"
     ;;
 esac
+if [[ "$create_release" == true ]]; then
+  printf '==> 创建 Gitee Release：%s\n' "$TAG"
+  curl -fsS "${CURL_SECURE[@]}" \
+    --form "access_token=<${TOKEN_FILE}" \
+    --form-string "tag_name=$TAG" \
+    --form-string "target_commitish=main" \
+    --form-string "name=$TAG" \
+    --form-string "body=GitHub 权威 Release $TAG 的校验后镜像。" \
+    --form-string "prerelease=false" \
+    -o "$release_json" \
+    "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases"
+fi
 
 release_id="$(python3 - "$release_json" "$TAG" <<'PY'
 import json

@@ -160,7 +160,14 @@ done
 printf '%s\n' "$*" >>"$TEST_CURL_CALLS"
 case "$url" in
   */releases) printf '{"id":42,"tag_name":"v9.9.9"}' >"$output" ;;
-  */releases/tags/*) cp "$TEST_RELEASE_JSON.release" "$output"; printf '200' ;;
+  */releases/tags/*)
+    if [ "${TEST_RELEASE_PROBE_NULL:-}" = "1" ]; then
+      printf 'null' >"$output"
+    else
+      cp "$TEST_RELEASE_JSON.release" "$output"
+    fi
+    printf '200'
+    ;;
   */attach_files)
     case "${output##*/}" in
       upload-*) : >"$TEST_ATTACH_READY"; printf '{}' >"$output" ;;
@@ -187,30 +194,43 @@ esac
 		t.Fatal(err)
 	}
 	secret := "gitee-secret-must-not-leak"
-	cmd := exec.Command(script, "v9.9.9", assetsDir)
-	cmd.Env = append(os.Environ(),
-		"PATH="+fakeBin+":"+os.Getenv("PATH"),
-		"GITEE_TOKEN="+secret,
-		"TEST_ASSET_DIR="+assetsDir,
-		"TEST_RELEASE_JSON="+checkJSON,
-		"TEST_ATTACH_READY="+filepath.Join(root, "attachments-ready"),
-		"TEST_GIT_CALLS="+gitCalls,
-		"TEST_CURL_CALLS="+filepath.Join(root, "curl-calls"),
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("mirror script failed: %v\n%s", err, output)
+	runMirror := func(extraEnv ...string) string {
+		t.Helper()
+		cmd := exec.Command(script, "v9.9.9", assetsDir)
+		cmd.Env = append(os.Environ(),
+			"PATH="+fakeBin+":"+os.Getenv("PATH"),
+			"GITEE_TOKEN="+secret,
+			"TEST_ASSET_DIR="+assetsDir,
+			"TEST_RELEASE_JSON="+checkJSON,
+			"TEST_ATTACH_READY="+filepath.Join(root, "attachments-ready"),
+			"TEST_GIT_CALLS="+gitCalls,
+			"TEST_CURL_CALLS="+filepath.Join(root, "curl-calls"),
+		)
+		cmd.Env = append(cmd.Env, extraEnv...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("mirror script failed: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+	createdOutput := runMirror("TEST_RELEASE_PROBE_NULL=1")
+	if !strings.Contains(createdOutput, "创建 Gitee Release") {
+		t.Fatalf("HTTP 200 + null must create the missing Gitee release: %s", createdOutput)
+	}
+	reusedOutput := runMirror()
+	if !strings.Contains(reusedOutput, "复用已有 Gitee Release") {
+		t.Fatalf("valid release response must reuse the Gitee release: %s", reusedOutput)
 	}
 	gitOutput, err := os.ReadFile(gitCalls)
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined := string(output) + string(gitOutput)
+	combined := createdOutput + reusedOutput + string(gitOutput)
 	if strings.Contains(combined, secret) {
 		t.Fatal("Gitee token leaked to output or git arguments")
 	}
-	if !strings.Contains(string(gitOutput), "HEAD:refs/heads/main") || !strings.Contains(string(output), "Gitee 镜像完成") {
-		t.Fatalf("mirror evidence missing: output=%s git=%s", output, gitOutput)
+	if !strings.Contains(string(gitOutput), "HEAD:refs/heads/main") || !strings.Contains(createdOutput, "Gitee 镜像完成") {
+		t.Fatalf("mirror evidence missing: output=%s git=%s", createdOutput, gitOutput)
 	}
 }
 
