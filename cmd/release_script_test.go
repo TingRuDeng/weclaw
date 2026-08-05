@@ -29,6 +29,47 @@ func TestGiteeMirrorScriptSyntaxAndHelp(t *testing.T) {
 	}
 }
 
+func TestGiteeMirrorUsesAttachmentEndpointAndBoundedTransfers(t *testing.T) {
+	script := filepath.Join("..", "scripts", "mirror_gitee_release.sh")
+	content, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, required := range []string{
+		`attachment_json=`,
+		`releases/${release_id}/attach_files`,
+		`--connect-timeout`,
+		`--max-time`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("mirror script missing resumable attachment contract %q", required)
+		}
+	}
+	if strings.Contains(text, `assets = release.get("assets")`) {
+		t.Fatal("Gitee source archives must not be treated as uploaded release attachments")
+	}
+}
+
+func TestGiteeRepairWorkflowDownloadsAuthoritativeRelease(t *testing.T) {
+	workflow := filepath.Join("..", ".github", "workflows", "mirror-gitee.yml")
+	content, err := os.ReadFile(workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, required := range []string{
+		"workflow_dispatch:",
+		`gh release download "$RELEASE_TAG"`,
+		`GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}`,
+		`scripts/mirror_gitee_release.sh "$RELEASE_TAG"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Gitee repair workflow missing %q", required)
+		}
+	}
+}
+
 func TestReleasePipelineMirrorsOnlyAfterGitHubCommit(t *testing.T) {
 	releaseContent, err := os.ReadFile(releaseScriptPath(t))
 	if err != nil {
@@ -76,7 +117,7 @@ func TestGiteeMirrorUsesVerifiedAssetsWithoutLeakingToken(t *testing.T) {
 
 	checkJSON := filepath.Join(root, "release-check.json")
 	var assetsJSON strings.Builder
-	assetsJSON.WriteString(`{"tag_name":"v9.9.9","assets":[`)
+	assetsJSON.WriteString(`[`)
 	allAssets := append(append([]string{}, assetNames...), "checksums.txt")
 	for index, name := range allAssets {
 		if index > 0 {
@@ -84,7 +125,7 @@ func TestGiteeMirrorUsesVerifiedAssetsWithoutLeakingToken(t *testing.T) {
 		}
 		fmt.Fprintf(&assetsJSON, `{"name":%q,"browser_download_url":%q}`, name, "https://gitee.com/download/"+name)
 	}
-	assetsJSON.WriteString(`]}`)
+	assetsJSON.WriteString(`]`)
 	if err := os.WriteFile(checkJSON, []byte(assetsJSON.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +140,9 @@ if [ "$1" = "ls-remote" ]; then
 fi
 printf '%s\n' "$*" >>"$TEST_GIT_CALLS"
 `
+	if err := os.WriteFile(checkJSON+".release", []byte(`{"id":42,"tag_name":"v9.9.9"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	fakeCurl := `#!/bin/sh
 output=''
 previous=''
@@ -111,8 +155,13 @@ done
 printf '%s\n' "$*" >>"$TEST_CURL_CALLS"
 case "$url" in
   */releases) printf '{"id":42,"tag_name":"v9.9.9"}' >"$output" ;;
-  */releases/tags/*) cp "$TEST_RELEASE_JSON" "$output" ;;
-  */attach_files) printf '{}' >"$output" ;;
+  */releases/tags/*) cp "$TEST_RELEASE_JSON.release" "$output"; printf '200' ;;
+  */attach_files)
+    case "${output##*/}" in
+      upload-*) : >"$TEST_ATTACH_READY"; printf '{}' >"$output" ;;
+      *) if [ -f "$TEST_ATTACH_READY" ]; then cp "$TEST_RELEASE_JSON" "$output"; else printf '[]' >"$output"; fi ;;
+    esac
+    ;;
   https://gitee.com/download/*) cp "$TEST_ASSET_DIR/${url##*/}" "$output" ;;
   *) exit 91 ;;
 esac
@@ -135,6 +184,7 @@ esac
 		"GITEE_TOKEN="+secret,
 		"TEST_ASSET_DIR="+assetsDir,
 		"TEST_RELEASE_JSON="+checkJSON,
+		"TEST_ATTACH_READY="+filepath.Join(root, "attachments-ready"),
 		"TEST_GIT_CALLS="+gitCalls,
 		"TEST_CURL_CALLS="+filepath.Join(root, "curl-calls"),
 	)
@@ -600,6 +650,7 @@ func TestWorkflowsPinAllGitHubActionsToReviewedCommits(t *testing.T) {
 	workflows := []string{
 		filepath.Join("..", ".github", "workflows", "ci.yml"),
 		filepath.Join("..", ".github", "workflows", "release.yml"),
+		filepath.Join("..", ".github", "workflows", "mirror-gitee.yml"),
 	}
 	for _, path := range workflows {
 		content, err := os.ReadFile(path)

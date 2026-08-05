@@ -1,0 +1,45 @@
+name: Repair Gitee Mirror
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing authoritative GitHub Release tag, e.g. v0.1.249'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
+
+concurrency:
+  group: gitee-mirror-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.26.5'
+
+      - name: Download authoritative GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset_dir="dist/$RELEASE_TAG"
+          mkdir -p "$asset_dir"
+          gh release download "$RELEASE_TAG" --repo TingRuDeng/weclaw --dir "$asset_dir"
+
+      - name: Resume and verify Gitee mirror
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: scripts/mirror_gitee_release.sh "$RELEASE_TAG" "dist/$RELEASE_TAG"
