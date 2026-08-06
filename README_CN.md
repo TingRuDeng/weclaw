@@ -22,7 +22,7 @@
 
 ## 快速开始
 
-前置条件：本机已安装需要使用的 Agent。Codex 使用 `codex`，Claude 使用 `claude`；一键安装检测到 Claude CLI 后会安装并配置固定版本的 `claude-agent-acp`。
+一键安装完成二进制校验后会先运行只读依赖检查；交互终端随后列出缺失组件、用途和联动前置项，只有用户选择并再次确认后才依次安装。Codex 使用 `codex`；Claude 远程运行同时需要 `claude` 与固定版本的 `claude-agent-acp`。当前 Claude npm 安装链要求 Node.js 22+。
 
 ```bash
 # 安装当前维护版
@@ -33,6 +33,9 @@ curl -fsSL --proto '=https' --tlsv1.2 https://gitee.com/jimdeng891/weclaw/raw/ma
 
 # 检查 Agent、平台凭证和访问控制
 weclaw doctor
+
+# 交互选择并安装缺失依赖；执行系统或官方安装命令前再次确认
+weclaw doctor --fix
 
 # 按需接入微信或飞书
 weclaw wechat login
@@ -285,7 +288,15 @@ weclaw doctor
 
 `weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、白名单、管理员和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
 
-`weclaw doctor` 对 Claude ACP 的成功检查只证明 `initialize` 握手可用，不会探测 `session/list` 或 `session/resume`；真实会话列举和恢复仍以对应命令的运行结果为准。
+`weclaw doctor` 默认只读，除现有配置外还检查 `sqlite3`、Linux `bubblewrap`、Node.js/npm、Codex CLI 的 `app-server` 能力、Claude Code CLI 和 Claude ACP adapter。已配置 Agent 的运行依赖缺失是阻断错误；未配置 Agent 或仅影响 `/cx` 会话目录、Codex Linux 沙箱的依赖缺失是警告。
+
+首次安装在有控制终端时通过 `/dev/tty` 进入同一个 `weclaw doctor --fix` 向导，不会让 `curl | sh` 的脚本输入被依赖选择消费。没有控制终端时只运行只读检查并打印后续命令；可用 `WECLAW_SKIP_DEPENDENCY_SETUP=1` 显式跳过该检查与向导。非交互安装依赖必须单独同时指定组件和确认，例如 `weclaw doctor --fix --components sqlite3,bubblewrap --yes`，不会默认安装全部组件。
+
+`weclaw doctor --fix` 用角色标签展示缺失项：SQLite、Linux bubblewrap 属于可选增强，Node.js/npm 属于 Agent 安装前置，Codex/Claude 属于可选 Agent，Claude ACP 是选择 Claude 后的必要组件。可选组件名为 `sqlite3`、`bubblewrap`、`nodejs`、`npm`、`codex`、`claude`、`claude-acp`；选择 Codex 会联动 Node.js/npm，选择 Claude 或 Claude ACP 会联动 CLI、adapter 与 Node.js/npm。执行前会完整显示安装命令和权限影响，直接回车或拒绝确认都不安装。
+
+系统依赖只使用已识别的 `apt-get`、`dnf` 或 Homebrew，Linux 需要提权时显式调用 `sudo`；npm 安装禁止 `sudo npm`，普通用户固定使用 `~/.local` prefix，并在当前修复进程中临时加入 `~/.local/bin` 以完成重检和绝对路径配置，退出后恢复原 PATH。WeClaw 不添加第三方 Node 软件源，也不替换 nvm、mise 等版本管理器；系统包安装后仍不满足所选 Agent 的 Node.js 版本要求时，会在执行 npm 前失败并保留真实错误。
+
+安装后会重新探测同一能力，只有验证通过才自动发现并保存新 Agent。Codex 和 Claude 的登录不会自动执行，仍需用户运行对应 CLI 完成官方认证。`weclaw doctor` 对 Claude ACP 的成功检查只证明 `initialize` 握手可用，不会探测 `session/list` 或 `session/resume`；真实会话列举和恢复仍以对应命令的运行结果为准。
 
 关键安全规则：
 

@@ -15,7 +15,12 @@ func boolPtr(b bool) *bool { return &b }
 
 func testDoctorDeps() doctorDeps {
 	return doctorDeps{
-		lookPath:       func(string) (string, error) { return "/usr/local/bin/agent", nil },
+		lookPath: func(string) (string, error) { return "/usr/local/bin/agent", nil },
+		commandOutput: func(context.Context, string, ...string) (string, error) {
+			return "v22.18.0", nil
+		},
+		goos:           "darwin",
+		codexHome:      func(*config.Config) string { return "" },
 		wechatAccounts: func() (int, error) { return 1, nil },
 		feishuCredsOK:  func(string) error { return nil },
 		sudoProbe:      func(string) error { return nil },

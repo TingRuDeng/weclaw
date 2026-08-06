@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/ilink"
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 type doctorStatus int
@@ -45,6 +47,9 @@ type doctorResult struct {
 // doctorDeps 注入外部探测，便于单测无副作用地验证检查逻辑。
 type doctorDeps struct {
 	lookPath             func(string) (string, error)
+	commandOutput        func(context.Context, string, ...string) (string, error)
+	goos                 string
+	codexHome            func(*config.Config) string
 	wechatAccounts       func() (int, error)
 	feishuCredsOK        func(string) error
 	sudoProbe            func(user string) error
@@ -55,6 +60,12 @@ type doctorDeps struct {
 func defaultDoctorDeps() doctorDeps {
 	return doctorDeps{
 		lookPath: config.LookPath,
+		commandOutput: func(ctx context.Context, command string, args ...string) (string, error) {
+			output, err := exec.CommandContext(ctx, command, args...).CombinedOutput()
+			return strings.TrimSpace(string(output)), err
+		},
+		goos:      runtime.GOOS,
+		codexHome: defaultDoctorCodexHome,
 		wechatAccounts: func() (int, error) {
 			accounts, err := ilink.LoadAllCredentials()
 			return len(accounts), err
@@ -73,18 +84,42 @@ func defaultDoctorDeps() doctorDeps {
 	}
 }
 
+var (
+	doctorFix            bool
+	doctorComponentFlags string
+	doctorYes            bool
+)
+
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "检查配置、Agent 和平台状态",
+	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
+		components, err := parseDoctorComponents(doctorComponentFlags)
+		if err != nil {
+			return err
+		}
+		if !doctorFix && (len(components) > 0 || doctorYes) {
+			return fmt.Errorf("--components 和 --yes 只能与 --fix 一起使用")
+		}
+		if doctorFix {
+			if err := runDoctorFix(cmd.Context(), doctorFixOptions{
+				Components: components, Yes: doctorYes,
+				Interactive: term.IsTerminal(int(os.Stdin.Fd())),
+				Input:       cmd.InOrStdin(), Output: cmd.OutOrStdout(), ErrorOutput: cmd.ErrOrStderr(),
+				Config: cfg, Deps: defaultDoctorFixDeps(),
+			}); err != nil {
+				return err
+			}
+		}
 		results := runDoctorChecks(cfg, defaultDoctorDeps())
 		failed := 0
 		for _, r := range results {
-			fmt.Printf("%-7s %s%s\n", r.Status.symbol(), r.Name, detailSuffix(r.Detail))
+			fmt.Fprintf(cmd.OutOrStdout(), "%-7s %s%s\n", r.Status.symbol(), r.Name, detailSuffix(r.Detail))
 			if r.Status == doctorFail {
 				failed++
 			}
@@ -97,6 +132,9 @@ var doctorCmd = &cobra.Command{
 }
 
 func init() {
+	doctorCmd.Flags().BoolVar(&doctorFix, "fix", false, "选择并安装缺失依赖，安装后重新验证")
+	doctorCmd.Flags().StringVar(&doctorComponentFlags, "components", "", "要安装的组件，逗号分隔："+doctorComponentNames())
+	doctorCmd.Flags().BoolVar(&doctorYes, "yes", false, "确认执行 --components 指定的安装（非交互环境必需）")
 	rootCmd.AddCommand(doctorCmd)
 }
 
@@ -111,6 +149,7 @@ func detailSuffix(detail string) string {
 func runDoctorChecks(cfg *config.Config, deps doctorDeps) []doctorResult {
 	var results []doctorResult
 	results = append(results, checkAgents(cfg, deps)...)
+	results = append(results, checkDoctorDependencies(cfg, deps)...)
 	results = append(results, checkPlatforms(cfg, deps)...)
 	results = append(results, checkAPIToken(cfg))
 	results = append(results, checkWorkspaceRoots(cfg))

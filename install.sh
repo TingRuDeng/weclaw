@@ -7,8 +7,6 @@ RELEASE_SOURCE=$(printf '%s' "${WECLAW_SOURCE:-auto}" | tr '[:upper:]' '[:lower:
 BINARY="weclaw"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-CLAUDE_ACP_PACKAGE="@agentclientprotocol/claude-agent-acp"
-CLAUDE_ACP_VERSION="${CLAUDE_ACP_VERSION:-0.58.1}"
 
 case "$RELEASE_SOURCE" in
   auto|github|gitee) ;;
@@ -240,24 +238,6 @@ download_verified_release() {
   verify_release_asset "$TMP" "$CHECKSUM_TMP" "$FILENAME"
 }
 
-# 从 PATH 中解析真实可执行文件，并统一返回绝对路径。
-resolve_executable() {
-  executable_name=$1
-  previous_ifs=$IFS
-  IFS=:
-  for executable_dir in $PATH; do
-    [ -n "$executable_dir" ] || executable_dir=.
-    if [ -f "$executable_dir/$executable_name" ] && [ -x "$executable_dir/$executable_name" ]; then
-      IFS=$previous_ifs
-      absolute_dir=$(CDPATH= cd -- "$executable_dir" 2>/dev/null && pwd) || return 1
-      printf '%s/%s\n' "$absolute_dir" "$executable_name"
-      return 0
-    fi
-  done
-  IFS=$previous_ifs
-  return 1
-}
-
 absolute_file_path() {
   file_path=$1
   file_dir=${file_path%/*}
@@ -266,65 +246,54 @@ absolute_file_path() {
   printf '%s/%s\n' "$absolute_dir" "$file_name"
 }
 
-claude_acp_install_command() {
-  printf 'npm install -g %s@%s' "$CLAUDE_ACP_PACKAGE" "$CLAUDE_ACP_VERSION"
-}
-
-validate_claude_acp_version() {
-  case "$CLAUDE_ACP_VERSION" in
-    *[!0-9A-Za-z._+-]*)
-      echo "CLAUDE_ACP_VERSION 无效，WeClaw 二进制已保留。" >&2
-      return 1
-      ;;
-  esac
-}
-
+# 生成可直接复制到 POSIX shell 的单个参数，避免安装路径中的空格或引号改变命令语义。
 shell_quote() {
-  escaped_value=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
-  printf "'%s'" "$escaped_value"
+  quoted_value=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
+  printf "'%s'\n" "$quoted_value"
 }
 
-configure_claude_agent() {
+run_dependency_setup() {
   installed_weclaw=$1
-  claude_path=$2
-  adapter_path=$3
-  if "$installed_weclaw" config agent --name claude \
-    --command "$adapter_path" --local-command "$claude_path"; then
+  quoted_weclaw=$(shell_quote "$installed_weclaw")
+  # 兼容旧变量：曾显式禁止 Claude ACP 自动安装的调用方不得被新向导引入其他写操作。
+  if [ "${WECLAW_SKIP_DEPENDENCY_SETUP:-0}" = "1" ] || [ "${WECLAW_SKIP_CLAUDE_ACP:-0}" = "1" ]; then
     return 0
   fi
-  echo "Claude ACP 配置失败，WeClaw 二进制已保留。" >&2
-  echo "请运行以下命令修复：" >&2
-  quoted_weclaw=$(shell_quote "$installed_weclaw")
-  quoted_adapter=$(shell_quote "$adapter_path")
-  quoted_claude=$(shell_quote "$claude_path")
-  printf '  %s config agent --name claude --command %s --local-command %s\n' \
-    "$quoted_weclaw" "$quoted_adapter" "$quoted_claude" >&2
-  return 1
-}
 
-# Claude 存在时补齐 ACP adapter；显式跳过时不修改 npm 或配置。
-setup_claude_acp() {
-  installed_weclaw=$1
-  [ "${WECLAW_SKIP_CLAUDE_ACP:-0}" != "1" ] || return 0
-  claude_path=$(resolve_executable claude) || return 0
-  adapter_path=$(resolve_executable claude-agent-acp) || adapter_path=
-  if [ -z "$adapter_path" ]; then
-    validate_claude_acp_version || return 1
-    echo "正在安装 Claude ACP adapter ${CLAUDE_ACP_VERSION}..."
-    if ! npm install -g "${CLAUDE_ACP_PACKAGE}@${CLAUDE_ACP_VERSION}"; then
-      echo "Claude ACP 安装失败，WeClaw 二进制已保留。" >&2
-      echo "请修复 npm 后运行：" >&2
-      echo "  $(claude_acp_install_command)" >&2
-      return 1
-    fi
-    adapter_path=$(resolve_executable claude-agent-acp) || {
-      echo "Claude ACP 安装后未出现在 PATH，WeClaw 二进制已保留。" >&2
-      echo "请运行以下命令修复：" >&2
-      echo "  $(claude_acp_install_command)" >&2
-      return 1
-    }
+  echo ""
+  echo "正在检查运行依赖..."
+  if ! "$installed_weclaw" doctor; then
+    echo "检测到阻断项，可在下面的依赖向导中选择修复。"
   fi
-  configure_claude_agent "$installed_weclaw" "$claude_path" "$adapter_path"
+
+  if doctor_help=$("$installed_weclaw" doctor --help 2>&1); then
+    :
+  else
+    doctor_help=
+  fi
+  case "$doctor_help" in
+    *--fix*) ;;
+    *)
+      echo "当前安装版本尚不支持依赖选择向导；请更新 WeClaw 后运行："
+      echo "  $quoted_weclaw doctor --fix"
+      return 0
+      ;;
+  esac
+
+  if [ "${WECLAW_INSTALL_INTERACTIVE:-0}" = "1" ] || [ -t 0 ]; then
+    "$installed_weclaw" doctor --fix
+    return
+  fi
+  if [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    "$installed_weclaw" doctor --fix </dev/tty >/dev/tty 2>&1
+    return
+  fi
+
+  echo "未检测到交互终端，未自动安装任何依赖。"
+  echo "请在终端运行："
+  echo "  $quoted_weclaw doctor --fix"
+  echo "非交互环境可显式执行："
+  echo "  $quoted_weclaw doctor --fix --components <组件列表> --yes"
 }
 
 # Detect OS
@@ -396,10 +365,12 @@ if [ "$OS" = "darwin" ]; then
 fi
 
 INSTALLED_WECLAW=$(absolute_file_path "${INSTALL_DIR}/${BINARY}")
-setup_claude_acp "$INSTALLED_WECLAW"
 
 echo ""
 echo "weclaw ${VERSION} installed to ${INSTALL_DIR}/${BINARY}"
+run_dependency_setup "$INSTALLED_WECLAW"
 echo ""
 echo "Get started:"
+echo "  weclaw doctor"
+echo "  weclaw doctor --fix"
 echo "  weclaw start"

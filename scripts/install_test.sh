@@ -31,6 +31,7 @@ assert_file_not_contains() {
 
 # 为每个用例构造完全隔离的命令目录和安装目录。
 setup_case() {
+  unset INSTALLER_INPUT_FILE WECLAW_INSTALL_INTERACTIVE WECLAW_SKIP_DEPENDENCY_SETUP
   CASE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/weclaw-install-test.XXXXXX")
   CASE_DIR=$(CDPATH= cd -- "$CASE_DIR" && pwd)
   FAKE_BIN="$CASE_DIR/bin"
@@ -96,7 +97,15 @@ fi
 cat >"$output" <<'SCRIPT'
 #!/bin/sh
 printf 'weclaw %s\n' "$*" >>"$CALLS_FILE"
-[ "${FAKE_WECLAW_CONFIG_FAIL:-0}" = "1" ] && exit 23
+if [ "$*" = "doctor --help" ]; then
+  [ "${FAKE_WECLAW_NO_FIX:-0}" = "1" ] || printf '  --fix\n'
+  exit 0
+fi
+[ "$*" != "doctor --fix" ] || {
+  IFS= read -r dependency_choice || true
+  printf 'doctor input %s\n' "$dependency_choice" >>"$CALLS_FILE"
+}
+[ "${FAKE_WECLAW_DOCTOR_FAIL:-0}" != "1" ] || exit 23
 exit 0
 SCRIPT
 case "$url" in
@@ -136,14 +145,6 @@ EOF
   chmod +x "$FAKE_BIN/claude"
 }
 
-add_adapter() {
-  cat >"$FAKE_BIN/claude-agent-acp" <<'EOF'
-#!/bin/sh
-exit 0
-EOF
-  chmod +x "$FAKE_BIN/claude-agent-acp"
-}
-
 # 假 npm 记录参数，并按用例要求创建 adapter 或返回失败。
 add_npm() {
   cat >"$FAKE_BIN/npm" <<'EOF'
@@ -162,10 +163,21 @@ EOF
 run_installer() {
   output_file="$CASE_DIR/output"
   set +e
-  PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw \
-    WECLAW_GITHUB_REPO=test/weclaw WECLAW_GITEE_REPO=test/weclaw \
-    WECLAW_SOURCE="${WECLAW_SOURCE:-auto}" INSTALL_DIR="$INSTALL_DIR" \
-    sh "$ROOT_DIR/install.sh" >"$output_file" 2>&1
+  if [ -n "${INSTALLER_INPUT_FILE:-}" ]; then
+    PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw \
+      WECLAW_GITHUB_REPO=test/weclaw WECLAW_GITEE_REPO=test/weclaw \
+      WECLAW_SOURCE="${WECLAW_SOURCE:-auto}" INSTALL_DIR="$INSTALL_DIR" \
+      WECLAW_INSTALL_INTERACTIVE="${WECLAW_INSTALL_INTERACTIVE:-0}" \
+      WECLAW_SKIP_DEPENDENCY_SETUP="${WECLAW_SKIP_DEPENDENCY_SETUP:-0}" \
+      sh "$ROOT_DIR/install.sh" <"$INSTALLER_INPUT_FILE" >"$output_file" 2>&1
+  else
+    PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw \
+      WECLAW_GITHUB_REPO=test/weclaw WECLAW_GITEE_REPO=test/weclaw \
+      WECLAW_SOURCE="${WECLAW_SOURCE:-auto}" INSTALL_DIR="$INSTALL_DIR" \
+      WECLAW_INSTALL_INTERACTIVE="${WECLAW_INSTALL_INTERACTIVE:-0}" \
+      WECLAW_SKIP_DEPENDENCY_SETUP="${WECLAW_SKIP_DEPENDENCY_SETUP:-0}" \
+      sh "$ROOT_DIR/install.sh" >"$output_file" 2>&1
+  fi
   status=$?
   set -e
   output=$(cat "$output_file")
@@ -178,103 +190,75 @@ finish_case() {
   printf '通过：%s\n' "$name"
 }
 
-test_without_claude() {
+test_noninteractive_install_runs_read_only_doctor() {
   setup_case
   run_installer
   [ "$status" -eq 0 ] || fail "无 Claude 时安装失败：$output"
-  assert_empty_file "$CALLS_FILE"
-  finish_case "无 Claude 时不处理 ACP"
+  assert_file_contains "$CALLS_FILE" "weclaw doctor"
+  assert_file_not_contains "$CALLS_FILE" "weclaw doctor --fix"
+  assert_contains "$output" "未检测到交互终端"
+  assert_contains "$output" "weclaw doctor --fix"
+  finish_case "非交互安装只检查并提示修复入口"
 }
 
-test_skip_claude_acp() {
+test_interactive_install_enters_dependency_wizard() {
   setup_case
-  add_claude
-  add_npm
-  WECLAW_SKIP_CLAUDE_ACP=1 run_installer
-  [ "$status" -eq 0 ] || fail "跳过 ACP 时安装失败：$output"
-  assert_empty_file "$CALLS_FILE"
-  finish_case "显式跳过 ACP"
+  INSTALLER_INPUT_FILE="$CASE_DIR/input"
+  printf '6\nn\n' >"$INSTALLER_INPUT_FILE"
+  WECLAW_INSTALL_INTERACTIVE=1 run_installer
+  [ "$status" -eq 0 ] || fail "安装失败：$output"
+  assert_file_contains "$CALLS_FILE" "weclaw doctor --fix"
+  assert_file_contains "$CALLS_FILE" "doctor input 6"
+  finish_case "交互安装进入依赖选择向导"
 }
 
-test_existing_adapter() {
-  setup_case
-  add_claude
-  add_adapter
-  run_installer
-  [ "$status" -eq 0 ] || fail "已有 adapter 时安装失败：$output"
-  assert_file_contains "$CALLS_FILE" "weclaw config agent --name claude --command $FAKE_BIN/claude-agent-acp --local-command $FAKE_BIN/claude"
-  ! grep -F 'npm ' "$CALLS_FILE" >/dev/null || fail "已有 adapter 不应升级"
-  finish_case "已有 adapter 仅配置"
-}
-
-test_install_default_version() {
+test_existing_claude_is_not_modified_without_selection() {
   setup_case
   add_claude
   add_npm
   run_installer
-  [ "$status" -eq 0 ] || fail "默认版本安装失败：$output"
-  assert_file_contains "$CALLS_FILE" "npm install -g @agentclientprotocol/claude-agent-acp@0.58.1"
-  assert_file_contains "$CALLS_FILE" "weclaw config agent --name claude --command $FAKE_BIN/claude-agent-acp --local-command $FAKE_BIN/claude"
-  ! grep -F 'sudo npm' "$CALLS_FILE" >/dev/null || fail "禁止 sudo npm"
-  finish_case "安装默认 ACP 版本"
+  [ "$status" -eq 0 ] || fail "非交互安装失败：$output"
+  assert_file_not_contains "$CALLS_FILE" "npm "
+  assert_file_not_contains "$CALLS_FILE" "weclaw config agent"
+  finish_case "已有 Claude 也不再未经选择安装 ACP"
 }
 
-test_install_overridden_version() {
+test_dependency_wizard_failure_keeps_weclaw() {
   setup_case
-  add_claude
-  add_npm
-  CLAUDE_ACP_VERSION=0.60.0 run_installer
-  [ "$status" -eq 0 ] || fail "覆盖版本安装失败：$output"
-  assert_file_contains "$CALLS_FILE" "npm install -g @agentclientprotocol/claude-agent-acp@0.60.0"
-  finish_case "安装指定 ACP 版本"
+  INSTALLER_INPUT_FILE="$CASE_DIR/input"
+  printf '6\ny\n' >"$INSTALLER_INPUT_FILE"
+  FAKE_WECLAW_DOCTOR_FAIL=1 WECLAW_INSTALL_INTERACTIVE=1 run_installer
+  [ "$status" -ne 0 ] || fail "依赖向导失败应返回非零：$output"
+  [ -x "$INSTALL_DIR/weclaw" ] || fail "配置失败时应保留 WeClaw"
+  finish_case "依赖向导失败保留 WeClaw"
 }
 
-test_rejects_invalid_version() {
+test_explicit_skip_avoids_dependency_checks() {
   setup_case
-  add_claude
-  add_npm
-  CLAUDE_ACP_VERSION='0.60.0 非法' run_installer
-  [ "$status" -ne 0 ] || fail "非法版本应非零退出"
-  [ -x "$INSTALL_DIR/weclaw" ] || fail "非法版本时应保留 WeClaw"
-  assert_contains "$output" "CLAUDE_ACP_VERSION 无效"
+  WECLAW_SKIP_DEPENDENCY_SETUP=1 run_installer
+  [ "$status" -eq 0 ] || fail "显式跳过依赖向导失败：$output"
   assert_empty_file "$CALLS_FILE"
-  finish_case "拒绝非法 ACP 版本"
+  finish_case "显式跳过依赖检查与安装"
 }
 
-test_install_failure_keeps_weclaw() {
-  setup_case
-  add_claude
-  add_npm
-  FAKE_NPM_FAIL=1 run_installer
-  [ "$status" -ne 0 ] || fail "npm 失败时应非零退出"
-  [ -x "$INSTALL_DIR/weclaw" ] || fail "npm 失败时应保留 WeClaw"
-  assert_contains "$output" "npm install -g @agentclientprotocol/claude-agent-acp@0.58.1"
-  finish_case "安装失败保留 WeClaw 并给出修复命令"
-}
-
-test_missing_npm_keeps_weclaw() {
-  setup_case
-  add_claude
-  run_installer
-  [ "$status" -ne 0 ] || fail "缺少 npm 时应非零退出"
-  [ -x "$INSTALL_DIR/weclaw" ] || fail "缺少 npm 时应保留 WeClaw"
-  assert_contains "$output" "npm install -g @agentclientprotocol/claude-agent-acp@0.58.1"
-  finish_case "缺少 npm 时保留 WeClaw 并给出修复命令"
-}
-
-test_config_failure_keeps_weclaw() {
+test_noninteractive_hint_quotes_install_path() {
   setup_case
   INSTALL_DIR="$CASE_DIR/install target"
   mkdir -p "$INSTALL_DIR"
   export INSTALL_DIR
-  add_claude
-  add_adapter
-  FAKE_WECLAW_CONFIG_FAIL=1 run_installer
-  [ "$status" -ne 0 ] || fail "配置失败时应非零退出"
-  [ -x "$INSTALL_DIR/weclaw" ] || fail "配置失败时应保留 WeClaw"
-  expected="'$INSTALL_DIR/weclaw' config agent --name claude --command '$FAKE_BIN/claude-agent-acp' --local-command '$FAKE_BIN/claude'"
-  assert_contains "$output" "$expected"
-  finish_case "配置失败保留 WeClaw 并给出修复命令"
+  run_installer
+  [ "$status" -eq 0 ] || fail "空格路径安装失败：$output"
+  assert_contains "$output" "'$INSTALL_DIR/weclaw' doctor --fix"
+  finish_case "非交互修复命令安全引用安装路径"
+}
+
+test_old_release_without_fix_only_prints_upgrade_hint() {
+  setup_case
+  FAKE_WECLAW_NO_FIX=1 run_installer
+  [ "$status" -eq 0 ] || fail "旧版兼容检查失败：$output"
+  assert_file_not_contains "$CALLS_FILE" "weclaw doctor --fix"
+  assert_contains "$output" "当前安装版本尚不支持依赖选择向导"
+  finish_case "旧版二进制不调用未知 doctor fix 参数"
 }
 
 test_checksum_success() {
@@ -395,15 +379,13 @@ test_release_gate_runs_install_tests() {
   printf '通过：发布门禁运行安装脚本测试\n'
 }
 
-test_without_claude
-test_skip_claude_acp
-test_existing_adapter
-test_install_default_version
-test_install_overridden_version
-test_rejects_invalid_version
-test_install_failure_keeps_weclaw
-test_missing_npm_keeps_weclaw
-test_config_failure_keeps_weclaw
+test_noninteractive_install_runs_read_only_doctor
+test_interactive_install_enters_dependency_wizard
+test_existing_claude_is_not_modified_without_selection
+test_dependency_wizard_failure_keeps_weclaw
+test_explicit_skip_avoids_dependency_checks
+test_noninteractive_hint_quotes_install_path
+test_old_release_without_fix_only_prints_upgrade_hint
 test_checksum_success
 test_explicit_gitee_source_is_isolated
 test_auto_falls_back_on_github_network_failure

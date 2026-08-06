@@ -1,5 +1,176 @@
 # 当前任务记录
 
+## 2026-08-06 首次安装依赖选择向导
+
+### 目标
+
+让普通用户首次安装 WeClaw 后立即看到缺失依赖及其用途，按需要选择 Codex、Claude 和辅助能力；安装器在展示完整命令与权限影响并取得确认后，按依赖顺序安装、重新探测并配置可用 Agent。
+
+### 当前事实与推荐交互
+
+- WeClaw 正式二进制本身为静态程序，没有必须额外安装的 Agent 运行时；Node.js/npm、Codex、Claude、Claude ACP、SQLite 和 bubblewrap 是否必需取决于用户选择的 Agent 与功能。
+- 首次安装向导先按“所选能力的必要依赖”和“可选增强”分组展示。选择 Codex 或 Claude 后，Node.js/npm 等前置项自动加入并标记为联动必要项，不能静默遗漏。
+- `curl | sh` 的标准输入属于安装脚本，交互必须显式连接可用的 `/dev/tty`；没有 TTY 时只打印只读检查结果和可复制的非交互命令，不自动安装任何包。
+- 系统包可以在确认后显式使用 `sudo`；npm 包禁止使用 `sudo npm`。当前 npm prefix 不可写时使用用户级目录并通过绝对路径完成能力验证和 Agent 配置，不覆盖用户已有 nvm、mise 或 npm 配置。
+- Node.js 版本不足且系统包管理器无法提供满足要求的版本时保留真实失败，提示用户使用其已有版本管理方式处理；不自动添加第三方软件源。
+- Claude/Codex 登录、OAuth、API Token 或中继凭据不由安装器自动创建，只在安装和能力检查通过后提示用户完成认证。
+
+### 验收标准
+
+- 交互式首次安装完成二进制校验后，展示缺失组件、用途、必要/可选关系和选择编号；直接回车取消，不产生额外系统或 npm 写入。
+- 用户选择 Codex 时按顺序处理 Node.js/npm、Codex CLI 和 `app-server` 验证；选择 Claude 时按顺序处理 Node.js/npm、Claude CLI、固定版本 ACP adapter 和 initialize 验证。
+- SQLite 与 Linux bubblewrap 作为可选增强单独展示，不因用户选择 Agent 而被无条件安装。
+- 执行前完整显示包管理器、npm 命令、是否需要 sudo 和目标安装目录；用户拒绝时保留已安装的 WeClaw 二进制并正常结束向导。
+- 普通用户面对 root 所有的 npm prefix 时不会尝试 `sudo npm`，而是使用受保护的用户级目录；安装后当前进程能解析并保存 Agent 的绝对命令路径。
+- 非交互安装必须显式提供组件列表和确认参数；没有 `/dev/tty`、未知组件、版本不足、安装失败或重检失败时均保持可观察错误且不写入假成功配置。
+- 已存在且通过能力检查的依赖不重复安装；首次安装和后续 `weclaw doctor --fix` 复用同一组件选择、依赖展开、安装和验证实现。
+
+### 实施步骤
+
+- [x] 先补首次安装交互测试，覆盖 TTY 选择、直接回车取消、无 TTY 提示、组件联动、已有依赖跳过和旧版 Claude 自动安装行为收敛。
+- [x] 扩展依赖结果模型与向导输出，明确区分所选能力的必要依赖、可选增强和当前可用项。
+- [x] 让 `install.sh` 在二进制安装后通过 `/dev/tty` 进入统一依赖向导；非交互环境只输出带参数的后续命令，不消费脚本输入或默认安装。
+- [x] 为 npm 安装增加普通用户目标目录与可写性处理，保持禁止 sudo npm，并用绝对路径完成安装后探测和 Agent 配置。
+- [x] 按前置运行时、Agent CLI、ACP adapter、能力探测、配置保存的顺序执行并显示阶段进度；任何阶段失败立即停止后续配置。
+- [x] 同步中英文安装说明和项目上下文，移除“检测到 Claude 就未经选择自动安装 ACP”的旧行为描述。
+- [x] 执行安装脚本隔离测试、cmd 定向测试、全仓测试、race、vet、Staticcheck、依赖差异、文档校验和 diff 复核。
+
+### 验证方式
+
+- `sh scripts/install_test.sh`。
+- `go test ./cmd ./config -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./... -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚与修正策略
+
+首次安装向导只编排现有 `doctor --fix` 能力。若交互入口回归，可停止从 `install.sh` 调用向导并保留独立的只读 `doctor` 与显式修复命令；不自动卸载已经由系统包管理器或 npm 成功安装的用户软件，也不覆盖用户原有 Agent 配置。
+
+### Review 小结（2026-08-06）
+
+- 首次安装在二进制摘要校验后先运行只读 Doctor；有控制终端时通过 `/dev/tty` 进入统一选择向导，无终端时只打印安全引用的显式命令。旧版二进制不支持 `doctor --fix` 时只提示更新，不调用未知参数。
+- 向导用角色标签区分可选增强、安装前置、可选 Agent 和 Claude 必需 adapter；选择 Codex/Claude 会自动展开前置项，macOS 不展示 Linux 专属 bubblewrap，用户拒绝或直接回车不安装。
+- 普通用户的 npm Agent 包使用 `~/.local` prefix，不使用 `sudo npm`；用户可写的 `~/.local/bin` 只在所有安装命令完成后临时加入 PATH，用于重检和保存绝对 Agent 路径，不参与 sudo 或系统包管理器解析。
+- 安装脚本 21 个隔离用例、全仓普通测试与 race、vet、`go mod tidy -diff`、Staticcheck、govulncheck、文档校验和 `git diff --check` 均通过；govulncheck 报告调用路径 0 项漏洞。
+- 审查结论为通过。本机测试没有执行真实 apt/dnf/Homebrew/npm 安装，也没有进行 Codex、Claude 登录或远端服务变更；外部包管理器行为仍由目标机器环境决定并保持真实失败语义。
+
+## 2026-08-05 运行依赖诊断与交互修复
+
+### 目标
+
+让 WeClaw 在用户实际触发 Agent 或 Codex 会话目录前发现缺失依赖，并在用户明确选择和确认后安装受支持组件、重新探测能力并补齐 Agent 配置。
+
+### 范围与安全边界
+
+- `weclaw doctor` 默认保持只读，检查 `sqlite3`、Linux Codex 沙箱使用的 `bubblewrap`、Node.js/npm、Codex CLI、Claude Code CLI 和 Claude ACP adapter。
+- 区分阻塞依赖、可选功能依赖和未选择的 Agent：已配置 Agent 的运行依赖缺失为失败；`sqlite3`、`bubblewrap` 或未配置 Agent 缺失只提示功能影响和可修复入口。
+- `weclaw doctor --fix` 仅安装用户选中的缺失组件；交互终端逐项选择并在执行前显示来源、命令和权限影响，默认拒绝。
+- 非交互环境必须同时显式提供组件列表与 `--yes`；禁止因为 stdin 不是终端而默认安装全部组件。
+- 系统包仅使用已识别平台的原生包管理器和固定参数；需要提权时显式调用 `sudo`，不收集或保存密码。
+- Node.js/npm 作为 npm 安装链的条件依赖：Codex 或 Claude ACP 选择 npm 安装路径且本机缺失时自动加入待选依赖，但仍必须由用户在最终确认清单中授权。
+- Node.js/npm 只通过已识别平台的原生包管理器安装，并验证上游要求的最低版本；不自动添加 NodeSource 等第三方软件源，不擅自替换 nvm、mise、Homebrew 或其他现有版本管理器管理的安装。
+- Codex、Claude 与 Claude ACP 只使用固定的官方发布入口或项目已固定的 adapter 包版本；不接受用户输入拼接包名、URL 或 shell 命令。
+- 安装完成后必须重新执行相同能力探测；Codex 验证 `app-server`，Claude 分别验证 CLI 与 ACP 初始化。登录和账号授权不自动执行，只输出后续登录提示。
+- 不自动修改系统软件源，不绕过 TLS、签名、摘要或代理策略；原生包管理器不能提供满足版本要求的 Node.js/npm 时保留真实失败，并提示用户通过已使用的版本管理器先完成安装。
+- 不在测试中执行真实 `sudo`、包管理器、npm 或远程安装脚本；所有外部动作经依赖注入验证参数、确认门禁和重检行为。
+
+### 验收标准
+
+- 当前 Jump Server 缺少 `sqlite3` 的状态会在 `weclaw doctor` 中提前显示，说明只影响 Codex 会话目录；安装并验证后变为 `[ok]`。
+- Linux 上 Codex 可运行但缺少 `bubblewrap` 时显示安全能力降级警告，并可单独选择安装。
+- Node.js 与 npm 分别检测命令和版本；仅使用现有 Agent 时不把未使用的 npm 标记为阻塞，选择 Codex npm 安装或 Claude ACP 时会显式展示并联动选择缺失前置项。
+- 已配置但缺少 Codex、Claude ACP 等运行命令时保持 `[fail]`；未配置且未安装的 Codex/Claude 只作为可选组件列出。
+- `--fix` 只执行选中项；用户拒绝、未知组件、不支持平台、缺少包管理器、安装命令失败或安装后探测仍失败时返回可观察错误，不写入假成功配置。
+- Codex 安装后验证 CLI 和 `app-server` 能力；Claude 安装后验证 CLI，再补齐并验证固定版本 ACP adapter，成功后使用现有配置原子写入路径注册 Agent。
+- 安装脚本与 CLI 对依赖状态和修复方式的提示一致；中英文使用说明明确安装行为、权限边界、认证边界和非交互参数。
+
+### 实施步骤
+
+- [x] 增加依赖描述与探测层，复用 `config.LookPath`，为 SQLite 数据库、Node.js/npm 版本、Codex `app-server`、Claude CLI/ACP 和 Linux `bubblewrap` 补充无副作用能力检查。
+- [x] 先补 `doctor` 结果分级、组件选择、默认拒绝、非交互门禁、平台映射、安装失败与重检失败测试。
+- [x] 为 `doctor` 增加 `--fix`、`--components`、`--yes`，解析组件依赖图并展示联动选择，通过固定参数直接调用受支持的包管理器或安装入口，禁止动态 shell 拼接。
+- [x] 安装成功后复用正式 Agent 检测和配置保存路径；只在能力探测通过后写入 Codex/Claude 配置，并提示用户完成官方登录。
+- [x] 调整 `install.sh`：安装 WeClaw 后只汇总缺失依赖和修复入口，不在 `curl | sh` 默认流程中新增未经选择的系统软件安装。
+- [x] 同步 `README_CN.md`、`README.md` 与项目上下文中的依赖、诊断和安装说明。
+- [x] 执行定向测试、安装脚本测试、全仓测试、race、vet、Staticcheck、依赖差异、文档校验和 diff 复核。
+
+### 验证方式
+
+- `go test ./cmd ./config ./messaging -count=1 -timeout 180s`。
+- `sh scripts/install_test.sh`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./... -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚与修正策略
+
+依赖探测、安装执行和 Agent 配置写入保持分层。若修复入口出现回归，可移除 `--fix` 路径并保留只读诊断；任何安装或重检失败均不得写入成功状态或覆盖原有 Agent 配置。系统包和第三方 CLI 由各自包管理器安装，WeClaw 不在回滚时擅自卸载用户机器上已有或新安装的软件。
+
+### Review 小结（2026-08-05）
+
+- `weclaw doctor` 默认只读，提前报告 Codex `app-server`、`sqlite3` 只读 `quick_check`、Linux `bubblewrap`、Node.js/npm、Claude CLI 与 ACP adapter；非原生 `codex-acp` 配置不会被误判为缺少 Codex CLI 的阻断错误。
+- `doctor --fix` 支持交互编号选择，以及非交互 `--components ... --yes`；依赖联动、固定参数命令、默认拒绝、安装后重检和 Agent 能力通过后配置均有自动化覆盖，外部安装测试不执行真实 sudo/npm。
+- Codex 通过官方 npm 包安装并验证 `app-server`；Claude CLI 与固定 `claude-agent-acp@0.58.1` 使用 npm 且禁止 sudo，Claude 路径要求 Node.js 22+。系统包管理器无法满足版本时在 npm 前失败，不添加第三方软件源。
+- 安装脚本 24 个隔离用例、全仓测试、全仓 race、vet、`go mod tidy -diff`、Staticcheck、文档校验和 `git diff --check` 均通过；没有执行真实系统包或 Agent 安装，也没有自动登录外部账号。
+
+## 2026-08-05 GitHub/Gitee 双源安装与更新
+
+### 目标
+
+在保持 GitHub 为权威发布源的前提下，为中国大陆或受限网络用户提供经过同一摘要校验的 Gitee 安装与更新镜像，并让来源选择、切换原因和镜像异常保持显式可见。
+
+### 范围与安全边界
+
+- 安装器支持显式 `github`、`gitee` 与 `auto` 来源；Gitee 用户可从 Gitee 源码镜像取得安装脚本，不再依赖 `raw.githubusercontent.com`。
+- `weclaw update` 使用与安装器一致的来源语义；默认来源和环境覆盖必须有明确优先级，不能让未知值静默回落 GitHub。
+- `auto` 仅在 DNS、连接、TLS、超时或服务端不可用时切换镜像，并输出切换原因；摘要缺失、重复、格式非法或 SHA-256 不匹配时立即失败，禁止换源掩盖供应链异常。
+- GitHub 继续负责版本、构建和权威 Release；Gitee 只镜像同一批二进制与 `checksums.txt`，不在 Gitee 重新构建。
+- 正式 GitHub Release 成功后再执行 Gitee 镜像；Gitee 失败不得删除已公开的 GitHub Release，但发布结果必须明确标记镜像降级并返回可观察失败。
+- 不引入第三方公共加速代理，不把 Gitee Token 写入仓库、日志、命令输出、Release 资产或配置示例。
+- 保留现有 128 MiB 下载上限、临时文件、摘要校验、原子替换、备份和回滚语义；Gitee latest 落后时禁止把现有客户端降级。
+
+### 关键未知与执行门禁
+
+- 目标仓库已确认为公开仓库 `git@gitee.com:jimdeng891/weclaw.git`；当前为空仓库，尚无默认分支或 Release。
+- Gitee 官方 API v5 已确认提供创建 Release、上传附件、查询 latest、列出/下载附件端点；写操作需要外部注入访问令牌。
+- 发布自动化使用用户创建的 Gitee 私人令牌，权限限制为 `user_info` 与 `projects`；令牌已保存为 GitHub Actions Secret `GITEE_TOKEN`，不在对话、本机配置或仓库中传递明文。
+- 本机首次 SSH 探测因 Gitee host key 尚未进入 `known_hosts` 而失败；不使用 `StrictHostKeyChecking=no` 绕过。自动化优先走 HTTPS + Secret，避免把本机 host key 接受作为发布依赖。
+- 在令牌安全注入、用户批准本计划且最小实测窗口确认前，不修改实现代码、不推送 Gitee、不上传 Release。
+
+### 验收标准
+
+- GitHub 可用时默认安装与更新行为保持兼容；受控模拟 GitHub 网络失败时，`auto` 明确切换到 Gitee 并完成同一版本安装或更新。
+- 显式 Gitee 来源完全不访问 GitHub；显式 GitHub 来源完全不访问 Gitee。
+- 两个来源都覆盖四个正式目标和同名 `checksums.txt`；缺失资产、错误摘要、截断下载、超限响应、未知来源和镜像版本倒退均失败关闭。
+- `weclaw update` 从 Gitee 下载后仍执行现有启动预检、运行态路径核对、原子替换和失败回滚。
+- 发布镜像只接受权威流程已生成并验证的资产；上传后重新下载并校验 tag、资产集合、文件大小和 SHA-256。
+- 中英文 README、安装帮助、更新配置、项目上下文和发布运维说明与实际行为一致。
+
+### 实施步骤
+
+- [ ] 确认 Gitee 仓库、令牌最小权限、Release/API 能力和一个不含凭据的测试版本上传/下载流程。
+- [x] 先扩展 `scripts/install_test.sh` 与 `cmd/update_test.go`，锁定三种来源、允许换源的网络错误、禁止换源的完整性错误和防降级语义。
+- [x] 在 `install.sh` 抽取 release provider，加入来源选择、显式日志、Gitee latest/资产 URL 与同源摘要校验。
+- [x] 在 `cmd/update_release.go`、`cmd/update.go` 和配置/Web 映射中加入 update source，复用现有下载上限、摘要校验、原子安装和回滚路径。
+- [x] 增加独立的 Gitee 镜像发布脚本或 workflow 步骤：只上传 GitHub 权威流程的现有资产，上传后重新下载验证；不在镜像侧构建。
+- [x] 同步 `README_CN.md`、`README.md`、`docs/AI_CONTEXT.md` 和发布运维说明，明确 GitHub 权威、Gitee 镜像及失败边界。
+- [ ] 执行安装/更新定向测试、全仓测试、race、vet、Staticcheck、govulncheck、文档校验、diff 检查和两个来源的隔离下载烟测。
+
+### 验证方式
+
+- `sh scripts/install_test.sh`，覆盖 GitHub/Gitee/auto、网络失败切换、摘要失败不切换、架构映射和显式版本。
+- `go test ./cmd -count=1 -timeout 120s`，覆盖 provider URL、latest 解析、版本防降级、下载上限、摘要和回滚。
+- 使用本地受控 HTTP server 分别模拟 GitHub 与 Gitee，不依赖公共网络制造成功测试或故意超时。
+- 对真实 Gitee 测试 Release 仅执行一次最小上传、下载和摘要烟测；删除或保留测试 Release 由用户在执行前确认。
+- `go test ./... -count=1 -timeout 120s`、`go test -race ./... -count=1 -timeout 180s`、`go vet ./...`、`go mod tidy -diff`。
+- `go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`、`go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚与修正策略
+
+双源逻辑按安装、更新和镜像发布三个边界隔离。实现回退时保留现有 GitHub 路径和校验语义，移除 Gitee provider/config/workflow 即可恢复单源；任何 Gitee 上传或校验失败都不修改已公开 GitHub Release。镜像凭据只通过外部 secret 注入，撤销凭据即可停止后续镜像，不影响现有客户端使用 GitHub。
+
 ## 2026-08-05 Codex provider 会话切换脚本
 
 ### 目标

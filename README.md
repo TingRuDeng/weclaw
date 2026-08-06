@@ -22,7 +22,7 @@ Use local Codex and Claude remotely from WeChat or Feishu while keeping real wor
 
 ## Quick Start
 
-Prerequisite: install the agents you plan to use. Codex uses `codex`, and Claude uses `claude`. When the one-line installer detects Claude CLI, it installs and configures a pinned `claude-agent-acp` version.
+After verifying the WeClaw binary, the one-line installer runs a read-only dependency check. On an interactive terminal it then lists missing components, their purpose, and linked prerequisites; installation starts only after the user selects components and confirms the complete plan. Codex uses `codex`; remote Claude operation requires both `claude` and the pinned `claude-agent-acp`. The current Claude npm installation path requires Node.js 22+.
 
 ```bash
 # Install the actively maintained distribution
@@ -33,6 +33,9 @@ curl -fsSL --proto '=https' --tlsv1.2 https://gitee.com/jimdeng891/weclaw/raw/ma
 
 # Check agents, platform credentials, and access control
 weclaw doctor
+
+# Select missing dependencies interactively; confirm before any system or official installer runs
+weclaw doctor --fix
 
 # Connect WeChat or Feishu as needed
 weclaw wechat login
@@ -285,7 +288,15 @@ weclaw doctor
 
 `weclaw web` binds to `127.0.0.1:39282` by default, injects the token through a URL fragment that is never sent to the server, and opens the browser. Soft settings such as agents, progress, allowlists, administrators, and workspace roots support hot reload. Platform enablement, credentials, or account topology changes require a restart. The built-in server has no TLS: non-loopback listeners are rejected by default and require an explicit `--allow-insecure-http` opt-in on a trusted LAN (a strong random token is still generated when `--token` is omitted); use an HTTPS tunnel or reverse proxy for public access.
 
-A successful Claude ACP check in `weclaw doctor` proves only that the `initialize` handshake works. It does not probe `session/list` or `session/resume`; use the real session commands to verify listing and recovery.
+`weclaw doctor` is read-only by default. In addition to the existing configuration checks, it inspects `sqlite3`, Linux `bubblewrap`, Node.js/npm, Codex CLI `app-server` support, Claude Code CLI, and the Claude ACP adapter. Missing runtime dependencies for a configured Agent are blocking failures; missing optional Agents or dependencies that affect only the `/cx` catalog or Codex Linux sandbox are warnings.
+
+When a controlling terminal exists, first installation connects the same `weclaw doctor --fix` wizard through `/dev/tty`, so dependency choices cannot consume the `curl | sh` script input. Without a controlling terminal the installer performs only the read-only check and prints follow-up commands. Set `WECLAW_SKIP_DEPENDENCY_SETUP=1` to skip both the check and wizard explicitly. Non-interactive dependency installation must be a separate explicit command with both components and consent, for example `weclaw doctor --fix --components sqlite3,bubblewrap --yes`; it never defaults to installing everything.
+
+`weclaw doctor --fix` labels component roles: SQLite and Linux bubblewrap are optional enhancements, Node.js/npm are Agent installation prerequisites, Codex and Claude are optional Agents, and Claude ACP is required after selecting Claude. Supported component names are `sqlite3`, `bubblewrap`, `nodejs`, `npm`, `codex`, `claude`, and `claude-acp`. Selecting Codex also selects Node.js/npm; selecting Claude or Claude ACP selects the CLI, adapter, and Node.js/npm. The full command and privilege plan is shown before execution, and pressing Enter or declining confirmation installs nothing.
+
+System dependencies use only a detected `apt-get`, `dnf`, or Homebrew installation. Linux privilege escalation is an explicit `sudo` command. npm installation never uses `sudo npm`: non-root users use the `~/.local` prefix, and the repair process temporarily prepends `~/.local/bin` while it rechecks capabilities and saves absolute Agent paths, then restores the original PATH. WeClaw does not add third-party Node repositories or replace nvm, mise, or another version manager. If the system package still does not satisfy the selected Agent's Node.js requirement, repair stops before npm runs and reports the real failure.
+
+After installation, WeClaw repeats the same capability probes and saves newly discovered Agent configuration only after verification. It never performs Codex or Claude login; run the corresponding CLI to complete official authentication. A successful Claude ACP check proves only that the `initialize` handshake works. It does not probe `session/list` or `session/resume`; use the real session commands to verify listing and recovery.
 
 Key security rules:
 
