@@ -165,7 +165,18 @@ func TestHelperRetryingCodexAppServer(t *testing.T) {
 				return
 			}
 			defer conn.Close()
-			serveDone <- serveMinimalCodexInitialize(conn)
+			if initializeErr := serveMinimalCodexInitialize(conn); initializeErr != nil {
+				serveDone <- initializeErr
+				return
+			}
+			// 真实 app-server 在 initialize 后继续驻留；测试 helper 也必须等客户端关闭，
+			// 否则进程退出与 ACPAgent 完成启动之间会形成调度相关的竞态。
+			for {
+				if _, _, readErr := conn.ReadMessage(); readErr != nil {
+					serveDone <- nil
+					return
+				}
+			}
 		}),
 	}
 	go func() { _ = server.Serve(listener) }()
