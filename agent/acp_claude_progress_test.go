@@ -7,173 +7,99 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestClaudeACPProgressMapsStructuredUpdates(t *testing.T) {
-	tests := []struct {
-		name   string
-		update sessionUpdate
-		want   string
-	}{
-		{name: "思考", update: sessionUpdate{SessionUpdate: "agent_thought_chunk", Content: json.RawMessage(`{"type":"text","text":"正在检查依赖"}`)}, want: "思考：正在检查依赖"},
-		{name: "工具开始", update: sessionUpdate{SessionUpdate: "tool_call", Title: "运行单元测试", Status: "pending"}, want: "工具：运行单元测试（等待中）"},
-		{name: "工具更新", update: sessionUpdate{SessionUpdate: "tool_call_update", Title: "运行单元测试", Status: "in_progress"}, want: "工具：运行单元测试（进行中）"},
-		{name: "计划", update: sessionUpdate{SessionUpdate: "plan", Entries: []acpPlanEntry{{Content: "修复失败测试", Status: "in_progress"}}}, want: "计划：修复失败测试（进行中）"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, ok := claudeACPProgressText(&test.update)
-			if !ok || got != test.want {
-				t.Fatalf("progress=(%q,%v), want (%q,true)", got, ok, test.want)
-			}
-		})
-	}
-}
-
-func TestClaudeACPProgressRejectsBodyAndRawJSON(t *testing.T) {
+func TestClaudeACPProgressSuppressesInternalUpdates(t *testing.T) {
+	state := newClaudeACPProgressState()
 	updates := []sessionUpdate{
-		{SessionUpdate: "agent_message_chunk", Content: json.RawMessage(`{"type":"text","text":"最终正文"}`)},
-		{SessionUpdate: "agent_thought_chunk", Content: json.RawMessage(`{"type":"image","text":"raw-value"}`)},
-		{SessionUpdate: "tool_call", Content: json.RawMessage(`{"secret":"raw-value"}`)},
+		{SessionUpdate: "agent_thought_chunk", Content: json.RawMessage(`{"type":"text","text":"正在检查依赖"}`)},
+		{SessionUpdate: "tool_call", ToolCallID: "call-1", Title: "运行单元测试", Status: "pending"},
+		{SessionUpdate: "tool_call_update", ToolCallID: "call-1", Title: "运行单元测试", Status: "in_progress"},
+		{SessionUpdate: "plan", Entries: []acpPlanEntry{{Content: "修复失败测试", Status: "in_progress"}}},
+		{SessionUpdate: "agent_message_chunk", Content: json.RawMessage(`{"type":"image","text":"raw-value"}`)},
 		{SessionUpdate: "unknown", Content: json.RawMessage(`{"text":"raw-value"}`)},
 	}
 	for _, update := range updates {
-		if got, ok := claudeACPProgressText(&update); ok || strings.Contains(got, "raw-value") {
-			t.Fatalf("update=%s progress=(%q,%v), want hidden", update.SessionUpdate, got, ok)
+		if event, ok := state.progressEvent(&update); ok {
+			t.Fatalf("update=%s event=%#v, want hidden", update.SessionUpdate, event)
 		}
 	}
 }
 
-func TestClaudeACPProgressCarriesToolTitleAndSuppressesDuplicate(t *testing.T) {
+func TestClaudeACPProgressBuffersVisibleMessageUntilToolBoundary(t *testing.T) {
 	state := newClaudeACPProgressState()
-	started := &sessionUpdate{
-		SessionUpdate: "tool_call", ToolCallID: "call-1", Title: "运行测试", Status: "in_progress",
+	chunks := []sessionUpdate{
+		{
+			SessionUpdate: "agent_message_chunk", MessageID: "message-1", Sequence: 41,
+			Content: json.RawMessage(`{"type":"text","text":"我先检查\n"}`),
+		},
+		{
+			SessionUpdate: "agent_message_chunk", MessageID: "message-1", Sequence: 42,
+			Content: json.RawMessage(`{"type":"text","text":"**当前实现**。"}`),
+		},
 	}
-	if text, ok := state.progressText(started); !ok || text != "工具：运行测试（进行中）" {
-		t.Fatalf("started=(%q,%v)", text, ok)
+	for index := range chunks {
+		if event, ok := state.progressEvent(&chunks[index]); ok {
+			t.Fatalf("chunk %d emitted early: %#v", index, event)
+		}
 	}
-	duplicate := &sessionUpdate{SessionUpdate: "tool_call_update", ToolCallID: "call-1", Status: "in_progress"}
-	if text, ok := state.progressText(duplicate); ok || text != "" {
-		t.Fatalf("duplicate=(%q,%v), want suppressed", text, ok)
-	}
-	completed := &sessionUpdate{SessionUpdate: "tool_call_update", ToolCallID: "call-1", Status: "completed"}
-	if text, ok := state.progressText(completed); !ok || text != "工具：运行测试（已完成）" {
-		t.Fatalf("completed=(%q,%v)", text, ok)
-	}
-}
-
-func TestClaudeACPProgressEventCarriesIdentityStateAndSequence(t *testing.T) {
-	state := newClaudeACPProgressState()
 	event, ok := state.progressEvent(&sessionUpdate{
-		SessionUpdate: "tool_call", ToolCallID: "call-7", Title: "运行回归测试",
-		Status: "in_progress", Sequence: 42,
+		SessionUpdate: "tool_call", ToolCallID: "call-1", Title: "读取代码", Sequence: 43,
 	})
 	if !ok {
-		t.Fatal("structured tool progress must emit")
+		t.Fatal("tool boundary must flush the completed user-visible message")
 	}
-	if event.ID != "tool:call-7" || event.Kind != ProgressKindTool || event.State != ProgressStateRunning || event.Sequence != 42 {
+	if event.ID != "agent-message:message-1" || event.Kind != ProgressKindMessage || event.State != ProgressStateCompleted || event.Sequence != 42 {
 		t.Fatalf("event=%#v", event)
 	}
-	if event.DisplayText() != "工具：运行回归测试（进行中）" || event.Summary != "运行回归测试" {
-		t.Fatalf("display=%q summary=%q", event.DisplayText(), event.Summary)
+	if event.Text != "我先检查\n**当前实现**。" {
+		t.Fatalf("text=%q", event.Text)
 	}
 }
 
-func TestClaudeACPProgressSuppressesNonAdjacentDuplicate(t *testing.T) {
-	state := newClaudeACPProgressState()
-	tool := &sessionUpdate{SessionUpdate: "tool_call", ToolCallID: "call-1", Title: "运行测试", Status: "in_progress"}
-	if _, ok := state.progressText(tool); !ok {
-		t.Fatal("first tool progress must emit")
-	}
-	plan := &sessionUpdate{SessionUpdate: "plan", Entries: []acpPlanEntry{{Content: "检查结果", Status: "in_progress"}}}
-	if _, ok := state.progressText(plan); !ok {
-		t.Fatal("intermediate plan progress must emit")
-	}
-	if text, ok := state.progressText(tool); ok || text != "" {
-		t.Fatalf("repeated tool=(%q,%v), want suppressed", text, ok)
-	}
-}
-
-func TestClaudeACPProgressBoundsStructuredHistory(t *testing.T) {
-	state := newClaudeACPProgressState()
-	for index := 0; index <= claudeProgressHistoryLimit; index++ {
-		state.progressText(&sessionUpdate{
-			SessionUpdate: "tool_call", ToolCallID: fmt.Sprintf("call-%d", index),
-			Title: fmt.Sprintf("工具-%d", index), Status: "in_progress",
-		})
-	}
-	if len(state.emitted) != claudeProgressHistoryLimit || len(state.toolTitles) != claudeProgressHistoryLimit {
-		t.Fatalf("history=%d tools=%d", len(state.emitted), len(state.toolTitles))
-	}
-	if _, exists := state.toolTitles["call-0"]; exists {
-		t.Fatal("oldest tool title must be evicted")
-	}
-	if state.emitted[len(state.emitted)-1] != "工具：工具-128（进行中）" {
-		t.Fatalf("latest progress=%q", state.emitted[len(state.emitted)-1])
-	}
-}
-
-func TestClaudeACPProgressAccumulatesThoughtChunks(t *testing.T) {
+func TestClaudeACPProgressFlushesPreviousMessageWhenMessageIDChanges(t *testing.T) {
 	state := newClaudeACPProgressState()
 	first := &sessionUpdate{
-		SessionUpdate: "agent_thought_chunk", MessageID: "thought-1",
-		Content: json.RawMessage(`{"type":"text","text":"正在"}`),
+		SessionUpdate: "agent_message_chunk", MessageID: "message-1", Sequence: 10,
+		Content: json.RawMessage(`{"type":"text","text":"第一条可见消息"}`),
+	}
+	if event, ok := state.progressEvent(first); ok {
+		t.Fatalf("first chunk emitted early: %#v", event)
 	}
 	second := &sessionUpdate{
-		SessionUpdate: "agent_thought_chunk", MessageID: "thought-1",
-		Content: json.RawMessage(`{"type":"text","text":"分析"}`),
+		SessionUpdate: "agent_message_chunk", MessageID: "message-2", Sequence: 11,
+		Content: json.RawMessage(`{"type":"text","text":"第二条可见消息"}`),
 	}
-	if text, ok := state.progressText(first); !ok || text != "思考：正在" {
-		t.Fatalf("first=(%q,%v)", text, ok)
+	event, ok := state.progressEvent(second)
+	if !ok || event.ID != "agent-message:message-1" || event.Text != "第一条可见消息" || event.Sequence != 10 {
+		t.Fatalf("first boundary event=(%#v,%v)", event, ok)
 	}
-	if text, ok := state.progressText(second); !ok || text != "思考：正在分析" {
-		t.Fatalf("second=(%q,%v)", text, ok)
-	}
-	state.progressText(&sessionUpdate{
-		SessionUpdate: "agent_thought_chunk", MessageID: "thought-1",
-		Content: json.RawMessage(fmt.Sprintf(`{"type":"text","text":%q}`, strings.Repeat("长", claudeThoughtBufferMaxRunes+1))),
-	})
-	if got := len([]rune(state.thoughtText)); got != claudeThoughtBufferMaxRunes {
-		t.Fatalf("thought buffer runes=%d", got)
+	event, ok = state.progressEvent(&sessionUpdate{SessionUpdate: "tool_call", ToolCallID: "call-2"})
+	if !ok || event.ID != "agent-message:message-2" || event.Text != "第二条可见消息" || event.Sequence != 11 {
+		t.Fatalf("second boundary event=(%#v,%v)", event, ok)
 	}
 }
 
-func TestClaudeACPProgressSelectsPlanAndTranslatesStatuses(t *testing.T) {
-	entries := []acpPlanEntry{
-		{Content: "第一步", Status: "completed"},
-		{Content: "第二步", Status: "pending"},
+func TestClaudeACPProgressUsesToolBoundaryWithoutMessageID(t *testing.T) {
+	state := newClaudeACPProgressState()
+	chunks := []sessionUpdate{
+		{SessionUpdate: "agent_message_chunk", Sequence: 20, Content: json.RawMessage(`{"type":"text","text":"兼容"}`)},
+		{SessionUpdate: "agent_message_chunk", Sequence: 21, Content: json.RawMessage(`{"type":"text","text":"旧版 ACP"}`)},
 	}
-	if text, ok := planProgressText(entries); !ok || text != "计划：第一步（已完成）" {
-		t.Fatalf("completed plan=(%q,%v)", text, ok)
-	}
-	entries[0].Status = "unknown"
-	if text, ok := planProgressText(entries); !ok || text != "计划：第二步（等待中）" {
-		t.Fatalf("pending plan=(%q,%v)", text, ok)
-	}
-	for status, want := range map[string]string{
-		"failed": "失败", "cancelled": "已取消", "unknown": "",
-	} {
-		if got := claudeProgressStatus(status); got != want {
-			t.Fatalf("status %s=%q, want %q", status, got, want)
+	for index := range chunks {
+		if event, ok := state.progressEvent(&chunks[index]); ok {
+			t.Fatalf("chunk %d emitted early: %#v", index, event)
 		}
 	}
-}
-
-func TestClaudeACPProgressUsesLatestLineAndLimitsLength(t *testing.T) {
-	longLine := strings.Repeat("进", claudeProgressMaxRunes+10)
-	text := progressSummary("旧行\n\n" + longLine)
-	if !strings.HasSuffix(text, "…") || len([]rune(text)) != claudeProgressMaxRunes {
-		t.Fatalf("summary runes=%d suffix=%q", len([]rune(text)), text[len(text)-3:])
-	}
-	if text, ok := planProgressText(nil); ok || text != "" {
-		t.Fatalf("empty plan=(%q,%v)", text, ok)
+	event, ok := state.progressEvent(&sessionUpdate{SessionUpdate: "tool_call_update", ToolCallID: "call-legacy"})
+	if !ok || event.ID != "" || event.Text != "兼容旧版 ACP" || event.Sequence != 21 {
+		t.Fatalf("legacy boundary event=(%#v,%v)", event, ok)
 	}
 }
 
-func TestClaudeACPProgressChatEmitsFinalOnce(t *testing.T) {
+func TestClaudeACPProgressChatEmitsOnlyCompletedVisibleMessages(t *testing.T) {
 	ag := NewACPAgent(ACPAgentConfig{ConfiguredName: "claude", StateFile: filepath.Join(t.TempDir(), "state.json")})
 	ag.sessions["conversation-1"] = "session-1"
 	ag.started = true
@@ -184,9 +110,13 @@ func TestClaudeACPProgressChatEmitsFinalOnce(t *testing.T) {
 		ag.notifyMu.Lock()
 		updates := ag.notifyCh["session-1"]
 		ag.notifyMu.Unlock()
-		updates <- &sessionUpdate{SessionUpdate: "agent_thought_chunk", Content: json.RawMessage(`{"type":"text","text":"正在分析"}`)}
-		updates <- &sessionUpdate{SessionUpdate: "agent_message_chunk", Content: json.RawMessage(`{"type":"text","text":"完成"}`)}
-		return json.RawMessage(`{"text":"完成"}`), nil
+		updates <- &sessionUpdate{SessionUpdate: "agent_thought_chunk", MessageID: "thought-1", Content: json.RawMessage(`{"type":"text","text":"正在分析"}`)}
+		updates <- &sessionUpdate{SessionUpdate: "agent_message_chunk", MessageID: "message-1", Content: json.RawMessage(`{"type":"text","text":"我先检查"}`)}
+		updates <- &sessionUpdate{SessionUpdate: "agent_message_chunk", MessageID: "message-1", Content: json.RawMessage(`{"type":"text","text":"当前实现。"}`)}
+		updates <- &sessionUpdate{SessionUpdate: "tool_call", ToolCallID: "call-1", Title: "读取代码", Status: "in_progress"}
+		updates <- &sessionUpdate{SessionUpdate: "tool_call_update", ToolCallID: "call-1", Title: "读取代码", Status: "completed"}
+		updates <- &sessionUpdate{SessionUpdate: "agent_message_chunk", MessageID: "message-2", Content: json.RawMessage(`{"type":"text","text":"最终结果"}`)}
+		return json.RawMessage(`{"text":"最终结果"}`), nil
 	}
 	var progress []string
 	reply, err := ag.chatLegacyACP(context.Background(), "conversation-1", "开始", func(text string) {
@@ -195,7 +125,7 @@ func TestClaudeACPProgressChatEmitsFinalOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chatLegacyACP error: %v", err)
 	}
-	if reply != "完成" || !reflect.DeepEqual(progress, []string{"思考：正在分析"}) {
+	if reply != "我先检查当前实现。最终结果" || len(progress) != 1 || progress[0] != "我先检查当前实现。" {
 		t.Fatalf("reply=%q progress=%#v", reply, progress)
 	}
 }

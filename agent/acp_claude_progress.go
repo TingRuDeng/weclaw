@@ -1,284 +1,94 @@
 package agent
 
-import (
-	"fmt"
-	"strings"
-	"unicode/utf8"
-)
+import "strings"
 
-const (
-	claudeProgressMaxRunes      = 240
-	claudeThoughtBufferMaxRunes = 4096
-	claudeProgressHistoryLimit  = 128
-)
-
+// claudeACPProgressState 只聚合 Claude 已允许展示的 agent_message_chunk。
+// 思考、工具和计划事件仍参与任务执行，但不会直接进入用户进度卡。
 type claudeACPProgressState struct {
-	toolTitles     map[string]string
-	thoughtMessage string
-	thoughtText    string
-	lastText       string
-	emitted        []string
-	toolOrder      []string
+	messageID       string
+	messageText     string
+	messageSequence uint64
+	emittedIDs      map[string]struct{}
 }
 
 func newClaudeACPProgressState() *claudeACPProgressState {
-	return &claudeACPProgressState{toolTitles: make(map[string]string)}
+	return &claudeACPProgressState{emittedIDs: make(map[string]struct{})}
 }
 
-// progressText 记录工具标题，并只输出允许展示的结构化字段。
-func (s *claudeACPProgressState) progressText(update *sessionUpdate) (string, bool) {
-	if update == nil {
-		return "", false
-	}
-	if update.SessionUpdate == "agent_thought_chunk" {
-		return s.thoughtProgressText(update)
-	}
-	if update.SessionUpdate == "tool_call" {
-		s.rememberToolTitle(update)
-	}
-	if update.SessionUpdate == "tool_call_update" && strings.TrimSpace(update.Title) == "" {
-		update = cloneUpdateWithTitle(update, s.toolTitles[update.ToolCallID])
-	}
-	return s.uniqueStructuredProgress(claudeACPProgressText(update))
-}
-
-// progressEvent 在保留旧展示文案的同时透传 Claude ACP 的事件身份和状态。
+// progressEvent 在消息边界明确后，原样发送上一条完整的用户可见消息。
+// 最后一条消息不会在 prompt 终态强制刷新，由共享终态流程作为最终结果写回完成卡。
 func (s *claudeACPProgressState) progressEvent(update *sessionUpdate) (ProgressEvent, bool) {
-	text, ok := s.progressText(update)
-	if !ok {
+	if update == nil {
 		return ProgressEvent{}, false
 	}
-	event := ProgressEvent{
-		Kind:     ProgressKindStatus,
-		State:    ProgressStateRunning,
-		Sequence: update.Sequence,
-		Text:     text,
-		Summary:  strings.TrimSpace(text),
-	}
 	switch update.SessionUpdate {
-	case "agent_thought_chunk":
-		event.ID = progressEventID("thought", update.MessageID)
-		event.Kind = ProgressKindThought
-		event.Detail = strings.TrimSpace(strings.TrimPrefix(text, "思考："))
-		event.Summary = "思考"
+	case "agent_message_chunk":
+		return s.appendMessageChunk(update)
 	case "tool_call", "tool_call_update":
-		event.ID = progressEventID("tool", update.ToolCallID)
-		event.Kind = ProgressKindTool
-		event.State = normalizeProgressState(update.Status)
-		if event.State == ProgressStateUnknown {
-			event.State = ProgressStateRunning
-		}
-		event.Summary = progressSummary(firstNonEmpty(update.Title, s.toolTitles[update.ToolCallID]))
-	case "plan":
-		event.ID = "plan"
-		event.Kind = ProgressKindPlan
-		if entry, found := currentPlanEntry(update.Entries); found {
-			event.State = normalizeProgressState(entry.Status)
-			event.Summary = progressSummary(entry.Content)
-		}
+		return s.flushMessage()
+	default:
+		return ProgressEvent{}, false
 	}
-	return event, true
 }
 
-func progressEventID(kind string, sourceID string) string {
-	sourceID = strings.TrimSpace(sourceID)
-	if sourceID == "" {
-		return ""
-	}
-	return kind + ":" + sourceID
-}
-
-func (s *claudeACPProgressState) thoughtProgressText(update *sessionUpdate) (string, bool) {
-	chunk := extractChunkText(update)
-	if chunk == "" {
-		return "", false
+func (s *claudeACPProgressState) appendMessageChunk(update *sessionUpdate) (ProgressEvent, bool) {
+	text := extractChunkText(update)
+	if text == "" {
+		return ProgressEvent{}, false
 	}
 	messageID := strings.TrimSpace(update.MessageID)
-	if messageID != "" && messageID != s.thoughtMessage {
-		s.thoughtMessage = messageID
-		s.thoughtText = ""
-	}
-	s.thoughtText = appendThoughtChunk(s.thoughtText, chunk)
-	return s.uniqueProgressText(prefixedProgress("思考", s.thoughtText))
-}
-
-func appendThoughtChunk(existing string, chunk string) string {
-	combined := []rune(existing + chunk)
-	if len(combined) <= claudeThoughtBufferMaxRunes {
-		return string(combined)
-	}
-	return string(combined[len(combined)-claudeThoughtBufferMaxRunes:])
-}
-
-func (s *claudeACPProgressState) uniqueProgressText(text string, ok bool) (string, bool) {
-	if !ok || text == s.lastText {
-		return "", false
-	}
-	s.lastText = text
-	return text, true
-}
-
-func (s *claudeACPProgressState) uniqueStructuredProgress(text string, ok bool) (string, bool) {
-	if !ok {
-		return "", false
-	}
-	if containsProgressText(s.emitted, text) {
-		return "", false
-	}
-	s.emitted = appendBoundedProgress(s.emitted, text)
-	s.lastText = text
-	return text, true
-}
-
-func containsProgressText(history []string, text string) bool {
-	for _, item := range history {
-		if item == text {
-			return true
+	if messageID != "" {
+		if _, emitted := s.emittedIDs[messageID]; emitted {
+			return ProgressEvent{}, false
 		}
 	}
-	return false
-}
 
-func appendBoundedProgress(history []string, text string) []string {
-	if len(history) < claudeProgressHistoryLimit {
-		return append(history, text)
+	if s.messageText == "" {
+		s.startMessage(messageID, text, update.Sequence)
+		return ProgressEvent{}, false
 	}
-	copy(history, history[1:])
-	history[len(history)-1] = text
-	return history
-}
-
-func (s *claudeACPProgressState) rememberToolTitle(update *sessionUpdate) {
-	toolID := strings.TrimSpace(update.ToolCallID)
-	title := progressSummary(update.Title)
-	if toolID != "" && title != "" {
-		if _, exists := s.toolTitles[toolID]; !exists {
-			s.rememberToolID(toolID)
-		}
-		s.toolTitles[toolID] = title
+	if s.messageID != "" && messageID != "" && messageID != s.messageID {
+		event, ok := s.flushMessage()
+		s.startMessage(messageID, text, update.Sequence)
+		return event, ok
 	}
-}
-
-func (s *claudeACPProgressState) rememberToolID(toolID string) {
-	if len(s.toolOrder) < claudeProgressHistoryLimit {
-		s.toolOrder = append(s.toolOrder, toolID)
-		return
+	if s.messageID == "" && messageID != "" {
+		// 兼容旧 ACP runtime 偶发缺失首个 chunk 的 messageId：不臆造边界，
+		// 把后续首次出现的稳定 ID 归入当前消息。
+		s.messageID = messageID
 	}
-	oldest := s.toolOrder[0]
-	delete(s.toolTitles, oldest)
-	copy(s.toolOrder, s.toolOrder[1:])
-	s.toolOrder[len(s.toolOrder)-1] = toolID
+	s.messageText += text
+	s.messageSequence = update.Sequence
+	return ProgressEvent{}, false
 }
 
-func cloneUpdateWithTitle(update *sessionUpdate, title string) *sessionUpdate {
-	cloned := *update
-	cloned.Title = title
-	return &cloned
+func (s *claudeACPProgressState) startMessage(messageID string, text string, sequence uint64) {
+	s.messageID = messageID
+	s.messageText = text
+	s.messageSequence = sequence
 }
 
-// claudeACPProgressText 将标准 ACP 更新映射为飞书和微信可读的单行进度。
-func claudeACPProgressText(update *sessionUpdate) (string, bool) {
-	if update == nil {
-		return "", false
-	}
-	switch update.SessionUpdate {
-	case "agent_thought_chunk":
-		return prefixedProgress("思考", extractChunkText(update))
-	case "tool_call", "tool_call_update":
-		return toolProgressText(update)
-	case "plan":
-		return planProgressText(update.Entries)
-	default:
-		return "", false
-	}
-}
-
-func prefixedProgress(prefix string, value string) (string, bool) {
-	text := progressSummary(value)
+func (s *claudeACPProgressState) flushMessage() (ProgressEvent, bool) {
+	messageID := s.messageID
+	text := strings.TrimSpace(s.messageText)
+	sequence := s.messageSequence
+	s.messageID = ""
+	s.messageText = ""
+	s.messageSequence = 0
 	if text == "" {
-		return "", false
+		return ProgressEvent{}, false
 	}
-	return prefix + "：" + text, true
-}
 
-func toolProgressText(update *sessionUpdate) (string, bool) {
-	title := progressSummary(update.Title)
-	if title == "" {
-		return "", false
-	}
-	status := claudeProgressStatus(update.Status)
-	if status == "" {
-		return "工具：" + title, true
-	}
-	return fmt.Sprintf("工具：%s（%s）", title, status), true
-}
-
-func planProgressText(entries []acpPlanEntry) (string, bool) {
-	entry, ok := currentPlanEntry(entries)
-	if !ok {
-		return "", false
-	}
-	content := progressSummary(entry.Content)
-	if content == "" {
-		return "", false
-	}
-	status := claudeProgressStatus(entry.Status)
-	if status == "" {
-		return "计划：" + content, true
-	}
-	return fmt.Sprintf("计划：%s（%s）", content, status), true
-}
-
-func currentPlanEntry(entries []acpPlanEntry) (acpPlanEntry, bool) {
-	for _, entry := range entries {
-		if entry.Status == "in_progress" && strings.TrimSpace(entry.Content) != "" {
-			return entry, true
+	eventID := ""
+	if messageID != "" {
+		if _, emitted := s.emittedIDs[messageID]; emitted {
+			return ProgressEvent{}, false
 		}
+		s.emittedIDs[messageID] = struct{}{}
+		eventID = "agent-message:" + messageID
 	}
-	for index := len(entries) - 1; index >= 0; index-- {
-		if entries[index].Status == "completed" && strings.TrimSpace(entries[index].Content) != "" {
-			return entries[index], true
-		}
-	}
-	for _, entry := range entries {
-		if entry.Status == "pending" && strings.TrimSpace(entry.Content) != "" {
-			return entry, true
-		}
-	}
-	return acpPlanEntry{}, false
-}
-
-func claudeProgressStatus(status string) string {
-	switch strings.TrimSpace(status) {
-	case "pending":
-		return "等待中"
-	case "in_progress":
-		return "进行中"
-	case "completed":
-		return "已完成"
-	case "failed":
-		return "失败"
-	case "cancelled":
-		return "已取消"
-	default:
-		return ""
-	}
-}
-
-func progressSummary(value string) string {
-	lines := strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n")
-	for index := len(lines) - 1; index >= 0; index-- {
-		if line := strings.Join(strings.Fields(lines[index]), " "); line != "" {
-			return truncateProgress(line)
-		}
-	}
-	return ""
-}
-
-func truncateProgress(value string) string {
-	if utf8.RuneCountInString(value) <= claudeProgressMaxRunes {
-		return value
-	}
-	runes := []rune(value)
-	return string(runes[:claudeProgressMaxRunes-1]) + "…"
+	return ProgressEvent{
+		ID: eventID, Kind: ProgressKindMessage, State: ProgressStateCompleted,
+		Sequence: sequence, Text: text,
+	}, true
 }

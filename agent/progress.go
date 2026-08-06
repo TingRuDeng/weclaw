@@ -97,19 +97,3 @@ func (c progressCallbacks) emit(event ProgressEvent) {
 func (c progressCallbacks) enabled() bool {
 	return c.onEvent != nil || c.onText != nil
 }
-
-func normalizeProgressState(value string) ProgressState {
-	normalized := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(value)))
-	switch normalized {
-	case "pending", "queued", "todo":
-		return ProgressStatePending
-	case "inprogress", "running", "started", "streaming":
-		return ProgressStateRunning
-	case "completed", "complete", "done", "success", "succeeded":
-		return ProgressStateCompleted
-	case "failed", "failure", "error", "cancelled", "canceled":
-		return ProgressStateFailed
-	default:
-		return ProgressStateUnknown
-	}
-}
