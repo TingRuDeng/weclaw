@@ -22,6 +22,7 @@ type codexSessionCommandRuntime struct {
 	bindingKey      string
 	ownerBindingKey string
 	workspaceRoot   string
+	renameSpec      *sessionRenameCommandSpec
 }
 
 type codexSessionCommandPreparation struct {
@@ -34,6 +35,25 @@ type codexSessionCommandPreparation struct {
 // prepareCodexSessionCommand 解析路由并在同一绑定锁内准备命令运行状态。
 func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessionCommandRequest) codexSessionCommandPreparation {
 	actorUserID, routeUserID := normalizeCodexCommandUsers(req)
+	if spec, handled, err := parseWorkspaceCommand(req.Trimmed, "/cx"); handled {
+		if err != nil {
+			return codexSessionCommandPreparation{result: textNavigationResult(err.Error())}
+		}
+		agentName, ok := h.codexAgentName()
+		if !ok {
+			return codexSessionCommandPreparation{result: textNavigationResult("当前没有配置 codex agent")}
+		}
+		result := h.handleWorkspaceCommand(workspaceCommandRequest{
+			Context: ctx, ActorUserID: actorUserID, RouteUserID: routeUserID,
+			AgentName: agentName, AgentKind: "codex", BindingKey: codexBindingKey(routeUserID, agentName),
+			Platform: req.Platform, Admin: h.codexSessionCommandAdmin(req, actorUserID), Private: req.Private, Spec: spec,
+		})
+		return codexSessionCommandPreparation{result: textNavigationResult(result)}
+	}
+	renameSpec, renameHandled, renameErr := parseSessionRenameCommand(req.Trimmed, "/cx")
+	if renameHandled && renameErr != nil {
+		return codexSessionCommandPreparation{result: textNavigationResult(renameErr.Error())}
+	}
 	fields := strings.Fields(req.Trimmed)
 	if len(fields) < 2 || fields[1] == "help" {
 		return codexSessionCommandPreparation{result: textNavigationResult(buildCodexSessionHelpText())}
@@ -51,6 +71,10 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 	if err != nil {
 		return codexSessionCommandPreparation{result: textNavigationResult(err.Error())}
 	}
+	unlockRegistry := func() {}
+	if codexCommandRequiresWorkspaceRegistryControl(fields[1]) {
+		unlockRegistry = h.lockWorkspaceRegistryControl()
+	}
 	runtime := codexSessionCommandRuntime{
 		ctx: ctx, req: req, actorUserID: actorUserID, routeUserID: routeUserID,
 		admin: h.codexSessionCommandAdmin(req, actorUserID), private: req.Private, fields: fields,
@@ -59,19 +83,39 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 		ownerBindingKey: codexBindingKey(actorUserID, agentName),
 		workspaceRoot:   h.codexWorkspaceRootForRoute(actorUserID, routeUserID, agentName, ag),
 	}
+	if renameHandled {
+		runtime.renameSpec = &renameSpec
+	}
 	unlock, err := h.lockCodexSessionBinding(ctx, runtime.bindingKey, fields[1])
 	if err != nil {
+		unlockRegistry()
 		return codexSessionCommandPreparation{result: textNavigationResult(
 			"前一项 Codex 会话操作仍在处理，本次命令未执行。",
 		)}
 	}
 	if reply := h.rejectDisallowedCodexWorkspace(runtime.bindingKey, agentName, runtime.workspaceRoot, fields, runtime.admin); reply != "" {
 		unlock()
+		unlockRegistry()
 		return codexSessionCommandPreparation{result: textNavigationResult(reply)}
 	}
 	h.ensureCodexSessions().ensureWorkspace(runtime.bindingKey, runtime.workspaceRoot)
 	h.syncCodexThreadFromAgent(routeUserID, agentName, runtime.workspaceRoot, ag)
-	return codexSessionCommandPreparation{runtime: runtime, unlock: unlock, ready: true}
+	return codexSessionCommandPreparation{runtime: runtime, unlock: func() {
+		unlock()
+		unlockRegistry()
+	}, ready: true}
+}
+
+func codexCommandRequiresWorkspaceRegistryControl(command string) bool {
+	if isCodexShortSelectionToken(command) {
+		return true
+	}
+	switch command {
+	case "new", "switch", "rename", "archive":
+		return true
+	default:
+		return false
+	}
 }
 
 // prepareCodexCdCommand 先用本地目录解析工作空间；只有唯一会话需要自动绑定时才延迟启动共享 Host。
@@ -97,13 +141,18 @@ func (h *Handler) prepareCodexCdCommand(
 		bindingKey:      codexBindingKey(routeUserID, agentName),
 		ownerBindingKey: codexBindingKey(actorUserID, agentName),
 	}
+	unlockRegistry := h.lockWorkspaceRegistryControl()
 	unlock, err := h.lockCodexSessionBinding(ctx, runtime.bindingKey, fields[1])
 	if err != nil {
+		unlockRegistry()
 		return codexSessionCommandPreparation{result: textNavigationResult(
 			"前一项 Codex 会话操作仍在处理，本次命令未执行。",
 		)}
 	}
-	return codexSessionCommandPreparation{runtime: runtime, unlock: unlock, ready: true}
+	return codexSessionCommandPreparation{runtime: runtime, unlock: func() {
+		unlock()
+		unlockRegistry()
+	}, ready: true}
 }
 
 // prepareCodexListCommand 直接读取本地 Codex App 目录，避免只读列表冷启动共享 Host。
@@ -239,6 +288,8 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 		}))
 	case "archive":
 		return textNavigationResult(h.handleCodexArchiveCommand(runtime))
+	case "rename":
+		return textNavigationResult(h.handleCodexRenameCommand(runtime))
 	case "switch":
 		return h.dispatchCodexSwitchCommand(runtime)
 	default:

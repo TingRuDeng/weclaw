@@ -16,7 +16,7 @@ func (h *Handler) handleModePlatformCommand(ctx context.Context, req platformCom
 	if req.Trimmed == "/mode" && h.sendFeishuModeCard(ctx, req, routeUserID, modeKey) {
 		return true
 	}
-	replyPlatformCommand(ctx, req, h.handleModeCommandForActor(routeUserID, req.Message.UserID, req.Trimmed))
+	replyPlatformCommand(ctx, req, h.handleModeCommandForActorContext(ctx, routeUserID, req.Message.UserID, req.Trimmed))
 	return true
 }
 
@@ -50,6 +50,12 @@ func (h *Handler) handleModeCommand(routeUserID string, trimmed string) string {
 
 // handleModeCommandForActor 分离会话状态键和审计操作者，避免群聊路由覆盖真实身份。
 func (h *Handler) handleModeCommandForActor(routeUserID string, actorUserID string, trimmed string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), automaticApprovalDisplayTimeout)
+	defer cancel()
+	return h.handleModeCommandForActorContext(ctx, routeUserID, actorUserID, trimmed)
+}
+
+func (h *Handler) handleModeCommandForActorContext(ctx context.Context, routeUserID string, actorUserID string, trimmed string) string {
 	modeKey := approvalModeKey(actorUserID, routeUserID)
 	fields := strings.Fields(trimmed)
 	if len(fields) == 1 {
@@ -61,11 +67,14 @@ func (h *Handler) handleModeCommandForActor(routeUserID string, actorUserID stri
 	switch strings.ToLower(strings.TrimSpace(fields[1])) {
 	case "yolo":
 		h.setYoloMode(modeKey, true)
-		resolved := h.resolvePendingApprovalsForYolo(actorUserID, routeUserID)
+		resolved, displayFailures := h.resolvePendingApprovalsForYolo(ctx, actorUserID, routeUserID)
 		h.auditRecord(auditEntry{User: actorUserID, Action: "mode_yolo_enabled"})
 		reply := "已切换为 yolo 模式：当前操作者在此窗口会自动同意 Agent 授权请求。\n⚠️ 该模式不改变全局 sandbox；Agent 的普通提问仍需选择。发送 /mode default 可恢复授权确认。"
 		if resolved > 0 {
 			reply += fmt.Sprintf("\n已同时放行 %d 个切换前待确认的授权请求。", resolved)
+		}
+		if displayFailures > 0 {
+			reply += fmt.Sprintf("\n⚠️ 其中卡片更新失败 %d 个；授权已生效，请以任务执行结果为准。", displayFailures)
 		}
 		return reply
 	case "default":

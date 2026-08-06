@@ -29,7 +29,9 @@ func TestBuildHelpText(t *testing.T) {
 		"/cx ls",
 		"/cx <编号|..> 选择或返回",
 		"/cx archive current 归档当前空闲会话",
+		"/cx rename current|<编号> <名称> 重命名会话",
 		"/cc quota 查看 Claude 账号额度",
+		"/cc rename current|<编号> <名称> 重命名会话",
 		"/codex <内容> 发给 Codex",
 		"@cx <内容> 发给 Codex",
 		"/cc <内容> 发给 Claude",
@@ -160,7 +162,7 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
 	}, adminReply)
 	got = helpChoiceIDs(adminReply.Choices[0].Choices)
-	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users"} {
+	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users", "/cx workspace", "/cc workspace"} {
 		if !got[want] {
 			t.Fatalf("admin help choices=%#v, want %q", adminReply.Choices[0].Choices, want)
 		}
@@ -223,10 +225,13 @@ func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
 		t.Fatalf("choices=%#v, want one codex help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/cx ls", "/cx status", "/cx pwd", "/cx quota", "/cx model ls", "/cx clean", "/guide", "/cx help", "/help"} {
+	for _, want := range []string{"/cx ls", "/cx status", "/cx pwd", "/cx quota", "/cx model ls", "/cx clean", "/cx rename", "/guide", "/cx help", "/help"} {
 		if !got[want] {
 			t.Fatalf("codex help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
+	}
+	if got["/cx workspace"] {
+		t.Fatalf("ordinary codex help choices=%#v, must keep workspace mutation in admin submenu", reply.Choices[0].Choices)
 	}
 	if !strings.Contains(reply.Choices[0].Prompt, "Codex") {
 		t.Fatalf("codex help prompt=%q, want section title", reply.Choices[0].Prompt)
@@ -248,10 +253,13 @@ func TestFeishuHelpClaudeSubmenuIncludesQuota(t *testing.T) {
 		t.Fatalf("choices=%#v, want one claude help card", reply.Choices)
 	}
 	got := helpChoiceIDs(reply.Choices[0].Choices)
-	for _, want := range []string{"/cc ls", "/cc new", "/cc status", "/cc pwd", "/cc quota", "/cc model ls", "/cc model reset", "/cc help", "/help"} {
+	for _, want := range []string{"/cc ls", "/cc new", "/cc status", "/cc pwd", "/cc quota", "/cc model ls", "/cc model reset", "/cc rename", "/cc help", "/help"} {
 		if !got[want] {
 			t.Fatalf("claude help choices=%#v, want %q", reply.Choices[0].Choices, want)
 		}
+	}
+	if got["/cc workspace"] {
+		t.Fatalf("ordinary claude help choices=%#v, must keep workspace mutation in admin submenu", reply.Choices[0].Choices)
 	}
 	for _, disabled := range []string{"/cc owner", "/cc cli"} {
 		if got[disabled] {
@@ -396,6 +404,9 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx switch <编号> 切换并绑定当前工作空间会话",
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx archive current|<编号> 归档当前或列表中的空闲会话",
+		"/cx rename current|<编号> <名称> 重命名当前或列表中的会话",
+		"/cx workspace add <路径> 管理员私聊登记已有工作目录",
+		"/cx workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cx pwd 查看当前工作空间",
 		"/cx status 查看当前工作空间、会话、任务、账号和运行状态",
 		"/cx quota 查看 Codex 账号额度",
@@ -425,6 +436,9 @@ func TestBuildClaudeSessionHelpTextIncludesCompleteCommands(t *testing.T) {
 	for _, want := range []string{
 		"/cc whoami 查看当前 workspace/session 绑定",
 		"/cc new 新建当前工作空间会话",
+		"/cc rename current|<编号> <名称> 重命名当前或列表中的会话",
+		"/cc workspace add <路径> 管理员私聊登记已有工作目录",
+		"/cc workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cc status 查看 binding、共享 ClaudeHost 和 writer 状态",
 		"/cc quota 查看 Claude 账号额度",
 		"/cc model status 查看新建 Claude 会话的默认模型配置",
@@ -441,5 +455,15 @@ func TestAdminHelpDocumentsDirectFeishuApproval(t *testing.T) {
 	text := buildHelpTextForAdmin(true)
 	if !strings.Contains(text, "/feishu users approve <用户ID> [--admin]") {
 		t.Fatalf("admin help=%q, want direct Feishu approval command", text)
+	}
+	for _, want := range []string{
+		"/cx workspace add <路径>",
+		"/cx workspace remove <编号|路径>",
+		"/cc workspace add <路径>",
+		"/cc workspace remove <编号|路径>",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("admin help should document %q, got %q", want, text)
+		}
 	}
 }

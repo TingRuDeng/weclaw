@@ -2,6 +2,8 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -234,10 +236,81 @@ func TestApprovalHandlerYoloAutoApprovesCodexFileChangeDecision(t *testing.T) {
 	}
 }
 
+func TestApprovalHandlerYoloRecordsAutomaticApprovalWithoutSendingApprovalCard(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := "feishu:tenant:dm:chat-a:ou_user"
+	h.setYoloMode(approvalModeKey("ou_user", route), true)
+	reply := newAutomaticApprovalCaptureReplier("card-task-1")
+	serialized := newSerializedReplier(reply)
+
+	decision, err := h.approvalHandlerForRoute(agentInteractionContextOptions{
+		actorUserID: "ou_user", routeUserID: route, agentName: "claude", reply: serialized,
+	})(context.Background(), agent.ApprovalRequest{
+		RequestID: "request-1",
+		ToolCall:  json.RawMessage(`{"command":"date"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "deny", Name: "拒绝", Kind: "deny"},
+			{ID: "allow_always", Name: "始终允许", Kind: "allow"},
+		},
+	})
+	if err != nil || decision != "allow_always" {
+		t.Fatalf("decision=%q err=%v，期望 YOLO 保持自动放行", decision, err)
+	}
+	if len(reply.choiceCh) != 0 {
+		t.Fatal("YOLO 后续审批不应发送新的审批卡片")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	record := reply.waitAutomaticApproval(t, ctx)
+	if !strings.Contains(record.prompt, `{"command":"date"}`) {
+		t.Fatalf("prompt=%q，期望保留审批摘要供任务卡记录", record.prompt)
+	}
+	if record.choice.ID != "allow_always" || record.choice.Label != "始终允许" ||
+		record.choice.Metadata["approval_key"] == "" ||
+		record.choice.Metadata["task_card_id"] != "card-task-1" {
+		t.Fatalf("choice=%#v，期望记录真实允许选项及任务卡关联", record.choice)
+	}
+}
+
+func TestApprovalHandlerYoloDoesNotWaitForAutomaticCardUpdate(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := "feishu:tenant:dm:chat-a:ou_user"
+	h.setYoloMode(approvalModeKey("ou_user", route), true)
+	reply := newBlockingAutomaticApprovalCaptureReplier("card-task-1")
+	defer close(reply.release)
+	result := make(chan string, 1)
+	go func() {
+		decision, err := h.approvalHandlerForRoute(agentInteractionContextOptions{
+			actorUserID: "ou_user", routeUserID: route, agentName: "claude", reply: reply,
+		})(context.Background(), agent.ApprovalRequest{
+			Options: []agent.ApprovalOption{{ID: "allow", Kind: "allow"}},
+		})
+		if err != nil {
+			result <- "error:" + err.Error()
+			return
+		}
+		result <- decision
+	}()
+
+	select {
+	case <-reply.started:
+	case <-time.After(time.Second):
+		t.Fatal("automatic card update did not start")
+	}
+	select {
+	case got := <-result:
+		if got != "allow" {
+			t.Fatalf("decision=%q，期望 YOLO 立即返回允许决策", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("YOLO 真实审批被飞书卡片更新阻塞")
+	}
+}
+
 func TestModeYoloResolvesExistingClaudeApprovalForSameRoute(t *testing.T) {
 	h := NewHandler(nil, nil)
 	route := "feishu:tenant:dm:chat-a:ou_user"
-	reply := newChoiceRequestCaptureReplier()
+	reply := newAutomaticApprovalCaptureReplier("card-task-1")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	result := make(chan string, 1)
@@ -271,6 +344,10 @@ func TestModeYoloResolvesExistingClaudeApprovalForSameRoute(t *testing.T) {
 	if !strings.Contains(modeReply, "放行 1 个") {
 		t.Fatalf("mode reply=%q，期望说明已放行待确认授权", modeReply)
 	}
+	record := reply.waitAutomaticApproval(t, ctx)
+	if record.choice.ID != "allow_always" || record.choice.Metadata["approval_key"] == "" {
+		t.Fatalf("automatic record=%#v，期望把既有审批收敛为 YOLO 允许记录", record)
+	}
 	select {
 	case got := <-result:
 		if got != "allow_always" {
@@ -278,6 +355,123 @@ func TestModeYoloResolvesExistingClaudeApprovalForSameRoute(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("切换 yolo 后待确认授权未被唤醒")
+	}
+}
+
+func TestModeYoloReportsCardUpdateFailureWithoutRevertingApproval(t *testing.T) {
+	h := NewHandler(nil, nil)
+	recorder := &recordingAuditLogger{}
+	h.SetAuditLogger(recorder)
+	route := "feishu:tenant:dm:chat-a:ou_user"
+	reply := newAutomaticApprovalCaptureReplier("card-task-1")
+	reply.recordErr = context.DeadlineExceeded
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan string, 1)
+	go func() {
+		decision, err := h.approvalHandlerForRoute(agentInteractionContextOptions{
+			actorUserID: "ou_user", routeUserID: route, agentName: "claude", reply: reply,
+		})(ctx, agent.ApprovalRequest{
+			RequestID: "request-2",
+			ToolCall:  json.RawMessage(`{"command":"sensitive-command"}`),
+			Options: []agent.ApprovalOption{
+				{ID: "deny", Kind: "deny"},
+				{ID: "allow_always", Kind: "allow"},
+			},
+		})
+		if err != nil {
+			result <- "error:" + err.Error()
+			return
+		}
+		result <- decision
+	}()
+	reply.waitChoiceRequest(t, ctx)
+
+	modeReply := h.handleModeCommandForActor(route, "ou_user", "/mode yolo")
+	if !strings.Contains(modeReply, "放行 1 个") || !strings.Contains(modeReply, "卡片更新失败 1 个") {
+		t.Fatalf("mode reply=%q，期望同时报告真实放行与展示失败", modeReply)
+	}
+	entries := recorder.snapshot()
+	if !auditEntriesContain(entries, "approval_auto_yolo_display_failed", "reason=card_update_timeout") {
+		t.Fatalf("audit entries=%#v，期望记录脱敏的卡片失败原因", entries)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Summary, "sensitive-command") {
+			t.Fatalf("audit entry leaked approval command: %#v", entry)
+		}
+	}
+	select {
+	case got := <-result:
+		if got != "allow_always" {
+			t.Fatalf("decision=%q，卡片失败不得回滚真实审批", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("卡片更新失败后审批请求未被唤醒")
+	}
+}
+
+func TestModeYoloDecisionWinsWhenOriginalApprovalCardSendFails(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := "feishu:tenant:dm:chat-a:ou_user"
+	reply := newFailingChoiceAutomaticApprovalCaptureReplier("card-task-1", errors.New("send approval card"))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan string, 1)
+	go func() {
+		decision, err := h.approvalHandlerForRoute(agentInteractionContextOptions{
+			actorUserID: "ou_user", routeUserID: route, agentName: "claude", reply: reply,
+		})(ctx, agent.ApprovalRequest{
+			Options: []agent.ApprovalOption{{ID: "deny", Kind: "deny"}, {ID: "allow", Kind: "allow"}},
+		})
+		if err != nil {
+			result <- "error:" + err.Error()
+			return
+		}
+		result <- decision
+	}()
+	reply.waitChoiceRequest(t, ctx)
+	modeResult := make(chan string, 1)
+	go func() { modeResult <- h.handleModeCommandForActor(route, "ou_user", "/mode yolo") }()
+	waitForResolvedApprovalForTest(t, ctx, h)
+	close(reply.release)
+
+	select {
+	case got := <-result:
+		if got != "allow" {
+			t.Fatalf("decision=%q，卡片发送失败不得覆盖已经提交的 YOLO 允许决策", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("waiting for approval result timed out")
+	}
+	select {
+	case modeReply := <-modeResult:
+		if !strings.Contains(modeReply, "放行 1 个") {
+			t.Fatalf("mode reply=%q，期望保留真实放行结果", modeReply)
+		}
+	case <-ctx.Done():
+		t.Fatal("waiting for mode result timed out")
+	}
+}
+
+func waitForResolvedApprovalForTest(t *testing.T, ctx context.Context, h *Handler) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		h.pendingApprovalsMu.Lock()
+		resolved := false
+		for _, pending := range h.pendingApprovals {
+			resolved = resolved || pending.resolved.Load()
+		}
+		h.pendingApprovalsMu.Unlock()
+		if resolved {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("pending approval was not resolved")
+		}
 	}
 }
 

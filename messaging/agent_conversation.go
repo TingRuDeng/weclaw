@@ -97,6 +97,9 @@ func (h *Handler) resolveCodexConversationIDForRoute(ctx context.Context, ownerU
 }
 
 func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConversationRoute, ag agent.Agent) error {
+	if err := h.hiddenWorkspaceError(agentNameFromBindingKey(route.bindingKey), route.workspaceRoot, "cx"); err != nil {
+		return err
+	}
 	codexAg, ok := ag.(agent.CodexThreadAgent)
 	if !ok {
 		h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
@@ -136,6 +139,9 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 		routeUserID = ownerUserID
 	}
 	workspaceRoot := h.claudeWorkspaceRootForUser(routeUserID, agentName, ag)
+	if err := h.hiddenWorkspaceError(agentName, workspaceRoot, "cc"); err != nil {
+		return "", err
+	}
 	if !h.workspaceAllowedForAgentContext(ctx, agentName, workspaceRoot) {
 		return "", fmt.Errorf("当前工作空间不在允许范围，请发送 /cc ls 重新选择")
 	}

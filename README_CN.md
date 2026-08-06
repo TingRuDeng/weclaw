@@ -57,6 +57,7 @@ weclaw status
 /cx ls                 # 查看已有会话
 /cx <编号>             # 选择并绑定会话；飞书也可点击会话卡片
 # 或发送 /cx new       # 新建并绑定会话
+/cx rename current 新名称
 检查当前项目并修复测试失败
 ```
 
@@ -72,7 +73,7 @@ weclaw status
 
 macOS 默认 `codex_host_mode: auto` 下，如果启动 WeClaw 时 Codex App 已运行，WeClaw 会通过受保护的 Desktop IPC 复用 App 的 Host，不再启动第二个 app-server；App 不在时，才连接或启动官方 standalone daemon（不可用时使用 WeClaw 自管兼容 Host）。如果共享 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；无法确认空闲或 App 存在但 IPC 不可达时直接失败，不会并行写入。
 
-App Host 支持选择已有会话、继续任务、进度、审批、`/guide`、`/stop`，以及修改当前 thread 的模型和推理强度。Desktop IPC 暂未暴露新建/归档会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 会明确拒绝且保留当前绑定。
+App Host 支持选择已有会话、继续任务、进度、审批、`/guide`、`/stop`，以及修改当前 thread 的模型和推理强度。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用；它们会额外启动进程，而默认 auto 拓扑已经能安全复用正在运行的 Codex App。
 
@@ -105,6 +106,7 @@ weclaw codex account doctor
 /cc ls
 /cc switch <编号|sessionId>
 /cc new
+/cc rename current <名称>
 /cc status
 /cc quota
 ```
@@ -116,6 +118,12 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 `/cc new` 后如果 ACP 目录还没有持久化空会话，`/cc ls` 会把当前已接管的绑定标记为“当前新会话”。该条目只用于导航展示；发送首条消息后会进入正常目录，并且始终不能绕过 `/cc switch` 的 `session/list` 校验。
 
 `/cc owner` 和 `/cc cli` 已停用：ClaudeHost 不再维护窗口级独占 owner，而独立 `claude --resume` 会绕过 session writer lease，重新产生第二个 writer。旧版状态文件中的 `remote`、`local`、`unclaimed` control intent 会在加载时丢弃，原有多窗口 binding 全部保留。原生 `claude` 命令仅可作为 `/cc quota` 的短生命周期额度查询回退，不参与会话写入。Claude 任务支持 `/stop` 和同一窗口的一条排队续跑，不支持 `/guide`。
+
+### 管理工作空间与会话名称
+
+管理员可在机器人私聊中登记或隐藏已有工作目录：`/cx workspace add <路径>`、`/cx workspace remove <编号|路径>`，Claude 使用对应的 `/cc workspace ...`。登记记录按实际 Agent 名称保存在 `~/.weclaw/workspace-registry.json`；`remove` 只从 WeClaw 导航隐藏目录，不删除源码、Codex thread、Claude session 或历史，重新 `add` 会解除隐藏。管理员可以登记白名单外目录，但这不会扩大普通用户的 `allowed_workspace_roots` 权限。
+
+有权访问目标工作空间的用户可用 `/cx rename current|<编号> <名称>` 或 `/cc rename current|<编号> <名称>` 修改 Agent 的全局会话名称；名称最长 120 个 Unicode 字符且只能是单行文本。Codex 通过唯一共享 app-server 写入并读回确认；Claude 仅在当前 ACP adapter 实时公布 `rename` 命令后，复用同一 ClaudeHost 和 session writer lease 执行。重命名不改变任何窗口 binding，目标忙碌或结果无法确认时会明确失败并要求重新查看列表。
 
 ### 控制运行中任务
 
@@ -197,7 +205,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | `/new` | 为当前默认 Agent 明确新建会话；默认 Agent 为 Codex 时同时绑定 |
 | `/model`、`/reasoning` | 已绑定时查看或切换当前会话配置；未绑定时查看或切换新会话默认值 |
 | `/fast [on|off]` | 查看或切换当前 Codex 会话速度；未绑定时切换新会话默认速度 |
-| `/mode [default|yolo]` | 查看或切换 Agent 授权处理方式；群聊按当前操作者隔离，飞书无参数 `/mode` 会弹出选择卡 |
+| `/mode [default|yolo]` | 查看或切换 Agent 授权处理方式；群聊按当前操作者隔离，飞书无参数 `/mode` 会弹出选择卡。切换到 yolo 会放行该操作者在当前窗口的既有待审批，并把已发审批卡收敛为自动批准终态；后续自动审批不再单独弹卡，有任务卡时追加记录 |
 | `/approve <短码>`、`/deny <短码>` | 审批按钮不可用时允许或拒绝对应操作；短码与操作者、窗口和有效期绑定 |
 | `/progress [模式]` | 查看进度模式；只有管理员可以修改账号级模式 |
 | `/ps`、`/stop` | 查看或停止当前任务 |
@@ -206,6 +214,10 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | `/cx <编号>`、`/cx switch <编号>` | 选择并绑定当前工作空间的 Codex 会话 |
 | `/cx new` | 新建并绑定当前工作空间的 Codex 会话 |
 | `/cx archive current`、`/cx archive <编号>` | 归档当前或列表中的空闲 Codex 会话；保留历史，不做硬删除 |
+| `/cx rename current\|<编号> <名称>` | 重命名当前或列表中的 Codex 会话，不改变任何窗口 binding |
+| `/cx workspace add <路径>`、`/cx workspace remove <编号\|路径>` | 管理员私聊登记或从 WeClaw 导航隐藏 Codex 工作目录 |
+| `/cc rename current\|<编号> <名称>` | 在 adapter 公布能力后重命名 Claude 会话，不改变任何窗口 binding |
+| `/cc workspace add <路径>`、`/cc workspace remove <编号\|路径>` | 管理员私聊登记或从 WeClaw 导航隐藏 Claude 工作目录 |
 | `/cx account`、`/cx account status` | 查看主机级 Codex 账号；管理员私聊可选择和切换 |
 | `/update`、`/restart [--force]` | 管理员在机器人私聊中远程更新或重启 WeClaw |
 
@@ -216,6 +228,8 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 
 归档：`/cx archive current` 归档当前绑定会话；进入工作空间会话列表后可用 `/cx archive <编号>` 归档指定会话。归档只允许空闲且未被其他 WeClaw 窗口绑定的会话，历史仍保留，可在 Codex App 的归档列表恢复。
 
+工作空间与名称：`/cx workspace add <路径>`、`/cx workspace remove <编号|路径>` 仅限管理员私聊；`/cx rename current|<编号> <名称>` 重命名当前或列表中的空闲会话。Desktop follower 模式不提供重命名写接口，需在 Codex App 内完成。
+
 运行边界：`/cx status` 紧凑展示当前工作空间、会话、任务、账号和运行状态；完整路径使用 `/cx pwd`，账号诊断使用 `/cx account status`，额度使用 `/cx quota`。
 
 其他：`/cx whoami`、`/cx ls`、`/cx ..`、`/cx cd <工作空间|..>`、`/cx pwd`、`/cx status`、`/cx quota`、`/cx account`、`/cx account status`、`/cx account use <账号>`、`/cx model status|ls`、`/cx clean`。其中 `/cx model status` 查看后续新建 Codex 会话的默认配置；当前绑定会话请用 `/model`、`/reasoning`、`/fast`。Fast 是否可用以当前模型目录为准，不支持的账号或模型会明确拒绝。
@@ -225,7 +239,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 <details>
 <summary>Claude 常用命令</summary>
 
-`/cc whoami`、`/cc ls`、`/cc cd <编号|..>`、`/cc switch <编号|sessionId>`、`/cc new`、`/cc pwd`、`/cc status`、`/cc quota`、`/cc model status|ls|reset`。其中 `/cc cd` 进入工作空间或返回工作空间列表；`/cc status` 统一展示 binding、共享 ClaudeHost 和 writer 状态；`/cc model status` 查看后续新建 Claude 会话的默认配置，`/cc model reset` 清除该默认配置，当前绑定会话请用 `/model`、`/reasoning`。`/cc owner`、`/cc cli` 已停用。
+`/cc whoami`、`/cc ls`、`/cc cd <编号|..>`、`/cc switch <编号|sessionId>`、`/cc new`、`/cc rename current|<编号> <名称>`、`/cc workspace add|remove`、`/cc pwd`、`/cc status`、`/cc quota`、`/cc model status|ls|reset`。其中 `/cc cd` 进入工作空间或返回工作空间列表；`/cc status` 统一展示 binding、共享 ClaudeHost 和 writer 状态；`/cc model status` 查看后续新建 Claude 会话的默认配置，`/cc model reset` 清除该默认配置，当前绑定会话请用 `/model`、`/reasoning`。`/cc owner`、`/cc cli` 已停用。
 
 `/cc quota` 复用本机 Claude Code OAuth 登录读取 5 小时、7 天和模型分项额度，且不发送模型请求；WeClaw 会优先兼容 Claude Code 旧版 Keychain/凭据文件并请求其 Anthropic 用量接口，凭据不可读或请求失败时再回退到短生命周期的 Claude 原生 `get_usage` 控制查询。Token 只在内存中发送到固定的 Anthropic 地址，不写日志、不持久化，也不会跟随重定向。相关凭据格式、用量接口和结构化控制能力都不是稳定公开契约，后续 Claude Code 版本可能调整；API key、Bedrock、Vertex 或缺少 profile 权限时只会返回“订阅额度不可用”。
 

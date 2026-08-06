@@ -52,7 +52,10 @@ func (h *Handler) handleFeishuClaudeSessionCommand(req claudeFeishuCommandReques
 	_, paginated := parseFeishuNavigationPage(fields, "/cc")
 	result := cardNavigationResult("当前导航状态已变化，请发送 /cc ls 重新打开。")
 	if !paginated {
-		result = h.handleClaudeSessionCommandForRouteResult(req.Context, msg.UserID, req.RouteUserID, h.isAdminMessage(msg), req.Trimmed)
+		result = h.handleClaudeSessionCommandForRouteRequest(req.Context, claudeSessionCommandRequest{
+			ActorUserID: msg.UserID, RouteUserID: req.RouteUserID, Trimmed: req.Trimmed,
+			Platform: msg.Platform, Admin: h.isAdminMessage(msg), Private: isPrivatePlatformMessage(msg, req.RouteUserID),
+		})
 	}
 	if h.sendFeishuClaudeNavigationChoices(req, result) {
 		return true
@@ -160,9 +163,10 @@ func (h *Handler) loadFeishuClaudeWorkspaceSnapshot(req claudeFeishuChoiceReques
 		return nil, "", false
 	}
 	choices := make([]platform.Choice, 0, len(groups))
-	for _, group := range groups {
+	for index, group := range groups {
 		choices = append(choices, platform.Choice{
-			ID: normalizeClaudeWorkspaceRoot(group.Root), Label: claudeWorkspaceGroupLabel(group),
+			ID:    normalizeClaudeWorkspaceRoot(group.Root),
+			Label: feishuIndexedChoiceLabel(index, claudeWorkspaceGroupLabel(group)),
 		})
 	}
 	if len(choices) == 0 {
@@ -200,14 +204,19 @@ func (h *Handler) loadFeishuClaudeSessionSnapshot(req claudeFeishuChoiceRequest,
 		choices, ok := h.feishuNavSnapshots.load(req.Snapshot, scope)
 		return choices, req.Snapshot, ok
 	}
-	sessions, err := h.claudeSessionsForWorkspace(req.Route, req.WorkspaceRoot)
+	sessions, err := h.claudeSwitchTargets(req.Route)
 	if err != nil {
 		return nil, "", false
 	}
+	workspaceRoot := normalizeClaudeWorkspaceRoot(req.WorkspaceRoot)
 	choices := make([]platform.Choice, 0, len(sessions))
-	for _, session := range sessions {
+	for index, session := range sessions {
+		if normalizeClaudeWorkspaceRoot(session.WorkspaceRoot) != workspaceRoot {
+			continue
+		}
 		choices = append(choices, platform.Choice{
-			ID: "/cc switch " + strings.TrimSpace(session.ThreadID), Label: codexSessionDisplayName(session),
+			ID:    "/cc switch " + strings.TrimSpace(session.ThreadID),
+			Label: feishuIndexedChoiceLabel(index, codexSessionDisplayName(session)),
 		})
 	}
 	if len(choices) == 0 {

@@ -117,6 +117,11 @@ type CodexThreadArchiveAgent interface {
 	ArchiveCodexThread(ctx context.Context, threadID string) error
 }
 
+// CodexThreadRenameAgent 暴露 Codex app-server 的权威 thread 名称修改能力。
+type CodexThreadRenameAgent interface {
+	RenameCodexThread(ctx context.Context, threadID string, name string) error
+}
+
 // CodexThreadArchiveEventSource 把 app-server 的外部归档事件同步给 frontend 状态层。
 type CodexThreadArchiveEventSource interface {
 	SetCodexThreadArchivedHandler(handler func(threadID string))
@@ -180,6 +185,11 @@ type ClaudeSessionAgent interface {
 	CurrentClaudeSession(conversationID string) (string, bool)
 	UseClaudeSession(ctx context.Context, conversationID string, sessionID string) error
 	ClearClaudeSession(conversationID string)
+}
+
+// ClaudeSessionRenameAgent 通过当前共享 ClaudeHost 修改权威 session 名称。
+type ClaudeSessionRenameAgent interface {
+	RenameClaudeSession(ctx context.Context, sessionID string, name string) error
 }
 
 // ClaudeHostStatus describes the one process-resident ACP host shared by all

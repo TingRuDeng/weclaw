@@ -20,6 +20,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 		platformProgressConfigs: make(map[string]config.ProgressConfig),
 		platformDefaultAgents:   make(map[string]string),
 		sessions:                newSessionService(),
+		workspaceRegistry:       newWorkspaceRegistry(),
 		feishuIdentities:        newFeishuIdentityStore(),
 		taskLocks:               make(map[string]*executionLock),
 		pendingApprovals:        make(map[string]*pendingApproval),

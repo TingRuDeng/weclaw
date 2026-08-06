@@ -166,6 +166,8 @@ func (a *ACPAgent) UseClaudeSession(ctx context.Context, conversationID string, 
 	if !ok {
 		return fmt.Errorf("session/list 中不存在 sessionId %q", sessionID)
 	}
+	a.claudeHostControlMu.Lock()
+	defer a.claudeHostControlMu.Unlock()
 	if reusable, reuseErr := a.reusableClaudeSession(selected.ID, selected.Cwd); reuseErr != nil {
 		return reuseErr
 	} else if reusable {
@@ -185,6 +187,7 @@ func (a *ACPAgent) UseClaudeSession(ctx context.Context, conversationID string, 
 	if err := a.cacheClaudeResumeConfig(selected.ID, result, sequence); err != nil {
 		return err
 	}
+	a.markClaudeSessionLoaded(selected.ID, selected.Cwd)
 	commit := conversationBindingCommit{sessionID: selected.ID, cwd: selected.Cwd}
 	return a.commitBindingIntent(conversationID, revision, commit)
 }
@@ -200,20 +203,17 @@ func (a *ACPAgent) reusableClaudeSession(sessionID string, cwd string) (bool, er
 	if generation == 0 {
 		return false, nil
 	}
-	for conversationID, currentSessionID := range a.sessions {
-		if currentSessionID != sessionID || a.sessionGenerations[conversationID] < generation {
-			continue
-		}
-		currentCwd := a.legacySessionCwdLocked(conversationID)
-		if currentCwd != cwd {
-			return false, fmt.Errorf(
-				"ClaudeHost 中 sessionId %q 的工作目录不一致: %q != %q",
-				sessionID, currentCwd, cwd,
-			)
-		}
-		return true, nil
+	loaded, ok := a.claudeLoadedSessions[sessionID]
+	if !ok || loaded.Generation != generation {
+		return false, nil
 	}
-	return false, nil
+	if loaded.Cwd != cwd {
+		return false, fmt.Errorf(
+			"ClaudeHost 中 sessionId %q 的工作目录不一致: %q != %q",
+			sessionID, loaded.Cwd, cwd,
+		)
+	}
+	return true, nil
 }
 
 // validateACPObjectResult 要求事务型 ACP 调用返回非 null JSON object。

@@ -55,6 +55,9 @@ func TestFeishuClaudeSessionChoicesPaginateWithStableIDs(t *testing.T) {
 	if len(choices) != 4 || choices[0].ID != "/cc switch session-07" || choices[1].ID != "/cc switch session-08" || choices[2].ID != "/cc page sessions 1" || choices[3].ID != "/cc cd .." {
 		t.Fatalf("second choices=%#v，会话分页必须保留稳定 sessionId", choices)
 	}
+	if choices[0].Label != "7. 会话 07" || choices[1].Label != "8. 会话 08" {
+		t.Fatalf("second labels=%#v，会话分页必须显示全局编号", choices)
+	}
 }
 
 func TestFeishuClaudeCcLsSendsAllowedACPWorkspaceChoices(t *testing.T) {
@@ -78,6 +81,9 @@ func TestFeishuClaudeCcLsSendsAllowedACPWorkspaceChoices(t *testing.T) {
 	}
 	if len(reply.Texts) != 0 {
 		t.Fatalf("texts=%#v，卡片成功后不应重复文本", reply.Texts)
+	}
+	if reply.Choices[0].Choices[0].Label != "0. alpha" || reply.Choices[0].Choices[1].Label != "1. beta" {
+		t.Fatalf("workspace choices=%#v，工作空间卡片必须显示可直接用于命令的编号", reply.Choices[0].Choices)
 	}
 	for _, choice := range reply.Choices[0].Choices {
 		if !isTestFeishuWorkspaceChoice(choice.ID, "/cc") || strings.Contains(choice.ID, allowedRoot) {
@@ -160,12 +166,58 @@ func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 3 {
 		t.Fatalf("choices=%#v，期望会话与返回按钮", reply.Choices)
 	}
-	if reply.Choices[0].Choices[0].ID != "/cc switch session-new" {
+	if reply.Choices[0].Choices[0].ID != "/cc switch session-new" || reply.Choices[0].Choices[0].Label != "0. 较新会话" || reply.Choices[0].Choices[1].Label != "1. 较早会话" {
 		t.Fatalf("choices=%#v，期望稳定 sessionId", reply.Choices)
 	}
 	binding := h.ensureClaudeSessions().binding(claudeBindingKey("feishu:user", "claude"))
 	if binding.WorkspaceRoot != workspace || binding.Status != claudeBindingUnbound {
 		t.Fatalf("binding=%+v，进入工作空间后应等待显式选择", binding)
+	}
+}
+
+func TestFeishuClaudeSessionLabelsUseAcceptedIndexesAcrossWorkspaces(t *testing.T) {
+	h, ag := newClaudeFeishuCardHandler(t)
+	root := t.TempDir()
+	alpha := filepath.Join(root, "alpha")
+	beta := filepath.Join(root, "beta")
+	for _, workspace := range []string{alpha, beta} {
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.SetAllowedWorkspaceRoots([]string{root})
+	ag.catalogSessions = []agent.ClaudeSession{
+		{ID: "session-beta", Cwd: beta, Title: "Beta", UpdatedAt: "2026-07-13T11:00:00Z"},
+		{ID: "session-alpha-new", Cwd: alpha, Title: "Alpha 新", UpdatedAt: "2026-07-13T10:00:00Z"},
+		{ID: "session-alpha-old", Cwd: alpha, Title: "Alpha 旧", UpdatedAt: "2026-07-13T09:00:00Z"},
+	}
+
+	listed := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc ls"})
+	if len(listed.Choices) != 1 {
+		t.Fatalf("workspace choices=%#v", listed.Choices)
+	}
+	alphaChoice := ""
+	for _, choice := range listed.Choices[0].Choices {
+		if strings.HasSuffix(choice.Label, ". alpha") {
+			alphaChoice = choice.ID
+			break
+		}
+	}
+	if alphaChoice == "" {
+		t.Fatalf("alpha workspace missing from %#v", listed.Choices[0].Choices)
+	}
+
+	sessions := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Choice: alphaChoice})
+	if len(sessions.Choices) != 1 || len(sessions.Choices[0].Choices) != 3 {
+		t.Fatalf("session choices=%#v", sessions.Choices)
+	}
+	if sessions.Choices[0].Choices[0].Label != "1. Alpha 新" || sessions.Choices[0].Choices[1].Label != "2. Alpha 旧" {
+		t.Fatalf("session choices=%#v，卡片编号必须与 /cc switch 接受的全局编号一致", sessions.Choices[0].Choices)
+	}
+
+	switched := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc switch 1"})
+	if ag.useSessionID != "session-alpha-new" || len(switched.Texts) != 1 || !strings.Contains(switched.Texts[0], "已切换 Claude 会话") {
+		t.Fatalf("session=%q texts=%#v，卡片编号必须可以直接用于切换", ag.useSessionID, switched.Texts)
 	}
 }
 

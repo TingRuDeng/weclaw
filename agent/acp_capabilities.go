@@ -41,6 +41,7 @@ func (a *ACPAgent) cacheAndValidateACPCapabilities(result json.RawMessage) error
 		a.clearLegacyBindingsLocked()
 	}
 	a.capabilities = snapshot
+	a.resetClaudeHostSessionStateLocked()
 	a.legacyRuntimeGeneration++
 	a.resolvePersistedSessionsLocked()
 	a.mu.Unlock()

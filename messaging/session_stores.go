@@ -64,3 +64,17 @@ func (h *Handler) ensureClaudeSessions() *claudeSessionStore {
 func (h *Handler) SetClaudeSessionFile(filePath string) error {
 	return h.ensureClaudeSessions().SetFilePath(filePath)
 }
+
+func (h *Handler) ensureWorkspaceRegistry() *workspaceRegistry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.workspaceRegistry == nil {
+		h.workspaceRegistry = newWorkspaceRegistry()
+	}
+	return h.workspaceRegistry
+}
+
+// SetWorkspaceRegistryFile 设置独立的工作空间导航覆盖层状态文件。
+func (h *Handler) SetWorkspaceRegistryFile(filePath string) error {
+	return h.ensureWorkspaceRegistry().SetFilePath(filePath)
+}

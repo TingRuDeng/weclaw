@@ -13,6 +13,7 @@ type codexThreadReadResponse struct {
 
 type codexThreadSnapshot struct {
 	ID     string              `json:"id"`
+	Name   string              `json:"name"`
 	Status codexThreadStatus   `json:"status"`
 	Turns  []codexTurnSnapshot `json:"turns"`
 }

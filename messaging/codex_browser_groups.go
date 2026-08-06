@@ -15,7 +15,11 @@ func (h *Handler) codexWorkspaceGroups(bindingKey string) ([]codexWorkspaceGroup
 		return nil, codexAppCatalogReadError("工作空间", err)
 	}
 	if available {
-		return h.codexWorkspaceGroupsForAppWorkspaces(bindingKey, workspaces)
+		groups, groupErr := h.codexWorkspaceGroupsForAppWorkspaces(bindingKey, workspaces)
+		if groupErr != nil {
+			return nil, groupErr
+		}
+		return mergeWorkspaceRegistryGroups(groups, h.workspaceRegistrySnapshot(agentNameFromBindingKey(bindingKey))), nil
 	}
 	byRoot := map[string]*codexWorkspaceGroup{}
 	for _, view := range h.codexSwitchTargets(bindingKey) {
@@ -28,7 +32,8 @@ func (h *Handler) codexWorkspaceGroups(bindingKey string) ([]codexWorkspaceGroup
 		}
 		byRoot[root].Sessions = append(byRoot[root].Sessions, view)
 	}
-	return sortedCodexWorkspaceGroups(byRoot), nil
+	groups := sortedCodexWorkspaceGroups(byRoot)
+	return mergeWorkspaceRegistryGroups(groups, h.workspaceRegistrySnapshot(agentNameFromBindingKey(bindingKey))), nil
 }
 
 func (h *Handler) codexWorkspaceGroupsForUser(bindingKey string, actorUserID string) ([]codexWorkspaceGroup, error) {
@@ -58,6 +63,7 @@ func (h *Handler) codexWorkspaceListForAccess(bindingKey string, admin bool) ([]
 			return nil, err
 		}
 	}
+	groups = mergeWorkspaceRegistryGroups(groups, h.workspaceRegistrySnapshot(agentNameFromBindingKey(bindingKey)))
 	return h.filterCodexWorkspaceGroupsForAccess(groups, admin), nil
 }
 
@@ -121,6 +127,9 @@ func sortedCodexWorkspaceGroups(byRoot map[string]*codexWorkspaceGroup) []codexW
 // codexSessionsForWorkspace 返回当前工作空间内可切换的会话，保持 /cx ls 与 /cx switch 编号一致。
 func (h *Handler) codexSessionsForWorkspace(bindingKey string, workspaceRoot string) ([]codexWorkspaceView, error) {
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	if h.workspaceRegistrySnapshot(agentNameFromBindingKey(bindingKey)).IsHidden(workspaceRoot) {
+		return nil, nil
+	}
 	sessions, available, err := h.codexAppWorkspaceThreads(workspaceRoot)
 	if err != nil {
 		return nil, codexAppCatalogReadError("会话目录", err)

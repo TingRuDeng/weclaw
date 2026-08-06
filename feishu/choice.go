@@ -19,6 +19,7 @@ const (
 	approvalStatusHandled        = "handled"
 	approvalStatusExpired        = "expired"
 	approvalStatusArchived       = "archived"
+	approvalStatusAutoApproved   = "auto_approved_yolo"
 	approvalStatusUnconfirmed    = "unconfirmed"
 	approvalPromptHead           = "Codex 请求执行敏感操作，请确认："
 	approvalPromptMarker         = "请求执行敏感操作，请确认："

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 func isClaudeSessionCommand(trimmed string) bool {
@@ -17,6 +18,10 @@ func isClaudeSessionCommand(trimmed string) bool {
 	switch fields[1] {
 	case "whoami", "ls", "new", "pwd", "status", "cli", "quota", "help":
 		return len(fields) == 2
+	case "workspace":
+		return len(fields) >= 3
+	case "rename":
+		return true
 	case "cd", "switch":
 		// 缺少目标时仍进入命令处理并返回用法；多余内容保留给 /cc 消息别名。
 		return len(fields) == 2 || len(fields) == 3
@@ -38,16 +43,53 @@ func isClaudeSessionCommandToken(token string) bool {
 }
 
 func (h *Handler) handleClaudeSessionCommand(ctx context.Context, userID string, trimmed string) string {
-	return h.handleClaudeSessionCommandForRoute(ctx, userID, userID, h.isAdminUser(userID), trimmed)
-}
-
-func (h *Handler) handleClaudeSessionCommandForRoute(ctx context.Context, actorUserID string, routeUserID string, admin bool, trimmed string) string {
-	return h.handleClaudeSessionCommandForRouteResult(ctx, actorUserID, routeUserID, admin, trimmed).Reply
+	return h.handleClaudeSessionCommandForRouteRequest(ctx, claudeSessionCommandRequest{
+		ActorUserID: userID, RouteUserID: userID, Trimmed: trimmed,
+		Admin: h.isAdminUser(userID), Private: true,
+	}).Reply
 }
 
 // handleClaudeSessionCommandForRouteResult 执行命令并显式标记是否可展示导航卡片。
 func (h *Handler) handleClaudeSessionCommandForRouteResult(ctx context.Context, actorUserID string, routeUserID string, admin bool, trimmed string) navigationCommandResult {
-	fields := strings.Fields(trimmed)
+	return h.handleClaudeSessionCommandForRouteRequest(ctx, claudeSessionCommandRequest{
+		ActorUserID: actorUserID, RouteUserID: routeUserID, Trimmed: trimmed, Admin: admin, Private: true,
+	})
+}
+
+type claudeSessionCommandRequest struct {
+	ActorUserID string
+	RouteUserID string
+	Trimmed     string
+	Platform    platform.PlatformName
+	Admin       bool
+	Private     bool
+}
+
+func (h *Handler) handleClaudeSessionCommandForRouteRequest(ctx context.Context, req claudeSessionCommandRequest) navigationCommandResult {
+	actorUserID := strings.TrimSpace(req.ActorUserID)
+	routeUserID := strings.TrimSpace(req.RouteUserID)
+	if routeUserID == "" {
+		routeUserID = actorUserID
+	}
+	if spec, handled, parseErr := parseWorkspaceCommand(req.Trimmed, "/cc"); handled {
+		if parseErr != nil {
+			return textNavigationResult(parseErr.Error())
+		}
+		agentName, ok := h.claudeAgentName()
+		if !ok {
+			return textNavigationResult("当前没有配置 claude agent")
+		}
+		return textNavigationResult(h.handleWorkspaceCommand(workspaceCommandRequest{
+			Context: ctx, ActorUserID: actorUserID, RouteUserID: routeUserID,
+			AgentName: agentName, AgentKind: "claude", BindingKey: claudeBindingKey(routeUserID, agentName),
+			Platform: req.Platform, Admin: req.Admin, Private: req.Private, Spec: spec,
+		}))
+	}
+	renameSpec, renameHandled, renameErr := parseSessionRenameCommand(req.Trimmed, "/cc")
+	if renameHandled && renameErr != nil {
+		return textNavigationResult(renameErr.Error())
+	}
+	fields := strings.Fields(req.Trimmed)
 	if len(fields) < 2 || fields[1] == "help" {
 		return textNavigationResult(buildClaudeSessionHelpText())
 	}
@@ -56,9 +98,11 @@ func (h *Handler) handleClaudeSessionCommandForRouteResult(ctx context.Context, 
 		log.Printf("[claude-session] 获取 Claude Agent 失败: %v", err)
 		return textNavigationResult("Claude Agent 当前不可用，请稍后重试。")
 	}
-	if strings.TrimSpace(routeUserID) == "" {
-		routeUserID = actorUserID
+	unlockRegistry := func() {}
+	if claudeCommandRequiresWorkspaceRegistryControl(fields[1]) {
+		unlockRegistry = h.lockWorkspaceRegistryControl()
 	}
+	defer unlockRegistry()
 	workspaceRoot := h.claudeWorkspaceRootForUser(routeUserID, agentName, ag)
 	bindingKey := claudeBindingKey(routeUserID, agentName)
 	route := claudeSessionRoute{
@@ -69,9 +113,22 @@ func (h *Handler) handleClaudeSessionCommandForRouteResult(ctx context.Context, 
 		Agent:         ag,
 		WorkspaceRoot: workspaceRoot,
 		BindingKey:    bindingKey,
-		Admin:         admin,
+		Admin:         req.Admin,
+		Platform:      req.Platform,
+	}
+	if renameHandled {
+		route.RenameSpec = &renameSpec
 	}
 	return h.routeClaudeSessionCommand(fields, route)
+}
+
+func claudeCommandRequiresWorkspaceRegistryControl(command string) bool {
+	switch command {
+	case "cd", "new", "switch", "rename":
+		return true
+	default:
+		return false
+	}
 }
 
 type claudeSessionRoute struct {
@@ -83,6 +140,8 @@ type claudeSessionRoute struct {
 	WorkspaceRoot string
 	BindingKey    string
 	Admin         bool
+	Platform      platform.PlatformName
+	RenameSpec    *sessionRenameCommandSpec
 }
 
 func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSessionRoute) navigationCommandResult {
@@ -115,6 +174,8 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 			return textNavigationResult("用法: /cc switch <编号|sessionId>")
 		}
 		return textNavigationResult(h.handleClaudeSwitch(route, fields[2]))
+	case "rename":
+		return textNavigationResult(h.handleClaudeRename(route))
 	default:
 		return textNavigationResult(buildClaudeSessionHelpText())
 	}

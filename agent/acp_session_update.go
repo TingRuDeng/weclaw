@@ -16,9 +16,15 @@ func (a *ACPAgent) handleSessionUpdateAt(params json.RawMessage, sequence uint64
 		return
 	}
 	p.Update.Sequence = sequence
-	if p.Update.SessionUpdate == "config_option_update" && a.isClaudeACP() {
+	claudeACP := a.isClaudeACP()
+	if p.Update.SessionUpdate == "config_option_update" && claudeACP {
 		if err := a.cacheClaudeSessionConfigAt(p.SessionID, p.Update.ConfigOptions, sequence); err != nil {
 			log.Printf("[acp] ignored invalid config_option_update (session=%s): %v", p.SessionID, err)
+		}
+	}
+	if claudeACP {
+		if err := a.cacheClaudeSessionMetadataUpdate(p.SessionID, p.Update); err != nil {
+			log.Printf("[acp] cached invalid Claude session metadata update (session=%s): %v", p.SessionID, err)
 		}
 	}
 

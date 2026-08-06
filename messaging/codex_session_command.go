@@ -99,7 +99,7 @@ func logCodexSessionControlTimeout(command string, phase string, target string, 
 }
 
 func (h *Handler) rejectDisallowedCodexWorkspace(bindingKey string, agentName string, workspaceRoot string, fields []string, admin bool) string {
-	if admin || len(fields) < 2 {
+	if len(fields) < 2 {
 		return ""
 	}
 	command := fields[1]
@@ -107,10 +107,22 @@ func (h *Handler) rejectDisallowedCodexWorkspace(bindingKey string, agentName st
 		return ""
 	}
 	if isCodexShortSelectionToken(command) {
-		if browsing, ok := h.codexBrowseWorkspace(bindingKey); ok && !h.isWorkspaceAllowed(browsing) {
-			h.clearCodexBrowseWorkspace(bindingKey)
-			return "当前浏览工作空间不在允许范围，请发送 /cx ls 重新选择。"
+		if browsing, ok := h.codexBrowseWorkspace(bindingKey); ok {
+			if err := h.hiddenWorkspaceError(agentName, browsing, "cx"); err != nil {
+				h.clearCodexBrowseWorkspace(bindingKey)
+				return err.Error()
+			}
+			if !admin && !h.isWorkspaceAllowed(browsing) {
+				h.clearCodexBrowseWorkspace(bindingKey)
+				return "当前浏览工作空间不在允许范围，请发送 /cx ls 重新选择。"
+			}
 		}
+		return ""
+	}
+	if err := h.hiddenWorkspaceError(agentName, workspaceRoot, "cx"); err != nil {
+		return err.Error()
+	}
+	if admin {
 		return ""
 	}
 	if h.isWorkspaceAllowed(workspaceRoot) || h.isConfiguredAgentWorkspace(agentName, workspaceRoot) {

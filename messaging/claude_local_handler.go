@@ -24,7 +24,11 @@ func (h *Handler) claudeSwitchTargets(route claudeSessionRoute) ([]codexWorkspac
 		return nil, fmt.Errorf("读取 Claude 会话目录失败: %w", err)
 	}
 	views := make([]codexWorkspaceView, 0, len(sessions))
+	registry := h.workspaceRegistrySnapshot(route.AgentName)
 	for _, session := range sessions {
+		if registry.IsHidden(session.Cwd) {
+			continue
+		}
 		if !route.Admin && !h.isWorkspaceAllowed(session.Cwd) {
 			continue
 		}
@@ -97,7 +101,17 @@ func (h *Handler) claudeWorkspaceGroupsForRoute(route claudeSessionRoute) ([]cod
 		}
 		byRoot[root].Sessions = append(byRoot[root].Sessions, view)
 	}
-	return sortedCodexWorkspaceGroups(byRoot), nil
+	groups := mergeWorkspaceRegistryGroups(sortedCodexWorkspaceGroups(byRoot), h.workspaceRegistrySnapshot(route.AgentName))
+	if route.Admin {
+		return groups, nil
+	}
+	filtered := make([]codexWorkspaceGroup, 0, len(groups))
+	for _, group := range groups {
+		if h.isWorkspaceAllowed(group.Root) {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered, nil
 }
 
 // findClaudeWorkspaceGroupForRoute 按卡片 token、手工编号或名称解析可访问工作空间。

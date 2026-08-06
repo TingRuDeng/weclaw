@@ -39,6 +39,8 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 		opts.routeUserID = opts.userID
 	}
 	bindingKey := claudeBindingKey(opts.routeUserID, opts.agentName)
+	unlockRegistry := h.lockWorkspaceRegistryControl()
+	defer unlockRegistry()
 	store := h.ensureClaudeSessions()
 	_, hasBinding := store.bindingSnapshot(bindingKey)
 	_, sessionCapable := opts.agent.(agent.ClaudeSessionAgent)
@@ -52,6 +54,10 @@ func (h *Handler) startAgentTask(opts agentTaskOptions) {
 		}
 		opts.claudeBinding = claudeTaskBindingSnapshot{SessionID: binding.SessionID, Revision: binding.Revision}
 		opts.workspaceRoot = firstNonBlank(binding.WorkspaceRoot, h.claudeWorkspaceRootForUser(opts.userID, opts.agentName, opts.agent))
+	}
+	if err := h.hiddenWorkspaceError(opts.agentName, opts.workspaceRoot, "cc"); err != nil {
+		sendPlatformText(opts.ctx, opts.reply, opts.userID, err.Error())
+		return
 	}
 	// 后台任务保留消息上下文值，但不能随平台请求返回而被取消。
 	opts.ctx = context.WithoutCancel(opts.ctx)

@@ -82,6 +82,10 @@ func feishuPaginatedPrompt(prompt string, page feishuChoicePage) string {
 	return fmt.Sprintf("%s\n\n第 %d/%d 页 · 共 %d 个", strings.TrimSpace(prompt), page.Number, page.TotalPages, page.TotalItems)
 }
 
+func feishuIndexedChoiceLabel(index int, label string) string {
+	return fmt.Sprintf("%d. %s", index, strings.TrimSpace(label))
+}
+
 func parseFeishuNavigationPage(fields []string, command string) (feishuNavigationPageRequest, bool) {
 	if len(fields) != 4 || fields[0] != command || fields[1] != "page" {
 		return feishuNavigationPageRequest{}, false

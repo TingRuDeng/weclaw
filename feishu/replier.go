@@ -22,6 +22,8 @@ type Replier struct {
 	taskCards    *taskCardRegistry
 	taskCardMu   sync.RWMutex
 	taskCardID   string
+	approvalMu   sync.Mutex
+	approvalCard map[string]standaloneApprovalCard
 	typingMu     sync.Mutex
 	typingStream platform.Stream
 }
@@ -189,7 +191,11 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 		if err != nil {
 			return err
 		}
-		return r.sendCard(ctx, targetOpenID, cardID)
+		if err := r.sendCard(ctx, targetOpenID, cardID); err != nil {
+			return err
+		}
+		r.rememberStandaloneApprovalCard(prompt, choices, conv, cardID)
+		return nil
 	}
 	var lines []string
 	if strings.TrimSpace(prompt) != "" {

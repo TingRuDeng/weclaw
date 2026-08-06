@@ -94,6 +94,11 @@ type ACPAgent struct {
 	stateSaveMu           sync.Mutex
 	claudeConfigMu        sync.Mutex
 	claudeQuotaMu         sync.Mutex
+	claudeHostControlMu   sync.Mutex
+	claudeLoadedSessions  map[string]claudeLoadedSessionState
+	claudeSessionCommands map[string]claudeSessionCommandState
+	claudeSessionTitles   map[string]claudeSessionTitleState
+	claudeCommandChanged  chan struct{}
 
 	// pending tracks in-flight JSON-RPC requests without owning transport or
 	// runtime lifecycle state.

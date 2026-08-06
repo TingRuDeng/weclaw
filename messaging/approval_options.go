@@ -95,6 +95,16 @@ func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCar
 	return choices
 }
 
+func approvalChoiceForDecision(choices []platform.Choice, decision string) (platform.Choice, bool) {
+	decision = strings.TrimSpace(decision)
+	for _, choice := range choices {
+		if strings.TrimSpace(choice.ID) == decision && decision != "" {
+			return choice, true
+		}
+	}
+	return platform.Choice{}, false
+}
+
 func approvalChoiceMetadata(approvalKey string, taskCardID string, ownerUserID string, routeUserID string, agentName string, interactionKind string) map[string]string {
 	metadata := make(map[string]string, 6)
 	if approvalKey = strings.TrimSpace(approvalKey); approvalKey != "" {

@@ -184,9 +184,11 @@ func (h *Handler) loadFeishuCodexWorkspaceSnapshot(req feishuCodexChoiceRequest,
 		return nil, "", false
 	}
 	choices := make([]platform.Choice, 0, len(groups))
-	for _, group := range groups {
+	for index, group := range groups {
 		if name := strings.TrimSpace(group.Name); name != "" {
-			choices = append(choices, platform.Choice{ID: normalizeCodexWorkspaceRoot(group.Root), Label: name})
+			choices = append(choices, platform.Choice{
+				ID: normalizeCodexWorkspaceRoot(group.Root), Label: feishuIndexedChoiceLabel(index, name),
+			})
 		}
 	}
 	if len(choices) == 0 {
@@ -232,12 +234,13 @@ func (h *Handler) loadFeishuCodexSessionSnapshot(req feishuCodexChoiceRequest, s
 		return nil, "", false
 	}
 	choices := make([]platform.Choice, 0, len(sessions))
-	for _, session := range sessions {
+	for index, session := range sessions {
 		if strings.TrimSpace(session.ThreadID) == "" || session.PendingNewThread {
 			continue
 		}
 		choices = append(choices, platform.Choice{
-			ID: fmt.Sprintf("/cx switch %s", strings.TrimSpace(session.ThreadID)), Label: codexSessionDisplayName(session),
+			ID:    fmt.Sprintf("/cx switch %s", strings.TrimSpace(session.ThreadID)),
+			Label: feishuIndexedChoiceLabel(index, codexSessionDisplayName(session)),
 		})
 	}
 	if len(choices) == 0 {

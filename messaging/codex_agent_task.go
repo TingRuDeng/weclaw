@@ -15,6 +15,8 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		opts.routeUserID = opts.userID
 	}
 	bindingKey := codexBindingKey(opts.routeUserID, opts.agentName)
+	unlockRegistry := h.lockWorkspaceRegistryControl()
+	defer unlockRegistry()
 	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
 	defer unlockBinding()
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
@@ -25,6 +27,11 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	route := opts.route
 	if route.conversationID == "" {
 		route = h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
+	}
+	if err := h.hiddenWorkspaceError(opts.agentName, route.workspaceRoot, "cx"); err != nil {
+		sendPlatformText(opts.ctx, opts.reply, opts.userID, err.Error())
+		cancelTaskTimeout()
+		return
 	}
 	if !h.workspaceAllowedForAgentContext(opts.ctx, opts.agentName, route.workspaceRoot) {
 		sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前工作空间不在允许范围，请发送 /cx ls 重新选择。")

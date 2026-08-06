@@ -69,7 +69,7 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 		t.Fatalf("second page=%#v，期望第二页卡片", second.Choices)
 	}
 	choices := second.Choices[0].Choices
-	if len(choices) != 3 || choices[0].Label != "workspace-07" || choices[1].Label != "workspace-08" ||
+	if len(choices) != 3 || choices[0].Label != "7. workspace-07" || choices[1].Label != "8. workspace-08" ||
 		!isTestFeishuWorkspaceChoice(choices[0].ID, "/cx") || !isTestFeishuWorkspaceChoice(choices[1].ID, "/cx") ||
 		choices[2].ID != "/cx page workspaces 1" {
 		t.Fatalf("second choices=%#v，分页必须使用首次加载时的稳定快照", choices)
@@ -135,7 +135,7 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	if len(choices) != 2 {
 		t.Fatalf("workspace choices=%#v, want two workspaces", choices)
 	}
-	if !isTestFeishuWorkspaceChoice(choices[0].ID, "/cx") || choices[0].Label != "alpha" {
+	if !isTestFeishuWorkspaceChoice(choices[0].ID, "/cx") || choices[0].Label != "0. alpha" {
 		t.Fatalf("first workspace choice=%#v, want opaque alpha token", choices[0])
 	}
 	if strings.Contains(choices[0].ID, workspaceA) {
@@ -336,7 +336,7 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 		t.Fatalf("prompt=%q, want workspace session prompt", reply.Choices[0].Prompt)
 	}
 	choices := reply.Choices[0].Choices
-	if len(choices) != 3 || choices[0].ID != "/cx switch thread-a" || choices[0].Label != "会话 A" {
+	if len(choices) != 3 || choices[0].ID != "/cx switch thread-a" || choices[0].Label != "0. 会话 A" || choices[1].Label != "1. 会话 B" {
 		t.Fatalf("session choices=%#v, want switch choices", choices)
 	}
 	if choices[2].ID != "/cx cd .." || choices[2].Label != "← 返回上一级" {
@@ -428,7 +428,7 @@ func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 		t.Fatalf("choices=%#v, want session card then workspace card", reply.Choices)
 	}
 	workspaceChoices := reply.Choices[1].Choices
-	if len(workspaceChoices) != 2 || !isTestFeishuWorkspaceChoice(workspaceChoices[0].ID, "/cx") || workspaceChoices[0].Label != "alpha" {
+	if len(workspaceChoices) != 2 || !isTestFeishuWorkspaceChoice(workspaceChoices[0].ID, "/cx") || workspaceChoices[0].Label != "0. alpha" {
 		t.Fatalf("workspace choices=%#v, want workspace list after back", workspaceChoices)
 	}
 }
@@ -514,7 +514,7 @@ func requireFeishuCodexWorkspaceChoice(t *testing.T, h *Handler, userID string, 
 		t.Fatalf("workspace choices=%#v texts=%#v", reply.Choices, reply.Texts)
 	}
 	for _, choice := range reply.Choices[0].Choices {
-		if choice.Label == label {
+		if strings.HasSuffix(choice.Label, ". "+label) {
 			if !isTestFeishuWorkspaceChoice(choice.ID, "/cx") {
 				t.Fatalf("workspace choice=%#v, want opaque token", choice)
 			}

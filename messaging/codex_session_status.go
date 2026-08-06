@@ -143,6 +143,10 @@ func (h *Handler) renderCodexStatusForRoute(actorUserID string, routeUserID stri
 
 func (h *Handler) renderCodexListForAccess(bindingKey string, actorUserID string, admin bool) string {
 	if workspaceRoot, ok := h.codexBrowseWorkspace(bindingKey); ok {
+		if h.workspaceRegistrySnapshot(agentNameFromBindingKey(bindingKey)).IsHidden(workspaceRoot) {
+			h.clearCodexBrowseWorkspace(bindingKey)
+			return h.renderCodexWorkspaceListForAccess(bindingKey, actorUserID, admin)
+		}
 		if !admin && !h.isWorkspaceAllowed(workspaceRoot) {
 			h.clearCodexBrowseWorkspace(bindingKey)
 			return h.renderCodexWorkspaceListForAccess(bindingKey, actorUserID, admin)
@@ -172,6 +176,9 @@ func buildCodexSessionHelpText() string {
 		"/cx switch <编号> 切换并绑定当前工作空间会话",
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx archive current|<编号> 归档当前或列表中的空闲会话",
+		"/cx rename current|<编号> <名称> 重命名当前或列表中的会话",
+		"/cx workspace add <路径> 管理员私聊登记已有工作目录",
+		"/cx workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cx pwd 查看当前工作空间",
 		"/cx status 查看当前工作空间、会话、任务、账号和运行状态",
 		"/cx quota 查看 Codex 账号额度",

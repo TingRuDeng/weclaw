@@ -192,6 +192,9 @@ func (h *Handler) resolveCodexSwitchTarget(req codexSwitchTargetRequest) (string
 		bindingKey: req.bindingKey, agentName: req.agentName,
 		workspaceRoot: req.workspaceRoot, target: threadID, agent: req.agent,
 	})
+	if err := h.hiddenWorkspaceError(req.agentName, workspaceRoot, "cx"); err != nil {
+		return "", "", err
+	}
 	return workspaceRoot, threadID, nil
 }
 
@@ -200,7 +203,11 @@ func (h *Handler) resolveCodexSessionView(agentName string, view codexWorkspaceV
 	if threadID == "" || view.PendingNewThread {
 		return "", "", fmt.Errorf("该编号当前没有可切换的会话。")
 	}
-	return normalizeCodexWorkspaceRoot(view.WorkspaceRoot), threadID, nil
+	workspaceRoot := normalizeCodexWorkspaceRoot(view.WorkspaceRoot)
+	if err := h.hiddenWorkspaceError(agentName, workspaceRoot, "cx"); err != nil {
+		return "", "", err
+	}
+	return workspaceRoot, threadID, nil
 }
 
 func parseCodexListIndex(value string) (int, bool) {

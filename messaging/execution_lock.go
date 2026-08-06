@@ -46,6 +46,24 @@ func (h *Handler) lockAgentExecutionContext(ctx context.Context, key string) (fu
 	}
 }
 
+// tryLockAgentExecution 非等待获取 writer 锁，供必须立即返回 busy 的控制命令使用。
+func (h *Handler) tryLockAgentExecution(key string) (func(), bool) {
+	lock := h.retainExecutionLock(key)
+	select {
+	case <-lock.token:
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				lock.token <- struct{}{}
+				h.releaseExecutionLock(key, lock)
+			})
+		}, true
+	default:
+		h.releaseExecutionLock(key, lock)
+		return nil, false
+	}
+}
+
 func (h *Handler) retainExecutionLock(key string) *executionLock {
 	h.taskLocksMu.Lock()
 	defer h.taskLocksMu.Unlock()

@@ -63,6 +63,15 @@ func (h *Handler) handleCwdWithRouteAccess(trimmed string, userID []string, admi
 		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请联系管理员在 allowed_workspace_roots 中添加。", absPath)
 	}
 	agents := h.snapshotAgents()
+	unlockRegistry := h.lockWorkspaceRegistryControl()
+	defer unlockRegistry()
+	if agentKind := h.hiddenCwdWorkspaceAgent(agents, absPath); agentKind != "" {
+		namespace := workspaceAgentNamespace(agentKind)
+		return fmt.Sprintf(
+			"该 %s 工作空间已被管理员从 WeClaw 移除，请先在管理员私聊中发送 /%s workspace add <路径> 重新登记。",
+			workspaceAgentLabel(agentKind), namespace,
+		)
+	}
 	// Active Claude tasks hold the session execution lock for their whole
 	// prompt. Check before acquiring binding locks so /cwd rejects immediately
 	// instead of waiting behind that writer lease.
@@ -81,6 +90,30 @@ func (h *Handler) handleCwdWithRouteAccess(trimmed string, userID []string, admi
 	h.updateAgentWorkingDirectories(absPath, agents)
 	h.recordActiveWorkspaceForUser(userID, agents, absPath)
 	return fmt.Sprintf("cwd: %s", absPath)
+}
+
+func (h *Handler) hiddenCwdWorkspaceAgent(agents map[string]agent.Agent, workspaceRoot string) string {
+	names := make([]string, 0, len(agents))
+	for name := range agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ag := agents[name]
+		kind := ""
+		switch {
+		case isCodexAgent(name, ag.Info()):
+			kind = "codex"
+		case isClaudeAgent(name, ag.Info()):
+			kind = "claude"
+		default:
+			continue
+		}
+		if h.workspaceRegistrySnapshot(name).IsHidden(workspaceRoot) {
+			return kind
+		}
+	}
+	return ""
 }
 
 func (h *Handler) releaseClaudeWorkspacesForCwd(userIDs []string, agents map[string]agent.Agent, workspaceRoot string) error {

@@ -164,7 +164,10 @@ func (h *Handler) handleClaudeSessionPlatformCommand(ctx context.Context, req pl
 	if h.handleFeishuClaudeSessionCommand(cardReq) {
 		return true
 	}
-	text := h.handleClaudeSessionCommandForRoute(ctx, msg.UserID, routeUserID, h.isAdminMessage(msg), req.Trimmed)
+	text := h.handleClaudeSessionCommandForRouteRequest(ctx, claudeSessionCommandRequest{
+		ActorUserID: msg.UserID, RouteUserID: routeUserID, Trimmed: req.Trimmed,
+		Platform: msg.Platform, Admin: h.isAdminMessage(msg), Private: isPrivatePlatformMessage(msg, routeUserID),
+	}).Reply
 	sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	return true
 }

@@ -79,6 +79,7 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/cx account", Label: "Codex 账号"},
 			{ID: "/cx model ls", Label: "可用模型"},
 			{ID: "/cx clean", Label: "清理失效记录"},
+			{ID: "/cx rename", Label: "重命名会话"},
 			{ID: "/guide", Label: "引导当前 Codex 任务"},
 			{ID: "/cx help", Label: "完整命令"},
 		}
@@ -91,6 +92,7 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/cc quota", Label: "账号额度"},
 			{ID: "/cc model ls", Label: "可用模型"},
 			{ID: "/cc model reset", Label: "重置新会话模型"},
+			{ID: "/cc rename", Label: "重命名会话"},
 			{ID: "/cc help", Label: "完整命令"},
 		}
 	case "settings":
@@ -109,6 +111,8 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 				{ID: "/feishu users", Label: "用户管理说明"},
 				{ID: "/feishu users pending", Label: "待授权用户"},
 				{ID: "/feishu users list", Label: "已授权用户"},
+				{ID: "/cx workspace", Label: "管理 Codex 工作空间"},
+				{ID: "/cc workspace", Label: "管理 Claude 工作空间"},
 			}
 		}
 	default:

@@ -56,6 +56,9 @@ func (a *ACPAgent) createSession(ctx context.Context, conversationID string) (st
 			return "", err
 		}
 	}
+	if a.isClaudeACP() {
+		a.markClaudeSessionLoaded(session.SessionID, cwd)
+	}
 	commit := conversationBindingCommit{sessionID: session.SessionID, cwd: cwd}
 	if err := a.commitBindingIntent(conversationID, revision, commit); err != nil {
 		return "", err
@@ -109,6 +112,12 @@ func (a *ACPAgent) resumeClaudeSessionIfStale(ctx context.Context, conversationI
 	if !stale {
 		return nil
 	}
+	a.claudeHostControlMu.Lock()
+	defer a.claudeHostControlMu.Unlock()
+	state, stale = a.staleClaudeSessionState(conversationID, sessionID)
+	if !stale {
+		return nil
+	}
 	if reusable, reuseErr := a.reusableClaudeSession(state.sessionID, state.cwd); reuseErr != nil {
 		return reuseErr
 	} else if reusable {
@@ -125,6 +134,7 @@ func (a *ACPAgent) resumeClaudeSessionIfStale(ctx context.Context, conversationI
 	if err := a.cacheClaudeResumeConfig(state.sessionID, result, sequence); err != nil {
 		return err
 	}
+	a.markClaudeSessionLoaded(state.sessionID, state.cwd)
 	return a.commitClaudeSessionGeneration(conversationID, state)
 }
 

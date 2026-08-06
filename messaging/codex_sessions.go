@@ -92,6 +92,19 @@ func (s *codexSessionStore) getActiveWorkspace(bindingKey string) (string, bool)
 	return workspaceRoot, workspaceRoot != ""
 }
 
+func (s *codexSessionStore) workspaceInUse(workspaceRoot string) bool {
+	workspaceRoot, _ = canonicalWorkspaceRegistryPath(workspaceRoot, false)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, binding := range s.bindings {
+		candidate, _ := canonicalWorkspaceRegistryPath(binding.ActiveWorkspace, false)
+		if candidate != "" && candidate == workspaceRoot {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *codexSessionStore) setActiveWorkspace(bindingKey string, workspaceRoot string) {
 	s.mu.Lock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)

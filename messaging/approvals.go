@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -15,19 +16,36 @@ import (
 )
 
 type pendingApproval struct {
-	choices   chan string
-	allowed   map[string]bool
-	aliases   map[string]string
-	key       string
-	userID    string
-	route     string
-	kind      string
-	yolo      string
-	deny      string
-	code      string
-	expiresAt time.Time
-	resolved  atomic.Bool
+	choices           chan string
+	allowed           map[string]bool
+	aliases           map[string]string
+	key               string
+	userID            string
+	route             string
+	kind              string
+	yolo              string
+	deny              string
+	code              string
+	expiresAt         time.Time
+	automaticRecorder automaticApprovalRecorder
+	automaticPrompt   string
+	automaticChoice   platform.Choice
+	displayReady      chan struct{}
+	resolved          atomic.Bool
 }
+
+// automaticApprovalRecorder 是飞书等平台可选实现的展示能力；审批真值仍由 Agent 决策通道负责。
+type automaticApprovalRecorder interface {
+	RecordAutomaticApproval(context.Context, string, platform.Choice) error
+}
+
+type pendingApprovalDisplay struct {
+	recorder automaticApprovalRecorder
+	prompt   string
+	choice   platform.Choice
+}
+
+const automaticApprovalDisplayTimeout = 10 * time.Second
 
 type approvalCodeConsumeResult uint8
 
@@ -65,23 +83,53 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		if len(choices) == 0 {
 			return "", fmt.Errorf("approval request has no options")
 		}
-		if h.isYoloMode(approvalModeKey(opts.actorUserID, opts.routeUserID)) {
-			decision := autoApproveApprovalOption(req.Options)
-			log.Printf("[handler] yolo mode auto-approving sensitive operation for %s -> %q", opts.actorUserID, decision)
-			h.auditRecord(auditEntry{User: opts.actorUserID, Action: "approval_auto_yolo", Summary: decision})
-			return decision, nil
+		prompt := approvalPrompt(req, opts.agentName)
+		yoloDecision := autoApproveApprovalOption(req.Options)
+		modeKey := approvalModeKey(opts.actorUserID, opts.routeUserID)
+		if h.isYoloMode(modeKey) {
+			log.Printf("[handler] yolo mode auto-approving sensitive operation for %s -> %q", opts.actorUserID, yoloDecision)
+			h.auditRecord(auditEntry{User: opts.actorUserID, Action: "approval_auto_yolo", Summary: yoloDecision})
+			if choice, ok := approvalChoiceForDecision(choices, yoloDecision); ok {
+				h.recordAutomaticApprovalAsync(ctx, opts.reply, prompt, choice, opts.actorUserID, yoloDecision)
+			}
+			return yoloDecision, nil
 		}
-		pending, err := h.registerPendingApprovalForRoute(
+		display := pendingApprovalDisplay{prompt: prompt}
+		if recorder, ok := optionalAutomaticApprovalRecorder(opts.reply); ok {
+			display.recorder = recorder
+			display.choice, _ = approvalChoiceForDecision(choices, yoloDecision)
+		}
+		pending, err := h.registerPendingApprovalForRouteWithDisplay(
 			opts.actorUserID, opts.routeUserID, approvalKey, req.Options,
-			autoApproveApprovalOption(req.Options), platform.ChoiceInteractionApproval,
+			yoloDecision, platform.ChoiceInteractionApproval, display,
 		)
 		if err != nil {
 			return "", err
 		}
 		defer h.clearPendingApproval(opts.actorUserID, pending)
-		prompt := approvalPromptWithTextFallback(approvalPrompt(req, opts.agentName), pending)
-		if err := opts.reply.AskChoices(ctx, prompt, choices); err != nil {
-			return "", err
+		// 关闭“初次检查 default、注册前恰好切到 yolo”的窗口；此时尚未发卡。
+		if h.isYoloMode(modeKey) {
+			resolvedHere := deliverPendingApprovalChoice(pending, yoloDecision)
+			pending.markDisplayReady()
+			if resolvedHere {
+				log.Printf("[handler] yolo mode auto-approving newly pending sensitive operation for %s -> %q", opts.actorUserID, yoloDecision)
+				h.auditRecord(auditEntry{User: opts.actorUserID, Action: "approval_auto_yolo", Summary: yoloDecision})
+				if choice, ok := approvalChoiceForDecision(choices, yoloDecision); ok {
+					h.recordAutomaticApprovalAsync(ctx, opts.reply, prompt, choice, opts.actorUserID, yoloDecision)
+				}
+			}
+			return yoloDecision, nil
+		}
+		prompt = approvalPromptWithTextFallback(prompt, pending)
+		askErr := opts.reply.AskChoices(ctx, prompt, choices)
+		pending.markDisplayReady()
+		if askErr != nil {
+			select {
+			case choice := <-pending.choices:
+				return strings.TrimSpace(choice), nil
+			default:
+			}
+			return "", askErr
 		}
 		wait := time.Until(pending.expiresAt)
 		if wait < 0 {
@@ -114,17 +162,29 @@ func (h *Handler) registerPendingApproval(userID string, approvalKey string, opt
 }
 
 func (h *Handler) registerPendingApprovalForRoute(userID string, routeUserID string, approvalKey string, options []agent.ApprovalOption, yoloDecision string, interactionKind string) (*pendingApproval, error) {
+	return h.registerPendingApprovalForRouteWithDisplay(
+		userID, routeUserID, approvalKey, options, yoloDecision, interactionKind, pendingApprovalDisplay{},
+	)
+}
+
+func (h *Handler) registerPendingApprovalForRouteWithDisplay(userID string, routeUserID string, approvalKey string, options []agent.ApprovalOption, yoloDecision string, interactionKind string, display pendingApprovalDisplay) (*pendingApproval, error) {
 	pending := &pendingApproval{
-		choices:   make(chan string, 1),
-		allowed:   approvalOptionSet(options),
-		aliases:   approvalOptionAliases(options),
-		key:       pendingApprovalMapKey(userID, routeUserID, interactionKind, approvalKey),
-		userID:    strings.TrimSpace(userID),
-		route:     strings.TrimSpace(routeUserID),
-		kind:      strings.TrimSpace(interactionKind),
-		yolo:      strings.TrimSpace(yoloDecision),
-		deny:      defaultDenyApprovalOption(options),
-		expiresAt: time.Now().Add(pendingApprovalTimeout),
+		choices:           make(chan string, 1),
+		allowed:           approvalOptionSet(options),
+		aliases:           approvalOptionAliases(options),
+		key:               pendingApprovalMapKey(userID, routeUserID, interactionKind, approvalKey),
+		userID:            strings.TrimSpace(userID),
+		route:             strings.TrimSpace(routeUserID),
+		kind:              strings.TrimSpace(interactionKind),
+		yolo:              strings.TrimSpace(yoloDecision),
+		deny:              defaultDenyApprovalOption(options),
+		expiresAt:         time.Now().Add(pendingApprovalTimeout),
+		automaticRecorder: display.recorder,
+		automaticPrompt:   strings.TrimSpace(display.prompt),
+		automaticChoice:   display.choice,
+	}
+	if pending.automaticRecorder != nil && strings.TrimSpace(pending.automaticChoice.ID) != "" {
+		pending.displayReady = make(chan struct{})
 	}
 	h.pendingApprovalsMu.Lock()
 	h.cleanupResolvedApprovalCodesLocked(time.Now())
@@ -292,12 +352,32 @@ func deliverPendingApprovalChoice(pending *pendingApproval, choice string) bool 
 	}
 }
 
+func (p *pendingApproval) markDisplayReady() {
+	if p != nil && p.displayReady != nil {
+		close(p.displayReady)
+	}
+}
+
+func (p *pendingApproval) recordAutomaticApproval(ctx context.Context) error {
+	if p == nil || p.automaticRecorder == nil || strings.TrimSpace(p.automaticChoice.ID) == "" {
+		return platform.ErrUnsupported
+	}
+	if p.displayReady != nil {
+		select {
+		case <-p.displayReady:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return p.automaticRecorder.RecordAutomaticApproval(ctx, p.automaticPrompt, p.automaticChoice)
+}
+
 // resolvePendingApprovalsForYolo 只放行当前操作者在当前窗口切换前已经弹出的授权请求。
-func (h *Handler) resolvePendingApprovalsForYolo(actorUserID string, routeUserID string) int {
+func (h *Handler) resolvePendingApprovalsForYolo(ctx context.Context, actorUserID string, routeUserID string) (int, int) {
 	actorUserID = strings.TrimSpace(actorUserID)
 	routeUserID = strings.TrimSpace(routeUserID)
 	if actorUserID == "" || routeUserID == "" {
-		return 0
+		return 0, 0
 	}
 	h.pendingApprovalsMu.Lock()
 	pending := make([]*pendingApproval, 0)
@@ -308,6 +388,7 @@ func (h *Handler) resolvePendingApprovalsForYolo(actorUserID string, routeUserID
 	}
 	h.pendingApprovalsMu.Unlock()
 	resolved := 0
+	displayFailures := 0
 	for _, item := range pending {
 		if !deliverPendingApprovalChoice(item, item.yolo) {
 			continue
@@ -315,8 +396,66 @@ func (h *Handler) resolvePendingApprovalsForYolo(actorUserID string, routeUserID
 		resolved++
 		log.Printf("[handler] yolo mode resolved pending sensitive operation for %s -> %q", item.userID, item.yolo)
 		h.auditRecord(auditEntry{User: item.userID, Action: "approval_auto_yolo", Summary: item.yolo})
+		if err := item.recordAutomaticApproval(ctx); err != nil && !errors.Is(err, platform.ErrUnsupported) {
+			displayFailures++
+			log.Printf("[handler] yolo approval display update failed for %s: %v", item.userID, err)
+			h.auditRecord(auditEntry{User: item.userID, Action: "approval_auto_yolo_display_failed", Summary: automaticApprovalDisplayFailureSummary(item.yolo, err)})
+		}
 	}
-	return resolved
+	return resolved, displayFailures
+}
+
+func recordAutomaticApproval(ctx context.Context, reply platform.Replier, prompt string, choice platform.Choice) error {
+	recorder, ok := optionalAutomaticApprovalRecorder(reply)
+	if !ok {
+		return platform.ErrUnsupported
+	}
+	return recorder.RecordAutomaticApproval(ctx, prompt, choice)
+}
+
+func (h *Handler) recordAutomaticApprovalAsync(ctx context.Context, reply platform.Replier, prompt string, choice platform.Choice, actorUserID string, decision string) {
+	go func() {
+		displayCtx, cancel := context.WithTimeout(context.WithoutCancel(normalizeContext(ctx)), automaticApprovalDisplayTimeout)
+		defer cancel()
+		if err := recordAutomaticApproval(displayCtx, reply, prompt, choice); err != nil && !errors.Is(err, platform.ErrUnsupported) {
+			log.Printf("[handler] yolo approval display update failed for %s: %v", actorUserID, err)
+			h.auditRecord(auditEntry{User: actorUserID, Action: "approval_auto_yolo_display_failed", Summary: automaticApprovalDisplayFailureSummary(decision, err)})
+		}
+	}()
+}
+
+func automaticApprovalDisplayFailureSummary(decision string, err error) string {
+	reason := "card_update_failed"
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		reason = "card_update_timeout"
+	case errors.Is(err, context.Canceled):
+		reason = "card_update_cancelled"
+	}
+	return "decision=" + strings.TrimSpace(decision) + " reason=" + reason
+}
+
+func optionalAutomaticApprovalRecorder(reply platform.Replier) (automaticApprovalRecorder, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		recorder, supported := optionalAutomaticApprovalRecorder(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedAutomaticApprovalRecorder{reply: serialized, recorder: recorder}, true
+	}
+	recorder, ok := reply.(automaticApprovalRecorder)
+	return recorder, ok
+}
+
+type serializedAutomaticApprovalRecorder struct {
+	reply    *serializedReplier
+	recorder automaticApprovalRecorder
+}
+
+func (s serializedAutomaticApprovalRecorder) RecordAutomaticApproval(ctx context.Context, prompt string, choice platform.Choice) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.recorder.RecordAutomaticApproval(ctx, prompt, choice)
 }
 
 func (h *Handler) findPendingApprovalLocked(userID string, routeUserID string, interactionKind string, approvalKey string) *pendingApproval {

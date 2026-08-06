@@ -57,6 +57,7 @@ The configuration file is `~/.weclaw/config.json`, the runtime log is `~/.weclaw
 /cx ls                 # List existing sessions
 /cx <number>           # Select and bind a session; Feishu also supports session cards
 # Or send /cx new      # Create and bind a session
+/cx rename current New name
 Inspect the current project and fix the failing tests
 ```
 
@@ -72,7 +73,7 @@ After selecting an existing session or sending `/cx new`, send the task directly
 
 With the default `codex_host_mode: auto` on macOS, WeClaw uses protected Desktop IPC when Codex App is already running and does not start a second app-server. When the App is absent, it connects to or starts the official standalone daemon, with the WeClaw-managed Host as the compatibility backend. If a shared Host is already active, WeClaw switches to a newly detected App only after every thread is globally idle and no writer lease exists. An ambiguous App endpoint or non-idle Host fails closed and never falls back to parallel writes.
 
-The App Host supports selecting existing sessions, turns, progress, approvals, `/guide`, `/stop`, and current-thread model or reasoning changes. Desktop IPC does not currently expose session creation/archive, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` fails clearly in App mode without deleting the current binding.
+The App Host supports selecting existing sessions, turns, progress, approvals, `/guide`, `/stop`, and current-thread model or reasoning changes. Desktop IPC does not currently expose session creation, archive, or rename, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` and `/cx rename` fail clearly in App mode without deleting the current binding.
 
 `/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` remain disabled because they launch extra processes; the default auto topology already reuses a running Codex App safely.
 
@@ -105,6 +106,7 @@ Use `/cx account` or `/cx account status` from Feishu or WeChat to inspect the m
 /cc ls
 /cc switch <number|sessionId>
 /cc new
+/cc rename current <name>
 /cc status
 /cc quota
 ```
@@ -116,6 +118,12 @@ Selecting or creating a session, choosing it from a Feishu card, or using global
 If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` marks the acquired binding as the “current new session.” This entry is display-only until the first message makes it part of the normal catalog, and it never bypasses `/cc switch` validation against `session/list`.
 
 `/cc owner` and `/cc cli` are disabled. ClaudeHost no longer has a frontend-exclusive owner, and an independent `claude --resume` would bypass the session writer lease and create a second writer. Legacy `remote`, `local`, and `unclaimed` control intents are discarded on load while every frontend binding is retained. Native `claude` is used only as a short-lived, prompt-free fallback for `/cc quota`, never for session writes. Claude tasks support `/stop` and one queued continuation from the same frontend, but not `/guide`.
+
+### Manage Workspaces and Session Names
+
+An administrator may register or hide existing working directories from a direct chat with `/cx workspace add <path>` and `/cx workspace remove <number|path>`; Claude uses the corresponding `/cc workspace ...` commands. Entries are isolated by the configured Agent name in `~/.weclaw/workspace-registry.json`. `remove` hides a directory only from WeClaw navigation: it never deletes source files, Codex threads, Claude sessions, or history, and a later `add` makes it visible again. Registering a path outside the allowlist does not expand a regular user's `allowed_workspace_roots` access.
+
+Users who can access the target workspace may run `/cx rename current|<number> <name>` or `/cc rename current|<number> <name>` to change the Agent-global session name. Names are single-line text of at most 120 Unicode code points. Codex writes through the unique shared app-server and verifies the result; Claude reuses the same ClaudeHost and session writer lease only after the ACP adapter advertises `rename` at runtime. Rename never changes any frontend binding, and a busy or unverifiable operation fails explicitly and asks the user to refresh the list.
 
 ### Control a Running Task
 
@@ -199,7 +207,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/new` | Explicitly create a session for the current default agent; also bind it when Codex is the default |
 | `/model`, `/reasoning` | Show or change the bound session configuration, or the new-session defaults when no session is bound |
 | `/fast [on|off]` | Show or change the bound Codex session speed, or the new-session default when no session is bound |
-| `/mode [default|yolo]` | Show or change Agent approval behavior; group chats isolate the setting by actor, and bare `/mode` opens a Feishu choice card |
+| `/mode [default|yolo]` | Show or change Agent approval behavior; group chats isolate the setting by actor, and bare `/mode` opens a Feishu choice card. Switching to yolo releases that actor's existing approvals in the current route and closes sent approval cards as auto-approved; later automatic approvals do not open a separate card and are appended to the task card when available |
 | `/approve <code>`, `/deny <code>` | Allow or deny the matching approval when card buttons are unavailable; codes are actor-, window-, and expiry-bound |
 | `/progress [mode]` | Show progress mode; only administrators may change the account-level mode |
 | `/ps`, `/stop` | List or stop current tasks |
@@ -208,6 +216,10 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
 | `/cx new` | Create and bind a Codex session in the current workspace |
 | `/cx archive current`, `/cx archive <number>` | Archive the current or listed idle Codex session while preserving its history |
+| `/cx rename current\|<number> <name>` | Rename the current or listed Codex session without changing frontend bindings |
+| `/cx workspace add <path>`, `/cx workspace remove <number\|path>` | Register or hide a Codex working directory from an administrator direct chat |
+| `/cc rename current\|<number> <name>` | Rename a Claude session when the adapter advertises support, without changing frontend bindings |
+| `/cc workspace add <path>`, `/cc workspace remove <number\|path>` | Register or hide a Claude working directory from an administrator direct chat |
 | `/cx account`, `/cx account status` | Inspect the host-level Codex account; administrator direct messages may select and switch |
 | `/update`, `/restart [--force]` | Remotely update or restart WeClaw from an administrator direct message |
 
@@ -218,6 +230,8 @@ Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` wh
 
 Archive: `/cx archive current` archives the bound session; after entering a workspace session list, `/cx archive <number>` archives that entry. Only idle sessions with no other WeClaw frontend binding can be archived. History is preserved and can be restored from the Codex App archive.
 
+Workspaces and names: `/cx workspace add <path>` and `/cx workspace remove <number|path>` require an administrator direct chat. `/cx rename current|<number> <name>` renames the current or listed idle session. Desktop follower mode has no rename write operation, so rename it in Codex App instead.
+
 Runtime boundary: `/cx status` is a compact view of the current workspace, session, task, account, and runtime. Use `/cx pwd` for the full path, `/cx account status` for account diagnostics, and `/cx quota` for usage limits.
 
 Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx pwd`, `/cx status`, `/cx quota`, `/cx account`, `/cx account status`, `/cx account use <profile>`, `/cx model status|ls`, and `/cx clean`. `/cx model status` shows defaults for newly created Codex sessions; use `/model`, `/reasoning`, and `/fast` for the bound session. Fast availability is read from the current model catalog and unsupported accounts or models fail explicitly.
@@ -227,7 +241,7 @@ Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx 
 <details>
 <summary>Common Claude commands</summary>
 
-`/cc whoami`, `/cc ls`, `/cc cd <number|..>`, `/cc switch <number|sessionId>`, `/cc new`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls|reset`. `/cc cd` enters a workspace or returns to the workspace list. `/cc status` is the unified binding, shared-ClaudeHost, and writer view. `/cc model status` shows defaults for newly created Claude sessions, while `/cc model reset` clears them; use `/model` and `/reasoning` for the bound session. `/cc owner` and `/cc cli` are disabled.
+`/cc whoami`, `/cc ls`, `/cc cd <number|..>`, `/cc switch <number|sessionId>`, `/cc new`, `/cc rename current|<number> <name>`, `/cc workspace add|remove`, `/cc pwd`, `/cc status`, `/cc quota`, `/cc model status|ls|reset`. `/cc cd` enters a workspace or returns to the workspace list. `/cc status` is the unified binding, shared-ClaudeHost, and writer view. `/cc model status` shows defaults for newly created Claude sessions, while `/cc model reset` clears them; use `/model` and `/reasoning` for the bound session. `/cc owner` and `/cc cli` are disabled.
 
 `/cc quota` reuses the local Claude Code OAuth login to read the 5-hour, 7-day, and model-scoped limits without sending a model request. WeClaw first supports Claude Code's legacy Keychain/credentials file and its Anthropic usage endpoint, then falls back to a short-lived native `get_usage` control query when those credentials are unavailable or the request fails. The token is kept in memory, sent only to the fixed Anthropic endpoint, never logged or persisted, and never forwarded through redirects. These credential, endpoint, and structured-control contracts are not stable public APIs and may change in later Claude Code releases. API key, Bedrock, Vertex, and sessions without profile scope report that subscription limits are unavailable.
 

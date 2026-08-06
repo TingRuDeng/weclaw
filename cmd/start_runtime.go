@@ -213,6 +213,9 @@ func configureHandlerState(handler *messaging.Handler) {
 	if err := handler.SetClaudeSessionFile(messaging.DefaultClaudeSessionFile()); err != nil {
 		log.Printf("加载 Claude 会话状态失败：%v", err)
 	}
+	if err := handler.SetWorkspaceRegistryFile(messaging.DefaultWorkspaceRegistryFile()); err != nil {
+		log.Printf("加载工作空间登记状态失败：%v", err)
+	}
 }
 
 // configureHandlerAccess 配置文件保存、工作区权限、限流与审计。

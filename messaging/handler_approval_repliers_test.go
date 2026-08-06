@@ -84,6 +84,11 @@ type choiceRequest struct {
 	choices []platform.Choice
 }
 
+type automaticApprovalRecord struct {
+	prompt string
+	choice platform.Choice
+}
+
 type choiceRequestCaptureReplier struct {
 	approvalKeyCaptureReplier
 	choiceCh chan choiceRequest
@@ -106,6 +111,91 @@ func (r *choiceRequestCaptureReplier) waitChoiceRequest(t *testing.T, ctx contex
 	case <-ctx.Done():
 		t.Fatal("choice request was not captured")
 		return choiceRequest{}
+	}
+}
+
+type automaticApprovalCaptureReplier struct {
+	*choiceRequestCaptureReplier
+	taskCardID string
+	recordErr  error
+	recordCh   chan automaticApprovalRecord
+}
+
+type blockingAutomaticApprovalCaptureReplier struct {
+	*automaticApprovalCaptureReplier
+	started chan struct{}
+	release chan struct{}
+}
+
+type failingChoiceAutomaticApprovalCaptureReplier struct {
+	*automaticApprovalCaptureReplier
+	release chan struct{}
+	askErr  error
+}
+
+func newFailingChoiceAutomaticApprovalCaptureReplier(taskCardID string, askErr error) *failingChoiceAutomaticApprovalCaptureReplier {
+	return &failingChoiceAutomaticApprovalCaptureReplier{
+		automaticApprovalCaptureReplier: newAutomaticApprovalCaptureReplier(taskCardID),
+		release:                         make(chan struct{}),
+		askErr:                          askErr,
+	}
+}
+
+func (r *failingChoiceAutomaticApprovalCaptureReplier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
+	if err := r.choiceRequestCaptureReplier.AskChoices(ctx, prompt, choices); err != nil {
+		return err
+	}
+	select {
+	case <-r.release:
+		return r.askErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func newBlockingAutomaticApprovalCaptureReplier(taskCardID string) *blockingAutomaticApprovalCaptureReplier {
+	return &blockingAutomaticApprovalCaptureReplier{
+		automaticApprovalCaptureReplier: newAutomaticApprovalCaptureReplier(taskCardID),
+		started:                         make(chan struct{}, 1),
+		release:                         make(chan struct{}),
+	}
+}
+
+func (r *blockingAutomaticApprovalCaptureReplier) RecordAutomaticApproval(ctx context.Context, prompt string, choice platform.Choice) error {
+	r.started <- struct{}{}
+	select {
+	case <-r.release:
+		return r.automaticApprovalCaptureReplier.RecordAutomaticApproval(ctx, prompt, choice)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func newAutomaticApprovalCaptureReplier(taskCardID string) *automaticApprovalCaptureReplier {
+	return &automaticApprovalCaptureReplier{
+		choiceRequestCaptureReplier: newChoiceRequestCaptureReplier(),
+		taskCardID:                  taskCardID,
+		recordCh:                    make(chan automaticApprovalRecord, 2),
+	}
+}
+
+func (r *automaticApprovalCaptureReplier) CurrentTaskCardID() string {
+	return r.taskCardID
+}
+
+func (r *automaticApprovalCaptureReplier) RecordAutomaticApproval(_ context.Context, prompt string, choice platform.Choice) error {
+	r.recordCh <- automaticApprovalRecord{prompt: prompt, choice: choice}
+	return r.recordErr
+}
+
+func (r *automaticApprovalCaptureReplier) waitAutomaticApproval(t *testing.T, ctx context.Context) automaticApprovalRecord {
+	t.Helper()
+	select {
+	case record := <-r.recordCh:
+		return record
+	case <-ctx.Done():
+		t.Fatal("automatic approval record was not captured")
+		return automaticApprovalRecord{}
 	}
 }
 

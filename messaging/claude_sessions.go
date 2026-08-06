@@ -82,6 +82,19 @@ func (s *claudeSessionStore) bindingSnapshot(bindingKey string) (claudeSessionBi
 	return binding, ok
 }
 
+func (s *claudeSessionStore) workspaceInUse(workspaceRoot string) bool {
+	workspaceRoot, _ = canonicalWorkspaceRegistryPath(workspaceRoot, false)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, binding := range s.bindings {
+		candidate, _ := canonicalWorkspaceRegistryPath(binding.WorkspaceRoot, false)
+		if candidate != "" && candidate == workspaceRoot {
+			return true
+		}
+	}
+	return false
+}
+
 // commitSelection 原子提交已由 ACP 验证成功的 workspace/session 绑定。
 func (s *claudeSessionStore) commitSelection(bindingKey string, workspaceRoot string, sessionID string) error {
 	workspaceRoot = normalizeClaudeWorkspaceRoot(workspaceRoot)

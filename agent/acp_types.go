@@ -95,20 +95,31 @@ type sessionUpdateParams struct {
 }
 
 type sessionUpdate struct {
-	SessionUpdate string                   `json:"sessionUpdate"`
-	Content       json.RawMessage          `json:"content,omitempty"`
-	Title         string                   `json:"title,omitempty"`
-	MessageID     string                   `json:"messageId,omitempty"`
-	Kind          string                   `json:"kind,omitempty"`
-	Status        string                   `json:"status,omitempty"`
-	ToolCallID    string                   `json:"toolCallId,omitempty"`
-	Entries       []acpPlanEntry           `json:"entries,omitempty"`
-	ConfigOptions []acpSessionConfigOption `json:"configOptions,omitempty"`
+	SessionUpdate     string                   `json:"sessionUpdate"`
+	Content           json.RawMessage          `json:"content,omitempty"`
+	Title             string                   `json:"title,omitempty"`
+	MessageID         string                   `json:"messageId,omitempty"`
+	Kind              string                   `json:"kind,omitempty"`
+	Status            string                   `json:"status,omitempty"`
+	ToolCallID        string                   `json:"toolCallId,omitempty"`
+	Entries           []acpPlanEntry           `json:"entries,omitempty"`
+	ConfigOptions     []acpSessionConfigOption `json:"configOptions,omitempty"`
+	AvailableCommands []acpAvailableCommand    `json:"availableCommands,omitempty"`
 	// For agent_message_chunk
 	Type string `json:"type,omitempty"`
 	Text string `json:"text,omitempty"`
 	// Sequence 是当前 ACP 连接上的单调 wire 序号，不参与 JSON 编解码。
 	Sequence uint64 `json:"-"`
+}
+
+type acpAvailableCommand struct {
+	Name        string                    `json:"name"`
+	Description string                    `json:"description,omitempty"`
+	Input       *acpAvailableCommandInput `json:"input,omitempty"`
+}
+
+type acpAvailableCommandInput struct {
+	Hint string `json:"hint,omitempty"`
 }
 
 type acpPlanEntry struct {

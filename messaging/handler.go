@@ -67,6 +67,7 @@ type Handler struct {
 	platformProgressConfigs map[string]config.ProgressConfig
 	platformDefaultAgents   map[string]string
 	sessions                *sessionService
+	workspaceRegistry       *workspaceRegistry
 	seenTextMsgs            sync.Map // map[string]textDedupEntry — MessageID 为 0 时按文本去重与 reservation
 	feishuIdentities        *feishuIdentityStore
 	taskLocksMu             sync.Mutex

@@ -1,5 +1,85 @@
 # 当前任务记录
 
+## 2026-08-06 YOLO 自动审批卡片收敛
+
+### 目标
+
+当同一操作者在当前飞书窗口切换 `/mode yolo` 时，既有待审批请求继续自动放行，同时把已经发出的审批卡片更新为明确的自动批准终态、移除操作按钮，并把审批记录写入对应任务卡；YOLO 模式下后续自动审批不再弹新审批卡，只追加任务卡记录。
+
+### 范围与验收标准
+
+- 只处理当前操作者、当前 route 中仍待确认且包含明确允许选项的 Agent 授权；普通结构化提问及其他用户或窗口不受影响。
+- 自动审批的真实决策先按现有幂等门禁提交给 Agent，飞书卡片更新不得反向撤销、重复提交或改变审批结果。
+- 已存在审批面板时更新为 `已自动批准（YOLO）` 终态并移除按钮，同时在对应任务卡追加同一条简洁记录。
+- YOLO 模式下后续授权请求不创建审批面板，只在已有任务卡追加自动审批记录。
+- CardKit 更新失败必须可观察：审批保持成功，`/mode` 回复说明卡片更新失败，日志与审计记录失败原因但不记录敏感命令正文。
+- 不支持该可选能力的平台保持现有自动审批行为，不制造错误提示或额外消息。
+
+### 实施步骤
+
+- [x] 先补消息层测试，锁定既有审批自动放行后触发一次展示收敛、失败只告警以及未来 YOLO 不弹卡但写记录。
+- [x] 先补飞书层测试，锁定审批面板终态、按钮移除、任务卡记录和部分更新失败语义。
+- [x] 增加最小平台可选接口并接入 pending approval；复用原任务回复器和 CardKit registry，不引入第二条审批决策链。
+- [x] 同步中英文说明与项目上下文，执行定向、全仓、race、vet、tidy、Staticcheck、govulncheck、文档和 diff 验证。
+
+### 验证方式
+
+- `go test ./messaging ./feishu ./platform -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./... -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`、`go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚与修正策略
+
+如卡片收敛出现回归，移除自动审批展示的可选接口调用即可恢复当前“只自动放行并写审计”的行为；不得回滚或重放已经提交给 Agent 的审批决策，也不删除任务卡、会话历史或审计记录。
+
+### Review 小结（2026-08-06）
+
+- `/mode yolo` 仍由原 pending approval 的原子门禁提交唯一允许决策；已发飞书审批面板或独立卡片随后更新为 `已自动批准（YOLO）` 且移除按钮，对应任务卡追加真实选项和脱敏摘要。
+- 后续 YOLO 审批不再发送审批卡；任务卡展示通过有界异步更新完成，不阻塞 Agent 决策。切换瞬间注册的新审批会二次检查 mode，卡片发送失败也不会覆盖已经提交的允许决策。
+- CardKit 部分或全部更新失败只影响展示：`/mode` 回复报告失败数量，日志保留平台错误，审计只记录 `card_update_failed/timeout/cancelled` 分类，不记录命令正文。
+- 已验证：定向 RED/GREEN、`go test ./... -count=1 -timeout 180s`、`go test -race ./... -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、govulncheck、文档校验与 `git diff --check`。
+- 剩余边界：本机未连接真实飞书 CardKit 执行审批，没有验证客户端缓存中的旧卡片动画和网络时序；服务未提交、推送、发布或部署。
+
+## 2026-08-06 Codex / Claude 工作空间与会话命名管理
+
+### 目标
+
+按已确认设计，让管理员通过 WeClaw 登记或隐藏 Codex、Claude 的已有工作目录，并让有权访问目标工作空间的用户重命名 Codex thread 或 Claude session；所有写操作复用 Agent 权威协议、现有单 Host 与 writer lease，不直接修改 Agent 私有状态或删除源码、历史。
+
+### 范围与验收标准
+
+- 独立 `workspace-registry.json` 以规范绝对路径保存 registered/hidden 覆盖层，写入原子、权限为 `0600`，损坏或未知版本时失败关闭且不覆盖原文件。
+- `/cx workspace add/remove` 与 `/cc workspace add/remove` 只允许管理员私聊；登记不扩大普通用户的 `allowed_workspace_roots` 权限，隐藏目录不能从列表、编号、ID 或过期卡片绕过。
+- `/cx rename current|<编号> <名称>` 通过共享 Codex app-server 的 `thread/name/set` 写入并由 `thread/read.name` 确认；Desktop follower 缺失能力时明确拒绝。
+- `/cc rename current|<编号> <名称>` 仅在当前 Claude adapter 公布 `rename` 后，通过同一 ClaudeHost、目标 session writer lease 和 `/rename` 执行，并由 `session/list.title` 读回确认。
+- 工作空间移除与会话重命名不改变其他前端 binding，不调用 `thread/delete`、`session/delete`，不启动第二个 Codex/Claude writer。
+
+### 实施步骤
+
+- [x] 先补 registry 合并、幂等、持久化失败、损坏保护和权限过滤的失败测试，再实现最小状态层。
+- [x] 先补 workspace add/remove 解析、管理员私聊、导航合并和隐藏绕过的失败测试，再接入 Codex/Claude 命令。
+- [x] 先补 Codex rename 参数、权威 RPC、busy/unknown/Desktop 边界和读回验证测试，再实现消息路由。
+- [x] 先补 Claude rename 能力公布、Host 复用、writer lease、读回验证和 binding 不变测试，再实现消息路由。
+- [x] 同步帮助、中英文 README 与 `docs/AI_CONTEXT.md`，执行定向、全仓、race、vet、tidy、Staticcheck、文档和 diff 验证。
+
+### 验证方式
+
+- `go test ./agent ./messaging ./cmd -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./... -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+先停止暴露 workspace/rename 命令并停用 registry overlay，保留 `workspace-registry.json` 供修复版本恢复；不自动删除登记目录、Agent 会话或历史。重命名失败只重新读取 Agent 权威目录并保留原 binding，不写本地标题补偿。
+
+### Review
+
+- 已实现按 Agent 隔离的工作空间登记/隐藏、管理员私聊门禁、全入口隐藏校验，以及 Codex/Claude 权威协议重命名；未修改或删除工作目录、会话历史和其他窗口 binding。
+- 已验证：`go test ./agent ./messaging ./cmd -count=1 -timeout 180s`、`go test ./... -count=1 -timeout 180s`、`go test -race ./... -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验与 `git diff --check`。
+- 剩余边界：未连接真实 Codex app-server 或 Claude ACP adapter 做线上重命名；运行时继续以能力公布和权威读回失败关闭，不返回假成功。
+
 ## 2026-08-06 首次安装依赖选择向导
 
 ### 目标
@@ -203,11 +283,11 @@
 
 ### 实施步骤
 
-- [ ] 先补临时 Codex home/SQLite/rollout fixture，锁定 dry-run、双向 provider 切换、ID 修复和恢复行为。
-- [ ] 实现输入校验、只读盘点、writer 门禁、空间检查、备份清单和 staged 原子替换。
-- [ ] 实现 SQLite、全部 `session_meta` 与可选 catalog 同步，以及类型特定的 item ID 修复与碰撞校验。
-- [ ] 实现备份恢复入口和幂等校验，不自动操作 Codex/WeClaw 进程。
-- [ ] 执行 shell 语法/静态检查、fixture 测试、文档校验和 diff 复核。
+- [x] 先补临时 Codex home/SQLite/rollout fixture，锁定 dry-run、双向 provider 切换、ID 修复和恢复行为。
+- [x] 实现输入校验、只读盘点、writer 门禁、空间检查、备份清单和 staged 原子替换。
+- [x] 实现 SQLite、全部 `session_meta` 与可选 catalog 同步，以及类型特定的 item ID 修复与碰撞校验。
+- [x] 实现备份恢复入口和幂等校验，不自动操作 Codex/WeClaw 进程。
+- [x] 执行 shell 语法/静态检查、fixture 测试、文档校验和 diff 复核。
 
 ### 验证方式
 
@@ -220,6 +300,14 @@
 ### 回滚与修正策略
 
 每次写入前对 SQLite 使用一致性备份，对所有将修改的 rollout 和可选 catalog 建立独立备份与清单。恢复入口只接受脚本生成且校验通过的备份目录；恢复时同样要求无 writer，并通过 staged 替换和 SQLite integrity check 完成。任何中途失败保留备份和错误日志，不自动重试、不自动启动服务。
+
+### Review 小结（2026-08-05）
+
+- `scripts/codex-provider-switch.sh` 默认只读预览；`--apply` 前同时检查 Codex/WeClaw 进程、目标目录打开文件、SQLite writer、文件归属、磁盘空间和备份目录安全性。
+- provider 切换同步覆盖 `state_5.sqlite`、可选 Desktop catalog、当前与归档 rollout 的全部 `session_meta`；显式 `--repair-item-ids` 仅修复已知类型的 `item_` 前缀并保留 `call_id`。
+- fixture 覆盖 dry-run、双向切换、归档、多条元数据、ID 引用、幂等、备份恢复、writer 门禁、错误 JSON、ID 碰撞、损坏备份和路径约束；全部测试通过。
+- 对真实 `~/.codex` 的临时一致性副本执行 dry-run 成功：复制 27 个 rollout，识别 15 个待改文件、215 条 `session_meta` 和 63 个待修复 item ID；真实目录未写入。
+- `bash -n`、嵌入 Python 语法编译、文档校验、fixture 测试与 diff 检查通过；本机未安装 ShellCheck，因此按“若存在则执行”的验证约定未运行。加密 reasoning 仍明确告警，跨 provider 完整兼容不作保证。
 
 ## 2026-08-05 飞书凭证权限自动修复
 
