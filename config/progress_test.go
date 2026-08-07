@@ -26,6 +26,33 @@ func TestDefaultProgressConfig(t *testing.T) {
 	if cfg.MaxProgressMessages != 4 {
 		t.Fatalf("MaxProgressMessages = %d, want 4", cfg.MaxProgressMessages)
 	}
+	if cfg.StreamTimelineLimit == nil || *cfg.StreamTimelineLimit != 0 {
+		t.Fatalf("StreamTimelineLimit = %#v, want pointer to 0", cfg.StreamTimelineLimit)
+	}
+}
+
+func TestProgressConfigMissingStreamTimelineLimitIsUnlimited(t *testing.T) {
+	if got := (ProgressConfig{}).EffectiveStreamTimelineLimit(); got != 0 {
+		t.Fatalf("EffectiveStreamTimelineLimit() = %d, want 0", got)
+	}
+}
+
+func TestProgressConfigStreamTimelineLimitExplicitZeroOverridesParent(t *testing.T) {
+	base := DefaultProgressConfig()
+	zero := 0
+	got := NormalizeProgressConfig(base, &ProgressConfig{StreamTimelineLimit: &zero})
+	if got.StreamTimelineLimit == nil || *got.StreamTimelineLimit != 0 {
+		t.Fatalf("StreamTimelineLimit = %#v, want explicit zero", got.StreamTimelineLimit)
+	}
+}
+
+func TestProgressConfigStreamTimelineLimitPositiveOverridesParent(t *testing.T) {
+	base := DefaultProgressConfig()
+	limit := 24
+	got := NormalizeProgressConfig(base, &ProgressConfig{StreamTimelineLimit: &limit})
+	if got.StreamTimelineLimit == nil || *got.StreamTimelineLimit != limit {
+		t.Fatalf("StreamTimelineLimit = %#v, want %d", got.StreamTimelineLimit, limit)
+	}
 }
 
 func TestProgressConfigUnmarshalDefaults(t *testing.T) {
@@ -86,5 +113,14 @@ func TestLoadEnvOverridesProgressMode(t *testing.T) {
 
 	if cfg.Progress.Mode != "typing" {
 		t.Fatalf("Progress.Mode = %q, want typing", cfg.Progress.Mode)
+	}
+}
+
+func TestLoadEnvAllowsUnlimitedStreamTimeline(t *testing.T) {
+	t.Setenv("WECLAW_PROGRESS_STREAM_TIMELINE_LIMIT", "0")
+	cfg := DefaultConfig()
+	loadEnv(cfg)
+	if cfg.Progress.StreamTimelineLimit == nil || *cfg.Progress.StreamTimelineLimit != 0 {
+		t.Fatalf("StreamTimelineLimit=%#v, want explicit zero", cfg.Progress.StreamTimelineLimit)
 	}
 }

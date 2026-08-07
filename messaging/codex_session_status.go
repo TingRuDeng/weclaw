@@ -169,6 +169,7 @@ func renderCodexThreadLabel(threadID string, pending bool) string {
 func buildCodexSessionHelpText() string {
 	return wechatCommandText(
 		"Codex 会话命令:",
+		"列表编号从 1 开始",
 		"/cx whoami 查看当前 workspace/thread 绑定",
 		"/cx ls 查看工作空间或当前工作空间会话",
 		"/cx <编号|..> 选择当前列表项或返回上一级",
@@ -177,6 +178,8 @@ func buildCodexSessionHelpText() string {
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx archive current|<编号> 归档当前或列表中的空闲会话",
 		"/cx rename current|<编号> <名称> 重命名当前或列表中的会话",
+		"/cx session remove <编号|threadId> 管理员私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
+		"/cx session restore <threadId> 管理员私聊恢复已隐藏会话",
 		"/cx workspace add <路径> 管理员私聊登记已有工作目录",
 		"/cx workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cx pwd 查看当前工作空间",

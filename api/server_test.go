@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/internal/auththrottle"
+	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -125,6 +126,45 @@ func TestHandleRuntimeStatusRequiresTokenWhenConfigured(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleRuntimeDrainStartsAndCancelsAuthenticatedDrain(t *testing.T) {
+	control := &staticRuntimeControl{result: messaging.RuntimeDrainResult{ActiveTasks: 1, RemainingTasks: 0}}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeDrainController(control))
+
+	start := httptest.NewRequest(http.MethodPost, "/api/runtime/drain?force=true", nil)
+	start.Host = "127.0.0.1:18011"
+	start.RemoteAddr = "127.0.0.1:40001"
+	startRec := httptest.NewRecorder()
+	server.handleRuntimeDrain(startRec, start)
+	if startRec.Code != http.StatusOK || !control.force {
+		t.Fatalf("start status=%d force=%v body=%q", startRec.Code, control.force, startRec.Body.String())
+	}
+
+	cancel := httptest.NewRequest(http.MethodDelete, "/api/runtime/drain", nil)
+	cancel.Host = "127.0.0.1:18011"
+	cancel.RemoteAddr = "127.0.0.1:40001"
+	cancelRec := httptest.NewRecorder()
+	server.handleRuntimeDrain(cancelRec, cancel)
+	if cancelRec.Code != http.StatusOK || !control.cancelled {
+		t.Fatalf("cancel status=%d cancelled=%v body=%q", cancelRec.Code, control.cancelled, cancelRec.Body.String())
+	}
+}
+
+func TestHandleRuntimeDrainReportsActiveTaskConflict(t *testing.T) {
+	control := &staticRuntimeControl{
+		result: messaging.RuntimeDrainResult{ActiveTasks: 2, RemainingTasks: 2},
+		err:    messaging.ErrActiveTasksRunning,
+	}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeDrainController(control))
+	req := httptest.NewRequest(http.MethodPost, "/api/runtime/drain", nil)
+	req.Host = "127.0.0.1:18011"
+	req.RemoteAddr = "127.0.0.1:40001"
+	rec := httptest.NewRecorder()
+	server.handleRuntimeDrain(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"active_tasks":2`) {
+		t.Fatalf("status=%d body=%q, want active-task conflict", rec.Code, rec.Body.String())
 	}
 }
 
@@ -384,6 +424,22 @@ func TestHandleSendRejectsOversizedBody(t *testing.T) {
 
 type staticRuntimeStatus struct {
 	active int
+}
+
+type staticRuntimeControl struct {
+	result    messaging.RuntimeDrainResult
+	err       error
+	force     bool
+	cancelled bool
+}
+
+func (s *staticRuntimeControl) Drain(_ context.Context, force bool) (messaging.RuntimeDrainResult, error) {
+	s.force = force
+	return s.result, s.err
+}
+
+func (s *staticRuntimeControl) CancelDrain() {
+	s.cancelled = true
 }
 
 func (s staticRuntimeStatus) ActiveTaskCount() int {

@@ -8,6 +8,10 @@ import (
 )
 
 var ErrUnsupported = errors.New("platform capability unsupported")
+var ErrStreamContentTooLarge = errors.New("stream content exceeds platform card limit")
+
+// TaskStreamThinkingIndicator 是任务流在等待下一段用户可见 Agent 回复时的统一活跃提示。
+const TaskStreamThinkingIndicator = "思考中....."
 
 // Replier 封装当前入站消息所在会话的回复能力。
 type Replier interface {
@@ -75,6 +79,20 @@ type IdempotentTextReplier interface {
 	SendTextIdempotent(ctx context.Context, text string, deliveryKey string) error
 }
 
+// TerminalResult 描述独立于流式进度卡的新终态结果消息。
+// Text 保留完整最终回答；Title 由消息层提供 Agent 与工作空间上下文。
+type TerminalResult struct {
+	Title string
+	Text  string
+	State StreamTerminalState
+}
+
+// IdempotentResultReplier 使用稳定 delivery key 发送平台原生终态结果；
+// 同一 key 的重试不得产生重复消息或重复分段。
+type IdempotentResultReplier interface {
+	SendResultIdempotent(ctx context.Context, result TerminalResult, deliveryKey string) error
+}
+
 // TerminalCheckpoint 是 adapter 自描述、可持久化的终态更新操作。
 type TerminalCheckpoint struct {
 	Kind    string          `json:"kind"`
@@ -91,7 +109,7 @@ const (
 )
 
 // DurableStreamReference 是可跨进程恢复同一张流式卡片的 adapter 自描述引用。
-// 引用只保存平台卡片定位和单调序列，不包含平台凭据。
+// 引用可以保存恢复终态所需的已展示卡片快照，但不得包含平台凭据或未脱敏协议正文。
 type DurableStreamReference struct {
 	Kind    string          `json:"kind"`
 	Payload json.RawMessage `json:"payload"`
@@ -102,9 +120,21 @@ type DurableStreamReferenceExporter interface {
 	DurableReference() (DurableStreamReference, error)
 }
 
+// DurableStreamReferenceChangeNotifier 允许 adapter 在审批等非进度路径改变可恢复卡片快照后，
+// 通知消息层立即刷新持久化引用。handler 必须在 adapter 内部锁之外调用。
+type DurableStreamReferenceChangeNotifier interface {
+	SetDurableReferenceChangeHandler(handler func())
+}
+
 // DurableStreamTerminalPreparer 在新进程中根据持久化引用生成终态操作。
 type DurableStreamTerminalPreparer interface {
 	PrepareTerminalFromReference(reference DurableStreamReference, finalContent string, failed bool) (TerminalCheckpoint, error)
+}
+
+// StatefulDurableStreamTerminalPreparer 在跨进程恢复时保留完成、失败和停止三态。
+type StatefulDurableStreamTerminalPreparer interface {
+	DurableStreamTerminalPreparer
+	PrepareTerminalFromReferenceWithState(reference DurableStreamReference, finalContent string, state StreamTerminalState) (TerminalCheckpoint, error)
 }
 
 // DurableTerminalStream 在执行网络写入前冻结并导出终态操作。
@@ -149,6 +179,12 @@ type StoppableStream interface {
 // SupersedableStream 是流的可选能力，用于停止旧展示位置但不宣告任务终态。
 type SupersedableStream interface {
 	Supersede(ctx context.Context, notice string) error
+}
+
+// StreamContentPreflighter 在网络更新前按平台的完整载荷限制校验正文。
+// 不支持的平台无需实现；返回 ErrStreamContentTooLarge 时消息层可创建续接卡片。
+type StreamContentPreflighter interface {
+	PreflightUpdate(content string) error
 }
 
 // StreamOptions 描述流式回复的初始化参数。

@@ -170,6 +170,11 @@ func codexExternalTaskContext(req codexSwitchRequest) context.Context {
 
 func (h *Handler) resolveCodexSwitchTarget(req codexSwitchTargetRequest) (string, string, error) {
 	target := strings.TrimSpace(req.target)
+	if _, numeric := parseCodexListIndex(target); !numeric {
+		if err := h.hiddenSessionError(req.agentName, target, "cx"); err != nil {
+			return "", "", err
+		}
+	}
 	if index, ok := parseCodexListIndex(target); ok {
 		view, found, err := h.resolveCodexSessionByIndex(req.bindingKey, index)
 		if err != nil {
@@ -203,6 +208,9 @@ func (h *Handler) resolveCodexSessionView(agentName string, view codexWorkspaceV
 	if threadID == "" || view.PendingNewThread {
 		return "", "", fmt.Errorf("该编号当前没有可切换的会话。")
 	}
+	if err := h.hiddenSessionError(agentName, threadID, "cx"); err != nil {
+		return "", "", err
+	}
 	workspaceRoot := normalizeCodexWorkspaceRoot(view.WorkspaceRoot)
 	if err := h.hiddenWorkspaceError(agentName, workspaceRoot, "cx"); err != nil {
 		return "", "", err
@@ -211,11 +219,18 @@ func (h *Handler) resolveCodexSessionView(agentName string, view codexWorkspaceV
 }
 
 func parseCodexListIndex(value string) (int, bool) {
-	if strings.TrimSpace(value) == "" {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return 0, false
 	}
 	index, err := strconv.Atoi(value)
-	return index, err == nil
+	if err != nil {
+		return 0, false
+	}
+	if index < 1 {
+		return -1, true
+	}
+	return index - 1, true
 }
 
 func (h *Handler) resolveCodexSwitchWorkspace(req codexSwitchTargetRequest) string {

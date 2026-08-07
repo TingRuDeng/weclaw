@@ -8,9 +8,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
-const workspaceRegistryVersion = 1
+const workspaceRegistryVersion = 2
 
 type workspaceRegistryEntry struct {
 	Root     string `json:"root"`
@@ -19,8 +20,14 @@ type workspaceRegistryEntry struct {
 }
 
 type workspaceRegistryAgentState struct {
-	Registered []workspaceRegistryEntry `json:"registered,omitempty"`
-	Hidden     []workspaceRegistryEntry `json:"hidden,omitempty"`
+	Registered     []workspaceRegistryEntry        `json:"registered,omitempty"`
+	Hidden         []workspaceRegistryEntry        `json:"hidden,omitempty"`
+	HiddenSessions []workspaceRegistrySessionEntry `json:"hidden_sessions,omitempty"`
+}
+
+type workspaceRegistrySessionEntry struct {
+	ID       string `json:"id"`
+	HiddenAt string `json:"hidden_at,omitempty"`
 }
 
 type workspaceRegistryState struct {
@@ -31,9 +38,15 @@ type workspaceRegistryState struct {
 }
 
 type workspaceRegistrySnapshot struct {
-	Revision   uint64
-	Registered []workspaceRegistryEntry
-	Hidden     map[string]struct{}
+	Revision       uint64
+	Registered     []workspaceRegistryEntry
+	Hidden         map[string]struct{}
+	HiddenSessions map[string]struct{}
+}
+
+func (s workspaceRegistrySnapshot) IsSessionHidden(sessionID string) bool {
+	_, hidden := s.HiddenSessions[strings.TrimSpace(sessionID)]
+	return hidden
 }
 
 func (s workspaceRegistrySnapshot) IsHidden(root string) bool {
@@ -49,6 +62,12 @@ type workspaceRegistryMutation struct {
 	Root     string
 	Changed  bool
 	Revision uint64
+}
+
+type workspaceRegistrySessionMutation struct {
+	SessionID string
+	Changed   bool
+	Revision  uint64
 }
 
 type workspaceRegistry struct {
@@ -100,14 +119,71 @@ func (r *workspaceRegistry) Snapshot(agentName string) (workspaceRegistrySnapsho
 	}
 	agentState := r.state.Agents[agentName]
 	snapshot := workspaceRegistrySnapshot{
-		Revision:   r.state.Revision,
-		Registered: append([]workspaceRegistryEntry(nil), agentState.Registered...),
-		Hidden:     make(map[string]struct{}, len(agentState.Hidden)),
+		Revision:       r.state.Revision,
+		Registered:     append([]workspaceRegistryEntry(nil), agentState.Registered...),
+		Hidden:         make(map[string]struct{}, len(agentState.Hidden)),
+		HiddenSessions: make(map[string]struct{}, len(agentState.HiddenSessions)),
 	}
 	for _, entry := range agentState.Hidden {
 		snapshot.Hidden[entry.Root] = struct{}{}
 	}
+	for _, entry := range agentState.HiddenSessions {
+		snapshot.HiddenSessions[entry.ID] = struct{}{}
+	}
 	return snapshot, nil
+}
+
+func (r *workspaceRegistry) HideSession(agentName string, sessionID string) (workspaceRegistrySessionMutation, error) {
+	return r.mutateSession(agentName, sessionID, true)
+}
+
+func (r *workspaceRegistry) RestoreSession(agentName string, sessionID string) (workspaceRegistrySessionMutation, error) {
+	return r.mutateSession(agentName, sessionID, false)
+}
+
+func (r *workspaceRegistry) mutateSession(agentName string, sessionID string, hide bool) (workspaceRegistrySessionMutation, error) {
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
+		return workspaceRegistrySessionMutation{}, fmt.Errorf("Agent 名称不能为空")
+	}
+	sessionID, err := normalizeWorkspaceRegistrySessionID(sessionID)
+	if err != nil {
+		return workspaceRegistrySessionMutation{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.loadErr != nil {
+		return workspaceRegistrySessionMutation{}, fmt.Errorf("工作空间登记状态不可用: %w", r.loadErr)
+	}
+	if r.filePath == "" {
+		return workspaceRegistrySessionMutation{}, fmt.Errorf("工作空间登记状态文件未配置")
+	}
+	next := cloneWorkspaceRegistryState(r.state)
+	agentState := next.Agents[agentName]
+	changed := false
+	if hide {
+		if !containsWorkspaceRegistrySessionEntry(agentState.HiddenSessions, sessionID) {
+			agentState.HiddenSessions = append(agentState.HiddenSessions, workspaceRegistrySessionEntry{
+				ID: sessionID, HiddenAt: r.now().UTC().Format(time.RFC3339),
+			})
+			changed = true
+		}
+	} else {
+		agentState.HiddenSessions, changed = removeWorkspaceRegistrySessionEntry(agentState.HiddenSessions, sessionID)
+	}
+	if !changed {
+		return workspaceRegistrySessionMutation{SessionID: sessionID, Revision: r.state.Revision}, nil
+	}
+	sortWorkspaceRegistrySessionEntries(agentState.HiddenSessions)
+	next.Agents[agentName] = agentState
+	next.Version = workspaceRegistryVersion
+	next.Revision++
+	next.Updated = r.now().UTC().Format(time.RFC3339)
+	if err := r.persist(r.filePath, next); err != nil {
+		return workspaceRegistrySessionMutation{}, fmt.Errorf("保存工作空间登记状态失败: %w", err)
+	}
+	r.state = next
+	return workspaceRegistrySessionMutation{SessionID: sessionID, Changed: true, Revision: next.Revision}, nil
 }
 
 func (r *workspaceRegistry) Add(agentName string, root string) (workspaceRegistryMutation, error) {
@@ -215,11 +291,59 @@ func cloneWorkspaceRegistryState(state workspaceRegistryState) workspaceRegistry
 	}
 	for name, agentState := range state.Agents {
 		clone.Agents[name] = workspaceRegistryAgentState{
-			Registered: append([]workspaceRegistryEntry(nil), agentState.Registered...),
-			Hidden:     append([]workspaceRegistryEntry(nil), agentState.Hidden...),
+			Registered:     append([]workspaceRegistryEntry(nil), agentState.Registered...),
+			Hidden:         append([]workspaceRegistryEntry(nil), agentState.Hidden...),
+			HiddenSessions: append([]workspaceRegistrySessionEntry(nil), agentState.HiddenSessions...),
 		}
 	}
 	return clone
+}
+
+func normalizeWorkspaceRegistrySessionID(sessionID string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", fmt.Errorf("会话 ID 不能为空")
+	}
+	if len(sessionID) > 1024 {
+		return "", fmt.Errorf("会话 ID 过长")
+	}
+	for _, char := range sessionID {
+		if unicode.IsControl(char) {
+			return "", fmt.Errorf("会话 ID 包含控制字符")
+		}
+	}
+	return sessionID, nil
+}
+
+func containsWorkspaceRegistrySessionEntry(entries []workspaceRegistrySessionEntry, sessionID string) bool {
+	for _, entry := range entries {
+		if entry.ID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+func removeWorkspaceRegistrySessionEntry(entries []workspaceRegistrySessionEntry, sessionID string) ([]workspaceRegistrySessionEntry, bool) {
+	result := make([]workspaceRegistrySessionEntry, 0, len(entries))
+	removed := false
+	for _, entry := range entries {
+		if entry.ID == sessionID {
+			removed = true
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result, removed
+}
+
+func sortWorkspaceRegistrySessionEntries(entries []workspaceRegistrySessionEntry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].HiddenAt != entries[j].HiddenAt {
+			return entries[i].HiddenAt < entries[j].HiddenAt
+		}
+		return entries[i].ID < entries[j].ID
+	})
 }
 
 func containsWorkspaceRegistryEntry(entries []workspaceRegistryEntry, root string) bool {

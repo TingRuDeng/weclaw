@@ -67,6 +67,32 @@ func TestRenderAcceptance(t *testing.T) {
 	}
 }
 
+func TestProgressResultTitleUsesAgentAndWorkspaceWithoutTaskTextFallback(t *testing.T) {
+	if got := progressResultTitleForAgentWorkspace("codex", "/workspace/jumpserver", 60); got != "Codex · jumpserver" {
+		t.Fatalf("title=%q", got)
+	}
+	if got := progressResultTitleForAgentWorkspace("", "", 60); got != "WeClaw" {
+		t.Fatalf("fallback title=%q, want WeClaw", got)
+	}
+}
+
+func TestProgressResultPresentationRequiresNativeStreamMode(t *testing.T) {
+	reply := platformtest.NewReplier(platform.Capabilities{
+		Text: true, Streaming: true, FinalReplyOutsideStream: true,
+	})
+	session := &progressSession{
+		reply: reply, stream: &platformtest.Stream{}, agentName: "codex", workspaceRoot: "/workspace/jumpserver",
+		cfg: config.ProgressConfig{Mode: progressModeSummary},
+	}
+	if title, rich := session.terminalResultPresentation(); rich || title != "" {
+		t.Fatalf("summary presentation title=%q rich=%v, want text path", title, rich)
+	}
+	session.cfg.Mode = progressModeStream
+	if title, rich := session.terminalResultPresentation(); !rich || title != "Codex · jumpserver" {
+		t.Fatalf("stream presentation title=%q rich=%v", title, rich)
+	}
+}
+
 func TestSummaryModeDoesNotRenderTextPreview(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeSummary
@@ -302,8 +328,9 @@ func TestStreamProgressIgnoresMessageLimitAndKeepsLatestUpdate(t *testing.T) {
 	if len(reply.Stream.Updates) != len(progresses) {
 		t.Fatalf("stream updates=%#v, want all %d progress updates", reply.Stream.Updates, len(progresses))
 	}
-	if got := reply.Stream.Updates[len(reply.Stream.Updates)-1]; got != "进展六" {
-		t.Fatalf("latest stream update=%q, want 进展六", got)
+	want := "进展六\n\n" + platform.TaskStreamThinkingIndicator
+	if got := reply.Stream.Updates[len(reply.Stream.Updates)-1]; got != want {
+		t.Fatalf("latest stream update=%q, want reply followed by thinking", got)
 	}
 }
 
@@ -388,18 +415,24 @@ func TestNativeStreamProgressCompletesWithFinalResult(t *testing.T) {
 	}
 }
 
-func TestNativeStreamOpensBeforeFirstAgentProgress(t *testing.T) {
+func TestNativeStreamShowsOnlyThinkingBeforeFirstAgentReply(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
 
 	_, finish := h.startProgressSessionWithFinal(context.Background(), reply, "", "短任务", cfg)
 	if reply.Stream.Options.Title != "短任务" {
 		t.Fatalf("stream options = %#v", reply.Stream.Options)
 	}
-	if reply.Stream.Options.InitialContent != "正在处理任务，请稍候。" {
+	if reply.Stream.Options.InitialContent != "思考中....." {
 		t.Fatalf("initial content = %q", reply.Stream.Options.InitialContent)
+	}
+	time.Sleep(3 * taskQueueProbeDelay)
+	if len(reply.Stream.Updates) != 0 {
+		t.Fatalf("updates=%#v, want initial thinking content unchanged before Agent reply", reply.Stream.Updates)
 	}
 	consumed := finish("最终结果", false)
 	if !consumed || reply.Stream.Completed != "最终结果" {

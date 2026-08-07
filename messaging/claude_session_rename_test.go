@@ -66,7 +66,7 @@ func TestClaudeRenameListIndexUsesVisibleCatalog(t *testing.T) {
 		{ID: "session-current", Cwd: workspace, Title: "当前", UpdatedAt: "2026-08-06T09:00:00Z"},
 	}
 
-	reply := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc rename 0 列表 新名称")
+	reply := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc rename 1 列表 新名称")
 
 	if calls := ag.calls(); len(calls) != 1 || calls[0] != (claudeRenameCall{sessionID: "session-newer", name: "列表 新名称"}) {
 		t.Fatalf("rename calls=%#v", calls)

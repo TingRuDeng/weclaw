@@ -23,9 +23,13 @@ type fakeMessageSender struct {
 
 type fakeIdempotentMessageSender struct {
 	fakeMessageSender
-	sendOperations  []string
-	replyOperations []string
-	seen            map[string]bool
+	sendOperations      []string
+	replyOperations     []string
+	sendCardOperations  []string
+	replyCardOperations []string
+	sendCardJSONs       []string
+	replyCardJSONs      []string
+	seen                map[string]bool
 }
 
 func (f *fakeIdempotentMessageSender) SendTextIdempotent(ctx context.Context, openID string, text string, operationID string) error {
@@ -52,18 +56,44 @@ func (f *fakeIdempotentMessageSender) ReplyTextIdempotent(ctx context.Context, m
 	return f.ReplyText(ctx, messageID, text)
 }
 
+func (f *fakeIdempotentMessageSender) SendCardJSONIdempotent(_ context.Context, openID string, cardJSON string, operationID string) error {
+	f.sendCardOperations = append(f.sendCardOperations, operationID)
+	if f.seen == nil {
+		f.seen = make(map[string]bool)
+	}
+	if f.seen[operationID] {
+		return nil
+	}
+	f.seen[operationID] = true
+	f.sendCardJSONs = append(f.sendCardJSONs, openID+":"+cardJSON)
+	return nil
+}
+
+func (f *fakeIdempotentMessageSender) ReplyCardJSONIdempotent(_ context.Context, messageID string, cardJSON string, operationID string) error {
+	f.replyCardOperations = append(f.replyCardOperations, operationID)
+	if f.seen == nil {
+		f.seen = make(map[string]bool)
+	}
+	if f.seen[operationID] {
+		return nil
+	}
+	f.seen[operationID] = true
+	f.replyCardJSONs = append(f.replyCardJSONs, messageID+":"+cardJSON)
+	return nil
+}
+
 func TestReplierCapabilitiesRequireCardKitForStreaming(t *testing.T) {
 	withoutCardKit := NewReplier(nil, "ou_user").Capabilities()
-	if withoutCardKit.Streaming || withoutCardKit.StreamCompletionNotification {
+	if withoutCardKit.Streaming || withoutCardKit.FinalReplyOutsideStream || withoutCardKit.StreamCompletionNotification {
 		t.Fatalf("capabilities without CardKit = %#v", withoutCardKit)
 	}
 
 	withCardKit := NewReplier(nil, "ou_user", &fakeCardKitClient{}).Capabilities()
-	if !withCardKit.Streaming || !withCardKit.StreamCompletionNotification {
+	if !withCardKit.Streaming || !withCardKit.FinalReplyOutsideStream {
 		t.Fatalf("capabilities with CardKit = %#v", withCardKit)
 	}
-	if withCardKit.FinalReplyOutsideStream {
-		t.Fatalf("final reply must enter task card: %#v", withCardKit)
+	if withCardKit.StreamCompletionNotification {
+		t.Fatalf("independent final result must replace redundant completion notification: %#v", withCardKit)
 	}
 }
 
@@ -160,6 +190,53 @@ func TestReplierSendTextIdempotentRejectsNonIdempotentSender(t *testing.T) {
 	}
 	if len(sender.texts) != 0 || len(sender.replyTexts) != 0 {
 		t.Fatalf("non-idempotent sender must not be called: texts=%#v replies=%#v", sender.texts, sender.replyTexts)
+	}
+}
+
+func TestReplierSendResultIdempotentUsesStableMarkdownCardUUID(t *testing.T) {
+	sender := &fakeIdempotentMessageSender{}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+	result := platform.TerminalResult{
+		Title: "Codex · jumpserver",
+		Text:  "### 次级问题 #11\n\n请检查结论。",
+		State: platform.StreamTerminalCompleted,
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := reply.SendResultIdempotent(context.Background(), result, "delivery-1:result"); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	if len(sender.replyCardOperations) != 2 || sender.replyCardOperations[0] == "" ||
+		sender.replyCardOperations[0] != sender.replyCardOperations[1] {
+		t.Fatalf("reply card operations=%#v", sender.replyCardOperations)
+	}
+	if len(sender.replyCardJSONs) != 1 {
+		t.Fatalf("reply cards=%d, want one deduplicated card", len(sender.replyCardJSONs))
+	}
+	raw := strings.TrimPrefix(sender.replyCardJSONs[0], "om_root:")
+	card := parseResultCard(t, raw)
+	if got := resultCardHeaderTitle(t, card); got != "Codex · jumpserver · 最终结果" {
+		t.Fatalf("title=%q", got)
+	}
+	if markdown := resultCardMainMarkdown(t, card); !strings.Contains(markdown, "### 次级问题 #11") {
+		t.Fatalf("markdown=%q", markdown)
+	}
+}
+
+func TestReplierSendResultIdempotentRejectsNonIdempotentSender(t *testing.T) {
+	sender := &fakeMessageSender{}
+	reply := NewReplierForMessage(sender, "oc_group", "om_root")
+
+	err := reply.SendResultIdempotent(context.Background(), platform.TerminalResult{
+		Title: "Codex", Text: "结果", State: platform.StreamTerminalCompleted,
+	}, "delivery-1:result")
+
+	if !errors.Is(err, platform.ErrUnsupported) {
+		t.Fatalf("err=%v, want ErrUnsupported", err)
+	}
+	if len(sender.texts) != 0 || len(sender.replyTexts) != 0 || len(sender.cards) != 0 || len(sender.replyCards) != 0 {
+		t.Fatalf("non-idempotent sender must not be called: %#v", sender)
 	}
 }
 

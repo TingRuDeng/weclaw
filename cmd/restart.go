@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/spf13/cobra"
@@ -26,11 +27,14 @@ var restartCmd = &cobra.Command{
 }
 
 type restartOps struct {
-	prepare    func(context.Context) (preparedStart, error)
-	ensureSafe func(context.Context, bool, *config.Config) error
-	isRunning  func() bool
-	stop       func() error
-	out        io.Writer
+	prepare        func(context.Context) (preparedStart, error)
+	ensureSafe     func(context.Context, bool, *config.Config) error
+	isRunning      func() bool
+	stop           func() error
+	isSystemd      func() bool
+	restartSystemd func() error
+	cancelDrain    func(context.Context, *config.Config)
+	out            io.Writer
 }
 
 func defaultRestartOps() restartOps {
@@ -38,10 +42,13 @@ func defaultRestartOps() restartOps {
 		prepare: func(ctx context.Context) (preparedStart, error) {
 			return prepareConfiguredStart(ctx, runBackgroundStart)
 		},
-		ensureSafe: ensureRestartSafeWithConfig,
-		isRunning:  weclawIsRunningForRestart,
-		stop:       stopAllWeclaw,
-		out:        os.Stdout,
+		ensureSafe:     beginRestartDrainWithConfig,
+		isRunning:      weclawIsRunningForRestart,
+		stop:           stopAllWeclaw,
+		isSystemd:      isSystemdManagedRuntime,
+		restartSystemd: restartSystemdService,
+		cancelDrain:    cancelRestartDrain,
+		out:            os.Stdout,
 	}
 }
 
@@ -55,8 +62,27 @@ func runRestart(ctx context.Context, force bool, ops restartOps) error {
 		return err
 	}
 	if ops.isRunning() {
+		if ops.isSystemd != nil && ops.isSystemd() {
+			fmt.Fprintln(ops.out, "正在通过 systemd 重启 WeClaw...")
+			if ops.restartSystemd == nil {
+				if ops.cancelDrain != nil {
+					ops.cancelDrain(context.Background(), prepared.cfg)
+				}
+				return fmt.Errorf("systemd restart is unavailable")
+			}
+			if err := ops.restartSystemd(); err != nil {
+				if ops.cancelDrain != nil {
+					ops.cancelDrain(context.Background(), prepared.cfg)
+				}
+				return err
+			}
+			return nil
+		}
 		fmt.Fprintln(ops.out, "正在停止 WeClaw...")
 		if err := ops.stop(); err != nil {
+			if ops.cancelDrain != nil {
+				ops.cancelDrain(context.Background(), prepared.cfg)
+			}
 			return err
 		}
 	} else {
@@ -64,6 +90,28 @@ func runRestart(ctx context.Context, force bool, ops restartOps) error {
 	}
 	fmt.Fprintln(ops.out, "正在启动 WeClaw...")
 	return prepared.run()
+}
+
+func isSystemdManagedRuntime() bool {
+	state, err := readRuntimeState()
+	return err == nil && state.Mode == "systemd"
+}
+
+func restartSystemdService() error {
+	name := "systemctl"
+	args := []string{"restart", "weclaw.service"}
+	if os.Geteuid() != 0 {
+		name = "sudo"
+		args = append([]string{"systemctl"}, args...)
+	}
+	command := exec.Command(name, args...)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("通过 systemd 重启 WeClaw 失败: %w", err)
+	}
+	return nil
 }
 
 // ensureRestartSafeWithConfig 使用同一配置快照检查运行中任务，避免预检后再次读取磁盘。

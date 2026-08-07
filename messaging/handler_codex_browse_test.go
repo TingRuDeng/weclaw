@@ -136,7 +136,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(109, "/cx ls"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "0. local") || !strings.Contains(text, "1. recorded") {
+	if !strings.Contains(text, "1. local") || !strings.Contains(text, "2. recorded") {
 		t.Fatalf("ls should include local and recorded workspace names, messages=%#v", calls.texts())
 	}
 	if strings.Contains(text, "thread-recorded") || strings.Contains(text, "来源:") {
@@ -220,7 +220,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(110, "/cx switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(110, "/cx switch 1"))
 
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
@@ -303,7 +303,7 @@ func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
 	if !strings.Contains(text, "Codex 工作空间") {
 		t.Fatalf("ls should show workspace list, messages=%#v", calls.texts())
 	}
-	if !strings.Contains(text, "0. card-manager-android") || !strings.Contains(text, "1. weclaw") {
+	if !strings.Contains(text, "1. card-manager-android") || !strings.Contains(text, "2. weclaw") {
 		t.Fatalf("ls should show workspace short names, messages=%#v", calls.texts())
 	}
 	if strings.Contains(text, "thread-a") || strings.Contains(text, workspaceA) {
@@ -336,7 +336,7 @@ func TestCodexCxLsUsesCodexAppWorkspaceOrder(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(150, "/cx ls"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "0. weclaw") || !strings.Contains(text, "1. SafariCollection") {
+	if !strings.Contains(text, "1. weclaw") || !strings.Contains(text, "2. SafariCollection") {
 		t.Fatalf("ls should follow Codex App project order, messages=%#v", calls.texts())
 	}
 	if strings.Contains(text, "tmp") {
@@ -370,7 +370,7 @@ func TestCodexCxLsIncludesProjectStoredOnlyInLocalProjects(t *testing.T) {
 	h.SetCodexLocalSessionDir(codexDir)
 
 	text := h.renderCodexWorkspaceListForAccess(codexBindingKey("admin-1", "codex"), "admin-1", true)
-	if !strings.Contains(text, "0. 智能家居总控") || !strings.Contains(text, "1. weclaw") {
+	if !strings.Contains(text, "1. 智能家居总控") || !strings.Contains(text, "2. weclaw") {
 		t.Fatalf("ls should include project stored only in local-projects, text=%q", text)
 	}
 	if strings.Contains(text, "g-p-smart-home") {

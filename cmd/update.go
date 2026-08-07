@@ -210,11 +210,14 @@ func applyUpdateFromSources(latest string, sources []releaseSource) (updateTrans
 }
 
 type updateCompletionOps struct {
-	prepare    func(context.Context) (preparedStart, error)
-	ensureSafe func(context.Context, bool, *config.Config) error
-	running    func() bool
-	stop       func() error
-	out        io.Writer
+	prepare        func(context.Context) (preparedStart, error)
+	ensureSafe     func(context.Context, bool, *config.Config) error
+	running        func() bool
+	stop           func() error
+	isSystemd      func() bool
+	restartSystemd func() error
+	cancelDrain    func(context.Context, *config.Config)
+	out            io.Writer
 }
 
 // defaultUpdateCompletionOps 复用正式启动预检，并保留更新命令原有的运行状态语义。
@@ -223,10 +226,13 @@ func defaultUpdateCompletionOps() updateCompletionOps {
 		prepare: func(ctx context.Context) (preparedStart, error) {
 			return prepareConfiguredStart(ctx, runBackgroundStart)
 		},
-		ensureSafe: ensureRestartSafeWithConfig,
-		running:    weclawIsRunningForRestart,
-		stop:       stopAllWeclaw,
-		out:        os.Stdout,
+		ensureSafe:     beginRestartDrainWithConfig,
+		running:        weclawIsRunningForRestart,
+		stop:           stopAllWeclaw,
+		isSystemd:      isSystemdManagedRuntime,
+		restartSystemd: restartSystemdService,
+		cancelDrain:    cancelRestartDrain,
+		out:            os.Stdout,
 	}
 }
 
@@ -271,9 +277,28 @@ func restartUpdatedServiceWithRollback(prepared preparedStart, ops updateComplet
 		fmt.Fprintln(ops.out, "更新完成；当前服务未运行，请执行 weclaw start。")
 		return nil
 	}
+	if ops.isSystemd != nil && ops.isSystemd() {
+		fmt.Fprintln(ops.out, "正在通过 systemd 重启新版本...")
+		if ops.restartSystemd == nil {
+			if ops.cancelDrain != nil {
+				ops.cancelDrain(context.Background(), prepared.cfg)
+			}
+			return rollbackUpdatedBinary(fmt.Errorf("systemd restart is unavailable"), rollback, ops.out)
+		}
+		if err := ops.restartSystemd(); err != nil {
+			if ops.cancelDrain != nil {
+				ops.cancelDrain(context.Background(), prepared.cfg)
+			}
+			return rollbackUpdatedBinary(fmt.Errorf("更新完成，但 systemd 重启失败: %w", err), rollback, ops.out)
+		}
+		return nil
+	}
 	fmt.Fprintln(ops.out, "正在停止旧服务...")
 	if err := ops.stop(); err != nil {
 		log.Printf("停止旧服务失败：%v", err)
+		if ops.cancelDrain != nil {
+			ops.cancelDrain(context.Background(), prepared.cfg)
+		}
 		return recoverPreviousUpdate(prepared, ops, fmt.Errorf("更新完成，但停止旧服务失败: %w", err), rollback)
 	}
 	fmt.Fprintln(ops.out, "正在启动新版本...")

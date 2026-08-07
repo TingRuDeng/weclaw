@@ -107,26 +107,39 @@ func (h *Handler) handleClaudeCdResult(route claudeSessionRoute, target string) 
 }
 
 func (h *Handler) handleClaudeNew(route claudeSessionRoute) string {
+	return h.handleClaudeNewResult(route).Reply
+}
+
+// handleClaudeNewResult 只把成功结果标记为可升级状态卡；失败继续保持文本语义。
+func (h *Handler) handleClaudeNewResult(route claudeSessionRoute) navigationCommandResult {
 	unlock := h.lockAgentExecution(claudeBindingExecutionKey(route.BindingKey))
 	defer unlock()
 	if reply := h.rejectActiveClaudeBindingChange(route); reply != "" {
-		return reply
+		return textNavigationResult(reply)
 	}
 	result, err := h.createAndAcquireClaudeSessionWithBindingLocked(route)
 	if err != nil {
 		log.Printf("[claude-session-acquire] 新建并绑定失败: %v", err)
-		return renderClaudeNewFailure(err)
+		return textNavigationResult(renderClaudeNewFailure(err))
 	}
 	lines := []string{
 		"已创建并绑定 Claude 会话。",
 		"工作空间: " + shortCodexWorkspaceName(route.WorkspaceRoot),
-		"运行通道: " + renderClaudeAcquireRuntimeStatus(result.RuntimeErr),
 	}
+	conversationID := buildClaudeConversationID(route.UserID, route.AgentName, route.WorkspaceRoot)
+	status := sessionModelStatus{}
+	if configAgent, ok := route.Agent.(agent.ClaudeSessionConfigAgent); ok {
+		if config, found := configAgent.ClaudeSessionConfig(conversationID); found {
+			status = sessionModelStatus{Model: config.Model, Effort: config.Effort}
+		}
+	}
+	lines = append(lines, renderSessionModelStatus(status)...)
+	lines = append(lines, "运行通道: "+renderClaudeAcquireRuntimeStatus(result.RuntimeErr))
 	if result.RuntimeErr != nil {
 		log.Printf("[claude-session-acquire] 新会话绑定已提交但运行通道不可用 session=%q: %v", result.SessionID, result.RuntimeErr)
 		lines = append(lines, "绑定已保留，普通消息暂不会写入；请稍后重试或发送 /cc status 查看状态。")
 	}
-	return wechatCommandText(lines...)
+	return statusCardNavigationResult(wechatCommandText(lines...), "Claude 会话")
 }
 
 func renderClaudeNewFailure(err error) string {

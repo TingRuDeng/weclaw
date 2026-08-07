@@ -193,14 +193,16 @@ type codexUserInput struct {
 }
 
 type codexTurnEvent struct {
-	Kind      string
-	TurnID    string
-	ItemID    string
-	Sequence  uint64
-	Delta     string
-	Text      string
-	Approval  *codexApprovalRequest
-	UserInput *codexUserInputEvent
+	Kind         string
+	TurnID       string
+	ItemID       string
+	MessagePhase string
+	Sequence     uint64
+	Delta        string
+	Text         string
+	Progress     *ProgressEvent
+	Approval     *codexApprovalRequest
+	UserInput    *codexUserInputEvent
 }
 
 type codexApprovalRequest struct {

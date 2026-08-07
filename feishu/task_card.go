@@ -15,15 +15,17 @@ type taskCardRegistry struct {
 }
 
 type taskCardState struct {
-	title             string
-	status            string
-	content           string
-	approvals         []string
-	sequence          int
-	approvalPanelID   string
-	approvalPanelSeq  int
-	approvalPanelRows []approvalPanelItem
-	updatedAt         time.Time
+	title              string
+	status             string
+	content            string
+	approvals          []string
+	sequence           int
+	approvalPanelID    string
+	approvalPanelSeq   int
+	approvalPanelRows  []approvalPanelItem
+	inlineActiveStatus bool
+	recoveryChanged    func()
+	updatedAt          time.Time
 }
 
 func newTaskCardRegistry() *taskCardRegistry {
@@ -31,22 +33,61 @@ func newTaskCardRegistry() *taskCardRegistry {
 }
 
 func (r *taskCardRegistry) record(cardID string, opts cardOptions) {
+	r.recordWithSequence(cardID, opts, 0)
+}
+
+func (r *taskCardRegistry) recordWithSequence(cardID string, opts cardOptions, sequence int) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
 		return
+	}
+	if sequence < 0 {
+		sequence = 0
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.purgeLocked()
 	r.cards[cardID] = &taskCardState{
-		title:     opts.Title,
-		status:    normalizeCardStatus(opts.Status),
-		content:   opts.Content,
-		updatedAt: r.nowOrDefault(),
+		title:              opts.Title,
+		status:             normalizeCardStatus(opts.Status),
+		content:            opts.Content,
+		approvals:          append([]string(nil), opts.Approvals...),
+		sequence:           sequence,
+		inlineActiveStatus: opts.InlineActiveStatus,
+		updatedAt:          r.nowOrDefault(),
 	}
 }
 
 func (r *taskCardRegistry) updateContent(cardID string, content string) {
 	r.update(cardID, "", content)
+}
+
+func (r *taskCardRegistry) snapshot(cardID string) (cardOptions, bool) {
+	opts, _, ok := r.snapshotWithSequence(cardID)
+	return opts, ok
+}
+
+func (r *taskCardRegistry) snapshotWithSequence(cardID string) (cardOptions, int, bool) {
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return cardOptions{}, 0, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.cards[cardID]
+	if state == nil {
+		return cardOptions{}, 0, false
+	}
+	return state.cardOptions(), state.sequence, true
+}
+
+func (r *taskCardRegistry) setDurableReferenceChangeHandler(cardID string, handler func()) {
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return
+	}
+	r.mu.Lock()
+	if state := r.cards[cardID]; state != nil {
+		state.recoveryChanged = handler
+	}
+	r.mu.Unlock()
 }
 
 func (r *taskCardRegistry) updateContentWithSequence(cardID string, content string) (cardOptions, int, bool) {
@@ -95,9 +136,14 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 		return cardOptions{}, false
 	}
 	if strings.TrimSpace(status) != "" {
-		state.status = normalizeCardStatus(status)
-		// 终态更新传入空正文时表示清空主内容，避免完成卡片残留上一条进度。
-		state.content = content
+		normalized := normalizeCardStatus(status)
+		state.status = normalized
+		if normalized == cardStatusSuperseded && strings.TrimSpace(content) != "" {
+			state.content = content
+		}
+		if normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped || normalized == cardStatusSuperseded {
+			state.recoveryChanged = nil
+		}
 	} else if strings.TrimSpace(content) != "" {
 		state.content = content
 	}
@@ -115,15 +161,22 @@ func (r *taskCardRegistry) addApprovalWithSequence(cardID string, action parsedC
 		return cardOptions{}, 0, false
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	state := r.cards[cardID]
 	if state == nil {
+		r.mu.Unlock()
 		return cardOptions{}, 0, false
 	}
 	state.approvals = append(state.approvals, approvalRecordLine(action))
 	state.sequence++
 	state.updatedAt = r.nowOrDefault()
-	return state.cardOptions(), state.sequence, true
+	opts := state.cardOptions()
+	sequence := state.sequence
+	recoveryChanged := state.recoveryChanged
+	r.mu.Unlock()
+	if recoveryChanged != nil {
+		recoveryChanged()
+	}
+	return opts, sequence, true
 }
 
 func (r *taskCardRegistry) nextSequence(cardID string, current int) int {
@@ -147,10 +200,11 @@ func (r *taskCardRegistry) nextSequence(cardID string, current int) int {
 
 func (s *taskCardState) cardOptions() cardOptions {
 	return cardOptions{
-		Status:    s.status,
-		Title:     s.title,
-		Content:   s.content,
-		Approvals: append([]string(nil), s.approvals...),
+		Status:             s.status,
+		Title:              s.title,
+		Content:            s.content,
+		Approvals:          append([]string(nil), s.approvals...),
+		InlineActiveStatus: s.inlineActiveStatus,
 	}
 }
 

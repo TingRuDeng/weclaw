@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -11,21 +12,22 @@ import (
 )
 
 type fakeCardKitClient struct {
-	cardID        string
-	cardIDs       []string
-	createdCards  []string
-	streamingSeqs []int
-	streamSeqs    []int
-	streamTexts   []string
-	updateSeqs    []int
-	updateCards   []string
-	updateCardIDs []string
-	destroyed     []string
-	streamErrors  []error
-	updateErrors  []error
-	updateCardCh  chan string
-	streamStarted chan struct{}
-	streamBlock   <-chan struct{}
+	cardID          string
+	cardIDs         []string
+	createdCards    []string
+	streamingSeqs   []int
+	streamSeqs      []int
+	streamTexts     []string
+	updateSeqs      []int
+	updateCards     []string
+	updateCardIDs   []string
+	destroyed       []string
+	streamErrors    []error
+	streamingErrors []error
+	updateErrors    []error
+	updateCardCh    chan string
+	streamStarted   chan struct{}
+	streamBlock     <-chan struct{}
 }
 
 type fakeIdempotentCardKitClient struct {
@@ -76,6 +78,11 @@ func (f *fakeCardKitClient) CreateCard(ctx context.Context, cardJSON string) (st
 // SetStreaming 记录 streaming_mode 更新顺序号。
 func (f *fakeCardKitClient) SetStreaming(ctx context.Context, cardID string, enabled bool, sequence int) error {
 	f.streamingSeqs = append(f.streamingSeqs, sequence)
+	if len(f.streamingErrors) > 0 {
+		err := f.streamingErrors[0]
+		f.streamingErrors = f.streamingErrors[1:]
+		return err
+	}
 	return nil
 }
 
@@ -162,6 +169,125 @@ func TestOpenStreamCreatesCardAndEnablesStreaming(t *testing.T) {
 	}
 	if len(cardKit.streamingSeqs) != 1 || cardKit.streamingSeqs[0] != 1 {
 		t.Fatalf("streaming seqs=%#v, want enable seq 1", cardKit.streamingSeqs)
+	}
+}
+
+func TestFeishuTaskStreamPlacesThinkingAtBottomUntilTerminal(t *testing.T) {
+	sender := &fakeMessageSender{}
+	cardKit := &fakeCardKitClient{cardID: "card-thinking"}
+	reply := newReplierWithTaskCards(sender, "ou_user", cardKit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex", InitialContent: "思考中.....",
+	})
+	if err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+	created := decodeCardJSON(t, cardKit.createdCards[0])
+	createdElements := created["body"].(map[string]any)["elements"].([]any)
+	if len(createdElements) != 1 || createdElements[0].(map[string]any)["content"] != "思考中....." {
+		t.Fatalf("created body=%#v, want only inline thinking content", created["body"])
+	}
+
+	const active = "我正在检查当前实现。\n\n思考中....."
+	if err := stream.Update(context.Background(), active); err != nil {
+		t.Fatalf("Update error: %v", err)
+	}
+	activeCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
+	activeElements := activeCard["body"].(map[string]any)["elements"].([]any)
+	if len(activeElements) != 1 || activeElements[0].(map[string]any)["content"] != active {
+		t.Fatalf("active body=%#v, want reply followed by inline thinking", activeCard["body"])
+	}
+	reference, err := stream.(platform.DurableStreamReferenceExporter).DurableReference()
+	if err != nil {
+		t.Fatalf("DurableReference error: %v", err)
+	}
+	var referencePayload feishuStreamReferencePayload
+	if err := json.Unmarshal(reference.Payload, &referencePayload); err != nil {
+		t.Fatalf("decode durable reference: %v", err)
+	}
+	if referencePayload.Content != "我正在检查当前实现。" || strings.Contains(referencePayload.Content, "思考中.....") {
+		t.Fatalf("durable content=%q, want process content without active thinking", referencePayload.Content)
+	}
+
+	const terminal = "我正在检查当前实现。"
+	if err := stream.Complete(context.Background(), terminal); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
+	doneElements := doneCard["body"].(map[string]any)["elements"].([]any)
+	if len(doneElements) != 2 || doneElements[0].(map[string]any)["content"] != "**已完成**" ||
+		doneElements[1].(map[string]any)["content"] != terminal {
+		t.Fatalf("done body=%#v, want terminal status and preserved reply without thinking", doneCard["body"])
+	}
+	if strings.Contains(cardKit.updateCards[len(cardKit.updateCards)-1], "思考中.....") {
+		t.Fatalf("terminal card must not retain active thinking indicator: %s", cardKit.updateCards[len(cardKit.updateCards)-1])
+	}
+}
+
+func TestFeishuTaskStreamWithoutAgentReplyRemovesThinkingAtTerminal(t *testing.T) {
+	cardKit := &fakeCardKitClient{cardID: "card-no-reply"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex", InitialContent: platform.TaskStreamThinkingIndicator,
+	})
+	if err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+	if err := stream.Complete(context.Background(), ""); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
+	elements := doneCard["body"].(map[string]any)["elements"].([]any)
+	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**已完成**" ||
+		elements[1].(map[string]any)["content"] != taskCardNoStructuredProgress {
+		t.Fatalf("done body=%#v, want explicit no-progress terminal card", doneCard["body"])
+	}
+	if strings.Contains(cardKit.updateCards[len(cardKit.updateCards)-1], platform.TaskStreamThinkingIndicator) {
+		t.Fatalf("terminal card must remove thinking without Agent reply: %s", cardKit.updateCards[len(cardKit.updateCards)-1])
+	}
+}
+
+func TestOpenTaskStreamDoesNotBindCardBeforeStreamingIsEnabled(t *testing.T) {
+	cardKit := &fakeCardKitClient{cardID: "card-failed", streamingErrors: []error{errors.New("streaming unavailable")}}
+	reply := NewReplier(&fakeMessageSender{}, "ou_user", cardKit)
+
+	if _, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "thinking"}); err == nil {
+		t.Fatal("OpenStream error=nil, want streaming enable failure")
+	}
+	if got := reply.CurrentTaskCardID(); got != "" {
+		t.Fatalf("current task card=%q, want previous binding unchanged", got)
+	}
+	if _, ok := reply.taskCards.snapshot("card-failed"); ok {
+		t.Fatal("failed stream card was published to task card registry")
+	}
+}
+
+func TestFeishuTaskStreamPreflightsCompleteCardJSONSize(t *testing.T) {
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "初始内容"})
+	stream := &feishuStream{
+		cardKit:   &fakeCardKitClient{},
+		taskCards: registry,
+		cardID:    "card-1",
+		title:     "Codex",
+		sequence:  1,
+		now:       time.Now,
+	}
+	smallJSON, err := buildCardV2(cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "短进展"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream.cardJSONSoftLimitBytes = len([]byte(smallJSON)) + 8
+	if err := stream.PreflightUpdate("短进展"); err != nil {
+		t.Fatalf("short content preflight error: %v", err)
+	}
+	if err := stream.PreflightUpdate(strings.Repeat("长", 100)); !errors.Is(err, platform.ErrStreamContentTooLarge) {
+		t.Fatalf("large content preflight error=%v, want ErrStreamContentTooLarge", err)
+	}
+
+	registry.addApproval("card-1", parsedCardAction{Choice: "allow", Label: strings.Repeat("审批", 40)})
+	if err := stream.PreflightUpdate("短进展"); !errors.Is(err, platform.ErrStreamContentTooLarge) {
+		t.Fatalf("preflight must include approval records, error=%v", err)
 	}
 }
 
@@ -338,9 +464,16 @@ func TestTaskCardStreamCompleteCancelsPendingProgress(t *testing.T) {
 	finalCard := <-cardKit.updateCardCh
 	card := decodeCardJSON(t, finalCard)
 	body := card["body"].(map[string]any)
-	main := body["elements"].([]any)[0].(map[string]any)
-	if got := main["content"]; got != "最终结果" {
-		t.Fatalf("final content=%q, want 最终结果", got)
+	elements := body["elements"].([]any)
+	if got := elements[0].(map[string]any)["content"]; got != "**已完成**" {
+		t.Fatalf("status=%q, want 已完成", got)
+	}
+	main := elements[1].(map[string]any)
+	if got := main["content"]; got != "进展一" {
+		t.Fatalf("final content=%q, want preserved latest delivered progress", got)
+	}
+	if strings.Contains(finalCard, "最终结果") || strings.Contains(finalCard, "待补发进展") {
+		t.Fatalf("terminal card=%s, want no final answer or cancelled pending progress", finalCard)
 	}
 	select {
 	case lateCard := <-cardKit.updateCardCh:
@@ -445,7 +578,11 @@ func TestFeishuStreamCompleteUpdatesDoneAndDestroys(t *testing.T) {
 	}
 	card := decodeCardJSON(t, cardKit.updateCards[0])
 	body := card["body"].(map[string]any)
-	main := body["elements"].([]any)[0].(map[string]any)
+	elements := body["elements"].([]any)
+	if got := elements[0].(map[string]any)["content"]; got != "**已完成**" {
+		t.Fatalf("status=%#v, want 已完成", got)
+	}
+	main := elements[1].(map[string]any)
 	if main["content"] != "done" {
 		t.Fatalf("final content=%#v, want done", main["content"])
 	}
@@ -492,16 +629,25 @@ func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 	card := decodeCardJSON(t, cardKit.updateCards[0])
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if len(elements) != 2 {
-		t.Fatalf("elements=%d, want approval record element", len(elements))
+	if len(elements) != 3 {
+		t.Fatalf("elements=%d, want status, preserved progress and approval record", len(elements))
 	}
-	approval := elements[1].(map[string]any)
+	if got := elements[0].(map[string]any)["content"]; got != "**已完成**" {
+		t.Fatalf("status=%q, want 已完成", got)
+	}
+	if got := elements[1].(map[string]any)["content"]; got != "处理中" {
+		t.Fatalf("content=%q, want preserved progress", got)
+	}
+	approval := elements[2].(map[string]any)
 	if !strings.Contains(approval["content"].(string), "command: date") {
 		t.Fatalf("approval content=%q, want approval record", approval["content"])
 	}
+	if strings.Contains(cardKit.updateCards[0], "最终结果") {
+		t.Fatalf("terminal card must not contain final answer: %s", cardKit.updateCards[0])
+	}
 }
 
-func TestFeishuStreamCompleteWithEmptyContentClearsTaskCardProgress(t *testing.T) {
+func TestFeishuStreamCompleteWithEmptyContentPreservesTaskCardProgress(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	registry := newTaskCardRegistry()
 	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
@@ -513,12 +659,37 @@ func TestFeishuStreamCompleteWithEmptyContentClearsTaskCardProgress(t *testing.T
 	}
 
 	card := decodeCardJSON(t, cardKit.updateCards[0])
-	if _, ok := card["body"]; ok {
-		t.Fatalf("done card body=%#v, want green header only", card["body"])
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**已完成**" ||
+		elements[1].(map[string]any)["content"] != "进展：任务仍在执行中，连接正常。" {
+		t.Fatalf("done card body=%#v, want status and preserved progress", card["body"])
 	}
 	header := card["header"].(map[string]any)
 	if header["template"] != "green" {
 		t.Fatalf("template=%v, want green", header["template"])
+	}
+}
+
+func TestFeishuStreamFailurePreservesTaskCardTimeline(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	registry := newTaskCardRegistry()
+	const timeline = "**执行进度**\n- ✅ 定位问题\n- • 运行测试"
+	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: timeline})
+	stream := &feishuStream{cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex", sequence: 4, throttle: cardkitThrottle, now: time.Now}
+
+	if err := stream.Fail(context.Background(), "boom"); err != nil {
+		t.Fatalf("Fail error: %v", err)
+	}
+	card := decodeCardJSON(t, cardKit.updateCards[0])
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]any)
+	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**执行失败**" ||
+		elements[1].(map[string]any)["content"] != timeline {
+		t.Fatalf("failed card body=%#v, want status and preserved timeline", card["body"])
+	}
+	if strings.Contains(cardKit.updateCards[0], "boom") {
+		t.Fatalf("failure result must stay outside task card: %s", cardKit.updateCards[0])
 	}
 }
 
@@ -544,6 +715,48 @@ func TestTaskCardApprovalUpdateKeepsStreamSequenceMonotonic(t *testing.T) {
 	}
 	if cardKit.updateSeqs[1] <= cardKit.updateSeqs[0] {
 		t.Fatalf("update seqs=%#v, final update must be greater than approval update", cardKit.updateSeqs)
+	}
+}
+
+func TestTaskCardApprovalRefreshesDurableReferenceAfterStreamEnable(t *testing.T) {
+	cardKit := &fakeCardKitClient{cardID: "card-1"}
+	registry := newTaskCardRegistry()
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, registry)
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "处理中"})
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	notifier, ok := stream.(interface{ SetDurableReferenceChangeHandler(func()) })
+	if !ok {
+		t.Fatalf("stream=%T, want durable reference change notifier", stream)
+	}
+	notified := 0
+	notifier.SetDurableReferenceChangeHandler(func() { notified++ })
+
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = cardKit
+	adapter.taskCards = registry
+	if !adapter.updateTaskCardWithApproval(context.Background(), parsedCardAction{
+		TaskCard: "card-1", Choice: "accept", Label: "允许本次", Summary: "command: date",
+	}) {
+		t.Fatal("approval update should update task card")
+	}
+	if notified != 1 {
+		t.Fatalf("durable reference notifications=%d, want 1", notified)
+	}
+	if len(cardKit.streamingSeqs) != 1 || len(cardKit.updateSeqs) != 1 || cardKit.updateSeqs[0] <= cardKit.streamingSeqs[0] {
+		t.Fatalf("streaming seqs=%#v update seqs=%#v, approval must advance past stream enable", cardKit.streamingSeqs, cardKit.updateSeqs)
+	}
+	reference, err := stream.(platform.DurableStreamReferenceExporter).DurableReference()
+	if err != nil {
+		t.Fatalf("DurableReference: %v", err)
+	}
+	var payload feishuStreamReferencePayload
+	if err := json.Unmarshal(reference.Payload, &payload); err != nil {
+		t.Fatalf("decode durable reference: %v", err)
+	}
+	if payload.Sequence != cardKit.updateSeqs[0] || len(payload.Approvals) != 1 || !strings.Contains(payload.Approvals[0], "command: date") {
+		t.Fatalf("payload=%#v, want latest approval and sequence", payload)
 	}
 }
 
@@ -603,7 +816,8 @@ func TestFeishuTerminalCheckpointKeepsOperationIDsAcrossRestartRetry(t *testing.
 func TestFeishuStreamReferenceCompletesOriginalCardAfterRestart(t *testing.T) {
 	sender := &fakeMessageSender{}
 	cardKit := &fakeIdempotentCardKitClient{}
-	beforeRestart := NewReplier(sender, "oc_chat", cardKit)
+	beforeCards := newTaskCardRegistry()
+	beforeRestart := newReplierWithTaskCards(sender, "oc_chat", cardKit, beforeCards)
 	stream, err := beforeRestart.OpenStream(context.Background(), platform.StreamOptions{
 		Title: "WeClaw · 重启", InitialContent: "正在重启",
 	})
@@ -614,12 +828,16 @@ func TestFeishuStreamReferenceCompletesOriginalCardAfterRestart(t *testing.T) {
 	if !ok {
 		t.Fatalf("stream=%T, want DurableStreamReferenceExporter", stream)
 	}
+	if err := stream.Update(context.Background(), "已完成验证，正在收尾"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	beforeCards.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "允许本次", Summary: "command: date"})
 	reference, err := exporter.DurableReference()
 	if err != nil {
 		t.Fatalf("DurableReference: %v", err)
 	}
 
-	afterRestart := NewReplier(nil, "oc_chat", cardKit)
+	afterRestart := newReplierWithTaskCards(nil, "oc_chat", cardKit, newTaskCardRegistry())
 	checkpoint, err := afterRestart.PrepareTerminalFromReference(reference, "WeClaw 已重启完成。\n版本：v0.1.test", false)
 	if err != nil {
 		t.Fatalf("PrepareTerminalFromReference: %v", err)
@@ -628,17 +846,51 @@ func TestFeishuStreamReferenceCompletesOriginalCardAfterRestart(t *testing.T) {
 		t.Fatalf("DeliverTerminal: %v", err)
 	}
 
+	if len(cardKit.updateCardIDs) < 2 || cardKit.updateCardIDs[len(cardKit.updateCardIDs)-1] != "card-1" {
+		t.Fatalf("updated card IDs=%#v, want original card", cardKit.updateCardIDs)
+	}
+	if len(cardKit.streamingSeqs) != 2 || cardKit.streamingSeqs[0] != 1 ||
+		len(cardKit.updateSeqs) < 2 || cardKit.streamingSeqs[1] <= cardKit.updateSeqs[len(cardKit.updateSeqs)-2] {
+		t.Fatalf("streaming seqs=%#v update seqs=%#v, terminal disable must follow progress and approval updates", cardKit.streamingSeqs, cardKit.updateSeqs)
+	}
+	if cardKit.updateSeqs[len(cardKit.updateSeqs)-1] <= cardKit.streamingSeqs[1] {
+		t.Fatalf("streaming seqs=%#v update seqs=%#v, terminal update must follow disable", cardKit.streamingSeqs, cardKit.updateSeqs)
+	}
+	terminalCard := cardKit.updateCards[len(cardKit.updateCards)-1]
+	if !strings.Contains(terminalCard, "已完成") || !strings.Contains(terminalCard, "已完成验证，正在收尾") ||
+		!strings.Contains(terminalCard, "command: date") || strings.Contains(terminalCard, "v0.1.test") {
+		t.Fatalf("terminal card=%q, want preserved progress and approval without final answer", terminalCard)
+	}
+}
+
+func TestFeishuStreamReferenceStopsInterruptedOriginalCardAfterRestart(t *testing.T) {
+	cardKit := &fakeIdempotentCardKitClient{}
+	beforeRestart := NewReplier(&fakeMessageSender{}, "oc_chat", cardKit)
+	stream, err := beforeRestart.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Claude · jumpserver", InitialContent: "思考中",
+	})
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	reference, err := stream.(platform.DurableStreamReferenceExporter).DurableReference()
+	if err != nil {
+		t.Fatalf("DurableReference: %v", err)
+	}
+	afterRestart := NewReplier(nil, "oc_chat", cardKit)
+	checkpoint, err := afterRestart.PrepareTerminalFromReferenceWithState(
+		reference, "任务已中断。WeClaw 服务在任务执行期间发生重启。", platform.StreamTerminalStopped,
+	)
+	if err != nil {
+		t.Fatalf("PrepareTerminalFromReferenceWithState: %v", err)
+	}
+	if err := afterRestart.DeliverTerminal(context.Background(), checkpoint); err != nil {
+		t.Fatalf("DeliverTerminal: %v", err)
+	}
 	if len(cardKit.updateCardIDs) != 1 || cardKit.updateCardIDs[0] != "card-1" {
 		t.Fatalf("updated card IDs=%#v, want original card", cardKit.updateCardIDs)
 	}
-	if len(cardKit.streamingSeqs) != 2 || cardKit.streamingSeqs[0] != 1 || cardKit.streamingSeqs[1] != 2 {
-		t.Fatalf("streaming seqs=%#v, want enable 1 then disable 2", cardKit.streamingSeqs)
-	}
-	if len(cardKit.updateSeqs) != 1 || cardKit.updateSeqs[0] != 3 {
-		t.Fatalf("update seqs=%#v, want terminal update 3", cardKit.updateSeqs)
-	}
-	if !strings.Contains(cardKit.updateCards[0], "v0.1.test") {
-		t.Fatalf("terminal card=%q, want restarted version", cardKit.updateCards[0])
+	if card := cardKit.updateCards[0]; !strings.Contains(card, "已停止") || !strings.Contains(card, "思考中") || strings.Contains(card, "任务已中断") {
+		t.Fatalf("terminal card=%q, want stopped state with preserved progress", card)
 	}
 }
 

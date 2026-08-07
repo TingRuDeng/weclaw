@@ -77,8 +77,8 @@ func TestFinalReplyOutsideStreamDoesNotPutOrdinaryAnswerInCard(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
-	if reply.Stream.Completed != "" {
-		t.Fatalf("completed=%q, want status-only task card", reply.Stream.Completed)
+	if reply.Stream.Completed != "[mock] 进展：Agent 正在整理结果。" {
+		t.Fatalf("completed=%q, want terminal task card to retain the latest Agent progress", reply.Stream.Completed)
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] "+finalReply {
 		t.Fatalf("texts=%#v, want ordinary final answer as text", reply.Texts)
@@ -297,7 +297,7 @@ func TestStoppedBroadcastTaskDoesNotRenderFailureCard(t *testing.T) {
 	cfg.SendAcceptance = boolPtr(false)
 	h.SetProgressConfig(cfg)
 	reply := platformtest.NewReplier(platform.Capabilities{
-		Text: true, Streaming: true, StreamCompletionNotification: true,
+		Text: true, Streaming: true, FinalReplyOutsideStream: true,
 	})
 	done := make(chan struct{})
 	go func() {
@@ -321,10 +321,10 @@ func TestStoppedBroadcastTaskDoesNotRenderFailureCard(t *testing.T) {
 	if reply.Stream.Failed != "" {
 		t.Fatalf("stopped broadcast rendered as failure: %q", reply.Stream.Failed)
 	}
-	if reply.Stream.Completed != "任务已按请求停止。" {
-		t.Fatalf("completed=%q, want stopped terminal content", reply.Stream.Completed)
+	if reply.Stream.Completed != progressNoStructuredRecord {
+		t.Fatalf("completed=%q, want explicit no-progress stopped card", reply.Stream.Completed)
 	}
-	if strings.Contains(strings.Join(reply.Texts, "\n"), "执行失败") {
-		t.Fatalf("texts=%#v, stopped broadcast must not emit failure wording", reply.Texts)
+	if len(reply.Texts) != 1 || reply.Texts[0] != "[slow] 任务已按请求停止。" {
+		t.Fatalf("texts=%#v, want one independent stopped result", reply.Texts)
 	}
 }

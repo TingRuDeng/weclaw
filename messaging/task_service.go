@@ -6,8 +6,9 @@ import "sync"
 // internals remain protected by activeAgentTask.mu; callers must preserve the
 // established lock order: taskService.mu before activeAgentTask.mu.
 type taskService struct {
-	mu     sync.Mutex
-	active map[string]*activeAgentTask
+	mu       sync.Mutex
+	active   map[string]*activeAgentTask
+	draining bool
 }
 
 func (s *taskService) ensureLocked() {

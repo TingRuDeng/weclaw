@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/api"
@@ -20,12 +21,22 @@ import (
 )
 
 type startRuntime struct {
-	ctx      context.Context
-	cfg      *config.Config
-	handler  *messaging.Handler
-	registry *platform.Registry
-	trace    *observability.Store
+	ctx             context.Context
+	cancel          context.CancelFunc
+	cfg             *config.Config
+	handler         *messaging.Handler
+	registry        *platform.Registry
+	trace           *observability.Store
+	drain           runtimeDrainer
+	shutdownTimeout time.Duration
+	runBridgeFn     func() error
 }
+
+type runtimeDrainer interface {
+	Drain(context.Context, bool) (messaging.RuntimeDrainResult, error)
+}
+
+const defaultRuntimeShutdownTimeout = 10 * time.Second
 
 type backgroundStartOps struct {
 	loadAccounts func() ([]*ilink.Credentials, error)
@@ -71,8 +82,11 @@ func runForegroundStart(cfg *config.Config) error {
 		return fmt.Errorf("write runtime state: %w", err)
 	}
 	defer removeRuntimeState()
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
 	accounts, err := loadStartAccounts(ctx, cfg)
 	if err != nil {
 		return err
@@ -87,11 +101,14 @@ func runForegroundStart(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	runtime := startRuntime{ctx: ctx, cfg: cfg, handler: handler, registry: registry, trace: traceStore}
+	runtime := startRuntime{
+		ctx: ctx, cancel: cancel, cfg: cfg, handler: handler, registry: registry, trace: traceStore,
+		drain: handler, shutdownTimeout: defaultRuntimeShutdownTimeout,
+	}
 	if err := runtime.startServices(); err != nil {
 		return err
 	}
-	return runtime.runBridge()
+	return runtime.runUntilShutdown(signals)
 }
 
 // loadStartAccounts 加载微信账号，并在启用微信但无账号时发起登录。
@@ -287,6 +304,7 @@ func (runtime startRuntime) startServices() error {
 		api.WithToken(runtime.cfg.APIToken),
 		api.WithRegistry(runtime.registry),
 		api.WithRuntimeStatusProvider(runtime.handler),
+		api.WithRuntimeDrainController(runtime.handler),
 		api.WithCodexAccountController(runtime.handler),
 		api.WithTraceQueryProvider(runtime.trace),
 		api.WithTerminalOutboxController(runtime.handler),
@@ -319,4 +337,43 @@ func (runtime startRuntime) runBridge() error {
 	}
 	log.Println("All platforms stopped")
 	return nil
+}
+
+func (runtime startRuntime) runUntilShutdown(signals <-chan os.Signal) error {
+	bridge := runtime.runBridge
+	if runtime.runBridgeFn != nil {
+		bridge = runtime.runBridgeFn
+	}
+	bridgeDone := make(chan error, 1)
+	go func() {
+		bridgeDone <- bridge()
+	}()
+	select {
+	case err := <-bridgeDone:
+		if runtime.cancel != nil {
+			runtime.cancel()
+		}
+		return err
+	case sig := <-signals:
+		log.Printf("Received %s, draining active tasks before shutdown...", sig)
+	}
+
+	timeout := runtime.shutdownTimeout
+	if timeout <= 0 {
+		timeout = defaultRuntimeShutdownTimeout
+	}
+	if runtime.drain != nil {
+		drainCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		result, err := runtime.drain.Drain(drainCtx, true)
+		cancel()
+		if err != nil {
+			log.Printf("Graceful task drain failed: %v", err)
+		} else if result.RemainingTasks > 0 {
+			log.Printf("Graceful task drain timed out with %d task(s); startup recovery will close persisted cards", result.RemainingTasks)
+		}
+	}
+	if runtime.cancel != nil {
+		runtime.cancel()
+	}
+	return <-bridgeDone
 }

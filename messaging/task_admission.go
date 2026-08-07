@@ -17,6 +17,7 @@ const (
 	activeTaskMissing
 	activeTaskPendingOccupied
 	activeTaskForeignWriter
+	activeTaskDraining
 )
 
 type activeTaskAdmission struct {
@@ -33,6 +34,9 @@ func (h *Handler) beginOrQueueClaudeTask(ctx context.Context, key string, meta a
 	h.tasks.mu.Lock()
 	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
+	if h.tasks.draining {
+		return activeTaskAdmission{status: activeTaskDraining, taskCtx: ctx}
+	}
 	if task := h.tasks.active[key]; task != nil {
 		task.mu.Lock()
 		foreign := task.routeUserID != strings.TrimSpace(meta.routeUserID)
@@ -52,6 +56,9 @@ func (h *Handler) beginOrQueueActiveTask(ctx context.Context, key string, meta a
 	h.tasks.mu.Lock()
 	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
+	if h.tasks.draining {
+		return activeTaskAdmission{status: activeTaskDraining, taskCtx: ctx}
+	}
 	if task := h.tasks.active[key]; task != nil {
 		return activeTaskAdmission{status: queuePendingOnTask(task, pending), task: task, taskCtx: ctx}
 	}
@@ -64,6 +71,9 @@ func (h *Handler) beginOrQueueActiveTask(ctx context.Context, key string, meta a
 func (h *Handler) queuePendingActiveTask(key string, pending pendingAgentTask) activeTaskAdmissionStatus {
 	h.tasks.mu.Lock()
 	defer h.tasks.mu.Unlock()
+	if h.tasks.draining {
+		return activeTaskDraining
+	}
 	task := h.tasks.active[key]
 	if task == nil {
 		return activeTaskMissing

@@ -12,9 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
 type outboxTestReplier struct {
@@ -22,13 +24,31 @@ type outboxTestReplier struct {
 	route                 platform.DeliveryRoute
 	accepted              map[string]string
 	textKeys              []string
+	resultKeys            []string
+	results               []platform.TerminalResult
 	failTextAfterAccept   int
+	failResultAfterAccept int
 	checkpointCalls       int
 	failCheckpoint        int
 	checkpointPayloadSeen []json.RawMessage
+	recoveredReferences   []platform.DurableStreamReference
+	recoveredStates       []platform.StreamTerminalState
 	stream                *outboxTestStream
+	finalOutside          bool
 	beforeCheckpoint      func()
 	textDelivered         chan string
+}
+
+type outboxTextOnlyReplier struct {
+	*platformtest.Replier
+	keys  []string
+	texts []string
+}
+
+func (r *outboxTextOnlyReplier) SendTextIdempotent(_ context.Context, text string, key string) error {
+	r.keys = append(r.keys, key)
+	r.texts = append(r.texts, text)
+	return nil
 }
 
 func newOutboxTestReplier(route platform.DeliveryRoute) *outboxTestReplier {
@@ -36,7 +56,10 @@ func newOutboxTestReplier(route platform.DeliveryRoute) *outboxTestReplier {
 }
 
 func (r *outboxTestReplier) Capabilities() platform.Capabilities {
-	return platform.Capabilities{Text: true, Streaming: true, StreamCompletionNotification: true}
+	return platform.Capabilities{
+		Text: true, Streaming: true,
+		FinalReplyOutsideStream: r.finalOutside, StreamCompletionNotification: !r.finalOutside,
+	}
 }
 func (r *outboxTestReplier) SendText(context.Context, string) error  { return nil }
 func (r *outboxTestReplier) SendImage(context.Context, string) error { return nil }
@@ -51,7 +74,11 @@ func (r *outboxTestReplier) OpenStream(context.Context, platform.StreamOptions) 
 func (r *outboxTestReplier) AskChoices(context.Context, string, []platform.Choice) error {
 	return platform.ErrUnsupported
 }
-func (r *outboxTestReplier) DeliveryRoute() platform.DeliveryRoute { return r.route }
+func (r *outboxTestReplier) DeliveryRoute() platform.DeliveryRoute {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.route
+}
 func (r *outboxTestReplier) SendTextIdempotent(_ context.Context, text string, key string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -72,6 +99,27 @@ func (r *outboxTestReplier) SendTextIdempotent(_ context.Context, text string, k
 	}
 	return nil
 }
+func (r *outboxTestReplier) SendResultIdempotent(_ context.Context, result platform.TerminalResult, key string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resultKeys = append(r.resultKeys, key)
+	if _, exists := r.accepted[key]; exists {
+		return nil
+	}
+	r.accepted[key] = result.Text
+	r.results = append(r.results, result)
+	if r.failResultAfterAccept > 0 {
+		r.failResultAfterAccept--
+		return errors.New("ambiguous result response")
+	}
+	if r.textDelivered != nil {
+		select {
+		case r.textDelivered <- result.Text:
+		default:
+		}
+	}
+	return nil
+}
 func (r *outboxTestReplier) DeliverTerminal(_ context.Context, checkpoint platform.TerminalCheckpoint) error {
 	if r.beforeCheckpoint != nil {
 		r.beforeCheckpoint()
@@ -86,14 +134,69 @@ func (r *outboxTestReplier) DeliverTerminal(_ context.Context, checkpoint platfo
 	}
 	return nil
 }
+func (r *outboxTestReplier) PrepareTerminalFromReference(reference platform.DurableStreamReference, content string, failed bool) (platform.TerminalCheckpoint, error) {
+	state := platform.StreamTerminalCompleted
+	if failed {
+		state = platform.StreamTerminalFailed
+	}
+	return r.PrepareTerminalFromReferenceWithState(reference, content, state)
+}
+func (r *outboxTestReplier) PrepareTerminalFromReferenceWithState(reference platform.DurableStreamReference, content string, state platform.StreamTerminalState) (platform.TerminalCheckpoint, error) {
+	r.mu.Lock()
+	r.recoveredReferences = append(r.recoveredReferences, reference)
+	r.recoveredStates = append(r.recoveredStates, state)
+	r.mu.Unlock()
+	payload, err := json.Marshal(map[string]any{
+		"reference": reference,
+		"content":   content,
+		"state":     state,
+	})
+	return platform.TerminalCheckpoint{Kind: "test.recovered-terminal.v1", Payload: payload}, err
+}
 
 type outboxTestStream struct {
 	mu            sync.Mutex
 	prepared      int
 	updates       []string
+	referenceNote string
+	referenceHook func()
 	beforePrepare func()
 	prepareErr    error
 	terminalState platform.StreamTerminalState
+}
+
+func (s *outboxTestStream) DurableReference() (platform.DurableStreamReference, error) {
+	s.mu.Lock()
+	content := ""
+	if len(s.updates) > 0 {
+		content = s.updates[len(s.updates)-1]
+	}
+	note := s.referenceNote
+	s.mu.Unlock()
+	payload, err := json.Marshal(map[string]any{"card_id": "card-1", "sequence": 7, "content": content, "note": note})
+	if err != nil {
+		return platform.DurableStreamReference{}, err
+	}
+	return platform.DurableStreamReference{
+		Kind:    "test.stream.v1",
+		Payload: payload,
+	}, nil
+}
+
+func (s *outboxTestStream) SetDurableReferenceChangeHandler(handler func()) {
+	s.mu.Lock()
+	s.referenceHook = handler
+	s.mu.Unlock()
+}
+
+func (s *outboxTestStream) changeDurableReference(note string) {
+	s.mu.Lock()
+	s.referenceNote = note
+	handler := s.referenceHook
+	s.mu.Unlock()
+	if handler != nil {
+		handler()
+	}
 }
 
 func (s *outboxTestStream) Update(_ context.Context, content string) error {
@@ -107,6 +210,12 @@ func (s *outboxTestStream) Complete(context.Context, string) error {
 }
 func (s *outboxTestStream) Fail(context.Context, string) error {
 	return errors.New("legacy Fail must not run")
+}
+func (s *outboxTestStream) Stop(_ context.Context, _ string) error {
+	s.mu.Lock()
+	s.terminalState = platform.StreamTerminalStopped
+	s.mu.Unlock()
+	return nil
 }
 func (s *outboxTestStream) PrepareTerminal(content string, failed bool) (platform.TerminalCheckpoint, error) {
 	state := platform.StreamTerminalCompleted
@@ -137,9 +246,10 @@ func (s *outboxTestStream) prepareTerminalWithState(content string, state platfo
 	return platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: payload}, err
 }
 
-func TestPrepareDurableTerminalCollapsesProgressTimeline(t *testing.T) {
+func TestPrepareDurableTerminalCarriesLatestProgressButKeepsFinalAnswerOutsideCard(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	reply := newOutboxTestReplier(platform.DeliveryRoute{Platform: platform.PlatformFeishu, ChatID: "chat-1"})
+	reply.finalOutside = true
 	stream := &outboxTestStream{}
 	reply.stream = stream
 	session := &progressSession{
@@ -147,8 +257,13 @@ func TestPrepareDurableTerminalCollapsesProgressTimeline(t *testing.T) {
 		cfg:        config.ProgressConfig{Mode: progressModeStream, InitialDelaySeconds: 1},
 		snapshotCh: make(chan progressCardSnapshot, 1),
 	}
+	card := "**执行进度**\n- ✅ 检查项目\n- • 运行测试\n\n**当前说明**\n正在完成最后验证。"
 	session.onTaskProgress(taskProgressUpdate{
-		card: "**执行进度**\n- ✅ 检查项目\n- • 运行测试", timeline: true,
+		card: card, timeline: true, currentExplanation: "正在完成最后验证。",
+		timelineItems: []agent.ProgressEvent{
+			{ID: "plan:1", Kind: agent.ProgressKindPlan, State: agent.ProgressStateCompleted, Text: "检查项目"},
+			{ID: "command:1", Kind: agent.ProgressKindCommand, State: agent.ProgressStateRunning, Text: "运行测试"},
+		},
 	})
 
 	prepared, err := session.prepareDurableTerminal(reply, "最终结果", false, false)
@@ -164,8 +279,8 @@ func TestPrepareDurableTerminalCollapsesProgressTimeline(t *testing.T) {
 	if err := json.Unmarshal(prepared.checkpoint.Payload, &payload); err != nil {
 		t.Fatalf("decode checkpoint: %v", err)
 	}
-	if payload.Content != "最终结果" {
-		t.Fatalf("content=%q, want final result without progress timeline", payload.Content)
+	if payload.Content != card || prepared.consumed {
+		t.Fatalf("content=%q consumed=%v, want latest progress without final answer", payload.Content, prepared.consumed)
 	}
 }
 
@@ -186,7 +301,9 @@ func (p *outboxTestPlatform) NewReplier(chatID string) platform.Replier {
 	return p.NewReplierForRoute(platform.DeliveryRoute{Platform: p.name, AccountID: p.account, ChatID: chatID})
 }
 func (p *outboxTestPlatform) NewReplierForRoute(route platform.DeliveryRoute) platform.Replier {
+	p.reply.mu.Lock()
 	p.reply.route = route
+	p.reply.mu.Unlock()
 	return p.reply
 }
 
@@ -222,7 +339,9 @@ func TestTerminalOutboxPersistsAtomicallyWithPrivatePermissions(t *testing.T) {
 		t.Fatalf("newTerminalOutbox: %v", err)
 	}
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
-	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, AgentName: "codex", Text: "最终结果"})
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "codex", ResultTitle: "Codex · jumpserver", RichResult: true, Text: "最终结果",
+	})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -244,8 +363,86 @@ func TestTerminalOutboxPersistsAtomicallyWithPrivatePermissions(t *testing.T) {
 		t.Fatalf("outbox dir mode=%v", dirInfo.Mode().Perm())
 	}
 	loaded, err := loadTerminalOutbox(path)
-	if err != nil || len(loaded) != 1 || loaded[0].Text != "最终结果" {
+	if err != nil || len(loaded) != 1 || loaded[0].Text != "最终结果" ||
+		loaded[0].ResultTitle != "Codex · jumpserver" || !loaded[0].RichResult {
 		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+}
+
+func TestTerminalOutboxDeliversRichTerminalResultInsteadOfPlainText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := outbox.enqueueAndAttempt(context.Background(), terminalOutboxDraft{
+		Route: route, AgentName: "codex", ResultTitle: "Codex · jumpserver", RichResult: true,
+		Text: "### 最终结果", Failed: true,
+	}, newSerializedReplier(reply)); err != nil {
+		t.Fatal(err)
+	}
+
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if len(reply.textKeys) != 0 || len(reply.resultKeys) != 1 || len(reply.results) != 1 {
+		t.Fatalf("text keys=%#v result keys=%#v results=%#v", reply.textKeys, reply.resultKeys, reply.results)
+	}
+	result := reply.results[0]
+	if result.Title != "Codex · jumpserver" || result.Text != "### 最终结果" || result.State != platform.StreamTerminalFailed {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestSendOutboxResultFallsBackToIdempotentTextWhenRichCapabilityIsMissing(t *testing.T) {
+	reply := &outboxTextOnlyReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true})}
+	entry := &terminalOutboxEntry{ResultTitle: "Codex · jumpserver", RichResult: true}
+
+	if err := sendOutboxResult(context.Background(), reply, entry, "### 最终结果", "delivery-1:result"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(reply.keys, []string{"delivery-1:result"}) ||
+		!reflect.DeepEqual(reply.texts, []string{"### 最终结果"}) {
+		t.Fatalf("keys=%#v texts=%#v", reply.keys, reply.texts)
+	}
+}
+
+func TestTerminalOutboxRetriesAmbiguousRichResultWithSameKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.failResultAfterAccept = 1
+	registry := newOutboxTestRegistry(route, reply)
+	first, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := first.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "claude", ResultTitle: "Claude · jumpserver", RichResult: true, Text: "完整回答",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.attempt(context.Background(), entry.ID, reply); err == nil {
+		t.Fatal("first attempt must expose ambiguous delivery")
+	}
+	second, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.attempt(context.Background(), entry.ID, nil); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if len(reply.resultKeys) != 2 || reply.resultKeys[0] != reply.resultKeys[1] || len(reply.results) != 1 {
+		t.Fatalf("result keys=%#v results=%#v", reply.resultKeys, reply.results)
+	}
+	if len(reply.textKeys) != 0 {
+		t.Fatalf("ambiguous card delivery must not fall back to text: %#v", reply.textKeys)
 	}
 }
 
@@ -656,7 +853,7 @@ func TestTerminalOutboxRestartRetriesTextWithSameIdempotencyKey(t *testing.T) {
 	}
 	reply.mu.Lock()
 	defer reply.mu.Unlock()
-	if len(reply.textKeys) != 2 || reply.textKeys[0] != reply.textKeys[1] {
+	if len(reply.textKeys) != 2 || reply.textKeys[0] != reply.textKeys[1] || !strings.HasSuffix(reply.textKeys[0], ":text") {
 		t.Fatalf("text keys=%#v, want stable retry key", reply.textKeys)
 	}
 	if len(reply.accepted) != 1 {
@@ -748,7 +945,226 @@ func TestTerminalOutboxReservedRecoveryDraftBecomesDeliverableAfterRestart(t *te
 	}
 }
 
-func TestTerminalOutboxDoesNotReplayCompletedCheckpointAfterNotificationFailure(t *testing.T) {
+func TestProgressSessionRestartRecoversOriginalCardAsStopped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.stream = &outboxTestStream{}
+	reply.finalOutside = true
+	registry := newOutboxTestRegistry(route, reply)
+	h := NewHandler(nil, nil)
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	if err := h.StartTerminalOutbox(workerCtx, registry, path); err != nil {
+		t.Fatalf("StartTerminalOutbox: %v", err)
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	_, _, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "claude", "/workspace/jumpserver", "检查审查文档", cfg,
+	)
+	stopWorker()
+	progress.stopBackground()
+
+	persisted, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatalf("load active task recovery: %v", err)
+	}
+	if len(persisted) != 1 {
+		t.Fatalf("active task recovery entries=%d, want 1", len(persisted))
+	}
+	if !persisted[0].RichResult || persisted[0].ResultTitle != "Claude · jumpserver" {
+		t.Fatalf("active result presentation=%#v, want Claude workspace result card", persisted[0])
+	}
+
+	restarted, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatalf("newTerminalOutbox after restart: %v", err)
+	}
+	if err := restarted.attempt(context.Background(), persisted[0].ID, nil); err != nil {
+		t.Fatalf("recover active task card: %v", err)
+	}
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if reply.checkpointCalls != 1 || len(reply.recoveredReferences) != 1 {
+		t.Fatalf("checkpoint calls=%d recovered references=%d, want original-card recovery", reply.checkpointCalls, len(reply.recoveredReferences))
+	}
+	if reply.recoveredStates[0] != platform.StreamTerminalStopped {
+		t.Fatalf("recovered state=%q, want stopped", reply.recoveredStates[0])
+	}
+	if got := string(reply.checkpointPayloadSeen[0]); !strings.Contains(got, "card-1") || !strings.Contains(got, "任务已中断") {
+		t.Fatalf("recovered checkpoint=%s, want original card and interruption content", got)
+	}
+	if len(reply.accepted) != 1 || len(reply.results) != 1 || reply.results[0].State != platform.StreamTerminalStopped {
+		t.Fatalf("fallback texts=%#v, want independent interruption result", reply.accepted)
+	}
+}
+
+func TestTerminalOutboxRecoversStagedTerminalStateAndResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		failed  bool
+		stopped bool
+		text    string
+		state   platform.StreamTerminalState
+	}{
+		{name: "completed", text: "完整最终回答", state: platform.StreamTerminalCompleted},
+		{name: "failed", failed: true, text: "任务执行失败：boom", state: platform.StreamTerminalFailed},
+		{name: "stopped", stopped: true, text: "任务已按请求停止。", state: platform.StreamTerminalStopped},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "outbox.json")
+			route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+			reply := newOutboxTestReplier(route)
+			registry := newOutboxTestRegistry(route, reply)
+			beforeCrash, err := newTerminalOutbox(path, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reference := &platform.DurableStreamReference{
+				Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-1","sequence":7}`),
+			}
+			entry, err := beforeCrash.reserve(terminalOutboxDraft{
+				Route: route, Stream: reference, Text: tc.text, Failed: tc.failed, Stopped: tc.stopped,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterCrash, err := newTerminalOutbox(path, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := afterCrash.attempt(context.Background(), entry.ID, nil); err != nil {
+				t.Fatalf("recover: %v", err)
+			}
+			reply.mu.Lock()
+			defer reply.mu.Unlock()
+			if len(reply.recoveredStates) != 1 || reply.recoveredStates[0] != tc.state {
+				t.Fatalf("recovered states=%#v, want %q", reply.recoveredStates, tc.state)
+			}
+			if len(reply.accepted) != 1 {
+				t.Fatalf("accepted=%#v, want one independent result", reply.accepted)
+			}
+			for _, delivered := range reply.accepted {
+				if delivered != tc.text {
+					t.Fatalf("delivered=%q, want %q", delivered, tc.text)
+				}
+			}
+		})
+	}
+}
+
+func TestProgressSessionRefreshesActiveRecoveryAfterProgressUpdate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.stream = &outboxTestStream{}
+	h := NewHandler(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := h.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), path); err != nil {
+		t.Fatalf("StartTerminalOutbox: %v", err)
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	_, _, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "claude", "/workspace/jumpserver", "检查任务", cfg,
+	)
+	progress.onTaskProgress(taskProgressUpdate{
+		latest: "正在检查。", card: "**执行进度**\n\n正在检查。", timeline: true, commentary: true,
+		timelineItems: []agent.ProgressEvent{{
+			ID: "agent-message:first", Kind: agent.ProgressKindCommentary,
+			State: agent.ProgressStateCompleted, Text: "正在检查。",
+		}},
+	})
+	waitUntil(t, func() bool {
+		persisted, err := loadTerminalOutbox(path)
+		return err == nil && len(persisted) == 1 && persisted[0].Stream != nil &&
+			strings.Contains(string(persisted[0].Stream.Payload), "正在检查")
+	})
+
+	persisted, err := loadTerminalOutbox(path)
+	if err != nil || len(persisted) != 1 || persisted[0].Stream == nil ||
+		!strings.Contains(string(persisted[0].Stream.Payload), "正在检查") {
+		t.Fatalf("persisted=%#v err=%v, want latest progress in recovery reference", persisted, err)
+	}
+}
+
+func TestProgressSessionRefreshesActiveRecoveryAfterAdapterStateChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.stream = &outboxTestStream{}
+	h := NewHandler(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := h.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), path); err != nil {
+		t.Fatalf("StartTerminalOutbox: %v", err)
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	_, _, _ = h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "claude", "/workspace/jumpserver", "检查审批", cfg,
+	)
+
+	reply.stream.changeDurableReference("审批：允许本次")
+	waitUntil(t, func() bool {
+		persisted, err := loadTerminalOutbox(path)
+		return err == nil && len(persisted) == 1 && persisted[0].Stream != nil &&
+			strings.Contains(string(persisted[0].Stream.Payload), "审批：允许本次")
+	})
+}
+
+func TestTerminalOutboxKeepsStreamRecoveryObservableWhenAdapterCannotPrepareCheckpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := &platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-1"}`)}
+	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, Stream: reference, Text: "最终结果"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = outbox.prepareStreamRecovery(entry.ID, entry, platformtest.NewReplier(platform.Capabilities{Text: true}))
+	if !errors.Is(err, platform.ErrUnsupported) {
+		t.Fatalf("prepareStreamRecovery error=%v, want ErrUnsupported", err)
+	}
+}
+
+func TestDirectProgressTerminalClearsActiveRecoveryReservation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.stream = &outboxTestStream{}
+	h := NewHandler(nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := h.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), path); err != nil {
+		t.Fatalf("StartTerminalOutbox: %v", err)
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	_, _, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "claude", "/workspace/jumpserver", "检查审查文档", cfg,
+	)
+	if entries, err := loadTerminalOutbox(path); err != nil || len(entries) != 1 {
+		t.Fatalf("active recovery entries=%#v err=%v", entries, err)
+	}
+	_ = progress.stopWithTerminal("", false, true)
+	if entries, err := loadTerminalOutbox(path); err != nil || len(entries) != 0 {
+		t.Fatalf("terminal progress left stale recovery entries=%#v err=%v", entries, err)
+	}
+}
+
+func TestTerminalOutboxDoesNotReplayCompletedCheckpointAfterResultFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
 	reply := newOutboxTestReplier(route)
@@ -760,12 +1176,12 @@ func TestTerminalOutboxDoesNotReplayCompletedCheckpointAfterNotificationFailure(
 	}
 	checkpoint := &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"card_id":"card-1"}`)}
 	if err := outbox.enqueueAndAttempt(context.Background(), terminalOutboxDraft{
-		Route: route, Checkpoint: checkpoint, Notification: "任务执行失败，请查看上方卡片。",
+		Route: route, Checkpoint: checkpoint, Text: "任务执行失败：boom",
 	}, reply); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := loadTerminalOutbox(path)
-	if err != nil || len(pending) != 1 || !pending[0].CheckpointDelivered || pending[0].NotificationDelivered {
+	if err != nil || len(pending) != 1 || !pending[0].CheckpointDelivered || pending[0].TextDelivered {
 		t.Fatalf("pending=%#v err=%v", pending, err)
 	}
 	restarted, err := newTerminalOutbox(path, registry)
@@ -785,7 +1201,7 @@ func TestTerminalOutboxDoesNotReplayCompletedCheckpointAfterNotificationFailure(
 	}
 }
 
-func TestTerminalOutboxDoesNotNotifyBeforeStoppedCheckpointSucceeds(t *testing.T) {
+func TestTerminalOutboxDeliversResultWhenCheckpointFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
 	reply := newOutboxTestReplier(route)
@@ -797,18 +1213,63 @@ func TestTerminalOutboxDoesNotNotifyBeforeStoppedCheckpointSucceeds(t *testing.T
 	checkpoint := &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"state":"stopped"}`)}
 	if err := outbox.enqueueAndAttempt(context.Background(), terminalOutboxDraft{
 		Route: route, Stopped: true, Checkpoint: checkpoint,
-		Notification: "任务已停止，请查看上方卡片。",
+		Text: "任务已按请求停止。",
 	}, reply); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := loadTerminalOutbox(path)
-	if err != nil || len(pending) != 1 || pending[0].CheckpointDelivered || pending[0].NotificationDelivered {
-		t.Fatalf("pending=%#v err=%v, failed checkpoint must keep notification pending", pending, err)
+	if err != nil || len(pending) != 1 || pending[0].CheckpointDelivered || !pending[0].TextDelivered {
+		t.Fatalf("pending=%#v err=%v, failed checkpoint must not block result delivery", pending, err)
 	}
 	reply.mu.Lock()
 	defer reply.mu.Unlock()
-	if len(reply.accepted) != 0 || len(reply.textKeys) != 0 {
-		t.Fatalf("accepted=%#v keys=%#v, notification must not precede stopped checkpoint", reply.accepted, reply.textKeys)
+	if len(reply.accepted) != 1 || len(reply.textKeys) != 1 {
+		t.Fatalf("accepted=%#v keys=%#v, want one independent stopped result", reply.accepted, reply.textKeys)
+	}
+}
+
+func TestTerminalOutboxStartsResultDeliveryWhileCheckpointIsBlocked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	checkpointStarted := make(chan struct{})
+	releaseCheckpoint := make(chan struct{})
+	reply.beforeCheckpoint = func() {
+		close(checkpointStarted)
+		<-releaseCheckpoint
+	}
+	reply.textDelivered = make(chan string, 1)
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"card_id":"card-1"}`)}
+	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, Checkpoint: checkpoint, Text: "完整最终结果"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- outbox.attempt(context.Background(), entry.ID, reply)
+	}()
+	select {
+	case <-checkpointStarted:
+	case <-time.After(time.Second):
+		close(releaseCheckpoint)
+		t.Fatal("checkpoint delivery did not start")
+	}
+	deliveredBeforeCheckpoint := false
+	select {
+	case text := <-reply.textDelivered:
+		deliveredBeforeCheckpoint = text == "完整最终结果"
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(releaseCheckpoint)
+	if err := <-done; err != nil {
+		t.Fatalf("attempt: %v", err)
+	}
+	if !deliveredBeforeCheckpoint {
+		t.Fatal("blocked checkpoint delayed the independent final result")
 	}
 }
 
@@ -851,6 +1312,7 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
 	reply := newOutboxTestReplier(route)
 	reply.stream = &outboxTestStream{}
+	reply.finalOutside = true
 	prepareReached := make(chan struct{})
 	continuePrepare := make(chan struct{})
 	reply.stream.beforePrepare = func() {
@@ -890,7 +1352,11 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	observedRecoveryDraft := recoveryErr == nil &&
 		len(recoveryEntries) == 1 &&
 		recoveryEntries[0].Checkpoint == nil &&
-		recoveryEntries[0].Text == "发布检查已通过"
+		recoveryEntries[0].Stream != nil &&
+		recoveryEntries[0].Text == "发布检查已通过" &&
+		recoveryEntries[0].RichResult &&
+		recoveryEntries[0].ResultTitle == "Codex · weclaw" &&
+		!recoveryEntries[0].Failed && !recoveryEntries[0].Stopped
 	close(continuePrepare)
 
 	<-checkpointReached
@@ -898,11 +1364,14 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	observedPersisted := checkpointErr == nil &&
 		len(checkpointEntries) == 1 &&
 		checkpointEntries[0].Checkpoint != nil &&
+		checkpointEntries[0].Text == "发布检查已通过" &&
+		checkpointEntries[0].RichResult &&
+		checkpointEntries[0].ResultTitle == "Codex · weclaw" &&
 		!checkpointEntries[0].CheckpointDelivered
 	close(continueCheckpoint)
 	consumed := <-finished
-	if !consumed {
-		t.Fatal("terminal reply should be consumed by durable card checkpoint")
+	if consumed {
+		t.Fatal("independent final reply must not be consumed by durable card checkpoint")
 	}
 	if !observedRecoveryDraft {
 		t.Fatalf("stream was frozen before durable recovery draft: observed=%v entries=%#v err=%v",
@@ -919,8 +1388,14 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	}
 	reply.mu.Lock()
 	defer reply.mu.Unlock()
-	if reply.checkpointCalls != 1 || len(reply.accepted) != 0 || len(reply.checkpointPayloadSeen) != 1 || !strings.Contains(string(reply.checkpointPayloadSeen[0]), "发布检查已通过") {
-		t.Fatalf("checkpoint calls=%d accepted=%#v payloads=%q", reply.checkpointCalls, reply.accepted, reply.checkpointPayloadSeen)
+	if reply.checkpointCalls != 1 || len(reply.accepted) != 1 || len(reply.results) != 1 ||
+		reply.results[0].Title != "Codex · weclaw" || reply.results[0].State != platform.StreamTerminalCompleted ||
+		len(reply.checkpointPayloadSeen) != 1 ||
+		strings.Contains(string(reply.checkpointPayloadSeen[0]), "发布检查已通过") {
+		t.Fatalf("checkpoint calls=%d accepted=%#v results=%#v payloads=%q", reply.checkpointCalls, reply.accepted, reply.results, reply.checkpointPayloadSeen)
+	}
+	if len(reply.recoveredReferences) != 0 {
+		t.Fatalf("normal completion recovered stale stream references: %#v", reply.recoveredReferences)
 	}
 }
 
@@ -929,6 +1404,7 @@ func TestFinishStoppedProgressPersistsStoppedCheckpoint(t *testing.T) {
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
 	reply := newOutboxTestReplier(route)
 	reply.stream = &outboxTestStream{}
+	reply.finalOutside = true
 	registry := newOutboxTestRegistry(route, reply)
 	h := NewHandler(nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -950,8 +1426,8 @@ func TestFinishStoppedProgressPersistsStoppedCheckpoint(t *testing.T) {
 		},
 		stopped: true, finish: finish, progress: progress,
 	})
-	if !consumed {
-		t.Fatal("stopped terminal reply should be consumed by durable checkpoint")
+	if consumed {
+		t.Fatal("stopped result must remain outside durable checkpoint")
 	}
 	waitForTerminalOutboxEmpty(t, path)
 	reply.stream.mu.Lock()
@@ -964,7 +1440,9 @@ func TestFinishStoppedProgressPersistsStoppedCheckpoint(t *testing.T) {
 	defer reply.mu.Unlock()
 	if len(reply.checkpointPayloadSeen) != 1 ||
 		!strings.Contains(string(reply.checkpointPayloadSeen[0]), `"state":"stopped"`) ||
-		strings.Contains(string(reply.checkpointPayloadSeen[0]), `"failed":true`) {
+		strings.Contains(string(reply.checkpointPayloadSeen[0]), `"failed":true`) ||
+		strings.Contains(string(reply.checkpointPayloadSeen[0]), "任务已按请求停止") ||
+		len(reply.accepted) != 1 {
 		t.Fatalf("checkpoint payloads=%q, want stopped non-failure state", reply.checkpointPayloadSeen)
 	}
 }
@@ -1007,4 +1485,9 @@ func TestFinishProgressReplyDoesNotPersistStatusSentinelWhenCheckpointPreparatio
 		t.Fatal("recovery text was not delivered")
 	}
 	waitForTerminalOutboxEmpty(t, path)
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if len(reply.recoveredReferences) != 1 || reply.checkpointCalls != 1 {
+		t.Fatalf("recovered references=%#v checkpoint calls=%d, want card recovery after preparation failure", reply.recoveredReferences, reply.checkpointCalls)
+	}
 }

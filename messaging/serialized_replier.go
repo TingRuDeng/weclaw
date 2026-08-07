@@ -107,3 +107,23 @@ func (s *serializedStream) Stop(ctx context.Context, content string) error {
 	}
 	return s.inner.Complete(ctx, content)
 }
+
+func (s *serializedStream) PreflightUpdate(content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	preflighter, ok := s.inner.(platform.StreamContentPreflighter)
+	if !ok {
+		return nil
+	}
+	return preflighter.PreflightUpdate(content)
+}
+
+func (s *serializedStream) Supersede(ctx context.Context, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	supersedable, ok := s.inner.(platform.SupersedableStream)
+	if !ok {
+		return platform.ErrUnsupported
+	}
+	return supersedable.Supersede(ctx, content)
+}

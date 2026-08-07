@@ -193,6 +193,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if progressCfg.Mode == "" {
 		progressCfg = h.resolveProgressConfigForAccount(runtime.opts.platform, runtime.opts.accountID, runtime.opts.agentName)
 	}
+	runtime.task.setProgressTimelineLimit(progressCfg.EffectiveStreamTimelineLimit())
 	taskText := firstNonBlank(runtime.state.Preview, "共享 Codex 任务")
 	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithHandle(
 		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, runtime.opts.workspaceRoot, taskText, progressCfg,

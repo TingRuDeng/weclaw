@@ -2,6 +2,8 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +21,7 @@ type reanchorTestReplier struct {
 	openCalls   int
 	lastOptions platform.StreamOptions
 	cardID      string
+	route       platform.DeliveryRoute
 }
 
 func newReanchorTestReplier() *reanchorTestReplier {
@@ -57,6 +60,8 @@ func (r *reanchorTestReplier) BindTaskCard(cardID string) {
 	r.mu.Unlock()
 }
 
+func (r *reanchorTestReplier) DeliveryRoute() platform.DeliveryRoute { return r.route }
+
 type reanchorTestStream struct {
 	mu              sync.Mutex
 	updates         []string
@@ -66,6 +71,12 @@ type reanchorTestStream struct {
 	prepared        []string
 	completeStarted chan struct{}
 	completeRelease <-chan struct{}
+	cardID          string
+}
+
+func (s *reanchorTestStream) DurableReference() (platform.DurableStreamReference, error) {
+	payload, err := json.Marshal(map[string]any{"card_id": s.cardID})
+	return platform.DurableStreamReference{Kind: "test.stream.v1", Payload: payload}, err
 }
 
 func (s *reanchorTestStream) Update(_ context.Context, content string) error {
@@ -184,17 +195,20 @@ func TestProgressSessionReanchorMovesUpdatesAndTerminalToNewStream(t *testing.T)
 	if oldReply.CurrentTaskCardID() != "card-new" {
 		t.Fatalf("future task interactions still target %q, want card-new", oldReply.CurrentTaskCardID())
 	}
-	if newReply.openCalls != 1 || !strings.Contains(newReply.lastOptions.InitialContent, "进展 A") {
+	if newReply.openCalls != 1 || !strings.Contains(newReply.lastOptions.InitialContent, "进展 A") ||
+		!strings.HasSuffix(newReply.lastOptions.InitialContent, platform.TaskStreamThinkingIndicator) {
 		t.Fatalf("new stream calls=%d opts=%#v", newReply.openCalls, newReply.lastOptions)
 	}
 
 	if !session.send("进展 B") {
 		t.Fatal("progress after reanchor should be sent")
 	}
-	if got := oldReply.stream.updateSnapshot(); len(got) != 1 || got[0] != "进展 A" {
+	if got := oldReply.stream.updateSnapshot(); len(got) != 1 ||
+		got[0] != "进展 A\n\n"+platform.TaskStreamThinkingIndicator {
 		t.Fatalf("old updates=%#v, want only pre-reanchor progress", got)
 	}
-	if got := newReply.stream.updateSnapshot(); len(got) != 1 || got[0] != "进展 B" {
+	if got := newReply.stream.updateSnapshot(); len(got) != 1 ||
+		got[0] != "进展 B\n\n"+platform.TaskStreamThinkingIndicator {
 		t.Fatalf("new updates=%#v, want post-reanchor progress", got)
 	}
 
@@ -225,8 +239,9 @@ func TestProgressSessionReanchorPreservesStructuredTimeline(t *testing.T) {
 	if err != nil || !moved {
 		t.Fatalf("reanchor moved=%t err=%v", moved, err)
 	}
-	if newReply.lastOptions.InitialContent != timeline {
-		t.Fatalf("initial content=%q, want full structured timeline", newReply.lastOptions.InitialContent)
+	want := timeline + "\n\n" + platform.TaskStreamThinkingIndicator
+	if newReply.lastOptions.InitialContent != want {
+		t.Fatalf("initial content=%q, want full structured timeline followed by thinking", newReply.lastOptions.InitialContent)
 	}
 }
 
@@ -250,6 +265,51 @@ func TestProgressSessionDurableTerminalUsesReanchoredStream(t *testing.T) {
 	}
 	if oldReply.stream.preparedCount() != 0 || newReply.stream.preparedCount() != 1 {
 		t.Fatalf("old prepared=%d new prepared=%d", oldReply.stream.preparedCount(), newReply.stream.preparedCount())
+	}
+}
+
+func TestProgressSessionReanchorPersistsLatestRecoveryCard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	recoveryReply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, recoveryReply)
+	h := NewHandler(nil, nil)
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	if err := h.StartTerminalOutbox(workerCtx, registry, path); err != nil {
+		t.Fatalf("StartTerminalOutbox: %v", err)
+	}
+	oldReply := newReanchorTestReplier()
+	oldReply.route = route
+	oldReply.stream.cardID = "card-old"
+	newReply := newReanchorTestReplier()
+	newReply.route = route
+	newReply.stream.cardID = "card-new"
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	_, _, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), oldReply, "", "codex", "/workspace/project-a", "执行任务", cfg,
+	)
+	if moved, err := session.reanchor(context.Background(), newReply, "最新进展"); err != nil || !moved {
+		t.Fatalf("reanchor moved=%t err=%v", moved, err)
+	}
+	stopWorker()
+	session.stopBackground()
+	persisted, err := loadTerminalOutbox(path)
+	if err != nil || len(persisted) != 1 {
+		t.Fatalf("persisted=%#v err=%v", persisted, err)
+	}
+	restarted, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.attempt(context.Background(), persisted[0].ID, nil); err != nil {
+		t.Fatalf("recover reanchored card: %v", err)
+	}
+	recoveryReply.mu.Lock()
+	defer recoveryReply.mu.Unlock()
+	if len(recoveryReply.recoveredReferences) != 1 || !strings.Contains(string(recoveryReply.recoveredReferences[0].Payload), "card-new") {
+		t.Fatalf("recovered references=%#v, want latest reanchored card", recoveryReply.recoveredReferences)
 	}
 }
 

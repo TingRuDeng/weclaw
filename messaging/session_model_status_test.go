@@ -18,7 +18,7 @@ func TestFeishuClaudeSessionCardShowsACPModelStatus(t *testing.T) {
 
 	h.HandleMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "feishu-cc-switch",
-		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cc switch 0"}},
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cc switch 1"}},
 	}, reply)
 
 	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "模型: claude-sonnet-4-5") {

@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -104,6 +105,98 @@ func TestWorkspaceRegistryPersistFailureDoesNotPublishAfterImage(t *testing.T) {
 	if snapshot.Revision != 0 || len(snapshot.Registered) != 0 || snapshot.IsHidden(root) {
 		t.Fatalf("snapshot=%+v, persistence failure published after-image", snapshot)
 	}
+}
+
+func TestWorkspaceRegistrySessionHideRestoreRoundTrip(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "workspace-registry.json")
+	registry := newWorkspaceRegistry()
+	registry.now = func() time.Time { return time.Date(2026, 8, 7, 8, 0, 0, 0, time.UTC) }
+	if err := registry.SetFilePath(stateFile); err != nil {
+		t.Fatalf("SetFilePath: %v", err)
+	}
+
+	hidden, err := registry.HideSession("codex", "thread-123")
+	if err != nil || !hidden.Changed || hidden.SessionID != "thread-123" || hidden.Revision != 1 {
+		t.Fatalf("HideSession=%+v err=%v", hidden, err)
+	}
+	repeated, err := registry.HideSession("codex", "thread-123")
+	if err != nil || repeated.Changed || repeated.Revision != 1 {
+		t.Fatalf("repeated HideSession=%+v err=%v", repeated, err)
+	}
+	snapshot, err := registry.Snapshot("codex")
+	if err != nil || !snapshot.IsSessionHidden("thread-123") {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+
+	restored, err := registry.RestoreSession("codex", "thread-123")
+	if err != nil || !restored.Changed || restored.Revision != 2 {
+		t.Fatalf("RestoreSession=%+v err=%v", restored, err)
+	}
+	repeatedRestore, err := registry.RestoreSession("codex", "thread-123")
+	if err != nil || repeatedRestore.Changed || repeatedRestore.Revision != 2 {
+		t.Fatalf("repeated RestoreSession=%+v err=%v", repeatedRestore, err)
+	}
+
+	reloaded := newWorkspaceRegistry()
+	if err := reloaded.SetFilePath(stateFile); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	reloadedSnapshot, err := reloaded.Snapshot("codex")
+	if err != nil || reloadedSnapshot.IsSessionHidden("thread-123") {
+		t.Fatalf("reloaded snapshot=%+v err=%v", reloadedSnapshot, err)
+	}
+}
+
+func TestWorkspaceRegistrySessionPersistFailureDoesNotPublishAfterImage(t *testing.T) {
+	registry := newWorkspaceRegistry()
+	registry.persist = func(string, workspaceRegistryState) error { return errors.New("disk full") }
+	if err := registry.SetFilePath(filepath.Join(t.TempDir(), "workspace-registry.json")); err != nil {
+		t.Fatalf("SetFilePath: %v", err)
+	}
+	if _, err := registry.HideSession("claude", "session-123"); err == nil {
+		t.Fatal("HideSession error=nil, want persistence failure")
+	}
+	snapshot, err := registry.Snapshot("claude")
+	if err != nil || snapshot.Revision != 0 || snapshot.IsSessionHidden("session-123") {
+		t.Fatalf("snapshot=%+v err=%v, persistence failure published after-image", snapshot, err)
+	}
+}
+
+func TestWorkspaceRegistryLoadsVersionOneAndUpgradesOnNextMutation(t *testing.T) {
+	root := t.TempDir()
+	stateFile := filepath.Join(t.TempDir(), "workspace-registry.json")
+	legacy := `{"version":1,"revision":4,"agents":{"codex":{"registered":[{"root":` + string(mustJSON(t, root)) + `}]}}}`
+	if err := os.WriteFile(stateFile, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := newWorkspaceRegistry()
+	if err := registry.SetFilePath(stateFile); err != nil {
+		t.Fatalf("load v1: %v", err)
+	}
+	snapshot, err := registry.Snapshot("codex")
+	if err != nil || snapshot.Revision != 4 || len(snapshot.Registered) != 1 {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	if _, err := registry.HideSession("codex", "thread-legacy"); err != nil {
+		t.Fatalf("mutate upgraded state: %v", err)
+	}
+	var persisted workspaceRegistryState
+	data, err := os.ReadFile(stateFile)
+	if err != nil || json.Unmarshal(data, &persisted) != nil {
+		t.Fatalf("read upgraded state: %v data=%s", err, data)
+	}
+	if persisted.Version != workspaceRegistryVersion || workspaceRegistryVersion != 2 {
+		t.Fatalf("persisted version=%d current=%d, want 2", persisted.Version, workspaceRegistryVersion)
+	}
+}
+
+func mustJSON(t *testing.T, value string) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func TestWorkspaceRegistryCorruptStateFailsClosedWithoutOverwrite(t *testing.T) {

@@ -237,7 +237,7 @@ func (h *Handler) cancelActiveTaskExpected(key string, actor string, expectation
 		return false, false
 	}
 	stop := task.beginStopRequest(taskStopRequest{
-		actor: strings.TrimSpace(actor), detach: true, mode: taskStopLocal,
+		actor: strings.TrimSpace(actor), mode: taskStopLocal,
 	})
 	h.tasks.mu.Unlock()
 	switch stop.status {

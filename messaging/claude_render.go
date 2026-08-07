@@ -104,7 +104,7 @@ func (h *Handler) renderClaudeWorkspaceList(route claudeSessionRoute) string {
 		return "当前还没有可切换的 Claude 会话。"
 	}
 	lines := []string{"Claude 会话:"}
-	index := 0
+	index := 1
 	for _, view := range views {
 		if view.PendingCatalog {
 			lines = append(lines, "当前新会话: "+shortCodexWorkspaceName(view.WorkspaceRoot)+"（发送第一条消息后进入历史目录）")
@@ -128,7 +128,7 @@ func (h *Handler) renderClaudeWorkspaceGroups(route claudeSessionRoute) string {
 	}
 	lines := []string{"Claude 工作空间:"}
 	for index, group := range groups {
-		lines = append(lines, fmt.Sprintf("%d. %s", index, claudeWorkspaceGroupLabel(group)))
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, claudeWorkspaceGroupLabel(group)))
 	}
 	return wechatCommandText(lines...)
 }
@@ -141,7 +141,7 @@ func renderClaudeSessionList(workspaceRoot string, sessions []codexWorkspaceView
 	}
 	lines := []string{workspaceName + " 会话:"}
 	for index, session := range sessions {
-		lines = append(lines, fmt.Sprintf("%d. %s", index, codexSessionDisplayName(session)))
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, codexSessionDisplayName(session)))
 	}
 	lines = append(lines, "", "发送 /cc cd .. 返回工作空间列表。")
 	return wechatCommandText(lines...)
@@ -159,12 +159,15 @@ func claudeSessionListLabel(view codexWorkspaceView) string {
 func buildClaudeSessionHelpText() string {
 	return wechatCommandText(
 		"Claude 会话命令:",
+		"列表编号从 1 开始",
 		"/cc whoami 查看当前 workspace/session 绑定",
 		"/cc ls 查看可切换会话",
 		"/cc cd <编号|..> 进入工作空间或返回列表",
 		"/cc switch <编号|sessionId> 切换 Claude 会话",
 		"/cc new 新建当前工作空间会话",
 		"/cc rename current|<编号> <名称> 重命名当前或列表中的会话",
+		"/cc session remove <编号|sessionId> 管理员私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
+		"/cc session restore <sessionId> 管理员私聊恢复已隐藏会话",
 		"/cc workspace add <路径> 管理员私聊登记已有工作目录",
 		"/cc workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cc pwd 查看当前工作空间",

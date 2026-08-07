@@ -154,6 +154,24 @@ func TestHandleProgressCommandRejectsUnknownMode(t *testing.T) {
 	}
 }
 
+func TestResolveProgressConfigExplicitZeroSurvivesAccountOverride(t *testing.T) {
+	h := NewHandler(nil, nil)
+	global := config.DefaultProgressConfig()
+	agentLimit, platformLimit, accountLimit := 6, 4, 0
+	h.SetProgressConfig(global)
+	h.SetAgentProgressConfigs(map[string]config.ProgressConfig{
+		"codex": {StreamTimelineLimit: &agentLimit},
+	})
+	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
+		string(platform.PlatformFeishu):                            {StreamTimelineLimit: &platformLimit},
+		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): {StreamTimelineLimit: &accountLimit},
+	})
+	got := h.resolveProgressConfigForAccount(platform.PlatformFeishu, "cli_a", "codex")
+	if got.StreamTimelineLimit == nil || *got.StreamTimelineLimit != 0 {
+		t.Fatalf("StreamTimelineLimit=%#v, want account explicit zero", got.StreamTimelineLimit)
+	}
+}
+
 func TestResolveProgressConfigForPlatformUsesPlatformOverride(t *testing.T) {
 	h := NewHandler(nil, nil)
 	globalCfg := config.DefaultProgressConfig()

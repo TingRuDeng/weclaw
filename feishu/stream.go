@@ -13,28 +13,35 @@ import (
 	"github.com/google/uuid"
 )
 
-const cardkitThrottle = 500 * time.Millisecond
+const (
+	cardkitThrottle              = 500 * time.Millisecond
+	feishuCardJSONSoftLimitBytes = 2_800_000
+)
 
 type feishuStream struct {
-	mu                sync.Mutex
-	ioMu              sync.Mutex
-	cardKit           cardKitClient
-	taskCards         *taskCardRegistry
-	cardID            string
-	title             string
-	sequence          int
-	lastUpdate        time.Time
-	lastContent       string
-	closed            bool
-	throttle          time.Duration
-	now               func() time.Time
-	pendingCtx        context.Context
-	pendingText       string
-	hasPending        bool
-	pendingTimer      *time.Timer
-	pendingGeneration uint64
-	terminal          *platform.TerminalCheckpoint
-	terminalDelivered bool
+	mu                      sync.Mutex
+	ioMu                    sync.Mutex
+	cardKit                 cardKitClient
+	taskCards               *taskCardRegistry
+	cardID                  string
+	title                   string
+	sequence                int
+	lastUpdate              time.Time
+	lastContent             string
+	closed                  bool
+	throttle                time.Duration
+	now                     func() time.Time
+	pendingCtx              context.Context
+	pendingText             string
+	hasPending              bool
+	pendingTimer            *time.Timer
+	pendingGeneration       uint64
+	cardJSONSoftLimitBytes  int
+	preserveTerminalContent bool
+	inlineActiveStatus      bool
+	preservedApprovals      []string
+	terminal                *platform.TerminalCheckpoint
+	terminalDelivered       bool
 }
 
 type feishuStreamUpdateOp struct {
@@ -57,12 +64,14 @@ const feishuTerminalCheckpointKind = "feishu.cardkit.terminal.v1"
 const feishuStreamReferenceKind = "feishu.cardkit.stream.v1"
 
 type feishuStreamReferencePayload struct {
-	CardID   string `json:"card_id"`
-	Title    string `json:"title"`
-	Sequence int    `json:"sequence"`
+	CardID    string   `json:"card_id"`
+	Title     string   `json:"title"`
+	Sequence  int      `json:"sequence"`
+	Content   string   `json:"content,omitempty"`
+	Approvals []string `json:"approvals,omitempty"`
 }
 
-const defaultSupersededTaskCardNotice = "已在新位置继续展示；后续进展和最终结果将更新到新卡片。"
+const defaultSupersededTaskCardNotice = "已在新位置继续展示；后续结构化进展将更新到新卡片，最终结果会另发独立结果卡片。"
 
 // openCardKitStream 创建并发送 CardKit 卡片，然后开启流式模式。
 func (r *Replier) openCardKitStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {
@@ -75,12 +84,16 @@ func (r *Replier) openTaskCardKitStream(ctx context.Context, opts platform.Strea
 
 func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.StreamOptions, trackTask bool) (platform.Stream, error) {
 	cardJSON, err := buildCardV2(cardOptions{
-		Status:  cardStatusThinking,
-		Title:   opts.Title,
-		Content: opts.InitialContent,
+		Status:             cardStatusThinking,
+		Title:              opts.Title,
+		Content:            opts.InitialContent,
+		InlineActiveStatus: trackTask,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if len([]byte(cardJSON)) > feishuCardJSONSoftLimitBytes {
+		return nil, fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(cardJSON)), feishuCardJSONSoftLimitBytes)
 	}
 	cardID, err := r.cardKit.CreateCard(ctx, cardJSON)
 	if err != nil {
@@ -89,32 +102,68 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 	if err := r.sendCard(ctx, r.openID, cardID); err != nil {
 		return nil, err
 	}
-	if trackTask {
-		r.setCurrentTaskCardID(cardID)
-		if r.taskCards != nil {
-			r.taskCards.record(cardID, cardOptions{
-				Status:  cardStatusThinking,
-				Title:   opts.Title,
-				Content: opts.InitialContent,
-			})
-		}
-	}
 	stream := &feishuStream{
-		cardKit:   r.cardKit,
-		taskCards: r.taskCards,
-		cardID:    cardID,
-		title:     opts.Title,
-		throttle:  cardkitThrottle,
-		now:       time.Now,
+		cardKit:                 r.cardKit,
+		taskCards:               r.taskCards,
+		cardID:                  cardID,
+		title:                   opts.Title,
+		throttle:                cardkitThrottle,
+		now:                     time.Now,
+		lastContent:             opts.InitialContent,
+		cardJSONSoftLimitBytes:  feishuCardJSONSoftLimitBytes,
+		preserveTerminalContent: trackTask,
+		inlineActiveStatus:      trackTask,
 	}
 	if err := stream.cardKit.SetStreaming(ctx, stream.cardID, true, stream.nextSequence()); err != nil {
 		return nil, err
 	}
+	if trackTask {
+		r.setCurrentTaskCardID(cardID)
+		if r.taskCards != nil {
+			r.taskCards.recordWithSequence(cardID, cardOptions{
+				Status:             cardStatusThinking,
+				Title:              opts.Title,
+				Content:            opts.InitialContent,
+				InlineActiveStatus: trackTask,
+			}, stream.sequence)
+		}
+	}
 	return stream, nil
+}
+
+// PreflightUpdate 使用将要提交的完整卡片 JSON 做保守字节上限检查。
+func (s *feishuStream) PreflightUpdate(content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	opts := cardOptions{
+		Status: cardStatusThinking, Title: s.title, Content: content,
+		InlineActiveStatus: s.inlineActiveStatus,
+	}
+	if s.taskCards != nil {
+		if snapshot, ok := s.taskCards.snapshot(s.cardID); ok {
+			snapshot.Content = content
+			opts = snapshot
+		}
+	}
+	cardJSON, err := buildCardV2(opts)
+	if err != nil {
+		return err
+	}
+	limit := s.cardJSONSoftLimitBytes
+	if limit <= 0 {
+		limit = feishuCardJSONSoftLimitBytes
+	}
+	if len([]byte(cardJSON)) > limit {
+		return fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(cardJSON)), limit)
+	}
+	return nil
 }
 
 // Update 节流更新主内容组件，触发飞书打字机效果。
 func (s *feishuStream) Update(ctx context.Context, content string) error {
+	if err := s.PreflightUpdate(content); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -306,13 +355,47 @@ func (s *feishuStream) DurableReference() (platform.DurableStreamReference, erro
 	if s.cardID == "" || s.title == "" || s.sequence <= 0 {
 		return platform.DurableStreamReference{}, fmt.Errorf("Feishu stream reference is incomplete")
 	}
+	content := trimTaskStreamThinkingIndicator(s.lastContent)
+	approvals := append([]string(nil), s.preservedApprovals...)
+	if s.taskCards != nil {
+		if snapshot, sequence, ok := s.taskCards.snapshotWithSequence(s.cardID); ok {
+			content = trimTaskStreamThinkingIndicator(snapshot.Content)
+			approvals = append([]string(nil), snapshot.Approvals...)
+			if sequence > s.sequence {
+				s.sequence = sequence
+			}
+		}
+	}
+	if s.hasPending && strings.TrimSpace(s.pendingText) != "" {
+		content = trimTaskStreamThinkingIndicator(s.pendingText)
+	}
+	if strings.TrimSpace(content) == "" {
+		content = taskCardNoStructuredProgress
+	}
 	payload, err := json.Marshal(feishuStreamReferencePayload{
 		CardID: s.cardID, Title: s.title, Sequence: s.sequence,
+		Content: content, Approvals: approvals,
 	})
 	if err != nil {
 		return platform.DurableStreamReference{}, err
 	}
 	return platform.DurableStreamReference{Kind: feishuStreamReferenceKind, Payload: payload}, nil
+}
+
+// SetDurableReferenceChangeHandler 绑定审批等旁路状态变化的持久化刷新通知。
+func (s *feishuStream) SetDurableReferenceChangeHandler(handler func()) {
+	s.mu.Lock()
+	taskCards := s.taskCards
+	cardID := s.cardID
+	closed := s.closed
+	s.mu.Unlock()
+	if taskCards == nil {
+		return
+	}
+	if closed {
+		handler = nil
+	}
+	taskCards.setDurableReferenceChangeHandler(cardID, handler)
 }
 
 // Fail 关闭流式并全量更新为失败卡片。
@@ -335,6 +418,15 @@ func (s *feishuStream) Stop(ctx context.Context, finalContent string) error {
 
 // PrepareTerminalFromReference 在新进程中恢复卡片定位与序列，并生成同卡终态操作。
 func (r *Replier) PrepareTerminalFromReference(reference platform.DurableStreamReference, finalContent string, failed bool) (platform.TerminalCheckpoint, error) {
+	state := platform.StreamTerminalCompleted
+	if failed {
+		state = platform.StreamTerminalFailed
+	}
+	return r.PrepareTerminalFromReferenceWithState(reference, finalContent, state)
+}
+
+// PrepareTerminalFromReferenceWithState 在新进程中恢复原卡并保留停止终态样式。
+func (r *Replier) PrepareTerminalFromReferenceWithState(reference platform.DurableStreamReference, finalContent string, state platform.StreamTerminalState) (platform.TerminalCheckpoint, error) {
 	if reference.Kind != feishuStreamReferenceKind {
 		return platform.TerminalCheckpoint{}, fmt.Errorf("unsupported Feishu stream reference %q", reference.Kind)
 	}
@@ -345,12 +437,26 @@ func (r *Replier) PrepareTerminalFromReference(reference platform.DurableStreamR
 	if payload.CardID == "" || payload.Title == "" || payload.Sequence <= 0 {
 		return platform.TerminalCheckpoint{}, fmt.Errorf("invalid Feishu stream reference")
 	}
+	referenceContent := strings.TrimSpace(payload.Content)
+	if referenceContent == "" {
+		referenceContent = taskCardNoStructuredProgress
+	}
 	stream := &feishuStream{
 		cardKit: r.cardKit, taskCards: r.taskCards,
 		cardID: payload.CardID, title: payload.Title, sequence: payload.Sequence,
-		now: time.Now,
+		lastContent:             referenceContent,
+		preserveTerminalContent: true, inlineActiveStatus: true,
+		preservedApprovals: append([]string(nil), payload.Approvals...),
+		now:                time.Now,
 	}
-	return stream.PrepareTerminal(finalContent, failed)
+	if r.taskCards != nil {
+		r.taskCards.recordWithSequence(payload.CardID, cardOptions{
+			Status: cardStatusThinking, Title: payload.Title, Content: stream.lastContent,
+			Approvals: payload.Approvals, InlineActiveStatus: true,
+		}, payload.Sequence)
+	}
+	// 恢复引用已经携带最后一次安全进度快照；finalContent 属于独立结果消息，不得写回任务卡。
+	return stream.PrepareTerminalWithState("", state)
 }
 
 // Supersede 退役旧任务卡但不生成任务终态；新卡将独立承接后续进展和结果。
@@ -471,9 +577,25 @@ func (s *feishuStream) PrepareTerminalWithState(finalContent string, state platf
 func (s *feishuStream) prepareTerminalUpdate(status string, content string) (feishuStreamTerminalOp, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	opts := cardOptions{Status: status, Title: s.title, Content: content}
+	opts := cardOptions{
+		Status: status, Title: s.title, Content: content,
+		InlineActiveStatus: s.inlineActiveStatus,
+	}
+	if s.preserveTerminalContent {
+		opts.Content = strings.TrimSpace(content)
+		if opts.Content == "" {
+			opts.Content = trimTaskStreamThinkingIndicator(s.lastContent)
+		}
+		if opts.Content == "" {
+			opts.Content = taskCardNoStructuredProgress
+		}
+		opts.Approvals = append([]string(nil), s.preservedApprovals...)
+	}
 	if s.taskCards != nil {
-		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, status, content); ok {
+		if s.preserveTerminalContent {
+			s.taskCards.updateContent(s.cardID, opts.Content)
+		}
+		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, status, ""); ok {
 			opts = snapshot
 		}
 	}
@@ -489,6 +611,12 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 		UpdateOperation:  uuid.NewString(),
 		CardJSON:         cardJSON,
 	}, nil
+}
+
+func trimTaskStreamThinkingIndicator(content string) string {
+	content = strings.TrimSpace(content)
+	content = strings.TrimSpace(strings.TrimSuffix(content, platform.TaskStreamThinkingIndicator))
+	return content
 }
 
 func deliverFeishuTerminalCheckpoint(ctx context.Context, client cardKitClient, checkpoint platform.TerminalCheckpoint) error {

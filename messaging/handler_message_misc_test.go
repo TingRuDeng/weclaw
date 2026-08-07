@@ -216,7 +216,7 @@ func TestSendReplyWithMediaKeepsChoiceLikeFinalReplyAsText(t *testing.T) {
 	}
 }
 
-func TestRawCommandStopCancelsActiveCodexTask(t *testing.T) {
+func TestRawCommandStopKeepsTerminalReplyEnabled(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.defaultName = "codex"
 	ag := &fakeCodexThreadAgent{
@@ -246,8 +246,8 @@ func TestRawCommandStopCancelsActiveCodexTask(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("task context was not canceled")
 	}
-	if task.shouldSendFinal() {
-		t.Fatal("task should not send final after stop")
+	if !task.shouldSendFinal() {
+		t.Fatal("stopped task must keep its single terminal reply enabled")
 	}
 	h.finishActiveTask(key, task)
 }

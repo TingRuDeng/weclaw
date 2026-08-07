@@ -50,6 +50,7 @@ type agentTaskAdmissionNotice struct {
 // startAgentTaskLifecycle 创建三类 Agent 共用的进度和终态交付器。
 func (h *Handler) startAgentTaskLifecycle(opts agentTaskLifecycleOptions) agentTaskLifecycle {
 	if opts.task != nil {
+		opts.task.setProgressTimelineLimit(opts.progressConfig.EffectiveStreamTimelineLimit())
 		opts.trace = traceWithReply(opts.task.traceSnapshot(), opts.reply)
 		opts.task.mu.Lock()
 		opts.task.trace = opts.trace
@@ -134,6 +135,10 @@ func (h *Handler) completeAgentTaskLifecycle(lifecycle agentTaskLifecycle) {
 
 // replyAgentTaskAdmission 统一三类 Agent 的排队和队列占用提示。
 func (h *Handler) replyAgentTaskAdmission(notice agentTaskAdmissionNotice, status activeTaskAdmissionStatus) {
+	if status == activeTaskDraining {
+		sendPlatformText(notice.ctx, notice.reply, notice.userID, "WeClaw 正在安全重启，暂不接收新任务，请稍后重试。")
+		return
+	}
 	if status == activeTaskQueued {
 		if h.sendPendingTaskControlCard(notice) {
 			return

@@ -177,7 +177,7 @@ func TestHandleCodexWhoamiAndLsCommands(t *testing.T) {
 	if !containsText(texts, "thread: thread-1") {
 		t.Fatalf("whoami/ls should include thread, messages=%#v", texts)
 	}
-	if !containsText(texts, "0. "+filepath.Base(workspace)) {
+	if !containsText(texts, "1. "+filepath.Base(workspace)) {
 		t.Fatalf("ls should include numbered workspace, messages=%#v", texts)
 	}
 }

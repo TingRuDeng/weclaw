@@ -157,7 +157,7 @@ func TestTaskViewReducerBuildsCompactStructuredTimeline(t *testing.T) {
 	}
 }
 
-func TestNativeAgentMessageReplacesStructuredTimeline(t *testing.T) {
+func TestClaudeAgentMessageRendersAsCurrentExplanationWithoutReplacingTimeline(t *testing.T) {
 	now := time.Now()
 	state, changed := reduceTaskView(taskViewState{}, taskViewEvent{
 		kind: taskViewProgress, at: now,
@@ -172,17 +172,195 @@ func TestNativeAgentMessageReplacesStructuredTimeline(t *testing.T) {
 		progress: agent.ProgressEvent{ID: "agent-message:message-1", Kind: agent.ProgressKindMessage, Sequence: 2, Text: native},
 	})
 	if !changed {
-		t.Fatal("native message was not recorded")
+		t.Fatal("native message sequence was not observed")
 	}
 	card, timeline := renderTaskProgressCard(state)
-	if timeline || card != native {
+	if !timeline || !strings.Contains(card, "**执行进度**") || !strings.Contains(card, "运行测试") ||
+		!strings.Contains(card, "**当前说明**") || !strings.Contains(card, native) {
+		t.Fatalf("card=%q timeline=%t, want timeline and independent current explanation", card, timeline)
+	}
+	if len(state.progressTimeline) != 1 || state.progressTimeline[0].ID != "command:test" {
+		t.Fatalf("timeline=%#v, native message must not enter structured progress", state.progressTimeline)
+	}
+	if state.lastProgress != "运行测试" || state.lastProgressEvent.ID != "command:test" {
+		t.Fatalf("last progress=%q event=%#v, want latest structured progress", state.lastProgress, state.lastProgressEvent)
+	}
+}
+
+func TestClaudeAgentMessageDoesNotConsumeStructuredTimelineLimit(t *testing.T) {
+	limit := 2
+	state := taskViewState{progressTimelineLimit: &limit}
+	events := []agent.ProgressEvent{
+		{ID: "command:first", Kind: agent.ProgressKindCommand, Sequence: 1, Text: "第一条结构化进度"},
+		{ID: "agent-message:message-1", Kind: agent.ProgressKindMessage, Sequence: 2, Text: "中间说明"},
+		{ID: "command:second", Kind: agent.ProgressKindCommand, Sequence: 3, Text: "第二条结构化进度"},
+	}
+	for index, progress := range events {
+		var changed bool
+		state, changed = reduceTaskView(state, taskViewEvent{
+			kind: taskViewProgress, at: time.Unix(int64(index), 0), progress: progress,
+		})
+		if !changed {
+			t.Fatalf("event %d was not reduced: %#v", index, progress)
+		}
+	}
+	if len(state.progressTimeline) != 2 ||
+		state.progressTimeline[0].ID != "command:first" ||
+		state.progressTimeline[1].ID != "command:second" {
+		t.Fatalf("timeline=%#v, want two structured entries", state.progressTimeline)
+	}
+	card, timeline := renderTaskProgressCard(state)
+	if !timeline || !strings.Contains(card, "第一条结构化进度") ||
+		!strings.Contains(card, "第二条结构化进度") || !strings.Contains(card, "**当前说明**") ||
+		!strings.Contains(card, "中间说明") {
 		t.Fatalf("card=%q timeline=%t", card, timeline)
 	}
 }
 
-func TestTaskViewReducerBoundsCompactTimeline(t *testing.T) {
+func TestClaudeAgentMessageAloneBuildsCurrentExplanationSnapshot(t *testing.T) {
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{owner: "user-1", agentName: "claude"})
+	const commentary = "我先检查当前实现，再运行回归测试。"
+	update, ok := task.recordProgressUpdate(time.Now(), agent.ProgressEvent{
+		ID: "agent-message:message-1", Kind: agent.ProgressKindMessage,
+		State: agent.ProgressStateCompleted, Sequence: 1, Text: commentary,
+	})
+	if !ok {
+		t.Fatal("commentary should produce a stream card snapshot")
+	}
+	if update.timeline || !strings.Contains(update.card, "**当前说明**") || !strings.Contains(update.card, commentary) {
+		t.Fatalf("update=%#v", update)
+	}
+	if len(update.timelineItems) != 0 {
+		t.Fatalf("timeline=%#v, commentary must not enter structured timeline", update.timelineItems)
+	}
+
+	task.recordTerminalView(time.Now().Add(time.Second), "completed")
+	task.mu.Lock()
+	terminalCard, terminalTimeline := renderTaskProgressCard(task.view)
+	task.mu.Unlock()
+	if terminalTimeline || !strings.Contains(terminalCard, commentary) {
+		t.Fatalf("terminal card=%q timeline=%t, want preserved current explanation", terminalCard, terminalTimeline)
+	}
+}
+
+func TestClaudeCurrentExplanationUsesSingleProgressRuneLimit(t *testing.T) {
+	state, changed := reduceTaskView(taskViewState{}, taskViewEvent{
+		kind: taskViewProgress, at: time.Now(),
+		progress: agent.ProgressEvent{
+			ID: "agent-message:message-1", Kind: agent.ProgressKindMessage,
+			Sequence: 1, Text: strings.Repeat("进", taskProgressTimelineItemMaxRunes+20),
+		},
+	})
+	if !changed {
+		t.Fatal("commentary was not reduced")
+	}
+	card, timeline := renderTaskProgressCard(state)
+	if timeline || !strings.HasSuffix(card, "…") || strings.Count(card, "进") != taskProgressTimelineItemMaxRunes {
+		t.Fatalf("card=%q timeline=%t", card, timeline)
+	}
+}
+
+func TestCodexCommentaryAccumulatesFromFirstToLastWithoutTruncation(t *testing.T) {
+	first := strings.Repeat("第一段用户可见说明。", taskProgressTimelineItemMaxRunes/8+8)
+	second := "第二段用户可见说明。\n\n- 保留 Markdown 列表\n- 保留完整正文"
+	events := []agent.ProgressEvent{
+		{ID: "agent-message:first", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 1, Text: first},
+		{ID: "command:test", Kind: agent.ProgressKindCommand, State: agent.ProgressStateCompleted, Sequence: 2, Text: "运行回归测试"},
+		{ID: "agent-message:second", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 3, Text: second},
+	}
 	state := taskViewState{}
-	for index := 0; index < taskProgressTimelineLimit+3; index++ {
+	for index, progress := range events {
+		var changed bool
+		state, changed = reduceTaskView(state, taskViewEvent{
+			kind: taskViewProgress, at: time.Unix(int64(index), 0), progress: progress,
+		})
+		if !changed {
+			t.Fatalf("event %d was not reduced: %#v", index, progress)
+		}
+	}
+
+	card, timeline := renderTaskProgressCard(state)
+	if !timeline || len(state.progressTimeline) != len(events) {
+		t.Fatalf("timeline=%t entries=%#v", timeline, state.progressTimeline)
+	}
+	firstIndex := strings.Index(card, first)
+	commandIndex := strings.Index(card, "运行回归测试")
+	secondIndex := strings.Index(card, second)
+	if firstIndex < 0 || commandIndex <= firstIndex || secondIndex <= commandIndex {
+		t.Fatalf("card=%q, want complete commentary and command in source order", card)
+	}
+	if strings.Contains(card, "**当前说明**") {
+		t.Fatalf("card=%q, Codex commentary must accumulate in the timeline", card)
+	}
+}
+
+func TestTaskViewReducerDefaultsToUnlimitedCodexCommentaryTimeline(t *testing.T) {
+	state := taskViewState{}
+	const messageCount = 11
+	for index := 0; index < messageCount; index++ {
+		var changed bool
+		state, changed = reduceTaskView(state, taskViewEvent{
+			kind: taskViewProgress,
+			at:   time.Unix(int64(index), 0),
+			progress: agent.ProgressEvent{
+				ID: "agent-message:" + string(rune('a'+index)), Kind: agent.ProgressKindCommentary,
+				State: agent.ProgressStateCompleted, Sequence: uint64(index + 1), Text: "说明 " + string(rune('A'+index)),
+			},
+		})
+		if !changed {
+			t.Fatalf("event %d was not reduced", index)
+		}
+	}
+	if got := len(state.progressTimeline); got != messageCount {
+		t.Fatalf("timeline length=%d, want %d", got, messageCount)
+	}
+	card, timeline := renderTaskProgressCard(state)
+	if !timeline || !strings.Contains(card, "说明 A") || !strings.Contains(card, "说明 K") {
+		t.Fatalf("card=%q timeline=%t", card, timeline)
+	}
+}
+
+func TestConfiguredPositiveTimelineLimitIncludesCodexCommentary(t *testing.T) {
+	limit := 2
+	state := taskViewState{progressTimelineLimit: &limit}
+	events := []agent.ProgressEvent{
+		{ID: "agent-message:first", Kind: agent.ProgressKindCommentary, Sequence: 1, Text: "第一段说明"},
+		{ID: "command:test", Kind: agent.ProgressKindCommand, Sequence: 2, Text: "运行测试"},
+		{ID: "agent-message:last", Kind: agent.ProgressKindCommentary, Sequence: 3, Text: "最后一段说明"},
+	}
+	for index, progress := range events {
+		state, _ = reduceTaskView(state, taskViewEvent{
+			kind: taskViewProgress, at: time.Unix(int64(index), 0), progress: progress,
+		})
+	}
+	if got := len(state.progressTimeline); got != limit || state.progressTimeline[0].ID != "command:test" ||
+		state.progressTimeline[1].ID != "agent-message:last" {
+		t.Fatalf("timeline=%#v, want latest %d entries", state.progressTimeline, limit)
+	}
+}
+
+func TestCodexCommentaryWithSameIDUpdatesInPlace(t *testing.T) {
+	state := taskViewState{}
+	for index, text := range []string{"第一版说明", "更新后的完整说明"} {
+		state, _ = reduceTaskView(state, taskViewEvent{
+			kind: taskViewProgress, at: time.Unix(int64(index), 0),
+			progress: agent.ProgressEvent{
+				ID: "agent-message:stable", Kind: agent.ProgressKindCommentary,
+				State: agent.ProgressStateCompleted, Sequence: uint64(index + 1), Text: text,
+			},
+		})
+	}
+	card, timeline := renderTaskProgressCard(state)
+	if !timeline || len(state.progressTimeline) != 1 || strings.Contains(card, "第一版说明") ||
+		!strings.Contains(card, "更新后的完整说明") {
+		t.Fatalf("card=%q timeline=%t entries=%#v", card, timeline, state.progressTimeline)
+	}
+}
+
+func TestTaskViewReducerBoundsCompactTimeline(t *testing.T) {
+	limit := 8
+	state := taskViewState{progressTimelineLimit: &limit}
+	for index := 0; index < limit+3; index++ {
 		var changed bool
 		state, changed = reduceTaskView(state, taskViewEvent{
 			kind: taskViewProgress,
@@ -197,12 +375,54 @@ func TestTaskViewReducerBoundsCompactTimeline(t *testing.T) {
 			t.Fatalf("event %d was not reduced", index)
 		}
 	}
-	if len(state.progressTimeline) != taskProgressTimelineLimit {
-		t.Fatalf("timeline length=%d, want %d", len(state.progressTimeline), taskProgressTimelineLimit)
+	if len(state.progressTimeline) != limit {
+		t.Fatalf("timeline length=%d, want %d", len(state.progressTimeline), limit)
 	}
 	card, timeline := renderTaskProgressCard(state)
 	if !timeline || strings.Contains(card, "步骤 A") || !strings.Contains(card, "步骤 K") {
 		t.Fatalf("bounded card=%q timeline=%t", card, timeline)
+	}
+}
+
+func TestTaskViewReducerKeepsUnlimitedTimelineWhenConfiguredZero(t *testing.T) {
+	limit := 0
+	state := taskViewState{progressTimelineLimit: &limit}
+	const eventCount = 11
+	for index := 0; index < eventCount; index++ {
+		var changed bool
+		state, changed = reduceTaskView(state, taskViewEvent{
+			kind: taskViewProgress,
+			at:   time.Unix(int64(index), 0),
+			progress: agent.ProgressEvent{
+				ID: "command-" + string(rune('a'+index)), Kind: agent.ProgressKindCommand,
+				State: agent.ProgressStateCompleted, Sequence: uint64(index + 1),
+				Text: "步骤 " + string(rune('A'+index)),
+			},
+		})
+		if !changed {
+			t.Fatalf("event %d was not reduced", index)
+		}
+	}
+	if got, want := len(state.progressTimeline), eventCount; got != want {
+		t.Fatalf("timeline length=%d, want %d", got, want)
+	}
+}
+
+func TestTaskViewReducerUsesConfiguredPositiveTimelineLimit(t *testing.T) {
+	limit := 3
+	state := taskViewState{progressTimelineLimit: &limit}
+	for index := 0; index < 5; index++ {
+		state, _ = reduceTaskView(state, taskViewEvent{
+			kind: taskViewProgress,
+			at:   time.Unix(int64(index), 0),
+			progress: agent.ProgressEvent{
+				ID: "file-" + string(rune('a'+index)), Kind: agent.ProgressKindFile,
+				State: agent.ProgressStateCompleted, Sequence: uint64(index + 1), Text: "文件步骤",
+			},
+		})
+	}
+	if got := len(state.progressTimeline); got != limit {
+		t.Fatalf("timeline length=%d, want %d", got, limit)
 	}
 }
 

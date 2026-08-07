@@ -146,7 +146,7 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 
 	list := h.renderCodexListForAccess(bindingKey, "user-1", false)
 	for _, want := range []string{
-		"Codex 工作空间:\n\n0. ",
+		"Codex 工作空间:\n\n1. ",
 		filepath.Base(workspaceA),
 		filepath.Base(workspaceB),
 	} {

@@ -142,7 +142,7 @@ func TestCodexDesktopProjectionKeepsParallelSiblingTurnsSeparate(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopProjectionEmitsCompletedAgentMessageOnly(t *testing.T) {
+func TestCodexDesktopProjectionEmitsAgentMessageAndHiddenCommandActivity(t *testing.T) {
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
 	items := []any{
 		map[string]any{"id": "agent-1", "type": "agentMessage", "status": "inProgress", "text": "Done"},
@@ -164,8 +164,9 @@ func TestCodexDesktopProjectionEmitsCompletedAgentMessageOnly(t *testing.T) {
 	if event.ItemID != "agent-1" || event.Text != "Done" {
 		t.Fatalf("event = %#v", event)
 	}
-	if len(update.Events) != 1 {
-		t.Fatalf("events = %#v, want only completed agentMessage", update.Events)
+	if len(update.Events) != 2 || update.Events[1].Kind != "activity" || update.Events[1].ItemID != "command-1" ||
+		update.Events[1].Progress != nil || update.Events[1].Text != "" {
+		t.Fatalf("events = %#v, want completed agentMessage and non-display command activity", update.Events)
 	}
 }
 
@@ -189,14 +190,17 @@ func TestCollectCodexDesktopTurnEmitsCompletedMessageAsNativeProgress(t *testing
 	var progress []ProgressEvent
 	collectCodexTurnText(
 		assembler,
-		&codexTurnEvent{Kind: "item_completed", ItemID: "message-1", Text: "我先读取当前实现。"},
+		&codexTurnEvent{
+			Kind: "item_completed", ItemID: "message-1", MessagePhase: "commentary", Text: "我先读取当前实现。",
+		},
 		progressCallbacks{onEvent: func(event ProgressEvent) { progress = append(progress, event) }},
 		newCodexTurnDiagnostics(codexTurnDiagnosticsLimit),
+		&codexMessageProgressBuffer{},
 	)
 	if assembler.finalText() != "我先读取当前实现。" {
 		t.Fatalf("final text=%q", assembler.finalText())
 	}
-	if len(progress) != 1 || progress[0].Kind != ProgressKindMessage || progress[0].Text != "我先读取当前实现。" {
+	if len(progress) != 1 || progress[0].Kind != ProgressKindCommentary || progress[0].Text != "我先读取当前实现。" {
 		t.Fatalf("progress=%#v", progress)
 	}
 }

@@ -213,8 +213,8 @@ func TestSendToNamedAgentNativeStreamCanKeepFinalReplyOutsideStream(t *testing.T
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "feishu:ou_user", routeUserID: "feishu:ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
-	if reply.Stream.Completed != "" {
-		t.Fatalf("completed=%q, want status-only completion card", reply.Stream.Completed)
+	if reply.Stream.Completed != "[mock] 过程片段" {
+		t.Fatalf("completed=%q, want terminal card to retain the Agent progress reply", reply.Stream.Completed)
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "[mock] 最终结果" {
 		t.Fatalf("texts=%#v, want final reply as separate message", reply.Texts)
@@ -234,8 +234,8 @@ func TestFinalReplyOutsideStreamFailureDoesNotExposeStatusSentinel(t *testing.T)
 
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "ou_user", routeUserID: "ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
-	if !strings.Contains(reply.Stream.Failed, "boom") {
-		t.Fatalf("failed card=%q，want 即时任务卡显示真实失败", reply.Stream.Failed)
+	if reply.Stream.Failed != progressNoStructuredRecord {
+		t.Fatalf("failed card=%q，want explicit no-progress terminal content", reply.Stream.Failed)
 	}
 	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "boom") {
 		t.Fatalf("texts=%#v，want 单条真实失败回复", reply.Texts)
@@ -273,7 +273,7 @@ func TestNativeStreamProgressCollapsesRepeatedStructuredStatus(t *testing.T) {
 	}
 }
 
-func TestNativeStreamCollapsesStructuredTimelineAtTerminal(t *testing.T) {
+func TestNativeStreamShowsStructuredTimelineAfterAgentReply(t *testing.T) {
 	h := NewHandler(nil, nil)
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
@@ -286,20 +286,137 @@ func TestNativeStreamCollapsesStructuredTimelineAtTerminal(t *testing.T) {
 	)
 	timeline := "**执行进度**\n\n- ✅ 定位问题\n- • 运行回归测试"
 	session.onTaskProgress(taskProgressUpdate{
-		latest: "运行回归测试", card: timeline, timeline: true,
+		latest: "运行回归测试", card: timeline, timeline: true, commentary: true,
 	})
 	time.Sleep(taskQueueProbeDelay)
 	_ = finish(progressStatusOnlyComplete, false)
 
-	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != timeline {
-		t.Fatalf("updates=%#v, want complete compact timeline", reply.Stream.Updates)
+	wantActive := timeline + "\n\n" + platform.TaskStreamThinkingIndicator
+	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != wantActive {
+		t.Fatalf("updates=%#v, want compact timeline followed by thinking", reply.Stream.Updates)
 	}
 	if reply.Stream.Completed != "" {
 		t.Fatalf("completed=%q, want progress collapsed at status-only terminal", reply.Stream.Completed)
 	}
 }
 
-func TestNativeMessageProgressPreservesFullCardText(t *testing.T) {
+func TestNativeStreamShowsFirstEffectiveNonCommandProgress(t *testing.T) {
+	h := NewHandler(nil, nil)
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	_, finish, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "codex", "/workspace/project", "检查任务", cfg,
+	)
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{owner: "user-1", agentName: "codex"})
+	fileUpdate, ok := task.recordProgressUpdate(time.Now(), agent.ProgressEvent{
+		ID: "file:progress", Kind: agent.ProgressKindFile,
+		State: agent.ProgressStateCompleted, Sequence: 1, Text: "检查进度实现",
+	})
+	if !ok {
+		t.Fatal("file progress should be recorded")
+	}
+	session.onTaskProgress(fileUpdate)
+	waitUntil(t, func() bool { return len(reply.Stream.UpdatesSnapshot()) > 0 })
+	updates := reply.Stream.UpdatesSnapshot()
+	first := updates[len(updates)-1]
+	if !strings.Contains(first, "检查进度实现") || !strings.HasSuffix(strings.TrimSpace(first), platform.TaskStreamThinkingIndicator) {
+		t.Fatalf("first update=%q, want file progress followed by thinking", first)
+	}
+	if strings.Contains(first, "等待 Agent") || strings.Contains(first, "连接正常") {
+		t.Fatalf("first update=%q, redundant synthetic waiting copy must be absent", first)
+	}
+
+	const commentary = "我先检查当前实现，再运行回归测试。"
+	commentaryUpdate, ok := task.recordProgressUpdate(time.Now().Add(time.Second), agent.ProgressEvent{
+		ID: "agent-message:first", Kind: agent.ProgressKindCommentary,
+		State: agent.ProgressStateCompleted, Sequence: 2, Text: commentary,
+	})
+	if !ok {
+		t.Fatal("commentary should be recorded")
+	}
+	session.onTaskProgress(commentaryUpdate)
+	waitUntil(t, func() bool { return len(reply.Stream.UpdatesSnapshot()) > 1 })
+	updates = reply.Stream.UpdatesSnapshot()
+	last := updates[len(updates)-1]
+	if !strings.Contains(last, "检查进度实现") || !strings.Contains(last, commentary) {
+		t.Fatalf("update=%q, want accumulated structured progress and Agent reply", last)
+	}
+	if strings.Count(last, "思考中.....") != 1 || !strings.HasSuffix(strings.TrimSpace(last), "思考中.....") {
+		t.Fatalf("update=%q, want one thinking indicator at the bottom", last)
+	}
+	if strings.Contains(last, "等待 Agent") || strings.Contains(last, "连接正常") {
+		t.Fatalf("update=%q, redundant synthetic waiting copy must be absent", last)
+	}
+	_ = finish(progressStatusOnlyComplete, false)
+}
+
+func TestTaskProgressUpdateHasEffectiveProgressAcceptsNonCommandEvents(t *testing.T) {
+	tests := []struct {
+		name   string
+		update taskProgressUpdate
+		want   bool
+	}{
+		{name: "commentary flag", update: taskProgressUpdate{commentary: true}, want: true},
+		{name: "current explanation", update: taskProgressUpdate{currentExplanation: "正在检查实现"}, want: true},
+		{name: "commentary event", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindCommentary, Text: "正在检查实现"}}}, want: true},
+		{name: "plan", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindPlan, Text: "先定位问题"}}}, want: true},
+		{name: "file", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindFile, Text: "修改进度实现"}}}, want: true},
+		{name: "tool", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindTool, Text: "读取项目结构"}}}, want: true},
+		{name: "command", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindCommand, Text: "执行 go test"}}}, want: false},
+		{name: "thought", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindThought, Text: "内部推理"}}}, want: false},
+		{name: "status", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindStatus, Text: "等待 Agent"}}}, want: false},
+		{name: "approval", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindApproval, Text: "等待审批"}}}, want: false},
+		{name: "empty plan", update: taskProgressUpdate{timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindPlan}}}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := taskProgressUpdateHasEffectiveProgress(tt.update); got != tt.want {
+				t.Fatalf("taskProgressUpdateHasEffectiveProgress()=%t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNativeStreamKeepsUpdatingAfterCommentaryLeavesBoundedTimeline(t *testing.T) {
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.EnableTyping = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	cfg.SummaryIntervalSeconds = 0
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	_, finish, session := NewHandler(nil, nil).startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "codex", "/workspace/project", "检查任务", cfg,
+	)
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{owner: "user-1", agentName: "codex"})
+	task.setProgressTimelineLimit(1)
+	commentaryUpdate, _ := task.recordProgressUpdate(time.Now(), agent.ProgressEvent{
+		ID: "agent-message:first", Kind: agent.ProgressKindCommentary,
+		State: agent.ProgressStateCompleted, Sequence: 1, Text: "我先检查当前实现。",
+	})
+	session.onTaskProgress(commentaryUpdate)
+	waitUntil(t, func() bool { return len(reply.Stream.UpdatesSnapshot()) == 1 })
+
+	fileUpdate, _ := task.recordProgressUpdate(time.Now().Add(time.Second), agent.ProgressEvent{
+		ID: "file:progress", Kind: agent.ProgressKindFile,
+		State: agent.ProgressStateCompleted, Sequence: 2, Text: "已完成实现检查",
+	})
+	if len(fileUpdate.timelineItems) != 1 || fileUpdate.timelineItems[0].Kind != agent.ProgressKindFile {
+		t.Fatalf("timeline=%#v, want commentary evicted by the positive window", fileUpdate.timelineItems)
+	}
+	session.onTaskProgress(fileUpdate)
+	waitUntil(t, func() bool { return len(reply.Stream.UpdatesSnapshot()) == 2 })
+	last := reply.Stream.UpdatesSnapshot()[1]
+	if !strings.Contains(last, "已完成实现检查") || !strings.HasSuffix(last, platform.TaskStreamThinkingIndicator) {
+		t.Fatalf("last update=%q, want continued progress after the first Agent reply", last)
+	}
+	_ = finish(progressStatusOnlyComplete, false)
+}
+
+func TestCodexCommentaryProgressUpdatesTimelineCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream
@@ -311,11 +428,21 @@ func TestNativeMessageProgressPreservesFullCardText(t *testing.T) {
 		context.Background(), reply, "[codex] ", "codex", "/workspace/project", "原生进度", cfg,
 	)
 	const native = "我先检查当前实现。\n\n- 保留 Codex 原文\n- 不生成工具时间线"
-	session.onTaskProgress(taskProgressUpdate{latest: native, card: native, verbatim: true})
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{owner: "user-1", agentName: "codex"})
+	update, ok := task.recordProgressUpdate(time.Now(), agent.ProgressEvent{
+		ID: "agent-message:message-1", Kind: agent.ProgressKindCommentary,
+		State: agent.ProgressStateCompleted, Sequence: 1, Text: native,
+	})
+	if !ok {
+		t.Fatal("native commentary should create a task progress update")
+	}
+	session.onTaskProgress(update)
 	time.Sleep(taskQueueProbeDelay)
 	_ = finish("最终结果", false)
 
-	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != native {
+	if len(reply.Stream.Updates) == 0 || !strings.Contains(reply.Stream.Updates[len(reply.Stream.Updates)-1], "**执行进度**") ||
+		strings.Contains(reply.Stream.Updates[len(reply.Stream.Updates)-1], "**当前说明**") ||
+		!strings.Contains(reply.Stream.Updates[len(reply.Stream.Updates)-1], native) {
 		t.Fatalf("updates=%#v", reply.Stream.Updates)
 	}
 	if reply.Stream.Completed != "最终结果" {
@@ -323,7 +450,7 @@ func TestNativeMessageProgressPreservesFullCardText(t *testing.T) {
 	}
 }
 
-func TestCodexNativeMessageProgressUsesVerbatimCard(t *testing.T) {
+func TestCodexNativeCommentaryEntersTimelineButFinalStaysOutsideCard(t *testing.T) {
 	const native = "我先检查当前实现。\n\n- 保留 Codex 原文\n- 不生成工具时间线"
 	h := NewHandler(nil, nil)
 	ag := &fakeStructuredProgressAgent{
@@ -331,7 +458,7 @@ func TestCodexNativeMessageProgressUsesVerbatimCard(t *testing.T) {
 			fakeAgent: fakeAgent{reply: "最终结果"}, delay: taskQueueProbeDelay,
 		},
 		events: []agent.ProgressEvent{{
-			ID: "agent-message:message-1", Kind: agent.ProgressKindMessage,
+			ID: "agent-message:message-1", Kind: agent.ProgressKindCommentary,
 			State: agent.ProgressStateCompleted, Sequence: 1, Text: native,
 		}},
 	}
@@ -343,7 +470,7 @@ func TestCodexNativeMessageProgressUsesVerbatimCard(t *testing.T) {
 	cfg.SummaryIntervalSeconds = 0
 	h.SetProgressConfig(cfg)
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{string(platform.PlatformFeishu): cfg})
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true})
 	executionKey := h.agentExecutionKeyForRoute("feishu:ou_user", "feishu:ou_user", "codex", ag)
 
 	h.sendToNamedAgent(agentMessageRequest{
@@ -356,11 +483,21 @@ func TestCodexNativeMessageProgressUsesVerbatimCard(t *testing.T) {
 		return !active
 	})
 
-	if len(reply.Stream.Updates) == 0 || reply.Stream.Updates[len(reply.Stream.Updates)-1] != native {
-		t.Fatalf("updates=%#v", reply.Stream.Updates)
+	foundCommentary := false
+	for _, update := range reply.Stream.Updates {
+		if strings.Contains(update, "**执行进度**") && !strings.Contains(update, "**当前说明**") && strings.Contains(update, native) {
+			foundCommentary = true
+		}
+		if strings.Contains(update, "最终结果") {
+			t.Fatalf("final answer entered task card: updates=%#v", reply.Stream.Updates)
+		}
 	}
-	if reply.Stream.Completed != "[codex] 最终结果" {
-		t.Fatalf("completed=%q", reply.Stream.Completed)
+	if !foundCommentary {
+		t.Fatalf("commentary missing from task card: updates=%#v", reply.Stream.Updates)
+	}
+	wantTerminal := "[codex] **执行进度**\n\n" + native
+	if reply.Stream.Completed != wantTerminal || len(reply.Texts) != 1 || reply.Texts[0] != "[codex] 最终结果" {
+		t.Fatalf("completed=%q texts=%#v, want independent final result", reply.Stream.Completed, reply.Texts)
 	}
 }
 
@@ -374,6 +511,7 @@ func TestStructuredAgentNativeStreamBuildsCompactTimeline(t *testing.T) {
 			{ID: "plan", Kind: agent.ProgressKindPlan, State: agent.ProgressStateRunning, Sequence: 1, Text: "定位问题"},
 			{ID: "command:test", Kind: agent.ProgressKindCommand, State: agent.ProgressStateRunning, Sequence: 2, Text: "运行 go test ./messaging"},
 			{ID: "command:test", Kind: agent.ProgressKindCommand, State: agent.ProgressStateCompleted, Sequence: 3, Text: "运行 go test ./messaging"},
+			{ID: "agent-message:first", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 4, Text: "我正在整理验证结果。"},
 		},
 	}
 	cfg := config.DefaultProgressConfig()

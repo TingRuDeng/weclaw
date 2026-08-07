@@ -24,9 +24,12 @@ func (h *Handler) claudeSwitchTargets(route claudeSessionRoute) ([]codexWorkspac
 		return nil, fmt.Errorf("读取 Claude 会话目录失败: %w", err)
 	}
 	views := make([]codexWorkspaceView, 0, len(sessions))
-	registry := h.workspaceRegistrySnapshot(route.AgentName)
+	registry, registryErr := h.ensureWorkspaceRegistry().Snapshot(route.AgentName)
+	if registryErr != nil {
+		return nil, fmt.Errorf("Claude 会话导航状态不可用，请检查 workspace-registry.json 后重试")
+	}
 	for _, session := range sessions {
-		if registry.IsHidden(session.Cwd) {
+		if registry.IsHidden(session.Cwd) || registry.IsSessionHidden(session.ID) {
 			continue
 		}
 		if !route.Admin && !h.isWorkspaceAllowed(session.Cwd) {
@@ -46,6 +49,9 @@ func (h *Handler) claudeDisplayTargets(route claudeSessionRoute) ([]codexWorkspa
 	}
 	binding := h.ensureClaudeSessions().binding(route.BindingKey)
 	if binding.Status != claudeBindingReady || strings.TrimSpace(binding.SessionID) == "" {
+		return views, nil
+	}
+	if h.workspaceRegistrySnapshot(route.AgentName).IsSessionHidden(binding.SessionID) {
 		return views, nil
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(binding.WorkspaceRoot)

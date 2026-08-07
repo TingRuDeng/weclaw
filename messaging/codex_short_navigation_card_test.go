@@ -27,7 +27,7 @@ func TestFeishuCodexShortNavigationKeepsCardState(t *testing.T) {
 	}}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), shortNavigationMessage("short-enter", "/cx 0"), reply)
+	h.HandleMessage(context.Background(), shortNavigationMessage("short-enter", "/cx 1"), reply)
 	if len(reply.Choices) != 1 || !strings.Contains(reply.Choices[0].Prompt, "alpha 会话") {
 		t.Fatalf("enter choices=%#v, want session card", reply.Choices)
 	}

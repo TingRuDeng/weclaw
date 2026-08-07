@@ -26,6 +26,11 @@ func (s *sdkMessageSender) ReplyTextIdempotent(ctx context.Context, messageID st
 	return s.replyMessageWithUUID(ctx, messageID, larkim.MsgTypeText, content, operationID)
 }
 
+// ReplyCardJSONIdempotent 把静态交互卡片回复到原消息 / 话题，并使用 UUID 去重重试。
+func (s *sdkMessageSender) ReplyCardJSONIdempotent(ctx context.Context, messageID string, cardJSON string, operationID string) error {
+	return s.replyMessageWithUUID(ctx, messageID, larkim.MsgTypeInteractive, cardJSON, operationID)
+}
+
 // ReplyImage 上传本地图片并回复到原消息 / 话题。
 func (s *sdkMessageSender) ReplyImage(ctx context.Context, messageID string, localPath string) error {
 	content, err := s.imageMessageContent(ctx, "", localPath)

@@ -180,6 +180,18 @@ func optionalIdempotentTextReplier(reply platform.Replier) (platform.IdempotentT
 	return idempotent, ok
 }
 
+func optionalIdempotentResultReplier(reply platform.Replier) (platform.IdempotentResultReplier, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		idempotent, supported := optionalIdempotentResultReplier(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedIdempotentResultReplier{reply: serialized, idempotent: idempotent}, true
+	}
+	idempotent, ok := reply.(platform.IdempotentResultReplier)
+	return idempotent, ok
+}
+
 func optionalDurableTerminalReplier(reply platform.Replier) (platform.DurableTerminalReplier, bool) {
 	if serialized, ok := reply.(*serializedReplier); ok {
 		durable, supported := optionalDurableTerminalReplier(serialized.inner)
@@ -236,6 +248,17 @@ func (s serializedIdempotentTextReplier) SendTextIdempotent(ctx context.Context,
 	return s.idempotent.SendTextIdempotent(ctx, text, deliveryKey)
 }
 
+type serializedIdempotentResultReplier struct {
+	reply      *serializedReplier
+	idempotent platform.IdempotentResultReplier
+}
+
+func (s serializedIdempotentResultReplier) SendResultIdempotent(ctx context.Context, result platform.TerminalResult, deliveryKey string) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.idempotent.SendResultIdempotent(ctx, result, deliveryKey)
+}
+
 type serializedDurableTerminalReplier struct {
 	reply   *serializedReplier
 	durable platform.DurableTerminalReplier
@@ -284,14 +307,26 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 	if strings.TrimSpace(projection.text) == "" && !req.progress.hasDurableTerminalStream() {
 		return false, false
 	}
+	resultTitle, richResult := req.progress.terminalResultPresentation()
 	recoveryDraft := terminalOutboxDraft{
 		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed, Stopped: req.stopped,
+		ResultTitle: resultTitle, RichResult: richResult,
 		Text: terminalRecoveryText(req.progress, projection.text, req.failed, req.stopped), Trace: req.delivery.trace,
 	}
-	reservation, err := outbox.reserve(recoveryDraft)
-	if err != nil {
+	reservationID := req.progress.activeRecoveryReservation()
+	if reservationID == "" {
+		reservation, err := outbox.reserve(recoveryDraft)
+		if err != nil {
+			h.recordTraceStage(req.delivery.trace, "terminal.outbox", "failed", err.Error())
+			log.Printf("[terminal-outbox] failed to persist terminal recovery draft; using legacy terminal path: %v", err)
+			return false, false
+		}
+		reservationID = reservation.ID
+	}
+	if err := outbox.stageReservationResult(reservationID, recoveryDraft); err != nil {
 		h.recordTraceStage(req.delivery.trace, "terminal.outbox", "failed", err.Error())
-		log.Printf("[terminal-outbox] failed to persist terminal recovery draft; using legacy terminal path: %v", err)
+		log.Printf("[terminal-outbox] failed to stage final result before freezing stream; using legacy terminal path: %v", err)
+		outbox.releaseReservation(reservationID)
 		return false, false
 	}
 	prepared, err := req.progress.prepareDurableTerminal(req.delivery.replyWriter, projection.text, req.failed, req.stopped)
@@ -320,26 +355,26 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 	}
 	draft := terminalOutboxDraft{
 		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed, Stopped: req.stopped,
-		Checkpoint: checkpoint, Text: text, Notification: prepared.notification, Trace: req.delivery.trace,
+		Checkpoint: checkpoint, ResultTitle: resultTitle, RichResult: richResult,
+		Text: text, Notification: prepared.notification, Trace: req.delivery.trace,
 	}
 	if checkpoint == nil && strings.TrimSpace(text) == "" && strings.TrimSpace(draft.Notification) == "" {
-		outbox.releaseReservation(reservation.ID)
-		return false, true
+		draft.Text = recoveryDraft.Text
 	}
 	ctx := context.WithoutCancel(req.delivery.ctx)
-	if err := outbox.commitReservation(reservation.ID, draft); err != nil {
+	if err := outbox.commitReservation(reservationID, draft); err != nil {
 		h.recordTraceStage(req.delivery.trace, "terminal.outbox", "failed", err.Error())
 		log.Printf("[terminal-outbox] failed to persist prepared terminal delivery; recovery text remains queued: %v", err)
-		if attemptErr := outbox.attempt(ctx, reservation.ID, req.delivery.replyWriter); attemptErr != nil {
-			log.Printf("[terminal-outbox] recovery text remains pending id=%s: %v", reservation.ID, attemptErr)
+		if attemptErr := outbox.attempt(ctx, reservationID, req.delivery.replyWriter); attemptErr != nil {
+			log.Printf("[terminal-outbox] recovery text remains pending id=%s: %v", reservationID, attemptErr)
 		}
 		outbox.signal()
 		return false, true
 	}
 	h.recordTraceStage(req.delivery.trace, "terminal.outbox", "persisted", "terminal delivery persisted")
-	if err := outbox.attempt(ctx, reservation.ID, req.delivery.replyWriter); err != nil {
+	if err := outbox.attempt(ctx, reservationID, req.delivery.replyWriter); err != nil {
 		log.Printf("[terminal-outbox] delivery pending id=%s platform=%s account=%s: %v",
-			reservation.ID, draft.Route.Platform, draft.Route.AccountID, err)
+			reservationID, draft.Route.Platform, draft.Route.AccountID, err)
 	}
 	outbox.signal()
 	return prepared.consumed && checkpoint != nil, true
@@ -368,10 +403,6 @@ func finishProgressWithReply(finish func(string, bool) bool, reply string, faile
 
 func finishProgressWithReplyForPlatform(replyWriter platform.Replier, finish func(string, bool) bool, reply string, failed bool) bool {
 	if shouldKeepFinalReplyOutsideStream(replyWriter, reply) {
-		if failed {
-			_ = finish(reply, true)
-			return false
-		}
 		_ = finish(progressStatusOnlyComplete, failed)
 		return false
 	}
@@ -382,7 +413,7 @@ func shouldKeepFinalReplyOutsideStream(replyWriter platform.Replier, reply strin
 	if replyWriter == nil || strings.TrimSpace(reply) == "" {
 		return false
 	}
-	return replyWriter.Capabilities().FinalReplyOutsideStream && canConsumeFinalReplyInStream(reply)
+	return replyWriter.Capabilities().FinalReplyOutsideStream
 }
 
 func canConsumeFinalReplyInStream(reply string) bool {

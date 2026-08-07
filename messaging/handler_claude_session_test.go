@@ -180,14 +180,14 @@ func TestClaudeCcLsSortsACPSessionsAcrossWorkspaces(t *testing.T) {
 	if strings.Index(text, "Alpha") > strings.Index(text, "Beta") {
 		t.Fatalf("text=%q，期望按 ACP 更新时间排序", text)
 	}
-	result := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 0")
+	result := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 1")
 	if ag.useSessionID != "session-a" || !strings.Contains(result, "已切换") {
 		t.Fatalf("session=%q result=%q", ag.useSessionID, result)
 	}
 }
 
 func TestClaudeBindingChangeRejectedWhileTaskRuns(t *testing.T) {
-	for _, command := range []string{"/cc switch 0", "/cc new"} {
+	for _, command := range []string{"/cc switch 1", "/cc new"} {
 		t.Run(command, func(t *testing.T) {
 			h, ag, workspace := newClaudeACPNavigationHandler(t)
 			key := claudeBindingKey("user-1", "claude")

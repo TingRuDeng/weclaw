@@ -148,18 +148,18 @@ func TestHandleCodexTurnCompletedUsesNestedCompletedStatus(t *testing.T) {
 	}
 }
 
-func TestHandleCodexItemCompletedAcceptsOfficialAgentMessageText(t *testing.T) {
+func TestHandleCodexItemCompletedAcceptsOfficialCommentaryText(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	turnCh := make(chan *codexTurnEvent, 1)
 	a.notifyMu.Lock()
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
 
-	a.handleCodexItemCompletedAt(json.RawMessage(`{"threadId":"thread-1","item":{"id":"message-1","type":"agentMessage","text":"Codex 原文","status":"completed"}}`), 19)
+	a.handleCodexItemCompletedAt(json.RawMessage(`{"threadId":"thread-1","item":{"id":"message-1","type":"agentMessage","phase":"commentary","text":"Codex 原文"}}`), 19)
 
 	select {
 	case event := <-turnCh:
-		if event.Kind != "item_completed" || event.ItemID != "message-1" || event.Text != "Codex 原文" || event.Sequence != 19 {
+		if event.Kind != "item_completed" || event.ItemID != "message-1" || event.MessagePhase != "commentary" || event.Text != "Codex 原文" || event.Sequence != 19 {
 			t.Fatalf("event=%#v", event)
 		}
 	default:
@@ -167,25 +167,137 @@ func TestHandleCodexItemCompletedAcceptsOfficialAgentMessageText(t *testing.T) {
 	}
 }
 
-func TestCodexSyntheticItemsDoNotEmitUserProgress(t *testing.T) {
+func TestCodexStructuredItemsEmitSafeLifecycleProgress(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	turnCh := make(chan *codexTurnEvent, 4)
+	turnCh := make(chan *codexTurnEvent, 8)
 	a.notifyMu.Lock()
 	a.turnCh["thread-1"] = turnCh
 	a.notifyMu.Unlock()
 
-	for _, params := range []string{
-		`{"threadId":"thread-1","item":{"id":"cmd-1","type":"commandExecution","command":["go","test","./..."],"status":"inProgress"}}`,
-		`{"threadId":"thread-1","item":{"id":"file-1","type":"fileChange","changes":[{"path":"secret.go"}],"status":"inProgress"}}`,
-		`{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"explore","status":"inProgress"}}`,
-	} {
-		a.handleCodexItemStarted(json.RawMessage(params))
+	tests := []struct {
+		params      string
+		wantID      string
+		wantKind    ProgressKind
+		wantSummary string
+	}{
+		{
+			params:      `{"threadId":"thread-1","item":{"id":"file-1","type":"fileChange","changes":[{"path":"/private/workspace/secret.go","diff":"private diff","kind":{"type":"update"}},{"path":"/private/workspace/other.go","diff":"private diff","kind":{"type":"add"}}],"status":"inProgress"}}`,
+			wantID:      "file:file-1",
+			wantKind:    ProgressKindFile,
+			wantSummary: "修改 2 个文件",
+		},
+		{
+			params:      `{"threadId":"thread-1","item":{"id":"tool-1","type":"mcpToolCall","server":"codegraph","tool":"explore","arguments":{"access_token":"secret-token"},"result":{"private":"output"},"status":"inProgress"}}`,
+			wantID:      "tool:tool-1",
+			wantKind:    ProgressKindTool,
+			wantSummary: "调用工具 codegraph/explore",
+		},
+		{
+			params:      `{"threadId":"thread-1","item":{"id":"dynamic-1","type":"dynamicToolCall","namespace":"functions","tool":"exec","arguments":{"api_key":"secret-token"},"contentItems":[{"type":"inputText","text":"private output"}],"status":"inProgress"}}`,
+			wantID:      "tool:dynamic-1",
+			wantKind:    ProgressKindTool,
+			wantSummary: "调用工具 functions/exec",
+		},
 	}
+	for _, test := range tests {
+		a.handleCodexItemStartedAt(json.RawMessage(test.params), 17)
+		event := <-turnCh
+		if event.Kind != "progress" || event.Progress == nil {
+			t.Fatalf("event=%#v, want structured progress", event)
+		}
+		progress := *event.Progress
+		if progress.ID != test.wantID || progress.Kind != test.wantKind || progress.State != ProgressStateRunning ||
+			progress.Sequence != 17 || progress.Summary != test.wantSummary || progress.Text != test.wantSummary {
+			t.Fatalf("progress=%#v", progress)
+		}
+		if strings.Contains(progress.DisplayText(), "secret-token") || strings.Contains(progress.DisplayText(), "private output") ||
+			strings.Contains(progress.DisplayText(), "/private/workspace") {
+			t.Fatalf("progress leaked raw item content: %#v", progress)
+		}
+	}
+}
 
-	select {
-	case event := <-turnCh:
-		t.Fatalf("synthetic item leaked into user progress: %#v", event)
-	default:
+func TestCodexCommandLifecycleProvidesHiddenContinuationSignal(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 2)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	started := json.RawMessage(`{"threadId":"thread-1","item":{"id":"cmd-1","type":"commandExecution","command":"go test ./...","status":"inProgress"}}`)
+	completed := json.RawMessage(`{"threadId":"thread-1","item":{"id":"cmd-1","type":"commandExecution","command":"go test ./...","aggregatedOutput":"private output","status":"completed"}}`)
+	a.handleCodexItemStartedAt(started, 20)
+	a.handleCodexItemCompletedAt(completed, 21)
+
+	var events []*codexTurnEvent
+	for {
+		select {
+		case event := <-turnCh:
+			events = append(events, event)
+		default:
+			if len(events) != 2 {
+				t.Fatalf("events=%#v, want hidden start and completion signals", events)
+			}
+			for index, event := range events {
+				if event.Kind != "activity" || event.ItemID != "cmd-1" || event.Progress != nil || event.Text != "" ||
+					event.Sequence != uint64(20+index) {
+					t.Fatalf("event %d=%#v, want non-display continuation signal", index, event)
+				}
+			}
+			return
+		}
+	}
+}
+
+func TestCodexStructuredItemCompletionUpdatesSameProgressID(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 2)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	started := json.RawMessage(`{"threadId":"thread-1","item":{"id":"file-1","type":"fileChange","changes":[{"path":"/workspace/file.go"}],"status":"inProgress"}}`)
+	completed := json.RawMessage(`{"threadId":"thread-1","item":{"id":"file-1","type":"fileChange","changes":[{"path":"/workspace/file.go","diff":"private diff"}],"status":"completed"}}`)
+	a.handleCodexItemStartedAt(started, 20)
+	a.handleCodexItemCompletedAt(completed, 21)
+
+	first, second := (<-turnCh).Progress, (<-turnCh).Progress
+	if first == nil || second == nil || first.ID != "file:file-1" || second.ID != first.ID ||
+		first.State != ProgressStateRunning || second.State != ProgressStateCompleted || second.Sequence != 21 {
+		t.Fatalf("started=%#v completed=%#v", first, second)
+	}
+}
+
+func TestCodexPlanUpdateEmitsCurrentSemanticStep(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	message := rpcResponse{
+		Method:   "turn/plan/updated",
+		Sequence: 30,
+		Params: json.RawMessage(`{
+			"threadId":"thread-1","turnId":"turn-1","explanation":"private explanation",
+			"plan":[
+				{"step":"定位根因","status":"completed"},
+				{"step":"补充回归测试","status":"inProgress"},
+				{"step":"执行全仓验证","status":"pending"}
+			]
+		}`),
+	}
+	if !a.dispatchCodexNotification(message, "") {
+		t.Fatal("turn/plan/updated should be consumed")
+	}
+	event := <-turnCh
+	if event.Kind != "progress" || event.Progress == nil {
+		t.Fatalf("event=%#v", event)
+	}
+	progress := *event.Progress
+	if progress.ID != "plan:turn-1:2" || progress.Kind != ProgressKindPlan || progress.State != ProgressStateRunning ||
+		progress.Sequence != 30 || progress.Text != "补充回归测试" {
+		t.Fatalf("progress=%#v", progress)
 	}
 }
 
@@ -228,7 +340,6 @@ func TestCodexInternalProgressNotificationsAreConsumedWithoutUserProgress(t *tes
 	a.notifyMu.Unlock()
 
 	for _, method := range []string{
-		"turn/plan/updated",
 		"item/autoApprovalReview/started",
 		"guardianWarning",
 		"item/commandExecution/outputDelta",

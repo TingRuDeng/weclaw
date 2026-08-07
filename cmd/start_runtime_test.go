@@ -1,16 +1,50 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/messaging"
 )
+
+type shutdownDrainStub struct {
+	drained *atomic.Bool
+}
+
+func (s shutdownDrainStub) Drain(context.Context, bool) (messaging.RuntimeDrainResult, error) {
+	s.drained.Store(true)
+	return messaging.RuntimeDrainResult{ActiveTasks: 1}, nil
+}
+
+func TestRunUntilShutdownDrainsTasksBeforeCancellingPlatforms(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var terminalized atomic.Bool
+	platformStopped := make(chan bool, 1)
+	runtime := startRuntime{
+		ctx: ctx, cancel: cancel, drain: shutdownDrainStub{drained: &terminalized}, shutdownTimeout: time.Second,
+		runBridgeFn: func() error {
+			<-ctx.Done()
+			platformStopped <- terminalized.Load()
+			return nil
+		},
+	}
+	signals := make(chan os.Signal, 1)
+	signals <- syscall.SIGTERM
+	if err := runtime.runUntilShutdown(signals); err != nil {
+		t.Fatalf("runUntilShutdown: %v", err)
+	}
+	if drainedFirst := <-platformStopped; !drainedFirst {
+		t.Fatal("platform context was cancelled before active task terminalized")
+	}
+}
 
 func TestStopAllWeclawRemovesPidFileAfterProcessExit(t *testing.T) {
 	exists := true
@@ -226,6 +260,14 @@ func TestWriteRuntimeStatePersistsExecutableIdentity(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("runtime state mode=%#o, want 0600", got)
+	}
+}
+
+func TestCurrentServiceModeDetectsSystemdInvocation(t *testing.T) {
+	t.Setenv(daemonChildEnv, "")
+	t.Setenv("INVOCATION_ID", "test-systemd-invocation")
+	if got := currentServiceMode(); got != "systemd" {
+		t.Fatalf("currentServiceMode=%q, want systemd", got)
 	}
 }
 

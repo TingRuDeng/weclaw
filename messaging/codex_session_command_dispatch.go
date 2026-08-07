@@ -35,6 +35,21 @@ type codexSessionCommandPreparation struct {
 // prepareCodexSessionCommand 解析路由并在同一绑定锁内准备命令运行状态。
 func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessionCommandRequest) codexSessionCommandPreparation {
 	actorUserID, routeUserID := normalizeCodexCommandUsers(req)
+	if spec, handled, err := parseSessionVisibilityCommand(req.Trimmed, "/cx"); handled {
+		if err != nil {
+			return codexSessionCommandPreparation{result: textNavigationResult(err.Error())}
+		}
+		agentName, ok := h.codexAgentName()
+		if !ok {
+			return codexSessionCommandPreparation{result: textNavigationResult("当前没有配置 codex agent")}
+		}
+		result := h.handleSessionVisibilityCommand(sessionVisibilityCommandRequest{
+			Context: ctx, ActorUserID: actorUserID, RouteUserID: routeUserID,
+			AgentName: agentName, AgentKind: "codex", BindingKey: codexBindingKey(routeUserID, agentName),
+			Platform: req.Platform, Admin: h.codexSessionCommandAdmin(req, actorUserID), Private: req.Private, Spec: spec,
+		})
+		return codexSessionCommandPreparation{result: textNavigationResult(result)}
+	}
 	if spec, handled, err := parseWorkspaceCommand(req.Trimmed, "/cx"); handled {
 		if err != nil {
 			return codexSessionCommandPreparation{result: textNavigationResult(err.Error())}

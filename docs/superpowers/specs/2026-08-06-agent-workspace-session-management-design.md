@@ -47,6 +47,7 @@ Claude Code 官方支持在当前 session 中执行 `/rename <名称>`。ACP 没
 - **登记工作空间**：管理员明确加入 WeClaw 导航覆盖层的已有目录；即使目录还没有会话也可显示。
 - **隐藏工作空间**：管理员从 WeClaw 导航中移除的目录。隐藏只影响 WeClaw，不修改 Agent 目录、历史或源码。
 - **会话名称**：Codex thread 或 Claude session 的 Agent 级全局元数据，不是某个飞书或微信窗口的本地别名。
+- **隐藏会话**：管理员从 WeClaw 导航中移除的 Codex thread 或 Claude session。隐藏只影响 WeClaw 的列表、编号与选择入口，不调用 Agent 归档或删除接口。
 - **移除**：删除手工登记项并写入隐藏标记，防止同一路径因 Agent 再次发现而立即出现；重新 `add` 会解除隐藏。
 
 ## 用户命令契约
@@ -55,9 +56,13 @@ Claude Code 官方支持在当前 session 中执行 `/rename <名称>`。ACP 没
 | --- | --- | --- |
 | `/cx workspace add <路径>` | 管理员私聊 | 登记已有目录到当前 Codex Agent，并解除同路径隐藏状态 |
 | `/cx workspace remove <编号\|路径>` | 管理员私聊 | 从 WeClaw 的 Codex 导航移除目录，不删除目录和 thread |
+| `/cx session remove <编号\|threadId>` | 管理员私聊 | 隐藏 Codex thread，不归档或删除 Agent 历史 |
+| `/cx session restore <threadId>` | 管理员私聊 | 解除 Codex thread 的隐藏标记 |
 | `/cx rename current\|<编号> <名称>` | 可访问目标的用户 | 通过 `thread/name/set` 重命名 Codex thread |
 | `/cc workspace add <路径>` | 管理员私聊 | 登记已有目录到当前 Claude Agent，并解除同路径隐藏状态 |
 | `/cc workspace remove <编号\|路径>` | 管理员私聊 | 从 WeClaw 的 Claude 导航移除目录，不删除目录和 session |
+| `/cc session remove <编号\|sessionId>` | 管理员私聊 | 隐藏 Claude session，不删除 Agent 历史 |
+| `/cc session restore <sessionId>` | 管理员私聊 | 解除 Claude session 的隐藏标记 |
 | `/cc rename current\|<编号> <名称>` | 可访问目标的用户 | 通过当前 ClaudeHost 的 `/rename` 重命名 Claude session |
 
 命令解析要求：
@@ -85,7 +90,7 @@ Claude Code 官方支持在当前 session 中执行 `/rename <名称>`。ACP 没
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "revision": 3,
   "agents": {
     "codex": {
@@ -100,6 +105,12 @@ Claude Code 官方支持在当前 session 中执行 `/rename <名称>`。ACP 没
           "root": "/srv/projects/legacy",
           "hidden_at": "2026-08-06T08:10:00Z"
         }
+      ],
+      "hidden_sessions": [
+        {
+          "id": "019example-session-id",
+          "hidden_at": "2026-08-06T08:15:00Z"
+        }
       ]
     }
   },
@@ -112,6 +123,8 @@ Claude Code 官方支持在当前 session 中执行 `/rename <名称>`。ACP 没
 - 路径以解析符号链接后的绝对干净路径作为唯一键。
 - `add` 幂等：已登记时不重复；已隐藏时原子解除隐藏。
 - `remove` 幂等：删除登记项并保留一个隐藏标记；重复调用返回“已移除”。
+- 会话 `remove/restore` 按 Agent 名称和 thread/session ID 幂等维护 `hidden_sessions`；恢复必须使用稳定 ID，避免列表变化后编号误恢复其他会话。
+- v1 文件可无损加载；下一次成功写入升级为 v2。未知版本仍失败关闭且不覆盖原文件。
 - 使用 copy-on-write 候选状态，先原子写入 `0600` 临时文件、同步并替换，成功后才发布内存状态。
 - 文件损坏或未知版本时不覆盖原文件；工作空间管理命令停用并报告可操作错误，Agent 原生目录仍受 `allowed_workspace_roots` 约束。
 - 登记目录后来消失时不展示；管理员仍可按已保存的完整路径执行 `remove` 清理记录。
@@ -136,6 +149,7 @@ flowchart LR
 4. 最后按操作者权限过滤；登记状态不能替代 `allowed_workspace_roots`。
 5. 同 basename 的目录在列表中追加最短可区分路径；名称解析不唯一时只接受编号或完整路径。
 6. 所有 `cd`、`switch`、`new` 和直接 ID 选择入口都复用同一可见性判断，不能只过滤展示层。
+7. 隐藏会话同时从文本列表、飞书卡片、编号解析、直接 ID 和过期卡片入口中过滤；registry 不可读时会话选择失败关闭。
 
 ### 移除门禁
 
@@ -155,6 +169,8 @@ flowchart LR
 5. Agent RPC。
 
 工作空间选择在提交 binding 前必须在同一 registry control 内复核 revision 和可见性。移除持有 registry control 后再检查当前 binding 与任务，从而避免“移除成功后又提交隐藏目录 binding”的竞态。
+
+会话隐藏同样属于主机级导航变更。目标仍被任一窗口绑定，或存在运行中、终态未确认任务时拒绝；操作者必须先切换或新建其他会话。成功后只写入隐藏标记，不改变 Agent 原生会话、标题和消息历史。
 
 ## Codex 会话重命名
 
@@ -228,20 +244,23 @@ sessionID -> { cwd, hostGeneration }
 | 普通用户执行 workspace add/remove | 拒绝并提示配置 `admin_users` |
 | 群聊或无法证明私聊的 workspace mutation | 拒绝主机级变更 |
 | 隐藏目录通过 thread/session ID 直接选择 | 拒绝，提示管理员重新登记 |
+| 隐藏会话通过编号、直接 ID 或旧卡片选择 | 拒绝，提示管理员执行对应 `session restore` |
+| 会话仍被窗口绑定或任务未终态 | 返回 busy，不写入隐藏标记 |
 | Codex Desktop follower 重命名 | 提示在 Codex App 中执行，不启动 shared Host |
 | Codex/Claude 目标有 active 或 uncertain writer | 返回 busy，不等待、不排队、不改变 binding |
 | Claude adapter 未公布 `rename` | 提示升级/核对 adapter，不把字符串当普通模型 prompt 发送 |
 | RPC 已发出但终态无法读回 | 返回结果未确认，保留 binding，要求重新列目录 |
 
-所有 workspace add/remove 与 rename 都写审计事件。审计记录操作者、平台、Agent、规范路径或脱敏会话 ID、成功/失败状态；不记录完整会话名称、prompt、Token 或凭据。
+所有 workspace add/remove、session remove/restore 与 rename 都写审计事件。审计记录操作者、平台、Agent、规范路径或脱敏会话 ID、成功/失败状态；不记录完整会话名称、prompt、Token 或凭据。
 
 ## 文件级实施范围
 
 ### 新增
 
 - `messaging/workspace_registry.go`：状态模型、目录合并、revision、访问和 control 门禁。
-- `messaging/workspace_registry_persistence.go`：v1 解码、原子持久化和损坏保护。
+- `messaging/workspace_registry_persistence.go`：v1/v2 解码、v2 原子持久化和损坏保护。
 - `messaging/workspace_commands.go`：Codex / Claude 共用的 add/remove 解析、权限和审计。
+- `messaging/session_visibility_commands.go`：Codex / Claude 会话隐藏与恢复的解析、占用门禁和审计。
 - `agent/codex_thread_rename.go`：`thread/name/set`、前后读取和未知终态错误。
 - `agent/claude_session_rename.go`：Host 加载、slash command 能力门禁、控制 prompt 与目录读回。
 - 对应 `_test.go` 文件。
@@ -285,6 +304,13 @@ sessionID -> { cwd, hostGeneration }
 - `session_info_update` 能被解析，最终成功必须由 `session/list.title` 读回确认。
 - 不调用独立 Claude CLI，不直接写 transcript，不调用 `session/delete`。
 
+### 会话隐藏与恢复
+
+- v1 registry 可加载，首次成功变更写为 v2；隐藏、重复隐藏、恢复和重复恢复均保持幂等。
+- 仅管理员私聊可变更；目标被任一窗口绑定或存在非终态任务时拒绝，持久化失败不发布内存 after-image。
+- Codex 与 Claude 的文本列表、飞书卡片、编号、直接 ID 和过期选择均不能重新选择隐藏会话；恢复后重新可见。
+- 实现不调用 Codex archive、Claude session 删除或私有状态文件修改能力。
+
 ### 验证命令
 
 ```bash
@@ -306,6 +332,7 @@ git diff --check
 2. 接入 workspace add/remove 命令和跨平台路由，验证并发 selection/remove。
 3. 实现 Codex rename 接口、消息命令和 Desktop follower 失败边界。
 4. 实现 Claude Host 级加载表、命令能力缓存和 rename 事务。
-5. 同步帮助、README、`docs/AI_CONTEXT.md`，执行全仓与发布门禁。
+5. 扩展 registry v2，接入 Codex/Claude 会话隐藏、恢复及所有导航入口过滤。
+6. 同步帮助、README、`docs/AI_CONTEXT.md`，执行全仓与发布门禁。
 
-回滚时可先停止广告并移除 workspace/rename 命令，再停用 registry overlay；保留 `workspace-registry.json` 供修复版本恢复，不自动删除。rename 不引入数据迁移，失败回滚只需保留原 binding 并重新读取 Agent 目录。由于首期没有目录或历史删除，回滚不需要恢复用户源码或会话文件。
+回滚时可先停止广告并移除 workspace/session/rename 命令，再停用 registry overlay；保留 `workspace-registry.json` 供修复版本恢复，不自动删除。rename 和会话隐藏都不修改 Agent 历史，失败回滚只需保留原 binding 并重新读取 Agent 目录；不需要恢复用户源码或会话文件。

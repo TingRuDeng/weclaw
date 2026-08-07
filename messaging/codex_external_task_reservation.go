@@ -72,6 +72,9 @@ func (h *Handler) reserveExternalCodexTask(opts externalCodexTaskOptions, prepar
 	h.tasks.mu.Lock()
 	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
+	if h.tasks.draining {
+		return externalCodexTaskReservation{}, ErrHandlerDraining
+	}
 	if task := h.tasks.active[opts.conversationID]; task != nil {
 		return h.reuseExternalCodexTaskReservationLocked(opts, prepared.state, task)
 	}

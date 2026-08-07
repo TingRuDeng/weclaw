@@ -9,6 +9,7 @@ type ProgressConfig struct {
 	InitialDelaySeconds    int    `json:"initial_delay_seconds,omitempty"`
 	SummaryIntervalSeconds int    `json:"summary_interval_seconds,omitempty"`
 	MaxProgressMessages    int    `json:"max_progress_messages,omitempty"`
+	StreamTimelineLimit    *int   `json:"stream_timeline_limit,omitempty"`
 	ShowTextPreview        *bool  `json:"show_text_preview,omitempty"`
 	PreviewRunes           int    `json:"preview_runes,omitempty"`
 	MaxTailRunes           int    `json:"max_tail_runes,omitempty"`
@@ -23,11 +24,13 @@ func DefaultProgressConfig() ProgressConfig {
 	enableTyping := true
 	showTextPreview := false
 	includePartialOnError := false
+	streamTimelineLimit := 0
 	return ProgressConfig{
 		Mode: "typing", SendAcceptance: &sendAcceptance, EnableTyping: &enableTyping,
 		TypingHeartbeatSeconds: 8, InitialDelaySeconds: 10, SummaryIntervalSeconds: 20,
 		MaxProgressMessages: 4, ShowTextPreview: &showTextPreview, PreviewRunes: 180,
-		MaxTailRunes: 1800, DuplicateTTLSeconds: 300,
+		StreamTimelineLimit: &streamTimelineLimit,
+		MaxTailRunes:        1800, DuplicateTTLSeconds: 300,
 		IncludePartialOnError: &includePartialOnError,
 	}
 }
@@ -47,6 +50,10 @@ func NormalizeProgressConfig(base ProgressConfig, override *ProgressConfig) Prog
 	if override.EnableTyping != nil {
 		cfg.EnableTyping = override.EnableTyping
 	}
+	if override.StreamTimelineLimit != nil {
+		value := *override.StreamTimelineLimit
+		cfg.StreamTimelineLimit = &value
+	}
 	cfg = mergeProgressNumbers(cfg, *override)
 	if override.ShowTextPreview != nil {
 		cfg.ShowTextPreview = override.ShowTextPreview
@@ -55,6 +62,14 @@ func NormalizeProgressConfig(base ProgressConfig, override *ProgressConfig) Prog
 		cfg.IncludePartialOnError = override.IncludePartialOnError
 	}
 	return cfg
+}
+
+// EffectiveStreamTimelineLimit 返回 stream 结构化时间线条数上限；0 表示不限制。
+func (c ProgressConfig) EffectiveStreamTimelineLimit() int {
+	if c.StreamTimelineLimit == nil {
+		return 0
+	}
+	return *c.StreamTimelineLimit
 }
 
 func mergeProgressNumbers(base ProgressConfig, override ProgressConfig) ProgressConfig {

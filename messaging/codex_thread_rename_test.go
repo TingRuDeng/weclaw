@@ -83,7 +83,7 @@ func TestCodexRenameListIndexUsesBrowsedWorkspace(t *testing.T) {
 
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1",
-		Trimmed: "/cx rename 0 列表 新名称", Platform: platform.PlatformFeishu,
+		Trimmed: "/cx rename 1 列表 新名称", Platform: platform.PlatformFeishu,
 	})
 
 	if calls := ag.calls(); len(calls) != 1 || calls[0] != (codexRenameCall{threadID: "thread-newer", name: "列表 新名称"}) {

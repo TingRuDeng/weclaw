@@ -28,7 +28,7 @@ func loadWorkspaceRegistryState(filePath string) (workspaceRegistryState, error)
 	if err := json.Unmarshal(data, &state); err != nil {
 		return workspaceRegistryState{}, fmt.Errorf("解析工作空间登记状态失败: %w", err)
 	}
-	if state.Version != workspaceRegistryVersion {
+	if state.Version != 1 && state.Version != workspaceRegistryVersion {
 		return workspaceRegistryState{}, fmt.Errorf("不支持的工作空间登记状态版本: %d", state.Version)
 	}
 	normalized, err := normalizeWorkspaceRegistryState(state)
@@ -72,8 +72,32 @@ func normalizeWorkspaceRegistryState(state workspaceRegistryState) (workspaceReg
 				visible = append(visible, entry)
 			}
 		}
-		normalized.Agents[name] = workspaceRegistryAgentState{Registered: visible, Hidden: hidden}
+		hiddenSessions, err := normalizeWorkspaceRegistrySessionEntries(entryState.HiddenSessions)
+		if err != nil {
+			return workspaceRegistryState{}, fmt.Errorf("Agent %q hidden_sessions 状态无效: %w", name, err)
+		}
+		normalized.Agents[name] = workspaceRegistryAgentState{
+			Registered: visible, Hidden: hidden, HiddenSessions: hiddenSessions,
+		}
 	}
+	return normalized, nil
+}
+
+func normalizeWorkspaceRegistrySessionEntries(entries []workspaceRegistrySessionEntry) ([]workspaceRegistrySessionEntry, error) {
+	normalized := make([]workspaceRegistrySessionEntry, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		id, err := normalizeWorkspaceRegistrySessionID(entry.ID)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, workspaceRegistrySessionEntry{ID: id, HiddenAt: strings.TrimSpace(entry.HiddenAt)})
+	}
+	sortWorkspaceRegistrySessionEntries(normalized)
 	return normalized, nil
 }
 

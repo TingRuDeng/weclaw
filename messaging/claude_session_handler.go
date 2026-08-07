@@ -20,6 +20,8 @@ func isClaudeSessionCommand(trimmed string) bool {
 		return len(fields) == 2
 	case "workspace":
 		return len(fields) >= 3
+	case "session":
+		return len(fields) >= 3
 	case "rename":
 		return true
 	case "cd", "switch":
@@ -70,6 +72,35 @@ func (h *Handler) handleClaudeSessionCommandForRouteRequest(ctx context.Context,
 	routeUserID := strings.TrimSpace(req.RouteUserID)
 	if routeUserID == "" {
 		routeUserID = actorUserID
+	}
+	if spec, handled, parseErr := parseSessionVisibilityCommand(req.Trimmed, "/cc"); handled {
+		if parseErr != nil {
+			return textNavigationResult(parseErr.Error())
+		}
+		agentName, ok := h.claudeAgentName()
+		if !ok {
+			return textNavigationResult("当前没有配置 claude agent")
+		}
+		if !req.Admin {
+			return textNavigationResult("仅管理员可以隐藏或恢复主机级会话导航。")
+		}
+		if !req.Private {
+			return textNavigationResult("会话隐藏与恢复只允许在私聊中执行。")
+		}
+		var ag agent.Agent
+		if spec.Action == "remove" {
+			var err error
+			_, ag, err = h.getClaudeSessionAgent(ctx)
+			if err != nil {
+				log.Printf("[claude-session] 获取 Claude Agent 失败: %v", err)
+				return textNavigationResult("Claude Agent 当前不可用，请稍后重试。")
+			}
+		}
+		return textNavigationResult(h.handleSessionVisibilityCommand(sessionVisibilityCommandRequest{
+			Context: ctx, ActorUserID: actorUserID, RouteUserID: routeUserID,
+			AgentName: agentName, AgentKind: "claude", BindingKey: claudeBindingKey(routeUserID, agentName), Agent: ag,
+			Platform: req.Platform, Admin: req.Admin, Private: req.Private, Spec: spec,
+		}))
 	}
 	if spec, handled, parseErr := parseWorkspaceCommand(req.Trimmed, "/cc"); handled {
 		if parseErr != nil {
@@ -168,7 +199,7 @@ func (h *Handler) routeClaudeSessionCommand(fields []string, route claudeSession
 	case "quota":
 		return textNavigationResult(h.renderClaudeQuota(route.Context, route.Agent))
 	case "new":
-		return textNavigationResult(h.handleClaudeNew(route))
+		return h.handleClaudeNewResult(route)
 	case "switch":
 		if len(fields) != 3 {
 			return textNavigationResult("用法: /cc switch <编号|sessionId>")

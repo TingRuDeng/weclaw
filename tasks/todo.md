@@ -1,5 +1,438 @@
 # 当前任务记录
 
+## 2026-08-07 Codex 无阶段自然语言进度回归修复
+
+### 目标
+
+恢复 Jump 真实 Codex 协议中未携带 `phase` 的用户可见中间消息：从第一条到最后一条中间说明持续写入飞书 `stream` 时间线；正常终态前的最后一条回答仍只通过独立结果卡交付。
+
+### 范围与验收标准
+
+- 明确标记为 `commentary` 的消息继续立即进入进度时间线，明确标记为 `final_answer` 的消息继续禁止进入。
+- 对 `phase` 为空的已完成 Agent 消息保留一条延迟判定：后续出现另一条消息、计划、文件、工具、审批或其他继续执行事件时，上一条判定为中间进度并原文展示。
+- 正常 `turn/completed` 前仍待判定的最后一条无阶段消息视为最终回答，不写入进度卡；最终回答继续由独立富文本结果卡发送。
+- 同一消息 ID 的重复快照只更新待判定内容，不制造重复进度；受控 turn 与接管/恢复 watcher 使用同一判定语义。
+- `stream_timeline_limit=0` 继续表示从第一条累计到最后一条中间进度并参与自动续卡；显式正数窗口和 Claude 行为不变。
+- 不恢复命令执行摘要、原始工具参数、逐 token、内部推理或最终回答到进度卡。
+
+### 实施步骤
+
+- [x] 先补受控 turn 与接管 watcher 的无阶段消息失败测试，确认当前实现会丢失自然语言进度。
+- [x] 实现单条延迟判定并复用现有 commentary 投影，保持显式阶段与最终回答边界。
+- [x] 执行 Agent、消息层定向测试，确认完整累计、正数窗口及最终结果独立投递没有回归。
+- [x] 执行全仓验证与差异复核；验证通过后再按用户后续指令决定是否更新 Jump。
+
+### 验证方式
+
+- `go test ./agent -run 'TestACPAgentCodexUnphased|TestCollectAttachedCodexUnphased|TestACPAgentCodexCommentary' -count=1`。
+- `go test ./agent ./messaging ./feishu -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./agent ./messaging ./feishu -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验与 `git diff --check`。
+
+### 回滚策略
+
+仅回滚无阶段消息的延迟判定状态；显式 `commentary`、最终回答独立投递、时间线无限窗口、自动续卡和 terminal outbox 均保持不变。不得通过直接转发所有无阶段消息来恢复进度，否则会重新把最终回答写入任务卡。
+
+### Review 小结（2026-08-07）
+
+- Jump 真实 rollout 已确认同一 turn 的用户可见 Agent 消息普遍没有 `phase`；原实现只接收显式 `commentary`，因此在时间线条数限制生效前就丢失了全部自然语言进度。
+- 受控 app-server turn 与接管 watcher 现在共用单条延迟判定：后续事件证明仍在执行时，上一条无阶段消息转换为 `ProgressKindCommentary`；正常完成前最后一条仍只作为最终回答。显式 `commentary` 和 `final_answer` 语义保持不变，同一 ID 的更新只投影最新正文一次。
+- `commandExecution` 仍不产生用户可见 `ProgressEvent`，只发送不含命令、输出和正文的内部活动信号，以便首条自然语言说明在命令开始后及时落卡；审批继续走独立交互路径。
+- TDD RED 真实复现受控 turn 和接管 watcher 都只剩文件进度，以及相同消息 ID 被重复投影；实现后相关测试转绿。既有测试继续确认 `stream_timeline_limit=0` 保留超过 8 条的完整 commentary 时间线、正整数窗口仍有效、最终回答独立投递。
+- 已验证：受影响包与全仓测试、`go test -race ./agent ./messaging ./feishu`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验和 `git diff --check` 全部通过。Jump 已安全更新为 `v0.1.254-jump.20260807184714.785e0c3.unphased-progress`：系统级 systemd active/enabled、`NRestarts=0`、健康端点与受保护 runtime API 正常、活动任务与 outbox 均为 0，Doctor 关键项通过。回滚文件为 `/home/debian/.local/bin/weclaw.rollback-20260807184714`；尚未通过真实飞书新任务验收自然语言时间线。
+
+## 2026-08-07 飞书任务卡活跃态精简
+
+### 目标
+
+飞书 `stream` 任务在 Agent 首次产生有效非命令进度前，卡片正文只显示“思考中.....”；收到说明、计划、文件修改或工具摘要后重写同一卡片，保留累计回复和结构化进度，并把“思考中.....”固定在正文底部。任务终态移除活跃提示，只保留过程内容和终态状态。
+
+### 范围与验收标准
+
+- 任务卡创建后、首条有效非命令进度到达前，正文只显示“思考中.....”，不得被“等待 Agent”“连接正常”或定时阶段提示覆盖。
+- Codex commentary、Claude message、计划、文件修改或工具摘要任一到达后，同一卡片展示截至当前的回复与安全结构化进度；“思考中.....”只出现一次且位于正文最底部。
+- 命令、内部推理、状态心跳和审批事件不能解除等待态；Codex `commandExecution` 生命周期仍不进入进度卡，审批卡与审批记录不受影响。
+- 后续回复和结构化进度继续原位更新。
+- 飞书活跃任务卡不再额外占用顶部状态行重复显示“思考中”；完成、失败、停止仍显示明确终态状态。
+- 任务终态正文不得残留“思考中.....”；没有可展示过程时使用明确的“本任务未产生结构化进度记录”说明，最终回答继续由独立结果卡交付。
+- 自动续卡、完整卡片容量预检、活动卡恢复引用和终态双路独立重试语义保持不变。
+
+### 实施步骤
+
+- [x] 先补回复前、首次回复、终态和飞书卡片布局的失败测试，确认旧行为可复现。
+- [x] 收敛消息层活跃态渲染与定时心跳，只在首条有效非命令进度后刷新进度正文。
+- [x] 调整飞书任务卡的活跃状态布局与终态快照，确保活跃提示置底且终态移除。
+- [x] 同步中英文 README、`docs/AI_CONTEXT.md` 和长期经验，复核没有恢复命令生命周期噪音。
+- [x] 执行定向、全仓、race、vet、tidy、Staticcheck、文档与差异验证。
+- [x] 等待 Jump 当前任务自然结束，再安全更新并检查 systemd、doctor 和 outbox；不得强制重启。
+
+### 验证方式
+
+- `go test ./messaging ./feishu -run 'TestNativeStreamShowsOnlyThinkingBeforeFirstAgentReply|TestNativeStreamShowsFirstEffectiveNonCommandProgress|TestTaskProgressUpdateHasEffectiveProgressAcceptsNonCommandEvents|TestFeishuTaskStreamPlacesThinkingAtBottomUntilTerminal' -count=1`。
+- `go test ./agent ./messaging ./feishu -count=1 -timeout 180s`、`go test ./... -count=1 -timeout 180s`。
+- `go test -race ./agent ./messaging ./feishu -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+回滚活跃提示渲染和飞书任务卡布局即可恢复旧展示；不得删除 terminal outbox、活动卡恢复引用、审批记录或 Agent 会话数据。Jump 更新只在没有活动任务时进行，并保留当前二进制回滚副本。
+
+### Review 小结（2026-08-07）
+
+- 飞书原生任务卡创建后只保留单一正文“思考中.....”，不再显示独立的顶部“思考中”状态行，也不会被定时“等待 Agent / 连接正常”提示覆盖；审批记录仍使用独立区域。
+- 首条有正文的 Codex commentary、Claude message、计划、文件或工具摘要会解除等待态并重写同一卡片；命令、内部推理、状态心跳和审批事件不会触发。后续进度继续更新，活跃提示始终只出现一次并位于正文底部。
+- TDD RED 复现文件进度不能刷新以及 plan/file/tool 判定为 false；最小白名单实现后定向用例转绿。最终源码的全仓测试、受影响包 race、vet、tidy、Staticcheck、文档校验与 `git diff --check` 均通过。
+- Jump 当前任务自然结束且终态 outbox 清空后，已安全更新为 `v0.1.254-jump.20260807172825.785e0c3.noncommand-progress`。systemd 为 active/enabled、`NRestarts=0`，runtime 为 `active_tasks=0`，doctor 关键项正常；回滚副本为 `/home/debian/.local/bin/weclaw.rollback-20260807173100`。
+
+## 2026-08-07 Codex stream 全量用户可见进度
+
+### 目标
+
+恢复 Codex 原生 `stream` 的连续展示体验：从第一条到最后一条累计保留 Codex 明确标记为 `commentary` 的用户可见消息，并把 `stream_timeline_limit` 缺省值改为 `0`。最终回答继续通过独立结果消息交付。
+
+### 范围与验收标准
+
+- Codex `agentMessage.phase=commentary` 按事件顺序进入任务时间线并保留完整正文；相同 ID 的更新仍原位合并，不只保留最新“当前说明”。
+- 缺省和未显式配置的 `stream_timeline_limit` 均为 `0`，表示不设置 WeClaw 条数上限；显式正整数仍只保留最近 N 条。
+- Codex commentary 与计划、文件和工具摘要共同参与飞书卡片容量预检及自动续卡，跨多张编号卡片形成逻辑完整记录。
+- 最终回答、内部推理、逐 token 增量、命令输出、工具原始参数和协议日志仍不得进入进度时间线。
+- Claude 当前的独立“当前说明”行为保持不变；结构化计划、文件和工具条目继续使用既有 180 字符收敛，Codex commentary 不按该限制截断；Codex `commandExecution` 生命周期不进入进度卡，命令审批仍独立展示。
+- 任务终态只改变卡片状态并保留各段内容；最终结果仍通过独立静态富文本结果卡发送。
+- 本轮只修改本地实现、测试和说明，不提交、推送、发布或部署 Jump。
+
+### 实施步骤
+
+- [x] 先补默认值为 `0`、Codex commentary 累计和完整正文保留的失败测试，并确认旧实现按预期失败。
+- [x] 在进度事件契约中标记需要累计展示的 Codex commentary，保持 Claude message 兼容语义不变。
+- [x] 修改 reducer、时间线渲染与续卡输入，使 Codex commentary 从首条累计到末条并参与容量分段。
+- [x] 更新中英文 README、`docs/AI_CONTEXT.md` 和相关旧测试，纠正“只保留当前说明/默认 8 条”的旧结论。
+- [x] 执行定向、全仓、race、vet、tidy、Staticcheck、文档和差异验证，再做交付前独立复核。
+
+### 验证方式
+
+- `go test ./config ./agent ./messaging -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./config ./agent ./messaging ./feishu -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+回滚累计标记和默认值即可恢复原有“最新当前说明 + 最近 8 条结构化进度”行为；不得删除 terminal outbox、活动卡恢复引用或已保存的会话数据。若真实平台出现单段异常，保留自动续卡和可观察错误，不能通过静默截断或把最终回答写回进度卡降级。
+
+### Review 小结（2026-08-07）
+
+- Codex `agentMessage.phase=commentary` 现在映射为独立的 `ProgressKindCommentary`，从第一条到最后一条按来源顺序进入任务时间线并保留完整 Markdown 正文；相同 ID 仍原位更新。Claude `ProgressKindMessage` 继续使用独立“当前说明”和 180 字符收敛。
+- `stream_timeline_limit` 的默认值及缺省回退均改为 `0`；显式正整数仍对结构化摘要与 Codex commentary 的组合时间线保留最近 N 条。计划、工具和文件摘要继续按 180 字符收敛，最终回答、推理、逐 token、原始输出和工具参数仍不进入进度卡。
+- Codex commentary 已纳入既有完整卡片预检与自动续卡：回归测试确认旧卡保留前段并提示第 2 张卡片，新卡从后续 commentary 继续，终态仍只收敛最新卡并独立交付最终结果。
+- Jump 真机 Trace 复核发现命令生命周期在最近样本中形成 `292` 个摘要完全相同的 `command` 事件；已在 Codex 事件源停止投影 `commandExecution`，避免其占用时间线和续卡容量，审批事件不受影响。
+- TDD RED 已分别复现默认值实际为 `8` 和缺少 commentary 累计语义；实现后定向测试转为 GREEN。全仓测试、受影响包 race、vet、tidy、Staticcheck、文档校验与 `git diff --check` 均通过。
+- 独立复核结论为有条件通过：未发现阻止本地交付的行为、安全或兼容性问题；本轮没有提交、推送、发布或部署 Jump，也尚未用真实飞书验证多段 commentary 的视觉效果和真实 CardKit 容量续卡。上方旧任务中“commentary 只进入当前说明、默认 8 条”的结论已被本次确认后的需求修正取代。
+
+## 2026-08-07 飞书独立富文本结果卡与完整进度语义复核
+
+### 目标
+
+让飞书 `stream` 任务在保留原进度卡的同时，通过一条新的静态富文本结果卡交付成功、失败或停止结果；保持未读通知、终态双路独立重试和长内容完整交付。复核 Jump 真机“进度不完整”现象，确认 `stream_timeline_limit=0` 保存的是语义合并后的结构化进度，而不是原始协议日志。
+
+### 范围与验收标准
+
+- 飞书原生 `stream` 任务终态继续只更新原进度卡状态并保留时间线、审批和当前说明；最终回答不得回填原卡。
+- 最终结果改为新建静态 CardKit 2.0 风格消息，正文使用 Markdown 元素；标题包含 Agent 与工作空间，完成、失败、停止使用对应状态和颜色，其他平台与非原生 stream 路径保持现有文本行为。
+- 本机绝对路径形式的 Markdown 链接改为可复制路径展示，不生成飞书客户端无法打开的伪链接；HTTP(S) 链接保持可点击。
+- 结果卡按完整交互消息载荷的保守上限预检并分段，连续编号发送；不得静默截断最终回答。
+- 结果卡发送使用 terminal outbox 既有持久记录和稳定 UUID：重试不得重复已成功分段，网络结果不明确时不得改发普通文本制造重复；只有平台不支持富结果能力时才使用现有幂等文本路径。
+- 卡片终态和富文本结果继续并行投递，一路失败不得阻止另一条；旧版 outbox 记录仍可加载并按文本恢复。
+- Jump 当前两个飞书账号的 `stream_timeline_limit=0` 保持不变；相同 ID 的运行/完成事件继续原位合并，推理、逐 token、命令输出、工具原始参数和最终回答仍不进入进度卡。
+
+### 实施步骤
+
+- [x] 只读核对 Jump 账号级进度配置，并把用户贴出的最终结果关联到对应 turn，统计原始事件、语义唯一项和终态投递状态。
+- [x] 先补富文本结果卡 Markdown、状态样式、本地路径处理、载荷分段和稳定 UUID 的失败测试。
+- [x] 增加平台可选的幂等终态结果能力，并由飞书 adapter 发送静态结果卡；不改变普通 `SendText` 行为。
+- [x] 扩展 terminal outbox 的向后兼容字段，持久化结果标题和富结果意图，并保持 checkpoint、结果两路独立投递。
+- [x] 更新中英文 README、`docs/AI_CONTEXT.md` 与相关旧测试，明确“独立新消息不等于纯文本”及 `0` 的语义合并边界。
+- [x] 执行定向、全仓、race、vet、tidy、Staticcheck、文档和差异验证，再做交付前独立复核。
+
+### 验证方式
+
+- `go test ./feishu ./messaging ./platform -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./feishu ./messaging -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+回滚平台富结果可选能力和飞书静态结果卡发送后，terminal outbox 继续使用原有幂等文本投递；新增可选字段必须保持旧记录可读且不删除待投递数据。不得通过把最终回答写回进度卡、关闭终态重试或暴露原始协议日志来降级。
+
+### Review 小结（2026-08-07）
+
+- Jump 真机账号级 `stream_timeline_limit=0` 已确认生效。用户示例任务的 8 个命令开始/完成事件按 4 个稳定 ID 原位合并为 4 条结构化进度，另有 1 条 commentary 进入“当前说明”；没有计划事件，推理、逐 token、命令输出和最终回答按安全边界不进入任务卡。因此现象不是仍受 8 条上限截断，而是“完整”指语义合并后的结构化进度。
+- 飞书原生 stream 终态结果现在通过新的静态 Markdown 卡片交付，标题包含 Agent 与工作空间；完成、失败、停止使用独立样式。本机绝对路径链接改为可复制路径，HTTP(S) 链接保持可点击。
+- 结果卡按包含接收目标、UUID 和二次 JSON 转义的完整消息 envelope 使用 24 KiB 软上限预检，超长正文拆成连续编号卡片。每段从 outbox delivery key 派生稳定 UUID；网络结果不明确时保持富结果路径同键重试，平台缺少能力时才走原有幂等文本。
+- terminal outbox v1 以可选字段保存结果标题和富结果意图，旧记录继续使用原 `:text` 键；卡片 checkpoint 与结果仍独立并行、分别持久化成功状态，序列化回复器不会丢失新能力。
+- 已验证：`go test ./... -count=1 -timeout 180s`、`go test -race ./feishu ./messaging ./platform -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck 全部通过。独立复核结论为有条件通过：未发现阻止本地交付的问题；尚未部署 Jump 或使用真实飞书验证新静态结果卡的通知、超长分段和跨重启恢复，当前工作区也保留此前多批未提交改动。
+
+## 2026-08-07 Codex stream 真实进度恢复
+
+### 目标
+
+恢复 Codex App Server 任务在飞书 `stream` 卡片中的真实中间进度：把协议中的计划与工具生命周期转换为语义合并的结构化时间线，把 `commentary` 阶段消息放入独立“当前说明”区域，并继续保证最终回答只通过终态独立消息交付。
+
+### 范围与验收标准
+
+- Codex App Server 的 `commandExecution`、`fileChange`、`mcpToolCall`、`dynamicToolCall` 和计划事件映射为稳定 ID、类型与运行/完成状态的 `ProgressEvent`；只展示安全摘要，不复制命令输出、工具原始参数、逐 token 内容或协议日志。
+- `agentMessage.phase=commentary` 映射为 `ProgressKindMessage`，仅更新独立“当前说明”区域；`final_answer` 和未知阶段不得写入任务卡，避免最终回答泄漏或重复。
+- “当前说明”不进入结构化时间线、不占用 `stream_timeline_limit`，也不覆盖、裁剪或替换已经存在的计划和工具进度；任务终态保留卡片上的已有时间线与当前说明。
+- 没有结构化进度但存在 commentary 时，stream 卡仍能展示当前说明；两者都没有时，终态继续显示“本任务未产生结构化进度记录”。
+- 保持已实现的卡片容量预检、自动续卡、审批绑定、终态卡片与独立结果消息双路持久化/重试语义不变。
+- 同步相关中英文说明和 AI 上下文；本轮只完成本地实现与验证，不提交、推送、发布或部署 Jump。
+
+### 实施步骤
+
+- [x] 先补 Codex 工具、计划、commentary 与 final answer 事件映射的失败测试。
+- [x] 实现最小协议解析与安全摘要映射，验证相同 ID 的运行/完成事件能够原位合并。
+- [x] 先补“当前说明”独立展示、不占时间线和终态保留的失败测试。
+- [x] 扩展任务视图 reducer 与 stream 快照渲染，同时保持非 stream 与最终结果路径不变。
+- [x] 同步文档和旧测试语义，执行定向、全仓、race、vet、tidy、Staticcheck、文档及差异验证。
+- [x] 完成交付前独立复核并记录剩余真机验证边界。
+
+### 验证方式
+
+- `go test ./agent ./messaging ./feishu -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./agent ./messaging ./feishu -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+回滚新增的 Codex 结构化事件映射和任务视图“当前说明”字段即可恢复旧行为；不删除已有 terminal outbox、活动卡引用或续卡状态。若某类协议字段在真实环境中不兼容，应显式停止该类映射并保留可观察诊断，不能退回为把最终回答写入进度卡。
+
+### Review 小结（2026-08-07）
+
+- Codex App Server 的计划更新及命令、文件、MCP、动态工具生命周期现在会产生稳定 ID 和运行/完成状态的安全摘要；原始命令、输出、参数、结果和 diff 不进入进度事件。`agentMessage` 仅在 `phase=commentary` 时形成当前说明，`final_answer` 与未知阶段只参与最终回答组装。
+- `ProgressKindMessage` 现在更新独立“当前说明”区域，不进入或占用结构化时间线；单条按 180 字符收敛，结构化时间线、当前说明、自动续卡和终态内容互不覆盖。最新 reducer 快照会直接进入 durable terminal checkpoint，消除异步更新尚未发送时遗漏最后进度的竞态，同时不增加最终消息之前的网络等待。
+- TDD 已真实复现三类旧行为：Codex 结构化事件没有投影字段、commentary 不生成 stream 快照、终态 checkpoint 在最后快照尚未发送时正文为空；对应 RED 均在实现后转为 GREEN。
+- 已验证：`go test ./... -count=1 -timeout 180s`、`go test -race ./agent ./messaging ./feishu -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验与 `git diff --check` 均通过。
+- 独立复核结论为有条件通过：未发现阻止本地交付的行为、安全或兼容性问题；当前工作区保留此前大量未提交改动，本轮未提交、推送、发布或部署 Jump，也未用真实飞书和 Jump 上的 Codex 版本完成端到端验收。
+
+## 2026-08-07 飞书 stream 终态保留与独立结果投递
+
+### 目标
+
+让飞书 `stream` 任务卡只承载任务状态、审批记录和语义合并后的结构化进度；任务结束时保留卡片过程内容并关闭流式状态，同时通过普通消息独立交付成功、失败或停止结果。卡片终态与最终结果分别持久化、重试和跨进程恢复，任一路失败都不能阻止另一条链路。
+
+### 范围与验收标准
+
+- 保留已经实现的 `stream_timeline_limit`、完整卡片 JSON 容量预检和自动续卡行为，不重做时间线窗口与分段机制。
+- `ProgressKindMessage` 不进入结构化时间线、不占用条数限制，也不能替换或挤出已有结构化进度；该阶段没有展示缺少明确协议分类的“当前说明”，现已由上方“Codex stream 真实进度恢复”任务补充为只展示明确 commentary 的独立区域。
+- 成功、失败和停止终态只更新最新卡片的标题或状态并关闭流式状态，保留当前分段的时间线、审批记录和正文；没有结构化进度时显示明确的空进度说明，不留下空白卡片。
+- 飞书启用最终回答独立投递：成功发送完整最终回答，失败发送必要错误，停止发送固定停止说明；每个终态只有一次逻辑结果投递，允许沿用现有文本分片形成多条物理消息，不再补发重复通知。
+- 卡片终态和最终结果使用独立持久化投递状态、错误、重试与超时上下文；任一路失败或阻塞不阻止另一条链路，服务重启后只恢复未成功部分，已成功的文本分片不得重复发送。
+- 最终结果的文本分片纳入本轮持久化与幂等保证；现有图片和附件投递能力保持不回退，并明确记录其当前尽力投递边界，不在本轮扩张为新的媒体 outbox 协议。
+- 自动续卡后继续以最新卡片作为终态、审批和恢复引用；旧卡冻结保存既有分段，不因后续正数窗口裁剪而追溯修改已经发送的历史卡片。
+- 同步中英文 README、`docs/AI_CONTEXT.md` 和相关旧测试语义；本轮只做本地实现与验证，不提交、推送、发布或部署 Jump。
+
+### 实施步骤
+
+- [x] 先补 `ProgressKindMessage` 不进入、不占用、不替换结构化时间线的失败测试，再拆分任务视图状态。
+- [x] 先补成功、失败、停止以及无结构化进度时保留卡片正文和明确终态的失败测试，再修改飞书终态快照与能力声明。
+- [x] 先补卡片失败仍投递结果、结果失败仍更新卡片、独立重试和重启不重复的失败测试，再拆分 terminal outbox 的投递执行与状态。
+- [x] 保持最终文本分片的稳定幂等键，移除飞书 stream 终态的重复完成通知；确认续卡后的最新引用仍用于终态恢复。
+- [x] 同步用户说明和 AI 上下文，更新仍断言旧终态覆盖行为的测试。
+- [x] 执行定向、全仓、race、vet、tidy、Staticcheck、文档和差异验证，再做交付前独立复核。
+
+### 验证方式
+
+- `go test ./messaging ./feishu -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./messaging ./feishu -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+回滚时恢复飞书终态写卡和原 terminal outbox 顺序，但不得删除已有 outbox 文件、活动卡恢复引用或自动续卡状态；新增持久字段必须保持旧记录可读。若两路独立投递出现异常，优先停用新的调度入口并保留未投递记录，不能把结果标记为成功或清理待重试数据。
+
+### Review 小结（2026-08-07）
+
+- 飞书 stream 终态现在只切换完成、失败或停止状态并关闭流式，保留最新分段的结构化时间线、审批和正文；最终回答、失败结果或停止说明通过普通消息独立交付。`ProgressKindMessage` 不进入或替换结构化时间线，后续仅把明确 commentary 展示在独立“当前说明”区域。
+- terminal outbox 在同一记录中分别持久化卡片 checkpoint、结果文本及各自 delivered 状态，并发尝试两路投递；卡片失败或阻塞不延迟结果消息，结果失败也不阻止卡片收敛，重启后只重试未成功部分。
+- 复核阶段补出并修正了三个恢复边界：任务卡注册继承 CardKit 已启用的 sequence；审批变化在 adapter 内部锁外立即刷新活动卡引用；adapter 无法从引用生成 checkpoint 时保留显式待重试或死信状态，不再误清理卡片阶段。
+- 已验证：`go test ./... -count=1 -timeout 180s`、`go test -race ./messaging ./feishu -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验与 `git diff --check` 均通过。
+- 独立复核结论为有条件通过：未发现阻止本地交付的行为、安全或兼容性问题；本轮未连接真实飞书验证通知、超长分片和 CardKit 故障恢复，附件与远程图片仍是已说明的 best-effort 边界。未提交、推送、发布或部署 Jump。
+
+## 2026-08-07 stream 完整时间线与会话导航隐藏
+
+### 目标
+
+让 `stream` 任务卡按配置保留本次任务从开始到当前的结构化进度；接近飞书卡片容量时自动续发后续卡片并保留历史；同时为 Codex、Claude 增加只影响 WeClaw 导航的会话移除与恢复能力。不调用 Agent 的归档、删除接口，不修改 Codex/Claude 私有会话历史。
+
+### 范围与验收标准
+
+- `ProgressConfig` 新增 `stream_timeline_limit`：缺省为 `8`，`0` 表示不设置 WeClaw 条数上限，正整数表示最多保留对应条数，负数在配置加载时明确拒绝。
+- 该字段沿用现有全局、Agent、平台、飞书机器人账号四层进度配置合并和热加载语义；显式 `0` 必须能覆盖上层正数，不能因零值合并规则退回默认值。
+- `stream_timeline_limit` 只控制结构化任务时间线；`max_progress_messages` 继续只限制非 `stream` 模式的消息发送次数，两者不互相替代。单条进度原有长度收敛保持不变。
+- 飞书原生任务卡在更新前按完整卡片 JSON 的保守软上限预检；预计超限时冻结当前卡片的已有进度并提示后续卡片，随后新建下一段卡片继续展示，不等待平台拒绝、不静默截断或丢弃历史。
+- 自动续卡使用连续段号，后续进度继续更新当前最新卡片；审批绑定、活动卡恢复引用和跨进程终态交付同步迁移到最新卡片。该阶段曾由最新卡承载最终结果，现已由上方新版任务改为卡片只收敛状态、结果另发普通消息。单条已收敛进度仍无法容纳时返回可观察错误，不制造假成功。
+- 新增管理员私聊命令 `/cx session remove <编号|threadId>`、`/cc session remove <编号|sessionId>`，把目标加入主机级 Agent 隔离隐藏层；文本列表、飞书卡片、编号、直接 ID 和过期卡片入口都不得重新选择隐藏会话。
+- 新增 `/cx session restore <threadId>`、`/cc session restore <sessionId>`，只移除隐藏标记；移除成功回复提供对应恢复命令，保证操作可逆。
+- 会话隐藏是主机级导航变更，仅管理员私聊可执行；目标仍被任一窗口绑定、存在运行中或状态未确认任务时失败关闭，要求先切换或新建其他会话。
+- 隐藏状态扩展现有 `workspace-registry.json` 导航覆盖层并升级版本；旧版状态可无损加载，写入继续 copy-on-write、原子替换和 `0600`，损坏、未知版本或持久化失败时不发布内存新状态。
+- 审计只记录动作、Agent 和脱敏会话标识，不记录会话标题或消息内容；不调用 Codex archive、Claude 私有文件删除或任何物理删除能力。
+- 本轮只完成本地实现与验证；不提交、推送、发布或部署 Jump。
+
+### 实施步骤
+
+- [x] 先补配置默认值、显式零值覆盖、正数覆盖和负数拒绝的失败测试。
+- [x] 先补 reducer 默认 8、配置上限和 `0` 全量保留的失败测试，再把已解析配置带入每个活动任务的唯一任务视图。
+- [x] 先补飞书完整卡片预检与进度自动续卡的失败测试，再实现保留旧段、创建新段、迁移审批和恢复引用的原子续接。
+- [x] 先补导航覆盖层版本迁移、会话隐藏/恢复幂等、持久化失败和损坏保护测试，再扩展状态模型。
+- [x] 先补 Codex/Claude 管理员私聊、占用拒绝、列表过滤、编号/直接 ID/旧卡绕过和恢复测试，再接入命令路由。
+- [x] 同步中英文配置示例、命令帮助和 `docs/AI_CONTEXT.md`，明确 `0` 的平台边界与“仅隐藏”语义。
+- [x] 执行定向、全仓、race、vet、tidy、Staticcheck、文档和差异验证，再做交付前独立复核。
+
+### 验证方式
+
+- `go test ./config ./messaging -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./config ./messaging -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚与修正策略
+
+回滚 `stream_timeline_limit` 时恢复固定 8 条 reducer 行为；回滚飞书续卡时保留平台预检并恢复单卡显式报错，不能恢复为静默截断；回滚会话隐藏时移除命令和过滤层，但保留 Agent 原生会话及历史。新版导航状态必须允许从旧版状态加载；若新字段发生问题，优先恢复隐藏记录的只读可见性，不删除 `workspace-registry.json` 或 Agent 私有数据。
+
+### Review 小结（2026-08-07）
+
+- `stream_timeline_limit` 已支持全局、Agent、平台和飞书机器人账号四层合并：缺省 `8`、显式 `0` 不设 WeClaw 条数上限、正数限制最近 N 条、负数在配置校验阶段拒绝；`max_progress_messages` 的非 stream 语义未改变。
+- 飞书任务卡按完整卡片 JSON 的 2,800,000 字节保守软上限预检；超限前创建连续编号的新卡，只把当前分段放入新卡，旧卡保留原进度并指向后续卡。活动卡恢复引用、当前任务卡和后续审批关联在新卡可流式更新且持久化成功后才迁移；该阶段“最终结果只写最新卡”的行为已由上方新版任务调整为“最新卡只收敛状态，最终结果另发普通消息”。
+- 独立复核补出了两个边界并以 RED/GREEN 修正：正数时间线窗口滑动时改用稳定事件锚点保留当前分段历史；CardKit 开启流式失败时不再提前发布新任务卡绑定。
+- Codex/Claude 已增加管理员私聊 `session remove/restore`；registry 升级为 v2 并兼容读取 v1，隐藏只影响 WeClaw 文本/卡片/编号/直接 ID/任务入口，不调用 Agent 归档、删除或私有状态修改；绑定或非终态任务会拒绝隐藏，审计只保存会话 ID 摘要。
+- 已验证：`go test ./... -count=1 -timeout 180s`、`go test -race ./config ./messaging ./feishu -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验与 `git diff --check` 均通过。
+- 独立复核结论为有条件通过：未发现阻止本地交付的行为或安全问题；本轮未连接真实飞书验证超大卡片续接，未部署 Jump，也未提交、推送、发布。
+
+## 2026-08-07 systemd 安全重启与任务卡跨进程恢复
+
+### 目标
+
+修复 systemd 重启或进程异常退出后任务卡长期停留在“执行中”、新进程无法停止旧任务的问题；让官方重启入口在任务门禁内排空或明确拒绝，并让绕过入口的重启也能在新进程启动后把旧任务卡更新为中断终态。
+
+### 范围与验收标准
+
+- 活动任务创建飞书原生进度卡后立即持久化可恢复的 CardKit 引用；正常完成复用同一持久记录交付真实终态，不发送重复中断消息。
+- 新进程启动时发现上次遗留的活动任务记录，会把原卡更新为“任务已中断”的停止终态并清理记录；不支持原卡恢复的平台保持现有文本恢复语义。
+- 收到 SIGTERM 后先停止接收新任务，再取消并等待现有任务完成终态交付；超过有界等待时间时退出，由下一进程继续恢复遗留卡片。
+- `weclaw restart` 识别 systemd 托管实例并走安全排空入口：普通重启在有活动任务时拒绝，`--force` 取消任务、交付终态后再重启；无活动任务时正常重启。
+- 直接执行 `systemctl restart weclaw` 虽可绕过 CLI 预检，但 SIGTERM 收尾或下次启动恢复必须消除永久“执行中”卡片。
+- `weclaw update --source gitee` 未显式传入 `--restart` 时继续只更新二进制，不触发服务重启。
+- 不修改 Agent 私有状态，不删除会话或工作空间；本轮不提交、推送、发布或部署 Jump。
+
+### 实施步骤
+
+- [x] 先补活动进度卡持久引用、异常退出恢复原卡和正常终态复用的失败测试。
+- [x] 基于现有 terminal outbox 实现活动任务预留记录，并在正常终态与跨进程恢复之间复用同一记录。
+- [x] 先补任务排空、SIGTERM 有界等待、强制取消和 systemd 重启委派的失败测试。
+- [x] 实现任务 admission/draining、Handler 优雅停机及 systemd-aware `weclaw restart`。
+- [x] 更新 systemd 单元为 foreground、on-failure、显式 SIGTERM 与停止超时，并同步必要说明。
+- [x] 执行定向、全仓、race、vet、tidy、Staticcheck、文档和差异验证，再做独立复核。
+
+### 验证方式
+
+- `go test ./messaging ./cmd -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./messaging ./cmd -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+回滚活动任务 outbox 预留、Handler 排空和 systemd-aware 重启委派即可恢复原行为；已有终端 outbox 文件保持向后兼容，不删除未完成记录。若新 systemd 单元出现问题，恢复原单元并 `daemon-reload`，但仅在确认无活动任务后重启服务。
+
+### Review 小结（2026-08-07）
+
+- 飞书原生任务卡创建后会把同卡恢复引用写入 terminal outbox；正常终态复用该 reservation，进程中断后由新进程把原卡更新为 stopped，而不是留下永久“执行中”或补发重复中断消息。
+- `restart` 与显式 `update --restart` 通过 loopback 排空入口原子关闭任务接纳；普通模式遇到活动任务拒绝，`--force` 取消并有界等待。systemd 实例委派 `weclaw.service`，supervisor 或直接停止失败时会恢复旧进程 admission。
+- 前台进程收到 SIGTERM 后先执行最长 10 秒的任务收尾，再停止平台；unit 使用 foreground、`Restart=on-failure`、SIGTERM 和 15 秒停止超时。普通 `weclaw update` 的不重启语义保持不变。
+- 已验证：定向 RED/GREEN、`go test ./... -count=1 -timeout 180s`、`go test -race ./messaging ./api ./cmd ./feishu -count=1 -timeout 240s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验和 `git diff --check` 均通过。
+- 独立复核结论为有条件通过：没有阻止交付的代码或安全问题；本机没有 `systemd-analyze`，且本轮未连接真实飞书、未部署 Jump、未执行真实 systemd 重启，也未提交、推送或发布。
+
+## 2026-08-06 `/cc new` 飞书成功状态卡片
+
+### 目标
+
+Claude 新会话创建并绑定成功后，飞书使用单张完成状态卡片展示新会话的工作空间、模型、推理强度和运行通道；其他平台保持文本回复，并确保配置字段来自刚创建的真实 ACP session。
+
+### 范围与验收标准
+
+- 仅 `/cc new` 成功结果升级为飞书状态卡片；失败结果仍用文本返回，`/new` 和其他平台继续使用文本。
+- 成功结果固定展示工作空间、模型、推理强度和运行通道，不展示或依赖 Claude 私有状态文件。
+- 模型和推理强度优先读取新 session 的 `ClaudeSessionConfig`；ACP 未记录对应字段时显示 `未知（会话未记录）`，不得借用 Agent 默认值。
+- 飞书 CardKit 不可用或状态卡创建失败时保留文本降级，不影响已经提交的新 session binding。
+- 不改变 `/cc ls`、`/cc switch`、工作空间编号以及现有失败回滚语义。
+
+### 实施步骤
+
+- [x] 先补飞书成功卡片、缺失配置文案和其他平台文本行为测试，并确认当前实现按预期失败。
+- [x] 补真实 `ACPAgent` 新 session 配置快照测试，确认卡片字段的数据来源契约。
+- [x] 实现结构化新建结果与飞书状态卡发送，保持其他平台文本路径。
+- [x] 执行定向、全仓、race、vet、tidy、Staticcheck、文档和差异验证。
+
+### 验证方式
+
+- `go test ./messaging ./agent -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./messaging ./agent -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+移除 `/cc new` 的飞书状态卡投递并恢复原文本结果即可；不回滚或删除已经由 ACP 创建并成功绑定的 Claude session，不修改其他平台和会话目录。
+
+### Review 小结（2026-08-06）
+
+- `/cc new` 成功后，飞书现在使用标题为 `Claude 会话` 的单张完成状态卡；卡片固定展示工作空间、模型、推理强度和运行通道，失败结果仍为文本。
+- 模型和推理强度从刚创建并绑定的 `ClaudeSessionConfig` 读取；ACP 未记录的字段逐项显示 `未知（会话未记录）`，不借用新会话默认值。
+- 非飞书平台和默认 `/new` 保持文本回复；飞书状态卡无法打开时也降级为同一成功文本，已经提交的 Claude binding 不回滚。
+- TDD RED 已真实复现旧实现只发文本且缺少模型、推理强度；GREEN 后定向测试、完整 agent/messaging、全仓测试、受影响包 race、vet、tidy、Staticcheck、文档校验和 `git diff --check` 均通过。
+- 剩余边界：本轮未连接真实飞书 CardKit 客户端查看视觉效果，未构建测试版、部署 Jump、提交、推送或发布。
+
+## 2026-08-06 用户导航编号改为从 1 开始
+
+### 目标
+
+将 Codex、Claude 的工作空间与会话列表统一改为用户可见编号从 `1` 开始，并保证卡片、文本列表及 `/cx`、`/cc` 的编号参数使用同一套语义。
+
+### 范围与验收标准
+
+- Codex、Claude 工作空间及会话的文本列表和飞书卡片均从 `1` 开始编号，跨页继续使用全局编号。
+- `/cx`、`/cc` 的工作空间进入/移除、会话切换、归档和重命名按 `1` 起始编号解析；`0` 不再指向第一项。
+- 卡片按钮继续使用稳定的 opaque token、threadId 或 sessionId，不因展示编号变化降低过期卡片与权限校验。
+- 模型、账号和依赖选择等不属于工作空间/会话导航的编号保持现有语义，不扩大改动范围。
+
+### 实施步骤
+
+- [x] 先更新卡片、文本导航和真实命令行为测试，确认在当前 `0` 起始实现上按预期失败。
+- [x] 集中转换用户编号与内部切片索引，并统一 Codex、Claude 的展示编号。
+- [x] 同步帮助提示，执行定向、全仓、race、静态检查与差异复核。
+- [x] 构建测试版并在无运行任务时更新 Jump systemd 服务，保留旧二进制备份并复验 API 与 doctor。
+
+### 验证方式
+
+- `go test ./messaging -count=1 -timeout 180s`。
+- `go test ./... -count=1 -timeout 180s`、`go test -race ./messaging -count=1 -timeout 240s`。
+- `go vet ./...`、`go mod tidy -diff`、`go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...`。
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic`、`git diff --check`。
+
+### 回滚策略
+
+回滚用户编号转换和展示偏移即可恢复 `0` 起始语义；远端部署保留当前测试版二进制备份，回滚时先确认无运行任务，再原子替换并重启 systemd，不修改工作空间 registry 或 Agent 会话数据。
+
+### Review 小结（2026-08-06）
+
+- 用户可见的 Codex、Claude 工作空间与会话编号现从 `1` 开始；命令层集中换算为内部切片索引，`0` 不再选择第一项，模型、账号和依赖选择编号未改动。
+- 飞书工作空间按钮继续使用短期 opaque token，会话按钮继续使用稳定 threadId/sessionId；Claude 跨工作空间会话仍显示与 `/cc switch` 一致的全局编号，可能存在间隔。
+- TDD RED 真实复现了 `0` 选中首项、`1` 命中第二项和卡片显示 `0. ...`；GREEN 后完整 messaging、全仓测试、messaging race、vet、tidy、Staticcheck、文档校验和 `git diff --check` 均通过。
+- Jump 已在 `active_tasks=0` 时原子更新到 `v0.1.253-test.202608061826`；systemd active/enabled、API `status=ok`、doctor 通过，旧版备份为 `/home/debian/.local/bin/weclaw.backup-v0.1.253-test.202608061810-20260806T183002`。
+- 剩余边界：尚未由用户在真实飞书客户端点击新卡片验证显示效果；现有 `allowed_workspace_roots` 未配置警告保持不变，本次未提交、推送或正式发布。
+
 ## 2026-08-06 YOLO 自动审批卡片收敛
 
 ### 目标

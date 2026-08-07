@@ -100,6 +100,34 @@ func TestConfigValidateRejectsNegativeHTTPMaxHistory(t *testing.T) {
 	}
 }
 
+func TestConfigValidateRejectsNegativeStreamTimelineLimitAtEveryLayer(t *testing.T) {
+	negative := -1
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "global", mutate: func(cfg *Config) { cfg.Progress.StreamTimelineLimit = &negative }},
+		{name: "agent", mutate: func(cfg *Config) {
+			cfg.Agents["codex"] = AgentConfig{Progress: &ProgressConfig{StreamTimelineLimit: &negative}}
+		}},
+		{name: "platform", mutate: func(cfg *Config) {
+			cfg.Platforms["wechat"] = PlatformConfig{Progress: &ProgressConfig{StreamTimelineLimit: &negative}}
+		}},
+		{name: "feishu bot", mutate: func(cfg *Config) {
+			cfg.Platforms["feishu"] = PlatformConfig{Bots: []FeishuBotConfig{{Name: "jump", AppID: "cli_a", Progress: &ProgressConfig{StreamTimelineLimit: &negative}}}}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tc.mutate(cfg)
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "stream_timeline_limit") {
+				t.Fatalf("Validate error=%v, want stream_timeline_limit rejection", err)
+			}
+		})
+	}
+}
+
 func TestAgentConfigUnmarshalEnv(t *testing.T) {
 	var cfg Config
 	data := []byte(`{

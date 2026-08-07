@@ -113,6 +113,8 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 				{ID: "/feishu users list", Label: "已授权用户"},
 				{ID: "/cx workspace", Label: "管理 Codex 工作空间"},
 				{ID: "/cc workspace", Label: "管理 Claude 工作空间"},
+				{ID: "/cx session", Label: "隐藏/恢复 Codex 会话"},
+				{ID: "/cc session", Label: "隐藏/恢复 Claude 会话"},
 			}
 		}
 	default:

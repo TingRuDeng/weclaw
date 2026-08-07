@@ -157,6 +157,41 @@ func TestWorkspaceRemoveRejectsActiveFrontendBinding(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRemoveNumberOneRemovesFirstVisibleWorkspace(t *testing.T) {
+	root := t.TempDir()
+	alpha := filepath.Join(root, "alpha")
+	beta := filepath.Join(root, "beta")
+	for _, workspace := range []string{alpha, beta} {
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := newWorkspaceCommandTestHandler(t, "codex")
+	h.SetAgentWorkDirs(map[string]string{"codex": alpha})
+	h.SetCodexLocalSessionDir(t.TempDir())
+	for _, workspace := range []string{beta, alpha} {
+		if _, err := h.ensureWorkspaceRegistry().Add("codex", workspace); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "admin-1", RouteUserID: "admin-1", Trimmed: "/cx workspace remove 1",
+		Admin: true, Private: true,
+	})
+
+	if !strings.Contains(reply, "已从 WeClaw 移除 Codex 工作空间") || !strings.Contains(reply, alpha) {
+		t.Fatalf("reply=%q, want first visible workspace %q", reply, alpha)
+	}
+	snapshot, err := h.ensureWorkspaceRegistry().Snapshot("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.IsHidden(alpha) || snapshot.IsHidden(beta) {
+		t.Fatalf("snapshot=%+v, number 1 must remove alpha only", snapshot)
+	}
+}
+
 func TestHiddenCodexWorkspaceRejectsDirectThreadSelection(t *testing.T) {
 	workspace := t.TempDir()
 	h := newWorkspaceCommandTestHandler(t, "codex")

@@ -59,7 +59,7 @@ func (r *Replier) Capabilities() platform.Capabilities {
 	return platform.Capabilities{
 		Text: true, Typing: true, Image: true, File: true, Card: true,
 		Streaming: streaming, Buttons: true, LongText: false,
-		StreamCompletionNotification: streaming,
+		FinalReplyOutsideStream: streaming,
 	}
 }
 
@@ -95,6 +95,41 @@ func (r *Replier) SendTextIdempotent(ctx context.Context, text string, deliveryK
 			continue
 		}
 		if err := sender.SendTextIdempotent(ctx, r.openID, chunk, operationID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SendResultIdempotent 把终态结果渲染为一条或多条静态 Markdown 卡片，
+// 每个分段都派生稳定 UUID，确保 outbox 重试不会重复已成功分段。
+func (r *Replier) SendResultIdempotent(ctx context.Context, result platform.TerminalResult, deliveryKey string) error {
+	sender, idempotent := r.sender.(idempotentResultMessageSender)
+	if !idempotent {
+		return platform.ErrUnsupported
+	}
+	status := cardStatusDone
+	switch result.State {
+	case platform.StreamTerminalFailed:
+		status = cardStatusError
+	case platform.StreamTerminalStopped:
+		status = cardStatusStopped
+	}
+	cards, err := buildResultCards(resultCardOptions{
+		Title: result.Title, Status: status, Content: result.Text,
+	})
+	if err != nil {
+		return err
+	}
+	for index, cardJSON := range cards {
+		operationID := terminalTextOperationID(deliveryKey, index)
+		if r.replyToID != "" {
+			if err := sender.ReplyCardJSONIdempotent(ctx, r.replyToID, cardJSON, operationID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := sender.SendCardJSONIdempotent(ctx, r.openID, cardJSON, operationID); err != nil {
 			return err
 		}
 	}

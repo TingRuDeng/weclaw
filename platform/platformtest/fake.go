@@ -74,6 +74,7 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 
 // Stream 是测试用流式回复器。
 type Stream struct {
+	mu          sync.Mutex
 	Options     platform.StreamOptions
 	Updates     []string
 	Completed   string
@@ -84,6 +85,8 @@ type Stream struct {
 }
 
 func (s *Stream) Update(ctx context.Context, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.UpdateErr != nil {
 		return s.UpdateErr
 	}
@@ -91,7 +94,16 @@ func (s *Stream) Update(ctx context.Context, content string) error {
 	return nil
 }
 
+// UpdatesSnapshot 返回并发安全的流更新副本，供异步进度测试轮询。
+func (s *Stream) UpdatesSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.Updates...)
+}
+
 func (s *Stream) Complete(ctx context.Context, finalContent string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.CompleteErr != nil {
 		return s.CompleteErr
 	}
@@ -100,6 +112,8 @@ func (s *Stream) Complete(ctx context.Context, finalContent string) error {
 }
 
 func (s *Stream) Fail(ctx context.Context, errText string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.FailErr != nil {
 		return s.FailErr
 	}

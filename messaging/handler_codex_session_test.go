@@ -184,7 +184,7 @@ func TestHandleCodexSwitchCommandAcceptsListIndex(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/cx switch 1"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(108, "/cx switch 2"))
 
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, targetWorkspace)
 	if ag.useThreadID != "" || pending || threadID != "thread-b" {

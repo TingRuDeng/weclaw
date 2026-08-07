@@ -370,7 +370,7 @@ func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 	}
 }
 
-func TestRestartIgnoresDetachedTask(t *testing.T) {
+func TestRestartWaitsForStoppedTaskTerminal(t *testing.T) {
 	h := NewHandler(nil, nil)
 	task, _, started := h.beginActiveTask(context.Background(), "task-1", activeTaskMeta{owner: "ou_admin"})
 	if !started {
@@ -379,10 +379,13 @@ func TestRestartIgnoresDetachedTask(t *testing.T) {
 	if cancelled, denied := h.cancelActiveTask("task-1", "ou_admin"); !cancelled || denied {
 		t.Fatalf("cancelled=%v denied=%v, want true false", cancelled, denied)
 	}
-	if text, blocked := h.restartBlockedByActiveTasks("restart", nil); blocked {
-		t.Fatalf("detached task should not block restart: %s", text)
+	if text, blocked := h.restartBlockedByActiveTasks("restart", nil); !blocked || !strings.Contains(text, "1 个运行中的任务") {
+		t.Fatalf("stopping task must remain protected until terminal delivery: %q blocked=%v", text, blocked)
 	}
 	h.finishActiveTask("task-1", task)
+	if text, blocked := h.restartBlockedByActiveTasks("restart", nil); blocked {
+		t.Fatalf("finished stopped task should release restart gate: %s", text)
+	}
 }
 
 func TestServiceAdminCommandsRunSequentially(t *testing.T) {

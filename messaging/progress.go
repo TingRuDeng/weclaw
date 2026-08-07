@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -23,6 +26,7 @@ const (
 
 	progressDefaultCompletion  = "任务已完成，正在发送最终结果。"
 	progressStatusOnlyComplete = "\x00weclaw_status_only_complete"
+	progressNoStructuredRecord = "本任务未产生结构化进度记录。"
 )
 
 var progressStageHints = []struct {
@@ -44,37 +48,46 @@ type progressSendState struct {
 }
 
 type progressCardSnapshot struct {
-	text       string
-	withPrefix bool
+	text               string
+	withPrefix         bool
+	structured         bool
+	effectiveProgress  bool
+	currentExplanation string
+	timelineItems      []agent.ProgressEvent
 }
 
 type progressSession struct {
-	handler             *Handler
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	reply               platform.Replier
-	stream              platform.Stream
-	prefix              string
-	agentName           string
-	workspaceRoot       string
-	taskText            string
-	cfg                 config.ProgressConfig
-	deltaCh             chan string
-	snapshotCh          chan progressCardSnapshot
-	wg                  sync.WaitGroup
-	streamMu            sync.Mutex
-	streamOpenAttempted bool
-	lastContent         string
-	finished            bool
-	terminalClaimed     bool
-	typingStarted       bool
+	handler               *Handler
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	reply                 platform.Replier
+	stream                platform.Stream
+	prefix                string
+	agentName             string
+	workspaceRoot         string
+	taskText              string
+	cfg                   config.ProgressConfig
+	deltaCh               chan string
+	snapshotCh            chan progressCardSnapshot
+	wg                    sync.WaitGroup
+	streamMu              sync.Mutex
+	streamOpenAttempted   bool
+	lastContent           string
+	finished              bool
+	terminalClaimed       bool
+	effectiveProgressSeen bool
+	typingStarted         bool
+	recoveryReservation   string
+	segmentAnchor         *agent.ProgressEvent
+	segmentNumber         int
+	latestTaskSnapshot    progressCardSnapshot
 }
 
 func (s *progressSession) usesNativeProgressCard() bool {
 	return s != nil && s.reply != nil && s.reply.Capabilities().Streaming && progressModeAllowsProgress(s.cfg.Mode)
 }
 
-const progressSupersededNotice = "已在新位置继续展示；后续进展和最终结果将更新到新卡片。"
+const progressSupersededNotice = "已在新位置继续展示；后续结构化进展将更新到新卡片，最终结果会另发独立结果卡片。"
 
 // startProgressSession 启动平台进度会话，保持旧语义：最终回复由调用方单独发送。
 func (h *Handler) startProgressSession(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func()) {
@@ -84,7 +97,7 @@ func (h *Handler) startProgressSession(ctx context.Context, reply platform.Repli
 	}
 }
 
-// startProgressSessionWithFinal 启动进度会话，并允许原生流式平台把最终结果收敛进同一张卡片。
+// startProgressSessionWithFinal 启动进度会话；各平台能力决定终态只收敛卡片状态还是同时承载最终结果。
 func (h *Handler) startProgressSessionWithFinal(ctx context.Context, reply platform.Replier, prefix string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool) {
 	return h.startProgressSessionForAgentWithFinal(ctx, reply, prefix, "", taskText, cfg)
 }
@@ -146,6 +159,14 @@ func (s *progressSession) onProgress(delta string) {
 	if strings.TrimSpace(delta) == "" {
 		return
 	}
+	if s.cfg.Mode == progressModeStream {
+		if summary := renderDeltaProgress(delta, s.cfg); strings.TrimSpace(summary) != "" {
+			s.observeEffectiveProgress(true)
+			s.rememberLatestTaskSnapshot(progressCardSnapshot{
+				text: summary, withPrefix: true, effectiveProgress: true,
+			})
+		}
+	}
 	if s.cfg.InitialDelaySeconds <= 0 {
 		s.ensureStream()
 	}
@@ -157,7 +178,14 @@ func (s *progressSession) onProgress(delta string) {
 }
 
 func (s *progressSession) onTaskProgress(update taskProgressUpdate) {
-	if (!update.timeline && !update.verbatim) || s.cfg.Mode != progressModeStream || !s.reply.Capabilities().Streaming {
+	if s.cfg.Mode != progressModeStream || !s.reply.Capabilities().Streaming {
+		if update.explanation || update.commentary {
+			return
+		}
+		s.onProgress(update.latest)
+		return
+	}
+	if !update.timeline && !update.explanation {
 		s.onProgress(update.latest)
 		return
 	}
@@ -168,7 +196,34 @@ func (s *progressSession) onTaskProgress(update taskProgressUpdate) {
 	if strings.TrimSpace(snapshot) == "" {
 		snapshot = update.latest
 	}
-	offerLatestProgressSnapshot(s.snapshotCh, progressCardSnapshot{text: snapshot, withPrefix: !update.verbatim})
+	snapshotState := progressCardSnapshot{
+		text: snapshot, withPrefix: true, structured: update.timeline,
+		effectiveProgress:  s.observeEffectiveProgress(taskProgressUpdateHasEffectiveProgress(update)),
+		currentExplanation: update.currentExplanation,
+		timelineItems:      append([]agent.ProgressEvent(nil), update.timelineItems...),
+	}
+	s.rememberLatestTaskSnapshot(snapshotState)
+	if !snapshotState.effectiveProgress {
+		return
+	}
+	offerLatestProgressSnapshot(s.snapshotCh, snapshotState)
+}
+
+func (s *progressSession) observeEffectiveProgress(observed bool) bool {
+	s.streamMu.Lock()
+	if observed {
+		s.effectiveProgressSeen = true
+	}
+	replied := s.effectiveProgressSeen
+	s.streamMu.Unlock()
+	return replied
+}
+
+func (s *progressSession) rememberLatestTaskSnapshot(snapshot progressCardSnapshot) {
+	s.streamMu.Lock()
+	snapshot.timelineItems = append([]agent.ProgressEvent(nil), snapshot.timelineItems...)
+	s.latestTaskSnapshot = snapshot
+	s.streamMu.Unlock()
 }
 
 func offerLatestProgressSnapshot(ch chan progressCardSnapshot, snapshot progressCardSnapshot) {
@@ -176,6 +231,7 @@ func offerLatestProgressSnapshot(ch chan progressCardSnapshot, snapshot progress
 	if snapshot.text == "" {
 		return
 	}
+	snapshot.timelineItems = append([]agent.ProgressEvent(nil), snapshot.timelineItems...)
 	select {
 	case ch <- snapshot:
 		return
@@ -244,6 +300,23 @@ func (s *progressSession) hasDurableTerminalStream() bool {
 	return ok
 }
 
+func (s *progressSession) terminalResultPresentation() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.terminalResultPresentationLocked()
+}
+
+func (s *progressSession) terminalResultPresentationLocked() (string, bool) {
+	if s == nil || s.cfg.Mode != progressModeStream || s.stream == nil || s.reply == nil ||
+		!s.reply.Capabilities().Streaming || !s.reply.Capabilities().FinalReplyOutsideStream {
+		return "", false
+	}
+	return progressResultTitleForAgentWorkspace(s.agentName, s.workspaceRoot, 60), true
+}
+
 func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, finalText string, failed bool, stopped bool) (preparedProgressTerminal, error) {
 	if s == nil {
 		return preparedProgressTerminal{}, nil
@@ -265,6 +338,12 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 		currentReply = replyWriter
 	}
 	content, terminalFailed, consumed := progressTerminalArguments(currentReply, parentCanceled, finalText, failed, stopped)
+	if strings.TrimSpace(content) == "" {
+		content = s.latestTaskSnapshotContentLocked()
+	}
+	if strings.TrimSpace(content) == "" {
+		content = progressNoStructuredRecord
+	}
 	s.terminalClaimed = true
 	s.finished = true
 	var checkpoint platform.TerminalCheckpoint
@@ -299,14 +378,11 @@ func progressTerminalArguments(replyWriter platform.Replier, parentCanceled bool
 	if finalText == progressStatusOnlyComplete {
 		return "", terminalFailed, false
 	}
+	if shouldKeepFinalReplyOutsideStream(replyWriter, finalText) {
+		return "", terminalFailed, false
+	}
 	if stopped {
 		return firstNonBlank(finalText, "任务已按请求停止。"), false, strings.TrimSpace(finalText) != ""
-	}
-	if shouldKeepFinalReplyOutsideStream(replyWriter, finalText) {
-		if failed {
-			return firstNonBlank(finalText, "任务执行失败。"), true, false
-		}
-		return "", terminalFailed, false
 	}
 	if !canConsumeFinalReplyInStream(finalText) {
 		fallback := progressDefaultCompletion
@@ -370,7 +446,7 @@ func (s *progressSession) handleProgressSnapshot(snapshot progressCardSnapshot, 
 	if time.Since(startedAt) < durationSeconds(s.cfg.InitialDelaySeconds, 0) {
 		return
 	}
-	s.sendSnapshotIfAllowed(snapshot.text, state, snapshot.withPrefix)
+	s.sendSnapshotIfAllowed(snapshot, state)
 }
 
 func (s *progressSession) handleProgressDelta(delta string, tail string, startedAt time.Time, state *progressSendState) string {
@@ -396,9 +472,13 @@ func (s *progressSession) handleTimedProgress(now time.Time, startedAt time.Time
 	if elapsed < durationSeconds(s.cfg.InitialDelaySeconds, 0) {
 		return
 	}
+	// stream 已经在任务开始时展示统一活跃提示；定时心跳不得用“等待 Agent”等合成文案覆盖它。
+	if s.cfg.Mode == progressModeStream {
+		return
+	}
 	if state.latestSnapshot.text != "" {
 		if state.sentCount == 0 {
-			s.sendSnapshotIfAllowed(state.latestSnapshot.text, state, state.latestSnapshot.withPrefix)
+			s.sendSnapshotIfAllowed(state.latestSnapshot, state)
 		}
 		return
 	}
@@ -416,8 +496,17 @@ func (s *progressSession) sendProgressIfAllowed(summary string, state *progressS
 	s.sendContentIfAllowed(summary, state, true)
 }
 
-func (s *progressSession) sendSnapshotIfAllowed(summary string, state *progressSendState, withPrefix bool) {
-	s.sendContentIfAllowed(summary, state, withPrefix)
+func (s *progressSession) sendSnapshotIfAllowed(snapshot progressCardSnapshot, state *progressSendState) {
+	now := time.Now()
+	if !shouldSendProgress(now, *state, snapshot.text, s.cfg) {
+		return
+	}
+	if !s.sendSnapshotContent(snapshot) {
+		return
+	}
+	state.lastSentSummary = snapshot.text
+	state.lastSentAt = now
+	state.sentCount++
 }
 
 func (s *progressSession) sendContentIfAllowed(summary string, state *progressSendState, withPrefix bool) {
@@ -446,20 +535,155 @@ func (s *progressSession) sendContent(text string, withPrefix bool) bool {
 	stream := s.ensureStreamLocked()
 	if stream != nil {
 		content := text
+		if s.cfg.Mode == progressModeStream {
+			content = appendActiveThinkingIndicator(content)
+		}
 		if withPrefix {
-			content = s.prefix + text
+			content = s.prefix + content
 		}
 		if err := stream.Update(s.ctx, content); err != nil {
 			log.Printf("[handler] failed to update progress stream: %v", err)
 			return false
 		}
 		s.lastContent = content
+		if err := s.persistActiveStreamRecoveryLocked(stream, s.reply); err != nil {
+			log.Printf("[terminal-outbox] failed to refresh active progress card recovery: %v", err)
+		}
 		return true
 	}
 	if s.reply.Capabilities().Streaming {
 		return false
 	}
 	return s.sendText(text)
+}
+
+func (s *progressSession) sendSnapshotContent(snapshot progressCardSnapshot) bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.finished || s.terminalClaimed {
+		return false
+	}
+	stream := s.ensureStreamLocked()
+	if stream == nil {
+		if s.reply.Capabilities().Streaming {
+			return false
+		}
+		return s.sendText(snapshot.text)
+	}
+	content := s.activeSnapshotContentLocked(snapshot)
+	if snapshot.withPrefix {
+		content = s.prefix + content
+	}
+	if preflighter, ok := stream.(platform.StreamContentPreflighter); ok {
+		if err := preflighter.PreflightUpdate(content); err != nil {
+			if !errors.Is(err, platform.ErrStreamContentTooLarge) || !snapshot.structured || len(snapshot.timelineItems) == 0 {
+				log.Printf("[handler] failed to preflight progress stream: %v", err)
+				return false
+			}
+			continued, continueErr := s.continueProgressStreamLocked(snapshot)
+			if continueErr != nil {
+				log.Printf("[handler] failed to continue oversized progress stream: %v", continueErr)
+				return false
+			}
+			return continued
+		}
+	}
+	if err := stream.Update(s.ctx, content); err != nil {
+		log.Printf("[handler] failed to update progress stream: %v", err)
+		return false
+	}
+	s.lastContent = content
+	if err := s.persistActiveStreamRecoveryLocked(stream, s.reply); err != nil {
+		log.Printf("[terminal-outbox] failed to refresh active progress card recovery: %v", err)
+	}
+	return true
+}
+
+func (s *progressSession) activeSnapshotContentLocked(snapshot progressCardSnapshot) string {
+	return appendActiveThinkingIndicator(s.segmentedSnapshotContentLocked(snapshot))
+}
+
+func (s *progressSession) segmentedSnapshotContentLocked(snapshot progressCardSnapshot) string {
+	if !snapshot.structured || len(snapshot.timelineItems) == 0 {
+		return snapshot.text
+	}
+	start := 0
+	if s.segmentAnchor != nil {
+		if index := matchingTaskProgressEntry(snapshot.timelineItems, *s.segmentAnchor); index >= 0 {
+			start = index
+		}
+	}
+	content, timeline := renderTaskProgressTimeline(snapshot.timelineItems[start:], snapshot.text)
+	if !timeline {
+		return snapshot.text
+	}
+	return appendTaskCurrentExplanation(content, snapshot.currentExplanation)
+}
+
+func (s *progressSession) latestTaskSnapshotContentLocked() string {
+	snapshot := s.latestTaskSnapshot
+	if strings.TrimSpace(snapshot.text) == "" {
+		return ""
+	}
+	content := s.segmentedSnapshotContentLocked(snapshot)
+	if snapshot.withPrefix {
+		content = s.prefix + content
+	}
+	return strings.TrimSpace(content)
+}
+
+func (s *progressSession) continueProgressStreamLocked(snapshot progressCardSnapshot) (bool, error) {
+	oldStream, ok := s.stream.(platform.SupersedableStream)
+	if !ok {
+		return false, fmt.Errorf("oversized progress stream does not support continuation")
+	}
+	segmentStart := len(snapshot.timelineItems) - 1
+	initialContent, timeline := renderTaskProgressTimeline(snapshot.timelineItems[segmentStart:], snapshot.text)
+	if !timeline {
+		initialContent = snapshot.text
+	} else {
+		initialContent = appendTaskCurrentExplanation(initialContent, snapshot.currentExplanation)
+	}
+	initialContent = appendActiveThinkingIndicator(initialContent)
+	if snapshot.withPrefix {
+		initialContent = s.prefix + initialContent
+	}
+	nextSegment := s.segmentNumber + 1
+	if nextSegment < 2 {
+		nextSegment = 2
+	}
+	baseTitle := progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60)
+	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{
+		Title: fmt.Sprintf("%s · 进度 %d", baseTitle, nextSegment), InitialContent: initialContent,
+	})
+	if err != nil {
+		return false, err
+	}
+	if stream == nil {
+		return false, fmt.Errorf("progress continuation returned nil stream")
+	}
+	if err := s.persistActiveStreamRecoveryLocked(stream, s.reply); err != nil {
+		if supersedable, ok := stream.(platform.SupersedableStream); ok {
+			_ = supersedable.Supersede(s.ctx, "任务卡续接失败，后续进展仍保留在上一张卡片。")
+		}
+		return false, fmt.Errorf("persist continued progress card recovery: %w", err)
+	}
+	rebindProgressTaskCard(s.reply, s.reply)
+	oldContent := trimActiveThinkingIndicator(s.lastContent)
+	if oldContent == "" {
+		oldContent = renderInitialCardProgress()
+	}
+	s.stream = stream
+	s.lastContent = initialContent
+	s.registerStreamRecoveryChangeHandlerLocked(stream)
+	segmentAnchor := snapshot.timelineItems[segmentStart]
+	s.segmentAnchor = &segmentAnchor
+	s.segmentNumber = nextSegment
+	notice := fmt.Sprintf("%s\n\n---\n后续进度见第 %d 张卡片。", oldContent, nextSegment)
+	if err := oldStream.Supersede(s.ctx, notice); err != nil {
+		log.Printf("[handler] continued progress card but failed to freeze previous segment: %v", err)
+	}
+	return true, nil
 }
 
 func (s *progressSession) sendText(text string) bool {
@@ -489,7 +713,78 @@ func (s *progressSession) ensureStreamLocked() platform.Stream {
 		return nil
 	}
 	s.stream = stream
+	s.lastContent = renderInitialCardProgress()
+	s.segmentNumber = 1
+	if err := s.persistActiveStreamRecoveryLocked(stream, s.reply); err != nil {
+		log.Printf("[terminal-outbox] failed to persist active progress card recovery: %v", err)
+	}
+	s.registerStreamRecoveryChangeHandlerLocked(stream)
 	return stream
+}
+
+func (s *progressSession) registerStreamRecoveryChangeHandlerLocked(stream platform.Stream) {
+	notifier, ok := stream.(platform.DurableStreamReferenceChangeNotifier)
+	if !ok {
+		return
+	}
+	notifier.SetDurableReferenceChangeHandler(s.refreshActiveStreamRecovery)
+}
+
+func (s *progressSession) refreshActiveStreamRecovery() {
+	if s == nil {
+		return
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.finished || s.terminalClaimed || s.stream == nil {
+		return
+	}
+	if err := s.persistActiveStreamRecoveryLocked(s.stream, s.reply); err != nil {
+		log.Printf("[terminal-outbox] failed to refresh active card recovery after adapter state change: %v", err)
+	}
+}
+
+func (s *progressSession) persistActiveStreamRecoveryLocked(stream platform.Stream, reply platform.Replier) error {
+	if s == nil || s.handler == nil {
+		return nil
+	}
+	outbox := s.handler.currentTerminalOutbox()
+	reporter, routeOK := optionalDeliveryRouteReporter(reply)
+	exporter, streamOK := stream.(platform.DurableStreamReferenceExporter)
+	if outbox == nil || !routeOK || !reporter.DeliveryRoute().Valid() || !streamOK {
+		return nil
+	}
+	reference, err := exporter.DurableReference()
+	if err != nil || strings.TrimSpace(reference.Kind) == "" {
+		if err == nil {
+			err = fmt.Errorf("durable stream reference kind is empty")
+		}
+		return fmt.Errorf("export active progress card: %w", err)
+	}
+	if s.recoveryReservation != "" {
+		return outbox.refreshStreamReservation(s.recoveryReservation, reporter.DeliveryRoute(), reference)
+	}
+	trace, _ := observability.TraceFromContext(s.ctx)
+	resultTitle, richResult := s.terminalResultPresentationLocked()
+	reservation, err := outbox.reserve(terminalOutboxDraft{
+		Route: reporter.DeliveryRoute(), AgentName: s.agentName, Stopped: true,
+		Stream: &reference, ResultTitle: resultTitle, RichResult: richResult,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", Trace: trace,
+	})
+	if err != nil {
+		return err
+	}
+	s.recoveryReservation = reservation.ID
+	return nil
+}
+
+func (s *progressSession) activeRecoveryReservation() string {
+	if s == nil {
+		return ""
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.recoveryReservation
 }
 
 // reanchor 在消息底部创建新任务卡，并把后续进展与终态原子切换到新流。
@@ -513,12 +808,13 @@ func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, 
 	if !ok {
 		return false, nil
 	}
-	initialContent := strings.TrimSpace(latestProgress)
-	if initialContent == "" {
-		initialContent = strings.TrimSpace(s.lastContent)
-	}
-	if initialContent == "" {
-		initialContent = renderInitialCardProgress()
+	initialContent := renderInitialCardProgress()
+	if s.latestTaskSnapshot.effectiveProgress {
+		initialContent = s.activeSnapshotContentLocked(s.latestTaskSnapshot)
+	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && strings.TrimSpace(latestProgress) != "" {
+		initialContent = appendActiveThinkingIndicator(latestProgress)
+	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && trimActiveThinkingIndicator(s.lastContent) != "" {
+		initialContent = appendActiveThinkingIndicator(trimActiveThinkingIndicator(s.lastContent))
 	}
 	stream, err := reply.OpenStream(moveCtx, platform.StreamOptions{
 		Title:          progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60),
@@ -530,11 +826,18 @@ func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, 
 	if stream == nil {
 		return false, fmt.Errorf("progress reanchor returned nil stream")
 	}
+	if err := s.persistActiveStreamRecoveryLocked(stream, reply); err != nil {
+		if supersedable, ok := stream.(platform.SupersedableStream); ok {
+			_ = supersedable.Supersede(moveCtx, "任务卡迁移失败，后续进展仍保留在原卡。")
+		}
+		return false, fmt.Errorf("persist reanchored progress card recovery: %w", err)
+	}
 	rebindProgressTaskCard(s.reply, reply)
 	s.stream = stream
 	s.reply = reply
 	s.streamOpenAttempted = true
 	s.lastContent = initialContent
+	s.registerStreamRecoveryChangeHandlerLocked(stream)
 	if err := oldStream.Supersede(moveCtx, progressSupersededNotice); err != nil {
 		return true, err
 	}
@@ -590,6 +893,17 @@ func progressTaskTitleForAgentWorkspace(agentName string, workspaceRoot string, 
 	return progressTaskTitle(title, maxRunes)
 }
 
+func progressResultTitleForAgentWorkspace(agentName string, workspaceRoot string, maxRunes int) string {
+	title := "WeClaw"
+	if strings.TrimSpace(agentName) != "" {
+		title = agentDisplayName(agentName)
+	}
+	if workspace := progressWorkspaceName(workspaceRoot); workspace != "" {
+		title += " · " + workspace
+	}
+	return progressTaskTitle(title, maxRunes)
+}
+
 func progressWorkspaceName(workspaceRoot string) string {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if workspaceRoot == "" {
@@ -628,28 +942,57 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	stopped = stopped || parentCanceled
+	terminalCardContent := ""
+	if s.reply.Capabilities().FinalReplyOutsideStream {
+		terminalCardContent = s.latestTaskSnapshotContentLocked()
+		if strings.TrimSpace(terminalCardContent) == "" {
+			terminalCardContent = progressNoStructuredRecord
+		}
+	}
 	var err error
 	switch {
 	case stopped:
 		content := firstNonBlank(finalText, "任务已按请求停止。")
+		if finalText == progressStatusOnlyComplete {
+			content = ""
+		}
+		if terminalCardContent != "" {
+			content = terminalCardContent
+		}
 		if stoppable, ok := stream.(platform.StoppableStream); ok {
 			err = stoppable.Stop(ctx, content)
 		} else {
 			err = stream.Complete(ctx, content)
 		}
 	case failed:
-		err = stream.Fail(ctx, firstNonBlank(finalText, "任务执行失败。"))
+		content := firstNonBlank(finalText, "任务执行失败。")
+		if finalText == progressStatusOnlyComplete {
+			content = ""
+		}
+		if terminalCardContent != "" {
+			content = terminalCardContent
+		}
+		err = stream.Fail(ctx, content)
 	case finalText == progressStatusOnlyComplete:
-		err = stream.Complete(ctx, "")
+		err = stream.Complete(ctx, terminalCardContent)
 	case strings.TrimSpace(finalText) != "":
-		err = stream.Complete(ctx, finalText)
+		content := finalText
+		if terminalCardContent != "" {
+			content = terminalCardContent
+		}
+		err = stream.Complete(ctx, content)
 	default:
-		err = stream.Complete(ctx, progressDefaultCompletion)
+		content := progressDefaultCompletion
+		if terminalCardContent != "" {
+			content = terminalCardContent
+		}
+		err = stream.Complete(ctx, content)
 	}
 	if err != nil {
 		log.Printf("[handler] failed to finish progress stream: %v", err)
 		return false
 	}
+	s.discardActiveStreamRecoveryLocked()
 	notification := renderStreamTerminalNotification(parentCanceled, failed, stopped, finalText)
 	if notification != "" && s.reply.Capabilities().StreamCompletionNotification {
 		if notifyErr := s.reply.SendText(ctx, notification); notifyErr != nil {
@@ -657,4 +1000,19 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 		}
 	}
 	return strings.TrimSpace(finalText) != "" && finalText != progressStatusOnlyComplete
+}
+
+func (s *progressSession) discardActiveStreamRecoveryLocked() {
+	if s == nil || s.handler == nil || s.recoveryReservation == "" {
+		return
+	}
+	outbox := s.handler.currentTerminalOutbox()
+	if outbox == nil {
+		return
+	}
+	if err := outbox.discardReservation(s.recoveryReservation); err != nil {
+		log.Printf("[terminal-outbox] failed to clear completed progress card recovery: %v", err)
+		return
+	}
+	s.recoveryReservation = ""
 }

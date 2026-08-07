@@ -29,7 +29,7 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(160, "/cx cd weclaw"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(161, "/cx switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(161, "/cx switch 1"))
 
 	key := buildCodexConversationID("user-1", "codex", workspace)
 	task, ok := h.activeTask(key)
@@ -75,7 +75,7 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(162, "/cx cd weclaw"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(163, "/cx switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(163, "/cx switch 1"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(164, "补充要求"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(165, "/guide"))
 

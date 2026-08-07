@@ -28,7 +28,7 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(114, "/cx cd alpha"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(115, "/cx switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(115, "/cx switch 1"))
 
 	bindingKey := codexBindingKey("user-1", "codex")
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspaceA)
@@ -61,7 +61,7 @@ func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(147, "/cx cd weclaw"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(148, "/cx switch 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(148, "/cx switch 1"))
 
 	thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if thread != "thread-bad" || pending {
@@ -88,10 +88,10 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(140, "/cx 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(140, "/cx 1"))
 
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
-		t.Fatalf("/cx 0 should enter workspace, got cwd=%q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
+		t.Fatalf("/cx 1 should enter workspace, got cwd=%q want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
 	}
 	bindingKey := codexBindingKey("user-1", "codex")
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
@@ -99,11 +99,34 @@ func TestCodexShortIndexEntersWorkspaceFromWorkspaceList(t *testing.T) {
 		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已进入工作空间并绑定唯一会话") || strings.Contains(text, "0. 会话 A") {
-		t.Fatalf("/cx 0 should auto switch single session, messages=%#v", calls.texts())
+	if !strings.Contains(text, "已进入工作空间并绑定唯一会话") || strings.Contains(text, "1. 会话 A") {
+		t.Fatalf("/cx 1 should auto switch single session, messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "模型: gpt-5.5") || !strings.Contains(text, "推理强度: medium") {
 		t.Fatalf("auto switch should show session model status, messages=%#v", calls.texts())
+	}
+}
+
+func TestCodexZeroIndexDoesNotSelectFirstWorkspace(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "weclaw")
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
+	h.SetCodexLocalSessionDir(codexDir)
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
+	h.defaultName = "codex"
+	h.agents["codex"] = ag
+	client, calls, closeServer := newRecordingILinkClient(t)
+	defer closeServer()
+
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(145, "/cx 0"))
+
+	if got := ag.lastWorkingDir(); got != "" {
+		t.Fatalf("/cx 0 changed cwd to %q, want no selection", got)
+	}
+	if !containsText(calls.texts(), "工作空间编号不存在") {
+		t.Fatalf("/cx 0 reply=%#v, want invalid workspace number", calls.texts())
 	}
 }
 
@@ -126,7 +149,7 @@ func TestCodexShortIndexCommitsBindingWhenSingleSessionRuntimeCannotBeRestored(t
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(146, "/cx 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(146, "/cx 1"))
 
 	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
 	oldThread, _ := h.ensureCodexSessions().getThread(bindingKey, oldWorkspace)
@@ -192,7 +215,7 @@ func TestCodexShortIndexSwitchesSessionInsideWorkspace(t *testing.T) {
 	defer closeServer()
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(141, "/cx cd weclaw"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(142, "/cx 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(142, "/cx 1"))
 
 	bindingKey := codexBindingKey("user-1", "codex")
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
@@ -200,7 +223,7 @@ func TestCodexShortIndexSwitchesSessionInsideWorkspace(t *testing.T) {
 		t.Fatalf("use=%q thread=%q pending=%v", ag.useThreadID, threadID, pending)
 	}
 	if !containsText(calls.texts(), "已切换并绑定") {
-		t.Fatalf("/cx 0 should switch current workspace session, messages=%#v", calls.texts())
+		t.Fatalf("/cx 1 should switch current workspace session, messages=%#v", calls.texts())
 	}
 }
 
@@ -221,7 +244,7 @@ func TestCodexShortDotDotReturnsToWorkspaceList(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(144, "/cx .."))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已返回工作空间列表") || !strings.Contains(text, "0. weclaw") {
+	if !strings.Contains(text, "已返回工作空间列表") || !strings.Contains(text, "1. weclaw") {
 		t.Fatalf("/cx .. should return to workspace list, messages=%#v", calls.texts())
 	}
 }
@@ -248,7 +271,7 @@ func TestCodexCxCdDotDotReturnsToWorkspaceListWithoutChangingCwd(t *testing.T) {
 	text := strings.Join(calls.texts(), "\n")
 	if !strings.Contains(text, "已返回工作空间列表") ||
 		!strings.Contains(text, "Codex 工作空间") ||
-		!strings.Contains(text, "0. weclaw") {
+		!strings.Contains(text, "1. weclaw") {
 		t.Fatalf("cd .. reply should include workspace list, messages=%#v", calls.texts())
 	}
 }

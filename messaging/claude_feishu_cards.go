@@ -57,10 +57,33 @@ func (h *Handler) handleFeishuClaudeSessionCommand(req claudeFeishuCommandReques
 			Platform: msg.Platform, Admin: h.isAdminMessage(msg), Private: isPrivatePlatformMessage(msg, req.RouteUserID),
 		})
 	}
+	if h.sendFeishuClaudeStatusCard(req, result) {
+		return true
+	}
 	if h.sendFeishuClaudeNavigationChoices(req, result) {
 		return true
 	}
 	sendPlatformText(req.Context, req.Reply, msg.UserID, result.Reply)
+	return true
+}
+
+// sendFeishuClaudeStatusCard 把已完成的新会话结果收敛到单张 CardKit 完成卡片。
+func (h *Handler) sendFeishuClaudeStatusCard(req claudeFeishuCommandRequest, result navigationCommandResult) bool {
+	title := strings.TrimSpace(result.StatusCardTitle)
+	if title == "" {
+		return false
+	}
+	stream, err := req.Reply.OpenStream(req.Context, platform.StreamOptions{
+		Title: title, InitialContent: result.Reply,
+	})
+	if err != nil {
+		log.Printf("[handler] failed to open feishu claude status card: %v", err)
+		return false
+	}
+	if err := stream.Complete(req.Context, result.Reply); err != nil {
+		log.Printf("[handler] failed to complete feishu claude status card: %v", err)
+		return false
+	}
 	return true
 }
 

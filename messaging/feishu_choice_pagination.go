@@ -83,7 +83,7 @@ func feishuPaginatedPrompt(prompt string, page feishuChoicePage) string {
 }
 
 func feishuIndexedChoiceLabel(index int, label string) string {
-	return fmt.Sprintf("%d. %s", index, strings.TrimSpace(label))
+	return fmt.Sprintf("%d. %s", index+1, strings.TrimSpace(label))
 }
 
 func parseFeishuNavigationPage(fields []string, command string) (feishuNavigationPageRequest, bool) {

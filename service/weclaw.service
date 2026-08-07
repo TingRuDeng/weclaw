@@ -4,9 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/weclaw start
-Restart=always
+Environment=WECLAW_SERVICE_MANAGER=systemd
+ExecStart=/usr/local/bin/weclaw start --foreground
+Restart=on-failure
 RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15s
 StandardOutput=journal
 StandardError=journal
 

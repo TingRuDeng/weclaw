@@ -90,6 +90,22 @@ func TestNativeAgentMessageTraceRecordsLengthWithoutBody(t *testing.T) {
 	}
 }
 
+func TestCodexCommentaryTraceRecordsLengthWithoutBody(t *testing.T) {
+	h := NewHandler(nil, nil)
+	capture := &traceCapture{}
+	h.SetTraceRecorder(capture)
+	trace := observability.NewTraceContext(observability.TraceSeed{Platform: string(platform.PlatformFeishu)})
+	h.recordProgressTrace(trace, agent.ProgressEvent{
+		ID: "agent-message:message-1", Kind: agent.ProgressKindCommentary,
+		State: agent.ProgressStateCompleted, Sequence: 9,
+	}, "private Codex commentary")
+
+	events := capture.snapshot()
+	if len(events) != 1 || events[0].Summary != "text_runes=24" || events[0].Kind != string(agent.ProgressKindCommentary) {
+		t.Fatalf("events=%#v", events)
+	}
+}
+
 func TestHandleMessageRecordsDuplicateWithoutAcceptingIt(t *testing.T) {
 	h := NewHandler(nil, nil)
 	capture := &traceCapture{}

@@ -116,6 +116,9 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 	if threadID == "" {
 		return fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
 	}
+	if err := h.hiddenSessionError(agentNameFromBindingKey(route.bindingKey), threadID, "cx"); err != nil {
+		return err
+	}
 	resolveOpts := codexRuntimeResolveOptions{route: route, threadID: threadID, ag: ag}
 	var resolution codexRuntimeResolution
 	var err error
@@ -161,6 +164,9 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	h.bindConversationCwd(ag, conversationID, workspaceRoot)
 	if binding.SessionID == "" || binding.Status == claudeBindingUnbound {
 		return "", fmt.Errorf("当前窗口没有有效的 Claude 会话，请发送 /cc ls 选择或 /cc new 新建")
+	}
+	if err := h.hiddenSessionError(agentName, binding.SessionID, "cc"); err != nil {
+		return "", err
 	}
 	if binding.Status == claudeBindingPendingResume {
 		return h.resumePendingClaudeBinding(ctx, claudeResumeRequest{

@@ -57,6 +57,9 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTa
 	h.tasks.mu.Lock()
 	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()
+	if h.tasks.draining {
+		return nil, ctx, false
+	}
 	if h.tasks.active[key] != nil {
 		return h.tasks.active[key], ctx, false
 	}
@@ -69,6 +72,9 @@ func (h *Handler) beginActiveTask(ctx context.Context, key string, meta activeTa
 func (h *Handler) beginSynchronousActiveTask(ctx context.Context, key string, meta activeTaskMeta) (*activeAgentTask, context.Context, error) {
 	task, taskCtx, started := h.beginActiveTask(ctx, key, meta)
 	if !started {
+		if task == nil {
+			return nil, ctx, ErrHandlerDraining
+		}
 		return nil, ctx, fmt.Errorf("execution %s already has an active task", key)
 	}
 	return task, taskCtx, nil
@@ -382,10 +388,27 @@ func (t *activeAgentTask) recordProgressUpdateWithPolicy(now time.Time, event ag
 	}
 	t.view = next
 	card, timeline := renderTaskProgressCard(next)
+	latest := next.lastProgress
+	if event.Kind == agent.ProgressKindMessage {
+		latest = strings.TrimSpace(event.DisplayText())
+	}
 	return taskProgressUpdate{
-		latest: next.lastProgress, card: card, timeline: timeline,
-		verbatim: next.lastProgressEvent.Kind == agent.ProgressKindMessage,
+		latest: latest, card: card, timeline: timeline,
+		explanation:        event.Kind == agent.ProgressKindMessage,
+		commentary:         event.Kind == agent.ProgressKindCommentary,
+		currentExplanation: next.currentExplanation,
+		timelineItems:      append([]agent.ProgressEvent(nil), next.progressTimeline...),
 	}, true
+}
+
+func (t *activeAgentTask) setProgressTimelineLimit(limit int) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	value := limit
+	t.view.progressTimelineLimit = &value
+	t.mu.Unlock()
 }
 
 func (t *activeAgentTask) recordProgressText(now time.Time, text string) (string, bool) {

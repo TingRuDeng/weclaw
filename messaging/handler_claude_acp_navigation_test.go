@@ -20,7 +20,7 @@ func TestClaudeCcLsUsesACPCatalogOnly(t *testing.T) {
 	}
 
 	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc ls")
-	if !strings.Contains(text, "允许会话") || strings.Contains(text, "越权会话") || fake.listCalls != 1 {
+	if !strings.Contains(text, "1. "+filepath.Base(allowed)+" / 允许会话") || strings.Contains(text, "越权会话") || fake.listCalls != 1 {
 		t.Fatalf("text=%q listCalls=%d", text, fake.listCalls)
 	}
 }
@@ -30,7 +30,7 @@ func TestClaudeSwitchCommitsACPBindingAndShowsConfig(t *testing.T) {
 	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-1", Cwd: workspace, Title: "目标会话"}}
 	fake.sessionConfig = agent.ClaudeSessionConfig{Model: "opus", Effort: "high"}
 
-	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 0")
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 1")
 	binding := h.ensureClaudeSessions().binding(claudeBindingKey("user-1", "claude"))
 	if fake.useSessionID != "session-1" || binding.SessionID != "session-1" || binding.Status != claudeBindingReady {
 		t.Fatalf("use=%q binding=%+v", fake.useSessionID, binding)
@@ -40,6 +40,20 @@ func TestClaudeSwitchCommitsACPBindingAndShowsConfig(t *testing.T) {
 	}
 	if !strings.Contains(text, "运行通道: 已就绪") {
 		t.Fatalf("text=%q, want ready status", text)
+	}
+}
+
+func TestClaudeZeroIndexDoesNotSelectFirstSession(t *testing.T) {
+	h, fake, workspace := newClaudeACPNavigationHandler(t)
+	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-1", Cwd: workspace, Title: "目标会话"}}
+
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 0")
+
+	if fake.useSessionID != "" {
+		t.Fatalf("/cc switch 0 selected %q, want no selection", fake.useSessionID)
+	}
+	if !strings.Contains(text, "查找 Claude 会话失败") {
+		t.Fatalf("text=%q, want rejected session selection", text)
 	}
 }
 
@@ -135,7 +149,7 @@ func TestClaudeSwitchSaveFailureRollsBackRuntime(t *testing.T) {
 	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-new", Cwd: workspace}}
 	h.ensureClaudeSessions().persist = func(claudeSessionState) error { return errors.New("disk full") }
 
-	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 0")
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 1")
 	binding := h.ensureClaudeSessions().binding(key)
 	if !strings.Contains(text, "失败，请稍后重试") || strings.Contains(text, "disk full") || binding.SessionID != "session-old" {
 		t.Fatalf("text=%q binding=%+v", text, binding)
@@ -186,7 +200,7 @@ func TestClaudeSwitchAgentSelectionSaveFailureRollsBack(t *testing.T) {
 	}
 	h.ensureAgentSessions().filePath = filepath.Join(invalidParent, "state.json")
 
-	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 0")
+	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc switch 1")
 	binding := h.ensureClaudeSessions().binding(key)
 	selected, _ := h.ensureAgentSessions().Get("user-1")
 	if !strings.Contains(text, "失败") || binding.SessionID != "session-old" || selected != "codex" {

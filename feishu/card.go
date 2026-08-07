@@ -7,20 +7,22 @@ import (
 )
 
 const (
-	cardStatusThinking   = "thinking"
-	cardStatusStreaming  = "streaming"
-	cardStatusDone       = "done"
-	cardStatusError      = "error"
-	cardStatusStopped    = "stopped"
-	cardStatusSuperseded = "superseded"
-	cardMainContentID    = "main_content"
+	cardStatusThinking           = "thinking"
+	cardStatusStreaming          = "streaming"
+	cardStatusDone               = "done"
+	cardStatusError              = "error"
+	cardStatusStopped            = "stopped"
+	cardStatusSuperseded         = "superseded"
+	cardMainContentID            = "main_content"
+	taskCardNoStructuredProgress = "本任务未产生结构化进度记录。"
 )
 
 type cardOptions struct {
-	Status    string
-	Title     string
-	Content   string
-	Approvals []string
+	Status             string
+	Title              string
+	Content            string
+	Approvals          []string
+	InlineActiveStatus bool
 }
 
 // buildCardV2 构建飞书 CardKit 2.0 卡片 JSON，状态和正文使用稳定 element_id 便于后续流式更新。
@@ -31,25 +33,23 @@ func buildCardV2(opts cardOptions) (string, error) {
 		title = "WeClaw"
 	}
 	content := strings.TrimSpace(opts.Content)
-	omitMainContent := status == cardStatusDone && content == ""
-	if content == "" && !omitMainContent {
+	if content == "" {
 		content = statusDefaultContent(status)
 	}
 	elements := make([]map[string]any, 0, 3)
-	if label := statusLabel(status); label != "" {
+	inlineActiveStatus := opts.InlineActiveStatus && (status == cardStatusThinking || status == cardStatusStreaming)
+	if label := statusLabel(status); label != "" && !inlineActiveStatus {
 		elements = append(elements, map[string]any{
 			"tag":        "markdown",
 			"element_id": "status",
 			"content":    label,
 		})
 	}
-	if !omitMainContent {
-		elements = append(elements, map[string]any{
-			"tag":        "markdown",
-			"element_id": cardMainContentID,
-			"content":    content,
-		})
-	}
+	elements = append(elements, map[string]any{
+		"tag":        "markdown",
+		"element_id": cardMainContentID,
+		"content":    content,
+	})
 	if approvalContent := approvalRecordsContent(opts.Approvals); approvalContent != "" {
 		elements = append(elements, map[string]any{
 			"tag":        "markdown",
@@ -114,8 +114,7 @@ func statusLabel(status string) string {
 	case cardStatusStreaming:
 		return "**生成中**"
 	case cardStatusDone:
-		// 成功终态由绿色标题和最终内容表达，避免重复显示“已完成”。
-		return ""
+		return "**已完成**"
 	case cardStatusError:
 		return "**执行失败**"
 	case cardStatusStopped:
@@ -147,7 +146,7 @@ func statusTemplate(status string) string {
 func statusDefaultContent(status string) string {
 	switch status {
 	case cardStatusDone:
-		return ""
+		return taskCardNoStructuredProgress
 	case cardStatusError:
 		return "任务执行失败。"
 	case cardStatusStopped:

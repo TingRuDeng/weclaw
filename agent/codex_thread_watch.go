@@ -82,10 +82,13 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 
 func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThreadWatchOptions) (string, error) {
 	assembler, diagnostics := newCodexFinalAssembler(), newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
+	messageProgress := codexMessageProgressBuffer{}
+	callbacks := progressCallbacks{onText: opts.onProgress, onEvent: opts.onProgressEvent}
 	ticksWithoutEvent := 0
 	for {
 		select {
 		case <-ctx.Done():
+			messageProgress.flush(callbacks)
 			return "", ctx.Err()
 		case <-opts.reconcile:
 			ticksWithoutEvent++
@@ -96,7 +99,12 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 				ticksWithoutEvent = 0
 			}
 			text, finished, err := a.reconcileAttachedCodexTurn(ctx, opts, assembler)
-			if err != nil || finished {
+			if err != nil {
+				messageProgress.flush(callbacks)
+				return text, err
+			}
+			if finished {
+				messageProgress.discard()
 				return text, err
 			}
 		case evt := <-opts.turnCh:
@@ -104,6 +112,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 				continue
 			}
 			ticksWithoutEvent = 0
+			messageProgress.beforeEvent(evt, callbacks)
 			if evt.Kind == "interrupted" {
 				return "", attachedCodexInterruptedError(opts, evt)
 			}
@@ -124,8 +133,7 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 			}
 			collectCodexTurnText(
 				assembler, evt,
-				progressCallbacks{onText: opts.onProgress, onEvent: opts.onProgressEvent},
-				diagnostics,
+				callbacks, diagnostics, &messageProgress,
 			)
 			if evt.Kind == "completed" {
 				return a.attachedCodexFinalText(ctx, opts.conversationID, opts.threadID, assembler)
@@ -205,16 +213,25 @@ func (a *ACPAgent) handleAttachedCodexApproval(ctx context.Context, evt *codexTu
 	return nil
 }
 
-func collectCodexTurnText(assembler *codexFinalAssembler, evt *codexTurnEvent, callbacks progressCallbacks, diagnostics *codexTurnDiagnostics) {
+func collectCodexTurnText(
+	assembler *codexFinalAssembler,
+	evt *codexTurnEvent,
+	callbacks progressCallbacks,
+	diagnostics *codexTurnDiagnostics,
+	messageProgress *codexMessageProgressBuffer,
+) {
+	if evt.Progress != nil {
+		diagnostics.remember(codexProgressPrefix + evt.Progress.DisplayText())
+		callbacks.emit(*evt.Progress)
+		return
+	}
 	if evt.Delta != "" {
 		assembler.addDelta(evt.ItemID, evt.Delta)
 	}
 	if evt.Text != "" {
 		if evt.Kind == "item_completed" {
 			assembler.addCompleted(evt.ItemID, evt.Text)
-			if event, ok := codexNativeMessageProgressEvent(evt); ok {
-				callbacks.emit(event)
-			}
+			messageProgress.observeCompleted(evt, callbacks)
 		} else {
 			assembler.addSnapshot(evt.ItemID, evt.Text)
 		}

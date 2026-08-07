@@ -73,7 +73,7 @@ func (h *Handler) renderCodexWorkspaceListForAccess(bindingKey string, actorUser
 	}
 	lines := []string{"Codex 工作空间:"}
 	for index, group := range groups {
-		lines = append(lines, fmt.Sprintf("%d. %s", index, group.Name))
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, group.Name))
 	}
 	return wechatCommandText(lines...)
 }
@@ -89,7 +89,7 @@ func (h *Handler) renderCodexSessionList(bindingKey string, workspaceRoot string
 	}
 	lines := []string{shortCodexWorkspaceName(workspaceRoot) + " 会话"}
 	for index, session := range sessions {
-		lines = append(lines, fmt.Sprintf("%d. %s", index, codexSessionDisplayName(session)))
+		lines = append(lines, fmt.Sprintf("%d. %s", index+1, codexSessionDisplayName(session)))
 	}
 	lines = append(lines, "", "发送 /cx cd .. 返回工作空间列表。")
 	return wechatCommandText(lines...)

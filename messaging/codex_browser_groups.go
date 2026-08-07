@@ -135,6 +135,17 @@ func (h *Handler) codexSessionsForWorkspace(bindingKey string, workspaceRoot str
 		return nil, codexAppCatalogReadError("会话目录", err)
 	}
 	if available {
+		snapshot, snapshotErr := h.ensureWorkspaceRegistry().Snapshot(agentNameFromBindingKey(bindingKey))
+		if snapshotErr != nil {
+			return nil, fmt.Errorf("Codex 会话导航状态不可用，请检查 workspace-registry.json 后重试")
+		}
+		filtered := sessions[:0]
+		for _, session := range sessions {
+			if !snapshot.IsSessionHidden(session.ThreadID) {
+				filtered = append(filtered, session)
+			}
+		}
+		sessions = filtered
 		visible := codexVisibleThreadSet(sessions)
 		if err := h.ensureCodexSessions().reconcileVisibleRemoteThreads(visible); err != nil {
 			return nil, err

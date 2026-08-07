@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,7 +56,7 @@ func TestFeishuClaudeSessionChoicesPaginateWithStableIDs(t *testing.T) {
 	if len(choices) != 4 || choices[0].ID != "/cc switch session-07" || choices[1].ID != "/cc switch session-08" || choices[2].ID != "/cc page sessions 1" || choices[3].ID != "/cc cd .." {
 		t.Fatalf("second choices=%#v，会话分页必须保留稳定 sessionId", choices)
 	}
-	if choices[0].Label != "7. 会话 07" || choices[1].Label != "8. 会话 08" {
+	if choices[0].Label != "8. 会话 07" || choices[1].Label != "9. 会话 08" {
 		t.Fatalf("second labels=%#v，会话分页必须显示全局编号", choices)
 	}
 }
@@ -82,7 +83,7 @@ func TestFeishuClaudeCcLsSendsAllowedACPWorkspaceChoices(t *testing.T) {
 	if len(reply.Texts) != 0 {
 		t.Fatalf("texts=%#v，卡片成功后不应重复文本", reply.Texts)
 	}
-	if reply.Choices[0].Choices[0].Label != "0. alpha" || reply.Choices[0].Choices[1].Label != "1. beta" {
+	if reply.Choices[0].Choices[0].Label != "1. alpha" || reply.Choices[0].Choices[1].Label != "2. beta" {
 		t.Fatalf("workspace choices=%#v，工作空间卡片必须显示可直接用于命令的编号", reply.Choices[0].Choices)
 	}
 	for _, choice := range reply.Choices[0].Choices {
@@ -128,10 +129,25 @@ func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
 	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.resetSessionID = "session-new"
+	ag.sessionConfig = agent.ClaudeSessionConfig{Model: "opus", Effort: "high"}
 
 	created := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc new"})
-	if len(created.Texts) != 1 || !strings.Contains(created.Texts[0], "已创建并绑定") {
-		t.Fatalf("created texts=%#v choices=%#v", created.Texts, created.Choices)
+	if len(created.Texts) != 0 || created.OpenStreamCalls != 1 || created.Stream.Completed == "" {
+		t.Fatalf("created texts=%#v streamCalls=%d completed=%q", created.Texts, created.OpenStreamCalls, created.Stream.Completed)
+	}
+	if created.Stream.Options.Title != "Claude 会话" {
+		t.Fatalf("title=%q，期望 Claude 会话状态卡片", created.Stream.Options.Title)
+	}
+	for _, want := range []string{
+		"已创建并绑定 Claude 会话。",
+		"工作空间: " + filepath.Base(workspace),
+		"模型: opus",
+		"推理强度: high",
+		"运行通道: 已就绪",
+	} {
+		if !strings.Contains(created.Stream.Completed, want) {
+			t.Fatalf("completed=%q，缺少 %q", created.Stream.Completed, want)
+		}
 	}
 
 	listed := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc ls"})
@@ -152,6 +168,47 @@ func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
 	}
 }
 
+func TestFeishuClaudeNewStatusCardMarksUnrecordedSessionConfigUnknown(t *testing.T) {
+	h, ag := newClaudeFeishuCardHandler(t)
+	workspace := t.TempDir()
+	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	ag.resetSessionID = "session-new"
+
+	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc new"})
+
+	if len(reply.Texts) != 0 || reply.OpenStreamCalls != 1 {
+		t.Fatalf("texts=%#v streamCalls=%d", reply.Texts, reply.OpenStreamCalls)
+	}
+	if strings.Count(reply.Stream.Completed, unknownSessionModelValue) != 2 ||
+		!strings.Contains(reply.Stream.Completed, "模型: "+unknownSessionModelValue) ||
+		!strings.Contains(reply.Stream.Completed, "推理强度: "+unknownSessionModelValue) {
+		t.Fatalf("completed=%q，缺失配置必须逐项显示未知", reply.Stream.Completed)
+	}
+}
+
+func TestFeishuClaudeNewFallsBackToTextWhenStatusCardCannotOpen(t *testing.T) {
+	h, ag := newClaudeFeishuCardHandler(t)
+	workspace := t.TempDir()
+	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
+	h.SetAllowedWorkspaceRoots([]string{workspace})
+	ag.resetSessionID = "session-new"
+
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true, Streaming: true})
+	reply.OpenStreamErr = errors.New("cardkit unavailable")
+	h.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "user", MessageID: "cc-new-fallback", Text: "/cc new",
+		Metadata: map[string]string{"feishu_session_key": "feishu:user"},
+	}, reply)
+
+	if reply.OpenStreamCalls != 1 || len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "已创建并绑定 Claude 会话") {
+		t.Fatalf("streamCalls=%d texts=%#v，卡片打开失败必须降级为成功文本", reply.OpenStreamCalls, reply.Texts)
+	}
+	if binding := h.ensureClaudeSessions().binding(claudeBindingKey("feishu:user", "claude")); binding.SessionID != "session-new" {
+		t.Fatalf("binding=%+v，展示降级不得撤销已提交的新会话", binding)
+	}
+}
+
 func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
@@ -166,7 +223,7 @@ func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 3 {
 		t.Fatalf("choices=%#v，期望会话与返回按钮", reply.Choices)
 	}
-	if reply.Choices[0].Choices[0].ID != "/cc switch session-new" || reply.Choices[0].Choices[0].Label != "0. 较新会话" || reply.Choices[0].Choices[1].Label != "1. 较早会话" {
+	if reply.Choices[0].Choices[0].ID != "/cc switch session-new" || reply.Choices[0].Choices[0].Label != "1. 较新会话" || reply.Choices[0].Choices[1].Label != "2. 较早会话" {
 		t.Fatalf("choices=%#v，期望稳定 sessionId", reply.Choices)
 	}
 	binding := h.ensureClaudeSessions().binding(claudeBindingKey("feishu:user", "claude"))
@@ -211,11 +268,11 @@ func TestFeishuClaudeSessionLabelsUseAcceptedIndexesAcrossWorkspaces(t *testing.
 	if len(sessions.Choices) != 1 || len(sessions.Choices[0].Choices) != 3 {
 		t.Fatalf("session choices=%#v", sessions.Choices)
 	}
-	if sessions.Choices[0].Choices[0].Label != "1. Alpha 新" || sessions.Choices[0].Choices[1].Label != "2. Alpha 旧" {
+	if sessions.Choices[0].Choices[0].Label != "2. Alpha 新" || sessions.Choices[0].Choices[1].Label != "3. Alpha 旧" {
 		t.Fatalf("session choices=%#v，卡片编号必须与 /cc switch 接受的全局编号一致", sessions.Choices[0].Choices)
 	}
 
-	switched := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc switch 1"})
+	switched := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc switch 2"})
 	if ag.useSessionID != "session-alpha-new" || len(switched.Texts) != 1 || !strings.Contains(switched.Texts[0], "已切换 Claude 会话") {
 		t.Fatalf("session=%q texts=%#v，卡片编号必须可以直接用于切换", ag.useSessionID, switched.Texts)
 	}

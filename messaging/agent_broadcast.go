@@ -226,6 +226,8 @@ func (h *Handler) replyBroadcastAdmission(req broadcastAgentsRequest, name strin
 		text = queuedAgentMessage
 	} else if status == activeTaskForeignWriter {
 		text = "当前 Claude session 正由另一个窗口执行任务，请等待该任务结束后重试。"
+	} else if status == activeTaskDraining {
+		text = "WeClaw 正在安全重启，暂不接收新任务，请稍后重试。"
 	}
 	results <- newBroadcastAgentResult(req, name, text, false)
 }

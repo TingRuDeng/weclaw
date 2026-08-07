@@ -34,6 +34,9 @@ func TestClaudeACPConfiguresNewSessionModelThenEffort(t *testing.T) {
 		case "session/new":
 			return json.RawMessage(`{"sessionId":"session-1","configOptions":` + claudeACPConfigOptionsJSON + `}`), nil
 		case "session/set_config_option":
+			if configOptionValue(params) == "high" {
+				return claudeConfigResultForTest("opus", "high", "low", "medium"), nil
+			}
 			return claudeConfigResultForTest("opus", "low", "medium", "high"), nil
 		default:
 			return nil, fmt.Errorf("unexpected method %s", method)
@@ -52,6 +55,10 @@ func TestClaudeACPConfiguresNewSessionModelThenEffort(t *testing.T) {
 	models, err := ag.ListClaudeModels(context.Background())
 	if err != nil || len(models) != 2 || models[0].ID != "claude-sonnet-5" || models[0].Alias != "sonnet" {
 		t.Fatalf("models=%#v err=%v，期望缓存 ACP 模型选项", models, err)
+	}
+	config, found := ag.ClaudeSessionConfig("conversation-1")
+	if !found || config.Model != "opus" || config.Effort != "high" {
+		t.Fatalf("config=%#v found=%t，期望读取 session/new 后真实写入的 ACP session 配置", config, found)
 	}
 }
 

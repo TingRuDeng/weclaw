@@ -29,7 +29,10 @@ type taskViewState struct {
 	lastProgressEvent       agent.ProgressEvent
 	lastProgressAt          time.Time
 	lastProgressSourceSeq   uint64
+	currentExplanation      string
+	currentExplanationAt    time.Time
 	progressTimeline        []agent.ProgressEvent
+	progressTimelineLimit   *int
 	progressTimelineEnabled bool
 	revision                uint64
 	closed                  bool
@@ -56,12 +59,25 @@ func reduceTaskView(current taskViewState, event taskViewEvent) (taskViewState, 
 		if sequence > 0 {
 			next.lastProgressSourceSeq = sequence
 		}
+		if event.progress.Kind == agent.ProgressKindMessage {
+			if sequence == 0 {
+				return current, false
+			}
+			next.currentExplanation = display
+			next.currentExplanationAt = event.at
+			next.revision++
+			return next, true
+		}
 		next.revision++
 		event.progress.Text = display
 		next.lastProgress = display
 		next.lastProgressEvent = event.progress
 		next.lastProgressAt = event.at
-		next.progressTimeline = appendTaskProgressTimeline(current.progressTimeline, event.progress)
+		limit := defaultTaskProgressTimelineLimit
+		if current.progressTimelineLimit != nil {
+			limit = *current.progressTimelineLimit
+		}
+		next.progressTimeline = appendTaskProgressTimeline(current.progressTimeline, event.progress, limit)
 		next.progressTimelineEnabled = current.progressTimelineEnabled || isStructuredTaskProgress(event.progress)
 		return next, true
 	case taskViewClosed:

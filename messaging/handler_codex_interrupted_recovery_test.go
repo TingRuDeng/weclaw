@@ -49,7 +49,7 @@ func TestCodexAgentTaskUsesRolloutAfterInterruptedObservation(t *testing.T) {
 	}
 }
 
-func TestCodexInterruptedAgentTaskStopsWithoutFailureReply(t *testing.T) {
+func TestCodexInterruptedAgentTaskSendsSingleStoppedReply(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
 	codexDir := t.TempDir()
 	writeLocalCodexSession(t, codexDir, "thread-1", route.workspaceRoot, "会话", "2026-07-14T00:00:00Z")
@@ -70,8 +70,8 @@ func TestCodexInterruptedAgentTaskStopsWithoutFailureReply(t *testing.T) {
 		_, active := h.activeTask(route.conversationID)
 		return !active
 	})
-	if texts := opts.reply.(*platformtest.Replier).Texts; len(texts) != 0 {
-		t.Fatalf("texts=%#v，停止后不应补发中断失败", texts)
+	if texts := opts.reply.(*platformtest.Replier).Texts; len(texts) != 1 || texts[0] != "任务已按请求停止。" {
+		t.Fatalf("texts=%#v，want one stopped result without failure wording", texts)
 	}
 }
 

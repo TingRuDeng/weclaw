@@ -123,6 +123,8 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 
 管理员可在机器人私聊中登记或隐藏已有工作目录：`/cx workspace add <路径>`、`/cx workspace remove <编号|路径>`，Claude 使用对应的 `/cc workspace ...`。登记记录按实际 Agent 名称保存在 `~/.weclaw/workspace-registry.json`；`remove` 只从 WeClaw 导航隐藏目录，不删除源码、Codex thread、Claude session 或历史，重新 `add` 会解除隐藏。管理员可以登记白名单外目录，但这不会扩大普通用户的 `allowed_workspace_roots` 权限。
 
+管理员还可在私聊中使用 `/cx session remove <编号|threadId>` 或 `/cc session remove <编号|sessionId>` 隐藏空闲且未被任何窗口绑定的会话；对应的 `session restore <稳定ID>` 会恢复导航可见性。该操作只写入 WeClaw 导航覆盖层，不归档或删除 Agent 会话与历史；仍有绑定、运行中任务或状态未确认时会失败关闭。
+
 有权访问目标工作空间的用户可用 `/cx rename current|<编号> <名称>` 或 `/cc rename current|<编号> <名称>` 修改 Agent 的全局会话名称；名称最长 120 个 Unicode 字符且只能是单行文本。Codex 通过唯一共享 app-server 写入并读回确认；Claude 仅在当前 ACP adapter 实时公布 `rename` 命令后，复用同一 ClaudeHost 和 session writer lease 执行。重命名不改变任何窗口 binding，目标忙碌或结果无法确认时会明确失败并要求重新查看列表。
 
 ### 控制运行中任务
@@ -135,9 +137,9 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 
 飞书中暂存第二条消息后会立即出现紧凑操作卡。无需点击卡片，消息默认会在当前任务结束后自动执行；卡片按钮只在需要改变默认处理方式时使用。Codex 提供“作为引导发送”“撤回暂存消息”“停止当前任务”，Claude 因不支持引导而只显示后两项。卡片同时绑定机器人账号、操作者、消息窗口、活动任务和该条暂存消息的 revision；旧卡片不能操作后来任务或替换后的消息。点击结果会直接更新原卡片，不再另发一条命令结果。
 
-Codex 和 Claude 的原生计划、工具、命令与文件事件会先归一为结构化进展；任务卡和 `/ps` 始终读取同一份最新快照。任务进入完成、失败或停止终态后，旧事件和晚到 watcher 不会再覆盖终态。
+Codex App Server 的原生计划、工具与文件事件会先归一为结构化进展；同一事件 ID 的运行与完成状态在任务卡中原位更新，原始命令输出、工具参数和 diff 不会写入卡片。`commandExecution` 生命周期不进入进度卡，真正需要用户处理的命令审批仍会独立展示。Codex 明确标记为 `commentary` 的用户可见中间说明会立即累计进时间线；若当前 Codex 版本未提供 `phase`，WeClaw 会暂存一条已完成消息，后续仍有执行活动时再把上一条确认为中间说明。正常完成前仍待判定的最后一条消息视为最终回答，不写入进度卡。所有中间说明都按顺序保留完整正文并与结构化进展一起参与自动续卡；Claude 的中间说明继续显示在独立“当前说明”区域。任务进入完成、失败或停止终态后，旧事件和晚到 watcher 不会再覆盖终态。
 
-任务终态会先把可恢复文本草稿原子写入 `~/.weclaw/state/terminal-outbox.json`，再冻结飞书任务卡并以 CardKit checkpoint 替换草稿；即使 WeClaw 在两步之间退出，重启后也能续投文本终态。飞书 CardKit 使用固定 UUID 和单调 sequence，飞书文本与微信分片也使用稳定去重键；交付语义是 at-least-once，不承诺跨平台 exactly-once。附件和远程图片暂不进入 outbox，仍按原有安全校验和 best-effort 路径发送。
+原生任务卡创建后会立即把可恢复的卡片引用原子写入 `~/.weclaw/state/terminal-outbox.json`。任务结束时，飞书卡片只收敛为完成、失败或停止状态并保留已有进度与审批；完整最终结果通过新的静态 Markdown 结果卡独立交付，标题显示 Agent 与工作空间，超长正文会按容量预检拆成连续编号的卡片。卡片 checkpoint 与结果卡分别记录成功状态、并行尝试和幂等重试，一路失败或阻塞不会阻止另一路；进程重启后只恢复尚未成功的部分，网络结果不明确时不会改发文本造成重复。若平台不支持富结果能力，则兼容回退到原有幂等文本。若进程在任务执行中退出，新进程会把原卡更新为“任务已中断”的停止终态，并独立投递停止结果。飞书 CardKit checkpoint 与结果卡分段使用稳定 UUID，微信文本分片也使用稳定去重键；交付语义是 at-least-once，不承诺跨平台 exactly-once。附件和远程图片暂不进入 outbox，仍按原有安全校验和 best-effort 路径发送。
 
 配置 `save_dir` 后，单独发送一个 URL 会触发链接归档。微信文章直接抓取；其他 URL 会先把完整目标 URL 交给第三方 Jina Reader 处理，Jina 失败时再由 WeClaw 直接抓取。URL 中的路径、查询参数和片段都会随请求发送给 Jina，请勿用此功能提交带签名、凭据或其他敏感信息的私有链接。
 
@@ -215,8 +217,10 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | `/cx new` | 新建并绑定当前工作空间的 Codex 会话 |
 | `/cx archive current`、`/cx archive <编号>` | 归档当前或列表中的空闲 Codex 会话；保留历史，不做硬删除 |
 | `/cx rename current\|<编号> <名称>` | 重命名当前或列表中的 Codex 会话，不改变任何窗口 binding |
+| `/cx session remove <编号\|threadId>`、`/cx session restore <threadId>` | 管理员私聊隐藏或恢复 WeClaw 中的 Codex 会话导航，不归档或删除历史 |
 | `/cx workspace add <路径>`、`/cx workspace remove <编号\|路径>` | 管理员私聊登记或从 WeClaw 导航隐藏 Codex 工作目录 |
 | `/cc rename current\|<编号> <名称>` | 在 adapter 公布能力后重命名 Claude 会话，不改变任何窗口 binding |
+| `/cc session remove <编号\|sessionId>`、`/cc session restore <sessionId>` | 管理员私聊隐藏或恢复 WeClaw 中的 Claude 会话导航，不删除历史 |
 | `/cc workspace add <路径>`、`/cc workspace remove <编号\|路径>` | 管理员私聊登记或从 WeClaw 导航隐藏 Claude 工作目录 |
 | `/cx account`、`/cx account status` | 查看主机级 Codex 账号；管理员私聊可选择和切换 |
 | `/update`、`/restart [--force]` | 管理员在机器人私聊中远程更新或重启 WeClaw |
@@ -300,6 +304,21 @@ weclaw config permission --agent codex --level default
 weclaw doctor
 ```
 
+`stream` 模式默认不设置 WeClaw 时间线条数上限，等价于 `stream_timeline_limit: 0`。可在全局、Agent、平台或飞书机器人账号的 `progress` 中用正整数覆盖为“只保留最近 N 条”。这里的“一条”是按稳定 ID 合并后的计划、工具或文件进度，或一条 Codex 用户可见 commentary；不是命令生命周期、原始协议事件、推理、逐 token 输出、命令输出或工具日志：
+
+```json
+{
+  "progress": {
+    "mode": "stream",
+    "stream_timeline_limit": 0
+  }
+}
+```
+
+不限条数不等于不限平台载荷。飞书会在完整卡片 JSON 接近内部保守软上限时自动冻结当前段并发送下一张进度卡，旧卡保留已显示历史，最新卡在任务结束时只更新状态并保留当前分段。Codex commentary 保留完整正文并计入时间线；计划、工具和文件等结构化摘要仍按 180 个字符收敛。Claude 的“当前说明”不计入时间线条数，并继续按 180 个字符收敛。完整最终结果另发为静态 Markdown 结果卡，不会替换进度卡或静默截断早期进度。
+
+飞书任务卡在 Agent 产生第一条有效非命令进度前，正文只显示 `思考中.....`，不会用“等待 Agent”“连接正常”等定时文案覆盖。收到 Codex commentary、Claude message、计划、文件修改或工具摘要后，同一卡片会展示截至当前的用户可见回复与安全结构化进度，并把 `思考中.....` 保留在正文最底部；完成、失败或停止时移除该活跃提示，只保留终态、已有过程和审批记录。无信息量的 Codex 命令执行生命周期不展示，内部推理与状态心跳也不会解除等待态，真正需要处理的审批仍正常显示。
+
 `weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、白名单、管理员和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
 
 `weclaw doctor` 默认只读，除现有配置外还检查 `sqlite3`、Linux `bubblewrap`、Node.js/npm、Codex CLI 的 `app-server` 能力、Claude Code CLI 和 Claude ACP adapter。已配置 Agent 的运行依赖缺失是阻断错误；未配置 Agent 或仅影响 `/cx` 会话目录、Codex Linux 沙箱的依赖缺失是警告。
@@ -348,7 +367,7 @@ weclaw version
 
 更新来源支持 `auto`（默认）、`github` 和 `gitee`。可用 `--source` 临时指定，在 `~/.weclaw/config.json` 写入 `"update_source": "gitee"` 持久指定，或用 `WECLAW_UPDATE_SOURCE` 覆盖。`auto` 只在 DNS、连接、TLS、超时或 HTTP 5xx 时从 GitHub 切换 Gitee；4xx、版本格式或 SHA-256 异常会直接失败，不通过换源掩盖完整性问题。Gitee 镜像落后时更新器也会拒绝降级。
 
-`weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`restart` 和 `update --restart` 会在停止旧服务前完成预检，普通重启不会中断正在运行的任务。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
+`weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`restart` 和 `update --restart` 会在停止旧服务前完成预检，并通过本机控制 API 原子进入排空状态：普通重启遇到活动任务会拒绝，`--force` 会取消任务并等待终态交付。systemd 托管实例会继续由 systemd 重启，不会另起私有后台进程；即使直接执行 `systemctl restart` 绕过 CLI 预检，SIGTERM 收尾或下次启动恢复也会关闭遗留任务卡。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
 
 ## 从源码构建
 

@@ -26,15 +26,16 @@ type codexAppServerTurnOptions struct {
 }
 
 type codexAppServerTurnRuntime struct {
-	opts         codexAppServerTurnOptions
-	threadID     string
-	pid          int
-	turnCh       chan *codexTurnEvent
-	turnIDCh     chan string
-	activeTurnID string
-	metrics      codexTurnMetrics
-	assembler    *codexFinalAssembler
-	diagnostics  *codexTurnDiagnostics
+	opts            codexAppServerTurnOptions
+	threadID        string
+	pid             int
+	turnCh          chan *codexTurnEvent
+	turnIDCh        chan string
+	activeTurnID    string
+	metrics         codexTurnMetrics
+	assembler       *codexFinalAssembler
+	diagnostics     *codexTurnDiagnostics
+	messageProgress codexMessageProgressBuffer
 }
 
 func newCodexTurnMetrics(startedAt time.Time) codexTurnMetrics {
@@ -156,6 +157,9 @@ func (a *ACPAgent) collectCodexAppServerTurn(runtime *codexAppServerTurnRuntime)
 }
 
 func (a *ACPAgent) cancelCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, error) {
+	runtime.messageProgress.flush(progressCallbacks{
+		onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent,
+	})
 	err := runtime.opts.ctx.Err()
 	log.Printf("[acp] turn context done (pid=%d, thread=%s, conversation=%s, elapsed=%s): %v", runtime.pid, runtime.threadID, runtime.opts.conversationID, runtime.metrics.elapsed(time.Now()), err)
 	if interruptErr := a.interruptCancelledCodexTurn(runtime.threadID, runtime.activeTurnID, runtime.turnIDCh); interruptErr != nil {
@@ -168,14 +172,21 @@ func (a *ACPAgent) handleCodexAppServerEvent(runtime *codexAppServerTurnRuntime,
 	if latency, ok := runtime.metrics.markFirstEvent(time.Now()); ok {
 		log.Printf("[acp] first turn event (pid=%d, thread=%s, conversation=%s, kind=%s, elapsed=%s)", runtime.pid, runtime.threadID, runtime.opts.conversationID, evt.Kind, latency)
 	}
+	callbacks := progressCallbacks{onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent}
+	runtime.messageProgress.beforeEvent(evt, callbacks)
 	if handled, err := a.handleCodexAppServerInteraction(runtime, evt); handled {
 		return "", false, err
 	}
 	if result, done, err := handleCodexAppServerTerminal(runtime, evt); done {
 		return result, true, err
 	}
+	if evt.Progress != nil {
+		runtime.diagnostics.remember(codexProgressPrefix + evt.Progress.DisplayText())
+		callbacks.emit(*evt.Progress)
+		return "", false, nil
+	}
 	if evt.Kind == "progress" {
-		// 兼容旧 watcher 事件，但不再把 Codex 内部执行细节合成为用户进度。
+		// 兼容无法提供结构化摘要的旧 watcher 事件。
 		return "", false, nil
 	}
 	collectCodexAppServerContent(runtime, evt)
@@ -236,9 +247,9 @@ func collectCodexAppServerContent(runtime *codexAppServerTurnRuntime, evt *codex
 	}
 	if evt.Kind == "item_completed" {
 		runtime.assembler.addCompleted(evt.ItemID, evt.Text)
-		if event, ok := codexNativeMessageProgressEvent(evt); ok {
-			progressCallbacks{onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent}.emit(event)
-		}
+		runtime.messageProgress.observeCompleted(evt, progressCallbacks{
+			onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent,
+		})
 		return
 	}
 	runtime.assembler.addSnapshot(evt.ItemID, evt.Text)

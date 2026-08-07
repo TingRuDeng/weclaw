@@ -126,3 +126,93 @@ func TestRunRestartStopsWhenSafetyCheckFails(t *testing.T) {
 		t.Fatalf("runRestart error=%v, want %v", err, wantErr)
 	}
 }
+
+func TestRunRestartDelegatesSystemdWithoutStartingPrivateDaemon(t *testing.T) {
+	var calls []string
+	err := runRestart(context.Background(), true, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			calls = append(calls, "prepare")
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error {
+				t.Fatal("systemd restart must not start a private daemon")
+				return nil
+			}}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			calls = append(calls, "drain")
+			return nil
+		},
+		isRunning: func() bool { calls = append(calls, "running"); return true },
+		isSystemd: func() bool { calls = append(calls, "systemd"); return true },
+		restartSystemd: func() error {
+			calls = append(calls, "restart-systemd")
+			return nil
+		},
+		stop: func() error {
+			t.Fatal("systemd restart must not signal and then spawn a private daemon")
+			return nil
+		},
+		out: &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("runRestart: %v", err)
+	}
+	want := "prepare,drain,running,systemd,restart-systemd"
+	if got := strings.Join(calls, ","); got != want {
+		t.Fatalf("calls=%s, want %s", got, want)
+	}
+}
+
+func TestRunRestartCancelsDrainWhenSystemdRestartFails(t *testing.T) {
+	wantErr := errors.New("systemctl failed")
+	cancelled := false
+	err := runRestart(context.Background(), false, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe:     func(context.Context, bool, *config.Config) error { return nil },
+		isRunning:      func() bool { return true },
+		isSystemd:      func() bool { return true },
+		restartSystemd: func() error { return wantErr },
+		cancelDrain:    func(context.Context, *config.Config) { cancelled = true },
+		out:            &bytes.Buffer{},
+	})
+	if !errors.Is(err, wantErr) || !cancelled {
+		t.Fatalf("error=%v cancelled=%v, want failed supervisor restart to restore admission", err, cancelled)
+	}
+}
+
+func TestRunRestartCancelsDrainWhenDirectStopFails(t *testing.T) {
+	wantErr := errors.New("stop failed")
+	cancelled := false
+	err := runRestart(context.Background(), false, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
+		isRunning:   func() bool { return true },
+		isSystemd:   func() bool { return false },
+		stop:        func() error { return wantErr },
+		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		out:         &bytes.Buffer{},
+	})
+	if !errors.Is(err, wantErr) || !cancelled {
+		t.Fatalf("error=%v cancelled=%v, want failed stop to restore admission", err, cancelled)
+	}
+}
+
+func TestRunRestartCancelsDrainWhenSystemdRestartIsUnavailable(t *testing.T) {
+	cancelled := false
+	err := runRestart(context.Background(), false, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
+		isRunning:   func() bool { return true },
+		isSystemd:   func() bool { return true },
+		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		out:         &bytes.Buffer{},
+	})
+	if err == nil || !cancelled {
+		t.Fatalf("error=%v cancelled=%v, want unavailable supervisor to restore admission", err, cancelled)
+	}
+}

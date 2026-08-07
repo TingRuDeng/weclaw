@@ -37,7 +37,7 @@ Codex：
 
 /cx account 查看当前 Codex 账号，管理员私聊可切换
 
-/cx ls 查看列表
+/cx ls 查看列表（编号从 1 开始）
 
 /cx <编号|..> 选择或返回
 
@@ -48,6 +48,8 @@ Codex：
 /cx rename current|<编号> <名称> 重命名会话
 
 Claude：
+
+/cc ls 查看列表（编号从 1 开始）
 
 /cc quota 查看 Claude 账号额度
 
@@ -99,9 +101,13 @@ func adminHelpText() string {
 
 /cx workspace remove <编号|路径> 从 WeClaw 移除 Codex 工作目录（仅私聊）
 
+/cx session remove <编号|threadId> 隐藏 Codex 会话，restore 恢复（仅私聊）
+
 /cc workspace add <路径> 登记 Claude 工作目录（仅私聊）
 
-/cc workspace remove <编号|路径> 从 WeClaw 移除 Claude 工作目录（仅私聊）`
+/cc workspace remove <编号|路径> 从 WeClaw 移除 Claude 工作目录（仅私聊）
+
+/cc session remove <编号|sessionId> 隐藏 Claude 会话，restore 恢复（仅私聊）`
 }
 
 // wechatCommandText 将内置命令回复转换为空行分隔，避免微信气泡折叠单换行。

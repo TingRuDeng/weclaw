@@ -7,19 +7,41 @@ import (
 )
 
 const (
-	taskProgressTimelineLimit        = 8
+	defaultTaskProgressTimelineLimit = 0
 	taskProgressTimelineItemMaxRunes = 180
 )
 
 type taskProgressUpdate struct {
-	latest   string
-	card     string
-	timeline bool
-	verbatim bool
+	latest             string
+	card               string
+	timeline           bool
+	explanation        bool
+	commentary         bool
+	currentExplanation string
+	timelineItems      []agent.ProgressEvent
 }
 
-func appendTaskProgressTimeline(current []agent.ProgressEvent, incoming agent.ProgressEvent) []agent.ProgressEvent {
+func taskProgressUpdateHasEffectiveProgress(update taskProgressUpdate) bool {
+	if update.explanation || update.commentary || strings.TrimSpace(update.currentExplanation) != "" {
+		return true
+	}
+	for _, event := range update.timelineItems {
+		if strings.TrimSpace(event.DisplayText()) == "" {
+			continue
+		}
+		switch event.Kind {
+		case agent.ProgressKindCommentary, agent.ProgressKindPlan, agent.ProgressKindFile, agent.ProgressKindTool:
+			return true
+		}
+	}
+	return false
+}
+
+func appendTaskProgressTimeline(current []agent.ProgressEvent, incoming agent.ProgressEvent, limit int) []agent.ProgressEvent {
 	next := append([]agent.ProgressEvent(nil), current...)
+	if incoming.Kind == agent.ProgressKindMessage {
+		return next
+	}
 	if index := matchingTaskProgressEntry(next, incoming); index >= 0 {
 		next[index] = incoming
 		return next
@@ -28,8 +50,8 @@ func appendTaskProgressTimeline(current []agent.ProgressEvent, incoming agent.Pr
 		completePreviousRunningPlan(next)
 	}
 	next = append(next, incoming)
-	if len(next) > taskProgressTimelineLimit {
-		next = append([]agent.ProgressEvent(nil), next[len(next)-taskProgressTimelineLimit:]...)
+	if limit > 0 && len(next) > limit {
+		next = append([]agent.ProgressEvent(nil), next[len(next)-limit:]...)
 	}
 	return next
 }
@@ -66,40 +88,71 @@ func completePreviousRunningPlan(entries []agent.ProgressEvent) {
 }
 
 func isStructuredTaskProgress(event agent.ProgressEvent) bool {
+	if event.Kind == agent.ProgressKindMessage {
+		return false
+	}
 	return event.Sequence > 0 || strings.TrimSpace(event.ID) != "" ||
 		(event.Kind != "" && event.Kind != agent.ProgressKindStatus)
 }
 
 func renderTaskProgressCard(state taskViewState) (string, bool) {
-	if state.lastProgressEvent.Kind == agent.ProgressKindMessage {
-		return strings.TrimSpace(state.lastProgress), false
-	}
+	var card string
+	var timeline bool
 	if !state.progressTimelineEnabled || len(state.progressTimeline) == 0 {
-		return strings.TrimSpace(state.lastProgress), false
+		card = strings.TrimSpace(state.lastProgress)
+	} else {
+		card, timeline = renderTaskProgressTimeline(state.progressTimeline, state.lastProgress)
 	}
-	lines := make([]string, 0, len(state.progressTimeline)+1)
+	return appendTaskCurrentExplanation(card, state.currentExplanation), timeline
+}
+
+func renderTaskProgressTimeline(entries []agent.ProgressEvent, fallback string) (string, bool) {
+	lines := make([]string, 0, len(entries)+1)
 	lines = append(lines, "**执行进度**")
-	for _, event := range state.progressTimeline {
-		display := compactTaskProgressDisplay(event)
+	for _, event := range entries {
+		display := taskProgressDisplay(event)
 		if display == "" {
+			continue
+		}
+		if event.Kind == agent.ProgressKindCommentary {
+			lines = append(lines, "", display)
 			continue
 		}
 		lines = append(lines, "- "+taskProgressMarker(event.State)+" "+display)
 	}
 	if len(lines) == 1 {
-		return strings.TrimSpace(state.lastProgress), false
+		return strings.TrimSpace(fallback), false
 	}
 	return strings.Join(lines, "\n"), true
 }
 
-func compactTaskProgressDisplay(event agent.ProgressEvent) string {
-	display := strings.TrimSpace(event.DisplayText())
+func taskProgressDisplay(event agent.ProgressEvent) string {
+	if event.Kind == agent.ProgressKindCommentary {
+		return strings.TrimSpace(event.DisplayText())
+	}
+	return compactTaskProgressText(event.DisplayText())
+}
+
+func compactTaskProgressText(text string) string {
+	display := strings.TrimSpace(text)
 	display = strings.TrimSpace(strings.TrimPrefix(display, "进展："))
 	runes := []rune(display)
 	if len(runes) > taskProgressTimelineItemMaxRunes {
 		return string(runes[:taskProgressTimelineItemMaxRunes]) + "…"
 	}
 	return display
+}
+
+func appendTaskCurrentExplanation(card string, explanation string) string {
+	explanation = compactTaskProgressText(explanation)
+	if explanation == "" {
+		return strings.TrimSpace(card)
+	}
+	section := "**当前说明**\n" + explanation
+	if card = strings.TrimSpace(card); card == "" {
+		return section
+	}
+	return card + "\n\n" + section
 }
 
 func taskProgressMarker(state agent.ProgressState) string {

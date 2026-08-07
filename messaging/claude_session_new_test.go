@@ -42,6 +42,12 @@ func TestClaudeNewCreatesAndBindsSessionAtomically(t *testing.T) {
 	if !strings.Contains(text, "已创建并绑定") {
 		t.Fatalf("text=%q", text)
 	}
+	if !strings.Contains(text, "工作空间: "+filepath.Base(workspace)) ||
+		!strings.Contains(text, "模型: "+unknownSessionModelValue) ||
+		!strings.Contains(text, "推理强度: "+unknownSessionModelValue) ||
+		!strings.Contains(text, "运行通道: 已就绪") {
+		t.Fatalf("text=%q，其他平台文本必须保留完整新会话状态", text)
+	}
 	if binding := h.ensureClaudeSessions().binding(key); binding.WorkspaceRoot != workspace || binding.SessionID != "session-new" {
 		t.Fatalf("binding=%+v", binding)
 	}

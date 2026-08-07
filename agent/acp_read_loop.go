@@ -179,7 +179,7 @@ func (a *ACPAgent) dispatchCodexTurnNotification(msg rpcResponse) bool {
 	case "turn/started", "turn/completed", "turn/failed":
 		a.handleCodexTurnEvent(msg.Method, msg.Params)
 	case "turn/plan/updated":
-		// 计划属于 Codex 内部执行细节；用户进度由 agentMessage 提供。
+		a.handleCodexTurnPlanUpdatedAt(msg.Params, msg.Sequence)
 	case "warning":
 		a.handleCodexWarning(msg.Params)
 	case "error":

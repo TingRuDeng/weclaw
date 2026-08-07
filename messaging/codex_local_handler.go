@@ -11,11 +11,15 @@ func (h *Handler) SetCodexLocalSessionDir(dir string) {
 
 // codexSwitchTargets 合并 WeClaw 已记录会话与本机 Codex 会话，保证编号和 /cx ls 展示一致。
 func (h *Handler) codexSwitchTargets(bindingKey string) []codexWorkspaceView {
+	snapshot, err := h.ensureWorkspaceRegistry().Snapshot(agentNameFromBindingKey(bindingKey))
+	if err != nil {
+		return nil
+	}
 	storedViews := h.ensureCodexSessions().listWorkspaces(bindingKey)
 	views := make([]codexWorkspaceView, 0, len(storedViews))
 	seenThreads := make(map[string]bool, len(storedViews))
 	for _, view := range storedViews {
-		if !isVisibleCodexWorkspace(view) {
+		if !isVisibleCodexWorkspace(view) || snapshot.IsSessionHidden(view.ThreadID) {
 			continue
 		}
 		views = append(views, view)
@@ -23,13 +27,13 @@ func (h *Handler) codexSwitchTargets(bindingKey string) []codexWorkspaceView {
 			seenThreads[view.ThreadID] = true
 		}
 	}
-	return h.appendLocalCodexSwitchTargets(views, seenThreads)
+	return h.appendLocalCodexSwitchTargets(views, seenThreads, snapshot)
 }
 
 // appendLocalCodexSwitchTargets 追加未被 WeClaw 记录过的本机会话，避免重复展示同一个 thread。
-func (h *Handler) appendLocalCodexSwitchTargets(views []codexWorkspaceView, seenThreads map[string]bool) []codexWorkspaceView {
+func (h *Handler) appendLocalCodexSwitchTargets(views []codexWorkspaceView, seenThreads map[string]bool, snapshot workspaceRegistrySnapshot) []codexWorkspaceView {
 	for _, view := range h.localCodexSessions() {
-		if view.ThreadID == "" || seenThreads[view.ThreadID] {
+		if view.ThreadID == "" || seenThreads[view.ThreadID] || snapshot.IsSessionHidden(view.ThreadID) {
 			continue
 		}
 		views = append(views, view)

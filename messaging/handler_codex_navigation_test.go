@@ -25,7 +25,7 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(112, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(112, "/cx cd 1"))
 
 	if ag.lastWorkingDir() != normalizeCodexWorkspaceRoot(workspace) {
 		t.Fatalf("codex cwd=%q, want %q", ag.lastWorkingDir(), normalizeCodexWorkspaceRoot(workspace))
@@ -37,7 +37,7 @@ func TestCodexCxCdWorkspaceThenLsListsSessionsWithoutThreadIDs(t *testing.T) {
 	if !strings.Contains(text, "工作空间: weclaw") || !strings.Contains(text, "weclaw 会话") {
 		t.Fatalf("cd reply should enter workspace and show sessions, messages=%#v", calls.texts())
 	}
-	if !strings.Contains(text, "0. 实现两级会话浏览") || !strings.Contains(text, "1. 修复安全问题") {
+	if !strings.Contains(text, "1. 实现两级会话浏览") || !strings.Contains(text, "2. 修复安全问题") {
 		t.Fatalf("session ls should show numbered session names, messages=%#v", calls.texts())
 	}
 	if strings.Contains(text, "thread-local-a") || strings.Contains(text, "来源:") {
@@ -69,10 +69,10 @@ func TestCodexCxCdWorkspaceUsesCodexAppThreadList(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(151, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(151, "/cx cd 1"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "0. App 重命名会话") || !strings.Contains(text, "1. App 旧会话") {
+	if !strings.Contains(text, "1. App 重命名会话") || !strings.Contains(text, "2. App 旧会话") {
 		t.Fatalf("session ls should use Codex App thread order, messages=%#v", calls.texts())
 	}
 	if strings.Contains(text, "JSONL 旧会话") || strings.Contains(text, "App 新会话") || strings.Contains(text, "第二行不展示") {
@@ -107,10 +107,10 @@ func TestCodexCxCdWorkspaceHidesCodexAppSubagentThreads(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(154, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(154, "/cx cd 1"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "0. App 主会话") || !strings.Contains(text, "1. App 第二会话") {
+	if !strings.Contains(text, "1. App 主会话") || !strings.Contains(text, "2. App 第二会话") {
 		t.Fatalf("session ls should show app user thread, messages=%#v", calls.texts())
 	}
 	if strings.Contains(text, "Codex agent history") || strings.Contains(text, "内部子任务") || strings.Contains(text, "JSONL 旧会话") {
@@ -138,7 +138,7 @@ func TestCodexCxCdWorkspaceSkipsStoredArchivedThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(152, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(152, "/cx cd 1"))
 
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if ag.useThreadID != "" || pending || threadID != "thread-visible" {
@@ -172,7 +172,7 @@ func TestCodexCxCdWorkspaceClearsStaleStoredThread(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(153, "/cx cd 0"))
+	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(153, "/cx cd 1"))
 
 	threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
 	if threadID != "" || pending {

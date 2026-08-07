@@ -22,7 +22,7 @@ type codexDesktopProjectedTurn struct {
 }
 
 type codexDesktopProjectedItem struct {
-	id, itemType, status, text string
+	id, itemType, status, phase, text string
 }
 
 type codexDesktopTextEventSpec struct {
@@ -165,7 +165,8 @@ func buildCodexDesktopProjectedItem(item map[string]any) codexDesktopProjectedIt
 	itemType := codexDesktopString(item["type"])
 	return codexDesktopProjectedItem{
 		id: codexDesktopID(item["id"]), itemType: itemType,
-		status: codexDesktopString(item["status"]), text: codexDesktopItemText(item),
+		status: codexDesktopString(item["status"]), phase: codexDesktopString(item["phase"]),
+		text: codexDesktopItemText(item),
 	}
 }
 
@@ -220,9 +221,26 @@ func projectCodexDesktopItems(turnID string, previous *codexDesktopProjectedTurn
 			if event := codexDesktopTextEvent(spec); event != nil {
 				events = append(events, event)
 			}
+		case "commandexecution":
+			if event := codexDesktopActivityEvent(turnID, old, hadItem, item); event != nil {
+				events = append(events, event)
+			}
 		}
 	}
 	return events
+}
+
+// codexDesktopActivityEvent 只标记 turn 仍在继续，不携带命令、输出或用户进度正文。
+func codexDesktopActivityEvent(
+	turnID string,
+	previous codexDesktopProjectedItem,
+	existed bool,
+	current codexDesktopProjectedItem,
+) *codexTurnEvent {
+	if existed && previous.status == current.status {
+		return nil
+	}
+	return &codexTurnEvent{Kind: "activity", TurnID: turnID, ItemID: current.id}
 }
 
 // codexDesktopTextEvent 只追加真实后缀；文本改写改发完整 snapshot。
@@ -232,7 +250,7 @@ func codexDesktopTextEvent(spec codexDesktopTextEventSpec) *codexTurnEvent {
 	}
 	if spec.current.status == "completed" && (!spec.existed || spec.previous.status != "completed") {
 		return &codexTurnEvent{
-			Kind: "item_completed", TurnID: spec.turnID,
+			Kind: "item_completed", TurnID: spec.turnID, MessagePhase: spec.current.phase,
 			ItemID: spec.current.id, Text: spec.current.text,
 		}
 	}
@@ -241,11 +259,13 @@ func codexDesktopTextEvent(spec codexDesktopTextEventSpec) *codexTurnEvent {
 	}
 	if strings.HasPrefix(spec.current.text, spec.previous.text) {
 		return &codexTurnEvent{
-			TurnID: spec.turnID, ItemID: spec.current.id,
+			TurnID: spec.turnID, ItemID: spec.current.id, MessagePhase: spec.current.phase,
 			Delta: strings.TrimPrefix(spec.current.text, spec.previous.text),
 		}
 	}
-	return &codexTurnEvent{TurnID: spec.turnID, ItemID: spec.current.id, Text: spec.current.text}
+	return &codexTurnEvent{
+		TurnID: spec.turnID, ItemID: spec.current.id, MessagePhase: spec.current.phase, Text: spec.current.text,
+	}
 }
 
 // codexDesktopTerminalEvent 把 Desktop turn 终态映射为现有统一事件。

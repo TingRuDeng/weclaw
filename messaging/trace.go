@@ -56,7 +56,7 @@ func (h *Handler) recordProgressTrace(trace observability.TraceContext, event ag
 	record.EventID = strings.TrimSpace(event.ID)
 	record.Sequence = event.Sequence
 	record.Kind = string(event.Kind)
-	if event.Kind == agent.ProgressKindMessage {
+	if event.Kind == agent.ProgressKindMessage || event.Kind == agent.ProgressKindCommentary {
 		record.Summary = fmt.Sprintf("text_runes=%d", len([]rune(display)))
 	} else {
 		record.Summary = display
@@ -74,6 +74,8 @@ func (h *Handler) recordTaskAdmissionTrace(trace observability.TraceContext, sta
 		h.recordTraceStage(trace, "task.rejected", "busy", "pending task slot occupied")
 	case activeTaskMissing:
 		h.recordTraceStage(trace, "task.rejected", "missing", "active task disappeared")
+	case activeTaskDraining:
+		h.recordTraceStage(trace, "task.rejected", "draining", "service is draining for restart")
 	}
 }
 

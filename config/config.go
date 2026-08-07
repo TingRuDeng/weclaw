@@ -272,7 +272,13 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("update_source must be auto, github, or gitee; got %q", c.UpdateSource)
 	}
+	if err := validateProgressConfig("progress", &c.Progress); err != nil {
+		return err
+	}
 	for name, agentCfg := range c.Agents {
+		if err := validateProgressConfig(fmt.Sprintf("agent %q progress", name), agentCfg.Progress); err != nil {
+			return err
+		}
 		if agentCfg.MaxHistory < 0 {
 			return fmt.Errorf("agent %q: max_history must be >= 0", name)
 		}
@@ -286,8 +292,25 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
 	}
+	for name, platformCfg := range c.Platforms {
+		if err := validateProgressConfig(fmt.Sprintf("platform %q progress", name), platformCfg.Progress); err != nil {
+			return err
+		}
+		for _, bot := range platformCfg.Bots {
+			if err := validateProgressConfig(fmt.Sprintf("platform %q bot %q progress", name, bot.Name), bot.Progress); err != nil {
+				return err
+			}
+		}
+	}
 	if err := validateFeishuPlatformConfig(c.Platforms["feishu"]); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateProgressConfig(scope string, cfg *ProgressConfig) error {
+	if cfg != nil && cfg.StreamTimelineLimit != nil && *cfg.StreamTimelineLimit < 0 {
+		return fmt.Errorf("%s: stream_timeline_limit must be >= 0", scope)
 	}
 	return nil
 }

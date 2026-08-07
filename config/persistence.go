@@ -112,6 +112,7 @@ func loadProgressEnv(cfg *Config) {
 	}
 	setProgressIntEnv("WECLAW_PROGRESS_SUMMARY_INTERVAL_SECONDS", &cfg.Progress.SummaryIntervalSeconds)
 	setProgressIntEnv("WECLAW_PROGRESS_MAX_MESSAGES", &cfg.Progress.MaxProgressMessages)
+	setProgressIntPointerEnv("WECLAW_PROGRESS_STREAM_TIMELINE_LIMIT", &cfg.Progress.StreamTimelineLimit)
 }
 
 func setProgressIntEnv(name string, target *int) {
@@ -125,6 +126,19 @@ func setProgressIntEnv(name string, target *int) {
 		return
 	}
 	*target = number
+}
+
+func setProgressIntPointerEnv(name string, target **int) {
+	value := os.Getenv(name)
+	if value == "" {
+		return
+	}
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("[config] WARNING: invalid %s=%q: %v", name, value, err)
+		return
+	}
+	*target = &number
 }
 
 // Save 原子保存配置，避免异常退出留下截断文件。

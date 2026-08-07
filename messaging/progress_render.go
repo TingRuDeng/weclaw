@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 func renderAcceptance(taskTitle string) string {
@@ -15,7 +16,24 @@ func renderInitialProgress() string {
 }
 
 func renderInitialCardProgress() string {
-	return "正在处理任务，请稍候。"
+	return platform.TaskStreamThinkingIndicator
+}
+
+func appendActiveThinkingIndicator(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return platform.TaskStreamThinkingIndicator
+	}
+	if strings.HasSuffix(content, platform.TaskStreamThinkingIndicator) {
+		return content
+	}
+	return content + "\n\n" + platform.TaskStreamThinkingIndicator
+}
+
+func trimActiveThinkingIndicator(content string) string {
+	content = strings.TrimSpace(content)
+	content = strings.TrimSpace(strings.TrimSuffix(content, platform.TaskStreamThinkingIndicator))
+	return content
 }
 
 func renderCardCreationFallback() string {

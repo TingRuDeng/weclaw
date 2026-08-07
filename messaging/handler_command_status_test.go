@@ -78,8 +78,8 @@ func TestBuildHelpText(t *testing.T) {
 		"常用：\n\n/status 查看 WeClaw 运行态",
 		"/status 查看 WeClaw 运行态\n\n/new 新建会话",
 		"Codex：\n\n/cx status 查看 Codex 会话状态",
-		"Claude：\n\n/cc quota 查看 Claude 账号额度",
-		"/cx ls 查看列表\n\n/cx <编号|..> 选择或返回",
+		"Claude：\n\n/cc ls 查看列表（编号从 1 开始）",
+		"/cx ls 查看列表（编号从 1 开始）\n\n/cx <编号|..> 选择或返回",
 		"发送消息：\n\n/codex <内容> 发给 Codex",
 		"更多：\n\n/cx help Codex 高级命令",
 		"/cx help Codex 高级命令\n\n/cc help Claude 高级命令",
@@ -162,7 +162,7 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
 	}, adminReply)
 	got = helpChoiceIDs(adminReply.Choices[0].Choices)
-	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users", "/cx workspace", "/cc workspace"} {
+	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users", "/cx workspace", "/cc workspace", "/cx session", "/cc session"} {
 		if !got[want] {
 			t.Fatalf("admin help choices=%#v, want %q", adminReply.Choices[0].Choices, want)
 		}
@@ -397,6 +397,7 @@ func helpChoiceIDs(choices []platform.Choice) map[string]bool {
 func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 	text := buildCodexSessionHelpText()
 	for _, want := range []string{
+		"列表编号从 1 开始",
 		"/cx whoami 查看当前 workspace/thread 绑定",
 		"/cx ls 查看工作空间或当前工作空间会话",
 		"/cx <编号|..> 选择当前列表项或返回上一级",
@@ -405,6 +406,8 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx archive current|<编号> 归档当前或列表中的空闲会话",
 		"/cx rename current|<编号> <名称> 重命名当前或列表中的会话",
+		"/cx session remove <编号|threadId> 管理员私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
+		"/cx session restore <threadId> 管理员私聊恢复已隐藏会话",
 		"/cx workspace add <路径> 管理员私聊登记已有工作目录",
 		"/cx workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cx pwd 查看当前工作空间",
@@ -434,9 +437,12 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 func TestBuildClaudeSessionHelpTextIncludesCompleteCommands(t *testing.T) {
 	text := buildClaudeSessionHelpText()
 	for _, want := range []string{
+		"列表编号从 1 开始",
 		"/cc whoami 查看当前 workspace/session 绑定",
 		"/cc new 新建当前工作空间会话",
 		"/cc rename current|<编号> <名称> 重命名当前或列表中的会话",
+		"/cc session remove <编号|sessionId> 管理员私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
+		"/cc session restore <sessionId> 管理员私聊恢复已隐藏会话",
 		"/cc workspace add <路径> 管理员私聊登记已有工作目录",
 		"/cc workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cc status 查看 binding、共享 ClaudeHost 和 writer 状态",
@@ -461,6 +467,8 @@ func TestAdminHelpDocumentsDirectFeishuApproval(t *testing.T) {
 		"/cx workspace remove <编号|路径>",
 		"/cc workspace add <路径>",
 		"/cc workspace remove <编号|路径>",
+		"/cx session remove <编号|threadId>",
+		"/cc session remove <编号|sessionId>",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("admin help should document %q, got %q", want, text)

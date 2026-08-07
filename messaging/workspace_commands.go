@@ -194,9 +194,24 @@ func agentNameFromBindingKey(bindingKey string) string {
 func (h *Handler) workspaceRegistrySnapshot(agentName string) workspaceRegistrySnapshot {
 	snapshot, err := h.ensureWorkspaceRegistry().Snapshot(agentName)
 	if err != nil {
-		return workspaceRegistrySnapshot{Hidden: make(map[string]struct{})}
+		return workspaceRegistrySnapshot{Hidden: make(map[string]struct{}), HiddenSessions: make(map[string]struct{})}
 	}
 	return snapshot
+}
+
+func (h *Handler) hiddenSessionError(agentName string, sessionID string, namespace string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	snapshot, err := h.ensureWorkspaceRegistry().Snapshot(agentName)
+	if err != nil {
+		return fmt.Errorf("会话导航状态不可用，请检查 workspace-registry.json 后重试")
+	}
+	if !snapshot.IsSessionHidden(sessionID) {
+		return nil
+	}
+	return fmt.Errorf("该会话已从 WeClaw 导航隐藏；如需恢复，请使用 /%s session restore %s", namespace, sessionID)
 }
 
 func (h *Handler) lockWorkspaceRegistryControl() func() {

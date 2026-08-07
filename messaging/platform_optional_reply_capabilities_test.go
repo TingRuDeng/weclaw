@@ -10,13 +10,14 @@ import (
 
 type optionalCapabilityTestReplier struct {
 	*platformtest.Replier
-	clientID       string
-	textChunkLimit int
-	remoteMedia    []string
-	route          platform.DeliveryRoute
-	idempotentText []string
-	deliveryKeys   []string
-	checkpoints    []platform.TerminalCheckpoint
+	clientID         string
+	textChunkLimit   int
+	remoteMedia      []string
+	route            platform.DeliveryRoute
+	idempotentText   []string
+	idempotentResult []platform.TerminalResult
+	deliveryKeys     []string
+	checkpoints      []platform.TerminalCheckpoint
 }
 
 func newOptionalCapabilityTestReplier() *optionalCapabilityTestReplier {
@@ -44,6 +45,12 @@ func (r *optionalCapabilityTestReplier) DeliveryRoute() platform.DeliveryRoute {
 
 func (r *optionalCapabilityTestReplier) SendTextIdempotent(_ context.Context, text string, deliveryKey string) error {
 	r.idempotentText = append(r.idempotentText, text)
+	r.deliveryKeys = append(r.deliveryKeys, deliveryKey)
+	return nil
+}
+
+func (r *optionalCapabilityTestReplier) SendResultIdempotent(_ context.Context, result platform.TerminalResult, deliveryKey string) error {
+	r.idempotentResult = append(r.idempotentResult, result)
 	r.deliveryKeys = append(r.deliveryKeys, deliveryKey)
 	return nil
 }
@@ -121,6 +128,14 @@ func TestSerializedReplierPreservesDurableDeliveryCapabilities(t *testing.T) {
 	if err := idempotent.SendTextIdempotent(context.Background(), "done", "delivery-1"); err != nil {
 		t.Fatal(err)
 	}
+	result := platform.TerminalResult{Title: "Codex · weclaw", Text: "### done", State: platform.StreamTerminalCompleted}
+	resultSender, ok := optionalIdempotentResultReplier(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost IdempotentResultReplier")
+	}
+	if err := resultSender.SendResultIdempotent(context.Background(), result, "delivery-2"); err != nil {
+		t.Fatal(err)
+	}
 	checkpoint := platform.TerminalCheckpoint{Kind: "feishu-card", Payload: []byte(`{"sequence":2}`)}
 	durable, ok := optionalDurableTerminalReplier(serialized)
 	if !ok {
@@ -131,8 +146,11 @@ func TestSerializedReplierPreservesDurableDeliveryCapabilities(t *testing.T) {
 	}
 
 	if len(reply.idempotentText) != 1 || reply.idempotentText[0] != "done" ||
-		len(reply.deliveryKeys) != 1 || reply.deliveryKeys[0] != "delivery-1" {
+		len(reply.deliveryKeys) != 2 || reply.deliveryKeys[0] != "delivery-1" || reply.deliveryKeys[1] != "delivery-2" {
 		t.Fatalf("idempotent delivery: texts=%#v keys=%#v", reply.idempotentText, reply.deliveryKeys)
+	}
+	if len(reply.idempotentResult) != 1 || reply.idempotentResult[0] != result {
+		t.Fatalf("idempotent results=%#v", reply.idempotentResult)
 	}
 	if len(reply.checkpoints) != 1 || reply.checkpoints[0].Kind != checkpoint.Kind ||
 		string(reply.checkpoints[0].Payload) != string(checkpoint.Payload) {

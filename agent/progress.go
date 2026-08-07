@@ -19,6 +19,8 @@ const (
 	ProgressKindUserInput  ProgressKind = "user_input"
 	ProgressKindGenerating ProgressKind = "generating"
 	ProgressKindMessage    ProgressKind = "message"
+	// ProgressKindCommentary 是 Codex 明确允许直接展示给用户的中间说明。
+	ProgressKindCommentary ProgressKind = "commentary"
 )
 
 // ProgressState 标识单条进展事件的生命周期状态。
@@ -45,7 +47,7 @@ type ProgressEvent struct {
 	Text     string
 }
 
-// DisplayText 返回平台和旧字符串回调可安全展示的单行文本。
+// DisplayText 返回平台和旧字符串回调可安全展示的文本。
 func (e ProgressEvent) DisplayText() string {
 	if text := strings.TrimSpace(e.Text); text != "" {
 		return text

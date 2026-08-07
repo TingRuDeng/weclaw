@@ -77,15 +77,18 @@ type terminalOutboxState struct {
 }
 
 type terminalOutboxEntry struct {
-	ID           string                       `json:"id"`
-	Route        platform.DeliveryRoute       `json:"route"`
-	AgentName    string                       `json:"agent_name,omitempty"`
-	Failed       bool                         `json:"failed,omitempty"`
-	Stopped      bool                         `json:"stopped,omitempty"`
-	Checkpoint   *platform.TerminalCheckpoint `json:"checkpoint,omitempty"`
-	Text         string                       `json:"text,omitempty"`
-	Notification string                       `json:"notification,omitempty"`
-	Trace        *observability.TraceContext  `json:"trace,omitempty"`
+	ID           string                           `json:"id"`
+	Route        platform.DeliveryRoute           `json:"route"`
+	AgentName    string                           `json:"agent_name,omitempty"`
+	Failed       bool                             `json:"failed,omitempty"`
+	Stopped      bool                             `json:"stopped,omitempty"`
+	Stream       *platform.DurableStreamReference `json:"stream,omitempty"`
+	Checkpoint   *platform.TerminalCheckpoint     `json:"checkpoint,omitempty"`
+	ResultTitle  string                           `json:"result_title,omitempty"`
+	RichResult   bool                             `json:"rich_result,omitempty"`
+	Text         string                           `json:"text,omitempty"`
+	Notification string                           `json:"notification,omitempty"`
+	Trace        *observability.TraceContext      `json:"trace,omitempty"`
 
 	CheckpointDelivered   bool `json:"checkpoint_delivered,omitempty"`
 	TextDelivered         bool `json:"text_delivered,omitempty"`
@@ -105,7 +108,10 @@ type terminalOutboxDraft struct {
 	AgentName    string
 	Failed       bool
 	Stopped      bool
+	Stream       *platform.DurableStreamReference
 	Checkpoint   *platform.TerminalCheckpoint
+	ResultTitle  string
+	RichResult   bool
 	Text         string
 	Notification string
 	Trace        observability.TraceContext
@@ -239,14 +245,16 @@ func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing b
 	if !draft.Route.Valid() {
 		return nil, fmt.Errorf("invalid terminal delivery route")
 	}
-	if draft.Checkpoint == nil && strings.TrimSpace(draft.Text) == "" && strings.TrimSpace(draft.Notification) == "" {
+	if draft.Stream == nil && draft.Checkpoint == nil && strings.TrimSpace(draft.Text) == "" && strings.TrimSpace(draft.Notification) == "" {
 		return nil, fmt.Errorf("terminal delivery has no payload")
 	}
 	now := o.now()
 	entry := &terminalOutboxEntry{
 		ID: uuid.NewString(), Route: draft.Route,
 		AgentName: strings.TrimSpace(draft.AgentName), Failed: draft.Failed, Stopped: draft.Stopped,
-		Checkpoint: draft.Checkpoint, Text: draft.Text, Notification: draft.Notification,
+		Stream: cloneDurableStreamReference(draft.Stream), Checkpoint: draft.Checkpoint,
+		ResultTitle: strings.TrimSpace(draft.ResultTitle), RichResult: draft.RichResult,
+		Text: draft.Text, Notification: draft.Notification,
 		CreatedAt: now, UpdatedAt: now, NextAttempt: now,
 	}
 	if strings.TrimSpace(draft.Trace.TraceID) != "" {
@@ -322,13 +330,58 @@ func (o *terminalOutbox) oldestEvictableDeadLetterLocked() int {
 	return index
 }
 
+// stageReservationResult 在冻结流之前先持久化真实终态结果；进程若在 checkpoint 准备期间退出，
+// 重启后的 worker 仍能分别恢复卡片终态和最终文本。
+func (o *terminalOutbox) stageReservationResult(id string, draft terminalOutboxDraft) error {
+	if !draft.Route.Valid() || strings.TrimSpace(draft.Text) == "" {
+		return fmt.Errorf("invalid staged terminal result")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		return ErrTerminalOutboxNotFound
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	entry.Route = draft.Route
+	entry.AgentName = strings.TrimSpace(draft.AgentName)
+	entry.Failed = draft.Failed
+	entry.Stopped = draft.Stopped
+	entry.ResultTitle = strings.TrimSpace(draft.ResultTitle)
+	entry.RichResult = draft.RichResult
+	entry.Text = draft.Text
+	entry.Notification = draft.Notification
+	entry.CheckpointDelivered = false
+	entry.TextDelivered = false
+	entry.NotificationDelivered = false
+	entry.UpdatedAt = o.now()
+	entry.NextAttempt = entry.UpdatedAt
+	entry.LastError = ""
+	entry.DeadLetter = false
+	entry.DeadLetterAt = time.Time{}
+	if strings.TrimSpace(draft.Trace.TraceID) != "" {
+		trace := draft.Trace
+		trace.RouteKey = ""
+		entry.Trace = &trace
+	}
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		return err
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		return fmt.Errorf("persist staged terminal result: %w", err)
+	}
+	return nil
+}
+
 // commitReservation 用 checkpoint 终态替换恢复文本；持久化失败时保留原草稿并允许重试投递。
 func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft) error {
 	if !draft.Route.Valid() {
 		o.releaseReservation(id)
 		return fmt.Errorf("invalid terminal delivery route")
 	}
-	if draft.Checkpoint == nil && strings.TrimSpace(draft.Text) == "" && strings.TrimSpace(draft.Notification) == "" {
+	if draft.Stream == nil && draft.Checkpoint == nil && strings.TrimSpace(draft.Text) == "" && strings.TrimSpace(draft.Notification) == "" {
 		o.releaseReservation(id)
 		return fmt.Errorf("terminal delivery has no payload")
 	}
@@ -344,7 +397,14 @@ func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft)
 	entry.AgentName = strings.TrimSpace(draft.AgentName)
 	entry.Failed = draft.Failed
 	entry.Stopped = draft.Stopped
+	nextStream := cloneDurableStreamReference(draft.Stream)
+	if nextStream == nil && draft.Checkpoint == nil {
+		nextStream = cloneDurableStreamReference(entry.Stream)
+	}
+	entry.Stream = nextStream
 	entry.Checkpoint = cloneTerminalCheckpoint(draft.Checkpoint)
+	entry.ResultTitle = strings.TrimSpace(draft.ResultTitle)
+	entry.RichResult = draft.RichResult
 	entry.Text = draft.Text
 	entry.Notification = draft.Notification
 	entry.UpdatedAt = o.now()
@@ -352,6 +412,9 @@ func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft)
 	entry.LastError = ""
 	entry.DeadLetter = false
 	entry.DeadLetterAt = time.Time{}
+	entry.CheckpointDelivered = false
+	entry.TextDelivered = false
+	entry.NotificationDelivered = false
 	if strings.TrimSpace(draft.Trace.TraceID) != "" {
 		trace := draft.Trace
 		trace.RouteKey = ""
@@ -384,6 +447,71 @@ func (o *terminalOutbox) releaseReservation(id string) {
 	delete(o.preparing, id)
 	o.mu.Unlock()
 	o.signal()
+}
+
+func (o *terminalOutbox) discardReservation(id string) error {
+	o.mu.Lock()
+	for index, entry := range o.entries {
+		if entry.ID != id {
+			continue
+		}
+		previousEntries := o.entries
+		wasPreparing := o.preparing[id]
+		remaining := make([]*terminalOutboxEntry, 0, len(o.entries)-1)
+		remaining = append(remaining, o.entries[:index]...)
+		remaining = append(remaining, o.entries[index+1:]...)
+		o.entries = remaining
+		delete(o.preparing, id)
+		if err := o.persistLocked(); err != nil {
+			o.entries = previousEntries
+			if wasPreparing {
+				o.preparing[id] = true
+			}
+			o.mu.Unlock()
+			return err
+		}
+		o.mu.Unlock()
+		return nil
+	}
+	delete(o.preparing, id)
+	o.mu.Unlock()
+	return nil
+}
+
+func (o *terminalOutbox) refreshStreamReservation(id string, route platform.DeliveryRoute, reference platform.DurableStreamReference) error {
+	if !route.Valid() || strings.TrimSpace(reference.Kind) == "" || len(reference.Payload) == 0 || !json.Valid(reference.Payload) {
+		return fmt.Errorf("invalid active stream recovery")
+	}
+	o.mu.Lock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		o.mu.Unlock()
+		return ErrTerminalOutboxNotFound
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	entry.Route = route
+	entry.Stream = cloneDurableStreamReference(&reference)
+	entry.Checkpoint = nil
+	entry.CheckpointDelivered = false
+	entry.TextDelivered = false
+	entry.NotificationDelivered = false
+	entry.UpdatedAt = o.now()
+	entry.NextAttempt = entry.UpdatedAt
+	entry.LastError = ""
+	entry.DeadLetter = false
+	entry.DeadLetterAt = time.Time{}
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		o.mu.Unlock()
+		return err
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		o.mu.Unlock()
+		return fmt.Errorf("persist active stream recovery: %w", err)
+	}
+	o.mu.Unlock()
+	return nil
 }
 
 func (o *terminalOutbox) run(ctx context.Context) {
@@ -602,41 +730,130 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 	}
 	defer o.endAttempt(id)
 	o.recordTrace(entry, "terminal.delivery.attempt", "running", fmt.Sprintf("attempt=%d", entry.Attempts+1))
-	reply, err := o.resolveReplier(entry.Route, preferred)
-	if err != nil {
-		return o.recordFailure(id, err)
+	var preparationErr error
+	if entry.Stream != nil && entry.Checkpoint == nil {
+		reply, err := o.resolveStageReplier(entry.Route, preferred)
+		if err == nil {
+			entry, err = o.prepareStreamRecovery(id, entry, reply)
+		}
+		preparationErr = err
 	}
-	ctx, cancel := context.WithTimeout(parent, terminalOutboxDeliveryTimeout)
-	defer cancel()
-	if entry.Checkpoint != nil && !entry.CheckpointDelivered {
-		durable, ok := optionalDurableTerminalReplier(reply)
-		if !ok {
-			return o.recordFailure(id, platform.ErrUnsupported)
-		}
-		if err := durable.DeliverTerminal(ctx, *entry.Checkpoint); err != nil {
-			return o.recordFailure(id, err)
-		}
-		if err := o.markDelivered(id, terminalOutboxCheckpointStage); err != nil {
-			return err
-		}
+
+	type stageResult struct {
+		stage terminalOutboxStage
+		err   error
+	}
+	results := make(chan stageResult, 3)
+	stageCount := 0
+	startStage := func(stage terminalOutboxStage, deliver func(context.Context, platform.Replier) error) {
+		stageCount++
+		go func() {
+			reply, err := o.resolveStageReplier(entry.Route, preferred)
+			if err == nil {
+				ctx, cancel := context.WithTimeout(parent, terminalOutboxDeliveryTimeout)
+				err = deliver(ctx, reply)
+				cancel()
+			}
+			if err == nil {
+				err = o.markDelivered(id, stage)
+			}
+			results <- stageResult{stage: stage, err: err}
+		}()
+	}
+
+	if preparationErr != nil {
+		stageCount++
+		results <- stageResult{stage: terminalOutboxCheckpointStage, err: preparationErr}
+	} else if entry.Checkpoint != nil && !entry.CheckpointDelivered {
+		checkpoint := cloneTerminalCheckpoint(entry.Checkpoint)
+		startStage(terminalOutboxCheckpointStage, func(ctx context.Context, reply platform.Replier) error {
+			durable, ok := optionalDurableTerminalReplier(reply)
+			if !ok {
+				return platform.ErrUnsupported
+			}
+			return durable.DeliverTerminal(ctx, *checkpoint)
+		})
 	}
 	if strings.TrimSpace(entry.Text) != "" && !entry.TextDelivered {
-		if err := sendOutboxText(ctx, reply, entry.Text, id+":text"); err != nil {
-			return o.recordFailure(id, err)
+		text := entry.Text
+		resultKey := id + ":text"
+		if entry.RichResult {
+			resultKey = id + ":result"
 		}
-		if err := o.markDelivered(id, terminalOutboxTextStage); err != nil {
-			return err
-		}
+		startStage(terminalOutboxTextStage, func(ctx context.Context, reply platform.Replier) error {
+			return sendOutboxResult(ctx, reply, entry, text, resultKey)
+		})
 	}
 	if strings.TrimSpace(entry.Notification) != "" && !entry.NotificationDelivered {
-		if err := sendOutboxText(ctx, reply, entry.Notification, id+":notification"); err != nil {
-			return o.recordFailure(id, err)
-		}
-		if err := o.markDelivered(id, terminalOutboxNotificationStage); err != nil {
-			return err
+		notification := entry.Notification
+		startStage(terminalOutboxNotificationStage, func(ctx context.Context, reply platform.Replier) error {
+			return sendOutboxText(ctx, reply, notification, id+":notification")
+		})
+	}
+	var deliveryErrors []error
+	for index := 0; index < stageCount; index++ {
+		result := <-results
+		if result.err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("%s delivery: %w", result.stage, result.err))
 		}
 	}
+	if err := errors.Join(deliveryErrors...); err != nil {
+		return o.recordFailure(id, err)
+	}
 	return o.removeDelivered(id)
+}
+
+func (o *terminalOutbox) prepareStreamRecovery(id string, entry *terminalOutboxEntry, reply platform.Replier) (*terminalOutboxEntry, error) {
+	if entry == nil || entry.Stream == nil {
+		return entry, nil
+	}
+	content := firstNonBlank(entry.Text, "任务已中断。WeClaw 服务在任务执行期间发生重启。")
+	state := platform.StreamTerminalCompleted
+	if entry.Stopped {
+		state = platform.StreamTerminalStopped
+	} else if entry.Failed {
+		state = platform.StreamTerminalFailed
+	}
+	var checkpoint platform.TerminalCheckpoint
+	var err error
+	if stateful, ok := reply.(platform.StatefulDurableStreamTerminalPreparer); ok {
+		checkpoint, err = stateful.PrepareTerminalFromReferenceWithState(*entry.Stream, content, state)
+	} else if preparer, ok := reply.(platform.DurableStreamTerminalPreparer); ok {
+		checkpoint, err = preparer.PrepareTerminalFromReference(*entry.Stream, content, state == platform.StreamTerminalFailed)
+	} else {
+		return entry, platform.ErrUnsupported
+	}
+	if err != nil {
+		return entry, err
+	}
+	if strings.TrimSpace(checkpoint.Kind) == "" || len(checkpoint.Payload) == 0 || !json.Valid(checkpoint.Payload) {
+		return entry, fmt.Errorf("invalid recovered terminal checkpoint")
+	}
+
+	o.mu.Lock()
+	current := o.entryLocked(id)
+	if current == nil {
+		o.mu.Unlock()
+		return entry, ErrTerminalOutboxNotFound
+	}
+	before := cloneTerminalOutboxEntry(current)
+	current.Stream = nil
+	current.Checkpoint = cloneTerminalCheckpoint(&checkpoint)
+	current.UpdatedAt = o.now()
+	current.NextAttempt = current.UpdatedAt
+	if err := validateTerminalOutboxEntry(current); err != nil {
+		*current = *before
+		o.mu.Unlock()
+		return entry, err
+	}
+	if err := o.persistLocked(); err != nil {
+		*current = *before
+		o.mu.Unlock()
+		return entry, fmt.Errorf("persist recovered terminal checkpoint: %w", err)
+	}
+	prepared := cloneTerminalOutboxEntry(current)
+	o.mu.Unlock()
+	return prepared, nil
 }
 
 func (o *terminalOutbox) beginAttempt(id string) (*terminalOutboxEntry, bool) {
@@ -671,6 +888,16 @@ func (o *terminalOutbox) resolveReplier(route platform.DeliveryRoute, preferred 
 	return nil, fmt.Errorf("no outbound replier for platform=%s", route.Platform)
 }
 
+// resolveStageReplier 优先为每个投递阶段创建独立回复器，避免卡片调用持有序列化锁时阻塞最终文本。
+func (o *terminalOutbox) resolveStageReplier(route platform.DeliveryRoute, preferred platform.Replier) (platform.Replier, error) {
+	if o.registry != nil {
+		if reply, ok := o.registry.ReplierForRoute(route); ok && reply != nil {
+			return reply, nil
+		}
+	}
+	return o.resolveReplier(route, preferred)
+}
+
 func sameDeliveryRoute(left platform.DeliveryRoute, right platform.DeliveryRoute) bool {
 	return left.Platform == right.Platform && strings.TrimSpace(left.AccountID) == strings.TrimSpace(right.AccountID) &&
 		strings.TrimSpace(left.ChatID) == strings.TrimSpace(right.ChatID) && strings.TrimSpace(left.ReplyToID) == strings.TrimSpace(right.ReplyToID)
@@ -684,6 +911,38 @@ func sendOutboxText(ctx context.Context, reply platform.Replier, text string, ke
 	return idempotent.SendTextIdempotent(ctx, text, key)
 }
 
+func sendOutboxResult(ctx context.Context, reply platform.Replier, entry *terminalOutboxEntry, text string, key string) error {
+	if entry == nil || !entry.RichResult {
+		return sendOutboxText(ctx, reply, text, key)
+	}
+	result := platform.TerminalResult{
+		Title: firstNonBlank(entry.ResultTitle, entry.AgentName, "WeClaw"),
+		Text:  text,
+		State: terminalOutboxResultState(entry),
+	}
+	idempotent, ok := optionalIdempotentResultReplier(reply)
+	if !ok {
+		return sendOutboxText(ctx, reply, text, key)
+	}
+	if err := idempotent.SendResultIdempotent(ctx, result, key); err != nil {
+		if errors.Is(err, platform.ErrUnsupported) {
+			return sendOutboxText(ctx, reply, text, key)
+		}
+		return err
+	}
+	return nil
+}
+
+func terminalOutboxResultState(entry *terminalOutboxEntry) platform.StreamTerminalState {
+	if entry != nil && entry.Stopped {
+		return platform.StreamTerminalStopped
+	}
+	if entry != nil && entry.Failed {
+		return platform.StreamTerminalFailed
+	}
+	return platform.StreamTerminalCompleted
+}
+
 type terminalOutboxStage int
 
 const (
@@ -691,6 +950,19 @@ const (
 	terminalOutboxTextStage
 	terminalOutboxNotificationStage
 )
+
+func (s terminalOutboxStage) String() string {
+	switch s {
+	case terminalOutboxCheckpointStage:
+		return "checkpoint"
+	case terminalOutboxTextStage:
+		return "text"
+	case terminalOutboxNotificationStage:
+		return "notification"
+	default:
+		return "unknown"
+	}
+}
 
 func (o *terminalOutbox) markDelivered(id string, stage terminalOutboxStage) error {
 	o.mu.Lock()
@@ -830,11 +1102,21 @@ func cloneTerminalOutboxEntry(entry *terminalOutboxEntry) *terminalOutboxEntry {
 		return nil
 	}
 	clone := *entry
+	clone.Stream = cloneDurableStreamReference(entry.Stream)
 	clone.Checkpoint = cloneTerminalCheckpoint(entry.Checkpoint)
 	if entry.Trace != nil {
 		trace := *entry.Trace
 		clone.Trace = &trace
 	}
+	return &clone
+}
+
+func cloneDurableStreamReference(reference *platform.DurableStreamReference) *platform.DurableStreamReference {
+	if reference == nil {
+		return nil
+	}
+	clone := *reference
+	clone.Payload = append(json.RawMessage(nil), reference.Payload...)
 	return &clone
 }
 
@@ -898,8 +1180,13 @@ func validateTerminalOutboxEntry(entry *terminalOutboxEntry) error {
 	if !entry.Route.Valid() {
 		return fmt.Errorf("invalid terminal outbox route")
 	}
-	if entry.Checkpoint == nil && strings.TrimSpace(entry.Text) == "" && strings.TrimSpace(entry.Notification) == "" {
+	if entry.Stream == nil && entry.Checkpoint == nil && strings.TrimSpace(entry.Text) == "" && strings.TrimSpace(entry.Notification) == "" {
 		return fmt.Errorf("terminal outbox entry has no payload")
+	}
+	if entry.Stream != nil {
+		if strings.TrimSpace(entry.Stream.Kind) == "" || len(entry.Stream.Payload) == 0 || !json.Valid(entry.Stream.Payload) {
+			return fmt.Errorf("invalid durable stream reference")
+		}
 	}
 	if entry.Checkpoint != nil {
 		if strings.TrimSpace(entry.Checkpoint.Kind) == "" || len(entry.Checkpoint.Payload) == 0 || !json.Valid(entry.Checkpoint.Payload) {

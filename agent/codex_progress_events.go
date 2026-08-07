@@ -45,9 +45,16 @@ func (d *codexTurnDiagnostics) withError(reason string) string {
 	return b.String()
 }
 
-// codexNativeMessageProgressEvent 原样转发 Codex 已完成的用户可见 agentMessage。
-// 只去除消息整体首尾空白，正文中的 Markdown 和换行保持不变。
+// codexNativeMessageProgressEvent 立即转发 Codex 明确标注为 commentary 的已完成消息。
+// final_answer 始终不进入进度卡；无阶段消息由下方延迟判定器处理。
 func codexNativeMessageProgressEvent(evt *codexTurnEvent) (ProgressEvent, bool) {
+	if evt == nil || evt.Kind != "item_completed" || evt.MessagePhase != "commentary" {
+		return ProgressEvent{}, false
+	}
+	return codexCompletedMessageProgressEvent(evt)
+}
+
+func codexCompletedMessageProgressEvent(evt *codexTurnEvent) (ProgressEvent, bool) {
 	if evt == nil || evt.Kind != "item_completed" {
 		return ProgressEvent{}, false
 	}
@@ -60,7 +67,67 @@ func codexNativeMessageProgressEvent(evt *codexTurnEvent) (ProgressEvent, bool) 
 		id = "agent-message:" + id
 	}
 	return ProgressEvent{
-		ID: id, Kind: ProgressKindMessage, State: ProgressStateCompleted,
+		ID: id, Kind: ProgressKindCommentary, State: ProgressStateCompleted,
 		Sequence: evt.Sequence, Text: text,
 	}, true
+}
+
+// codexMessageProgressBuffer 延迟一条无 phase 的已完成消息。后续仍有执行事件时，
+// 上一条才可确认为中间说明；正常 turn/completed 前的最后一条仍作为最终回答。
+type codexMessageProgressBuffer struct {
+	pending *codexTurnEvent
+}
+
+func (b *codexMessageProgressBuffer) beforeEvent(evt *codexTurnEvent, callbacks progressCallbacks) {
+	if b == nil || b.pending == nil || evt == nil {
+		return
+	}
+	if evt.Kind == "completed" {
+		b.discard()
+		return
+	}
+	if evt.Kind == "item_completed" && evt.MessagePhase == "" && sameCodexMessageItem(b.pending, evt) {
+		return
+	}
+	b.flush(callbacks)
+}
+
+func (b *codexMessageProgressBuffer) observeCompleted(evt *codexTurnEvent, callbacks progressCallbacks) {
+	if b == nil || evt == nil || evt.Kind != "item_completed" {
+		return
+	}
+	if event, ok := codexNativeMessageProgressEvent(evt); ok {
+		callbacks.emit(event)
+		return
+	}
+	if evt.MessagePhase != "" || strings.TrimSpace(evt.Text) == "" {
+		return
+	}
+	copyEvent := *evt
+	b.pending = &copyEvent
+}
+
+func (b *codexMessageProgressBuffer) flush(callbacks progressCallbacks) {
+	if b == nil || b.pending == nil {
+		return
+	}
+	pending := b.pending
+	b.pending = nil
+	if event, ok := codexCompletedMessageProgressEvent(pending); ok {
+		callbacks.emit(event)
+	}
+}
+
+func (b *codexMessageProgressBuffer) discard() {
+	if b != nil {
+		b.pending = nil
+	}
+}
+
+func sameCodexMessageItem(left *codexTurnEvent, right *codexTurnEvent) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftID := strings.TrimSpace(left.ItemID)
+	return leftID != "" && leftID == strings.TrimSpace(right.ItemID)
 }

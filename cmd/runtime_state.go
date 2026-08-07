@@ -98,6 +98,9 @@ func currentServiceMode() string {
 	if os.Getenv(daemonChildEnv) == "1" {
 		return "background"
 	}
+	if strings.TrimSpace(os.Getenv("INVOCATION_ID")) != "" || strings.EqualFold(strings.TrimSpace(os.Getenv("WECLAW_SERVICE_MANAGER")), "systemd") {
+		return "systemd"
+	}
 	return "foreground"
 }
 

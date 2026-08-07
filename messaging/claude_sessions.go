@@ -3,6 +3,7 @@ package messaging
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -93,6 +94,23 @@ func (s *claudeSessionStore) workspaceInUse(workspaceRoot string) bool {
 		}
 	}
 	return false
+}
+
+func (s *claudeSessionStore) sessionBindingKeys(sessionID string) []string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := make([]string, 0)
+	for bindingKey, binding := range s.bindings {
+		if strings.TrimSpace(binding.SessionID) == sessionID {
+			keys = append(keys, bindingKey)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // commitSelection 原子提交已由 ACP 验证成功的 workspace/session 绑定。

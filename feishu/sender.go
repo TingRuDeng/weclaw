@@ -30,6 +30,11 @@ type idempotentMessageSender interface {
 	ReplyTextIdempotent(ctx context.Context, messageID string, text string, operationID string) error
 }
 
+type idempotentResultMessageSender interface {
+	SendCardJSONIdempotent(ctx context.Context, openID string, cardJSON string, operationID string) error
+	ReplyCardJSONIdempotent(ctx context.Context, messageID string, cardJSON string, operationID string) error
+}
+
 type createMessageFunc func(ctx context.Context, receiveID string, receiveIDType string, msgType string, content string) (int, string, error)
 type replyMessageFunc func(ctx context.Context, messageID string, msgType string, content string, replyInThread bool) (int, string, error)
 type patchMessageFunc func(ctx context.Context, messageID string, content string) (int, string, error)
@@ -64,6 +69,11 @@ func (s *sdkMessageSender) SendTextIdempotent(ctx context.Context, receiveID str
 		return err
 	}
 	return s.createMessageWithUUID(ctx, receiveID, larkim.MsgTypeText, content, operationID)
+}
+
+// SendCardJSONIdempotent 直接发送静态交互卡片，并使用飞书消息 UUID 去重重试。
+func (s *sdkMessageSender) SendCardJSONIdempotent(ctx context.Context, receiveID string, cardJSON string, operationID string) error {
+	return s.createMessageWithUUID(ctx, receiveID, larkim.MsgTypeInteractive, cardJSON, operationID)
 }
 
 // SendImage 上传本地图片并发送 image 消息。

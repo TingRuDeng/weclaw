@@ -564,6 +564,74 @@ func TestCompleteUpdateHandlesClaudeACPPreflight(t *testing.T) {
 	}
 }
 
+func TestCompleteUpdateRestartDelegatesSystemd(t *testing.T) {
+	var calls []string
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			calls = append(calls, "prepare")
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error {
+				t.Fatal("systemd-managed update must not spawn private daemon")
+				return nil
+			}}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { calls = append(calls, "drain"); return nil },
+		running:    func() bool { calls = append(calls, "running"); return true },
+		isSystemd:  func() bool { calls = append(calls, "systemd"); return true },
+		restartSystemd: func() error {
+			calls = append(calls, "restart-systemd")
+			return nil
+		},
+		stop: func() error {
+			t.Fatal("systemd-managed update must not stop by pid and spawn a daemon")
+			return nil
+		},
+		out: &bytes.Buffer{},
+	}
+	if err := completeUpdate(context.Background(), true, false, ops); err != nil {
+		t.Fatalf("completeUpdate: %v", err)
+	}
+	want := []string{"prepare", "drain", "running", "systemd", "restart-systemd"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls=%v, want %v", calls, want)
+	}
+}
+
+func TestCompleteUpdateRestartCancelsDrainWhenStopFails(t *testing.T) {
+	wantErr := errors.New("stop failed")
+	cancelled := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
+		running:     func() bool { return true },
+		isSystemd:   func() bool { return false },
+		stop:        func() error { return wantErr },
+		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		out:         &bytes.Buffer{},
+	}
+	if err := completeUpdate(context.Background(), true, false, ops); !errors.Is(err, wantErr) || !cancelled {
+		t.Fatalf("error=%v cancelled=%v, want failed stop to restore admission", err, cancelled)
+	}
+}
+
+func TestCompleteUpdateRestartCancelsDrainWhenSystemdRestartIsUnavailable(t *testing.T) {
+	cancelled := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
+		running:     func() bool { return true },
+		isSystemd:   func() bool { return true },
+		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		out:         &bytes.Buffer{},
+	}
+	if err := completeUpdate(context.Background(), true, false, ops); err == nil || !cancelled {
+		t.Fatalf("error=%v cancelled=%v, want unavailable supervisor to restore admission", err, cancelled)
+	}
+}
+
 func TestReplaceBinaryUsesAtomicTargetDirectoryStage(t *testing.T) {
 	sourceDir := t.TempDir()
 	targetDir := t.TempDir()

@@ -94,7 +94,7 @@ func TestCodexArchiveListIndexUsesBrowsedWorkspace(t *testing.T) {
 
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1",
-		Trimmed: "/cx archive 0", Platform: platform.PlatformFeishu,
+		Trimmed: "/cx archive 1", Platform: platform.PlatformFeishu,
 	})
 
 	if calls := ag.archivedThreads(); len(calls) != 1 || calls[0] != "thread-newer" {
@@ -219,7 +219,7 @@ func TestCodexArchiveListUnknownOutcomePreservesCurrentBinding(t *testing.T) {
 
 	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1",
-		Trimmed: fmt.Sprintf("/cx archive %d", targetIndex), Platform: platform.PlatformWeChat,
+		Trimmed: fmt.Sprintf("/cx archive %d", targetIndex+1), Platform: platform.PlatformWeChat,
 	})
 
 	if calls := ag.archivedThreads(); len(calls) != 1 || calls[0] != "thread-target" {
