@@ -2,7 +2,7 @@
 
 ## 状态
 
-当前权威设计。取代 2026-07-15 的“选择即独占接管”方案。
+当前权威详细设计，已实施并随正式版本发布。取代 2026-07-15 的“选择即独占接管”方案。
 
 ## 目标
 
@@ -32,8 +32,9 @@ flowchart LR
     A[Codex App] --> D[Codex App Desktop IPC]
     L[weclaw codex cli] --> O[官方 daemon]
     M --> R[Codex Host 选择与生命周期门禁]
-    R -->|auto 且 App 已运行| D
-    R -->|App 不在且 standalone 可用| O
+    R -->|已验证运行中 daemon| O
+    R -->|无 daemon 且 App 已运行| D
+    R -->|无 daemon/App 且 standalone 可用| O
     R -->|兼容回退| C[WeClaw-managed app-server]
     D --> T[Codex threads / turns]
     O --> T
@@ -52,6 +53,12 @@ flowchart LR
 `weclaw codex cli` 只在官方 daemon 拓扑中可用。它使用官方 standalone Codex 二进制并固定传入当前 control socket 的 `--remote unix://...`；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。WeClaw 服务未运行且 App 不存在时可以直接受控启动 daemon；服务运行时，CLI 先调用仅限 loopback 的 `POST /api/codex/cli/prepare`，由服务内同一个 Agent 在 admission/gate 内按启动时已经解析的拓扑准备 Host，再核对返回 socket 与客户端解析值一致。Desktop 可见、managed Host、控制接口不可达或 Host 身份不明确时都失败关闭。
 
 WeClaw-managed Host 已运行后若探测到 App，只能在所有 thread 全局 idle、没有 active/uncertain writer lease，并串行持有 gate 与 socket lifecycle lock 时切换。官方 daemon 已运行时不执行该切换，App 作为平等前端复用 daemon。停止结果、daemon 或 App 状态、IPC 身份任一不可确认，当前 runtime 都进入不可写状态，不能并行保留两个 Host。
+
+### 显式 Handoff 与 `no-client-found`
+
+飞书或微信的显式会话选择是非幂等 Handoff 边界。只有身份验证通过的官方 daemon 已经是唯一 Host、当前 runtime 为 `weclaw`，且 Desktop 历史探测明确返回 `no-client-found` 时，选择流程才可把该响应视为 App 客户端已释放会话的证据，并继续在同一 daemon 上恢复目标 thread；Codex App 进程仍可见不覆盖这条证据。
+
+该例外不能扩散到普通消息、只读 inspect、超时、断线、unknown delivery、Desktop Host 或 managed Host。上述路径仍必须保留 binding 并失败关闭，不能因 `no-client-found` 自动接管，也不能启动第二个 Host。
 
 ### Shared Host 边界
 
@@ -172,6 +179,7 @@ Codex App 与受控 CLI 也直接向同一 Host 提交输入。app-server 的接
 - `/cx app|cli|attach|detach`、Codex Companion 和旧 `codex exec` 都不能启动第二 writer；`weclaw codex cli` 只能固定连接官方 daemon，且 Host 身份不明确时失败关闭。
 - Desktop queued follow-up 按 connection epoch 同步为客户端草稿，不能生成 writer lease、WeClaw pending task 或已接受输入。
 - `auto` 在官方 daemon 已运行且验证通过时保持 daemon 权威并跳过 Desktop IPC；没有运行中的 daemon 时，App 已运行才连接 Desktop IPC，App 不在时选择 daemon/managed。daemon 身份不明或 App 存在但 IPC 不可达时失败关闭。
+- 官方 daemon 已是唯一 Host 且 App 可见时，显式会话 Handoff 可依据 Desktop `no-client-found` 在同一 daemon 恢复目标 thread；普通消息、只读探测、Desktop/managed 拓扑和不明确响应仍失败关闭。
 - Desktop follower 支持已有 thread turn/steer/interrupt/settings，明确拒绝未暴露的 thread/start、archive、model/list、账号与额度能力。
 - daemon 与 managed 的 socket、生命周期和失败回退边界分别验证；显式 daemon 失败不能启动 managed。
 - runtime 失败保留 binding，持久化失败回滚，切换失败不破坏原会话。

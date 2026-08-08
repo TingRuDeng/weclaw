@@ -53,16 +53,15 @@ ai_summary:
 
 ## Detail docs
 
-- `docs/superpowers/specs/2026-07-18-codex-single-app-server-design.md` 是当前 Codex 共享 Host 的详细设计；日常项目事实仍以 `docs/AI_CONTEXT.md` 为准，Host 拓扑、writer lease 或协议边界变化时应同步复核。
-- `docs/superpowers/specs/2026-08-06-agent-workspace-session-management-design.md` 是已实施、尚未发布的 Codex / Claude 工作空间登记、隐藏与会话重命名设计；当前产品事实仍以 `docs/AI_CONTEXT.md` 和源码为准。
-- `docs/superpowers/specs/2026-08-08-feishu-codex-progress-card-relay-design.md` 是已实施、待发布与真实飞书端验收的 Codex 引导接力与可折叠进度卡设计；当前产品事实仍以 `docs/AI_CONTEXT.md`、源码和测试为准。
+- `docs/superpowers/specs/2026-07-18-codex-single-app-server-design.md` 是已实施并发布的 Codex 共享 Host 详细设计；日常项目事实仍以 `docs/AI_CONTEXT.md` 为准，Host 拓扑、Handoff、writer lease 或协议边界变化时应同步复核。
+- `docs/superpowers/specs/2026-08-06-agent-workspace-session-management-design.md` 是已实施并发布的 Codex / Claude 工作空间登记、隐藏与会话重命名设计；当前产品事实仍以 `docs/AI_CONTEXT.md` 和源码为准。
+- `docs/superpowers/specs/2026-08-08-feishu-codex-progress-card-relay-design.md` 是已实施并发布、待真实飞书端验收的 Codex 引导接力与可折叠进度卡设计；当前产品事实仍以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
 ## Task records
 
-- `tasks/todo.md` 只记录当前或正在执行的任务，不长期累积已完成流水账。
+- `tasks/todo.md` 只记录当前尚待完成的飞书端侧验收，不长期累积已完成流水账。
 - `tasks/lessons.md` 记录可复用的踩坑规则和高风险路径，清理文档时必须保留。
-- `docs/CODE_REVIEW_2026-07-14.md` 是修复提交 `9af1731` 时点的历史复审快照；后续代码已继续演进，不能再作为当前缺陷状态来源。
-- `docs/CODE_REVIEW_2026-07-13.md` 是 `9b42cda` 时点的历史深度审查快照；其架构与测试盲区分析可作背景参考，当前状态必须回到代码、测试和本索引核验。
+- 已完成的执行计划和审查快照只保留在 Git 历史中，不作为当前文档入口或缺陷状态来源。
 
 ## How to verify
 
