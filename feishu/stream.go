@@ -38,6 +38,9 @@ type feishuStream struct {
 	hasPending              bool
 	pendingTimer            *time.Timer
 	pendingGeneration       uint64
+	pendingPresentation     platform.StreamPresentation
+	hasPendingPresentation  bool
+	presentationTimer       *time.Timer
 	cardJSONSoftLimitBytes  int
 	preserveTerminalContent bool
 	inlineActiveStatus      bool
@@ -90,7 +93,40 @@ func (s *feishuStream) UpdatePresentation(ctx context.Context, p platform.Stream
 		s.mu.Unlock()
 		return nil
 	}
-	s.cancelPendingUpdate()
+	if delay := s.throttleDelay(s.now()); delay > 0 {
+		s.pendingPresentation, s.hasPendingPresentation = p, true
+		if s.presentationTimer == nil {
+			s.presentationTimer = time.AfterFunc(delay, func() { s.flushPresentation() })
+		}
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	return s.updatePresentationNow(ctx, p)
+}
+
+func (s *feishuStream) flushPresentation() {
+	s.mu.Lock()
+	if s.closed || !s.hasPendingPresentation {
+		s.presentationTimer = nil
+		s.mu.Unlock()
+		return
+	}
+	p := s.pendingPresentation
+	s.hasPendingPresentation = false
+	s.presentationTimer = nil
+	s.mu.Unlock()
+	if err := s.updatePresentationNow(context.Background(), p); err != nil {
+		log.Printf("[feishu] failed to flush presentation: %v", err)
+	}
+}
+
+func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.StreamPresentation) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
 	op := feishuStreamUpdateOp{summary: p.Summary, content: p.Details}
 	if s.taskCards != nil {
 		_, a, b, ok := s.taskCards.updatePresentationWithSequences(s.cardID, p.Summary, p.Details)
@@ -108,10 +144,22 @@ func (s *feishuStream) UpdatePresentation(ctx context.Context, p platform.Stream
 		op.summarySeq = s.nextSequence()
 		op.detailsSeq = s.nextSequence()
 	}
-	if err := s.cardKit.StreamContent(ctx, s.cardID, cardProgressSummaryID, op.summary, op.summarySeq); err != nil {
+	if err := s.streamComponentWithRetry(ctx, cardProgressSummaryID, op.summary, op.summarySeq); err != nil {
 		return err
 	}
-	return s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, op.content, op.detailsSeq)
+	return s.streamComponentWithRetry(ctx, cardMainContentID, op.content, op.detailsSeq)
+}
+
+func (s *feishuStream) streamComponentWithRetry(ctx context.Context, elementID, content string, sequence int) error {
+	err := s.cardKit.StreamContent(ctx, s.cardID, elementID, content, sequence)
+	if shouldReenableStreaming(err) {
+		enable, retry := s.nextSequence(), s.nextSequence()
+		if e := s.cardKit.SetStreaming(ctx, s.cardID, true, enable); e != nil {
+			return ignoreCardKitUpdateError(e)
+		}
+		err = s.cardKit.StreamContent(ctx, s.cardID, elementID, content, retry)
+	}
+	return err
 }
 
 type feishuStreamTerminalOp struct {
@@ -574,6 +622,7 @@ func (s *feishuStream) prepareSupersedeUpdate(content string) (feishuStreamTermi
 	if s.taskCards != nil {
 		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, cardStatusSuperseded, content); ok {
 			opts = snapshot
+			opts.Expanded = false
 		}
 	}
 	cardJSON, err := buildCardV2(opts)
@@ -678,7 +727,12 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 		}
 		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, status, ""); ok {
 			opts = snapshot
+			opts.Expanded = false
 		}
+	}
+	if s.collapsible {
+		opts.Collapsible = true
+		opts.Expanded = false
 	}
 	cardJSON, err := buildCardV2(opts)
 	if err != nil {

@@ -155,6 +155,54 @@ func TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard(t *testing.T
 	}
 }
 
+func TestCollapsibleTaskTerminalAndSupersedeCollapsePanel(t *testing.T) {
+	for _, terminal := range []platform.StreamTerminalState{platform.StreamTerminalCompleted, platform.StreamTerminalFailed, platform.StreamTerminalStopped} {
+		kit := &fakeCardKitClient{cardID: "card-terminal"}
+		reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+		stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "摘要", Details: "详情"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := stream.(*feishuStream)
+		op, err := s.prepareTerminalUpdate(cardStatusDone, "结果")
+		if err != nil {
+			t.Fatal(err)
+		}
+		card := decodeCardJSON(t, op.CardJSON)
+		elems := card["body"].(map[string]any)["elements"].([]any)
+		found := false
+		for _, e := range elems {
+			if e.(map[string]any)["element_id"] == cardProgressPanelID {
+				found = true
+				if e.(map[string]any)["expanded"] != false {
+					t.Fatalf("terminal expanded=%v", e)
+				}
+			}
+		}
+		if !found {
+			t.Fatal("terminal panel missing")
+		}
+		_ = terminal
+	}
+	kit := &fakeCardKitClient{cardID: "card-super"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "摘要", Details: "详情"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := stream.(*feishuStream).prepareSupersedeUpdate("转移")
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := decodeCardJSON(t, op.CardJSON)
+	elems := card["body"].(map[string]any)["elements"].([]any)
+	for _, e := range elems {
+		if e.(map[string]any)["element_id"] == cardProgressPanelID && e.(map[string]any)["expanded"] != false {
+			t.Fatal("supersede expanded")
+		}
+	}
+}
+
 // UpdateCard 记录全量更新顺序号。
 func (f *fakeCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJSON string, sequence int) error {
 	f.updateCardIDs = append(f.updateCardIDs, cardID)

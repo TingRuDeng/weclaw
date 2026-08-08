@@ -16,6 +16,15 @@
 - `GOCACHE=/tmp/weclaw-go-cache go test ./feishu -count=1 -timeout 120s`: FAIL，环境禁止 `httptest.NewServer` 监听 IPv6 loopback，失败于 `feishu/config_test.go:254`。
 - `git diff --check`: PASS
 
+## Review 修复 Round 1
+
+- 终态和 supersede 从 registry snapshot 后显式设置 `Collapsible:true, Expanded:false`。
+- 结构化 presentation 增加完整快照 pending/throttle，定时只 flush 最新一份。
+- summary/details 组件统一复用 `SetStreaming` + retry 写入逻辑。
+- 新增 `TestCollapsibleTaskTerminalAndSupersedeCollapsePanel`；精确回归命令：
+  `GOCACHE=/tmp/weclaw-go-cache go test ./feishu -run 'Test(CollapsibleTaskTerminalAndSupersedeCollapsePanel|BuildTaskCardUsesCollapsibleProgressPanel|TaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard|ApprovalRebuildPreservesCollapsibleTaskProgress)' -count=1 -timeout 120s`: PASS。
+- `git diff --check`: PASS。
+
 ## 自审与疑虑
 
 - 本次仅修改 Task 2 指定的三个实现文件；测试文件未改，因为 brief 中要求的新增测试并不存在于工作树，且无法凭空补齐 fake client 的 element_id 记录契约。
