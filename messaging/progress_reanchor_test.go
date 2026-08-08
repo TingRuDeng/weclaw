@@ -72,6 +72,14 @@ type reanchorTestStream struct {
 	completeStarted chan struct{}
 	completeRelease <-chan struct{}
 	cardID          string
+	presentations   []platform.StreamPresentation
+}
+
+func (s *reanchorTestStream) UpdatePresentation(_ context.Context, presentation platform.StreamPresentation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.presentations = append(s.presentations, presentation)
+	return nil
 }
 
 func (s *reanchorTestStream) DurableReference() (platform.DurableStreamReference, error) {
@@ -242,6 +250,34 @@ func TestProgressSessionReanchorPreservesStructuredTimeline(t *testing.T) {
 	want := timeline + "\n\n" + platform.TaskStreamThinkingIndicator
 	if newReply.lastOptions.InitialContent != want {
 		t.Fatalf("initial content=%q, want full structured timeline followed by thinking", newReply.lastOptions.InitialContent)
+	}
+}
+
+func TestProgressSessionUsesStructuredPresentation(t *testing.T) {
+	h := NewHandler(nil, nil)
+	oldReply := newReanchorTestReplier()
+	newReply := newReanchorTestReplier()
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	_, _, session := h.startProgressSessionForWorkspaceAgentWithHandle(context.Background(), oldReply, "", "codex", "/workspace", "执行任务", cfg)
+	session.onTaskProgress(taskProgressUpdate{latest: "最新摘要", card: "**执行进度**\n- • 旧时间线\n\n**当前说明**\n继续处理", timeline: true, currentExplanation: "继续处理", timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindTool, Text: "旧时间线"}}})
+	if !session.sendSnapshotContent(progressCardSnapshot{summary: "最新摘要", text: "**执行进度**\n- • 旧时间线", structured: true, withPrefix: true, effectiveProgress: true, timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindTool, Text: "旧时间线"}}}) {
+		t.Fatal("structured snapshot should be sent")
+	}
+	oldReply.stream.mu.Lock()
+	got := append([]platform.StreamPresentation(nil), oldReply.stream.presentations...)
+	oldReply.stream.mu.Unlock()
+	if len(got) == 0 || got[len(got)-1].Summary != "最新摘要" || !strings.Contains(got[len(got)-1].Details, "旧时间线") {
+		t.Fatalf("presentations=%#v", got)
+	}
+	if moved, err := session.reanchor(context.Background(), newReply, "忽略此字符串"); err != nil || !moved {
+		t.Fatalf("reanchor moved=%t err=%v", moved, err)
+	}
+	newReply.stream.mu.Lock()
+	defer newReply.stream.mu.Unlock()
+	if newReply.lastOptions.InitialPresentation == nil || newReply.lastOptions.InitialPresentation.Summary != "最新摘要" || !strings.Contains(newReply.lastOptions.InitialPresentation.Details, "旧时间线") {
+		t.Fatalf("initial presentation=%#v", newReply.lastOptions.InitialPresentation)
 	}
 }
 

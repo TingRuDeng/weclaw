@@ -444,3 +444,31 @@ func TestActiveTaskProgressReanchorSnapshotUsesCompactTimeline(t *testing.T) {
 		t.Fatalf("snapshot=%q ok=%t, want compact timeline", snapshot.text, ok)
 	}
 }
+
+func TestProgressReanchorSnapshotCarriesStructuredSummaryAndDetails(t *testing.T) {
+	task := &activeAgentTask{progress: &progressSession{}}
+	for _, event := range []agent.ProgressEvent{
+		{ID: "commentary", Kind: agent.ProgressKindCommentary, Sequence: 1, Text: "已开始处理。"},
+		{ID: "tool", Kind: agent.ProgressKindTool, Sequence: 2, Text: "读取项目结构"},
+	} {
+		if _, recorded := task.recordProgressUpdate(time.Now(), event); !recorded {
+			t.Fatalf("event was not recorded: %#v", event)
+		}
+	}
+	if _, recorded := task.recordLocalProgressText(time.Now(), "已接收新的补充输入。"); !recorded {
+		t.Fatal("local guide was not recorded")
+	}
+	progress, snapshot, ok := task.progressReanchorSnapshot()
+	if !ok || progress == nil {
+		t.Fatal("expected reanchorable progress session")
+	}
+	if snapshot.summary != "已接收新的补充输入。" {
+		t.Fatalf("summary=%q", snapshot.summary)
+	}
+	if !snapshot.structured || len(snapshot.timelineItems) == 0 {
+		t.Fatalf("snapshot=%#v", snapshot)
+	}
+	if !strings.Contains(snapshot.text, "已接收新的补充输入。") || !strings.Contains(snapshot.text, "读取项目结构") {
+		t.Fatalf("details=%q", snapshot.text)
+	}
+}
