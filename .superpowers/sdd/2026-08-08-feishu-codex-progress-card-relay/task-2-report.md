@@ -16,6 +16,15 @@
 - `GOCACHE=/tmp/weclaw-go-cache go test ./feishu -count=1 -timeout 120s`: FAIL，环境禁止 `httptest.NewServer` 监听 IPv6 loopback，失败于 `feishu/config_test.go:254`。
 - `git diff --check`: PASS
 
+## Review 覆盖补充
+
+- `TestTaskCardStructuredPresentationThrottleKeepsLatestSnapshot`
+- `TestTaskCardStructuredPresentationRetriesSummaryAfterStreamingDisabled`
+- `TestTaskCardStructuredPresentationRetriesDetailsAfterStreamingDisabled`
+
+命令：`GOCACHE=/tmp/weclaw-go-cache go test ./feishu -run 'Test(TaskCardStructuredPresentationThrottleKeepsLatestSnapshot|TaskCardStructuredPresentationRetriesSummaryAfterStreamingDisabled|TaskCardStructuredPresentationRetriesDetailsAfterStreamingDisabled|CollapsibleTaskTerminalAndSupersedeCollapsePanel|BuildTaskCardUsesCollapsibleProgressPanel|TaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard|ApprovalRebuildPreservesCollapsibleTaskProgress)' -count=1 -timeout 120s`：PASS。
+`git diff --check`：PASS。
+
 ## Review 修复 Round 1
 
 - 终态和 supersede 从 registry snapshot 后显式设置 `Collapsible:true, Expanded:false`。

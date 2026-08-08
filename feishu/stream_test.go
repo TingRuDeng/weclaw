@@ -203,6 +203,72 @@ func TestCollapsibleTaskTerminalAndSupersedeCollapsePanel(t *testing.T) {
 	}
 }
 
+func TestTaskCardStructuredPresentationThrottleKeepsLatestSnapshot(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "card-throttle"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "初始", Details: "初始"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := stream.(*feishuStream)
+	s.throttle = 20 * time.Millisecond
+	structured := stream.(platform.StructuredProgressStream)
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "第一", Details: "第一详情"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "最后", Details: "最后详情"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	if len(kit.updateCardIDs) != 0 || len(kit.streamElementIDs) != 4 {
+		t.Fatalf("updates=%d streams=%#v", len(kit.updateCardIDs), kit.streamElementIDs)
+	}
+	if kit.streamTexts[0] != "第一" || kit.streamTexts[1] != "第一详情" || kit.streamTexts[2] != "最后" || kit.streamTexts[3] != "最后详情" {
+		t.Fatalf("texts=%#v", kit.streamTexts)
+	}
+	if kit.streamSeqs[1] <= kit.streamSeqs[0] {
+		t.Fatalf("sequences=%#v", kit.streamSeqs)
+	}
+}
+
+func TestTaskCardStructuredPresentationRetriesSummaryAfterStreamingDisabled(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "card-summary-retry", streamErrors: []error{formatFeishuAPIError("cli_a", 200850, "disabled")}}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "初始", Details: "初始"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "摘要", Details: "详情"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.streamingSeqs) < 2 || len(kit.streamElementIDs) != 3 {
+		t.Fatalf("streaming=%#v elements=%#v", kit.streamingSeqs, kit.streamElementIDs)
+	}
+	if kit.streamElementIDs[0] != cardProgressSummaryID || kit.streamElementIDs[1] != cardProgressSummaryID || kit.streamElementIDs[2] != cardMainContentID {
+		t.Fatalf("elements=%#v", kit.streamElementIDs)
+	}
+}
+
+func TestTaskCardStructuredPresentationRetriesDetailsAfterStreamingDisabled(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "card-details-retry", streamErrors: []error{nil, formatFeishuAPIError("cli_a", 200850, "disabled")}}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "初始", Details: "初始"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "摘要", Details: "详情"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.streamingSeqs) < 2 || len(kit.streamElementIDs) != 3 {
+		t.Fatalf("streaming=%#v elements=%#v", kit.streamingSeqs, kit.streamElementIDs)
+	}
+	if kit.streamElementIDs[0] != cardProgressSummaryID || kit.streamElementIDs[1] != cardMainContentID || kit.streamElementIDs[2] != cardMainContentID {
+		t.Fatalf("elements=%#v", kit.streamElementIDs)
+	}
+}
+
 // UpdateCard 记录全量更新顺序号。
 func (f *fakeCardKitClient) UpdateCard(ctx context.Context, cardID string, cardJSON string, sequence int) error {
 	f.updateCardIDs = append(f.updateCardIDs, cardID)
