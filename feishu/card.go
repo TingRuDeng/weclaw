@@ -14,6 +14,8 @@ const (
 	cardStatusStopped            = "stopped"
 	cardStatusSuperseded         = "superseded"
 	cardMainContentID            = "main_content"
+	cardProgressSummaryID        = "progress_summary"
+	cardProgressPanelID          = "progress_panel"
 	taskCardNoStructuredProgress = "本任务未产生结构化进度记录。"
 )
 
@@ -21,7 +23,10 @@ type cardOptions struct {
 	Status             string
 	Title              string
 	Content            string
+	Summary            string
 	Approvals          []string
+	Collapsible        bool
+	Expanded           bool
 	InlineActiveStatus bool
 }
 
@@ -45,11 +50,22 @@ func buildCardV2(opts cardOptions) (string, error) {
 			"content":    label,
 		})
 	}
-	elements = append(elements, map[string]any{
+	main := map[string]any{
 		"tag":        "markdown",
 		"element_id": cardMainContentID,
 		"content":    content,
-	})
+	}
+	if opts.Collapsible {
+		summary := strings.TrimSpace(opts.Summary)
+		if summary == "" {
+			summary = statusLabel(status)
+		}
+		elements = append(elements, map[string]any{"tag": "markdown", "element_id": cardProgressSummaryID, "content": summary})
+		elements = append(elements, map[string]any{"tag": "collapsible_panel", "element_id": cardProgressPanelID, "expanded": opts.Expanded,
+			"header": map[string]any{"title": map[string]any{"tag": "plain_text", "content": "完整进度"}}, "elements": []map[string]any{main}})
+	} else {
+		elements = append(elements, main)
+	}
 	if approvalContent := approvalRecordsContent(opts.Approvals); approvalContent != "" {
 		elements = append(elements, map[string]any{
 			"tag":        "markdown",

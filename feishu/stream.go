@@ -28,6 +28,8 @@ type feishuStream struct {
 	sequence                int
 	lastUpdate              time.Time
 	lastContent             string
+	lastSummary             string
+	collapsible             bool
 	closed                  bool
 	throttle                time.Duration
 	now                     func() time.Time
@@ -46,9 +48,70 @@ type feishuStream struct {
 
 type feishuStreamUpdateOp struct {
 	content       string
+	summary       string
+	detailsSeq    int
+	summarySeq    int
 	streamSeq     int
 	taskCardJSON  string
 	taskUpdateSeq int
+}
+
+func (s *feishuStream) PreflightPresentation(p platform.StreamPresentation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	opts := cardOptions{Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Content: p.Details, InlineActiveStatus: s.inlineActiveStatus, Collapsible: s.collapsible, Expanded: true}
+	if s.taskCards != nil {
+		if snap, ok := s.taskCards.snapshot(s.cardID); ok {
+			opts = snap
+			opts.Summary = p.Summary
+			opts.Content = p.Details
+		}
+	}
+	raw, err := buildCardV2(opts)
+	if err != nil {
+		return err
+	}
+	limit := s.cardJSONSoftLimitBytes
+	if limit <= 0 {
+		limit = feishuCardJSONSoftLimitBytes
+	}
+	if len([]byte(raw)) > limit {
+		return fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(raw)), limit)
+	}
+	return nil
+}
+
+func (s *feishuStream) UpdatePresentation(ctx context.Context, p platform.StreamPresentation) error {
+	if err := s.PreflightPresentation(p); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.cancelPendingUpdate()
+	op := feishuStreamUpdateOp{summary: p.Summary, content: p.Details}
+	if s.taskCards != nil {
+		_, a, b, ok := s.taskCards.updatePresentationWithSequences(s.cardID, p.Summary, p.Details)
+		if ok {
+			op.summarySeq, op.detailsSeq = a, b
+			s.sequence = b
+		}
+	}
+	s.lastSummary = p.Summary
+	s.lastContent = p.Details
+	s.mu.Unlock()
+	s.ioMu.Lock()
+	defer s.ioMu.Unlock()
+	if op.summarySeq == 0 {
+		op.summarySeq = s.nextSequence()
+		op.detailsSeq = s.nextSequence()
+	}
+	if err := s.cardKit.StreamContent(ctx, s.cardID, cardProgressSummaryID, op.summary, op.summarySeq); err != nil {
+		return err
+	}
+	return s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, op.content, op.detailsSeq)
 }
 
 type feishuStreamTerminalOp struct {
@@ -83,10 +146,15 @@ func (r *Replier) openTaskCardKitStream(ctx context.Context, opts platform.Strea
 }
 
 func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.StreamOptions, trackTask bool) (platform.Stream, error) {
+	initialSummary, initialDetails := "", opts.InitialContent
+	if opts.InitialPresentation != nil {
+		initialSummary, initialDetails = opts.InitialPresentation.Summary, opts.InitialPresentation.Details
+	}
 	cardJSON, err := buildCardV2(cardOptions{
-		Status:             cardStatusThinking,
-		Title:              opts.Title,
-		Content:            opts.InitialContent,
+		Status:  cardStatusThinking,
+		Title:   opts.Title,
+		Content: initialDetails, Summary: initialSummary,
+		Collapsible: trackTask && opts.InitialPresentation != nil, Expanded: true,
 		InlineActiveStatus: trackTask,
 	})
 	if err != nil {
@@ -103,13 +171,14 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 		return nil, err
 	}
 	stream := &feishuStream{
-		cardKit:                 r.cardKit,
-		taskCards:               r.taskCards,
-		cardID:                  cardID,
-		title:                   opts.Title,
-		throttle:                cardkitThrottle,
-		now:                     time.Now,
-		lastContent:             opts.InitialContent,
+		cardKit:     r.cardKit,
+		taskCards:   r.taskCards,
+		cardID:      cardID,
+		title:       opts.Title,
+		throttle:    cardkitThrottle,
+		now:         time.Now,
+		lastContent: initialDetails, lastSummary: initialSummary,
+		collapsible:             trackTask && opts.InitialPresentation != nil,
 		cardJSONSoftLimitBytes:  feishuCardJSONSoftLimitBytes,
 		preserveTerminalContent: trackTask,
 		inlineActiveStatus:      trackTask,
@@ -121,9 +190,9 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 		r.setCurrentTaskCardID(cardID)
 		if r.taskCards != nil {
 			r.taskCards.recordWithSequence(cardID, cardOptions{
-				Status:             cardStatusThinking,
-				Title:              opts.Title,
-				Content:            opts.InitialContent,
+				Status:  cardStatusThinking,
+				Title:   opts.Title,
+				Content: initialDetails, Summary: initialSummary, Collapsible: stream.collapsible, Expanded: true,
 				InlineActiveStatus: trackTask,
 			}, stream.sequence)
 		}
@@ -193,6 +262,15 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 
 func (s *feishuStream) prepareUpdateNowLocked(content string, now time.Time) (feishuStreamUpdateOp, error) {
 	op := feishuStreamUpdateOp{content: content}
+	if s.collapsible {
+		op.streamSeq = s.nextSequence()
+		s.lastUpdate = now
+		s.lastContent = content
+		if s.taskCards != nil {
+			s.taskCards.updateContent(s.cardID, content)
+		}
+		return op, nil
+	}
 	if s.taskCards != nil {
 		opts, sequence, ok := s.taskCards.updateContentWithSequence(s.cardID, content)
 		if ok {
@@ -232,6 +310,9 @@ func (s *feishuStream) runUpdateNow(ctx context.Context, op feishuStreamUpdateOp
 			log.Printf("[feishu] ignored non-fatal task card update error: %v", err)
 		}
 		return nil
+	}
+	if s.collapsible {
+		return s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, op.content, op.streamSeq)
 	}
 	err := s.cardKit.StreamContent(ctx, s.cardID, cardMainContentID, op.content, op.streamSeq)
 	if shouldReenableStreaming(err) {

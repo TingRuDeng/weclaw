@@ -18,12 +18,15 @@ type taskCardState struct {
 	title              string
 	status             string
 	content            string
+	summary            string
 	approvals          []string
 	sequence           int
 	approvalPanelID    string
 	approvalPanelSeq   int
 	approvalPanelRows  []approvalPanelItem
 	inlineActiveStatus bool
+	collapsible        bool
+	expanded           bool
 	recoveryChanged    func()
 	updatedAt          time.Time
 }
@@ -50,9 +53,12 @@ func (r *taskCardRegistry) recordWithSequence(cardID string, opts cardOptions, s
 		title:              opts.Title,
 		status:             normalizeCardStatus(opts.Status),
 		content:            opts.Content,
+		summary:            opts.Summary,
 		approvals:          append([]string(nil), opts.Approvals...),
 		sequence:           sequence,
 		inlineActiveStatus: opts.InlineActiveStatus,
+		collapsible:        opts.Collapsible,
+		expanded:           opts.Expanded,
 		updatedAt:          r.nowOrDefault(),
 	}
 }
@@ -104,6 +110,25 @@ func (r *taskCardRegistry) updateContentWithSequence(cardID string, content stri
 	state.sequence++
 	state.updatedAt = r.nowOrDefault()
 	return state.cardOptions(), state.sequence, true
+}
+
+func (r *taskCardRegistry) updatePresentationWithSequences(cardID, summary, content string) (cardOptions, int, int, bool) {
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return cardOptions{}, 0, 0, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.cards[cardID]
+	if state == nil {
+		return cardOptions{}, 0, 0, false
+	}
+	state.summary, state.content = summary, content
+	state.sequence++
+	first := state.sequence
+	state.sequence++
+	second := state.sequence
+	state.updatedAt = r.nowOrDefault()
+	return state.cardOptions(), first, second, true
 }
 
 func (r *taskCardRegistry) update(cardID string, status string, content string) {
@@ -203,7 +228,10 @@ func (s *taskCardState) cardOptions() cardOptions {
 		Status:             s.status,
 		Title:              s.title,
 		Content:            s.content,
+		Summary:            s.summary,
 		Approvals:          append([]string(nil), s.approvals...),
+		Collapsible:        s.collapsible,
+		Expanded:           s.expanded,
 		InlineActiveStatus: s.inlineActiveStatus,
 	}
 }
