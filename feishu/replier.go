@@ -154,6 +154,11 @@ func (r *Replier) DeliverTerminal(ctx context.Context, checkpoint platform.Termi
 	return deliverFeishuTerminalCheckpoint(ctx, r.cardKit, checkpoint)
 }
 
+// DeliverSupersede 重放已经持久化的 CardKit 旧卡收敛操作。
+func (r *Replier) DeliverSupersede(ctx context.Context, checkpoint platform.SupersedeCheckpoint) error {
+	return deliverFeishuSupersedeCheckpoint(ctx, r.cardKit, checkpoint)
+}
+
 // SendImage 上传并发送本地图片。
 func (r *Replier) SendImage(ctx context.Context, localPath string) error {
 	if r.replyToID != "" {

@@ -674,8 +674,8 @@ func TestTaskCardStreamSupersedeStopsOldCardWithoutCompletingTask(t *testing.T) 
 	if got := elements[0].(map[string]any)["content"]; got != "**已转移**" {
 		t.Fatalf("status=%q, want 已转移", got)
 	}
-	if got := elements[1].(map[string]any)["content"]; got != "已在新位置继续展示" {
-		t.Fatalf("content=%q", got)
+	if got, _ := elements[1].(map[string]any)["content"].(string); !strings.Contains(got, "待补发进展") || !strings.Contains(got, "已在新位置继续展示") {
+		t.Fatalf("content=%q, want pending progress and transfer notice", got)
 	}
 	if stream.terminal != nil || len(cardKit.destroyed) != 0 {
 		t.Fatalf("supersede must not create terminal checkpoint or destroy card: terminal=%#v destroyed=%#v", stream.terminal, cardKit.destroyed)
@@ -921,6 +921,42 @@ func TestTaskCardApprovalRefreshesDurableReferenceAfterStreamEnable(t *testing.T
 	}
 }
 
+func TestFeishuStructuredDurableReferencePreservesPresentation(t *testing.T) {
+	cardKit := &fakeCardKitClient{cardID: "card-1"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "开始", Details: "初始详情"},
+	})
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	structured := stream.(platform.StructuredProgressStream)
+	s := stream.(*feishuStream)
+	s.throttle = time.Hour
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.cancelPendingPresentation()
+		s.mu.Unlock()
+	})
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "第一步", Details: "第一步详情"}); err != nil {
+		t.Fatalf("first presentation: %v", err)
+	}
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "最新摘要", Details: "最新详情\n\n思考中....."}); err != nil {
+		t.Fatalf("pending presentation: %v", err)
+	}
+	reference, err := stream.(platform.DurableStreamReferenceExporter).DurableReference()
+	if err != nil {
+		t.Fatalf("DurableReference: %v", err)
+	}
+	var payload feishuStreamReferencePayload
+	if err := json.Unmarshal(reference.Payload, &payload); err != nil {
+		t.Fatalf("decode durable reference: %v", err)
+	}
+	if payload.Summary != "最新摘要" || payload.Details != "最新详情" || payload.Content != payload.Details || !payload.Collapsible {
+		t.Fatalf("payload=%#v", payload)
+	}
+}
+
 func TestFeishuStreamCompleteIsIdempotentAndIgnoresLateUpdate(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
@@ -971,6 +1007,140 @@ func TestFeishuTerminalCheckpointKeepsOperationIDsAcrossRestartRetry(t *testing.
 	}
 	if len(cardKit.streamingSeqs) != 1 || len(cardKit.updateSeqs) != 1 || cardKit.updateSeqs[0] <= cardKit.streamingSeqs[0] {
 		t.Fatalf("stream seqs=%#v update seqs=%#v", cardKit.streamingSeqs, cardKit.updateSeqs)
+	}
+}
+
+func TestFeishuPrepareSupersedeFromReferencePreservesProgressAndCollapsesPanel(t *testing.T) {
+	payload, err := json.Marshal(feishuStreamReferencePayload{
+		CardID: "card-1", Title: "Codex · project-a", Sequence: 7,
+		Content: "旧兼容进度", Summary: "已完成代码检查", Details: "1. 已读取实现\n2. 已补充测试",
+		Collapsible: true, Approvals: []string{"允许本次：command: date"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := NewReplier(nil, "oc_chat", &fakeIdempotentCardKitClient{})
+	checkpoint, err := reply.PrepareSupersedeFromReference(platform.DurableStreamReference{
+		Kind: feishuStreamReferenceKind, Payload: payload,
+	}, "已在下方新卡继续展示。", "reanchor-1")
+	if err != nil {
+		t.Fatalf("PrepareSupersedeFromReference: %v", err)
+	}
+	if checkpoint.Kind != feishuSupersedeCheckpointKind {
+		t.Fatalf("kind=%q", checkpoint.Kind)
+	}
+	var op feishuStreamTerminalOp
+	if err := json.Unmarshal(checkpoint.Payload, &op); err != nil {
+		t.Fatalf("decode checkpoint: %v", err)
+	}
+	if op.DisableSeq != 8 || op.UpdateSeq != 9 || op.DisableOperation == "" || op.UpdateOperation == "" {
+		t.Fatalf("operation=%#v", op)
+	}
+
+	card := decodeCardJSON(t, op.CardJSON)
+	elements := card["body"].(map[string]any)["elements"].([]any)
+	var status, summary, details, approval string
+	foundPanel := false
+	for _, raw := range elements {
+		element := raw.(map[string]any)
+		switch element["element_id"] {
+		case "status":
+			status, _ = element["content"].(string)
+		case cardProgressSummaryID:
+			summary, _ = element["content"].(string)
+		case cardProgressPanelID:
+			foundPanel = true
+			if element["expanded"] != false {
+				t.Fatalf("panel expanded=%v, want false", element["expanded"])
+			}
+			panelElements := element["elements"].([]any)
+			details, _ = panelElements[0].(map[string]any)["content"].(string)
+		case "approval_records":
+			approval, _ = element["content"].(string)
+		}
+	}
+	if status != "**已转移**" || summary != "已完成代码检查" || !foundPanel {
+		t.Fatalf("status=%q summary=%q panel=%v", status, summary, foundPanel)
+	}
+	if !strings.Contains(details, "1. 已读取实现") || !strings.Contains(details, "已在下方新卡继续展示。") {
+		t.Fatalf("details=%q, want preserved progress and transfer notice", details)
+	}
+	if !strings.Contains(approval, "command: date") {
+		t.Fatalf("approval=%q", approval)
+	}
+}
+
+func TestFeishuDeliverSupersedeCheckpointIsIdempotent(t *testing.T) {
+	payload, err := json.Marshal(feishuStreamReferencePayload{
+		CardID: "card-1", Title: "Codex", Sequence: 4, Content: "当前进度",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardKit := &fakeIdempotentCardKitClient{}
+	reply := NewReplier(nil, "oc_chat", cardKit)
+	checkpoint, err := reply.PrepareSupersedeFromReference(platform.DurableStreamReference{
+		Kind: feishuStreamReferenceKind, Payload: payload,
+	}, "已在下方新卡继续展示。", "reanchor-1")
+	if err != nil {
+		t.Fatalf("PrepareSupersedeFromReference: %v", err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := reply.DeliverSupersede(context.Background(), checkpoint); err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+	}
+	if len(cardKit.streamOperations) != 2 || cardKit.streamOperations[0] == "" || cardKit.streamOperations[0] != cardKit.streamOperations[1] {
+		t.Fatalf("stream operations=%#v", cardKit.streamOperations)
+	}
+	if len(cardKit.updateOperations) != 2 || cardKit.updateOperations[0] == "" || cardKit.updateOperations[0] != cardKit.updateOperations[1] {
+		t.Fatalf("update operations=%#v", cardKit.updateOperations)
+	}
+	if len(cardKit.streamingSeqs) != 1 || len(cardKit.updateSeqs) != 1 {
+		t.Fatalf("effective streaming=%#v updates=%#v", cardKit.streamingSeqs, cardKit.updateSeqs)
+	}
+	if len(cardKit.destroyed) != 0 {
+		t.Fatalf("supersede must preserve historical card: destroyed=%#v", cardKit.destroyed)
+	}
+}
+
+func TestFeishuDeliverPreparedSupersedeCancelsPendingState(t *testing.T) {
+	cardKit := &fakeIdempotentCardKitClient{}
+	registry := newTaskCardRegistry()
+	registry.recordWithSequence("card-1", cardOptions{
+		Status: cardStatusThinking, Title: "Codex", Summary: "摘要", Content: "详情",
+		Collapsible: true, Expanded: true,
+	}, 3)
+	stream := &feishuStream{
+		cardKit: cardKit, taskCards: registry, cardID: "card-1", title: "Codex", sequence: 3,
+		lastSummary: "摘要", lastContent: "详情", collapsible: true, now: time.Now,
+		hasPending: true, pendingText: "待补发文本", pendingTimer: time.AfterFunc(time.Hour, func() {}),
+		hasPendingPresentation: true, pendingPresentation: platform.StreamPresentation{Summary: "待补发摘要", Details: "待补发详情"},
+		presentationTimer: time.AfterFunc(time.Hour, func() {}),
+	}
+	notified := 0
+	stream.SetDurableReferenceChangeHandler(func() { notified++ })
+	reference, err := stream.DurableReference()
+	if err != nil {
+		t.Fatalf("DurableReference: %v", err)
+	}
+	checkpoint, err := prepareFeishuSupersedeFromReference(reference, "已在下方新卡继续展示。", "reanchor-1")
+	if err != nil {
+		t.Fatalf("prepare checkpoint: %v", err)
+	}
+	if err := stream.DeliverPreparedSupersede(context.Background(), checkpoint); err != nil {
+		t.Fatalf("DeliverPreparedSupersede: %v", err)
+	}
+	stream.mu.Lock()
+	closed := stream.closed
+	hasPending := stream.hasPending || stream.pendingTimer != nil || stream.hasPendingPresentation || stream.presentationTimer != nil
+	stream.mu.Unlock()
+	if !closed || hasPending {
+		t.Fatalf("closed=%v pending=%v", closed, hasPending)
+	}
+	registry.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "允许本次", Summary: "command: date"})
+	if notified != 0 {
+		t.Fatalf("recovery callback fired after supersede: %d", notified)
 	}
 }
 

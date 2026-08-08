@@ -175,14 +175,18 @@ type feishuStreamTerminalOp struct {
 }
 
 const feishuTerminalCheckpointKind = "feishu.cardkit.terminal.v1"
+const feishuSupersedeCheckpointKind = "feishu.cardkit.supersede.v1"
 const feishuStreamReferenceKind = "feishu.cardkit.stream.v1"
 
 type feishuStreamReferencePayload struct {
-	CardID    string   `json:"card_id"`
-	Title     string   `json:"title"`
-	Sequence  int      `json:"sequence"`
-	Content   string   `json:"content,omitempty"`
-	Approvals []string `json:"approvals,omitempty"`
+	CardID      string   `json:"card_id"`
+	Title       string   `json:"title"`
+	Sequence    int      `json:"sequence"`
+	Content     string   `json:"content,omitempty"`
+	Summary     string   `json:"summary,omitempty"`
+	Details     string   `json:"details,omitempty"`
+	Collapsible bool     `json:"collapsible,omitempty"`
+	Approvals   []string `json:"approvals,omitempty"`
 }
 
 const defaultSupersededTaskCardNotice = "已在新位置继续展示；后续结构化进展将更新到新卡片，最终结果会另发独立结果卡片。"
@@ -468,6 +472,15 @@ func (s *feishuStream) cancelPendingUpdate() {
 	s.hasPending = false
 }
 
+func (s *feishuStream) cancelPendingPresentation() {
+	if s.presentationTimer != nil {
+		s.presentationTimer.Stop()
+	}
+	s.presentationTimer = nil
+	s.pendingPresentation = platform.StreamPresentation{}
+	s.hasPendingPresentation = false
+}
+
 // Complete 关闭流式并全量更新为完成卡片。
 func (s *feishuStream) Complete(ctx context.Context, finalContent string) error {
 	checkpoint, err := s.PrepareTerminalWithState(finalContent, platform.StreamTerminalCompleted)
@@ -487,11 +500,15 @@ func (s *feishuStream) DurableReference() (platform.DurableStreamReference, erro
 	if s.cardID == "" || s.title == "" || s.sequence <= 0 {
 		return platform.DurableStreamReference{}, fmt.Errorf("Feishu stream reference is incomplete")
 	}
-	content := trimTaskStreamThinkingIndicator(s.lastContent)
+	summary := strings.TrimSpace(s.lastSummary)
+	details := trimTaskStreamThinkingIndicator(s.lastContent)
+	collapsible := s.collapsible
 	approvals := append([]string(nil), s.preservedApprovals...)
 	if s.taskCards != nil {
 		if snapshot, sequence, ok := s.taskCards.snapshotWithSequence(s.cardID); ok {
-			content = trimTaskStreamThinkingIndicator(snapshot.Content)
+			summary = strings.TrimSpace(snapshot.Summary)
+			details = trimTaskStreamThinkingIndicator(snapshot.Content)
+			collapsible = snapshot.Collapsible
 			approvals = append([]string(nil), snapshot.Approvals...)
 			if sequence > s.sequence {
 				s.sequence = sequence
@@ -499,14 +516,17 @@ func (s *feishuStream) DurableReference() (platform.DurableStreamReference, erro
 		}
 	}
 	if s.hasPending && strings.TrimSpace(s.pendingText) != "" {
-		content = trimTaskStreamThinkingIndicator(s.pendingText)
+		details = trimTaskStreamThinkingIndicator(s.pendingText)
 	}
-	if strings.TrimSpace(content) == "" {
-		content = taskCardNoStructuredProgress
+	if s.hasPendingPresentation {
+		summary = strings.TrimSpace(s.pendingPresentation.Summary)
+		details = trimTaskStreamThinkingIndicator(s.pendingPresentation.Details)
 	}
+	summary, details = normalizeFeishuReferencePresentation(summary, details, details)
 	payload, err := json.Marshal(feishuStreamReferencePayload{
 		CardID: s.cardID, Title: s.title, Sequence: s.sequence,
-		Content: content, Approvals: approvals,
+		Content: details, Summary: summary, Details: details, Collapsible: collapsible,
+		Approvals: approvals,
 	})
 	if err != nil {
 		return platform.DurableStreamReference{}, err
@@ -559,31 +579,23 @@ func (r *Replier) PrepareTerminalFromReference(reference platform.DurableStreamR
 
 // PrepareTerminalFromReferenceWithState 在新进程中恢复原卡并保留停止终态样式。
 func (r *Replier) PrepareTerminalFromReferenceWithState(reference platform.DurableStreamReference, finalContent string, state platform.StreamTerminalState) (platform.TerminalCheckpoint, error) {
-	if reference.Kind != feishuStreamReferenceKind {
-		return platform.TerminalCheckpoint{}, fmt.Errorf("unsupported Feishu stream reference %q", reference.Kind)
+	payload, err := decodeFeishuStreamReference(reference)
+	if err != nil {
+		return platform.TerminalCheckpoint{}, err
 	}
-	var payload feishuStreamReferencePayload
-	if err := json.Unmarshal(reference.Payload, &payload); err != nil {
-		return platform.TerminalCheckpoint{}, fmt.Errorf("decode Feishu stream reference: %w", err)
-	}
-	if payload.CardID == "" || payload.Title == "" || payload.Sequence <= 0 {
-		return platform.TerminalCheckpoint{}, fmt.Errorf("invalid Feishu stream reference")
-	}
-	referenceContent := strings.TrimSpace(payload.Content)
-	if referenceContent == "" {
-		referenceContent = taskCardNoStructuredProgress
-	}
+	summary, details := normalizeFeishuReferencePresentation(payload.Summary, payload.Details, payload.Content)
 	stream := &feishuStream{
 		cardKit: r.cardKit, taskCards: r.taskCards,
 		cardID: payload.CardID, title: payload.Title, sequence: payload.Sequence,
-		lastContent:             referenceContent,
+		lastContent: details, lastSummary: summary, collapsible: payload.Collapsible,
 		preserveTerminalContent: true, inlineActiveStatus: true,
 		preservedApprovals: append([]string(nil), payload.Approvals...),
 		now:                time.Now,
 	}
 	if r.taskCards != nil {
 		r.taskCards.recordWithSequence(payload.CardID, cardOptions{
-			Status: cardStatusThinking, Title: payload.Title, Content: stream.lastContent,
+			Status: cardStatusThinking, Title: payload.Title, Summary: summary, Content: details,
+			Collapsible: payload.Collapsible, Expanded: true,
 			Approvals: payload.Approvals, InlineActiveStatus: true,
 		}, payload.Sequence)
 	}
@@ -591,50 +603,67 @@ func (r *Replier) PrepareTerminalFromReferenceWithState(reference platform.Durab
 	return stream.PrepareTerminalWithState("", state)
 }
 
-// Supersede 退役旧任务卡但不生成任务终态；新卡将独立承接后续进展和结果。
+// PrepareSupersedeFromReference 根据已持久化的旧卡引用生成可幂等重放的收敛操作。
+func (r *Replier) PrepareSupersedeFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	return prepareFeishuSupersedeFromReference(reference, notice, operationID)
+}
+
+// Supersede 保留为没有 outbox 编排时的兼容路径。
 func (s *feishuStream) Supersede(ctx context.Context, notice string) error {
+	reference, err := s.DurableReference()
+	if err != nil {
+		s.mu.Lock()
+		alreadyClosed := s.closed || s.terminal != nil || s.terminalDelivered
+		s.mu.Unlock()
+		if alreadyClosed {
+			return nil
+		}
+		return err
+	}
+	checkpoint, err := prepareFeishuSupersedeFromReference(reference, notice, uuid.NewString())
+	if err != nil {
+		return err
+	}
+	return s.DeliverPreparedSupersede(ctx, checkpoint)
+}
+
+// DeliverPreparedSupersede 先冻结旧 stream，再投递已经持久化的收敛操作。
+func (s *feishuStream) DeliverPreparedSupersede(ctx context.Context, checkpoint platform.SupersedeCheckpoint) error {
 	s.ioMu.Lock()
 	defer s.ioMu.Unlock()
 
 	s.mu.Lock()
-	if s.closed || s.terminal != nil || s.terminalDelivered {
+	if s.terminal != nil || s.terminalDelivered {
 		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
 	s.cancelPendingUpdate()
+	s.cancelPendingPresentation()
+	taskCards, cardID := s.taskCards, s.cardID
 	s.mu.Unlock()
 
-	notice = strings.TrimSpace(notice)
-	if notice == "" {
-		notice = defaultSupersededTaskCardNotice
+	if taskCards != nil {
+		taskCards.updateAndSnapshot(cardID, cardStatusSuperseded, "")
+		taskCards.setDurableReferenceChangeHandler(cardID, nil)
 	}
-	op, err := s.prepareSupersedeUpdate(notice)
-	if err != nil {
-		return err
-	}
-	disableErr := s.cardKit.SetStreaming(ctx, s.cardID, false, op.DisableSeq)
-	updateErr := s.cardKit.UpdateCard(ctx, s.cardID, op.CardJSON, op.UpdateSeq)
-	return firstErr(ignoreCardKitUpdateError(updateErr), ignoreCardKitUpdateError(disableErr))
+	return deliverFeishuSupersedeCheckpoint(ctx, s.cardKit, checkpoint)
 }
 
-func (s *feishuStream) prepareSupersedeUpdate(content string) (feishuStreamTerminalOp, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	opts := cardOptions{Status: cardStatusSuperseded, Title: s.title, Content: content}
-	if s.taskCards != nil {
-		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, cardStatusSuperseded, content); ok {
-			opts = snapshot
-			opts.Expanded = false
-		}
-	}
-	cardJSON, err := buildCardV2(opts)
+func (s *feishuStream) prepareSupersedeUpdate(notice string) (feishuStreamTerminalOp, error) {
+	reference, err := s.DurableReference()
 	if err != nil {
 		return feishuStreamTerminalOp{}, err
 	}
-	return feishuStreamTerminalOp{
-		CardID: s.cardID, DisableSeq: s.nextSequence(), UpdateSeq: s.nextSequence(), CardJSON: cardJSON,
-	}, nil
+	checkpoint, err := prepareFeishuSupersedeFromReference(reference, notice, uuid.NewString())
+	if err != nil {
+		return feishuStreamTerminalOp{}, err
+	}
+	var op feishuStreamTerminalOp
+	if err := json.Unmarshal(checkpoint.Payload, &op); err != nil {
+		return feishuStreamTerminalOp{}, err
+	}
+	return op, nil
 }
 
 func (s *feishuStream) deliverPreparedTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {
@@ -691,6 +720,7 @@ func (s *feishuStream) PrepareTerminalWithState(finalContent string, state platf
 	}
 	s.closed = true
 	s.cancelPendingUpdate()
+	s.cancelPendingPresentation()
 	s.mu.Unlock()
 	op, err := s.prepareTerminalUpdate(status, finalContent)
 	if err != nil {
@@ -711,7 +741,8 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	opts := cardOptions{
-		Status: status, Title: s.title, Content: content,
+		Status: status, Title: s.title, Summary: s.lastSummary, Content: content,
+		Collapsible: s.collapsible, Expanded: false,
 		InlineActiveStatus: s.inlineActiveStatus,
 	}
 	if s.preserveTerminalContent {
@@ -755,6 +786,101 @@ func trimTaskStreamThinkingIndicator(content string) string {
 	content = strings.TrimSpace(content)
 	content = strings.TrimSpace(strings.TrimSuffix(content, platform.TaskStreamThinkingIndicator))
 	return content
+}
+
+func decodeFeishuStreamReference(reference platform.DurableStreamReference) (feishuStreamReferencePayload, error) {
+	if reference.Kind != feishuStreamReferenceKind {
+		return feishuStreamReferencePayload{}, fmt.Errorf("unsupported Feishu stream reference %q", reference.Kind)
+	}
+	var payload feishuStreamReferencePayload
+	if err := json.Unmarshal(reference.Payload, &payload); err != nil {
+		return feishuStreamReferencePayload{}, fmt.Errorf("decode Feishu stream reference: %w", err)
+	}
+	if strings.TrimSpace(payload.CardID) == "" || strings.TrimSpace(payload.Title) == "" || payload.Sequence <= 0 {
+		return feishuStreamReferencePayload{}, fmt.Errorf("invalid Feishu stream reference")
+	}
+	return payload, nil
+}
+
+func normalizeFeishuReferencePresentation(summary, details, legacyContent string) (string, string) {
+	legacyContent = trimTaskStreamThinkingIndicator(legacyContent)
+	summary = strings.TrimSpace(summary)
+	details = trimTaskStreamThinkingIndicator(details)
+	if summary == "" {
+		summary = legacyContent
+	}
+	if details == "" {
+		details = legacyContent
+	}
+	if details == "" {
+		details = taskCardNoStructuredProgress
+	}
+	if summary == "" {
+		summary = details
+	}
+	return summary, details
+}
+
+func prepareFeishuSupersedeFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	payload, err := decodeFeishuStreamReference(reference)
+	if err != nil {
+		return platform.SupersedeCheckpoint{}, err
+	}
+	operationID = strings.TrimSpace(operationID)
+	if operationID == "" {
+		return platform.SupersedeCheckpoint{}, fmt.Errorf("Feishu supersede operation ID is required")
+	}
+	notice = strings.TrimSpace(notice)
+	if notice == "" {
+		notice = defaultSupersededTaskCardNotice
+	}
+	summary, details := normalizeFeishuReferencePresentation(payload.Summary, payload.Details, payload.Content)
+	if !strings.Contains(details, notice) {
+		details += "\n\n---\n\n" + notice
+	}
+	cardJSON, err := buildCardV2(cardOptions{
+		Status: cardStatusSuperseded, Title: payload.Title,
+		Summary: summary, Content: details, Approvals: payload.Approvals,
+		Collapsible: payload.Collapsible, Expanded: false,
+	})
+	if err != nil {
+		return platform.SupersedeCheckpoint{}, err
+	}
+	op := feishuStreamTerminalOp{
+		CardID: payload.CardID, DisableSeq: payload.Sequence + 1,
+		DisableOperation: uuid.NewSHA1(uuid.NameSpaceOID, []byte(operationID+":disable")).String(),
+		UpdateSeq:        payload.Sequence + 2,
+		UpdateOperation:  uuid.NewSHA1(uuid.NameSpaceOID, []byte(operationID+":update")).String(),
+		CardJSON:         cardJSON,
+	}
+	checkpointPayload, err := json.Marshal(op)
+	if err != nil {
+		return platform.SupersedeCheckpoint{}, err
+	}
+	return platform.SupersedeCheckpoint{Kind: feishuSupersedeCheckpointKind, Payload: checkpointPayload}, nil
+}
+
+func deliverFeishuSupersedeCheckpoint(ctx context.Context, client cardKitClient, checkpoint platform.SupersedeCheckpoint) error {
+	if checkpoint.Kind != feishuSupersedeCheckpointKind {
+		return fmt.Errorf("unsupported Feishu supersede checkpoint %q", checkpoint.Kind)
+	}
+	if client == nil {
+		return fmt.Errorf("CardKit client is unavailable")
+	}
+	var op feishuStreamTerminalOp
+	if err := json.Unmarshal(checkpoint.Payload, &op); err != nil {
+		return fmt.Errorf("decode Feishu supersede checkpoint: %w", err)
+	}
+	if op.CardID == "" || op.DisableSeq <= 0 || op.UpdateSeq <= op.DisableSeq || op.DisableOperation == "" || op.UpdateOperation == "" || op.CardJSON == "" {
+		return fmt.Errorf("invalid Feishu supersede checkpoint")
+	}
+	idempotent, ok := client.(idempotentCardKitClient)
+	if !ok {
+		return platform.ErrUnsupported
+	}
+	disableErr := idempotent.SetStreamingIdempotent(ctx, op.CardID, false, op.DisableSeq, op.DisableOperation)
+	updateErr := idempotent.UpdateCardIdempotent(ctx, op.CardID, op.CardJSON, op.UpdateSeq, op.UpdateOperation)
+	return firstErr(ignoreCardKitUpdateError(updateErr), ignoreCardKitUpdateError(disableErr))
 }
 
 func deliverFeishuTerminalCheckpoint(ctx context.Context, client cardKitClient, checkpoint platform.TerminalCheckpoint) error {

@@ -99,6 +99,12 @@ type TerminalCheckpoint struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// SupersedeCheckpoint 是 adapter 自描述、可持久化的旧展示位置收敛操作。
+type SupersedeCheckpoint struct {
+	Kind    string          `json:"kind"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 // StreamTerminalState 区分完成、失败和用户主动停止，避免 adapter 把停止渲染成错误。
 type StreamTerminalState string
 
@@ -124,6 +130,21 @@ type DurableStreamReferenceExporter interface {
 // 通知消息层立即刷新持久化引用。handler 必须在 adapter 内部锁之外调用。
 type DurableStreamReferenceChangeNotifier interface {
 	SetDurableReferenceChangeHandler(handler func())
+}
+
+// DurableStreamSupersedePreparer 根据持久化引用生成可重放的旧展示位置收敛操作。
+type DurableStreamSupersedePreparer interface {
+	PrepareSupersedeFromReference(reference DurableStreamReference, notice string, operationID string) (SupersedeCheckpoint, error)
+}
+
+// PreparedSupersedableStream 关闭当前内存 stream，并投递已经持久化的收敛操作。
+type PreparedSupersedableStream interface {
+	DeliverPreparedSupersede(ctx context.Context, checkpoint SupersedeCheckpoint) error
+}
+
+// DurableSupersedeReplier 用重建后的平台客户端重放旧展示位置收敛操作。
+type DurableSupersedeReplier interface {
+	DeliverSupersede(ctx context.Context, checkpoint SupersedeCheckpoint) error
 }
 
 // DurableStreamTerminalPreparer 在新进程中根据持久化引用生成终态操作。
