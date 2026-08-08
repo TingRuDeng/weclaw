@@ -13,9 +13,16 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/config"
 )
+
+type updateRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn updateRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestGitHubRepoUsesProjectFork(t *testing.T) {
 	if githubRepo != "TingRuDeng/weclaw" {
@@ -301,6 +308,37 @@ func TestDownloadFileWithAcceptSetsReleaseAssetHeader(t *testing.T) {
 		t.Fatalf("downloadFileWithAccept error=%v", err)
 	}
 	defer os.Remove(path)
+}
+
+func TestDownloadFileAllowsReleaseAssetTransferBeyondMetadataWindow(t *testing.T) {
+	originalTransport := updateHTTPClient.Transport
+	var remaining time.Duration
+	updateHTTPClient.Transport = updateRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		deadline, ok := req.Context().Deadline()
+		if !ok {
+			t.Fatal("release asset request has no transfer deadline")
+		}
+		remaining = time.Until(deadline)
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        make(http.Header),
+			Body:          http.NoBody,
+			ContentLength: 0,
+			Request:       req,
+		}, nil
+	})
+	t.Cleanup(func() {
+		updateHTTPClient.Transport = originalTransport
+	})
+
+	path, err := downloadFile("https://github.com/TingRuDeng/weclaw/releases/download/v1.2.3/weclaw_darwin_arm64")
+	if err != nil {
+		t.Fatalf("downloadFile error=%v", err)
+	}
+	defer os.Remove(path)
+	if remaining < 5*time.Minute {
+		t.Fatalf("asset transfer deadline=%s, want at least 5m", remaining)
+	}
 }
 
 func TestReleaseTagFromLatestRedirect(t *testing.T) {

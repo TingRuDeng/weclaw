@@ -16,7 +16,7 @@ import (
 const maxUpdateDownloadBytes = 128 * 1024 * 1024
 const maxSymlinkDepth = 40
 
-var updateHTTPClient = &http.Client{Timeout: updateHTTPTimeout}
+var updateHTTPClient = &http.Client{Timeout: updateAssetHTTPTimeout}
 
 func downloadFile(url string) (string, error) {
 	return downloadFileWithAccept(url, "")

@@ -14,7 +14,8 @@ import (
 )
 
 const githubUserAgent = "weclaw-updater"
-const updateHTTPTimeout = 60 * time.Second
+const updateMetadataHTTPTimeout = 60 * time.Second
+const updateAssetHTTPTimeout = 10 * time.Minute
 const updateReleaseTagEnv = "WECLAW_UPDATE_RELEASE_TAG"
 const githubAPIBaseURL = "https://api.github.com"
 const giteeAPIBaseURL = "https://gitee.com/api/v5"
@@ -126,7 +127,7 @@ func getGiteeLatestVersionFromBase(apiBaseURL string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", githubUserAgent)
-	resp, err := (&http.Client{Timeout: updateHTTPTimeout}).Do(req)
+	resp, err := (&http.Client{Timeout: updateMetadataHTTPTimeout}).Do(req)
 	if err != nil {
 		return "", releaseUnavailable(err)
 	}
@@ -186,7 +187,7 @@ func getLatestVersion() (string, error) {
 		return "", err
 	}
 	client := &http.Client{
-		Timeout: updateHTTPTimeout,
+		Timeout: updateMetadataHTTPTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -273,7 +274,7 @@ func githubReleaseAssetAPIURLFromBase(apiBaseURL string, version string, filenam
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	client := &http.Client{Timeout: updateHTTPTimeout}
+	client := &http.Client{Timeout: updateMetadataHTTPTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
