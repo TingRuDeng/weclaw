@@ -137,6 +137,7 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 	}
 	s.lastSummary = p.Summary
 	s.lastContent = p.Details
+	s.lastUpdate = s.now()
 	s.mu.Unlock()
 	s.ioMu.Lock()
 	defer s.ioMu.Unlock()
@@ -153,7 +154,9 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 func (s *feishuStream) streamComponentWithRetry(ctx context.Context, elementID, content string, sequence int) error {
 	err := s.cardKit.StreamContent(ctx, s.cardID, elementID, content, sequence)
 	if shouldReenableStreaming(err) {
+		s.mu.Lock()
 		enable, retry := s.nextSequence(), s.nextSequence()
+		s.mu.Unlock()
 		if e := s.cardKit.SetStreaming(ctx, s.cardID, true, enable); e != nil {
 			return ignoreCardKitUpdateError(e)
 		}

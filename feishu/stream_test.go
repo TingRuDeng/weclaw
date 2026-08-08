@@ -130,6 +130,7 @@ func TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard(t *testing.T
 	if !ok {
 		t.Fatal("missing StructuredProgressStream")
 	}
+	stream.(*feishuStream).throttle = 0
 	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "正在运行测试", Details: "读取代码\n\n运行测试\n\n思考中....."}); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +212,7 @@ func TestTaskCardStructuredPresentationThrottleKeepsLatestSnapshot(t *testing.T)
 		t.Fatal(err)
 	}
 	s := stream.(*feishuStream)
-	s.throttle = 20 * time.Millisecond
+	s.throttle = time.Hour
 	structured := stream.(platform.StructuredProgressStream)
 	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "第一", Details: "第一详情"}); err != nil {
 		t.Fatal(err)
@@ -219,11 +220,17 @@ func TestTaskCardStructuredPresentationThrottleKeepsLatestSnapshot(t *testing.T)
 	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "最后", Details: "最后详情"}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(40 * time.Millisecond)
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "最终", Details: "最终详情"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.streamElementIDs) != 2 {
+		t.Fatalf("throttled streams=%#v, want only first presentation", kit.streamElementIDs)
+	}
+	s.flushPresentation()
 	if len(kit.updateCardIDs) != 0 || len(kit.streamElementIDs) != 4 {
 		t.Fatalf("updates=%d streams=%#v", len(kit.updateCardIDs), kit.streamElementIDs)
 	}
-	if kit.streamTexts[0] != "第一" || kit.streamTexts[1] != "第一详情" || kit.streamTexts[2] != "最后" || kit.streamTexts[3] != "最后详情" {
+	if kit.streamTexts[0] != "第一" || kit.streamTexts[1] != "第一详情" || kit.streamTexts[2] != "最终" || kit.streamTexts[3] != "最终详情" {
 		t.Fatalf("texts=%#v", kit.streamTexts)
 	}
 	if kit.streamSeqs[1] <= kit.streamSeqs[0] {

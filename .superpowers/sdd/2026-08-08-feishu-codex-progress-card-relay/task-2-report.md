@@ -25,6 +25,13 @@
 命令：`GOCACHE=/tmp/weclaw-go-cache go test ./feishu -run 'Test(TaskCardStructuredPresentationThrottleKeepsLatestSnapshot|TaskCardStructuredPresentationRetriesSummaryAfterStreamingDisabled|TaskCardStructuredPresentationRetriesDetailsAfterStreamingDisabled|CollapsibleTaskTerminalAndSupersedeCollapsePanel|BuildTaskCardUsesCollapsibleProgressPanel|TaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard|ApprovalRebuildPreservesCollapsibleTaskProgress)' -count=1 -timeout 120s`：PASS。
 `git diff --check`：PASS。
 
+## Review 修复 Round 2
+
+- 结构化 presentation 立即写入和 timer flush 均更新时间状态，后续更新正确进入 throttle pending；测试强化为窗口内连续三份只发送首份和 flush 后最后一份。
+- retry 的 enable/retry sequence 在 `s.mu` 下分配，保持与 terminal/update 的锁顺序一致。
+- 聚焦命令：`GOCACHE=/tmp/weclaw-go-cache go test ./feishu -run 'Test(TaskCardStructuredPresentationThrottleKeepsLatestSnapshot|TaskCardStructuredPresentationRetriesSummaryAfterStreamingDisabled|TaskCardStructuredPresentationRetriesDetailsAfterStreamingDisabled|CollapsibleTaskTerminalAndSupersedeCollapsePanel|BuildCardV2|TaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard|ApprovalRebuildPreservesCollapsibleTaskProgress)' -count=1 -timeout 120s`：PASS。
+- `git diff --check`：PASS。
+
 ## Review 修复 Round 1
 
 - 终态和 supersede 从 registry snapshot 后显式设置 `Collapsible:true, Expanded:false`。
