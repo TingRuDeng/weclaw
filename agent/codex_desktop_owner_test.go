@@ -430,8 +430,10 @@ func TestDesktopBridgeDoesNotFallbackWhileCodexAppIsPresent(t *testing.T) {
 		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,
 	}
 	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+		Command: "codex", Args: []string{"app-server"},
+		CodexHostMode: "managed", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
 	restarted := false
 	a.restartCodexAppServerCall = func(context.Context) error {
 		restarted = true
@@ -445,6 +447,34 @@ func TestDesktopBridgeDoesNotFallbackWhileCodexAppIsPresent(t *testing.T) {
 	}
 	if restarted {
 		t.Fatal("running Codex App must prevent fallback to a second app-server")
+	}
+}
+
+func TestOfficialDaemonHandoffRecoversNoClientWhileCodexAppIsPresent(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		CodexHostMode: "daemon", StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	restarted := false
+	a.restartCodexAppServerCall = func(context.Context) error {
+		restarted = true
+		return nil
+	}
+	a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
+	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+
+	binding, err := a.HandoffCodexRuntime(context.Background(), req)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw ||
+		a.threads[req.Ref.ConversationID] != req.Ref.ThreadID {
+		t.Fatalf("binding=%#v threads=%#v error=%v", binding, a.threads, err)
+	}
+	if !restarted {
+		t.Fatal("official daemon client should recover the released thread")
 	}
 }
 

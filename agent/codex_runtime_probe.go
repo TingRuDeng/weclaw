@@ -123,7 +123,10 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 			return binding, err
 		}
 	}
-	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{allowConflictRecovery: true})
+	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{
+		allowConflictRecovery: true,
+		allowNoClientRelease:  true,
+	})
 	if req.Intent.Owner == CodexControlRemote && canRecoverCodexRuntimeForRemoteOwner(err) &&
 		(!a.codexDesktopBridge || desktopHostDefinitelyAbsent(a.desktopProbe)) {
 		log.Printf("[codex-runtime] remote owner 忽略 Desktop 探测不确定状态 thread=%q: %v", req.Ref.ThreadID, err)
@@ -221,6 +224,7 @@ func (a *ACPAgent) validateCodexRuntimeSupport(req CodexRuntimeRequest) error {
 
 type codexRuntimeProbeOptions struct {
 	allowConflictRecovery bool
+	allowNoClientRelease  bool
 }
 
 // probeCodexRuntime 只把完整 Desktop 快照或明确无人处理视为确定性结论。
@@ -253,7 +257,12 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 		}
 	}
 	released := desktopReleaseConfirmed(a.desktopProbe, loadErr)
-	if a.codexDesktopBridge {
+	// A verified official daemon remains the only Host even when the App is
+	// visible. During an explicit handoff, no-client then proves only that the
+	// App frontend released this thread, so the shared daemon may resume it.
+	officialDaemonHandoff := opts.allowNoClientRelease && a.usesOfficialCodexDaemon() &&
+		a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw
+	if a.codexDesktopBridge && !officialDaemonHandoff {
 		released = desktopHostDefinitelyAbsent(a.desktopProbe)
 	}
 	if released {
