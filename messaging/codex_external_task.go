@@ -166,9 +166,9 @@ func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
 		lines = append(lines, "当前进展: "+previewPendingCodexMessage(state.Progress))
 	}
 	if state.Controllable {
-		lines = append(lines, "新消息会先暂存；回复 /guide 发送到当前任务，回复 /stop 停止任务，回复 /cancel 撤回暂存。")
+		lines = append(lines, "新消息会直接发送到当前任务；回复 /stop 可停止任务。")
 	} else {
-		lines = append(lines, "任务完成后结果会自动返回当前会话。")
+		lines = append(lines, "新消息会直接发送到当前任务；当前任务暂不支持从飞书或微信停止，完成后结果会自动返回当前会话。")
 	}
 	return lines
 }

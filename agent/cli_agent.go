@@ -8,7 +8,8 @@ import (
 	"sync"
 )
 
-// CLIAgent invokes a local CLI agent (claude, codex, etc.) via streaming JSON.
+// CLIAgent preserves the legacy configuration shape for explicit diagnostics.
+// Stateful Codex and Claude tasks must use their shared Host runtimes.
 type CLIAgent struct {
 	name             string
 	command          string
@@ -98,19 +99,10 @@ func (a *CLIAgent) SetConversationCwd(conversationID string, cwd string) {
 	a.conversationCwds[conversationID] = cwd
 }
 
-func (a *CLIAgent) cwdForConversation(conversationID string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if cwd := strings.TrimSpace(a.conversationCwds[conversationID]); cwd != "" {
-		return cwd
-	}
-	return a.cwd
-}
-
 // Chat sends a message to the CLI agent and returns the response.
 func (a *CLIAgent) Chat(ctx context.Context, conversationID string, message string) (string, error) {
-	if !strings.EqualFold(a.name, "codex") {
-		return "", fmt.Errorf("CLI Agent %q 不受支持；Claude 必须使用 ACP", a.name)
+	if strings.EqualFold(a.name, "codex") {
+		return "", fmt.Errorf("Codex 独立 exec 会话模式已停用；请使用共享 app-server")
 	}
-	return a.chatCodex(ctx, conversationID, message)
+	return "", fmt.Errorf("CLI Agent %q 不受支持；Claude 必须使用 ACP", a.name)
 }

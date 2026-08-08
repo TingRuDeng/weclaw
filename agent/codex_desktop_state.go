@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,6 +27,7 @@ type codexDesktopThreadSnapshot struct {
 	Raw             map[string]any
 	State           CodexThreadState
 	Requests        map[string]codexDesktopPendingAction
+	QueuedFollowUps []json.RawMessage
 	UpdatedAt       time.Time
 	projection      codexDesktopProjectionState
 }
@@ -62,11 +64,18 @@ type codexDesktopQueuedPatchSet struct {
 	patches                       []codexDesktopPatch
 }
 
+type codexDesktopQueuedFollowUps struct {
+	epoch     uint64
+	messages  []json.RawMessage
+	updatedAt time.Time
+}
+
 type codexDesktopStateStore struct {
 	mu              sync.Mutex
 	threads         map[string]codexDesktopThreadSnapshot
 	revisionWake    map[string]chan struct{}
 	queued          map[string][]codexDesktopQueuedPatchSet
+	followUps       map[string]codexDesktopQueuedFollowUps
 	needsSnapshot   map[string]uint64
 	now             func() time.Time
 	requestSnapshot func(string)
@@ -83,6 +92,7 @@ func newCodexDesktopStateStore(options codexDesktopStateOptions) *codexDesktopSt
 		threads:       make(map[string]codexDesktopThreadSnapshot),
 		revisionWake:  make(map[string]chan struct{}),
 		queued:        make(map[string][]codexDesktopQueuedPatchSet),
+		followUps:     make(map[string]codexDesktopQueuedFollowUps),
 		needsSnapshot: make(map[string]uint64), now: options.now,
 		requestSnapshot: options.requestSnapshot,
 		actions:         options.actions, actionSeen: make(map[string]map[string]bool),
@@ -109,6 +119,7 @@ func (s *codexDesktopStateStore) applySnapshot(spec codexDesktopSnapshotSpec) (c
 	}
 	previous := codexDesktopProjectionPointer(current, exists && current.ConnectionEpoch == spec.epoch)
 	snapshot, events := buildCodexDesktopSnapshot(spec, s.now(), previous)
+	s.attachQueuedFollowUpsLocked(&snapshot)
 	s.threads[spec.threadID] = snapshot
 	replayed, replayErr := s.replayQueuedLocked(spec.threadID)
 	events = append(events, replayed...)
@@ -164,6 +175,7 @@ func (s *codexDesktopStateStore) applyPatchSet(spec codexDesktopPatchSetSpec) (c
 		threadID: spec.threadID, epoch: spec.epoch, revision: spec.revision, raw: next,
 	}
 	snapshot, events := buildCodexDesktopSnapshot(snapshotSpec, s.now(), &current.projection)
+	s.attachQueuedFollowUpsLocked(&snapshot)
 	s.threads[spec.threadID] = snapshot
 	s.signalRevisionLocked(spec.threadID)
 	actionEvents, actionErr := s.projectPendingActionEventsLocked(snapshot)
@@ -213,6 +225,7 @@ func cloneCodexDesktopSnapshot(snapshot codexDesktopThreadSnapshot) codexDesktop
 		requests[key] = request
 	}
 	snapshot.Requests = requests
+	snapshot.QueuedFollowUps = cloneCodexDesktopRawMessages(snapshot.QueuedFollowUps)
 	snapshot.projection = cloneCodexDesktopProjection(snapshot.projection)
 	return snapshot
 }
@@ -243,7 +256,33 @@ func (s *codexDesktopStateStore) evictIdleLocked(currentThreadID string) {
 		}
 		delete(s.threads, candidate)
 		delete(s.queued, candidate)
+		delete(s.followUps, candidate)
 		delete(s.needsSnapshot, candidate)
 		delete(s.actionSeen, candidate)
+	}
+}
+
+// evictOrphanFollowUpsLocked keeps pre-snapshot Desktop draft broadcasts bounded.
+func (s *codexDesktopStateStore) evictOrphanFollowUpsLocked(currentThreadID string) {
+	for {
+		orphanCount := 0
+		candidate := ""
+		for threadID, followUps := range s.followUps {
+			if _, known := s.threads[threadID]; known {
+				continue
+			}
+			orphanCount++
+			if threadID == currentThreadID {
+				continue
+			}
+			if candidate == "" || followUps.updatedAt.Before(s.followUps[candidate].updatedAt) ||
+				(followUps.updatedAt.Equal(s.followUps[candidate].updatedAt) && threadID < candidate) {
+				candidate = threadID
+			}
+		}
+		if orphanCount <= codexDesktopMaxThreads || candidate == "" {
+			return
+		}
+		delete(s.followUps, candidate)
 	}
 }

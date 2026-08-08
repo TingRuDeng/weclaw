@@ -23,6 +23,7 @@ type doctorFixDeps struct {
 	CommandOutput func(context.Context, string, ...string) (string, error)
 	RunCommand    func(context.Context, doctorInstallCommand, io.Reader, io.Writer, io.Writer) error
 	Configure     func(context.Context, *config.Config) error
+	SaveConfig    func(*config.Config) error
 	UserHomeDir   func() (string, error)
 }
 
@@ -48,12 +49,14 @@ func defaultDoctorFixDeps() doctorFixDeps {
 		},
 		RunCommand: func(ctx context.Context, command doctorInstallCommand, in io.Reader, out, errOut io.Writer) error {
 			cmd := exec.CommandContext(ctx, command.Name, command.Args...)
+			cmd.Env = mergeDoctorCommandEnv(os.Environ(), command.Env)
 			cmd.Stdin = in
 			cmd.Stdout = out
 			cmd.Stderr = errOut
 			return cmd.Run()
 		},
 		Configure:   configureDoctorInstalledAgents,
+		SaveConfig:  config.Save,
 		UserHomeDir: os.UserHomeDir,
 	}
 }
@@ -107,7 +110,7 @@ func runDoctorFix(ctx context.Context, opts doctorFixOptions) error {
 	reader := bufio.NewReader(opts.Input)
 	requested := opts.Components
 	if len(requested) == 0 {
-		missing := doctorComponentsAvailableForPrompt(opts.Deps)
+		missing := doctorComponentsAvailableForPrompt(opts.Deps, opts.Config)
 		selected, cancelled, err := promptDoctorComponents(reader, opts.Output, missing)
 		if err != nil {
 			return err
@@ -122,7 +125,7 @@ func runDoctorFix(ctx context.Context, opts doctorFixOptions) error {
 	if err != nil {
 		return err
 	}
-	needed := doctorComponentsNeedingInstall(expanded, opts.Deps)
+	needed := doctorComponentsNeedingInstallForFix(expanded, opts.Deps, opts.Config)
 	if len(needed) == 0 {
 		fmt.Fprintln(opts.Output, "所选依赖已经可用，无需安装。")
 		return nil
@@ -135,9 +138,27 @@ func runDoctorFix(ctx context.Context, opts doctorFixOptions) error {
 	if err != nil {
 		return err
 	}
+	codexInstallDir, err := doctorCodexInstallDir(opts.Deps, needed)
+	if err != nil {
+		return err
+	}
+	codexInstallerPath := ""
+	if hasDoctorComponent(needed, componentCodex) {
+		installerDir, err := os.MkdirTemp("", "weclaw-codex-installer-")
+		if err != nil {
+			return fmt.Errorf("创建 Codex 安装器临时目录失败: %w", err)
+		}
+		codexInstallerPath = filepath.Join(installerDir, "install.sh")
+		defer func() {
+			_ = os.Remove(codexInstallerPath)
+			_ = os.Remove(installerDir)
+		}()
+	}
 	plan, err := buildDoctorInstallPlan(doctorInstallPlanRequest{
 		GOOS: opts.Deps.GOOS, PackageManager: manager, Root: opts.Deps.Root,
-		NPMPrefix: npmPrefix, Components: needed,
+		NPMPrefix: npmPrefix, CodexInstallerPath: codexInstallerPath,
+		CodexInstallDir: codexInstallDir, CodexHome: configuredDoctorCodexHomeOverride(opts.Config),
+		Components: needed,
 	})
 	if err != nil {
 		return err
@@ -162,13 +183,17 @@ func runDoctorFix(ctx context.Context, opts doctorFixOptions) error {
 	if err := executeDoctorInstallPlan(ctx, plan, opts, needed); err != nil {
 		return err
 	}
-	// 用户可写目录只用于发现刚安装的 Agent，不能参与 sudo、包管理器或 npm 本身的解析。
-	restorePath, err := prependDoctorNPMBinToPath(npmPrefix)
+	// 用户可写目录只用于发现刚安装的 Agent，不能参与 sudo 或包管理器本身的解析。
+	binDirs := []string{codexInstallDir}
+	if npmPrefix != "" {
+		binDirs = append(binDirs, filepath.Join(npmPrefix, "bin"))
+	}
+	restorePath, err := prependDoctorAgentBinsToPath(binDirs)
 	if err != nil {
 		return err
 	}
 	defer restorePath()
-	remaining := doctorComponentsNeedingInstall(needed, opts.Deps)
+	remaining := doctorComponentsNeedingInstallForFix(needed, opts.Deps, opts.Config)
 	if len(remaining) > 0 {
 		return fmt.Errorf("安装命令已完成，但 %s 仍不可用", joinDoctorComponents(remaining))
 	}
@@ -177,11 +202,23 @@ func runDoctorFix(ctx context.Context, opts doctorFixOptions) error {
 			return fmt.Errorf("安装完成但 Agent 配置失败: %w", err)
 		}
 	}
+	pinned, err := pinDoctorStandaloneCodexCommand(opts.Config, codexInstallDir, needed)
+	if err != nil {
+		return err
+	}
+	if pinned {
+		if opts.Deps.SaveConfig == nil {
+			return fmt.Errorf("安装完成但 Codex 绝对路径无法保存")
+		}
+		if err := opts.Deps.SaveConfig(opts.Config); err != nil {
+			return fmt.Errorf("安装完成但保存 Codex 绝对路径失败: %w", err)
+		}
+	}
 	fmt.Fprintf(opts.Output, "%s 安装后验证通过。\n", joinDoctorComponents(needed))
 	return nil
 }
 
-func doctorComponentsAvailableForPrompt(deps doctorFixDeps) []doctorComponent {
+func doctorComponentsAvailableForPrompt(deps doctorFixDeps, cfg *config.Config) []doctorComponent {
 	supported := make([]doctorComponent, 0, len(doctorComponentOrder))
 	for _, component := range doctorComponentOrder {
 		if component == componentBubblewrap && deps.GOOS != "linux" {
@@ -189,7 +226,7 @@ func doctorComponentsAvailableForPrompt(deps doctorFixDeps) []doctorComponent {
 		}
 		supported = append(supported, component)
 	}
-	return doctorComponentsNeedingInstall(supported, deps)
+	return doctorComponentsNeedingInstallForFix(supported, deps, cfg)
 }
 
 func promptDoctorComponents(reader *bufio.Reader, out io.Writer, available []doctorComponent) ([]doctorComponent, bool, error) {
@@ -233,11 +270,11 @@ func doctorComponentPromptLabel(component doctorComponent) string {
 	case componentBubblewrap:
 		return "[可选增强] bubblewrap — Linux Codex 沙箱"
 	case componentNodeJS:
-		return "[安装前置] nodejs — Codex/Claude npm 安装运行时"
+		return "[安装前置] nodejs — Claude npm 安装运行时"
 	case componentNPM:
-		return "[安装前置] npm — Codex/Claude 官方包安装器"
+		return "[安装前置] npm — Claude 官方包安装器"
 	case componentCodex:
-		return "[可选 Agent] codex — 自动包含 Node.js 和 npm"
+		return "[可选 Agent] codex — 使用 OpenAI 官方 standalone 安装器"
 	case componentClaude:
 		return "[可选 Agent] claude — 自动包含 Node.js 22+、npm 和 Claude ACP"
 	case componentClaudeACP:
@@ -248,7 +285,7 @@ func doctorComponentPromptLabel(component doctorComponent) string {
 }
 
 func doctorNPMInstallPrefix(deps doctorFixDeps, components []doctorComponent) (string, error) {
-	if deps.Root || !installsAgentComponent(components) {
+	if deps.Root || !installsNPMComponent(components) {
 		return "", nil
 	}
 	if deps.UserHomeDir == nil {
@@ -265,14 +302,46 @@ func doctorNPMInstallPrefix(deps doctorFixDeps, components []doctorComponent) (s
 	return filepath.Join(home, ".local"), nil
 }
 
-func prependDoctorNPMBinToPath(prefix string) (func(), error) {
-	prefix = strings.TrimSpace(prefix)
-	if prefix == "" {
+func doctorCodexInstallDir(deps doctorFixDeps, components []doctorComponent) (string, error) {
+	if !hasDoctorComponent(components, componentCodex) {
+		return "", nil
+	}
+	if deps.UserHomeDir == nil {
+		return "", fmt.Errorf("安装 Codex standalone 需要可用的用户主目录")
+	}
+	home, err := deps.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("读取用户主目录失败: %w", err)
+	}
+	home = strings.TrimSpace(home)
+	if home == "" || !filepath.IsAbs(home) {
+		return "", fmt.Errorf("Codex standalone 安装目录必须基于绝对用户主目录")
+	}
+	return filepath.Join(home, ".local", "bin"), nil
+}
+
+func prependDoctorAgentBinsToPath(binDirs []string) (func(), error) {
+	prefixes := make([]string, 0, len(binDirs))
+	seen := make(map[string]bool)
+	for _, binDir := range binDirs {
+		binDir = strings.TrimSpace(binDir)
+		if binDir == "" {
+			continue
+		}
+		if !filepath.IsAbs(binDir) {
+			return nil, fmt.Errorf("Agent 安装目录必须是绝对路径")
+		}
+		binDir = filepath.Clean(binDir)
+		if !seen[binDir] {
+			seen[binDir] = true
+			prefixes = append(prefixes, binDir)
+		}
+	}
+	if len(prefixes) == 0 {
 		return func() {}, nil
 	}
-	binDir := filepath.Join(prefix, "bin")
 	original, existed := os.LookupEnv("PATH")
-	updated := binDir
+	updated := strings.Join(prefixes, string(os.PathListSeparator))
 	if original != "" {
 		updated += string(os.PathListSeparator) + original
 	}
@@ -313,6 +382,70 @@ func doctorComponentsNeedingInstall(components []doctorComponent, deps doctorFix
 	return needed
 }
 
+func doctorComponentsNeedingInstallForFix(components []doctorComponent, deps doctorFixDeps, cfg *config.Config) []doctorComponent {
+	missing := doctorComponentsNeedingInstall(components, deps)
+	missingSet := make(map[doctorComponent]bool, len(missing))
+	for _, component := range missing {
+		missingSet[component] = true
+	}
+	if hasDoctorComponent(components, componentCodex) && !doctorStandaloneCodexAvailable(cfg) {
+		missingSet[componentCodex] = true
+	}
+	result := make([]doctorComponent, 0, len(missingSet))
+	for _, component := range components {
+		if missingSet[component] {
+			result = append(result, component)
+		}
+	}
+	return result
+}
+
+func doctorStandaloneCodexAvailable(cfg *config.Config) bool {
+	codexHome := strings.TrimSpace(defaultDoctorCodexHome(cfg))
+	if codexHome == "" || !filepath.IsAbs(codexHome) {
+		return false
+	}
+	path := filepath.Join(codexHome, "packages", "standalone", "current", "codex")
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+}
+
+func pinDoctorStandaloneCodexCommand(cfg *config.Config, installDir string, components []doctorComponent) (bool, error) {
+	if cfg == nil || !hasDoctorComponent(components, componentCodex) {
+		return false, nil
+	}
+	agentConfig, ok := cfg.Agents["codex"]
+	if !ok || !isCodexAppServerAgent(agentConfig) {
+		return false, nil
+	}
+	command := filepath.Join(strings.TrimSpace(installDir), "codex")
+	info, err := os.Stat(command)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		if err == nil {
+			err = fmt.Errorf("不是可执行普通文件")
+		}
+		return false, fmt.Errorf("安装完成但 Codex 可见命令无效 %s: %w", command, err)
+	}
+	command = filepath.Clean(command)
+	if filepath.Clean(agentConfig.Command) == command {
+		return false, nil
+	}
+	agentConfig.Command = command
+	cfg.Agents["codex"] = agentConfig
+	return true, nil
+}
+
+func configuredDoctorCodexHomeOverride(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	agentConfig, ok := cfg.Agents["codex"]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(agentConfig.Env["CODEX_HOME"])
+}
+
 func doctorComponentNeedsInstall(component doctorComponent, nodeMinimum int, deps doctorFixDeps) bool {
 	command := map[doctorComponent]string{
 		componentSQLite: "sqlite3", componentBubblewrap: "bwrap", componentNodeJS: "node",
@@ -348,20 +481,13 @@ func doctorComponentNeedsInstall(component doctorComponent, nodeMinimum int, dep
 }
 
 func doctorRequiredNodeMajor(components []doctorComponent) int {
-	minimum := 22
-	hasCodex := false
 	for _, component := range components {
 		switch component {
 		case componentClaude, componentClaudeACP:
 			return 22
-		case componentCodex:
-			hasCodex = true
 		}
 	}
-	if hasCodex {
-		minimum = 16
-	}
-	return minimum
+	return 22
 }
 
 func detectDoctorPackageManager(deps doctorFixDeps, components []doctorComponent) (string, error) {
@@ -451,6 +577,15 @@ func installsAgentComponent(components []doctorComponent) bool {
 	return false
 }
 
+func installsNPMComponent(components []doctorComponent) bool {
+	for _, component := range components {
+		if component == componentNPM || component == componentClaude || component == componentClaudeACP {
+			return true
+		}
+	}
+	return false
+}
+
 func joinDoctorComponents(components []doctorComponent) string {
 	names := make([]string, 0, len(components))
 	for _, component := range components {
@@ -460,7 +595,9 @@ func joinDoctorComponents(components []doctorComponent) string {
 }
 
 func formatDoctorInstallCommand(command doctorInstallCommand) string {
-	parts := []string{command.Name}
+	parts := make([]string, 0, len(command.Env)+len(command.Args)+1)
+	parts = append(parts, command.Env...)
+	parts = append(parts, command.Name)
 	for _, arg := range command.Args {
 		if strings.ContainsAny(arg, " \t\n\"'") {
 			parts = append(parts, strconv.Quote(arg))
@@ -469,4 +606,37 @@ func formatDoctorInstallCommand(command doctorInstallCommand) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+func hasDoctorComponent(components []doctorComponent, target doctorComponent) bool {
+	for _, component := range components {
+		if component == target {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeDoctorCommandEnv(base []string, overrides []string) []string {
+	result := append([]string(nil), base...)
+	positions := make(map[string]int, len(result))
+	for index, item := range result {
+		if split := strings.IndexByte(item, '='); split > 0 {
+			positions[item[:split]] = index
+		}
+	}
+	for _, item := range overrides {
+		split := strings.IndexByte(item, '=')
+		if split <= 0 {
+			continue
+		}
+		key := item[:split]
+		if index, ok := positions[key]; ok {
+			result[index] = item
+			continue
+		}
+		positions[key] = len(result)
+		result = append(result, item)
+	}
+	return result
 }

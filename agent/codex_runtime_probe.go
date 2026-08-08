@@ -88,7 +88,7 @@ func unknownCodexRuntimeSnapshot(req CodexRuntimeRequest, state CodexThreadState
 	}
 }
 
-// HandoffCodexRuntime 执行用户已明确选择的控制权移交，不替用户自动决定控制方。
+// HandoffCodexRuntime 保留兼容 API 名称；它绑定 frontend，并只在确需更换 Host 时执行切换。
 func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	a.codexAdmissionMu.Lock()
 	defer a.codexAdmissionMu.Unlock()
@@ -102,7 +102,11 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if a.desktopProbe == nil {
 		return a.activateSharedCodexHost(ctx, req)
 	}
-	if a.codexOwners.hasWriterLease(req.Ref.ThreadID) {
+	// A writer lease protects the accepted turn lifecycle, not a frontend route.
+	// The production shared-host topology may bind another conversation to the
+	// same runtime while that turn is active. Compatibility probes that still
+	// enforce the retired owner model keep the old fail-closed behavior.
+	if a.codexOwners.hasWriterLease(req.Ref.ThreadID) && a.codexOwners.enforcesControl() {
 		return CodexThreadBinding{}, ErrCodexWriterBusy
 	}
 	if req.Intent.Owner == CodexControlUnclaimed {

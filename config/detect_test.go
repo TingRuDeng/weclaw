@@ -143,6 +143,21 @@ func TestDetectAndConfigureOpenCodeUsesCompanion(t *testing.T) {
 	}
 }
 
+func TestDetectAndConfigureDoesNotFallbackToCodexExec(t *testing.T) {
+	paths := map[string]string{"codex": "/fake/bin/codex"}
+	probes := map[string]bool{
+		"/fake/bin/codex\x00[app-server --help]": false,
+	}
+	withAgentDetection(t, paths, probes)
+
+	cfg := DefaultConfig()
+	DetectAndConfigure(cfg)
+
+	if codex, ok := cfg.Agents["codex"]; ok {
+		t.Fatalf("Codex config=%#v, want no legacy codex exec fallback", codex)
+	}
+}
+
 func TestOpenclawACPConfigKeepsSecretsOutOfArgs(t *testing.T) {
 	cfg := openclawACPConfig(openclawACPConfigRequest{
 		command: "openclaw", gatewayURL: "ws://127.0.0.1:18789", token: "secret-token",

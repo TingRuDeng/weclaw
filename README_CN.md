@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
-通过微信和飞书远程使用本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果。Codex 始终只保留一个 Host 写入权威；Codex App 已运行时，WeClaw 可通过 Desktop IPC 复用同一上下文。
+通过微信和飞书远程使用本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果。Codex 始终只保留一个 Host 写入权威；Codex App、受控 CLI、微信和飞书可以从同一 thread 平等继续任务。
 
 > 当前正式 Release 支持 **macOS Apple Silicon / Intel（darwin/arm64、darwin/amd64）** 和 **Linux arm64 / amd64**。Windows 暂不提供正式资产。
 
@@ -17,12 +17,12 @@
 - **远程接管本地任务**：离开电脑后，从微信或飞书继续 Codex、Claude 会话。
 - **上下文不中断**：复用 Codex workspace/thread 和 Claude ACP session，不把每条消息当成新对话。
 - **过程可见、结果可达**：飞书使用 CardKit 实时更新，微信提供输入状态和任务结果。
-- **单一 Codex 运行边界**：Codex App 或共享 app-server 二选一成为 Host；窗口只保存会话绑定，同一 thread 的活动 turn 由服务端串行化。
+- **单一 Codex 运行边界**：Codex App 或共享 app-server 二选一成为 Host；活动 turn 的输入按 app-server 接受顺序处理，新 turn 由 writer lease 串行化。
 - **安全边界可配置**：用户白名单、工作目录白名单、管理员权限、审计日志和 Codex 权限档位均可独立配置。
 
 ## 快速开始
 
-一键安装完成二进制校验后会先运行只读依赖检查；交互终端随后列出缺失组件、用途和联动前置项，只有用户选择并再次确认后才依次安装。Codex 使用 `codex`；Claude 远程运行同时需要 `claude` 与固定版本的 `claude-agent-acp`。当前 Claude npm 安装链要求 Node.js 22+。
+一键安装完成二进制校验后会先运行只读依赖检查；交互终端随后列出缺失组件、用途和联动前置项，只有用户选择并再次确认后才依次安装。Codex 使用 OpenAI 官方 standalone 安装，不依赖 Node.js/npm；Claude 远程运行同时需要 `claude` 与固定版本的 `claude-agent-acp`，当前安装链要求 Node.js 22+。
 
 ```bash
 # 安装当前维护版
@@ -73,9 +73,18 @@ weclaw status
 
 macOS 默认 `codex_host_mode: auto` 下，如果启动 WeClaw 时 Codex App 已运行，WeClaw 会通过受保护的 Desktop IPC 复用 App 的 Host，不再启动第二个 app-server；App 不在时，才连接或启动官方 standalone daemon（不可用时使用 WeClaw 自管兼容 Host）。如果共享 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；无法确认空闲或 App 存在但 IPC 不可达时直接失败，不会并行写入。
 
-App Host 支持选择已有会话、继续任务、进度、审批、`/guide`、`/stop`，以及修改当前 thread 的模型和推理强度。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
+App Host 支持选择已有会话、继续任务、进度、审批、`/stop`，以及修改当前 thread 的模型和推理强度。飞书或微信绑定到 App 中正在运行的 thread 后，普通消息会直接进入当前 turn，不再先暂存并等待任务结束。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
 
-`/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用；它们会额外启动进程，而默认 auto 拓扑已经能安全复用正在运行的 Codex App。
+`/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用，因为消息命令不能在本机启动额外进程。本机终端使用受控入口：
+
+```bash
+weclaw codex cli
+weclaw codex cli resume <thread-id>
+```
+
+该命令只使用官方 standalone Codex，并把 `--remote` 固定到唯一 official daemon socket；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。服务未运行且 Codex App 不存在时，它可以直接受控启动 daemon；服务正在运行时，CLI 必须先通过仅限本机的控制接口让该服务按自身已解析的拓扑准备 Host，并核对返回 socket 与本地配置完全一致。Desktop、managed Host、服务控制接口不可达或 Host 身份不明确时都会拒绝。旧 `type: cli` Codex 配置会迁移为共享 app-server，旧 `codex exec` 独立会话模式不再保留。
+
+Codex App 和 CLI 中尚未发送的 queued follow-up 仍是各自客户端的本地草稿。只有输入被 app-server 接受后，才进入所有入口共享的顺序；WeClaw 不会把草稿当成已提交任务或自动代发。
 
 ### 安全切换 Codex OAuth 账号
 
@@ -129,13 +138,14 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 
 ### 控制运行中任务
 
-- 运行中发送一条普通消息：暂存，并在当前任务结束后自动续跑。
-- `/cancel`：撤回暂存消息，不停止当前任务。
-- `/guide`：把暂存消息作为 Codex 当前任务的引导信息；Claude 不支持。
+- Codex 运行中发送普通消息：立即进入当前 app-server turn，不新开 turn，也不进入 WeClaw 私有队列。
+- Claude 运行中发送普通消息：最多暂存一条，并在当前任务结束后自动续跑。
+- `/cancel`：撤回确实存在的暂存消息，不停止当前任务。
+- `/guide`：把确实存在的 Codex 暂存消息发送到当前任务；正常活动 turn 输入无需使用。
 - `/stop`：停止当前窗口正在运行的任务。
 - `/ps`：查看当前用户运行中的任务。
 
-飞书中暂存第二条消息后会立即出现紧凑操作卡。无需点击卡片，消息默认会在当前任务结束后自动执行；卡片按钮只在需要改变默认处理方式时使用。Codex 提供“作为引导发送”“撤回暂存消息”“停止当前任务”，Claude 因不支持引导而只显示后两项。卡片同时绑定机器人账号、操作者、消息窗口、活动任务和该条暂存消息的 revision；旧卡片不能操作后来任务或替换后的消息。点击结果会直接更新原卡片，不再另发一条命令结果。
+飞书只在消息确实进入兼容 pending 队列时显示紧凑操作卡；Codex 正常活动 turn 的补充输入不会显示暂存卡。Claude 的暂存消息无需点击，默认在当前任务结束后自动执行。卡片同时绑定机器人账号、操作者、消息窗口、活动任务和该条暂存消息的 revision；旧卡片不能操作后来任务或替换后的消息。点击结果会直接更新原卡片，不再另发一条命令结果。
 
 Codex App Server 的原生计划、工具与文件事件会先归一为结构化进展；同一事件 ID 的运行与完成状态在任务卡中原位更新，原始命令输出、工具参数和 diff 不会写入卡片。`commandExecution` 生命周期不进入进度卡，真正需要用户处理的命令审批仍会独立展示。Codex 明确标记为 `commentary` 的用户可见中间说明会立即累计进时间线；若当前 Codex 版本未提供 `phase`，WeClaw 会暂存一条已完成消息，后续仍有执行活动时再把上一条确认为中间说明。正常完成前仍待判定的最后一条消息视为最终回答，不写入进度卡。所有中间说明都按顺序保留完整正文并与结构化进展一起参与自动续卡；Claude 的中间说明继续显示在独立“当前说明”区域。任务进入完成、失败或停止终态后，旧事件和晚到 watcher 不会再覆盖终态。
 
@@ -193,7 +203,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 
 | Agent | 远程后端 | 会话复用 | 模型 / 推理强度 | 独立 writer |
 | --- | --- | :---: | :---: | --- |
-| Codex | Codex App IPC / 共享 app-server | workspace + thread | ✅ | 不启动独立 writer |
+| Codex | Codex App IPC / 共享 app-server | workspace + thread | ✅ | 受控 CLI 复用 daemon，不启动独立 writer |
 | Claude | 单一共享 ClaudeHost（ACP） | ACP session + writer lease | ✅ | 禁止 |
 | OpenCode | Companion | 取决于本地连接 | 取决于 Agent | 可见终端 |
 | 其他 Agent | ACP / HTTP / Companion | 取决于协议能力 | 取决于 Agent | 取决于配置 |
@@ -211,7 +221,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | `/approve <短码>`、`/deny <短码>` | 审批按钮不可用时允许或拒绝对应操作；短码与操作者、窗口和有效期绑定 |
 | `/progress [模式]` | 查看进度模式；只有管理员可以修改账号级模式 |
 | `/ps`、`/stop` | 查看或停止当前任务 |
-| `/cancel`、`/guide` | 撤回暂存消息，或引导 Codex 当前任务 |
+| `/cancel`、`/guide` | 处理确实存在的暂存消息；Codex 活动 turn 的普通输入会直接发送 |
 | `/cx help`、`/cc help` | 查看 Codex、Claude 完整会话命令 |
 | `/cx <编号>`、`/cx switch <编号>` | 选择并绑定当前工作空间的 Codex 会话 |
 | `/cx new` | 新建并绑定当前工作空间的 Codex 会话 |
@@ -287,7 +297,7 @@ Tenant scopes：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonl
 - Claude：`/cc ls`、`/cc status`、`/cc new`、`/cc quota`
 - 设置：`/model`、`/reasoning`、`/fast`、`/mode`
 
-推荐使用飞书 7.22 及以上版本的悬浮菜单，并将每个菜单项的响应动作配置为“发送文字消息”。应用菜单只保留高频入口；`/guide` 和 `/cancel` 不进入常驻菜单，在消息真实暂存时由上下文操作卡提供，`/help` 仍按“常用与任务、Codex、Claude、设置与进度”分级展示完整命令，管理员还会看到独立的“管理员”分类。
+推荐使用飞书 7.22 及以上版本的悬浮菜单，并将每个菜单项的响应动作配置为“发送文字消息”。应用菜单只保留高频入口；`/guide` 和 `/cancel` 不进入常驻菜单，只在消息确实暂存时由上下文操作卡提供。Codex 活动 turn 的普通输入直接发送，不显示暂存卡；`/help` 仍按“常用与任务、Codex、Claude、设置与进度”分级展示完整命令，管理员还会看到独立的“管理员”分类。
 
 悬浮菜单最多支持 5 个主菜单、每个主菜单 10 个子菜单，上述配置可直接使用；如需兼容最多 3 个主菜单、每个主菜单 5 个子菜单的可切换菜单，请移除“设置”主菜单，通过 `/help` 进入设置命令。机器人菜单仅在单聊中展示，群聊仍需直接发送命令。限制与配置步骤见[飞书官方机器人菜单使用指南](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/bot-v3/bot-customized-menu)。
 
@@ -325,9 +335,9 @@ weclaw doctor
 
 首次安装在有控制终端时通过 `/dev/tty` 进入同一个 `weclaw doctor --fix` 向导，不会让 `curl | sh` 的脚本输入被依赖选择消费。没有控制终端时只运行只读检查并打印后续命令；可用 `WECLAW_SKIP_DEPENDENCY_SETUP=1` 显式跳过该检查与向导。非交互安装依赖必须单独同时指定组件和确认，例如 `weclaw doctor --fix --components sqlite3,bubblewrap --yes`，不会默认安装全部组件。
 
-`weclaw doctor --fix` 用角色标签展示缺失项：SQLite、Linux bubblewrap 属于可选增强，Node.js/npm 属于 Agent 安装前置，Codex/Claude 属于可选 Agent，Claude ACP 是选择 Claude 后的必要组件。可选组件名为 `sqlite3`、`bubblewrap`、`nodejs`、`npm`、`codex`、`claude`、`claude-acp`；选择 Codex 会联动 Node.js/npm，选择 Claude 或 Claude ACP 会联动 CLI、adapter 与 Node.js/npm。执行前会完整显示安装命令和权限影响，直接回车或拒绝确认都不安装。
+`weclaw doctor --fix` 用角色标签展示缺失项：SQLite、Linux bubblewrap 属于可选增强，Codex/Claude 属于可选 Agent，Node.js/npm 只作为 Claude 安装前置，Claude ACP 是选择 Claude 后的必要组件。可选组件名为 `sqlite3`、`bubblewrap`、`nodejs`、`npm`、`codex`、`claude`、`claude-acp`；选择 Codex 只使用 OpenAI 官方 standalone 安装器，选择 Claude 或 Claude ACP 才会联动 CLI、adapter 与 Node.js/npm。执行前会完整显示安装命令和权限影响，直接回车或拒绝确认都不安装。
 
-系统依赖只使用已识别的 `apt-get`、`dnf` 或 Homebrew，Linux 需要提权时显式调用 `sudo`；npm 安装禁止 `sudo npm`，普通用户固定使用 `~/.local` prefix，并在当前修复进程中临时加入 `~/.local/bin` 以完成重检和绝对路径配置，退出后恢复原 PATH。WeClaw 不添加第三方 Node 软件源，也不替换 nvm、mise 等版本管理器；系统包安装后仍不满足所选 Agent 的 Node.js 版本要求时，会在执行 npm 前失败并保留真实错误。
+Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE=1` 和固定参数执行，不使用 `curl | sh` 或动态 shell 拼接。系统依赖只使用已识别的 `apt-get`、`dnf` 或 Homebrew，Linux 需要提权时显式调用 `sudo`；npm 安装禁止 `sudo npm`，普通用户固定使用 `~/.local` prefix，并在当前修复进程中临时加入 `~/.local/bin` 以完成重检和绝对路径配置，退出后恢复原 PATH。WeClaw 不添加第三方 Node 软件源，也不替换 nvm、mise 等版本管理器；系统包安装后仍不满足所选 Claude 依赖的 Node.js 版本要求时，会在执行 npm 前失败并保留真实错误。
 
 安装后会重新探测同一能力，只有验证通过才自动发现并保存新 Agent。Codex 和 Claude 的登录不会自动执行，仍需用户运行对应 CLI 完成官方认证。`weclaw doctor` 对 Claude ACP 的成功检查只证明 `initialize` 握手可用，不会探测 `session/list` 或 `session/resume`；真实会话列举和恢复仍以对应命令的运行结果为准。
 

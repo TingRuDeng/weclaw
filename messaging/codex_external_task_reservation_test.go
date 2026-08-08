@@ -63,6 +63,23 @@ func TestReserveExternalCodexTaskRejectsNonRunningInProcessTask(t *testing.T) {
 	}
 }
 
+func TestReserveExternalCodexTaskRejectsDifferentKnownInProcessTurn(t *testing.T) {
+	h := NewHandler(nil, nil)
+	prepared, opts := testExternalCodexReservationInput(nil, nil)
+	task, _, started := h.beginActiveTask(context.Background(), opts.conversationID, activeTaskMeta{
+		owner: opts.actorUserID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		codexThreadID: opts.threadID, codexTurnID: "turn-old", inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("未能建立 in-process active task")
+	}
+	defer h.finishActiveTask(opts.conversationID, task)
+	_, err := h.reserveExternalCodexTask(opts, prepared)
+	if !errors.Is(err, errExternalCodexTaskReservationConflict) {
+		t.Fatalf("不同 active turn 不应复用 in-process lifecycle，error=%v", err)
+	}
+}
+
 func TestReserveExternalCodexTaskRequiresSameInProcessIdentity(t *testing.T) {
 	h := NewHandler(nil, nil)
 	prepared, opts := testExternalCodexReservationInput(nil, nil)

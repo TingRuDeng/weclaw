@@ -506,6 +506,37 @@ func TestHandoffCodexRuntimeRejectsActiveWriter(t *testing.T) {
 	}
 }
 
+func TestHandoffCodexRuntimeAllowsFrontendBindingDuringSharedTurn(t *testing.T) {
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}, desktopBridge: true})
+	first := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(first, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := a.codexOwners.beginTurn(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.finish()
+	if err := lease.accept("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	second := remoteCodexRuntimeRequest("thread-1", "route-2", 1)
+	second.Ref.ConversationID = "conversation-2"
+	second.Intent.ConversationID = "conversation-2"
+
+	binding, err := a.HandoffCodexRuntime(context.Background(), second)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw || !binding.State.Active || binding.State.ActiveTurnID != "turn-1" {
+		t.Fatalf("binding=%#v error=%v", binding, err)
+	}
+	current, ok := a.codexOwners.currentConversationBinding("conversation-2")
+	if !ok || current.Ref.ThreadID != "thread-1" {
+		t.Fatalf("current=%#v ok=%v", current, ok)
+	}
+}
+
 func codexHandoffRPCFake(t *testing.T, threadID string, turnID string) func(context.Context, string, interface{}) (json.RawMessage, error) {
 	t.Helper()
 	return func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {

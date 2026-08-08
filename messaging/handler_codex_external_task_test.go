@@ -48,15 +48,16 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	if !strings.Contains(text, "共享 Codex 任务正在进行") || !strings.Contains(text, "本地 App 发起的任务") {
 		t.Fatalf("switch reply should show active task, messages=%#v", calls.texts())
 	}
-	if !strings.Contains(text, "/guide") || !strings.Contains(text, "/stop") || !strings.Contains(text, "/cancel") {
-		t.Fatalf("active switch reply should show all task controls, messages=%#v", calls.texts())
+	if !strings.Contains(text, "新消息会直接发送到当前任务") || !strings.Contains(text, "/stop") ||
+		strings.Contains(text, "/guide") || strings.Contains(text, "/cancel") {
+		t.Fatalf("active switch reply should show immediate input and stop controls, messages=%#v", calls.texts())
 	}
 	if !strings.Contains(text, "模型: gpt-5.5") || !strings.Contains(text, "推理强度: high") {
 		t.Fatalf("active switch reply should keep session model status, messages=%#v", calls.texts())
 	}
 }
 
-func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
+func TestCodexMessageSteersExternalActiveTurnImmediately(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -77,20 +78,19 @@ func TestCodexGuideSteersExternalActiveTurn(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(162, "/cx cd weclaw"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(163, "/cx switch 1"))
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(164, "补充要求"))
-	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(165, "/guide"))
 
 	if ag.steerThreadID != "thread-active" || ag.steerTurnID != "turn-active" || ag.steerMessage != "补充要求" {
 		t.Fatalf("steer=(%q,%q,%q), want active thread turn message", ag.steerThreadID, ag.steerTurnID, ag.steerMessage)
 	}
 	if ag.chatCallCount() != 0 {
-		t.Fatalf("/guide for external active turn should not start new chat, calls=%d", ag.chatCallCount())
+		t.Fatalf("active turn follow-up should not start new chat, calls=%d", ag.chatCallCount())
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, queuedAgentMessage) {
-		t.Fatalf("普通消息应发送简洁排队提示，messages=%#v", calls.texts())
-	}
 	if !strings.Contains(text, "已发送到当前共享 Codex 任务") {
-		t.Fatalf("/guide should confirm steer, messages=%#v", calls.texts())
+		t.Fatalf("message should confirm immediate steer, messages=%#v", calls.texts())
+	}
+	if strings.Contains(text, queuedAgentMessage) {
+		t.Fatalf("message must not enter a private WeClaw queue, messages=%#v", calls.texts())
 	}
 }
 

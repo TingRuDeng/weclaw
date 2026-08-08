@@ -69,62 +69,70 @@ func switchAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 		Metadata:  map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
 	}, fixture.reply)
 	if _, ok := fixture.h.activeTask(fixture.conversationID); !ok {
-		t.Fatalf("切换到本地运行中 rollout 后应登记外部任务镜像，texts=%#v", fixture.reply.Texts)
+		t.Fatalf("切换到本地运行中 rollout 后应登记外部任务镜像，texts=%#v", fixture.reply.TextsSnapshot())
 	}
-	notice := strings.Join(fixture.reply.Texts, "\n")
+	notice := strings.Join(fixture.reply.TextsSnapshot(), "\n")
 	for _, want := range []string{"共享 Codex 任务正在进行", "修复跨进程任务反馈", "正在核对任务状态"} {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("switch notice=%q, want %q", notice, want)
 		}
 	}
 	if strings.Contains(notice, "/guide") || strings.Contains(notice, "/stop") {
-		t.Fatalf("switch notice=%q, read-only rollout mirror must not advertise remote control", notice)
+		t.Fatalf("switch notice=%q, rollout mirror must not advertise unavailable commands", notice)
 	}
-	if strings.Contains(notice, "需在 Codex App 中操作") || !strings.Contains(notice, "结果会自动返回当前会话") {
-		t.Fatalf("switch notice=%q, must only describe automatic result delivery", notice)
+	if strings.Contains(notice, "需在 Codex App 中操作") ||
+		!strings.Contains(notice, "新消息会直接发送到当前任务") ||
+		!strings.Contains(notice, "结果会自动返回当前会话") {
+		t.Fatalf("switch notice=%q, must describe direct input and automatic result delivery", notice)
 	}
 }
 
-// queueAndStopRolloutMirror 验证只读任务排队且无法从远端停止。
-func queueAndStopRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
+// steerAndStopRolloutMirror 验证输入立即进入当前任务，但无法从远端停止只读镜像。
+func steerAndStopRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 	t.Helper()
 	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "补充要求",
 		Metadata: map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
 	}, fixture.reply)
 	task, _ := fixture.h.activeTask(fixture.conversationID)
-	if task.pendingGuide() != "补充要求" || !containsText(fixture.reply.Texts, queuedAgentMessage) {
-		t.Fatalf("pending=%q texts=%#v, read-only task must queue the next message", task.pendingGuide(), fixture.reply.Texts)
+	texts := fixture.reply.TextsSnapshot()
+	if task.pendingGuide() != "" || fixture.agent.steerThreadID != "thread-rollout-active" ||
+		fixture.agent.steerTurnID != fixture.turnID || fixture.agent.steerMessage != "补充要求" ||
+		!containsText(texts, "已发送到当前共享 Codex 任务") || containsText(texts, queuedAgentMessage) {
+		t.Fatalf("pending=%q steer=(%q,%q,%q) texts=%#v", task.pendingGuide(), fixture.agent.steerThreadID,
+			fixture.agent.steerTurnID, fixture.agent.steerMessage, texts)
 	}
 	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/stop",
 		Metadata: map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
 	}, fixture.reply)
-	if _, ok := fixture.h.activeTask(fixture.conversationID); !ok || !containsText(fixture.reply.Texts, "暂不支持从飞书或微信停止") {
-		t.Fatalf("texts=%#v, /stop must not cancel read-only rollout mirror", fixture.reply.Texts)
+	texts = fixture.reply.TextsSnapshot()
+	if _, ok := fixture.h.activeTask(fixture.conversationID); !ok || !containsText(texts, "暂不支持从飞书或微信停止") {
+		t.Fatalf("texts=%#v, /stop must not cancel read-only rollout mirror", texts)
 	}
 }
 
-// completeAndAssertRolloutMirror 验证本地完成后回传结果并自动续跑。
+// completeAndAssertRolloutMirror 验证本地完成后回传结果，且不会另开 turn。
 func completeAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 	t.Helper()
 	appendCodexRolloutRecord(t, fixture.rolloutPath, rolloutProgressRecord("正在整理最终结果"))
 	appendCodexRolloutRecord(t, fixture.rolloutPath, rolloutTaskCompleteRecord(fixture.turnID, "本地任务最终结果"))
 	waitUntil(t, func() bool {
-		return fixture.agent.lastChatMessage() == "补充要求"
+		return containsText(fixture.reply.TextsSnapshot(), "本地任务最终结果")
 	})
-	if !containsText(fixture.reply.Texts, "本地任务最终结果") {
-		t.Fatalf("texts=%#v, rollout task 完成后应返回最终结果", fixture.reply.Texts)
+	if fixture.agent.chatCallCount() != 0 {
+		t.Fatalf("chat calls=%d, steer 输入不应在完成后自动续跑", fixture.agent.chatCallCount())
 	}
-	if containsText(fixture.reply.Texts, "回复“确认”执行该消息") {
-		t.Fatalf("texts=%#v, rollout task 自动续跑不应要求确认", fixture.reply.Texts)
+	texts := fixture.reply.TextsSnapshot()
+	if containsText(texts, "回复“确认”执行该消息") {
+		t.Fatalf("texts=%#v, rollout task 自动续跑不应要求确认", texts)
 	}
 }
 
 func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 	fixture := newRolloutMirrorFixture(t)
 	switchAndAssertRolloutMirror(t, fixture)
-	queueAndStopRolloutMirror(t, fixture)
+	steerAndStopRolloutMirror(t, fixture)
 	completeAndAssertRolloutMirror(t, fixture)
 }
 

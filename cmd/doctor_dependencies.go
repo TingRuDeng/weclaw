@@ -39,24 +39,29 @@ var doctorComponentOrder = []doctorComponent{
 type doctorInstallCommand struct {
 	Name string
 	Args []string
+	Env  []string
 }
 
 type doctorInstallPlanRequest struct {
-	GOOS           string
-	PackageManager string
-	Root           bool
-	NPMPrefix      string
-	Components     []doctorComponent
+	GOOS               string
+	PackageManager     string
+	Root               bool
+	NPMPrefix          string
+	CodexInstallerPath string
+	CodexInstallDir    string
+	CodexHome          string
+	Components         []doctorComponent
 }
 
 func checkDoctorDependencies(cfg *config.Config, deps doctorDeps) []doctorResult {
-	results := make([]doctorResult, 0, 7)
+	results := make([]doctorResult, 0, 8)
 	codexConfigured := configuredAgent(cfg, "codex")
 	claudeConfigured := configuredAgent(cfg, "claude")
 
 	codexCommand, nativeCodexRequired := configuredNativeCodexCommand(cfg)
 	codexPath, codexErr := lookupDoctorDependency(deps, codexCommand)
 	results = append(results, checkCodexCapabilities(nativeCodexRequired, codexPath, codexErr, deps))
+	results = append(results, checkCodexStandalone(cfg, deps))
 	results = append(results, checkCodexSessionCatalog(codexConfigured || codexErr == nil, cfg, deps))
 	if deps.goos == "linux" && (nativeCodexRequired || (codexCommand == "codex" && codexErr == nil)) {
 		results = append(results, checkSimpleDependency(deps, "Codex sandbox", "bwrap", doctorWarn,
@@ -73,6 +78,45 @@ func checkDoctorDependencies(cfg *config.Config, deps doctorDeps) []doctorResult
 	results = append(results, checkNodeRuntime(deps, claudeConfigured))
 	results = append(results, checkNPM(deps, claudeConfigured))
 	return results
+}
+
+func checkCodexStandalone(cfg *config.Config, deps doctorDeps) doctorResult {
+	result := doctorResult{Name: "Codex standalone daemon"}
+	if cfg == nil {
+		result.Status = doctorOK
+		result.Detail = "当前配置不要求官方 daemon"
+		return result
+	}
+	agentConfig, configured := cfg.Agents["codex"]
+	if !configured || !isCodexAppServerAgent(agentConfig) {
+		result.Status = doctorOK
+		result.Detail = "当前配置不要求官方 daemon"
+		return result
+	}
+	mode := agentConfig.EffectiveCodexHostMode()
+	if mode == "managed" {
+		result.Status = doctorOK
+		result.Detail = "当前显式使用 managed 兼容 Host"
+		return result
+	}
+	codexHome := ""
+	if deps.codexHome != nil {
+		codexHome = strings.TrimSpace(deps.codexHome(cfg))
+	}
+	path := filepath.Join(codexHome, "packages", "standalone", "current", "codex")
+	info, err := os.Stat(path)
+	if codexHome != "" && err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+		result.Status = doctorOK
+		result.Detail = path
+		return result
+	}
+	result.Status = doctorWarn
+	result.Detail = "未安装官方 standalone；auto 将使用 managed 兼容 Host，受控 weclaw codex cli 不可用"
+	if mode == "daemon" {
+		result.Status = doctorFail
+		result.Detail = "codex_host_mode=daemon 需要官方 standalone；运行 weclaw doctor --fix --components codex"
+	}
+	return result
 }
 
 func configuredNativeCodexCommand(cfg *config.Config) (string, bool) {
@@ -274,7 +318,7 @@ func checkNodeRuntime(deps doctorDeps, blocking bool) doctorResult {
 }
 
 func checkNPM(deps doctorDeps, blocking bool) doctorResult {
-	result := checkSimpleDependency(deps, "npm", "npm", doctorWarn, "缺少 npm；无法安装 Codex/Claude/ACP")
+	result := checkSimpleDependency(deps, "npm", "npm", doctorWarn, "缺少 npm；无法安装 Claude/ACP")
 	if blocking && result.Status != doctorOK {
 		result.Status = doctorFail
 	}
@@ -310,8 +354,6 @@ func expandDoctorComponents(requested []doctorComponent) ([]doctorComponent, err
 		case componentSQLite, componentBubblewrap, componentNodeJS, componentNPM:
 			selected[component] = true
 		case componentCodex:
-			selected[componentNodeJS] = true
-			selected[componentNPM] = true
 			selected[componentCodex] = true
 		case componentClaude, componentClaudeACP:
 			selected[componentNodeJS] = true
@@ -340,7 +382,8 @@ func buildDoctorInstallPlan(req doctorInstallPlanRequest) ([]doctorInstallComman
 			packages = append(packages, name)
 		}
 	}
-	npmPackages := make([]string, 0, 3)
+	npmPackages := make([]string, 0, 2)
+	installCodex := false
 	for _, component := range req.Components {
 		switch component {
 		case componentSQLite:
@@ -367,7 +410,7 @@ func buildDoctorInstallPlan(req doctorInstallPlanRequest) ([]doctorInstallComman
 				}
 			}
 		case componentCodex:
-			npmPackages = append(npmPackages, "@openai/codex")
+			installCodex = true
 		case componentClaude:
 			npmPackages = append(npmPackages, "@anthropic-ai/claude-code")
 		case componentClaudeACP:
@@ -376,7 +419,7 @@ func buildDoctorInstallPlan(req doctorInstallPlanRequest) ([]doctorInstallComman
 			return nil, fmt.Errorf("未知依赖组件 %q", component)
 		}
 	}
-	plan := make([]doctorInstallCommand, 0, len(npmPackages)+2)
+	plan := make([]doctorInstallCommand, 0, len(npmPackages)+4)
 	if len(packages) > 0 {
 		switch {
 		case req.GOOS == "darwin" && req.PackageManager == "brew":
@@ -389,6 +432,27 @@ func buildDoctorInstallPlan(req doctorInstallPlanRequest) ([]doctorInstallComman
 		default:
 			return nil, fmt.Errorf("不支持的包管理器 %q（%s）", req.PackageManager, req.GOOS)
 		}
+	}
+	if installCodex {
+		installerPath := strings.TrimSpace(req.CodexInstallerPath)
+		if installerPath == "" || !filepath.IsAbs(installerPath) {
+			return nil, fmt.Errorf("Codex standalone 安装器需要绝对临时路径")
+		}
+		installDir := strings.TrimSpace(req.CodexInstallDir)
+		if installDir == "" || !filepath.IsAbs(installDir) {
+			return nil, fmt.Errorf("Codex standalone 安装目录必须是绝对路径")
+		}
+		plan = append(plan, doctorInstallCommand{
+			Name: "curl", Args: []string{"-fsSL", "https://chatgpt.com/codex/install.sh", "-o", installerPath},
+		})
+		installerEnv := []string{"CODEX_NON_INTERACTIVE=1", "CODEX_INSTALL_DIR=" + installDir}
+		if codexHome := strings.TrimSpace(req.CodexHome); codexHome != "" {
+			if !filepath.IsAbs(codexHome) {
+				return nil, fmt.Errorf("CODEX_HOME 必须是绝对路径")
+			}
+			installerEnv = append(installerEnv, "CODEX_HOME="+filepath.Clean(codexHome))
+		}
+		plan = append(plan, doctorInstallCommand{Name: "sh", Args: []string{installerPath}, Env: installerEnv})
 	}
 	for _, packageName := range npmPackages {
 		args := []string{"install", "--global"}

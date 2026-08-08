@@ -27,6 +27,10 @@ func createAgentByName(ctx context.Context, cfg *config.Config, name string, pro
 		log.Printf("[agent] Claude remote backend only supports ACP; run weclaw config agent")
 		return nil
 	}
+	if name == "codex" && agCfg.Type == "cli" {
+		log.Printf("[agent] legacy codex exec backend is disabled; migrate to the shared app-server runtime")
+		return nil
+	}
 
 	switch agCfg.Type {
 	case "acp":

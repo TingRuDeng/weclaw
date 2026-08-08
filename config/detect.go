@@ -28,10 +28,9 @@ type agentCandidate struct {
 var agentCandidates = []agentCandidate{
 	// claude: ACP-only，原生 CLI 只作为额度查询回退的 local_command 使用
 	{Name: "claude", Binary: "claude-agent-acp", Type: "acp", Model: "sonnet"},
-	// codex: prefer ACP, fallback to CLI
+	// codex: only shared app-server backends are valid remote runtimes
 	{Name: "codex", Binary: "codex-acp", Type: "acp", Model: ""},
 	{Name: "codex", Binary: "codex", Args: []string{"app-server", "--listen", "stdio://"}, CheckArgs: []string{"app-server", "--help"}, Type: "acp", Model: ""},
-	{Name: "codex", Binary: "codex", Type: "cli", Model: ""},
 	// ACP-only agents
 	{Name: "cursor", Binary: "agent", Args: []string{"acp"}, Type: "acp", Model: ""},
 	{Name: "kimi", Binary: "kimi", Args: []string{"acp"}, Type: "acp", Model: ""},
@@ -182,7 +181,7 @@ func openclawACPConfig(req openclawACPConfigRequest) AgentConfig {
 	}
 }
 
-// NormalizeCodexRemoteFirst 将所有旧 Codex Companion 配置迁移到单一共享 app-server，
+// NormalizeCodexRemoteFirst 将旧 Codex Companion/exec 配置迁移到单一共享 app-server，
 // 并为原生 shared Host 写入受控的兼容性自动更新默认值。
 func NormalizeCodexRemoteFirst(cfg *Config) bool {
 	if cfg == nil || cfg.Agents == nil {
@@ -199,6 +198,12 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 		agCfg.AutoLaunch = nil
 		modified = true
 		log.Printf("[config] migrated codex companion to single shared app-server")
+	} else if agCfg.Type == "cli" && isNativeCodexCommand(agCfg.Command) {
+		agCfg.Type = "acp"
+		agCfg.Args = []string{"app-server", "--listen", "stdio://"}
+		agCfg.AutoLaunch = nil
+		modified = true
+		log.Printf("[config] migrated legacy codex exec backend to single shared app-server")
 	}
 	if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
 		strings.TrimSpace(agCfg.CodexAutoUpdate) == "" {
@@ -212,9 +217,13 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 	return modified
 }
 
+func isNativeCodexCommand(command string) bool {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(command)))
+	return base == "codex" || base == "codex.exe"
+}
+
 func isNativeCodexAppServerConfig(cfg AgentConfig) bool {
-	base := strings.ToLower(filepath.Base(strings.TrimSpace(cfg.Command)))
-	if base != "codex" && base != "codex.exe" {
+	if !isNativeCodexCommand(cfg.Command) {
 		return false
 	}
 	for _, arg := range cfg.Args {

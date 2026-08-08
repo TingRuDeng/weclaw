@@ -9,6 +9,7 @@ import (
 
 // Replier 是测试用回复器，记录业务层发出的所有回复意图。
 type Replier struct {
+	textsMu         sync.RWMutex
 	Caps            platform.Capabilities
 	Texts           []string
 	Images          []string
@@ -38,8 +39,17 @@ func (r *Replier) Capabilities() platform.Capabilities {
 }
 
 func (r *Replier) SendText(ctx context.Context, text string) error {
+	r.textsMu.Lock()
+	defer r.textsMu.Unlock()
 	r.Texts = append(r.Texts, text)
 	return nil
+}
+
+// TextsSnapshot 返回并发安全的文本回复副本，供异步回复测试轮询。
+func (r *Replier) TextsSnapshot() []string {
+	r.textsMu.RLock()
+	defer r.textsMu.RUnlock()
+	return append([]string(nil), r.Texts...)
 }
 
 func (r *Replier) SendImage(ctx context.Context, localPath string) error {

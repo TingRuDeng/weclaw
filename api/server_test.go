@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/internal/auththrottle"
 	"github.com/fastclaw-ai/weclaw/messaging"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -126,6 +127,35 @@ func TestHandleRuntimeStatusRequiresTokenWhenConfigured(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleCodexCLIPrepareUsesLocalController(t *testing.T) {
+	control := &staticCodexCLIControl{host: agent.CodexCLIHost{SocketPath: "/tmp/shared.sock"}}
+	server := NewServer(nil, "127.0.0.1:18011", WithCodexCLIHostController(control))
+	req := httptest.NewRequest(http.MethodPost, "/api/codex/cli/prepare", nil)
+	req.Host = "127.0.0.1:18011"
+	req.RemoteAddr = "127.0.0.1:40001"
+	rec := httptest.NewRecorder()
+
+	server.handleCodexCLIPrepare(rec, req)
+
+	if rec.Code != http.StatusOK || !control.called || !strings.Contains(rec.Body.String(), `"socket_path":"/tmp/shared.sock"`) {
+		t.Fatalf("status=%d called=%v body=%q", rec.Code, control.called, rec.Body.String())
+	}
+}
+
+func TestHandleCodexCLIPrepareRejectsNonLocalCaller(t *testing.T) {
+	server := NewServer(nil, "127.0.0.1:18011", WithCodexCLIHostController(&staticCodexCLIControl{}))
+	req := httptest.NewRequest(http.MethodPost, "/api/codex/cli/prepare", nil)
+	req.Host = "127.0.0.1:18011"
+	req.RemoteAddr = "203.0.113.10:40001"
+	rec := httptest.NewRecorder()
+
+	server.handleCodexCLIPrepare(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%q, want forbidden", rec.Code, rec.Body.String())
 	}
 }
 
@@ -431,6 +461,17 @@ type staticRuntimeControl struct {
 	err       error
 	force     bool
 	cancelled bool
+}
+
+type staticCodexCLIControl struct {
+	host   agent.CodexCLIHost
+	err    error
+	called bool
+}
+
+func (s *staticCodexCLIControl) PrepareCodexCLIHost(context.Context) (agent.CodexCLIHost, error) {
+	s.called = true
+	return s.host, s.err
 }
 
 func (s *staticRuntimeControl) Drain(_ context.Context, force bool) (messaging.RuntimeDrainResult, error) {

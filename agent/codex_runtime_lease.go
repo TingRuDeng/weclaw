@@ -50,6 +50,7 @@ func (r *codexRuntimeOwnerRegistry) activateRuntime(req CodexRuntimeRequest, run
 			if binding.Runtime != runtime {
 				return binding, ErrCodexWriterBusy
 			}
+			r.conversations[req.Ref.ConversationID] = threadID
 			binding.Ref = req.Ref
 			return binding, nil
 		}

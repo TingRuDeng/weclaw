@@ -94,6 +94,31 @@ func TestDoctorDependenciesFailConfiguredCodexWithoutAppServer(t *testing.T) {
 	}
 }
 
+func TestDoctorDependenciesRequireStandaloneForDaemonMode(t *testing.T) {
+	codexHome := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon",
+	}
+	deps := testDoctorDeps()
+	deps.codexHome = func(*config.Config) string { return codexHome }
+	result, ok := findResult(checkDoctorDependencies(cfg, deps), "Codex standalone daemon")
+	if !ok || result.Status != doctorFail || !strings.Contains(result.Detail, "--components codex") {
+		t.Fatalf("result=%#v ok=%t, want blocking standalone requirement", result, ok)
+	}
+	standalone := filepath.Join(codexHome, "packages", "standalone", "current", "codex")
+	if err := os.MkdirAll(filepath.Dir(standalone), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(standalone, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result, ok = findResult(checkDoctorDependencies(cfg, deps), "Codex standalone daemon")
+	if !ok || result.Status != doctorOK || result.Detail != standalone {
+		t.Fatalf("result=%#v ok=%t, want verified standalone path", result, ok)
+	}
+}
+
 func TestDoctorDependenciesDoNotBlockConfiguredCodexACPAdapterWithoutCodexCLI(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex-acp"}
@@ -142,9 +167,22 @@ func TestExpandDoctorComponentsAddsAgentInstallPrerequisites(t *testing.T) {
 	}
 }
 
+func TestExpandDoctorComponentsCodexHasNoNodeDependency(t *testing.T) {
+	got, err := expandDoctorComponents([]doctorComponent{componentCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []doctorComponent{componentCodex}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("expanded components=%v, want standalone Codex only %v", got, want)
+	}
+}
+
 func TestBuildDoctorInstallPlanForDebianUsesFixedArguments(t *testing.T) {
 	plan, err := buildDoctorInstallPlan(doctorInstallPlanRequest{
 		GOOS: "linux", PackageManager: "apt-get", Root: false,
+		CodexInstallerPath: "/tmp/weclaw-doctor/codex-install.sh",
+		CodexInstallDir:    "/home/debian/.local/bin",
 		Components: []doctorComponent{
 			componentSQLite, componentBubblewrap, componentNodeJS, componentNPM, componentCodex,
 		},
@@ -155,14 +193,17 @@ func TestBuildDoctorInstallPlanForDebianUsesFixedArguments(t *testing.T) {
 	want := []doctorInstallCommand{
 		{Name: "sudo", Args: []string{"apt-get", "update"}},
 		{Name: "sudo", Args: []string{"apt-get", "install", "-y", "sqlite3", "bubblewrap", "nodejs", "npm"}},
-		{Name: "npm", Args: []string{"install", "--global", "@openai/codex"}},
+		{Name: "curl", Args: []string{"-fsSL", "https://chatgpt.com/codex/install.sh", "-o", "/tmp/weclaw-doctor/codex-install.sh"}},
+		{Name: "sh", Args: []string{"/tmp/weclaw-doctor/codex-install.sh"}, Env: []string{
+			"CODEX_NON_INTERACTIVE=1", "CODEX_INSTALL_DIR=/home/debian/.local/bin",
+		}},
 	}
 	if fmt.Sprint(plan) != fmt.Sprint(want) {
 		t.Fatalf("install plan=%v, want %v", plan, want)
 	}
 	for _, command := range plan {
-		if command.Name == "sh" || command.Name == "bash" {
-			t.Fatalf("install plan must not invoke a shell: %#v", command)
+		if command.Name == "sh" && len(command.Args) > 0 && command.Args[0] == "-c" {
+			t.Fatalf("install plan must not execute dynamic shell text: %#v", command)
 		}
 	}
 }
@@ -215,7 +256,7 @@ func TestDoctorPromptOmitsLinuxOnlyBubblewrapOnDarwin(t *testing.T) {
 			return "", fmt.Errorf("not found")
 		},
 	}
-	available := doctorComponentsAvailableForPrompt(deps)
+	available := doctorComponentsAvailableForPrompt(deps, nil)
 	if containsDoctorComponent(available, componentBubblewrap) {
 		t.Fatalf("darwin prompt must not offer Linux-only bubblewrap: %v", available)
 	}
@@ -468,7 +509,7 @@ func TestParseDoctorComponentsRejectsUnknownName(t *testing.T) {
 	}
 }
 
-func TestDoctorNodeRequirementDependsOnSelectedAgent(t *testing.T) {
+func TestDoctorNodeRequirementOnlyDependsOnClaude(t *testing.T) {
 	deps := doctorFixDeps{
 		LookPath: func(name string) (string, error) {
 			return "/usr/bin/" + name, nil
@@ -484,8 +525,8 @@ func TestDoctorNodeRequirementDependsOnSelectedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := doctorComponentsNeedingInstall(codex, deps); containsDoctorComponent(got, componentNodeJS) {
-		t.Fatalf("Codex install should accept Node.js 20, got missing=%v", got)
+	if containsDoctorComponent(codex, componentNodeJS) || containsDoctorComponent(codex, componentNPM) {
+		t.Fatalf("standalone Codex must not depend on Node/npm, got expanded=%v", codex)
 	}
 	claude, err := expandDoctorComponents([]doctorComponent{componentClaude})
 	if err != nil {
@@ -493,6 +534,128 @@ func TestDoctorNodeRequirementDependsOnSelectedAgent(t *testing.T) {
 	}
 	if got := doctorComponentsNeedingInstall(claude, deps); !containsDoctorComponent(got, componentNodeJS) {
 		t.Fatalf("Claude ACP requires Node.js 22+, got missing=%v", got)
+	}
+}
+
+func TestDoctorCodexInstallDirIsIndependentFromNPMPrefix(t *testing.T) {
+	deps := doctorFixDeps{
+		Root:        true,
+		UserHomeDir: func() (string, error) { return "/root", nil },
+	}
+	components := []doctorComponent{componentCodex}
+	codexDir, err := doctorCodexInstallDir(deps, components)
+	if err != nil {
+		t.Fatal(err)
+	}
+	npmPrefix, err := doctorNPMInstallPrefix(deps, components)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codexDir != "/root/.local/bin" || npmPrefix != "" {
+		t.Fatalf("codexDir=%q npmPrefix=%q, want standalone user bin without npm prefix", codexDir, npmPrefix)
+	}
+}
+
+func TestDoctorFixRequiresStandaloneWhenNPMCodexIsOnPath(t *testing.T) {
+	codexHome := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "/usr/local/bin/codex",
+		Args: []string{"app-server"}, Env: map[string]string{"CODEX_HOME": codexHome},
+	}
+	deps := doctorFixDeps{
+		LookPath: func(string) (string, error) { return "/usr/local/bin/codex", nil },
+		CommandOutput: func(context.Context, string, ...string) (string, error) {
+			return "app-server help", nil
+		},
+	}
+	components := []doctorComponent{componentCodex}
+	if missing := doctorComponentsNeedingInstallForFix(components, deps, cfg); !containsDoctorComponent(missing, componentCodex) {
+		t.Fatalf("missing=%v, npm Codex must not satisfy standalone requirement", missing)
+	}
+	standalone := filepath.Join(codexHome, "packages", "standalone", "current", "codex")
+	if err := os.MkdirAll(filepath.Dir(standalone), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(standalone, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if missing := doctorComponentsNeedingInstallForFix(components, deps, cfg); len(missing) != 0 {
+		t.Fatalf("missing=%v, managed standalone should satisfy requirement", missing)
+	}
+}
+
+func TestBuildDoctorInstallPlanPassesConfiguredCodexHome(t *testing.T) {
+	plan, err := buildDoctorInstallPlan(doctorInstallPlanRequest{
+		GOOS: "darwin", CodexInstallerPath: "/tmp/weclaw/install.sh",
+		CodexInstallDir: "/Users/test/.local/bin", CodexHome: "/Volumes/Data/codex",
+		Components: []doctorComponent{componentCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 2 || fmt.Sprint(plan[1].Env) != fmt.Sprint([]string{
+		"CODEX_NON_INTERACTIVE=1", "CODEX_INSTALL_DIR=/Users/test/.local/bin", "CODEX_HOME=/Volumes/Data/codex",
+	}) {
+		t.Fatalf("plan=%#v, want configured CODEX_HOME on installer", plan)
+	}
+}
+
+func TestRunDoctorFixPersistsStandaloneCodexCommand(t *testing.T) {
+	home := t.TempDir()
+	codexHome := filepath.Join(home, ".codex")
+	visibleCommand := filepath.Join(home, ".local", "bin", "codex")
+	standaloneCommand := filepath.Join(codexHome, "packages", "standalone", "current", "codex")
+	cfg := config.DefaultConfig()
+	cfg.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		Env: map[string]string{"CODEX_HOME": codexHome},
+	}
+	installed := false
+	savedCommand := ""
+	deps := doctorFixDeps{
+		GOOS: "darwin", UserHomeDir: func() (string, error) { return home, nil },
+		LookPath: func(name string) (string, error) {
+			if name == "codex" && installed {
+				return visibleCommand, nil
+			}
+			return "", fmt.Errorf("not found")
+		},
+		CommandOutput: func(context.Context, string, ...string) (string, error) {
+			return "app-server help", nil
+		},
+		RunCommand: func(_ context.Context, command doctorInstallCommand, _ io.Reader, _, _ io.Writer) error {
+			if command.Name != "sh" {
+				return nil
+			}
+			for _, path := range []string{visibleCommand, standaloneCommand} {
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					return err
+				}
+				if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+					return err
+				}
+			}
+			installed = true
+			return nil
+		},
+		Configure: func(context.Context, *config.Config) error { return nil },
+		SaveConfig: func(saved *config.Config) error {
+			savedCommand = saved.Agents["codex"].Command
+			return nil
+		},
+	}
+
+	err := runDoctorFix(context.Background(), doctorFixOptions{
+		Components: []doctorComponent{componentCodex}, Yes: true, Interactive: false,
+		Input: strings.NewReader(""), Output: io.Discard, ErrorOutput: io.Discard,
+		Config: cfg, Deps: deps,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if savedCommand != visibleCommand || cfg.Agents["codex"].Command != visibleCommand {
+		t.Fatalf("saved command=%q config=%#v, want %q", savedCommand, cfg.Agents["codex"], visibleCommand)
 	}
 }
 

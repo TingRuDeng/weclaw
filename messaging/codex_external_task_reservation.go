@@ -119,7 +119,7 @@ func (h *Handler) reuseExternalCodexTaskReservationLocked(opts externalCodexTask
 	defer task.mu.Unlock()
 	control := task.externalReservation
 	if control == nil {
-		return reuseInProcessCodexTaskReservationLocked(opts, task)
+		return reuseInProcessCodexTaskReservationLocked(opts, state, task)
 	}
 	control.mu.Lock()
 	defer control.mu.Unlock()
@@ -132,8 +132,8 @@ func (h *Handler) reuseExternalCodexTaskReservationLocked(opts externalCodexTask
 }
 
 // reuseInProcessCodexTaskReservationLocked 只复用显式由本进程 lifecycle 回推的 running 任务。
-func reuseInProcessCodexTaskReservationLocked(opts externalCodexTaskOptions, task *activeAgentTask) (externalCodexTaskReservation, error) {
-	if !sameInProcessCodexTaskIdentityLocked(task, opts) {
+func reuseInProcessCodexTaskReservationLocked(opts externalCodexTaskOptions, state externalCodexTaskState, task *activeAgentTask) (externalCodexTaskReservation, error) {
+	if !sameInProcessCodexTaskIdentityLocked(task, opts, state) {
 		return externalCodexTaskReservation{}, errExternalCodexTaskReservationConflict
 	}
 	return externalCodexTaskReservation{
@@ -243,10 +243,12 @@ func sameExternalCodexTaskIdentityLocked(task *activeAgentTask, opts externalCod
 }
 
 // sameInProcessCodexTaskIdentityLocked 排除来源不明、非 running 或跨窗口的 control=nil 任务。
-func sameInProcessCodexTaskIdentityLocked(task *activeAgentTask, opts externalCodexTaskOptions) bool {
+func sameInProcessCodexTaskIdentityLocked(task *activeAgentTask, opts externalCodexTaskOptions, state externalCodexTaskState) bool {
+	activeTurnID := strings.TrimSpace(state.ActiveTurnID)
 	return task.inProcessCodexLifecycle && task.phase == codexTaskRunning &&
 		task.owner == strings.TrimSpace(opts.actorUserID) &&
 		task.routeUserID == strings.TrimSpace(opts.routeUserID) &&
 		task.agentName == strings.TrimSpace(opts.agentName) &&
-		task.codexThreadID == strings.TrimSpace(opts.threadID)
+		task.codexThreadID == strings.TrimSpace(opts.threadID) &&
+		(task.codexTurnID == "" || task.codexTurnID == activeTurnID)
 }

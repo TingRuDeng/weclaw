@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
@@ -31,7 +32,7 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 		return false
 	}
 	if codexRuntimeReadyForRemoteTurn(resolution.Binding.Runtime) && codexResolutionActive(resolution) {
-		return h.queueMessageBehindLiveTask(opts)
+		return h.steerMessageIntoLiveTask(opts)
 	}
 	return false
 }
@@ -40,9 +41,11 @@ func codexResolutionActive(resolution codexRuntimeResolution) bool {
 	return resolution.Binding.State.Active || resolution.Rollout.Active
 }
 
-func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) bool {
+// steerMessageIntoLiveTask submits accepted input directly to the canonical
+// app-server turn. No WeClaw-private pending queue sits between equal frontends.
+func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions) bool {
 	taskOpts := opts.taskOpts
-	_, active, err := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
+	state, active, err := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
 		ctx: taskOpts.ctx, actorUserID: taskOpts.userID, routeUserID: taskOpts.routeUserID,
 		agentName: taskOpts.agentName, agent: taskOpts.agent,
 		conversationID: opts.route.conversationID, threadID: opts.route.threadID,
@@ -56,19 +59,25 @@ func (h *Handler) queueMessageBehindLiveTask(opts codexTaskPreflightOptions) boo
 	if !active {
 		return false
 	}
-	taskOpts.route = opts.route
-	status := h.queuePendingActiveTask(opts.route.conversationID, h.pendingCodexTask(taskOpts))
-	h.recordTaskAdmissionTrace(taskOpts.trace, status)
-	if status == activeTaskMissing {
-		return false
+	runtimeAgent, ok := taskOpts.agent.(agent.CodexThreadRuntimeAgent)
+	if !ok {
+		h.rejectCodexTaskStart(opts, agent.ErrCodexRuntimeUnavailable)
+		return true
 	}
 	opts.cancel()
-	task, _ := h.activeTask(opts.route.conversationID)
-	h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
-		ctx: taskOpts.ctx, platformName: taskOpts.platform, accountID: taskOpts.accountID,
-		reply: taskOpts.reply, userID: taskOpts.userID, routeUserID: taskOpts.routeUserID,
-		agentName: taskOpts.agentName, executionKey: opts.route.conversationID, task: task, guideSupported: true,
-	}, status)
+	if err := runtimeAgent.SteerCodexThread(
+		taskOpts.ctx, opts.route.conversationID, opts.route.threadID, state.ActiveTurnID, taskOpts.message,
+	); err != nil {
+		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID,
+			"发送到当前共享 Codex 任务失败: "+sanitizeAgentError(err.Error()))
+		return true
+	}
+	if task, ok := h.activeTask(opts.route.conversationID); ok {
+		task.recordLocalProgressText(time.Now(), "已接收新的补充输入。")
+	}
+	h.recordTraceStage(taskOpts.trace.WithConversation(opts.route.conversationID).
+		WithThreadTurn(opts.route.threadID, state.ActiveTurnID), "task.input_accepted", "running", "input steered to active Codex turn")
+	sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, "已发送到当前共享 Codex 任务。")
 	return true
 }
 

@@ -59,6 +59,7 @@ func (s *codexDesktopStateStore) replayQueuedLocked(threadID string) ([]*codexTu
 		}
 		var projected []*codexTurnEvent
 		current, projected = buildCodexDesktopSnapshot(spec, s.now(), &current.projection)
+		s.attachQueuedFollowUpsLocked(&current)
 		events = append(events, projected...)
 		s.threads[threadID] = current
 	}

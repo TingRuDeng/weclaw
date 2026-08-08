@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
-Use local Codex and Claude remotely from WeChat or Feishu while keeping real workspace and session context, live progress, approvals, and results. Codex always has one authoritative Host; when Codex App is already running, WeClaw reuses its context through Desktop IPC.
+Use local Codex and Claude remotely from WeChat or Feishu while keeping real workspace and session context, live progress, approvals, and results. Codex always has one authoritative Host; Codex App, the controlled CLI, WeChat, and Feishu can continue the same thread as equal input frontends.
 
 > Official releases support **macOS Apple Silicon / Intel (darwin/arm64 and darwin/amd64)** plus **Linux arm64 / amd64**. Windows assets are not currently published.
 
@@ -17,12 +17,12 @@ Use local Codex and Claude remotely from WeChat or Feishu while keeping real wor
 - **Take over local work remotely**: continue Codex and Claude sessions from WeChat or Feishu after leaving your computer.
 - **Keep the original context**: reuse Codex workspaces/threads and Claude ACP sessions instead of starting a new conversation for every message.
 - **See progress and receive results**: Feishu uses CardKit updates, while WeChat provides typing state and task results.
-- **Use one Codex runtime boundary**: either Codex App or the shared app-server is the Host; windows keep session bindings, while the Host serializes active turns on each thread.
+- **Use one Codex runtime boundary**: either Codex App or the shared app-server is the Host; active-turn inputs follow app-server acceptance order, while writer leases serialize new turns.
 - **Configure security boundaries**: user allowlists, workspace roots, admin access, audit logs, and Codex permission levels are independent controls.
 
 ## Quick Start
 
-After verifying the WeClaw binary, the one-line installer runs a read-only dependency check. On an interactive terminal it then lists missing components, their purpose, and linked prerequisites; installation starts only after the user selects components and confirms the complete plan. Codex uses `codex`; remote Claude operation requires both `claude` and the pinned `claude-agent-acp`. The current Claude npm installation path requires Node.js 22+.
+After verifying the WeClaw binary, the one-line installer runs a read-only dependency check. On an interactive terminal it then lists missing components, their purpose, and linked prerequisites; installation starts only after the user selects components and confirms the complete plan. Codex uses OpenAI's official standalone installation and does not require Node.js/npm. Remote Claude operation requires both `claude` and the pinned `claude-agent-acp`; its current installation path requires Node.js 22+.
 
 ```bash
 # Install the actively maintained distribution
@@ -73,9 +73,18 @@ After selecting an existing session or sending `/cx new`, send the task directly
 
 With the default `codex_host_mode: auto` on macOS, WeClaw uses protected Desktop IPC when Codex App is already running and does not start a second app-server. When the App is absent, it connects to or starts the official standalone daemon, with the WeClaw-managed Host as the compatibility backend. If a shared Host is already active, WeClaw switches to a newly detected App only after every thread is globally idle and no writer lease exists. An ambiguous App endpoint or non-idle Host fails closed and never falls back to parallel writes.
 
-The App Host supports selecting existing sessions, turns, progress, approvals, `/guide`, `/stop`, and current-thread model or reasoning changes. Desktop IPC does not currently expose session creation, archive, or rename, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` and `/cx rename` fail clearly in App mode without deleting the current binding.
+The App Host supports selecting existing sessions, turns, progress, approvals, `/stop`, and current-thread model or reasoning changes. After Feishu or WeChat binds a thread that is already running in the App, a regular message goes directly into the active turn instead of waiting in a private continuation queue. Desktop IPC does not currently expose session creation, archive, or rename, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` and `/cx rename` fail clearly in App mode without deleting the current binding.
 
-`/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` remain disabled because they launch extra processes; the default auto topology already reuses a running Codex App safely.
+`/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` remain disabled because chat commands cannot launch another local process. Use the controlled terminal entrypoint instead:
+
+```bash
+weclaw codex cli
+weclaw codex cli resume <thread-id>
+```
+
+This command uses only the official standalone Codex binary and pins `--remote` to the unique official daemon socket. It allows only the interactive TUI and its `resume`, `fork`, and `archive` operations; custom `--remote`, non-interactive, and management subcommands are rejected. When WeClaw is stopped and Codex App is absent, the command may start the daemon directly. When the service is running, the CLI must first ask that process through a loopback-only control endpoint to prepare the Host using its already-resolved topology, then prove that the returned socket exactly matches the local configuration. Desktop, a managed Host, an unreachable service control endpoint, or ambiguous Host identity all fail closed. Legacy Codex `type: cli` configuration migrates to the shared app-server, and the old independent `codex exec` session mode is removed.
+
+Queued follow-ups that have not been sent from Codex App or the CLI remain local client drafts. They join the shared ordering only after the app-server accepts them; WeClaw does not treat drafts as submitted work or send them automatically.
 
 ### Switch Codex OAuth Accounts Safely
 
@@ -129,13 +138,14 @@ Users who can access the target workspace may run `/cx rename current|<number> <
 
 ### Control a Running Task
 
-- Send one regular message while a task is active: queue it and run it automatically after the current task ends.
-- `/cancel`: remove the queued message without stopping the active task.
-- `/guide`: steer the active Codex task with the queued message; Claude does not support it.
+- Send a regular message while Codex is active: submit it immediately to the current app-server turn without creating another turn or private queue.
+- Send a regular message while Claude is active: queue at most one continuation and run it after the current task ends.
+- `/cancel`: remove a queued message when one actually exists, without stopping the active task.
+- `/guide`: submit an actually queued Codex message to the current task; normal active-turn input does not need this command.
 - `/stop`: stop the task running in the current chat window.
 - `/ps`: list tasks running for the current user.
 
-In Feishu, queuing a second message immediately opens a compact contextual card. No click is required: by default, the message runs automatically after the current task ends, and the buttons are only for changing that default handling. A Codex card offers **Send as guidance**, **Remove queued message**, and **Stop current task**; a Claude card omits guidance because Claude does not support it. The card is bound to the bot account, operator, chat route, active task, and exact queued-message revision, so an expired card cannot alter a later task or replacement message. Button results replace the same card instead of creating a separate command-result message.
+Feishu opens a compact contextual card only when a message actually enters the compatibility pending queue; normal Codex active-turn input does not show a queue card. A Claude continuation runs automatically after the current task unless the user changes that handling. The card is bound to the bot account, operator, chat route, active task, and exact queued-message revision, so an expired card cannot alter a later task or replacement message. Button results replace the same card instead of creating a separate command-result message.
 
 Native Codex App Server plan, tool, and file signals are normalized into structured progress events. Running and terminal states with the same event ID update in place, while raw command output, tool arguments, and diffs never enter the card. `commandExecution` lifecycle events are omitted from progress; command approvals that require user action remain independently visible. Codex user-visible messages explicitly marked as `commentary` accumulate in source order with their complete text in the same timeline and participate in automatic card continuation; Claude interim notes remain in the separate **Current note** section. Final answers and Codex messages with an unknown phase never enter the task card. Stale or late watcher events cannot overwrite a terminal task state.
 
@@ -195,7 +205,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 
 | Agent | Remote Backend | Session Reuse | Model / Reasoning | Independent Writer |
 | --- | --- | :---: | :---: | --- |
-| Codex | Codex App IPC / shared app-server | Workspace + thread | Yes | No independent writer |
+| Codex | Codex App IPC / shared app-server | Workspace + thread | Yes | Controlled CLI reuses the daemon; no independent writer |
 | Claude | Single shared ClaudeHost (ACP) | ACP session + writer lease | Yes | Disabled |
 | OpenCode | Companion | Depends on local connection | Agent-dependent | Visible terminal |
 | Other agents | ACP / HTTP / Companion | Protocol-dependent | Agent-dependent | Configuration-dependent |
@@ -213,7 +223,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | `/approve <code>`, `/deny <code>` | Allow or deny the matching approval when card buttons are unavailable; codes are actor-, window-, and expiry-bound |
 | `/progress [mode]` | Show progress mode; only administrators may change the account-level mode |
 | `/ps`, `/stop` | List or stop current tasks |
-| `/cancel`, `/guide` | Remove a queued message or steer the active Codex task |
+| `/cancel`, `/guide` | Handle an actually queued message; regular Codex active-turn input is sent directly |
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
 | `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
 | `/cx new` | Create and bind a Codex session in the current workspace |
@@ -289,7 +299,7 @@ Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`
 - Claude: `/cc ls`, `/cc status`, `/cc new`, `/cc quota`
 - Settings: `/model`, `/reasoning`, `/fast`, `/mode`
 
-Keep `/guide` and `/cancel` out of the permanent menu: Feishu presents them contextually when a message is actually queued, and `/help` remains the fallback command index.
+Keep `/guide` and `/cancel` out of the permanent menu: Feishu presents them only when a message is actually queued. Regular Codex active-turn input is sent directly and does not open a queue card; `/help` remains the fallback command index.
 
 </details>
 
@@ -325,9 +335,9 @@ Before the Agent produces its first effective non-command progress event, a Feis
 
 When a controlling terminal exists, first installation connects the same `weclaw doctor --fix` wizard through `/dev/tty`, so dependency choices cannot consume the `curl | sh` script input. Without a controlling terminal the installer performs only the read-only check and prints follow-up commands. Set `WECLAW_SKIP_DEPENDENCY_SETUP=1` to skip both the check and wizard explicitly. Non-interactive dependency installation must be a separate explicit command with both components and consent, for example `weclaw doctor --fix --components sqlite3,bubblewrap --yes`; it never defaults to installing everything.
 
-`weclaw doctor --fix` labels component roles: SQLite and Linux bubblewrap are optional enhancements, Node.js/npm are Agent installation prerequisites, Codex and Claude are optional Agents, and Claude ACP is required after selecting Claude. Supported component names are `sqlite3`, `bubblewrap`, `nodejs`, `npm`, `codex`, `claude`, and `claude-acp`. Selecting Codex also selects Node.js/npm; selecting Claude or Claude ACP selects the CLI, adapter, and Node.js/npm. The full command and privilege plan is shown before execution, and pressing Enter or declining confirmation installs nothing.
+`weclaw doctor --fix` labels component roles: SQLite and Linux bubblewrap are optional enhancements, Codex and Claude are optional Agents, Node.js/npm are prerequisites only for Claude, and Claude ACP is required after selecting Claude. Supported component names are `sqlite3`, `bubblewrap`, `nodejs`, `npm`, `codex`, `claude`, and `claude-acp`. Selecting Codex uses OpenAI's official standalone installer only; selecting Claude or Claude ACP selects the CLI, adapter, and Node.js/npm. The full command and privilege plan is shown before execution, and pressing Enter or declining confirmation installs nothing.
 
-System dependencies use only a detected `apt-get`, `dnf`, or Homebrew installation. Linux privilege escalation is an explicit `sudo` command. npm installation never uses `sudo npm`: non-root users use the `~/.local` prefix, and the repair process temporarily prepends `~/.local/bin` while it rechecks capabilities and saves absolute Agent paths, then restores the original PATH. WeClaw does not add third-party Node repositories or replace nvm, mise, or another version manager. If the system package still does not satisfy the selected Agent's Node.js requirement, repair stops before npm runs and reports the real failure.
+The Codex installer is downloaded to a private temporary file and then executed with fixed arguments and `CODEX_NON_INTERACTIVE=1`; Doctor does not use `curl | sh` or dynamic shell composition. System dependencies use only a detected `apt-get`, `dnf`, or Homebrew installation. Linux privilege escalation is an explicit `sudo` command. npm installation never uses `sudo npm`: non-root users use the `~/.local` prefix, and the repair process temporarily prepends `~/.local/bin` while it rechecks capabilities and saves absolute Agent paths, then restores the original PATH. WeClaw does not add third-party Node repositories or replace nvm, mise, or another version manager. If the system package still does not satisfy Claude's selected Node.js requirement, repair stops before npm runs and reports the real failure.
 
 After installation, WeClaw repeats the same capability probes and saves newly discovered Agent configuration only after verification. It never performs Codex or Claude login; run the corresponding CLI to complete official authentication. A successful Claude ACP check proves only that the `initialize` handshake works. It does not probe `session/list` or `session/resume`; use the real session commands to verify listing and recovery.
 

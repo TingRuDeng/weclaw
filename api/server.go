@@ -33,6 +33,7 @@ type Server struct {
 	status   RuntimeStatusProvider
 	drain    RuntimeDrainController
 	accounts CodexAccountController
+	codexCLI CodexCLIHostController
 	traces   observability.QueryProvider
 	outbox   TerminalOutboxController
 	addr     string
@@ -59,6 +60,12 @@ type CodexAccountController interface {
 	UseCodexAccount(context.Context, string, uint64) (agent.CodexAccountSwitchResult, error)
 	RemoveCodexAccount(context.Context, string) error
 	DoctorCodexAccounts(context.Context) codexauth.DoctorResult
+}
+
+// CodexCLIHostController prepares the one official daemon through the running
+// service's Agent instance before a local terminal frontend connects.
+type CodexCLIHostController interface {
+	PrepareCodexCLIHost(context.Context) (agent.CodexCLIHost, error)
 }
 
 // TerminalOutboxController 仅暴露脱敏状态和幂等重投调度，不允许读取消息正文或路由。
@@ -102,6 +109,13 @@ func WithRuntimeDrainController(controller RuntimeDrainController) Option {
 func WithCodexAccountController(controller CodexAccountController) Option {
 	return func(s *Server) {
 		s.accounts = controller
+	}
+}
+
+// WithCodexCLIHostController configures the local controlled-CLI entrypoint.
+func WithCodexCLIHostController(controller CodexCLIHostController) Option {
+	return func(s *Server) {
+		s.codexCLI = controller
 	}
 }
 
@@ -150,6 +164,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/codex/accounts/use", s.handleCodexAccountUse)
 	mux.HandleFunc("/api/codex/accounts/remove", s.handleCodexAccountRemove)
 	mux.HandleFunc("/api/codex/accounts/doctor", s.handleCodexAccountDoctor)
+	mux.HandleFunc("/api/codex/cli/prepare", s.handleCodexCLIPrepare)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")

@@ -306,6 +306,7 @@ func (runtime startRuntime) startServices() error {
 		api.WithRuntimeStatusProvider(runtime.handler),
 		api.WithRuntimeDrainController(runtime.handler),
 		api.WithCodexAccountController(runtime.handler),
+		api.WithCodexCLIHostController(runtime.handler),
 		api.WithTraceQueryProvider(runtime.trace),
 		api.WithTerminalOutboxController(runtime.handler),
 	)

@@ -348,6 +348,41 @@ func TestNormalizeCodexRemoteFirstMigratesCompanion(t *testing.T) {
 	}
 }
 
+func TestNormalizeCodexRemoteFirstMigratesLegacyCLI(t *testing.T) {
+	autoLaunch := true
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type: "cli", Command: "/usr/local/bin/codex",
+		Args: []string{"exec", "--skip-git-repo-check"},
+		Cwd:  "/tmp/work", Env: map[string]string{"CODEX_HOME": "/tmp/codex-home"},
+		Model: "gpt-test", Effort: "high", AutoLaunch: &autoLaunch,
+	}
+
+	if !NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() = false, want legacy CLI migration")
+	}
+	got := cfg.Agents["codex"]
+	if got.Type != "acp" {
+		t.Fatalf("Type=%q, want acp", got.Type)
+	}
+	wantArgs := []string{"app-server", "--listen", "stdio://"}
+	if !reflect.DeepEqual(got.Args, wantArgs) {
+		t.Fatalf("Args=%#v, want %#v", got.Args, wantArgs)
+	}
+	if got.AutoLaunch != nil {
+		t.Fatalf("AutoLaunch=%#v, want nil", got.AutoLaunch)
+	}
+	if got.CodexAutoUpdate != "incompatible" {
+		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got.CodexAutoUpdate)
+	}
+	if got.Cwd != "/tmp/work" || got.Env["CODEX_HOME"] != "/tmp/codex-home" || got.Model != "gpt-test" || got.Effort != "high" {
+		t.Fatalf("migration lost shared runtime settings: %#v", got)
+	}
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")
+	}
+}
+
 func TestNormalizeCodexRemoteFirstEnablesControlledUpdateForExistingSharedHost(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents["codex"] = AgentConfig{

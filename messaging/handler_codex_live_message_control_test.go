@@ -39,18 +39,24 @@ func TestCodexLiveTaskCompletionKeepsExplicitThreadSelection(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopActiveMessageQueuesOnePending(t *testing.T) {
+func TestCodexDesktopActiveMessageSteersCurrentTurn(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
 	ag.watchDone = make(chan struct{})
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool {
-		task, ok := h.activeTask(route.conversationID)
-		return ok && task.pendingGuide() == "继续任务"
+		return ag.steerMessage == "继续任务"
 	})
 	task, _ := h.activeTask(route.conversationID)
 	defer task.cancel()
 	if ag.chatCallCount() != 0 {
 		t.Fatal("active Desktop thread 不应开始新 turn")
+	}
+	if task.pendingGuide() != "" || ag.steerThreadID != route.threadID || ag.steerTurnID != "turn-1" {
+		t.Fatalf("pending=%q steer=(%q,%q,%q)", task.pendingGuide(), ag.steerThreadID, ag.steerTurnID, ag.steerMessage)
+	}
+	text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n")
+	if !strings.Contains(text, "已发送到当前共享 Codex 任务") || strings.Contains(text, queuedAgentMessage) {
+		t.Fatalf("reply=%q", text)
 	}
 }
 
@@ -81,7 +87,7 @@ func TestCodexActivePreflightTimeoutReleasesThreadLock(t *testing.T) {
 	assertCodexThreadLockReusable(t, h, route.threadID)
 }
 
-func TestCodexInProcessActiveTaskQueuesSecondMessage(t *testing.T) {
+func TestCodexInProcessActiveTaskSteersSecondMessage(t *testing.T) {
 	h, ag, first, route := liveMessageFixture(t, false)
 	turnEntered := make(chan struct{}, 1)
 	turnRelease := make(chan struct{})
@@ -102,21 +108,22 @@ func TestCodexInProcessActiveTaskQueuesSecondMessage(t *testing.T) {
 	second.message, second.reply = "第二条", secondReply
 	h.startCodexAgentTask(second)
 	text := strings.Join(secondReply.Texts, "\n")
-	if !strings.Contains(text, queuedAgentMessage) || strings.Contains(text, "reservation") || strings.Contains(text, "暂不能开始任务") {
-		t.Fatalf("第二条应进入现有 in-process 队列，reply=%q", text)
+	if !strings.Contains(text, "已发送到当前共享 Codex 任务") || strings.Contains(text, queuedAgentMessage) || strings.Contains(text, "暂不能开始任务") {
+		t.Fatalf("第二条应直接进入现有 in-process turn，reply=%q", text)
+	}
+	if ag.steerThreadID != route.threadID || ag.steerTurnID != "turn-1" || ag.steerMessage != "第二条" {
+		t.Fatalf("steer=(%q,%q,%q)", ag.steerThreadID, ag.steerTurnID, ag.steerMessage)
 	}
 	idleState := agent.CodexThreadState{ThreadID: route.threadID, Model: "gpt-live"}
 	ag.setBindingState(idleState)
 	close(turnRelease)
-	waitUntil(t, func() bool {
-		ag.mu.Lock()
-		defer ag.mu.Unlock()
-		return ag.runCalls == 2
-	})
 	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
+	if ag.chatCallCount() != 1 {
+		t.Fatalf("run calls=%d, want only the original turn", ag.chatCallCount())
+	}
 }
 
-func TestCodexDesktopQueuedMessageKeepsResolvedStreamProgress(t *testing.T) {
+func TestCodexDesktopDirectInputKeepsResolvedStreamProgress(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
 	ag.watchDone = make(chan struct{})
 	ag.watchProgress = "正在处理本地任务"
@@ -130,15 +137,15 @@ func TestCodexDesktopQueuedMessageKeepsResolvedStreamProgress(t *testing.T) {
 	select {
 	case <-reply.StreamOpened:
 	case <-time.After(taskWaitTimeout):
-		t.Fatalf("typing=%#v，排队外部任务未继承 stream 配置", reply.TypingStates)
+		t.Fatalf("typing=%#v，外部任务未继承 stream 配置", reply.TypingStates)
 	}
 	task, ok := h.activeTask(route.conversationID)
 	if !ok {
-		t.Fatal("排队后外部任务未登记")
+		t.Fatal("直接输入后外部任务未登记")
 	}
 	defer task.cancel()
 	if reply.Stream.Options.Title == "" {
-		t.Fatalf("typing=%#v，排队外部任务未继承 stream 配置", reply.TypingStates)
+		t.Fatalf("typing=%#v，外部任务未继承 stream 配置", reply.TypingStates)
 	}
 	if len(reply.TypingStates) != 0 {
 		t.Fatalf("typing=%#v，stream 模式不应创建 typing 卡", reply.TypingStates)
