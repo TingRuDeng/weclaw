@@ -55,7 +55,7 @@ ai_summary:
 
 - `docs/superpowers/specs/2026-07-18-codex-single-app-server-design.md` 是当前 Codex 共享 Host 的详细设计；日常项目事实仍以 `docs/AI_CONTEXT.md` 为准，Host 拓扑、writer lease 或协议边界变化时应同步复核。
 - `docs/superpowers/specs/2026-08-06-agent-workspace-session-management-design.md` 是已实施、尚未发布的 Codex / Claude 工作空间登记、隐藏与会话重命名设计；当前产品事实仍以 `docs/AI_CONTEXT.md` 和源码为准。
-- `docs/superpowers/specs/2026-08-08-feishu-codex-progress-card-relay-design.md` 是已确认、待实施的飞书 Codex 引导接力与可折叠进度卡设计；实施完成前不能把其中行为视为当前产品事实。
+- `docs/superpowers/specs/2026-08-08-feishu-codex-progress-card-relay-design.md` 是已实施、待发布与真实飞书端验收的 Codex 引导接力与可折叠进度卡设计；当前产品事实仍以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
 ## Task records
 
