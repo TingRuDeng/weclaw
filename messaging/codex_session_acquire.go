@@ -9,6 +9,7 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/google/uuid"
 )
 
 var (
@@ -237,8 +238,8 @@ func (h *Handler) reanchorActiveCodexTask(ctx context.Context, task *activeAgent
 	if !ok {
 		return false, nil
 	}
-	moved, err := progress.reanchorWithSnapshot(ctx, reply, snapshot)
-	if moved {
+	result, err := progress.reanchor(ctx, reply, snapshot, uuid.NewString())
+	if result.Moved {
 		task.mu.Lock()
 		task.trace = traceWithReply(task.trace, progressReplier(reply))
 		trace := task.trace
@@ -246,9 +247,9 @@ func (h *Handler) reanchorActiveCodexTask(ctx context.Context, task *activeAgent
 		h.recordTraceStage(trace, "task.card_reanchored", "running", "progress card moved to latest message position")
 	}
 	if err != nil {
-		log.Printf("[codex-session-bind] 任务卡重锚失败 moved=%t: %v", moved, err)
+		log.Printf("[codex-session-bind] 任务卡重锚失败 moved=%t: %v", result.Moved, err)
 	}
-	return moved, err
+	return result.Moved, err
 }
 
 func (h *Handler) failCodexAcquireRuntime(result codexSessionAcquireResult, liveAgent agent.CodexLiveRuntimeAgent, cause error) codexSessionAcquireResult {

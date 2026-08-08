@@ -14,6 +14,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/google/uuid"
 )
 
 const (
@@ -55,6 +56,20 @@ type progressCardSnapshot struct {
 	effectiveProgress  bool
 	currentExplanation string
 	timelineItems      []agent.ProgressEvent
+}
+
+type progressReanchorRequest struct {
+	Context      context.Context
+	Reply        platform.Replier
+	Snapshot     progressCardSnapshot
+	Title        string
+	TransitionID string
+	Notice       string
+}
+
+type progressReanchorResult struct {
+	Moved            bool
+	SupersedePending bool
 }
 
 type progressSession struct {
@@ -662,56 +677,40 @@ func (s *progressSession) latestTaskSnapshotContentLocked() string {
 }
 
 func (s *progressSession) continueProgressStreamLocked(snapshot progressCardSnapshot) (bool, error) {
-	oldStream, ok := s.stream.(platform.SupersedableStream)
-	if !ok {
+	if _, ok := s.stream.(platform.SupersedableStream); !ok {
 		return false, fmt.Errorf("oversized progress stream does not support continuation")
 	}
 	segmentStart := len(snapshot.timelineItems) - 1
-	initialContent, timeline := renderTaskProgressTimeline(snapshot.timelineItems[segmentStart:], snapshot.text)
-	if !timeline {
-		initialContent = snapshot.text
-	} else {
-		initialContent = appendTaskCurrentExplanation(initialContent, snapshot.currentExplanation)
-	}
-	initialContent = appendActiveThinkingIndicator(initialContent)
-	if snapshot.withPrefix {
-		initialContent = s.prefix + initialContent
-	}
 	nextSegment := s.segmentNumber + 1
 	if nextSegment < 2 {
 		nextSegment = 2
 	}
 	baseTitle := progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60)
-	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{
-		Title: fmt.Sprintf("%s · 进度 %d", baseTitle, nextSegment), InitialContent: initialContent,
-		InitialPresentation: func() *platform.StreamPresentation { p := s.snapshotPresentationLocked(snapshot); return &p }(),
-	})
-	if err != nil {
-		return false, err
-	}
-	if stream == nil {
-		return false, fmt.Errorf("progress continuation returned nil stream")
-	}
-	if err := s.persistActiveStreamRecoveryLocked(stream, s.reply); err != nil {
-		if supersedable, ok := stream.(platform.SupersedableStream); ok {
-			_ = supersedable.Supersede(s.ctx, "任务卡续接失败，后续进展仍保留在上一张卡片。")
-		}
-		return false, fmt.Errorf("persist continued progress card recovery: %w", err)
-	}
-	rebindProgressTaskCard(s.reply, s.reply)
 	oldContent := trimActiveThinkingIndicator(s.lastContent)
 	if oldContent == "" {
 		oldContent = renderInitialCardProgress()
 	}
-	s.stream = stream
-	s.lastContent = initialContent
-	s.registerStreamRecoveryChangeHandlerLocked(stream)
+	segmentSnapshot := snapshot
+	segmentSnapshot.timelineItems = append([]agent.ProgressEvent(nil), snapshot.timelineItems[segmentStart:]...)
+	result, err := s.reanchorStreamLocked(progressReanchorRequest{
+		Context:      s.ctx,
+		Reply:        s.reply,
+		Snapshot:     segmentSnapshot,
+		Title:        fmt.Sprintf("%s · 进度 %d", baseTitle, nextSegment),
+		TransitionID: uuid.NewString(),
+		Notice:       fmt.Sprintf("%s\n\n---\n后续进度见第 %d 张卡片。", oldContent, nextSegment),
+	})
+	if !result.Moved {
+		return false, err
+	}
 	segmentAnchor := snapshot.timelineItems[segmentStart]
 	s.segmentAnchor = &segmentAnchor
 	s.segmentNumber = nextSegment
-	notice := fmt.Sprintf("%s\n\n---\n后续进度见第 %d 张卡片。", oldContent, nextSegment)
-	if err := oldStream.Supersede(s.ctx, notice); err != nil {
+	if err != nil {
 		log.Printf("[handler] continued progress card but failed to freeze previous segment: %v", err)
+	}
+	if result.SupersedePending {
+		log.Printf("[handler] continued progress card; previous segment supersede is queued for retry")
 	}
 	return true, nil
 }
@@ -818,34 +817,58 @@ func (s *progressSession) activeRecoveryReservation() string {
 }
 
 // reanchor 在消息底部创建新任务卡，并把后续进展与终态原子切换到新流。
-func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, latestProgress string) (bool, error) {
-	return s.reanchorWithSnapshot(ctx, reply, progressCardSnapshot{summary: latestProgress, text: latestProgress, withPrefix: true})
-}
-
-func (s *progressSession) reanchorWithSnapshot(ctx context.Context, reply platform.Replier, latestSnapshot progressCardSnapshot) (bool, error) {
+func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, snapshot progressCardSnapshot, transitionID string) (progressReanchorResult, error) {
 	if s == nil || reply == nil || !reply.Capabilities().Streaming {
-		return false, nil
+		return progressReanchorResult{}, nil
 	}
 	reply = progressReplier(reply)
 	if reply == nil || !reply.Capabilities().Streaming {
-		return false, nil
+		return progressReanchorResult{}, nil
 	}
 
 	moveCtx, cancel := context.WithTimeout(context.WithoutCancel(normalizeContext(ctx)), 5*time.Second)
 	defer cancel()
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
+	return s.reanchorStreamLocked(progressReanchorRequest{
+		Context:      moveCtx,
+		Reply:        reply,
+		Snapshot:     snapshot,
+		Title:        progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60),
+		TransitionID: transitionID,
+		Notice:       progressSupersededNotice,
+	})
+}
+
+// reanchorStreamLocked 必须在持有 streamMu 时调用。只有 durable 事务落盘成功后，
+// 才会改变 task-card binding 和内存中的权威 stream。
+func (s *progressSession) reanchorStreamLocked(request progressReanchorRequest) (progressReanchorResult, error) {
 	if s.finished || s.terminalClaimed || s.stream == nil {
-		return false, nil
+		return progressReanchorResult{}, nil
 	}
 	oldStream, ok := s.stream.(platform.SupersedableStream)
 	if !ok {
-		return false, nil
+		return progressReanchorResult{}, nil
 	}
+	ctx := normalizeContext(request.Context)
+	reply := request.Reply
+	if reply == nil || !reply.Capabilities().Streaming {
+		return progressReanchorResult{}, nil
+	}
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		title = progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60)
+	}
+	notice := strings.TrimSpace(request.Notice)
+	if notice == "" {
+		notice = progressSupersededNotice
+	}
+
 	initialContent := renderInitialCardProgress()
 	var initialPresentation *platform.StreamPresentation
-	if latestSnapshot.effectiveProgress || latestSnapshot.structured {
-		snapshot := latestSnapshot
+	withPrefix := request.Snapshot.withPrefix
+	if request.Snapshot.effectiveProgress || request.Snapshot.structured {
+		snapshot := request.Snapshot
 		if strings.TrimSpace(snapshot.text) == "" {
 			snapshot.text = snapshot.summary
 		}
@@ -853,30 +876,107 @@ func (s *progressSession) reanchorWithSnapshot(ctx context.Context, reply platfo
 		p := s.snapshotPresentationLocked(snapshot)
 		initialPresentation = &p
 	} else if s.latestTaskSnapshot.effectiveProgress {
+		withPrefix = s.latestTaskSnapshot.withPrefix
 		initialContent = s.activeSnapshotContentLocked(s.latestTaskSnapshot)
 		p := s.snapshotPresentationLocked(s.latestTaskSnapshot)
 		initialPresentation = &p
-	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && strings.TrimSpace(latestSnapshot.summary) != "" {
-		initialContent = appendActiveThinkingIndicator(latestSnapshot.summary)
+	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && strings.TrimSpace(request.Snapshot.summary) != "" {
+		initialContent = appendActiveThinkingIndicator(request.Snapshot.summary)
 	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && trimActiveThinkingIndicator(s.lastContent) != "" {
 		initialContent = appendActiveThinkingIndicator(trimActiveThinkingIndicator(s.lastContent))
 	}
-	stream, err := reply.OpenStream(moveCtx, platform.StreamOptions{
-		Title:               progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60),
+	if withPrefix {
+		initialContent = s.prefix + initialContent
+		if initialPresentation != nil {
+			initialPresentation.Details = s.prefix + initialPresentation.Details
+		}
+	}
+
+	type durableReanchor struct {
+		outbox       *terminalOutbox
+		reservation  string
+		oldRoute     platform.DeliveryRoute
+		newRoute     platform.DeliveryRoute
+		checkpoint   platform.SupersedeCheckpoint
+		prepared     platform.PreparedSupersedableStream
+		transitionID string
+	}
+	var durable *durableReanchor
+	var outbox *terminalOutbox
+	if s.handler != nil {
+		outbox = s.handler.currentTerminalOutbox()
+	}
+	oldRouteReporter, oldRouteOK := optionalDeliveryRouteReporter(s.reply)
+	newRouteReporter, newRouteOK := optionalDeliveryRouteReporter(reply)
+	oldExporter, oldExportOK := s.stream.(platform.DurableStreamReferenceExporter)
+	preparer, prepareOK := optionalDurableStreamSupersedePreparer(s.reply)
+	preparedStream, preparedOK := s.stream.(platform.PreparedSupersedableStream)
+	if outbox != nil && s.recoveryReservation != "" && oldRouteOK && newRouteOK && oldExportOK && prepareOK && preparedOK {
+		oldRoute := oldRouteReporter.DeliveryRoute()
+		newRoute := newRouteReporter.DeliveryRoute()
+		if oldRoute.Valid() && newRoute.Valid() {
+			transitionID := strings.TrimSpace(request.TransitionID)
+			if _, err := uuid.Parse(transitionID); err != nil {
+				return progressReanchorResult{}, fmt.Errorf("invalid progress reanchor transition ID")
+			}
+			if err := outbox.beginStreamReanchor(s.recoveryReservation); err != nil {
+				return progressReanchorResult{}, fmt.Errorf("reserve progress reanchor delivery: %w", err)
+			}
+			defer outbox.endStreamReanchor(s.recoveryReservation)
+			oldReference, err := oldExporter.DurableReference()
+			if err != nil {
+				return progressReanchorResult{}, fmt.Errorf("export previous progress card: %w", err)
+			}
+			checkpoint, err := preparer.PrepareSupersedeFromReference(oldReference, notice, transitionID)
+			if err != nil {
+				return progressReanchorResult{}, fmt.Errorf("prepare previous progress card supersede: %w", err)
+			}
+			durable = &durableReanchor{
+				outbox: outbox, reservation: s.recoveryReservation,
+				oldRoute: oldRoute, newRoute: newRoute, checkpoint: checkpoint,
+				prepared: preparedStream, transitionID: transitionID,
+			}
+		}
+	}
+
+	stream, err := reply.OpenStream(ctx, platform.StreamOptions{
+		Title:               title,
 		InitialContent:      initialContent,
 		InitialPresentation: initialPresentation,
 	})
 	if err != nil {
-		return false, err
+		return progressReanchorResult{}, err
 	}
 	if stream == nil {
-		return false, fmt.Errorf("progress reanchor returned nil stream")
+		return progressReanchorResult{}, fmt.Errorf("progress reanchor returned nil stream")
 	}
-	if err := s.persistActiveStreamRecoveryLocked(stream, reply); err != nil {
-		if supersedable, ok := stream.(platform.SupersedableStream); ok {
-			_ = supersedable.Supersede(moveCtx, "任务卡迁移失败，后续进展仍保留在原卡。")
+	if durable != nil {
+		newExporter, ok := stream.(platform.DurableStreamReferenceExporter)
+		if !ok {
+			durable = nil
+		} else {
+			newReference, exportErr := newExporter.DurableReference()
+			if exportErr != nil {
+				s.cleanupFailedReanchorStream(ctx, stream)
+				return progressReanchorResult{}, fmt.Errorf("export reanchored progress card: %w", exportErr)
+			}
+			pending := pendingStreamSupersede{
+				ID: durable.transitionID, Route: durable.oldRoute,
+				Checkpoint: durable.checkpoint,
+			}
+			if persistErr := durable.outbox.reanchorStreamReservation(
+				durable.reservation, durable.newRoute, newReference, pending,
+			); persistErr != nil {
+				s.cleanupFailedReanchorStream(ctx, stream)
+				return progressReanchorResult{}, fmt.Errorf("persist reanchored progress card recovery: %w", persistErr)
+			}
 		}
-		return false, fmt.Errorf("persist reanchored progress card recovery: %w", err)
+	}
+	if durable == nil {
+		if err := s.persistActiveStreamRecoveryLocked(stream, reply); err != nil {
+			s.cleanupFailedReanchorStream(ctx, stream)
+			return progressReanchorResult{}, fmt.Errorf("persist reanchored progress card recovery: %w", err)
+		}
 	}
 	rebindProgressTaskCard(s.reply, reply)
 	s.stream = stream
@@ -884,10 +984,33 @@ func (s *progressSession) reanchorWithSnapshot(ctx context.Context, reply platfo
 	s.streamOpenAttempted = true
 	s.lastContent = initialContent
 	s.registerStreamRecoveryChangeHandlerLocked(stream)
-	if err := oldStream.Supersede(moveCtx, progressSupersededNotice); err != nil {
-		return true, err
+	if durable == nil {
+		if err := oldStream.Supersede(ctx, notice); err != nil {
+			return progressReanchorResult{Moved: true}, err
+		}
+		return progressReanchorResult{Moved: true}, nil
 	}
-	return true, nil
+	if err := durable.prepared.DeliverPreparedSupersede(ctx, durable.checkpoint); err != nil {
+		if recordErr := durable.outbox.recordPendingStreamSupersedeFailure(durable.reservation, durable.transitionID, err); recordErr != nil && !errors.Is(recordErr, err) {
+			log.Printf("[terminal-outbox] failed to persist progress card supersede retry: %v", recordErr)
+		}
+		return progressReanchorResult{Moved: true, SupersedePending: true}, nil
+	}
+	if err := durable.outbox.completePendingStreamSupersede(durable.reservation, durable.transitionID); err != nil {
+		log.Printf("[terminal-outbox] failed to clear delivered progress card supersede: %v", err)
+		return progressReanchorResult{Moved: true, SupersedePending: true}, nil
+	}
+	return progressReanchorResult{Moved: true}, nil
+}
+
+func (s *progressSession) cleanupFailedReanchorStream(ctx context.Context, stream platform.Stream) {
+	supersedable, ok := stream.(platform.SupersedableStream)
+	if !ok {
+		return
+	}
+	if err := supersedable.Supersede(ctx, "任务卡迁移失败，后续进展仍保留在原卡。"); err != nil {
+		log.Printf("[handler] failed to mark abandoned progress card: %v", err)
+	}
 }
 
 func rebindProgressTaskCard(previous platform.Replier, current platform.Replier) {

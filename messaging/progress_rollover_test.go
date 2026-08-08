@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -16,12 +17,13 @@ import (
 )
 
 type rolloverTestReplier struct {
-	mu      sync.Mutex
-	limit   int
-	streams []*rolloverTestStream
-	options []platform.StreamOptions
-	route   platform.DeliveryRoute
-	cardID  string
+	mu           sync.Mutex
+	limit        int
+	streams      []*rolloverTestStream
+	options      []platform.StreamOptions
+	route        platform.DeliveryRoute
+	cardID       string
+	supersedeErr error
 }
 
 func (r *rolloverTestReplier) Capabilities() platform.Capabilities {
@@ -38,7 +40,7 @@ func (r *rolloverTestReplier) OpenStream(_ context.Context, opts platform.Stream
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cardID := "card-" + fmt.Sprint(len(r.streams)+1)
-	stream := &rolloverTestStream{limit: r.limit, cardID: cardID}
+	stream := &rolloverTestStream{limit: r.limit, cardID: cardID, deliverErr: r.supersedeErr}
 	r.streams = append(r.streams, stream)
 	r.options = append(r.options, opts)
 	r.cardID = cardID
@@ -59,6 +61,11 @@ func (r *rolloverTestReplier) BindTaskCard(cardID string) {
 
 func (r *rolloverTestReplier) DeliveryRoute() platform.DeliveryRoute { return r.route }
 
+func (r *rolloverTestReplier) PrepareSupersedeFromReference(_ platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	payload, err := json.Marshal(map[string]string{"notice": notice, "operation_id": operationID})
+	return platform.SupersedeCheckpoint{Kind: "rollover.test.supersede.v1", Payload: payload}, err
+}
+
 func (r *rolloverTestReplier) streamsSnapshot() []*rolloverTestStream {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -66,12 +73,15 @@ func (r *rolloverTestReplier) streamsSnapshot() []*rolloverTestStream {
 }
 
 type rolloverTestStream struct {
-	mu         sync.Mutex
-	limit      int
-	updates    []string
-	superseded []string
-	completed  []string
-	cardID     string
+	mu                 sync.Mutex
+	limit              int
+	updates            []string
+	superseded         []string
+	completed          []string
+	cardID             string
+	preparedSupersedes int
+	fallbackSupersedes int
+	deliverErr         error
 }
 
 func (s *rolloverTestStream) PreflightUpdate(content string) error {
@@ -101,8 +111,24 @@ func (s *rolloverTestStream) Fail(ctx context.Context, content string) error {
 func (s *rolloverTestStream) Supersede(_ context.Context, content string) error {
 	s.mu.Lock()
 	s.superseded = append(s.superseded, content)
+	s.fallbackSupersedes++
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *rolloverTestStream) DeliverPreparedSupersede(_ context.Context, checkpoint platform.SupersedeCheckpoint) error {
+	var payload struct {
+		Notice string `json:"notice"`
+	}
+	if err := json.Unmarshal(checkpoint.Payload, &payload); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.superseded = append(s.superseded, payload.Notice)
+	s.preparedSupersedes++
+	err := s.deliverErr
+	s.mu.Unlock()
+	return err
 }
 
 func (s *rolloverTestStream) DurableReference() (platform.DurableStreamReference, error) {
@@ -114,6 +140,69 @@ func (s *rolloverTestStream) updateCounts() (updates int, superseded int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.updates), len(s.superseded)
+}
+
+func (s *rolloverTestStream) supersedeDeliveryCounts() (prepared int, fallback int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.preparedSupersedes, s.fallbackSupersedes
+}
+
+func TestProgressRolloverUsesDurableReanchorTransaction(t *testing.T) {
+	h := NewHandler(nil, nil)
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	outbox, _ := attachTestTerminalOutbox(t, h)
+	reply := &rolloverTestReplier{
+		limit: 350, route: route, supersedeErr: errors.New("temporary CardKit failure"),
+	}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	_, finish, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), reply, "", "codex", "/workspace/project", "执行任务", cfg,
+	)
+	first := []agent.ProgressEvent{
+		{ID: "a", Kind: agent.ProgressKindFile, State: agent.ProgressStateCompleted, Text: "定位问题"},
+		{ID: "b", Kind: agent.ProgressKindCommand, State: agent.ProgressStateRunning, Text: "运行测试"},
+	}
+	firstCard, _ := renderTaskProgressTimeline(first, "")
+	session.onTaskProgress(taskProgressUpdate{latest: "定位问题", card: firstCard, timeline: true, timelineItems: first})
+	waitForRolloverCondition(t, func() bool {
+		streams := reply.streamsSnapshot()
+		if len(streams) != 1 {
+			return false
+		}
+		updates, _ := streams[0].updateCounts()
+		return updates == 1
+	})
+
+	second := append(append([]agent.ProgressEvent(nil), first...), agent.ProgressEvent{
+		ID: "c", Kind: agent.ProgressKindFile, State: agent.ProgressStateCompleted, Text: strings.Repeat("新增进展", 24),
+	})
+	secondCard, _ := renderTaskProgressTimeline(second, "")
+	session.onTaskProgress(taskProgressUpdate{latest: second[2].Text, card: secondCard, timeline: true, timelineItems: second})
+	waitForRolloverCondition(t, func() bool {
+		streams := reply.streamsSnapshot()
+		if len(streams) != 2 {
+			return false
+		}
+		prepared, _ := streams[0].supersedeDeliveryCounts()
+		return prepared == 1
+	})
+
+	streams := reply.streamsSnapshot()
+	prepared, fallback := streams[0].supersedeDeliveryCounts()
+	if prepared != 1 || fallback != 0 {
+		t.Fatalf("supersede deliveries prepared=%d fallback=%d", prepared, fallback)
+	}
+	entry := outbox.entryLocked(session.recoveryReservation)
+	if entry == nil || entry.Stream == nil || !strings.Contains(string(entry.Stream.Payload), "card-2") || len(entry.PendingSupersedes) != 1 {
+		t.Fatalf("rollover transaction was not durably retained: %#v", entry)
+	}
+	if !finish("最终结果", false) {
+		t.Fatal("latest continuation card should consume final result")
+	}
 }
 
 func TestStructuredProgressAutomaticallyContinuesOnAnotherCardBeforeOverflow(t *testing.T) {

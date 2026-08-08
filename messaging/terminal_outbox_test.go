@@ -1585,6 +1585,51 @@ func TestTerminalOutboxReanchorPersistsNewAuthorityAndPendingSupersedeAtomically
 	}
 }
 
+func TestTerminalOutboxStreamReanchorHoldBlocksPendingDeliveryUntilAuthoritySwitch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	oldReference := testDurableStreamReference("card-old")
+	entry, err := outbox.reserve(terminalOutboxDraft{Route: route, Stream: &oldReference, Text: "任务已中断"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.beginStreamReanchor(entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000121", route, "card-old", base)
+	if err := outbox.reanchorStreamReservation(entry.ID, route, testDurableStreamReference("card-new"), pending); err != nil {
+		outbox.endStreamReanchor(entry.ID)
+		t.Fatal(err)
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err != nil {
+		outbox.endStreamReanchor(entry.ID)
+		t.Fatalf("blocked attempt returned error: %v", err)
+	}
+	reply.mu.Lock()
+	callsWhileHeld := reply.supersedeCalls
+	reply.mu.Unlock()
+	if callsWhileHeld != 0 {
+		outbox.endStreamReanchor(entry.ID)
+		t.Fatalf("supersede delivered before authority switch: calls=%d", callsWhileHeld)
+	}
+	outbox.endStreamReanchor(entry.ID)
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err != nil {
+		t.Fatalf("supersede after authority switch: %v", err)
+	}
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if reply.supersedeCalls != 1 {
+		t.Fatalf("supersede calls=%d, want 1 after releasing reanchor hold", reply.supersedeCalls)
+	}
+}
+
 func TestTerminalOutboxRetriesSupersedeWhileReservationIsPreparing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.json")
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}

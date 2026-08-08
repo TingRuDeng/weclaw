@@ -642,6 +642,25 @@ func (o *terminalOutbox) reanchorStreamReservation(
 	return nil
 }
 
+// beginStreamReanchor 暂停同一 reservation 的后台投递，直到调用方完成
+// durable 提交后的内存权威切换。该占用不落盘，进程重启后 pending 可立即恢复。
+func (o *terminalOutbox) beginStreamReanchor(id string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.entryLocked(id) == nil {
+		return ErrTerminalOutboxNotFound
+	}
+	if o.processing[id] {
+		return fmt.Errorf("terminal outbox reservation is busy")
+	}
+	o.processing[id] = true
+	return nil
+}
+
+func (o *terminalOutbox) endStreamReanchor(id string) {
+	o.endAttempt(id)
+}
+
 func (o *terminalOutbox) run(ctx context.Context) {
 	for {
 		if ctx.Err() != nil {
