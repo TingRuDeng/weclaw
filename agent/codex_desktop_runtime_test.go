@@ -60,6 +60,55 @@ func TestACPAgentStartPrefersDesktopBridgeWithoutStartingSharedHost(t *testing.T
 	}
 }
 
+func TestACPAgentStartPrefersRunningOfficialDaemonOverDesktopBridge(t *testing.T) {
+	home := newShortCodexHome(t)
+	socketPath := codexDaemonSocketPath(home)
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newFakeCodexHost(listener)
+	server.start(t)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	desktopDialed := false
+	runtime.client = newCodexDesktopClient(codexDesktopTestOptions(func(context.Context) (net.Conn, error) {
+		desktopDialed = true
+		return nil, errors.New("Desktop IPC must not be selected")
+	}))
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "auto",
+		Env: map[string]string{"CODEX_HOME": home}, StateFile: filepath.Join(home, "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	var lifecycleActions []string
+	a.codexDaemonLifecycleCall = func(_ context.Context, action string) (codexDaemonLifecycleOutput, error) {
+		lifecycleActions = append(lifecycleActions, action)
+		return testCodexDaemonOutput("running", "pid", socketPath), nil
+	}
+	a.codexDaemonMetadataCall = testCodexDaemonMetadata
+
+	err = a.Start(context.Background())
+
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(a.Stop)
+	if got := a.codexRuntimeModeSnapshot(); got != CodexRuntimeWeClaw {
+		t.Fatalf("runtime mode = %q, want shared daemon", got)
+	}
+	if desktopDialed {
+		t.Fatal("Desktop IPC was dialed while the official daemon was running")
+	}
+	if len(lifecycleActions) != 2 || lifecycleActions[0] != "version" || lifecycleActions[1] != "version" {
+		t.Fatalf("daemon lifecycle actions = %v, want two version validations", lifecycleActions)
+	}
+}
+
 func TestACPAgentStartFailsClosedWhenDesktopIsPresentButUnreachable(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	runtime := newCodexDesktopRuntime()

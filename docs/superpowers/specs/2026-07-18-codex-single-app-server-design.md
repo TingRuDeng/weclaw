@@ -44,14 +44,14 @@ flowchart LR
 
 `codex_host_mode` 接受 `auto`、`daemon` 和 `managed`：
 
-1. macOS 默认 `auto` 先探测 Codex App。App 已运行时，`agent/codex_desktop_connector.go` 通过受保护 Desktop IPC 复用 App Host。
-2. App 不在时，`auto` 在 `CODEX_HOME` 已有官方 control socket 或 standalone Codex 可执行时使用 `agent/codex_daemon_host.go`；否则使用 WeClaw-managed 兼容路径。
+1. macOS 默认 `auto` 先检查固定 control socket 上是否已有官方 daemon，并用官方 lifecycle `version` 验证其身份。验证通过的运行中 daemon 保持唯一 Host，即使 Codex App 同时存在也不切换到 Desktop IPC。
+2. 没有运行中的 daemon 时，App 已运行则由 `agent/codex_desktop_connector.go` 通过受保护 Desktop IPC 复用 App Host；App 不在时，`auto` 在 `CODEX_HOME` 存在可执行 standalone Codex 时使用 `agent/codex_daemon_host.go`，否则使用 WeClaw-managed 兼容路径。control socket 存在但身份验证失败时必须失败关闭，不能回退 Desktop 或 managed。
 3. 显式 `daemon` 只使用官方生命周期命令和固定 control socket，不允许自定义 `app_server_socket` 或 `run_as_user`，失败时不回退 managed。
 4. 显式 `managed` 使用 `agent/codex_app_server_host.go` 管理兼容 Host，不主动接入 Desktop。
 
 `weclaw codex cli` 只在官方 daemon 拓扑中可用。它使用官方 standalone Codex 二进制并固定传入当前 control socket 的 `--remote unix://...`；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。WeClaw 服务未运行且 App 不存在时可以直接受控启动 daemon；服务运行时，CLI 先调用仅限 loopback 的 `POST /api/codex/cli/prepare`，由服务内同一个 Agent 在 admission/gate 内按启动时已经解析的拓扑准备 Host，再核对返回 socket 与客户端解析值一致。Desktop 可见、managed Host、控制接口不可达或 Host 身份不明确时都失败关闭。
 
-共享 Host 已运行后若探测到 App，只能在所有 thread 全局 idle、没有 active/uncertain writer lease，并串行持有 gate 与 socket lifecycle lock 时切换。停止结果、App 状态或 IPC 身份任一不可确认，当前 runtime 都进入不可写状态，不能并行保留两个 Host。
+WeClaw-managed Host 已运行后若探测到 App，只能在所有 thread 全局 idle、没有 active/uncertain writer lease，并串行持有 gate 与 socket lifecycle lock 时切换。官方 daemon 已运行时不执行该切换，App 作为平等前端复用 daemon。停止结果、daemon 或 App 状态、IPC 身份任一不可确认，当前 runtime 都进入不可写状态，不能并行保留两个 Host。
 
 ### Shared Host 边界
 
@@ -122,7 +122,7 @@ Runtime 只回答共享 host 当前能否服务：
 
 1. 必须已有 frontend binding。
 2. 每次已准入 turn 前重新确认 `conversationID -> threadID` 映射，避免其他前端最近的绑定污染当前映射。
-3. 连接或恢复当前唯一 Host；`auto` 下先按 Desktop/daemon/managed 顺序确认权威。
+3. 连接或恢复当前唯一 Host；`auto` 下先确认已运行且验证通过的 daemon，再按 Desktop/daemon 启动/managed 顺序确认权威。
 4. 若 thread 已有活动 turn，登记结果 observer，并立即使用 `turn/steer` 提交消息；不进入 WeClaw 私有 pending queue，也不新建 turn。
 5. 若 thread 空闲，获取 thread writer lease，启动 turn，并在唯一终态释放 lease。
 
@@ -145,6 +145,7 @@ Codex App 与受控 CLI 也直接向同一 Host 提交输入。app-server 的接
 ## 故障边界
 
 - socket 连接失败：保留 binding；允许下一次操作重连或重启 host。
+- 官方 daemon control socket 已存在但 lifecycle 身份或运行状态无法验证：保留 binding 并失败关闭，不得切换 Desktop 或 managed。
 - App 进程或 IPC endpoint 存在但安全连接失败：保留 binding 并失败关闭，不得回退 daemon/managed。
 - turn 观察流断开：保留 binding、active turn 和 writer lease；其他前端继续收到 writer busy，直到权威终态收敛。
 - host 启动失败：暴露经过清洗的真实错误；SQLite 状态初始化错误仍进入有限重试。
@@ -153,7 +154,7 @@ Codex App 与受控 CLI 也直接向同一 Host 提交输入。app-server 的接
 - host client recovery：只断开当前 client，不终止其他客户端正在使用的 host。
 - host owner 停止：终止其启动的 host；其他客户端必须感知断线并按正常重连路径恢复。
 - 两个前端并发首次连接：由跨进程启动锁选出唯一启动者；等待者复用赢家的 socket。
-- shared Host 切换到后来出现的 App：只有 admission、全局 idle、writer lease 和 lifecycle lock 全部通过才停止 shared Host；任何不确定结果保持不可写。
+- WeClaw-managed Host 切换到后来出现的 App：只有 admission、全局 idle、writer lease 和 lifecycle lock 全部通过才停止 managed Host；运行中的官方 daemon 不切换，任何不确定结果保持不可写。
 
 ## 验证契约
 
@@ -170,7 +171,7 @@ Codex App 与受控 CLI 也直接向同一 Host 提交输入。app-server 的接
 - v1-v3 owner 状态迁移后不再影响 v5 binding。
 - `/cx app|cli|attach|detach`、Codex Companion 和旧 `codex exec` 都不能启动第二 writer；`weclaw codex cli` 只能固定连接官方 daemon，且 Host 身份不明确时失败关闭。
 - Desktop queued follow-up 按 connection epoch 同步为客户端草稿，不能生成 writer lease、WeClaw pending task 或已接受输入。
-- `auto` 在 App 已运行时只连接 Desktop IPC；App 不在时才选择 daemon/managed，App 存在但 IPC 不可达时失败关闭。
+- `auto` 在官方 daemon 已运行且验证通过时保持 daemon 权威并跳过 Desktop IPC；没有运行中的 daemon 时，App 已运行才连接 Desktop IPC，App 不在时选择 daemon/managed。daemon 身份不明或 App 存在但 IPC 不可达时失败关闭。
 - Desktop follower 支持已有 thread turn/steer/interrupt/settings，明确拒绝未暴露的 thread/start、archive、model/list、账号与额度能力。
 - daemon 与 managed 的 socket、生命周期和失败回退边界分别验证；显式 daemon 失败不能启动 managed。
 - runtime 失败保留 binding，持久化失败回滚，切换失败不破坏原会话。

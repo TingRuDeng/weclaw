@@ -71,7 +71,7 @@ weclaw status
 /cx status             # 查看当前工作空间、会话、任务、账号和运行状态
 ```
 
-macOS 默认 `codex_host_mode: auto` 下，如果启动 WeClaw 时 Codex App 已运行，WeClaw 会通过受保护的 Desktop IPC 复用 App 的 Host，不再启动第二个 app-server；App 不在时，才连接或启动官方 standalone daemon（不可用时使用 WeClaw 自管兼容 Host）。如果共享 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；无法确认空闲或 App 存在但 IPC 不可达时直接失败，不会并行写入。
+macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经在固定 control socket 上运行且身份验证通过，WeClaw 会保持它作为唯一 Host，即使 Codex App 也已运行；Codex App、受控 CLI、飞书和微信因此可以复用同一组 thread。没有已运行 daemon 时，WeClaw 才在 App 已运行时通过受保护的 Desktop IPC 复用 App Host；App 不在时连接或启动官方 daemon（不可用时使用 WeClaw 自管兼容 Host）。如果 WeClaw 自管 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；daemon 身份、全局空闲或 App IPC 无法确认时直接失败，不会并行写入。
 
 App Host 支持选择已有会话、继续任务、进度、审批、`/stop`，以及修改当前 thread 的模型和推理强度。飞书或微信绑定到 App 中正在运行的 thread 后，普通消息会直接进入当前 turn，不再先暂存并等待任务结束。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
 

@@ -36,10 +36,18 @@ func (a *ACPAgent) handleCodexDesktopDisconnect() {
 	}
 }
 
-// tryStartCodexDesktopRuntime 在默认 auto 拓扑中优先连接已运行的 Codex App。
-// App 仍存在但 IPC 不可达时必须失败关闭，不能启动第二个 app-server。
+// tryStartCodexDesktopRuntime 在默认 auto 拓扑中复用当前唯一 Host。已运行的
+// 官方 daemon 保持权威；否则才连接已运行的 Codex App。App 仍存在但 IPC
+// 不可达时必须失败关闭，不能启动第二个 app-server。
 func (a *ACPAgent) tryStartCodexDesktopRuntime(ctx context.Context) (bool, error) {
 	if !a.codexDesktopBridge || a.desktopRuntime == nil {
+		return false, nil
+	}
+	daemonRunning, err := a.runningOfficialCodexDaemon(ctx)
+	if err != nil {
+		return false, fmt.Errorf("验证已运行的官方 Codex daemon: %w", err)
+	}
+	if daemonRunning {
 		return false, nil
 	}
 	socketExists, processExists := a.desktopRuntime.Presence()
@@ -54,6 +62,24 @@ func (a *ACPAgent) tryStartCodexDesktopRuntime(ctx context.Context) (bool, error
 	}
 	if err := a.transitionCodexRuntimeToDesktop(ctx); err != nil {
 		_ = a.desktopRuntime.disconnect()
+		return false, err
+	}
+	return true, nil
+}
+
+func (a *ACPAgent) runningOfficialCodexDaemon(ctx context.Context) (bool, error) {
+	if !a.usesOfficialCodexDaemon() {
+		return false, nil
+	}
+	socketPath, err := a.resolveCodexDaemonSocket()
+	if err != nil {
+		return false, err
+	}
+	exists, err := existingCodexHostSocket(socketPath)
+	if err != nil || !exists {
+		return false, err
+	}
+	if _, err := a.runAndValidateCodexDaemonLifecycle(ctx, "version", socketPath); err != nil {
 		return false, err
 	}
 	return true, nil
