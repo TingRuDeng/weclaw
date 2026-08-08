@@ -281,6 +281,40 @@ func TestProgressSessionUsesStructuredPresentation(t *testing.T) {
 	}
 }
 
+func TestProgressReanchorConsumesLatestReducerSnapshot(t *testing.T) {
+	h := NewHandler(nil, nil)
+	oldReply, newReply := newReanchorTestReplier(), newReanchorTestReplier()
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode, cfg.SendAcceptance = progressModeStream, boolPtr(false)
+	_, _, session := h.startProgressSessionForWorkspaceAgentWithHandle(context.Background(), oldReply, "", "codex", "/workspace", "执行任务", cfg)
+	task := &activeAgentTask{progress: session}
+	for i, event := range []agent.ProgressEvent{{Kind: agent.ProgressKindTool, Sequence: 1, Text: "旧工具步骤"}} {
+		if _, ok := task.recordProgressUpdate(time.Now().Add(time.Duration(i)*time.Second), event); !ok {
+			t.Fatal("record old progress")
+		}
+	}
+	old := task.view
+	oldUpdate := taskProgressUpdate{latest: old.lastProgress, card: "**执行进度**\n- • 旧工具步骤", timeline: true, timelineItems: old.progressTimeline}
+	session.onTaskProgress(oldUpdate)
+	if !session.sendSnapshotContent(session.latestTaskSnapshot) {
+		t.Fatal("send old snapshot")
+	}
+	if _, ok := task.recordLocalProgressText(time.Now(), "已接收新的补充输入。"); !ok {
+		t.Fatal("record local guide")
+	}
+	_, snapshot, ok := task.progressReanchorSnapshot()
+	if !ok {
+		t.Fatal("snapshot unavailable")
+	}
+	if moved, err := session.reanchorWithSnapshot(context.Background(), newReply, snapshot); err != nil || !moved {
+		t.Fatalf("reanchor moved=%t err=%v", moved, err)
+	}
+	p := newReply.lastOptions.InitialPresentation
+	if p == nil || p.Summary != "已接收新的补充输入。" || !strings.Contains(p.Details, "旧工具步骤") || !strings.Contains(p.Details, "已接收新的补充输入。") {
+		t.Fatalf("initial presentation=%#v", p)
+	}
+}
+
 func TestProgressSessionDurableTerminalUsesReanchoredStream(t *testing.T) {
 	h := NewHandler(nil, nil)
 	oldReply := newReanchorTestReplier()

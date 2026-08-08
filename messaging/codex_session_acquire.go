@@ -237,7 +237,7 @@ func (h *Handler) reanchorActiveCodexTask(ctx context.Context, task *activeAgent
 	if !ok {
 		return false, nil
 	}
-	moved, err := progress.reanchor(ctx, reply, snapshot.summary)
+	moved, err := progress.reanchorWithSnapshot(ctx, reply, snapshot)
 	if moved {
 		task.mu.Lock()
 		task.trace = traceWithReply(task.trace, progressReplier(reply))

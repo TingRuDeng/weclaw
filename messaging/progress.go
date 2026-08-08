@@ -819,6 +819,10 @@ func (s *progressSession) activeRecoveryReservation() string {
 
 // reanchor 在消息底部创建新任务卡，并把后续进展与终态原子切换到新流。
 func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, latestProgress string) (bool, error) {
+	return s.reanchorWithSnapshot(ctx, reply, progressCardSnapshot{summary: latestProgress, text: latestProgress, withPrefix: true})
+}
+
+func (s *progressSession) reanchorWithSnapshot(ctx context.Context, reply platform.Replier, latestSnapshot progressCardSnapshot) (bool, error) {
 	if s == nil || reply == nil || !reply.Capabilities().Streaming {
 		return false, nil
 	}
@@ -840,12 +844,20 @@ func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, 
 	}
 	initialContent := renderInitialCardProgress()
 	var initialPresentation *platform.StreamPresentation
-	if s.latestTaskSnapshot.effectiveProgress {
+	if latestSnapshot.effectiveProgress || latestSnapshot.structured {
+		snapshot := latestSnapshot
+		if strings.TrimSpace(snapshot.text) == "" {
+			snapshot.text = snapshot.summary
+		}
+		initialContent = s.activeSnapshotContentLocked(snapshot)
+		p := s.snapshotPresentationLocked(snapshot)
+		initialPresentation = &p
+	} else if s.latestTaskSnapshot.effectiveProgress {
 		initialContent = s.activeSnapshotContentLocked(s.latestTaskSnapshot)
 		p := s.snapshotPresentationLocked(s.latestTaskSnapshot)
 		initialPresentation = &p
-	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && strings.TrimSpace(latestProgress) != "" {
-		initialContent = appendActiveThinkingIndicator(latestProgress)
+	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && strings.TrimSpace(latestSnapshot.summary) != "" {
+		initialContent = appendActiveThinkingIndicator(latestSnapshot.summary)
 	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && trimActiveThinkingIndicator(s.lastContent) != "" {
 		initialContent = appendActiveThinkingIndicator(trimActiveThinkingIndicator(s.lastContent))
 	}
