@@ -18,6 +18,8 @@ type optionalCapabilityTestReplier struct {
 	idempotentResult []platform.TerminalResult
 	deliveryKeys     []string
 	checkpoints      []platform.TerminalCheckpoint
+	supersedeRefs    []platform.DurableStreamReference
+	supersedes       []platform.SupersedeCheckpoint
 }
 
 func newOptionalCapabilityTestReplier() *optionalCapabilityTestReplier {
@@ -57,6 +59,16 @@ func (r *optionalCapabilityTestReplier) SendResultIdempotent(_ context.Context, 
 
 func (r *optionalCapabilityTestReplier) DeliverTerminal(_ context.Context, checkpoint platform.TerminalCheckpoint) error {
 	r.checkpoints = append(r.checkpoints, checkpoint)
+	return nil
+}
+
+func (r *optionalCapabilityTestReplier) PrepareSupersedeFromReference(reference platform.DurableStreamReference, _ string, _ string) (platform.SupersedeCheckpoint, error) {
+	r.supersedeRefs = append(r.supersedeRefs, reference)
+	return platform.SupersedeCheckpoint{Kind: "feishu-supersede", Payload: []byte(`{"sequence":3}`)}, nil
+}
+
+func (r *optionalCapabilityTestReplier) DeliverSupersede(_ context.Context, checkpoint platform.SupersedeCheckpoint) error {
+	r.supersedes = append(r.supersedes, checkpoint)
 	return nil
 }
 
@@ -144,6 +156,22 @@ func TestSerializedReplierPreservesDurableDeliveryCapabilities(t *testing.T) {
 	if err := durable.DeliverTerminal(context.Background(), checkpoint); err != nil {
 		t.Fatal(err)
 	}
+	reference := platform.DurableStreamReference{Kind: "feishu-stream", Payload: []byte(`{"sequence":1}`)}
+	preparer, ok := optionalDurableStreamSupersedePreparer(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost DurableStreamSupersedePreparer")
+	}
+	supersede, err := preparer.PrepareSupersedeFromReference(reference, "moved", "operation-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliverer, ok := optionalDurableSupersedeReplier(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost DurableSupersedeReplier")
+	}
+	if err := deliverer.DeliverSupersede(context.Background(), supersede); err != nil {
+		t.Fatal(err)
+	}
 
 	if len(reply.idempotentText) != 1 || reply.idempotentText[0] != "done" ||
 		len(reply.deliveryKeys) != 2 || reply.deliveryKeys[0] != "delivery-1" || reply.deliveryKeys[1] != "delivery-2" {
@@ -155,5 +183,9 @@ func TestSerializedReplierPreservesDurableDeliveryCapabilities(t *testing.T) {
 	if len(reply.checkpoints) != 1 || reply.checkpoints[0].Kind != checkpoint.Kind ||
 		string(reply.checkpoints[0].Payload) != string(checkpoint.Payload) {
 		t.Fatalf("checkpoints=%#v", reply.checkpoints)
+	}
+	if len(reply.supersedeRefs) != 1 || reply.supersedeRefs[0].Kind != reference.Kind ||
+		len(reply.supersedes) != 1 || reply.supersedes[0].Kind != supersede.Kind {
+		t.Fatalf("supersede refs=%#v checkpoints=%#v", reply.supersedeRefs, reply.supersedes)
 	}
 }

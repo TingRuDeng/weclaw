@@ -204,6 +204,30 @@ func optionalDurableTerminalReplier(reply platform.Replier) (platform.DurableTer
 	return durable, ok
 }
 
+func optionalDurableStreamSupersedePreparer(reply platform.Replier) (platform.DurableStreamSupersedePreparer, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		preparer, supported := optionalDurableStreamSupersedePreparer(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedDurableStreamSupersedePreparer{reply: serialized, preparer: preparer}, true
+	}
+	preparer, ok := reply.(platform.DurableStreamSupersedePreparer)
+	return preparer, ok
+}
+
+func optionalDurableSupersedeReplier(reply platform.Replier) (platform.DurableSupersedeReplier, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		durable, supported := optionalDurableSupersedeReplier(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedDurableSupersedeReplier{reply: serialized, durable: durable}, true
+	}
+	durable, ok := reply.(platform.DurableSupersedeReplier)
+	return durable, ok
+}
+
 type serializedTextChunkLimitSetter struct {
 	reply  *serializedReplier
 	setter platform.TextChunkLimitSetter
@@ -268,6 +292,28 @@ func (s serializedDurableTerminalReplier) DeliverTerminal(ctx context.Context, c
 	s.reply.mu.Lock()
 	defer s.reply.mu.Unlock()
 	return s.durable.DeliverTerminal(ctx, checkpoint)
+}
+
+type serializedDurableStreamSupersedePreparer struct {
+	reply    *serializedReplier
+	preparer platform.DurableStreamSupersedePreparer
+}
+
+func (s serializedDurableStreamSupersedePreparer) PrepareSupersedeFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.preparer.PrepareSupersedeFromReference(reference, notice, operationID)
+}
+
+type serializedDurableSupersedeReplier struct {
+	reply   *serializedReplier
+	durable platform.DurableSupersedeReplier
+}
+
+func (s serializedDurableSupersedeReplier) DeliverSupersede(ctx context.Context, checkpoint platform.SupersedeCheckpoint) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.durable.DeliverSupersede(ctx, checkpoint)
 }
 
 func (h *Handler) finishAndSendProgressReply(req progressReplyDelivery) bool {

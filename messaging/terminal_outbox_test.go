@@ -31,6 +31,10 @@ type outboxTestReplier struct {
 	checkpointCalls       int
 	failCheckpoint        int
 	checkpointPayloadSeen []json.RawMessage
+	supersedeCalls        int
+	failSupersede         int
+	supersedePayloadSeen  []json.RawMessage
+	deliveryOrder         []string
 	recoveredReferences   []platform.DurableStreamReference
 	recoveredStates       []platform.StreamTerminalState
 	stream                *outboxTestStream
@@ -127,10 +131,23 @@ func (r *outboxTestReplier) DeliverTerminal(_ context.Context, checkpoint platfo
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.checkpointCalls++
+	r.deliveryOrder = append(r.deliveryOrder, "terminal")
 	r.checkpointPayloadSeen = append(r.checkpointPayloadSeen, append(json.RawMessage(nil), checkpoint.Payload...))
 	if r.failCheckpoint > 0 {
 		r.failCheckpoint--
 		return errors.New("checkpoint unavailable")
+	}
+	return nil
+}
+func (r *outboxTestReplier) DeliverSupersede(_ context.Context, checkpoint platform.SupersedeCheckpoint) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.supersedeCalls++
+	r.deliveryOrder = append(r.deliveryOrder, "supersede")
+	r.supersedePayloadSeen = append(r.supersedePayloadSeen, append(json.RawMessage(nil), checkpoint.Payload...))
+	if r.failSupersede > 0 {
+		r.failSupersede--
+		return errors.New("supersede unavailable")
 	}
 	return nil
 }
@@ -145,6 +162,7 @@ func (r *outboxTestReplier) PrepareTerminalFromReferenceWithState(reference plat
 	r.mu.Lock()
 	r.recoveredReferences = append(r.recoveredReferences, reference)
 	r.recoveredStates = append(r.recoveredStates, state)
+	r.deliveryOrder = append(r.deliveryOrder, "prepare_terminal")
 	r.mu.Unlock()
 	payload, err := json.Marshal(map[string]any{
 		"reference": reference,
@@ -1490,4 +1508,397 @@ func TestFinishProgressReplyDoesNotPersistStatusSentinelWhenCheckpointPreparatio
 	if len(reply.recoveredReferences) != 1 || reply.checkpointCalls != 1 {
 		t.Fatalf("recovered references=%#v checkpoint calls=%d, want card recovery after preparation failure", reply.recoveredReferences, reply.checkpointCalls)
 	}
+}
+
+func testPendingStreamSupersede(id string, route platform.DeliveryRoute, cardID string, nextAttempt time.Time) pendingStreamSupersede {
+	payload, _ := json.Marshal(map[string]string{"card_id": cardID})
+	return pendingStreamSupersede{
+		ID: id, Route: route,
+		Checkpoint:  platform.SupersedeCheckpoint{Kind: "test.supersede.v1", Payload: payload},
+		NextAttempt: nextAttempt,
+	}
+}
+
+func testDurableStreamReference(cardID string) platform.DurableStreamReference {
+	payload, _ := json.Marshal(map[string]any{"card_id": cardID, "sequence": 7})
+	return platform.DurableStreamReference{Kind: "test.stream.v1", Payload: payload}
+}
+
+func TestTerminalOutboxReanchorPersistsNewAuthorityAndPendingSupersedeAtomically(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	oldRoute := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "old-chat"}
+	newRoute := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "new-chat"}
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldReference := testDurableStreamReference("card-old")
+	entry, err := outbox.reserve(terminalOutboxDraft{Route: oldRoute, Stream: &oldReference, Text: "任务已中断"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	newReference := testDurableStreamReference("card-new")
+	pending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000101", oldRoute, "card-old", base)
+	if err := outbox.reanchorStreamReservation(entry.ID, newRoute, newReference, pending); err != nil {
+		t.Fatalf("reanchorStreamReservation: %v", err)
+	}
+	if err := outbox.reanchorStreamReservation(entry.ID, newRoute, newReference, pending); err != nil {
+		t.Fatalf("idempotent reanchorStreamReservation: %v", err)
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+	if loaded[0].Route != newRoute || loaded[0].Stream == nil || !strings.Contains(string(loaded[0].Stream.Payload), "card-new") ||
+		len(loaded[0].PendingSupersedes) != 1 || loaded[0].PendingSupersedes[0].ID != pending.ID {
+		t.Fatalf("reanchored entry=%#v", loaded[0])
+	}
+	if err := outbox.refreshStreamReservation(entry.ID, newRoute, newReference); err != nil {
+		t.Fatalf("refreshStreamReservation: %v", err)
+	}
+	if refreshed := outbox.entryLocked(entry.ID); len(refreshed.PendingSupersedes) != 1 || refreshed.PendingSupersedes[0].ID != pending.ID {
+		t.Fatalf("refresh cleared pending supersede: %#v", refreshed)
+	}
+
+	beforeMemory := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	beforeDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPath := outbox.path
+	outbox.path = filepath.Join(path, "blocked")
+	failedReference := testDurableStreamReference("card-never-committed")
+	failedPending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000102", newRoute, "card-new", base)
+	if err := outbox.reanchorStreamReservation(entry.ID, oldRoute, failedReference, failedPending); err == nil {
+		t.Fatal("reanchor persistence failure returned nil")
+	}
+	outbox.path = originalPath
+	afterMemory := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	afterDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterMemory, beforeMemory) || !reflect.DeepEqual(afterDisk, beforeDisk) {
+		t.Fatalf("failed reanchor changed authority:\nbefore=%#v\nafter=%#v", beforeMemory, afterMemory)
+	}
+}
+
+func TestTerminalOutboxRetriesSupersedeWhileReservationIsPreparing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.failSupersede = 1
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	reference := testDurableStreamReference("card-old")
+	entry, err := outbox.reserve(terminalOutboxDraft{Route: route, Stream: &reference, Text: "任务已中断"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newReference := testDurableStreamReference("card-new")
+	pending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000103", route, "card-old", base)
+	if err := outbox.reanchorStreamReservation(entry.ID, route, newReference, pending); err != nil {
+		t.Fatal(err)
+	}
+	if due := outbox.duePendingStreamSupersedes(); len(due) != 1 || due[0].entryID != entry.ID || due[0].pendingID != pending.ID {
+		t.Fatalf("pending supersede was not due while reservation prepared: %#v", due)
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err == nil {
+		t.Fatal("first supersede attempt unexpectedly succeeded")
+	}
+	stored := outbox.entryLocked(entry.ID)
+	if !outbox.preparing[entry.ID] || stored.Attempts != 0 || len(stored.PendingSupersedes) != 1 || stored.PendingSupersedes[0].Attempts != 1 {
+		t.Fatalf("entry=%#v preparing=%v", stored, outbox.preparing[entry.ID])
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err != nil {
+		t.Fatalf("retry supersede: %v", err)
+	}
+	stored = outbox.entryLocked(entry.ID)
+	if stored == nil || len(stored.PendingSupersedes) != 0 || stored.Stream == nil || !outbox.preparing[entry.ID] {
+		t.Fatalf("active reservation after supersede=%#v", stored)
+	}
+}
+
+func TestTerminalOutboxRestartReplaysPendingSupersedeBeforeTerminalRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, reply)
+	beforeRestart, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	beforeRestart.now = func() time.Time { return base }
+	oldReference := testDurableStreamReference("card-old")
+	entry, err := beforeRestart.reserve(terminalOutboxDraft{Route: route, Stream: &oldReference, Text: "任务已中断"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newReference := testDurableStreamReference("card-new")
+	pending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000104", route, "card-old", base)
+	if err := beforeRestart.reanchorStreamReservation(entry.ID, route, newReference, pending); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go restarted.run(ctx)
+	waitForTerminalOutboxEmpty(t, path)
+	cancel()
+	reply.mu.Lock()
+	order := append([]string(nil), reply.deliveryOrder...)
+	reply.mu.Unlock()
+	if len(order) < 2 || order[0] != "supersede" || order[1] != "prepare_terminal" {
+		t.Fatalf("delivery order=%#v, want supersede before terminal recovery", order)
+	}
+}
+
+func TestTerminalOutboxSupersedeFailureDoesNotConsumeTerminalAttempts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.failSupersede = 1
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.maxAttempts = 1
+	base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	reference := testDurableStreamReference("card-old")
+	entry, err := outbox.reserve(terminalOutboxDraft{Route: route, Stream: &reference, Text: "任务已中断"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000105", route, "card-old", base)
+	if err := outbox.reanchorStreamReservation(entry.ID, route, testDurableStreamReference("card-new"), pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err == nil {
+		t.Fatal("supersede failure returned nil")
+	}
+	stored := outbox.entryLocked(entry.ID)
+	if stored.Attempts != 0 || stored.DeadLetter || len(stored.PendingSupersedes) != 1 || !stored.PendingSupersedes[0].DeadLetter || stored.PendingSupersedes[0].Attempts != 1 {
+		t.Fatalf("entry=%#v", stored)
+	}
+}
+
+func TestTerminalOutboxLoadsVersionOneEntryWithoutPendingSupersedes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	legacy := `{"version":1,"entries":[{"id":"00000000-0000-4000-8000-000000000106","route":{"platform":"feishu","chat_id":"oc_chat"},"text":"旧版结果","created_at":"2026-08-08T10:00:00Z","updated_at":"2026-08-08T10:00:00Z","next_attempt":"2026-08-08T10:00:00Z"}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil || len(loaded) != 1 || len(loaded[0].PendingSupersedes) != 0 || loaded[0].Text != "旧版结果" {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+}
+
+func TestTerminalOutboxKeepsDeliveredTerminalWhileSupersedeNeedsRedrive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	reply.failSupersede = 1
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.maxAttempts = 1
+	base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	reference := testDurableStreamReference("card-old")
+	entry, err := outbox.reserve(terminalOutboxDraft{Route: route, Stream: &reference, Text: "任务已中断"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000107", route, "card-old", base)
+	if err := outbox.reanchorStreamReservation(entry.ID, route, testDurableStreamReference("card-new"), pending); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"card_id":"card-new"}`)}
+	if err := outbox.stageReservationResult(entry.ID, terminalOutboxDraft{Route: route, Text: "最终结果"}); err != nil {
+		t.Fatal(err)
+	}
+	if staged := outbox.entryLocked(entry.ID); len(staged.PendingSupersedes) != 1 {
+		t.Fatalf("staging cleared pending supersede: %#v", staged)
+	}
+	if err := outbox.commitReservation(entry.ID, terminalOutboxDraft{Route: route, Checkpoint: checkpoint, Text: "最终结果"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err == nil {
+		t.Fatal("supersede failure returned nil")
+	}
+	if err := outbox.attempt(context.Background(), entry.ID, reply); err != nil {
+		t.Fatalf("terminal attempt: %v", err)
+	}
+	stored := outbox.entryLocked(entry.ID)
+	if stored == nil || !stored.CheckpointDelivered || !stored.TextDelivered || len(stored.PendingSupersedes) != 1 || !stored.PendingSupersedes[0].DeadLetter {
+		t.Fatalf("stored=%#v", stored)
+	}
+	status := outbox.status()
+	if status.Pending != 0 || status.DeadLetter != 1 {
+		t.Fatalf("status=%#v, want only supersede dead letter", status)
+	}
+	statusJSON, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(statusJSON), "oc_chat") || strings.Contains(string(statusJSON), "card-old") {
+		t.Fatalf("status leaked route or checkpoint payload: %s", statusJSON)
+	}
+	if result, err := outbox.redrive(entry.ID); err != nil || result.Requested != 1 {
+		t.Fatalf("redrive result=%#v err=%v", result, err)
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err != nil {
+		t.Fatalf("supersede redrive: %v", err)
+	}
+	if remaining := outbox.entryLocked(entry.ID); remaining != nil {
+		t.Fatalf("delivered entry remained after supersede: %#v", remaining)
+	}
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if reply.checkpointCalls != 1 || len(reply.accepted) != 1 || reply.supersedeCalls != 2 {
+		t.Fatalf("checkpoint=%d accepted=%#v supersede=%d", reply.checkpointCalls, reply.accepted, reply.supersedeCalls)
+	}
+}
+
+func TestTerminalOutboxRecordsSupersedeLifecycleWithoutCheckpointPayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	capture := &traceCapture{}
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply), capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	trace := observability.NewTraceContext(observability.TraceSeed{Platform: string(route.Platform), ChatID: route.ChatID}).WithTask("task-1")
+	reference := testDurableStreamReference("card-old")
+	entry, err := outbox.reserve(terminalOutboxDraft{Route: route, Stream: &reference, Text: "任务已中断", Trace: trace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testPendingStreamSupersede("00000000-0000-4000-8000-000000000108", route, "card-old-secret-guide", base)
+	reply.failSupersede = 1
+	outbox.maxAttempts = 2
+	if err := outbox.reanchorStreamReservation(entry.ID, route, testDurableStreamReference("card-new"), first); err != nil {
+		t.Fatal(err)
+	}
+	_ = outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, first.ID)
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	second := testPendingStreamSupersede("00000000-0000-4000-8000-000000000109", route, "card-new-secret-guide", base)
+	reply.failSupersede = 1
+	outbox.maxAttempts = 1
+	if err := outbox.reanchorStreamReservation(entry.ID, route, testDurableStreamReference("card-latest"), second); err != nil {
+		t.Fatal(err)
+	}
+	_ = outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, second.ID)
+
+	var stages []string
+	for _, event := range capture.snapshot() {
+		if strings.HasPrefix(event.Stage, "task.card_supersede") {
+			stages = append(stages, event.Stage)
+			if strings.Contains(event.Summary, "secret-guide") {
+				t.Fatalf("trace leaked checkpoint payload: %#v", event)
+			}
+		}
+	}
+	want := []string{
+		"task.card_supersede_pending", "task.card_supersede_retry", "task.card_superseded",
+		"task.card_supersede_pending", "task.card_supersede_dead_letter",
+	}
+	if !reflect.DeepEqual(stages, want) {
+		t.Fatalf("stages=%#v, want %#v", stages, want)
+	}
+}
+
+func TestTerminalOutboxPendingSupersedeMutationsRollbackOnPersistenceFailure(t *testing.T) {
+	setup := func(t *testing.T) (*terminalOutbox, string, string, string) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "outbox.json")
+		route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+		outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		base := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+		outbox.now = func() time.Time { return base }
+		reference := testDurableStreamReference("card-old")
+		entry, err := outbox.reserve(terminalOutboxDraft{Route: route, Stream: &reference, Text: "任务已中断"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending := testPendingStreamSupersede("00000000-0000-4000-8000-000000000110", route, "card-old", base)
+		if err := outbox.reanchorStreamReservation(entry.ID, route, testDurableStreamReference("card-new"), pending); err != nil {
+			t.Fatal(err)
+		}
+		return outbox, path, entry.ID, pending.ID
+	}
+	assertRollback := func(t *testing.T, outbox *terminalOutbox, path string, entryID string, mutate func() error) {
+		t.Helper()
+		before := cloneTerminalOutboxEntry(outbox.entryLocked(entryID))
+		beforeDisk, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalPath := outbox.path
+		outbox.path = filepath.Join(path, "blocked")
+		if err := mutate(); err == nil {
+			t.Fatal("mutation persistence failure returned nil")
+		}
+		outbox.path = originalPath
+		after := cloneTerminalOutboxEntry(outbox.entryLocked(entryID))
+		afterDisk, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(after, before) || !reflect.DeepEqual(afterDisk, beforeDisk) {
+			t.Fatalf("mutation escaped rollback:\nbefore=%#v\nafter=%#v", before, after)
+		}
+	}
+
+	t.Run("complete", func(t *testing.T) {
+		outbox, path, entryID, pendingID := setup(t)
+		assertRollback(t, outbox, path, entryID, func() error {
+			return outbox.completePendingStreamSupersede(entryID, pendingID)
+		})
+	})
+	t.Run("record failure", func(t *testing.T) {
+		outbox, path, entryID, pendingID := setup(t)
+		assertRollback(t, outbox, path, entryID, func() error {
+			return outbox.recordPendingStreamSupersedeFailure(entryID, pendingID, errors.New("delivery failed"))
+		})
+	})
+	t.Run("redrive", func(t *testing.T) {
+		outbox, path, entryID, pendingID := setup(t)
+		outbox.mu.Lock()
+		stored := outbox.entryLocked(entryID)
+		stored.PendingSupersedes[0].Attempts = 1
+		stored.PendingSupersedes[0].DeadLetter = true
+		stored.PendingSupersedes[0].DeadLetterAt = outbox.now()
+		if err := outbox.persistLocked(); err != nil {
+			outbox.mu.Unlock()
+			t.Fatal(err)
+		}
+		outbox.mu.Unlock()
+		assertRollback(t, outbox, path, entryID, func() error {
+			_, err := outbox.redrive(pendingID)
+			return err
+		})
+	})
 }

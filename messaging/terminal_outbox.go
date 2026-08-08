@@ -39,6 +39,8 @@ var (
 // TerminalOutboxEntryStatus 是仅供本机运维使用的脱敏投递状态，不包含平台路由和消息正文。
 type TerminalOutboxEntryStatus struct {
 	ID           string    `json:"id"`
+	Kind         string    `json:"kind,omitempty"`
+	ParentID     string    `json:"parent_id,omitempty"`
 	AgentName    string    `json:"agent_name,omitempty"`
 	Attempts     int       `json:"attempts"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -76,19 +78,31 @@ type terminalOutboxState struct {
 	Entries []*terminalOutboxEntry `json:"entries"`
 }
 
+type pendingStreamSupersede struct {
+	ID           string                       `json:"id"`
+	Route        platform.DeliveryRoute       `json:"route"`
+	Checkpoint   platform.SupersedeCheckpoint `json:"checkpoint"`
+	Attempts     int                          `json:"attempts,omitempty"`
+	NextAttempt  time.Time                    `json:"next_attempt"`
+	LastError    string                       `json:"last_error,omitempty"`
+	DeadLetter   bool                         `json:"dead_letter,omitempty"`
+	DeadLetterAt time.Time                    `json:"dead_letter_at,omitempty"`
+}
+
 type terminalOutboxEntry struct {
-	ID           string                           `json:"id"`
-	Route        platform.DeliveryRoute           `json:"route"`
-	AgentName    string                           `json:"agent_name,omitempty"`
-	Failed       bool                             `json:"failed,omitempty"`
-	Stopped      bool                             `json:"stopped,omitempty"`
-	Stream       *platform.DurableStreamReference `json:"stream,omitempty"`
-	Checkpoint   *platform.TerminalCheckpoint     `json:"checkpoint,omitempty"`
-	ResultTitle  string                           `json:"result_title,omitempty"`
-	RichResult   bool                             `json:"rich_result,omitempty"`
-	Text         string                           `json:"text,omitempty"`
-	Notification string                           `json:"notification,omitempty"`
-	Trace        *observability.TraceContext      `json:"trace,omitempty"`
+	ID                string                           `json:"id"`
+	Route             platform.DeliveryRoute           `json:"route"`
+	AgentName         string                           `json:"agent_name,omitempty"`
+	Failed            bool                             `json:"failed,omitempty"`
+	Stopped           bool                             `json:"stopped,omitempty"`
+	Stream            *platform.DurableStreamReference `json:"stream,omitempty"`
+	Checkpoint        *platform.TerminalCheckpoint     `json:"checkpoint,omitempty"`
+	ResultTitle       string                           `json:"result_title,omitempty"`
+	RichResult        bool                             `json:"rich_result,omitempty"`
+	Text              string                           `json:"text,omitempty"`
+	Notification      string                           `json:"notification,omitempty"`
+	Trace             *observability.TraceContext      `json:"trace,omitempty"`
+	PendingSupersedes []pendingStreamSupersede         `json:"pending_supersedes,omitempty"`
 
 	CheckpointDelivered   bool `json:"checkpoint_delivered,omitempty"`
 	TextDelivered         bool `json:"text_delivered,omitempty"`
@@ -455,6 +469,41 @@ func (o *terminalOutbox) discardReservation(id string) error {
 		if entry.ID != id {
 			continue
 		}
+		if len(entry.PendingSupersedes) > 0 {
+			before := cloneTerminalOutboxEntry(entry)
+			wasPreparing := o.preparing[id]
+			entry.Stream = nil
+			entry.Checkpoint = nil
+			entry.Text = ""
+			entry.Notification = ""
+			entry.CheckpointDelivered = true
+			entry.TextDelivered = true
+			entry.NotificationDelivered = true
+			entry.UpdatedAt = o.now()
+			entry.LastError = ""
+			entry.DeadLetter = false
+			entry.DeadLetterAt = time.Time{}
+			delete(o.preparing, id)
+			if err := validateTerminalOutboxEntry(entry); err != nil {
+				*entry = *before
+				if wasPreparing {
+					o.preparing[id] = true
+				}
+				o.mu.Unlock()
+				return err
+			}
+			if err := o.persistLocked(); err != nil {
+				*entry = *before
+				if wasPreparing {
+					o.preparing[id] = true
+				}
+				o.mu.Unlock()
+				return err
+			}
+			o.mu.Unlock()
+			o.signal()
+			return nil
+		}
 		previousEntries := o.entries
 		wasPreparing := o.preparing[id]
 		remaining := make([]*terminalOutboxEntry, 0, len(o.entries)-1)
@@ -514,10 +563,98 @@ func (o *terminalOutbox) refreshStreamReservation(id string, route platform.Deli
 	return nil
 }
 
+func (o *terminalOutbox) reanchorStreamReservation(
+	id string,
+	newRoute platform.DeliveryRoute,
+	newReference platform.DurableStreamReference,
+	pending pendingStreamSupersede,
+) error {
+	if !newRoute.Valid() || strings.TrimSpace(newReference.Kind) == "" || len(newReference.Payload) == 0 || !json.Valid(newReference.Payload) {
+		return fmt.Errorf("invalid reanchored stream recovery")
+	}
+	if pending.NextAttempt.IsZero() {
+		pending.NextAttempt = o.now()
+	}
+	if err := validatePendingStreamSupersede(&pending); err != nil {
+		return err
+	}
+
+	o.mu.Lock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		o.mu.Unlock()
+		return ErrTerminalOutboxNotFound
+	}
+	duplicate := false
+	for _, candidate := range o.entries {
+		if candidate.ID == pending.ID {
+			o.mu.Unlock()
+			return fmt.Errorf("pending stream supersede id conflicts with terminal outbox entry")
+		}
+		for _, existing := range candidate.PendingSupersedes {
+			if existing.ID != pending.ID {
+				continue
+			}
+			if candidate.ID != id {
+				o.mu.Unlock()
+				return fmt.Errorf("pending stream supersede id already belongs to another entry")
+			}
+			if !sameDeliveryRoute(existing.Route, pending.Route) || existing.Checkpoint.Kind != pending.Checkpoint.Kind ||
+				string(existing.Checkpoint.Payload) != string(pending.Checkpoint.Payload) {
+				o.mu.Unlock()
+				return fmt.Errorf("pending stream supersede id conflicts with an existing operation")
+			}
+			duplicate = true
+		}
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	entry.Route = newRoute
+	entry.Stream = cloneDurableStreamReference(&newReference)
+	entry.Checkpoint = nil
+	entry.CheckpointDelivered = false
+	entry.TextDelivered = false
+	entry.NotificationDelivered = false
+	entry.UpdatedAt = o.now()
+	entry.NextAttempt = entry.UpdatedAt
+	entry.Attempts = 0
+	entry.LastError = ""
+	entry.DeadLetter = false
+	entry.DeadLetterAt = time.Time{}
+	if !duplicate {
+		entry.PendingSupersedes = append(entry.PendingSupersedes, clonePendingStreamSupersede(pending))
+	}
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		o.mu.Unlock()
+		return err
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		o.mu.Unlock()
+		return fmt.Errorf("persist reanchored stream recovery: %w", err)
+	}
+	committed := cloneTerminalOutboxEntry(entry)
+	o.mu.Unlock()
+	if !duplicate {
+		o.recordTrace(committed, "task.card_supersede_pending", "pending", "old progress card supersede queued")
+	}
+	o.signal()
+	return nil
+}
+
 func (o *terminalOutbox) run(ctx context.Context) {
 	for {
 		if ctx.Err() != nil {
 			return
+		}
+		for _, pending := range o.duePendingStreamSupersedes() {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := o.attemptPendingStreamSupersede(ctx, pending.entryID, pending.pendingID); err != nil && ctx.Err() == nil {
+				log.Printf("[terminal-outbox] retry pending supersede entry=%s pending=%s: %s",
+					pending.entryID, pending.pendingID, observability.SanitizeText(err.Error()))
+			}
 		}
 		for _, id := range o.dueIDs() {
 			if ctx.Err() != nil {
@@ -571,7 +708,7 @@ func (o *terminalOutbox) dueIDs() []string {
 	defer o.mu.Unlock()
 	due := make([]*terminalOutboxEntry, 0, len(o.entries))
 	for _, entry := range o.entries {
-		if !entry.DeadLetter && !o.preparing[entry.ID] && !o.processing[entry.ID] && !entry.NextAttempt.After(now) {
+		if terminalEntryHasWork(entry) && !entry.DeadLetter && !o.preparing[entry.ID] && !o.processing[entry.ID] && !entry.NextAttempt.After(now) {
 			due = append(due, entry)
 		}
 	}
@@ -591,16 +728,62 @@ func (o *terminalOutbox) dueIDs() []string {
 	return ids
 }
 
+type duePendingStreamSupersede struct {
+	entryID     string
+	pendingID   string
+	nextAttempt time.Time
+	createdAt   time.Time
+}
+
+func (o *terminalOutbox) duePendingStreamSupersedes() []duePendingStreamSupersede {
+	now := o.now()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var due []duePendingStreamSupersede
+	for _, entry := range o.entries {
+		if o.processing[entry.ID] {
+			continue
+		}
+		for _, pending := range entry.PendingSupersedes {
+			if pending.DeadLetter || pending.NextAttempt.After(now) {
+				continue
+			}
+			due = append(due, duePendingStreamSupersede{
+				entryID: entry.ID, pendingID: pending.ID,
+				nextAttempt: pending.NextAttempt, createdAt: entry.CreatedAt,
+			})
+		}
+	}
+	sort.SliceStable(due, func(i, j int) bool {
+		if !due[i].nextAttempt.Equal(due[j].nextAttempt) {
+			return due[i].nextAttempt.Before(due[j].nextAttempt)
+		}
+		if !due[i].createdAt.Equal(due[j].createdAt) {
+			return due[i].createdAt.Before(due[j].createdAt)
+		}
+		if due[i].entryID != due[j].entryID {
+			return due[i].entryID < due[j].entryID
+		}
+		return due[i].pendingID < due[j].pendingID
+	})
+	return due
+}
+
 func (o *terminalOutbox) nextAttemptDelay() (time.Duration, bool) {
 	now := o.now()
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	var next time.Time
 	for _, entry := range o.entries {
-		if entry.DeadLetter || o.preparing[entry.ID] || o.processing[entry.ID] {
-			continue
+		if !o.processing[entry.ID] {
+			for _, pending := range entry.PendingSupersedes {
+				if !pending.DeadLetter && (next.IsZero() || pending.NextAttempt.Before(next)) {
+					next = pending.NextAttempt
+				}
+			}
 		}
-		if next.IsZero() || entry.NextAttempt.Before(next) {
+		if terminalEntryHasWork(entry) && !entry.DeadLetter && !o.preparing[entry.ID] && !o.processing[entry.ID] &&
+			(next.IsZero() || entry.NextAttempt.Before(next)) {
 			next = entry.NextAttempt
 		}
 	}
@@ -623,28 +806,38 @@ func (o *terminalOutbox) redrive(id string) (TerminalOutboxRedriveResult, error)
 	id = strings.TrimSpace(id)
 	now := o.now()
 	o.mu.Lock()
-	type previousSchedule struct {
-		entry        *terminalOutboxEntry
-		updatedAt    time.Time
-		nextAttempt  time.Time
-		deadLetter   bool
-		deadLetterAt time.Time
-	}
-	previous := make([]previousSchedule, 0, len(o.entries))
+	before := cloneTerminalOutboxEntries(o.entries)
 	requested := 0
 	for _, entry := range o.entries {
-		if id != "" && entry.ID != id {
-			continue
+		matchedParent := id == "" || entry.ID == id
+		matchedPending := false
+		if id != "" && !matchedParent {
+			matchedPending = pendingStreamSupersedeIndex(entry, id) >= 0
+			if !matchedPending {
+				continue
+			}
 		}
-		previous = append(previous, previousSchedule{
-			entry: entry, updatedAt: entry.UpdatedAt, nextAttempt: entry.NextAttempt,
-			deadLetter: entry.DeadLetter, deadLetterAt: entry.DeadLetterAt,
-		})
-		entry.NextAttempt = now
-		entry.UpdatedAt = now
-		entry.DeadLetter = false
-		entry.DeadLetterAt = time.Time{}
-		requested++
+		changed := false
+		if matchedParent && (terminalEntryHasWork(entry) || entry.DeadLetter) {
+			entry.NextAttempt = now
+			entry.DeadLetter = false
+			entry.DeadLetterAt = time.Time{}
+			changed = true
+		}
+		for index := range entry.PendingSupersedes {
+			pending := &entry.PendingSupersedes[index]
+			if !matchedParent && pending.ID != id {
+				continue
+			}
+			pending.NextAttempt = now
+			pending.DeadLetter = false
+			pending.DeadLetterAt = time.Time{}
+			changed = true
+		}
+		if changed {
+			entry.UpdatedAt = now
+			requested++
+		}
 	}
 	if id != "" && requested == 0 {
 		o.mu.Unlock()
@@ -652,12 +845,7 @@ func (o *terminalOutbox) redrive(id string) (TerminalOutboxRedriveResult, error)
 	}
 	if requested > 0 {
 		if err := o.persistLocked(); err != nil {
-			for _, state := range previous {
-				state.entry.UpdatedAt = state.updatedAt
-				state.entry.NextAttempt = state.nextAttempt
-				state.entry.DeadLetter = state.deadLetter
-				state.entry.DeadLetterAt = state.deadLetterAt
-			}
+			o.entries = before
 			o.mu.Unlock()
 			return TerminalOutboxRedriveResult{}, fmt.Errorf("persist terminal outbox redrive: %w", err)
 		}
@@ -675,33 +863,63 @@ func terminalOutboxStatus(entries []*terminalOutboxEntry, preparing map[string]b
 	if len(limits) > 0 && limits[0] > 0 {
 		limit = limits[0]
 	}
-	status := TerminalOutboxStatus{}
-	sorted := append([]*terminalOutboxEntry(nil), entries...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
-			return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
+	type statusCandidate struct {
+		value      TerminalOutboxEntryStatus
+		deadLetter bool
+		blocked    bool
+	}
+	candidates := make([]statusCandidate, 0, len(entries))
+	for _, entry := range entries {
+		isPreparing := preparing != nil && preparing[entry.ID]
+		isProcessing := processing != nil && processing[entry.ID]
+		if terminalEntryHasWork(entry) || entry.DeadLetter {
+			candidates = append(candidates, statusCandidate{
+				value: TerminalOutboxEntryStatus{
+					ID: entry.ID, AgentName: entry.AgentName, Attempts: entry.Attempts,
+					CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, NextAttempt: entry.NextAttempt,
+					LastError: observability.SanitizeText(entry.LastError), Preparing: isPreparing, Processing: isProcessing,
+					DeadLetter: entry.DeadLetter, DeadLetterAt: entry.DeadLetterAt,
+				},
+				deadLetter: entry.DeadLetter, blocked: isPreparing || isProcessing,
+			})
 		}
-		return sorted[i].ID < sorted[j].ID
+		for _, pending := range entry.PendingSupersedes {
+			candidates = append(candidates, statusCandidate{
+				value: TerminalOutboxEntryStatus{
+					ID: pending.ID, Kind: "supersede", ParentID: entry.ID, AgentName: entry.AgentName,
+					Attempts: pending.Attempts, CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt,
+					NextAttempt: pending.NextAttempt, LastError: observability.SanitizeText(pending.LastError),
+					Processing: isProcessing, DeadLetter: pending.DeadLetter, DeadLetterAt: pending.DeadLetterAt,
+				},
+				deadLetter: pending.DeadLetter, blocked: isProcessing,
+			})
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if !candidates[i].value.CreatedAt.Equal(candidates[j].value.CreatedAt) {
+			return candidates[i].value.CreatedAt.Before(candidates[j].value.CreatedAt)
+		}
+		return candidates[i].value.ID < candidates[j].value.ID
 	})
+	status := TerminalOutboxStatus{}
 	var recentErrorAt time.Time
-	for _, entry := range sorted {
-		if entry.DeadLetter {
+	for _, candidate := range candidates {
+		entry := candidate.value
+		if candidate.deadLetter {
 			status.DeadLetter++
 		} else {
 			status.Pending++
 		}
-		isPreparing := preparing != nil && preparing[entry.ID]
-		isProcessing := processing != nil && processing[entry.ID]
-		if isPreparing {
+		if entry.Preparing {
 			status.Preparing++
 		}
-		if isProcessing {
+		if entry.Processing {
 			status.Processing++
 		}
-		if !entry.DeadLetter && (status.OldestCreatedAt.IsZero() || entry.CreatedAt.Before(status.OldestCreatedAt)) {
+		if !candidate.deadLetter && (status.OldestCreatedAt.IsZero() || entry.CreatedAt.Before(status.OldestCreatedAt)) {
 			status.OldestCreatedAt = entry.CreatedAt
 		}
-		if !entry.DeadLetter && !isPreparing && !isProcessing &&
+		if !candidate.deadLetter && !candidate.blocked &&
 			(status.NextAttempt.IsZero() || entry.NextAttempt.Before(status.NextAttempt)) {
 			status.NextAttempt = entry.NextAttempt
 		}
@@ -710,17 +928,170 @@ func terminalOutboxStatus(entries []*terminalOutboxEntry, preparing map[string]b
 			status.RecentError = observability.SanitizeText(entry.LastError)
 		}
 		if len(status.Entries) < terminalOutboxStatusMaxEntries {
-			status.Entries = append(status.Entries, TerminalOutboxEntryStatus{
-				ID: entry.ID, AgentName: entry.AgentName, Attempts: entry.Attempts,
-				CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, NextAttempt: entry.NextAttempt,
-				LastError: observability.SanitizeText(entry.LastError), Preparing: isPreparing, Processing: isProcessing,
-				DeadLetter: entry.DeadLetter, DeadLetterAt: entry.DeadLetterAt,
-			})
+			status.Entries = append(status.Entries, entry)
 		}
 	}
-	status.AtCapacity = status.Pending >= limit
-	status.Truncated = len(sorted) > len(status.Entries)
+	status.AtCapacity = len(entries) >= limit
+	status.Truncated = len(candidates) > len(status.Entries)
 	return status
+}
+
+func (o *terminalOutbox) attemptPendingStreamSupersede(parent context.Context, entryID string, pendingID string) error {
+	entry, pending, ok := o.beginPendingStreamSupersedeAttempt(entryID, pendingID)
+	if !ok {
+		return nil
+	}
+	defer o.endAttempt(entryID)
+	reply, err := o.resolveStageReplier(pending.Route, nil)
+	if err == nil {
+		durable, supported := optionalDurableSupersedeReplier(reply)
+		if !supported {
+			err = platform.ErrUnsupported
+		} else {
+			ctx, cancel := context.WithTimeout(parent, terminalOutboxDeliveryTimeout)
+			err = durable.DeliverSupersede(ctx, cloneSupersedeCheckpoint(pending.Checkpoint))
+			cancel()
+		}
+	}
+	if err != nil {
+		return o.recordPendingStreamSupersedeFailure(entryID, pendingID, err)
+	}
+	if err := o.completePendingStreamSupersede(entryID, pendingID); err != nil {
+		return err
+	}
+	o.recordTrace(entry, "task.card_superseded", "completed", "old progress card superseded")
+	return nil
+}
+
+func (o *terminalOutbox) beginPendingStreamSupersedeAttempt(entryID string, pendingID string) (*terminalOutboxEntry, pendingStreamSupersede, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.processing[entryID] {
+		return nil, pendingStreamSupersede{}, false
+	}
+	entry := o.entryLocked(entryID)
+	if entry == nil {
+		return nil, pendingStreamSupersede{}, false
+	}
+	for _, pending := range entry.PendingSupersedes {
+		if pending.ID != pendingID || pending.DeadLetter {
+			continue
+		}
+		o.processing[entryID] = true
+		return cloneTerminalOutboxEntry(entry), clonePendingStreamSupersede(pending), true
+	}
+	return nil, pendingStreamSupersede{}, false
+}
+
+func (o *terminalOutbox) completePendingStreamSupersede(entryID string, pendingID string) error {
+	o.mu.Lock()
+	entry := o.entryLocked(entryID)
+	if entry == nil {
+		o.mu.Unlock()
+		return nil
+	}
+	index := pendingStreamSupersedeIndex(entry, pendingID)
+	if index < 0 {
+		o.mu.Unlock()
+		return nil
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	entry.PendingSupersedes = append(entry.PendingSupersedes[:index], entry.PendingSupersedes[index+1:]...)
+	entry.UpdatedAt = o.now()
+	removeParent := len(entry.PendingSupersedes) == 0 && !terminalEntryHasWork(entry) && !entry.DeadLetter
+	previousEntries := o.entries
+	if removeParent {
+		remaining := make([]*terminalOutboxEntry, 0, len(o.entries)-1)
+		for _, candidate := range o.entries {
+			if candidate.ID != entryID {
+				remaining = append(remaining, candidate)
+			}
+		}
+		o.entries = remaining
+	}
+	if err := o.persistLocked(); err != nil {
+		if removeParent {
+			o.entries = previousEntries
+		}
+		*entry = *before
+		o.mu.Unlock()
+		return fmt.Errorf("persist completed stream supersede: %w", err)
+	}
+	o.mu.Unlock()
+	return nil
+}
+
+func (o *terminalOutbox) recordPendingStreamSupersedeFailure(entryID string, pendingID string, deliveryErr error) error {
+	o.mu.Lock()
+	entry := o.entryLocked(entryID)
+	if entry == nil {
+		o.mu.Unlock()
+		return deliveryErr
+	}
+	index := pendingStreamSupersedeIndex(entry, pendingID)
+	if index < 0 {
+		o.mu.Unlock()
+		return deliveryErr
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	pending := &entry.PendingSupersedes[index]
+	pending.Attempts++
+	entry.UpdatedAt = o.now()
+	pending.LastError = truncateTerminalOutboxError(deliveryErr)
+	if pending.Attempts >= o.attemptLimit() {
+		pending.DeadLetter = true
+		pending.DeadLetterAt = entry.UpdatedAt
+		pending.NextAttempt = entry.UpdatedAt
+	} else {
+		pending.NextAttempt = entry.UpdatedAt.Add(terminalOutboxBackoff(pending.Attempts))
+	}
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		o.mu.Unlock()
+		return fmt.Errorf("supersede delivery failed: %v; validate retry state: %w", deliveryErr, err)
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		o.mu.Unlock()
+		return fmt.Errorf("supersede delivery failed: %v; persist retry state: %w", deliveryErr, err)
+	}
+	clone := cloneTerminalOutboxEntry(entry)
+	deadLetter := pending.DeadLetter
+	o.mu.Unlock()
+	if deadLetter {
+		o.recordTrace(clone, "task.card_supersede_dead_letter", "failed", deliveryErr.Error())
+	} else {
+		o.recordTrace(clone, "task.card_supersede_retry", "failed", deliveryErr.Error())
+	}
+	return deliveryErr
+}
+
+func pendingStreamSupersedeIndex(entry *terminalOutboxEntry, pendingID string) int {
+	if entry == nil {
+		return -1
+	}
+	for index := range entry.PendingSupersedes {
+		if entry.PendingSupersedes[index].ID == pendingID {
+			return index
+		}
+	}
+	return -1
+}
+
+func terminalEntryHasWork(entry *terminalOutboxEntry) bool {
+	if entry == nil {
+		return false
+	}
+	if entry.Stream != nil {
+		return true
+	}
+	if entry.Checkpoint != nil && !entry.CheckpointDelivered {
+		return true
+	}
+	if strings.TrimSpace(entry.Text) != "" && !entry.TextDelivered {
+		return true
+	}
+	return strings.TrimSpace(entry.Notification) != "" && !entry.NotificationDelivered
 }
 
 func (o *terminalOutbox) attempt(parent context.Context, id string, preferred platform.Replier) error {
@@ -863,7 +1234,7 @@ func (o *terminalOutbox) beginAttempt(id string) (*terminalOutboxEntry, bool) {
 		return nil, false
 	}
 	entry := o.entryLocked(id)
-	if entry == nil || entry.DeadLetter {
+	if entry == nil || entry.DeadLetter || !terminalEntryHasWork(entry) {
 		return nil, false
 	}
 	o.processing[id] = true
@@ -874,6 +1245,7 @@ func (o *terminalOutbox) endAttempt(id string) {
 	o.mu.Lock()
 	delete(o.processing, id)
 	o.mu.Unlock()
+	o.signal()
 }
 
 func (o *terminalOutbox) resolveReplier(route platform.DeliveryRoute, preferred platform.Replier) (platform.Replier, error) {
@@ -1054,6 +1426,21 @@ func (o *terminalOutbox) removeDelivered(id string) error {
 			continue
 		}
 		clone := cloneTerminalOutboxEntry(entry)
+		if len(entry.PendingSupersedes) > 0 {
+			before := cloneTerminalOutboxEntry(entry)
+			entry.UpdatedAt = o.now()
+			entry.LastError = ""
+			entry.DeadLetter = false
+			entry.DeadLetterAt = time.Time{}
+			if err := o.persistLocked(); err != nil {
+				*entry = *before
+				o.mu.Unlock()
+				return err
+			}
+			o.mu.Unlock()
+			o.recordTrace(clone, "terminal.delivery.completed", "completed", "terminal delivery committed; supersede pending")
+			return nil
+		}
 		previous := o.entries
 		remaining := make([]*terminalOutboxEntry, 0, len(o.entries)-1)
 		remaining = append(remaining, o.entries[:index]...)
@@ -1104,11 +1491,23 @@ func cloneTerminalOutboxEntry(entry *terminalOutboxEntry) *terminalOutboxEntry {
 	clone := *entry
 	clone.Stream = cloneDurableStreamReference(entry.Stream)
 	clone.Checkpoint = cloneTerminalCheckpoint(entry.Checkpoint)
+	clone.PendingSupersedes = make([]pendingStreamSupersede, len(entry.PendingSupersedes))
+	for index, pending := range entry.PendingSupersedes {
+		clone.PendingSupersedes[index] = clonePendingStreamSupersede(pending)
+	}
 	if entry.Trace != nil {
 		trace := *entry.Trace
 		clone.Trace = &trace
 	}
 	return &clone
+}
+
+func cloneTerminalOutboxEntries(entries []*terminalOutboxEntry) []*terminalOutboxEntry {
+	clones := make([]*terminalOutboxEntry, len(entries))
+	for index, entry := range entries {
+		clones[index] = cloneTerminalOutboxEntry(entry)
+	}
+	return clones
 }
 
 func cloneDurableStreamReference(reference *platform.DurableStreamReference) *platform.DurableStreamReference {
@@ -1127,6 +1526,16 @@ func cloneTerminalCheckpoint(checkpoint *platform.TerminalCheckpoint) *platform.
 	clone := *checkpoint
 	clone.Payload = append(json.RawMessage(nil), checkpoint.Payload...)
 	return &clone
+}
+
+func cloneSupersedeCheckpoint(checkpoint platform.SupersedeCheckpoint) platform.SupersedeCheckpoint {
+	checkpoint.Payload = append(json.RawMessage(nil), checkpoint.Payload...)
+	return checkpoint
+}
+
+func clonePendingStreamSupersede(pending pendingStreamSupersede) pendingStreamSupersede {
+	pending.Checkpoint = cloneSupersedeCheckpoint(pending.Checkpoint)
+	return pending
 }
 
 func loadTerminalOutbox(path string) ([]*terminalOutboxEntry, error) {
@@ -1158,6 +1567,7 @@ func loadTerminalOutbox(path string) ([]*terminalOutboxEntry, error) {
 		return nil, fmt.Errorf("terminal outbox has too many entries")
 	}
 	seen := make(map[string]struct{}, len(state.Entries))
+	seenPending := make(map[string]struct{})
 	for _, entry := range state.Entries {
 		if err := validateTerminalOutboxEntry(entry); err != nil {
 			return nil, err
@@ -1165,7 +1575,19 @@ func loadTerminalOutbox(path string) ([]*terminalOutboxEntry, error) {
 		if _, exists := seen[entry.ID]; exists {
 			return nil, fmt.Errorf("duplicate terminal outbox id %s", entry.ID)
 		}
+		if _, exists := seenPending[entry.ID]; exists {
+			return nil, fmt.Errorf("duplicate terminal outbox operation id %s", entry.ID)
+		}
 		seen[entry.ID] = struct{}{}
+		for _, pending := range entry.PendingSupersedes {
+			if _, exists := seen[pending.ID]; exists {
+				return nil, fmt.Errorf("duplicate terminal outbox operation id %s", pending.ID)
+			}
+			if _, exists := seenPending[pending.ID]; exists {
+				return nil, fmt.Errorf("duplicate pending stream supersede id %s", pending.ID)
+			}
+			seenPending[pending.ID] = struct{}{}
+		}
 	}
 	return state.Entries, nil
 }
@@ -1180,7 +1602,7 @@ func validateTerminalOutboxEntry(entry *terminalOutboxEntry) error {
 	if !entry.Route.Valid() {
 		return fmt.Errorf("invalid terminal outbox route")
 	}
-	if entry.Stream == nil && entry.Checkpoint == nil && strings.TrimSpace(entry.Text) == "" && strings.TrimSpace(entry.Notification) == "" {
+	if entry.Stream == nil && entry.Checkpoint == nil && strings.TrimSpace(entry.Text) == "" && strings.TrimSpace(entry.Notification) == "" && len(entry.PendingSupersedes) == 0 {
 		return fmt.Errorf("terminal outbox entry has no payload")
 	}
 	if entry.Stream != nil {
@@ -1198,6 +1620,39 @@ func validateTerminalOutboxEntry(entry *terminalOutboxEntry) error {
 	}
 	if entry.DeadLetter && entry.DeadLetterAt.IsZero() {
 		return fmt.Errorf("terminal outbox dead letter timestamp is missing")
+	}
+	seenPending := make(map[string]struct{}, len(entry.PendingSupersedes))
+	for index := range entry.PendingSupersedes {
+		pending := &entry.PendingSupersedes[index]
+		if err := validatePendingStreamSupersede(pending); err != nil {
+			return err
+		}
+		if _, exists := seenPending[pending.ID]; exists {
+			return fmt.Errorf("duplicate pending stream supersede id %s", pending.ID)
+		}
+		seenPending[pending.ID] = struct{}{}
+	}
+	return nil
+}
+
+func validatePendingStreamSupersede(pending *pendingStreamSupersede) error {
+	if pending == nil {
+		return fmt.Errorf("nil pending stream supersede")
+	}
+	if _, err := uuid.Parse(pending.ID); err != nil {
+		return fmt.Errorf("invalid pending stream supersede id")
+	}
+	if !pending.Route.Valid() {
+		return fmt.Errorf("invalid pending stream supersede route")
+	}
+	if strings.TrimSpace(pending.Checkpoint.Kind) == "" || len(pending.Checkpoint.Payload) == 0 || !json.Valid(pending.Checkpoint.Payload) {
+		return fmt.Errorf("invalid pending stream supersede checkpoint")
+	}
+	if pending.Attempts < 0 || pending.NextAttempt.IsZero() {
+		return fmt.Errorf("pending stream supersede retry state is invalid")
+	}
+	if pending.DeadLetter && pending.DeadLetterAt.IsZero() {
+		return fmt.Errorf("pending stream supersede dead letter timestamp is missing")
 	}
 	return nil
 }
