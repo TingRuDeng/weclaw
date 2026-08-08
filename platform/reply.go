@@ -187,10 +187,24 @@ type StreamContentPreflighter interface {
 	PreflightUpdate(content string) error
 }
 
+type StreamPresentation struct {
+	Summary string
+	Details string
+}
+
+type StructuredProgressStream interface {
+	UpdatePresentation(ctx context.Context, presentation StreamPresentation) error
+}
+
+type StreamPresentationPreflighter interface {
+	PreflightPresentation(presentation StreamPresentation) error
+}
+
 // StreamOptions 描述流式回复的初始化参数。
 type StreamOptions struct {
-	Title          string
-	InitialContent string
+	Title               string
+	InitialContent      string
+	InitialPresentation *StreamPresentation
 }
 
 const (

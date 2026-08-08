@@ -350,17 +350,25 @@ func (t *activeAgentTask) detachProgressSession(progress *progressSession) {
 	t.mu.Unlock()
 }
 
-func (t *activeAgentTask) progressReanchorSnapshot() (*progressSession, string, bool) {
+func (t *activeAgentTask) progressReanchorSnapshot() (*progressSession, progressCardSnapshot, bool) {
 	if t == nil {
-		return nil, "", false
+		return nil, progressCardSnapshot{}, false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.progress == nil || t.detached || t.phase == codexTaskTerminal || t.view.closed {
-		return nil, "", false
+		return nil, progressCardSnapshot{}, false
 	}
 	card, _ := renderTaskProgressCard(t.view)
-	return t.progress, card, true
+	return t.progress, progressCardSnapshot{
+		summary:            t.view.lastProgress,
+		text:               card,
+		withPrefix:         true,
+		structured:         t.view.progressTimelineEnabled && len(t.view.progressTimeline) > 0,
+		effectiveProgress:  true,
+		currentExplanation: t.view.currentExplanation,
+		timelineItems:      append([]agent.ProgressEvent(nil), t.view.progressTimeline...),
+	}, true
 }
 
 func (t *activeAgentTask) recordProgress(now time.Time, event agent.ProgressEvent) (string, bool) {

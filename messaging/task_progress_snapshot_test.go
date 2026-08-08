@@ -438,9 +438,9 @@ func TestActiveTaskProgressReanchorSnapshotUsesCompactTimeline(t *testing.T) {
 	}
 
 	_, snapshot, ok := task.progressReanchorSnapshot()
-	if !ok || !strings.Contains(snapshot, "**执行进度**") ||
-		!strings.Contains(snapshot, "✅ 定位问题") ||
-		!strings.Contains(snapshot, "• 使用 CodeGraph · codegraph_explore") {
-		t.Fatalf("snapshot=%q ok=%t, want compact timeline", snapshot, ok)
+	if !ok || !strings.Contains(snapshot.text, "**执行进度**") ||
+		!strings.Contains(snapshot.text, "✅ 定位问题") ||
+		!strings.Contains(snapshot.text, "• 使用 CodeGraph · codegraph_explore") {
+		t.Fatalf("snapshot=%q ok=%t, want compact timeline", snapshot.text, ok)
 	}
 }

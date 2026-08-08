@@ -233,11 +233,11 @@ func (h *Handler) commitCodexTaskCardFocus(bindingKey string, conversationID str
 }
 
 func (h *Handler) reanchorActiveCodexTask(ctx context.Context, task *activeAgentTask, reply platform.Replier) (bool, error) {
-	progress, latest, ok := task.progressReanchorSnapshot()
+	progress, snapshot, ok := task.progressReanchorSnapshot()
 	if !ok {
 		return false, nil
 	}
-	moved, err := progress.reanchor(ctx, reply, latest)
+	moved, err := progress.reanchor(ctx, reply, snapshot.summary)
 	if moved {
 		task.mu.Lock()
 		task.trace = traceWithReply(task.trace, progressReplier(reply))

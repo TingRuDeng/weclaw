@@ -48,6 +48,7 @@ type progressSendState struct {
 }
 
 type progressCardSnapshot struct {
+	summary            string
 	text               string
 	withPrefix         bool
 	structured         bool
@@ -197,7 +198,7 @@ func (s *progressSession) onTaskProgress(update taskProgressUpdate) {
 		snapshot = update.latest
 	}
 	snapshotState := progressCardSnapshot{
-		text: snapshot, withPrefix: true, structured: update.timeline,
+		summary: update.latest, text: snapshot, withPrefix: true, structured: update.timeline,
 		effectiveProgress:  s.observeEffectiveProgress(taskProgressUpdateHasEffectiveProgress(update)),
 		currentExplanation: update.currentExplanation,
 		timelineItems:      append([]agent.ProgressEvent(nil), update.timelineItems...),
@@ -571,8 +572,23 @@ func (s *progressSession) sendSnapshotContent(snapshot progressCardSnapshot) boo
 		return s.sendText(snapshot.text)
 	}
 	content := s.activeSnapshotContentLocked(snapshot)
+	presentation := s.snapshotPresentationLocked(snapshot)
 	if snapshot.withPrefix {
 		content = s.prefix + content
+		presentation.Details = s.prefix + presentation.Details
+	}
+	if preflighter, ok := stream.(platform.StreamPresentationPreflighter); ok {
+		if err := preflighter.PreflightPresentation(presentation); err != nil {
+			if !errors.Is(err, platform.ErrStreamContentTooLarge) || !snapshot.structured || len(snapshot.timelineItems) == 0 {
+				log.Printf("[handler] failed to preflight progress presentation: %v", err)
+				return false
+			}
+			continued, continueErr := s.continueProgressStreamLocked(snapshot)
+			if continueErr != nil {
+				return false
+			}
+			return continued
+		}
 	}
 	if preflighter, ok := stream.(platform.StreamContentPreflighter); ok {
 		if err := preflighter.PreflightUpdate(content); err != nil {
@@ -588,7 +604,12 @@ func (s *progressSession) sendSnapshotContent(snapshot progressCardSnapshot) boo
 			return continued
 		}
 	}
-	if err := stream.Update(s.ctx, content); err != nil {
+	if structured, ok := stream.(platform.StructuredProgressStream); ok {
+		if err := structured.UpdatePresentation(s.ctx, presentation); err != nil {
+			log.Printf("[handler] failed to update structured progress stream: %v", err)
+			return false
+		}
+	} else if err := stream.Update(s.ctx, content); err != nil {
 		log.Printf("[handler] failed to update progress stream: %v", err)
 		return false
 	}
@@ -597,6 +618,14 @@ func (s *progressSession) sendSnapshotContent(snapshot progressCardSnapshot) boo
 		log.Printf("[terminal-outbox] failed to refresh active progress card recovery: %v", err)
 	}
 	return true
+}
+
+func (s *progressSession) snapshotPresentationLocked(snapshot progressCardSnapshot) platform.StreamPresentation {
+	summary := strings.TrimSpace(snapshot.summary)
+	if summary == "" {
+		summary = snapshot.text
+	}
+	return platform.StreamPresentation{Summary: summary, Details: s.activeSnapshotContentLocked(snapshot)}
 }
 
 func (s *progressSession) activeSnapshotContentLocked(snapshot progressCardSnapshot) string {
@@ -655,6 +684,7 @@ func (s *progressSession) continueProgressStreamLocked(snapshot progressCardSnap
 	baseTitle := progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60)
 	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{
 		Title: fmt.Sprintf("%s · 进度 %d", baseTitle, nextSegment), InitialContent: initialContent,
+		InitialPresentation: func() *platform.StreamPresentation { p := s.snapshotPresentationLocked(snapshot); return &p }(),
 	})
 	if err != nil {
 		return false, err
@@ -809,16 +839,20 @@ func (s *progressSession) reanchor(ctx context.Context, reply platform.Replier, 
 		return false, nil
 	}
 	initialContent := renderInitialCardProgress()
+	var initialPresentation *platform.StreamPresentation
 	if s.latestTaskSnapshot.effectiveProgress {
 		initialContent = s.activeSnapshotContentLocked(s.latestTaskSnapshot)
+		p := s.snapshotPresentationLocked(s.latestTaskSnapshot)
+		initialPresentation = &p
 	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && strings.TrimSpace(latestProgress) != "" {
 		initialContent = appendActiveThinkingIndicator(latestProgress)
 	} else if strings.TrimSpace(s.latestTaskSnapshot.text) == "" && trimActiveThinkingIndicator(s.lastContent) != "" {
 		initialContent = appendActiveThinkingIndicator(trimActiveThinkingIndicator(s.lastContent))
 	}
 	stream, err := reply.OpenStream(moveCtx, platform.StreamOptions{
-		Title:          progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60),
-		InitialContent: initialContent,
+		Title:               progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60),
+		InitialContent:      initialContent,
+		InitialPresentation: initialPresentation,
 	})
 	if err != nil {
 		return false, err
