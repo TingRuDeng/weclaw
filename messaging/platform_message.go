@@ -18,6 +18,7 @@ type platformMessageRuntime struct {
 	routeUserID          string
 	text                 string
 	clientID             string
+	messageKey           string
 	trace                observability.TraceContext
 	textDedupReservation string
 }
@@ -32,7 +33,7 @@ func (runtime platformMessageRuntime) agentRequest(message string) agentMessageR
 	return agentMessageRequest{
 		ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
 		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, reply: runtime.reply,
-		message: message, clientID: runtime.clientID, trace: runtime.trace,
+		message: message, clientID: runtime.clientID, messageKey: runtime.messageKey, trace: runtime.trace,
 	}
 }
 
@@ -66,6 +67,17 @@ func platformMessageDedupKey(msg platform.IncomingMessage) string {
 	return strings.TrimSpace(string(msg.Platform)) + "\x00" + strings.TrimSpace(msg.AccountID) + "\x00" + strings.TrimSpace(msg.MessageID)
 }
 
+func platformMessageIdentityKey(msg platform.IncomingMessage, clientID string) string {
+	if msg.MessageID != "" && msg.MessageID != "0" {
+		return platformMessageDedupKey(msg)
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = NewClientID()
+	}
+	return strings.TrimSpace(string(msg.Platform)) + "\x00" + strings.TrimSpace(msg.AccountID) + "\x00client:" + clientID
+}
+
 // isDuplicatePlatformMessage 使用稳定消息 ID 拦截平台重复投递。
 func (h *Handler) isDuplicatePlatformMessage(msg platform.IncomingMessage) bool {
 	if msg.MessageID == "" || msg.MessageID == "0" {
@@ -88,6 +100,7 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 		req := taskCommandRequest{
 			ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
 			actorUserID: runtime.msg.UserID, routeUserID: runtime.routeUserID, reply: runtime.reply,
+			messageKey: platformMessageIdentityKey(runtime.msg, runtime.clientID),
 		}
 		runtime.sendText(h.handleStopActiveTask(req))
 		return true
@@ -131,6 +144,7 @@ func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platfo
 		return prepared, false
 	}
 	prepared.clientID = NewClientID()
+	prepared.messageKey = platformMessageIdentityKey(prepared.msg, prepared.clientID)
 	prepared.trace = prepared.trace.WithClientID(prepared.clientID)
 	prepared.ctx = observability.ContextWithTrace(prepared.ctx, prepared.trace)
 	if setter, ok := prepared.reply.(platform.ClientIDSetter); ok {
@@ -211,7 +225,7 @@ func (h *Handler) dispatchPlatformMessage(runtime platformMessageRuntime) {
 	}
 	if h.handleBuiltInPlatformCommand(runtime.ctx, platformCommandRequest{
 		Message: runtime.msg, RouteUserID: runtime.routeUserID, Reply: runtime.reply,
-		Trimmed: trimmed, ClientID: runtime.clientID,
+		Trimmed: trimmed, ClientID: runtime.clientID, MessageKey: runtime.messageKey,
 	}) {
 		return
 	}
@@ -302,6 +316,6 @@ func newBroadcastAgentsRequest(runtime platformMessageRuntime, names []string, m
 	return broadcastAgentsRequest{
 		ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
 		userID: runtime.msg.UserID, routeUserID: runtime.routeUserID, replyWriter: runtime.reply,
-		names: names, message: message, clientID: runtime.clientID, trace: runtime.trace,
+		names: names, message: message, clientID: runtime.clientID, messageKey: runtime.messageKey, trace: runtime.trace,
 	}
 }

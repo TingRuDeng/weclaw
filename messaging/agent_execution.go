@@ -22,6 +22,7 @@ type agentMessageRequest struct {
 	name         string
 	message      string
 	clientID     string
+	messageKey   string
 	trace        observability.TraceContext
 }
 
@@ -110,7 +111,7 @@ func newCodexAgentTaskOptions(runtime agentDispatchRuntime) codexAgentTaskOption
 		ctx: runtime.req.ctx, platform: runtime.req.platformName, accountID: runtime.req.accountID,
 		userID: runtime.req.userID, routeUserID: runtime.req.routeUserID,
 		reply: runtime.req.reply, agentName: runtime.req.name, message: runtime.req.message,
-		clientID: runtime.req.clientID, replyPrefix: runtime.prefix,
+		clientID: runtime.req.clientID, messageKey: runtime.req.messageKey, replyPrefix: runtime.prefix,
 		agent: runtime.agent, progressCfg: runtime.progressCfg, trace: runtime.req.trace,
 	}
 }

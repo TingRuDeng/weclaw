@@ -14,6 +14,7 @@ type platformCommandRequest struct {
 	Reply       platform.Replier
 	Trimmed     string
 	ClientID    string
+	MessageKey  string
 }
 
 // handleBuiltInPlatformCommand 处理平台内置命令，飞书使用 routeUserID 控制会话但保留真实发送者回复。
@@ -154,6 +155,7 @@ func newTaskCommandRequest(ctx context.Context, req platformCommandRequest, rout
 		ctx: ctx, platformName: req.Message.Platform, accountID: req.Message.AccountID,
 		actorUserID: req.Message.UserID, routeUserID: routeUserID,
 		reply: req.Reply, clientID: req.ClientID,
+		messageKey: req.MessageKey,
 	}
 }
 

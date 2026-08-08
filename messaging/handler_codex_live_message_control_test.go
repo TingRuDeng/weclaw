@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -325,4 +326,228 @@ func liveMessageFixture(t *testing.T, active bool) (*Handler, *fakeCodexLiveAgen
 		agentName: "codex", message: "继续任务", agent: ag, progressCfg: cfg, route: route,
 	}
 	return h, ag, opts, route
+}
+
+type guideSteerCall struct {
+	threadID string
+	turnID   string
+	message  string
+}
+
+type recordingGuideAgent struct {
+	*fakeCodexLiveAgent
+	guideMu sync.Mutex
+	guides  []guideSteerCall
+}
+
+func (a *recordingGuideAgent) SteerCodexThread(_ context.Context, _ string, threadID string, turnID string, message string) error {
+	a.guideMu.Lock()
+	a.guides = append(a.guides, guideSteerCall{threadID: threadID, turnID: turnID, message: message})
+	a.fakeCodexThreadAgent.steerThreadID = threadID
+	a.fakeCodexThreadAgent.steerTurnID = turnID
+	a.fakeCodexThreadAgent.steerMessage = message
+	err := a.fakeCodexThreadAgent.steerErr
+	a.guideMu.Unlock()
+	return err
+}
+
+func (a *recordingGuideAgent) guideSnapshot() []guideSteerCall {
+	a.guideMu.Lock()
+	defer a.guideMu.Unlock()
+	return append([]guideSteerCall(nil), a.guides...)
+}
+
+type guideRelayTestReplier struct {
+	*reanchorTestReplier
+	textsMu      sync.Mutex
+	texts        []string
+	openErr      error
+	openAttempts int
+}
+
+func newGuideRelayTestReplier(cardID string) *guideRelayTestReplier {
+	inner := newReanchorTestReplier()
+	inner.cardID = cardID
+	inner.stream.cardID = cardID
+	return &guideRelayTestReplier{reanchorTestReplier: inner}
+}
+
+func (r *guideRelayTestReplier) SendText(_ context.Context, text string) error {
+	r.textsMu.Lock()
+	r.texts = append(r.texts, text)
+	r.textsMu.Unlock()
+	return nil
+}
+
+func (r *guideRelayTestReplier) OpenStream(ctx context.Context, options platform.StreamOptions) (platform.Stream, error) {
+	r.openAttempts++
+	if r.openErr != nil {
+		return nil, r.openErr
+	}
+	return r.reanchorTestReplier.OpenStream(ctx, options)
+}
+
+func (r *guideRelayTestReplier) textsSnapshot() []string {
+	r.textsMu.Lock()
+	defer r.textsMu.Unlock()
+	return append([]string(nil), r.texts...)
+}
+
+type liveGuideRelayFixture struct {
+	h        *Handler
+	agent    *recordingGuideAgent
+	opts     codexAgentTaskOptions
+	route    codexConversationRoute
+	task     *activeAgentTask
+	progress *progressSession
+	finish   func(string, bool) bool
+	oldReply *guideRelayTestReplier
+}
+
+func newLiveGuideRelayFixture(t *testing.T, nativeProgress bool) liveGuideRelayFixture {
+	t.Helper()
+	h, base, opts, route := liveMessageFixture(t, true)
+	recording := &recordingGuideAgent{fakeCodexLiveAgent: base}
+	h.agents["codex"] = recording
+	opts.agent = recording
+	task, taskCtx, started := h.beginActiveTask(context.Background(), route.conversationID, activeTaskMeta{
+		owner: opts.userID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		message: "活动任务", runtimeOwner: agent.CodexRuntimeWeClaw,
+		codexThreadID: route.threadID, codexTurnID: "turn-1", inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("failed to register active guide task")
+	}
+	fixture := liveGuideRelayFixture{h: h, agent: recording, opts: opts, route: route, task: task}
+	if !nativeProgress {
+		return fixture
+	}
+	oldReply := newGuideRelayTestReplier("card-initial")
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	cfg.InitialDelaySeconds = 0
+	_, finish, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+		taskCtx, oldReply, "", "codex", route.workspaceRoot, "活动任务", cfg,
+	)
+	task.setProgressTimelineLimit(cfg.EffectiveStreamTimelineLimit())
+	task.attachProgressSession(progress)
+	fixture.progress, fixture.finish, fixture.oldReply = progress, finish, oldReply
+	fixture.opts.progressCfg = cfg
+	return fixture
+}
+
+func (f liveGuideRelayFixture) sendGuide(message string, messageKey string, reply platform.Replier) {
+	opts := f.opts
+	opts.message = message
+	opts.messageKey = messageKey
+	opts.reply = reply
+	f.h.startCodexAgentTask(opts)
+}
+
+func TestLiveCodexGuideCreatesRelayCardWithoutSuccessText(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	reply := newGuideRelayTestReplier("card-guide-1")
+	fixture.sendGuide("补充要求一", "feishu\x00cli_a\x00message-1", reply)
+
+	if calls := fixture.agent.guideSnapshot(); len(calls) != 1 || calls[0].message != "补充要求一" {
+		t.Fatalf("steer calls=%#v", calls)
+	}
+	if reply.openAttempts != 1 || fixture.oldReply.stream.supersededCount() != 1 {
+		t.Fatalf("open=%d old superseded=%d", reply.openAttempts, fixture.oldReply.stream.supersededCount())
+	}
+	if texts := reply.textsSnapshot(); len(texts) != 0 {
+		t.Fatalf("successful relay should not send text: %#v", texts)
+	}
+}
+
+func TestThreeRapidLiveCodexGuidesCreateThreeOrderedRelayCards(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	replies := []*guideRelayTestReplier{
+		newGuideRelayTestReplier("card-guide-1"),
+		newGuideRelayTestReplier("card-guide-2"),
+		newGuideRelayTestReplier("card-guide-3"),
+	}
+	for index, reply := range replies {
+		fixture.sendGuide(
+			[]string{"第一条引导", "第二条引导", "第三条引导"}[index],
+			[]string{"message-1", "message-2", "message-3"}[index],
+			reply,
+		)
+	}
+
+	calls := fixture.agent.guideSnapshot()
+	if len(calls) != 3 || calls[0].message != "第一条引导" || calls[1].message != "第二条引导" || calls[2].message != "第三条引导" {
+		t.Fatalf("steer order=%#v", calls)
+	}
+	streams := []*reanchorTestStream{fixture.oldReply.stream, replies[0].stream, replies[1].stream, replies[2].stream}
+	for index := 0; index < len(streams)-1; index++ {
+		if streams[index].supersededCount() != 1 {
+			t.Fatalf("stream %d superseded=%d, want 1", index, streams[index].supersededCount())
+		}
+	}
+	if streams[3].supersededCount() != 0 {
+		t.Fatalf("latest stream superseded=%d", streams[3].supersededCount())
+	}
+	for index, reply := range replies {
+		if reply.openAttempts != 1 || len(reply.textsSnapshot()) != 0 {
+			t.Fatalf("reply %d open=%d texts=%#v", index, reply.openAttempts, reply.textsSnapshot())
+		}
+	}
+	if !fixture.progress.send("后续进展") || !fixture.finish("最终结果", false) {
+		t.Fatal("latest relay should accept progress and terminal")
+	}
+	for index := 0; index < len(streams)-1; index++ {
+		if streams[index].completedCount() != 0 || len(streams[index].updateSnapshot()) != 0 {
+			t.Fatalf("old stream %d completed=%d updates=%#v", index, streams[index].completedCount(), streams[index].updateSnapshot())
+		}
+	}
+	if streams[3].completedCount() != 1 || len(streams[3].updateSnapshot()) != 1 {
+		t.Fatalf("latest completed=%d updates=%#v", streams[3].completedCount(), streams[3].updateSnapshot())
+	}
+}
+
+func TestLiveCodexGuideSteerFailureDoesNotCreateRelayCard(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	fixture.agent.fakeCodexThreadAgent.steerErr = errors.New("steer rejected")
+	reply := newGuideRelayTestReplier("card-guide-failed")
+	fixture.sendGuide("失败引导", "message-failed", reply)
+
+	if reply.openAttempts != 0 || fixture.oldReply.stream.supersededCount() != 0 {
+		t.Fatalf("failed steer opened=%d superseded=%d", reply.openAttempts, fixture.oldReply.stream.supersededCount())
+	}
+	if texts := strings.Join(reply.textsSnapshot(), "\n"); !strings.Contains(texts, "steer rejected") {
+		t.Fatalf("failure reply=%q", texts)
+	}
+}
+
+func TestLiveCodexGuideReanchorFailureWarnsWithoutRepeatingSteer(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	reply := newGuideRelayTestReplier("card-guide-failed")
+	reply.openErr = errors.New("create card failed")
+	fixture.sendGuide("已送达引导", "message-reanchor-failed", reply)
+
+	if calls := fixture.agent.guideSnapshot(); len(calls) != 1 {
+		t.Fatalf("steer calls=%#v", calls)
+	}
+	if reply.openAttempts != 1 || fixture.oldReply.stream.supersededCount() != 0 {
+		t.Fatalf("open=%d old superseded=%d", reply.openAttempts, fixture.oldReply.stream.supersededCount())
+	}
+	text := strings.Join(reply.textsSnapshot(), "\n")
+	if !strings.Contains(text, "引导已送达，但任务卡迁移失败") || !strings.Contains(text, "create card failed") {
+		t.Fatalf("warning=%q", text)
+	}
+}
+
+func TestLiveCodexGuideWithoutNativeProgressCardKeepsSuccessText(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, false)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	fixture.sendGuide("文本引导", "message-text-only", reply)
+
+	if calls := fixture.agent.guideSnapshot(); len(calls) != 1 {
+		t.Fatalf("steer calls=%#v", calls)
+	}
+	if text := strings.Join(reply.TextsSnapshot(), "\n"); !strings.Contains(text, "已发送到当前共享 Codex 任务") {
+		t.Fatalf("success reply=%q", text)
+	}
 }

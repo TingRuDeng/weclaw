@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 )
@@ -72,12 +71,17 @@ func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions) bool 
 			"发送到当前共享 Codex 任务失败: "+sanitizeAgentError(err.Error()))
 		return true
 	}
-	if task, ok := h.activeTask(opts.route.conversationID); ok {
-		task.recordLocalProgressText(time.Now(), "已接收新的补充输入。")
-	}
 	h.recordTraceStage(taskOpts.trace.WithConversation(opts.route.conversationID).
 		WithThreadTurn(opts.route.threadID, state.ActiveTurnID), "task.input_accepted", "running", "input steered to active Codex turn")
-	sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, "已发送到当前共享 Codex 任务。")
+	delivery := codexGuideDeliveryResult{ReplyText: codexGuideAcceptedReply}
+	if task, ok := h.activeTask(opts.route.conversationID); ok {
+		delivery = h.completeAcceptedCodexGuide(
+			taskOpts.ctx, task, taskOpts.reply, taskOpts.messageKey, "已接收新的补充输入。",
+		)
+	}
+	if delivery.ReplyText != "" {
+		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID, delivery.ReplyText)
+	}
 	return true
 }
 

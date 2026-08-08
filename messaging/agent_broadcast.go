@@ -22,6 +22,7 @@ type broadcastAgentsRequest struct {
 	names        []string
 	message      string
 	clientID     string
+	messageKey   string
 	trace        observability.TraceContext
 }
 
@@ -173,7 +174,7 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	taskOpts := codexAgentTaskOptions{
 		ctx: ctx, platform: req.platformName, accountID: req.accountID,
 		userID: req.userID, routeUserID: req.routeUserID, reply: reply,
-		agentName: name, message: req.message, clientID: req.clientID,
+		agentName: name, message: req.message, clientID: req.clientID, messageKey: req.messageKey,
 		replyPrefix: "[" + name + "] ", agent: ag,
 		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), route: route,
 		trace: req.trace.WithConversation(route.conversationID).WithThreadTurn(route.threadID, ""),
@@ -213,7 +214,7 @@ func (h *Handler) broadcastPendingCodexTask(req broadcastAgentsRequest, name str
 	return h.pendingCodexTask(codexAgentTaskOptions{
 		ctx: req.ctx, platform: req.platformName, accountID: req.accountID,
 		userID: req.userID, routeUserID: req.routeUserID, reply: reply,
-		agentName: name, message: req.message, clientID: req.clientID,
+		agentName: name, message: req.message, clientID: req.clientID, messageKey: req.messageKey,
 		replyPrefix: "[" + name + "] ", agent: ag,
 		progressCfg: h.resolveProgressConfigForAccount(req.platformName, req.accountID, name), route: route,
 		trace: req.trace.WithConversation(route.conversationID).WithThreadTurn(route.threadID, ""),

@@ -136,6 +136,28 @@ func TestFeishuSwitchMirrorsRunningCodexAppRollout(t *testing.T) {
 	completeAndAssertRolloutMirror(t, fixture)
 }
 
+func TestRolloutGuideCreatesRelayCardWithoutSuccessText(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	if !fixture.h.storePendingGuide(fixture.route.conversationID, pendingAgentTask{message: "补充 rollout 要求", run: func() {}}) {
+		t.Fatal("failed to store pending guide")
+	}
+	reply := newGuideRelayTestReplier("card-rollout-guide")
+	text, handled := fixture.h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{
+		ctx: context.Background(), key: fixture.route.conversationID,
+		agentName: "codex", actor: fixture.opts.userID,
+		reply: reply, messageKey: "feishu\x00cli_a\x00rollout-guide-1",
+	})
+	if !handled || text != "" {
+		t.Fatalf("handled=%v text=%q", handled, text)
+	}
+	if fixture.task.pendingGuide() != "" || reply.openAttempts != 1 || fixture.oldReply.stream.supersededCount() != 1 {
+		t.Fatalf("pending=%q open=%d superseded=%d", fixture.task.pendingGuide(), reply.openAttempts, fixture.oldReply.stream.supersededCount())
+	}
+	if calls := fixture.agent.guideSnapshot(); len(calls) != 1 || calls[0].message != "补充 rollout 要求" {
+		t.Fatalf("steer calls=%#v", calls)
+	}
+}
+
 func localRolloutPathForTest(codexDir string, threadID string) string {
 	return filepath.Join(codexDir, "sessions", "2026", "04", "29", "rollout-"+threadID+".jsonl")
 }

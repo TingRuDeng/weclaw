@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -223,6 +224,107 @@ func TestPendingTaskControlConcurrentClicksMutateOnce(t *testing.T) {
 	}
 	if successes != 1 || task.pendingGuide() != "" {
 		t.Fatalf("successes=%d pending=%q replies=%#v", successes, task.pendingGuide(), replies)
+	}
+}
+
+func issuePendingGuideControl(t *testing.T, fixture liveGuideRelayFixture, message string) string {
+	t.Helper()
+	if !fixture.h.storePendingGuide(fixture.route.conversationID, pendingAgentTask{message: message, run: func() {}}) {
+		t.Fatal("failed to store pending guide")
+	}
+	cardReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
+	fixture.h.replyAgentTaskAdmission(agentTaskAdmissionNotice{
+		ctx: context.Background(), platformName: platform.PlatformFeishu, accountID: "app-1",
+		reply: cardReply, userID: fixture.opts.userID, routeUserID: fixture.opts.routeUserID,
+		agentName: "codex", executionKey: fixture.route.conversationID,
+		task: fixture.task, guideSupported: true,
+	}, activeTaskQueued)
+	if len(cardReply.Choices) != 1 || len(cardReply.Choices[0].Choices) == 0 {
+		t.Fatalf("control card=%#v", cardReply.Choices)
+	}
+	return cardReply.Choices[0].Choices[0].Metadata[platform.ChoiceMetadataTaskControlToken]
+}
+
+func TestPendingTaskGuideControlRevisionSteersAndReanchorsOnce(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	token := issuePendingGuideControl(t, fixture, "只发送一次")
+	replies := []*guideRelayTestReplier{
+		newGuideRelayTestReplier("card-control-a"),
+		newGuideRelayTestReplier("card-control-b"),
+	}
+	var wg sync.WaitGroup
+	for index := range replies {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			fixture.h.HandleMessage(
+				context.Background(),
+				pendingTaskControlMessage("guide-event-"+string(rune('a'+index)), fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
+				replies[index],
+			)
+		}(index)
+	}
+	wg.Wait()
+
+	if calls := fixture.agent.guideSnapshot(); len(calls) != 1 || calls[0].message != "只发送一次" {
+		t.Fatalf("steer calls=%#v", calls)
+	}
+	opened := 0
+	for _, reply := range replies {
+		opened += reply.openAttempts
+	}
+	if opened != 1 || fixture.task.pendingGuide() != "" || fixture.oldReply.stream.supersededCount() != 1 {
+		t.Fatalf("opened=%d pending=%q superseded=%d", opened, fixture.task.pendingGuide(), fixture.oldReply.stream.supersededCount())
+	}
+}
+
+func TestPendingTaskGuideSteerFailureDoesNotCreateRelayCard(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	token := issuePendingGuideControl(t, fixture, "会失败的引导")
+	fixture.agent.fakeCodexThreadAgent.steerErr = errors.New("steer denied")
+	reply := newGuideRelayTestReplier("card-never-created")
+	fixture.h.HandleMessage(
+		context.Background(),
+		pendingTaskControlMessage("guide-steer-failed", fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
+		reply,
+	)
+
+	if reply.openAttempts != 0 || fixture.oldReply.stream.supersededCount() != 0 || fixture.task.pendingGuide() != "会失败的引导" {
+		t.Fatalf("open=%d superseded=%d pending=%q", reply.openAttempts, fixture.oldReply.stream.supersededCount(), fixture.task.pendingGuide())
+	}
+	if text := strings.Join(reply.textsSnapshot(), "\n"); !strings.Contains(text, "steer denied") {
+		t.Fatalf("failure reply=%q", text)
+	}
+}
+
+func TestPendingTaskGuideReanchorFailureDoesNotRepeatSteer(t *testing.T) {
+	fixture := newLiveGuideRelayFixture(t, true)
+	token := issuePendingGuideControl(t, fixture, "已送达但迁卡失败")
+	reply := newGuideRelayTestReplier("card-create-failed")
+	reply.openErr = errors.New("card create rejected")
+	fixture.h.HandleMessage(
+		context.Background(),
+		pendingTaskControlMessage("guide-reanchor-failed", fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
+		reply,
+	)
+	if text := strings.Join(reply.textsSnapshot(), "\n"); !strings.Contains(text, "引导已送达，但任务卡迁移失败") {
+		t.Fatalf("warning=%q", text)
+	}
+	if fixture.task.pendingGuide() != "" {
+		t.Fatalf("delivered guide was restored: %q", fixture.task.pendingGuide())
+	}
+
+	staleReply := newGuideRelayTestReplier("card-stale")
+	fixture.h.HandleMessage(
+		context.Background(),
+		pendingTaskControlMessage("guide-reanchor-retry", fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
+		staleReply,
+	)
+	if calls := fixture.agent.guideSnapshot(); len(calls) != 1 {
+		t.Fatalf("steer repeated after reanchor failure: %#v", calls)
+	}
+	if staleReply.openAttempts != 0 || (!containsText(staleReply.textsSnapshot(), "已处理") && !containsText(staleReply.textsSnapshot(), "已经过期")) {
+		t.Fatalf("stale open=%d texts=%#v", staleReply.openAttempts, staleReply.textsSnapshot())
 	}
 }
 

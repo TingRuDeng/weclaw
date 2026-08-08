@@ -180,7 +180,8 @@ func (h *Handler) handlePendingTaskControlChoice(runtime platformMessageRuntime)
 	req := taskCommandRequest{
 		ctx: runtime.ctx, platformName: runtime.msg.Platform, accountID: runtime.msg.AccountID,
 		actorUserID: runtime.msg.UserID, routeUserID: runtime.routeUserID, reply: runtime.reply,
-		targetKey: record.executionKey, targetAgentName: record.agentName, expectation: record.expectation,
+		messageKey: platformMessageIdentityKey(runtime.msg, runtime.clientID),
+		targetKey:  record.executionKey, targetAgentName: record.agentName, expectation: record.expectation,
 	}
 	switch strings.TrimSpace(command.Value["choice"]) {
 	case "/guide":

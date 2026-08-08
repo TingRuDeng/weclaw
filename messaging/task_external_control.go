@@ -42,6 +42,22 @@ func (h *Handler) externalCodexControlState(key string, actor string) (bool, boo
 
 // resolveExternalCodexControl 每次控制前核对任务发起人、共享 runtime 与 active turn。
 func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (externalCodexControlTarget, bool, error) {
+	target, handled, err := h.resolveCachedExternalCodexControl(req)
+	if !handled || err != nil {
+		return target, handled, err
+	}
+	controlCtx, cancel := h.codexThreadControlContext(req.ctx)
+	defer cancel()
+	unlock, err := h.lockCodexThreadControlContext(controlCtx, target.threadID)
+	if err != nil {
+		return target, true, fmt.Errorf("等待 Codex 会话控制超时: %w", err)
+	}
+	defer unlock()
+	target, err = h.resolveExternalCodexControlLocked(controlCtx, req, target)
+	return target, true, err
+}
+
+func (h *Handler) resolveCachedExternalCodexControl(req externalCodexControlRequest) (externalCodexControlTarget, bool, error) {
 	target, denied := h.cachedExternalCodexTarget(req.key, req.actor)
 	if denied {
 		return target, true, fmt.Errorf("只有任务发起人可以控制当前任务")
@@ -61,42 +77,45 @@ func (h *Handler) resolveExternalCodexControl(req externalCodexControlRequest) (
 		}
 		return target, true, fmt.Errorf("当前 Codex 任务暂不支持从飞书或微信停止")
 	}
+	return target, true, nil
+}
+
+// resolveExternalCodexControlLocked validates the canonical runtime while the
+// caller owns the thread control lock.
+func (h *Handler) resolveExternalCodexControlLocked(
+	ctx context.Context,
+	req externalCodexControlRequest,
+	target externalCodexControlTarget,
+) (externalCodexControlTarget, error) {
 	liveAgent, live := req.ag.(agent.CodexLiveRuntimeAgent)
 	runtimeAgent, runtime := req.ag.(agent.CodexThreadRuntimeAgent)
 	if !live || !runtime {
-		return target, true, nil
+		return target, nil
 	}
-	controlCtx, cancel := h.codexThreadControlContext(req.ctx)
-	defer cancel()
-	unlock, err := h.lockCodexThreadControlContext(controlCtx, target.threadID)
-	if err != nil {
-		return target, true, fmt.Errorf("等待 Codex 会话控制超时: %w", err)
-	}
-	defer unlock()
 	route := codexConversationRoute{
 		bindingKey:     codexBindingKey(target.task.routeUserID, target.task.agentName),
 		conversationID: req.key,
 	}
-	binding, err := liveAgent.InspectCodexRuntime(controlCtx, agent.CodexRuntimeRequest{
+	binding, err := liveAgent.InspectCodexRuntime(ctx, agent.CodexRuntimeRequest{
 		Ref:    agent.CodexThreadRef{ConversationID: req.key, ThreadID: target.threadID},
 		Intent: codexSharedHostIntent(route),
 	})
 	if err != nil {
-		return target, true, fmt.Errorf("无法确认 Codex 实时运行位置: %w", err)
+		return target, fmt.Errorf("无法确认 Codex 实时运行位置: %w", err)
 	}
 	if binding.Runtime != agent.CodexRuntimeWeClaw {
-		return target, true, fmt.Errorf("Codex 实时运行位置不可用，无法确认%s操作", req.action)
+		return target, fmt.Errorf("Codex 实时运行位置不可用，无法确认%s操作", req.action)
 	}
-	state, err := runtimeAgent.ReadCodexThreadState(controlCtx, req.key, target.threadID)
+	state, err := runtimeAgent.ReadCodexThreadState(ctx, req.key, target.threadID)
 	if err != nil {
-		return target, true, err
+		return target, err
 	}
 	if !state.Active || state.ActiveTurnID == "" {
-		return target, true, fmt.Errorf("共享 Codex app-server 当前没有可控制的 active turn")
+		return target, fmt.Errorf("共享 Codex app-server 当前没有可控制的 active turn")
 	}
 	target.turnID = state.ActiveTurnID
 	target.task.refreshExternalCodexTurn(binding, state.ActiveTurnID)
-	return target, true, nil
+	return target, nil
 }
 
 func (h *Handler) cachedExternalCodexTarget(key string, actor string) (externalCodexControlTarget, bool) {

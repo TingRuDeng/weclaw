@@ -20,6 +20,7 @@ type codexAgentTaskOptions struct {
 	agentName   string
 	message     string
 	clientID    string
+	messageKey  string
 	replyPrefix string
 	agent       agent.Agent
 	progressCfg config.ProgressConfig

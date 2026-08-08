@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -20,6 +19,7 @@ type taskCommandRequest struct {
 	routeUserID     string
 	reply           platform.Replier
 	clientID        string
+	messageKey      string
 	targetKey       string
 	targetAgentName string
 	expectation     pendingTaskControlExpectation
@@ -37,6 +37,8 @@ type externalCodexTaskCommand struct {
 	agentName   string
 	agent       agent.Agent
 	actor       string
+	reply       platform.Replier
+	messageKey  string
 	expectation pendingTaskControlExpectation
 }
 
@@ -65,11 +67,16 @@ func (h *Handler) handleGuideCommand(req taskCommandRequest) {
 		return
 	}
 	if external {
-		text, _ := h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{
+		text, handled := h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{
 			ctx: req.ctx, key: target.key, agentName: target.name, actor: req.actorUserID,
+			reply: req.reply, messageKey: req.messageKey,
 			expectation: req.expectation,
 		})
-		sendPlatformText(req.ctx, req.reply, req.actorUserID, text)
+		if handled && text != "" {
+			sendPlatformText(req.ctx, req.reply, req.actorUserID, text)
+		} else if !handled {
+			sendPlatformText(req.ctx, req.reply, req.actorUserID, "当前没有可发送的引导对话。")
+		}
 		return
 	}
 	message, task, ok, denied := h.detachPendingGuideExpected(target.key, req.actorUserID, req.expectation)
@@ -84,7 +91,7 @@ func (h *Handler) handleGuideCommand(req taskCommandRequest) {
 	if !waitForActiveTask(req.ctx, task) {
 		return
 	}
-	h.sendToNamedAgent(agentMessageRequest{ctx: req.ctx, platformName: req.platformName, accountID: req.accountID, userID: req.actorUserID, routeUserID: req.routeUserID, reply: req.reply, name: target.name, message: message, clientID: req.clientID})
+	h.sendToNamedAgent(agentMessageRequest{ctx: req.ctx, platformName: req.platformName, accountID: req.accountID, userID: req.actorUserID, routeUserID: req.routeUserID, reply: req.reply, name: target.name, message: message, clientID: req.clientID, messageKey: req.messageKey})
 
 }
 
@@ -151,29 +158,46 @@ func (h *Handler) steerPendingGuideToExternalCodex(req externalCodexTaskCommand)
 	if !ok {
 		return "", false
 	}
-	target, handled, resolveErr := h.resolveExternalCodexControl(externalCodexControlRequest{
+	controlReq := externalCodexControlRequest{
 		ctx: req.ctx, key: req.key, ag: ag, actor: req.actor, action: "guide",
-	})
+	}
+	target, handled, resolveErr := h.resolveCachedExternalCodexControl(controlReq)
 	if handled && resolveErr != nil {
 		return resolveErr.Error(), true
 	}
 	if !handled {
 		return "", false
 	}
+	controlCtx, cancel := h.codexThreadControlContext(req.ctx)
+	defer cancel()
+	unlock, err := h.lockCodexThreadControlContext(controlCtx, target.threadID)
+	if err != nil {
+		return fmt.Sprintf("等待 Codex 会话控制超时: %v", err), true
+	}
+	defer unlock()
+	target, resolveErr = h.resolveExternalCodexControlLocked(controlCtx, controlReq, target)
+	if resolveErr != nil {
+		return resolveErr.Error(), true
+	}
 	pending, _, _, task, ok, denied := h.takeExternalCodexGuideExpected(req.key, req.actor, req.expectation)
 	if denied {
 		return "只有任务发起人可以发送引导消息。", true
 	}
 	if !ok {
+		if !req.expectation.empty() {
+			return "该暂存消息已处理，或操作卡片已经过期。", true
+		}
 		return "", false
 	}
-	if err := runtimeAg.SteerCodexThread(req.ctx, req.key, target.threadID, target.turnID, pending.message); err != nil {
+	if err := runtimeAg.SteerCodexThread(controlCtx, req.key, target.threadID, target.turnID, pending.message); err != nil {
 		h.finishExternalCodexGuide(req.key, task, false)
 		return fmt.Sprintf("发送到当前共享 Codex 任务失败: %v", err), true
 	}
 	h.finishExternalCodexGuide(req.key, task, true)
-	task.recordLocalProgressText(time.Now(), "已发送引导对话。")
-	return "已发送到当前共享 Codex 任务。", true
+	delivery := h.completeAcceptedCodexGuide(
+		controlCtx, task, req.reply, req.messageKey, "已发送引导对话。",
+	)
+	return delivery.ReplyText, true
 }
 
 // interruptExternalCodexTask 停止共享 host 中由当前任务发起人控制的活动 turn。
