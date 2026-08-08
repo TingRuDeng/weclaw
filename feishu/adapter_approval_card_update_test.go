@@ -53,6 +53,52 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 	}
 }
 
+func TestApprovalRebuildPreservesCollapsibleTaskProgress(t *testing.T) {
+	kit := &fakeCardKitClient{}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = kit
+	adapter.taskCards.record("card-task-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Summary: "正在运行测试", Content: "读取代码\n\n运行测试", Collapsible: true, Expanded: true})
+	dispatched := make(chan platform.IncomingMessage, 1)
+	if _, err := adapter.handleCardActionEvent(context.Background(), approvalCardActionEvent("allow", "允许本次", "card-task-1"), func(ctx context.Context, msg platform.IncomingMessage, reply platform.Replier) {
+		dispatched <- msg
+		consumeApprovalForTest(msg)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.updateCards) != 1 {
+		t.Fatalf("updates=%d", len(kit.updateCards))
+	}
+	card := decodeCardJSON(t, kit.updateCards[0])
+	elems := card["body"].(map[string]any)["elements"].([]any)
+	panelIndex := -1
+	for i, element := range elems {
+		if element.(map[string]any)["element_id"] == cardProgressPanelID {
+			panelIndex = i
+		}
+	}
+	if panelIndex < 0 {
+		t.Fatalf("elements=%#v", elems)
+	}
+	panel := elems[panelIndex].(map[string]any)
+	if panel["element_id"] != cardProgressPanelID || panel["expanded"] != true {
+		t.Fatalf("panel=%#v", panel)
+	}
+	main := panel["elements"].([]any)[0].(map[string]any)
+	if !strings.Contains(main["content"].(string), "运行测试") {
+		t.Fatalf("main=%#v", main)
+	}
+	approvalFound := false
+	for _, element := range elems {
+		value := element.(map[string]any)["content"]
+		if content, ok := value.(string); ok && strings.Contains(content, "允许本次") {
+			approvalFound = true
+		}
+	}
+	if !approvalFound {
+		t.Fatalf("approvals=%#v", elems)
+	}
+}
+
 func TestHandleApprovalCardActionPreservesSessionKey(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	event := approvalCardActionEvent("allow", "允许本次", "")

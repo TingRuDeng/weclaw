@@ -21,3 +21,17 @@
 - 本次仅修改 Task 2 指定的三个实现文件；测试文件未改，因为 brief 中要求的新增测试并不存在于工作树，且无法凭空补齐 fake client 的 element_id 记录契约。
 - 完整测试失败为沙箱网络监听权限，不是编译或断言失败。
 - 终态折叠依赖 registry 快照中的 `Expanded:false`，恢复引用路径仍需上层传入完整 presentation 才能形成折叠初始卡。
+
+## 补充测试
+
+初始实现跳过 brief 要求的新增测试，属于流程偏差；本次已补齐：
+
+- `TestBuildTaskCardUsesCollapsibleProgressPanel`
+- `TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard`
+- `TestApprovalRebuildPreservesCollapsibleTaskProgress`
+
+证据：
+
+- `GOCACHE=/tmp/weclaw-go-cache go test ./feishu -run 'Test(BuildTaskCardUsesCollapsibleProgressPanel|TaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard|ApprovalRebuildPreservesCollapsibleTaskProgress)' -count=1 -timeout 120s`: PASS
+- `GOCACHE=/tmp/weclaw-go-cache go test ./feishu -run 'Test(FeishuTaskStream|HandleCardActionEvent.*Approval|HandleCardActionEventAppendsApprovalToTaskCardState)' -count=1 -timeout 120s`: PASS
+- `git diff --check`: PASS

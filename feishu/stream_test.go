@@ -12,22 +12,24 @@ import (
 )
 
 type fakeCardKitClient struct {
-	cardID          string
-	cardIDs         []string
-	createdCards    []string
-	streamingSeqs   []int
-	streamSeqs      []int
-	streamTexts     []string
-	updateSeqs      []int
-	updateCards     []string
-	updateCardIDs   []string
-	destroyed       []string
-	streamErrors    []error
-	streamingErrors []error
-	updateErrors    []error
-	updateCardCh    chan string
-	streamStarted   chan struct{}
-	streamBlock     <-chan struct{}
+	cardID           string
+	cardIDs          []string
+	createdCards     []string
+	streamingSeqs    []int
+	streamSeqs       []int
+	streamTexts      []string
+	streamCardIDs    []string
+	streamElementIDs []string
+	updateSeqs       []int
+	updateCards      []string
+	updateCardIDs    []string
+	destroyed        []string
+	streamErrors     []error
+	streamingErrors  []error
+	updateErrors     []error
+	updateCardCh     chan string
+	streamStarted    chan struct{}
+	streamBlock      <-chan struct{}
 }
 
 type fakeIdempotentCardKitClient struct {
@@ -94,6 +96,8 @@ func (f *fakeCardKitClient) SetStreamingIdempotent(ctx context.Context, cardID s
 func (f *fakeCardKitClient) StreamContent(ctx context.Context, cardID string, elementID string, content string, sequence int) error {
 	f.streamSeqs = append(f.streamSeqs, sequence)
 	f.streamTexts = append(f.streamTexts, content)
+	f.streamCardIDs = append(f.streamCardIDs, cardID)
+	f.streamElementIDs = append(f.streamElementIDs, elementID)
 	if f.streamStarted != nil {
 		select {
 		case f.streamStarted <- struct{}{}:
@@ -113,6 +117,42 @@ func (f *fakeCardKitClient) StreamContent(ctx context.Context, cardID string, el
 	err := f.streamErrors[0]
 	f.streamErrors = f.streamErrors[1:]
 	return err
+}
+
+func TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "card-task"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "开始", Details: "初始"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	structured, ok := stream.(platform.StructuredProgressStream)
+	if !ok {
+		t.Fatal("missing StructuredProgressStream")
+	}
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "正在运行测试", Details: "读取代码\n\n运行测试\n\n思考中....."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "测试完成", Details: "读取代码\n\n运行测试\n\n完成"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.updateCardIDs) != 0 {
+		t.Fatalf("UpdateCard calls=%d, want 0", len(kit.updateCardIDs))
+	}
+	if len(kit.streamElementIDs) != 4 {
+		t.Fatalf("element ids=%#v", kit.streamElementIDs)
+	}
+	want := []string{cardProgressSummaryID, cardMainContentID, cardProgressSummaryID, cardMainContentID}
+	for i, got := range kit.streamElementIDs {
+		if got != want[i] {
+			t.Fatalf("element[%d]=%q want %q", i, got, want[i])
+		}
+	}
+	for i := 1; i < len(kit.streamSeqs); i++ {
+		if kit.streamSeqs[i] <= kit.streamSeqs[i-1] {
+			t.Fatalf("sequences=%#v", kit.streamSeqs)
+		}
+	}
 }
 
 // UpdateCard 记录全量更新顺序号。

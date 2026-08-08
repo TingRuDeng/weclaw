@@ -6,6 +6,59 @@ import (
 	"testing"
 )
 
+func TestBuildTaskCardUsesCollapsibleProgressPanel(t *testing.T) {
+	statuses := []struct {
+		status   string
+		expanded bool
+	}{{cardStatusThinking, true}, {cardStatusStreaming, true}, {cardStatusSuperseded, false}, {cardStatusDone, false}, {cardStatusStopped, false}, {cardStatusError, false}}
+	for _, tt := range statuses {
+		raw, err := buildCardV2(cardOptions{Status: tt.status, Title: "Codex", Summary: "摘要", Content: "详情", Collapsible: true, Expanded: tt.expanded})
+		if err != nil {
+			t.Fatal(err)
+		}
+		card := decodeCardJSON(t, raw)
+		elements := card["body"].(map[string]any)["elements"].([]any)
+		summaryIndex, panelIndex := -1, -1
+		for i, element := range elements {
+			id := element.(map[string]any)["element_id"]
+			if id == cardProgressSummaryID {
+				summaryIndex = i
+			}
+			if id == cardProgressPanelID {
+				panelIndex = i
+			}
+		}
+		if summaryIndex < 0 || panelIndex < 0 || summaryIndex >= panelIndex {
+			t.Fatalf("status=%s elements=%#v", tt.status, elements)
+		}
+		panel := elements[panelIndex].(map[string]any)
+		if panel["tag"] != "collapsible_panel" || panel["element_id"] != cardProgressPanelID || panel["expanded"] != tt.expanded {
+			t.Fatalf("status=%s panel=%#v", tt.status, panel)
+		}
+		header := panel["header"].(map[string]any)["title"].(map[string]any)
+		if header["content"] != "完整进度" {
+			t.Fatalf("header=%#v", header)
+		}
+		inside := panel["elements"].([]any)
+		if len(inside) != 1 || inside[0].(map[string]any)["element_id"] != cardMainContentID {
+			t.Fatalf("inside=%#v", inside)
+		}
+	}
+	raw, err := buildCardV2(cardOptions{Status: cardStatusDone, Content: "结果"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	elements := decodeCardJSON(t, raw)["body"].(map[string]any)["elements"].([]any)
+	if len(elements) != 2 {
+		t.Fatalf("normal elements=%#v", elements)
+	}
+	for _, element := range elements {
+		if element.(map[string]any)["tag"] == "collapsible_panel" {
+			t.Fatal("normal result unexpectedly collapsible")
+		}
+	}
+}
+
 func TestBuildCardV2IncludesStableMainContentElement(t *testing.T) {
 	raw, err := buildCardV2(cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
 	if err != nil {
