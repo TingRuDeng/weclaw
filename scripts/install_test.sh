@@ -322,23 +322,30 @@ test_rejects_unknown_source() {
   finish_case "拒绝未知安装来源"
 }
 test_supported_release_targets() {
-  for spec in \
-    "Darwin arm64 weclaw_darwin_arm64" \
-    "Darwin x86_64 weclaw_darwin_amd64" \
-    "Linux aarch64 weclaw_linux_arm64" \
-    "Linux x86_64 weclaw_linux_amd64"
-  do
+  setup_case
+  FAKE_UNAME_OS=Darwin
+  FAKE_UNAME_ARCH=arm64
+  FAKE_ASSET_NAME=weclaw_darwin_arm64
+  export FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+  WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -eq 0 ] || fail "Darwin/arm64 安装失败：$output"
+  assert_file_contains "$DOWNLOADS_FILE" "/v1.2.3/weclaw_darwin_arm64"
+  finish_case "支持正式资产 weclaw_darwin_arm64"
+  unset FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+}
+test_rejects_unpublished_release_targets() {
+  for spec in "Darwin x86_64" "Linux aarch64" "Linux x86_64"; do
     set -- $spec
     setup_case
     FAKE_UNAME_OS=$1
     FAKE_UNAME_ARCH=$2
-    FAKE_ASSET_NAME=$3
-    export FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+    export FAKE_UNAME_OS FAKE_UNAME_ARCH
     WECLAW_SKIP_CLAUDE_ACP=1 run_installer
-    [ "$status" -eq 0 ] || fail "$1/$2 安装失败：$output"
-    assert_file_contains "$DOWNLOADS_FILE" "/v1.2.3/$3"
-    finish_case "支持正式资产 $3"
-    unset FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+    [ "$status" -ne 0 ] || fail "$1/$2 未发布平台应拒绝安装"
+    assert_contains "$output" "only darwin/arm64 is published"
+    assert_empty_file "$DOWNLOADS_FILE"
+    finish_case "拒绝未发布平台 $1/$2"
+    unset FAKE_UNAME_OS FAKE_UNAME_ARCH
   done
 }
 test_checksum_mismatch_keeps_existing_binary() {
@@ -394,6 +401,7 @@ test_auto_does_not_fallback_on_http_404
 test_auto_does_not_fallback_on_truncated_download
 test_rejects_unknown_source
 test_supported_release_targets
+test_rejects_unpublished_release_targets
 test_checksum_mismatch_keeps_existing_binary
 test_checksum_missing_entry_keeps_existing_binary
 test_release_gate_runs_install_tests

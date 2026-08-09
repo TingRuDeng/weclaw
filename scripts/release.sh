@@ -12,9 +12,6 @@ RELEASE_COMMITTED=0
 
 TARGETS=(
   "darwin/arm64"
-  "darwin/amd64"
-  "linux/arm64"
-  "linux/amd64"
 )
 
 usage() {

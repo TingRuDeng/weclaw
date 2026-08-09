@@ -311,6 +311,11 @@ case "$ARCH" in
   *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
+if [ "$OS/$ARCH" != "darwin/arm64" ]; then
+  echo "Unsupported release platform: $OS/$ARCH (only darwin/arm64 is published)" >&2
+  exit 1
+fi
+
 echo "Detected: ${OS}/${ARCH}"
 
 # Download

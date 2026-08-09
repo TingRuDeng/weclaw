@@ -112,7 +112,7 @@ jobs:
 
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum weclaw_* > checksums.txt
+        run: sha256sum weclaw_darwin_arm64 > checksums.txt
 
       - name: Determine release tag
         id: tag
@@ -148,7 +148,7 @@ jobs:
           prerelease: true
           target_commitish: ${{ github.sha }}
           files: |
-            dist/weclaw_*
+            dist/weclaw_darwin_arm64
             dist/checksums.txt
           body: |
             Pre-release build from `${{ github.ref_name }}` branch.
