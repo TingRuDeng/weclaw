@@ -91,6 +91,31 @@ func TestAcquireCodexSessionCommitsFrontendBindingAndSharedRuntime(t *testing.T)
 	}
 }
 
+func TestAcquireCodexSessionPreservesCommandDeadlineForRuntimeHandoff(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.h.codexControlTimeout = 20 * time.Millisecond
+	commandCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	commandDeadline, _ := commandCtx.Deadline()
+	request := f.request("thread-b")
+	request.ctx = commandCtx
+	var handoffDeadline time.Time
+	f.ag.recordRuntimeContext = func(phase string, ctx context.Context, _ agent.CodexRuntimeRequest) {
+		if phase == "handoff" {
+			handoffDeadline, _ = ctx.Deadline()
+		}
+	}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if handoffDeadline.IsZero() || !handoffDeadline.Equal(commandDeadline) {
+		t.Fatalf("handoff deadline=%v, want command deadline=%v", handoffDeadline, commandDeadline)
+	}
+}
+
 func TestAcquireCodexSessionPreparesProviderBeforeSharedRuntimeBinding(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))

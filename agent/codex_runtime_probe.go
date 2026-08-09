@@ -7,6 +7,16 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
+)
+
+const (
+	// Desktop history may initialize the IPC client, issue the history request,
+	// and wait for the returned revision to be projected locally.
+	codexRuntimeHandoffProbeTimeout = 2*codexDesktopRequestTimeout + codexDesktopStateApplyTimeout
+	// Shared-host activation keeps the former thread-control RPC budget, but it
+	// now starts after the Desktop probe instead of sharing the probe deadline.
+	codexRuntimeHandoffActivationTimeout = 15 * time.Second
 )
 
 // InspectCodexRuntime 每次重新探测 Desktop，并同步已持久化的用户控制意图。
@@ -100,7 +110,9 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 		return CodexThreadBinding{}, err
 	}
 	if a.desktopProbe == nil {
-		return a.activateSharedCodexHost(ctx, req)
+		activationCtx, cancel := context.WithTimeout(ctx, codexRuntimeHandoffActivationTimeout)
+		defer cancel()
+		return a.activateSharedCodexHost(activationCtx, req)
 	}
 	// A writer lease protects the accepted turn lifecycle, not a frontend route.
 	// The production shared-host topology may bind another conversation to the
@@ -123,10 +135,12 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 			return binding, err
 		}
 	}
-	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{
+	probeCtx, cancelProbe := context.WithTimeout(ctx, codexRuntimeHandoffProbeTimeout)
+	runtime, state, err := a.probeCodexRuntime(probeCtx, req, codexRuntimeProbeOptions{
 		allowConflictRecovery: true,
 		allowNoClientRelease:  true,
 	})
+	cancelProbe()
 	if req.Intent.Owner == CodexControlRemote && canRecoverCodexRuntimeForRemoteOwner(err) &&
 		(!a.codexDesktopBridge || desktopHostDefinitelyAbsent(a.desktopProbe)) {
 		log.Printf("[codex-runtime] remote owner 忽略 Desktop 探测不确定状态 thread=%q: %v", req.Ref.ThreadID, err)
@@ -135,19 +149,21 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if err != nil && !(req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict) {
 		return CodexThreadBinding{}, err
 	}
+	activationCtx, cancelActivation := context.WithTimeout(ctx, codexRuntimeHandoffActivationTimeout)
+	defer cancelActivation()
 	// The verified daemon is already the authoritative Host. Once the explicit
 	// Desktop probe confirms release, attaching a new frontend only needs to
 	// resume and read the target thread on the existing client. Restarting that
 	// client would unnecessarily drain unrelated active turns.
 	if req.Intent.Owner == CodexControlRemote && runtime == CodexRuntimeUnknown &&
 		a.usesOfficialCodexDaemon() && a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw {
-		return a.activateSharedCodexHost(ctx, req)
+		return a.activateSharedCodexHost(activationCtx, req)
 	}
 	if req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict {
 		runtime = CodexRuntimeDesktop
 	}
 	if runtime == CodexRuntimeDesktop && a.codexDesktopBridge {
-		if transitionErr := a.transitionCodexRuntimeToDesktop(ctx); transitionErr != nil {
+		if transitionErr := a.transitionCodexRuntimeToDesktop(activationCtx); transitionErr != nil {
 			if a.desktopRuntime != nil {
 				_ = a.desktopRuntime.disconnect()
 			}
@@ -157,7 +173,7 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if req.Intent.Owner == CodexControlDesktop || runtime != CodexRuntimeUnknown {
 		return a.codexOwners.activateRuntime(req, runtime, state)
 	}
-	return a.recoverCodexRuntimeForRemote(ctx, req)
+	return a.recoverCodexRuntimeForRemote(activationCtx, req)
 }
 
 // canRecoverCodexRuntimeForRemoteOwner 只放宽已持久化 remote owner 的 Desktop 探测结果。

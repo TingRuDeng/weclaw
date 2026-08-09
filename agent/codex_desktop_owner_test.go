@@ -20,6 +20,7 @@ type codexDesktopOwnerProbeFake struct {
 	discoverCalls  int
 	loadCalls      int
 	loadHook       func(CodexThreadRef)
+	loadFunc       func(context.Context, CodexThreadRef) error
 }
 
 func (f *codexDesktopOwnerProbeFake) Discover(context.Context, CodexThreadRef) (bool, error) {
@@ -27,10 +28,13 @@ func (f *codexDesktopOwnerProbeFake) Discover(context.Context, CodexThreadRef) (
 	return f.discoverResult, f.discoverErr
 }
 
-func (f *codexDesktopOwnerProbeFake) LoadHistory(_ context.Context, ref CodexThreadRef) error {
+func (f *codexDesktopOwnerProbeFake) LoadHistory(ctx context.Context, ref CodexThreadRef) error {
 	f.loadCalls++
 	if f.loadHook != nil {
 		f.loadHook(ref)
+	}
+	if f.loadFunc != nil {
+		return f.loadFunc(ctx, ref)
 	}
 	return f.loadErr
 }
@@ -483,6 +487,61 @@ func TestOfficialDaemonHandoffReusesClientWhileAnotherTurnIsActive(t *testing.T)
 	}
 	if restarted {
 		t.Fatal("official daemon handoff must not restart the shared client")
+	}
+}
+
+func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *testing.T) {
+	var probeDeadline time.Time
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,
+	}
+	probe.loadFunc = func(ctx context.Context, _ CodexThreadRef) error {
+		var ok bool
+		probeDeadline, ok = ctx.Deadline()
+		if !ok {
+			t.Fatal("Desktop handoff probe must be bounded")
+		}
+		return ErrCodexDesktopNoClient
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		CodexHostMode: "daemon", StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	var activationDeadline time.Time
+	a.rpcCall = func(ctx context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatalf("%s must be bounded", method)
+		}
+		switch method {
+		case "thread/resume":
+			activationDeadline = deadline
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`), nil
+		default:
+			t.Fatalf("unexpected rpc method %s", method)
+			return nil, nil
+		}
+	}
+	parentCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	parentDeadline, _ := parentCtx.Deadline()
+
+	binding, err := a.HandoffCodexRuntime(parentCtx, remoteCodexRuntimeRequest("thread-1", "route-1", 1))
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("binding=%#v error=%v", binding, err)
+	}
+	if probeDeadline.IsZero() || activationDeadline.IsZero() {
+		t.Fatalf("probe deadline=%v activation deadline=%v", probeDeadline, activationDeadline)
+	}
+	if !probeDeadline.Before(parentDeadline) || !activationDeadline.Before(parentDeadline) {
+		t.Fatalf("phase deadlines must be shorter than parent: parent=%v probe=%v activation=%v", parentDeadline, probeDeadline, activationDeadline)
+	}
+	if !probeDeadline.After(activationDeadline) {
+		t.Fatalf("activation must receive a fresh independent budget: probe=%v activation=%v", probeDeadline, activationDeadline)
 	}
 }
 

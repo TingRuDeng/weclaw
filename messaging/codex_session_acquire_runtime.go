@@ -19,9 +19,10 @@ func (h *Handler) bindCodexSharedRuntime(req codexSessionAcquireRequest, liveAge
 	if err != nil {
 		return codexRuntimeResolution{}, err
 	}
-	controlCtx, cancel := h.codexThreadControlContext(req.ctx)
-	defer cancel()
-	binding, bindErr := liveAgent.HandoffCodexRuntime(controlCtx, request)
+	// The Agent owns separate bounded budgets for Desktop release probing and
+	// shared-host activation. A generic thread-control deadline around both
+	// phases would let the probe consume the resume budget.
+	binding, bindErr := liveAgent.HandoffCodexRuntime(normalizeContext(req.ctx), request)
 	resolution := codexRuntimeResolution{
 		Request: request, Binding: binding, Rollout: rollout,
 		Live: true, ProbeErr: bindErr,
