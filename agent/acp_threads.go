@@ -195,6 +195,10 @@ func codexThreadIDFromStartResult(result json.RawMessage) (string, error) {
 }
 
 func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, threadID string) error {
+	return a.resumeThreadWithProvider(ctx, conversationID, threadID, a.codexThreadProvider(threadID))
+}
+
+func (a *ACPAgent) resumeThreadWithProvider(ctx context.Context, conversationID string, threadID string, provider string) error {
 	if threadID == "" {
 		return fmt.Errorf("empty thread id")
 	}
@@ -208,6 +212,13 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 	if reviewer := a.approvalReviewerForCodex(); reviewer != "" {
 		params["approvalsReviewer"] = reviewer
 	}
+	provider = strings.TrimSpace(provider)
+	if provider != "" {
+		if !codexProviderTokenPattern.MatchString(provider) {
+			return fmt.Errorf("invalid model provider %q", provider)
+		}
+		params["modelProvider"] = provider
+	}
 	startedAt := time.Now()
 	result, sequence, err := a.rpcWithSequence(ctx, "thread/resume", params)
 	elapsed := time.Since(startedAt)
@@ -219,12 +230,19 @@ func (a *ACPAgent) resumeThread(ctx context.Context, conversationID string, thre
 
 	var resumeResult struct {
 		Thread struct {
-			ID string `json:"id"`
+			ID            string `json:"id"`
+			ModelProvider string `json:"modelProvider"`
 		} `json:"thread"`
 	}
 	a.cacheCodexThreadConfigFromLifecycleResult(result, threadID, CodexThreadConfig{}, sequence)
-	if err := json.Unmarshal(result, &resumeResult); err == nil && resumeResult.Thread.ID != "" && resumeResult.Thread.ID != threadID {
-		log.Printf("[acp] thread/resume returned different id (requested=%s, returned=%s)", threadID, resumeResult.Thread.ID)
+	if err := json.Unmarshal(result, &resumeResult); err != nil {
+		return fmt.Errorf("parse thread/resume result: %w", err)
+	}
+	if resumeResult.Thread.ID == "" || resumeResult.Thread.ID != threadID {
+		return fmt.Errorf("thread/resume returned different id (requested=%s, returned=%s)", threadID, resumeResult.Thread.ID)
+	}
+	if provider != "" && strings.TrimSpace(resumeResult.Thread.ModelProvider) != provider {
+		return fmt.Errorf("thread/resume provider mismatch (requested=%s, returned=%s)", provider, resumeResult.Thread.ModelProvider)
 	}
 	return nil
 }

@@ -75,6 +75,8 @@ macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经
 
 在飞书或微信中显式选择会话属于一次 Handoff。若已验证的官方 daemon 是唯一 Host，而 Desktop 历史探测返回 `no-client-found`，WeClaw 会把它视为当前 App 客户端已释放该会话，并在同一 daemon 上恢复绑定；因此 Codex App 窗口仍可见时也能从移动端接手。这个例外只用于显式会话选择：普通消息、状态查询、断线或超时不会自动接管，证据不足时仍保留 binding 并失败关闭。
 
+历史 thread 不再绑定创建时使用的 provider。选择或续写已有会话时，WeClaw 会读取当前 Codex Host 对该 workspace 生效的 `model_provider`；若与 thread 元数据不同，会在所有已知任务空闲且没有 writer lease 时备份并只迁移该 thread 的 rollout、`state_5.sqlite` 和可选 local catalog，再用同一 thread ID 和显式 provider 执行 resume。用户消息、可见回复、工具调用和结果会保留；无法跨 provider 使用的加密 reasoning 与 compaction 状态会删除。目标 thread 仍在运行时不会中断，当前 turn 的引导仍进入它已经使用的 provider；下一个新 turn 会先完成迁移。已加载但空闲的 App/shared Host 可以受控重启后继续。迁移记录保存在 `CODEX_HOME/backups/weclaw-provider-migration/`，任何身份、路径、状态或 resume 核验不确定都会失败关闭。
+
 App Host 支持选择已有会话、继续任务、进度、审批、`/stop`，以及修改当前 thread 的模型和推理强度。飞书或微信绑定到 App 中正在运行的 thread 后，普通消息会直接进入当前 turn，不再先暂存并等待任务结束。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用，因为消息命令不能在本机启动额外进程。本机终端使用受控入口：

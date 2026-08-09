@@ -91,6 +91,58 @@ func TestAcquireCodexSessionCommitsFrontendBindingAndSharedRuntime(t *testing.T)
 	}
 }
 
+func TestAcquireCodexSessionPreparesProviderBeforeSharedRuntimeBinding(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("acquire result=%+v err=%v", result, err)
+	}
+	f.ag.mu.Lock()
+	defer f.ag.mu.Unlock()
+	if f.ag.providerPrepareCalls != 1 || !f.ag.providerPrepared || f.ag.handoffCalls != 1 || f.ag.handoffBeforeProviderPrepare {
+		t.Fatalf("prepare=%d handoff=%d", f.ag.providerPrepareCalls, f.ag.handoffCalls)
+	}
+	if f.ag.lastRuntimeReq.WorkspaceRoot != f.workspaceB {
+		t.Fatalf("workspaceRoot=%q, want %q", f.ag.lastRuntimeReq.WorkspaceRoot, f.workspaceB)
+	}
+}
+
+func TestAcquireCodexSessionDefersProviderMigrationWithoutResumingWrongProvider(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.ag.providerPreparation = agent.CodexProviderPreparation{Provider: "openai", PreviousProvider: "relay", Deferred: true}
+	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+	if err != nil || !errors.Is(result.runtimeErr, agent.ErrCodexWriterBusy) {
+		t.Fatalf("acquire result=%+v err=%v", result, err)
+	}
+	f.ag.mu.Lock()
+	handoffCalls := f.ag.handoffCalls
+	f.ag.mu.Unlock()
+	if handoffCalls != 0 {
+		t.Fatalf("handoff calls=%d, want 0", handoffCalls)
+	}
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceB {
+		t.Fatalf("durable workspace=%q, want %q", active, f.workspaceB)
+	}
+}
+
+func TestAcquireCodexSessionKeepsObservingActiveTargetUntilNextTurnCanMigrate(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.setActiveTarget("turn-live")
+	f.ag.providerPreparation = agent.CodexProviderPreparation{
+		Provider: "openai", PreviousProvider: "relay", Deferred: true, TargetActive: true,
+	}
+	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("acquire result=%+v err=%v", result, err)
+	}
+	f.ag.mu.Lock()
+	handoffCalls := f.ag.handoffCalls
+	f.ag.mu.Unlock()
+	if handoffCalls != 1 {
+		t.Fatalf("handoff calls=%d, want 1", handoffCalls)
+	}
+}
+
 func TestAcquireCodexSessionRuntimeFailureKeepsFrontendBinding(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	f.ag.handoffErrors["thread-b"] = context.DeadlineExceeded

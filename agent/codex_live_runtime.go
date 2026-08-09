@@ -59,8 +59,20 @@ type CodexRuntimeRequest struct {
 	Ref        CodexThreadRef
 	Intent     CodexControlIntent
 	Checkpoint CodexRolloutCheckpoint
+	// WorkspaceRoot determines the effective current provider through config/read.
+	// Empty preserves compatibility for callers that do not manage local Codex state.
+	WorkspaceRoot string
 	// PendingFirstTurn 表示该 thread 尚无已接受的用户 turn，可在协议确认不存在时安全补建。
 	PendingFirstTurn bool
+}
+
+type CodexProviderPreparation struct {
+	Provider         string
+	PreviousProvider string
+	Changed          bool
+	Deferred         bool
+	TargetActive     bool
+	BackupDir        string
 }
 
 type CodexTurnRequest struct {
@@ -124,6 +136,12 @@ type CodexLiveRuntimeAgent interface {
 	ReconcileCodexObservedTurn(context.Context, CodexRuntimeRequest, CodexThreadState) (CodexThreadBinding, error)
 	MarkCodexRuntimeConflict(context.Context, CodexRuntimeRequest) error
 	RunCodexTurn(context.Context, CodexTurnRequest) (string, error)
+}
+
+// CodexProviderRuntimeAgent is implemented by local Codex app-server agents
+// that can migrate one persisted thread to the Host's effective provider.
+type CodexProviderRuntimeAgent interface {
+	PrepareCodexThread(context.Context, CodexRuntimeRequest) (CodexProviderPreparation, error)
 }
 
 type codexDesktopOwnerProbe interface {

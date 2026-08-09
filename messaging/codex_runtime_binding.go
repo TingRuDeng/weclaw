@@ -100,9 +100,10 @@ func (h *Handler) buildCodexRuntimeRequest(route codexConversationRoute, threadI
 		return agent.CodexRuntimeRequest{}, codexRolloutTaskState{}, err
 	}
 	request := agent.CodexRuntimeRequest{
-		Ref:        agent.CodexThreadRef{ConversationID: route.conversationID, ThreadID: threadID},
-		Intent:     intent,
-		Checkpoint: agentRolloutCheckpoint(rollout),
+		Ref:           agent.CodexThreadRef{ConversationID: route.conversationID, ThreadID: threadID},
+		Intent:        intent,
+		Checkpoint:    agentRolloutCheckpoint(rollout),
+		WorkspaceRoot: route.workspaceRoot,
 		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
 			route.bindingKey, route.workspaceRoot, threadID,
 		),
@@ -118,8 +119,9 @@ func (h *Handler) buildCodexRuntimeRequestForTurn(route codexConversationRoute, 
 	}
 	log.Printf("[codex-task] 首次写入忽略 rollout checkpoint 读取失败 thread=%q: %v", threadID, err)
 	return agent.CodexRuntimeRequest{
-		Ref:    route.ref(threadID),
-		Intent: codexSharedHostIntent(route),
+		Ref:           route.ref(threadID),
+		Intent:        codexSharedHostIntent(route),
+		WorkspaceRoot: route.workspaceRoot,
 		PendingFirstTurn: h.ensureCodexSessions().isPendingFirstTurn(
 			route.bindingKey, route.workspaceRoot, threadID,
 		),

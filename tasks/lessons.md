@@ -776,3 +776,10 @@
 - 反例：看到 Qoder 国际版支持 `qodercli --acp`，就断言 Qoder CN 或 QoderWork CN 使用相同命令；看到 TRAE CN 文档出现 ACP，就断言 TRAE 国际版也已提供同一 CLI。
 - 正确做法：分别记录产品名、官方域名、账号边界、二进制、启动参数、传输方式和当前 WeClaw 验证状态；官方资料缺失时标记“待实机验证”，不得写成“已支持”。
 - 来源：2026-08-01 用户指出 Qoder 与 TRAE 均需区分国际版和中国版。
+## 2026-08-09 历史 Codex 会话必须跟随当前 provider
+
+- 触发条件：本地 Codex 在官方与中转 provider 间切换后，从飞书、微信或受控 CLI 选择由另一 provider 创建的历史 thread。
+- 规则：历史 thread 保存的 `model_provider` 只描述旧状态，不能决定续写 provider；每次显式选择和真实 turn 前都必须以当前 Host 对 workspace 生效的 provider 为权威，在空闲门禁内迁移同一 thread 的 provider 元数据和兼容历史。
+- 反例：按会话原 provider 启动或 resume，导致旧中转不可用时该会话永久不可用；只改 SQLite 或 `session_meta`，却保留跨 provider 无法解密的 reasoning；目标 active 时直接重启 Host；迁移暂缓后仍把输入发往旧 provider。
+- 正确做法：保留 thread ID、用户消息、可见回复、工具调用和结果，递归删除 provider 专属的加密 reasoning/compaction 状态并修复所有层级的 item ID 引用，原子更新目标 rollout 与两处目录元数据并写 before-image 备份；共享 Host 用 `config/read(cwd)` 与显式 `thread/resume.modelProvider` 核验，空闲已加载 Host 才允许受控重启。active 目标不被中断，当前 turn 的 steer 沿用既有 provider，下一个新 turn 先迁移；unknown/交付不确定一律失败关闭并在后续写入前重试。
+- 来源：用户明确纠正“切换历史会话时应该使用当前 Codex 在用的 provider，并自动修改要切换会话所属的 provider 信息”。

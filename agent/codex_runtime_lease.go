@@ -146,6 +146,20 @@ func (r *codexRuntimeOwnerRegistry) anyWriterLeaseStatus() (count int, uncertain
 	return count, uncertain
 }
 
+func (r *codexRuntimeOwnerRegistry) anyActiveThreadStatus() (count int, unknown bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, binding := range r.threads {
+		if binding.Runtime == CodexRuntimeConflict {
+			unknown = true
+		}
+		if binding.State.Active {
+			count++
+		}
+	}
+	return count, unknown
+}
+
 // accept 把实际 turn ID 绑定到租约，并核对启动响应前到达的 Desktop 快照。
 func (l *codexWriterLease) accept(turnID string) error {
 	turnID = strings.TrimSpace(turnID)

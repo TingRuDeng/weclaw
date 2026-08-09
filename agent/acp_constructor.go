@@ -81,6 +81,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		threads:                    make(map[string]string),
 		codexThreadConfigs:         make(map[string]CodexThreadConfig),
 		codexThreadConfigRevisions: make(map[string]uint64),
+		codexThreadProviders:       make(map[string]string),
 		resumeOnFirstUse:           make(map[string]bool),
 		conversationCwds:           make(map[string]string),
 		stateFile:                  options.stateFile,

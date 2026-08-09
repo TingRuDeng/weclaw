@@ -33,11 +33,25 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 		if err := a.ensureCodexAccountForTurn(ctx); err != nil {
 			return "", err
 		}
+		preparation, prepareErr := a.prepareCodexThreadProviderLocked(ctx, req.Runtime)
+		if prepareErr != nil {
+			return "", prepareErr
+		}
+		if preparation.Deferred {
+			return "", errCodexProviderMigrationDeferred
+		}
 		// Every frontend conversation has its own app-server mapping. Rebind on
 		// each admitted turn so a binding created while another client held the
 		// thread lease cannot accidentally reuse a stale conversation mapping.
 		binding, err = a.activateSharedCodexHost(ctx, req.Runtime)
 	} else if a.codexDesktopBridge {
+		preparation, prepareErr := a.prepareCodexThreadProviderLocked(ctx, req.Runtime)
+		if prepareErr != nil {
+			return "", prepareErr
+		}
+		if preparation.Deferred {
+			return "", errCodexProviderMigrationDeferred
+		}
 		binding, err = a.inspectCodexRuntimeLocked(ctx, req.Runtime)
 	} else {
 		binding, err = a.CurrentCodexRuntime(req.Runtime)

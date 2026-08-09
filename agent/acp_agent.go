@@ -82,6 +82,7 @@ type ACPAgent struct {
 	threads                    map[string]string // conversationID -> threadID (codex app-server)
 	codexThreadConfigs         map[string]CodexThreadConfig
 	codexThreadConfigRevisions map[string]uint64
+	codexThreadProviders       map[string]string
 	// resumeOnFirstUse marks restored thread mappings that should trigger a
 	// best-effort thread/resume call before first turn.
 	resumeOnFirstUse      map[string]bool // conversationID -> resume needed
@@ -146,6 +147,10 @@ type ACPAgent struct {
 	codexCLIUpdaterCall        func(context.Context) (codexCLIUpdateResult, error)
 	codexDaemonLifecycleCall   func(context.Context, string) (codexDaemonLifecycleOutput, error)
 	codexDaemonMetadataCall    func(context.Context, codexDaemonLifecycleOutput, string) (codexHostMetadata, error)
+	codexProviderMigrationCall func(context.Context, codexProviderMigrationRequest) (codexProviderMigrationResult, error)
+	codexProviderReadCall      func(context.Context, string) (string, error)
+	stopDesktopHostCall        func(context.Context) error
+	startDesktopHostCall       func(context.Context) error
 	protocolTrace              observability.ProtocolRecorder
 }
 

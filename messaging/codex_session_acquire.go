@@ -77,6 +77,17 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		return codexSessionAcquireResult{}, errCodexRemoteSelectionChanged
 	}
 	h.bindConversationCwd(req.agent, req.route.conversationID, req.route.workspaceRoot)
+	providerRequest, providerRollout, err := h.buildCodexRuntimeRequest(req.route, req.route.threadID)
+	if err != nil {
+		return codexSessionAcquireResult{}, err
+	}
+	providerPreparation := agent.CodexProviderPreparation{}
+	if providerAgent, supported := req.agent.(agent.CodexProviderRuntimeAgent); supported {
+		providerPreparation, err = providerAgent.PrepareCodexThread(req.ctx, providerRequest)
+		if err != nil {
+			return codexSessionAcquireResult{}, err
+		}
+	}
 	committed, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
 		BindingKey:       req.route.bindingKey,
 		WorkspaceRoot:    req.route.workspaceRoot,
@@ -103,6 +114,14 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 	result.selectionChanged = h.codexTaskCardSelectionChanged(
 		req.route.bindingKey, req.route.conversationID, storeSelectionChanged,
 	)
+	if providerPreparation.Deferred && !providerPreparation.TargetActive && !providerRequest.Checkpoint.Active {
+		result.resolution = codexRuntimeResolution{
+			Request: providerRequest, Binding: unknownCodexRuntimeBinding(providerRequest),
+			Rollout: providerRollout, Live: true, ProbeErr: agent.ErrCodexWriterBusy,
+		}
+		result.runtimeErr = agent.ErrCodexWriterBusy
+		return result, nil
+	}
 
 	result.resolution, result.runtimeErr = h.bindCodexSharedRuntime(req, liveAgent)
 	if result.runtimeErr != nil {

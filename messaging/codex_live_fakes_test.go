@@ -10,32 +10,37 @@ import (
 
 type fakeCodexLiveAgent struct {
 	*fakeCodexThreadAgent
-	mu                    sync.Mutex
-	binding               agent.CodexThreadBinding
-	bindings              map[string]agent.CodexThreadBinding
-	bindErr               error
-	inspectErrors         map[string]error
-	handoffErr            error
-	handoffErrors         map[string]error
-	handoffAfterErrors    map[string]error
-	handoffHistory        []agent.CodexRuntimeRequest
-	handoffReleases       map[string]<-chan struct{}
-	handoffHooks          map[string]func()
-	rejectCanceledContext bool
-	runErr                error
-	bindCalls             int
-	handoffCalls          int
-	runCalls              int
-	lastRuntimeReq        agent.CodexRuntimeRequest
-	lastTurnReq           agent.CodexTurnRequest
-	watchResults          []fakeCodexWatchResult
-	inspectEntered        chan struct{}
-	inspectRelease        <-chan struct{}
-	handoffEntered        chan struct{}
-	handoffRelease        <-chan struct{}
-	turnEntered           chan struct{}
-	turnRelease           <-chan struct{}
-	recordRuntimeContext  func(string, context.Context, agent.CodexRuntimeRequest)
+	mu                           sync.Mutex
+	binding                      agent.CodexThreadBinding
+	bindings                     map[string]agent.CodexThreadBinding
+	bindErr                      error
+	inspectErrors                map[string]error
+	handoffErr                   error
+	handoffErrors                map[string]error
+	handoffAfterErrors           map[string]error
+	handoffHistory               []agent.CodexRuntimeRequest
+	handoffReleases              map[string]<-chan struct{}
+	handoffHooks                 map[string]func()
+	rejectCanceledContext        bool
+	runErr                       error
+	providerPreparation          agent.CodexProviderPreparation
+	providerPrepareErr           error
+	providerPrepareCalls         int
+	providerPrepared             bool
+	handoffBeforeProviderPrepare bool
+	bindCalls                    int
+	handoffCalls                 int
+	runCalls                     int
+	lastRuntimeReq               agent.CodexRuntimeRequest
+	lastTurnReq                  agent.CodexTurnRequest
+	watchResults                 []fakeCodexWatchResult
+	inspectEntered               chan struct{}
+	inspectRelease               <-chan struct{}
+	handoffEntered               chan struct{}
+	handoffRelease               <-chan struct{}
+	turnEntered                  chan struct{}
+	turnRelease                  <-chan struct{}
+	recordRuntimeContext         func(string, context.Context, agent.CodexRuntimeRequest)
 }
 
 type fakeCodexWatchResult struct {
@@ -137,6 +142,9 @@ func (f *fakeCodexLiveAgent) ReconcileCodexObservedTurn(_ context.Context, req a
 
 func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	f.mu.Lock()
+	if !f.providerPrepared {
+		f.handoffBeforeProviderPrepare = true
+	}
 	f.handoffCalls++
 	f.lastRuntimeReq = req
 	f.handoffHistory = append(f.handoffHistory, req)
@@ -195,6 +203,15 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 		return binding, err
 	}
 	return binding, nil
+}
+
+func (f *fakeCodexLiveAgent) PrepareCodexThread(_ context.Context, req agent.CodexRuntimeRequest) (agent.CodexProviderPreparation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.providerPrepareCalls++
+	f.providerPrepared = true
+	f.lastRuntimeReq = req
+	return f.providerPreparation, f.providerPrepareErr
 }
 
 // MarkCodexRuntimeConflict 模拟 ACP registry 的持续 fail-closed 标记。
