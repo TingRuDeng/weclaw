@@ -51,7 +51,7 @@ ai_summary:
 - `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；macOS 默认 `auto` 拓扑会保持已验证且正在运行的官方 standalone daemon 为唯一 Host，即使 Codex App 同时存在也让 App、微信、飞书和受控 `weclaw codex cli` 复用它。没有运行中的 daemon 时，App 已运行则通过受保护 Desktop IPC 复用 App Host；App 不在时才连接或启动稳定 Unix socket 上的共享 app-server（官方 standalone daemon 优先，否则使用 WeClaw-managed 兼容路径）。managed Host 切换到 App 前必须经过全局空闲门禁，任何时刻只能有一个写入权威；活动 turn 输入直接 steer，未发送的 Desktop/CLI follow-up 仍是客户端草稿；Codex Companion 和旧 `codex exec` 第二 writer 已停用。
 - `codexauth/` 管理 shared-host 级 Codex ChatGPT OAuth profile：系统凭据库优先、受保护文件显式降级；在线切换由 `agent/codex_account.go` 在 task/lease/thread 空闲门禁内停止和验证真实受管 Host，不能修改窗口 workspace/thread binding。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
-- `scripts/release.sh` 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64` 四个正式资产，并会运行测试、race、vet 和 `git diff --check`；本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。
+- `scripts/release.sh` 为 GitHub 构建 `darwin/arm64`、`darwin/amd64`、`linux/arm64`、`linux/amd64` 四个正式资产，Gitee 只镜像 `darwin/arm64` 压缩资产和原始摘要；发布会运行测试、race、vet 和 `git diff --check`，本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。
 - `tasks/todo.md` 只保留当前或正在执行的任务记录；已完成历史流水账不长期保留。
 - `tasks/lessons.md` 是长期经验沉淀，清理文档时必须保留。
 - 不要把机器本地绝对路径写入项目上下文文档；配置示例可以使用 `/path/to/project` 这类占位路径。

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type codexDesktopOwnerProbeFake struct {
@@ -450,7 +451,7 @@ func TestDesktopBridgeDoesNotFallbackWhileCodexAppIsPresent(t *testing.T) {
 	}
 }
 
-func TestOfficialDaemonHandoffRecoversNoClientWhileCodexAppIsPresent(t *testing.T) {
+func TestOfficialDaemonHandoffReusesClientWhileAnotherTurnIsActive(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{
 		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,
 	}
@@ -466,15 +467,22 @@ func TestOfficialDaemonHandoffRecoversNoClientWhileCodexAppIsPresent(t *testing.
 	}
 	a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
 	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	permit, err := a.ensureCodexAppServerGate().acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer permit.release()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 
-	binding, err := a.HandoffCodexRuntime(context.Background(), req)
+	binding, err := a.HandoffCodexRuntime(ctx, req)
 
 	if err != nil || binding.Runtime != CodexRuntimeWeClaw ||
 		a.threads[req.Ref.ConversationID] != req.Ref.ThreadID {
 		t.Fatalf("binding=%#v threads=%#v error=%v", binding, a.threads, err)
 	}
-	if !restarted {
-		t.Fatal("official daemon client should recover the released thread")
+	if restarted {
+		t.Fatal("official daemon handoff must not restart the shared client")
 	}
 }
 

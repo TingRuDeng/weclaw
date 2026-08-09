@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 	"github.com/fastclaw-ai/weclaw/wechat"
 )
 
@@ -226,6 +228,76 @@ func TestGuideSendsPendingMessageAndSuppressesFirstReply(t *testing.T) {
 	if !containsText(texts, "第2条结果") {
 		t.Fatalf("未发送引导后的最终结果，messages=%#v", texts)
 	}
+}
+
+type codexGuideContextProbeAgent struct {
+	fakeAgent
+	contexts chan context.Context
+	release  chan struct{}
+}
+
+func (a *codexGuideContextProbeAgent) ChatWithProgress(ctx context.Context, _ string, _ string, _ func(string)) (string, error) {
+	a.contexts <- ctx
+	select {
+	case <-a.release:
+		return "完成", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func TestCodexGuideReplacementSurvivesCardActionContextCancellation(t *testing.T) {
+	h := NewHandler(nil, nil)
+	ag := &codexGuideContextProbeAgent{
+		fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}},
+		contexts:  make(chan context.Context, 2),
+		release:   make(chan struct{}, 1),
+	}
+	t.Cleanup(func() { close(ag.release) })
+	h.SetDefaultAgent("codex", ag)
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	h.SetProgressConfig(cfg)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	request := func(ctx context.Context, message string) agentMessageRequest {
+		return agentMessageRequest{
+			ctx: ctx, platformName: platform.PlatformFeishu,
+			userID: "user-1", routeUserID: "route-1", reply: reply,
+			name: "codex", message: message,
+		}
+	}
+
+	h.sendToNamedAgent(request(context.Background(), "第一条"))
+	select {
+	case <-ag.contexts:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("未等到第一条 Codex 任务开始")
+	}
+	h.sendToNamedAgent(request(context.Background(), "第二条"))
+
+	cardActionCtx, cancelCardAction := context.WithCancel(context.Background())
+	h.handleGuideCommand(taskCommandRequest{
+		ctx: cardActionCtx, platformName: platform.PlatformFeishu,
+		actorUserID: "user-1", routeUserID: "route-1", reply: reply,
+	})
+	cancelCardAction()
+
+	var replacementCtx context.Context
+	select {
+	case replacementCtx = <-ag.contexts:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("未等到引导接管后的 Codex 任务开始")
+	}
+	if err := replacementCtx.Err(); err != nil {
+		t.Fatalf("卡片回调结束后引导任务上下文被取消: %v", err)
+	}
+
+	ag.release <- struct{}{}
+	key := h.agentExecutionKeyForRoute("user-1", "route-1", "codex", ag)
+	waitUntil(t, func() bool {
+		_, active := h.activeTask(key)
+		return !active
+	})
 }
 
 func TestCancelWithdrawsPendingGuideAndKeepsRunningTask(t *testing.T) {

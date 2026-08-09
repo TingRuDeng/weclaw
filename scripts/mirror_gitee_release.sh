@@ -48,12 +48,10 @@ SOURCE_ASSETS=(
   weclaw_linux_arm64
   weclaw_linux_amd64
 )
+GITEE_BINARY_ASSET="weclaw_darwin_arm64"
 EXPECTED_ASSETS=(
   checksums.txt
-  weclaw_darwin_arm64.gz
-  weclaw_darwin_amd64.gz
-  weclaw_linux_arm64.gz
-  weclaw_linux_amd64.gz
+  "${GITEE_BINARY_ASSET}.gz"
 )
 
 actual_count="$(find "$ASSET_DIR" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
@@ -72,9 +70,7 @@ trap cleanup EXIT
 
 MIRROR_DIR="$TEMP_DIR/mirror-assets"
 mkdir -p "$MIRROR_DIR"
-for asset_name in "${SOURCE_ASSETS[@]}"; do
-  gzip -n -9 -c "$ASSET_DIR/$asset_name" >"$MIRROR_DIR/$asset_name.gz"
-done
+gzip -n -9 -c "$ASSET_DIR/$GITEE_BINARY_ASSET" >"$MIRROR_DIR/$GITEE_BINARY_ASSET.gz"
 cp "$ASSET_DIR/checksums.txt" "$MIRROR_DIR/checksums.txt"
 
 TOKEN_FILE="$TEMP_DIR/token"
@@ -235,7 +231,7 @@ with open(sys.argv[2], "w", encoding="utf-8") as output:
 PY
 
 asset_count="$(wc -l <"$TEMP_DIR/assets.tsv" | tr -d '[:space:]')"
-[[ "$asset_count" == "${#EXPECTED_ASSETS[@]}" ]] || fail "Gitee Release 资产数为 $asset_count，期望 ${#EXPECTED_ASSETS[@]}"
+[[ "$asset_count" == "${#EXPECTED_ASSETS[@]}" ]] || fail "Gitee Release 资产数为 ${asset_count}，期望 ${#EXPECTED_ASSETS[@]}"
 for asset_name in "${EXPECTED_ASSETS[@]}"; do
   asset_url="$(awk -F '\t' -v name="$asset_name" '$1 == name { print $2 }' "$TEMP_DIR/assets.tsv")"
   [[ -n "$asset_url" ]] || fail "Gitee Release 缺少资产：$asset_name"
@@ -244,11 +240,13 @@ for asset_name in "${EXPECTED_ASSETS[@]}"; do
 done
 verified_original_dir="$TEMP_DIR/verified-original"
 mkdir -p "$verified_original_dir"
-for asset_name in "${SOURCE_ASSETS[@]}"; do
-  gzip -dc "$verified_dir/$asset_name.gz" >"$verified_original_dir/$asset_name" || fail "Gitee 回下载 gzip 资产损坏：$asset_name.gz"
-  cmp "$ASSET_DIR/$asset_name" "$verified_original_dir/$asset_name" >/dev/null || fail "Gitee 解压资产与权威资产不同：$asset_name"
-done
+gzip -dc "$verified_dir/$GITEE_BINARY_ASSET.gz" >"$verified_original_dir/$GITEE_BINARY_ASSET" || fail "Gitee 回下载 gzip 资产损坏：$GITEE_BINARY_ASSET.gz"
+cmp "$ASSET_DIR/$GITEE_BINARY_ASSET" "$verified_original_dir/$GITEE_BINARY_ASSET" >/dev/null || fail "Gitee 解压资产与权威资产不同：$GITEE_BINARY_ASSET"
 cp "$verified_dir/checksums.txt" "$verified_original_dir/checksums.txt"
-(cd "$verified_original_dir" && shasum -a 256 -c checksums.txt) >/dev/null || fail "Gitee 回下载摘要校验失败"
+arm64_checksums="$TEMP_DIR/darwin-arm64-checksums.txt"
+awk -v name="$GITEE_BINARY_ASSET" '$2 == name || $2 == "*" name { print }' "$verified_original_dir/checksums.txt" >"$arm64_checksums"
+arm64_checksum_count="$(wc -l <"$arm64_checksums" | tr -d '[:space:]')"
+[[ "$arm64_checksum_count" == "1" ]] || fail "checksums.txt 中 ${GITEE_BINARY_ASSET} 摘要数为 ${arm64_checksum_count}，期望 1"
+(cd "$verified_original_dir" && shasum -a 256 -c "$arm64_checksums") >/dev/null || fail "Gitee 回下载摘要校验失败"
 
 printf 'Gitee 镜像完成：%s\n' "$TAG"

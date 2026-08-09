@@ -131,6 +131,24 @@ func (r *taskCardRegistry) updatePresentationWithSequences(cardID, summary, cont
 	return state.cardOptions(), first, second, true
 }
 
+func (r *taskCardRegistry) enableStructuredPresentationWithSequence(cardID, summary, content string) (cardOptions, int, bool) {
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return cardOptions{}, 0, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.cards[cardID]
+	if state == nil {
+		return cardOptions{}, 0, false
+	}
+	state.summary, state.content = summary, content
+	state.collapsible = true
+	state.expanded = true
+	state.sequence++
+	state.updatedAt = r.nowOrDefault()
+	return state.cardOptions(), state.sequence, true
+}
+
 func (r *taskCardRegistry) update(cardID string, status string, content string) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
 		return

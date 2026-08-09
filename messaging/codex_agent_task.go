@@ -19,6 +19,8 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	defer unlockRegistry()
 	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
 	defer unlockBinding()
+	// 后台任务保留消息上下文值，但不能随平台请求返回而被取消。
+	opts.ctx = context.WithoutCancel(opts.ctx)
 	agentCtx, cancelTaskTimeout := contextWithTaskTimeout(opts.ctx, opts.progressCfg)
 	agentCtx = h.withAgentInteractions(agentCtx, agentInteractionContextOptions{
 		actorUserID: opts.userID, routeUserID: opts.routeUserID,

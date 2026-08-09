@@ -28,7 +28,7 @@ After verifying the WeClaw binary, the one-line installer runs a read-only depen
 # Install the actively maintained distribution
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
-# If GitHub is unreachable, fetch the same installer and verified mirror assets from Gitee
+# On an Apple Silicon Mac, use Gitee for the same installer and verified mirror assets if GitHub is unreachable
 curl -fsSL --proto '=https' --tlsv1.2 https://gitee.com/jimdeng891/weclaw/raw/main/install.sh | WECLAW_SOURCE=gitee sh
 
 # Check agents, platform credentials, and access control
@@ -376,12 +376,12 @@ weclaw restart
 weclaw restart --force       # Explicitly interrupt active tasks
 weclaw stop
 weclaw update
-weclaw update --source gitee  # Explicit Gitee mirror for restricted networks
+weclaw update --source gitee  # Explicit Gitee mirror for Apple Silicon Macs
 weclaw update --restart
 weclaw version
 ```
 
-Update sources are `auto` (default), `github`, and `gitee`. Use `--source` for one command, set `"update_source": "gitee"` in `~/.weclaw/config.json` for a persistent choice, or override it with `WECLAW_UPDATE_SOURCE`. `auto` falls back from GitHub to Gitee only for DNS, connection, TLS, timeout, or HTTP 5xx failures. HTTP 4xx, invalid versions, and SHA-256 failures stop immediately instead of being hidden by a mirror fallback. The updater also rejects a stale mirror that would downgrade the installed stable version.
+Update sources are `auto` (default), `github`, and `gitee`. Gitee binary mirrors are available only for `darwin/arm64`; other platforms must use GitHub. Use `--source` for one command, set `"update_source": "gitee"` in `~/.weclaw/config.json` for a persistent choice, or override it with `WECLAW_UPDATE_SOURCE`. `auto` falls back from GitHub to Gitee only for DNS, connection, TLS, timeout, or HTTP 5xx failures. HTTP 4xx, invalid versions, and SHA-256 failures stop immediately instead of being hidden by a mirror fallback. The updater also rejects a stale mirror that would downgrade the installed stable version.
 
 `weclaw update` returns immediately when the installed version is already current. Configuration and agent preflight runs only after installing a new version or when `update --restart` is explicitly requested. `restart` and `update --restart` finish preflight and atomically enter drain mode through the loopback control API before stopping the old service: a normal restart rejects active tasks, while `--force` cancels them and waits for terminal delivery. A systemd-managed instance remains owned by systemd instead of spawning a private daemon. Even a direct `systemctl restart` that bypasses CLI preflight closes leftover task cards through SIGTERM draining or startup recovery. If preflight fails after installing a new version, WeClaw restores the previous binary. During `update --restart`, safety-check, shutdown, or startup failures likewise restore the previous binary and restart the previous service if it had already stopped; rollback failures are reported together with the original update error. Without an explicit `--restart`, `weclaw update` replaces only the binary and never restarts the service. Update official installations with `weclaw update`; never overwrite the binary in PATH with a local build.
 
@@ -396,7 +396,7 @@ go build -o weclaw .
 
 The repository currently uses Go 1.26.5. No publicly pullable container image is currently published in sync with this maintained distribution.
 
-`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline. GitHub Release remains authoritative for versions and builds. Only after that release is public and verified are the four binaries mirrored to [Gitee](https://gitee.com/jimdeng891/weclaw) as reversible `.gz` attachments alongside the original `checksums.txt`; the installer and updater still verify the unpacked files against the authoritative GitHub checksums. A mirror failure visibly fails the release job without deleting the already verified GitHub Release; the manual `Repair Gitee Mirror` workflow resumes missing attachments from that GitHub Release and verifies them again.
+`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline. GitHub Release remains authoritative for versions and builds, publishing all four platform binaries and the original `checksums.txt`. Only after that release is public and verified are the reversible `.gz` representation of `weclaw_darwin_arm64` and that same original `checksums.txt` mirrored to [Gitee](https://gitee.com/jimdeng891/weclaw); the installer and updater still verify the unpacked file against the authoritative GitHub checksum. A mirror failure visibly fails the release job without deleting the already verified GitHub Release; the manual `Repair Gitee Mirror` workflow resumes missing attachments from that GitHub Release and verifies them again.
 
 ## Upstream and License
 

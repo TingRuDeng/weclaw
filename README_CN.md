@@ -28,7 +28,7 @@
 # 安装当前维护版
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/TingRuDeng/weclaw/main/install.sh | sh
 
-# GitHub 不可达时，从 Gitee 取得同一安装脚本和已校验镜像资产
+# Apple Silicon Mac 在 GitHub 不可达时，从 Gitee 取得同一安装脚本和已校验镜像资产
 curl -fsSL --proto '=https' --tlsv1.2 https://gitee.com/jimdeng891/weclaw/raw/main/install.sh | WECLAW_SOURCE=gitee sh
 
 # 检查 Agent、平台凭证和访问控制
@@ -376,12 +376,12 @@ weclaw restart
 weclaw restart --force       # 明确中断运行中任务
 weclaw stop
 weclaw update
-weclaw update --source gitee  # GitHub 不可达时显式使用 Gitee
+weclaw update --source gitee  # Apple Silicon Mac 在 GitHub 不可达时显式使用 Gitee
 weclaw update --restart
 weclaw version
 ```
 
-更新来源支持 `auto`（默认）、`github` 和 `gitee`。可用 `--source` 临时指定，在 `~/.weclaw/config.json` 写入 `"update_source": "gitee"` 持久指定，或用 `WECLAW_UPDATE_SOURCE` 覆盖。`auto` 只在 DNS、连接、TLS、超时或 HTTP 5xx 时从 GitHub 切换 Gitee；4xx、版本格式或 SHA-256 异常会直接失败，不通过换源掩盖完整性问题。Gitee 镜像落后时更新器也会拒绝降级。
+更新来源支持 `auto`（默认）、`github` 和 `gitee`。Gitee 二进制镜像仅提供 `darwin/arm64`，其他平台应使用 GitHub。可用 `--source` 临时指定，在 `~/.weclaw/config.json` 写入 `"update_source": "gitee"` 持久指定，或用 `WECLAW_UPDATE_SOURCE` 覆盖。`auto` 只在 DNS、连接、TLS、超时或 HTTP 5xx 时从 GitHub 切换 Gitee；4xx、版本格式或 SHA-256 异常会直接失败，不通过换源掩盖完整性问题。Gitee 镜像落后时更新器也会拒绝降级。
 
 `weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`restart` 和 `update --restart` 会在停止旧服务前完成预检，并通过本机控制 API 原子进入排空状态：普通重启遇到活动任务会拒绝，`--force` 会取消任务并等待终态交付。systemd 托管实例会继续由 systemd 重启，不会另起私有后台进程；即使直接执行 `systemctl restart` 绕过 CLI 预检，SIGTERM 收尾或下次启动恢复也会关闭遗留任务卡。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
 
@@ -396,7 +396,7 @@ go build -o weclaw .
 
 仓库当前使用 Go 1.26.5。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
 
-正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源；正式 Release 验证通过后，四个二进制会以可还原的 `.gz` 附件连同原始 `checksums.txt` 镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)，安装器和更新器解压后仍按 GitHub 权威摘要校验。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 续传缺失附件并重新验证。
+正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，继续发布四个平台二进制和原始 `checksums.txt`；正式 Release 验证通过后，只把 `weclaw_darwin_arm64` 的可还原 `.gz` 表示和同一份原始 `checksums.txt` 镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)，安装器和更新器解压后仍按 GitHub 权威摘要校验。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 续传缺失附件并重新验证。
 
 ## 上游与许可
 

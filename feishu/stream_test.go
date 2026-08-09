@@ -156,6 +156,62 @@ func TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard(t *testing.T
 	}
 }
 
+func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "card-upgrade"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex", InitialContent: platform.TaskStreamThinkingIndicator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream.(*feishuStream).throttle = 0
+
+	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
+		Summary: "正在读取代码", Details: "读取代码\n\n" + platform.TaskStreamThinkingIndicator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.updateCards) != 1 {
+		t.Fatalf("UpdateCard calls=%d, want 1 layout upgrade", len(kit.updateCards))
+	}
+	if len(kit.streamElementIDs) != 0 {
+		t.Fatalf("stream element ids=%#v, want no component update before layout upgrade", kit.streamElementIDs)
+	}
+	card := decodeCardJSON(t, kit.updateCards[0])
+	elements := card["body"].(map[string]any)["elements"].([]any)
+	if len(elements) != 2 || elements[0].(map[string]any)["element_id"] != cardProgressSummaryID ||
+		elements[0].(map[string]any)["content"] != "正在读取代码" ||
+		elements[1].(map[string]any)["element_id"] != cardProgressPanelID {
+		t.Fatalf("upgraded body=%#v, want summary and collapsible progress panel", card["body"])
+	}
+	panelElements := elements[1].(map[string]any)["elements"].([]any)
+	if len(panelElements) != 1 || panelElements[0].(map[string]any)["element_id"] != cardMainContentID ||
+		panelElements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator {
+		t.Fatalf("progress panel elements=%#v, want latest details", panelElements)
+	}
+
+	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
+		Summary: "正在运行测试", Details: "读取代码\n\n运行测试\n\n" + platform.TaskStreamThinkingIndicator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.updateCards) != 1 {
+		t.Fatalf("UpdateCard calls=%d, want only the initial layout upgrade", len(kit.updateCards))
+	}
+	wantElementIDs := []string{cardProgressSummaryID, cardMainContentID}
+	if len(kit.streamElementIDs) != len(wantElementIDs) {
+		t.Fatalf("stream element ids=%#v, want %#v after layout upgrade", kit.streamElementIDs, wantElementIDs)
+	}
+	for i, want := range wantElementIDs {
+		if kit.streamElementIDs[i] != want {
+			t.Fatalf("stream element id[%d]=%q, want %q", i, kit.streamElementIDs[i], want)
+		}
+	}
+}
+
 func TestCollapsibleTaskTerminalAndSupersedeCollapsePanel(t *testing.T) {
 	for _, terminal := range []platform.StreamTerminalState{platform.StreamTerminalCompleted, platform.StreamTerminalFailed, platform.StreamTerminalStopped} {
 		kit := &fakeCardKitClient{cardID: "card-terminal"}

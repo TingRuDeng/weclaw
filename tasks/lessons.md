@@ -1,5 +1,13 @@
 # Lessons
 
+## 2026-08-09 后台 Agent 任务不能继承平台回调取消
+
+- 触发条件：飞书卡片按钮在异步分发完成后取消回调 context，而业务处理已经从该回调启动新的 Codex 或 Claude 后台任务。
+- 规则：后台任务必须保留消息 context 中的 Trace、route 和身份值，但必须脱离平台请求或卡片回调的取消与 deadline；任务停止和超时只能由任务自身的 cancel 与 `TaskTimeoutSeconds` 控制。
+- 反例：直接以卡片回调 context 创建后台任务；按钮返回后旧任务已停止，新任务随回调一起收到 `context canceled`，导致进度卡创建失败且没有最终回复。
+- 正确做法：在后台任务入口先使用 `context.WithoutCancel` 冻结值，再建立任务级 timeout 和 active-task cancel；回归测试应在分发返回后取消原 context，并断言新任务仍运行且可创建进度流。
+- 来源：2026-08-09 用户反馈飞书安卓端点击“作为引导发送”后旧卡停止更新、新卡未生成；Trace 显示替代任务启动后约 190 ms 因 `context canceled` 失败。
+
 ## 2026-07-31 用户主动停止必须是独立终态
 
 - 触发条件：用户发送 `/stop`，协议已接受停止请求，随后 Agent、rollout 或任务 context 以 `interrupted`、turn terminal 或 `context canceled` 结束。

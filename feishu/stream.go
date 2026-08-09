@@ -70,6 +70,8 @@ func (s *feishuStream) PreflightPresentation(p platform.StreamPresentation) erro
 			opts.Content = p.Details
 		}
 	}
+	opts.Collapsible = true
+	opts.Expanded = true
 	raw, err := buildCardV2(opts)
 	if err != nil {
 		return err
@@ -128,7 +130,29 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 		return nil
 	}
 	op := feishuStreamUpdateOp{summary: p.Summary, content: p.Details}
-	if s.taskCards != nil {
+	if !s.collapsible {
+		opts := cardOptions{
+			Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Content: p.Details,
+			Collapsible: true, Expanded: true, InlineActiveStatus: s.inlineActiveStatus,
+			Approvals: append([]string(nil), s.preservedApprovals...),
+		}
+		if s.taskCards != nil {
+			if snapshot, sequence, ok := s.taskCards.enableStructuredPresentationWithSequence(s.cardID, p.Summary, p.Details); ok {
+				opts = snapshot
+				op.taskUpdateSeq = sequence
+				s.sequence = sequence
+			}
+		}
+		if op.taskUpdateSeq == 0 {
+			op.taskUpdateSeq = s.nextSequence()
+		}
+		cardJSON, err := buildCardV2(opts)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		op.taskCardJSON = cardJSON
+	} else if s.taskCards != nil {
 		_, a, b, ok := s.taskCards.updatePresentationWithSequences(s.cardID, p.Summary, p.Details)
 		if ok {
 			op.summarySeq, op.detailsSeq = a, b
@@ -141,6 +165,19 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 	s.mu.Unlock()
 	s.ioMu.Lock()
 	defer s.ioMu.Unlock()
+	if op.taskCardJSON != "" {
+		err := s.cardKit.UpdateCard(ctx, s.cardID, op.taskCardJSON, op.taskUpdateSeq)
+		if ignored := ignoreCardKitUpdateError(err); ignored != nil {
+			return ignored
+		}
+		if err != nil {
+			log.Printf("[feishu] ignored non-fatal structured layout update error: %v", err)
+		}
+		s.mu.Lock()
+		s.collapsible = true
+		s.mu.Unlock()
+		return nil
+	}
 	if op.summarySeq == 0 {
 		op.summarySeq = s.nextSequence()
 		op.detailsSeq = s.nextSequence()

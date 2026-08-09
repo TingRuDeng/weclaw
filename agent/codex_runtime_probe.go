@@ -135,6 +135,14 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if err != nil && !(req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict) {
 		return CodexThreadBinding{}, err
 	}
+	// The verified daemon is already the authoritative Host. Once the explicit
+	// Desktop probe confirms release, attaching a new frontend only needs to
+	// resume and read the target thread on the existing client. Restarting that
+	// client would unnecessarily drain unrelated active turns.
+	if req.Intent.Owner == CodexControlRemote && runtime == CodexRuntimeUnknown &&
+		a.usesOfficialCodexDaemon() && a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw {
+		return a.activateSharedCodexHost(ctx, req)
+	}
 	if req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict {
 		runtime = CodexRuntimeDesktop
 	}
