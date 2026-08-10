@@ -15,6 +15,7 @@ type taskCardRegistry struct {
 }
 
 type taskCardState struct {
+	taskCardID         string
 	title              string
 	status             string
 	content            string
@@ -50,6 +51,7 @@ func (r *taskCardRegistry) recordWithSequence(cardID string, opts cardOptions, s
 	defer r.mu.Unlock()
 	r.purgeLocked()
 	r.cards[cardID] = &taskCardState{
+		taskCardID:         cardID,
 		title:              opts.Title,
 		status:             normalizeCardStatus(opts.Status),
 		content:            opts.Content,
@@ -61,6 +63,22 @@ func (r *taskCardRegistry) recordWithSequence(cardID string, opts cardOptions, s
 		expanded:           opts.Expanded,
 		updatedAt:          r.nowOrDefault(),
 	}
+}
+
+func (r *taskCardRegistry) setExpandedWithSequence(cardID string, expanded bool) (cardOptions, int, bool) {
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return cardOptions{}, 0, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.cards[cardID]
+	if state == nil || !state.collapsible {
+		return cardOptions{}, 0, false
+	}
+	state.expanded = expanded
+	state.sequence++
+	state.updatedAt = r.nowOrDefault()
+	return state.cardOptions(), state.sequence, true
 }
 
 func (r *taskCardRegistry) updateContent(cardID string, content string) {
@@ -94,6 +112,22 @@ func (r *taskCardRegistry) setDurableReferenceChangeHandler(cardID string, handl
 		state.recoveryChanged = handler
 	}
 	r.mu.Unlock()
+}
+
+func (r *taskCardRegistry) notifyDurableReferenceChange(cardID string) {
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return
+	}
+	r.mu.Lock()
+	state := r.cards[cardID]
+	var handler func()
+	if state != nil {
+		handler = state.recoveryChanged
+	}
+	r.mu.Unlock()
+	if handler != nil {
+		handler()
+	}
 }
 
 func (r *taskCardRegistry) updateContentWithSequence(cardID string, content string) (cardOptions, int, bool) {
@@ -251,6 +285,7 @@ func (s *taskCardState) cardOptions() cardOptions {
 		Collapsible:        s.collapsible,
 		Expanded:           s.expanded,
 		InlineActiveStatus: s.inlineActiveStatus,
+		taskCardID:         s.taskCardID,
 	}
 }
 

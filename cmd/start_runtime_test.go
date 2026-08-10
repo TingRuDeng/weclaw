@@ -13,10 +13,35 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/messaging"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
 type shutdownDrainStub struct {
 	drained *atomic.Bool
+}
+
+func TestStartHandlerStatusShowsWeClawVersion(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	previousVersion := Version
+	Version = "v9.8.7"
+	t.Cleanup(func() { Version = previousVersion })
+
+	handler := newStartHandlerWithTrace(config.DefaultConfig(), nil)
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	handler.HandleMessage(context.Background(), platform.IncomingMessage{
+		Platform:  platform.PlatformFeishu,
+		AccountID: "main",
+		UserID:    "ou_user",
+		ChatID:    "oc_chat",
+		MessageID: "status-version",
+		Text:      "/status",
+	}, reply)
+
+	text := strings.Join(reply.TextsSnapshot(), "\n")
+	if !strings.Contains(text, "version: v9.8.7") {
+		t.Fatalf("/status reply missing build version, got %q", text)
+	}
 }
 
 func (s shutdownDrainStub) Drain(context.Context, bool) (messaging.RuntimeDrainResult, error) {

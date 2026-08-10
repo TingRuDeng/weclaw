@@ -18,6 +18,7 @@ func (h *Handler) buildStatus(userID string) string {
 func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platformName platform.PlatformName, accountID string) string {
 	currentName := h.defaultAgentNameForRoute(routeUserID, platformName, accountID)
 	h.mu.RLock()
+	version := h.version
 	rateLimit := h.rateLimitPerMinute
 	auditOn := h.audit != nil
 	workspaceConfined := len(h.allowedWorkspaceRoots) > 0
@@ -27,7 +28,7 @@ func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platfor
 	}
 	h.mu.RUnlock()
 
-	lines := []string{"WeClaw 运行态"}
+	lines := []string{"WeClaw 运行态", "version: " + version}
 
 	switch {
 	case currentName == "":

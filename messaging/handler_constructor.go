@@ -10,6 +10,7 @@ import (
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
 	return &Handler{
+		version:                 "dev",
 		agents:                  make(map[string]agent.Agent),
 		agentStarts:             make(map[string]*agentStartState),
 		agentWorkDirs:           make(map[string]string),

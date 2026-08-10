@@ -287,6 +287,22 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 				Content: initialDetails, Summary: initialSummary, Collapsible: stream.collapsible, Expanded: true,
 				InlineActiveStatus: trackTask,
 			}, stream.sequence)
+			if stream.collapsible {
+				boundOpts, ok := r.taskCards.snapshot(cardID)
+				if !ok {
+					return nil, fmt.Errorf("task card state is unavailable after creation")
+				}
+				boundCardJSON, buildErr := buildCardV2(boundOpts)
+				if buildErr != nil {
+					return nil, buildErr
+				}
+				if len([]byte(boundCardJSON)) > feishuCardJSONSoftLimitBytes {
+					return nil, fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(boundCardJSON)), feishuCardJSONSoftLimitBytes)
+				}
+				if updateErr := stream.cardKit.UpdateCard(ctx, cardID, boundCardJSON, stream.nextSequence()); updateErr != nil {
+					return nil, updateErr
+				}
+			}
 		}
 	}
 	return stream, nil
@@ -878,7 +894,7 @@ func prepareFeishuSupersedeFromReference(reference platform.DurableStreamReferen
 	cardJSON, err := buildCardV2(cardOptions{
 		Status: cardStatusSuperseded, Title: payload.Title,
 		Summary: summary, Content: details, Approvals: payload.Approvals,
-		Collapsible: payload.Collapsible, Expanded: false,
+		Collapsible: payload.Collapsible, Expanded: false, taskCardID: payload.CardID,
 	})
 	if err != nil {
 		return platform.SupersedeCheckpoint{}, err

@@ -41,6 +41,7 @@ type AgentMeta struct {
 // Handler processes incoming WeChat messages and dispatches replies.
 type Handler struct {
 	mu                      sync.RWMutex
+	version                 string
 	defaultName             string
 	agents                  map[string]agent.Agent // name -> running agent
 	agentStarts             map[string]*agentStartState
@@ -99,6 +100,17 @@ type Handler struct {
 	lastTraceErrorAt        time.Time
 	auditErrorMu            sync.Mutex
 	lastAuditErrorAt        time.Time
+}
+
+// SetVersion 注入当前 WeClaw 构建版本，供聊天内置 /status 展示。
+func (h *Handler) SetVersion(version string) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = "dev"
+	}
+	h.mu.Lock()
+	h.version = version
+	h.mu.Unlock()
 }
 
 // SetTraceRecorder 配置固定字段的诊断 Trace；写入失败不得改变消息业务终态。

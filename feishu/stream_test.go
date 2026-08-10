@@ -137,8 +137,8 @@ func TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard(t *testing.T
 	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "测试完成", Details: "读取代码\n\n运行测试\n\n完成"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(kit.updateCardIDs) != 0 {
-		t.Fatalf("UpdateCard calls=%d, want 0", len(kit.updateCardIDs))
+	if len(kit.updateCardIDs) != 1 {
+		t.Fatalf("UpdateCard calls=%d, want only the initial task-card action binding update", len(kit.updateCardIDs))
 	}
 	if len(kit.streamElementIDs) != 4 {
 		t.Fatalf("element ids=%#v", kit.streamElementIDs)
@@ -187,9 +187,12 @@ func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
 		t.Fatalf("upgraded body=%#v, want summary and collapsible progress panel", card["body"])
 	}
 	panelElements := elements[1].(map[string]any)["elements"].([]any)
-	if len(panelElements) != 1 || panelElements[0].(map[string]any)["element_id"] != cardMainContentID ||
+	if len(panelElements) != 2 || panelElements[0].(map[string]any)["element_id"] != cardMainContentID ||
 		panelElements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator {
-		t.Fatalf("progress panel elements=%#v, want latest details", panelElements)
+		t.Fatalf("progress panel elements=%#v, want latest details and bottom collapse control", panelElements)
+	}
+	if panelElements[1].(map[string]any)["element_id"] != cardProgressCollapseID {
+		t.Fatalf("progress panel elements=%#v, want bottom collapse control", panelElements)
 	}
 
 	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
@@ -209,6 +212,39 @@ func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
 		if kit.streamElementIDs[i] != want {
 			t.Fatalf("stream element id[%d]=%q, want %q", i, kit.streamElementIDs[i], want)
 		}
+	}
+}
+
+func TestTaskCardInitialStructuredPresentationAddsBottomCollapseControl(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "card-initial-progress"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	_, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex",
+		InitialPresentation: &platform.StreamPresentation{
+			Summary: "正在读取代码", Details: "读取代码\n\n" + platform.TaskStreamThinkingIndicator,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.updateCards) != 1 {
+		t.Fatalf("UpdateCard calls=%d, want initial task-card action binding update", len(kit.updateCards))
+	}
+	card := decodeCardJSON(t, kit.updateCards[0])
+	elements := card["body"].(map[string]any)["elements"].([]any)
+	panel := elements[len(elements)-1].(map[string]any)
+	if panel["element_id"] != cardProgressPanelID {
+		t.Fatalf("last element=%#v, want progress panel", panel)
+	}
+	inside := panel["elements"].([]any)
+	button := inside[len(inside)-1].(map[string]any)
+	if button["element_id"] != cardProgressCollapseID {
+		t.Fatalf("panel elements=%#v, want bottom collapse control", inside)
+	}
+	behaviors := button["behaviors"].([]any)
+	value := behaviors[0].(map[string]any)["value"].(map[string]any)
+	if value["task_card_id"] != "card-initial-progress" {
+		t.Fatalf("button value=%#v, want created task card id", value)
 	}
 }
 
@@ -283,7 +319,7 @@ func TestTaskCardStructuredPresentationThrottleKeepsLatestSnapshot(t *testing.T)
 		t.Fatalf("throttled streams=%#v, want only first presentation", kit.streamElementIDs)
 	}
 	s.flushPresentation()
-	if len(kit.updateCardIDs) != 0 || len(kit.streamElementIDs) != 4 {
+	if len(kit.updateCardIDs) != 1 || len(kit.streamElementIDs) != 4 {
 		t.Fatalf("updates=%d streams=%#v", len(kit.updateCardIDs), kit.streamElementIDs)
 	}
 	if kit.streamTexts[0] != "第一" || kit.streamTexts[1] != "第一详情" || kit.streamTexts[2] != "最终" || kit.streamTexts[3] != "最终详情" {
@@ -1096,7 +1132,7 @@ func TestFeishuPrepareSupersedeFromReferencePreservesProgressAndCollapsesPanel(t
 	card := decodeCardJSON(t, op.CardJSON)
 	elements := card["body"].(map[string]any)["elements"].([]any)
 	var status, summary, details, approval string
-	foundPanel := false
+	foundPanel, foundBottomControl := false, false
 	for _, raw := range elements {
 		element := raw.(map[string]any)
 		switch element["element_id"] {
@@ -1111,6 +1147,17 @@ func TestFeishuPrepareSupersedeFromReferencePreservesProgressAndCollapsesPanel(t
 			}
 			panelElements := element["elements"].([]any)
 			details, _ = panelElements[0].(map[string]any)["content"].(string)
+			if len(panelElements) > 1 {
+				button := panelElements[len(panelElements)-1].(map[string]any)
+				foundBottomControl = button["element_id"] == cardProgressCollapseID
+				if foundBottomControl {
+					behaviors := button["behaviors"].([]any)
+					value := behaviors[0].(map[string]any)["value"].(map[string]any)
+					if value["task_card_id"] != "card-1" {
+						t.Fatalf("button value=%#v, want superseded card id", value)
+					}
+				}
+			}
 		case "approval_records":
 			approval, _ = element["content"].(string)
 		}
@@ -1123,6 +1170,9 @@ func TestFeishuPrepareSupersedeFromReferencePreservesProgressAndCollapsesPanel(t
 	}
 	if !strings.Contains(approval, "command: date") {
 		t.Fatalf("approval=%q", approval)
+	}
+	if !foundBottomControl {
+		t.Fatal("superseded progress panel missing bottom collapse control")
 	}
 }
 

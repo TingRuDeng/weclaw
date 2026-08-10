@@ -157,6 +157,8 @@ Codex App Server 的原生计划、工具与文件事件会先归一为结构化
 
 原生任务卡创建后会立即把可恢复的卡片引用原子写入 `~/.weclaw/state/terminal-outbox.json`。任务结束时，飞书卡片只收敛为完成、失败或停止状态并保留已有进度与审批；完整最终结果通过新的静态 Markdown 结果卡独立交付，标题显示 Agent 与工作空间，超长正文会按容量预检拆成连续编号的卡片。卡片 checkpoint 与结果卡分别记录成功状态、并行尝试和幂等重试，一路失败或阻塞不会阻止另一路；进程重启后只恢复尚未成功的部分，网络结果不明确时不会改发文本造成重复。若平台不支持富结果能力，则兼容回退到原有幂等文本。若进程在任务执行中退出，新进程会把原卡更新为“任务已中断”的停止终态，并独立投递停止结果。飞书 CardKit checkpoint 与结果卡分段使用稳定 UUID，微信文本分片也使用稳定去重键；交付语义是 at-least-once，不承诺跨平台 exactly-once。附件和远程图片暂不进入 outbox，仍按原有安全校验和 best-effort 路径发送。
 
+运维人员可用 `weclaw outbox status [--json]` 查看脱敏积压，并用 `weclaw outbox redrive [entry-id]` 提前唤醒一个或全部待投递项。`redrive` 仅支持服务运行时通过真实 loopback API 执行，不重置重试次数或修改正文；API 不可达时失败关闭。`weclaw doctor` 也会报告 outbox 文件不可读、存在积压或容量耗尽。
+
 配置 `save_dir` 后，单独发送一个 URL 会触发链接归档。微信文章直接抓取；其他 URL 会先把完整目标 URL 交给第三方 Jina Reader 处理，Jina 失败时再由 WeClaw 直接抓取。URL 中的路径、查询参数和片段都会随请求发送给 Jina，请勿用此功能提交带签名、凭据或其他敏感信息的私有链接。
 
 ### 查询端到端 Trace
@@ -333,7 +335,7 @@ weclaw doctor
 
 不限条数不等于不限平台载荷。飞书会在完整卡片 JSON 接近内部保守软上限时自动冻结当前段并发送下一张进度卡，旧卡保留已显示历史，最新卡在任务结束时只更新状态并保留当前分段。Codex commentary 保留完整正文并计入时间线；计划、工具和文件等结构化摘要仍按 180 个字符收敛。Claude 的“当前说明”不计入时间线条数，并继续按 180 个字符收敛。完整最终结果另发为静态 Markdown 结果卡，不会替换进度卡或静默截断早期进度。
 
-飞书任务卡在 Agent 产生第一条有效非命令进度前，正文只显示 `思考中.....`，不会用“等待 Agent”“连接正常”等定时文案覆盖。收到 Codex commentary、Claude message、计划、文件修改或工具摘要后，同一卡片会展示截至当前的用户可见回复与安全结构化进度，并把 `思考中.....` 保留在正文最底部。当前摘要固定显示在折叠面板外，完整进度位于可手动收起或展开的面板内；活动卡默认展开，普通流式更新只更新稳定内容组件，不会重置用户选择的展开状态。完成、失败、停止或转移时卡片自动折叠，并移除活跃提示，同时保留已有过程和审批记录。无信息量的 Codex 命令执行生命周期不展示，内部推理与状态心跳也不会解除等待态，真正需要处理的审批仍正常显示。
+飞书任务卡在 Agent 产生第一条有效非命令进度前，正文只显示 `思考中.....`，不会用“等待 Agent”“连接正常”等定时文案覆盖。收到 Codex commentary、Claude message、计划、文件修改或工具摘要后，同一卡片会展示截至当前的用户可见回复与安全结构化进度，并把 `思考中.....` 保留在正文最底部。当前摘要固定显示在折叠面板外，完整进度位于可手动收起或展开的面板内；活动卡默认展开，普通流式更新只更新稳定内容组件，不会重置用户选择的展开状态。收起态的“展开完整进度”入口位于卡片可见内容最底部；展开后，完整时间线末尾提供“收起完整进度”操作，无需滚回面板顶部。完成、失败、停止或转移时卡片自动折叠，并移除活跃提示，同时保留已有过程和审批记录。无信息量的 Codex 命令执行生命周期不展示，内部推理与状态心跳也不会解除等待态，真正需要处理的审批仍正常显示。
 
 `weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、白名单、管理员和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
 
@@ -357,14 +359,18 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - 审计日志默认开启，不记录密钥。
 - Codex `permission_level` 支持 `default`、`auto_review`、`full_access`；默认档位为 `default`。
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。
-- `codex_host_mode` 支持 `auto`、`daemon`、`managed`。默认 `auto` 仅在 `CODEX_HOME` 存在官方 control socket 或可执行的 standalone Codex 时选择 `daemon`，否则使用兼容的 `managed`；显式 `daemon` 缺少 standalone、发现非官方 socket 或生命周期校验失败时直接失败，不静默启动第二个 Host。`daemon` 的 socket 和进程由官方生命周期命令管理，不能与 `app_server_socket` 或 `run_as_user` 混用。
+- `codex_host_mode` 支持 `auto`、`daemon`、`managed`。macOS 默认 `auto` 先保留已验证且正在运行的官方 daemon；没有运行中 daemon 时优先复用已运行的 Codex App，App 不在时才选择可用的 standalone daemon，否则使用兼容 `managed`。不启用 Desktop bridge 的平台按“官方 daemon 可用则使用，否则 managed”选择。官方 socket 身份不明或 App 已存在但安全 IPC 不可达时失败关闭，不静默启动第二个 Host；显式 `daemon` 也不回退，且不能与 `app_server_socket` 或 `run_as_user` 混用。
 - 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。官方 `daemon` 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
 
 | Codex 权限档位 | 行为 |
 | --- | --- |
 | `default` | `workspace-write` + 按需审批 + 用户确认 |
-| `auto_review` | 不扩大 sandbox，由 Codex 自动审查越界审批 |
-| `full_access` | `danger-full-access` + 不审批，仅限可信环境 |
+| `auto_review` | `workspace-write` + 按需审批，由 Codex reviewer 自动审查越界请求 |
+| `full_access` | `danger-full-access` + 不审批，仅限可信且隔离良好的环境 |
+
+脚本化配置应显式指定档位，例如 `weclaw config permission --agent codex --level full_access`，然后执行 `weclaw restart`。该命令会写入 `permission_level`，并清空会优先覆盖档位映射的 `approval_policy`、`approval_reviewer`、`sandbox_mode`；直接手工编辑 JSON 时则必须自行处理这些高级覆盖。运行中的 Codex Agent 不会热切换权限，重启后新 Host/会话才使用新值。
+
+`auto_review` 不会扩大 `workspace-write` sandbox；WeClaw 只把 `approvalsReviewer=auto_review` 交给 Codex，也不会把审查服务错误或拒绝转换成允许。聊天中的 `/mode yolo` 是另一层临时行为：只在当前 WeClaw 进程内按真实操作者和窗口 route 隔离，重启后清除，并且不会改变全局 sandbox 或 `permission_level`。`full_access` 也不会让 WeClaw 变成 root 或绕过操作系统权限；systemd 以哪个用户运行，Codex 就最多拥有该用户本来可访问的文件范围，例如 `.git` 仍须对该服务用户可写。
 
 ## 运行与更新
 

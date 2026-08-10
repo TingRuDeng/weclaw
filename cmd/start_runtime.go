@@ -150,6 +150,7 @@ func newStartHandlerWithTrace(cfg *config.Config, traceStore *observability.Stor
 	handler := messaging.NewHandler(func(ctx context.Context, name string) agent.Agent {
 		return createAgentByName(ctx, cfg, name, protocolTrace)
 	}, saveDefaultAgent)
+	handler.SetVersion(Version)
 	handler.SetCDNDownloader(wechat.DownloadFileFromCDN)
 	handler.SetTraceRecorder(traceStore)
 	configureHandlerMetadata(handler, cfg)

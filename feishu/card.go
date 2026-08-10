@@ -16,6 +16,7 @@ const (
 	cardMainContentID            = "main_content"
 	cardProgressSummaryID        = "progress_summary"
 	cardProgressPanelID          = "progress_panel"
+	cardProgressCollapseID       = "progress_collapse"
 	taskCardNoStructuredProgress = "本任务未产生结构化进度记录。"
 )
 
@@ -28,6 +29,7 @@ type cardOptions struct {
 	Collapsible        bool
 	Expanded           bool
 	InlineActiveStatus bool
+	taskCardID         string
 }
 
 // buildCardV2 构建飞书 CardKit 2.0 卡片 JSON，状态和正文使用稳定 element_id 便于后续流式更新。
@@ -55,23 +57,39 @@ func buildCardV2(opts cardOptions) (string, error) {
 		"element_id": cardMainContentID,
 		"content":    content,
 	}
+	approvalContent := approvalRecordsContent(opts.Approvals)
 	if opts.Collapsible {
 		summary := strings.TrimSpace(opts.Summary)
 		if summary == "" {
 			summary = statusLabel(status)
 		}
+		panelElements := []map[string]any{main}
+		if taskCardID := strings.TrimSpace(opts.taskCardID); taskCardID != "" {
+			panelElements = append(panelElements, taskProgressCollapseButton(taskCardID))
+		}
 		elements = append(elements, map[string]any{"tag": "markdown", "element_id": cardProgressSummaryID, "content": summary})
+		if approvalContent != "" {
+			elements = append(elements, map[string]any{
+				"tag":        "markdown",
+				"element_id": "approval_records",
+				"content":    approvalContent,
+			})
+		}
+		panelTitle := "完整进度"
+		if !opts.Expanded {
+			panelTitle = "展开完整进度"
+		}
 		elements = append(elements, map[string]any{"tag": "collapsible_panel", "element_id": cardProgressPanelID, "expanded": opts.Expanded,
-			"header": map[string]any{"title": map[string]any{"tag": "plain_text", "content": "完整进度"}}, "elements": []map[string]any{main}})
+			"header": map[string]any{"title": map[string]any{"tag": "plain_text", "content": panelTitle}}, "elements": panelElements})
 	} else {
 		elements = append(elements, main)
-	}
-	if approvalContent := approvalRecordsContent(opts.Approvals); approvalContent != "" {
-		elements = append(elements, map[string]any{
-			"tag":        "markdown",
-			"element_id": "approval_records",
-			"content":    approvalContent,
-		})
+		if approvalContent != "" {
+			elements = append(elements, map[string]any{
+				"tag":        "markdown",
+				"element_id": "approval_records",
+				"content":    approvalContent,
+			})
+		}
 	}
 	card := map[string]any{
 		"schema": "2.0",
@@ -99,6 +117,23 @@ func buildCardV2(opts cardOptions) (string, error) {
 		return "", fmt.Errorf("marshal feishu card: %w", err)
 	}
 	return string(data), nil
+}
+
+func taskProgressCollapseButton(taskCardID string) map[string]any {
+	return map[string]any{
+		"tag":        "button",
+		"element_id": cardProgressCollapseID,
+		"text":       map[string]any{"tag": "plain_text", "content": "收起完整进度"},
+		"type":       "text",
+		"width":      "fill",
+		"behaviors": []map[string]any{{
+			"type": "callback",
+			"value": map[string]string{
+				"action":       cardActionTaskProgressCollapse,
+				"task_card_id": taskCardID,
+			},
+		}},
+	}
 }
 
 func approvalRecordsContent(records []string) string {

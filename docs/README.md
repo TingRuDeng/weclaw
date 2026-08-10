@@ -53,13 +53,13 @@ ai_summary:
 
 ## Detail docs
 
-- `docs/superpowers/specs/2026-07-18-codex-single-app-server-design.md` 是已实施并发布的 Codex 共享 Host 详细设计；日常项目事实仍以 `docs/AI_CONTEXT.md` 为准，Host 拓扑、Handoff、writer lease 或协议边界变化时应同步复核。
-- `docs/superpowers/specs/2026-08-06-agent-workspace-session-management-design.md` 是已实施并发布的 Codex / Claude 工作空间登记、隐藏与会话重命名设计；当前产品事实仍以 `docs/AI_CONTEXT.md` 和源码为准。
-- `docs/superpowers/specs/2026-08-08-feishu-codex-progress-card-relay-design.md` 是已实施并发布、待真实飞书端验收的 Codex 引导接力与可折叠进度卡设计；当前产品事实仍以 `docs/AI_CONTEXT.md`、源码和测试为准。
+- [Codex 单一 Host、多前端设计](superpowers/specs/2026-07-18-codex-single-app-server-design.md) 是已实施并发布的共享 Host 设计基线；它不是当前 authority doc，Host 拓扑、Handoff、provider 迁移、writer lease 或协议边界变化时以 `docs/AI_CONTEXT.md` 和源码为准并同步复核。
+- [Codex / Claude 工作空间与会话命名管理设计](superpowers/specs/2026-08-06-agent-workspace-session-management-design.md) 是已实施并发布的工作空间登记、隐藏与会话重命名设计基线；它不是当前 authority doc，产品事实仍以 `docs/AI_CONTEXT.md` 和源码为准。
+- [飞书 Codex 引导接力与可折叠进度卡设计](superpowers/specs/2026-08-08-feishu-codex-progress-card-relay-design.md) 是已实施并发布、待真实飞书端验收的设计基线；它不是当前 authority doc，产品事实与验收状态仍以 `docs/AI_CONTEXT.md`、源码、测试和 `tasks/todo.md` 为准。
 
 ## Task records
 
-- `tasks/todo.md` 只记录当前尚待完成的飞书端侧验收，不长期累积已完成流水账。
+- `tasks/todo.md` 只记录当前正在执行或尚待完成的任务，不长期累积已完成流水账。
 - `tasks/lessons.md` 记录可复用的踩坑规则和高风险路径，清理文档时必须保留。
 - 已完成的执行计划和审查快照只保留在 Git 历史中，不作为当前文档入口或缺陷状态来源。
 
