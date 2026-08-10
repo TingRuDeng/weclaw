@@ -508,7 +508,8 @@ func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *test
 		CodexHostMode: "daemon", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
 	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
-	var activationDeadline time.Time
+	var resumeDeadline time.Time
+	var readDeadline time.Time
 	a.rpcCall = func(ctx context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok {
@@ -516,9 +517,11 @@ func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *test
 		}
 		switch method {
 		case "thread/resume":
-			activationDeadline = deadline
+			resumeDeadline = deadline
+			time.Sleep(10 * time.Millisecond)
 			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
 		case "thread/read":
+			readDeadline = deadline
 			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`), nil
 		default:
 			t.Fatalf("unexpected rpc method %s", method)
@@ -534,14 +537,17 @@ func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *test
 	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
 		t.Fatalf("binding=%#v error=%v", binding, err)
 	}
-	if probeDeadline.IsZero() || activationDeadline.IsZero() {
-		t.Fatalf("probe deadline=%v activation deadline=%v", probeDeadline, activationDeadline)
+	if probeDeadline.IsZero() || resumeDeadline.IsZero() || readDeadline.IsZero() {
+		t.Fatalf("probe deadline=%v resume deadline=%v read deadline=%v", probeDeadline, resumeDeadline, readDeadline)
 	}
-	if !probeDeadline.Before(parentDeadline) || !activationDeadline.Before(parentDeadline) {
-		t.Fatalf("phase deadlines must be shorter than parent: parent=%v probe=%v activation=%v", parentDeadline, probeDeadline, activationDeadline)
+	if !probeDeadline.Before(parentDeadline) || !resumeDeadline.Before(parentDeadline) || !readDeadline.Before(parentDeadline) {
+		t.Fatalf("phase deadlines must be shorter than parent: parent=%v probe=%v resume=%v read=%v", parentDeadline, probeDeadline, resumeDeadline, readDeadline)
 	}
-	if !probeDeadline.After(activationDeadline) {
-		t.Fatalf("activation must receive a fresh independent budget: probe=%v activation=%v", probeDeadline, activationDeadline)
+	if !probeDeadline.After(resumeDeadline) {
+		t.Fatalf("activation must receive a fresh independent budget: probe=%v resume=%v", probeDeadline, resumeDeadline)
+	}
+	if !readDeadline.After(resumeDeadline) {
+		t.Fatalf("thread/read must receive a fresh budget after thread/resume: resume=%v read=%v", resumeDeadline, readDeadline)
 	}
 }
 

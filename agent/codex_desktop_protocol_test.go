@@ -180,6 +180,27 @@ func TestCodexDesktopDiscoveryCarriesNestedMethodVersion(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopFollowingBroadcastTargetsRequestingClient(t *testing.T) {
+	envelope, err := newCodexDesktopBroadcast(codexDesktopBroadcastSpec{
+		SourceClientID:  "weclaw-client",
+		TargetClientIDs: []string{"desktop-client"},
+		Method:          "thread-stream-following-changed",
+		Params: map[string]any{
+			"conversationId": "thread-1",
+			"hostId":         "host-1",
+			"following":      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("newCodexDesktopBroadcast() error = %v", err)
+	}
+	if envelope.Type != codexDesktopEnvelopeBroadcast || envelope.Version != 1 ||
+		envelope.Method != "thread-stream-following-changed" ||
+		len(envelope.TargetClientIDs) != 1 || envelope.TargetClientIDs[0] != "desktop-client" {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
 func TestCodexDesktopEnvelopeAcceptsGoldenThreadChanges(t *testing.T) {
 	for _, name := range []string{"thread_snapshot.json", "thread_patches.json"} {
 		t.Run(name, func(t *testing.T) {

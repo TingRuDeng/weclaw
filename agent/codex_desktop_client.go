@@ -126,6 +126,29 @@ func (c *codexDesktopClient) Discover(ctx context.Context, spec codexDesktopRequ
 	return c.sendDiscovery(ctx, envelope)
 }
 
+// broadcastForEpoch sends a response broadcast only on the connection that
+// delivered the triggering event. A reconnect must not receive a stale claim.
+func (c *codexDesktopClient) broadcastForEpoch(
+	ctx context.Context,
+	epoch uint64,
+	method string,
+	params any,
+	targetClientIDs []string,
+) error {
+	connection, sourceClientID, err := c.connectionForEpoch(epoch)
+	if err != nil {
+		return err
+	}
+	envelope, err := newCodexDesktopBroadcast(codexDesktopBroadcastSpec{
+		SourceClientID: sourceClientID, TargetClientIDs: targetClientIDs,
+		Method: method, Params: params,
+	})
+	if err != nil {
+		return err
+	}
+	return c.writeEnvelope(ctx, connection, envelope)
+}
+
 // Close 永久关闭 client，并一次性唤醒所有等待者。
 func (c *codexDesktopClient) Close() error {
 	c.mu.Lock()

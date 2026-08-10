@@ -6,7 +6,7 @@
 
 ## 目标
 
-- 本机任一时刻只允许一个 Codex Host 成为写入权威；该 Host 可以是 Codex App、官方 standalone daemon 或 WeClaw-managed 兼容 Host。
+- WeClaw 任一时刻只允许一个共享 Codex Host 成为自己的写入权威；上游 writer lock 继续保证同一 thread 只有一个进程 writer。该 WeClaw Host 可以是 Codex App、官方 standalone daemon 或 WeClaw-managed 兼容 Host。
 - Codex App、受控 Codex CLI、微信和飞书都是平等输入入口；消息前端只保存 workspace/thread 绑定。
 - 多个前端可以绑定或打开同一个 thread；已有活动 turn 时，后续输入直接提交到该 turn，只有新建 turn 才由 writer lease 串行化。
 - 全局输入顺序以 app-server 接受请求为起点；Desktop 或 CLI 尚未发送的 queued follow-up 仍是客户端本地草稿，不进入全局顺序。
@@ -17,7 +17,7 @@
 ## 非目标
 
 - 不修改 Codex App 本身，也不让 WeClaw 管理或终止 App 进程。
-- 不把进程存在等同于 IPC 可用；App 存在但受保护 IPC 不可达时不得回退启动第二个 Host。
+- 不把进程存在等同于 IPC 可用；App 存在但受保护 IPC 不可达时不得回退启动第二个 WeClaw Host。
 - 不允许普通消息在没有显式 binding 时隐式创建 thread。
 - 不把 Desktop 或 CLI 尚未发送的草稿伪装成 app-server 已接受输入，也不替客户端自动提交草稿。
 - 不把 Desktop follower 未暴露的 thread/start、archive、model/list、账号或额度能力伪装为可用。
@@ -52,13 +52,19 @@ flowchart LR
 
 `weclaw codex cli` 只在官方 daemon 拓扑中可用。它使用官方 standalone Codex 二进制并固定传入当前 control socket 的 `--remote unix://...`；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。WeClaw 服务未运行且 App 不存在时可以直接受控启动 daemon；服务运行时，CLI 先调用仅限 loopback 的 `POST /api/codex/cli/prepare`，由服务内同一个 Agent 在 admission/gate 内按启动时已经解析的拓扑准备 Host，再核对返回 socket 与客户端解析值一致。Desktop 可见、managed Host、控制接口不可达或 Host 身份不明确时都失败关闭。
 
-WeClaw-managed Host 已运行后若探测到 App，只能在所有 thread 全局 idle、没有 active/uncertain writer lease，并串行持有 gate 与 socket lifecycle lock 时切换。官方 daemon 已运行时不执行该切换，App 作为平等前端复用 daemon。停止结果、daemon 或 App 状态、IPC 身份任一不可确认，当前 runtime 都进入不可写状态，不能并行保留两个 Host。
+WeClaw-managed Host 已运行后若探测到 App，只能在所有 thread 全局 idle、没有 active/uncertain writer lease，并串行持有 gate 与 socket lifecycle lock 时切换。官方 daemon 已运行时不把 WeClaw 权威切到 Desktop IPC；停止结果、daemon 或 App 状态、IPC 身份任一不可确认，当前 runtime 都进入不可写状态，不能并行保留两个 WeClaw Host。
 
 ### 显式 Handoff 与 `no-client-found`
 
 飞书或微信的显式会话选择是非幂等 Handoff 边界。只有身份验证通过的官方 daemon 已经是唯一 Host、当前 runtime 为 `weclaw`，且 Desktop 历史探测明确返回 `no-client-found` 时，选择流程才可把该响应视为 App 客户端已释放会话的证据，并继续在同一 daemon 上恢复目标 thread；Codex App 进程仍可见不覆盖这条证据。
 
 该例外不能扩散到普通消息、只读 inspect、超时、断线、unknown delivery、Desktop Host 或 managed Host。上述路径仍必须保留 binding 并失败关闭，不能因 `no-client-found` 自动接管，也不能启动第二个 Host。
+
+### 切走后的旧 thread 回交
+
+显式 A→B 切换在 durable binding 已提交后，可以尝试把无人使用的 A 回交给 Codex App。只有 A 已不再是任何 frontend 当前 workspace 的 thread、目标不是 pending first turn、App 进程和安全 IPC endpoint 均存在、官方 daemon 是当前 WeClaw Host，并且 gate、全局 writer lease、全部 active/unknown thread 与 lifecycle lock 检查都通过时，才停止并重启受管 daemon。重启成功必须废止上一 Host generation 的 runtime 快照、保留全部 durable binding，并让 B 通过正常 Handoff 按需 resume；A 因不再被新 daemon 加载而立即释放上游 writer lock，App 可以独立打开 A。同一 thread 仍禁止 App 与 daemon 双写。
+
+回交是切换后的独立恢复阶段：忙、状态未知或生命周期失败不能回滚已经提交的 B binding，也不能伪装 A 已释放。结果必须明确显示“旧会话暂未回交”；若另一个 frontend 当前仍选择 A，则不触碰 Host 并显示保留原因。`thread/unsubscribe` 不能立即卸载 thread，不是该恢复的完成证据。Desktop IPC 的 `thread-stream-following-status-requested@1` 只在 Desktop 是当前 WeClaw 权威且 thread 已明确跟踪时定向答复，不能替代 daemon 重启或声明未知 thread ownership。
 
 ### Shared Host 边界
 
@@ -117,11 +123,12 @@ Runtime 只回答共享 host 当前能否服务：
 ### 选择或切换
 
 1. 获取当前 frontend binding 锁。
-2. 校验 workspace/thread 和活动任务边界。
+2. 获取目标 thread 与切换前 active thread 的稳定顺序控制锁，并校验 workspace/thread 和活动任务边界。
 3. 原子提交 frontend binding。
 4. 持久化该窗口选中的 Agent。
-5. 将 frontend conversation 映射到共享 app-server thread。
-6. 若 runtime 同步失败，返回“运行通道暂不可用（窗口绑定已保留）”。
+5. 若满足旧 thread 回交条件，在全局空闲门禁内重启官方 daemon；失败只记录回交未完成。
+6. 将 frontend conversation 映射到共享 app-server thread。
+7. 若 runtime 同步失败，返回“运行通道暂不可用（窗口绑定已保留）”。
 
 其他前端正在该 thread 执行任务不阻止绑定；真正开始 turn 时由 writer lease 串行化。
 
@@ -180,6 +187,8 @@ Codex App 与受控 CLI 也直接向同一 Host 提交输入。app-server 的接
 - Desktop queued follow-up 按 connection epoch 同步为客户端草稿，不能生成 writer lease、WeClaw pending task 或已接受输入。
 - `auto` 在官方 daemon 已运行且验证通过时保持 daemon 权威并跳过 Desktop IPC；没有运行中的 daemon 时，App 已运行才连接 Desktop IPC，App 不在时选择 daemon/managed。daemon 身份不明或 App 存在但 IPC 不可达时失败关闭。
 - 官方 daemon 已是唯一 Host 且 App 可见时，显式会话 Handoff 可依据 Desktop `no-client-found` 在同一 daemon 恢复目标 thread；普通消息、只读探测、Desktop/managed 拓扑和不明确响应仍失败关闭。
+- A→B 切换仅在 A 无 active frontend 引用、App 进程与安全 IPC endpoint 均存在且 Host 全局空闲时重启官方 daemon；其他 frontend 仍选择 A、active/unknown thread、writer lease、lifecycle 失败和 pending first turn 都不得停止 Host。重启后旧 runtime 快照失效、binding 保留、B 正常恢复；失败不回滚 B，并明确显示 A 尚未回交。
+- Desktop following status 只对已跟踪且当前权威的 thread 定向回复；未知 thread、daemon runtime、旧 connection epoch 和缺失 host/client ID 都不得声明 following。
 - Desktop follower 支持已有 thread turn/steer/interrupt/settings，明确拒绝未暴露的 thread/start、archive、model/list、账号与额度能力。
 - daemon 与 managed 的 socket、生命周期和失败回退边界分别验证；显式 daemon 失败不能启动 managed。
 - runtime 失败保留 binding，持久化失败回滚，切换失败不破坏原会话。

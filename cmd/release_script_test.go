@@ -102,7 +102,7 @@ func TestGiteeMirrorPublishesOnlyVerifiedDarwinArm64WithoutLeakingToken(t *testi
 	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	assetNames := []string{"weclaw_darwin_arm64"}
+	assetNames := []string{"weclaw_darwin_arm64", "weclaw_linux_arm64", "weclaw_linux_amd64"}
 	var checksums strings.Builder
 	for _, name := range assetNames {
 		content := []byte("verified-" + name + "\n")
@@ -428,8 +428,13 @@ func TestCIValidationMatrixAndReleaseAssetContract(t *testing.T) {
 		if strings.Contains(text, "goos: windows") {
 			t.Fatalf("%s must not publish Windows assets", path)
 		}
-		if !strings.Contains(text, "run: sha256sum weclaw_darwin_arm64 > checksums.txt") || !strings.Contains(text, "dist/weclaw_darwin_arm64") {
-			t.Fatalf("%s must publish only the darwin/arm64 prerelease asset and checksum", path)
+		if !strings.Contains(text, "run: sha256sum weclaw_darwin_arm64 weclaw_linux_arm64 weclaw_linux_amd64 > checksums.txt") {
+			t.Fatalf("%s must checksum the three published prerelease assets", path)
+		}
+		for _, asset := range []string{"dist/weclaw_darwin_arm64", "dist/weclaw_linux_arm64", "dist/weclaw_linux_amd64"} {
+			if !strings.Contains(text, asset) {
+				t.Fatalf("%s missing prerelease asset %q", path, asset)
+			}
 		}
 		if strings.Contains(text, "dist/weclaw_*") {
 			t.Fatalf("%s must not publish the complete validation matrix", path)
@@ -441,13 +446,13 @@ func TestCIValidationMatrixAndReleaseAssetContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(script)
-	if !strings.Contains(text, `"darwin/arm64"`) {
-		t.Fatal("release script must publish darwin/arm64")
-	}
-	for _, target := range []string{`"darwin/amd64"`, `"linux/arm64"`, `"linux/amd64"`} {
-		if strings.Contains(text, target) {
-			t.Fatalf("release script must not publish unsupported target %s", target)
+	for _, target := range []string{`"darwin/arm64"`, `"linux/arm64"`, `"linux/amd64"`} {
+		if !strings.Contains(text, target) {
+			t.Fatalf("release script missing published target %s", target)
 		}
+	}
+	if strings.Contains(text, `"darwin/amd64"`) {
+		t.Fatal("release script must not publish unsupported darwin/amd64")
 	}
 	if !strings.Contains(text, "${#TARGETS[@]} + 1") {
 		t.Fatal("release asset verification must derive expected count from TARGETS")
@@ -460,14 +465,16 @@ func TestReleaseScriptVerifiesEveryOfficialAssetName(t *testing.T) {
 	fixture := validReleaseVerifyFixture()
 	fixture.assets = strings.Join([]string{
 		"weclaw_darwin_arm64",
+		"weclaw_linux_arm64",
+		"weclaw_linux_amd64",
 		"checksums.txt",
 	}, `\n`)
 	command := releaseVerifyCommand(script, fixture)
 	runReleaseScriptTestCommand(t, "", "bash", "-c", command)
 
-	fixture.assets = strings.Replace(fixture.assets, "weclaw_darwin_arm64", "unexpected_asset", 1)
+	fixture.assets = strings.Replace(fixture.assets, "weclaw_linux_amd64", "unexpected_asset", 1)
 	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, fixture))
-	if !strings.Contains(output, "Release 缺少资产：weclaw_darwin_arm64") {
+	if !strings.Contains(output, "Release 缺少资产：weclaw_linux_amd64") {
 		t.Fatalf("missing asset rejection=%q", output)
 	}
 }
@@ -915,6 +922,8 @@ func validReleaseVerifyFixture() releaseVerifyFixture {
 	return releaseVerifyFixture{
 		assets: strings.Join([]string{
 			"weclaw_darwin_arm64",
+			"weclaw_linux_arm64",
+			"weclaw_linux_amd64",
 			"checksums.txt",
 		}, `\n`),
 		tag: "v9.9.9",
@@ -942,9 +951,9 @@ func releaseVerifyCommandForInvocation(script string, fixture releaseVerifyFixtu
 		`FAKE_CORRUPT=` + corrupt + ` && ` +
 		`gh() { ` +
 		`if [[ "$1 $2" == "release download" ]]; then local dir=""; while (($#)); do if [[ "$1" == "--dir" ]]; then dir="$2"; shift 2; else shift; fi; done; mkdir -p "$dir"; ` +
-		`printf '%s\n' weclaw_darwin_arm64 > "$dir/weclaw_darwin_arm64"; ` +
-		`(cd "$dir" && shasum -a 256 weclaw_darwin_arm64 > checksums.txt); if [[ "$FAKE_CORRUPT" == 1 ]]; then printf 'corrupt\n' >> "$dir/weclaw_darwin_arm64"; fi; return 0; fi; ` +
-		`case "$*" in *".assets | length"*) echo 2 ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
+		`for name in weclaw_darwin_arm64 weclaw_linux_arm64 weclaw_linux_amd64; do printf '%s\n' "$name" > "$dir/$name"; done; ` +
+		`(cd "$dir" && shasum -a 256 weclaw_* > checksums.txt); if [[ "$FAKE_CORRUPT" == 1 ]]; then printf 'corrupt\n' >> "$dir/weclaw_linux_amd64"; fi; return 0; fi; ` +
+		`case "$*" in *".assets | length"*) echo 4 ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
 		`*"@tsv"*) printf '%s\t%s\t%s\n' "` + fixture.tag + `" "` + draft + `" "` + prerelease + `" ;; *"--json tagName"*) echo "` + fixture.tag + `" ;; esac; } && ` +
 		invocation
 }

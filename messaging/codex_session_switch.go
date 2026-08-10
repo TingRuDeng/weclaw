@@ -130,6 +130,16 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		result.resolution, h.codexSessionModelStatus(result.route.threadID),
 	)
 	lines = append(lines, renderCompactSessionModelStatus(modelStatus))
+	if result.handoffReleaseAttempted {
+		if result.handoffReleaseErr == nil {
+			lines = append(lines, "旧会话: 已释放，可在 Codex App 打开。")
+		} else {
+			log.Printf("[codex-session-handoff] 会话已切换但旧 thread 暂未回交 thread=%q: %v", result.handoffReleaseThreadID, result.handoffReleaseErr)
+			lines = append(lines, "旧会话: 暂未回交给 Codex App（共享 Host 仍在使用或状态未确认）。")
+		}
+	} else if result.handoffReleaseRetained {
+		lines = append(lines, "旧会话: 仍被其他窗口选中，未回交给 Codex App。")
+	}
 	if result.runtimeErr != nil {
 		log.Printf("[codex-session-bind] 绑定已提交但共享 host 暂不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
 		lines = append(lines,

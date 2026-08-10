@@ -233,6 +233,7 @@ func (a *ACPAgent) resumeThreadWithProvider(ctx context.Context, conversationID 
 			ID            string `json:"id"`
 			ModelProvider string `json:"modelProvider"`
 		} `json:"thread"`
+		ModelProvider string `json:"modelProvider"`
 	}
 	a.cacheCodexThreadConfigFromLifecycleResult(result, threadID, CodexThreadConfig{}, sequence)
 	if err := json.Unmarshal(result, &resumeResult); err != nil {
@@ -241,8 +242,14 @@ func (a *ACPAgent) resumeThreadWithProvider(ctx context.Context, conversationID 
 	if resumeResult.Thread.ID == "" || resumeResult.Thread.ID != threadID {
 		return fmt.Errorf("thread/resume returned different id (requested=%s, returned=%s)", threadID, resumeResult.Thread.ID)
 	}
-	if provider != "" && strings.TrimSpace(resumeResult.Thread.ModelProvider) != provider {
-		return fmt.Errorf("thread/resume provider mismatch (requested=%s, returned=%s)", provider, resumeResult.Thread.ModelProvider)
+	returnedProvider := strings.TrimSpace(resumeResult.ModelProvider)
+	if returnedProvider == "" {
+		// Older app-server responses exposed the provider only on the nested
+		// thread. Current v2 responses use the top-level field as the canonical ID.
+		returnedProvider = strings.TrimSpace(resumeResult.Thread.ModelProvider)
+	}
+	if provider != "" && returnedProvider != provider {
+		return fmt.Errorf("thread/resume provider mismatch (requested=%s, returned=%s)", provider, returnedProvider)
 	}
 	return nil
 }

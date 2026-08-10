@@ -144,6 +144,14 @@ type CodexProviderRuntimeAgent interface {
 	PrepareCodexThread(context.Context, CodexRuntimeRequest) (CodexProviderPreparation, error)
 }
 
+// CodexThreadHandoffAgent releases an idle historical thread from the
+// official shared daemon so Codex App can open that thread with its own writer.
+// The caller must first prove the thread is no longer selected by any active
+// frontend; the implementation independently enforces Host-wide idle gates.
+type CodexThreadHandoffAgent interface {
+	RecoverCodexThreadHandoff(context.Context, string) (attempted bool, err error)
+}
+
 type codexDesktopOwnerProbe interface {
 	LoadHistory(context.Context, CodexThreadRef) error
 	Presence() (socketExists bool, processExists bool)

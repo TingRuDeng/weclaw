@@ -22,6 +22,24 @@ func TestSortedUniqueCodexThreadIDs(t *testing.T) {
 	}
 }
 
+// TestCodexRemoteSelectionThreadIDsIncludesPreviousAndTarget 验证切换事务同时锁定旧会话和目标会话。
+func TestCodexRemoteSelectionThreadIDsIncludesPreviousAndTarget(t *testing.T) {
+	snapshot := codexRemoteSelectionSnapshot{
+		TargetThreadID: "thread-b",
+		Binding: codexSessionBinding{
+			ActiveWorkspace: "/workspace/a",
+			Workspaces: map[string]codexWorkspaceSession{
+				"/workspace/a": {ThreadID: "thread-a"},
+			},
+		},
+	}
+	got := codexRemoteSelectionThreadIDs(snapshot)
+	want := []string{"thread-a", "thread-b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thread IDs=%v, want=%v", got, want)
+	}
+}
+
 // TestLockCodexSessionThreadsReleasesPartialLocksOnTimeout 验证部分加锁失败时已持有锁会被释放。
 func TestLockCodexSessionThreadsReleasesPartialLocksOnTimeout(t *testing.T) {
 	h := NewHandler(nil, nil)

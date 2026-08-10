@@ -64,6 +64,18 @@ func (c *codexDesktopClient) connectionForWrite(connecting bool) (codexDesktopCo
 	return connection, nil
 }
 
+func (c *codexDesktopClient) connectionForEpoch(epoch uint64) (codexDesktopConnectionRef, string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	connection := codexDesktopConnectionRef{
+		conn: c.conn, epoch: c.epoch, state: c.connectionState,
+	}
+	if epoch == 0 || c.epoch != epoch || !c.connectionMatchesLocked(connection) {
+		return codexDesktopConnectionRef{}, "", ErrCodexDesktopDisconnected
+	}
+	return connection, c.clientID, nil
+}
+
 // connectionMatches 在锁内核对连接代次与连接阶段。
 func (c *codexDesktopClient) connectionMatches(connection codexDesktopConnectionRef) bool {
 	c.mu.Lock()

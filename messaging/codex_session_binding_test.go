@@ -91,6 +91,84 @@ func TestAcquireCodexSessionCommitsFrontendBindingAndSharedRuntime(t *testing.T)
 	}
 }
 
+func TestAcquireCodexSessionReleasesUnusedOldThreadBeforeBindingTarget(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.ag.threadHandoffApplicable = true
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+	if err != nil || result.runtimeErr != nil || result.handoffReleaseErr != nil || !result.handoffReleaseAttempted {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	threads, operations := f.ag.threadHandoffSnapshot()
+	if len(threads) != 1 || threads[0] != "thread-a" {
+		t.Fatalf("released threads=%v, want thread-a", threads)
+	}
+	if len(operations) < 2 || operations[0] != "release:thread-a" || operations[1] != "bind:thread-b" {
+		t.Fatalf("operations=%v, want release before target bind", operations)
+	}
+	if text := f.h.renderCodexSessionAcquireSuccess(result); !strings.Contains(text, "旧会话: 已释放，可在 Codex App 打开") {
+		t.Fatalf("text=%q, want released handoff notice", text)
+	}
+}
+
+func TestAcquireCodexSessionKeepsOldThreadWhenAnotherFrontendUsesIt(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.ag.threadHandoffApplicable = true
+	otherBinding := codexBindingKey("other-route", "codex")
+	otherWorkspace := "/workspace/other"
+	f.h.ensureCodexSessions().setThread(otherBinding, otherWorkspace, "thread-a")
+	f.h.ensureCodexSessions().setActiveWorkspace(otherBinding, otherWorkspace)
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	threads, _ := f.ag.threadHandoffSnapshot()
+	if len(threads) != 0 || result.handoffReleaseAttempted || !result.handoffReleaseRetained {
+		t.Fatalf("release calls=%v result=%#v", threads, result)
+	}
+	if text := f.h.renderCodexSessionAcquireSuccess(result); !strings.Contains(text, "旧会话: 仍被其他窗口选中") {
+		t.Fatalf("text=%q, want retained frontend notice", text)
+	}
+}
+
+func TestAcquireCodexSessionDoesNotRecycleHostForPendingFirstTurn(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.ag.threadHandoffApplicable = true
+	request := f.request("thread-b")
+	request.pendingFirstTurn = true
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	threads, _ := f.ag.threadHandoffSnapshot()
+	if len(threads) != 0 || result.handoffReleaseAttempted {
+		t.Fatalf("release calls=%v result=%#v", threads, result)
+	}
+}
+
+func TestAcquireCodexSessionKeepsBindingWhenOldThreadReleaseIsBusy(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.ag.threadHandoffApplicable = true
+	f.ag.threadHandoffErr = agent.ErrCodexWriterBusy
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+	if err != nil || result.runtimeErr != nil || !result.handoffReleaseAttempted ||
+		!errors.Is(result.handoffReleaseErr, agent.ErrCodexWriterBusy) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceB {
+		t.Fatalf("active workspace=%q, want %q", active, f.workspaceB)
+	}
+	if got := len(f.ag.handoffRequests()); got != 1 {
+		t.Fatalf("target bind calls=%d, want 1", got)
+	}
+	if text := f.h.renderCodexSessionAcquireSuccess(result); !strings.Contains(text, "旧会话: 暂未回交给 Codex App") {
+		t.Fatalf("text=%q, want deferred handoff notice", text)
+	}
+}
+
 func TestAcquireCodexSessionPreservesCommandDeadlineForRuntimeHandoff(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	f.h.codexControlTimeout = 20 * time.Millisecond

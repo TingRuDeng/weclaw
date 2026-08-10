@@ -46,10 +46,51 @@ func (s *codexSessionStore) remoteSelectionSnapshot(bindingKey string, targetThr
 	return remoteSelectionSnapshotLocked(s.bindings, bindingKey, targetThreadID)
 }
 
-// codexRemoteSelectionThreadIDs returns the sole runtime thread touched by a
-// binding operation. It remains a slice so the shared lock helper can be used.
+// codexRemoteSelectionThreadIDs locks both the target and the previously
+// selected thread. This keeps the active-frontend check stable while an idle
+// old thread is handed back to Codex App.
 func codexRemoteSelectionThreadIDs(snapshot codexRemoteSelectionSnapshot) []string {
-	return sortedUniqueCodexThreadIDs([]string{snapshot.TargetThreadID})
+	return sortedUniqueCodexThreadIDs([]string{
+		snapshot.TargetThreadID,
+		codexRemoteSelectionActiveThreadID(snapshot),
+	})
+}
+
+func codexRemoteSelectionActiveThreadID(snapshot codexRemoteSelectionSnapshot) string {
+	workspaceRoot := normalizeCodexWorkspaceRoot(snapshot.Binding.ActiveWorkspace)
+	if workspaceRoot == "" {
+		return ""
+	}
+	session := snapshot.Binding.Workspaces[workspaceRoot]
+	if session.PendingNewThread {
+		return ""
+	}
+	return strings.TrimSpace(session.ThreadID)
+}
+
+// activeFrontendUsesThread considers only each frontend's current workspace;
+// historical durable bindings do not keep runtime ownership alive.
+func (s *codexSessionStore) activeFrontendUsesThread(threadID string) bool {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, archived := s.archived[threadID]; archived {
+		return false
+	}
+	for _, binding := range s.bindings {
+		workspaceRoot := normalizeCodexWorkspaceRoot(binding.ActiveWorkspace)
+		if workspaceRoot == "" {
+			continue
+		}
+		session := binding.Workspaces[workspaceRoot]
+		if !session.PendingNewThread && strings.TrimSpace(session.ThreadID) == threadID {
+			return true
+		}
+	}
+	return false
 }
 
 // commitRemoteSelection persists a candidate before replacing the live map.

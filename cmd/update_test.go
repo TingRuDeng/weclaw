@@ -408,20 +408,26 @@ func TestEffectiveReleaseSourceFlagOverridesConfig(t *testing.T) {
 	}
 }
 
-func TestReleaseAssetNameSupportsOnlyDarwinArm64(t *testing.T) {
-	name, err := releaseAssetNameForRuntime("darwin", "arm64")
-	if err != nil {
-		t.Fatalf("releaseAssetNameForRuntime error: %v", err)
-	}
-	if name != "weclaw_darwin_arm64" {
-		t.Fatalf("asset name=%q, want weclaw_darwin_arm64", name)
+func TestReleaseAssetNameSupportsDarwinArm64AndLinux(t *testing.T) {
+	for _, supported := range [][3]string{
+		{"darwin", "arm64", "weclaw_darwin_arm64"},
+		{"linux", "arm64", "weclaw_linux_arm64"},
+		{"linux", "amd64", "weclaw_linux_amd64"},
+	} {
+		name, err := releaseAssetNameForRuntime(supported[0], supported[1])
+		if err != nil {
+			t.Fatalf("releaseAssetNameForRuntime(%q, %q) error: %v", supported[0], supported[1], err)
+		}
+		if name != supported[2] {
+			t.Fatalf("asset name=%q, want %q", name, supported[2])
+		}
 	}
 
-	for _, unsupported := range [][2]string{{"darwin", "amd64"}, {"linux", "arm64"}, {"linux", "amd64"}, {"windows", "amd64"}} {
+	for _, unsupported := range [][2]string{{"darwin", "amd64"}, {"windows", "amd64"}} {
 		if _, err := releaseAssetNameForRuntime(unsupported[0], unsupported[1]); err == nil {
 			t.Fatalf("releaseAssetNameForRuntime(%q, %q) error=nil", unsupported[0], unsupported[1])
-		} else if !strings.Contains(err.Error(), "仅支持 darwin/arm64") {
-			t.Fatalf("error=%v, want darwin/arm64-only hint", err)
+		} else if !strings.Contains(err.Error(), "darwin/arm64、linux/arm64、linux/amd64") {
+			t.Fatalf("error=%v, want published-target hint", err)
 		}
 	}
 }

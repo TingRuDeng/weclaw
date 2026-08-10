@@ -100,6 +100,22 @@ func (r *codexRuntimeOwnerRegistry) switchRuntimeAuthority(runtime CodexRuntimeH
 	}
 }
 
+// invalidateRuntimeAuthority discards snapshots owned by a Host process that
+// has been restarted without changing the logical runtime kind. Durable
+// conversation mappings and control intents remain available for resume.
+func (r *codexRuntimeOwnerRegistry) invalidateRuntimeAuthority(runtime CodexRuntimeHolder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for threadID, binding := range r.threads {
+		if codexBindingRuntime(binding) != runtime {
+			continue
+		}
+		binding.Runtime = CodexRuntimeUnknown
+		binding.RuntimeGeneration++
+		r.threads[threadID] = binding
+	}
+}
+
 func (r *codexRuntimeOwnerRegistry) enforcesControl() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()

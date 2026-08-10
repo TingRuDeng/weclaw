@@ -111,17 +111,24 @@ func TestResumeThreadWithProviderSendsAndVerifiesProvider(t *testing.T) {
 		if values["modelProvider"] != "openai" {
 			t.Fatalf("thread/resume params = %#v", values)
 		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","modelProvider":"openai"}}`), nil
+		return json.RawMessage(`{"thread":{"id":"thread-1","modelProvider":"OpenAI"},"modelProvider":"openai"}`), nil
 	}
 	if err := a.resumeThreadWithProvider(context.Background(), "conversation-1", "thread-1", "openai"); err != nil {
 		t.Fatalf("resumeThreadWithProvider() error = %v", err)
 	}
 
 	a.rpcCall = func(_ context.Context, _ string, _ any) (json.RawMessage, error) {
-		return json.RawMessage(`{"thread":{"id":"thread-1","modelProvider":"relay"}}`), nil
+		return json.RawMessage(`{"thread":{"id":"thread-1","modelProvider":"OpenAI"},"modelProvider":"relay"}`), nil
 	}
 	if err := a.resumeThreadWithProvider(context.Background(), "conversation-1", "thread-1", "openai"); err == nil || !strings.Contains(err.Error(), "provider mismatch") {
 		t.Fatalf("resumeThreadWithProvider() mismatch error = %v", err)
+	}
+
+	a.rpcCall = func(_ context.Context, _ string, _ any) (json.RawMessage, error) {
+		return json.RawMessage(`{"thread":{"id":"thread-1","modelProvider":"openai"}}`), nil
+	}
+	if err := a.resumeThreadWithProvider(context.Background(), "conversation-1", "thread-1", "openai"); err != nil {
+		t.Fatalf("resumeThreadWithProvider() legacy response error = %v", err)
 	}
 }
 

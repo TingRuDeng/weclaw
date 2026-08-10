@@ -10,7 +10,7 @@
 
 通过微信和飞书远程使用本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果。Codex 始终只保留一个 Host 写入权威；Codex App、受控 CLI、微信和飞书可以从同一 thread 平等继续任务。
 
-> 当前正式 Release 仅提供 **macOS Apple Silicon（darwin/arm64）** 资产。Intel Mac、Linux 和 Windows 可从源码构建，但不提供正式二进制或自更新支持。
+> 当前正式 Release 提供 **macOS Apple Silicon（darwin/arm64）**，以及适用于 Debian/Linux 的 **arm64、amd64** 二进制。Intel Mac 和 Windows 可从源码构建，但不提供正式二进制或自更新支持。
 
 ## 为什么使用 WeClaw
 
@@ -396,7 +396,7 @@ go build -o weclaw .
 
 仓库当前使用 Go 1.26.5。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
 
-正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，仅发布 `weclaw_darwin_arm64` 和只包含该资产摘要的 `checksums.txt`；CI 仍交叉构建其他目标用于兼容性检查，但不会把它们上传到正式或预发布 Release。正式 Release 验证通过后，把 `weclaw_darwin_arm64` 的可还原 `.gz` 表示和同一份原始 `checksums.txt` 镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)，安装器和更新器解压后仍按 GitHub 权威摘要校验。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 续传缺失附件并重新验证。
+正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，发布 `weclaw_darwin_arm64`、`weclaw_linux_arm64`、`weclaw_linux_amd64` 和原始 `checksums.txt`；CI 仅额外交叉构建 `darwin/amd64` 做兼容性检查。正式 Release 验证通过后，只把 `weclaw_darwin_arm64` 的可还原 `.gz` 表示和同一份原始摘要镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)，Debian/Linux 安装与自更新使用 GitHub。安装器和更新器始终按权威摘要校验所选二进制。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 续传缺失附件并重新验证。
 
 ## 上游与许可
 

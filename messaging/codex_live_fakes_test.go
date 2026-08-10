@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -28,6 +29,10 @@ type fakeCodexLiveAgent struct {
 	providerPrepareCalls         int
 	providerPrepared             bool
 	handoffBeforeProviderPrepare bool
+	threadHandoffApplicable      bool
+	threadHandoffErr             error
+	threadHandoffThreads         []string
+	operationHistory             []string
 	bindCalls                    int
 	handoffCalls                 int
 	runCalls                     int
@@ -146,6 +151,7 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 		f.handoffBeforeProviderPrepare = true
 	}
 	f.handoffCalls++
+	f.operationHistory = append(f.operationHistory, "bind:"+req.Ref.ThreadID)
 	f.lastRuntimeReq = req
 	f.handoffHistory = append(f.handoffHistory, req)
 	entered, release := f.handoffEntered, f.handoffRelease
@@ -203,6 +209,15 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 		return binding, err
 	}
 	return binding, nil
+}
+
+func (f *fakeCodexLiveAgent) RecoverCodexThreadHandoff(_ context.Context, threadID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	threadID = strings.TrimSpace(threadID)
+	f.threadHandoffThreads = append(f.threadHandoffThreads, threadID)
+	f.operationHistory = append(f.operationHistory, "release:"+threadID)
+	return f.threadHandoffApplicable, f.threadHandoffErr
 }
 
 func (f *fakeCodexLiveAgent) PrepareCodexThread(_ context.Context, req agent.CodexRuntimeRequest) (agent.CodexProviderPreparation, error) {
@@ -322,6 +337,12 @@ func (f *fakeCodexLiveAgent) handoffRequests() []agent.CodexRuntimeRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]agent.CodexRuntimeRequest(nil), f.handoffHistory...)
+}
+
+func (f *fakeCodexLiveAgent) threadHandoffSnapshot() ([]string, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.threadHandoffThreads...), append([]string(nil), f.operationHistory...)
 }
 
 func (f *fakeCodexLiveAgent) runCallSnapshot() (int, agent.CodexTurnRequest) {

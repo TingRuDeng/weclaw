@@ -14,8 +14,8 @@ const (
 	// Desktop history may initialize the IPC client, issue the history request,
 	// and wait for the returned revision to be projected locally.
 	codexRuntimeHandoffProbeTimeout = 2*codexDesktopRequestTimeout + codexDesktopStateApplyTimeout
-	// Shared-host activation keeps the former thread-control RPC budget, but it
-	// now starts after the Desktop probe instead of sharing the probe deadline.
+	// Each blocking shared-host activation phase gets the former thread-control
+	// RPC budget. The caller's shorter deadline still caps the complete handoff.
 	codexRuntimeHandoffActivationTimeout = 15 * time.Second
 )
 
@@ -110,9 +110,9 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 		return CodexThreadBinding{}, err
 	}
 	if a.desktopProbe == nil {
-		activationCtx, cancel := context.WithTimeout(ctx, codexRuntimeHandoffActivationTimeout)
-		defer cancel()
-		return a.activateSharedCodexHost(activationCtx, req)
+		return a.activateSharedCodexHostWithPhaseTimeout(
+			ctx, req, codexRuntimeHandoffActivationTimeout,
+		)
 	}
 	// A writer lease protects the accepted turn lifecycle, not a frontend route.
 	// The production shared-host topology may bind another conversation to the
@@ -149,20 +149,22 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if err != nil && !(req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict) {
 		return CodexThreadBinding{}, err
 	}
-	activationCtx, cancelActivation := context.WithTimeout(ctx, codexRuntimeHandoffActivationTimeout)
-	defer cancelActivation()
 	// The verified daemon is already the authoritative Host. Once the explicit
 	// Desktop probe confirms release, attaching a new frontend only needs to
 	// resume and read the target thread on the existing client. Restarting that
 	// client would unnecessarily drain unrelated active turns.
 	if req.Intent.Owner == CodexControlRemote && runtime == CodexRuntimeUnknown &&
 		a.usesOfficialCodexDaemon() && a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw {
-		return a.activateSharedCodexHost(activationCtx, req)
+		return a.activateSharedCodexHostWithPhaseTimeout(
+			ctx, req, codexRuntimeHandoffActivationTimeout,
+		)
 	}
 	if req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict {
 		runtime = CodexRuntimeDesktop
 	}
 	if runtime == CodexRuntimeDesktop && a.codexDesktopBridge {
+		activationCtx, cancelActivation := context.WithTimeout(ctx, codexRuntimeHandoffActivationTimeout)
+		defer cancelActivation()
 		if transitionErr := a.transitionCodexRuntimeToDesktop(activationCtx); transitionErr != nil {
 			if a.desktopRuntime != nil {
 				_ = a.desktopRuntime.disconnect()
@@ -173,7 +175,9 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if req.Intent.Owner == CodexControlDesktop || runtime != CodexRuntimeUnknown {
 		return a.codexOwners.activateRuntime(req, runtime, state)
 	}
-	return a.recoverCodexRuntimeForRemote(activationCtx, req)
+	return a.recoverCodexRuntimeForRemoteWithPhaseTimeout(
+		ctx, req, codexRuntimeHandoffActivationTimeout,
+	)
 }
 
 // canRecoverCodexRuntimeForRemoteOwner 只放宽已持久化 remote owner 的 Desktop 探测结果。
@@ -201,6 +205,10 @@ func (a *ACPAgent) MarkCodexRuntimeConflict(ctx context.Context, req CodexRuntim
 // app-server. Repeated calls reuse the live connection and do not perform any
 // Desktop ownership probe.
 func (a *ACPAgent) activateSharedCodexHost(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
+	return a.activateSharedCodexHostWithPhaseTimeout(ctx, req, 0)
+}
+
+func (a *ACPAgent) activateSharedCodexHostWithPhaseTimeout(ctx context.Context, req CodexRuntimeRequest, phaseTimeout time.Duration) (CodexThreadBinding, error) {
 	hasLease, uncertainLease := a.codexOwners.writerLeaseStatus(req.Ref.ThreadID)
 	if hasLease && !uncertainLease {
 		binding, ok := a.codexOwners.threadBinding(req.Ref.ThreadID)
@@ -210,7 +218,10 @@ func (a *ACPAgent) activateSharedCodexHost(ctx context.Context, req CodexRuntime
 		binding.Ref = req.Ref
 		return binding, nil
 	}
-	if err := a.ensureCodexAppServerStartedForTurn(ctx, req.Ref.ConversationID); err != nil {
+	startCtx, cancelStart := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
+	err := a.ensureCodexAppServerStartedForTurn(startCtx, req.Ref.ConversationID)
+	cancelStart()
+	if err != nil {
 		return CodexThreadBinding{}, err
 	}
 	a.mu.Lock()
@@ -218,12 +229,17 @@ func (a *ACPAgent) activateSharedCodexHost(ctx context.Context, req CodexRuntime
 	shouldResume := boundThread != strings.TrimSpace(req.Ref.ThreadID) || a.resumeOnFirstUse[req.Ref.ConversationID]
 	a.mu.Unlock()
 	if shouldResume {
-		if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
+		resumeCtx, cancelResume := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
+		err := a.resumeThread(resumeCtx, req.Ref.ConversationID, req.Ref.ThreadID)
+		cancelResume()
+		if err != nil {
 			return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)
 		}
 		a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
 	}
-	state, _, err := a.readCodexAppServerThreadStateResult(ctx, req.Ref.ThreadID)
+	readCtx, cancelRead := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
+	state, _, err := a.readCodexAppServerThreadStateResult(readCtx, req.Ref.ThreadID)
+	cancelRead()
 	if err != nil {
 		return CodexThreadBinding{}, err
 	}
@@ -237,6 +253,13 @@ func (a *ACPAgent) activateSharedCodexHost(ctx context.Context, req CodexRuntime
 		}
 	}
 	return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
+}
+
+func codexRuntimeActivationPhaseContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func (a *ACPAgent) validateCodexRuntimeSupport(req CodexRuntimeRequest) error {
@@ -313,17 +336,25 @@ func codexProbeError(loadErr error) error {
 	return ErrCodexDesktopOwnershipUnknown
 }
 
-func (a *ACPAgent) recoverCodexRuntimeForRemote(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
-	if err := a.restartCodexAppServer(ctx); err != nil {
+func (a *ACPAgent) recoverCodexRuntimeForRemoteWithPhaseTimeout(ctx context.Context, req CodexRuntimeRequest, phaseTimeout time.Duration) (CodexThreadBinding, error) {
+	restartCtx, cancelRestart := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
+	err := a.restartCodexAppServer(restartCtx)
+	cancelRestart()
+	if err != nil {
 		return CodexThreadBinding{}, err
 	}
 	if a.codexDesktopBridge && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
 		return CodexThreadBinding{}, ErrCodexRuntimeUnavailable
 	}
-	if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
+	resumeCtx, cancelResume := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
+	err = a.resumeThread(resumeCtx, req.Ref.ConversationID, req.Ref.ThreadID)
+	cancelResume()
+	if err != nil {
 		return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)
 	}
-	state, _, err := a.readCodexAppServerThreadStateResult(ctx, req.Ref.ThreadID)
+	readCtx, cancelRead := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
+	state, _, err := a.readCodexAppServerThreadStateResult(readCtx, req.Ref.ThreadID)
+	cancelRead()
 	if err != nil {
 		return CodexThreadBinding{}, err
 	}

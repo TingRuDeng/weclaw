@@ -34,6 +34,8 @@ var (
 	codexDesktopMethodVersions = map[string]int{
 		"initialize":                                            1,
 		"thread-stream-state-changed":                           11,
+		"thread-stream-following-changed":                       1,
+		"thread-stream-following-status-requested":              1,
 		"thread-read-state-changed":                             2,
 		"thread-queued-followups-changed":                       1,
 		"thread-follower-load-complete-history":                 1,
@@ -57,17 +59,18 @@ var (
 )
 
 type codexDesktopEnvelope struct {
-	Type           string          `json:"type"`
-	RequestID      string          `json:"requestId,omitempty"`
-	SourceClientID string          `json:"sourceClientId,omitempty"`
-	Version        int             `json:"version,omitempty"`
-	Method         string          `json:"method,omitempty"`
-	Params         json.RawMessage `json:"params,omitempty"`
-	ResultType     string          `json:"resultType,omitempty"`
-	Result         json.RawMessage `json:"result,omitempty"`
-	Error          string          `json:"error,omitempty"`
-	Request        json.RawMessage `json:"request,omitempty"`
-	Response       json.RawMessage `json:"response,omitempty"`
+	Type            string          `json:"type"`
+	RequestID       string          `json:"requestId,omitempty"`
+	SourceClientID  string          `json:"sourceClientId,omitempty"`
+	TargetClientIDs []string        `json:"targetClientIds,omitempty"`
+	Version         int             `json:"version,omitempty"`
+	Method          string          `json:"method,omitempty"`
+	Params          json.RawMessage `json:"params,omitempty"`
+	ResultType      string          `json:"resultType,omitempty"`
+	Result          json.RawMessage `json:"result,omitempty"`
+	Error           string          `json:"error,omitempty"`
+	Request         json.RawMessage `json:"request,omitempty"`
+	Response        json.RawMessage `json:"response,omitempty"`
 }
 
 type codexDesktopRequestSpec struct {
@@ -82,6 +85,13 @@ type codexDesktopDiscoverySpec struct {
 	SourceClientID string
 	Method         string
 	Params         any
+}
+
+type codexDesktopBroadcastSpec struct {
+	SourceClientID  string
+	TargetClientIDs []string
+	Method          string
+	Params          any
 }
 
 func decodeCodexDesktopEnvelope(payload []byte) (codexDesktopEnvelope, error) {
@@ -292,6 +302,22 @@ func newCodexDesktopDiscoveryRequest(spec codexDesktopDiscoverySpec) (codexDeskt
 		RequestID:      spec.RequestID,
 		SourceClientID: spec.SourceClientID,
 		Request:        request,
+	}
+	return envelope, validateCodexDesktopEnvelope(envelope)
+}
+
+func newCodexDesktopBroadcast(spec codexDesktopBroadcastSpec) (codexDesktopEnvelope, error) {
+	params, err := marshalCodexDesktopProtocolValue("params", spec.Params)
+	if err != nil {
+		return codexDesktopEnvelope{}, err
+	}
+	envelope := codexDesktopEnvelope{
+		Type:            codexDesktopEnvelopeBroadcast,
+		SourceClientID:  strings.TrimSpace(spec.SourceClientID),
+		TargetClientIDs: append([]string(nil), spec.TargetClientIDs...),
+		Version:         codexDesktopMethodVersions[spec.Method],
+		Method:          spec.Method,
+		Params:          params,
 	}
 	return envelope, validateCodexDesktopEnvelope(envelope)
 }

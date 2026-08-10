@@ -66,6 +66,22 @@ func TestCodexDesktopStateIgnoresStreamFollowingBroadcast(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopStateIgnoresStreamFollowingStatusRequest(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	envelope := codexDesktopEnvelope{
+		Type: codexDesktopEnvelopeBroadcast, Method: "thread-stream-following-status-requested", Version: 1,
+		Params: json.RawMessage(`{"conversationId":"thread-1","hostId":"host-1"}`),
+	}
+
+	update, err := store.applyEnvelope(1, envelope)
+	if err != nil {
+		t.Fatalf("applyEnvelope() error = %v", err)
+	}
+	if update.Applied {
+		t.Fatalf("update = %#v", update)
+	}
+}
+
 func TestCodexDesktopStateProjectsQueuedFollowupsBroadcast(t *testing.T) {
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
 	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{

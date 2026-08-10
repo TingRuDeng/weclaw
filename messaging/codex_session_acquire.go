@@ -37,22 +37,26 @@ type codexSessionAcquireRequest struct {
 }
 
 type codexSessionAcquireResult struct {
-	route                codexConversationRoute
-	resolution           codexRuntimeResolution
-	externalState        externalCodexTaskState
-	externalActive       bool
-	externalProgressCard bool
-	agentSessionErr      error
-	runtimeErr           error
-	selectionChanged     bool
-	progressReanchored   bool
-	progressReanchorErr  error
+	route                   codexConversationRoute
+	resolution              codexRuntimeResolution
+	externalState           externalCodexTaskState
+	externalActive          bool
+	externalProgressCard    bool
+	agentSessionErr         error
+	runtimeErr              error
+	selectionChanged        bool
+	progressReanchored      bool
+	progressReanchorErr     error
+	handoffReleaseAttempted bool
+	handoffReleaseRetained  bool
+	handoffReleaseThreadID  string
+	handoffReleaseErr       error
 }
 
 // acquireCodexSessionWithBindingLocked atomically commits one frontend's
 // workspace/thread binding, then asks the shared app-server client to bind its
-// conversation mapping to that thread. Other frontends are never released or
-// invalidated.
+// conversation mapping to that thread. Other durable frontend bindings are
+// never released; an idle Host may be recycled to return the old thread lock.
 func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRequest) (codexSessionAcquireResult, error) {
 	liveAgent, ok := req.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
@@ -110,6 +114,7 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		}
 		return codexSessionAcquireResult{}, result.agentSessionErr
 	}
+	result = h.recoverPreviousCodexThreadHandoff(result, req, locked)
 	storeSelectionChanged := !codexRemoteSelectionMatchesRoute(locked, req.route)
 	result.selectionChanged = h.codexTaskCardSelectionChanged(
 		req.route.bindingKey, req.route.conversationID, storeSelectionChanged,
@@ -133,6 +138,30 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		h.commitCodexTaskCardFocus(req.route.bindingKey, req.route.conversationID)
 	}
 	return result, err
+}
+
+func (h *Handler) recoverPreviousCodexThreadHandoff(
+	result codexSessionAcquireResult,
+	req codexSessionAcquireRequest,
+	previous codexRemoteSelectionSnapshot,
+) codexSessionAcquireResult {
+	previousThreadID := codexRemoteSelectionActiveThreadID(previous)
+	if req.pendingFirstTurn || previousThreadID == "" || previousThreadID == strings.TrimSpace(req.route.threadID) {
+		return result
+	}
+	result.handoffReleaseThreadID = previousThreadID
+	if h.ensureCodexSessions().activeFrontendUsesThread(previousThreadID) {
+		result.handoffReleaseRetained = true
+		return result
+	}
+	handoffAgent, ok := req.agent.(agent.CodexThreadHandoffAgent)
+	if !ok {
+		return result
+	}
+	attempted, err := handoffAgent.RecoverCodexThreadHandoff(req.ctx, previousThreadID)
+	result.handoffReleaseAttempted = attempted
+	result.handoffReleaseErr = err
+	return result
 }
 
 // finishCodexFrontendBinding switches only this message route's workspace and

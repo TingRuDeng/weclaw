@@ -25,6 +25,12 @@ type codexDesktopRuntime struct {
 	tracked       map[string]bool
 }
 
+type codexDesktopFollowingStatus struct {
+	ConversationID string
+	HostID         string
+	TargetClientID string
+}
+
 // newCodexDesktopRuntime 创建尚未连接 socket 的懒初始化 runtime。
 func newCodexDesktopRuntime() *codexDesktopRuntime {
 	return &codexDesktopRuntime{
@@ -212,11 +218,15 @@ func codexDesktopLoadRevision(result json.RawMessage) (uint64, error) {
 
 // trackThread 标记 WeClaw 明确接管的 Desktop thread。
 func (r *codexDesktopRuntime) trackThread(threadID string) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
 	r.mu.Lock()
 	if r.tracked == nil {
 		r.tracked = make(map[string]bool)
 	}
-	r.tracked[strings.TrimSpace(threadID)] = true
+	r.tracked[threadID] = true
 	r.mu.Unlock()
 }
 
@@ -238,7 +248,14 @@ func (r *codexDesktopRuntime) handleBroadcast(sourceEpoch uint64, envelope codex
 	client, state, owners, authoritative, onEvents := r.client, r.state, r.owners, r.authoritative, r.onEvents
 	tracked := r.tracked[codexDesktopBroadcastThreadID(envelope)]
 	r.mu.Unlock()
-	if client == nil || state == nil || client.Epoch() != sourceEpoch {
+	if client == nil || client.Epoch() != sourceEpoch {
+		return
+	}
+	if envelope.Method == "thread-stream-following-status-requested" {
+		r.answerFollowingStatusRequest(sourceEpoch, envelope, client, authoritative, tracked)
+		return
+	}
+	if state == nil {
 		return
 	}
 	if envelope.Method == "thread-stream-state-changed" && !tracked {
@@ -260,6 +277,59 @@ func (r *codexDesktopRuntime) handleBroadcast(sourceEpoch uint64, envelope codex
 			onEvents(update.Snapshot.ThreadID, update.Events)
 		}
 	})
+}
+
+func (r *codexDesktopRuntime) answerFollowingStatusRequest(
+	sourceEpoch uint64,
+	envelope codexDesktopEnvelope,
+	client *codexDesktopClient,
+	authoritative func() bool,
+	tracked bool,
+) {
+	isAuthoritative := authoritative != nil && authoritative()
+	status, ok := codexDesktopFollowingStatusResponse(envelope, tracked, isAuthoritative)
+	if !ok {
+		return
+	}
+	if client.Epoch() != sourceEpoch {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), codexDesktopStateApplyTimeout)
+	defer cancel()
+	err := client.broadcastForEpoch(ctx, sourceEpoch, "thread-stream-following-changed", map[string]any{
+		"conversationId": status.ConversationID,
+		"hostId":         status.HostID,
+		"following":      true,
+	}, []string{status.TargetClientID})
+	if err != nil {
+		log.Printf("[acp] Codex Desktop following 状态应答失败 thread=%q: %v", status.ConversationID, err)
+	}
+}
+
+func codexDesktopFollowingStatusResponse(
+	envelope codexDesktopEnvelope,
+	tracked bool,
+	authoritative bool,
+) (codexDesktopFollowingStatus, bool) {
+	if !tracked || !authoritative || strings.TrimSpace(envelope.SourceClientID) == "" {
+		return codexDesktopFollowingStatus{}, false
+	}
+	var params struct {
+		ConversationID string `json:"conversationId"`
+		HostID         string `json:"hostId"`
+	}
+	if err := json.Unmarshal(envelope.Params, &params); err != nil {
+		return codexDesktopFollowingStatus{}, false
+	}
+	status := codexDesktopFollowingStatus{
+		ConversationID: strings.TrimSpace(params.ConversationID),
+		HostID:         strings.TrimSpace(params.HostID),
+		TargetClientID: strings.TrimSpace(envelope.SourceClientID),
+	}
+	if status.ConversationID == "" || status.HostID == "" {
+		return codexDesktopFollowingStatus{}, false
+	}
+	return status, true
 }
 
 // codexDesktopBroadcastThreadID 只提取广播路由字段，不解析大型 conversationState。

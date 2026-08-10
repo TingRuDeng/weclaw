@@ -109,6 +109,70 @@ func TestACPAgentStartPrefersRunningOfficialDaemonOverDesktopBridge(t *testing.T
 	}
 }
 
+func TestCodexDesktopRuntimeAnswersFollowingStatusForTrackedAuthoritativeThread(t *testing.T) {
+	response := make(chan codexDesktopEnvelope, 1)
+	runtime := newCodexDesktopRuntime()
+	runtime.setAuthoritative(func() bool { return true })
+	runtime.trackThread("thread-1")
+	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "weclaw-client")
+		writeCodexDesktopTestEnvelope(t, conn, codexDesktopEnvelope{
+			Type: codexDesktopEnvelopeBroadcast, SourceClientID: "desktop-client",
+			Method: "thread-stream-following-status-requested", Version: 1,
+			Params: json.RawMessage(`{"conversationId":"thread-1","hostId":"host-1"}`),
+		})
+		response <- readCodexDesktopTestEnvelope(t, conn)
+	}))
+	options.onBroadcast = runtime.handleBroadcast
+	client := newCodexDesktopClient(options)
+	runtime.mu.Lock()
+	runtime.client = client
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	runtime.mu.Unlock()
+	mustConnectCodexDesktopTestClient(t, client)
+
+	select {
+	case envelope := <-response:
+		if envelope.Method != "thread-stream-following-changed" || envelope.Version != 1 ||
+			len(envelope.TargetClientIDs) != 1 || envelope.TargetClientIDs[0] != "desktop-client" {
+			t.Fatalf("response envelope = %#v", envelope)
+		}
+		var params struct {
+			ConversationID string `json:"conversationId"`
+			HostID         string `json:"hostId"`
+			Following      bool   `json:"following"`
+		}
+		if err := json.Unmarshal(envelope.Params, &params); err != nil ||
+			params.ConversationID != "thread-1" || params.HostID != "host-1" || !params.Following {
+			t.Fatalf("response params=%#v err=%v", params, err)
+		}
+	case <-time.After(codexDesktopTestTimeout):
+		t.Fatal("following status response not sent")
+	}
+}
+
+func TestCodexDesktopFollowingStatusDoesNotClaimUntrackedOrNonAuthoritativeThread(t *testing.T) {
+	envelope := codexDesktopEnvelope{
+		Type: codexDesktopEnvelopeBroadcast, SourceClientID: "desktop-client",
+		Method: "thread-stream-following-status-requested", Version: 1,
+		Params: json.RawMessage(`{"conversationId":"thread-1","hostId":"host-1"}`),
+	}
+	for _, test := range []struct {
+		name          string
+		tracked       bool
+		authoritative bool
+	}{
+		{name: "untracked", tracked: false, authoritative: true},
+		{name: "not authoritative", tracked: true, authoritative: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if status, ok := codexDesktopFollowingStatusResponse(envelope, test.tracked, test.authoritative); ok {
+				t.Fatalf("status=%#v, must not claim following", status)
+			}
+		})
+	}
+}
+
 func TestACPAgentStartFailsClosedWhenDesktopIsPresentButUnreachable(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	runtime := newCodexDesktopRuntime()

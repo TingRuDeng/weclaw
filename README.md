@@ -10,7 +10,7 @@
 
 Use local Codex and Claude remotely from WeChat or Feishu while keeping real workspace and session context, live progress, approvals, and results. Codex always has one authoritative Host; Codex App, the controlled CLI, WeChat, and Feishu can continue the same thread as equal input frontends.
 
-> Official releases provide only the **macOS Apple Silicon (darwin/arm64)** asset. Intel Mac, Linux, and Windows can still be built from source, but do not receive official binaries or self-update support.
+> Official releases provide **macOS Apple Silicon (darwin/arm64)** and Debian/Linux binaries for **arm64 and amd64**. Intel Mac and Windows can still be built from source, but do not receive official binaries or self-update support.
 
 ## Why WeClaw
 
@@ -396,7 +396,7 @@ go build -o weclaw .
 
 The repository currently uses Go 1.26.5. No publicly pullable container image is currently published in sync with this maintained distribution.
 
-`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline. GitHub Release remains authoritative for versions and builds, publishing only `weclaw_darwin_arm64` and a `checksums.txt` containing only that asset's digest. CI still cross-builds the other targets for compatibility checks but does not upload them to stable or prerelease Releases. Only after that release is public and verified are the reversible `.gz` representation of `weclaw_darwin_arm64` and that same original `checksums.txt` mirrored to [Gitee](https://gitee.com/jimdeng891/weclaw); the installer and updater still verify the unpacked file against the authoritative GitHub checksum. A mirror failure visibly fails the release job without deleting the already verified GitHub Release; the manual `Repair Gitee Mirror` workflow resumes missing attachments from that GitHub Release and verifies them again.
+`scripts/release.sh` is the only authoritative stable-release entrypoint. The manual GitHub Actions Release workflow checks out clean `main` and delegates to that script instead of maintaining a second test, build, or upload pipeline. GitHub Release remains authoritative for versions and builds, publishing `weclaw_darwin_arm64`, `weclaw_linux_arm64`, `weclaw_linux_amd64`, and their original `checksums.txt`; CI still cross-builds `darwin/amd64` only as a compatibility check. Only after that release is public and verified are the reversible `.gz` representation of `weclaw_darwin_arm64` and the same original checksums mirrored to [Gitee](https://gitee.com/jimdeng891/weclaw); Debian/Linux installation and self-update use GitHub. The installer and updater always verify the selected binary against the authoritative checksum. A mirror failure visibly fails the release job without deleting the already verified GitHub Release; the manual `Repair Gitee Mirror` workflow resumes missing attachments from that GitHub Release and verifies them again.
 
 ## Upstream and License
 
