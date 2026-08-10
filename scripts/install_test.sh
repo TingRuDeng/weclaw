@@ -279,6 +279,21 @@ test_explicit_gitee_source_is_isolated() {
   assert_file_contains "$INSTALL_DIR/weclaw" "#!/bin/sh"
   finish_case "显式 Gitee 来源不访问 GitHub"
 }
+test_explicit_gitee_source_supports_linux_amd64() {
+  setup_case
+  FAKE_UNAME_OS=Linux
+  FAKE_UNAME_ARCH=x86_64
+  FAKE_ASSET_NAME=weclaw_linux_amd64
+  export FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+  WECLAW_SOURCE=gitee WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -eq 0 ] || fail "Linux amd64 显式 Gitee 安装失败：$output"
+  assert_file_contains "$DOWNLOADS_FILE" "https://gitee.com/test/weclaw/releases/download/v1.2.3/weclaw_linux_amd64.gz"
+  assert_file_contains "$DOWNLOADS_FILE" "https://gitee.com/test/weclaw/releases/download/v1.2.3/checksums.txt"
+  assert_file_not_contains "$DOWNLOADS_FILE" "github.com"
+  assert_file_contains "$INSTALL_DIR/weclaw" "#!/bin/sh"
+  finish_case "显式 Gitee 来源支持 Linux amd64"
+  unset FAKE_UNAME_OS FAKE_UNAME_ARCH FAKE_ASSET_NAME
+}
 test_auto_falls_back_on_github_network_failure() {
   setup_case
   FAKE_GITHUB_NETWORK_FAIL=1 WECLAW_SOURCE=auto WECLAW_SKIP_CLAUDE_ACP=1 run_installer
@@ -402,6 +417,7 @@ test_noninteractive_hint_quotes_install_path
 test_old_release_without_fix_only_prints_upgrade_hint
 test_checksum_success
 test_explicit_gitee_source_is_isolated
+test_explicit_gitee_source_supports_linux_amd64
 test_auto_falls_back_on_github_network_failure
 test_auto_asset_falls_back_on_network_failure
 test_auto_does_not_fallback_on_http_404

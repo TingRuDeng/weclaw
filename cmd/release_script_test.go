@@ -92,7 +92,7 @@ func TestReleasePipelineMirrorsOnlyAfterGitHubCommit(t *testing.T) {
 	}
 }
 
-func TestGiteeMirrorPublishesOnlyVerifiedDarwinArm64WithoutLeakingToken(t *testing.T) {
+func TestGiteeMirrorPublishesVerifiedDarwinArm64AndLinuxAMD64WithoutLeakingToken(t *testing.T) {
 	root := t.TempDir()
 	assetsDir := filepath.Join(root, "assets")
 	fakeBin := filepath.Join(root, "bin")
@@ -119,7 +119,7 @@ func TestGiteeMirrorPublishesOnlyVerifiedDarwinArm64WithoutLeakingToken(t *testi
 	checkJSON := filepath.Join(root, "release-check.json")
 	var assetsJSON strings.Builder
 	assetsJSON.WriteString(`[`)
-	allAssets := []string{"weclaw_darwin_arm64.gz", "checksums.txt"}
+	allAssets := []string{"weclaw_darwin_arm64.gz", "weclaw_linux_amd64.gz", "checksums.txt"}
 	for index, name := range allAssets {
 		if index > 0 {
 			assetsJSON.WriteByte(',')
@@ -232,10 +232,12 @@ esac
 	if !strings.Contains(string(gitOutput), "HEAD:refs/heads/main") || !strings.Contains(createdOutput, "Gitee 镜像完成") {
 		t.Fatalf("mirror evidence missing: output=%s git=%s", createdOutput, gitOutput)
 	}
-	if !strings.Contains(string(curlOutput), "upload-weclaw_darwin_arm64.gz.json") || !strings.Contains(string(curlOutput), "upload-checksums.txt.json") {
+	if !strings.Contains(string(curlOutput), "upload-weclaw_darwin_arm64.gz.json") ||
+		!strings.Contains(string(curlOutput), "upload-weclaw_linux_amd64.gz.json") ||
+		!strings.Contains(string(curlOutput), "upload-checksums.txt.json") {
 		t.Fatalf("Gitee mirror did not upload the expected assets: %s", curlOutput)
 	}
-	for _, unsupported := range []string{"weclaw_darwin_amd64.gz", "weclaw_linux_arm64.gz", "weclaw_linux_amd64.gz"} {
+	for _, unsupported := range []string{"weclaw_darwin_amd64.gz", "weclaw_linux_arm64.gz"} {
 		if strings.Contains(string(curlOutput), "upload-"+unsupported+".json") {
 			t.Fatalf("Gitee mirror uploaded unsupported asset %s: %s", unsupported, curlOutput)
 		}
