@@ -71,7 +71,7 @@ weclaw status
 /cx status             # 查看当前工作空间、会话、任务、账号和运行状态
 ```
 
-macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经在固定 control socket 上运行且身份验证通过，WeClaw 会保持它作为唯一 Host，即使 Codex App 也已运行；Codex App、受控 CLI、飞书和微信因此可以复用同一组 thread。没有已运行 daemon 时，WeClaw 才在 App 已运行时通过受保护的 Desktop IPC 复用 App Host；App 不在时连接或启动官方 daemon（不可用时使用 WeClaw 自管兼容 Host）。如果 WeClaw 自管 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；daemon 身份、全局空闲或 App IPC 无法确认时直接失败，不会并行写入。
+macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经在固定 control socket 上运行且身份验证通过，WeClaw 会保持它作为唯一 Host，即使 Codex App 也已运行；Codex App、受控 CLI、飞书和微信因此可以复用同一组 thread。没有已运行 daemon 时，WeClaw 才在 App 已运行时通过受保护的 Desktop IPC 复用 App Host；App 不在时连接或启动官方 daemon（不可用时使用 WeClaw 自管兼容 Host）。如果 WeClaw 自管 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；daemon 身份、全局空闲或 App IPC 无法确认时直接失败，不会并行写入。macOS 显式 `daemon` 模式也会装配 Desktop IPC，但只用于前端状态探测和切走后的旧 thread 回交；它无权把 App 选为 Host，daemon 启动或验证失败时仍会失败关闭。
 
 在飞书或微信中显式选择会话属于一次 Handoff。若已验证的官方 daemon 是唯一 Host，而 Desktop 历史探测返回 `no-client-found`，WeClaw 会把它视为当前 App 客户端已释放该会话，并在同一 daemon 上恢复绑定；因此 Codex App 窗口仍可见时也能从移动端接手。这个例外只用于显式会话选择：普通消息、状态查询、断线或超时不会自动接管，证据不足时仍保留 binding 并失败关闭。
 
@@ -86,7 +86,7 @@ weclaw codex cli
 weclaw codex cli resume <thread-id>
 ```
 
-该命令只使用官方 standalone Codex，并把 `--remote` 固定到唯一 official daemon socket；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。服务未运行且 Codex App 不存在时，它可以直接受控启动 daemon；服务正在运行时，CLI 必须先通过仅限本机的控制接口让该服务按自身已解析的拓扑准备 Host，并核对返回 socket 与本地配置完全一致。Desktop、managed Host、服务控制接口不可达或 Host 身份不明确时都会拒绝。旧 `type: cli` Codex 配置会迁移为共享 app-server，旧 `codex exec` 独立会话模式不再保留。
+该命令只使用官方 standalone Codex，并把 `--remote` 固定到唯一 official daemon socket；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。服务未运行且 Codex App 不存在时，它可以直接受控启动 daemon；服务正在运行时，CLI 必须先通过仅限本机的控制接口让该服务按自身已解析的拓扑准备 Host，并核对返回 socket 与本地配置完全一致。App 是当前 Host、managed Host、服务控制接口不可达或 Host 身份不明确时都会拒绝；仅有 App 可见不再单独构成拒绝理由，但服务必须已证明 daemon 是 WeClaw 权威。旧 `type: cli` Codex 配置会迁移为共享 app-server，旧 `codex exec` 独立会话模式不再保留。
 
 Codex App 和 CLI 中尚未发送的 queued follow-up 仍是各自客户端的本地草稿。只有输入被 app-server 接受后，才进入所有入口共享的顺序；WeClaw 不会把草稿当成已提交任务或自动代发。
 
@@ -359,7 +359,7 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - 审计日志默认开启，不记录密钥。
 - Codex `permission_level` 支持 `default`、`auto_review`、`full_access`；默认档位为 `default`。
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。
-- `codex_host_mode` 支持 `auto`、`daemon`、`managed`。macOS 默认 `auto` 先保留已验证且正在运行的官方 daemon；没有运行中 daemon 时优先复用已运行的 Codex App，App 不在时才选择可用的 standalone daemon，否则使用兼容 `managed`。不启用 Desktop bridge 的平台按“官方 daemon 可用则使用，否则 managed”选择。官方 socket 身份不明或 App 已存在但安全 IPC 不可达时失败关闭，不静默启动第二个 Host；显式 `daemon` 也不回退，且不能与 `app_server_socket` 或 `run_as_user` 混用。
+- `codex_host_mode` 支持 `auto`、`daemon`、`managed`。macOS 默认 `auto` 先保留已验证且正在运行的官方 daemon；没有运行中 daemon 时优先复用已运行的 Codex App，App 不在时才选择可用的 standalone daemon，否则使用兼容 `managed`。显式 `daemon` 在 macOS 保留 Desktop IPC 协调和 thread 回交，但不允许切换到 App Host；它不回退，且不能与 `app_server_socket` 或 `run_as_user` 混用。不启用 Desktop 协调的平台按“官方 daemon 可用则使用，否则 managed”选择。官方 socket 身份不明，或 auto 选择 App Host 时 App 已存在但安全 IPC 不可达，都会失败关闭，不静默启动第二个 Host。
 - 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。官方 `daemon` 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
 
 | Codex 权限档位 | 行为 |

@@ -44,7 +44,7 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 		// each admitted turn so a binding created while another client held the
 		// thread lease cannot accidentally reuse a stale conversation mapping.
 		binding, err = a.activateSharedCodexHost(ctx, req.Runtime)
-	} else if a.codexDesktopBridge {
+	} else if a.codexDesktopHostSelection {
 		preparation, prepareErr := a.prepareCodexThreadProviderLocked(ctx, req.Runtime)
 		if prepareErr != nil {
 			return "", prepareErr

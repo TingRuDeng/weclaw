@@ -118,8 +118,12 @@ func (req codexSwitchRequest) acquireRequest(route codexConversationRoute) codex
 
 // renderCodexSessionAcquireSuccess 只在 frontend binding 已提交后宣告成功。
 func (h *Handler) renderCodexSessionAcquireSuccess(result codexSessionAcquireResult) string {
+	headline := "已切换并绑定。"
+	if result.runtimeErr != nil {
+		headline = "已选择，等待运行通道。"
+	}
 	return h.renderCodexSessionAcquireResult(
-		result, "已切换并绑定。", shortCodexWorkspaceName(result.route.workspaceRoot),
+		result, headline, shortCodexWorkspaceName(result.route.workspaceRoot),
 	)
 }
 

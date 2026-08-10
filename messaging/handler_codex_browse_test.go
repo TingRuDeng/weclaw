@@ -260,7 +260,7 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch thread-bad"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已切换并绑定") || !strings.Contains(text, "运行通道: 暂不可用") {
+	if !strings.Contains(text, "已选择，等待运行通道") || !strings.Contains(text, "运行通道: 暂不可用") {
 		t.Fatalf("reply should preserve binding while reporting runtime failure, messages=%#v", calls.texts())
 	}
 	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)

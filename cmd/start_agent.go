@@ -166,12 +166,14 @@ func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTra
 	return result
 }
 
-// codexDesktopBridgeEnabled 只为原生 Codex 的默认 auto 拓扑启用 App IPC。
-// 显式 Host、socket 或 run_as_user 配置始终保持用户选定的共享 Host。
+// codexDesktopBridgeEnabled 为原生 Codex 的单用户 macOS 拓扑启用 App IPC 协调。
+// auto 可以在没有 daemon 时选择 App Host；显式 daemon 只用 IPC 做
+// frontend 状态探测和 thread 回交，不改变用户选定的 Host。
 func codexDesktopBridgeEnabled(agCfg config.AgentConfig) bool {
+	hostMode := agCfg.EffectiveCodexHostMode()
 	return runtime.GOOS == "darwin" &&
 		isCodexAppServerAgent(agCfg) &&
-		agCfg.EffectiveCodexHostMode() == "auto" &&
+		(hostMode == "auto" || hostMode == "daemon") &&
 		strings.TrimSpace(agCfg.AppServerSocket) == "" &&
 		strings.TrimSpace(agCfg.RunAsUser) == ""
 }

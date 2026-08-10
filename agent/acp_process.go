@@ -43,7 +43,7 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 		log.Printf("[acp] using Codex App Desktop IPC; shared app-server not started")
 		return nil
 	}
-	if a.codexDesktopBridge {
+	if a.codexDesktopCoordination {
 		a.setCodexRuntimeMode(CodexRuntimeUnknown)
 	}
 	for attempt := 1; attempt <= codexCompatibilityUpdateThreshold; attempt++ {

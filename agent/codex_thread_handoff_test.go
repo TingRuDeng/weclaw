@@ -142,8 +142,9 @@ func newCodexThreadHandoffTestAgent(t *testing.T, threadStatus string) *ACPAgent
 	runtime.presence = func() (bool, bool) { return true, true }
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeDaemon,
-		Env: map[string]string{"CODEX_HOME": home}, StateFile: filepath.Join(home, "state.json"),
-	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+		CodexDesktopBridge: true,
+		Env:                map[string]string{"CODEX_HOME": home}, StateFile: filepath.Join(home, "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime})
 	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		if method != "thread/list" {

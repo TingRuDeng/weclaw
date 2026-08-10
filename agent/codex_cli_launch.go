@@ -96,7 +96,7 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	}
 	if a.desktopProbe != nil {
 		socketExists, processExists := a.desktopProbe.Presence()
-		if socketExists || processExists {
+		if (socketExists || processExists) && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
 			return CodexCLILaunch{}, fmt.Errorf("Codex App 当前可见，无法证明 official daemon 是唯一 Host；受控 CLI 已拒绝连接")
 		}
 	}

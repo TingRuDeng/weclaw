@@ -217,7 +217,7 @@ func TestHandoffCodexRuntimeRemoteUsesLiveDesktop(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
-	}, acpAgentOptions{desktopProbe: probe})
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
 	probe.loadHook = func(ref CodexThreadRef) {
 		a.codexOwners.observeDesktopSnapshot(ref.ThreadID, 7, CodexThreadState{ThreadID: ref.ThreadID})
 	}
@@ -487,6 +487,34 @@ func TestOfficialDaemonHandoffReusesClientWhileAnotherTurnIsActive(t *testing.T)
 	}
 	if restarted {
 		t.Fatal("official daemon handoff must not restart the shared client")
+	}
+}
+
+func TestExplicitDaemonHandoffDoesNotSelectDesktopHost(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeDaemon,
+		CodexDesktopBridge: true, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	probe.loadHook = func(ref CodexThreadRef) {
+		a.codexOwners.observeDesktopSnapshot(ref.ThreadID, 1, CodexThreadState{ThreadID: ref.ThreadID})
+	}
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+
+	_, err := a.HandoffCodexRuntime(
+		context.Background(), remoteCodexRuntimeRequest("thread-1", "route-1", 1),
+	)
+
+	if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) {
+		t.Fatalf("HandoffCodexRuntime() error=%v, want ownership unknown", err)
+	}
+	if stopped || a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+		t.Fatalf("stopped=%v runtime=%q, explicit daemon must remain authoritative", stopped, a.codexRuntimeModeSnapshot())
 	}
 }
 

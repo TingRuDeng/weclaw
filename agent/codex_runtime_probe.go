@@ -34,7 +34,7 @@ func (a *ACPAgent) inspectCodexRuntimeLocked(ctx context.Context, req CodexRunti
 		return a.activateSharedCodexHost(ctx, req)
 	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{})
-	if runtime == CodexRuntimeDesktop && a.codexDesktopBridge {
+	if runtime == CodexRuntimeDesktop && a.codexDesktopHostSelection {
 		if transitionErr := a.transitionCodexRuntimeToDesktop(ctx); transitionErr != nil {
 			if a.desktopRuntime != nil {
 				_ = a.desktopRuntime.disconnect()
@@ -126,7 +126,7 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	}
 	// thread/start/session resume 已经给出了当前 app-server 的本地 writer 证据。
 	// 窗口认领只需同步控制 revision，不应为此再次探测 Codex Desktop。
-	if req.Intent.Owner == CodexControlRemote && !a.codexDesktopBridge {
+	if req.Intent.Owner == CodexControlRemote && !a.codexDesktopCoordination {
 		if current, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok && current.Runtime == CodexRuntimeWeClaw {
 			binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, current.State)
 			if err == nil {
@@ -142,7 +142,7 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	})
 	cancelProbe()
 	if req.Intent.Owner == CodexControlRemote && canRecoverCodexRuntimeForRemoteOwner(err) &&
-		(!a.codexDesktopBridge || desktopHostDefinitelyAbsent(a.desktopProbe)) {
+		(!a.codexDesktopCoordination || desktopHostDefinitelyAbsent(a.desktopProbe)) {
 		log.Printf("[codex-runtime] remote owner 忽略 Desktop 探测不确定状态 thread=%q: %v", req.Ref.ThreadID, err)
 		runtime, err = CodexRuntimeUnknown, nil
 	}
@@ -162,7 +162,7 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if req.Intent.Owner == CodexControlDesktop && runtime == CodexRuntimeConflict {
 		runtime = CodexRuntimeDesktop
 	}
-	if runtime == CodexRuntimeDesktop && a.codexDesktopBridge {
+	if runtime == CodexRuntimeDesktop && a.codexDesktopHostSelection {
 		activationCtx, cancelActivation := context.WithTimeout(ctx, codexRuntimeHandoffActivationTimeout)
 		defer cancelActivation()
 		if transitionErr := a.transitionCodexRuntimeToDesktop(activationCtx); transitionErr != nil {
@@ -280,14 +280,14 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 	if a.desktopProbe == nil {
 		return CodexRuntimeUnknown, current.State, ErrCodexDesktopOwnershipUnknown
 	}
-	if a.codexDesktopBridge && desktopHostDefinitelyAbsent(a.desktopProbe) {
+	if a.codexDesktopCoordination && desktopHostDefinitelyAbsent(a.desktopProbe) {
 		if current.Runtime == CodexRuntimeWeClaw {
 			return CodexRuntimeWeClaw, current.State, nil
 		}
 		return CodexRuntimeUnknown, current.State, nil
 	}
 	loadErr := a.desktopProbe.LoadHistory(ctx, req.Ref)
-	if a.codexDesktopBridge && loadErr == nil && a.desktopRuntime != nil {
+	if a.codexDesktopHostSelection && loadErr == nil && a.desktopRuntime != nil {
 		if state, stateErr := a.desktopRuntime.threadState(req.Ref.ThreadID); stateErr == nil {
 			return CodexRuntimeDesktop, state, nil
 		}
@@ -299,7 +299,7 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 			}
 			return CodexRuntimeConflict, binding.State, ErrCodexRuntimeConflict
 		}
-		if binding.Runtime == CodexRuntimeDesktop {
+		if a.codexDesktopHostSelection && binding.Runtime == CodexRuntimeDesktop {
 			return CodexRuntimeDesktop, binding.State, nil
 		}
 	}
@@ -309,7 +309,7 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 	// App frontend released this thread, so the shared daemon may resume it.
 	officialDaemonHandoff := opts.allowNoClientRelease && a.usesOfficialCodexDaemon() &&
 		a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw
-	if a.codexDesktopBridge && !officialDaemonHandoff {
+	if a.codexDesktopCoordination && !officialDaemonHandoff {
 		released = desktopHostDefinitelyAbsent(a.desktopProbe)
 	}
 	if released {
@@ -343,7 +343,7 @@ func (a *ACPAgent) recoverCodexRuntimeForRemoteWithPhaseTimeout(ctx context.Cont
 	if err != nil {
 		return CodexThreadBinding{}, err
 	}
-	if a.codexDesktopBridge && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+	if a.codexDesktopHostSelection && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
 		return CodexThreadBinding{}, ErrCodexRuntimeUnavailable
 	}
 	resumeCtx, cancelResume := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)

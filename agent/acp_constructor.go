@@ -48,9 +48,6 @@ func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	}
 	options.protocol = protocol
 	options.stateFile = stateFile
-	if cfg.CodexDesktopBridge {
-		options.desktopBridge = true
-	}
 	a := buildACPAgent(cfg, options)
 	a.configureCodexRuntime(options.desktopProbe)
 	a.loadState()
@@ -59,6 +56,14 @@ func newACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 
 // buildACPAgent 初始化不依赖外部运行时的进程内状态。
 func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
+	configuredHostMode := normalizeAgentCodexHostMode(cfg.CodexHostMode)
+	desktopCoordination := cfg.CodexDesktopBridge || options.desktopBridge
+	// options.desktopBridge 是包内测试的完整 Desktop Host 注入点；生产
+	// 配置中只有 auto 能从共享 Host 切换到 Desktop Host。保留
+	// 历史直接构造器“省略 Host mode + 显式 bridge”的既有语义。
+	desktopHostSelection := options.desktopBridge ||
+		(cfg.CodexDesktopBridge &&
+			(configuredHostMode == codexHostModeAuto || strings.TrimSpace(cfg.CodexHostMode) == ""))
 	a := &ACPAgent{
 		configuredName:             strings.TrimSpace(cfg.ConfiguredName),
 		command:                    cfg.Command,
@@ -86,7 +91,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		conversationCwds:           make(map[string]string),
 		stateFile:                  options.stateFile,
 		codexHostSocket:            strings.TrimSpace(cfg.AppServerSocket),
-		codexHostMode:              normalizeAgentCodexHostMode(cfg.CodexHostMode),
+		codexHostMode:              configuredHostMode,
 		codexAutoUpdate:            strings.ToLower(strings.TrimSpace(cfg.CodexAutoUpdate)),
 		claudeSessionConfigs:       make(map[string][]acpSessionConfigOption),
 		claudeConfigRevisions:      make(map[string]uint64),
@@ -97,7 +102,8 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		notifyCh:                   make(map[string]chan *sessionUpdate),
 		turnCh:                     make(map[string]chan *codexTurnEvent),
 		desktopProbe:               options.desktopProbe,
-		codexDesktopBridge:         options.desktopBridge,
+		codexDesktopCoordination:   desktopCoordination,
+		codexDesktopHostSelection:  desktopHostSelection,
 		appServerGate:              newCodexAppServerGate(),
 		protocolTrace:              cfg.ProtocolTrace,
 	}
@@ -106,12 +112,13 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 }
 
 // configureCodexRuntime 为原生 app-server 装配 thread 绑定与 writer lease。
-// 默认 macOS auto 拓扑恢复 Desktop IPC；显式 probe 继续供隔离测试使用。
+// macOS auto/daemon 拓扑都可装配 Desktop IPC 协调；是否允许 App
+// 成为 Host 由 codexDesktopHostSelection 独立决定。
 func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 	if a.protocol != protocolCodexAppServer {
 		return
 	}
-	if probe == nil && a.codexDesktopBridge {
+	if probe == nil && a.codexDesktopCoordination {
 		probe = newSystemCodexDesktopRuntime()
 	}
 	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
@@ -120,7 +127,7 @@ func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 	}
 	// 生产 bridge 仍沿用“多 frontend binding + 单 thread lease”，不恢复
 	// 已退役的 route 独占 owner；测试注入默认保留旧控制语义。
-	if a.codexDesktopBridge {
+	if a.codexDesktopCoordination {
 		a.codexOwners.enforceControl = false
 	}
 	a.desktopProbe = probe

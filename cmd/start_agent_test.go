@@ -39,8 +39,8 @@ func TestACPAgentConfigFromConfigPassesCodexHostMode(t *testing.T) {
 	if got.CodexHostMode != "daemon" {
 		t.Fatalf("CodexHostMode=%q, want daemon", got.CodexHostMode)
 	}
-	if got.CodexDesktopBridge {
-		t.Fatal("explicit daemon mode must not enable the Codex Desktop bridge")
+	if got.CodexDesktopBridge != (runtime.GOOS == "darwin") {
+		t.Fatalf("daemon CodexDesktopBridge=%v, want Darwin-only coordination", got.CodexDesktopBridge)
 	}
 	if defaulted := acpAgentConfigFromConfig("codex", config.AgentConfig{}).CodexHostMode; defaulted != "auto" {
 		t.Fatalf("default CodexHostMode=%q, want auto", defaulted)

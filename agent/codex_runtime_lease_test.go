@@ -435,11 +435,13 @@ func TestCodexRuntimeRemoteRouteHandoffReusesIdleWeClawRuntime(t *testing.T) {
 	}
 }
 
-func TestRunCodexTurnUsesValidatedWeClawRuntime(t *testing.T) {
+func TestExplicitDaemonTurnUsesValidatedWeClawRuntimeWithoutDesktopProbe(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{loadErr: ErrCodexDesktopNoClient}
 	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeDaemon,
+		CodexDesktopBridge: true, StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
 	req := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)
@@ -837,7 +839,7 @@ func TestHandoffCodexRuntimeDesktopClearsExplicitConflict(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
-	}, acpAgentOptions{desktopProbe: probe})
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
 	remote := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	if _, err := a.codexOwners.activateRuntime(remote, CodexRuntimeDesktop, CodexThreadState{ThreadID: "thread-1"}); err != nil {
 		t.Fatal(err)

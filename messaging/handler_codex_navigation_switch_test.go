@@ -68,7 +68,7 @@ func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
 		t.Fatalf("运行通道失败后仍应提交目标，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已切换并绑定") || !strings.Contains(text, "运行通道: 暂不可用") ||
+	if !strings.Contains(text, "已选择，等待运行通道。") || !strings.Contains(text, "运行通道: 暂不可用") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") || strings.Contains(text, "thread-store internal error") {
 		t.Fatalf("runtime failure should keep committed selection without false conflict or draft, messages=%#v", calls.texts())
 	}

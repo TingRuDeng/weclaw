@@ -35,7 +35,7 @@ func TestACPAgentDesktopControlledTurnDoesNotStartAppServer(t *testing.T) {
 }
 
 func TestACPAgentStartPrefersDesktopBridgeWithoutStartingSharedHost(t *testing.T) {
-	t.Setenv("WECLAW_HOME", t.TempDir())
+	home := newShortCodexHome(t)
 	runtime := newCodexDesktopRuntime()
 	runtime.presence = func() (bool, bool) { return true, true }
 	hold := make(chan struct{})
@@ -46,8 +46,10 @@ func TestACPAgentStartPrefersDesktopBridgeWithoutStartingSharedHost(t *testing.T
 	t.Cleanup(func() { close(hold) })
 
 	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
-	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeAuto,
+		CodexDesktopBridge: true, Env: map[string]string{"CODEX_HOME": home},
+		StateFile: filepath.Join(home, "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime})
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -57,6 +59,43 @@ func TestACPAgentStartPrefersDesktopBridgeWithoutStartingSharedHost(t *testing.T
 	}
 	if got := a.codexRuntimeModeSnapshot(); got != CodexRuntimeDesktop {
 		t.Fatalf("runtime mode = %q, want desktop", got)
+	}
+}
+
+func TestACPAgentExplicitDaemonDoesNotSelectDesktopHost(t *testing.T) {
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	desktopDialed := false
+	runtime.client = newCodexDesktopClient(codexDesktopTestOptions(func(context.Context) (net.Conn, error) {
+		desktopDialed = true
+		return nil, errors.New("explicit daemon must not select Desktop Host")
+	}))
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon",
+		CodexDesktopBridge: true, Env: map[string]string{"CODEX_HOME": t.TempDir()},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime})
+	if !a.codexDesktopCoordination || a.codexDesktopHostSelection {
+		t.Fatalf("coordination=%v hostSelection=%v, explicit daemon must coordinate without selecting Desktop Host",
+			a.codexDesktopCoordination, a.codexDesktopHostSelection)
+	}
+
+	selected, err := a.tryStartCodexDesktopRuntime(context.Background())
+
+	if err != nil || selected || desktopDialed {
+		t.Fatalf("selected=%v desktopDialed=%v err=%v", selected, desktopDialed, err)
+	}
+}
+
+func TestACPAgentLegacyDesktopBridgeStillSelectsDesktopHost(t *testing.T) {
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexDesktopBridge: true,
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+
+	if !a.codexDesktopCoordination || !a.codexDesktopHostSelection {
+		t.Fatalf("coordination=%v hostSelection=%v, legacy explicit bridge must retain Host selection",
+			a.codexDesktopCoordination, a.codexDesktopHostSelection)
 	}
 }
 

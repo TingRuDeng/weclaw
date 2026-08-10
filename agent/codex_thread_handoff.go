@@ -13,7 +13,7 @@ import (
 func (a *ACPAgent) RecoverCodexThreadHandoff(ctx context.Context, previousThreadID string) (attempted bool, err error) {
 	previousThreadID = strings.TrimSpace(previousThreadID)
 	if previousThreadID == "" || a.protocol != protocolCodexAppServer ||
-		!a.codexDesktopBridge || !a.usesOfficialCodexDaemon() || a.desktopProbe == nil {
+		!a.codexDesktopCoordination || !a.usesOfficialCodexDaemon() || a.desktopProbe == nil {
 		return false, nil
 	}
 	desktopSocketExists, desktopProcessExists := a.desktopProbe.Presence()

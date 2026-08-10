@@ -127,11 +127,13 @@ type ACPAgent struct {
 	desktopProbe   codexDesktopOwnerProbe
 	codexOwners    *codexRuntimeOwnerRegistry
 	desktopRuntime *codexDesktopRuntime
-	// codexDesktopBridge 只在默认单用户 macOS auto 拓扑启用。运行时模式是
-	// Host 级事实：Desktop 与共享 app-server 不能同时成为写入权威。
-	codexDesktopBridge bool
-	codexRuntimeMode   CodexRuntimeHolder
-	appServerGate      *codexAppServerGate
+	// Desktop 协调能力与 Host 选择权必须分离：daemon 也需要通过
+	// App IPC 探测 frontend 并回交 thread，但只有 auto 允许把 App Host
+	// 设为全局写入权威。
+	codexDesktopCoordination  bool
+	codexDesktopHostSelection bool
+	codexRuntimeMode          CodexRuntimeHolder
+	appServerGate             *codexAppServerGate
 	// codexAdmissionMu serializes turn preflight with host-level account
 	// maintenance. A turn releases it only after holding both the app-server
 	// permit and writer lease; account operations then either run before the
@@ -172,7 +174,7 @@ type ACPAgentConfig struct {
 	AppServerSocket    string                         // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
 	CodexHostMode      string                         // auto / daemon / managed
 	CodexAutoUpdate    string                         // Codex CLI 自动更新策略：off / incompatible
-	CodexDesktopBridge bool                           // 默认 auto 拓扑优先复用本机 Codex App IPC
+	CodexDesktopBridge bool                           // 启用本机 App IPC 协调；auto 及旧版省略 Host mode 可选择 App Host
 	RunAsUser          string                         // 以独立 Unix 用户运行（文件系统隔离）
 	RunAsEnv           []string                       // run_as_user 时透传的环境变量名白名单
 	ProtocolTrace      observability.ProtocolRecorder // 显式启用的 Codex 线协议诊断记录器

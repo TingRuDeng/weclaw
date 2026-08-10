@@ -91,7 +91,7 @@ func TestPrepareCodexCLILaunchDoesNotStartSecondHostForRunningService(t *testing
 	}
 }
 
-func TestPrepareCodexCLILaunchRejectsExistingDaemonWhenDesktopIsPresent(t *testing.T) {
+func TestPrepareCodexCLILaunchAllowsVerifiedDaemonWhenDesktopIsPresent(t *testing.T) {
 	home, err := os.MkdirTemp("/tmp", "wc-codex-")
 	if err != nil {
 		t.Fatal(err)
@@ -114,17 +114,28 @@ func TestPrepareCodexCLILaunchRejectsExistingDaemonWhenDesktopIsPresent(t *testi
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	a := NewACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, Env: map[string]string{"CODEX_HOME": home}, CodexHostMode: "daemon",
+		Command: "codex", Args: []string{"app-server"}, Env: map[string]string{"CODEX_HOME": home},
+		CodexHostMode: "daemon", CodexDesktopBridge: true,
 	})
 	a.desktopProbe = &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
-	a.codexDaemonLifecycleCall = func(context.Context, string) (codexDaemonLifecycleOutput, error) {
-		t.Fatal("Desktop 存在时不应查询或连接 official daemon")
-		return codexDaemonLifecycleOutput{}, nil
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	a.codexDaemonLifecycleCall = func(_ context.Context, action string) (codexDaemonLifecycleOutput, error) {
+		if action != "version" {
+			t.Fatalf("daemon lifecycle action=%q, want version", action)
+		}
+		output := testCodexDaemonOutput("running", "pid", socketPath)
+		output.ManagedCodexPath = managedCodex
+		return output, nil
 	}
+	a.codexDaemonMetadataCall = testCodexDaemonMetadata
 
-	_, err = a.PrepareCodexCLILaunch(context.Background(), CodexCLILaunchOptions{AllowHostStart: false})
-	if err == nil || !strings.Contains(err.Error(), "Codex App") {
-		t.Fatalf("error=%v, want ambiguous Host rejection", err)
+	launch, err := a.PrepareCodexCLILaunch(context.Background(), CodexCLILaunchOptions{AllowHostStart: false})
+	if err != nil || launch.SocketPath != socketPath {
+		t.Fatalf("launch=%#v error=%v", launch, err)
+	}
+	a.setCodexRuntimeMode(CodexRuntimeUnknown)
+	if _, err := a.PrepareCodexCLILaunch(context.Background(), CodexCLILaunchOptions{AllowHostStart: false}); err == nil || !strings.Contains(err.Error(), "Codex App") {
+		t.Fatalf("unknown authority error=%v, want ambiguous Host rejection", err)
 	}
 }
 

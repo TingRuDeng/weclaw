@@ -40,7 +40,7 @@ func (a *ACPAgent) handleCodexDesktopDisconnect() {
 // 官方 daemon 保持权威；否则才连接已运行的 Codex App。App 仍存在但 IPC
 // 不可达时必须失败关闭，不能启动第二个 app-server。
 func (a *ACPAgent) tryStartCodexDesktopRuntime(ctx context.Context) (bool, error) {
-	if !a.codexDesktopBridge || a.desktopRuntime == nil {
+	if !a.codexDesktopHostSelection || a.desktopRuntime == nil {
 		return false, nil
 	}
 	daemonRunning, err := a.runningOfficialCodexDaemon(ctx)

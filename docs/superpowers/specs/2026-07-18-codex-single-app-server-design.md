@@ -47,10 +47,10 @@ flowchart LR
 
 1. macOS 默认 `auto` 先检查固定 control socket 上是否已有官方 daemon，并用官方 lifecycle `version` 验证其身份。验证通过的运行中 daemon 保持唯一 Host，即使 Codex App 同时存在也不切换到 Desktop IPC。
 2. 没有运行中的 daemon 时，App 已运行则由 `agent/codex_desktop_connector.go` 通过受保护 Desktop IPC 复用 App Host；App 不在时，`auto` 在 `CODEX_HOME` 存在可执行 standalone Codex 时使用 `agent/codex_daemon_host.go`，否则使用 WeClaw-managed 兼容路径。control socket 存在但身份验证失败时必须失败关闭，不能回退 Desktop 或 managed。
-3. 显式 `daemon` 只使用官方生命周期命令和固定 control socket，不允许自定义 `app_server_socket` 或 `run_as_user`，失败时不回退 managed。
+3. 显式 `daemon` 只使用官方生命周期命令和固定 control socket，不允许自定义 `app_server_socket` 或 `run_as_user`，失败时不回退 managed。macOS 下它保留 Desktop IPC 协调能力，仅用于 frontend 状态探测和旧 thread 回交，不获得选择 App Host 的权限。
 4. 显式 `managed` 使用 `agent/codex_app_server_host.go` 管理兼容 Host，不主动接入 Desktop。
 
-`weclaw codex cli` 只在官方 daemon 拓扑中可用。它使用官方 standalone Codex 二进制并固定传入当前 control socket 的 `--remote unix://...`；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。WeClaw 服务未运行且 App 不存在时可以直接受控启动 daemon；服务运行时，CLI 先调用仅限 loopback 的 `POST /api/codex/cli/prepare`，由服务内同一个 Agent 在 admission/gate 内按启动时已经解析的拓扑准备 Host，再核对返回 socket 与客户端解析值一致。Desktop 可见、managed Host、控制接口不可达或 Host 身份不明确时都失败关闭。
+`weclaw codex cli` 只在官方 daemon 拓扑中可用。它使用官方 standalone Codex 二进制并固定传入当前 control socket 的 `--remote unix://...`；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。WeClaw 服务未运行且 App 不存在时可以直接受控启动 daemon；服务运行时，CLI 先调用仅限 loopback 的 `POST /api/codex/cli/prepare`，由服务内同一个 Agent 在 admission/gate 内按启动时已经解析的拓扑准备 Host，再核对返回 socket 与客户端解析值一致。App 是当前 Host、managed Host、控制接口不可达或 Host 身份不明确时都失败关闭；若服务已证明 daemon 是 WeClaw 权威，App 仅可见不能单独构成拒绝理由。
 
 WeClaw-managed Host 已运行后若探测到 App，只能在所有 thread 全局 idle、没有 active/uncertain writer lease，并串行持有 gate 与 socket lifecycle lock 时切换。官方 daemon 已运行时不把 WeClaw 权威切到 Desktop IPC；停止结果、daemon 或 App 状态、IPC 身份任一不可确认，当前 runtime 都进入不可写状态，不能并行保留两个 WeClaw Host。
 
