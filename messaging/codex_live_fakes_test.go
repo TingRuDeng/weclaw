@@ -381,6 +381,6 @@ func codexLiveSwitchFixture(t *testing.T, state agent.CodexThreadState) (*Handle
 func (f *fakeCodexLiveAgent) setBindingState(state agent.CodexThreadState) {
 	f.mu.Lock()
 	f.binding.State = state
-	f.fakeCodexThreadAgent.threadState = state
 	f.mu.Unlock()
+	f.fakeCodexThreadAgent.setThreadState(state)
 }

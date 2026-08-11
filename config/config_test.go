@@ -577,7 +577,7 @@ func TestPlatformConfigDefaultsFeishuSessionRules(t *testing.T) {
 	}
 }
 
-func TestConfigUnmarshalAdminUsers(t *testing.T) {
+func TestConfigPreservesLegacyAdminUsersWithoutPromotingThem(t *testing.T) {
 	var cfg Config
 	data := []byte(`{
 		"admin_users": ["ou_admin", "wx_admin"],
@@ -588,8 +588,8 @@ func TestConfigUnmarshalAdminUsers(t *testing.T) {
 		t.Fatalf("unmarshal config: %v", err)
 	}
 	want := []string{"ou_admin", "wx_admin"}
-	if !reflect.DeepEqual(cfg.AdminUsers, want) {
-		t.Fatalf("AdminUsers=%#v, want %#v", cfg.AdminUsers, want)
+	if !reflect.DeepEqual(cfg.LegacyAdminUsers, want) {
+		t.Fatalf("LegacyAdminUsers=%#v, want %#v", cfg.LegacyAdminUsers, want)
 	}
 }
 

@@ -33,6 +33,7 @@ type defaultSessionResetRequest struct {
 	platform    platform.PlatformName
 	accountID   string
 	reply       platform.Replier
+	admin       bool
 }
 
 type claudeDefaultSessionResetRequest struct {
@@ -41,6 +42,7 @@ type claudeDefaultSessionResetRequest struct {
 	userID      string
 	agentName   string
 	agent       agent.Agent
+	admin       bool
 }
 
 // resetDefaultSessionForMessage 按消息会话选择的 Agent 重置对应会话。
@@ -64,6 +66,7 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 	if isClaudeAgent(name, ag.Info()) {
 		return h.resetDefaultClaudeSession(claudeDefaultSessionResetRequest{
 			ctx: ctx, actorUserID: actorUserID, userID: routeUserID, agentName: name, agent: ag,
+			admin: req.admin,
 		})
 	}
 	sessionID, err := ag.ResetSession(ctx, routeUserID)
@@ -109,7 +112,7 @@ func (h *Handler) resetDefaultClaudeSession(req claudeDefaultSessionResetRequest
 	route := claudeSessionRoute{
 		Context: req.ctx, ActorUserID: req.actorUserID, UserID: req.userID, AgentName: req.agentName,
 		Agent: req.agent, WorkspaceRoot: workspaceRoot, BindingKey: claudeBindingKey(req.userID, req.agentName),
-		Admin: h.isAdminUser(req.actorUserID),
+		Admin: req.admin,
 	}
 	return h.handleClaudeNew(route)
 }

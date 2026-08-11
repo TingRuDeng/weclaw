@@ -477,7 +477,7 @@ func TestFeishuTaskStreamPlacesThinkingAtBottomUntilTerminal(t *testing.T) {
 	}
 }
 
-func TestFeishuTaskStreamWithoutAgentReplyRemovesThinkingAtTerminal(t *testing.T) {
+func TestFeishuTaskStreamWithoutAgentReplyKeepsOnlyTerminalStatus(t *testing.T) {
 	cardKit := &fakeCardKitClient{cardID: "card-no-reply"}
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
 	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
@@ -491,12 +491,33 @@ func TestFeishuTaskStreamWithoutAgentReplyRemovesThinkingAtTerminal(t *testing.T
 	}
 	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
 	elements := doneCard["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**已完成**" ||
-		elements[1].(map[string]any)["content"] != taskCardNoStructuredProgress {
-		t.Fatalf("done body=%#v, want explicit no-progress terminal card", doneCard["body"])
+	if len(elements) != 1 || elements[0].(map[string]any)["content"] != "**已完成**" {
+		t.Fatalf("done body=%#v, want compact terminal status only", doneCard["body"])
 	}
 	if strings.Contains(cardKit.updateCards[len(cardKit.updateCards)-1], platform.TaskStreamThinkingIndicator) {
 		t.Fatalf("terminal card must remove thinking without Agent reply: %s", cardKit.updateCards[len(cardKit.updateCards)-1])
+	}
+}
+
+func TestFeishuTaskStreamWithoutProgressKeepsApprovalRecordsInCompactTerminal(t *testing.T) {
+	cardKit := &fakeCardKitClient{cardID: "card-approval-only"}
+	registry := newTaskCardRegistry()
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, registry)
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex", InitialContent: platform.TaskStreamThinkingIndicator,
+	})
+	if err != nil {
+		t.Fatalf("OpenStream error: %v", err)
+	}
+	registry.addApproval("card-approval-only", parsedCardAction{Choice: "accept", Label: "accept", Summary: "command: date"})
+	if err := stream.Complete(context.Background(), ""); err != nil {
+		t.Fatalf("Complete error: %v", err)
+	}
+	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
+	elements := doneCard["body"].(map[string]any)["elements"].([]any)
+	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**已完成**" ||
+		!strings.Contains(elements[1].(map[string]any)["content"].(string), "command: date") {
+		t.Fatalf("done body=%#v, want compact status and preserved approval", doneCard["body"])
 	}
 }
 
@@ -1304,7 +1325,7 @@ func TestFeishuStreamReferenceStopsInterruptedOriginalCardAfterRestart(t *testin
 	cardKit := &fakeIdempotentCardKitClient{}
 	beforeRestart := NewReplier(&fakeMessageSender{}, "oc_chat", cardKit)
 	stream, err := beforeRestart.OpenStream(context.Background(), platform.StreamOptions{
-		Title: "Claude · jumpserver", InitialContent: "思考中",
+		Title: "Claude · jumpserver", InitialContent: platform.TaskStreamThinkingIndicator,
 	})
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
@@ -1326,8 +1347,9 @@ func TestFeishuStreamReferenceStopsInterruptedOriginalCardAfterRestart(t *testin
 	if len(cardKit.updateCardIDs) != 1 || cardKit.updateCardIDs[0] != "card-1" {
 		t.Fatalf("updated card IDs=%#v, want original card", cardKit.updateCardIDs)
 	}
-	if card := cardKit.updateCards[0]; !strings.Contains(card, "已停止") || !strings.Contains(card, "思考中") || strings.Contains(card, "任务已中断") {
-		t.Fatalf("terminal card=%q, want stopped state with preserved progress", card)
+	if card := cardKit.updateCards[0]; !strings.Contains(card, "已停止") || strings.Contains(card, "思考中") ||
+		strings.Contains(card, "未产生结构化进度") || strings.Contains(card, "任务已中断") {
+		t.Fatalf("terminal card=%q, want compact stopped state without synthetic progress", card)
 	}
 }
 

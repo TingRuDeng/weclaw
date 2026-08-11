@@ -106,8 +106,10 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 	}
 	state, err := runtimeAg.ReadCodexThreadState(opts.ctx, opts.conversationID, opts.threadID)
 	resolved := resolvedExternalCodexTask{
-		state: externalCodexTaskState{CodexThreadState: state, Controllable: true},
-		err:   err,
+		state: externalCodexTaskState{
+			CodexThreadState: state, Progress: state.LastAgentMessageText, Controllable: true,
+		},
+		err: err,
 	}
 	if err != nil {
 		return resolved
@@ -166,7 +168,7 @@ func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
 		lines = append(lines, "当前进展: "+previewPendingCodexMessage(state.Progress))
 	}
 	if state.Controllable {
-		lines = append(lines, "新消息会直接发送到当前任务；回复 /stop 可停止任务。")
+		lines = append(lines, "新消息会直接发送到当前任务；回复 /stop 会同时停止本地 Codex 和当前消息窗口中的共享任务。")
 	} else {
 		lines = append(lines, "新消息会直接发送到当前任务；当前任务暂不支持从飞书或微信停止，完成后结果会自动返回当前会话。")
 	}
@@ -223,6 +225,14 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 		recordProgress(agent.TextProgressEvent(runtime.state.Progress))
 	}
 	result := h.superviseExternalCodexWatch(runtime, recordProgress)
+	if !result.Terminal && runtime.task.shouldPreserveRecoveryOnDrain() {
+		h.recordTraceStage(trace, "task.observer_preserved", "detached", "observer stopped for service restart; shared turn continues")
+		if progressSession != nil {
+			progressSession.stopBackground()
+		}
+		h.finishActiveTask(runtime.opts.conversationID, runtime.task)
+		return
+	}
 	if !result.Terminal && runtime.task.isStopping() {
 		result.Terminal = true
 		result.Failed = true
@@ -291,6 +301,15 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if hasPending {
 		pending.run()
 	}
+}
+
+func (t *activeAgentTask) shouldPreserveRecoveryOnDrain() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.preserveRecoveryOnDrain
 }
 
 // reconcileExternalCodexTerminal 在消息层释放观察任务前，先收敛同一 turn 的运行态。

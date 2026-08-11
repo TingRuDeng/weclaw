@@ -59,6 +59,7 @@ func (h *Handler) routeServicePlatformCommand(ctx context.Context, req platformC
 			platform:    msg.Platform,
 			accountID:   msg.AccountID,
 			reply:       req.Reply,
+			admin:       h.isAdminMessage(msg),
 		}))
 	default:
 		return false
@@ -72,7 +73,7 @@ func (h *Handler) routeSessionPlatformCommand(ctx context.Context, req platformC
 	switch {
 	case isProgressCommand(req.Trimmed):
 		if len(strings.Fields(req.Trimmed)) > 1 && !h.isAdminMessage(msg) {
-			replyPlatformCommand(ctx, req, "仅管理员可以修改当前机器人账号的进度模式。")
+			replyPlatformCommand(ctx, req, "当前账号未授权修改进度模式，请将该身份加入当前机器人或平台的 allowed_users。")
 			return true
 		}
 		replyPlatformCommand(ctx, req, h.handleProgressCommandForAccount(req.Trimmed, msg.Platform, msg.AccountID))

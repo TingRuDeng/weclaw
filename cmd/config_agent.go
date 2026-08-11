@@ -55,25 +55,17 @@ func runConfigAgent(opts configAgentOptions) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	if cfg.Agents == nil {
-		cfg.Agents = make(map[string]config.AgentConfig)
-	}
-	agentCfg := migrateACPAgentConfig(cfg.Agents[next.Name], next)
-	cfg.Agents[next.Name] = agentCfg
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	if err := cfg.ValidateClaudeACPAgents(); err != nil {
-		return err
-	}
-	if err := probeConfigAgent(next, agentCfg); err != nil {
-		return err
-	}
-	if err := config.Save(cfg); err != nil {
+	if err := config.Update(func(cfg *config.Config) error {
+		if cfg.Agents == nil {
+			cfg.Agents = make(map[string]config.AgentConfig)
+		}
+		agentCfg := migrateACPAgentConfig(cfg.Agents[next.Name], next)
+		cfg.Agents[next.Name] = agentCfg
+		if err := cfg.ValidateClaudeACPAgents(); err != nil {
+			return err
+		}
+		return probeConfigAgent(next, agentCfg)
+	}); err != nil {
 		return err
 	}
 	printConfigAgentResult(next)

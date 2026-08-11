@@ -7,17 +7,17 @@ import (
 )
 
 const (
-	cardStatusThinking           = "thinking"
-	cardStatusStreaming          = "streaming"
-	cardStatusDone               = "done"
-	cardStatusError              = "error"
-	cardStatusStopped            = "stopped"
-	cardStatusSuperseded         = "superseded"
-	cardMainContentID            = "main_content"
-	cardProgressSummaryID        = "progress_summary"
-	cardProgressPanelID          = "progress_panel"
-	cardProgressCollapseID       = "progress_collapse"
-	taskCardNoStructuredProgress = "本任务未产生结构化进度记录。"
+	cardStatusThinking     = "thinking"
+	cardStatusStreaming    = "streaming"
+	cardStatusDone         = "done"
+	cardStatusError        = "error"
+	cardStatusStopped      = "stopped"
+	cardStatusSuperseded   = "superseded"
+	cardStatusDetached     = "detached"
+	cardMainContentID      = "main_content"
+	cardProgressSummaryID  = "progress_summary"
+	cardProgressPanelID    = "progress_panel"
+	cardProgressCollapseID = "progress_collapse"
 )
 
 type cardOptions struct {
@@ -40,8 +40,13 @@ func buildCardV2(opts cardOptions) (string, error) {
 		title = "WeClaw"
 	}
 	content := strings.TrimSpace(opts.Content)
-	if content == "" {
+	compactTerminal := content == "" && isCompactTerminalStatus(status)
+	if content == "" && !compactTerminal {
 		content = statusDefaultContent(status)
+	}
+	if compactTerminal {
+		opts.Summary = ""
+		opts.Collapsible = false
 	}
 	elements := make([]map[string]any, 0, 3)
 	inlineActiveStatus := opts.InlineActiveStatus && (status == cardStatusThinking || status == cardStatusStreaming)
@@ -52,10 +57,13 @@ func buildCardV2(opts cardOptions) (string, error) {
 			"content":    label,
 		})
 	}
-	main := map[string]any{
-		"tag":        "markdown",
-		"element_id": cardMainContentID,
-		"content":    content,
+	var main map[string]any
+	if content != "" {
+		main = map[string]any{
+			"tag":        "markdown",
+			"element_id": cardMainContentID,
+			"content":    content,
+		}
 	}
 	approvalContent := approvalRecordsContent(opts.Approvals)
 	if opts.Collapsible {
@@ -63,7 +71,10 @@ func buildCardV2(opts cardOptions) (string, error) {
 		if summary == "" {
 			summary = statusLabel(status)
 		}
-		panelElements := []map[string]any{main}
+		panelElements := make([]map[string]any, 0, 2)
+		if main != nil {
+			panelElements = append(panelElements, main)
+		}
 		if taskCardID := strings.TrimSpace(opts.taskCardID); taskCardID != "" {
 			panelElements = append(panelElements, taskProgressCollapseButton(taskCardID))
 		}
@@ -82,7 +93,9 @@ func buildCardV2(opts cardOptions) (string, error) {
 		elements = append(elements, map[string]any{"tag": "collapsible_panel", "element_id": cardProgressPanelID, "expanded": opts.Expanded,
 			"header": map[string]any{"title": map[string]any{"tag": "plain_text", "content": panelTitle}}, "elements": panelElements})
 	} else {
-		elements = append(elements, main)
+		if main != nil {
+			elements = append(elements, main)
+		}
 		if approvalContent != "" {
 			elements = append(elements, map[string]any{
 				"tag":        "markdown",
@@ -119,6 +132,10 @@ func buildCardV2(opts cardOptions) (string, error) {
 	return string(data), nil
 }
 
+func isCompactTerminalStatus(status string) bool {
+	return status == cardStatusDone || status == cardStatusError || status == cardStatusStopped
+}
+
 func taskProgressCollapseButton(taskCardID string) map[string]any {
 	return map[string]any{
 		"tag":        "button",
@@ -152,7 +169,7 @@ func approvalRecordsContent(records []string) string {
 // normalizeCardStatus 收敛未知状态，避免生成不可识别样式。
 func normalizeCardStatus(status string) string {
 	switch status {
-	case cardStatusThinking, cardStatusStreaming, cardStatusDone, cardStatusError, cardStatusStopped, cardStatusSuperseded:
+	case cardStatusThinking, cardStatusStreaming, cardStatusDone, cardStatusError, cardStatusStopped, cardStatusSuperseded, cardStatusDetached:
 		return status
 	default:
 		return cardStatusThinking
@@ -172,6 +189,8 @@ func statusLabel(status string) string {
 		return "**已停止**"
 	case cardStatusSuperseded:
 		return "**已转移**"
+	case cardStatusDetached:
+		return "**已停止同步**"
 	default:
 		return "**思考中**"
 	}
@@ -186,7 +205,7 @@ func statusTemplate(status string) string {
 		return "red"
 	case cardStatusStopped:
 		return "grey"
-	case cardStatusSuperseded:
+	case cardStatusSuperseded, cardStatusDetached:
 		return "grey"
 	default:
 		return "blue"
@@ -196,16 +215,12 @@ func statusTemplate(status string) string {
 // statusDefaultContent 返回空内容时的默认正文。
 func statusDefaultContent(status string) string {
 	switch status {
-	case cardStatusDone:
-		return taskCardNoStructuredProgress
-	case cardStatusError:
-		return "任务执行失败。"
-	case cardStatusStopped:
-		return "任务已按请求停止。"
 	case cardStatusStreaming:
 		return "正在生成结果，请稍候。"
 	case cardStatusSuperseded:
 		return "已在新位置继续展示。"
+	case cardStatusDetached:
+		return "已解除当前窗口的会话绑定。"
 	default:
 		return "正在分析任务，请稍候。"
 	}

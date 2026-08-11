@@ -127,3 +127,16 @@ func (s *serializedStream) Supersede(ctx context.Context, content string) error 
 	}
 	return supersedable.Supersede(ctx, content)
 }
+
+func (s *serializedStream) Detach(ctx context.Context, content string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if detachable, ok := s.inner.(platform.DetachableStream); ok {
+		return detachable.Detach(ctx, content)
+	}
+	supersedable, ok := s.inner.(platform.SupersedableStream)
+	if !ok {
+		return platform.ErrUnsupported
+	}
+	return supersedable.Supersede(ctx, content)
+}

@@ -87,6 +87,24 @@ func TestDoctorWarnsEmptyAllowlist(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsLegacyAdminUsersWithoutExpandingAllowlist(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.LegacyAdminUsers = []string{"legacy-user"}
+	cfg.Platforms = map[string]config.PlatformConfig{
+		"wechat": {Enabled: boolPtr(true)},
+	}
+
+	results := runDoctorChecks(cfg, testDoctorDeps())
+	legacy, ok := findResult(results, "legacy admin_users")
+	if !ok || legacy.Status != doctorWarn || !strings.Contains(legacy.Detail, "ignored (1 entries)") {
+		t.Fatalf("legacy result=%#v ok=%t, want ignored warning", legacy, ok)
+	}
+	allowlist, ok := findResult(results, "access control wechat")
+	if !ok || allowlist.Status != doctorWarn || !strings.Contains(allowlist.Detail, "default-deny") {
+		t.Fatalf("allowlist result=%#v ok=%t, legacy field must not grant access", allowlist, ok)
+	}
+}
+
 func TestDoctorSkipsImplicitWeChatWhenFeishuEnabled(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Platforms = map[string]config.PlatformConfig{

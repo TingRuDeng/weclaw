@@ -35,7 +35,7 @@ func TestCardActionBlocksLaterMessageDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在切换并接管")
+	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在切换中，请稍后……")
 	<-cardStarted
 	messageDone := make(chan error, 1)
 	go func() { messageDone <- adapter.handleMessageEvent(context.Background(), messageEvent, dispatch) }()
@@ -267,5 +267,10 @@ func assertPendingChoiceCard(t *testing.T, card *callback.Card, label string, de
 	}
 	if strings.Contains(content, "已提交：") || strings.Contains(content, "已选择：") || strings.Contains(content, `"tag":"button"`) {
 		t.Fatalf("card=%s，不应提前声明已选择或保留按钮", content)
+	}
+	for _, internal := range []string{"正在切换并接管", "全局任务和写入状态", "共享 Codex Host", "本卡片更新结果", "结果将单独发送"} {
+		if strings.Contains(content, internal) {
+			t.Fatalf("card=%s，不应展示内部实现说明 %q", content, internal)
+		}
 	}
 }

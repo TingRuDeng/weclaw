@@ -38,7 +38,48 @@ func TestRegistryDispatchesAllowedUser(t *testing.T) {
 	if len(got) != 1 || got[0].UserID != "user-1" {
 		t.Fatalf("got messages=%#v, want user-1", got)
 	}
+	if !got[0].HasAuthorizedAccess() {
+		t.Fatal("allowed registry dispatch did not carry trusted access capability")
+	}
+	tampered := got[0]
+	tampered.AccountID = "other-account"
+	if tampered.HasAuthorizedAccess() {
+		t.Fatal("access capability survived account tampering")
+	}
+	tampered = got[0]
+	tampered.UserID = "other-user"
+	tampered.UserAliases = nil
+	if tampered.HasAuthorizedAccess() {
+		t.Fatal("access capability survived identity tampering")
+	}
 	_ = reply
+}
+
+func TestIncomingMessageWithoutRegistryCapabilityIsNotAuthorized(t *testing.T) {
+	msg := IncomingMessage{Platform: PlatformFeishu, AccountID: "cli_a", UserID: "ou_user"}
+	if msg.HasAuthorizedAccess() {
+		t.Fatal("plain incoming message forged trusted access")
+	}
+}
+
+func TestRegistryAuthorizationFailureClearsExistingCapability(t *testing.T) {
+	entryPlatform := &recordingPlatform{name: PlatformFeishu, accountID: "cli_a"}
+	allowedRegistry := NewRegistry([]RegistryEntry{{
+		Platform: entryPlatform,
+		Access:   NewAccessControl([]string{"on_allowed"}),
+	}})
+	msg, ok := allowedRegistry.AuthorizeIncomingMessage(IncomingMessage{
+		Platform: PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", UserAliases: []string{"on_allowed"},
+	})
+	if !ok || !msg.HasAuthorizedAccess() {
+		t.Fatal("initial registry authorization failed")
+	}
+
+	deniedRegistry := NewRegistry([]RegistryEntry{{Platform: entryPlatform, Access: NewAccessControl(nil)}})
+	msg, ok = deniedRegistry.AuthorizeIncomingMessage(msg)
+	if ok || msg.HasAuthorizedAccess() {
+		t.Fatal("failed reauthorization retained a stale access capability")
+	}
 }
 
 func TestRegistryAllowsFeishuByOriginalUserIDWhenSessionMetadataExists(t *testing.T) {

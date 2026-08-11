@@ -232,7 +232,6 @@ func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string,
 	if _, live := ag.(agent.CodexLiveRuntimeAgent); live {
 		// Live turn 已由 route 绑定到显式选择；ACP 的兼容映射可能仍指向旧 Desktop thread。
 		if selected, pending := store.getThread(bindingKey, workspaceRoot); !pending && strings.TrimSpace(selected) != "" {
-			store.clearPendingFirstTurn(bindingKey, workspaceRoot, selected)
 			return workspaceRoot, true
 		}
 	}
@@ -243,7 +242,14 @@ func (h *Handler) recordCodexThreadForWorkspace(userID string, agentName string,
 	if ownerWorkspace, ok := store.findWorkspaceByThread(bindingKey, threadID); ok {
 		workspaceRoot = ownerWorkspace
 	}
-	store.setThread(bindingKey, workspaceRoot, threadID)
+	recorded, err := store.recordThreadUnlessReleased(bindingKey, workspaceRoot, threadID)
+	if err != nil {
+		log.Printf("[codex-session] 保存 Agent 会话回填失败: %v", err)
+		return "", false
+	}
+	if !recorded {
+		return "", false
+	}
 	return workspaceRoot, true
 }
 
@@ -261,6 +267,8 @@ func (h *Handler) syncCodexThreadFromAgent(userID string, agentName string, work
 	conversationID := buildCodexConversationID(userID, agentName, workspaceRoot)
 	threadID, ok = codexAg.CurrentCodexThread(conversationID)
 	if ok {
-		store.setThread(bindingKey, workspaceRoot, threadID)
+		if _, err := store.recordThreadUnlessReleased(bindingKey, workspaceRoot, threadID); err != nil {
+			log.Printf("[codex-session] 同步 Agent 会话回填失败: %v", err)
+		}
 	}
 }

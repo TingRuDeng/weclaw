@@ -17,6 +17,35 @@ type IncomingMessage struct {
 	ReplyToID    string
 	ContextToken string
 	Metadata     map[string]string
+	accessGrant  *incomingAccessGrant
+}
+
+type incomingAccessGrant struct {
+	platform PlatformName
+	account  string
+	identity string
+}
+
+// HasAuthorizedAccess 仅在 Registry 已用当前平台账号的 allowed_users
+// 验证这条消息后返回 true。grant 绑定平台、账号和命中的身份，复制后篡改字段会失效。
+func (m IncomingMessage) HasAuthorizedAccess() bool {
+	_, ok := m.AuthorizedIdentity()
+	return ok
+}
+
+// AuthorizedIdentity 返回 Registry allowlist 实际命中的身份。
+// 它只在 capability 仍与当前消息的平台、账号和身份一致时可见。
+func (m IncomingMessage) AuthorizedIdentity() (string, bool) {
+	grant := m.accessGrant
+	if grant == nil || m.Platform != grant.platform || strings.TrimSpace(m.AccountID) != grant.account {
+		return "", false
+	}
+	for _, identity := range m.UserIdentityKeys() {
+		if identity == grant.identity {
+			return identity, true
+		}
+	}
+	return "", false
 }
 
 // SessionRoute 是平台 adapter 解析出的稳定会话路由；它与真实发送者 UserID 分离。

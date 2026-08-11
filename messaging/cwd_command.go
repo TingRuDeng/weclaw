@@ -60,7 +60,7 @@ func (h *Handler) handleCwdWithRouteAccess(trimmed string, userID []string, admi
 	}
 	if !admin && !h.isWorkspaceAllowed(absPath) {
 		log.Printf("[handler] rejected /cwd outside allowed workspace roots: %s", absPath)
-		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请联系管理员在 allowed_workspace_roots 中添加。", absPath)
+		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请在 allowed_workspace_roots 中添加后重试。", absPath)
 	}
 	agents := h.snapshotAgents()
 	unlockRegistry := h.lockWorkspaceRegistryControl()
@@ -68,7 +68,7 @@ func (h *Handler) handleCwdWithRouteAccess(trimmed string, userID []string, admi
 	if agentKind := h.hiddenCwdWorkspaceAgent(agents, absPath); agentKind != "" {
 		namespace := workspaceAgentNamespace(agentKind)
 		return fmt.Sprintf(
-			"该 %s 工作空间已被管理员从 WeClaw 移除，请先在管理员私聊中发送 /%s workspace add <路径> 重新登记。",
+			"该 %s 工作空间已从 WeClaw 导航中移除，请先在已授权账号私聊中发送 /%s workspace add <路径> 重新登记。",
 			workspaceAgentLabel(agentKind), namespace,
 		)
 	}

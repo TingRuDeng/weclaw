@@ -151,6 +151,52 @@ func TestCodexNewUsesBindingLock(t *testing.T) {
 	}
 }
 
+func TestCodexFirstTurnReplacementUsesBindingLock(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	routeUserID := "feishu:tenant:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
+
+	unlock := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
+	done := make(chan error, 1)
+	go func() {
+		done <- h.commitCodexFirstTurnReplacement(codexControlledTurnOptions{
+			ctx: context.Background(),
+			route: codexConversationRoute{
+				bindingKey: bindingKey, workspaceRoot: workspace,
+				conversationID: conversationID, threadID: "thread-old",
+			},
+		}, agent.CodexThreadRef{
+			ConversationID: conversationID, ThreadID: "thread-old",
+		}, agent.CodexThreadRef{
+			ConversationID: conversationID, ThreadID: "thread-new",
+		})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("first-turn replacement bypassed binding lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if threadID, _ := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "thread-old" {
+		t.Fatalf("thread changed while binding lock held: %q", threadID)
+	}
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first-turn replacement did not resume after binding unlock")
+	}
+	if threadID, _ := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "thread-new" {
+		t.Fatalf("thread after replacement=%q, want thread-new", threadID)
+	}
+}
+
 func TestHandleCodexNewRejectsActiveOldRemoteTaskBeforeReset(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()

@@ -109,6 +109,51 @@ func TestChatCodexAppServerInterruptsTurnWhenContextCancelled(t *testing.T) {
 	}
 }
 
+func TestChatCodexAppServerDetachesObserverWithoutInterruptingTurn(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	ctx, detach := ContextWithCodexObserverDetach(context.Background())
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir()})
+	turnStarted := make(chan struct{})
+	interruptCalled := make(chan struct{}, 1)
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			close(turnStarted)
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		case "turn/interrupt":
+			interruptCalled <- struct{}{}
+			return json.RawMessage(`{}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+	createCodexThreadForTest(t, ctx, a, "conversation-1")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.chatCodexAppServer(codexAppServerTurnOptions{ctx: ctx, conversationID: "conversation-1", message: "hello"})
+		done <- err
+	}()
+	<-turnStarted
+	detach()
+	if err := <-done; !errors.Is(err, ErrCodexObserverDetached) {
+		t.Fatalf("chat error=%v, want observer detached", err)
+	}
+	select {
+	case <-interruptCalled:
+		t.Fatal("observer detach called turn/interrupt")
+	default:
+	}
+	a.notifyMu.Lock()
+	_, registered := a.turnCh["thread-1"]
+	a.notifyMu.Unlock()
+	if registered {
+		t.Fatal("observer detach left the turn channel registered")
+	}
+}
+
 func TestChatCodexAppServerReturnsStructuredInterruptedTurn(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir()})

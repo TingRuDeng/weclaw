@@ -9,14 +9,16 @@ import (
 
 // configService 负责配置的读取(脱敏)/校验/原子写回。
 type configService struct {
-	load func() (*config.Config, error)
-	save func(*config.Config) error
+	load   func() (*config.Config, error)
+	save   func(*config.Config) error
+	update func(func(*config.Config) error) error
 }
 
 func newConfigService() *configService {
 	return &configService{
-		load: config.Load,
-		save: atomicSaveConfig,
+		load:   config.Load,
+		save:   atomicSaveConfig,
+		update: config.Update,
 	}
 }
 
@@ -31,8 +33,26 @@ func (s *configService) view() (configView, error) {
 
 // apply 合并脱敏视图、校验并原子写回；返回是否需要重启。
 func (s *configService) apply(v configView) (restartRequired bool, err error) {
+	if s.update != nil {
+		err := s.update(func(current *config.Config) error {
+			if err := validateConfigViewRevision(current, v); err != nil {
+				return err
+			}
+			merged := mergeView(current, v)
+			if err := validateConfig(merged); err != nil {
+				return err
+			}
+			restartRequired = restartRequiredConfigChanged(current, merged)
+			*current = *merged
+			return nil
+		})
+		return restartRequired, err
+	}
 	current, err := s.load()
 	if err != nil {
+		return false, err
+	}
+	if err := validateConfigViewRevision(current, v); err != nil {
 		return false, err
 	}
 	merged := mergeView(current, v)
@@ -44,6 +64,13 @@ func (s *configService) apply(v configView) (restartRequired bool, err error) {
 		return false, err
 	}
 	return restartRequired, nil
+}
+
+func validateConfigViewRevision(current *config.Config, view configView) error {
+	if strings.TrimSpace(view.Revision) == "" || view.Revision != configRevision(current) {
+		return fmt.Errorf("配置已变化，请重新加载后再保存")
+	}
+	return nil
 }
 
 // validateConfig 做保存前的基本校验，避免写入明显非法的配置。

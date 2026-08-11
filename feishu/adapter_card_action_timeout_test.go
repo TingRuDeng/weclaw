@@ -79,7 +79,7 @@ func TestInlineCardActionFallsBackToSeparateResultAfterCallbackBudget(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在处理")
+	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在处理中，请稍后……")
 	close(release)
 	select {
 	case got := <-sender.texts:
@@ -107,7 +107,7 @@ func TestSlowSessionSwitchUpdatesOriginalCardAfterCallbackBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPendingChoiceCard(t, resp.Card, "会话 A", "本卡片更新结果")
+	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在切换中，请稍后……")
 	close(release)
 	select {
 	case got := <-sender.patches:
@@ -143,7 +143,7 @@ func TestSlowCodexWorkspaceChoiceUpdatesOriginalCardAfterCallbackBudget(t *testi
 		t.Fatal(err)
 	}
 	close(release)
-	assertPendingChoiceCard(t, resp.Card, "codex-environment", "本卡片更新结果")
+	assertPendingChoiceCard(t, resp.Card, "codex-environment", "正在加载中，请稍后……")
 	select {
 	case got := <-sender.patches:
 		if !strings.Contains(got, "om_card:") ||
@@ -183,7 +183,7 @@ func TestSlowCodexWorkspaceChoicePatchesSessionChoicesAfterCallbackBudget(t *tes
 		t.Fatal(err)
 	}
 	close(release)
-	assertPendingChoiceCard(t, resp.Card, "codex-environment", "本卡片更新结果")
+	assertPendingChoiceCard(t, resp.Card, "codex-environment", "正在加载中，请稍后……")
 	select {
 	case got := <-sender.patches:
 		if !strings.Contains(got, "om_card:") ||
@@ -220,7 +220,7 @@ func TestSlowTaskControlUpdatesOriginalCardAfterCallbackBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPendingChoiceCard(t, resp.Card, "停止当前任务", "正在处理")
+	assertPendingChoiceCard(t, resp.Card, "停止当前任务", "正在处理中，请稍后……")
 	close(release)
 	select {
 	case got := <-sender.patches:
@@ -256,7 +256,7 @@ func TestTimedOutSessionSwitchUpdatesOriginalCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPendingChoiceCard(t, resp.Card, "会话 A", "本卡片更新结果")
+	assertPendingChoiceCard(t, resp.Card, "会话 A", "正在切换中，请稍后……")
 	select {
 	case got := <-sender.patches:
 		if !strings.Contains(got, "om_card:") || !strings.Contains(got, "等待超时") {

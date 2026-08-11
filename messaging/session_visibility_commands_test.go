@@ -21,7 +21,7 @@ func TestCodexSessionRemoveRequiresAdminPrivateAndCanRestoreByID(t *testing.T) {
 	ordinary := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: command, Private: true,
 	})
-	if !strings.Contains(ordinary, "仅管理员") {
+	if !strings.Contains(ordinary, "当前账号未授权") {
 		t.Fatalf("ordinary=%q", ordinary)
 	}
 	group := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{

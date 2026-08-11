@@ -204,6 +204,7 @@ func (s *feishuStream) streamComponentWithRetry(ctx context.Context, elementID, 
 
 type feishuStreamTerminalOp struct {
 	CardID           string `json:"card_id"`
+	Status           string `json:"status,omitempty"`
 	DisableSeq       int    `json:"disable_sequence"`
 	DisableOperation string `json:"disable_operation"`
 	UpdateSeq        int    `json:"update_sequence"`
@@ -661,6 +662,11 @@ func (r *Replier) PrepareSupersedeFromReference(reference platform.DurableStream
 	return prepareFeishuSupersedeFromReference(reference, notice, operationID)
 }
 
+// PrepareDetachFromReference 生成“解除当前窗口同步”的可重放卡片冻结操作。
+func (r *Replier) PrepareDetachFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	return prepareFeishuDetachFromReference(reference, notice, operationID)
+}
+
 // Supersede 保留为没有 outbox 编排时的兼容路径。
 func (s *feishuStream) Supersede(ctx context.Context, notice string) error {
 	reference, err := s.DurableReference()
@@ -674,6 +680,25 @@ func (s *feishuStream) Supersede(ctx context.Context, notice string) error {
 		return err
 	}
 	checkpoint, err := prepareFeishuSupersedeFromReference(reference, notice, uuid.NewString())
+	if err != nil {
+		return err
+	}
+	return s.DeliverPreparedSupersede(ctx, checkpoint)
+}
+
+// Detach 冻结当前窗口的任务卡，但不把共享任务标记为终态或迁移到新卡。
+func (s *feishuStream) Detach(ctx context.Context, notice string) error {
+	reference, err := s.DurableReference()
+	if err != nil {
+		s.mu.Lock()
+		alreadyClosed := s.closed || s.terminal != nil || s.terminalDelivered
+		s.mu.Unlock()
+		if alreadyClosed {
+			return nil
+		}
+		return err
+	}
+	checkpoint, err := prepareFeishuDetachFromReference(reference, notice, uuid.NewString())
 	if err != nil {
 		return err
 	}
@@ -697,7 +722,12 @@ func (s *feishuStream) DeliverPreparedSupersede(ctx context.Context, checkpoint 
 	s.mu.Unlock()
 
 	if taskCards != nil {
-		taskCards.updateAndSnapshot(cardID, cardStatusSuperseded, "")
+		status := cardStatusSuperseded
+		var op feishuStreamTerminalOp
+		if json.Unmarshal(checkpoint.Payload, &op) == nil && op.Status == cardStatusDetached {
+			status = cardStatusDetached
+		}
+		taskCards.updateAndSnapshot(cardID, status, "", false)
 		taskCards.setDurableReferenceChangeHandler(cardID, nil)
 	}
 	return deliverFeishuSupersedeCheckpoint(ctx, s.cardKit, checkpoint)
@@ -803,21 +833,18 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 		if opts.Content == "" {
 			opts.Content = trimTaskStreamThinkingIndicator(s.lastContent)
 		}
-		if opts.Content == "" {
-			opts.Content = taskCardNoStructuredProgress
-		}
 		opts.Approvals = append([]string(nil), s.preservedApprovals...)
 	}
 	if s.taskCards != nil {
-		if s.preserveTerminalContent {
-			s.taskCards.updateContent(s.cardID, opts.Content)
-		}
-		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, status, ""); ok {
+		if snapshot, ok := s.taskCards.updateAndSnapshot(s.cardID, status, opts.Content, s.preserveTerminalContent); ok {
 			opts = snapshot
 			opts.Expanded = false
 		}
 	}
-	if s.collapsible {
+	if strings.TrimSpace(opts.Content) == "" && isCompactTerminalStatus(status) {
+		opts.Summary = ""
+		opts.Collapsible = false
+	} else if s.collapsible {
 		opts.Collapsible = true
 		opts.Expanded = false
 	}
@@ -865,9 +892,6 @@ func normalizeFeishuReferencePresentation(summary, details, legacyContent string
 	if details == "" {
 		details = legacyContent
 	}
-	if details == "" {
-		details = taskCardNoStructuredProgress
-	}
 	if summary == "" {
 		summary = details
 	}
@@ -875,6 +899,14 @@ func normalizeFeishuReferencePresentation(summary, details, legacyContent string
 }
 
 func prepareFeishuSupersedeFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	return prepareFeishuStreamFreezeFromReference(reference, notice, operationID, cardStatusSuperseded)
+}
+
+func prepareFeishuDetachFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	return prepareFeishuStreamFreezeFromReference(reference, notice, operationID, cardStatusDetached)
+}
+
+func prepareFeishuStreamFreezeFromReference(reference platform.DurableStreamReference, notice string, operationID string, status string) (platform.SupersedeCheckpoint, error) {
 	payload, err := decodeFeishuStreamReference(reference)
 	if err != nil {
 		return platform.SupersedeCheckpoint{}, err
@@ -885,14 +917,22 @@ func prepareFeishuSupersedeFromReference(reference platform.DurableStreamReferen
 	}
 	notice = strings.TrimSpace(notice)
 	if notice == "" {
-		notice = defaultSupersededTaskCardNotice
+		if status == cardStatusDetached {
+			notice = "已解除当前窗口的会话绑定；本地 Codex 任务继续运行。"
+		} else {
+			notice = defaultSupersededTaskCardNotice
+		}
 	}
 	summary, details := normalizeFeishuReferencePresentation(payload.Summary, payload.Details, payload.Content)
 	if !strings.Contains(details, notice) {
-		details += "\n\n---\n\n" + notice
+		if details == "" {
+			details = notice
+		} else {
+			details += "\n\n---\n\n" + notice
+		}
 	}
 	cardJSON, err := buildCardV2(cardOptions{
-		Status: cardStatusSuperseded, Title: payload.Title,
+		Status: status, Title: payload.Title,
 		Summary: summary, Content: details, Approvals: payload.Approvals,
 		Collapsible: payload.Collapsible, Expanded: false, taskCardID: payload.CardID,
 	})
@@ -900,7 +940,7 @@ func prepareFeishuSupersedeFromReference(reference platform.DurableStreamReferen
 		return platform.SupersedeCheckpoint{}, err
 	}
 	op := feishuStreamTerminalOp{
-		CardID: payload.CardID, DisableSeq: payload.Sequence + 1,
+		CardID: payload.CardID, Status: status, DisableSeq: payload.Sequence + 1,
 		DisableOperation: uuid.NewSHA1(uuid.NameSpaceOID, []byte(operationID+":disable")).String(),
 		UpdateSeq:        payload.Sequence + 2,
 		UpdateOperation:  uuid.NewSHA1(uuid.NameSpaceOID, []byte(operationID+":update")).String(),

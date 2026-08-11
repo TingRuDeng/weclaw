@@ -37,18 +37,6 @@ func (h *Handler) SetAllowedWorkspaceRoots(roots []string) {
 	h.allowedWorkspaceRoots = cleaned
 }
 
-// SetAdminUsers 设置允许执行 WeClaw 管理命令的用户白名单；空白名单表示全部拒绝。
-func (h *Handler) SetAdminUsers(users []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.adminUsers = make(map[string]struct{}, len(users))
-	for _, user := range users {
-		if trimmed := strings.TrimSpace(user); trimmed != "" {
-			h.adminUsers[trimmed] = struct{}{}
-		}
-	}
-}
-
 // SetRateLimitPerMinute 设置每用户每分钟触发 agent 的上限；<=0 表示不限流。
 func (h *Handler) SetRateLimitPerMinute(limit int) {
 	h.mu.Lock()

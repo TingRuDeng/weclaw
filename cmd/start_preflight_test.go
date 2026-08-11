@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -24,6 +25,11 @@ func TestPrepareConfiguredStartDaemonChildSkipsCapabilityProbe(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents["claude"] = config.AgentConfig{Type: "acp", Command: adapter}
+	fingerprint, err := claudePreflightFingerprint(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemonClaudePreflightEnv, fingerprint)
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -37,6 +43,60 @@ func TestPrepareConfiguredStartDaemonChildSkipsCapabilityProbe(t *testing.T) {
 	if err := prepared.run(); err != nil {
 		t.Fatalf("prepared.run error=%v", err)
 	}
+}
+
+func TestDaemonChildRejectsClaudeConfigChangedAfterParentPreflight(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	t.Setenv(daemonChildEnv, "1")
+	t.Setenv("PATH", t.TempDir())
+	adapterA := filepath.Join(home, "claude-agent-acp-a")
+	adapterB := filepath.Join(home, "claude-agent-acp-b")
+	for _, path := range []string{adapterA, adapterB} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	parent := config.DefaultConfig()
+	parent.Agents["claude"] = config.AgentConfig{Type: "acp", Command: adapterA, Model: "sonnet"}
+	fingerprint, err := claudePreflightFingerprint(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(daemonClaudePreflightEnv, fingerprint)
+	changed := config.DefaultConfig()
+	changed.Agents["claude"] = config.AgentConfig{Type: "acp", Command: adapterB, Model: "opus"}
+	if err := config.Save(changed); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := prepareConfiguredStart(context.Background(), func(*config.Config) error { return nil }); err == nil {
+		t.Fatal("daemon child accepted Claude config that was not attested by the parent preflight")
+	}
+}
+
+func TestDaemonChildEnvironmentCarriesClaudePreflightFingerprint(t *testing.T) {
+	env := daemonChildEnvironment([]string{
+		"PATH=/usr/bin",
+		daemonChildEnv + "=stale",
+		daemonClaudePreflightEnv + "=stale",
+	}, "sha256:test")
+	if got := environmentValue(env, daemonChildEnv); got != "1" {
+		t.Fatalf("daemon child marker=%q, want 1", got)
+	}
+	if got := environmentValue(env, daemonClaudePreflightEnv); got != "sha256:test" {
+		t.Fatalf("daemon Claude preflight fingerprint=%q", got)
+	}
+}
+
+func environmentValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
 }
 
 // TestConfiguredStartPreflightParentKeepsCapabilityProbe 验证父进程仍执行完整 ACP 能力握手。
@@ -84,7 +144,7 @@ func TestPrepareStartRejectsLoadAndPreflightErrors(t *testing.T) {
 // TestPersistDetectedStartConfigSkipsUnchangedConfig 验证无自动探测变更时不触碰配置文件。
 func TestPersistDetectedStartConfigSkipsUnchangedConfig(t *testing.T) {
 	called := false
-	err := persistDetectedStartConfig(false, config.DefaultConfig(), func(*config.Config) error {
+	err := persistDetectedStartConfig(false, config.DefaultConfig(), func(func(*config.Config) error) error {
 		called = true
 		return nil
 	})
@@ -95,16 +155,139 @@ func TestPersistDetectedStartConfigSkipsUnchangedConfig(t *testing.T) {
 
 // TestPersistDetectedStartConfigSavesChangedConfig 验证自动探测配置在启动前持久化。
 func TestPersistDetectedStartConfigSavesChangedConfig(t *testing.T) {
-	wantCfg := config.DefaultConfig()
+	wantCfg := completeStartPreflightAgentConfig("/usr/bin/true")
+	wantCfg.RateLimitPerMinute = 17
+	candidate := completeStartPreflightAgentConfig("/usr/bin/true")
 	called := false
-	err := persistDetectedStartConfig(true, wantCfg, func(got *config.Config) error {
+	err := persistDetectedStartConfig(true, candidate, func(mutate func(*config.Config) error) error {
 		called = true
-		if got != wantCfg {
-			t.Fatal("保存时未使用预检配置快照")
-		}
-		return nil
+		return mutate(wantCfg)
 	})
-	if err != nil || !called {
-		t.Fatalf("error=%v called=%t, want successful save", err, called)
+	if err != nil || !called || candidate.RateLimitPerMinute != 17 {
+		t.Fatalf("error=%v called=%t candidate=%#v, want latest committed config", err, called, candidate)
 	}
+}
+
+func TestPersistDetectedStartConfigDoesNotRestoreConcurrentRevocation(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	base := completeStartPreflightAgentConfig("/usr/bin/true")
+	base.Platforms["feishu"] = config.PlatformConfig{Bots: []config.FeishuBotConfig{{
+		Name: "main", AppID: "cli_a", AllowedUsers: []string{"victim"},
+	}}}
+	if err := config.Save(base); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Update(func(latest *config.Config) error {
+		platformCfg := latest.Platforms["feishu"]
+		platformCfg.Bots[0].AllowedUsers = nil
+		latest.Platforms["feishu"] = platformCfg
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistDetectedStartConfig(true, candidate, config.Update); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Platforms["feishu"].Bots[0].AllowedUsers; len(got) != 0 {
+		t.Fatalf("start preflight restored revoked allowed_users: %#v", got)
+	}
+}
+
+func TestPersistDetectedStartConfigRejectsConcurrentClaudeAppearance(t *testing.T) {
+	binDir := t.TempDir()
+	adapter := filepath.Join(binDir, "claude-agent-acp")
+	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	candidate := completeStartPreflightAgentConfig(adapter)
+	delete(candidate.Agents, "claude")
+	latest := completeStartPreflightAgentConfig(adapter)
+
+	err := persistDetectedStartConfig(true, candidate, func(mutate func(*config.Config) error) error {
+		return mutate(latest)
+	})
+	if err == nil {
+		t.Fatal("concurrently appeared Claude config bypassed the parent capability preflight")
+	}
+}
+
+func TestDetectStartAgentsPreservesPreflightResolvedClaudeCommand(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	binDir := t.TempDir()
+	adapter := filepath.Join(binDir, "claude-agent-acp")
+	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	cfg := completeStartPreflightAgentConfig("claude-agent-acp")
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	preflighted, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude := preflighted.Agents["claude"]
+	claude.Command = adapter
+	preflighted.Agents["claude"] = claude
+
+	if err := detectStartAgents(preflighted); err != nil {
+		t.Fatal(err)
+	}
+	if got := preflighted.Agents["claude"].Command; got != adapter {
+		t.Fatalf("runtime Claude command=%q, want preflighted %q", got, adapter)
+	}
+}
+
+func TestStartRejectsConcurrentUnprobedClaudeConfigChange(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	binDir := t.TempDir()
+	adapter := filepath.Join(binDir, "claude-agent-acp")
+	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	cfg := completeStartPreflightAgentConfig("claude-agent-acp")
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	preflighted, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude := preflighted.Agents["claude"]
+	claude.Command = adapter
+	preflighted.Agents["claude"] = claude
+	if err := config.Update(func(latest *config.Config) error {
+		changed := latest.Agents["claude"]
+		changed.Model = "opus"
+		latest.Agents["claude"] = changed
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := detectStartAgents(preflighted); err == nil {
+		t.Fatal("concurrently changed Claude config bypassed capability preflight")
+	}
+}
+
+func completeStartPreflightAgentConfig(claudeCommand string) *config.Config {
+	cfg := config.DefaultConfig()
+	for _, name := range []string{
+		"codex", "cursor", "kimi", "gemini", "opencode", "openclaw", "pi",
+		"copilot", "droid", "iflow", "kiro", "qwen",
+	} {
+		cfg.Agents[name] = config.AgentConfig{Type: "http", Endpoint: "http://127.0.0.1"}
+	}
+	cfg.Agents["claude"] = config.AgentConfig{Type: "acp", Command: claudeCommand, Model: "sonnet"}
+	return cfg
 }

@@ -16,7 +16,10 @@ func (a *ACPAgent) handleCodexApprovalEvent(ctx context.Context, evt *codexTurnE
 	if evt.Approval.Respond == nil {
 		return errCodexApprovalResponderMissing
 	}
-	optionID := a.resolvePermissionOption(ctx, evt.Approval.Request)
+	optionID, resolveErr := a.resolvePermissionOptionWithError(ctx, evt.Approval.Request)
+	if errors.Is(resolveErr, ErrCodexObserverDetached) {
+		return resolveErr
+	}
 	if err := evt.Approval.Respond(ctx, optionID); err != nil {
 		return fmt.Errorf("provider approval response: %w", err)
 	}

@@ -104,6 +104,7 @@ func newActiveAgentTask(ctx context.Context, meta activeTaskMeta) (*activeAgentT
 		startedAt: time.Now(), runtimeOwner: meta.runtimeOwner, ownerRevision: meta.ownerRevision,
 		phase: codexTaskRunning, codexThreadID: strings.TrimSpace(meta.codexThreadID),
 		codexTurnID: strings.TrimSpace(meta.codexTurnID), inProcessCodexLifecycle: meta.inProcessCodexLifecycle,
+		interactionLease: meta.interactionLease, detachCodexObserver: meta.detachCodexObserver,
 		taskID: uuid.NewString(), conversationID: strings.TrimSpace(meta.trace.ConversationID),
 		sessionID: strings.TrimSpace(meta.sessionID),
 	}

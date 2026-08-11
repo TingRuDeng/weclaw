@@ -63,7 +63,7 @@ func TestRunFeishuUsersApproveCodeUsesContactName(t *testing.T) {
 	})
 
 	output := captureStdout(t, func() {
-		err := runFeishuUsersApproveCode(feishuUsersApproveCodeOptions{Code: "123456"})
+		err := runFeishuUsersApproveCode(feishuUsersApproveCodeOptions{Code: "123456", BotRef: "project-a"})
 		if err != nil {
 			t.Fatalf("runFeishuUsersApproveCode error: %v", err)
 		}

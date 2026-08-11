@@ -12,7 +12,6 @@ import (
 
 func TestRunUsersApproveCodeWritesWechatAllowedUser(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Cleanup(func() { usersApproveAdmin = false })
 	writeUsersAccessCodeForTest(t, time.Now().Add(30*time.Minute))
 	cfg := config.DefaultConfig()
 	cfg.Platforms["wechat"] = config.PlatformConfig{}
@@ -21,13 +20,12 @@ func TestRunUsersApproveCodeWritesWechatAllowedUser(t *testing.T) {
 	}
 
 	output := captureStdout(t, func() {
-		if err := runUsersApproveCodeForTest("123456", true); err != nil {
+		if err := runUsersApproveCodeForTest("123456"); err != nil {
 			t.Fatalf("approve code: %v", err)
 		}
 	})
 
-	if !strings.Contains(output, "已授权 wechat 用户: wx_user@im.wechat") ||
-		!strings.Contains(output, "已同步加入 admin_users") {
+	if !strings.Contains(output, "已授权 wechat 用户: wx_user@im.wechat") {
 		t.Fatalf("output=%q, want approve result", output)
 	}
 	loaded, err := config.Load()
@@ -45,7 +43,6 @@ func TestRunUsersListShowsWechatAllowedUsers(t *testing.T) {
 	cfg.Platforms["wechat"] = config.PlatformConfig{
 		AllowedUsers: []string{"wx_user@im.wechat", "wx_admin@im.wechat"},
 	}
-	cfg.AdminUsers = []string{"wx_admin@im.wechat"}
 	if err := config.Save(cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
@@ -59,9 +56,7 @@ func TestRunUsersListShowsWechatAllowedUsers(t *testing.T) {
 	for _, want := range []string{
 		"已授权微信用户:",
 		"wx_user@im.wechat",
-		"用户类型: 普通用户",
 		"wx_admin@im.wechat",
-		"用户类型: 管理员",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output=%q, want %q", output, want)
@@ -84,7 +79,6 @@ func TestRunUsersPendingShowsWechatAccessCodes(t *testing.T) {
 		"wx_user@im.wechat",
 		"授权码: 123456",
 		"授权命令: weclaw wechat users approve-code 123456",
-		"管理员命令: weclaw wechat users approve-code 123456 --admin",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output=%q, want %q", output, want)
@@ -116,9 +110,8 @@ func TestWechatUsersCommandPath(t *testing.T) {
 	}
 }
 
-func runUsersApproveCodeForTest(code string, admin bool) error {
+func runUsersApproveCodeForTest(code string) error {
 	cmd := newWechatUsersApproveCodeCmd("weclaw wechat users")
-	usersApproveAdmin = admin
 	return cmd.RunE(cmd, []string{code})
 }
 

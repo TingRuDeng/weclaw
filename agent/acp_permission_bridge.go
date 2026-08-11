@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -154,24 +155,32 @@ func firstNonEmptyString(values ...string) string {
 }
 
 func (a *ACPAgent) resolvePermissionOption(ctx context.Context, req ApprovalRequest) string {
+	optionID, _ := a.resolvePermissionOptionWithError(ctx, req)
+	return optionID
+}
+
+func (a *ACPAgent) resolvePermissionOptionWithError(ctx context.Context, req ApprovalRequest) (string, error) {
 	fallback := selectApprovalOption(req.Options, defaultDenyDecision(req.Options))
 	if len(req.Options) == 0 {
-		return fallback
+		return fallback, nil
 	}
 	handler := approvalHandlerFromContext(ctx)
 	if handler == nil {
-		return fallback
+		return fallback, nil
 	}
 	optionID, err := handler(ctx, req)
 	if err != nil {
+		if errors.Is(err, ErrCodexObserverDetached) {
+			return "", err
+		}
 		log.Printf("[acp] approval handler failed, denying request: %v", err)
-		return fallback
+		return fallback, nil
 	}
 	if isApprovalOption(req.Options, optionID) {
-		return optionID
+		return optionID, nil
 	}
 	log.Printf("[acp] approval handler returned unknown option %q, denying request", optionID)
-	return fallback
+	return fallback, nil
 }
 
 func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string, responseFormat permissionResponseFormat, requested ...json.RawMessage) error {

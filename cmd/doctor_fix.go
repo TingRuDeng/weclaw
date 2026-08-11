@@ -56,7 +56,7 @@ func defaultDoctorFixDeps() doctorFixDeps {
 			return cmd.Run()
 		},
 		Configure:   configureDoctorInstalledAgents,
-		SaveConfig:  config.Save,
+		SaveConfig:  saveDoctorPinnedCodexConfig,
 		UserHomeDir: os.UserHomeDir,
 	}
 }
@@ -551,21 +551,49 @@ func configureDoctorInstalledAgents(ctx context.Context, cfg *config.Config) err
 	if cfg == nil {
 		return nil
 	}
-	if !config.DetectAndConfigure(cfg) {
+	var committed *config.Config
+	if err := config.Update(func(latest *config.Config) error {
+		config.DetectAndConfigure(latest)
+		if claudeCfg, ok := latest.Agents["claude"]; ok {
+			if err := defaultClaudeACPProbe(ctx, "claude", claudeCfg); err != nil {
+				return fmt.Errorf("Claude ACP 能力预检失败: %w", err)
+			}
+		}
+		if err := latest.ValidateClaudeACPAgents(); err != nil {
+			return err
+		}
+		committed = latest
+		return nil
+	}); err != nil {
+		return err
+	}
+	if committed != nil {
+		*cfg = *committed
+	}
+	return nil
+}
+
+func saveDoctorPinnedCodexConfig(candidate *config.Config) error {
+	if candidate == nil {
 		return nil
 	}
-	if claudeCfg, ok := cfg.Agents["claude"]; ok {
-		if err := defaultClaudeACPProbe(ctx, "claude", claudeCfg); err != nil {
-			return fmt.Errorf("Claude ACP 能力预检失败: %w", err)
+	codexCfg, ok := candidate.Agents["codex"]
+	if !ok {
+		return nil
+	}
+	return config.Update(func(latest *config.Config) error {
+		if latest.Agents == nil {
+			latest.Agents = make(map[string]config.AgentConfig)
 		}
-	}
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	if err := cfg.ValidateClaudeACPAgents(); err != nil {
-		return err
-	}
-	return config.Save(cfg)
+		latestCodex, exists := latest.Agents["codex"]
+		if !exists {
+			latestCodex = codexCfg
+		} else {
+			latestCodex.Command = codexCfg.Command
+		}
+		latest.Agents["codex"] = latestCodex
+		return latest.ValidateClaudeACPAgents()
+	})
 }
 
 func installsAgentComponent(components []doctorComponent) bool {

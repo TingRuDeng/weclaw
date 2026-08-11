@@ -66,7 +66,7 @@ func isSpaceByte(value byte) bool {
 
 func (h *Handler) handleWorkspaceCommand(req workspaceCommandRequest) string {
 	if !req.Admin {
-		return "仅管理员可以登记或移除主机级工作空间。"
+		return "当前账号未授权登记或移除主机级工作空间。"
 	}
 	if !req.Private {
 		return "工作空间登记只允许在私聊中执行。"
@@ -224,5 +224,5 @@ func (h *Handler) hiddenWorkspaceError(agentName string, workspaceRoot string, n
 	if !h.workspaceRegistrySnapshot(agentName).IsHidden(workspaceRoot) {
 		return nil
 	}
-	return fmt.Errorf("当前工作空间已被管理员移除，请发送 /%s ls 重新选择", namespace)
+	return fmt.Errorf("当前工作空间已从 WeClaw 导航中移除，请发送 /%s ls 重新选择", namespace)
 }

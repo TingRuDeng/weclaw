@@ -96,23 +96,18 @@ func collectConfigPermissionOptions(opts configPermissionOptions, prompter confi
 
 // applyCodexPermissionLevel 写入权限档位，并清理会覆盖档位映射的高级字段。
 func applyCodexPermissionLevel(opts configPermissionOptions) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	agentCfg, ok := cfg.Agents[opts.Agent]
-	if !ok {
-		return fmt.Errorf("agent %q 不存在，请先配置该 agent", opts.Agent)
-	}
-	agentCfg.PermissionLevel = opts.Level
-	agentCfg.ApprovalPolicy = ""
-	agentCfg.ApprovalReviewer = ""
-	agentCfg.SandboxMode = ""
-	cfg.Agents[opts.Agent] = agentCfg
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	if err := config.Save(cfg); err != nil {
+	if err := config.Update(func(cfg *config.Config) error {
+		agentCfg, ok := cfg.Agents[opts.Agent]
+		if !ok {
+			return fmt.Errorf("agent %q 不存在，请先配置该 agent", opts.Agent)
+		}
+		agentCfg.PermissionLevel = opts.Level
+		agentCfg.ApprovalPolicy = ""
+		agentCfg.ApprovalReviewer = ""
+		agentCfg.SandboxMode = ""
+		cfg.Agents[opts.Agent] = agentCfg
+		return nil
+	}); err != nil {
 		return err
 	}
 	printConfigPermissionResult(opts)

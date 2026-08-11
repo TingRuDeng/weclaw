@@ -133,7 +133,7 @@ func (h *Handler) rejectDisallowedCodexWorkspace(bindingKey string, agentName st
 
 func isCodexWorkspaceIndependentCommand(command string) bool {
 	switch command {
-	case "ls", "cd", "clean", "quota", "detach", "model", "account":
+	case "ls", "cd", "clean", "quota", "detach", "release", "model", "account":
 		return true
 	default:
 		return false

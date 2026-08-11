@@ -47,7 +47,7 @@ func isClaudeSessionCommandToken(token string) bool {
 func (h *Handler) handleClaudeSessionCommand(ctx context.Context, userID string, trimmed string) string {
 	return h.handleClaudeSessionCommandForRouteRequest(ctx, claudeSessionCommandRequest{
 		ActorUserID: userID, RouteUserID: userID, Trimmed: trimmed,
-		Admin: h.isAdminUser(userID), Private: true,
+		Admin: false, Private: true,
 	}).Reply
 }
 
@@ -82,7 +82,7 @@ func (h *Handler) handleClaudeSessionCommandForRouteRequest(ctx context.Context,
 			return textNavigationResult("当前没有配置 claude agent")
 		}
 		if !req.Admin {
-			return textNavigationResult("仅管理员可以隐藏或恢复主机级会话导航。")
+			return textNavigationResult("当前账号未授权隐藏或恢复主机级会话导航。")
 		}
 		if !req.Private {
 			return textNavigationResult("会话隐藏与恢复只允许在私聊中执行。")

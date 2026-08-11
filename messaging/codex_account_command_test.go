@@ -93,12 +93,11 @@ func newMessagingAccountFixture(t *testing.T, profileCount int) (*Handler, *fake
 	h := NewHandler(nil, nil)
 	h.defaultName = "codex"
 	h.agents["codex"] = accountAgent
-	h.SetAdminUsers([]string{"on_admin"})
 	msg := platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_admin", UserAliases: []string{"on_admin"},
 		Metadata: map[string]string{feishuSessionMetadataKey: "feishu:cli_a:tenant:dm:oc_chat:ou_admin", "feishu_chat_type": "p2p"},
 	}
-	return h, accountAgent, msg
+	return h, accountAgent, authorizeIncomingMessageForTest(t, msg, "on_admin")
 }
 
 func TestCompactCodexAccountIdentityShowsExternalSwitchWithoutMisreportingCurrent(t *testing.T) {

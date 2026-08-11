@@ -1,10 +1,74 @@
 package messaging
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
+
+// recordThreadUnlessReleased 原子提交 Agent 迟到回填；显式 release 墓碑一旦先提交，
+// 后续映射不得靠普通 setThread 清除它。显式 switch/new 仍走 remote selection 提交。
+func (s *codexSessionStore) recordThreadUnlessReleased(bindingKey string, workspaceRoot string, threadID string) (bool, error) {
+	bindingKey = strings.TrimSpace(bindingKey)
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	threadID = strings.TrimSpace(threadID)
+	if bindingKey == "" || workspaceRoot == "" || threadID == "" {
+		return false, nil
+	}
+
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, archived := s.archived[threadID]; archived {
+		return false, nil
+	}
+	current := s.bindings[bindingKey].Workspaces[workspaceRoot]
+	if codexWorkspaceReleaseIntent(current) {
+		return false, nil
+	}
+	if strings.TrimSpace(current.ThreadID) == threadID &&
+		!current.PendingNewThread && !current.PendingFirstTurn {
+		return true, nil
+	}
+
+	nextBindings := cloneCodexSessionBindings(s.bindings)
+	binding := nextBindings[bindingKey]
+	if binding.Workspaces == nil {
+		binding.Workspaces = make(map[string]codexWorkspaceSession)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for root, existing := range binding.Workspaces {
+		if root == workspaceRoot || strings.TrimSpace(existing.ThreadID) != threadID {
+			continue
+		}
+		existing.ThreadID = ""
+		existing.PendingNewThread = false
+		existing.PendingFirstTurn = false
+		existing.FirstTurnRecoveryThreadID = ""
+		existing.FirstTurnRecoveryReservationID = ""
+		existing.UpdatedAt = now
+		binding.Workspaces[root] = existing
+	}
+	current.ThreadID = threadID
+	current.PendingNewThread = false
+	current.PendingFirstTurn = false
+	current.FirstTurnRecoveryThreadID = ""
+	current.FirstTurnRecoveryReservationID = ""
+	clearCodexWorkspaceReleaseState(&current)
+	current.UpdatedAt = now
+	binding.Workspaces[workspaceRoot] = current
+	nextBindings[bindingKey] = binding
+	if err := s.persistCandidate(s.filePath, codexSessionState{
+		Version: codexSessionStateVersion, Bindings: nextBindings,
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: now,
+	}); err != nil {
+		return false, fmt.Errorf("保存 Codex Agent 会话回填: %w", err)
+	}
+	s.bindings = nextBindings
+	return true, nil
+}
 
 func (s *codexSessionStore) listWorkspaces(bindingKey string) []codexWorkspaceView {
 	s.mu.Lock()
@@ -41,6 +105,10 @@ func (s *codexSessionStore) cleanMissingWorkspaces(bindingKey string) []string {
 			continue
 		}
 		delete(binding.Workspaces, root)
+		if binding.Follower != nil && normalizeCodexWorkspaceRoot(binding.Follower.WorkspaceRoot) == root {
+			binding.Follower = nil
+			binding.FollowRevision++
+		}
 		removed = append(removed, root)
 	}
 	if len(removed) == 0 {
@@ -80,8 +148,16 @@ func (s *codexSessionStore) clearStaleWorkspaceThread(bindingKey string, workspa
 	session.ThreadID = ""
 	session.PendingNewThread = false
 	session.PendingFirstTurn = false
+	session.FirstTurnRecoveryThreadID = ""
+	session.FirstTurnRecoveryReservationID = ""
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	binding.Workspaces[workspaceRoot] = session
+	if binding.Follower != nil &&
+		normalizeCodexWorkspaceRoot(binding.Follower.WorkspaceRoot) == workspaceRoot &&
+		strings.TrimSpace(binding.Follower.ThreadID) == threadID {
+		binding.Follower = nil
+		binding.FollowRevision++
+	}
 	s.bindings[bindingKey] = binding
 	s.mu.Unlock()
 	s.save()
@@ -131,6 +207,8 @@ func (s *codexSessionStore) updateWorkspace(bindingKey string, workspaceRoot str
 			existing.ThreadID = ""
 			existing.PendingNewThread = false
 			existing.PendingFirstTurn = false
+			existing.FirstTurnRecoveryThreadID = ""
+			existing.FirstTurnRecoveryReservationID = ""
 			existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 			binding.Workspaces[root] = existing
 		}

@@ -30,6 +30,10 @@ type outboxTestReplier struct {
 	failResultAfterAccept int
 	checkpointCalls       int
 	failCheckpoint        int
+	failDetachPrepare     int
+	detachPrepareCalls    int
+	detachPrepareStarted  chan struct{}
+	detachPrepareContinue chan struct{}
 	checkpointPayloadSeen []json.RawMessage
 	supersedeCalls        int
 	failSupersede         int
@@ -170,6 +174,160 @@ func (r *outboxTestReplier) PrepareTerminalFromReferenceWithState(reference plat
 		"state":     state,
 	})
 	return platform.TerminalCheckpoint{Kind: "test.recovered-terminal.v1", Payload: payload}, err
+}
+
+func (r *outboxTestReplier) PrepareDetachFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	r.mu.Lock()
+	r.detachPrepareCalls++
+	call := r.detachPrepareCalls
+	started := r.detachPrepareStarted
+	continueCh := r.detachPrepareContinue
+	if r.failDetachPrepare > 0 {
+		r.failDetachPrepare--
+		r.mu.Unlock()
+		return platform.SupersedeCheckpoint{}, errors.New("detach preparation unavailable")
+	}
+	r.mu.Unlock()
+	if call == 1 && started != nil {
+		close(started)
+	}
+	if call == 1 && continueCh != nil {
+		<-continueCh
+	}
+	payload, err := json.Marshal(map[string]any{
+		"reference": reference,
+		"notice":    notice,
+		"operation": operationID,
+		"status":    "detached",
+	})
+	return platform.SupersedeCheckpoint{Kind: "test.detached-stream.v1", Payload: payload}, err
+}
+
+func TestReleasedRecoveryPrepareFailureThenRebindMigratesPreparingHold(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message-release",
+	}
+	reply := newOutboxTestReplier(route)
+	reply.failDetachPrepare = 1
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	routeUserID := "feishu:bot:dm:chat:user"
+	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-rebind"}`)}
+	entry, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: activeStreamRestartText, ActiveStreamRecovery: true,
+		Trace: observability.TraceContext{
+			TraceID: "trace-rebind", ConversationID: conversationID, ThreadID: "thread-shared", TurnID: "turn-active",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := codexReleasedFollowerSnapshot{
+		AgentName: "codex", ConversationID: conversationID, ThreadID: "thread-shared", Committed: true,
+	}
+	h := NewHandler(nil, nil)
+	h.recoverReleasedCodexFollowerStreamsForTargets(outbox, []codexReleasedFollowerSnapshot{release})
+	follower := codexFollowerSnapshot{
+		BindingKey: codexBindingKey(routeUserID, "codex"), RouteUserID: routeUserID,
+		AgentName: "codex", ConversationID: conversationID, Revision: 2,
+		Target: codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: "user", DeliveryRoute: route,
+		},
+	}
+	outbox.reconcileCodexFollowerHolds([]codexFollowerSnapshot{follower}, nil)
+	if held := outbox.heldCodexFollowerRecoveries(follower); len(held) != 1 || held[0].ID != entry.ID {
+		t.Fatalf("rebound follower did not adopt released hold: %#v", held)
+	}
+}
+
+func TestConcurrentReleasedRecoveryQueuesSingleDetachOperation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message-release",
+	}
+	reply := newOutboxTestReplier(route)
+	reply.detachPrepareStarted = make(chan struct{})
+	reply.detachPrepareContinue = make(chan struct{})
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	routeUserID := "feishu:bot:dm:chat:user"
+	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-concurrent"}`)}
+	entry, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: activeStreamRestartText, ActiveStreamRecovery: true,
+		Trace: observability.TraceContext{
+			TraceID: "trace-concurrent", ConversationID: conversationID, ThreadID: "thread-shared", TurnID: "turn-active",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := []codexReleasedFollowerSnapshot{{
+		AgentName: "codex", ConversationID: conversationID, ThreadID: "thread-shared", Committed: true,
+	}}
+	firstDone := make(chan struct{})
+	go func() {
+		h.recoverReleasedCodexFollowerStreamsForTargets(outbox, targets)
+		close(firstDone)
+	}()
+	select {
+	case <-reply.detachPrepareStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first detach preparation did not start")
+	}
+	secondDone := make(chan struct{})
+	go func() {
+		h.recoverReleasedCodexFollowerStreamsForTargets(outbox, targets)
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent recovery did not finish")
+	}
+	close(reply.detachPrepareContinue)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first recovery did not finish")
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != entry.ID {
+		t.Fatalf("loaded=%#v", loaded)
+	}
+	if got := len(loaded[0].PendingSupersedes); got != 1 {
+		t.Fatalf("detach operations=%d, want 1: %#v", got, loaded[0].PendingSupersedes)
+	}
+	reply.mu.Lock()
+	prepareCalls := reply.detachPrepareCalls
+	reply.mu.Unlock()
+	if prepareCalls != 1 {
+		t.Fatalf("detach prepare calls=%d, want 1", prepareCalls)
+	}
+}
+
+func (r *outboxTestReplier) PrepareSupersedeFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	payload, err := json.Marshal(map[string]any{
+		"reference": reference,
+		"notice":    notice,
+		"operation": operationID,
+		"status":    "superseded",
+	})
+	return platform.SupersedeCheckpoint{Kind: "test.superseded-stream.v1", Payload: payload}, err
 }
 
 type outboxTestStream struct {
@@ -330,6 +488,653 @@ func newOutboxTestRegistry(route platform.DeliveryRoute, reply *outboxTestReplie
 		Platform: &outboxTestPlatform{name: route.Platform, account: route.AccountID, reply: reply},
 		Access:   platform.NewAccessControl([]string{"test-user"}),
 	}})
+}
+
+func TestTerminalOutboxConvertsReleasedCodexFollowerRecoveryBeforeWorkerStarts(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	workspace := t.TempDir()
+	routeUserID := "feishu:bot:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	first := NewHandler(nil, nil)
+	first.SetCodexSessionFile(statePath)
+	first.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	first.ensureCodexSessions().setThread(bindingKey, workspace, "thread-released")
+	if _, err := first.ensureCodexSessions().releaseWorkspaceThread(bindingKey, workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message",
+	}
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-released"}`)}
+	trace := observability.TraceContext{
+		TraceID: "trace-release", ConversationID: buildCodexConversationID(routeUserID, "codex", workspace),
+		ThreadID: "thread-released", TurnID: "turn-active",
+	}
+	entry, err := oldOutbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", Trace: trace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewHandler(nil, nil)
+	restarted.SetCodexSessionFile(statePath)
+	reply := newOutboxTestReplier(route)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := restarted.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != entry.ID {
+		t.Fatalf("loaded=%#v", loaded)
+	}
+	recovered := loaded[0]
+	if recovered.Stream != nil || recovered.Checkpoint != nil || recovered.Text != "" || !recovered.TextDelivered {
+		t.Fatalf("released recovery still has terminal payload: %#v", recovered)
+	}
+	if len(recovered.PendingSupersedes) != 1 || recovered.PendingSupersedes[0].Checkpoint.Kind != "test.detached-stream.v1" {
+		t.Fatalf("released recovery detach=%#v", recovered.PendingSupersedes)
+	}
+	if due := restarted.currentTerminalOutbox().dueIDs(); len(due) != 0 {
+		t.Fatalf("released recovery remains terminal-deliverable: %v", due)
+	}
+}
+
+func TestReleasedCodexFollowerRecoveryRetriesWithoutProcessRestart(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	workspace := t.TempDir()
+	routeUserID := "feishu:bot:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	first := NewHandler(nil, nil)
+	first.SetCodexSessionFile(statePath)
+	first.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	first.ensureCodexSessions().setThread(bindingKey, workspace, "thread-released")
+	if _, err := first.ensureCodexSessions().releaseWorkspaceThread(bindingKey, workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message",
+	}
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-released"}`)}
+	trace := observability.TraceContext{
+		TraceID: "trace-release", ConversationID: buildCodexConversationID(routeUserID, "codex", workspace),
+		ThreadID: "thread-released", TurnID: "turn-active",
+	}
+	entry, err := oldOutbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", Trace: trace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewHandler(nil, nil)
+	restarted.SetCodexSessionFile(statePath)
+	reply := newOutboxTestReplier(route)
+	reply.failDetachPrepare = 1
+	registry := newOutboxTestRegistry(route, reply)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := restarted.StartTerminalOutbox(ctx, registry, path); err != nil {
+		t.Fatal(err)
+	}
+	if due := restarted.currentTerminalOutbox().dueIDs(); len(due) != 0 {
+		t.Fatalf("failed first detach exposed terminal recovery: %v", due)
+	}
+	restarted.reconcileCodexFollowers(context.Background(), registry)
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != entry.ID || loaded[0].Stream != nil || loaded[0].Text != "" || len(loaded[0].PendingSupersedes) != 1 {
+		t.Fatalf("released recovery was not retried in-process: %#v", loaded)
+	}
+	if due := restarted.currentTerminalOutbox().dueIDs(); len(due) != 0 {
+		t.Fatalf("retried release remains terminal-deliverable: %v", due)
+	}
+}
+
+func TestReleasedFollowerRecoveryPreservesPriorTurnStagedTerminal(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	workspace := t.TempDir()
+	routeUserID := "feishu:bot:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	first := NewHandler(nil, nil)
+	first.SetCodexSessionFile(statePath)
+	first.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	first.ensureCodexSessions().setThread(bindingKey, workspace, "thread-released")
+	if _, err := first.ensureCodexSessions().releaseWorkspaceThread(bindingKey, workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message",
+	}
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-prior"}`)}
+	entry, err := oldOutbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", ActiveStreamRecovery: true,
+		Trace: observability.TraceContext{
+			TraceID: "trace-prior", ConversationID: buildCodexConversationID(routeUserID, "codex", workspace),
+			ThreadID: "thread-released", TurnID: "turn-prior",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oldOutbox.stageReservationResult(entry.ID, terminalOutboxDraft{
+		Route: route, AgentName: "codex", Text: "上一轮最终结果",
+		Trace: observability.TraceContext{
+			TraceID: "trace-prior", ConversationID: buildCodexConversationID(routeUserID, "codex", workspace),
+			ThreadID: "thread-released", TurnID: "turn-prior",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewHandler(nil, nil)
+	restarted.SetCodexSessionFile(statePath)
+	reply := newOutboxTestReplier(route)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := restarted.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].Stream == nil || loaded[0].Text != "上一轮最终结果" ||
+		len(loaded[0].PendingSupersedes) != 0 {
+		t.Fatalf("prior staged terminal was consumed by release recovery: %#v", loaded)
+	}
+	if due := restarted.currentTerminalOutbox().dueIDs(); !reflect.DeepEqual(due, []string{entry.ID}) {
+		t.Fatalf("prior staged terminal due=%v, want [%s]", due, entry.ID)
+	}
+}
+
+func TestReleaseFirstTurnPredecessorCrashFreezesExactReservation(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	outboxPath := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	workspace := t.TempDir()
+	routeUserID := "feishu:bot:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message",
+	}
+
+	first := NewHandler(nil, nil)
+	first.SetCodexSessionFile(statePath)
+	first.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	first.ensureCodexSessions().setThread(bindingKey, workspace, "thread-old")
+	outbox, err := newTerminalOutbox(outboxPath, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-first-turn"}`)}
+	journal, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", ActiveStreamRecovery: true,
+		Trace: observability.TraceContext{TraceID: "trace-journal", ConversationID: conversationID, ThreadID: "thread-old"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", ActiveStreamRecovery: true,
+		Trace: observability.TraceContext{TraceID: "trace-other", ConversationID: conversationID, ThreadID: "thread-old", TurnID: "turn-other"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.ensureCodexSessions().replaceRemoteFirstTurnThread(
+		bindingKey, workspace, conversationID, "thread-old", "thread-new", journal.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.ensureCodexSessions().releaseWorkspaceThread(bindingKey, workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := NewHandler(nil, nil)
+	restarted.SetCodexSessionFile(statePath)
+	reply := newOutboxTestReplier(route)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := restarted.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), outboxPath); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadTerminalOutbox(outboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]*terminalOutboxEntry, len(loaded))
+	for _, entry := range loaded {
+		byID[entry.ID] = entry
+	}
+	if recovered := byID[journal.ID]; recovered == nil || recovered.Stream != nil || recovered.Text != "" ||
+		len(recovered.PendingSupersedes) != 1 {
+		t.Fatalf("first-turn release reservation was not frozen: %#v", recovered)
+	}
+	if untouched := byID[other.ID]; untouched == nil || untouched.Stream == nil || untouched.Text == "" ||
+		len(untouched.PendingSupersedes) != 0 {
+		t.Fatalf("unrelated predecessor reservation was changed: %#v", untouched)
+	}
+}
+
+func TestTerminalOutboxHoldsFollowerRecoveryAcrossReplyMessages(t *testing.T) {
+	h, _, _, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	close(watchDone)
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	entryRoute := snapshot.Target.DeliveryRoute
+	entryRoute.ReplyToID = "message-before-restart"
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-active"}`)}
+	entry, err := oldOutbox.reserve(terminalOutboxDraft{
+		Route: entryRoute, AgentName: snapshot.AgentName, Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", ActiveStreamRecovery: true,
+		Trace: observability.TraceContext{
+			TraceID: "trace-active", ConversationID: snapshot.ConversationID,
+			ThreadID: snapshot.Target.ThreadID, TurnID: "turn-local-1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := newOutboxTestReplier(snapshot.Target.DeliveryRoute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.StartTerminalOutbox(ctx, newOutboxTestRegistry(snapshot.Target.DeliveryRoute, reply), path); err != nil {
+		t.Fatal(err)
+	}
+	outbox := h.currentTerminalOutbox()
+	outbox.mu.Lock()
+	held := outbox.followerHeld[entry.ID]
+	outbox.mu.Unlock()
+	if !held {
+		t.Fatal("active recovery was not held after only ReplyToID changed")
+	}
+	if due := outbox.dueIDs(); len(due) != 0 {
+		t.Fatalf("cross-message recovery became terminal-deliverable: %v", due)
+	}
+}
+
+func TestFollowerBindingRemovalReleasesStaleRecoveryHold(t *testing.T) {
+	h, _, registry, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	close(watchDone)
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-active"}`)}
+	entry, err := oldOutbox.reserve(terminalOutboxDraft{
+		Route: snapshot.Target.DeliveryRoute, AgentName: snapshot.AgentName, Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", ActiveStreamRecovery: true,
+		Trace: observability.TraceContext{
+			TraceID: "trace-active", ConversationID: snapshot.ConversationID,
+			ThreadID: snapshot.Target.ThreadID, TurnID: "turn-local-1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.StartTerminalOutbox(ctx, registry, path); err != nil {
+		t.Fatal(err)
+	}
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	binding := store.bindings[snapshot.BindingKey]
+	binding.Follower = nil
+	binding.FollowRevision++
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+
+	h.reconcileCodexFollowers(context.Background(), registry)
+	outbox := h.currentTerminalOutbox()
+	outbox.mu.Lock()
+	held := outbox.followerHeld[entry.ID]
+	outbox.mu.Unlock()
+	if held {
+		t.Fatal("removed follower left recovery held for the process lifetime")
+	}
+	if due := outbox.dueIDs(); !reflect.DeepEqual(due, []string{entry.ID}) {
+		t.Fatalf("released stale hold due=%v, want [%s]", due, entry.ID)
+	}
+}
+
+func TestTerminalOutboxHoldsActiveCodexFollowerRecoveryBeforeWorkerStarts(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	h, _, _, snapshot, watchDone := newCodexFollowerFixtureWithStatePath(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	}, statePath)
+	close(watchDone)
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := snapshot.Target.DeliveryRoute
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-active"}`)}
+	entry, err := oldOutbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: snapshot.AgentName, Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。",
+		Trace: observability.TraceContext{
+			TraceID: "trace-active", ConversationID: snapshot.ConversationID,
+			ThreadID: snapshot.Target.ThreadID, TurnID: "turn-local-1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := newOutboxTestReplier(route)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), path); err != nil {
+		t.Fatal(err)
+	}
+	outbox := h.currentTerminalOutbox()
+	outbox.mu.Lock()
+	held := outbox.preparing[entry.ID]
+	outbox.mu.Unlock()
+	if !held {
+		t.Fatal("active follower recovery was not held before worker startup")
+	}
+	if due := outbox.dueIDs(); len(due) != 0 {
+		t.Fatalf("held follower recovery is terminal-deliverable: %v", due)
+	}
+}
+
+func TestCodexFollowerRecoveryKeepsPriorTurnTerminalWhileNewTurnIsActive(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	h, _, _, snapshot, watchDone := newCodexFollowerFixtureWithStatePath(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-2",
+	}, statePath)
+	close(watchDone)
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := snapshot.Target.DeliveryRoute
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-prior-turn"}`)}
+	entry, err := oldOutbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: snapshot.AgentName, Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。",
+		Trace: observability.TraceContext{
+			TraceID: "trace-prior-turn", ConversationID: snapshot.ConversationID,
+			ThreadID: snapshot.Target.ThreadID, TurnID: "turn-local-1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oldOutbox.stageReservationResult(entry.ID, terminalOutboxDraft{
+		Route: route, AgentName: snapshot.AgentName, Text: "上一轮最终结果",
+		Trace: observability.TraceContext{
+			TraceID: "trace-prior-turn", ConversationID: snapshot.ConversationID,
+			ThreadID: snapshot.Target.ThreadID, TurnID: "turn-local-1",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reply := newOutboxTestReplier(route)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), path); err != nil {
+		t.Fatal(err)
+	}
+	state := externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
+		ThreadID: snapshot.Target.ThreadID, Active: true, ActiveTurnID: "turn-local-2",
+	}}
+	if err := h.reconcileCodexFollowerRecoveries(snapshot, state, reply); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != entry.ID || loaded[0].Stream == nil ||
+		loaded[0].Text != "上一轮最终结果" || len(loaded[0].PendingSupersedes) != 0 {
+		t.Fatalf("prior turn terminal was overwritten by active turn recovery: %#v", loaded)
+	}
+	if due := h.currentTerminalOutbox().dueIDs(); !reflect.DeepEqual(due, []string{entry.ID}) {
+		t.Fatalf("prior turn terminal due=%v, want [%s]", due, entry.ID)
+	}
+	reply.mu.Lock()
+	supersedeCalls := reply.supersedeCalls
+	reply.mu.Unlock()
+	if supersedeCalls != 0 {
+		t.Fatalf("prior turn card was superseded by the new turn: calls=%d", supersedeCalls)
+	}
+}
+
+func TestCodexFirstTurnRecoveryRepairsOnlyJournalReservation(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	outboxPath := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	workspace := filepath.Join(t.TempDir(), "project")
+	routeUserID := "feishu:bot:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message",
+	}
+
+	h := NewHandler(nil, nil)
+	h.SetCodexSessionFile(statePath)
+	selection := h.ensureCodexSessions().remoteSelectionSnapshot(bindingKey, "thread-old")
+	if _, err := h.ensureCodexSessions().commitRemoteSelection(codexRemoteSelectionUpdate{
+		BindingKey: bindingKey, WorkspaceRoot: workspace, ConversationID: conversationID,
+		TargetThreadID: "thread-old", PendingFirstTurn: true, SetFollower: true,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-old", ActorUserID: "user",
+			DeliveryRoute: route,
+		},
+		Expected: selection,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := newTerminalOutbox(outboxPath, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-first-turn"}`)}
+	journalEntry, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。",
+		Trace: observability.TraceContext{
+			TraceID: "trace-first-turn", ConversationID: conversationID,
+			ThreadID: "thread-old", TurnID: "",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorEntry, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。",
+		Trace: observability.TraceContext{
+			TraceID: "trace-prior", ConversationID: conversationID,
+			ThreadID: "thread-old", TurnID: "turn-prior",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.stageReservationResult(priorEntry.ID, terminalOutboxDraft{
+		Route: route, AgentName: "codex", Text: "上一轮最终结果",
+		Trace: observability.TraceContext{
+			TraceID: "trace-prior", ConversationID: conversationID,
+			ThreadID: "thread-old", TurnID: "turn-prior",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ensureCodexSessions().replaceRemoteFirstTurnThread(
+		bindingKey, workspace, conversationID, "thread-old", "thread-new", journalEntry.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	snapshots := h.ensureCodexSessions().followerSnapshots()
+	if len(snapshots) != 1 {
+		t.Fatalf("followers=%#v", snapshots)
+	}
+
+	reply := newOutboxTestReplier(route)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.StartTerminalOutbox(ctx, newOutboxTestRegistry(route, reply), outboxPath); err != nil {
+		t.Fatal(err)
+	}
+	activeOutbox := h.currentTerminalOutbox()
+	activeOutbox.mu.Lock()
+	journalHeld := activeOutbox.followerHeld[journalEntry.ID]
+	priorHeld := activeOutbox.followerHeld[priorEntry.ID]
+	activeOutbox.mu.Unlock()
+	if !journalHeld || priorHeld {
+		t.Fatalf("held journal=%v prior=%v, want true false", journalHeld, priorHeld)
+	}
+	state := externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
+		ThreadID: "thread-new", Active: true, ActiveTurnID: "turn-new",
+	}}
+	if err := h.reconcileCodexFollowerRecoveries(snapshots[0], state, reply); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadTerminalOutbox(outboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repaired, prior *terminalOutboxEntry
+	for _, entry := range loaded {
+		switch entry.ID {
+		case journalEntry.ID:
+			repaired = entry
+		case priorEntry.ID:
+			prior = entry
+		}
+	}
+	if repaired == nil || repaired.Trace == nil || repaired.Trace.ThreadID != "thread-new" ||
+		repaired.Trace.TurnID != "turn-new" || repaired.Stream != nil || repaired.Text != "" ||
+		len(repaired.PendingSupersedes) != 1 {
+		t.Fatalf("journal reservation was not repaired exactly: %#v", repaired)
+	}
+	if prior == nil || prior.Trace == nil || prior.Trace.ThreadID != "thread-old" ||
+		prior.Trace.TurnID != "turn-prior" || prior.Stream == nil || prior.Text != "上一轮最终结果" ||
+		len(prior.PendingSupersedes) != 0 {
+		t.Fatalf("prior reservation was changed by first-turn repair: %#v", prior)
+	}
+	if due := activeOutbox.dueIDs(); !reflect.DeepEqual(due, []string{priorEntry.ID}) {
+		t.Fatalf("due=%v, want prior reservation only", due)
+	}
+}
+
+func TestCodexFollowerRestartFreezesHeldCardAndStartsNewObserver(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	h, ag, _, snapshot, watchDone := newCodexFollowerFixtureWithStatePath(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	}, statePath)
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	route := snapshot.Target.DeliveryRoute
+	oldOutbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := platform.DurableStreamReference{Kind: "test.stream.v1", Payload: json.RawMessage(`{"card_id":"card-before-restart"}`)}
+	_, err = oldOutbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: snapshot.AgentName, Stopped: true, Stream: &reference,
+		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。",
+		Trace: observability.TraceContext{
+			TraceID: "trace-restart", ConversationID: snapshot.ConversationID,
+			ThreadID: snapshot.Target.ThreadID, TurnID: "turn-local-1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := newOutboxTestReplier(route)
+	reply.stream = &outboxTestStream{}
+	registry := newOutboxTestRegistry(route, reply)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := h.StartTerminalOutbox(ctx, registry, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.startCodexFollowerReconciler(ctx, registry, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ag.watchStarted:
+	case <-time.After(time.Second):
+		t.Fatal("restored follower observer did not start")
+	}
+	waitForRolloverCondition(t, func() bool {
+		reply.mu.Lock()
+		defer reply.mu.Unlock()
+		return reply.supersedeCalls == 1
+	})
+	reply.mu.Lock()
+	checkpointCalls := reply.checkpointCalls
+	results := len(reply.results)
+	textKeys := len(reply.textKeys)
+	reply.mu.Unlock()
+	if checkpointCalls != 0 || results != 0 || textKeys != 0 {
+		t.Fatalf("restart emitted false terminal delivery: checkpoint=%d results=%d text=%d", checkpointCalls, results, textKeys)
+	}
+	if _, active := h.activeTask(snapshot.ConversationID); !active {
+		t.Fatal("restored follower observer is not active")
+	}
+
+	ag.setBindingState(agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false, LastTurnID: "turn-local-1", LastTurnStatus: "completed",
+	})
+	close(watchDone)
+	waitForRolloverCondition(t, func() bool {
+		_, active := h.activeTask(snapshot.ConversationID)
+		return !active
+	})
+	cancel()
+	waitForRolloverCondition(t, func() bool {
+		h.codexFollowerMu.Lock()
+		defer h.codexFollowerMu.Unlock()
+		return h.codexFollower == nil
+	})
 }
 
 func waitForTerminalOutboxEmpty(t *testing.T, path string) {
@@ -838,6 +1643,77 @@ func TestTerminalOutboxRemoveDeliveredRollsBackMemoryOnPersistenceFailure(t *tes
 	after := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("entry changed after failed persistence:\nbefore=%#v\nafter=%#v", before, after)
+	}
+}
+
+func TestTerminalOutboxRefreshTraceRollsBackMemoryOnPersistenceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot-1", ChatID: "chat-1",
+	}
+	reference := testDurableStreamReference("card-1")
+	entry, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, Stream: &reference, Text: "任务已中断",
+		Trace: observability.TraceContext{TraceID: "trace-old", ThreadID: "thread-old"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	outbox.now = func() time.Time { return before.UpdatedAt.Add(time.Hour) }
+	outbox.path = filepath.Join(path, "blocked")
+
+	err = outbox.refreshStreamReservationTrace(entry.ID, observability.TraceContext{
+		TraceID: "trace-new", ThreadID: "thread-new",
+	})
+	if err == nil {
+		t.Fatal("refresh trace error=nil, want persistence failure")
+	}
+	after := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("entry changed after failed trace refresh:\nbefore=%#v\nafter=%#v", before, after)
+	}
+}
+
+func TestTerminalOutboxDetachRollsBackFollowerHoldOnPersistenceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot-1", ChatID: "chat-1",
+	}
+	reference := testDurableStreamReference("card-1")
+	entry, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stream: &reference, Text: "任务已中断",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.mu.Lock()
+	outbox.followerHeld[entry.ID] = true
+	outbox.mu.Unlock()
+	before := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	outbox.path = filepath.Join(path, "blocked")
+
+	err = outbox.detachStreamReservation(entry.ID, testPendingStreamSupersede(
+		"00000000-0000-4000-8000-000000000120", route, "card-1", time.Now(),
+	))
+	if err == nil {
+		t.Fatal("detach error=nil, want persistence failure")
+	}
+	after := cloneTerminalOutboxEntry(outbox.entryLocked(entry.ID))
+	outbox.mu.Lock()
+	preparing := outbox.preparing[entry.ID]
+	held := outbox.followerHeld[entry.ID]
+	outbox.mu.Unlock()
+	if !reflect.DeepEqual(after, before) || !preparing || !held {
+		t.Fatalf("detach rollback entry=%#v preparing=%v followerHeld=%v", after, preparing, held)
 	}
 }
 

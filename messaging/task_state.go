@@ -33,6 +33,9 @@ type activeAgentTask struct {
 	codexTurnID             string
 	externalReservation     *externalCodexTaskReservationControl
 	inProcessCodexLifecycle bool
+	preserveRecoveryOnDrain bool
+	interactionLease        *agentInteractionLease
+	detachCodexObserver     func()
 	trace                   observability.TraceContext
 	taskID                  string
 	conversationID          string
@@ -98,6 +101,8 @@ type activeTaskMeta struct {
 	codexThreadID           string
 	codexTurnID             string
 	inProcessCodexLifecycle bool
+	interactionLease        *agentInteractionLease
+	detachCodexObserver     func()
 	trace                   observability.TraceContext
 	sessionID               string
 }
@@ -298,6 +303,9 @@ func (h *Handler) claimActiveTaskTerminal(key string, task *activeAgentTask) boo
 	}
 	task.mu.Lock()
 	defer task.mu.Unlock()
+	if task.detached {
+		return false
+	}
 	return task.claimTerminalLocked()
 }
 
@@ -308,6 +316,10 @@ func (h *Handler) finishClaimedActiveTask(key string, task *activeAgentTask) (pe
 		return pendingAgentTask{}, false
 	}
 	task.mu.Lock()
+	if task.phase != codexTaskTerminal {
+		task.mu.Unlock()
+		return pendingAgentTask{}, false
+	}
 	pending := pendingAgentTask{}
 	if task.phase == codexTaskTerminal && !task.pendingSteering {
 		pending = task.pending

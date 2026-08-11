@@ -40,66 +40,88 @@ type AgentMeta struct {
 
 // Handler processes incoming WeChat messages and dispatches replies.
 type Handler struct {
-	mu                      sync.RWMutex
-	version                 string
-	defaultName             string
-	agents                  map[string]agent.Agent // name -> running agent
-	agentStarts             map[string]*agentStartState
-	agentMetas              []AgentMeta       // all configured agents (for /status)
-	agentWorkDirs           map[string]string // agent name -> configured/runtime cwd
-	configuredAgentWorkDirs map[string]string // agent name -> 启动配置 cwd，不随会话切换变化
-	customAliases           map[string]string // custom alias -> agent name (from config)
-	factory                 AgentFactory
-	saveDefault             SaveDefaultFunc
-	saveDir                 string   // directory to save images/files to
-	allowedWorkspaceRoots   []string // /cwd 允许切换的根目录；空=禁止远程切换
-	adminUsers              map[string]struct{}
-	rateLimiter             *userRateLimiter
-	rateLimitPerMinute      int
-	audit                   auditLogger
-	startedAt               time.Time
-	agentInvocations        atomic.Int64
-	agentErrors             atomic.Int64
-	lastDedupCleanup        atomic.Int64
-	seenMsgs                sync.Map // map[int64]time.Time — dedup by message_id
-	cdnDownloader           CDNDownloader
-	progressConfig          config.ProgressConfig
-	agentProgressConfigs    map[string]config.ProgressConfig
-	platformProgressConfigs map[string]config.ProgressConfig
-	platformDefaultAgents   map[string]string
-	sessions                *sessionService
-	workspaceRegistry       *workspaceRegistry
-	seenTextMsgs            sync.Map // map[string]textDedupEntry — MessageID 为 0 时按文本去重与 reservation
-	feishuIdentities        *feishuIdentityStore
-	taskLocksMu             sync.Mutex
-	taskLocks               map[string]*executionLock
-	tasks                   taskService
-	pendingApprovalsMu      sync.Mutex
-	pendingApprovals        map[string]*pendingApproval
-	resolvedApprovalCodes   map[string]time.Time
-	yoloUsers               sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
-	codexLocalSessionDir    string
-	codexBrowseMu           sync.Mutex
-	codexBrowseWorkspaces   map[string]string
-	codexTaskCardFocusMu    sync.Mutex
-	codexTaskCardFocus      map[string]string
-	feishuWorkspaceChoices  feishuWorkspaceChoiceStore
-	feishuNavSnapshots      feishuNavigationSnapshotStore
-	feishuAccountConfirms   feishuCodexAccountConfirmStore
-	pendingTaskControls     pendingTaskControlStore
-	serviceAdminMu          sync.Mutex
-	serviceAdminExecutor    ServiceAdminCommandExecutor
-	adminTimeout            time.Duration
-	codexCommandTimeout     time.Duration
-	codexLockWaitTimeout    time.Duration
-	codexControlTimeout     time.Duration
-	terminalOutboxMu        sync.RWMutex
-	terminalOutbox          *terminalOutbox
-	traceRecorder           observability.Recorder
-	traceErrorMu            sync.Mutex
-	lastTraceErrorAt        time.Time
-	auditErrorMu            sync.Mutex
-	lastAuditErrorAt        time.Time
+	mu                       sync.RWMutex
+	version                  string
+	defaultName              string
+	agents                   map[string]agent.Agent // name -> running agent
+	agentStarts              map[string]*agentStartState
+	agentMetas               []AgentMeta       // all configured agents (for /status)
+	agentWorkDirs            map[string]string // agent name -> configured/runtime cwd
+	configuredAgentWorkDirs  map[string]string // agent name -> 启动配置 cwd，不随会话切换变化
+	customAliases            map[string]string // custom alias -> agent name (from config)
+	factory                  AgentFactory
+	saveDefault              SaveDefaultFunc
+	saveDir                  string   // directory to save images/files to
+	allowedWorkspaceRoots    []string // /cwd 允许切换的根目录；空=禁止远程切换
+	rateLimiter              *userRateLimiter
+	rateLimitPerMinute       int
+	audit                    auditLogger
+	startedAt                time.Time
+	agentInvocations         atomic.Int64
+	agentErrors              atomic.Int64
+	lastDedupCleanup         atomic.Int64
+	seenMsgs                 sync.Map // map[int64]time.Time — dedup by message_id
+	cdnDownloader            CDNDownloader
+	progressConfig           config.ProgressConfig
+	agentProgressConfigs     map[string]config.ProgressConfig
+	platformProgressConfigs  map[string]config.ProgressConfig
+	platformDefaultAgents    map[string]string
+	platformAccessUpdater    func(platform.PlatformName, string, []string)
+	sessions                 *sessionService
+	workspaceRegistry        *workspaceRegistry
+	seenTextMsgs             sync.Map // map[string]textDedupEntry — MessageID 为 0 时按文本去重与 reservation
+	feishuIdentities         *feishuIdentityStore
+	feishuIdentityMutationMu sync.Mutex
+	taskLocksMu              sync.Mutex
+	taskLocks                map[string]*executionLock
+	tasks                    taskService
+	pendingApprovalsMu       sync.Mutex
+	pendingApprovals         map[string]*pendingApproval
+	resolvedApprovalCodes    map[string]time.Time
+	yoloUsers                sync.Map // userID -> struct{}：开启自动放行(yolo)的用户
+	codexLocalSessionDir     string
+	codexBrowseMu            sync.Mutex
+	codexBrowseWorkspaces    map[string]string
+	codexTaskCardFocusMu     sync.Mutex
+	codexTaskCardFocus       map[string]string
+	feishuWorkspaceChoices   feishuWorkspaceChoiceStore
+	feishuNavSnapshots       feishuNavigationSnapshotStore
+	feishuAccountConfirms    feishuCodexAccountConfirmStore
+	pendingTaskControls      pendingTaskControlStore
+	serviceAdminMu           sync.Mutex
+	serviceAdminExecutor     ServiceAdminCommandExecutor
+	adminTimeout             time.Duration
+	codexCommandTimeout      time.Duration
+	codexLockWaitTimeout     time.Duration
+	codexControlTimeout      time.Duration
+	codexFollowerMu          sync.Mutex
+	codexFollower            *codexFollowerService
+	terminalOutboxMu         sync.RWMutex
+	terminalOutbox           *terminalOutbox
+	traceRecorder            observability.Recorder
+	traceErrorMu             sync.Mutex
+	lastTraceErrorAt         time.Time
+	auditErrorMu             sync.Mutex
+	lastAuditErrorAt         time.Time
+}
+
+// SetPlatformRegistry 绑定运行中的账号级访问控制注册表，供远程授权变更立即生效。
+func (h *Handler) SetPlatformRegistry(registry *platform.Registry) {
+	h.mu.Lock()
+	if registry == nil {
+		h.platformAccessUpdater = nil
+	} else {
+		h.platformAccessUpdater = registry.UpdateAccessForAccount
+	}
+	h.mu.Unlock()
+}
+
+// SetPlatformAccessUpdater 注入运行时账号权限刷新器。正式服务使用从磁盘最新配置
+// 重建访问控制的实现，避免并发 CLI 或热重载用旧快照覆盖撤销结果。
+func (h *Handler) SetPlatformAccessUpdater(update func(platform.PlatformName, string, []string)) {
+	h.mu.Lock()
+	h.platformAccessUpdater = update
+	h.mu.Unlock()
 }
 
 // SetVersion 注入当前 WeClaw 构建版本，供聊天内置 /status 展示。

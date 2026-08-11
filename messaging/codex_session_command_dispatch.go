@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
-	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type codexSessionCommandRuntime struct {
@@ -183,16 +182,9 @@ func (h *Handler) prepareCodexListCommand(req codexSessionCommandRequest, actorU
 	)}
 }
 
-// codexSessionCommandAdmin keeps Feishu's union_id-only decision from being
-// widened later by comparing the app-scoped open_id against admin_users.
+// codexSessionCommandAdmin 只接受入口从 Registry capability 投影的决定。
 func (h *Handler) codexSessionCommandAdmin(req codexSessionCommandRequest, actorUserID string) bool {
-	if req.Admin {
-		return true
-	}
-	if req.Platform == platform.PlatformFeishu {
-		return false
-	}
-	return h.isAdminUser(actorUserID)
+	return req.Admin
 }
 
 // normalizeCodexCommandUsers 补齐真实用户和平台路由用户。
@@ -257,6 +249,8 @@ func (h *Handler) dispatchCodexUtilityCommand(runtime codexSessionCommandRuntime
 		return h.dispatchCodexAccountCommand(runtime), true
 	case "clean":
 		return h.codexNoArgCommandResult(fields, "/cx clean", func() string { return h.handleCodexClean(runtime.bindingKey) })
+	case "release":
+		return textNavigationResult(h.handleCodexReleaseCommand(runtime)), true
 	case "app":
 		return h.codexNoArgCommandResult(fields, "/cx app", func() string { return codexSingleHostEntryDisabled("app") })
 	case "cli":

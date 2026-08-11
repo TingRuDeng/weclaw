@@ -135,12 +135,11 @@ func TestCwdAllowlistEmptyRejectsDirectorySwitch(t *testing.T) {
 func TestCwdAdminBypassesWorkspaceRoots(t *testing.T) {
 	dir := t.TempDir()
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"wx_admin"})
 
-	got := h.handleCwdForMessage("/cwd "+dir, platform.IncomingMessage{
+	got := h.handleCwdForMessage("/cwd "+dir, authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformWeChat,
 		UserID:   "wx_admin",
-	}, "")
+	}, "wx_admin"), "")
 
 	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
 		t.Fatalf("admin should bypass empty allowed_workspace_roots, got %q", got)
@@ -150,13 +149,12 @@ func TestCwdAdminBypassesWorkspaceRoots(t *testing.T) {
 func TestCwdFeishuAdminUsesUnionIDBypass(t *testing.T) {
 	dir := t.TempDir()
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 
-	got := h.handleCwdForMessage("/cwd "+dir, platform.IncomingMessage{
+	got := h.handleCwdForMessage("/cwd "+dir, authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Metadata: map[string]string{"feishu_union_id": "on_admin"},
-	}, "")
+	}, "on_admin"), "")
 
 	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
 		t.Fatalf("feishu admin should bypass empty allowed_workspace_roots by union_id, got %q", got)

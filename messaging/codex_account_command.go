@@ -13,7 +13,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-const codexAccountPermissionDenied = "Codex 账号是当前 WeClaw 主机的全局设置；只有管理员私聊可以查看账号列表或切换。"
+const codexAccountPermissionDenied = "Codex 账号是当前 WeClaw 主机的全局设置；只有当前平台或机器人已授权账号的私聊可以查看账号列表或切换。"
 
 func (h *Handler) dispatchCodexAccountCommand(runtime codexSessionCommandRuntime) navigationCommandResult {
 	fields := runtime.fields
@@ -447,9 +447,9 @@ func formatCodexAccountCommandError(err error) string {
 func codexAccountCommandUsage() string {
 	return wechatCommandText(
 		"Codex 账号命令:",
-		"/cx account 查看当前账号；管理员私聊可查看账号列表",
+		"/cx account 查看当前账号；已授权账号私聊可查看账号列表",
 		"/cx account status 查看当前账号、Host、最近切换和额度摘要",
-		"/cx account use <id-or-label> 管理员私聊切换主机级账号",
+		"/cx account use <id-or-label> 已授权账号私聊切换主机级账号",
 		"账号保存和删除只允许在本机 CLI 执行。",
 	)
 }

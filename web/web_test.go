@@ -41,9 +41,9 @@ func TestWorkspaceRootsHintMatchesRuntimeAccessRules(t *testing.T) {
 	}
 	text := string(data)
 	for _, want := range []string{
-		"普通用户允许的工作目录根",
-		"未配置时，普通用户远程 /cwd 被禁用",
-		"管理员不受此限制",
+		"受限兼容入口允许的工作目录根",
+		"未携带平台授权能力的兼容入口不能远程切换 /cwd",
+		"allowed_users 中的账号不受此限制",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("工作空间提示缺少 %q", want)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,9 +10,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/fastclaw-ai/weclaw/internal/securefile"
 )
+
+var configMutationMu sync.Mutex
 
 // ConfigPath 返回配置文件路径。
 func ConfigPath() (string, error) {
@@ -147,6 +151,65 @@ func Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	return withConfigMutationLock(path, func() error {
+		return saveConfigAtPath(path, cfg)
+	})
+}
+
+// Update 在进程内和跨进程锁内重新读取最新配置、执行一次修改并原子保存。
+// 所有基于旧配置的读改写都应走该入口，避免并发命令相互覆盖。
+func Update(mutate func(*Config) error) error {
+	if mutate == nil {
+		return fmt.Errorf("config update mutation is nil")
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	return withConfigMutationLock(path, func() error {
+		cfg, err := Load()
+		if err != nil {
+			return err
+		}
+		if err := mutate(cfg); err != nil {
+			return err
+		}
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		return saveConfigAtPath(path, cfg)
+	})
+}
+
+// WithLockedSnapshot 在与配置写入相同的进程内和跨进程锁中读取最新配置。
+// callback 只应用运行态快照，不能在其中再次调用 Save、Update 或 WithLockedSnapshot。
+func WithLockedSnapshot(callback func(*Config) error) error {
+	if callback == nil {
+		return fmt.Errorf("config snapshot callback is nil")
+	}
+	path, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	return withConfigMutationLock(path, func() error {
+		cfg, err := Load()
+		if err != nil {
+			return err
+		}
+		return callback(cfg)
+	})
+}
+
+func withConfigMutationLock(path string, fn func() error) error {
+	configMutationMu.Lock()
+	defer configMutationMu.Unlock()
+	if err := securefile.WithExclusiveLock(context.Background(), path+".lock", fn); err != nil {
+		return fmt.Errorf("lock config: %w", err)
+	}
+	return nil
+}
+
+func saveConfigAtPath(path string, cfg *Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

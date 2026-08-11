@@ -22,7 +22,7 @@ func TestCodexWorkspaceAddRequiresAdminPrivateAndPreservesSpaces(t *testing.T) {
 	ordinary := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: command, Private: true,
 	})
-	if !strings.Contains(ordinary, "仅管理员") {
+	if !strings.Contains(ordinary, "当前账号未授权") {
 		t.Fatalf("ordinary reply=%q", ordinary)
 	}
 	group := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
@@ -205,7 +205,7 @@ func TestHiddenCodexWorkspaceRejectsDirectThreadSelection(t *testing.T) {
 		bindingKey: bindingKey, agentName: "codex", workspaceRoot: workspace,
 		target: "thread-hidden", agent: &fakeCodexThreadAgent{},
 	})
-	if err == nil || !strings.Contains(err.Error(), "已被管理员移除") {
+	if err == nil || !strings.Contains(err.Error(), "已从 WeClaw 导航中移除") {
 		t.Fatalf("error=%v, want hidden workspace rejection", err)
 	}
 }
@@ -221,7 +221,7 @@ func TestHiddenWorkspaceBlocksExistingCodexAndClaudeBindings(t *testing.T) {
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-hidden")
 	_, codexErr := h.resolveCodexConversationIDForRoute(context.Background(), "user-1", "user-1", "codex", codex)
-	if codexErr == nil || !strings.Contains(codexErr.Error(), "已被管理员移除") {
+	if codexErr == nil || !strings.Contains(codexErr.Error(), "已从 WeClaw 导航中移除") {
 		t.Fatalf("Codex error=%v, want hidden workspace rejection", codexErr)
 	}
 
@@ -236,7 +236,7 @@ func TestHiddenWorkspaceBlocksExistingCodexAndClaudeBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, claudeErr := h.resolveClaudeConversationIDForRoute(context.Background(), "user-1", "user-1", "claude", claude)
-	if claudeErr == nil || !strings.Contains(claudeErr.Error(), "已被管理员移除") {
+	if claudeErr == nil || !strings.Contains(claudeErr.Error(), "已从 WeClaw 导航中移除") {
 		t.Fatalf("Claude error=%v, want hidden workspace rejection", claudeErr)
 	}
 }
@@ -252,7 +252,7 @@ func TestCwdRejectsWorkspaceHiddenForConfiguredAgent(t *testing.T) {
 	}
 
 	reply := h.handleCwdWithAccess("/cwd "+workspace, []string{"admin-1"}, true)
-	if !strings.Contains(reply, "已被管理员从 WeClaw 移除") {
+	if !strings.Contains(reply, "已从 WeClaw 导航中移除") {
 		t.Fatalf("reply=%q, want hidden workspace rejection", reply)
 	}
 	if got := codex.lastWorkingDir(); got != "" {

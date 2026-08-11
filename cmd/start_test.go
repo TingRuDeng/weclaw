@@ -15,7 +15,7 @@ import (
 // TestPersistDetectedStartConfigExposesSaveFailure 验证自动探测结果无法持久化时阻止启动。
 func TestPersistDetectedStartConfigExposesSaveFailure(t *testing.T) {
 	wantErr := errors.New("只读配置")
-	err := persistDetectedStartConfig(true, config.DefaultConfig(), func(*config.Config) error {
+	err := persistDetectedStartConfig(true, config.DefaultConfig(), func(func(*config.Config) error) error {
 		return wantErr
 	})
 	if !errors.Is(err, wantErr) {

@@ -14,11 +14,11 @@ Use local Codex and Claude remotely from WeChat or Feishu while keeping real wor
 
 ## Why WeClaw
 
-- **Take over local work remotely**: continue Codex and Claude sessions from WeChat or Feishu after leaving your computer.
+- **Synchronize local work remotely**: continue Codex and Claude sessions from WeChat or Feishu after leaving your computer.
 - **Keep the original context**: reuse Codex workspaces/threads and Claude ACP sessions instead of starting a new conversation for every message.
 - **See progress and receive results**: Feishu uses CardKit updates, while WeChat provides typing state and task results.
 - **Use one Codex runtime boundary**: either Codex App or the shared app-server is the Host; active-turn inputs follow app-server acceptance order, while writer leases serialize new turns.
-- **Configure security boundaries**: user allowlists, workspace roots, admin access, audit logs, and Codex permission levels are independent controls.
+- **Configure security boundaries**: platform or bot user allowlists, workspace roots, audit logs, and Codex permission levels are independent controls; one person's authorized accounts have the same management capability.
 
 ## Quick Start
 
@@ -63,21 +63,24 @@ Inspect the current project and fix the failing tests
 
 After selecting an existing session or sending `/cx new`, send the task directly. Without a valid session binding, a regular message only asks the user to select a session or send `/cx new`; it never creates or binds a session implicitly.
 
-### Use Codex App and WeClaw Together
+### Synchronize One Task Between Feishu and Codex App / Controlled CLI
 
 ```text
 /cx ls                 # List existing local workspaces and threads
 /cx <number>           # Bind this frontend window to the selected thread
 /cx status             # Inspect the current workspace, session, task, account, and runtime
+/cx release            # Unbind only this Feishu window; the local task keeps running
 ```
 
-With the default `codex_host_mode: auto` on macOS, an official standalone daemon already running on its fixed control socket remains the single Host after its identity is verified, even when Codex App is also running. Codex App, the controlled CLI, Feishu, and WeChat can therefore reuse the same threads. Without a running daemon, WeClaw uses protected Desktop IPC when the App is running; when the App is absent, it connects to or starts the official daemon, with the WeClaw-managed Host as the compatibility backend. A running WeClaw-managed Host switches to a newly detected App only after every thread is globally idle and no writer lease exists. Ambiguous daemon identity, an ambiguous App endpoint, or a non-idle Host fails closed and never falls back to parallel writes. Explicit `daemon` mode on macOS also installs Desktop IPC coordination, but only for frontend-state probes and returning a thread after switching away; it cannot select the App as Host, and daemon startup or identity failures remain fail-closed.
+With the default `codex_host_mode: auto` on macOS, an official standalone daemon already running on its fixed control socket remains the single Host after its identity is verified, even when Codex App is also running. Codex App, the controlled CLI, Feishu, and WeChat can therefore reuse the same threads. Without a running daemon, WeClaw uses protected Desktop IPC when the App is running; when the App is absent, it connects to or starts the official daemon, with the WeClaw-managed Host as the compatibility backend. A running WeClaw-managed Host switches to a newly detected App only after every thread is globally idle and no writer lease exists. Ambiguous daemon identity, an ambiguous App endpoint, or a non-idle Host fails closed and never falls back to parallel writes. Explicit `daemon` mode on macOS also installs Desktop IPC for frontend probes and required Host coordination; it cannot select the App as Host, and daemon startup or identity failures remain fail-closed.
 
-Explicitly selecting a session from Feishu or WeChat is a Handoff. When a verified official daemon is already the only Host and the Desktop history probe returns `no-client-found`, WeClaw treats that response as evidence that the App client has released the session and resumes the binding on the same daemon. This allows a mobile frontend to take over even while the Codex App window remains visible. The exception applies only to explicit session selection: regular messages, status inspection, disconnects, and timeouts never trigger an automatic takeover, and insufficient evidence preserves the binding while failing closed.
+The supported collaboration shapes are “Feishu + Codex App” and “Feishu + controlled Codex CLI.” Both frontends bind the same thread, observe task state from the same Host, and can continue the task. When Feishu selects an active thread, WeClaw first restores the authoritative snapshot and then follows later progress. A regular message uses the current `turnId` to join the active turn; a new turn is started only when the thread is idle. If App, CLI, and Feishu all happen to open the same thread, upstream request acceptance still determines order, but WeClaw does not claim client-level exclusivity or precise ownership.
+
+The Feishu binding is durable. After a WeClaw restart or short disconnect, observation is attached again when platform delivery returns; a failed recovery is observable and never stops the local task or pretends synchronization succeeded. `/cx release` unbinds only the current message route, stops progress, approvals, questions, and final results from returning to that route, and freezes its current card without a terminal state. It does not interrupt the active turn, restart the Host, or retain a read-only observer. Local Codex keeps running; selecting the thread again resumes from the latest authoritative snapshot.
 
 Historical threads no longer remain tied to the provider that created them. Before selecting or continuing an existing thread, WeClaw resolves the effective `model_provider` of the current Codex Host for that workspace. When the stored provider differs, and every known task is idle with no writer lease, WeClaw backs up and migrates only that thread's rollout, `state_5.sqlite` row, and optional local catalog rows, then resumes the same thread ID with the provider explicitly set. User messages, visible answers, tool calls, and tool results are preserved; provider-bound encrypted reasoning and compaction state are removed. An active target is never interrupted: steering stays in its already selected provider for the current turn, and the next new turn migrates first. An idle loaded App/shared Host may be restarted under lifecycle control. Journals and backups live under `CODEX_HOME/backups/weclaw-provider-migration/`; uncertain identity, paths, state, or resume verification fails closed.
 
-The App Host supports selecting existing sessions, turns, progress, approvals, `/stop`, and current-thread model or reasoning changes. After Feishu or WeChat binds a thread that is already running in the App, a regular message goes directly into the active turn instead of waiting in a private continuation queue. Desktop IPC does not currently expose session creation, archive, or rename, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` and `/cx rename` fail clearly in App mode without deleting the current binding.
+The App Host supports selecting existing sessions, turns, progress, approvals, `/stop`, and current-thread model or reasoning changes. After Feishu binds a thread that is already running in the App, a regular message goes directly into the active turn instead of waiting in a private continuation queue. Desktop IPC does not currently expose session creation, archive, or rename, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` and `/cx rename` fail clearly in App mode without deleting the current binding.
 
 `/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` remain disabled because chat commands cannot launch another local process. Use the controlled terminal entrypoint instead:
 
@@ -111,7 +114,7 @@ While WeClaw is running, `save` accepts only the account actually used by the sh
 
 An online `use` first rejects active tasks, active or uncertain writer leases, and every active or unknown thread. It persists a switch journal before stopping the real managed Host, projects the target authentication, starts the unique Host, and verifies both account identity and rate limits. A target startup or verification failure restores the previous authentication and Host. A mid-switch process exit or rollback failure remains fail-closed after restart instead of becoming writable when memory resets. Online `save` likewise commits the profile index and Host identity metadata as one compensated operation. WeClaw never terminates a legacy or otherwise unverified app-server; run `weclaw codex account doctor`. To clear an unsafe journal, stop the service, explicitly run offline `use`, then start it again.
 
-Use `/cx account` or `/cx account status` from Feishu or WeChat to inspect the masked current profile. Only an administrator in a direct chat may list profiles or run `/cx account use <id-or-label>`. A Feishu list selection adds a five-minute confirmation card scoped to the operator, route, target profile, and list revision. A WeClaw host has one globally active Codex account, not one account per chat window.
+Use `/cx account` or `/cx account status` from Feishu or WeChat to inspect the masked current profile. An identity in the current platform or bot `allowed_users` may list profiles or run `/cx account use <id-or-label>` from a direct chat. A Feishu list selection adds a five-minute confirmation card scoped to the operator, route, target profile, and list revision. A WeClaw host has one globally active Codex account, not one account per chat window.
 
 ### Reuse Claude Code Sessions
 
@@ -134,9 +137,9 @@ If ACP has not persisted an empty session immediately after `/cc new`, `/cc ls` 
 
 ### Manage Workspaces and Session Names
 
-An administrator may register or hide existing working directories from a direct chat with `/cx workspace add <path>` and `/cx workspace remove <number|path>`; Claude uses the corresponding `/cc workspace ...` commands. Entries are isolated by the configured Agent name in `~/.weclaw/workspace-registry.json`. `remove` hides a directory only from WeClaw navigation: it never deletes source files, Codex threads, Claude sessions, or history, and a later `add` makes it visible again. Registering a path outside the allowlist does not expand a regular user's `allowed_workspace_roots` access.
+An identity in the current platform or bot `allowed_users` may register or hide existing working directories from a direct chat with `/cx workspace add <path>` and `/cx workspace remove <number|path>`; Claude uses the corresponding `/cc workspace ...` commands. Entries are isolated by the configured Agent name in `~/.weclaw/workspace-registry.json`. `remove` hides a directory only from WeClaw navigation: it never deletes source files, Codex threads, Claude sessions, or history, and a later `add` makes it visible again.
 
-Administrators can also hide an idle, unbound session from a direct chat with `/cx session remove <number|threadId>` or `/cc session remove <number|sessionId>`. Use the corresponding `session restore <stable-id>` command to make it visible again. This changes only WeClaw's navigation overlay; it never archives or deletes Agent sessions or history, and it fails closed while any frontend remains bound or task state is active or uncertain.
+Authorized identities can also hide an idle, unbound session from a direct chat with `/cx session remove <number|threadId>` or `/cc session remove <number|sessionId>`. Use the corresponding `session restore <stable-id>` command to make it visible again. This changes only WeClaw's navigation overlay; it never archives or deletes Agent sessions or history, and it fails closed while any frontend remains bound or task state is active or uncertain.
 
 Users who can access the target workspace may run `/cx rename current|<number> <name>` or `/cc rename current|<number> <name>` to change the Agent-global session name. Names are single-line text of at most 120 Unicode code points. Codex writes through the unique shared app-server and verifies the result; Claude reuses the same ClaudeHost and session writer lease only after the ACP adapter advertises `rename` at runtime. Rename never changes any frontend binding, and a busy or unverifiable operation fails explicitly and asks the user to refresh the list.
 
@@ -146,7 +149,8 @@ Users who can access the target workspace may run `/cx rename current|<number> <
 - Send a regular message while Claude is active: queue at most one continuation and run it after the current task ends.
 - `/cancel`: remove a queued message when one actually exists, without stopping the active task.
 - `/guide`: submit an actually queued Codex message to the current task; normal active-turn input does not need this command.
-- `/stop`: stop the task running in the current chat window.
+- `/cx release`: unbind this message route and stop its Codex synchronization while the local task keeps running.
+- `/stop`: stop the global active turn for the bound thread; both local Codex and the current message route are affected.
 - `/ps`: list tasks running for the current user.
 
 Feishu opens a compact contextual card only when a message actually enters the compatibility pending queue; normal Codex active-turn input does not show a queue card. A Claude continuation runs automatically after the current task unless the user changes that handling. The card is bound to the bot account, operator, chat route, active task, and exact queued-message revision, so an expired card cannot alter a later task or replacement message. Button results replace the same card instead of creating a separate command-result message.
@@ -155,7 +159,7 @@ With native Feishu progress cards enabled, every supplemental input accepted by 
 
 Native Codex App Server plan, tool, and file signals are normalized into structured progress events. Running and terminal states with the same event ID update in place, while raw command output, tool arguments, and diffs never enter the card. `commandExecution` lifecycle events are omitted from progress; command approvals that require user action remain independently visible. Codex user-visible messages explicitly marked as `commentary` accumulate in source order with their complete text in the same timeline and participate in automatic card continuation. If the runtime omits `phase`, WeClaw holds one completed message until later activity proves it is intermediate; the last message still pending at normal completion remains the final answer and never enters the task card. Claude interim notes remain in the separate **Current note** section. Stale or late watcher events cannot overwrite a terminal task state.
 
-As soon as a native task card is created, WeClaw atomically records its recoverable reference in `~/.weclaw/state/terminal-outbox.json`. At task termination, the Feishu card changes only to completed, failed, or stopped while preserving its progress and approvals; the complete final result is delivered independently as a new static Markdown result card whose title identifies the Agent and workspace. Long results are capacity-checked and split into consecutively numbered cards. Card checkpoints and result cards record separate success states and are attempted and retried independently, so a failure or stall on one path does not block the other and a restart recovers only unfinished work. An ambiguous network response is retried with the same UUID instead of falling back to text and creating a duplicate; platforms without rich-result support retain the idempotent text path. If the process exits while the task is active, the next process updates the original card to a stopped “task interrupted” terminal and independently delivers the stopped result. Feishu CardKit checkpoints and result-card segments use stable UUIDs, while WeChat chunks use stable deduplication keys. Delivery is at-least-once rather than cross-platform exactly-once. Attachments and remote images remain outside the v1 outbox and use the existing validated best-effort path.
+As soon as a native task card is created, WeClaw atomically records its recoverable reference in `~/.weclaw/state/terminal-outbox.json`. At task termination, the Feishu card changes only to completed, failed, or stopped while preserving its progress and approvals; the complete final result is delivered independently as a new static Markdown result card whose title identifies the Agent and workspace. Long results are capacity-checked and split into consecutively numbered cards. Card checkpoints and result cards record separate success states and are attempted and retried independently, so a failure or stall on one path does not block the other and a restart recovers only unfinished work. An ambiguous network response is retried with the same UUID instead of falling back to text and creating a duplicate; platforms without rich-result support retain the idempotent text path. For a Codex active turn with a durable binding, restart first preserves the old-card recovery record and reattaches observation instead of reporting a false “task interrupted” result; a real terminal result is sent only after authoritative state confirms it. Other tasks that cannot restore observation retain the existing interruption recovery behavior. Feishu CardKit checkpoints and result-card segments use stable UUIDs, while WeChat chunks use stable deduplication keys. Delivery is at-least-once rather than cross-platform exactly-once. Attachments and remote images remain outside the v1 outbox and use the existing validated best-effort path.
 
 When `save_dir` is configured, a message containing only one URL triggers link archiving. WeChat articles are fetched directly; every other URL is first sent in full to the third-party Jina Reader service, with a direct WeClaw fetch only if Jina fails. The URL path, query, and fragment are therefore disclosed to Jina. Do not use this feature for private links containing signatures, credentials, or other sensitive data.
 
@@ -221,36 +225,37 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 | Command | Description |
 | --- | --- |
 | `/help`, `/status` | Show help and WeClaw runtime status |
-| `/cwd [path]` | Show or switch the current frontend workspace; switching also updates Agent default cwd values, and regular users are confined to allowed workspace roots |
+| `/cwd [path]` | Show or switch the current frontend workspace; switching also updates Agent default cwd values, while compatibility paths without a Registry authorization capability remain confined to allowed workspace roots |
 | `/new` | Explicitly create a session for the current default agent; also bind it when Codex is the default |
 | `/model`, `/reasoning` | Show or change the bound session configuration, or the new-session defaults when no session is bound |
 | `/fast [on|off]` | Show or change the bound Codex session speed, or the new-session default when no session is bound |
 | `/mode [default|yolo]` | Show or change Agent approval behavior; group chats isolate the setting by actor, and bare `/mode` opens a Feishu choice card. Switching to yolo releases that actor's existing approvals in the current route and closes sent approval cards as auto-approved; later automatic approvals do not open a separate card and are appended to the task card when available |
 | `/approve <code>`, `/deny <code>` | Allow or deny the matching approval when card buttons are unavailable; codes are actor-, window-, and expiry-bound |
-| `/progress [mode]` | Show progress mode; only administrators may change the account-level mode |
-| `/ps`, `/stop` | List or stop current tasks |
+| `/progress [mode]` | Show progress mode; identities in the current platform or bot `allowed_users` may change the account-level mode |
+| `/ps`, `/stop` | List tasks, or stop the global active turn for the bound thread |
 | `/cancel`, `/guide` | Handle an actually queued message; regular Codex active-turn input is sent directly |
 | `/cx help`, `/cc help` | Show complete Codex or Claude session commands |
 | `/cx <number>`, `/cx switch <number>` | Select and bind a Codex session in the current workspace |
 | `/cx new` | Create and bind a Codex session in the current workspace |
+| `/cx release` | Unbind only the current message route and stop synchronization; the local task keeps running |
 | `/cx archive current`, `/cx archive <number>` | Archive the current or listed idle Codex session while preserving its history |
 | `/cx rename current\|<number> <name>` | Rename the current or listed Codex session without changing frontend bindings |
-| `/cx session remove <number\|threadId>`, `/cx session restore <threadId>` | Hide or restore Codex session navigation from an administrator direct chat without archiving or deleting history |
-| `/cx workspace add <path>`, `/cx workspace remove <number\|path>` | Register or hide a Codex working directory from an administrator direct chat |
+| `/cx session remove <number\|threadId>`, `/cx session restore <threadId>` | Hide or restore Codex session navigation from an authorized direct chat without archiving or deleting history |
+| `/cx workspace add <path>`, `/cx workspace remove <number\|path>` | Register or hide a Codex working directory from an authorized direct chat |
 | `/cc rename current\|<number> <name>` | Rename a Claude session when the adapter advertises support, without changing frontend bindings |
-| `/cc session remove <number\|sessionId>`, `/cc session restore <sessionId>` | Hide or restore Claude session navigation from an administrator direct chat without deleting history |
-| `/cc workspace add <path>`, `/cc workspace remove <number\|path>` | Register or hide a Claude working directory from an administrator direct chat |
-| `/cx account`, `/cx account status` | Inspect the host-level Codex account; administrator direct messages may select and switch |
-| `/update`, `/restart [--force]` | Remotely update or restart WeClaw from an administrator direct message |
+| `/cc session remove <number\|sessionId>`, `/cc session restore <sessionId>` | Hide or restore Claude session navigation from an authorized direct chat without deleting history |
+| `/cc workspace add <path>`, `/cc workspace remove <number\|path>` | Register or hide a Claude working directory from an authorized direct chat |
+| `/cx account`, `/cx account status` | Inspect the host-level Codex account; authorized direct messages may select and switch |
+| `/update`, `/restart [--force]` | Remotely update or restart WeClaw from an authorized direct message |
 
 <details>
 <summary>Common Codex commands</summary>
 
-Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`.
+Select and bind: `/cx <number>`, `/cx switch <session>`, `/cx cd <workspace>` when that workspace has one session, and `/cx new`. Use `/cx release` to unbind this route without stopping the local task.
 
 Archive: `/cx archive current` archives the bound session; after entering a workspace session list, `/cx archive <number>` archives that entry. Only idle sessions with no other WeClaw frontend binding can be archived. History is preserved and can be restored from the Codex App archive.
 
-Workspaces and names: `/cx workspace add <path>` and `/cx workspace remove <number|path>` require an administrator direct chat. `/cx rename current|<number> <name>` renames the current or listed idle session. Desktop follower mode has no rename write operation, so rename it in Codex App instead.
+Workspaces and names: `/cx workspace add <path>` and `/cx workspace remove <number|path>` require a direct chat from an identity in the current platform or bot `allowed_users`. `/cx rename current|<number> <name>` renames the current or listed idle session. Desktop follower mode has no rename write operation, so rename it in Codex App instead.
 
 Runtime boundary: `/cx status` is a compact view of the current workspace, session, task, account, and runtime. Use `/cx pwd` for the full path, `/cx account status` for account diagnostics, and `/cx quota` for usage limits.
 
@@ -274,7 +279,7 @@ Other commands: `/cx whoami`, `/cx ls`, `/cx ..`, `/cx cd <workspace|..>`, `/cx 
 ```bash
 weclaw wechat login
 weclaw wechat users pending
-weclaw wechat users approve-code <authorization-code> [--admin]
+weclaw wechat users approve-code <authorization-code>
 ```
 
 An unauthorized WeChat user receives a short-lived authorization code. An empty `allowed_users` list rejects everyone by default.
@@ -285,10 +290,10 @@ An unauthorized WeChat user receives a short-lived authorization code. An empty 
 weclaw feishu add
 weclaw feishu status --name <bot-name>
 weclaw feishu users pending
-weclaw feishu users approve-code <authorization-code> [--bot <name|app_id>] [--admin]
+weclaw feishu users approve-code <authorization-code> [--bot <name|app_id>]
 ```
 
-`weclaw feishu add` saves credentials interactively and updates `platforms.feishu.bots[]`. The `app_secret` is stored only in a separate credential file, never in `config.json`. Each bot can have its own user allowlist, default agent, and progress mode.
+`weclaw feishu add` saves credentials interactively and updates `platforms.feishu.bots[]`. The `app_secret` is stored only in a separate credential file, never in `config.json`. Each bot can have its own user allowlist, default agent, and progress mode. A Feishu `/feishu users ...` chat command can manage only the bot that received it. Local `approve`, `approve-code`, and `revoke` commands require an explicit `--bot <name|app_id>` when more than one bot is configured; it may be omitted only for a single bot.
 
 <details>
 <summary>Minimum Feishu application permissions</summary>
@@ -305,7 +310,7 @@ Tenant scopes: `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`
 - Claude: `/cc ls`, `/cc status`, `/cc new`, `/cc quota`
 - Settings: `/model`, `/reasoning`, `/fast`, `/mode`
 
-Keep `/guide` and `/cancel` out of the permanent menu: Feishu presents them only when a message is actually queued. Regular Codex active-turn input is sent directly and does not open a queue card; `/help` remains the fallback command index.
+Keep `/guide` and `/cancel` out of the permanent menu: Feishu presents them only when a message is actually queued. Regular Codex active-turn input is sent directly and does not open a queue card; `/help` remains the fallback command index and `/help manage` lists management operations available to authorized identities.
 
 </details>
 
@@ -335,7 +340,7 @@ Unlimited items do not bypass platform payload limits. Before the complete Feish
 
 Before the Agent produces its first effective non-command progress event, a Feishu task card body shows only `思考中.....`; synthetic timer copy such as “waiting for Agent” or “connection healthy” does not replace it. After a Codex commentary, Claude message, plan, file change, or tool summary arrives, the same card shows the accumulated user-visible replies and safe structured progress, with `思考中.....` kept once at the bottom. The current summary remains outside a collapsible panel, while the complete progress timeline is inside it. Active cards start expanded, users may collapse or reopen them, and ordinary streaming updates touch only stable content elements so they do not reset that client-side choice. When collapsed, the “Expand complete progress” entry is the last visible card element; when expanded, a “Collapse complete progress” action follows the complete timeline so users do not need to scroll back to the panel header. Completion, failure, stop, or relay automatically collapses the card and removes the active indicator while preserving process content and approval records. Uninformative Codex command-execution lifecycle entries stay hidden; internal reasoning and status heartbeats do not unlock the waiting card, while real approvals remain visible.
 
-`weclaw web` binds to `127.0.0.1:39282` by default, injects the token through a URL fragment that is never sent to the server, and opens the browser. Soft settings such as agents, progress, allowlists, administrators, and workspace roots support hot reload. Platform enablement, credentials, or account topology changes require a restart. The built-in server has no TLS: non-loopback listeners are rejected by default and require an explicit `--allow-insecure-http` opt-in on a trusted LAN (a strong random token is still generated when `--token` is omitted); use an HTTPS tunnel or reverse proxy for public access.
+`weclaw web` binds to `127.0.0.1:39282` by default, injects the token through a URL fragment that is never sent to the server, and opens the browser. Soft settings such as agents, progress, platform or bot allowlists, and workspace roots support hot reload. Platform enablement, credentials, or account topology changes require a restart. The configuration view carries a revision fingerprint: if a CLI or messaging command has changed the configuration in the meantime, a stale page is rejected and must be reloaded instead of overwriting the latest allowlist. The built-in server has no TLS: non-loopback listeners are rejected by default and require an explicit `--allow-insecure-http` opt-in on a trusted LAN (a strong random token is still generated when `--token` is omitted); use an HTTPS tunnel or reverse proxy for public access.
 
 `weclaw doctor` is read-only by default. In addition to the existing configuration checks, it inspects `sqlite3`, Linux `bubblewrap`, Node.js/npm, Codex CLI `app-server` support, Claude Code CLI, and the Claude ACP adapter. Missing runtime dependencies for a configured Agent are blocking failures; missing optional Agents or dependencies that affect only the `/cx` catalog or Codex Linux sandbox are warnings.
 
@@ -350,8 +355,9 @@ After installation, WeClaw repeats the same capability probes and saves newly di
 Key security rules:
 
 - An empty platform `allowed_users` list rejects everyone by default.
-- `admin_users` grants only WeClaw management access; the user must still belong to the relevant platform allowlist.
-- Regular users may only `/cwd` into `allowed_workspace_roots` and their descendants; administrators are exempt.
+- The current platform or bot `allowed_users` is the only remote identity source. Every listed identity has the same WeClaw management capability, and bot accounts cannot authorize each other.
+- A legacy top-level `admin_users` value is ignored with startup and `doctor` warnings. It is never migrated automatically and never expands an allowlist; it is retained only for configuration round trips and is hidden and read-only from the Web configuration view.
+- Identities authorized through `allowed_users` are not restricted by `allowed_workspace_roots`; compatibility or internal paths without a Registry authorization capability remain confined to those roots.
 - A non-loopback `api_addr` requires `api_token`.
 - Loopback listeners may omit `api_token`, but other local processes can then call administrative endpoints; `weclaw doctor` reports this risk, and a random token is still recommended.
 - Audit logging is enabled by default and never records secrets.

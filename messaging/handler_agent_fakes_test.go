@@ -96,6 +96,7 @@ func (f *fakeAgent) resetConversationID() string {
 
 type fakeCodexThreadAgent struct {
 	fakeAgent
+	threadStateMu      sync.RWMutex
 	threadID           string
 	useConversation    string
 	useThreadID        string
@@ -170,6 +171,8 @@ func (f *fakeCodexThreadAgent) ReadCodexThreadState(ctx context.Context, _ strin
 	if err := waitCodexLiveTestHook(ctx, f.threadStateRelease); err != nil {
 		return agent.CodexThreadState{}, err
 	}
+	f.threadStateMu.RLock()
+	defer f.threadStateMu.RUnlock()
 	if f.threadStateErr != nil {
 		return agent.CodexThreadState{}, f.threadStateErr
 	}
@@ -178,6 +181,12 @@ func (f *fakeCodexThreadAgent) ReadCodexThreadState(ctx context.Context, _ strin
 		state.ThreadID = threadID
 	}
 	return state, nil
+}
+
+func (f *fakeCodexThreadAgent) setThreadState(state agent.CodexThreadState) {
+	f.threadStateMu.Lock()
+	f.threadState = state
+	f.threadStateMu.Unlock()
 }
 
 func (f *fakeCodexThreadAgent) WatchCodexThread(ctx context.Context, _ string, _ string, onProgress func(string)) (string, error) {

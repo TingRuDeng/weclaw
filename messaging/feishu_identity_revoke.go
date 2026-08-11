@@ -9,24 +9,23 @@ import (
 )
 
 type feishuIdentityRevokeOptions struct {
-	Selector string
-	BotRef   string
-	Admin    bool
+	Selector  string
+	BotRef    string
+	AccountID string
 }
 
 // FeishuIdentityRevokeRequest 描述一次飞书身份取消授权请求。
 type FeishuIdentityRevokeRequest struct {
 	Selector string
 	BotRef   string
-	Admin    bool
 	FilePath string
 }
 
 // FeishuIdentityRevokeResult 返回已移除授权的身份和范围。
 type FeishuIdentityRevokeResult struct {
-	Identity string
-	Bots     []string
-	Admin    bool
+	Identity     string
+	Bots         []string
+	allowedUsers []string
 }
 
 func (h *Handler) handleFeishuIdentityRevoke(msg platform.IncomingMessage, args []string) string {
@@ -34,17 +33,25 @@ func (h *Handler) handleFeishuIdentityRevoke(msg platform.IncomingMessage, args 
 	if err != nil {
 		return err.Error()
 	}
+	opts.BotRef, err = remoteFeishuIdentityBotRef(msg.AccountID, opts.BotRef)
+	if err != nil {
+		return err.Error()
+	}
+	opts.AccountID = strings.TrimSpace(msg.AccountID)
+	h.feishuIdentityMutationMu.Lock()
+	defer h.feishuIdentityMutationMu.Unlock()
 	result, err := revokeFeishuIdentity(h.ensureFeishuIdentities(), opts)
 	if err != nil {
 		return err.Error()
 	}
-	h.auditFeishuIdentityMutation(msg, "feishu_identity_revoke", result.Identity, result.Bots, result.Admin)
+	h.refreshFeishuAccountAccess(opts.AccountID, result.allowedUsers)
+	h.auditFeishuIdentityMutation(msg, "feishu_identity_revoke", result.Identity, result.Bots)
 	return RenderFeishuIdentityRevoke(result)
 }
 
 func parseFeishuIdentityRevokeOptions(args []string) (feishuIdentityRevokeOptions, error) {
 	if len(args) == 0 {
-		return feishuIdentityRevokeOptions{}, fmt.Errorf("用法: /feishu users revoke <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]")
+		return feishuIdentityRevokeOptions{}, fmt.Errorf("用法: /feishu users revoke <union_id|user_id|open_id> [--bot <name|app_id>]")
 	}
 	opts := feishuIdentityRevokeOptions{Selector: strings.TrimSpace(args[0])}
 	if isNumericFeishuIdentitySelector(opts.Selector) {
@@ -63,9 +70,6 @@ func parseFeishuIdentityRevokeOptions(args []string) (feishuIdentityRevokeOption
 
 func applyFeishuRevokeFlag(opts feishuIdentityRevokeOptions, args []string, index int) (feishuIdentityRevokeOptions, int, error) {
 	switch args[index] {
-	case "--admin":
-		opts.Admin = true
-		return opts, 0, nil
 	case "--bot":
 		if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
 			return opts, 0, fmt.Errorf("--bot 需要指定机器人 name 或 app_id")
@@ -82,7 +86,6 @@ func RevokeFeishuIdentity(req FeishuIdentityRevokeRequest) (FeishuIdentityRevoke
 	opts := feishuIdentityRevokeOptions{
 		Selector: strings.TrimSpace(req.Selector),
 		BotRef:   strings.TrimSpace(req.BotRef),
-		Admin:    req.Admin,
 	}
 	store := newFeishuIdentityStore()
 	store.SetFilePath(firstNonBlank(req.FilePath, DefaultFeishuIdentityFile()))
@@ -96,55 +99,86 @@ func revokeFeishuIdentity(store *feishuIdentityStore, opts feishuIdentityRevokeO
 	if isNumericFeishuIdentitySelector(opts.Selector) {
 		return FeishuIdentityRevokeResult{}, fmt.Errorf("为避免列表变化导致误操作，请使用 union_id、user_id 或 open_id。")
 	}
-	identity, keys := feishuIdentityRevokeKeys(store, opts.Selector)
-	bots, adminRemoved, err := removeFeishuIdentityFromConfig(keys, opts.BotRef, opts.Admin)
+	accountID := strings.TrimSpace(opts.AccountID)
+	if accountID == "" {
+		var err error
+		accountID, err = resolveLocalFeishuRevokeAccountID(opts.BotRef)
+		if err != nil {
+			return FeishuIdentityRevokeResult{}, err
+		}
+	}
+	identity, keys, keyErr := feishuIdentityRevokeKeys(store, opts.Selector, accountID)
+	if keyErr != nil {
+		return FeishuIdentityRevokeResult{}, keyErr
+	}
+	bots, allowedUsers, err := removeFeishuIdentityFromConfig(keys, opts.BotRef)
 	if err != nil {
 		return FeishuIdentityRevokeResult{}, fmt.Errorf("取消授权失败: %w", err)
 	}
-	if len(bots) == 0 && !adminRemoved {
+	if len(bots) == 0 {
 		return FeishuIdentityRevokeResult{}, fmt.Errorf("未找到该飞书用户授权。")
 	}
-	return FeishuIdentityRevokeResult{Identity: identity, Bots: bots, Admin: adminRemoved}, nil
+	return FeishuIdentityRevokeResult{Identity: identity, Bots: bots, allowedUsers: allowedUsers}, nil
 }
 
-func feishuIdentityRevokeKeys(store *feishuIdentityStore, selector string) (string, []string) {
+func resolveLocalFeishuRevokeAccountID(botRef string) (string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return "", err
+	}
+	bots := cfg.Platforms[string(platform.PlatformFeishu)].Bots
+	botRef = strings.TrimSpace(botRef)
+	if botRef == "" {
+		if len(bots) == 1 {
+			return strings.TrimSpace(bots[0].AppID), nil
+		}
+		return "", nil
+	}
+	for _, bot := range bots {
+		if feishuBotConfigMatchesRef(bot, botRef) {
+			return strings.TrimSpace(bot.AppID), nil
+		}
+	}
+	return "", fmt.Errorf("未找到飞书机器人 %q", botRef)
+}
+
+func feishuIdentityRevokeKeys(store *feishuIdentityStore, selector string, accountID string) (string, []string, error) {
 	selector = strings.TrimSpace(selector)
 	record, ok := resolveFeishuIdentityApprovalRecord(store, selector)
 	if !ok {
-		return selector, []string{selector}
+		return selector, []string{selector}, nil
+	}
+	if strings.TrimSpace(accountID) != "" && !feishuIdentityRecordSeenOnAccount(record, accountID) {
+		return "", nil, fmt.Errorf("未在当前机器人发现该飞书用户身份。")
 	}
 	identity := firstNonBlank(preferredFeishuAllowedIdentity(record), selector)
-	return identity, feishuIdentityAuthKeys(record, "")
+	return identity, feishuIdentityAuthKeys(record, accountID), nil
 }
 
-func removeFeishuIdentityFromConfig(keys []string, botRef string, admin bool) ([]string, bool, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, false, err
-	}
-	platformCfg := cfg.Platforms[string(platform.PlatformFeishu)]
-	bots, labels, err := removeIdentityFromFeishuBots(platformCfg.Bots, keys, botRef)
-	if err != nil {
-		return nil, false, err
-	}
-	platformCfg.Bots = bots
-	cfg.Platforms[string(platform.PlatformFeishu)] = platformCfg
-	adminRemoved := false
-	if admin {
-		cfg.AdminUsers, adminRemoved = removeIdentityValues(cfg.AdminUsers, keys)
-	}
-	if len(labels) == 0 && !adminRemoved {
-		return nil, false, nil
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, false, err
-	}
-	return labels, adminRemoved, config.Save(cfg)
+func removeFeishuIdentityFromConfig(keys []string, botRef string) ([]string, []string, error) {
+	var labels []string
+	var allowedUsers []string
+	err := config.Update(func(cfg *config.Config) error {
+		platformCfg := cfg.Platforms[string(platform.PlatformFeishu)]
+		bots, updatedLabels, err := removeIdentityFromFeishuBots(platformCfg.Bots, keys, botRef)
+		if err != nil {
+			return err
+		}
+		labels = updatedLabels
+		allowedUsers = feishuAllowedUsersForBotRef(bots, botRef)
+		platformCfg.Bots = bots
+		cfg.Platforms[string(platform.PlatformFeishu)] = platformCfg
+		return nil
+	})
+	return labels, allowedUsers, err
 }
 
 func removeIdentityFromFeishuBots(bots []config.FeishuBotConfig, keys []string, botRef string) ([]config.FeishuBotConfig, []string, error) {
 	if len(bots) == 0 {
 		return nil, nil, fmt.Errorf("未配置飞书机器人")
+	}
+	if len(bots) > 1 && strings.TrimSpace(botRef) == "" {
+		return nil, nil, fmt.Errorf("配置了多个飞书机器人，请使用 --bot <name|app_id> 明确目标机器人")
 	}
 	next := append([]config.FeishuBotConfig(nil), bots...)
 	labels := make([]string, 0, len(next))
@@ -195,9 +229,6 @@ func RenderFeishuIdentityRevoke(result FeishuIdentityRevokeResult) string {
 	lines := []string{"已取消飞书用户授权: " + result.Identity}
 	if len(result.Bots) > 0 {
 		lines = append(lines, "已移除机器人授权: "+strings.Join(result.Bots, ", "))
-	}
-	if result.Admin {
-		lines = append(lines, "已移出 admin_users")
 	}
 	return strings.Join(lines, "\n")
 }

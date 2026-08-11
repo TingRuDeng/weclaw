@@ -13,17 +13,17 @@ func (h *Handler) handleFeishuHelpCommand(ctx context.Context, msg platform.Inco
 	if msg.Platform != platform.PlatformFeishu || reply == nil || !reply.Capabilities().Buttons {
 		return false
 	}
-	isAdmin := h.isAdminMessage(msg)
-	section := feishuHelpSection(command, isAdmin)
-	choices := platformChoicesWithMetadata(feishuHelpChoices(section, isAdmin), feishuChoiceSessionMetadata(msg, routeUserID))
-	if err := reply.AskChoices(ctx, feishuHelpPrompt(section, isAdmin), choices); err != nil {
+	authorized := h.isAdminMessage(msg)
+	section := feishuHelpSection(command, authorized)
+	choices := platformChoicesWithMetadata(feishuHelpChoices(section, authorized), feishuChoiceSessionMetadata(msg, routeUserID))
+	if err := reply.AskChoices(ctx, feishuHelpPrompt(section, authorized), choices); err != nil {
 		log.Printf("[handler] failed to send feishu help card to %s: %v", msg.UserID, err)
 		return false
 	}
 	return true
 }
 
-func feishuHelpSection(command string, isAdmin bool) string {
+func feishuHelpSection(command string, authorized bool) string {
 	fields := strings.Fields(command)
 	if len(fields) != 2 || fields[0] != "/help" {
 		return ""
@@ -32,32 +32,36 @@ func feishuHelpSection(command string, isAdmin bool) string {
 	switch section {
 	case "common", "codex", "claude", "settings":
 		return section
-	case "admin":
-		if isAdmin {
+	case "manage":
+		if authorized {
 			return section
+		}
+	case "admin":
+		if authorized {
+			return "manage"
 		}
 	}
 	return ""
 }
 
-func feishuHelpPrompt(section string, isAdmin bool) string {
+func feishuHelpPrompt(section string, authorized bool) string {
 	titles := map[string]string{
 		"common":   "常用与任务",
 		"codex":    "Codex",
 		"claude":   "Claude",
 		"settings": "设置与进度",
-		"admin":    "管理员",
+		"manage":   "管理",
 	}
 	if title := titles[section]; title != "" {
 		return "WeClaw 帮助 · " + title + "\n请选择命令，点击后会直接执行。"
 	}
-	if isAdmin {
-		return "WeClaw 帮助\n请选择分类。管理员操作仅对管理员显示。"
+	if authorized {
+		return "WeClaw 帮助\n请选择分类。管理操作仅对当前机器人已授权账号显示。"
 	}
 	return "WeClaw 帮助\n请选择分类。"
 }
 
-func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
+func feishuHelpChoices(section string, authorized bool) []platform.Choice {
 	var choices []platform.Choice
 	switch section {
 	case "common":
@@ -103,8 +107,8 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/mode", Label: "确认模式"},
 			{ID: "/progress", Label: "进度模式"},
 		}
-	case "admin":
-		if isAdmin {
+	case "manage":
+		if authorized {
 			choices = []platform.Choice{
 				{ID: "/update", Label: "远程更新"},
 				{ID: "/restart", Label: "重启服务"},
@@ -124,8 +128,8 @@ func feishuHelpChoices(section string, isAdmin bool) []platform.Choice {
 			{ID: "/help claude", Label: "Claude"},
 			{ID: "/help settings", Label: "设置与进度"},
 		}
-		if isAdmin {
-			choices = append(choices, platform.Choice{ID: "/help admin", Label: "管理员"})
+		if authorized {
+			choices = append(choices, platform.Choice{ID: "/help manage", Label: "管理"})
 		}
 		return choices
 	}

@@ -81,12 +81,21 @@ func feishuIdentityAllowedByBot(record feishuIdentityRecord, accountID string, b
 }
 
 func feishuIdentityAuthKeys(record feishuIdentityRecord, accountID string) []string {
-	keys := []string{record.Key, record.UnionID, record.UserID, record.OpenID}
-	if accountOpenID := strings.TrimSpace(record.OpenIDs[accountID]); accountOpenID != "" {
-		keys = append(keys, accountOpenID)
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		keys := []string{record.Key, record.UnionID, record.UserID, record.OpenID}
+		for _, openID := range record.OpenIDs {
+			keys = append(keys, openID)
+		}
+		return uniqueTrimmedStrings(keys)
 	}
-	for _, openID := range record.OpenIDs {
-		keys = append(keys, openID)
+	accountOpenID := strings.TrimSpace(record.OpenIDs[accountID])
+	keys := []string{record.UnionID, record.UserID, accountOpenID}
+	// v1 早期记录没有账号到 open_id 的映射，只能在完全没有映射数据时兼容旧字段。
+	if len(record.OpenIDs) == 0 && stringSliceContains(record.Accounts, accountID) {
+		keys = append(keys, record.Key, record.OpenID)
+	} else if record.Key == record.UnionID || record.Key == record.UserID || record.Key == accountOpenID {
+		keys = append(keys, record.Key)
 	}
 	return uniqueTrimmedStrings(keys)
 }

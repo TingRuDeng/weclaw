@@ -39,14 +39,14 @@ func choicePendingDetail(choice string) string {
 	command := strings.ToLower(strings.TrimSpace(choice))
 	switch {
 	case command == "/cx cd" || strings.HasPrefix(command, "/cx cd "):
-		return "正在加载该工作空间的会话；如只有一个会话将自动切换，完成后将在本卡片更新结果。"
+		return "正在加载中，请稍后……"
 	case command == "/cx switch" || strings.HasPrefix(command, "/cx switch ") ||
 		command == "/cc switch" || strings.HasPrefix(command, "/cc switch "):
-		return "正在切换并接管，完成后将在本卡片更新结果。"
+		return "正在切换中，请稍后……"
 	case strings.HasPrefix(command, "/cx account confirm "):
-		return "正在检查全局任务和写入状态，并切换共享 Codex Host；完成后将在本卡片更新结果。"
+		return "正在切换中，请稍后……"
 	default:
-		return "正在处理，结果将单独发送。"
+		return "正在处理中，请稍后……"
 	}
 }
 

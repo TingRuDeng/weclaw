@@ -180,7 +180,7 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 	}
 }
 
-func TestBuildCardV2DoneWithoutContentExplainsMissingStructuredProgress(t *testing.T) {
+func TestBuildCardV2DoneWithoutContentRendersStatusOnly(t *testing.T) {
 	raw, err := buildCardV2(cardOptions{Status: cardStatusDone})
 	if err != nil {
 		t.Fatalf("buildCardV2 error: %v", err)
@@ -188,9 +188,8 @@ func TestBuildCardV2DoneWithoutContentExplainsMissingStructuredProgress(t *testi
 	card := decodeCardJSON(t, raw)
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**已完成**" ||
-		elements[1].(map[string]any)["content"] != taskCardNoStructuredProgress {
-		t.Fatalf("done card body=%#v, want explicit terminal state and empty-progress explanation", card["body"])
+	if len(elements) != 1 || elements[0].(map[string]any)["content"] != "**已完成**" {
+		t.Fatalf("done card body=%#v, want compact terminal status only", card["body"])
 	}
 	header := card["header"].(map[string]any)
 	if header["template"] != "green" {

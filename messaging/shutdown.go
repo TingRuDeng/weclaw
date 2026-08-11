@@ -42,7 +42,13 @@ func (h *Handler) Drain(ctx context.Context, force bool) (RuntimeDrainResult, er
 	if force {
 		for _, task := range tasks {
 			task.mu.Lock()
-			if task.phase != codexTaskTerminal {
+			preserveCodexObserver := task.phase != codexTaskTerminal &&
+				((task.externalReservation != nil && !task.inProcessCodexLifecycle) ||
+					(task.inProcessCodexLifecycle && task.detachCodexObserver != nil))
+			if preserveCodexObserver {
+				task.preserveRecoveryOnDrain = true
+				task.pending = pendingAgentTask{}
+			} else if task.phase != codexTaskTerminal {
 				task.phase = codexTaskStopping
 				task.stopRequested = true
 				task.pending = pendingAgentTask{}
@@ -57,7 +63,21 @@ func (h *Handler) Drain(ctx context.Context, force bool) (RuntimeDrainResult, er
 		return result, nil
 	}
 	for _, task := range tasks {
-		task.cancel()
+		task.mu.Lock()
+		detachObserver := task.preserveRecoveryOnDrain && task.inProcessCodexLifecycle && task.detachCodexObserver != nil
+		detachInteractions := task.preserveRecoveryOnDrain
+		interactionLease := task.interactionLease
+		detach := task.detachCodexObserver
+		cancel := task.cancel
+		task.mu.Unlock()
+		if detachInteractions {
+			interactionLease.forceDetach()
+		}
+		if detachObserver {
+			detach()
+			continue
+		}
+		cancel()
 	}
 	for _, task := range tasks {
 		select {

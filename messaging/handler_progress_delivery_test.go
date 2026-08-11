@@ -321,8 +321,8 @@ func TestStoppedBroadcastTaskDoesNotRenderFailureCard(t *testing.T) {
 	if reply.Stream.Failed != "" {
 		t.Fatalf("stopped broadcast rendered as failure: %q", reply.Stream.Failed)
 	}
-	if reply.Stream.Completed != progressNoStructuredRecord {
-		t.Fatalf("completed=%q, want explicit no-progress stopped card", reply.Stream.Completed)
+	if reply.Stream.Completed != "" {
+		t.Fatalf("completed=%q, want compact status-only stopped card", reply.Stream.Completed)
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "[slow] 任务已按请求停止。" {
 		t.Fatalf("texts=%#v, want one independent stopped result", reply.Texts)

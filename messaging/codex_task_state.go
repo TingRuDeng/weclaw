@@ -74,12 +74,32 @@ func (t *activeAgentTask) markCodexObservationInterrupted(threadID string, turnI
 	t.codexTurnID = turnID
 }
 
-func (t *activeAgentTask) replaceCodexThread(previousThreadID string, currentThreadID string) {
+func (t *activeAgentTask) replaceCodexThread(previousThreadID string, currentThreadID string) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.codexThreadID == previousThreadID {
 		t.codexThreadID = currentThreadID
+		t.trace = t.trace.WithThreadTurn(t.codexThreadID, t.codexTurnID)
 	}
+	progress := t.progress
+	trace := t.trace
+	t.mu.Unlock()
+	if progress != nil {
+		return progress.refreshActiveStreamRecoveryTrace(trace)
+	}
+	return nil
+}
+
+func (t *activeAgentTask) activeRecoveryReservationID() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	progress := t.progress
+	t.mu.Unlock()
+	if progress == nil {
+		return ""
+	}
+	return progress.activeRecoveryReservation()
 }
 
 func (t *activeAgentTask) markCodexRunning(binding agent.CodexThreadBinding) {

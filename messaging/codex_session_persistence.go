@@ -57,6 +57,8 @@ func (s *codexSessionStore) load() {
 		normalized := codexSessionBinding{
 			ActiveWorkspace: normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
 			Workspaces:      make(map[string]codexWorkspaceSession),
+			FollowRevision:  binding.FollowRevision,
+			Follower:        normalizeCodexFrontendFollower(binding.Follower),
 		}
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
@@ -68,10 +70,76 @@ func (s *codexSessionStore) load() {
 					session.ThreadID = ""
 					session.PendingNewThread = false
 					session.PendingFirstTurn = false
+					session.FirstTurnRecoveryThreadID = ""
+					session.FirstTurnRecoveryReservationID = ""
+					changed = true
+				}
+			}
+			session.ThreadID = strings.TrimSpace(session.ThreadID)
+			recoveryThreadID := strings.TrimSpace(session.FirstTurnRecoveryThreadID)
+			if recoveryThreadID != session.FirstTurnRecoveryThreadID {
+				changed = true
+			}
+			session.FirstTurnRecoveryThreadID = recoveryThreadID
+			recoveryReservationID := strings.TrimSpace(session.FirstTurnRecoveryReservationID)
+			if recoveryReservationID != session.FirstTurnRecoveryReservationID {
+				changed = true
+			}
+			session.FirstTurnRecoveryReservationID = recoveryReservationID
+			if session.ThreadID == "" || recoveryThreadID == session.ThreadID ||
+				recoveryThreadID == "" && recoveryReservationID != "" {
+				if recoveryThreadID != "" || recoveryReservationID != "" {
+					changed = true
+				}
+				session.FirstTurnRecoveryThreadID = ""
+				session.FirstTurnRecoveryReservationID = ""
+			}
+			session.ReleasedThreadID = strings.TrimSpace(session.ReleasedThreadID)
+			session.ReleasedRecoveryThreadID = strings.TrimSpace(session.ReleasedRecoveryThreadID)
+			session.ReleasedRecoveryReservationID = strings.TrimSpace(session.ReleasedRecoveryReservationID)
+			if session.ReleasePending {
+				// ReleasePending 是已持久化的用户意图。旧进程未走到卡片冻结或提交即崩溃时，
+				// 新进程把它提升为正式墓碑，再由 outbox 精确完成非终态冻结。
+				session.ReleasePending = false
+				session.Released = true
+				changed = true
+			}
+			if session.Released && session.ReleasedThreadID == "" && session.ThreadID != "" {
+				session.ReleasedThreadID = session.ThreadID
+				session.ThreadID = ""
+				changed = true
+			} else if !session.Released && (session.ReleasedThreadID != "" ||
+				session.ReleasedRecoveryThreadID != "" || session.ReleasedRecoveryReservationID != "") {
+				clearCodexWorkspaceReleaseState(&session)
+				changed = true
+			}
+			if session.Released {
+				if session.ThreadID != "" || session.PendingNewThread || session.PendingFirstTurn ||
+					session.FirstTurnRecoveryThreadID != "" || session.FirstTurnRecoveryReservationID != "" {
+					session.ThreadID = ""
+					session.PendingNewThread = false
+					session.PendingFirstTurn = false
+					session.FirstTurnRecoveryThreadID = ""
+					session.FirstTurnRecoveryReservationID = ""
+					changed = true
+				}
+				if session.ReleasedRecoveryReservationID == "" && session.ReleasedRecoveryThreadID != "" {
+					session.ReleasedRecoveryThreadID = ""
 					changed = true
 				}
 			}
 			normalized.Workspaces[workspaceRoot] = session
+		}
+		if normalized.Follower != nil {
+			target := normalized.Workspaces[normalized.Follower.WorkspaceRoot]
+			if codexWorkspaceReleaseIntent(target) || strings.TrimSpace(target.ThreadID) != normalized.Follower.ThreadID {
+				normalized.Follower = nil
+				normalized.FollowRevision++
+				changed = true
+			}
+		} else if binding.Follower != nil {
+			normalized.FollowRevision++
+			changed = true
 		}
 		bindings[migratedKey] = mergeCodexSessionBinding(bindings[migratedKey], normalized)
 	}
@@ -95,6 +163,11 @@ func mergeCodexSessionBinding(current codexSessionBinding, incoming codexSession
 	}
 	if current.ActiveWorkspace == "" {
 		current.ActiveWorkspace = incoming.ActiveWorkspace
+	}
+	if incoming.FollowRevision > current.FollowRevision ||
+		incoming.FollowRevision == current.FollowRevision && incoming.Follower != nil && current.Follower == nil {
+		current.FollowRevision = incoming.FollowRevision
+		current.Follower = cloneCodexFrontendFollower(incoming.Follower)
 	}
 	for workspaceRoot, session := range incoming.Workspaces {
 		current.Workspaces[workspaceRoot] = mergeCodexWorkspaceSession(current.Workspaces[workspaceRoot], session)
@@ -157,7 +230,10 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaces[workspaceRoot] = session
 		}
-		state.Bindings[key] = codexSessionBinding{ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces}
+		state.Bindings[key] = codexSessionBinding{
+			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
+			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
+		}
 	}
 	return filePath, state
 }

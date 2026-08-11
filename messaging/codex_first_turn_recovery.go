@@ -15,6 +15,7 @@ func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 	conversationID string,
 	oldThreadID string,
 	newThreadID string,
+	recoveryReservationID ...string,
 ) error {
 	bindingKey = strings.TrimSpace(bindingKey)
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
@@ -51,14 +52,30 @@ func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 		session.ThreadID = ""
 		session.PendingNewThread = false
 		session.PendingFirstTurn = false
+		session.FirstTurnRecoveryThreadID = ""
+		session.FirstTurnRecoveryReservationID = ""
 		session.UpdatedAt = now.Format(time.RFC3339)
 		binding.Workspaces[root] = session
 	}
 	currentSession.ThreadID = newThreadID
 	currentSession.PendingNewThread = false
 	currentSession.PendingFirstTurn = true
+	currentSession.FirstTurnRecoveryThreadID = oldThreadID
+	if len(recoveryReservationID) > 0 {
+		currentSession.FirstTurnRecoveryReservationID = strings.TrimSpace(recoveryReservationID[0])
+	} else {
+		currentSession.FirstTurnRecoveryReservationID = ""
+	}
 	currentSession.UpdatedAt = now.Format(time.RFC3339)
 	binding.Workspaces[workspaceRoot] = currentSession
+	if binding.Follower != nil &&
+		normalizeCodexWorkspaceRoot(binding.Follower.WorkspaceRoot) == workspaceRoot &&
+		strings.TrimSpace(binding.Follower.ThreadID) == oldThreadID {
+		binding.Follower = cloneCodexFrontendFollower(binding.Follower)
+		binding.Follower.ThreadID = newThreadID
+		binding.Follower.UpdatedAt = now.Format(time.RFC3339)
+		binding.FollowRevision++
+	}
 	nextBindings[bindingKey] = binding
 
 	state := codexSessionState{

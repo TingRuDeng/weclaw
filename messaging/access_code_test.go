@@ -3,6 +3,7 @@ package messaging
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -26,7 +27,7 @@ func TestObserveDeniedIdentityIssuesWechatAccessCode(t *testing.T) {
 	}
 }
 
-func TestApproveAccessCodeWritesWechatAllowedUserAndAdmin(t *testing.T) {
+func TestApproveAccessCodeWritesOnlyWechatAllowedUser(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	cfg := config.DefaultConfig()
 	cfg.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{}
@@ -41,13 +42,13 @@ func TestApproveAccessCodeWritesWechatAllowedUserAndAdmin(t *testing.T) {
 		t.Fatalf("issueAccessCode error=%v", err)
 	}
 
-	result, err := ApproveAccessCode(AccessCodeApprovalRequest{Code: record.Code, Admin: true})
+	result, err := ApproveAccessCode(AccessCodeApprovalRequest{Code: record.Code})
 	if err != nil {
 		t.Fatalf("ApproveAccessCode error: %v", err)
 	}
 
-	if result.Identity != "wx_user@im.wechat" || result.Platform != string(platform.PlatformWeChat) || !result.Admin {
-		t.Fatalf("result=%#v, want approved wechat admin", result)
+	if result.Identity != "wx_user@im.wechat" || result.Platform != string(platform.PlatformWeChat) {
+		t.Fatalf("result=%#v, want approved wechat user", result)
 	}
 	loaded, loadErr := config.Load()
 	if loadErr != nil {
@@ -56,11 +57,50 @@ func TestApproveAccessCodeWritesWechatAllowedUserAndAdmin(t *testing.T) {
 	if !stringSliceContains(loaded.Platforms[string(platform.PlatformWeChat)].AllowedUsers, "wx_user@im.wechat") {
 		t.Fatalf("wechat allowed_users=%#v, want user", loaded.Platforms[string(platform.PlatformWeChat)].AllowedUsers)
 	}
-	if !stringSliceContains(loaded.AdminUsers, "wx_user@im.wechat") {
-		t.Fatalf("admin_users=%#v, want user", loaded.AdminUsers)
+	if len(loaded.LegacyAdminUsers) != 0 {
+		t.Fatalf("legacy admin_users=%#v, must not be written by approval", loaded.LegacyAdminUsers)
 	}
 	if _, err := ApproveAccessCode(AccessCodeApprovalRequest{Code: record.Code}); err == nil {
 		t.Fatal("used access code should be cleared")
+	}
+}
+
+func TestApproveAccessCodePreservesLatestUnrelatedConfigMutation(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	cfg.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{}
+	cfg.Platforms[string(platform.PlatformFeishu)] = config.PlatformConfig{Bots: []config.FeishuBotConfig{{
+		Name: "main", AppID: "cli_a",
+	}}}
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	record, err := issueAccessCode(DefaultAccessCodeFile(), platform.IncomingMessage{
+		Platform: platform.PlatformWeChat, UserID: "wx_user@im.wechat",
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Update(func(latest *config.Config) error {
+		platformCfg := latest.Platforms[string(platform.PlatformFeishu)]
+		platformCfg.Bots[0].AllowedUsers = []string{"ou_feishu"}
+		latest.Platforms[string(platform.PlatformFeishu)] = platformCfg
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApproveAccessCode(AccessCodeApprovalRequest{Code: record.Code}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Platforms[string(platform.PlatformFeishu)].Bots[0].AllowedUsers; !reflect.DeepEqual(got, []string{"ou_feishu"}) {
+		t.Fatalf("access-code approval overwrote latest Feishu config: %#v", got)
+	}
+	if got := loaded.Platforms[string(platform.PlatformWeChat)].AllowedUsers; !reflect.DeepEqual(got, []string{"wx_user@im.wechat"}) {
+		t.Fatalf("wechat approval missing: %#v", got)
 	}
 }
 

@@ -69,12 +69,56 @@ func TestMergeViewOverwritesNewSecret(t *testing.T) {
 	}
 }
 
-func TestMergeViewUpdatesAdminUsers(t *testing.T) {
-	current := &config.Config{AdminUsers: []string{"old_admin"}}
+func TestWebViewHidesAndPreservesLegacyAdminUsers(t *testing.T) {
+	current := &config.Config{LegacyAdminUsers: []string{"old_admin"}}
 	view := redactConfig(current)
-	view.AdminUsers = []string{"new_admin"}
-	if got := mergeView(current, view).AdminUsers; !reflect.DeepEqual(got, []string{"new_admin"}) {
-		t.Fatalf("AdminUsers=%#v, want new_admin", got)
+	blob, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "admin_users") || strings.Contains(string(blob), "old_admin") {
+		t.Fatalf("web view exposed legacy admin_users: %s", blob)
+	}
+	if got := mergeView(current, view).LegacyAdminUsers; !reflect.DeepEqual(got, []string{"old_admin"}) {
+		t.Fatalf("LegacyAdminUsers=%#v, want preserved old_admin", got)
+	}
+}
+
+func TestConfigServiceRejectsStaleViewWithoutRestoringRevokedAccess(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	base := config.DefaultConfig()
+	base.Platforms["feishu"] = config.PlatformConfig{Bots: []config.FeishuBotConfig{{
+		Name: "main", AppID: "cli_a", AllowedUsers: []string{"ou_user"},
+	}}}
+	if err := config.Save(base); err != nil {
+		t.Fatal(err)
+	}
+	service := newConfigService()
+	stale, err := service.view()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Update(func(cfg *config.Config) error {
+		platformCfg := cfg.Platforms["feishu"]
+		platformCfg.Bots[0].AllowedUsers = nil
+		cfg.Platforms["feishu"] = platformCfg
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stale.UpdateSource = "gitee"
+	if _, err := service.apply(stale); err == nil || !strings.Contains(err.Error(), "配置已变化") {
+		t.Fatalf("stale apply error=%v, want explicit conflict", err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Platforms["feishu"].Bots[0].AllowedUsers; len(got) != 0 {
+		t.Fatalf("stale web view restored revoked allowed_users: %#v", got)
+	}
+	if loaded.UpdateSource != "auto" {
+		t.Fatalf("stale web view partially updated config: source=%q", loaded.UpdateSource)
 	}
 }
 

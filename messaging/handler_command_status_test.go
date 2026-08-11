@@ -127,25 +127,24 @@ func TestFeishuHelpSendsChoiceCard(t *testing.T) {
 	}
 }
 
-func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
+func TestFeishuHelpShowsManagementChoicesForAuthorizedUser(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 	rootReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_admin",
 		MessageID: "feishu-admin-help-1",
 		Text:      "/help",
 		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
-	}, rootReply)
+	}, "on_admin"), rootReply)
 
 	if len(rootReply.Choices) != 1 {
 		t.Fatalf("choices=%#v, want one help card", rootReply.Choices)
 	}
 	got := helpChoiceIDs(rootReply.Choices[0].Choices)
-	if !got["/help admin"] {
-		t.Fatalf("admin help choices=%#v, want admin category", rootReply.Choices[0].Choices)
+	if !got["/help manage"] {
+		t.Fatalf("management help choices=%#v, want management category", rootReply.Choices[0].Choices)
 	}
 	for _, hidden := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list"} {
 		if got[hidden] || strings.Contains(rootReply.Choices[0].Prompt, hidden) {
@@ -154,13 +153,13 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 	}
 
 	adminReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_admin",
 		MessageID: "feishu-admin-help-2",
-		Text:      "/help admin",
+		Text:      "/help manage",
 		Metadata:  map[string]string{"feishu_union_id": "on_admin"},
-	}, adminReply)
+	}, "on_admin"), adminReply)
 	got = helpChoiceIDs(adminReply.Choices[0].Choices)
 	for _, want := range []string{"/update", "/restart", "/feishu users pending", "/feishu users list", "/feishu users", "/cx workspace", "/cc workspace", "/cx session", "/cc session"} {
 		if !got[want] {
@@ -170,8 +169,8 @@ func TestFeishuHelpShowsAdminChoicesOnlyForAdmin(t *testing.T) {
 	if !got["/help"] {
 		t.Fatalf("admin help choices=%#v, want return action", adminReply.Choices[0].Choices)
 	}
-	if !strings.Contains(adminReply.Choices[0].Prompt, "管理员") {
-		t.Fatalf("admin help prompt=%q, want admin title", adminReply.Choices[0].Prompt)
+	if !strings.Contains(adminReply.Choices[0].Prompt, "管理") {
+		t.Fatalf("management help prompt=%q, want management title", adminReply.Choices[0].Prompt)
 	}
 }
 
@@ -293,9 +292,8 @@ func TestFeishuHelpSettingsLabelsModelScope(t *testing.T) {
 	}
 }
 
-func TestHelpHidesAdminCommandsForNonAdmin(t *testing.T) {
+func TestHelpHidesManagementCommandsWithoutRegistryCapability(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 	feishuReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	wechatReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
@@ -314,7 +312,7 @@ func TestHelpHidesAdminCommandsForNonAdmin(t *testing.T) {
 	}, wechatReply)
 
 	got := helpChoiceIDs(feishuReply.Choices[0].Choices)
-	for _, hidden := range []string{"/help admin", "/update", "/restart", "/feishu users pending", "/feishu users list"} {
+	for _, hidden := range []string{"/help manage", "/update", "/restart", "/feishu users pending", "/feishu users list"} {
 		if got[hidden] {
 			t.Fatalf("non-admin feishu help choices=%#v, should hide %q", feishuReply.Choices[0].Choices, hidden)
 		}
@@ -331,31 +329,30 @@ func TestHelpHidesAdminCommandsForNonAdmin(t *testing.T) {
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-user-help-admin-1",
-		Text:      "/help admin",
+		Text:      "/help manage",
 		Metadata:  map[string]string{"feishu_union_id": "on_user"},
 	}, directAdminReply)
-	if got := helpChoiceIDs(directAdminReply.Choices[0].Choices); got["/help admin"] || got["/update"] || got["/restart"] {
+	if got := helpChoiceIDs(directAdminReply.Choices[0].Choices); got["/help manage"] || got["/update"] || got["/restart"] {
 		t.Fatalf("non-admin direct admin help=%#v, should fall back to public help root", directAdminReply.Choices[0].Choices)
 	}
 }
 
-func TestWeChatHelpShowsAdminCommandsForAdmin(t *testing.T) {
+func TestWeChatHelpShowsManagementCommandsForAuthorizedUser(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"wx_admin"})
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformWeChat,
 		UserID:    "wx_admin",
 		MessageID: "wechat-admin-help-1",
 		Text:      "/help",
-	}, reply)
+	}, "wx_admin"), reply)
 
 	if len(reply.Texts) != 1 {
 		t.Fatalf("texts=%#v, want one help text", reply.Texts)
 	}
 	for _, want := range []string{
-		"管理员：",
+		"管理操作：",
 		"/update 远程更新 WeClaw",
 		"/restart 重启 WeClaw",
 		"/feishu users pending 查看待授权飞书用户",
@@ -406,10 +403,10 @@ func TestBuildCodexSessionHelpTextIncludesDescriptions(t *testing.T) {
 		"/cx new 新建并绑定当前工作空间会话",
 		"/cx archive current|<编号> 归档当前或列表中的空闲会话",
 		"/cx rename current|<编号> <名称> 重命名当前或列表中的会话",
-		"/cx session remove <编号|threadId> 管理员私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
-		"/cx session restore <threadId> 管理员私聊恢复已隐藏会话",
-		"/cx workspace add <路径> 管理员私聊登记已有工作目录",
-		"/cx workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
+		"/cx session remove <编号|threadId> 已授权账号私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
+		"/cx session restore <threadId> 已授权账号私聊恢复已隐藏会话",
+		"/cx workspace add <路径> 已授权账号私聊登记已有工作目录",
+		"/cx workspace remove <编号|路径> 已授权账号私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cx pwd 查看当前工作空间",
 		"/cx status 查看当前工作空间、会话、任务、账号和运行状态",
 		"/cx quota 查看 Codex 账号额度",
@@ -441,10 +438,10 @@ func TestBuildClaudeSessionHelpTextIncludesCompleteCommands(t *testing.T) {
 		"/cc whoami 查看当前 workspace/session 绑定",
 		"/cc new 新建当前工作空间会话",
 		"/cc rename current|<编号> <名称> 重命名当前或列表中的会话",
-		"/cc session remove <编号|sessionId> 管理员私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
-		"/cc session restore <sessionId> 管理员私聊恢复已隐藏会话",
-		"/cc workspace add <路径> 管理员私聊登记已有工作目录",
-		"/cc workspace remove <编号|路径> 管理员私聊从 WeClaw 导航移除目录，不删除目录或历史",
+		"/cc session remove <编号|sessionId> 已授权账号私聊从 WeClaw 导航隐藏空闲且未绑定的会话",
+		"/cc session restore <sessionId> 已授权账号私聊恢复已隐藏会话",
+		"/cc workspace add <路径> 已授权账号私聊登记已有工作目录",
+		"/cc workspace remove <编号|路径> 已授权账号私聊从 WeClaw 导航移除目录，不删除目录或历史",
 		"/cc status 查看 binding、共享 ClaudeHost 和 writer 状态",
 		"/cc quota 查看 Claude 账号额度",
 		"/cc model status 查看新建 Claude 会话的默认模型配置",
@@ -459,7 +456,7 @@ func TestBuildClaudeSessionHelpTextIncludesCompleteCommands(t *testing.T) {
 
 func TestAdminHelpDocumentsDirectFeishuApproval(t *testing.T) {
 	text := buildHelpTextForAdmin(true)
-	if !strings.Contains(text, "/feishu users approve <用户ID> [--admin]") {
+	if !strings.Contains(text, "/feishu users approve <用户ID>") {
 		t.Fatalf("admin help=%q, want direct Feishu approval command", text)
 	}
 	for _, want := range []string{

@@ -37,7 +37,7 @@ func (h *Handler) codexWorkspaceGroups(bindingKey string) ([]codexWorkspaceGroup
 }
 
 func (h *Handler) codexWorkspaceGroupsForUser(bindingKey string, actorUserID string) ([]codexWorkspaceGroup, error) {
-	return h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, h.isAdminUser(actorUserID))
+	return h.codexWorkspaceGroupsForAccess(bindingKey, actorUserID, false)
 }
 
 func (h *Handler) codexWorkspaceGroupsForAccess(bindingKey string, actorUserID string, admin bool) ([]codexWorkspaceGroup, error) {

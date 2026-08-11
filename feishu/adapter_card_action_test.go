@@ -77,7 +77,7 @@ func TestHandleCardActionEventDispatchesRawCommand(t *testing.T) {
 	if resp.Toast.Content != "已受理，正在处理" {
 		t.Fatalf("toast=%q, want pending status", resp.Toast.Content)
 	}
-	assertPendingChoiceCard(t, resp.Card, "账本 App 开发", "正在处理")
+	assertPendingChoiceCard(t, resp.Card, "账本 App 开发", "正在处理中，请稍后……")
 	select {
 	case msg := <-dispatched:
 		if msg.RawCommand == nil || msg.RawCommand.Action != cardActionChoice || msg.RawCommand.Value["choice"] != "1" {

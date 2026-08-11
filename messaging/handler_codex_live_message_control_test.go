@@ -191,7 +191,7 @@ func TestCodexDesktopStopWaitsForTerminalAndKeepsPending(t *testing.T) {
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "下一条", run: func() {}})
 	text, handled := h.interruptExternalCodexTask(externalCodexTaskCommand{ctx: context.Background(), key: route.conversationID, agent: ag, actor: "user-1"})
-	if !handled || !strings.Contains(text, "等待任务终态") {
+	if !handled || !strings.Contains(text, "等待任务结束") {
 		t.Fatalf("handled=%v text=%q", handled, text)
 	}
 	if taskPhase(task) != codexTaskStopping || task.pendingGuide() != "下一条" {
@@ -255,7 +255,7 @@ func TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt(t *testing.T) {
 	first, firstHandled := h.interruptExternalCodexTask(req)
 	second, secondHandled := h.interruptExternalCodexTask(req)
 
-	if !firstHandled || !secondHandled || !strings.Contains(first, "等待任务终态") || !strings.Contains(second, "等待任务终态") {
+	if !firstHandled || !secondHandled || !strings.Contains(first, "等待任务结束") || !strings.Contains(second, "等待任务结束") {
 		t.Fatalf("first=%q second=%q", first, second)
 	}
 	if ag.interruptCalls != 1 {

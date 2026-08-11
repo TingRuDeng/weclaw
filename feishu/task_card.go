@@ -202,7 +202,7 @@ func (r *taskCardRegistry) update(cardID string, status string, content string) 
 	state.updatedAt = r.nowOrDefault()
 }
 
-func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, content string) (cardOptions, bool) {
+func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, content string, replaceContent bool) (cardOptions, bool) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
 		return cardOptions{}, false
 	}
@@ -215,7 +215,14 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 	if strings.TrimSpace(status) != "" {
 		normalized := normalizeCardStatus(status)
 		state.status = normalized
-		if normalized == cardStatusSuperseded && strings.TrimSpace(content) != "" {
+		if replaceContent && (normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped) {
+			state.content = strings.TrimSpace(content)
+			if state.content == "" {
+				state.summary = ""
+				state.collapsible = false
+				state.expanded = false
+			}
+		} else if normalized == cardStatusSuperseded && strings.TrimSpace(content) != "" {
 			state.content = content
 		}
 		if normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped || normalized == cardStatusSuperseded {

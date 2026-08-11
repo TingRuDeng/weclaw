@@ -33,7 +33,7 @@ func TestCodexWorkspaceGroupsRespectAllowedRootsForOrdinaryUser(t *testing.T) {
 	}
 }
 
-func TestCodexWorkspaceGroupsBypassAllowedRootsForAdmin(t *testing.T) {
+func TestCodexWorkspaceGroupsBypassAllowedRootsForAuthorizedAccess(t *testing.T) {
 	h := NewHandler(nil, nil)
 	allowed := filepath.Join(t.TempDir(), "allowed")
 	blocked := filepath.Join(t.TempDir(), "blocked")
@@ -42,9 +42,8 @@ func TestCodexWorkspaceGroupsBypassAllowedRootsForAdmin(t *testing.T) {
 	writeCodexAppWorkspaceState(t, codexDir, []string{allowed, blocked}, []string{allowed, blocked})
 	h.SetCodexLocalSessionDir(codexDir)
 	h.SetAllowedWorkspaceRoots([]string{allowed})
-	h.SetAdminUsers([]string{"admin-1"})
 
-	groups, err := h.codexWorkspaceGroupsForUser(codexBindingKey("admin-1", "codex"), "admin-1")
+	groups, err := h.codexWorkspaceGroupsForAccess(codexBindingKey("admin-1", "codex"), "admin-1", true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -92,12 +92,15 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 			return codexSessionAcquireResult{}, err
 		}
 	}
+	follower, setFollower := codexFollowerFromAcquire(req)
 	committed, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
 		BindingKey:       req.route.bindingKey,
 		WorkspaceRoot:    req.route.workspaceRoot,
 		TargetThreadID:   req.route.threadID,
 		ConversationID:   req.route.conversationID,
 		PendingFirstTurn: req.pendingFirstTurn,
+		SetFollower:      setFollower,
+		Follower:         follower,
 		Expected:         locked,
 	})
 	if err != nil {

@@ -12,7 +12,6 @@ import (
 type feishuUsersApproveCodeOptions struct {
 	Code        string
 	BotRef      string
-	Admin       bool
 	DisplayName string
 }
 
@@ -21,7 +20,7 @@ func validateFeishuUsersApproveCodeArgs(cmd *cobra.Command, args []string) error
 	if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 		return nil
 	}
-	return fmt.Errorf("用法: weclaw feishu users approve-code <授权码> [--bot <name|app_id>] [--admin] [--name <显示名>]")
+	return fmt.Errorf("用法: weclaw feishu users approve-code <授权码> [--bot <name|app_id>] [--name <显示名>]")
 }
 
 // runFeishuUsersApproveCode 使用短期授权码完成用户授权。
@@ -29,7 +28,6 @@ func runFeishuUsersApproveCode(opts feishuUsersApproveCodeOptions) error {
 	result, err := messaging.ApproveFeishuIdentityByCode(messaging.FeishuIdentityApproveCodeRequest{
 		Code:        opts.Code,
 		BotRef:      opts.BotRef,
-		Admin:       opts.Admin,
 		DisplayName: opts.DisplayName,
 	})
 	if err != nil {

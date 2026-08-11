@@ -7,7 +7,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
-func (h *Handler) renderFeishuIdentityViews(title string, pendingOnly bool) string {
+func (h *Handler) renderFeishuIdentityViewsForAccount(title string, pendingOnly bool, accountID string) string {
 	store := h.ensureFeishuIdentities()
 	if err := store.LoadError(); err != nil {
 		return fmt.Sprintf("读取飞书身份状态失败: %v", err)
@@ -15,6 +15,7 @@ func (h *Handler) renderFeishuIdentityViews(title string, pendingOnly bool) stri
 	cfg, cfgOK := loadFeishuIdentityConfig()
 	labels := feishuBotAccountLabelsForConfig(cfg, cfgOK)
 	views := feishuIdentityViewsForMessage(store.ListRecords(), cfg, cfgOK, pendingOnly)
+	views = filterFeishuIdentityViewsForAccount(views, accountID, pendingOnly)
 	if len(views) == 0 {
 		return title + ": 暂无。"
 	}
@@ -23,6 +24,37 @@ func (h *Handler) renderFeishuIdentityViews(title string, pendingOnly bool) stri
 		lines = append(lines, renderFeishuIdentityViewForMessage(view, labels, pendingOnly)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func filterFeishuIdentityViewsForAccount(views []FeishuIdentityView, accountID string, pendingOnly bool) []FeishuIdentityView {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return views
+	}
+	filtered := make([]FeishuIdentityView, 0, len(views))
+	for _, view := range views {
+		if !stringSliceContains(view.Accounts, accountID) {
+			continue
+		}
+		view.Accounts = []string{accountID}
+		view.AuthorizedAccounts = filterIdentityAccount(view.AuthorizedAccounts, accountID)
+		view.UnauthorizedAccounts = filterIdentityAccount(view.UnauthorizedAccounts, accountID)
+		if pendingOnly && len(view.UnauthorizedAccounts) == 0 {
+			continue
+		}
+		if !pendingOnly && len(view.AuthorizedAccounts) == 0 {
+			continue
+		}
+		filtered = append(filtered, view)
+	}
+	return filtered
+}
+
+func filterIdentityAccount(accounts []string, accountID string) []string {
+	if stringSliceContains(accounts, accountID) {
+		return []string{accountID}
+	}
+	return nil
 }
 
 func feishuIdentityViewsForMessage(records []feishuIdentityRecord, cfg config.Config, cfgOK bool, pendingOnly bool) []FeishuIdentityView {
@@ -44,7 +76,6 @@ func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[stri
 	lines := []string{"- " + view.Key}
 	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		lines = append(lines, "   已授权机器人: "+strings.Join(feishuAccountLabels(view.AuthorizedAccounts, labels), ", "))
-		lines = append(lines, "   用户类型: "+feishuIdentityUserTypeForMessage(view))
 	}
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		lines = append(lines, "   待授权机器人: "+strings.Join(feishuAccountLabels(view.UnauthorizedAccounts, labels), ", "))
@@ -54,13 +85,6 @@ func renderFeishuIdentityViewForMessage(view FeishuIdentityView, labels map[stri
 	}
 	lines = append(lines, feishuIdentityActionLines(view, showApprovalCode)...)
 	return lines
-}
-
-func feishuIdentityUserTypeForMessage(view FeishuIdentityView) string {
-	if view.Admin {
-		return "管理员"
-	}
-	return "普通用户"
 }
 
 func feishuIdentityActionLines(view FeishuIdentityView, showApprovalCode bool) []string {
@@ -78,9 +102,6 @@ func feishuIdentityAuthCodeLines(view FeishuIdentityView) []string {
 		"   授权码: " + view.AuthCode,
 		"   授权命令: /feishu users approve-code " + view.AuthCode,
 	}
-	if strings.TrimSpace(view.UnionID) != "" {
-		lines = append(lines, "   授权并设为管理员: /feishu users approve-code "+view.AuthCode+" --admin")
-	}
 	return lines
 }
 
@@ -92,12 +113,6 @@ func feishuIdentityApproveHintLines(view FeishuIdentityView) []string {
 	lines := []string{
 		"   授权命令: /feishu users approve " + selector,
 		"   授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。",
-	}
-	if strings.TrimSpace(view.UnionID) != "" {
-		lines = append(lines,
-			"   管理员命令: /feishu users approve "+view.UnionID+" --admin",
-			"   管理员说明: 需要同时设为管理员时执行上面的管理员命令。",
-		)
 	}
 	return lines
 }

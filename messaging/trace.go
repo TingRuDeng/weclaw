@@ -127,9 +127,9 @@ func (t *activeAgentTask) setTraceConversation(conversationID string, sessionID 
 	t.mu.Unlock()
 }
 
-func (t *activeAgentTask) setTraceThreadTurn(threadID string, turnID string) observability.TraceContext {
+func (t *activeAgentTask) setTraceThreadTurn(threadID string, turnID string) (observability.TraceContext, error) {
 	if t == nil {
-		return observability.TraceContext{}
+		return observability.TraceContext{}, nil
 	}
 	t.mu.Lock()
 	if strings.TrimSpace(threadID) != "" {
@@ -140,6 +140,10 @@ func (t *activeAgentTask) setTraceThreadTurn(threadID string, turnID string) obs
 	}
 	t.trace = t.trace.WithThreadTurn(t.codexThreadID, t.codexTurnID)
 	trace := t.trace
+	progress := t.progress
 	t.mu.Unlock()
-	return trace
+	if progress != nil {
+		return trace, progress.refreshActiveStreamRecoveryTrace(trace)
+	}
+	return trace, nil
 }

@@ -11,6 +11,8 @@ import (
 
 const queuedAgentMessage = "已排队，将在当前任务结束后自动执行。"
 
+const sharedCodexStopAccepted = "已发送停止请求；这会同时停止本地 Codex 和当前消息窗口中的共享任务，正在等待任务结束。"
+
 type taskCommandRequest struct {
 	ctx             context.Context
 	platformName    platform.PlatformName
@@ -228,7 +230,7 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 	case taskStopTerminal:
 		return "当前任务已经结束，无需停止。", true
 	case taskStopAlreadyRequested:
-		return "已发送停止请求，等待任务终态。", true
+		return sharedCodexStopAccepted, true
 	}
 	if err := runtimeAg.InterruptCodexThread(req.ctx, req.key, target.threadID, target.turnID); err != nil {
 		target.task.rollbackRemoteStop()
@@ -237,7 +239,7 @@ func (h *Handler) interruptExternalCodexTask(req externalCodexTaskCommand) (stri
 	if target.task.commitRemoteStop() == taskStopTerminal {
 		return "当前任务已经结束，无需停止。", true
 	}
-	return "已发送停止请求，等待任务终态。", true
+	return sharedCodexStopAccepted, true
 }
 
 // handleCancelCommand 已并入 /cancel(撤回暂存) 与 /stop(停止运行) 两个独立命令，保留占位以便检索历史语义。

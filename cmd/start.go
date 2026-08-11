@@ -2,12 +2,18 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 
 	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/spf13/cobra"
 )
+
+const daemonClaudePreflightEnv = "WECLAW_DAEMON_CLAUDE_PREFLIGHT"
 
 var (
 	foregroundFlag bool
@@ -86,10 +92,40 @@ func configuredStartPreflight() func(context.Context, *config.Config) error {
 
 // preflightDaemonChildConfig 只复核配置与命令路径，避免在获取运行锁前重复启动 ACP。
 func preflightDaemonChildConfig(_ context.Context, cfg *config.Config) error {
-	return cfg.PreflightClaudeACPAgents(config.ClaudeACPPreflightOptions{
+	if err := cfg.PreflightClaudeACPAgents(config.ClaudeACPPreflightOptions{
 		LookPath: config.LookPath,
 		Probe:    func(string, config.AgentConfig) error { return nil },
-	})
+	}); err != nil {
+		return err
+	}
+	expected := strings.TrimSpace(os.Getenv(daemonClaudePreflightEnv))
+	if expected == "" {
+		return fmt.Errorf("后台子进程缺少父进程 Claude 预检指纹，请重新执行 weclaw start")
+	}
+	actual, err := claudePreflightFingerprint(cfg)
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return fmt.Errorf("Claude 配置在父进程预检后发生变化，请重新执行 weclaw start")
+	}
+	return nil
+}
+
+func claudePreflightFingerprint(cfg *config.Config) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("Claude 预检配置为空")
+	}
+	agentCfg, present := cfg.Agents["claude"]
+	payload, err := json.Marshal(struct {
+		Present bool               `json:"present"`
+		Agent   config.AgentConfig `json:"agent"`
+	}{Present: present, Agent: agentCfg})
+	if err != nil {
+		return "", fmt.Errorf("生成 Claude 预检指纹: %w", err)
+	}
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("sha256:%x", sum[:]), nil
 }
 
 // prepareStart 固化一次配置快照，避免停止服务前后重复加载配置。
@@ -116,16 +152,62 @@ func preflightStartConfig(ctx context.Context, cfg *config.Config) error {
 	if err != nil || !modified {
 		return err
 	}
-	return persistDetectedStartConfig(modified, cfg, config.Save)
+	return persistDetectedStartConfig(modified, cfg, config.Update)
 }
 
 // persistDetectedStartConfig 确保后台子进程能重新加载同一份预检配置。
-func persistDetectedStartConfig(modified bool, cfg *config.Config, save func(*config.Config) error) error {
+func persistDetectedStartConfig(modified bool, cfg *config.Config, update func(func(*config.Config) error) error) error {
 	if !modified {
 		return nil
 	}
-	if err := save(cfg); err != nil {
+	var committed *config.Config
+	if err := update(func(latest *config.Config) error {
+		config.DetectAndConfigure(latest)
+		if cfg != nil {
+			if _, err := applyPreflightedClaudeConfig(cfg, latest); err != nil {
+				return err
+			}
+		}
+		committed = latest
+		return nil
+	}); err != nil {
 		return fmt.Errorf("保存自动探测配置失败: %w", err)
 	}
+	if cfg != nil && committed != nil {
+		*cfg = *committed
+	}
 	return nil
+}
+
+// applyPreflightedClaudeConfig 只接受与已完成 ACP 能力握手完全相同的 Claude 配置。
+// command 可从别名解析为同一绝对路径；其它字段变化必须重新执行一次 start 预检。
+func applyPreflightedClaudeConfig(preflighted *config.Config, latest *config.Config) (bool, error) {
+	if preflighted == nil || latest == nil {
+		return false, nil
+	}
+	want, wantOK := preflighted.Agents["claude"]
+	got, gotOK := latest.Agents["claude"]
+	if !wantOK || !gotOK {
+		if wantOK == gotOK {
+			return false, nil
+		}
+		return false, fmt.Errorf("Claude 配置在启动预检后发生变化，请重新执行 weclaw start")
+	}
+	wantCommand, err := config.LookPath(want.Command)
+	if err != nil {
+		return false, fmt.Errorf("重新确认已预检 Claude 命令 %q: %w", want.Command, err)
+	}
+	gotCommand, err := config.LookPath(got.Command)
+	if err != nil {
+		return false, fmt.Errorf("重新确认当前 Claude 命令 %q: %w", got.Command, err)
+	}
+	want.Command = wantCommand
+	resolvedGot := got
+	resolvedGot.Command = gotCommand
+	if !reflect.DeepEqual(want, resolvedGot) {
+		return false, fmt.Errorf("Claude 配置在启动预检后发生变化，请重新执行 weclaw start")
+	}
+	changed := !reflect.DeepEqual(got, want)
+	latest.Agents["claude"] = want
+	return changed, nil
 }

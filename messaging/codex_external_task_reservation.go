@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/observability"
 )
 
@@ -37,9 +38,18 @@ const (
 )
 
 type externalCodexTaskReservationControl struct {
-	mu      sync.Mutex
-	status  externalCodexTaskReservationStatus
-	runtime externalCodexTaskRuntime
+	mu          sync.Mutex
+	status      externalCodexTaskReservationStatus
+	runtime     externalCodexTaskRuntime
+	watcherDone chan struct{}
+	doneOnce    sync.Once
+}
+
+func (c *externalCodexTaskReservationControl) finishWatcher() {
+	if c == nil {
+		return
+	}
+	c.doneOnce.Do(func() { close(c.watcherDone) })
 }
 
 // prepareExternalCodexTask 只解析外部任务，不占用观察槽或启动观察器。
@@ -83,9 +93,11 @@ func (h *Handler) reserveExternalCodexTask(opts externalCodexTaskOptions, prepar
 
 // createExternalCodexTaskReservationLocked 在共享槽位锁内创建 reserved 任务及其唯一控制器。
 func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTaskOptions, prepared preparedExternalCodexTask) externalCodexTaskReservation {
-	taskCtx := h.withAgentInteractions(context.Background(), agentInteractionContextOptions{
+	interactionLease := &agentInteractionLease{}
+	taskCtx, detachCodexObserver := agent.ContextWithCodexObserverDetach(context.Background())
+	taskCtx = h.withAgentInteractions(taskCtx, agentInteractionContextOptions{
 		actorUserID: opts.actorUserID, routeUserID: opts.routeUserID,
-		agentName: opts.agentName, reply: opts.reply,
+		agentName: opts.agentName, reply: opts.reply, lease: interactionLease,
 	})
 	runtimeOwner, ownerRevision := externalCodexTaskOwner(prepared.state)
 	trace, _ := observability.TraceFromContext(opts.ctx)
@@ -96,9 +108,12 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 		message:      firstNonBlank(prepared.state.Preview, "共享 Codex 任务"),
 		runtimeOwner: runtimeOwner, ownerRevision: ownerRevision,
 		codexThreadID: opts.threadID, codexTurnID: prepared.state.ActiveTurnID,
+		interactionLease: interactionLease, detachCodexObserver: detachCodexObserver,
 		trace: trace,
 	})
-	control := &externalCodexTaskReservationControl{status: externalCodexTaskReserved}
+	control := &externalCodexTaskReservationControl{
+		status: externalCodexTaskReserved, watcherDone: make(chan struct{}),
+	}
 	task.phase = codexTaskReserved
 	task.externalReservation = control
 	control.runtime = externalCodexTaskRuntime{
@@ -156,7 +171,10 @@ func (h *Handler) activateExternalCodexTaskReservation(reservation externalCodex
 		return h.externalCodexTaskReservationActive(reservation)
 	}
 	h.recordTraceStage(runtime.task.traceSnapshot(), "task.observer_started", "running", "shared Codex turn observer started")
-	go h.runExternalCodexTaskWatcher(runtime)
+	go func() {
+		defer reservation.control.finishWatcher()
+		h.runExternalCodexTaskWatcher(runtime)
+	}()
 	return true
 }
 
@@ -230,6 +248,7 @@ func (h *Handler) cancelReservedExternalCodexTask(reservation externalCodexTaskR
 	reservation.task.cancel()
 	delete(h.tasks.active, reservation.key)
 	close(reservation.task.done)
+	reservation.control.finishWatcher()
 }
 
 // sameExternalCodexTaskIdentityLocked 校验规范化身份；调用方必须持有 task.mu。

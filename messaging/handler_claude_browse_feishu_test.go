@@ -300,15 +300,14 @@ func TestFeishuClaudeSessionChoiceSwitchesRemoteOwner(t *testing.T) {
 	}
 }
 
-func TestFeishuClaudeCcLsAllowsAdminOutsideRoots(t *testing.T) {
+func TestFeishuClaudeCcLsAllowsAuthorizedUserOutsideRoots(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
-	h.SetAdminUsers([]string{"on_admin"})
 	ag.catalogSessions = []agent.ClaudeSession{
 		{ID: "session-a", Cwd: filepath.Join(t.TempDir(), "alpha")},
 		{ID: "session-b", Cwd: filepath.Join(t.TempDir(), "beta")},
 	}
 	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{
-		Handler: h, SessionKey: "feishu:admin", Text: "/cc ls", UnionID: "on_admin",
+		Handler: h, SessionKey: "feishu:admin", Text: "/cc ls", UnionID: "on_admin", Authorized: true, T: t,
 	})
 	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 2 {
 		t.Fatalf("choices=%#v，管理员应看到白名单外工作空间", reply.Choices)
@@ -374,6 +373,8 @@ type claudeFeishuTestRequest struct {
 	UnionID    string
 	MessageID  string
 	Snapshot   string
+	Authorized bool
+	T          *testing.T
 }
 
 func sendClaudeFeishuCommand(req claudeFeishuTestRequest) *platformtest.Replier {
@@ -386,6 +387,9 @@ func sendClaudeFeishuCommand(req claudeFeishuTestRequest) *platformtest.Replier 
 		msg.RawCommand = &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": req.Choice, "navigation_snapshot": req.Snapshot,
 		}}
+	}
+	if req.Authorized {
+		msg = authorizeIncomingMessageForTest(req.T, msg, req.UnionID)
 	}
 	req.Handler.HandleMessage(context.Background(), msg, reply)
 	return reply

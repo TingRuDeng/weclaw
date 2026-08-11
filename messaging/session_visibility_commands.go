@@ -55,7 +55,7 @@ func parseSessionVisibilityCommand(trimmed string, namespace string) (sessionVis
 
 func (h *Handler) handleSessionVisibilityCommand(req sessionVisibilityCommandRequest) string {
 	if !req.Admin {
-		return "仅管理员可以隐藏或恢复主机级会话导航。"
+		return "当前账号未授权隐藏或恢复主机级会话导航。"
 	}
 	if !req.Private {
 		return "会话隐藏与恢复只允许在私聊中执行。"

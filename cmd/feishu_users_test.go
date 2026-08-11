@@ -30,9 +30,8 @@ func TestRunFeishuUsersPendingPrintsDiscoveredIdentity(t *testing.T) {
 	if !strings.Contains(output, "卡片管家 (project-a, cli_a)") {
 		t.Fatalf("output=%q, want readable bot label", output)
 	}
-	if !strings.Contains(output, "授权命令: weclaw feishu users approve on_same_person") ||
-		!strings.Contains(output, "授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。") ||
-		!strings.Contains(output, "管理员命令: weclaw feishu users approve on_same_person --admin") {
+	if !strings.Contains(output, "授权命令: weclaw feishu users approve on_same_person --bot cli_a") ||
+		!strings.Contains(output, "授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。") {
 		t.Fatalf("output=%q, want approve command hints", output)
 	}
 }
@@ -84,13 +83,12 @@ func TestRunFeishuUsersListPrintsAuthorizedScopeWithoutAuthCode(t *testing.T) {
 	}
 }
 
-func TestRunFeishuUsersListPrintsUserType(t *testing.T) {
+func TestRunFeishuUsersListDoesNotPrintRemovedUserRoles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 	writeFeishuBotsConfigForTest(t)
 	authorizeFeishuUserForTest(t, "on_same_person")
 	authorizeFeishuUserForTest(t, "on_approved")
-	addFeishuAdminUserForTest(t, "on_approved")
 
 	output := captureStdout(t, func() {
 		if err := runFeishuUsers("list"); err != nil {
@@ -98,11 +96,11 @@ func TestRunFeishuUsersListPrintsUserType(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(output, "on_approved") ||
-		!strings.Contains(output, "用户类型: 管理员") ||
-		!strings.Contains(output, "on_same_person") ||
-		!strings.Contains(output, "用户类型: 普通用户") {
-		t.Fatalf("output=%q, want admin and normal user types", output)
+	if !strings.Contains(output, "on_approved") || !strings.Contains(output, "on_same_person") {
+		t.Fatalf("output=%q, want both authorized users", output)
+	}
+	if strings.Contains(output, "用户类型") || strings.Contains(output, "管理员") || strings.Contains(output, "普通用户") {
+		t.Fatalf("output=%q, must not print removed role distinction", output)
 	}
 }
 
@@ -118,8 +116,7 @@ func TestRunFeishuUsersPendingPrintsAuthCodeCommand(t *testing.T) {
 	})
 
 	if !strings.Contains(output, "授权码: 123456") ||
-		!strings.Contains(output, "weclaw feishu users approve-code 123456") ||
-		!strings.Contains(output, "weclaw feishu users approve-code 123456 --admin") {
+		!strings.Contains(output, "weclaw feishu users approve-code 123456 --bot cli_a") {
 		t.Fatalf("output=%q, want approve-code command hints", output)
 	}
 }
@@ -159,7 +156,7 @@ func TestRunFeishuUsersPendingPrintsUnauthorizedScopeWithoutAuthCode(t *testing.
 
 	if !strings.Contains(output, "待授权机器人: project-b") ||
 		!strings.Contains(output, "状态: 待授权") ||
-		!strings.Contains(output, "授权命令: weclaw feishu users approve on_same_person") ||
+		!strings.Contains(output, "授权命令: weclaw feishu users approve on_same_person --bot cli_b") ||
 		!strings.Contains(output, "授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。") {
 		t.Fatalf("output=%q, want pending unauthorized scope", output)
 	}
@@ -185,51 +182,30 @@ func TestRunFeishuUsersPendingHidesExpiredAuthCode(t *testing.T) {
 		strings.Contains(output, "approve-code 123456") {
 		t.Fatalf("output=%q, should hide expired auth code", output)
 	}
-	if !strings.Contains(output, "weclaw feishu users approve on_same_person") {
+	if !strings.Contains(output, "weclaw feishu users approve on_same_person --bot cli_a") {
 		t.Fatalf("output=%q, want stable-id approval hint", output)
 	}
 }
 
-func TestRunFeishuUsersApproveAddsAdminUser(t *testing.T) {
+func TestRunFeishuUsersApproveRequiresBotWhenMultipleConfigured(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 	writeFeishuBotsConfigForTest(t)
 
-	output := captureStdout(t, func() {
-		err := runFeishuUsersApprove(feishuUsersApproveOptions{
-			Selector: "on_same_person",
-			Admin:    true,
-		})
-		if err != nil {
-			t.Fatalf("runFeishuUsersApprove error: %v", err)
-		}
-	})
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load error: %v", err)
-	}
-	if got := strings.Join(cfg.AdminUsers, ","); got != "on_same_person" {
-		t.Fatalf("admin_users=%q, want on_same_person", got)
-	}
-	for _, bot := range cfg.Platforms["feishu"].Bots {
-		if got := strings.Join(bot.AllowedUsers, ","); got != "on_same_person" {
-			t.Fatalf("bot %s allowed_users=%q, want on_same_person", bot.Name, got)
-		}
-	}
-	if !strings.Contains(output, "已同步加入 admin_users") {
-		t.Fatalf("output=%q, want admin completion message", output)
+	err := runFeishuUsersApprove(feishuUsersApproveOptions{Selector: "on_same_person"})
+	if err == nil || !strings.Contains(err.Error(), "请使用 --bot") {
+		t.Fatalf("error=%v, want explicit bot requirement", err)
 	}
 }
 
-func TestRunFeishuUsersApproveAddsAdminForApprovedIdentity(t *testing.T) {
+func TestRunFeishuUsersApproveAddsAllowedUserToSelectedBot(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateForTest(t)
 	writeFeishuBotsConfigForTest(t)
 
 	err := runFeishuUsersApprove(feishuUsersApproveOptions{
 		Selector: "on_approved",
-		Admin:    true,
+		BotRef:   "project-a",
 	})
 	if err != nil {
 		t.Fatalf("runFeishuUsersApprove error: %v", err)
@@ -238,28 +214,32 @@ func TestRunFeishuUsersApproveAddsAdminForApprovedIdentity(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("config.Load error: %v", loadErr)
 	}
-	if got := strings.Join(cfg.AdminUsers, ","); got != "on_approved" {
-		t.Fatalf("admin_users=%q, want on_approved", got)
+	bots := cfg.Platforms["feishu"].Bots
+	if !usersTestStringSliceContains(bots[0].AllowedUsers, "on_approved") || usersTestStringSliceContains(bots[1].AllowedUsers, "on_approved") {
+		t.Fatalf("bots=%#v, want selected bot only", bots)
+	}
+	if len(cfg.LegacyAdminUsers) != 0 {
+		t.Fatalf("legacy admin_users=%#v, must not be written", cfg.LegacyAdminUsers)
 	}
 }
 
-func TestRunFeishuUsersApproveRejectsAdminWithoutUnionID(t *testing.T) {
+func TestRunFeishuUsersApproveAllowsObservedIdentityWithoutUnionID(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeFeishuIdentityStateWithoutUnionForTest(t)
 	writeFeishuBotsConfigForTest(t)
 
 	err := runFeishuUsersApprove(feishuUsersApproveOptions{
 		Selector: "ou_only",
-		Admin:    true,
+		BotRef:   "project-a",
 	})
-	if err == nil || !strings.Contains(err.Error(), "缺少 union_id") {
-		t.Fatalf("error=%v, want missing union_id", err)
+	if err != nil {
+		t.Fatalf("error=%v, want observed open/user identity approval", err)
 	}
 	cfg, loadErr := config.Load()
 	if loadErr != nil {
 		t.Fatalf("config.Load error: %v", loadErr)
 	}
-	if len(cfg.AdminUsers) != 0 {
-		t.Fatalf("admin_users=%#v, want empty", cfg.AdminUsers)
+	if len(cfg.Platforms["feishu"].Bots[0].AllowedUsers) != 1 {
+		t.Fatalf("allowed_users=%#v, want selected identity", cfg.Platforms["feishu"].Bots[0].AllowedUsers)
 	}
 }

@@ -11,7 +11,7 @@ const (
 	registryInitialRestartDelay = 3 * time.Second
 	registryMaxRestartDelay     = 30 * time.Second
 	denyNoticeInterval          = 60 * time.Second
-	denyNoticeText              = "当前账号未授权使用 WeClaw，请联系管理员配置 allowed_users。"
+	denyNoticeText              = "当前账号未授权使用 WeClaw，请在 WeClaw 服务器上将该身份加入当前平台或机器人的 allowed_users。"
 )
 
 // Registry 统一管理已启用的平台实例，并在分发前执行访问控制。
@@ -26,6 +26,12 @@ type Registry struct {
 type RegistryEntry struct {
 	Platform Platform
 	Access   AccessControl
+}
+
+// RegistryAccount 是当前进程实际运行的平台账号标识。
+type RegistryAccount struct {
+	Platform  PlatformName
+	AccountID string
 }
 
 // IdentityObserver 在访问控制前观察入站身份，只用于发现身份，不决定授权。
@@ -165,6 +171,44 @@ func (r *Registry) HasAccount(platformName PlatformName, accountID string) bool 
 	return false
 }
 
+// RegisteredAccounts 返回当前进程已经创建的平台账号快照。
+// 配置热重载用它将已删除或禁用账号立即收敛为默认拒绝。
+func (r *Registry) RegisteredAccounts() []RegistryAccount {
+	if r == nil {
+		return nil
+	}
+	accounts := make([]RegistryAccount, 0, len(r.entries))
+	for _, entry := range r.entries {
+		accounts = append(accounts, RegistryAccount{
+			Platform: entry.Platform.Name(), AccountID: entry.Platform.AccountID(),
+		})
+	}
+	return accounts
+}
+
+// AuthorizeIncomingMessage 用 Registry 当前的账号级 allowlist 生成不可伪造的消息能力。
+// 它主要供不经过 Run 循环的受控入口复用同一鉴权边界；平台和账号必须精确匹配。
+func (r *Registry) AuthorizeIncomingMessage(msg IncomingMessage) (IncomingMessage, bool) {
+	msg.accessGrant = nil
+	if r == nil || msg.Platform == "" || msg.AccountID == "" {
+		return msg, false
+	}
+	for _, entry := range r.entries {
+		if entry.Platform.Name() != msg.Platform || entry.Platform.AccountID() != msg.AccountID {
+			continue
+		}
+		identity, allowed := accessAllowedIdentity(entry.Access, msg)
+		if !allowed {
+			return msg, false
+		}
+		msg.accessGrant = &incomingAccessGrant{
+			platform: entry.Platform.Name(), account: entry.Platform.AccountID(), identity: identity,
+		}
+		return msg, true
+	}
+	return msg, false
+}
+
 // UpdateAccess 热更新指定平台的访问控制白名单，不重启平台连接。
 func (r *Registry) UpdateAccess(platformName PlatformName, allowed []string) {
 	if r == nil {
@@ -224,12 +268,19 @@ func runPlatformWithRestart(ctx context.Context, entry RegistryEntry, dispatch D
 
 func guardedDispatch(entry RegistryEntry, dispatch DispatchFunc, limiter *denyNoticeLimiter, observer IdentityObserver, denyProvider DenyNoticeProvider) DispatchFunc {
 	return func(ctx context.Context, msg IncomingMessage, reply Replier) {
+		// 平台和账号来自已注册实例，不信任 adapter 载荷中的同名字段。
+		msg.Platform = entry.Platform.Name()
+		msg.AccountID = entry.Platform.AccountID()
 		observeIncomingIdentity(observer, msg)
-		if !accessAllowsMessage(entry.Access, msg) {
+		identity, allowed := accessAllowedIdentity(entry.Access, msg)
+		if !allowed {
 			log.Printf("[platform] denied %s user %q aliases=%q on account %q",
 				entry.Platform.Name(), msg.UserID, msg.UserAliases, entry.Platform.AccountID())
 			sendDenyNotice(ctx, entry, msg, reply, limiter, denyProvider)
 			return
+		}
+		msg.accessGrant = &incomingAccessGrant{
+			platform: entry.Platform.Name(), account: entry.Platform.AccountID(), identity: identity,
 		}
 		dispatch(ctx, msg, reply)
 	}
@@ -242,12 +293,11 @@ func observeIncomingIdentity(observer IdentityObserver, msg IncomingMessage) {
 	observer(msg)
 }
 
-// accessAllowsMessage 用主用户 ID 和平台身份别名共同判断授权。
-func accessAllowsMessage(access AccessControl, msg IncomingMessage) bool {
+func accessAllowedIdentity(access AccessControl, msg IncomingMessage) (string, bool) {
 	for _, userID := range msg.UserIdentityKeys() {
 		if access.Allowed(userID) {
-			return true
+			return userID, true
 		}
 	}
-	return false
+	return "", false
 }

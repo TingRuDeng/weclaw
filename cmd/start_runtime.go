@@ -46,10 +46,14 @@ type backgroundStartOps struct {
 
 // runBackgroundStart 在派生后台进程前完成必要的微信登录。
 func runBackgroundStart(cfg *config.Config) error {
+	fingerprint, err := claudePreflightFingerprint(cfg)
+	if err != nil {
+		return err
+	}
 	return runBackgroundStartWithOps(cfg, backgroundStartOps{
 		loadAccounts: ilink.LoadAllCredentials,
 		login:        doLogin,
-		runDaemon:    runDaemon,
+		runDaemon:    func() error { return runDaemon(fingerprint) },
 	})
 }
 
@@ -101,6 +105,8 @@ func runForegroundStart(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	handler.SetPlatformRegistry(registry)
+	handler.SetPlatformAccessUpdater(latestPlatformAccessUpdater(registry))
 	runtime := startRuntime{
 		ctx: ctx, cancel: cancel, cfg: cfg, handler: handler, registry: registry, trace: traceStore,
 		drain: handler, shutdownTimeout: defaultRuntimeShutdownTimeout,
@@ -130,15 +136,37 @@ func loadStartAccounts(ctx context.Context, cfg *config.Config) ([]*ilink.Creden
 
 // detectStartAgents 自动探测 Agent，并在保存后再次验证 Claude ACP 配置。
 func detectStartAgents(cfg *config.Config) error {
-	if config.DetectAndConfigure(cfg) {
-		if err := config.Save(cfg); err != nil {
-			log.Printf("Warning: failed to save auto-detected config: %v", err)
-		} else {
-			path, _ := config.ConfigPath()
-			log.Printf("Auto-detected agents saved to %s", path)
+	changed := false
+	var committed *config.Config
+	if err := config.Update(func(latest *config.Config) error {
+		changed = config.DetectAndConfigure(latest)
+		if err := latest.ValidateClaudeACPAgents(); err != nil {
+			return err
 		}
+		if _, preflighted := cfg.Agents["claude"]; !preflighted {
+			if _, appeared := latest.Agents["claude"]; appeared {
+				return fmt.Errorf("Claude 配置在启动预检后发生变化，请重新执行 weclaw start")
+			}
+		} else {
+			resolvedChanged, err := applyPreflightedClaudeConfig(cfg, latest)
+			if err != nil {
+				return err
+			}
+			changed = resolvedChanged || changed
+		}
+		committed = latest
+		return nil
+	}); err != nil {
+		return err
 	}
-	return cfg.ValidateClaudeACPAgents()
+	if committed != nil {
+		*cfg = *committed
+	}
+	if changed {
+		path, _ := config.ConfigPath()
+		log.Printf("Auto-detected agents saved to %s", path)
+	}
+	return nil
 }
 
 func newStartHandlerWithTrace(cfg *config.Config, traceStore *observability.Store) *messaging.Handler {
@@ -244,12 +272,13 @@ func configureHandlerAccess(handler *messaging.Handler, cfg *config.Config) {
 	}
 	handler.SetAllowedWorkspaceRoots(cfg.AllowedWorkspaceRoots)
 	if len(cfg.AllowedWorkspaceRoots) == 0 {
-		log.Printf("WARNING: allowed_workspace_roots 未配置，普通用户远程 /cwd 切换已禁用；管理员不受此限制。")
+		log.Printf("WARNING: allowed_workspace_roots 未配置，未授权身份的远程 /cwd 切换已禁用；当前平台 allowed_users 中的身份不受此限制。")
 	} else {
 		log.Printf("Allowed workspace roots: %v", cfg.AllowedWorkspaceRoots)
 	}
-	handler.SetAdminUsers(cfg.AdminUsers)
-	log.Printf("Admin users configured: %d", len(cfg.AdminUsers))
+	if len(cfg.LegacyAdminUsers) > 0 {
+		log.Printf("WARNING: legacy admin_users is ignored (%d entries); access is granted only by each platform or bot allowed_users and is not migrated automatically", len(cfg.LegacyAdminUsers))
+	}
 	handler.SetRateLimitPerMinute(cfg.RateLimitPerMinute)
 	if cfg.RateLimitPerMinute > 0 {
 		log.Printf("Rate limit: %d agent invocations per user per minute", cfg.RateLimitPerMinute)
@@ -299,6 +328,9 @@ func newStartRegistry(accounts []*ilink.Credentials, cfg *config.Config, handler
 func (runtime startRuntime) startServices() error {
 	if err := runtime.handler.StartTerminalOutbox(runtime.ctx, runtime.registry, messaging.DefaultTerminalOutboxFile()); err != nil {
 		return fmt.Errorf("start terminal outbox: %w", err)
+	}
+	if err := runtime.handler.StartCodexFollowerReconciler(runtime.ctx, runtime.registry); err != nil {
+		return fmt.Errorf("start Codex follower reconciler: %w", err)
 	}
 	go runSoftConfigReloader(runtime.ctx, runtime.handler, runtime.registry)
 	apiServer := api.NewServer(nil, runtime.apiAddress(),

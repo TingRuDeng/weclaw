@@ -58,19 +58,19 @@ func TestProgressCommandShowsPlatformEffectiveMode(t *testing.T) {
 
 func TestProgressCommandChangesPlatformOverride(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
 		string(platform.PlatformFeishu): {Mode: progressModeStream},
 	})
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
 	h.handleBuiltInPlatformCommand(context.Background(), platformCommandRequest{
-		Message: platform.IncomingMessage{
-			Platform: platform.PlatformFeishu,
-			UserID:   "ou_user",
-			Text:     "/progress typing",
-			Metadata: map[string]string{"feishu_union_id": "on_admin"},
-		},
+		Message: authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+			Platform:  platform.PlatformFeishu,
+			AccountID: "cli_a",
+			UserID:    "ou_user",
+			Text:      "/progress typing",
+			Metadata:  map[string]string{"feishu_union_id": "on_admin"},
+		}, "on_admin"),
 		RouteUserID: "ou_user",
 		Reply:       reply,
 		Trimmed:     "/progress typing",
@@ -79,14 +79,13 @@ func TestProgressCommandChangesPlatformOverride(t *testing.T) {
 	if !containsText(reply.Texts, "已切换进度模式：typing") {
 		t.Fatalf("reply=%#v, want switched typing mode", reply.Texts)
 	}
-	if got := h.resolveProgressConfigForPlatform(platform.PlatformFeishu, "codex").Mode; got != progressModeTyping {
-		t.Fatalf("feishu progress mode=%q, want typing", got)
+	if got := h.resolveProgressConfigForAccount(platform.PlatformFeishu, "cli_a", "codex").Mode; got != progressModeTyping {
+		t.Fatalf("feishu account progress mode=%q, want typing", got)
 	}
 }
 
 func TestProgressCommandChangesOnlyCurrentFeishuAccount(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): {Mode: progressModeSummary},
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_b"): {Mode: progressModeStream},
@@ -94,13 +93,13 @@ func TestProgressCommandChangesOnlyCurrentFeishuAccount(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
 	h.handleBuiltInPlatformCommand(context.Background(), platformCommandRequest{
-		Message: platform.IncomingMessage{
+		Message: authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 			Platform:  platform.PlatformFeishu,
 			AccountID: "cli_a",
 			UserID:    "ou_user",
 			Text:      "/progress typing",
 			Metadata:  map[string]string{"feishu_union_id": "on_admin"},
-		},
+		}, "on_admin"),
 		RouteUserID: "ou_user",
 		Reply:       reply,
 		Trimmed:     "/progress typing",
@@ -117,7 +116,7 @@ func TestProgressCommandChangesOnlyCurrentFeishuAccount(t *testing.T) {
 	}
 }
 
-func TestProgressCommandRejectsNonAdminMutationWithoutChangingAccount(t *testing.T) {
+func TestProgressCommandRejectsMutationWithoutRegistryCapability(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetPlatformProgressConfigs(map[string]config.ProgressConfig{
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_a"): {Mode: progressModeSummary},
@@ -133,8 +132,8 @@ func TestProgressCommandRejectsNonAdminMutationWithoutChangingAccount(t *testing
 		Trimmed:     "/progress typing",
 	})
 
-	if !containsText(reply.Texts, "仅管理员可以修改") {
-		t.Fatalf("reply=%#v, want admin-only mutation notice", reply.Texts)
+	if !containsText(reply.Texts, "allowed_users") {
+		t.Fatalf("reply=%#v, want authorization notice", reply.Texts)
 	}
 	if got := h.resolveProgressConfigForAccount(platform.PlatformFeishu, "cli_a", "codex").Mode; got != progressModeSummary {
 		t.Fatalf("progress mode=%q, want unchanged summary", got)

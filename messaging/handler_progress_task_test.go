@@ -234,8 +234,8 @@ func TestFinalReplyOutsideStreamFailureDoesNotExposeStatusSentinel(t *testing.T)
 
 	h.sendToNamedAgent(agentMessageRequest{ctx: context.Background(), platformName: platform.PlatformFeishu, userID: "ou_user", routeUserID: "ou_user", reply: reply, name: "mock", message: "hello", clientID: "client-1"})
 
-	if reply.Stream.Failed != progressNoStructuredRecord {
-		t.Fatalf("failed card=%q，want explicit no-progress terminal content", reply.Stream.Failed)
+	if reply.Stream.Failed != "" {
+		t.Fatalf("failed card=%q，want compact status-only terminal", reply.Stream.Failed)
 	}
 	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "boom") {
 		t.Fatalf("texts=%#v，want 单条真实失败回复", reply.Texts)

@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -89,6 +90,15 @@ func (l agentTaskLifecycle) recordProgress(event agent.ProgressEvent) {
 // finishAgentTaskLifecycle 统一最终文本、进度卡收口和停止后的回复抑制。
 func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply string, err error) {
 	defer lifecycle.opts.task.detachProgressSession(lifecycle.progress)
+	if errors.Is(err, agent.ErrCodexObserverDetached) {
+		trace := lifecycle.opts.task.traceSnapshot()
+		h.recordTraceStage(trace, "task.observer_preserved", "detached", "observer detached without stopping shared Codex turn")
+		if lifecycle.opts.task.shouldPreserveRecoveryOnDrain() && lifecycle.progress != nil {
+			lifecycle.progress.stopBackground()
+		}
+		h.finishActiveTask(lifecycle.opts.executionKey, lifecycle.opts.task)
+		return
+	}
 	lifecycle.opts.task.closeProgress()
 	trace := lifecycle.opts.task.traceSnapshot()
 	stopped := lifecycle.opts.task.stoppedByRequest(err)
@@ -105,7 +115,7 @@ func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply s
 		reply = renderFinalSuccess(lifecycle.opts.replyPrefix, reply)
 		h.recordTraceStage(trace, "task.completed", "completed", "agent task completed")
 	}
-	if !lifecycle.opts.task.shouldSendFinal() {
+	if !h.claimActiveTaskTerminal(lifecycle.opts.executionKey, lifecycle.opts.task) {
 		h.recordTraceStage(trace, "task.delivery_suppressed", "detached", "final reply suppressed")
 		if stopped && lifecycle.progress != nil {
 			_ = lifecycle.progress.stopWithTerminal("", false, true)
@@ -128,7 +138,11 @@ func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply s
 // completeAgentTaskLifecycle 清理活动任务，并异步续跑唯一一条暂存消息。
 func (h *Handler) completeAgentTaskLifecycle(lifecycle agentTaskLifecycle) {
 	lifecycle.opts.cancel()
-	if pending, ok := h.completeActiveTask(lifecycle.opts.executionKey, lifecycle.opts.task); ok {
+	pending, ok := h.finishClaimedActiveTask(lifecycle.opts.executionKey, lifecycle.opts.task)
+	if !ok {
+		pending, ok = h.completeActiveTask(lifecycle.opts.executionKey, lifecycle.opts.task)
+	}
+	if ok {
 		go pending.run()
 	}
 }

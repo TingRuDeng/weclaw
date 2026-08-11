@@ -27,7 +27,6 @@ const (
 
 	progressDefaultCompletion  = "任务已完成，正在发送最终结果。"
 	progressStatusOnlyComplete = "\x00weclaw_status_only_complete"
-	progressNoStructuredRecord = "本任务未产生结构化进度记录。"
 )
 
 var progressStageHints = []struct {
@@ -91,12 +90,45 @@ type progressSession struct {
 	lastContent           string
 	finished              bool
 	terminalClaimed       bool
+	detachClaimed         bool
 	effectiveProgressSeen bool
 	typingStarted         bool
 	recoveryReservation   string
 	segmentAnchor         *agent.ProgressEvent
 	segmentNumber         int
 	latestTaskSnapshot    progressCardSnapshot
+}
+
+// claimDetachWithoutTerminal 在线性化点冻结终态竞争；实际卡片更新和持久化在锁外完成。
+func (s *progressSession) claimDetachWithoutTerminal() bool {
+	if s == nil {
+		return true
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.finished || s.terminalClaimed {
+		return false
+	}
+	s.finished = true
+	s.terminalClaimed = true
+	s.detachClaimed = true
+	return true
+}
+
+// rollbackDetachWithoutTerminalClaim 仅回滚尚未执行实际卡片冻结的 release claim。
+// 调用方持有任务投递栅栏，因而不会与合法终态 claim 并发。
+func (s *progressSession) rollbackDetachWithoutTerminalClaim() {
+	if s == nil {
+		return
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if !s.detachClaimed {
+		return
+	}
+	s.detachClaimed = false
+	s.finished = false
+	s.terminalClaimed = false
 }
 
 func (s *progressSession) usesNativeProgressCard() bool {
@@ -282,6 +314,130 @@ func (s *progressSession) stopBackground() bool {
 	return parentCanceled
 }
 
+// detachWithoutTerminal 冻结当前进度展示，但不把共享任务宣告为完成、失败或停止。
+func (s *progressSession) detachWithoutTerminal(ctx context.Context, notice string) error {
+	if s == nil {
+		return nil
+	}
+	notice = strings.TrimSpace(notice)
+	if notice == "" {
+		notice = "已解除当前窗口的会话绑定；本地 Codex 任务继续运行。"
+	}
+	s.streamMu.Lock()
+	if s.detachClaimed {
+		s.detachClaimed = false
+	} else if s.finished || s.terminalClaimed {
+		s.streamMu.Unlock()
+		return nil
+	}
+	stream := s.stream
+	var supersedable platform.SupersedableStream
+	var detachable platform.DetachableStream
+	if stream != nil {
+		supersedable, _ = stream.(platform.SupersedableStream)
+		detachable, _ = stream.(platform.DetachableStream)
+		if supersedable == nil && detachable == nil {
+			s.streamMu.Unlock()
+			return platform.ErrUnsupported
+		}
+	}
+	type durableDetach struct {
+		outbox       *terminalOutbox
+		reservation  string
+		transitionID string
+		checkpoint   platform.SupersedeCheckpoint
+		prepared     platform.PreparedSupersedableStream
+	}
+	var durable *durableDetach
+	if stream != nil && s.handler != nil && s.recoveryReservation != "" {
+		outbox := s.handler.currentTerminalOutbox()
+		reporter, routeOK := optionalDeliveryRouteReporter(s.reply)
+		exporter, exportOK := stream.(platform.DurableStreamReferenceExporter)
+		detachPreparer, detachPrepareOK := optionalDurableStreamDetachPreparer(s.reply)
+		supersedePreparer, supersedePrepareOK := optionalDurableStreamSupersedePreparer(s.reply)
+		prepared, deliverOK := stream.(platform.PreparedSupersedableStream)
+		prepareOK := detachPrepareOK || supersedePrepareOK
+		if outbox != nil && routeOK && reporter.DeliveryRoute().Valid() && exportOK && prepareOK && deliverOK {
+			reference, err := exporter.DurableReference()
+			if err != nil {
+				s.streamMu.Unlock()
+				return fmt.Errorf("export released progress card: %w", err)
+			}
+			transitionID := uuid.NewString()
+			var checkpoint platform.SupersedeCheckpoint
+			if detachPrepareOK {
+				checkpoint, err = detachPreparer.PrepareDetachFromReference(reference, notice, transitionID)
+			} else {
+				checkpoint, err = supersedePreparer.PrepareSupersedeFromReference(reference, notice, transitionID)
+			}
+			if err != nil {
+				s.streamMu.Unlock()
+				return fmt.Errorf("prepare released progress card freeze: %w", err)
+			}
+			if err := outbox.beginStreamReanchor(s.recoveryReservation); err != nil {
+				s.streamMu.Unlock()
+				return fmt.Errorf("reserve released progress card freeze: %w", err)
+			}
+			pending := pendingStreamSupersede{
+				ID: transitionID, Route: reporter.DeliveryRoute(), Checkpoint: checkpoint,
+			}
+			if err := outbox.detachStreamReservation(s.recoveryReservation, pending); err != nil {
+				outbox.endStreamReanchor(s.recoveryReservation)
+				s.streamMu.Unlock()
+				return fmt.Errorf("persist released progress card freeze: %w", err)
+			}
+			durable = &durableDetach{
+				outbox: outbox, reservation: s.recoveryReservation,
+				transitionID: transitionID, checkpoint: checkpoint, prepared: prepared,
+			}
+			s.recoveryReservation = ""
+		}
+	}
+	s.finished = true
+	s.terminalClaimed = true
+	s.streamMu.Unlock()
+
+	s.stopBackground()
+	if supersedable == nil && detachable == nil {
+		s.streamMu.Lock()
+		s.discardActiveStreamRecoveryLocked()
+		s.streamMu.Unlock()
+		return nil
+	}
+	detachCtx, cancel := context.WithTimeout(context.WithoutCancel(normalizeContext(ctx)), 5*time.Second)
+	defer cancel()
+	if durable != nil {
+		err := durable.prepared.DeliverPreparedSupersede(detachCtx, durable.checkpoint)
+		if err != nil {
+			if recordErr := durable.outbox.recordPendingStreamSupersedeFailure(
+				durable.reservation, durable.transitionID, err,
+			); recordErr != nil && !errors.Is(recordErr, err) {
+				log.Printf("[terminal-outbox] failed to persist released card freeze retry: %v", recordErr)
+			}
+			durable.outbox.endStreamReanchor(durable.reservation)
+			return nil
+		}
+		if err := durable.outbox.completePendingStreamSupersede(durable.reservation, durable.transitionID); err != nil {
+			log.Printf("[terminal-outbox] failed to clear delivered released card freeze: %v", err)
+		}
+		durable.outbox.endStreamReanchor(durable.reservation)
+		return nil
+	}
+	var err error
+	if detachable != nil {
+		err = detachable.Detach(detachCtx, notice)
+	} else {
+		err = supersedable.Supersede(detachCtx, notice)
+	}
+	if err != nil {
+		return err
+	}
+	s.streamMu.Lock()
+	s.discardActiveStreamRecoveryLocked()
+	s.streamMu.Unlock()
+	return nil
+}
+
 type preparedProgressTerminal struct {
 	checkpoint   *platform.TerminalCheckpoint
 	consumed     bool
@@ -356,9 +512,6 @@ func (s *progressSession) prepareDurableTerminal(replyWriter platform.Replier, f
 	content, terminalFailed, consumed := progressTerminalArguments(currentReply, parentCanceled, finalText, failed, stopped)
 	if strings.TrimSpace(content) == "" {
 		content = s.latestTaskSnapshotContentLocked()
-	}
-	if strings.TrimSpace(content) == "" {
-		content = progressNoStructuredRecord
 	}
 	s.terminalClaimed = true
 	s.finished = true
@@ -798,7 +951,7 @@ func (s *progressSession) persistActiveStreamRecoveryLocked(stream platform.Stre
 	reservation, err := outbox.reserve(terminalOutboxDraft{
 		Route: reporter.DeliveryRoute(), AgentName: s.agentName, Stopped: true,
 		Stream: &reference, ResultTitle: resultTitle, RichResult: richResult,
-		Text: "任务已中断。WeClaw 服务在任务执行期间发生重启。", Trace: trace,
+		Text: activeStreamRestartText, Trace: trace, ActiveStreamRecovery: true,
 	})
 	if err != nil {
 		return err
@@ -814,6 +967,25 @@ func (s *progressSession) activeRecoveryReservation() string {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	return s.recoveryReservation
+}
+
+func (s *progressSession) refreshActiveStreamRecoveryTrace(trace observability.TraceContext) error {
+	if s == nil || s.handler == nil {
+		return nil
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.recoveryReservation == "" {
+		return nil
+	}
+	outbox := s.handler.currentTerminalOutbox()
+	if outbox == nil {
+		return nil
+	}
+	if err := outbox.refreshStreamReservationTrace(s.recoveryReservation, trace); err != nil {
+		return err
+	}
+	return nil
 }
 
 // reanchor 在消息底部创建新任务卡，并把后续进展与终态原子切换到新流。
@@ -1102,6 +1274,9 @@ func (s *progressSession) cancelTyping() {
 func (s *progressSession) finishStream(parentCanceled bool, finalText string, failed bool, stopped bool) bool {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
+	if s.finished || s.terminalClaimed {
+		return false
+	}
 	stream := s.stream
 	if stream == nil || !s.reply.Capabilities().Streaming {
 		return false
@@ -1114,9 +1289,6 @@ func (s *progressSession) finishStream(parentCanceled bool, finalText string, fa
 	terminalCardContent := ""
 	if s.reply.Capabilities().FinalReplyOutsideStream {
 		terminalCardContent = s.latestTaskSnapshotContentLocked()
-		if strings.TrimSpace(terminalCardContent) == "" {
-			terminalCardContent = progressNoStructuredRecord
-		}
 	}
 	var err error
 	switch {

@@ -134,7 +134,7 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	if ag.interruptThreadID != "thread-active" || ag.interruptTurnID != "turn-active" {
 		t.Fatalf("interrupt=(%q,%q), want active thread turn", ag.interruptThreadID, ag.interruptTurnID)
 	}
-	if !containsText(calls.texts(), "已发送停止请求，等待任务终态") {
+	if !containsText(calls.texts(), "同时停止本地 Codex 和当前消息窗口中的共享任务") {
 		t.Fatalf("/stop should confirm interrupt and wait for terminal, messages=%#v", calls.texts())
 	}
 }
@@ -165,7 +165,7 @@ func TestFeishuStopResolvesInProcessUnknownRuntime(t *testing.T) {
 	if ag.interruptThreadID != route.threadID || ag.interruptTurnID != "turn-fake" {
 		t.Fatalf("interrupt=(%q,%q), want (%q,%q)", ag.interruptThreadID, ag.interruptTurnID, route.threadID, "turn-fake")
 	}
-	if !containsText(reply.Texts, "已发送停止请求，等待任务终态") {
+	if !containsText(reply.Texts, "同时停止本地 Codex 和当前消息窗口中的共享任务") {
 		t.Fatalf("reply=%#v, want remote stop confirmation", reply.Texts)
 	}
 	if taskPhase(task) != codexTaskStopping || task.runtimeOwner != agent.CodexRuntimeWeClaw {
@@ -346,7 +346,7 @@ func TestCodexSelectedSharedTaskImmediatelyAcceptsGuideAndStop(t *testing.T) {
 	})
 
 	if !guideHandled || !strings.Contains(guide, "已发送") ||
-		!stopHandled || !strings.Contains(stop, "等待任务终态") {
+		!stopHandled || !strings.Contains(stop, "等待任务结束") {
 		t.Fatalf("guide=(%v,%q) stop=(%v,%q)", guideHandled, guide, stopHandled, stop)
 	}
 	if fixture.ag.steerThreadID != "thread-b" || fixture.ag.steerTurnID != "turn-b" ||

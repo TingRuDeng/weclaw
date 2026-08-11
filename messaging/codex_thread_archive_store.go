@@ -45,8 +45,15 @@ func (s *codexSessionStore) releaseRemoteThread(
 		session.ThreadID = ""
 		session.PendingNewThread = false
 		session.PendingFirstTurn = false
+		session.FirstTurnRecoveryThreadID = ""
+		session.FirstTurnRecoveryReservationID = ""
 		session.UpdatedAt = now
 		binding.Workspaces[workspaceRoot] = session
+		changed = true
+	}
+	if binding.Follower != nil && strings.TrimSpace(binding.Follower.ThreadID) == threadID {
+		binding.Follower = nil
+		binding.FollowRevision++
 		changed = true
 	}
 	nextBindings[bindingKey] = binding
@@ -146,8 +153,14 @@ func (s *codexSessionStore) markRemoteThreadArchived(threadID string) error {
 			session.ThreadID = ""
 			session.PendingNewThread = false
 			session.PendingFirstTurn = false
+			session.FirstTurnRecoveryThreadID = ""
+			session.FirstTurnRecoveryReservationID = ""
 			session.UpdatedAt = now
 			binding.Workspaces[workspaceRoot] = session
+		}
+		if binding.Follower != nil && strings.TrimSpace(binding.Follower.ThreadID) == threadID {
+			binding.Follower = nil
+			binding.FollowRevision++
 		}
 		nextBindings[bindingKey] = binding
 	}

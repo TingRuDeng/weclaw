@@ -66,7 +66,7 @@ func TestCodexSessionStoreReplacesMissingFirstTurnThreadAtomically(t *testing.T)
 	}
 
 	if err := store.replaceRemoteFirstTurnThread(
-		bindingKey, workspace, conversationID, "thread-old", "thread-new",
+		bindingKey, workspace, conversationID, "thread-old", "thread-new", "reservation-1",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +83,17 @@ func TestCodexSessionStoreReplacesMissingFirstTurnThreadAtomically(t *testing.T)
 	if !reloaded.clearPendingFirstTurn(bindingKey, workspace, "thread-new") ||
 		reloaded.isPendingFirstTurn(bindingKey, workspace, "thread-new") {
 		t.Fatal("首个 turn 完成后应清除 pending-first-turn 标记")
+	}
+	reloaded.mu.Lock()
+	journal := reloaded.bindings[bindingKey].Workspaces[normalizeCodexWorkspaceRoot(workspace)]
+	reloaded.mu.Unlock()
+	if journal.FirstTurnRecoveryThreadID != "thread-old" || journal.FirstTurnRecoveryReservationID != "reservation-1" {
+		t.Fatalf("pending 标记清除后恢复 journal 被提前删除: %#v", journal)
+	}
+	if !reloaded.clearFirstTurnRecoveryJournal(
+		bindingKey, workspace, "thread-new", "thread-old", "reservation-1",
+	) {
+		t.Fatal("已持久修复的 first-turn journal 未清除")
 	}
 }
 

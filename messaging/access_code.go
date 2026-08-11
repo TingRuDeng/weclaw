@@ -37,14 +37,12 @@ type accessCodeRecord struct {
 
 type AccessCodeApprovalRequest struct {
 	Code     string
-	Admin    bool
 	FilePath string
 }
 
 type AccessCodeApprovalResult struct {
 	Platform string
 	Identity string
-	Admin    bool
 }
 
 type AccessCodeView struct {
@@ -60,7 +58,7 @@ func DefaultAccessCodeFile() string {
 	return filepath.Join(defaultDataDir(), "access-codes.json")
 }
 
-// ObserveDeniedIdentity 为被拒绝的入站身份生成用户可交给管理员的授权码。
+// ObserveDeniedIdentity 为被拒绝的入站身份生成可在服务器端确认的授权码。
 func (h *Handler) ObserveDeniedIdentity(msg platform.IncomingMessage) string {
 	if msg.Platform == platform.PlatformFeishu {
 		return h.ObserveDeniedFeishuIdentity(msg)
@@ -71,9 +69,9 @@ func (h *Handler) ObserveDeniedIdentity(msg platform.IncomingMessage) string {
 	record, err := issueAccessCode(DefaultAccessCodeFile(), msg, time.Now().UTC())
 	if err != nil {
 		log.Printf("[access-code] failed to issue code for %s: %v", msg.UserID, err)
-		return "当前账号无权限，且授权码生成失败，请联系管理员检查 WeClaw 状态。"
+		return "当前账号无权限，且授权码生成失败，请在服务器上检查 WeClaw 状态。"
 	}
-	return fmt.Sprintf("当前账号无权限，请联系管理员授权。\n授权码: %s", record.Code)
+	return fmt.Sprintf("当前账号无权限，请在 WeClaw 服务器上完成授权。\n授权码: %s", record.Code)
 }
 
 func issueAccessCode(filePath string, msg platform.IncomingMessage, now time.Time) (accessCodeRecord, error) {
@@ -146,24 +144,19 @@ func ApproveAccessCode(req AccessCodeApprovalRequest) (AccessCodeApprovalResult,
 	if record.Platform != string(platform.PlatformWeChat) {
 		return AccessCodeApprovalResult{}, fmt.Errorf("该授权码不支持通用授权命令")
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return AccessCodeApprovalResult{}, err
-	}
-	platformCfg := cfg.Platforms[record.Platform]
-	platformCfg.AllowedUsers = appendUniqueString(platformCfg.AllowedUsers, record.UserID)
-	cfg.Platforms[record.Platform] = platformCfg
-	if req.Admin {
-		cfg.AdminUsers = appendUniqueString(cfg.AdminUsers, record.UserID)
-	}
-	if err := config.Save(cfg); err != nil {
+	if err := config.Update(func(cfg *config.Config) error {
+		platformCfg := cfg.Platforms[record.Platform]
+		platformCfg.AllowedUsers = appendUniqueString(platformCfg.AllowedUsers, record.UserID)
+		cfg.Platforms[record.Platform] = platformCfg
+		return nil
+	}); err != nil {
 		return AccessCodeApprovalResult{}, err
 	}
 	delete(state.Records, code)
 	if err := saveAccessCodeState(filePath, state); err != nil {
 		return AccessCodeApprovalResult{}, err
 	}
-	return AccessCodeApprovalResult{Platform: record.Platform, Identity: record.UserID, Admin: req.Admin}, nil
+	return AccessCodeApprovalResult{Platform: record.Platform, Identity: record.UserID}, nil
 }
 
 // LoadPendingAccessCodeViews 返回仍有效的通用授权码，用于命令行查看待授权用户。

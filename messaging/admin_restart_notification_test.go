@@ -16,20 +16,19 @@ import (
 func TestServiceAdminRestartPersistsCompletionNotice(t *testing.T) {
 	path := useAdminRestartNotificationPath(t)
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 	h.SetServiceAdminCommandExecutor(func(ctx context.Context, command string, args []string) (string, error) {
 		return "restart scheduled", nil
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_a",
 		UserID:    "ou_admin",
 		ChatID:    "oc_chat",
 		Text:      "/restart --force",
 		Metadata:  privateFeishuAdminMetadata("on_admin"),
-	}, reply)
+	}), reply)
 
 	texts := reply.waitTexts(t, 2)
 	if !strings.Contains(texts[1], "重启完成后会自动发送通知") {
@@ -83,16 +82,15 @@ func TestDeliverPendingRestartNotificationsSendsCompletionNotice(t *testing.T) {
 func TestServiceAdminRestartCompletesOriginalStreamingCardAfterRestart(t *testing.T) {
 	path := useAdminRestartNotificationPath(t)
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
 		return "restart scheduled", nil
 	})
 	accepted := newAdminStreamingCommandTestReplier()
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_admin", ChatID: "oc_chat",
 		Text: "/restart --force", Metadata: privateFeishuAdminMetadata("on_admin"),
-	}, accepted)
+	}), accepted)
 
 	notifications := waitForAdminRestartNotifications(t, path, 1)
 	if notifications[0].Stream == nil || notifications[0].Stream.Kind != "admin.test.stream.v1" {
@@ -148,13 +146,12 @@ func TestServiceAdminRestartStartFailureFailsPendingCardAndClearsNotification(t 
 	})
 
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"on_admin"})
 	reply := newAdminStreamingCommandTestReplier()
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_admin", ChatID: "oc_chat",
 		Text: "/restart --force", Metadata: privateFeishuAdminMetadata("on_admin"),
-	}, reply)
+	}), reply)
 
 	checkpoint := waitForAdminRestartTerminal(t, reply)
 	var payload struct {

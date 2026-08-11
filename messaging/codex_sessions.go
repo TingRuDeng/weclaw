@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type codexSessionStateWriter func(filePath string, data []byte) error
@@ -38,20 +40,66 @@ type legacyCodexControlIntent struct {
 type codexSessionBinding struct {
 	ActiveWorkspace string
 	Workspaces      map[string]codexWorkspaceSession
+	FollowRevision  uint64
+	Follower        *codexFrontendFollower
+}
+
+type codexFrontendFollower struct {
+	WorkspaceRoot string
+	ThreadID      string
+	ActorUserID   string
+	DeliveryRoute platform.DeliveryRoute
+	UpdatedAt     string
+}
+
+type codexFollowerSnapshot struct {
+	BindingKey     string
+	RouteUserID    string
+	AgentName      string
+	ConversationID string
+	Revision       uint64
+	// RecoveryThreadID 精确指向首次补建前的 placeholder thread，供跨进程修复 outbox trace。
+	RecoveryThreadID      string
+	RecoveryReservationID string
+	Target                codexFrontendFollower
 }
 
 type codexWorkspaceSession struct {
-	ThreadID         string
-	PendingNewThread bool
-	PendingFirstTurn bool
-	UpdatedAt        string
+	ThreadID                       string
+	PendingNewThread               bool
+	PendingFirstTurn               bool
+	FirstTurnRecoveryThreadID      string
+	FirstTurnRecoveryReservationID string
+	ReleasePending                 bool
+	Released                       bool
+	ReleasedThreadID               string
+	ReleasedRecoveryThreadID       string
+	ReleasedRecoveryReservationID  string
+	UpdatedAt                      string
 }
 
 const legacyBindingDefaultPlatform = "wechat"
 
-// v5 persists frontend bindings and archive tombstones. Codex writer authority
-// belongs to the single app-server and is never assigned to a message route.
-const codexSessionStateVersion = 5
+// v9 persists two-phase frontend release intent and its exact active-card recovery reservation.
+// v8 added long-lived Feishu follower endpoints, release/archive tombstones, and the predecessor
+// thread needed to repair first-turn outbox metadata after a crash. Codex writer authority belongs to
+// the single app-server and is never assigned to a message route.
+const codexSessionStateVersion = 9
+
+func codexWorkspaceReleaseIntent(session codexWorkspaceSession) bool {
+	return session.ReleasePending || session.Released
+}
+
+func clearCodexWorkspaceReleaseState(session *codexWorkspaceSession) {
+	if session == nil {
+		return
+	}
+	session.ReleasePending = false
+	session.Released = false
+	session.ReleasedThreadID = ""
+	session.ReleasedRecoveryThreadID = ""
+	session.ReleasedRecoveryReservationID = ""
+}
 
 func newCodexSessionStore() *codexSessionStore {
 	return &codexSessionStore{
@@ -79,10 +127,20 @@ func (s *codexSessionStore) getThread(bindingKey string, workspaceRoot string) (
 	defer s.mu.Unlock()
 	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
 	session := s.bindings[bindingKey].Workspaces[workspaceRoot]
+	if codexWorkspaceReleaseIntent(session) {
+		return "", false
+	}
 	if _, archived := s.archived[strings.TrimSpace(session.ThreadID)]; archived {
 		return "", false
 	}
 	return session.ThreadID, session.PendingNewThread
+}
+
+func (s *codexSessionStore) workspaceReleased(bindingKey string, workspaceRoot string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	return codexWorkspaceReleaseIntent(s.bindings[bindingKey].Workspaces[workspaceRoot])
 }
 
 func (s *codexSessionStore) getActiveWorkspace(bindingKey string) (string, bool) {
@@ -157,6 +215,33 @@ func (s *codexSessionStore) clearPendingFirstTurn(bindingKey string, workspaceRo
 		return false
 	}
 	session.PendingFirstTurn = false
+	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	binding.Workspaces[workspaceRoot] = session
+	s.bindings[bindingKey] = binding
+	s.mu.Unlock()
+	s.save()
+	return true
+}
+
+func (s *codexSessionStore) clearFirstTurnRecoveryJournal(
+	bindingKey string,
+	workspaceRoot string,
+	threadID string,
+	recoveryThreadID string,
+	recoveryReservationID string,
+) bool {
+	s.mu.Lock()
+	workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
+	binding := s.bindings[bindingKey]
+	session, ok := binding.Workspaces[workspaceRoot]
+	if !ok || strings.TrimSpace(session.ThreadID) != strings.TrimSpace(threadID) ||
+		strings.TrimSpace(session.FirstTurnRecoveryThreadID) != strings.TrimSpace(recoveryThreadID) ||
+		strings.TrimSpace(session.FirstTurnRecoveryReservationID) != strings.TrimSpace(recoveryReservationID) {
+		s.mu.Unlock()
+		return false
+	}
+	session.FirstTurnRecoveryThreadID = ""
+	session.FirstTurnRecoveryReservationID = ""
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	binding.Workspaces[workspaceRoot] = session
 	s.bindings[bindingKey] = binding

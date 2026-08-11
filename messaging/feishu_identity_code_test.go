@@ -14,7 +14,7 @@ func TestObserveFeishuIdentityReturnsAuthCodeNotice(t *testing.T) {
 
 	notice := handler.ObserveDeniedFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 
-	if !strings.Contains(notice, "当前账号无权限，请联系管理员授权") ||
+	if !strings.Contains(notice, "当前账号无权限，请在 WeClaw 服务器上完成授权") ||
 		!strings.Contains(notice, "授权码: ") {
 		t.Fatalf("notice=%q, want auth code notice", notice)
 	}
@@ -40,6 +40,7 @@ func TestApproveFeishuIdentityByCodeWritesDisplayName(t *testing.T) {
 
 	result, err := ApproveFeishuIdentityByCode(FeishuIdentityApproveCodeRequest{
 		Code:        record.AuthCode,
+		BotRef:      "cli_a",
 		DisplayName: "张三",
 		FilePath:    stateFile,
 	})

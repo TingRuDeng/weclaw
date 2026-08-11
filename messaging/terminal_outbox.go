@@ -29,6 +29,7 @@ const (
 	terminalOutboxMaxAttempts      = 12
 	terminalOutboxErrorMaxRunes    = 500
 	terminalOutboxStatusMaxEntries = 100
+	activeStreamRestartText        = "任务已中断。WeClaw 服务在任务执行期间发生重启。"
 )
 
 var (
@@ -90,19 +91,20 @@ type pendingStreamSupersede struct {
 }
 
 type terminalOutboxEntry struct {
-	ID                string                           `json:"id"`
-	Route             platform.DeliveryRoute           `json:"route"`
-	AgentName         string                           `json:"agent_name,omitempty"`
-	Failed            bool                             `json:"failed,omitempty"`
-	Stopped           bool                             `json:"stopped,omitempty"`
-	Stream            *platform.DurableStreamReference `json:"stream,omitempty"`
-	Checkpoint        *platform.TerminalCheckpoint     `json:"checkpoint,omitempty"`
-	ResultTitle       string                           `json:"result_title,omitempty"`
-	RichResult        bool                             `json:"rich_result,omitempty"`
-	Text              string                           `json:"text,omitempty"`
-	Notification      string                           `json:"notification,omitempty"`
-	Trace             *observability.TraceContext      `json:"trace,omitempty"`
-	PendingSupersedes []pendingStreamSupersede         `json:"pending_supersedes,omitempty"`
+	ID                   string                           `json:"id"`
+	Route                platform.DeliveryRoute           `json:"route"`
+	AgentName            string                           `json:"agent_name,omitempty"`
+	Failed               bool                             `json:"failed,omitempty"`
+	Stopped              bool                             `json:"stopped,omitempty"`
+	Stream               *platform.DurableStreamReference `json:"stream,omitempty"`
+	Checkpoint           *platform.TerminalCheckpoint     `json:"checkpoint,omitempty"`
+	ResultTitle          string                           `json:"result_title,omitempty"`
+	RichResult           bool                             `json:"rich_result,omitempty"`
+	Text                 string                           `json:"text,omitempty"`
+	Notification         string                           `json:"notification,omitempty"`
+	Trace                *observability.TraceContext      `json:"trace,omitempty"`
+	PendingSupersedes    []pendingStreamSupersede         `json:"pending_supersedes,omitempty"`
+	ActiveStreamRecovery bool                             `json:"active_stream_recovery,omitempty"`
 
 	CheckpointDelivered   bool `json:"checkpoint_delivered,omitempty"`
 	TextDelivered         bool `json:"text_delivered,omitempty"`
@@ -118,31 +120,35 @@ type terminalOutboxEntry struct {
 }
 
 type terminalOutboxDraft struct {
-	Route        platform.DeliveryRoute
-	AgentName    string
-	Failed       bool
-	Stopped      bool
-	Stream       *platform.DurableStreamReference
-	Checkpoint   *platform.TerminalCheckpoint
-	ResultTitle  string
-	RichResult   bool
-	Text         string
-	Notification string
-	Trace        observability.TraceContext
+	Route                platform.DeliveryRoute
+	AgentName            string
+	Failed               bool
+	Stopped              bool
+	Stream               *platform.DurableStreamReference
+	Checkpoint           *platform.TerminalCheckpoint
+	ResultTitle          string
+	RichResult           bool
+	Text                 string
+	Notification         string
+	Trace                observability.TraceContext
+	ActiveStreamRecovery bool
 }
 
 type terminalOutbox struct {
-	mu          sync.Mutex
-	path        string
-	registry    *platform.Registry
-	entries     []*terminalOutboxEntry
-	preparing   map[string]bool
-	processing  map[string]bool
-	wake        chan struct{}
-	now         func() time.Time
-	trace       observability.Recorder
-	maxEntries  int
-	maxAttempts int
+	mu           sync.Mutex
+	path         string
+	registry     *platform.Registry
+	entries      []*terminalOutboxEntry
+	preparing    map[string]bool
+	followerHeld map[string]bool
+	releaseHeld  map[string]bool
+	releaseBusy  map[string]bool
+	processing   map[string]bool
+	wake         chan struct{}
+	now          func() time.Time
+	trace        observability.Recorder
+	maxEntries   int
+	maxAttempts  int
 }
 
 // DefaultTerminalOutboxFile 返回终态 outbox 的主机级状态文件。
@@ -174,8 +180,62 @@ func (h *Handler) StartTerminalOutbox(ctx context.Context, registry *platform.Re
 	}
 	h.terminalOutbox = outbox
 	h.terminalOutboxMu.Unlock()
+	followers, releases := h.ensureCodexSessions().followerRecoverySnapshots()
+	outbox.holdCodexFollowerRecoveries(followers)
+	h.recoverReleasedCodexFollowerStreamsForTargets(outbox, committedCodexReleaseTargets(releases))
 	go outbox.run(ctx)
 	return nil
+}
+
+// recoverReleasedCodexFollowerStreams 修补“解绑墓碑已落盘、卡片冻结尚未落盘”时的崩溃窗口。
+// 匹配项先在内存中 hold，准备失败也绝不能退回为服务重启终态。
+func (h *Handler) recoverReleasedCodexFollowerStreams(outbox *terminalOutbox) {
+	h.recoverReleasedCodexFollowerStreamsForTargets(outbox, h.ensureCodexSessions().releasedFollowerSnapshots())
+}
+
+func committedCodexReleaseTargets(targets []codexReleasedFollowerSnapshot) []codexReleasedFollowerSnapshot {
+	committed := make([]codexReleasedFollowerSnapshot, 0, len(targets))
+	for _, target := range targets {
+		if target.Committed {
+			committed = append(committed, target)
+		}
+	}
+	return committed
+}
+
+func (h *Handler) recoverReleasedCodexFollowerStreamsForTargets(
+	outbox *terminalOutbox,
+	targets []codexReleasedFollowerSnapshot,
+) {
+	for _, entry := range outbox.holdReleasedCodexFollowerRecoveries(targets) {
+		func() {
+			defer outbox.endReleasedRecoveryAttempt(entry.ID)
+			reply, ok := outbox.registry.ReplierForRoute(entry.Route)
+			if !ok || reply == nil {
+				log.Printf("[terminal-outbox] 已解绑 Codex 卡片冻结等待平台恢复 id=%s", entry.ID)
+				return
+			}
+			preparer, ok := optionalDurableStreamDetachPreparer(reply)
+			if !ok || entry.Stream == nil {
+				log.Printf("[terminal-outbox] 已解绑 Codex 卡片不支持可恢复冻结 id=%s", entry.ID)
+				return
+			}
+			operationID := uuid.NewString()
+			notice := "已解除当前窗口的会话绑定；本地 Codex 任务继续运行。"
+			checkpoint, err := preparer.PrepareDetachFromReference(*entry.Stream, notice, operationID)
+			if err != nil {
+				log.Printf("[terminal-outbox] 准备已解绑 Codex 卡片冻结失败 id=%s: %s",
+					entry.ID, observability.SanitizeText(err.Error()))
+				return
+			}
+			if err := outbox.detachStreamReservation(entry.ID, pendingStreamSupersede{
+				ID: operationID, Route: entry.Route, Checkpoint: checkpoint,
+			}); err != nil {
+				log.Printf("[terminal-outbox] 持久化已解绑 Codex 卡片冻结失败 id=%s: %s",
+					entry.ID, observability.SanitizeText(err.Error()))
+			}
+		}()
+	}
 }
 
 func (h *Handler) currentTerminalOutbox() *terminalOutbox {
@@ -217,7 +277,9 @@ func InspectTerminalOutbox(path string) (TerminalOutboxStatus, error) {
 
 func newTerminalOutbox(path string, registry *platform.Registry, traceRecorders ...observability.Recorder) (*terminalOutbox, error) {
 	outbox := &terminalOutbox{
-		path: path, registry: registry, preparing: make(map[string]bool), processing: make(map[string]bool),
+		path: path, registry: registry,
+		preparing: make(map[string]bool), followerHeld: make(map[string]bool),
+		releaseHeld: make(map[string]bool), releaseBusy: make(map[string]bool), processing: make(map[string]bool),
 		wake: make(chan struct{}, 1), now: time.Now,
 		maxEntries: terminalOutboxMaxEntries, maxAttempts: terminalOutboxMaxAttempts,
 	}
@@ -245,6 +307,210 @@ func (o *terminalOutbox) enqueueAndAttempt(ctx context.Context, draft terminalOu
 	return nil
 }
 
+func (o *terminalOutbox) holdReleasedCodexFollowerRecoveries(targets []codexReleasedFollowerSnapshot) []*terminalOutboxEntry {
+	if len(targets) == 0 {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var held []*terminalOutboxEntry
+	for _, entry := range o.entries {
+		if !terminalOutboxEntryIsActiveStreamRecovery(entry) || entry.Trace == nil {
+			continue
+		}
+		for _, target := range targets {
+			if !terminalOutboxEntryMatchesCodexRelease(entry, target) {
+				continue
+			}
+			o.preparing[entry.ID] = true
+			o.releaseHeld[entry.ID] = true
+			delete(o.followerHeld, entry.ID)
+			if o.releaseBusy[entry.ID] {
+				break
+			}
+			o.releaseBusy[entry.ID] = true
+			held = append(held, cloneTerminalOutboxEntry(entry))
+			break
+		}
+	}
+	return held
+}
+
+// holdCodexFollowerRecoveries 在 worker 启动前暂停仍有 durable follower 的活动卡恢复，
+// 避免把可重新观察的本地 turn 误报为“服务重启导致停止”。
+func (o *terminalOutbox) holdCodexFollowerRecoveries(targets []codexFollowerSnapshot) {
+	if len(targets) == 0 {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, entry := range o.entries {
+		if !terminalOutboxEntryIsActiveStreamRecovery(entry) || entry.Trace == nil {
+			continue
+		}
+		for _, target := range targets {
+			if !terminalOutboxEntryMatchesCodexFollower(entry, target) {
+				continue
+			}
+			o.preparing[entry.ID] = true
+			o.followerHeld[entry.ID] = true
+			break
+		}
+	}
+}
+
+func (o *terminalOutbox) heldCodexFollowerRecoveries(target codexFollowerSnapshot) []*terminalOutboxEntry {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var held []*terminalOutboxEntry
+	for _, entry := range o.entries {
+		if !o.followerHeld[entry.ID] || o.releaseHeld[entry.ID] ||
+			!terminalOutboxEntryIsActiveStreamRecovery(entry) || entry.Trace == nil {
+			continue
+		}
+		if !terminalOutboxEntryMatchesCodexFollower(entry, target) {
+			continue
+		}
+		held = append(held, cloneTerminalOutboxEntry(entry))
+	}
+	return held
+}
+
+func terminalOutboxEntryMatchesCodexFollower(entry *terminalOutboxEntry, target codexFollowerSnapshot) bool {
+	if !terminalOutboxEntryIsActiveStreamRecovery(entry) || entry.Trace == nil || entry.AgentName != target.AgentName ||
+		entry.Trace.ConversationID != target.ConversationID ||
+		!sameDeliveryEndpoint(entry.Route, target.Target.DeliveryRoute) {
+		return false
+	}
+	if strings.TrimSpace(entry.Trace.ThreadID) == strings.TrimSpace(target.Target.ThreadID) {
+		return true
+	}
+	return strings.TrimSpace(target.RecoveryThreadID) != "" &&
+		strings.TrimSpace(target.RecoveryReservationID) != "" &&
+		entry.ID == strings.TrimSpace(target.RecoveryReservationID) &&
+		strings.TrimSpace(entry.Trace.ThreadID) == strings.TrimSpace(target.RecoveryThreadID)
+}
+
+func terminalOutboxEntryMatchesCodexRelease(entry *terminalOutboxEntry, target codexReleasedFollowerSnapshot) bool {
+	if !terminalOutboxEntryIsActiveStreamRecovery(entry) || entry.Trace == nil ||
+		entry.AgentName != target.AgentName || entry.Trace.ConversationID != target.ConversationID {
+		return false
+	}
+	reservationID := strings.TrimSpace(target.RecoveryReservationID)
+	if reservationID != "" && entry.ID != reservationID {
+		return false
+	}
+	threadID := strings.TrimSpace(entry.Trace.ThreadID)
+	if threadID == strings.TrimSpace(target.ThreadID) {
+		return true
+	}
+	return reservationID != "" && strings.TrimSpace(target.RecoveryThreadID) != "" &&
+		threadID == strings.TrimSpace(target.RecoveryThreadID)
+}
+
+func terminalOutboxEntryIsActiveStreamRecovery(entry *terminalOutboxEntry) bool {
+	if entry == nil || entry.Stream == nil {
+		return false
+	}
+	if entry.ActiveStreamRecovery {
+		return true
+	}
+	// v1 旧状态没有显式类型；仅精确识别历史活动卡重启草稿。
+	return entry.Stopped && entry.Checkpoint == nil && entry.Text == activeStreamRestartText &&
+		!entry.CheckpointDelivered && !entry.TextDelivered && !entry.NotificationDelivered
+}
+
+func sameDeliveryEndpoint(left platform.DeliveryRoute, right platform.DeliveryRoute) bool {
+	return left.Platform == right.Platform &&
+		strings.TrimSpace(left.AccountID) == strings.TrimSpace(right.AccountID) &&
+		strings.TrimSpace(left.ChatID) == strings.TrimSpace(right.ChatID)
+}
+
+func (o *terminalOutbox) releaseHeldCodexFollowerRecovery(id string) {
+	o.mu.Lock()
+	delete(o.followerHeld, id)
+	delete(o.releaseHeld, id)
+	delete(o.releaseBusy, id)
+	delete(o.preparing, id)
+	o.mu.Unlock()
+	o.signal()
+}
+
+func (o *terminalOutbox) endReleasedRecoveryAttempt(id string) {
+	o.mu.Lock()
+	delete(o.releaseBusy, id)
+	o.mu.Unlock()
+}
+
+// reconcileCodexFollowerHolds 释放已经不再对应活动 follower 或解绑意图的内存 hold。
+// hold 本身不落盘；若不在每轮快照后清理，路由变更会让恢复条目永久停在 preparing。
+func (o *terminalOutbox) reconcileCodexFollowerHolds(
+	followers []codexFollowerSnapshot,
+	releases []codexReleasedFollowerSnapshot,
+) {
+	o.mu.Lock()
+	changed := false
+	heldIDs := make(map[string]struct{}, len(o.followerHeld)+len(o.releaseHeld))
+	for id := range o.followerHeld {
+		heldIDs[id] = struct{}{}
+	}
+	for id := range o.releaseHeld {
+		heldIDs[id] = struct{}{}
+	}
+	for id := range heldIDs {
+		if o.releaseBusy[id] {
+			continue
+		}
+		entry := o.entryLocked(id)
+		followerMatch := false
+		releaseMatch := false
+		if entry != nil {
+			for _, follower := range followers {
+				if terminalOutboxEntryMatchesCodexFollower(entry, follower) {
+					followerMatch = true
+					break
+				}
+			}
+			for _, release := range releases {
+				if terminalOutboxEntryMatchesCodexRelease(entry, release) {
+					releaseMatch = true
+					break
+				}
+			}
+		}
+		if releaseMatch {
+			if !o.releaseHeld[id] || o.followerHeld[id] || !o.preparing[id] {
+				changed = true
+			}
+			o.releaseHeld[id] = true
+			delete(o.followerHeld, id)
+			o.preparing[id] = true
+			continue
+		}
+		if followerMatch {
+			if o.releaseHeld[id] || !o.followerHeld[id] || !o.preparing[id] {
+				changed = true
+			}
+			delete(o.releaseHeld, id)
+			delete(o.releaseBusy, id)
+			o.followerHeld[id] = true
+			o.preparing[id] = true
+			continue
+		}
+		if o.followerHeld[id] || o.releaseHeld[id] || o.preparing[id] {
+			changed = true
+		}
+		delete(o.followerHeld, id)
+		delete(o.releaseHeld, id)
+		delete(o.releaseBusy, id)
+		delete(o.preparing, id)
+	}
+	o.mu.Unlock()
+	if changed {
+		o.signal()
+	}
+}
+
 func (o *terminalOutbox) enqueue(draft terminalOutboxDraft) (*terminalOutboxEntry, error) {
 	return o.enqueueWithState(draft, false)
 }
@@ -269,7 +535,8 @@ func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing b
 		Stream: cloneDurableStreamReference(draft.Stream), Checkpoint: draft.Checkpoint,
 		ResultTitle: strings.TrimSpace(draft.ResultTitle), RichResult: draft.RichResult,
 		Text: draft.Text, Notification: draft.Notification,
-		CreatedAt: now, UpdatedAt: now, NextAttempt: now,
+		ActiveStreamRecovery: draft.ActiveStreamRecovery,
+		CreatedAt:            now, UpdatedAt: now, NextAttempt: now,
 	}
 	if strings.TrimSpace(draft.Trace.TraceID) != "" {
 		trace := draft.Trace
@@ -365,6 +632,7 @@ func (o *terminalOutbox) stageReservationResult(id string, draft terminalOutboxD
 	entry.RichResult = draft.RichResult
 	entry.Text = draft.Text
 	entry.Notification = draft.Notification
+	entry.ActiveStreamRecovery = false
 	entry.CheckpointDelivered = false
 	entry.TextDelivered = false
 	entry.NotificationDelivered = false
@@ -421,6 +689,7 @@ func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft)
 	entry.RichResult = draft.RichResult
 	entry.Text = draft.Text
 	entry.Notification = draft.Notification
+	entry.ActiveStreamRecovery = false
 	entry.UpdatedAt = o.now()
 	entry.NextAttempt = entry.UpdatedAt
 	entry.LastError = ""
@@ -476,6 +745,7 @@ func (o *terminalOutbox) discardReservation(id string) error {
 			entry.Checkpoint = nil
 			entry.Text = ""
 			entry.Notification = ""
+			entry.ActiveStreamRecovery = false
 			entry.CheckpointDelivered = true
 			entry.TextDelivered = true
 			entry.NotificationDelivered = true
@@ -540,6 +810,7 @@ func (o *terminalOutbox) refreshStreamReservation(id string, route platform.Deli
 	before := cloneTerminalOutboxEntry(entry)
 	entry.Route = route
 	entry.Stream = cloneDurableStreamReference(&reference)
+	entry.ActiveStreamRecovery = true
 	entry.Checkpoint = nil
 	entry.CheckpointDelivered = false
 	entry.TextDelivered = false
@@ -560,6 +831,31 @@ func (o *terminalOutbox) refreshStreamReservation(id string, route platform.Deli
 		return fmt.Errorf("persist active stream recovery: %w", err)
 	}
 	o.mu.Unlock()
+	return nil
+}
+
+func (o *terminalOutbox) refreshStreamReservationTrace(id string, trace observability.TraceContext) error {
+	if strings.TrimSpace(trace.TraceID) == "" {
+		return nil
+	}
+	trace.RouteKey = ""
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		return ErrTerminalOutboxNotFound
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	entry.Trace = &trace
+	entry.UpdatedAt = o.now()
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		return err
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		return fmt.Errorf("persist active stream recovery trace: %w", err)
+	}
 	return nil
 }
 
@@ -610,6 +906,7 @@ func (o *terminalOutbox) reanchorStreamReservation(
 	before := cloneTerminalOutboxEntry(entry)
 	entry.Route = newRoute
 	entry.Stream = cloneDurableStreamReference(&newReference)
+	entry.ActiveStreamRecovery = true
 	entry.Checkpoint = nil
 	entry.CheckpointDelivered = false
 	entry.TextDelivered = false
@@ -638,6 +935,102 @@ func (o *terminalOutbox) reanchorStreamReservation(
 	if !duplicate {
 		o.recordTrace(committed, "task.card_supersede_pending", "pending", "old progress card supersede queued")
 	}
+	o.signal()
+	return nil
+}
+
+// detachStreamReservation 原子移除活动卡片的“服务重启即中断”终态恢复，
+// 只保留可幂等重试的非终态冻结操作。
+func (o *terminalOutbox) detachStreamReservation(id string, pending pendingStreamSupersede) error {
+	if pending.NextAttempt.IsZero() {
+		pending.NextAttempt = o.now()
+	}
+	if err := validatePendingStreamSupersede(&pending); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		o.mu.Unlock()
+		return ErrTerminalOutboxNotFound
+	}
+	if !terminalOutboxEntryIsActiveStreamRecovery(entry) {
+		o.mu.Unlock()
+		return fmt.Errorf("terminal outbox reservation is no longer an active stream recovery")
+	}
+	for _, candidate := range o.entries {
+		if candidate.ID == pending.ID {
+			o.mu.Unlock()
+			return fmt.Errorf("pending stream supersede id conflicts with terminal outbox entry")
+		}
+		for _, existing := range candidate.PendingSupersedes {
+			if existing.ID == pending.ID {
+				o.mu.Unlock()
+				return fmt.Errorf("pending stream supersede id already exists")
+			}
+		}
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	wasPreparing := o.preparing[id]
+	wasFollowerHeld := o.followerHeld[id]
+	wasReleaseHeld := o.releaseHeld[id]
+	wasReleaseBusy := o.releaseBusy[id]
+	entry.Stream = nil
+	entry.Checkpoint = nil
+	entry.Text = ""
+	entry.Notification = ""
+	entry.ActiveStreamRecovery = false
+	entry.CheckpointDelivered = true
+	entry.TextDelivered = true
+	entry.NotificationDelivered = true
+	entry.Attempts = 0
+	entry.UpdatedAt = o.now()
+	entry.NextAttempt = entry.UpdatedAt
+	entry.LastError = ""
+	entry.DeadLetter = false
+	entry.DeadLetterAt = time.Time{}
+	entry.PendingSupersedes = append(entry.PendingSupersedes, clonePendingStreamSupersede(pending))
+	delete(o.preparing, id)
+	delete(o.followerHeld, id)
+	delete(o.releaseHeld, id)
+	delete(o.releaseBusy, id)
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		if wasPreparing {
+			o.preparing[id] = true
+		}
+		if wasFollowerHeld {
+			o.followerHeld[id] = true
+		}
+		if wasReleaseHeld {
+			o.releaseHeld[id] = true
+		}
+		if wasReleaseBusy {
+			o.releaseBusy[id] = true
+		}
+		o.mu.Unlock()
+		return err
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		if wasPreparing {
+			o.preparing[id] = true
+		}
+		if wasFollowerHeld {
+			o.followerHeld[id] = true
+		}
+		if wasReleaseHeld {
+			o.releaseHeld[id] = true
+		}
+		if wasReleaseBusy {
+			o.releaseBusy[id] = true
+		}
+		o.mu.Unlock()
+		return fmt.Errorf("persist detached stream recovery: %w", err)
+	}
+	committed := cloneTerminalOutboxEntry(entry)
+	o.mu.Unlock()
+	o.recordTrace(committed, "task.card_detach_pending", "pending", "released progress card freeze queued")
 	o.signal()
 	return nil
 }

@@ -47,15 +47,10 @@ func runFeishuBootstrap(ctx context.Context, opts feishuBootstrapOptions) error 
 	if err := saveFeishuCreds(opts.Name, feishu.Credentials{AppID: opts.AppID, AppSecret: opts.AppSecret}); err != nil {
 		return err
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	upsertFeishuBotConfig(cfg, opts)
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	if err := config.Save(cfg); err != nil {
+	if err := config.Update(func(cfg *config.Config) error {
+		upsertFeishuBotConfig(cfg, opts)
+		return nil
+	}); err != nil {
 		return err
 	}
 	printFeishuBootstrapResult(opts)

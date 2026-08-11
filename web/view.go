@@ -1,6 +1,9 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"reflect"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -11,13 +14,13 @@ const secretMask = "__WECLAW_UNCHANGED__"
 
 // configView 是面向前端的脱敏配置视图。
 type configView struct {
+	Revision              string                           `json:"revision"`
 	DefaultAgent          string                           `json:"default_agent"`
 	APIAddr               string                           `json:"api_addr"`
 	APIToken              string                           `json:"api_token"`
 	UpdateSource          string                           `json:"update_source"`
 	SaveDir               string                           `json:"save_dir"`
 	AllowedWorkspaceRoots []string                         `json:"allowed_workspace_roots"`
-	AdminUsers            []string                         `json:"admin_users"`
 	RateLimitPerMinute    int                              `json:"rate_limit_per_minute"`
 	AuditLog              *bool                            `json:"audit_log"`
 	AuditLogPath          string                           `json:"audit_log_path"`
@@ -54,12 +57,12 @@ type agentView struct {
 // redactConfig 把配置转为脱敏视图：所有密钥替换为掩码常量(非空时)，env 值掩码。
 func redactConfig(cfg *config.Config) configView {
 	v := configView{
+		Revision:              configRevision(cfg),
 		DefaultAgent:          cfg.DefaultAgent,
 		APIAddr:               cfg.APIAddr,
 		UpdateSource:          cfg.UpdateSource,
 		SaveDir:               cfg.SaveDir,
 		AllowedWorkspaceRoots: cfg.AllowedWorkspaceRoots,
-		AdminUsers:            cfg.AdminUsers,
 		RateLimitPerMinute:    cfg.RateLimitPerMinute,
 		AuditLog:              cfg.AuditLog,
 		AuditLogPath:          cfg.AuditLogPath,
@@ -106,6 +109,18 @@ func redactConfig(cfg *config.Config) configView {
 	return v
 }
 
+func configRevision(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 // mergeView 把脱敏视图合并回 current：掩码值沿用 current 的密钥，非掩码值覆盖。
 func mergeView(current *config.Config, v configView) *config.Config {
 	merged := *current // 浅拷贝顶层标量
@@ -114,7 +129,6 @@ func mergeView(current *config.Config, v configView) *config.Config {
 	merged.UpdateSource = v.UpdateSource
 	merged.SaveDir = v.SaveDir
 	merged.AllowedWorkspaceRoots = v.AllowedWorkspaceRoots
-	merged.AdminUsers = v.AdminUsers
 	merged.RateLimitPerMinute = v.RateLimitPerMinute
 	merged.AuditLog = v.AuditLog
 	merged.AuditLogPath = v.AuditLogPath

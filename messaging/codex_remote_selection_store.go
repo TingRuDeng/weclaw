@@ -11,6 +11,7 @@ import (
 var (
 	errCodexRemoteSelectionChanged = errors.New("Codex 会话绑定状态已变化")
 	errCodexRemoteThreadArchived   = errors.New("Codex 会话已归档")
+	errCodexFollowerAlreadyBound   = errors.New("该 Codex 会话已绑定到另一个飞书窗口")
 )
 
 // codexRemoteSelectionSnapshot is the compare-and-swap image for one
@@ -31,6 +32,8 @@ type codexRemoteSelectionUpdate struct {
 	TargetThreadID   string
 	ConversationID   string
 	PendingFirstTurn bool
+	SetFollower      bool
+	Follower         *codexFrontendFollower
 	Expected         codexRemoteSelectionSnapshot
 }
 
@@ -110,6 +113,16 @@ func (s *codexSessionStore) commitRemoteSelection(update codexRemoteSelectionUpd
 	if err := validateCodexRemoteSelectionSnapshotLocked(s.bindings, update); err != nil {
 		return codexRemoteSelectionResult{}, err
 	}
+	if update.SetFollower && update.Follower != nil {
+		for bindingKey, binding := range s.bindings {
+			if bindingKey == update.BindingKey || binding.Follower == nil {
+				continue
+			}
+			if strings.TrimSpace(binding.Follower.ThreadID) == update.TargetThreadID {
+				return codexRemoteSelectionResult{}, errCodexFollowerAlreadyBound
+			}
+		}
+	}
 	before := codexRemoteSelectionState{bindings: cloneCodexSessionBindings(s.bindings)}
 	nextBindings := cloneCodexSessionBindings(s.bindings)
 	now := time.Now().UTC()
@@ -160,6 +173,9 @@ func normalizeCodexRemoteSelectionUpdate(update codexRemoteSelectionUpdate) code
 	update.WorkspaceRoot = normalizeCodexWorkspaceRoot(update.WorkspaceRoot)
 	update.TargetThreadID = strings.TrimSpace(update.TargetThreadID)
 	update.ConversationID = strings.TrimSpace(update.ConversationID)
+	if update.SetFollower {
+		update.Follower = normalizeCodexFrontendFollower(update.Follower)
+	}
 	return update
 }
 
@@ -193,7 +209,10 @@ func cloneCodexSessionBindings(source map[string]codexSessionBinding) map[string
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaces[workspaceRoot] = session
 		}
-		cloned[key] = codexSessionBinding{ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces}
+		cloned[key] = codexSessionBinding{
+			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
+			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
+		}
 	}
 	return cloned
 }
@@ -212,7 +231,8 @@ func sameCodexSessionBindings(left map[string]codexSessionBinding, right map[str
 }
 
 func sameCodexSessionBinding(left codexSessionBinding, right codexSessionBinding) bool {
-	if left.ActiveWorkspace != right.ActiveWorkspace || len(left.Workspaces) != len(right.Workspaces) {
+	if left.ActiveWorkspace != right.ActiveWorkspace || left.FollowRevision != right.FollowRevision ||
+		!sameCodexFrontendFollower(left.Follower, right.Follower) || len(left.Workspaces) != len(right.Workspaces) {
 		return false
 	}
 	for workspaceRoot, session := range left.Workspaces {
@@ -246,19 +266,36 @@ func selectCodexRemoteWorkspace(bindings map[string]codexSessionBinding, update 
 			continue
 		}
 		session.ThreadID, session.PendingNewThread, session.PendingFirstTurn = "", false, false
+		session.FirstTurnRecoveryThreadID = ""
+		session.FirstTurnRecoveryReservationID = ""
 		session.UpdatedAt = now.Format(time.RFC3339)
 		binding.Workspaces[root], changed = session, true
 	}
 	target := binding.Workspaces[update.WorkspaceRoot]
-	if strings.TrimSpace(target.ThreadID) != update.TargetThreadID || target.PendingNewThread {
+	if strings.TrimSpace(target.ThreadID) != update.TargetThreadID || target.PendingNewThread || codexWorkspaceReleaseIntent(target) {
 		target.ThreadID, target.PendingNewThread = update.TargetThreadID, false
 		target.PendingFirstTurn = update.PendingFirstTurn
+		target.FirstTurnRecoveryThreadID = ""
+		target.FirstTurnRecoveryReservationID = ""
+		clearCodexWorkspaceReleaseState(&target)
 		target.UpdatedAt, changed = now.Format(time.RFC3339), true
 		binding.Workspaces[update.WorkspaceRoot] = target
 	} else if update.PendingFirstTurn && !target.PendingFirstTurn {
 		target.PendingFirstTurn = true
+		target.FirstTurnRecoveryThreadID = ""
+		target.FirstTurnRecoveryReservationID = ""
 		target.UpdatedAt, changed = now.Format(time.RFC3339), true
 		binding.Workspaces[update.WorkspaceRoot] = target
+	}
+	if update.SetFollower {
+		binding.FollowRevision++
+		binding.Follower = cloneCodexFrontendFollower(update.Follower)
+		if binding.Follower != nil {
+			binding.Follower.WorkspaceRoot = update.WorkspaceRoot
+			binding.Follower.ThreadID = update.TargetThreadID
+			binding.Follower.UpdatedAt = now.Format(time.RFC3339)
+		}
+		changed = true
 	}
 	bindings[update.BindingKey] = binding
 	return changed

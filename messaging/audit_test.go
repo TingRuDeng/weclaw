@@ -130,7 +130,6 @@ func TestAuditRecordLogsPersistenceFailureWithoutPropagating(t *testing.T) {
 
 func TestServiceAdminCommandAuditsAcceptedAndResult(t *testing.T) {
 	h := NewHandler(nil, nil)
-	h.SetAdminUsers([]string{"admin"})
 	recorder := &recordingAuditLogger{}
 	h.SetAuditLogger(recorder)
 	h.SetServiceAdminCommandExecutor(func(context.Context, string, []string) (string, error) {
@@ -138,9 +137,9 @@ func TestServiceAdminCommandAuditsAcceptedAndResult(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformWeChat, AccountID: "wx-a", UserID: "admin", Text: "/update",
-	}, reply)
+	}), reply)
 	reply.waitTexts(t, 2)
 
 	entries := recorder.snapshot()
@@ -269,9 +268,9 @@ func TestFeishuIdentityMutationsAuditTargetWithoutAuthorizationCode(t *testing.T
 		t.Fatal("IssueAuthCode ok=false")
 	}
 	reply := newAdminCommandTestReplier()
-	h.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users approve-code "+record.AuthCode+" --admin"), reply)
+	h.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve-code "+record.AuthCode), reply)
 	reply.waitTexts(t, 1)
-	h.HandleMessage(context.Background(), feishuAdminCommandMessage("/feishu users revoke on_same_person --admin"), reply)
+	h.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_same_person"), reply)
 	reply.waitTexts(t, 2)
 
 	entries := recorder.snapshot()

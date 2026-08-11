@@ -12,15 +12,14 @@ import (
 type feishuIdentityApproveCodeOptions struct {
 	Code        string
 	BotRef      string
-	Admin       bool
 	DisplayName string
+	AccountID   string
 }
 
 // FeishuIdentityApproveCodeRequest 描述一次基于授权码的飞书身份授权请求。
 type FeishuIdentityApproveCodeRequest struct {
 	Code        string
 	BotRef      string
-	Admin       bool
 	DisplayName string
 	FilePath    string
 }
@@ -30,17 +29,25 @@ func (h *Handler) handleFeishuIdentityApproveCode(msg platform.IncomingMessage, 
 	if err != nil {
 		return err.Error()
 	}
+	opts.BotRef, err = remoteFeishuIdentityBotRef(msg.AccountID, opts.BotRef)
+	if err != nil {
+		return err.Error()
+	}
+	opts.AccountID = strings.TrimSpace(msg.AccountID)
+	h.feishuIdentityMutationMu.Lock()
+	defer h.feishuIdentityMutationMu.Unlock()
 	result, err := approveFeishuIdentityByCode(h.ensureFeishuIdentities(), opts)
 	if err != nil {
 		return err.Error()
 	}
-	h.auditFeishuIdentityMutation(msg, "feishu_identity_approve", result.Identity, result.Bots, result.Admin)
+	h.refreshFeishuAccountAccess(opts.AccountID, result.allowedUsers)
+	h.auditFeishuIdentityMutation(msg, "feishu_identity_approve", result.Identity, result.Bots)
 	return RenderFeishuIdentityApproval(result)
 }
 
 func parseFeishuIdentityApproveCodeOptions(args []string) (feishuIdentityApproveCodeOptions, error) {
 	if len(args) == 0 {
-		return feishuIdentityApproveCodeOptions{}, fmt.Errorf("用法: /feishu users approve-code <授权码> [--bot <name|app_id>] [--admin] [--name <显示名>]")
+		return feishuIdentityApproveCodeOptions{}, fmt.Errorf("用法: /feishu users approve-code <授权码> [--bot <name|app_id>] [--name <显示名>]")
 	}
 	opts := feishuIdentityApproveCodeOptions{Code: strings.TrimSpace(args[0])}
 	for i := 1; i < len(args); i++ {
@@ -56,9 +63,6 @@ func parseFeishuIdentityApproveCodeOptions(args []string) (feishuIdentityApprove
 
 func applyFeishuApproveCodeFlag(opts feishuIdentityApproveCodeOptions, args []string, index int) (feishuIdentityApproveCodeOptions, int, error) {
 	switch args[index] {
-	case "--admin":
-		opts.Admin = true
-		return opts, 0, nil
 	case "--bot":
 		value, err := feishuApproveCodeFlagValue(args, index, "--bot 需要指定机器人 name 或 app_id")
 		opts.BotRef = value
@@ -89,7 +93,6 @@ func ApproveFeishuIdentityByCode(req FeishuIdentityApproveCodeRequest) (FeishuId
 	opts := feishuIdentityApproveCodeOptions{
 		Code:        strings.TrimSpace(req.Code),
 		BotRef:      strings.TrimSpace(req.BotRef),
-		Admin:       req.Admin,
 		DisplayName: strings.TrimSpace(req.DisplayName),
 	}
 	return approveFeishuIdentityByCode(store, opts)
@@ -104,9 +107,9 @@ func approveFeishuIdentityByCode(store *feishuIdentityStore, opts feishuIdentity
 		record = renameFeishuRecordForApproval(store, record, opts.DisplayName)
 	}
 	result, err := approveFeishuIdentity(store, feishuIdentityApproveOptions{
-		Selector: record.Key,
-		BotRef:   opts.BotRef,
-		Admin:    opts.Admin,
+		Selector:  record.Key,
+		BotRef:    opts.BotRef,
+		AccountID: opts.AccountID,
 	})
 	if err != nil {
 		return FeishuIdentityApproveResult{}, err

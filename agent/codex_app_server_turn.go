@@ -142,8 +142,16 @@ func (a *ACPAgent) logCodexTurnStart(runtime *codexAppServerTurnRuntime, elapsed
 }
 
 func (a *ACPAgent) collectCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, error) {
+	detach := codexObserverDetachFromContext(runtime.opts.ctx)
 	for {
 		select {
+		case <-detach:
+			runtime.messageProgress.flush(progressCallbacks{
+				onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent,
+			})
+			log.Printf("[acp] turn observer detached without interrupt (pid=%d, thread=%s, conversation=%s, elapsed=%s)",
+				runtime.pid, runtime.threadID, runtime.opts.conversationID, runtime.metrics.elapsed(time.Now()))
+			return "", ErrCodexObserverDetached
 		case <-runtime.opts.ctx.Done():
 			return a.cancelCodexAppServerTurn(runtime)
 		case runtime.activeTurnID = <-runtime.turnIDCh:

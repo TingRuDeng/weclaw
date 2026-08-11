@@ -17,7 +17,6 @@ var feishuUsersCmd = &cobra.Command{
 
 var (
 	feishuUsersApproveBotRef string
-	feishuUsersApproveAdmin  bool
 	feishuUsersApproveName   string
 )
 
@@ -45,7 +44,6 @@ var feishuUsersApproveCmd = &cobra.Command{
 		return runFeishuUsersApprove(feishuUsersApproveOptions{
 			Selector: args[0],
 			BotRef:   feishuUsersApproveBotRef,
-			Admin:    feishuUsersApproveAdmin,
 		})
 	},
 }
@@ -70,7 +68,6 @@ var feishuUsersApproveCodeCmd = &cobra.Command{
 		return runFeishuUsersApproveCode(feishuUsersApproveCodeOptions{
 			Code:        args[0],
 			BotRef:      feishuUsersApproveBotRef,
-			Admin:       feishuUsersApproveAdmin,
 			DisplayName: feishuUsersApproveName,
 		})
 	},
@@ -79,14 +76,11 @@ var feishuUsersApproveCodeCmd = &cobra.Command{
 type feishuUsersApproveOptions struct {
 	Selector string
 	BotRef   string
-	Admin    bool
 }
 
 func init() {
 	feishuUsersApproveCmd.Flags().StringVar(&feishuUsersApproveBotRef, "bot", "", "限定写入的飞书机器人 name 或 app_id")
-	feishuUsersApproveCmd.Flags().BoolVar(&feishuUsersApproveAdmin, "admin", false, "同时写入顶层 admin_users")
 	feishuUsersApproveCodeCmd.Flags().StringVar(&feishuUsersApproveBotRef, "bot", "", "限定写入的飞书机器人 name 或 app_id")
-	feishuUsersApproveCodeCmd.Flags().BoolVar(&feishuUsersApproveAdmin, "admin", false, "同时写入顶层 admin_users")
 	feishuUsersApproveCodeCmd.Flags().StringVar(&feishuUsersApproveName, "name", "", "为该用户写入本地显示名")
 	feishuUsersCmd.AddCommand(feishuUsersPendingCmd, feishuUsersListCmd, feishuUsersApproveCmd, feishuUsersApproveCodeCmd, feishuUsersRenameCmd)
 }
@@ -119,15 +113,14 @@ func validateFeishuUsersApproveArgs(cmd *cobra.Command, args []string) error {
 	if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 		return nil
 	}
-	return fmt.Errorf("用法: weclaw feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]")
+	return fmt.Errorf("用法: weclaw feishu users approve <union_id|user_id|open_id> [--bot <name|app_id>]")
 }
 
-// runFeishuUsersApprove 将已发现身份写入飞书允许访问列表，可选同步管理员。
+// runFeishuUsersApprove 将已发现身份写入飞书允许访问列表。
 func runFeishuUsersApprove(opts feishuUsersApproveOptions) error {
 	result, err := messaging.ApproveFeishuIdentity(messaging.FeishuIdentityApproveRequest{
 		Selector: opts.Selector,
 		BotRef:   opts.BotRef,
-		Admin:    opts.Admin,
 	})
 	if err != nil {
 		return err
@@ -154,7 +147,6 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	fmt.Printf("%d. %s\n", index, feishuIdentityDisplayLabel(view, names))
 	if !showApprovalCode && len(view.AuthorizedAccounts) > 0 {
 		fmt.Printf("   已授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.AuthorizedAccounts, botLabels), ", "))
-		fmt.Printf("   用户类型: %s\n", feishuIdentityUserType(view))
 	}
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		fmt.Printf("   待授权机器人: %s\n", strings.Join(feishuBotLabelsForAccounts(view.UnauthorizedAccounts, botLabels), ", "))
@@ -167,22 +159,12 @@ func printFeishuIdentityView(index int, view messaging.FeishuIdentityView, botLa
 	}
 	if showApprovalCode && strings.TrimSpace(view.AuthCode) != "" {
 		fmt.Printf("   授权码: %s\n", view.AuthCode)
-		fmt.Printf("   授权命令: weclaw feishu users approve-code %s\n", view.AuthCode)
-		if strings.TrimSpace(view.UnionID) != "" {
-			fmt.Printf("   授权并设为管理员: weclaw feishu users approve-code %s --admin\n", view.AuthCode)
-		}
+		printFeishuIdentityApproveCodeHints(view.AuthCode, view)
 		return
 	}
 	if showApprovalCode && len(view.UnauthorizedAccounts) > 0 {
 		printFeishuIdentityApproveHints(view)
 	}
-}
-
-func feishuIdentityUserType(view messaging.FeishuIdentityView) string {
-	if view.Admin {
-		return "管理员"
-	}
-	return "普通用户"
 }
 
 // feishuIdentityViewStatus 把身份授权状态转为面向用户的中文文案。
@@ -257,18 +239,55 @@ func feishuBotLabelsForAccounts(accounts []string, labels map[string]string) []s
 	return out
 }
 
-// printFeishuIdentityApproveHints 输出访问授权和管理员授权的下一步命令。
+// printFeishuIdentityApproveHints 输出访问授权的下一步命令。
 func printFeishuIdentityApproveHints(view messaging.FeishuIdentityView) {
 	selector := firstFeishuIdentitySelector(view)
 	if selector == "" {
 		return
 	}
-	fmt.Printf("   授权命令: weclaw feishu users approve %s\n", selector)
-	fmt.Println("   授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。")
-	if strings.TrimSpace(view.UnionID) != "" {
-		fmt.Printf("   管理员命令: weclaw feishu users approve %s --admin\n", view.UnionID)
-		fmt.Println("   管理员说明: 需要同时设为管理员时执行上面的管理员命令。")
+	accounts := feishuIdentityApprovalAccounts(view)
+	if len(accounts) == 0 {
+		fmt.Printf("   授权命令: weclaw feishu users approve %s --bot <name|app_id>\n", selector)
+	} else {
+		for _, account := range accounts {
+			fmt.Printf("   授权命令: weclaw feishu users approve %s --bot %s\n", selector, account)
+		}
 	}
+	fmt.Println("   授权说明: 执行上面的授权命令可授权该用户访问待授权机器人。")
+}
+
+// printFeishuIdentityApproveCodeHints 为每个待授权机器人输出可直接执行的命令。
+func printFeishuIdentityApproveCodeHints(code string, view messaging.FeishuIdentityView) {
+	accounts := feishuIdentityApprovalAccounts(view)
+	if len(accounts) == 0 {
+		fmt.Printf("   授权命令: weclaw feishu users approve-code %s --bot <name|app_id>\n", code)
+		return
+	}
+	for _, account := range accounts {
+		fmt.Printf("   授权命令: weclaw feishu users approve-code %s --bot %s\n", code, account)
+	}
+}
+
+// feishuIdentityApprovalAccounts 返回仍需授权的机器人账号，并保持发现顺序。
+func feishuIdentityApprovalAccounts(view messaging.FeishuIdentityView) []string {
+	accounts := view.UnauthorizedAccounts
+	if len(accounts) == 0 {
+		accounts = view.Accounts
+	}
+	out := make([]string, 0, len(accounts))
+	seen := make(map[string]struct{}, len(accounts))
+	for _, account := range accounts {
+		account = strings.TrimSpace(account)
+		if account == "" {
+			continue
+		}
+		if _, ok := seen[account]; ok {
+			continue
+		}
+		seen[account] = struct{}{}
+		out = append(out, account)
+	}
+	return out
 }
 
 // firstFeishuIdentitySelector 选择授权命令最稳定的用户标识。

@@ -202,6 +202,18 @@ type SupersedableStream interface {
 	Supersede(ctx context.Context, notice string) error
 }
 
+// DetachableStream 允许平台在消息窗口解除绑定时冻结当前展示，但不把它标记为
+// 自动续卡或位置迁移。未实现的平台可以继续使用 SupersedableStream 降级。
+type DetachableStream interface {
+	Detach(ctx context.Context, notice string) error
+}
+
+// DurableStreamDetachPreparer 根据持久化引用生成可重放的解除同步操作。
+// 返回 SupersedeCheckpoint 是为了复用同一套非终态 outbox 重试通道。
+type DurableStreamDetachPreparer interface {
+	PrepareDetachFromReference(reference DurableStreamReference, notice string, operationID string) (SupersedeCheckpoint, error)
+}
+
 // StreamContentPreflighter 在网络更新前按平台的完整载荷限制校验正文。
 // 不支持的平台无需实现；返回 ErrStreamContentTooLarge 时消息层可创建续接卡片。
 type StreamContentPreflighter interface {

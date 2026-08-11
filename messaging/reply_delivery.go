@@ -216,6 +216,18 @@ func optionalDurableStreamSupersedePreparer(reply platform.Replier) (platform.Du
 	return preparer, ok
 }
 
+func optionalDurableStreamDetachPreparer(reply platform.Replier) (platform.DurableStreamDetachPreparer, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		preparer, supported := optionalDurableStreamDetachPreparer(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedDurableStreamDetachPreparer{reply: serialized, preparer: preparer}, true
+	}
+	preparer, ok := reply.(platform.DurableStreamDetachPreparer)
+	return preparer, ok
+}
+
 func optionalDurableSupersedeReplier(reply platform.Replier) (platform.DurableSupersedeReplier, bool) {
 	if serialized, ok := reply.(*serializedReplier); ok {
 		durable, supported := optionalDurableSupersedeReplier(serialized.inner)
@@ -297,6 +309,17 @@ func (s serializedDurableTerminalReplier) DeliverTerminal(ctx context.Context, c
 type serializedDurableStreamSupersedePreparer struct {
 	reply    *serializedReplier
 	preparer platform.DurableStreamSupersedePreparer
+}
+
+type serializedDurableStreamDetachPreparer struct {
+	reply    *serializedReplier
+	preparer platform.DurableStreamDetachPreparer
+}
+
+func (s serializedDurableStreamDetachPreparer) PrepareDetachFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.preparer.PrepareDetachFromReference(reference, notice, operationID)
 }
 
 func (s serializedDurableStreamSupersedePreparer) PrepareSupersedeFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {

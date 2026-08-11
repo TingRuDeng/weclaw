@@ -6,6 +6,8 @@
 
 本文定义 WeClaw 远程管理 Codex、Claude 工作空间导航和会话名称的首期契约。当前行为以 `docs/AI_CONTEXT.md` 和源码为准。
 
+> 授权模型更新（2026-08-11）：本文中的“管理员”、`admin_users` 与 `--admin` 描述仅保留为首期历史背景。当前运行时以每个平台或机器人账号自己的 `allowed_users` 为唯一远程身份来源；其中所有身份具有相同管理能力，旧顶层 `admin_users` 只告警并忽略，不自动迁移。当前命令、账号隔离和工作空间边界以 `README_CN.md`、`docs/AI_CONTEXT.md` 与源码为准。
+
 ## 目标
 
 - 允许管理员通过 WeClaw 为指定 Codex 或 Claude Agent 登记已有工作目录，并从 WeClaw 导航中移除工作目录。

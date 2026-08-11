@@ -14,11 +14,11 @@
 
 ## 为什么使用 WeClaw
 
-- **远程接管本地任务**：离开电脑后，从微信或飞书继续 Codex、Claude 会话。
+- **远程同步本地任务**：离开电脑后，从微信或飞书继续 Codex、Claude 会话。
 - **上下文不中断**：复用 Codex workspace/thread 和 Claude ACP session，不把每条消息当成新对话。
 - **过程可见、结果可达**：飞书使用 CardKit 实时更新，微信提供输入状态和任务结果。
 - **单一 Codex 运行边界**：Codex App 或共享 app-server 二选一成为 Host；活动 turn 的输入按 app-server 接受顺序处理，新 turn 由 writer lease 串行化。
-- **安全边界可配置**：用户白名单、工作目录白名单、管理员权限、审计日志和 Codex 权限档位均可独立配置。
+- **安全边界可配置**：平台或机器人用户白名单、工作目录白名单、审计日志和 Codex 权限档位均可独立配置；个人的多个已授权账号具有相同管理能力。
 
 ## 快速开始
 
@@ -63,21 +63,24 @@ weclaw status
 
 选择已有会话或发送 `/cx new` 后即可直接发送任务。没有有效会话绑定时，普通消息只会提示选择会话或发送 `/cx new`，不会隐式创建或绑定会话。
 
-### 同时使用 Codex App 与 WeClaw
+### 在飞书与 Codex App / 受控 CLI 间同步同一任务
 
 ```text
 /cx ls                 # 查看本机已有 workspace 和 thread
 /cx <编号>             # 将当前窗口绑定到选中的 thread
 /cx status             # 查看当前工作空间、会话、任务、账号和运行状态
+/cx release            # 只解除当前飞书窗口绑定，本地任务继续运行
 ```
 
-macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经在固定 control socket 上运行且身份验证通过，WeClaw 会保持它作为唯一 Host，即使 Codex App 也已运行；Codex App、受控 CLI、飞书和微信因此可以复用同一组 thread。没有已运行 daemon 时，WeClaw 才在 App 已运行时通过受保护的 Desktop IPC 复用 App Host；App 不在时连接或启动官方 daemon（不可用时使用 WeClaw 自管兼容 Host）。如果 WeClaw 自管 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；daemon 身份、全局空闲或 App IPC 无法确认时直接失败，不会并行写入。macOS 显式 `daemon` 模式也会装配 Desktop IPC，但只用于前端状态探测和切走后的旧 thread 回交；它无权把 App 选为 Host，daemon 启动或验证失败时仍会失败关闭。
+macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经在固定 control socket 上运行且身份验证通过，WeClaw 会保持它作为唯一 Host，即使 Codex App 也已运行；Codex App、受控 CLI、飞书和微信因此可以复用同一组 thread。没有已运行 daemon 时，WeClaw 才在 App 已运行时通过受保护的 Desktop IPC 复用 App Host；App 不在时连接或启动官方 daemon（不可用时使用 WeClaw 自管兼容 Host）。如果 WeClaw 自管 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；daemon 身份、全局空闲或 App IPC 无法确认时直接失败，不会并行写入。macOS 显式 `daemon` 模式也会装配 Desktop IPC，但只用于前端状态探测和必要的 Host 协调；它无权把 App 选为 Host，daemon 启动或验证失败时仍会失败关闭。
 
-在飞书或微信中显式选择会话属于一次 Handoff。若已验证的官方 daemon 是唯一 Host，而 Desktop 历史探测返回 `no-client-found`，WeClaw 会把它视为当前 App 客户端已释放该会话，并在同一 daemon 上恢复绑定；因此 Codex App 窗口仍可见时也能从移动端接手。这个例外只用于显式会话选择：普通消息、状态查询、断线或超时不会自动接管，证据不足时仍保留 binding 并失败关闭。
+正式支持的协作形态是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”：两端绑定同一个 thread，看到同一 Host 提供的任务状态，并都可继续输入。飞书选择正在运行的会话后会先回填权威快照，再持续同步后续进度；普通消息使用当前 `turnId` 直接加入 active turn，只有 thread 空闲时才开始下一 turn。App、CLI 和飞书三端意外同时打开同一 thread 时仍由上游按请求接受顺序处理，但 WeClaw 不宣称客户端级排他或精确归属。
+
+飞书绑定会持久化。WeClaw 重启或短暂断线后，会在平台投递恢复时重新挂接仍在运行的任务；恢复失败会明确记录，不会停止本地任务或伪装成已同步。`/cx release` 只解除当前消息窗口的绑定，停止向该窗口回推进度、审批、问答和最终结果，并把现有进度卡冻结为非终态；它不会中断 active turn、重启 Host，也不会保留只读观察。本地 Codex 继续运行；之后重新选择同一会话时，从最新权威快照恢复同步。
 
 历史 thread 不再绑定创建时使用的 provider。选择或续写已有会话时，WeClaw 会读取当前 Codex Host 对该 workspace 生效的 `model_provider`；若与 thread 元数据不同，会在所有已知任务空闲且没有 writer lease 时备份并只迁移该 thread 的 rollout、`state_5.sqlite` 和可选 local catalog，再用同一 thread ID 和显式 provider 执行 resume。用户消息、可见回复、工具调用和结果会保留；无法跨 provider 使用的加密 reasoning 与 compaction 状态会删除。目标 thread 仍在运行时不会中断，当前 turn 的引导仍进入它已经使用的 provider；下一个新 turn 会先完成迁移。已加载但空闲的 App/shared Host 可以受控重启后继续。迁移记录保存在 `CODEX_HOME/backups/weclaw-provider-migration/`，任何身份、路径、状态或 resume 核验不确定都会失败关闭。
 
-App Host 支持选择已有会话、继续任务、进度、审批、`/stop`，以及修改当前 thread 的模型和推理强度。飞书或微信绑定到 App 中正在运行的 thread 后，普通消息会直接进入当前 turn，不再先暂存并等待任务结束。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
+App Host 支持选择已有会话、继续任务、进度、审批、`/stop`，以及修改当前 thread 的模型和推理强度。飞书绑定到 App 中正在运行的 thread 后，普通消息会直接进入当前 turn，不再先暂存并等待任务结束。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用，因为消息命令不能在本机启动额外进程。本机终端使用受控入口：
 
@@ -111,7 +114,7 @@ weclaw codex account doctor
 
 在线 `use` 会先拒绝正在执行的任务、活动或不确定 writer lease，以及任何 active/unknown thread；随后在索引写入切换 journal，停止真实受管 Host、投影目标认证、启动唯一 Host，并核对账号和额度。目标启动或验证失败时自动恢复旧认证和旧 Host；中途进程退出或回滚失败会在重启后继续保持禁止写入，不能因内存重置伪装恢复。在线 `save` 也会把 profile 索引与 Host 身份元数据一起提交，任一侧失败就补偿另一侧。旧版遗留或无法证明身份的 app-server 不会被终止，请先运行 `weclaw codex account doctor`；需要解除不安全 journal 时，停服后显式执行一次离线 `use` 再启动服务。
 
-飞书或微信可用 `/cx account`、`/cx account status` 查看脱敏的当前账号。只有管理员私聊可以查看账号列表或执行 `/cx account use <ID或标签>`；飞书列表选择还会显示一次绑定操作者、窗口、目标 profile 和列表 revision 的 5 分钟确认卡。一个 WeClaw 主机只有一个全局活动 Codex 账号，不按聊天窗口分别切换。
+飞书或微信可用 `/cx account`、`/cx account status` 查看脱敏的当前账号。当前平台或机器人的 `allowed_users` 身份可在私聊中查看账号列表或执行 `/cx account use <ID或标签>`；飞书列表选择还会显示一次绑定操作者、窗口、目标 profile 和列表 revision 的 5 分钟确认卡。一个 WeClaw 主机只有一个全局活动 Codex 账号，不按聊天窗口分别切换。
 
 ### 复用 Claude Code 会话
 
@@ -128,15 +131,15 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 
 选择、新建、飞书卡片切换或默认 Claude 的全局 `/new` 都只修改当前窗口 binding，不会覆盖或释放其他窗口。`session/resume`、ACP 连接或 ClaudeHost 启动失败只会把当前 binding 标记为运行通道不可用，不会切回旧 Agent、旧 session 或清除 binding；普通消息在恢复成功前保持禁止写入。重启 WeClaw 后，持久化 binding 先恢复为 `pending_resume`，由下一次真实使用恢复共享运行通道。
 
-`/cc new` 后如果 ACP 目录还没有持久化空会话，`/cc ls` 会把当前已接管的绑定标记为“当前新会话”。该条目只用于导航展示；发送首条消息后会进入正常目录，并且始终不能绕过 `/cc switch` 的 `session/list` 校验。
+`/cc new` 后如果 ACP 目录还没有持久化空会话，`/cc ls` 会把当前已绑定的空会话标记为“当前新会话”。该条目只用于导航展示；发送首条消息后会进入正常目录，并且始终不能绕过 `/cc switch` 的 `session/list` 校验。
 
 `/cc owner` 和 `/cc cli` 已停用：ClaudeHost 不再维护窗口级独占 owner，而独立 `claude --resume` 会绕过 session writer lease，重新产生第二个 writer。旧版状态文件中的 `remote`、`local`、`unclaimed` control intent 会在加载时丢弃，原有多窗口 binding 全部保留。原生 `claude` 命令仅可作为 `/cc quota` 的短生命周期额度查询回退，不参与会话写入。Claude 任务支持 `/stop` 和同一窗口的一条排队续跑，不支持 `/guide`。
 
 ### 管理工作空间与会话名称
 
-管理员可在机器人私聊中登记或隐藏已有工作目录：`/cx workspace add <路径>`、`/cx workspace remove <编号|路径>`，Claude 使用对应的 `/cc workspace ...`。登记记录按实际 Agent 名称保存在 `~/.weclaw/workspace-registry.json`；`remove` 只从 WeClaw 导航隐藏目录，不删除源码、Codex thread、Claude session 或历史，重新 `add` 会解除隐藏。管理员可以登记白名单外目录，但这不会扩大普通用户的 `allowed_workspace_roots` 权限。
+当前平台或机器人的 `allowed_users` 身份可在机器人私聊中登记或隐藏已有工作目录：`/cx workspace add <路径>`、`/cx workspace remove <编号|路径>`，Claude 使用对应的 `/cc workspace ...`。登记记录按实际 Agent 名称保存在 `~/.weclaw/workspace-registry.json`；`remove` 只从 WeClaw 导航隐藏目录，不删除源码、Codex thread、Claude session 或历史，重新 `add` 会解除隐藏。
 
-管理员还可在私聊中使用 `/cx session remove <编号|threadId>` 或 `/cc session remove <编号|sessionId>` 隐藏空闲且未被任何窗口绑定的会话；对应的 `session restore <稳定ID>` 会恢复导航可见性。该操作只写入 WeClaw 导航覆盖层，不归档或删除 Agent 会话与历史；仍有绑定、运行中任务或状态未确认时会失败关闭。
+已授权身份还可在私聊中使用 `/cx session remove <编号|threadId>` 或 `/cc session remove <编号|sessionId>` 隐藏空闲且未被任何窗口绑定的会话；对应的 `session restore <稳定ID>` 会恢复导航可见性。该操作只写入 WeClaw 导航覆盖层，不归档或删除 Agent 会话与历史；仍有绑定、运行中任务或状态未确认时会失败关闭。
 
 有权访问目标工作空间的用户可用 `/cx rename current|<编号> <名称>` 或 `/cc rename current|<编号> <名称>` 修改 Agent 的全局会话名称；名称最长 120 个 Unicode 字符且只能是单行文本。Codex 通过唯一共享 app-server 写入并读回确认；Claude 仅在当前 ACP adapter 实时公布 `rename` 命令后，复用同一 ClaudeHost 和 session writer lease 执行。重命名不改变任何窗口 binding，目标忙碌或结果无法确认时会明确失败并要求重新查看列表。
 
@@ -146,7 +149,8 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 - Claude 运行中发送普通消息：最多暂存一条，并在当前任务结束后自动续跑。
 - `/cancel`：撤回确实存在的暂存消息，不停止当前任务。
 - `/guide`：把确实存在的 Codex 暂存消息发送到当前任务；正常活动 turn 输入无需使用。
-- `/stop`：停止当前窗口正在运行的任务。
+- `/cx release`：只解除当前窗口的 Codex 绑定并停止该窗口同步，本地任务继续运行。
+- `/stop`：停止当前绑定 thread 的全局 active turn；本地 Codex 和当前消息窗口会同时受到影响。
 - `/ps`：查看当前用户运行中的任务。
 
 飞书只在消息确实进入兼容 pending 队列时显示紧凑操作卡；Codex 正常活动 turn 的补充输入不会显示暂存卡。Claude 的暂存消息无需点击，默认在当前任务结束后自动执行。卡片同时绑定机器人账号、操作者、消息窗口、活动任务和该条暂存消息的 revision；旧卡片不能操作后来任务或替换后的消息。点击结果会直接更新原卡片，不再另发一条命令结果。
@@ -155,7 +159,7 @@ Claude 通过一个进程驻留的共享 ClaudeHost 管理真实 ACP session：�
 
 Codex App Server 的原生计划、工具与文件事件会先归一为结构化进展；同一事件 ID 的运行与完成状态在任务卡中原位更新，原始命令输出、工具参数和 diff 不会写入卡片。`commandExecution` 生命周期不进入进度卡，真正需要用户处理的命令审批仍会独立展示。Codex 明确标记为 `commentary` 的用户可见中间说明会立即累计进时间线；若当前 Codex 版本未提供 `phase`，WeClaw 会暂存一条已完成消息，后续仍有执行活动时再把上一条确认为中间说明。正常完成前仍待判定的最后一条消息视为最终回答，不写入进度卡。所有中间说明都按顺序保留完整正文并与结构化进展一起参与自动续卡；Claude 的中间说明继续显示在独立“当前说明”区域。任务进入完成、失败或停止终态后，旧事件和晚到 watcher 不会再覆盖终态。
 
-原生任务卡创建后会立即把可恢复的卡片引用原子写入 `~/.weclaw/state/terminal-outbox.json`。任务结束时，飞书卡片只收敛为完成、失败或停止状态并保留已有进度与审批；完整最终结果通过新的静态 Markdown 结果卡独立交付，标题显示 Agent 与工作空间，超长正文会按容量预检拆成连续编号的卡片。卡片 checkpoint 与结果卡分别记录成功状态、并行尝试和幂等重试，一路失败或阻塞不会阻止另一路；进程重启后只恢复尚未成功的部分，网络结果不明确时不会改发文本造成重复。若平台不支持富结果能力，则兼容回退到原有幂等文本。若进程在任务执行中退出，新进程会把原卡更新为“任务已中断”的停止终态，并独立投递停止结果。飞书 CardKit checkpoint 与结果卡分段使用稳定 UUID，微信文本分片也使用稳定去重键；交付语义是 at-least-once，不承诺跨平台 exactly-once。附件和远程图片暂不进入 outbox，仍按原有安全校验和 best-effort 路径发送。
+原生任务卡创建后会立即把可恢复的卡片引用原子写入 `~/.weclaw/state/terminal-outbox.json`。任务结束时，飞书卡片只收敛为完成、失败或停止状态并保留已有进度与审批；完整最终结果通过新的静态 Markdown 结果卡独立交付，标题显示 Agent 与工作空间，超长正文会按容量预检拆成连续编号的卡片。卡片 checkpoint 与结果卡分别记录成功状态、并行尝试和幂等重试，一路失败或阻塞不会阻止另一路；进程重启后只恢复尚未成功的部分，网络结果不明确时不会改发文本造成重复。若平台不支持富结果能力，则兼容回退到原有幂等文本。对仍有 durable binding 的 Codex active turn，重启会先保留旧卡恢复记录并重新挂接观察，不能误报“任务已中断”；只有权威状态确认任务已结束后才投递真实终态。其他无法恢复观察的任务仍按既有中断恢复规则处理。飞书 CardKit checkpoint 与结果卡分段使用稳定 UUID，微信文本分片也使用稳定去重键；交付语义是 at-least-once，不承诺跨平台 exactly-once。附件和远程图片暂不进入 outbox，仍按原有安全校验和 best-effort 路径发送。
 
 运维人员可用 `weclaw outbox status [--json]` 查看脱敏积压，并用 `weclaw outbox redrive [entry-id]` 提前唤醒一个或全部待投递项。`redrive` 仅支持服务运行时通过真实 loopback API 执行，不重置重试次数或修改正文；API 不可达时失败关闭。`weclaw doctor` 也会报告 outbox 文件不可读、存在积压或容量耗尽。
 
@@ -221,36 +225,37 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 | 命令 | 说明 |
 | --- | --- |
 | `/help`、`/status` | 查看帮助和 WeClaw 运行态 |
-| `/cwd [路径]` | 查看或切换当前窗口工作目录；切换会同步 Agent 默认 cwd，普通用户受工作目录白名单限制 |
+| `/cwd [路径]` | 查看或切换当前窗口工作目录；切换会同步 Agent 默认 cwd，未获 Registry 授权能力的兼容入口受工作目录白名单限制 |
 | `/new` | 为当前默认 Agent 明确新建会话；默认 Agent 为 Codex 时同时绑定 |
 | `/model`、`/reasoning` | 已绑定时查看或切换当前会话配置；未绑定时查看或切换新会话默认值 |
 | `/fast [on|off]` | 查看或切换当前 Codex 会话速度；未绑定时切换新会话默认速度 |
 | `/mode [default|yolo]` | 查看或切换 Agent 授权处理方式；群聊按当前操作者隔离，飞书无参数 `/mode` 会弹出选择卡。切换到 yolo 会放行该操作者在当前窗口的既有待审批，并把已发审批卡收敛为自动批准终态；后续自动审批不再单独弹卡，有任务卡时追加记录 |
 | `/approve <短码>`、`/deny <短码>` | 审批按钮不可用时允许或拒绝对应操作；短码与操作者、窗口和有效期绑定 |
-| `/progress [模式]` | 查看进度模式；只有管理员可以修改账号级模式 |
-| `/ps`、`/stop` | 查看或停止当前任务 |
+| `/progress [模式]` | 查看进度模式；当前平台或机器人 `allowed_users` 身份可修改账号级模式 |
+| `/ps`、`/stop` | 查看任务，或停止当前绑定 thread 的全局 active turn |
 | `/cancel`、`/guide` | 处理确实存在的暂存消息；Codex 活动 turn 的普通输入会直接发送 |
 | `/cx help`、`/cc help` | 查看 Codex、Claude 完整会话命令 |
 | `/cx <编号>`、`/cx switch <编号>` | 选择并绑定当前工作空间的 Codex 会话 |
 | `/cx new` | 新建并绑定当前工作空间的 Codex 会话 |
+| `/cx release` | 只解除当前消息窗口的 Codex 绑定并停止同步；本地任务继续运行 |
 | `/cx archive current`、`/cx archive <编号>` | 归档当前或列表中的空闲 Codex 会话；保留历史，不做硬删除 |
 | `/cx rename current\|<编号> <名称>` | 重命名当前或列表中的 Codex 会话，不改变任何窗口 binding |
-| `/cx session remove <编号\|threadId>`、`/cx session restore <threadId>` | 管理员私聊隐藏或恢复 WeClaw 中的 Codex 会话导航，不归档或删除历史 |
-| `/cx workspace add <路径>`、`/cx workspace remove <编号\|路径>` | 管理员私聊登记或从 WeClaw 导航隐藏 Codex 工作目录 |
+| `/cx session remove <编号\|threadId>`、`/cx session restore <threadId>` | 已授权账号私聊隐藏或恢复 WeClaw 中的 Codex 会话导航，不归档或删除历史 |
+| `/cx workspace add <路径>`、`/cx workspace remove <编号\|路径>` | 已授权账号私聊登记或从 WeClaw 导航隐藏 Codex 工作目录 |
 | `/cc rename current\|<编号> <名称>` | 在 adapter 公布能力后重命名 Claude 会话，不改变任何窗口 binding |
-| `/cc session remove <编号\|sessionId>`、`/cc session restore <sessionId>` | 管理员私聊隐藏或恢复 WeClaw 中的 Claude 会话导航，不删除历史 |
-| `/cc workspace add <路径>`、`/cc workspace remove <编号\|路径>` | 管理员私聊登记或从 WeClaw 导航隐藏 Claude 工作目录 |
-| `/cx account`、`/cx account status` | 查看主机级 Codex 账号；管理员私聊可选择和切换 |
-| `/update`、`/restart [--force]` | 管理员在机器人私聊中远程更新或重启 WeClaw |
+| `/cc session remove <编号\|sessionId>`、`/cc session restore <sessionId>` | 已授权账号私聊隐藏或恢复 WeClaw 中的 Claude 会话导航，不删除历史 |
+| `/cc workspace add <路径>`、`/cc workspace remove <编号\|路径>` | 已授权账号私聊登记或从 WeClaw 导航隐藏 Claude 工作目录 |
+| `/cx account`、`/cx account status` | 查看主机级 Codex 账号；已授权账号私聊可选择和切换 |
+| `/update`、`/restart [--force]` | 已授权账号在机器人私聊中远程更新或重启 WeClaw |
 
 <details>
 <summary>Codex 常用命令</summary>
 
-选择并绑定：`/cx <编号>`、`/cx switch <会话>`、进入仅有一个会话的 `/cx cd <工作空间>`、`/cx new`。
+选择并绑定：`/cx <编号>`、`/cx switch <会话>`、进入仅有一个会话的 `/cx cd <工作空间>`、`/cx new`。解除当前窗口绑定但不停止本地任务：`/cx release`。
 
 归档：`/cx archive current` 归档当前绑定会话；进入工作空间会话列表后可用 `/cx archive <编号>` 归档指定会话。归档只允许空闲且未被其他 WeClaw 窗口绑定的会话，历史仍保留，可在 Codex App 的归档列表恢复。
 
-工作空间与名称：`/cx workspace add <路径>`、`/cx workspace remove <编号|路径>` 仅限管理员私聊；`/cx rename current|<编号> <名称>` 重命名当前或列表中的空闲会话。Desktop follower 模式不提供重命名写接口，需在 Codex App 内完成。
+工作空间与名称：`/cx workspace add <路径>`、`/cx workspace remove <编号|路径>` 仅限当前平台或机器人 `allowed_users` 身份的私聊；`/cx rename current|<编号> <名称>` 重命名当前或列表中的空闲会话。Desktop follower 模式不提供重命名写接口，需在 Codex App 内完成。
 
 运行边界：`/cx status` 紧凑展示当前工作空间、会话、任务、账号和运行状态；完整路径使用 `/cx pwd`，账号诊断使用 `/cx account status`，额度使用 `/cx quota`。
 
@@ -274,7 +279,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 ```bash
 weclaw wechat login
 weclaw wechat users pending
-weclaw wechat users approve-code <授权码> [--admin]
+weclaw wechat users approve-code <授权码>
 ```
 
 微信未授权用户会收到短期授权码。`allowed_users` 为空时默认拒绝所有用户。
@@ -285,10 +290,10 @@ weclaw wechat users approve-code <授权码> [--admin]
 weclaw feishu add
 weclaw feishu status --name <bot名称>
 weclaw feishu users pending
-weclaw feishu users approve-code <授权码> [--bot <名称|app_id>] [--admin]
+weclaw feishu users approve-code <授权码> [--bot <名称|app_id>]
 ```
 
-`weclaw feishu add` 交互式保存凭证，并更新 `platforms.feishu.bots[]`；`app_secret` 只写入独立凭证文件，不进入 `config.json`。每个机器人可以独立配置用户白名单、默认 Agent 和进度模式。
+`weclaw feishu add` 交互式保存凭证，并更新 `platforms.feishu.bots[]`；`app_secret` 只写入独立凭证文件，不进入 `config.json`。每个机器人可以独立配置用户白名单、默认 Agent 和进度模式。飞书聊天中的 `/feishu users ...` 只能管理收到该消息的机器人；本地 `approve`、`approve-code` 和 `revoke` 在配置多个机器人时必须显式传入 `--bot <名称|app_id>`，只有单机器人时可省略。
 
 <details>
 <summary>飞书应用最小权限</summary>
@@ -305,7 +310,7 @@ Tenant scopes：`im:message.p2p_msg:readonly`、`im:message.group_at_msg:readonl
 - Claude：`/cc ls`、`/cc status`、`/cc new`、`/cc quota`
 - 设置：`/model`、`/reasoning`、`/fast`、`/mode`
 
-推荐使用飞书 7.22 及以上版本的悬浮菜单，并将每个菜单项的响应动作配置为“发送文字消息”。应用菜单只保留高频入口；`/guide` 和 `/cancel` 不进入常驻菜单，只在消息确实暂存时由上下文操作卡提供。Codex 活动 turn 的普通输入直接发送，不显示暂存卡；`/help` 仍按“常用与任务、Codex、Claude、设置与进度”分级展示完整命令，管理员还会看到独立的“管理员”分类。
+推荐使用飞书 7.22 及以上版本的悬浮菜单，并将每个菜单项的响应动作配置为“发送文字消息”。应用菜单只保留高频入口；`/guide` 和 `/cancel` 不进入常驻菜单，只在消息确实暂存时由上下文操作卡提供。Codex 活动 turn 的普通输入直接发送，不显示暂存卡；`/help` 仍按“常用与任务、Codex、Claude、设置与进度”分级展示完整命令，`/help manage` 展示已授权账号可用的管理操作。
 
 悬浮菜单最多支持 5 个主菜单、每个主菜单 10 个子菜单，上述配置可直接使用；如需兼容最多 3 个主菜单、每个主菜单 5 个子菜单的可切换菜单，请移除“设置”主菜单，通过 `/help` 进入设置命令。机器人菜单仅在单聊中展示，群聊仍需直接发送命令。限制与配置步骤见[飞书官方机器人菜单使用指南](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/bot-v3/bot-customized-menu)。
 
@@ -337,7 +342,7 @@ weclaw doctor
 
 飞书任务卡在 Agent 产生第一条有效非命令进度前，正文只显示 `思考中.....`，不会用“等待 Agent”“连接正常”等定时文案覆盖。收到 Codex commentary、Claude message、计划、文件修改或工具摘要后，同一卡片会展示截至当前的用户可见回复与安全结构化进度，并把 `思考中.....` 保留在正文最底部。当前摘要固定显示在折叠面板外，完整进度位于可手动收起或展开的面板内；活动卡默认展开，普通流式更新只更新稳定内容组件，不会重置用户选择的展开状态。收起态的“展开完整进度”入口位于卡片可见内容最底部；展开后，完整时间线末尾提供“收起完整进度”操作，无需滚回面板顶部。完成、失败、停止或转移时卡片自动折叠，并移除活跃提示，同时保留已有过程和审批记录。无信息量的 Codex 命令执行生命周期不展示，内部推理与状态心跳也不会解除等待态，真正需要处理的审批仍正常显示。
 
-`weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、白名单、管理员和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
+`weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、平台或机器人白名单和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。配置页会携带版本指纹；如果后台配置已被命令行或消息端修改，旧页面保存会明确提示冲突，需要重新加载后再提交，避免覆盖最新白名单。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
 
 `weclaw doctor` 默认只读，除现有配置外还检查 `sqlite3`、Linux `bubblewrap`、Node.js/npm、Codex CLI 的 `app-server` 能力、Claude Code CLI 和 Claude ACP adapter。已配置 Agent 的运行依赖缺失是阻断错误；未配置 Agent 或仅影响 `/cx` 会话目录、Codex Linux 沙箱的依赖缺失是警告。
 
@@ -352,8 +357,9 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 关键安全规则：
 
 - 平台 `allowed_users` 为空时默认拒绝所有用户。
-- `admin_users` 只授予 WeClaw 管理权限；用户仍须位于对应平台白名单。
-- 普通用户只能 `/cwd` 到 `allowed_workspace_roots` 及其子目录；管理员不受该限制。
+- 当前平台或机器人 `allowed_users` 是远程访问的唯一身份来源；其中每个身份具有相同的 WeClaw 管理能力，机器人账号之间不能串权。
+- 旧配置中的顶层 `admin_users` 只会由启动与 `doctor` 告警并忽略，不自动迁移，也不会扩大任何 `allowed_users`；该值仅为配置文件兼容回写而保留，Web 不展示也不可编辑。
+- `allowed_users` 身份不受 `allowed_workspace_roots` 限制；未携带 Registry 授权能力的兼容或内部入口只能 `/cwd` 到白名单及其子目录。
 - 非回环 `api_addr` 必须配置 `api_token`。
 - 回环地址允许不配置 `api_token`，但本机其他进程将可调用管理接口，`weclaw doctor` 会持续告警；推荐仍配置随机 Token。
 - 审计日志默认开启，不记录密钥。

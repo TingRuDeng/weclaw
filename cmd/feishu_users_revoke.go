@@ -10,7 +10,6 @@ import (
 
 var (
 	feishuUsersRevokeBotRef string
-	feishuUsersRevokeAdmin  bool
 )
 
 var feishuUsersRevokeCmd = &cobra.Command{
@@ -21,7 +20,6 @@ var feishuUsersRevokeCmd = &cobra.Command{
 		return runFeishuUsersRevoke(feishuUsersRevokeOptions{
 			Selector: args[0],
 			BotRef:   feishuUsersRevokeBotRef,
-			Admin:    feishuUsersRevokeAdmin,
 		})
 	},
 }
@@ -29,12 +27,10 @@ var feishuUsersRevokeCmd = &cobra.Command{
 type feishuUsersRevokeOptions struct {
 	Selector string
 	BotRef   string
-	Admin    bool
 }
 
 func init() {
 	feishuUsersRevokeCmd.Flags().StringVar(&feishuUsersRevokeBotRef, "bot", "", "限定移除的飞书机器人 name 或 app_id")
-	feishuUsersRevokeCmd.Flags().BoolVar(&feishuUsersRevokeAdmin, "admin", false, "同时从顶层 admin_users 移除")
 	feishuUsersCmd.AddCommand(feishuUsersRevokeCmd)
 }
 
@@ -43,15 +39,14 @@ func validateFeishuUsersRevokeArgs(cmd *cobra.Command, args []string) error {
 	if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 		return nil
 	}
-	return fmt.Errorf("用法: weclaw feishu users revoke <union_id|user_id|open_id> [--bot <name|app_id>] [--admin]")
+	return fmt.Errorf("用法: weclaw feishu users revoke <union_id|user_id|open_id> [--bot <name|app_id>]")
 }
 
-// runFeishuUsersRevoke 从飞书允许访问列表移除用户，可选同步移除管理员。
+// runFeishuUsersRevoke 从飞书允许访问列表移除用户。
 func runFeishuUsersRevoke(opts feishuUsersRevokeOptions) error {
 	result, err := messaging.RevokeFeishuIdentity(messaging.FeishuIdentityRevokeRequest{
 		Selector: opts.Selector,
 		BotRef:   opts.BotRef,
-		Admin:    opts.Admin,
 	})
 	if err != nil {
 		return err

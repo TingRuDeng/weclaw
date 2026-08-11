@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,7 +34,10 @@ const (
 )
 
 // runDaemon 启动后台子进程；普通 start 只负责启动，不隐式停止既有服务。
-func runDaemon() error {
+func runDaemon(claudePreflightFingerprint string) error {
+	if strings.TrimSpace(claudePreflightFingerprint) == "" {
+		return fmt.Errorf("后台启动缺少 Claude 预检指纹")
+	}
 	launchLock, err := acquireDaemonLaunchLock()
 	if err != nil {
 		return err
@@ -69,7 +73,7 @@ func runDaemon() error {
 	}
 
 	cmd := exec.Command(exe, "start", "-f")
-	cmd.Env = append(os.Environ(), daemonChildEnv+"=1")
+	cmd.Env = daemonChildEnvironment(os.Environ(), claudePreflightFingerprint)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
 	setSysProcAttr(cmd)
@@ -112,6 +116,23 @@ func runDaemon() error {
 	fmt.Printf("Log: %s\n", logPath)
 	fmt.Printf("Stop: weclaw stop\n")
 	return nil
+}
+
+func daemonChildEnvironment(base []string, claudePreflightFingerprint string) []string {
+	result := make([]string, 0, len(base)+2)
+	childPrefix := daemonChildEnv + "="
+	preflightPrefix := daemonClaudePreflightEnv + "="
+	for _, entry := range base {
+		if strings.HasPrefix(entry, childPrefix) || strings.HasPrefix(entry, preflightPrefix) {
+			continue
+		}
+		result = append(result, entry)
+	}
+	result = append(result,
+		daemonChildEnv+"=1",
+		daemonClaudePreflightEnv+"="+strings.TrimSpace(claudePreflightFingerprint),
+	)
+	return result
 }
 
 // waitDaemonChildReady 等待后台子进程真正持有 runtime lock，避免父进程提前返回造成并发 start 抢占。

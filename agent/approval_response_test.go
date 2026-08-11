@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -47,6 +48,31 @@ func TestResolvePermissionOptionUsesProtocolDeclineWhenOptionsMissing(t *testing
 	}
 	if called {
 		t.Fatal("approval handler was called for request without options")
+	}
+}
+
+func TestDetachedObserverDoesNotSubmitDefaultApprovalDecision(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+		return "", ErrCodexObserverDetached
+	})
+	responded := false
+	evt := &codexTurnEvent{Approval: &codexApprovalRequest{
+		Request: ApprovalRequest{
+			RequestID: "approval-1",
+			Options:   []ApprovalOption{{ID: "allow", Name: "允许"}, {ID: "deny", Name: "拒绝"}},
+		},
+		Respond: func(context.Context, string) error {
+			responded = true
+			return nil
+		},
+	}}
+	err := a.handleCodexApprovalEvent(ctx, evt)
+	if !errors.Is(err, ErrCodexObserverDetached) {
+		t.Fatalf("approval error=%v, want observer detached", err)
+	}
+	if responded {
+		t.Fatal("detached observer submitted a default approval decision")
 	}
 }
 

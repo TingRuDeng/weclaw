@@ -10,9 +10,6 @@ func RenderFeishuIdentityApproval(result FeishuIdentityApproveResult) string {
 	if len(result.Bots) > 0 {
 		lines = append(lines, "已写入机器人: "+strings.Join(result.Bots, ", "))
 	}
-	if result.Admin {
-		lines = append(lines, "已同步加入 admin_users")
-	}
 	return strings.Join(lines, "\n")
 }
 

@@ -6,7 +6,7 @@ func buildHelpText() string {
 	return buildHelpTextForAdmin(false)
 }
 
-func buildHelpTextForAdmin(isAdmin bool) string {
+func buildHelpTextForAdmin(authorized bool) string {
 	text := `WeClaw 帮助
 
 常用：
@@ -27,7 +27,7 @@ func buildHelpTextForAdmin(isAdmin bool) string {
 
 /ps 查看运行中的任务
 
-/stop 停止当前运行的任务
+/stop 停止当前运行的任务；Codex 共享任务也会在本地端停止
 
 Codex：
 
@@ -35,7 +35,7 @@ Codex：
 
 /cx quota 查看 Codex 账号额度
 
-/cx account 查看当前 Codex 账号，管理员私聊可切换
+/cx account 查看当前 Codex 账号，已授权账号私聊可切换
 
 /cx ls 查看列表（编号从 1 开始）
 
@@ -72,26 +72,26 @@ Claude：
 /cc help Claude 高级命令
 
 /progress 查看进度模式`
-	if !isAdmin {
+	if !authorized {
 		return text
 	}
-	return text + "\n\n" + adminHelpText()
+	return text + "\n\n" + managementHelpText()
 }
 
-func adminHelpText() string {
-	return `管理员：
+func managementHelpText() string {
+	return `管理操作：
 
-/update 远程更新 WeClaw（飞书仅管理员私聊）
+/update 远程更新 WeClaw（飞书仅已授权账号私聊）
 
-/restart 重启 WeClaw（飞书仅管理员私聊）
+/restart 重启 WeClaw（飞书仅已授权账号私聊）
 
-/restart --force 强制重启 WeClaw（飞书仅管理员私聊）
+/restart --force 强制重启 WeClaw（飞书仅已授权账号私聊）
 
 /feishu users pending 查看待授权飞书用户
 
 /feishu users list 查看已授权飞书用户
 
-/feishu users approve <用户ID> [--admin] 直接授权飞书用户
+/feishu users approve <用户ID> 直接授权飞书用户
 
 /feishu users approve-code <授权码> 授权飞书用户
 

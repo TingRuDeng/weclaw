@@ -151,11 +151,23 @@ func runDoctorChecks(cfg *config.Config, deps doctorDeps) []doctorResult {
 	results = append(results, checkAgents(cfg, deps)...)
 	results = append(results, checkDoctorDependencies(cfg, deps)...)
 	results = append(results, checkPlatforms(cfg, deps)...)
+	results = append(results, checkLegacyAdminUsers(cfg)...)
 	results = append(results, checkAPIToken(cfg))
 	results = append(results, checkWorkspaceRoots(cfg))
 	results = append(results, checkAuditLog(cfg))
 	results = append(results, checkTerminalOutbox(deps))
 	return results
+}
+
+func checkLegacyAdminUsers(cfg *config.Config) []doctorResult {
+	if cfg == nil || len(cfg.LegacyAdminUsers) == 0 {
+		return nil
+	}
+	return []doctorResult{{
+		Name:   "legacy admin_users",
+		Status: doctorWarn,
+		Detail: fmt.Sprintf("ignored (%d entries); configure each platform or bot allowed_users instead; no automatic migration", len(cfg.LegacyAdminUsers)),
+	}}
 }
 
 func checkTerminalOutbox(deps doctorDeps) doctorResult {
@@ -225,7 +237,7 @@ func checkWorkspaceRoots(cfg *config.Config) doctorResult {
 	result := doctorResult{Name: "workspace confinement"}
 	if len(cfg.AllowedWorkspaceRoots) == 0 {
 		result.Status = doctorWarn
-		result.Detail = "allowed_workspace_roots 未配置；普通用户远程 /cwd 切换已禁用，管理员不受此限制"
+		result.Detail = "allowed_workspace_roots 未配置；未授权身份的远程 /cwd 切换已禁用，当前平台 allowed_users 中的身份不受此限制"
 		return result
 	}
 	for _, root := range cfg.AllowedWorkspaceRoots {

@@ -214,7 +214,7 @@ func TestFeishuCodexWorkspaceNameWithErrorWordStillSendsCard(t *testing.T) {
 	}
 }
 
-func TestFeishuCodexWorkspaceChoiceKeepsAliasAdminAccess(t *testing.T) {
+func TestFeishuCodexWorkspaceChoiceKeepsAuthorizedAccess(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	root := t.TempDir()
@@ -224,29 +224,28 @@ func TestFeishuCodexWorkspaceChoiceKeepsAliasAdminAccess(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
-	h.SetAdminUsers([]string{"on_admin"})
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
 	h.defaultName = "codex"
 	h.agents["codex"] = ag
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	sessionKey := "feishu:tenant_1:dm:oc_1:ou_open"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_open", UserAliases: []string{"on_admin"},
 		MessageID: "feishu-alias-admin-list", Text: "/cx ls",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
-	}, reply)
+	}, "on_admin"), reply)
 	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 2 {
 		t.Fatalf("workspace choices=%#v, want two admin-visible workspaces", reply.Choices)
 	}
 
 	workspaceChoice := reply.Choices[0].Choices[1].ID
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_open", UserAliases: []string{"on_admin"},
 		MessageID:  "feishu-alias-admin-choice",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": workspaceChoice}},
 		Metadata:   map[string]string{"feishu_session_key": sessionKey},
-	}, reply)
+	}, "on_admin"), reply)
 
 	bindingKey := codexBindingKey(sessionKey, "codex")
 	activeWorkspace, ok := h.ensureCodexSessions().getActiveWorkspace(bindingKey)

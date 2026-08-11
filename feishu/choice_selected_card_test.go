@@ -42,13 +42,24 @@ func TestReasoningChoiceCollapsesCardAndReplaysCommand(t *testing.T) {
 	}
 }
 
-func TestCodexWorkspaceChoiceShowsLoadingStatus(t *testing.T) {
-	card := buildSubmittedChoiceCard(parsedCardAction{
-		Choice: "/cx cd 9",
-		Label:  "card-manager-android",
-	})
-
-	assertPendingChoiceCard(t, card, "card-manager-android", "本卡片更新结果")
+func TestSubmittedChoiceCardUsesUserFacingPendingStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		choice string
+		want   string
+	}{
+		{name: "workspace loading", choice: "/cx cd 9", want: "正在加载中，请稍后……"},
+		{name: "codex session switch", choice: "/cx switch thread-1", want: "正在切换中，请稍后……"},
+		{name: "claude session switch", choice: "/cc switch session-1", want: "正在切换中，请稍后……"},
+		{name: "codex account switch", choice: "/cx account confirm token-1", want: "正在切换中，请稍后……"},
+		{name: "other operation", choice: "/stop", want: "正在处理中，请稍后……"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			card := buildSubmittedChoiceCard(parsedCardAction{Choice: tt.choice, Label: "目标"})
+			assertPendingChoiceCard(t, card, "目标", tt.want)
+		})
+	}
 }
 
 func TestHandleCardActionEventDoesNotCollapseUnrecognizedCard(t *testing.T) {

@@ -159,6 +159,16 @@ func (h *Handler) beginClaudeBroadcastRuntime(req broadcastAgentsRequest, name s
 }
 
 func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name string, ag agent.Agent, ctx context.Context, reply platform.Replier, results chan<- broadcastAgentResult) (broadcastAgentRuntime, bool) {
+	interactionLease := &agentInteractionLease{}
+	ctx = h.withAgentInteractions(ctx, agentInteractionContextOptions{
+		actorUserID: req.userID, routeUserID: req.routeUserID,
+		agentName: name, reply: reply, lease: interactionLease,
+	})
+	_, liveCodexLifecycle := ag.(agent.CodexLiveRuntimeAgent)
+	var detachCodexObserver func()
+	if liveCodexLifecycle {
+		ctx, detachCodexObserver = agent.ContextWithCodexObserverDetach(ctx)
+	}
 	bindingKey := codexBindingKey(req.routeUserID, name)
 	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
 	defer unlockBinding()
@@ -189,7 +199,8 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	pending := h.broadcastPendingCodexTask(req, name, ag, route, reply)
 	admission := h.beginOrQueueActiveTask(ctx, key, activeTaskMeta{
 		owner: req.userID, routeUserID: req.routeUserID, agentName: name, message: req.message,
-		codexThreadID: route.threadID, inProcessCodexLifecycle: true, trace: taskOpts.trace,
+		codexThreadID: route.threadID, inProcessCodexLifecycle: liveCodexLifecycle,
+		interactionLease: interactionLease, detachCodexObserver: detachCodexObserver, trace: taskOpts.trace,
 	}, pending)
 	if admission.status != activeTaskStarted {
 		h.replyBroadcastAdmission(req, name, admission.status, results)

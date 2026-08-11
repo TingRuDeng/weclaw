@@ -12,7 +12,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-const adminCommandDeniedText = "当前账号未授权执行 WeClaw 管理命令，请联系管理员配置 admin_users。"
+const adminCommandDeniedText = "当前账号未授权执行 WeClaw 管理命令，请将该身份加入当前平台或机器人 allowed_users。"
 const adminCommandTimeout = 5 * time.Minute
 const adminRestartDelay = 1200 * time.Millisecond
 const adminRestartFailureNotifyTimeout = 30 * time.Second
@@ -126,49 +126,10 @@ func (h *Handler) openServiceAdminCommandStatus(ctx context.Context, command str
 	return stream
 }
 
-// isAdminUser 判断当前用户是否在管理命令白名单中。
-func (h *Handler) isAdminUser(userID string) bool {
-	return h.adminIdentityAllowed([]string{userID})
-}
-
-// isAdminMessage 使用平台指定的管理身份判断权限；飞书只接受 union_id。
+// isAdminMessage 只信任 Registry 在账号级 allowed_users 校验后签发的能力。
+// 所有已授权身份拥有同等管理能力，直接构造 IncomingMessage 不能伪造该权限。
 func (h *Handler) isAdminMessage(msg platform.IncomingMessage) bool {
-	return h.adminIdentityAllowed(adminIdentityKeysForMessage(msg))
-}
-
-// adminIdentityKeysForMessage 返回管理权限可用身份；飞书多应用下只使用稳定 union_id。
-func adminIdentityKeysForMessage(msg platform.IncomingMessage) []string {
-	if msg.Platform == platform.PlatformFeishu {
-		return feishuAdminIdentityKeys(msg)
-	}
-	return msg.UserIdentityKeys()
-}
-
-// feishuAdminIdentityKeys 只提取飞书 union_id，避免 open_id / user_id 跨应用不可复用。
-func feishuAdminIdentityKeys(msg platform.IncomingMessage) []string {
-	if msg.Metadata != nil {
-		if unionID := strings.TrimSpace(msg.Metadata["feishu_union_id"]); unionID != "" {
-			return []string{unionID}
-		}
-	}
-	for _, identity := range msg.UserIdentityKeys() {
-		identity = strings.TrimSpace(identity)
-		if strings.HasPrefix(identity, "on_") {
-			return []string{identity}
-		}
-	}
-	return nil
-}
-
-func (h *Handler) adminIdentityAllowed(identities []string) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for _, identity := range identities {
-		if _, ok := h.adminUsers[strings.TrimSpace(identity)]; ok {
-			return true
-		}
-	}
-	return false
+	return msg.HasAuthorizedAccess()
 }
 
 func (h *Handler) currentServiceAdminCommandExecutor() ServiceAdminCommandExecutor {

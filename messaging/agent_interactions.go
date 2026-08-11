@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -15,6 +16,133 @@ type agentInteractionContextOptions struct {
 	routeUserID string
 	agentName   string
 	reply       platform.Replier
+	lease       *agentInteractionLease
+}
+
+type agentInteractionLease struct {
+	mu             sync.Mutex
+	detached       bool
+	inFlight       int
+	detachedSignal chan struct{}
+}
+
+type agentInteractionDetachClaim struct {
+	lease  *agentInteractionLease
+	locked bool
+}
+
+func (l *agentInteractionLease) begin() bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.detached {
+		return false
+	}
+	l.inFlight++
+	return true
+}
+
+func (l *agentInteractionLease) end() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.inFlight > 0 {
+		l.inFlight--
+	}
+	l.mu.Unlock()
+}
+
+// claimDetach 在调用方完成持久化栅栏前一直阻止新交互进入。
+// 调用方必须以 finish(true/false) 结束 claim；false 保持原观察端可交互。
+func (l *agentInteractionLease) claimDetach() (*agentInteractionDetachClaim, bool) {
+	if l == nil {
+		return &agentInteractionDetachClaim{}, true
+	}
+	l.mu.Lock()
+	if l.detached {
+		l.mu.Unlock()
+		return &agentInteractionDetachClaim{}, true
+	}
+	if l.inFlight > 0 {
+		l.mu.Unlock()
+		return nil, false
+	}
+	return &agentInteractionDetachClaim{lease: l, locked: true}, true
+}
+
+func (c *agentInteractionDetachClaim) finish(detach bool) {
+	if c == nil || !c.locked || c.lease == nil {
+		return
+	}
+	if detach {
+		c.lease.detachLocked()
+	}
+	c.locked = false
+	c.lease.mu.Unlock()
+}
+
+// forceDetach 仅用于服务排空：让正在等待的交互返回 observer-detached，
+// 不能把 watcher context 的取消转换成对共享任务的默认拒绝或空回答。
+func (l *agentInteractionLease) forceDetach() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.detachLocked()
+}
+
+func (l *agentInteractionLease) detachLocked() {
+	if l.detached {
+		return
+	}
+	l.detached = true
+	if l.detachedSignal != nil {
+		close(l.detachedSignal)
+	}
+}
+
+func (l *agentInteractionLease) isDetached() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.detached
+}
+
+func (l *agentInteractionLease) done() <-chan struct{} {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.detachedSignal == nil {
+		l.detachedSignal = make(chan struct{})
+		if l.detached {
+			close(l.detachedSignal)
+		}
+	}
+	return l.detachedSignal
+}
+
+func (l *agentInteractionLease) bindContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if l == nil {
+		return ctx, func() {}
+	}
+	bound, cancel := context.WithCancel(ctx)
+	done := l.done()
+	go func() {
+		select {
+		case <-done:
+			cancel()
+		case <-bound.Done():
+		}
+	}()
+	return bound, cancel
 }
 
 type userInputQuestionRequest struct {
@@ -32,6 +160,12 @@ func (h *Handler) withAgentInteractions(ctx context.Context, opts agentInteracti
 // userInputHandlerForRoute 顺序展示问题，确保平台回复与真实任务发起人绑定。
 func (h *Handler) userInputHandlerForRoute(opts agentInteractionContextOptions) agent.UserInputHandler {
 	return func(ctx context.Context, req agent.UserInputRequest) (agent.UserInputAnswers, error) {
+		if !opts.lease.begin() {
+			return nil, agent.ErrCodexObserverDetached
+		}
+		defer opts.lease.end()
+		ctx, cancelInteraction := opts.lease.bindContext(ctx)
+		defer cancelInteraction()
 		if err := validateAgentInteractionRoute(opts); err != nil {
 			return nil, err
 		}
@@ -66,9 +200,12 @@ func (h *Handler) askUserInputQuestion(ctx context.Context, req userInputQuestio
 	defer h.clearPendingApproval(req.opts.actorUserID, pending)
 	choices := userInputPlatformChoices(options, key, req.opts)
 	if err := req.opts.reply.AskChoices(ctx, userInputPrompt(req.question), choices); err != nil {
+		if req.opts.lease.isDetached() {
+			return "", agent.ErrCodexObserverDetached
+		}
 		return "", err
 	}
-	return waitForUserInputChoice(ctx, pending)
+	return waitForUserInputChoice(ctx, pending, req.opts.lease)
 }
 
 func buildUserInputOptions(req userInputQuestionRequest) (string, []agent.ApprovalOption, error) {
@@ -125,7 +262,7 @@ func userInputPrompt(question agent.UserInputQuestion) string {
 	return header + "\n\n" + prompt
 }
 
-func waitForUserInputChoice(ctx context.Context, pending *pendingApproval) (string, error) {
+func waitForUserInputChoice(ctx context.Context, pending *pendingApproval, lease *agentInteractionLease) (string, error) {
 	timer := time.NewTimer(pendingApprovalTimeout)
 	defer timer.Stop()
 	select {
@@ -133,7 +270,12 @@ func waitForUserInputChoice(ctx context.Context, pending *pendingApproval) (stri
 		return strings.TrimSpace(choice), nil
 	case <-timer.C:
 		return "", fmt.Errorf("Codex 结构化问答等待超时")
+	case <-lease.done():
+		return "", agent.ErrCodexObserverDetached
 	case <-ctx.Done():
+		if lease.isDetached() {
+			return "", agent.ErrCodexObserverDetached
+		}
 		return "", ctx.Err()
 	}
 }

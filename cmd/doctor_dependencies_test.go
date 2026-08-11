@@ -119,6 +119,32 @@ func TestDoctorDependenciesRequireStandaloneForDaemonMode(t *testing.T) {
 	}
 }
 
+func TestSaveDoctorPinnedCodexConfigPreservesConcurrentAgentFields(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	latest := config.DefaultConfig()
+	latest.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "/old/codex", PermissionLevel: "default",
+	}
+	if err := config.Save(latest); err != nil {
+		t.Fatal(err)
+	}
+	candidate := config.DefaultConfig()
+	candidate.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "/new/codex", PermissionLevel: "full_access",
+	}
+	if err := saveDoctorPinnedCodexConfig(candidate); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexCfg := loaded.Agents["codex"]
+	if codexCfg.Command != "/new/codex" || codexCfg.PermissionLevel != "default" {
+		t.Fatalf("codex config=%#v, want new command with latest permission fields", codexCfg)
+	}
+}
+
 func TestDoctorDependenciesDoNotBlockConfiguredCodexACPAdapterWithoutCodexCLI(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents["codex"] = config.AgentConfig{Type: "acp", Command: "codex-acp"}

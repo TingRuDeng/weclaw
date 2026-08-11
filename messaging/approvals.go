@@ -72,6 +72,12 @@ func (h *Handler) approvalHandlerForUser(userID string, routeUserID string, repl
 
 func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) agent.ApprovalHandler {
 	return func(ctx context.Context, req agent.ApprovalRequest) (string, error) {
+		if !opts.lease.begin() {
+			return "", agent.ErrCodexObserverDetached
+		}
+		defer opts.lease.end()
+		ctx, cancelInteraction := opts.lease.bindContext(ctx)
+		defer cancelInteraction()
 		if err := validateAgentInteractionRoute(opts); err != nil {
 			return "", err
 		}
@@ -124,6 +130,9 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		askErr := opts.reply.AskChoices(ctx, prompt, choices)
 		pending.markDisplayReady()
 		if askErr != nil {
+			if opts.lease.isDetached() {
+				return "", agent.ErrCodexObserverDetached
+			}
 			select {
 			case choice := <-pending.choices:
 				return strings.TrimSpace(choice), nil
@@ -143,7 +152,12 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		case <-timer.C:
 			h.auditDefaultDenyApproval(opts, "timeout")
 			return defaultDenyApprovalOption(req.Options), nil
+		case <-opts.lease.done():
+			return "", agent.ErrCodexObserverDetached
 		case <-ctx.Done():
+			if opts.lease.isDetached() {
+				return "", agent.ErrCodexObserverDetached
+			}
 			h.auditDefaultDenyApproval(opts, "context_cancelled")
 			return defaultDenyApprovalOption(req.Options), ctx.Err()
 		}
@@ -224,6 +238,22 @@ func (h *Handler) clearPendingApproval(userID string, pending *pendingApproval) 
 	}
 	h.cleanupResolvedApprovalCodesLocked(time.Now())
 	h.pendingApprovalsMu.Unlock()
+}
+
+func (h *Handler) hasPendingInteractionForRoute(userID string, routeUserID string) bool {
+	userID = strings.TrimSpace(userID)
+	routeUserID = strings.TrimSpace(routeUserID)
+	now := time.Now()
+	h.pendingApprovalsMu.Lock()
+	defer h.pendingApprovalsMu.Unlock()
+	for _, pending := range h.pendingApprovals {
+		if pending == nil || pending.userID != userID || pending.route != routeUserID ||
+			pending.resolved.Load() || !pending.expiresAt.After(now) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (h *Handler) consumePendingApproval(userID string, choice string) bool {

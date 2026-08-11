@@ -70,6 +70,7 @@ async function saveConfig() {
   currentConfig.rate_limit_per_minute = parseInt(document.getElementById('rate-limit').value || '0', 10);
   try {
     const r = await api('PUT', '/api/config', currentConfig);
+    await loadConfig();
     toast(r.restart_required ? '已保存，运行 weclaw restart 生效' : '已保存并即时生效');
   } catch (e) { toast('保存失败: ' + e.message); }
 }
