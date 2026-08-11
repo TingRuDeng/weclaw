@@ -31,6 +31,7 @@ type codexAppServerTurnRuntime struct {
 	pid             int
 	turnCh          chan *codexTurnEvent
 	turnIDCh        chan string
+	startResultCh   chan error
 	activeTurnID    string
 	metrics         codexTurnMetrics
 	assembler       *codexFinalAssembler
@@ -81,7 +82,8 @@ func (a *ACPAgent) chatCodexAppServerControlledTurn(opts codexAppServerTurnOptio
 	runtime := &codexAppServerTurnRuntime{
 		opts: opts, threadID: threadID, pid: a.runtimePID(),
 		turnCh: make(chan *codexTurnEvent, codexTurnEventBufferSize), turnIDCh: make(chan string, 1),
-		metrics: newCodexTurnMetrics(time.Now()), assembler: newCodexFinalAssembler(),
+		startResultCh: make(chan error, 1),
+		metrics:       newCodexTurnMetrics(time.Now()), assembler: newCodexFinalAssembler(),
 		diagnostics: newCodexTurnDiagnostics(codexTurnDiagnosticsLimit),
 	}
 	if !a.registerTurnChannel(threadID, runtime.turnCh) {
@@ -104,9 +106,7 @@ func (a *ACPAgent) startCodexAppServerTurn(runtime *codexAppServerTurnRuntime) {
 				err = fmt.Errorf("%w (resume failed: %v)", err, resumeErr)
 			}
 		}
-		if err != nil {
-			runtime.turnCh <- &codexTurnEvent{Kind: "error", Text: err.Error()}
-		}
+		runtime.startResultCh <- err
 	}()
 }
 
@@ -143,25 +143,57 @@ func (a *ACPAgent) logCodexTurnStart(runtime *codexAppServerTurnRuntime, elapsed
 
 func (a *ACPAgent) collectCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, error) {
 	detach := codexObserverDetachFromContext(runtime.opts.ctx)
+	startResultCh := runtime.startResultCh
 	for {
 		select {
 		case <-detach:
-			runtime.messageProgress.flush(progressCallbacks{
-				onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent,
-			})
-			log.Printf("[acp] turn observer detached without interrupt (pid=%d, thread=%s, conversation=%s, elapsed=%s)",
-				runtime.pid, runtime.threadID, runtime.opts.conversationID, runtime.metrics.elapsed(time.Now()))
-			return "", ErrCodexObserverDetached
+			return detachCodexAppServerTurn(runtime)
 		case <-runtime.opts.ctx.Done():
 			return a.cancelCodexAppServerTurn(runtime)
+		case err := <-startResultCh:
+			startResultCh = nil
+			if err != nil {
+				return a.handleCodexAppServerTurnStartError(runtime, err)
+			}
 		case runtime.activeTurnID = <-runtime.turnIDCh:
 		case evt := <-runtime.turnCh:
 			result, done, err := a.handleCodexAppServerEvent(runtime, evt)
-			if done || err != nil {
-				return result, err
+			if !done && err == nil {
+				continue
 			}
+			// app-server 可以在 turn/start 响应到达前投递进度、审批甚至终态。
+			// 非终态必须立即处理，避免服务端等待审批响应；但本地生命周期
+			// 只有在 OnTurnStarted 已提交后才能结束，否则迟到的 accept 会失败。
+			if startResultCh != nil {
+				select {
+				case <-detach:
+					return detachCodexAppServerTurn(runtime)
+				case <-runtime.opts.ctx.Done():
+					return a.cancelCodexAppServerTurn(runtime)
+				case startErr := <-startResultCh:
+					startResultCh = nil
+					if startErr != nil {
+						return a.handleCodexAppServerTurnStartError(runtime, startErr)
+					}
+				}
+			}
+			return result, err
 		}
 	}
+}
+
+func (a *ACPAgent) handleCodexAppServerTurnStartError(runtime *codexAppServerTurnRuntime, err error) (string, error) {
+	result, _, handledErr := a.handleCodexAppServerEvent(runtime, &codexTurnEvent{Kind: "error", Text: err.Error()})
+	return result, handledErr
+}
+
+func detachCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, error) {
+	runtime.messageProgress.flush(progressCallbacks{
+		onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent,
+	})
+	log.Printf("[acp] turn observer detached without interrupt (pid=%d, thread=%s, conversation=%s, elapsed=%s)",
+		runtime.pid, runtime.threadID, runtime.opts.conversationID, runtime.metrics.elapsed(time.Now()))
+	return "", ErrCodexObserverDetached
 }
 
 func (a *ACPAgent) cancelCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, error) {

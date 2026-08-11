@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
@@ -31,6 +33,9 @@ func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
 			a.notifyMu.Unlock()
 			ch <- &codexTurnEvent{Delta: "补建后执行成功"}
 			ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-new"}
+			// 真实 app-server 可能在 turn/start 响应被调用方处理前先投递终态。
+			// 主动让出执行权，把这个协议时序固定为可重复的回归用例。
+			runtime.Gosched()
 			return json.RawMessage(`{"turn":{"id":"turn-new"}}`), nil
 		default:
 			return nil, fmt.Errorf("unexpected rpc method %s", method)
@@ -72,6 +77,57 @@ func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
 	if binding, ok := a.codexOwners.threadBinding("thread-new"); !ok ||
 		binding.Runtime != CodexRuntimeWeClaw || binding.Control != request.Intent {
 		t.Fatalf("binding=%#v ok=%v", binding, ok)
+	}
+}
+
+func TestCodexAppServerHandlesApprovalBeforeTurnStartResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx = ContextWithApprovalHandler(ctx, func(context.Context, ApprovalRequest) (string, error) {
+		return "allow", nil
+	})
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	approvalResponded := make(chan struct{})
+	a.rpcCall = func(callCtx context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-approval"}}`), nil
+		case "turn/start":
+			turn := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[turn.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Approval: &codexApprovalRequest{
+				Request: ApprovalRequest{
+					RequestID: "approval-1",
+					Options:   []ApprovalOption{{ID: "allow", Kind: "allow"}, {ID: "deny", Kind: "deny"}},
+				},
+				Respond: func(context.Context, string) error {
+					close(approvalResponded)
+					return nil
+				},
+			}}
+			select {
+			case <-approvalResponded:
+			case <-callCtx.Done():
+				return nil, callCtx.Err()
+			}
+			ch <- &codexTurnEvent{Delta: "审批后继续执行"}
+			ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-approval"}
+			return json.RawMessage(`{"turn":{"id":"turn-approval"}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+
+	createCodexThreadForTest(t, ctx, a, "conversation-approval-before-start")
+	reply, err := a.chatCodexAppServer(codexAppServerTurnOptions{
+		ctx: ctx, conversationID: "conversation-approval-before-start", message: "执行需要审批的任务",
+	})
+	if err != nil || reply != "审批后继续执行" {
+		t.Fatalf("reply=%q error=%v", reply, err)
 	}
 }
 
