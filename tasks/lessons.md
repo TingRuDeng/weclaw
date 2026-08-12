@@ -2,6 +2,22 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
+## 2026-08-12 Codex Desktop `no-client-found` 只说明目标请求无人处理
+
+- 触发条件：Codex App 进程和安全 IPC endpoint 都存在，飞书选择一个真实 thread 后，Desktop Router 等待目标 handler 并返回 `no-client-found`。
+- 状态边界：消息窗口的 durable binding 已经提交，但 Desktop runtime 尚未建立；必须显示“已选择，等待运行通道”、阻止普通消息并保留 binding，不能伪装成切换完成，也不能为了绕过错误启动第二个 Host。
+- 语义边界：只有已验证官方 daemon 本来就是 WeClaw 权威 Host 的显式 Handoff，才可把该响应当成 App frontend 已释放目标 thread 的证据；Desktop Host、managed Host、普通消息、超时、断线和未知交付都不得复用这条例外。
+- 恢复方式：先让用户在 Codex App 打开目标工作空间中的准确会话，再从消息端重新选择；仍无 handler 时完全重启 App 后重试，不需要删除或重建 thread。
+- 来源：2026-08-12 飞书会话卡片已成功提交目标 binding，但 `thread-follower-load-complete-history` 等待 10 秒后返回 `no-client-found`，持久化 follower 仍为空。
+
+## 2026-08-12 `turn/start` 响应不能充当事件消费总屏障
+
+- 触发条件：app-server 在 `turn/start` RPC 响应被调用方处理前，先投递进度、审批或快速任务终态。
+- 规则：collector 从一开始持续消费非终态事件；审批和结构化问答必须立即响应，否则服务端等待交互、客户端等待 `turn/start` 响应会形成死锁。
+- 生命周期屏障：终态可以先到，但只有启动结果成功且 `OnTurnStarted` 已提交真实 turn ID 后才能清理任务并返回；启动失败必须沿同一错误路径结束，不能让迟到的 accept 写入已经释放的 lifecycle。
+- 反例：先完整等待 `turn/start` 再读取事件会阻塞前置审批；完全不等待响应则会让快速终态先结束任务，导致真实 turn 没有登记、后续 `/stop` 或恢复找不到活动任务。
+- 来源：2026-08-11 CI 中快速 turn 先发送 delta/completed、后返回启动响应，随后补充了“审批先于响应”和“终态先于响应”的协议回归测试。
+
 ## 2026-08-11 Codex 本地端与飞书是协作前端，授权只来自账号白名单
 
 - 协作边界：正式支持“飞书 + Codex App”或“飞书 + 受控 Codex CLI”绑定同一个 Host/thread；active turn 的补充输入以 expected turn ID 直接 steer，空闲时才开始新 turn。三端同时打开时不宣称客户端级排他、所有权或精确归属。

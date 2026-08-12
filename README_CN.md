@@ -76,11 +76,15 @@ macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经
 
 正式支持的协作形态是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”：两端绑定同一个 thread，看到同一 Host 提供的任务状态，并都可继续输入。飞书选择正在运行的会话后会先回填权威快照，再持续同步后续进度；普通消息使用当前 `turnId` 直接加入 active turn，只有 thread 空闲时才开始下一 turn。App、CLI 和飞书三端意外同时打开同一 thread 时仍由上游按请求接受顺序处理，但 WeClaw 不宣称客户端级排他或精确归属。
 
+会话绑定与运行通道是两个独立结果：选择会话时，WeClaw 先持久化当前消息窗口的 workspace/thread，再尝试从当前 Host 装载状态并建立同步。如果结果显示“已选择，等待运行通道”，表示目标会话已经记住，但当前仍不可写；普通消息会被阻止，不能把它当成切换完成。可先发送 `/cx status` 复核，再重新选择该会话。
+
 飞书绑定会持久化。WeClaw 重启或短暂断线后，会在平台投递恢复时重新挂接仍在运行的任务；恢复失败会明确记录，不会停止本地任务或伪装成已同步。`/cx release` 只解除当前消息窗口的绑定，停止向该窗口回推进度、审批、问答和最终结果，并把现有进度卡冻结为非终态；它不会中断 active turn、重启 Host，也不会保留只读观察。本地 Codex 继续运行；之后重新选择同一会话时，从最新权威快照恢复同步。
 
 历史 thread 不再绑定创建时使用的 provider。选择或续写已有会话时，WeClaw 会读取当前 Codex Host 对该 workspace 生效的 `model_provider`；若与 thread 元数据不同，会在所有已知任务空闲且没有 writer lease 时备份并只迁移该 thread 的 rollout、`state_5.sqlite` 和可选 local catalog，再用同一 thread ID 和显式 provider 执行 resume。用户消息、可见回复、工具调用和结果会保留；无法跨 provider 使用的加密 reasoning 与 compaction 状态会删除。目标 thread 仍在运行时不会中断，当前 turn 的引导仍进入它已经使用的 provider；下一个新 turn 会先完成迁移。已加载但空闲的 App/shared Host 可以受控重启后继续。迁移记录保存在 `CODEX_HOME/backups/weclaw-provider-migration/`，任何身份、路径、状态或 resume 核验不确定都会失败关闭。
 
 App Host 支持选择已有会话、继续任务、进度、审批、`/stop`，以及修改当前 thread 的模型和推理强度。飞书绑定到 App 中正在运行的 thread 后，普通消息会直接进入当前 turn，不再先暂存并等待任务结束。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
+
+App 进程和安全 IPC 存在，不代表目标 thread 已有可处理请求的 Desktop 客户端。若日志出现 `no-client-found`，WeClaw 会保留刚提交的飞书绑定并保持运行通道不可写，不会为绕过错误启动第二个 Host。请先在 Codex App 打开目标工作空间中的准确会话，再从飞书重新选择；仍不可用时，完全退出并重新打开 Codex App、打开目标会话后重试。该操作不会要求重建或删除原会话。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用，因为消息命令不能在本机启动额外进程。本机终端使用受控入口：
 
@@ -224,7 +228,7 @@ WeClaw 通过 `platform` 抽象统一命令、会话、任务和审批，再按�
 
 | 命令 | 说明 |
 | --- | --- |
-| `/help`、`/status` | 查看帮助和 WeClaw 运行态 |
+| `/help`、`/status` | 查看帮助，或查看包含 WeClaw 版本号的运行态 |
 | `/cwd [路径]` | 查看或切换当前窗口工作目录；切换会同步 Agent 默认 cwd，未获 Registry 授权能力的兼容入口受工作目录白名单限制 |
 | `/new` | 为当前默认 Agent 明确新建会话；默认 Agent 为 Codex 时同时绑定 |
 | `/model`、`/reasoning` | 已绑定时查看或切换当前会话配置；未绑定时查看或切换新会话默认值 |

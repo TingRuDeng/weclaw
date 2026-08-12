@@ -85,6 +85,8 @@ managed 默认 socket 位于 WeClaw 状态目录的 `runtime/` 下。若完整�
 
 Desktop 的 `thread-queued-followups-changed` 只同步 App 客户端拥有的未发送草稿。WeClaw 保留其 connection epoch 并随 snapshot/patch 更新，但不能回写这些草稿，也不能把它们视为已接受输入、writer lease 或待自动续跑任务。
 
+App 进程与安全 IPC endpoint 存在时，`thread-follower-load-complete-history` 返回 `no-client-found` 表示当前没有 Desktop 客户端处理目标 thread，不表示 App Host 已消失。消息层已经提交的 frontend binding 必须保留，runtime 保持不可写并阻止普通消息；用户在 Codex App 打开准确会话后重新选择。该路径不能启动第二个 Host，也不能复用只适用于已验证官方 daemon 显式 Handoff 的 release evidence 例外。
+
 ## 状态模型
 
 ### Frontend binding
@@ -93,11 +95,12 @@ Desktop 的 `thread-queued-followups-changed` 只同步 App 客户端拥有的�
 
 - route/binding key
 - active workspace
-- selected thread
+- 各 workspace 的 selected thread、首轮恢复与 release journal
+- follower revision、当前观察目标和平台投递 route
 
 `messaging/codex_remote_selection_store.go` 使用 copy-on-write + CAS 提交单个前端的绑定。不同前端互不释放、互不覆盖；同一前端切换失败时回滚到 after-image 仍匹配的旧绑定。
 
-状态文件版本为 v5。v1-v3 的 `Controls` 只用于兼容反序列化，加载后丢弃并重写，不能再参与授权判断。
+状态文件版本为 v9：v8 引入长生命周期 follower、release/archive 墓碑和首轮恢复前驱，v9 进一步持久化两阶段 release intent 与精确活动卡恢复 reservation。v1-v3 的 `Controls` 只用于兼容反序列化，加载后丢弃并重写，不能再参与授权判断。
 
 ### Runtime availability
 
@@ -115,6 +118,7 @@ Runtime 只回答共享 host 当前能否服务：
 - lease 与 frontend route、旧 owner revision 无关。
 - runtime 必须为 `weclaw` 或 `desktop`，且 lease 绑定当前 Host generation。
 - 已有 lease 时第二个 `turn/start` 返回 writer busy；指向该活动 turn 的普通输入使用 `turn/steer`，不会创建第二个 lease，也不会清除其他前端的 binding。
+- app-server 可在 `turn/start` RPC 响应前投递进度、审批或终态；非终态和交互必须立即消费，终态则等待启动结果与 `OnTurnStarted` 提交完成后才能清理 lifecycle。
 - Complete、Fail、Stop 或取消最终都必须释放同一 lease；晚到状态不能覆盖新代次。
 - 客户端断线或交付状态未知时必须保留 fail-closed lease；只有 rollout 或重连后的 `thread/read` 明确确认同一 turn 终态后才能释放。
 
@@ -182,13 +186,15 @@ Codex App 与受控 CLI 也直接向同一 Host 提交输入。app-server 的接
 - 两个不同 frontend 同时绑定同一 thread。
 - 同一 thread 的第二个新 turn 被拒绝；不同前端可向现有 turn steer，lease 释放后可开始下一 turn。
 - turn 已接受后连接断开不能释放 lease；rollout 确认终态或重连读取到匹配终态后才可继续写。
-- v1-v3 owner 状态迁移后不再影响 v5 binding。
+- v1-v3 owner 状态迁移后不再影响 v9 binding；v9 的 follower、首轮恢复和 release journal 可在重启后恢复或失败关闭。
 - `/cx app|cli|attach|detach`、Codex Companion 和旧 `codex exec` 都不能启动第二 writer；`weclaw codex cli` 只能固定连接官方 daemon，且 Host 身份不明确时失败关闭。
 - Desktop queued follow-up 按 connection epoch 同步为客户端草稿，不能生成 writer lease、WeClaw pending task 或已接受输入。
 - `auto` 在官方 daemon 已运行且验证通过时保持 daemon 权威并跳过 Desktop IPC；没有运行中的 daemon 时，App 已运行才连接 Desktop IPC，App 不在时选择 daemon/managed。daemon 身份不明或 App 存在但 IPC 不可达时失败关闭。
 - 官方 daemon 已是唯一 Host 且 App 可见时，显式会话 Handoff 可依据 Desktop `no-client-found` 在同一 daemon 恢复目标 thread；普通消息、只读探测、Desktop/managed 拓扑和不明确响应仍失败关闭。
+- App Host 返回 `no-client-found` 时保留已提交 binding、保持 runtime 不可写；打开目标 App 会话后重试，不能启动第二 Host。
 - A→B 切换仅在 A 无 active frontend 引用、App 进程与安全 IPC endpoint 均存在且 Host 全局空闲时重启官方 daemon；其他 frontend 仍选择 A、active/unknown thread、writer lease、lifecycle 失败和 pending first turn 都不得停止 Host。重启后旧 runtime 快照失效、binding 保留、B 正常恢复；失败不回滚 B，并明确显示 A 尚未回交。
 - Desktop following status 只对已跟踪且当前权威的 thread 定向回复；未知 thread、daemon runtime、旧 connection epoch 和缺失 host/client ID 都不得声明 following。
 - Desktop follower 支持已有 thread turn/steer/interrupt/settings，明确拒绝未暴露的 thread/start、archive、model/list、账号与额度能力。
+- `turn/start` 响应前的审批不会死锁，响应前的快速终态也不会先于 `OnTurnStarted` 清理任务。
 - daemon 与 managed 的 socket、生命周期和失败回退边界分别验证；显式 daemon 失败不能启动 managed。
 - runtime 失败保留 binding，持久化失败回滚，切换失败不破坏原会话。

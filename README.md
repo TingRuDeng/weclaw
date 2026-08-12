@@ -76,11 +76,15 @@ With the default `codex_host_mode: auto` on macOS, an official standalone daemon
 
 The supported collaboration shapes are “Feishu + Codex App” and “Feishu + controlled Codex CLI.” Both frontends bind the same thread, observe task state from the same Host, and can continue the task. When Feishu selects an active thread, WeClaw first restores the authoritative snapshot and then follows later progress. A regular message uses the current `turnId` to join the active turn; a new turn is started only when the thread is idle. If App, CLI, and Feishu all happen to open the same thread, upstream request acceptance still determines order, but WeClaw does not claim client-level exclusivity or precise ownership.
 
+Session binding and runtime availability are separate outcomes. WeClaw first persists the workspace/thread selected by the current message route, then asks the current Host to load its state and establish synchronization. “Selected; waiting for runtime” means that the target was remembered but is not writable yet. Regular messages are blocked in that state; use `/cx status` to inspect it, then select the session again instead of treating the switch as complete.
+
 The Feishu binding is durable. After a WeClaw restart or short disconnect, observation is attached again when platform delivery returns; a failed recovery is observable and never stops the local task or pretends synchronization succeeded. `/cx release` unbinds only the current message route, stops progress, approvals, questions, and final results from returning to that route, and freezes its current card without a terminal state. It does not interrupt the active turn, restart the Host, or retain a read-only observer. Local Codex keeps running; selecting the thread again resumes from the latest authoritative snapshot.
 
 Historical threads no longer remain tied to the provider that created them. Before selecting or continuing an existing thread, WeClaw resolves the effective `model_provider` of the current Codex Host for that workspace. When the stored provider differs, and every known task is idle with no writer lease, WeClaw backs up and migrates only that thread's rollout, `state_5.sqlite` row, and optional local catalog rows, then resumes the same thread ID with the provider explicitly set. User messages, visible answers, tool calls, and tool results are preserved; provider-bound encrypted reasoning and compaction state are removed. An active target is never interrupted: steering stays in its already selected provider for the current turn, and the next new turn migrates first. An idle loaded App/shared Host may be restarted under lifecycle control. Journals and backups live under `CODEX_HOME/backups/weclaw-provider-migration/`; uncertain identity, paths, state, or resume verification fails closed.
 
 The App Host supports selecting existing sessions, turns, progress, approvals, `/stop`, and current-thread model or reasoning changes. After Feishu binds a thread that is already running in the App, a regular message goes directly into the active turn instead of waiting in a private continuation queue. Desktop IPC does not currently expose session creation, archive, or rename, the complete model list, account management, or quota APIs. Perform those operations in Codex App and select the resulting session with `/cx ls`; `/cx new` and `/cx rename` fail clearly in App mode without deleting the current binding.
+
+An App process and a secure IPC endpoint do not prove that a Desktop client is registered to handle the target thread. If the log reports `no-client-found`, WeClaw keeps the newly committed Feishu binding unavailable for writes and does not start a second Host to bypass the error. Open the exact session under its target workspace in Codex App, then select it again from Feishu. If it remains unavailable, quit Codex App completely, reopen it, open the target session, and retry. The existing session does not need to be recreated or deleted.
 
 `/cx app`, `/cx cli`, `/cx attach`, and `/cx detach` remain disabled because chat commands cannot launch another local process. Use the controlled terminal entrypoint instead:
 
@@ -224,7 +228,7 @@ WeClaw uses the `platform` abstraction to share commands, sessions, tasks, and a
 
 | Command | Description |
 | --- | --- |
-| `/help`, `/status` | Show help and WeClaw runtime status |
+| `/help`, `/status` | Show help or runtime status including the WeClaw version |
 | `/cwd [path]` | Show or switch the current frontend workspace; switching also updates Agent default cwd values, while compatibility paths without a Registry authorization capability remain confined to allowed workspace roots |
 | `/new` | Explicitly create a session for the current default agent; also bind it when Codex is the default |
 | `/model`, `/reasoning` | Show or change the bound session configuration, or the new-session defaults when no session is bound |
