@@ -399,7 +399,10 @@ weclaw version
 
 更新来源支持 `auto`（默认）、`github` 和 `gitee`。Gitee 二进制镜像提供 `darwin/arm64` 与 `linux/amd64`；`linux/arm64` 仍使用 GitHub。可用 `--source` 临时指定，在 `~/.weclaw/config.json` 写入 `"update_source": "gitee"` 持久指定，或用 `WECLAW_UPDATE_SOURCE` 覆盖。`auto` 只在 DNS、连接、TLS、超时或 HTTP 5xx 时从 GitHub 切换 Gitee；4xx、版本格式或 SHA-256 异常会直接失败，不通过换源掩盖完整性问题。Gitee 镜像落后时更新器也会拒绝降级。
 
-`weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`restart` 和 `update --restart` 会在停止旧服务前完成预检，并通过本机控制 API 原子进入排空状态：普通重启遇到活动任务会拒绝，`--force` 会取消任务并等待终态交付。systemd 托管实例会继续由 systemd 重启，不会另起私有后台进程；即使直接执行 `systemctl restart` 绕过 CLI 预检，SIGTERM 收尾或下次启动恢复也会关闭遗留任务卡。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
+`weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`restart` 和 `update --restart` 使用同一个协调重启事务：先持有排他的 Codex frontend 租约，通过本机 `/api/runtime/restart/prepare` 关闭消息准入并排空任务，再确认 Codex App 已完整退出、没有受控 `weclaw codex cli`、writer lease 或活动/未知 thread，最后停止身份验证通过的 official daemon 或 WeClaw-managed Host。Codex App 或受控 CLI 仍在运行时命令会在停止 WeClaw 前明确拒绝；WeClaw 只用受保护 IPC 和同用户主进程名做保守存在性探测，不会按进程名终止或自动退出 Codex App，`--force` 也只中断 WeClaw 自己的任务，不能绕过这些 Host 安全门禁。新服务必须在平台监听前读取受保护的重启状态、启动唯一 Host，并验证 Host generation 已变化；验证失败保持不可写，外层停止失败则先重建旧 Host 才恢复消息准入。systemd 托管实例继续由 systemd 重启，不会另起私有后台进程。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
+
+若 WeClaw 服务本来就未运行，`weclaw restart` 保留“检查 App/受控 CLI 后直接启动”的兼容语义；没有旧服务可执行上述 loopback Host 事务时，不宣称已轮换独立存在的外部 Host。
+从尚不支持该协调端点的旧版本首次升级时，正在执行更新的仍是旧进程，因此不能把该次 `update --restart` 当作已验证的新事务。首次迁移应先执行不带 `--restart` 的 `weclaw update`，完整退出 Codex App 和受控 CLI，再用已安装的新版本执行 `weclaw restart`。
 
 ## 从源码构建
 

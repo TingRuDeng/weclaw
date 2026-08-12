@@ -2,6 +2,7 @@ package platformtest
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -15,6 +16,27 @@ func TestFakeReplierRecordsText(t *testing.T) {
 	}
 	if len(reply.Texts) != 1 || reply.Texts[0] != "hello" {
 		t.Fatalf("texts=%#v, want hello", reply.Texts)
+	}
+}
+
+func TestFakeReplierRecordsTypingConcurrently(t *testing.T) {
+	reply := NewReplier(platform.Capabilities{Typing: true})
+	const calls = 32
+	var wg sync.WaitGroup
+
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func(on bool) {
+			defer wg.Done()
+			if err := reply.Typing(context.Background(), on); err != nil {
+				t.Errorf("Typing error: %v", err)
+			}
+		}(i%2 == 0)
+	}
+	wg.Wait()
+
+	if got := len(reply.TypingStatesSnapshot()); got != calls {
+		t.Fatalf("typing states=%d, want %d", got, calls)
 	}
 }
 

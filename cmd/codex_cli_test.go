@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,6 +44,13 @@ func TestRunCodexCLIForwardsFrontendArguments(t *testing.T) {
 	}
 	var executed agent.CodexCLILaunch
 	executeCodexCLI = func(_ context.Context, launch agent.CodexCLILaunch) error {
+		lease, err := agent.AcquireCodexRestartLease()
+		if lease != nil {
+			_ = lease.Close()
+		}
+		if !errors.Is(err, agent.ErrCodexCLIFrontendActive) {
+			t.Fatalf("restart lease error=%v, want CLI lifetime lease conflict", err)
+		}
 		executed = launch
 		return nil
 	}

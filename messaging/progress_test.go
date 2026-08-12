@@ -382,8 +382,8 @@ func TestNativeStreamProgressSkipsTypingAndCompletes(t *testing.T) {
 	onProgress("部分结果")
 	stop()
 
-	if len(reply.TypingStates) != 0 {
-		t.Fatalf("typing states=%#v, want native stream without typing", reply.TypingStates)
+	if states := reply.TypingStatesSnapshot(); len(states) != 0 {
+		t.Fatalf("typing states=%#v, want native stream without typing", states)
 	}
 	if reply.Stream.Completed == "" {
 		t.Fatal("native progress stream should be completed on stop")

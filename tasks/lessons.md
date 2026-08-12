@@ -404,6 +404,14 @@
 - 正确做法：服务进程通过本机 API 暴露实时 active task 数，CLI 重启前查询；已知进程存在但配置或 API 无法确认状态时默认阻断，手工恢复必须显式使用 `--force`，有任务时给出明确提示。
 - 来源：2026-07-04 飞书任务失败排查发现发布/重启中断了 43 分钟的运行中任务。
 
+## 2026-08-12 Codex Host 协调重启
+
+- 触发条件：执行 `weclaw restart` 或 `weclaw update --restart`，同时可能存在 Codex App、受控 CLI、official daemon、managed Host 或活动/未知 writer。
+- 规则：重启是“消息准入 + 任务 + frontend 租约 + Host 生命周期 + 服务进程 + 启动后 generation 验证”的事务；任何外部 frontend、writer、thread 或 Host 身份无法证明安全时失败关闭。`--force` 只作用于 WeClaw 自己的任务，不能扩大为强杀 App 或绕过 Host 门禁。
+- 反例：只停止 pid 文件中的 WeClaw，保留 daemon、App 或 CLI 各自的 Host，然后让新服务按启动时探测另选 Host；会出现飞书 binding 已成功但 runtime resume 报 `already has an active writer` 或历史 `no-client-found` 的假接管。
+- 正确做法：受控 CLI 全程持共享内核租约，重启持排他租约；要求用户完整退出 App；在全局 idle 和 lifecycle lock 下只停止身份验证通过的 daemon/managed Host；Host 停止前持久化恢复状态，新服务在平台监听前验证唯一且 generation 已变化的 Host，外层停止失败则先重建 Host 才恢复消息准入。
+- 来源：2026-08-12 飞书接管同一 Codex thread 时复现 App/daemon writer 冲突，用户确认更新重启应统一收敛 Codex App、CLI、daemon 与 Host 生命周期。
+
 ## 2026-07-03 飞书按钮会话路由
 
 - 触发条件：飞书里把 Codex 普通回复中的编号选项渲染成按钮，或把 Codex 权限请求渲染成审批按钮时。

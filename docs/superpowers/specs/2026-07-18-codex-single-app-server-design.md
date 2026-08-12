@@ -79,6 +79,14 @@ WeClaw-managed Host 已运行后若探测到 App，只能在所有 thread 全局
 
 managed 默认 socket 位于 WeClaw 状态目录的 `runtime/` 下。若完整路径超过 Darwin `sockaddr_un` 安全上限，使用原目标路径的稳定哈希落到真实系统临时目录下的 `weclaw-<uid>/`；macOS 将 `/tmp` 解析为 `/private/tmp`，避免 Codex 拒绝目录链中的软链接。目录必须为真实目录、owner 合法且禁止 group/other 访问。显式配置的超长路径直接报错。daemon 固定使用 `CODEX_HOME/app-server-control/app-server-control.sock`，不能被自定义 socket 覆盖。
 
+### 协调重启
+
+`weclaw restart` 与 `weclaw update --restart` 是 Host 级事务，不等同于只向 WeClaw PID 发送信号。运行中服务在协调 API 边界持有 Codex frontend 排他租约，离线启动分支则由外层命令持有，两者都阻止新的受控 CLI；持久化重启事务在旧服务退出后继续拦截 CLI。运行中服务再关闭消息准入、排空 `Handler.tasks`，并在 admission、writer lease、全量 thread idle 与 socket lifecycle lock 下确认 Codex App 已退出，随后只停止身份和 generation 均验证通过的 official daemon 或 managed Host。`--force` 只能取消 WeClaw 自己拥有的任务，不能绕过 App、受控 CLI、active/unknown thread 或不明 Host。
+
+WeClaw 不管理或终止 Codex App；App 仍存在时协调重启在触碰 Host 和 WeClaw 服务前返回可操作错误。受控 `weclaw codex cli` 在整个 TUI 生命周期持有共享内核租约，因此无需扫描或误杀进程。Host 停止前写入受保护的重启状态；新服务必须在平台监听前启动/连接唯一 Host，并证明新 generation 不同于已停止代次。启动验证失败保持不可写；若外层停止 WeClaw 失败，则先重建并验证 Host，再删除重启状态并恢复消息准入。
+
+旧 WeClaw 服务未运行时，`restart` 仅在离线分支持有排他租约、检查 App 后直接启动；由于没有旧服务可执行 Host 事务，该分支不承诺轮换独立存在的外部 Host。
+
 ### Desktop follower 边界
 
 `agent/codex_desktop_connector.go` 和 `agent/codex_desktop_runtime.go` 只连接已验证的 App IPC endpoint，并把 Desktop 作为唯一 Host 权威。它支持读取已有 thread、启动/观察 turn、steer、interrupt、审批、用户输入和当前 thread settings；不提供新建/归档 thread、完整模型列表、账号或额度操作。上述缺失能力必须提示用户在 Codex App 执行，不能静默启动 shared Host 补齐。

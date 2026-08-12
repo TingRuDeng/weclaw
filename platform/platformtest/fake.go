@@ -10,6 +10,7 @@ import (
 // Replier 是测试用回复器，记录业务层发出的所有回复意图。
 type Replier struct {
 	textsMu         sync.RWMutex
+	typingMu        sync.RWMutex
 	Caps            platform.Capabilities
 	Texts           []string
 	Images          []string
@@ -63,8 +64,17 @@ func (r *Replier) SendFile(ctx context.Context, localPath string) error {
 }
 
 func (r *Replier) Typing(ctx context.Context, on bool) error {
+	r.typingMu.Lock()
+	defer r.typingMu.Unlock()
 	r.TypingStates = append(r.TypingStates, on)
 	return nil
+}
+
+// TypingStatesSnapshot 返回并发安全的输入状态副本，供异步进度测试读取。
+func (r *Replier) TypingStatesSnapshot() []bool {
+	r.typingMu.RLock()
+	defer r.typingMu.RUnlock()
+	return append([]bool(nil), r.TypingStates...)
 }
 
 func (r *Replier) OpenStream(ctx context.Context, opts platform.StreamOptions) (platform.Stream, error) {

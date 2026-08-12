@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
@@ -595,6 +596,26 @@ func TestCompleteUpdateHandlesClaudeACPPreflight(t *testing.T) {
 	}
 }
 
+func TestCompleteUpdateRollsBackWhenCodexCLILeaseBlocksRestart(t *testing.T) {
+	rolledBack := false
+	cancelled := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe:  func(context.Context, bool, *config.Config) error { return agent.ErrCodexCLIFrontendActive },
+		cancelDrain: func(context.Context, *config.Config) error { cancelled = true; return nil },
+		out:         &bytes.Buffer{},
+	}
+	err := completeUpdateWithRollback(context.Background(), true, false, ops, func() error {
+		rolledBack = true
+		return nil
+	})
+	if !errors.Is(err, agent.ErrCodexCLIFrontendActive) || !rolledBack || !cancelled {
+		t.Fatalf("error=%v rolledBack=%v cancelled=%v", err, rolledBack, cancelled)
+	}
+}
+
 func TestCompleteUpdateRestartDelegatesSystemd(t *testing.T) {
 	var calls []string
 	ops := updateCompletionOps{
@@ -638,7 +659,7 @@ func TestCompleteUpdateRestartCancelsDrainWhenStopFails(t *testing.T) {
 		running:     func() bool { return true },
 		isSystemd:   func() bool { return false },
 		stop:        func() error { return wantErr },
-		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		cancelDrain: func(context.Context, *config.Config) error { cancelled = true; return nil },
 		out:         &bytes.Buffer{},
 	}
 	if err := completeUpdate(context.Background(), true, false, ops); !errors.Is(err, wantErr) || !cancelled {
@@ -655,7 +676,7 @@ func TestCompleteUpdateRestartCancelsDrainWhenSystemdRestartIsUnavailable(t *tes
 		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
 		running:     func() bool { return true },
 		isSystemd:   func() bool { return true },
-		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		cancelDrain: func(context.Context, *config.Config) error { cancelled = true; return nil },
 		out:         &bytes.Buffer{},
 	}
 	if err := completeUpdate(context.Background(), true, false, ops); err == nil || !cancelled {

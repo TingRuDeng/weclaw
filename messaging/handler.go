@@ -92,6 +92,12 @@ type Handler struct {
 	serviceAdminMu           sync.Mutex
 	serviceAdminExecutor     ServiceAdminCommandExecutor
 	adminTimeout             time.Duration
+	runtimeRestartMu         sync.Mutex
+	runtimeRestartPrepared   bool
+	runtimeRestartController agent.CodexRestartController
+	runtimeRestartLease      *agent.CodexFrontendLease
+	runtimeRestartResult     RuntimeRestartResult
+	runtimeRestartStateFile  string
 	codexCommandTimeout      time.Duration
 	codexLockWaitTimeout     time.Duration
 	codexControlTimeout      time.Duration

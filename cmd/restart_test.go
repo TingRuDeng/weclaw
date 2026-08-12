@@ -4,11 +4,30 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 )
+
+func TestRunRestartRejectsActiveControlledCLIWhileOffline(t *testing.T) {
+	prepared := false
+	err := runRestart(context.Background(), false, restartOps{
+		acquireLease: func() (io.Closer, error) { return nil, agent.ErrCodexCLIFrontendActive },
+		prepare: func(context.Context) (preparedStart, error) {
+			prepared = true
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
+		isRunning:  func() bool { return false },
+		out:        &bytes.Buffer{},
+	})
+	if !errors.Is(err, agent.ErrCodexCLIFrontendActive) || !strings.Contains(err.Error(), "退出所有 weclaw codex cli") || !prepared {
+		t.Fatalf("runRestart error=%v prepared=%v", err, prepared)
+	}
+}
 
 // TestRunRestartDoesNotStopWhenPreflightFails 验证预检失败时旧服务保持运行。
 func TestRunRestartDoesNotStopWhenPreflightFails(t *testing.T) {
@@ -68,6 +87,22 @@ func TestRunRestartStartsDirectlyWhenWeclawIsNotRunning(t *testing.T) {
 	}
 }
 
+func TestRunRestartDoesNotStartOfflineWhenCodexAppIsVisible(t *testing.T) {
+	started := false
+	err := runRestart(context.Background(), false, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error { started = true; return nil }}, nil
+		},
+		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
+		isRunning:   func() bool { return false },
+		offlineSafe: func(*config.Config) error { return agent.ErrCodexDesktopFrontendActive },
+		out:         &bytes.Buffer{},
+	})
+	if !errors.Is(err, agent.ErrCodexDesktopFrontendActive) || started {
+		t.Fatalf("error=%v started=%v", err, started)
+	}
+}
+
 func TestRunRestartStopsBeforeStartWhenWeclawIsRunning(t *testing.T) {
 	var out bytes.Buffer
 	var calls []string
@@ -109,6 +144,7 @@ func TestRunRestartStopsBeforeStartWhenWeclawIsRunning(t *testing.T) {
 
 func TestRunRestartStopsWhenSafetyCheckFails(t *testing.T) {
 	wantErr := errors.New("安全检查失败")
+	cancelled := false
 	err := runRestart(context.Background(), false, restartOps{
 		prepare: func(context.Context) (preparedStart, error) {
 			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
@@ -119,11 +155,15 @@ func TestRunRestartStopsWhenSafetyCheckFails(t *testing.T) {
 			return false
 		},
 		stop: func() error { return nil },
-		out:  &bytes.Buffer{},
+		cancelDrain: func(context.Context, *config.Config) error {
+			cancelled = true
+			return nil
+		},
+		out: &bytes.Buffer{},
 	})
 
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("runRestart error=%v, want %v", err, wantErr)
+	if !errors.Is(err, wantErr) || !cancelled {
+		t.Fatalf("runRestart error=%v cancelled=%v, want %v", err, cancelled, wantErr)
 	}
 }
 
@@ -173,7 +213,7 @@ func TestRunRestartCancelsDrainWhenSystemdRestartFails(t *testing.T) {
 		isRunning:      func() bool { return true },
 		isSystemd:      func() bool { return true },
 		restartSystemd: func() error { return wantErr },
-		cancelDrain:    func(context.Context, *config.Config) { cancelled = true },
+		cancelDrain:    func(context.Context, *config.Config) error { cancelled = true; return nil },
 		out:            &bytes.Buffer{},
 	})
 	if !errors.Is(err, wantErr) || !cancelled {
@@ -192,7 +232,7 @@ func TestRunRestartCancelsDrainWhenDirectStopFails(t *testing.T) {
 		isRunning:   func() bool { return true },
 		isSystemd:   func() bool { return false },
 		stop:        func() error { return wantErr },
-		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		cancelDrain: func(context.Context, *config.Config) error { cancelled = true; return nil },
 		out:         &bytes.Buffer{},
 	})
 	if !errors.Is(err, wantErr) || !cancelled {
@@ -209,7 +249,7 @@ func TestRunRestartCancelsDrainWhenSystemdRestartIsUnavailable(t *testing.T) {
 		ensureSafe:  func(context.Context, bool, *config.Config) error { return nil },
 		isRunning:   func() bool { return true },
 		isSystemd:   func() bool { return true },
-		cancelDrain: func(context.Context, *config.Config) { cancelled = true },
+		cancelDrain: func(context.Context, *config.Config) error { cancelled = true; return nil },
 		out:         &bytes.Buffer{},
 	})
 	if err == nil || !cancelled {

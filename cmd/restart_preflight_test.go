@@ -43,7 +43,7 @@ func TestBeginRestartDrainUsesAtomicRuntimeEndpoint(t *testing.T) {
 	requested := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = true
-		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/drain" || r.URL.Query().Get("force") != "true" {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/restart/prepare" || r.URL.Query().Get("force") != "true" {
 			t.Fatalf("request=%s %s, want force drain POST", r.Method, r.URL.String())
 		}
 		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true, ActiveTasks: 1})
@@ -77,5 +77,25 @@ func TestBeginRestartDrainReportsActiveTaskConflict(t *testing.T) {
 	err := beginRestartDrainWithConfig(context.Background(), false, cfg)
 	if err == nil || !strings.Contains(err.Error(), "2 个运行中的任务") {
 		t.Fatalf("error=%v, want active task conflict", err)
+	}
+}
+
+func TestCancelRestartDrainRequiresConfirmedAdmissionRecovery(t *testing.T) {
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/runtime/restart/prepare" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: false})
+	}))
+	defer server.Close()
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
+	if err := cancelRestartDrain(context.Background(), cfg); err != nil {
+		t.Fatalf("cancelRestartDrain: %v", err)
+	}
+	if !requested {
+		t.Fatal("runtime restart cancellation endpoint was not called")
 	}
 }

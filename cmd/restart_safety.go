@@ -15,7 +15,7 @@ import (
 )
 
 const restartSafetyTimeout = 2 * time.Second
-const restartDrainTimeout = 12 * time.Second
+const restartDrainTimeout = 60 * time.Second
 
 var restartSafetyHTTPClient = &http.Client{Timeout: restartSafetyTimeout}
 var restartDrainHTTPClient = &http.Client{Timeout: restartDrainTimeout}
@@ -30,6 +30,7 @@ type runtimeDrainResponse struct {
 	Draining       bool   `json:"draining"`
 	ActiveTasks    int    `json:"active_tasks"`
 	RemainingTasks int    `json:"remaining_tasks"`
+	Message        string `json:"message"`
 }
 
 type restartSafetyOptions struct {
@@ -80,7 +81,7 @@ func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Co
 	if err != nil || !processExists(state.PID) {
 		return nil
 	}
-	endpoint, err := runtimeAPIURL(cfg.APIAddr, "/api/runtime/drain")
+	endpoint, err := runtimeAPIURL(cfg.APIAddr, "/api/runtime/restart/prepare")
 	if err != nil {
 		return fmt.Errorf("无法连接安全重启排空入口: %w", err)
 	}
@@ -107,7 +108,16 @@ func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Co
 		return fmt.Errorf("安全重启排空响应包含多余内容")
 	}
 	if resp.StatusCode == http.StatusConflict {
+		if message := strings.TrimSpace(result.Message); message != "" {
+			return fmt.Errorf("%s", message)
+		}
 		return fmt.Errorf("当前还有 %d 个运行中的任务，已取消重启；请等待完成或在飞书发送 /stop 后重试，如确认要中断可加 --force", result.ActiveTasks)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if message := strings.TrimSpace(result.Message); message != "" {
+			return fmt.Errorf("%s", message)
+		}
+		return fmt.Errorf("安全重启排空入口返回异常状态 %d", resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK || result.Status != "ok" || !result.Draining || result.ActiveTasks < 0 || result.RemainingTasks < 0 {
 		return fmt.Errorf("安全重启排空入口返回异常状态 %d", resp.StatusCode)
@@ -115,20 +125,37 @@ func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Co
 	return nil
 }
 
-func cancelRestartDrain(ctx context.Context, cfg *config.Config) {
-	endpoint, err := runtimeAPIURL(cfg.APIAddr, "/api/runtime/drain")
+func cancelRestartDrain(ctx context.Context, cfg *config.Config) error {
+	endpoint, err := runtimeAPIURL(cfg.APIAddr, "/api/runtime/restart/prepare")
 	if err != nil {
-		return
+		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
-		return
+		return err
 	}
 	setRuntimeAPIToken(req, cfg.APIToken)
-	resp, err := restartSafetyHTTPClient.Do(req)
-	if err == nil {
-		_ = resp.Body.Close()
+	resp, err := restartDrainHTTPClient.Do(req)
+	if err != nil {
+		return err
 	}
+	defer resp.Body.Close()
+	var result runtimeDrainResponse
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&result); err != nil {
+		return fmt.Errorf("恢复重启事务响应无效: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("恢复重启事务响应包含多余内容")
+	}
+	if resp.StatusCode != http.StatusOK || result.Status != "ok" || result.Draining {
+		if message := strings.TrimSpace(result.Message); message != "" {
+			return fmt.Errorf("%s", message)
+		}
+		return fmt.Errorf("恢复重启事务返回异常状态 %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func setRuntimeAPIToken(req *http.Request, token string) {

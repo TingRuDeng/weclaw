@@ -198,6 +198,46 @@ func TestHandleRuntimeDrainReportsActiveTaskConflict(t *testing.T) {
 	}
 }
 
+func TestHandleRuntimeRestartPreparesAndCancelsTransaction(t *testing.T) {
+	control := &staticRuntimeRestartControl{result: messaging.RuntimeRestartResult{
+		ActiveTasks: 1, Codex: true,
+		CodexHost: agent.CodexRestartSnapshot{HostMode: "daemon", HostGeneration: 9, HostStopped: true},
+	}}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force=true", nil)
+	request.Host = "127.0.0.1:18011"
+	request.RemoteAddr = "127.0.0.1:40001"
+	recorder := httptest.NewRecorder()
+	server.handleRuntimeRestart(recorder, request)
+	if recorder.Code != http.StatusOK || !control.force || !strings.Contains(recorder.Body.String(), `"host_generation":9`) {
+		t.Fatalf("status=%d force=%v body=%q", recorder.Code, control.force, recorder.Body.String())
+	}
+
+	cancelRequest := httptest.NewRequest(http.MethodDelete, "/api/runtime/restart/prepare", nil)
+	cancelRequest.Host = "127.0.0.1:18011"
+	cancelRequest.RemoteAddr = "127.0.0.1:40001"
+	cancelRecorder := httptest.NewRecorder()
+	server.handleRuntimeRestart(cancelRecorder, cancelRequest)
+	if cancelRecorder.Code != http.StatusOK || !control.cancelled {
+		t.Fatalf("cancel status=%d cancelled=%v body=%q", cancelRecorder.Code, control.cancelled, cancelRecorder.Body.String())
+	}
+}
+
+func TestHandleRuntimeRestartReportsCodexBlocker(t *testing.T) {
+	control := &staticRuntimeRestartControl{err: fmt.Errorf(
+		"%w: %w", messaging.ErrRuntimeRestartBlocked, agent.ErrCodexDesktopFrontendActive,
+	)}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare", nil)
+	request.Host = "127.0.0.1:18011"
+	request.RemoteAddr = "127.0.0.1:40001"
+	recorder := httptest.NewRecorder()
+	server.handleRuntimeRestart(recorder, request)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "Codex App") {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestAuthorizeReadRejectsExternalHostWithoutToken(t *testing.T) {
 	server := NewServer(nil, "127.0.0.1:18011")
 	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
@@ -463,6 +503,13 @@ type staticRuntimeControl struct {
 	cancelled bool
 }
 
+type staticRuntimeRestartControl struct {
+	result    messaging.RuntimeRestartResult
+	err       error
+	force     bool
+	cancelled bool
+}
+
 type staticCodexCLIControl struct {
 	host   agent.CodexCLIHost
 	err    error
@@ -481,6 +528,16 @@ func (s *staticRuntimeControl) Drain(_ context.Context, force bool) (messaging.R
 
 func (s *staticRuntimeControl) CancelDrain() {
 	s.cancelled = true
+}
+
+func (s *staticRuntimeRestartControl) PrepareRuntimeRestart(_ context.Context, force bool) (messaging.RuntimeRestartResult, error) {
+	s.force = force
+	return s.result, s.err
+}
+
+func (s *staticRuntimeRestartControl) CancelRuntimeRestart(context.Context) error {
+	s.cancelled = true
+	return nil
 }
 
 func (s staticRuntimeStatus) ActiveTaskCount() int {

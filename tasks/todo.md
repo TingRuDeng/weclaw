@@ -1,5 +1,25 @@
 # 当前任务记录
 
+## 2026-08-12 WeClaw 与 Codex Host 强一致重启
+
+### 目标
+
+让 `weclaw restart` 与 `weclaw update --restart` 在停止服务前收敛 Codex App、受控 CLI、official daemon、managed Host、writer lease 和活动 thread，避免新服务选择另一套 Host 后出现飞书绑定成功但 runtime writer 冲突。
+
+### 完成标准
+
+- [x] 受控 `weclaw codex cli` 全程持共享租约；协调重启持排他租约，不能与新 CLI 启动竞态。
+- [x] Codex App、writer lease、active/unknown thread 或不明 Host 存在时，重启在停止 WeClaw 前失败关闭；`--force` 不绕过。
+- [x] 只停止身份和 generation 验证通过的 official daemon 或 managed Host；App 只做 IPC/同 UID 主进程存在性探测，不按进程名终止。
+- [x] Host 停止前持久化重启状态；新服务在平台监听前验证唯一且 generation 已变化的 Host。
+- [x] 外层停止失败时先重建 Host，再删除重启状态并恢复消息准入。
+- [x] 完成受影响模块、全仓普通/Race 测试、Vet、module tidy、Staticcheck、文档和差异验证。
+- [ ] 发布后在真实 Codex App、受控 CLI 与飞书链路执行端侧验收。
+
+### 验证边界
+
+自动化测试证明状态机、租约、失败关闭和 generation 门禁；不会替代真实 App 退出检测、官方 daemon 生命周期、飞书错误回写和更新重启的端侧验收。
+
 ## 2026-08-12 Codex App 与飞书真机协作修复
 
 ### 目标

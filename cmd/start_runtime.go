@@ -100,6 +100,12 @@ func runForegroundStart(cfg *config.Config) error {
 	}
 	traceStore := newStartTraceStore()
 	handler := newStartHandlerWithTrace(cfg, traceStore)
+	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 2*time.Minute)
+	if err := handler.RecoverRuntimeRestart(recoveryCtx); err != nil {
+		recoveryCancel()
+		return fmt.Errorf("恢复协调重启事务失败: %w", err)
+	}
+	recoveryCancel()
 	startDefaultAgent(ctx, handler, cfg)
 	registry, err := newStartRegistry(accounts, cfg, handler)
 	if err != nil {
@@ -338,6 +344,7 @@ func (runtime startRuntime) startServices() error {
 		api.WithRegistry(runtime.registry),
 		api.WithRuntimeStatusProvider(runtime.handler),
 		api.WithRuntimeDrainController(runtime.handler),
+		api.WithRuntimeRestartController(runtime.handler),
 		api.WithCodexAccountController(runtime.handler),
 		api.WithCodexCLIHostController(runtime.handler),
 		api.WithTraceQueryProvider(runtime.trace),

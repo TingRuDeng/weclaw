@@ -64,6 +64,11 @@ func init() {
 }
 
 func runCodexCLI(ctx context.Context, args []string) error {
+	frontendLease, err := agent.AcquireCodexCLIFrontendLease()
+	if err != nil {
+		return fmt.Errorf("无法启动受控 Codex CLI: %w", err)
+	}
+	defer frontendLease.Close()
 	cfg, err := loadCodexCLIConfig()
 	if err != nil {
 		return fmt.Errorf("加载配置失败: %w", err)

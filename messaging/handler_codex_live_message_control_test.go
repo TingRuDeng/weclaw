@@ -187,7 +187,7 @@ func TestCodexDesktopDirectInputKeepsResolvedStreamProgress(t *testing.T) {
 	select {
 	case <-reply.StreamOpened:
 	case <-time.After(taskWaitTimeout):
-		t.Fatalf("typing=%#v，外部任务未继承 stream 配置", reply.TypingStates)
+		t.Fatalf("typing=%#v，外部任务未继承 stream 配置", reply.TypingStatesSnapshot())
 	}
 	task, ok := h.activeTask(route.conversationID)
 	if !ok {
@@ -195,10 +195,10 @@ func TestCodexDesktopDirectInputKeepsResolvedStreamProgress(t *testing.T) {
 	}
 	defer task.cancel()
 	if reply.Stream.Options.Title == "" {
-		t.Fatalf("typing=%#v，外部任务未继承 stream 配置", reply.TypingStates)
+		t.Fatalf("typing=%#v，外部任务未继承 stream 配置", reply.TypingStatesSnapshot())
 	}
-	if len(reply.TypingStates) != 0 {
-		t.Fatalf("typing=%#v，stream 模式不应创建 typing 卡", reply.TypingStates)
+	if states := reply.TypingStatesSnapshot(); len(states) != 0 {
+		t.Fatalf("typing=%#v，stream 模式不应创建 typing 卡", states)
 	}
 }
 

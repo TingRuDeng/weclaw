@@ -21,7 +21,7 @@ var updateRestartFlag bool
 var updateSourceFlag string
 
 func init() {
-	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后重启 WeClaw")
+	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后协调重启 WeClaw 与受管 Codex Host")
 	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
 	updateCmd.Flags().StringVar(&updateSourceFlag, "source", "", "更新来源：auto、github 或 gitee（默认读取配置）")
 	rootCmd.AddCommand(updateCmd)
@@ -216,7 +216,7 @@ type updateCompletionOps struct {
 	stop           func() error
 	isSystemd      func() bool
 	restartSystemd func() error
-	cancelDrain    func(context.Context, *config.Config)
+	cancelDrain    func(context.Context, *config.Config) error
 	out            io.Writer
 }
 
@@ -262,7 +262,7 @@ func completeUpdateWithRollback(
 		return nil
 	}
 	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
-		return rollbackUpdatedBinary(err, rollback, ops.out)
+		return rollbackUpdatedBinary(compensateRestartDrain(err, ops.cancelDrain, prepared.cfg), rollback, ops.out)
 	}
 	return restartUpdatedServiceWithRollback(prepared, ops, rollback)
 }
@@ -280,26 +280,26 @@ func restartUpdatedServiceWithRollback(prepared preparedStart, ops updateComplet
 	if ops.isSystemd != nil && ops.isSystemd() {
 		fmt.Fprintln(ops.out, "正在通过 systemd 重启新版本...")
 		if ops.restartSystemd == nil {
-			if ops.cancelDrain != nil {
-				ops.cancelDrain(context.Background(), prepared.cfg)
-			}
-			return rollbackUpdatedBinary(fmt.Errorf("systemd restart is unavailable"), rollback, ops.out)
+			return rollbackUpdatedBinary(
+				compensateRestartDrain(fmt.Errorf("systemd restart is unavailable"), ops.cancelDrain, prepared.cfg),
+				rollback, ops.out,
+			)
 		}
 		if err := ops.restartSystemd(); err != nil {
-			if ops.cancelDrain != nil {
-				ops.cancelDrain(context.Background(), prepared.cfg)
-			}
-			return rollbackUpdatedBinary(fmt.Errorf("更新完成，但 systemd 重启失败: %w", err), rollback, ops.out)
+			return rollbackUpdatedBinary(
+				compensateRestartDrain(fmt.Errorf("更新完成，但 systemd 重启失败: %w", err), ops.cancelDrain, prepared.cfg),
+				rollback, ops.out,
+			)
 		}
 		return nil
 	}
 	fmt.Fprintln(ops.out, "正在停止旧服务...")
 	if err := ops.stop(); err != nil {
 		log.Printf("停止旧服务失败：%v", err)
-		if ops.cancelDrain != nil {
-			ops.cancelDrain(context.Background(), prepared.cfg)
-		}
-		return recoverPreviousUpdate(prepared, ops, fmt.Errorf("更新完成，但停止旧服务失败: %w", err), rollback)
+		cause := compensateRestartDrain(
+			fmt.Errorf("更新完成，但停止旧服务失败: %w", err), ops.cancelDrain, prepared.cfg,
+		)
+		return recoverPreviousUpdate(prepared, ops, cause, rollback)
 	}
 	fmt.Fprintln(ops.out, "正在启动新版本...")
 	if err := prepared.run(); err != nil {

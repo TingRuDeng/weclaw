@@ -129,9 +129,13 @@ type ACPAgent struct {
 	claudeQuotaOAuthToken func(context.Context) (string, error)
 	claudeQuotaOAuthQuery func(context.Context, string) (ClaudeQuota, error)
 
-	desktopProbe   codexDesktopOwnerProbe
-	codexOwners    *codexRuntimeOwnerRegistry
-	desktopRuntime *codexDesktopRuntime
+	desktopProbe codexDesktopOwnerProbe
+	// codexDesktopPresenceCall is a test seam for strict restart preflight.
+	// Production falls back to the platform probe even when Desktop IPC is not
+	// enabled for the configured Host mode.
+	codexDesktopPresenceCall func() (bool, bool)
+	codexOwners              *codexRuntimeOwnerRegistry
+	desktopRuntime           *codexDesktopRuntime
 	// Desktop 协调能力与 Host 选择权必须分离：daemon 也需要通过
 	// App IPC 探测 frontend 并回交 thread，但只有 auto 允许把 App Host
 	// 设为全局写入权威。
@@ -144,6 +148,9 @@ type ACPAgent struct {
 	// permit and writer lease; account operations then either run before the
 	// preflight or observe the admitted turn and fail busy.
 	codexAdmissionMu           sync.Mutex
+	codexRestartMu             sync.Mutex
+	codexRestartSnapshot       CodexRestartSnapshot
+	codexRestartPrepared       bool
 	codexAccountSafetyOnce     sync.Once
 	restartCodexAppServerCall  func(context.Context) error
 	codexAccountStoreCall      func() (*codexauth.Store, error)
