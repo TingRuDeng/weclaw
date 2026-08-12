@@ -16,19 +16,20 @@ type codexWorkspaceGroup struct {
 }
 
 type codexWorkspaceCdRequest struct {
-	Context         context.Context
-	TaskContext     context.Context
-	UserID          string
-	ActorUserID     string
-	BindingKey      string
-	OwnerBindingKey string
-	AgentName       string
-	Target          string
-	Agent           agent.Agent
-	Platform        platform.PlatformName
-	AccountID       string
-	Reply           platform.Replier
-	Admin           bool
+	Context            context.Context
+	TaskContext        context.Context
+	UserID             string
+	ActorUserID        string
+	AuthorizedIdentity string
+	BindingKey         string
+	OwnerBindingKey    string
+	AgentName          string
+	Target             string
+	Agent              agent.Agent
+	Platform           platform.PlatformName
+	AccountID          string
+	Reply              platform.Replier
+	Admin              bool
 }
 
 type codexSingleSessionEntryRequest struct {
@@ -165,8 +166,9 @@ func (h *Handler) enterCodexWorkspaceWithSingleSessionResult(entry codexSingleSe
 	}
 	result, err := h.acquireCodexSessionWithBindingLocked(codexSessionAcquireRequest{
 		ctx: req.Context, taskContext: firstCodexContext(req.TaskContext, req.Context),
-		actorUserID: firstNonBlank(req.ActorUserID, req.UserID),
-		routeUserID: req.UserID, agentName: req.AgentName, agent: req.Agent,
+		actorUserID:        firstNonBlank(req.ActorUserID, req.UserID),
+		authorizedIdentity: strings.TrimSpace(req.AuthorizedIdentity),
+		routeUserID:        req.UserID, agentName: req.AgentName, agent: req.Agent,
 		route: route, platform: req.Platform, accountID: req.AccountID, reply: req.Reply,
 	})
 	if err != nil {

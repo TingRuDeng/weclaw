@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -187,6 +188,91 @@ func TestCodexDesktopRuntimeAnswersFollowingStatusForTrackedAuthoritativeThread(
 		}
 	case <-time.After(codexDesktopTestTimeout):
 		t.Fatal("following status response not sent")
+	}
+}
+
+func TestCodexDesktopLoadHistoryActivelyRegistersLateFollower(t *testing.T) {
+	runtime := newCodexDesktopRuntime()
+	runtime.setAuthoritative(func() bool { return true })
+	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "weclaw-client")
+		first := readCodexDesktopTestEnvelope(t, conn)
+		if first.Method != "thread-stream-following-changed" {
+			if first.Method == "thread-follower-load-complete-history" {
+				writeCodexDesktopTestError(t, conn, codexDesktopTestResponse{
+					requestID: first.RequestID,
+					message:   "no-client-found: thread stream owner became unavailable",
+				})
+			}
+			return
+		}
+		var following struct {
+			ConversationID string `json:"conversationId"`
+			HostID         string `json:"hostId"`
+			Following      bool   `json:"following"`
+		}
+		if err := json.Unmarshal(first.Params, &following); err != nil ||
+			following.ConversationID != "thread-1" || following.HostID != "local" || !following.Following {
+			t.Errorf("following params=%#v err=%v", following, err)
+			return
+		}
+		snapshot := desktopRefreshEnvelope(t, 1)
+		snapshot.SourceClientID = "desktop-client"
+		writeCodexDesktopTestEnvelope(t, conn, snapshot)
+		request := readCodexDesktopTestEnvelope(t, conn)
+		if request.Method != "thread-follower-load-complete-history" {
+			t.Errorf("request method=%q, want load-complete-history", request.Method)
+			return
+		}
+		writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+			requestID: request.RequestID,
+			value:     map[string]uint64{"revision": 1},
+		})
+	}))
+	options.onBroadcast = runtime.handleBroadcast
+	client := newCodexDesktopClient(options)
+	runtime.mu.Lock()
+	runtime.client = client
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	runtime.mu.Unlock()
+	t.Cleanup(func() { _ = client.Close() })
+
+	err := runtime.LoadHistory(context.Background(), CodexThreadRef{ThreadID: "thread-1"})
+
+	if err != nil {
+		t.Fatalf("LoadHistory() error = %v", err)
+	}
+	if snapshot, ok := runtime.state.snapshot("thread-1"); !ok || snapshot.Revision != 1 {
+		t.Fatalf("snapshot=%#v found=%v", snapshot, ok)
+	}
+}
+
+func TestCodexDesktopLoadHistoryDoesNotRegisterFollowerWhenDesktopIsNotAuthoritative(t *testing.T) {
+	runtime := newCodexDesktopRuntime()
+	runtime.setAuthoritative(func() bool { return false })
+	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "weclaw-client")
+		request := readCodexDesktopTestEnvelope(t, conn)
+		if request.Method != "thread-follower-load-complete-history" {
+			t.Errorf("request method=%q, want load-complete-history without following claim", request.Method)
+			return
+		}
+		writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+			requestID: request.RequestID,
+			value:     map[string]uint64{"revision": 1},
+		})
+	}))
+	client := newCodexDesktopClient(options)
+	runtime.mu.Lock()
+	runtime.client = client
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	runtime.mu.Unlock()
+	t.Cleanup(func() { _ = client.Close() })
+
+	err := runtime.requestHistory(context.Background(), CodexThreadRef{ThreadID: "thread-1"}, false)
+
+	if err != nil {
+		t.Fatalf("requestHistory() error = %v", err)
 	}
 }
 
@@ -486,6 +572,344 @@ func TestACPAgentDesktopWatchReconcilesCompletedState(t *testing.T) {
 	}
 }
 
+func TestACPAgentDesktopWatchWaitsForLateFinalWhenAttachingDuringCompletedCandidate(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	applyDesktopRuntimeTestState(t, a, 2, "inProgress", "")
+	applyDesktopRuntimeTestState(t, a, 3, "completed", "")
+	reconcile := make(chan time.Time, 1)
+	type watchResult struct {
+		text string
+		err  error
+	}
+	done := make(chan watchResult, 1)
+	go func() {
+		text, err := a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
+			conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1", reconcile: reconcile,
+		})
+		done <- watchResult{text: text, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		t.Fatalf("watcher returned before late final revision: text=%q err=%v", result.text, result.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	applyDesktopRuntimeTestState(t, a, 4, "completed", "迟到的最终回答")
+	reconcile <- time.Now()
+	select {
+	case result := <-done:
+		if result.err != nil || result.text != "迟到的最终回答" {
+			t.Fatalf("result=%#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not settle after the final revision")
+	}
+}
+
+func TestACPAgentDesktopWatchReconcileWaitsForLateFinalCandidate(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	applyDesktopRuntimeTestState(t, a, 2, "inProgress", "")
+	reconcile := make(chan time.Time, 2)
+	type watchResult struct {
+		text string
+		err  error
+	}
+	done := make(chan watchResult, 1)
+	go func() {
+		text, err := a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
+			conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1", reconcile: reconcile,
+		})
+		done <- watchResult{text: text, err: err}
+	}()
+	waitForDesktopTurnWatcher(t, a, "thread-1")
+
+	applyDesktopRuntimeTestState(t, a, 3, "completed", "")
+	reconcile <- time.Now()
+	select {
+	case result := <-done:
+		t.Fatalf("reconcile returned before late final revision: text=%q err=%v", result.text, result.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	applyDesktopRuntimeTestState(t, a, 4, "completed", "迟到的最终回答")
+	reconcile <- time.Now()
+	select {
+	case result := <-done:
+		if result.err != nil || result.text != "迟到的最终回答" {
+			t.Fatalf("result=%#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconcile did not settle after the final revision")
+	}
+}
+
+func TestACPAgentDesktopWatchSettlesCompletedCandidateAfterRefreshBarrier(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	applyDesktopRuntimeTestState(t, a, 2, "inProgress", "")
+	applyDesktopRuntimeTestState(t, a, 3, "completed", "")
+	reconcile := make(chan time.Time, codexThreadWatchRefreshTicks)
+	type watchResult struct {
+		text string
+		err  error
+	}
+	done := make(chan watchResult, 1)
+	go func() {
+		text, err := a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
+			conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1", reconcile: reconcile,
+			refresh: func(context.Context) error { return nil },
+		})
+		done <- watchResult{text: text, err: err}
+	}()
+
+	for range codexThreadWatchRefreshTicks {
+		reconcile <- time.Now()
+	}
+	select {
+	case result := <-done:
+		if result.err != nil || result.text != "Codex App 本地任务已完成，但没有返回文本。" {
+			t.Fatalf("result=%#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completed candidate did not settle after the refresh barrier")
+	}
+}
+
+func TestACPAgentDesktopWatchRejectsRolloverAfterObserverAttach(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	applyDesktopRuntimeTestState(t, a, 2, "inProgress", "")
+	reconcile := make(chan time.Time, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
+			conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1", reconcile: reconcile,
+		})
+		errCh <- err
+	}()
+	waitForDesktopTurnWatcher(t, a, "thread-1")
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{
+		desktopTurnFixture("turn-1", "completed", nil),
+		desktopTurnFixture("turn-2", "inProgress", []any{map[string]any{
+			"id": "commentary-2", "type": "agentMessage", "status": "completed",
+			"phase": "commentary", "text": "turn-2 的内容不得作为 turn-1 结果",
+		}}),
+	}
+	update, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 3, raw: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.codexOwners.observeDesktopSnapshot("thread-1", 3, update.Snapshot.State)
+	reconcile <- time.Now()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrCodexControlChanged) {
+			t.Fatalf("rollover error=%v, want ErrCodexControlChanged", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not reject the newer active turn")
+	}
+}
+
+func TestACPAgentDesktopExpectedTurnMismatchKeepsClaimedInteractionReplayable(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{desktopTurnFixture("turn-2", "inProgress", nil)}
+	raw["requests"] = []any{desktopPendingRequestFixture(
+		"request-1", "item/commandExecution/requestApproval",
+	)}
+	update, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := findCodexDesktopApprovalEvent(t, update.Events)
+	if approval.TurnID != "turn-2" {
+		t.Fatalf("Desktop approval turn=%q, want turn-2", approval.TurnID)
+	}
+	a.desktopRuntime.abandonTurnEvent("thread-1", approval)
+	a.codexOwners.observeDesktopSnapshot("thread-1", 2, update.Snapshot.State)
+
+	_, err = a.WatchCodexThreadEventsForTurn(
+		context.Background(), "conversation-1", "thread-1", "turn-1", nil,
+	)
+	if !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("error=%v, want ErrCodexControlChanged", err)
+	}
+	replayed := findCodexDesktopActionEvent(a.desktopRuntime.replayActiveTurnEvents("thread-1"))
+	if replayed == nil || replayed.Approval == nil || replayed.Approval.Request.RequestID != "request-1" {
+		t.Fatalf("claimed Desktop approval was not restored after turn mismatch: %#v", replayed)
+	}
+}
+
+func TestACPAgentDesktopWatchReplaysVisibleActiveCommentary(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	claimDesktopRemoteControl(t, a)
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{desktopTurnFixture("turn-1", "inProgress", []any{
+		map[string]any{
+			"id": "commentary-1", "type": "agentMessage", "status": "completed",
+			"phase": "commentary", "text": "正在复核当前改动。",
+		},
+		map[string]any{
+			"id": "command-1", "type": "commandExecution", "status": "completed",
+			"command": "git status", "aggregatedOutput": "secret output",
+		},
+		map[string]any{
+			"id": "final-1", "type": "agentMessage", "status": "completed",
+			"phase": "final_answer", "text": "最终结果不应进入进度。",
+		},
+	})}
+	update, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.codexOwners.observeDesktopSnapshot("thread-1", 2, update.Snapshot.State)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	progress := make(chan ProgressEvent, 4)
+	done := make(chan error, 1)
+	go func() {
+		_, watchErr := a.WatchCodexThreadEvents(ctx, "conversation-1", "thread-1", func(event ProgressEvent) {
+			progress <- event
+		})
+		done <- watchErr
+	}()
+
+	select {
+	case event := <-progress:
+		if event.Kind != ProgressKindCommentary || event.DisplayText() != "正在复核当前改动。" {
+			t.Fatalf("replayed progress = %#v", event)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("active Desktop commentary was not replayed when the follower attached")
+	}
+	select {
+	case event := <-progress:
+		t.Fatalf("hidden command or final answer was replayed: %#v", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+	cancel()
+	<-done
+}
+
+func TestACPAgentDesktopWatchReplaysAllVisibleActiveCommentary(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	claimDesktopRemoteControl(t, a)
+	items := make([]any, 300)
+	for index := range items {
+		items[index] = map[string]any{
+			"id": fmt.Sprintf("commentary-%03d", index), "type": "agentMessage",
+			"status": "completed", "phase": "commentary", "text": fmt.Sprintf("进度 %03d", index),
+		}
+	}
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{desktopTurnFixture("turn-1", "inProgress", items)}
+	update, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.codexOwners.observeDesktopSnapshot("thread-1", 2, update.Snapshot.State)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	progress := make(chan ProgressEvent, len(items))
+	done := make(chan error, 1)
+	go func() {
+		_, watchErr := a.WatchCodexThreadEventsForTurn(ctx, "conversation-1", "thread-1", "turn-1", func(event ProgressEvent) {
+			progress <- event
+		})
+		done <- watchErr
+	}()
+	for index := range items {
+		select {
+		case event := <-progress:
+			want := fmt.Sprintf("进度 %03d", index)
+			if event.DisplayText() != want {
+				t.Fatalf("progress[%d]=%#v, want %q", index, event, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("progress[%d] timed out", index)
+		}
+	}
+	cancel()
+	<-done
+}
+
+func TestACPAgentDesktopAllowsMultipleFrontendWatchers(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	claimDesktopRemoteControl(t, a)
+	applyDesktopRuntimeTestState(t, a, 2, "inProgress", "")
+
+	type watchResult struct {
+		text string
+		err  error
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	firstProgress := make(chan ProgressEvent, 2)
+	secondProgress := make(chan ProgressEvent, 2)
+	firstDone := make(chan watchResult, 1)
+	secondDone := make(chan watchResult, 1)
+	go func() {
+		text, err := a.WatchCodexThreadEvents(ctx, "conversation-1", "thread-1", func(event ProgressEvent) {
+			firstProgress <- event
+		})
+		firstDone <- watchResult{text: text, err: err}
+	}()
+	waitForDesktopTurnWatcher(t, a, "thread-1")
+	go func() {
+		text, err := a.WatchCodexThreadEvents(ctx, "conversation-2", "thread-1", func(event ProgressEvent) {
+			secondProgress <- event
+		})
+		secondDone <- watchResult{text: text, err: err}
+	}()
+
+	select {
+	case result := <-secondDone:
+		t.Fatalf("second frontend watcher exited before the shared turn ended: %v", result.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	event := ProgressEvent{
+		ID: "commentary-live", Kind: ProgressKindCommentary,
+		State: ProgressStateCompleted, Text: "两个前端都应看到这条进度。",
+	}
+	a.dispatchToTurnCh("thread-1", &codexTurnEvent{
+		Kind: "progress", TurnID: "turn-1", Progress: &event,
+	})
+	a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "completed", TurnID: "turn-1"})
+
+	for name, progress := range map[string]<-chan ProgressEvent{
+		"first": firstProgress, "second": secondProgress,
+	} {
+		select {
+		case got := <-progress:
+			if got.DisplayText() != event.DisplayText() {
+				t.Fatalf("%s progress=%#v, want %#v", name, got, event)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s frontend did not receive shared progress", name)
+		}
+	}
+	for name, done := range map[string]<-chan watchResult{
+		"first": firstDone, "second": secondDone,
+	} {
+		select {
+		case result := <-done:
+			if result.err != nil || result.text == "" {
+				t.Fatalf("%s result=%q error=%v", name, result.text, result.err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s frontend watcher did not finish", name)
+		}
+	}
+}
+
 // applyDesktopRuntimeTestState 更新测试 runtime，但故意不投递 turn event。
 func applyDesktopRuntimeTestState(t *testing.T, a *ACPAgent, revision uint64, status string, text string) {
 	t.Helper()
@@ -518,7 +942,7 @@ func waitForDesktopTurnWatcher(t *testing.T, a *ACPAgent, threadID string) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		a.notifyMu.Lock()
-		registered := a.turnCh[threadID] != nil
+		registered := a.turnCh[threadID] != nil || len(a.turnObservers[threadID]) > 0
 		a.notifyMu.Unlock()
 		if registered {
 			return

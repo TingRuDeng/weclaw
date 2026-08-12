@@ -28,11 +28,27 @@ func (s *codexDesktopStateStore) projectPendingActionEventsLocked(snapshot codex
 		if !supported {
 			continue
 		}
+		event.TurnID = firstNonEmpty(event.TurnID, snapshot.State.ActiveTurnID, snapshot.State.LastTurnID)
 		s.wrapPendingActionResponder(snapshot.ThreadID, requestID, event)
 		seen[requestID] = true
 		events = append(events, event)
 	}
 	return events, nil
+}
+
+func (s *codexDesktopStateStore) replayPendingActionEvents(threadID string) []*codexTurnEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, ok := s.threads[threadID]
+	if !ok {
+		return nil
+	}
+	events, err := s.projectPendingActionEventsLocked(snapshot)
+	if err != nil {
+		return nil
+	}
+	stampCodexDesktopWatermark(events, snapshot.ConnectionEpoch, snapshot.Revision)
+	return events
 }
 
 // wrapPendingActionResponder 在发送失败时允许后续 snapshot 再次投递 pending 请求。

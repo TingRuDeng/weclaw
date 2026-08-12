@@ -70,32 +70,22 @@ func TestApprovalRebuildPreservesCollapsibleTaskProgress(t *testing.T) {
 	}
 	card := decodeCardJSON(t, kit.updateCards[0])
 	elems := card["body"].(map[string]any)["elements"].([]any)
-	panelIndex := -1
-	for i, element := range elems {
-		if element.(map[string]any)["element_id"] == cardProgressPanelID {
-			panelIndex = i
-		}
-	}
-	if panelIndex < 0 {
-		t.Fatalf("elements=%#v", elems)
-	}
-	panel := elems[panelIndex].(map[string]any)
-	if panel["element_id"] != cardProgressPanelID || panel["expanded"] != true {
-		t.Fatalf("panel=%#v", panel)
-	}
-	main := panel["elements"].([]any)[0].(map[string]any)
-	if !strings.Contains(main["content"].(string), "运行测试") {
-		t.Fatalf("main=%#v", main)
-	}
-	approvalFound := false
+	progressFound, approvalFound, collapseFound := false, false, false
 	for _, element := range elems {
-		value := element.(map[string]any)["content"]
+		item := element.(map[string]any)
+		if item["element_id"] == cardMainContentID {
+			progressFound = strings.Contains(item["content"].(string), "运行测试")
+		}
+		if item["element_id"] == cardProgressCollapseID {
+			collapseFound = true
+		}
+		value := item["content"]
 		if content, ok := value.(string); ok && strings.Contains(content, "允许本次") {
 			approvalFound = true
 		}
 	}
-	if !approvalFound {
-		t.Fatalf("approvals=%#v", elems)
+	if !progressFound || !approvalFound || !collapseFound {
+		t.Fatalf("elements=%#v, want progress, approval and collapse control", elems)
 	}
 }
 

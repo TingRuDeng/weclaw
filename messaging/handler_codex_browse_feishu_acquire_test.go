@@ -29,10 +29,10 @@ func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testin
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, oldWorkspace)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		MessageID: "feishu-cx-single-failure", Text: "/cx cd weclaw",
-	}, reply)
+	}, "ou_user"), reply)
 
 	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
 	targetThread, pending := h.ensureCodexSessions().getThread(bindingKey, targetWorkspace)

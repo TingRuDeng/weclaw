@@ -127,6 +127,12 @@ type CodexThreadArchiveEventSource interface {
 	SetCodexThreadArchivedHandler(handler func(threadID string))
 }
 
+// CodexThreadActivityEventSource 通知消息前端某个已绑定 thread 的
+// turn 或交互状态发生变化。通知只用于唤醒持久 follower，不携带写入授权。
+type CodexThreadActivityEventSource interface {
+	SetCodexThreadActivityHandler(handler func(threadID string))
+}
+
 // CodexThreadState 描述 app-server 或 Desktop 持有的 Codex thread 当前运行态。
 type CodexThreadState struct {
 	ThreadID             string
@@ -153,6 +159,17 @@ type CodexThreadRuntimeAgent interface {
 // CodexStructuredThreadRuntimeAgent 为已运行的 Codex turn 提供结构化观察事件。
 type CodexStructuredThreadRuntimeAgent interface {
 	WatchCodexThreadEvents(ctx context.Context, conversationID string, threadID string, onProgress func(ProgressEvent)) (string, error)
+}
+
+// CodexExpectedThreadRuntimeAgent 在建立观察器时固定目标 turn，防止 observer
+// 启动前发生 turn rollover 后把新任务写入旧任务的幂等投递槽。
+type CodexExpectedThreadRuntimeAgent interface {
+	WatchCodexThreadForTurn(ctx context.Context, conversationID string, threadID string, turnID string, onProgress func(string)) (string, error)
+}
+
+// CodexExpectedStructuredThreadRuntimeAgent 是带结构化进度的目标 turn 观察能力。
+type CodexExpectedStructuredThreadRuntimeAgent interface {
+	WatchCodexThreadEventsForTurn(ctx context.Context, conversationID string, threadID string, turnID string, onProgress func(ProgressEvent)) (string, error)
 }
 
 // ConversationWorkspaceAgent 允许 Agent 为单个 conversation 固定工作目录。

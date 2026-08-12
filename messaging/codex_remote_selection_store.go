@@ -11,7 +11,6 @@ import (
 var (
 	errCodexRemoteSelectionChanged = errors.New("Codex 会话绑定状态已变化")
 	errCodexRemoteThreadArchived   = errors.New("Codex 会话已归档")
-	errCodexFollowerAlreadyBound   = errors.New("该 Codex 会话已绑定到另一个飞书窗口")
 )
 
 // codexRemoteSelectionSnapshot is the compare-and-swap image for one
@@ -27,14 +26,17 @@ type codexRemoteSelectionState struct {
 }
 
 type codexRemoteSelectionUpdate struct {
-	BindingKey       string
-	WorkspaceRoot    string
-	TargetThreadID   string
-	ConversationID   string
-	PendingFirstTurn bool
-	SetFollower      bool
-	Follower         *codexFrontendFollower
-	Expected         codexRemoteSelectionSnapshot
+	BindingKey              string
+	WorkspaceRoot           string
+	TargetThreadID          string
+	ConversationID          string
+	PendingFirstTurn        bool
+	SetFollower             bool
+	Follower                *codexFrontendFollower
+	FollowerTurnID          string
+	FollowerTurnInitialized bool
+	FollowerTurnPending     bool
+	Expected                codexRemoteSelectionSnapshot
 }
 
 type codexRemoteSelectionResult struct {
@@ -113,16 +115,6 @@ func (s *codexSessionStore) commitRemoteSelection(update codexRemoteSelectionUpd
 	if err := validateCodexRemoteSelectionSnapshotLocked(s.bindings, update); err != nil {
 		return codexRemoteSelectionResult{}, err
 	}
-	if update.SetFollower && update.Follower != nil {
-		for bindingKey, binding := range s.bindings {
-			if bindingKey == update.BindingKey || binding.Follower == nil {
-				continue
-			}
-			if strings.TrimSpace(binding.Follower.ThreadID) == update.TargetThreadID {
-				return codexRemoteSelectionResult{}, errCodexFollowerAlreadyBound
-			}
-		}
-	}
 	before := codexRemoteSelectionState{bindings: cloneCodexSessionBindings(s.bindings)}
 	nextBindings := cloneCodexSessionBindings(s.bindings)
 	now := time.Now().UTC()
@@ -173,6 +165,7 @@ func normalizeCodexRemoteSelectionUpdate(update codexRemoteSelectionUpdate) code
 	update.WorkspaceRoot = normalizeCodexWorkspaceRoot(update.WorkspaceRoot)
 	update.TargetThreadID = strings.TrimSpace(update.TargetThreadID)
 	update.ConversationID = strings.TrimSpace(update.ConversationID)
+	update.FollowerTurnID = strings.TrimSpace(update.FollowerTurnID)
 	if update.SetFollower {
 		update.Follower = normalizeCodexFrontendFollower(update.Follower)
 	}
@@ -212,6 +205,8 @@ func cloneCodexSessionBindings(source map[string]codexSessionBinding) map[string
 		cloned[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
 			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
+			FollowTurnID: strings.TrimSpace(binding.FollowTurnID), FollowTurnInitialized: binding.FollowTurnInitialized,
+			FollowTurnPending: binding.FollowTurnPending,
 		}
 	}
 	return cloned
@@ -232,6 +227,8 @@ func sameCodexSessionBindings(left map[string]codexSessionBinding, right map[str
 
 func sameCodexSessionBinding(left codexSessionBinding, right codexSessionBinding) bool {
 	if left.ActiveWorkspace != right.ActiveWorkspace || left.FollowRevision != right.FollowRevision ||
+		left.FollowTurnID != right.FollowTurnID || left.FollowTurnInitialized != right.FollowTurnInitialized ||
+		left.FollowTurnPending != right.FollowTurnPending ||
 		!sameCodexFrontendFollower(left.Follower, right.Follower) || len(left.Workspaces) != len(right.Workspaces) {
 		return false
 	}
@@ -288,14 +285,25 @@ func selectCodexRemoteWorkspace(bindings map[string]codexSessionBinding, update 
 		binding.Workspaces[update.WorkspaceRoot] = target
 	}
 	if update.SetFollower {
-		binding.FollowRevision++
+		previousFollower := cloneCodexFrontendFollower(binding.Follower)
+		preserveTurn := sameCodexFrontendFollowerIdentity(previousFollower, update.Follower)
+		if !preserveTurn {
+			binding.FollowRevision++
+			binding.FollowTurnID = update.FollowerTurnID
+			binding.FollowTurnInitialized = update.FollowerTurnInitialized
+			binding.FollowTurnPending = update.FollowerTurnPending
+		}
 		binding.Follower = cloneCodexFrontendFollower(update.Follower)
 		if binding.Follower != nil {
 			binding.Follower.WorkspaceRoot = update.WorkspaceRoot
 			binding.Follower.ThreadID = update.TargetThreadID
-			binding.Follower.UpdatedAt = now.Format(time.RFC3339)
+			if preserveTurn && previousFollower != nil && previousFollower.DeliveryRoute == binding.Follower.DeliveryRoute {
+				binding.Follower.UpdatedAt = previousFollower.UpdatedAt
+			} else {
+				binding.Follower.UpdatedAt = now.Format(time.RFC3339)
+			}
 		}
-		changed = true
+		changed = changed || !sameCodexFrontendFollower(previousFollower, binding.Follower) || !preserveTurn
 	}
 	bindings[update.BindingKey] = binding
 	return changed

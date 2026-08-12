@@ -31,6 +31,8 @@ type activeAgentTask struct {
 	phase                   codexTaskPhase
 	codexThreadID           string
 	codexTurnID             string
+	terminalDeliveryKey     string
+	terminalDeliveryGuard   terminalDeliveryGuard
 	externalReservation     *externalCodexTaskReservationControl
 	inProcessCodexLifecycle bool
 	preserveRecoveryOnDrain bool
@@ -41,6 +43,46 @@ type activeAgentTask struct {
 	conversationID          string
 	sessionID               string
 	progress                *progressSession
+}
+
+func (t *activeAgentTask) setTerminalDeliveryKey(key string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.terminalDeliveryKey = strings.TrimSpace(key)
+	t.mu.Unlock()
+}
+
+func (t *activeAgentTask) setTerminalDeliveryGuard(guard terminalDeliveryGuard) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.terminalDeliveryGuard = guard
+	progress := t.progress
+	t.mu.Unlock()
+	if progress != nil {
+		progress.setTerminalDeliveryGuard(guard)
+	}
+}
+
+func (t *activeAgentTask) terminalDeliveryKeySnapshot() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.terminalDeliveryKey
+}
+
+func (t *activeAgentTask) terminalDeliveryGuardSnapshot() terminalDeliveryGuard {
+	if t == nil {
+		return terminalDeliveryGuard{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.terminalDeliveryGuard
 }
 
 type pendingAgentTask struct {
@@ -347,6 +389,7 @@ func (t *activeAgentTask) attachProgressSession(progress *progressSession) {
 	t.mu.Lock()
 	if t.phase != codexTaskTerminal && !t.view.closed {
 		t.progress = progress
+		progress.deliveryGuard = t.terminalDeliveryGuard
 	}
 	t.mu.Unlock()
 }

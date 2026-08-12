@@ -374,6 +374,7 @@ import sys
 path = pathlib.Path(sys.argv[1])
 path.write_text(
     "#!/usr/bin/env bash\n"
+    "exec 9<>\"$2/state_5.sqlite\"\n"
     ": >\"$4\"\n"
     "while [[ ! -e \"$3\" ]]; do /bin/sleep 0.05; done\n",
     encoding="utf-8",
@@ -406,6 +407,43 @@ if providers != {"OpenAI"}:
 PY
 }
 
+test_apply_ignores_open_files_outside_migration_targets() {
+  local codex_home="${test_root}/unrelated-open-file-home"
+  local helper_dir="${test_root}/unrelated-open-file-helper"
+  local unrelated_file
+  local apply_status
+
+  create_fixture "${codex_home}"
+  unrelated_file="${codex_home}/generated_images/unrelated.txt"
+  mkdir -p "$(dirname "${unrelated_file}")"
+  printf '%s\n' "read-only fixture" >"${unrelated_file}"
+  mkdir -p "${helper_dir}"
+  python3 - "${helper_dir}/lsof" <<'PY'
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(
+    "#!/usr/bin/env bash\n"
+    "if [[ \" $* \" == *\" +D \"* ]]; then\n"
+    "  echo 424242\n"
+    "  exit 0\n"
+    "fi\n"
+    "exit 1\n",
+    encoding="utf-8",
+)
+os.chmod(path, 0o755)
+PY
+
+  set +e
+  PATH="${helper_dir}:${PATH}" "${switch_script}" openai --apply --codex-home "${codex_home}" >/dev/null
+  apply_status=$?
+  set -e
+
+  [[ ${apply_status} -eq 0 ]] || fail "apply rejected an open file outside migration targets"
+}
+
 test_apply_does_not_delete_rollout_adjacent_files() {
   local codex_home="${test_root}/rollout-adjacent-home"
   local adjacent_file
@@ -416,6 +454,33 @@ test_apply_does_not_delete_rollout_adjacent_files() {
   "${switch_script}" openai --apply --codex-home "${codex_home}" >/dev/null
   [[ -f "${adjacent_file}" ]] || fail "apply deleted a rollout-adjacent file"
   [[ "$(<"${adjacent_file}")" == "unrelated-fixture" ]] || fail "apply changed a rollout-adjacent file"
+}
+
+test_valid_json_with_unicode_next_line_is_accepted() {
+  local codex_home="${test_root}/unicode-next-line-home"
+  local rollout
+  local output
+
+  create_fixture "${codex_home}"
+  rollout="${codex_home}/sessions/2026/08/05/current.jsonl"
+  python3 - "${rollout}" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+record = {
+    "timestamp": "2026-08-05T00:00:05Z",
+    "type": "event_msg",
+    "payload": {"type": "agent_reasoning", "text": "before\u0085after"},
+}
+with path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+PY
+
+  output="$("${switch_script}" openai --repair-item-ids --codex-home "${codex_home}")"
+  assert_contains "${output}" "mode=dry-run"
+  assert_contains "${output}" "rollout_files=2"
 }
 
 test_invalid_json_and_id_collisions_fail_without_writing() {
@@ -629,8 +694,12 @@ test_unknown_item_ids_are_reported_as_unrepaired
 echo "PASS: unknown item IDs are reported without unsafe rewriting"
 test_apply_refuses_a_running_codex_process_for_the_target_home
 echo "PASS: apply refuses an active Codex process for the target home"
+test_apply_ignores_open_files_outside_migration_targets
+echo "PASS: apply ignores open files outside migration targets"
 test_apply_does_not_delete_rollout_adjacent_files
 echo "PASS: apply leaves rollout-adjacent files untouched"
+test_valid_json_with_unicode_next_line_is_accepted
+echo "PASS: valid JSON strings containing Unicode next line are accepted"
 test_invalid_json_and_id_collisions_fail_without_writing
 echo "PASS: malformed JSON and item ID collisions fail without writes"
 test_restore_rejects_a_corrupted_backup

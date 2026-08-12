@@ -64,13 +64,15 @@ func buildCodexDesktopThreadState(spec codexDesktopThreadStateSpec) CodexThreadS
 		ThreadID: spec.threadID, Model: codexDesktopString(spec.raw["latestModel"]),
 		Effort: codexDesktopString(spec.raw["latestReasoningEffort"]),
 	}
-	for _, turnID := range spec.projection.order {
+	for index, turnID := range spec.projection.order {
 		turn := spec.projection.turns[turnID]
 		state.LastTurnID, state.LastTurnStatus = turnID, turn.status
 		if isCodexDesktopActiveStatus(turn.status) {
 			state.Active, state.ActiveTurnID = true, turnID
 		}
-		projectCodexDesktopItemText(&state, turn)
+		if index == len(spec.projection.order)-1 {
+			projectCodexDesktopItemText(&state, turn)
+		}
 	}
 	for _, request := range spec.requests {
 		state.WaitingOnUserInput = state.WaitingOnUserInput || request.Method == "item/tool/requestUserInput"
@@ -81,14 +83,23 @@ func buildCodexDesktopThreadState(spec codexDesktopThreadStateSpec) CodexThreadS
 
 // projectCodexDesktopItemText 更新最近用户预览和最终助手文本。
 func projectCodexDesktopItemText(state *CodexThreadState, turn codexDesktopProjectedTurn) {
+	fallbackAgentText := ""
 	for _, itemID := range turn.order {
 		item := turn.items[itemID]
 		switch strings.ToLower(item.itemType) {
 		case "usermessage":
 			state.Preview = item.text
 		case "agentmessage":
-			state.LastAgentMessageText = item.text
+			phase := strings.ToLower(strings.TrimSpace(item.phase))
+			if phase == "final_answer" {
+				state.LastAgentMessageText = item.text
+			} else if phase == "" {
+				fallbackAgentText = item.text
+			}
 		}
+	}
+	if state.LastAgentMessageText == "" {
+		state.LastAgentMessageText = fallbackAgentText
 	}
 }
 
@@ -131,12 +142,23 @@ func copyCodexDesktopTerminals(previous *codexDesktopProjectionState) map[string
 	return result
 }
 
+func copyCodexDesktopTerminalCandidates(previous *codexDesktopProjectionState) map[string]bool {
+	result := make(map[string]bool)
+	if previous != nil {
+		for turnID, pending := range previous.terminalCandidates {
+			result[turnID] = pending
+		}
+	}
+	return result
+}
+
 // cloneCodexDesktopProjection 深拷贝内部差分记忆。
 func cloneCodexDesktopProjection(source codexDesktopProjectionState) codexDesktopProjectionState {
 	clone := codexDesktopProjectionState{
 		turns: make(map[string]codexDesktopProjectedTurn, len(source.turns)),
 		order: append([]string(nil), source.order...), terminal: copyCodexDesktopTerminals(&source),
-		activeTombstones: make(map[string]codexDesktopProjectedTurn, len(source.activeTombstones)),
+		terminalCandidates: copyCodexDesktopTerminalCandidates(&source),
+		activeTombstones:   make(map[string]codexDesktopProjectedTurn, len(source.activeTombstones)),
 	}
 	for turnID, turn := range source.turns {
 		turn.order = append([]string(nil), turn.order...)
@@ -185,6 +207,8 @@ func filterCodexDesktopTurns(projection *codexDesktopProjectionState, keep map[s
 			order = append(order, turnID)
 		} else {
 			delete(projection.turns, turnID)
+			delete(projection.terminal, turnID)
+			delete(projection.terminalCandidates, turnID)
 		}
 	}
 	return order

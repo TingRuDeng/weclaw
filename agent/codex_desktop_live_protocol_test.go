@@ -161,8 +161,9 @@ func TestCodexDesktopStateIgnoresVersionlessClientStatusBroadcast(t *testing.T) 
 	}
 }
 
-// TestCodexDesktopStateCompletesTurnAfterHistoryArchive 验证长会话分两次归档时不会丢失终态。
-func TestCodexDesktopStateCompletesTurnAfterHistoryArchive(t *testing.T) {
+// TestCodexDesktopStateKeepsFinalCandidateAfterHistoryArchive 验证长会话分两次归档时
+// 不会因为普通状态 revision 提前结束并丢失随后到达的 final_answer。
+func TestCodexDesktopStateKeepsFinalCandidateAfterHistoryArchive(t *testing.T) {
 	activeRaw := desktopHistoryTurnFixture("tail:1:local:active", "turn-active", "inProgress")
 	_, _, activeProjection, _ := projectCodexDesktopSnapshot("thread-1", activeRaw, nil)
 
@@ -173,8 +174,14 @@ func TestCodexDesktopStateCompletesTurnAfterHistoryArchive(t *testing.T) {
 	}
 
 	completedRaw := desktopHistoryTurnFixture("turn:turn-active", "turn-active", "completed")
-	_, _, _, completedEvents := projectCodexDesktopSnapshot("thread-1", completedRaw, &archivedProjection)
-	assertCodexDesktopEvent(t, completedEvents, "completed", "turn-active")
+	_, _, completedProjection, completedEvents := projectCodexDesktopSnapshot("thread-1", completedRaw, &archivedProjection)
+	if len(completedEvents) != 0 {
+		t.Fatalf("status-only completed must wait for final answer, events=%#v", completedEvents)
+	}
+	_, _, pendingProjection, settledEvents := projectCodexDesktopSnapshot("thread-1", completedRaw, &completedProjection)
+	if len(settledEvents) != 0 || !pendingProjection.terminalCandidates["turn-active"] {
+		t.Fatalf("ordinary completed revision settled before final answer: events=%#v candidates=%#v", settledEvents, pendingProjection.terminalCandidates)
+	}
 }
 
 // desktopHistoryTurnFixture 构造 Codex Desktop 长会话中的单 turn 历史状态。

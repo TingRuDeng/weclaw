@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -574,11 +576,11 @@ func TestACPAgentWatchesAttachedCodexThread(t *testing.T) {
 		defer close(done)
 		for {
 			a.notifyMu.Lock()
-			ch := a.turnCh["thread-active"]
+			registered := len(a.turnObservers["thread-active"]) > 0
 			a.notifyMu.Unlock()
-			if ch != nil {
-				ch <- &codexTurnEvent{ItemID: "agent-1", Delta: "接管后的最终回复"}
-				ch <- &codexTurnEvent{Kind: "completed"}
+			if registered {
+				a.dispatchToTurnCh("thread-active", &codexTurnEvent{ItemID: "agent-1", Delta: "接管后的最终回复"})
+				a.dispatchToTurnCh("thread-active", &codexTurnEvent{Kind: "completed"})
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -593,6 +595,127 @@ func TestACPAgentWatchesAttachedCodexThread(t *testing.T) {
 		t.Fatalf("reply=%q", reply)
 	}
 	<-done
+}
+
+func TestACPAgentAppServerWatchReplaysVisibleActiveCommentary(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"正在复核当前实现。"},{"id":"command-1","type":"commandExecution","text":"secret command output"},{"id":"reasoning-1","type":"reasoning","text":"private reasoning"},{"id":"final-1","type":"agentMessage","phase":"final_answer","text":"最终结果"}]}]}}`), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	progress := make(chan ProgressEvent, 4)
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.WatchCodexThreadEventsForTurn(ctx, "conversation-1", "thread-1", "turn-1", func(event ProgressEvent) {
+			progress <- event
+		})
+		done <- err
+	}()
+	select {
+	case event := <-progress:
+		if event.Kind != ProgressKindCommentary || event.DisplayText() != "正在复核当前实现。" {
+			t.Fatalf("progress=%#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("app-server active commentary was not replayed")
+	}
+	select {
+	case event := <-progress:
+		t.Fatalf("hidden item or final answer leaked into progress: %#v", event)
+	case <-time.After(30 * time.Millisecond):
+	}
+	cancel()
+	<-done
+}
+
+func TestACPAgentAppServerReplayPrecedesQueuedLiveProgress(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	a.rpcCall = func(ctx context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		select {
+		case <-readStarted:
+		default:
+			close(readStarted)
+		}
+		select {
+		case <-releaseRead:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"history","type":"agentMessage","phase":"commentary","text":"历史进度"}]}]}}`), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	progress := make(chan string, 4)
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.WatchCodexThreadEventsForTurn(ctx, "conversation-1", "thread-1", "turn-1", func(event ProgressEvent) {
+			progress <- event.DisplayText()
+		})
+		done <- err
+	}()
+	<-readStarted
+	a.dispatchToTurnCh("thread-1", &codexTurnEvent{
+		Kind: "item_completed", TurnID: "turn-1", ItemID: "live", MessagePhase: "commentary",
+		Sequence: 1, Text: "实时进度",
+	})
+	close(releaseRead)
+	for index, want := range []string{"历史进度", "实时进度"} {
+		select {
+		case got := <-progress:
+			if got != want {
+				t.Fatalf("progress[%d]=%q, want %q", index, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("progress[%d] timed out", index)
+		}
+	}
+	cancel()
+	<-done
+}
+
+func TestACPAgentExpectedTurnRejectsRolloverBeforeObserverAttach(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-2","status":"inProgress"}]}}`), nil
+	}
+	_, err := a.WatchCodexThreadEventsForTurn(context.Background(), "conversation-1", "thread-1", "turn-1", nil)
+	if !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("error=%v, want control changed", err)
+	}
+}
+
+func TestACPAgentExpectedTurnMismatchKeepsClaimedInteractionPending(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-2","status":"inProgress"}]}}`), nil
+	}
+	event := &codexTurnEvent{
+		Kind: "approval_request", TurnID: "turn-1",
+		Approval: &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-1"}},
+	}
+	a.rememberPendingCodexInteraction("thread-1", event)
+
+	_, err := a.WatchCodexThreadEventsForTurn(context.Background(), "conversation-1", "thread-1", "turn-1", nil)
+	if !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("error=%v, want control changed", err)
+	}
+	pending := a.claimPendingCodexInteractions("thread-1")
+	if len(pending) != 1 || codexInteractionID(pending[0]) != "approval-1" {
+		t.Fatalf("pending interactions=%#v, want claimed approval restored", pending)
+	}
 }
 
 func TestACPAgentWatchReturnsCompletedStateAfterRegistration(t *testing.T) {
@@ -612,5 +735,35 @@ func TestACPAgentWatchReturnsCompletedStateAfterRegistration(t *testing.T) {
 	}
 	if reply != "任务已经完成" {
 		t.Fatalf("reply=%q", reply)
+	}
+}
+
+func TestReadCodexAppServerThreadSnapshotReturnsWireWatermark(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	a.stdin = nopWriteCloser{Buffer: &bytes.Buffer{}}
+	type snapshotResult struct {
+		state    CodexThreadState
+		sequence uint64
+		err      error
+	}
+	done := make(chan snapshotResult, 1)
+	go func() {
+		state, _, _, sequence, err := a.readCodexAppServerThreadSnapshotResult(context.Background(), "thread-1")
+		done <- snapshotResult{state: state, sequence: sequence, err: err}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !a.pending.contains(1) {
+		if time.Now().After(deadline) {
+			t.Fatal("thread/read request was not registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress"}]}}}`)
+	result := <-done
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.sequence != 1 || !result.state.Active || result.state.ActiveTurnID != "turn-1" {
+		t.Fatalf("snapshot result=%#v, want active turn with response watermark 1", result)
 	}
 }

@@ -225,7 +225,15 @@ def transform_rollout(
     encrypted_items = 0
     unknown_item_ids = 0
 
-    for line_number, raw_line in enumerate(text.splitlines(keepends=True), start=1):
+    lines = text.split("\n")
+    has_final_newline = text.endswith("\n")
+    if has_final_newline:
+        lines.pop()
+
+    for line_number, line in enumerate(lines, start=1):
+        raw_line = line
+        if line_number < len(lines) or has_final_newline:
+            raw_line += "\n"
         content = raw_line.rstrip("\r\n")
         if not content.strip():
             records.append((None, raw_line))
@@ -375,7 +383,7 @@ def assert_sqlite_writable(path: pathlib.Path) -> None:
         fail(f"active SQLite writer detected for {path}: {exc}")
 
 
-def assert_no_open_files(home: pathlib.Path) -> None:
+def assert_no_open_files(home: pathlib.Path, targets: list[pathlib.Path]) -> None:
     configured_home = pathlib.Path(
         os.environ.get("CODEX_HOME", str(pathlib.Path.home() / ".codex"))
     ).expanduser().resolve()
@@ -404,7 +412,7 @@ def assert_no_open_files(home: pathlib.Path) -> None:
         is_writer_process = bool(
             re.search(r"(?:^|/)codex(?:\s|$)", normalized_command)
             or "/Codex.app/Contents/MacOS/Codex" in normalized_command
-            or re.search(r"(?:^|/)weclaw(?:\s|$)", normalized_command)
+            or re.search(r"(?:^|/)weclaw\s+(?:start|restart|codex)(?:\s|$)", normalized_command)
         )
         if not is_writer_process:
             continue
@@ -419,15 +427,22 @@ def assert_no_open_files(home: pathlib.Path) -> None:
     lsof = shutil.which("lsof")
     if lsof is None:
         fail("lsof is required for --apply so active Codex writers can be detected")
+    inspected_paths = list(targets)
+    for target in targets:
+        if target.suffix == ".sqlite":
+            inspected_paths.extend(
+                pathlib.Path(f"{target}{suffix}") for suffix in ("-wal", "-shm")
+            )
+    existing_paths = sorted({str(path) for path in inspected_paths if path.exists()})
     result = subprocess.run(
-        [lsof, "-t", "+D", str(home)],
+        [lsof, "-t", "--", *existing_paths],
         check=False,
         capture_output=True,
         text=True,
     )
     if result.returncode == 0 and result.stdout.strip():
         pids = ",".join(sorted(set(result.stdout.split())))
-        fail(f"active process has files open under Codex home; close Codex first (pid={pids})")
+        fail(f"active process has migration target files open; close Codex first (pid={pids})")
     if result.returncode not in (0, 1):
         detail = result.stderr.strip() or f"exit status {result.returncode}"
         fail(f"lsof writer check failed: {detail}")
@@ -591,7 +606,7 @@ def apply_switch(
         fail(f"Codex home must be owned by the current user: {home}")
     for path in files:
         assert_owned_file_inside_home(home, path)
-    assert_no_open_files(home)
+    assert_no_open_files(home, files)
     for path, _, count in database_plans:
         if count:
             assert_sqlite_writable(path)
@@ -620,7 +635,7 @@ def apply_switch(
             expected = manifest_entries[relative]["source_sha256"]
             if sha256_file(destination) != expected:
                 fail(f"source changed after backup; refusing to apply: {destination}")
-        assert_no_open_files(home)
+        assert_no_open_files(home, files)
         for path, _, count in database_plans:
             if count:
                 assert_sqlite_writable(path)
@@ -774,7 +789,7 @@ def restore_backup(
     entries: list[tuple[pathlib.Path, pathlib.Path, dict[str, object]]],
 ) -> pathlib.Path:
     destinations = [destination for _, destination, _ in entries]
-    assert_no_open_files(home)
+    assert_no_open_files(home, destinations)
     for _, destination, entry in entries:
         if entry["kind"] == "sqlite":
             assert_sqlite_writable(destination)
@@ -789,7 +804,7 @@ def restore_backup(
         relative = destination.relative_to(home).as_posix()
         if sha256_file(destination) != safety_entries[relative]["source_sha256"]:
             fail(f"restore destination changed after safety backup: {destination}")
-    assert_no_open_files(home)
+    assert_no_open_files(home, destinations)
 
     replaced: list[pathlib.Path] = []
     try:

@@ -67,6 +67,7 @@ type Handler struct {
 	platformProgressConfigs  map[string]config.ProgressConfig
 	platformDefaultAgents    map[string]string
 	platformAccessUpdater    func(platform.PlatformName, string, []string)
+	platformRegistry         *platform.Registry
 	sessions                 *sessionService
 	workspaceRegistry        *workspaceRegistry
 	seenTextMsgs             sync.Map // map[string]textDedupEntry — MessageID 为 0 时按文本去重与 reservation
@@ -96,13 +97,16 @@ type Handler struct {
 	codexControlTimeout      time.Duration
 	codexFollowerMu          sync.Mutex
 	codexFollower            *codexFollowerService
-	terminalOutboxMu         sync.RWMutex
-	terminalOutbox           *terminalOutbox
-	traceRecorder            observability.Recorder
-	traceErrorMu             sync.Mutex
-	lastTraceErrorAt         time.Time
-	auditErrorMu             sync.Mutex
-	lastAuditErrorAt         time.Time
+	// codexFollowerDeliveryMu 线性化主动观察端点的建立、撤销和实际投递。
+	// 撤权或 /cx release 返回后，不允许较早取得的 follower 快照重新挂载或继续发送。
+	codexFollowerDeliveryMu sync.RWMutex
+	terminalOutboxMu        sync.RWMutex
+	terminalOutbox          *terminalOutbox
+	traceRecorder           observability.Recorder
+	traceErrorMu            sync.Mutex
+	lastTraceErrorAt        time.Time
+	auditErrorMu            sync.Mutex
+	lastAuditErrorAt        time.Time
 }
 
 // SetPlatformRegistry 绑定运行中的账号级访问控制注册表，供远程授权变更立即生效。
@@ -113,6 +117,7 @@ func (h *Handler) SetPlatformRegistry(registry *platform.Registry) {
 	} else {
 		h.platformAccessUpdater = registry.UpdateAccessForAccount
 	}
+	h.platformRegistry = registry
 	h.mu.Unlock()
 }
 

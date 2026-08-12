@@ -15,8 +15,7 @@ const (
 	cardStatusSuperseded   = "superseded"
 	cardStatusDetached     = "detached"
 	cardMainContentID      = "main_content"
-	cardProgressSummaryID  = "progress_summary"
-	cardProgressPanelID    = "progress_panel"
+	cardProgressExpandID   = "progress_expand"
 	cardProgressCollapseID = "progress_collapse"
 )
 
@@ -67,18 +66,6 @@ func buildCardV2(opts cardOptions) (string, error) {
 	}
 	approvalContent := approvalRecordsContent(opts.Approvals)
 	if opts.Collapsible {
-		summary := strings.TrimSpace(opts.Summary)
-		if summary == "" {
-			summary = statusLabel(status)
-		}
-		panelElements := make([]map[string]any, 0, 2)
-		if main != nil {
-			panelElements = append(panelElements, main)
-		}
-		if taskCardID := strings.TrimSpace(opts.taskCardID); taskCardID != "" {
-			panelElements = append(panelElements, taskProgressCollapseButton(taskCardID))
-		}
-		elements = append(elements, map[string]any{"tag": "markdown", "element_id": cardProgressSummaryID, "content": summary})
 		if approvalContent != "" {
 			elements = append(elements, map[string]any{
 				"tag":        "markdown",
@@ -86,12 +73,21 @@ func buildCardV2(opts cardOptions) (string, error) {
 				"content":    approvalContent,
 			})
 		}
-		panelTitle := "完整进度"
-		if !opts.Expanded {
-			panelTitle = "展开完整进度"
+		taskCardID := strings.TrimSpace(opts.taskCardID)
+		if opts.Expanded || taskCardID == "" {
+			if main != nil {
+				elements = append(elements, main)
+			}
+			if taskCardID != "" {
+				elements = append(elements, taskProgressControlButton(
+					cardProgressCollapseID, "收起完整进度", cardActionTaskProgressCollapse, taskCardID,
+				))
+			}
+		} else {
+			elements = append(elements, taskProgressControlButton(
+				cardProgressExpandID, "展开完整进度", cardActionTaskProgressExpand, taskCardID,
+			))
 		}
-		elements = append(elements, map[string]any{"tag": "collapsible_panel", "element_id": cardProgressPanelID, "expanded": opts.Expanded,
-			"header": map[string]any{"title": map[string]any{"tag": "plain_text", "content": panelTitle}}, "elements": panelElements})
 	} else {
 		if main != nil {
 			elements = append(elements, main)
@@ -136,17 +132,17 @@ func isCompactTerminalStatus(status string) bool {
 	return status == cardStatusDone || status == cardStatusError || status == cardStatusStopped
 }
 
-func taskProgressCollapseButton(taskCardID string) map[string]any {
+func taskProgressControlButton(elementID, label, action, taskCardID string) map[string]any {
 	return map[string]any{
 		"tag":        "button",
-		"element_id": cardProgressCollapseID,
-		"text":       map[string]any{"tag": "plain_text", "content": "收起完整进度"},
-		"type":       "text",
+		"element_id": elementID,
+		"text":       map[string]any{"tag": "plain_text", "content": label},
+		"type":       "default",
 		"width":      "fill",
 		"behaviors": []map[string]any{{
 			"type": "callback",
 			"value": map[string]string{
-				"action":       cardActionTaskProgressCollapse,
+				"action":       action,
 				"task_card_id": taskCardID,
 			},
 		}},
@@ -182,7 +178,7 @@ func statusLabel(status string) string {
 	case cardStatusStreaming:
 		return "**生成中**"
 	case cardStatusDone:
-		return "**已完成**"
+		return ""
 	case cardStatusError:
 		return "**执行失败**"
 	case cardStatusStopped:

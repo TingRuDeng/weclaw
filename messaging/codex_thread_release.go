@@ -48,6 +48,7 @@ func (h *Handler) handleCodexReleaseCommand(runtime codexSessionCommandRuntime) 
 	)
 	var release codexWorkspaceThreadReleaseResult
 	releasePrepared := false
+	h.codexFollowerDeliveryMu.Lock()
 	detached, detachErr := h.detachCodexFrontendTaskWithPrepare(
 		conversationID,
 		runtime.routeUserID,
@@ -62,12 +63,15 @@ func (h *Handler) handleCodexReleaseCommand(runtime codexSessionCommandRuntime) 
 		},
 	)
 	if detachErr != nil {
+		h.codexFollowerDeliveryMu.Unlock()
 		return fmt.Sprintf("解除 Codex 会话绑定失败: %v", detachErr)
 	}
 	if detached.interaction {
+		h.codexFollowerDeliveryMu.Unlock()
 		return "当前任务正在处理审批或问答，请先完成交互，再解除绑定。"
 	}
 	if detached.terminal {
+		h.codexFollowerDeliveryMu.Unlock()
 		return "当前任务已进入终态，请稍后重试解除绑定。"
 	}
 	if !releasePrepared {
@@ -76,9 +80,11 @@ func (h *Handler) handleCodexReleaseCommand(runtime codexSessionCommandRuntime) 
 			runtime.bindingKey, runtime.workspaceRoot, recoveryReservationID,
 		)
 		if err != nil {
+			h.codexFollowerDeliveryMu.Unlock()
 			return fmt.Sprintf("解除 Codex 会话绑定失败: %v", err)
 		}
 	}
+	h.codexFollowerDeliveryMu.Unlock()
 	if !release.changed {
 		return "当前窗口没有已绑定的 Codex 会话。"
 	}

@@ -61,15 +61,17 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 			req.result = cardNavigationResult("当前导航状态已变化，请发送 /cx ls 重新打开。")
 		}
 	} else {
+		authorizedIdentity, _ := msg.AuthorizedIdentity()
 		req.result = h.handleCodexSessionCommandForRouteResult(ctx, codexSessionCommandRequest{
-			ActorUserID: msg.UserID,
-			RouteUserID: routeUserID,
-			Trimmed:     trimmed,
-			Platform:    msg.Platform,
-			AccountID:   msg.AccountID,
-			Reply:       reply,
-			Admin:       h.isAdminMessage(msg),
-			Private:     isPrivateCodexCommandMessage(msg, routeUserID),
+			ActorUserID:        msg.UserID,
+			AuthorizedIdentity: authorizedIdentity,
+			RouteUserID:        routeUserID,
+			Trimmed:            trimmed,
+			Platform:           msg.Platform,
+			AccountID:          msg.AccountID,
+			Reply:              reply,
+			Admin:              h.isAdminMessage(msg),
+			Private:            isPrivateCodexCommandMessage(msg, routeUserID),
 		})
 	}
 	if len(req.result.Choices) > 0 {

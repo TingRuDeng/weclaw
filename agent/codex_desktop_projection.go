@@ -8,10 +8,11 @@ import (
 const codexDesktopMaxProjectedTurns = 200
 
 type codexDesktopProjectionState struct {
-	turns            map[string]codexDesktopProjectedTurn
-	order            []string
-	terminal         map[string]bool
-	activeTombstones map[string]codexDesktopProjectedTurn
+	turns              map[string]codexDesktopProjectedTurn
+	order              []string
+	terminal           map[string]bool
+	terminalCandidates map[string]bool
+	activeTombstones   map[string]codexDesktopProjectedTurn
 }
 
 type codexDesktopProjectedTurn struct {
@@ -36,6 +37,7 @@ type codexDesktopTextEventSpec struct {
 func projectCodexDesktopSnapshot(threadID string, raw map[string]any, previous *codexDesktopProjectionState) (CodexThreadState, map[string]codexDesktopPendingAction, codexDesktopProjectionState, []*codexTurnEvent) {
 	projection := buildCodexDesktopProjection(raw)
 	projection.terminal = copyCodexDesktopTerminals(previous)
+	projection.terminalCandidates = copyCodexDesktopTerminalCandidates(previous)
 	projection.activeTombstones = carryCodexDesktopActiveTombstones(previous, projection.turns)
 	events := projectCodexDesktopEvents(previous, &projection)
 	requests := projectCodexDesktopRequests(raw)
@@ -49,7 +51,8 @@ func projectCodexDesktopSnapshot(threadID string, raw map[string]any, previous *
 func buildCodexDesktopProjection(raw map[string]any) codexDesktopProjectionState {
 	projection := codexDesktopProjectionState{
 		turns: make(map[string]codexDesktopProjectedTurn), terminal: make(map[string]bool),
-		activeTombstones: make(map[string]codexDesktopProjectedTurn),
+		terminalCandidates: make(map[string]bool),
+		activeTombstones:   make(map[string]codexDesktopProjectedTurn),
 	}
 	for _, value := range codexDesktopTurnValues(raw) {
 		turn, _ := value.(map[string]any)
@@ -190,17 +193,42 @@ func projectCodexDesktopEvents(previous *codexDesktopProjectionState, current *c
 		terminal := isCodexDesktopTerminalStatus(turn.status)
 		if baseline && terminal {
 			current.terminal[turnID] = true
+			delete(current.terminalCandidates, turnID)
 			continue
 		}
-		if terminal && existed && isCodexDesktopActiveStatus(previousTurn.status) && !current.terminal[turnID] {
-			events = append(events, codexDesktopTerminalEvent(turn))
-			current.terminal[turnID] = true
+		if terminal && !current.terminal[turnID] {
+			transitioned := existed && isCodexDesktopActiveStatus(previousTurn.status)
+			ready := turn.status != "completed" || codexDesktopTurnHasFinalAnswer(turn)
+			switch {
+			case transitioned && !ready:
+				// Desktop 可能先把 turn 标成 completed，后续 revision 才补 final_answer。
+				// 无正文终态由 watcher 的主动刷新屏障收敛，普通状态 revision 不得提前结束。
+				current.terminalCandidates[turnID] = true
+			case ready && (transitioned || current.terminalCandidates[turnID]):
+				events = append(events, codexDesktopTerminalEvent(turn))
+				current.terminal[turnID] = true
+				delete(current.terminalCandidates, turnID)
+			}
 		}
 		if terminal {
 			delete(current.activeTombstones, turnID)
+		} else {
+			delete(current.terminalCandidates, turnID)
 		}
 	}
 	return events
+}
+
+func codexDesktopTurnHasFinalAnswer(turn codexDesktopProjectedTurn) bool {
+	for _, itemID := range turn.order {
+		item := turn.items[itemID]
+		phase := strings.ToLower(strings.TrimSpace(item.phase))
+		if strings.EqualFold(item.itemType, "agentMessage") && strings.TrimSpace(item.text) != "" &&
+			(phase == "final_answer" || phase == "") {
+			return true
+		}
+	}
+	return false
 }
 
 // projectCodexDesktopItems 对同一 turn 的 item 做有序差分。
@@ -248,7 +276,9 @@ func codexDesktopTextEvent(spec codexDesktopTextEventSpec) *codexTurnEvent {
 	if spec.current.text == "" {
 		return nil
 	}
-	if spec.current.status == "completed" && (!spec.existed || spec.previous.status != "completed") {
+	currentCompleted := isCodexDesktopCompletedMessage(spec.current)
+	previousCompleted := spec.existed && isCodexDesktopCompletedMessage(spec.previous)
+	if currentCompleted && (!previousCompleted || spec.previous.text != spec.current.text || spec.previous.phase != spec.current.phase) {
 		return &codexTurnEvent{
 			Kind: "item_completed", TurnID: spec.turnID, MessagePhase: spec.current.phase,
 			ItemID: spec.current.id, Text: spec.current.text,
@@ -265,6 +295,22 @@ func codexDesktopTextEvent(spec codexDesktopTextEventSpec) *codexTurnEvent {
 	}
 	return &codexTurnEvent{
 		TurnID: spec.turnID, ItemID: spec.current.id, MessagePhase: spec.current.phase, Text: spec.current.text,
+	}
+}
+
+func isCodexDesktopCompletedMessage(item codexDesktopProjectedItem) bool {
+	status := strings.ToLower(strings.TrimSpace(item.status))
+	if status == "completed" {
+		return true
+	}
+	if status != "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(item.phase)) {
+	case "commentary", "final_answer":
+		return true
+	default:
+		return false
 	}
 }
 

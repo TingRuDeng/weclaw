@@ -290,7 +290,8 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 		return textNavigationResult(h.handleCodexNewForRoute(codexNewRequest{
 			ctx: runtime.ctx, taskContext: runtime.externalTaskCtx,
 			actorUserID: runtime.actorUserID, userID: runtime.routeUserID,
-			agentName: runtime.agentName, workspaceRoot: runtime.workspaceRoot,
+			authorizedIdentity: runtime.req.AuthorizedIdentity,
+			agentName:          runtime.agentName, workspaceRoot: runtime.workspaceRoot,
 			agent:    runtime.agent,
 			platform: runtime.req.Platform, accountID: runtime.req.AccountID,
 			reply: runtime.req.Reply,
@@ -316,7 +317,7 @@ func (h *Handler) dispatchCodexSwitchCommand(runtime codexSessionCommandRuntime)
 		workspaceRoot: runtime.workspaceRoot, agent: runtime.agent,
 		target: runtime.fields[2], ownerBindingKey: runtime.ownerBindingKey,
 		options: codexSwitchOptions{
-			actorUserID: runtime.actorUserID, platform: runtime.req.Platform,
+			actorUserID: runtime.actorUserID, authorizedIdentity: runtime.req.AuthorizedIdentity, platform: runtime.req.Platform,
 			accountID: runtime.req.AccountID, reply: runtime.req.Reply,
 			externalTaskCtx: runtime.externalTaskCtx,
 		},
@@ -327,7 +328,7 @@ func (h *Handler) dispatchCodexSwitchCommand(runtime codexSessionCommandRuntime)
 // shortSelectionRequest 构造短编号选择请求。
 func (runtime codexSessionCommandRuntime) shortSelectionRequest() codexShortSelectionRequest {
 	return codexShortSelectionRequest{
-		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID,
+		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID, AuthorizedIdentity: runtime.req.AuthorizedIdentity,
 		AgentName: runtime.agentName, WorkspaceRoot: runtime.workspaceRoot,
 		Agent: runtime.agent, BindingKey: runtime.bindingKey, Target: runtime.fields[1],
 		OwnerBindingKey: runtime.ownerBindingKey, Platform: runtime.req.Platform,
@@ -340,7 +341,7 @@ func (runtime codexSessionCommandRuntime) shortSelectionRequest() codexShortSele
 func (runtime codexSessionCommandRuntime) workspaceCdRequest(target string) codexWorkspaceCdRequest {
 	return codexWorkspaceCdRequest{
 		Context: runtime.ctx, TaskContext: runtime.externalTaskCtx,
-		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID,
+		UserID: runtime.routeUserID, ActorUserID: runtime.actorUserID, AuthorizedIdentity: runtime.req.AuthorizedIdentity,
 		BindingKey: runtime.bindingKey, OwnerBindingKey: runtime.ownerBindingKey,
 		AgentName: runtime.agentName, Target: target, Agent: runtime.agent,
 		Platform: runtime.req.Platform, AccountID: runtime.req.AccountID,

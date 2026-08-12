@@ -106,12 +106,17 @@ type ACPAgent struct {
 	pending rpcPendingRegistry
 
 	// notifications channel for session/update events
-	notifyMu sync.Mutex
-	notifyCh map[string]chan *sessionUpdate // sessionID -> channel
-	turnCh   map[string]chan *codexTurnEvent
+	notifyMu                sync.Mutex
+	notifyCh                map[string]chan *sessionUpdate // sessionID -> channel
+	turnCh                  map[string]chan *codexTurnEvent
+	turnObservers           map[string]map[uint64]*codexTurnObserverMailbox
+	turnObserverNext        uint64
+	pendingTurnInteractions map[string]map[string]*codexTurnEvent
 
 	codexThreadArchiveHandlerMu sync.RWMutex
 	codexThreadArchivedHandler  func(string)
+	codexThreadActivityMu       sync.RWMutex
+	codexThreadActivityHandler  func(string)
 
 	unhandledLogMu sync.Mutex
 	unhandledLogAt map[string]time.Time

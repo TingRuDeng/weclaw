@@ -2,13 +2,15 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
-## 2026-08-12 Codex Desktop `no-client-found` 只说明目标请求无人处理
+## 2026-08-12 Codex Desktop follower 登记必须是当前状态声明
 
-- 触发条件：Codex App 进程和安全 IPC endpoint 都存在，飞书选择一个真实 thread 后，Desktop Router 等待目标 handler 并返回 `no-client-found`。
+- 触发条件：Codex App 已经打开并拥有目标 thread，WeClaw 稍后才连入 Desktop IPC，因此错过 App 在 owner transition 时只发送一次的 `thread-stream-following-status-requested`。
+- 精确错误语义：`no-client-found: thread stream owner became unavailable` 表示 Router 已命中 owner handler，但 owner 无法把完整快照广播给当前 follower；本次真机根因是 WeClaw 尚未进入 App 的 follower registry，不是用户未打开目标 thread。
 - 状态边界：消息窗口的 durable binding 已经提交，但 Desktop runtime 尚未建立；必须显示“已选择，等待运行通道”、阻止普通消息并保留 binding，不能伪装成切换完成，也不能为了绕过错误启动第二个 Host。
 - 语义边界：只有已验证官方 daemon 本来就是 WeClaw 权威 Host 的显式 Handoff，才可把该响应当成 App frontend 已释放目标 thread 的证据；Desktop Host、managed Host、普通消息、超时、断线和未知交付都不得复用这条例外。
-- 恢复方式：先让用户在 Codex App 打开目标工作空间中的准确会话，再从消息端重新选择；仍无 handler 时完全重启 App 后重试，不需要删除或重建 thread。
-- 来源：2026-08-12 飞书会话卡片已成功提交目标 binding，但 `thread-follower-load-complete-history` 等待 10 秒后返回 `no-client-found`，持久化 follower 仍为空。
+- 恢复方式：只有 Desktop 当前是 WeClaw 权威 runtime 时，`LoadHistory` 才主动广播幂等的 `thread-stream-following-changed{following:true}`，等到首个 snapshot 后再请求完整历史。已运行的官方 daemon 仍是唯一 Host 时必须跳过主动声明，避免抢占 App。
+- 包装能力边界：飞书会话卡回调会经过 `inlineCardReplier → deferredCardResultReplier`；获取 durable route 前必须沿 `ProgressReplierProvider` 解包，不能因窄 `platform.Replier` 接口丢失底层 `DeliveryRouteReporter`。
+- 来源：2026-08-12 真机先修复卡片包装链并持久化 follower，仍每约 2 秒稳定返回上述精确错误；加入主动登记后，原 binding 无需重选即停止报错并收到目标 thread 广播。
 
 ## 2026-08-12 `turn/start` 响应不能充当事件消费总屏障
 
@@ -21,6 +23,9 @@
 ## 2026-08-11 Codex 本地端与飞书是协作前端，授权只来自账号白名单
 
 - 协作边界：正式支持“飞书 + Codex App”或“飞书 + 受控 Codex CLI”绑定同一个 Host/thread；active turn 的补充输入以 expected turn ID 直接 steer，空闲时才开始新 turn。三端同时打开时不宣称客户端级排他、所有权或精确归属。
+- 多窗口边界：多个飞书 route 可以同时绑定同一 thread，各自持久化 follower、进度卡和终态 outbox；普通进度与终态 fan-out，审批和结构化问答只能交给一个 owner 或 observer。释放一个 route 不得取消其他 observer 或中断共享 turn。
+- 恢复游标：active turn 只能先记录 pending，不能在 watcher 和 durable outbox 建立前直接记为已交付；inactive 快照发现 pending turn 时，即使 turn ID 相同也必须用稳定键补投终态，成功入 outbox 后再 settled。
+- 授权边界：durable follower 只能保存 Registry 实际签发的 `AuthorizedIdentity`，不能回退到表面 `UserID`；撤权必须与 acquire 和 outbox 网络投递共用读写门禁，返回前持久清除 follower、递增 revision 并停止该 route 的后续投递。重新授权不得自动复活旧 follower。
 - 解除边界：`/cx release` 只解除当前 route 的 durable binding、停止该 route 的观察与交互投递并以非终态冻结卡片；不得 cancel/interrupt active turn、重启 Host、提交默认拒绝或补发终态。本地任务继续运行，重新绑定后从最新权威快照恢复。
 - 恢复边界：服务重启前只解除 observer 并保留 active stream recovery；新进程必须先 hold 旧终态恢复项，再按 durable follower 重新挂接和 reanchor。不能因为进程重启把仍在 App/CLI 运行的共享 turn 误报为已停止。
 - 交互边界：解除绑定当下若正在等待审批或结构化问答，应失败关闭；解除成功后旧 route 的 interaction lease 必须失效，不能继续向飞书提问，也不能用 observer cancel 自动替用户拒绝。`/stop` 才是停止绑定 thread 全局 active turn 的入口，并须明确同时影响本地端与消息窗口。

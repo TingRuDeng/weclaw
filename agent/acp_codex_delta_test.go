@@ -349,6 +349,54 @@ func TestCollectAttachedCodexUnphasedIntermediateMessageBecomesProgressButLastSt
 	}
 }
 
+func TestCollectAttachedCodexSkipsLiveItemsAlreadyIncludedInAppServerSnapshot(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 2)
+	turnCh <- &codexTurnEvent{
+		Kind: "item_delta", ItemID: "message-final", MessagePhase: "final_answer",
+		Sequence: 40, Delta: "后缀",
+	}
+	turnCh <- &codexTurnEvent{Kind: "completed", Sequence: 42}
+
+	reply, err := a.collectAttachedCodexTurn(context.Background(), codexThreadWatchOptions{
+		conversationID: "user-1", threadID: "thread-1", turnCh: turnCh,
+		appServerSequence: 41,
+		initialEvents: []*codexTurnEvent{{
+			Kind: "item_completed", ItemID: "message-final", MessagePhase: "final_answer",
+			Text: "完整最终回答",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("collectAttachedCodexTurn error: %v", err)
+	}
+	if reply != "完整最终回答" {
+		t.Fatalf("reply=%q, want complete snapshot answer", reply)
+	}
+}
+
+func TestAppServerSnapshotWatermarkKeepsControlEvents(t *testing.T) {
+	approval := &codexTurnEvent{
+		Kind: "approval_request", Sequence: 40,
+		Approval: &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-1"}},
+	}
+	userInput := &codexTurnEvent{
+		Kind: "user_input_request", Sequence: 40,
+		UserInput: &codexUserInputEvent{Request: UserInputRequest{RequestID: "input-1"}},
+	}
+	for _, event := range []*codexTurnEvent{approval, userInput, {Kind: "completed", Sequence: 40}} {
+		if shouldSkipCodexAppServerSnapshotDuplicate(event, 41) {
+			t.Fatalf("control event was hidden by snapshot watermark: %#v", event)
+		}
+	}
+	structured := &codexTurnEvent{
+		Kind: "progress", Sequence: 40,
+		Progress: &ProgressEvent{ID: "file:file-1", Kind: ProgressKindFile, Text: "修改文件"},
+	}
+	if shouldSkipCodexAppServerSnapshotDuplicate(structured, 41) {
+		t.Fatalf("structured progress missing from thread snapshot was hidden: %#v", structured)
+	}
+}
+
 func TestACPAgentCodexUnphasedMessageUpdateWithSameIDEmitsLatestTextOnce(t *testing.T) {
 	ctx := context.Background()
 	a := NewACPAgent(ACPAgentConfig{

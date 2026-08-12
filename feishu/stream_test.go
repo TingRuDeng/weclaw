@@ -119,7 +119,7 @@ func (f *fakeCardKitClient) StreamContent(ctx context.Context, cardID string, el
 	return err
 }
 
-func TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard(t *testing.T) {
+func TestTaskCardStreamUpdatesOnlyCompleteProgressWithoutReplacingCard(t *testing.T) {
 	kit := &fakeCardKitClient{cardID: "card-task"}
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
 	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialContent: "初始", InitialPresentation: &platform.StreamPresentation{Summary: "开始", Details: "初始"}})
@@ -140,10 +140,10 @@ func TestTaskCardStreamUpdatesSummaryAndDetailsWithoutReplacingCard(t *testing.T
 	if len(kit.updateCardIDs) != 1 {
 		t.Fatalf("UpdateCard calls=%d, want only the initial task-card action binding update", len(kit.updateCardIDs))
 	}
-	if len(kit.streamElementIDs) != 4 {
+	if len(kit.streamElementIDs) != 2 {
 		t.Fatalf("element ids=%#v", kit.streamElementIDs)
 	}
-	want := []string{cardProgressSummaryID, cardMainContentID, cardProgressSummaryID, cardMainContentID}
+	want := []string{cardMainContentID, cardMainContentID}
 	for i, got := range kit.streamElementIDs {
 		if got != want[i] {
 			t.Fatalf("element[%d]=%q want %q", i, got, want[i])
@@ -181,18 +181,10 @@ func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
 	}
 	card := decodeCardJSON(t, kit.updateCards[0])
 	elements := card["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 2 || elements[0].(map[string]any)["element_id"] != cardProgressSummaryID ||
-		elements[0].(map[string]any)["content"] != "正在读取代码" ||
-		elements[1].(map[string]any)["element_id"] != cardProgressPanelID {
-		t.Fatalf("upgraded body=%#v, want summary and collapsible progress panel", card["body"])
-	}
-	panelElements := elements[1].(map[string]any)["elements"].([]any)
-	if len(panelElements) != 2 || panelElements[0].(map[string]any)["element_id"] != cardMainContentID ||
-		panelElements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator {
-		t.Fatalf("progress panel elements=%#v, want latest details and bottom collapse control", panelElements)
-	}
-	if panelElements[1].(map[string]any)["element_id"] != cardProgressCollapseID {
-		t.Fatalf("progress panel elements=%#v, want bottom collapse control", panelElements)
+	if len(elements) != 2 || elements[0].(map[string]any)["element_id"] != cardMainContentID ||
+		elements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator ||
+		elements[1].(map[string]any)["element_id"] != cardProgressCollapseID {
+		t.Fatalf("upgraded body=%#v, want complete progress and bottom collapse control", card["body"])
 	}
 
 	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
@@ -204,7 +196,7 @@ func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
 	if len(kit.updateCards) != 1 {
 		t.Fatalf("UpdateCard calls=%d, want only the initial layout upgrade", len(kit.updateCards))
 	}
-	wantElementIDs := []string{cardProgressSummaryID, cardMainContentID}
+	wantElementIDs := []string{cardMainContentID}
 	if len(kit.streamElementIDs) != len(wantElementIDs) {
 		t.Fatalf("stream element ids=%#v, want %#v after layout upgrade", kit.streamElementIDs, wantElementIDs)
 	}
@@ -232,14 +224,9 @@ func TestTaskCardInitialStructuredPresentationAddsBottomCollapseControl(t *testi
 	}
 	card := decodeCardJSON(t, kit.updateCards[0])
 	elements := card["body"].(map[string]any)["elements"].([]any)
-	panel := elements[len(elements)-1].(map[string]any)
-	if panel["element_id"] != cardProgressPanelID {
-		t.Fatalf("last element=%#v, want progress panel", panel)
-	}
-	inside := panel["elements"].([]any)
-	button := inside[len(inside)-1].(map[string]any)
+	button := elements[len(elements)-1].(map[string]any)
 	if button["element_id"] != cardProgressCollapseID {
-		t.Fatalf("panel elements=%#v, want bottom collapse control", inside)
+		t.Fatalf("elements=%#v, want bottom collapse control", elements)
 	}
 	behaviors := button["behaviors"].([]any)
 	value := behaviors[0].(map[string]any)["value"].(map[string]any)
@@ -248,7 +235,7 @@ func TestTaskCardInitialStructuredPresentationAddsBottomCollapseControl(t *testi
 	}
 }
 
-func TestCollapsibleTaskTerminalAndSupersedeCollapsePanel(t *testing.T) {
+func TestCollapsibleTaskTerminalAndSupersedeHideProgressBehindExpandControl(t *testing.T) {
 	for _, terminal := range []platform.StreamTerminalState{platform.StreamTerminalCompleted, platform.StreamTerminalFailed, platform.StreamTerminalStopped} {
 		kit := &fakeCardKitClient{cardID: "card-terminal"}
 		reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
@@ -263,17 +250,17 @@ func TestCollapsibleTaskTerminalAndSupersedeCollapsePanel(t *testing.T) {
 		}
 		card := decodeCardJSON(t, op.CardJSON)
 		elems := card["body"].(map[string]any)["elements"].([]any)
-		found := false
+		foundExpand, foundMain := false, false
 		for _, e := range elems {
-			if e.(map[string]any)["element_id"] == cardProgressPanelID {
-				found = true
-				if e.(map[string]any)["expanded"] != false {
-					t.Fatalf("terminal expanded=%v", e)
-				}
+			switch e.(map[string]any)["element_id"] {
+			case cardProgressExpandID:
+				foundExpand = true
+			case cardMainContentID:
+				foundMain = true
 			}
 		}
-		if !found {
-			t.Fatal("terminal panel missing")
+		if !foundExpand || foundMain {
+			t.Fatalf("terminal elements=%#v, want hidden progress and expand control", elems)
 		}
 		_ = terminal
 	}
@@ -289,10 +276,17 @@ func TestCollapsibleTaskTerminalAndSupersedeCollapsePanel(t *testing.T) {
 	}
 	card := decodeCardJSON(t, op.CardJSON)
 	elems := card["body"].(map[string]any)["elements"].([]any)
+	foundExpand, foundMain := false, false
 	for _, e := range elems {
-		if e.(map[string]any)["element_id"] == cardProgressPanelID && e.(map[string]any)["expanded"] != false {
-			t.Fatal("supersede expanded")
+		switch e.(map[string]any)["element_id"] {
+		case cardProgressExpandID:
+			foundExpand = true
+		case cardMainContentID:
+			foundMain = true
 		}
+	}
+	if !foundExpand || foundMain {
+		t.Fatalf("supersede elements=%#v, want hidden progress and expand control", elems)
 	}
 }
 
@@ -315,14 +309,14 @@ func TestTaskCardStructuredPresentationThrottleKeepsLatestSnapshot(t *testing.T)
 	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "最终", Details: "最终详情"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(kit.streamElementIDs) != 2 {
+	if len(kit.streamElementIDs) != 1 {
 		t.Fatalf("throttled streams=%#v, want only first presentation", kit.streamElementIDs)
 	}
 	s.flushPresentation()
-	if len(kit.updateCardIDs) != 1 || len(kit.streamElementIDs) != 4 {
+	if len(kit.updateCardIDs) != 1 || len(kit.streamElementIDs) != 2 {
 		t.Fatalf("updates=%d streams=%#v", len(kit.updateCardIDs), kit.streamElementIDs)
 	}
-	if kit.streamTexts[0] != "第一" || kit.streamTexts[1] != "第一详情" || kit.streamTexts[2] != "最终" || kit.streamTexts[3] != "最终详情" {
+	if kit.streamTexts[0] != "第一详情" || kit.streamTexts[1] != "最终详情" {
 		t.Fatalf("texts=%#v", kit.streamTexts)
 	}
 	if kit.streamSeqs[1] <= kit.streamSeqs[0] {
@@ -330,7 +324,7 @@ func TestTaskCardStructuredPresentationThrottleKeepsLatestSnapshot(t *testing.T)
 	}
 }
 
-func TestTaskCardStructuredPresentationRetriesSummaryAfterStreamingDisabled(t *testing.T) {
+func TestTaskCardStructuredPresentationRetriesCompleteProgressAfterStreamingDisabled(t *testing.T) {
 	kit := &fakeCardKitClient{cardID: "card-summary-retry", streamErrors: []error{formatFeishuAPIError("cli_a", 200850, "disabled")}}
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
 	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "初始", Details: "初始"}})
@@ -341,29 +335,10 @@ func TestTaskCardStructuredPresentationRetriesSummaryAfterStreamingDisabled(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(kit.streamingSeqs) < 2 || len(kit.streamElementIDs) != 3 {
+	if len(kit.streamingSeqs) < 2 || len(kit.streamElementIDs) != 2 {
 		t.Fatalf("streaming=%#v elements=%#v", kit.streamingSeqs, kit.streamElementIDs)
 	}
-	if kit.streamElementIDs[0] != cardProgressSummaryID || kit.streamElementIDs[1] != cardProgressSummaryID || kit.streamElementIDs[2] != cardMainContentID {
-		t.Fatalf("elements=%#v", kit.streamElementIDs)
-	}
-}
-
-func TestTaskCardStructuredPresentationRetriesDetailsAfterStreamingDisabled(t *testing.T) {
-	kit := &fakeCardKitClient{cardID: "card-details-retry", streamErrors: []error{nil, formatFeishuAPIError("cli_a", 200850, "disabled")}}
-	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
-	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "初始", Details: "初始"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "摘要", Details: "详情"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(kit.streamingSeqs) < 2 || len(kit.streamElementIDs) != 3 {
-		t.Fatalf("streaming=%#v elements=%#v", kit.streamingSeqs, kit.streamElementIDs)
-	}
-	if kit.streamElementIDs[0] != cardProgressSummaryID || kit.streamElementIDs[1] != cardMainContentID || kit.streamElementIDs[2] != cardMainContentID {
+	if kit.streamElementIDs[0] != cardMainContentID || kit.streamElementIDs[1] != cardMainContentID {
 		t.Fatalf("elements=%#v", kit.streamElementIDs)
 	}
 }
@@ -468,16 +443,18 @@ func TestFeishuTaskStreamPlacesThinkingAtBottomUntilTerminal(t *testing.T) {
 	}
 	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
 	doneElements := doneCard["body"].(map[string]any)["elements"].([]any)
-	if len(doneElements) != 2 || doneElements[0].(map[string]any)["content"] != "**已完成**" ||
-		doneElements[1].(map[string]any)["content"] != terminal {
-		t.Fatalf("done body=%#v, want terminal status and preserved reply without thinking", doneCard["body"])
+	if len(doneElements) != 1 || doneElements[0].(map[string]any)["content"] != terminal {
+		t.Fatalf("done body=%#v, want preserved reply without redundant terminal text or thinking", doneCard["body"])
+	}
+	if doneCard["header"].(map[string]any)["template"] != "green" {
+		t.Fatalf("done header=%#v, want green terminal header", doneCard["header"])
 	}
 	if strings.Contains(cardKit.updateCards[len(cardKit.updateCards)-1], "思考中.....") {
 		t.Fatalf("terminal card must not retain active thinking indicator: %s", cardKit.updateCards[len(cardKit.updateCards)-1])
 	}
 }
 
-func TestFeishuTaskStreamWithoutAgentReplyKeepsOnlyTerminalStatus(t *testing.T) {
+func TestFeishuTaskStreamWithoutAgentReplyKeepsOnlyGreenTerminalHeader(t *testing.T) {
 	cardKit := &fakeCardKitClient{cardID: "card-no-reply"}
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
 	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
@@ -490,9 +467,11 @@ func TestFeishuTaskStreamWithoutAgentReplyKeepsOnlyTerminalStatus(t *testing.T) 
 		t.Fatalf("Complete error: %v", err)
 	}
 	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
-	elements := doneCard["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 1 || elements[0].(map[string]any)["content"] != "**已完成**" {
-		t.Fatalf("done body=%#v, want compact terminal status only", doneCard["body"])
+	if body, ok := doneCard["body"]; ok {
+		t.Fatalf("done body=%#v, want header-only compact terminal card", body)
+	}
+	if doneCard["header"].(map[string]any)["template"] != "green" {
+		t.Fatalf("done header=%#v, want green terminal header", doneCard["header"])
 	}
 	if strings.Contains(cardKit.updateCards[len(cardKit.updateCards)-1], platform.TaskStreamThinkingIndicator) {
 		t.Fatalf("terminal card must remove thinking without Agent reply: %s", cardKit.updateCards[len(cardKit.updateCards)-1])
@@ -515,9 +494,8 @@ func TestFeishuTaskStreamWithoutProgressKeepsApprovalRecordsInCompactTerminal(t 
 	}
 	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
 	elements := doneCard["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**已完成**" ||
-		!strings.Contains(elements[1].(map[string]any)["content"].(string), "command: date") {
-		t.Fatalf("done body=%#v, want compact status and preserved approval", doneCard["body"])
+	if len(elements) != 1 || !strings.Contains(elements[0].(map[string]any)["content"].(string), "command: date") {
+		t.Fatalf("done body=%#v, want preserved approval without redundant terminal text", doneCard["body"])
 	}
 }
 
@@ -739,10 +717,7 @@ func TestTaskCardStreamCompleteCancelsPendingProgress(t *testing.T) {
 	card := decodeCardJSON(t, finalCard)
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if got := elements[0].(map[string]any)["content"]; got != "**已完成**" {
-		t.Fatalf("status=%q, want 已完成", got)
-	}
-	main := elements[1].(map[string]any)
+	main := elements[0].(map[string]any)
 	if got := main["content"]; got != "进展一" {
 		t.Fatalf("final content=%q, want preserved latest delivered progress", got)
 	}
@@ -853,10 +828,7 @@ func TestFeishuStreamCompleteUpdatesDoneAndDestroys(t *testing.T) {
 	card := decodeCardJSON(t, cardKit.updateCards[0])
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if got := elements[0].(map[string]any)["content"]; got != "**已完成**" {
-		t.Fatalf("status=%#v, want 已完成", got)
-	}
-	main := elements[1].(map[string]any)
+	main := elements[0].(map[string]any)
 	if main["content"] != "done" {
 		t.Fatalf("final content=%#v, want done", main["content"])
 	}
@@ -903,16 +875,13 @@ func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 	card := decodeCardJSON(t, cardKit.updateCards[0])
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if len(elements) != 3 {
-		t.Fatalf("elements=%d, want status, preserved progress and approval record", len(elements))
+	if len(elements) != 2 {
+		t.Fatalf("elements=%d, want preserved progress and approval record", len(elements))
 	}
-	if got := elements[0].(map[string]any)["content"]; got != "**已完成**" {
-		t.Fatalf("status=%q, want 已完成", got)
-	}
-	if got := elements[1].(map[string]any)["content"]; got != "处理中" {
+	if got := elements[0].(map[string]any)["content"]; got != "处理中" {
 		t.Fatalf("content=%q, want preserved progress", got)
 	}
-	approval := elements[2].(map[string]any)
+	approval := elements[1].(map[string]any)
 	if !strings.Contains(approval["content"].(string), "command: date") {
 		t.Fatalf("approval content=%q, want approval record", approval["content"])
 	}
@@ -935,9 +904,8 @@ func TestFeishuStreamCompleteWithEmptyContentPreservesTaskCardProgress(t *testin
 	card := decodeCardJSON(t, cardKit.updateCards[0])
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if len(elements) != 2 || elements[0].(map[string]any)["content"] != "**已完成**" ||
-		elements[1].(map[string]any)["content"] != "进展：任务仍在执行中，连接正常。" {
-		t.Fatalf("done card body=%#v, want status and preserved progress", card["body"])
+	if len(elements) != 1 || elements[0].(map[string]any)["content"] != "进展：任务仍在执行中，连接正常。" {
+		t.Fatalf("done card body=%#v, want preserved progress without redundant status", card["body"])
 	}
 	header := card["header"].(map[string]any)
 	if header["template"] != "green" {
@@ -1123,7 +1091,7 @@ func TestFeishuTerminalCheckpointKeepsOperationIDsAcrossRestartRetry(t *testing.
 	}
 }
 
-func TestFeishuPrepareSupersedeFromReferencePreservesProgressAndCollapsesPanel(t *testing.T) {
+func TestFeishuPrepareSupersedeFromReferencePreservesHiddenProgressAndExpandControl(t *testing.T) {
 	payload, err := json.Marshal(feishuStreamReferencePayload{
 		CardID: "card-1", Title: "Codex · project-a", Sequence: 7,
 		Content: "旧兼容进度", Summary: "已完成代码检查", Details: "1. 已读取实现\n2. 已补充测试",
@@ -1152,48 +1120,34 @@ func TestFeishuPrepareSupersedeFromReferencePreservesProgressAndCollapsesPanel(t
 
 	card := decodeCardJSON(t, op.CardJSON)
 	elements := card["body"].(map[string]any)["elements"].([]any)
-	var status, summary, details, approval string
-	foundPanel, foundBottomControl := false, false
+	var status, approval string
+	foundExpand := false
 	for _, raw := range elements {
 		element := raw.(map[string]any)
 		switch element["element_id"] {
 		case "status":
 			status, _ = element["content"].(string)
-		case cardProgressSummaryID:
-			summary, _ = element["content"].(string)
-		case cardProgressPanelID:
-			foundPanel = true
-			if element["expanded"] != false {
-				t.Fatalf("panel expanded=%v, want false", element["expanded"])
-			}
-			panelElements := element["elements"].([]any)
-			details, _ = panelElements[0].(map[string]any)["content"].(string)
-			if len(panelElements) > 1 {
-				button := panelElements[len(panelElements)-1].(map[string]any)
-				foundBottomControl = button["element_id"] == cardProgressCollapseID
-				if foundBottomControl {
-					behaviors := button["behaviors"].([]any)
-					value := behaviors[0].(map[string]any)["value"].(map[string]any)
-					if value["task_card_id"] != "card-1" {
-						t.Fatalf("button value=%#v, want superseded card id", value)
-					}
-				}
+		case cardProgressExpandID:
+			foundExpand = true
+			behaviors := element["behaviors"].([]any)
+			value := behaviors[0].(map[string]any)["value"].(map[string]any)
+			if value["task_card_id"] != "card-1" {
+				t.Fatalf("button value=%#v, want superseded card id", value)
 			}
 		case "approval_records":
 			approval, _ = element["content"].(string)
 		}
 	}
-	if status != "**已转移**" || summary != "已完成代码检查" || !foundPanel {
-		t.Fatalf("status=%q summary=%q panel=%v", status, summary, foundPanel)
+	if status != "**已转移**" || !foundExpand {
+		t.Fatalf("status=%q expand=%v", status, foundExpand)
 	}
-	if !strings.Contains(details, "1. 已读取实现") || !strings.Contains(details, "已在下方新卡继续展示。") {
-		t.Fatalf("details=%q, want preserved progress and transfer notice", details)
+	if op.TaskCard == nil || op.TaskCard.Summary != "已完成代码检查" ||
+		!strings.Contains(op.TaskCard.Content, "1. 已读取实现") ||
+		!strings.Contains(op.TaskCard.Content, "已在下方新卡继续展示。") {
+		t.Fatalf("task card=%#v, want preserved hidden progress and transfer notice", op.TaskCard)
 	}
 	if !strings.Contains(approval, "command: date") {
 		t.Fatalf("approval=%q", approval)
-	}
-	if !foundBottomControl {
-		t.Fatal("superseded progress panel missing bottom collapse control")
 	}
 }
 
@@ -1228,6 +1182,75 @@ func TestFeishuDeliverSupersedeCheckpointIsIdempotent(t *testing.T) {
 	}
 	if len(cardKit.destroyed) != 0 {
 		t.Fatalf("supersede must preserve historical card: destroyed=%#v", cardKit.destroyed)
+	}
+}
+
+func TestFeishuSupersedeCheckpointRestoresProgressControlStateAfterRestart(t *testing.T) {
+	payload, err := json.Marshal(feishuStreamReferencePayload{
+		CardID: "card-1", Title: "Codex", Sequence: 4,
+		Summary: "检查实现", Details: "第一步\n\n第二步", Collapsible: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := prepareFeishuSupersedeFromReference(platform.DurableStreamReference{
+		Kind: feishuStreamReferenceKind, Payload: payload,
+	}, "已在新位置继续展示", "supersede-restart-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cardKit := &fakeIdempotentCardKitClient{}
+	afterCards := newTaskCardRegistry()
+	afterRestart := newReplierWithTaskCards(nil, "ou_user", cardKit, afterCards)
+	if err := afterRestart.DeliverSupersede(context.Background(), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	opts, ok := afterCards.snapshot("card-1")
+	if !ok || opts.Status != cardStatusSuperseded ||
+		!strings.Contains(opts.Content, "第一步") || !strings.Contains(opts.Content, "已在新位置继续展示") || opts.Expanded {
+		t.Fatalf("restored superseded task card=%#v ok=%v", opts, ok)
+	}
+}
+
+func TestCollapsedTaskCardPreflightChecksCompleteHiddenProgress(t *testing.T) {
+	registry := newTaskCardRegistry()
+	registry.record("card-1", cardOptions{
+		Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Content: "旧进度",
+		Collapsible: true, Expanded: false,
+	})
+	stream := &feishuStream{
+		taskCards: registry, cardID: "card-1", title: "Codex",
+		collapsible: true, cardJSONSoftLimitBytes: 1_000,
+	}
+	err := stream.PreflightUpdate(strings.Repeat("完整进度", 1_000))
+	if !errors.Is(err, platform.ErrStreamContentTooLarge) {
+		t.Fatalf("PreflightUpdate error=%v, want complete hidden progress capacity failure", err)
+	}
+}
+
+func TestFeishuTerminalCheckpointRestoresProgressControlStateAfterRestart(t *testing.T) {
+	cardKit := &fakeIdempotentCardKitClient{fakeCardKitClient: fakeCardKitClient{cardID: "card-1"}}
+	beforeRestart := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
+	stream, err := beforeRestart.OpenStream(context.Background(), platform.StreamOptions{
+		Title:               "Codex",
+		InitialPresentation: &platform.StreamPresentation{Summary: "检查实现", Details: "第一步\n\n第二步"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := stream.(platform.StatefulDurableTerminalStream).PrepareTerminalWithState("", platform.StreamTerminalCompleted)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	afterCards := newTaskCardRegistry()
+	afterRestart := newReplierWithTaskCards(nil, "ou_user", cardKit, afterCards)
+	if err := afterRestart.DeliverTerminal(context.Background(), checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	opts, ok := afterCards.snapshot("card-1")
+	if !ok || opts.Status != cardStatusDone || opts.Content != "第一步\n\n第二步" || opts.Expanded {
+		t.Fatalf("restored task card=%#v ok=%v", opts, ok)
 	}
 }
 
@@ -1315,7 +1338,7 @@ func TestFeishuStreamReferenceCompletesOriginalCardAfterRestart(t *testing.T) {
 		t.Fatalf("streaming seqs=%#v update seqs=%#v, terminal update must follow disable", cardKit.streamingSeqs, cardKit.updateSeqs)
 	}
 	terminalCard := cardKit.updateCards[len(cardKit.updateCards)-1]
-	if !strings.Contains(terminalCard, "已完成") || !strings.Contains(terminalCard, "已完成验证，正在收尾") ||
+	if strings.Contains(terminalCard, "**已完成**") || !strings.Contains(terminalCard, "已完成验证，正在收尾") ||
 		!strings.Contains(terminalCard, "command: date") || strings.Contains(terminalCard, "v0.1.test") {
 		t.Fatalf("terminal card=%q, want preserved progress and approval without final answer", terminalCard)
 	}

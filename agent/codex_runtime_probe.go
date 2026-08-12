@@ -379,26 +379,33 @@ func (a *ACPAgent) bindCodexAppServerThread(conversationID string, threadID stri
 }
 
 func (a *ACPAgent) readCodexAppServerThreadState(ctx context.Context, threadID string) (CodexThreadState, error) {
-	state, _, err := a.readCodexAppServerThreadStateResult(ctx, threadID)
+	state, _, _, _, err := a.readCodexAppServerThreadSnapshotResult(ctx, threadID)
 	return state, err
 }
 
 func (a *ACPAgent) readCodexAppServerThreadStateResult(ctx context.Context, threadID string) (CodexThreadState, bool, error) {
+	state, _, pendingFirstTurn, _, err := a.readCodexAppServerThreadSnapshotResult(ctx, threadID)
+	return state, pendingFirstTurn, err
+}
+
+// readCodexAppServerThreadSnapshotResult 同时保留 thread/read 的完整 items，
+// 供观察器在订阅增量事件前回放已存在的用户可见进度。
+func (a *ACPAgent) readCodexAppServerThreadSnapshotResult(ctx context.Context, threadID string) (CodexThreadState, codexThreadSnapshot, bool, uint64, error) {
 	threadID = strings.TrimSpace(threadID)
-	result, err := a.rpc(ctx, "thread/read", map[string]interface{}{
+	result, sequence, err := a.rpcWithSequence(ctx, "thread/read", map[string]interface{}{
 		"threadId": threadID, "includeTurns": true,
 	})
 	if err != nil {
 		// thread/start 返回的新 thread 在收到首条用户消息前尚未 materialize。
 		// 此时没有 turn 是确定的空闲态，不能把协议限制升级为写入冲突。
 		if isCodexThreadPendingFirstTurn(err) {
-			return CodexThreadState{ThreadID: threadID}, true, nil
+			return CodexThreadState{ThreadID: threadID}, codexThreadSnapshot{ID: threadID}, true, sequence, nil
 		}
-		return CodexThreadState{}, false, err
+		return CodexThreadState{}, codexThreadSnapshot{}, false, sequence, err
 	}
 	var response codexThreadReadResponse
 	if err := json.Unmarshal(result, &response); err != nil {
-		return CodexThreadState{}, false, fmt.Errorf("parse thread/read result: %w", err)
+		return CodexThreadState{}, codexThreadSnapshot{}, false, sequence, fmt.Errorf("parse thread/read result: %w", err)
 	}
-	return codexThreadStateFromSnapshot(response.Thread), false, nil
+	return codexThreadStateFromSnapshot(response.Thread), response.Thread, false, sequence, nil
 }

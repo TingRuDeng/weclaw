@@ -160,8 +160,12 @@ func (h *Handler) watchReconnectedCodexRuntime(ctx context.Context, req external
 	}
 	var text string
 	var err error
-	if structured, ok := req.agent.(agent.CodexStructuredThreadRuntimeAgent); ok {
+	if structured, ok := req.agent.(agent.CodexExpectedStructuredThreadRuntimeAgent); ok {
+		text, err = structured.WatchCodexThreadEventsForTurn(ctx, req.conversationID, req.threadID, req.turnID, req.onProgress)
+	} else if structured, ok := req.agent.(agent.CodexStructuredThreadRuntimeAgent); ok {
 		text, err = structured.WatchCodexThreadEvents(ctx, req.conversationID, req.threadID, req.onProgress)
+	} else if expected, ok := req.agent.(agent.CodexExpectedThreadRuntimeAgent); ok {
+		text, err = expected.WatchCodexThreadForTurn(ctx, req.conversationID, req.threadID, req.turnID, textProgressCallback(req.onProgress))
 	} else {
 		text, err = runtimeAgent.WatchCodexThread(ctx, req.conversationID, req.threadID, textProgressCallback(req.onProgress))
 	}
@@ -191,7 +195,18 @@ func (h *Handler) currentCodexSharedHostBinding(ctx context.Context, req externa
 		Intent: codexSharedHostIntent(route),
 	}
 	binding, err := liveAgent.InspectCodexRuntime(controlCtx, request)
-	return binding, err == nil && binding.Runtime == agent.CodexRuntimeWeClaw, err
+	if err != nil || !codexRuntimeReadyForRemoteTurn(binding.Runtime) {
+		return binding, false, err
+	}
+	targetTurnID := strings.TrimSpace(req.turnID)
+	if targetTurnID == "" {
+		return binding, false, nil
+	}
+	observedTurnID := strings.TrimSpace(binding.State.LastTurnID)
+	if binding.State.Active {
+		observedTurnID = strings.TrimSpace(binding.State.ActiveTurnID)
+	}
+	return binding, observedTurnID == targetTurnID, nil
 }
 
 // isCodexRuntimeConflict 只把显式双写冲突视为观察终态。

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -12,44 +13,61 @@ const (
 )
 
 type codexThreadWatchOptions struct {
-	conversationID  string
-	threadID        string
-	targetTurnID    string
-	turnCh          <-chan *codexTurnEvent
-	onProgress      func(string)
-	onProgressEvent func(ProgressEvent)
-	reconcile       <-chan time.Time
+	conversationID    string
+	threadID          string
+	targetTurnID      string
+	turnCh            <-chan *codexTurnEvent
+	initialEvents     []*codexTurnEvent
+	appServerSequence uint64
+	desktopEpoch      uint64
+	desktopRevision   uint64
+	replayedActions   map[string]bool
+	onProgress        func(string)
+	onProgressEvent   func(ProgressEvent)
+	reconcile         <-chan time.Time
+	refresh           func(context.Context) error
 }
 
 // WatchCodexThreadEvents 观察已运行 turn，并保留结构化进展字段。
 func (a *ACPAgent) WatchCodexThreadEvents(ctx context.Context, conversationID string, threadID string, onProgress func(ProgressEvent)) (string, error) {
+	return a.WatchCodexThreadEventsForTurn(ctx, conversationID, threadID, "", onProgress)
+}
+
+// WatchCodexThreadEventsForTurn 只观察调用方预留的同一个 active turn。
+func (a *ACPAgent) WatchCodexThreadEventsForTurn(ctx context.Context, conversationID string, threadID string, turnID string, onProgress func(ProgressEvent)) (string, error) {
 	if a.protocol != protocolCodexAppServer {
 		return "", fmt.Errorf("agent is not codex app-server")
 	}
 	ticker := time.NewTicker(codexThreadWatchReconcileInterval)
 	defer ticker.Stop()
 	return a.watchCodexThreadWithReconcile(ctx, codexThreadWatchOptions{
-		conversationID: conversationID, threadID: threadID,
+		conversationID: conversationID, threadID: threadID, targetTurnID: strings.TrimSpace(turnID),
 		onProgressEvent: onProgress, reconcile: ticker.C,
 	})
 }
 
 // WatchCodexThread 接管已经运行的 Codex thread，并等待当前 turn 完成。
 func (a *ACPAgent) WatchCodexThread(ctx context.Context, conversationID string, threadID string, onProgress func(delta string)) (string, error) {
+	return a.WatchCodexThreadForTurn(ctx, conversationID, threadID, "", onProgress)
+}
+
+// WatchCodexThreadForTurn 是旧字符串进度接口的目标 turn 版本。
+func (a *ACPAgent) WatchCodexThreadForTurn(ctx context.Context, conversationID string, threadID string, turnID string, onProgress func(delta string)) (string, error) {
 	if a.protocol != protocolCodexAppServer {
 		return "", fmt.Errorf("agent is not codex app-server")
 	}
 	ticker := time.NewTicker(codexThreadWatchReconcileInterval)
 	defer ticker.Stop()
 	return a.watchCodexThreadWithReconcile(ctx, codexThreadWatchOptions{
-		conversationID: conversationID, threadID: threadID,
+		conversationID: conversationID, threadID: threadID, targetTurnID: strings.TrimSpace(turnID),
 		onProgress: onProgress, reconcile: ticker.C,
 	})
 }
 
 // watchCodexThreadWithReconcile 同时消费实时事件和权威状态，避免单个终态事件缺失后永久挂起。
 func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codexThreadWatchOptions) (string, error) {
-	if binding, ok := a.runtimeBindingForThread(opts.conversationID, opts.threadID); ok {
+	binding, hasBinding := a.runtimeBindingForThread(opts.conversationID, opts.threadID)
+	if hasBinding {
 		if binding.Runtime == CodexRuntimeUnknown {
 			return "", ErrCodexRuntimeUnavailable
 		}
@@ -58,12 +76,23 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 		}
 	}
 	turnCh := make(chan *codexTurnEvent, codexTurnEventBufferSize)
-	if !a.registerTurnChannel(opts.threadID, turnCh) {
-		return "", fmt.Errorf("thread %s already has an active watcher or turn", opts.threadID)
+	observerID := a.registerTurnObserver(opts.threadID, turnCh)
+	defer a.unregisterTurnObserver(opts.threadID, observerID, turnCh)
+	state, initialEvents, appServerSequence, desktopEpoch, desktopRevision, err := a.attachedCodexWatchSnapshot(ctx, opts, binding, hasBinding)
+	if err == nil && strings.TrimSpace(opts.targetTurnID) != "" {
+		observedTurnID := strings.TrimSpace(state.LastTurnID)
+		if state.Active {
+			observedTurnID = strings.TrimSpace(state.ActiveTurnID)
+		}
+		if observedTurnID != "" && observedTurnID != strings.TrimSpace(opts.targetTurnID) {
+			a.abandonCodexInteractions(opts.threadID, initialEvents)
+			return "", fmt.Errorf("%w: expected turn %s, observed %s", ErrCodexControlChanged, opts.targetTurnID, observedTurnID)
+		}
 	}
-	defer a.unregisterTurnChannel(opts.threadID, turnCh)
-	state, err := a.ReadCodexThreadState(ctx, opts.conversationID, opts.threadID)
-	if err == nil && !state.Active {
+	watch := opts
+	if err == nil && !state.Active && a.desktopWatchAwaitingFinal(watch, state) {
+		watch.targetTurnID = firstNonEmpty(strings.TrimSpace(watch.targetTurnID), strings.TrimSpace(state.LastTurnID))
+	} else if err == nil && !state.Active {
 		if interrupted := interruptedCodexThreadStateError(state, opts.threadID, ""); interrupted != nil {
 			return "", interrupted
 		}
@@ -72,18 +101,98 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 		}
 		return "Codex App 本地任务已完成，但没有返回文本。", nil
 	}
-	watch := opts
-	if err == nil {
+	if err == nil && watch.targetTurnID == "" {
 		watch.targetTurnID = state.ActiveTurnID
 	}
 	watch.turnCh = turnCh
+	watch.initialEvents = initialEvents
+	watch.appServerSequence = appServerSequence
+	watch.desktopEpoch = desktopEpoch
+	watch.desktopRevision = desktopRevision
+	watch.replayedActions = codexInteractionIDs(initialEvents)
 	return a.collectAttachedCodexTurn(ctx, watch)
+}
+
+func (a *ACPAgent) abandonCodexInteractions(threadID string, events []*codexTurnEvent) {
+	for _, event := range codexTurnInteractions(events) {
+		a.abandonCodexTurnEvent(threadID, event)
+	}
+}
+
+func (a *ACPAgent) attachedCodexWatchSnapshot(
+	ctx context.Context,
+	opts codexThreadWatchOptions,
+	binding CodexThreadBinding,
+	hasBinding bool,
+) (CodexThreadState, []*codexTurnEvent, uint64, uint64, uint64, error) {
+	if hasBinding && binding.Runtime == CodexRuntimeDesktop {
+		if a.desktopRuntime == nil {
+			return CodexThreadState{}, nil, 0, 0, 0, ErrCodexRuntimeUnavailable
+		}
+		state, batch, err := a.desktopRuntime.activeWatchSnapshot(opts.threadID)
+		return state, batch.Events, 0, batch.Epoch, batch.Revision, err
+	}
+	state, snapshot, _, sequence, err := a.readCodexAppServerThreadSnapshotResult(ctx, opts.threadID)
+	if err != nil || !state.Active {
+		return state, nil, sequence, 0, 0, err
+	}
+	targetTurnID := firstNonEmpty(strings.TrimSpace(opts.targetTurnID), strings.TrimSpace(state.ActiveTurnID))
+	events := projectCodexAppServerActiveTurnEvents(snapshot, targetTurnID)
+	events = append(events, a.claimPendingCodexInteractions(opts.threadID)...)
+	return state, events, sequence, 0, 0, nil
 }
 
 func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThreadWatchOptions) (string, error) {
 	assembler, diagnostics := newCodexFinalAssembler(), newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
 	messageProgress := codexMessageProgressBuffer{}
 	callbacks := progressCallbacks{onText: opts.onProgress, onEvent: opts.onProgressEvent}
+	processEvent := func(evt *codexTurnEvent) (string, bool, error) {
+		if evt == nil {
+			return "", false, nil
+		}
+		if evt.TurnID != "" && opts.targetTurnID != "" && evt.TurnID != opts.targetTurnID {
+			if isCodexTurnInteractionEvent(evt) {
+				a.abandonCodexTurnEvent(opts.threadID, evt)
+				return "", true, fmt.Errorf(
+					"%w: expected turn %s, observed interaction for %s",
+					ErrCodexControlChanged, opts.targetTurnID, evt.TurnID,
+				)
+			}
+			return "", false, nil
+		}
+		messageProgress.beforeEvent(evt, callbacks)
+		if evt.Kind == "interrupted" {
+			return "", true, attachedCodexInterruptedError(opts, evt)
+		}
+		if evt.Approval != nil {
+			if err := a.handleAttachedCodexApproval(ctx, evt); err != nil {
+				a.abandonCodexTurnEvent(opts.threadID, evt)
+				return "", true, err
+			}
+			return "", false, nil
+		}
+		if evt.UserInput != nil {
+			if err := a.handleCodexUserInputEvent(ctx, evt); err != nil {
+				a.abandonCodexTurnEvent(opts.threadID, evt)
+				return "", true, fmt.Errorf("user input response error: %w", err)
+			}
+			return "", false, nil
+		}
+		if evt.Kind == "error" {
+			return "", true, fmt.Errorf("%w: %s", ErrCodexTurnTerminal, diagnostics.withError(evt.Text))
+		}
+		collectCodexTurnText(assembler, evt, callbacks, diagnostics, &messageProgress)
+		if evt.Kind == "completed" {
+			text, err := a.attachedCodexFinalText(ctx, opts.conversationID, opts.threadID, assembler)
+			return text, true, err
+		}
+		return "", false, nil
+	}
+	for _, evt := range opts.initialEvents {
+		if text, done, err := processEvent(evt); done || err != nil {
+			return text, err
+		}
+	}
 	ticksWithoutEvent := 0
 	for {
 		select {
@@ -92,13 +201,21 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 			return "", ctx.Err()
 		case <-opts.reconcile:
 			ticksWithoutEvent++
+			refreshed := false
 			if ticksWithoutEvent >= codexThreadWatchRefreshTicks {
-				if err := a.refreshAttachedCodexThread(ctx, opts.conversationID, opts.threadID); err != nil {
+				refresh := opts.refresh
+				if refresh == nil {
+					refresh = func(ctx context.Context) error {
+						return a.refreshAttachedCodexThread(ctx, opts.conversationID, opts.threadID)
+					}
+				}
+				if err := refresh(ctx); err != nil {
 					return "", err
 				}
 				ticksWithoutEvent = 0
+				refreshed = true
 			}
-			text, finished, err := a.reconcileAttachedCodexTurn(ctx, opts, assembler)
+			text, finished, err := a.reconcileAttachedCodexTurn(ctx, opts, assembler, refreshed)
 			if err != nil {
 				messageProgress.flush(callbacks)
 				return text, err
@@ -108,38 +225,65 @@ func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThrea
 				return text, err
 			}
 		case evt := <-opts.turnCh:
-			if evt.TurnID != "" && opts.targetTurnID != "" && evt.TurnID != opts.targetTurnID {
+			if shouldSkipCodexAppServerSnapshotDuplicate(evt, opts.appServerSequence) {
+				continue
+			}
+			if shouldSkipCodexDesktopReplayDuplicate(evt, opts.desktopEpoch, opts.desktopRevision, opts.replayedActions) {
 				continue
 			}
 			ticksWithoutEvent = 0
-			messageProgress.beforeEvent(evt, callbacks)
-			if evt.Kind == "interrupted" {
-				return "", attachedCodexInterruptedError(opts, evt)
-			}
-			if evt.Approval != nil {
-				if err := a.handleAttachedCodexApproval(ctx, evt); err != nil {
-					return "", err
-				}
-				continue
-			}
-			if evt.UserInput != nil {
-				if err := a.handleCodexUserInputEvent(ctx, evt); err != nil {
-					return "", fmt.Errorf("user input response error: %w", err)
-				}
-				continue
-			}
-			if evt.Kind == "error" {
-				return "", fmt.Errorf("%w: %s", ErrCodexTurnTerminal, diagnostics.withError(evt.Text))
-			}
-			collectCodexTurnText(
-				assembler, evt,
-				callbacks, diagnostics, &messageProgress,
-			)
-			if evt.Kind == "completed" {
-				return a.attachedCodexFinalText(ctx, opts.conversationID, opts.threadID, assembler)
+			if text, done, err := processEvent(evt); done || err != nil {
+				return text, err
 			}
 		}
 	}
+}
+
+func shouldSkipCodexAppServerSnapshotDuplicate(event *codexTurnEvent, replaySequence uint64) bool {
+	if event == nil || replaySequence == 0 || event.Sequence == 0 || event.Sequence > replaySequence ||
+		isCodexTurnControlEvent(event) || event.Progress != nil {
+		return false
+	}
+	return event.Delta != "" || event.Text != "" || event.Kind == "item_completed" || event.Kind == "activity"
+}
+
+func codexInteractionIDs(events []*codexTurnEvent) map[string]bool {
+	result := make(map[string]bool)
+	for _, event := range events {
+		if id := codexInteractionID(event); id != "" {
+			result[id] = true
+		}
+	}
+	return result
+}
+
+func codexInteractionID(event *codexTurnEvent) string {
+	if event == nil {
+		return ""
+	}
+	if event.Approval != nil {
+		return strings.TrimSpace(event.Approval.Request.RequestID)
+	}
+	if event.UserInput != nil {
+		return strings.TrimSpace(event.UserInput.Request.RequestID)
+	}
+	return ""
+}
+
+func shouldSkipCodexDesktopReplayDuplicate(event *codexTurnEvent, replayEpoch uint64, replayRevision uint64, replayedActions map[string]bool) bool {
+	if event == nil || replayEpoch == 0 || event.DesktopEpoch == 0 {
+		return false
+	}
+	if event.DesktopEpoch < replayEpoch {
+		return true
+	}
+	if event.DesktopEpoch > replayEpoch || replayRevision == 0 || event.DesktopRevision == 0 || event.DesktopRevision > replayRevision {
+		return false
+	}
+	if id := codexInteractionID(event); id != "" {
+		return replayedActions[id]
+	}
+	return true
 }
 
 // attachedCodexInterruptedError 保留 watcher 后续核对 rollout 所需的 thread 和 turn 身份。
@@ -162,16 +306,27 @@ func (a *ACPAgent) refreshAttachedCodexThread(ctx context.Context, conversationI
 }
 
 // reconcileAttachedCodexTurn 在实时事件缺失时根据当前 active turn 判断原任务是否已经结束。
-func (a *ACPAgent) reconcileAttachedCodexTurn(ctx context.Context, opts codexThreadWatchOptions, assembler *codexFinalAssembler) (string, bool, error) {
+func (a *ACPAgent) reconcileAttachedCodexTurn(
+	ctx context.Context,
+	opts codexThreadWatchOptions,
+	assembler *codexFinalAssembler,
+	refreshed bool,
+) (string, bool, error) {
 	state, err := a.ReadCodexThreadState(ctx, opts.conversationID, opts.threadID)
 	if err != nil {
 		return "", false, err
+	}
+	if err := validateCodexWatchTurnIdentity(opts.targetTurnID, state); err != nil {
+		return "", true, err
 	}
 	if state.Active && (opts.targetTurnID == "" || state.ActiveTurnID == "" || state.ActiveTurnID == opts.targetTurnID) {
 		return "", false, nil
 	}
 	if interrupted := interruptedCodexThreadStateError(state, opts.threadID, opts.targetTurnID); interrupted != nil {
 		return "", true, interrupted
+	}
+	if a.desktopWatchAwaitingFinal(opts, state) && !refreshed {
+		return "", false, nil
 	}
 	if text := assembler.finalText(); text != "" {
 		return text, true, nil
@@ -180,6 +335,30 @@ func (a *ACPAgent) reconcileAttachedCodexTurn(ctx context.Context, opts codexThr
 		return state.LastAgentMessageText, true, nil
 	}
 	return "Codex App 本地任务已完成，但没有返回文本。", true, nil
+}
+
+func validateCodexWatchTurnIdentity(targetTurnID string, state CodexThreadState) error {
+	targetTurnID = strings.TrimSpace(targetTurnID)
+	if targetTurnID == "" {
+		return nil
+	}
+	observedTurnID := strings.TrimSpace(state.LastTurnID)
+	if state.Active {
+		observedTurnID = strings.TrimSpace(state.ActiveTurnID)
+	}
+	if observedTurnID == "" || observedTurnID == targetTurnID {
+		return nil
+	}
+	return fmt.Errorf("%w: expected turn %s, observed %s", ErrCodexControlChanged, targetTurnID, observedTurnID)
+}
+
+func (a *ACPAgent) desktopWatchAwaitingFinal(opts codexThreadWatchOptions, state CodexThreadState) bool {
+	binding, ok := a.runtimeBindingForThread(opts.conversationID, opts.threadID)
+	if !ok || binding.Runtime != CodexRuntimeDesktop || a.desktopRuntime == nil {
+		return false
+	}
+	turnID := firstNonEmpty(strings.TrimSpace(opts.targetTurnID), strings.TrimSpace(state.LastTurnID))
+	return a.desktopRuntime.awaitingFinalAnswer(opts.threadID, turnID)
 }
 
 // interruptedCodexThreadStateError 从权威快照识别漏收事件后的中断终态。
@@ -226,14 +405,14 @@ func collectCodexTurnText(
 		return
 	}
 	if evt.Delta != "" {
-		assembler.addDelta(evt.ItemID, evt.Delta)
+		assembler.addDelta(evt.ItemID, evt.MessagePhase, evt.Delta)
 	}
 	if evt.Text != "" {
 		if evt.Kind == "item_completed" {
-			assembler.addCompleted(evt.ItemID, evt.Text)
+			assembler.addCompleted(evt.ItemID, evt.MessagePhase, evt.Text)
 			messageProgress.observeCompleted(evt, callbacks)
 		} else {
-			assembler.addSnapshot(evt.ItemID, evt.Text)
+			assembler.addSnapshot(evt.ItemID, evt.MessagePhase, evt.Text)
 		}
 	}
 }

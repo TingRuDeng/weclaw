@@ -27,20 +27,22 @@ func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, rep
 }
 
 type replyDeliveryRequest struct {
-	ctx         context.Context
-	replyWriter platform.Replier
-	userID      string
-	agentName   string
-	reply       string
-	trace       observability.TraceContext
+	ctx           context.Context
+	replyWriter   platform.Replier
+	userID        string
+	agentName     string
+	reply         string
+	trace         observability.TraceContext
+	deliveryGuard terminalDeliveryGuard
 }
 
 type progressReplyDelivery struct {
-	delivery replyDeliveryRequest
-	failed   bool
-	stopped  bool
-	finish   func(string, bool) bool
-	progress *progressSession
+	delivery       replyDeliveryRequest
+	failed         bool
+	stopped        bool
+	idempotencyKey string
+	finish         func(string, bool) bool
+	progress       *progressSession
 }
 
 type replyDeliveryProjection struct {
@@ -60,7 +62,14 @@ func (h *Handler) sendReplyWithMediaAfterStreamCore(ctx context.Context, replyWr
 
 func (h *Handler) prepareReplyDelivery(req replyDeliveryRequest) replyDeliveryProjection {
 	attachmentPaths := extractLocalAttachmentPaths(req.reply)
-	sentPaths, failedPaths := h.sendLocalAttachments(req, attachmentPaths)
+	var sentPaths, failedPaths []string
+	if h.withFollowerDeliveryGuard(req.deliveryGuard, req.replyWriter, func() {
+		sentPaths, failedPaths = h.sendLocalAttachments(req, attachmentPaths)
+	}) {
+		// sentPaths/failedPaths 已由受保护的投递路径填充。
+	} else {
+		failedPaths = append(failedPaths, attachmentPaths...)
+	}
 	return replyDeliveryProjection{
 		text:      rewriteReplyWithAttachmentResults(req.reply, sentPaths, failedPaths),
 		imageURLs: ExtractImageURLs(req.reply),
@@ -94,6 +103,22 @@ func (h *Handler) sendLocalAttachments(req replyDeliveryRequest, paths []string)
 }
 
 func (h *Handler) sendReplyProjection(req replyDeliveryRequest, projection replyDeliveryProjection, finalInStream bool) {
+	if !replyProjectionHasPayload(projection, finalInStream) {
+		return
+	}
+	allowed, reason := h.withFollowerDeliveryGuardReason(req.deliveryGuard, req.replyWriter, func() {
+		h.sendReplyProjectionAuthorized(req, projection, finalInStream)
+	})
+	if !allowed {
+		h.recordTraceStage(req.trace, "reply.delivery.suppressed", "dropped", "follower_guard="+reason)
+	}
+}
+
+func replyProjectionHasPayload(projection replyDeliveryProjection, finalInStream bool) bool {
+	return !finalInStream && strings.TrimSpace(projection.text) != "" || len(projection.imageURLs) > 0
+}
+
+func (h *Handler) sendReplyProjectionAuthorized(req replyDeliveryRequest, projection replyDeliveryProjection, finalInStream bool) {
 	if setter, ok := optionalTextChunkLimitSetter(req.replyWriter); ok {
 		setter.SetTextChunkLimit(textReplyChunkLimit(req.ctx))
 	}
@@ -130,6 +155,44 @@ func (h *Handler) sendReplyProjection(req replyDeliveryRequest, projection reply
 		return
 	}
 	h.recordTraceStage(req.trace, "reply.delivery.completed", "completed", "reply projection sent")
+}
+
+func (h *Handler) withFollowerDeliveryGuard(guard terminalDeliveryGuard, reply platform.Replier, deliver func()) bool {
+	allowed, _ := h.withFollowerDeliveryGuardReason(guard, reply, deliver)
+	return allowed
+}
+
+func (h *Handler) withFollowerDeliveryGuardReason(guard terminalDeliveryGuard, reply platform.Replier, deliver func()) (bool, string) {
+	if guard.empty() {
+		deliver()
+		return true, ""
+	}
+	if !guard.complete() {
+		return false, "guard_incomplete"
+	}
+	if reply == nil {
+		return false, "reply_unavailable"
+	}
+	reporter, ok := optionalDeliveryRouteReporter(reply)
+	if !ok || !reporter.DeliveryRoute().Valid() {
+		return false, "route_unavailable"
+	}
+	h.codexFollowerDeliveryMu.RLock()
+	defer h.codexFollowerDeliveryMu.RUnlock()
+	h.mu.RLock()
+	registry := h.platformRegistry
+	h.mu.RUnlock()
+	entry := &terminalOutboxEntry{
+		Route: reporter.DeliveryRoute(), AuthorizedIdentity: guard.AuthorizedIdentity,
+		FollowerBindingKey: guard.FollowerBindingKey, FollowerRevision: guard.FollowerRevision,
+		FollowerThreadID: guard.FollowerThreadID,
+	}
+	allowed, reason := h.terminalOutboxDeliveryDecision(registry, entry)
+	if !allowed {
+		return false, reason
+	}
+	deliver()
+	return true, ""
 }
 
 func optionalTextChunkLimitSetter(reply platform.Replier) (platform.TextChunkLimitSetter, bool) {
@@ -376,12 +439,18 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 	if strings.TrimSpace(projection.text) == "" && !req.progress.hasDurableTerminalStream() {
 		return false, false
 	}
+	guard := req.delivery.deliveryGuard
+	if guard.empty() && req.progress != nil {
+		guard = req.progress.terminalDeliveryGuardSnapshot()
+	}
 	resultTitle, richResult := req.progress.terminalResultPresentation()
 	recoveryDraft := terminalOutboxDraft{
 		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed, Stopped: req.stopped,
 		ResultTitle: resultTitle, RichResult: richResult,
-		Text: terminalRecoveryText(req.progress, projection.text, req.failed, req.stopped), Trace: req.delivery.trace,
+		Text:           terminalRecoveryText(req.progress, projection.text, req.failed, req.stopped),
+		IdempotencyKey: strings.TrimSpace(req.idempotencyKey), Trace: req.delivery.trace,
 	}
+	guard.apply(&recoveryDraft)
 	reservationID := req.progress.activeRecoveryReservation()
 	if reservationID == "" {
 		reservation, err := outbox.reserve(recoveryDraft)
@@ -425,8 +494,10 @@ func (h *Handler) finishProgressReplyWithOutbox(req progressReplyDelivery, proje
 	draft := terminalOutboxDraft{
 		Route: reporter.DeliveryRoute(), AgentName: req.delivery.agentName, Failed: req.failed, Stopped: req.stopped,
 		Checkpoint: checkpoint, ResultTitle: resultTitle, RichResult: richResult,
-		Text: text, Notification: prepared.notification, Trace: req.delivery.trace,
+		Text: text, Notification: prepared.notification,
+		IdempotencyKey: strings.TrimSpace(req.idempotencyKey), Trace: req.delivery.trace,
 	}
+	guard.apply(&draft)
 	if checkpoint == nil && strings.TrimSpace(text) == "" && strings.TrimSpace(draft.Notification) == "" {
 		draft.Text = recoveryDraft.Text
 	}

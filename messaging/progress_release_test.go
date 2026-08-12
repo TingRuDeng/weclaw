@@ -141,7 +141,7 @@ func TestCodexFirstTurnReplacementRecoversTracePersistenceFailureAfterRestart(t 
 		BindingKey: bindingKey, WorkspaceRoot: workspace, ConversationID: conversationID,
 		TargetThreadID: "thread-old", PendingFirstTurn: true, SetFollower: true,
 		Follower: &codexFrontendFollower{
-			WorkspaceRoot: workspace, ThreadID: "thread-old", ActorUserID: "user",
+			WorkspaceRoot: workspace, ThreadID: "thread-old", ActorUserID: "user", AuthorizedIdentity: "user",
 			DeliveryRoute: route,
 		},
 		Expected: selection,
@@ -201,7 +201,7 @@ func TestCodexFirstTurnReplacementRecoversTracePersistenceFailureAfterRestart(t 
 	state := externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
 		ThreadID: "thread-new", Active: true, ActiveTurnID: "turn-new",
 	}}
-	if err := restarted.reconcileCodexFollowerRecoveries(snapshots[0], state, restartedReply); err != nil {
+	if _, err := restarted.reconcileCodexFollowerRecoveries(snapshots[0], state, restartedReply); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := loadTerminalOutbox(outboxPath)

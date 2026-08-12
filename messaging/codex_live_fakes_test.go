@@ -15,6 +15,8 @@ type fakeCodexLiveAgent struct {
 	binding                      agent.CodexThreadBinding
 	bindings                     map[string]agent.CodexThreadBinding
 	bindErr                      error
+	currentErr                   error
+	enforceControl               bool
 	inspectErrors                map[string]error
 	handoffErr                   error
 	handoffErrors                map[string]error
@@ -115,7 +117,7 @@ func (f *fakeCodexLiveAgent) CurrentCodexRuntime(req agent.CodexRuntimeRequest) 
 	}
 	binding.Ref = req.Ref
 	binding.Control = req.Intent
-	return binding, nil
+	return binding, f.currentErr
 }
 
 func (f *fakeCodexLiveAgent) ReconcileCodexObservedTurn(_ context.Context, req agent.CodexRuntimeRequest, state agent.CodexThreadState) (agent.CodexThreadBinding, error) {
@@ -130,7 +132,7 @@ func (f *fakeCodexLiveAgent) ReconcileCodexObservedTurn(_ context.Context, req a
 	}
 	intentEstablished := binding.Control.Owner != "" || binding.Control.RouteKey != "" ||
 		binding.Control.ConversationID != "" || binding.Control.Revision != 0
-	if intentEstablished && binding.Control != req.Intent {
+	if f.enforceControl && intentEstablished && binding.Control != req.Intent {
 		return binding, agent.ErrCodexControlChanged
 	}
 	state.ThreadID = req.Ref.ThreadID

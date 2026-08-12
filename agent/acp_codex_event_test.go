@@ -35,6 +35,33 @@ func TestACPAgentCodexErrorNotificationReachesActiveTurn(t *testing.T) {
 	}
 }
 
+func TestCodexNotificationDispatchPreservesWireSequence(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	turnCh := make(chan *codexTurnEvent, 2)
+	a.notifyMu.Lock()
+	a.turnCh["thread-1"] = turnCh
+	a.notifyMu.Unlock()
+
+	if !a.dispatchCodexNotification(rpcResponse{
+		Method: "item/agentMessage/delta", Sequence: 31,
+		Params: json.RawMessage(`{"threadId":"thread-1","itemId":"message-1","delta":"增量"}`),
+	}, "") {
+		t.Fatal("item delta was not consumed")
+	}
+	if !a.dispatchCodexNotification(rpcResponse{
+		Method: "turn/completed", Sequence: 32,
+		Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`),
+	}, "") {
+		t.Fatal("turn completion was not consumed")
+	}
+	if event := <-turnCh; event.Sequence != 31 || event.Delta != "增量" {
+		t.Fatalf("delta event=%#v, want wire sequence 31", event)
+	}
+	if event := <-turnCh; event.Sequence != 32 || event.Kind != "completed" {
+		t.Fatalf("terminal event=%#v, want wire sequence 32", event)
+	}
+}
+
 func TestACPAgentConsumesCodexThreadSettingsUpdated(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	params := json.RawMessage(`{"threadId":"thread-1","threadSettings":{"model":"gpt-5.6-sol","effort":"max","serviceTier":"priority"}}`)

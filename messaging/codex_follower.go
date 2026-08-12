@@ -19,6 +19,7 @@ const defaultCodexFollowerReconcileInterval = 2 * time.Second
 type codexFollowerService struct {
 	registry *platform.Registry
 	interval time.Duration
+	wake     chan struct{}
 }
 
 // StartCodexFollowerReconciler 恢复持久化的飞书同步端点，并持续观察本地端稍后启动的新 turn。
@@ -36,6 +37,7 @@ func (h *Handler) startCodexFollowerReconciler(ctx context.Context, registry *pl
 	service := &codexFollowerService{
 		registry: registry,
 		interval: interval,
+		wake:     make(chan struct{}, 1),
 	}
 	h.codexFollowerMu.Lock()
 	if h.codexFollower != nil {
@@ -63,6 +65,7 @@ func (h *Handler) runCodexFollowerReconciler(ctx context.Context, service *codex
 		select {
 		case <-ctx.Done():
 			return
+		case <-service.wake:
 		case <-ticker.C:
 		}
 	}
@@ -86,6 +89,11 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 	if !h.ensureCodexSessions().followerMatches(snapshot) {
 		return nil
 	}
+	if !h.codexFollowerAuthorized(registry, snapshot) {
+		h.detachUnauthorizedCodexFollowers(registry, snapshot.Target.DeliveryRoute.Platform,
+			snapshot.Target.DeliveryRoute.AccountID)
+		return nil
+	}
 	reply, ok := registry.ReplierForRoute(snapshot.Target.DeliveryRoute)
 	if !ok || reply == nil {
 		return fmt.Errorf("飞书投递路由暂不可用")
@@ -101,6 +109,7 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		agentName:      snapshot.AgentName,
 		agent:          ag,
 		conversationID: snapshot.ConversationID,
+		bindingKey:     snapshot.BindingKey,
 		threadID:       snapshot.Target.ThreadID,
 		workspaceRoot:  snapshot.Target.WorkspaceRoot,
 		platform:       snapshot.Target.DeliveryRoute.Platform,
@@ -113,63 +122,233 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		reply:                        reply,
 		runtimeInactiveAuthoritative: true,
 	}
-	prepared, err := h.prepareExternalCodexTask(opts)
-	if err != nil {
-		return err
-	}
 	unlock, err := h.lockCodexSessionBinding(ctx, snapshot.BindingKey, "follow")
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	bindingLocked := true
+	defer func() {
+		if bindingLocked {
+			unlock()
+		}
+	}()
+	if !h.ensureCodexSessions().followerMatches(snapshot) {
+		return nil
+	}
+	liveAgent, ok := ag.(agent.CodexLiveRuntimeAgent)
+	if !ok {
+		return errCodexSessionAcquireUnsupported
+	}
+	unlockThread, err := h.lockCodexSessionThread(ctx, snapshot.Target.ThreadID, "follow")
+	if err != nil {
+		return err
+	}
+	threadLocked := true
+	defer func() {
+		if threadLocked {
+			unlockThread()
+		}
+	}()
+	h.codexFollowerDeliveryMu.RLock()
+	deliveryLocked := true
+	defer func() {
+		if deliveryLocked {
+			h.codexFollowerDeliveryMu.RUnlock()
+		}
+	}()
+	if !h.ensureCodexSessions().followerMatches(snapshot) {
+		return nil
+	}
+	if !h.codexFollowerAuthorized(registry, snapshot) {
+		h.codexFollowerDeliveryMu.RUnlock()
+		deliveryLocked = false
+		unlockThread()
+		threadLocked = false
+		unlock()
+		bindingLocked = false
+		h.detachUnauthorizedCodexFollowers(registry, snapshot.Target.DeliveryRoute.Platform,
+			snapshot.Target.DeliveryRoute.AccountID)
+		return nil
+	}
+	route := codexConversationRoute{
+		bindingKey: snapshot.BindingKey, conversationID: snapshot.ConversationID,
+		workspaceRoot: snapshot.Target.WorkspaceRoot, threadID: snapshot.Target.ThreadID,
+	}
+	request := h.buildCodexRuntimeRequestForTurn(route, snapshot.Target.ThreadID)
+	if err := ensureCodexFollowerRuntime(ctx, liveAgent, request); err != nil {
+		return err
+	}
+	prepared, err := h.prepareExternalCodexTask(opts)
+	if err != nil {
+		return err
+	}
 	if !h.ensureCodexSessions().followerMatches(snapshot) {
 		return nil
 	}
 	if prepared.active {
-		liveAgent, ok := ag.(agent.CodexLiveRuntimeAgent)
-		if !ok {
-			return errCodexSessionAcquireUnsupported
-		}
-		unlockThread, lockErr := h.lockCodexSessionThread(ctx, snapshot.Target.ThreadID, "follow")
-		if lockErr != nil {
-			return lockErr
-		}
-		route := codexConversationRoute{
-			bindingKey: snapshot.BindingKey, conversationID: snapshot.ConversationID,
-			workspaceRoot: snapshot.Target.WorkspaceRoot, threadID: snapshot.Target.ThreadID,
-		}
-		request := h.buildCodexRuntimeRequestForTurn(route, snapshot.Target.ThreadID)
+		opts.terminalDeliveryKey = codexFollowerTerminalOutboxID(snapshot, prepared.state.ActiveTurnID)
 		_, reconcileErr := liveAgent.ReconcileCodexObservedTurn(ctx, request, prepared.state.CodexThreadState)
-		unlockThread()
 		if reconcileErr != nil {
 			return reconcileErr
 		}
 	}
-	if recoveryErr := h.reconcileCodexFollowerRecoveries(snapshot, prepared.state, reply); recoveryErr != nil {
+	unlockThread()
+	threadLocked = false
+	if !prepared.active && h.activeTaskOwnsCodexFollowerTurn(snapshot, prepared.state) {
+		return nil
+	}
+	recoveredTerminal, recoveryErr := h.reconcileCodexFollowerRecoveries(snapshot, prepared.state, reply)
+	if recoveryErr != nil {
 		log.Printf("[codex-follower] 恢复旧进度卡失败 route=%q thread=%q: %v",
 			snapshot.BindingKey, snapshot.Target.ThreadID, recoveryErr)
 	}
+	if recoveredTerminal {
+		if recoveryErr != nil {
+			return recoveryErr
+		}
+		return h.ensureCodexSessions().commitFollowerTurnClaim(snapshot, prepared.state.LastTurnID)
+	}
 	if !prepared.active {
-		return nil
+		return h.reconcileInactiveCodexFollower(snapshot, prepared.state)
 	}
 	reservation, err := h.reserveExternalCodexTask(opts, prepared)
 	if err != nil {
 		return err
 	}
+	reservation.task.setTerminalDeliveryKey(opts.terminalDeliveryKey)
+	reservation.task.setTerminalDeliveryGuard(terminalDeliveryGuardFromFollower(snapshot))
+	if err := h.ensureCodexSessions().commitFollowerTurnPending(snapshot, prepared.state.ActiveTurnID); err != nil {
+		h.cancelExternalCodexTaskReservation(reservation)
+		return err
+	}
 	if !h.activateExternalCodexTaskReservation(reservation) {
 		h.cancelExternalCodexTaskReservation(reservation)
+		// Pending 游标必须保留：它明确表示尚无 durable observer/outbox 取得终态责任。
+		// 后续调和会重试观察；若 turn 已结束，inactive 分支会补投确定性终态。
 		return errExternalCodexTaskReservationConflict
 	}
 	return nil
 }
 
-func (h *Handler) reconcileCodexFollowerRecoveries(snapshot codexFollowerSnapshot, state externalCodexTaskState, reply platform.Replier) error {
+func (h *Handler) codexFollowerAuthorized(registry *platform.Registry, snapshot codexFollowerSnapshot) bool {
+	return registry.AllowsStoredIdentity(
+		snapshot.Target.DeliveryRoute.Platform,
+		snapshot.Target.DeliveryRoute.AccountID,
+		[]string{snapshot.Target.AuthorizedIdentity},
+	)
+}
+
+func ensureCodexFollowerRuntime(ctx context.Context, liveAgent agent.CodexLiveRuntimeAgent, request agent.CodexRuntimeRequest) error {
+	binding, err := liveAgent.CurrentCodexRuntime(request)
+	if err == nil && codexRuntimeReadyForRemoteTurn(binding.Runtime) {
+		return nil
+	}
+	_, err = liveAgent.HandoffCodexRuntime(ctx, request)
+	if err != nil {
+		return err
+	}
+	binding, err = liveAgent.CurrentCodexRuntime(request)
+	if err != nil {
+		return err
+	}
+	if !codexRuntimeReadyForRemoteTurn(binding.Runtime) {
+		return agent.ErrCodexRuntimeUnavailable
+	}
+	return nil
+}
+
+func (h *Handler) activeTaskOwnsCodexFollowerTurn(snapshot codexFollowerSnapshot, state externalCodexTaskState) bool {
+	targetTurnID := strings.TrimSpace(state.ActiveTurnID)
+	if targetTurnID == "" {
+		targetTurnID = strings.TrimSpace(state.LastTurnID)
+	}
+	h.tasks.mu.Lock()
+	defer h.tasks.mu.Unlock()
+	task := h.tasks.active[snapshot.ConversationID]
+	if task == nil {
+		return false
+	}
+	task.mu.Lock()
+	defer task.mu.Unlock()
+	return task.codexThreadID == strings.TrimSpace(snapshot.Target.ThreadID) &&
+		task.codexTurnID == targetTurnID
+}
+
+func (h *Handler) reconcileInactiveCodexFollower(snapshot codexFollowerSnapshot, state externalCodexTaskState) error {
+	turnID := strings.TrimSpace(state.LastTurnID)
+	if !snapshot.FollowTurnInitialized {
+		return h.ensureCodexSessions().commitFollowerTurnClaim(snapshot, turnID)
+	}
+	if turnID == "" || turnID == strings.TrimSpace(snapshot.FollowTurnID) && !snapshot.FollowTurnPending {
+		return nil
+	}
+	draft, terminal := codexFollowerTerminalDraft(snapshot, state)
+	if !terminal {
+		return nil
+	}
 	outbox := h.currentTerminalOutbox()
 	if outbox == nil {
-		return nil
+		return ErrTerminalOutboxUnavailable
+	}
+	if _, err := outbox.enqueue(draft); err != nil {
+		return err
+	}
+	outbox.signal()
+	return h.ensureCodexSessions().commitFollowerTurnClaim(snapshot, turnID)
+}
+
+func codexFollowerTerminalDraft(snapshot codexFollowerSnapshot, state externalCodexTaskState) (terminalOutboxDraft, bool) {
+	status := strings.ToLower(strings.TrimSpace(state.LastTurnStatus))
+	text := ""
+	failed, stopped := false, false
+	switch status {
+	case "completed":
+		text = firstNonBlank(state.LastAgentMessageText, "Codex App 本地任务已完成，但没有返回文本。")
+	case "failed", "error":
+		failed = true
+		text = renderFinalFailure("", fmt.Errorf("Codex 本地任务执行失败"))
+	case "interrupted", "cancelled", "canceled":
+		stopped = true
+		text = renderFinalStopped("")
+	default:
+		return terminalOutboxDraft{}, false
+	}
+	return terminalOutboxDraft{
+		ID:                 codexFollowerTerminalOutboxID(snapshot, state.LastTurnID),
+		Route:              snapshot.Target.DeliveryRoute,
+		AgentName:          snapshot.AgentName,
+		AuthorizedIdentity: snapshot.Target.AuthorizedIdentity,
+		FollowerBindingKey: snapshot.BindingKey, FollowerRevision: snapshot.Revision,
+		FollowerThreadID: snapshot.Target.ThreadID,
+		Failed:           failed,
+		Stopped:          stopped,
+		ResultTitle:      progressResultTitleForAgentWorkspace(snapshot.AgentName, snapshot.Target.WorkspaceRoot, 60),
+		RichResult:       true,
+		Text:             text,
+		IdempotencyKey:   codexFollowerTerminalOutboxID(snapshot, state.LastTurnID),
+	}, true
+}
+
+func codexFollowerTerminalOutboxID(snapshot codexFollowerSnapshot, turnID string) string {
+	route := snapshot.Target.DeliveryRoute
+	identity := strings.Join([]string{
+		"weclaw.codex-follower-terminal.v1",
+		string(route.Platform), strings.TrimSpace(route.AccountID), strings.TrimSpace(route.ChatID),
+		strings.TrimSpace(snapshot.BindingKey), strings.TrimSpace(snapshot.Target.AuthorizedIdentity),
+		strings.TrimSpace(snapshot.AgentName),
+		strings.TrimSpace(snapshot.Target.ThreadID), strings.TrimSpace(turnID),
+	}, "\x00")
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(identity)).String()
+}
+
+func (h *Handler) reconcileCodexFollowerRecoveries(snapshot codexFollowerSnapshot, state externalCodexTaskState, reply platform.Replier) (bool, error) {
+	outbox := h.currentTerminalOutbox()
+	if outbox == nil {
+		return false, nil
 	}
 	entries := outbox.heldCodexFollowerRecoveries(snapshot)
 	var joined error
+	terminalRecovered := false
 	for _, entry := range entries {
 		if entry.Stream == nil || entry.Trace == nil {
 			continue
@@ -197,8 +376,10 @@ func (h *Handler) reconcileCodexFollowerRecoveries(snapshot codexFollowerSnapsho
 		entryTurnID := strings.TrimSpace(entry.Trace.TurnID)
 		if !state.Active {
 			if entryTurnID != "" && entryTurnID == strings.TrimSpace(state.LastTurnID) {
-				if err := h.finalizeHeldCodexFollowerRecovery(outbox, entry, state); err != nil {
+				if err := h.finalizeHeldCodexFollowerRecovery(outbox, entry, snapshot, state); err != nil {
 					joined = errors.Join(joined, err)
+				} else {
+					terminalRecovered = true
 				}
 			} else {
 				outbox.releaseHeldCodexFollowerRecovery(entry.ID)
@@ -245,10 +426,15 @@ func (h *Handler) reconcileCodexFollowerRecoveries(snapshot codexFollowerSnapsho
 			snapshot.RecoveryReservationID,
 		)
 	}
-	return joined
+	return terminalRecovered, joined
 }
 
-func (h *Handler) finalizeHeldCodexFollowerRecovery(outbox *terminalOutbox, entry *terminalOutboxEntry, state externalCodexTaskState) error {
+func (h *Handler) finalizeHeldCodexFollowerRecovery(
+	outbox *terminalOutbox,
+	entry *terminalOutboxEntry,
+	snapshot codexFollowerSnapshot,
+	state externalCodexTaskState,
+) error {
 	status := strings.ToLower(strings.TrimSpace(state.LastTurnStatus))
 	stopped := status == "interrupted" || status == "cancelled" || status == "canceled"
 	failed := status == "failed" || status == "error"
@@ -266,7 +452,11 @@ func (h *Handler) finalizeHeldCodexFollowerRecovery(outbox *terminalOutbox, entr
 	}
 	if err := outbox.stageReservationResult(entry.ID, terminalOutboxDraft{
 		Route: entry.Route, AgentName: entry.AgentName, Failed: failed, Stopped: stopped,
-		ResultTitle: entry.ResultTitle, RichResult: entry.RichResult, Text: text, Trace: trace,
+		AuthorizedIdentity: snapshot.Target.AuthorizedIdentity,
+		FollowerBindingKey: snapshot.BindingKey, FollowerRevision: snapshot.Revision,
+		FollowerThreadID: snapshot.Target.ThreadID,
+		ResultTitle:      entry.ResultTitle, RichResult: entry.RichResult, Text: text,
+		IdempotencyKey: codexFollowerTerminalOutboxID(snapshot, state.LastTurnID), Trace: trace,
 	}); err != nil {
 		return err
 	}

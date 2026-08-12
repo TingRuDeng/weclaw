@@ -76,6 +76,63 @@ func TestDetachedObserverDoesNotSubmitDefaultApprovalDecision(t *testing.T) {
 	}
 }
 
+func TestApprovalHandlerFailureDoesNotSubmitDefaultDecision(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	wantErr := errors.New("feishu approval card unavailable")
+	ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+		return "", wantErr
+	})
+	responded := false
+	evt := &codexTurnEvent{Approval: &codexApprovalRequest{
+		Request: ApprovalRequest{
+			RequestID: "approval-1",
+			Options:   []ApprovalOption{{ID: "allow", Name: "允许"}, {ID: "deny", Name: "拒绝"}},
+		},
+		Respond: func(context.Context, string) error {
+			responded = true
+			return nil
+		},
+	}}
+
+	err := a.handleCodexApprovalEvent(ctx, evt)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("approval error=%v, want %v", err, wantErr)
+	}
+	if responded {
+		t.Fatal("failed approval delivery submitted a default decision")
+	}
+}
+
+func TestAppServerApprovalWaitsForFrontendObserver(t *testing.T) {
+	var out bytes.Buffer
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.stdin = nopWriteCloser{Buffer: &out}
+	raw := `{"jsonrpc":"2.0","id":11,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-pending","turnId":"turn-1","itemId":"call-1","toolCall":{"cmd":"apply_patch"},"options":[{"optionId":"allow_once","name":"Allow","kind":"allow"},{"optionId":"deny_once","name":"Deny","kind":"deny"}]}}`
+
+	a.handlePermissionRequestAt(raw, 7)
+
+	if out.Len() != 0 {
+		t.Fatalf("unobserved approval wrote a provider response: %s", out.String())
+	}
+	pending := a.claimPendingCodexInteractions("thread-pending")
+	if len(pending) != 1 {
+		t.Fatalf("pending approvals=%d, want 1", len(pending))
+	}
+	evt := pending[0]
+	if evt.TurnID != "turn-1" || evt.Sequence != 7 {
+		t.Fatalf("pending event turn=%q sequence=%d, want turn-1/7", evt.TurnID, evt.Sequence)
+	}
+	ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+		return "allow_once", nil
+	})
+	if err := a.handleCodexApprovalEvent(ctx, evt); err != nil {
+		t.Fatalf("replayed approval response: %v", err)
+	}
+	if !strings.Contains(out.String(), `"decision":"allow_once"`) {
+		t.Fatalf("provider response=%s, want allow_once", out.String())
+	}
+}
+
 func TestSelectPermissionOptionUsesCodexFileChangeDecisionFallback(t *testing.T) {
 	params := permissionRequestParams{
 		AvailableDecisionsSnake: permissionDecisions{"accept", "cancel"},

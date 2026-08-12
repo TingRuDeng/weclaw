@@ -181,6 +181,55 @@ func TestCodexDesktopStateIgnoresStaleConnectionEpoch(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopReplayWatermarkDistinguishesConnectionEpoch(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	oldRaw := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "inProgress", []any{
+		map[string]any{"id": "message-old", "type": "agentMessage", "phase": "commentary", "status": "completed", "text": "旧连接进度"},
+	})})
+	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 100, raw: oldRaw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	batch := store.replayActiveTurnBatch("thread-1")
+	oldEvent := findCodexDesktopEventByItemID(t, batch.Events, "message-old")
+
+	newRaw := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "inProgress", []any{
+		map[string]any{"id": "message-new", "type": "agentMessage", "phase": "commentary", "status": "completed", "text": "新连接进度"},
+	})})
+	update, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 2, revision: 1, raw: newRaw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newEvent := findCodexDesktopEventByItemID(t, update.Events, "message-new")
+
+	if batch.Epoch != 1 || batch.Revision != 100 || oldEvent.DesktopEpoch != 1 || oldEvent.DesktopRevision != 100 {
+		t.Fatalf("old watermark batch=%#v event=%#v", batch, oldEvent)
+	}
+	if newEvent.DesktopEpoch != 2 || newEvent.DesktopRevision != 1 {
+		t.Fatalf("new watermark event=%#v", newEvent)
+	}
+	if !shouldSkipCodexDesktopReplayDuplicate(oldEvent, batch.Epoch, batch.Revision, nil) {
+		t.Fatal("same-epoch event already included in replay was not skipped")
+	}
+	if shouldSkipCodexDesktopReplayDuplicate(newEvent, batch.Epoch, batch.Revision, nil) {
+		t.Fatal("new connection epoch event was mistaken for an old replay duplicate")
+	}
+}
+
+func findCodexDesktopEventByItemID(t *testing.T, events []*codexTurnEvent, itemID string) *codexTurnEvent {
+	t.Helper()
+	for _, event := range events {
+		if event != nil && event.ItemID == itemID {
+			return event
+		}
+	}
+	t.Fatalf("item %q not found in %#v", itemID, events)
+	return nil
+}
+
 func TestCodexDesktopStateKeepsOnlyPendingRequests(t *testing.T) {
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
 	raw := desktopStateFixture("thread-1", "idle")

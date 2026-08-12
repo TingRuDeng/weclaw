@@ -332,8 +332,8 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		log.Printf("[feishu] ignored duplicate card action event: event_id=%s", action.EventID)
 		return duplicateCardActionResponse(), nil
 	}
-	if action.Action == cardActionTaskProgressCollapse {
-		return a.handleTaskProgressCollapse(ctx, action), nil
+	if action.Action == cardActionTaskProgressExpand || action.Action == cardActionTaskProgressCollapse {
+		return a.handleTaskProgressControl(ctx, action, action.Action == cardActionTaskProgressExpand), nil
 	}
 	metadata := map[string]string{"source": "card.action.trigger"}
 	if action.SessionKey != "" {

@@ -94,9 +94,36 @@ type progressSession struct {
 	effectiveProgressSeen bool
 	typingStarted         bool
 	recoveryReservation   string
+	deliveryGuard         terminalDeliveryGuard
 	segmentAnchor         *agent.ProgressEvent
 	segmentNumber         int
 	latestTaskSnapshot    progressCardSnapshot
+}
+
+func (s *progressSession) setTerminalDeliveryGuard(guard terminalDeliveryGuard) {
+	if s == nil {
+		return
+	}
+	s.streamMu.Lock()
+	s.deliveryGuard = guard
+	reservationID := s.recoveryReservation
+	s.streamMu.Unlock()
+	if reservationID != "" && s.handler != nil {
+		if outbox := s.handler.currentTerminalOutbox(); outbox != nil {
+			if err := outbox.refreshReservationDeliveryGuard(reservationID, guard); err != nil {
+				log.Printf("[terminal-outbox] failed to refresh delivery guard: %v", err)
+			}
+		}
+	}
+}
+
+func (s *progressSession) terminalDeliveryGuardSnapshot() terminalDeliveryGuard {
+	if s == nil {
+		return terminalDeliveryGuard{}
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.deliveryGuard
 }
 
 // claimDetachWithoutTerminal 在线性化点冻结终态竞争；实际卡片更新和持久化在锁外完成。
@@ -165,6 +192,10 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithFinal(ctx context.Con
 
 // startProgressSessionForWorkspaceAgentWithHandle 额外返回内部会话，供终态 outbox 在网络写入前导出 checkpoint。
 func (h *Handler) startProgressSessionForWorkspaceAgentWithHandle(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig) (func(string), func(string, bool) bool, *progressSession) {
+	return h.startProgressSessionForWorkspaceAgentWithGuard(ctx, reply, prefix, agentName, workspaceRoot, taskText, cfg, terminalDeliveryGuard{})
+}
+
+func (h *Handler) startProgressSessionForWorkspaceAgentWithGuard(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig, guard terminalDeliveryGuard) (func(string), func(string, bool) bool, *progressSession) {
 	if cfg.Mode == "" {
 		cfg = config.DefaultProgressConfig()
 	}
@@ -177,7 +208,8 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithHandle(ctx context.Co
 		handler: h, ctx: progressCtx, cancel: cancel, reply: reply,
 		prefix: prefix, agentName: agentName, workspaceRoot: workspaceRoot,
 		taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
-		snapshotCh: make(chan progressCardSnapshot, 1),
+		snapshotCh:    make(chan progressCardSnapshot, 1),
+		deliveryGuard: guard,
 	}
 	session.start()
 	return session.onProgress, session.stopWithFinal, session
@@ -312,6 +344,21 @@ func (s *progressSession) stopBackground() bool {
 		s.cancelTyping()
 	}
 	return parentCanceled
+}
+
+// discardDetachedWithoutTerminal 停止已被投递栅栏撤销的进度会话，并清除其
+// durable recovery；它不再更新原卡片，供账号撤权等禁止继续出站的路径使用。
+func (s *progressSession) discardDetachedWithoutTerminal() {
+	if s == nil {
+		return
+	}
+	s.stopBackground()
+	s.streamMu.Lock()
+	s.detachClaimed = false
+	s.finished = true
+	s.terminalClaimed = true
+	s.discardActiveStreamRecoveryLocked()
+	s.streamMu.Unlock()
 }
 
 // detachWithoutTerminal 冻结当前进度展示，但不把共享任务宣告为完成、失败或停止。
@@ -948,11 +995,13 @@ func (s *progressSession) persistActiveStreamRecoveryLocked(stream platform.Stre
 	}
 	trace, _ := observability.TraceFromContext(s.ctx)
 	resultTitle, richResult := s.terminalResultPresentationLocked()
-	reservation, err := outbox.reserve(terminalOutboxDraft{
+	draft := terminalOutboxDraft{
 		Route: reporter.DeliveryRoute(), AgentName: s.agentName, Stopped: true,
 		Stream: &reference, ResultTitle: resultTitle, RichResult: richResult,
 		Text: activeStreamRestartText, Trace: trace, ActiveStreamRecovery: true,
-	})
+	}
+	s.deliveryGuard.apply(&draft)
+	reservation, err := outbox.reserve(draft)
 	if err != nil {
 		return err
 	}

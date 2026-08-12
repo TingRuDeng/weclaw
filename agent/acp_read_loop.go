@@ -160,9 +160,9 @@ func (a *ACPAgent) dispatchCodexNotification(msg rpcResponse, line string) bool 
 func (a *ACPAgent) dispatchCodexMessageNotification(msg rpcResponse) bool {
 	switch msg.Method {
 	case "codex/event/agent_message_delta":
-		a.handleCodexDelta(msg.Params)
+		a.handleCodexDeltaAt(msg.Params, msg.Sequence)
 	case "item/agentMessage/delta":
-		a.handleCodexItemDelta(msg.Params)
+		a.handleCodexItemDeltaAt(msg.Params, msg.Sequence)
 	case "item/started":
 		a.handleCodexItemStartedAt(msg.Params, msg.Sequence)
 	case "item/completed":
@@ -177,13 +177,13 @@ func (a *ACPAgent) dispatchCodexMessageNotification(msg rpcResponse) bool {
 func (a *ACPAgent) dispatchCodexTurnNotification(msg rpcResponse) bool {
 	switch msg.Method {
 	case "turn/started", "turn/completed", "turn/failed":
-		a.handleCodexTurnEvent(msg.Method, msg.Params)
+		a.handleCodexTurnEventAt(msg.Method, msg.Params, msg.Sequence)
 	case "turn/plan/updated":
 		a.handleCodexTurnPlanUpdatedAt(msg.Params, msg.Sequence)
 	case "warning":
 		a.handleCodexWarning(msg.Params)
 	case "error":
-		a.handleCodexError(msg.Params)
+		a.handleCodexErrorAt(msg.Params, msg.Sequence)
 	default:
 		return false
 	}

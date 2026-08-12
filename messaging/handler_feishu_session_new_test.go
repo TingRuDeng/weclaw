@@ -24,10 +24,10 @@ func TestFeishuNewUsesGroupSessionMetadataForReset(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant_1:group:oc_1"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", Text: "/new",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
-	}, reply)
+	}, "ou_user"), reply)
 
 	_, resetConversation := ag.resetSnapshot()
 	if !strings.Contains(resetConversation, sessionKey) {
@@ -57,11 +57,11 @@ func TestHandleGlobalNewPassesFeishuObserverContext(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant:dm:chat-new:ou_actor"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_actor",
 		MessageID: "global-new-context", Text: "/new",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
-	}, reply)
+	}, "ou_actor"), reply)
 
 	conversationID := buildCodexConversationID(sessionKey, "codex", workspace)
 	task, active := h.activeTask(conversationID)

@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 
@@ -23,17 +24,31 @@ func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	if _, ok := opts.taskOpts.agent.(agent.CodexLiveRuntimeAgent); !ok {
 		return false
 	}
+	if h.ensureCodexSessions().isPendingFirstTurn(
+		opts.route.bindingKey, opts.route.workspaceRoot, opts.route.threadID,
+	) {
+		return false
+	}
 	resolution, err := h.resolveBoundCodexRuntimeLocked(codexRuntimeResolveOptions{
 		route: opts.route, threadID: opts.route.threadID, ag: opts.taskOpts.agent,
 	})
 	if err != nil {
 		log.Printf("[codex-task] 共享 host 运行时快照暂不可用 thread=%q: %v", opts.route.threadID, err)
+		h.rejectCodexTaskStart(opts, err)
+		return true
+	}
+	switch resolution.Binding.Runtime {
+	case agent.CodexRuntimeDesktop, agent.CodexRuntimeWeClaw:
+		if codexResolutionActive(resolution) {
+			return h.steerMessageIntoLiveTask(opts)
+		}
 		return false
+	case agent.CodexRuntimeConflict:
+		h.rejectCodexTaskStart(opts, agent.ErrCodexRuntimeConflict)
+	default:
+		h.rejectCodexTaskStart(opts, agent.ErrCodexRuntimeUnavailable)
 	}
-	if codexRuntimeReadyForRemoteTurn(resolution.Binding.Runtime) && codexResolutionActive(resolution) {
-		return h.steerMessageIntoLiveTask(opts)
-	}
-	return false
+	return true
 }
 
 func codexResolutionActive(resolution codexRuntimeResolution) bool {
@@ -47,7 +62,8 @@ func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions) bool 
 	state, active, err := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
 		ctx: taskOpts.ctx, actorUserID: taskOpts.userID, routeUserID: taskOpts.routeUserID,
 		agentName: taskOpts.agentName, agent: taskOpts.agent,
-		conversationID: opts.route.conversationID, threadID: opts.route.threadID,
+		conversationID: opts.route.conversationID, bindingKey: opts.route.bindingKey,
+		threadID:      opts.route.threadID,
 		workspaceRoot: opts.route.workspaceRoot,
 		progressCfg:   taskOpts.progressCfg, reply: taskOpts.reply,
 	})
@@ -87,6 +103,13 @@ func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions) bool 
 
 func (h *Handler) rejectCodexTaskStart(opts codexTaskPreflightOptions, err error) {
 	opts.cancel()
+	if errors.Is(err, agent.ErrCodexRuntimeUnavailable) ||
+		errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown) ||
+		errors.Is(err, agent.ErrCodexDesktopDisconnected) {
+		sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID,
+			"Codex App 运行通道暂不可用，会话绑定已保留。请稍后重试，或发送 /cx status 查看状态。")
+		return
+	}
 	message := fmt.Sprintf("当前 Codex 会话暂不能开始任务: %v", err)
 	sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID, message)
 }

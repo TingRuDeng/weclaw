@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +14,11 @@ func codexFollowerFromAcquire(req codexSessionAcquireRequest) (*codexFrontendFol
 	if req.platform != platform.PlatformFeishu || req.reply == nil {
 		return nil, false
 	}
-	reporter, ok := optionalDeliveryRouteReporter(req.reply)
+	authorizedIdentity := strings.TrimSpace(req.authorizedIdentity)
+	if authorizedIdentity == "" {
+		return nil, false
+	}
+	reporter, ok := optionalDeliveryRouteReporter(progressReplier(req.reply))
 	if !ok {
 		return nil, false
 	}
@@ -27,11 +33,12 @@ func codexFollowerFromAcquire(req codexSessionAcquireRequest) (*codexFrontendFol
 		return nil, false
 	}
 	follower := normalizeCodexFrontendFollower(&codexFrontendFollower{
-		WorkspaceRoot: req.route.workspaceRoot,
-		ThreadID:      req.route.threadID,
-		ActorUserID:   firstNonBlank(req.actorUserID, req.routeUserID),
-		DeliveryRoute: route,
-		UpdatedAt:     time.Now().UTC().Format(time.RFC3339),
+		WorkspaceRoot:      req.route.workspaceRoot,
+		ThreadID:           req.route.threadID,
+		ActorUserID:        firstNonBlank(req.actorUserID, req.routeUserID),
+		AuthorizedIdentity: authorizedIdentity,
+		DeliveryRoute:      route,
+		UpdatedAt:          time.Now().UTC().Format(time.RFC3339),
 	})
 	return follower, follower != nil
 }
@@ -52,12 +59,13 @@ func normalizeCodexFrontendFollower(source *codexFrontendFollower) *codexFronten
 	follower.WorkspaceRoot = normalizeCodexWorkspaceRoot(follower.WorkspaceRoot)
 	follower.ThreadID = strings.TrimSpace(follower.ThreadID)
 	follower.ActorUserID = strings.TrimSpace(follower.ActorUserID)
+	follower.AuthorizedIdentity = strings.TrimSpace(follower.AuthorizedIdentity)
 	follower.DeliveryRoute.AccountID = strings.TrimSpace(follower.DeliveryRoute.AccountID)
 	follower.DeliveryRoute.ChatID = strings.TrimSpace(follower.DeliveryRoute.ChatID)
 	follower.DeliveryRoute.ReplyToID = strings.TrimSpace(follower.DeliveryRoute.ReplyToID)
 	follower.UpdatedAt = strings.TrimSpace(follower.UpdatedAt)
 	if follower.WorkspaceRoot == "" || follower.ThreadID == "" ||
-		follower.ActorUserID == "" || !follower.DeliveryRoute.Valid() {
+		follower.ActorUserID == "" || follower.AuthorizedIdentity == "" || !follower.DeliveryRoute.Valid() {
 		return nil
 	}
 	return &follower
@@ -68,6 +76,15 @@ func sameCodexFrontendFollower(left *codexFrontendFollower, right *codexFrontend
 		return left == nil && right == nil
 	}
 	return *left == *right
+}
+
+func sameCodexFrontendFollowerIdentity(left *codexFrontendFollower, right *codexFrontendFollower) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.WorkspaceRoot == right.WorkspaceRoot && left.ThreadID == right.ThreadID &&
+		left.ActorUserID == right.ActorUserID && left.AuthorizedIdentity == right.AuthorizedIdentity &&
+		sameDeliveryEndpoint(left.DeliveryRoute, right.DeliveryRoute)
 }
 
 func routeUserIDFromCodexBindingKey(bindingKey string) string {
@@ -82,6 +99,88 @@ func (s *codexSessionStore) followerSnapshots() []codexFollowerSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.followerSnapshotsLocked()
+}
+
+func (s *codexSessionStore) followerSnapshot(bindingKey string) (codexFollowerSnapshot, bool) {
+	bindingKey = strings.TrimSpace(bindingKey)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, snapshot := range s.followerSnapshotsLocked() {
+		if snapshot.BindingKey == bindingKey {
+			return snapshot, true
+		}
+	}
+	return codexFollowerSnapshot{}, false
+}
+
+type codexFollowerTurnDeliveryClaim struct {
+	snapshot    codexFollowerSnapshot
+	deliveryKey string
+}
+
+func (h *Handler) codexFollowerTurnClaim(
+	bindingKey string,
+	conversationID string,
+	threadID string,
+	turnID string,
+) (codexFollowerTurnDeliveryClaim, bool) {
+	snapshot, ok := h.ensureCodexSessions().followerSnapshot(bindingKey)
+	if !ok || snapshot.ConversationID != strings.TrimSpace(conversationID) ||
+		strings.TrimSpace(snapshot.Target.ThreadID) != strings.TrimSpace(threadID) ||
+		strings.TrimSpace(turnID) == "" {
+		return codexFollowerTurnDeliveryClaim{}, false
+	}
+	return codexFollowerTurnDeliveryClaim{
+		snapshot: snapshot, deliveryKey: codexFollowerTerminalOutboxID(snapshot, turnID),
+	}, true
+}
+
+func (h *Handler) claimCodexFollowerTurnForTask(
+	bindingKey string,
+	conversationID string,
+	threadID string,
+	turnID string,
+	task *activeAgentTask,
+) error {
+	claim, ok := h.codexFollowerTurnClaim(bindingKey, conversationID, threadID, turnID)
+	if !ok {
+		return nil
+	}
+	if task != nil {
+		task.setTerminalDeliveryKey(claim.deliveryKey)
+		task.setTerminalDeliveryGuard(terminalDeliveryGuardFromFollower(claim.snapshot))
+	}
+	if err := h.ensureCodexSessions().commitFollowerTurnPending(claim.snapshot, turnID); err != nil {
+		if errors.Is(err, errCodexRemoteSelectionChanged) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func terminalDeliveryGuardFromFollower(snapshot codexFollowerSnapshot) terminalDeliveryGuard {
+	return terminalDeliveryGuard{
+		AuthorizedIdentity: snapshot.Target.AuthorizedIdentity,
+		FollowerBindingKey: snapshot.BindingKey,
+		FollowerRevision:   snapshot.Revision,
+		FollowerThreadID:   snapshot.Target.ThreadID,
+	}
+}
+
+func (h *Handler) codexFollowerDeliveryGuardForTask(task *activeAgentTask) terminalDeliveryGuard {
+	if h == nil || task == nil {
+		return terminalDeliveryGuard{}
+	}
+	task.mu.Lock()
+	bindingKey := codexBindingKey(task.routeUserID, task.agentName)
+	threadID := strings.TrimSpace(task.codexThreadID)
+	task.mu.Unlock()
+	snapshot, ok := h.ensureCodexSessions().followerSnapshot(bindingKey)
+	if !ok || strings.TrimSpace(snapshot.Target.ThreadID) != threadID {
+		return terminalDeliveryGuard{}
+	}
+	return terminalDeliveryGuardFromFollower(snapshot)
 }
 
 func (s *codexSessionStore) followerSnapshotsLocked() []codexFollowerSnapshot {
@@ -104,6 +203,9 @@ func (s *codexSessionStore) followerSnapshotsLocked() []codexFollowerSnapshot {
 			BindingKey: bindingKey, RouteUserID: routeUserID, AgentName: agentName,
 			ConversationID:        buildCodexConversationID(routeUserID, agentName, follower.WorkspaceRoot),
 			Revision:              binding.FollowRevision,
+			FollowTurnID:          strings.TrimSpace(binding.FollowTurnID),
+			FollowTurnInitialized: binding.FollowTurnInitialized,
+			FollowTurnPending:     binding.FollowTurnPending,
 			RecoveryThreadID:      strings.TrimSpace(session.FirstTurnRecoveryThreadID),
 			RecoveryReservationID: strings.TrimSpace(session.FirstTurnRecoveryReservationID),
 			Target:                *follower,
@@ -116,12 +218,130 @@ func (s *codexSessionStore) followerSnapshotsLocked() []codexFollowerSnapshot {
 func (s *codexSessionStore) followerMatches(snapshot codexFollowerSnapshot) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.followerMatchesLocked(snapshot)
+}
+
+func (h *Handler) terminalOutboxDeliveryAllowed(registry *platform.Registry, entry *terminalOutboxEntry) bool {
+	allowed, _ := h.terminalOutboxDeliveryDecision(registry, entry)
+	return allowed
+}
+
+func (h *Handler) terminalOutboxDeliveryDecision(registry *platform.Registry, entry *terminalOutboxEntry) (bool, string) {
+	if entry == nil {
+		return false, "entry_missing"
+	}
+	guard := terminalDeliveryGuardFromEntry(entry)
+	if guard.empty() {
+		return true, ""
+	}
+	if !guard.complete() {
+		return false, "guard_incomplete"
+	}
+	if registry == nil {
+		return false, "registry_unavailable"
+	}
+	if !registry.AllowsStoredIdentity(entry.Route.Platform, entry.Route.AccountID, []string{guard.AuthorizedIdentity}) {
+		return false, "identity_not_allowed"
+	}
+	snapshot, ok := h.ensureCodexSessions().followerSnapshot(guard.FollowerBindingKey)
+	if !ok {
+		return false, "follower_missing"
+	}
+	if snapshot.Revision != guard.FollowerRevision {
+		return false, "revision_changed"
+	}
+	if strings.TrimSpace(snapshot.Target.ThreadID) != guard.FollowerThreadID {
+		return false, "thread_changed"
+	}
+	if strings.TrimSpace(snapshot.Target.AuthorizedIdentity) != guard.AuthorizedIdentity {
+		return false, "identity_changed"
+	}
+	if !sameDeliveryEndpoint(snapshot.Target.DeliveryRoute, entry.Route) {
+		return false, "route_changed"
+	}
+	return true, ""
+}
+
+func (s *codexSessionStore) followerMatchesLocked(snapshot codexFollowerSnapshot) bool {
 	binding := s.bindings[snapshot.BindingKey]
 	session := binding.Workspaces[snapshot.Target.WorkspaceRoot]
 	return binding.FollowRevision == snapshot.Revision &&
 		sameCodexFrontendFollower(binding.Follower, &snapshot.Target) &&
+		strings.TrimSpace(binding.FollowTurnID) == strings.TrimSpace(snapshot.FollowTurnID) &&
+		binding.FollowTurnInitialized == snapshot.FollowTurnInitialized &&
+		binding.FollowTurnPending == snapshot.FollowTurnPending &&
 		strings.TrimSpace(session.FirstTurnRecoveryThreadID) == strings.TrimSpace(snapshot.RecoveryThreadID) &&
 		strings.TrimSpace(session.FirstTurnRecoveryReservationID) == strings.TrimSpace(snapshot.RecoveryReservationID)
+}
+
+// clearFollowerIfMatches 按 revision 和投递身份 CAS 清除一个已撤权的主动观察端点。
+// workspace/thread 选择仍保留；重新授权后必须由用户再次选择才会重新建立同步。
+func (s *codexSessionStore) clearFollowerIfMatches(snapshot codexFollowerSnapshot) (bool, error) {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding, ok := s.bindings[snapshot.BindingKey]
+	if !ok || binding.FollowRevision != snapshot.Revision ||
+		!sameCodexFrontendFollower(binding.Follower, &snapshot.Target) {
+		return false, nil
+	}
+	nextBindings := cloneCodexSessionBindings(s.bindings)
+	binding = nextBindings[snapshot.BindingKey]
+	binding.Follower = nil
+	binding.FollowRevision++
+	clearCodexFollowerTurnState(&binding)
+	nextBindings[snapshot.BindingKey] = binding
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := s.persistCandidate(s.filePath, codexSessionState{
+		Version: codexSessionStateVersion, Bindings: nextBindings,
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: now,
+	}); err != nil {
+		return false, fmt.Errorf("保存 Codex follower 撤权: %w", err)
+	}
+	s.bindings = nextBindings
+	return true, nil
+}
+
+// commitFollowerTurnClaim 在 outbox 或观察任务取得可靠投递责任后，原子推进 durable follower 游标。
+func (s *codexSessionStore) commitFollowerTurnClaim(snapshot codexFollowerSnapshot, turnID string) error {
+	return s.commitFollowerTurnState(snapshot, turnID, true, false)
+}
+
+// commitFollowerTurnPending 记录该 route 已发现 active turn，但尚未取得持久终态投递责任。
+func (s *codexSessionStore) commitFollowerTurnPending(snapshot codexFollowerSnapshot, turnID string) error {
+	return s.commitFollowerTurnState(snapshot, turnID, true, true)
+}
+
+func (s *codexSessionStore) commitFollowerTurnState(
+	snapshot codexFollowerSnapshot,
+	turnID string,
+	initialized bool,
+	pending bool,
+) error {
+	turnID = strings.TrimSpace(turnID)
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.followerMatchesLocked(snapshot) {
+		return errCodexRemoteSelectionChanged
+	}
+	nextBindings := cloneCodexSessionBindings(s.bindings)
+	binding := nextBindings[snapshot.BindingKey]
+	binding.FollowTurnID = turnID
+	binding.FollowTurnInitialized = initialized
+	binding.FollowTurnPending = pending
+	nextBindings[snapshot.BindingKey] = binding
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := s.persistCandidate(s.filePath, codexSessionState{
+		Version: codexSessionStateVersion, Bindings: nextBindings,
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: now,
+	}); err != nil {
+		return err
+	}
+	s.bindings = nextBindings
+	return nil
 }
 
 type codexReleasedFollowerSnapshot struct {

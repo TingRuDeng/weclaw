@@ -16,21 +16,23 @@ var (
 	errCodexSessionAcquireActiveOld   = errors.New("当前会话任务仍在执行")
 	errCodexSessionAcquireUncertain   = errors.New("Codex 会话绑定结果未确认")
 	errCodexSessionAcquireUnsupported = errors.New("当前 Codex Agent 不支持共享 app-server 会话绑定")
+	errCodexFollowerAccessChanged     = errors.New("飞书授权状态已变化，请重新发送命令")
 )
 
 // codexSessionAcquireRequest describes one frontend binding operation. The
 // route identifies a client view; it is not a global writer owner.
 type codexSessionAcquireRequest struct {
-	ctx         context.Context
-	actorUserID string
-	routeUserID string
-	agentName   string
-	agent       agent.Agent
-	route       codexConversationRoute
-	platform    platform.PlatformName
-	accountID   string
-	reply       platform.Replier
-	taskContext context.Context
+	ctx                context.Context
+	actorUserID        string
+	authorizedIdentity string
+	routeUserID        string
+	agentName          string
+	agent              agent.Agent
+	route              codexConversationRoute
+	platform           platform.PlatformName
+	accountID          string
+	reply              platform.Replier
+	taskContext        context.Context
 	// pendingFirstTurn marks a thread created by thread/start that has not yet
 	// accepted its first user turn.
 	pendingFirstTurn bool
@@ -92,16 +94,31 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 			return codexSessionAcquireResult{}, err
 		}
 	}
+	preBindRuntime, preBindRuntimeErr := liveAgent.CurrentCodexRuntime(providerRequest)
+	unlockFollowerDelivery := func() {}
+	if req.platform == platform.PlatformFeishu {
+		h.codexFollowerDeliveryMu.RLock()
+		unlockFollowerDelivery = h.codexFollowerDeliveryMu.RUnlock
+		if !h.codexFollowerIdentityAuthorized(req.platform, req.accountID, req.authorizedIdentity) {
+			unlockFollowerDelivery()
+			return codexSessionAcquireResult{}, errCodexFollowerAccessChanged
+		}
+	}
+	defer unlockFollowerDelivery()
 	follower, setFollower := codexFollowerFromAcquire(req)
+	followerBaseline := codexFollowerBaselineFromSources(providerRollout, preBindRuntime, preBindRuntimeErr)
 	committed, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
-		BindingKey:       req.route.bindingKey,
-		WorkspaceRoot:    req.route.workspaceRoot,
-		TargetThreadID:   req.route.threadID,
-		ConversationID:   req.route.conversationID,
-		PendingFirstTurn: req.pendingFirstTurn,
-		SetFollower:      setFollower,
-		Follower:         follower,
-		Expected:         locked,
+		BindingKey:              req.route.bindingKey,
+		WorkspaceRoot:           req.route.workspaceRoot,
+		TargetThreadID:          req.route.threadID,
+		ConversationID:          req.route.conversationID,
+		PendingFirstTurn:        req.pendingFirstTurn,
+		SetFollower:             setFollower,
+		Follower:                follower,
+		FollowerTurnID:          followerBaseline.turnID,
+		FollowerTurnInitialized: setFollower && followerBaseline.initialized,
+		FollowerTurnPending:     setFollower && followerBaseline.pending,
+		Expected:                locked,
 	})
 	if err != nil {
 		return codexSessionAcquireResult{}, err
@@ -141,6 +158,36 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		h.commitCodexTaskCardFocus(req.route.bindingKey, req.route.conversationID)
 	}
 	return result, err
+}
+
+type codexFollowerBaseline struct {
+	turnID      string
+	initialized bool
+	pending     bool
+}
+
+func codexFollowerBaselineFromSources(
+	rollout codexRolloutTaskState,
+	binding agent.CodexThreadBinding,
+	stateErr error,
+) codexFollowerBaseline {
+	if stateErr == nil && codexRuntimeReadyForRemoteTurn(binding.Runtime) {
+		state := binding.State
+		if state.Active {
+			if turnID := firstNonBlank(state.ActiveTurnID, state.LastTurnID); turnID != "" {
+				return codexFollowerBaseline{turnID: turnID, initialized: true, pending: true}
+			}
+		} else if turnID := strings.TrimSpace(state.LastTurnID); turnID != "" {
+			return codexFollowerBaseline{turnID: turnID, initialized: true}
+		}
+	}
+	if turnID := strings.TrimSpace(rollout.TurnID); turnID != "" {
+		return codexFollowerBaseline{turnID: turnID, initialized: true, pending: rollout.Active}
+	}
+	// 绑定提交本身就是 follower 的观察起点。即使 Desktop handler 暂不可用，
+	// 也要持久化一个空基线；否则在首次成功调和前快速完成的第一轮会被误当成历史。
+	// 若本地 rollout 或权威 runtime 能证明既有 turn，上面的分支已经记录其 ID。
+	return codexFollowerBaseline{initialized: true}
 }
 
 func (h *Handler) recoverPreviousCodexThreadHandoff(
@@ -191,7 +238,8 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 		ctx: taskContext, actorUserID: req.actorUserID,
 		routeUserID: req.routeUserID, agentName: req.agentName,
 		agent: req.agent, conversationID: req.route.conversationID,
-		threadID: req.route.threadID, workspaceRoot: req.route.workspaceRoot, platform: req.platform,
+		bindingKey: req.route.bindingKey,
+		threadID:   req.route.threadID, workspaceRoot: req.route.workspaceRoot, platform: req.platform,
 		accountID: req.accountID, reply: req.reply,
 	}
 }
@@ -200,6 +248,9 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 // Failure affects progress mirroring only; the frontend binding remains valid.
 func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, req codexSessionAcquireRequest, liveAgent agent.CodexLiveRuntimeAgent) (codexSessionAcquireResult, error) {
 	opts := externalCodexTaskOptionsFromAcquire(req)
+	// 只有绑定事务最初确实看见过 active turn，后续的 inactive 快照才是
+	// 同一事务内的权威终态确认。否则仍要允许 rollout 作为跨进程活动证据，
+	// 避免 app-server 暂时空闲的快照覆盖本地仍在运行的任务。
 	opts.runtimeInactiveAuthoritative = result.resolution.Binding.State.Active
 	prepared, err := h.prepareExternalCodexTask(opts)
 	if err != nil {
@@ -221,9 +272,24 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 		err = fmt.Errorf("共享 app-server 的活动任务暂不能建立观察流")
 		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
 	}
+	if prepared.active {
+		if snapshot, ok := h.ensureCodexSessions().followerSnapshot(req.route.bindingKey); ok {
+			opts.terminalDeliveryKey = codexFollowerTerminalOutboxID(snapshot, prepared.state.ActiveTurnID)
+		}
+	}
 	reservation, err := h.reserveExternalCodexTask(opts, prepared)
 	if err != nil {
 		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
+	}
+	if prepared.active {
+		if snapshot, ok := h.ensureCodexSessions().followerSnapshot(req.route.bindingKey); ok {
+			reservation.task.setTerminalDeliveryKey(opts.terminalDeliveryKey)
+			reservation.task.setTerminalDeliveryGuard(terminalDeliveryGuardFromFollower(snapshot))
+			if err := h.ensureCodexSessions().commitFollowerTurnPending(snapshot, prepared.state.ActiveTurnID); err != nil {
+				h.cancelExternalCodexTaskReservation(reservation)
+				return h.failCodexAcquireRuntime(result, liveAgent, err), nil
+			}
+		}
 	}
 	observerReady := h.activateExternalCodexTaskReservation(reservation)
 	if prepared.active && !observerReady {

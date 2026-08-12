@@ -56,9 +56,9 @@ func newFeishuExternalProgressFixture(t *testing.T) feishuExternalProgressFixtur
 
 func TestCodexExternalAppTaskUsesFeishuAccountProgress(t *testing.T) {
 	fixture := newFeishuExternalProgressFixture(t)
-	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	fixture.h.HandlePlatformMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/cx cd weclaw",
-	}, fixture.reply)
+	}, "ou_user"), fixture.reply)
 	close(fixture.watchDone)
 	waitUntil(t, func() bool {
 		_, active := fixture.h.activeTask(buildCodexConversationID("ou_user", "codex", fixture.workspace))

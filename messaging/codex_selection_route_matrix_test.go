@@ -27,11 +27,11 @@ type feishuOriginalRouteFixture struct {
 func TestFeishuSessionButtonBindsOriginalRouteOnly(t *testing.T) {
 	fixture := newFeishuOriginalRouteFixture(t)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	fixture.h.HandleMessage(context.Background(), platform.IncomingMessage{
+	fixture.h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "fs-bot", UserID: fixture.actor,
 		MessageID: "session-button", Metadata: map[string]string{feishuSessionMetadataKey: fixture.route},
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cx switch thread-target"}},
-	}, reply)
+	}, fixture.actor), reply)
 	assertFeishuOriginalRouteBound(t, fixture, reply)
 }
 

@@ -96,8 +96,8 @@ func (t feishuDispatchTicket) runAfterOrderedWait(ctx context.Context, wait func
 	}
 	done := make(chan struct{})
 	go func() {
-		defer t.finish()
 		defer close(done)
+		defer t.finish()
 		dispatch()
 	}()
 	select {

@@ -72,6 +72,7 @@ func (s *codexSessionStore) releaseWorkspaceThread(
 		strings.TrimSpace(binding.Follower.ThreadID) == threadID {
 		binding.Follower = nil
 		binding.FollowRevision++
+		clearCodexFollowerTurnState(&binding)
 	}
 	nextBindings[bindingKey] = binding
 

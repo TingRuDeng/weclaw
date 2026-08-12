@@ -303,6 +303,50 @@ func TestCodexRuntimeReconcilesObservedHandoffTurnBeforeTerminal(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeReconcileAllowsSameTurnFromAnotherFrontendWhenControlNotEnforced(t *testing.T) {
+	registry := newCodexRuntimeOwnerRegistry(nil)
+	routeA := remoteCodexRuntimeRequest("thread-1", "route-a", 1)
+	routeB := remoteCodexRuntimeRequest("thread-1", "route-b", 1)
+	active := CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-shared",
+	}
+	if _, err := registry.activateRuntime(routeA, CodexRuntimeDesktop, active); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.activateRuntime(routeB, CodexRuntimeDesktop, active); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := registry.reconcileObservedTurn(routeA, active); err != nil {
+		t.Fatalf("reconcile active from route A: %v", err)
+	}
+	terminal := CodexThreadState{
+		ThreadID: "thread-1", LastTurnID: "turn-shared", LastTurnStatus: "completed",
+	}
+	if _, err := registry.reconcileObservedTurn(routeA, terminal); err != nil {
+		t.Fatalf("reconcile terminal from route A: %v", err)
+	}
+}
+
+func TestCodexRuntimeReconcileStillRejectsChangedControlWhenEnforced(t *testing.T) {
+	registry := newLegacyCodexRuntimeOwnerRegistry()
+	routeA := remoteCodexRuntimeRequest("thread-1", "route-a", 1)
+	routeB := remoteCodexRuntimeRequest("thread-1", "route-b", 1)
+	active := CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-shared",
+	}
+	if _, err := registry.activateRuntime(routeA, CodexRuntimeDesktop, active); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.activateRuntime(routeB, CodexRuntimeDesktop, active); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := registry.reconcileObservedTurn(routeA, active); !errors.Is(err, ErrCodexControlChanged) {
+		t.Fatalf("reconcile error=%v, want ErrCodexControlChanged", err)
+	}
+}
+
 func TestCodexRuntimeReconcileDoesNotClearExplicitConflict(t *testing.T) {
 	registry := newLegacyCodexRuntimeOwnerRegistry()
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)

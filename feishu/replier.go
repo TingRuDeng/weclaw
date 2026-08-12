@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -151,12 +152,32 @@ func (r *Replier) DeliveryRoute() platform.DeliveryRoute {
 
 // DeliverTerminal 重放已经持久化的 CardKit 终态操作。
 func (r *Replier) DeliverTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {
-	return deliverFeishuTerminalCheckpoint(ctx, r.cardKit, checkpoint)
+	if err := deliverFeishuTerminalCheckpoint(ctx, r.cardKit, checkpoint); err != nil {
+		return err
+	}
+	if r.taskCards == nil {
+		return nil
+	}
+	var op feishuStreamTerminalOp
+	if json.Unmarshal(checkpoint.Payload, &op) == nil && op.TaskCard != nil {
+		r.taskCards.recordWithSequence(op.CardID, op.TaskCard.cardOptions(op.CardID), op.UpdateSeq)
+	}
+	return nil
 }
 
 // DeliverSupersede 重放已经持久化的 CardKit 旧卡收敛操作。
 func (r *Replier) DeliverSupersede(ctx context.Context, checkpoint platform.SupersedeCheckpoint) error {
-	return deliverFeishuSupersedeCheckpoint(ctx, r.cardKit, checkpoint)
+	if err := deliverFeishuSupersedeCheckpoint(ctx, r.cardKit, checkpoint); err != nil {
+		return err
+	}
+	if r.taskCards == nil {
+		return nil
+	}
+	var op feishuStreamTerminalOp
+	if json.Unmarshal(checkpoint.Payload, &op) == nil && op.TaskCard != nil {
+		r.taskCards.recordWithSequence(op.CardID, op.TaskCard.cardOptions(op.CardID), op.UpdateSeq)
+	}
+	return nil
 }
 
 // SendImage 上传并发送本地图片。

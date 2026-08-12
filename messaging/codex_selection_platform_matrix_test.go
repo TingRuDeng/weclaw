@@ -56,10 +56,14 @@ func TestCodexSelectionBindsForWeChatAndFeishu(t *testing.T) {
 				}
 			}
 
-			h.HandleMessage(context.Background(), platform.IncomingMessage{
+			msg := platform.IncomingMessage{
 				Platform: test.platform, AccountID: test.account, UserID: test.actor,
 				MessageID: test.name + "-select", Text: "/cx switch thread-b", Metadata: test.metadata,
-			}, reply)
+			}
+			if test.platform == platform.PlatformFeishu {
+				msg = authorizeIncomingMessageForTest(t, msg, test.actor)
+			}
+			h.HandleMessage(context.Background(), msg, reply)
 			if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "已切换并绑定") {
 				t.Fatalf("texts=%#v", reply.Texts)
 			}

@@ -6,46 +6,37 @@ import (
 	"testing"
 )
 
-func TestBuildTaskCardUsesCollapsibleProgressPanel(t *testing.T) {
+func TestBuildTaskCardUsesExplicitProgressVisibilityControls(t *testing.T) {
 	statuses := []struct {
 		status   string
 		expanded bool
 	}{{cardStatusThinking, true}, {cardStatusStreaming, true}, {cardStatusSuperseded, false}, {cardStatusDone, false}, {cardStatusStopped, false}, {cardStatusError, false}}
 	for _, tt := range statuses {
-		raw, err := buildCardV2(cardOptions{Status: tt.status, Title: "Codex", Summary: "摘要", Content: "详情", Collapsible: true, Expanded: tt.expanded})
+		raw, err := buildCardV2(cardOptions{
+			Status: tt.status, Title: "Codex", Summary: "摘要", Content: "详情",
+			Collapsible: true, Expanded: tt.expanded, taskCardID: "card-task-1",
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		card := decodeCardJSON(t, raw)
 		elements := card["body"].(map[string]any)["elements"].([]any)
-		summaryIndex, panelIndex := -1, -1
-		for i, element := range elements {
-			id := element.(map[string]any)["element_id"]
-			if id == cardProgressSummaryID {
-				summaryIndex = i
+		mainVisible, expandVisible, collapseVisible, summaryVisible := false, false, false, false
+		for _, rawElement := range elements {
+			element := rawElement.(map[string]any)
+			switch element["element_id"] {
+			case cardMainContentID:
+				mainVisible = true
+			case cardProgressExpandID:
+				expandVisible = true
+			case cardProgressCollapseID:
+				collapseVisible = true
+			case "progress_summary":
+				summaryVisible = true
 			}
-			if id == cardProgressPanelID {
-				panelIndex = i
-			}
 		}
-		if summaryIndex < 0 || panelIndex < 0 || summaryIndex >= panelIndex {
-			t.Fatalf("status=%s elements=%#v", tt.status, elements)
-		}
-		panel := elements[panelIndex].(map[string]any)
-		if panel["tag"] != "collapsible_panel" || panel["element_id"] != cardProgressPanelID || panel["expanded"] != tt.expanded {
-			t.Fatalf("status=%s panel=%#v", tt.status, panel)
-		}
-		header := panel["header"].(map[string]any)["title"].(map[string]any)
-		wantHeader := "完整进度"
-		if !tt.expanded {
-			wantHeader = "展开完整进度"
-		}
-		if header["content"] != wantHeader {
-			t.Fatalf("header=%#v", header)
-		}
-		inside := panel["elements"].([]any)
-		if len(inside) != 1 || inside[0].(map[string]any)["element_id"] != cardMainContentID {
-			t.Fatalf("inside=%#v", inside)
+		if mainVisible != tt.expanded || expandVisible == tt.expanded || collapseVisible != tt.expanded || summaryVisible {
+			t.Fatalf("status=%s expanded=%t elements=%#v", tt.status, tt.expanded, elements)
 		}
 	}
 	raw, err := buildCardV2(cardOptions{Status: cardStatusDone, Content: "结果"})
@@ -53,7 +44,7 @@ func TestBuildTaskCardUsesCollapsibleProgressPanel(t *testing.T) {
 		t.Fatal(err)
 	}
 	elements := decodeCardJSON(t, raw)["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 2 {
+	if len(elements) != 1 {
 		t.Fatalf("normal elements=%#v", elements)
 	}
 	for _, element := range elements {
@@ -79,19 +70,12 @@ func TestExpandedTaskCardPlacesCollapseControlAfterProgressAndApprovals(t *testi
 		t.Fatal(err)
 	}
 	elements := decodeCardJSON(t, raw)["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 3 || elements[0].(map[string]any)["element_id"] != cardProgressSummaryID ||
-		elements[1].(map[string]any)["element_id"] != "approval_records" ||
-		elements[2].(map[string]any)["element_id"] != cardProgressPanelID {
-		t.Fatalf("elements=%#v, want summary and approvals before progress panel", elements)
+	if len(elements) != 3 || elements[0].(map[string]any)["element_id"] != "approval_records" ||
+		elements[1].(map[string]any)["element_id"] != cardMainContentID ||
+		elements[2].(map[string]any)["element_id"] != cardProgressCollapseID {
+		t.Fatalf("elements=%#v, want approvals, complete progress and bottom collapse control", elements)
 	}
-	panelElements := elements[2].(map[string]any)["elements"].([]any)
-	if len(panelElements) != 2 {
-		t.Fatalf("panel elements=%#v, want progress and bottom collapse control", panelElements)
-	}
-	if panelElements[0].(map[string]any)["element_id"] != cardMainContentID {
-		t.Fatalf("panel elements=%#v, want progress first", panelElements)
-	}
-	button := panelElements[1].(map[string]any)
+	button := elements[2].(map[string]any)
 	if button["tag"] != "button" || button["element_id"] != "progress_collapse" {
 		t.Fatalf("bottom element=%#v, want collapse button", button)
 	}
@@ -105,7 +89,65 @@ func TestExpandedTaskCardPlacesCollapseControlAfterProgressAndApprovals(t *testi
 	}
 }
 
-func TestCollapsedTaskCardKeepsNativeExpandHeaderAtVisibleBottom(t *testing.T) {
+func TestTaskCardProgressControlsAreMutuallyExclusiveButtons(t *testing.T) {
+	tests := []struct {
+		name          string
+		expanded      bool
+		wantControlID string
+		wantText      string
+		wantAction    string
+		wantMain      bool
+	}{
+		{name: "collapsed", wantControlID: "progress_expand", wantText: "展开完整进度", wantAction: "task_progress_expand"},
+		{name: "expanded", expanded: true, wantControlID: cardProgressCollapseID, wantText: "收起完整进度", wantAction: "task_progress_collapse", wantMain: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := buildCardV2(cardOptions{
+				Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Content: "完整时间线",
+				Collapsible: true, Expanded: tt.expanded, taskCardID: "card-task-1",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			elements := decodeCardJSON(t, raw)["body"].(map[string]any)["elements"].([]any)
+			foundMain, foundSummary := false, false
+			controls := make([]map[string]any, 0, 1)
+			for _, rawElement := range elements {
+				element := rawElement.(map[string]any)
+				if element["element_id"] == cardMainContentID {
+					foundMain = true
+				}
+				if element["element_id"] == "progress_summary" {
+					foundSummary = true
+				}
+				if element["tag"] == "button" {
+					controls = append(controls, element)
+				}
+			}
+			if foundMain != tt.wantMain {
+				t.Fatalf("main visible=%v, want %v; elements=%#v", foundMain, tt.wantMain, elements)
+			}
+			if foundSummary {
+				t.Fatalf("elements=%#v, want one progress body without duplicate summary", elements)
+			}
+			if len(controls) != 1 {
+				t.Fatalf("controls=%#v, want exactly one progress control", controls)
+			}
+			control := controls[0]
+			if control["element_id"] != tt.wantControlID || control["type"] != "default" ||
+				control["text"].(map[string]any)["content"] != tt.wantText {
+				t.Fatalf("control=%#v", control)
+			}
+			value := control["behaviors"].([]any)[0].(map[string]any)["value"].(map[string]any)
+			if value["action"] != tt.wantAction || value["task_card_id"] != "card-task-1" {
+				t.Fatalf("control value=%#v", value)
+			}
+		})
+	}
+}
+
+func TestCollapsedTaskCardKeepsExplicitExpandButtonAtVisibleBottom(t *testing.T) {
 	registry := newTaskCardRegistry()
 	registry.record("card-task-1", cardOptions{
 		Status: cardStatusDone, Title: "Codex", Summary: "摘要", Content: "完整时间线",
@@ -120,16 +162,12 @@ func TestCollapsedTaskCardKeepsNativeExpandHeaderAtVisibleBottom(t *testing.T) {
 		t.Fatal(err)
 	}
 	elements := decodeCardJSON(t, raw)["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 4 || elements[3].(map[string]any)["element_id"] != cardProgressPanelID {
-		t.Fatalf("elements=%#v, want collapsed progress panel as final visible body element", elements)
+	if len(elements) != 2 || elements[1].(map[string]any)["element_id"] != cardProgressExpandID {
+		t.Fatalf("elements=%#v, want expand control as final visible body element", elements)
 	}
-	panel := elements[3].(map[string]any)
-	if panel["expanded"] != false {
-		t.Fatalf("panel expanded=%v, want false", panel["expanded"])
-	}
-	header := panel["header"].(map[string]any)["title"].(map[string]any)
-	if header["content"] != "展开完整进度" {
-		t.Fatalf("header=%#v", header)
+	button := elements[1].(map[string]any)
+	if button["text"].(map[string]any)["content"] != "展开完整进度" || button["type"] != "default" {
+		t.Fatalf("button=%#v", button)
 	}
 }
 
@@ -158,7 +196,7 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 	}{
 		{cardStatusThinking, "blue", "**思考中**"},
 		{cardStatusStreaming, "blue", "**生成中**"},
-		{cardStatusDone, "green", "**已完成**"},
+		{cardStatusDone, "green", ""},
 		{cardStatusError, "red", "**执行失败**"},
 		{"stopped", "grey", "**已停止**"},
 	}
@@ -172,7 +210,13 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 		if header["template"] != tt.template {
 			t.Fatalf("status=%s template=%v, want %s", tt.status, header["template"], tt.template)
 		}
-		body := card["body"].(map[string]any)
+		body, bodyExists := card["body"].(map[string]any)
+		if tt.label == "" {
+			if bodyExists {
+				t.Fatalf("status=%s body=%#v, want header-only status", tt.status, body)
+			}
+			continue
+		}
 		statusElement := body["elements"].([]any)[0].(map[string]any)
 		if statusElement["content"] != tt.label {
 			t.Fatalf("status=%s label=%v, want %s", tt.status, statusElement["content"], tt.label)
@@ -180,16 +224,14 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 	}
 }
 
-func TestBuildCardV2DoneWithoutContentRendersStatusOnly(t *testing.T) {
+func TestBuildCardV2DoneWithoutContentUsesGreenHeaderWithoutRedundantBody(t *testing.T) {
 	raw, err := buildCardV2(cardOptions{Status: cardStatusDone})
 	if err != nil {
 		t.Fatalf("buildCardV2 error: %v", err)
 	}
 	card := decodeCardJSON(t, raw)
-	body := card["body"].(map[string]any)
-	elements := body["elements"].([]any)
-	if len(elements) != 1 || elements[0].(map[string]any)["content"] != "**已完成**" {
-		t.Fatalf("done card body=%#v, want compact terminal status only", card["body"])
+	if body, ok := card["body"]; ok {
+		t.Fatalf("done card body=%#v, want green header without redundant completion body", body)
 	}
 	header := card["header"].(map[string]any)
 	if header["template"] != "green" {
@@ -222,14 +264,14 @@ func TestBuildCardV2AppendsApprovalRecords(t *testing.T) {
 	card := decodeCardJSON(t, raw)
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]any)
-	if len(elements) != 3 {
+	if len(elements) != 2 {
 		t.Fatalf("elements=%d, want approval record element", len(elements))
 	}
-	main := elements[1].(map[string]any)
+	main := elements[0].(map[string]any)
 	if main["element_id"] != cardMainContentID || main["content"] != "最终回答" {
 		t.Fatalf("main element=%#v, want final content without status row", main)
 	}
-	approval := elements[2].(map[string]any)
+	approval := elements[1].(map[string]any)
 	content := approval["content"].(string)
 	if !strings.Contains(content, "审批记录") || !strings.Contains(content, "command: date") {
 		t.Fatalf("approval content=%q, want approval summary", content)

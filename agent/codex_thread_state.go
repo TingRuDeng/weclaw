@@ -32,6 +32,7 @@ type codexTurnSnapshot struct {
 type codexThreadItem struct {
 	ID      string          `json:"id"`
 	Type    string          `json:"type"`
+	Phase   string          `json:"phase"`
 	Text    string          `json:"text"`
 	Content json.RawMessage `json:"content"`
 }
@@ -130,6 +131,43 @@ func codexThreadStateFromSnapshot(thread codexThreadSnapshot) CodexThreadState {
 	return state
 }
 
+// projectCodexAppServerActiveTurnEvents 从 thread/read 快照恢复用户可见的
+// Agent 消息。命令只作为隐藏活动边界，推理和未知协议项不进入消息进度。
+func projectCodexAppServerActiveTurnEvents(thread codexThreadSnapshot, targetTurnID string) []*codexTurnEvent {
+	targetTurnID = strings.TrimSpace(targetTurnID)
+	for index := len(thread.Turns) - 1; index >= 0; index-- {
+		turn := thread.Turns[index]
+		if strings.TrimSpace(turn.ID) != targetTurnID || turn.Status != "inProgress" {
+			continue
+		}
+		events := make([]*codexTurnEvent, 0, len(turn.Items))
+		for _, item := range turn.Items {
+			itemID := strings.TrimSpace(item.ID)
+			switch strings.ToLower(strings.TrimSpace(item.Type)) {
+			case "agentmessage":
+				phase := strings.ToLower(strings.TrimSpace(item.Phase))
+				if phase != "" && phase != "commentary" && phase != "final_answer" {
+					continue
+				}
+				text := strings.TrimSpace(codexItemText(item))
+				if text == "" {
+					continue
+				}
+				events = append(events, &codexTurnEvent{
+					Kind: "item_completed", TurnID: targetTurnID, ItemID: itemID,
+					MessagePhase: phase, Text: text,
+				})
+			case "commandexecution":
+				events = append(events, &codexTurnEvent{
+					Kind: "activity", TurnID: targetTurnID, ItemID: itemID,
+				})
+			}
+		}
+		return events
+	}
+	return nil
+}
+
 // latestCodexTurnState 返回 thread/read 中最近 turn 的身份和权威状态。
 func latestCodexTurnState(turns []codexTurnSnapshot) (string, string) {
 	if len(turns) == 0 {
@@ -160,14 +198,25 @@ func latestCodexUserPreview(turns []codexTurnSnapshot) string {
 }
 
 func latestCodexAgentText(turns []codexTurnSnapshot) string {
-	for i := len(turns) - 1; i >= 0; i-- {
-		for j := len(turns[i].Items) - 1; j >= 0; j-- {
-			if turns[i].Items[j].Type == "agentMessage" {
-				return strings.TrimSpace(codexItemText(turns[i].Items[j]))
-			}
+	if len(turns) == 0 {
+		return ""
+	}
+	latest := turns[len(turns)-1]
+	fallback := ""
+	for j := len(latest.Items) - 1; j >= 0; j-- {
+		item := latest.Items[j]
+		if item.Type != "agentMessage" {
+			continue
+		}
+		phase := strings.ToLower(strings.TrimSpace(item.Phase))
+		if phase == "final_answer" {
+			return strings.TrimSpace(codexItemText(item))
+		}
+		if phase == "" && fallback == "" {
+			fallback = strings.TrimSpace(codexItemText(item))
 		}
 	}
-	return ""
+	return fallback
 }
 
 func codexStatusHasFlag(flags []string, target string) bool {

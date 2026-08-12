@@ -2,22 +2,59 @@ package agent
 
 import (
 	"log"
+	"sort"
 	"strings"
 )
 
 const codexTurnControlReserve = 8
 
-// dispatchToTurnCh 为控制事件保留容量，普通进度拥塞时可以丢弃但终态不能丢。
+// dispatchToTurnCh 把实时事件同时投递给唯一执行 owner 和所有只读前端观察器。
+// 审批与问答只交给一个控制消费者，避免多个消息窗口重复回答同一请求。
 func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
+	delivered := a.dispatchToTurnChannels(threadID, evt)
+	a.notifyCodexThreadActivity(threadID, evt)
+	return delivered
+}
+
+// dispatchDesktopTurnEvent 必须先恢复无人接收的 pending action，再唤醒 follower。
+// 否则新 watcher 可能在 actionSeen 清理前完成一次空回放，并永久错过审批。
+func (a *ACPAgent) dispatchDesktopTurnEvent(threadID string, evt *codexTurnEvent) bool {
+	delivered := a.dispatchToTurnChannels(threadID, evt)
+	if !delivered && a.desktopRuntime != nil {
+		a.desktopRuntime.abandonTurnEvent(threadID, evt)
+	}
+	a.notifyCodexThreadActivity(threadID, evt)
+	return delivered
+}
+
+func (a *ACPAgent) dispatchToTurnChannels(threadID string, evt *codexTurnEvent) bool {
 	a.notifyMu.Lock()
-	ch, ok := a.turnCh[threadID]
-	if !ok {
-		ch, ok = a.singleActiveTurnChannel(threadID, evt)
+	defer a.notifyMu.Unlock()
+	owner, ownerOK := a.turnCh[threadID]
+	if !ownerOK {
+		owner, ownerOK = a.singleActiveTurnChannel(threadID, evt)
 	}
-	a.notifyMu.Unlock()
-	if !ok {
-		return false
+	observers := a.turnObserverMailboxesLocked(threadID)
+	if isCodexTurnInteractionEvent(evt) {
+		if ownerOK {
+			return dispatchCodexTurnControlEvent(owner, evt)
+		}
+		if len(observers) == 0 {
+			return false
+		}
+		return observers[0].enqueue(evt)
 	}
+	delivered := false
+	if ownerOK {
+		delivered = dispatchCodexTurnEvent(owner, evt) || delivered
+	}
+	for _, observer := range observers {
+		delivered = observer.enqueue(evt) || delivered
+	}
+	return delivered
+}
+
+func dispatchCodexTurnEvent(ch chan *codexTurnEvent, evt *codexTurnEvent) bool {
 	if isCodexTurnControlEvent(evt) {
 		return dispatchCodexTurnControlEvent(ch, evt)
 	}
@@ -34,6 +71,44 @@ func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
 	default:
 		return false
 	}
+}
+
+func (a *ACPAgent) turnObserverMailboxesLocked(threadID string) []*codexTurnObserverMailbox {
+	registered := a.turnObservers[threadID]
+	if len(registered) == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, len(registered))
+	for id := range registered {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	mailboxes := make([]*codexTurnObserverMailbox, 0, len(ids))
+	for _, id := range ids {
+		mailboxes = append(mailboxes, registered[id])
+	}
+	return mailboxes
+}
+
+func (a *ACPAgent) notifyCodexThreadActivity(threadID string, evt *codexTurnEvent) {
+	if strings.TrimSpace(threadID) == "" || !isCodexFollowerWakeEvent(evt) {
+		return
+	}
+	a.codexThreadActivityMu.RLock()
+	handler := a.codexThreadActivityHandler
+	a.codexThreadActivityMu.RUnlock()
+	if handler != nil {
+		handler(threadID)
+	}
+}
+
+func isCodexTurnInteractionEvent(evt *codexTurnEvent) bool {
+	return evt != nil && (evt.Approval != nil || evt.UserInput != nil)
+}
+
+func isCodexFollowerWakeEvent(evt *codexTurnEvent) bool {
+	return evt != nil && (evt.Kind == "started" || isCodexTurnTerminalEvent(evt) ||
+		evt.Approval != nil || evt.UserInput != nil)
 }
 
 // singleActiveTurnChannel 仅为空路由事件提供单活动通道兜底，明示未知 thread 必须丢弃。

@@ -108,6 +108,7 @@ func (s *codexSessionStore) cleanMissingWorkspaces(bindingKey string) []string {
 		if binding.Follower != nil && normalizeCodexWorkspaceRoot(binding.Follower.WorkspaceRoot) == root {
 			binding.Follower = nil
 			binding.FollowRevision++
+			clearCodexFollowerTurnState(&binding)
 		}
 		removed = append(removed, root)
 	}
@@ -157,6 +158,7 @@ func (s *codexSessionStore) clearStaleWorkspaceThread(bindingKey string, workspa
 		strings.TrimSpace(binding.Follower.ThreadID) == threadID {
 		binding.Follower = nil
 		binding.FollowRevision++
+		clearCodexFollowerTurnState(&binding)
 	}
 	s.bindings[bindingKey] = binding
 	s.mu.Unlock()

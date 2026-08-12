@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -92,7 +93,7 @@ func TestCodexDesktopProjectionRebuildsRewrittenText(t *testing.T) {
 	}
 }
 
-func TestCodexDesktopProjectionEmitsTerminalOncePerTurn(t *testing.T) {
+func TestCodexDesktopProjectionKeepsStatusOnlyCompletedPendingAcrossOrdinaryRevisions(t *testing.T) {
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
 	raw := desktopProjectionFixture("thread-1", []any{
 		desktopTurnFixture("turn-1", "inProgress", nil),
@@ -107,23 +108,108 @@ func TestCodexDesktopProjectionEmitsTerminalOncePerTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyPatchSet() error = %v", err)
 	}
-	assertCodexDesktopEvent(t, update.Events, "completed", "turn-1")
+	if len(update.Events) != 0 {
+		t.Fatalf("status-only completed must wait for final answer, events=%#v", update.Events)
+	}
 
-	update, err = store.applySnapshot(codexDesktopSnapshotSpec{
-		threadID: "thread-1", epoch: 1, revision: 3, raw: update.Snapshot.Raw,
+	for revision := uint64(3); revision <= 4; revision++ {
+		update, err = store.applySnapshot(codexDesktopSnapshotSpec{
+			threadID: "thread-1", epoch: 1, revision: revision, raw: update.Snapshot.Raw,
+		})
+		if err != nil {
+			t.Fatalf("applySnapshot(revision=%d) error = %v", revision, err)
+		}
+		if len(update.Events) != 0 {
+			t.Fatalf("status-only completed emitted at revision %d: %#v", revision, update.Events)
+		}
+		if !store.awaitingFinalAnswer("thread-1", "turn-1") {
+			t.Fatalf("revision %d lost the pending final-answer barrier", revision)
+		}
+	}
+}
+
+func TestCodexDesktopProjectionWaitsForLateFinalAnswer(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	raw := desktopProjectionFixture("thread-1", []any{
+		desktopTurnFixture("turn-1", "inProgress", nil),
 	})
-	if err != nil {
+	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{threadID: "thread-1", epoch: 1, revision: 1, raw: raw}); err != nil {
 		t.Fatalf("applySnapshot() error = %v", err)
 	}
-	if len(update.Events) != 0 {
-		t.Fatalf("duplicate terminal events = %#v", update.Events)
+	statusOnly, err := store.applyPatchSet(codexDesktopPatchSetSpec{
+		threadID: "thread-1", epoch: 1, baseRevision: 1, revision: 2,
+		patches: []codexDesktopPatch{{Op: "replace", Path: []any{"turns", 0, "status"}, Value: "completed"}},
+	})
+	if err != nil {
+		t.Fatalf("applyPatchSet(status) error = %v", err)
 	}
+	if len(statusOnly.Events) != 0 {
+		t.Fatalf("status-only completed emitted early events=%#v", statusOnly.Events)
+	}
+	withFinal, err := store.applyPatchSet(codexDesktopPatchSetSpec{
+		threadID: "thread-1", epoch: 1, baseRevision: 2, revision: 3,
+		patches: []codexDesktopPatch{{
+			Op: "add", Path: []any{"turns", 0, "items", 0},
+			Value: map[string]any{"id": "final-1", "type": "agentMessage", "phase": "final_answer", "text": "最终回答"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("applyPatchSet(final) error = %v", err)
+	}
+	if len(withFinal.Events) != 2 || withFinal.Events[0].Kind != "item_completed" || withFinal.Events[0].Text != "最终回答" || withFinal.Events[1].Kind != "completed" {
+		t.Fatalf("events=%#v, want final_answer then completed", withFinal.Events)
+	}
+}
+
+func TestCodexDesktopProjectionProjectsStatuslessCommentaryAsCompletedMessage(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	raw := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "inProgress", nil)})
+	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 1, raw: raw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	withCommentary := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "inProgress", []any{
+		map[string]any{"id": "commentary-1", "type": "agentMessage", "phase": "commentary", "text": "正在核对提交状态。"},
+	})})
+	update, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: withCommentary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := assertCodexDesktopEvent(t, update.Events, "item_completed", "turn-1")
+	if event.ItemID != "commentary-1" || event.MessagePhase != "commentary" || event.Text != "正在核对提交状态。" {
+		t.Fatalf("commentary event=%#v", event)
+	}
+}
+
+func TestCodexDesktopProjectionTreatsUnphasedCompletedMessageAsLegacyFinal(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	raw := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "inProgress", nil)})
+	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 1, raw: raw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completed := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "completed", []any{
+		map[string]any{"id": "legacy-final", "type": "agentMessage", "status": "completed", "text": "兼容最终回答"},
+	})})
+	update, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: completed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCodexDesktopEvent(t, update.Events, "completed", "turn-1")
 }
 
 func TestCodexDesktopProjectionKeepsParallelSiblingTurnsSeparate(t *testing.T) {
 	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
 	raw := desktopProjectionFixture("thread-1", []any{
-		desktopTurnFixture("turn-1", "running", nil),
+		desktopTurnFixture("turn-1", "running", []any{
+			map[string]any{"id": "final-1", "type": "agentMessage", "status": "completed", "phase": "final_answer", "text": "完成"},
+		}),
 		desktopTurnFixture("turn-2", "processing", nil),
 	})
 	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{threadID: "thread-1", epoch: 1, revision: 1, raw: raw}); err != nil {
@@ -197,10 +283,99 @@ func TestCollectCodexDesktopTurnEmitsCompletedMessageAsNativeProgress(t *testing
 		newCodexTurnDiagnostics(codexTurnDiagnosticsLimit),
 		&codexMessageProgressBuffer{},
 	)
-	if assembler.finalText() != "我先读取当前实现。" {
-		t.Fatalf("final text=%q", assembler.finalText())
+	if assembler.finalText() != "" {
+		t.Fatalf("commentary leaked into final text: %q", assembler.finalText())
 	}
 	if len(progress) != 1 || progress[0].Kind != ProgressKindCommentary || progress[0].Text != "我先读取当前实现。" {
+		t.Fatalf("progress=%#v", progress)
+	}
+}
+
+func TestCollectCodexDesktopTurnReturnsFinalAnswerAfterCommentary(t *testing.T) {
+	assembler := newCodexFinalAssembler()
+	var progress []ProgressEvent
+	callbacks := progressCallbacks{onEvent: func(event ProgressEvent) { progress = append(progress, event) }}
+	diagnostics := newCodexTurnDiagnostics(codexTurnDiagnosticsLimit)
+	buffer := &codexMessageProgressBuffer{}
+	collectCodexTurnText(assembler, &codexTurnEvent{
+		Kind: "item_completed", ItemID: "commentary-1", MessagePhase: "commentary", Text: "正在核对提交状态。",
+	}, callbacks, diagnostics, buffer)
+	collectCodexTurnText(assembler, &codexTurnEvent{
+		Kind: "item_completed", ItemID: "final-1", MessagePhase: "final_answer", Text: "没有。当前工作区尚未提交和推送。",
+	}, callbacks, diagnostics, buffer)
+
+	if assembler.finalText() != "没有。当前工作区尚未提交和推送。" {
+		t.Fatalf("final text=%q", assembler.finalText())
+	}
+	if len(progress) != 1 || progress[0].Text != "正在核对提交状态。" {
+		t.Fatalf("progress=%#v", progress)
+	}
+}
+
+func TestCollectCodexDesktopProjectionSeparatesStatuslessProgressAndFinalAnswer(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	active := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "inProgress", nil)})
+	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 1, raw: active,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	commentary := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "inProgress", []any{
+		map[string]any{"id": "commentary-1", "type": "agentMessage", "phase": "commentary", "text": "正在核对提交状态。"},
+	})})
+	commentaryUpdate, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: commentary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "completed", []any{
+		map[string]any{"id": "commentary-1", "type": "agentMessage", "phase": "commentary", "text": "正在核对提交状态。"},
+	})})
+	statusUpdate, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 3, raw: completed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryUpdate, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 4, raw: completed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withFinal := desktopProjectionFixture("thread-1", []any{desktopTurnFixture("turn-1", "completed", []any{
+		map[string]any{"id": "commentary-1", "type": "agentMessage", "phase": "commentary", "text": "正在核对提交状态。"},
+		map[string]any{"id": "final-1", "type": "agentMessage", "phase": "final_answer", "text": "没有。当前工作区尚未提交和推送。"},
+	})})
+	finalUpdate, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 5, raw: withFinal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events := append([]*codexTurnEvent{}, commentaryUpdate.Events...)
+	events = append(events, statusUpdate.Events...)
+	events = append(events, ordinaryUpdate.Events...)
+	events = append(events, finalUpdate.Events...)
+	turnCh := make(chan *codexTurnEvent, len(events))
+	for _, event := range events {
+		turnCh <- event
+	}
+	var progress []ProgressEvent
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	reply, err := a.collectAttachedCodexTurn(context.Background(), codexThreadWatchOptions{
+		conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1", turnCh: turnCh,
+		onProgressEvent: func(event ProgressEvent) { progress = append(progress, event) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply != "没有。当前工作区尚未提交和推送。" {
+		t.Fatalf("reply=%q", reply)
+	}
+	if len(progress) != 1 || progress[0].Text != "正在核对提交状态。" {
 		t.Fatalf("progress=%#v", progress)
 	}
 }

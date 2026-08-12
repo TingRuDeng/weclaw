@@ -259,6 +259,7 @@ func (a *ACPAgent) handleCodexAppServerInteraction(runtime *codexAppServerTurnRu
 		Summary: strings.TrimSpace(strings.TrimPrefix(progressText, codexProgressPrefix)), Text: progressText,
 	})
 	if err := handle(); err != nil {
+		a.abandonCodexTurnEvent(runtime.threadID, evt)
 		return true, fmt.Errorf("Codex 交互响应失败: %w", err)
 	}
 	return true, nil
@@ -280,19 +281,19 @@ func handleCodexAppServerTerminal(runtime *codexAppServerTurnRuntime, evt *codex
 
 func collectCodexAppServerContent(runtime *codexAppServerTurnRuntime, evt *codexTurnEvent) {
 	if evt.Delta != "" {
-		runtime.assembler.addDelta(evt.ItemID, evt.Delta)
+		runtime.assembler.addDelta(evt.ItemID, evt.MessagePhase, evt.Delta)
 	}
 	if evt.Text == "" {
 		return
 	}
 	if evt.Kind == "item_completed" {
-		runtime.assembler.addCompleted(evt.ItemID, evt.Text)
+		runtime.assembler.addCompleted(evt.ItemID, evt.MessagePhase, evt.Text)
 		runtime.messageProgress.observeCompleted(evt, progressCallbacks{
 			onText: runtime.opts.onProgress, onEvent: runtime.opts.onProgressEvent,
 		})
 		return
 	}
-	runtime.assembler.addSnapshot(evt.ItemID, evt.Text)
+	runtime.assembler.addSnapshot(evt.ItemID, evt.MessagePhase, evt.Text)
 }
 
 func finishCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, bool, error) {

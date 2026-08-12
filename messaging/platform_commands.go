@@ -53,13 +53,15 @@ func (h *Handler) routeServicePlatformCommand(ctx context.Context, req platformC
 		}
 		replyPlatformCommand(ctx, req, buildHelpTextForAdmin(h.isAdminMessage(msg)))
 	case req.Trimmed == "/new":
+		authorizedIdentity, _ := msg.AuthorizedIdentity()
 		replyPlatformCommand(ctx, req, h.resetDefaultSessionForMessage(ctx, defaultSessionResetRequest{
-			actorUserID: msg.UserID,
-			routeUserID: routeUserID,
-			platform:    msg.Platform,
-			accountID:   msg.AccountID,
-			reply:       req.Reply,
-			admin:       h.isAdminMessage(msg),
+			actorUserID:        msg.UserID,
+			authorizedIdentity: authorizedIdentity,
+			routeUserID:        routeUserID,
+			platform:           msg.Platform,
+			accountID:          msg.AccountID,
+			reply:              req.Reply,
+			admin:              h.isAdminMessage(msg),
 		}))
 	default:
 		return false
@@ -184,15 +186,17 @@ func (h *Handler) handleCodexSessionPlatformCommand(ctx context.Context, req pla
 	}) {
 		return true
 	}
+	authorizedIdentity, _ := msg.AuthorizedIdentity()
 	text := h.handleCodexSessionCommandForRoute(ctx, codexSessionCommandRequest{
-		ActorUserID: msg.UserID,
-		RouteUserID: routeUserID,
-		Trimmed:     req.Trimmed,
-		Platform:    msg.Platform,
-		AccountID:   msg.AccountID,
-		Reply:       req.Reply,
-		Admin:       h.isAdminMessage(msg),
-		Private:     isPrivateCodexCommandMessage(msg, routeUserID),
+		ActorUserID:        msg.UserID,
+		AuthorizedIdentity: authorizedIdentity,
+		RouteUserID:        routeUserID,
+		Trimmed:            req.Trimmed,
+		Platform:           msg.Platform,
+		AccountID:          msg.AccountID,
+		Reply:              req.Reply,
+		Admin:              h.isAdminMessage(msg),
+		Private:            isPrivateCodexCommandMessage(msg, routeUserID),
 	})
 	sendPlatformText(ctx, req.Reply, msg.UserID, text)
 	return true

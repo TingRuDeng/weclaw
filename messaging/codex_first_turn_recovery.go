@@ -75,6 +75,11 @@ func (s *codexSessionStore) replaceRemoteFirstTurnThread(
 		binding.Follower.ThreadID = newThreadID
 		binding.Follower.UpdatedAt = now.Format(time.RFC3339)
 		binding.FollowRevision++
+		// 新 thread 已由同一次 turn/start 创建，但此处尚未收到权威 turn ID。
+		// 先持久化 pending 空游标，崩溃恢复时 inactive 快照仍会补投该首轮终态。
+		binding.FollowTurnID = ""
+		binding.FollowTurnInitialized = true
+		binding.FollowTurnPending = true
 	}
 	nextBindings[bindingKey] = binding
 

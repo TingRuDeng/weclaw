@@ -29,21 +29,19 @@ func TestPrepareDetachFromReferenceUsesSynchronizationLanguage(t *testing.T) {
 	}
 	card := decodeCardJSON(t, op.CardJSON)
 	elements := card["body"].(map[string]any)["elements"].([]any)
-	var status, details string
+	var status string
 	for _, raw := range elements {
 		element := raw.(map[string]any)
 		switch element["element_id"] {
 		case "status":
 			status, _ = element["content"].(string)
-		case cardProgressPanelID:
-			panelElements := element["elements"].([]any)
-			details, _ = panelElements[0].(map[string]any)["content"].(string)
 		}
 	}
 	if status != "**已停止同步**" {
 		t.Fatalf("detach status=%q", status)
 	}
-	if !strings.Contains(details, "1. 已读取实现") || !strings.Contains(details, "本地 Codex 任务继续运行") {
-		t.Fatalf("detach details=%q, want preserved progress and release notice", details)
+	if op.TaskCard == nil || !strings.Contains(op.TaskCard.Content, "1. 已读取实现") ||
+		!strings.Contains(op.TaskCard.Content, "本地 Codex 任务继续运行") {
+		t.Fatalf("detach task card=%#v, want preserved hidden progress and release notice", op.TaskCard)
 	}
 }

@@ -361,7 +361,7 @@ func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	workspaceChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "weclaw", nil)
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-workspace-single",
@@ -369,7 +369,7 @@ func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t 
 			Action: "choice",
 			Value:  map[string]string{"choice": workspaceChoice},
 		},
-	}, reply)
+	}, "ou_user"), reply)
 
 	if len(reply.Choices) != 0 {
 		t.Fatalf("choices=%#v, want no second choice card", reply.Choices)
@@ -450,7 +450,7 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	alphaChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "alpha", nil)
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-alpha",
@@ -458,14 +458,14 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 			Action: "choice",
 			Value:  map[string]string{"choice": alphaChoice},
 		},
-	}, reply)
+	}, "ou_user"), reply)
 	staleAlphaChoice := reply.Choices[0].Choices[0].ID
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cx cd .."}},
-	}, platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true}))
+	}, "ou_user"), platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true}))
 	betaChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "beta", nil)
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-beta",
@@ -473,8 +473,8 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 			Action: "choice",
 			Value:  map[string]string{"choice": betaChoice},
 		},
-	}, reply)
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	}, "ou_user"), reply)
+	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-stale-alpha",
@@ -482,7 +482,7 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 			Action: "choice",
 			Value:  map[string]string{"choice": staleAlphaChoice},
 		},
-	}, reply)
+	}, "ou_user"), reply)
 
 	bindingKey := codexBindingKey("ou_user", "codex")
 	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)

@@ -9,6 +9,10 @@ import (
 )
 
 func (a *ACPAgent) handleCodexDelta(params json.RawMessage) {
+	a.handleCodexDeltaAt(params, 0)
+}
+
+func (a *ACPAgent) handleCodexDeltaAt(params json.RawMessage, sequence uint64) {
 	var p struct {
 		Msg struct {
 			Type  string `json:"type"`
@@ -32,12 +36,10 @@ func (a *ACPAgent) handleCodexDelta(params json.RawMessage) {
 		return
 	}
 
-	a.dispatchToTurnCh(key, &codexTurnEvent{Delta: delta})
+	a.dispatchToTurnCh(key, &codexTurnEvent{Sequence: sequence, Delta: delta})
 }
 
-// handleCodexItemDelta handles "item/agentMessage/delta" events.
-// These contain incremental text deltas for the agent's response.
-func (a *ACPAgent) handleCodexItemDelta(params json.RawMessage) {
+func (a *ACPAgent) handleCodexItemDeltaAt(params json.RawMessage, sequence uint64) {
 	var p struct {
 		ThreadID string `json:"threadId"`
 		ItemID   string `json:"itemId"`
@@ -51,11 +53,15 @@ func (a *ACPAgent) handleCodexItemDelta(params json.RawMessage) {
 		return
 	}
 
-	a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{ItemID: p.ItemID, Delta: p.Delta})
+	a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{ItemID: p.ItemID, Sequence: sequence, Delta: p.Delta})
 }
 
 // handleCodexTurnEvent 处理 turn 生命周期事件，兼容 Codex app-server 的成功与失败形态。
 func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
+	a.handleCodexTurnEventAt(method, params, 0)
+}
+
+func (a *ACPAgent) handleCodexTurnEventAt(method string, params json.RawMessage, sequence uint64) {
 	var p struct {
 		ThreadID string          `json:"threadId"`
 		Status   string          `json:"status"`
@@ -74,16 +80,18 @@ func (a *ACPAgent) handleCodexTurnEvent(method string, params json.RawMessage) {
 
 	turnID := strings.TrimSpace(p.Turn.ID)
 	if method == "turn/started" {
-		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "started", TurnID: turnID})
+		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "started", TurnID: turnID, Sequence: sequence})
 		return
 	}
 	if method == "turn/completed" {
-		a.dispatchToTurnCh(p.ThreadID, codexCompletedEvent(turnID, firstNonEmpty(p.Turn.Status, p.Status), p.Turn.Error))
+		event := codexCompletedEvent(turnID, firstNonEmpty(p.Turn.Status, p.Status), p.Turn.Error)
+		event.Sequence = sequence
+		a.dispatchToTurnCh(p.ThreadID, event)
 		return
 	}
 	if method == "turn/failed" {
 		text := firstNonEmpty(formatCodexTurnError(p.Error), p.Message, p.Code, p.Status)
-		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "error", TurnID: turnID, Text: observability.SanitizeText(joinCodexErrorParts("Codex turn 执行失败", text, ""))})
+		a.dispatchToTurnCh(p.ThreadID, &codexTurnEvent{Kind: "error", TurnID: turnID, Sequence: sequence, Text: observability.SanitizeText(joinCodexErrorParts("Codex turn 执行失败", text, ""))})
 	}
 }
 
@@ -116,6 +124,10 @@ func formatCodexTurnError(rawError json.RawMessage) string {
 }
 
 func (a *ACPAgent) handleCodexError(params json.RawMessage) {
+	a.handleCodexErrorAt(params, 0)
+}
+
+func (a *ACPAgent) handleCodexErrorAt(params json.RawMessage, sequence uint64) {
 	if isRecoverableCodexTransportText(string(params)) {
 		log.Printf("[acp] ignoring recoverable codex transport error: %.200s", observability.SanitizeText(string(params)))
 		return
@@ -134,7 +146,7 @@ func (a *ACPAgent) handleCodexError(params json.RawMessage) {
 		log.Printf("[acp] ignoring codex error without actionable details: %.200s", observability.SanitizeText(string(params)))
 		return
 	}
-	a.dispatchToTurnCh("", &codexTurnEvent{Kind: "error", Text: text})
+	a.dispatchToTurnCh("", &codexTurnEvent{Kind: "error", Sequence: sequence, Text: text})
 }
 
 func formatCodexError(params json.RawMessage) string {

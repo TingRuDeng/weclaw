@@ -28,12 +28,13 @@ func (h *Handler) switchDefault(ctx context.Context, routeUserID string, name st
 }
 
 type defaultSessionResetRequest struct {
-	actorUserID string
-	routeUserID string
-	platform    platform.PlatformName
-	accountID   string
-	reply       platform.Replier
-	admin       bool
+	actorUserID        string
+	authorizedIdentity string
+	routeUserID        string
+	platform           platform.PlatformName
+	accountID          string
+	reply              platform.Replier
+	admin              bool
 }
 
 type claudeDefaultSessionResetRequest struct {
@@ -60,7 +61,8 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 	if isCodexAgent(name, ag.Info()) {
 		return h.resetDefaultCodexSessionForRoute(ctx, defaultCodexSessionCreateRequest{
 			actorUserID: actorUserID, routeUserID: routeUserID, agentName: name,
-			agent: ag, platform: req.platform, accountID: req.accountID, reply: req.reply,
+			authorizedIdentity: req.authorizedIdentity,
+			agent:              ag, platform: req.platform, accountID: req.accountID, reply: req.reply,
 		})
 	}
 	if isClaudeAgent(name, ag.Info()) {
@@ -81,13 +83,14 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 }
 
 type defaultCodexSessionCreateRequest struct {
-	actorUserID string
-	routeUserID string
-	agentName   string
-	agent       agent.Agent
-	platform    platform.PlatformName
-	accountID   string
-	reply       platform.Replier
+	actorUserID        string
+	authorizedIdentity string
+	routeUserID        string
+	agentName          string
+	agent              agent.Agent
+	platform           platform.PlatformName
+	accountID          string
+	reply              platform.Replier
 }
 
 // resetDefaultCodexSessionForRoute 按 route 当前工作空间创建并绑定新的 Codex thread。
@@ -100,7 +103,8 @@ func (h *Handler) resetDefaultCodexSessionForRoute(ctx context.Context, req defa
 	)
 	return h.handleCodexNewForRoute(codexNewRequest{
 		ctx: ctx, taskContext: normalizeContext(ctx), actorUserID: req.actorUserID,
-		userID: req.routeUserID, agentName: req.agentName,
+		authorizedIdentity: strings.TrimSpace(req.authorizedIdentity),
+		userID:             req.routeUserID, agentName: req.agentName,
 		workspaceRoot: workspaceRoot, agent: req.agent,
 		platform: req.platform, accountID: req.accountID, reply: req.reply,
 	})

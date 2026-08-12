@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -53,6 +54,126 @@ func TestExplicitUnknownThreadDoesNotFallbackToSoleChannel(t *testing.T) {
 	}
 	if len(parentCh) != 0 {
 		t.Fatal("父线程通道收到子线程中断事件")
+	}
+}
+
+func TestCodexInteractionUsesOwnerThenSingleFrontendObserver(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	owner := make(chan *codexTurnEvent, 2)
+	first := make(chan *codexTurnEvent, 2)
+	second := make(chan *codexTurnEvent, 2)
+	if !a.registerTurnChannel("thread-1", owner) {
+		t.Fatal("failed to register turn owner")
+	}
+	firstID := a.registerTurnObserver("thread-1", first)
+	secondID := a.registerTurnObserver("thread-1", second)
+	defer a.unregisterTurnObserver("thread-1", firstID, first)
+	defer a.unregisterTurnObserver("thread-1", secondID, second)
+
+	request := &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-1"}}
+	if !a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "approval_request", Approval: request}) {
+		t.Fatal("approval was not delivered to the turn owner")
+	}
+	if len(owner) != 1 || len(first) != 0 || len(second) != 0 {
+		t.Fatalf("owner=%d first=%d second=%d, want 1/0/0", len(owner), len(first), len(second))
+	}
+	<-owner
+	a.unregisterTurnChannel("thread-1", owner)
+	if !a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "approval_request", Approval: request}) {
+		t.Fatal("approval was not delivered to a frontend observer")
+	}
+	if len(first) != 1 || len(second) != 0 {
+		t.Fatalf("first=%d second=%d, want exactly one observer delivery", len(first), len(second))
+	}
+}
+
+func TestCodexInteractionMovesToNextObserverWhenFirstUnregisters(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	first := make(chan *codexTurnEvent, 2)
+	second := make(chan *codexTurnEvent, 2)
+	firstID := a.registerTurnObserver("thread-1", first)
+	secondID := a.registerTurnObserver("thread-1", second)
+	defer a.unregisterTurnObserver("thread-1", secondID, second)
+	request := &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-1"}}
+	event := &codexTurnEvent{Kind: "approval_request", Approval: request}
+	if !a.dispatchToTurnCh("thread-1", event) || len(first) != 1 || len(second) != 0 {
+		t.Fatalf("initial delivery first=%d second=%d", len(first), len(second))
+	}
+
+	a.unregisterTurnObserver("thread-1", firstID, first)
+	if len(first) != 0 || len(second) != 1 {
+		t.Fatalf("handoff first=%d second=%d, want 0/1", len(first), len(second))
+	}
+	if got := <-second; got != event {
+		t.Fatalf("handed off event=%p, want %p", got, event)
+	}
+}
+
+func TestCodexInteractionRolloverSkipsOldTurnObserversAndRemainsPending(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	type observerResult struct {
+		err error
+	}
+	results := make(chan observerResult, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for range 2 {
+		turnCh := make(chan *codexTurnEvent, 1)
+		observerID := a.registerTurnObserver("thread-1", turnCh)
+		go func() {
+			_, err := a.collectAttachedCodexTurn(ctx, codexThreadWatchOptions{
+				threadID: "thread-1", targetTurnID: "turn-1",
+				turnCh: turnCh, reconcile: make(chan time.Time),
+			})
+			a.unregisterTurnObserver("thread-1", observerID, turnCh)
+			results <- observerResult{err: err}
+		}()
+	}
+
+	event := &codexTurnEvent{
+		Kind: "approval_request", TurnID: "turn-2",
+		Approval: &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-2"}},
+	}
+	if !a.dispatchToTurnCh("thread-1", event) {
+		t.Fatal("turn-2 approval was not accepted by the observer layer")
+	}
+	for index := range 2 {
+		select {
+		case result := <-results:
+			if !errors.Is(result.err, ErrCodexControlChanged) {
+				t.Fatalf("observer[%d] error=%v, want ErrCodexControlChanged", index, result.err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("observer[%d] did not release the mismatched interaction", index)
+		}
+	}
+	pending := a.claimPendingCodexInteractions("thread-1")
+	if len(pending) != 1 || pending[0] != event {
+		t.Fatalf("pending interactions=%#v, want the turn-2 approval", pending)
+	}
+}
+
+func TestCodexObserverMailboxPreservesProgressBurst(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
+	observer := make(chan *codexTurnEvent, 1)
+	id := a.registerTurnObserver("thread-1", observer)
+	defer a.unregisterTurnObserver("thread-1", id, observer)
+	const total = 300
+	for index := 0; index < total; index++ {
+		if !a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "progress", ItemID: fmt.Sprintf("item-%03d", index)}) {
+			t.Fatalf("progress %d was rejected", index)
+		}
+	}
+	for index := 0; index < total; index++ {
+		select {
+		case event := <-observer:
+			want := fmt.Sprintf("item-%03d", index)
+			if event.ItemID != want {
+				t.Fatalf("event[%d]=%q, want %q", index, event.ItemID, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("progress %d was lost from the observer mailbox", index)
+		}
 	}
 }
 

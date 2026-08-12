@@ -104,11 +104,12 @@ func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
 	route := "feishu:tenant_1:dm:oc_1:ou_user"
 
 	h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "ou_user",
-		RouteUserID: route,
-		Trimmed:     "/cx cd beta",
-		Platform:    platform.PlatformFeishu,
-		Reply:       platformtest.NewReplier(platform.Capabilities{Text: true}),
+		ActorUserID:        "ou_user",
+		AuthorizedIdentity: "ou_user",
+		RouteUserID:        route,
+		Trimmed:            "/cx cd beta",
+		Platform:           platform.PlatformFeishu,
+		Reply:              platformtest.NewReplier(platform.Capabilities{Text: true}),
 	})
 	status := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "ou_user",

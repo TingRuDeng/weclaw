@@ -208,6 +208,11 @@ func (h *Handler) runControlledCodexTurn(opts codexControlledTurnOptions) (strin
 			if traceErr != nil {
 				log.Printf("[terminal-outbox] 首次 turn trace 暂未持久化，将在 follower 恢复时重试: %v", traceErr)
 			}
+			if err := h.claimCodexFollowerTurnForTask(
+				opts.route.bindingKey, opts.route.conversationID, thread.ThreadID, turnID, opts.task,
+			); err != nil {
+				return err
+			}
 			if thread.ConversationID == opts.route.conversationID {
 				h.ensureCodexSessions().clearPendingFirstTurn(
 					opts.route.bindingKey, opts.route.workspaceRoot, thread.ThreadID,

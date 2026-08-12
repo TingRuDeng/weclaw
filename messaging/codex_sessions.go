@@ -38,26 +38,33 @@ type legacyCodexControlIntent struct {
 }
 
 type codexSessionBinding struct {
-	ActiveWorkspace string
-	Workspaces      map[string]codexWorkspaceSession
-	FollowRevision  uint64
-	Follower        *codexFrontendFollower
+	ActiveWorkspace       string
+	Workspaces            map[string]codexWorkspaceSession
+	FollowRevision        uint64
+	Follower              *codexFrontendFollower
+	FollowTurnID          string
+	FollowTurnInitialized bool
+	FollowTurnPending     bool
 }
 
 type codexFrontendFollower struct {
-	WorkspaceRoot string
-	ThreadID      string
-	ActorUserID   string
-	DeliveryRoute platform.DeliveryRoute
-	UpdatedAt     string
+	WorkspaceRoot      string
+	ThreadID           string
+	ActorUserID        string
+	AuthorizedIdentity string
+	DeliveryRoute      platform.DeliveryRoute
+	UpdatedAt          string
 }
 
 type codexFollowerSnapshot struct {
-	BindingKey     string
-	RouteUserID    string
-	AgentName      string
-	ConversationID string
-	Revision       uint64
+	BindingKey            string
+	RouteUserID           string
+	AgentName             string
+	ConversationID        string
+	Revision              uint64
+	FollowTurnID          string
+	FollowTurnInitialized bool
+	FollowTurnPending     bool
 	// RecoveryThreadID 精确指向首次补建前的 placeholder thread，供跨进程修复 outbox trace。
 	RecoveryThreadID      string
 	RecoveryReservationID string
@@ -80,11 +87,24 @@ type codexWorkspaceSession struct {
 
 const legacyBindingDefaultPlatform = "wechat"
 
+// v11 distinguishes an active turn claim from a terminal delivery already secured by the outbox,
+// so a crash between follower reservation and watcher activation cannot permanently skip a result.
+// v10 persists the last turn claimed by each durable follower, so a local turn that starts and
+// finishes between two reconciliations can still be delivered exactly once through the outbox.
 // v9 persists two-phase frontend release intent and its exact active-card recovery reservation.
 // v8 added long-lived Feishu follower endpoints, release/archive tombstones, and the predecessor
 // thread needed to repair first-turn outbox metadata after a crash. Codex writer authority belongs to
 // the single app-server and is never assigned to a message route.
-const codexSessionStateVersion = 9
+const codexSessionStateVersion = 12
+
+func clearCodexFollowerTurnState(binding *codexSessionBinding) {
+	if binding == nil {
+		return
+	}
+	binding.FollowTurnID = ""
+	binding.FollowTurnInitialized = false
+	binding.FollowTurnPending = false
+}
 
 func codexWorkspaceReleaseIntent(session codexWorkspaceSession) bool {
 	return session.ReleasePending || session.Released

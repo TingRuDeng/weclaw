@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -39,12 +38,25 @@ func (a *ACPAgent) handlePermissionRequestAt(raw string, sequence uint64) {
 			Options:   options,
 		},
 	}
+	routeID := permissionRouteID(req.Params)
+	event := &codexTurnEvent{
+		Kind: "approval_request", TurnID: strings.TrimSpace(req.Params.TurnID),
+		Sequence: sequence, Approval: approval,
+	}
 	approval.Respond = func(_ context.Context, optionID string) error {
-		return a.respondPermissionRequest(
+		err := a.respondPermissionRequest(
 			req.ID, optionID, responseFormat, req.Params.Permissions,
 		)
+		if err == nil {
+			a.forgetPendingCodexInteraction(routeID, event)
+		}
+		return err
 	}
-	if a.dispatchToTurnCh(permissionRouteID(req.Params), &codexTurnEvent{Kind: "approval_request", Sequence: sequence, Approval: approval}) {
+	if a.dispatchToTurnCh(routeID, event) {
+		return
+	}
+	if a.protocol == protocolCodexAppServer {
+		a.rememberPendingCodexInteraction(routeID, event)
 		return
 	}
 	optionID := selectPermissionOption(req.Params, defaultDenyDecision(approval.Request.Options))
@@ -170,17 +182,12 @@ func (a *ACPAgent) resolvePermissionOptionWithError(ctx context.Context, req App
 	}
 	optionID, err := handler(ctx, req)
 	if err != nil {
-		if errors.Is(err, ErrCodexObserverDetached) {
-			return "", err
-		}
-		log.Printf("[acp] approval handler failed, denying request: %v", err)
-		return fallback, nil
+		return "", fmt.Errorf("approval handler: %w", err)
 	}
 	if isApprovalOption(req.Options, optionID) {
 		return optionID, nil
 	}
-	log.Printf("[acp] approval handler returned unknown option %q, denying request", optionID)
-	return fallback, nil
+	return "", fmt.Errorf("approval handler returned unknown option %q", optionID)
 }
 
 func (a *ACPAgent) respondPermissionRequest(id json.RawMessage, optionID string, responseFormat permissionResponseFormat, requested ...json.RawMessage) error {

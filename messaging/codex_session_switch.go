@@ -12,11 +12,12 @@ import (
 )
 
 type codexSwitchOptions struct {
-	actorUserID     string
-	platform        platform.PlatformName
-	accountID       string
-	reply           platform.Replier
-	externalTaskCtx context.Context
+	actorUserID        string
+	authorizedIdentity string
+	platform           platform.PlatformName
+	accountID          string
+	reply              platform.Replier
+	externalTaskCtx    context.Context
 }
 
 type codexSwitchRequest struct {
@@ -39,16 +40,17 @@ type codexSwitchTargetRequest struct {
 }
 
 type codexNewRequest struct {
-	ctx           context.Context
-	taskContext   context.Context
-	actorUserID   string
-	userID        string
-	agentName     string
-	workspaceRoot string
-	agent         agent.Agent
-	platform      platform.PlatformName
-	accountID     string
-	reply         platform.Replier
+	ctx                context.Context
+	taskContext        context.Context
+	actorUserID        string
+	authorizedIdentity string
+	userID             string
+	agentName          string
+	workspaceRoot      string
+	agent              agent.Agent
+	platform           platform.PlatformName
+	accountID          string
+	reply              platform.Replier
 }
 
 // handleCodexNewForRoute 创建 thread 后立即绑定当前 frontend。
@@ -58,8 +60,9 @@ func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
 	result, err := h.createAndAcquireCodexSessionWithBindingLocked(codexSessionCreateRequest{
 		acquire: codexSessionAcquireRequest{
 			ctx: req.ctx, taskContext: req.taskContext,
-			actorUserID: firstNonBlank(req.actorUserID, req.userID),
-			routeUserID: req.userID, agentName: req.agentName, agent: req.agent,
+			actorUserID:        firstNonBlank(req.actorUserID, req.userID),
+			authorizedIdentity: strings.TrimSpace(req.authorizedIdentity),
+			routeUserID:        req.userID, agentName: req.agentName, agent: req.agent,
 			route: codexConversationRoute{
 				bindingKey: bindingKey, workspaceRoot: req.workspaceRoot,
 				conversationID: conversationID,
@@ -109,8 +112,9 @@ func (h *Handler) resolveCodexSwitchRoute(req codexSwitchRequest) (codexConversa
 func (req codexSwitchRequest) acquireRequest(route codexConversationRoute) codexSessionAcquireRequest {
 	return codexSessionAcquireRequest{
 		ctx: req.ctx, taskContext: codexExternalTaskContext(req),
-		actorUserID: firstNonBlank(req.options.actorUserID, req.userID),
-		routeUserID: req.userID, agentName: req.agentName, agent: req.agent,
+		actorUserID:        firstNonBlank(req.options.actorUserID, req.userID),
+		authorizedIdentity: strings.TrimSpace(req.options.authorizedIdentity),
+		routeUserID:        req.userID, agentName: req.agentName, agent: req.agent,
 		route: route, platform: req.options.platform, accountID: req.options.accountID,
 		reply: req.options.reply,
 	}

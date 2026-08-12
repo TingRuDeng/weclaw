@@ -33,6 +33,12 @@ func newCodexSessionBindingFixture(t *testing.T) *codexSessionBindingFixture {
 		reply: platformtest.NewReplier(platform.Capabilities{Text: true}),
 	}
 	f.bindingKey = codexBindingKey(f.routeUser, "codex")
+	h.SetPlatformRegistry(platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &codexFollowerTestPlatform{
+			name: platform.PlatformFeishu, account: "cli_a", reply: f.reply,
+		},
+		Access: platform.NewAccessControl([]string{f.routeUser}),
+	}}))
 	h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceA, "thread-a")
 	h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceB, "thread-b")
 	h.ensureCodexSessions().setActiveWorkspace(f.bindingKey, f.workspaceA)
@@ -52,8 +58,9 @@ func (f *codexSessionBindingFixture) request(threadID string) codexSessionAcquir
 		workspace = f.workspaceA
 	}
 	return codexSessionAcquireRequest{
-		ctx: context.Background(), actorUserID: f.routeUser, routeUserID: f.routeUser,
-		agentName: "codex", agent: f.ag,
+		ctx: context.Background(), actorUserID: f.routeUser, authorizedIdentity: f.routeUser,
+		routeUserID: f.routeUser,
+		agentName:   "codex", agent: f.ag,
 		route: codexConversationRoute{
 			bindingKey: f.bindingKey, workspaceRoot: workspace,
 			conversationID: buildCodexConversationID(f.routeUser, "codex", workspace),
@@ -88,6 +95,59 @@ func TestAcquireCodexSessionCommitsFrontendBindingAndSharedRuntime(t *testing.T)
 	}
 	if result.resolution.Binding.Runtime != agent.CodexRuntimeWeClaw {
 		t.Fatalf("runtime=%q", result.resolution.Binding.Runtime)
+	}
+}
+
+func TestAcquireCodexSessionCannotRestoreFollowerAfterConcurrentRevocation(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	f.ag.handoffEntered = entered
+	f.ag.handoffRelease = release
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}
+	req := f.request("thread-b")
+	req.platform = platform.PlatformFeishu
+	req.accountID = "cli_a"
+	req.reply = &codexFollowerRouteReplier{Replier: f.reply, route: route}
+
+	type acquireResult struct {
+		result codexSessionAcquireResult
+		err    error
+	}
+	acquired := make(chan acquireResult, 1)
+	go func() {
+		result, err := f.h.acquireCodexSessionWithBindingLocked(req)
+		acquired <- acquireResult{result: result, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime handoff did not start")
+	}
+	revoked := make(chan struct{})
+	go func() {
+		f.h.refreshFeishuAccountAccess("cli_a", nil)
+		close(revoked)
+	}()
+	select {
+	case <-revoked:
+		t.Fatal("revocation returned before follower acquire reached its commit boundary")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	got := <-acquired
+	if got.err != nil || got.result.runtimeErr != nil {
+		t.Fatalf("acquire result=%#v err=%v", got.result, got.err)
+	}
+	select {
+	case <-revoked:
+	case <-time.After(time.Second):
+		t.Fatal("revocation did not finish after acquire released its delivery lease")
+	}
+	if snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey); ok {
+		t.Fatalf("revoked follower was restored after command return: %#v", snapshot)
 	}
 }
 
@@ -365,14 +425,18 @@ func TestAcquireCodexSessionActiveSharedTurnStartsObserver(t *testing.T) {
 
 func TestAcquireCodexSessionFeishuActiveTurnUsesDedicatedProgressCard(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}
 	f.reply = platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	routeReply := &codexFollowerRouteReplier{Replier: f.reply, route: route}
 	f.setActiveTarget("turn-b")
 	f.ag.watchDone = make(chan struct{})
 	t.Cleanup(func() { closeTestChannel(f.ag.watchDone) })
 	request := f.request("thread-b")
 	request.platform = platform.PlatformFeishu
 	request.accountID = "cli_a"
-	request.reply = f.reply
+	request.reply = routeReply
 
 	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
 	if err != nil || result.runtimeErr != nil || !result.externalActive || !result.externalProgressCard {
@@ -382,6 +446,10 @@ func TestAcquireCodexSessionFeishuActiveTurnUsesDedicatedProgressCard(t *testing
 	if !strings.Contains(text, "进度和结果见下方任务卡") || strings.Contains(text, "共享 Codex 任务正在进行") {
 		t.Fatalf("text=%q, want compact dedicated task card notice", text)
 	}
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || snapshot.FollowTurnID != "turn-b" || !snapshot.FollowTurnPending {
+		t.Fatalf("active acquire follower snapshot=%#v ok=%v, want pending turn-b", snapshot, ok)
+	}
 
 	closeTestChannel(f.ag.watchDone)
 	task, active := f.h.activeTask(result.route.conversationID)
@@ -390,12 +458,180 @@ func TestAcquireCodexSessionFeishuActiveTurnUsesDedicatedProgressCard(t *testing
 	}
 }
 
+func TestAcquireCodexSessionIdleFollowerBaselinesHistoricalTurnAtBindingCommit(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.workspaceB = t.TempDir()
+	f.h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceB, "thread-b")
+	codexDir := t.TempDir()
+	writeLocalCodexSession(t, codexDir, "thread-b", f.workspaceB, "历史会话", "2026-08-12T08:00:00Z")
+	rolloutPath := localRolloutPathForTest(codexDir, "thread-b")
+	appendCodexRolloutRecord(t, rolloutPath, rolloutTaskStartedRecord("turn-before-binding"))
+	appendCodexRolloutRecord(t, rolloutPath, rolloutTaskCompleteRecord("turn-before-binding", "历史回答"))
+	f.h.SetCodexLocalSessionDir(codexDir)
+
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}
+	request := f.request("thread-b")
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = &codexFollowerRouteReplier{Replier: f.reply, route: route}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || !snapshot.FollowTurnInitialized || snapshot.FollowTurnPending ||
+		snapshot.FollowTurnID != "turn-before-binding" {
+		t.Fatalf("idle acquire follower snapshot=%#v ok=%v, want settled historical baseline", snapshot, ok)
+	}
+}
+
+func TestAcquireCodexSessionIdleFollowerBaselinesRuntimeHistoryWithoutLocalRollout(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	state := agent.CodexThreadState{
+		ThreadID: "thread-b", LastTurnID: "turn-desktop-history", LastTurnStatus: "completed",
+		LastAgentMessageText: "Desktop 历史回答",
+	}
+	f.ag.setThreadBinding("thread-b", agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop, State: state})
+	f.ag.setBindingState(state)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}
+	request := f.request("thread-b")
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = &codexFollowerRouteReplier{Replier: f.reply, route: route}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || !snapshot.FollowTurnInitialized || snapshot.FollowTurnPending ||
+		snapshot.FollowTurnID != "turn-desktop-history" {
+		t.Fatalf("runtime baseline snapshot=%#v ok=%v", snapshot, ok)
+	}
+}
+
+func TestCodexFollowerBaselineInitializesEmptyThread(t *testing.T) {
+	baseline := codexFollowerBaselineFromSources(
+		codexRolloutTaskState{}, agent.CodexThreadBinding{
+			Runtime: agent.CodexRuntimeDesktop, State: agent.CodexThreadState{ThreadID: "thread-empty"},
+		}, nil,
+	)
+	if !baseline.initialized || baseline.pending || baseline.turnID != "" {
+		t.Fatalf("empty thread baseline=%#v, want initialized empty settled cursor", baseline)
+	}
+}
+
+func TestCodexFollowerBaselinePrefersAuthoritativeTerminalRuntimeOverStaleRollout(t *testing.T) {
+	baseline := codexFollowerBaselineFromSources(
+		codexRolloutTaskState{TurnID: "turn-before-binding", Active: true},
+		agent.CodexThreadBinding{
+			Runtime: agent.CodexRuntimeDesktop,
+			State: agent.CodexThreadState{
+				ThreadID: "thread-b", LastTurnID: "turn-before-binding", LastTurnStatus: "completed",
+			},
+		},
+		nil,
+	)
+	if !baseline.initialized || baseline.pending || baseline.turnID != "turn-before-binding" {
+		t.Fatalf("baseline=%#v, want authoritative runtime terminal state", baseline)
+	}
+}
+
+func TestCodexFollowerBaselineFallsBackToRolloutWhenRuntimeIsUnknown(t *testing.T) {
+	baseline := codexFollowerBaselineFromSources(
+		codexRolloutTaskState{TurnID: "turn-rollout", Active: true},
+		agent.CodexThreadBinding{Runtime: agent.CodexRuntimeUnknown},
+		nil,
+	)
+	if !baseline.initialized || !baseline.pending || baseline.turnID != "turn-rollout" {
+		t.Fatalf("baseline=%#v, want rollout fallback for unknown runtime", baseline)
+	}
+}
+
+func TestCodexFollowerBaselineStartsEmptyWhenRuntimeIsTemporarilyUnavailable(t *testing.T) {
+	baseline := codexFollowerBaselineFromSources(
+		codexRolloutTaskState{},
+		agent.CodexThreadBinding{Runtime: agent.CodexRuntimeUnknown},
+		agent.ErrCodexRuntimeUnavailable,
+	)
+	if !baseline.initialized || baseline.pending || baseline.turnID != "" {
+		t.Fatalf("unavailable empty baseline=%#v, want initialized empty cursor", baseline)
+	}
+}
+
+func TestUnavailableEmptyThreadFollowerDeliversFirstFastTerminalAfterBinding(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}
+	req := f.request("thread-b")
+	req.platform = platform.PlatformFeishu
+	req.accountID = "cli_a"
+	req.reply = &codexFollowerRouteReplier{Replier: f.reply, route: route}
+	f.ag.handoffErrors["thread-b"] = agent.ErrCodexRuntimeUnavailable
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(req)
+	if err != nil || !errors.Is(result.runtimeErr, agent.ErrCodexRuntimeUnavailable) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || !snapshot.FollowTurnInitialized || snapshot.FollowTurnID != "" || snapshot.FollowTurnPending {
+		t.Fatalf("initial follower snapshot=%#v ok=%v", snapshot, ok)
+	}
+
+	reply := newOutboxTestReplier(route)
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &outboxTestPlatform{name: route.Platform, account: route.AccountID, reply: reply},
+		Access:   platform.NewAccessControl([]string{f.routeUser}),
+	}})
+	outbox, err := newTerminalOutbox(filepath.Join(t.TempDir(), "terminal-outbox.json"), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.h.terminalOutboxMu.Lock()
+	f.h.terminalOutbox = outbox
+	f.h.terminalOutboxMu.Unlock()
+	delete(f.ag.handoffErrors, "thread-b")
+	f.h.agents["codex"] = f.ag
+	terminalState := agent.CodexThreadState{
+		ThreadID: "thread-b", LastTurnID: "turn-first", LastTurnStatus: "completed",
+		LastAgentMessageText: "绑定后的首轮结果",
+	}
+	f.ag.setBindingState(terminalState)
+	f.ag.setThreadBinding("thread-b", agent.CodexThreadBinding{
+		Runtime: agent.CodexRuntimeDesktop,
+		State:   terminalState,
+	})
+	if err := f.h.reconcileCodexFollower(context.Background(), registry, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	id := codexFollowerTerminalOutboxID(snapshot, "turn-first")
+	if err := outbox.attempt(context.Background(), id, reply); err != nil {
+		t.Fatal(err)
+	}
+	reply.mu.Lock()
+	results := append([]platform.TerminalResult(nil), reply.results...)
+	reply.mu.Unlock()
+	if len(results) != 1 || !strings.Contains(results[0].Text, "绑定后的首轮结果") {
+		current, _ := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+		t.Fatalf("results=%#v entries=%#v current=%#v", results, outbox.entries, current)
+	}
+}
+
 func TestCodexSwitchCommandRendersBindingSemantics(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	text := f.h.handleCodexSwitchForRouteWithOptions(codexSwitchRequest{
 		ctx: context.Background(), userID: f.routeUser, agentName: "codex",
 		workspaceRoot: f.workspaceB, agent: f.ag, target: "thread-b",
-		options: codexSwitchOptions{actorUserID: f.routeUser, platform: platform.PlatformFeishu, reply: f.reply},
+		options: codexSwitchOptions{
+			actorUserID: f.routeUser, authorizedIdentity: f.routeUser,
+			platform: platform.PlatformFeishu, accountID: "cli_a", reply: f.reply,
+		},
 	})
 	if !strings.Contains(text, "已切换并绑定") ||
 		strings.Contains(text, "窗口绑定") || strings.Contains(text, "运行位置") ||

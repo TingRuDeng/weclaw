@@ -57,6 +57,27 @@ func (h *Handler) detachCodexFrontendTaskWithPrepare(
 	threadID string,
 	prepare func() error,
 ) (codexFrontendTaskDetachResult, error) {
+	return h.detachCodexFrontendTaskWithOptions(key, routeUserID, threadID, false, prepare)
+}
+
+// detachCodexFrontendTaskForAuthorizationRevocation 强制撤销该 route 的交互和投递。
+// 它只解除消息端观察，不取消或 interrupt 共享 Codex turn。
+func (h *Handler) detachCodexFrontendTaskForAuthorizationRevocation(
+	key string,
+	routeUserID string,
+	threadID string,
+) codexFrontendTaskDetachResult {
+	result, _ := h.detachCodexFrontendTaskWithOptions(key, routeUserID, threadID, true, nil)
+	return result
+}
+
+func (h *Handler) detachCodexFrontendTaskWithOptions(
+	key string,
+	routeUserID string,
+	threadID string,
+	forceInteractionDetach bool,
+	prepare func() error,
+) (codexFrontendTaskDetachResult, error) {
 	key = strings.TrimSpace(key)
 	routeUserID = strings.TrimSpace(routeUserID)
 	threadID = strings.TrimSpace(threadID)
@@ -80,6 +101,9 @@ func (h *Handler) detachCodexFrontendTaskWithPrepare(
 		task.mu.Unlock()
 		h.tasks.mu.Unlock()
 		return codexFrontendTaskDetachResult{terminal: true}, nil
+	}
+	if forceInteractionDetach {
+		task.interactionLease.forceDetach()
 	}
 	interactionClaim, ok := task.interactionLease.claimDetach()
 	if !ok {

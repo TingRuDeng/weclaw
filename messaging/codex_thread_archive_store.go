@@ -54,6 +54,7 @@ func (s *codexSessionStore) releaseRemoteThread(
 	if binding.Follower != nil && strings.TrimSpace(binding.Follower.ThreadID) == threadID {
 		binding.Follower = nil
 		binding.FollowRevision++
+		clearCodexFollowerTurnState(&binding)
 		changed = true
 	}
 	nextBindings[bindingKey] = binding
@@ -161,6 +162,7 @@ func (s *codexSessionStore) markRemoteThreadArchived(threadID string) error {
 		if binding.Follower != nil && strings.TrimSpace(binding.Follower.ThreadID) == threadID {
 			binding.Follower = nil
 			binding.FollowRevision++
+			clearCodexFollowerTurnState(&binding)
 		}
 		nextBindings[bindingKey] = binding
 	}

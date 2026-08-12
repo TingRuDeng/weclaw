@@ -209,6 +209,26 @@ func (r *Registry) AuthorizeIncomingMessage(msg IncomingMessage) (IncomingMessag
 	return msg, false
 }
 
+// AllowsStoredIdentity 使用当前账号级 allowlist 复核持久化主动投递身份。
+// identities 应来自同一真实用户在该账号下已观察到的 open_id、user_id 或 union_id。
+func (r *Registry) AllowsStoredIdentity(platformName PlatformName, accountID string, identities []string) bool {
+	if r == nil || platformName == "" || accountID == "" {
+		return false
+	}
+	for _, entry := range r.entries {
+		if entry.Platform.Name() != platformName || entry.Platform.AccountID() != accountID {
+			continue
+		}
+		for _, identity := range identities {
+			if entry.Access.Allowed(identity) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
 // UpdateAccess 热更新指定平台的访问控制白名单，不重启平台连接。
 func (r *Registry) UpdateAccess(platformName PlatformName, allowed []string) {
 	if r == nil {

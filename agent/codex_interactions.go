@@ -17,7 +17,7 @@ func (a *ACPAgent) handleCodexApprovalEvent(ctx context.Context, evt *codexTurnE
 		return errCodexApprovalResponderMissing
 	}
 	optionID, resolveErr := a.resolvePermissionOptionWithError(ctx, evt.Approval.Request)
-	if errors.Is(resolveErr, ErrCodexObserverDetached) {
+	if resolveErr != nil {
 		return resolveErr
 	}
 	if err := evt.Approval.Respond(ctx, optionID); err != nil {

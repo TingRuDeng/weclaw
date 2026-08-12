@@ -266,6 +266,20 @@ func TestRegistryUpdatesAccessForSpecificAccount(t *testing.T) {
 	}
 }
 
+func TestRegistryAllowsStoredIdentityTracksAccountRevocation(t *testing.T) {
+	registry := NewRegistry([]RegistryEntry{{
+		Platform: &recordingPlatform{name: PlatformFeishu, accountID: "cli_a"},
+		Access:   NewAccessControl([]string{"on_same_person"}),
+	}})
+	if !registry.AllowsStoredIdentity(PlatformFeishu, "cli_a", []string{"ou_open", "on_same_person"}) {
+		t.Fatal("stored Feishu aliases were not authorized on their account")
+	}
+	registry.UpdateAccessForAccount(PlatformFeishu, "cli_a", nil)
+	if registry.AllowsStoredIdentity(PlatformFeishu, "cli_a", []string{"ou_open", "on_same_person"}) {
+		t.Fatal("revoked stored identity remained authorized")
+	}
+}
+
 func TestRegistryHasAccount(t *testing.T) {
 	first := &recordingPlatform{name: PlatformFeishu, accountID: "cli_a"}
 	second := &recordingPlatform{name: PlatformFeishu, accountID: "cli_b"}

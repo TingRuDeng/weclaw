@@ -61,6 +61,55 @@ func TestCodexDesktopActiveMessageSteersCurrentTurn(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopActiveMessageClaimsStableFollowerTerminalDelivery(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, true)
+	ag.watchDone = make(chan struct{})
+	t.Cleanup(func() { closeTestChannel(ag.watchDone) })
+	deliveryRoute := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}
+	initial := h.ensureCodexSessions().remoteSelectionSnapshot(route.bindingKey, route.threadID)
+	if _, err := h.ensureCodexSessions().commitRemoteSelection(codexRemoteSelectionUpdate{
+		BindingKey: route.bindingKey, WorkspaceRoot: route.workspaceRoot,
+		TargetThreadID: route.threadID, ConversationID: route.conversationID,
+		SetFollower: true,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: route.workspaceRoot, ThreadID: route.threadID,
+			ActorUserID: opts.userID, AuthorizedIdentity: opts.userID, DeliveryRoute: deliveryRoute,
+		},
+		Expected: initial,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	opts.platform = platform.PlatformFeishu
+	opts.accountID = "cli_a"
+	opts.reply = &codexFollowerRouteReplier{Replier: opts.reply.(*platformtest.Replier), route: deliveryRoute}
+
+	h.startCodexAgentTask(opts)
+	waitUntil(t, func() bool { return ag.steerMessage == "继续任务" })
+	task, ok := h.activeTask(route.conversationID)
+	if !ok {
+		t.Fatal("active steer did not register its observer")
+	}
+	snapshot, ok := h.ensureCodexSessions().followerSnapshot(route.bindingKey)
+	if !ok || snapshot.FollowTurnID != "turn-1" || !snapshot.FollowTurnPending {
+		t.Fatalf("steer follower snapshot=%#v ok=%v, want pending turn-1", snapshot, ok)
+	}
+	wantKey := codexFollowerTerminalOutboxID(snapshot, "turn-1")
+	task.mu.Lock()
+	control := task.externalReservation
+	task.mu.Unlock()
+	if control == nil {
+		t.Fatal("active steer observer has no external reservation")
+	}
+	control.mu.Lock()
+	gotKey := control.runtime.opts.terminalDeliveryKey
+	control.mu.Unlock()
+	if gotKey != wantKey {
+		t.Fatalf("terminal delivery key=%q, want %q", gotKey, wantKey)
+	}
+}
+
 func TestCodexActivePreflightTimeoutReleasesThreadLock(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
 	h.codexControlTimeout = 20 * time.Millisecond
@@ -153,17 +202,19 @@ func TestCodexDesktopDirectInputKeepsResolvedStreamProgress(t *testing.T) {
 	}
 }
 
-func TestCodexUnknownRuntimeStartsWithoutChangingOwner(t *testing.T) {
-	h, ag, opts, _ := liveMessageFixture(t, false)
+func TestCodexUnknownRuntimeDoesNotStartTurn(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 	h.startCodexAgentTask(opts)
-	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
 	text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n")
-	if ag.bindCalls != 0 || ag.handoffCalls != 0 || strings.Contains(text, "运行通道暂不可用") {
-		t.Fatalf("chat=%d inspect=%d handoff=%d text=%q", ag.chatCallCount(), ag.bindCalls, ag.handoffCalls, text)
+	if ag.chatCallCount() != 0 || ag.steerTurnID != "" || ag.bindCalls != 0 || ag.handoffCalls != 0 {
+		t.Fatalf("chat=%d steer=%q inspect=%d handoff=%d", ag.chatCallCount(), ag.steerTurnID, ag.bindCalls, ag.handoffCalls)
 	}
-	if ag.lastTurnReq.Runtime.PendingFirstTurn {
-		t.Fatal("普通历史 thread 不能仅因本地 rollout 为空获得自动补建资格")
+	if _, active := h.activeTask(route.conversationID); active {
+		t.Fatal("runtime unknown 时不应登记新的 active task")
+	}
+	if !strings.Contains(text, "运行通道暂不可用") || !strings.Contains(text, "绑定已保留") {
+		t.Fatalf("reply=%q, want binding-preserving unavailable notice", text)
 	}
 }
 
@@ -263,26 +314,27 @@ func TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt(t *testing.T) {
 	}
 }
 
-func TestCodexPendingMessageKeepsRemoteOwnerPriority(t *testing.T) {
+func TestCodexPendingMessageFailsClosedWhenRuntimeBecomesUnknown(t *testing.T) {
 	h, ag, opts, _ := liveMessageFixture(t, false)
 	pending := h.pendingCodexTask(opts)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
 	pending.run()
-	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
-	if ag.chatCallCount() != 1 {
-		t.Fatal("pending 在 remote owner 仍有效时应继续启动新 turn")
+	if ag.chatCallCount() != 0 {
+		t.Fatal("runtime unknown 时 pending 输入不应启动新 turn")
 	}
 }
 
-func TestCodexMessageDoesNotLetUnknownRuntimeVetoRemoteOwner(t *testing.T) {
-	h, ag, opts, _ := liveMessageFixture(t, false)
-	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
+func TestCodexRuntimeSnapshotErrorDoesNotStartTurn(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
+	ag.currentErr = agent.ErrCodexDesktopOwnershipUnknown
 
 	h.startCodexAgentTask(opts)
 
-	waitUntil(t, func() bool { return ag.chatCallCount() == 1 })
-	if ag.bindCalls != 0 || ag.handoffCalls != 0 {
-		t.Fatalf("handler 不应把 runtime 快照当授权门禁，chat=%d inspect=%d handoff=%d", ag.chatCallCount(), ag.bindCalls, ag.handoffCalls)
+	if ag.chatCallCount() != 0 || ag.steerTurnID != "" {
+		t.Fatalf("snapshot error started work: chat=%d steer=%q", ag.chatCallCount(), ag.steerTurnID)
+	}
+	if _, active := h.activeTask(route.conversationID); active {
+		t.Fatal("snapshot error must fail before task admission")
 	}
 }
 

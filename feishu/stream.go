@@ -51,9 +51,7 @@ type feishuStream struct {
 
 type feishuStreamUpdateOp struct {
 	content       string
-	summary       string
 	detailsSeq    int
-	summarySeq    int
 	streamSeq     int
 	taskCardJSON  string
 	taskUpdateSeq int
@@ -129,7 +127,7 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 		s.mu.Unlock()
 		return nil
 	}
-	op := feishuStreamUpdateOp{summary: p.Summary, content: p.Details}
+	op := feishuStreamUpdateOp{content: p.Details}
 	if !s.collapsible {
 		opts := cardOptions{
 			Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Content: p.Details,
@@ -153,10 +151,12 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 		}
 		op.taskCardJSON = cardJSON
 	} else if s.taskCards != nil {
-		_, a, b, ok := s.taskCards.updatePresentationWithSequences(s.cardID, p.Summary, p.Details)
+		snapshot, sequence, ok := s.taskCards.updatePresentationWithSequence(s.cardID, p.Summary, p.Details)
 		if ok {
-			op.summarySeq, op.detailsSeq = a, b
-			s.sequence = b
+			s.sequence = sequence
+			if snapshot.Expanded {
+				op.detailsSeq = sequence
+			}
 		}
 	}
 	s.lastSummary = p.Summary
@@ -178,12 +178,8 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 		s.mu.Unlock()
 		return nil
 	}
-	if op.summarySeq == 0 {
-		op.summarySeq = s.nextSequence()
-		op.detailsSeq = s.nextSequence()
-	}
-	if err := s.streamComponentWithRetry(ctx, cardProgressSummaryID, op.summary, op.summarySeq); err != nil {
-		return err
+	if op.detailsSeq == 0 {
+		return nil
 	}
 	return s.streamComponentWithRetry(ctx, cardMainContentID, op.content, op.detailsSeq)
 }
@@ -203,13 +199,25 @@ func (s *feishuStream) streamComponentWithRetry(ctx context.Context, elementID, 
 }
 
 type feishuStreamTerminalOp struct {
-	CardID           string `json:"card_id"`
-	Status           string `json:"status,omitempty"`
-	DisableSeq       int    `json:"disable_sequence"`
-	DisableOperation string `json:"disable_operation"`
-	UpdateSeq        int    `json:"update_sequence"`
-	UpdateOperation  string `json:"update_operation"`
-	CardJSON         string `json:"card_json"`
+	CardID           string                    `json:"card_id"`
+	Status           string                    `json:"status,omitempty"`
+	DisableSeq       int                       `json:"disable_sequence"`
+	DisableOperation string                    `json:"disable_operation"`
+	UpdateSeq        int                       `json:"update_sequence"`
+	UpdateOperation  string                    `json:"update_operation"`
+	CardJSON         string                    `json:"card_json"`
+	TaskCard         *feishuTaskCardCheckpoint `json:"task_card,omitempty"`
+}
+
+type feishuTaskCardCheckpoint struct {
+	Title              string   `json:"title"`
+	Status             string   `json:"status"`
+	Content            string   `json:"content,omitempty"`
+	Summary            string   `json:"summary,omitempty"`
+	Approvals          []string `json:"approvals,omitempty"`
+	Collapsible        bool     `json:"collapsible,omitempty"`
+	Expanded           bool     `json:"expanded,omitempty"`
+	InlineActiveStatus bool     `json:"inline_active_status,omitempty"`
 }
 
 const feishuTerminalCheckpointKind = "feishu.cardkit.terminal.v1"
@@ -323,6 +331,9 @@ func (s *feishuStream) PreflightUpdate(content string) error {
 			opts = snapshot
 		}
 	}
+	if opts.Collapsible {
+		opts.Expanded = true
+	}
 	cardJSON, err := buildCardV2(opts)
 	if err != nil {
 		return err
@@ -372,11 +383,17 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 func (s *feishuStream) prepareUpdateNowLocked(content string, now time.Time) (feishuStreamUpdateOp, error) {
 	op := feishuStreamUpdateOp{content: content}
 	if s.collapsible {
-		op.streamSeq = s.nextSequence()
 		s.lastUpdate = now
 		s.lastContent = content
 		if s.taskCards != nil {
-			s.taskCards.updateContent(s.cardID, content)
+			if opts, sequence, ok := s.taskCards.updateContentWithSequence(s.cardID, content); ok {
+				s.sequence = sequence
+				if opts.Expanded {
+					op.streamSeq = sequence
+				}
+			}
+		} else {
+			op.streamSeq = s.nextSequence()
 		}
 		return op, nil
 	}
@@ -418,6 +435,9 @@ func (s *feishuStream) runUpdateNow(ctx context.Context, op feishuStreamUpdateOp
 		if err != nil {
 			log.Printf("[feishu] ignored non-fatal task card update error: %v", err)
 		}
+		return nil
+	}
+	if op.streamSeq == 0 {
 		return nil
 	}
 	if s.collapsible {
@@ -859,7 +879,31 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 		UpdateSeq:        s.nextSequence(),
 		UpdateOperation:  uuid.NewString(),
 		CardJSON:         cardJSON,
+		TaskCard:         taskCardCheckpointFromOptions(opts),
 	}, nil
+}
+
+func taskCardCheckpointFromOptions(opts cardOptions) *feishuTaskCardCheckpoint {
+	if strings.TrimSpace(opts.taskCardID) == "" || !opts.Collapsible {
+		return nil
+	}
+	return &feishuTaskCardCheckpoint{
+		Title: opts.Title, Status: opts.Status, Content: opts.Content, Summary: opts.Summary,
+		Approvals: append([]string(nil), opts.Approvals...), Collapsible: opts.Collapsible,
+		Expanded: opts.Expanded, InlineActiveStatus: opts.InlineActiveStatus,
+	}
+}
+
+func (checkpoint *feishuTaskCardCheckpoint) cardOptions(cardID string) cardOptions {
+	if checkpoint == nil {
+		return cardOptions{}
+	}
+	return cardOptions{
+		Status: checkpoint.Status, Title: checkpoint.Title, Content: checkpoint.Content,
+		Summary: checkpoint.Summary, Approvals: append([]string(nil), checkpoint.Approvals...),
+		Collapsible: checkpoint.Collapsible, Expanded: checkpoint.Expanded,
+		InlineActiveStatus: checkpoint.InlineActiveStatus, taskCardID: cardID,
+	}
 }
 
 func trimTaskStreamThinkingIndicator(content string) string {
@@ -945,6 +989,11 @@ func prepareFeishuStreamFreezeFromReference(reference platform.DurableStreamRefe
 		UpdateSeq:        payload.Sequence + 2,
 		UpdateOperation:  uuid.NewSHA1(uuid.NameSpaceOID, []byte(operationID+":update")).String(),
 		CardJSON:         cardJSON,
+		TaskCard: taskCardCheckpointFromOptions(cardOptions{
+			Status: status, Title: payload.Title, Summary: summary, Content: details,
+			Approvals: payload.Approvals, Collapsible: payload.Collapsible,
+			Expanded: false, taskCardID: payload.CardID,
+		}),
 	}
 	checkpointPayload, err := json.Marshal(op)
 	if err != nil {

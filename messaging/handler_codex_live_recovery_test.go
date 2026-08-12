@@ -197,26 +197,58 @@ func TestCodexPendingWaitsForDesktopRelease(t *testing.T) {
 }
 
 func TestCodexReconnectRestoresControlAfterSnapshot(t *testing.T) {
-	h, runtime, cancel := disconnectedExternalRuntimeFixture(t)
-	defer cancel()
-	codexDir := t.TempDir()
-	writeLocalCodexSession(t, codexDir, "thread-1", t.TempDir(), "会话", "2026-07-11T09:00:00Z")
-	path := localRolloutPathForTest(codexDir, "thread-1")
-	appendCodexRolloutRecord(t, path, rolloutTaskStartedRecord("turn-1"))
-	h.SetCodexLocalSessionDir(codexDir)
-	ag := runtime.opts.agent.(*fakeCodexLiveAgent)
-	ag.watchResults = append(ag.watchResults, fakeCodexWatchResult{text: "重连后完成"})
-	done := make(chan struct{})
-	go func() { h.runExternalCodexTaskWatcher(runtime); close(done) }()
-	waitUntil(t, func() bool { return taskPhase(runtime.task) == codexTaskDisconnected })
-	ag.setBindingRuntime(agent.CodexRuntimeWeClaw)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Desktop 重连后 watcher 未恢复")
+	for _, runtimeHolder := range []agent.CodexRuntimeHolder{agent.CodexRuntimeWeClaw, agent.CodexRuntimeDesktop} {
+		t.Run(string(runtimeHolder), func(t *testing.T) {
+			h, runtime, cancel := disconnectedExternalRuntimeFixture(t)
+			defer cancel()
+			codexDir := t.TempDir()
+			writeLocalCodexSession(t, codexDir, "thread-1", t.TempDir(), "会话", "2026-07-11T09:00:00Z")
+			path := localRolloutPathForTest(codexDir, "thread-1")
+			appendCodexRolloutRecord(t, path, rolloutTaskStartedRecord("turn-1"))
+			h.SetCodexLocalSessionDir(codexDir)
+			ag := runtime.opts.agent.(*fakeCodexLiveAgent)
+			ag.watchResults = append(ag.watchResults, fakeCodexWatchResult{text: "重连后完成"})
+			done := make(chan struct{})
+			go func() { h.runExternalCodexTaskWatcher(runtime); close(done) }()
+			waitUntil(t, func() bool { return taskPhase(runtime.task) == codexTaskDisconnected })
+			ag.setBindingRuntime(runtimeHolder)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatalf("%s 重连后 watcher 未恢复", runtimeHolder)
+			}
+			if _, active := h.activeTask(runtime.opts.conversationID); active {
+				t.Fatal("重连后的真实终态未结束任务")
+			}
+		})
 	}
-	if _, active := h.activeTask(runtime.opts.conversationID); active {
-		t.Fatal("重连后的真实终态未结束任务")
+}
+
+func TestCurrentCodexSharedHostBindingRequiresSameTurn(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		runtime agent.CodexRuntimeHolder
+		state   agent.CodexThreadState
+		want    bool
+	}{
+		{name: "desktop active same turn", runtime: agent.CodexRuntimeDesktop, state: agent.CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1"}, want: true},
+		{name: "desktop inactive same terminal", runtime: agent.CodexRuntimeDesktop, state: agent.CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-1", LastTurnStatus: "completed"}, want: true},
+		{name: "desktop different turn", runtime: agent.CodexRuntimeDesktop, state: agent.CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-2"}},
+		{name: "weclaw different turn", runtime: agent.CodexRuntimeWeClaw, state: agent.CodexThreadState{ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-2"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h, runtime, cancel := disconnectedExternalRuntimeFixture(t)
+			defer cancel()
+			ag := runtime.opts.agent.(*fakeCodexLiveAgent)
+			ag.setThreadBinding("thread-1", agent.CodexThreadBinding{Runtime: test.runtime, State: test.state})
+			_, got, err := h.currentCodexSharedHostBinding(context.Background(), externalCodexWatchRequest{
+				agent: ag, routeUserID: "user-1", agentName: "codex", conversationID: "conversation-1",
+				threadID: "thread-1", turnID: "turn-1",
+			})
+			if err != nil || got != test.want {
+				t.Fatalf("reconnected=%v err=%v, want %v", got, err, test.want)
+			}
+		})
 	}
 }
 

@@ -58,8 +58,10 @@ func (h *Handler) startAgentTaskLifecycle(opts agentTaskLifecycleOptions) agentT
 		opts.task.mu.Unlock()
 	}
 	opts.taskCtx = observability.ContextWithTrace(opts.taskCtx, opts.trace)
-	onProgress, finish, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+	guard := h.codexFollowerDeliveryGuardForTask(opts.task)
+	onProgress, finish, progress := h.startProgressSessionForWorkspaceAgentWithGuard(
 		opts.taskCtx, opts.reply, opts.replyPrefix, opts.agentName, opts.workspaceRoot, opts.message, opts.progressConfig,
+		guard,
 	)
 	if opts.task != nil {
 		opts.task.attachProgressSession(progress)
@@ -128,10 +130,11 @@ func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply s
 		delivery: replyDeliveryRequest{
 			ctx: lifecycle.opts.replyCtx, replyWriter: lifecycle.opts.reply,
 			userID: lifecycle.opts.userID, agentName: lifecycle.opts.agentName, reply: reply,
-			trace: trace,
+			trace: trace, deliveryGuard: lifecycle.opts.task.terminalDeliveryGuardSnapshot(),
 		},
 		failed: err != nil && !stopped, stopped: stopped,
-		finish: lifecycle.finish, progress: lifecycle.progress,
+		idempotencyKey: lifecycle.opts.task.terminalDeliveryKeySnapshot(),
+		finish:         lifecycle.finish, progress: lifecycle.progress,
 	})
 }
 

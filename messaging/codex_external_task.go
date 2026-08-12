@@ -13,18 +13,20 @@ import (
 )
 
 type externalCodexTaskOptions struct {
-	ctx            context.Context
-	actorUserID    string
-	routeUserID    string
-	agentName      string
-	agent          agent.Agent
-	conversationID string
-	threadID       string
-	workspaceRoot  string
-	platform       platform.PlatformName
-	accountID      string
-	progressCfg    config.ProgressConfig
-	reply          platform.Replier
+	ctx                 context.Context
+	actorUserID         string
+	routeUserID         string
+	agentName           string
+	agent               agent.Agent
+	conversationID      string
+	bindingKey          string
+	threadID            string
+	workspaceRoot       string
+	platform            platform.PlatformName
+	accountID           string
+	progressCfg         config.ProgressConfig
+	reply               platform.Replier
+	terminalDeliveryKey string
 	// runtimeInactiveAuthoritative 仅用于同一绑定事务内的 active→terminal 二次确认。
 	runtimeInactiveAuthoritative bool
 }
@@ -71,9 +73,23 @@ func (h *Handler) startExternalCodexTaskIfActive(opts externalCodexTaskOptions) 
 	if err != nil || !prepared.active {
 		return prepared.state, false, err
 	}
+	claim, hasClaim := h.codexFollowerTurnClaim(
+		opts.bindingKey, opts.conversationID, opts.threadID, prepared.state.ActiveTurnID,
+	)
+	if hasClaim {
+		opts.terminalDeliveryKey = claim.deliveryKey
+	}
 	reservation, err := h.reserveExternalCodexTask(opts, prepared)
 	if err != nil {
 		return prepared.state, false, err
+	}
+	if hasClaim {
+		reservation.task.setTerminalDeliveryKey(claim.deliveryKey)
+		reservation.task.setTerminalDeliveryGuard(terminalDeliveryGuardFromFollower(claim.snapshot))
+		if err := h.ensureCodexSessions().commitFollowerTurnPending(claim.snapshot, prepared.state.ActiveTurnID); err != nil {
+			h.cancelExternalCodexTaskReservation(reservation)
+			return prepared.state, false, err
+		}
 	}
 	if !h.activateExternalCodexTaskReservation(reservation) {
 		return prepared.state, false, errExternalCodexTaskReservationConflict
@@ -107,7 +123,7 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 	state, err := runtimeAg.ReadCodexThreadState(opts.ctx, opts.conversationID, opts.threadID)
 	resolved := resolvedExternalCodexTask{
 		state: externalCodexTaskState{
-			CodexThreadState: state, Progress: state.LastAgentMessageText, Controllable: true,
+			CodexThreadState: state, Controllable: true,
 		},
 		err: err,
 	}
@@ -120,9 +136,17 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 	}
 	resolved.active = true
 	if state.ActiveTurnID != "" {
-		if structured, ok := opts.agent.(agent.CodexStructuredThreadRuntimeAgent); ok {
+		if structured, ok := opts.agent.(agent.CodexExpectedStructuredThreadRuntimeAgent); ok {
+			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+				return structured.WatchCodexThreadEventsForTurn(ctx, opts.conversationID, opts.threadID, state.ActiveTurnID, onProgress)
+			}
+		} else if structured, ok := opts.agent.(agent.CodexStructuredThreadRuntimeAgent); ok {
 			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
 				return structured.WatchCodexThreadEvents(ctx, opts.conversationID, opts.threadID, onProgress)
+			}
+		} else if expected, ok := opts.agent.(agent.CodexExpectedThreadRuntimeAgent); ok {
+			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+				return expected.WatchCodexThreadForTurn(ctx, opts.conversationID, opts.threadID, state.ActiveTurnID, textProgressCallback(onProgress))
 			}
 		} else {
 			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
@@ -197,8 +221,10 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	}
 	runtime.task.setProgressTimelineLimit(progressCfg.EffectiveStreamTimelineLimit())
 	taskText := firstNonBlank(runtime.state.Preview, "共享 Codex 任务")
-	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithHandle(
+	guard := h.codexFollowerDeliveryGuardForTask(runtime.task)
+	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithGuard(
 		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, runtime.opts.workspaceRoot, taskText, progressCfg,
+		guard,
 	)
 	runtime.task.attachProgressSession(progressSession)
 	defer runtime.task.detachProgressSession(progressSession)
@@ -286,9 +312,11 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 			delivery: replyDeliveryRequest{
 				ctx: runtime.opts.ctx, replyWriter: runtime.opts.reply,
 				userID: runtime.opts.actorUserID, agentName: runtime.opts.agentName, reply: reply, trace: trace,
+				deliveryGuard: runtime.task.terminalDeliveryGuardSnapshot(),
 			},
 			failed: result.Failed, stopped: result.Stopped,
-			finish: finishProgress, progress: progressSession,
+			idempotencyKey: firstNonBlank(runtime.task.terminalDeliveryKeySnapshot(), runtime.opts.terminalDeliveryKey),
+			finish:         finishProgress, progress: progressSession,
 		})
 	} else {
 		if result.Stopped && progressSession != nil {

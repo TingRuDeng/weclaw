@@ -39,6 +39,12 @@ type codexDesktopStateUpdate struct {
 	NeedsSnapshot bool
 }
 
+type codexDesktopReplayBatch struct {
+	Epoch    uint64
+	Revision uint64
+	Events   []*codexTurnEvent
+}
+
 type codexDesktopStateOptions struct {
 	now             func() time.Time
 	requestSnapshot func(string)
@@ -127,6 +133,7 @@ func (s *codexDesktopStateStore) applySnapshot(spec codexDesktopSnapshotSpec) (c
 	s.signalRevisionLocked(spec.threadID)
 	actionEvents, actionErr := s.projectPendingActionEventsLocked(snapshot)
 	events = append(events, actionEvents...)
+	stampCodexDesktopWatermark(events, snapshot.ConnectionEpoch, snapshot.Revision)
 	target := s.needsSnapshot[spec.threadID]
 	needsSnapshot := target > snapshot.Revision
 	if !needsSnapshot {
@@ -180,11 +187,79 @@ func (s *codexDesktopStateStore) applyPatchSet(spec codexDesktopPatchSetSpec) (c
 	s.signalRevisionLocked(spec.threadID)
 	actionEvents, actionErr := s.projectPendingActionEventsLocked(snapshot)
 	events = append(events, actionEvents...)
+	stampCodexDesktopWatermark(events, snapshot.ConnectionEpoch, snapshot.Revision)
 	s.evictIdleLocked(spec.threadID)
 	s.mu.Unlock()
 	return codexDesktopStateUpdate{
 		Snapshot: cloneCodexDesktopSnapshot(snapshot), Events: events, Applied: true,
 	}, actionErr
+}
+
+// replayActiveTurnBatch 在同一 state 锁内取得 revision、可见历史与尚未
+// 被其他消费者取得的交互，避免水位和审批来自不同快照。
+func (s *codexDesktopStateStore) replayActiveTurnBatch(threadID string) codexDesktopReplayBatch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, ok := s.threads[threadID]
+	if !ok || !snapshot.State.Active || strings.TrimSpace(snapshot.State.ActiveTurnID) == "" {
+		return codexDesktopReplayBatch{}
+	}
+	turn, ok := snapshot.projection.turns[snapshot.State.ActiveTurnID]
+	var events []*codexTurnEvent
+	if ok {
+		events = projectCodexDesktopItems(turn.id, nil, turn)
+	}
+	actionEvents, err := s.projectPendingActionEventsLocked(snapshot)
+	if err == nil {
+		events = append(events, actionEvents...)
+	}
+	stampCodexDesktopWatermark(events, snapshot.ConnectionEpoch, snapshot.Revision)
+	return codexDesktopReplayBatch{Epoch: snapshot.ConnectionEpoch, Revision: snapshot.Revision, Events: events}
+}
+
+func (s *codexDesktopStateStore) activeWatchSnapshot(threadID string) (CodexThreadState, codexDesktopReplayBatch, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, ok := s.threads[threadID]
+	if !ok {
+		return CodexThreadState{}, codexDesktopReplayBatch{}, false
+	}
+	state := snapshot.State
+	batch := codexDesktopReplayBatch{Epoch: snapshot.ConnectionEpoch, Revision: snapshot.Revision}
+	if !state.Active || strings.TrimSpace(state.ActiveTurnID) == "" {
+		return state, batch, true
+	}
+	if turn, exists := snapshot.projection.turns[state.ActiveTurnID]; exists {
+		batch.Events = projectCodexDesktopItems(turn.id, nil, turn)
+	}
+	actionEvents, err := s.projectPendingActionEventsLocked(snapshot)
+	if err == nil {
+		batch.Events = append(batch.Events, actionEvents...)
+	}
+	stampCodexDesktopWatermark(batch.Events, snapshot.ConnectionEpoch, snapshot.Revision)
+	return state, batch, true
+}
+
+// awaitingFinalAnswer 表示 Desktop 已把 turn 标记为 completed，但投影器仍在
+// 等待后续 history 中的 final_answer。watcher 不得在主动刷新屏障前结算空结果。
+func (s *codexDesktopStateStore) awaitingFinalAnswer(threadID string, turnID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, ok := s.threads[strings.TrimSpace(threadID)]
+	if !ok {
+		return false
+	}
+	turnID = firstNonEmpty(strings.TrimSpace(turnID), strings.TrimSpace(snapshot.State.LastTurnID))
+	return turnID != "" && snapshot.projection.terminalCandidates[turnID]
+}
+
+func stampCodexDesktopWatermark(events []*codexTurnEvent, epoch uint64, revision uint64) {
+	for _, event := range events {
+		if event != nil {
+			event.DesktopEpoch = epoch
+			event.DesktopRevision = revision
+		}
+	}
 }
 
 // snapshot 返回私有深拷贝，调用者不能修改缓存基线。

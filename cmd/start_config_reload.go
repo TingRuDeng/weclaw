@@ -79,6 +79,9 @@ func runSoftConfigReloader(ctx context.Context, handler *messaging.Handler, regi
 				log.Printf("[config] WARNING: platform access hot reload failed, keeping previous access: %v", err)
 				continue
 			}
+			for _, account := range registry.RegisteredAccounts() {
+				handler.ReconcilePlatformAccess(account.Platform, account.AccountID)
+			}
 			lastMod = info.ModTime()
 			log.Printf("[config] soft config reloaded from %s", path)
 		}

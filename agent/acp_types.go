@@ -198,11 +198,15 @@ type codexTurnEvent struct {
 	ItemID       string
 	MessagePhase string
 	Sequence     uint64
-	Delta        string
-	Text         string
-	Progress     *ProgressEvent
-	Approval     *codexApprovalRequest
-	UserInput    *codexUserInputEvent
+	// DesktopEpoch 和 DesktopRevision 只用于 Desktop 初始快照与实时增量的切换水位；
+	// 不映射为用户可见的 Agent sequence。
+	DesktopEpoch    uint64
+	DesktopRevision uint64
+	Delta           string
+	Text            string
+	Progress        *ProgressEvent
+	Approval        *codexApprovalRequest
+	UserInput       *codexUserInputEvent
 }
 
 type codexApprovalRequest struct {

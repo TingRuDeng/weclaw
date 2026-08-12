@@ -55,10 +55,13 @@ func (s *codexSessionStore) load() {
 			changed = true
 		}
 		normalized := codexSessionBinding{
-			ActiveWorkspace: normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
-			Workspaces:      make(map[string]codexWorkspaceSession),
-			FollowRevision:  binding.FollowRevision,
-			Follower:        normalizeCodexFrontendFollower(binding.Follower),
+			ActiveWorkspace:       normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
+			Workspaces:            make(map[string]codexWorkspaceSession),
+			FollowRevision:        binding.FollowRevision,
+			Follower:              normalizeCodexFrontendFollower(binding.Follower),
+			FollowTurnID:          strings.TrimSpace(binding.FollowTurnID),
+			FollowTurnInitialized: binding.FollowTurnInitialized,
+			FollowTurnPending:     binding.FollowTurnPending,
 		}
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
@@ -135,10 +138,15 @@ func (s *codexSessionStore) load() {
 			if codexWorkspaceReleaseIntent(target) || strings.TrimSpace(target.ThreadID) != normalized.Follower.ThreadID {
 				normalized.Follower = nil
 				normalized.FollowRevision++
+				clearCodexFollowerTurnState(&normalized)
 				changed = true
 			}
 		} else if binding.Follower != nil {
 			normalized.FollowRevision++
+			clearCodexFollowerTurnState(&normalized)
+			changed = true
+		} else if normalized.FollowTurnID != "" || normalized.FollowTurnInitialized || normalized.FollowTurnPending {
+			clearCodexFollowerTurnState(&normalized)
 			changed = true
 		}
 		bindings[migratedKey] = mergeCodexSessionBinding(bindings[migratedKey], normalized)
@@ -168,6 +176,9 @@ func mergeCodexSessionBinding(current codexSessionBinding, incoming codexSession
 		incoming.FollowRevision == current.FollowRevision && incoming.Follower != nil && current.Follower == nil {
 		current.FollowRevision = incoming.FollowRevision
 		current.Follower = cloneCodexFrontendFollower(incoming.Follower)
+		current.FollowTurnID = incoming.FollowTurnID
+		current.FollowTurnInitialized = incoming.FollowTurnInitialized
+		current.FollowTurnPending = incoming.FollowTurnPending
 	}
 	for workspaceRoot, session := range incoming.Workspaces {
 		current.Workspaces[workspaceRoot] = mergeCodexWorkspaceSession(current.Workspaces[workspaceRoot], session)
@@ -233,6 +244,8 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 		state.Bindings[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
 			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
+			FollowTurnID: strings.TrimSpace(binding.FollowTurnID), FollowTurnInitialized: binding.FollowTurnInitialized,
+			FollowTurnPending: binding.FollowTurnPending,
 		}
 	}
 	return filePath, state

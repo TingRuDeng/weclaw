@@ -25,7 +25,7 @@ func (r *codexRuntimeOwnerRegistry) reconcileObservedTurn(req CodexRuntimeReques
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	binding, ok := r.threads[threadID]
-	if !ok || !sameCodexControlIntent(binding.Control, req.Intent) {
+	if !ok || r.enforceControl && !sameCodexControlIntent(binding.Control, req.Intent) {
 		return binding, ErrCodexControlChanged
 	}
 	if r.leases[threadID] != nil {

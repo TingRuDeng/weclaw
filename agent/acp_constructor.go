@@ -101,6 +101,8 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		claudeCommandChanged:       make(chan struct{}),
 		notifyCh:                   make(map[string]chan *sessionUpdate),
 		turnCh:                     make(map[string]chan *codexTurnEvent),
+		turnObservers:              make(map[string]map[uint64]*codexTurnObserverMailbox),
+		pendingTurnInteractions:    make(map[string]map[string]*codexTurnEvent),
 		desktopProbe:               options.desktopProbe,
 		codexDesktopCoordination:   desktopCoordination,
 		codexDesktopHostSelection:  desktopHostSelection,
@@ -144,7 +146,7 @@ func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 	a.desktopRuntime.setDisconnectHandler(a.handleCodexDesktopDisconnect)
 	a.desktopRuntime.setEventHandler(func(threadID string, events []*codexTurnEvent) {
 		for _, event := range events {
-			a.dispatchToTurnCh(threadID, event)
+			a.dispatchDesktopTurnEvent(threadID, event)
 		}
 	})
 }

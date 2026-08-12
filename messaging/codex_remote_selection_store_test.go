@@ -90,6 +90,50 @@ func TestCodexRemoteSelectionAllowsMultipleFrontendsOnSameThread(t *testing.T) {
 	}
 }
 
+func TestCodexRemoteSelectionKeepsFollowerRevisionForSameAuthorizedEndpoint(t *testing.T) {
+	store := newCodexSessionStore()
+	workspace := "/workspace/reselect"
+	bindingKey := codexBindingKey("feishu:route-a", "codex")
+	store.ensureWorkspace(bindingKey, workspace)
+	firstRoute := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot-a", ChatID: "chat-a", ReplyToID: "message-1",
+	}
+	commit := func(route platform.DeliveryRoute) error {
+		_, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
+			BindingKey: bindingKey, WorkspaceRoot: workspace,
+			TargetThreadID: "thread-shared", ConversationID: "conversation-a",
+			SetFollower: true,
+			Follower: &codexFrontendFollower{
+				WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: "user-a",
+				AuthorizedIdentity: "union-a", DeliveryRoute: route,
+			},
+			FollowerTurnID: "turn-1", FollowerTurnInitialized: true,
+			Expected: store.remoteSelectionSnapshot(bindingKey, "thread-shared"),
+		})
+		return err
+	}
+	if err := commit(firstRoute); err != nil {
+		t.Fatal(err)
+	}
+	before := store.followerSnapshots()[0]
+
+	secondRoute := firstRoute
+	secondRoute.ReplyToID = "message-2"
+	if err := commit(secondRoute); err != nil {
+		t.Fatal(err)
+	}
+	after := store.followerSnapshots()[0]
+	if after.Revision != before.Revision {
+		t.Fatalf("same authorized endpoint revision=%d, want %d", after.Revision, before.Revision)
+	}
+	if after.FollowTurnID != "turn-1" || !after.FollowTurnInitialized || after.FollowTurnPending {
+		t.Fatalf("same endpoint reset follower cursor: %#v", after)
+	}
+	if after.Target.DeliveryRoute.ReplyToID != "message-2" {
+		t.Fatalf("latest reply anchor=%q, want message-2", after.Target.DeliveryRoute.ReplyToID)
+	}
+}
+
 func TestCodexRemoteSelectionClearsExplicitReleaseTombstone(t *testing.T) {
 	store := newCodexSessionStore()
 	workspace := "/workspace/rebind"
@@ -218,7 +262,7 @@ func TestCodexRemoteSelectionPersistsFollowerEndpointAndReleaseClearsIt(t *testi
 	workspace := "/workspace/follower"
 	store.ensureWorkspace(bindingKey, workspace)
 	follower := &codexFrontendFollower{
-		WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: "ou_user",
+		WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: "ou_user", AuthorizedIdentity: "ou_user",
 		DeliveryRoute: platform.DeliveryRoute{
 			Platform: platform.PlatformFeishu, AccountID: "bot-a",
 			ChatID: "oc_chat", ReplyToID: "om_switch",
@@ -269,8 +313,10 @@ func TestCodexRemoteSelectionPersistsFollowerEndpointAndReleaseClearsIt(t *testi
 	}
 }
 
-func TestCodexRemoteSelectionRejectsSecondFeishuFollowerForSameThread(t *testing.T) {
+func TestCodexRemoteSelectionAllowsMultipleFeishuFollowersForSameThread(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
 	store := newCodexSessionStore()
+	store.SetFilePath(statePath)
 	workspace := "/workspace/shared-follower"
 	firstKey := codexBindingKey("feishu:route-a", "codex")
 	secondKey := codexBindingKey("feishu:route-b", "codex")
@@ -281,7 +327,7 @@ func TestCodexRemoteSelectionRejectsSecondFeishuFollowerForSameThread(t *testing
 			TargetThreadID: "thread-shared", ConversationID: "conversation-" + actor,
 			SetFollower: true,
 			Follower: &codexFrontendFollower{
-				WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: actor,
+				WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: actor, AuthorizedIdentity: actor,
 				DeliveryRoute: platform.DeliveryRoute{
 					Platform: platform.PlatformFeishu, AccountID: "bot-a", ChatID: chat,
 				},
@@ -293,11 +339,35 @@ func TestCodexRemoteSelectionRejectsSecondFeishuFollowerForSameThread(t *testing
 	if err := commit(firstKey, "user-a", "chat-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := commit(secondKey, "user-b", "chat-b"); !errors.Is(err, errCodexFollowerAlreadyBound) {
-		t.Fatalf("second follower error=%v, want already bound", err)
+	if err := commit(secondKey, "user-b", "chat-b"); err != nil {
+		t.Fatalf("second follower error=%v", err)
 	}
-	if got := store.followerSnapshots(); len(got) != 1 || got[0].BindingKey != firstKey {
-		t.Fatalf("followers after conflict=%#v", got)
+	if got := store.followerSnapshots(); len(got) != 2 ||
+		got[0].BindingKey != firstKey || got[1].BindingKey != secondKey {
+		t.Fatalf("followers=%#v, want both frontend routes", got)
+	}
+
+	reloaded := newCodexSessionStore()
+	reloaded.SetFilePath(statePath)
+	beforeRelease := reloaded.followerSnapshots()
+	if len(beforeRelease) != 2 || beforeRelease[0].Target.DeliveryRoute.ChatID != "chat-a" ||
+		beforeRelease[1].Target.DeliveryRoute.ChatID != "chat-b" {
+		t.Fatalf("reloaded followers=%#v", beforeRelease)
+	}
+	secondRevision := beforeRelease[1].Revision
+	if _, err := reloaded.releaseWorkspaceThread(firstKey, workspace); err != nil {
+		t.Fatal(err)
+	}
+	afterRelease := reloaded.followerSnapshots()
+	if len(afterRelease) != 1 || afterRelease[0].BindingKey != secondKey ||
+		afterRelease[0].Revision != secondRevision || afterRelease[0].Target.DeliveryRoute.ChatID != "chat-b" {
+		t.Fatalf("followers after route A release=%#v", afterRelease)
+	}
+	finalReload := newCodexSessionStore()
+	finalReload.SetFilePath(statePath)
+	if got := finalReload.followerSnapshots(); len(got) != 1 || got[0].BindingKey != secondKey ||
+		got[0].Revision != secondRevision {
+		t.Fatalf("persisted release isolation=%#v", got)
 	}
 }
 
@@ -311,7 +381,7 @@ func TestCodexFirstTurnReplacementMovesFollowerTarget(t *testing.T) {
 		TargetThreadID: "thread-placeholder", ConversationID: "conversation-a",
 		PendingFirstTurn: true, SetFollower: true,
 		Follower: &codexFrontendFollower{
-			WorkspaceRoot: workspace, ThreadID: "thread-placeholder", ActorUserID: "user-a",
+			WorkspaceRoot: workspace, ThreadID: "thread-placeholder", ActorUserID: "user-a", AuthorizedIdentity: "user-a",
 			DeliveryRoute: platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "bot-a", ChatID: "chat-a"},
 		},
 		Expected: store.remoteSelectionSnapshot(bindingKey, "thread-placeholder"),
@@ -342,7 +412,7 @@ func TestCodexRemoteThreadReleaseClearsFollowerConflict(t *testing.T) {
 			TargetThreadID: "thread-shared", ConversationID: "conversation-" + actor,
 			SetFollower: true,
 			Follower: &codexFrontendFollower{
-				WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: actor,
+				WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: actor, AuthorizedIdentity: actor,
 				DeliveryRoute: platform.DeliveryRoute{
 					Platform: platform.PlatformFeishu, AccountID: "bot-a", ChatID: chat,
 				},

@@ -94,6 +94,10 @@ type terminalOutboxEntry struct {
 	ID                   string                           `json:"id"`
 	Route                platform.DeliveryRoute           `json:"route"`
 	AgentName            string                           `json:"agent_name,omitempty"`
+	AuthorizedIdentity   string                           `json:"authorized_identity,omitempty"`
+	FollowerBindingKey   string                           `json:"follower_binding_key,omitempty"`
+	FollowerRevision     uint64                           `json:"follower_revision,omitempty"`
+	FollowerThreadID     string                           `json:"follower_thread_id,omitempty"`
 	Failed               bool                             `json:"failed,omitempty"`
 	Stopped              bool                             `json:"stopped,omitempty"`
 	Stream               *platform.DurableStreamReference `json:"stream,omitempty"`
@@ -102,6 +106,7 @@ type terminalOutboxEntry struct {
 	RichResult           bool                             `json:"rich_result,omitempty"`
 	Text                 string                           `json:"text,omitempty"`
 	Notification         string                           `json:"notification,omitempty"`
+	IdempotencyKey       string                           `json:"idempotency_key,omitempty"`
 	Trace                *observability.TraceContext      `json:"trace,omitempty"`
 	PendingSupersedes    []pendingStreamSupersede         `json:"pending_supersedes,omitempty"`
 	ActiveStreamRecovery bool                             `json:"active_stream_recovery,omitempty"`
@@ -120,8 +125,13 @@ type terminalOutboxEntry struct {
 }
 
 type terminalOutboxDraft struct {
+	ID                   string
 	Route                platform.DeliveryRoute
 	AgentName            string
+	AuthorizedIdentity   string
+	FollowerBindingKey   string
+	FollowerRevision     uint64
+	FollowerThreadID     string
 	Failed               bool
 	Stopped              bool
 	Stream               *platform.DurableStreamReference
@@ -130,25 +140,91 @@ type terminalOutboxDraft struct {
 	RichResult           bool
 	Text                 string
 	Notification         string
+	IdempotencyKey       string
 	Trace                observability.TraceContext
 	ActiveStreamRecovery bool
 }
 
+type terminalDeliveryGuard struct {
+	AuthorizedIdentity string
+	FollowerBindingKey string
+	FollowerRevision   uint64
+	FollowerThreadID   string
+}
+
+func (g terminalDeliveryGuard) empty() bool {
+	return strings.TrimSpace(g.AuthorizedIdentity) == "" && strings.TrimSpace(g.FollowerBindingKey) == "" &&
+		g.FollowerRevision == 0 && strings.TrimSpace(g.FollowerThreadID) == ""
+}
+
+func (g terminalDeliveryGuard) complete() bool {
+	return strings.TrimSpace(g.AuthorizedIdentity) != "" && strings.TrimSpace(g.FollowerBindingKey) != "" &&
+		g.FollowerRevision != 0 && strings.TrimSpace(g.FollowerThreadID) != ""
+}
+
+func terminalDeliveryGuardFromDraft(draft terminalOutboxDraft) terminalDeliveryGuard {
+	return terminalDeliveryGuard{
+		AuthorizedIdentity: strings.TrimSpace(draft.AuthorizedIdentity),
+		FollowerBindingKey: strings.TrimSpace(draft.FollowerBindingKey),
+		FollowerRevision:   draft.FollowerRevision,
+		FollowerThreadID:   strings.TrimSpace(draft.FollowerThreadID),
+	}
+}
+
+func terminalDeliveryGuardFromEntry(entry *terminalOutboxEntry) terminalDeliveryGuard {
+	if entry == nil {
+		return terminalDeliveryGuard{}
+	}
+	return terminalDeliveryGuard{
+		AuthorizedIdentity: strings.TrimSpace(entry.AuthorizedIdentity),
+		FollowerBindingKey: strings.TrimSpace(entry.FollowerBindingKey),
+		FollowerRevision:   entry.FollowerRevision,
+		FollowerThreadID:   strings.TrimSpace(entry.FollowerThreadID),
+	}
+}
+
+func mergeTerminalDeliveryGuard(entry *terminalOutboxEntry, draft terminalOutboxDraft) error {
+	guard := terminalDeliveryGuardFromDraft(draft)
+	if guard.empty() {
+		return nil
+	}
+	if !guard.complete() {
+		return fmt.Errorf("incomplete terminal follower delivery guard")
+	}
+	entry.AuthorizedIdentity = guard.AuthorizedIdentity
+	entry.FollowerBindingKey = guard.FollowerBindingKey
+	entry.FollowerRevision = guard.FollowerRevision
+	entry.FollowerThreadID = guard.FollowerThreadID
+	return nil
+}
+
+func (g terminalDeliveryGuard) apply(draft *terminalOutboxDraft) {
+	if draft == nil {
+		return
+	}
+	draft.AuthorizedIdentity = strings.TrimSpace(g.AuthorizedIdentity)
+	draft.FollowerBindingKey = strings.TrimSpace(g.FollowerBindingKey)
+	draft.FollowerRevision = g.FollowerRevision
+	draft.FollowerThreadID = strings.TrimSpace(g.FollowerThreadID)
+}
+
 type terminalOutbox struct {
-	mu           sync.Mutex
-	path         string
-	registry     *platform.Registry
-	entries      []*terminalOutboxEntry
-	preparing    map[string]bool
-	followerHeld map[string]bool
-	releaseHeld  map[string]bool
-	releaseBusy  map[string]bool
-	processing   map[string]bool
-	wake         chan struct{}
-	now          func() time.Time
-	trace        observability.Recorder
-	maxEntries   int
-	maxAttempts  int
+	mu              sync.Mutex
+	path            string
+	registry        *platform.Registry
+	entries         []*terminalOutboxEntry
+	preparing       map[string]bool
+	followerHeld    map[string]bool
+	releaseHeld     map[string]bool
+	releaseBusy     map[string]bool
+	processing      map[string]bool
+	wake            chan struct{}
+	now             func() time.Time
+	trace           observability.Recorder
+	maxEntries      int
+	maxAttempts     int
+	deliveryAllowed func(*terminalOutboxEntry) bool
+	deliveryBarrier *sync.RWMutex
 }
 
 // DefaultTerminalOutboxFile 返回终态 outbox 的主机级状态文件。
@@ -173,6 +249,10 @@ func (h *Handler) StartTerminalOutbox(ctx context.Context, registry *platform.Re
 	if err != nil {
 		return err
 	}
+	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
+		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	}
+	outbox.deliveryBarrier = &h.codexFollowerDeliveryMu
 	h.terminalOutboxMu.Lock()
 	if h.terminalOutbox != nil {
 		h.terminalOutboxMu.Unlock()
@@ -529,12 +609,20 @@ func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing b
 		return nil, fmt.Errorf("terminal delivery has no payload")
 	}
 	now := o.now()
+	entryID := strings.TrimSpace(draft.ID)
+	if entryID == "" {
+		entryID = uuid.NewString()
+	}
 	entry := &terminalOutboxEntry{
-		ID: uuid.NewString(), Route: draft.Route,
+		ID: entryID, Route: draft.Route,
 		AgentName: strings.TrimSpace(draft.AgentName), Failed: draft.Failed, Stopped: draft.Stopped,
+		AuthorizedIdentity: strings.TrimSpace(draft.AuthorizedIdentity),
+		FollowerBindingKey: strings.TrimSpace(draft.FollowerBindingKey),
+		FollowerRevision:   draft.FollowerRevision, FollowerThreadID: strings.TrimSpace(draft.FollowerThreadID),
 		Stream: cloneDurableStreamReference(draft.Stream), Checkpoint: draft.Checkpoint,
 		ResultTitle: strings.TrimSpace(draft.ResultTitle), RichResult: draft.RichResult,
 		Text: draft.Text, Notification: draft.Notification,
+		IdempotencyKey:       strings.TrimSpace(draft.IdempotencyKey),
 		ActiveStreamRecovery: draft.ActiveStreamRecovery,
 		CreatedAt:            now, UpdatedAt: now, NextAttempt: now,
 	}
@@ -547,6 +635,37 @@ func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing b
 		return nil, err
 	}
 	o.mu.Lock()
+	if existing := o.entryLocked(entry.ID); existing != nil {
+		if !sameTerminalOutboxPayload(existing, entry) {
+			o.mu.Unlock()
+			return nil, fmt.Errorf("terminal outbox id conflicts with an existing delivery")
+		}
+		if !sameDeliveryRoute(existing.Route, entry.Route) {
+			guard := terminalDeliveryGuardFromEntry(existing)
+			if !guard.complete() || !sameDeliveryEndpoint(existing.Route, entry.Route) ||
+				o.preparing[entry.ID] || o.processing[entry.ID] {
+				o.mu.Unlock()
+				return nil, fmt.Errorf("terminal outbox id conflicts with an existing delivery")
+			}
+			before := cloneTerminalOutboxEntry(existing)
+			existing.Route = entry.Route
+			existing.Attempts = 0
+			existing.LastError = ""
+			existing.DeadLetter = false
+			existing.DeadLetterAt = time.Time{}
+			existing.UpdatedAt = now
+			existing.NextAttempt = now
+			if err := o.persistLocked(); err != nil {
+				*existing = *before
+				o.mu.Unlock()
+				return nil, fmt.Errorf("persist reanchored terminal delivery: %w", err)
+			}
+		}
+		clone := cloneTerminalOutboxEntry(existing)
+		o.mu.Unlock()
+		o.signal()
+		return clone, nil
+	}
 	evictedIndex := -1
 	var evicted *terminalOutboxEntry
 	if len(o.entries) >= o.entryLimit() {
@@ -580,6 +699,22 @@ func (o *terminalOutbox) enqueueWithState(draft terminalOutboxDraft, preparing b
 	}
 	o.recordTrace(clone, "terminal.outbox.enqueued", "pending", "terminal delivery queued")
 	return clone, nil
+}
+
+func sameTerminalOutboxPayload(existing *terminalOutboxEntry, candidate *terminalOutboxEntry) bool {
+	if existing == nil || candidate == nil {
+		return existing == nil && candidate == nil
+	}
+	return existing.ID == candidate.ID &&
+		existing.AgentName == candidate.AgentName && existing.Failed == candidate.Failed &&
+		existing.AuthorizedIdentity == candidate.AuthorizedIdentity &&
+		existing.FollowerBindingKey == candidate.FollowerBindingKey &&
+		existing.FollowerRevision == candidate.FollowerRevision && existing.FollowerThreadID == candidate.FollowerThreadID &&
+		existing.Stopped == candidate.Stopped && existing.ResultTitle == candidate.ResultTitle &&
+		existing.RichResult == candidate.RichResult && existing.Text == candidate.Text &&
+		existing.Notification == candidate.Notification && existing.IdempotencyKey == candidate.IdempotencyKey && existing.Stream == nil &&
+		candidate.Stream == nil && existing.Checkpoint == nil && candidate.Checkpoint == nil &&
+		!existing.ActiveStreamRecovery && !candidate.ActiveStreamRecovery
 }
 
 func (o *terminalOutbox) entryLimit() int {
@@ -626,12 +761,17 @@ func (o *terminalOutbox) stageReservationResult(id string, draft terminalOutboxD
 	before := cloneTerminalOutboxEntry(entry)
 	entry.Route = draft.Route
 	entry.AgentName = strings.TrimSpace(draft.AgentName)
+	if err := mergeTerminalDeliveryGuard(entry, draft); err != nil {
+		*entry = *before
+		return err
+	}
 	entry.Failed = draft.Failed
 	entry.Stopped = draft.Stopped
 	entry.ResultTitle = strings.TrimSpace(draft.ResultTitle)
 	entry.RichResult = draft.RichResult
 	entry.Text = draft.Text
 	entry.Notification = draft.Notification
+	entry.IdempotencyKey = strings.TrimSpace(draft.IdempotencyKey)
 	entry.ActiveStreamRecovery = false
 	entry.CheckpointDelivered = false
 	entry.TextDelivered = false
@@ -677,6 +817,13 @@ func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft)
 	before := cloneTerminalOutboxEntry(entry)
 	entry.Route = draft.Route
 	entry.AgentName = strings.TrimSpace(draft.AgentName)
+	if err := mergeTerminalDeliveryGuard(entry, draft); err != nil {
+		*entry = *before
+		delete(o.preparing, id)
+		o.mu.Unlock()
+		o.signal()
+		return err
+	}
 	entry.Failed = draft.Failed
 	entry.Stopped = draft.Stopped
 	nextStream := cloneDurableStreamReference(draft.Stream)
@@ -689,6 +836,7 @@ func (o *terminalOutbox) commitReservation(id string, draft terminalOutboxDraft)
 	entry.RichResult = draft.RichResult
 	entry.Text = draft.Text
 	entry.Notification = draft.Notification
+	entry.IdempotencyKey = strings.TrimSpace(draft.IdempotencyKey)
 	entry.ActiveStreamRecovery = false
 	entry.UpdatedAt = o.now()
 	entry.NextAttempt = entry.UpdatedAt
@@ -855,6 +1003,33 @@ func (o *terminalOutbox) refreshStreamReservationTrace(id string, trace observab
 	if err := o.persistLocked(); err != nil {
 		*entry = *before
 		return fmt.Errorf("persist active stream recovery trace: %w", err)
+	}
+	return nil
+}
+
+func (o *terminalOutbox) refreshReservationDeliveryGuard(id string, guard terminalDeliveryGuard) error {
+	if !guard.complete() {
+		return fmt.Errorf("incomplete terminal follower delivery guard")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		return ErrTerminalOutboxNotFound
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	entry.AuthorizedIdentity = strings.TrimSpace(guard.AuthorizedIdentity)
+	entry.FollowerBindingKey = strings.TrimSpace(guard.FollowerBindingKey)
+	entry.FollowerRevision = guard.FollowerRevision
+	entry.FollowerThreadID = strings.TrimSpace(guard.FollowerThreadID)
+	entry.UpdatedAt = o.now()
+	if err := validateTerminalOutboxEntry(entry); err != nil {
+		*entry = *before
+		return err
+	}
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		return fmt.Errorf("persist terminal delivery guard: %w", err)
 	}
 	return nil
 }
@@ -1507,11 +1682,21 @@ func terminalEntryHasWork(entry *terminalOutboxEntry) bool {
 }
 
 func (o *terminalOutbox) attempt(parent context.Context, id string, preferred platform.Replier) error {
+	if o.deliveryBarrier != nil {
+		o.deliveryBarrier.RLock()
+		defer o.deliveryBarrier.RUnlock()
+	}
 	entry, ok := o.beginAttempt(id)
 	if !ok {
 		return nil
 	}
 	defer o.endAttempt(id)
+	if o.deliveryAllowed != nil && !o.deliveryAllowed(entry) {
+		if err := o.discardReservation(id); err != nil {
+			return fmt.Errorf("discard unauthorized terminal delivery: %w", err)
+		}
+		return nil
+	}
 	o.recordTrace(entry, "terminal.delivery.attempt", "running", fmt.Sprintf("attempt=%d", entry.Attempts+1))
 	var preparationErr error
 	if entry.Stream != nil && entry.Checkpoint == nil {
@@ -1559,9 +1744,9 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 	}
 	if strings.TrimSpace(entry.Text) != "" && !entry.TextDelivered {
 		text := entry.Text
-		resultKey := id + ":text"
+		resultKey := terminalOutboxIdempotencyKey(entry, "text")
 		if entry.RichResult {
-			resultKey = id + ":result"
+			resultKey = terminalOutboxIdempotencyKey(entry, "result")
 		}
 		startStage(terminalOutboxTextStage, func(ctx context.Context, reply platform.Replier) error {
 			return sendOutboxResult(ctx, reply, entry, text, resultKey)
@@ -1570,7 +1755,7 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 	if strings.TrimSpace(entry.Notification) != "" && !entry.NotificationDelivered {
 		notification := entry.Notification
 		startStage(terminalOutboxNotificationStage, func(ctx context.Context, reply platform.Replier) error {
-			return sendOutboxText(ctx, reply, notification, id+":notification")
+			return sendOutboxText(ctx, reply, notification, terminalOutboxIdempotencyKey(entry, "notification"))
 		})
 	}
 	var deliveryErrors []error
@@ -1584,6 +1769,17 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 		return o.recordFailure(id, err)
 	}
 	return o.removeDelivered(id)
+}
+
+func terminalOutboxIdempotencyKey(entry *terminalOutboxEntry, stage string) string {
+	base := ""
+	if entry != nil {
+		base = strings.TrimSpace(entry.IdempotencyKey)
+		if base == "" {
+			base = entry.ID
+		}
+	}
+	return base + ":" + stage
 }
 
 func (o *terminalOutbox) prepareStreamRecovery(id string, entry *terminalOutboxEntry, reply platform.Replier) (*terminalOutboxEntry, error) {
@@ -2013,6 +2209,10 @@ func validateTerminalOutboxEntry(entry *terminalOutboxEntry) error {
 	}
 	if !entry.Route.Valid() {
 		return fmt.Errorf("invalid terminal outbox route")
+	}
+	guard := terminalDeliveryGuardFromEntry(entry)
+	if !guard.empty() && !guard.complete() {
+		return fmt.Errorf("incomplete terminal follower delivery guard")
 	}
 	if entry.Stream == nil && entry.Checkpoint == nil && strings.TrimSpace(entry.Text) == "" && strings.TrimSpace(entry.Notification) == "" && len(entry.PendingSupersedes) == 0 {
 		return fmt.Errorf("terminal outbox entry has no payload")

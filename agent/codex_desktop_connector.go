@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const codexDesktopStateApplyTimeout = 10 * time.Second
+const (
+	codexDesktopStateApplyTimeout = 10 * time.Second
+	codexDesktopLocalHostID       = "local"
+)
 
 type codexDesktopRuntime struct {
 	mu            sync.Mutex
@@ -94,6 +97,74 @@ func (r *codexDesktopRuntime) threadState(threadID string) (CodexThreadState, er
 		return CodexThreadState{}, ErrCodexDesktopOwnershipUnknown
 	}
 	return snapshot.State, nil
+}
+
+// replayActiveTurnEvents 在 watcher 先完成注册后，从带 revision
+// 屏障的当前快照回放可见进度和尚未取得的交互。
+func (r *codexDesktopRuntime) replayActiveTurnEvents(threadID string) []*codexTurnEvent {
+	return r.replayActiveTurnBatch(threadID).Events
+}
+
+func (r *codexDesktopRuntime) replayActiveTurnBatch(threadID string) codexDesktopReplayBatch {
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state == nil {
+		return codexDesktopReplayBatch{}
+	}
+	return state.replayActiveTurnBatch(threadID)
+}
+
+func (r *codexDesktopRuntime) activeWatchSnapshot(threadID string) (CodexThreadState, codexDesktopReplayBatch, error) {
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state == nil {
+		return CodexThreadState{}, codexDesktopReplayBatch{}, ErrCodexDesktopUnavailable
+	}
+	threadState, batch, ok := state.activeWatchSnapshot(threadID)
+	if !ok {
+		return CodexThreadState{}, codexDesktopReplayBatch{}, ErrCodexDesktopOwnershipUnknown
+	}
+	return threadState, batch, nil
+}
+
+func (r *codexDesktopRuntime) awaitingFinalAnswer(threadID string, turnID string) bool {
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	return state != nil && state.awaitingFinalAnswer(threadID, turnID)
+}
+
+func (r *codexDesktopRuntime) abandonTurnEvent(threadID string, event *codexTurnEvent) {
+	if event == nil {
+		return
+	}
+	requestID := ""
+	if event.Approval != nil {
+		requestID = event.Approval.Request.RequestID
+	} else if event.UserInput != nil {
+		requestID = event.UserInput.Request.RequestID
+	}
+	if strings.TrimSpace(requestID) == "" {
+		return
+	}
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state != nil {
+		state.resetPendingActionOnError(threadID, requestID, context.Canceled)
+	}
+}
+
+func (r *codexDesktopRuntime) replayPendingActionEvents(threadID string) []*codexTurnEvent {
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state == nil {
+		return nil
+	}
+	return state.replayPendingActionEvents(threadID)
 }
 
 // startTurn 通过 follower 在同一个 Desktop thread 开始任务。
@@ -190,6 +261,9 @@ func (r *codexDesktopRuntime) requestHistory(ctx context.Context, ref CodexThrea
 	if err := client.Connect(ctx); err != nil {
 		return err
 	}
+	if err := r.announceFollowing(ctx, client, ref.ThreadID); err != nil {
+		return err
+	}
 	result, err := client.Call(ctx, "thread-follower-load-complete-history", map[string]string{
 		"conversationId": ref.ThreadID,
 	})
@@ -203,6 +277,42 @@ func (r *codexDesktopRuntime) requestHistory(ctx context.Context, ref CodexThrea
 	waitCtx, cancel := context.WithTimeout(ctx, codexDesktopStateApplyTimeout)
 	defer cancel()
 	return r.state.waitForRevision(waitCtx, strings.TrimSpace(ref.ThreadID), client.Epoch(), revision)
+}
+
+// announceFollowing 把显式跟踪从一次性状态询问改成幂等的当前状态声明。
+// App 已先打开 thread 时不会再次询问，只有主动登记后 owner 才能回放 snapshot。
+func (r *codexDesktopRuntime) announceFollowing(ctx context.Context, client *codexDesktopClient, threadID string) error {
+	threadID = strings.TrimSpace(threadID)
+	if client == nil || threadID == "" {
+		return ErrCodexDesktopUnavailable
+	}
+	r.mu.Lock()
+	authoritative := r.authoritative
+	state := r.state
+	r.mu.Unlock()
+	if authoritative == nil || !authoritative() {
+		return nil
+	}
+	epoch := client.Epoch()
+	hasCurrentSnapshot := false
+	if state != nil {
+		if snapshot, ok := state.snapshot(threadID); ok && snapshot.ConnectionEpoch == epoch {
+			hasCurrentSnapshot = true
+		}
+	}
+	if err := client.broadcastForEpoch(ctx, epoch, "thread-stream-following-changed", map[string]any{
+		"conversationId": threadID,
+		"hostId":         codexDesktopLocalHostID,
+		"following":      true,
+	}, nil); err != nil {
+		return err
+	}
+	if state == nil || hasCurrentSnapshot {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, codexDesktopStateApplyTimeout)
+	defer cancel()
+	return state.waitForRevision(waitCtx, threadID, epoch, 0)
 }
 
 // codexDesktopLoadRevision 提取 Desktop load-complete-history 的状态屏障 revision。

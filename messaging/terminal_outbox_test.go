@@ -45,6 +45,9 @@ type outboxTestReplier struct {
 	finalOutside          bool
 	beforeCheckpoint      func()
 	textDelivered         chan string
+	fileStarted           chan struct{}
+	fileContinue          chan struct{}
+	fileOnce              sync.Once
 }
 
 type outboxTextOnlyReplier struct {
@@ -71,8 +74,16 @@ func (r *outboxTestReplier) Capabilities() platform.Capabilities {
 }
 func (r *outboxTestReplier) SendText(context.Context, string) error  { return nil }
 func (r *outboxTestReplier) SendImage(context.Context, string) error { return nil }
-func (r *outboxTestReplier) SendFile(context.Context, string) error  { return nil }
-func (r *outboxTestReplier) Typing(context.Context, bool) error      { return nil }
+func (r *outboxTestReplier) SendFile(context.Context, string) error {
+	if r.fileStarted != nil {
+		r.fileOnce.Do(func() { close(r.fileStarted) })
+	}
+	if r.fileContinue != nil {
+		<-r.fileContinue
+	}
+	return nil
+}
+func (r *outboxTestReplier) Typing(context.Context, bool) error { return nil }
 func (r *outboxTestReplier) OpenStream(context.Context, platform.StreamOptions) (platform.Stream, error) {
 	if r.stream != nil {
 		return r.stream, nil
@@ -237,7 +248,7 @@ func TestReleasedRecoveryPrepareFailureThenRebindMigratesPreparingHold(t *testin
 		BindingKey: codexBindingKey(routeUserID, "codex"), RouteUserID: routeUserID,
 		AgentName: "codex", ConversationID: conversationID, Revision: 2,
 		Target: codexFrontendFollower{
-			WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: "user", DeliveryRoute: route,
+			WorkspaceRoot: workspace, ThreadID: "thread-shared", ActorUserID: "user", AuthorizedIdentity: "user", DeliveryRoute: route,
 		},
 	}
 	outbox.reconcileCodexFollowerHolds([]codexFollowerSnapshot{follower}, nil)
@@ -486,8 +497,82 @@ func (p *outboxTestPlatform) NewReplierForRoute(route platform.DeliveryRoute) pl
 func newOutboxTestRegistry(route platform.DeliveryRoute, reply *outboxTestReplier) *platform.Registry {
 	return platform.NewRegistry([]platform.RegistryEntry{{
 		Platform: &outboxTestPlatform{name: route.Platform, account: route.AccountID, reply: reply},
-		Access:   platform.NewAccessControl([]string{"test-user"}),
+		Access:   platform.NewAccessControl([]string{"test-user", "user"}),
 	}})
+}
+
+func TestTerminalOutboxDeterministicIDIsIdempotent(t *testing.T) {
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat",
+	}
+	outbox, err := newTerminalOutbox(filepath.Join(t.TempDir(), "terminal-outbox.json"), platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "a67f311d-521a-5e25-89da-a8b1fa07e267"
+	draft := terminalOutboxDraft{
+		ID: id, Route: route, AgentName: "codex", Text: "唯一快速终态",
+		RichResult: true, ResultTitle: "Codex · project",
+	}
+	first, err := outbox.enqueue(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := outbox.enqueue(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != id || second.ID != id {
+		t.Fatalf("ids=%q/%q, want %q", first.ID, second.ID, id)
+	}
+	entries, err := loadTerminalOutbox(outbox.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries=%d, want one idempotent result", len(entries))
+	}
+}
+
+func TestTerminalOutboxReanchorsIdempotentFollowerTerminalAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	oldRoute := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat", ReplyToID: "message-before-restart",
+	}
+	draft := terminalOutboxDraft{
+		ID: "a67f311d-521a-5e25-89da-a8b1fa07e268", Route: oldRoute, AgentName: "codex", Text: "唯一最终结果",
+		AuthorizedIdentity: "union-user", FollowerBindingKey: "binding-user", FollowerRevision: 7,
+		FollowerThreadID: "thread-1", RichResult: true, ResultTitle: "Codex · project",
+	}
+	beforeRestart, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := beforeRestart.enqueue(draft); err != nil {
+		t.Fatal(err)
+	}
+
+	afterRestart, err := newTerminalOutbox(path, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	latestRoute := oldRoute
+	latestRoute.ReplyToID = "message-after-restart"
+	draft.Route = latestRoute
+	entry, err := afterRestart.enqueue(draft)
+	if err != nil {
+		t.Fatalf("reanchor idempotent follower terminal: %v", err)
+	}
+	if !sameDeliveryRoute(entry.Route, latestRoute) {
+		t.Fatalf("returned route=%#v, want latest %#v", entry.Route, latestRoute)
+	}
+	entries, err := loadTerminalOutbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !sameDeliveryRoute(entries[0].Route, latestRoute) {
+		t.Fatalf("persisted entries=%#v, want one terminal anchored to latest message", entries)
+	}
 }
 
 func TestTerminalOutboxConvertsReleasedCodexFollowerRecoveryBeforeWorkerStarts(t *testing.T) {
@@ -922,7 +1007,7 @@ func TestCodexFollowerRecoveryKeepsPriorTurnTerminalWhileNewTurnIsActive(t *test
 	state := externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
 		ThreadID: snapshot.Target.ThreadID, Active: true, ActiveTurnID: "turn-local-2",
 	}}
-	if err := h.reconcileCodexFollowerRecoveries(snapshot, state, reply); err != nil {
+	if _, err := h.reconcileCodexFollowerRecoveries(snapshot, state, reply); err != nil {
 		t.Fatal(err)
 	}
 
@@ -963,7 +1048,7 @@ func TestCodexFirstTurnRecoveryRepairsOnlyJournalReservation(t *testing.T) {
 		BindingKey: bindingKey, WorkspaceRoot: workspace, ConversationID: conversationID,
 		TargetThreadID: "thread-old", PendingFirstTurn: true, SetFollower: true,
 		Follower: &codexFrontendFollower{
-			WorkspaceRoot: workspace, ThreadID: "thread-old", ActorUserID: "user",
+			WorkspaceRoot: workspace, ThreadID: "thread-old", ActorUserID: "user", AuthorizedIdentity: "user",
 			DeliveryRoute: route,
 		},
 		Expected: selection,
@@ -1033,7 +1118,7 @@ func TestCodexFirstTurnRecoveryRepairsOnlyJournalReservation(t *testing.T) {
 	state := externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
 		ThreadID: "thread-new", Active: true, ActiveTurnID: "turn-new",
 	}}
-	if err := h.reconcileCodexFollowerRecoveries(snapshots[0], state, reply); err != nil {
+	if _, err := h.reconcileCodexFollowerRecoveries(snapshots[0], state, reply); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1216,6 +1301,318 @@ func TestTerminalOutboxDeliversRichTerminalResultInsteadOfPlainText(t *testing.T
 	result := reply.results[0]
 	if result.Title != "Codex · jumpserver" || result.Text != "### 最终结果" || result.State != platform.StreamTerminalFailed {
 		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestTerminalOutboxSuppressesFollowerResultAfterAuthorizationRevocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, reply)
+	registry.UpdateAccessForAccount(platform.PlatformFeishu, "cli_a", []string{"union_user"})
+	h := NewHandler(nil, nil)
+	store := h.ensureCodexSessions()
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "ou_user",
+			AuthorizedIdentity: "union_user", DeliveryRoute: route,
+		},
+	}
+	store.mu.Unlock()
+	outbox, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
+		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "codex", RichResult: true, Text: "不得泄露的最终结果",
+		AuthorizedIdentity: "union_user", FollowerBindingKey: bindingKey,
+		FollowerRevision: 1, FollowerThreadID: "thread-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
+		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	}
+
+	registry.UpdateAccessForAccount(platform.PlatformFeishu, "cli_a", nil)
+	if err := restarted.attempt(context.Background(), entry.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	reply.mu.Lock()
+	delivered := len(reply.results) + len(reply.textKeys)
+	reply.mu.Unlock()
+	if delivered != 0 {
+		t.Fatalf("revoked follower received %d terminal deliveries", delivered)
+	}
+	if entries, err := loadTerminalOutbox(path); err != nil || len(entries) != 0 {
+		t.Fatalf("suppressed entry remains=%#v err=%v", entries, err)
+	}
+}
+
+func TestTerminalOutboxAllowsFollowerResultReanchoredToLaterMessageInSameChat(t *testing.T) {
+	followerRoute := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat", ReplyToID: "switch-message",
+	}
+	resultRoute := followerRoute
+	resultRoute.ReplyToID = "later-task-message"
+	registry := newOutboxTestRegistry(resultRoute, newOutboxTestReplier(resultRoute))
+	h := NewHandler(nil, nil)
+	store := h.ensureCodexSessions()
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user",
+			AuthorizedIdentity: "test-user", DeliveryRoute: followerRoute,
+		},
+	}
+	store.mu.Unlock()
+	entry := &terminalOutboxEntry{
+		Route: resultRoute, AuthorizedIdentity: "test-user", FollowerBindingKey: bindingKey,
+		FollowerRevision: 1, FollowerThreadID: "thread-1",
+	}
+	if !h.terminalOutboxDeliveryAllowed(registry, entry) {
+		t.Fatal("a later message anchor in the same authorized chat was rejected")
+	}
+	entry.Route.ChatID = "different-chat"
+	if h.terminalOutboxDeliveryAllowed(registry, entry) {
+		t.Fatal("a different chat was accepted by the follower delivery guard")
+	}
+}
+
+func TestTerminalOutboxPreservesFollowerGuardAcrossStageAndCommit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, newOutboxTestReplier(route)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := testDurableStreamReference("card-guarded")
+	entry, err := outbox.reserve(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Stream: &reference, Text: "恢复占位",
+		AuthorizedIdentity: "union_user", FollowerBindingKey: "binding-a",
+		FollowerRevision: 7, FollowerThreadID: "thread-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outbox.stageReservationResult(entry.ID, terminalOutboxDraft{
+		Route: route, AgentName: "codex", Text: "最终结果",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"card_id":"card-guarded"}`)}
+	if err := outbox.commitReservation(entry.ID, terminalOutboxDraft{
+		Route: route, AgentName: "codex", Checkpoint: checkpoint, Text: "最终结果",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored := outbox.entryLocked(entry.ID)
+	if guard := terminalDeliveryGuardFromEntry(stored); guard != (terminalDeliveryGuard{
+		AuthorizedIdentity: "union_user", FollowerBindingKey: "binding-a",
+		FollowerRevision: 7, FollowerThreadID: "thread-a",
+	}) {
+		t.Fatalf("guard=%#v", guard)
+	}
+	loaded, err := loadTerminalOutbox(path)
+	if err != nil || len(loaded) != 1 || terminalDeliveryGuardFromEntry(loaded[0]) != terminalDeliveryGuardFromEntry(stored) {
+		t.Fatalf("loaded=%#v err=%v", loaded, err)
+	}
+}
+
+func TestTerminalOutboxRejectsPartialFollowerGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, newOutboxTestReplier(route)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := outbox.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Text: "不得投递", AuthorizedIdentity: "union_user",
+	}); err == nil || !strings.Contains(err.Error(), "incomplete terminal follower delivery guard") {
+		t.Fatalf("partial guard error=%v", err)
+	}
+}
+
+func TestTerminalOutboxRevocationWaitsForStartedFollowerDelivery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, reply)
+	h := NewHandler(nil, nil)
+	h.SetPlatformRegistry(registry)
+	store := h.ensureCodexSessions()
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user",
+			AuthorizedIdentity: "user", DeliveryRoute: route,
+		},
+	}
+	store.mu.Unlock()
+	outbox, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
+		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	}
+	outbox.deliveryBarrier = &h.codexFollowerDeliveryMu
+	started := make(chan struct{})
+	release := make(chan struct{})
+	reply.beforeCheckpoint = func() {
+		close(started)
+		<-release
+	}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "codex", Text: "最终结果",
+		Checkpoint:         &platform.TerminalCheckpoint{Kind: "test.terminal.v1", Payload: json.RawMessage(`{"card_id":"card-a"}`)},
+		AuthorizedIdentity: "user", FollowerBindingKey: bindingKey,
+		FollowerRevision: 1, FollowerThreadID: "thread-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attemptDone := make(chan error, 1)
+	go func() { attemptDone <- outbox.attempt(context.Background(), entry.ID, nil) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("terminal delivery did not start")
+	}
+	revokeDone := make(chan struct{})
+	go func() {
+		h.refreshFeishuAccountAccess("cli_a", nil)
+		close(revokeDone)
+	}()
+	select {
+	case <-revokeDone:
+		t.Fatal("revoke returned before the already-started delivery finished")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	if err := <-attemptDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-revokeDone:
+	case <-time.After(time.Second):
+		t.Fatal("revoke did not finish after delivery completed")
+	}
+	store.mu.Lock()
+	binding := store.bindings[bindingKey]
+	store.mu.Unlock()
+	if binding.Follower != nil || binding.FollowRevision != 2 {
+		t.Fatalf("binding after revoke=%#v", binding)
+	}
+}
+
+func TestTerminalOutboxSuppressesFollowerResultAfterRelease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, reply)
+	h := NewHandler(nil, nil)
+	store := h.ensureCodexSessions()
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user",
+			AuthorizedIdentity: "user", DeliveryRoute: route,
+		},
+	}
+	store.mu.Unlock()
+	outbox, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
+		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	}
+	entry, err := outbox.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "codex", RichResult: true, Text: "解绑后的最终结果",
+		AuthorizedIdentity: "user", FollowerBindingKey: bindingKey,
+		FollowerRevision: 1, FollowerThreadID: "thread-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	binding := store.bindings[bindingKey]
+	binding.FollowRevision++
+	binding.Follower = nil
+	store.bindings[bindingKey] = binding
+	store.mu.Unlock()
+
+	if err := outbox.attempt(context.Background(), entry.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	reply.mu.Lock()
+	delivered := len(reply.results) + len(reply.textKeys)
+	reply.mu.Unlock()
+	if delivered != 0 {
+		t.Fatalf("released follower received %d terminal deliveries", delivered)
+	}
+}
+
+func TestTerminalOutboxUsesStableFollowerIdempotencyKeyAcrossEntryIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{
+		"00000000-0000-4000-8000-000000000001",
+		"00000000-0000-4000-8000-000000000002",
+	} {
+		entry, enqueueErr := outbox.enqueue(terminalOutboxDraft{
+			ID: id, Route: route, AgentName: "codex", ResultTitle: "Codex · jumpserver",
+			RichResult: true, Text: "同一 turn 的最终回答", IdempotencyKey: "follower-turn-1",
+		})
+		if enqueueErr != nil {
+			t.Fatal(enqueueErr)
+		}
+		if attemptErr := outbox.attempt(context.Background(), entry.ID, reply); attemptErr != nil {
+			t.Fatal(attemptErr)
+		}
+	}
+
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if !reflect.DeepEqual(reply.resultKeys, []string{"follower-turn-1:result", "follower-turn-1:result"}) ||
+		len(reply.results) != 1 {
+		t.Fatalf("result keys=%#v results=%#v, want one idempotent delivery", reply.resultKeys, reply.results)
 	}
 }
 
@@ -2290,6 +2687,136 @@ func TestFinishProgressReplyPersistsCheckpointBeforeTerminalDelivery(t *testing.
 	}
 	if len(reply.recoveredReferences) != 0 {
 		t.Fatalf("normal completion recovered stale stream references: %#v", reply.recoveredReferences)
+	}
+}
+
+func TestFinishProgressReplyUsesDurableResultWhenProgressIsOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat", ReplyToID: "message-1",
+	}
+	reply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, reply)
+	h := NewHandler(nil, nil)
+	h.SetPlatformRegistry(registry)
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user-1",
+			AuthorizedIdentity: "test-user", DeliveryRoute: route,
+		},
+	}
+	store.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := h.StartTerminalOutbox(ctx, registry, path); err != nil {
+		t.Fatal(err)
+	}
+
+	consumed := h.finishAndSendProgressReply(progressReplyDelivery{
+		delivery: replyDeliveryRequest{
+			ctx: context.Background(), replyWriter: reply, userID: "user-1", agentName: "codex",
+			reply: "进度关闭时的最终结果", deliveryGuard: terminalDeliveryGuard{
+				AuthorizedIdentity: "test-user", FollowerBindingKey: bindingKey,
+				FollowerRevision: 1, FollowerThreadID: "thread-1",
+			},
+		},
+		finish: func(string, bool) bool { return false }, progress: nil,
+	})
+	if consumed {
+		t.Fatal("progress-off result must remain an independent delivery")
+	}
+	waitForTerminalOutboxEmpty(t, path)
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if len(reply.textKeys) != 1 || reply.accepted[reply.textKeys[0]] != "进度关闭时的最终结果" {
+		t.Fatalf("text keys=%#v accepted=%#v", reply.textKeys, reply.accepted)
+	}
+}
+
+func TestFollowerRevocationWaitsForStartedFinalMediaDelivery(t *testing.T) {
+	root := t.TempDir()
+	attachment := filepath.Join(root, "report.pdf")
+	if err := os.WriteFile(attachment, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat", ReplyToID: "message-1",
+	}
+	baseReply := newOutboxTestReplier(route)
+	reply := baseReply
+	reply.fileStarted = make(chan struct{})
+	reply.fileContinue = make(chan struct{})
+	registry := newOutboxTestRegistry(route, reply)
+	h := NewHandler(nil, nil)
+	h.SetPlatformRegistry(registry)
+	h.SetAllowedWorkspaceRoots([]string{root})
+	h.agentWorkDirs = map[string]string{"codex": root}
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user-1",
+			AuthorizedIdentity: "test-user", DeliveryRoute: route,
+		},
+	}
+	store.mu.Unlock()
+	guard := terminalDeliveryGuard{
+		AuthorizedIdentity: "test-user", FollowerBindingKey: bindingKey,
+		FollowerRevision: 1, FollowerThreadID: "thread-1",
+	}
+	done := make(chan struct{})
+	go func() {
+		h.finishAndSendProgressReply(progressReplyDelivery{
+			delivery: replyDeliveryRequest{
+				ctx: context.Background(), replyWriter: reply, userID: "user-1", agentName: "codex",
+				reply: "报告：\n" + attachment, deliveryGuard: guard,
+			},
+			finish: func(string, bool) bool { return false },
+		})
+		close(done)
+	}()
+	select {
+	case <-reply.fileStarted:
+	case <-time.After(time.Second):
+		t.Fatal("final attachment delivery did not start")
+	}
+	revoked := make(chan struct{})
+	go func() {
+		h.refreshFeishuAccountAccess("cli_a", nil)
+		close(revoked)
+	}()
+	select {
+	case <-revoked:
+		t.Fatal("revocation returned while final attachment was still sending")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(reply.fileContinue)
+	select {
+	case <-revoked:
+	case <-time.After(time.Second):
+		t.Fatal("revocation did not finish after final attachment delivery")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("final delivery did not finish after revocation")
+	}
+	baseReply.mu.Lock()
+	defer baseReply.mu.Unlock()
+	if len(baseReply.textKeys) != 0 || len(baseReply.results) != 0 {
+		t.Fatalf("revoked follower received terminal text/results: keys=%#v results=%#v", baseReply.textKeys, baseReply.results)
 	}
 }
 

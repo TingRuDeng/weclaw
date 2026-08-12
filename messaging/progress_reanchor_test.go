@@ -681,7 +681,7 @@ func TestCodexReturnToRunningTaskReanchorsOnce(t *testing.T) {
 
 	req := codexSessionAcquireRequest{
 		ctx: context.Background(), taskContext: context.Background(),
-		actorUserID: "user-1", routeUserID: "route-1", agentName: "codex", agent: ag,
+		actorUserID: "user-1", authorizedIdentity: "user-1", routeUserID: "route-1", agentName: "codex", agent: ag,
 		route: route, platform: platform.PlatformFeishu, reply: newReply,
 	}
 	result, err := h.acquireCodexSessionWithBindingLocked(req)

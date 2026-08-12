@@ -19,14 +19,15 @@ const (
 
 // codexSessionCommandRequest 拆开真实用户和会话路由，避免飞书 thread 命令串到用户全局会话。
 type codexSessionCommandRequest struct {
-	ActorUserID string
-	RouteUserID string
-	Trimmed     string
-	Platform    platform.PlatformName
-	AccountID   string
-	Reply       platform.Replier
-	Admin       bool
-	Private     bool
+	ActorUserID        string
+	AuthorizedIdentity string
+	RouteUserID        string
+	Trimmed            string
+	Platform           platform.PlatformName
+	AccountID          string
+	Reply              platform.Replier
+	Admin              bool
+	Private            bool
 }
 
 // handleCodexSessionCommandForRoute 让飞书内置会话命令操作 route session，同时继续按真实用户解析工作空间。
@@ -141,38 +142,40 @@ func isCodexWorkspaceIndependentCommand(command string) bool {
 }
 
 type codexShortSelectionRequest struct {
-	UserID          string
-	ActorUserID     string
-	AgentName       string
-	WorkspaceRoot   string
-	Agent           agent.Agent
-	BindingKey      string
-	Target          string
-	OwnerBindingKey string
-	Platform        platform.PlatformName
-	AccountID       string
-	Reply           platform.Replier
-	Admin           bool
-	TaskContext     context.Context
+	UserID             string
+	ActorUserID        string
+	AuthorizedIdentity string
+	AgentName          string
+	WorkspaceRoot      string
+	Agent              agent.Agent
+	BindingKey         string
+	Target             string
+	OwnerBindingKey    string
+	Platform           platform.PlatformName
+	AccountID          string
+	Reply              platform.Replier
+	Admin              bool
+	TaskContext        context.Context
 }
 
 // handleCodexShortSelection 保留短编号工作空间导航的结构化卡片状态。
 func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortSelectionRequest) navigationCommandResult {
 	if req.Target == ".." {
 		return h.handleCodexCdResult(codexWorkspaceCdRequest{
-			Context:         ctx,
-			TaskContext:     req.TaskContext,
-			UserID:          req.UserID,
-			ActorUserID:     req.ActorUserID,
-			BindingKey:      req.BindingKey,
-			OwnerBindingKey: req.OwnerBindingKey,
-			AgentName:       req.AgentName,
-			Target:          req.Target,
-			Agent:           req.Agent,
-			Platform:        req.Platform,
-			AccountID:       req.AccountID,
-			Reply:           req.Reply,
-			Admin:           req.Admin,
+			Context:            ctx,
+			TaskContext:        req.TaskContext,
+			UserID:             req.UserID,
+			ActorUserID:        req.ActorUserID,
+			AuthorizedIdentity: req.AuthorizedIdentity,
+			BindingKey:         req.BindingKey,
+			OwnerBindingKey:    req.OwnerBindingKey,
+			AgentName:          req.AgentName,
+			Target:             req.Target,
+			Agent:              req.Agent,
+			Platform:           req.Platform,
+			AccountID:          req.AccountID,
+			Reply:              req.Reply,
+			Admin:              req.Admin,
 		})
 	}
 	if _, browsing := h.codexBrowseWorkspace(req.BindingKey); browsing {
@@ -181,26 +184,27 @@ func (h *Handler) handleCodexShortSelection(ctx context.Context, req codexShortS
 			workspaceRoot: req.WorkspaceRoot, agent: req.Agent,
 			target: req.Target, ownerBindingKey: req.OwnerBindingKey,
 			options: codexSwitchOptions{
-				actorUserID: req.ActorUserID, platform: req.Platform,
+				actorUserID: req.ActorUserID, authorizedIdentity: req.AuthorizedIdentity, platform: req.Platform,
 				accountID: req.AccountID, reply: req.Reply,
 				externalTaskCtx: req.TaskContext,
 			},
 		}))
 	}
 	return h.handleCodexCdResult(codexWorkspaceCdRequest{
-		Context:         ctx,
-		TaskContext:     req.TaskContext,
-		UserID:          req.UserID,
-		ActorUserID:     req.ActorUserID,
-		BindingKey:      req.BindingKey,
-		OwnerBindingKey: req.OwnerBindingKey,
-		AgentName:       req.AgentName,
-		Target:          req.Target,
-		Agent:           req.Agent,
-		Platform:        req.Platform,
-		AccountID:       req.AccountID,
-		Reply:           req.Reply,
-		Admin:           req.Admin,
+		Context:            ctx,
+		TaskContext:        req.TaskContext,
+		UserID:             req.UserID,
+		ActorUserID:        req.ActorUserID,
+		AuthorizedIdentity: req.AuthorizedIdentity,
+		BindingKey:         req.BindingKey,
+		OwnerBindingKey:    req.OwnerBindingKey,
+		AgentName:          req.AgentName,
+		Target:             req.Target,
+		Agent:              req.Agent,
+		Platform:           req.Platform,
+		AccountID:          req.AccountID,
+		Reply:              req.Reply,
+		Admin:              req.Admin,
 	})
 }
 

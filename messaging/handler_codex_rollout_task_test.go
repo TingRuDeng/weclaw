@@ -61,13 +61,13 @@ func newRolloutMirrorFixture(t *testing.T) rolloutMirrorFixture {
 // switchAndAssertRolloutMirror 验证切换反馈和外部任务镜像登记。
 func switchAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 	t.Helper()
-	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	fixture.h.HandlePlatformMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_a",
 		UserID:    "ou_user",
 		Text:      "/cx switch thread-rollout-active",
 		Metadata:  map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
-	}, fixture.reply)
+	}, "ou_user"), fixture.reply)
 	if _, ok := fixture.h.activeTask(fixture.conversationID); !ok {
 		t.Fatalf("切换到本地运行中 rollout 后应登记外部任务镜像，texts=%#v", fixture.reply.TextsSnapshot())
 	}
