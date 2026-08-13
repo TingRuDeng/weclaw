@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
 func TestActiveTaskProgressSnapshotRejectsStaleAndLateEvents(t *testing.T) {
@@ -340,6 +342,29 @@ func TestConfiguredPositiveTimelineLimitIncludesCodexCommentary(t *testing.T) {
 	}
 }
 
+func TestActiveTaskApplyingPositiveTimelineLimitTrimsPreloadedSnapshot(t *testing.T) {
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{owner: "user-1", agentName: "codex"})
+	task.progress = &progressSession{}
+	for index, text := range []string{"第一段说明", "第二段说明", "第三段说明"} {
+		if _, recorded := task.recordProgressUpdate(time.Unix(int64(index), 0), agent.ProgressEvent{
+			ID: "agent-message:" + string(rune('a'+index)), Kind: agent.ProgressKindCommentary,
+			State: agent.ProgressStateCompleted, Sequence: uint64(index + 1), Text: text,
+		}); !recorded {
+			t.Fatalf("event %d was not recorded", index)
+		}
+	}
+
+	task.setProgressTimelineLimit(2)
+	_, snapshot, ok := task.progressReanchorSnapshot()
+	if !ok {
+		t.Fatal("snapshot unavailable")
+	}
+	if got := len(snapshot.timelineItems); got != 2 || snapshot.timelineItems[0].Text != "第二段说明" ||
+		snapshot.timelineItems[1].Text != "第三段说明" {
+		t.Fatalf("timeline=%#v, want latest two preloaded entries", snapshot.timelineItems)
+	}
+}
+
 func TestCodexCommentaryWithSameIDUpdatesInPlace(t *testing.T) {
 	state := taskViewState{}
 	for index, text := range []string{"第一版说明", "更新后的完整说明"} {
@@ -510,5 +535,48 @@ func TestProgressPresentationPreviewsLatestFiveStructuredItems(t *testing.T) {
 	}
 	if !strings.HasSuffix(presentation.Preview, platform.TaskStreamThinkingIndicator) {
 		t.Fatalf("preview=%q, want active indicator at bottom", presentation.Preview)
+	}
+}
+
+func TestProgressSessionOpensWithSeededStructuredPresentation(t *testing.T) {
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	events := []agent.ProgressEvent{
+		{ID: "agent-message:1", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 1, Text: "第一条说明"},
+		{ID: "agent-message:2", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 2, Text: "第二条说明"},
+		{ID: "agent-message:3", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 3, Text: "第三条说明"},
+		{ID: "agent-message:4", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 4, Text: "第四条说明"},
+		{ID: "agent-message:5", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 5, Text: "第五条说明"},
+		{ID: "agent-message:6", Kind: agent.ProgressKindCommentary, State: agent.ProgressStateCompleted, Sequence: 6, Text: "第六条说明"},
+	}
+	full, timeline := renderTaskProgressTimeline(events, "")
+	if !timeline {
+		t.Fatal("fixture must produce a structured timeline")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &progressSession{
+		ctx: ctx, cancel: cancel, reply: reply,
+		agentName: "codex", workspaceRoot: "/workspace/project", taskText: "共享任务", cfg: cfg,
+		deltaCh: make(chan string, 1), snapshotCh: make(chan progressCardSnapshot, 1),
+		latestTaskSnapshot: progressCardSnapshot{
+			summary: "第六条说明", text: full, structured: true, effectiveProgress: true,
+			timelineItems: events,
+		},
+	}
+
+	session.start()
+	t.Cleanup(func() { session.stopBackground() })
+	presentation := reply.Stream.Options.InitialPresentation
+	if presentation == nil {
+		t.Fatal("initial presentation=nil, want seeded active-turn progress on first card")
+	}
+	if strings.Contains(presentation.Preview, "第一条说明") || !strings.Contains(presentation.Preview, "第二条说明") ||
+		!strings.Contains(presentation.Preview, "第六条说明") {
+		t.Fatalf("preview=%q, want latest five entries", presentation.Preview)
+	}
+	if !strings.Contains(presentation.Details, "第一条说明") || !strings.Contains(presentation.Details, "第六条说明") {
+		t.Fatalf("details=%q, want complete progress", presentation.Details)
 	}
 }

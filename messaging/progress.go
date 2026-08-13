@@ -197,12 +197,19 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithHandle(ctx context.Co
 }
 
 func (h *Handler) startProgressSessionForWorkspaceAgentWithGuard(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig, guard terminalDeliveryGuard) (func(string), func(string, bool) bool, *progressSession) {
+	return h.startProgressSessionForWorkspaceAgentWithGuardAndSnapshot(
+		ctx, reply, prefix, agentName, workspaceRoot, taskText, cfg, guard, progressCardSnapshot{},
+	)
+}
+
+func (h *Handler) startProgressSessionForWorkspaceAgentWithGuardAndSnapshot(ctx context.Context, reply platform.Replier, prefix string, agentName string, workspaceRoot string, taskText string, cfg config.ProgressConfig, guard terminalDeliveryGuard, initial progressCardSnapshot) (func(string), func(string, bool) bool, *progressSession) {
 	if cfg.Mode == "" {
 		cfg = config.DefaultProgressConfig()
 	}
 	if cfg.Mode == progressModeOff {
 		return func(string) {}, func(string, bool) bool { return false }, nil
 	}
+	reply = progressReplier(reply)
 
 	progressCtx, cancel := context.WithCancel(ctx)
 	session := &progressSession{
@@ -211,6 +218,13 @@ func (h *Handler) startProgressSessionForWorkspaceAgentWithGuard(ctx context.Con
 		taskText: taskText, cfg: cfg, deltaCh: make(chan string, 256),
 		snapshotCh:    make(chan progressCardSnapshot, 1),
 		deliveryGuard: guard,
+		latestTaskSnapshot: progressCardSnapshot{
+			summary: initial.summary, text: initial.text, withPrefix: initial.withPrefix,
+			structured: initial.structured, effectiveProgress: initial.effectiveProgress,
+			currentExplanation: initial.currentExplanation,
+			timelineItems:      append([]agent.ProgressEvent(nil), initial.timelineItems...),
+		},
+		effectiveProgressSeen: initial.effectiveProgress,
 	}
 	session.start()
 	return session.onProgress, session.stopWithFinal, session
@@ -952,15 +966,32 @@ func (s *progressSession) ensureStreamLocked() platform.Stream {
 		return s.stream
 	}
 	s.streamOpenAttempted = true
+	initialContent := renderInitialCardProgress()
+	var initialPresentation *platform.StreamPresentation
+	if s.latestTaskSnapshot.effectiveProgress || s.latestTaskSnapshot.structured {
+		snapshot := s.latestTaskSnapshot
+		if strings.TrimSpace(snapshot.text) == "" {
+			snapshot.text = snapshot.summary
+		}
+		initialContent = s.activeSnapshotContentLocked(snapshot)
+		presentation := s.snapshotPresentationLocked(snapshot)
+		initialPresentation = &presentation
+		if snapshot.withPrefix {
+			initialContent = s.prefix + initialContent
+			initialPresentation.Preview = s.prefix + initialPresentation.Preview
+			initialPresentation.Details = s.prefix + initialPresentation.Details
+		}
+	}
 	stream, err := s.reply.OpenStream(s.ctx, platform.StreamOptions{
-		Title: progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60), InitialContent: renderInitialCardProgress(),
+		Title:          progressTaskTitleForAgentWorkspace(s.agentName, s.workspaceRoot, s.taskText, 60),
+		InitialContent: initialContent, InitialPresentation: initialPresentation,
 	})
 	if err != nil {
 		log.Printf("[handler] failed to open progress stream: %v", err)
 		return nil
 	}
 	s.stream = stream
-	s.lastContent = renderInitialCardProgress()
+	s.lastContent = initialContent
 	s.segmentNumber = 1
 	if err := s.persistActiveStreamRecoveryLocked(stream, s.reply); err != nil {
 		log.Printf("[terminal-outbox] failed to persist active progress card recovery: %v", err)

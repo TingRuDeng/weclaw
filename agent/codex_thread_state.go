@@ -58,6 +58,54 @@ func (a *ACPAgent) ReadCodexThreadState(ctx context.Context, conversationID stri
 	return a.readCodexAppServerThreadState(ctx, threadID)
 }
 
+// ReadCodexThreadProgressSnapshot 原子读取活动 turn 状态和当前可见进度，
+// 供消息前端在启动长期 watcher 前初始化首张任务卡。
+func (a *ACPAgent) ReadCodexThreadProgressSnapshot(ctx context.Context, conversationID string, threadID string) (CodexThreadState, []ProgressEvent, error) {
+	if a.protocol != protocolCodexAppServer {
+		return CodexThreadState{}, nil, fmt.Errorf("agent is not codex app-server")
+	}
+	if binding, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
+		switch binding.Runtime {
+		case CodexRuntimeDesktop:
+			if a.desktopRuntime == nil {
+				return CodexThreadState{}, nil, ErrCodexRuntimeUnavailable
+			}
+			state, batch, err := a.desktopRuntime.activeWatchSnapshot(threadID)
+			return state, projectCodexVisibleProgressEvents(batch.Events), err
+		case CodexRuntimeUnknown:
+			return CodexThreadState{}, nil, ErrCodexRuntimeUnavailable
+		case CodexRuntimeConflict:
+			return CodexThreadState{}, nil, ErrCodexRuntimeConflict
+		}
+	}
+	state, snapshot, _, _, err := a.readCodexAppServerThreadSnapshotResult(ctx, threadID)
+	if err != nil || !state.Active || strings.TrimSpace(state.ActiveTurnID) == "" {
+		return state, nil, err
+	}
+	events := projectCodexAppServerActiveTurnEvents(snapshot, state.ActiveTurnID)
+	return state, projectCodexVisibleProgressEvents(events), nil
+}
+
+func projectCodexVisibleProgressEvents(events []*codexTurnEvent) []ProgressEvent {
+	result := make([]ProgressEvent, 0, len(events))
+	callbacks := progressCallbacks{onEvent: func(event ProgressEvent) {
+		result = append(result, event)
+	}}
+	messageProgress := codexMessageProgressBuffer{}
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		messageProgress.beforeEvent(event, callbacks)
+		if event.Progress != nil {
+			callbacks.emit(*event.Progress)
+			continue
+		}
+		messageProgress.observeCompleted(event, callbacks)
+	}
+	return result
+}
+
 func isCodexThreadPendingFirstTurn(err error) bool {
 	return err != nil && strings.Contains(
 		err.Error(), "includeTurns is unavailable before first user message",

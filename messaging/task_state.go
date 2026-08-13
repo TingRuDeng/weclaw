@@ -414,15 +414,32 @@ func (t *activeAgentTask) progressReanchorSnapshot() (*progressSession, progress
 	if t.progress == nil || t.detached || t.phase == codexTaskTerminal || t.view.closed {
 		return nil, progressCardSnapshot{}, false
 	}
-	card, _ := renderTaskProgressCard(t.view)
-	return t.progress, progressCardSnapshot{
-		summary:            t.view.lastProgress,
+	snapshot, ok := progressCardSnapshotFromTaskView(t.view)
+	return t.progress, snapshot, ok
+}
+
+func (t *activeAgentTask) progressCardSnapshot() (progressCardSnapshot, bool) {
+	if t == nil {
+		return progressCardSnapshot{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return progressCardSnapshotFromTaskView(t.view)
+}
+
+func progressCardSnapshotFromTaskView(view taskViewState) (progressCardSnapshot, bool) {
+	card, timeline := renderTaskProgressCard(view)
+	if strings.TrimSpace(card) == "" {
+		return progressCardSnapshot{}, false
+	}
+	return progressCardSnapshot{
+		summary:            view.lastProgress,
 		text:               card,
 		withPrefix:         true,
-		structured:         t.view.progressTimelineEnabled && len(t.view.progressTimeline) > 0,
+		structured:         timeline && view.progressTimelineEnabled && len(view.progressTimeline) > 0,
 		effectiveProgress:  true,
-		currentExplanation: t.view.currentExplanation,
-		timelineItems:      append([]agent.ProgressEvent(nil), t.view.progressTimeline...),
+		currentExplanation: view.currentExplanation,
+		timelineItems:      append([]agent.ProgressEvent(nil), view.progressTimeline...),
 	}, true
 }
 
@@ -469,9 +486,12 @@ func (t *activeAgentTask) setProgressTimelineLimit(limit int) {
 		return
 	}
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	value := limit
 	t.view.progressTimelineLimit = &value
-	t.mu.Unlock()
+	if limit > 0 && len(t.view.progressTimeline) > limit {
+		t.view.progressTimeline = append([]agent.ProgressEvent(nil), t.view.progressTimeline[len(t.view.progressTimeline)-limit:]...)
+	}
 }
 
 func (t *activeAgentTask) recordProgressText(now time.Time, text string) (string, bool) {

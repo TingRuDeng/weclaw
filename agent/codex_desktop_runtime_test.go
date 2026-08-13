@@ -797,6 +797,48 @@ func TestACPAgentDesktopWatchReplaysVisibleActiveCommentary(t *testing.T) {
 	<-done
 }
 
+func TestACPAgentDesktopProgressSnapshotReplaysVisibleActiveCommentary(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	claimDesktopRemoteControl(t, a)
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{desktopTurnFixture("turn-1", "inProgress", []any{
+		map[string]any{
+			"id": "commentary-1", "type": "agentMessage", "status": "completed",
+			"phase": "commentary", "text": "第一条说明",
+		},
+		map[string]any{
+			"id": "command-1", "type": "commandExecution", "status": "completed",
+			"command": "git status", "aggregatedOutput": "secret output",
+		},
+		map[string]any{
+			"id": "commentary-2", "type": "agentMessage", "status": "completed",
+			"phase": "commentary", "text": "第二条说明",
+		},
+		map[string]any{
+			"id": "final-1", "type": "agentMessage", "status": "completed",
+			"phase": "final_answer", "text": "最终结果不应进入进度",
+		},
+	})}
+	update, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.codexOwners.observeDesktopSnapshot("thread-1", 2, update.Snapshot.State)
+
+	state, progress, err := a.ReadCodexThreadProgressSnapshot(context.Background(), "conversation-1", "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Active || state.ActiveTurnID != "turn-1" {
+		t.Fatalf("state=%#v, want active turn-1", state)
+	}
+	if len(progress) != 2 || progress[0].DisplayText() != "第一条说明" || progress[1].DisplayText() != "第二条说明" {
+		t.Fatalf("progress=%#v, want only visible Desktop commentary", progress)
+	}
+}
+
 func TestACPAgentDesktopWatchReplaysAllVisibleActiveCommentary(t *testing.T) {
 	a, _ := desktopRuntimeTestAgent(t)
 	claimDesktopRemoteControl(t, a)

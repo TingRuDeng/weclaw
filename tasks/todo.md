@@ -335,3 +335,72 @@ git diff --check
 - [x] 引导接力卡、折叠面板、终态收敛、重启恢复和两路独立投递已通过自动化验证。
 - [x] 权威发布门禁已验证安装脚本、全仓测试、Race、Vet、Staticcheck、govulncheck、文档、module tidy 和差异检查。
 - [x] 相关实现已合入 `main`，`v0.1.266` 指向当前提交 `fa8d16d`；本机正式二进制已更新到该版本。
+
+## 2026-08-13 会话切换即时回放与任务卡终态收纳修复
+
+### 目标
+
+修复真实飞书端已经复现的两处体验断链：切换到正在执行的 Codex 会话时，新任务卡必须立即展示当前 turn 最近 5 条用户可见进度；任务结束后同一卡片必须自动收起，并能可靠地展开或收起完整进度。
+
+### 已确认根因
+
+- 会话切换虽然能从 Codex Desktop/App Server 快照回放当前 turn 的历史事件，但进度会话会先以“思考中.....”创建空卡，观察器启动后才异步读取和投影历史，因此首屏没有最近 5 条进度。
+- 从飞书会话卡点击进入 `/cx switch` 时，长期进度会话保存了 `inlineCardReplier` / `deferredCardResultReplier` 临时包装器；这些包装器只暴露基础 `Replier` 能力，终态路径无法取得真实 `DeliveryRouteReporter`，本机 Trace 因此记录 `reply.delivery.suppressed: follower_guard=route_unavailable`。
+- 外部任务终态调和与最终投递仍使用卡片命令的短生命周期 context；按钮回调结束后该 context 已取消，本机日志已经出现 `外部任务终态同步失败: context canceled`。
+- 当前展开/收起测试由测试代码直接预置 task-card registry，只证明按钮处理函数本身可用，没有覆盖真实会话卡包装链、终态 checkpoint、同卡 registry 恢复和飞书回调的完整组合。
+
+### 范围
+
+- 为 Codex 活动 turn 提供一次原子快照：同时返回 thread/turn 身份和当前可回放的用户可见结构化进度；命令、命令输出、内部推理和最终回答继续不进入进度时间线。
+- 在创建新的飞书任务卡前，先把活动快照交给现有进度 reducer 做语义合并，并以折叠态的最近 5 条作为初始 presentation；完整时间线继续保存在卡片详情中。
+- 观察器随后回放相同历史和实时增量时，按既有 ID、阶段和序列去重或原位更新，不产生重复进度。
+- 新进度会话在开始时统一解包临时交互回复器，保留真实飞书投递路由、CardKit durable 能力和任务卡绑定能力。
+- 外部任务的终态调和、卡片冻结和独立结果投递使用与任务生命周期绑定的 context；命令回调结束不得取消长期观察任务的终态处理。
+- 补齐真实 `/cx switch → 历史进度首屏 → 增量更新 → 任务终态 → 展开/收起` 集成测试；按钮处理函数无缺陷时不做无关重写。
+
+### 非目标与安全边界
+
+- 不把最近 5 条改成新的配置项；继续沿用已确认的默认折叠展示语义和 `stream_timeline_limit` 完整时间线边界。
+- 不展示原始 Desktop 协议事件、逐 token、命令文本、命令输出或内部推理。
+- 不改变最终回答独立消息、续卡、审批记录、terminal outbox 幂等键和 follower 授权失败关闭语义。
+- 不修改或重启 Codex App，不创建第二个 Host，不改变同一 active turn 的 steer 行为。
+
+### 验收标准
+
+- [x] 飞书切换到已有至少 6 条可见进度的 active turn 后，首张任务卡创建时即显示最近 5 条，不等待新的 Codex 事件；展开后可看到从第一条开始的完整语义时间线。
+- [x] 初始快照与观察器历史回放重叠时不重复，后续新进度继续更新同一卡片；命令和最终回答不进入时间线。
+- [x] 从飞书会话卡点击切换产生的临时回复器不会丢失真实 delivery route 和 durable task-card 能力。
+- [x] 卡片命令回调结束后，外部任务完成仍能调和同一 turn、冻结流式状态、自动折叠卡片并发送唯一独立结果消息。
+- [x] 完成、失败和停止卡片均保留已有进度；折叠态只有“展开完整进度”，展开态只有底部“收起完整进度”，每次点击都更新原卡且不进入 Agent 分发。
+- [x] terminal outbox 重试或服务重启恢复后，已成功的卡片终态和最终结果不重复，恢复后的展开/收起仍使用同一份 task-card checkpoint。
+
+### 实施步骤
+
+- [x] 先补失败测试：活动快照首屏最近 5 条、历史去重、真实会话卡回复器能力、短命 context 结束后的终态、终态 checkpoint 后展开/收起。
+- [x] 扩展 Codex 活动快照读取与纯进度投影，复用现有 commentary/plan/file/tool 过滤和语义合并规则。
+- [x] 让 external task 在打开进度卡前预载 reducer 快照，并把最近 5 条/完整时间线作为初始结构化 presentation。
+- [x] 在进度会话边界解包临时回复器，并把外部任务终态操作切换到任务生命周期 context。
+- [x] 运行 agent、messaging、feishu 定向测试与 Race，复核终态 outbox、续卡和 follower 恢复回归。
+- [x] 运行全仓测试、Vet、module tidy、Staticcheck、文档校验和差异检查，记录 Review；真实飞书桌面端/移动端仍作为更新本机版本后的最终验收。
+
+### 验证方式
+
+```bash
+go test ./agent ./messaging ./feishu ./platform -count=1 -timeout 180s
+go test -race ./agent ./messaging ./feishu -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review（2026-08-13）
+
+- 结论：有条件通过。实现、自动化测试、并发测试和静态门禁均通过，没有发现阻止更新本机版本的问题；真实飞书桌面端/移动端交互仍需在安装新版本后验收。
+- 会话切换现在通过同一次 Desktop/App Server 权威快照取得 active turn 和用户可见历史进度，首张卡直接生成“最近 5 条”折叠视图及完整详情；命令、命令输出、内部推理和最终回答未进入时间线。
+- 进度会话会在边界解包临时回复器，终态调和与最终结果改用任务生命周期 context；回归测试已用取消的卡片回调 context 复现旧路径最终消息丢失，并确认修复后正常发送。
+- 飞书真实 task-card registry 回归覆盖活动态展开、终态自动收起、终态再次展开和收起，按钮未进入 Agent 分发；既有 terminal outbox、恢复和幂等测试随全仓门禁通过。
+- 验证通过：`go test ./agent ./messaging ./feishu ./platform -count=1 -timeout 240s`、`go test -race ./agent ./messaging ./feishu -count=1 -timeout 360s`、`go test ./... -count=1 -timeout 300s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验和 `git diff --check`。
+- 全仓测试首次复跑曾出现一次既有 follower 恢复用例的 `TempDir RemoveAll: directory not empty` 清理竞态；该用例连续运行 20 次及随后全仓复跑均通过，未修改不在本次范围内的 follower teardown。

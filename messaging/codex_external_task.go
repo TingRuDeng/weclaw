@@ -33,8 +33,9 @@ type externalCodexTaskOptions struct {
 
 type externalCodexTaskState struct {
 	agent.CodexThreadState
-	Progress     string
-	Controllable bool
+	Progress       string
+	ProgressEvents []agent.ProgressEvent
+	Controllable   bool
 }
 
 type externalCodexTaskWatch func(context.Context, func(agent.ProgressEvent)) (string, error)
@@ -120,10 +121,10 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 	if !ok {
 		return resolvedExternalCodexTask{}
 	}
-	state, err := runtimeAg.ReadCodexThreadState(opts.ctx, opts.conversationID, opts.threadID)
+	state, progressEvents, err := readExternalCodexRuntimeSnapshot(opts, runtimeAg)
 	resolved := resolvedExternalCodexTask{
 		state: externalCodexTaskState{
-			CodexThreadState: state, Controllable: true,
+			CodexThreadState: state, ProgressEvents: progressEvents, Controllable: true,
 		},
 		err: err,
 	}
@@ -155,6 +156,14 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 		}
 	}
 	return resolved
+}
+
+func readExternalCodexRuntimeSnapshot(opts externalCodexTaskOptions, runtimeAg agent.CodexThreadRuntimeAgent) (agent.CodexThreadState, []agent.ProgressEvent, error) {
+	if snapshotAgent, ok := opts.agent.(agent.CodexThreadProgressSnapshotAgent); ok {
+		return snapshotAgent.ReadCodexThreadProgressSnapshot(opts.ctx, opts.conversationID, opts.threadID)
+	}
+	state, err := runtimeAg.ReadCodexThreadState(opts.ctx, opts.conversationID, opts.threadID)
+	return state, nil, err
 }
 
 // resolveExternalCodexRollout 读取共享 rollout，并只把真实文件中的终态当 inactive 证据。
@@ -222,9 +231,10 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	runtime.task.setProgressTimelineLimit(progressCfg.EffectiveStreamTimelineLimit())
 	taskText := firstNonBlank(runtime.state.Preview, "共享 Codex 任务")
 	guard := h.codexFollowerDeliveryGuardForTask(runtime.task)
-	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithGuard(
+	initialSnapshot, _ := runtime.task.progressCardSnapshot()
+	onProgress, finishProgress, progressSession := h.startProgressSessionForWorkspaceAgentWithGuardAndSnapshot(
 		runtime.ctx, runtime.opts.reply, "", runtime.opts.agentName, runtime.opts.workspaceRoot, taskText, progressCfg,
-		guard,
+		guard, initialSnapshot,
 	)
 	runtime.task.attachProgressSession(progressSession)
 	defer runtime.task.detachProgressSession(progressSession)
@@ -310,7 +320,7 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if runtime.task.shouldSendFinal() {
 		h.finishAndSendProgressReply(progressReplyDelivery{
 			delivery: replyDeliveryRequest{
-				ctx: runtime.opts.ctx, replyWriter: runtime.opts.reply,
+				ctx: context.WithoutCancel(normalizeContext(runtime.ctx)), replyWriter: runtime.opts.reply,
 				userID: runtime.opts.actorUserID, agentName: runtime.opts.agentName, reply: reply, trace: trace,
 				deliveryGuard: runtime.task.terminalDeliveryGuardSnapshot(),
 			},
@@ -366,7 +376,7 @@ func (h *Handler) reconcileExternalCodexTerminal(runtime externalCodexTaskRuntim
 		state.LastAgentMessageText = result.Final
 	}
 
-	controlCtx, cancel := h.codexThreadControlContext(runtime.opts.ctx)
+	controlCtx, cancel := h.codexThreadControlContext(context.WithoutCancel(normalizeContext(runtime.ctx)))
 	defer cancel()
 	unlock, err := h.lockCodexThreadControlContext(controlCtx, runtime.opts.threadID)
 	if err != nil {

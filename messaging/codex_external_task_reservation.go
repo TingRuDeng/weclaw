@@ -119,6 +119,9 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 	control.runtime = externalCodexTaskRuntime{
 		opts: opts, state: prepared.state, watch: prepared.watch, task: task, ctx: watchCtx,
 	}
+	for _, event := range prepared.state.ProgressEvents {
+		task.recordProgressUpdate(time.Now(), event)
+	}
 	if prepared.state.Progress != "" {
 		task.recordProgressText(time.Now(), prepared.state.Progress)
 	}

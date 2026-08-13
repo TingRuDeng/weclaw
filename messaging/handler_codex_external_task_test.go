@@ -5,9 +5,85 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/platform"
+	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
+
+type fakeCodexProgressSnapshotAgent struct {
+	*fakeCodexLiveAgent
+	progress []agent.ProgressEvent
+}
+
+func (a *fakeCodexProgressSnapshotAgent) ReadCodexThreadProgressSnapshot(
+	ctx context.Context, conversationID string, threadID string,
+) (agent.CodexThreadState, []agent.ProgressEvent, error) {
+	state, err := a.ReadCodexThreadState(ctx, conversationID, threadID)
+	return state, append([]agent.ProgressEvent(nil), a.progress...), err
+}
+
+func TestCodexSwitchActiveTurnOpensCardWithLatestFiveSnapshotEntries(t *testing.T) {
+	h := NewHandler(nil, nil)
+	watchDone := make(chan struct{})
+	base := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active", Preview: "本地任务",
+	})
+	base.watchDone = watchDone
+	ag := &fakeCodexProgressSnapshotAgent{fakeCodexLiveAgent: base}
+	for index := 1; index <= 6; index++ {
+		ag.progress = append(ag.progress, agent.ProgressEvent{
+			ID: "agent-message:" + string(rune('0'+index)), Kind: agent.ProgressKindCommentary,
+			State: agent.ProgressStateCompleted, Sequence: uint64(index),
+			Text: "第" + string(rune('0'+index)) + "条说明",
+		})
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	opts := externalCodexTaskOptions{
+		ctx: context.Background(), actorUserID: "user-1", routeUserID: "user-1",
+		agentName: "codex", agent: ag, conversationID: "conversation-1",
+		threadID: "thread-active", workspaceRoot: "/workspace/project", progressCfg: cfg, reply: reply,
+	}
+	prepared, err := h.prepareExternalCodexTask(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := h.reserveExternalCodexTask(opts, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.activateExternalCodexTaskReservation(reservation) {
+		t.Fatal("activate external task")
+	}
+	t.Cleanup(func() {
+		close(watchDone)
+		waitUntil(t, func() bool {
+			_, active := h.activeTask(opts.conversationID)
+			return !active
+		})
+	})
+	select {
+	case <-reply.StreamOpened:
+	case <-time.After(time.Second):
+		t.Fatal("progress card was not opened")
+	}
+	presentation := reply.Stream.Options.InitialPresentation
+	if presentation == nil {
+		t.Fatal("initial presentation=nil, want active-turn snapshot")
+	}
+	if strings.Contains(presentation.Preview, "第1条说明") || !strings.Contains(presentation.Preview, "第2条说明") ||
+		!strings.Contains(presentation.Preview, "第6条说明") {
+		t.Fatalf("preview=%q, want latest five snapshot entries", presentation.Preview)
+	}
+	if !strings.Contains(presentation.Details, "第1条说明") || !strings.Contains(presentation.Details, "第6条说明") {
+		t.Fatalf("details=%q, want complete snapshot", presentation.Details)
+	}
+}
 
 func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	h := NewHandler(nil, nil)

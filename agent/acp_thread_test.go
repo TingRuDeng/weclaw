@@ -513,6 +513,32 @@ func TestACPAgentReadsActiveCodexThreadState(t *testing.T) {
 	}
 }
 
+func TestACPAgentReadsActiveTurnProgressSnapshotWithoutHiddenItems(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"第一条说明"},{"id":"command-1","type":"commandExecution","text":"secret command"},{"id":"reasoning-1","type":"reasoning","text":"private reasoning"},{"id":"commentary-2","type":"agentMessage","phase":"commentary","text":"第二条说明"},{"id":"final-1","type":"agentMessage","phase":"final_answer","text":"最终回答"}]}]}}`), nil
+	}
+	snapshotAgent, ok := any(a).(CodexThreadProgressSnapshotAgent)
+	if !ok {
+		t.Fatal("ACPAgent does not implement CodexThreadProgressSnapshotAgent")
+	}
+	state, progress, err := snapshotAgent.ReadCodexThreadProgressSnapshot(context.Background(), "conversation-1", "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Active || state.ActiveTurnID != "turn-1" {
+		t.Fatalf("state=%#v, want active turn-1", state)
+	}
+	if len(progress) != 2 || progress[0].DisplayText() != "第一条说明" || progress[1].DisplayText() != "第二条说明" {
+		t.Fatalf("progress=%#v, want only visible commentary in source order", progress)
+	}
+}
+
 func TestACPAgentSteersActiveCodexTurn(t *testing.T) {
 	ctx := context.Background()
 	a := NewACPAgent(ACPAgentConfig{

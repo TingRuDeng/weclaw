@@ -156,6 +156,12 @@ type CodexThreadRuntimeAgent interface {
 	InterruptCodexThread(ctx context.Context, conversationID string, threadID string, turnID string) error
 }
 
+// CodexThreadProgressSnapshotAgent 原子读取活动 turn 状态及当前可回放的用户可见进度。
+// 消息前端可用它初始化首张任务卡，再由 watcher 继续消费同一 turn 的增量事件。
+type CodexThreadProgressSnapshotAgent interface {
+	ReadCodexThreadProgressSnapshot(ctx context.Context, conversationID string, threadID string) (CodexThreadState, []ProgressEvent, error)
+}
+
 // CodexStructuredThreadRuntimeAgent 为已运行的 Codex turn 提供结构化观察事件。
 type CodexStructuredThreadRuntimeAgent interface {
 	WatchCodexThreadEvents(ctx context.Context, conversationID string, threadID string, onProgress func(ProgressEvent)) (string, error)

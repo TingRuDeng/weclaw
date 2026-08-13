@@ -13,6 +13,99 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
+type contextCheckingCodexLiveAgent struct {
+	*fakeCodexLiveAgent
+}
+
+type contextCheckingFinalReplier struct {
+	*platformtest.Replier
+}
+
+func (r *contextCheckingFinalReplier) SendText(ctx context.Context, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.Replier.SendText(ctx, text)
+}
+
+func (a *contextCheckingCodexLiveAgent) ReconcileCodexObservedTurn(
+	ctx context.Context, req agent.CodexRuntimeRequest, state agent.CodexThreadState,
+) (agent.CodexThreadBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return agent.CodexThreadBinding{}, err
+	}
+	return a.fakeCodexLiveAgent.ReconcileCodexObservedTurn(ctx, req, state)
+}
+
+func TestExternalCodexTerminalReconcileOutlivesSwitchCallbackContext(t *testing.T) {
+	h := NewHandler(nil, nil)
+	callbackCtx, cancelCallback := context.WithCancel(context.Background())
+	cancelCallback()
+	base := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
+	})
+	ag := &contextCheckingCodexLiveAgent{fakeCodexLiveAgent: base}
+	runtime := externalCodexTaskRuntime{
+		opts: externalCodexTaskOptions{
+			ctx: callbackCtx, actorUserID: "user-1", routeUserID: "user-1", agentName: "codex",
+			agent: ag, conversationID: "conversation-1", threadID: "thread-1",
+		},
+		state: externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
+			ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
+		}, Controllable: true},
+		ctx: context.Background(),
+	}
+
+	err := h.reconcileExternalCodexTerminal(runtime, codexExternalWatchResult{
+		Terminal: true, ConfirmedTerminal: true, Final: "任务完成",
+	})
+	if err != nil {
+		t.Fatalf("reconcile error=%v, terminal task context must outlive switch callback", err)
+	}
+	binding := ag.threadBinding("thread-1")
+	if binding.State.Active || binding.State.LastTurnID != "turn-1" || binding.State.LastTurnStatus != "completed" {
+		t.Fatalf("binding=%#v, want completed turn", binding)
+	}
+}
+
+func TestExternalCodexFinalReplyOutlivesSwitchCallbackContext(t *testing.T) {
+	h := NewHandler(nil, nil)
+	callbackCtx, cancelCallback := context.WithCancel(context.Background())
+	cancelCallback()
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
+	})
+	reply := &contextCheckingFinalReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true})}
+	task, taskCtx := newActiveAgentTask(context.Background(), activeTaskMeta{
+		owner: "user-1", routeUserID: "user-1", agentName: "codex",
+		runtimeOwner: agent.CodexRuntimeWeClaw, codexThreadID: "thread-1", codexTurnID: "turn-1",
+	})
+	h.tasks.mu.Lock()
+	h.ensureActiveTasksLocked()
+	h.tasks.active["conversation-1"] = task
+	h.tasks.mu.Unlock()
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeOff
+	runtime := externalCodexTaskRuntime{
+		opts: externalCodexTaskOptions{
+			ctx: callbackCtx, actorUserID: "user-1", routeUserID: "user-1", agentName: "codex",
+			agent: ag, conversationID: "conversation-1", threadID: "thread-1", progressCfg: cfg, reply: reply,
+		},
+		state: externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
+			ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
+		}, Controllable: true},
+		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
+			return "任务完成", nil
+		},
+		task: task, ctx: taskCtx,
+	}
+
+	h.runExternalCodexTaskWatcher(runtime)
+	if !containsText(reply.TextsSnapshot(), "任务完成") {
+		t.Fatalf("texts=%#v, final reply must use task lifecycle context", reply.TextsSnapshot())
+	}
+}
+
 func TestCodexDesktopLocalInteractionErrorIsNotTerminal(t *testing.T) {
 	result := classifyCodexWatchResult("", errors.New("approval response failed"), "desktop")
 	if result.Terminal {

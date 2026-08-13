@@ -3,6 +3,7 @@ package feishu
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -249,4 +250,95 @@ func TestTaskCardStreamsPreviewThenExpandedDetailsInOneBody(t *testing.T) {
 	if mainContent != "第三步\n\n第四步\n\n第五步\n\n第六步\n\n第七步" {
 		t.Fatalf("collapsed elements=%#v, want latest preview", elements)
 	}
+}
+
+func TestTerminalTaskCardAutomaticallyCollapsesAndKeepsProgressControls(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "card-task-1"}
+	registry := newTaskCardRegistry()
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, registry)
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex",
+		InitialPresentation: &platform.StreamPresentation{
+			Summary: "第六条说明",
+			Preview: "第二条说明\n\n第三条说明\n\n第四条说明\n\n第五条说明\n\n第六条说明",
+			Details: "第一条说明\n\n第二条说明\n\n第三条说明\n\n第四条说明\n\n第五条说明\n\n第六条说明",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = kit
+	adapter.taskCards = registry
+	dispatch := func(context.Context, platform.IncomingMessage, platform.Replier) {
+		t.Fatal("progress control reached Agent dispatch")
+	}
+	control := func(action string) *callback.CardActionTriggerResponse {
+		t.Helper()
+		event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: "ou_user"},
+			Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_task"},
+			Action: &callback.CallBackAction{Value: map[string]interface{}{
+				"action": action, "task_card_id": "card-task-1",
+			}},
+		}}
+		response, actionErr := adapter.handleCardActionEvent(context.Background(), event, dispatch)
+		if actionErr != nil {
+			t.Fatal(actionErr)
+		}
+		return response
+	}
+
+	if response := control("task_progress_expand"); response.Toast == nil || response.Toast.Type != "success" {
+		t.Fatalf("expand response=%#v", response)
+	}
+	if err := stream.Complete(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	opts, ok := registry.snapshot("card-task-1")
+	if !ok || opts.Expanded || !opts.Collapsible {
+		t.Fatalf("terminal card=%#v, want collapsed progress", opts)
+	}
+	terminalCard := decodeCardJSON(t, kit.updateCards[len(kit.updateCards)-1])
+	terminalElements := terminalCard["body"].(map[string]any)["elements"].([]any)
+	if taskProgressElementContent(terminalElements, cardMainContentID) != opts.Preview ||
+		taskProgressElementContent(terminalElements, cardProgressExpandID) == "" {
+		t.Fatalf("terminal elements=%#v, want preview and expand button", terminalElements)
+	}
+
+	if response := control("task_progress_expand"); response.Toast == nil || response.Toast.Type != "success" {
+		t.Fatalf("terminal expand response=%#v", response)
+	}
+	expanded := decodeCardJSON(t, kit.updateCards[len(kit.updateCards)-1])
+	expandedElements := expanded["body"].(map[string]any)["elements"].([]any)
+	if !strings.Contains(taskProgressElementContent(expandedElements, cardMainContentID), "第一条说明") ||
+		taskProgressElementContent(expandedElements, cardProgressCollapseID) == "" {
+		t.Fatalf("expanded elements=%#v, want complete progress and collapse button", expandedElements)
+	}
+	if response := control("task_progress_collapse"); response.Toast == nil || response.Toast.Type != "success" {
+		t.Fatalf("terminal collapse response=%#v", response)
+	}
+	collapsed := decodeCardJSON(t, kit.updateCards[len(kit.updateCards)-1])
+	collapsedElements := collapsed["body"].(map[string]any)["elements"].([]any)
+	if strings.Contains(taskProgressElementContent(collapsedElements, cardMainContentID), "第一条说明") ||
+		taskProgressElementContent(collapsedElements, cardProgressExpandID) == "" {
+		t.Fatalf("collapsed elements=%#v, want latest-five preview and expand button", collapsedElements)
+	}
+}
+
+func taskProgressElementContent(elements []any, elementID string) string {
+	for _, raw := range elements {
+		element, _ := raw.(map[string]any)
+		if element["element_id"] != elementID {
+			continue
+		}
+		if content, ok := element["content"].(string); ok {
+			return content
+		}
+		if text, ok := element["text"].(map[string]any); ok {
+			content, _ := text["content"].(string)
+			return content
+		}
+	}
+	return ""
 }

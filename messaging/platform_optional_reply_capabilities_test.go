@@ -4,9 +4,44 @@ import (
 	"context"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
+
+type temporaryProgressReplyWrapper struct {
+	platform.Replier
+	progress platform.Replier
+}
+
+func (r *temporaryProgressReplyWrapper) ProgressReplier() platform.Replier {
+	return r.progress
+}
+
+func TestProgressSessionUsesDurableRouteBehindTemporaryReplyWrapper(t *testing.T) {
+	h := NewHandler(nil, nil)
+	base := newOptionalCapabilityTestReplier()
+	base.Caps = platform.Capabilities{Text: true, Streaming: true, FinalReplyOutsideStream: true}
+	base.route = platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot", ChatID: "chat-1", ReplyToID: "message-1",
+	}
+	wrapper := &temporaryProgressReplyWrapper{Replier: base, progress: base}
+	cfg := config.DefaultProgressConfig()
+	cfg.Mode = progressModeStream
+	cfg.SendAcceptance = boolPtr(false)
+	ctx, cancel := context.WithCancel(context.Background())
+	_, _, session := h.startProgressSessionForWorkspaceAgentWithHandle(
+		ctx, wrapper, "", "codex", "/workspace/project", "共享任务", cfg,
+	)
+	t.Cleanup(func() {
+		cancel()
+		session.stopBackground()
+	})
+	reporter, ok := optionalDeliveryRouteReporter(session.currentTerminalReply())
+	if !ok || reporter.DeliveryRoute() != base.route {
+		t.Fatalf("terminal reply route=(%#v,%t), want durable base route %#v", reporter, ok, base.route)
+	}
+}
 
 type optionalCapabilityTestReplier struct {
 	*platformtest.Replier
