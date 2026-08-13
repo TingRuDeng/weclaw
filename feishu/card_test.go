@@ -35,7 +35,7 @@ func TestBuildTaskCardUsesExplicitProgressVisibilityControls(t *testing.T) {
 				summaryVisible = true
 			}
 		}
-		if mainVisible != tt.expanded || expandVisible == tt.expanded || collapseVisible != tt.expanded || summaryVisible {
+		if !mainVisible || expandVisible == tt.expanded || collapseVisible != tt.expanded || summaryVisible {
 			t.Fatalf("status=%s expanded=%t elements=%#v", tt.status, tt.expanded, elements)
 		}
 	}
@@ -96,15 +96,14 @@ func TestTaskCardProgressControlsAreMutuallyExclusiveButtons(t *testing.T) {
 		wantControlID string
 		wantText      string
 		wantAction    string
-		wantMain      bool
 	}{
 		{name: "collapsed", wantControlID: "progress_expand", wantText: "展开完整进度", wantAction: "task_progress_expand"},
-		{name: "expanded", expanded: true, wantControlID: cardProgressCollapseID, wantText: "收起完整进度", wantAction: "task_progress_collapse", wantMain: true},
+		{name: "expanded", expanded: true, wantControlID: cardProgressCollapseID, wantText: "收起完整进度", wantAction: "task_progress_collapse"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			raw, err := buildCardV2(cardOptions{
-				Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Content: "完整时间线",
+				Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Preview: "最近五条", Content: "完整时间线",
 				Collapsible: true, Expanded: tt.expanded, taskCardID: "card-task-1",
 			})
 			if err != nil {
@@ -125,8 +124,8 @@ func TestTaskCardProgressControlsAreMutuallyExclusiveButtons(t *testing.T) {
 					controls = append(controls, element)
 				}
 			}
-			if foundMain != tt.wantMain {
-				t.Fatalf("main visible=%v, want %v; elements=%#v", foundMain, tt.wantMain, elements)
+			if !foundMain {
+				t.Fatalf("main visible=%v, want one progress body; elements=%#v", foundMain, elements)
 			}
 			if foundSummary {
 				t.Fatalf("elements=%#v, want one progress body without duplicate summary", elements)
@@ -150,7 +149,7 @@ func TestTaskCardProgressControlsAreMutuallyExclusiveButtons(t *testing.T) {
 func TestCollapsedTaskCardKeepsExplicitExpandButtonAtVisibleBottom(t *testing.T) {
 	registry := newTaskCardRegistry()
 	registry.record("card-task-1", cardOptions{
-		Status: cardStatusDone, Title: "Codex", Summary: "摘要", Content: "完整时间线",
+		Status: cardStatusDone, Title: "Codex", Summary: "摘要", Preview: "最近五条", Content: "完整时间线",
 		Approvals: []string{"允许本次：读取文件"}, Collapsible: true, Expanded: false,
 	})
 	opts, ok := registry.snapshot("card-task-1")
@@ -162,10 +161,12 @@ func TestCollapsedTaskCardKeepsExplicitExpandButtonAtVisibleBottom(t *testing.T)
 		t.Fatal(err)
 	}
 	elements := decodeCardJSON(t, raw)["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 2 || elements[1].(map[string]any)["element_id"] != cardProgressExpandID {
-		t.Fatalf("elements=%#v, want expand control as final visible body element", elements)
+	if len(elements) != 3 || elements[1].(map[string]any)["element_id"] != cardMainContentID ||
+		elements[1].(map[string]any)["content"] != "最近五条" ||
+		elements[2].(map[string]any)["element_id"] != cardProgressExpandID {
+		t.Fatalf("elements=%#v, want preview and expand control as final visible body elements", elements)
 	}
-	button := elements[1].(map[string]any)
+	button := elements[2].(map[string]any)
 	if button["text"].(map[string]any)["content"] != "展开完整进度" || button["type"] != "default" {
 		t.Fatalf("button=%#v", button)
 	}

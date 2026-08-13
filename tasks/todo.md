@@ -20,6 +20,60 @@
 
 自动化测试证明状态机、租约、失败关闭和 generation 门禁；不会替代真实 App 退出检测、官方 daemon 生命周期、飞书错误回写和更新重启的端侧验收。
 
+## 2026-08-12 飞书任务卡默认展示最近 5 条进度
+
+### 目标
+
+飞书切换或接管会话后，新任务卡默认在同一正文区域展示最近 5 条语义合并后的结构化进度并实时更新；用户点击“展开完整进度”后，同一区域切换为当前分段的完整进度，后续更新继续写入完整进度末尾。
+
+### 范围与交互约定
+
+- “最近 5 行”按经过 ID/阶段合并后的最近 5 条结构化进度项计算，不按 Markdown 物理换行或逐 token 输出截断；单条仍沿用现有 180 字符收敛。
+- 默认态只渲染最近 5 条预览和底部“展开完整进度”按钮，不再额外渲染顶部摘要、第二个进度面板或重复时间线。
+- 展开态在原 `main_content` 区域显示当前分段完整时间线，底部只显示“收起完整进度”；后续普通和结构化更新按当前展开状态实时更新同一正文组件。
+- 收起后回到截至当前的最近 5 条预览，不隐藏全部进度；折叠期间仍持续积累完整时间线。
+- 审批记录、思考中状态、自动续卡、终态保留、独立最终结果、`stream_timeline_limit` 和单条 180 字符限制保持现有语义。
+- 容量预检仍以完整展开卡片为准；完整时间线接近飞书限制时继续自动续卡，不能因为默认只显示 5 条而绕过容量控制。
+- durable stream reference、终态 checkpoint 和跨进程恢复必须同时保留最近预览所需信息与完整正文；服务重启后按钮状态和后续实时更新不能漂移。
+
+### 验收标准
+
+- [x] 切换到已有 active turn 后，首张卡默认只显示最近 5 条已回放进度；不足 5 条时全部显示。
+- [x] 默认态收到第 6 条及后续进度时，原卡正文实时滑动为最新 5 条，不出现第二份重复进度。
+- [x] 点击“展开完整进度”后，同一卡片显示从本分段第一条到当前的完整时间线，按钮移到底部并变为“收起完整进度”。
+- [x] 展开期间的新进度在完整时间线末尾实时出现；同 ID/阶段更新仍原位更新，不重复追加。
+- [x] 点击“收起完整进度”后，同一卡片立即回到最新 5 条预览；再次展开可看到期间积累的全部进度。
+- [x] 审批、终态、续卡、服务重启恢复和最终结果独立投递行为不回归。
+
+### 实施步骤
+
+- [x] 先补失败测试，覆盖默认最近 5 条、预览滑动、展开后完整更新、收起恢复预览和无重复区域。
+- [x] 在消息层从结构化时间线生成最近 5 条预览，并通过结构化流协议同时传递预览与完整正文。
+- [x] 扩展飞书任务卡 registry、CardKit 更新和按钮回调，根据当前展开状态选择同一 `main_content` 的预览或完整正文。
+- [x] 扩展 durable reference 与终态/续卡 checkpoint，验证重启后预览、完整正文和展开状态一致。
+- [x] 运行 `messaging`、`feishu` 定向测试及与风险匹配的全仓验证，复核最终差异。
+
+### 验证方式
+
+```bash
+go test ./messaging ./feishu -count=1 -timeout 180s
+go test -race ./messaging ./feishu -count=1 -timeout 240s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- 飞书任务卡始终只保留一个 `main_content`：默认实时显示当前分段最近 5 条，展开后实时显示完整分段，收起后恢复最新 5 条；切换已有 active turn 的 reanchor 入口已补充直接回归测试。
+- `Preview`、完整正文和展开状态已进入 registry、durable reference 与终态 checkpoint；旧引用缺少 `Preview` 时回退完整正文，终态自动收起并移除“思考中.....”。
+- 初始卡和后续更新继续按完整展开卡片 JSON 预检容量；审批、续卡、独立最终结果和非结构化平台路径保持原有语义。
+- 展开或收起的远端 `UpdateCard` 失败时，registry 仅在 sequence 未变化时恢复原状态，避免下一条流式进度向用户实际仍折叠的卡片写入完整正文，也不会覆盖并发期间的更晚更新。
+- 验证通过：`go test ./messaging ./feishu ./platform -count=1 -timeout 180s`、`go test -race ./messaging ./feishu -count=1 -timeout 360s`、`go test ./... -count=1 -timeout 300s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。真实飞书桌面端和移动端交互仍需发布后验收。
+
 ## 2026-08-12 Codex App 与飞书真机协作修复
 
 ### 目标

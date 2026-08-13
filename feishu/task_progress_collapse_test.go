@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/platform"
@@ -13,7 +14,7 @@ func TestTaskProgressCollapseActionUpdatesCardWithoutAgentDispatch(t *testing.T)
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.cardKit = kit
 	adapter.taskCards.record("card-task-1", cardOptions{
-		Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Content: "完整时间线",
+		Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Preview: "最近五条", Content: "完整时间线",
 		Collapsible: true, Expanded: true, InlineActiveStatus: true,
 	})
 	durableRefreshes := 0
@@ -52,8 +53,8 @@ func TestTaskProgressCollapseActionUpdatesCardWithoutAgentDispatch(t *testing.T)
 			collapseVisible = true
 		}
 	}
-	if mainVisible || !expandVisible || collapseVisible {
-		t.Fatalf("elements=%#v, want hidden progress and expand control only", elements)
+	if !mainVisible || !expandVisible || collapseVisible {
+		t.Fatalf("elements=%#v, want preview and expand control only", elements)
 	}
 	opts, ok := adapter.taskCards.snapshot("card-task-1")
 	if !ok || opts.Expanded {
@@ -74,7 +75,7 @@ func TestTaskProgressExpandActionUpdatesCardWithoutAgentDispatch(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
 	adapter.cardKit = kit
 	adapter.taskCards.record("card-task-1", cardOptions{
-		Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Content: "完整时间线",
+		Status: cardStatusStreaming, Title: "Codex", Summary: "摘要", Preview: "最近五条", Content: "完整时间线",
 		Collapsible: true, Expanded: false, InlineActiveStatus: true,
 	})
 	durableRefreshes := 0
@@ -130,13 +131,47 @@ func TestTaskProgressExpandActionUpdatesCardWithoutAgentDispatch(t *testing.T) {
 	}
 }
 
-func TestCollapsedTaskCardAccumulatesProgressUntilExpanded(t *testing.T) {
+func TestTaskProgressExpandFailureKeepsCollapsedRegistryState(t *testing.T) {
+	kit := &fakeCardKitClient{updateErrors: []error{errors.New("update failed")}}
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	adapter.cardKit = kit
+	adapter.taskCards.record("card-task-1", cardOptions{
+		Status: cardStatusStreaming, Title: "Codex", Preview: "最近五条", Content: "完整时间线",
+		Collapsible: true, Expanded: false, InlineActiveStatus: true,
+	})
+	durableRefreshes := 0
+	adapter.taskCards.setDurableReferenceChangeHandler("card-task-1", func() { durableRefreshes++ })
+	event := &callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+		Operator: &callback.Operator{OpenID: "ou_user"},
+		Context:  &callback.Context{OpenChatID: "oc_chat", OpenMessageID: "om_task"},
+		Action: &callback.CallBackAction{Value: map[string]interface{}{
+			"action": "task_progress_expand", "task_card_id": "card-task-1",
+		}},
+	}}
+
+	response, err := adapter.handleCardActionEvent(context.Background(), event, func(context.Context, platform.IncomingMessage, platform.Replier) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response == nil || response.Toast == nil || response.Toast.Type != "warning" {
+		t.Fatalf("response=%#v, want warning toast", response)
+	}
+	opts, ok := adapter.taskCards.snapshot("card-task-1")
+	if !ok || opts.Expanded {
+		t.Fatalf("task card state=%#v, want collapsed after remote update failure", opts)
+	}
+	if durableRefreshes != 0 {
+		t.Fatalf("durable reference refreshes=%d, want 0 after failed update", durableRefreshes)
+	}
+}
+
+func TestTaskCardStreamsPreviewThenExpandedDetailsInOneBody(t *testing.T) {
 	kit := &fakeCardKitClient{cardID: "card-task-1"}
 	registry := newTaskCardRegistry()
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, registry)
 	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
 		Title:               "Codex",
-		InitialPresentation: &platform.StreamPresentation{Summary: "第一步", Details: "第一步详情"},
+		InitialPresentation: &platform.StreamPresentation{Summary: "第五步", Preview: "第三步\n\n第四步\n\n第五步", Details: "第一步\n\n第二步\n\n第三步\n\n第四步\n\n第五步"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -163,23 +198,19 @@ func TestCollapsedTaskCardAccumulatesProgressUntilExpanded(t *testing.T) {
 		}
 	}
 
-	control("task_progress_collapse")
+	opts, ok := registry.snapshot("card-task-1")
+	if !ok || opts.Expanded {
+		t.Fatalf("initial task card=%#v, want collapsed preview", opts)
+	}
 	streamCallsBefore := len(kit.streamElementIDs)
 	if err := stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
-		Summary: "第二步", Details: "第一步详情\n\n第二步详情",
+		Summary: "第六步", Preview: "第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步", Details: "第一步\n\n第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(kit.streamElementIDs) != streamCallsBefore {
-		t.Fatalf("collapsed card streamed hidden progress: before=%d after=%d elements=%#v",
-			streamCallsBefore, len(kit.streamElementIDs), kit.streamElementIDs)
-	}
-	if err := stream.Update(context.Background(), "第一步详情\n\n第二步详情\n\n第三步详情"); err != nil {
-		t.Fatal(err)
-	}
-	if len(kit.streamElementIDs) != streamCallsBefore {
-		t.Fatalf("collapsed card streamed hidden plain progress: before=%d after=%d elements=%#v",
-			streamCallsBefore, len(kit.streamElementIDs), kit.streamElementIDs)
+	if len(kit.streamElementIDs) != streamCallsBefore+1 || kit.streamTexts[len(kit.streamTexts)-1] != "第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步" {
+		t.Fatalf("collapsed card did not stream latest preview: before=%d after=%d texts=%#v elements=%#v",
+			streamCallsBefore, len(kit.streamElementIDs), kit.streamTexts, kit.streamElementIDs)
 	}
 	control("task_progress_expand")
 	card := decodeCardJSON(t, kit.updateCards[len(kit.updateCards)-1])
@@ -194,7 +225,28 @@ func TestCollapsedTaskCardAccumulatesProgressUntilExpanded(t *testing.T) {
 			summaryVisible = true
 		}
 	}
-	if mainContent != "第一步详情\n\n第二步详情\n\n第三步详情" || summaryVisible {
+	if mainContent != "第一步\n\n第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步" || summaryVisible {
 		t.Fatalf("expanded elements=%#v, want latest complete progress without summary duplicate", elements)
+	}
+	if err := stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
+		Summary: "第七步", Preview: "第三步\n\n第四步\n\n第五步\n\n第六步\n\n第七步", Details: "第一步\n\n第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步\n\n第七步",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := kit.streamTexts[len(kit.streamTexts)-1]; got != "第一步\n\n第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步\n\n第七步" {
+		t.Fatalf("expanded stream=%q, want complete details", got)
+	}
+	control("task_progress_collapse")
+	card = decodeCardJSON(t, kit.updateCards[len(kit.updateCards)-1])
+	elements = card["body"].(map[string]any)["elements"].([]any)
+	mainContent = ""
+	for _, raw := range elements {
+		element := raw.(map[string]any)
+		if element["element_id"] == cardMainContentID {
+			mainContent, _ = element["content"].(string)
+		}
+	}
+	if mainContent != "第三步\n\n第四步\n\n第五步\n\n第六步\n\n第七步" {
+		t.Fatalf("collapsed elements=%#v, want latest preview", elements)
 	}
 }

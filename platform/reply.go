@@ -222,6 +222,7 @@ type StreamContentPreflighter interface {
 
 type StreamPresentation struct {
 	Summary string
+	Preview string
 	Details string
 }
 

@@ -506,14 +506,32 @@ func TestProgressSessionUsesStructuredPresentation(t *testing.T) {
 	cfg.Mode = progressModeStream
 	cfg.SendAcceptance = boolPtr(false)
 	_, _, session := h.startProgressSessionForWorkspaceAgentWithHandle(context.Background(), oldReply, "", "codex", "/workspace", "执行任务", cfg)
-	session.onTaskProgress(taskProgressUpdate{latest: "最新摘要", card: "**执行进度**\n- • 旧时间线\n\n**当前说明**\n继续处理", timeline: true, currentExplanation: "继续处理", timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindTool, Text: "旧时间线"}}})
-	if !session.sendSnapshotContent(progressCardSnapshot{summary: "最新摘要", text: "**执行进度**\n- • 旧时间线", structured: true, withPrefix: true, effectiveProgress: true, timelineItems: []agent.ProgressEvent{{Kind: agent.ProgressKindTool, Text: "旧时间线"}}}) {
+	timelineItems := []agent.ProgressEvent{
+		{ID: "step-1", Kind: agent.ProgressKindCommentary, Sequence: 1, Text: "第一条进度"},
+		{ID: "step-2", Kind: agent.ProgressKindCommentary, Sequence: 2, Text: "第二条进度"},
+		{ID: "step-3", Kind: agent.ProgressKindCommentary, Sequence: 3, Text: "第三条进度"},
+		{ID: "step-4", Kind: agent.ProgressKindCommentary, Sequence: 4, Text: "第四条进度"},
+		{ID: "step-5", Kind: agent.ProgressKindCommentary, Sequence: 5, Text: "第五条进度"},
+		{ID: "step-6", Kind: agent.ProgressKindCommentary, Sequence: 6, Text: "第六条进度"},
+		{ID: "step-7", Kind: agent.ProgressKindCommentary, Sequence: 7, Text: "第七条进度"},
+	}
+	card, timeline := renderTaskProgressTimeline(timelineItems, "第七条进度")
+	if !timeline {
+		t.Fatal("expected structured timeline")
+	}
+	session.onTaskProgress(taskProgressUpdate{
+		latest: "最新摘要", card: card, timeline: true, currentExplanation: "继续处理", timelineItems: timelineItems,
+	})
+	if !session.sendSnapshotContent(progressCardSnapshot{
+		summary: "最新摘要", text: card, structured: true, withPrefix: true,
+		effectiveProgress: true, timelineItems: timelineItems,
+	}) {
 		t.Fatal("structured snapshot should be sent")
 	}
 	oldReply.stream.mu.Lock()
 	got := append([]platform.StreamPresentation(nil), oldReply.stream.presentations...)
 	oldReply.stream.mu.Unlock()
-	if len(got) == 0 || got[len(got)-1].Summary != "最新摘要" || !strings.Contains(got[len(got)-1].Details, "旧时间线") {
+	if len(got) == 0 || got[len(got)-1].Summary != "最新摘要" || !strings.Contains(got[len(got)-1].Details, "第一条进度") {
 		t.Fatalf("presentations=%#v", got)
 	}
 	if result, err := session.reanchor(context.Background(), newReply, progressCardSnapshot{
@@ -523,8 +541,24 @@ func TestProgressSessionUsesStructuredPresentation(t *testing.T) {
 	}
 	newReply.stream.mu.Lock()
 	defer newReply.stream.mu.Unlock()
-	if newReply.lastOptions.InitialPresentation == nil || newReply.lastOptions.InitialPresentation.Summary != "最新摘要" || !strings.Contains(newReply.lastOptions.InitialPresentation.Details, "旧时间线") {
+	presentation := newReply.lastOptions.InitialPresentation
+	if presentation == nil || presentation.Summary != "最新摘要" {
 		t.Fatalf("initial presentation=%#v", newReply.lastOptions.InitialPresentation)
+	}
+	for _, want := range []string{"第一条进度", "第二条进度", "第七条进度"} {
+		if !strings.Contains(presentation.Details, want) {
+			t.Fatalf("initial details=%q, want %q", presentation.Details, want)
+		}
+	}
+	for _, hidden := range []string{"第一条进度", "第二条进度"} {
+		if strings.Contains(presentation.Preview, hidden) {
+			t.Fatalf("initial preview=%q, must omit %q", presentation.Preview, hidden)
+		}
+	}
+	for _, want := range []string{"第三条进度", "第四条进度", "第五条进度", "第六条进度", "第七条进度"} {
+		if !strings.Contains(presentation.Preview, want) {
+			t.Fatalf("initial preview=%q, want %q", presentation.Preview, want)
+		}
 	}
 }
 

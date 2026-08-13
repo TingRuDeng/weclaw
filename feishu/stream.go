@@ -28,6 +28,7 @@ type feishuStream struct {
 	sequence                int
 	lastUpdate              time.Time
 	lastContent             string
+	lastPreview             string
 	lastSummary             string
 	collapsible             bool
 	closed                  bool
@@ -60,11 +61,12 @@ type feishuStreamUpdateOp struct {
 func (s *feishuStream) PreflightPresentation(p platform.StreamPresentation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	opts := cardOptions{Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Content: p.Details, InlineActiveStatus: s.inlineActiveStatus, Collapsible: s.collapsible, Expanded: true}
+	opts := cardOptions{Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Preview: p.Preview, Content: p.Details, InlineActiveStatus: s.inlineActiveStatus, Collapsible: s.collapsible, Expanded: true}
 	if s.taskCards != nil {
 		if snap, ok := s.taskCards.snapshot(s.cardID); ok {
 			opts = snap
 			opts.Summary = p.Summary
+			opts.Preview = p.Preview
 			opts.Content = p.Details
 		}
 	}
@@ -127,15 +129,15 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 		s.mu.Unlock()
 		return nil
 	}
-	op := feishuStreamUpdateOp{content: p.Details}
+	op := feishuStreamUpdateOp{content: presentationVisibleContent(p, false)}
 	if !s.collapsible {
 		opts := cardOptions{
-			Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Content: p.Details,
-			Collapsible: true, Expanded: true, InlineActiveStatus: s.inlineActiveStatus,
+			Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Preview: p.Preview, Content: p.Details,
+			Collapsible: true, Expanded: false, InlineActiveStatus: s.inlineActiveStatus,
 			Approvals: append([]string(nil), s.preservedApprovals...),
 		}
 		if s.taskCards != nil {
-			if snapshot, sequence, ok := s.taskCards.enableStructuredPresentationWithSequence(s.cardID, p.Summary, p.Details); ok {
+			if snapshot, sequence, ok := s.taskCards.enableStructuredPresentationWithSequence(s.cardID, p.Summary, p.Preview, p.Details); ok {
 				opts = snapshot
 				op.taskUpdateSeq = sequence
 				s.sequence = sequence
@@ -151,15 +153,15 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 		}
 		op.taskCardJSON = cardJSON
 	} else if s.taskCards != nil {
-		snapshot, sequence, ok := s.taskCards.updatePresentationWithSequence(s.cardID, p.Summary, p.Details)
+		snapshot, sequence, ok := s.taskCards.updatePresentationWithSequence(s.cardID, p.Summary, p.Preview, p.Details)
 		if ok {
 			s.sequence = sequence
-			if snapshot.Expanded {
-				op.detailsSeq = sequence
-			}
+			op.content = visibleCardContent(snapshot)
+			op.detailsSeq = sequence
 		}
 	}
 	s.lastSummary = p.Summary
+	s.lastPreview = p.Preview
 	s.lastContent = p.Details
 	s.lastUpdate = s.now()
 	s.mu.Unlock()
@@ -182,6 +184,17 @@ func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.Str
 		return nil
 	}
 	return s.streamComponentWithRetry(ctx, cardMainContentID, op.content, op.detailsSeq)
+}
+
+func presentationVisibleContent(p platform.StreamPresentation, expanded bool) string {
+	if !expanded && strings.TrimSpace(p.Preview) != "" {
+		return p.Preview
+	}
+	return p.Details
+}
+
+func visibleCardContent(opts cardOptions) string {
+	return presentationVisibleContent(platform.StreamPresentation{Preview: opts.Preview, Details: opts.Content}, opts.Expanded)
 }
 
 func (s *feishuStream) streamComponentWithRetry(ctx context.Context, elementID, content string, sequence int) error {
@@ -213,6 +226,7 @@ type feishuTaskCardCheckpoint struct {
 	Title              string   `json:"title"`
 	Status             string   `json:"status"`
 	Content            string   `json:"content,omitempty"`
+	Preview            string   `json:"preview,omitempty"`
 	Summary            string   `json:"summary,omitempty"`
 	Approvals          []string `json:"approvals,omitempty"`
 	Collapsible        bool     `json:"collapsible,omitempty"`
@@ -231,7 +245,9 @@ type feishuStreamReferencePayload struct {
 	Content     string   `json:"content,omitempty"`
 	Summary     string   `json:"summary,omitempty"`
 	Details     string   `json:"details,omitempty"`
+	Preview     string   `json:"preview,omitempty"`
 	Collapsible bool     `json:"collapsible,omitempty"`
+	Expanded    bool     `json:"expanded,omitempty"`
 	Approvals   []string `json:"approvals,omitempty"`
 }
 
@@ -247,22 +263,36 @@ func (r *Replier) openTaskCardKitStream(ctx context.Context, opts platform.Strea
 }
 
 func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.StreamOptions, trackTask bool) (platform.Stream, error) {
-	initialSummary, initialDetails := "", opts.InitialContent
+	initialSummary, initialPreview, initialDetails := "", opts.InitialContent, opts.InitialContent
 	if opts.InitialPresentation != nil {
-		initialSummary, initialDetails = opts.InitialPresentation.Summary, opts.InitialPresentation.Details
+		initialSummary, initialPreview, initialDetails = opts.InitialPresentation.Summary, opts.InitialPresentation.Preview, opts.InitialPresentation.Details
+		if strings.TrimSpace(initialPreview) == "" {
+			initialPreview = initialDetails
+		}
 	}
-	cardJSON, err := buildCardV2(cardOptions{
+	cardOpts := cardOptions{
 		Status:  cardStatusThinking,
 		Title:   opts.Title,
-		Content: initialDetails, Summary: initialSummary,
-		Collapsible: trackTask && opts.InitialPresentation != nil, Expanded: true,
+		Content: initialDetails, Preview: initialPreview, Summary: initialSummary,
+		Collapsible: trackTask && opts.InitialPresentation != nil, Expanded: false,
 		InlineActiveStatus: trackTask,
-	})
+	}
+	cardJSON, err := buildCardV2(cardOpts)
 	if err != nil {
 		return nil, err
 	}
 	if len([]byte(cardJSON)) > feishuCardJSONSoftLimitBytes {
 		return nil, fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(cardJSON)), feishuCardJSONSoftLimitBytes)
+	}
+	if cardOpts.Collapsible {
+		cardOpts.Expanded = true
+		expandedJSON, buildErr := buildCardV2(cardOpts)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		if len([]byte(expandedJSON)) > feishuCardJSONSoftLimitBytes {
+			return nil, fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(expandedJSON)), feishuCardJSONSoftLimitBytes)
+		}
 	}
 	cardID, err := r.cardKit.CreateCard(ctx, cardJSON)
 	if err != nil {
@@ -278,7 +308,7 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 		title:       opts.Title,
 		throttle:    cardkitThrottle,
 		now:         time.Now,
-		lastContent: initialDetails, lastSummary: initialSummary,
+		lastContent: initialDetails, lastPreview: initialPreview, lastSummary: initialSummary,
 		collapsible:             trackTask && opts.InitialPresentation != nil,
 		cardJSONSoftLimitBytes:  feishuCardJSONSoftLimitBytes,
 		preserveTerminalContent: trackTask,
@@ -293,7 +323,7 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 			r.taskCards.recordWithSequence(cardID, cardOptions{
 				Status:  cardStatusThinking,
 				Title:   opts.Title,
-				Content: initialDetails, Summary: initialSummary, Collapsible: stream.collapsible, Expanded: true,
+				Content: initialDetails, Preview: initialPreview, Summary: initialSummary, Collapsible: stream.collapsible, Expanded: false,
 				InlineActiveStatus: trackTask,
 			}, stream.sequence)
 			if stream.collapsible {
@@ -575,14 +605,18 @@ func (s *feishuStream) DurableReference() (platform.DurableStreamReference, erro
 		return platform.DurableStreamReference{}, fmt.Errorf("Feishu stream reference is incomplete")
 	}
 	summary := strings.TrimSpace(s.lastSummary)
+	preview := trimTaskStreamThinkingIndicator(s.lastPreview)
 	details := trimTaskStreamThinkingIndicator(s.lastContent)
 	collapsible := s.collapsible
+	expanded := false
 	approvals := append([]string(nil), s.preservedApprovals...)
 	if s.taskCards != nil {
 		if snapshot, sequence, ok := s.taskCards.snapshotWithSequence(s.cardID); ok {
 			summary = strings.TrimSpace(snapshot.Summary)
+			preview = trimTaskStreamThinkingIndicator(snapshot.Preview)
 			details = trimTaskStreamThinkingIndicator(snapshot.Content)
 			collapsible = snapshot.Collapsible
+			expanded = snapshot.Expanded
 			approvals = append([]string(nil), snapshot.Approvals...)
 			if sequence > s.sequence {
 				s.sequence = sequence
@@ -590,16 +624,19 @@ func (s *feishuStream) DurableReference() (platform.DurableStreamReference, erro
 		}
 	}
 	if s.hasPending && strings.TrimSpace(s.pendingText) != "" {
+		preview = trimTaskStreamThinkingIndicator(s.pendingText)
 		details = trimTaskStreamThinkingIndicator(s.pendingText)
 	}
 	if s.hasPendingPresentation {
 		summary = strings.TrimSpace(s.pendingPresentation.Summary)
+		preview = trimTaskStreamThinkingIndicator(s.pendingPresentation.Preview)
 		details = trimTaskStreamThinkingIndicator(s.pendingPresentation.Details)
 	}
-	summary, details = normalizeFeishuReferencePresentation(summary, details, details)
+	summary, preview, details = normalizeFeishuReferencePresentation(summary, preview, details, details)
 	payload, err := json.Marshal(feishuStreamReferencePayload{
 		CardID: s.cardID, Title: s.title, Sequence: s.sequence,
-		Content: details, Summary: summary, Details: details, Collapsible: collapsible,
+		Content: details, Summary: summary, Preview: preview, Details: details,
+		Collapsible: collapsible, Expanded: expanded,
 		Approvals: approvals,
 	})
 	if err != nil {
@@ -657,19 +694,19 @@ func (r *Replier) PrepareTerminalFromReferenceWithState(reference platform.Durab
 	if err != nil {
 		return platform.TerminalCheckpoint{}, err
 	}
-	summary, details := normalizeFeishuReferencePresentation(payload.Summary, payload.Details, payload.Content)
+	summary, preview, details := normalizeFeishuReferencePresentation(payload.Summary, payload.Preview, payload.Details, payload.Content)
 	stream := &feishuStream{
 		cardKit: r.cardKit, taskCards: r.taskCards,
 		cardID: payload.CardID, title: payload.Title, sequence: payload.Sequence,
-		lastContent: details, lastSummary: summary, collapsible: payload.Collapsible,
+		lastContent: details, lastPreview: preview, lastSummary: summary, collapsible: payload.Collapsible,
 		preserveTerminalContent: true, inlineActiveStatus: true,
 		preservedApprovals: append([]string(nil), payload.Approvals...),
 		now:                time.Now,
 	}
 	if r.taskCards != nil {
 		r.taskCards.recordWithSequence(payload.CardID, cardOptions{
-			Status: cardStatusThinking, Title: payload.Title, Summary: summary, Content: details,
-			Collapsible: payload.Collapsible, Expanded: true,
+			Status: cardStatusThinking, Title: payload.Title, Summary: summary, Preview: preview, Content: details,
+			Collapsible: payload.Collapsible, Expanded: payload.Expanded,
 			Approvals: payload.Approvals, InlineActiveStatus: true,
 		}, payload.Sequence)
 	}
@@ -844,7 +881,7 @@ func (s *feishuStream) prepareTerminalUpdate(status string, content string) (fei
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	opts := cardOptions{
-		Status: status, Title: s.title, Summary: s.lastSummary, Content: content,
+		Status: status, Title: s.title, Summary: s.lastSummary, Preview: s.lastPreview, Content: content,
 		Collapsible: s.collapsible, Expanded: false,
 		InlineActiveStatus: s.inlineActiveStatus,
 	}
@@ -888,7 +925,7 @@ func taskCardCheckpointFromOptions(opts cardOptions) *feishuTaskCardCheckpoint {
 		return nil
 	}
 	return &feishuTaskCardCheckpoint{
-		Title: opts.Title, Status: opts.Status, Content: opts.Content, Summary: opts.Summary,
+		Title: opts.Title, Status: opts.Status, Content: opts.Content, Preview: opts.Preview, Summary: opts.Summary,
 		Approvals: append([]string(nil), opts.Approvals...), Collapsible: opts.Collapsible,
 		Expanded: opts.Expanded, InlineActiveStatus: opts.InlineActiveStatus,
 	}
@@ -900,7 +937,7 @@ func (checkpoint *feishuTaskCardCheckpoint) cardOptions(cardID string) cardOptio
 	}
 	return cardOptions{
 		Status: checkpoint.Status, Title: checkpoint.Title, Content: checkpoint.Content,
-		Summary: checkpoint.Summary, Approvals: append([]string(nil), checkpoint.Approvals...),
+		Preview: checkpoint.Preview, Summary: checkpoint.Summary, Approvals: append([]string(nil), checkpoint.Approvals...),
 		Collapsible: checkpoint.Collapsible, Expanded: checkpoint.Expanded,
 		InlineActiveStatus: checkpoint.InlineActiveStatus, taskCardID: cardID,
 	}
@@ -926,9 +963,10 @@ func decodeFeishuStreamReference(reference platform.DurableStreamReference) (fei
 	return payload, nil
 }
 
-func normalizeFeishuReferencePresentation(summary, details, legacyContent string) (string, string) {
+func normalizeFeishuReferencePresentation(summary, preview, details, legacyContent string) (string, string, string) {
 	legacyContent = trimTaskStreamThinkingIndicator(legacyContent)
 	summary = strings.TrimSpace(summary)
+	preview = trimTaskStreamThinkingIndicator(preview)
 	details = trimTaskStreamThinkingIndicator(details)
 	if summary == "" {
 		summary = legacyContent
@@ -936,10 +974,13 @@ func normalizeFeishuReferencePresentation(summary, details, legacyContent string
 	if details == "" {
 		details = legacyContent
 	}
+	if preview == "" {
+		preview = details
+	}
 	if summary == "" {
 		summary = details
 	}
-	return summary, details
+	return summary, preview, details
 }
 
 func prepareFeishuSupersedeFromReference(reference platform.DurableStreamReference, notice string, operationID string) (platform.SupersedeCheckpoint, error) {
@@ -967,7 +1008,7 @@ func prepareFeishuStreamFreezeFromReference(reference platform.DurableStreamRefe
 			notice = defaultSupersededTaskCardNotice
 		}
 	}
-	summary, details := normalizeFeishuReferencePresentation(payload.Summary, payload.Details, payload.Content)
+	summary, preview, details := normalizeFeishuReferencePresentation(payload.Summary, payload.Preview, payload.Details, payload.Content)
 	if !strings.Contains(details, notice) {
 		if details == "" {
 			details = notice
@@ -975,9 +1016,16 @@ func prepareFeishuStreamFreezeFromReference(reference platform.DurableStreamRefe
 			details += "\n\n---\n\n" + notice
 		}
 	}
+	if !strings.Contains(preview, notice) {
+		if preview == "" {
+			preview = notice
+		} else {
+			preview += "\n\n---\n\n" + notice
+		}
+	}
 	cardJSON, err := buildCardV2(cardOptions{
 		Status: status, Title: payload.Title,
-		Summary: summary, Content: details, Approvals: payload.Approvals,
+		Summary: summary, Preview: preview, Content: details, Approvals: payload.Approvals,
 		Collapsible: payload.Collapsible, Expanded: false, taskCardID: payload.CardID,
 	})
 	if err != nil {
@@ -990,7 +1038,7 @@ func prepareFeishuStreamFreezeFromReference(reference platform.DurableStreamRefe
 		UpdateOperation:  uuid.NewSHA1(uuid.NameSpaceOID, []byte(operationID+":update")).String(),
 		CardJSON:         cardJSON,
 		TaskCard: taskCardCheckpointFromOptions(cardOptions{
-			Status: status, Title: payload.Title, Summary: summary, Content: details,
+			Status: status, Title: payload.Title, Summary: summary, Preview: preview, Content: details,
 			Approvals: payload.Approvals, Collapsible: payload.Collapsible,
 			Expanded: false, taskCardID: payload.CardID,
 		}),

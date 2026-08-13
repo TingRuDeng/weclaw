@@ -23,6 +23,7 @@ type cardOptions struct {
 	Status             string
 	Title              string
 	Content            string
+	Preview            string
 	Summary            string
 	Approvals          []string
 	Collapsible        bool
@@ -39,6 +40,11 @@ func buildCardV2(opts cardOptions) (string, error) {
 		title = "WeClaw"
 	}
 	content := strings.TrimSpace(opts.Content)
+	if opts.Collapsible && !opts.Expanded {
+		if preview := strings.TrimSpace(opts.Preview); preview != "" {
+			content = preview
+		}
+	}
 	compactTerminal := content == "" && isCompactTerminalStatus(status)
 	if content == "" && !compactTerminal {
 		content = statusDefaultContent(status)
@@ -74,16 +80,14 @@ func buildCardV2(opts cardOptions) (string, error) {
 			})
 		}
 		taskCardID := strings.TrimSpace(opts.taskCardID)
-		if opts.Expanded || taskCardID == "" {
-			if main != nil {
-				elements = append(elements, main)
-			}
-			if taskCardID != "" {
-				elements = append(elements, taskProgressControlButton(
-					cardProgressCollapseID, "收起完整进度", cardActionTaskProgressCollapse, taskCardID,
-				))
-			}
-		} else {
+		if main != nil {
+			elements = append(elements, main)
+		}
+		if taskCardID != "" && opts.Expanded {
+			elements = append(elements, taskProgressControlButton(
+				cardProgressCollapseID, "收起完整进度", cardActionTaskProgressCollapse, taskCardID,
+			))
+		} else if taskCardID != "" {
 			elements = append(elements, taskProgressControlButton(
 				cardProgressExpandID, "展开完整进度", cardActionTaskProgressExpand, taskCardID,
 			))

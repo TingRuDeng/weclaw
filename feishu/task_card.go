@@ -19,6 +19,7 @@ type taskCardState struct {
 	title              string
 	status             string
 	content            string
+	preview            string
 	summary            string
 	approvals          []string
 	sequence           int
@@ -55,6 +56,7 @@ func (r *taskCardRegistry) recordWithSequence(cardID string, opts cardOptions, s
 		title:              opts.Title,
 		status:             normalizeCardStatus(opts.Status),
 		content:            opts.Content,
+		preview:            opts.Preview,
 		summary:            opts.Summary,
 		approvals:          append([]string(nil), opts.Approvals...),
 		sequence:           sequence,
@@ -65,20 +67,35 @@ func (r *taskCardRegistry) recordWithSequence(cardID string, opts cardOptions, s
 	}
 }
 
-func (r *taskCardRegistry) setExpandedWithSequence(cardID string, expanded bool) (cardOptions, int, bool) {
+func (r *taskCardRegistry) setExpandedWithSequence(cardID string, expanded bool) (cardOptions, int, bool, bool) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
-		return cardOptions{}, 0, false
+		return cardOptions{}, 0, false, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state := r.cards[cardID]
 	if state == nil || !state.collapsible {
-		return cardOptions{}, 0, false
+		return cardOptions{}, 0, false, false
 	}
+	previous := state.expanded
 	state.expanded = expanded
 	state.sequence++
 	state.updatedAt = r.nowOrDefault()
-	return state.cardOptions(), state.sequence, true
+	return state.cardOptions(), state.sequence, previous, true
+}
+
+func (r *taskCardRegistry) restoreExpandedIfSequence(cardID string, sequence int, expanded bool) {
+	if r == nil || strings.TrimSpace(cardID) == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.cards[cardID]
+	if state == nil || state.sequence != sequence {
+		return
+	}
+	state.expanded = expanded
+	state.updatedAt = r.nowOrDefault()
 }
 
 func (r *taskCardRegistry) updateContent(cardID string, content string) {
@@ -141,12 +158,13 @@ func (r *taskCardRegistry) updateContentWithSequence(cardID string, content stri
 		return cardOptions{}, 0, false
 	}
 	state.content = content
+	state.preview = content
 	state.sequence++
 	state.updatedAt = r.nowOrDefault()
 	return state.cardOptions(), state.sequence, true
 }
 
-func (r *taskCardRegistry) updatePresentationWithSequence(cardID, summary, content string) (cardOptions, int, bool) {
+func (r *taskCardRegistry) updatePresentationWithSequence(cardID, summary, preview, content string) (cardOptions, int, bool) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
 		return cardOptions{}, 0, false
 	}
@@ -156,13 +174,13 @@ func (r *taskCardRegistry) updatePresentationWithSequence(cardID, summary, conte
 	if state == nil {
 		return cardOptions{}, 0, false
 	}
-	state.summary, state.content = summary, content
+	state.summary, state.preview, state.content = summary, preview, content
 	state.sequence++
 	state.updatedAt = r.nowOrDefault()
 	return state.cardOptions(), state.sequence, true
 }
 
-func (r *taskCardRegistry) enableStructuredPresentationWithSequence(cardID, summary, content string) (cardOptions, int, bool) {
+func (r *taskCardRegistry) enableStructuredPresentationWithSequence(cardID, summary, preview, content string) (cardOptions, int, bool) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
 		return cardOptions{}, 0, false
 	}
@@ -172,9 +190,9 @@ func (r *taskCardRegistry) enableStructuredPresentationWithSequence(cardID, summ
 	if state == nil {
 		return cardOptions{}, 0, false
 	}
-	state.summary, state.content = summary, content
+	state.summary, state.preview, state.content = summary, preview, content
 	state.collapsible = true
-	state.expanded = true
+	state.expanded = false
 	state.sequence++
 	state.updatedAt = r.nowOrDefault()
 	return state.cardOptions(), state.sequence, true
@@ -212,17 +230,24 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 	if strings.TrimSpace(status) != "" {
 		normalized := normalizeCardStatus(status)
 		state.status = normalized
+		terminalDisplay := normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped ||
+			normalized == cardStatusSuperseded || normalized == cardStatusDetached
+		if terminalDisplay {
+			state.preview = trimTaskStreamThinkingIndicator(state.preview)
+			state.expanded = false
+		}
 		if replaceContent && (normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped) {
 			state.content = strings.TrimSpace(content)
 			if state.content == "" {
 				state.summary = ""
+				state.preview = ""
 				state.collapsible = false
 				state.expanded = false
 			}
 		} else if normalized == cardStatusSuperseded && strings.TrimSpace(content) != "" {
 			state.content = content
 		}
-		if normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped || normalized == cardStatusSuperseded {
+		if terminalDisplay {
 			state.recoveryChanged = nil
 		}
 	} else if strings.TrimSpace(content) != "" {
@@ -284,6 +309,7 @@ func (s *taskCardState) cardOptions() cardOptions {
 		Status:             s.status,
 		Title:              s.title,
 		Content:            s.content,
+		Preview:            s.preview,
 		Summary:            s.summary,
 		Approvals:          append([]string(nil), s.approvals...),
 		Collapsible:        s.collapsible,

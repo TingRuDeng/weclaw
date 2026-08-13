@@ -183,8 +183,8 @@ func TestTaskCardFirstStructuredPresentationUpgradesInitialCard(t *testing.T) {
 	elements := card["body"].(map[string]any)["elements"].([]any)
 	if len(elements) != 2 || elements[0].(map[string]any)["element_id"] != cardMainContentID ||
 		elements[0].(map[string]any)["content"] != "读取代码\n\n"+platform.TaskStreamThinkingIndicator ||
-		elements[1].(map[string]any)["element_id"] != cardProgressCollapseID {
-		t.Fatalf("upgraded body=%#v, want complete progress and bottom collapse control", card["body"])
+		elements[1].(map[string]any)["element_id"] != cardProgressExpandID {
+		t.Fatalf("upgraded body=%#v, want default preview and bottom expand control", card["body"])
 	}
 
 	err = stream.(platform.StructuredProgressStream).UpdatePresentation(context.Background(), platform.StreamPresentation{
@@ -225,8 +225,8 @@ func TestTaskCardInitialStructuredPresentationAddsBottomCollapseControl(t *testi
 	card := decodeCardJSON(t, kit.updateCards[0])
 	elements := card["body"].(map[string]any)["elements"].([]any)
 	button := elements[len(elements)-1].(map[string]any)
-	if button["element_id"] != cardProgressCollapseID {
-		t.Fatalf("elements=%#v, want bottom collapse control", elements)
+	if button["element_id"] != cardProgressExpandID {
+		t.Fatalf("elements=%#v, want bottom expand control", elements)
 	}
 	behaviors := button["behaviors"].([]any)
 	value := behaviors[0].(map[string]any)["value"].(map[string]any)
@@ -235,7 +235,7 @@ func TestTaskCardInitialStructuredPresentationAddsBottomCollapseControl(t *testi
 	}
 }
 
-func TestCollapsibleTaskTerminalAndSupersedeHideProgressBehindExpandControl(t *testing.T) {
+func TestCollapsibleTaskTerminalAndSupersedeShowPreviewBeforeExpandControl(t *testing.T) {
 	for _, terminal := range []platform.StreamTerminalState{platform.StreamTerminalCompleted, platform.StreamTerminalFailed, platform.StreamTerminalStopped} {
 		kit := &fakeCardKitClient{cardID: "card-terminal"}
 		reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
@@ -259,8 +259,8 @@ func TestCollapsibleTaskTerminalAndSupersedeHideProgressBehindExpandControl(t *t
 				foundMain = true
 			}
 		}
-		if !foundExpand || foundMain {
-			t.Fatalf("terminal elements=%#v, want hidden progress and expand control", elems)
+		if !foundExpand || !foundMain {
+			t.Fatalf("terminal elements=%#v, want preview and expand control", elems)
 		}
 		_ = terminal
 	}
@@ -285,8 +285,8 @@ func TestCollapsibleTaskTerminalAndSupersedeHideProgressBehindExpandControl(t *t
 			foundMain = true
 		}
 	}
-	if !foundExpand || foundMain {
-		t.Fatalf("supersede elements=%#v, want hidden progress and expand control", elems)
+	if !foundExpand || !foundMain {
+		t.Fatalf("supersede elements=%#v, want preview and expand control", elems)
 	}
 }
 
@@ -540,6 +540,25 @@ func TestFeishuTaskStreamPreflightsCompleteCardJSONSize(t *testing.T) {
 	registry.addApproval("card-1", parsedCardAction{Choice: "allow", Label: strings.Repeat("审批", 40)})
 	if err := stream.PreflightUpdate("短进展"); !errors.Is(err, platform.ErrStreamContentTooLarge) {
 		t.Fatalf("preflight must include approval records, error=%v", err)
+	}
+}
+
+func TestInitialStructuredTaskCardPreflightsExpandedDetails(t *testing.T) {
+	cardKit := &fakeCardKitClient{cardID: "card-1"}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
+	_, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex",
+		InitialPresentation: &platform.StreamPresentation{
+			Summary: "最新摘要",
+			Preview: "最近五条",
+			Details: strings.Repeat("x", feishuCardJSONSoftLimitBytes),
+		},
+	})
+	if !errors.Is(err, platform.ErrStreamContentTooLarge) {
+		t.Fatalf("OpenStream error=%v, want expanded details capacity failure", err)
+	}
+	if len(cardKit.createdCards) != 0 {
+		t.Fatalf("created cards=%d, oversized complete timeline must fail before creation", len(cardKit.createdCards))
 	}
 }
 
@@ -913,6 +932,38 @@ func TestFeishuStreamCompleteWithEmptyContentPreservesTaskCardProgress(t *testin
 	}
 }
 
+func TestFeishuStructuredTerminalCollapsesPreviewWithoutThinkingIndicator(t *testing.T) {
+	cardKit := &fakeIdempotentCardKitClient{fakeCardKitClient: fakeCardKitClient{cardID: "card-1"}}
+	registry := newTaskCardRegistry()
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, registry)
+	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
+		Title: "Codex",
+		InitialPresentation: &platform.StreamPresentation{
+			Summary: "第六步",
+			Preview: "第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步\n\n" + platform.TaskStreamThinkingIndicator,
+			Details: "第一步\n\n第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步\n\n" + platform.TaskStreamThinkingIndicator,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok := registry.setExpandedWithSequence("card-1", true); !ok {
+		t.Fatal("expand task card")
+	}
+	if err := stream.Complete(context.Background(), "第一步\n\n第二步\n\n第三步\n\n第四步\n\n第五步\n\n第六步"); err != nil {
+		t.Fatal(err)
+	}
+
+	opts, ok := registry.snapshot("card-1")
+	if !ok || opts.Expanded || strings.Contains(opts.Preview, platform.TaskStreamThinkingIndicator) {
+		t.Fatalf("terminal task card=%#v, want collapsed preview without active indicator", opts)
+	}
+	card := cardKit.updateCards[len(cardKit.updateCards)-1]
+	if strings.Contains(card, platform.TaskStreamThinkingIndicator) {
+		t.Fatalf("terminal card=%q, must remove active indicator", card)
+	}
+}
+
 func TestFeishuStreamFailurePreservesTaskCardTimeline(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	registry := newTaskCardRegistry()
@@ -1006,7 +1057,7 @@ func TestFeishuStructuredDurableReferencePreservesPresentation(t *testing.T) {
 	cardKit := &fakeCardKitClient{cardID: "card-1"}
 	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
 	stream, err := reply.OpenStream(context.Background(), platform.StreamOptions{
-		Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "开始", Details: "初始详情"},
+		Title: "Codex", InitialPresentation: &platform.StreamPresentation{Summary: "开始", Preview: "初始预览", Details: "初始详情"},
 	})
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
@@ -1019,10 +1070,13 @@ func TestFeishuStructuredDurableReferencePreservesPresentation(t *testing.T) {
 		s.cancelPendingPresentation()
 		s.mu.Unlock()
 	})
-	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "第一步", Details: "第一步详情"}); err != nil {
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "第一步", Preview: "第一步预览", Details: "第一步详情"}); err != nil {
 		t.Fatalf("first presentation: %v", err)
 	}
-	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "最新摘要", Details: "最新详情\n\n思考中....."}); err != nil {
+	if _, _, _, ok := reply.taskCards.setExpandedWithSequence("card-1", true); !ok {
+		t.Fatal("expand task card")
+	}
+	if err := structured.UpdatePresentation(context.Background(), platform.StreamPresentation{Summary: "最新摘要", Preview: "最新预览\n\n思考中.....", Details: "最新详情\n\n思考中....."}); err != nil {
 		t.Fatalf("pending presentation: %v", err)
 	}
 	reference, err := stream.(platform.DurableStreamReferenceExporter).DurableReference()
@@ -1033,7 +1087,8 @@ func TestFeishuStructuredDurableReferencePreservesPresentation(t *testing.T) {
 	if err := json.Unmarshal(reference.Payload, &payload); err != nil {
 		t.Fatalf("decode durable reference: %v", err)
 	}
-	if payload.Summary != "最新摘要" || payload.Details != "最新详情" || payload.Content != payload.Details || !payload.Collapsible {
+	if payload.Summary != "最新摘要" || payload.Preview != "最新预览" || payload.Details != "最新详情" ||
+		payload.Content != payload.Details || !payload.Collapsible || !payload.Expanded {
 		t.Fatalf("payload=%#v", payload)
 	}
 }
@@ -1233,7 +1288,7 @@ func TestFeishuTerminalCheckpointRestoresProgressControlStateAfterRestart(t *tes
 	beforeRestart := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", cardKit, newTaskCardRegistry())
 	stream, err := beforeRestart.OpenStream(context.Background(), platform.StreamOptions{
 		Title:               "Codex",
-		InitialPresentation: &platform.StreamPresentation{Summary: "检查实现", Details: "第一步\n\n第二步"},
+		InitialPresentation: &platform.StreamPresentation{Summary: "检查实现", Preview: "第二步", Details: "第一步\n\n第二步"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1249,8 +1304,15 @@ func TestFeishuTerminalCheckpointRestoresProgressControlStateAfterRestart(t *tes
 		t.Fatal(err)
 	}
 	opts, ok := afterCards.snapshot("card-1")
-	if !ok || opts.Status != cardStatusDone || opts.Content != "第一步\n\n第二步" || opts.Expanded {
+	if !ok || opts.Status != cardStatusDone || opts.Preview != "第二步" || opts.Content != "第一步\n\n第二步" || opts.Expanded {
 		t.Fatalf("restored task card=%#v ok=%v", opts, ok)
+	}
+	card := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
+	elements := card["body"].(map[string]any)["elements"].([]any)
+	if len(elements) < 2 || elements[0].(map[string]any)["element_id"] != cardMainContentID ||
+		elements[0].(map[string]any)["content"] != "第二步" ||
+		elements[len(elements)-1].(map[string]any)["element_id"] != cardProgressExpandID {
+		t.Fatalf("terminal elements=%#v, want collapsed preview and expand control", elements)
 	}
 }
 

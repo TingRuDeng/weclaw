@@ -25,8 +25,9 @@ const (
 	progressModeStream  = "stream"
 	progressModeDebug   = "debug"
 
-	progressDefaultCompletion  = "任务已完成，正在发送最终结果。"
-	progressStatusOnlyComplete = "\x00weclaw_status_only_complete"
+	progressDefaultCompletion    = "任务已完成，正在发送最终结果。"
+	progressStatusOnlyComplete   = "\x00weclaw_status_only_complete"
+	progressTimelinePreviewItems = 5
 )
 
 var progressStageHints = []struct {
@@ -790,6 +791,7 @@ func (s *progressSession) sendSnapshotContent(snapshot progressCardSnapshot) boo
 	presentation := s.snapshotPresentationLocked(snapshot)
 	if snapshot.withPrefix {
 		content = s.prefix + content
+		presentation.Preview = s.prefix + presentation.Preview
 		presentation.Details = s.prefix + presentation.Details
 	}
 	if preflighter, ok := stream.(platform.StreamPresentationPreflighter); ok {
@@ -840,7 +842,18 @@ func (s *progressSession) snapshotPresentationLocked(snapshot progressCardSnapsh
 	if summary == "" {
 		summary = snapshot.text
 	}
-	return platform.StreamPresentation{Summary: summary, Details: s.activeSnapshotContentLocked(snapshot)}
+	details := s.activeSnapshotContentLocked(snapshot)
+	preview := details
+	if snapshot.structured && len(snapshot.timelineItems) > 0 {
+		items := s.segmentedSnapshotTimelineItemsLocked(snapshot)
+		if len(items) > progressTimelinePreviewItems {
+			items = items[len(items)-progressTimelinePreviewItems:]
+		}
+		if content, timeline := renderTaskProgressTimeline(items, snapshot.text); timeline {
+			preview = appendActiveThinkingIndicator(appendTaskCurrentExplanation(content, snapshot.currentExplanation))
+		}
+	}
+	return platform.StreamPresentation{Summary: summary, Preview: preview, Details: details}
 }
 
 func (s *progressSession) activeSnapshotContentLocked(snapshot progressCardSnapshot) string {
@@ -851,17 +864,22 @@ func (s *progressSession) segmentedSnapshotContentLocked(snapshot progressCardSn
 	if !snapshot.structured || len(snapshot.timelineItems) == 0 {
 		return snapshot.text
 	}
+	items := s.segmentedSnapshotTimelineItemsLocked(snapshot)
+	content, timeline := renderTaskProgressTimeline(items, snapshot.text)
+	if !timeline {
+		return snapshot.text
+	}
+	return appendTaskCurrentExplanation(content, snapshot.currentExplanation)
+}
+
+func (s *progressSession) segmentedSnapshotTimelineItemsLocked(snapshot progressCardSnapshot) []agent.ProgressEvent {
 	start := 0
 	if s.segmentAnchor != nil {
 		if index := matchingTaskProgressEntry(snapshot.timelineItems, *s.segmentAnchor); index >= 0 {
 			start = index
 		}
 	}
-	content, timeline := renderTaskProgressTimeline(snapshot.timelineItems[start:], snapshot.text)
-	if !timeline {
-		return snapshot.text
-	}
-	return appendTaskCurrentExplanation(content, snapshot.currentExplanation)
+	return snapshot.timelineItems[start:]
 }
 
 func (s *progressSession) latestTaskSnapshotContentLocked() string {
@@ -1109,6 +1127,7 @@ func (s *progressSession) reanchorStreamLocked(request progressReanchorRequest) 
 	if withPrefix {
 		initialContent = s.prefix + initialContent
 		if initialPresentation != nil {
+			initialPresentation.Preview = s.prefix + initialPresentation.Preview
 			initialPresentation.Details = s.prefix + initialPresentation.Details
 		}
 	}

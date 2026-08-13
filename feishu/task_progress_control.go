@@ -18,16 +18,18 @@ func (a *Adapter) handleTaskProgressControl(ctx context.Context, action parsedCa
 	if a.taskCards == nil || a.cardKit == nil || cardID == "" {
 		return taskProgressControlWarning("任务卡状态已失效，请重新打开最新任务卡")
 	}
-	opts, sequence, ok := a.taskCards.setExpandedWithSequence(cardID, expanded)
+	opts, sequence, previousExpanded, ok := a.taskCards.setExpandedWithSequence(cardID, expanded)
 	if !ok {
 		return taskProgressControlWarning("任务卡状态已失效，请重新打开最新任务卡")
 	}
 	cardJSON, err := buildCardV2(opts)
 	if err != nil {
+		a.taskCards.restoreExpandedIfSequence(cardID, sequence, previousExpanded)
 		log.Printf("[feishu] failed to build task progress visibility update: expanded=%t err=%v", expanded, err)
 		return taskProgressControlWarning("更新完整进度显示失败，请重试")
 	}
 	if err := a.cardKit.UpdateCard(ctx, cardID, cardJSON, sequence); err != nil {
+		a.taskCards.restoreExpandedIfSequence(cardID, sequence, previousExpanded)
 		log.Printf("[feishu] failed to update task progress visibility: card=%q expanded=%t err=%v", cardID, expanded, err)
 		return taskProgressControlWarning("更新完整进度显示失败，请重试")
 	}
