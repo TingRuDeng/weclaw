@@ -262,6 +262,9 @@ func completeUpdateWithRollback(
 		return nil
 	}
 	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
+		if errors.Is(err, errCoordinatedRestartUnsupported) {
+			return rollbackUpdatedBinary(err, rollback, ops.out)
+		}
 		return rollbackUpdatedBinary(compensateRestartDrain(err, ops.cancelDrain, prepared.cfg), rollback, ops.out)
 	}
 	return restartUpdatedServiceWithRollback(prepared, ops, rollback)

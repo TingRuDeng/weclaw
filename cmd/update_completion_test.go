@@ -78,6 +78,33 @@ func TestCompleteUpdateSafetyFailureKeepsOldService(t *testing.T) {
 	}
 }
 
+func TestCompleteUpdateDoesNotCancelUnsupportedLegacyTransaction(t *testing.T) {
+	cancelled := false
+	rolledBack := false
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			return legacyRuntimeRestartError("v0.1.267")
+		},
+		cancelDrain: func(context.Context, *config.Config) error {
+			cancelled = true
+			return nil
+		},
+		out: &bytes.Buffer{},
+	}
+
+	err := completeUpdateWithRollback(context.Background(), true, false, ops, func() error {
+		rolledBack = true
+		return nil
+	})
+
+	if !errors.Is(err, errCoordinatedRestartUnsupported) || cancelled || !rolledBack {
+		t.Fatalf("completeUpdate error=%v cancelled=%v rolledBack=%v", err, cancelled, rolledBack)
+	}
+}
+
 // TestRestartUpdatedServiceDoesNotStartStoppedService 验证更新前未运行时不会意外启动服务。
 func TestRestartUpdatedServiceDoesNotStartStoppedService(t *testing.T) {
 	started := false

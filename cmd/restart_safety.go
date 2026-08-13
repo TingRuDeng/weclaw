@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,6 +20,8 @@ const restartDrainTimeout = 60 * time.Second
 
 var restartSafetyHTTPClient = &http.Client{Timeout: restartSafetyTimeout}
 var restartDrainHTTPClient = &http.Client{Timeout: restartDrainTimeout}
+
+var errCoordinatedRestartUnsupported = errors.New("运行中的 WeClaw 不支持协调重启接口")
 
 type runtimeStatusResponse struct {
 	Status      string `json:"status"`
@@ -98,6 +101,9 @@ func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Co
 		return fmt.Errorf("无法确认安全重启排空状态，已取消重启: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return legacyRuntimeRestartError(state.Version)
+	}
 	var result runtimeDrainResponse
 	decoder := json.NewDecoder(resp.Body)
 	if err := decoder.Decode(&result); err != nil {
@@ -123,6 +129,18 @@ func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Co
 		return fmt.Errorf("安全重启排空入口返回异常状态 %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func legacyRuntimeRestartError(version string) error {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = "旧版本"
+	}
+	return fmt.Errorf(
+		"%w（运行版本 %s），未停止任何进程；为保持 Codex Host 单写入，不能降级为普通重启。"+
+			"请先等待所有任务完成并完整退出 Codex App、受控 CLI，然后依次执行 weclaw stop、weclaw start、weclaw restart 完成一次性迁移",
+		errCoordinatedRestartUnsupported, version,
+	)
 }
 
 func cancelRestartDrain(ctx context.Context, cfg *config.Config) error {

@@ -87,6 +87,8 @@ WeClaw 不管理或终止 Codex App；App 仍存在时协调重启在触碰 Host
 
 旧 WeClaw 服务未运行时，`restart` 仅在离线分支持有排他租约、检查 App 后直接启动；由于没有旧服务可执行 Host 事务，该分支不承诺轮换独立存在的外部 Host。
 
+新二进制已经安装但内存中的旧服务尚未替换时，协调端点的 HTTP 404 表示运行时能力不匹配。CLI 必须在触碰进程前失败关闭并显示运行态记录中的服务版本；不得把纯文本 404 正文当作 JSON、不得对未开始的事务执行 DELETE，也不得静默回退到只排空任务的旧接口。一次性迁移要求任务全部终态且 App/受控 CLI 已退出，随后按 `stop`、`start`、`restart` 顺序先引导新服务，再由新服务完成 Host generation 轮换。
+
 ### Desktop follower 边界
 
 `agent/codex_desktop_connector.go` 和 `agent/codex_desktop_runtime.go` 只连接已验证的 App IPC endpoint，并把 Desktop 作为唯一 Host 权威。它支持读取已有 thread、启动/观察 turn、steer、interrupt、审批、用户输入和当前 thread settings；不提供新建/归档 thread、完整模型列表、账号或额度操作。上述缺失能力必须提示用户在 Codex App 执行，不能静默启动 shared Host 补齐。

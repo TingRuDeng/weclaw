@@ -402,7 +402,7 @@ weclaw version
 `weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`restart` 和 `update --restart` 使用同一个协调重启事务：先持有排他的 Codex frontend 租约，通过本机 `/api/runtime/restart/prepare` 关闭消息准入并排空任务，再确认 Codex App 已完整退出、没有受控 `weclaw codex cli`、writer lease 或活动/未知 thread，最后停止身份验证通过的 official daemon 或 WeClaw-managed Host。Codex App 或受控 CLI 仍在运行时命令会在停止 WeClaw 前明确拒绝；WeClaw 只用受保护 IPC 和同用户主进程名做保守存在性探测，不会按进程名终止或自动退出 Codex App，`--force` 也只中断 WeClaw 自己的任务，不能绕过这些 Host 安全门禁。新服务必须在平台监听前读取受保护的重启状态、启动唯一 Host，并验证 Host generation 已变化；验证失败保持不可写，外层停止失败则先重建旧 Host 才恢复消息准入。systemd 托管实例继续由 systemd 重启，不会另起私有后台进程。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
 
 若 WeClaw 服务本来就未运行，`weclaw restart` 保留“检查 App/受控 CLI 后直接启动”的兼容语义；没有旧服务可执行上述 loopback Host 事务时，不宣称已轮换独立存在的外部 Host。
-从尚不支持该协调端点的旧版本首次升级时，正在执行更新的仍是旧进程，因此不能把该次 `update --restart` 当作已验证的新事务。首次迁移应先执行不带 `--restart` 的 `weclaw update`，完整退出 Codex App 和受控 CLI，再用已安装的新版本执行 `weclaw restart`。
+从尚不支持该协调端点的旧版本首次升级时，PATH 中的新二进制与内存中仍运行的旧服务具有不同能力。新 CLI 收到协调端点的 HTTP 404 时会在触碰任何进程前失败关闭，显示运行中服务版本和一次性迁移步骤，不把纯文本 `404 page not found` 误解析成 JSON，也不向不存在的事务发送补偿请求。先等待所有任务完成并完整退出 Codex App 和受控 CLI，再依次执行 `weclaw stop`、`weclaw start`、`weclaw restart`：第一次启动把服务进程切到新版本，最后一次重启才执行完整 Host 停止和 generation 验证。不能把中间的离线启动宣称为已完成协调事务。
 
 ## 从源码构建
 

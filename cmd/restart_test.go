@@ -167,6 +167,31 @@ func TestRunRestartStopsWhenSafetyCheckFails(t *testing.T) {
 	}
 }
 
+func TestRunRestartDoesNotCancelUnsupportedLegacyTransaction(t *testing.T) {
+	cancelled := false
+	err := runRestart(context.Background(), false, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			return legacyRuntimeRestartError("v0.1.267")
+		},
+		isRunning: func() bool {
+			t.Fatal("旧服务不支持协调端点时不应继续停止服务")
+			return true
+		},
+		cancelDrain: func(context.Context, *config.Config) error {
+			cancelled = true
+			return nil
+		},
+		out: &bytes.Buffer{},
+	})
+
+	if !errors.Is(err, errCoordinatedRestartUnsupported) || cancelled {
+		t.Fatalf("runRestart error=%v cancelled=%v", err, cancelled)
+	}
+}
+
 func TestRunRestartDelegatesSystemdWithoutStartingPrivateDaemon(t *testing.T) {
 	var calls []string
 	err := runRestart(context.Background(), true, restartOps{

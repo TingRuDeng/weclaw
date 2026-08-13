@@ -65,6 +65,9 @@ func runRestart(ctx context.Context, force bool, ops restartOps) error {
 		return err
 	}
 	if err := ops.ensureSafe(ctx, force, prepared.cfg); err != nil {
+		if errors.Is(err, errCoordinatedRestartUnsupported) {
+			return err
+		}
 		return compensateRestartDrain(err, ops.cancelDrain, prepared.cfg)
 	}
 	running := ops.isRunning()

@@ -412,6 +412,14 @@
 - 正确做法：受控 CLI 全程持共享内核租约，重启持排他租约；要求用户完整退出 App；在全局 idle 和 lifecycle lock 下只停止身份验证通过的 daemon/managed Host；Host 停止前持久化恢复状态，新服务在平台监听前验证唯一且 generation 已变化的 Host，外层停止失败则先重建 Host 才恢复消息准入。
 - 来源：2026-08-12 飞书接管同一 Codex thread 时复现 App/daemon writer 冲突，用户确认更新重启应统一收敛 Codex App、CLI、daemon 与 Host 生命周期。
 
+## 2026-08-13 协调重启必须区分磁盘二进制与运行中服务能力
+
+- 触发条件：`weclaw update` 已把 PATH 中的二进制更新到支持 `/api/runtime/restart/prepare` 的版本，但旧 WeClaw 服务仍在内存中运行并返回 HTTP 404。
+- 规则：管理命令必须把运行态版本和 API 能力作为服务事实；端点 404 在解析正文前识别，且未建立事务时禁止执行补偿。版本切换不能仅凭磁盘二进制版本推断服务能力。
+- 反例：直接把纯文本 `404 page not found` 解码为结构体，Go 会先把 `404` 识别成 JSON 数字并报 `cannot unmarshal number`；随后再 DELETE 同一不存在的端点，产生“恢复重启事务失败”的第二条误报。
+- 正确做法：保持失败关闭，显示旧服务版本和 `stop` → `start` → `restart` 的一次性迁移顺序；先让新服务真正运行，最后再由它执行 Host 停止和 generation 验证，不自动降级为弱重启。
+- 来源：2026-08-13 用户在已安装 `v0.1.268`、运行中服务仍为 `v0.1.267` 时执行 `weclaw restart` 的真实错误反馈。
+
 ## 2026-07-03 飞书按钮会话路由
 
 - 触发条件：飞书里把 Codex 普通回复中的编号选项渲染成按钮，或把 Codex 权限请求渲染成审批按钮时。

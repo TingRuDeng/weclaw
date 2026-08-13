@@ -80,6 +80,34 @@ func TestBeginRestartDrainReportsActiveTaskConflict(t *testing.T) {
 	}
 }
 
+func TestBeginRestartDrainReportsLegacyRuntimeMigration(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	if err := writeRuntimeState(runtimeState{
+		PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267",
+	}); err != nil {
+		t.Fatalf("writeRuntimeState error=%v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
+
+	err := beginRestartDrainWithConfig(context.Background(), false, cfg)
+
+	if err == nil {
+		t.Fatal("beginRestartDrainWithConfig error=nil, want legacy migration guidance")
+	}
+	message := err.Error()
+	if strings.Contains(message, "cannot unmarshal number") {
+		t.Fatalf("error=%v, plain-text 404 must not be decoded as a JSON number", err)
+	}
+	for _, want := range []string{"v0.1.267", "weclaw stop", "weclaw start", "weclaw restart"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error=%v, want %q", err, want)
+		}
+	}
+}
+
 func TestCancelRestartDrainRequiresConfirmedAdmissionRecovery(t *testing.T) {
 	requested := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
