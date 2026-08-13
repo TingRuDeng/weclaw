@@ -111,6 +111,19 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 	if h.handlePendingTaskControlChoice(runtime) {
 		return true
 	}
+	if isPendingApprovalChoiceCommand(command) {
+		switch h.reviewPendingApprovalForRoute(runtime.ctx, runtime.msg.UserID, runtime.routeUserID) {
+		case pendingApprovalRouteResolvedExternally:
+			reportCardActionResult(command, platform.CardActionResultResolvedExternally)
+			return true
+		case pendingApprovalRouteTerminal:
+			reportCardActionResult(command, platform.CardActionResultTurnTerminal)
+			return true
+		case pendingApprovalRouteUnavailable:
+			reportCardActionResult(command, platform.CardActionResultStateUnavailable)
+			return true
+		}
+	}
 	if isPendingInteractionChoiceCommand(command) && h.consumePendingInteractionForKey(
 		runtime.msg.UserID, runtime.routeUserID,
 		command.Value[platform.ChoiceMetadataInteractionKind],
@@ -131,12 +144,28 @@ func (h *Handler) handlePlatformRawCommand(runtime platformMessageRuntime) bool 
 
 // preparePlatformMessage 依次消费审批、附件和文本去重，并创建客户端请求 ID。
 func (h *Handler) preparePlatformMessage(runtime platformMessageRuntime) (platformMessageRuntime, bool) {
+	approvalState := pendingApprovalRouteNone
+	if !strings.HasPrefix(strings.TrimSpace(runtime.text), "/") {
+		approvalState = h.reviewPendingApprovalForRoute(runtime.ctx, runtime.msg.UserID, runtime.routeUserID)
+		switch approvalState {
+		case pendingApprovalRouteTerminal:
+			runtime.sendText("当前任务已经结束，正在同步最终结果，请稍后重试。")
+			return runtime, false
+		case pendingApprovalRouteUnavailable:
+			runtime.sendText("暂时无法确认当前授权状态，请稍后重试；会话绑定和待审批请求均已保留。")
+			return runtime, false
+		}
+	}
 	switch h.consumePendingApprovalText(runtime.msg.UserID, runtime.routeUserID, runtime.text) {
 	case approvalTextConsumed:
 		h.auditApprovalDecision(runtime, "approval_text_decision", runtime.text)
 		return runtime, false
 	case approvalTextAmbiguous:
 		runtime.sendText("当前有多个待审批操作，无法判断这条回复对应哪一个。请点击目标审批卡片中的按钮。")
+		return runtime, false
+	}
+	if approvalState == pendingApprovalRouteWaiting {
+		runtime.sendText("当前任务正在等待授权，请先处理审批后重新发送这条消息。")
 		return runtime, false
 	}
 	prepared, ok := h.preparePlatformAttachments(runtime)

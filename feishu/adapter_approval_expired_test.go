@@ -40,3 +40,18 @@ func TestHandleCardActionEventShowsExpiredWhenApprovalNoLongerPending(t *testing
 	}
 	assertApprovalCardContent(t, second, "⚠️ 已过期", "允许本次")
 }
+
+func TestHandleCardActionEventShowsResolvedInCodexApp(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	event := approvalCardActionEvent("allow", "允许本次", "")
+	resp, err := adapter.handleCardActionEvent(context.Background(), event, func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		msg.RawCommand.Result <- platform.CardActionResultResolvedExternally
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || resp.Toast == nil || resp.Toast.Type != "info" {
+		t.Fatalf("response=%#v, want info toast", resp)
+	}
+	assertApprovalCardContent(t, resp, "已在 Codex App 处理", "允许本次")
+}

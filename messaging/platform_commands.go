@@ -98,7 +98,7 @@ func (h *Handler) routeTaskPlatformCommand(ctx context.Context, req platformComm
 	msg := req.Message
 	switch {
 	case isApprovalFallbackCommand(req.Trimmed):
-		replyPlatformCommand(ctx, req, h.handleApprovalFallbackCommand(msg.UserID, routeUserID, req.Trimmed))
+		replyPlatformCommand(ctx, req, h.handleApprovalFallbackCommand(ctx, msg.UserID, routeUserID, req.Trimmed))
 	case req.Trimmed == "/guide":
 		h.handleGuideCommand(newTaskCommandRequest(ctx, req, routeUserID))
 	case req.Trimmed == "/cancel":
@@ -123,10 +123,18 @@ func isApprovalFallbackCommand(trimmed string) bool {
 	return strings.EqualFold(fields[0], "/approve") || strings.EqualFold(fields[0], "/deny")
 }
 
-func (h *Handler) handleApprovalFallbackCommand(actorUserID string, routeUserID string, trimmed string) string {
+func (h *Handler) handleApprovalFallbackCommand(ctx context.Context, actorUserID string, routeUserID string, trimmed string) string {
 	fields := strings.Fields(strings.TrimSpace(trimmed))
 	if len(fields) != 2 {
 		return "用法：/approve <审批短码> 允许操作；/deny <审批短码> 拒绝操作。"
+	}
+	switch h.reviewPendingApprovalForRoute(ctx, actorUserID, routeUserID) {
+	case pendingApprovalRouteResolvedExternally:
+		return "该审批已在 Codex App 处理，无需重复操作。"
+	case pendingApprovalRouteTerminal:
+		return "该审批所属任务已经结束，无需继续操作。"
+	case pendingApprovalRouteUnavailable:
+		return "暂时无法确认当前授权状态，请稍后重试；会话绑定和待审批请求均已保留。"
 	}
 	approve := strings.EqualFold(fields[0], "/approve")
 	result := h.consumePendingApprovalCode(actorUserID, routeUserID, fields[1], approve)

@@ -20,6 +20,12 @@ type codexFollowerService struct {
 	registry *platform.Registry
 	interval time.Duration
 	wake     chan struct{}
+	failures map[string]codexFollowerFailureState
+}
+
+type codexFollowerFailureState struct {
+	summary string
+	count   int
 }
 
 // StartCodexFollowerReconciler 恢复持久化的飞书同步端点，并持续观察本地端稍后启动的新 turn。
@@ -38,6 +44,7 @@ func (h *Handler) startCodexFollowerReconciler(ctx context.Context, registry *pl
 		registry: registry,
 		interval: interval,
 		wake:     make(chan struct{}, 1),
+		failures: make(map[string]codexFollowerFailureState),
 	}
 	h.codexFollowerMu.Lock()
 	if h.codexFollower != nil {
@@ -61,7 +68,7 @@ func (h *Handler) runCodexFollowerReconciler(ctx context.Context, service *codex
 	ticker := time.NewTicker(service.interval)
 	defer ticker.Stop()
 	for {
-		h.reconcileCodexFollowers(ctx, service.registry)
+		h.reconcileCodexFollowersWithService(ctx, service)
 		select {
 		case <-ctx.Done():
 			return
@@ -72,17 +79,47 @@ func (h *Handler) runCodexFollowerReconciler(ctx context.Context, service *codex
 }
 
 func (h *Handler) reconcileCodexFollowers(ctx context.Context, registry *platform.Registry) {
+	h.reconcileCodexFollowersWithService(ctx, &codexFollowerService{registry: registry})
+}
+
+func (h *Handler) reconcileCodexFollowersWithService(ctx context.Context, service *codexFollowerService) {
+	registry := service.registry
 	followers, releases := h.ensureCodexSessions().followerRecoverySnapshots()
 	if outbox := h.currentTerminalOutbox(); outbox != nil {
 		h.recoverReleasedCodexFollowerStreamsForTargets(outbox, committedCodexReleaseTargets(releases))
 		outbox.reconcileCodexFollowerHolds(followers, releases)
 	}
 	for _, snapshot := range followers {
-		if err := h.reconcileCodexFollower(ctx, registry, snapshot); err != nil && ctx.Err() == nil {
-			log.Printf("[codex-follower] 同步观察失败 route=%q thread=%q revision=%d: %v",
-				snapshot.BindingKey, snapshot.Target.ThreadID, snapshot.Revision, err)
-		}
+		err := h.reconcileCodexFollower(ctx, registry, snapshot)
+		service.recordReconcileResult(snapshot, err, ctx.Err())
 	}
+}
+
+func (s *codexFollowerService) recordReconcileResult(snapshot codexFollowerSnapshot, err error, contextErr error) {
+	if s == nil || contextErr != nil {
+		return
+	}
+	key := snapshot.BindingKey + "\x00" + snapshot.Target.ThreadID
+	if err == nil {
+		delete(s.failures, key)
+		return
+	}
+	if s.failures == nil {
+		s.failures = make(map[string]codexFollowerFailureState)
+	}
+	summary := err.Error()
+	state := s.failures[key]
+	if state.summary != summary {
+		state = codexFollowerFailureState{summary: summary}
+	}
+	state.count++
+	s.failures[key] = state
+	// 首次立即记录；同一错误随后按 2 的幂次采样，避免两秒一次刷屏且仍可观察持续故障。
+	if state.count&(state.count-1) != 0 {
+		return
+	}
+	log.Printf("[codex-follower] 同步观察暂未恢复 route=%q thread=%q revision=%d attempts=%d: %v",
+		snapshot.BindingKey, snapshot.Target.ThreadID, snapshot.Revision, state.count, err)
 }
 
 func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform.Registry, snapshot codexFollowerSnapshot) error {

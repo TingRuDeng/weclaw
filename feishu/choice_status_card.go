@@ -215,6 +215,15 @@ func approvalHandledStatus(action parsedCardAction) (string, string) {
 	if strings.TrimSpace(action.Status) == approvalStatusUnconfirmed {
 		return "⚠️ 处理结果未确认", "yellow"
 	}
+	if strings.TrimSpace(action.Status) == approvalStatusResolvedInApp {
+		return "ℹ️ 已在 Codex App 处理", "blue"
+	}
+	if strings.TrimSpace(action.Status) == approvalStatusTurnTerminal {
+		return "ℹ️ 任务已经结束", "grey"
+	}
+	if strings.TrimSpace(action.Status) == approvalStatusStateUnknown {
+		return "⚠️ 暂时无法确认状态", "yellow"
+	}
 	choice := strings.ToLower(strings.TrimSpace(action.Choice))
 	label := strings.ToLower(strings.TrimSpace(action.Label))
 	switch {

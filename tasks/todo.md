@@ -1,5 +1,50 @@
 # 当前任务记录
 
+## 2026-08-13 Codex Desktop 审批超时权威复核
+
+### 目标
+
+将 Desktop 审批的固定五分钟默认拒绝改为权威状态复核：审批仍存在时继续等待，已由 Codex App 处理时不重复响应，原 turn 已结束时禁止继续 steer，状态不可用时失败关闭并保留绑定。
+
+### 范围与验收标准
+
+- [x] Desktop 审批到达复核时间后主动刷新完整 history 并等待 revision，再按 request ID 和原 turn 判断 `pending`、`resolved_externally`、`turn_terminal` 或 `unknown`。
+- [x] `pending` 只续期并保留现有审批展示，不向 provider 发送默认拒绝；其他 Agent 没有权威探针时保持现有超时语义。
+- [x] App 已处理的 request 不再触发第二次 responder，也不向用户报告 `Request not found`；终态或 rollover 不再接受旧 turn steer。
+- [x] 待审批期间收到普通消息时先复核状态：仍待审批则提示用户先处理且不发送消息；已处理且 turn 活动时才继续 steer。
+- [x] Desktop 明确返回的远端错误与真正的写后超时/断线分开分类，`Cannot read properties ... cwd` 不再伪装成“交付状态未知”。
+- [x] 飞书审批卡能收敛为仍待处理、已在 App 处理或任务已结束；展示失败不改变审批真值。
+- [x] follower 的重复写入冲突日志按相同错误计数采样，不再以固定短周期刷同一错误。
+
+### 实施步骤
+
+- [x] 先补红测试，覆盖 Desktop request 状态探针、软复核、外部处理、终态、刷新失败、消息预检和错误分类。
+- [x] 在 Desktop state/runtime 中实现带 history revision 屏障的审批状态探针，并把它绑定到 Desktop pending action。
+- [x] 在消息层实现审批复核循环和 pending-message 预检，确保控制结果不会进入 provider responder。
+- [x] 扩展飞书可选审批展示收敛能力，并为 follower 冲突日志增加状态采样。
+- [x] 同步必要上下文文档，完成定向、Race、全仓和静态门禁，复核最终差异。
+
+### 验证方式
+
+```bash
+go test ./agent ./messaging ./feishu ./platform -count=1 -timeout 180s
+go test -race ./agent ./messaging ./feishu -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- Desktop 审批的五分钟期限已改为带完整 history revision 屏障的状态复核；request 仍存在或状态不可用时继续等待，不再默认拒绝。request 已由 App 处理或原 turn 已结束时，消息层关闭旧审批且不调用第二次 provider responder。
+- 普通文本、审批文本、`/approve`、`/deny` 和审批卡动作在提交前统一复核；明确的 Desktop JavaScript/参数错误归类为确定性远端错误，只有写后断线或响应超时保留交付未知语义。
+- 飞书现有审批展示可原地收敛为“已在 Codex App 处理”或“任务已经结束”；follower 相同错误只在第 1、2、4、8 次等节点记录，成功后重置计数。
+- 验证通过：受影响模块测试、`go test -race ./agent ./messaging ./feishu`、串行 `go test ./...`、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验与 `git diff --check`。一次将全仓测试与 Race 并行运行时出现 follower 测试临时目录清理竞态；该用例单独连续 10 次及随后串行全仓均通过，未复现断言或实现失败。
+- 自动化覆盖 Desktop 状态机、消息预检、卡片收敛与并发路径；真实 Codex App 与飞书双端等待超过五分钟后的交互仍需安装新版本后做端侧验收。
+
 ## 2026-08-12 WeClaw 与 Codex Host 强一致重启
 
 ### 目标

@@ -7,12 +7,64 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
 type standaloneApprovalCard struct {
 	cardID   string
 	sequence int
+}
+
+// RecordApprovalState 在 Desktop 权威复核确认 request 已由 App 处理或原 turn
+// 已结束时，原地关闭现有飞书审批展示；展示失败不会改变审批真值。
+func (r *Replier) RecordApprovalState(ctx context.Context, prompt string, choices []platform.Choice, state agent.ApprovalRequestState) error {
+	if r == nil || r.cardKit == nil || len(choices) == 0 {
+		return platform.ErrUnsupported
+	}
+	status := ""
+	switch state {
+	case agent.ApprovalRequestStateResolvedExternally:
+		status = approvalStatusResolvedInApp
+	case agent.ApprovalRequestStateTurnTerminal:
+		status = approvalStatusTurnTerminal
+	default:
+		return platform.ErrUnsupported
+	}
+	choice := choices[0]
+	action := parsedCardAction{
+		Action: cardActionChoice, Kind: cardKindApproval,
+		Summary:  approvalSummaryFromPrompt(prompt),
+		TaskCard: strings.TrimSpace(choice.Metadata["task_card_id"]),
+		Approval: strings.TrimSpace(choice.Metadata["approval_key"]),
+		Owner:    strings.TrimSpace(choice.Metadata[approvalOwnerValueKey]),
+		Status:   status,
+	}
+	handled := false
+	failures := make([]error, 0, 3)
+	if updated, err := r.recordAutomaticApprovalOnTaskCard(ctx, action); updated {
+		handled = true
+		failures = appendApprovalDisplayError(failures, err)
+	}
+	if updated, err := r.recordAutomaticApprovalOnPanel(ctx, action); updated {
+		handled = true
+		failures = appendApprovalDisplayError(failures, err)
+	}
+	if updated, err := r.recordAutomaticApprovalOnStandaloneCard(ctx, action); updated {
+		handled = true
+		failures = appendApprovalDisplayError(failures, err)
+	}
+	if !handled {
+		return platform.ErrUnsupported
+	}
+	return errors.Join(failures...)
+}
+
+func appendApprovalDisplayError(failures []error, err error) []error {
+	if err != nil {
+		return append(failures, err)
+	}
+	return failures
 }
 
 // RecordAutomaticApproval 把 YOLO 的真实允许决策写回现有审批卡和任务卡；展示失败不会改变审批真值。

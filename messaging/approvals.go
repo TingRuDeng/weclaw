@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 type pendingApproval struct {
 	choices           chan string
+	stateChanges      chan agent.ApprovalRequestState
 	allowed           map[string]bool
 	aliases           map[string]string
 	key               string
@@ -27,9 +29,13 @@ type pendingApproval struct {
 	deny              string
 	code              string
 	expiresAt         time.Time
+	deadlineMu        sync.Mutex
+	stateProbe        agent.ApprovalRequestStateProbe
 	automaticRecorder automaticApprovalRecorder
 	automaticPrompt   string
 	automaticChoice   platform.Choice
+	stateRecorder     approvalStateRecorder
+	stateChoices      []platform.Choice
 	displayReady      chan struct{}
 	resolved          atomic.Bool
 }
@@ -37,6 +43,10 @@ type pendingApproval struct {
 // automaticApprovalRecorder 是飞书等平台可选实现的展示能力；审批真值仍由 Agent 决策通道负责。
 type automaticApprovalRecorder interface {
 	RecordAutomaticApproval(context.Context, string, platform.Choice) error
+}
+
+type approvalStateRecorder interface {
+	RecordApprovalState(context.Context, string, []platform.Choice, agent.ApprovalRequestState) error
 }
 
 type pendingApprovalDisplay struct {
@@ -112,6 +122,14 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		if err != nil {
 			return "", err
 		}
+		h.pendingApprovalsMu.Lock()
+		pending.stateProbe = req.StateProbe
+		if recorder, ok := optionalApprovalStateRecorder(opts.reply); ok {
+			pending.stateRecorder = recorder
+			pending.stateChoices = append([]platform.Choice(nil), choices...)
+			pending.automaticPrompt = prompt
+		}
+		h.pendingApprovalsMu.Unlock()
 		defer h.clearPendingApproval(opts.actorUserID, pending)
 		// 关闭“初次检查 default、注册前恰好切到 yolo”的窗口；此时尚未发卡。
 		if h.isYoloMode(modeKey) {
@@ -140,23 +158,72 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 			}
 			return "", askErr
 		}
-		wait := time.Until(pending.expiresAt)
+		return h.waitForPendingApproval(ctx, opts, req, pending)
+	}
+}
+
+func (h *Handler) waitForPendingApproval(ctx context.Context, opts agentInteractionContextOptions, req agent.ApprovalRequest, pending *pendingApproval) (string, error) {
+	for {
+		wait := time.Until(pending.deadline())
 		if wait < 0 {
 			wait = 0
 		}
 		timer := time.NewTimer(wait)
-		defer timer.Stop()
 		select {
 		case choice := <-pending.choices:
+			timer.Stop()
 			return strings.TrimSpace(choice), nil
+		case state := <-pending.stateChanges:
+			timer.Stop()
+			switch state {
+			case agent.ApprovalRequestStateResolvedExternally:
+				return "", agent.ErrApprovalResolvedExternally
+			case agent.ApprovalRequestStateTurnTerminal:
+				return "", agent.ErrApprovalTurnTerminal
+			default:
+				pending.renewDeadline()
+				continue
+			}
 		case <-timer.C:
-			h.auditDefaultDenyApproval(opts, "timeout")
-			return defaultDenyApprovalOption(req.Options), nil
+			if pending.stateProbe == nil {
+				h.auditDefaultDenyApproval(opts, "timeout")
+				return defaultDenyApprovalOption(req.Options), nil
+			}
+			state, err := pending.stateProbe(ctx)
+			switch {
+			case err != nil || state == agent.ApprovalRequestStateUnknown:
+				pending.renewDeadline()
+				h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_state_review_failed", Summary: "decision=pending reason=state_unavailable"})
+				continue
+			case state == agent.ApprovalRequestStatePending:
+				pending.renewDeadline()
+				h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_state_reviewed", Summary: "decision=pending"})
+				continue
+			case state == agent.ApprovalRequestStateResolvedExternally:
+				if pending.resolved.CompareAndSwap(false, true) {
+					h.recordPendingApprovalStateAsync(ctx, pending, state, opts.actorUserID)
+					h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_resolved_externally", Summary: "decision=handled_elsewhere"})
+				}
+				return "", agent.ErrApprovalResolvedExternally
+			case state == agent.ApprovalRequestStateTurnTerminal:
+				if pending.resolved.CompareAndSwap(false, true) {
+					h.recordPendingApprovalStateAsync(ctx, pending, state, opts.actorUserID)
+					h.auditRecord(auditEntry{User: opts.actorUserID, Agent: strings.TrimSpace(opts.agentName), Action: "approval_turn_terminal", Summary: "decision=not_sent"})
+				}
+				return "", agent.ErrApprovalTurnTerminal
+			default:
+				pending.renewDeadline()
+			}
 		case <-opts.lease.done():
+			timer.Stop()
 			return "", agent.ErrCodexObserverDetached
 		case <-ctx.Done():
+			timer.Stop()
 			if opts.lease.isDetached() {
 				return "", agent.ErrCodexObserverDetached
+			}
+			if pending.stateProbe != nil {
+				return "", ctx.Err()
 			}
 			h.auditDefaultDenyApproval(opts, "context_cancelled")
 			return defaultDenyApprovalOption(req.Options), ctx.Err()
@@ -184,6 +251,7 @@ func (h *Handler) registerPendingApprovalForRoute(userID string, routeUserID str
 func (h *Handler) registerPendingApprovalForRouteWithDisplay(userID string, routeUserID string, approvalKey string, options []agent.ApprovalOption, yoloDecision string, interactionKind string, display pendingApprovalDisplay) (*pendingApproval, error) {
 	pending := &pendingApproval{
 		choices:           make(chan string, 1),
+		stateChanges:      make(chan agent.ApprovalRequestState, 1),
 		allowed:           approvalOptionSet(options),
 		aliases:           approvalOptionAliases(options),
 		key:               pendingApprovalMapKey(userID, routeUserID, interactionKind, approvalKey),
@@ -193,6 +261,7 @@ func (h *Handler) registerPendingApprovalForRouteWithDisplay(userID string, rout
 		yolo:              strings.TrimSpace(yoloDecision),
 		deny:              defaultDenyApprovalOption(options),
 		expiresAt:         time.Now().Add(pendingApprovalTimeout),
+		stateProbe:        nil,
 		automaticRecorder: display.recorder,
 		automaticPrompt:   strings.TrimSpace(display.prompt),
 		automaticChoice:   display.choice,
@@ -222,6 +291,118 @@ func (h *Handler) registerPendingApprovalForRouteWithDisplay(userID string, rout
 	return pending, nil
 }
 
+type pendingApprovalRouteState uint8
+
+const (
+	pendingApprovalRouteNone pendingApprovalRouteState = iota
+	pendingApprovalRouteWaiting
+	pendingApprovalRouteResolvedExternally
+	pendingApprovalRouteTerminal
+	pendingApprovalRouteUnavailable
+)
+
+func (h *Handler) reviewPendingApprovalForRoute(ctx context.Context, userID string, routeUserID string) pendingApprovalRouteState {
+	userID = strings.TrimSpace(userID)
+	routeUserID = strings.TrimSpace(routeUserID)
+	h.pendingApprovalsMu.Lock()
+	pendingItems := make([]*pendingApproval, 0)
+	for _, pending := range h.pendingApprovals {
+		if pending == nil || pending.userID != userID || pending.route != routeUserID ||
+			pending.kind != platform.ChoiceInteractionApproval || pending.resolved.Load() || pending.stateProbe == nil {
+			continue
+		}
+		pendingItems = append(pendingItems, pending)
+	}
+	h.pendingApprovalsMu.Unlock()
+	result := pendingApprovalRouteNone
+	for _, pending := range pendingItems {
+		state, err := pending.stateProbe(ctx)
+		switch {
+		case err != nil || state == agent.ApprovalRequestStateUnknown:
+			return pendingApprovalRouteUnavailable
+		case state == agent.ApprovalRequestStatePending:
+			pending.renewDeadline()
+			if result != pendingApprovalRouteTerminal {
+				result = pendingApprovalRouteWaiting
+			}
+		case state == agent.ApprovalRequestStateResolvedExternally:
+			if deliverPendingApprovalState(pending, state) {
+				h.recordPendingApprovalStateAsync(ctx, pending, state, userID)
+			}
+			if result == pendingApprovalRouteNone {
+				result = pendingApprovalRouteResolvedExternally
+			}
+		case state == agent.ApprovalRequestStateTurnTerminal:
+			if deliverPendingApprovalState(pending, state) {
+				h.recordPendingApprovalStateAsync(ctx, pending, state, userID)
+			}
+			result = pendingApprovalRouteTerminal
+		}
+	}
+	return result
+}
+
+func (h *Handler) recordPendingApprovalStateAsync(ctx context.Context, pending *pendingApproval, state agent.ApprovalRequestState, actorUserID string) {
+	if pending == nil || pending.stateRecorder == nil {
+		return
+	}
+	go func() {
+		displayCtx, cancel := context.WithTimeout(context.WithoutCancel(normalizeContext(ctx)), automaticApprovalDisplayTimeout)
+		defer cancel()
+		if err := pending.stateRecorder.RecordApprovalState(displayCtx, pending.automaticPrompt, pending.stateChoices, state); err != nil && !errors.Is(err, platform.ErrUnsupported) {
+			log.Printf("[handler] approval state display update failed for %s: %v", actorUserID, err)
+			h.auditRecord(auditEntry{User: actorUserID, Action: "approval_state_display_failed", Summary: "reason=card_update_failed"})
+		}
+	}()
+}
+
+func optionalApprovalStateRecorder(reply platform.Replier) (approvalStateRecorder, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		recorder, supported := optionalApprovalStateRecorder(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedApprovalStateRecorder{reply: serialized, recorder: recorder}, true
+	}
+	recorder, ok := reply.(approvalStateRecorder)
+	return recorder, ok
+}
+
+type serializedApprovalStateRecorder struct {
+	reply    *serializedReplier
+	recorder approvalStateRecorder
+}
+
+func (s serializedApprovalStateRecorder) RecordApprovalState(ctx context.Context, prompt string, choices []platform.Choice, state agent.ApprovalRequestState) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.recorder.RecordApprovalState(ctx, prompt, choices, state)
+}
+
+func deliverPendingApprovalState(pending *pendingApproval, state agent.ApprovalRequestState) bool {
+	if pending == nil || !pending.resolved.CompareAndSwap(false, true) {
+		return false
+	}
+	select {
+	case pending.stateChanges <- state:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *pendingApproval) deadline() time.Time {
+	p.deadlineMu.Lock()
+	defer p.deadlineMu.Unlock()
+	return p.expiresAt
+}
+
+func (p *pendingApproval) renewDeadline() {
+	p.deadlineMu.Lock()
+	p.expiresAt = time.Now().Add(pendingApprovalTimeout)
+	p.deadlineMu.Unlock()
+}
+
 func (h *Handler) clearPendingApproval(userID string, pending *pendingApproval) {
 	if pending == nil {
 		return
@@ -248,7 +429,7 @@ func (h *Handler) hasPendingInteractionForRoute(userID string, routeUserID strin
 	defer h.pendingApprovalsMu.Unlock()
 	for _, pending := range h.pendingApprovals {
 		if pending == nil || pending.userID != userID || pending.route != routeUserID ||
-			pending.resolved.Load() || !pending.expiresAt.After(now) {
+			pending.resolved.Load() || !pending.deadline().After(now) {
 			continue
 		}
 		return true
@@ -303,7 +484,7 @@ func (h *Handler) consumePendingApprovalCode(userID string, routeUserID string, 
 	for _, pending := range h.pendingApprovals {
 		if pending.userID == userID && pending.route == routeUserID &&
 			pending.kind == platform.ChoiceInteractionApproval && pending.code == code {
-			if !pending.expiresAt.After(now) {
+			if !pending.deadline().After(now) {
 				break
 			}
 			found = pending
@@ -606,6 +787,11 @@ func isPendingInteractionChoiceCommand(cmd *platform.CardAction) bool {
 	default:
 		return false
 	}
+}
+
+func isPendingApprovalChoiceCommand(cmd *platform.CardAction) bool {
+	return isPendingInteractionChoiceCommand(cmd) &&
+		strings.TrimSpace(cmd.Value[platform.ChoiceMetadataInteractionKind]) == platform.ChoiceInteractionApproval
 }
 
 func reportCardActionResult(cmd *platform.CardAction, result platform.CardActionResult) bool {

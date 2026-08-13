@@ -3,7 +3,9 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +73,291 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("approval handler did not return")
+	}
+}
+
+func TestDesktopApprovalReviewKeepsPendingRequestWithoutDefaultDeny(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	probeCalled := make(chan struct{}, 1)
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			probeCalled <- struct{}{}
+			return agent.ApprovalRequestStatePending, nil
+		},
+	})
+	request := reply.waitChoiceRequest(t, ctx)
+	expirePendingApprovalsForTest(h)
+	close(reply.release)
+
+	select {
+	case <-probeCalled:
+	case <-ctx.Done():
+		t.Fatal("Desktop approval state probe was not called")
+	}
+	assertApprovalPendingForTest(t, result)
+	resolveApprovalForTest(t, ctx, h, reply, approvalKeyFromChoices(request.choices), "accept", result, "accept")
+}
+
+func TestDesktopApprovalReviewSettlesExternalResolutionAndUpdatesDisplay(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingApprovalStateCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			return agent.ApprovalRequestStateResolvedExternally, nil
+		},
+	})
+	reply.waitChoiceRequest(t, ctx)
+	expirePendingApprovalsForTest(h)
+	close(reply.release)
+	select {
+	case got := <-result:
+		if !strings.Contains(got, agent.ErrApprovalResolvedExternally.Error()) {
+			t.Fatalf("approval result=%q", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not settle")
+	}
+	select {
+	case record := <-reply.stateCh:
+		if record.state != agent.ApprovalRequestStateResolvedExternally || record.prompt == "" || len(record.choices) == 0 {
+			t.Fatalf("approval display record=%#v", record)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval display was not updated")
+	}
+}
+
+func TestDesktopApprovalReviewSettlesTerminalTurnWithoutDecision(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			return agent.ApprovalRequestStateTurnTerminal, nil
+		},
+	})
+	reply.waitChoiceRequest(t, ctx)
+	expirePendingApprovalsForTest(h)
+	close(reply.release)
+	select {
+	case got := <-result:
+		if !strings.Contains(got, agent.ErrApprovalTurnTerminal.Error()) {
+			t.Fatalf("approval result=%q", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not settle")
+	}
+}
+
+func TestDesktopApprovalReviewKeepsPendingWhenStateUnavailable(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	probeCalled := make(chan struct{}, 1)
+	var stateAvailable atomic.Bool
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			if stateAvailable.Load() {
+				return agent.ApprovalRequestStatePending, nil
+			}
+			probeCalled <- struct{}{}
+			return agent.ApprovalRequestStateUnknown, errors.New("snapshot unavailable")
+		},
+	})
+	request := reply.waitChoiceRequest(t, ctx)
+	expirePendingApprovalsForTest(h)
+	close(reply.release)
+	select {
+	case <-probeCalled:
+	case <-ctx.Done():
+		t.Fatal("Desktop approval state probe was not called")
+	}
+	assertApprovalPendingForTest(t, result)
+	stateAvailable.Store(true)
+	resolveApprovalForTest(t, ctx, h, reply, approvalKeyFromChoices(request.choices), "accept", result, "accept")
+}
+
+func expirePendingApprovalsForTest(h *Handler) {
+	h.pendingApprovalsMu.Lock()
+	defer h.pendingApprovalsMu.Unlock()
+	for _, pending := range h.pendingApprovals {
+		pending.deadlineMu.Lock()
+		pending.expiresAt = time.Now().Add(-time.Second)
+		pending.deadlineMu.Unlock()
+	}
+}
+
+func TestPendingDesktopApprovalBlocksOrdinaryMessageAndRechecksState(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	probeCalled := make(chan struct{}, 1)
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			probeCalled <- struct{}{}
+			return agent.ApprovalRequestStatePending, nil
+		},
+	})
+	request := reply.waitChoiceRequest(t, ctx)
+	close(reply.release)
+	runtime := platformMessageRuntime{
+		ctx: ctx, msg: platform.IncomingMessage{Platform: platform.PlatformFeishu, UserID: "ou_user"},
+		routeUserID: "ou_user", text: "继续执行后面的任务", reply: reply,
+	}
+	if _, ready := h.preparePlatformMessage(runtime); ready {
+		t.Fatal("ordinary message must not pass while Desktop approval is pending")
+	}
+	select {
+	case <-probeCalled:
+	default:
+		t.Fatal("ordinary message did not recheck Desktop approval state")
+	}
+	texts := reply.textsSnapshot()
+	if len(texts) == 0 || !strings.Contains(texts[len(texts)-1], "等待授权") {
+		t.Fatalf("reply=%#v, want pending approval guidance", texts)
+	}
+	resolveApprovalForTest(t, ctx, h, reply, approvalKeyFromChoices(request.choices), "accept", result, "accept")
+}
+
+func TestDesktopApprovalCardReportsAlreadyHandledWithoutSubmittingDecision(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			return agent.ApprovalRequestStateResolvedExternally, nil
+		},
+	})
+	request := reply.waitChoiceRequest(t, ctx)
+	resultCh := make(chan platform.CardActionResult, 1)
+	h.HandleMessage(ctx, platform.IncomingMessage{
+		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "approval-action",
+		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
+			"choice": "accept", "approval_key": approvalKeyFromChoices(request.choices),
+			platform.ChoiceMetadataInteractionKind: platform.ChoiceInteractionApproval,
+		}, Result: resultCh},
+	}, reply)
+	close(reply.release)
+	select {
+	case got := <-resultCh:
+		if got != platform.CardActionResultResolvedExternally {
+			t.Fatalf("card result=%q, want resolved externally", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("card result was not reported")
+	}
+	select {
+	case got := <-result:
+		if !strings.Contains(got, agent.ErrApprovalResolvedExternally.Error()) {
+			t.Fatalf("approval result=%q", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not settle")
+	}
+}
+
+func TestDesktopApprovalTextRechecksBeforeSubmittingDecision(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			return agent.ApprovalRequestStateResolvedExternally, nil
+		},
+	})
+	reply.waitChoiceRequest(t, ctx)
+	close(reply.release)
+	runtime := platformMessageRuntime{
+		ctx: ctx, msg: platform.IncomingMessage{Platform: platform.PlatformFeishu, UserID: "ou_user"},
+		routeUserID: "ou_user", text: "accept", reply: reply,
+	}
+	if _, ready := h.preparePlatformMessage(runtime); !ready {
+		t.Fatal("message should continue after the approval was handled in Codex App")
+	}
+	select {
+	case got := <-result:
+		if !strings.Contains(got, agent.ErrApprovalResolvedExternally.Error()) {
+			t.Fatalf("approval result=%q", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not settle")
+	}
+}
+
+func TestDesktopApprovalFallbackCodeRechecksBeforeSubmittingDecision(t *testing.T) {
+	h := NewHandler(nil, nil)
+	reply := newBlockingChoiceRequestCaptureReplier()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := startApprovalForTest(ctx, h, reply, agent.ApprovalRequest{
+		RequestID: "request-1", ToolCall: json.RawMessage(`{"cmd":"pwd"}`),
+		Options: []agent.ApprovalOption{
+			{ID: "accept", Name: "允许", Kind: "allow"},
+			{ID: "decline", Name: "拒绝", Kind: "deny"},
+		},
+		StateProbe: func(context.Context) (agent.ApprovalRequestState, error) {
+			return agent.ApprovalRequestStateResolvedExternally, nil
+		},
+	})
+	request := reply.waitChoiceRequest(t, ctx)
+	close(reply.release)
+	code := approvalCodeFromPrompt(request.prompt)
+	got := h.handleApprovalFallbackCommand(ctx, "ou_user", "ou_user", "/approve "+code)
+	if !strings.Contains(got, "Codex App") {
+		t.Fatalf("fallback result=%q, want handled-in-App guidance", got)
+	}
+	select {
+	case approvalResult := <-result:
+		if !strings.Contains(approvalResult, agent.ErrApprovalResolvedExternally.Error()) {
+			t.Fatalf("approval result=%q", approvalResult)
+		}
+	case <-ctx.Done():
+		t.Fatal("approval handler did not settle")
 	}
 }
 

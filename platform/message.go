@@ -83,8 +83,11 @@ func addIdentityKey(values *[]string, seen map[string]bool, value string) {
 type CardActionResult string
 
 const (
-	CardActionResultConsumed CardActionResult = "consumed"
-	CardActionResultExpired  CardActionResult = "expired"
+	CardActionResultConsumed           CardActionResult = "consumed"
+	CardActionResultExpired            CardActionResult = "expired"
+	CardActionResultResolvedExternally CardActionResult = "resolved_externally"
+	CardActionResultTurnTerminal       CardActionResult = "turn_terminal"
+	CardActionResultStateUnavailable   CardActionResult = "state_unavailable"
 )
 
 // ConversationKey 返回跨平台会话隔离 key，避免不同平台的相同用户 ID 串话。

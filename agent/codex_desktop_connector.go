@@ -16,16 +16,41 @@ const (
 )
 
 type codexDesktopRuntime struct {
-	mu            sync.Mutex
-	client        *codexDesktopClient
-	state         *codexDesktopStateStore
-	actions       *codexDesktopActions
-	owners        *codexRuntimeOwnerRegistry
-	presence      func() (bool, bool)
-	authoritative func() bool
-	onDisconnect  func()
-	onEvents      func(string, []*codexTurnEvent)
-	tracked       map[string]bool
+	mu             sync.Mutex
+	client         *codexDesktopClient
+	state          *codexDesktopStateStore
+	actions        *codexDesktopActions
+	owners         *codexRuntimeOwnerRegistry
+	presence       func() (bool, bool)
+	authoritative  func() bool
+	onDisconnect   func()
+	onEvents       func(string, []*codexTurnEvent)
+	refreshHistory func(context.Context, CodexThreadRef) error
+	tracked        map[string]bool
+}
+
+func (r *codexDesktopRuntime) approvalRequestState(ctx context.Context, threadID string, turnID string, requestID string) (ApprovalRequestState, error) {
+	threadID = strings.TrimSpace(threadID)
+	r.mu.Lock()
+	refresh := r.refreshHistory
+	r.mu.Unlock()
+	if refresh == nil {
+		refresh = r.LoadHistory
+	}
+	if err := refresh(ctx, CodexThreadRef{ThreadID: threadID}); err != nil {
+		return ApprovalRequestStateUnknown, err
+	}
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state == nil {
+		return ApprovalRequestStateUnknown, ErrCodexDesktopUnavailable
+	}
+	snapshot, ok := state.snapshot(threadID)
+	if !ok {
+		return ApprovalRequestStateUnknown, ErrCodexDesktopOwnershipUnknown
+	}
+	return codexDesktopApprovalRequestState(snapshot, turnID, requestID), nil
 }
 
 type codexDesktopFollowingStatus struct {
@@ -223,7 +248,8 @@ func (r *codexDesktopRuntime) ensureInitialized() *codexDesktopClient {
 	})
 	actions := newCodexDesktopActions(client, client.nextRequestID)
 	state := newCodexDesktopStateStore(codexDesktopStateOptions{
-		actions: actions,
+		actions:            actions,
+		approvalStateProbe: r.approvalRequestState,
 		requestSnapshot: func(threadID string) {
 			ref := CodexThreadRef{ThreadID: threadID}
 			if err := r.requestHistory(context.Background(), ref, false); err != nil {

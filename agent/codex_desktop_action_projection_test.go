@@ -8,6 +8,90 @@ import (
 	"time"
 )
 
+func TestCodexDesktopApprovalRequestStateUsesRequestAndOriginalTurn(t *testing.T) {
+	tests := []struct {
+		name      string
+		state     CodexThreadState
+		requests  map[string]codexDesktopPendingAction
+		wantState ApprovalRequestState
+	}{
+		{
+			name: "pending request", state: CodexThreadState{Active: true, ActiveTurnID: "turn-1"},
+			requests:  map[string]codexDesktopPendingAction{"request-1": {ID: "request-1"}},
+			wantState: ApprovalRequestStatePending,
+		},
+		{
+			name: "handled in app", state: CodexThreadState{Active: true, ActiveTurnID: "turn-1"},
+			requests:  map[string]codexDesktopPendingAction{},
+			wantState: ApprovalRequestStateResolvedExternally,
+		},
+		{
+			name: "turn completed", state: CodexThreadState{Active: false, LastTurnID: "turn-1", LastTurnStatus: "completed"},
+			requests:  map[string]codexDesktopPendingAction{},
+			wantState: ApprovalRequestStateTurnTerminal,
+		},
+		{
+			name: "turn rolled over", state: CodexThreadState{Active: true, ActiveTurnID: "turn-2"},
+			requests:  map[string]codexDesktopPendingAction{"request-1": {ID: "request-1"}},
+			wantState: ApprovalRequestStateTurnTerminal,
+		},
+		{
+			name:      "missing turn state is unknown",
+			state:     CodexThreadState{},
+			requests:  map[string]codexDesktopPendingAction{},
+			wantState: ApprovalRequestStateUnknown,
+		},
+		{
+			name:      "inactive snapshot retaining request is unknown",
+			state:     CodexThreadState{Active: false, LastTurnID: "turn-1", LastTurnStatus: "completed"},
+			requests:  map[string]codexDesktopPendingAction{"request-1": {ID: "request-1"}},
+			wantState: ApprovalRequestStateUnknown,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := codexDesktopThreadSnapshot{State: test.state, Requests: test.requests}
+			if got := codexDesktopApprovalRequestState(snapshot, "turn-1", "request-1"); got != test.wantState {
+				t.Fatalf("state=%v, want %v", got, test.wantState)
+			}
+		})
+	}
+}
+
+func TestCodexDesktopPendingApprovalCarriesAuthoritativeStateProbe(t *testing.T) {
+	var gotThread, gotTurn, gotRequest string
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{
+		now:     time.Now,
+		actions: newCodexDesktopActions(&codexDesktopActionCaller{}, func() string { return "sender" }),
+		approvalStateProbe: func(_ context.Context, threadID string, turnID string, requestID string) (ApprovalRequestState, error) {
+			gotThread, gotTurn, gotRequest = threadID, turnID, requestID
+			return ApprovalRequestStatePending, nil
+		},
+	})
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{desktopTurnFixture("turn-1", "inProgress", nil)}
+	raw["requests"] = []any{desktopPendingRequestFixture(
+		"request-1", "item/commandExecution/requestApproval",
+	)}
+	update, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 1, raw: raw,
+	})
+	if err != nil {
+		t.Fatalf("applySnapshot() error = %v", err)
+	}
+	event := findCodexDesktopApprovalEvent(t, update.Events)
+	if event.Approval.Request.StateProbe == nil {
+		t.Fatal("Desktop approval did not carry state probe")
+	}
+	state, err := event.Approval.Request.StateProbe(context.Background())
+	if err != nil || state != ApprovalRequestStatePending {
+		t.Fatalf("StateProbe() = %v, %v", state, err)
+	}
+	if gotThread != "thread-1" || gotTurn != "turn-1" || gotRequest != "request-1" {
+		t.Fatalf("probe args = %q, %q, %q", gotThread, gotTurn, gotRequest)
+	}
+}
+
 func TestCodexDesktopPendingApprovalSurvivesDisconnectAndIsNotReplayed(t *testing.T) {
 	caller := &codexDesktopActionCaller{err: ErrCodexDesktopDisconnected}
 	actions := newCodexDesktopActions(caller, func() string { return "sender" })

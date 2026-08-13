@@ -21,6 +21,9 @@ const (
 	approvalStatusArchived       = "archived"
 	approvalStatusAutoApproved   = "auto_approved_yolo"
 	approvalStatusUnconfirmed    = "unconfirmed"
+	approvalStatusResolvedInApp  = "resolved_in_app"
+	approvalStatusTurnTerminal   = "turn_terminal"
+	approvalStatusStateUnknown   = "state_unknown"
 	approvalPromptHead           = "Codex 请求执行敏感操作，请确认："
 	approvalPromptMarker         = "请求执行敏感操作，请确认："
 	approvalSummaryMaxRune       = 160

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -66,6 +67,22 @@ func TestRecordAutomaticApprovalUpdatesStandaloneApprovalCard(t *testing.T) {
 	card := cardKit.updateCards[0]
 	if !strings.Contains(card, "已自动批准（YOLO）") || strings.Contains(card, `"tag":"button"`) {
 		t.Fatalf("standalone card=%s，期望无按钮自动批准终态", card)
+	}
+}
+
+func TestRecordApprovalStateClosesExistingStandaloneCard(t *testing.T) {
+	cardKit := &fakeCardKitClient{}
+	reply := NewReplier(&fakeMessageSender{}, "ou_user", cardKit)
+	prompt := approvalPromptForTest("date")
+	choice := automaticApprovalChoiceForTest("approval-1", "")
+	if err := reply.AskChoices(context.Background(), prompt, []platform.Choice{choice}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reply.RecordApprovalState(context.Background(), prompt, []platform.Choice{choice}, agent.ApprovalRequestStateResolvedExternally); err != nil {
+		t.Fatal(err)
+	}
+	if len(cardKit.updateCards) != 1 || !strings.Contains(cardKit.updateCards[0], "已在 Codex App 处理") {
+		t.Fatalf("updates=%#v", cardKit.updateCards)
 	}
 }
 

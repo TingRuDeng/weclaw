@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
@@ -92,6 +93,51 @@ type automaticApprovalRecord struct {
 type choiceRequestCaptureReplier struct {
 	approvalKeyCaptureReplier
 	choiceCh chan choiceRequest
+}
+
+type blockingChoiceRequestCaptureReplier struct {
+	*choiceRequestCaptureReplier
+	release chan struct{}
+}
+
+type approvalStateRecord struct {
+	prompt  string
+	choices []platform.Choice
+	state   agent.ApprovalRequestState
+}
+
+type blockingApprovalStateCaptureReplier struct {
+	*blockingChoiceRequestCaptureReplier
+	stateCh chan approvalStateRecord
+}
+
+func newBlockingChoiceRequestCaptureReplier() *blockingChoiceRequestCaptureReplier {
+	return &blockingChoiceRequestCaptureReplier{
+		choiceRequestCaptureReplier: newChoiceRequestCaptureReplier(),
+		release:                     make(chan struct{}),
+	}
+}
+
+func newBlockingApprovalStateCaptureReplier() *blockingApprovalStateCaptureReplier {
+	return &blockingApprovalStateCaptureReplier{
+		blockingChoiceRequestCaptureReplier: newBlockingChoiceRequestCaptureReplier(),
+		stateCh:                             make(chan approvalStateRecord, 1),
+	}
+}
+
+func (r *blockingApprovalStateCaptureReplier) RecordApprovalState(_ context.Context, prompt string, choices []platform.Choice, state agent.ApprovalRequestState) error {
+	r.stateCh <- approvalStateRecord{prompt: prompt, choices: append([]platform.Choice(nil), choices...), state: state}
+	return nil
+}
+
+func (r *blockingChoiceRequestCaptureReplier) AskChoices(ctx context.Context, prompt string, choices []platform.Choice) error {
+	r.choiceCh <- choiceRequest{prompt: prompt, choices: append([]platform.Choice(nil), choices...)}
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func newChoiceRequestCaptureReplier() *choiceRequestCaptureReplier {

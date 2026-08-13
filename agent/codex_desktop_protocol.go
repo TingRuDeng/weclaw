@@ -30,6 +30,10 @@ var (
 	ErrCodexDesktopDeliveryUnknown = errors.New("Codex Desktop 请求交付状态未知")
 	// ErrCodexDesktopNoClient 表示路由器确认没有客户端可以处理请求。
 	ErrCodexDesktopNoClient = errors.New("没有 Codex Desktop 客户端可处理请求")
+	// ErrCodexDesktopRemote 表示 Desktop 已明确返回失败，交付结果并不含糊。
+	ErrCodexDesktopRemote = errors.New("Codex Desktop 远端处理失败")
+	// ErrCodexDesktopRequestNotFound 表示目标 pending request 已由其他前端处理或移除。
+	ErrCodexDesktopRequestNotFound = errors.New("Codex Desktop 请求已不存在")
 
 	codexDesktopMethodVersions = map[string]int{
 		"initialize":                                            1,

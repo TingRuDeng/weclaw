@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
 
 type approvalContextKey struct{}
@@ -14,11 +15,28 @@ type ApprovalOption struct {
 	Kind string
 }
 
+type ApprovalRequestState uint8
+
+const (
+	ApprovalRequestStateUnknown ApprovalRequestState = iota
+	ApprovalRequestStatePending
+	ApprovalRequestStateResolvedExternally
+	ApprovalRequestStateTurnTerminal
+)
+
+var (
+	ErrApprovalResolvedExternally = errors.New("审批已由其他前端处理")
+	ErrApprovalTurnTerminal       = errors.New("审批所属 Codex turn 已结束")
+)
+
+type ApprovalRequestStateProbe func(context.Context) (ApprovalRequestState, error)
+
 // ApprovalRequest 描述一次需要用户确认的 Codex 敏感操作。
 type ApprovalRequest struct {
-	RequestID string
-	ToolCall  json.RawMessage
-	Options   []ApprovalOption
+	RequestID  string
+	ToolCall   json.RawMessage
+	Options    []ApprovalOption
+	StateProbe ApprovalRequestStateProbe
 }
 
 // ApprovalHandler 由消息层实现，用于把 Codex 审批请求转成平台交互。

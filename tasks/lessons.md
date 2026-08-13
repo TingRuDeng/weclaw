@@ -848,3 +848,11 @@
 - 反例：按会话原 provider 启动或 resume，导致旧中转不可用时该会话永久不可用；只改 SQLite 或 `session_meta`，却保留跨 provider 无法解密的 reasoning；目标 active 时直接重启 Host；迁移暂缓后仍把输入发往旧 provider。
 - 正确做法：保留 thread ID、用户消息、可见回复、工具调用和结果，递归删除 provider 专属的加密 reasoning/compaction 状态并修复所有层级的 item ID 引用，原子更新目标 rollout 与两处目录元数据并写 before-image 备份；共享 Host 用 `config/read(cwd)` 与显式 `thread/resume.modelProvider` 核验，空闲已加载 Host 才允许受控重启。active 目标不被中断，当前 turn 的 steer 沿用既有 provider，下一个新 turn 先迁移；unknown/交付不确定一律失败关闭并在后续写入前重试。
 - 来源：用户明确纠正“切换历史会话时应该使用当前 Codex 在用的 provider，并自动修改要切换会话所属的 provider 信息”。
+
+## 2026-08-13 Desktop 多前端审批必须按 request 与原 turn 复核
+
+- 触发条件：同一 Codex Desktop 审批可由 Codex App 或飞书处理，飞书等待超时、收到新消息或用户再次点击审批入口。
+- 规则：等待期限只能触发带 revision 屏障的权威状态复核，不能直接向 provider 发送默认拒绝；提交任何飞书决定前都要按 request ID 和原 turn ID 复核。
+- 反例：App 已经响应 request 后，WeClaw 五分钟超时再次发送 `decline`，Desktop 返回 `Request not found`；后续消息仍 steer 到失效 turn，并把明确的 JavaScript 错误包装成“交付状态未知”。
+- 正确做法：request 仍 pending 就续期；request 消失且原 turn active 就收敛为其他前端已处理；原 turn terminal/rollover 就禁止 steer；状态不可用时失败关闭并保留 binding。`Request not found` 竞态不再重复报错，明确远端错误与写后断线/超时分别分类。
+- 来源：2026-08-13 本机审计日志中的 `approval_default_deny reason=timeout` 与 Codex Desktop 同一 request 的重复响应记录。

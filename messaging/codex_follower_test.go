@@ -14,6 +14,23 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
+func TestCodexFollowerFailureLoggingUsesPowerOfTwoSampling(t *testing.T) {
+	service := &codexFollowerService{}
+	snapshot := codexFollowerSnapshot{BindingKey: "route", Target: codexFrontendFollower{ThreadID: "thread-1"}}
+	err := agent.ErrCodexWriterBusy
+	for index := 0; index < 3; index++ {
+		service.recordReconcileResult(snapshot, err, nil)
+	}
+	state := service.failures["route\x00thread-1"]
+	if state.count != 3 || state.summary != err.Error() {
+		t.Fatalf("failure state=%#v", state)
+	}
+	service.recordReconcileResult(snapshot, nil, nil)
+	if _, ok := service.failures["route\x00thread-1"]; ok {
+		t.Fatal("successful reconcile did not clear sampled failure state")
+	}
+}
+
 type codexFollowerTestPlatform struct {
 	name    platform.PlatformName
 	account string

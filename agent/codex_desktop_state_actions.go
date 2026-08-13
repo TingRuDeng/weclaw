@@ -3,7 +3,33 @@ package agent
 import (
 	"context"
 	"sort"
+	"strings"
 )
+
+func codexDesktopApprovalRequestState(snapshot codexDesktopThreadSnapshot, turnID string, requestID string) ApprovalRequestState {
+	turnID = strings.TrimSpace(turnID)
+	requestID = strings.TrimSpace(requestID)
+	if turnID == "" || requestID == "" {
+		return ApprovalRequestStateUnknown
+	}
+	activeTurnID := strings.TrimSpace(snapshot.State.ActiveTurnID)
+	if snapshot.State.Active {
+		if activeTurnID == "" {
+			return ApprovalRequestStateUnknown
+		}
+		if activeTurnID != turnID {
+			return ApprovalRequestStateTurnTerminal
+		}
+		if _, exists := snapshot.Requests[requestID]; exists {
+			return ApprovalRequestStatePending
+		}
+		return ApprovalRequestStateResolvedExternally
+	}
+	if _, exists := snapshot.Requests[requestID]; exists || strings.TrimSpace(snapshot.State.LastTurnID) == "" {
+		return ApprovalRequestStateUnknown
+	}
+	return ApprovalRequestStateTurnTerminal
+}
 
 // projectPendingActionEventsLocked 只投递首次出现且能映射 responder 的 pending action。
 func (s *codexDesktopStateStore) projectPendingActionEventsLocked(snapshot codexDesktopThreadSnapshot) ([]*codexTurnEvent, error) {
@@ -29,6 +55,14 @@ func (s *codexDesktopStateStore) projectPendingActionEventsLocked(snapshot codex
 			continue
 		}
 		event.TurnID = firstNonEmpty(event.TurnID, snapshot.State.ActiveTurnID, snapshot.State.LastTurnID)
+		if event.Approval != nil && s.approvalStateProbe != nil {
+			threadID := snapshot.ThreadID
+			turnID := event.TurnID
+			requestID := event.Approval.Request.RequestID
+			event.Approval.Request.StateProbe = func(ctx context.Context) (ApprovalRequestState, error) {
+				return s.approvalStateProbe(ctx, threadID, turnID, requestID)
+			}
+		}
 		s.wrapPendingActionResponder(snapshot.ThreadID, requestID, event)
 		seen[requestID] = true
 		events = append(events, event)

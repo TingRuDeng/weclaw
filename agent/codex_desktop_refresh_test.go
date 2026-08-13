@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -24,6 +25,47 @@ func TestCodexDesktopStateWaitsForRequestedRevision(t *testing.T) {
 	applyDesktopRefreshSnapshot(t, store, 2)
 	if err := <-done; err != nil {
 		t.Fatalf("waitForRevision() error = %v", err)
+	}
+}
+
+func TestCodexDesktopApprovalRequestStateRefreshesBeforeReading(t *testing.T) {
+	store := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	pending := desktopStateFixture("thread-1", "active")
+	pending["turns"] = []any{desktopTurnFixture("turn-1", "inProgress", nil)}
+	pending["requests"] = []any{desktopPendingRequestFixture(
+		"request-1", "item/commandExecution/requestApproval",
+	)}
+	if _, err := store.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 1, raw: pending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := false
+	runtime := &codexDesktopRuntime{state: store}
+	runtime.refreshHistory = func(context.Context, CodexThreadRef) error {
+		refreshed = true
+		resolved := desktopStateFixture("thread-1", "active")
+		resolved["turns"] = []any{desktopTurnFixture("turn-1", "inProgress", nil)}
+		_, err := store.applySnapshot(codexDesktopSnapshotSpec{
+			threadID: "thread-1", epoch: 1, revision: 2, raw: resolved,
+		})
+		return err
+	}
+	state, err := runtime.approvalRequestState(context.Background(), "thread-1", "turn-1", "request-1")
+	if err != nil || state != ApprovalRequestStateResolvedExternally || !refreshed {
+		t.Fatalf("approvalRequestState() = %v, %v refreshed=%v", state, err, refreshed)
+	}
+}
+
+func TestCodexDesktopApprovalRequestStateFailsClosedWhenRefreshFails(t *testing.T) {
+	wantErr := errors.New("refresh unavailable")
+	runtime := &codexDesktopRuntime{
+		state:          newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now}),
+		refreshHistory: func(context.Context, CodexThreadRef) error { return wantErr },
+	}
+	state, err := runtime.approvalRequestState(context.Background(), "thread-1", "turn-1", "request-1")
+	if state != ApprovalRequestStateUnknown || !errors.Is(err, wantErr) {
+		t.Fatalf("approvalRequestState() = %v, %v", state, err)
 	}
 }
 

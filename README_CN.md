@@ -84,6 +84,8 @@ macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经
 
 App Host 支持选择已有会话、继续任务、进度、审批、`/stop`，以及修改当前 thread 的模型和推理强度。飞书绑定到 App 中正在运行的 thread 后，普通消息会直接进入当前 turn，不再先暂存并等待任务结束。Desktop IPC 暂未暴露新建、归档或重命名会话、完整模型列表、账号和额度接口：请在 Codex App 完成这些操作，再通过 `/cx ls` 选择会话；App Host 下 `/cx new` 和 `/cx rename` 会明确拒绝且保留当前绑定。
 
+App Host 的飞书审批不会在五分钟后自动拒绝。等待时间到达时，WeClaw 会刷新 Desktop 完整状态并等待对应 revision：request 仍存在就保留原审批继续等待；已在 Codex App 处理就关闭飞书审批且不重复响应；原 turn 已结束就停止向旧 turn 发送输入。状态暂时不可读时保持失败关闭，保留会话绑定和待审批请求。审批期间发送普通消息、点击旧卡或使用 `/approve`、`/deny` 短码都会先做同样复核。Desktop 明确返回的 JavaScript 或参数错误会按远端处理失败报告，只有写入后断线或等待响应超时才属于“交付状态未知”。
+
 App 进程和安全 IPC 存在，不代表 WeClaw 已登记为目标 thread 的同步端。若日志出现精确错误 `no-client-found: thread stream owner became unavailable`，表示 Router 已找到 owner handler，但 owner 尚不能把完整快照交给当前 follower；常见原因是 WeClaw 晚于 App 打开会话，错过了一次性的 following 状态询问。WeClaw 会保留已提交的飞书绑定，主动、幂等地登记 follower 后继续后台重试，不会为绕过错误启动第二个 Host。通常无需重新选择或重开会话；仍不可用时，先确认 Codex App 打开的是目标工作空间中的准确会话，再完全退出并重新打开 App。原会话不需要删除或重建。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用，因为消息命令不能在本机启动额外进程。本机终端使用受控入口：

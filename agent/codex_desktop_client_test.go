@@ -130,6 +130,25 @@ func TestCodexDesktopClientFailsPendingCallsOnDisconnect(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopClientDoesNotClassifyExplicitRemoteErrorsAsDeliveryUnknown(t *testing.T) {
+	tests := []string{
+		"Request not found",
+		"Cannot read properties of undefined (reading 'cwd')",
+	}
+	for _, message := range tests {
+		err := classifyCodexDesktopRemoteError(message)
+		if errors.Is(err, ErrCodexDesktopDeliveryUnknown) {
+			t.Fatalf("classifyCodexDesktopRemoteError(%q) = %v, explicit response must not be delivery unknown", message, err)
+		}
+		if !errors.Is(err, ErrCodexDesktopRemote) {
+			t.Fatalf("classifyCodexDesktopRemoteError(%q) = %v, want remote error", message, err)
+		}
+	}
+	if err := classifyCodexDesktopRemoteError("Request not found"); !errors.Is(err, ErrCodexDesktopRequestNotFound) {
+		t.Fatalf("Request not found classification = %v", err)
+	}
+}
+
 func TestCodexDesktopClientRejectsMalformedInitialize(t *testing.T) {
 	dial := codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		initialize := readCodexDesktopTestEnvelope(t, conn)

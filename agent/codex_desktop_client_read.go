@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // readLoop 独占读取当前连接，并由 epoch 防止旧连接清理新状态。
@@ -57,12 +58,16 @@ func (c *codexDesktopClient) dispatchResponse(envelope codexDesktopEnvelope) {
 	pending.result <- result
 }
 
-// classifyCodexDesktopRemoteError 仅把明确无人处理映射为确定性错误。
+// classifyCodexDesktopRemoteError 只把写后断线或等待超时视为交付状态未知；
+// Desktop 已返回的错误本身就是确定性结果。
 func classifyCodexDesktopRemoteError(message string) error {
 	if isCodexDesktopNoClientError(message) {
 		return fmt.Errorf("%w: %s", ErrCodexDesktopNoClient, message)
 	}
-	return fmt.Errorf("%w: Codex Desktop 返回错误: %s", ErrCodexDesktopDeliveryUnknown, message)
+	if strings.Contains(strings.ToLower(message), "request not found") {
+		return fmt.Errorf("%w: %w: %s", ErrCodexDesktopRemote, ErrCodexDesktopRequestNotFound, message)
+	}
+	return fmt.Errorf("%w: Codex Desktop 返回错误: %s", ErrCodexDesktopRemote, message)
 }
 
 // dispatchDiscoveryResponse 解析 canHandle 并唤醒对应 discovery 等待者。

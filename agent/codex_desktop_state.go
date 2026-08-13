@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,9 +47,10 @@ type codexDesktopReplayBatch struct {
 }
 
 type codexDesktopStateOptions struct {
-	now             func() time.Time
-	requestSnapshot func(string)
-	actions         *codexDesktopActions
+	now                func() time.Time
+	requestSnapshot    func(string)
+	approvalStateProbe func(context.Context, string, string, string) (ApprovalRequestState, error)
+	actions            *codexDesktopActions
 }
 
 type codexDesktopSnapshotSpec struct {
@@ -77,16 +79,17 @@ type codexDesktopQueuedFollowUps struct {
 }
 
 type codexDesktopStateStore struct {
-	mu              sync.Mutex
-	threads         map[string]codexDesktopThreadSnapshot
-	revisionWake    map[string]chan struct{}
-	queued          map[string][]codexDesktopQueuedPatchSet
-	followUps       map[string]codexDesktopQueuedFollowUps
-	needsSnapshot   map[string]uint64
-	now             func() time.Time
-	requestSnapshot func(string)
-	actions         *codexDesktopActions
-	actionSeen      map[string]map[string]bool
+	mu                 sync.Mutex
+	threads            map[string]codexDesktopThreadSnapshot
+	revisionWake       map[string]chan struct{}
+	queued             map[string][]codexDesktopQueuedPatchSet
+	followUps          map[string]codexDesktopQueuedFollowUps
+	needsSnapshot      map[string]uint64
+	now                func() time.Time
+	requestSnapshot    func(string)
+	approvalStateProbe func(context.Context, string, string, string) (ApprovalRequestState, error)
+	actions            *codexDesktopActions
+	actionSeen         map[string]map[string]bool
 }
 
 // newCodexDesktopStateStore 创建 revision 严格递增的 Desktop 状态缓存。
@@ -100,8 +103,9 @@ func newCodexDesktopStateStore(options codexDesktopStateOptions) *codexDesktopSt
 		queued:        make(map[string][]codexDesktopQueuedPatchSet),
 		followUps:     make(map[string]codexDesktopQueuedFollowUps),
 		needsSnapshot: make(map[string]uint64), now: options.now,
-		requestSnapshot: options.requestSnapshot,
-		actions:         options.actions, actionSeen: make(map[string]map[string]bool),
+		requestSnapshot:    options.requestSnapshot,
+		approvalStateProbe: options.approvalStateProbe,
+		actions:            options.actions, actionSeen: make(map[string]map[string]bool),
 	}
 }
 

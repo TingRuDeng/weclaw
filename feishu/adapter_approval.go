@@ -92,6 +92,12 @@ func (a *Adapter) resolveApprovalCardAction(ctx context.Context, action parsedCa
 	switch {
 	case !confirmed:
 		action.Status = approvalStatusUnconfirmed
+	case result == platform.CardActionResultResolvedExternally:
+		action.Status = approvalStatusResolvedInApp
+	case result == platform.CardActionResultTurnTerminal:
+		action.Status = approvalStatusTurnTerminal
+	case result == platform.CardActionResultStateUnavailable:
+		action.Status = approvalStatusStateUnknown
 	case result == platform.CardActionResultExpired:
 		action.Status = approvalStatusExpired
 	case result == platform.CardActionResultConsumed && a.updateTaskCardWithApproval(ctx, action):
@@ -164,6 +170,12 @@ func approvalActionToast(action parsedCardAction) *callback.Toast {
 		return &callback.Toast{Type: "info", Content: "已受理，正在处理"}
 	case approvalStatusExpired:
 		return &callback.Toast{Type: "warning", Content: "授权请求已过期，请重新发起任务"}
+	case approvalStatusResolvedInApp:
+		return &callback.Toast{Type: "info", Content: "该授权已在 Codex App 处理"}
+	case approvalStatusTurnTerminal:
+		return &callback.Toast{Type: "info", Content: "任务已经结束"}
+	case approvalStatusStateUnknown:
+		return &callback.Toast{Type: "warning", Content: "暂时无法确认授权状态，请稍后重试"}
 	case approvalStatusUnconfirmed:
 		return &callback.Toast{Type: "warning", Content: "授权处理结果未确认，请重新发起任务"}
 	default:
