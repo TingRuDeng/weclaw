@@ -481,7 +481,7 @@ func TestReleaseScriptVerifiesEveryOfficialAssetName(t *testing.T) {
 	}
 }
 
-func TestReleaseScriptRejectsDraftPrereleaseAndCorruptAsset(t *testing.T) {
+func TestReleaseScriptRejectsDraftAndPrerelease(t *testing.T) {
 	script := releaseScriptPath(t)
 	tests := []struct {
 		name   string
@@ -490,7 +490,6 @@ func TestReleaseScriptRejectsDraftPrereleaseAndCorruptAsset(t *testing.T) {
 	}{
 		{"draft", func(f *releaseVerifyFixture) { f.draft = true }, "draft"},
 		{"prerelease", func(f *releaseVerifyFixture) { f.prerelease = true }, "prerelease"},
-		{"corrupt checksum", func(f *releaseVerifyFixture) { f.corrupt = true }, "checksum"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -519,6 +518,30 @@ func TestReleaseScriptAcceptsDraftAssetsBeforePromotion(t *testing.T) {
 	}
 }
 
+func TestReleaseScriptResolvesDraftByAuthenticatedReleaseIDWithoutRedownload(t *testing.T) {
+	script := releaseScriptPath(t)
+	content, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, required := range []string{
+		"RELEASE_ID", "resolve_release_id", "repos/TingRuDeng/weclaw/releases/", "--method PATCH",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("release script missing draft ID contract %q", required)
+		}
+	}
+	if strings.Contains(text, `gh release download "$TAG"`) {
+		t.Fatal("release script must not redownload every published asset after upload")
+	}
+
+	fixture := validReleaseVerifyFixture()
+	runReleaseScriptTestCommand(t, "", "bash", "-c", releaseVerifyCommandForInvocation(
+		script, fixture, `RELEASE_ID="" && resolve_release_id && [[ "$RELEASE_ID" == 42 ]]`,
+	))
+}
+
 func TestReleaseScriptStagesBeforeSmokeAndPromotion(t *testing.T) {
 	content, err := os.ReadFile(releaseScriptPath(t))
 	if err != nil {
@@ -537,7 +560,7 @@ func TestReleaseScriptStagesBeforeSmokeAndPromotion(t *testing.T) {
 		}
 		previous = index
 	}
-	for _, required := range []string{"--draft", "--draft=false --latest", `WECLAW_UPDATE_RELEASE_TAG="$TAG"`} {
+	for _, required := range []string{"--draft", "--method PATCH", "make_latest=true", `WECLAW_UPDATE_RELEASE_TAG="$TAG"`} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("release transaction missing %q", required)
 		}
@@ -549,12 +572,15 @@ func TestReleaseScriptCleansDraftAndTagAfterFailure(t *testing.T) {
 	command := "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
 		`gh() { printf 'GH:%s\n' "$*"; } && ` +
 		`git() { printf 'GIT:%s\n' "$*"; } && ` +
-		`DRY_RUN=0 TAG=v9.9.9 RELEASE_TAG_CREATED=1 RELEASE_TAG_PUSHED=1 RELEASE_DRAFT_ATTEMPTED=1 RELEASE_COMMITTED=0 && ` +
+		`DRY_RUN=0 TAG=v9.9.9 RELEASE_ID=42 RELEASE_TAG_CREATED=1 RELEASE_TAG_PUSHED=1 RELEASE_DRAFT_ATTEMPTED=1 RELEASE_COMMITTED=0 && ` +
 		`set +e; false; cleanup_failed_release`
 
 	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", command)
-	if !strings.Contains(output, "GH:release delete v9.9.9 --repo TingRuDeng/weclaw --cleanup-tag --yes") {
+	if !strings.Contains(output, "GH:api --method DELETE repos/TingRuDeng/weclaw/releases/42") {
 		t.Fatalf("cleanup output=%q, want draft release cleanup", output)
+	}
+	if !strings.Contains(output, "GIT:push origin --delete v9.9.9") {
+		t.Fatalf("cleanup output=%q, want remote tag cleanup", output)
 	}
 }
 
@@ -917,7 +943,6 @@ type releaseVerifyFixture struct {
 	tag        string
 	draft      bool
 	prerelease bool
-	corrupt    bool
 }
 
 func validReleaseVerifyFixture() releaseVerifyFixture {
@@ -945,17 +970,9 @@ func releaseVerifyCommandForInvocation(script string, fixture releaseVerifyFixtu
 	if fixture.prerelease {
 		prerelease = "true"
 	}
-	corrupt := "0"
-	if fixture.corrupt {
-		corrupt = "1"
-	}
 	return "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
-		`FAKE_CORRUPT=` + corrupt + ` && ` +
 		`gh() { ` +
-		`if [[ "$1 $2" == "release download" ]]; then local dir=""; while (($#)); do if [[ "$1" == "--dir" ]]; then dir="$2"; shift 2; else shift; fi; done; mkdir -p "$dir"; ` +
-		`for name in weclaw_darwin_arm64 weclaw_linux_arm64 weclaw_linux_amd64; do printf '%s\n' "$name" > "$dir/$name"; done; ` +
-		`(cd "$dir" && shasum -a 256 weclaw_* > checksums.txt); if [[ "$FAKE_CORRUPT" == 1 ]]; then printf 'corrupt\n' >> "$dir/weclaw_linux_amd64"; fi; return 0; fi; ` +
-		`case "$*" in *".assets | length"*) echo 4 ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
+		`case "$*" in *"?per_page=100"*) echo 42 ;; *".assets | length"*) echo 4 ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
 		`*"@tsv"*) printf '%s\t%s\t%s\n' "` + fixture.tag + `" "` + draft + `" "` + prerelease + `" ;; *"--json tagName"*) echo "` + fixture.tag + `" ;; esac; } && ` +
-		invocation
+		`RELEASE_ID=42 && ` + invocation
 }

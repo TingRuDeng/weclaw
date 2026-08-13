@@ -404,3 +404,27 @@ git diff --check
 - 飞书真实 task-card registry 回归覆盖活动态展开、终态自动收起、终态再次展开和收起，按钮未进入 Agent 分发；既有 terminal outbox、恢复和幂等测试随全仓门禁通过。
 - 验证通过：`go test ./agent ./messaging ./feishu ./platform -count=1 -timeout 240s`、`go test -race ./agent ./messaging ./feishu -count=1 -timeout 360s`、`go test ./... -count=1 -timeout 300s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck、文档校验和 `git diff --check`。
 - 全仓测试首次复跑曾出现一次既有 follower 恢复用例的 `TempDir RemoveAll: directory not empty` 清理竞态；该用例连续运行 20 次及随后全仓复跑均通过，未修改不在本次范围内的 follower teardown。
+
+## 2026-08-13 GitHub draft Release 按 ID 验证修复
+
+### 目标
+
+修复 `v0.1.271` 首次发布时 draft Release 已创建、但发布脚本紧接着按 tag 查询得到 `release not found` 并回滚的问题。
+
+### 范围与验收
+
+- [x] 通过认证后的 GitHub Release 列表解析目标 draft 的数据库 ID，后续验证、公开和失败清理都使用该 ID。
+- [x] draft 阶段只验证远端资产名称和数量，不再把全部资产及摘要重复下载到本机；主机资产仍由现有 `weclaw update` smoke 下载并校验。
+- [x] 公开后继续确认目标版本是非 draft、非 prerelease 且成为 latest。
+- [x] 保留失败事务自动删除草稿和远端标签的恢复能力。
+
+### 实施与验证
+
+- [x] 先补发布脚本契约失败测试，再修改 `scripts/release.sh`。
+- [x] 运行 `cmd` 定向测试、安装脚本测试、文档校验和差异检查。
+
+### Review
+
+- 首次回归测试按预期因缺少 `RELEASE_ID` 失败；实现后全部 `TestReleaseScript*` 用例通过。
+- 发布事务现在从认证后的 Release 列表解析 draft ID，并用 ID 完成元数据验证、公开与失败清理；远端 tag 仍独立清理。
+- 验证通过：`bash -n scripts/release.sh`、`go test ./cmd -run 'TestReleaseScript' -count=1 -timeout 120s`、安装脚本 22 个用例、文档校验和 `git diff --check`。

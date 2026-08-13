@@ -9,6 +9,7 @@ RELEASE_TAG_CREATED=0
 RELEASE_TAG_PUSHED=0
 RELEASE_DRAFT_ATTEMPTED=0
 RELEASE_COMMITTED=0
+RELEASE_ID=""
 
 TARGETS=(
   "darwin/arm64"
@@ -192,6 +193,24 @@ build_assets() {
 	(cd "$out_dir" && shasum -a 256 weclaw_* > checksums.txt)
 }
 
+query_release_id() {
+	gh api --paginate "repos/TingRuDeng/weclaw/releases?per_page=100" \
+		--jq ".[] | select(.tag_name == \"$TAG\") | .id"
+}
+
+resolve_release_id() {
+	[[ "$DRY_RUN" -eq 0 ]] || return 0
+	local attempt candidate
+	for attempt in 1 2 3 4 5 6 7 8 9 10; do
+		if candidate="$(query_release_id)" && [[ "$candidate" =~ ^[0-9]+$ ]]; then
+			RELEASE_ID="${candidate%%$'\n'*}"
+			return 0
+		fi
+		sleep 1
+	done
+	fail "无法通过认证 Release 列表找到草稿：$TAG"
+}
+
 cleanup_failed_release() {
 	local exit_code=$?
 	trap - EXIT
@@ -200,15 +219,21 @@ cleanup_failed_release() {
 	fi
 
 	printf '发布事务失败，正在清理未提交的 Release 和 tag：%s\n' "$TAG" >&2
-	local cleanup_failed=0
+	local cleanup_failed=0 cleanup_release_id="$RELEASE_ID"
 	if [[ "$RELEASE_DRAFT_ATTEMPTED" -eq 1 ]]; then
-		if ! gh release delete "$TAG" --repo TingRuDeng/weclaw --cleanup-tag --yes; then
-			cleanup_failed=1
-			if [[ "$RELEASE_TAG_PUSHED" -eq 1 ]] && ! git push origin --delete "$TAG"; then
+		if [[ -z "$cleanup_release_id" ]]; then
+			cleanup_release_id="$(query_release_id 2>/dev/null || true)"
+			cleanup_release_id="${cleanup_release_id%%$'\n'*}"
+		fi
+		if [[ "$cleanup_release_id" =~ ^[0-9]+$ ]]; then
+			if ! gh api --method DELETE "repos/TingRuDeng/weclaw/releases/$cleanup_release_id"; then
 				cleanup_failed=1
 			fi
+		elif ! gh release delete "$TAG" --repo TingRuDeng/weclaw --yes; then
+			cleanup_failed=1
 		fi
-	elif [[ "$RELEASE_TAG_PUSHED" -eq 1 ]]; then
+	fi
+	if [[ "$RELEASE_TAG_PUSHED" -eq 1 ]]; then
 		if ! git push origin --delete "$TAG"; then
 			cleanup_failed=1
 		fi
@@ -245,56 +270,37 @@ stage_release() {
 		--verify-tag \
 		--title "$TAG" \
 		--generate-notes
+	resolve_release_id
 }
 
 verify_release_assets() {
 	[[ "$DRY_RUN" -eq 0 ]] || return 0
 	local expected_draft="$1" asset_count assets expected_asset expected_asset_count release_info release_tag is_draft is_prerelease target
 	log "验证 GitHub Release 资产"
-	release_info="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json tagName,isDraft,isPrerelease --jq '[.tagName, (.isDraft | tostring), (.isPrerelease | tostring)] | @tsv')"
+	[[ -n "$RELEASE_ID" ]] || fail "GitHub Release ID 尚未解析：$TAG"
+	release_info="$(gh api "repos/TingRuDeng/weclaw/releases/$RELEASE_ID" --jq '[.tag_name, (.draft | tostring), (.prerelease | tostring)] | @tsv')"
 	IFS=$'\t' read -r release_tag is_draft is_prerelease <<<"$release_info"
 	[[ "$release_tag" == "$TAG" ]] || fail "Release tag 为 $release_tag，期望 $TAG"
 	[[ "$is_draft" == "$expected_draft" ]] || fail "Release draft 状态为 $is_draft，期望 $expected_draft：$TAG"
 	[[ "$is_prerelease" == "false" ]] || fail "Release 仍是 prerelease：$TAG"
-	asset_count="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json assets --jq '.assets | length')"
+	asset_count="$(gh api "repos/TingRuDeng/weclaw/releases/$RELEASE_ID" --jq '.assets | length')"
 	expected_asset_count=$(( ${#TARGETS[@]} + 1 ))
 	[[ "$asset_count" == "$expected_asset_count" ]] || fail "Release 资产数量异常：$asset_count，期望 $expected_asset_count"
-	assets="$(gh release view "$TAG" --repo TingRuDeng/weclaw --json assets --jq '.assets[].name')"
+	assets="$(gh api "repos/TingRuDeng/weclaw/releases/$RELEASE_ID" --jq '.assets[].name')"
 	for target in "${TARGETS[@]}"; do
 		expected_asset="weclaw_${target//\//_}"
 		grep -Fxq "$expected_asset" <<<"$assets" || fail "Release 缺少资产：$expected_asset"
 	done
 	grep -Fxq "checksums.txt" <<<"$assets" || fail "Release 缺少资产：checksums.txt"
-
-	(
-		set -euo pipefail
-		local checksum_count checksum_names tmp_dir
-		tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/weclaw-release-verify.XXXXXX")"
-		cleanup() {
-			rm -rf "$tmp_dir"
-		}
-		trap cleanup EXIT
-
-		gh release download "$TAG" --repo TingRuDeng/weclaw --dir "$tmp_dir"
-		[[ -f "$tmp_dir/checksums.txt" ]] || fail "下载的 Release 缺少 checksums.txt"
-		checksum_names="$(awk 'NF >= 2 { name=$2; sub(/^\\*/, "", name); print name }' "$tmp_dir/checksums.txt")"
-		checksum_count="$(awk 'NF >= 2 { count++ } END { print count+0 }' "$tmp_dir/checksums.txt")"
-		[[ "$checksum_count" == "${#TARGETS[@]}" ]] || fail "checksums.txt 条目数异常：$checksum_count，期望 ${#TARGETS[@]}"
-		for target in "${TARGETS[@]}"; do
-			expected_asset="weclaw_${target//\//_}"
-			[[ -f "$tmp_dir/$expected_asset" ]] || fail "下载的 Release 缺少资产：$expected_asset"
-			grep -Fxq "$expected_asset" <<<"$checksum_names" || fail "checksums.txt 缺少资产：$expected_asset"
-		done
-		if ! (cd "$tmp_dir" && shasum -a 256 -c checksums.txt); then
-			fail "Release 资产 checksum 校验失败"
-		fi
-	)
 }
 
 promote_release() {
 	[[ "$DRY_RUN" -eq 0 ]] || return 0
 	log "发布正式 latest Release：$TAG"
-	gh release edit "$TAG" --repo TingRuDeng/weclaw --draft=false --latest
+	[[ -n "$RELEASE_ID" ]] || fail "GitHub Release ID 尚未解析：$TAG"
+	gh api --method PATCH "repos/TingRuDeng/weclaw/releases/$RELEASE_ID" \
+		-F draft=false \
+		-f make_latest=true >/dev/null
 }
 
 verify_release() {
