@@ -100,6 +100,174 @@ func TestACPAgentLegacyDesktopBridgeStillSelectsDesktopHost(t *testing.T) {
 	}
 }
 
+func TestHandoffCodexRuntimeAdoptsLateDesktopHostBeforeHistoryProbe(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "desktop-client")
+		first := readCodexDesktopTestEnvelope(t, conn)
+		if first.Method != "thread-stream-following-changed" {
+			if first.Method == "thread-follower-load-complete-history" {
+				writeCodexDesktopTestError(t, conn, codexDesktopTestResponse{
+					requestID: first.RequestID,
+					message:   "no-client-found: thread stream owner became unavailable",
+				})
+			}
+			return
+		}
+		raw := desktopStateFixture("thread-1", "active")
+		raw["turns"] = []any{desktopTurnFixture("turn-active", "inProgress", nil)}
+		params, err := json.Marshal(codexDesktopStateParams{
+			ConversationID: "thread-1",
+			Change: codexDesktopStateChange{
+				Type: "snapshot", Revision: 1, ConversationState: raw,
+			},
+		})
+		if err != nil {
+			t.Errorf("marshal Desktop snapshot: %v", err)
+			return
+		}
+		writeCodexDesktopTestEnvelope(t, conn, codexDesktopEnvelope{
+			Type: codexDesktopEnvelopeBroadcast, SourceClientID: "desktop-client",
+			Method: "thread-stream-state-changed", Version: 11, Params: params,
+		})
+		request := readCodexDesktopTestEnvelope(t, conn)
+		if request.Method != "thread-follower-load-complete-history" {
+			t.Errorf("request method=%q, want load-complete-history", request.Method)
+			return
+		}
+		writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+			requestID: request.RequestID,
+			value:     map[string]uint64{"revision": 1},
+		})
+	}))
+	options.onBroadcast = runtime.handleBroadcast
+	runtime.client = newCodexDesktopClient(options)
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+
+	home := t.TempDir()
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		StateFile: filepath.Join(home, "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/list" {
+			t.Fatalf("unexpected managed Host RPC %q", method)
+		}
+		return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+	}
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+	t.Cleanup(func() { _ = runtime.disconnect() })
+
+	binding, err := a.HandoffCodexRuntime(
+		context.Background(), remoteCodexRuntimeRequest("thread-1", "route-1", 1),
+	)
+
+	if err != nil || !stopped || binding.Runtime != CodexRuntimeDesktop ||
+		!binding.State.Active || binding.State.ActiveTurnID != "turn-active" {
+		t.Fatalf("binding=%#v stopped=%v error=%v", binding, stopped, err)
+	}
+}
+
+func TestHandoffCodexRuntimeDefersLateDesktopHostWhileManagedWriterIsActive(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "desktop-client")
+		payload, err := readCodexDesktopFrame(conn)
+		if err != nil {
+			return
+		}
+		envelope, err := decodeCodexDesktopEnvelope(payload)
+		if err != nil {
+			t.Errorf("decode Desktop envelope: %v", err)
+			return
+		}
+		if envelope.Method == "thread-follower-load-complete-history" {
+			writeCodexDesktopTestError(t, conn, codexDesktopTestResponse{
+				requestID: envelope.RequestID,
+				message:   "no-client-found: thread stream owner became unavailable",
+			})
+		}
+	}))
+	runtime.client = newCodexDesktopClient(options)
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+
+	home := t.TempDir()
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		StateFile: filepath.Join(home, "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-1"}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := a.codexOwners.beginTurn(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.finish()
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+	t.Cleanup(func() { _ = runtime.disconnect() })
+
+	_, err = a.HandoffCodexRuntime(context.Background(), request)
+
+	if !errors.Is(err, ErrCodexWriterBusy) || !errors.Is(err, ErrCodexDesktopAdoptionDeferred) ||
+		stopped || a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+		t.Fatalf("error=%v stopped=%v runtime=%q", err, stopped, a.codexRuntimeModeSnapshot())
+	}
+}
+
+func TestHandoffCodexRuntimeDefersLateDesktopHostWhileManagedThreadIsActive(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	runtime := newCodexDesktopRuntime()
+	runtime.presence = func() (bool, bool) { return true, true }
+	runtime.client = newCodexDesktopClient(codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "desktop-client")
+		_, _ = readCodexDesktopFrame(conn)
+	})))
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/list" {
+			t.Fatalf("unexpected managed Host RPC %q", method)
+		}
+		return json.RawMessage(`{"data":[{"id":"thread-active","status":{"type":"active"}}],"nextCursor":null}`), nil
+	}
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+	t.Cleanup(func() { _ = runtime.disconnect() })
+
+	_, err := a.HandoffCodexRuntime(
+		context.Background(), remoteCodexRuntimeRequest("thread-1", "route-1", 1),
+	)
+
+	if !errors.Is(err, ErrCodexWriterBusy) || !errors.Is(err, ErrCodexDesktopAdoptionDeferred) ||
+		stopped || a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+		t.Fatalf("error=%v stopped=%v runtime=%q", err, stopped, a.codexRuntimeModeSnapshot())
+	}
+}
+
 func TestACPAgentStartPrefersRunningOfficialDaemonOverDesktopBridge(t *testing.T) {
 	home := newShortCodexHome(t)
 	socketPath := codexDaemonSocketPath(home)

@@ -30,6 +30,9 @@ func (a *ACPAgent) inspectCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
+	if err := a.reconcileCodexHostTopologyLocked(ctx); err != nil {
+		return unknownCodexRuntimeSnapshot(req, CodexThreadState{}), err
+	}
 	if a.desktopProbe == nil {
 		return a.activateSharedCodexHost(ctx, req)
 	}
@@ -108,6 +111,11 @@ func (a *ACPAgent) HandoffCodexRuntime(ctx context.Context, req CodexRuntimeRequ
 func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
+	}
+	if req.Intent.Owner != CodexControlUnclaimed {
+		if err := a.reconcileCodexHostTopologyLocked(ctx); err != nil {
+			return CodexThreadBinding{}, err
+		}
 	}
 	if a.desktopProbe == nil {
 		return a.activateSharedCodexHostWithPhaseTimeout(

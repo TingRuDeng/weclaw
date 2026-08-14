@@ -36,6 +36,34 @@ func (a *ACPAgent) handleCodexDesktopDisconnect() {
 	}
 }
 
+// ReconcileCodexHostTopology 重新探测晚于 WeClaw 启动的 Codex App，并在
+// 现有单 Host 门禁允许时把权威运行时安全迁移到 Desktop。
+func (a *ACPAgent) ReconcileCodexHostTopology(ctx context.Context) error {
+	if a.protocol != protocolCodexAppServer || a.codexOwners == nil {
+		return ErrCodexRuntimeUnavailable
+	}
+	a.codexAdmissionMu.Lock()
+	defer a.codexAdmissionMu.Unlock()
+	return a.reconcileCodexHostTopologyLocked(ctx)
+}
+
+func (a *ACPAgent) reconcileCodexHostTopologyLocked(ctx context.Context) error {
+	runtime := a.codexRuntimeModeSnapshot()
+	if runtime == CodexRuntimeDesktop ||
+		(runtime == CodexRuntimeWeClaw && a.usesOfficialCodexDaemon()) ||
+		!a.codexDesktopHostSelection || a.desktopRuntime == nil {
+		return nil
+	}
+	if socketExists, processExists := a.desktopRuntime.Presence(); !socketExists && !processExists {
+		return nil
+	}
+	_, err := a.tryStartCodexDesktopRuntime(ctx)
+	if errors.Is(err, ErrCodexWriterBusy) {
+		return fmt.Errorf("%w: %w", ErrCodexDesktopAdoptionDeferred, err)
+	}
+	return err
+}
+
 // tryStartCodexDesktopRuntime 在默认 auto 拓扑中复用当前唯一 Host。已运行的
 // 官方 daemon 保持权威；否则才连接已运行的 Codex App。App 仍存在但 IPC
 // 不可达时必须失败关闭，不能启动第二个 app-server。

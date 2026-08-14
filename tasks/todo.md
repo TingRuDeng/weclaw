@@ -1,5 +1,48 @@
 # 当前任务记录
 
+## 2026-08-14 Codex App 晚启动后的动态单 Host 收敛
+
+### 目标
+
+当 WeClaw 已启动 managed Codex Host、随后用户再打开 Codex App 时，后台自动把运行拓扑安全收敛到 App Host；飞书已有会话绑定无需重新选择即可回放并继续同步本地活动任务的进度、交互和唯一终态。
+
+### 范围与验收标准
+
+- [x] `auto` 拓扑检测到晚启动的 Codex App 后，把 Host 迁移与 `/cx` frontend binding 解耦；已有 durable follower 会主动唤醒迁移，不依赖用户重复执行 `/cx`。
+- [x] 迁移前阻止新的 WeClaw 写入，并确认源 managed Host 没有 writer lease、active 或 unknown thread；目标 App Host 可以已有活动 turn。
+- [x] 源 Host 停止成功后才提交 Desktop 权威并加载带 revision 屏障的完整 history；停止结果不确定时保持失败关闭，不启动第二个 WeClaw Host。
+- [x] App IPC、源 Host 空闲门禁或历史加载暂时失败时保留 binding/follower 并自动重试；恢复后从已有进度建立观察器，已结束 turn 通过 terminal outbox 幂等补投。
+- [x] 显式 `daemon` 拓扑继续保持官方 daemon 权威；App 可见不能触发切换。没有 durable follower 时不为本功能额外迁移 Host。
+- [x] 用户提示区分“等待当前 WeClaw 任务结束”“正在接入 Codex App”和真实不可恢复错误，不要求反复重新绑定。
+
+### 实施步骤
+
+- [x] 先补失败测试，覆盖 managed 空闲时接入已有活动 App turn、源 Host 忙时延后迁移，以及 follower 在当前 runtime 仍显示可用时仍触发 Host 级调和。
+- [x] 增加独立的 Host 拓扑调和入口，复用现有 admission、全局空闲、writer lease 和 lifecycle lock 完成 managed → Desktop 两阶段迁移。
+- [x] 把 durable follower reconciler 接到 Host 级调和入口；迁移成功后继续复用现有 history 回放、活动观察器与 terminal outbox。
+- [x] 收敛用户提示和可观察日志，更新 authority docs 与长期经验，保留既有 daemon、重启和失败关闭边界。
+- [x] 完成 agent/messaging/feishu 定向、Race、全仓、Vet、module tidy、Staticcheck、文档和差异验证，并复核真机剩余风险。
+
+### 验证方式
+
+```bash
+go test ./agent ./messaging -count=1 -timeout 180s
+go test -race ./agent ./messaging ./feishu -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- 新增 Host 级调和入口；飞书 durable follower 即使看到旧 `runtime=weclaw` binding 仍会探测晚启动 App。源 managed Host 的 writer lease 或实际 active/unknown thread 会延后迁移，停止成功后才提交 Desktop 权威并加载历史。
+- 显式 daemon 和 `/cx release` 不触发 App Host 选择；App IPC、源 Host 状态或停止结果不确定时保留 binding/follower 并继续失败关闭。用户提示已区分等待源任务、正在接入 App 与通用运行时失败。
+- 回归测试完成红绿验证，覆盖空闲迁移到已有 active App turn、本地 writer lease、Host 实际 active thread、旧可用 binding 仍触发调和和两类提示。
+- 验证通过：定向测试、`go test -race ./agent ./messaging ./feishu`、`go test ./...`、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。真实 Codex App 与飞书端到端恢复仍需安装新版本后真机验收。
+
 ## 2026-08-14 飞书会话切换运行通道恢复回写
 
 ### 目标

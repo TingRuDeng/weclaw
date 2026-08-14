@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -702,6 +703,34 @@ func TestCodexSwitchCommandRendersBindingSemantics(t *testing.T) {
 		strings.Contains(text, "窗口绑定") || strings.Contains(text, "运行位置") ||
 		strings.Contains(text, "控制方") || strings.Contains(text, "接管") {
 		t.Fatalf("text=%q", text)
+	}
+}
+
+func TestRenderCodexSessionAcquireResultExplainsDeferredDesktopAdoption(t *testing.T) {
+	h := NewHandler(nil, nil)
+	result := codexSessionAcquireResult{
+		route:      codexConversationRoute{workspaceRoot: "/workspace/project", threadID: "thread-1"},
+		runtimeErr: fmt.Errorf("%w: %w", agent.ErrCodexDesktopAdoptionDeferred, agent.ErrCodexWriterBusy),
+	}
+
+	text := h.renderCodexSessionAcquireSuccess(result)
+	if !strings.Contains(text, "正在等待当前 WeClaw 任务结束") ||
+		!strings.Contains(text, "任务结束后会自动接入 Codex App") {
+		t.Fatalf("text=%q, want deferred Desktop adoption guidance", text)
+	}
+}
+
+func TestRenderCodexSessionAcquireResultExplainsDesktopConnectionRecovery(t *testing.T) {
+	h := NewHandler(nil, nil)
+	result := codexSessionAcquireResult{
+		route:      codexConversationRoute{workspaceRoot: "/workspace/project", threadID: "thread-1"},
+		runtimeErr: agent.ErrCodexDesktopOwnershipUnknown,
+	}
+
+	text := h.renderCodexSessionAcquireSuccess(result)
+	if !strings.Contains(text, "正在接入 Codex App") ||
+		!strings.Contains(text, "恢复后本卡会自动更新") {
+		t.Fatalf("text=%q, want Desktop connection recovery guidance", text)
 	}
 }
 

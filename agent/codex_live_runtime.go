@@ -16,6 +16,7 @@ var (
 	ErrCodexRuntimeConflict              = errors.New("Codex Desktop 与 WeClaw 发生写入冲突")
 	ErrCodexRuntimeUnavailable           = errors.New("Codex 实际运行时不可用")
 	ErrCodexWriterBusy                   = errors.New("Codex thread 已有写入任务")
+	ErrCodexDesktopAdoptionDeferred      = errors.New("Codex App Host 接入等待共享 Host 空闲")
 )
 
 type CodexControlOwner string

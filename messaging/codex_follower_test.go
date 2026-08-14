@@ -217,6 +217,44 @@ type codexFollowerRuntimeBootstrapAgent struct {
 	ready bool
 }
 
+type codexFollowerHostTopologyAgent struct {
+	*codexFollowerWatchAgent
+	mu         sync.Mutex
+	reconciled bool
+}
+
+func (a *codexFollowerHostTopologyAgent) ReconcileCodexHostTopology(context.Context) error {
+	a.mu.Lock()
+	a.reconciled = true
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *codexFollowerHostTopologyAgent) topologyReconciled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reconciled
+}
+
+func TestEnsureCodexFollowerRuntimeReconcilesHostBeforeAcceptingExistingBinding(t *testing.T) {
+	base := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: "thread-1"})
+	ag := &codexFollowerHostTopologyAgent{
+		codexFollowerWatchAgent: &codexFollowerWatchAgent{
+			fakeCodexLiveAgent: base,
+			watchStarted:       make(chan string, 1),
+		},
+	}
+	request := agent.CodexRuntimeRequest{
+		Ref: agent.CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"},
+	}
+
+	err := ensureCodexFollowerRuntime(context.Background(), ag, request)
+
+	if err != nil || !ag.topologyReconciled() {
+		t.Fatalf("error=%v reconciled=%v", err, ag.topologyReconciled())
+	}
+}
+
 func (a *codexFollowerRuntimeBootstrapAgent) CurrentCodexRuntime(req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	a.mu.Lock()
 	ready := a.ready

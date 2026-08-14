@@ -1070,11 +1070,24 @@ func TestEnsureAllCodexThreadsIdleTraversesPagination(t *testing.T) {
 		}
 		return nil, errors.New("unexpected page")
 	}
-	if err := fixture.agent.ensureAllCodexThreadsIdle(context.Background()); codexauth.ErrorCode(err) != codexauth.CodeBusy {
-		t.Fatalf("error=%v", err)
+	if err := fixture.agent.ensureAllCodexThreadsIdle(context.Background()); codexauth.ErrorCode(err) != codexauth.CodeBusy || !errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("error=%v, want active writer busy", err)
 	}
 	if fixture.threadListCalls != 2 {
 		t.Fatalf("thread/list calls=%d", fixture.threadListCalls)
+	}
+}
+
+func TestEnsureAllCodexThreadsIdleKeepsUnknownStateDistinctFromWriterBusy(t *testing.T) {
+	fixture := newAccountSwitchFixture(t)
+	fixture.threadListHook = func(int, interface{}) (json.RawMessage, error) {
+		return json.RawMessage(`{"data":[{"id":"thread-1","status":{"type":"mystery"}}],"nextCursor":null}`), nil
+	}
+
+	err := fixture.agent.ensureAllCodexThreadsIdle(context.Background())
+
+	if codexauth.ErrorCode(err) != codexauth.CodeBusy || errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("error=%v, unknown state must stay fail-closed without writer-busy classification", err)
 	}
 }
 

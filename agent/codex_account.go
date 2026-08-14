@@ -690,7 +690,7 @@ func (a *ACPAgent) ensureAllCodexThreadsIdle(ctx context.Context) error {
 				switch thread.Status.Type {
 				case "idle", "notLoaded":
 				case "active":
-					return codexauth.NewError(codexauth.CodeBusy, "Codex 仍有运行中的 thread，不能切换账号", nil)
+					return codexauth.NewError(codexauth.CodeBusy, "Codex 仍有运行中的 thread，不能切换账号", ErrCodexWriterBusy)
 				default:
 					return codexauth.NewError(codexauth.CodeBusy, "Codex thread 运行态未知，不能切换账号", nil)
 				}

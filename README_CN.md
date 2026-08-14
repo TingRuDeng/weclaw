@@ -72,7 +72,7 @@ weclaw status
 /cx release            # 只解除当前飞书窗口绑定，本地任务继续运行
 ```
 
-macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经在固定 control socket 上运行且身份验证通过，WeClaw 会保持它作为唯一 Host，即使 Codex App 也已运行；Codex App、受控 CLI、飞书和微信因此可以复用同一组 thread。没有已运行 daemon 时，WeClaw 才在 App 已运行时通过受保护的 Desktop IPC 复用 App Host；App 不在时连接或启动官方 daemon（不可用时使用 WeClaw 自管兼容 Host）。如果 WeClaw 自管 Host 已在运行，WeClaw 只会在全局 thread 空闲且没有 writer lease 时切换到后来出现的 App；daemon 身份、全局空闲或 App IPC 无法确认时直接失败，不会并行写入。macOS 显式 `daemon` 模式也会装配 Desktop IPC，但只用于前端状态探测和必要的 Host 协调；它无权把 App 选为 Host，daemon 启动或验证失败时仍会失败关闭。
+macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经在固定 control socket 上运行且身份验证通过，WeClaw 会保持它作为唯一 Host，即使 Codex App 也已运行；Codex App、受控 CLI、飞书和微信因此可以复用同一组 thread。没有已运行 daemon 时，WeClaw 才在 App 已运行时通过受保护的 Desktop IPC 复用 App Host；App 不在时连接或启动官方 daemon（不可用时使用 WeClaw 自管兼容 Host）。如果 WeClaw 自管 Host 已在运行，已有飞书同步端点会在后台发现后来启动的 App，并只在源 Host 的全部 thread 空闲且没有 writer lease 时停止源 Host、提交 Desktop 权威，再登记 follower 和加载完整历史；App 中的目标 thread 可以已经在运行。源 Host 尚忙、daemon 身份、App IPC 或停止结果无法确认时保留绑定并自动重试，不会并行写入，也不要求重新选择会话。macOS 显式 `daemon` 模式也会装配 Desktop IPC，但只用于前端状态探测和必要的 Host 协调；它无权把 App 选为 Host，daemon 启动或验证失败时仍会失败关闭。
 
 正式支持的协作形态是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”：两端绑定同一个 thread，看到同一 Host 提供的任务状态，并都可继续输入。飞书在 thread 空闲时完成绑定后，App 或 CLI 稍后启动任务也会自动开始同步；选择正在运行的会话时会先回填已有的可见自然语言进度，再持续同步后续进度。普通消息使用当前 `turnId` 直接加入 active turn，只有 thread 空闲时才开始下一 turn。App、CLI 和飞书三端意外同时打开同一 thread 时仍由上游按请求接受顺序处理，但 WeClaw 不宣称客户端级排他或精确归属。
 

@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -150,10 +151,7 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 	}
 	if result.runtimeErr != nil {
 		log.Printf("[codex-session-bind] 绑定已提交但共享 host 暂不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
-		lines = append(lines,
-			"运行通道: 暂不可用（窗口绑定已保留）",
-			"普通消息暂不会写入；恢复后本卡会自动更新，也可发送 /cx status 查看状态。",
-		)
+		lines = append(lines, renderCodexRuntimeRecoveryNotice(result.runtimeErr)...)
 	}
 	if result.externalActive {
 		if result.externalProgressCard {
@@ -177,6 +175,26 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		lines = append(lines, "警告: 保存当前窗口 Agent 失败，请重试。")
 	}
 	return wechatCommandText(lines...)
+}
+
+func renderCodexRuntimeRecoveryNotice(err error) []string {
+	switch {
+	case errors.Is(err, agent.ErrCodexDesktopAdoptionDeferred):
+		return []string{
+			"运行通道: 正在等待当前 WeClaw 任务结束（窗口绑定已保留）",
+			"任务结束后会自动接入 Codex App；普通消息暂不会写入，无需重新绑定。",
+		}
+	case errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown):
+		return []string{
+			"运行通道: 正在接入 Codex App（窗口绑定已保留）",
+			"普通消息暂不会写入；恢复后本卡会自动更新，也可发送 /cx status 查看状态。",
+		}
+	default:
+		return []string{
+			"运行通道: 暂不可用（窗口绑定已保留）",
+			"普通消息暂不会写入；恢复后本卡会自动更新，也可发送 /cx status 查看状态。",
+		}
+	}
 }
 
 func codexExternalTaskContext(req codexSwitchRequest) context.Context {

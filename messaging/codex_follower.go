@@ -376,7 +376,16 @@ func (h *Handler) codexFollowerAuthorized(registry *platform.Registry, snapshot 
 	)
 }
 
+type codexHostTopologyReconciler interface {
+	ReconcileCodexHostTopology(context.Context) error
+}
+
 func ensureCodexFollowerRuntime(ctx context.Context, liveAgent agent.CodexLiveRuntimeAgent, request agent.CodexRuntimeRequest) error {
+	if reconciler, ok := liveAgent.(codexHostTopologyReconciler); ok {
+		if err := reconciler.ReconcileCodexHostTopology(ctx); err != nil {
+			return err
+		}
+	}
 	binding, err := liveAgent.CurrentCodexRuntime(request)
 	if err == nil && codexRuntimeReadyForRemoteTurn(binding.Runtime) {
 		return nil

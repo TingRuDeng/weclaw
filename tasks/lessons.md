@@ -2,6 +2,14 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
+## 2026-08-14 Codex App 晚启动必须先收敛 Host 再加载 follower 历史
+
+- 触发条件：WeClaw 启动时 App 不在，因此先运行兼容 managed Host；用户随后打开 App 并在其中继续目标 thread，而飞书 durable binding 仍把旧 `runtime=weclaw` 快照当成可用。
+- 根因：Host 选择只在 Agent 启动时执行；后台 follower 看到旧绑定可用便跳过 handoff，直接向尚未成为权威的 Desktop 请求完整历史，主动 following 声明也因非权威而被抑制，最终持续返回 `no-client-found`。
+- 正确顺序：durable follower 和显式 runtime handoff/inspect 先进入同一个 Host 拓扑调和入口；确认源 managed Host 无 writer lease 且所有 thread 空闲后停止它，停止成功才提交 Desktop 权威，随后声明 following 并加载带 revision 屏障的完整历史。目标 App thread 可以 active，因为全局空闲门禁检查的是即将停止的源 Host。
+- 失败边界：源 Host 忙时保留绑定并以可识别的 deferred 状态自动重试；App IPC、源 Host 状态或停止结果不确定时继续失败关闭。显式 daemon 已是权威时不得切到 App，也不能为恢复 follower 启动第二个 Host。
+- 来源：2026-08-14 真机中 WeClaw 13:05 启动 managed Host、App 13:09 才启动；14:07 后重复绑定仍返回 `no-client-found`，而本地 App turn 正常完成。补充晚启动 App、源 writer busy 和旧 binding 触发调和的回归测试后修复。
+
 ## 2026-08-12 Codex Desktop follower 登记必须是当前状态声明
 
 - 触发条件：Codex App 已经打开并拥有目标 thread，WeClaw 稍后才连入 Desktop IPC，因此错过 App 在 owner transition 时只发送一次的 `thread-stream-following-status-requested`。
