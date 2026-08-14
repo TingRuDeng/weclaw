@@ -1,5 +1,49 @@
 # 当前任务记录
 
+## 2026-08-14 飞书审批与 Desktop 任务终态双端收敛
+
+### 目标
+
+修复飞书审批已点击但 Codex App 仍待授权，以及目标 Codex App turn 已结束但飞书进度卡未自动收纳的问题；审批与任务终态都以 Desktop 权威状态为准，不再把 `Request not found` 直接当作成功。
+
+### 范围与验收标准
+
+- [x] Desktop responder 返回 `Request not found` 时复核原 request 与 turn；仍待审批则保留并重新展示审批，不记录假成功。
+- [x] request 已由 App 处理或原 turn 已终止时幂等收敛，不重复响应，也不让旧审批阻塞后续消息。
+- [x] 目标 turn 已终止时，即使同一 thread 已启动新的 App turn，也能完成原 watcher、释放 writer lease，并触发飞书终态卡自动收纳。
+- [x] 终态卡默认只显示最近五条进度，完整进度按钮仍可展开；最终结果继续通过独立消息投递。
+- [x] 无结构化进度的紧凑终态卡仍生成 CardKit 2.0 必需的空 `body.elements`，不再因 `200610 body is nil` 进入终态 outbox 死信。
+- [x] 扫描同一时间窗口的 WeClaw、审计和 Codex Desktop 日志，区分本轮根因、可忽略竞争日志与新增风险。
+
+### 实施步骤
+
+- [x] 先补失败测试，覆盖审批仍 pending、已外部处理、turn 终止，以及目标 turn 被后续 turn 覆盖的场景。
+- [x] 实现审批权威复核、pending 重放与目标 turn 精确终态读取。
+- [x] 根据真机 outbox 错误补紧凑终态卡 `body` 契约测试，并修复 CardKit 2.0 空正文结构。
+- [x] 完成 agent、messaging、feishu 定向测试、Race、全仓和静态门禁。
+- [x] 复核最终差异与运行日志，记录真实验证结果和剩余真机风险。
+
+### 验证方式
+
+```bash
+go test ./agent ./messaging ./feishu -count=1 -timeout 180s
+go test -race ./agent ./messaging ./feishu -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- Desktop 审批响应遇到 `Request not found` 后会刷新权威 history：request 仍 pending 或状态不可用时继续观察并保留可重放交互；已由 App 处理或原 turn 已结束时才幂等成功。
+- Desktop watcher 改为按目标 turn 读取终态和最终正文；同一 thread 后续启动的新 turn 不再覆盖旧任务的完成、失败或中断结果，因此旧 writer lease 能正常结束并进入终态投递。
+- 真机日志还确认了卡片未收纳的直接原因：紧凑终态 JSON 省略 `body`，飞书返回 `200610 body is nil` 并在 12 次重试后进入死信。CardKit 2.0 终态现在始终携带空 `body.elements`，仍不显示冗余完成文案。
+- 验证通过：受影响模块测试、`go test -race ./agent ./messaging ./feishu`、`go test ./...`、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。
+- 日志中的 Desktop snapshot/会话切换五秒超时、WebSocket reset、Codex App `unknown conversation` 与 `ResizeObserver` 告警未证明造成本轮审批或终态失败；当前均有失败关闭或自动恢复路径，保留为真机观察项。旧的 CardKit 死信不会被本次源码修改自动重放，需安装新版本后用新任务验收。
+
 ## 2026-08-14 Codex App 晚启动后的动态单 Host 收敛
 
 ### 目标

@@ -66,7 +66,7 @@ func buildCodexDesktopThreadState(spec codexDesktopThreadStateSpec) CodexThreadS
 	}
 	for index, turnID := range spec.projection.order {
 		turn := spec.projection.turns[turnID]
-		state.LastTurnID, state.LastTurnStatus = turnID, turn.status
+		state.LastTurnID, state.LastTurnStatus, state.LastTurnError = turnID, turn.status, turn.errorText
 		if isCodexDesktopActiveStatus(turn.status) {
 			state.Active, state.ActiveTurnID = true, turnID
 		}

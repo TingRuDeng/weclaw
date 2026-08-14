@@ -244,6 +244,36 @@ func (s *codexDesktopStateStore) activeWatchSnapshot(threadID string) (CodexThre
 	return state, batch, true
 }
 
+// targetTurnState 从完整 Desktop 投影中读取指定 turn，而不是用后来启动的
+// active turn 覆盖原 watcher 的终态判断。
+func (s *codexDesktopStateStore) targetTurnState(threadID string, turnID string) (CodexThreadState, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot, ok := s.threads[strings.TrimSpace(threadID)]
+	if !ok {
+		return CodexThreadState{}, false
+	}
+	turnID = strings.TrimSpace(turnID)
+	turn, ok := snapshot.projection.turns[turnID]
+	if !ok {
+		return CodexThreadState{}, false
+	}
+	state := CodexThreadState{
+		ThreadID:       snapshot.ThreadID,
+		LastTurnID:     turnID,
+		LastTurnStatus: turn.status,
+		LastTurnError:  turn.errorText,
+		Model:          snapshot.State.Model,
+		Effort:         snapshot.State.Effort,
+	}
+	if isCodexDesktopActiveStatus(turn.status) {
+		state.Active = true
+		state.ActiveTurnID = turnID
+	}
+	projectCodexDesktopItemText(&state, turn)
+	return state, true
+}
+
 // awaitingFinalAnswer 表示 Desktop 已把 turn 标记为 completed，但投影器仍在
 // 等待后续 history 中的 final_answer。watcher 不得在主动刷新屏障前结算空结果。
 func (s *codexDesktopStateStore) awaitingFinalAnswer(threadID string, turnID string) bool {

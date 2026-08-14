@@ -118,12 +118,12 @@ func buildCardV2(opts cardOptions) (string, error) {
 			},
 			"template": statusTemplate(status),
 		},
-	}
-	if len(elements) > 0 {
-		card["body"] = map[string]any{
+		// CardKit JSON 2.0 要求 body 始终存在；紧凑终态可以没有组件，
+		// 但不能省略 body，否则全量更新会返回 200610 body is nil。
+		"body": map[string]any{
 			"direction": "vertical",
 			"elements":  elements,
-		}
+		},
 	}
 	data, err := json.Marshal(card)
 	if err != nil {

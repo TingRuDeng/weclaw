@@ -467,8 +467,9 @@ func TestFeishuTaskStreamWithoutAgentReplyKeepsOnlyGreenTerminalHeader(t *testin
 		t.Fatalf("Complete error: %v", err)
 	}
 	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
-	if body, ok := doneCard["body"]; ok {
-		t.Fatalf("done body=%#v, want header-only compact terminal card", body)
+	body, ok := doneCard["body"].(map[string]any)
+	if !ok || len(body["elements"].([]any)) != 0 {
+		t.Fatalf("done body=%#v, want compact terminal card with required empty body", body)
 	}
 	if doneCard["header"].(map[string]any)["template"] != "green" {
 		t.Fatalf("done header=%#v, want green terminal header", doneCard["header"])

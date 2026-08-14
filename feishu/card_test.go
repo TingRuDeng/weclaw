@@ -213,8 +213,8 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 		}
 		body, bodyExists := card["body"].(map[string]any)
 		if tt.label == "" {
-			if bodyExists {
-				t.Fatalf("status=%s body=%#v, want header-only status", tt.status, body)
+			if !bodyExists || len(body["elements"].([]any)) != 0 {
+				t.Fatalf("status=%s body=%#v, want required empty CardKit body", tt.status, body)
 			}
 			continue
 		}
@@ -225,14 +225,15 @@ func TestBuildCardV2StatusTemplates(t *testing.T) {
 	}
 }
 
-func TestBuildCardV2DoneWithoutContentUsesGreenHeaderWithoutRedundantBody(t *testing.T) {
+func TestBuildCardV2DoneWithoutContentKeepsRequiredEmptyBody(t *testing.T) {
 	raw, err := buildCardV2(cardOptions{Status: cardStatusDone})
 	if err != nil {
 		t.Fatalf("buildCardV2 error: %v", err)
 	}
 	card := decodeCardJSON(t, raw)
-	if body, ok := card["body"]; ok {
-		t.Fatalf("done card body=%#v, want green header without redundant completion body", body)
+	body, ok := card["body"].(map[string]any)
+	if !ok || len(body["elements"].([]any)) != 0 {
+		t.Fatalf("done card body=%#v, want required empty body without redundant completion text", body)
 	}
 	header := card["header"].(map[string]any)
 	if header["template"] != "green" {

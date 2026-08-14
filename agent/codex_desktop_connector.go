@@ -154,6 +154,16 @@ func (r *codexDesktopRuntime) activeWatchSnapshot(threadID string) (CodexThreadS
 	return threadState, batch, nil
 }
 
+func (r *codexDesktopRuntime) targetTurnState(threadID string, turnID string) (CodexThreadState, bool) {
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state == nil {
+		return CodexThreadState{}, false
+	}
+	return state.targetTurnState(threadID, turnID)
+}
+
 func (r *codexDesktopRuntime) awaitingFinalAnswer(threadID string, turnID string) bool {
 	r.mu.Lock()
 	state := r.state

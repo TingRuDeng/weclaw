@@ -142,6 +142,7 @@ type CodexThreadState struct {
 	ActiveTurnID         string
 	LastTurnID           string
 	LastTurnStatus       string
+	LastTurnError        string
 	WaitingOnApproval    bool
 	WaitingOnUserInput   bool
 	Preview              string

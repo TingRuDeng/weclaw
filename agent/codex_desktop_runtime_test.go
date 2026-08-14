@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -841,21 +842,28 @@ func TestACPAgentDesktopWatchSettlesCompletedCandidateAfterRefreshBarrier(t *tes
 	}
 }
 
-func TestACPAgentDesktopWatchRejectsRolloverAfterObserverAttach(t *testing.T) {
+func TestACPAgentDesktopWatchSettlesTargetTurnBeforeNewerTurn(t *testing.T) {
 	a, _ := desktopRuntimeTestAgent(t)
 	applyDesktopRuntimeTestState(t, a, 2, "inProgress", "")
 	reconcile := make(chan time.Time, 1)
-	errCh := make(chan error, 1)
+	type watchResult struct {
+		text string
+		err  error
+	}
+	resultCh := make(chan watchResult, 1)
 	go func() {
-		_, err := a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
+		text, err := a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
 			conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1", reconcile: reconcile,
 		})
-		errCh <- err
+		resultCh <- watchResult{text: text, err: err}
 	}()
 	waitForDesktopTurnWatcher(t, a, "thread-1")
 	raw := desktopStateFixture("thread-1", "active")
 	raw["turns"] = []any{
-		desktopTurnFixture("turn-1", "completed", nil),
+		desktopTurnFixture("turn-1", "completed", []any{map[string]any{
+			"id": "final-1", "type": "agentMessage", "status": "completed",
+			"phase": "final_answer", "text": "turn-1 的最终结果",
+		}}),
 		desktopTurnFixture("turn-2", "inProgress", []any{map[string]any{
 			"id": "commentary-2", "type": "agentMessage", "status": "completed",
 			"phase": "commentary", "text": "turn-2 的内容不得作为 turn-1 结果",
@@ -870,12 +878,62 @@ func TestACPAgentDesktopWatchRejectsRolloverAfterObserverAttach(t *testing.T) {
 	a.codexOwners.observeDesktopSnapshot("thread-1", 3, update.Snapshot.State)
 	reconcile <- time.Now()
 	select {
-	case err := <-errCh:
-		if !errors.Is(err, ErrCodexControlChanged) {
-			t.Fatalf("rollover error=%v, want ErrCodexControlChanged", err)
+	case result := <-resultCh:
+		if result.err != nil || result.text != "turn-1 的最终结果" {
+			t.Fatalf("target turn result=%#v", result)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("watcher did not reject the newer active turn")
+		t.Fatal("watcher did not settle the completed target turn")
+	}
+}
+
+func TestACPAgentDesktopWatchSettlesCompletedTargetWhenNewerTurnAlreadyActive(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{
+		desktopTurnFixture("turn-1", "completed", []any{map[string]any{
+			"id": "final-1", "type": "agentMessage", "status": "completed",
+			"phase": "final_answer", "text": "较早任务的结果",
+		}}),
+		desktopTurnFixture("turn-2", "inProgress", nil),
+	}
+	update, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.codexOwners.observeDesktopSnapshot("thread-1", 2, update.Snapshot.State)
+
+	text, err := a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
+		conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1",
+		reconcile: make(chan time.Time),
+	})
+	if err != nil || text != "较早任务的结果" {
+		t.Fatalf("watch result = %q, %v", text, err)
+	}
+}
+
+func TestACPAgentDesktopWatchPreservesFailedTargetBeforeNewerTurn(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	raw := desktopStateFixture("thread-1", "active")
+	failed := desktopTurnFixture("turn-1", "failed", nil)
+	failed["error"] = map[string]any{"message": "目标任务失败"}
+	raw["turns"] = []any{failed, desktopTurnFixture("turn-2", "inProgress", nil)}
+	update, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: raw,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.codexOwners.observeDesktopSnapshot("thread-1", 2, update.Snapshot.State)
+
+	_, err = a.watchCodexThreadWithReconcile(context.Background(), codexThreadWatchOptions{
+		conversationID: "conversation-1", threadID: "thread-1", targetTurnID: "turn-1",
+		reconcile: make(chan time.Time),
+	})
+	if !errors.Is(err, ErrCodexTurnTerminal) || !strings.Contains(err.Error(), "目标任务失败") {
+		t.Fatalf("watch error = %v, want failed target error", err)
 	}
 }
 
