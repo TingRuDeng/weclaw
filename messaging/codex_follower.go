@@ -15,12 +15,14 @@ import (
 )
 
 const defaultCodexFollowerReconcileInterval = 2 * time.Second
+const codexFollowerRuntimeResultTimeout = 5 * time.Second
 
 type codexFollowerService struct {
-	registry *platform.Registry
-	interval time.Duration
-	wake     chan struct{}
-	failures map[string]codexFollowerFailureState
+	registry       *platform.Registry
+	interval       time.Duration
+	wake           chan struct{}
+	failures       map[string]codexFollowerFailureState
+	resultFailures map[string]codexFollowerFailureState
 }
 
 type codexFollowerFailureState struct {
@@ -41,10 +43,11 @@ func (h *Handler) startCodexFollowerReconciler(ctx context.Context, registry *pl
 		interval = defaultCodexFollowerReconcileInterval
 	}
 	service := &codexFollowerService{
-		registry: registry,
-		interval: interval,
-		wake:     make(chan struct{}, 1),
-		failures: make(map[string]codexFollowerFailureState),
+		registry:       registry,
+		interval:       interval,
+		wake:           make(chan struct{}, 1),
+		failures:       make(map[string]codexFollowerFailureState),
+		resultFailures: make(map[string]codexFollowerFailureState),
 	}
 	h.codexFollowerMu.Lock()
 	if h.codexFollower != nil {
@@ -91,8 +94,38 @@ func (h *Handler) reconcileCodexFollowersWithService(ctx context.Context, servic
 	}
 	for _, snapshot := range followers {
 		err := h.reconcileCodexFollower(ctx, registry, snapshot)
+		var resultErr error
+		if err == nil {
+			resultErr = h.reconcileCodexFollowerRuntimeResult(ctx, registry, snapshot)
+		}
+		service.recordRuntimeResult(snapshot, resultErr, ctx.Err())
 		service.recordReconcileResult(snapshot, err, ctx.Err())
 	}
+}
+
+func (s *codexFollowerService) recordRuntimeResult(snapshot codexFollowerSnapshot, err error, contextErr error) {
+	if s == nil || contextErr != nil {
+		return
+	}
+	key := snapshot.BindingKey + "\x00" + snapshot.Target.ThreadID
+	if err == nil {
+		delete(s.resultFailures, key)
+		return
+	}
+	if s.resultFailures == nil {
+		s.resultFailures = make(map[string]codexFollowerFailureState)
+	}
+	state := s.resultFailures[key]
+	if state.summary != err.Error() {
+		state = codexFollowerFailureState{summary: err.Error()}
+	}
+	state.count++
+	s.resultFailures[key] = state
+	if state.count&(state.count-1) != 0 {
+		return
+	}
+	log.Printf("[codex-follower] 运行通道已恢复但切换结果暂未更新 route=%q thread=%q revision=%d attempts=%d: %v",
+		snapshot.BindingKey, snapshot.Target.ThreadID, snapshot.Revision, state.count, err)
 }
 
 func (s *codexFollowerService) recordReconcileResult(snapshot codexFollowerSnapshot, err error, contextErr error) {
@@ -120,6 +153,74 @@ func (s *codexFollowerService) recordReconcileResult(snapshot codexFollowerSnaps
 	}
 	log.Printf("[codex-follower] 同步观察暂未恢复 route=%q thread=%q revision=%d attempts=%d: %v",
 		snapshot.BindingKey, snapshot.Target.ThreadID, snapshot.Revision, state.count, err)
+}
+
+func (h *Handler) reconcileCodexFollowerRuntimeResult(
+	ctx context.Context,
+	registry *platform.Registry,
+	expected codexFollowerSnapshot,
+) error {
+	if expected.Target.RuntimeRecoveryResult == nil {
+		return nil
+	}
+	ready, err := codexFollowerRuntimeResultReady(*expected.Target.RuntimeRecoveryResult, time.Now())
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return nil
+	}
+	unlock, err := h.lockCodexSessionBinding(ctx, expected.BindingKey, "follow-result")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, ok := h.ensureCodexSessions().followerSnapshot(expected.BindingKey)
+	if !ok || current.Revision != expected.Revision ||
+		!sameCodexFrontendFollower(&current.Target, &expected.Target) {
+		return nil
+	}
+	h.codexFollowerDeliveryMu.RLock()
+	defer h.codexFollowerDeliveryMu.RUnlock()
+	if !h.ensureCodexSessions().followerMatches(current) || !h.codexFollowerAuthorized(registry, current) {
+		return nil
+	}
+	reply, ok := registry.ReplierForRoute(current.Target.DeliveryRoute)
+	if !ok || reply == nil {
+		return fmt.Errorf("飞书投递路由暂不可用")
+	}
+	durable, ok := optionalDurableCommandResultReplier(reply)
+	if !ok {
+		return platform.ErrUnsupported
+	}
+	deliveryCtx, cancel := context.WithTimeout(ctx, codexFollowerRuntimeResultTimeout)
+	defer cancel()
+	content := h.renderCodexFollowerRuntimeRecovered(current)
+	if err := durable.DeliverCommandResult(deliveryCtx, *current.Target.RuntimeRecoveryResult, content); err != nil {
+		return err
+	}
+	return h.ensureCodexSessions().clearFollowerRuntimeRecovery(current)
+}
+
+func codexFollowerRuntimeResultReady(reference platform.DurableCommandResultReference, now time.Time) (bool, error) {
+	readyAfter := strings.TrimSpace(reference.ReadyAfter)
+	if readyAfter == "" {
+		return true, nil
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, readyAfter)
+	if err != nil {
+		return false, fmt.Errorf("Codex 运行通道恢复卡引用时间无效: %w", err)
+	}
+	return !now.Before(deadline), nil
+}
+
+func (h *Handler) renderCodexFollowerRuntimeRecovered(snapshot codexFollowerSnapshot) string {
+	return wechatCommandText(
+		"已切换并绑定。",
+		"工作空间: "+shortCodexWorkspaceName(snapshot.Target.WorkspaceRoot),
+		renderCompactSessionModelStatus(h.codexSessionModelStatus(snapshot.Target.ThreadID)),
+		"运行通道: 已恢复",
+	)
 }
 
 func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform.Registry, snapshot codexFollowerSnapshot) error {

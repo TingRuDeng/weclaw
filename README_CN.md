@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/TingRuDeng/weclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/TingRuDeng/weclaw/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/TingRuDeng/weclaw)](https://github.com/TingRuDeng/weclaw/releases/latest)
-[![Go](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
@@ -76,7 +76,7 @@ macOS 默认 `codex_host_mode: auto` 下，如果官方 standalone daemon 已经
 
 正式支持的协作形态是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”：两端绑定同一个 thread，看到同一 Host 提供的任务状态，并都可继续输入。飞书在 thread 空闲时完成绑定后，App 或 CLI 稍后启动任务也会自动开始同步；选择正在运行的会话时会先回填已有的可见自然语言进度，再持续同步后续进度。普通消息使用当前 `turnId` 直接加入 active turn，只有 thread 空闲时才开始下一 turn。App、CLI 和飞书三端意外同时打开同一 thread 时仍由上游按请求接受顺序处理，但 WeClaw 不宣称客户端级排他或精确归属。
 
-会话绑定与运行通道是两个独立结果：选择会话时，WeClaw 先持久化当前消息窗口的 workspace/thread 和同步端点，再尝试从当前 Host 装载状态并建立同步。如果结果显示“已选择，等待运行通道”，表示目标会话已经记住，但当前仍不可写；普通消息会被阻止，不能把它当成切换完成。可先发送 `/cx status` 复核；后台会持续重试，App 打开准确 thread 后无需重新执行 `/cx switch` 即可自动恢复。
+会话绑定与运行通道是两个独立结果：选择会话时，WeClaw 先持久化当前消息窗口的 workspace/thread 和同步端点，再尝试从当前 Host 装载状态并建立同步。如果结果显示“已选择，等待运行通道”，表示目标会话已经记住，但当前仍不可写；普通消息会被阻止，不能把它当成切换完成。可先发送 `/cx status` 复核；后台会持续重试，App 打开准确 thread 后无需重新执行 `/cx switch` 即可自动恢复。通过飞书会话卡选择时，恢复成功会把原切换结果卡更新为“已切换并绑定”，不会另发一条重复通知；卡片更新失败会独立重试，不影响已经恢复的会话同步。
 
 飞书绑定会持久化。WeClaw 重启或短暂断线后，会在平台投递恢复时重新挂接仍在运行的任务；恢复失败会明确记录，不会停止本地任务或伪装成已同步。多个飞书窗口可同时绑定同一个 thread，并分别接收进度和唯一最终结果；审批或问答只交给一个执行端，避免重复提交。durable follower 会记录当前机器人 `allowed_users` 实际命中的授权身份；撤权会清除该 route 的 follower 并阻止其尚未投递的受保护结果，重新授权后需要重新选择会话。`/cx release` 只解除当前消息窗口的绑定，停止向该窗口回推进度、审批、问答和最终结果，并把现有进度卡冻结为非终态；它不会影响其他窗口，也不会中断 active turn、重启 Host 或保留只读观察。本地 Codex 继续运行；之后重新选择同一会话时，从最新权威快照恢复同步。
 
@@ -415,9 +415,9 @@ go build -o weclaw .
 ./weclaw --help
 ```
 
-仓库当前使用 Go 1.26.5。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
+仓库当前使用 Go 1.26.6。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
 
-正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，发布 `weclaw_darwin_arm64`、`weclaw_linux_arm64`、`weclaw_linux_amd64` 和原始 `checksums.txt`；CI 仅额外交叉构建 `darwin/amd64` 做兼容性检查。正式 Release 验证通过后，把 `weclaw_darwin_arm64` 与 `weclaw_linux_amd64` 的可还原 `.gz` 表示和同一份原始摘要镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)；`linux/arm64` 仍只由 GitHub 提供。安装器和更新器始终按权威摘要校验所选二进制。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 续传缺失附件并重新验证。
+正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，发布 `weclaw_darwin_arm64`、`weclaw_linux_arm64`、`weclaw_linux_amd64` 和原始 `checksums.txt`；CI 仅额外交叉构建 `darwin/amd64` 做兼容性检查。正式 Release 验证通过后，把 `weclaw_darwin_arm64` 与 `weclaw_linux_amd64` 的可还原 `.gz` 表示和同一份原始摘要镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)；`linux/arm64` 仍只由 GitHub 提供。镜像上传后只核对最终附件名称和数量，不再重复回下载；安装器和更新器仍按权威摘要校验所选二进制。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 幂等续传缺失附件并重新核对清单。
 
 ## 上游与许可
 

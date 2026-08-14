@@ -75,3 +75,41 @@ func TestDeferredSwitchResultUpdatesOriginalCardAsGreen(t *testing.T) {
 		t.Fatalf("header=%#v, want successful deferred switch in green", header)
 	}
 }
+
+func TestDeferredSwitchResultReferenceRebuildsOriginalCardUpdate(t *testing.T) {
+	sender := &fakeMessageSender{}
+	base := NewReplier(sender, "oc_chat")
+	reply := newDeferredCardResultReplierWithTitle(
+		base, sender, "om_card", "会话切换结果", "/cx switch thread-1",
+	)
+	inline := newInlineCardReplier(reply, "feishu:oc_chat", "/cx switch thread-1")
+	reporter, ok := any(inline).(platform.DurableCommandResultReferenceReporter)
+	if !ok {
+		t.Fatalf("reply=%T, want durable command result reference", inline)
+	}
+	reference, err := reporter.DurableCommandResultReference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reference.Valid() {
+		t.Fatalf("reference=%#v, want valid original-card reference", reference)
+	}
+
+	rebuilt := NewReplier(sender, "oc_chat")
+	deliverer, ok := any(rebuilt).(platform.DurableCommandResultReplier)
+	if !ok {
+		t.Fatalf("reply=%T, want durable command result replier", rebuilt)
+	}
+	if err := deliverer.DeliverCommandResult(
+		context.Background(), reference,
+		"已切换并绑定。\n工作空间: weclaw\n运行通道: 已恢复",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.patchCards) != 1 || !strings.HasPrefix(sender.patchCards[0], "om_card:") {
+		t.Fatalf("patchCards=%#v, want recovered result to patch original card", sender.patchCards)
+	}
+	if len(sender.texts) != 0 {
+		t.Fatalf("texts=%#v, recovered result must not create a new message", sender.texts)
+	}
+}

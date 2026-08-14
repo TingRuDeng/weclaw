@@ -24,6 +24,15 @@ type codexSessionBindingFixture struct {
 	reply      *platformtest.Replier
 }
 
+type codexRuntimeRecoveryReferenceReplier struct {
+	*codexFollowerRouteReplier
+	reference platform.DurableCommandResultReference
+}
+
+func (r *codexRuntimeRecoveryReferenceReplier) DurableCommandResultReference() (platform.DurableCommandResultReference, error) {
+	return r.reference, nil
+}
+
 func newCodexSessionBindingFixture(t *testing.T) *codexSessionBindingFixture {
 	t.Helper()
 	h := NewHandler(nil, nil)
@@ -620,6 +629,62 @@ func TestUnavailableEmptyThreadFollowerDeliversFirstFastTerminalAfterBinding(t *
 	if len(results) != 1 || !strings.Contains(results[0].Text, "绑定后的首轮结果") {
 		current, _ := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
 		t.Fatalf("results=%#v entries=%#v current=%#v", results, outbox.entries, current)
+	}
+}
+
+func TestAcquireCodexSessionPersistsRuntimeRecoveryResultOnlyWhenRuntimeUnavailable(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a",
+	}
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-b",
+	}
+	req := f.request("thread-b")
+	req.platform = platform.PlatformFeishu
+	req.accountID = "cli_a"
+	req.reply = &codexRuntimeRecoveryReferenceReplier{
+		codexFollowerRouteReplier: &codexFollowerRouteReplier{Replier: f.reply, route: route},
+		reference:                 reference,
+	}
+	f.ag.handoffErrors["thread-b"] = agent.ErrCodexRuntimeUnavailable
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(req)
+	if err != nil || !errors.Is(result.runtimeErr, agent.ErrCodexRuntimeUnavailable) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || snapshot.Target.RuntimeRecoveryResult == nil ||
+		*snapshot.Target.RuntimeRecoveryResult != reference {
+		t.Fatalf("snapshot=%#v ok=%v, want pending original-card recovery", snapshot, ok)
+	}
+}
+
+func TestAcquireCodexSessionDoesNotPersistRuntimeRecoveryResultWhenReady(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a",
+	}
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-b",
+	}
+	req := f.request("thread-b")
+	req.platform = platform.PlatformFeishu
+	req.accountID = "cli_a"
+	req.reply = &codexRuntimeRecoveryReferenceReplier{
+		codexFollowerRouteReplier: &codexFollowerRouteReplier{Replier: f.reply, route: route},
+		reference:                 reference,
+	}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(req)
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || snapshot.Target.RuntimeRecoveryResult != nil {
+		t.Fatalf("snapshot=%#v ok=%v, ready runtime must not enqueue a recovery result", snapshot, ok)
 	}
 }
 

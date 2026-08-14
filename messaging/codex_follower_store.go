@@ -48,6 +48,10 @@ func cloneCodexFrontendFollower(source *codexFrontendFollower) *codexFrontendFol
 		return nil
 	}
 	cloned := *source
+	if source.RuntimeRecoveryResult != nil {
+		reference := *source.RuntimeRecoveryResult
+		cloned.RuntimeRecoveryResult = &reference
+	}
 	return &cloned
 }
 
@@ -63,6 +67,19 @@ func normalizeCodexFrontendFollower(source *codexFrontendFollower) *codexFronten
 	follower.DeliveryRoute.AccountID = strings.TrimSpace(follower.DeliveryRoute.AccountID)
 	follower.DeliveryRoute.ChatID = strings.TrimSpace(follower.DeliveryRoute.ChatID)
 	follower.DeliveryRoute.ReplyToID = strings.TrimSpace(follower.DeliveryRoute.ReplyToID)
+	if follower.RuntimeRecoveryResult != nil {
+		reference := *follower.RuntimeRecoveryResult
+		reference.Kind = strings.TrimSpace(reference.Kind)
+		reference.TargetID = strings.TrimSpace(reference.TargetID)
+		reference.Title = strings.TrimSpace(reference.Title)
+		reference.Command = strings.TrimSpace(reference.Command)
+		reference.ReadyAfter = strings.TrimSpace(reference.ReadyAfter)
+		if reference.Valid() {
+			follower.RuntimeRecoveryResult = &reference
+		} else {
+			follower.RuntimeRecoveryResult = nil
+		}
+	}
 	follower.UpdatedAt = strings.TrimSpace(follower.UpdatedAt)
 	if follower.WorkspaceRoot == "" || follower.ThreadID == "" ||
 		follower.ActorUserID == "" || follower.AuthorizedIdentity == "" || !follower.DeliveryRoute.Valid() {
@@ -72,6 +89,16 @@ func normalizeCodexFrontendFollower(source *codexFrontendFollower) *codexFronten
 }
 
 func sameCodexFrontendFollower(left *codexFrontendFollower, right *codexFrontendFollower) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.WorkspaceRoot == right.WorkspaceRoot && left.ThreadID == right.ThreadID &&
+		left.ActorUserID == right.ActorUserID && left.AuthorizedIdentity == right.AuthorizedIdentity &&
+		left.DeliveryRoute == right.DeliveryRoute && left.UpdatedAt == right.UpdatedAt &&
+		sameDurableCommandResultReference(left.RuntimeRecoveryResult, right.RuntimeRecoveryResult)
+}
+
+func sameDurableCommandResultReference(left *platform.DurableCommandResultReference, right *platform.DurableCommandResultReference) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -311,6 +338,76 @@ func (s *codexSessionStore) commitFollowerTurnClaim(snapshot codexFollowerSnapsh
 // commitFollowerTurnPending 记录该 route 已发现 active turn，但尚未取得持久终态投递责任。
 func (s *codexSessionStore) commitFollowerTurnPending(snapshot codexFollowerSnapshot, turnID string) error {
 	return s.commitFollowerTurnState(snapshot, turnID, true, true)
+}
+
+func (s *codexSessionStore) commitFollowerRuntimeRecovery(
+	snapshot codexFollowerSnapshot,
+	reference platform.DurableCommandResultReference,
+) error {
+	if !reference.Valid() {
+		return platform.ErrUnsupported
+	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.followerMatchesLocked(snapshot) {
+		return errCodexRemoteSelectionChanged
+	}
+	nextBindings := cloneCodexSessionBindings(s.bindings)
+	binding := nextBindings[snapshot.BindingKey]
+	follower := cloneCodexFrontendFollower(binding.Follower)
+	if follower == nil {
+		return errCodexRemoteSelectionChanged
+	}
+	reference.Kind = strings.TrimSpace(reference.Kind)
+	reference.TargetID = strings.TrimSpace(reference.TargetID)
+	reference.Title = strings.TrimSpace(reference.Title)
+	reference.Command = strings.TrimSpace(reference.Command)
+	reference.ReadyAfter = strings.TrimSpace(reference.ReadyAfter)
+	if reference.ReadyAfter != "" {
+		if _, err := time.Parse(time.RFC3339Nano, reference.ReadyAfter); err != nil {
+			return fmt.Errorf("Codex 运行通道恢复卡引用时间无效: %w", err)
+		}
+	}
+	follower.RuntimeRecoveryResult = &reference
+	binding.Follower = follower
+	nextBindings[snapshot.BindingKey] = binding
+	if err := s.persistCandidate(s.filePath, codexSessionState{
+		Version: codexSessionStateVersion, Bindings: nextBindings,
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		return err
+	}
+	s.bindings = nextBindings
+	return nil
+}
+
+func (s *codexSessionStore) clearFollowerRuntimeRecovery(snapshot codexFollowerSnapshot) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.followerMatchesLocked(snapshot) {
+		return errCodexRemoteSelectionChanged
+	}
+	nextBindings := cloneCodexSessionBindings(s.bindings)
+	binding := nextBindings[snapshot.BindingKey]
+	follower := cloneCodexFrontendFollower(binding.Follower)
+	if follower == nil {
+		return errCodexRemoteSelectionChanged
+	}
+	follower.RuntimeRecoveryResult = nil
+	binding.Follower = follower
+	nextBindings[snapshot.BindingKey] = binding
+	if err := s.persistCandidate(s.filePath, codexSessionState{
+		Version: codexSessionStateVersion, Bindings: nextBindings,
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		return err
+	}
+	s.bindings = nextBindings
+	return nil
 }
 
 func (s *codexSessionStore) commitFollowerTurnState(

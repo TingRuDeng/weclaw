@@ -237,6 +237,9 @@ esac
 		!strings.Contains(string(curlOutput), "upload-checksums.txt.json") {
 		t.Fatalf("Gitee mirror did not upload the expected assets: %s", curlOutput)
 	}
+	if strings.Contains(string(curlOutput), "https://gitee.com/download/") {
+		t.Fatalf("Gitee mirror must not re-download uploaded assets: %s", curlOutput)
+	}
 	for _, unsupported := range []string{"weclaw_darwin_amd64.gz", "weclaw_linux_arm64.gz"} {
 		if strings.Contains(string(curlOutput), "upload-"+unsupported+".json") {
 			t.Fatalf("Gitee mirror uploaded unsupported asset %s: %s", unsupported, curlOutput)
@@ -683,8 +686,8 @@ func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		text := string(content)
-		if !strings.Contains(text, "go-version: '1.26.5'") {
-			t.Fatalf("%s must use Go 1.26.5", path)
+		if !strings.Contains(text, "go-version: '1.26.6'") {
+			t.Fatalf("%s must use Go 1.26.6", path)
 		}
 		if !strings.Contains(text, "govulncheck@v1.6.0") {
 			t.Fatalf("%s must run pinned govulncheck v1.6.0", path)
@@ -694,8 +697,8 @@ func TestWorkflowsUseSecureGoToolchainAndVulnerabilityScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(release), "go-version: '1.26.5'") {
-		t.Fatal("stable release workflow must use Go 1.26.5")
+	if !strings.Contains(string(release), "go-version: '1.26.6'") {
+		t.Fatal("stable release workflow must use Go 1.26.6")
 	}
 	assertReleaseWorkflowDelegatesCanonicalScript(t)
 }

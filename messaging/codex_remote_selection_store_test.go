@@ -116,6 +116,12 @@ func TestCodexRemoteSelectionKeepsFollowerRevisionForSameAuthorizedEndpoint(t *t
 		t.Fatal(err)
 	}
 	before := store.followerSnapshots()[0]
+	recovery := platform.DurableCommandResultReference{
+		Kind: "test-command", TargetID: "old-switch-card", Command: "/cx switch thread-shared",
+	}
+	if err := store.commitFollowerRuntimeRecovery(before, recovery); err != nil {
+		t.Fatal(err)
+	}
 
 	secondRoute := firstRoute
 	secondRoute.ReplyToID = "message-2"
@@ -131,6 +137,9 @@ func TestCodexRemoteSelectionKeepsFollowerRevisionForSameAuthorizedEndpoint(t *t
 	}
 	if after.Target.DeliveryRoute.ReplyToID != "message-2" {
 		t.Fatalf("latest reply anchor=%q, want message-2", after.Target.DeliveryRoute.ReplyToID)
+	}
+	if after.Target.RuntimeRecoveryResult != nil {
+		t.Fatalf("reselected follower retained stale runtime result=%#v", after.Target.RuntimeRecoveryResult)
 	}
 }
 

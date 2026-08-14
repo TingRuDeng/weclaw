@@ -145,19 +145,53 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 			Rollout: providerRollout, Live: true, ProbeErr: agent.ErrCodexWriterBusy,
 		}
 		result.runtimeErr = agent.ErrCodexWriterBusy
-		return result, nil
+		return h.recordCodexRuntimeRecoveryResult(req, result), nil
 	}
 
 	result.resolution, result.runtimeErr = h.bindCodexSharedRuntime(req, liveAgent)
 	if result.runtimeErr != nil {
-		return result, nil
+		return h.recordCodexRuntimeRecoveryResult(req, result), nil
 	}
 	result, err = h.attachCodexAcquireObserver(result, req, liveAgent)
+	if result.runtimeErr != nil {
+		result = h.recordCodexRuntimeRecoveryResult(req, result)
+	}
 	if err == nil && result.runtimeErr == nil &&
 		(result.progressReanchorErr == nil || result.progressReanchored) {
 		h.commitCodexTaskCardFocus(req.route.bindingKey, req.route.conversationID)
 	}
 	return result, err
+}
+
+func (h *Handler) recordCodexRuntimeRecoveryResult(
+	req codexSessionAcquireRequest,
+	result codexSessionAcquireResult,
+) codexSessionAcquireResult {
+	if result.runtimeErr == nil || req.platform != platform.PlatformFeishu || req.reply == nil {
+		return result
+	}
+	reporter, ok := optionalDurableCommandResultReferenceReporter(req.reply)
+	if !ok {
+		return result
+	}
+	reference, err := reporter.DurableCommandResultReference()
+	if err != nil || !reference.Valid() {
+		if err != nil && !errors.Is(err, platform.ErrUnsupported) {
+			log.Printf("[codex-session-bind] 无法保存运行通道恢复卡引用 thread=%q: %v", result.route.threadID, err)
+		}
+		return result
+	}
+	store := h.ensureCodexSessions()
+	snapshot, ok := store.followerSnapshot(result.route.bindingKey)
+	if !ok || snapshot.Target.ThreadID != result.route.threadID {
+		return result
+	}
+	if err := store.commitFollowerRuntimeRecovery(snapshot, reference); err != nil {
+		log.Printf("[codex-session-bind] 保存运行通道恢复卡引用失败 thread=%q: %v", result.route.threadID, err)
+		return result
+	}
+	h.wakeCodexFollowerReconciler()
+	return result
 }
 
 type codexFollowerBaseline struct {

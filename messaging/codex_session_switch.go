@@ -152,7 +152,7 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		log.Printf("[codex-session-bind] 绑定已提交但共享 host 暂不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
 		lines = append(lines,
 			"运行通道: 暂不可用（窗口绑定已保留）",
-			"普通消息暂不会写入；请稍后重试或发送 /cx status 查看状态。",
+			"普通消息暂不会写入；恢复后本卡会自动更新，也可发送 /cx status 查看状态。",
 		)
 	}
 	if result.externalActive {

@@ -10,6 +10,7 @@
 - 语义边界：只有已验证官方 daemon 本来就是 WeClaw 权威 Host 的显式 Handoff，才可把该响应当成 App frontend 已释放目标 thread 的证据；Desktop Host、managed Host、普通消息、超时、断线和未知交付都不得复用这条例外。
 - 恢复方式：只有 Desktop 当前是 WeClaw 权威 runtime 时，`LoadHistory` 才主动广播幂等的 `thread-stream-following-changed{following:true}`，等到首个 snapshot 后再请求完整历史。已运行的官方 daemon 仍是唯一 Host 时必须跳过主动声明，避免抢占 App。
 - 包装能力边界：飞书会话卡回调会经过 `inlineCardReplier → deferredCardResultReplier`；获取 durable route 前必须沿 `ProgressReplierProvider` 解包，不能因窄 `platform.Replier` 接口丢失底层 `DeliveryRouteReporter`。
+- 结果收敛边界：运行通道短暂失败时，原飞书命令结果卡引用必须和 follower 一起持久化；只有运行通道与观察状态完整调和后才能把原卡更新为成功。初始回调仍可能覆盖原卡时先等待，卡片更新失败独立重试；不能另发成功消息、伪造同步恢复，或让旧引用覆盖后续会话选择。
 - 来源：2026-08-12 真机先修复卡片包装链并持久化 follower，仍每约 2 秒稳定返回上述精确错误；加入主动登记后，原 binding 无需重选即停止报错并收到目标 thread 广播。
 
 ## 2026-08-12 `turn/start` 响应不能充当事件消费总屏障

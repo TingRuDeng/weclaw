@@ -126,6 +126,15 @@ func (r *inlineCardReplier) ProgressReplier() platform.Replier {
 	return r.Replier
 }
 
+// DurableCommandResultReference 保留内联回调下层的原卡引用，供后台恢复后更新同一张卡。
+func (r *inlineCardReplier) DurableCommandResultReference() (platform.DurableCommandResultReference, error) {
+	reporter, ok := r.Replier.(platform.DurableCommandResultReferenceReporter)
+	if !ok {
+		return platform.DurableCommandResultReference{}, platform.ErrUnsupported
+	}
+	return reporter.DurableCommandResultReference()
+}
+
 func (r *inlineCardReplier) CurrentTaskCardID() string {
 	reporter, ok := r.Replier.(platform.TaskCardReporter)
 	if !ok {

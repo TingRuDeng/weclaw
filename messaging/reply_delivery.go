@@ -231,6 +231,30 @@ func optionalDeliveryRouteReporter(reply platform.Replier) (platform.DeliveryRou
 	return reporter, ok
 }
 
+func optionalDurableCommandResultReferenceReporter(reply platform.Replier) (platform.DurableCommandResultReferenceReporter, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		reporter, supported := optionalDurableCommandResultReferenceReporter(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedDurableCommandResultReferenceReporter{reply: serialized, reporter: reporter}, true
+	}
+	reporter, ok := reply.(platform.DurableCommandResultReferenceReporter)
+	return reporter, ok
+}
+
+func optionalDurableCommandResultReplier(reply platform.Replier) (platform.DurableCommandResultReplier, bool) {
+	if serialized, ok := reply.(*serializedReplier); ok {
+		durable, supported := optionalDurableCommandResultReplier(serialized.inner)
+		if !supported {
+			return nil, false
+		}
+		return serializedDurableCommandResultReplier{reply: serialized, durable: durable}, true
+	}
+	durable, ok := reply.(platform.DurableCommandResultReplier)
+	return durable, ok
+}
+
 func optionalIdempotentTextReplier(reply platform.Replier) (platform.IdempotentTextReplier, bool) {
 	if serialized, ok := reply.(*serializedReplier); ok {
 		idempotent, supported := optionalIdempotentTextReplier(serialized.inner)
@@ -328,6 +352,28 @@ func (s serializedRemoteMediaSender) SendMediaFromURL(ctx context.Context, media
 type serializedDeliveryRouteReporter struct {
 	reply    *serializedReplier
 	reporter platform.DeliveryRouteReporter
+}
+
+type serializedDurableCommandResultReferenceReporter struct {
+	reply    *serializedReplier
+	reporter platform.DurableCommandResultReferenceReporter
+}
+
+func (s serializedDurableCommandResultReferenceReporter) DurableCommandResultReference() (platform.DurableCommandResultReference, error) {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.reporter.DurableCommandResultReference()
+}
+
+type serializedDurableCommandResultReplier struct {
+	reply   *serializedReplier
+	durable platform.DurableCommandResultReplier
+}
+
+func (s serializedDurableCommandResultReplier) DeliverCommandResult(ctx context.Context, reference platform.DurableCommandResultReference, text string) error {
+	s.reply.mu.Lock()
+	defer s.reply.mu.Unlock()
+	return s.durable.DeliverCommandResult(ctx, reference, text)
 }
 
 func (s serializedDeliveryRouteReporter) DeliveryRoute() platform.DeliveryRoute {

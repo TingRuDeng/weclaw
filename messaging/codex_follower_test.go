@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -43,6 +44,22 @@ type codexFollowerDurableReplier struct {
 	route    platform.DeliveryRoute
 	mu       sync.Mutex
 	accepted map[string]bool
+}
+
+type codexFollowerCommandResultReplier struct {
+	*platformtest.Replier
+	mu         sync.Mutex
+	references []platform.DurableCommandResultReference
+	texts      []string
+	err        error
+}
+
+func (r *codexFollowerCommandResultReplier) DeliverCommandResult(_ context.Context, reference platform.DurableCommandResultReference, text string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.references = append(r.references, reference)
+	r.texts = append(r.texts, text)
+	return r.err
 }
 
 func newCodexFollowerDurableReplier(route platform.DeliveryRoute, caps platform.Capabilities) *codexFollowerDurableReplier {
@@ -254,6 +271,213 @@ func TestCodexFollowerReestablishesRuntimeBeforeReadingRestartedDesktopState(t *
 		return h.codexFollower == nil
 	})
 	close(watchDone)
+}
+
+func TestCodexFollowerRecoveryUpdatesPendingSwitchResult(t *testing.T) {
+	h, _, _, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false,
+	})
+	defer close(watchDone)
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-local",
+	}
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	binding := store.bindings[snapshot.BindingKey]
+	binding.Follower.RuntimeRecoveryResult = &reference
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+	snapshot = store.followerSnapshots()[0]
+
+	reply := &codexFollowerCommandResultReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true})}
+	registry := newCodexFollowerTestRegistry(snapshot.Target.DeliveryRoute, reply)
+	h.reconcileCodexFollowersWithService(context.Background(), &codexFollowerService{
+		registry: registry, failures: make(map[string]codexFollowerFailureState),
+	})
+
+	reply.mu.Lock()
+	references := append([]platform.DurableCommandResultReference(nil), reply.references...)
+	texts := append([]string(nil), reply.texts...)
+	reply.mu.Unlock()
+	if len(references) != 1 || references[0] != reference {
+		t.Fatalf("references=%#v, want original switch-card reference", references)
+	}
+	if len(texts) != 1 || !strings.Contains(texts[0], "已切换并绑定") ||
+		!strings.Contains(texts[0], "运行通道: 已恢复") {
+		t.Fatalf("texts=%#v, want recovered switch result", texts)
+	}
+	current, ok := store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult != nil {
+		t.Fatalf("current=%#v ok=%v, recovered result must be cleared after delivery", current, ok)
+	}
+}
+
+func TestCodexFollowerRecoveryWaitsUntilInitialSwitchCardCanNoLongerOverwriteIt(t *testing.T) {
+	h, _, _, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false,
+	})
+	defer close(watchDone)
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-local", ReadyAfter: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	}
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	binding := store.bindings[snapshot.BindingKey]
+	binding.Follower.RuntimeRecoveryResult = &reference
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+
+	reply := &codexFollowerCommandResultReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true})}
+	registry := newCodexFollowerTestRegistry(snapshot.Target.DeliveryRoute, reply)
+	h.reconcileCodexFollowersWithService(context.Background(), &codexFollowerService{registry: registry})
+	reply.mu.Lock()
+	attempts := len(reply.references)
+	reply.mu.Unlock()
+	if attempts != 0 {
+		t.Fatalf("card attempts=%d before initial callback settles, want 0", attempts)
+	}
+	current, ok := store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult == nil {
+		t.Fatalf("current=%#v ok=%v, deferred result must remain pending", current, ok)
+	}
+	store.mu.Lock()
+	binding = store.bindings[snapshot.BindingKey]
+	pastReference := *binding.Follower.RuntimeRecoveryResult
+	pastReference.ReadyAfter = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	binding.Follower.RuntimeRecoveryResult = &pastReference
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+	h.reconcileCodexFollowersWithService(context.Background(), &codexFollowerService{registry: registry})
+	reply.mu.Lock()
+	attempts = len(reply.references)
+	reply.mu.Unlock()
+	if attempts != 1 {
+		t.Fatalf("card attempts=%d after callback grace period, want 1", attempts)
+	}
+	current, ok = store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult != nil {
+		t.Fatalf("current=%#v ok=%v, delivered result must be cleared", current, ok)
+	}
+}
+
+func TestCodexFollowerRecoveryKeepsPendingSwitchResultUntilRuntimeAndCardAreReady(t *testing.T) {
+	h, ag, _, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false,
+	})
+	defer close(watchDone)
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-local",
+	}
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	binding := store.bindings[snapshot.BindingKey]
+	binding.Follower.RuntimeRecoveryResult = &reference
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+
+	reply := &codexFollowerCommandResultReplier{
+		Replier: platformtest.NewReplier(platform.Capabilities{Text: true}),
+		err:     errors.New("card patch unavailable"),
+	}
+	registry := newCodexFollowerTestRegistry(snapshot.Target.DeliveryRoute, reply)
+	service := &codexFollowerService{
+		registry: registry, failures: make(map[string]codexFollowerFailureState),
+		resultFailures: make(map[string]codexFollowerFailureState),
+	}
+
+	ag.fakeCodexThreadAgent.threadStateErr = errors.New("desktop state unavailable")
+	h.reconcileCodexFollowersWithService(context.Background(), service)
+	reply.mu.Lock()
+	firstAttempts := len(reply.references)
+	reply.mu.Unlock()
+	if firstAttempts != 0 {
+		t.Fatalf("card update attempts=%d while runtime is unavailable, want 0", firstAttempts)
+	}
+	current, ok := store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult == nil {
+		t.Fatalf("current=%#v ok=%v, runtime failure must keep pending result", current, ok)
+	}
+
+	ag.fakeCodexThreadAgent.threadStateErr = nil
+	h.reconcileCodexFollowersWithService(context.Background(), service)
+	current, ok = store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult == nil {
+		t.Fatalf("current=%#v ok=%v, card failure must keep pending result", current, ok)
+	}
+	reply.mu.Lock()
+	if len(reply.references) != 1 {
+		reply.mu.Unlock()
+		t.Fatalf("card attempts=%d, want one failed attempt", len(reply.references))
+	}
+	reply.err = nil
+	reply.mu.Unlock()
+
+	h.reconcileCodexFollowersWithService(context.Background(), service)
+	reply.mu.Lock()
+	attempts := len(reply.references)
+	reply.mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("card attempts=%d, want retry after patch failure", attempts)
+	}
+	current, ok = store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult != nil {
+		t.Fatalf("current=%#v ok=%v, successful retry must clear pending result", current, ok)
+	}
+}
+
+func TestCodexFollowerRecoveryResultSurvivesRestart(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	first, _, _, snapshot, firstWatchDone := newCodexFollowerFixtureWithStatePath(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false,
+	}, statePath)
+	close(firstWatchDone)
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-local",
+	}
+	store := first.ensureCodexSessions()
+	store.mu.Lock()
+	binding := store.bindings[snapshot.BindingKey]
+	binding.Follower.RuntimeRecoveryResult = &reference
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+
+	second := NewHandler(nil, nil)
+	second.SetCodexSessionFile(statePath)
+	base := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false,
+	})
+	watchDone := make(chan struct{})
+	base.watchDone = watchDone
+	defer close(watchDone)
+	second.SetDefaultAgent("codex", &codexFollowerWatchAgent{
+		fakeCodexLiveAgent: base, watchStarted: make(chan string, 1),
+	})
+	loaded := second.ensureCodexSessions().followerSnapshots()
+	if len(loaded) != 1 || loaded[0].Target.RuntimeRecoveryResult == nil {
+		t.Fatalf("loaded=%#v, want persisted pending result", loaded)
+	}
+	reply := &codexFollowerCommandResultReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true})}
+	registry := newCodexFollowerTestRegistry(loaded[0].Target.DeliveryRoute, reply)
+	second.reconcileCodexFollowersWithService(context.Background(), &codexFollowerService{registry: registry})
+	reply.mu.Lock()
+	attempts := len(reply.references)
+	reply.mu.Unlock()
+	if attempts != 1 {
+		t.Fatalf("card attempts=%d after restart, want 1", attempts)
+	}
+	current, ok := second.ensureCodexSessions().followerSnapshot(loaded[0].BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult != nil {
+		t.Fatalf("current=%#v ok=%v, restart recovery must clear pending result", current, ok)
+	}
 }
 
 func TestCodexFollowerAttachesWhenBoundThreadStartsWithoutInboundMessage(t *testing.T) {

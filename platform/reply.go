@@ -74,6 +74,30 @@ type DeliveryRouteReporter interface {
 	DeliveryRoute() DeliveryRoute
 }
 
+// DurableCommandResultReference 是平台自描述、可跨进程恢复的命令结果展示引用。
+// 引用只能包含更新既有展示所需的最小定位与样式信息，不得包含平台凭据。
+type DurableCommandResultReference struct {
+	Kind       string `json:"kind"`
+	TargetID   string `json:"target_id"`
+	Title      string `json:"title,omitempty"`
+	Command    string `json:"command,omitempty"`
+	ReadyAfter string `json:"ready_after,omitempty"`
+}
+
+func (r DurableCommandResultReference) Valid() bool {
+	return strings.TrimSpace(r.Kind) != "" && strings.TrimSpace(r.TargetID) != ""
+}
+
+// DurableCommandResultReferenceReporter 导出当前命令结果所在的可恢复展示位置。
+type DurableCommandResultReferenceReporter interface {
+	DurableCommandResultReference() (DurableCommandResultReference, error)
+}
+
+// DurableCommandResultReplier 在后台状态恢复后原地更新既有命令结果展示。
+type DurableCommandResultReplier interface {
+	DeliverCommandResult(ctx context.Context, reference DurableCommandResultReference, text string) error
+}
+
 // IdempotentTextReplier 使用稳定 delivery key 发送文本；重试同一 key 不应产生重复消息。
 type IdempotentTextReplier interface {
 	SendTextIdempotent(ctx context.Context, text string, deliveryKey string) error

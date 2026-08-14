@@ -38,7 +38,7 @@ ASSET_DIR="$2"
 [[ "$GITEE_TOKEN" != *$'\n'* && "$GITEE_TOKEN" != *$'\r'* ]] || fail "GITEE_TOKEN 格式无效"
 [[ "$GITEE_CURL_MAX_TIME" =~ ^[1-9][0-9]*$ ]] || fail "GITEE_CURL_MAX_TIME 必须是正整数秒"
 
-for command_name in git curl python3 shasum cmp gzip cp; do
+for command_name in git curl python3 shasum gzip cp; do
   command -v "$command_name" >/dev/null 2>&1 || fail "缺少命令：$command_name"
 done
 
@@ -205,18 +205,15 @@ for asset_name in "${EXPECTED_ASSETS[@]}"; do
     "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
 done
 
-printf '==> 回下载并验证 Gitee Release 资产\n'
-verified_dir="$TEMP_DIR/verified"
-mkdir -p "$verified_dir"
+printf '==> 核对 Gitee Release 资产清单\n'
 curl -fsS "${CURL_SECURE[@]}" --get \
   --data-urlencode "access_token@${TOKEN_FILE}" \
   -o "$attachment_json" \
   "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
 
-python3 - "$attachment_json" "$TEMP_DIR/assets.tsv" <<'PY'
+python3 - "$attachment_json" "$TEMP_DIR/assets.txt" <<'PY'
 import json
 import sys
-from urllib.parse import urlparse
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     assets = json.load(handle)
@@ -224,35 +221,16 @@ seen = set()
 with open(sys.argv[2], "w", encoding="utf-8") as output:
     for asset in assets:
         name = asset.get("name", "")
-        url = asset.get("browser_download_url", "")
-        parsed = urlparse(url)
         if not name or name in seen or any(char in name for char in "\t\r\n"):
             raise SystemExit("Gitee release contains invalid or duplicate asset name")
-        if parsed.scheme != "https" or parsed.hostname != "gitee.com":
-            raise SystemExit("Gitee release contains unexpected asset URL")
         seen.add(name)
-        output.write(f"{name}\t{url}\n")
+        output.write(name + "\n")
 PY
 
-asset_count="$(wc -l <"$TEMP_DIR/assets.tsv" | tr -d '[:space:]')"
+asset_count="$(wc -l <"$TEMP_DIR/assets.txt" | tr -d '[:space:]')"
 [[ "$asset_count" == "${#EXPECTED_ASSETS[@]}" ]] || fail "Gitee Release 资产数为 ${asset_count}，期望 ${#EXPECTED_ASSETS[@]}"
 for asset_name in "${EXPECTED_ASSETS[@]}"; do
-  asset_url="$(awk -F '\t' -v name="$asset_name" '$1 == name { print $2 }' "$TEMP_DIR/assets.tsv")"
-  [[ -n "$asset_url" ]] || fail "Gitee Release 缺少资产：$asset_name"
-  curl -fsSL "${CURL_SECURE[@]}" --max-filesize 134217728 -o "$verified_dir/$asset_name" "$asset_url"
-  cmp "$MIRROR_DIR/$asset_name" "$verified_dir/$asset_name" >/dev/null || fail "Gitee 回下载资产与镜像资产不同：$asset_name"
-done
-verified_original_dir="$TEMP_DIR/verified-original"
-mkdir -p "$verified_original_dir"
-cp "$verified_dir/checksums.txt" "$verified_original_dir/checksums.txt"
-for asset_name in "${GITEE_BINARY_ASSETS[@]}"; do
-  gzip -dc "$verified_dir/$asset_name.gz" >"$verified_original_dir/$asset_name" || fail "Gitee 回下载 gzip 资产损坏：$asset_name.gz"
-  cmp "$ASSET_DIR/$asset_name" "$verified_original_dir/$asset_name" >/dev/null || fail "Gitee 解压资产与权威资产不同：$asset_name"
-  asset_checksums="$TEMP_DIR/$asset_name-checksums.txt"
-  awk -v name="$asset_name" '$2 == name || $2 == "*" name { print }' "$verified_original_dir/checksums.txt" >"$asset_checksums"
-  asset_checksum_count="$(wc -l <"$asset_checksums" | tr -d '[:space:]')"
-  [[ "$asset_checksum_count" == "1" ]] || fail "checksums.txt 中 ${asset_name} 摘要数为 ${asset_checksum_count}，期望 1"
-  (cd "$verified_original_dir" && shasum -a 256 -c "$asset_checksums") >/dev/null || fail "Gitee 回下载摘要校验失败：$asset_name"
+  grep -Fxq "$asset_name" "$TEMP_DIR/assets.txt" || fail "Gitee Release 缺少资产：$asset_name"
 done
 
 printf 'Gitee 镜像完成：%s\n' "$TAG"

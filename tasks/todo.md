@@ -1,5 +1,46 @@
 # 当前任务记录
 
+## 2026-08-14 飞书会话切换运行通道恢复回写
+
+### 目标
+
+当飞书选择 Codex 会话时已经提交窗口绑定、但 Codex Desktop 运行通道短暂不可用，保留现有失败关闭语义；后台 follower 真正恢复后，自动把原会话切换结果卡更新为“已切换并绑定”，避免用户把已经恢复的绑定误认为持续失败。
+
+### 范围与验收标准
+
+- [x] 只有首次切换结果确实显示“等待运行通道”时才登记待回写状态；初次即成功、普通文本命令和非飞书平台不产生额外通知。
+- [x] 待回写状态及原飞书卡片引用进入现有 Codex session 持久化，WeClaw 重启后仍可恢复；引用不得包含平台凭据或 Agent 协议正文。
+- [x] follower 完成运行通道与观察状态调和后，原卡原地更新为“已切换并绑定”，并保留工作空间、模型和推理强度等必要上下文。
+- [x] follower 仍失败时不伪造成功；卡片更新失败独立记录并重试，不阻断 follower 同步，也不重复发送新消息。
+- [x] 会话再次切换、释放、归档或撤权后，旧待回写状态不能覆盖新会话结果。
+
+### 实施步骤
+
+- [x] 先补失败测试，覆盖待回写登记、成功恢复后原卡更新、失败不更新、更新失败重试和跨进程恢复。
+- [x] 增加平台无关的持久化命令结果引用能力，并让飞书导出、重建和原地更新会话切换结果卡。
+- [x] 把待回写状态纳入 follower CAS 状态；在完整调和成功后独立投递并原子清除。
+- [x] 同步必要用户说明与维护者上下文，完成定向、Race、全仓和静态门禁并复核差异。
+
+### 验证方式
+
+```bash
+go test ./messaging ./feishu ./platform -count=1 -timeout 180s
+go test -race ./messaging ./feishu -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- 飞书卡片切换在 runtime 短暂失败时持久化原命令结果卡引用；完整 follower 调和成功后只更新原卡，不发送额外消息。初始回调保护时间避免迟到的“等待运行通道”覆盖恢复结果。
+- 运行通道仍不可用时不更新成功状态；原卡更新失败独立按 2 的幂次采样记录并持续重试，成功后以 follower CAS 清除。服务重启、重复选择、释放、归档和撤权均由持久状态与现有 binding 门禁收敛。
+- 验证通过：受影响模块测试、`go test -race ./messaging ./feishu`、`go test ./...`、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。一次受限沙箱执行因 `httptest` 无法监听回环端口失败；在允许回环监听后原命令通过。
+- 自动化覆盖状态登记、初次成功不登记、恢复更新、初始回调顺序、运行通道失败、卡片失败重试、跨进程恢复和新选择清理旧引用；真实飞书 CardKit 原地更新仍需安装新版本后端侧验收。
+
 ## 2026-08-13 Codex Desktop 审批超时权威复核
 
 ### 目标

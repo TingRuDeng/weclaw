@@ -48,12 +48,13 @@ type codexSessionBinding struct {
 }
 
 type codexFrontendFollower struct {
-	WorkspaceRoot      string
-	ThreadID           string
-	ActorUserID        string
-	AuthorizedIdentity string
-	DeliveryRoute      platform.DeliveryRoute
-	UpdatedAt          string
+	WorkspaceRoot         string
+	ThreadID              string
+	ActorUserID           string
+	AuthorizedIdentity    string
+	DeliveryRoute         platform.DeliveryRoute
+	RuntimeRecoveryResult *platform.DurableCommandResultReference `json:"RuntimeRecoveryResult,omitempty"`
+	UpdatedAt             string
 }
 
 type codexFollowerSnapshot struct {
@@ -87,6 +88,7 @@ type codexWorkspaceSession struct {
 
 const legacyBindingDefaultPlatform = "wechat"
 
+// v13 persists a pending command-result card update while a selected Desktop runtime is unavailable.
 // v11 distinguishes an active turn claim from a terminal delivery already secured by the outbox,
 // so a crash between follower reservation and watcher activation cannot permanently skip a result.
 // v10 persists the last turn claimed by each durable follower, so a local turn that starts and
@@ -95,7 +97,7 @@ const legacyBindingDefaultPlatform = "wechat"
 // v8 added long-lived Feishu follower endpoints, release/archive tombstones, and the predecessor
 // thread needed to repair first-turn outbox metadata after a crash. Codex writer authority belongs to
 // the single app-server and is never assigned to a message route.
-const codexSessionStateVersion = 12
+const codexSessionStateVersion = 13
 
 func clearCodexFollowerTurnState(binding *codexSessionBinding) {
 	if binding == nil {

@@ -53,6 +53,8 @@ type optionalCapabilityTestReplier struct {
 	idempotentResult []platform.TerminalResult
 	deliveryKeys     []string
 	checkpoints      []platform.TerminalCheckpoint
+	commandReference platform.DurableCommandResultReference
+	commandResults   []string
 	supersedeRefs    []platform.DurableStreamReference
 	supersedes       []platform.SupersedeCheckpoint
 }
@@ -78,6 +80,16 @@ func (r *optionalCapabilityTestReplier) SendMediaFromURL(_ context.Context, medi
 
 func (r *optionalCapabilityTestReplier) DeliveryRoute() platform.DeliveryRoute {
 	return r.route
+}
+
+func (r *optionalCapabilityTestReplier) DurableCommandResultReference() (platform.DurableCommandResultReference, error) {
+	return r.commandReference, nil
+}
+
+func (r *optionalCapabilityTestReplier) DeliverCommandResult(_ context.Context, reference platform.DurableCommandResultReference, text string) error {
+	r.commandReference = reference
+	r.commandResults = append(r.commandResults, text)
+	return nil
 }
 
 func (r *optionalCapabilityTestReplier) SendTextIdempotent(_ context.Context, text string, deliveryKey string) error {
@@ -168,6 +180,24 @@ func TestSerializedReplierPreservesDurableDeliveryCapabilities(t *testing.T) {
 	if route := reporter.DeliveryRoute(); route != reply.route {
 		t.Fatalf("delivery route=%+v, want %+v", route, reply.route)
 	}
+	commandReference := platform.DurableCommandResultReference{
+		Kind: "test-command", TargetID: "card-1", Title: "会话切换结果", Command: "/cx switch thread-1",
+	}
+	reply.commandReference = commandReference
+	referenceReporter, ok := optionalDurableCommandResultReferenceReporter(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost DurableCommandResultReferenceReporter")
+	}
+	if reference, err := referenceReporter.DurableCommandResultReference(); err != nil || reference != commandReference {
+		t.Fatalf("command result reference=%#v err=%v", reference, err)
+	}
+	commandDeliverer, ok := optionalDurableCommandResultReplier(serialized)
+	if !ok {
+		t.Fatal("serialized replier lost DurableCommandResultReplier")
+	}
+	if err := commandDeliverer.DeliverCommandResult(context.Background(), commandReference, "已切换并绑定"); err != nil {
+		t.Fatal(err)
+	}
 	idempotent, ok := optionalIdempotentTextReplier(serialized)
 	if !ok {
 		t.Fatal("serialized replier lost IdempotentTextReplier")
@@ -218,6 +248,9 @@ func TestSerializedReplierPreservesDurableDeliveryCapabilities(t *testing.T) {
 	if len(reply.checkpoints) != 1 || reply.checkpoints[0].Kind != checkpoint.Kind ||
 		string(reply.checkpoints[0].Payload) != string(checkpoint.Payload) {
 		t.Fatalf("checkpoints=%#v", reply.checkpoints)
+	}
+	if len(reply.commandResults) != 1 || reply.commandResults[0] != "已切换并绑定" {
+		t.Fatalf("command results=%#v", reply.commandResults)
 	}
 	if len(reply.supersedeRefs) != 1 || reply.supersedeRefs[0].Kind != reference.Kind ||
 		len(reply.supersedes) != 1 || reply.supersedes[0].Kind != supersede.Kind {
