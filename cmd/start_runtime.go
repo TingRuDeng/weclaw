@@ -36,6 +36,10 @@ type runtimeDrainer interface {
 	Drain(context.Context, bool) (messaging.RuntimeDrainResult, error)
 }
 
+type runtimeShutdownCoordinator interface {
+	PrepareRuntimeRestart(context.Context, bool) (messaging.RuntimeRestartResult, error)
+}
+
 const defaultRuntimeShutdownTimeout = 10 * time.Second
 
 type backgroundStartOps struct {
@@ -389,12 +393,12 @@ func (runtime startRuntime) runUntilShutdown(signals <-chan os.Signal) error {
 	go func() {
 		bridgeDone <- bridge()
 	}()
+	var bridgeErr error
+	bridgeFinished := false
 	select {
-	case err := <-bridgeDone:
-		if runtime.cancel != nil {
-			runtime.cancel()
-		}
-		return err
+	case bridgeErr = <-bridgeDone:
+		bridgeFinished = true
+		log.Printf("Message bridge stopped; coordinating runtime shutdown...")
 	case sig := <-signals:
 		log.Printf("Received %s, draining active tasks before shutdown...", sig)
 	}
@@ -403,7 +407,16 @@ func (runtime startRuntime) runUntilShutdown(signals <-chan os.Signal) error {
 	if timeout <= 0 {
 		timeout = defaultRuntimeShutdownTimeout
 	}
-	if runtime.drain != nil {
+	if coordinator, ok := runtime.drain.(runtimeShutdownCoordinator); ok {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		result, err := coordinator.PrepareRuntimeRestart(shutdownCtx, true)
+		cancel()
+		if err != nil {
+			log.Printf("Coordinated Codex Host shutdown was not completed; preserving Host: %v", err)
+		} else if result.RemainingTasks > 0 {
+			log.Printf("Coordinated shutdown timed out with %d task(s); startup recovery will close persisted cards", result.RemainingTasks)
+		}
+	} else if runtime.drain != nil {
 		drainCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		result, err := runtime.drain.Drain(drainCtx, true)
 		cancel()
@@ -415,6 +428,9 @@ func (runtime startRuntime) runUntilShutdown(signals <-chan os.Signal) error {
 	}
 	if runtime.cancel != nil {
 		runtime.cancel()
+	}
+	if bridgeFinished {
+		return bridgeErr
 	}
 	return <-bridgeDone
 }

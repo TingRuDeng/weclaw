@@ -9,6 +9,7 @@ ExecStart=/usr/local/bin/weclaw start --foreground
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM
+KillMode=process
 TimeoutStopSec=15s
 StandardOutput=journal
 StandardError=journal

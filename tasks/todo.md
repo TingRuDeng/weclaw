@@ -1,5 +1,52 @@
 # 当前任务记录
 
+## 2026-08-16 WeClaw 与受管 Codex Host 协调停止
+
+### 目标
+
+让普通 `weclaw stop`、前台信号停止和 systemd 停止在安全条件满足时一并停止身份验证通过的共享 Codex Host，避免 WeClaw 退出后留下 `PPID=1` 的 WeClaw-managed app-server；停止失败或 Host 状态不安全时保持失败关闭，不按进程名误杀 Codex App 或不明进程。
+
+### 范围与验收标准
+
+- [x] `weclaw stop` 在发送 `SIGTERM` 前调用现有强一致 Host 事务，排空任务并验证 Codex App、受控 CLI、writer lease、active/unknown thread 和 Host 身份。
+- [x] 协调准备失败时不停止 WeClaw；事务已经开始时执行补偿，恢复 Host 和消息准入，旧服务继续可用。
+- [x] WeClaw 进程收到 `SIGINT`/`SIGTERM` 时优先执行同一协调事务；安全停止成功后再取消平台上下文，避免 systemd 或前台停止遗留受管 Host。
+- [x] 消息桥自行退出时也执行协调事务，不因非信号退出遗留受管 Host。
+- [x] 信号停止遇到不安全或不可确认的 Host 时不强杀 Host；WeClaw 仍按外部停止请求退出，并输出可观察日志说明 Host 被保留及原因。
+- [x] systemd unit 使用 `KillMode=process`，只向 WeClaw 主进程发停止信号，避免默认 cgroup 行为绕过 Host 安全门禁。
+- [x] 已验证的 Host 按独立进程组整体停止；Codex App 仍不由 WeClaw 按进程名退出，`--force` 不绕过 Host 安全门禁。
+- [x] 后续 `weclaw start` 复用现有持久化 generation 恢复事务，启动或验证唯一新 Host，并清理陈旧 socket/元数据。
+
+### 实施步骤
+
+- [x] 先补失败测试，覆盖 CLI stop 的准备顺序、准备失败不停止、停止失败补偿，以及信号停止优先执行强事务。
+- [x] 把 `weclaw stop` 接入 loopback 协调入口，保留旧版本能力不匹配和失败补偿语义。
+- [x] 把进程信号停止和消息桥退出接入 Handler 强事务；失败时保留 Host 并记录原因，不阻止外部服务停止。
+- [x] 收紧 systemd 停止边界并增加 unit 契约测试，防止服务管理器直接终止受管 Host。
+- [x] 同步 README、维护者上下文与长期经验，明确普通停止、协调重启和外部 Host 的边界。
+- [x] 完成 cmd、messaging、agent 定向测试、Race、全仓、Vet、module tidy、Staticcheck、文档和差异验证。
+
+### 验证方式
+
+```bash
+go test ./cmd ./messaging ./agent -count=1 -timeout 180s
+go test -race ./cmd ./messaging ./agent -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- `weclaw stop` 现在先通过 loopback 强事务关闭准入、排空任务并停止身份验证通过的 Host，成功后才向 WeClaw PID 发送 `SIGTERM`；准备失败不停止服务，外层停止失败会补偿恢复 Host 和消息准入。
+- 前台信号与消息桥自行退出都在取消平台上下文前执行同一事务；安全门禁失败时保留 Host，并在日志中记录原始原因，不回退调用普通排空或按进程名杀进程。
+- `service/weclaw.service` 使用 `KillMode=process`，避免 systemd 默认向整个 cgroup 发信号而绕过 Host 门禁；契约测试固定该设置。自定义或已安装的旧 unit 仍需同步此属性后由 systemd 重新加载。
+- 验证通过：受影响模块测试、受影响模块 Race、全仓测试、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。首次受限沙箱执行因 `/bin/ps` 被拒绝而失败；在允许进程身份检查的环境重跑同一测试命令后全部通过。
+- 自动化覆盖协调顺序、准备失败、停止失败补偿、旧运行时能力不匹配、信号失败可观察、消息桥退出和 systemd unit 契约；真实 systemd cgroup 与本机受管 app-server 的端到端停止仍需安装新版本后验收。
+
 ## 2026-08-14 飞书审批与 Desktop 任务终态双端收敛
 
 ### 目标

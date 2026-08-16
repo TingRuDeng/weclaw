@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +21,13 @@ import (
 
 type shutdownDrainStub struct {
 	drained *atomic.Bool
+}
+
+type coordinatedShutdownStub struct {
+	prepared   *atomic.Bool
+	drained    *atomic.Bool
+	forced     *atomic.Bool
+	prepareErr error
 }
 
 func TestStartHandlerStatusShowsWeClawVersion(t *testing.T) {
@@ -49,6 +58,23 @@ func (s shutdownDrainStub) Drain(context.Context, bool) (messaging.RuntimeDrainR
 	return messaging.RuntimeDrainResult{ActiveTasks: 1}, nil
 }
 
+func (s coordinatedShutdownStub) Drain(context.Context, bool) (messaging.RuntimeDrainResult, error) {
+	if s.drained != nil {
+		s.drained.Store(true)
+	}
+	return messaging.RuntimeDrainResult{}, nil
+}
+
+func (s coordinatedShutdownStub) PrepareRuntimeRestart(_ context.Context, force bool) (messaging.RuntimeRestartResult, error) {
+	if s.prepared != nil {
+		s.prepared.Store(true)
+	}
+	if s.forced != nil {
+		s.forced.Store(force)
+	}
+	return messaging.RuntimeRestartResult{Codex: true}, s.prepareErr
+}
+
 func TestRunUntilShutdownDrainsTasksBeforeCancellingPlatforms(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var terminalized atomic.Bool
@@ -68,6 +94,114 @@ func TestRunUntilShutdownDrainsTasksBeforeCancellingPlatforms(t *testing.T) {
 	}
 	if drainedFirst := <-platformStopped; !drainedFirst {
 		t.Fatal("platform context was cancelled before active task terminalized")
+	}
+}
+
+func TestRunUntilShutdownCoordinatesCodexHostBeforeCancellingPlatforms(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var prepared atomic.Bool
+	var drained atomic.Bool
+	var forced atomic.Bool
+	platformStopped := make(chan bool, 1)
+	runtime := startRuntime{
+		ctx:             ctx,
+		cancel:          cancel,
+		drain:           coordinatedShutdownStub{prepared: &prepared, drained: &drained, forced: &forced},
+		shutdownTimeout: time.Second,
+		runBridgeFn: func() error {
+			<-ctx.Done()
+			platformStopped <- prepared.Load()
+			return nil
+		},
+	}
+	signals := make(chan os.Signal, 1)
+	signals <- syscall.SIGTERM
+
+	if err := runtime.runUntilShutdown(signals); err != nil {
+		t.Fatalf("runUntilShutdown: %v", err)
+	}
+	if preparedFirst := <-platformStopped; !preparedFirst {
+		t.Fatal("platform context was cancelled before coordinated Codex Host shutdown")
+	}
+	if drained.Load() {
+		t.Fatal("signal shutdown used generic task drain instead of the coordinated Host transaction")
+	}
+	if !forced.Load() {
+		t.Fatal("external signal shutdown must preserve the existing forced task-drain behavior")
+	}
+}
+
+func TestRunUntilShutdownPreservesHostAndStopsPlatformsWhenCoordinationFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var prepared atomic.Bool
+	var drained atomic.Bool
+	platformStopped := make(chan bool, 1)
+	wantErr := errors.New("Host still has an active thread")
+	runtime := startRuntime{
+		ctx: ctx, cancel: cancel,
+		drain:           coordinatedShutdownStub{prepared: &prepared, drained: &drained, prepareErr: wantErr},
+		shutdownTimeout: time.Second,
+		runBridgeFn: func() error {
+			<-ctx.Done()
+			platformStopped <- prepared.Load()
+			return nil
+		},
+	}
+	signals := make(chan os.Signal, 1)
+	signals <- syscall.SIGTERM
+
+	var logs bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
+
+	if err := runtime.runUntilShutdown(signals); err != nil {
+		t.Fatalf("runUntilShutdown: %v", err)
+	}
+	if preparedFirst := <-platformStopped; !preparedFirst {
+		t.Fatal("platform context was cancelled before failed Host coordination completed")
+	}
+	if drained.Load() {
+		t.Fatal("failed coordinated shutdown must not fall back to generic task drain")
+	}
+	if got := logs.String(); !strings.Contains(got, "preserving Host") || !strings.Contains(got, wantErr.Error()) {
+		t.Fatalf("shutdown log=%q, want preserved Host reason", got)
+	}
+}
+
+func TestRunUntilShutdownCoordinatesCodexHostWhenBridgeStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var prepared atomic.Bool
+	var forced atomic.Bool
+	wantErr := errors.New("message bridge stopped")
+	runtime := startRuntime{
+		ctx: ctx, cancel: cancel,
+		drain:           coordinatedShutdownStub{prepared: &prepared, forced: &forced},
+		shutdownTimeout: time.Second,
+		runBridgeFn:     func() error { return wantErr },
+	}
+
+	if err := runtime.runUntilShutdown(make(chan os.Signal)); !errors.Is(err, wantErr) {
+		t.Fatalf("runUntilShutdown error=%v, want %v", err, wantErr)
+	}
+	if !prepared.Load() || !forced.Load() {
+		t.Fatalf("bridge exit skipped coordinated shutdown: prepared=%v forced=%v", prepared.Load(), forced.Load())
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("bridge exit did not cancel the runtime context")
+	}
+}
+
+func TestSystemdServiceSignalsOnlyWeClawMainProcess(t *testing.T) {
+	unit, err := os.ReadFile(filepath.Join("..", "service", "weclaw.service"))
+	if err != nil {
+		t.Fatalf("read systemd service: %v", err)
+	}
+	text := string(unit)
+	if !strings.Contains(text, "KillMode=process") {
+		t.Fatal("systemd service must signal only the WeClaw main process so it can coordinate the Codex Host")
 	}
 }
 

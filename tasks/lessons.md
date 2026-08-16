@@ -421,6 +421,14 @@
 - 正确做法：受控 CLI 全程持共享内核租约，重启持排他租约；要求用户完整退出 App；在全局 idle 和 lifecycle lock 下只停止身份验证通过的 daemon/managed Host；Host 停止前持久化恢复状态，新服务在平台监听前验证唯一且 generation 已变化的 Host，外层停止失败则先重建 Host 才恢复消息准入。
 - 来源：2026-08-12 飞书接管同一 Codex thread 时复现 App/daemon writer 冲突，用户确认更新重启应统一收敛 Codex App、CLI、daemon 与 Host 生命周期。
 
+## 2026-08-16 WeClaw 停止也必须协调受管 Host
+
+- 触发条件：执行 `weclaw stop`、前台 Ctrl-C 或 systemd stop，而共享 app-server 使用独立进程组并可能在 WeClaw 退出后被重新托管为 `PPID=1`。
+- 规则：CLI stop 必须在发送 `SIGTERM` 前复用 Host 强事务；事务失败不得停止服务，外层停止失败必须补偿。进程直接收到停止信号或消息桥自行退出时也先有界尝试同一事务，但安全状态无法证明时保留 Host 并服从外部停止，不把 fail-closed 退化成强杀。
+- 反例：普通 stop 只读取 WeClaw pid 文件并发送信号，而 `codex app-server` 通过 `context.WithoutCancel` 和独立进程组继续运行；systemd 默认 `KillMode=control-group` 又会反向同时向主进程和 Host 发信号，两种行为都绕过 Host 身份与空闲门禁。
+- 正确做法：先关闭消息准入、排空 WeClaw 任务、验证 App/CLI/writer/thread 和 PID/UID/命令/generation，再停止真实 Host；systemd unit 使用 `KillMode=process`，只把信号交给 WeClaw 主进程。成功事务保留持久化 generation 供后续启动验证；Codex App 仍只能由用户退出，不按进程名终止。
+- 来源：2026-08-16 本机日志显示 WeClaw 停止后 PID 66394 的 WeClaw-managed app-server 一度以 `PPID=1` 继续运行。
+
 ## 2026-08-13 协调重启必须区分磁盘二进制与运行中服务能力
 
 - 触发条件：`weclaw update` 已把 PATH 中的二进制更新到支持 `/api/runtime/restart/prepare` 的版本，但旧 WeClaw 服务仍在内存中运行并返回 HTTP 404。
