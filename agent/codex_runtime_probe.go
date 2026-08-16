@@ -181,7 +181,11 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 		}
 	}
 	if req.Intent.Owner == CodexControlDesktop || runtime != CodexRuntimeUnknown {
-		return a.codexOwners.activateRuntime(req, runtime, state)
+		binding, activateErr := a.codexOwners.activateRuntime(req, runtime, state)
+		if activateErr == nil && binding.Runtime == CodexRuntimeWeClaw {
+			a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
+		}
+		return binding, activateErr
 	}
 	return a.recoverCodexRuntimeForRemoteWithPhaseTimeout(
 		ctx, req, codexRuntimeHandoffActivationTimeout,

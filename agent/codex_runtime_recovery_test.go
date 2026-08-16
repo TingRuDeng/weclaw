@@ -97,6 +97,42 @@ func TestACPAgentClearCodexThreadUnbindsConversation(t *testing.T) {
 	}
 }
 
+func TestACPAgentHandoffRebindsConversationAfterExplicitRelease(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
+		CodexHostMode: "auto", CodexDesktopBridge: true,
+	}, acpAgentOptions{desktopProbe: probe})
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		t.Fatal("已运行的 WeClaw runtime 重新绑定 frontend 时不应调用 app-server RPC")
+		return nil, nil
+	}
+	request := CodexRuntimeRequest{
+		Ref: CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"},
+		Intent: CodexControlIntent{
+			Owner: CodexControlRemote, RouteKey: "route-1",
+			ConversationID: "conversation-1", Revision: 1,
+		},
+	}
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeWeClaw, CodexThreadState{ThreadID: request.Ref.ThreadID}); err != nil {
+		t.Fatal(err)
+	}
+
+	a.ClearCodexThread(request.Ref.ConversationID)
+	if _, ok := a.CurrentCodexThread(request.Ref.ConversationID); ok {
+		t.Fatal("ClearCodexThread() 后 conversation 仍绑定 thread")
+	}
+	request.Intent.Revision++
+	binding, err := a.HandoffCodexRuntime(context.Background(), request)
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("HandoffCodexRuntime() binding=%#v err=%v", binding, err)
+	}
+	if threadID, ok := a.CurrentCodexThread(request.Ref.ConversationID); !ok || threadID != request.Ref.ThreadID {
+		t.Fatalf("CurrentCodexThread()=(%q,%v), want (%q,true)", threadID, ok, request.Ref.ThreadID)
+	}
+}
+
 func TestACPAgentUseCodexThreadDoesNotResumeDesktopRuntime(t *testing.T) {
 	a := runtimeRecoveryTestAgent(t, CodexRuntimeDesktop)
 	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
