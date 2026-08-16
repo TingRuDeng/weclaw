@@ -2,6 +2,14 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
+## 2026-08-16 后台协调器测试取消后必须等待真正退出
+
+- 触发条件：测试使用 `t.TempDir` 保存 follower 状态，同时启动持续调和的后台 goroutine。
+- 规则：取消 context 只是发出停止信号，不是 goroutine 已退出的证据；测试返回前必须等待协调器的完成状态，再让临时目录清理。
+- 反例：只用 `defer cancel()` 结束测试；在 race 模式下，协调器仍可能保存 `codex-sessions.json`，与 `TempDir` 删除并发并报 `directory not empty`。
+- 正确做法：先撤销 watcher/任务投递，调用 `cancel()`，再用有超时的条件等待确认 reconciler 已注销，最后释放测试通道和临时目录。
+- 来源：2026-08-16 v0.1.277 首次发布的全仓 race 门禁稳定复现 follower 恢复测试清理竞态；按同文件已有的 cancel + wait 模式修复后定向连跑 50 次通过。
+
 ## 2026-08-16 App 与 WeClaw 冲突应统一 daemon，不能扩大进程清理
 
 - 触发条件：官方 daemon 已是 WeClaw 权威 Host，用户稍后打开 Codex App；App 默认又启动私有 stdio `app-server`，同一 thread 的上游 writer lock 因两个 Host 同时加载而报“其他窗口正在使用”。
