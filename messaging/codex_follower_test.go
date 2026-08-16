@@ -952,7 +952,6 @@ func TestCodexFollowerRestoresFromPersistedBindingWithoutInboundMessage(t *testi
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	registry := newCodexFollowerTestRegistry(snapshots[0].Target.DeliveryRoute, reply)
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	second.startCodexFollowerReconciler(ctx, registry, 10*time.Millisecond)
 	select {
 	case <-ag.watchStarted:
@@ -960,6 +959,12 @@ func TestCodexFollowerRestoresFromPersistedBindingWithoutInboundMessage(t *testi
 		t.Fatal("persisted follower did not restore after restart")
 	}
 	second.detachCodexFrontendTask(snapshots[0].ConversationID, snapshots[0].RouteUserID, snapshots[0].Target.ThreadID)
+	cancel()
+	waitForRolloverCondition(t, func() bool {
+		second.codexFollowerMu.Lock()
+		defer second.codexFollowerMu.Unlock()
+		return second.codexFollower == nil
+	})
 	close(base.watchDone)
 }
 
