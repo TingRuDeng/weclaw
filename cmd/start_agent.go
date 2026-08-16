@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
 	"runtime"
@@ -18,44 +19,53 @@ var codexACPStartupRetryDelay = 2 * time.Second
 
 // createAgentByName 按配置名称创建 Agent；配置缺失或启动失败时返回 nil。
 func createAgentByName(ctx context.Context, cfg *config.Config, name string, protocolTrace ...observability.ProtocolRecorder) agent.Agent {
+	ag, err := createAgentByNameWithError(ctx, cfg, name, protocolTrace...)
+	if err != nil {
+		log.Printf("[agent] %v", err)
+		return nil
+	}
+	return ag
+}
+
+// createAgentByNameWithError 保留 Agent 启动的原始错误，供消息侧返回可操作的
+// 恢复提示；createAgentByName 继续保持历史的 nil 返回契约。
+func createAgentByNameWithError(ctx context.Context, cfg *config.Config, name string, protocolTrace ...observability.ProtocolRecorder) (agent.Agent, error) {
 	agCfg, ok := cfg.Agents[name]
 	if !ok {
-		log.Printf("[agent] %q not found in config", name)
-		return nil
+		return nil, fmt.Errorf("agent %q not found in config", name)
 	}
 	if name == "claude" && agCfg.Type != "acp" {
-		log.Printf("[agent] Claude remote backend only supports ACP; run weclaw config agent")
-		return nil
+		return nil, fmt.Errorf("Claude remote backend only supports ACP; run weclaw config agent")
 	}
 	if name == "codex" && agCfg.Type == "cli" {
-		log.Printf("[agent] legacy codex exec backend is disabled; migrate to the shared app-server runtime")
-		return nil
+		return nil, fmt.Errorf("legacy codex exec backend is disabled; migrate to the shared app-server runtime")
 	}
 
 	switch agCfg.Type {
 	case "acp":
-		return createACPAgent(ctx, name, agCfg, protocolTrace...)
+		ag, err := startACPAgentWithRetry(ctx, name, agCfg, protocolTrace...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start ACP agent %q: %w", name, err)
+		}
+		log.Printf("[agent] started ACP agent: %s (command=%s, type=%s, model=%s, effort=%s)", name, agCfg.Command, agCfg.Type, agCfg.Model, agCfg.Effort)
+		return ag, nil
 	case "cli":
-		return createCLIAgent(name, agCfg)
+		return createCLIAgent(name, agCfg), nil
 	case "http":
-		return createHTTPAgent(name, agCfg)
+		ag := createHTTPAgent(name, agCfg)
+		if ag == nil {
+			return nil, fmt.Errorf("HTTP agent %q is invalid or incomplete", name)
+		}
+		return ag, nil
 	case "companion":
-		return createCompanionAgent(ctx, name, agCfg)
+		ag := createCompanionAgent(ctx, name, agCfg)
+		if ag == nil {
+			return nil, fmt.Errorf("companion agent %q failed to start", name)
+		}
+		return ag, nil
 	default:
-		log.Printf("[agent] unknown type %q for %q", agCfg.Type, name)
-		return nil
+		return nil, fmt.Errorf("unknown agent type %q for %q", agCfg.Type, name)
 	}
-}
-
-// createACPAgent 启动带重试策略的 ACP Agent。
-func createACPAgent(ctx context.Context, name string, agCfg config.AgentConfig, protocolTrace ...observability.ProtocolRecorder) agent.Agent {
-	ag, err := startACPAgentWithRetry(ctx, name, agCfg, protocolTrace...)
-	if err != nil {
-		log.Printf("[agent] failed to start ACP agent %q: %v", name, err)
-		return nil
-	}
-	log.Printf("[agent] started ACP agent: %s (command=%s, type=%s, model=%s, effort=%s)", name, agCfg.Command, agCfg.Type, agCfg.Model, agCfg.Effort)
-	return ag
 }
 
 // createCLIAgent 创建按次调用的 CLI Agent。
@@ -156,6 +166,7 @@ func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTra
 		AppServerSocket:    agCfg.AppServerSocket,
 		CodexHostMode:      agCfg.EffectiveCodexHostMode(),
 		CodexAutoUpdate:    agCfg.EffectiveCodexAutoUpdate(),
+		CodexAppDaemon:     agCfg.CodexAppDaemon,
 		CodexDesktopBridge: codexDesktopBridgeEnabled(agCfg),
 		RunAsUser:          agCfg.RunAsUser,
 		RunAsEnv:           agCfg.RunAsEnv,

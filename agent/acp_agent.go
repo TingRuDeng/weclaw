@@ -54,10 +54,11 @@ type ACPAgent struct {
 	// codexHostMode is resolved once during construction. "daemon" uses the
 	// official Codex lifecycle and never falls back to a WeClaw-owned process;
 	// "managed" preserves the compatibility backend.
-	codexHostMode   string
-	hostCmd         *exec.Cmd
-	hostDone        <-chan error
-	codexAutoUpdate string
+	codexHostMode       string
+	hostCmd             *exec.Cmd
+	hostDone            <-chan error
+	codexAutoUpdate     string
+	codexAppReuseDaemon *bool
 	// Codex 兼容性启动错误只有连续出现后才触发更新，避免把瞬时锁争用或
 	// IO 抖动误判为版本不兼容。更新时间用于抑制同一故障上的更新风暴。
 	codexCompatibilityFailures  int
@@ -161,6 +162,8 @@ type ACPAgent struct {
 	codexCLIUpdaterCall        func(context.Context) (codexCLIUpdateResult, error)
 	codexDaemonLifecycleCall   func(context.Context, string) (codexDaemonLifecycleOutput, error)
 	codexDaemonMetadataCall    func(context.Context, codexDaemonLifecycleOutput, string) (codexHostMetadata, error)
+	codexAppDaemonReuseCall    func(context.Context, bool, string) (codexAppDaemonReuseResult, error)
+	codexAppDaemonInspectCall  func(context.Context) (codexAppDaemonReuseResult, error)
 	codexProviderMigrationCall func(context.Context, codexProviderMigrationRequest) (codexProviderMigrationResult, error)
 	codexProviderReadCall      func(context.Context, string) (string, error)
 	stopDesktopHostCall        func(context.Context) error
@@ -186,6 +189,7 @@ type ACPAgentConfig struct {
 	AppServerSocket    string                         // Codex app-server shared Unix socket; empty uses the WeClaw runtime directory
 	CodexHostMode      string                         // auto / daemon / managed
 	CodexAutoUpdate    string                         // Codex CLI 自动更新策略：off / incompatible
+	CodexAppDaemon     *bool                          // macOS Codex App 是否复用官方 daemon；nil 表示不管理
 	CodexDesktopBridge bool                           // 启用本机 App IPC 协调；auto 及旧版省略 Host mode 可选择 App Host
 	RunAsUser          string                         // 以独立 Unix 用户运行（文件系统隔离）
 	RunAsEnv           []string                       // run_as_user 时透传的环境变量名白名单

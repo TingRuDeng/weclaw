@@ -187,6 +187,10 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 			_ = conn.Close()
 			return 0, metadataErr
 		}
+		if err := a.ensureCodexAppReusesDaemon(ctx, socketPath); err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
 		if err := a.attachCodexHostConnection(conn); err != nil {
 			_ = conn.Close()
 			return 0, err
@@ -219,6 +223,10 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 			_ = conn.Close()
 			return 0, metadataErr
 		}
+		if err := a.ensureCodexAppReusesDaemon(ctx, socketPath); err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
 		if err := a.attachCodexHostConnection(conn); err != nil {
 			_ = conn.Close()
 			return 0, err
@@ -237,6 +245,10 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 		a.effectiveCodexHostConnectTimeout(),
 	)
 	if err != nil {
+		return 0, err
+	}
+	if err := a.ensureCodexAppReusesDaemon(ctx, socketPath); err != nil {
+		_ = conn.Close()
 		return 0, err
 	}
 	if err := a.attachCodexHostConnection(conn); err != nil {

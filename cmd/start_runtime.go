@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -110,6 +111,7 @@ func runForegroundStart(cfg *config.Config) error {
 		return fmt.Errorf("恢复协调重启事务失败: %w", err)
 	}
 	recoveryCancel()
+	startCodexAppDaemonReuseAgent(ctx, handler, cfg)
 	startDefaultAgent(ctx, handler, cfg)
 	registry, err := newStartRegistry(accounts, cfg, handler)
 	if err != nil {
@@ -125,6 +127,34 @@ func runForegroundStart(cfg *config.Config) error {
 		return err
 	}
 	return runtime.runUntilShutdown(signals)
+}
+
+// startCodexAppDaemonReuseAgent 提前准备非默认 Codex Agent，使官方 daemon
+// 验证完成后尽快提交 App 的 launchd 复用环境。失败不阻断其它 Agent 和平台；
+// 之后的 /cx 请求仍会沿同一路径重试并返回真实错误。
+func startCodexAppDaemonReuseAgent(ctx context.Context, handler *messaging.Handler, cfg *config.Config) {
+	if !shouldWarmCodexAppDaemonReuse(cfg) {
+		return
+	}
+	go func() {
+		log.Printf("Preparing Codex App daemon reuse in background...")
+		if _, err := handler.EnsureAgentStarted(ctx, "codex"); err != nil {
+			log.Printf("Failed to prepare Codex App daemon reuse: %v", err)
+		}
+	}()
+}
+
+func shouldWarmCodexAppDaemonReuse(cfg *config.Config) bool {
+	if runtime.GOOS != "darwin" || cfg == nil {
+		return false
+	}
+	agentCfg, ok := cfg.Agents["codex"]
+	if !ok || !agentCfg.EffectiveCodexAppDaemon() || !isCodexAppServerAgent(agentCfg) {
+		return false
+	}
+	mode := agentCfg.EffectiveCodexHostMode()
+	return (mode == "auto" || mode == "daemon") &&
+		strings.TrimSpace(agentCfg.AppServerSocket) == "" && strings.TrimSpace(agentCfg.RunAsUser) == ""
 }
 
 // loadStartAccounts 加载微信账号，并在启用微信但无账号时发起登录。
@@ -185,8 +215,8 @@ func newStartHandlerWithTrace(cfg *config.Config, traceStore *observability.Stor
 		protocolTrace = traceStore
 	}
 	logAvailableAgents(cfg)
-	handler := messaging.NewHandler(func(ctx context.Context, name string) agent.Agent {
-		return createAgentByName(ctx, cfg, name, protocolTrace)
+	handler := messaging.NewHandlerWithErrorFactory(func(ctx context.Context, name string) (agent.Agent, error) {
+		return createAgentByNameWithError(ctx, cfg, name, protocolTrace)
 	}, saveDefaultAgent)
 	handler.SetVersion(Version)
 	handler.SetCDNDownloader(wechat.DownloadFileFromCDN)

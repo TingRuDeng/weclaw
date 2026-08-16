@@ -2,6 +2,14 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
+## 2026-08-16 App 与 WeClaw 冲突应统一 daemon，不能扩大进程清理
+
+- 触发条件：官方 daemon 已是 WeClaw 权威 Host，用户稍后打开 Codex App；App 默认又启动私有 stdio `app-server`，同一 thread 的上游 writer lock 因两个 Host 同时加载而报“其他窗口正在使用”。
+- 规则：Host 生命周期归属与 frontend 进程归属必须分开。WeClaw 只管理身份、generation 和 socket 均验证通过的官方 daemon 或 WeClaw-managed Host；用户拥有的 Codex App 不能因 writer 冲突被重启脚本按名称终止。解决方向是让 App、受控 CLI、飞书和微信复用同一官方 daemon。
+- 反例：WeClaw 重启时扫描并杀掉全部 `codex`/`app-server`/ChatGPT 进程。这样会中断用户本地任务、误杀无关窗口，仍不能证明新 App 启动后不会再次产生第二个 Host。
+- 正确做法：官方 daemon 验证就绪后，核对 App 与 WeClaw 的 `CODEX_HOME` control socket 一致，再为后续 App 启动启用受保护的 local-daemon 环境；已运行 App 仍有私有 app-server 时失败关闭并要求完整重启，不自动退出。App 接入共享 daemon 后使用 daemon 的会话目录，独立 SQLite 目录差异必须显式说明且不得自动迁移或删除。
+- 来源：2026-08-16 真机确认 App 私有 `codex ... app-server` 与官方 standalone daemon 并存；用户明确要求优先推进 App/CLI daemon 复用，而不是在 WeClaw 重启时扩大进程清理。
+
 ## 2026-08-14 Codex App 晚启动必须先收敛 Host 再加载 follower 历史
 
 - 触发条件：WeClaw 启动时 App 不在，因此先运行兼容 managed Host；用户随后打开 App 并在其中继续目标 thread，而飞书 durable binding 仍把旧 `runtime=weclaw` 快照当成可用。

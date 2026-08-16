@@ -2,9 +2,11 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,6 +103,25 @@ func TestEnsureAgentStartedSerializesConcurrentStartup(t *testing.T) {
 	}
 	if factoryCalls != 1 {
 		t.Fatalf("factoryCalls=%d, want one serialized startup", factoryCalls)
+	}
+}
+
+func TestEnsureAgentStartedPreservesFactoryErrorAndRetries(t *testing.T) {
+	want := errors.New("Codex App 需要重启")
+	var calls atomic.Int32
+	h := NewHandlerWithErrorFactory(func(context.Context, string) (agent.Agent, error) {
+		calls.Add(1)
+		return nil, want
+	}, nil)
+
+	if _, err := h.EnsureAgentStarted(context.Background(), "codex"); !errors.Is(err, want) {
+		t.Fatalf("first EnsureAgentStarted() error=%v, want preserved factory error", err)
+	}
+	if _, err := h.EnsureAgentStarted(context.Background(), "codex"); !errors.Is(err, want) {
+		t.Fatalf("second EnsureAgentStarted() error=%v, want preserved factory error", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("factory calls=%d, want retry after failed startup", got)
 	}
 }
 

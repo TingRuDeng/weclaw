@@ -50,6 +50,7 @@ ai_summary:
 - `messaging/handler.go` 是命令路由、会话、审批、进度、任务状态和 Agent 调用的主要业务入口。
 - `observability/` 提供固定字段、默认脱敏的端到端 Trace；本机 CLI/API 可按 message、task、thread、turn 或 stage 查询，Codex 协议正文只有显式启用后才会以脱敏形式记录。
 - `agent/` 内包含 ACP、CLI、HTTP、Companion 等 Agent runtime；macOS 默认 `auto` 拓扑会保持已验证且正在运行的官方 standalone daemon 为唯一 Host，即使 Codex App 同时存在也让 App、微信、飞书和受控 `weclaw codex cli` 复用它。没有运行中的 daemon 时，App 已运行则通过受保护 Desktop IPC 复用 App Host；App 不在时才连接或启动稳定 Unix socket 上的共享 app-server（官方 standalone daemon 优先，否则使用 WeClaw-managed 兼容路径）。macOS 显式 `daemon` 仍启用 Desktop IPC 协调和旧 thread 回交，但不允许选择 App Host。managed Host 切换到 App 前必须经过全局空闲门禁，任何时刻只能有一个写入权威；活动 turn 输入直接 steer，未发送的 Desktop/CLI follow-up 仍是客户端草稿；Codex Companion 和旧 `codex exec` 第二 writer 已停用。
+- 原生 Codex `auto`/`daemon` 默认让后续启动的 macOS Codex App 通过受保护的 launchd 环境复用同一官方 daemon；设置前必须验证 daemon 与 App 推导出的 `CODEX_HOME` control socket 完全一致。已运行 App 若仍带私有 app-server，只能失败关闭并要求用户重启 App，禁止自动退出或按进程名清理；独立 `CODEX_SQLITE_HOME` 表示 App 接入后会看到 daemon 的目录，不得据此迁移或删除旧目录。
 - `codexauth/` 管理 shared-host 级 Codex ChatGPT OAuth profile：系统凭据库优先、受保护文件显式降级；在线切换由 `agent/codex_account.go` 在 task/lease/thread 空闲门禁内停止和验证真实受管 Host，不能修改窗口 workspace/thread binding。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
 - `scripts/release.sh` 为 GitHub 构建和发布 `darwin/arm64`、`linux/arm64`、`linux/amd64` 正式资产及原始摘要，Gitee 镜像 `darwin/arm64` 与 `linux/amd64` 的压缩表示和同一摘要；CI 额外交叉构建 `darwin/amd64` 做兼容性检查，但不得上传该资产。发布门禁包含安装脚本、文档、module tidy、全仓测试、race、vet、Staticcheck、govulncheck 和 `git diff --check`；本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。

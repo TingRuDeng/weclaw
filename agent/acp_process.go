@@ -37,6 +37,9 @@ func (a *ACPAgent) Start(ctx context.Context) (err error) {
 	defer func() {
 		err = a.finishACPStart(err)
 	}()
+	if err := a.applyCodexAppDaemonReusePreference(startupCtx); err != nil {
+		return err
+	}
 	if selected, selectErr := a.tryStartCodexDesktopRuntime(startupCtx); selectErr != nil {
 		return selectErr
 	} else if selected {

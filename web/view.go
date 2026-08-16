@@ -50,6 +50,7 @@ type agentView struct {
 	AppServerSocket  string            `json:"app_server_socket,omitempty"`
 	CodexHostMode    string            `json:"codex_host_mode,omitempty"`
 	CodexAutoUpdate  string            `json:"codex_auto_update,omitempty"`
+	CodexAppDaemon   *bool             `json:"codex_app_reuse_daemon,omitempty"`
 	RunAsUser        string            `json:"run_as_user,omitempty"`
 	RunAsEnv         []string          `json:"run_as_env,omitempty"`
 }
@@ -92,6 +93,7 @@ func redactConfig(cfg *config.Config) configView {
 			AppServerSocket:  ag.AppServerSocket,
 			CodexHostMode:    ag.CodexHostMode,
 			CodexAutoUpdate:  ag.CodexAutoUpdate,
+			CodexAppDaemon:   ag.CodexAppDaemon,
 			RunAsUser:        ag.RunAsUser,
 			RunAsEnv:         ag.RunAsEnv,
 		}
@@ -158,6 +160,7 @@ func mergeView(current *config.Config, v configView) *config.Config {
 			AppServerSocket:  av.AppServerSocket,
 			CodexHostMode:    av.CodexHostMode,
 			CodexAutoUpdate:  av.CodexAutoUpdate,
+			CodexAppDaemon:   av.CodexAppDaemon,
 			RunAsUser:        av.RunAsUser,
 			RunAsEnv:         av.RunAsEnv,
 			Progress:         prev.Progress,

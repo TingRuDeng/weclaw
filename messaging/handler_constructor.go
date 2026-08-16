@@ -1,6 +1,7 @@
 package messaging
 
 import (
+	"context"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -9,6 +10,22 @@ import (
 
 // NewHandler creates a new message handler.
 func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
+	var wrapped AgentFactoryWithError
+	if factory != nil {
+		wrapped = func(ctx context.Context, name string) (agent.Agent, error) {
+			return factory(ctx, name), nil
+		}
+	}
+	return newHandler(wrapped, saveDefault)
+}
+
+// NewHandlerWithErrorFactory creates a handler whose on-demand Agent startup
+// keeps the original error for user-visible recovery guidance.
+func NewHandlerWithErrorFactory(factory AgentFactoryWithError, saveDefault SaveDefaultFunc) *Handler {
+	return newHandler(factory, saveDefault)
+}
+
+func newHandler(factory AgentFactoryWithError, saveDefault SaveDefaultFunc) *Handler {
 	return &Handler{
 		version:                 "dev",
 		agents:                  make(map[string]agent.Agent),

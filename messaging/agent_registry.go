@@ -67,8 +67,8 @@ func (h *Handler) getAgent(ctx context.Context, name string) (agent.Agent, error
 	h.mu.Unlock()
 
 	log.Printf("[handler] starting agent %q on demand...", name)
-	ag = factory(ctx, name)
-	if ag != nil {
+	ag, start.err = factory(ctx, name)
+	if start.err == nil && ag != nil {
 		h.bindCodexThreadArchiveEvents(ag)
 		h.bindCodexThreadActivityEvents(ag)
 	}
@@ -76,12 +76,13 @@ func (h *Handler) getAgent(ctx context.Context, name string) (agent.Agent, error
 	h.mu.Lock()
 	if existing, ok := h.agents[name]; ok {
 		ag = existing
-	} else if ag != nil {
+		start.err = nil
+	} else if start.err == nil && ag != nil {
 		h.agents[name] = ag
 	}
-	if ag == nil {
+	if start.err == nil && ag == nil {
 		start.err = fmt.Errorf("agent %q not available", name)
-	} else {
+	} else if start.err == nil {
 		start.ag = ag
 	}
 	delete(h.agentStarts, name)

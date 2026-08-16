@@ -93,6 +93,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		codexHostSocket:            strings.TrimSpace(cfg.AppServerSocket),
 		codexHostMode:              configuredHostMode,
 		codexAutoUpdate:            strings.ToLower(strings.TrimSpace(cfg.CodexAutoUpdate)),
+		codexAppReuseDaemon:        cloneBoolPointer(cfg.CodexAppDaemon),
 		claudeSessionConfigs:       make(map[string][]acpSessionConfigOption),
 		claudeConfigRevisions:      make(map[string]uint64),
 		claudeLoadedSessions:       make(map[string]claudeLoadedSessionState),
@@ -111,6 +112,14 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	}
 	a.codexHostMode = a.resolveAgentCodexHostMode()
 	return a
+}
+
+func cloneBoolPointer(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 // configureCodexRuntime 为原生 app-server 装配 thread 绑定与 writer lease。

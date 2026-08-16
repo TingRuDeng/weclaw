@@ -32,15 +32,19 @@ func TestCreateAgentByNameRejectsClaudeCLI(t *testing.T) {
 }
 
 func TestACPAgentConfigFromConfigPassesCodexHostMode(t *testing.T) {
+	reuseDaemon := true
 	got := acpAgentConfigFromConfig("codex", config.AgentConfig{
 		Type: "acp", Command: "codex", Args: []string{"app-server"},
-		CodexHostMode: "daemon",
+		CodexHostMode: "daemon", CodexAppDaemon: &reuseDaemon,
 	})
 	if got.CodexHostMode != "daemon" {
 		t.Fatalf("CodexHostMode=%q, want daemon", got.CodexHostMode)
 	}
 	if got.CodexDesktopBridge != (runtime.GOOS == "darwin") {
 		t.Fatalf("daemon CodexDesktopBridge=%v, want Darwin-only coordination", got.CodexDesktopBridge)
+	}
+	if got.CodexAppDaemon == nil || !*got.CodexAppDaemon {
+		t.Fatalf("CodexAppDaemon=%v, want true", got.CodexAppDaemon)
 	}
 	if defaulted := acpAgentConfigFromConfig("codex", config.AgentConfig{}).CodexHostMode; defaulted != "auto" {
 		t.Fatalf("default CodexHostMode=%q, want auto", defaulted)
@@ -57,6 +61,24 @@ func TestACPAgentConfigFromConfigPassesCodexHostMode(t *testing.T) {
 	})
 	if custom.CodexDesktopBridge {
 		t.Fatal("custom app-server socket must keep the explicitly selected shared Host")
+	}
+}
+
+func TestShouldWarmCodexAppDaemonReuse(t *testing.T) {
+	enabled := true
+	cfg := config.DefaultConfig()
+	cfg.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		CodexHostMode: "auto", CodexAppDaemon: &enabled,
+	}
+	if got, want := shouldWarmCodexAppDaemonReuse(cfg), runtime.GOOS == "darwin"; got != want {
+		t.Fatalf("shouldWarmCodexAppDaemonReuse()=%v, want %v", got, want)
+	}
+	codex := cfg.Agents["codex"]
+	codex.CodexHostMode = "managed"
+	cfg.Agents["codex"] = codex
+	if shouldWarmCodexAppDaemonReuse(cfg) {
+		t.Fatal("managed Host must not prewarm App daemon reuse")
 	}
 }
 

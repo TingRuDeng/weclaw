@@ -292,6 +292,30 @@ func TestAgentConfigCodexHostMode(t *testing.T) {
 	}
 }
 
+func TestAgentConfigCodexAppDaemon(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server"],
+				"codex_app_reuse_daemon": true
+			}
+		}
+	}`)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	agentCfg := cfg.Agents["codex"]
+	if agentCfg.CodexAppDaemon == nil || !agentCfg.EffectiveCodexAppDaemon() {
+		t.Fatalf("CodexAppDaemon=%v, want explicit true", agentCfg.CodexAppDaemon)
+	}
+	if (AgentConfig{}).EffectiveCodexAppDaemon() {
+		t.Fatal("nil codex_app_reuse_daemon must preserve unmanaged behavior")
+	}
+}
+
 func TestValidateRejectsInvalidCodexHostModeCombinations(t *testing.T) {
 	tests := map[string]AgentConfig{
 		"unknown":       {CodexHostMode: "external"},
@@ -315,6 +339,36 @@ func TestValidateRejectsUnknownCodexAutoUpdate(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), `invalid codex_auto_update "always"`) {
 		t.Fatalf("Validate() error=%v, want invalid codex_auto_update", err)
+	}
+}
+
+func TestValidateRejectsInvalidCodexAppDaemonCombinations(t *testing.T) {
+	enabled := true
+	tests := map[string]AgentConfig{
+		"non native": {
+			Type: "acp", Command: "codex-acp", CodexAppDaemon: &enabled,
+		},
+		"managed": {
+			Type: "acp", Command: "codex", Args: []string{"app-server"},
+			CodexHostMode: "managed", CodexAppDaemon: &enabled,
+		},
+		"custom socket": {
+			Type: "acp", Command: "codex", Args: []string{"app-server"},
+			AppServerSocket: "/tmp/codex.sock", CodexAppDaemon: &enabled,
+		},
+		"run as user": {
+			Type: "acp", Command: "codex", Args: []string{"app-server"},
+			RunAsUser: "codex", CodexAppDaemon: &enabled,
+		},
+	}
+	for name, agentCfg := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Agents["codex"] = agentCfg
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "codex_app_reuse_daemon") {
+				t.Fatalf("Validate() error=%v, want codex_app_reuse_daemon error", err)
+			}
+		})
 	}
 }
 
@@ -396,6 +450,9 @@ func TestNormalizeCodexRemoteFirstEnablesControlledUpdateForExistingSharedHost(t
 	if got := cfg.Agents["codex"].CodexAutoUpdate; got != "incompatible" {
 		t.Fatalf("CodexAutoUpdate=%q, want incompatible", got)
 	}
+	if got := cfg.Agents["codex"].CodexAppDaemon; got == nil || !*got {
+		t.Fatalf("CodexAppDaemon=%v, want true", got)
+	}
 	if NormalizeCodexRemoteFirst(cfg) {
 		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")
 	}
@@ -408,11 +465,32 @@ func TestNormalizeCodexRemoteFirstKeepsExplicitUpdatePolicy(t *testing.T) {
 		CodexAutoUpdate: "off",
 	}
 
-	if NormalizeCodexRemoteFirst(cfg) {
-		t.Fatal("NormalizeCodexRemoteFirst() changed explicit off policy")
+	if !NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() must add the App daemon reuse default")
 	}
 	if got := cfg.Agents["codex"].CodexAutoUpdate; got != "off" {
 		t.Fatalf("CodexAutoUpdate=%q, want off", got)
+	}
+	if got := cfg.Agents["codex"].CodexAppDaemon; got == nil || !*got {
+		t.Fatalf("CodexAppDaemon=%v, want true", got)
+	}
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")
+	}
+}
+
+func TestNormalizeCodexRemoteFirstKeepsExplicitAppDaemonOptOut(t *testing.T) {
+	disabled := false
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		CodexAutoUpdate: "incompatible", CodexAppDaemon: &disabled,
+	}
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("explicit codex_app_reuse_daemon=false must remain unchanged")
+	}
+	if got := cfg.Agents["codex"].CodexAppDaemon; got == nil || *got {
+		t.Fatalf("CodexAppDaemon=%v, want false", got)
 	}
 }
 

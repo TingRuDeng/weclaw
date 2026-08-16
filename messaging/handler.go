@@ -18,6 +18,11 @@ import (
 // AgentFactory creates an agent by config name. Returns nil if the name is unknown.
 type AgentFactory func(ctx context.Context, name string) agent.Agent
 
+// AgentFactoryWithError preserves the concrete startup failure for callers that
+// need to present an actionable recovery step instead of a generic unavailable
+// message. NewHandler keeps the original AgentFactory API for embedders.
+type AgentFactoryWithError func(ctx context.Context, name string) (agent.Agent, error)
+
 // SaveDefaultFunc persists the default agent name to config file.
 type SaveDefaultFunc func(name string) error
 
@@ -49,7 +54,7 @@ type Handler struct {
 	agentWorkDirs            map[string]string // agent name -> configured/runtime cwd
 	configuredAgentWorkDirs  map[string]string // agent name -> 启动配置 cwd，不随会话切换变化
 	customAliases            map[string]string // custom alias -> agent name (from config)
-	factory                  AgentFactory
+	factory                  AgentFactoryWithError
 	saveDefault              SaveDefaultFunc
 	saveDir                  string   // directory to save images/files to
 	allowedWorkspaceRoots    []string // /cwd 允许切换的根目录；空=禁止远程切换

@@ -62,31 +62,32 @@ func (c FeishuBotConfig) EffectiveRequireMentionInGroup() bool {
 
 // AgentConfig holds configuration for a single agent.
 type AgentConfig struct {
-	Type             string            `json:"type"`                        // "acp", "cli", "http", or "companion"
-	Command          string            `json:"command,omitempty"`           // binary path (cli/acp type)
-	LocalCommand     string            `json:"local_command,omitempty"`     // Claude 账号额度查询回退使用的原生命令
-	Args             []string          `json:"args,omitempty"`              // extra args for command (e.g. ["acp"] for cursor)
-	Aliases          []string          `json:"aliases,omitempty"`           // custom trigger commands (e.g. ["gpt", "4o"])
-	Cwd              string            `json:"cwd,omitempty"`               // working directory (workspace)
-	Env              map[string]string `json:"env,omitempty"`               // extra environment variables (cli/acp type)
-	Model            string            `json:"model,omitempty"`             // model name
-	Effort           string            `json:"effort,omitempty"`            // Codex / Claude reasoning effort
-	PermissionLevel  string            `json:"permission_level,omitempty"`  // Codex 权限档位：default / auto_review / full_access
-	ApprovalPolicy   string            `json:"approval_policy,omitempty"`   // Codex approvalPolicy 高级覆盖
-	ApprovalReviewer string            `json:"approval_reviewer,omitempty"` // Codex approvalsReviewer 高级覆盖：user / auto_review
-	SandboxMode      string            `json:"sandbox_mode,omitempty"`      // Codex sandbox：read-only / workspace-write / danger-full-access
-	SystemPrompt     string            `json:"system_prompt,omitempty"`     // system prompt
-	Endpoint         string            `json:"endpoint,omitempty"`          // API endpoint (http type)
-	APIKey           string            `json:"api_key,omitempty"`           // HTTP Agent 密钥；只能写入配置文件和 Authorization header，禁止日志/审计明文输出
-	Headers          map[string]string `json:"headers,omitempty"`           // extra HTTP headers (http type)
-	MaxHistory       int               `json:"max_history,omitempty"`       // max history (http type)
-	Progress         *ProgressConfig   `json:"progress,omitempty"`          // 微信进度反馈配置
-	AutoLaunch       *bool             `json:"auto_launch,omitempty"`       // companion 是否自动打开本地可见终端
-	AppServerSocket  string            `json:"app_server_socket,omitempty"` // Codex 单一 app-server 的共享 Unix socket
-	CodexHostMode    string            `json:"codex_host_mode,omitempty"`   // Codex Host：auto / daemon / managed
-	CodexAutoUpdate  string            `json:"codex_auto_update,omitempty"` // Codex CLI 自动更新：off / incompatible
-	RunAsUser        string            `json:"run_as_user,omitempty"`       // 以独立 Unix 用户运行 agent，做文件系统隔离
-	RunAsEnv         []string          `json:"run_as_env,omitempty"`        // run_as_user 时需透传的环境变量名白名单
+	Type             string            `json:"type"`                             // "acp", "cli", "http", or "companion"
+	Command          string            `json:"command,omitempty"`                // binary path (cli/acp type)
+	LocalCommand     string            `json:"local_command,omitempty"`          // Claude 账号额度查询回退使用的原生命令
+	Args             []string          `json:"args,omitempty"`                   // extra args for command (e.g. ["acp"] for cursor)
+	Aliases          []string          `json:"aliases,omitempty"`                // custom trigger commands (e.g. ["gpt", "4o"])
+	Cwd              string            `json:"cwd,omitempty"`                    // working directory (workspace)
+	Env              map[string]string `json:"env,omitempty"`                    // extra environment variables (cli/acp type)
+	Model            string            `json:"model,omitempty"`                  // model name
+	Effort           string            `json:"effort,omitempty"`                 // Codex / Claude reasoning effort
+	PermissionLevel  string            `json:"permission_level,omitempty"`       // Codex 权限档位：default / auto_review / full_access
+	ApprovalPolicy   string            `json:"approval_policy,omitempty"`        // Codex approvalPolicy 高级覆盖
+	ApprovalReviewer string            `json:"approval_reviewer,omitempty"`      // Codex approvalsReviewer 高级覆盖：user / auto_review
+	SandboxMode      string            `json:"sandbox_mode,omitempty"`           // Codex sandbox：read-only / workspace-write / danger-full-access
+	SystemPrompt     string            `json:"system_prompt,omitempty"`          // system prompt
+	Endpoint         string            `json:"endpoint,omitempty"`               // API endpoint (http type)
+	APIKey           string            `json:"api_key,omitempty"`                // HTTP Agent 密钥；只能写入配置文件和 Authorization header，禁止日志/审计明文输出
+	Headers          map[string]string `json:"headers,omitempty"`                // extra HTTP headers (http type)
+	MaxHistory       int               `json:"max_history,omitempty"`            // max history (http type)
+	Progress         *ProgressConfig   `json:"progress,omitempty"`               // 微信进度反馈配置
+	AutoLaunch       *bool             `json:"auto_launch,omitempty"`            // companion 是否自动打开本地可见终端
+	AppServerSocket  string            `json:"app_server_socket,omitempty"`      // Codex 单一 app-server 的共享 Unix socket
+	CodexHostMode    string            `json:"codex_host_mode,omitempty"`        // Codex Host：auto / daemon / managed
+	CodexAutoUpdate  string            `json:"codex_auto_update,omitempty"`      // Codex CLI 自动更新：off / incompatible
+	CodexAppDaemon   *bool             `json:"codex_app_reuse_daemon,omitempty"` // macOS Codex App 是否复用官方 daemon；nil 表示不管理
+	RunAsUser        string            `json:"run_as_user,omitempty"`            // 以独立 Unix 用户运行 agent，做文件系统隔离
+	RunAsEnv         []string          `json:"run_as_env,omitempty"`             // run_as_user 时需透传的环境变量名白名单
 }
 
 // EffectiveApprovalPolicy 返回 Codex ACP 会话使用的审批策略；未配置档位时使用 default。
@@ -197,6 +198,34 @@ func (c AgentConfig) ValidateCodexHostModeConfig() error {
 	}
 }
 
+// EffectiveCodexAppDaemon 返回是否由 WeClaw 协调 macOS Codex App
+// 连接官方 daemon。nil 保留嵌入方的既有行为；原生 Codex 配置会在规范化时
+// 显式写入推荐值。
+func (c AgentConfig) EffectiveCodexAppDaemon() bool {
+	return boolValueDefault(c.CodexAppDaemon, false)
+}
+
+// ValidateCodexAppDaemonConfig 拒绝无法共享官方 control socket 的组合。
+// false 只表示撤销 WeClaw 管理的 App 启动环境，因此不限制其它 Host 模式。
+func (c AgentConfig) ValidateCodexAppDaemonConfig() error {
+	if !c.EffectiveCodexAppDaemon() {
+		return nil
+	}
+	if !isNativeCodexAppServerConfig(c) {
+		return fmt.Errorf("codex_app_reuse_daemon requires native codex app-server")
+	}
+	if mode := c.EffectiveCodexHostMode(); mode != "auto" && mode != "daemon" {
+		return fmt.Errorf("codex_app_reuse_daemon requires codex_host_mode auto or daemon")
+	}
+	if strings.TrimSpace(c.AppServerSocket) != "" {
+		return fmt.Errorf("codex_app_reuse_daemon cannot be combined with app_server_socket")
+	}
+	if strings.TrimSpace(c.RunAsUser) != "" {
+		return fmt.Errorf("codex_app_reuse_daemon cannot be combined with run_as_user")
+	}
+	return nil
+}
+
 func normalizeCodexHostMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	return strings.ReplaceAll(mode, "-", "_")
@@ -289,6 +318,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
 		if err := agentCfg.ValidateCodexHostModeConfig(); err != nil {
+			return fmt.Errorf("agent %q: %w", name, err)
+		}
+		if err := agentCfg.ValidateCodexAppDaemonConfig(); err != nil {
 			return fmt.Errorf("agent %q: %w", name, err)
 		}
 	}

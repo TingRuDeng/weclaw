@@ -130,6 +130,35 @@ func TestCodexDaemonClientAttachesOnlyToOfficialManagedSocket(t *testing.T) {
 	})
 }
 
+func TestCodexDaemonClientRejectsRunningPrivateAppBeforeInitialize(t *testing.T) {
+	a, socketPath := newCodexDaemonTestAgent(t)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newFakeCodexHost(listener)
+	server.start(t)
+	t.Cleanup(func() { _ = listener.Close() })
+	a.codexDaemonLifecycleCall = func(context.Context, string) (codexDaemonLifecycleOutput, error) {
+		return testCodexDaemonOutput("running", "pid", socketPath), nil
+	}
+	a.codexDaemonMetadataCall = testCodexDaemonMetadata
+	enabled := true
+	a.codexAppReuseDaemon = &enabled
+	a.codexAppDaemonReuseCall = func(_ context.Context, gotEnabled bool, gotSocket string) (codexAppDaemonReuseResult, error) {
+		if !gotEnabled || gotSocket != socketPath {
+			t.Fatalf("enabled=%v socket=%q, want true and %q", gotEnabled, gotSocket, socketPath)
+		}
+		return codexAppDaemonReuseResult{AppRunning: true, PrivateAppServer: true}, nil
+	}
+	if err := a.Start(context.Background()); !errors.Is(err, ErrCodexAppRestartRequired) {
+		t.Fatalf("Start() error=%v, want App restart required", err)
+	}
+	if a.isRuntimeStarted() {
+		t.Fatal("private App must be rejected before the daemon client initializes")
+	}
+}
+
 func TestCodexDaemonClientStartsOfficialDaemonWithoutLegacyFallback(t *testing.T) {
 	a, socketPath := newCodexDaemonTestAgent(t)
 	var actions []string

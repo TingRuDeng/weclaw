@@ -49,9 +49,13 @@ func (a *ACPAgent) ReconcileCodexHostTopology(ctx context.Context) error {
 
 func (a *ACPAgent) reconcileCodexHostTopologyLocked(ctx context.Context) error {
 	runtime := a.codexRuntimeModeSnapshot()
-	if runtime == CodexRuntimeDesktop ||
-		(runtime == CodexRuntimeWeClaw && a.usesOfficialCodexDaemon()) ||
-		!a.codexDesktopHostSelection || a.desktopRuntime == nil {
+	if runtime == CodexRuntimeDesktop {
+		return nil
+	}
+	if runtime == CodexRuntimeWeClaw && a.usesOfficialCodexDaemon() {
+		return a.validateRunningCodexAppDaemonReuse(ctx)
+	}
+	if !a.codexDesktopHostSelection || a.desktopRuntime == nil {
 		return nil
 	}
 	if socketExists, processExists := a.desktopRuntime.Presence(); !socketExists && !processExists {
