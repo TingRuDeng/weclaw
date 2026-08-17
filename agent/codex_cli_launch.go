@@ -116,6 +116,9 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	action := "version"
 	if !exists {
 		action = "start"
+		if err := a.preflightCodexHostConflicts(ctx, 0); err != nil {
+			return CodexCLILaunch{}, err
+		}
 	}
 	output, err := a.runAndValidateCodexDaemonLifecycle(ctx, action, socketPath)
 	if err != nil {
@@ -128,6 +131,9 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 			output.ManagedCodexPath,
 			command,
 		)
+	}
+	if err := a.preflightCodexHostConflicts(ctx, output.PID); err != nil {
+		return CodexCLILaunch{}, err
 	}
 
 	env, err := mergeEnv(os.Environ(), a.env)

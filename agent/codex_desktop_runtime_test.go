@@ -89,6 +89,27 @@ func TestACPAgentExplicitDaemonDoesNotSelectDesktopHost(t *testing.T) {
 	}
 }
 
+func TestACPAgentAutoResolvedDaemonDoesNotSelectDesktopHost(t *testing.T) {
+	home := t.TempDir()
+	binary := codexDaemonManagedBinaryPath(home)
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("test"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "auto",
+		CodexDesktopBridge: true, Env: map[string]string{"CODEX_HOME": home},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+
+	if a.codexHostMode != codexHostModeDaemon || a.codexDesktopHostSelection {
+		t.Fatalf("mode=%q hostSelection=%v, resolved daemon must remain the only Host authority",
+			a.codexHostMode, a.codexDesktopHostSelection)
+	}
+}
+
 func TestACPAgentLegacyDesktopBridgeStillSelectsDesktopHost(t *testing.T) {
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, CodexDesktopBridge: true,
@@ -294,6 +315,7 @@ func TestACPAgentStartPrefersRunningOfficialDaemonOverDesktopBridge(t *testing.T
 		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "auto",
 		Env: map[string]string{"CODEX_HOME": home}, StateFile: filepath.Join(home, "state.json"),
 	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	var lifecycleActions []string
 	a.codexDaemonLifecycleCall = func(_ context.Context, action string) (codexDaemonLifecycleOutput, error) {
 		lifecycleActions = append(lifecycleActions, action)
@@ -555,6 +577,7 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 		},
 	}
 	shared := NewACPAgent(config)
+	shared.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	if err := shared.Start(context.Background()); err != nil {
 		t.Fatalf("start shared Host: %v", err)
 	}
@@ -570,6 +593,7 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 	t.Cleanup(func() { close(hold) })
 	config.StateFile = filepath.Join(dir, "desktop-state.json")
 	desktop := newACPAgent(config, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	desktop.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	if err := desktop.Start(context.Background()); err != nil {
 		t.Fatalf("start Desktop bridge: %v", err)
 	}

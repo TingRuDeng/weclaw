@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/config"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
@@ -28,6 +29,39 @@ type codexSessionBindingFixture struct {
 type codexRuntimeRecoveryReferenceReplier struct {
 	*codexFollowerRouteReplier
 	reference platform.DurableCommandResultReference
+}
+
+type readyGateCodexLiveAgent struct {
+	*fakeCodexLiveAgent
+	readyEntered chan struct{}
+	readyRelease <-chan struct{}
+	readyErr     error
+}
+
+func (a *readyGateCodexLiveAgent) WatchCodexThreadEventsForTurnReady(
+	ctx context.Context,
+	conversationID string,
+	threadID string,
+	turnID string,
+	onReady func(agent.CodexThreadObserverReady) error,
+	onProgress func(agent.ProgressEvent),
+) (string, error) {
+	signalCodexLiveTestHook(a.readyEntered)
+	if err := waitCodexLiveTestHook(ctx, a.readyRelease); err != nil {
+		return "", err
+	}
+	if a.readyErr != nil {
+		return "", a.readyErr
+	}
+	binding := a.threadBinding(threadID)
+	if onReady != nil {
+		if err := onReady(agent.CodexThreadObserverReady{
+			ThreadID: threadID, TurnID: turnID, RuntimeGeneration: binding.RuntimeGeneration,
+		}); err != nil {
+			return "", err
+		}
+	}
+	return a.WatchCodexThread(ctx, conversationID, threadID, textProgressCallback(onProgress))
 }
 
 func (r *codexRuntimeRecoveryReferenceReplier) DurableCommandResultReference() (platform.DurableCommandResultReference, error) {
@@ -465,6 +499,181 @@ func TestAcquireCodexSessionFeishuActiveTurnUsesDedicatedProgressCard(t *testing
 	task, active := f.h.activeTask(result.route.conversationID)
 	if active {
 		waitDone(t, task.done, "feishu shared host observer cleanup")
+	}
+}
+
+func TestAcquireCodexSessionWaitsForCardAndExactTurnObserverReadiness(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.setActiveTarget("turn-b")
+	binding := f.ag.threadBinding("thread-b")
+	binding.RuntimeGeneration = 7
+	f.ag.setThreadBinding("thread-b", binding)
+	f.ag.watchDone = make(chan struct{})
+	t.Cleanup(func() { closeTestChannel(f.ag.watchDone) })
+	readyEntered := make(chan struct{}, 1)
+	readyRelease := make(chan struct{})
+	ag := &readyGateCodexLiveAgent{
+		fakeCodexLiveAgent: f.ag, readyEntered: readyEntered, readyRelease: readyRelease,
+	}
+	f.reply = platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	request := f.request("thread-b")
+	request.agent = ag
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = &codexFollowerRouteReplier{Replier: f.reply, route: platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}}
+	type acquireResult struct {
+		result codexSessionAcquireResult
+		err    error
+	}
+	done := make(chan acquireResult, 1)
+	go func() {
+		result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+		done <- acquireResult{result: result, err: err}
+	}()
+	select {
+	case <-readyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("observer did not reach readiness gate")
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("acquire returned before observer readiness: %#v", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	preparing, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || preparing.AttachPhase != codexFollowerAttachPreparing ||
+		preparing.AttachTurnID != "turn-b" || preparing.RuntimeGeneration != 7 {
+		t.Fatalf("preparing follower=%#v ok=%v", preparing, ok)
+	}
+	close(readyRelease)
+	got := <-done
+	if got.err != nil || got.result.runtimeErr != nil || !got.result.externalActive {
+		t.Fatalf("result=%#v err=%v", got.result, got.err)
+	}
+	ready := f.h.ensureCodexSessions().followerSnapshots()[0]
+	if ready.AttachPhase != codexFollowerAttachReady || ready.AttachTurnID != "turn-b" || ready.RuntimeGeneration != 7 {
+		t.Fatalf("ready follower=%#v", ready)
+	}
+	closeTestChannel(f.ag.watchDone)
+}
+
+func TestAcquireSameActiveCodexSessionCommitsNewAttachRevisionReady(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.setActiveTarget("turn-b")
+	binding := f.ag.threadBinding("thread-b")
+	binding.RuntimeGeneration = 7
+	f.ag.setThreadBinding("thread-b", binding)
+	f.ag.watchDone = make(chan struct{})
+	t.Cleanup(func() { closeTestChannel(f.ag.watchDone) })
+	f.reply = platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	request := f.request("thread-b")
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = &codexFollowerRouteReplier{Replier: f.reply, route: platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}}
+
+	firstResult, err := f.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || firstResult.runtimeErr != nil || !firstResult.externalActive {
+		t.Fatalf("first result=%#v err=%v", firstResult, err)
+	}
+	first, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || first.AttachPhase != codexFollowerAttachReady {
+		t.Fatalf("first attach=%#v ok=%v", first, ok)
+	}
+
+	secondResult, err := f.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || secondResult.runtimeErr != nil || !secondResult.externalActive {
+		t.Fatalf("second result=%#v err=%v", secondResult, err)
+	}
+	second, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || second.AttachRevision <= first.AttachRevision ||
+		second.AttachPhase != codexFollowerAttachReady || second.AttachTurnID != "turn-b" ||
+		second.RuntimeGeneration != 7 {
+		t.Fatalf("second attach=%#v ok=%v, first revision=%d", second, ok, first.AttachRevision)
+	}
+}
+
+func TestAcquireCodexSessionReusesReadyInProcessCardWithoutObserverControl(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.h.ensureCodexSessions().setActiveWorkspace(f.bindingKey, f.workspaceB)
+	f.setActiveTarget("turn-b")
+	binding := f.ag.threadBinding("thread-b")
+	binding.RuntimeGeneration = 7
+	f.ag.setThreadBinding("thread-b", binding)
+	f.reply = platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	routeReply := &codexFollowerRouteReplier{Replier: f.reply, route: platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}}
+	request := f.request("thread-b")
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = routeReply
+	task, taskCtx, started := f.h.beginActiveTask(context.Background(), request.route.conversationID, activeTaskMeta{
+		owner: f.routeUser, routeUserID: f.routeUser, agentName: "codex", message: "本地活动任务",
+		codexThreadID: "thread-b", codexTurnID: "turn-b", inProcessCodexLifecycle: true,
+	})
+	if !started {
+		t.Fatal("in-process task should start")
+	}
+	request.taskContext = taskCtx
+	progressCfg := config.DefaultProgressConfig()
+	progressCfg.Mode = progressModeStream
+	progressCfg.SendAcceptance = boolPtr(false)
+	_, _, progress := f.h.startProgressSessionForWorkspaceAgentWithHandle(
+		taskCtx, routeReply, "", "codex", f.workspaceB, "本地活动任务", progressCfg,
+	)
+	if progress == nil || progress.nativeProgressReadyError() != nil {
+		t.Fatalf("native progress card not ready: %#v", progress)
+	}
+	task.attachProgressSession(progress)
+	t.Cleanup(func() {
+		task.detachProgressSession(progress)
+		progress.stopBackground()
+		task.cancel()
+		f.h.finishActiveTask(request.route.conversationID, task)
+	})
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+
+	if err != nil || result.runtimeErr != nil || !result.externalActive || !result.externalProgressCard {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	current, active := f.h.activeTask(request.route.conversationID)
+	if !active || current != task || current.externalReservation != nil {
+		t.Fatalf("active=%t task=%p current=%p reservation=%#v", active, task, current, current.externalReservation)
+	}
+	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
+	if !ok || snapshot.AttachPhase != codexFollowerAttachReady ||
+		snapshot.AttachTurnID != "turn-b" || snapshot.RuntimeGeneration != 7 {
+		t.Fatalf("follower=%#v ok=%t", snapshot, ok)
+	}
+}
+
+func TestAcquireCodexSessionCardFailureKeepsFollowerPreparing(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.setActiveTarget("turn-b")
+	f.ag.watchDone = make(chan struct{})
+	t.Cleanup(func() { closeTestChannel(f.ag.watchDone) })
+	f.reply = platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	f.reply.OpenStreamErr = errors.New("card unavailable")
+	request := f.request("thread-b")
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = &codexFollowerRouteReplier{Replier: f.reply, route: platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+
+	if err != nil || result.runtimeErr == nil || !strings.Contains(result.runtimeErr.Error(), "card unavailable") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	snapshot := f.h.ensureCodexSessions().followerSnapshots()[0]
+	if snapshot.AttachPhase != codexFollowerAttachPreparing {
+		t.Fatalf("card failure follower=%#v, want preparing", snapshot)
 	}
 }
 

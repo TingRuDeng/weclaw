@@ -56,10 +56,6 @@ jobs:
         include:
           - goos: darwin
             goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
           - goos: linux
             goarch: amd64
 
@@ -112,7 +108,7 @@ jobs:
 
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum weclaw_darwin_arm64 weclaw_linux_arm64 weclaw_linux_amd64 > checksums.txt
+        run: sha256sum weclaw_darwin_arm64 weclaw_linux_amd64 > checksums.txt
 
       - name: Determine release tag
         id: tag
@@ -149,7 +145,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             dist/weclaw_darwin_arm64
-            dist/weclaw_linux_arm64
             dist/weclaw_linux_amd64
             dist/checksums.txt
           body: |

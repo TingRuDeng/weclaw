@@ -490,7 +490,7 @@ func TestOfficialDaemonHandoffReusesClientWhileAnotherTurnIsActive(t *testing.T)
 	}
 }
 
-func TestExplicitDaemonHandoffDoesNotSelectDesktopHost(t *testing.T) {
+func TestExplicitDaemonHandoffTreatsAppHistoryAsSharedDaemonFrontend(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeDaemon,
@@ -500,18 +500,19 @@ func TestExplicitDaemonHandoffDoesNotSelectDesktopHost(t *testing.T) {
 	probe.loadHook = func(ref CodexThreadRef) {
 		a.codexOwners.observeDesktopSnapshot(ref.ThreadID, 1, CodexThreadState{ThreadID: ref.ThreadID})
 	}
+	a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
 	stopped := false
 	a.stopManagedHostCall = func(context.Context, string) error {
 		stopped = true
 		return nil
 	}
 
-	_, err := a.HandoffCodexRuntime(
+	binding, err := a.HandoffCodexRuntime(
 		context.Background(), remoteCodexRuntimeRequest("thread-1", "route-1", 1),
 	)
 
-	if !errors.Is(err, ErrCodexDesktopOwnershipUnknown) {
-		t.Fatalf("HandoffCodexRuntime() error=%v, want ownership unknown", err)
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("binding=%#v error=%v, App history must not replace daemon authority", binding, err)
 	}
 	if stopped || a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
 		t.Fatalf("stopped=%v runtime=%q, explicit daemon must remain authoritative", stopped, a.codexRuntimeModeSnapshot())

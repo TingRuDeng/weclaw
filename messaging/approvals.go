@@ -163,6 +163,7 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 }
 
 func (h *Handler) waitForPendingApproval(ctx context.Context, opts agentInteractionContextOptions, req agent.ApprovalRequest, pending *pendingApproval) (string, error) {
+	resolutionDone := codexInteractionResolutionDone(req.Resolution)
 	for {
 		wait := time.Until(pending.deadline())
 		if wait < 0 {
@@ -184,6 +185,9 @@ func (h *Handler) waitForPendingApproval(ctx context.Context, opts agentInteract
 				pending.renewDeadline()
 				continue
 			}
+		case <-resolutionDone:
+			timer.Stop()
+			return "", codexInteractionResolutionError(req.Resolution)
 		case <-timer.C:
 			if pending.stateProbe == nil {
 				h.auditDefaultDenyApproval(opts, "timeout")

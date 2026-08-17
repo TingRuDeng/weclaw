@@ -706,6 +706,67 @@ func TestACPAgentAppServerReplayPrecedesQueuedLiveProgress(t *testing.T) {
 	<-done
 }
 
+func TestACPAgentObserverReadyAfterExactTurnSnapshotBeforeReplay(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"history","type":"agentMessage","phase":"commentary","text":"历史进度"}]}]}}`), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	order := make(chan string, 3)
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.WatchCodexThreadEventsForTurnReady(
+			ctx, "conversation-1", "thread-1", "turn-1",
+			func(ready CodexThreadObserverReady) error {
+				a.notifyMu.Lock()
+				registered := len(a.turnObservers["thread-1"]) > 0
+				a.notifyMu.Unlock()
+				if !registered || ready.ThreadID != "thread-1" || ready.TurnID != "turn-1" {
+					return fmt.Errorf("invalid observer readiness: registered=%v ready=%#v", registered, ready)
+				}
+				order <- "ready"
+				return nil
+			},
+			func(event ProgressEvent) { order <- event.DisplayText() },
+		)
+		done <- err
+	}()
+	for index, want := range []string{"ready", "历史进度"} {
+		select {
+		case got := <-order:
+			if got != want {
+				t.Fatalf("order[%d]=%q, want %q", index, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("order[%d] timed out", index)
+		}
+	}
+	cancel()
+	<-done
+}
+
+func TestACPAgentObserverReadyNotCalledForTurnRollover(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/read" {
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-2","status":"inProgress"}]}}`), nil
+	}
+	called := false
+	_, err := a.WatchCodexThreadEventsForTurnReady(
+		context.Background(), "conversation-1", "thread-1", "turn-1",
+		func(CodexThreadObserverReady) error { called = true; return nil }, nil,
+	)
+	if !errors.Is(err, ErrCodexControlChanged) || called {
+		t.Fatalf("error=%v readyCalled=%v, want rollover before readiness", err, called)
+	}
+}
+
 func TestACPAgentExpectedTurnRejectsRolloverBeforeObserverAttach(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {

@@ -43,6 +43,11 @@ type externalCodexTaskReservationControl struct {
 	runtime     externalCodexTaskRuntime
 	watcherDone chan struct{}
 	doneOnce    sync.Once
+	readyDone   chan struct{}
+	readyErr    error
+	ready       agent.CodexThreadObserverReady
+	readySeen   bool
+	readyOnce   sync.Once
 }
 
 func (c *externalCodexTaskReservationControl) finishWatcher() {
@@ -50,6 +55,52 @@ func (c *externalCodexTaskReservationControl) finishWatcher() {
 		return
 	}
 	c.doneOnce.Do(func() { close(c.watcherDone) })
+}
+
+func (c *externalCodexTaskReservationControl) finishReady(err error) {
+	c.finishObserverReady(agent.CodexThreadObserverReady{}, false, err)
+}
+
+func (c *externalCodexTaskReservationControl) finishObserverReady(
+	ready agent.CodexThreadObserverReady,
+	seen bool,
+	err error,
+) {
+	if c == nil {
+		return
+	}
+	c.readyOnce.Do(func() {
+		c.mu.Lock()
+		c.readyErr = err
+		c.ready = ready
+		c.readySeen = seen
+		c.mu.Unlock()
+		close(c.readyDone)
+	})
+}
+
+func (c *externalCodexTaskReservationControl) readyResult() (error, bool) {
+	_, _, err, complete := c.observerReadyResult()
+	return err, complete
+}
+
+func (c *externalCodexTaskReservationControl) observerReadyResult() (
+	agent.CodexThreadObserverReady,
+	bool,
+	error,
+	bool,
+) {
+	if c == nil {
+		return agent.CodexThreadObserverReady{}, false, nil, true
+	}
+	select {
+	case <-c.readyDone:
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.ready, c.readySeen, c.readyErr, true
+	default:
+		return agent.CodexThreadObserverReady{}, false, nil, false
+	}
 }
 
 // prepareExternalCodexTask 只解析外部任务，不占用观察槽或启动观察器。
@@ -112,12 +163,12 @@ func (h *Handler) createExternalCodexTaskReservationLocked(opts externalCodexTas
 		trace: trace,
 	})
 	control := &externalCodexTaskReservationControl{
-		status: externalCodexTaskReserved, watcherDone: make(chan struct{}),
+		status: externalCodexTaskReserved, watcherDone: make(chan struct{}), readyDone: make(chan struct{}),
 	}
 	task.phase = codexTaskReserved
 	task.externalReservation = control
 	control.runtime = externalCodexTaskRuntime{
-		opts: opts, state: prepared.state, watch: prepared.watch, task: task, ctx: watchCtx,
+		opts: opts, state: prepared.state, watch: prepared.watch, task: task, ctx: watchCtx, control: control,
 	}
 	for _, event := range prepared.state.ProgressEvents {
 		task.recordProgressUpdate(time.Now(), event)
@@ -175,10 +226,24 @@ func (h *Handler) activateExternalCodexTaskReservation(reservation externalCodex
 	}
 	h.recordTraceStage(runtime.task.traceSnapshot(), "task.observer_started", "running", "shared Codex turn observer started")
 	go func() {
+		defer reservation.control.finishReady(fmt.Errorf("Codex observer 在就绪前结束"))
 		defer reservation.control.finishWatcher()
 		h.runExternalCodexTaskWatcher(runtime)
 	}()
 	return true
+}
+
+func (h *Handler) waitExternalCodexTaskReservationReady(ctx context.Context, reservation externalCodexTaskReservation) error {
+	if reservation.task == nil || reservation.control == nil {
+		return nil
+	}
+	select {
+	case <-normalizeContext(ctx).Done():
+		return normalizeContext(ctx).Err()
+	case <-reservation.control.readyDone:
+		err, _ := reservation.control.readyResult()
+		return err
+	}
 }
 
 // externalCodexTaskReservationActive 区分已激活复用与已取消、已终态的失效句柄。

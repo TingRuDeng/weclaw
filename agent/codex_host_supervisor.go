@@ -304,7 +304,11 @@ func (a *ACPAgent) validateManagedCodexHost(socketPath string) (codexHostMetadat
 		identity.start != metadata.ProcessStart || identity.commandHash != metadata.ObservedCommandHash {
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程身份与受管记录不一致", nil)
 	}
-	if _, ok := a.allowedCodexHostUIDs()[identity.uid]; !ok {
+	allowedProcessUIDs, err := a.codexHostConflictAllowedUIDs()
+	if err != nil {
+		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程所有者无法确认", err)
+	}
+	if _, ok := allowedProcessUIDs[identity.uid]; !ok {
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程所有者不受信任", nil)
 	}
 	if metadata.ProcessGroupID != metadata.PID {
@@ -334,6 +338,9 @@ func (a *ACPAgent) InspectCodexHost(ctx context.Context) CodexHostStatus {
 func (a *ACPAgent) stopManagedCodexHostLocked(ctx context.Context, socketPath string) error {
 	metadata, err := a.validateManagedCodexHost(socketPath)
 	if err != nil {
+		return err
+	}
+	if err := a.preflightCodexHostConflicts(ctx, metadata.PID); err != nil {
 		return err
 	}
 	if a.usesOfficialCodexDaemon() {

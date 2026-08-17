@@ -387,6 +387,7 @@ func newCodexDaemonTestAgent(t *testing.T) (*ACPAgent, string) {
 		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon",
 		Env: map[string]string{"CODEX_HOME": home}, StateFile: filepath.Join(home, "state.json"),
 	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	t.Cleanup(a.Stop)
 	return a, socketPath
 }
@@ -406,7 +407,7 @@ func newShortCodexHome(t *testing.T) string {
 
 func testCodexDaemonOutput(status, backend, socketPath string) codexDaemonLifecycleOutput {
 	return codexDaemonLifecycleOutput{
-		Status: status, Backend: backend, ManagedCodexPath: "/tmp/managed-codex",
+		Status: status, Backend: backend, PID: os.Getpid(), ManagedCodexPath: "/tmp/managed-codex",
 		SocketPath: socketPath, AppServerVersion: "test",
 	}
 }

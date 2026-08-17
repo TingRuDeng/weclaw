@@ -124,6 +124,9 @@ func (a *ACPAgent) PrepareCodexRestart(
 	if err != nil {
 		return CodexRestartSnapshot{}, fmt.Errorf("验证待停止的 Codex Host: %w", err)
 	}
+	if err := a.preflightCodexHostConflicts(ctx, metadata.PID); err != nil {
+		return CodexRestartSnapshot{}, err
+	}
 	snapshot := CodexRestartSnapshot{
 		HostMode: strings.TrimSpace(a.codexHostMode), SocketPath: socketPath,
 		HostGeneration: metadata.Generation, HostStopped: true,
@@ -260,6 +263,9 @@ func (a *ACPAgent) inspectStartedCodexHost(ctx context.Context) (CodexRestartSna
 	if err != nil {
 		return CodexRestartSnapshot{}, fmt.Errorf("验证重启后的 Codex Host: %w", err)
 	}
+	if err := a.preflightCodexHostConflicts(ctx, metadata.PID); err != nil {
+		return CodexRestartSnapshot{}, err
+	}
 	return CodexRestartSnapshot{
 		HostMode: strings.TrimSpace(a.codexHostMode), SocketPath: socketPath,
 		HostGeneration: metadata.Generation, HostStopped: false,
@@ -294,6 +300,10 @@ func (a *ACPAgent) replaceStaleCodexHostGeneration(ctx context.Context, previous
 	if metadata.Generation != previous.HostGeneration {
 		releaseCodexHostStartupLock(lifecycleLock)
 		return nil
+	}
+	if err := a.preflightCodexHostConflicts(ctx, metadata.PID); err != nil {
+		releaseCodexHostStartupLock(lifecycleLock)
+		return err
 	}
 	if err := a.stopManagedHost(ctx, socketPath); err != nil {
 		releaseCodexHostStartupLock(lifecycleLock)

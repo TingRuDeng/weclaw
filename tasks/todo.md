@@ -1,5 +1,99 @@
 # 当前任务记录
 
+## 2026-08-16 Codex 多 Host 冲突只读预检
+
+### 目标
+
+在 WeClaw 启动或协调重启 Codex Host 前，只读枚举受检 UID 范围内的 Codex `app-server` 进程组；除已验证的权威 Host 外发现额外 Host 时失败关闭并给出处理提示，绝不按进程名自动结束未知进程。
+
+### 范围与验收标准
+
+- [x] 同一 Host 的 Node 包装进程和原生 Codex 子进程按 PGID 聚合，只报告一个 Host。
+- [x] 普通模式只检查当前有效 UID；`run_as_user` 还检查目标 UID 和 sudo wrapper 的 root UID，其他用户进程不误报。
+- [x] macOS/Linux 使用原始 argv 保留路径空格与参数边界；受控 `codex --remote` CLI、帮助和 daemon/proxy/schema generation 等 tooling 不误报。
+- [x] 已通过 metadata 或 official daemon lifecycle 验证的权威 PGID 可以继续；额外未知 PGID 必须失败关闭。
+- [x] 进程表读取或身份解析失败必须失败关闭，不能静默跳过预检。
+- [x] 错误只显示有界、脱敏的 Host 分类及 PGID/PID，并明确只读预检“未停止任何进程”和人工处理步骤。
+- [x] 预检接入 managed Host 启动、official daemon 启动/接管及协调重启；不改变现有 Host 停止身份门禁。
+
+### 实施步骤
+
+- [x] 先补失败测试，固定 PGID 聚合、允许权威 Host、未知 Host 拒绝、读取失败和误报边界。
+- [x] 实现 Unix 只读进程快照解析、冲突判定和非 Unix 明确边界。
+- [x] 把预检接入 Host 启动/接管与协调重启，复用已验证 metadata 和 daemon lifecycle PID。
+- [x] 更新中英文用户说明、维护者上下文和长期安全经验。
+- [x] 完成定向、Race、全仓、Vet、module tidy、Staticcheck、文档和差异验证。
+
+### 验证方式
+
+```bash
+go test ./agent -run 'TestCodexHostConflict' -count=1 -timeout 120s
+go test -race ./agent -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- 预检在 Host 状态变更前只读读取进程快照；macOS 使用 `kern.procargs2`、Linux 使用 `/proc/<pid>/cmdline` 保留原始 argv 边界，再按 PGID 把 Node wrapper 与 native child 聚合为一个 Host。
+- 普通模式检查当前有效 UID；`run_as_user` 额外覆盖目标 UID 与 sudo root wrapper。仅 metadata/lifecycle PID 证明的权威 PGID 可放行，额外 Host、快照/argv 不可读或权威身份不明均失败关闭。
+- `--remote`、帮助、daemon、proxy、schema generation 与 Node 普通 worker 已通过回归用例排除；未知 app-server 参数存在歧义时按潜在 Host 失败关闭。错误仅显示脱敏分类、PGID 和有界 PID，不停止既有 App 或未知进程。
+- 最新代码验证通过：多 Host 定向测试、完整 Agent Race、全仓测试、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验、`git diff --check`，以及正式 `darwin/arm64`、`linux/amd64` 目标编译。独立 review-gate 未发现阻止交付问题。
+- Desktop 私有 Host 兼容选择路径仍不属于本次预检承诺；该路径不获得受管身份，完整多前端共享继续只以 verified official daemon 为 authority。
+
+## 2026-08-16 飞书与 Codex App/CLI 同 Host 多前端接管
+
+### 目标
+
+让 Codex App、受控 `weclaw codex cli` 和飞书在同一个 official daemon 上作为同一 thread/active turn 的多个前端协作：飞书选择会话后只有在运行通道、历史回放和实时观察器真实就绪时才报告接管成功；后续进度、交互和唯一终态可靠同步，`/cx release` 只解除当前飞书 route，不停止本地任务。
+
+### 范围与验收标准
+
+- [x] official standalone daemon 是完整共享模式的唯一 Host authority；App history 只能作为客户端可见性证据，不能把 daemon authority 改成 Desktop。
+- [x] App 使用私有 app-server 时失败关闭并明确要求完整重启；不热迁移 active turn，不启动第二个 Host。
+- [x] 会话选择采用持久化两阶段接管；`preparing` 只表示用户意图已保存，runtime generation、历史回放、进度卡和 exact-turn observer 全部就绪后才 CAS 提交 `ready`。
+- [x] 接管未完成或短暂断线时不返回“已切换并绑定”，普通消息不得误投旧会话或未验证 runtime；后台按同一 revision 幂等恢复。
+- [x] 进度、审批/问答展示和终态向所有仍绑定 observer 广播；审批/问答通过单决策 CAS broker 保证只提交一次，并能收敛本地或其他前端已处理状态。
+- [x] `/cx release` 在 active turn 或 pending interaction 期间也可提交 route tombstone；不 interrupt、不切换或重启 Host，释放后不再观察或接收尚未 claim 的终态。
+- [x] WeClaw 重启后按 Host authority、历史/交互回放、observer readiness、终态 outbox 的顺序恢复，不漏进度、不重复最终结果。
+- [x] 真实 daemon 双客户端协议门禁证明跨连接订阅、`turn/steer`、审批解决和唯一终态；若当前 Codex 版本不支持则保留真实失败并停止伪实现。
+
+### 实施步骤
+
+- [x] 先补红测试，固定 runtime/observer 未就绪不得报告成功、resolved daemon 不得选择 Desktop、审批展示广播但决策单次提交、pending interaction 可 release。
+- [x] 收敛 Host mode 解析和 authority 不变量，复用现有 App daemon 配置与 Host generation 门禁。
+- [x] 扩展 Codex session v14 持久化与 follower CAS，落地 `preparing -> ready` 两阶段接管和 observer readiness handshake。
+- [x] 拆分观察事件广播与 interaction broker，接入外部处理、状态未知复核和跨进程恢复。
+- [x] 调整 release 线性化及 terminal outbox revision guard，完成断线与重启恢复顺序。
+- [x] 更新用户说明和维护者上下文，完成定向、Race、全仓、Vet、module tidy、Staticcheck、文档和差异门禁。
+- [x] 在隔离 Unix socket 上运行真实 Codex daemon 双客户端协议验收，并记录实际支持边界。
+
+### 验证方式
+
+```bash
+go test ./agent ./messaging ./feishu ./platform -count=1 -timeout 240s
+go test -race ./agent ./messaging ./feishu -count=1 -timeout 420s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- 完整共享现在只以 identity-verified official daemon 为 Host authority；Codex App、受控 CLI 与飞书是同一 thread/active turn 的并列 frontend。App 私有 Host 和 WeClaw-managed Host 仅保留兼容路径，不能伪装成完整共享或触发 active turn 热迁移。
+- Codex session store 已升级到 v14。route 先持久化 `preparing`，只有 Host generation、权威历史、交互回放、任务卡与 exact-turn observer 全部就绪后才以 revision/turn/generation CAS 提交 `ready`；未就绪期间普通消息失败关闭。
+- 进度、交互展示和终态按 ready route 广播；`(thread, turn, request)` broker 只接受一次审批或结构化问答提交，并通过 `serverRequest/resolved` 收敛其他 frontend。`/cx release` 先持久化 route tombstone，再解除当前 route，不停止共享 turn 或其他 observer。
+- 重启恢复顺序固定为 Host authority、权威 history、pending interaction replay、exact-turn observer/attach ready、guarded terminal outbox；`startupHeld` 同时覆盖旧卡 supersede 调度、计时和最终投递尝试。
+- 验证通过：模块测试、模块 Race、全仓测试、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。受限沙箱内真实协议门禁最初因 official daemon 调用 `/bin/ps` 被拒绝而失败；在允许进程身份检查的隔离环境重跑后通过。
+- 真实 official daemon 双客户端协议门禁通过（4.11 秒）：客户端 B 可重放客户端 A 的审批，跨连接 `turn/steer` 生效，审批解决后 B 收到 `serverRequest/resolved`，两个客户端各自只收到一次终态，最终历史包含 steer marker。真实飞书端的完整交互体验仍需安装包含本改动的版本后验收。
+
 ## 2026-08-16 WeClaw 与受管 Codex Host 协调停止
 
 ### 目标

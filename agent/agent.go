@@ -179,6 +179,28 @@ type CodexExpectedStructuredThreadRuntimeAgent interface {
 	WatchCodexThreadEventsForTurn(ctx context.Context, conversationID string, threadID string, turnID string, onProgress func(ProgressEvent)) (string, error)
 }
 
+// CodexThreadObserverReady identifies the exact Host generation and turn whose
+// history watermark has been established before live event consumption starts.
+type CodexThreadObserverReady struct {
+	ThreadID          string
+	TurnID            string
+	RuntimeGeneration uint64
+}
+
+// CodexReadyExpectedStructuredThreadRuntimeAgent exposes an explicit readiness
+// handshake for durable message frontends. Returning an error from onReady
+// detaches the newly registered observer before it can project stale events.
+type CodexReadyExpectedStructuredThreadRuntimeAgent interface {
+	WatchCodexThreadEventsForTurnReady(
+		ctx context.Context,
+		conversationID string,
+		threadID string,
+		turnID string,
+		onReady func(CodexThreadObserverReady) error,
+		onProgress func(ProgressEvent),
+	) (string, error)
+}
+
 // ConversationWorkspaceAgent 允许 Agent 为单个 conversation 固定工作目录。
 type ConversationWorkspaceAgent interface {
 	SetConversationCwd(conversationID string, cwd string)

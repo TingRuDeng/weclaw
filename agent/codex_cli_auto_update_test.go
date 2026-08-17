@@ -168,6 +168,7 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 			testCodexUnixHostCountEnv:         countPath,
 		},
 	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	a.codexCompatibilityRetryWait = time.Millisecond
 	t.Cleanup(a.Stop)
 
@@ -314,6 +315,7 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 			testCodexUnixHostCountEnv:         countPath,
 		},
 	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	t.Cleanup(a.Stop)
 	return a, markerPath, countPath
 }

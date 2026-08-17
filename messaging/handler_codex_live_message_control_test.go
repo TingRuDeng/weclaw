@@ -81,6 +81,17 @@ func TestCodexDesktopActiveMessageClaimsStableFollowerTerminalDelivery(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
+	preparing, ok := h.ensureCodexSessions().followerSnapshot(route.bindingKey)
+	if !ok {
+		t.Fatal("committed follower is missing")
+	}
+	prepared, err := h.ensureCodexSessions().commitFollowerAttachRuntime(preparing, "turn-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ensureCodexSessions().commitFollowerAttachReady(prepared, "turn-1", 0); err != nil {
+		t.Fatal(err)
+	}
 	opts.platform = platform.PlatformFeishu
 	opts.accountID = "cli_a"
 	opts.reply = &codexFollowerRouteReplier{Replier: opts.reply.(*platformtest.Replier), route: deliveryRoute}

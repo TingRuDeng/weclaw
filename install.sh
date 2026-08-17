@@ -312,9 +312,9 @@ case "$ARCH" in
 esac
 
 case "$OS/$ARCH" in
-  darwin/arm64|linux/arm64|linux/amd64) ;;
+  darwin/arm64|linux/amd64) ;;
   *)
-    echo "Unsupported release platform: $OS/$ARCH (published: darwin/arm64, linux/arm64, linux/amd64)" >&2
+    echo "Unsupported release platform: $OS/$ARCH (published: darwin/arm64, linux/amd64)" >&2
     exit 1
     ;;
 esac

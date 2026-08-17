@@ -339,7 +339,6 @@ test_rejects_unknown_source() {
 test_supported_release_targets() {
   for spec in \
     "Darwin arm64 weclaw_darwin_arm64" \
-    "Linux aarch64 weclaw_linux_arm64" \
     "Linux x86_64 weclaw_linux_amd64"
   do
     set -- $spec
@@ -356,7 +355,7 @@ test_supported_release_targets() {
   done
 }
 test_rejects_unpublished_release_targets() {
-  for spec in "Darwin x86_64"; do
+  for spec in "Darwin x86_64" "Linux aarch64"; do
     set -- $spec
     setup_case
     FAKE_UNAME_OS=$1

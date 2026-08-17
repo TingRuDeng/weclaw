@@ -209,22 +209,24 @@ func (g terminalDeliveryGuard) apply(draft *terminalOutboxDraft) {
 }
 
 type terminalOutbox struct {
-	mu              sync.Mutex
-	path            string
-	registry        *platform.Registry
-	entries         []*terminalOutboxEntry
-	preparing       map[string]bool
-	followerHeld    map[string]bool
-	releaseHeld     map[string]bool
-	releaseBusy     map[string]bool
-	processing      map[string]bool
-	wake            chan struct{}
-	now             func() time.Time
-	trace           observability.Recorder
-	maxEntries      int
-	maxAttempts     int
-	deliveryAllowed func(*terminalOutboxEntry) bool
-	deliveryBarrier *sync.RWMutex
+	mu               sync.Mutex
+	path             string
+	registry         *platform.Registry
+	entries          []*terminalOutboxEntry
+	preparing        map[string]bool
+	followerHeld     map[string]bool
+	startupHeld      map[string]bool
+	releaseHeld      map[string]bool
+	releaseBusy      map[string]bool
+	processing       map[string]bool
+	wake             chan struct{}
+	now              func() time.Time
+	trace            observability.Recorder
+	maxEntries       int
+	maxAttempts      int
+	deliveryAllowed  func(*terminalOutboxEntry) bool
+	deliveryDecision func(*terminalOutboxEntry) (bool, string)
+	deliveryBarrier  *sync.RWMutex
 }
 
 // DefaultTerminalOutboxFile 返回终态 outbox 的主机级状态文件。
@@ -249,8 +251,8 @@ func (h *Handler) StartTerminalOutbox(ctx context.Context, registry *platform.Re
 	if err != nil {
 		return err
 	}
-	outbox.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
-		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	outbox.deliveryDecision = func(entry *terminalOutboxEntry) (bool, string) {
+		return h.terminalOutboxDeliveryDecision(registry, entry)
 	}
 	outbox.deliveryBarrier = &h.codexFollowerDeliveryMu
 	h.terminalOutboxMu.Lock()
@@ -261,6 +263,7 @@ func (h *Handler) StartTerminalOutbox(ctx context.Context, registry *platform.Re
 	h.terminalOutbox = outbox
 	h.terminalOutboxMu.Unlock()
 	followers, releases := h.ensureCodexSessions().followerRecoverySnapshots()
+	outbox.holdCodexFollowerTerminalDeliveries(followers)
 	outbox.holdCodexFollowerRecoveries(followers)
 	h.recoverReleasedCodexFollowerStreamsForTargets(outbox, committedCodexReleaseTargets(releases))
 	go outbox.run(ctx)
@@ -358,7 +361,7 @@ func InspectTerminalOutbox(path string) (TerminalOutboxStatus, error) {
 func newTerminalOutbox(path string, registry *platform.Registry, traceRecorders ...observability.Recorder) (*terminalOutbox, error) {
 	outbox := &terminalOutbox{
 		path: path, registry: registry,
-		preparing: make(map[string]bool), followerHeld: make(map[string]bool),
+		preparing: make(map[string]bool), followerHeld: make(map[string]bool), startupHeld: make(map[string]bool),
 		releaseHeld: make(map[string]bool), releaseBusy: make(map[string]bool), processing: make(map[string]bool),
 		wake: make(chan struct{}, 1), now: time.Now,
 		maxEntries: terminalOutboxMaxEntries, maxAttempts: terminalOutboxMaxAttempts,
@@ -372,6 +375,85 @@ func newTerminalOutbox(path string, registry *platform.Registry, traceRecorders 
 	}
 	outbox.entries = entries
 	return outbox, nil
+}
+
+// holdCodexFollowerTerminalDeliveries prevents a persisted ready bit from a
+// previous process from authorizing delivery before this process re-establishes
+// Host authority, history replay and the exact-turn observer watermark.
+func (o *terminalOutbox) holdCodexFollowerTerminalDeliveries(targets []codexFollowerSnapshot) {
+	if len(targets) == 0 {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, entry := range o.entries {
+		if !terminalEntryHasWork(entry) {
+			continue
+		}
+		for _, target := range targets {
+			if !terminalOutboxEntryMatchesCodexFollowerGuard(entry, target) {
+				continue
+			}
+			o.startupHeld[entry.ID] = true
+			o.preparing[entry.ID] = true
+			break
+		}
+	}
+}
+
+func terminalOutboxEntryMatchesCodexFollowerGuard(entry *terminalOutboxEntry, target codexFollowerSnapshot) bool {
+	guard := terminalDeliveryGuardFromEntry(entry)
+	return guard.complete() && guard.FollowerBindingKey == target.BindingKey &&
+		guard.FollowerRevision == target.Revision &&
+		guard.FollowerThreadID == strings.TrimSpace(target.Target.ThreadID) &&
+		guard.AuthorizedIdentity == strings.TrimSpace(target.Target.AuthorizedIdentity) &&
+		sameDeliveryEndpoint(entry.Route, target.Target.DeliveryRoute)
+}
+
+func (o *terminalOutbox) releaseCodexFollowerTerminalDeliveries(target codexFollowerSnapshot) {
+	o.mu.Lock()
+	changed := false
+	for _, entry := range o.entries {
+		if !o.startupHeld[entry.ID] || !terminalOutboxEntryMatchesCodexFollowerGuard(entry, target) {
+			continue
+		}
+		delete(o.startupHeld, entry.ID)
+		if !o.followerHeld[entry.ID] && !o.releaseHeld[entry.ID] {
+			delete(o.preparing, entry.ID)
+		}
+		changed = true
+	}
+	o.mu.Unlock()
+	if changed {
+		o.signal()
+	}
+}
+
+func (o *terminalOutbox) reconcileCodexFollowerTerminalDeliveryHolds(targets []codexFollowerSnapshot) {
+	o.mu.Lock()
+	changed := false
+	for id := range o.startupHeld {
+		entry := o.entryLocked(id)
+		matched := false
+		for _, target := range targets {
+			if terminalOutboxEntryMatchesCodexFollowerGuard(entry, target) {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		delete(o.startupHeld, id)
+		if !o.followerHeld[id] && !o.releaseHeld[id] {
+			delete(o.preparing, id)
+		}
+		changed = true
+	}
+	o.mu.Unlock()
+	if changed {
+		o.signal()
+	}
 }
 
 func (o *terminalOutbox) enqueueAndAttempt(ctx context.Context, draft terminalOutboxDraft, preferred platform.Replier) error {
@@ -1328,7 +1410,7 @@ func (o *terminalOutbox) duePendingStreamSupersedes() []duePendingStreamSupersed
 	defer o.mu.Unlock()
 	var due []duePendingStreamSupersede
 	for _, entry := range o.entries {
-		if o.processing[entry.ID] {
+		if o.processing[entry.ID] || o.startupHeld[entry.ID] {
 			continue
 		}
 		for _, pending := range entry.PendingSupersedes {
@@ -1362,7 +1444,7 @@ func (o *terminalOutbox) nextAttemptDelay() (time.Duration, bool) {
 	defer o.mu.Unlock()
 	var next time.Time
 	for _, entry := range o.entries {
-		if !o.processing[entry.ID] {
+		if !o.processing[entry.ID] && !o.startupHeld[entry.ID] {
 			for _, pending := range entry.PendingSupersedes {
 				if !pending.DeadLetter && (next.IsZero() || pending.NextAttempt.Before(next)) {
 					next = pending.NextAttempt
@@ -1553,7 +1635,7 @@ func (o *terminalOutbox) attemptPendingStreamSupersede(parent context.Context, e
 func (o *terminalOutbox) beginPendingStreamSupersedeAttempt(entryID string, pendingID string) (*terminalOutboxEntry, pendingStreamSupersede, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.processing[entryID] {
+	if o.processing[entryID] || o.startupHeld[entryID] {
 		return nil, pendingStreamSupersede{}, false
 	}
 	entry := o.entryLocked(entryID)
@@ -1691,7 +1773,19 @@ func (o *terminalOutbox) attempt(parent context.Context, id string, preferred pl
 		return nil
 	}
 	defer o.endAttempt(id)
-	if o.deliveryAllowed != nil && !o.deliveryAllowed(entry) {
+	allowed, reason := true, ""
+	if o.deliveryDecision != nil {
+		allowed, reason = o.deliveryDecision(entry)
+	} else if o.deliveryAllowed != nil {
+		allowed = o.deliveryAllowed(entry)
+	}
+	if !allowed {
+		if reason == "attach_not_ready" {
+			if err := o.deferDelivery(id, reason); err != nil {
+				return fmt.Errorf("defer terminal delivery until follower attach is ready: %w", err)
+			}
+			return nil
+		}
 		if err := o.discardReservation(id); err != nil {
 			return fmt.Errorf("discard unauthorized terminal delivery: %w", err)
 		}
@@ -1909,6 +2003,33 @@ func sendOutboxResult(ctx context.Context, reply platform.Replier, entry *termin
 			return sendOutboxText(ctx, reply, text, key)
 		}
 		return err
+	}
+	return nil
+}
+
+func (o *terminalOutbox) deferDelivery(id string, reason string) error {
+	o.mu.Lock()
+	entry := o.entryLocked(id)
+	if entry == nil {
+		o.mu.Unlock()
+		return nil
+	}
+	before := cloneTerminalOutboxEntry(entry)
+	now := o.now()
+	summary := "delivery deferred: " + strings.TrimSpace(reason)
+	firstDeferral := entry.LastError != summary
+	entry.UpdatedAt = now
+	entry.NextAttempt = now.Add(terminalOutboxRetryMin)
+	entry.LastError = summary
+	if err := o.persistLocked(); err != nil {
+		*entry = *before
+		o.mu.Unlock()
+		return err
+	}
+	deferred := cloneTerminalOutboxEntry(entry)
+	o.mu.Unlock()
+	if firstDeferral {
+		o.recordTrace(deferred, "terminal.delivery.deferred", "waiting", reason)
 	}
 	return nil
 }

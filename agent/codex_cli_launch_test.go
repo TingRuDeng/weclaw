@@ -27,6 +27,7 @@ func TestPrepareCodexCLILaunchStartsOfficialDaemonAndPinsRemote(t *testing.T) {
 		Command: "codex", Args: []string{"-c", "feature=true", "app-server", "--listen", "stdio://"},
 		Cwd: t.TempDir(), Env: map[string]string{"CODEX_HOME": home}, CodexHostMode: "daemon",
 	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	var actions []string
 	a.codexDaemonLifecycleCall = func(_ context.Context, action string) (codexDaemonLifecycleOutput, error) {
 		actions = append(actions, action)
@@ -117,6 +118,7 @@ func TestPrepareCodexCLILaunchAllowsVerifiedDaemonWhenDesktopIsPresent(t *testin
 		Command: "codex", Args: []string{"app-server"}, Env: map[string]string{"CODEX_HOME": home},
 		CodexHostMode: "daemon", CodexDesktopBridge: true,
 	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	a.desktopProbe = &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
 	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
 	a.codexDaemonLifecycleCall = func(_ context.Context, action string) (codexDaemonLifecycleOutput, error) {

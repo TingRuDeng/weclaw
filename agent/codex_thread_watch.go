@@ -25,6 +25,7 @@ type codexThreadWatchOptions struct {
 	replayedActions   map[string]bool
 	onProgress        func(string)
 	onProgressEvent   func(ProgressEvent)
+	onReady           func(CodexThreadObserverReady) error
 	reconcile         <-chan time.Time
 	refresh           func(context.Context) error
 }
@@ -36,6 +37,19 @@ func (a *ACPAgent) WatchCodexThreadEvents(ctx context.Context, conversationID st
 
 // WatchCodexThreadEventsForTurn 只观察调用方预留的同一个 active turn。
 func (a *ACPAgent) WatchCodexThreadEventsForTurn(ctx context.Context, conversationID string, threadID string, turnID string, onProgress func(ProgressEvent)) (string, error) {
+	return a.WatchCodexThreadEventsForTurnReady(ctx, conversationID, threadID, turnID, nil, onProgress)
+}
+
+// WatchCodexThreadEventsForTurnReady reports readiness only after the observer,
+// authoritative snapshot, exact-turn check and replay watermark are all established.
+func (a *ACPAgent) WatchCodexThreadEventsForTurnReady(
+	ctx context.Context,
+	conversationID string,
+	threadID string,
+	turnID string,
+	onReady func(CodexThreadObserverReady) error,
+	onProgress func(ProgressEvent),
+) (string, error) {
 	if a.protocol != protocolCodexAppServer {
 		return "", fmt.Errorf("agent is not codex app-server")
 	}
@@ -43,7 +57,7 @@ func (a *ACPAgent) WatchCodexThreadEventsForTurn(ctx context.Context, conversati
 	defer ticker.Stop()
 	return a.watchCodexThreadWithReconcile(ctx, codexThreadWatchOptions{
 		conversationID: conversationID, threadID: threadID, targetTurnID: strings.TrimSpace(turnID),
-		onProgressEvent: onProgress, reconcile: ticker.C,
+		onProgressEvent: onProgress, onReady: onReady, reconcile: ticker.C,
 	})
 }
 
@@ -80,6 +94,9 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 	observerID := a.registerTurnObserver(opts.threadID, turnCh)
 	defer a.unregisterTurnObserver(opts.threadID, observerID, turnCh)
 	state, initialEvents, appServerSequence, desktopEpoch, desktopRevision, err := a.attachedCodexWatchSnapshot(ctx, opts, binding, hasBinding)
+	for _, event := range codexTurnInteractions(initialEvents) {
+		a.rememberPendingCodexInteraction(opts.threadID, event)
+	}
 	if err == nil && strings.TrimSpace(opts.targetTurnID) != "" {
 		if targetState, ok := a.attachedCodexTargetTurnState(opts); ok {
 			state = targetState
@@ -102,6 +119,22 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 		}
 	}
 	watch := opts
+	if err == nil && watch.targetTurnID == "" {
+		watch.targetTurnID = firstNonEmpty(strings.TrimSpace(state.ActiveTurnID), strings.TrimSpace(state.LastTurnID))
+	}
+	if err == nil && watch.onReady != nil {
+		generation := uint64(0)
+		if hasBinding {
+			generation = binding.RuntimeGeneration
+		}
+		if readyErr := watch.onReady(CodexThreadObserverReady{
+			ThreadID: strings.TrimSpace(opts.threadID), TurnID: strings.TrimSpace(watch.targetTurnID),
+			RuntimeGeneration: generation,
+		}); readyErr != nil {
+			a.abandonCodexInteractions(opts.threadID, initialEvents)
+			return "", readyErr
+		}
+	}
 	if err == nil && !state.Active && a.desktopWatchAwaitingFinal(watch, state) {
 		watch.targetTurnID = firstNonEmpty(strings.TrimSpace(watch.targetTurnID), strings.TrimSpace(state.LastTurnID))
 	} else if err == nil && !state.Active {
@@ -115,9 +148,6 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 			return state.LastAgentMessageText, nil
 		}
 		return "Codex App 本地任务已完成，但没有返回文本。", nil
-	}
-	if err == nil && watch.targetTurnID == "" {
-		watch.targetTurnID = state.ActiveTurnID
 	}
 	watch.turnCh = turnCh
 	watch.initialEvents = initialEvents
@@ -152,9 +182,7 @@ func (a *ACPAgent) attachedCodexWatchSnapshot(
 		return state, nil, sequence, 0, 0, err
 	}
 	targetTurnID := firstNonEmpty(strings.TrimSpace(opts.targetTurnID), strings.TrimSpace(state.ActiveTurnID))
-	events := projectCodexAppServerActiveTurnEvents(snapshot, targetTurnID)
-	events = append(events, a.claimPendingCodexInteractions(opts.threadID)...)
-	return state, events, sequence, 0, 0, nil
+	return state, projectCodexAppServerActiveTurnEvents(snapshot, targetTurnID), sequence, 0, 0, nil
 }
 
 func (a *ACPAgent) collectAttachedCodexTurn(ctx context.Context, opts codexThreadWatchOptions) (string, error) {

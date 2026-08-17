@@ -394,6 +394,22 @@ func (t *activeAgentTask) attachProgressSession(progress *progressSession) {
 	t.mu.Unlock()
 }
 
+func (t *activeAgentTask) nativeProgressCardReadyError() error {
+	if t == nil {
+		return fmt.Errorf("现有 Codex 任务进度卡尚未挂接")
+	}
+	t.mu.Lock()
+	progress := t.progress
+	t.mu.Unlock()
+	if progress == nil {
+		return fmt.Errorf("现有 Codex 任务进度卡尚未挂接")
+	}
+	if !progress.usesNativeProgressCard() {
+		return fmt.Errorf("现有 Codex 任务未使用原生进度卡")
+	}
+	return progress.nativeProgressReadyError()
+}
+
 func (t *activeAgentTask) detachProgressSession(progress *progressSession) {
 	if t == nil || progress == nil {
 		return

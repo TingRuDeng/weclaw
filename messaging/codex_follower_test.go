@@ -248,7 +248,7 @@ func TestEnsureCodexFollowerRuntimeReconcilesHostBeforeAcceptingExistingBinding(
 		Ref: agent.CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-1"},
 	}
 
-	err := ensureCodexFollowerRuntime(context.Background(), ag, request)
+	_, err := ensureCodexFollowerRuntime(context.Background(), ag, request)
 
 	if err != nil || !ag.topologyReconciled() {
 		t.Fatalf("error=%v reconciled=%v", err, ag.topologyReconciled())
@@ -349,6 +349,72 @@ func TestCodexFollowerRecoveryUpdatesPendingSwitchResult(t *testing.T) {
 	current, ok := store.followerSnapshot(snapshot.BindingKey)
 	if !ok || current.Target.RuntimeRecoveryResult != nil {
 		t.Fatalf("current=%#v ok=%v, recovered result must be cleared after delivery", current, ok)
+	}
+}
+
+func TestCodexFollowerRecoveryKeepsPendingSwitchResultUntilAttachReady(t *testing.T) {
+	h, _, _, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false,
+	})
+	defer close(watchDone)
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-local",
+	}
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	binding := store.bindings[snapshot.BindingKey]
+	binding.FollowerAttachPhase = codexFollowerAttachPreparing
+	binding.Follower.RuntimeRecoveryResult = &reference
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+
+	reply := &codexFollowerCommandResultReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true})}
+	registry := newCodexFollowerTestRegistry(snapshot.Target.DeliveryRoute, reply)
+	preparing, ok := store.followerSnapshot(snapshot.BindingKey)
+	if !ok {
+		t.Fatal("preparing follower missing")
+	}
+	if err := h.reconcileCodexFollowerRuntimeResult(context.Background(), registry, preparing); err != nil {
+		t.Fatal(err)
+	}
+	reply.mu.Lock()
+	attempts := len(reply.references)
+	reply.mu.Unlock()
+	if attempts != 0 {
+		t.Fatalf("card attempts=%d while attach is preparing, want 0", attempts)
+	}
+	current, ok := store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult == nil {
+		t.Fatalf("current=%#v ok=%v, preparing attach must keep pending result", current, ok)
+	}
+
+	store.mu.Lock()
+	binding = store.bindings[snapshot.BindingKey]
+	binding.FollowerAttachPhase = codexFollowerAttachReady
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+	ready, ok := store.followerSnapshot(snapshot.BindingKey)
+	if !ok {
+		t.Fatal("ready follower missing")
+	}
+	if err := h.reconcileCodexFollowerRuntimeResult(context.Background(), registry, ready); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.reconcileCodexFollowerRuntimeResult(context.Background(), registry, ready); err != nil {
+		t.Fatal(err)
+	}
+	reply.mu.Lock()
+	attempts = len(reply.references)
+	reply.mu.Unlock()
+	if attempts != 1 {
+		t.Fatalf("card attempts=%d after attach becomes ready, want exactly 1", attempts)
+	}
+	current, ok = store.followerSnapshot(snapshot.BindingKey)
+	if !ok || current.Target.RuntimeRecoveryResult != nil {
+		t.Fatalf("current=%#v ok=%v, delivered result must be cleared", current, ok)
 	}
 }
 
@@ -958,6 +1024,12 @@ func TestCodexFollowerRestoresFromPersistedBindingWithoutInboundMessage(t *testi
 	case <-time.After(time.Second):
 		t.Fatal("persisted follower did not restore after restart")
 	}
+	if _, err := second.ensureCodexSessions().releaseWorkspaceThread(
+		snapshots[0].BindingKey,
+		snapshots[0].Target.WorkspaceRoot,
+	); err != nil {
+		t.Fatal(err)
+	}
 	second.detachCodexFrontendTask(snapshots[0].ConversationID, snapshots[0].RouteUserID, snapshots[0].Target.ThreadID)
 	cancel()
 	waitForRolloverCondition(t, func() bool {
@@ -966,6 +1038,169 @@ func TestCodexFollowerRestoresFromPersistedBindingWithoutInboundMessage(t *testi
 		return second.codexFollower == nil
 	})
 	close(base.watchDone)
+}
+
+func TestCodexFollowerRestartReusesPersistedPreparingAttachRevision(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	first, _, _, snapshot, firstDone := newCodexFollowerFixtureWithStatePath(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	}, statePath)
+	preparing, err := first.ensureCodexSessions().commitFollowerAttachRuntime(snapshot, "turn-local-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preparing.AttachPhase != codexFollowerAttachPreparing {
+		t.Fatalf("persisted attach=%#v, want preparing", preparing)
+	}
+	close(firstDone)
+
+	second := NewHandler(nil, nil)
+	second.SetCodexSessionFile(statePath)
+	base := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	watchDone := make(chan struct{})
+	base.watchDone = watchDone
+	ag := &codexFollowerWatchAgent{fakeCodexLiveAgent: base, watchStarted: make(chan string, 1)}
+	second.SetDefaultAgent("codex", ag)
+	loaded := second.ensureCodexSessions().followerSnapshots()
+	if len(loaded) != 1 || loaded[0].AttachPhase != codexFollowerAttachPreparing ||
+		loaded[0].AttachRevision != preparing.AttachRevision {
+		t.Fatalf("loaded=%#v, want persisted preparing revision %d", loaded, preparing.AttachRevision)
+	}
+	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	registry := newCodexFollowerTestRegistry(loaded[0].Target.DeliveryRoute, reply)
+	ctx, cancel := context.WithCancel(context.Background())
+	second.startCodexFollowerReconciler(ctx, registry, 10*time.Millisecond)
+	select {
+	case <-ag.watchStarted:
+	case <-time.After(time.Second):
+		t.Fatal("persisted preparing follower did not rebuild its observer")
+	}
+	waitForRolloverCondition(t, func() bool {
+		current, ok := second.ensureCodexSessions().followerSnapshot(loaded[0].BindingKey)
+		return ok && current.AttachPhase == codexFollowerAttachReady
+	})
+	current, ok := second.ensureCodexSessions().followerSnapshot(loaded[0].BindingKey)
+	if !ok || current.AttachRevision != preparing.AttachRevision ||
+		current.AttachTurnID != "turn-local-1" || current.RuntimeGeneration != 0 {
+		t.Fatalf("recovered attach=%#v ok=%v, want original preparing revision", current, ok)
+	}
+
+	second.detachCodexFrontendTask(loaded[0].ConversationID, loaded[0].RouteUserID, loaded[0].Target.ThreadID)
+	cancel()
+	waitForRolloverCondition(t, func() bool {
+		second.codexFollowerMu.Lock()
+		defer second.codexFollowerMu.Unlock()
+		return second.codexFollower == nil
+	})
+	close(watchDone)
+}
+
+func TestCodexFollowerPreparingAttachUsesExistingObserverReadiness(t *testing.T) {
+	h, _, registry, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	defer closeTestChannel(watchDone)
+	if err := h.reconcileCodexFollower(context.Background(), registry, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	ready, ok := h.ensureCodexSessions().followerSnapshot(snapshot.BindingKey)
+	if !ok || ready.AttachPhase != codexFollowerAttachReady {
+		t.Fatalf("initial attach=%#v ok=%v", ready, ok)
+	}
+	preparing, err := h.ensureCodexSessions().commitFollowerAttachRuntime(ready, "turn-local-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.reconcileCodexFollower(context.Background(), registry, preparing); err != nil {
+		t.Fatal(err)
+	}
+	current, ok := h.ensureCodexSessions().followerSnapshot(snapshot.BindingKey)
+	if !ok || current.AttachPhase != codexFollowerAttachReady ||
+		current.AttachRevision != preparing.AttachRevision {
+		t.Fatalf("reused observer attach=%#v ok=%v, want ready revision %d", current, ok, preparing.AttachRevision)
+	}
+	h.detachCodexFrontendTask(snapshot.ConversationID, snapshot.RouteUserID, snapshot.Target.ThreadID)
+}
+
+func TestCodexFollowerPreparingAttachRejectsInProcessTurnWithoutNativeProgressCard(t *testing.T) {
+	h, _, registry, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	defer closeTestChannel(watchDone)
+	preparing, err := h.ensureCodexSessions().commitFollowerAttachRuntime(snapshot, "turn-local-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{
+		owner: "user", routeUserID: snapshot.RouteUserID, agentName: snapshot.AgentName,
+		codexThreadID: "thread-local", codexTurnID: "turn-local-1", inProcessCodexLifecycle: true,
+	})
+	h.tasks.mu.Lock()
+	h.ensureActiveTasksLocked()
+	h.tasks.active[snapshot.ConversationID] = task
+	h.tasks.mu.Unlock()
+	t.Cleanup(func() {
+		task.cancel()
+		h.finishActiveTask(snapshot.ConversationID, task)
+	})
+
+	err = h.reconcileCodexFollower(context.Background(), registry, preparing)
+	if err == nil || !strings.Contains(err.Error(), "进度卡") {
+		t.Fatalf("reconcile error=%v, want native progress card readiness failure", err)
+	}
+	current, ok := h.ensureCodexSessions().followerSnapshot(snapshot.BindingKey)
+	if !ok || current.AttachPhase != codexFollowerAttachPreparing ||
+		current.AttachRevision != preparing.AttachRevision {
+		t.Fatalf("in-process attach=%#v ok=%v, want preparing revision %d", current, ok, preparing.AttachRevision)
+	}
+}
+
+func TestCodexFollowerPreparingAttachUsesVerifiedInProcessTurn(t *testing.T) {
+	h, _, registry, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	defer closeTestChannel(watchDone)
+	preparing, err := h.ensureCodexSessions().commitFollowerAttachRuntime(snapshot, "turn-local-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{
+		owner: "user", routeUserID: snapshot.RouteUserID, agentName: snapshot.AgentName,
+		codexThreadID: "thread-local", codexTurnID: "turn-local-1", inProcessCodexLifecycle: true,
+	})
+	h.tasks.mu.Lock()
+	h.ensureActiveTasksLocked()
+	h.tasks.active[snapshot.ConversationID] = task
+	h.tasks.mu.Unlock()
+	progressReply := platformtest.NewReplier(platform.Capabilities{Text: true, Streaming: true})
+	progressCfg := config.DefaultProgressConfig()
+	progressCfg.Mode = progressModeStream
+	progressCfg.SendAcceptance = boolPtr(false)
+	_, _, progress := h.startProgressSessionForWorkspaceAgentWithHandle(
+		context.Background(), progressReply, "", snapshot.AgentName,
+		snapshot.Target.WorkspaceRoot, "共享 Codex 任务", progressCfg,
+	)
+	if progress == nil || progress.nativeProgressReadyError() != nil {
+		t.Fatalf("native progress card not ready: %#v", progress)
+	}
+	task.attachProgressSession(progress)
+	t.Cleanup(func() {
+		progress.stopBackground()
+		task.cancel()
+		h.finishActiveTask(snapshot.ConversationID, task)
+	})
+
+	if err := h.reconcileCodexFollower(context.Background(), registry, preparing); err != nil {
+		t.Fatal(err)
+	}
+	current, ok := h.ensureCodexSessions().followerSnapshot(snapshot.BindingKey)
+	if !ok || current.AttachPhase != codexFollowerAttachReady ||
+		current.AttachRevision != preparing.AttachRevision {
+		t.Fatalf("in-process attach=%#v ok=%v, want ready revision %d", current, ok, preparing.AttachRevision)
+	}
 }
 
 func TestCodexFollowerFansOutSharedTurnToMultipleRoutes(t *testing.T) {

@@ -84,6 +84,16 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 git diff --check
 ```
 
+official-daemon-protocol (opt-in):
+
+```bash
+WECLAW_TEST_CODEX_DAEMON_PROTOCOL=1 \
+WECLAW_TEST_CODEX_HOME=/path/to/isolated-codex-home \
+go test ./agent -run '^TestCodexOfficialDaemonTwoClientProtocol$' -count=1 -timeout 300s -v
+```
+
+该门禁会启动隔离的 official daemon 并校验双客户端事件回放、跨连接 `turn/steer`、交互解决与唯一终态。隔离目录必须预装 `packages/standalone/current/codex`，不得指向日常 `CODEX_HOME`，测试前也不得残留 daemon socket 或 PID 文件。
+
 release-side-effect:
 
 ```bash

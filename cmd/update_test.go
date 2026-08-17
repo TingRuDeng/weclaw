@@ -409,10 +409,9 @@ func TestEffectiveReleaseSourceFlagOverridesConfig(t *testing.T) {
 	}
 }
 
-func TestReleaseAssetNameSupportsDarwinArm64AndLinux(t *testing.T) {
+func TestReleaseAssetNameSupportsDarwinArm64AndLinuxAMD64(t *testing.T) {
 	for _, supported := range [][3]string{
 		{"darwin", "arm64", "weclaw_darwin_arm64"},
-		{"linux", "arm64", "weclaw_linux_arm64"},
 		{"linux", "amd64", "weclaw_linux_amd64"},
 	} {
 		name, err := releaseAssetNameForRuntime(supported[0], supported[1])
@@ -424,10 +423,10 @@ func TestReleaseAssetNameSupportsDarwinArm64AndLinux(t *testing.T) {
 		}
 	}
 
-	for _, unsupported := range [][2]string{{"darwin", "amd64"}, {"windows", "amd64"}} {
+	for _, unsupported := range [][2]string{{"darwin", "amd64"}, {"linux", "arm64"}, {"windows", "amd64"}} {
 		if _, err := releaseAssetNameForRuntime(unsupported[0], unsupported[1]); err == nil {
 			t.Fatalf("releaseAssetNameForRuntime(%q, %q) error=nil", unsupported[0], unsupported[1])
-		} else if !strings.Contains(err.Error(), "darwin/arm64、linux/arm64、linux/amd64") {
+		} else if !strings.Contains(err.Error(), "darwin/arm64、linux/amd64") {
 			t.Fatalf("error=%v, want published-target hint", err)
 		}
 	}

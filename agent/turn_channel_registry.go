@@ -38,11 +38,16 @@ func (a *ACPAgent) failAppServerActiveTurns(reason string) {
 // registerTurnChannel 原子注册 thread/session 的事件所有者，已有任务时拒绝覆盖。
 func (a *ACPAgent) registerTurnChannel(key string, ch chan *codexTurnEvent) bool {
 	a.notifyMu.Lock()
-	defer a.notifyMu.Unlock()
 	if _, exists := a.turnCh[key]; exists {
+		a.notifyMu.Unlock()
 		return false
 	}
 	a.turnCh[key] = ch
+	pending := a.pendingCodexInteractionsLocked(key)
+	a.notifyMu.Unlock()
+	for _, event := range pending {
+		dispatchCodexTurnControlEvent(ch, event)
+	}
 	return true
 }
 
@@ -54,20 +59,15 @@ func (a *ACPAgent) unregisterTurnChannel(key string, owner chan *codexTurnEvent)
 		return
 	}
 	delete(a.turnCh, key)
-	interactions := drainCodexTurnInteractions(owner)
 	a.notifyMu.Unlock()
-	for _, event := range interactions {
-		if !a.dispatchToTurnChannels(key, event) {
-			a.abandonCodexTurnEvent(key, event)
-		}
+	for _, event := range drainCodexTurnInteractions(owner) {
+		a.abandonCodexTurnEvent(key, event)
 	}
-	a.redispatchPendingCodexInteractions(key)
 }
 
 // registerTurnObserver 登记只读 frontend 观察器，不占用 app-server 的唯一执行 owner。
 func (a *ACPAgent) registerTurnObserver(key string, ch chan *codexTurnEvent) uint64 {
 	a.notifyMu.Lock()
-	defer a.notifyMu.Unlock()
 	if a.turnObservers == nil {
 		a.turnObservers = make(map[string]map[uint64]*codexTurnObserverMailbox)
 	}
@@ -76,7 +76,13 @@ func (a *ACPAgent) registerTurnObserver(key string, ch chan *codexTurnEvent) uin
 	if a.turnObservers[key] == nil {
 		a.turnObservers[key] = make(map[uint64]*codexTurnObserverMailbox)
 	}
-	a.turnObservers[key][id] = newCodexTurnObserverMailbox(ch)
+	mailbox := newCodexTurnObserverMailbox(ch)
+	a.turnObservers[key][id] = mailbox
+	pending := a.pendingCodexInteractionsLocked(key)
+	a.notifyMu.Unlock()
+	for _, event := range pending {
+		mailbox.enqueue(event)
+	}
 	return id
 }
 
@@ -93,14 +99,9 @@ func (a *ACPAgent) unregisterTurnObserver(key string, id uint64, owner chan *cod
 		delete(a.turnObservers, key)
 	}
 	a.notifyMu.Unlock()
-	events := mailbox.stopAndDrain()
-	interactions := codexTurnInteractions(events)
-	for _, event := range interactions {
-		if !a.dispatchToTurnChannels(key, event) {
-			a.abandonCodexTurnEvent(key, event)
-		}
+	for _, event := range codexTurnInteractions(mailbox.stopAndDrain()) {
+		a.abandonCodexTurnEvent(key, event)
 	}
-	a.redispatchPendingCodexInteractions(key)
 }
 
 func codexTurnInteractions(events []*codexTurnEvent) []*codexTurnEvent {
@@ -138,36 +139,14 @@ func (a *ACPAgent) abandonCodexTurnEvent(threadID string, event *codexTurnEvent)
 	a.rememberPendingCodexInteraction(threadID, event)
 }
 
-// redispatchPendingCodexInteractions 在 owner 或 observer 退出后立即把待处理交互
-// 交给仍在线的下一个消费者；无消费者时继续保留为可重放状态。
-func (a *ACPAgent) redispatchPendingCodexInteractions(threadID string) {
-	var events []*codexTurnEvent
-	if a.desktopRuntime != nil {
-		events = append(events, a.desktopRuntime.replayPendingActionEvents(threadID)...)
-	}
-	events = append(events, a.claimPendingCodexInteractions(threadID)...)
-	for _, event := range events {
-		if a.dispatchToTurnChannels(threadID, event) {
-			continue
-		}
-		a.abandonCodexTurnEvent(threadID, event)
-	}
-}
-
 func (a *ACPAgent) rememberPendingCodexInteraction(threadID string, event *codexTurnEvent) {
 	threadID = strings.TrimSpace(threadID)
-	requestID := codexInteractionID(event)
-	if a.protocol != protocolCodexAppServer || threadID == "" || requestID == "" {
+	requestKey := codexInteractionBrokerKey(event)
+	if a.protocol != protocolCodexAppServer || threadID == "" || requestKey == "" {
 		return
 	}
 	a.notifyMu.Lock()
-	if a.pendingTurnInteractions == nil {
-		a.pendingTurnInteractions = make(map[string]map[string]*codexTurnEvent)
-	}
-	if a.pendingTurnInteractions[threadID] == nil {
-		a.pendingTurnInteractions[threadID] = make(map[string]*codexTurnEvent)
-	}
-	a.pendingTurnInteractions[threadID][requestID] = event
+	a.rememberPendingCodexInteractionLocked(threadID, event)
 	a.notifyMu.Unlock()
 	a.notifyCodexThreadActivity(threadID, event)
 }
@@ -175,35 +154,51 @@ func (a *ACPAgent) rememberPendingCodexInteraction(threadID string, event *codex
 func (a *ACPAgent) claimPendingCodexInteractions(threadID string) []*codexTurnEvent {
 	threadID = strings.TrimSpace(threadID)
 	a.notifyMu.Lock()
-	pending := a.pendingTurnInteractions[threadID]
-	delete(a.pendingTurnInteractions, threadID)
+	events := a.pendingCodexInteractionsLocked(threadID)
 	a.notifyMu.Unlock()
+	return events
+}
+
+func (a *ACPAgent) rememberPendingCodexInteractionLocked(threadID string, event *codexTurnEvent) {
+	requestKey := codexInteractionBrokerKey(event)
+	if a.protocol != protocolCodexAppServer || threadID == "" || requestKey == "" {
+		return
+	}
+	a.bindCodexInteractionBrokerLocked(threadID, event)
+	if a.pendingTurnInteractions == nil {
+		a.pendingTurnInteractions = make(map[string]map[string]*codexTurnEvent)
+	}
+	if a.pendingTurnInteractions[threadID] == nil {
+		a.pendingTurnInteractions[threadID] = make(map[string]*codexTurnEvent)
+	}
+	a.pendingTurnInteractions[threadID][requestKey] = event
+}
+
+func (a *ACPAgent) pendingCodexInteractionsLocked(threadID string) []*codexTurnEvent {
+	pending := a.pendingTurnInteractions[strings.TrimSpace(threadID)]
 	if len(pending) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(pending))
-	for id := range pending {
-		ids = append(ids, id)
+	keys := make([]string, 0, len(pending))
+	for key := range pending {
+		keys = append(keys, key)
 	}
-	sort.Strings(ids)
-	events := make([]*codexTurnEvent, 0, len(ids))
-	for _, id := range ids {
-		events = append(events, pending[id])
+	sort.Strings(keys)
+	events := make([]*codexTurnEvent, 0, len(keys))
+	for _, key := range keys {
+		events = append(events, pending[key])
 	}
 	return events
 }
 
 func (a *ACPAgent) forgetPendingCodexInteraction(threadID string, event *codexTurnEvent) {
 	threadID = strings.TrimSpace(threadID)
-	requestID := codexInteractionID(event)
-	if threadID == "" || requestID == "" {
+	requestKey := codexInteractionBrokerKey(event)
+	if threadID == "" || requestKey == "" {
 		return
 	}
 	a.notifyMu.Lock()
-	delete(a.pendingTurnInteractions[threadID], requestID)
-	if len(a.pendingTurnInteractions[threadID]) == 0 {
-		delete(a.pendingTurnInteractions, threadID)
-	}
+	a.forgetCodexInteractionLocked(threadID, requestKey, event)
 	a.notifyMu.Unlock()
 }
 

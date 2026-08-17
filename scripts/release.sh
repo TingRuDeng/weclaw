@@ -13,7 +13,6 @@ RELEASE_ID=""
 
 TARGETS=(
   "darwin/arm64"
-  "linux/arm64"
   "linux/amd64"
 )
 
@@ -285,7 +284,7 @@ verify_release_assets() {
 	[[ "$is_prerelease" == "false" ]] || fail "Release 仍是 prerelease：$TAG"
 	asset_count="$(gh api "repos/TingRuDeng/weclaw/releases/$RELEASE_ID" --jq '.assets | length')"
 	expected_asset_count=$(( ${#TARGETS[@]} + 1 ))
-	[[ "$asset_count" == "$expected_asset_count" ]] || fail "Release 资产数量异常：$asset_count，期望 $expected_asset_count"
+	[[ "$asset_count" == "$expected_asset_count" ]] || fail "Release 资产数量异常：${asset_count}，期望 ${expected_asset_count}"
 	assets="$(gh api "repos/TingRuDeng/weclaw/releases/$RELEASE_ID" --jq '.assets[].name')"
 	for target in "${TARGETS[@]}"; do
 		expected_asset="weclaw_${target//\//_}"

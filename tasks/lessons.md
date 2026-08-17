@@ -10,6 +10,15 @@
 - 正确做法：先撤销 watcher/任务投递，调用 `cancel()`，再用有超时的条件等待确认 reconciler 已注销，最后释放测试通道和临时目录。
 - 来源：2026-08-16 v0.1.277 首次发布的全仓 race 门禁稳定复现 follower 恢复测试清理竞态；按同文件已有的 cancel + wait 模式修复后定向连跑 50 次通过。
 
+## 2026-08-16 Codex 完整多前端共享必须以 official daemon 和 ready attach 为边界
+
+- Host 边界：已验证 official standalone daemon 是完整共享模式的唯一写入权威；Codex App、受控 CLI、飞书和微信只是连接它的 frontend。App 进程、IPC 或历史可见不能切换 Host authority，App 私有 Host 和 WeClaw-managed Host 只保留兼容边界，不宣称完整共享。
+- 接管边界：follower LP1 只持久化 `preparing` 意图；精确 Host generation、权威历史、活动 turn 的原生卡与 observer 都就绪后，才能按 binding revision、attach revision、turn 和 generation 执行 LP2 CAS 提交 `ready`。`preparing` 期间普通输入必须失败关闭，不得回复“已切换并绑定”。
+- 交互边界：同一 turn 的进度、审批/问答展示和终态可向多个 ready route 广播，但审批与结构化问答必须用 `(thread, turn, request)` broker 串行唯一提交；其他展示在 `serverRequest/resolved` 后收敛为外部已处理，不重复回应。
+- 释放与恢复边界：`/cx release` 先持久化 route tombstone 再 detach，不 interrupt turn、不重启 Host、不影响其他 route。新进程按 `host_authority -> history_snapshot -> interaction_replay -> observer_ready -> outbox_delivery` 恢复，guarded terminal 和 pending supersede 在 observer-ready 前都必须 hold。
+- 验证边界：隔离 official daemon 的真实双客户端门禁必须证明审批回放、跨连接 `turn/steer`、`serverRequest/resolved` 和两端各一次终态；只有包内 fake 测试不能证明上游真实协议支持。
+- 来源：2026-08-16 官方 daemon 隔离双客户端门禁通过，并以定向、Race、全仓和静态门禁覆盖两阶段 attach、broker、release 与恢复顺序。本条取代以 managed→Desktop authority 或单一 interaction owner 为完整共享主路的旧结论。
+
 ## 2026-08-16 App 与 WeClaw 冲突应统一 daemon，不能扩大进程清理
 
 - 触发条件：官方 daemon 已是 WeClaw 权威 Host，用户稍后打开 Codex App；App 默认又启动私有 stdio `app-server`，同一 thread 的上游 writer lock 因两个 Host 同时加载而报“其他窗口正在使用”。
@@ -18,7 +27,15 @@
 - 正确做法：官方 daemon 验证就绪后，核对 App 与 WeClaw 的 `CODEX_HOME` control socket 一致，再为后续 App 启动启用受保护的 local-daemon 环境；已运行 App 仍有私有 app-server 时失败关闭并要求完整重启，不自动退出。App 接入共享 daemon 后使用 daemon 的会话目录，独立 SQLite 目录差异必须显式说明且不得自动迁移或删除。
 - 来源：2026-08-16 真机确认 App 私有 `codex ... app-server` 与官方 standalone daemon 并存；用户明确要求优先推进 App/CLI daemon 复用，而不是在 WeClaw 重启时扩大进程清理。
 
-## 2026-08-14 Codex App 晚启动必须先收敛 Host 再加载 follower 历史
+## 2026-08-16 多 Host 冲突预检必须只读、按进程组且失败关闭
+
+- 触发条件：shared managed Host、official daemon 或受控 CLI 准备启动、接管、重启或停止时，受检 UID 范围内可能已经存在另一个 `codex app-server`；`run_as_user` 场景还会出现 root sudo wrapper 与目标 UID 子进程共用 PGID。
+- 规则：预检只读完整进程快照，在 macOS/Linux 读取候选原始 argv 后将 Node wrapper 和 native child 按 PGID 归为一个 Host，只允许受保护 metadata 或 official lifecycle PID 对应的权威组；进程表或候选 argv 不可读、权威 PID 身份不符或出现额外组都必须在 Host 状态变更前失败关闭。候选在快照后退出可忽略，权限或格式错误不能忽略。
+- 反例：按 PID 把同一 Host 的 wrapper/child 报成两个冲突；用丢失参数边界的 `ps command=` 区分含空格路径；把 `codex --remote`、帮助、daemon、proxy、schema generation 或 shell 文本当成 Host；或者为了自动修复按名称结束 Codex App 和未知进程。
+- 正确做法：错误只给脱敏分类、PGID 和有界 PID，并明确只读预检未停止进程和人工处理方式。启动后复核只可回收当前代码明确创建的 managed Host，不能触碰既有或未知进程。该快照只是时点门禁，不能宣称已经建立跨 socket/CODEX_HOME 的持续排他锁。
+- 来源：2026-08-16 用户要求 WeClaw 在 Host 生命周期操作前增加一次只读多 Host 冲突预检，同时保留用户对本地 Codex 进程的控制权。
+
+## 2026-08-14 Codex App 晚启动必须先收敛 Host 再加载 follower 历史（历史，完整共享已改为 official daemon）
 
 - 触发条件：WeClaw 启动时 App 不在，因此先运行兼容 managed Host；用户随后打开 App 并在其中继续目标 thread，而飞书 durable binding 仍把旧 `runtime=weclaw` 快照当成可用。
 - 根因：Host 选择只在 Agent 启动时执行；后台 follower 看到旧绑定可用便跳过 handoff，直接向尚未成为权威的 Desktop 请求完整历史，主动 following 声明也因非权威而被抑制，最终持续返回 `no-client-found`。
@@ -45,15 +62,15 @@
 - 反例：先完整等待 `turn/start` 再读取事件会阻塞前置审批；完全不等待响应则会让快速终态先结束任务，导致真实 turn 没有登记、后续 `/stop` 或恢复找不到活动任务。
 - 来源：2026-08-11 CI 中快速 turn 先发送 delta/completed、后返回启动响应，随后补充了“审批先于响应”和“终态先于响应”的协议回归测试。
 
-## 2026-08-11 Codex 本地端与飞书是协作前端，授权只来自账号白名单
+## 2026-08-11 Codex 本地端与飞书是协作前端（历史交互 owner 模型已被 broker 取代）
 
-- 协作边界：正式支持“飞书 + Codex App”或“飞书 + 受控 Codex CLI”绑定同一个 Host/thread；active turn 的补充输入以 expected turn ID 直接 steer，空闲时才开始新 turn。三端同时打开时不宣称客户端级排他、所有权或精确归属。
-- 多窗口边界：多个飞书 route 可以同时绑定同一 thread，各自持久化 follower、进度卡和终态 outbox；普通进度与终态 fan-out，审批和结构化问答只能交给一个 owner 或 observer。释放一个 route 不得取消其他 observer 或中断共享 turn。
+- 协作边界：常见主路径是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”绑定同一个 verified official daemon/thread；完整共享模式也允许三端同时打开，active turn 的补充输入以 expected turn ID 直接 steer，空闲时才开始新 turn，但不宣称客户端级排他、所有权或精确归属。
+- 多窗口边界：多个飞书 route 可以同时绑定同一 thread，各自持久化 follower、进度卡和终态 outbox；进度、审批/问答展示和终态都按 route fan-out，但交互决策由 `(thread, turn, request)` broker 只提交一次。释放一个 route 不得取消其他 observer 或中断共享 turn。
 - 恢复游标：active turn 只能先记录 pending，不能在 watcher 和 durable outbox 建立前直接记为已交付；inactive 快照发现 pending turn 时，即使 turn ID 相同也必须用稳定键补投终态，成功入 outbox 后再 settled。
 - 授权边界：durable follower 只能保存 Registry 实际签发的 `AuthorizedIdentity`，不能回退到表面 `UserID`；撤权必须与 acquire 和 outbox 网络投递共用读写门禁，返回前持久清除 follower、递增 revision 并停止该 route 的后续投递。重新授权不得自动复活旧 follower。
 - 解除边界：`/cx release` 只解除当前 route 的 durable binding、停止该 route 的观察与交互投递并以非终态冻结卡片；不得 cancel/interrupt active turn、重启 Host、提交默认拒绝或补发终态。本地任务继续运行，重新绑定后从最新权威快照恢复。
-- 恢复边界：服务重启前只解除 observer 并保留 active stream recovery；新进程必须先 hold 旧终态恢复项，再按 durable follower 重新挂接和 reanchor。不能因为进程重启把仍在 App/CLI 运行的共享 turn 误报为已停止。
-- 交互边界：解除绑定当下若正在等待审批或结构化问答，应失败关闭；解除成功后旧 route 的 interaction lease 必须失效，不能继续向飞书提问，也不能用 observer cancel 自动替用户拒绝。`/stop` 才是停止绑定 thread 全局 active turn 的入口，并须明确同时影响本地端与消息窗口。
+- 恢复边界：服务重启前只解除 observer 并保留 active stream recovery；新进程必须按 `host_authority -> history_snapshot -> interaction_replay -> observer_ready -> attach_ready -> outbox_delivery` 恢复，并在 observer/attach ready 前 hold guarded terminal 与旧卡 supersede。不能因为进程重启把仍在 App/CLI 运行的共享 turn 误报为已停止或提前投递旧终态。
+- 交互边界：正在等待审批或结构化问答时仍可释放当前 route，但必须先持久化 release tombstone 和 interaction detach claim；失败时保留原绑定，成功后旧 route 不再等待或提交决策，也不能用 observer cancel 自动替用户拒绝。`/stop` 才是停止绑定 thread 全局 active turn 的入口，并须明确同时影响本地端与消息窗口。
 - 授权边界：每个平台或机器人账号自己的 `allowed_users` 是远程身份唯一来源，其中所有身份具有相同管理能力；Registry capability 必须绑定 platform/account/identity，远程身份管理只能修改当前机器人。本地配置多个飞书机器人时，`approve`、`approve-code`、`revoke` 及其可复制提示必须显式携带 `--bot`。旧 `admin_users`、`--admin` 和角色输出均已废弃，旧配置只告警并忽略，不迁移、不扩权。
 - 配置一致性：授权、撤销、Web 和运行中 CLI 的读改写必须在同一个原子 `config.Update` 事务中重新读取最新配置；只给最终 `Save` 加锁仍会让旧快照覆盖并发撤销。Web 使用版本指纹拒绝旧页面，远程身份变更则在同一 Handler 门禁内按“配置提交、Registry 热更新、成功回复”排序。
 - 来源：2026-08-11 用户确认个人可使用多个账号，但不共享给多人，并将产品模型从“控制权移交”收敛为飞书与一个本地 Codex 端的协作接力。
@@ -772,7 +789,7 @@
 - 触发条件：飞书或微信切换到 Codex App 正在执行的 thread 后，又需要浏览 `/cx ls` 或切换到其他 Codex 会话。
 - 规则：飞书窗口可以按用户选择自由浏览和切换 Codex 会话；只读导航命令不得被 active task 拦截。切到其他会话后旧任务不应在当前消息流持续刷屏，但任务执行身份和结构化快照必须保留；真实切回仍在运行的任务时，应在消息底部重建一张当前卡。独立任务卡已经承载实时状态时，切换结果只确认绑定和任务卡位置，不得重复展示任务正文与当前进展。
 - 反例：把 `/cx ls`、`/cx cd` 或会话选择按钮一律挡在“当前任务正在执行”之后，导致用户切到运行中会话后无法再切走。
-- 正确做法：用 frontend binding 的前后快照判断真实 A→B→A；切回 A 时从 `activeTasks` reducer 读取最新进展，新建底部卡后原子替换 progress stream，再把旧卡标记为“已转移”并停止 streaming。终态准备与重锚使用同一会话锁，只有最新卡可以进入 terminal outbox；A→A 重复选择不得重建。切换卡压缩为工作空间、模型配置和一句任务卡指引；只有微信或进度关闭等没有独立任务卡的路径才内联任务摘要、进展与控制说明。其他窗口、其他 route 或其他任务的展示不能被当前窗口清理。
+- 正确做法：用 frontend binding 的前后快照判断真实 A→B→A；切回 A 时从 `activeTasks` reducer 读取最新进展，新建底部卡后原子替换 progress stream，再把旧卡标记为“已转移”并停止 streaming。终态准备与重锚使用同一会话锁，只有同一 route 的最新权威卡可以进入该 route 的 terminal outbox；A→A 重复选择不得重建。切换卡压缩为工作空间、模型配置和一句任务卡指引；只有微信或进度关闭等没有独立任务卡的路径才内联任务摘要、进展与控制说明。其他窗口、其他 route 或其他任务的展示不能被当前窗口清理。
 - 来源：2026-07-18 用户明确窗口可自由切换；2026-07-20 用户反馈切回 A 后原卡虽恢复更新但已被消息刷到上方；2026-07-22 用户指出切换卡与下方任务卡重复展示当前进展。
 
 ## 2026-07-20 Codex 顶层工作空间列表禁止预加载全部会话
@@ -887,5 +904,5 @@
 - 触发条件：同一 Codex Desktop 审批可由 Codex App 或飞书处理，飞书等待超时、收到新消息或用户再次点击审批入口。
 - 规则：等待期限只能触发带 revision 屏障的权威状态复核，不能直接向 provider 发送默认拒绝；提交任何飞书决定前都要按 request ID 和原 turn ID 复核。
 - 反例：App 已经响应 request 后，WeClaw 五分钟超时再次发送 `decline`，Desktop 返回 `Request not found`；后续消息仍 steer 到失效 turn，并把明确的 JavaScript 错误包装成“交付状态未知”。
-- 正确做法：request 仍 pending 就续期；request 消失且原 turn active 就收敛为其他前端已处理；原 turn terminal/rollover 就禁止 steer；状态不可用时失败关闭并保留 binding。`Request not found` 竞态不再重复报错，明确远端错误与写后断线/超时分别分类。
+- 正确做法：request 仍 pending 就续期；request 消失且原 turn active 就收敛为其他前端已处理；原 turn terminal/rollover 就禁止 steer；状态不可用时失败关闭并保留 binding。同一 request 向多个 observer 展示时，由 `(thread, turn, request)` broker 串行唯一提交，其他展示根据 `serverRequest/resolved` 收敛。`Request not found` 竞态不再重复报错，明确远程错误与写后断线/超时分别分类。
 - 来源：2026-08-13 本机审计日志中的 `approval_default_deny reason=timeout` 与 Codex Desktop 同一 request 的重复响应记录。

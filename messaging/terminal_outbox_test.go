@@ -56,6 +56,66 @@ type outboxTextOnlyReplier struct {
 	texts []string
 }
 
+type orderedRestartCodexAgent struct {
+	*codexFollowerWatchAgent
+	mu           sync.Mutex
+	events       []string
+	readyEntered chan struct{}
+	readyRelease <-chan struct{}
+}
+
+func (a *orderedRestartCodexAgent) record(event string) {
+	a.mu.Lock()
+	a.events = append(a.events, event)
+	a.mu.Unlock()
+}
+
+func (a *orderedRestartCodexAgent) eventSnapshot() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.events...)
+}
+
+func (a *orderedRestartCodexAgent) ReconcileCodexHostTopology(context.Context) error {
+	a.record("host_authority")
+	return nil
+}
+
+func (a *orderedRestartCodexAgent) ReadCodexThreadProgressSnapshot(
+	ctx context.Context,
+	conversationID string,
+	threadID string,
+) (agent.CodexThreadState, []agent.ProgressEvent, error) {
+	a.record("history_snapshot")
+	state, err := a.ReadCodexThreadState(ctx, conversationID, threadID)
+	return state, nil, err
+}
+
+func (a *orderedRestartCodexAgent) WatchCodexThreadEventsForTurnReady(
+	ctx context.Context,
+	conversationID string,
+	threadID string,
+	turnID string,
+	onReady func(agent.CodexThreadObserverReady) error,
+	onProgress func(agent.ProgressEvent),
+) (string, error) {
+	a.record("interaction_replay")
+	signalCodexLiveTestHook(a.readyEntered)
+	if err := waitCodexLiveTestHook(ctx, a.readyRelease); err != nil {
+		return "", err
+	}
+	binding := a.threadBinding(threadID)
+	if onReady != nil {
+		if err := onReady(agent.CodexThreadObserverReady{
+			ThreadID: threadID, TurnID: turnID, RuntimeGeneration: binding.RuntimeGeneration,
+		}); err != nil {
+			return "", err
+		}
+	}
+	a.record("observer_ready")
+	return a.WatchCodexThread(ctx, conversationID, threadID, textProgressCallback(onProgress))
+}
+
 func (r *outboxTextOnlyReplier) SendTextIdempotent(_ context.Context, text string, key string) error {
 	r.keys = append(r.keys, key)
 	r.texts = append(r.texts, text)
@@ -1222,6 +1282,157 @@ func TestCodexFollowerRestartFreezesHeldCardAndStartsNewObserver(t *testing.T) {
 	})
 }
 
+func TestCodexFollowerRestartDefersGuardedTerminalUntilObserverReady(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	first, _, _, snapshot, firstWatchDone := newCodexFollowerFixtureWithStatePath(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	}, statePath)
+	prepared, err := first.ensureCodexSessions().commitFollowerAttachRuntime(snapshot, "turn-local-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.ensureCodexSessions().commitFollowerAttachReady(prepared, "turn-local-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	ready, ok := first.ensureCodexSessions().followerSnapshot(snapshot.BindingKey)
+	if !ok || ready.AttachPhase != codexFollowerAttachReady {
+		t.Fatalf("ready follower=%#v ok=%v", ready, ok)
+	}
+	close(firstWatchDone)
+
+	outboxPath := filepath.Join(t.TempDir(), "terminal-outbox.json")
+	beforeRestart, err := newTerminalOutbox(outboxPath, platform.NewRegistry(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryKey := codexFollowerTerminalOutboxID(ready, "turn-local-1")
+	guard := terminalDeliveryGuardFromFollower(ready)
+	draft := terminalOutboxDraft{
+		ID: deliveryKey, Route: ready.Target.DeliveryRoute, AgentName: ready.AgentName,
+		Text: "重启前已提交终态", IdempotencyKey: deliveryKey,
+	}
+	guard.apply(&draft)
+	entry, err := beforeRestart.enqueue(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := testPendingStreamSupersede(
+		"00000000-0000-4000-8000-000000000201",
+		ready.Target.DeliveryRoute,
+		"card-before-restart",
+		beforeRestart.now(),
+	)
+	beforeRestart.mu.Lock()
+	stored := beforeRestart.entryLocked(entry.ID)
+	stored.PendingSupersedes = append(stored.PendingSupersedes, pending)
+	if err := beforeRestart.persistLocked(); err != nil {
+		beforeRestart.mu.Unlock()
+		t.Fatal(err)
+	}
+	beforeRestart.mu.Unlock()
+
+	restarted := NewHandler(nil, nil)
+	restarted.SetCodexSessionFile(statePath)
+	watchDone := make(chan struct{})
+	base := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	base.watchDone = watchDone
+	readyEntered := make(chan struct{}, 1)
+	readyRelease := make(chan struct{})
+	ordered := &orderedRestartCodexAgent{
+		codexFollowerWatchAgent: &codexFollowerWatchAgent{
+			fakeCodexLiveAgent: base, watchStarted: make(chan string, 1),
+		},
+		readyEntered: readyEntered, readyRelease: readyRelease,
+	}
+	restarted.SetDefaultAgent("codex", ordered)
+
+	reply := newOutboxTestReplier(ready.Target.DeliveryRoute)
+	reply.stream = &outboxTestStream{}
+	reply.textDelivered = make(chan string, 1)
+	registry := newOutboxTestRegistry(ready.Target.DeliveryRoute, reply)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := restarted.StartTerminalOutbox(ctx, registry, outboxPath); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case text := <-reply.textDelivered:
+		t.Fatalf("guarded terminal delivered before restart reconciliation: %q", text)
+	case <-time.After(50 * time.Millisecond):
+	}
+	reply.mu.Lock()
+	supersedeCalls := reply.supersedeCalls
+	reply.mu.Unlock()
+	if supersedeCalls != 0 {
+		t.Fatalf("pending supersede delivered before restart reconciliation: calls=%d", supersedeCalls)
+	}
+	if err := restarted.startCodexFollowerReconciler(ctx, registry, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-readyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("restored observer did not reach readiness gate")
+	}
+	select {
+	case text := <-reply.textDelivered:
+		t.Fatalf("guarded terminal delivered before observer readiness: %q", text)
+	case <-time.After(50 * time.Millisecond):
+	}
+	reply.mu.Lock()
+	supersedeCalls = reply.supersedeCalls
+	reply.mu.Unlock()
+	if supersedeCalls != 0 {
+		t.Fatalf("pending supersede delivered before observer readiness: calls=%d", supersedeCalls)
+	}
+	close(readyRelease)
+	select {
+	case text := <-reply.textDelivered:
+		if text != "重启前已提交终态" {
+			t.Fatalf("delivered text=%q", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("guarded terminal was not delivered after observer readiness")
+	}
+	events := append(ordered.eventSnapshot(), "outbox_delivery")
+	wantEvents := []string{"host_authority", "history_snapshot", "interaction_replay", "observer_ready", "outbox_delivery"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("restart events=%v, want %v", events, wantEvents)
+	}
+	reply.mu.Lock()
+	keys := append([]string(nil), reply.textKeys...)
+	supersedeCalls = reply.supersedeCalls
+	deliveryOrder := append([]string(nil), reply.deliveryOrder...)
+	reply.mu.Unlock()
+	if !reflect.DeepEqual(keys, []string{deliveryKey + ":text"}) {
+		t.Fatalf("delivery keys=%v, want one %q", keys, deliveryKey+":text")
+	}
+	if supersedeCalls != 1 || len(deliveryOrder) == 0 || deliveryOrder[0] != "supersede" {
+		t.Fatalf("supersede calls=%d delivery order=%v, want one supersede before terminal", supersedeCalls, deliveryOrder)
+	}
+	waitForRolloverCondition(t, func() bool {
+		entries, err := loadTerminalOutbox(outboxPath)
+		if err != nil {
+			return false
+		}
+		for _, entry := range entries {
+			if entry.ID == deliveryKey {
+				return false
+			}
+		}
+		return true
+	})
+	restarted.detachCodexFrontendTask(ready.ConversationID, ready.RouteUserID, ready.Target.ThreadID)
+	cancel()
+	waitForRolloverCondition(t, func() bool {
+		restarted.codexFollowerMu.Lock()
+		defer restarted.codexFollowerMu.Unlock()
+		return restarted.codexFollower == nil
+	})
+}
+
 func waitForTerminalOutboxEmpty(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -1361,6 +1572,136 @@ func TestTerminalOutboxSuppressesFollowerResultAfterAuthorizationRevocation(t *t
 	}
 	if entries, err := loadTerminalOutbox(path); err != nil || len(entries) != 0 {
 		t.Fatalf("suppressed entry remains=%#v err=%v", entries, err)
+	}
+}
+
+func TestTerminalOutboxHoldsFollowerResultUntilAttachReady(t *testing.T) {
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	registry := newOutboxTestRegistry(route, newOutboxTestReplier(route))
+	registry.UpdateAccessForAccount(platform.PlatformFeishu, "cli_a", []string{"union_user"})
+	h := NewHandler(nil, nil)
+	store := h.ensureCodexSessions()
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "ou_user",
+			AuthorizedIdentity: "union_user", DeliveryRoute: route,
+		},
+		FollowerAttachRevision: 1,
+		FollowerAttachPhase:    codexFollowerAttachPreparing,
+	}
+	store.mu.Unlock()
+	entry := &terminalOutboxEntry{
+		Route: route, AuthorizedIdentity: "union_user", FollowerBindingKey: bindingKey,
+		FollowerRevision: 1, FollowerThreadID: "thread-1",
+	}
+	if allowed, reason := h.terminalOutboxDeliveryDecision(registry, entry); allowed || reason != "attach_not_ready" {
+		t.Fatalf("preparing decision allowed=%v reason=%q", allowed, reason)
+	}
+
+	store.mu.Lock()
+	binding := store.bindings[bindingKey]
+	binding.FollowerAttachPhase = codexFollowerAttachReady
+	store.bindings[bindingKey] = binding
+	store.mu.Unlock()
+	if allowed, reason := h.terminalOutboxDeliveryDecision(registry, entry); !allowed || reason != "" {
+		t.Fatalf("ready decision allowed=%v reason=%q", allowed, reason)
+	}
+}
+
+func TestTerminalOutboxWorkerPersistsFollowerResultUntilAttachReady(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	registry := newOutboxTestRegistry(route, reply)
+	registry.UpdateAccessForAccount(platform.PlatformFeishu, "cli_a", []string{"union_user"})
+	h := NewHandler(nil, nil)
+	store := h.ensureCodexSessions()
+	bindingKey := codexBindingKey("route-user", "codex")
+	workspace := "/workspace/jumpserver"
+	store.mu.Lock()
+	store.bindings[bindingKey] = codexSessionBinding{
+		ActiveWorkspace: workspace,
+		Workspaces:      map[string]codexWorkspaceSession{workspace: {ThreadID: "thread-1"}},
+		FollowRevision:  1,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "ou_user",
+			AuthorizedIdentity: "union_user", DeliveryRoute: route,
+		},
+		FollowerAttachRevision: 1,
+		FollowerAttachPhase:    codexFollowerAttachPreparing,
+	}
+	store.mu.Unlock()
+	seed, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := seed.enqueue(terminalOutboxDraft{
+		Route: route, AgentName: "codex", RichResult: true, Text: "最终结果",
+		AuthorizedIdentity: "union_user", FollowerBindingKey: bindingKey,
+		FollowerRevision: 1, FollowerThreadID: "thread-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := h.StartTerminalOutbox(ctx, registry, path); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	started := h.currentTerminalOutbox()
+	started.mu.Lock()
+	held, preparing := started.startupHeld[entry.ID], started.preparing[entry.ID]
+	started.mu.Unlock()
+	if !held || !preparing {
+		cancel()
+		t.Fatalf("startup hold=%v preparing=%v, want guarded result held before reconciliation", held, preparing)
+	}
+	cancel()
+
+	persisted, err := loadTerminalOutbox(path)
+	if err != nil || len(persisted) != 1 || persisted[0].Attempts != 0 || persisted[0].DeadLetter {
+		t.Fatalf("preparing follower entry=%#v err=%v, want one deferred result", persisted, err)
+	}
+	reply.mu.Lock()
+	deliveredBeforeReady := len(reply.results) + len(reply.textKeys)
+	reply.mu.Unlock()
+	if deliveredBeforeReady != 0 {
+		t.Fatalf("preparing follower received %d terminal deliveries", deliveredBeforeReady)
+	}
+
+	store.mu.Lock()
+	binding := store.bindings[bindingKey]
+	binding.FollowerAttachPhase = codexFollowerAttachReady
+	store.bindings[bindingKey] = binding
+	store.mu.Unlock()
+	restarted, err := newTerminalOutbox(path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.deliveryAllowed = func(entry *terminalOutboxEntry) bool {
+		return h.terminalOutboxDeliveryAllowed(registry, entry)
+	}
+	if err := restarted.attempt(context.Background(), entry.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.attempt(context.Background(), entry.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	reply.mu.Lock()
+	deliveredAfterReady := len(reply.results) + len(reply.textKeys)
+	reply.mu.Unlock()
+	if deliveredAfterReady != 1 {
+		t.Fatalf("ready follower received %d terminal deliveries, want 1", deliveredAfterReady)
+	}
+	if entries, loadErr := loadTerminalOutbox(path); loadErr != nil || len(entries) != 0 {
+		t.Fatalf("delivered entry remains=%#v err=%v", entries, loadErr)
 	}
 }
 
@@ -3070,6 +3411,63 @@ func TestTerminalOutboxRetriesSupersedeWhileReservationIsPreparing(t *testing.T)
 	stored = outbox.entryLocked(entry.ID)
 	if stored == nil || len(stored.PendingSupersedes) != 0 || stored.Stream == nil || !outbox.preparing[entry.ID] {
 		t.Fatalf("active reservation after supersede=%#v", stored)
+	}
+}
+
+func TestTerminalOutboxStartupHoldDefersPendingSupersedeSchedulingAndAttempt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.json")
+	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
+	reply := newOutboxTestReplier(route)
+	outbox, err := newTerminalOutbox(path, newOutboxTestRegistry(route, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)
+	outbox.now = func() time.Time { return base }
+	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, Text: "重启前终态"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := testPendingStreamSupersede(
+		"00000000-0000-4000-8000-000000000202", route, "card-before-restart", base,
+	)
+	outbox.mu.Lock()
+	stored := outbox.entryLocked(entry.ID)
+	stored.PendingSupersedes = append(stored.PendingSupersedes, pending)
+	outbox.startupHeld[entry.ID] = true
+	outbox.preparing[entry.ID] = true
+	outbox.mu.Unlock()
+
+	if due := outbox.duePendingStreamSupersedes(); len(due) != 0 {
+		t.Fatalf("startup-held pending supersede is due: %#v", due)
+	}
+	if delay, scheduled := outbox.nextAttemptDelay(); scheduled {
+		t.Fatalf("startup-held pending supersede scheduled a worker wakeup: delay=%s", delay)
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err != nil {
+		t.Fatalf("startup-held direct attempt returned error: %v", err)
+	}
+	reply.mu.Lock()
+	callsWhileHeld := reply.supersedeCalls
+	reply.mu.Unlock()
+	if callsWhileHeld != 0 {
+		t.Fatalf("startup-held pending supersede was delivered: calls=%d", callsWhileHeld)
+	}
+
+	outbox.mu.Lock()
+	delete(outbox.startupHeld, entry.ID)
+	delete(outbox.preparing, entry.ID)
+	outbox.mu.Unlock()
+	if due := outbox.duePendingStreamSupersedes(); len(due) != 1 || due[0].pendingID != pending.ID {
+		t.Fatalf("released pending supersede is not due: %#v", due)
+	}
+	if err := outbox.attemptPendingStreamSupersede(context.Background(), entry.ID, pending.ID); err != nil {
+		t.Fatalf("released pending supersede attempt: %v", err)
+	}
+	reply.mu.Lock()
+	defer reply.mu.Unlock()
+	if reply.supersedeCalls != 1 {
+		t.Fatalf("supersede calls=%d, want 1 after releasing startup hold", reply.supersedeCalls)
 	}
 }
 

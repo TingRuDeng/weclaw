@@ -208,12 +208,14 @@ func TestACPAgentMultipleClientsShareExistingCodexHost(t *testing.T) {
 	server.start(t)
 
 	newClient := func(stateName string) *ACPAgent {
-		return NewACPAgent(ACPAgentConfig{
+		a := NewACPAgent(ACPAgentConfig{
 			Command:         "codex",
 			Args:            []string{"app-server", "--listen", "stdio://"},
 			AppServerSocket: socketPath,
 			StateFile:       filepath.Join(dir, stateName+".json"),
 		})
+		a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
+		return a
 	}
 	first := newClient("first")
 	second := newClient("second")
@@ -289,7 +291,7 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 	}
 
 	newClient := func(stateName string) *ACPAgent {
-		return NewACPAgent(ACPAgentConfig{
+		a := NewACPAgent(ACPAgentConfig{
 			Command:         commandPath,
 			Args:            []string{"app-server"},
 			AppServerSocket: socketPath,
@@ -299,6 +301,8 @@ WECLAW_TEST_CODEX_UNIX_HOST_SOCKET="$socket" exec "$WECLAW_TEST_CODEX_BINARY" -t
 				testCodexUnixHostCountEnv:  countPath,
 			},
 		})
+		a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
+		return a
 	}
 	first := newClient("first")
 	second := newClient("second")

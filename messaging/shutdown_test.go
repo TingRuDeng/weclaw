@@ -111,8 +111,13 @@ func TestForceDrainPreservesExternalCodexRecoveryWithoutStoppedTerminal(t *testi
 		state: externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
 			ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
 		}},
-		watch: func(ctx context.Context, _ func(agent.ProgressEvent)) (string, error) {
+		watch: func(ctx context.Context, onReady func(agent.CodexThreadObserverReady) error, _ func(agent.ProgressEvent)) (string, error) {
 			close(watchStarted)
+			if onReady != nil {
+				if err := onReady(agent.CodexThreadObserverReady{ThreadID: "thread-1", TurnID: "turn-1"}); err != nil {
+					return "", err
+				}
+			}
 			<-ctx.Done()
 			return "", ctx.Err()
 		},

@@ -282,6 +282,7 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 // Failure affects progress mirroring only; the frontend binding remains valid.
 func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, req codexSessionAcquireRequest, liveAgent agent.CodexLiveRuntimeAgent) (codexSessionAcquireResult, error) {
 	opts := externalCodexTaskOptionsFromAcquire(req)
+	opts.runtimeGeneration = result.resolution.Binding.RuntimeGeneration
 	// 只有绑定事务最初确实看见过 active turn，后续的 inactive 快照才是
 	// 同一事务内的权威终态确认。否则仍要允许 rollout 作为跨进程活动证据，
 	// 避免 app-server 暂时空闲的快照覆盖本地仍在运行的任务。
@@ -300,6 +301,7 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 			return h.failCodexAcquireRuntime(result, liveAgent, reconcileErr), nil
 		}
 		result.resolution.Binding = binding
+		opts.runtimeGeneration = binding.RuntimeGeneration
 	}
 	if result.resolution.Binding.State.Active &&
 		!prepared.confirmedInactive && (!prepared.active || !prepared.state.Controllable) {
@@ -309,6 +311,26 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	if prepared.active {
 		if snapshot, ok := h.ensureCodexSessions().followerSnapshot(req.route.bindingKey); ok {
 			opts.terminalDeliveryKey = codexFollowerTerminalOutboxID(snapshot, prepared.state.ActiveTurnID)
+		}
+	}
+	if snapshot, ok := h.ensureCodexSessions().followerSnapshot(req.route.bindingKey); ok {
+		turnID := strings.TrimSpace(prepared.state.LastTurnID)
+		if prepared.active {
+			turnID = strings.TrimSpace(prepared.state.ActiveTurnID)
+		}
+		preparedAttach, prepareErr := h.ensureCodexSessions().commitFollowerAttachRuntime(
+			snapshot, turnID, opts.runtimeGeneration,
+		)
+		if prepareErr != nil {
+			return h.failCodexAcquireRuntime(result, liveAgent, prepareErr), nil
+		}
+		opts.followerAttach = &preparedAttach
+		if !prepared.active {
+			if readyErr := h.ensureCodexSessions().commitFollowerAttachReady(
+				preparedAttach, turnID, opts.runtimeGeneration,
+			); readyErr != nil {
+				return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+			}
 		}
 	}
 	reservation, err := h.reserveExternalCodexTask(opts, prepared)
@@ -329,6 +351,46 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	if prepared.active && !observerReady {
 		h.cancelExternalCodexTaskReservation(reservation)
 		return h.failCodexAcquireRuntime(result, liveAgent, errExternalCodexTaskReservationConflict), nil
+	}
+	if prepared.active && observerReady {
+		if readyErr := h.waitExternalCodexTaskReservationReady(req.ctx, reservation); readyErr != nil {
+			result.externalState = prepared.state
+			return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+		}
+		if reservation.reused && opts.followerAttach != nil {
+			if reservation.control == nil {
+				if readyErr := reservation.task.nativeProgressCardReadyError(); readyErr != nil {
+					result.externalState = prepared.state
+					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+				}
+				readyErr := h.commitCodexObserverReadyForAttach(
+					opts.followerAttach, opts.threadID, prepared.state.ActiveTurnID,
+					agent.CodexThreadObserverReady{
+						ThreadID: opts.threadID, TurnID: prepared.state.ActiveTurnID,
+						RuntimeGeneration: opts.runtimeGeneration,
+					},
+				)
+				if readyErr != nil {
+					result.externalState = prepared.state
+					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+				}
+			} else {
+				ready, seen, readyErr, complete := reservation.control.observerReadyResult()
+				if !complete || readyErr != nil || !seen {
+					if readyErr == nil {
+						readyErr = fmt.Errorf("已复用的 Codex observer 缺少就绪证据")
+					}
+					result.externalState = prepared.state
+					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+				}
+				if readyErr = h.commitCodexObserverReadyForAttach(
+					opts.followerAttach, opts.threadID, prepared.state.ActiveTurnID, ready,
+				); readyErr != nil {
+					result.externalState = prepared.state
+					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+				}
+			}
+		}
 	}
 	result.externalState = prepared.state
 	result.externalActive = prepared.active && observerReady

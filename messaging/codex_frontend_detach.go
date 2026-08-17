@@ -60,6 +60,17 @@ func (h *Handler) detachCodexFrontendTaskWithPrepare(
 	return h.detachCodexFrontendTaskWithOptions(key, routeUserID, threadID, false, prepare)
 }
 
+// detachCodexFrontendTaskForReleaseWithPrepare lets an explicit route release
+// detach a waiting interaction only after its durable tombstone is prepared.
+func (h *Handler) detachCodexFrontendTaskForReleaseWithPrepare(
+	key string,
+	routeUserID string,
+	threadID string,
+	prepare func() error,
+) (codexFrontendTaskDetachResult, error) {
+	return h.detachCodexFrontendTaskWithOptions(key, routeUserID, threadID, true, prepare)
+}
+
 // detachCodexFrontendTaskForAuthorizationRevocation 强制撤销该 route 的交互和投递。
 // 它只解除消息端观察，不取消或 interrupt 共享 Codex turn。
 func (h *Handler) detachCodexFrontendTaskForAuthorizationRevocation(
@@ -102,14 +113,17 @@ func (h *Handler) detachCodexFrontendTaskWithOptions(
 		h.tasks.mu.Unlock()
 		return codexFrontendTaskDetachResult{terminal: true}, nil
 	}
+	var interactionClaim *agentInteractionDetachClaim
 	if forceInteractionDetach {
-		task.interactionLease.forceDetach()
-	}
-	interactionClaim, ok := task.interactionLease.claimDetach()
-	if !ok {
-		task.mu.Unlock()
-		h.tasks.mu.Unlock()
-		return codexFrontendTaskDetachResult{interaction: true}, nil
+		interactionClaim = task.interactionLease.claimForceDetach()
+	} else {
+		var ok bool
+		interactionClaim, ok = task.interactionLease.claimDetach()
+		if !ok {
+			task.mu.Unlock()
+			h.tasks.mu.Unlock()
+			return codexFrontendTaskDetachResult{interaction: true}, nil
+		}
 	}
 	progress := task.progress
 	if progress != nil && !progress.claimDetachWithoutTerminal() {

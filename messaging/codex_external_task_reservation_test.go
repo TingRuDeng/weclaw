@@ -267,10 +267,22 @@ func TestReserveExternalCodexTaskRequiresSameIdentity(t *testing.T) {
 }
 
 func testExternalCodexReservationInput(watchStarted chan struct{}, watchDone <-chan struct{}) (preparedExternalCodexTask, externalCodexTaskOptions) {
-	watch := func(context.Context, func(agent.ProgressEvent)) (string, error) { return "完成", nil }
+	watch := func(_ context.Context, onReady func(agent.CodexThreadObserverReady) error, _ func(agent.ProgressEvent)) (string, error) {
+		if onReady != nil {
+			if err := onReady(agent.CodexThreadObserverReady{ThreadID: "thread-1", TurnID: "turn-1"}); err != nil {
+				return "", err
+			}
+		}
+		return "完成", nil
+	}
 	if watchStarted != nil {
-		watch = func(context.Context, func(agent.ProgressEvent)) (string, error) {
+		watch = func(_ context.Context, onReady func(agent.CodexThreadObserverReady) error, _ func(agent.ProgressEvent)) (string, error) {
 			close(watchStarted)
+			if onReady != nil {
+				if err := onReady(agent.CodexThreadObserverReady{ThreadID: "thread-1", TurnID: "turn-1"}); err != nil {
+					return "", err
+				}
+			}
 			<-watchDone
 			return "完成", nil
 		}

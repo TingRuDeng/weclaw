@@ -47,6 +47,12 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		return
 	}
+	if err := h.requireCodexFollowerAttachReady(route); err != nil {
+		h.rejectCodexTaskStart(codexTaskPreflightOptions{
+			taskOpts: opts, route: route, cancel: cancelTaskTimeout,
+		}, err)
+		return
+	}
 	controlCtx, cancelControl := h.codexThreadControlContext(agentCtx)
 	defer cancelControl()
 	unlockControl, err := h.lockCodexThreadControlContext(controlCtx, route.threadID)

@@ -55,13 +55,17 @@ func (s *codexSessionStore) load() {
 			changed = true
 		}
 		normalized := codexSessionBinding{
-			ActiveWorkspace:       normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
-			Workspaces:            make(map[string]codexWorkspaceSession),
-			FollowRevision:        binding.FollowRevision,
-			Follower:              normalizeCodexFrontendFollower(binding.Follower),
-			FollowTurnID:          strings.TrimSpace(binding.FollowTurnID),
-			FollowTurnInitialized: binding.FollowTurnInitialized,
-			FollowTurnPending:     binding.FollowTurnPending,
+			ActiveWorkspace:           normalizeCodexWorkspaceRoot(binding.ActiveWorkspace),
+			Workspaces:                make(map[string]codexWorkspaceSession),
+			FollowRevision:            binding.FollowRevision,
+			Follower:                  normalizeCodexFrontendFollower(binding.Follower),
+			FollowerAttachRevision:    binding.FollowerAttachRevision,
+			FollowerAttachPhase:       normalizeCodexFollowerAttachPhase(binding.FollowerAttachPhase),
+			FollowerAttachTurnID:      strings.TrimSpace(binding.FollowerAttachTurnID),
+			FollowerRuntimeGeneration: binding.FollowerRuntimeGeneration,
+			FollowTurnID:              strings.TrimSpace(binding.FollowTurnID),
+			FollowTurnInitialized:     binding.FollowTurnInitialized,
+			FollowTurnPending:         binding.FollowTurnPending,
 		}
 		for workspaceRoot, session := range binding.Workspaces {
 			workspaceRoot = normalizeCodexWorkspaceRoot(workspaceRoot)
@@ -134,6 +138,15 @@ func (s *codexSessionStore) load() {
 			normalized.Workspaces[workspaceRoot] = session
 		}
 		if normalized.Follower != nil {
+			if state.Version < 14 || normalized.FollowerAttachRevision == 0 || normalized.FollowerAttachPhase == "" {
+				if normalized.FollowerAttachRevision == 0 {
+					normalized.FollowerAttachRevision = 1
+				}
+				normalized.FollowerAttachPhase = codexFollowerAttachReady
+				normalized.FollowerAttachTurnID = normalized.FollowTurnID
+				normalized.FollowerRuntimeGeneration = 0
+				changed = true
+			}
 			target := normalized.Workspaces[normalized.Follower.WorkspaceRoot]
 			if codexWorkspaceReleaseIntent(target) || strings.TrimSpace(target.ThreadID) != normalized.Follower.ThreadID {
 				normalized.Follower = nil
@@ -176,6 +189,10 @@ func mergeCodexSessionBinding(current codexSessionBinding, incoming codexSession
 		incoming.FollowRevision == current.FollowRevision && incoming.Follower != nil && current.Follower == nil {
 		current.FollowRevision = incoming.FollowRevision
 		current.Follower = cloneCodexFrontendFollower(incoming.Follower)
+		current.FollowerAttachRevision = incoming.FollowerAttachRevision
+		current.FollowerAttachPhase = incoming.FollowerAttachPhase
+		current.FollowerAttachTurnID = incoming.FollowerAttachTurnID
+		current.FollowerRuntimeGeneration = incoming.FollowerRuntimeGeneration
 		current.FollowTurnID = incoming.FollowTurnID
 		current.FollowTurnInitialized = incoming.FollowTurnInitialized
 		current.FollowTurnPending = incoming.FollowTurnPending
@@ -244,7 +261,11 @@ func (s *codexSessionStore) snapshotCodexSessionState() (string, codexSessionSta
 		state.Bindings[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
 			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
-			FollowTurnID: strings.TrimSpace(binding.FollowTurnID), FollowTurnInitialized: binding.FollowTurnInitialized,
+			FollowerAttachRevision:    binding.FollowerAttachRevision,
+			FollowerAttachPhase:       binding.FollowerAttachPhase,
+			FollowerAttachTurnID:      strings.TrimSpace(binding.FollowerAttachTurnID),
+			FollowerRuntimeGeneration: binding.FollowerRuntimeGeneration,
+			FollowTurnID:              strings.TrimSpace(binding.FollowTurnID), FollowTurnInitialized: binding.FollowTurnInitialized,
 			FollowTurnPending: binding.FollowTurnPending,
 		}
 	}

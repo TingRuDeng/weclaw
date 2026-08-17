@@ -104,6 +104,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		turnCh:                     make(map[string]chan *codexTurnEvent),
 		turnObservers:              make(map[string]map[uint64]*codexTurnObserverMailbox),
 		pendingTurnInteractions:    make(map[string]map[string]*codexTurnEvent),
+		turnInteractionBrokers:     make(map[string]map[string]*codexInteractionBroker),
 		desktopProbe:               options.desktopProbe,
 		codexDesktopCoordination:   desktopCoordination,
 		codexDesktopHostSelection:  desktopHostSelection,
@@ -111,6 +112,12 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		protocolTrace:              cfg.ProtocolTrace,
 	}
 	a.codexHostMode = a.resolveAgentCodexHostMode()
+	// auto 只有在最终落到 managed 时才允许选择 Desktop Host。official
+	// daemon 已经是唯一写入权威，Desktop bridge 在该拓扑下只负责协调。
+	// options.desktopBridge 保留包内测试对完整 Desktop Host 的显式注入语义。
+	if a.codexHostMode == codexHostModeDaemon && !options.desktopBridge {
+		a.codexDesktopHostSelection = false
+	}
 	return a
 }
 

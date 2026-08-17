@@ -92,7 +92,7 @@ func TestReleasePipelineMirrorsOnlyAfterGitHubCommit(t *testing.T) {
 	}
 }
 
-func TestGiteeMirrorPublishesVerifiedDarwinArm64AndLinuxAMD64WithoutLeakingToken(t *testing.T) {
+func TestGiteeMirrorPublishesVerifiedOfficialAssetsWithoutLeakingToken(t *testing.T) {
 	root := t.TempDir()
 	assetsDir := filepath.Join(root, "assets")
 	fakeBin := filepath.Join(root, "bin")
@@ -102,7 +102,7 @@ func TestGiteeMirrorPublishesVerifiedDarwinArm64AndLinuxAMD64WithoutLeakingToken
 	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	assetNames := []string{"weclaw_darwin_arm64", "weclaw_linux_arm64", "weclaw_linux_amd64"}
+	assetNames := []string{"weclaw_darwin_arm64", "weclaw_linux_amd64"}
 	var checksums strings.Builder
 	for _, name := range assetNames {
 		content := []byte("verified-" + name + "\n")
@@ -413,8 +413,6 @@ func TestReleaseScriptUpdateSmokeSkipsUnsupportedHost(t *testing.T) {
 func TestCIValidationMatrixAndReleaseAssetContract(t *testing.T) {
 	requiredTargets := []string{
 		"- goos: darwin\n            goarch: arm64",
-		"- goos: darwin\n            goarch: amd64",
-		"- goos: linux\n            goarch: arm64",
 		"- goos: linux\n            goarch: amd64",
 	}
 	for _, path := range []string{
@@ -433,10 +431,16 @@ func TestCIValidationMatrixAndReleaseAssetContract(t *testing.T) {
 		if strings.Contains(text, "goos: windows") {
 			t.Fatalf("%s must not publish Windows assets", path)
 		}
-		if !strings.Contains(text, "run: sha256sum weclaw_darwin_arm64 weclaw_linux_arm64 weclaw_linux_amd64 > checksums.txt") {
-			t.Fatalf("%s must checksum the three published prerelease assets", path)
+		if strings.Contains(text, "- goos: darwin\n            goarch: amd64") {
+			t.Fatalf("%s must not build unsupported darwin/amd64", path)
 		}
-		for _, asset := range []string{"dist/weclaw_darwin_arm64", "dist/weclaw_linux_arm64", "dist/weclaw_linux_amd64"} {
+		if strings.Contains(text, "- goos: linux\n            goarch: arm64") {
+			t.Fatalf("%s must not build unsupported linux/arm64", path)
+		}
+		if !strings.Contains(text, "run: sha256sum weclaw_darwin_arm64 weclaw_linux_amd64 > checksums.txt") {
+			t.Fatalf("%s must checksum the two published prerelease assets", path)
+		}
+		for _, asset := range []string{"dist/weclaw_darwin_arm64", "dist/weclaw_linux_amd64"} {
 			if !strings.Contains(text, asset) {
 				t.Fatalf("%s missing prerelease asset %q", path, asset)
 			}
@@ -451,13 +455,16 @@ func TestCIValidationMatrixAndReleaseAssetContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(script)
-	for _, target := range []string{`"darwin/arm64"`, `"linux/arm64"`, `"linux/amd64"`} {
+	for _, target := range []string{`"darwin/arm64"`, `"linux/amd64"`} {
 		if !strings.Contains(text, target) {
 			t.Fatalf("release script missing published target %s", target)
 		}
 	}
 	if strings.Contains(text, `"darwin/amd64"`) {
 		t.Fatal("release script must not publish unsupported darwin/amd64")
+	}
+	if strings.Contains(text, `"linux/arm64"`) {
+		t.Fatal("release script must not publish unsupported linux/arm64")
 	}
 	if !strings.Contains(text, "${#TARGETS[@]} + 1") {
 		t.Fatal("release asset verification must derive expected count from TARGETS")
@@ -470,7 +477,6 @@ func TestReleaseScriptVerifiesEveryOfficialAssetName(t *testing.T) {
 	fixture := validReleaseVerifyFixture()
 	fixture.assets = strings.Join([]string{
 		"weclaw_darwin_arm64",
-		"weclaw_linux_arm64",
 		"weclaw_linux_amd64",
 		"checksums.txt",
 	}, `\n`)
@@ -481,6 +487,17 @@ func TestReleaseScriptVerifiesEveryOfficialAssetName(t *testing.T) {
 	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, fixture))
 	if !strings.Contains(output, "Release 缺少资产：weclaw_linux_amd64") {
 		t.Fatalf("missing asset rejection=%q", output)
+	}
+}
+
+func TestReleaseScriptRejectsUnexpectedAssetCount(t *testing.T) {
+	script := releaseScriptPath(t)
+	fixture := validReleaseVerifyFixture()
+	fixture.assets += `\nunexpected_asset`
+
+	output := runReleaseScriptTestCommandExpectFailure(t, "", "bash", "-c", releaseVerifyCommand(script, fixture))
+	if !strings.Contains(output, "Release 资产数量异常：4，期望 3") {
+		t.Fatalf("unexpected asset count rejection=%q", output)
 	}
 }
 
@@ -952,7 +969,6 @@ func validReleaseVerifyFixture() releaseVerifyFixture {
 	return releaseVerifyFixture{
 		assets: strings.Join([]string{
 			"weclaw_darwin_arm64",
-			"weclaw_linux_arm64",
 			"weclaw_linux_amd64",
 			"checksums.txt",
 		}, `\n`),
@@ -965,6 +981,10 @@ func releaseVerifyCommand(script string, fixture releaseVerifyFixture) string {
 }
 
 func releaseVerifyCommandForInvocation(script string, fixture releaseVerifyFixture, invocation string) string {
+	assetCount := 0
+	if fixture.assets != "" {
+		assetCount = strings.Count(fixture.assets, `\n`) + 1
+	}
 	draft := "false"
 	if fixture.draft {
 		draft = "true"
@@ -975,7 +995,7 @@ func releaseVerifyCommandForInvocation(script string, fixture releaseVerifyFixtu
 	}
 	return "WECLAW_RELEASE_SOURCE_ONLY=1 source " + shellQuote(script) + ` && ` +
 		`gh() { ` +
-		`case "$*" in *"?per_page=100"*) echo 42 ;; *".assets | length"*) echo 4 ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
+		`case "$*" in *"?per_page=100"*) echo 42 ;; *".assets | length"*) echo ` + fmt.Sprint(assetCount) + ` ;; *".assets[].name"*) printf '%b\n' "` + fixture.assets + `" ;; ` +
 		`*"@tsv"*) printf '%s\t%s\t%s\n' "` + fixture.tag + `" "` + draft + `" "` + prerelease + `" ;; *"--json tagName"*) echo "` + fixture.tag + `" ;; esac; } && ` +
 		`RELEASE_ID=42 && ` + invocation
 }

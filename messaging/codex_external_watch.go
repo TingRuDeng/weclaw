@@ -32,14 +32,25 @@ type externalCodexWatchRequest struct {
 }
 
 // superviseExternalCodexWatch 把当前客户端断线切换为 rollout/reconnect 观察。
-func (h *Handler) superviseExternalCodexWatch(runtime externalCodexTaskRuntime, onProgress func(agent.ProgressEvent)) codexExternalWatchResult {
-	text, err := runtime.watch(runtime.ctx, onProgress)
+func (h *Handler) superviseExternalCodexWatch(
+	runtime externalCodexTaskRuntime,
+	onReady func(agent.CodexThreadObserverReady) error,
+	onProgress func(agent.ProgressEvent),
+) codexExternalWatchResult {
+	text, err := runtime.watch(runtime.ctx, onReady, onProgress)
 	source := "runtime"
 	if !runtime.state.Controllable {
 		source = "rollout"
 	}
 	result := classifyCodexWatchResult(text, err, source)
 	if result.Terminal {
+		return result
+	}
+	if _, ready := runtime.control.readyResult(); !ready {
+		runtime.control.finishReady(firstNonNilError(err, fmt.Errorf("Codex observer 在就绪前断开")))
+		return result
+	}
+	if readyErr, _ := runtime.control.readyResult(); readyErr != nil {
 		return result
 	}
 	runtime.task.markCodexDisconnected()

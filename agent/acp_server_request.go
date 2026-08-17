@@ -6,6 +6,7 @@ import (
 )
 
 const rpcMethodNotFound = -32601
+const rpcInvalidParams = -32602
 
 type rpcServerResponse struct {
 	JSONRPC string      `json:"jsonrpc"`
@@ -48,6 +49,8 @@ func (a *ACPAgent) dispatchACPServerRequest(msg rpcResponse, line string) error 
 				Success: false,
 			},
 		})
+	case "item/tool/requestUserInput":
+		return a.handleToolUserInputRequest(msg)
 	default:
 		return a.writeRPCServerResponse(rpcServerResponse{
 			JSONRPC: "2.0",
@@ -58,6 +61,14 @@ func (a *ACPAgent) dispatchACPServerRequest(msg rpcResponse, line string) error 
 			},
 		})
 	}
+}
+
+func (a *ACPAgent) writeRPCServerError(id int64, code int, message string) error {
+	return a.writeRPCServerResponse(rpcServerResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error:   &rpcError{Code: code, Message: message},
+	})
 }
 
 func (a *ACPAgent) writeRPCServerResponse(response rpcServerResponse) error {

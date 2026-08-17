@@ -304,6 +304,13 @@ func (a *ACPAgent) probeCodexRuntime(ctx context.Context, req CodexRuntimeReques
 			return CodexRuntimeDesktop, state, nil
 		}
 	}
+	// App 和 WeClaw 连接的是同一个 official daemon 时，App 历史只证明
+	// thread 对该前端可见，不代表 Desktop 拥有另一个 Host。显式接管应继续
+	// 通过现有 daemon 客户端 resume/read，并由该连接建立实时观察器。
+	if loadErr == nil && opts.allowNoClientRelease && !a.codexDesktopHostSelection &&
+		a.usesOfficialCodexDaemon() && a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw {
+		return CodexRuntimeUnknown, current.State, nil
+	}
 	if binding, ok := a.codexOwners.threadBinding(req.Ref.ThreadID); ok {
 		if binding.Runtime == CodexRuntimeConflict {
 			if opts.allowConflictRecovery && desktopReleaseConfirmed(a.desktopProbe, loadErr) {

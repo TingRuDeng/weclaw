@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -21,8 +22,9 @@ type UserInputQuestion struct {
 }
 
 type UserInputRequest struct {
-	RequestID string
-	Questions []UserInputQuestion
+	RequestID  string
+	Questions  []UserInputQuestion
+	Resolution CodexInteractionResolution
 }
 
 type UserInputAnswers map[string][]string
@@ -87,6 +89,10 @@ func (a *ACPAgent) handleCodexUserInputEvent(ctx context.Context, evt *codexTurn
 	}
 	answers, err := handler(ctx, evt.UserInput.Request)
 	if err != nil {
+		if errors.Is(err, ErrCodexInteractionResolvedExternally) || errors.Is(err, ErrCodexTurnTerminal) {
+			a.resolveCodexInteraction(evt, err)
+			return nil
+		}
 		return retryCodexUserInputEvent(evt, err)
 	}
 	if err := validateUserInputAnswers(evt.UserInput.Request, answers); err != nil {
@@ -95,7 +101,13 @@ func (a *ACPAgent) handleCodexUserInputEvent(ctx context.Context, evt *codexTurn
 	if evt.UserInput.Respond == nil {
 		return retryCodexUserInputEvent(evt, fmt.Errorf("Codex 结构化问答缺少 provider responder"))
 	}
-	return evt.UserInput.Respond(ctx, answers)
+	err = a.submitCodexInteraction(ctx, evt, func() error {
+		return evt.UserInput.Respond(ctx, answers)
+	})
+	if errors.Is(err, ErrCodexInteractionResolvedExternally) || errors.Is(err, ErrCodexTurnTerminal) {
+		return nil
+	}
+	return err
 }
 
 // retryCodexUserInputEvent 释放投递标记，让未回答请求可由后续 snapshot 重投。

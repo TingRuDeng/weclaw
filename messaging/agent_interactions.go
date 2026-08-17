@@ -73,6 +73,21 @@ func (l *agentInteractionLease) claimDetach() (*agentInteractionDetachClaim, boo
 	return &agentInteractionDetachClaim{lease: l, locked: true}, true
 }
 
+// claimForceDetach blocks new interactions while persistence is prepared, but
+// permits release to win over an already waiting approval or question. The
+// caller closes the detach signal only after the durable release write succeeds.
+func (l *agentInteractionLease) claimForceDetach() *agentInteractionDetachClaim {
+	if l == nil {
+		return &agentInteractionDetachClaim{}
+	}
+	l.mu.Lock()
+	if l.detached {
+		l.mu.Unlock()
+		return &agentInteractionDetachClaim{}
+	}
+	return &agentInteractionDetachClaim{lease: l, locked: true}
+}
+
 func (c *agentInteractionDetachClaim) finish(detach bool) {
 	if c == nil || !c.locked || c.lease == nil {
 		return
@@ -146,9 +161,10 @@ func (l *agentInteractionLease) bindContext(ctx context.Context) (context.Contex
 }
 
 type userInputQuestionRequest struct {
-	requestID string
-	question  agent.UserInputQuestion
-	opts      agentInteractionContextOptions
+	requestID  string
+	question   agent.UserInputQuestion
+	resolution agent.CodexInteractionResolution
+	opts       agentInteractionContextOptions
 }
 
 // withAgentInteractions 为同一任务注入审批和结构化问答能力。
@@ -175,7 +191,7 @@ func (h *Handler) userInputHandlerForRoute(opts agentInteractionContextOptions) 
 		answers := make(agent.UserInputAnswers, len(req.Questions))
 		for _, question := range req.Questions {
 			answer, err := h.askUserInputQuestion(ctx, userInputQuestionRequest{
-				requestID: req.RequestID, question: question, opts: opts,
+				requestID: req.RequestID, question: question, resolution: req.Resolution, opts: opts,
 			})
 			if err != nil {
 				return nil, err
@@ -205,7 +221,7 @@ func (h *Handler) askUserInputQuestion(ctx context.Context, req userInputQuestio
 		}
 		return "", err
 	}
-	return waitForUserInputChoice(ctx, pending, req.opts.lease)
+	return waitForUserInputChoice(ctx, pending, req.opts.lease, req.resolution)
 }
 
 func buildUserInputOptions(req userInputQuestionRequest) (string, []agent.ApprovalOption, error) {
@@ -262,12 +278,19 @@ func userInputPrompt(question agent.UserInputQuestion) string {
 	return header + "\n\n" + prompt
 }
 
-func waitForUserInputChoice(ctx context.Context, pending *pendingApproval, lease *agentInteractionLease) (string, error) {
+func waitForUserInputChoice(
+	ctx context.Context,
+	pending *pendingApproval,
+	lease *agentInteractionLease,
+	resolution agent.CodexInteractionResolution,
+) (string, error) {
 	timer := time.NewTimer(pendingApprovalTimeout)
 	defer timer.Stop()
 	select {
 	case choice := <-pending.choices:
 		return strings.TrimSpace(choice), nil
+	case <-codexInteractionResolutionDone(resolution):
+		return "", codexInteractionResolutionError(resolution)
 	case <-timer.C:
 		return "", fmt.Errorf("Codex 结构化问答等待超时")
 	case <-lease.done():
@@ -278,6 +301,22 @@ func waitForUserInputChoice(ctx context.Context, pending *pendingApproval, lease
 		}
 		return "", ctx.Err()
 	}
+}
+
+func codexInteractionResolutionDone(resolution agent.CodexInteractionResolution) <-chan struct{} {
+	if resolution == nil {
+		return nil
+	}
+	return resolution.Done()
+}
+
+func codexInteractionResolutionError(resolution agent.CodexInteractionResolution) error {
+	if resolution != nil {
+		if err := resolution.Err(); err != nil {
+			return err
+		}
+	}
+	return agent.ErrCodexInteractionResolvedExternally
 }
 
 func validateAgentInteractionRoute(opts agentInteractionContextOptions) error {

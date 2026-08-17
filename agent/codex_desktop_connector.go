@@ -192,16 +192,6 @@ func (r *codexDesktopRuntime) abandonTurnEvent(threadID string, event *codexTurn
 	}
 }
 
-func (r *codexDesktopRuntime) replayPendingActionEvents(threadID string) []*codexTurnEvent {
-	r.mu.Lock()
-	state := r.state
-	r.mu.Unlock()
-	if state == nil {
-		return nil
-	}
-	return state.replayPendingActionEvents(threadID)
-}
-
 // startTurn 通过 follower 在同一个 Desktop thread 开始任务。
 func (r *codexDesktopRuntime) startTurn(ctx context.Context, spec codexDesktopStartTurnSpec) (string, error) {
 	r.mu.Lock()

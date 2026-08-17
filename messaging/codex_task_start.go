@@ -9,6 +9,8 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
+var errCodexFollowerAttachPreparing = errors.New("Codex 会话正在切换中")
+
 type codexTaskPreflightOptions struct {
 	taskOpts codexAgentTaskOptions
 	route    codexConversationRoute
@@ -103,6 +105,11 @@ func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions) bool 
 
 func (h *Handler) rejectCodexTaskStart(opts codexTaskPreflightOptions, err error) {
 	opts.cancel()
+	if errors.Is(err, errCodexFollowerAttachPreparing) {
+		sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID,
+			"Codex 会话正在切换中，请稍后重试。")
+		return
+	}
 	if errors.Is(err, agent.ErrCodexRuntimeUnavailable) ||
 		errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown) ||
 		errors.Is(err, agent.ErrCodexDesktopDisconnected) {

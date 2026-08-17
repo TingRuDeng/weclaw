@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -57,11 +58,11 @@ func TestExplicitUnknownThreadDoesNotFallbackToSoleChannel(t *testing.T) {
 	}
 }
 
-func TestCodexInteractionUsesOwnerThenSingleFrontendObserver(t *testing.T) {
+func TestCodexInteractionBroadcastsToOwnerAndAllFrontendObservers(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
-	owner := make(chan *codexTurnEvent, 2)
-	first := make(chan *codexTurnEvent, 2)
-	second := make(chan *codexTurnEvent, 2)
+	owner := make(chan *codexTurnEvent, 4)
+	first := make(chan *codexTurnEvent, 4)
+	second := make(chan *codexTurnEvent, 4)
 	if !a.registerTurnChannel("thread-1", owner) {
 		t.Fatal("failed to register turn owner")
 	}
@@ -74,20 +75,174 @@ func TestCodexInteractionUsesOwnerThenSingleFrontendObserver(t *testing.T) {
 	if !a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "approval_request", Approval: request}) {
 		t.Fatal("approval was not delivered to the turn owner")
 	}
-	if len(owner) != 1 || len(first) != 0 || len(second) != 0 {
-		t.Fatalf("owner=%d first=%d second=%d, want 1/0/0", len(owner), len(first), len(second))
+	if len(owner) != 1 || len(first) != 1 || len(second) != 1 {
+		t.Fatalf("owner=%d first=%d second=%d, want 1/1/1", len(owner), len(first), len(second))
 	}
 	<-owner
+	<-first
+	<-second
 	a.unregisterTurnChannel("thread-1", owner)
-	if !a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "approval_request", Approval: request}) {
-		t.Fatal("approval was not delivered to a frontend observer")
+	secondRequest := &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-2"}}
+	if !a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "approval_request", Approval: secondRequest}) {
+		t.Fatal("approval was not delivered to frontend observers")
 	}
-	if len(first) != 1 || len(second) != 0 {
-		t.Fatalf("first=%d second=%d, want exactly one observer delivery", len(first), len(second))
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("first=%d second=%d, want both observer deliveries", len(first), len(second))
 	}
 }
 
-func TestCodexInteractionMovesToNextObserverWhenFirstUnregisters(t *testing.T) {
+func TestCodexApprovalBroadcastSubmitsProviderDecisionOnce(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	first := make(chan *codexTurnEvent, 2)
+	second := make(chan *codexTurnEvent, 2)
+	firstID := a.registerTurnObserver("thread-1", first)
+	secondID := a.registerTurnObserver("thread-1", second)
+	defer a.unregisterTurnObserver("thread-1", firstID, first)
+	defer a.unregisterTurnObserver("thread-1", secondID, second)
+
+	var calls atomic.Int32
+	providerEntered := make(chan string, 2)
+	releaseProvider := make(chan struct{})
+	event := &codexTurnEvent{
+		Kind: "approval_request", TurnID: "turn-1",
+		Approval: &codexApprovalRequest{
+			Request: ApprovalRequest{
+				RequestID: "approval-1",
+				Options: []ApprovalOption{
+					{ID: "allow", Name: "允许"},
+					{ID: "deny", Name: "拒绝"},
+				},
+			},
+			Respond: func(_ context.Context, decision string) error {
+				calls.Add(1)
+				providerEntered <- decision
+				<-releaseProvider
+				return nil
+			},
+		},
+	}
+	if !a.dispatchToTurnCh("thread-1", event) {
+		t.Fatal("approval was not broadcast")
+	}
+	var firstEvent *codexTurnEvent
+	select {
+	case firstEvent = <-first:
+	case <-time.After(time.Second):
+		t.Fatal("first observer did not receive approval")
+	}
+	var secondEvent *codexTurnEvent
+	select {
+	case secondEvent = <-second:
+	case <-time.After(time.Second):
+		t.Fatal("second observer did not receive approval")
+	}
+	results := make(chan error, 2)
+	go func() {
+		ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+			return "allow", nil
+		})
+		results <- a.handleCodexApprovalEvent(ctx, firstEvent)
+	}()
+	go func() {
+		ctx := ContextWithApprovalHandler(context.Background(), func(context.Context, ApprovalRequest) (string, error) {
+			return "deny", nil
+		})
+		results <- a.handleCodexApprovalEvent(ctx, secondEvent)
+	}()
+
+	select {
+	case <-providerEntered:
+	case <-time.After(time.Second):
+		t.Fatal("provider responder was not called")
+	}
+	select {
+	case decision := <-providerEntered:
+		close(releaseProvider)
+		t.Fatalf("provider responder received a second decision %q", decision)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseProvider)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("approval handler error=%v", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls=%d, want 1", got)
+	}
+}
+
+func TestCodexUserInputBroadcastSubmitsProviderAnswersOnce(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	first := make(chan *codexTurnEvent, 2)
+	second := make(chan *codexTurnEvent, 2)
+	firstID := a.registerTurnObserver("thread-1", first)
+	secondID := a.registerTurnObserver("thread-1", second)
+	defer a.unregisterTurnObserver("thread-1", firstID, first)
+	defer a.unregisterTurnObserver("thread-1", secondID, second)
+
+	var calls atomic.Int32
+	providerEntered := make(chan UserInputAnswers, 2)
+	releaseProvider := make(chan struct{})
+	event := &codexTurnEvent{
+		Kind: "user_input_request", TurnID: "turn-1",
+		UserInput: &codexUserInputEvent{
+			Request: UserInputRequest{
+				RequestID: "input-1",
+				Questions: []UserInputQuestion{{
+					ID: "question-1", Prompt: "请选择", Options: []UserInputOption{{Label: "继续"}, {Label: "停止"}},
+				}},
+			},
+			Respond: func(_ context.Context, answers UserInputAnswers) error {
+				calls.Add(1)
+				providerEntered <- answers
+				<-releaseProvider
+				return nil
+			},
+		},
+	}
+	if !a.dispatchToTurnCh("thread-1", event) {
+		t.Fatal("user input was not broadcast")
+	}
+	firstEvent := <-first
+	secondEvent := <-second
+	results := make(chan error, 2)
+	go func() {
+		ctx := ContextWithUserInputHandler(context.Background(), func(context.Context, UserInputRequest) (UserInputAnswers, error) {
+			return UserInputAnswers{"question-1": {"继续"}}, nil
+		})
+		results <- a.handleCodexUserInputEvent(ctx, firstEvent)
+	}()
+	go func() {
+		ctx := ContextWithUserInputHandler(context.Background(), func(context.Context, UserInputRequest) (UserInputAnswers, error) {
+			return UserInputAnswers{"question-1": {"停止"}}, nil
+		})
+		results <- a.handleCodexUserInputEvent(ctx, secondEvent)
+	}()
+
+	select {
+	case <-providerEntered:
+	case <-time.After(time.Second):
+		t.Fatal("provider responder was not called")
+	}
+	select {
+	case answers := <-providerEntered:
+		close(releaseProvider)
+		t.Fatalf("provider responder received second answers %#v", answers)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseProvider)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("user input handler error=%v", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls=%d, want 1", got)
+	}
+}
+
+func TestCodexInteractionObserverUnregisterDoesNotDuplicateBroadcast(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex"})
 	first := make(chan *codexTurnEvent, 2)
 	second := make(chan *codexTurnEvent, 2)
@@ -96,16 +251,16 @@ func TestCodexInteractionMovesToNextObserverWhenFirstUnregisters(t *testing.T) {
 	defer a.unregisterTurnObserver("thread-1", secondID, second)
 	request := &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-1"}}
 	event := &codexTurnEvent{Kind: "approval_request", Approval: request}
-	if !a.dispatchToTurnCh("thread-1", event) || len(first) != 1 || len(second) != 0 {
+	if !a.dispatchToTurnCh("thread-1", event) || len(first) != 1 || len(second) != 1 {
 		t.Fatalf("initial delivery first=%d second=%d", len(first), len(second))
 	}
 
 	a.unregisterTurnObserver("thread-1", firstID, first)
 	if len(first) != 0 || len(second) != 1 {
-		t.Fatalf("handoff first=%d second=%d, want 0/1", len(first), len(second))
+		t.Fatalf("after unregister first=%d second=%d, want 0/1 without duplicate", len(first), len(second))
 	}
 	if got := <-second; got != event {
-		t.Fatalf("handed off event=%p, want %p", got, event)
+		t.Fatalf("broadcast event=%p, want %p", got, event)
 	}
 }
 

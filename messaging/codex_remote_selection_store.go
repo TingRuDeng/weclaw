@@ -205,7 +205,11 @@ func cloneCodexSessionBindings(source map[string]codexSessionBinding) map[string
 		cloned[key] = codexSessionBinding{
 			ActiveWorkspace: binding.ActiveWorkspace, Workspaces: workspaces,
 			FollowRevision: binding.FollowRevision, Follower: cloneCodexFrontendFollower(binding.Follower),
-			FollowTurnID: strings.TrimSpace(binding.FollowTurnID), FollowTurnInitialized: binding.FollowTurnInitialized,
+			FollowerAttachRevision:    binding.FollowerAttachRevision,
+			FollowerAttachPhase:       binding.FollowerAttachPhase,
+			FollowerAttachTurnID:      strings.TrimSpace(binding.FollowerAttachTurnID),
+			FollowerRuntimeGeneration: binding.FollowerRuntimeGeneration,
+			FollowTurnID:              strings.TrimSpace(binding.FollowTurnID), FollowTurnInitialized: binding.FollowTurnInitialized,
 			FollowTurnPending: binding.FollowTurnPending,
 		}
 	}
@@ -227,6 +231,10 @@ func sameCodexSessionBindings(left map[string]codexSessionBinding, right map[str
 
 func sameCodexSessionBinding(left codexSessionBinding, right codexSessionBinding) bool {
 	if left.ActiveWorkspace != right.ActiveWorkspace || left.FollowRevision != right.FollowRevision ||
+		left.FollowerAttachRevision != right.FollowerAttachRevision ||
+		left.FollowerAttachPhase != right.FollowerAttachPhase ||
+		left.FollowerAttachTurnID != right.FollowerAttachTurnID ||
+		left.FollowerRuntimeGeneration != right.FollowerRuntimeGeneration ||
 		left.FollowTurnID != right.FollowTurnID || left.FollowTurnInitialized != right.FollowTurnInitialized ||
 		left.FollowTurnPending != right.FollowTurnPending ||
 		!sameCodexFrontendFollower(left.Follower, right.Follower) || len(left.Workspaces) != len(right.Workspaces) {
@@ -294,6 +302,10 @@ func selectCodexRemoteWorkspace(bindings map[string]codexSessionBinding, update 
 			binding.FollowTurnPending = update.FollowerTurnPending
 		}
 		binding.Follower = cloneCodexFrontendFollower(update.Follower)
+		binding.FollowerAttachRevision++
+		binding.FollowerAttachPhase = codexFollowerAttachPreparing
+		binding.FollowerAttachTurnID = update.FollowerTurnID
+		binding.FollowerRuntimeGeneration = 0
 		if binding.Follower != nil {
 			binding.Follower.WorkspaceRoot = update.WorkspaceRoot
 			binding.Follower.ThreadID = update.TargetThreadID
@@ -302,8 +314,11 @@ func selectCodexRemoteWorkspace(bindings map[string]codexSessionBinding, update 
 			} else {
 				binding.Follower.UpdatedAt = now.Format(time.RFC3339)
 			}
+		} else {
+			binding.FollowerAttachPhase = ""
+			binding.FollowerAttachTurnID = ""
 		}
-		changed = changed || !sameCodexFrontendFollower(previousFollower, binding.Follower) || !preserveTurn
+		changed = true
 	}
 	bindings[update.BindingKey] = binding
 	return changed

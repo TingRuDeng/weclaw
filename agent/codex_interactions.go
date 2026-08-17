@@ -21,14 +21,25 @@ func (a *ACPAgent) handleCodexApprovalEvent(ctx context.Context, evt *codexTurnE
 	}
 	optionID, resolveErr := a.resolvePermissionOptionWithError(ctx, evt.Approval.Request)
 	if resolveErr != nil {
-		if errors.Is(resolveErr, ErrApprovalResolvedExternally) || errors.Is(resolveErr, ErrApprovalTurnTerminal) {
+		if errors.Is(resolveErr, ErrApprovalResolvedExternally) || errors.Is(resolveErr, ErrApprovalTurnTerminal) ||
+			errors.Is(resolveErr, ErrCodexInteractionResolvedExternally) || errors.Is(resolveErr, ErrCodexTurnTerminal) {
+			a.resolveCodexInteraction(evt, resolveErr)
 			return nil
 		}
 		return resolveErr
 	}
-	if err := evt.Approval.Respond(ctx, optionID); err != nil {
+	if err := a.submitCodexInteraction(ctx, evt, func() error {
+		return evt.Approval.Respond(ctx, optionID)
+	}); err != nil {
+		if errors.Is(err, ErrCodexInteractionResolvedExternally) || errors.Is(err, ErrCodexTurnTerminal) {
+			return nil
+		}
 		if errors.Is(err, ErrCodexDesktopRequestNotFound) {
-			return recheckCodexDesktopApprovalAfterRequestNotFound(ctx, evt.Approval.Request, err)
+			recheckErr := recheckCodexDesktopApprovalAfterRequestNotFound(ctx, evt.Approval.Request, err)
+			if recheckErr == nil {
+				a.resolveCodexInteraction(evt, ErrApprovalResolvedExternally)
+			}
+			return recheckErr
 		}
 		return fmt.Errorf("provider approval response: %w", err)
 	}

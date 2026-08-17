@@ -174,6 +174,7 @@ func newManagedRestartFixture(t *testing.T, generation uint64) (*ACPAgent, strin
 		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
 		AppServerSocket: socketPath, StateFile: filepath.Join(dir, "state.json"),
 	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
 	a.codexDesktopPresenceCall = func() (bool, bool) { return false, false }
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		if method != "thread/list" {

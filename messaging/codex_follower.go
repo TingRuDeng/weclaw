@@ -91,11 +91,15 @@ func (h *Handler) reconcileCodexFollowersWithService(ctx context.Context, servic
 	if outbox := h.currentTerminalOutbox(); outbox != nil {
 		h.recoverReleasedCodexFollowerStreamsForTargets(outbox, committedCodexReleaseTargets(releases))
 		outbox.reconcileCodexFollowerHolds(followers, releases)
+		outbox.reconcileCodexFollowerTerminalDeliveryHolds(followers)
 	}
 	for _, snapshot := range followers {
 		err := h.reconcileCodexFollower(ctx, registry, snapshot)
 		var resultErr error
 		if err == nil {
+			if outbox := h.currentTerminalOutbox(); outbox != nil {
+				outbox.releaseCodexFollowerTerminalDeliveries(snapshot)
+			}
 			resultErr = h.reconcileCodexFollowerRuntimeResult(ctx, registry, snapshot)
 		}
 		service.recordRuntimeResult(snapshot, resultErr, ctx.Err())
@@ -178,6 +182,9 @@ func (h *Handler) reconcileCodexFollowerRuntimeResult(
 	current, ok := h.ensureCodexSessions().followerSnapshot(expected.BindingKey)
 	if !ok || current.Revision != expected.Revision ||
 		!sameCodexFrontendFollower(&current.Target, &expected.Target) {
+		return nil
+	}
+	if current.AttachPhase != codexFollowerAttachReady {
 		return nil
 	}
 	h.codexFollowerDeliveryMu.RLock()
@@ -313,9 +320,11 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		workspaceRoot: snapshot.Target.WorkspaceRoot, threadID: snapshot.Target.ThreadID,
 	}
 	request := h.buildCodexRuntimeRequestForTurn(route, snapshot.Target.ThreadID)
-	if err := ensureCodexFollowerRuntime(ctx, liveAgent, request); err != nil {
+	runtimeBinding, err := ensureCodexFollowerRuntime(ctx, liveAgent, request)
+	if err != nil {
 		return err
 	}
+	opts.runtimeGeneration = runtimeBinding.RuntimeGeneration
 	prepared, err := h.prepareExternalCodexTask(opts)
 	if err != nil {
 		return err
@@ -325,15 +334,47 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 	}
 	if prepared.active {
 		opts.terminalDeliveryKey = codexFollowerTerminalOutboxID(snapshot, prepared.state.ActiveTurnID)
-		_, reconcileErr := liveAgent.ReconcileCodexObservedTurn(ctx, request, prepared.state.CodexThreadState)
+		reconciledBinding, reconcileErr := liveAgent.ReconcileCodexObservedTurn(ctx, request, prepared.state.CodexThreadState)
 		if reconcileErr != nil {
 			return reconcileErr
 		}
+		opts.runtimeGeneration = reconciledBinding.RuntimeGeneration
 	}
 	unlockThread()
 	threadLocked = false
-	if !prepared.active && h.activeTaskOwnsCodexFollowerTurn(snapshot, prepared.state) {
-		return nil
+	attachTurnID := strings.TrimSpace(prepared.state.LastTurnID)
+	if prepared.active {
+		attachTurnID = strings.TrimSpace(prepared.state.ActiveTurnID)
+	}
+	if owned, readyErr := h.commitOwnedCodexFollowerAttachReady(
+		snapshot, prepared.state, attachTurnID, opts.runtimeGeneration,
+	); owned {
+		return readyErr
+	}
+	attachMatchesRuntime := snapshot.AttachTurnID == attachTurnID &&
+		snapshot.RuntimeGeneration == opts.runtimeGeneration
+	needsPreparing := !attachMatchesRuntime ||
+		(prepared.active && snapshot.AttachPhase != codexFollowerAttachPreparing) ||
+		(!prepared.active && snapshot.AttachPhase == "")
+	if needsPreparing {
+		snapshot, err = h.ensureCodexSessions().commitFollowerAttachRuntime(
+			snapshot, attachTurnID, opts.runtimeGeneration,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	if prepared.active {
+		opts.followerAttach = &snapshot
+	} else if snapshot.AttachPhase != codexFollowerAttachReady {
+		if err := h.ensureCodexSessions().commitFollowerAttachReady(
+			snapshot, attachTurnID, opts.runtimeGeneration,
+		); err != nil {
+			return err
+		}
+		if current, ok := h.ensureCodexSessions().followerSnapshot(snapshot.BindingKey); ok {
+			snapshot = current
+		}
 	}
 	recoveredTerminal, recoveryErr := h.reconcileCodexFollowerRecoveries(snapshot, prepared.state, reply)
 	if recoveryErr != nil {
@@ -365,7 +406,7 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		// 后续调和会重试观察；若 turn 已结束，inactive 分支会补投确定性终态。
 		return errExternalCodexTaskReservationConflict
 	}
-	return nil
+	return h.waitExternalCodexTaskReservationReady(ctx, reservation)
 }
 
 func (h *Handler) codexFollowerAuthorized(registry *platform.Registry, snapshot codexFollowerSnapshot) bool {
@@ -380,45 +421,119 @@ type codexHostTopologyReconciler interface {
 	ReconcileCodexHostTopology(context.Context) error
 }
 
-func ensureCodexFollowerRuntime(ctx context.Context, liveAgent agent.CodexLiveRuntimeAgent, request agent.CodexRuntimeRequest) error {
+func ensureCodexFollowerRuntime(ctx context.Context, liveAgent agent.CodexLiveRuntimeAgent, request agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
 	if reconciler, ok := liveAgent.(codexHostTopologyReconciler); ok {
 		if err := reconciler.ReconcileCodexHostTopology(ctx); err != nil {
-			return err
+			return agent.CodexThreadBinding{}, err
 		}
 	}
 	binding, err := liveAgent.CurrentCodexRuntime(request)
 	if err == nil && codexRuntimeReadyForRemoteTurn(binding.Runtime) {
-		return nil
+		return binding, nil
 	}
-	_, err = liveAgent.HandoffCodexRuntime(ctx, request)
+	binding, err = liveAgent.HandoffCodexRuntime(ctx, request)
 	if err != nil {
-		return err
+		return agent.CodexThreadBinding{}, err
 	}
 	binding, err = liveAgent.CurrentCodexRuntime(request)
 	if err != nil {
-		return err
+		return agent.CodexThreadBinding{}, err
 	}
 	if !codexRuntimeReadyForRemoteTurn(binding.Runtime) {
-		return agent.ErrCodexRuntimeUnavailable
+		return binding, agent.ErrCodexRuntimeUnavailable
 	}
-	return nil
+	return binding, nil
 }
 
-func (h *Handler) activeTaskOwnsCodexFollowerTurn(snapshot codexFollowerSnapshot, state externalCodexTaskState) bool {
+type codexFollowerActiveTaskReadiness struct {
+	matched       bool
+	inProcess     bool
+	progressErr   error
+	ready         agent.CodexThreadObserverReady
+	readySeen     bool
+	readyErr      error
+	readyComplete bool
+}
+
+func (h *Handler) activeTaskCodexFollowerReadiness(
+	snapshot codexFollowerSnapshot,
+	state externalCodexTaskState,
+) codexFollowerActiveTaskReadiness {
 	targetTurnID := strings.TrimSpace(state.ActiveTurnID)
 	if targetTurnID == "" {
 		targetTurnID = strings.TrimSpace(state.LastTurnID)
 	}
 	h.tasks.mu.Lock()
-	defer h.tasks.mu.Unlock()
 	task := h.tasks.active[snapshot.ConversationID]
+	h.tasks.mu.Unlock()
 	if task == nil {
-		return false
+		return codexFollowerActiveTaskReadiness{}
 	}
 	task.mu.Lock()
-	defer task.mu.Unlock()
-	return task.codexThreadID == strings.TrimSpace(snapshot.Target.ThreadID) &&
-		task.codexTurnID == targetTurnID
+	if task.codexThreadID != strings.TrimSpace(snapshot.Target.ThreadID) ||
+		task.codexTurnID != targetTurnID {
+		task.mu.Unlock()
+		return codexFollowerActiveTaskReadiness{}
+	}
+	readiness := codexFollowerActiveTaskReadiness{
+		matched: true, inProcess: task.inProcessCodexLifecycle,
+	}
+	control := task.externalReservation
+	task.mu.Unlock()
+	if readiness.inProcess {
+		readiness.progressErr = task.nativeProgressCardReadyError()
+	}
+	if control != nil {
+		readiness.ready, readiness.readySeen, readiness.readyErr, readiness.readyComplete =
+			control.observerReadyResult()
+	}
+	return readiness
+}
+
+func (h *Handler) commitOwnedCodexFollowerAttachReady(
+	snapshot codexFollowerSnapshot,
+	state externalCodexTaskState,
+	turnID string,
+	runtimeGeneration uint64,
+) (bool, error) {
+	readiness := h.activeTaskCodexFollowerReadiness(snapshot, state)
+	if !readiness.matched {
+		return false, nil
+	}
+	if snapshot.AttachPhase == codexFollowerAttachReady &&
+		snapshot.AttachTurnID == turnID && snapshot.RuntimeGeneration == runtimeGeneration {
+		return true, nil
+	}
+	if snapshot.AttachPhase != codexFollowerAttachPreparing ||
+		snapshot.AttachTurnID != turnID || snapshot.RuntimeGeneration != runtimeGeneration {
+		prepared, err := h.ensureCodexSessions().commitFollowerAttachRuntime(
+			snapshot, turnID, runtimeGeneration,
+		)
+		if err != nil {
+			return true, err
+		}
+		snapshot = prepared
+	}
+	if readiness.inProcess {
+		if readiness.progressErr != nil {
+			return true, readiness.progressErr
+		}
+		return true, h.ensureCodexSessions().commitFollowerAttachReady(
+			snapshot, turnID, runtimeGeneration,
+		)
+	}
+	if !readiness.readyComplete {
+		return true, fmt.Errorf("现有 Codex observer 尚未完成就绪校验")
+	}
+	if readiness.readyErr != nil {
+		return true, readiness.readyErr
+	}
+	if !readiness.readySeen {
+		return true, fmt.Errorf("现有 Codex observer 缺少就绪证据")
+	}
+	return true, h.commitCodexObserverReadyForAttach(
+		&snapshot, snapshot.Target.ThreadID, turnID, readiness.ready,
+	)
 }
 
 func (h *Handler) reconcileInactiveCodexFollower(snapshot codexFollowerSnapshot, state externalCodexTaskState) error {

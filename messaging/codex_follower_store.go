@@ -88,6 +88,15 @@ func normalizeCodexFrontendFollower(source *codexFrontendFollower) *codexFronten
 	return &follower
 }
 
+func normalizeCodexFollowerAttachPhase(phase codexFollowerAttachPhase) codexFollowerAttachPhase {
+	switch phase {
+	case codexFollowerAttachPreparing, codexFollowerAttachReady:
+		return phase
+	default:
+		return ""
+	}
+}
+
 func sameCodexFrontendFollower(left *codexFrontendFollower, right *codexFrontendFollower) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -226,10 +235,20 @@ func (s *codexSessionStore) followerSnapshotsLocked() []codexFollowerSnapshot {
 		}
 		routeUserID := routeUserIDFromCodexBindingKey(bindingKey)
 		agentName := agentNameFromBindingKey(bindingKey)
+		attachPhase := normalizeCodexFollowerAttachPhase(binding.FollowerAttachPhase)
+		if attachPhase == "" {
+			// In-memory fixtures and pre-v14 callers may still construct a follower
+			// directly. Persisted pre-v14 state is normalized during load.
+			attachPhase = codexFollowerAttachReady
+		}
 		snapshots = append(snapshots, codexFollowerSnapshot{
 			BindingKey: bindingKey, RouteUserID: routeUserID, AgentName: agentName,
 			ConversationID:        buildCodexConversationID(routeUserID, agentName, follower.WorkspaceRoot),
 			Revision:              binding.FollowRevision,
+			AttachRevision:        binding.FollowerAttachRevision,
+			AttachPhase:           attachPhase,
+			AttachTurnID:          strings.TrimSpace(binding.FollowerAttachTurnID),
+			RuntimeGeneration:     binding.FollowerRuntimeGeneration,
 			FollowTurnID:          strings.TrimSpace(binding.FollowTurnID),
 			FollowTurnInitialized: binding.FollowTurnInitialized,
 			FollowTurnPending:     binding.FollowTurnPending,
@@ -240,6 +259,90 @@ func (s *codexSessionStore) followerSnapshotsLocked() []codexFollowerSnapshot {
 	}
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].BindingKey < snapshots[j].BindingKey })
 	return snapshots
+}
+
+// commitFollowerAttachRuntime records the exact Host generation and turn that a
+// watcher must observe before this frontend can become ready.
+func (s *codexSessionStore) commitFollowerAttachRuntime(
+	expected codexFollowerSnapshot,
+	turnID string,
+	runtimeGeneration uint64,
+) (codexFollowerSnapshot, error) {
+	turnID = strings.TrimSpace(turnID)
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.followerAttachMatchesLocked(expected) {
+		return codexFollowerSnapshot{}, errCodexRemoteSelectionChanged
+	}
+	binding := s.bindings[expected.BindingKey]
+	binding.FollowerAttachRevision++
+	binding.FollowerAttachPhase = codexFollowerAttachPreparing
+	binding.FollowerAttachTurnID = turnID
+	binding.FollowerRuntimeGeneration = runtimeGeneration
+	nextBindings := cloneCodexSessionBindings(s.bindings)
+	nextBindings[expected.BindingKey] = binding
+	state := codexSessionState{
+		Version: codexSessionStateVersion, Bindings: nextBindings,
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := s.persistCandidate(s.filePath, state); err != nil {
+		return codexFollowerSnapshot{}, fmt.Errorf("保存 Codex 接管准备状态: %w", err)
+	}
+	s.bindings = nextBindings
+	return s.followerSnapshotLocked(expected.BindingKey)
+}
+
+// commitFollowerAttachReady is the LP2 CAS. It succeeds only for the exact
+// selection, attach revision, turn and Host generation prepared by LP1.
+func (s *codexSessionStore) commitFollowerAttachReady(
+	expected codexFollowerSnapshot,
+	turnID string,
+	runtimeGeneration uint64,
+) error {
+	turnID = strings.TrimSpace(turnID)
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.followerAttachMatchesLocked(expected) {
+		return errCodexRemoteSelectionChanged
+	}
+	binding := s.bindings[expected.BindingKey]
+	if binding.FollowerAttachPhase != codexFollowerAttachPreparing ||
+		strings.TrimSpace(binding.FollowerAttachTurnID) != turnID ||
+		binding.FollowerRuntimeGeneration != runtimeGeneration {
+		return errCodexRemoteSelectionChanged
+	}
+	binding.FollowerAttachPhase = codexFollowerAttachReady
+	nextBindings := cloneCodexSessionBindings(s.bindings)
+	nextBindings[expected.BindingKey] = binding
+	state := codexSessionState{
+		Version: codexSessionStateVersion, Bindings: nextBindings,
+		Archived: sortedCodexArchivedThreadIDs(s.archived), Updated: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := s.persistCandidate(s.filePath, state); err != nil {
+		return fmt.Errorf("保存 Codex 接管就绪状态: %w", err)
+	}
+	s.bindings = nextBindings
+	return nil
+}
+
+func (s *codexSessionStore) followerAttachMatchesLocked(expected codexFollowerSnapshot) bool {
+	binding, ok := s.bindings[expected.BindingKey]
+	return ok && binding.FollowRevision == expected.Revision &&
+		binding.FollowerAttachRevision == expected.AttachRevision &&
+		sameCodexFrontendFollower(binding.Follower, &expected.Target)
+}
+
+func (s *codexSessionStore) followerSnapshotLocked(bindingKey string) (codexFollowerSnapshot, error) {
+	for _, snapshot := range s.followerSnapshotsLocked() {
+		if snapshot.BindingKey == bindingKey {
+			return snapshot, nil
+		}
+	}
+	return codexFollowerSnapshot{}, errCodexRemoteSelectionChanged
 }
 
 func (s *codexSessionStore) followerMatches(snapshot codexFollowerSnapshot) bool {
@@ -285,6 +388,9 @@ func (h *Handler) terminalOutboxDeliveryDecision(registry *platform.Registry, en
 	}
 	if !sameDeliveryEndpoint(snapshot.Target.DeliveryRoute, entry.Route) {
 		return false, "route_changed"
+	}
+	if snapshot.AttachPhase != codexFollowerAttachReady {
+		return false, "attach_not_ready"
 	}
 	return true, ""
 }

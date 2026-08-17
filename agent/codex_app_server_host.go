@@ -60,6 +60,10 @@ func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {
 	}
 
 	if conn, dialErr := dialCodexHost(ctx, socketPath); dialErr == nil {
+		if err := a.preflightConnectedManagedCodexHost(ctx, socketPath); err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
 		if err := a.attachCodexHostConnection(conn); err != nil {
 			_ = conn.Close()
 			return 0, err
@@ -88,6 +92,10 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 		return 0, err
 	}
 	if conn, dialErr := dialCodexHost(ctx, socketPath); dialErr == nil {
+		if err := a.preflightConnectedManagedCodexHost(ctx, socketPath); err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
 		if err := a.attachCodexHostConnection(conn); err != nil {
 			_ = conn.Close()
 			return 0, err
@@ -96,6 +104,9 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 		return 0, nil
 	}
 
+	if err := a.preflightCodexHostConflicts(ctx, 0); err != nil {
+		return 0, err
+	}
 	if err := a.removeStaleCodexHostSocket(socketPath); err != nil {
 		return 0, err
 	}
@@ -142,6 +153,15 @@ func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath s
 	}
 	metadata, err := a.newManagedCodexHostMetadata(cmd, socketPath)
 	if err != nil {
+		closeMetadataReady()
+		connection, ownedCmd, ownedDone := a.disconnectCodexHostClient(true)
+		if connection != nil {
+			_ = connection.Close()
+		}
+		stopCodexHostProcess(ownedCmd, ownedDone)
+		return 0, err
+	}
+	if err := a.preflightCodexHostConflicts(ctx, metadata.PID); err != nil {
 		closeMetadataReady()
 		connection, ownedCmd, ownedDone := a.disconnectCodexHostClient(true)
 		if connection != nil {

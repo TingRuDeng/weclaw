@@ -30,26 +30,13 @@ func (h *Handler) handleCodexReleaseCommand(runtime codexSessionCommandRuntime) 
 		return "Codex 会话绑定状态已变化，本次解绑未执行，请重试。"
 	}
 	conversationID := buildCodexConversationID(runtime.routeUserID, runtime.agentName, runtime.workspaceRoot)
-	if h.hasPendingInteractionForRoute(runtime.actorUserID, runtime.routeUserID) {
-		return "当前任务正在等待交互，请先处理当前审批或问答，再解除绑定。"
-	}
-	if runtimeAgent, ok := runtime.agent.(agent.CodexThreadRuntimeAgent); ok && threadID != "" {
-		state, stateErr := runtimeAgent.ReadCodexThreadState(runtime.ctx, conversationID, threadID)
-		if stateErr != nil {
-			if _, active := h.activeTask(conversationID); active {
-				return fmt.Sprintf("暂时无法确认当前任务的交互状态，本次解绑未执行: %v", stateErr)
-			}
-		} else if state.WaitingOnApproval || state.WaitingOnUserInput {
-			return "当前任务正在等待交互，请先处理当前审批或问答，再解除绑定。"
-		}
-	}
 	recoveryReservationID := h.codexFrontendRecoveryReservation(
 		conversationID, runtime.routeUserID, lockedThreadID,
 	)
 	var release codexWorkspaceThreadReleaseResult
 	releasePrepared := false
 	h.codexFollowerDeliveryMu.Lock()
-	detached, detachErr := h.detachCodexFrontendTaskWithPrepare(
+	detached, detachErr := h.detachCodexFrontendTaskForReleaseWithPrepare(
 		conversationID,
 		runtime.routeUserID,
 		lockedThreadID,
@@ -65,14 +52,6 @@ func (h *Handler) handleCodexReleaseCommand(runtime codexSessionCommandRuntime) 
 	if detachErr != nil {
 		h.codexFollowerDeliveryMu.Unlock()
 		return fmt.Sprintf("解除 Codex 会话绑定失败: %v", detachErr)
-	}
-	if detached.interaction {
-		h.codexFollowerDeliveryMu.Unlock()
-		return "当前任务正在处理审批或问答，请先完成交互，再解除绑定。"
-	}
-	if detached.terminal {
-		h.codexFollowerDeliveryMu.Unlock()
-		return "当前任务已进入终态，请稍后重试解除绑定。"
 	}
 	if !releasePrepared {
 		var err error

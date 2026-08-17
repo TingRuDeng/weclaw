@@ -116,6 +116,9 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 	if threadID == "" {
 		return fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
 	}
+	if err := h.requireCodexFollowerAttachReady(route); err != nil {
+		return err
+	}
 	if err := h.hiddenSessionError(agentNameFromBindingKey(route.bindingKey), threadID, "cx"); err != nil {
 		return err
 	}
@@ -134,6 +137,18 @@ func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConve
 		}
 	}
 	h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
+	return nil
+}
+
+func (h *Handler) requireCodexFollowerAttachReady(route codexConversationRoute) error {
+	snapshot, ok := h.ensureCodexSessions().followerSnapshot(route.bindingKey)
+	if !ok || snapshot.ConversationID != strings.TrimSpace(route.conversationID) ||
+		strings.TrimSpace(snapshot.Target.ThreadID) != strings.TrimSpace(route.threadID) {
+		return nil
+	}
+	if snapshot.AttachPhase != codexFollowerAttachReady {
+		return errCodexFollowerAttachPreparing
+	}
 	return nil
 }
 

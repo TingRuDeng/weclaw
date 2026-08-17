@@ -38,14 +38,25 @@ type legacyCodexControlIntent struct {
 }
 
 type codexSessionBinding struct {
-	ActiveWorkspace       string
-	Workspaces            map[string]codexWorkspaceSession
-	FollowRevision        uint64
-	Follower              *codexFrontendFollower
-	FollowTurnID          string
-	FollowTurnInitialized bool
-	FollowTurnPending     bool
+	ActiveWorkspace           string
+	Workspaces                map[string]codexWorkspaceSession
+	FollowRevision            uint64
+	Follower                  *codexFrontendFollower
+	FollowerAttachRevision    uint64
+	FollowerAttachPhase       codexFollowerAttachPhase
+	FollowerAttachTurnID      string
+	FollowerRuntimeGeneration uint64
+	FollowTurnID              string
+	FollowTurnInitialized     bool
+	FollowTurnPending         bool
 }
+
+type codexFollowerAttachPhase string
+
+const (
+	codexFollowerAttachPreparing codexFollowerAttachPhase = "preparing"
+	codexFollowerAttachReady     codexFollowerAttachPhase = "ready"
+)
 
 type codexFrontendFollower struct {
 	WorkspaceRoot         string
@@ -63,6 +74,10 @@ type codexFollowerSnapshot struct {
 	AgentName             string
 	ConversationID        string
 	Revision              uint64
+	AttachRevision        uint64
+	AttachPhase           codexFollowerAttachPhase
+	AttachTurnID          string
+	RuntimeGeneration     uint64
 	FollowTurnID          string
 	FollowTurnInitialized bool
 	FollowTurnPending     bool
@@ -88,6 +103,9 @@ type codexWorkspaceSession struct {
 
 const legacyBindingDefaultPlatform = "wechat"
 
+// v14 persists a separate preparing -> ready frontend-attach transaction. Its revision is
+// independent from terminal-delivery authorization, so reselecting the same endpoint can
+// invalidate stale observer callbacks without discarding the durable turn cursor.
 // v13 persists a pending command-result card update while a selected Desktop runtime is unavailable.
 // v11 distinguishes an active turn claim from a terminal delivery already secured by the outbox,
 // so a crash between follower reservation and watcher activation cannot permanently skip a result.
@@ -97,7 +115,7 @@ const legacyBindingDefaultPlatform = "wechat"
 // v8 added long-lived Feishu follower endpoints, release/archive tombstones, and the predecessor
 // thread needed to repair first-turn outbox metadata after a crash. Codex writer authority belongs to
 // the single app-server and is never assigned to a message route.
-const codexSessionStateVersion = 13
+const codexSessionStateVersion = 14
 
 func clearCodexFollowerTurnState(binding *codexSessionBinding) {
 	if binding == nil {
@@ -106,6 +124,9 @@ func clearCodexFollowerTurnState(binding *codexSessionBinding) {
 	binding.FollowTurnID = ""
 	binding.FollowTurnInitialized = false
 	binding.FollowTurnPending = false
+	binding.FollowerAttachPhase = ""
+	binding.FollowerAttachTurnID = ""
+	binding.FollowerRuntimeGeneration = 0
 }
 
 func codexWorkspaceReleaseIntent(session codexWorkspaceSession) bool {

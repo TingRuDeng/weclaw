@@ -225,7 +225,7 @@ func TestCodexReleaseSuppressesFutureApprovalAndUserInputWithoutDefaultDecision(
 	}
 }
 
-func TestCodexReleaseRollsBackWhenInteractionLeaseIsInFlight(t *testing.T) {
+func TestCodexReleaseDetachesInFlightApprovalWithoutSubmittingDecision(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	routeUserID := "feishu:tenant:dm:chat:user"
@@ -238,10 +238,6 @@ func TestCodexReleaseRollsBackWhenInteractionLeaseIsInFlight(t *testing.T) {
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-active")
 	lease := &agentInteractionLease{}
-	if !lease.begin() {
-		t.Fatal("failed to begin interaction lease")
-	}
-	defer lease.end()
 	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
 	_, _, started := h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
 		owner: "user", routeUserID: routeUserID, agentName: "codex",
@@ -251,15 +247,45 @@ func TestCodexReleaseRollsBackWhenInteractionLeaseIsInFlight(t *testing.T) {
 	if !started {
 		t.Fatal("active task was not started")
 	}
+	reply := newApprovalKeyCaptureReplier()
+	interactionResult := make(chan error, 1)
+	go func() {
+		_, err := h.approvalHandlerForRoute(agentInteractionContextOptions{
+			actorUserID: "user", routeUserID: routeUserID, agentName: "codex", reply: reply, lease: lease,
+		})(context.Background(), agent.ApprovalRequest{
+			RequestID: "approval-active",
+			Options: []agent.ApprovalOption{
+				{ID: "allow", Name: "允许", Kind: "allow"},
+				{ID: "deny", Name: "拒绝", Kind: "deny"},
+			},
+		})
+		interactionResult <- err
+	}()
+	approvalKey := reply.waitApprovalKey(t, context.Background())
+
 	result := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user", RouteUserID: routeUserID,
 		Trimmed: "/cx release", Platform: platform.PlatformFeishu,
 	})
-	if !strings.Contains(result, "正在处理审批或问答") {
+	if !strings.Contains(result, "已解除当前窗口") {
 		t.Fatalf("release result=%q", result)
 	}
-	if threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "thread-active" || pending {
-		t.Fatalf("binding after rejected release thread=%q pending=%v", threadID, pending)
+	if threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "" || pending {
+		t.Fatalf("binding after release thread=%q pending=%v", threadID, pending)
+	}
+	select {
+	case err := <-interactionResult:
+		if !errors.Is(err, agent.ErrCodexObserverDetached) {
+			t.Fatalf("approval error=%v, want observer detached", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight approval did not stop after release")
+	}
+	if h.consumePendingApprovalForKey("user", approvalKey, "allow") {
+		t.Fatal("released approval remained consumable")
+	}
+	if ag.interruptCalls != 0 {
+		t.Fatalf("interrupt calls=%d, release must not stop shared turn", ag.interruptCalls)
 	}
 }
 
@@ -353,6 +379,38 @@ func TestReleasePendingPersistsOnlyAfterInteractionDetachClaim(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("blocked interaction did not observe detached lease")
+	}
+}
+
+func TestCodexReleasePersistenceFailureKeepsInFlightInteractionAttached(t *testing.T) {
+	h := NewHandler(nil, nil)
+	key := buildCodexConversationID("feishu:tenant:dm:chat:user", "codex", "/workspace/project")
+	lease := &agentInteractionLease{}
+	if !lease.begin() {
+		t.Fatal("failed to begin interaction")
+	}
+	defer lease.end()
+	_, _, started := h.beginActiveTask(context.Background(), key, activeTaskMeta{
+		owner: "user", routeUserID: "feishu:tenant:dm:chat:user", agentName: "codex",
+		codexThreadID: "thread-active", codexTurnID: "turn-active", inProcessCodexLifecycle: true,
+		interactionLease: lease,
+	})
+	if !started {
+		t.Fatal("active task was not started")
+	}
+	wantErr := errors.New("persist release tombstone")
+	result, err := h.detachCodexFrontendTaskWithOptions(
+		key, "feishu:tenant:dm:chat:user", "thread-active", true,
+		func() error { return wantErr },
+	)
+	if !errors.Is(err, wantErr) || result.detached {
+		t.Fatalf("detach result=%#v err=%v", result, err)
+	}
+	if lease.isDetached() {
+		t.Fatal("failed persistence detached the interaction lease")
+	}
+	if _, ok := h.activeTask(key); !ok {
+		t.Fatal("failed persistence removed the active route")
 	}
 }
 
@@ -582,7 +640,7 @@ func TestCodexReleasePreventsLateAgentMappingFromRebindingThread(t *testing.T) {
 	}
 }
 
-func TestCodexReleaseWaitsForPendingInteractionWithoutResolvingIt(t *testing.T) {
+func TestCodexReleaseAllowsHostPendingInteractionWithoutResolvingIt(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	routeUserID := "feishu:tenant:dm:chat:user"
@@ -609,11 +667,11 @@ func TestCodexReleaseWaitsForPendingInteractionWithoutResolvingIt(t *testing.T) 
 		ActorUserID: "user", RouteUserID: routeUserID,
 		Trimmed: "/cx release", Platform: platform.PlatformFeishu,
 	})
-	if !strings.Contains(result, "请先处理当前审批或问答") {
+	if !strings.Contains(result, "已解除当前窗口") {
 		t.Fatalf("release result=%q", result)
 	}
-	if threadID, _ := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "thread-active" {
-		t.Fatalf("pending interaction release changed binding=%q", threadID)
+	if threadID, pendingState := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "" || pendingState {
+		t.Fatalf("pending interaction release kept binding=%q pending=%v", threadID, pendingState)
 	}
 	select {
 	case choice := <-pending.choices:
@@ -666,7 +724,7 @@ func TestCodexReleaseDoesNotClearBindingChangedWhileWaitingForThreadLock(t *test
 	}
 }
 
-func TestCodexReleaseCannotDetachAfterFinalDeliveryIsClaimed(t *testing.T) {
+func TestCodexReleaseClearsBindingAfterFinalDeliveryIsClaimed(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	routeUserID := "feishu:tenant:dm:chat:user"
@@ -718,11 +776,14 @@ func TestCodexReleaseCannotDetachAfterFinalDeliveryIsClaimed(t *testing.T) {
 		ActorUserID: "user", RouteUserID: routeUserID,
 		Trimmed: "/cx release", Platform: platform.PlatformFeishu,
 	})
-	if !strings.Contains(result, "任务已进入终态") {
+	if !strings.Contains(result, "已解除当前窗口") {
 		t.Fatalf("release result=%q", result)
 	}
-	if threadID, _ := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "thread-active" {
-		t.Fatalf("terminal delivery claim lost binding=%q", threadID)
+	if threadID, pending := h.ensureCodexSessions().getThread(bindingKey, workspace); threadID != "" || pending {
+		t.Fatalf("terminal delivery claim kept binding=%q pending=%t", threadID, pending)
+	}
+	if ag.interruptCalls != 0 {
+		t.Fatalf("interrupt calls=%d, release must not stop the shared turn", ag.interruptCalls)
 	}
 	close(reply.unblock)
 	select {

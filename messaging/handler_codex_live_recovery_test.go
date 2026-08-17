@@ -94,7 +94,7 @@ func TestExternalCodexFinalReplyOutlivesSwitchCallbackContext(t *testing.T) {
 		state: externalCodexTaskState{CodexThreadState: agent.CodexThreadState{
 			ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-1",
 		}, Controllable: true},
-		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
+		watch: func(context.Context, func(agent.CodexThreadObserverReady) error, func(agent.ProgressEvent)) (string, error) {
 			return "任务完成", nil
 		},
 		task: task, ctx: taskCtx,
@@ -209,7 +209,7 @@ func TestCodexRolloutWatcherReadFailureReleasesTask(t *testing.T) {
 		}},
 		task: task,
 		ctx:  taskCtx,
-		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
+		watch: func(context.Context, func(agent.CodexThreadObserverReady) error, func(agent.ProgressEvent)) (string, error) {
 			return "", errors.New("rollout 文件读取失败")
 		},
 	}
@@ -255,7 +255,7 @@ func TestRequestedStopExternalWatcherRendersStoppedTerminal(t *testing.T) {
 		}},
 		task: task,
 		ctx:  taskCtx,
-		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
+		watch: func(context.Context, func(agent.CodexThreadObserverReady) error, func(agent.ProgressEvent)) (string, error) {
 			return "", fmt.Errorf("%w: interrupted", errCodexRolloutAborted)
 		},
 	}
@@ -361,7 +361,7 @@ func disconnectedExternalRuntimeFixture(t *testing.T) (*Handler, externalCodexTa
 		opts: externalCodexTaskOptions{ctx: ctx, actorUserID: "user-1", routeUserID: "user-1", agentName: "codex",
 			agent: ag, conversationID: "conversation-1", threadID: "thread-1", reply: reply},
 		state: agentStateForExternalTest(), task: task, ctx: taskCtx,
-		watch: func(context.Context, func(agent.ProgressEvent)) (string, error) {
+		watch: func(context.Context, func(agent.CodexThreadObserverReady) error, func(agent.ProgressEvent)) (string, error) {
 			return "", agent.ErrCodexDesktopDisconnected
 		},
 	}

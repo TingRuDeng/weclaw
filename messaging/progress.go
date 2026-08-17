@@ -88,6 +88,7 @@ type progressSession struct {
 	wg                    sync.WaitGroup
 	streamMu              sync.Mutex
 	streamOpenAttempted   bool
+	streamOpenErr         error
 	lastContent           string
 	finished              bool
 	terminalClaimed       bool
@@ -161,6 +162,21 @@ func (s *progressSession) rollbackDetachWithoutTerminalClaim() {
 
 func (s *progressSession) usesNativeProgressCard() bool {
 	return s != nil && s.reply != nil && s.reply.Capabilities().Streaming && progressModeAllowsProgress(s.cfg.Mode)
+}
+
+func (s *progressSession) nativeProgressReadyError() error {
+	if s == nil || !s.usesNativeProgressCard() {
+		return nil
+	}
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.stream != nil {
+		return nil
+	}
+	if s.streamOpenErr != nil {
+		return s.streamOpenErr
+	}
+	return fmt.Errorf("任务进度卡尚未创建")
 }
 
 const progressSupersededNotice = "已在新位置继续展示；后续结构化进展将更新到新卡片，最终结果会另发独立结果卡片。"
@@ -987,6 +1003,7 @@ func (s *progressSession) ensureStreamLocked() platform.Stream {
 		InitialContent: initialContent, InitialPresentation: initialPresentation,
 	})
 	if err != nil {
+		s.streamOpenErr = err
 		log.Printf("[handler] failed to open progress stream: %v", err)
 		return nil
 	}

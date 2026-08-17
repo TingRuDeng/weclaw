@@ -9,7 +9,7 @@ import (
 const codexTurnControlReserve = 8
 
 // dispatchToTurnCh 把实时事件同时投递给唯一执行 owner 和所有只读前端观察器。
-// 审批与问答只交给一个控制消费者，避免多个消息窗口重复回答同一请求。
+// 审批与问答也向所有前端展示；provider 响应由共享交互 broker 单独串行化。
 func (a *ACPAgent) dispatchToTurnCh(threadID string, evt *codexTurnEvent) bool {
 	delivered := a.dispatchToTurnChannels(threadID, evt)
 	a.notifyCodexThreadActivity(threadID, evt)
@@ -30,19 +30,25 @@ func (a *ACPAgent) dispatchDesktopTurnEvent(threadID string, evt *codexTurnEvent
 func (a *ACPAgent) dispatchToTurnChannels(threadID string, evt *codexTurnEvent) bool {
 	a.notifyMu.Lock()
 	defer a.notifyMu.Unlock()
+	if isCodexTurnInteractionEvent(evt) {
+		a.rememberPendingCodexInteractionLocked(strings.TrimSpace(threadID), evt)
+	} else if isCodexTurnTerminalEvent(evt) {
+		a.settleCodexTurnInteractionsLocked(threadID, evt.TurnID)
+	}
 	owner, ownerOK := a.turnCh[threadID]
 	if !ownerOK {
 		owner, ownerOK = a.singleActiveTurnChannel(threadID, evt)
 	}
 	observers := a.turnObserverMailboxesLocked(threadID)
 	if isCodexTurnInteractionEvent(evt) {
+		delivered := false
 		if ownerOK {
-			return dispatchCodexTurnControlEvent(owner, evt)
+			delivered = dispatchCodexTurnControlEvent(owner, evt) || delivered
 		}
-		if len(observers) == 0 {
-			return false
+		for _, observer := range observers {
+			delivered = observer.enqueue(evt) || delivered
 		}
-		return observers[0].enqueue(evt)
+		return delivered
 	}
 	delivered := false
 	if ownerOK {

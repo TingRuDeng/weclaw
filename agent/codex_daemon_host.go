@@ -182,6 +182,10 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 			_ = conn.Close()
 			return 0, inspectErr
 		}
+		if err := a.preflightCodexHostConflicts(ctx, output.PID); err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
 		metadata, metadataErr := a.recordCodexDaemonMetadata(ctx, output, socketPath)
 		if metadataErr != nil {
 			_ = conn.Close()
@@ -198,6 +202,9 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 		return metadata.PID, nil
 	}
 
+	if err := a.preflightCodexHostConflicts(ctx, 0); err != nil {
+		return 0, err
+	}
 	output, err := a.runAndValidateCodexDaemonLifecycle(ctx, "start", socketPath)
 	if err != nil {
 		if !isCodexDaemonStartReadinessTimeout(err, socketPath) {
@@ -218,6 +225,10 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 			_ = conn.Close()
 			return 0, err
 		}
+		if err := a.preflightCodexHostConflicts(ctx, output.PID); err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
 		metadata, metadataErr := a.recordCodexDaemonMetadata(ctx, output, socketPath)
 		if metadataErr != nil {
 			_ = conn.Close()
@@ -232,6 +243,9 @@ func (a *ACPAgent) launchCodexDaemonClientLocked(ctx context.Context, socketPath
 			return 0, err
 		}
 		return metadata.PID, nil
+	}
+	if err := a.preflightCodexHostConflicts(ctx, output.PID); err != nil {
+		return 0, err
 	}
 	metadata, err := a.recordCodexDaemonMetadata(ctx, output, socketPath)
 	if err != nil {
@@ -303,6 +317,9 @@ func (a *ACPAgent) runAndValidateCodexDaemonLifecycle(
 	}
 	if action != "stop" && strings.TrimSpace(output.ManagedCodexPath) == "" {
 		return codexDaemonLifecycleOutput{}, fmt.Errorf("%w: managed Codex path is empty", errCodexDaemonUnmanaged)
+	}
+	if action != "stop" && output.PID <= 0 {
+		return codexDaemonLifecycleOutput{}, fmt.Errorf("%w: lifecycle PID is invalid", errCodexDaemonUnmanaged)
 	}
 	return output, nil
 }

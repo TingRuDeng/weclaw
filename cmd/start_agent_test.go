@@ -7,17 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
-	"github.com/gorilla/websocket"
 )
 
 func TestCreateAgentByNameRejectsClaudeCLI(t *testing.T) {
@@ -124,23 +120,27 @@ func TestHelperACPConfiguredName(t *testing.T) {
 
 func TestCreateAgentByNameRetriesCodexSQLiteRuntimeStartup(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
-	t.Setenv("WECLAW_TEST_CODEX_RETRY_HELPER", "1")
-	countFile := filepath.Join(t.TempDir(), "attempts")
-	t.Setenv("WECLAW_TEST_CODEX_RETRY_COUNT", countFile)
-	binDir := t.TempDir()
-	codexPath := filepath.Join(binDir, "codex")
-	if err := os.Symlink(os.Args[0], codexPath); err != nil {
-		t.Fatalf("create codex helper symlink: %v", err)
-	}
 	oldDelay := codexACPStartupRetryDelay
+	oldStart := startACPAgentCall
 	codexACPStartupRetryDelay = time.Millisecond
-	t.Cleanup(func() { codexACPStartupRetryDelay = oldDelay })
+	attempts := 0
+	startACPAgentCall = func(context.Context, *agent.ACPAgent) error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("failed to initialize sqlite state runtime under test CODEX_HOME")
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		codexACPStartupRetryDelay = oldDelay
+		startACPAgentCall = oldStart
+	})
 
 	cfg := config.DefaultConfig()
 	cfg.Agents["codex"] = config.AgentConfig{
 		Type:          "acp",
-		Command:       codexPath,
-		Args:          []string{"-test.run=TestHelperRetryingCodexAppServer", "app-server", "--listen", "stdio://"},
+		Command:       "codex",
+		Args:          []string{"app-server", "--listen", "stdio://"},
 		Cwd:           t.TempDir(),
 		CodexHostMode: "managed",
 	}
@@ -154,107 +154,9 @@ func TestCreateAgentByNameRetriesCodexSQLiteRuntimeStartup(t *testing.T) {
 			stopper.Stop()
 		}
 	})
-	if got := readRetryHelperAttempts(t, countFile); got != 3 {
-		t.Fatalf("attempts=%d, want 3", got)
+	if attempts != 3 {
+		t.Fatalf("attempts=%d, want 3", attempts)
 	}
-}
-
-func TestHelperRetryingCodexAppServer(t *testing.T) {
-	if os.Getenv("WECLAW_TEST_CODEX_RETRY_HELPER") != "1" {
-		return
-	}
-	countFile := os.Getenv("WECLAW_TEST_CODEX_RETRY_COUNT")
-	attempt := readRetryHelperAttempts(t, countFile) + 1
-	if err := os.WriteFile(countFile, []byte(fmt.Sprintf("%d", attempt)), 0o600); err != nil {
-		t.Fatalf("write retry helper attempts: %v", err)
-	}
-	if attempt < 3 {
-		fmt.Fprintln(os.Stderr, "Error: failed to initialize sqlite state runtime under /Users/example/.codex: failed to initialize state runtime at /Users/example/.codex")
-		os.Exit(1)
-	}
-	socketPath := retryHelperCodexSocketPath(t, os.Args)
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen retry helper socket: %v", err)
-	}
-	defer listener.Close()
-	serveDone := make(chan error, 1)
-	server := &http.Server{
-		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			conn, upgradeErr := (&websocket.Upgrader{}).Upgrade(writer, request, nil)
-			if upgradeErr != nil {
-				serveDone <- upgradeErr
-				return
-			}
-			defer conn.Close()
-			if initializeErr := serveMinimalCodexInitialize(conn); initializeErr != nil {
-				serveDone <- initializeErr
-				return
-			}
-			// 真实 app-server 在 initialize 后继续驻留；测试 helper 也必须等客户端关闭，
-			// 否则进程退出与 ACPAgent 完成启动之间会形成调度相关的竞态。
-			for {
-				if _, _, readErr := conn.ReadMessage(); readErr != nil {
-					serveDone <- nil
-					return
-				}
-			}
-		}),
-	}
-	go func() { _ = server.Serve(listener) }()
-	if err := <-serveDone; err != nil {
-		t.Fatalf("serve retry helper websocket: %v", err)
-	}
-	_ = server.Close()
-	os.Exit(0)
-}
-
-func retryHelperCodexSocketPath(t *testing.T, args []string) string {
-	t.Helper()
-	for index := 0; index+1 < len(args); index++ {
-		if args[index] == "--listen" && strings.HasPrefix(args[index+1], "unix://") {
-			return strings.TrimPrefix(args[index+1], "unix://")
-		}
-	}
-	t.Fatalf("missing unix app-server listen argument: %q", args)
-	return ""
-}
-
-func readRetryHelperAttempts(t *testing.T, path string) int {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0
-	}
-	if err != nil {
-		t.Fatalf("read retry helper attempts: %v", err)
-	}
-	var attempts int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &attempts); err != nil {
-		t.Fatalf("parse retry helper attempts: %v", err)
-	}
-	return attempts
-}
-
-func serveMinimalCodexInitialize(conn *websocket.Conn) error {
-	_, line, err := conn.ReadMessage()
-	if err != nil {
-		return fmt.Errorf("read initialize request: %w", err)
-	}
-	var req struct {
-		ID int64 `json:"id"`
-	}
-	if err := json.Unmarshal(line, &req); err != nil {
-		return fmt.Errorf("parse initialize request: %w", err)
-	}
-	resp := json.RawMessage(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"macos"}}`, req.ID))
-	if err := conn.WriteMessage(websocket.TextMessage, resp); err != nil {
-		return fmt.Errorf("write initialize response: %w", err)
-	}
-	if _, _, err := conn.ReadMessage(); err != nil {
-		return fmt.Errorf("read initialized notification: %w", err)
-	}
-	return nil
 }
 
 func TestCompanionAutoLaunchDefaultsToRemoteOnly(t *testing.T) {

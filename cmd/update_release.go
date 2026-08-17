@@ -174,10 +174,10 @@ func releaseAssetURLForSource(source releaseSource, version string, filename str
 // releaseAssetNameForRuntime 返回当前发布策略支持的 release 资产名。
 func releaseAssetNameForRuntime(goos string, goarch string) (string, error) {
 	switch goos + "/" + goarch {
-	case "darwin/arm64", "linux/arm64", "linux/amd64":
+	case "darwin/arm64", "linux/amd64":
 		return fmt.Sprintf("weclaw_%s_%s", goos, goarch), nil
 	default:
-		return "", fmt.Errorf("当前 release 支持 darwin/arm64、linux/arm64、linux/amd64，当前平台是 %s/%s", goos, goarch)
+		return "", fmt.Errorf("当前 release 支持 darwin/arm64、linux/amd64，当前平台是 %s/%s", goos, goarch)
 	}
 }
 

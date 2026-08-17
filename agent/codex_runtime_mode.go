@@ -228,6 +228,9 @@ func (a *ACPAgent) attachExistingSharedCodexHost(ctx context.Context, socketPath
 	if err != nil {
 		return err
 	}
+	if err := a.preflightCodexHostConflicts(ctx, metadata.PID); err != nil {
+		return err
+	}
 	conn, err := dialCodexHost(ctx, socketPath)
 	if err != nil {
 		return fmt.Errorf("连接已有共享 Codex Host: %w", err)

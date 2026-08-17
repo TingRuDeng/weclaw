@@ -37,6 +37,7 @@ type ApprovalRequest struct {
 	ToolCall   json.RawMessage
 	Options    []ApprovalOption
 	StateProbe ApprovalRequestStateProbe
+	Resolution CodexInteractionResolution
 }
 
 // ApprovalHandler 由消息层实现，用于把 Codex 审批请求转成平台交互。

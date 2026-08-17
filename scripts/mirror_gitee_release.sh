@@ -44,7 +44,6 @@ done
 
 SOURCE_ASSETS=(
   weclaw_darwin_arm64
-  weclaw_linux_arm64
   weclaw_linux_amd64
 )
 GITEE_BINARY_ASSETS=(

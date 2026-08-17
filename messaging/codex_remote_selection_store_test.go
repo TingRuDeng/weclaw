@@ -116,6 +116,9 @@ func TestCodexRemoteSelectionKeepsFollowerRevisionForSameAuthorizedEndpoint(t *t
 		t.Fatal(err)
 	}
 	before := store.followerSnapshots()[0]
+	if before.AttachPhase != codexFollowerAttachPreparing || before.AttachRevision == 0 {
+		t.Fatalf("initial attach=%#v, want preparing revision", before)
+	}
 	recovery := platform.DurableCommandResultReference{
 		Kind: "test-command", TargetID: "old-switch-card", Command: "/cx switch thread-shared",
 	}
@@ -132,6 +135,9 @@ func TestCodexRemoteSelectionKeepsFollowerRevisionForSameAuthorizedEndpoint(t *t
 	if after.Revision != before.Revision {
 		t.Fatalf("same authorized endpoint revision=%d, want %d", after.Revision, before.Revision)
 	}
+	if after.AttachRevision <= before.AttachRevision || after.AttachPhase != codexFollowerAttachPreparing {
+		t.Fatalf("same endpoint attach=%#v, want newer preparing revision", after)
+	}
 	if after.FollowTurnID != "turn-1" || !after.FollowTurnInitialized || after.FollowTurnPending {
 		t.Fatalf("same endpoint reset follower cursor: %#v", after)
 	}
@@ -140,6 +146,134 @@ func TestCodexRemoteSelectionKeepsFollowerRevisionForSameAuthorizedEndpoint(t *t
 	}
 	if after.Target.RuntimeRecoveryResult != nil {
 		t.Fatalf("reselected follower retained stale runtime result=%#v", after.Target.RuntimeRecoveryResult)
+	}
+}
+
+func TestCodexFollowerAttachReadyRequiresExactRevisionTurnAndRuntimeGeneration(t *testing.T) {
+	store := newCodexSessionStore()
+	workspace := "/workspace/attach"
+	bindingKey := codexBindingKey("feishu:route-a", "codex")
+	store.ensureWorkspace(bindingKey, workspace)
+	route := platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "bot-a", ChatID: "chat-a", ReplyToID: "message-1",
+	}
+	_, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
+		BindingKey: bindingKey, WorkspaceRoot: workspace,
+		TargetThreadID: "thread-1", ConversationID: "conversation-a",
+		SetFollower: true,
+		Follower: &codexFrontendFollower{
+			WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user-a",
+			AuthorizedIdentity: "union-a", DeliveryRoute: route,
+		},
+		FollowerTurnID: "turn-1", FollowerTurnInitialized: true,
+		Expected: store.remoteSelectionSnapshot(bindingKey, "thread-1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparing := store.followerSnapshots()[0]
+	prepared, err := store.commitFollowerAttachRuntime(preparing, "turn-1", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.commitFollowerAttachReady(preparing, "turn-1", 7); !errors.Is(err, errCodexRemoteSelectionChanged) {
+		t.Fatalf("stale pre-runtime snapshot error=%v, want selection changed", err)
+	}
+	if err := store.commitFollowerAttachReady(prepared, "turn-other", 7); !errors.Is(err, errCodexRemoteSelectionChanged) {
+		t.Fatalf("wrong turn error=%v, want selection changed", err)
+	}
+	if err := store.commitFollowerAttachReady(prepared, "turn-1", 8); !errors.Is(err, errCodexRemoteSelectionChanged) {
+		t.Fatalf("wrong generation error=%v, want selection changed", err)
+	}
+	if err := store.commitFollowerAttachReady(prepared, "turn-1", 7); err != nil {
+		t.Fatal(err)
+	}
+	ready := store.followerSnapshots()[0]
+	if ready.AttachPhase != codexFollowerAttachReady || ready.AttachRevision != prepared.AttachRevision ||
+		ready.AttachTurnID != "turn-1" || ready.RuntimeGeneration != 7 {
+		t.Fatalf("ready snapshot=%#v", ready)
+	}
+}
+
+func TestCodexFollowerAttachReadyRejectsCallbackFromEarlierReselection(t *testing.T) {
+	store := newCodexSessionStore()
+	workspace := "/workspace/reselect-cas"
+	bindingKey := codexBindingKey("feishu:route-a", "codex")
+	store.ensureWorkspace(bindingKey, workspace)
+	commit := func(replyTo string) codexFollowerSnapshot {
+		t.Helper()
+		_, err := store.commitRemoteSelection(codexRemoteSelectionUpdate{
+			BindingKey: bindingKey, WorkspaceRoot: workspace,
+			TargetThreadID: "thread-1", ConversationID: "conversation-a",
+			SetFollower: true,
+			Follower: &codexFrontendFollower{
+				WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user-a",
+				AuthorizedIdentity: "union-a", DeliveryRoute: platform.DeliveryRoute{
+					Platform: platform.PlatformFeishu, AccountID: "bot-a", ChatID: "chat-a", ReplyToID: replyTo,
+				},
+			},
+			FollowerTurnID: "turn-1", FollowerTurnInitialized: true,
+			Expected: store.remoteSelectionSnapshot(bindingKey, "thread-1"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := store.commitFollowerAttachRuntime(store.followerSnapshots()[0], "turn-1", 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+	first := commit("message-1")
+	second := commit("message-2")
+	if second.AttachRevision <= first.AttachRevision {
+		t.Fatalf("attach revisions first=%d second=%d", first.AttachRevision, second.AttachRevision)
+	}
+	if err := store.commitFollowerAttachReady(first, "turn-1", 7); !errors.Is(err, errCodexRemoteSelectionChanged) {
+		t.Fatalf("stale ready error=%v, want selection changed", err)
+	}
+	if current := store.followerSnapshots()[0]; current.AttachPhase != codexFollowerAttachPreparing {
+		t.Fatalf("stale callback changed current attach=%#v", current)
+	}
+}
+
+func TestCodexSessionV13FollowerMigratesAsReady(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "codex-sessions.json")
+	workspace := "/workspace/legacy"
+	bindingKey := codexBindingKey("feishu:route-a", "codex")
+	legacy := codexSessionState{
+		Version: 13,
+		Bindings: map[string]codexSessionBinding{
+			bindingKey: {
+				ActiveWorkspace: workspace,
+				Workspaces: map[string]codexWorkspaceSession{
+					workspace: {ThreadID: "thread-1"},
+				},
+				FollowRevision: 4,
+				Follower: &codexFrontendFollower{
+					WorkspaceRoot: workspace, ThreadID: "thread-1", ActorUserID: "user-a",
+					AuthorizedIdentity: "union-a", DeliveryRoute: platform.DeliveryRoute{
+						Platform: platform.PlatformFeishu, AccountID: "bot-a", ChatID: "chat-a", ReplyToID: "message-1",
+					},
+				},
+				FollowTurnID: "turn-1", FollowTurnInitialized: true,
+			},
+		},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := newCodexSessionStore()
+	store.SetFilePath(filePath)
+	snapshot := store.followerSnapshots()[0]
+	if snapshot.AttachPhase != codexFollowerAttachReady || snapshot.AttachRevision == 0 ||
+		snapshot.AttachTurnID != "turn-1" {
+		t.Fatalf("migrated follower=%#v, want ready v14 attach", snapshot)
 	}
 }
 

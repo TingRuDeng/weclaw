@@ -27,6 +27,8 @@ type externalCodexTaskOptions struct {
 	progressCfg         config.ProgressConfig
 	reply               platform.Replier
 	terminalDeliveryKey string
+	runtimeGeneration   uint64
+	followerAttach      *codexFollowerSnapshot
 	// runtimeInactiveAuthoritative 仅用于同一绑定事务内的 active→terminal 二次确认。
 	runtimeInactiveAuthoritative bool
 }
@@ -38,7 +40,11 @@ type externalCodexTaskState struct {
 	Controllable   bool
 }
 
-type externalCodexTaskWatch func(context.Context, func(agent.ProgressEvent)) (string, error)
+type externalCodexTaskWatch func(
+	context.Context,
+	func(agent.CodexThreadObserverReady) error,
+	func(agent.ProgressEvent),
+) (string, error)
 
 type resolvedExternalCodexTask struct {
 	state             externalCodexTaskState
@@ -137,25 +143,57 @@ func resolveExternalCodexRuntime(opts externalCodexTaskOptions) resolvedExternal
 	}
 	resolved.active = true
 	if state.ActiveTurnID != "" {
-		if structured, ok := opts.agent.(agent.CodexExpectedStructuredThreadRuntimeAgent); ok {
-			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+		if ready, ok := opts.agent.(agent.CodexReadyExpectedStructuredThreadRuntimeAgent); ok {
+			resolved.watch = func(ctx context.Context, onReady func(agent.CodexThreadObserverReady) error, onProgress func(agent.ProgressEvent)) (string, error) {
+				return ready.WatchCodexThreadEventsForTurnReady(
+					ctx, opts.conversationID, opts.threadID, state.ActiveTurnID, onReady, onProgress,
+				)
+			}
+		} else if structured, ok := opts.agent.(agent.CodexExpectedStructuredThreadRuntimeAgent); ok {
+			resolved.watch = func(ctx context.Context, onReady func(agent.CodexThreadObserverReady) error, onProgress func(agent.ProgressEvent)) (string, error) {
+				if err := notifyLegacyCodexObserverReady(onReady, opts, state.ActiveTurnID); err != nil {
+					return "", err
+				}
 				return structured.WatchCodexThreadEventsForTurn(ctx, opts.conversationID, opts.threadID, state.ActiveTurnID, onProgress)
 			}
 		} else if structured, ok := opts.agent.(agent.CodexStructuredThreadRuntimeAgent); ok {
-			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+			resolved.watch = func(ctx context.Context, onReady func(agent.CodexThreadObserverReady) error, onProgress func(agent.ProgressEvent)) (string, error) {
+				if err := notifyLegacyCodexObserverReady(onReady, opts, state.ActiveTurnID); err != nil {
+					return "", err
+				}
 				return structured.WatchCodexThreadEvents(ctx, opts.conversationID, opts.threadID, onProgress)
 			}
 		} else if expected, ok := opts.agent.(agent.CodexExpectedThreadRuntimeAgent); ok {
-			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+			resolved.watch = func(ctx context.Context, onReady func(agent.CodexThreadObserverReady) error, onProgress func(agent.ProgressEvent)) (string, error) {
+				if err := notifyLegacyCodexObserverReady(onReady, opts, state.ActiveTurnID); err != nil {
+					return "", err
+				}
 				return expected.WatchCodexThreadForTurn(ctx, opts.conversationID, opts.threadID, state.ActiveTurnID, textProgressCallback(onProgress))
 			}
 		} else {
-			resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+			resolved.watch = func(ctx context.Context, onReady func(agent.CodexThreadObserverReady) error, onProgress func(agent.ProgressEvent)) (string, error) {
+				if err := notifyLegacyCodexObserverReady(onReady, opts, state.ActiveTurnID); err != nil {
+					return "", err
+				}
 				return runtimeAg.WatchCodexThread(ctx, opts.conversationID, opts.threadID, textProgressCallback(onProgress))
 			}
 		}
 	}
 	return resolved
+}
+
+func notifyLegacyCodexObserverReady(
+	onReady func(agent.CodexThreadObserverReady) error,
+	opts externalCodexTaskOptions,
+	turnID string,
+) error {
+	if onReady == nil {
+		return nil
+	}
+	return onReady(agent.CodexThreadObserverReady{
+		ThreadID: strings.TrimSpace(opts.threadID), TurnID: strings.TrimSpace(turnID),
+		RuntimeGeneration: opts.runtimeGeneration,
+	})
 }
 
 func readExternalCodexRuntimeSnapshot(opts externalCodexTaskOptions, runtimeAg agent.CodexThreadRuntimeAgent) (agent.CodexThreadState, []agent.ProgressEvent, error) {
@@ -185,7 +223,12 @@ func (h *Handler) resolveExternalCodexRollout(threadID string) resolvedExternalC
 		},
 		Progress: rollout.Progress,
 	}
-	resolved.watch = func(ctx context.Context, onProgress func(agent.ProgressEvent)) (string, error) {
+	resolved.watch = func(ctx context.Context, onReady func(agent.CodexThreadObserverReady) error, onProgress func(agent.ProgressEvent)) (string, error) {
+		if onReady != nil {
+			if err := onReady(agent.CodexThreadObserverReady{ThreadID: threadID, TurnID: rollout.TurnID}); err != nil {
+				return "", err
+			}
+		}
 		return watchCodexRolloutTask(ctx, rollout, textProgressCallback(onProgress))
 	}
 	return resolved
@@ -216,11 +259,12 @@ func externalCodexTaskOwner(state externalCodexTaskState) (agent.CodexRuntimeHol
 }
 
 type externalCodexTaskRuntime struct {
-	opts  externalCodexTaskOptions
-	state externalCodexTaskState
-	watch externalCodexTaskWatch
-	task  *activeAgentTask
-	ctx   context.Context
+	opts    externalCodexTaskOptions
+	state   externalCodexTaskState
+	watch   externalCodexTaskWatch
+	task    *activeAgentTask
+	ctx     context.Context
+	control *externalCodexTaskReservationControl
 }
 
 func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) {
@@ -238,6 +282,14 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	)
 	runtime.task.attachProgressSession(progressSession)
 	defer runtime.task.detachProgressSession(progressSession)
+	if progressSession != nil {
+		if err := progressSession.nativeProgressReadyError(); err != nil {
+			runtime.control.finishReady(err)
+			_ = finishProgress("", false)
+			h.finishActiveTask(runtime.opts.conversationID, runtime.task)
+			return
+		}
+	}
 	runtime.task.mu.Lock()
 	runtime.task.trace = traceWithReply(runtime.task.trace, runtime.opts.reply)
 	runtime.task.mu.Unlock()
@@ -260,7 +312,17 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if runtime.state.Progress != "" {
 		recordProgress(agent.TextProgressEvent(runtime.state.Progress))
 	}
-	result := h.superviseExternalCodexWatch(runtime, recordProgress)
+	readyCallback := func(ready agent.CodexThreadObserverReady) error {
+		err := h.commitExternalCodexObserverReady(runtime, ready)
+		runtime.control.finishObserverReady(ready, true, err)
+		return err
+	}
+	result := h.superviseExternalCodexWatch(runtime, readyCallback, recordProgress)
+	if readyErr, complete := runtime.control.readyResult(); complete && readyErr != nil {
+		_ = finishProgress("", false)
+		h.finishActiveTask(runtime.opts.conversationID, runtime.task)
+		return
+	}
 	if !result.Terminal && runtime.task.shouldPreserveRecoveryOnDrain() {
 		h.recordTraceStage(trace, "task.observer_preserved", "detached", "observer stopped for service restart; shared turn continues")
 		if progressSession != nil {
@@ -339,6 +401,39 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 	if hasPending {
 		pending.run()
 	}
+}
+
+func (h *Handler) commitExternalCodexObserverReady(
+	runtime externalCodexTaskRuntime,
+	ready agent.CodexThreadObserverReady,
+) error {
+	return h.commitCodexObserverReadyForAttach(
+		runtime.opts.followerAttach,
+		runtime.opts.threadID,
+		runtime.state.ActiveTurnID,
+		ready,
+	)
+}
+
+func (h *Handler) commitCodexObserverReadyForAttach(
+	expected *codexFollowerSnapshot,
+	threadID string,
+	turnID string,
+	ready agent.CodexThreadObserverReady,
+) error {
+	if strings.TrimSpace(ready.ThreadID) != strings.TrimSpace(threadID) ||
+		strings.TrimSpace(ready.TurnID) != strings.TrimSpace(turnID) {
+		return errCodexRemoteSelectionChanged
+	}
+	if expected == nil {
+		return nil
+	}
+	if ready.RuntimeGeneration != expected.RuntimeGeneration {
+		return errCodexRemoteSelectionChanged
+	}
+	return h.ensureCodexSessions().commitFollowerAttachReady(
+		*expected, ready.TurnID, ready.RuntimeGeneration,
+	)
 }
 
 func (t *activeAgentTask) shouldPreserveRecoveryOnDrain() bool {

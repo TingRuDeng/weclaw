@@ -15,7 +15,10 @@ import (
 	"github.com/fastclaw-ai/weclaw/observability"
 )
 
-var codexACPStartupRetryDelay = 2 * time.Second
+var (
+	codexACPStartupRetryDelay = 2 * time.Second
+	startACPAgentCall         = func(ctx context.Context, ag *agent.ACPAgent) error { return ag.Start(ctx) }
+)
 
 // createAgentByName 按配置名称创建 Agent；配置缺失或启动失败时返回 nil。
 func createAgentByName(ctx context.Context, cfg *config.Config, name string, protocolTrace ...observability.ProtocolRecorder) agent.Agent {
@@ -127,7 +130,7 @@ func startACPAgentWithRetry(ctx context.Context, name string, agCfg config.Agent
 	ag := newACPAgentFromConfig(name, agCfg, protocolTrace...)
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if err := ag.Start(ctx); err != nil {
+		if err := startACPAgentCall(ctx, ag); err != nil {
 			lastErr = err
 			if attempt == attempts || !isRetryableCodexStateRuntimeError(err) ||
 				errors.Is(err, agent.ErrCodexCLIAutoUpdateFailed) {
