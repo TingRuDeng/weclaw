@@ -592,7 +592,9 @@ func TestRunCodexTurnPreflightSerializesAccountMaintenance(t *testing.T) {
 		case "thread/read":
 			preflightOnce.Do(func() { close(preflightStarted) })
 			<-releasePreflight
-			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`), nil
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
 		case "turn/start":
 			close(turnStartCalled)
 			<-releaseTurn
@@ -656,7 +658,9 @@ func TestRunCodexTurnRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		switch method {
 		case "thread/read":
-			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeTurnId":"turn-existing"},"turns":[{"id":"turn-existing","status":"inProgress"}]}}`), nil
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"turn-existing","status":"inProgress","items":[]}],"nextCursor":null}`), nil
 		case "turn/start":
 			turnStartCalls++
 			return nil, fmt.Errorf("turn/start must not be called while host thread is active")
@@ -813,10 +817,12 @@ func sharedHostObservationLossFixture(t *testing.T) (*ACPAgent, CodexRuntimeRequ
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		switch method {
 		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
 			if terminal {
-				return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"turn-1","status":"completed"}]}}`), nil
+				return json.RawMessage(`{"data":[{"id":"turn-1","status":"completed","items":[]}],"nextCursor":null}`), nil
 			}
-			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`), nil
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
 		case "turn/start":
 			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
 		default:

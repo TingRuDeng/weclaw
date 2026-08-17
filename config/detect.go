@@ -212,6 +212,12 @@ func NormalizeCodexRemoteFirst(cfg *Config) bool {
 		log.Printf("[config] enabled controlled Codex CLI updates for incompatible state runtimes")
 	}
 	if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
+		agCfg.CodexAppDaemon == nil && agCfg.CodexMultiFrontend != nil {
+		enabled := *agCfg.CodexMultiFrontend
+		agCfg.CodexAppDaemon = &enabled
+		modified = true
+		log.Printf("[config] aligned Codex App daemon reuse with codex_multi_frontend=%t", enabled)
+	} else if agCfg.Type == "acp" && isNativeCodexAppServerConfig(agCfg) &&
 		agCfg.CodexAppDaemon == nil &&
 		(agCfg.EffectiveCodexHostMode() == "auto" || agCfg.EffectiveCodexHostMode() == "daemon") &&
 		strings.TrimSpace(agCfg.AppServerSocket) == "" && strings.TrimSpace(agCfg.RunAsUser) == "" {

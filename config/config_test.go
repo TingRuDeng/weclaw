@@ -316,6 +316,55 @@ func TestAgentConfigCodexAppDaemon(t *testing.T) {
 	}
 }
 
+func TestCodexMultiFrontendForcesOfficialDaemon(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server", "--listen", "stdio://"],
+				"codex_multi_frontend": true
+			}
+		}
+	}`)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	agentCfg := cfg.Agents["codex"]
+	if got := agentCfg.EffectiveCodexHostMode(); got != "daemon" {
+		t.Fatalf("EffectiveCodexHostMode()=%q, want daemon when multi-frontend sharing is enabled", got)
+	}
+	if !agentCfg.EffectiveCodexAppDaemon() {
+		t.Fatal("multi-frontend sharing must enable Codex App daemon reuse")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error=%v, want valid multi-frontend config", err)
+	}
+}
+
+func TestValidateRejectsCodexMultiFrontendConflicts(t *testing.T) {
+	tests := map[string]string{
+		"non native":         `"command":"codex-acp"`,
+		"managed":            `"command":"codex","args":["app-server"],"codex_host_mode":"managed"`,
+		"custom socket":      `"command":"codex","args":["app-server"],"app_server_socket":"/tmp/codex.sock"`,
+		"run as user":        `"command":"codex","args":["app-server"],"run_as_user":"codex"`,
+		"app reuse disabled": `"command":"codex","args":["app-server"],"codex_app_reuse_daemon":false`,
+	}
+	for name, fields := range tests {
+		t.Run(name, func(t *testing.T) {
+			var cfg Config
+			data := []byte(`{"agents":{"codex":{"type":"acp","codex_multi_frontend":true,` + fields + `}}}`)
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "codex_multi_frontend") {
+				t.Fatalf("Validate() error=%v, want codex_multi_frontend conflict", err)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInvalidCodexHostModeCombinations(t *testing.T) {
 	tests := map[string]AgentConfig{
 		"unknown":       {CodexHostMode: "external"},
@@ -491,6 +540,26 @@ func TestNormalizeCodexRemoteFirstKeepsExplicitAppDaemonOptOut(t *testing.T) {
 	}
 	if got := cfg.Agents["codex"].CodexAppDaemon; got == nil || *got {
 		t.Fatalf("CodexAppDaemon=%v, want false", got)
+	}
+}
+
+func TestNormalizeCodexRemoteFirstHonorsMultiFrontendOptOut(t *testing.T) {
+	disabled := false
+	cfg := DefaultConfig()
+	cfg.Agents["codex"] = AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		CodexAutoUpdate: "incompatible", CodexMultiFrontend: &disabled,
+	}
+
+	if !NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("NormalizeCodexRemoteFirst() must persist the App daemon opt-out")
+	}
+	got := cfg.Agents["codex"]
+	if got.CodexAppDaemon == nil || *got.CodexAppDaemon {
+		t.Fatalf("CodexAppDaemon=%v, want false when multi-frontend sharing is explicitly disabled", got.CodexAppDaemon)
+	}
+	if NormalizeCodexRemoteFirst(cfg) {
+		t.Fatal("second NormalizeCodexRemoteFirst() = true, want idempotent")
 	}
 }
 

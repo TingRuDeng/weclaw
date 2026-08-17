@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 )
@@ -12,12 +11,11 @@ import (
 // TestWatchCodexThreadReadsInterruptedIdleState 验证注册时已空闲的中断 turn 不会返回旧文本。
 func TestWatchCodexThreadReadsInterruptedIdleState(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"turn-1","status":"interrupted","items":[{"id":"msg-1","type":"agentMessage","text":"部分旧文本"}]}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-1","status":"interrupted","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{"turn-1": json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"msg-1","type":"agentMessage","text":"部分旧文本"}}],"nextCursor":null}`)},
+	)
 
 	_, err := a.WatchCodexThread(context.Background(), "conversation-1", "thread-1", nil)
 	assertInterruptedTurnError(t, err, "thread-1", "turn-1")

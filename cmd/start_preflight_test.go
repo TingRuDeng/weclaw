@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,34 @@ import (
 
 	"github.com/fastclaw-ai/weclaw/config"
 )
+
+func TestStartPreflightRejectsMissingMultiFrontendStandalone(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	codexHome := t.TempDir()
+	var cfg config.Config
+	data := []byte(`{
+		"default_agent": "codex",
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server", "--listen", "stdio://"],
+				"env": {"CODEX_HOME": "` + codexHome + `"},
+				"codex_auto_update": "incompatible",
+				"codex_app_reuse_daemon": true,
+				"codex_multi_frontend": true
+			}
+		}
+	}`)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	err := preflightStartConfig(context.Background(), &cfg)
+	if err == nil || !strings.Contains(err.Error(), "codex_multi_frontend") || !strings.Contains(err.Error(), "doctor --fix --components codex") {
+		t.Fatalf("preflightStartConfig() error=%v, want blocking standalone install guidance", err)
+	}
+}
 
 // TestPrepareConfiguredStartDaemonChildSkipsCapabilityProbe 验证后台子进程不重复执行父进程已完成的 ACP 握手。
 func TestPrepareConfiguredStartDaemonChildSkipsCapabilityProbe(t *testing.T) {

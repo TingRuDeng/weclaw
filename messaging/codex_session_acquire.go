@@ -491,6 +491,8 @@ func renderCodexSessionAcquireFailure(err error) string {
 		return "前一项会话操作仍在处理，本次绑定未执行。"
 	case errors.Is(err, errCodexSessionAcquireUnsupported):
 		return "当前 Codex Agent 不支持共享 app-server 会话绑定。"
+	case errors.Is(err, agent.ErrACPFrameTooLarge):
+		return "Codex 返回的单条会话数据过大，本次绑定已安全停止。请更新 Codex CLI 后重试。"
 	default:
 		return "绑定 Codex 会话失败，请重试。"
 	}

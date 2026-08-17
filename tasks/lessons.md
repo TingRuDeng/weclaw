@@ -2,12 +2,20 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
+## 2026-08-17 完整多前端共享必须由用户意图开关强制依赖
+
+- 触发条件：原生 Codex 配置使用默认 `auto`，本机没有 official standalone；WeClaw 先启动 managed Host，随后 Codex App 又启动私有 Host，用户却合理地认为启动顺序已经保证复用。
+- 规则：`codex_multi_frontend: true` 必须把有效 Host 模式固定为 `daemon`，并在任何平台启动前验证 standalone；依赖缺失、配置冲突或身份不明都失败关闭，不能先启动消息服务再等待首次 `/cx` 暴露问题。
+- 反例：继续用 `auto + codex_app_reuse_daemon: true` 表达完整共享；standalone 缺失时静默回退 managed，同时只打印“Preparing Codex App daemon reuse”。该组合描述了实现偏好，却没有兑现用户要求的能力。
+- 正确做法：产品级开关拥有 Host 模式和 App 复用的派生关系；Doctor 与启动预检复用同一 standalone 路径契约，且文件检查通过后仍要在平台注册前同步验证真实 daemon 和 Host 身份。字段省略兼容旧配置，显式关闭不得被旧规范化默认覆盖；Web 等配置读写入口必须完整保留该意图字段。
+- 来源：2026-08-17 本机确认 `~/.codex/packages/standalone/current/codex` 与官方 control socket 均不存在，实际运行的是 WeClaw-managed socket，后启动 App 未复用同一 Host。
+
 ## 2026-08-16 后台协调器测试取消后必须等待真正退出
 
 - 触发条件：测试使用 `t.TempDir` 保存 follower 状态，同时启动持续调和的后台 goroutine。
 - 规则：取消 context 只是发出停止信号，不是 goroutine 已退出的证据；测试返回前必须等待协调器的完成状态，再让临时目录清理。
 - 反例：只用 `defer cancel()` 结束测试；在 race 模式下，协调器仍可能保存 `codex-sessions.json`，与 `TempDir` 删除并发并报 `directory not empty`。
-- 正确做法：先撤销 watcher/任务投递，调用 `cancel()`，再用有超时的条件等待确认 reconciler 已注销，最后释放测试通道和临时目录。
+- 正确做法：先调用 `cancel()` 并用有超时的条件等待 reconciler 已注销，再撤销并等待最后一个 watcher/任务投递，最后释放测试通道和临时目录。只先 detach 当前 watcher 会留下一个 ticker 窗口，仍持有 durable binding 的 reconciler 可以合法地重新挂载新 watcher。
 - 来源：2026-08-16 v0.1.277 首次发布的全仓 race 门禁稳定复现 follower 恢复测试清理竞态；按同文件已有的 cancel + wait 模式修复后定向连跑 50 次通过。
 
 ## 2026-08-16 Codex 完整多前端共享必须以 official daemon 和 ready attach 为边界
@@ -187,7 +195,7 @@
 
 ## 2026-07-17 Codex 空会话不得误判为写入冲突
 
-- 触发条件：`thread/start` 已成功返回新 thread，但该 thread 尚未收到第一条用户消息；随后会话接管或外部任务观察读取 `thread/read(includeTurns=true)`。
+- 触发条件：`thread/start` 已成功返回新 thread，但该 thread 尚未收到第一条用户消息；随后会话接管或外部任务观察执行轻量 `thread/read(includeTurns=false)`。
 - 规则：Codex app-server 返回 `includeTurns is unavailable before first user message` 表示确定的空闲空会话，不是 runtime 故障，更不是 writer 冲突；只有 writer lease 重叠或不同 active turn 等实际写入证据才能进入 `CodexRuntimeConflict`。Desktop IPC 不可用只能影响旧通道清理或 runtime 可用性，不能污染新 thread。
 - 反例：`/new` 成功创建并接管新 thread 后，外部任务观察把“尚未 materialize”当成读取失败，调用 `MarkCodexRuntimeConflict`，导致首条普通消息被永久阻断。
 - 正确做法：在 Agent 协议边界把首条消息前的 turns 不可读归一化为空闲 `CodexThreadState`；回归测试必须覆盖 `ResetSession → HandoffCodexRuntime → 空会话读取 → 第一条 writer lease`，发布前再用真实 Codex app-server 验证 `thread/start → 空会话读取 → 第一条 turn`。
@@ -906,3 +914,11 @@
 - 反例：App 已经响应 request 后，WeClaw 五分钟超时再次发送 `decline`，Desktop 返回 `Request not found`；后续消息仍 steer 到失效 turn，并把明确的 JavaScript 错误包装成“交付状态未知”。
 - 正确做法：request 仍 pending 就续期；request 消失且原 turn active 就收敛为其他前端已处理；原 turn terminal/rollover 就禁止 steer；状态不可用时失败关闭并保留 binding。同一 request 向多个 observer 展示时，由 `(thread, turn, request)` broker 串行唯一提交，其他展示根据 `serverRequest/resolved` 收敛。`Request not found` 竞态不再重复报错，明确远程错误与写后断线/超时分别分类。
 - 来源：2026-08-13 本机审计日志中的 `approval_default_deny reason=timeout` 与 Codex Desktop 同一 request 的重复响应记录。
+
+## 2026-08-17 Codex 会话恢复必须有界读取历史
+
+- 触发条件：用户从消息平台绑定累计了大量 turn 或 items 的 Codex thread，app-server 把完整历史放进 `thread/resume` 或 `thread/read` 的单条 NDJSON 响应。
+- 规则：绑定、状态探测和 watcher 回放必须分层读取；恢复 RPC 排除 turns，状态只读轻量 turn 元数据，只有精确目标 turn 的用户可见历史才按页加载。任何页面仍超过 ACP 单帧上限时必须返回稳定错误并保留绑定失败的真实原因。
+- 反例：对所有会话固定调用 `thread/resume` 和 `thread/read(includeTurns=true)`；小会话正常，超大会话超过 Scanner 64 MiB 后 reader 断开，所有等待中的 RPC 只得到通用运行时退出错误，飞书最终仅显示“绑定失败”。
+- 正确做法：`thread/resume(excludeTurns=true)` 后使用 `thread/read(includeTurns=false)`，再通过 `thread/turns/list(itemsView=notLoaded)` 分页定位目标 turn，并以 `thread/items/list(turnId=...)` 分页回放；重复 cursor、错误 turn item 和目标 turn 消失都失败关闭。Scanner 的 `token too long` 必须映射为可识别哨兵错误，供消息层给出明确处理建议。
+- 来源：2026-08-17 超大 Codex 会话真机绑定失败及本机 Codex app-server schema 复核。

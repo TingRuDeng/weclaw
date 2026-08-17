@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -116,6 +117,30 @@ func TestDoctorDependenciesRequireStandaloneForDaemonMode(t *testing.T) {
 	result, ok = findResult(checkDoctorDependencies(cfg, deps), "Codex standalone daemon")
 	if !ok || result.Status != doctorOK || result.Detail != standalone {
 		t.Fatalf("result=%#v ok=%t, want verified standalone path", result, ok)
+	}
+}
+
+func TestDoctorDependenciesRequireStandaloneForMultiFrontend(t *testing.T) {
+	codexHome := t.TempDir()
+	var cfg config.Config
+	if err := json.Unmarshal([]byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server"],
+				"codex_multi_frontend": true
+			}
+		}
+	}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	deps := testDoctorDeps()
+	deps.codexHome = func(*config.Config) string { return codexHome }
+
+	result, ok := findResult(checkDoctorDependencies(&cfg, deps), "Codex standalone daemon")
+	if !ok || result.Status != doctorFail || !containsAll(result.Detail, "codex_multi_frontend", "--components codex") {
+		t.Fatalf("result=%#v ok=%t, want blocking multi-frontend standalone requirement", result, ok)
 	}
 }
 

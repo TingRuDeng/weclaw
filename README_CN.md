@@ -74,6 +74,8 @@ weclaw status
 
 macOS 默认 `codex_host_mode: auto` 在构造 Agent 时固定 Host 拓扑：固定 control socket 上已有已验证 daemon，或 `CODEX_HOME` 中可用 official standalone 时，都选择 official daemon 作为唯一 Host。即使 Codex App 已运行，App 的历史可见性也不会把 Host authority 切换到 Desktop。只有 standalone 不可用时，`auto` 才保留 App 私有 Host 或 WeClaw-managed Host 的兼容路径；该路径不承诺 App、CLI 和飞书的完整多前端共享，也不会为了伪同步启动第二个 Host。显式 `daemon` 模式可使用 Desktop IPC 做前端探测和协调，但绝不允许选择 App Host；daemon 启动或身份验证失败时保持失败关闭。
 
+需要把多前端共享作为强制能力时，在原生 Codex Agent 上设置 `"codex_multi_frontend": true`。该开关把有效 Host 模式固定为 `daemon`，同时启用 macOS App daemon 复用；official standalone 缺失时，`weclaw doctor` 报阻断错误，`weclaw start` 也会在平台启动前失败并提示 `weclaw doctor --fix --components codex`，不会回退 managed。文件存在后，启动流程还会在平台注册前同步启动并验证 daemon、App 复用和 Host 身份，任一步失败都不会先开放消息入口。它不能与 `codex_host_mode: managed`、自定义 `app_server_socket`、`run_as_user` 或 `codex_app_reuse_daemon: false` 并用。省略该字段保留旧版 `auto` 行为；显式设为 `false` 时，配置规范化不会再次打开 App daemon 复用。
+
 shared managed Host、official daemon 和受控 `weclaw codex cli` 在启动、接管或协调停止前都会执行一次只读多 Host 预检：普通模式检查当前有效 UID；配置 `run_as_user` 时还检查目标 UID，以及只用于识别 sudo 包装进程的 root UID。macOS 通过 `kern.procargs2`、Linux 通过 `/proc/<pid>/cmdline` 读取候选进程的原始 argv，避免路径空格或参数边界造成误判；随后把 Node 包装进程和原生子进程按 PGID 聚合，并且只放行已由受保护 metadata 或 official lifecycle PID 验证的权威进程组。额外 `codex app-server`、进程表或候选原始参数不可读、权威身份无法确认都会让本次操作失败关闭；错误只显示脱敏分类、PGID 和有界 PID，不输出完整命令。`codex --remote`、帮助、daemon、proxy、schema generation 等 tooling 和近似命令不算 Host。只读预检本身不会停止任何进程；启动后复核若发现竞态，兼容 managed 路径只回收本次明确由 WeClaw 创建的新 Host，绝不会按名称结束既有 Codex App 或未知进程。该检查只证明扫描时点，没有替代跨 socket/CODEX_HOME 的持续全局锁；外部程序在扫描后另启 Host 仍会在下一次门禁被发现。
 
 这里的“Codex App 与 daemon 同时存在”以 App 已经连接同一个官方 daemon 为前提。原生 Codex shared app-server 配置会默认写入 `codex_app_reuse_daemon: true`：WeClaw 先验证官方 daemon、固定 control socket 与 App 使用的 `CODEX_HOME` 完全一致，再通过当前 macOS 用户的 launchd 环境为后续启动的 App 启用官方 local-daemon 入口；不会修改 App 包或签名。已经运行且仍带私有 `app-server` 子进程的 App 不会被强退，Codex Agent 会失败关闭并要求完整退出、重新打开 App。首次升级到此版本时因此需要重启 App 一次；如果重启后仍回退私有 Host，应同步更新 Codex App 与 standalone CLI，并清除冲突的 `CODEX_CLI_PATH` 或 `CODEX_APP_SERVER_FORCE_CLI=1` 启动覆盖。连接 daemon 后，App 展示的是该 daemon 的会话目录；若 WeClaw 配置了独立 `CODEX_SQLITE_HOME`，界面目录可能与升级前 App 私有 Host 不同，但原目录不会被删除。显式设为 `false` 会撤销 WeClaw 管理的 launchd 开关，同样只在 App 下次启动后生效。
@@ -354,7 +356,7 @@ weclaw doctor
 
 `weclaw web` 默认只监听 `127.0.0.1:39282`，通过不会发送到服务端的 URL fragment 注入 token，并打开浏览器。Agent、进度、平台或机器人白名单和工作目录等软配置支持热重载；平台启用、凭证或账号拓扑变化需要重启。配置页会携带版本指纹；如果后台配置已被命令行或消息端修改，旧页面保存会明确提示冲突，需要重新加载后再提交，避免覆盖最新白名单。内置服务不提供 TLS；非回环监听默认拒绝，确需在可信内网暴露时必须显式使用 `--allow-insecure-http`（未指定 `--token` 时仍会自动生成强随机 token），公网访问应通过 HTTPS 隧道或反向代理。
 
-`weclaw doctor` 默认只读，除现有配置外还检查 `sqlite3`、Linux `bubblewrap`、Node.js/npm、Codex CLI 的 `app-server` 能力、Claude Code CLI 和 Claude ACP adapter。已配置 Agent 的运行依赖缺失是阻断错误；未配置 Agent 或仅影响 `/cx` 会话目录、Codex Linux 沙箱的依赖缺失是警告。
+`weclaw doctor` 默认只读，除现有配置外还检查 `sqlite3`、Linux `bubblewrap`、Node.js/npm、Codex CLI 的 `app-server` 能力、official standalone、Claude Code CLI 和 Claude ACP adapter。启用 `codex_multi_frontend` 后 standalone 缺失是阻断错误；未启用严格共享时，缺失 standalone 仍只是 managed 兼容模式警告。其他已配置 Agent 的运行依赖缺失同样是阻断错误；未配置 Agent 或仅影响 `/cx` 会话目录、Codex Linux 沙箱的依赖缺失是警告。
 
 首次安装在有控制终端时通过 `/dev/tty` 进入同一个 `weclaw doctor --fix` 向导，不会让 `curl | sh` 的脚本输入被依赖选择消费。没有控制终端时只运行只读检查并打印后续命令；可用 `WECLAW_SKIP_DEPENDENCY_SETUP=1` 显式跳过该检查与向导。非交互安装依赖必须单独同时指定组件和确认，例如 `weclaw doctor --fix --components sqlite3,bubblewrap --yes`，不会默认安装全部组件。
 
@@ -375,6 +377,7 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - 审计日志默认开启，不记录密钥。
 - Codex `permission_level` 支持 `default`、`auto_review`、`full_access`；默认档位为 `default`。
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。
+- `codex_multi_frontend: true` 是完整共享的用户意图开关：它强制 official daemon、要求 standalone 已安装并禁止兼容回退；省略时继续使用旧版 `auto` 兼容策略。
 - `codex_host_mode` 支持 `auto`、`daemon`、`managed`。macOS 默认 `auto` 在官方 daemon 已运行或 standalone 可用时直接固定为 `daemon`，不会因 App 已运行而改选 Desktop Host；只有 standalone 不可用时才进入 App 私有 Host 或 `managed` 的兼容路径。显式 `daemon` 在 macOS 保留 Desktop IPC 协调，但不允许切换到 App Host；它不回退，且不能与 `app_server_socket` 或 `run_as_user` 混用。不启用 Desktop 协调的平台同样按“官方 daemon 可用则使用，否则 managed”选择。官方 socket 身份不明、App 私有 IPC 不可达或 Host authority 无法证明时都失败关闭，不静默启动第二个 Host。
 - shared managed Host、official daemon、受控 `weclaw codex cli` 及协调停止在变更 Host 状态前执行受检 UID 范围内的多 Host 只读预检；`run_as_user` 模式会额外覆盖目标 UID 和 sudo wrapper 的 root UID。额外 `app-server`、进程表或候选原始参数不可读时失败关闭，只报告脱敏 PGID/PID，且不按进程名停止既有或未知进程。该检查是时点门禁，不是持续全局锁。
 - 原生 Codex 的 `auto`/`daemon` 配置默认写入 `codex_app_reuse_daemon: true`。该字段只在 macOS 生效，并只管理后续 App 启动使用的 launchd 环境；官方 daemon 尚未验证、App 与 WeClaw 的 `CODEX_HOME`/control socket 不一致、存在强制 CLI 覆盖，或已运行 App 仍持有私有 `app-server` 时都会失败关闭。WeClaw 不会为此退出 App；首次启用后完整重启 App 一次。

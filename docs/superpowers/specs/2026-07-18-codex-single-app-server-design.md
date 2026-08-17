@@ -49,6 +49,7 @@ flowchart LR
 2. 没有运行中的 daemon 时，App 已运行则由 `agent/codex_desktop_connector.go` 通过受保护 Desktop IPC 复用 App Host；App 不在时，`auto` 在 `CODEX_HOME` 存在可执行 standalone Codex 时使用 `agent/codex_daemon_host.go`，否则使用 WeClaw-managed 兼容路径。control socket 存在但身份验证失败时必须失败关闭，不能回退 Desktop 或 managed。
 3. 显式 `daemon` 只使用官方生命周期命令和固定 control socket，不允许自定义 `app_server_socket` 或 `run_as_user`，失败时不回退 managed。macOS 下它保留 Desktop IPC 协调能力，仅用于 frontend 状态探测和旧 thread 回交，不获得选择 App Host 的权限。
 4. 显式 `managed` 使用 `agent/codex_app_server_host.go` 管理兼容 Host，不主动接入 Desktop。
+5. `codex_multi_frontend: true` 是产品级严格共享开关：它覆盖 `auto` 的降级语义，把有效模式固定为 `daemon`，并在平台启动前要求 official standalone 可执行文件存在；与 `managed`、自定义 socket、`run_as_user` 或 App daemon 复用关闭冲突时配置校验直接失败。字段省略保留旧兼容策略，显式 `false` 不得被规范化改回 App daemon 复用开启。
 
 原生 Codex 的 `auto`/`daemon` 配置默认启用 `codex_app_reuse_daemon`。macOS 只有在官方 lifecycle 与进程身份验证完成、App 根据 launchd `CODEX_HOME` 推导出的 control socket 与当前 daemon socket 完全一致、且没有 `CODEX_CLI_PATH` 或 `CODEX_APP_SERVER_FORCE_CLI=1` 冲突时，才为后续 App 启动提交 `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`。已经运行且仍有私有 `codex ... app-server` 后代的 App 必须要求完整重启；WeClaw 不退出 App、不修改 App 包，也不在这种过渡态继续附着 daemon。显式关闭只撤销后续启动环境，当前 App 仍需重启才改变 Host。
 

@@ -1,5 +1,89 @@
 # 当前任务记录
 
+## 2026-08-17 Codex 多前端共享显式开关
+
+### 目标
+
+增加面向用户意图的 `codex_multi_frontend` 配置。启用后强制使用 verified official standalone daemon，并让 Codex App、受控 CLI 与消息平台共享同一 Host；依赖或身份不满足时失败关闭，不再回退 managed 兼容 Host。
+
+### 范围与验收标准
+
+- [x] `codex_multi_frontend: true` 只允许原生 Codex app-server，并把有效 Host 模式固定为 `daemon`。
+- [x] 启用共享时拒绝 `managed`、自定义 `app_server_socket`、`run_as_user` 和 `codex_app_reuse_daemon: false` 等冲突配置。
+- [x] standalone 缺失时 `weclaw doctor` 返回阻塞错误并提示 `doctor --fix --components codex`；启动链不回退 managed。
+- [x] macOS 启用共享时自动派生 App daemon 复用；配置省略时保留旧版 `auto` 行为，显式 `daemon` 继续兼容。
+- [x] Web 配置读取与写回保留新字段，不覆盖现有 Agent 配置或凭据。
+- [x] 中英文说明、维护者上下文和长期经验明确区分共享模式与兼容模式。
+
+### 实施步骤
+
+- [x] 先补失败测试，固定有效模式派生、冲突拒绝、Doctor 阻塞和 Web 写回。
+- [x] 实现配置字段、有效值派生与运行时传递，复用现有 daemon 启动和身份门禁。
+- [x] 更新 Doctor 诊断文案和配置视图，不新增第二套 standalone 安装器。
+- [x] 更新 README、authority docs 与 lessons，并完成定向、Race、全仓和静态验证。
+
+### 验证方式
+
+```bash
+go test ./config ./cmd ./web -count=1 -timeout 240s
+go test -race ./config ./cmd ./web ./agent -count=1 -timeout 420s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- `codex_multi_frontend: true` 现在把原生 Codex 的有效 Host 模式固定为 `daemon`，自动启用 Codex App daemon 复用，并拒绝 managed Host、自定义 socket、`run_as_user` 及显式关闭 App 复用等冲突配置；字段省略时保留原有兼容行为。
+- Doctor 在 standalone 缺失时给出阻断错误和现有安装入口；启动链在平台注册前同步启动并验证 official standalone daemon、Agent 与 Host 身份，失败时不回退 managed Host，也不会让消息平台先上线。
+- Web 配置读写、中英文 README、维护者上下文、历史设计说明和长期经验均已同步。验证通过：全仓测试、受影响模块 Race、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。
+- 本轮没有提交、推送、安装 standalone、修改本机配置或重启服务；超大 Codex 会话绑定恢复仍是下方独立未完成任务，不属于本轮交付。
+
+## 2026-08-17 超大 Codex 会话绑定恢复
+
+### 目标
+
+修复飞书执行 `/cx ls` 选择超大 Codex 会话时，`thread/resume` 返回完整历史并超过 ACP reader 单帧上限，导致连接断开并最终提示“绑定 Codex 会话失败”的问题；恢复过程只加载必要状态，进度回放按页读取目标 turn。
+
+### 范围与验收标准
+
+- [x] `thread/resume` 使用协议支持的 `excludeTurns: true`，不在绑定阶段返回完整历史。
+- [x] 仅探测运行状态时使用 `thread/read includeTurns: false`，不加载与判断无关的 turn items。
+- [x] 观察器需要历史回放时通过 `thread/turns/list` 分页读取最近或目标 turn，并保持现有结构化进度、审批和终态语义。
+- [x] 超大历史或异常协议帧不再让用户只看到无根因的通用绑定错误；连接失败和恢复状态保持可观察且失败关闭。
+- [x] 小会话、首轮尚未 materialize、活动 turn 接管、重启恢复及多前端共享行为不回归。
+
+### 实施步骤
+
+- [x] 先补失败测试，固定 resume 不携带 turns、状态探测不加载 turns、分页回放目标 turn 和超大历史边界。
+- [x] 拆分轻量状态读取与需要历史的观察器回放，接入 `thread/turns/list` 分页协议。
+- [x] 改进 ACP reader 过大帧的错误语义与断线恢复，避免持续输出误导性的账号切换噪音。
+- [x] 更新受影响的维护者文档与长期经验，只记录当前真实协议边界。
+- [x] 完成定向测试、Race、全仓测试、Vet、module tidy、Staticcheck、文档和差异验证。
+
+### 验证方式
+
+```bash
+go test ./agent ./messaging -count=1 -timeout 240s
+go test -race ./agent ./messaging -count=1 -timeout 420s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- `thread/resume` 只恢复 thread 元数据，状态探测只读取最新一页 turn 元数据；watcher 需要回放时才按 64 条 turn、32 条 item 分页加载精确目标 turn，避免累计历史进入单条 ACP 响应。
+- 指定 turn 不存在、分页 cursor 重复、item 归属其他 turn 和 Scanner 单帧超限均失败关闭；超限错误保留稳定错误链，飞书绑定入口返回可操作的 Codex CLI 更新提示。
+- watcher 建立快照失败会立即退出并归还已认领交互，不再继续等待或处理旧审批；状态读取、回放与目标 turn 的水位线语义均由回归测试覆盖。
+- 验证通过：`agent`、`messaging` 定向测试，二者 Race，全仓测试、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。整仓首次运行中超时用例受并行负载延迟，独立连续 3 次及随后整仓复跑均通过。
+
 ## 2026-08-16 Codex 多 Host 冲突只读预检
 
 ### 目标

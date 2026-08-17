@@ -50,8 +50,13 @@ func (r *rpcPendingRegistry) deliver(response *rpcResponse) bool {
 }
 
 func (r *rpcPendingRegistry) failAll(reason string) {
+	r.failAllWithCause(reason, nil)
+}
+
+func (r *rpcPendingRegistry) failAllWithCause(reason string, cause error) {
 	response := &rpcResponse{
 		Error: &rpcError{Code: -32000, Message: reason},
+		Cause: cause,
 	}
 
 	r.mu.Lock()

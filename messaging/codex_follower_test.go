@@ -1030,13 +1030,16 @@ func TestCodexFollowerRestoresFromPersistedBindingWithoutInboundMessage(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	second.detachCodexFrontendTask(snapshots[0].ConversationID, snapshots[0].RouteUserID, snapshots[0].Target.ThreadID)
 	cancel()
 	waitForRolloverCondition(t, func() bool {
 		second.codexFollowerMu.Lock()
 		defer second.codexFollowerMu.Unlock()
 		return second.codexFollower == nil
 	})
+	result := second.detachCodexFrontendTask(snapshots[0].ConversationID, snapshots[0].RouteUserID, snapshots[0].Target.ThreadID)
+	if !result.detached {
+		t.Fatalf("persisted follower task cleanup=%#v, want detached", result)
+	}
 	close(base.watchDone)
 }
 
@@ -1087,13 +1090,16 @@ func TestCodexFollowerRestartReusesPersistedPreparingAttachRevision(t *testing.T
 		t.Fatalf("recovered attach=%#v ok=%v, want original preparing revision", current, ok)
 	}
 
-	second.detachCodexFrontendTask(loaded[0].ConversationID, loaded[0].RouteUserID, loaded[0].Target.ThreadID)
 	cancel()
 	waitForRolloverCondition(t, func() bool {
 		second.codexFollowerMu.Lock()
 		defer second.codexFollowerMu.Unlock()
 		return second.codexFollower == nil
 	})
+	result := second.detachCodexFrontendTask(loaded[0].ConversationID, loaded[0].RouteUserID, loaded[0].Target.ThreadID)
+	if !result.detached {
+		t.Fatalf("persisted preparing follower task cleanup=%#v, want detached", result)
+	}
 	close(watchDone)
 }
 

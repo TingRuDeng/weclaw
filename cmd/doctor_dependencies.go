@@ -112,7 +112,10 @@ func checkCodexStandalone(cfg *config.Config, deps doctorDeps) doctorResult {
 	}
 	result.Status = doctorWarn
 	result.Detail = "未安装官方 standalone；auto 将使用 managed 兼容 Host，受控 weclaw codex cli 不可用"
-	if mode == "daemon" {
+	if agentConfig.EffectiveCodexMultiFrontend() {
+		result.Status = doctorFail
+		result.Detail = "codex_multi_frontend=true 需要官方 standalone；运行 weclaw doctor --fix --components codex"
+	} else if mode == "daemon" {
 		result.Status = doctorFail
 		result.Detail = "codex_host_mode=daemon 需要官方 standalone；运行 weclaw doctor --fix --components codex"
 	}

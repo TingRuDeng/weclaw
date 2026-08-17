@@ -108,7 +108,7 @@ func TestResumeThreadWithProviderSendsAndVerifiesProvider(t *testing.T) {
 			return nil, nil
 		}
 		values := params.(map[string]any)
-		if values["modelProvider"] != "openai" {
+		if values["modelProvider"] != "openai" || values["excludeTurns"] != true {
 			t.Fatalf("thread/resume params = %#v", values)
 		}
 		return json.RawMessage(`{"thread":{"id":"thread-1","modelProvider":"OpenAI"},"modelProvider":"openai"}`), nil

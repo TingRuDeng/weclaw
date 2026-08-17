@@ -929,6 +929,14 @@ func TestRenderCodexSessionAcquireResultExplainsDeferredDesktopAdoption(t *testi
 	}
 }
 
+func TestRenderCodexSessionAcquireFailureExplainsOversizedProtocolFrame(t *testing.T) {
+	err := fmt.Errorf("绑定恢复失败: %w", agent.ErrACPFrameTooLarge)
+	text := renderCodexSessionAcquireFailure(err)
+	if !strings.Contains(text, "单条会话数据过大") || !strings.Contains(text, "Codex CLI") {
+		t.Fatalf("rendered failure=%q, want actionable oversized-frame explanation", text)
+	}
+}
+
 func TestRenderCodexSessionAcquireResultExplainsDesktopConnectionRecovery(t *testing.T) {
 	h := NewHandler(nil, nil)
 	result := codexSessionAcquireResult{

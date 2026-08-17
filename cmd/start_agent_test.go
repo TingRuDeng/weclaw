@@ -60,6 +60,30 @@ func TestACPAgentConfigFromConfigPassesCodexHostMode(t *testing.T) {
 	}
 }
 
+func TestACPAgentConfigFromConfigEnforcesMultiFrontendRuntime(t *testing.T) {
+	var cfg config.Config
+	if err := json.Unmarshal([]byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server", "--listen", "stdio://"],
+				"codex_multi_frontend": true
+			}
+		}
+	}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	got := acpAgentConfigFromConfig("codex", cfg.Agents["codex"])
+	if got.CodexHostMode != "daemon" {
+		t.Fatalf("CodexHostMode=%q, want daemon", got.CodexHostMode)
+	}
+	if got.CodexAppDaemon == nil || !*got.CodexAppDaemon {
+		t.Fatalf("CodexAppDaemon=%v, want derived true", got.CodexAppDaemon)
+	}
+}
+
 func TestShouldWarmCodexAppDaemonReuse(t *testing.T) {
 	enabled := true
 	cfg := config.DefaultConfig()
@@ -75,6 +99,35 @@ func TestShouldWarmCodexAppDaemonReuse(t *testing.T) {
 	cfg.Agents["codex"] = codex
 	if shouldWarmCodexAppDaemonReuse(cfg) {
 		t.Fatal("managed Host must not prewarm App daemon reuse")
+	}
+}
+
+type failingCodexAgentStarter struct {
+	calls int
+	err   error
+}
+
+func (s *failingCodexAgentStarter) EnsureAgentStarted(context.Context, string) (agent.Agent, error) {
+	s.calls++
+	return nil, s.err
+}
+
+func TestStartCodexAppDaemonReuseAgentFailsStrictSharingSynchronously(t *testing.T) {
+	enabled := true
+	wantErr := errors.New("daemon identity unavailable")
+	cfg := config.DefaultConfig()
+	cfg.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+		CodexMultiFrontend: &enabled,
+	}
+	starter := &failingCodexAgentStarter{err: wantErr}
+
+	err := startCodexAppDaemonReuseAgent(context.Background(), starter, cfg)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("startCodexAppDaemonReuseAgent() error=%v, want %v", err, wantErr)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("EnsureAgentStarted calls=%d, want 1 before platform startup", starter.calls)
 	}
 }
 

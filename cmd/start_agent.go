@@ -153,6 +153,11 @@ func newACPAgentFromConfig(name string, agCfg config.AgentConfig, protocolTrace 
 }
 
 func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTrace ...observability.ProtocolRecorder) agent.ACPAgentConfig {
+	codexAppDaemon := agCfg.CodexAppDaemon
+	if agCfg.EffectiveCodexMultiFrontend() {
+		enabled := true
+		codexAppDaemon = &enabled
+	}
 	result := agent.ACPAgentConfig{
 		ConfiguredName:     name,
 		Command:            agCfg.Command,
@@ -169,7 +174,7 @@ func acpAgentConfigFromConfig(name string, agCfg config.AgentConfig, protocolTra
 		AppServerSocket:    agCfg.AppServerSocket,
 		CodexHostMode:      agCfg.EffectiveCodexHostMode(),
 		CodexAutoUpdate:    agCfg.EffectiveCodexAutoUpdate(),
-		CodexAppDaemon:     agCfg.CodexAppDaemon,
+		CodexAppDaemon:     codexAppDaemon,
 		CodexDesktopBridge: codexDesktopBridgeEnabled(agCfg),
 		RunAsUser:          agCfg.RunAsUser,
 		RunAsEnv:           agCfg.RunAsEnv,

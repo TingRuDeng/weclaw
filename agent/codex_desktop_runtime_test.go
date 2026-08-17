@@ -1137,6 +1137,11 @@ func TestACPAgentDesktopAllowsMultipleFrontendWatchers(t *testing.T) {
 	a, _ := desktopRuntimeTestAgent(t)
 	claimDesktopRemoteControl(t, a)
 	applyDesktopRuntimeTestState(t, a, 2, "inProgress", "")
+	binding, ok := a.codexOwners.threadBinding("thread-1")
+	if !ok {
+		t.Fatal("shared Desktop thread binding 不存在")
+	}
+	a.codexOwners.bindConversation(CodexThreadRef{ConversationID: "conversation-2", ThreadID: "thread-1"}, binding)
 
 	type watchResult struct {
 		text string

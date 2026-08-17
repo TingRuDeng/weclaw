@@ -37,6 +37,21 @@ type codexThreadItem struct {
 	Content json.RawMessage `json:"content"`
 }
 
+type codexThreadTurnsListResponse struct {
+	Data       []codexTurnSnapshot `json:"data"`
+	NextCursor string              `json:"nextCursor"`
+}
+
+type codexThreadItemEntry struct {
+	TurnID string          `json:"turnId"`
+	Item   codexThreadItem `json:"item"`
+}
+
+type codexThreadItemsListResponse struct {
+	Data       []codexThreadItemEntry `json:"data"`
+	NextCursor string                 `json:"nextCursor"`
+}
+
 // ReadCodexThreadState 读取 Codex app-server thread 当前状态，用于接管本地 App 运行中任务。
 func (a *ACPAgent) ReadCodexThreadState(ctx context.Context, conversationID string, threadID string) (CodexThreadState, error) {
 	if a.protocol != protocolCodexAppServer {
@@ -78,7 +93,7 @@ func (a *ACPAgent) ReadCodexThreadProgressSnapshot(ctx context.Context, conversa
 			return CodexThreadState{}, nil, ErrCodexRuntimeConflict
 		}
 	}
-	state, snapshot, _, _, err := a.readCodexAppServerThreadSnapshotResult(ctx, threadID)
+	state, snapshot, _, _, err := a.readCodexAppServerThreadSnapshotResult(ctx, threadID, "")
 	if err != nil || !state.Active || strings.TrimSpace(state.ActiveTurnID) == "" {
 		return state, nil, err
 	}

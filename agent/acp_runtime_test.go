@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -298,6 +299,36 @@ func TestACPScannerReadsLargeCodexNotification(t *testing.T) {
 	}
 	if scanner.Text() != line {
 		t.Fatal("scanner returned unexpected large notification content")
+	}
+}
+
+func TestACPReadLoopClassifiesOversizedProtocolFrame(t *testing.T) {
+	scanner := bufio.NewScanner(strings.NewReader(strings.Repeat("x", 128)))
+	scanner.Buffer(make([]byte, 8), 16)
+	if scanner.Scan() || scanner.Err() == nil {
+		t.Fatalf("scanner state scan=%t err=%v, want token-too-long failure", scanner.Scan(), scanner.Err())
+	}
+
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.stdin = nopWriteCloser{Buffer: &bytes.Buffer{}}
+	a.scanner = scanner
+	a.wireEpoch = 1
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := a.callWithSequence(context.Background(), "thread/read", map[string]interface{}{"threadId": "thread-large"})
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !a.pending.contains(1) {
+		if time.Now().After(deadline) {
+			t.Fatal("thread/read request was not registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	a.finishReadLoop(scanner, 1, nil)
+	if err := <-done; !errors.Is(err, ErrACPFrameTooLarge) {
+		t.Fatalf("call error=%v, want ErrACPFrameTooLarge", err)
 	}
 }
 

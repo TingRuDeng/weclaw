@@ -3,8 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 )
+
+var ErrACPFrameTooLarge = errors.New("ACP protocol frame exceeds safe limit")
 
 const (
 	acpProtocolVersion            = 1

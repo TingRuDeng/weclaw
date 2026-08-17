@@ -35,7 +35,7 @@ func TestACPAgentResetSessionKeepsFreshThreadWritableBeforeFirstTurn(t *testing.
 			return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil
 		case "thread/read":
 			request := params.(map[string]interface{})
-			if request["threadId"] != "thread-new" || request["includeTurns"] != true {
+			if request["threadId"] != "thread-new" || request["includeTurns"] != false {
 				t.Fatalf("thread/read params=%#v", request)
 			}
 			return nil, errors.New("agent error: thread thread-new is not materialized yet; includeTurns is unavailable before first user message")

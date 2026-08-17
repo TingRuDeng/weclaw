@@ -233,8 +233,12 @@ func (a *ACPAgent) dispatchCodexKnownNotification(msg rpcResponse, line string) 
 // finishReadLoop 清理当前 runtime，并唤醒所有仍在等待的调用者。
 func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner, epoch uint64, waitErr error) {
 	exitReason := "ACP runtime exited"
+	var cause error
 	if err := scanner.Err(); err != nil {
 		exitReason = fmt.Sprintf("ACP runtime read error: %v", err)
+		if isACPFrameTooLargeReadError(err) {
+			cause = ErrACPFrameTooLarge
+		}
 		log.Printf("[acp] read loop error: %v", err)
 	} else if waitErr != nil {
 		exitReason = fmt.Sprintf("ACP runtime exited: %v", waitErr)
@@ -252,8 +256,12 @@ func (a *ACPAgent) finishReadLoop(scanner *bufio.Scanner, epoch uint64, waitErr 
 	a.mu.Unlock()
 	a.wireDispatchMu.Unlock()
 	if currentScanner {
-		a.failRuntimeWaitersUncertain(exitReason)
+		a.failRuntimeWaitersUncertainWithCause(exitReason, cause)
 	}
+}
+
+func isACPFrameTooLargeReadError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "token too long")
 }
 
 func (a *ACPAgent) shouldLogUnhandledMethod(method string, now time.Time) bool {
@@ -285,8 +293,12 @@ func (a *ACPAgent) failRuntimeWaiters(reason string) {
 // its response was lost, so the observer must enter reconciliation instead of
 // reporting a confirmed failure and releasing the writer lease.
 func (a *ACPAgent) failRuntimeWaitersUncertain(reason string) {
+	a.failRuntimeWaitersUncertainWithCause(reason, nil)
+}
+
+func (a *ACPAgent) failRuntimeWaitersUncertainWithCause(reason string, cause error) {
 	a.interruptActiveTurns(reason)
-	a.failPendingRequests(reason)
+	a.pending.failAllWithCause(reason, cause)
 }
 
 func (a *ACPAgent) failPendingRequests(reason string) {

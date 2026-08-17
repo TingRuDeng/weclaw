@@ -64,6 +64,34 @@ func TestMergeViewPreservesMaskedSecrets(t *testing.T) {
 	}
 }
 
+func TestWebViewPreservesCodexMultiFrontend(t *testing.T) {
+	current := config.DefaultConfig()
+	current.Agents["codex"] = config.AgentConfig{
+		Type: "acp", Command: "codex", Args: []string{"app-server"},
+	}
+	var view configView
+	if err := json.Unmarshal([]byte(`{
+		"agents": {
+			"codex": {
+				"type": "acp",
+				"command": "codex",
+				"args": ["app-server"],
+				"codex_multi_frontend": true
+			}
+		}
+	}`), &view); err != nil {
+		t.Fatal(err)
+	}
+	merged := mergeView(current, view)
+	blob, err := json.Marshal(merged.Agents["codex"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(blob), `"codex_multi_frontend":true`) {
+		t.Fatalf("merged Codex config dropped multi-frontend intent: %s", blob)
+	}
+}
+
 func TestMergeViewOverwritesNewSecret(t *testing.T) {
 	current := &config.Config{APIToken: "old"}
 	view := redactConfig(current)

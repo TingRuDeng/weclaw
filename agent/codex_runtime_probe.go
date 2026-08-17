@@ -17,6 +17,8 @@ const (
 	// Each blocking shared-host activation phase gets the former thread-control
 	// RPC budget. The caller's shorter deadline still caps the complete handoff.
 	codexRuntimeHandoffActivationTimeout = 15 * time.Second
+	codexThreadTurnsPageSize             = 64
+	codexThreadItemsPageSize             = 32
 )
 
 // InspectCodexRuntime 每次重新探测 Desktop，并同步已持久化的用户控制意图。
@@ -398,33 +400,169 @@ func (a *ACPAgent) bindCodexAppServerThread(conversationID string, threadID stri
 }
 
 func (a *ACPAgent) readCodexAppServerThreadState(ctx context.Context, threadID string) (CodexThreadState, error) {
-	state, _, _, _, err := a.readCodexAppServerThreadSnapshotResult(ctx, threadID)
+	state, _, err := a.readCodexAppServerThreadStateResult(ctx, threadID)
 	return state, err
 }
 
 func (a *ACPAgent) readCodexAppServerThreadStateResult(ctx context.Context, threadID string) (CodexThreadState, bool, error) {
-	state, _, pendingFirstTurn, _, err := a.readCodexAppServerThreadSnapshotResult(ctx, threadID)
-	return state, pendingFirstTurn, err
+	thread, pendingFirstTurn, _, err := a.readCodexAppServerThreadMetadata(ctx, threadID)
+	if err != nil || pendingFirstTurn {
+		return codexThreadStateFromSnapshot(thread), pendingFirstTurn, err
+	}
+	turn, found, _, err := a.readCodexAppServerTargetTurn(ctx, threadID, "", false)
+	if err != nil {
+		return CodexThreadState{}, false, err
+	}
+	if found {
+		thread.Turns = []codexTurnSnapshot{turn}
+	}
+	return codexThreadStateFromSnapshot(thread), false, nil
 }
 
-// readCodexAppServerThreadSnapshotResult 同时保留 thread/read 的完整 items，
-// 供观察器在订阅增量事件前回放已存在的用户可见进度。
-func (a *ACPAgent) readCodexAppServerThreadSnapshotResult(ctx context.Context, threadID string) (CodexThreadState, codexThreadSnapshot, bool, uint64, error) {
+// readCodexAppServerThreadSnapshotResult 先读取轻量 thread 元数据，再只为目标
+// turn 分页加载 items，避免把整个 rollout 历史放进一条 ACP 响应。
+func (a *ACPAgent) readCodexAppServerThreadSnapshotResult(ctx context.Context, threadID string, targetTurnID string) (CodexThreadState, codexThreadSnapshot, bool, uint64, error) {
+	thread, pendingFirstTurn, sequence, err := a.readCodexAppServerThreadMetadata(ctx, threadID)
+	if err != nil || pendingFirstTurn {
+		return codexThreadStateFromSnapshot(thread), thread, pendingFirstTurn, sequence, err
+	}
+	turn, found, turnSequence, err := a.readCodexAppServerTargetTurn(ctx, threadID, targetTurnID, true)
+	if turnSequence > sequence {
+		sequence = turnSequence
+	}
+	if err != nil {
+		return CodexThreadState{}, codexThreadSnapshot{}, false, sequence, err
+	}
+	if found {
+		thread.Turns = []codexTurnSnapshot{turn}
+	}
+	state := codexThreadStateFromSnapshot(thread)
+	if strings.TrimSpace(targetTurnID) != "" && found {
+		state.Active = turn.Status == "inProgress"
+		state.WaitingOnApproval = state.Active && codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnApproval")
+		state.WaitingOnUserInput = state.Active && codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnUserInput")
+	}
+	return state, thread, false, sequence, nil
+}
+
+func (a *ACPAgent) readCodexAppServerThreadMetadata(ctx context.Context, threadID string) (codexThreadSnapshot, bool, uint64, error) {
 	threadID = strings.TrimSpace(threadID)
 	result, sequence, err := a.rpcWithSequence(ctx, "thread/read", map[string]interface{}{
-		"threadId": threadID, "includeTurns": true,
+		"threadId": threadID, "includeTurns": false,
 	})
 	if err != nil {
-		// thread/start 返回的新 thread 在收到首条用户消息前尚未 materialize。
-		// 此时没有 turn 是确定的空闲态，不能把协议限制升级为写入冲突。
 		if isCodexThreadPendingFirstTurn(err) {
-			return CodexThreadState{ThreadID: threadID}, codexThreadSnapshot{ID: threadID}, true, sequence, nil
+			return codexThreadSnapshot{ID: threadID}, true, sequence, nil
 		}
-		return CodexThreadState{}, codexThreadSnapshot{}, false, sequence, err
+		return codexThreadSnapshot{}, false, sequence, err
 	}
 	var response codexThreadReadResponse
 	if err := json.Unmarshal(result, &response); err != nil {
-		return CodexThreadState{}, codexThreadSnapshot{}, false, sequence, fmt.Errorf("parse thread/read result: %w", err)
+		return codexThreadSnapshot{}, false, sequence, fmt.Errorf("parse thread/read result: %w", err)
 	}
-	return codexThreadStateFromSnapshot(response.Thread), response.Thread, false, sequence, nil
+	if strings.TrimSpace(response.Thread.ID) == "" {
+		return codexThreadSnapshot{}, false, sequence, fmt.Errorf("thread/read returned empty thread id")
+	}
+	return response.Thread, false, sequence, nil
+}
+
+func (a *ACPAgent) readCodexAppServerTargetTurn(ctx context.Context, threadID string, targetTurnID string, loadItems bool) (codexTurnSnapshot, bool, uint64, error) {
+	threadID = strings.TrimSpace(threadID)
+	targetTurnID = strings.TrimSpace(targetTurnID)
+	cursor := ""
+	seenCursors := make(map[string]bool)
+	var sequence uint64
+	for {
+		params := map[string]interface{}{
+			"threadId": threadID, "limit": codexThreadTurnsPageSize,
+			"sortDirection": "desc", "itemsView": "notLoaded",
+		}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		result, pageSequence, err := a.rpcWithSequence(ctx, "thread/turns/list", params)
+		if pageSequence > sequence {
+			sequence = pageSequence
+		}
+		if err != nil {
+			if isCodexThreadPendingFirstTurn(err) {
+				return codexTurnSnapshot{}, false, sequence, nil
+			}
+			return codexTurnSnapshot{}, false, sequence, fmt.Errorf("list Codex thread turns: %w", err)
+		}
+		var page codexThreadTurnsListResponse
+		if err := json.Unmarshal(result, &page); err != nil {
+			return codexTurnSnapshot{}, false, sequence, fmt.Errorf("parse thread/turns/list result: %w", err)
+		}
+		for _, turn := range page.Data {
+			if targetTurnID == "" || strings.TrimSpace(turn.ID) == targetTurnID {
+				if loadItems {
+					items, itemsSequence, err := a.readCodexAppServerTurnItems(ctx, threadID, turn.ID)
+					if itemsSequence > sequence {
+						sequence = itemsSequence
+					}
+					if err != nil {
+						return codexTurnSnapshot{}, false, sequence, err
+					}
+					turn.Items = items
+				}
+				return turn, true, sequence, nil
+			}
+		}
+		nextCursor := strings.TrimSpace(page.NextCursor)
+		if targetTurnID == "" || nextCursor == "" {
+			break
+		}
+		if seenCursors[nextCursor] {
+			return codexTurnSnapshot{}, false, sequence, fmt.Errorf("thread/turns/list returned repeated cursor")
+		}
+		seenCursors[nextCursor] = true
+		cursor = nextCursor
+	}
+	if targetTurnID != "" {
+		return codexTurnSnapshot{}, false, sequence, fmt.Errorf("%w: target turn %s not found", ErrCodexControlChanged, targetTurnID)
+	}
+	return codexTurnSnapshot{}, false, sequence, nil
+}
+
+func (a *ACPAgent) readCodexAppServerTurnItems(ctx context.Context, threadID string, turnID string) ([]codexThreadItem, uint64, error) {
+	cursor := ""
+	seenCursors := make(map[string]bool)
+	items := make([]codexThreadItem, 0)
+	var sequence uint64
+	for {
+		params := map[string]interface{}{
+			"threadId": strings.TrimSpace(threadID), "turnId": strings.TrimSpace(turnID),
+			"limit": codexThreadItemsPageSize, "sortDirection": "asc",
+		}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		result, pageSequence, err := a.rpcWithSequence(ctx, "thread/items/list", params)
+		if pageSequence > sequence {
+			sequence = pageSequence
+		}
+		if err != nil {
+			return nil, sequence, fmt.Errorf("list Codex turn items: %w", err)
+		}
+		var page codexThreadItemsListResponse
+		if err := json.Unmarshal(result, &page); err != nil {
+			return nil, sequence, fmt.Errorf("parse thread/items/list result: %w", err)
+		}
+		for _, entry := range page.Data {
+			if strings.TrimSpace(entry.TurnID) != strings.TrimSpace(turnID) {
+				return nil, sequence, fmt.Errorf("thread/items/list returned item for different turn")
+			}
+			items = append(items, entry.Item)
+		}
+		nextCursor := strings.TrimSpace(page.NextCursor)
+		if nextCursor == "" {
+			return items, sequence, nil
+		}
+		if seenCursors[nextCursor] {
+			return nil, sequence, fmt.Errorf("thread/items/list returned repeated cursor")
+		}
+		seenCursors[nextCursor] = true
+		cursor = nextCursor
+	}
 }

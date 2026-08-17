@@ -111,7 +111,9 @@ func runForegroundStart(cfg *config.Config) error {
 		return fmt.Errorf("恢复协调重启事务失败: %w", err)
 	}
 	recoveryCancel()
-	startCodexAppDaemonReuseAgent(ctx, handler, cfg)
+	if err := startCodexAppDaemonReuseAgent(ctx, handler, cfg); err != nil {
+		return err
+	}
 	startDefaultAgent(ctx, handler, cfg)
 	registry, err := newStartRegistry(accounts, cfg, handler)
 	if err != nil {
@@ -129,12 +131,24 @@ func runForegroundStart(cfg *config.Config) error {
 	return runtime.runUntilShutdown(signals)
 }
 
-// startCodexAppDaemonReuseAgent 提前准备非默认 Codex Agent，使官方 daemon
-// 验证完成后尽快提交 App 的 launchd 复用环境。失败不阻断其它 Agent 和平台；
-// 之后的 /cx 请求仍会沿同一路径重试并返回真实错误。
-func startCodexAppDaemonReuseAgent(ctx context.Context, handler *messaging.Handler, cfg *config.Config) {
+type startAgentEnsurer interface {
+	EnsureAgentStarted(context.Context, string) (agent.Agent, error)
+}
+
+// startCodexAppDaemonReuseAgent 在严格共享模式下同步验证唯一 Host；兼容配置
+// 仍沿用后台预热，避免改变旧版启动可用性。
+func startCodexAppDaemonReuseAgent(ctx context.Context, handler startAgentEnsurer, cfg *config.Config) error {
+	if cfg != nil {
+		if agentCfg, ok := cfg.Agents["codex"]; ok && agentCfg.EffectiveCodexMultiFrontend() {
+			log.Printf("Preparing required Codex multi-frontend daemon...")
+			if _, err := handler.EnsureAgentStarted(ctx, "codex"); err != nil {
+				return fmt.Errorf("启动 Codex 多前端共享失败: %w", err)
+			}
+			return nil
+		}
+	}
 	if !shouldWarmCodexAppDaemonReuse(cfg) {
-		return
+		return nil
 	}
 	go func() {
 		log.Printf("Preparing Codex App daemon reuse in background...")
@@ -142,6 +156,7 @@ func startCodexAppDaemonReuseAgent(ctx context.Context, handler *messaging.Handl
 			log.Printf("Failed to prepare Codex App daemon reuse: %v", err)
 		}
 	}()
+	return nil
 }
 
 func shouldWarmCodexAppDaemonReuse(cfg *config.Config) bool {

@@ -136,6 +136,9 @@ func (a *ACPAgent) callWithSequence(ctx context.Context, method string, params i
 	case resp := <-ch:
 		if resp.Error != nil {
 			msg := formatRPCErrorMessage(resp.Error, a.stderrSnapshot())
+			if resp.Cause != nil {
+				return nil, resp.Sequence, fmt.Errorf("%w: %s", resp.Cause, msg)
+			}
 			return nil, resp.Sequence, fmt.Errorf("agent error: %s", msg)
 		}
 		return resp.Result, resp.Sequence, nil

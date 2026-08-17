@@ -92,6 +92,9 @@ func configuredStartPreflight() func(context.Context, *config.Config) error {
 
 // preflightDaemonChildConfig 只复核配置与命令路径，避免在获取运行锁前重复启动 ACP。
 func preflightDaemonChildConfig(_ context.Context, cfg *config.Config) error {
+	if err := preflightCodexMultiFrontend(cfg); err != nil {
+		return err
+	}
 	if err := cfg.PreflightClaudeACPAgents(config.ClaudeACPPreflightOptions{
 		LookPath: config.LookPath,
 		Probe:    func(string, config.AgentConfig) error { return nil },
@@ -143,6 +146,9 @@ func prepareStart(ctx context.Context, ops startPreparationOps) (preparedStart, 
 // preflightStartConfig 验证 Claude ACP adapter 可执行且具备会话列表与恢复能力。
 func preflightStartConfig(ctx context.Context, cfg *config.Config) error {
 	modified := config.DetectAndConfigure(cfg)
+	if err := preflightCodexMultiFrontend(cfg); err != nil {
+		return err
+	}
 	err := cfg.PreflightClaudeACPAgents(config.ClaudeACPPreflightOptions{
 		LookPath: config.LookPath,
 		Probe: func(name string, agentCfg config.AgentConfig) error {
@@ -153,6 +159,21 @@ func preflightStartConfig(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	return persistDetectedStartConfig(modified, cfg, config.Update)
+}
+
+func preflightCodexMultiFrontend(cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	agentCfg, ok := cfg.Agents["codex"]
+	if !ok || !agentCfg.EffectiveCodexMultiFrontend() {
+		return nil
+	}
+	result := checkCodexStandalone(cfg, doctorDeps{codexHome: defaultDoctorCodexHome})
+	if result.Status == doctorFail {
+		return fmt.Errorf("%s", result.Detail)
+	}
+	return nil
 }
 
 // persistDetectedStartConfig 确保后台子进程能重新加载同一份预检配置。

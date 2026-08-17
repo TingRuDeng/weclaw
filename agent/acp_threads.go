@@ -205,6 +205,7 @@ func (a *ACPAgent) resumeThreadWithProvider(ctx context.Context, conversationID 
 
 	params := map[string]interface{}{
 		"threadId":       threadID,
+		"excludeTurns":   true,
 		"approvalPolicy": a.approvalPolicyForContext(ctx),
 		"cwd":            a.cwdForConversation(conversationID),
 		"sandbox":        a.sandboxModeForCodex(),

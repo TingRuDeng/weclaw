@@ -471,6 +471,39 @@ func TestACPAgentCodexThreadControls(t *testing.T) {
 	}
 }
 
+func codexThreadSnapshotRPC(
+	t *testing.T,
+	threadResult json.RawMessage,
+	turnsResult json.RawMessage,
+	itemsByTurn map[string]json.RawMessage,
+) func(context.Context, string, interface{}) (json.RawMessage, error) {
+	t.Helper()
+	return func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		request := params.(map[string]interface{})
+		switch method {
+		case "thread/read":
+			if request["includeTurns"] != false {
+				t.Fatalf("thread/read params=%#v, want metadata-only read", request)
+			}
+			return threadResult, nil
+		case "thread/turns/list":
+			if request["itemsView"] != "notLoaded" || request["sortDirection"] != "desc" {
+				t.Fatalf("thread/turns/list params=%#v", request)
+			}
+			return turnsResult, nil
+		case "thread/items/list":
+			turnID, _ := request["turnId"].(string)
+			result, ok := itemsByTurn[turnID]
+			if !ok {
+				return nil, fmt.Errorf("unexpected items request for turn %q", turnID)
+			}
+			return result, nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method: %s", method)
+		}
+	}
+}
+
 func TestACPAgentReadsActiveCodexThreadState(t *testing.T) {
 	ctx := context.Background()
 	a := NewACPAgent(ACPAgentConfig{
@@ -478,25 +511,10 @@ func TestACPAgentReadsActiveCodexThreadState(t *testing.T) {
 		Args:    []string{"app-server", "--listen", "stdio://"},
 		Cwd:     t.TempDir(),
 	})
-	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected rpc method: %s", method)
-		}
-		p := params.(map[string]interface{})
-		if p["threadId"] != "thread-active" || p["includeTurns"] != true {
-			return nil, fmt.Errorf("thread/read params=%#v", p)
-		}
-		return json.RawMessage(`{
-			"thread": {
-				"id": "thread-active",
-				"status": {"type": "active", "activeFlags": ["waitingOnUserInput"]},
-				"turns": [
-					{"id": "turn-old", "status": "completed", "items": [{"id": "agent-old", "type": "agentMessage", "text": "旧回复"}]},
-					{"id": "turn-active", "status": "inProgress", "items": [{"id": "user-1", "type": "userMessage", "content": [{"type": "text", "text": "本地 App 发起的任务"}]}]}
-				]
-			}
-		}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-active","status":{"type":"active","activeFlags":["waitingOnUserInput"]}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-active","status":"inProgress","items":[]}],"nextCursor":null}`), nil,
+	)
 
 	state, err := a.ReadCodexThreadState(ctx, "conversation-1", "thread-active")
 	if err != nil {
@@ -508,21 +526,194 @@ func TestACPAgentReadsActiveCodexThreadState(t *testing.T) {
 	if !state.WaitingOnUserInput {
 		t.Fatalf("waiting flag=false, state=%#v", state)
 	}
-	if state.Preview != "本地 App 发起的任务" {
-		t.Fatalf("preview=%q", state.Preview)
+	if state.Preview != "" {
+		t.Fatalf("preview=%q, want empty metadata-only preview", state.Preview)
 	}
+}
+
+func TestReadCodexAppServerThreadStateUsesLightweightTurnPage(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	methods := make([]string, 0, 2)
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		request := params.(map[string]interface{})
+		switch method {
+		case "thread/read":
+			if request["threadId"] != "thread-active" || request["includeTurns"] != false {
+				t.Fatalf("thread/read params=%#v, want metadata-only read", request)
+			}
+			return json.RawMessage(`{"thread":{"id":"thread-active","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}`), nil
+		case "thread/turns/list":
+			if request["threadId"] != "thread-active" || request["itemsView"] != "notLoaded" ||
+				request["sortDirection"] != "desc" || request["limit"] == nil {
+				t.Fatalf("thread/turns/list params=%#v, want bounded metadata page", request)
+			}
+			return json.RawMessage(`{"data":[{"id":"turn-active","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	state, pending, err := a.readCodexAppServerThreadStateResult(context.Background(), "thread-active")
+	if err != nil || pending {
+		t.Fatalf("readCodexAppServerThreadStateResult() state=%#v pending=%t err=%v", state, pending, err)
+	}
+	if !state.Active || state.ActiveTurnID != "turn-active" || !state.WaitingOnApproval {
+		t.Fatalf("state=%#v, want active lightweight state", state)
+	}
+	if fmt.Sprint(methods) != "[thread/read thread/turns/list]" {
+		t.Fatalf("methods=%v", methods)
+	}
+}
+
+func TestACPAgentProgressSnapshotPaginatesTargetTurnItems(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	itemPages := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		request := params.(map[string]interface{})
+		switch method {
+		case "thread/read":
+			if request["includeTurns"] != false {
+				t.Fatalf("thread/read params=%#v, want metadata-only read", request)
+			}
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]}}}`), nil
+		case "thread/turns/list":
+			if request["itemsView"] != "notLoaded" || request["sortDirection"] != "desc" {
+				t.Fatalf("thread/turns/list params=%#v", request)
+			}
+			return json.RawMessage(`{"data":[{"id":"turn-1","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			itemPages++
+			if request["threadId"] != "thread-1" || request["turnId"] != "turn-1" ||
+				request["sortDirection"] != "asc" || request["limit"] == nil {
+				t.Fatalf("thread/items/list params=%#v", request)
+			}
+			if itemPages == 1 {
+				if _, ok := request["cursor"]; ok {
+					t.Fatalf("first item page must omit cursor: %#v", request)
+				}
+				return json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"第一条说明"}}],"nextCursor":"items-2"}`), nil
+			}
+			if request["cursor"] != "items-2" {
+				t.Fatalf("second item page cursor=%#v", request["cursor"])
+			}
+			return json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"command-1","type":"commandExecution","text":"hidden"}},{"turnId":"turn-1","item":{"id":"commentary-2","type":"agentMessage","phase":"commentary","text":"第二条说明"}}],"nextCursor":null}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	state, progress, err := a.ReadCodexThreadProgressSnapshot(context.Background(), "conversation-1", "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Active || state.ActiveTurnID != "turn-1" || itemPages != 2 {
+		t.Fatalf("state=%#v itemPages=%d", state, itemPages)
+	}
+	if len(progress) != 2 || progress[0].DisplayText() != "第一条说明" || progress[1].DisplayText() != "第二条说明" {
+		t.Fatalf("progress=%#v", progress)
+	}
+}
+
+func TestACPAgentTargetTurnPaginationRejectsRepeatedCursor(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"turn-other","status":"completed","items":[]}],"nextCursor":"repeated"}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	_, _, _, _, err := a.readCodexAppServerThreadSnapshotResult(context.Background(), "thread-1", "turn-target")
+	if err == nil || !strings.Contains(err.Error(), "repeated cursor") {
+		t.Fatalf("error=%v, want repeated cursor failure", err)
+	}
+}
+
+func TestACPAgentTargetTurnItemsRejectDifferentTurn(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-target","status":"inProgress","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{
+			"turn-target": json.RawMessage(`{"data":[{"turnId":"turn-other","item":{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"错误归属"}}],"nextCursor":null}`),
+		},
+	)
+
+	_, _, _, _, err := a.readCodexAppServerThreadSnapshotResult(context.Background(), "thread-1", "turn-target")
+	if err == nil || !strings.Contains(err.Error(), "different turn") {
+		t.Fatalf("error=%v, want different turn failure", err)
+	}
+}
+
+func TestACPAgentWatchFindsTargetTurnAcrossMetadataPages(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
+	turnPages := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		request := params.(map[string]interface{})
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]}}}`), nil
+		case "thread/turns/list":
+			turnPages++
+			if turnPages == 1 {
+				return json.RawMessage(`{"data":[{"id":"turn-new","status":"inProgress","items":[]}],"nextCursor":"turns-2"}`), nil
+			}
+			if request["cursor"] != "turns-2" {
+				t.Fatalf("second turn page cursor=%#v", request["cursor"])
+			}
+			return json.RawMessage(`{"data":[{"id":"turn-target","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			if request["turnId"] != "turn-target" {
+				t.Fatalf("thread/items/list target=%#v", request["turnId"])
+			}
+			return json.RawMessage(`{"data":[{"turnId":"turn-target","item":{"id":"history","type":"agentMessage","phase":"commentary","text":"目标任务进度"}}],"nextCursor":null}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	progress := make(chan ProgressEvent, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.WatchCodexThreadEventsForTurn(ctx, "conversation-1", "thread-1", "turn-target", func(event ProgressEvent) {
+			progress <- event
+		})
+		done <- err
+	}()
+	select {
+	case event := <-progress:
+		if event.DisplayText() != "目标任务进度" || turnPages != 2 {
+			t.Fatalf("event=%#v turnPages=%d", event, turnPages)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("target turn history was not replayed")
+	}
+	cancel()
+	<-done
 }
 
 func TestACPAgentReadsActiveTurnProgressSnapshotWithoutHiddenItems(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
 	})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"第一条说明"},{"id":"command-1","type":"commandExecution","text":"secret command"},{"id":"reasoning-1","type":"reasoning","text":"private reasoning"},{"id":"commentary-2","type":"agentMessage","phase":"commentary","text":"第二条说明"},{"id":"final-1","type":"agentMessage","phase":"final_answer","text":"最终回答"}]}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-1","status":"inProgress","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{"turn-1": json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"第一条说明"}},{"turnId":"turn-1","item":{"id":"command-1","type":"commandExecution","text":"secret command"}},{"turnId":"turn-1","item":{"id":"reasoning-1","type":"reasoning","text":"private reasoning"}},{"turnId":"turn-1","item":{"id":"commentary-2","type":"agentMessage","phase":"commentary","text":"第二条说明"}},{"turnId":"turn-1","item":{"id":"final-1","type":"agentMessage","phase":"final_answer","text":"最终回答"}}],"nextCursor":null}`)},
+	)
 	snapshotAgent, ok := any(a).(CodexThreadProgressSnapshotAgent)
 	if !ok {
 		t.Fatal("ACPAgent does not implement CodexThreadProgressSnapshotAgent")
@@ -597,6 +788,11 @@ func TestACPAgentWatchesAttachedCodexThread(t *testing.T) {
 		Args:    []string{"app-server", "--listen", "stdio://"},
 		Cwd:     t.TempDir(),
 	})
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-active","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-active","status":"inProgress","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{"turn-active": json.RawMessage(`{"data":[],"nextCursor":null}`)},
+	)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -625,12 +821,11 @@ func TestACPAgentWatchesAttachedCodexThread(t *testing.T) {
 
 func TestACPAgentAppServerWatchReplaysVisibleActiveCommentary(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"正在复核当前实现。"},{"id":"command-1","type":"commandExecution","text":"secret command output"},{"id":"reasoning-1","type":"reasoning","text":"private reasoning"},{"id":"final-1","type":"agentMessage","phase":"final_answer","text":"最终结果"}]}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-1","status":"inProgress","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{"turn-1": json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"commentary-1","type":"agentMessage","phase":"commentary","text":"正在复核当前实现。"}},{"turnId":"turn-1","item":{"id":"command-1","type":"commandExecution","text":"secret command output"}},{"turnId":"turn-1","item":{"id":"reasoning-1","type":"reasoning","text":"private reasoning"}},{"turnId":"turn-1","item":{"id":"final-1","type":"agentMessage","phase":"final_answer","text":"最终结果"}}],"nextCursor":null}`)},
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	progress := make(chan ProgressEvent, 4)
 	done := make(chan error, 1)
@@ -661,21 +856,25 @@ func TestACPAgentAppServerReplayPrecedesQueuedLiveProgress(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
 	readStarted := make(chan struct{})
 	releaseRead := make(chan struct{})
-	a.rpcCall = func(ctx context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
+	baseRPC := codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-1","status":"inProgress","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{"turn-1": json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"history","type":"agentMessage","phase":"commentary","text":"历史进度"}}],"nextCursor":null}`)},
+	)
+	a.rpcCall = func(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+		if method == "thread/read" {
+			select {
+			case <-readStarted:
+			default:
+				close(readStarted)
+			}
+			select {
+			case <-releaseRead:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
-		select {
-		case <-readStarted:
-		default:
-			close(readStarted)
-		}
-		select {
-		case <-releaseRead:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"history","type":"agentMessage","phase":"commentary","text":"历史进度"}]}]}}`), nil
+		return baseRPC(ctx, method, params)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	progress := make(chan string, 4)
@@ -708,12 +907,11 @@ func TestACPAgentAppServerReplayPrecedesQueuedLiveProgress(t *testing.T) {
 
 func TestACPAgentObserverReadyAfterExactTurnSnapshotBeforeReplay(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"history","type":"agentMessage","phase":"commentary","text":"历史进度"}]}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-1","status":"inProgress","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{"turn-1": json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"history","type":"agentMessage","phase":"commentary","text":"历史进度"}}],"nextCursor":null}`)},
+	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	order := make(chan string, 3)
@@ -751,12 +949,10 @@ func TestACPAgentObserverReadyAfterExactTurnSnapshotBeforeReplay(t *testing.T) {
 
 func TestACPAgentObserverReadyNotCalledForTurnRollover(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-2","status":"inProgress"}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-2","status":"inProgress","items":[]}],"nextCursor":null}`), nil,
+	)
 	called := false
 	_, err := a.WatchCodexThreadEventsForTurnReady(
 		context.Background(), "conversation-1", "thread-1", "turn-1",
@@ -769,12 +965,10 @@ func TestACPAgentObserverReadyNotCalledForTurnRollover(t *testing.T) {
 
 func TestACPAgentExpectedTurnRejectsRolloverBeforeObserverAttach(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-2","status":"inProgress"}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-2","status":"inProgress","items":[]}],"nextCursor":null}`), nil,
+	)
 	_, err := a.WatchCodexThreadEventsForTurn(context.Background(), "conversation-1", "thread-1", "turn-1", nil)
 	if !errors.Is(err, ErrCodexControlChanged) {
 		t.Fatalf("error=%v, want control changed", err)
@@ -783,12 +977,10 @@ func TestACPAgentExpectedTurnRejectsRolloverBeforeObserverAttach(t *testing.T) {
 
 func TestACPAgentExpectedTurnMismatchKeepsClaimedInteractionPending(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-2","status":"inProgress"}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-2","status":"inProgress","items":[]}],"nextCursor":null}`), nil,
+	)
 	event := &codexTurnEvent{
 		Kind: "approval_request", TurnID: "turn-1",
 		Approval: &codexApprovalRequest{Request: ApprovalRequest{RequestID: "approval-1"}},
@@ -807,12 +999,11 @@ func TestACPAgentExpectedTurnMismatchKeepsClaimedInteractionPending(t *testing.T
 
 func TestACPAgentWatchReturnsCompletedStateAfterRegistration(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}})
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method != "thread/read" {
-			return nil, fmt.Errorf("unexpected method %s", method)
-		}
-		return json.RawMessage(`{"thread":{"id":"thread-finished","status":{"type":"idle"},"turns":[{"id":"turn-1","status":"completed","items":[{"id":"msg-1","type":"agentMessage","text":"任务已经完成"}]}]}}`), nil
-	}
+	a.rpcCall = codexThreadSnapshotRPC(t,
+		json.RawMessage(`{"thread":{"id":"thread-finished","status":{"type":"idle"}}}`),
+		json.RawMessage(`{"data":[{"id":"turn-1","status":"completed","items":[]}],"nextCursor":null}`),
+		map[string]json.RawMessage{"turn-1": json.RawMessage(`{"data":[{"turnId":"turn-1","item":{"id":"msg-1","type":"agentMessage","text":"任务已经完成"}}],"nextCursor":null}`)},
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
@@ -835,7 +1026,7 @@ func TestReadCodexAppServerThreadSnapshotReturnsWireWatermark(t *testing.T) {
 	}
 	done := make(chan snapshotResult, 1)
 	go func() {
-		state, _, _, sequence, err := a.readCodexAppServerThreadSnapshotResult(context.Background(), "thread-1")
+		state, _, _, sequence, err := a.readCodexAppServerThreadSnapshotResult(context.Background(), "thread-1", "")
 		done <- snapshotResult{state: state, sequence: sequence, err: err}
 	}()
 	deadline := time.Now().Add(time.Second)
@@ -845,12 +1036,26 @@ func TestReadCodexAppServerThreadSnapshotReturnsWireWatermark(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	a.handleACPWireLine(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[{"id":"turn-1","status":"inProgress"}]}}}`)
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thread-1","status":{"type":"active"}}}}`)
+	for !a.pending.contains(2) {
+		if time.Now().After(deadline) {
+			t.Fatal("thread/turns/list request was not registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":2,"result":{"data":[{"id":"turn-1","status":"inProgress","items":[]}],"nextCursor":null}}`)
+	for !a.pending.contains(3) {
+		if time.Now().After(deadline) {
+			t.Fatal("thread/items/list request was not registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":3,"result":{"data":[],"nextCursor":null}}`)
 	result := <-done
 	if result.err != nil {
 		t.Fatal(result.err)
 	}
-	if result.sequence != 1 || !result.state.Active || result.state.ActiveTurnID != "turn-1" {
-		t.Fatalf("snapshot result=%#v, want active turn with response watermark 1", result)
+	if result.sequence != 3 || !result.state.Active || result.state.ActiveTurnID != "turn-1" {
+		t.Fatalf("snapshot result=%#v, want active turn with response watermark 3", result)
 	}
 }

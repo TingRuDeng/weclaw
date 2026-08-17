@@ -551,7 +551,9 @@ func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *test
 			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
 		case "thread/read":
 			readDeadline = deadline
-			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[]}}`), nil
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
 		default:
 			t.Fatalf("unexpected rpc method %s", method)
 			return nil, nil
@@ -676,7 +678,9 @@ func codexHandoffRPCFake(t *testing.T, threadID string, turnID string) func(cont
 		case "thread/resume":
 			return json.RawMessage(`{"thread":{"id":"` + threadID + `"}}`), nil
 		case "thread/read":
-			return json.RawMessage(`{"thread":{"id":"` + threadID + `","status":{"type":"idle"},"turns":[{"id":"` + turnID + `","status":"completed"}]}}`), nil
+			return json.RawMessage(`{"thread":{"id":"` + threadID + `","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"` + turnID + `","status":"completed","items":[]}],"nextCursor":null}`), nil
 		default:
 			t.Fatalf("unexpected rpc method %s", method)
 			return nil, nil

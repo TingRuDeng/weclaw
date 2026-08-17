@@ -23,6 +23,7 @@ type rpcResponse struct {
 	Error    *rpcError       `json:"error,omitempty"`
 	Params   json.RawMessage `json:"params,omitempty"`
 	Sequence uint64          `json:"-"`
+	Cause    error           `json:"-"`
 }
 
 type rpcError struct {

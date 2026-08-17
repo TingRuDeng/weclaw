@@ -97,6 +97,10 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 	for _, event := range codexTurnInteractions(initialEvents) {
 		a.rememberPendingCodexInteraction(opts.threadID, event)
 	}
+	if err != nil {
+		a.abandonCodexInteractions(opts.threadID, initialEvents)
+		return "", err
+	}
 	if err == nil && strings.TrimSpace(opts.targetTurnID) != "" {
 		if targetState, ok := a.attachedCodexTargetTurnState(opts); ok {
 			state = targetState
@@ -177,7 +181,7 @@ func (a *ACPAgent) attachedCodexWatchSnapshot(
 		state, batch, err := a.desktopRuntime.activeWatchSnapshot(opts.threadID)
 		return state, batch.Events, 0, batch.Epoch, batch.Revision, err
 	}
-	state, snapshot, _, sequence, err := a.readCodexAppServerThreadSnapshotResult(ctx, opts.threadID)
+	state, snapshot, _, sequence, err := a.readCodexAppServerThreadSnapshotResult(ctx, opts.threadID, opts.targetTurnID)
 	if err != nil || !state.Active {
 		return state, nil, sequence, 0, 0, err
 	}
