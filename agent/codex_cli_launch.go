@@ -67,6 +67,9 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	if a == nil || a.protocol != protocolCodexAppServer {
 		return CodexCLILaunch{}, fmt.Errorf("受控 Codex CLI 需要原生 app-server 配置")
 	}
+	if err := a.validateCodexLiveTestPathIsolation(); err != nil {
+		return CodexCLILaunch{}, err
+	}
 	if err := validateCodexCLIFrontendArgs(codexCLIFrontendPrefixArgs(a.args)); err != nil {
 		return CodexCLILaunch{}, fmt.Errorf("Codex app-server 配置不能用于受控 CLI: %w", err)
 	}

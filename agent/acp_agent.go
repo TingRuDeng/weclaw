@@ -31,6 +31,9 @@ type ACPAgent struct {
 	env              map[string]string
 	runAs            runAsUserSpec
 	protocol         string // "legacy_acp" or "codex_app_server"
+	// allowCodexLiveTestPaths 只能由包内真实协议门禁构造器设置，不能由
+	// 用户配置或环境变量开启。
+	allowCodexLiveTestPaths bool
 
 	mu sync.Mutex
 	// writeMu serializes outbound ACP frames without coupling blocking I/O to

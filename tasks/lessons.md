@@ -922,3 +922,11 @@
 - 反例：对所有会话固定调用 `thread/resume` 和 `thread/read(includeTurns=true)`；小会话正常，超大会话超过 Scanner 64 MiB 后 reader 断开，所有等待中的 RPC 只得到通用运行时退出错误，飞书最终仅显示“绑定失败”。
 - 正确做法：`thread/resume(excludeTurns=true)` 后使用 `thread/read(includeTurns=false)`，再通过 `thread/turns/list(itemsView=notLoaded)` 分页定位目标 turn，并以 `thread/items/list(turnId=...)` 分页回放；重复 cursor、错误 turn item 和目标 turn 消失都失败关闭。Scanner 的 `token too long` 必须映射为可识别哨兵错误，供消息层给出明确处理建议。
 - 来源：2026-08-17 超大 Codex 会话真机绑定失败及本机 Codex app-server schema 复核。
+
+## 2026-08-17 Codex 真实协议门禁不得复用日常安装状态
+
+- 触发条件：真实 official daemon 协议测试从 prepared `CODEX_HOME` 启动 standalone，并可能派生独立 updater 或 `codex-code-mode-host`。
+- 规则：prepared home 只能作为未启动的完整 standalone 包来源；测试必须在系统临时目录复制完整 package，并隔离 `HOME`、`CODEX_HOME`、`CODEX_SQLITE_HOME`、XDG 目录和 PATH。测试前后都要核对日常 PATH 入口和 `~/.local/bin/codex`，结束时分别证明 app-server、updater 与 Code Mode host 已退出。
+- 反例：只硬链接单个 `codex` 到临时 `CODEX_HOME`，继续继承真实 `HOME`/PATH，并只等待主 daemon 停止；官方 updater 会把临时包写入用户全局入口，随后以 `PPID=1` 留在后台，Codex App 可能误用这套 runtime 并失去终端能力。
+- 正确做法：拒绝含 daemon/control 状态、日常入口引用或残留进程的 prepared home；只复制 manifest 验证通过且软链接不越界的完整 release 树。清理只能对 PID 记录、UID、启动时间、独立 PGID 和精确 standalone 入口全部匹配的测试 updater 发送 `SIGTERM`，入口只接受 native 或验证通过的 Node wrapper 形态；任何不确定结果保留 runtime 并失败关闭，不恢复入口、不按名称结束 App 或未知进程。生产服务启动或 `weclaw codex cli` 若看到 `weclaw-codex-live*` 命令、`PATH` 或 `CODEX_HOME`，也必须在副作用前拒绝。
+- 来源：2026-08-17 真实协议门禁遗留 `/private/tmp/weclaw-codex-live.*` updater 并把 `~/.local/bin/codex` 指向临时包，用户结束全部 Codex 进程后 Codex App 终端能力才恢复。

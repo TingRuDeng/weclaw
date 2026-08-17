@@ -33,9 +33,8 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 
 	preparedHome := requireIsolatedCodexDaemonHome(t)
 	runtimeHome := prepareCodexDaemonLiveRuntimeHome(t, preparedHome)
-	codexHome := runtimeHome.path
+	codexHome := runtimeHome.codexHome
 	workspace := t.TempDir()
-	sqliteHome := t.TempDir()
 	const (
 		approvalCommand = "mkdir LIVE_GATE_APPROVAL_7F3A"
 		approvalCallID  = "weclaw-live-approval"
@@ -47,10 +46,10 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 	installCodexDaemonLiveModelConfig(t, codexHome, modelServer.URL())
 	managedBinary := codexDaemonManagedBinaryPath(codexHome)
 	clientA := newCodexDaemonLiveClient(
-		managedBinary, codexHome, sqliteHome, workspace, filepath.Join(workspace, "client-a.json"),
+		managedBinary, runtimeHome, workspace, filepath.Join(workspace, "client-a.json"),
 	)
 	clientB := newCodexDaemonLiveClient(
-		managedBinary, codexHome, sqliteHome, workspace, filepath.Join(workspace, "client-b.json"),
+		managedBinary, runtimeHome, workspace, filepath.Join(workspace, "client-b.json"),
 	)
 	socketPath := codexDaemonSocketPath(codexHome)
 
@@ -59,28 +58,41 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 	t.Cleanup(func() {
 		clientB.Stop()
 		clientA.Stop()
-		if !daemonOwned {
-			return
-		}
-		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		lifecycleLock, err := clientA.acquireCodexHostStartupLock(stopCtx, socketPath)
+		err := runCodexDaemonLiveCleanupSteps(codexDaemonLiveCleanupSteps{
+			stopDaemon: func() error {
+				if !daemonOwned {
+					return fmt.Errorf("isolated official daemon ownership was not recorded")
+				}
+				stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				lifecycleLock, err := clientA.acquireCodexHostStartupLock(stopCtx, socketPath)
+				if err != nil {
+					return fmt.Errorf("lock isolated official daemon cleanup: %w", err)
+				}
+				defer releaseCodexHostStartupLock(lifecycleLock)
+				currentMetadata, err := clientA.readCodexHostMetadata(socketPath)
+				if err != nil {
+					return fmt.Errorf("inspect isolated official daemon before cleanup: %w", err)
+				}
+				if !sameCodexHostGeneration(currentMetadata, ownedMetadata) {
+					return fmt.Errorf("isolated official daemon generation changed; preserving current Host")
+				}
+				if err := clientA.stopManagedCodexHostLocked(stopCtx, socketPath); err != nil {
+					return fmt.Errorf("stop isolated official daemon: %w", err)
+				}
+				return nil
+			},
+			stopUpdater: func() error {
+				updaterCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := stopCodexDaemonLiveUpdater(updaterCtx, clientA, runtimeHome); err != nil {
+					return fmt.Errorf("stop verified isolated official daemon updater: %w", err)
+				}
+				return nil
+			},
+		})
 		if err != nil {
-			t.Errorf("lock isolated official daemon cleanup: %v", err)
-			return
-		}
-		defer releaseCodexHostStartupLock(lifecycleLock)
-		currentMetadata, err := clientA.readCodexHostMetadata(socketPath)
-		if err != nil {
-			t.Errorf("inspect isolated official daemon before cleanup: %v", err)
-			return
-		}
-		if !sameCodexHostGeneration(currentMetadata, ownedMetadata) {
-			t.Errorf("isolated official daemon generation changed; preserving current Host")
-			return
-		}
-		if err := clientA.stopManagedCodexHostLocked(stopCtx, socketPath); err != nil {
-			t.Errorf("stop isolated official daemon: %v", err)
+			t.Errorf("clean up isolated official daemon runtime: %v", err)
 			return
 		}
 		runtimeHome.cleanupSafe = true
@@ -436,69 +448,70 @@ stream_max_retries = 0
 }
 
 type codexDaemonLiveRuntimeHome struct {
-	path        string
-	cleanupSafe bool
+	path             string
+	userHome         string
+	codexHome        string
+	sqliteHome       string
+	dailyEntrypoints []codexDaemonLiveEntrypointSnapshot
+	cleanupSafe      bool
 }
 
 func prepareCodexDaemonLiveRuntimeHome(t *testing.T, preparedHome string) *codexDaemonLiveRuntimeHome {
 	t.Helper()
-	home, err := os.MkdirTemp("/private/tmp", "weclaw-codex-live-runtime-")
+	dailyEntrypoints, err := snapshotCodexDaemonLiveEntrypoints()
 	if err != nil {
-		t.Fatalf("create isolated Codex runtime home: %v", err)
+		t.Fatalf("snapshot daily Codex commands before live gate: %v", err)
 	}
-	runtime := &codexDaemonLiveRuntimeHome{path: home, cleanupSafe: true}
+	home, err := createCodexDaemonLiveRuntimeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &codexDaemonLiveRuntimeHome{
+		path:             home,
+		userHome:         filepath.Join(home, "user-home"),
+		codexHome:        filepath.Join(home, "codex-home"),
+		sqliteHome:       filepath.Join(home, "sqlite-home"),
+		dailyEntrypoints: dailyEntrypoints,
+		cleanupSafe:      true,
+	}
 	t.Cleanup(func() {
+		var cleanupErrors []error
 		if !runtime.cleanupSafe {
-			t.Errorf("preserving isolated Codex runtime home because daemon stop was not confirmed: %s", runtime.path)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("daemon stop was not confirmed"))
+		}
+		if err := verifyCodexDaemonLiveCleanup(runtime); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
+		if err := errors.Join(cleanupErrors...); err != nil {
+			t.Errorf("preserving isolated Codex runtime home because cleanup isolation was not proven: %s: %v", runtime.path, err)
 			return
 		}
 		if err := os.RemoveAll(runtime.path); err != nil {
 			t.Errorf("remove isolated Codex runtime home: %v", err)
 		}
 	})
-	destinationDir := filepath.Join(runtime.path, "packages", "standalone", "current")
-	if err := os.MkdirAll(destinationDir, 0o700); err != nil {
-		t.Fatalf("create isolated standalone directory: %v", err)
+	for _, directory := range []string{runtime.userHome, runtime.codexHome, runtime.sqliteHome} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatalf("create isolated Codex directory %s: %v", directory, err)
+		}
 	}
-	source := codexDaemonManagedBinaryPath(preparedHome)
-	destination := codexDaemonManagedBinaryPath(runtime.path)
-	if err := os.Link(source, destination); err == nil {
-		return runtime
+	if err := copyCodexDaemonLiveStandalonePackage(preparedHome, runtime.codexHome); err != nil {
+		t.Fatalf("copy isolated standalone package: %v", err)
 	}
-	if err := copyCodexDaemonLiveBinary(source, destination); err != nil {
-		t.Fatalf("copy isolated standalone binary: %v", err)
+	aliasDir := filepath.Join(runtime.userHome, ".local", "bin")
+	if err := os.MkdirAll(aliasDir, 0o700); err != nil {
+		t.Fatalf("create isolated Codex PATH alias directory: %v", err)
+	}
+	aliasPath := filepath.Join(aliasDir, "codex")
+	managedBinary := filepath.Join(runtime.codexHome, "packages", "standalone", "current", "bin", "codex")
+	relativeTarget, err := filepath.Rel(aliasDir, managedBinary)
+	if err != nil || filepath.IsAbs(relativeTarget) || !codexPathWithinRoot(runtime.path, managedBinary) {
+		t.Fatalf("resolve isolated Codex PATH alias: target=%s err=%v", managedBinary, err)
+	}
+	if err := os.Symlink(relativeTarget, aliasPath); err != nil {
+		t.Fatalf("create isolated Codex PATH alias: %v", err)
 	}
 	return runtime
-}
-
-func copyCodexDaemonLiveBinary(source string, destination string) error {
-	input, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o755)
-	if err != nil {
-		return err
-	}
-	failed := true
-	defer func() {
-		_ = output.Close()
-		if failed {
-			_ = os.Remove(destination)
-		}
-	}()
-	if _, err := io.Copy(output, input); err != nil {
-		return err
-	}
-	if err := output.Sync(); err != nil {
-		return err
-	}
-	if err := output.Close(); err != nil {
-		return err
-	}
-	failed = false
-	return nil
 }
 
 func validateCodexDaemonLiveApproval(event *codexTurnEvent, command string, workspace string) error {
@@ -560,16 +573,19 @@ func requireIsolatedCodexDaemonHome(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("resolve current Codex home: %v", err)
 	}
-	if sameCodexDaemonLivePath(codexHome, currentHome) {
-		t.Fatalf("%s must not use the current daily Codex home %s", testCodexDaemonHomeEnv, currentHome)
+	dailyEntrypoints, err := snapshotCodexDaemonLiveEntrypoints()
+	if err != nil {
+		t.Fatalf("inspect daily Codex commands before live gate: %v", err)
 	}
-	managedBinary := codexDaemonManagedBinaryPath(codexHome)
-	if info, err := os.Stat(managedBinary); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		t.Fatalf("isolated Codex home has no executable standalone binary at %s: %v", managedBinary, err)
+	processCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	processes, err := snapshotCodexDaemonLiveProcesses(processCtx)
+	if err != nil {
+		t.Fatalf("inspect prepared Codex home processes: %v", err)
 	}
-	for _, path := range []string{codexDaemonSocketPath(codexHome), codexDaemonPIDPath(codexHome)} {
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("isolated Codex daemon state must be absent before the test: path=%s err=%v", path, err)
+	for _, dailyEntrypoint := range dailyEntrypoints {
+		if err := validateCodexDaemonLivePreparedHome(codexHome, currentHome, dailyEntrypoint, processes); err != nil {
+			t.Fatalf("%s is not a clean isolated Codex home: %v", testCodexDaemonHomeEnv, err)
 		}
 	}
 	return codexHome
@@ -586,24 +602,24 @@ func sameCodexDaemonLivePath(first string, second string) bool {
 
 func newCodexDaemonLiveClient(
 	command string,
-	codexHome string,
-	sqliteHome string,
+	runtime *codexDaemonLiveRuntimeHome,
 	workspace string,
 	stateFile string,
 ) *ACPAgent {
-	return NewACPAgent(ACPAgentConfig{
+	packageRoot := filepath.Join(runtime.codexHome, "packages", "standalone", "current")
+	return newACPAgent(ACPAgentConfig{
 		ConfiguredName:     "codex-live-protocol",
 		Command:            command,
 		Args:               []string{"app-server"},
 		Cwd:                workspace,
-		Env:                map[string]string{"CODEX_HOME": codexHome, "CODEX_SQLITE_HOME": sqliteHome},
+		Env:                codexDaemonLiveEnvironment(runtime.userHome, runtime.codexHome, runtime.sqliteHome, packageRoot),
 		StateFile:          stateFile,
 		CodexHostMode:      codexHostModeDaemon,
 		CodexAutoUpdate:    "off",
 		ApprovalPolicy:     "untrusted",
 		SandboxMode:        "read-only",
 		CodexDesktopBridge: false,
-	})
+	}, acpAgentOptions{allowCodexLiveTestPaths: true})
 }
 
 func startCodexDaemonLiveThread(t *testing.T, ctx context.Context, client *ACPAgent, workspace string) string {

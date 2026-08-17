@@ -92,7 +92,7 @@ WECLAW_TEST_CODEX_HOME=/path/to/isolated-codex-home \
 go test ./agent -run '^TestCodexOfficialDaemonTwoClientProtocol$' -count=1 -timeout 300s -v
 ```
 
-该门禁会启动隔离的 official daemon 并校验双客户端事件回放、跨连接 `turn/steer`、交互解决与唯一终态。隔离目录必须预装 `packages/standalone/current/codex`，不得指向日常 `CODEX_HOME`，测试前也不得残留 daemon socket 或 PID 文件。
+该门禁会启动隔离的 official daemon 并校验双客户端事件回放、跨连接 `turn/steer`、交互解决与唯一终态。`WECLAW_TEST_CODEX_HOME` 必须是独立的真实目录，不能是日常 `CODEX_HOME` 或带有 `app-server-daemon`、`app-server-control`、PID/锁文件的已启动目录；测试前也不能有属于该目录的 app-server、updater 或 `codex-code-mode-host` 进程。门禁会把 `packages/standalone/current` 指向的完整 release 包（入口、Code Mode host、资源、`rg` 和 manifest）复制到系统临时目录下的独立 runtime，并隔离 `HOME`、`CODEX_HOME`、`CODEX_SQLITE_HOME` 和 `PATH`，不会改写日常 `codex` 入口。结束时必须再次证明这些进程已退出且日常入口未变化；无法证明时保留 runtime 现场并失败关闭，不按名称结束未知进程。正常服务启动和 `weclaw codex cli` 都会在 Host/App 副作用前拒绝用户配置中的 `weclaw-codex-live*` 路径。
 
 release-side-effect:
 

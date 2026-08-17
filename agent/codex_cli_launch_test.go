@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -9,6 +10,51 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestPrepareCodexCLILaunchRejectsCodexLiveTestPathBeforeSideEffects(t *testing.T) {
+	runtimeRoot, err := createCodexDaemonLiveRuntimeRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeRoot) })
+	codexHome := filepath.Join(runtimeRoot, "codex-home")
+	managedCodex := codexDaemonManagedBinaryPath(codexHome)
+	if err := os.MkdirAll(filepath.Dir(managedCodex), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managedCodex, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, Cwd: t.TempDir(),
+		Env: map[string]string{"CODEX_HOME": codexHome}, CodexHostMode: "daemon",
+	})
+	var preflightCalled bool
+	a.codexHostConflictPreflightCall = func(context.Context, int) error {
+		preflightCalled = true
+		return nil
+	}
+	var lifecycleCalled bool
+	a.codexDaemonLifecycleCall = func(context.Context, string) (codexDaemonLifecycleOutput, error) {
+		lifecycleCalled = true
+		return codexDaemonLifecycleOutput{
+			Status: "started", Backend: "pid", PID: 123,
+			ManagedCodexPath: managedCodex, SocketPath: codexDaemonSocketPath(codexHome),
+		}, nil
+	}
+
+	_, err = a.PrepareCodexCLILaunch(context.Background(), CodexCLILaunchOptions{AllowHostStart: true})
+	if !errors.Is(err, errCodexLiveTestPathLeak) {
+		t.Fatalf("PrepareCodexCLILaunch() error=%v, want live-test path rejection", err)
+	}
+	if preflightCalled || lifecycleCalled {
+		t.Fatalf("live-test path reached Host side effects: preflight=%v lifecycle=%v", preflightCalled, lifecycleCalled)
+	}
+	controlDir := filepath.Dir(codexDaemonSocketPath(codexHome))
+	if _, statErr := os.Lstat(controlDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("live-test path created control state before rejection: path=%s err=%v", controlDir, statErr)
+	}
+}
 
 func TestPrepareCodexCLILaunchStartsOfficialDaemonAndPinsRemote(t *testing.T) {
 	home, err := os.MkdirTemp("/tmp", "wc-codex-")

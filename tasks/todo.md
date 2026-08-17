@@ -1,5 +1,50 @@
 # 当前任务记录
 
+## 2026-08-17 Codex standalone 隔离与 Code Mode 冲突防护
+
+### 目标
+
+修复真实协议门禁使用临时 standalone 时可能遗留官方 updater、改写用户全局 Codex 命令入口并干扰 Codex App Code Mode/终端能力的问题；生产启动遇到临时测试路径时失败关闭，不自动结束未知 Codex 进程。
+
+### 范围与验收标准
+
+- [x] 真实协议门禁只把 prepared home 当作干净的 standalone 来源，拒绝已 bootstrap、存在 daemon/updater 状态或污染用户命令入口的来源。
+- [x] 运行时隔离副本包含完整 standalone 包，并隔离 `HOME`、`CODEX_HOME`、`CODEX_SQLITE_HOME` 和 PATH alias 写入范围。
+- [x] 门禁结束后分别确认 app-server、updater 与 `codex-code-mode-host` 无残留，并确认测试前后的用户 Codex 命令入口未变化；无法证明时保留现场并明确失败。
+- [x] 生产服务启动或受控 CLI 的 Codex 配置、PATH、解析后命令指向 `weclaw-codex-live*` 临时目录时拒绝继续，错误可操作且不自动结束进程。
+- [x] 保留现有 Host identity、generation 和多 Host 只读预检边界，不把批量结束 Codex 进程作为恢复逻辑。
+- [x] 更新受影响的维护者文档与长期经验，明确真实协议测试目录不得作为日常 Codex 安装入口。
+
+### 实施步骤
+
+- [x] 先补失败测试，固定污染 prepared home、完整包复制、隔离环境和生产临时路径拒绝行为。
+- [x] 实现 prepared home 预检、完整 standalone 隔离副本和测试前后不变量检查。
+- [x] 在生产服务启动和 `PrepareCodexCLILaunch` 边界拒绝临时 live-test Codex 命令路径，并保留现有未知 Host 失败关闭语义。
+- [x] 将 daemon 与 updater 清理拆成独立步骤；daemon 所有权或停止失败时仍尝试可精确验证的 updater，并聚合两路错误。
+- [x] 更新文档与经验，完成定向、Race、全仓和静态验证。
+
+### 验证方式
+
+```bash
+go test ./agent ./cmd -count=1 -timeout 240s
+go test -race ./agent ./cmd -count=1 -timeout 420s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### Review
+
+- 已完成生产服务启动和受控 CLI 的临时路径拒绝、prepared home 清洁预检、完整 standalone 字节副本、独立 `HOME`/PATH 环境和主 daemon/updater/Code Mode host 清理证明；清理无法证明时保留 runtime，不自动结束未知进程。
+- live runtime 使用 canonical `/tmp`，兼容 macOS 与 Linux；日常 PATH 入口和 `~/.local/bin/codex` 只做前后快照比较，不会被测试覆盖或恢复。目录组件以 `weclaw-codex-live` 为保留前缀，覆盖现有及未来后缀。
+- 清理步骤对 daemon 和 updater 独立执行；updater 仅接受 PID 记录、UID、独立 PGID、启动时间和精确 native/Node wrapper argv 全部匹配的进程。
+- 验证通过：`go test ./agent ./cmd -count=1 -timeout 240s`、对应 Race、`go test ./... -count=1 -timeout 300s`、`go vet ./...`、`go mod tidy -diff`、固定版本 Staticcheck、文档校验、`git diff --check` 和 Linux `amd64` Agent 测试包编译。
+- `govulncheck@v1.6.0` 固定版本扫描已通过：从本机 module cache 构建同版本扫描器后输出 `No vulnerabilities found`（退出码 0）。发布脚本的 `go run ...@v1.6.0` 形式曾因 `proxy.golang.org` 下载超时，正式 workflow 仍需复核其原始下载路径。
+- 未运行真实 official daemon live protocol gate：当前用户的 prepared home/`~/.local/bin/codex` 仍指向旧临时 runtime，继续运行会触碰真实 Codex 安装边界；因此没有修改入口、删除目录、停止进程或重启服务。
+
 ## 2026-08-17 Codex 多前端共享显式开关
 
 ### 目标

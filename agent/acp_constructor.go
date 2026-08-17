@@ -20,10 +20,11 @@ func detectACPProtocol(command string, args []string) string {
 }
 
 type acpAgentOptions struct {
-	desktopProbe  codexDesktopOwnerProbe
-	desktopBridge bool
-	protocol      string
-	stateFile     string
+	desktopProbe            codexDesktopOwnerProbe
+	desktopBridge           bool
+	allowCodexLiveTestPaths bool
+	protocol                string
+	stateFile               string
 }
 
 // NewACPAgent creates a new ACP agent.
@@ -79,6 +80,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		env:                        cfg.Env,
 		runAs:                      runAsUserSpec{User: cfg.RunAsUser, PreserveEnv: cfg.RunAsEnv},
 		protocol:                   options.protocol,
+		allowCodexLiveTestPaths:    options.allowCodexLiveTestPaths,
 		sessions:                   make(map[string]string),
 		pendingPersistedSessions:   make(map[string]string),
 		sessionGenerations:         make(map[string]uint64),
