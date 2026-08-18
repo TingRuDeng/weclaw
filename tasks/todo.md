@@ -126,7 +126,7 @@ git diff --check
 
 - `thread/resume` 只恢复 thread 元数据，状态探测只读取最新一页 turn 元数据；watcher 需要回放时才按 64 条 turn、32 条 item 分页加载精确目标 turn，避免累计历史进入单条 ACP 响应。
 - 指定 turn 不存在、分页 cursor 重复、item 归属其他 turn 和 Scanner 单帧超限均失败关闭；超限错误保留稳定错误链，飞书绑定入口返回可操作的 Codex CLI 更新提示。
-- watcher 建立快照失败会立即退出并归还已认领交互，不再继续等待或处理旧审批；状态读取、回放与目标 turn 的水位线语义均由回归测试覆盖。
+- watcher 建立快照失败会立即退出并归还已认领交互，不再继续等待或处理旧审批；状态读取、回放与目标 turn 的水位线语义均由回归测试覆盖。当前 official daemon 若明确不支持 `thread/items/list`，会复用目标元数据页 cursor 以 `itemsView=full` 读取同一页，保留完成态最终回答与活动 turn 结构化进度，其他错误仍失败关闭。
 - 验证通过：`agent`、`messaging` 定向测试，二者 Race，全仓测试、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。整仓首次运行中超时用例受并行负载延迟，独立连续 3 次及随后整仓复跑均通过。
 
 ## 2026-08-16 Codex 多 Host 冲突只读预检

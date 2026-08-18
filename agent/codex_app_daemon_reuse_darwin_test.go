@@ -82,6 +82,37 @@ func TestConfigureCodexAppDaemonReuseExplicitDisableUnsetsEnvironment(t *testing
 	}
 }
 
+func TestInspectCodexAppDaemonReuseAcceptsDaemonTransportWithoutDesktopEndpoint(t *testing.T) {
+	result, err := inspectCodexAppDaemonReuseWithDeps(codexAppDaemonInspectDeps{
+		hostState: func() (codexDesktopHostProcessState, error) {
+			return codexDesktopHostProcessState{AppRunning: true, AppPIDs: []int{100}}, nil
+		},
+		processEnvironment: func(pid int, name string) (string, bool, error) {
+			if pid != 100 || name != codexAppUseLocalDaemonEnv {
+				t.Fatalf("pid=%d name=%q", pid, name)
+			}
+			return "1", true, nil
+		},
+	})
+	if err != nil || !result.AppRunning || result.PrivateAppServer {
+		t.Fatalf("result=%#v error=%v, want verified daemon frontend", result, err)
+	}
+}
+
+func TestInspectCodexAppDaemonReuseRejectsAppWithoutDaemonEnvironment(t *testing.T) {
+	result, err := inspectCodexAppDaemonReuseWithDeps(codexAppDaemonInspectDeps{
+		hostState: func() (codexDesktopHostProcessState, error) {
+			return codexDesktopHostProcessState{AppRunning: true, AppPIDs: []int{100}}, nil
+		},
+		processEnvironment: func(int, string) (string, bool, error) {
+			return "", false, nil
+		},
+	})
+	if err == nil || !result.AppRunning || !strings.Contains(err.Error(), codexAppUseLocalDaemonEnv) {
+		t.Fatalf("result=%#v error=%v, want missing daemon environment rejection", result, err)
+	}
+}
+
 func TestCodexDesktopHostProcessStateFindsPrivateAppServer(t *testing.T) {
 	uid := uint32(os.Getuid())
 	processes := []unix.KinfoProc{

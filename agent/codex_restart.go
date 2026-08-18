@@ -179,7 +179,7 @@ func (a *ACPAgent) CancelCodexRestart(ctx context.Context) error {
 	if err := a.requireCodexDesktopAbsent(); err != nil {
 		return err
 	}
-	verified, err := a.verifyStartedCodexHost(ctx, previous)
+	verified, err := a.verifyStartedCodexHost(ctx, previous, false)
 	if err != nil {
 		return fmt.Errorf("恢复重启前的 Codex Host: %w", err)
 	}
@@ -199,12 +199,24 @@ func (a *ACPAgent) VerifyCodexRestart(ctx context.Context, previous CodexRestart
 	}
 	a.codexAdmissionMu.Lock()
 	defer a.codexAdmissionMu.Unlock()
-	if err := a.requireCodexDesktopAbsent(); err != nil {
+	topologyChanged, err := a.codexRestartTopologyChanged(previous)
+	if err != nil {
 		return CodexRestartSnapshot{}, err
+	}
+	if topologyChanged && !a.usesOfficialCodexDaemon() {
+		return CodexRestartSnapshot{}, fmt.Errorf(
+			"%w: 已停止的 Codex Host 拓扑发生变化，但当前不是官方 daemon，拒绝自动迁移",
+			ErrCodexRuntimeUnavailable,
+		)
+	}
+	if !topologyChanged {
+		if err := a.requireCodexDesktopAbsent(); err != nil {
+			return CodexRestartSnapshot{}, err
+		}
 	}
 	if previous.HostStopped {
 		currentMode := strings.TrimSpace(a.codexHostMode)
-		if previous.HostMode != "" && currentMode != previous.HostMode {
+		if !topologyChanged && previous.HostMode != "" && currentMode != previous.HostMode {
 			return CodexRestartSnapshot{}, fmt.Errorf(
 				"%w: Codex Host mode 已从 %s 变为 %s",
 				ErrCodexRuntimeUnavailable, previous.HostMode, currentMode,
@@ -214,17 +226,42 @@ func (a *ACPAgent) VerifyCodexRestart(ctx context.Context, previous CodexRestart
 		if err != nil {
 			return CodexRestartSnapshot{}, err
 		}
-		if previous.SocketPath != "" && filepath.Clean(currentSocket) != filepath.Clean(previous.SocketPath) {
+		if !topologyChanged && previous.SocketPath != "" && filepath.Clean(currentSocket) != filepath.Clean(previous.SocketPath) {
 			return CodexRestartSnapshot{}, fmt.Errorf("%w: Codex Host socket 已变更", ErrCodexRuntimeUnavailable)
 		}
 	}
-	return a.verifyStartedCodexHost(ctx, previous)
+	return a.verifyStartedCodexHost(ctx, previous, topologyChanged)
 }
 
-func (a *ACPAgent) verifyStartedCodexHost(ctx context.Context, previous CodexRestartSnapshot) (CodexRestartSnapshot, error) {
-	current, err := a.inspectStartedCodexHost(ctx)
+// codexRestartTopologyChanged reports whether a persisted stopped-Host intent
+// describes a different mode or socket from the current configuration. A
+// changed topology is only safe to migrate when the current mode is later
+// proven to be the official daemon; callers still run the normal identity and
+// process-group preflight after startup.
+func (a *ACPAgent) codexRestartTopologyChanged(previous CodexRestartSnapshot) (bool, error) {
+	if !previous.HostStopped {
+		return false, nil
+	}
+	currentMode := strings.TrimSpace(a.codexHostMode)
+	currentSocket, err := a.resolveCodexHostSocket()
+	if err != nil {
+		return false, fmt.Errorf("%w: 无法解析当前 Codex Host 拓扑: %v", ErrCodexRuntimeUnavailable, err)
+	}
+	modeChanged := previous.HostMode != "" && currentMode != previous.HostMode
+	socketChanged := previous.SocketPath != "" && filepath.Clean(currentSocket) != filepath.Clean(previous.SocketPath)
+	return modeChanged || socketChanged, nil
+}
+
+func (a *ACPAgent) verifyStartedCodexHost(ctx context.Context, previous CodexRestartSnapshot, topologyChanged bool) (CodexRestartSnapshot, error) {
+	current, err := a.inspectStartedCodexHost(ctx, topologyChanged)
 	if err != nil {
 		return CodexRestartSnapshot{}, err
+	}
+	// A changed topology has a new authority and is validated by the current
+	// daemon identity plus the multi-Host preflight. Never stop that current Host
+	// merely because its numeric generation happens to match the old snapshot.
+	if topologyChanged {
+		return current, nil
 	}
 	if !previous.HostStopped || previous.HostGeneration == 0 || current.HostGeneration != previous.HostGeneration {
 		return current, nil
@@ -232,7 +269,7 @@ func (a *ACPAgent) verifyStartedCodexHost(ctx context.Context, previous CodexRes
 	if err := a.replaceStaleCodexHostGeneration(ctx, previous); err != nil {
 		return CodexRestartSnapshot{}, err
 	}
-	current, err = a.inspectStartedCodexHost(ctx)
+	current, err = a.inspectStartedCodexHost(ctx, false)
 	if err != nil {
 		return CodexRestartSnapshot{}, err
 	}
@@ -242,18 +279,31 @@ func (a *ACPAgent) verifyStartedCodexHost(ctx context.Context, previous CodexRes
 	return current, nil
 }
 
-func (a *ACPAgent) inspectStartedCodexHost(ctx context.Context) (CodexRestartSnapshot, error) {
+func (a *ACPAgent) inspectStartedCodexHost(ctx context.Context, allowDaemonFrontend bool) (CodexRestartSnapshot, error) {
 	if err := a.ensureStarted(ctx); err != nil {
 		return CodexRestartSnapshot{}, err
 	}
-	if err := a.requireCodexDesktopAbsent(); err != nil {
-		return CodexRestartSnapshot{}, err
+	if !allowDaemonFrontend {
+		if err := a.requireCodexDesktopAbsent(); err != nil {
+			return CodexRestartSnapshot{}, err
+		}
+	}
+	if allowDaemonFrontend && !a.usesOfficialCodexDaemon() {
+		return CodexRestartSnapshot{}, fmt.Errorf(
+			"%w: 仅官方 daemon 恢复允许 Codex App 前端保持运行",
+			ErrCodexRuntimeUnavailable,
+		)
 	}
 	if a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
 		return CodexRestartSnapshot{}, fmt.Errorf("%w: 重启后 Host 权威不是 WeClaw", ErrCodexRuntimeUnavailable)
 	}
-	if err := a.requireCodexRestartIdle(ctx); err != nil {
-		return CodexRestartSnapshot{}, err
+	// A topology migration only attaches to the already verified official
+	// daemon. It does not stop or replace that Host, so its active threads may
+	// continue while WeClaw recovers the old transaction.
+	if !allowDaemonFrontend {
+		if err := a.requireCodexRestartIdle(ctx); err != nil {
+			return CodexRestartSnapshot{}, err
+		}
 	}
 	socketPath, err := a.resolveCodexHostSocket()
 	if err != nil {

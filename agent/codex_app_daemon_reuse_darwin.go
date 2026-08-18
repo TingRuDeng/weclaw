@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +25,12 @@ const (
 type codexDesktopHostProcessState struct {
 	AppRunning       bool
 	PrivateAppServer bool
+	AppPIDs          []int
+}
+
+type codexAppDaemonInspectDeps struct {
+	hostState          func() (codexDesktopHostProcessState, error)
+	processEnvironment func(int, string) (string, bool, error)
 }
 
 type codexAppDaemonReuseDeps struct {
@@ -113,26 +120,51 @@ func configureCodexAppDaemonReuseWithDeps(
 	return result, err
 }
 
-func inspectSystemCodexAppDaemonReuse(ctx context.Context) (codexAppDaemonReuseResult, error) {
-	state, err := codexDesktopHostProcessStateFromSystem()
+func inspectSystemCodexAppDaemonReuse(_ context.Context) (codexAppDaemonReuseResult, error) {
+	return inspectCodexAppDaemonReuseWithDeps(codexAppDaemonInspectDeps{
+		hostState:          codexDesktopHostProcessStateFromSystem,
+		processEnvironment: readCodexAppProcessEnvironmentValue,
+	})
+}
+
+func inspectCodexAppDaemonReuseWithDeps(deps codexAppDaemonInspectDeps) (codexAppDaemonReuseResult, error) {
+	state, err := deps.hostState()
 	result := codexAppDaemonReuseResult{
 		AppRunning: state.AppRunning, PrivateAppServer: state.PrivateAppServer,
 	}
 	if err != nil {
 		return result, err
 	}
-	if state.AppRunning && !state.PrivateAppServer {
-		probeCtx, cancelProbe := context.WithTimeout(ctx, codexDesktopPresenceTimeout)
-		defer cancelProbe()
-		connected, probeErr := codexDesktopEndpointConnectableWithDeps(probeCtx, systemCodexDesktopEndpointDeps())
-		if probeErr != nil {
-			return result, fmt.Errorf("verify running Codex App Desktop endpoint: %w", probeErr)
+	if !state.AppRunning || state.PrivateAppServer {
+		return result, nil
+	}
+	if len(state.AppPIDs) == 0 || deps.processEnvironment == nil {
+		return result, fmt.Errorf("running Codex App process identity is incomplete")
+	}
+	for _, pid := range state.AppPIDs {
+		value, present, envErr := deps.processEnvironment(pid, codexAppUseLocalDaemonEnv)
+		if envErr != nil {
+			return result, fmt.Errorf("inspect running Codex App daemon environment: %w", envErr)
 		}
-		if !connected {
-			return result, fmt.Errorf("running Codex App has not exposed a verifiable Desktop endpoint")
+		if !present || value != "1" {
+			return result, fmt.Errorf(
+				"running Codex App did not inherit %s=1; fully quit and reopen Codex App",
+				codexAppUseLocalDaemonEnv,
+			)
 		}
 	}
 	return result, nil
+}
+
+func readCodexAppProcessEnvironmentValue(pid int, name string) (string, bool, error) {
+	data, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		return "", false, err
+	}
+	if len(data) > codexHostSnapshotScanLimit {
+		return "", false, fmt.Errorf("Codex App 原始进程信息超过 %d 字节", codexHostSnapshotScanLimit)
+	}
+	return parseDarwinProcessEnvironmentValue(data, name)
 }
 
 func codexAppDaemonSocketFromLaunchEnvironment(ctx context.Context, deps codexAppDaemonReuseDeps) (string, error) {
@@ -208,6 +240,10 @@ func codexDesktopHostProcessStateFrom(
 		}
 	}
 	state := codexDesktopHostProcessState{AppRunning: len(appPIDs) > 0}
+	for pid := range appPIDs {
+		state.AppPIDs = append(state.AppPIDs, pid)
+	}
+	sort.Ints(state.AppPIDs)
 	if !state.AppRunning {
 		return state, nil
 	}

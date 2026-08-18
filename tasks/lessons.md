@@ -920,7 +920,7 @@
 - 触发条件：用户从消息平台绑定累计了大量 turn 或 items 的 Codex thread，app-server 把完整历史放进 `thread/resume` 或 `thread/read` 的单条 NDJSON 响应。
 - 规则：绑定、状态探测和 watcher 回放必须分层读取；恢复 RPC 排除 turns，状态只读轻量 turn 元数据，只有精确目标 turn 的用户可见历史才按页加载。任何页面仍超过 ACP 单帧上限时必须返回稳定错误并保留绑定失败的真实原因。
 - 反例：对所有会话固定调用 `thread/resume` 和 `thread/read(includeTurns=true)`；小会话正常，超大会话超过 Scanner 64 MiB 后 reader 断开，所有等待中的 RPC 只得到通用运行时退出错误，飞书最终仅显示“绑定失败”。
-- 正确做法：`thread/resume(excludeTurns=true)` 后使用 `thread/read(includeTurns=false)`，再通过 `thread/turns/list(itemsView=notLoaded)` 分页定位目标 turn，并以 `thread/items/list(turnId=...)` 分页回放；重复 cursor、错误 turn item 和目标 turn 消失都失败关闭。Scanner 的 `token too long` 必须映射为可识别哨兵错误，供消息层给出明确处理建议。
+- 正确做法：`thread/resume(excludeTurns=true)` 后使用 `thread/read(includeTurns=false)`，再通过 `thread/turns/list(itemsView=notLoaded)` 分页定位目标 turn，并优先以 `thread/items/list(turnId=...)` 分页回放。official daemon 明确返回该方法不受支持时，复用命中页 cursor 以 `itemsView=full` 只读取目标所在页；普通 RPC 错误不能静默降级。重复 cursor、错误 turn item 和目标 turn 消失都失败关闭。Scanner 的 `token too long` 必须映射为可识别哨兵错误，供消息层给出明确处理建议。
 - 来源：2026-08-17 超大 Codex 会话真机绑定失败及本机 Codex app-server schema 复核。
 
 ## 2026-08-17 Codex 真实协议门禁不得复用日常安装状态

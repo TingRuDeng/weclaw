@@ -490,6 +490,31 @@ func TestOfficialDaemonHandoffReusesClientWhileAnotherTurnIsActive(t *testing.T)
 	}
 }
 
+func TestOfficialDaemonHandoffSkipsDesktopProbeWhenIPCIsUnavailable(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr:      errors.New("dial unix ~/.codex/ipc/ipc.sock: connect: connection refused"),
+		socketExists: true, processExists: true,
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		CodexHostMode: "daemon", CodexDesktopBridge: true,
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	a.rpcCall = codexHandoffRPCFake(t, "thread-1", "turn-1")
+
+	binding, err := a.HandoffCodexRuntime(
+		context.Background(), remoteCodexRuntimeRequest("thread-1", "route-1", 1),
+	)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
+		t.Fatalf("binding=%#v error=%v, official daemon should remain authoritative", binding, err)
+	}
+	if probe.loadCalls != 0 {
+		t.Fatalf("official daemon handoff must not probe unavailable Desktop IPC: loadCalls=%d", probe.loadCalls)
+	}
+}
+
 func TestExplicitDaemonHandoffTreatsAppHistoryAsSharedDaemonFrontend(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{socketExists: true, processExists: true}
 	a := newACPAgent(ACPAgentConfig{

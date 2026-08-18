@@ -298,6 +298,12 @@ func (a *ACPAgent) runAndValidateCodexDaemonLifecycle(
 			socketPath,
 		)
 	}
+	if action == "version" && (output.Backend == "" || output.PID <= 0) {
+		output, err = a.hydrateCodexDaemonVersionOutput(output, socketPath)
+		if err != nil {
+			return codexDaemonLifecycleOutput{}, err
+		}
+	}
 	switch action {
 	case "start":
 		if output.Status != "started" && output.Status != "alreadyRunning" {
@@ -320,6 +326,48 @@ func (a *ACPAgent) runAndValidateCodexDaemonLifecycle(
 	}
 	if action != "stop" && output.PID <= 0 {
 		return codexDaemonLifecycleOutput{}, fmt.Errorf("%w: lifecycle PID is invalid", errCodexDaemonUnmanaged)
+	}
+	return output, nil
+}
+
+// hydrateCodexDaemonVersionOutput handles official standalone releases whose
+// version response reports the running socket and versions but omits the
+// lifecycle backend and PID. The identity comes from the official lifecycle
+// PID record when available, or from an existing protected WeClaw daemon
+// metadata record when the release does not create the legacy PID file.
+func (a *ACPAgent) hydrateCodexDaemonVersionOutput(
+	output codexDaemonLifecycleOutput,
+	socketPath string,
+) (codexDaemonLifecycleOutput, error) {
+	codexHome, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
+	if err != nil {
+		return codexDaemonLifecycleOutput{}, fmt.Errorf(
+			"%w: resolve CODEX_HOME for official daemon PID record: %v",
+			errCodexDaemonUnmanaged,
+			err,
+		)
+	}
+	record, err := a.readCodexDaemonPIDRecordForSocket(codexHome, socketPath)
+	if err != nil {
+		return codexDaemonLifecycleOutput{}, fmt.Errorf(
+			"%w: read official Codex daemon identity: %v",
+			errCodexDaemonUnmanaged,
+			err,
+		)
+	}
+	if output.PID > 0 && output.PID != record.PID {
+		return codexDaemonLifecycleOutput{}, fmt.Errorf(
+			"%w: lifecycle pid=%d, record pid=%d",
+			errCodexDaemonUnmanaged,
+			output.PID,
+			record.PID,
+		)
+	}
+	if output.Backend == "" {
+		output.Backend = "pid"
+	}
+	if output.PID <= 0 {
+		output.PID = record.PID
 	}
 	return output, nil
 }
@@ -441,7 +489,7 @@ func (a *ACPAgent) recordCodexDaemonMetadata(
 			expectedManagedPath,
 		)
 	}
-	record, err := a.readCodexDaemonPIDRecord(codexDaemonPIDPath(codexHome))
+	record, err := a.readCodexDaemonPIDRecordForSocket(codexHome, socketPath)
 	if err != nil {
 		return codexHostMetadata{}, err
 	}
@@ -540,7 +588,7 @@ func (a *ACPAgent) validateCodexDaemonManagement(
 	if err != nil {
 		return err
 	}
-	record, err := a.readCodexDaemonPIDRecord(codexDaemonPIDPath(codexHome))
+	record, err := a.readCodexDaemonPIDRecordForSocket(codexHome, socketPath)
 	if err != nil {
 		return err
 	}
@@ -624,4 +672,52 @@ func (a *ACPAgent) readCodexDaemonPIDRecord(path string) (codexDaemonPIDRecord, 
 		return codexDaemonPIDRecord{}, fmt.Errorf("%w: invalid daemon pid record", errCodexDaemonUnmanaged)
 	}
 	return record, nil
+}
+
+// readCodexDaemonPIDRecordForSocket supports standalone releases that expose
+// lifecycle state through the control socket but do not create the historical
+// app-server-daemon/app-server.pid file. The fallback is accepted only for a
+// protected, currently-running daemon metadata record; callers still inspect
+// the process start time, process group, and managed command before attaching.
+func (a *ACPAgent) readCodexDaemonPIDRecordForSocket(
+	codexHome string,
+	socketPath string,
+) (codexDaemonPIDRecord, error) {
+	record, err := a.readCodexDaemonPIDRecord(codexDaemonPIDPath(codexHome))
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return record, err
+	}
+	metadata, metadataErr := a.readCodexHostMetadata(socketPath)
+	if metadataErr != nil {
+		return codexDaemonPIDRecord{}, fmt.Errorf(
+			"official PID record is unavailable (%v); read protected daemon metadata: %w",
+			err,
+			metadataErr,
+		)
+	}
+	if metadata.Manager != codexHostManagerDaemon || metadata.State != "running" {
+		return codexDaemonPIDRecord{}, fmt.Errorf(
+			"%w: protected daemon metadata is not a running official daemon",
+			errCodexDaemonUnmanaged,
+		)
+	}
+	expectedManagedPath := filepath.Clean(codexDaemonManagedBinaryPath(codexHome))
+	if filepath.Clean(metadata.ManagedCodexPath) != expectedManagedPath {
+		return codexDaemonPIDRecord{}, fmt.Errorf(
+			"%w: protected daemon metadata managed path=%s, expected=%s",
+			errCodexDaemonUnmanaged,
+			metadata.ManagedCodexPath,
+			expectedManagedPath,
+		)
+	}
+	if metadata.PID <= 0 || metadata.ProcessGroupID <= 0 || strings.TrimSpace(metadata.ProcessStart) == "" {
+		return codexDaemonPIDRecord{}, fmt.Errorf(
+			"%w: protected daemon metadata identity is incomplete",
+			errCodexDaemonUnmanaged,
+		)
+	}
+	return codexDaemonPIDRecord{
+		PID:              metadata.PID,
+		ProcessStartTime: metadata.ProcessStart,
+	}, nil
 }

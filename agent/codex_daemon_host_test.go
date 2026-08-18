@@ -37,6 +37,73 @@ func TestParseCodexDaemonLifecycleOutputRequiresSingleJSONValue(t *testing.T) {
 	}
 }
 
+func TestCodexDaemonVersionHydratesMissingPIDAndBackendFromRecord(t *testing.T) {
+	a, socketPath := newCodexDaemonTestAgent(t)
+	home := filepath.Dir(filepath.Dir(socketPath))
+	writeTestCodexDaemonPIDRecord(t, codexDaemonPIDPath(home), codexDaemonPIDRecord{
+		PID:              os.Getpid(),
+		ProcessStartTime: "test",
+	})
+	a.codexDaemonLifecycleCall = func(context.Context, string) (codexDaemonLifecycleOutput, error) {
+		return codexDaemonLifecycleOutput{
+			Status:           "running",
+			ManagedCodexPath: codexDaemonManagedBinaryPath(home),
+			SocketPath:       socketPath,
+			AppServerVersion: "test",
+		}, nil
+	}
+
+	output, err := a.runAndValidateCodexDaemonLifecycle(context.Background(), "version", socketPath)
+	if err != nil {
+		t.Fatalf("runAndValidateCodexDaemonLifecycle() error=%v", err)
+	}
+	if output.Backend != "pid" || output.PID != os.Getpid() {
+		t.Fatalf("output=%#v, want backend pid and pid %d", output, os.Getpid())
+	}
+}
+
+func TestCodexDaemonVersionHydratesFromExistingHostMetadataWhenPIDRecordIsAbsent(t *testing.T) {
+	a, socketPath := newCodexDaemonTestAgent(t)
+	home := filepath.Dir(filepath.Dir(socketPath))
+	identity, err := inspectCodexHostProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeCodexHostMetadata(socketPath, codexHostMetadata{
+		Version:             codexHostMetadataVersion,
+		Manager:             codexHostManagerDaemon,
+		State:               "running",
+		PID:                 os.Getpid(),
+		ProcessGroupID:      identity.pgid,
+		UID:                 identity.uid,
+		ProcessStart:        identity.start,
+		ObservedCommandHash: identity.commandHash,
+		CommandFingerprint:  "test",
+		SocketPath:          socketPath,
+		Generation:          1,
+		ManagedCodexPath:    codexDaemonManagedBinaryPath(home),
+		StartedAt:           time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.codexDaemonLifecycleCall = func(context.Context, string) (codexDaemonLifecycleOutput, error) {
+		return codexDaemonLifecycleOutput{
+			Status:           "running",
+			ManagedCodexPath: codexDaemonManagedBinaryPath(home),
+			SocketPath:       socketPath,
+			AppServerVersion: "test",
+		}, nil
+	}
+
+	output, err := a.runAndValidateCodexDaemonLifecycle(context.Background(), "version", socketPath)
+	if err != nil {
+		t.Fatalf("runAndValidateCodexDaemonLifecycle() error=%v", err)
+	}
+	if output.Backend != "pid" || output.PID != os.Getpid() {
+		t.Fatalf("output=%#v, want backend pid and pid %d", output, os.Getpid())
+	}
+}
+
 func TestCodexDaemonProcessCommandRequiresExactManagedBinary(t *testing.T) {
 	const managed = "/tmp/codex/current/codex"
 	for _, valid := range []string{

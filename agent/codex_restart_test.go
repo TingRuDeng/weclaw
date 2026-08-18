@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -143,9 +144,72 @@ func TestPrepareAndVerifyCodexRestartRequireNewHostGeneration(t *testing.T) {
 
 	mismatch, _, cleanupMismatch := newManagedRestartFixture(t, 12)
 	defer cleanupMismatch()
-	mismatch.codexHostMode = "daemon"
-	if _, err := mismatch.VerifyCodexRestart(context.Background(), snapshot); !errors.Is(err, ErrCodexRuntimeUnavailable) {
+	mismatchSnapshot := snapshot
+	mismatchSnapshot.SocketPath = filepath.Join(t.TempDir(), "old-managed.sock")
+	if _, err := mismatch.VerifyCodexRestart(context.Background(), mismatchSnapshot); !errors.Is(err, ErrCodexRuntimeUnavailable) {
 		t.Fatalf("VerifyCodexRestart topology mismatch error=%v", err)
+	}
+}
+
+func TestVerifyCodexRestartAllowsStoppedManagedToOfficialDaemonMigration(t *testing.T) {
+	a, previousSocket, cleanup := newManagedRestartFixture(t, 21)
+	defer cleanup()
+
+	// The persisted transaction was created by the old managed topology. The
+	// current process has already been configured for the official daemon and
+	// the Codex App is a normal daemon frontend, so Desktop presence is expected.
+	codexHome := filepath.Dir(previousSocket)
+	currentSocket := codexDaemonSocketPath(codexHome)
+	if err := os.MkdirAll(filepath.Dir(currentSocket), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	currentListener, err := net.Listen("unix", currentSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer currentListener.Close()
+	a.codexHostMode = codexHostModeDaemon
+	a.codexHostSocket = ""
+	a.env = map[string]string{"CODEX_HOME": codexHome}
+	a.codexDesktopPresenceCall = func() (bool, bool) { return true, true }
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/list" {
+			return nil, errors.New("unexpected rpc: " + method)
+		}
+		return json.RawMessage(`{"data":[{"id":"thread-active","status":{"type":"active"}}],"nextCursor":null}`), nil
+	}
+	metadata, err := a.readCodexHostMetadata(previousSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Manager = codexHostManagerDaemon
+	metadata.SocketPath = currentSocket
+	metadata.CommandFingerprint = a.configuredCodexHostCommandFingerprint(currentSocket)
+	if err := a.writeCodexHostMetadata(currentSocket, metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	stopCalls := 0
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopCalls++
+		return errors.New("must not stop the current daemon during migration")
+	}
+	previous := CodexRestartSnapshot{
+		HostMode:       codexHostModeManaged,
+		SocketPath:     previousSocket,
+		HostGeneration: 21,
+		HostStopped:    true,
+	}
+	current, err := a.VerifyCodexRestart(context.Background(), previous)
+	if err != nil {
+		t.Fatalf("VerifyCodexRestart migration: %v", err)
+	}
+	if stopCalls != 0 {
+		t.Fatalf("migration stopped current Host %d time(s)", stopCalls)
+	}
+	if current.HostMode != codexHostModeDaemon || current.SocketPath != currentSocket ||
+		current.HostGeneration != 21 || current.HostStopped {
+		t.Fatalf("current snapshot=%#v", current)
 	}
 }
 

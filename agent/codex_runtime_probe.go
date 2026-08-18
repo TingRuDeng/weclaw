@@ -21,6 +21,8 @@ const (
 	codexThreadItemsPageSize             = 32
 )
 
+var errCodexThreadItemsListUnsupported = errors.New("Codex app-server does not support thread/items/list")
+
 // InspectCodexRuntime 每次重新探测 Desktop，并同步已持久化的用户控制意图。
 func (a *ACPAgent) InspectCodexRuntime(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	a.codexAdmissionMu.Lock()
@@ -144,6 +146,17 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 			}
 			return binding, err
 		}
+	}
+	// official daemon 是唯一 Host 时，Codex App 只是 frontend。App 的
+	// Desktop IPC 可能不存在或已不可达，不能阻止飞书 follower 直接复用
+	// 同一 daemon；否则每次恢复都会把 frontend 故障误报成 Host ownership unknown。
+	if req.Intent.Owner == CodexControlRemote &&
+		a.usesOfficialCodexDaemon() &&
+		a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw &&
+		!a.codexDesktopHostSelection {
+		return a.activateSharedCodexHostWithPhaseTimeout(
+			ctx, req, codexRuntimeHandoffActivationTimeout,
+		)
 	}
 	probeCtx, cancelProbe := context.WithTimeout(ctx, codexRuntimeHandoffProbeTimeout)
 	runtime, state, err := a.probeCodexRuntime(probeCtx, req, codexRuntimeProbeOptions{
@@ -467,15 +480,70 @@ func (a *ACPAgent) readCodexAppServerThreadMetadata(ctx context.Context, threadI
 }
 
 func (a *ACPAgent) readCodexAppServerTargetTurn(ctx context.Context, threadID string, targetTurnID string, loadItems bool) (codexTurnSnapshot, bool, uint64, error) {
+	turn, found, pageCursor, sequence, err := a.readCodexAppServerTargetTurnView(ctx, threadID, targetTurnID, "notLoaded", "")
+	if err != nil || !found || !loadItems {
+		return turn, found, sequence, err
+	}
+	items, itemsSequence, itemsErr := a.readCodexAppServerTurnItems(ctx, threadID, turn.ID)
+	if itemsSequence > sequence {
+		sequence = itemsSequence
+	}
+	if itemsErr == nil {
+		turn.Items = items
+		return turn, true, sequence, nil
+	}
+	if !errors.Is(itemsErr, errCodexThreadItemsListUnsupported) {
+		return codexThreadSnapshotTurnError(itemsErr, sequence)
+	}
+
+	// Codex 0.147.0 supports the full turn view but not the newer paginated
+	// thread/items/list method. Re-read the requested turn page so the fallback
+	// remains bounded and preserves the existing target-turn checks. When the
+	// first lookup selected the latest turn, pin that ID before the second read;
+	// otherwise a newly-created turn could be mistaken for the original page.
+	fullTargetTurnID := strings.TrimSpace(targetTurnID)
+	if fullTargetTurnID == "" {
+		fullTargetTurnID = strings.TrimSpace(turn.ID)
+	}
+	if fullTargetTurnID == "" {
+		return codexThreadSnapshotTurnError(
+			fmt.Errorf("%w: metadata page returned an empty turn id", ErrCodexControlChanged),
+			sequence,
+		)
+	}
+	fullTurn, fullFound, _, fullSequence, fullErr := a.readCodexAppServerTargetTurnView(ctx, threadID, fullTargetTurnID, "full", pageCursor)
+	if fullSequence > sequence {
+		sequence = fullSequence
+	}
+	if fullErr != nil {
+		return codexThreadSnapshotTurnError(fullErr, sequence)
+	}
+	if !fullFound {
+		return codexThreadSnapshotTurnError(
+			fmt.Errorf("%w: target turn %s not found in full turn view", ErrCodexControlChanged, fullTargetTurnID),
+			sequence,
+		)
+	}
+	return fullTurn, true, sequence, nil
+}
+
+func codexThreadSnapshotTurnError(err error, sequence uint64) (codexTurnSnapshot, bool, uint64, error) {
+	return codexTurnSnapshot{}, false, sequence, err
+}
+
+func (a *ACPAgent) readCodexAppServerTargetTurnView(ctx context.Context, threadID string, targetTurnID string, itemsView string, cursor string) (codexTurnSnapshot, bool, string, uint64, error) {
 	threadID = strings.TrimSpace(threadID)
 	targetTurnID = strings.TrimSpace(targetTurnID)
-	cursor := ""
+	cursor = strings.TrimSpace(cursor)
 	seenCursors := make(map[string]bool)
+	if cursor != "" {
+		seenCursors[cursor] = true
+	}
 	var sequence uint64
 	for {
 		params := map[string]interface{}{
 			"threadId": threadID, "limit": codexThreadTurnsPageSize,
-			"sortDirection": "desc", "itemsView": "notLoaded",
+			"sortDirection": "desc", "itemsView": itemsView,
 		}
 		if cursor != "" {
 			params["cursor"] = cursor
@@ -486,27 +554,17 @@ func (a *ACPAgent) readCodexAppServerTargetTurn(ctx context.Context, threadID st
 		}
 		if err != nil {
 			if isCodexThreadPendingFirstTurn(err) {
-				return codexTurnSnapshot{}, false, sequence, nil
+				return codexTurnSnapshot{}, false, "", sequence, nil
 			}
-			return codexTurnSnapshot{}, false, sequence, fmt.Errorf("list Codex thread turns: %w", err)
+			return codexTurnSnapshot{}, false, "", sequence, fmt.Errorf("list Codex thread turns: %w", err)
 		}
 		var page codexThreadTurnsListResponse
 		if err := json.Unmarshal(result, &page); err != nil {
-			return codexTurnSnapshot{}, false, sequence, fmt.Errorf("parse thread/turns/list result: %w", err)
+			return codexTurnSnapshot{}, false, "", sequence, fmt.Errorf("parse thread/turns/list result: %w", err)
 		}
 		for _, turn := range page.Data {
 			if targetTurnID == "" || strings.TrimSpace(turn.ID) == targetTurnID {
-				if loadItems {
-					items, itemsSequence, err := a.readCodexAppServerTurnItems(ctx, threadID, turn.ID)
-					if itemsSequence > sequence {
-						sequence = itemsSequence
-					}
-					if err != nil {
-						return codexTurnSnapshot{}, false, sequence, err
-					}
-					turn.Items = items
-				}
-				return turn, true, sequence, nil
+				return turn, true, cursor, sequence, nil
 			}
 		}
 		nextCursor := strings.TrimSpace(page.NextCursor)
@@ -514,15 +572,15 @@ func (a *ACPAgent) readCodexAppServerTargetTurn(ctx context.Context, threadID st
 			break
 		}
 		if seenCursors[nextCursor] {
-			return codexTurnSnapshot{}, false, sequence, fmt.Errorf("thread/turns/list returned repeated cursor")
+			return codexTurnSnapshot{}, false, "", sequence, fmt.Errorf("thread/turns/list returned repeated cursor")
 		}
 		seenCursors[nextCursor] = true
 		cursor = nextCursor
 	}
 	if targetTurnID != "" {
-		return codexTurnSnapshot{}, false, sequence, fmt.Errorf("%w: target turn %s not found", ErrCodexControlChanged, targetTurnID)
+		return codexTurnSnapshot{}, false, "", sequence, fmt.Errorf("%w: target turn %s not found", ErrCodexControlChanged, targetTurnID)
 	}
-	return codexTurnSnapshot{}, false, sequence, nil
+	return codexTurnSnapshot{}, false, "", sequence, nil
 }
 
 func (a *ACPAgent) readCodexAppServerTurnItems(ctx context.Context, threadID string, turnID string) ([]codexThreadItem, uint64, error) {
@@ -543,6 +601,9 @@ func (a *ACPAgent) readCodexAppServerTurnItems(ctx context.Context, threadID str
 			sequence = pageSequence
 		}
 		if err != nil {
+			if isCodexThreadItemsListUnsupported(err) {
+				return nil, sequence, fmt.Errorf("%w: %v", errCodexThreadItemsListUnsupported, err)
+			}
 			return nil, sequence, fmt.Errorf("list Codex turn items: %w", err)
 		}
 		var page codexThreadItemsListResponse
@@ -565,4 +626,15 @@ func (a *ACPAgent) readCodexAppServerTurnItems(ctx context.Context, threadID str
 		seenCursors[nextCursor] = true
 		cursor = nextCursor
 	}
+}
+
+func isCodexThreadItemsListUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errCodexThreadItemsListUnsupported) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "thread/items/list") && strings.Contains(message, "not supported")
 }

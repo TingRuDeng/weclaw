@@ -34,3 +34,21 @@ func TestParseDarwinCodexHostArgsRejectsTruncatedArgv(t *testing.T) {
 		t.Fatal("truncated argv must fail closed")
 	}
 }
+
+func TestParseDarwinProcessEnvironmentValueReturnsOnlyRequestedVariable(t *testing.T) {
+	data := make([]byte, 4)
+	binary.NativeEndian.PutUint32(data, 1)
+	data = append(data, []byte(
+		"/Applications/Codex.app/Contents/MacOS/ChatGPT\x00\x00"+
+			"/Applications/Codex.app/Contents/MacOS/ChatGPT\x00"+
+			"TOKEN=secret\x00CODEX_APP_SERVER_USE_LOCAL_DAEMON=1\x00\x00",
+	)...)
+
+	got, present, err := parseDarwinProcessEnvironmentValue(data, codexAppUseLocalDaemonEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present || got != "1" {
+		t.Fatalf("value=%q present=%v, want 1", got, present)
+	}
+}
