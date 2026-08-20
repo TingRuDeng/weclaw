@@ -12,14 +12,14 @@
 - [x] 回调缺失 `EventID` 时，同一卡片的后续 revision 仍能区分新的审批请求。
 - [x] `EventID` 与 revision 都缺失的旧卡片使用 approval key 摘要区分新请求，不把原值写入 Trace。
 - [x] 同一审批请求的平台重投和重复点击仍只提交一次决策。
-- [ ] 通过受影响模块、Race、全仓和正式发布门禁，以下一个补丁版本发布。
+- [x] 通过受影响模块、Race、全仓和正式发布门禁，以下一个补丁版本发布。
 
 ### 实施步骤
 
 - [x] 先补失败测试，覆盖同一卡片的不同事件 ID 与无事件 ID 的不同 revision。
 - [x] 让审批卡片使用已有的稳定卡片消息 ID 生成逻辑，保留审批 key 幂等保护。
 - [x] 完成定向测试、Race、全仓验证、差异复核和独立审查。
-- [ ] 提交并推送 `main`，通过权威发布脚本发布下一个补丁版本，核对 tag、GitHub Release、资产、摘要与 Gitee 镜像。
+- [x] 提交并推送 `main`，通过权威发布脚本发布下一个补丁版本，核对 tag、GitHub Release、资产、摘要与 Gitee 镜像。
 
 ### 验证方式
 
@@ -41,6 +41,14 @@ env -u WECLAW_RELEASE_SOURCE_ONLY bash scripts/release.sh --next-patch
 - 2026-08-20：定向审批回归、`./messaging ./feishu ./platform`、`messaging/feishu` Race 和 `go test ./...` 均通过。
 - 2026-08-20：`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、govulncheck v1.6.0、文档校验和 `git diff --check` 均退出 0；govulncheck 报告当前代码调用链 0 个漏洞。
 - 2026-08-20：独立复核确认 EventID/revision/approval key 摘要优先级、跨新平台事件的业务幂等和原始 approval key 脱敏路径；未发现阻止发布的问题。真实飞书点击验收需在新版本安装后执行。
+- 2026-08-20：修复提交 `149271e4d65a544be7e396d95e84585df30ee840` 已推送到 `origin/main`；因 `v0.1.281` 已指向前一提交，本次顺延发布 `v0.1.282`。
+- 2026-08-20：权威发布脚本的安装器 22 用例、全仓测试、全仓 Race、Vet、Staticcheck、govulncheck、两平台构建、GitHub draft 资产校验和真实 `weclaw update` 烟测均通过；GitHub Release 已公开为 latest、非 draft、非 prerelease。
+- 2026-08-20：GitHub 的 `checksums.txt`、`weclaw_darwin_arm64`、`weclaw_linux_amd64` 共 3 项资产摘要与本地产物一致；Gitee 的 `main` 与 `v0.1.282` tag 指向同一提交，镜像附件为 `checksums.txt` 和两个 gzip 二进制共 3 项。
+
+### Review
+
+- 飞书审批回调现在能区分同一卡片上的后续新请求，同时保留同一业务审批的重复点击和新平台事件重投幂等；原始 approval key 不进入平台消息 ID。
+- 代码、测试、文档、GitHub Release 与 Gitee 镜像均已交付；真实飞书端点击效果仍需安装 `v0.1.282` 后验收，本次未更新或重启本机正在运行的 WeClaw。
 
 ### 回滚
 
