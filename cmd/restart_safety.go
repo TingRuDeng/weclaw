@@ -80,6 +80,15 @@ func ensureRestartSafe(ctx context.Context, opts restartSafetyOptions) error {
 }
 
 func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Config) error {
+	return beginRestartDrainWithConfigOptions(ctx, force, false, cfg)
+}
+
+func beginRestartDrainWithConfigOptions(
+	ctx context.Context,
+	force bool,
+	stopConflictingCodexHosts bool,
+	cfg *config.Config,
+) error {
 	state, err := readRuntimeState()
 	if err != nil || !processExists(state.PID) {
 		return nil
@@ -88,8 +97,20 @@ func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Co
 	if err != nil {
 		return fmt.Errorf("无法连接安全重启排空入口: %w", err)
 	}
-	if force {
-		endpoint += "?force=true"
+	if force || stopConflictingCodexHosts {
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return fmt.Errorf("解析安全重启排空入口: %w", err)
+		}
+		query := parsed.Query()
+		if force {
+			query.Set("force", "true")
+		}
+		if stopConflictingCodexHosts {
+			query.Set("stop_conflicting_codex_hosts", "true")
+		}
+		parsed.RawQuery = query.Encode()
+		endpoint = parsed.String()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {

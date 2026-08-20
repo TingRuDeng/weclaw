@@ -33,9 +33,27 @@ type runtimeRestartState struct {
 
 const runtimeRestartStateVersion = 1
 
+type codexRestartOptionsController interface {
+	PrepareCodexRestartWithOptions(
+		context.Context,
+		func(agent.CodexRestartSnapshot) error,
+		agent.CodexRestartOptions,
+	) (agent.CodexRestartSnapshot, error)
+}
+
 // PrepareRuntimeRestart atomically closes message admission, drains tasks and
 // stops the verified Codex Host before the outer CLI replaces the service.
 func (h *Handler) PrepareRuntimeRestart(ctx context.Context, force bool) (RuntimeRestartResult, error) {
+	return h.PrepareRuntimeRestartWithOptions(ctx, force, false)
+}
+
+// PrepareRuntimeRestartWithOptions carries explicit external-Host stop
+// authority from the loopback restart endpoint into the Codex transaction.
+func (h *Handler) PrepareRuntimeRestartWithOptions(
+	ctx context.Context,
+	force bool,
+	stopConflictingCodexHosts bool,
+) (RuntimeRestartResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -94,7 +112,17 @@ func (h *Handler) PrepareRuntimeRestart(ctx context.Context, force bool) (Runtim
 			result.CodexHost = snapshot
 			return nil
 		}
-		snapshot, prepareErr := controller.PrepareCodexRestart(ctx, persistIntent)
+		var snapshot agent.CodexRestartSnapshot
+		var prepareErr error
+		if optionsController, ok := runtimeAgent.(codexRestartOptionsController); ok {
+			snapshot, prepareErr = optionsController.PrepareCodexRestartWithOptions(
+				ctx,
+				persistIntent,
+				agent.CodexRestartOptions{StopConflictingCodexHosts: stopConflictingCodexHosts},
+			)
+		} else {
+			snapshot, prepareErr = controller.PrepareCodexRestart(ctx, persistIntent)
+		}
 		if prepareErr != nil {
 			if errors.Is(prepareErr, agent.ErrCodexRestartUnsafe) {
 				h.runtimeRestartPrepared = true

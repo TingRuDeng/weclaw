@@ -401,6 +401,7 @@ weclaw start --foreground    # 前台调试
 weclaw status
 weclaw restart
 weclaw restart --force       # 明确中断运行中任务
+weclaw restart --stop-conflicting-codex-hosts  # 明确停止已验证的冲突 Codex Host
 weclaw stop
 weclaw update
 weclaw update --source gitee  # Apple Silicon Mac 或 Debian amd64 在 GitHub 不可达时显式使用 Gitee
@@ -412,7 +413,7 @@ weclaw version
 
 `weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。`stop`、`restart` 和 `update --restart` 都通过本机 `/api/runtime/restart/prepare` 使用同一套 Host 安全事务：先持有排他的 Codex frontend 租约，关闭消息准入并排空任务，再确认 Codex App 已完整退出、没有受控 `weclaw codex cli`、writer lease 或活动/未知 thread，最后停止身份验证通过的 official daemon 或 WeClaw-managed Host。`stop` 只有在事务准备成功后才向 WeClaw 发送 `SIGTERM`；准备失败时服务保持运行，外层停止失败时先重建旧 Host 并恢复消息准入。直接的 `SIGINT`/`SIGTERM`（包括 systemd stop 或消息桥异常退出）也会在进程内尝试同一事务；若外部停止已经不可撤销但 Host 状态不安全或不可确认，WeClaw 会退出并明确记录保留 Host 的原因，不会强杀它。仓库自带的 `service/weclaw.service` 使用 `KillMode=process`，让 systemd 只向 WeClaw 主进程发信号、由上述事务管理 Host；自定义 unit 也必须保留该设置，不能使用默认的 `control-group`。Codex App 或受控 CLI 仍在运行时 CLI 管理命令会在停止 WeClaw 前明确拒绝；WeClaw 只用受保护 IPC 和同用户主进程名做保守存在性探测，不会按进程名终止或自动退出 Codex App，强制排空也只中断 WeClaw 自己的任务，不能绕过这些 Host 安全门禁。后续服务启动必须在平台监听前读取受保护的事务状态、启动唯一 Host，并验证 Host generation 已变化；验证失败保持不可写。systemd 托管实例继续由 systemd 停止或重启，不会另起私有后台进程。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
 
-若 WeClaw 服务本来就未运行，`weclaw restart` 保留“检查 App/受控 CLI 后直接启动”的兼容语义；没有旧服务可执行上述 loopback Host 事务时，不宣称已轮换独立存在的外部 Host。
+若 WeClaw 服务本来就未运行，`weclaw restart` 默认仍只检查 Codex App/受控 CLI 并直接启动；发现外部 Host 时会失败关闭，不停止任何进程。只有显式传入 `--stop-conflicting-codex-hosts` 才会在启动前识别并停止身份验证通过的 official daemon、Codex App 私有 Host 或 WeClaw-managed Host；PID、PGID、UID、启动时间、命令指纹或受保护 metadata 任一无法匹配时仍拒绝停止。`--force` 只处理中断 WeClaw 自身任务，不授予停止 Codex Host 或 Codex App 的权限。
 从尚不支持该协调端点的旧版本首次升级时，PATH 中的新二进制与内存中仍运行的旧服务具有不同能力。新 CLI 收到协调端点的 HTTP 404 时会在触碰任何进程前失败关闭，显示运行中服务版本和一次性迁移步骤，不把纯文本 `404 page not found` 误解析成 JSON，也不向不存在的事务发送补偿请求。先等待所有任务完成并完整退出 Codex App 和受控 CLI，再依次执行 `weclaw stop`、`weclaw start`、`weclaw restart`：第一次启动把服务进程切到新版本，最后一次重启才执行完整 Host 停止和 generation 验证。不能把中间的离线启动宣称为已完成协调事务。
 
 ## 从源码构建

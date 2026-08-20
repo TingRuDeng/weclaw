@@ -60,6 +60,12 @@ type RuntimeRestartController interface {
 	CancelRuntimeRestart(context.Context) error
 }
 
+// RuntimeRestartOptionsController lets newer controllers receive explicit
+// restart authority without changing the legacy loopback controller contract.
+type RuntimeRestartOptionsController interface {
+	PrepareRuntimeRestartWithOptions(context.Context, bool, bool) (messaging.RuntimeRestartResult, error)
+}
+
 // CodexAccountController 由消息层实现，统一协调运行中的任务、Agent 与账号事务。
 type CodexAccountController interface {
 	ListCodexAccounts(context.Context) (agent.CodexAccountStatus, error)
@@ -235,9 +241,24 @@ func (s *Server) handleRuntimeRestart(w http.ResponseWriter, r *http.Request) {
 		}
 		force = parsed
 	}
+	stopConflictingCodexHosts := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("stop_conflicting_codex_hosts")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_stop_conflicting_codex_hosts", "stop_conflicting_codex_hosts 必须是布尔值")
+			return
+		}
+		stopConflictingCodexHosts = parsed
+	}
 	restartCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	result, err := s.restart.PrepareRuntimeRestart(restartCtx, force)
+	var result messaging.RuntimeRestartResult
+	var err error
+	if controller, ok := s.restart.(RuntimeRestartOptionsController); ok {
+		result, err = controller.PrepareRuntimeRestartWithOptions(restartCtx, force, stopConflictingCodexHosts)
+	} else {
+		result, err = s.restart.PrepareRuntimeRestart(restartCtx, force)
+	}
 	if errors.Is(err, messaging.ErrActiveTasksRunning) || errors.Is(err, messaging.ErrRuntimeRestartBlocked) {
 		writeJSONStatus(w, http.StatusConflict, map[string]any{
 			"status": "busy", "draining": s.runtimeRestartDraining(),

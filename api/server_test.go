@@ -223,6 +223,19 @@ func TestHandleRuntimeRestartPreparesAndCancelsTransaction(t *testing.T) {
 	}
 }
 
+func TestHandleRuntimeRestartPassesConflictingHostAuthorization(t *testing.T) {
+	control := &staticRuntimeRestartOptionsControl{}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?stop_conflicting_codex_hosts=true", nil)
+	request.Host = "127.0.0.1:18011"
+	request.RemoteAddr = "127.0.0.1:40001"
+	recorder := httptest.NewRecorder()
+	server.handleRuntimeRestart(recorder, request)
+	if recorder.Code != http.StatusOK || !control.stopConflicts {
+		t.Fatalf("status=%d stopConflicts=%v body=%q", recorder.Code, control.stopConflicts, recorder.Body.String())
+	}
+}
+
 func TestHandleRuntimeRestartReportsCodexBlocker(t *testing.T) {
 	control := &staticRuntimeRestartControl{err: fmt.Errorf(
 		"%w: %w", messaging.ErrRuntimeRestartBlocked, agent.ErrCodexDesktopFrontendActive,
@@ -508,6 +521,16 @@ type staticRuntimeRestartControl struct {
 	err       error
 	force     bool
 	cancelled bool
+}
+
+type staticRuntimeRestartOptionsControl struct {
+	staticRuntimeRestartControl
+	stopConflicts bool
+}
+
+func (s *staticRuntimeRestartOptionsControl) PrepareRuntimeRestartWithOptions(_ context.Context, _ bool, stopConflicts bool) (messaging.RuntimeRestartResult, error) {
+	s.stopConflicts = stopConflicts
+	return messaging.RuntimeRestartResult{}, nil
 }
 
 type staticCodexCLIControl struct {

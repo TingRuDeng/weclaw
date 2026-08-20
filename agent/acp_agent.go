@@ -170,11 +170,16 @@ type ACPAgent struct {
 	codexAppDaemonInspectCall      func(context.Context) (codexAppDaemonReuseResult, error)
 	codexHostConflictPreflightCall func(context.Context, int) error
 	codexHostProcessSnapshotCall   func(context.Context, map[uint32]struct{}) ([]codexHostProcessSnapshot, error)
-	codexProviderMigrationCall     func(context.Context, codexProviderMigrationRequest) (codexProviderMigrationResult, error)
-	codexProviderReadCall          func(context.Context, string) (string, error)
-	stopDesktopHostCall            func(context.Context) error
-	startDesktopHostCall           func(context.Context) error
-	protocolTrace                  observability.ProtocolRecorder
+	// The following seams keep process-control tests fully local. Production
+	// always re-reads the system process table and uses the concrete lifecycle.
+	codexHostProcessIdentityCall      func(int) (codexProcessIdentity, error)
+	stopCodexConflictProcessGroupCall func(context.Context, codexVerifiedHostConflictTarget) error
+	stopConflictingCodexHostCall      func(context.Context, codexVerifiedHostConflictTarget) error
+	codexProviderMigrationCall        func(context.Context, codexProviderMigrationRequest) (codexProviderMigrationResult, error)
+	codexProviderReadCall             func(context.Context, string) (string, error)
+	stopDesktopHostCall               func(context.Context) error
+	startDesktopHostCall              func(context.Context) error
+	protocolTrace                     observability.ProtocolRecorder
 }
 
 // ACPAgentConfig holds configuration for the ACP agent.

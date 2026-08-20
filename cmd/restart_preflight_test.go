@@ -62,6 +62,31 @@ func TestBeginRestartDrainUsesAtomicRuntimeEndpoint(t *testing.T) {
 	}
 }
 
+func TestBeginRestartDrainPassesConflictingHostAuthorization(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/restart/prepare" ||
+			r.URL.Query().Get("stop_conflicting_codex_hosts") != "true" {
+			t.Fatalf("request=%s %s, want explicit conflicting-host authorization", r.Method, r.URL.String())
+		}
+		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true})
+	}))
+	defer server.Close()
+	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
+	if err := beginRestartDrainWithConfigOptions(context.Background(), false, true, cfg); err != nil {
+		t.Fatalf("beginRestartDrainWithConfigOptions: %v", err)
+	}
+	if !requested {
+		t.Fatal("runtime restart endpoint was not called")
+	}
+}
+
 func TestBeginRestartDrainReportsActiveTaskConflict(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

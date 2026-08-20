@@ -1,5 +1,63 @@
 # 当前任务记录
 
+## 2026-08-19 重启时显式停止冲突 Codex Host
+
+### 目标
+
+让 `weclaw restart` 在 Codex Host 冲突阻塞启动时先输出可核验的进程组清单；默认保持只读并失败关闭，只有用户显式传入 `--stop-conflicting-codex-hosts` 时，才停止身份重新验证通过的 official daemon、WeClaw-managed Host，以及 Codex App 私有 Host与其 App 主进程，然后继续完成单一 Host 重启事务。
+
+### 范围与验收标准
+
+- [x] 默认 `weclaw restart` 发现阻塞 Host 时输出类型、PGID、PID、身份状态和处理提示，不停止任何 Codex 或 App 进程。
+- [x] 新参数 `--stop-conflicting-codex-hosts` 独立于 `--force`；前者授权停止冲突 Host，后者仍只授权中断 WeClaw 自身运行中任务。
+- [x] 显式授权只作用于当前有效 UID 范围内、原始 argv 和进程身份可重新验证的 official daemon、WeClaw-managed Host 或 Codex App 私有 Host；PID、PGID、启动时间、UID、命令指纹或 metadata/generation 漂移时失败关闭。
+- [x] Codex App 私有 Host 与 App 主进程属于同一可验证进程组时允许整体退出；输出明确提示 App 会退出，未知进程、其他 UID 和无法读取参数的进程永远不自动停止。
+- [x] 停止和恢复纳入现有 `runtime-restart.json` 事务；中途失败时不得把“已停止”误记为成功，补偿只恢复 WeClaw 可证明拥有的 Host，不自动重开 Codex App。
+- [x] 兼容运行中服务、离线重启和 systemd 路径；API 请求、CLI 输出、中英文说明及维护者上下文保持一致。
+
+### 实施步骤
+
+- [x] 补充失败测试，固定默认只报告、显式参数传播、身份漂移拒绝、受管 Host/official daemon/App 进程组停止和事务恢复语义。
+- [x] 扩展多 Host 预检为结构化冲突快照，并保留现有错误文本兼容入口。
+- [x] 在 Agent 重启事务内实现显式授权停止与停止前身份复核，复用 official lifecycle 和 managed metadata，不按名称盲杀。
+- [x] 扩展本机重启 API、CLI 和离线重启路径，输出冲突清单及可复制的重试命令。
+- [x] 更新 README、authority docs 与长期经验。
+- [x] 完成完整 Agent 进程身份测试和受影响包 Race。
+- [ ] 完成真实服务重启验收。
+
+### 验证方式
+
+```bash
+go test ./agent ./messaging ./api ./cmd -count=1 -timeout 300s
+go test -race ./agent ./messaging ./api ./cmd -count=1 -timeout 480s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+```
+
+### 回滚
+
+- 删除新参数及其 API/Agent 传播字段，恢复原有只读冲突预检和重启调用签名。
+- 不删除或手工改写 `runtime-restart.json`、Host metadata、writer lock 或 Codex 数据目录；任何未完成事务继续由既有启动恢复路径处理。
+
+### 当前验证记录
+
+- 已通过：`go test ./agent ./cmd ./api ./messaging -run 'TestClassifyCodexHostConflictTarget|TestClassifyManagedCodexHostConflictTarget|TestPrepareCodexRestartWithOptionsStopsVerifiedPrivateAppHostOnlyAfterIntent|TestRunRestartWithOptionsPropagates|TestBeginRestartDrainPassesConflictingHostAuthorization|TestHandleRuntimeRestartPassesConflictingHostAuthorization|TestPrepareRuntimeRestartWithOptionsPropagatesConflictAuthorization' -count=1`。
+- 独立安全复核发现停止等待阶段只按 PID 判断存活，存在 PID/PGID 快速复用后误发 SIGKILL 的风险；已补充身份漂移回归测试，并在等待期间及强杀前复核 UID、PGID、启动时间和命令哈希，漂移时失败关闭。
+- 普通 sandbox 下完整 Agent 测试因子进程执行 `/bin/ps` 被拒绝；沙箱外原命令复跑通过：`env GOCACHE=/private/tmp/weclaw-gocache go test ./agent ./messaging ./api ./cmd -count=1 -timeout 300s`。
+- 提交前验证通过：上述四包 Race、`go test ./... -count=1 -timeout 300s`、`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、文档校验和 `git diff --check`。
+- 真实重启已验证 official daemon 的受保护 fallback 可停止原 Host 并把 metadata CAS 标记为 `stopped`；WeClaw 服务恢复尚未验收，因为后续冲突变为当前 Codex App 私有 Host，停止 App 进程组的执行授权未获批准。
+
+### Review
+
+- 实现范围覆盖 CLI flag、loopback query、runtime restart options、Agent 身份证明、official lifecycle stop、managed metadata CAS、App 私有进程组停止和离线显式路径；默认模式仍失败关闭且不停止外部进程。
+- 已通过受影响包全量测试与 Race、全仓测试、Vet、module tidy、Staticcheck、文档校验和 `git diff --check`；真实 `/bin/ps` 进程身份测试已在沙箱外复跑通过。
+- 独立 review-gate 发现的停止窗口身份漂移风险已修复并由回归测试覆盖；未发现其他阻止提交的问题。
+- 剩余验证：当前 Codex App 私有 Host 尚未停止，WeClaw 服务恢复、Codex App 重开复用和 systemd 路径未做真实验收。
+
 ## 2026-08-17 Codex standalone 隔离与 Code Mode 冲突防护
 
 ### 目标

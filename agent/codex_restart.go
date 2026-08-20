@@ -17,10 +17,27 @@ var (
 // CodexRestartSnapshot is the minimum non-secret Host identity persisted
 // across a WeClaw process replacement.
 type CodexRestartSnapshot struct {
-	HostMode       string `json:"host_mode"`
-	SocketPath     string `json:"socket_path"`
-	HostGeneration uint64 `json:"host_generation"`
-	HostStopped    bool   `json:"host_stopped"`
+	HostMode         string                         `json:"host_mode"`
+	SocketPath       string                         `json:"socket_path"`
+	HostGeneration   uint64                         `json:"host_generation"`
+	HostStopped      bool                           `json:"host_stopped"`
+	ConflictingHosts []CodexRestartConflictSnapshot `json:"conflicting_hosts,omitempty"`
+}
+
+// CodexRestartConflictSnapshot is the bounded, non-secret part of a process
+// stop plan persisted before an explicitly authorized conflicting Host stop.
+// It deliberately excludes argv, sockets, and executable paths.
+type CodexRestartConflictSnapshot struct {
+	Kind    string `json:"kind"`
+	PGID    int    `json:"pgid"`
+	PIDs    []int  `json:"pids"`
+	Stopped bool   `json:"stopped"`
+}
+
+// CodexRestartOptions contains only explicit operator authority for a single
+// coordinated restart. It deliberately does not change task-draining policy.
+type CodexRestartOptions struct {
+	StopConflictingCodexHosts bool
 }
 
 // CodexRestartController coordinates one native Codex shared Host with the
@@ -43,6 +60,17 @@ func CodexDesktopFrontendPresence() (socketExists bool, processExists bool) {
 func (a *ACPAgent) PrepareCodexRestart(
 	ctx context.Context,
 	persistIntent func(CodexRestartSnapshot) error,
+) (CodexRestartSnapshot, error) {
+	return a.PrepareCodexRestartWithOptions(ctx, persistIntent, CodexRestartOptions{})
+}
+
+// PrepareCodexRestartWithOptions performs one coordinated restart under the
+// explicit authority carried by the local restart request. The default option
+// remains strictly read-only for external Codex Hosts.
+func (a *ACPAgent) PrepareCodexRestartWithOptions(
+	ctx context.Context,
+	persistIntent func(CodexRestartSnapshot) error,
+	opts CodexRestartOptions,
 ) (CodexRestartSnapshot, error) {
 	if a == nil || !a.usesCodexSharedHost() {
 		return CodexRestartSnapshot{}, fmt.Errorf("当前 Agent 不是 Codex shared app-server")
@@ -86,17 +114,10 @@ func (a *ACPAgent) PrepareCodexRestart(
 		}
 	}()
 
-	if err := a.requireCodexDesktopAbsent(); err != nil {
-		return CodexRestartSnapshot{}, err
-	}
-	if err := a.requireCodexRestartIdle(ctx); err != nil {
-		return CodexRestartSnapshot{}, err
-	}
-	if err := a.ensureStarted(ctx); err != nil {
-		return CodexRestartSnapshot{}, fmt.Errorf("启动并验证 Codex Host: %w", err)
-	}
-	if a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
-		return CodexRestartSnapshot{}, fmt.Errorf("%w: 当前 Host 权威不是 WeClaw", ErrCodexRuntimeUnavailable)
+	if !opts.StopConflictingCodexHosts {
+		if err := a.requireCodexDesktopAbsent(); err != nil {
+			return CodexRestartSnapshot{}, err
+		}
 	}
 	if err := a.requireCodexRestartIdle(ctx); err != nil {
 		return CodexRestartSnapshot{}, err
@@ -109,13 +130,49 @@ func (a *ACPAgent) PrepareCodexRestart(
 	if err := a.prepareCodexHostSocket(socketPath); err != nil {
 		return CodexRestartSnapshot{}, err
 	}
+
+	var snapshot CodexRestartSnapshot
+	var plannedConflicts []codexHostConflictTarget
+	if opts.StopConflictingCodexHosts {
+		initialGeneration := uint64(0)
+		if metadata, metadataErr := a.validateManagedCodexHost(socketPath); metadataErr == nil {
+			initialGeneration = metadata.Generation
+		}
+		snapshot = CodexRestartSnapshot{
+			HostMode: strings.TrimSpace(a.codexHostMode), SocketPath: socketPath,
+			HostGeneration: initialGeneration, HostStopped: true,
+		}
+		var err error
+		snapshot, plannedConflicts, err = a.stopExplicitCodexHostConflicts(ctx, snapshot, persistIntent)
+		if err != nil {
+			return CodexRestartSnapshot{}, err
+		}
+		if !a.usesOfficialCodexDaemon() {
+			if err := a.requireCodexDesktopAbsent(); err != nil {
+				return CodexRestartSnapshot{}, err
+			}
+		}
+	}
+
+	if err := a.ensureStarted(ctx); err != nil {
+		return CodexRestartSnapshot{}, err
+	}
+	if a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
+		return CodexRestartSnapshot{}, fmt.Errorf("%w: 当前 Host 权威不是 WeClaw", ErrCodexRuntimeUnavailable)
+	}
+	if err := a.requireCodexRestartIdle(ctx); err != nil {
+		return CodexRestartSnapshot{}, err
+	}
+
 	lifecycleLock, err := a.acquireCodexHostStartupLock(ctx, socketPath)
 	if err != nil {
 		return CodexRestartSnapshot{}, err
 	}
 	defer releaseCodexHostStartupLock(lifecycleLock)
-	if err := a.requireCodexDesktopAbsent(); err != nil {
-		return CodexRestartSnapshot{}, err
+	if !opts.StopConflictingCodexHosts {
+		if err := a.requireCodexDesktopAbsent(); err != nil {
+			return CodexRestartSnapshot{}, err
+		}
 	}
 	if err := a.requireCodexRestartIdle(ctx); err != nil {
 		return CodexRestartSnapshot{}, err
@@ -127,17 +184,26 @@ func (a *ACPAgent) PrepareCodexRestart(
 	if err := a.preflightCodexHostConflicts(ctx, metadata.PID); err != nil {
 		return CodexRestartSnapshot{}, err
 	}
-	snapshot := CodexRestartSnapshot{
+	snapshot = CodexRestartSnapshot{
 		HostMode: strings.TrimSpace(a.codexHostMode), SocketPath: socketPath,
 		HostGeneration: metadata.Generation, HostStopped: true,
+	}
+	if len(plannedConflicts) > 0 {
+		stopped := make(map[int]bool, len(plannedConflicts))
+		for _, conflict := range plannedConflicts {
+			stopped[conflict.group.PGID] = true
+		}
+		snapshot.ConflictingHosts = restartConflictSnapshots(plannedConflicts, stopped)
 	}
 	// Persist the old generation before process mutation. If either process
 	// crashes after this point, startup recovery can still prove replacement.
 	if err := persistIntent(snapshot); err != nil {
 		return CodexRestartSnapshot{}, fmt.Errorf("持久化 Codex Host 重启意图: %w", err)
 	}
-	if err := a.requireCodexDesktopAbsent(); err != nil {
-		return CodexRestartSnapshot{}, err
+	if !opts.StopConflictingCodexHosts {
+		if err := a.requireCodexDesktopAbsent(); err != nil {
+			return CodexRestartSnapshot{}, err
+		}
 	}
 	if err := a.requireCodexRestartIdle(ctx); err != nil {
 		return CodexRestartSnapshot{}, err
@@ -158,6 +224,84 @@ func (a *ACPAgent) PrepareCodexRestart(
 	gate.finishExclusive(true, false)
 	committed = true
 	return snapshot, nil
+}
+
+// stopExplicitCodexHostConflicts takes a second, type-specific identity proof
+// for every extra Host. The complete plan is journaled before the first
+// external process mutation; each successful stop is then journaled separately
+// so an interrupted operation remains observable and recoverable.
+func (a *ACPAgent) stopExplicitCodexHostConflicts(
+	ctx context.Context,
+	snapshot CodexRestartSnapshot,
+	persistIntent func(CodexRestartSnapshot) error,
+) (CodexRestartSnapshot, []codexHostConflictTarget, error) {
+	plan, err := a.planCodexHostConflicts(ctx, a.codexRestartAuthorityPID(ctx, snapshot.SocketPath))
+	if err != nil {
+		return CodexRestartSnapshot{}, nil, err
+	}
+	if len(plan.conflictGroups) == 0 {
+		return snapshot, nil, nil
+	}
+	verified := make([]codexVerifiedHostConflictTarget, 0, len(plan.conflicts))
+	for _, target := range plan.conflicts {
+		if target.kind == codexHostConflictTargetUnknown {
+			return CodexRestartSnapshot{}, nil, fmt.Errorf(
+				"%w：PGID %d（%s）的身份无法完整证明；显式参数不会停止未知进程",
+				ErrCodexHostConflict, target.group.PGID, target.group.Kind,
+			)
+		}
+		candidate, verifyErr := a.verifyCodexHostConflictTarget(ctx, target)
+		if verifyErr != nil {
+			return CodexRestartSnapshot{}, nil, fmt.Errorf("复核待停止的 Codex Host PGID %d: %w", target.group.PGID, verifyErr)
+		}
+		verified = append(verified, candidate)
+	}
+
+	planned := make([]codexHostConflictTarget, 0, len(verified))
+	for _, target := range verified {
+		planned = append(planned, target.codexHostConflictTarget)
+	}
+	snapshot.ConflictingHosts = restartConflictSnapshots(planned, nil)
+	if err := persistIntent(snapshot); err != nil {
+		return CodexRestartSnapshot{}, nil, fmt.Errorf("持久化冲突 Codex Host 重启意图: %w", err)
+	}
+	a.codexRestartMu.Lock()
+	a.codexRestartSnapshot = snapshot
+	a.codexRestartPrepared = true
+	a.codexRestartMu.Unlock()
+
+	stopped := make(map[int]bool, len(verified))
+	for _, target := range verified {
+		if err := a.stopVerifiedCodexHostConflict(ctx, target); err != nil {
+			return CodexRestartSnapshot{}, nil, fmt.Errorf("%w: 停止冲突 Codex Host PGID %d: %v", ErrCodexRestartUnsafe, target.group.PGID, err)
+		}
+		stopped[target.group.PGID] = true
+		snapshot.ConflictingHosts = restartConflictSnapshots(planned, stopped)
+		if err := persistIntent(snapshot); err != nil {
+			return CodexRestartSnapshot{}, nil, fmt.Errorf("%w: 记录冲突 Codex Host PGID %d 已停止: %v", ErrCodexRestartUnsafe, target.group.PGID, err)
+		}
+		a.codexRestartMu.Lock()
+		a.codexRestartSnapshot = snapshot
+		a.codexRestartMu.Unlock()
+	}
+	return snapshot, planned, nil
+}
+
+func (a *ACPAgent) codexRestartAuthorityPID(ctx context.Context, socketPath string) int {
+	if a.isRuntimeStarted() {
+		if pid := a.runtimePID(); pid > 0 {
+			return pid
+		}
+	}
+	if metadata, err := a.validateManagedCodexHost(socketPath); err == nil {
+		return metadata.PID
+	}
+	if a.usesOfficialCodexDaemon() {
+		if output, err := a.runAndValidateCodexDaemonLifecycle(ctx, "version", socketPath); err == nil {
+			return output.PID
+		}
+	}
+	return 0
 }
 
 // CancelCodexRestart reconstructs a Host stopped by PrepareCodexRestart before

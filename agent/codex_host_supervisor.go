@@ -296,7 +296,7 @@ func (a *ACPAgent) validateManagedCodexHost(socketPath string) (codexHostMetadat
 	if metadata.CommandFingerprint != a.configuredCodexHostCommandFingerprint(socketPath) {
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 启动配置已变化；请先重启 WeClaw", nil)
 	}
-	identity, err := inspectCodexHostProcess(metadata.PID)
+	identity, err := a.inspectRestartCodexHostProcess(metadata.PID)
 	if err != nil {
 		return codexHostMetadata{}, codexauth.NewError(codexauth.CodeUnmanagedHost, "Codex Host 进程身份无法确认", err)
 	}

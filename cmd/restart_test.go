@@ -12,6 +12,59 @@ import (
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
+func TestRestartRegistersIndependentConflictingCodexHostStopFlag(t *testing.T) {
+	flag := restartCmd.Flags().Lookup("stop-conflicting-codex-hosts")
+	if flag == nil {
+		t.Fatal("restart 缺少 --stop-conflicting-codex-hosts")
+	}
+	if flag.Name == restartCmd.Flags().Lookup("force").Name {
+		t.Fatal("冲突 Host 停止授权不得复用 --force")
+	}
+}
+
+func TestRunRestartWithOptionsPropagatesConflictingHostAuthorization(t *testing.T) {
+	called := false
+	err := runRestartWithOptions(context.Background(), false, true, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
+		},
+		ensureSafeWithOptions: func(_ context.Context, force bool, stopConflicts bool, _ *config.Config) error {
+			called = true
+			if force || !stopConflicts {
+				t.Fatalf("force=%v stopConflicts=%v", force, stopConflicts)
+			}
+			return nil
+		},
+		isRunning: func() bool { return false },
+		out:       &bytes.Buffer{},
+	})
+	if err != nil || !called {
+		t.Fatalf("runRestartWithOptions error=%v called=%v", err, called)
+	}
+}
+
+func TestRunRestartWithOptionsPropagatesOfflineConflictingHostAuthorization(t *testing.T) {
+	called := false
+	err := runRestartWithOptions(context.Background(), false, true, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
+		offlineSafeWithOptions: func(_ *config.Config, stopConflicts bool) error {
+			called = true
+			if !stopConflicts {
+				t.Fatal("offline stop authorization was not propagated")
+			}
+			return nil
+		},
+		isRunning: func() bool { return false },
+		out:       &bytes.Buffer{},
+	})
+	if err != nil || !called {
+		t.Fatalf("runRestartWithOptions error=%v called=%v", err, called)
+	}
+}
+
 func TestRunRestartRejectsActiveControlledCLIWhileOffline(t *testing.T) {
 	prepared := false
 	err := runRestart(context.Background(), false, restartOps{

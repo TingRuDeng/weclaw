@@ -32,7 +32,7 @@ ai_summary:
 
 ## Core Directories
 
-- `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口；更新后重启与手动重启必须在停止旧服务前复用启动预检。
+- `cmd/`：CLI 命令、启动、停止、更新、重启保护、Companion 和发布相关入口；更新后重启与手动重启必须在停止旧服务前复用启动预检。`weclaw restart` 默认只读检查冲突 Codex Host；只有显式 `--stop-conflicting-codex-hosts` 才能停止身份验证通过的 official daemon、Codex App 私有 Host 或 WeClaw-managed Host。停止前必须完成 PID、PGID、UID、启动时间、命令哈希及 protected metadata/lifecycle 复核；任一漂移或未知进程均失败关闭。`--force` 只作用于 WeClaw 自身任务。WeClaw 未运行时同样通过 Agent 的离线受控入口执行显式停止，不按进程名清理、不删除 lock/journal/Codex 数据目录。
 - `config/`：配置结构、默认值、Agent 探测、工作目录白名单、平台/机器人用户白名单与旧配置兼容告警和 API 安全校验。
 - `agent/`：统一 Agent 接口与各类 runtime；`codexauth/`：按 shared-host namespace 隔离的 OAuth profile、系统凭据库/显式文件后端、安全文件与跨进程事务锁。
 - `platform/` 提供跨平台消息与回复抽象；`messaging/` 负责命令、会话、审批、结构化进展、任务状态、终态 outbox 和 Agent 调用。

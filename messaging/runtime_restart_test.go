@@ -21,6 +21,20 @@ type fakeCodexRestartAgent struct {
 	verifyCalls   int
 }
 
+type optionsFakeCodexRestartAgent struct {
+	*fakeCodexRestartAgent
+	stopConflicts bool
+}
+
+func (f *optionsFakeCodexRestartAgent) PrepareCodexRestartWithOptions(
+	ctx context.Context,
+	persist func(agent.CodexRestartSnapshot) error,
+	opts agent.CodexRestartOptions,
+) (agent.CodexRestartSnapshot, error) {
+	f.stopConflicts = opts.StopConflictingCodexHosts
+	return f.PrepareCodexRestart(ctx, persist)
+}
+
 func newFakeCodexRestartAgent() *fakeCodexRestartAgent {
 	return &fakeCodexRestartAgent{fakeAgent: fakeAgent{info: agent.AgentInfo{
 		Name: "codex", Type: "acp", Command: "codex",
@@ -65,6 +79,21 @@ func TestPrepareRuntimeRestartRejectsActiveControlledCLIAtServiceBoundary(t *tes
 	}
 	if h.IsDraining() {
 		t.Fatal("frontend lease rejection changed message admission")
+	}
+}
+
+func TestPrepareRuntimeRestartWithOptionsPropagatesConflictAuthorization(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	h := NewHandler(nil, nil)
+	h.runtimeRestartStateFile = filepath.Join(t.TempDir(), "runtime-restart.json")
+	controller := &optionsFakeCodexRestartAgent{fakeCodexRestartAgent: newFakeCodexRestartAgent()}
+	controller.prepareResult = agent.CodexRestartSnapshot{HostGeneration: 3, HostStopped: true}
+	h.SetDefaultAgent("codex", controller)
+	if _, err := h.PrepareRuntimeRestartWithOptions(context.Background(), false, true); err != nil {
+		t.Fatalf("PrepareRuntimeRestartWithOptions: %v", err)
+	}
+	if !controller.stopConflicts {
+		t.Fatal("conflicting-host authorization was not propagated to Codex Agent")
 	}
 }
 

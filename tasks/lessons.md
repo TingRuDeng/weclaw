@@ -462,6 +462,14 @@
 - 正确做法：受控 CLI 全程持共享内核租约，重启持排他租约；要求用户完整退出 App；在全局 idle 和 lifecycle lock 下只停止身份验证通过的 daemon/managed Host；Host 停止前持久化恢复状态，新服务在平台监听前验证唯一且 generation 已变化的 Host，外层停止失败则先重建 Host 才恢复消息准入。
 - 来源：2026-08-12 飞书接管同一 Codex thread 时复现 App/daemon writer 冲突，用户确认更新重启应统一收敛 Codex App、CLI、daemon 与 Host 生命周期。
 
+## 2026-08-19 冲突 Codex Host 必须显式授权后才可停止
+
+- 触发条件：Codex App 私有 Host、official daemon 或另一个 WeClaw-managed Host 残留，阻塞 `weclaw restart` 启动唯一共享 Host。
+- 规则：默认 restart 只读列出冲突并失败关闭；独立的 `--stop-conflicting-codex-hosts` 才授予一次停止授权。`--force` 只中断 WeClaw 自身任务，不能扩大为停止 Codex 服务或 Codex App。
+- 正确做法：先捕获全部冲突目标并持久化重启意图，再对每个目标复核 PID、PGID、UID、启动时间、原始 argv/命令哈希及类型专属 ownership proof；official daemon 只能调用其 lifecycle stop，managed Host 只能更新匹配的受保护 metadata，App 私有 Host 只能停止完整验证过的同一进程组。任何漂移、未知进程、metadata/lifecycle 不一致或停止结果不可确认都失败关闭。
+- 离线边界：WeClaw 未运行时默认仍不触碰外部 Host；显式参数通过同一 Agent 证明和停止逻辑处理残留 Host，不删除 lock、journal 或 Codex 数据目录。
+- 来源：2026-08-19 用户确认允许触碰 official daemon 或 WeClaw-managed Host，并要求 restart 列出阻塞服务、经显式参数后才自行停止对应服务。
+
 ## 2026-08-16 WeClaw 停止也必须协调受管 Host
 
 - 触发条件：执行 `weclaw stop`、前台 Ctrl-C 或 systemd stop，而共享 app-server 使用独立进程组并可能在 WeClaw 退出后被重新托管为 `PPID=1`。
