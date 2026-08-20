@@ -1,5 +1,52 @@
 # 当前任务记录
 
+## 2026-08-20 飞书连续审批被消息去重丢弃
+
+### 目标
+
+修复同一飞书任务卡片后续出现新的 Codex 提权请求时，点击允许或拒绝因复用旧消息 ID 而在进入审批 broker 前被全局消息去重丢弃的问题。
+
+### 范围与验收标准
+
+- [x] 同一卡片上不同飞书事件对应的审批动作使用不同的平台消息 ID。
+- [x] 回调缺失 `EventID` 时，同一卡片的后续 revision 仍能区分新的审批请求。
+- [x] `EventID` 与 revision 都缺失的旧卡片使用 approval key 摘要区分新请求，不把原值写入 Trace。
+- [x] 同一审批请求的平台重投和重复点击仍只提交一次决策。
+- [ ] 通过受影响模块、Race、全仓和正式发布门禁，以下一个补丁版本发布。
+
+### 实施步骤
+
+- [x] 先补失败测试，覆盖同一卡片的不同事件 ID 与无事件 ID 的不同 revision。
+- [x] 让审批卡片使用已有的稳定卡片消息 ID 生成逻辑，保留审批 key 幂等保护。
+- [x] 完成定向测试、Race、全仓验证、差异复核和独立审查。
+- [ ] 提交并推送 `main`，通过权威发布脚本发布下一个补丁版本，核对 tag、GitHub Release、资产、摘要与 Gitee 镜像。
+
+### 验证方式
+
+```bash
+go test ./feishu -run 'TestHandleCardActionEventDistinguishesSuccessiveApprovalsOnSameCard|TestHandleCardActionEventDeduplicatesApprovalAcrossNewPlatformEvents' -count=1
+go test ./messaging ./feishu ./platform -count=1 -timeout 180s
+go test -race ./messaging ./feishu -count=1 -timeout 360s
+go test ./... -count=1 -timeout 300s
+go vet ./...
+go mod tidy -diff
+go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_docs.py . --profile generic
+git diff --check
+env -u WECLAW_RELEASE_SOURCE_ONLY bash scripts/release.sh --next-patch
+```
+
+### 验证记录
+
+- 2026-08-20：定向审批回归、`./messaging ./feishu ./platform`、`messaging/feishu` Race 和 `go test ./...` 均通过。
+- 2026-08-20：`go vet ./...`、`go mod tidy -diff`、Staticcheck v0.7.0、govulncheck v1.6.0、文档校验和 `git diff --check` 均退出 0；govulncheck 报告当前代码调用链 0 个漏洞。
+- 2026-08-20：独立复核确认 EventID/revision/approval key 摘要优先级、跨新平台事件的业务幂等和原始 approval key 脱敏路径；未发现阻止发布的问题。真实飞书点击验收需在新版本安装后执行。
+
+### 回滚
+
+- 代码回滚只恢复审批卡片原有消息 ID 生成方式；不删除或改写已有审批、Codex thread 或飞书卡片数据。
+- 已公开的 Release 保留作为可回退版本；发布后问题通过新补丁版本修正，不删除或覆盖已发布资产。
+
 ## 2026-08-19 重启时显式停止冲突 Codex Host
 
 ### 目标

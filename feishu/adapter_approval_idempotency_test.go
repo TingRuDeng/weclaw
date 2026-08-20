@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/platform"
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 )
 
 func TestRecordApprovalActionPurgesExpired(t *testing.T) {
@@ -34,6 +35,103 @@ func TestRecordApprovalActionPurgesExpired(t *testing.T) {
 	}
 	if _, ok := adapter.approvals["approval\x00appr-1"]; ok {
 		t.Fatal("expired approval key should have been purged")
+	}
+}
+
+func TestHandleCardActionEventDistinguishesSuccessiveApprovalsOnSameCard(t *testing.T) {
+	tests := []struct {
+		name         string
+		eventIDs     [2]string
+		revisions    [2]string
+		approvalKeys [2]string
+		messageIDs   [2]string
+	}{
+		{
+			name:         "event id",
+			eventIDs:     [2]string{"evt_approval_1", "evt_approval_2"},
+			revisions:    [2]string{"revision-1", "revision-2"},
+			approvalKeys: [2]string{"approval-key-1", "approval-key-2"},
+			messageIDs:   [2]string{"om_msg:card-event:evt_approval_1", "om_msg:card-event:evt_approval_2"},
+		},
+		{
+			name:         "card revision fallback",
+			revisions:    [2]string{"revision-1", "revision-2"},
+			approvalKeys: [2]string{"approval-key-1", "approval-key-2"},
+			messageIDs:   [2]string{"om_msg:card-revision:revision-1:choice:allow", "om_msg:card-revision:revision-2:choice:allow"},
+		},
+		{
+			name:         "approval key fallback",
+			approvalKeys: [2]string{"approval-key-1", "approval-key-2"},
+			messageIDs: [2]string{
+				"om_msg:card-approval:fe39ceee9f943b54bd6e72a0e10d91e58de0587f8fecbdd2d0bebb319985fc0c:choice:allow",
+				"om_msg:card-approval:92908d40ab32c9d24b2a2372d7bc480ec90a075490bc1268f5cd17ecae3a08db:choice:allow",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+			messageIDs := make([]string, 0, 2)
+			for i := range tt.messageIDs {
+				event := approvalCardActionEvent("allow", "允许本次", "")
+				event.Event.Action.Value["approval_key"] = tt.approvalKeys[i]
+				event.Event.Action.Value[cardRevisionValueKey] = tt.revisions[i]
+				if tt.eventIDs[i] != "" {
+					event.EventV2Base = &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: tt.eventIDs[i]}}
+				}
+				if _, err := adapter.handleCardActionEvent(context.Background(), event, func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+					messageIDs = append(messageIDs, msg.MessageID)
+					consumeApprovalForTest(msg)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(messageIDs) != len(tt.messageIDs) {
+				t.Fatalf("messageIDs=%#v, want %#v", messageIDs, tt.messageIDs)
+			}
+			for i, want := range tt.messageIDs {
+				if messageIDs[i] != want {
+					t.Fatalf("messageIDs[%d]=%q, want %q", i, messageIDs[i], want)
+				}
+				if strings.Contains(messageIDs[i], tt.approvalKeys[i]) {
+					t.Fatalf("messageIDs[%d]=%q, should not contain raw approval key", i, messageIDs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestHandleCardActionEventDeduplicatesApprovalAcrossNewPlatformEvents(t *testing.T) {
+	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})
+	first := approvalCardActionEvent("allow", "允许本次", "")
+	first.EventV2Base = &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_retry_1"}}
+	second := approvalCardActionEvent("allow", "允许本次", "")
+	second.EventV2Base = &larkevent.EventV2Base{Header: &larkevent.EventHeader{EventID: "evt_retry_2"}}
+	dispatched := make(chan platform.IncomingMessage, 2)
+	dispatch := func(_ context.Context, msg platform.IncomingMessage, _ platform.Replier) {
+		dispatched <- msg
+		consumeApprovalForTest(msg)
+	}
+
+	if _, err := adapter.handleCardActionEvent(context.Background(), first, dispatch); err != nil {
+		t.Fatalf("first handleCardActionEvent error: %v", err)
+	}
+	if _, err := adapter.handleCardActionEvent(context.Background(), second, dispatch); err != nil {
+		t.Fatalf("second handleCardActionEvent error: %v", err)
+	}
+	select {
+	case msg := <-dispatched:
+		if msg.MessageID != "om_msg:card-event:evt_retry_1" {
+			t.Fatalf("first MessageID=%q, want event-specific identity", msg.MessageID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first dispatch")
+	}
+	select {
+	case msg := <-dispatched:
+		t.Fatalf("retried approval dispatched after new platform event: %#v", msg)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

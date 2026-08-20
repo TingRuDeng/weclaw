@@ -65,7 +65,7 @@ func (a *Adapter) approvalActionMessage(action parsedCardAction, resultCh chan p
 		UserAliases: action.UserAliases,
 		ChatID:      action.ChatID,
 		Route:       platform.SessionRoute{Key: action.SessionKey},
-		MessageID:   action.MessageID + ":card:" + action.Action + ":" + action.Choice,
+		MessageID:   approvalActionMessageID(action),
 		RawCommand: &platform.CardAction{
 			Action: action.Action,
 			Value: map[string]string{
@@ -79,6 +79,16 @@ func (a *Adapter) approvalActionMessage(action parsedCardAction, resultCh chan p
 		},
 		Metadata: metadata,
 	}
+}
+
+func approvalActionMessageID(action parsedCardAction) string {
+	if strings.TrimSpace(action.EventID) != "" || strings.TrimSpace(action.CardRevision) != "" {
+		return regularCardActionMessageID(action)
+	}
+	if approvalKey := strings.TrimSpace(action.Approval); approvalKey != "" {
+		return strings.TrimSpace(action.MessageID) + ":card-approval:" + hashString(approvalKey) + ":" + action.Action + ":" + action.Choice
+	}
+	return regularCardActionMessageID(action)
 }
 
 func (a *Adapter) resolveApprovalCardAction(ctx context.Context, action parsedCardAction, msg platform.IncomingMessage, resultCh <-chan platform.CardActionResult, dispatch platform.DispatchFunc) parsedCardAction {

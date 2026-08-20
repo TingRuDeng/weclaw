@@ -923,6 +923,14 @@
 - 正确做法：request 仍 pending 就续期；request 消失且原 turn active 就收敛为其他前端已处理；原 turn terminal/rollover 就禁止 steer；状态不可用时失败关闭并保留 binding。同一 request 向多个 observer 展示时，由 `(thread, turn, request)` broker 串行唯一提交，其他展示根据 `serverRequest/resolved` 收敛。`Request not found` 竞态不再重复报错，明确远程错误与写后断线/超时分别分类。
 - 来源：2026-08-13 本机审计日志中的 `approval_default_deny reason=timeout` 与 Codex Desktop 同一 request 的重复响应记录。
 
+## 2026-08-20 卡片审批消息身份必须区分新请求与平台重投
+
+- 触发条件：同一飞书任务卡在一次审批处理后继续运行，后续又出现新的 Codex 提权请求。
+- 规则：卡片回调的平台消息 ID 优先使用飞书 `EventID`，缺失时使用每次渲染生成的 `CardRevision`，两者都缺失的兼容路径使用 approval key 的 SHA-256 摘要，不把原值写入 Trace；业务审批幂等则继续使用 approval key 和原卡片绑定。
+- 反例：审批专用分支只用“原消息 ID + action + choice”生成消息 ID；第一次点击被全局去重记住后，后续新审批使用同一按钮会在进入审批 broker 前被丢弃。
+- 正确做法：审批分支复用普通卡片的稳定事件身份生成器，再为旧卡片补不泄露原值的 approval key 摘要兜底；回归测试同时覆盖同一卡片的不同事件、无事件 ID 时的不同 revision、两者都缺失时的不同 approval key，以及同一审批重投只处理一次。
+- 来源：2026-08-20 本机 Trace 显示后续点击已进入 `message.received`，但因复用 `:card:choice:accept` 消息 ID 立即进入 `message.duplicate / dropped`。
+
 ## 2026-08-17 Codex 会话恢复必须有界读取历史
 
 - 触发条件：用户从消息平台绑定累计了大量 turn 或 items 的 Codex thread，app-server 把完整历史放进 `thread/resume` 或 `thread/read` 的单条 NDJSON 响应。
