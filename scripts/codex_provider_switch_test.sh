@@ -50,10 +50,13 @@ import sys
 root = pathlib.Path(sys.argv[1])
 
 state = sqlite3.connect(root / "state_5.sqlite")
-state.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, model_provider TEXT NOT NULL)")
+state.execute(
+    "CREATE TABLE threads ("
+    "id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0)"
+)
 state.executemany(
-    "INSERT INTO threads (id, model_provider) VALUES (?, ?)",
-    [("thread-current", "OpenAI"), ("thread-archived", "OpenAI")],
+    "INSERT INTO threads (id, model_provider, archived) VALUES (?, ?, ?)",
+    [("thread-current", "OpenAI", 0), ("thread-archived", "OpenAI", 1)],
 )
 state.commit()
 state.close()
@@ -153,11 +156,12 @@ test_dry_run_reports_changes_without_writing() {
   [[ "${after}" == "${before}" ]] || fail "dry-run modified fixture files"
   assert_contains "${output}" "mode=dry-run"
   assert_contains "${output}" "target_provider=openai"
-  assert_contains "${output}" "state_rows=2"
-  assert_contains "${output}" "catalog_rows=2"
-  assert_contains "${output}" "rollout_files=2"
-  assert_contains "${output}" "session_meta_records=3"
-  assert_contains "${output}" "item_id_repairs=3"
+  assert_contains "${output}" "state_rows=1"
+  assert_contains "${output}" "catalog_rows=1"
+  assert_contains "${output}" "rollout_files=1"
+  assert_contains "${output}" "session_meta_records=2"
+  assert_contains "${output}" "item_id_repairs=2"
+  assert_contains "${output}" "archived_threads_skipped=1"
   assert_contains "${output}" "encrypted_content_items=1"
 }
 
@@ -186,15 +190,17 @@ import sys
 home = pathlib.Path(sys.argv[1])
 backup = pathlib.Path(sys.argv[2])
 
-for database_path, table in (
-    (home / "state_5.sqlite", "threads"),
-    (home / "sqlite" / "codex-dev.db", "local_thread_catalog"),
+for database_path, table, id_column in (
+    (home / "state_5.sqlite", "threads", "id"),
+    (home / "sqlite" / "codex-dev.db", "local_thread_catalog", "thread_id"),
 ):
     connection = sqlite3.connect(database_path)
-    providers = {row[0] for row in connection.execute(f"SELECT model_provider FROM {table}")}
+    providers = dict(
+        connection.execute(f"SELECT {id_column}, model_provider FROM {table}")
+    )
     integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
     connection.close()
-    if providers != {"openai"}:
+    if providers != {"thread-current": "openai", "thread-archived": "OpenAI"}:
         raise SystemExit(f"unexpected providers in {database_path}: {providers}")
     if integrity != "ok":
         raise SystemExit(f"integrity check failed for {database_path}: {integrity}")
@@ -206,11 +212,11 @@ for path in sorted((home / "sessions").rglob("*.jsonl")) + sorted(
     records.extend(json.loads(line) for line in path.read_text(encoding="utf-8").splitlines())
 
 providers = {
-    record["payload"]["model_provider"]
+    record["payload"]["id"]: record["payload"]["model_provider"]
     for record in records
     if record.get("type") == "session_meta"
 }
-if providers != {"openai"}:
+if providers != {"thread-current": "openai", "thread-archived": "OpenAI"}:
     raise SystemExit(f"unexpected rollout providers: {providers}")
 
 response_items = {
@@ -221,7 +227,7 @@ response_items = {
 expected_ids = {
     "function_call": "fc_function",
     "reasoning": "rs_reasoning",
-    "custom_tool_call": "ctc_custom",
+    "custom_tool_call": "item_custom",
 }
 actual_ids = {item_type: response_items[item_type]["id"] for item_type in expected_ids}
 if actual_ids != expected_ids:
@@ -248,7 +254,6 @@ expected_paths = {
     "state_5.sqlite",
     "sqlite/codex-dev.db",
     "sessions/2026/08/05/current.jsonl",
-    "archived_sessions/archived.jsonl",
 }
 if backed_up_paths != expected_paths:
     raise SystemExit(f"unexpected backup paths: {backed_up_paths}")
@@ -283,7 +288,7 @@ test_bidirectional_idempotent_and_restore() {
 
   restore_preview="$("${switch_script}" --restore "${first_backup}" --codex-home "${codex_home}")"
   assert_contains "${restore_preview}" "mode=dry-run"
-  assert_contains "${restore_preview}" "restore_files=4"
+  assert_contains "${restore_preview}" "restore_files=3"
   restore_output="$("${switch_script}" --restore "${first_backup}" --apply --codex-home "${codex_home}")"
   assert_contains "${restore_output}" "status=restored"
   assert_contains "${restore_output}" "restore_source=${first_backup}"
@@ -480,7 +485,7 @@ PY
 
   output="$("${switch_script}" openai --repair-item-ids --codex-home "${codex_home}")"
   assert_contains "${output}" "mode=dry-run"
-  assert_contains "${output}" "rollout_files=2"
+  assert_contains "${output}" "rollout_files=1"
 }
 
 test_invalid_json_and_id_collisions_fail_without_writing() {
@@ -548,7 +553,7 @@ test_restore_rejects_a_corrupted_backup() {
   apply_output="$("${switch_script}" openai --apply --codex-home "${codex_home}")"
   backup_dir="$(printf '%s\n' "${apply_output}" | awk -F= '$1 == "backup_dir" {print substr($0, index($0, "=") + 1)}')"
   [[ -d "${backup_dir}" ]] || fail "corruption test backup is missing"
-  printf '%s\n' 'tampered' >>"${backup_dir}/archived_sessions/archived.jsonl"
+  printf '%s\n' 'tampered' >>"${backup_dir}/sessions/2026/08/05/current.jsonl"
   before="$(fixture_snapshot "${codex_home}")"
 
   set +e
@@ -678,7 +683,7 @@ import sys
 connection = sqlite3.connect(sys.argv[1])
 rows = dict(connection.execute("SELECT id, provider_update_count FROM threads"))
 connection.close()
-expected = {"thread-current": 0, "thread-archived": 1}
+expected = {"thread-current": 0, "thread-archived": 0}
 if rows != expected:
     raise SystemExit(f"provider update touched unchanged rows: {rows}")
 PY

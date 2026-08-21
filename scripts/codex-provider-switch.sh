@@ -10,6 +10,7 @@ usage() {
   codex-provider-switch.sh --restore BACKUP_DIR [--apply] [--codex-home PATH]
 
 默认只做只读预览；只有显式传入 --apply 才会写入。
+归档会话不会切换 provider，也不会修复历史 item ID。
 
 选项:
   --repair-item-ids  将已知 Responses 类型的错误 item_ 前缀改为类型专用前缀
@@ -135,7 +136,27 @@ def table_has_column(connection: sqlite3.Connection, table: str, column: str) ->
     return any(row[1] == column for row in rows)
 
 
-def count_sqlite_changes(path: pathlib.Path, table: str, target: str, optional: bool) -> int:
+def provider_change_filter(
+    table: str, target: str, archived_thread_ids: set[str]
+) -> tuple[str, tuple[str, ...]]:
+    clause = "model_provider IS NULL OR model_provider <> ?"
+    parameters: tuple[str, ...] = (target,)
+    if table == "threads":
+        clause = f"({clause}) AND archived = 0"
+    elif table == "local_thread_catalog" and archived_thread_ids:
+        placeholders = ",".join("?" for _ in archived_thread_ids)
+        clause = f"({clause}) AND thread_id NOT IN ({placeholders})"
+        parameters += tuple(sorted(archived_thread_ids))
+    return clause, parameters
+
+
+def count_sqlite_changes(
+    path: pathlib.Path,
+    table: str,
+    target: str,
+    optional: bool,
+    archived_thread_ids: set[str],
+) -> int:
     if not path.exists():
         if optional:
             return 0
@@ -149,9 +170,9 @@ def count_sqlite_changes(path: pathlib.Path, table: str, target: str, optional: 
                 if optional:
                     return 0
                 fail(f"{path} does not contain {table}.model_provider")
+            clause, parameters = provider_change_filter(table, target, archived_thread_ids)
             row = connection.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE model_provider IS NULL OR model_provider <> ?",
-                (target,),
+                f"SELECT COUNT(*) FROM {table} WHERE {clause}", parameters
             ).fetchone()
             return int(row[0])
         finally:
@@ -173,6 +194,25 @@ def sqlite_table_available(path: pathlib.Path, table: str) -> bool:
         fail(f"cannot inspect SQLite database {path}: {exc}")
 
 
+def read_archived_thread_ids(path: pathlib.Path) -> set[str]:
+    if not path.exists() or path.is_symlink() or not path.is_file():
+        fail(f"required SQLite database does not exist or is unsafe: {path}")
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            if not table_has_column(connection, "threads", "archived"):
+                fail(f"{path} does not contain threads.archived")
+            return {
+                row[0]
+                for row in connection.execute("SELECT id FROM threads WHERE archived <> 0")
+                if isinstance(row[0], str) and row[0]
+            }
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        fail(f"cannot inspect archived threads in {path}: {exc}")
+
+
 def contains_encrypted_content(value: object) -> bool:
     if isinstance(value, dict):
         if value.get("encrypted_content"):
@@ -184,15 +224,12 @@ def contains_encrypted_content(value: object) -> bool:
 
 
 def rollout_paths(home: pathlib.Path) -> list[pathlib.Path]:
-    paths: list[pathlib.Path] = []
-    for directory_name in ("sessions", "archived_sessions"):
-        directory = home / directory_name
-        if not directory.exists():
-            continue
-        if directory.is_symlink() or not directory.is_dir():
-            fail(f"rollout directory must be a real directory: {directory}")
-        paths.extend(path for path in directory.rglob("*.jsonl") if path.is_file())
-    return sorted(paths)
+    directory = home / "sessions"
+    if not directory.exists():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        fail(f"rollout directory must be a real directory: {directory}")
+    return sorted(path for path in directory.rglob("*.jsonl") if path.is_file())
 
 
 def replace_item_references(value: object, replacements: dict[str, str], key: str = "") -> object:
@@ -528,15 +565,21 @@ def make_backup(
 
 
 def stage_sqlite_update(
-    source: pathlib.Path, destination: pathlib.Path, table: str, provider: str
+    source: pathlib.Path,
+    destination: pathlib.Path,
+    table: str,
+    provider: str,
+    archived_thread_ids: set[str],
 ) -> None:
     sqlite_backup(source, destination)
     connection = sqlite3.connect(destination)
     try:
+        clause, filter_parameters = provider_change_filter(
+            table, provider, archived_thread_ids
+        )
         connection.execute(
-            f"UPDATE {table} SET model_provider = ? "
-            "WHERE model_provider IS NULL OR model_provider <> ?",
-            (provider, provider),
+            f"UPDATE {table} SET model_provider = ? WHERE {clause}",
+            (provider, *filter_parameters),
         )
         connection.commit()
         result = connection.execute("PRAGMA integrity_check").fetchone()
@@ -546,15 +589,17 @@ def stage_sqlite_update(
         connection.close()
 
 
-def validate_sqlite_provider(path: pathlib.Path, table: str, provider: str) -> None:
+def validate_sqlite_provider(
+    path: pathlib.Path, table: str, provider: str, archived_thread_ids: set[str]
+) -> None:
     connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         result = connection.execute("PRAGMA integrity_check").fetchone()
         if not result or result[0] != "ok":
             fail(f"SQLite integrity check failed: {path}")
+        clause, parameters = provider_change_filter(table, provider, archived_thread_ids)
         mismatch = connection.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE model_provider IS NULL OR model_provider <> ?",
-            (provider,),
+            f"SELECT COUNT(*) FROM {table} WHERE {clause}", parameters
         ).fetchone()
         if not mismatch or int(mismatch[0]) != 0:
             fail(f"provider verification failed for {path}")
@@ -598,6 +643,7 @@ def apply_switch(
     provider: str,
     database_plans: list[tuple[pathlib.Path, str, int]],
     rollout_plans: dict[pathlib.Path, bytes],
+    archived_thread_ids: set[str],
 ) -> pathlib.Path | None:
     files = [path for path, _, count in database_plans if count] + list(rollout_plans)
     if not files:
@@ -620,7 +666,7 @@ def apply_switch(
                 continue
             staged = stage_root / source.relative_to(home)
             staged.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            stage_sqlite_update(source, staged, table, provider)
+            stage_sqlite_update(source, staged, table, provider, archived_thread_ids)
             replacements.append((staged, source, stat.S_IMODE(source.stat().st_mode), True))
         for source, content in rollout_plans.items():
             staged = stage_root / source.relative_to(home)
@@ -647,7 +693,7 @@ def apply_switch(
                 replaced.append(destination)
             for path, table, count in database_plans:
                 if count:
-                    validate_sqlite_provider(path, table, provider)
+                    validate_sqlite_provider(path, table, provider, archived_thread_ids)
             for path, expected_content in rollout_plans.items():
                 validate_jsonl(path)
                 if path.read_bytes() != expected_content:
@@ -872,8 +918,17 @@ if restore:
 
 state_path = home / "state_5.sqlite"
 catalog_path = home / "sqlite" / "codex-dev.db"
-state_rows = count_sqlite_changes(state_path, "threads", provider, optional=False)
-catalog_rows = count_sqlite_changes(catalog_path, "local_thread_catalog", provider, optional=True)
+archived_thread_ids = read_archived_thread_ids(state_path)
+state_rows = count_sqlite_changes(
+    state_path, "threads", provider, optional=False, archived_thread_ids=archived_thread_ids
+)
+catalog_rows = count_sqlite_changes(
+    catalog_path,
+    "local_thread_catalog",
+    provider,
+    optional=True,
+    archived_thread_ids=archived_thread_ids,
+)
 (
     rollout_plans,
     session_meta_records,
@@ -887,6 +942,7 @@ print(f"codex_home={home}")
 print(f"target_provider={provider}")
 print(f"state_rows={state_rows}")
 print(f"catalog_rows={catalog_rows}")
+print(f"archived_threads_skipped={len(archived_thread_ids)}")
 print(f"rollout_files={len(rollout_plans)}")
 print(f"session_meta_records={session_meta_records}")
 print(f"item_id_repairs={item_id_repairs}")
@@ -901,7 +957,9 @@ if apply:
     database_plans = [(state_path, "threads", state_rows)]
     if sqlite_table_available(catalog_path, "local_thread_catalog"):
         database_plans.append((catalog_path, "local_thread_catalog", catalog_rows))
-    backup_dir = apply_switch(home, provider, database_plans, rollout_plans)
+    backup_dir = apply_switch(
+        home, provider, database_plans, rollout_plans, archived_thread_ids
+    )
     if backup_dir is None:
         print("status=no-changes")
     else:
