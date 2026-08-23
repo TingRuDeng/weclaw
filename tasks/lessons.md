@@ -470,6 +470,13 @@
 - 离线边界：WeClaw 未运行时默认仍不触碰外部 Host；显式参数通过同一 Agent 证明和停止逻辑处理残留 Host，不删除 lock、journal 或 Codex 数据目录。
 - 来源：2026-08-19 用户确认允许触碰 official daemon 或 WeClaw-managed Host，并要求 restart 列出阻塞服务、经显式参数后才自行停止对应服务。
 
+## 2026-08-23 ACP 断线后的重启空闲状态必须由 Host 权威复核
+
+- 触发条件：WeClaw 到 shared Codex Host 的 ACP/WebSocket 客户端异常断开，内存 binding 仍保存断线前的 active thread，但 Host 上对应 turn 已经结束。
+- 规则：writer lease 始终先失败关闭；没有 writer lease 时，普通重启只连接已存在的受管 socket，并分页读取 archived/unarchived `thread/list`。权威列表全部 idle 后只清除 `CodexRuntimeWeClaw` binding 的缓存 active，Desktop/unknown/conflict 不得借用这份证明，也不让 `--force` 绕过门禁。
+- 失败边界：Host 不存在、重连失败、thread 列表无法完整读取、真实 active、未知状态或 owner conflict 均继续拒绝重启；复核前不得停止 Host、删除 writer lock 或创建替代 Host。
+- 来源：2026-08-23 真机日志确认 WebSocket `close 1006` 后 WeClaw `active_tasks=0`，但重启仍被 `存在 1 个活动 thread，unknown=false` 阻断。
+
 ## 2026-08-16 WeClaw 停止也必须协调受管 Host
 
 - 触发条件：执行 `weclaw stop`、前台 Ctrl-C 或 systemd stop，而共享 app-server 使用独立进程组并可能在 WeClaw 退出后被重新托管为 `PPID=1`。

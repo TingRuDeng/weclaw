@@ -62,6 +62,110 @@ func TestPrepareCodexRestartRejectsWriterLeaseBeforeHostMutation(t *testing.T) {
 	}
 }
 
+func TestPrepareCodexRestartRevalidatesStaleActiveSnapshotAfterClientDisconnect(t *testing.T) {
+	a, _, cleanup := newManagedRestartFixture(t, 11)
+	defer cleanup()
+	req := CodexRuntimeRequest{
+		Ref:    CodexThreadRef{ConversationID: "conversation", ThreadID: "thread-stale"},
+		Intent: CodexControlIntent{Owner: CodexControlRemote, RouteKey: "route", ConversationID: "conversation", Revision: 1},
+	}
+	if _, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, CodexThreadState{
+		ThreadID: "thread-stale", Active: true, ActiveTurnID: "turn-finished",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.started = false
+	a.mu.Unlock()
+	threadListCalls := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/list" {
+			return nil, errors.New("unexpected rpc: " + method)
+		}
+		threadListCalls++
+		return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+	}
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+
+	_, err := a.PrepareCodexRestart(context.Background(), func(CodexRestartSnapshot) error { return nil })
+	if err != nil {
+		t.Fatalf("PrepareCodexRestart stale snapshot: %v", err)
+	}
+	if threadListCalls == 0 {
+		t.Fatal("重启前没有重新读取 daemon 的权威 thread 状态")
+	}
+	if !stopped {
+		t.Fatal("daemon 已确认空闲后没有继续协调停止 Host")
+	}
+}
+
+func TestPrepareCodexRestartRejectsAuthoritativeActiveThreadAfterClientDisconnect(t *testing.T) {
+	a, _, cleanup := newManagedRestartFixture(t, 11)
+	defer cleanup()
+	a.mu.Lock()
+	a.started = false
+	a.mu.Unlock()
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/list" {
+			return nil, errors.New("unexpected rpc: " + method)
+		}
+		return json.RawMessage(`{"data":[{"id":"thread-active","status":{"type":"active"}}],"nextCursor":null}`), nil
+	}
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+
+	_, err := a.PrepareCodexRestart(context.Background(), func(CodexRestartSnapshot) error { return nil })
+	if !errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("PrepareCodexRestart error=%v, want authoritative active rejection", err)
+	}
+	if stopped {
+		t.Fatal("权威 thread 状态为 active 时不得停止 Host")
+	}
+}
+
+func TestPrepareCodexRestartDoesNotUseSharedHostIdleToClearUnknownRuntime(t *testing.T) {
+	a, _, cleanup := newManagedRestartFixture(t, 11)
+	defer cleanup()
+	req := CodexRuntimeRequest{
+		Ref:    CodexThreadRef{ConversationID: "conversation", ThreadID: "thread-unknown"},
+		Intent: CodexControlIntent{Owner: CodexControlRemote, RouteKey: "route", ConversationID: "conversation", Revision: 1},
+	}
+	if _, err := a.codexOwners.activateRuntime(req, CodexRuntimeUnknown, CodexThreadState{
+		ThreadID: "thread-unknown", Active: true, ActiveTurnID: "turn-unknown",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.started = false
+	a.mu.Unlock()
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "thread/list" {
+			return nil, errors.New("unexpected rpc: " + method)
+		}
+		return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+	}
+	stopped := false
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopped = true
+		return nil
+	}
+
+	_, err := a.PrepareCodexRestart(context.Background(), func(CodexRestartSnapshot) error { return nil })
+	if !errors.Is(err, ErrCodexWriterBusy) {
+		t.Fatalf("PrepareCodexRestart error=%v, want unknown runtime rejection", err)
+	}
+	if stopped {
+		t.Fatal("shared Host 空闲不能覆盖 unknown runtime 的 active 状态")
+	}
+}
+
 func TestPrepareCodexRestartDoesNotStopHostBeforeIntentIsDurable(t *testing.T) {
 	a, _, cleanup := newManagedRestartFixture(t, 11)
 	defer cleanup()

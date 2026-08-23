@@ -118,6 +118,9 @@ func (a *ACPAgent) PrepareCodexRestartWithOptions(
 		if err := a.requireCodexDesktopAbsent(); err != nil {
 			return CodexRestartSnapshot{}, err
 		}
+		if err := a.reconnectExistingCodexHostForRestart(ctx); err != nil {
+			return CodexRestartSnapshot{}, err
+		}
 	}
 	if err := a.requireCodexRestartIdle(ctx); err != nil {
 		return CodexRestartSnapshot{}, err
@@ -534,6 +537,31 @@ func (a *ACPAgent) requireCodexDesktopAbsent() error {
 	return nil
 }
 
+// reconnectExistingCodexHostForRestart refreshes a disconnected client before
+// restart safety trusts its cached thread state. It never starts a replacement
+// Host: a missing socket leaves the later failed-closed checks unchanged.
+func (a *ACPAgent) reconnectExistingCodexHostForRestart(ctx context.Context) error {
+	if a.isRuntimeStarted() || a.rpcCall != nil {
+		return nil
+	}
+	socketPath, err := a.resolveCodexHostSocket()
+	if err != nil {
+		return err
+	}
+	exists, err := existingCodexHostSocket(socketPath)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if err := a.attachExistingSharedCodexHost(ctx, socketPath); err != nil {
+		return fmt.Errorf("%w: 重新连接已有 Codex Host 以复核 thread 状态: %v", ErrCodexRestartUnsafe, err)
+	}
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	return nil
+}
+
 func (a *ACPAgent) requireCodexRestartIdle(ctx context.Context) error {
 	if a.codexOwners != nil {
 		if count, uncertain := a.codexOwners.anyWriterLeaseStatus(); count > 0 {
@@ -542,15 +570,21 @@ func (a *ACPAgent) requireCodexRestartIdle(ctx context.Context) error {
 			}
 			return fmt.Errorf("%w: 存在 %d 个 writer lease", ErrCodexWriterBusy, count)
 		}
-		if active, unknown := a.codexOwners.anyActiveThreadStatus(); active > 0 || unknown {
-			return fmt.Errorf("%w: 存在 %d 个活动 thread，unknown=%t", ErrCodexWriterBusy, active, unknown)
-		}
 	}
-	if a.isRuntimeStarted() {
+	authoritativeIdle := a.isRuntimeStarted() || a.rpcCall != nil
+	if authoritativeIdle {
 		idleCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if err := a.ensureAllCodexThreadsIdle(idleCtx); err != nil {
 			return fmt.Errorf("%w: 无法确认所有 Codex thread 均为空闲: %v", ErrCodexWriterBusy, err)
+		}
+		if a.codexOwners != nil {
+			a.codexOwners.confirmWeClawThreadsIdle()
+		}
+	}
+	if a.codexOwners != nil {
+		if active, unknown := a.codexOwners.anyActiveThreadStatus(); active > 0 || unknown {
+			return fmt.Errorf("%w: 存在 %d 个活动 thread，unknown=%t", ErrCodexWriterBusy, active, unknown)
 		}
 	}
 	return nil

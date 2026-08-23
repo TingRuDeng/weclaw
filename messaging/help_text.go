@@ -85,7 +85,7 @@ func managementHelpText() string {
 
 /restart 重启 WeClaw（飞书仅已授权账号私聊）
 
-/restart --force 强制重启 WeClaw（飞书仅已授权账号私聊）
+/restart --force 只中断 WeClaw 自身任务，不绕过 Codex thread 门禁（飞书仅已授权账号私聊）
 
 /feishu users pending 查看待授权飞书用户
 

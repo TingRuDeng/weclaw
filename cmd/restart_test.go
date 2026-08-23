@@ -20,6 +20,13 @@ func TestRestartRegistersIndependentConflictingCodexHostStopFlag(t *testing.T) {
 	if flag.Name == restartCmd.Flags().Lookup("force").Name {
 		t.Fatal("冲突 Host 停止授权不得复用 --force")
 	}
+	force := restartCmd.Flags().Lookup("force")
+	if force == nil {
+		t.Fatal("restart 缺少 --force")
+	}
+	if !strings.Contains(force.Usage, "不绕过 Codex Host thread 门禁") {
+		t.Fatalf("force usage=%q, must explain Codex Host thread boundary", force.Usage)
+	}
 }
 
 func TestRunRestartWithOptionsPropagatesConflictingHostAuthorization(t *testing.T) {

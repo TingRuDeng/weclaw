@@ -19,7 +19,12 @@ var (
 )
 
 func init() {
-	restartCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
+	restartCmd.Flags().BoolVar(
+		&restartForceFlag,
+		"force",
+		false,
+		"中断 WeClaw 自身运行中任务；不绕过 Codex Host thread 门禁",
+	)
 	restartCmd.Flags().BoolVar(
 		&restartStopConflictingCodexHostsFlag,
 		"stop-conflicting-codex-hosts",

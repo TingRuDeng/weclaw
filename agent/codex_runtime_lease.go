@@ -160,6 +160,22 @@ func (r *codexRuntimeOwnerRegistry) anyActiveThreadStatus() (count int, unknown 
 	return count, unknown
 }
 
+// confirmWeClawThreadsIdle applies a complete authoritative shared-Host idle
+// snapshot to cached WeClaw bindings only. Desktop, unknown, and conflict
+// bindings belong to different or unproven authorities and remain fail-closed.
+func (r *codexRuntimeOwnerRegistry) confirmWeClawThreadsIdle() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for threadID, binding := range r.threads {
+		if binding.Runtime != CodexRuntimeWeClaw {
+			continue
+		}
+		binding.State.Active = false
+		binding.State.ActiveTurnID = ""
+		r.threads[threadID] = binding
+	}
+}
+
 // accept 把实际 turn ID 绑定到租约，并核对启动响应前到达的 Desktop 快照。
 func (l *codexWriterLease) accept(turnID string) error {
 	turnID = strings.TrimSpace(turnID)

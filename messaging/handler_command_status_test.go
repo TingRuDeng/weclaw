@@ -355,6 +355,7 @@ func TestWeChatHelpShowsManagementCommandsForAuthorizedUser(t *testing.T) {
 		"管理操作：",
 		"/update 远程更新 WeClaw",
 		"/restart 重启 WeClaw",
+		"/restart --force 只中断 WeClaw 自身任务，不绕过 Codex thread 门禁",
 		"/feishu users pending 查看待授权飞书用户",
 		"/feishu users revoke <用户ID> 取消飞书用户授权",
 	} {
