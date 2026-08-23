@@ -188,8 +188,11 @@ func stopLegacyRuntime(ctx context.Context, cfg *config.Config, stop func() erro
 		return err
 	}
 	if err := stop(); err != nil {
-		_ = cancelLegacyRuntimeDrain(context.Background(), cfg)
-		return fmt.Errorf("旧版服务迁移停止失败: %w", err)
+		stopErr := fmt.Errorf("旧版服务迁移停止失败: %w", err)
+		if cancelErr := cancelLegacyRuntimeDrain(context.Background(), cfg); cancelErr != nil {
+			return errors.Join(stopErr, fmt.Errorf("恢复旧版服务排空失败: %w", cancelErr))
+		}
+		return stopErr
 	}
 	return nil
 }
