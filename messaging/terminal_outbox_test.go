@@ -2008,18 +2008,13 @@ func TestTerminalOutboxRetriesAmbiguousRichResultWithSameKey(t *testing.T) {
 }
 
 func TestTerminalOutboxKeepsCommittedEntryWhenDirectorySyncFails(t *testing.T) {
-	originalSync := syncTerminalOutboxDirectory
-	syncTerminalOutboxDirectory = func(string) error {
-		return errors.New("injected directory sync failure")
-	}
-	t.Cleanup(func() {
-		syncTerminalOutboxDirectory = originalSync
-	})
-
 	path := filepath.Join(t.TempDir(), "state", terminalOutboxFileName)
 	outbox, err := newTerminalOutbox(path, platform.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("newTerminalOutbox: %v", err)
+	}
+	outbox.syncDirectory = func(string) error {
+		return errors.New("injected directory sync failure")
 	}
 	route := platform.DeliveryRoute{Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "oc_chat"}
 	entry, err := outbox.enqueue(terminalOutboxDraft{Route: route, AgentName: "codex", Text: "最终结果"})

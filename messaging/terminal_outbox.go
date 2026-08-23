@@ -221,6 +221,7 @@ type terminalOutbox struct {
 	processing       map[string]bool
 	wake             chan struct{}
 	now              func() time.Time
+	syncDirectory    func(string) error
 	trace            observability.Recorder
 	maxEntries       int
 	maxAttempts      int
@@ -363,7 +364,7 @@ func newTerminalOutbox(path string, registry *platform.Registry, traceRecorders 
 		path: path, registry: registry,
 		preparing: make(map[string]bool), followerHeld: make(map[string]bool), startupHeld: make(map[string]bool),
 		releaseHeld: make(map[string]bool), releaseBusy: make(map[string]bool), processing: make(map[string]bool),
-		wake: make(chan struct{}, 1), now: time.Now,
+		wake: make(chan struct{}, 1), now: time.Now, syncDirectory: syncTerminalOutboxDirectory,
 		maxEntries: terminalOutboxMaxEntries, maxAttempts: terminalOutboxMaxAttempts,
 	}
 	if len(traceRecorders) > 0 {
@@ -2210,7 +2211,7 @@ func (o *terminalOutbox) entryLocked(id string) *terminalOutboxEntry {
 }
 
 func (o *terminalOutbox) persistLocked() error {
-	return writeTerminalOutbox(o.path, o.entries)
+	return writeTerminalOutbox(o.path, o.entries, o.syncDirectory)
 }
 
 func cloneTerminalOutboxEntry(entry *terminalOutboxEntry) *terminalOutboxEntry {
@@ -2390,7 +2391,7 @@ func validatePendingStreamSupersede(pending *pendingStreamSupersede) error {
 	return nil
 }
 
-var syncTerminalOutboxDirectory = func(dir string) error {
+func syncTerminalOutboxDirectory(dir string) error {
 	dirFile, err := os.Open(dir)
 	if err != nil {
 		return err
@@ -2398,7 +2399,7 @@ var syncTerminalOutboxDirectory = func(dir string) error {
 	return errors.Join(dirFile.Sync(), dirFile.Close())
 }
 
-func writeTerminalOutbox(path string, entries []*terminalOutboxEntry) error {
+func writeTerminalOutbox(path string, entries []*terminalOutboxEntry, syncDirectory func(string) error) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -2450,7 +2451,7 @@ func writeTerminalOutbox(path string, entries []*terminalOutboxEntry) error {
 	}
 	// Rename is the commit point. Keep in-memory state aligned with the file
 	// already visible at path even when the directory metadata cannot be synced.
-	if err := syncTerminalOutboxDirectory(dir); err != nil {
+	if err := syncDirectory(dir); err != nil {
 		log.Printf("[terminal-outbox] state file replaced but parent directory sync failed: %v", err)
 	}
 	return nil
