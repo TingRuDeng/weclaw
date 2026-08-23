@@ -154,7 +154,8 @@ func (s *Server) authorized(r *http.Request) bool {
 
 // sameOrigin 拒绝来自其它源的请求，防 DNS rebinding / CSRF。无 Origin/Referer 的同机直连放行。
 func (s *Server) sameOrigin(r *http.Request) bool {
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	originHeader := strings.TrimSpace(r.Header.Get("Origin"))
+	origin := originHeader
 	if origin == "" {
 		origin = strings.TrimSpace(r.Header.Get("Referer"))
 	}
@@ -163,6 +164,9 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 	}
 	u, err := url.Parse(origin)
 	if err != nil {
+		return false
+	}
+	if u.User != nil || u.Host == "" || !strings.EqualFold(u.Scheme, "http") {
 		return false
 	}
 	return strings.EqualFold(u.Host, r.Host)

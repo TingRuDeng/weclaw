@@ -537,8 +537,12 @@ func (h *Handler) consumePendingInteractionForKey(userID string, routeUserID str
 func (h *Handler) findPendingApprovalTextLocked(userID string, routeUserID string, choice string) (*pendingApproval, string, bool) {
 	var found *pendingApproval
 	resolvedChoice := ""
+	now := time.Now()
 	for _, pending := range h.pendingApprovals {
-		if pending.userID != strings.TrimSpace(userID) || pending.route != strings.TrimSpace(routeUserID) {
+		if pending == nil || pending.userID != strings.TrimSpace(userID) || pending.route != strings.TrimSpace(routeUserID) {
+			continue
+		}
+		if pending.resolved.Load() || !pending.deadline().After(now) {
 			continue
 		}
 		resolved := pending.resolveChoice(choice)

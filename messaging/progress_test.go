@@ -195,6 +195,27 @@ func TestRenderFinalFailureStripsANSIForUnknownAgentError(t *testing.T) {
 	}
 }
 
+func TestRenderFinalFailureRedactsSecretsAndInternalPaths(t *testing.T) {
+	err := errors.New(`provider failed access_token="secret-token" jwt=eyJaaaaaaaaaa.bbbbbbbbbb.cccccccc path=/Users/alice/private/project`)
+	got := renderFinalFailure("", err)
+	for _, leaked := range []string{"secret-token", "eyJaaaaaaaaaa", "/Users/alice/private/project"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("final failure leaked %q: %q", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "[REDACTED]") || !strings.Contains(got, "[REDACTED_PATH]") {
+		t.Fatalf("final failure missing redaction markers: %q", got)
+	}
+}
+
+func TestRenderFinalFailureCapsUnknownError(t *testing.T) {
+	err := errors.New(strings.Repeat("x", maxUserVisibleAgentErrorRunes+200))
+	got := renderFinalFailure("", err)
+	if strings.Count(got, "x") > maxUserVisibleAgentErrorRunes {
+		t.Fatalf("final failure exceeded user error cap: %d x characters", strings.Count(got, "x"))
+	}
+}
+
 func TestStreamModeRendersLastNonEmptyStatusLine(t *testing.T) {
 	cfg := config.DefaultProgressConfig()
 	cfg.Mode = progressModeStream

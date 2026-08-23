@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -37,6 +38,29 @@ func (h *Handler) AgentByName(name string) agent.Agent {
 // EnsureAgentStarted 启动或复用指定 agent，供后台预热与消息按需启动共享同一条路径。
 func (h *Handler) EnsureAgentStarted(ctx context.Context, name string) (agent.Agent, error) {
 	return h.getAgent(ctx, name)
+}
+
+// StopAgents stops every process-owning Agent currently held by the handler.
+// It is used at startup and shutdown boundaries where no platform work may
+// continue; stateless HTTP/CLI agents simply do not implement Stop.
+func (h *Handler) StopAgents() {
+	h.mu.Lock()
+	h.agentsStopping = true
+	names := make([]string, 0, len(h.agents))
+	for name := range h.agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	agents := make([]agent.Agent, 0, len(names))
+	for _, name := range names {
+		agents = append(agents, h.agents[name])
+	}
+	h.mu.Unlock()
+	for index := len(agents) - 1; index >= 0; index-- {
+		if stopper, ok := agents[index].(interface{ Stop() }); ok {
+			stopper.Stop()
+		}
+	}
 }
 
 // getAgent 返回已运行的 agent；未启动时按需创建，且创建过程不持有 Handler 全局锁。
@@ -74,11 +98,27 @@ func (h *Handler) getAgent(ctx context.Context, name string) (agent.Agent, error
 	}
 
 	h.mu.Lock()
+	stopping := h.agentsStopping
+	stopCreated := false
+	stored := false
+	existingAgent := false
 	if existing, ok := h.agents[name]; ok {
+		existingAgent = true
 		ag = existing
-		start.err = nil
-	} else if start.err == nil && ag != nil {
+		if stopping {
+			start.err = fmt.Errorf("handler is stopping")
+		} else {
+			start.err = nil
+		}
+	} else if start.err == nil && ag != nil && !stopping {
 		h.agents[name] = ag
+		stored = true
+	} else if start.err == nil && ag != nil && stopping {
+		start.err = fmt.Errorf("handler is stopping")
+		stopCreated = true
+	}
+	if ag != nil && start.err != nil && !stored && !existingAgent {
+		stopCreated = true
 	}
 	if start.err == nil && ag == nil {
 		start.err = fmt.Errorf("agent %q not available", name)
@@ -88,6 +128,11 @@ func (h *Handler) getAgent(ctx context.Context, name string) (agent.Agent, error
 	delete(h.agentStarts, name)
 	close(start.done)
 	h.mu.Unlock()
+	if stopCreated && ag != nil {
+		if stopper, ok := ag.(interface{ Stop() }); ok {
+			stopper.Stop()
+		}
+	}
 
 	if start.err != nil {
 		return nil, start.err

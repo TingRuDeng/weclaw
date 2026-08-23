@@ -17,14 +17,15 @@ import (
 )
 
 type doctorFixDeps struct {
-	GOOS          string
-	Root          bool
-	LookPath      func(string) (string, error)
-	CommandOutput func(context.Context, string, ...string) (string, error)
-	RunCommand    func(context.Context, doctorInstallCommand, io.Reader, io.Writer, io.Writer) error
-	Configure     func(context.Context, *config.Config) error
-	SaveConfig    func(*config.Config) error
-	UserHomeDir   func() (string, error)
+	GOOS                 string
+	Root                 bool
+	CodexInstallerSHA256 string
+	LookPath             func(string) (string, error)
+	CommandOutput        func(context.Context, string, ...string) (string, error)
+	RunCommand           func(context.Context, doctorInstallCommand, io.Reader, io.Writer, io.Writer) error
+	Configure            func(context.Context, *config.Config) error
+	SaveConfig           func(*config.Config) error
+	UserHomeDir          func() (string, error)
 }
 
 type doctorFixOptions struct {
@@ -157,7 +158,8 @@ func runDoctorFix(ctx context.Context, opts doctorFixOptions) error {
 	plan, err := buildDoctorInstallPlan(doctorInstallPlanRequest{
 		GOOS: opts.Deps.GOOS, PackageManager: manager, Root: opts.Deps.Root,
 		NPMPrefix: npmPrefix, CodexInstallerPath: codexInstallerPath,
-		CodexInstallDir: codexInstallDir, CodexHome: configuredDoctorCodexHomeOverride(opts.Config),
+		CodexInstallerSHA256: opts.Deps.CodexInstallerSHA256,
+		CodexInstallDir:      codexInstallDir, CodexHome: configuredDoctorCodexHomeOverride(opts.Config),
 		Components: needed,
 	})
 	if err != nil {
@@ -540,6 +542,14 @@ func executeDoctorInstallPlan(ctx context.Context, plan []doctorInstallCommand, 
 			command.Name = npmPath
 		}
 		fmt.Fprintf(opts.Output, "正在执行：%s\n", formatDoctorInstallCommand(planned))
+		if command.VerifySHA256 != "" {
+			if len(command.Args) == 0 {
+				return fmt.Errorf("安装器校验缺少目标路径")
+			}
+			if err := verifyDoctorInstaller(command.Args[0], command.VerifySHA256); err != nil {
+				return fmt.Errorf("拒绝执行未验证的安装器: %w", err)
+			}
+		}
 		if err := opts.Deps.RunCommand(ctx, command, opts.Input, opts.Output, opts.ErrorOutput); err != nil {
 			return fmt.Errorf("安装 %s 失败（%s）: %w", joinDoctorComponents(components), formatDoctorInstallCommand(planned), err)
 		}

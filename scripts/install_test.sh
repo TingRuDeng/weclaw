@@ -38,10 +38,12 @@ setup_case() {
   INSTALL_DIR="$CASE_DIR/install"
   CALLS_FILE="$CASE_DIR/calls"
   DOWNLOADS_FILE="$CASE_DIR/downloads"
+  CURL_ARGS_FILE="$CASE_DIR/curl-args"
   mkdir -p "$FAKE_BIN" "$INSTALL_DIR"
   : >"$CALLS_FILE"
   : >"$DOWNLOADS_FILE"
-  export CASE_DIR FAKE_BIN INSTALL_DIR CALLS_FILE DOWNLOADS_FILE
+  : >"$CURL_ARGS_FILE"
+  export CASE_DIR FAKE_BIN INSTALL_DIR CALLS_FILE DOWNLOADS_FILE CURL_ARGS_FILE
   create_base_commands
 }
 
@@ -59,6 +61,7 @@ url=''
 saw_https_proto=0
 saw_tls12=0
 for argument do
+  printf '<%s>\n' "$argument" >>"$CURL_ARGS_FILE"
   [ "$previous" = "-o" ] && output=$argument
   [ "$previous" = "--proto" ] && [ "$argument" = "=https" ] && saw_https_proto=1
   [ "$argument" = "--tlsv1.2" ] && saw_tls12=1
@@ -167,6 +170,7 @@ run_installer() {
     PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw \
       WECLAW_GITHUB_REPO=test/weclaw WECLAW_GITEE_REPO=test/weclaw \
       WECLAW_SOURCE="${WECLAW_SOURCE:-auto}" INSTALL_DIR="$INSTALL_DIR" \
+      GITHUB_TOKEN="${GITHUB_TOKEN:-}" GH_TOKEN="${GH_TOKEN:-}" \
       WECLAW_INSTALL_INTERACTIVE="${WECLAW_INSTALL_INTERACTIVE:-0}" \
       WECLAW_SKIP_DEPENDENCY_SETUP="${WECLAW_SKIP_DEPENDENCY_SETUP:-0}" \
       sh "$ROOT_DIR/install.sh" <"$INSTALLER_INPUT_FILE" >"$output_file" 2>&1
@@ -174,6 +178,7 @@ run_installer() {
     PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw \
       WECLAW_GITHUB_REPO=test/weclaw WECLAW_GITEE_REPO=test/weclaw \
       WECLAW_SOURCE="${WECLAW_SOURCE:-auto}" INSTALL_DIR="$INSTALL_DIR" \
+      GITHUB_TOKEN="${GITHUB_TOKEN:-}" GH_TOKEN="${GH_TOKEN:-}" \
       WECLAW_INSTALL_INTERACTIVE="${WECLAW_INSTALL_INTERACTIVE:-0}" \
       WECLAW_SKIP_DEPENDENCY_SETUP="${WECLAW_SKIP_DEPENDENCY_SETUP:-0}" \
       sh "$ROOT_DIR/install.sh" >"$output_file" 2>&1
@@ -389,6 +394,19 @@ test_checksum_missing_entry_keeps_existing_binary() {
   assert_contains "$output" "未找到唯一的 SHA-256"
   finish_case "摘要文件缺少资产条目时不替换现有二进制"
 }
+test_github_token_is_not_exposed_in_curl_argv() {
+  setup_case
+  token='super-secret-github-token'
+  GITHUB_TOKEN="$token" WECLAW_SKIP_CLAUDE_ACP=1 run_installer
+  [ "$status" -eq 0 ] || fail "带 GitHub Token 的安装失败：$output"
+  assert_file_contains "$CURL_ARGS_FILE" "<--netrc-file>"
+  assert_file_not_contains "$CURL_ARGS_FILE" "$token"
+  assert_file_not_contains "$CURL_ARGS_FILE" "Authorization: Bearer"
+  netrc_path=$(awk 'previous == "<--netrc-file>" { gsub(/^<|>$/, "", $0); print; exit } { previous=$0 }' "$CURL_ARGS_FILE")
+  [ -n "$netrc_path" ] || fail "curl 未收到 netrc 文件路径"
+  [ ! -e "$netrc_path" ] || fail "Token 临时文件应在安装退出时清理：$netrc_path"
+  finish_case "GitHub Token 不出现在 curl 参数"
+}
 test_release_gate_runs_install_tests() {
   release_calls=$(/bin/bash -c '
     set -e
@@ -426,5 +444,6 @@ test_supported_release_targets
 test_rejects_unpublished_release_targets
 test_checksum_mismatch_keeps_existing_binary
 test_checksum_missing_entry_keeps_existing_binary
+test_github_token_is_not_exposed_in_curl_argv
 test_release_gate_runs_install_tests
 printf '安装脚本测试全部通过：%s 个用例\n' "$PASS_COUNT"

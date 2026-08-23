@@ -116,6 +116,9 @@ func ValidateURL(rawURL string) error {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("remote media scheme %q is not allowed", parsed.Scheme)
 	}
+	if parsed.User != nil {
+		return fmt.Errorf("remote media URL userinfo is not allowed")
+	}
 	host := parsed.Hostname()
 	if host == "" {
 		return fmt.Errorf("remote media host is required")

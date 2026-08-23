@@ -2,10 +2,16 @@ package messaging
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/observability"
 )
+
+const maxUserVisibleAgentErrorRunes = 800
+
+var internalPathPattern = regexp.MustCompile(`(?:/Users|/home|/private/tmp|/var/folders|/tmp)/[^\s,;)}\]]+`)
 
 // friendlyAgentError 将常见 Agent 底层错误转换成微信侧可操作提示。
 func friendlyAgentError(err error) string {
@@ -51,7 +57,13 @@ func sanitizeAgentError(text string) string {
 		}
 		return r
 	}, text)
-	return strings.TrimSpace(text)
+	text = internalPathPattern.ReplaceAllString(text, "[REDACTED_PATH]")
+	text = observability.SanitizeText(text)
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) > maxUserVisibleAgentErrorRunes {
+		return string(runes[:maxUserVisibleAgentErrorRunes]) + "…"
+	}
+	return string(runes)
 }
 
 func isCodexUpstreamError(lower string) bool {

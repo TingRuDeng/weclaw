@@ -105,16 +105,39 @@ func runForegroundStart(cfg *config.Config) error {
 	}
 	traceStore := newStartTraceStore()
 	handler := newStartHandlerWithTrace(cfg, traceStore)
+	backgroundStarts := make([]<-chan struct{}, 0, 2)
+	defer func() {
+		cancel()
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), defaultRuntimeShutdownTimeout)
+		defer waitCancel()
+		timedOut := false
+		for _, done := range backgroundStarts {
+			select {
+			case <-done:
+			case <-waitCtx.Done():
+				timedOut = true
+			}
+			if timedOut {
+				break
+			}
+		}
+		if timedOut {
+			log.Printf("Timed out waiting for startup Agent cleanup: %v", waitCtx.Err())
+		}
+		handler.StopAgents()
+	}()
 	recoveryCtx, recoveryCancel := context.WithTimeout(ctx, 2*time.Minute)
 	if err := handler.RecoverRuntimeRestart(recoveryCtx); err != nil {
 		recoveryCancel()
 		return fmt.Errorf("恢复协调重启事务失败: %w", err)
 	}
 	recoveryCancel()
-	if err := startCodexAppDaemonReuseAgent(ctx, handler, cfg); err != nil {
+	if done, err := startCodexAppDaemonReuseAgentWithDone(ctx, handler, cfg); err != nil {
 		return err
+	} else {
+		backgroundStarts = append(backgroundStarts, done)
 	}
-	startDefaultAgent(ctx, handler, cfg)
+	backgroundStarts = append(backgroundStarts, startDefaultAgent(ctx, handler, cfg))
 	registry, err := newStartRegistry(accounts, cfg, handler)
 	if err != nil {
 		return err
@@ -138,25 +161,35 @@ type startAgentEnsurer interface {
 // startCodexAppDaemonReuseAgent 在严格共享模式下同步验证唯一 Host；兼容配置
 // 仍沿用后台预热，避免改变旧版启动可用性。
 func startCodexAppDaemonReuseAgent(ctx context.Context, handler startAgentEnsurer, cfg *config.Config) error {
+	_, err := startCodexAppDaemonReuseAgentWithDone(ctx, handler, cfg)
+	return err
+}
+
+func startCodexAppDaemonReuseAgentWithDone(ctx context.Context, handler startAgentEnsurer, cfg *config.Config) (<-chan struct{}, error) {
+	done := make(chan struct{})
 	if cfg != nil {
 		if agentCfg, ok := cfg.Agents["codex"]; ok && agentCfg.EffectiveCodexMultiFrontend() {
 			log.Printf("Preparing required Codex multi-frontend daemon...")
 			if _, err := handler.EnsureAgentStarted(ctx, "codex"); err != nil {
-				return fmt.Errorf("启动 Codex 多前端共享失败: %w", err)
+				close(done)
+				return done, fmt.Errorf("启动 Codex 多前端共享失败: %w", err)
 			}
-			return nil
+			close(done)
+			return done, nil
 		}
 	}
 	if !shouldWarmCodexAppDaemonReuse(cfg) {
-		return nil
+		close(done)
+		return done, nil
 	}
 	go func() {
+		defer close(done)
 		log.Printf("Preparing Codex App daemon reuse in background...")
 		if _, err := handler.EnsureAgentStarted(ctx, "codex"); err != nil {
 			log.Printf("Failed to prepare Codex App daemon reuse: %v", err)
 		}
 	}()
-	return nil
+	return done, nil
 }
 
 func shouldWarmCodexAppDaemonReuse(cfg *config.Config) bool {
@@ -355,8 +388,10 @@ func configureHandlerAudit(handler *messaging.Handler, cfg *config.Config) {
 }
 
 // startDefaultAgent 后台初始化默认 Agent，使平台监听无需等待握手完成。
-func startDefaultAgent(ctx context.Context, handler *messaging.Handler, cfg *config.Config) {
+func startDefaultAgent(ctx context.Context, handler *messaging.Handler, cfg *config.Config) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		if cfg.DefaultAgent == "" {
 			log.Println("No default agent configured, staying in echo mode")
 			return
@@ -369,6 +404,7 @@ func startDefaultAgent(ctx context.Context, handler *messaging.Handler, cfg *con
 		}
 		handler.SetDefaultAgent(cfg.DefaultAgent, ag)
 	}()
+	return done
 }
 
 // newStartRegistry 创建供主动发送、入站消息和身份观察共享的平台注册表。

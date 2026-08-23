@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -247,7 +248,7 @@ func TestBuildDoctorInstallPlanForDebianUsesFixedArguments(t *testing.T) {
 		{Name: "curl", Args: []string{"-fsSL", "https://chatgpt.com/codex/install.sh", "-o", "/tmp/weclaw-doctor/codex-install.sh"}},
 		{Name: "sh", Args: []string{"/tmp/weclaw-doctor/codex-install.sh"}, Env: []string{
 			"CODEX_NON_INTERACTIVE=1", "CODEX_INSTALL_DIR=/home/debian/.local/bin",
-		}},
+		}, VerifySHA256: doctorCodexInstallerSHA256},
 	}
 	if fmt.Sprint(plan) != fmt.Sprint(want) {
 		t.Fatalf("install plan=%v, want %v", plan, want)
@@ -268,11 +269,51 @@ func TestBuildDoctorInstallPlanUsesUserPrefixForNPM(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []doctorInstallCommand{
-		{Name: "npm", Args: []string{"install", "--global", "--prefix", "/home/debian/.local", "@anthropic-ai/claude-code"}},
+		{Name: "npm", Args: []string{"install", "--global", "--prefix", "/home/debian/.local", "@anthropic-ai/claude-code@2.1.240"}},
 		{Name: "npm", Args: []string{"install", "--global", "--prefix", "/home/debian/.local", "@agentclientprotocol/claude-agent-acp@0.58.1"}},
 	}
 	if fmt.Sprint(plan) != fmt.Sprint(want) {
 		t.Fatalf("install plan=%v, want user-prefix npm commands %v", plan, want)
+	}
+}
+
+func TestBuildDoctorInstallPlanPinsCodexInstallerDigest(t *testing.T) {
+	plan, err := buildDoctorInstallPlan(doctorInstallPlanRequest{
+		GOOS: "darwin", CodexInstallerPath: "/tmp/weclaw/install.sh",
+		CodexInstallDir: "/Users/test/.local/bin", Components: []doctorComponent{componentCodex},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 2 || plan[1].VerifySHA256 != doctorCodexInstallerSHA256 {
+		t.Fatalf("plan=%#v, want pinned Codex installer digest %q", plan, doctorCodexInstallerSHA256)
+	}
+}
+
+func TestExecuteDoctorInstallPlanRejectsCodexInstallerDigestMismatch(t *testing.T) {
+	installerPath := filepath.Join(t.TempDir(), "install.sh")
+	if err := os.WriteFile(installerPath, []byte("tampered"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	run := false
+	opts := doctorFixOptions{
+		Output: io.Discard, ErrorOutput: io.Discard,
+		Deps: doctorFixDeps{
+			LookPath: func(string) (string, error) { return "/bin/true", nil },
+			RunCommand: func(_ context.Context, _ doctorInstallCommand, _ io.Reader, _, _ io.Writer) error {
+				run = true
+				return nil
+			},
+		},
+	}
+	err := executeDoctorInstallPlan(context.Background(), []doctorInstallCommand{{
+		Name: "sh", Args: []string{installerPath}, VerifySHA256: doctorCodexInstallerSHA256,
+	}}, opts, []doctorComponent{componentCodex})
+	if err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("error=%v, want digest rejection", err)
+	}
+	if run {
+		t.Fatal("tampered installer must not execute")
 	}
 }
 
@@ -664,8 +705,9 @@ func TestRunDoctorFixPersistsStandaloneCodexCommand(t *testing.T) {
 	}
 	installed := false
 	savedCommand := ""
+	installerBytes := []byte("#!/bin/sh\nexit 0\n")
 	deps := doctorFixDeps{
-		GOOS: "darwin", UserHomeDir: func() (string, error) { return home, nil },
+		GOOS: "darwin", CodexInstallerSHA256: fmt.Sprintf("%x", sha256.Sum256(installerBytes)), UserHomeDir: func() (string, error) { return home, nil },
 		LookPath: func(name string) (string, error) {
 			if name == "codex" && installed {
 				return visibleCommand, nil
@@ -676,6 +718,12 @@ func TestRunDoctorFixPersistsStandaloneCodexCommand(t *testing.T) {
 			return "app-server help", nil
 		},
 		RunCommand: func(_ context.Context, command doctorInstallCommand, _ io.Reader, _, _ io.Writer) error {
+			if command.Name == "curl" {
+				if len(command.Args) < 4 {
+					return fmt.Errorf("unexpected curl command: %#v", command)
+				}
+				return os.WriteFile(command.Args[3], installerBytes, 0o700)
+			}
 			if command.Name != "sh" {
 				return nil
 			}
@@ -683,7 +731,7 @@ func TestRunDoctorFixPersistsStandaloneCodexCommand(t *testing.T) {
 				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 					return err
 				}
-				if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+				if err := os.WriteFile(path, installerBytes, 0o700); err != nil {
 					return err
 				}
 			}

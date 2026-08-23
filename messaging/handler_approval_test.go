@@ -706,6 +706,33 @@ func TestPendingApprovalTextIsolatedByRoute(t *testing.T) {
 	}
 }
 
+func TestPendingApprovalTextIgnoresResolvedAndExpiredMatches(t *testing.T) {
+	h := NewHandler(nil, nil)
+	resolved, err := h.registerPendingApprovalForRoute(
+		"ou_user", "feishu:route-a", "resolved-key",
+		[]agent.ApprovalOption{{ID: "allow", Kind: "allow"}}, "allow", platform.ChoiceInteractionApproval,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deliverPendingApprovalChoice(resolved, "allow") {
+		t.Fatal("failed to resolve fixture approval")
+	}
+	expired, err := h.registerPendingApprovalForRoute(
+		"ou_user", "feishu:route-a", "expired-key",
+		[]agent.ApprovalOption{{ID: "allow", Kind: "allow"}}, "allow", platform.ChoiceInteractionApproval,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired.deadlineMu.Lock()
+	expired.expiresAt = time.Now().Add(-time.Second)
+	expired.deadlineMu.Unlock()
+	if got := h.consumePendingApprovalText("ou_user", "feishu:route-a", "allow"); got != approvalTextUnmatched {
+		t.Fatalf("resolved/expired matches result=%v, want unmatched", got)
+	}
+}
+
 func TestPendingApprovalIsolatesIdenticalConcurrentRequests(t *testing.T) {
 	h := NewHandler(nil, nil)
 	replyA := newApprovalKeyCaptureReplier()

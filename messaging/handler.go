@@ -46,6 +46,7 @@ type AgentMeta struct {
 // Handler processes incoming WeChat messages and dispatches replies.
 type Handler struct {
 	mu                       sync.RWMutex
+	agentsStopping           bool
 	version                  string
 	defaultName              string
 	agents                   map[string]agent.Agent // name -> running agent

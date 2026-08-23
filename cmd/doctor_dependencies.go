@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,11 @@ import (
 )
 
 const doctorDependencyProbeTimeout = 10 * time.Second
+
+const (
+	doctorCodexInstallerURL    = "https://chatgpt.com/codex/install.sh"
+	doctorCodexInstallerSHA256 = "ba92dd27e5c06f0d3bbc58bfa4b9cfb6599cd2742fbb1f92a2765e6c07dedb5a"
+)
 
 type doctorComponent string
 
@@ -37,20 +43,22 @@ var doctorComponentOrder = []doctorComponent{
 }
 
 type doctorInstallCommand struct {
-	Name string
-	Args []string
-	Env  []string
+	Name         string
+	Args         []string
+	Env          []string
+	VerifySHA256 string
 }
 
 type doctorInstallPlanRequest struct {
-	GOOS               string
-	PackageManager     string
-	Root               bool
-	NPMPrefix          string
-	CodexInstallerPath string
-	CodexInstallDir    string
-	CodexHome          string
-	Components         []doctorComponent
+	GOOS                 string
+	PackageManager       string
+	Root                 bool
+	NPMPrefix            string
+	CodexInstallerPath   string
+	CodexInstallerSHA256 string
+	CodexInstallDir      string
+	CodexHome            string
+	Components           []doctorComponent
 }
 
 func checkDoctorDependencies(cfg *config.Config, deps doctorDeps) []doctorResult {
@@ -415,7 +423,7 @@ func buildDoctorInstallPlan(req doctorInstallPlanRequest) ([]doctorInstallComman
 		case componentCodex:
 			installCodex = true
 		case componentClaude:
-			npmPackages = append(npmPackages, "@anthropic-ai/claude-code")
+			npmPackages = append(npmPackages, "@anthropic-ai/claude-code@2.1.240")
 		case componentClaudeACP:
 			npmPackages = append(npmPackages, "@agentclientprotocol/claude-agent-acp@0.58.1")
 		default:
@@ -446,7 +454,7 @@ func buildDoctorInstallPlan(req doctorInstallPlanRequest) ([]doctorInstallComman
 			return nil, fmt.Errorf("Codex standalone 安装目录必须是绝对路径")
 		}
 		plan = append(plan, doctorInstallCommand{
-			Name: "curl", Args: []string{"-fsSL", "https://chatgpt.com/codex/install.sh", "-o", installerPath},
+			Name: "curl", Args: []string{"-fsSL", doctorCodexInstallerURL, "-o", installerPath},
 		})
 		installerEnv := []string{"CODEX_NON_INTERACTIVE=1", "CODEX_INSTALL_DIR=" + installDir}
 		if codexHome := strings.TrimSpace(req.CodexHome); codexHome != "" {
@@ -455,7 +463,14 @@ func buildDoctorInstallPlan(req doctorInstallPlanRequest) ([]doctorInstallComman
 			}
 			installerEnv = append(installerEnv, "CODEX_HOME="+filepath.Clean(codexHome))
 		}
-		plan = append(plan, doctorInstallCommand{Name: "sh", Args: []string{installerPath}, Env: installerEnv})
+		installerSHA256 := strings.TrimSpace(req.CodexInstallerSHA256)
+		if installerSHA256 == "" {
+			installerSHA256 = doctorCodexInstallerSHA256
+		}
+		plan = append(plan, doctorInstallCommand{
+			Name: "sh", Args: []string{installerPath}, Env: installerEnv,
+			VerifySHA256: installerSHA256,
+		})
 	}
 	for _, packageName := range npmPackages {
 		args := []string{"install", "--global"}
@@ -472,6 +487,21 @@ func appendPrivilegedInstall(plan []doctorInstallCommand, root bool, command str
 		return append(plan, doctorInstallCommand{Name: command, Args: args})
 	}
 	return append(plan, doctorInstallCommand{Name: "sudo", Args: append([]string{command}, args...)})
+}
+
+func verifyDoctorInstaller(path, expectedSHA256 string) error {
+	if strings.TrimSpace(expectedSHA256) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("读取安装器失败: %w", err)
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(data))
+	if !strings.EqualFold(actual, strings.TrimSpace(expectedSHA256)) {
+		return fmt.Errorf("安装器 SHA-256 校验失败: got %s, want %s", actual, strings.TrimSpace(expectedSHA256))
+	}
+	return nil
 }
 
 func validateDoctorFixRequest(interactive, yes bool, components []doctorComponent) error {

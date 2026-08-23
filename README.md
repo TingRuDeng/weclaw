@@ -22,7 +22,7 @@ Use local Codex and Claude remotely from WeChat or Feishu while keeping real wor
 
 ## Quick Start
 
-After verifying the WeClaw binary, the one-line installer runs a read-only dependency check. On an interactive terminal it then lists missing components, their purpose, and linked prerequisites; installation starts only after the user selects components and confirms the complete plan. Codex uses OpenAI's official standalone installation and does not require Node.js/npm. Remote Claude operation requires both `claude` and the pinned `claude-agent-acp`; its current installation path requires Node.js 22+.
+After verifying the WeClaw binary, the one-line installer runs a read-only dependency check. On an interactive terminal it then lists missing components, their purpose, and linked prerequisites; installation starts only after the user selects components and confirms the complete plan. Codex uses OpenAI's official standalone installation and does not require Node.js/npm; the installer verifies the official script against a pinned SHA-256, so a remote script change requires an explicit digest update. Remote Claude operation requires `claude` (the installation chain currently pins `@anthropic-ai/claude-code@2.1.240`) and the pinned `claude-agent-acp`; its current installation path requires Node.js 22+.
 
 ```bash
 # Install the actively maintained distribution

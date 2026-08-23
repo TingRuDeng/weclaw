@@ -123,6 +123,19 @@ func TestAuthMiddleware(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin: want 403 got %d", rec.Code)
 	}
+	for _, origin := range []string{
+		"https://127.0.0.1:39282",
+		"http://user:password@127.0.0.1:39282",
+	} {
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		req.Header.Set("X-WeClaw-Token", "secret")
+		req.Header.Set("Origin", origin)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("unsafe origin %q: want 403 got %d", origin, rec.Code)
+		}
+	}
 
 	// URL query 中的 token 会进入日志和历史，不能作为 API 凭证。
 	rec = httptest.NewRecorder()

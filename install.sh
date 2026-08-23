@@ -7,6 +7,17 @@ RELEASE_SOURCE=$(printf '%s' "${WECLAW_SOURCE:-auto}" | tr '[:upper:]' '[:lower:
 BINARY="weclaw"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+TOKEN_FILE=""
+
+if [ -n "$TOKEN" ]; then
+  TOKEN_FILE=$(mktemp)
+  old_umask=$(umask)
+  umask 077
+  printf 'machine github.com\nlogin x-access-token\npassword %s\n' "$TOKEN" >"$TOKEN_FILE"
+  umask "$old_umask"
+  trap 'rm -f "$TOKEN_FILE"' 0
+  trap 'exit 1' 1 2 15
+fi
 
 case "$RELEASE_SOURCE" in
   auto|github|gitee) ;;
@@ -40,7 +51,7 @@ release_download() {
   download_url=$2
   download_output=$3
   if [ "$download_source" = "github" ] && [ -n "$TOKEN" ]; then
-    if http_code=$(curl -sSL --proto '=https' --tlsv1.2 -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" -o "$download_output" -w '%{http_code}' "$download_url"); then
+    if http_code=$(curl -sSL --proto '=https' --tlsv1.2 --netrc-file "$TOKEN_FILE" -H "User-Agent: weclaw-installer" -o "$download_output" -w '%{http_code}' "$download_url"); then
       :
     else
       classify_curl_failure "$?" "$download_source"
@@ -76,7 +87,7 @@ release_download() {
 
 github_latest_version() {
   if [ -n "$TOKEN" ]; then
-    if latest_result=$(curl -sSLI --proto '=https' --tlsv1.2 -o /dev/null -w '%{http_code}\n%{url_effective}' -H "User-Agent: weclaw-installer" -H "Authorization: Bearer ${TOKEN}" "https://github.com/${GITHUB_REPO}/releases/latest"); then
+    if latest_result=$(curl -sSLI --proto '=https' --tlsv1.2 --netrc-file "$TOKEN_FILE" -o /dev/null -w '%{http_code}\n%{url_effective}' -H "User-Agent: weclaw-installer" "https://github.com/${GITHUB_REPO}/releases/latest"); then
       :
     else
       classify_curl_failure "$?" "GitHub latest"
@@ -337,7 +348,7 @@ TMP=$(mktemp)
 ARCHIVE_TMP=$(mktemp)
 CHECKSUM_TMP=$(mktemp)
 cleanup_downloads() {
-  rm -f "$TMP" "$ARCHIVE_TMP" "$CHECKSUM_TMP"
+  rm -f "$TMP" "$ARCHIVE_TMP" "$CHECKSUM_TMP" "$TOKEN_FILE"
 }
 trap cleanup_downloads 0
 trap 'exit 1' 1 2 15

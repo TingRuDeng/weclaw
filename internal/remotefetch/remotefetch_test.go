@@ -38,6 +38,17 @@ func TestValidateURLRejectsUnsafeHosts(t *testing.T) {
 	}
 }
 
+func TestValidateURLRejectsUserinfo(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://user:password@example.com/a.png",
+		"https://token@example.com/a.png",
+	} {
+		if err := ValidateURL(rawURL); err == nil || !strings.Contains(err.Error(), "userinfo") {
+			t.Fatalf("ValidateURL(%q) error=%v, want userinfo rejection", rawURL, err)
+		}
+	}
+}
+
 func TestValidateIPRejectsSpecialPurposeRanges(t *testing.T) {
 	blocked := []string{
 		"0.1.2.3",

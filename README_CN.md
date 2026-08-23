@@ -22,7 +22,7 @@
 
 ## 快速开始
 
-一键安装完成二进制校验后会先运行只读依赖检查；交互终端随后列出缺失组件、用途和联动前置项，只有用户选择并再次确认后才依次安装。Codex 使用 OpenAI 官方 standalone 安装，不依赖 Node.js/npm；Claude 远程运行同时需要 `claude` 与固定版本的 `claude-agent-acp`，当前安装链要求 Node.js 22+。
+一键安装完成二进制校验后会先运行只读依赖检查；交互终端随后列出缺失组件、用途和联动前置项，只有用户选择并再次确认后才依次安装。Codex 使用 OpenAI 官方 standalone 安装，不依赖 Node.js/npm；安装器会校验官方脚本的固定 SHA-256，远端脚本变更需要人工升级摘要。Claude 远程运行同时需要 `claude`（当前安装链固定 `@anthropic-ai/claude-code@2.1.240`）与固定版本的 `claude-agent-acp`，当前安装链要求 Node.js 22+。
 
 ```bash
 # 安装当前维护版
