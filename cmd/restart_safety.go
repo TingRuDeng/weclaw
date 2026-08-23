@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fastclaw-ai/weclaw/agent"
 	"github.com/fastclaw-ai/weclaw/config"
 )
 
@@ -162,6 +163,95 @@ func legacyRuntimeRestartError(version string) error {
 			"请先等待所有任务完成并完整退出 Codex App、受控 CLI，然后依次执行 weclaw stop、weclaw start、weclaw restart 完成一次性迁移",
 		errCoordinatedRestartUnsupported, version,
 	)
+}
+
+// stopLegacyRuntime 完成旧服务的一次性迁移停止。旧服务不认识
+// /api/runtime/restart/prepare，不能假装已经完成 Codex Host 轮换；但它仍
+// 支持 runtime/drain，因此先关闭消息准入并确认 WeClaw 任务为空，再停止
+// WeClaw 自身。Codex Host 保留到新服务启动后由正式 restart 事务处理。
+func stopLegacyRuntime(ctx context.Context, cfg *config.Config, stop func() error) error {
+	if cfg == nil {
+		return fmt.Errorf("旧版服务迁移停止缺少配置")
+	}
+	if stop == nil {
+		return fmt.Errorf("旧版服务迁移停止缺少停止操作")
+	}
+	lease, err := agent.AcquireCodexRestartLease()
+	if err != nil {
+		return fmt.Errorf("旧版服务迁移停止无法取得 Codex frontend 租约: %w", err)
+	}
+	defer lease.Close()
+	if err := ensureOfflineCodexRestartSafeWithOptions(cfg, false); err != nil {
+		return fmt.Errorf("旧版服务迁移停止前 Codex App 检查失败: %w", err)
+	}
+	if err := beginLegacyRuntimeDrain(ctx, cfg); err != nil {
+		return err
+	}
+	if err := stop(); err != nil {
+		_ = cancelLegacyRuntimeDrain(context.Background(), cfg)
+		return fmt.Errorf("旧版服务迁移停止失败: %w", err)
+	}
+	return nil
+}
+
+func beginLegacyRuntimeDrain(ctx context.Context, cfg *config.Config) error {
+	endpoint, err := runtimeAPIURL(cfg.APIAddr, "/api/runtime/drain")
+	if err != nil {
+		return fmt.Errorf("无法连接旧版服务排空入口: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	setRuntimeAPIToken(req, cfg.APIToken)
+	resp, err := restartSafetyHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("无法确认旧版服务排空状态，已取消迁移停止: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("旧版服务不支持安全排空入口，已取消迁移停止")
+	}
+	var result runtimeDrainResponse
+	decoder := json.NewDecoder(resp.Body)
+	if err := decoder.Decode(&result); err != nil {
+		return fmt.Errorf("旧版服务排空响应无效: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("旧版服务排空响应包含多余内容")
+	}
+	if resp.StatusCode == http.StatusConflict {
+		if message := strings.TrimSpace(result.Message); message != "" {
+			return fmt.Errorf("迁移停止已取消：%s", message)
+		}
+		return fmt.Errorf("迁移停止已取消：旧版服务仍有 %d 个运行中的任务", result.ActiveTasks)
+	}
+	if resp.StatusCode != http.StatusOK || result.Status != "ok" || !result.Draining || result.ActiveTasks != 0 || result.RemainingTasks != 0 {
+		return fmt.Errorf("旧版服务排空未确认成功（状态 %d，active_tasks=%d，remaining_tasks=%d）", resp.StatusCode, result.ActiveTasks, result.RemainingTasks)
+	}
+	return nil
+}
+
+func cancelLegacyRuntimeDrain(ctx context.Context, cfg *config.Config) error {
+	endpoint, err := runtimeAPIURL(cfg.APIAddr, "/api/runtime/drain")
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	setRuntimeAPIToken(req, cfg.APIToken)
+	resp, err := restartSafetyHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("恢复旧版服务排空返回异常状态 %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func cancelRestartDrain(ctx context.Context, cfg *config.Config) error {

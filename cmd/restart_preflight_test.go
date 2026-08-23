@@ -133,6 +133,59 @@ func TestBeginRestartDrainReportsLegacyRuntimeMigration(t *testing.T) {
 	}
 }
 
+func TestStopLegacyRuntimeRequiresNoActiveTasks(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	activeTasks := 1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runtime/drain" {
+			t.Fatalf("path=%s, want runtime drain", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "busy", ActiveTasks: activeTasks, RemainingTasks: activeTasks, Message: "旧版服务仍有 1 个运行中的任务"})
+	}))
+	defer server.Close()
+	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
+	stopped := false
+	err := stopLegacyRuntime(context.Background(), cfg, func() error {
+		stopped = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "1 个运行中的任务") || stopped {
+		t.Fatalf("error=%v stopped=%v, want migration blocked before process stop", err, stopped)
+	}
+}
+
+func TestStopLegacyRuntimeStopsOnlyAfterIdleStatus(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	activeTasks := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/drain" {
+			t.Fatalf("request=%s %s, want runtime drain POST", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true, ActiveTasks: activeTasks, RemainingTasks: 0})
+	}))
+	defer server.Close()
+	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw", Version: "v0.1.267"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
+	stopped := false
+	if err := stopLegacyRuntime(context.Background(), cfg, func() error {
+		stopped = true
+		return nil
+	}); err != nil {
+		t.Fatalf("stopLegacyRuntime: %v", err)
+	}
+	if !stopped {
+		t.Fatal("idle legacy runtime should be stopped")
+	}
+}
+
 func TestCancelRestartDrainRequiresConfirmedAdmissionRecovery(t *testing.T) {
 	requested := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

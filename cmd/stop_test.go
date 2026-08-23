@@ -103,7 +103,7 @@ func TestRunStopRestoresHostWhenServiceStopFails(t *testing.T) {
 	}
 }
 
-func TestRunStopDoesNotCompensateUnsupportedRuntime(t *testing.T) {
+func TestRunStopMigratesUnsupportedRuntimeAfterExplicitLegacyStop(t *testing.T) {
 	stopped := false
 	cancelled := false
 	err := runStop(context.Background(), stopOps{
@@ -113,6 +113,10 @@ func TestRunStopDoesNotCompensateUnsupportedRuntime(t *testing.T) {
 		},
 		prepare: func(context.Context, bool, *config.Config) error {
 			return errCoordinatedRestartUnsupported
+		},
+		legacyStop: func(context.Context, *config.Config, func() error) error {
+			stopped = true
+			return nil
 		},
 		stop: func() error {
 			stopped = true
@@ -125,7 +129,7 @@ func TestRunStopDoesNotCompensateUnsupportedRuntime(t *testing.T) {
 		out: &bytes.Buffer{},
 	})
 
-	if !errors.Is(err, errCoordinatedRestartUnsupported) || stopped || cancelled {
+	if err != nil || !stopped || cancelled {
 		t.Fatalf("error=%v stopped=%v cancelled=%v", err, stopped, cancelled)
 	}
 }

@@ -5,7 +5,18 @@ GITHUB_REPO="${WECLAW_GITHUB_REPO:-${WECLAW_REPO:-TingRuDeng/weclaw}}"
 GITEE_REPO="${WECLAW_GITEE_REPO:-jimdeng891/weclaw}"
 RELEASE_SOURCE=$(printf '%s' "${WECLAW_SOURCE:-auto}" | tr '[:upper:]' '[:lower:]')
 BINARY="weclaw"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+if [ -z "${INSTALL_DIR:-}" ]; then
+  # 默认跟随 PATH 中现有的 weclaw，避免安装完成后 CLI 与运行服务落在不同副本。
+  existing_weclaw=$(command -v "$BINARY" 2>/dev/null || true)
+  case "$existing_weclaw" in
+    /*/*)
+      INSTALL_DIR=${existing_weclaw%/*}
+      ;;
+    *)
+      INSTALL_DIR=/usr/local/bin
+      ;;
+  esac
+fi
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 TOKEN_FILE=""
 

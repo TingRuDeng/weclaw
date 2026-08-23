@@ -28,6 +28,7 @@ type stopOps struct {
 	isRunning  func() bool
 	prepare    func(context.Context, bool, *config.Config) error
 	stop       func() error
+	legacyStop func(context.Context, *config.Config, func() error) error
 	cancel     func(context.Context, *config.Config) error
 	out        io.Writer
 }
@@ -38,6 +39,7 @@ func defaultStopOps() stopOps {
 		isRunning:  weclawIsRunningForRestart,
 		prepare:    beginRestartDrainWithConfig,
 		stop:       stopAllWeclaw,
+		legacyStop: stopLegacyRuntime,
 		cancel:     cancelRestartDrain,
 		out:        os.Stdout,
 	}
@@ -51,7 +53,13 @@ func runStop(ctx context.Context, ops stopOps) error {
 		}
 		if err := ops.prepare(ctx, true, cfg); err != nil {
 			if errors.Is(err, errCoordinatedRestartUnsupported) {
-				return err
+				if ops.legacyStop == nil {
+					return err
+				}
+				if migrationErr := ops.legacyStop(ctx, cfg, ops.stop); migrationErr != nil {
+					return migrationErr
+				}
+				return writeStopConfirmation(ops.out)
 			}
 			return compensateRestartDrain(err, ops.cancel, cfg)
 		}

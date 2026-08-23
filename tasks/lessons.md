@@ -490,8 +490,15 @@
 - 触发条件：`weclaw update` 已把 PATH 中的二进制更新到支持 `/api/runtime/restart/prepare` 的版本，但旧 WeClaw 服务仍在内存中运行并返回 HTTP 404。
 - 规则：管理命令必须把运行态版本和 API 能力作为服务事实；端点 404 在解析正文前识别，且未建立事务时禁止执行补偿。版本切换不能仅凭磁盘二进制版本推断服务能力。
 - 反例：直接把纯文本 `404 page not found` 解码为结构体，Go 会先把 `404` 识别成 JSON 数字并报 `cannot unmarshal number`；随后再 DELETE 同一不存在的端点，产生“恢复重启事务失败”的第二条误报。
-- 正确做法：保持失败关闭，显示旧服务版本和 `stop` → `start` → `restart` 的一次性迁移顺序；先让新服务真正运行，最后再由它执行 Host 停止和 generation 验证，不自动降级为弱重启。
+- 正确做法：`restart` 和 `update --restart` 仍保持失败关闭并显示旧服务版本；`stop` 在同一 404 能力协商下进入严格迁移流程，先取得 frontend lease，确认 Codex App/受控 CLI 已退出，再让旧 `/api/runtime/drain` 返回 `draining=true`、`active_tasks=0`、`remaining_tasks=0`，随后只停止旧 WeClaw 自身。迁移停止不等于 Host 已轮换，必须再 `weclaw start` 运行新版本，最后 `weclaw restart` 执行 Host 停止和 generation 验证；任一迁移门禁失败都保留进程并失败关闭。
 - 来源：2026-08-13 用户在已安装 `v0.1.268`、运行中服务仍为 `v0.1.267` 时执行 `weclaw restart` 的真实错误反馈。
+
+## 2026-08-23 旧服务升级后的 stop 必须使用可证明的迁移排空
+
+- 触发条件：新 CLI 发现运行中的旧 WeClaw 不支持 `/api/runtime/restart/prepare`，但用户需要先停掉旧服务以完成升级。
+- 规则：HTTP 404 先按能力协商处理，不解析纯文本为 JSON，也不向不存在的事务发送 DELETE 补偿。只有在 frontend lease 可得、Codex App 和受控 CLI 已退出，且旧 `/api/runtime/drain` 明确确认 `draining=true`、`active_tasks=0`、`remaining_tasks=0` 时，`weclaw stop` 才能关闭旧服务的消息准入并停止 WeClaw 自身；Codex Host 保留到新版 `weclaw restart` 完成正式 generation 轮换。
+- 失败边界：旧服务不支持排空、仍有活动任务、App/CLI 仍在线、租约不可得或停止失败时，恢复消息准入（若已关闭）并失败关闭，不按进程名终止 Codex App，不删除 writer lock、事务记录或 Codex 数据。
+- 来源：2026-08-23 用户反馈升级后运行中的旧服务仍以“存在 1 个活动 thread”阻断 `weclaw stop`。
 
 ## 2026-07-03 飞书按钮会话路由
 

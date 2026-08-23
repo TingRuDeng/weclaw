@@ -188,6 +188,21 @@ run_installer() {
   output=$(cat "$output_file")
 }
 
+run_installer_without_install_dir() {
+  output_file="$CASE_DIR/output"
+  set +e
+  PATH="$FAKE_BIN:$SYSTEM_PATH" WECLAW_REPO=test/weclaw \
+    WECLAW_GITHUB_REPO=test/weclaw WECLAW_GITEE_REPO=test/weclaw \
+    WECLAW_SOURCE="${WECLAW_SOURCE:-auto}" \
+    GITHUB_TOKEN="${GITHUB_TOKEN:-}" GH_TOKEN="${GH_TOKEN:-}" \
+    WECLAW_INSTALL_INTERACTIVE="${WECLAW_INSTALL_INTERACTIVE:-0}" \
+    WECLAW_SKIP_DEPENDENCY_SETUP="${WECLAW_SKIP_DEPENDENCY_SETUP:-0}" \
+    sh "$ROOT_DIR/install.sh" >"$output_file" 2>&1
+  status=$?
+  set -e
+  output=$(cat "$output_file")
+}
+
 finish_case() {
   name=$1
   rm -rf "$CASE_DIR"
@@ -255,6 +270,21 @@ test_noninteractive_hint_quotes_install_path() {
   [ "$status" -eq 0 ] || fail "空格路径安装失败：$output"
   assert_contains "$output" "'$INSTALL_DIR/weclaw' doctor --fix"
   finish_case "非交互修复命令安全引用安装路径"
+}
+
+test_default_install_follows_existing_path_command() {
+  setup_case
+  cat >"$FAKE_BIN/weclaw" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x "$FAKE_BIN/weclaw"
+  unset INSTALL_DIR
+  WECLAW_SKIP_CLAUDE_ACP=1 run_installer_without_install_dir
+  [ "$status" -eq 0 ] || fail "应沿用 PATH 中现有 weclaw 的安装目录：$output"
+  [ -x "$FAKE_BIN/weclaw" ] || fail "默认安装未写入 PATH 中现有 weclaw 的目录"
+  assert_contains "$output" "$FAKE_BIN/weclaw"
+  finish_case "默认安装沿用 PATH 中现有二进制目录"
 }
 
 test_old_release_without_fix_only_prints_upgrade_hint() {
@@ -431,6 +461,7 @@ test_existing_claude_is_not_modified_without_selection
 test_dependency_wizard_failure_keeps_weclaw
 test_explicit_skip_avoids_dependency_checks
 test_noninteractive_hint_quotes_install_path
+test_default_install_follows_existing_path_command
 test_old_release_without_fix_only_prints_upgrade_hint
 test_checksum_success
 test_explicit_gitee_source_is_isolated
