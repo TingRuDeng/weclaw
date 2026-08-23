@@ -613,6 +613,7 @@ func TestReleaseScriptAuthenticatesDraftUpdateSmoke(t *testing.T) {
 	for _, required := range []string{
 		`RELEASE_DRAFT_ATTEMPTED=1`,
 		`github_token="$(gh auth token)"`,
+		`env -u WECLAW_DAEMON_CHILD -u WECLAW_DAEMON_CLAUDE_PREFLIGHT`,
 		`GITHUB_TOKEN="$github_token" WECLAW_HOME=`,
 	} {
 		if !strings.Contains(text, required) {

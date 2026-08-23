@@ -353,7 +353,8 @@ verify_update_smoke() {
 		smoke_bin="$tmp_dir/weclaw"
 		mkdir -p "$tmp_dir/home"
 		go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=v0.0.0-update-smoke" -o "$smoke_bin" .
-		GITHUB_TOKEN="$github_token" WECLAW_HOME="$tmp_dir/home" WECLAW_UPDATE_RELEASE_TAG="$TAG" "$smoke_bin" update
+		env -u WECLAW_DAEMON_CHILD -u WECLAW_DAEMON_CLAUDE_PREFLIGHT \
+			GITHUB_TOKEN="$github_token" WECLAW_HOME="$tmp_dir/home" WECLAW_UPDATE_RELEASE_TAG="$TAG" "$smoke_bin" update
 		version_output="$(WECLAW_HOME="$tmp_dir/home" "$smoke_bin" version)"
 		[[ "$version_output" == *"weclaw $TAG ("* ]] || fail "update smoke 版本异常：$version_output"
 	)
