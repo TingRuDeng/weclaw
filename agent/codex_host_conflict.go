@@ -346,7 +346,7 @@ func parseCodexHostProcessSnapshot(output string) ([]codexHostProcessSnapshot, e
 			return nil, fmt.Errorf("解析 Codex Host 进程表第 %d 行 PPID", lineNumber)
 		}
 		pgid, err := strconv.Atoi(fields[2])
-		if err != nil || pgid <= 0 {
+		if err != nil || pgid < 0 {
 			return nil, fmt.Errorf("解析 Codex Host 进程表第 %d 行 PGID", lineNumber)
 		}
 		uid, err := strconv.ParseUint(fields[3], 10, 32)

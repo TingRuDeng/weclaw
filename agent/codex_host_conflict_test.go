@@ -71,6 +71,25 @@ func TestCodexHostConflictGroupsNodeWrapperAndNativeChildByPGID(t *testing.T) {
 	}
 }
 
+func TestCodexHostConflictParsesLinuxKernelThreadWithZeroPGID(t *testing.T) {
+	processes, err := parseCodexHostProcessSnapshot(strings.Join([]string{
+		"1 0 1 0 systemd /sbin/init",
+		"2 0 0 0 kthreadd [kthreadd]",
+		"100 1 100 1001 codex /home/test/.local/bin/codex app-server --listen unix:///tmp/codex.sock",
+	}, "\n"))
+	if err != nil {
+		t.Fatalf("parse Linux process snapshot: %v", err)
+	}
+	if len(processes) != 3 || processes[1].PID != 2 || processes[1].PGID != 0 {
+		t.Fatalf("processes=%#v, want Linux kernel thread PID 2 with PGID 0", processes)
+	}
+
+	groups := collectCodexHostProcessGroups(processes, map[uint32]struct{}{1001: {}})
+	if len(groups) != 1 || groups[0].PGID != 100 {
+		t.Fatalf("groups=%#v, want only Codex Host PGID 100", groups)
+	}
+}
+
 func TestCodexHostConflictAllowsVerifiedAuthorityGroup(t *testing.T) {
 	processes := []codexHostProcessSnapshot{{
 		PID: 100, PPID: 1, PGID: 100, UID: 501,
@@ -292,9 +311,14 @@ func TestCodexHostConflictMatchesOnlyRealAppServerSubcommand(t *testing.T) {
 }
 
 func TestCodexHostConflictRejectsMalformedProcessSnapshot(t *testing.T) {
-	_, err := parseCodexHostProcessSnapshot("100 invalid-row")
-	if err == nil || !strings.Contains(err.Error(), "解析 Codex Host 进程表") {
-		t.Fatalf("error=%v, want malformed snapshot failure", err)
+	for _, snapshot := range []string{
+		"100 invalid-row",
+		"100 1 -1 501 codex /opt/codex app-server",
+	} {
+		_, err := parseCodexHostProcessSnapshot(snapshot)
+		if err == nil || !strings.Contains(err.Error(), "解析 Codex Host 进程表") {
+			t.Fatalf("snapshot=%q error=%v, want malformed snapshot failure", snapshot, err)
+		}
 	}
 }
 
