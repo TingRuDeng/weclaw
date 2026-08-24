@@ -49,15 +49,77 @@ func TestPrepareStartUsesOneValidatedConfigSnapshot(t *testing.T) {
 	}
 }
 
-func TestWechatEnabledDefaultsToTrue(t *testing.T) {
-	cfg := config.DefaultConfig()
+func TestLoadStartConfigInitializesAPIToken(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
 
-	if !wechatEnabled(cfg) {
-		t.Fatal("wechat should be enabled when platforms.wechat.enabled is omitted")
+	cfg, err := loadStartConfig()
+	if err != nil {
+		t.Fatalf("loadStartConfig: %v", err)
+	}
+	if strings.TrimSpace(cfg.APIToken) == "" {
+		t.Fatal("loadStartConfig returned empty api_token")
 	}
 }
 
-func TestWechatEnabledDefaultsToFalseWhenFeishuEnabled(t *testing.T) {
+func TestPlatformSelectionLeavesFreshConfigUnselected(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	selection := resolvePlatformSelection(cfg, 0)
+	if selection.wechat || selection.feishu {
+		t.Fatalf("selection=%+v, want no platform selected", selection)
+	}
+}
+
+func TestPlatformSelectionKeepsLegacyWeChatWithStoredAccount(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	selection := resolvePlatformSelection(cfg, 1)
+	if !selection.wechat || selection.feishu {
+		t.Fatalf("selection=%+v, want legacy WeChat only", selection)
+	}
+}
+
+func TestPersistLegacyWeChatSelectionWritesExplicitEnabledFlag(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	cfg := config.DefaultConfig()
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := persistLegacyWeChatSelection(cfg, 1, config.Update); err != nil {
+		t.Fatalf("persistLegacyWeChatSelection: %v", err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	wechat := loaded.Platforms[string(platform.PlatformWeChat)]
+	if wechat.Enabled == nil || !*wechat.Enabled {
+		t.Fatalf("persisted wechat enabled=%v, want true", wechat.Enabled)
+	}
+}
+
+func TestPersistLegacyWeChatSelectionPreservesNewerExplicitChoice(t *testing.T) {
+	cfg := config.DefaultConfig()
+	disabled := false
+	if err := persistLegacyWeChatSelection(cfg, 1, func(mutate func(*config.Config) error) error {
+		latest := config.DefaultConfig()
+		latest.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{Enabled: &disabled}
+		return mutate(latest)
+	}); err != nil {
+		t.Fatalf("persistLegacyWeChatSelection: %v", err)
+	}
+
+	wechat := cfg.Platforms[string(platform.PlatformWeChat)]
+	if wechat.Enabled == nil || *wechat.Enabled {
+		t.Fatalf("wechat enabled=%v, want preserved explicit false", wechat.Enabled)
+	}
+	selection := resolvePlatformSelection(cfg, 1)
+	if selection.wechat || selection.feishu {
+		t.Fatalf("selection=%+v, want newer explicit choice", selection)
+	}
+}
+
+func TestPlatformSelectionDefaultsToFeishuOnlyWhenEnabled(t *testing.T) {
 	cfg := config.DefaultConfig()
 	enabled := true
 	cfg.Platforms[string(platform.PlatformFeishu)] = config.PlatformConfig{
@@ -67,8 +129,9 @@ func TestWechatEnabledDefaultsToFalseWhenFeishuEnabled(t *testing.T) {
 		},
 	}
 
-	if wechatEnabled(cfg) {
-		t.Fatal("wechat should be disabled by default when feishu is enabled")
+	selection := resolvePlatformSelection(cfg, 1)
+	if selection.wechat || !selection.feishu {
+		t.Fatalf("selection=%+v, want Feishu only", selection)
 	}
 }
 
@@ -83,8 +146,9 @@ func TestWechatEnabledCanBeExplicitlyEnabledWithFeishu(t *testing.T) {
 	}
 	cfg.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{Enabled: &enabled}
 
-	if !wechatEnabled(cfg) {
-		t.Fatal("wechat should stay enabled when explicitly configured with feishu")
+	selection := resolvePlatformSelection(cfg, 1)
+	if !selection.wechat || !selection.feishu {
+		t.Fatalf("selection=%+v, want both platforms", selection)
 	}
 }
 
@@ -93,8 +157,9 @@ func TestWechatEnabledCanBeDisabled(t *testing.T) {
 	disabled := false
 	cfg.Platforms[string(platform.PlatformWeChat)] = config.PlatformConfig{Enabled: &disabled}
 
-	if wechatEnabled(cfg) {
-		t.Fatal("wechat should be disabled when platforms.wechat.enabled=false")
+	selection := resolvePlatformSelection(cfg, 1)
+	if selection.wechat || selection.feishu {
+		t.Fatalf("selection=%+v, want both platforms disabled", selection)
 	}
 }
 

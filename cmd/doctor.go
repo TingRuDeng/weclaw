@@ -107,6 +107,13 @@ var doctorCmd = &cobra.Command{
 			return fmt.Errorf("--components 和 --yes 只能与 --fix 一起使用")
 		}
 		if doctorFix {
+			token, err := config.EnsureAPIToken()
+			if err != nil {
+				return fmt.Errorf("初始化 API Token 失败: %w", err)
+			}
+			if cfg.APIToken == "" {
+				cfg.APIToken = token
+			}
 			if err := runDoctorFix(cmd.Context(), doctorFixOptions{
 				Components: components, Yes: doctorYes,
 				Interactive: term.IsTerminal(int(os.Stdin.Fd())),

@@ -48,6 +48,8 @@ weclaw status
 
 配置文件位于 `~/.weclaw/config.json`，运行日志位于 `~/.weclaw/weclaw.log`，审计日志默认位于 `~/.weclaw/audit.log`。
 
+微信和飞书都是可选平台。全新配置未选择任何平台时，`weclaw doctor` 只给出警告，`weclaw start` 仍会以 API-only 模式常驻运行，不会自动弹出微信扫码；配置平台或凭证后重启服务即可加载。显式启用微信但缺少账号时启动会失败，并提示运行 `weclaw wechat login`。旧版本已保存微信账号且未写 `platforms.wechat.enabled` 的配置会在首次启动时迁移为显式启用微信。
+
 ## 核心工作流
 
 ### 从远程窗口开始 Codex 任务
@@ -295,6 +297,7 @@ weclaw wechat users approve-code <授权码>
 ```
 
 微信未授权用户会收到短期授权码。`allowed_users` 为空时默认拒绝所有用户。
+`weclaw wechat login` 是唯一触发微信扫码的入口；登录成功后会保存凭证并显式启用微信平台。
 
 ### 飞书
 
@@ -375,8 +378,9 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - 只有经过 Registry `allowed_users` 校验并携带授权能力的消息才能进入 Handler；直接构造或绕过 Registry 的消息会被拒绝。
 - 已授权身份可以切换和接管任意本机 Agent 工作空间；真正的文件系统隔离应使用 Agent sandbox、`run_as_user` 和操作系统权限。
 - 本地附件只从消息路由对应的 Agent 工作空间或 WeClaw 专用工作目录回传，并继续拒绝符号链接逃逸。
-- 非回环 `api_addr` 必须配置 `api_token`。
-- 回环地址允许不配置 `api_token`，但本机其他进程将可调用管理接口，`weclaw doctor` 会持续告警；推荐仍配置随机 Token。
+- `weclaw start` 和 `weclaw doctor --fix` 会在持久配置缺少 `api_token` 时一次性生成 32 字节强随机 Token，以 URL-safe Base64 无填充格式写入 `config.json`；已有值不会覆盖，Token 不会输出到日志。
+- `WECLAW_API_TOKEN` 只覆盖当前进程，不会写回配置；普通 `weclaw doctor` 和 `config.Load` 保持只读。
+- 非回环 `api_addr` 始终必须有有效 `api_token`。旧空 Token 配置会在上述初始化入口迁移；若随机源不可用，启动或修复会直接失败，不会降级为空 Token。
 - 审计日志默认开启，不记录密钥。
 - Codex `permission_level` 支持 `default`、`auto_review`、`full_access`；默认档位为 `default`。
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。

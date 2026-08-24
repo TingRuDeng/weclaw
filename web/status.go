@@ -55,13 +55,18 @@ func (s *Server) buildStatus() (statusView, error) {
 
 func platformStatuses(cfg *config.Config) ([]platformStatus, error) {
 	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
-	wechatEnabled := wechatCfg.Enabled == nil || *wechatCfg.Enabled
 	accounts, err := ilink.LoadAllCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("load WeChat credential status: %w", err)
 	}
 
 	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
+	wechatEnabled := false
+	if wechatCfg.Enabled != nil {
+		wechatEnabled = *wechatCfg.Enabled
+	} else if (feishuCfg.Enabled == nil || !*feishuCfg.Enabled) && len(accounts) > 0 {
+		wechatEnabled = true
+	}
 	statuses := []platformStatus{
 		{
 			Name:               string(platform.PlatformWeChat),

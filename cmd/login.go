@@ -6,6 +6,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/fastclaw-ai/weclaw/config"
+	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +26,20 @@ var loginCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := enableWeChatPlatform(); err != nil {
+			return fmt.Errorf("保存微信平台启用状态失败: %w", err)
+		}
 		fmt.Printf("账号 %s 已添加。运行 weclaw start 启动服务。\n", creds.ILinkBotID)
 		return nil
 	},
+}
+
+func enableWeChatPlatform() error {
+	return config.Update(func(cfg *config.Config) error {
+		wechat := cfg.Platforms[string(platform.PlatformWeChat)]
+		enabled := true
+		wechat.Enabled = &enabled
+		cfg.Platforms[string(platform.PlatformWeChat)] = wechat
+		return nil
+	})
 }

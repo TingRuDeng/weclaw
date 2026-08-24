@@ -17,11 +17,71 @@ import (
 
 var feishuStateFileUnsafeChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+type platformSelection struct {
+	wechat bool
+	feishu bool
+}
+
+// resolvePlatformSelection 兼容未写 enabled 的旧微信配置，同时让全新配置保持未选择状态。
+func resolvePlatformSelection(cfg *config.Config, wechatAccountCount int) platformSelection {
+	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
+	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
+	selection := platformSelection{
+		feishu: feishuCfg.Enabled != nil && *feishuCfg.Enabled,
+	}
+	if wechatCfg.Enabled != nil {
+		selection.wechat = *wechatCfg.Enabled
+		return selection
+	}
+	selection.wechat = !selection.feishu && wechatAccountCount > 0
+	return selection
+}
+
+func needsWechatAccounts(cfg *config.Config) bool {
+	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
+	if wechatCfg.Enabled != nil {
+		return *wechatCfg.Enabled
+	}
+	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
+	return feishuCfg.Enabled == nil || !*feishuCfg.Enabled
+}
+
+func persistLegacyWeChatSelection(cfg *config.Config, accountCount int, update func(func(*config.Config) error) error) error {
+	if cfg == nil || accountCount == 0 || cfg.Platforms[string(platform.PlatformWeChat)].Enabled != nil {
+		return nil
+	}
+	if feishu := cfg.Platforms[string(platform.PlatformFeishu)]; feishu.Enabled != nil && *feishu.Enabled {
+		return nil
+	}
+	if update == nil {
+		return fmt.Errorf("persist legacy WeChat selection: config updater is nil")
+	}
+	var latestWechat config.PlatformConfig
+	var latestFeishu config.PlatformConfig
+	if err := update(func(latest *config.Config) error {
+		latestWechat = latest.Platforms[string(platform.PlatformWeChat)]
+		latestFeishu = latest.Platforms[string(platform.PlatformFeishu)]
+		if latestWechat.Enabled != nil || (latestFeishu.Enabled != nil && *latestFeishu.Enabled) {
+			return nil
+		}
+		enabled := true
+		latestWechat.Enabled = &enabled
+		latest.Platforms[string(platform.PlatformWeChat)] = latestWechat
+		return nil
+	}); err != nil {
+		return fmt.Errorf("persist legacy WeChat selection: %w", err)
+	}
+	cfg.Platforms[string(platform.PlatformWeChat)] = latestWechat
+	cfg.Platforms[string(platform.PlatformFeishu)] = latestFeishu
+	return nil
+}
+
 func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config, opts ...platform.RegistryOption) (*platform.Registry, error) {
 	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
 	entries := make([]platform.RegistryEntry, 0, len(accounts)+len(feishuCfg.Bots))
 	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
-	if !wechatEnabled(cfg) {
+	selection := resolvePlatformSelection(cfg, len(accounts))
+	if !selection.wechat {
 		log.Printf("[platform] wechat disabled by config")
 	} else {
 		for _, creds := range accounts {
@@ -33,7 +93,7 @@ func buildPlatformRegistry(accounts []*ilink.Credentials, cfg *config.Config, op
 			})
 		}
 	}
-	if feishuCfg.Enabled != nil && *feishuCfg.Enabled {
+	if selection.feishu {
 		feishuEntries, err := buildFeishuRegistryEntries(feishuCfg)
 		if err != nil {
 			return nil, err
@@ -89,16 +149,6 @@ func resolveFeishuMaxMessageAge(bot config.FeishuBotConfig) time.Duration {
 		return feishuplatform.DefaultMessageMaxAge
 	}
 	return time.Duration(*bot.MaxMessageAgeSeconds) * time.Second
-}
-
-func wechatEnabled(cfg *config.Config) bool {
-	wechatCfg := cfg.Platforms[string(platform.PlatformWeChat)]
-	if wechatCfg.Enabled != nil {
-		return *wechatCfg.Enabled
-	}
-	// 飞书-only 新用户没有微信账号时，启动不能被微信自动登录阻塞。
-	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
-	return feishuCfg.Enabled == nil || !*feishuCfg.Enabled
 }
 
 func wechatAggregationWindow(cfg config.PlatformConfig) time.Duration {

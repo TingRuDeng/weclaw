@@ -202,6 +202,35 @@ func TestRunUntilShutdownCoordinatesCodexHostWhenBridgeStops(t *testing.T) {
 	}
 }
 
+func TestRunUntilShutdownKeepsAPIOnlyRuntimeAliveUntilSignal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime := startRuntime{
+		ctx:             ctx,
+		cancel:          cancel,
+		registry:        platform.NewRegistry(nil),
+		shutdownTimeout: time.Second,
+	}
+	signals := make(chan os.Signal, 1)
+	done := make(chan error, 1)
+	go func() { done <- runtime.runUntilShutdown(signals) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("API-only runtime exited before signal: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	signals <- syscall.SIGTERM
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runUntilShutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("API-only runtime did not stop after signal")
+	}
+}
+
 func TestSystemdServiceSignalsOnlyWeClawMainProcess(t *testing.T) {
 	unit, err := os.ReadFile(filepath.Join("..", "service", "weclaw.service"))
 	if err != nil {

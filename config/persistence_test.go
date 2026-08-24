@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,8 @@ func TestLoadReturnsConfigPathError(t *testing.T) {
 
 // TestLoadMissingFileAppliesEnvironment 验证配置文件不存在时仍应用环境变量覆盖。
 func TestLoadMissingFileAppliesEnvironment(t *testing.T) {
-	t.Setenv("WECLAW_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
 	t.Setenv("WECLAW_DEFAULT_AGENT", "claude")
 
 	cfg, err := Load()
@@ -28,6 +30,9 @@ func TestLoadMissingFileAppliesEnvironment(t *testing.T) {
 	}
 	if cfg.DefaultAgent != "claude" || cfg.Progress.Mode == "" {
 		t.Fatalf("default_agent=%q progress=%#v", cfg.DefaultAgent, cfg.Progress)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.json")); !os.IsNotExist(err) {
+		t.Fatalf("Load must remain read-only, config stat error=%v", err)
 	}
 }
 
@@ -74,6 +79,80 @@ func TestLoadEnvironmentOverridesNormalizedFile(t *testing.T) {
 	}
 	if cfg.Progress.Mode != "typing" || cfg.Progress.TypingHeartbeatSeconds == 0 {
 		t.Fatalf("progress=%#v", cfg.Progress)
+	}
+}
+
+func TestUpdateDoesNotPersistEnvironmentOverrides(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	t.Setenv("WECLAW_API_TOKEN", "environment-token")
+	cfg := DefaultConfig()
+	cfg.APIToken = "persisted-token"
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var runtimeSnapshot *Config
+	if err := Update(func(latest *Config) error {
+		if latest.APIToken != "environment-token" {
+			t.Fatalf("Update callback api_token=%q, want environment override", latest.APIToken)
+		}
+		runtimeSnapshot = latest
+		latest.DefaultAgent = "codex"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var persisted Config
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if persisted.APIToken != "persisted-token" {
+		t.Fatalf("persisted api_token=%q, want original disk value", persisted.APIToken)
+	}
+	if runtimeSnapshot == nil || runtimeSnapshot.APIToken != "environment-token" {
+		t.Fatalf("runtime snapshot api_token=%q, want environment override", runtimeSnapshot.APIToken)
+	}
+}
+
+func TestUpdatePersistsExplicitChangeToEnvironmentBackedField(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("WECLAW_HOME", home)
+	t.Setenv("WECLAW_DEFAULT_AGENT", "claude")
+	if err := Save(DefaultConfig()); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var runtimeSnapshot *Config
+	if err := Update(func(latest *Config) error {
+		if latest.DefaultAgent != "claude" {
+			t.Fatalf("Update callback default_agent=%q, want environment override", latest.DefaultAgent)
+		}
+		runtimeSnapshot = latest
+		latest.DefaultAgent = "codex"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var persisted Config
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if persisted.DefaultAgent != "codex" {
+		t.Fatalf("persisted default_agent=%q, want explicit update", persisted.DefaultAgent)
+	}
+	if runtimeSnapshot == nil || runtimeSnapshot.DefaultAgent != "claude" {
+		t.Fatalf("runtime snapshot default_agent=%q, want environment override", runtimeSnapshot.DefaultAgent)
 	}
 }
 

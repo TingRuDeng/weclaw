@@ -87,6 +87,21 @@ func TestDoctorWarnsEmptyAllowlist(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsWhenNoPlatformSelected(t *testing.T) {
+	cfg := config.DefaultConfig()
+	deps := testDoctorDeps()
+	deps.wechatAccounts = func() (int, error) { return 0, nil }
+
+	results := runDoctorChecks(cfg, deps)
+	platforms, ok := findResult(results, "platforms")
+	if !ok || platforms.Status != doctorWarn {
+		t.Fatalf("platforms=%#v ok=%t, want warning", platforms, ok)
+	}
+	if _, ok := findResult(results, "platform wechat"); ok {
+		t.Fatal("fresh config must not require WeChat login")
+	}
+}
+
 func TestDoctorWarnsLegacyAdminUsersWithoutExpandingAllowlist(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.LegacyAdminUsers = []string{"legacy-user"}

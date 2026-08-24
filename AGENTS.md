@@ -55,6 +55,8 @@ ai_summary:
 - 原生 Codex `auto`/`daemon` 默认让后续启动的 macOS Codex App 通过受保护的 launchd 环境复用同一官方 daemon；设置前必须验证 daemon 与 App 推导出的 `CODEX_HOME` control socket 完全一致。已运行 App 若仍带私有 app-server，只能失败关闭并要求用户重启 App，禁止自动退出或按进程名清理；独立 `CODEX_SQLITE_HOME` 表示 App 接入后会看到 daemon 的目录，不得据此迁移或删除旧目录。
 - `codexauth/` 管理 shared-host 级 Codex ChatGPT OAuth profile：系统凭据库优先、受保护文件显式降级；在线切换由 `agent/codex_account.go` 在 task/lease/thread 空闲门禁内停止和验证真实受管 Host，不能修改窗口 workspace/thread binding。
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
+- 全新配置不默认启用消息平台；未选择平台时 `doctor` 警告而 `start` 以 API-only 模式常驻。微信扫码只由显式 `weclaw wechat login` 触发；旧微信凭证在首次启动时迁移为显式启用，飞书已启用时不隐式同时启用微信。
+- 持久配置缺少 `api_token` 时，`start` 与 `doctor --fix` 一次性生成并原子保存强随机 Token；普通配置读取和普通 `doctor` 只读，`WECLAW_API_TOKEN` 只做运行态覆盖且不得经配置更新写回。
 - `scripts/release.sh` 和 CI 只为 GitHub 构建、上传 `darwin/arm64`、`linux/amd64` 正式资产及原始摘要，Gitee 镜像同两项资产的压缩表示和同一摘要。发布门禁包含安装脚本、文档、module tidy、全仓测试、race、vet、Staticcheck、govulncheck 和 `git diff --check`；本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。
 - `tasks/todo.md` 只保留当前或正在执行的任务记录；已完成历史流水账不长期保留。
 - `tasks/lessons.md` 是长期经验沉淀，清理文档时必须保留。

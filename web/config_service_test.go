@@ -272,6 +272,18 @@ func TestPlatformStatusesPropagateWeChatCredentialReadFailure(t *testing.T) {
 	}
 }
 
+func TestPlatformStatusesKeepFreshConfigUnselected(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	statuses, err := platformStatuses(config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("platformStatuses: %v", err)
+	}
+	wechat, ok := findPlatformStatus(statuses, "wechat")
+	if !ok || wechat.Enabled {
+		t.Fatalf("wechat status=%#v ok=%t, want disabled for fresh config", wechat, ok)
+	}
+}
+
 func TestFeishuPlatformStatusesDistinguishMissingAndMalformedCredentials(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("WECLAW_HOME", home)

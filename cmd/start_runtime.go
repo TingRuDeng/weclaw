@@ -44,12 +44,12 @@ type runtimeShutdownCoordinator interface {
 const defaultRuntimeShutdownTimeout = 10 * time.Second
 
 type backgroundStartOps struct {
-	loadAccounts func() ([]*ilink.Credentials, error)
-	login        func(context.Context) (*ilink.Credentials, error)
-	runDaemon    func() error
+	loadAccounts             func() ([]*ilink.Credentials, error)
+	persistPlatformSelection func(*config.Config, int) error
+	runDaemon                func() error
 }
 
-// runBackgroundStart 在派生后台进程前完成必要的微信登录。
+// runBackgroundStart 在派生后台进程前完成凭据检查。
 func runBackgroundStart(cfg *config.Config) error {
 	fingerprint, err := claudePreflightFingerprint(cfg)
 	if err != nil {
@@ -57,25 +57,31 @@ func runBackgroundStart(cfg *config.Config) error {
 	}
 	return runBackgroundStartWithOps(cfg, backgroundStartOps{
 		loadAccounts: ilink.LoadAllCredentials,
-		login:        doLogin,
-		runDaemon:    func() error { return runDaemon(fingerprint) },
+		persistPlatformSelection: func(cfg *config.Config, count int) error {
+			return persistLegacyWeChatSelection(cfg, count, config.Update)
+		},
+		runDaemon: func() error { return runDaemon(fingerprint) },
 	})
 }
 
-// runBackgroundStartWithOps 保证凭据加载、登录和 daemon 启动按失败边界顺序执行。
+// runBackgroundStartWithOps 保证凭据加载和 daemon 启动按失败边界顺序执行。
 func runBackgroundStartWithOps(cfg *config.Config, ops backgroundStartOps) error {
-	accounts, err := ops.loadAccounts()
-	if err != nil {
-		return fmt.Errorf("failed to load credentials: %w", err)
+	var accountCount int
+	if needsWechatAccounts(cfg) {
+		accounts, err := ops.loadAccounts()
+		if err != nil {
+			return fmt.Errorf("failed to load credentials: %w", err)
+		}
+		accountCount = len(accounts)
 	}
-	if !wechatEnabled(cfg) || len(accounts) > 0 {
-		return ops.runDaemon()
+	if ops.persistPlatformSelection != nil {
+		if err := ops.persistPlatformSelection(cfg, accountCount); err != nil {
+			return err
+		}
 	}
-	fmt.Println("未找到微信账号，正在启动微信扫码登录...")
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-	if _, err := ops.login(ctx); err != nil {
-		return fmt.Errorf("login failed: %w", err)
+	selection := resolvePlatformSelection(cfg, accountCount)
+	if selection.wechat && accountCount == 0 {
+		return fmt.Errorf("未找到微信账号，请先运行 weclaw wechat login")
 	}
 	return ops.runDaemon()
 }
@@ -96,7 +102,7 @@ func runForegroundStart(cfg *config.Config) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	accounts, err := loadStartAccounts(ctx, cfg)
+	accounts, err := loadStartAccounts(cfg)
 	if err != nil {
 		return err
 	}
@@ -205,21 +211,23 @@ func shouldWarmCodexAppDaemonReuse(cfg *config.Config) bool {
 		strings.TrimSpace(agentCfg.AppServerSocket) == "" && strings.TrimSpace(agentCfg.RunAsUser) == ""
 }
 
-// loadStartAccounts 加载微信账号，并在启用微信但无账号时发起登录。
-func loadStartAccounts(ctx context.Context, cfg *config.Config) ([]*ilink.Credentials, error) {
+// loadStartAccounts 加载微信账号；缺少显式启用微信的凭证时直接失败。
+func loadStartAccounts(cfg *config.Config) ([]*ilink.Credentials, error) {
+	if !needsWechatAccounts(cfg) {
+		return nil, nil
+	}
 	accounts, err := ilink.LoadAllCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load credentials: %w", err)
 	}
-	if !wechatEnabled(cfg) || len(accounts) > 0 {
+	if err := persistLegacyWeChatSelection(cfg, len(accounts), config.Update); err != nil {
+		return nil, err
+	}
+	selection := resolvePlatformSelection(cfg, len(accounts))
+	if !selection.wechat || len(accounts) > 0 {
 		return accounts, nil
 	}
-	log.Println("未找到微信账号，正在启动微信扫码登录...")
-	creds, err := doLogin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("login failed: %w", err)
-	}
-	return append(accounts, creds), nil
+	return nil, fmt.Errorf("未找到微信账号，请先运行 weclaw wechat login")
 }
 
 // detectStartAgents 自动探测 Agent，并在保存后再次验证 Claude ACP 配置。
@@ -451,6 +459,11 @@ func (runtime startRuntime) apiAddress() string {
 
 // runBridge 运行平台消息桥，并在所有平台退出后结束前台进程。
 func (runtime startRuntime) runBridge() error {
+	if runtime.registry == nil || len(runtime.registry.RegisteredAccounts()) == 0 {
+		log.Printf("No messaging platform enabled; API-only service is running. Restart WeClaw after configuring a platform.")
+		<-runtime.ctx.Done()
+		return nil
+	}
 	log.Printf("Starting message bridge...")
 	if err := runtime.registry.Run(runtime.ctx, runtime.handler.HandleMessage); err != nil {
 		return err

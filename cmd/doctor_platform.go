@@ -13,36 +13,31 @@ import (
 // checkPlatforms 汇总已启用平台的凭证与访问控制检查。
 func checkPlatforms(cfg *config.Config, deps doctorDeps) []doctorResult {
 	var results []doctorResult
-	wechatEnabled, feishuEnabled := platformEnablement(cfg)
-	if wechatEnabled {
-		results = append(results, checkWeChat(deps))
+	wechatAccounts := 0
+	if needsWechatAccounts(cfg) {
+		count, err := deps.wechatAccounts()
+		if err != nil {
+			results = append(results, doctorResult{Name: "platform wechat", Status: doctorFail, Detail: "load credentials: " + err.Error()})
+		} else {
+			wechatAccounts = count
+		}
+	}
+	selection := resolvePlatformSelection(cfg, wechatAccounts)
+	if selection.wechat {
+		results = append(results, checkWeChatAccountCount(wechatAccounts))
 		results = append(results, checkAllowlist(cfg, string(platform.PlatformWeChat)))
 	}
-	if feishuEnabled {
+	if selection.feishu {
 		results = append(results, checkFeishuBots(cfg, deps)...)
 	}
-	if !wechatEnabled && !feishuEnabled {
-		results = append(results, doctorResult{Name: "platforms", Status: doctorWarn, Detail: "no platform enabled; nothing to run"})
+	if !selection.wechat && !selection.feishu {
+		results = append(results, doctorResult{Name: "platforms", Status: doctorWarn, Detail: "no messaging platform selected; API-only service will run"})
 	}
 	return results
 }
 
-// platformEnablement 解析启用的平台，必须与启动阶段保持一致，避免 doctor 误报实际未启动的平台。
-func platformEnablement(cfg *config.Config) (wechat bool, feishu bool) {
-	wechat = wechatEnabled(cfg)
-	feishuCfg := cfg.Platforms[string(platform.PlatformFeishu)]
-	feishu = feishuCfg.Enabled != nil && *feishuCfg.Enabled
-	return wechat, feishu
-}
-
-func checkWeChat(deps doctorDeps) doctorResult {
+func checkWeChatAccountCount(count int) doctorResult {
 	result := doctorResult{Name: "platform wechat"}
-	count, err := deps.wechatAccounts()
-	if err != nil {
-		result.Status = doctorFail
-		result.Detail = "load credentials: " + err.Error()
-		return result
-	}
 	if count == 0 {
 		result.Status = doctorFail
 		result.Detail = "no WeChat account; run `weclaw wechat login`"

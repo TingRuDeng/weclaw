@@ -66,6 +66,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 
 // loadStartConfig 加载启动配置，并统一包装配置文件错误。
 func loadStartConfig() (*config.Config, error) {
+	if _, err := config.Load(); err != nil {
+		return nil, fmt.Errorf("加载配置失败: %w", err)
+	}
+	if _, err := config.EnsureAPIToken(); err != nil {
+		return nil, fmt.Errorf("初始化 API Token 失败: %w", err)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("加载配置失败: %w", err)

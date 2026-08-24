@@ -48,6 +48,8 @@ weclaw status
 
 The configuration file is `~/.weclaw/config.json`, the runtime log is `~/.weclaw/weclaw.log`, and the default audit log is `~/.weclaw/audit.log`.
 
+WeChat and Feishu are both optional. With a fresh configuration and no selected platform, `weclaw doctor` reports a warning and `weclaw start` stays online in API-only mode without opening a WeChat QR login. Restart the service after configuring a platform or credentials. If WeChat is explicitly enabled without an account, startup fails with guidance to run `weclaw wechat login`. A legacy configuration with stored WeChat credentials and no `platforms.wechat.enabled` value is migrated to explicit WeChat enablement on first startup.
+
 ## Core Workflows
 
 ### Start a Codex Task Remotely
@@ -295,6 +297,7 @@ weclaw wechat users approve-code <authorization-code>
 ```
 
 An unauthorized WeChat user receives a short-lived authorization code. An empty `allowed_users` list rejects everyone by default.
+`weclaw wechat login` is the only command that starts the WeChat QR flow. A successful login saves the credentials and explicitly enables the WeChat platform.
 
 ### Feishu
 
@@ -373,8 +376,9 @@ Key security rules:
 - Only messages validated through Registry `allowed_users` and carrying its access grant may enter the Handler; directly constructed messages and Registry bypasses are rejected.
 - Authorized identities may switch to and take over any local Agent workspace. Use the Agent sandbox, `run_as_user`, and operating-system permissions for real filesystem isolation.
 - Local attachments are sent only from the message route's Agent workspace or WeClaw's dedicated workspace, with symlink escapes still rejected.
-- A non-loopback `api_addr` requires `api_token`.
-- Loopback listeners may omit `api_token`, but other local processes can then call administrative endpoints; `weclaw doctor` reports this risk, and a random token is still recommended.
+- `weclaw start` and `weclaw doctor --fix` generate a 32-byte cryptographically random `api_token` once when the persisted configuration has none. It is stored in `config.json` as unpadded URL-safe Base64; existing values are preserved and the token is never logged.
+- `WECLAW_API_TOKEN` is a runtime-only override and is never written back. Plain `weclaw doctor` and `config.Load` remain read-only.
+- A non-loopback `api_addr` always requires an effective `api_token`. Legacy empty-token configurations are migrated by the initialization entry points above. If secure randomness is unavailable, startup or repair fails instead of falling back to an empty token.
 - Audit logging is enabled by default and never records secrets.
 - Codex `permission_level` accepts `default`, `auto_review`, and `full_access`; the effective default is `default`.
 - Codex manages the shared Unix socket automatically. Set `app_server_socket` only for multi-process or `run_as_user` deployments; its parent must be owned by the target user and no more permissive than `0700`.
