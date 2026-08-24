@@ -38,14 +38,22 @@ func TestStartHandlerStatusShowsWeClawVersion(t *testing.T) {
 
 	handler := newStartHandlerWithTrace(config.DefaultConfig(), nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	handler.HandleMessage(context.Background(), platform.IncomingMessage{
+	registry := platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &configReloadTestPlatform{name: platform.PlatformFeishu, account: "main"},
+		Access:   platform.NewAccessControl([]string{"ou_user"}),
+	}})
+	msg, ok := registry.AuthorizeIncomingMessage(platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "main",
 		UserID:    "ou_user",
 		ChatID:    "oc_chat",
 		MessageID: "status-version",
 		Text:      "/status",
-	}, reply)
+	})
+	if !ok {
+		t.Fatal("failed to authorize status test message")
+	}
+	handler.HandleMessage(context.Background(), msg, reply)
 
 	text := strings.Join(reply.TextsSnapshot(), "\n")
 	if !strings.Contains(text, "version: v9.8.7") {

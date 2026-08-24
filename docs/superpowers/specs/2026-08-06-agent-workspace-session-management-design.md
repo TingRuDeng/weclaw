@@ -8,12 +8,14 @@
 
 > 授权模型更新（2026-08-11）：本文中的“管理员”、`admin_users` 与 `--admin` 描述仅保留为首期历史背景。当前运行时以每个平台或机器人账号自己的 `allowed_users` 为唯一远程身份来源；其中所有身份具有相同管理能力，旧顶层 `admin_users` 只告警并忽略，不自动迁移。当前命令、账号隔离和工作空间边界以 `README_CN.md`、`docs/AI_CONTEXT.md` 与源码为准。
 
+> 工作空间授权更新（2026-08-24）：`allowed_workspace_roots` 已退出运行时权限模型。Registry `allowed_users` 授权的身份可导航和接管任意本机 Agent 工作空间；未携带 Registry 授权能力的消息在 Handler 入口失败关闭。旧配置键仅兼容一个版本的加载和原样保存，运行时忽略且 Web 不展示。
+
 ## 目标
 
 - 允许管理员通过 WeClaw 为指定 Codex 或 Claude Agent 登记已有工作目录，并从 WeClaw 导航中移除工作目录。
 - 允许有权访问目标工作空间的用户重命名 Codex thread 或 Claude session。
 - 保持 Codex App / app-server 与 Claude ACP 目录为会话事实源，不通过直接改 SQLite、JSONL 或 Agent 私有状态伪造成功。
-- 保持 `allowed_workspace_roots`、单一 Codex Host、单一 ClaudeHost、多前端 binding 和 session/thread 单 writer 约束。
+- 保持 Registry 身份授权、单一 Codex Host、单一 ClaudeHost、多前端 binding 和 session/thread 单 writer 约束。
 - 所有状态变更都必须可验证；请求结果不确定时明确提示用户复核，不能返回假成功。
 
 ## 非目标
@@ -79,7 +81,7 @@ Claude Code 官方支持在当前 session 中执行 `/rename <名称>`。ACP 没
 
 - 工作空间登记是主机级状态，只允许 `admin_users` 中且可证明为私聊的操作者修改；无法证明私聊的平台请求失败关闭。
 - `add` 复用 `/cwd` 的 `~` 展开、绝对路径、符号链接解析和真实目录校验，不创建缺失目录。
-- 管理员可以登记 `allowed_workspace_roots` 之外的目录，但该操作不扩大普通用户权限；普通用户仍看不到、不能选择白名单外目录。
+- 工作空间登记只改变导航覆盖层，不改变 Registry 身份授权；已授权身份可以看到并选择任意未隐藏的本机 Agent 工作空间。
 - `rename` 必须再次校验目标工作空间位于操作者可访问范围内，不能用 thread/session ID 绕过工作空间限制或隐藏状态。
 
 ## 工作空间状态模型
@@ -128,7 +130,7 @@ Claude Code 官方支持在当前 session 中执行 `/rename <名称>`。ACP 没
 - 会话 `remove/restore` 按 Agent 名称和 thread/session ID 幂等维护 `hidden_sessions`；恢复必须使用稳定 ID，避免列表变化后编号误恢复其他会话。
 - v1 文件可无损加载；下一次成功写入升级为 v2。未知版本仍失败关闭且不覆盖原文件。
 - 使用 copy-on-write 候选状态，先原子写入 `0600` 临时文件、同步并替换，成功后才发布内存状态。
-- 文件损坏或未知版本时不覆盖原文件；工作空间管理命令停用并报告可操作错误，Agent 原生目录仍受 `allowed_workspace_roots` 约束。
+- 文件损坏或未知版本时不覆盖原文件；工作空间管理命令停用并报告可操作错误，Agent 原生目录仍受 Agent sandbox、`run_as_user` 和操作系统权限约束。
 - 登记目录后来消失时不展示；管理员仍可按已保存的完整路径执行 `remove` 清理记录。
 
 ### 目录合并
@@ -139,7 +141,7 @@ flowchart LR
     A["Claude ACP session/list"] --> M
     R["WeClaw registered"] --> M
     H["WeClaw hidden"] -->|"过滤"| M
-    M --> P["allowed_workspace_roots / 管理员权限过滤"]
+    M --> P["隐藏状态与目录有效性过滤"]
     P --> U["/cx ls 与 /cc ls"]
 ```
 
@@ -148,7 +150,7 @@ flowchart LR
 1. 先保留各 Agent 原生目录现有顺序。
 2. 追加尚未出现的手工登记目录，按 `added_at`、规范路径稳定排序。
 3. 按规范路径去重，并过滤隐藏目录。
-4. 最后按操作者权限过滤；登记状态不能替代 `allowed_workspace_roots`。
+4. 最后过滤隐藏或已失效目录；登记状态不能替代 Handler 入口的 Registry 身份授权。
 5. 同 basename 的目录在列表中追加最短可区分路径；名称解析不唯一时只接受编号或完整路径。
 6. 所有 `cd`、`switch`、`new` 和直接 ID 选择入口都复用同一可见性判断，不能只过滤展示层。
 7. 隐藏会话同时从文本列表、飞书卡片、编号解析、直接 ID 和过期卡片入口中过滤；registry 不可读时会话选择失败关闭。

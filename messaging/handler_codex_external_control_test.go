@@ -27,7 +27,6 @@ func newFeishuExternalProgressFixture(t *testing.T) feishuExternalProgressFixtur
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	offCfg := config.DefaultProgressConfig()
@@ -76,7 +75,6 @@ func TestCodexSwitchHidesAppThreadStateReadError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
@@ -95,7 +93,6 @@ func TestCodexSwitchHidesMissingActiveTurnError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
@@ -117,7 +114,6 @@ func TestCodexStopInterruptsExternalActiveTurn(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	state := agent.CodexThreadState{
@@ -157,7 +153,7 @@ func TestFeishuStopResolvesInProcessUnknownRuntime(t *testing.T) {
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android",
 		UserID: "user-1", MessageID: "stop-in-process", Text: "/stop",
 	}, reply)

@@ -12,19 +12,20 @@ import (
 )
 
 type agentTaskLifecycleOptions struct {
-	taskCtx        context.Context
-	replyCtx       context.Context
-	reply          platform.Replier
-	task           *activeAgentTask
-	cancel         context.CancelFunc
-	executionKey   string
-	userID         string
-	agentName      string
-	workspaceRoot  string
-	message        string
-	replyPrefix    string
-	progressConfig config.ProgressConfig
-	trace          observability.TraceContext
+	taskCtx                context.Context
+	replyCtx               context.Context
+	reply                  platform.Replier
+	task                   *activeAgentTask
+	cancel                 context.CancelFunc
+	executionKey           string
+	userID                 string
+	agentName              string
+	workspaceRoot          string
+	message                string
+	replyPrefix            string
+	progressConfig         config.ProgressConfig
+	trace                  observability.TraceContext
+	allowedAttachmentRoots []string
 }
 
 type agentTaskLifecycle struct {
@@ -50,6 +51,9 @@ type agentTaskAdmissionNotice struct {
 
 // startAgentTaskLifecycle 创建三类 Agent 共用的进度和终态交付器。
 func (h *Handler) startAgentTaskLifecycle(opts agentTaskLifecycleOptions) agentTaskLifecycle {
+	if opts.allowedAttachmentRoots == nil {
+		opts.allowedAttachmentRoots = h.allowedAttachmentRootsForWorkspace(opts.agentName, opts.workspaceRoot)
+	}
 	if opts.task != nil {
 		opts.task.setProgressTimelineLimit(opts.progressConfig.EffectiveStreamTimelineLimit())
 		opts.trace = traceWithReply(opts.task.traceSnapshot(), opts.reply)
@@ -131,6 +135,7 @@ func (h *Handler) finishAgentTaskLifecycle(lifecycle agentTaskLifecycle, reply s
 			ctx: lifecycle.opts.replyCtx, replyWriter: lifecycle.opts.reply,
 			userID: lifecycle.opts.userID, agentName: lifecycle.opts.agentName, reply: reply,
 			trace: trace, deliveryGuard: lifecycle.opts.task.terminalDeliveryGuardSnapshot(),
+			allowedAttachmentRoots: lifecycle.opts.allowedAttachmentRoots,
 		},
 		failed: err != nil && !stopped, stopped: stopped,
 		idempotencyKey: lifecycle.opts.task.terminalDeliveryKeySnapshot(),

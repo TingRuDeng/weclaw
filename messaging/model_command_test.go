@@ -148,7 +148,7 @@ func TestFeishuModelCommandUsesChoiceCard(t *testing.T) {
 	h := newModelHandler(ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_main",
 		UserID:    "ou_user",
@@ -184,7 +184,7 @@ func TestFeishuReasoningCommandUsesCurrentModelEffortChoices(t *testing.T) {
 	h := newModelHandler(ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_main",
 		UserID:    "ou_user",
@@ -226,7 +226,7 @@ func TestFeishuFastCommandUsesChoiceCard(t *testing.T) {
 	h := newModelHandler(ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "fast-card", Text: "/fast",
 	}, reply)
 
@@ -249,7 +249,7 @@ func TestFeishuModelCommandFallsBackToTextWithoutChoices(t *testing.T) {
 	h := newModelHandler(ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_main",
 		UserID:    "ou_user",
@@ -272,7 +272,7 @@ func TestExplicitReasoningCommandAndWechatOverviewStayText(t *testing.T) {
 	h := newModelHandler(ag)
 	feishuReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "reasoning-explicit",
@@ -283,7 +283,7 @@ func TestExplicitReasoningCommandAndWechatOverviewStayText(t *testing.T) {
 		t.Fatalf("texts=%#v choices=%#v model=%q effort=%q，推理命令不能修改模型", feishuReply.Texts, feishuReply.Choices, ag.model, ag.effort)
 	}
 	wechatReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformWeChat,
 		UserID:    "wx_user",
 		MessageID: "reasoning-wechat",

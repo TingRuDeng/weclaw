@@ -90,11 +90,11 @@ func TestBuildHelpText(t *testing.T) {
 	}
 }
 
-func TestFeishuHelpSendsChoiceCard(t *testing.T) {
+func TestFeishuHelpSendsAuthorizedChoiceCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-help-1",
@@ -116,6 +116,7 @@ func TestFeishuHelpSendsChoiceCard(t *testing.T) {
 		"/help codex":    "Codex",
 		"/help claude":   "Claude",
 		"/help settings": "设置与进度",
+		"/help manage":   "管理",
 	}
 	if len(got.Choices) != len(wants) {
 		t.Fatalf("choices=%#v, want %d entries", got.Choices, len(wants))
@@ -131,7 +132,7 @@ func TestFeishuHelpShowsManagementChoicesForAuthorizedUser(t *testing.T) {
 	h := NewHandler(nil, nil)
 	rootReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_admin",
 		MessageID: "feishu-admin-help-1",
@@ -153,7 +154,7 @@ func TestFeishuHelpShowsManagementChoicesForAuthorizedUser(t *testing.T) {
 	}
 
 	adminReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_admin",
 		MessageID: "feishu-admin-help-2",
@@ -177,7 +178,7 @@ func TestFeishuHelpShowsManagementChoicesForAuthorizedUser(t *testing.T) {
 func TestFeishuHelpKeepsGuideInCodexSection(t *testing.T) {
 	h := NewHandler(nil, nil)
 	commonReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "/help common",
@@ -190,7 +191,7 @@ func TestFeishuHelpKeepsGuideInCodexSection(t *testing.T) {
 	}
 
 	codexReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "/help codex",
@@ -213,7 +214,7 @@ func TestFeishuHelpCodexSubmenuIncludesLongTailCommands(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-codex-help-1",
@@ -241,7 +242,7 @@ func TestFeishuHelpClaudeSubmenuIncludesQuota(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-claude-help-1",
@@ -273,7 +274,7 @@ func TestFeishuHelpClaudeSubmenuIncludesQuota(t *testing.T) {
 func TestFeishuHelpSettingsLabelsModelScope(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "/help settings",
@@ -292,7 +293,7 @@ func TestFeishuHelpSettingsLabelsModelScope(t *testing.T) {
 	}
 }
 
-func TestHelpHidesManagementCommandsWithoutRegistryCapability(t *testing.T) {
+func TestHelpRejectsMessagesWithoutRegistryCapability(t *testing.T) {
 	h := NewHandler(nil, nil)
 	feishuReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	wechatReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -311,17 +312,8 @@ func TestHelpHidesManagementCommandsWithoutRegistryCapability(t *testing.T) {
 		Text:      "/help",
 	}, wechatReply)
 
-	got := helpChoiceIDs(feishuReply.Choices[0].Choices)
-	for _, hidden := range []string{"/help manage", "/update", "/restart", "/feishu users pending", "/feishu users list"} {
-		if got[hidden] {
-			t.Fatalf("non-admin feishu help choices=%#v, should hide %q", feishuReply.Choices[0].Choices, hidden)
-		}
-		if strings.Contains(feishuReply.Choices[0].Prompt, hidden) {
-			t.Fatalf("non-admin feishu help prompt=%q, should hide %q", feishuReply.Choices[0].Prompt, hidden)
-		}
-		if strings.Contains(wechatReply.Texts[0], hidden) {
-			t.Fatalf("non-admin wechat help=%q, should hide %q", wechatReply.Texts[0], hidden)
-		}
+	if len(feishuReply.Choices) != 0 || len(feishuReply.Texts) != 0 || len(wechatReply.Texts) != 0 {
+		t.Fatalf("messages without Registry grant were handled: feishu=%#v wechat=%#v", feishuReply, wechatReply)
 	}
 
 	directAdminReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
@@ -332,8 +324,8 @@ func TestHelpHidesManagementCommandsWithoutRegistryCapability(t *testing.T) {
 		Text:      "/help manage",
 		Metadata:  map[string]string{"feishu_union_id": "on_user"},
 	}, directAdminReply)
-	if got := helpChoiceIDs(directAdminReply.Choices[0].Choices); got["/help manage"] || got["/update"] || got["/restart"] {
-		t.Fatalf("non-admin direct admin help=%#v, should fall back to public help root", directAdminReply.Choices[0].Choices)
+	if len(directAdminReply.Choices) != 0 || len(directAdminReply.Texts) != 0 {
+		t.Fatalf("management help without Registry grant was handled: %#v", directAdminReply)
 	}
 }
 
@@ -341,7 +333,7 @@ func TestWeChatHelpShowsManagementCommandsForAuthorizedUser(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformWeChat,
 		UserID:    "wx_admin",
 		MessageID: "wechat-admin-help-1",
@@ -369,7 +361,7 @@ func TestNonFeishuHelpKeepsText(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformWeChat,
 		UserID:    "user-1",
 		MessageID: "wechat-help-1",

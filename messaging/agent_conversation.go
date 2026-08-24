@@ -58,21 +58,44 @@ func (h *Handler) bindConversationCwd(ag agent.Agent, conversationID string, wor
 	}
 }
 
-func (h *Handler) allowedAttachmentRoots(agentName string) []string {
-	roots := []string{defaultAttachmentWorkspace()}
+func (h *Handler) allowedAttachmentRoots(routeUserID string, agentName string) []string {
+	workspaceRoot := ""
+	routeUserID = strings.TrimSpace(routeUserID)
+	if routeUserID != "" {
+		if activeRoot, ok := h.ensureCodexSessions().getActiveWorkspace(codexBindingKey(routeUserID, agentName)); ok {
+			workspaceRoot = activeRoot
+		}
+		if workspaceRoot == "" {
+			workspaceRoot = h.ensureClaudeSessions().binding(claudeBindingKey(routeUserID, agentName)).WorkspaceRoot
+		}
+	}
+	return h.allowedAttachmentRootsForWorkspace(agentName, workspaceRoot)
+}
 
+func (h *Handler) allowedAttachmentRootsForWorkspace(agentName string, workspaceRoot string) []string {
+	roots := []string{snapshotAttachmentRoot(defaultAttachmentWorkspace())}
+	if workspaceRoot = snapshotAttachmentRoot(workspaceRoot); workspaceRoot != "" {
+		return append(roots, workspaceRoot)
+	}
 	h.mu.RLock()
 	agentDir := h.agentWorkDirs[agentName]
-	workspaceRoots := append([]string(nil), h.allowedWorkspaceRoots...)
 	h.mu.RUnlock()
-
-	if agentDir != "" {
+	if agentDir = snapshotAttachmentRoot(agentDir); agentDir != "" {
 		roots = append(roots, agentDir)
 	}
-	// 允许回传 agent 在已授权工作目录(白名单)内生成的产物。
-	roots = append(roots, workspaceRoots...)
-
 	return roots
+}
+
+func snapshotAttachmentRoot(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return ""
+	}
+	canonical, err := canonicalizePath(root, false)
+	if err != nil {
+		return root
+	}
+	return canonical
 }
 
 func (h *Handler) resolveAgentConversationIDForRoute(ctx context.Context, ownerUserID string, routeUserID string, agentName string, ag agent.Agent) (string, error) {
@@ -159,9 +182,6 @@ func (h *Handler) resolveClaudeConversationIDForRoute(ctx context.Context, owner
 	workspaceRoot := h.claudeWorkspaceRootForUser(routeUserID, agentName, ag)
 	if err := h.hiddenWorkspaceError(agentName, workspaceRoot, "cc"); err != nil {
 		return "", err
-	}
-	if !h.workspaceAllowedForAgentContext(ctx, agentName, workspaceRoot) {
-		return "", fmt.Errorf("当前工作空间不在允许范围，请发送 /cc ls 重新选择")
 	}
 	bindingKey := claudeBindingKey(routeUserID, agentName)
 	conversationID := buildClaudeConversationID(routeUserID, agentName, workspaceRoot)

@@ -147,10 +147,6 @@ func (h *Handler) renderCodexListForAccess(bindingKey string, actorUserID string
 			h.clearCodexBrowseWorkspace(bindingKey)
 			return h.renderCodexWorkspaceListForAccess(bindingKey, actorUserID, admin)
 		}
-		if !admin && !h.isWorkspaceAllowed(workspaceRoot) {
-			h.clearCodexBrowseWorkspace(bindingKey)
-			return h.renderCodexWorkspaceListForAccess(bindingKey, actorUserID, admin)
-		}
 		return h.renderCodexSessionList(bindingKey, workspaceRoot)
 	}
 	return h.renderCodexWorkspaceListForAccess(bindingKey, actorUserID, admin)

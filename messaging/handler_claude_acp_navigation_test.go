@@ -11,7 +11,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/agent"
 )
 
-func TestClaudeCcLsUsesACPCatalogOnly(t *testing.T) {
+func TestClaudeCcLsUsesAllVisibleACPCatalogSessions(t *testing.T) {
 	h, fake, allowed := newClaudeACPNavigationHandler(t)
 	blocked := t.TempDir()
 	fake.catalogSessions = []agent.ClaudeSession{
@@ -20,7 +20,8 @@ func TestClaudeCcLsUsesACPCatalogOnly(t *testing.T) {
 	}
 
 	text := h.handleClaudeSessionCommand(context.Background(), "user-1", "/cc ls")
-	if !strings.Contains(text, "1. "+filepath.Base(allowed)+" / 允许会话") || strings.Contains(text, "越权会话") || fake.listCalls != 1 {
+	if !strings.Contains(text, filepath.Base(allowed)+" / 允许会话") ||
+		!strings.Contains(text, filepath.Base(blocked)+" / 越权会话") || fake.listCalls != 1 {
 		t.Fatalf("text=%q listCalls=%d", text, fake.listCalls)
 	}
 }
@@ -235,6 +236,5 @@ func newClaudeACPNavigationHandler(t *testing.T) (*Handler, *fakeClaudeSessionAg
 	h.defaultName = "claude"
 	h.agents["claude"] = fake
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	return h, fake, workspace
 }

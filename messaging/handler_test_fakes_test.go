@@ -124,7 +124,7 @@ func handleTestWeChatMessage(h *Handler, ctx context.Context, client *ilink.Clie
 		return
 	}
 	reply := wechat.NewReplier(client, msg.FromUserID, msg.ContextToken, "")
-	h.HandleMessage(ctx, wechat.IncomingFromWeixin(msg), reply)
+	h.handleMessageForTest(ctx, wechat.IncomingFromWeixin(msg), reply)
 }
 
 func newFileMessage(id int64, fileName string) ilink.WeixinMessage {

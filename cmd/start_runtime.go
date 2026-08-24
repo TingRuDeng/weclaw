@@ -352,17 +352,11 @@ func configureHandlerState(handler *messaging.Handler) {
 	}
 }
 
-// configureHandlerAccess 配置文件保存、工作区权限、限流与审计。
+// configureHandlerAccess 配置文件保存、限流与审计。
 func configureHandlerAccess(handler *messaging.Handler, cfg *config.Config) {
 	if cfg.SaveDir != "" {
 		handler.SetSaveDir(cfg.SaveDir)
 		log.Printf("Image save directory: %s", cfg.SaveDir)
-	}
-	handler.SetAllowedWorkspaceRoots(cfg.AllowedWorkspaceRoots)
-	if len(cfg.AllowedWorkspaceRoots) == 0 {
-		log.Printf("WARNING: allowed_workspace_roots 未配置，未授权身份的远程 /cwd 切换已禁用；当前平台 allowed_users 中的身份不受此限制。")
-	} else {
-		log.Printf("Allowed workspace roots: %v", cfg.AllowedWorkspaceRoots)
 	}
 	if len(cfg.LegacyAdminUsers) > 0 {
 		log.Printf("WARNING: legacy admin_users is ignored (%d entries); access is granted only by each platform or bot allowed_users and is not migrated automatically", len(cfg.LegacyAdminUsers))

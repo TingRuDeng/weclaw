@@ -34,23 +34,18 @@ func TestFrontendShowsClaudeACPAndLocalHandoffState(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRootsHintMatchesRuntimeAccessRules(t *testing.T) {
-	data, err := fs.ReadFile(staticFS, "static/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		"受限兼容入口允许的工作目录根",
-		"未携带平台授权能力的兼容入口不能远程切换 /cwd",
-		"allowed_users 中的账号不受此限制",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("工作空间提示缺少 %q", want)
+func TestLegacyWorkspaceRootsConfigIsNotExposed(t *testing.T) {
+	for _, name := range []string{"static/index.html", "static/app.js"} {
+		data, err := fs.ReadFile(staticFS, name)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if strings.Contains(text, "未配置工作目录根时，/cwd 可指向任意目录") {
-		t.Fatal("配置面板仍展示与运行时相反的旧提示")
+		text := string(data)
+		for _, legacy := range []string{"allowed_workspace_roots", "workspace-roots", "受限兼容入口允许的工作目录根"} {
+			if strings.Contains(text, legacy) {
+				t.Fatalf("%s still exposes legacy workspace roots config %q", name, legacy)
+			}
+		}
 	}
 }
 

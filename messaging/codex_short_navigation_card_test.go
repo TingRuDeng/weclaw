@@ -17,7 +17,6 @@ func TestFeishuCodexShortNavigationKeepsCardState(t *testing.T) {
 	codexDir := t.TempDir()
 	root := t.TempDir()
 	workspace := filepath.Join(root, "alpha")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspace, "会话 B", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -27,12 +26,12 @@ func TestFeishuCodexShortNavigationKeepsCardState(t *testing.T) {
 	}}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), shortNavigationMessage("short-enter", "/cx 1"), reply)
+	h.handleMessageForTest(context.Background(), shortNavigationMessage("short-enter", "/cx 1"), reply)
 	if len(reply.Choices) != 1 || !strings.Contains(reply.Choices[0].Prompt, "alpha 会话") {
 		t.Fatalf("enter choices=%#v, want session card", reply.Choices)
 	}
 
-	h.HandleMessage(context.Background(), shortNavigationMessage("short-back", "/cx .."), reply)
+	h.handleMessageForTest(context.Background(), shortNavigationMessage("short-back", "/cx .."), reply)
 	if len(reply.Choices) != 2 || !strings.Contains(reply.Choices[1].Prompt, "Codex 工作空间") {
 		t.Fatalf("back choices=%#v, want workspace card", reply.Choices)
 	}

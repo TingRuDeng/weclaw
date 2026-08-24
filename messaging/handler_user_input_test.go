@@ -50,14 +50,14 @@ func TestUserInputRawCommandUsesCorrelationKey(t *testing.T) {
 	requestA := replyA.waitRequest(t, ctx)
 	requestB := replyB.waitRequest(t, ctx)
 
-	h.HandleMessage(ctx, userInputCardMessage("answer-a", requestA.key, "快速"), replyA)
+	h.handleMessageForTest(ctx, userInputCardMessage("answer-a", requestA.key, "快速"), replyA)
 	assertUserInputResult(t, ctx, resultA, "快速")
 	select {
 	case got := <-resultB:
 		t.Fatalf("问题 B 不应被问题 A 的卡片消费：%#v", got)
 	case <-time.After(taskQueueProbeDelay):
 	}
-	h.HandleMessage(ctx, userInputCardMessage("answer-b", requestB.key, "完整"), replyB)
+	h.handleMessageForTest(ctx, userInputCardMessage("answer-b", requestB.key, "完整"), replyB)
 	assertUserInputResult(t, ctx, resultB, "完整")
 }
 
@@ -65,7 +65,7 @@ func TestUserInputRawCommandUsesCorrelationKey(t *testing.T) {
 func TestExpiredUserInputCardDoesNotBecomeAgentMessage(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := newUserInputCaptureReplier()
-	h.HandleMessage(context.Background(), userInputCardMessage("expired-question", "missing-key", "快速"), reply)
+	h.handleMessageForTest(context.Background(), userInputCardMessage("expired-question", "missing-key", "快速"), reply)
 	if !containsText(reply.textsSnapshot(), "交互已过期") {
 		t.Fatalf("texts=%#v，期望明确提示过期交互", reply.textsSnapshot())
 	}

@@ -21,7 +21,7 @@ func TestServiceAdminRestartPersistsCompletionNotice(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_a",
 		UserID:    "ou_admin",
@@ -87,7 +87,7 @@ func TestServiceAdminRestartCompletesOriginalStreamingCardAfterRestart(t *testin
 	})
 	accepted := newAdminStreamingCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_admin", ChatID: "oc_chat",
 		Text: "/restart --force", Metadata: privateFeishuAdminMetadata("on_admin"),
 	}), accepted)
@@ -148,7 +148,7 @@ func TestServiceAdminRestartStartFailureFailsPendingCardAndClearsNotification(t 
 	h := NewHandler(nil, nil)
 	reply := newAdminStreamingCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_admin", ChatID: "oc_chat",
 		Text: "/restart --force", Metadata: privateFeishuAdminMetadata("on_admin"),
 	}), reply)

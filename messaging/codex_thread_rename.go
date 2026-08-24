@@ -95,13 +95,7 @@ func (h *Handler) resolveCodexRenameTarget(runtime codexSessionCommandRuntime, v
 }
 
 func (h *Handler) validateCodexRenameWorkspace(runtime codexSessionCommandRuntime, workspaceRoot string) error {
-	if err := h.hiddenWorkspaceError(runtime.agentName, workspaceRoot, "cx"); err != nil {
-		return err
-	}
-	if runtime.admin || h.isWorkspaceAllowed(workspaceRoot) || h.isConfiguredAgentWorkspace(runtime.agentName, workspaceRoot) {
-		return nil
-	}
-	return fmt.Errorf("该会话工作空间不在允许范围，请发送 /cx ls 重新选择")
+	return h.hiddenWorkspaceError(runtime.agentName, workspaceRoot, "cx")
 }
 
 func (h *Handler) auditSessionRename(platformName string, userID string, agentName string, kind string, sessionID string, status string) {

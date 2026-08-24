@@ -24,19 +24,6 @@ func (h *Handler) saveDirectory() string {
 	return h.saveDir
 }
 
-// SetAllowedWorkspaceRoots 设置普通用户 /cwd 允许切换的根目录白名单；空切片表示普通用户禁止远程切换目录。
-func (h *Handler) SetAllowedWorkspaceRoots(roots []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	cleaned := make([]string, 0, len(roots))
-	for _, root := range roots {
-		if trimmed := strings.TrimSpace(root); trimmed != "" {
-			cleaned = append(cleaned, trimmed)
-		}
-	}
-	h.allowedWorkspaceRoots = cleaned
-}
-
 // SetRateLimitPerMinute 设置每用户每分钟触发 agent 的上限；<=0 表示不限流。
 func (h *Handler) SetRateLimitPerMinute(limit int) {
 	h.mu.Lock()
@@ -93,17 +80,6 @@ func agentRateLimitKey(platformName platform.PlatformName, accountID string, use
 	return strings.TrimSpace(string(platformName)) + "\x00" + strings.TrimSpace(accountID) + "\x00" + strings.TrimSpace(userID)
 }
 
-// isWorkspaceAllowed 判断目标目录是否落在普通用户 /cwd 白名单内；白名单为空时默认拒绝。
-func (h *Handler) isWorkspaceAllowed(absPath string) bool {
-	h.mu.RLock()
-	roots := h.allowedWorkspaceRoots
-	h.mu.RUnlock()
-	if len(roots) == 0 {
-		return false
-	}
-	return isAllowedAttachmentPath(absPath, roots)
-}
-
 // SetCustomAliases sets custom alias mappings from config.
 func (h *Handler) SetCustomAliases(aliases map[string]string) {
 	h.mu.Lock()
@@ -124,10 +100,8 @@ func (h *Handler) SetAgentWorkDirs(workDirs map[string]string) {
 	defer h.mu.Unlock()
 
 	h.agentWorkDirs = make(map[string]string, len(workDirs))
-	h.configuredAgentWorkDirs = make(map[string]string, len(workDirs))
 	for name, dir := range workDirs {
 		h.agentWorkDirs[name] = dir
-		h.configuredAgentWorkDirs[name] = dir
 	}
 }
 

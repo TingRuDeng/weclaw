@@ -80,7 +80,7 @@ func TestPendingTaskControlOldCardCannotClearReplacementMessage(t *testing.T) {
 	token := cardReply.Choices[0].Choices[0].Metadata[platform.ChoiceMetadataTaskControlToken]
 
 	firstReply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), pendingTaskControlMessage("event-1", "user-1", "route-1", "app-1", "/cancel", token), firstReply)
+	h.handleMessageForTest(context.Background(), pendingTaskControlMessage("event-1", "user-1", "route-1", "app-1", "/cancel", token), firstReply)
 	if task.pendingGuide() != "" || !containsText(firstReply.Texts, "已撤回") {
 		t.Fatalf("pending=%q texts=%#v, first card action should clear pending", task.pendingGuide(), firstReply.Texts)
 	}
@@ -89,7 +89,7 @@ func TestPendingTaskControlOldCardCannotClearReplacementMessage(t *testing.T) {
 	}
 
 	staleReply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), pendingTaskControlMessage("event-2", "user-1", "route-1", "app-1", "/cancel", token), staleReply)
+	h.handleMessageForTest(context.Background(), pendingTaskControlMessage("event-2", "user-1", "route-1", "app-1", "/cancel", token), staleReply)
 	if task.pendingGuide() != "相同内容" {
 		t.Fatalf("old card cleared replacement pending message: %q", task.pendingGuide())
 	}
@@ -155,7 +155,7 @@ func TestPendingTaskControlRejectsMismatchedScopeAndExpiry(t *testing.T) {
 	for index, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-			h.HandleMessage(
+			h.handleMessageForTest(
 				context.Background(),
 				pendingTaskControlMessage("scope-event-"+string(rune('a'+index)), tt.userID, tt.routeID, tt.accountID, "/cancel", token),
 				reply,
@@ -171,7 +171,7 @@ func TestPendingTaskControlRejectsMismatchedScopeAndExpiry(t *testing.T) {
 
 	now = now.Add(pendingTaskControlTTL + time.Second)
 	expiredReply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(
+	h.handleMessageForTest(
 		context.Background(),
 		pendingTaskControlMessage("expired-event", "user-1", "route-1", "app-1", "/cancel", token),
 		expiredReply,
@@ -207,7 +207,7 @@ func TestPendingTaskControlConcurrentClicksMutateOnce(t *testing.T) {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			h.HandleMessage(
+			h.handleMessageForTest(
 				context.Background(),
 				pendingTaskControlMessage("concurrent-event-"+string(rune('a'+index)), "user-1", "route-1", "app-1", "/cancel", token),
 				replies[index],
@@ -257,7 +257,7 @@ func TestPendingTaskGuideControlRevisionSteersAndReanchorsOnce(t *testing.T) {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			fixture.h.HandleMessage(
+			fixture.h.handleMessageForTest(
 				context.Background(),
 				pendingTaskControlMessage("guide-event-"+string(rune('a'+index)), fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
 				replies[index],
@@ -283,7 +283,7 @@ func TestPendingTaskGuideSteerFailureDoesNotCreateRelayCard(t *testing.T) {
 	token := issuePendingGuideControl(t, fixture, "会失败的引导")
 	fixture.agent.fakeCodexThreadAgent.steerErr = errors.New("steer denied")
 	reply := newGuideRelayTestReplier("card-never-created")
-	fixture.h.HandleMessage(
+	fixture.h.handleMessageForTest(
 		context.Background(),
 		pendingTaskControlMessage("guide-steer-failed", fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
 		reply,
@@ -302,7 +302,7 @@ func TestPendingTaskGuideReanchorFailureDoesNotRepeatSteer(t *testing.T) {
 	token := issuePendingGuideControl(t, fixture, "已送达但迁卡失败")
 	reply := newGuideRelayTestReplier("card-create-failed")
 	reply.openErr = errors.New("card create rejected")
-	fixture.h.HandleMessage(
+	fixture.h.handleMessageForTest(
 		context.Background(),
 		pendingTaskControlMessage("guide-reanchor-failed", fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
 		reply,
@@ -315,7 +315,7 @@ func TestPendingTaskGuideReanchorFailureDoesNotRepeatSteer(t *testing.T) {
 	}
 
 	staleReply := newGuideRelayTestReplier("card-stale")
-	fixture.h.HandleMessage(
+	fixture.h.handleMessageForTest(
 		context.Background(),
 		pendingTaskControlMessage("guide-reanchor-retry", fixture.opts.userID, fixture.opts.routeUserID, "app-1", "/guide", token),
 		staleReply,

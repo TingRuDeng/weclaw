@@ -21,7 +21,6 @@ func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platfor
 	version := h.version
 	rateLimit := h.rateLimitPerMinute
 	auditOn := h.audit != nil
-	workspaceConfined := len(h.allowedWorkspaceRoots) > 0
 	var ag agent.Agent
 	if currentName != "" {
 		ag = h.agents[currentName]
@@ -56,7 +55,7 @@ func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platfor
 		rateText = fmt.Sprintf("%d/min", rateLimit)
 	}
 	lines = append(lines, fmt.Sprintf("mode: %s · rate limit: %s", mode, rateText))
-	lines = append(lines, fmt.Sprintf("workspace confined: %t · audit: %t", workspaceConfined, auditOn))
+	lines = append(lines, fmt.Sprintf("audit: %t", auditOn))
 
 	return wechatCommandText(lines...)
 }

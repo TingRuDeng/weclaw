@@ -68,16 +68,7 @@ func (h *Handler) codexWorkspaceListForAccess(bindingKey string, admin bool) ([]
 }
 
 func (h *Handler) filterCodexWorkspaceGroupsForAccess(groups []codexWorkspaceGroup, admin bool) []codexWorkspaceGroup {
-	if admin {
-		return groups
-	}
-	filtered := make([]codexWorkspaceGroup, 0, len(groups))
-	for _, group := range groups {
-		if h.isWorkspaceAllowed(group.Root) || h.isConfiguredWorkspace(group.Root) {
-			filtered = append(filtered, group)
-		}
-	}
-	return filtered
+	return groups
 }
 
 func (h *Handler) codexWorkspaceGroupsForAppWorkspaces(bindingKey string, workspaces []codexAppWorkspace) ([]codexWorkspaceGroup, error) {

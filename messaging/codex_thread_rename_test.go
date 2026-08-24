@@ -71,7 +71,6 @@ func TestCodexRenameListIndexUsesBrowsedWorkspace(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "project")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-newer", workspace, "较新会话", "2026-04-29T10:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := newFakeCodexRenameAgent("")

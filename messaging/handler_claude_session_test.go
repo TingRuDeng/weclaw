@@ -36,9 +36,8 @@ func TestHandleCwdClearsClaudeSessionBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	newWorkspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
 
-	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
+	text := h.handleCwdWithRoute("/cwd "+newWorkspace, []string{"user-1"}, cwdRoute{routeUserID: "user-1"})
 	binding := h.ensureClaudeSessions().binding(key)
 	canonicalWorkspace := canonicalTestPath(t, newWorkspace)
 	if !strings.Contains(text, canonicalWorkspace) || binding.WorkspaceRoot != canonicalWorkspace {
@@ -60,7 +59,6 @@ func TestClaudeCdReleasesSelectedRemoteSession(t *testing.T) {
 	if err := os.MkdirAll(other, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h.SetAllowedWorkspaceRoots([]string{workspace, other})
 	fake.catalogSessions = []agent.ClaudeSession{{ID: "session-b", Cwd: other}}
 
 	result := h.handleClaudeSessionCommandForRouteResult(
@@ -82,9 +80,8 @@ func TestHandleCwdReleasesClaudeOwnerBeforeChangingRuntimeCwd(t *testing.T) {
 	store.bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
 	fake.runtimeSessions = map[string]string{conversationID: "session-a"}
 	newWorkspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
 
-	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
+	text := h.handleCwdWithRoute("/cwd "+newWorkspace, []string{"user-1"}, cwdRoute{routeUserID: "user-1"})
 	if !strings.Contains(text, canonicalTestPath(t, newWorkspace)) {
 		t.Fatalf("text=%q", text)
 	}
@@ -105,9 +102,8 @@ func TestHandleCwdDoesNotChangeRuntimeCwdWhenClaudeReleaseFails(t *testing.T) {
 		return errors.New("open /Users/private/claude-sessions.json: permission denied")
 	}
 	newWorkspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
 
-	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
+	text := h.handleCwdWithRoute("/cwd "+newWorkspace, []string{"user-1"}, cwdRoute{routeUserID: "user-1"})
 	if !strings.Contains(text, "切换 Claude 工作空间失败") || strings.Contains(text, "/Users/private") {
 		t.Fatalf("text=%q", text)
 	}
@@ -143,9 +139,8 @@ func TestHandleCwdMultipleClaudeAgentsKeepsCwdWhenLaterReleaseFails(t *testing.T
 		return nil
 	}
 	newWorkspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{newWorkspace})
 
-	text := h.handleCwd("/cwd "+newWorkspace, "user-1")
+	text := h.handleCwdWithRoute("/cwd "+newWorkspace, []string{"user-1"}, cwdRoute{routeUserID: "user-1"})
 	if !strings.Contains(text, "切换 Claude 工作空间失败") {
 		t.Fatalf("text=%q", text)
 	}
@@ -170,7 +165,6 @@ func TestClaudeCcLsSortsACPSessionsAcrossWorkspaces(t *testing.T) {
 	if err := os.MkdirAll(workspaceB, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h.SetAllowedWorkspaceRoots([]string{allowedRoot})
 	ag.catalogSessions = []agent.ClaudeSession{
 		{ID: "session-b", Cwd: workspaceB, Title: "Beta", UpdatedAt: "2026-07-13T09:00:00Z"},
 		{ID: "session-a", Cwd: workspaceA, Title: "Alpha", UpdatedAt: "2026-07-13T10:00:00Z"},

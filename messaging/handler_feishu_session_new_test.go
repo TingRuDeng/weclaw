@@ -24,7 +24,7 @@ func TestFeishuNewUsesGroupSessionMetadataForReset(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant_1:group:oc_1"
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", Text: "/new",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
 	}, "ou_user"), reply)
@@ -57,7 +57,7 @@ func TestHandleGlobalNewPassesFeishuObserverContext(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant:dm:chat-new:ou_actor"
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_actor",
 		MessageID: "global-new-context", Text: "/new",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
@@ -105,7 +105,7 @@ func TestFeishuNewUsesSessionDefaultAgent(t *testing.T) {
 		t.Fatalf("设置会话 Agent 失败：%v", err)
 	}
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_main", UserID: "user-1",
 		MessageID: "new-session-agent", Text: "/new",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},

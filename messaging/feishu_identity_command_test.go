@@ -17,7 +17,7 @@ func TestFeishuIdentityCommandListsPendingUsers(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users pending"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users pending"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "on_same_person") || !strings.Contains(texts[0], "cli_a") {
@@ -32,10 +32,10 @@ func TestFeishuIdentityCommandListHidesPendingScope(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_b", "ou_b", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person --bot main"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person --bot main"), reply)
 	reply.waitTexts(t, 1)
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users list"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users list"), reply)
 
 	texts := reply.waitTexts(t, 2)
 	listReply := texts[len(texts)-1]
@@ -49,7 +49,7 @@ func TestFeishuIdentityCommandListHidesPendingScope(t *testing.T) {
 		t.Fatalf("reply=%q, list should not print pending scope", listReply)
 	}
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users pending"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users pending"), reply)
 
 	texts = reply.waitTexts(t, 3)
 	pendingReply := texts[len(texts)-1]
@@ -64,7 +64,7 @@ func TestFeishuIdentityCommandApprovesUnionIDForCurrentBotOnly(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "已授权") || !strings.Contains(texts[0], "on_same_person") {
@@ -89,7 +89,7 @@ func TestFeishuIdentityCommandRejectsOtherBotTarget(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person --bot android"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person --bot android"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "只能管理当前机器人") {
@@ -112,7 +112,7 @@ func TestFeishuIdentityCommandCannotApproveIdentitySeenOnlyByOtherBot(t *testing
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_b", "ou_b", "user_b", "on_other_bot"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_other_bot"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_other_bot"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "未在当前机器人发现") {
@@ -145,7 +145,7 @@ func TestFeishuIdentityCommandCannotRevokeOtherBotAuthorization(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_b", "ou_b", "user_b", "on_other_bot"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_other_bot"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_other_bot"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "未在当前机器人发现") {
@@ -166,7 +166,7 @@ func TestFeishuIdentityCommandRejectsNumericApprovalSelector(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve 1"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve 1"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "请使用 union_id、user_id 或 open_id") {
@@ -189,7 +189,7 @@ func TestFeishuIdentityCommandRejectsLegacyAdminFlag(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person --admin"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person --admin"), reply)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -213,9 +213,9 @@ func TestFeishuIdentityCommandRevokesCurrentBotAuthorization(t *testing.T) {
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", "on_same_person"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_same_person"), reply)
 	reply.waitTexts(t, 1)
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_same_person"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_same_person"), reply)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -256,7 +256,7 @@ func TestFeishuIdentityCommandRevocationUpdatesRegistryBeforeReply(t *testing.T)
 	}
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(
+	handler.handleMessageForTest(
 		context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_same_person"), reply,
 	)
 	reply.waitTexts(t, 1)
@@ -306,7 +306,7 @@ func TestFeishuIdentityCommandApprovesByCodeWithDisplayName(t *testing.T) {
 	}
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve-code "+record.AuthCode+" --name 张三"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve-code "+record.AuthCode+" --name 张三"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "张三 (on_same_person)") {
@@ -341,7 +341,7 @@ func TestFeishuIdentityCommandPendingHidesExpiredAuthCode(t *testing.T) {
 	store.save()
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users pending"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users pending"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if strings.Contains(texts[0], "授权码: 123456") ||
@@ -356,7 +356,7 @@ func TestFeishuIdentityCommandAllowsObservedIdentityWithoutUnionID(t *testing.T)
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_a", "user_a", ""))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve ou_a"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve ou_a"), reply)
 
 	texts := reply.waitTexts(t, 1)
 	if !strings.Contains(texts[0], "已授权飞书用户: user_a") {

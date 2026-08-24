@@ -53,12 +53,10 @@ type Handler struct {
 	agentStarts              map[string]*agentStartState
 	agentMetas               []AgentMeta       // all configured agents (for /status)
 	agentWorkDirs            map[string]string // agent name -> configured/runtime cwd
-	configuredAgentWorkDirs  map[string]string // agent name -> 启动配置 cwd，不随会话切换变化
 	customAliases            map[string]string // custom alias -> agent name (from config)
 	factory                  AgentFactoryWithError
 	saveDefault              SaveDefaultFunc
-	saveDir                  string   // directory to save images/files to
-	allowedWorkspaceRoots    []string // /cwd 允许切换的根目录；空=禁止远程切换
+	saveDir                  string // directory to save images/files to
 	rateLimiter              *userRateLimiter
 	rateLimitPerMinute       int
 	audit                    auditLogger
@@ -171,6 +169,10 @@ func (h *Handler) HandleMessage(ctx context.Context, incoming platform.IncomingM
 		log.Printf("[handler] received message from %s without replier", incoming.UserID)
 		return
 	}
+	if !incoming.HasAuthorizedAccess() {
+		log.Printf("[handler] rejected message without Registry access grant")
+		return
+	}
 	h.handlePlatformMessage(ctx, incoming, reply)
 }
 
@@ -189,7 +191,7 @@ func (h *Handler) handlePlatformMessage(ctx context.Context, msg platform.Incomi
 		return
 	}
 	runtime := platformMessageRuntime{
-		ctx: contextWithWorkspaceAdmin(ctx, h.isAdminMessage(msg)),
+		ctx: ctx,
 		msg: msg, reply: replyWriter, routeUserID: routeUserID,
 		text: strings.TrimSpace(platformMessageText(msg)), trace: trace,
 	}

@@ -32,9 +32,6 @@ func (h *Handler) claudeSwitchTargets(route claudeSessionRoute) ([]codexWorkspac
 		if registry.IsHidden(session.Cwd) || registry.IsSessionHidden(session.ID) {
 			continue
 		}
-		if !route.Admin && !h.isWorkspaceAllowed(session.Cwd) {
-			continue
-		}
 		views = append(views, claudeSessionView(session))
 	}
 	return sortClaudeSessionViews(views), nil
@@ -55,7 +52,7 @@ func (h *Handler) claudeDisplayTargets(route claudeSessionRoute) ([]codexWorkspa
 		return views, nil
 	}
 	workspaceRoot := normalizeClaudeWorkspaceRoot(binding.WorkspaceRoot)
-	if workspaceRoot == "" || !route.Admin && !h.isWorkspaceAllowed(workspaceRoot) {
+	if workspaceRoot == "" {
 		return views, nil
 	}
 	for _, view := range views {
@@ -108,16 +105,7 @@ func (h *Handler) claudeWorkspaceGroupsForRoute(route claudeSessionRoute) ([]cod
 		byRoot[root].Sessions = append(byRoot[root].Sessions, view)
 	}
 	groups := mergeWorkspaceRegistryGroups(sortedCodexWorkspaceGroups(byRoot), h.workspaceRegistrySnapshot(route.AgentName))
-	if route.Admin {
-		return groups, nil
-	}
-	filtered := make([]codexWorkspaceGroup, 0, len(groups))
-	for _, group := range groups {
-		if h.isWorkspaceAllowed(group.Root) {
-			filtered = append(filtered, group)
-		}
-	}
-	return filtered, nil
+	return groups, nil
 }
 
 // findClaudeWorkspaceGroupForRoute 按卡片 token、手工编号或名称解析可访问工作空间。

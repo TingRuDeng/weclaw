@@ -1350,7 +1350,6 @@ func TestCodexFollowerReleaseOneRouteKeepsOtherRouteDelivery(t *testing.T) {
 	h.SetCodexSessionFile(filepath.Join(t.TempDir(), "codex-sessions.json"))
 	workspace := t.TempDir()
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	progressCfg := config.DefaultProgressConfig()
 	progressCfg.Mode = progressModeStream
 	progressCfg.InitialDelaySeconds = 0

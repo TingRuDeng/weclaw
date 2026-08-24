@@ -148,7 +148,7 @@ func TestFeishuCodexAccountListUsesSnapshotPagination(t *testing.T) {
 	h, _, msg := newMessagingAccountFixture(t, 10)
 	msg.Text, msg.MessageID = "/cx account", "account-list"
 	first := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, first)
+	h.handleMessageForTest(context.Background(), msg, first)
 	if len(first.Choices) != 1 || len(first.Choices[0].Choices) != 8 {
 		t.Fatalf("choices=%#v", first.Choices)
 	}
@@ -171,7 +171,7 @@ func TestFeishuCodexAccountListUsesSnapshotPagination(t *testing.T) {
 		"choice": next.ID, platform.ChoiceMetadataNavigationSnapshot: next.Metadata[platform.ChoiceMetadataNavigationSnapshot],
 	}}
 	second := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, second)
+	h.handleMessageForTest(context.Background(), msg, second)
 	if len(second.Choices) != 1 || !strings.Contains(second.Choices[0].Prompt, "第 2/2 页") {
 		t.Fatalf("second=%#v", second.Choices)
 	}
@@ -185,7 +185,7 @@ func TestFeishuCodexAccountListShowsEverySavedAccount(t *testing.T) {
 	msg.Text, msg.MessageID = "/cx account", "account-list-all"
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), msg, reply)
+	h.handleMessageForTest(context.Background(), msg, reply)
 
 	if len(reply.Choices) != 1 {
 		t.Fatalf("choices=%#v", reply.Choices)
@@ -217,14 +217,14 @@ func TestFeishuCodexAccountSelectionRequiresScopedConfirmationAndIsIdempotent(t 
 	h, accountAgent, msg := newMessagingAccountFixture(t, 2)
 	msg.Text, msg.MessageID = "/cx account", "account-list"
 	listed := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, listed)
+	h.handleMessageForTest(context.Background(), msg, listed)
 	selectCommand := listed.Choices[0].Choices[0].ID
 
 	msg.Text = ""
 	msg.MessageID = "account-select"
 	msg.RawCommand = &platform.CardAction{Action: "choice", Value: map[string]string{"choice": selectCommand}}
 	selected := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, selected)
+	h.handleMessageForTest(context.Background(), msg, selected)
 	if len(selected.Choices) != 1 || len(selected.Choices[0].Choices) != 2 || !strings.Contains(selected.Choices[0].Prompt, "当前账号") {
 		t.Fatalf("confirmation=%#v", selected.Choices)
 	}
@@ -236,14 +236,14 @@ func TestFeishuCodexAccountSelectionRequiresScopedConfirmationAndIsIdempotent(t 
 	msg.MessageID = "account-confirm"
 	msg.RawCommand = &platform.CardAction{Action: "choice", Value: map[string]string{"choice": confirmCommand}}
 	confirmed := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, confirmed)
+	h.handleMessageForTest(context.Background(), msg, confirmed)
 	if accountAgent.useCalls != 1 || accountAgent.usedRev != 7 || !containsText(confirmed.Texts, "账号切换成功") {
 		t.Fatalf("calls=%d rev=%d texts=%#v", accountAgent.useCalls, accountAgent.usedRev, confirmed.Texts)
 	}
 
 	msg.MessageID = "account-confirm-again"
 	repeated := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, repeated)
+	h.handleMessageForTest(context.Background(), msg, repeated)
 	if accountAgent.useCalls != 1 || !containsText(repeated.Texts, "账号切换成功") {
 		t.Fatalf("duplicate calls=%d texts=%#v", accountAgent.useCalls, repeated.Texts)
 	}
@@ -255,14 +255,14 @@ func TestFeishuCodexAccountSwitchDeniedOutsideAdminPrivateChat(t *testing.T) {
 	msg.Metadata[feishuSessionMetadataKey] = "feishu:cli_a:tenant:group:oc_chat"
 	msg.Text, msg.MessageID = "/cx account", "account-group-list"
 	listed := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, listed)
+	h.handleMessageForTest(context.Background(), msg, listed)
 	if len(listed.Choices) != 0 || !containsText(listed.Texts, codexAccountPermissionDenied) {
 		t.Fatalf("choices=%#v texts=%#v", listed.Choices, listed.Texts)
 	}
 
 	msg.Text, msg.MessageID = "/cx account use 账号-02", "account-group-use"
 	used := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, used)
+	h.handleMessageForTest(context.Background(), msg, used)
 	if accountAgent.useCalls != 0 || !containsText(used.Texts, codexAccountPermissionDenied) {
 		t.Fatalf("calls=%d texts=%#v", accountAgent.useCalls, used.Texts)
 	}
@@ -276,7 +276,7 @@ func TestFeishuCodexAccountSwitchDeniedOutsideAdminPrivateChat(t *testing.T) {
 	} {
 		msg.Text, msg.MessageID, msg.RawCommand = testCase.command, "account-group-status-"+testCase.command, nil
 		statusReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-		h.HandleMessage(context.Background(), msg, statusReply)
+		h.handleMessageForTest(context.Background(), msg, statusReply)
 		joined := strings.Join(statusReply.Texts, "\n")
 		if !strings.Contains(joined, testCase.account) || strings.Contains(joined, "凭据后端") || strings.Contains(joined, "generation") {
 			t.Fatalf("command=%q texts=%#v", testCase.command, statusReply.Texts)
@@ -289,7 +289,7 @@ func TestCodexStatusDoesNotFetchQuotaOrExposeAccountDetails(t *testing.T) {
 	msg.Text, msg.MessageID = "/cx status", "compact-account-status"
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), msg, reply)
+	h.handleMessageForTest(context.Background(), msg, reply)
 
 	joined := strings.Join(reply.Texts, "\n")
 	if !strings.Contains(joined, "账号: 账号-01") {
@@ -317,7 +317,7 @@ func TestCodexAccountSwitchRejectsHandlerActiveTaskBeforeAgentMutation(t *testin
 	defer h.finishActiveTask("codex-account-active", task)
 	msg.Text, msg.MessageID = "/cx account use 账号-02", "account-active-use"
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, reply)
+	h.handleMessageForTest(context.Background(), msg, reply)
 	if accountAgent.useCalls != 0 || !containsText(reply.Texts, "还有 1 个 Codex 任务") {
 		t.Fatalf("calls=%d texts=%#v", accountAgent.useCalls, reply.Texts)
 	}
@@ -327,7 +327,7 @@ func TestFeishuCodexAccountOldRevisionAndExpiredConfirmationAreRejected(t *testi
 	h, accountAgent, msg := newMessagingAccountFixture(t, 2)
 	msg.Text, msg.MessageID = "/cx account", "account-list-old"
 	listed := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, listed)
+	h.handleMessageForTest(context.Background(), msg, listed)
 	selectCommand := listed.Choices[0].Choices[0].ID
 	accountAgent.mu.Lock()
 	accountAgent.status.Store.Revision++
@@ -335,7 +335,7 @@ func TestFeishuCodexAccountOldRevisionAndExpiredConfirmationAreRejected(t *testi
 	msg.Text, msg.MessageID = "", "account-select-old"
 	msg.RawCommand = &platform.CardAction{Action: "choice", Value: map[string]string{"choice": selectCommand}}
 	stale := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, stale)
+	h.handleMessageForTest(context.Background(), msg, stale)
 	if !containsText(stale.Texts, "账号列表已更新") {
 		t.Fatalf("texts=%#v", stale.Texts)
 	}
@@ -347,13 +347,13 @@ func TestFeishuCodexAccountOldRevisionAndExpiredConfirmationAreRejected(t *testi
 	h.feishuAccountConfirms.now = func() time.Time { return now }
 	msg.MessageID = "account-select-fresh"
 	selected := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, selected)
+	h.handleMessageForTest(context.Background(), msg, selected)
 	confirmCommand := selected.Choices[0].Choices[0].ID
 	now = now.Add(feishuCodexAccountConfirmTTL + time.Second)
 	msg.MessageID = "account-confirm-expired"
 	msg.RawCommand = &platform.CardAction{Action: "choice", Value: map[string]string{"choice": confirmCommand}}
 	expired := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), msg, expired)
+	h.handleMessageForTest(context.Background(), msg, expired)
 	if accountAgent.useCalls != 0 || !containsText(expired.Texts, "已过期") {
 		t.Fatalf("calls=%d texts=%#v", accountAgent.useCalls, expired.Texts)
 	}

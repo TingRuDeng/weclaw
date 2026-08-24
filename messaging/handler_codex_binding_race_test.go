@@ -233,7 +233,7 @@ func TestCwdUsesCodexBindingLock(t *testing.T) {
 	unlock := h.lockAgentExecution(codexBindingExecutionKey(codexBindingKey("user-1", "codex")))
 	done := make(chan struct{})
 	go func() {
-		h.handleCwdWithAccess("/cwd "+dir, []string{"user-1"}, true)
+		h.handleCwdWithRoute("/cwd "+dir, []string{"user-1"}, cwdRoute{routeUserID: "user-1"})
 		close(done)
 	}()
 	assertNotClosed(t, done, "/cwd 越过了 Codex 绑定锁")

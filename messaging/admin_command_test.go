@@ -36,7 +36,7 @@ func authorizedAdminCommandMessage(t *testing.T, msg platform.IncomingMessage) p
 	return authorizeIncomingMessageForTest(t, msg, allowedIdentity)
 }
 
-func TestServiceAdminCommandRequiresWhitelistedUser(t *testing.T) {
+func TestServiceAdminCommandRejectsMessageWithoutRegistryGrant(t *testing.T) {
 	ag := &fakeAgent{reply: "agent reply", info: agent.AgentInfo{Name: "mock", Type: "test"}}
 	calls := 0
 	h := NewHandler(func(ctx context.Context, name string) agent.Agent {
@@ -64,9 +64,8 @@ func TestServiceAdminCommandRequiresWhitelistedUser(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("admin executor calls=%d, want 0 for denied admin command", calls)
 	}
-	texts := reply.waitTexts(t, 1)
-	if len(texts) != 1 || !strings.Contains(texts[0], "未授权执行 WeClaw 管理命令") {
-		t.Fatalf("reply texts=%#v, want unauthorized admin command notice", texts)
+	if texts := reply.snapshotTexts(); len(texts) != 0 {
+		t.Fatalf("reply texts=%#v, want Handler to reject message without Registry grant", texts)
 	}
 }
 
@@ -93,7 +92,7 @@ func TestServiceAdminCommandRunsUpdateForRegistryAllowedUser(t *testing.T) {
 		UserID:   "ou_admin",
 		Text:     "/update",
 	}, "ou_admin")
-	h.HandleMessage(context.Background(), msg, reply)
+	h.handleMessageForTest(context.Background(), msg, reply)
 
 	if ag.chatCallCount() != 0 {
 		t.Fatalf("agent calls=%d, want 0 for recognized admin command", ag.chatCallCount())
@@ -122,7 +121,7 @@ func TestServiceAdminCommandUpdatesStreamingCardInPlace(t *testing.T) {
 	})
 	reply := newAdminStreamingCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
@@ -152,7 +151,7 @@ func TestServiceAdminCommandFailsStreamingCardInPlace(t *testing.T) {
 	})
 	reply := newAdminStreamingCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
@@ -178,7 +177,7 @@ func TestServiceAdminCommandAllowsFeishuUnionID(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin_for_this_bot",
 		Text:     "/update",
@@ -203,7 +202,7 @@ func TestServiceAdminCommandRejectsFeishuGroupEvenForAdmin(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
@@ -232,7 +231,7 @@ func TestServiceAdminCommandRejectsFeishuGroupCardCallbackEvenForAdmin(t *testin
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Route:    platform.SessionRoute{Key: "feishu:cli_a:tenant:group:oc_group"},
@@ -259,7 +258,7 @@ func TestServiceAdminCommandReportsBackgroundUpdateFailure(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
@@ -300,12 +299,11 @@ func TestServiceAdminCommandRejectsCapabilityAfterAccountMutation(t *testing.T) 
 	msg.AccountID = "cli_b"
 	h.HandleMessage(context.Background(), msg, reply)
 
-	texts := reply.waitTexts(t, 1)
 	if calls != 0 {
 		t.Fatalf("admin executor calls=%d, want 0 after account mutation invalidates capability", calls)
 	}
-	if !strings.Contains(texts[0], "未授权执行 WeClaw 管理命令") {
-		t.Fatalf("reply texts=%#v, want unauthorized notice", texts)
+	if texts := reply.snapshotTexts(); len(texts) != 0 {
+		t.Fatalf("reply texts=%#v, want Handler to reject invalidated Registry grant", texts)
 	}
 }
 
@@ -321,7 +319,7 @@ func TestServiceAdminCommandAllowsRestartForceOnly(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformWeChat,
 		UserID:   "ou_admin",
 		Text:     "/restart --force",
@@ -357,7 +355,7 @@ func TestServiceAdminRestartWithoutForceReportsActiveTasks(t *testing.T) {
 	defer h.finishActiveTask("task-1", task)
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/restart",
@@ -418,14 +416,14 @@ func TestServiceAdminCommandsRunSequentially(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update",
 		Metadata: privateFeishuAdminMetadata("on_admin"),
 	}), reply)
 	waitForClosedChannel(t, updateStarted, "update start")
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/restart --force",
@@ -453,7 +451,7 @@ func TestServiceAdminCommandRejectsUnsupportedArgs(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_admin",
 		Text:     "/update --restart",

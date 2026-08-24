@@ -67,7 +67,6 @@ func TestForceDrainCancelsNonLiveCodexBackend(t *testing.T) {
 	bindingKey := codexBindingKey(routeUserID, "codex")
 	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
 	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-non-live")
 	cfg := config.DefaultProgressConfig()

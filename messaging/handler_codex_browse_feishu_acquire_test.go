@@ -18,7 +18,6 @@ func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testin
 	codexDir, root := t.TempDir(), t.TempDir()
 	oldWorkspace := filepath.Join(root, "old")
 	targetWorkspace := filepath.Join(root, "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-b", targetWorkspace, "会话 B", "2026-07-15T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
@@ -29,7 +28,7 @@ func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testin
 	h.ensureCodexSessions().setActiveWorkspace(bindingKey, oldWorkspace)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		MessageID: "feishu-cx-single-failure", Text: "/cx cd weclaw",
 	}, "ou_user"), reply)

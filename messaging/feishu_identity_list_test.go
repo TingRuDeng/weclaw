@@ -13,11 +13,11 @@ func TestFeishuIdentityCommandListShowsAuthorizedUsersWithoutRoles(t *testing.T)
 	handler.ObserveFeishuIdentity(feishuIdentityMessage("cli_a", "ou_regular", "user_regular", "on_regular"))
 	reply := newAdminCommandTestReplier()
 
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_admin_user"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_admin_user"), reply)
 	reply.waitTexts(t, 1)
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_regular"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve on_regular"), reply)
 	reply.waitTexts(t, 2)
-	handler.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users list"), reply)
+	handler.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users list"), reply)
 
 	texts := reply.waitTexts(t, 3)
 	listReply := texts[len(texts)-1]

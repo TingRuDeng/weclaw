@@ -15,25 +15,27 @@ func (h *Handler) sendReplyWithMedia(ctx context.Context, replyWriter platform.R
 }
 
 func (h *Handler) sendReplyWithMediaAfterStream(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
-	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, agentName, reply, finalInStream)
+	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, userID, agentName, reply, finalInStream)
 }
 
 func (h *Handler) sendReplyWithMediaForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string) {
 	h.sendReplyWithMediaAfterStreamForRoute(ctx, replyWriter, userID, routeUserID, agentName, reply, false)
 }
 
-func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, replyWriter platform.Replier, userID string, _ string, agentName string, reply string, finalInStream bool) {
-	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, agentName, reply, finalInStream)
+func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string, finalInStream bool) {
+	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, routeUserID, agentName, reply, finalInStream)
 }
 
 type replyDeliveryRequest struct {
-	ctx           context.Context
-	replyWriter   platform.Replier
-	userID        string
-	agentName     string
-	reply         string
-	trace         observability.TraceContext
-	deliveryGuard terminalDeliveryGuard
+	ctx                    context.Context
+	replyWriter            platform.Replier
+	userID                 string
+	routeUserID            string
+	agentName              string
+	reply                  string
+	trace                  observability.TraceContext
+	deliveryGuard          terminalDeliveryGuard
+	allowedAttachmentRoots []string
 }
 
 type progressReplyDelivery struct {
@@ -50,11 +52,11 @@ type replyDeliveryProjection struct {
 	imageURLs []string
 }
 
-func (h *Handler) sendReplyWithMediaAfterStreamCore(ctx context.Context, replyWriter platform.Replier, userID string, agentName string, reply string, finalInStream bool) {
+func (h *Handler) sendReplyWithMediaAfterStreamCore(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string, finalInStream bool) {
 	trace, _ := observability.TraceFromContext(ctx)
 	req := replyDeliveryRequest{
 		ctx: ctx, replyWriter: replyWriter, userID: userID,
-		agentName: agentName, reply: reply, trace: traceWithReply(trace, replyWriter),
+		routeUserID: routeUserID, agentName: agentName, reply: reply, trace: traceWithReply(trace, replyWriter),
 	}
 	projection := h.prepareReplyDelivery(req)
 	h.sendReplyProjection(req, projection, finalInStream)
@@ -77,7 +79,10 @@ func (h *Handler) prepareReplyDelivery(req replyDeliveryRequest) replyDeliveryPr
 }
 
 func (h *Handler) sendLocalAttachments(req replyDeliveryRequest, paths []string) ([]string, []string) {
-	allowedRoots := h.allowedAttachmentRoots(req.agentName)
+	allowedRoots := req.allowedAttachmentRoots
+	if allowedRoots == nil {
+		allowedRoots = h.allowedAttachmentRoots(req.routeUserID, req.agentName)
+	}
 	var sentPaths []string
 	var failedPaths []string
 	for _, attachmentPath := range paths {

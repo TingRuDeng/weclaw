@@ -130,6 +130,9 @@ func (h *Handler) reserveExternalCodexTask(opts externalCodexTaskOptions, prepar
 	if !prepared.active {
 		return externalCodexTaskReservation{}, nil
 	}
+	if opts.allowedAttachmentRoots == nil {
+		opts.allowedAttachmentRoots = h.allowedAttachmentRootsForWorkspace(opts.agentName, opts.workspaceRoot)
+	}
 	h.tasks.mu.Lock()
 	defer h.tasks.mu.Unlock()
 	h.ensureActiveTasksLocked()

@@ -15,7 +15,7 @@ import (
 
 func TestFeishuClaudeNewBindsWindowToClaude(t *testing.T) {
 	h, _, claude, sessionKey := newClaudeBindingHandler(t)
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "new-claude-session", Text: "/cc new",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
@@ -35,7 +35,7 @@ func TestHandleGlobalNewKeepsClaudeResetBehavior(t *testing.T) {
 	if err := h.ensureAgentSessions().Set(sessionKey, "claude"); err != nil {
 		t.Fatal(err)
 	}
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "global-new-claude", Text: "/new",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
@@ -57,14 +57,14 @@ func TestFeishuClaudeSessionSwitchBindsWindowToClaude(t *testing.T) {
 	h, codex, claude, sessionKey := newClaudeBindingHandler(t)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "switch-claude-session", RawCommand: &platform.CardAction{
 			Action: "choice", Value: map[string]string{"choice": "/cc switch session-claude"},
 		},
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
 	}, reply)
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "message-after-switch", Text: "你是什么模型",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
@@ -90,7 +90,7 @@ func TestClaudeRuntimeFailureStillBindsCurrentWindowToClaude(t *testing.T) {
 	}
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "failed-switch-claude", RawCommand: &platform.CardAction{
 			Action: "choice", Value: map[string]string{"choice": "/cc switch session-claude"},
@@ -108,7 +108,7 @@ func TestClaudeRuntimeFailureStillBindsCurrentWindowToClaude(t *testing.T) {
 		t.Fatalf("reply=%q", text)
 	}
 	normalReply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_android", UserID: "ou_user",
 		MessageID: "message-after-runtime-failure", Text: "继续",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
@@ -179,6 +179,5 @@ func newClaudeBindingHandler(t *testing.T) (*Handler, *fakeAgent, *fakeClaudeSes
 	h.SetPlatformDefaultAgents(map[string]string{
 		PlatformAccountConfigKey(platform.PlatformFeishu, "cli_android"): "codex",
 	})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	return h, codex, claude, "feishu:tenant:dm:chat:ou_user"
 }

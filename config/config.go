@@ -11,19 +11,19 @@ const maxFeishuMessageAgeSeconds = int64(time.Duration(1<<63-1) / time.Second)
 
 // Config holds the application configuration.
 type Config struct {
-	DefaultAgent          string                    `json:"default_agent"`
-	APIAddr               string                    `json:"api_addr,omitempty"`
-	APIToken              string                    `json:"api_token,omitempty"`
-	UpdateSource          string                    `json:"update_source,omitempty"`
-	SaveDir               string                    `json:"save_dir,omitempty"`
-	AllowedWorkspaceRoots []string                  `json:"allowed_workspace_roots,omitempty"`
-	LegacyAdminUsers      []string                  `json:"admin_users,omitempty"`           // 仅兼容保留旧配置；运行时忽略且不会自动迁移
-	RateLimitPerMinute    int                       `json:"rate_limit_per_minute,omitempty"` // 每用户每分钟最多触发 agent 次数；0=不限流
-	AuditLog              *bool                     `json:"audit_log,omitempty"`             // 是否记录审计日志；缺省=开启
-	AuditLogPath          string                    `json:"audit_log_path,omitempty"`        // 审计日志路径；空=~/.weclaw/audit.log
-	Progress              ProgressConfig            `json:"progress,omitempty"`
-	Agents                map[string]AgentConfig    `json:"agents"`
-	Platforms             map[string]PlatformConfig `json:"platforms,omitempty"`
+	DefaultAgent                string                    `json:"default_agent"`
+	APIAddr                     string                    `json:"api_addr,omitempty"`
+	APIToken                    string                    `json:"api_token,omitempty"`
+	UpdateSource                string                    `json:"update_source,omitempty"`
+	SaveDir                     string                    `json:"save_dir,omitempty"`
+	LegacyAllowedWorkspaceRoots []string                  `json:"allowed_workspace_roots,omitempty"` // 兼容一个版本保留旧配置；运行时忽略
+	LegacyAdminUsers            []string                  `json:"admin_users,omitempty"`             // 仅兼容保留旧配置；运行时忽略且不会自动迁移
+	RateLimitPerMinute          int                       `json:"rate_limit_per_minute,omitempty"`   // 每用户每分钟最多触发 agent 次数；0=不限流
+	AuditLog                    *bool                     `json:"audit_log,omitempty"`               // 是否记录审计日志；缺省=开启
+	AuditLogPath                string                    `json:"audit_log_path,omitempty"`          // 审计日志路径；空=~/.weclaw/audit.log
+	Progress                    ProgressConfig            `json:"progress,omitempty"`
+	Agents                      map[string]AgentConfig    `json:"agents"`
+	Platforms                   map[string]PlatformConfig `json:"platforms,omitempty"`
 }
 
 // PlatformConfig 保存单个平台的启用状态、访问控制和展示覆盖配置。

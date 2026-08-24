@@ -21,7 +21,7 @@ func TestCwdCommandDetectionRequiresExactToken(t *testing.T) {
 			t.Fatalf("%q must not be captured as a cwd command", message)
 		}
 	}
-	if got := NewHandler(nil, nil).handleCwd("/cwdfoo"); got != "用法: /cwd [路径]" {
+	if got := NewHandler(nil, nil).handleCwdWithRoute("/cwdfoo", nil, cwdRoute{}); got != "用法: /cwd [路径]" {
 		t.Fatalf("direct invalid cwd reply=%q", got)
 	}
 }
@@ -39,7 +39,7 @@ func TestCwdStatusUsesFeishuRouteCodexWorkspaceWithoutMutation(t *testing.T) {
 	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey(route, "codex"), workspace)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "user-a",
 		Text:     "/cwd",
@@ -75,7 +75,7 @@ func TestCwdStatusUsesFeishuRouteClaudeWorkspaceWithoutMutation(t *testing.T) {
 	h.ensureClaudeSessions().bindings[key] = newClaudeBinding(workspace, "session-a", claudeBindingReady)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "user-a",
 		Text:     "/cwd",

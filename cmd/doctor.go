@@ -153,7 +153,6 @@ func runDoctorChecks(cfg *config.Config, deps doctorDeps) []doctorResult {
 	results = append(results, checkPlatforms(cfg, deps)...)
 	results = append(results, checkLegacyAdminUsers(cfg)...)
 	results = append(results, checkAPIToken(cfg))
-	results = append(results, checkWorkspaceRoots(cfg))
 	results = append(results, checkAuditLog(cfg))
 	results = append(results, checkTerminalOutbox(deps))
 	return results
@@ -229,26 +228,6 @@ func checkAuditLog(cfg *config.Config) doctorResult {
 	}
 	result.Status = doctorOK
 	result.Detail = path
-	return result
-}
-
-// checkWorkspaceRoots 校验 /cwd 工作目录白名单：未配置时提示远程切换已禁用，配置项不存在时失败。
-func checkWorkspaceRoots(cfg *config.Config) doctorResult {
-	result := doctorResult{Name: "workspace confinement"}
-	if len(cfg.AllowedWorkspaceRoots) == 0 {
-		result.Status = doctorWarn
-		result.Detail = "allowed_workspace_roots 未配置；未授权身份的远程 /cwd 切换已禁用，当前平台 allowed_users 中的身份不受此限制"
-		return result
-	}
-	for _, root := range cfg.AllowedWorkspaceRoots {
-		if info, err := os.Stat(root); err != nil || !info.IsDir() {
-			result.Status = doctorFail
-			result.Detail = fmt.Sprintf("allowed root not a directory: %s", root)
-			return result
-		}
-	}
-	result.Status = doctorOK
-	result.Detail = fmt.Sprintf("%d root(s) configured", len(cfg.AllowedWorkspaceRoots))
 	return result
 }
 

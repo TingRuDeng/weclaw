@@ -237,7 +237,7 @@ func TestStatusCommandDoesNotWaitForOnDemandAgentStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	go h.HandleMessage(ctx, platform.IncomingMessage{
+	go h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform: platform.PlatformWeChat,
 		UserID:   "user-1",
 		Text:     "/slow hello",
@@ -251,7 +251,7 @@ func TestStatusCommandDoesNotWaitForOnDemandAgentStart(t *testing.T) {
 	statusReply := newAdminCommandTestReplier()
 	done := make(chan struct{})
 	go func() {
-		h.HandleMessage(ctx, platform.IncomingMessage{
+		h.handleMessageForTest(ctx, platform.IncomingMessage{
 			Platform: platform.PlatformWeChat,
 			UserID:   "user-1",
 			Text:     "/status",

@@ -17,14 +17,14 @@ func TestHandlePlatformMessageUsesPlatformReplier(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	h.HandlePlatformMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformWeChat,
 		AccountID: "bot-1",
 		UserID:    "user-1",
 		ChatID:    "user-1",
 		MessageID: "9001",
 		Text:      "/status",
-	}, reply)
+	}, "user-1"), reply)
 
 	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "agent:") {
 		t.Fatalf("platform reply texts=%#v, want status reply", reply.Texts)
@@ -50,7 +50,7 @@ func TestHandleMessageUsesPlatformDefaultAgent(t *testing.T) {
 	})
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "user-1",
 		Text:     "hello",
@@ -83,7 +83,7 @@ func TestHandleMessageUsesFeishuAccountDefaultAgent(t *testing.T) {
 	})
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		AccountID: "cli_b",
 		UserID:    "user-1",
@@ -130,7 +130,7 @@ func TestHandleMessageUsesPersistedSessionDefaultAgent(t *testing.T) {
 		Metadata:  map[string]string{"feishu_session_key": "feishu:tenant:dm:chat-a:user-1"},
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	newHandler().HandleMessage(context.Background(), sessionA, reply)
+	newHandler().handleMessageForTest(context.Background(), sessionA, reply)
 	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "当前会话已切换到 claude") {
 		t.Fatalf("switch reply=%#v", reply.Texts)
 	}
@@ -138,7 +138,7 @@ func TestHandleMessageUsesPersistedSessionDefaultAgent(t *testing.T) {
 	restored := newHandler()
 	sessionA.MessageID = "message-a"
 	sessionA.Text = "hello"
-	restored.HandleMessage(context.Background(), sessionA, reply)
+	restored.handleMessageForTest(context.Background(), sessionA, reply)
 	if !claude.wasChatCalled() {
 		t.Fatal("当前会话重启恢复后应调用 claude")
 	}
@@ -146,7 +146,7 @@ func TestHandleMessageUsesPersistedSessionDefaultAgent(t *testing.T) {
 	sessionB := sessionA
 	sessionB.MessageID = "message-b"
 	sessionB.Metadata = map[string]string{"feishu_session_key": "feishu:tenant:dm:chat-b:user-1"}
-	restored.HandleMessage(context.Background(), sessionB, reply)
+	restored.handleMessageForTest(context.Background(), sessionB, reply)
 	waitForFakeAgentCalls(t, codex, 1)
 	if codex.chatCallCount() != 1 {
 		t.Fatalf("其他会话 codex 调用次数=%d，期望 1", codex.chatCallCount())
@@ -170,10 +170,10 @@ func TestStatusUsesFeishuSessionSelectedAgent(t *testing.T) {
 
 	message.MessageID = "status-switch"
 	message.Text = "/cc"
-	h.HandleMessage(context.Background(), message, reply)
+	h.handleMessageForTest(context.Background(), message, reply)
 	message.MessageID = "status-read"
 	message.Text = "/status"
-	h.HandleMessage(context.Background(), message, reply)
+	h.handleMessageForTest(context.Background(), message, reply)
 
 	if len(reply.Texts) != 2 {
 		t.Fatalf("回复数量=%d，期望切换和状态各一条：%#v", len(reply.Texts), reply.Texts)
@@ -210,7 +210,7 @@ func TestNamedAgentMessageDoesNotChangeSessionDefaultAgent(t *testing.T) {
 		Text:      "/cc 仅本次使用 Claude",
 		Metadata:  map[string]string{"feishu_session_key": "feishu:tenant:dm:chat-a:user-1"},
 	}
-	h.HandleMessage(context.Background(), message, platformtest.NewReplier(platform.Capabilities{Text: true}))
+	h.handleMessageForTest(context.Background(), message, platformtest.NewReplier(platform.Capabilities{Text: true}))
 	if _, ok := h.ensureAgentSessions().Get(platformMessageRouteUserID(message)); ok {
 		t.Fatal("带内容的 Agent 命令不应修改会话默认 Agent")
 	}
@@ -231,7 +231,7 @@ func TestAgentSwitchFailureDoesNotChangeSessionDefaultAgent(t *testing.T) {
 		Text:      "/cc",
 		Metadata:  map[string]string{"feishu_session_key": "feishu:tenant:dm:chat-a:user-1"},
 	}
-	h.HandleMessage(context.Background(), message, platformtest.NewReplier(platform.Capabilities{Text: true}))
+	h.handleMessageForTest(context.Background(), message, platformtest.NewReplier(platform.Capabilities{Text: true}))
 	if _, ok := h.ensureAgentSessions().Get(platformMessageRouteUserID(message)); ok {
 		t.Fatal("Agent 启动失败时不应修改会话默认 Agent")
 	}
@@ -248,7 +248,7 @@ func TestHandleMessageUsesFeishuSessionMetadataForRouting(t *testing.T) {
 	h.SetDefaultAgent("mock", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_sender",
 		Text:     "hello",
@@ -275,7 +275,7 @@ func TestHandleMessageKeepsFeishuChoiceLikeFinalReplyAsText(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	sessionKey := "feishu:tenant_1:dm:oc_1:ou_sender"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_sender",
 		Text:     "开始",
@@ -305,7 +305,7 @@ func TestHandleMessageKeepsFeishuSenderUserIDForLogs(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(oldOutput)
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "top-secret-message",
@@ -343,9 +343,8 @@ func TestHandleMessageUsesFeishuSessionKeyForWorkspaceCommands(t *testing.T) {
 	h.SetDefaultAgent("codex", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	workspaceRoot := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspaceRoot})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "/cwd " + workspaceRoot,

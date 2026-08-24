@@ -371,7 +371,10 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - 平台 `allowed_users` 为空时默认拒绝所有用户。
 - 当前平台或机器人 `allowed_users` 是远程访问的唯一身份来源；其中每个身份具有相同的 WeClaw 管理能力，机器人账号之间不能串权。
 - 旧配置中的顶层 `admin_users` 只会由启动与 `doctor` 告警并忽略，不自动迁移，也不会扩大任何 `allowed_users`；该值仅为配置文件兼容回写而保留，Web 不展示也不可编辑。
-- `allowed_users` 身份不受 `allowed_workspace_roots` 限制；未携带 Registry 授权能力的兼容或内部入口只能 `/cwd` 到白名单及其子目录。
+- 旧配置中的顶层 `allowed_workspace_roots` 仅兼容一个版本的加载和原样保存；运行时忽略，Web 不展示也不可编辑。
+- 只有经过 Registry `allowed_users` 校验并携带授权能力的消息才能进入 Handler；直接构造或绕过 Registry 的消息会被拒绝。
+- 已授权身份可以切换和接管任意本机 Agent 工作空间；真正的文件系统隔离应使用 Agent sandbox、`run_as_user` 和操作系统权限。
+- 本地附件只从消息路由对应的 Agent 工作空间或 WeClaw 专用工作目录回传，并继续拒绝符号链接逃逸。
 - 非回环 `api_addr` 必须配置 `api_token`。
 - 回环地址允许不配置 `api_token`，但本机其他进程将可调用管理接口，`weclaw doctor` 会持续告警；推荐仍配置随机 Token。
 - 审计日志默认开启，不记录密钥。

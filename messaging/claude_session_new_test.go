@@ -161,6 +161,5 @@ func newClaudeSessionCreateHandler(t *testing.T) (*Handler, *fakeClaudeSessionCr
 	h.defaultName = "claude"
 	h.agents["claude"] = fake
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	return h, fake, workspace
 }

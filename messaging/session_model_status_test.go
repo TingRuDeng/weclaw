@@ -16,7 +16,7 @@ func TestFeishuClaudeSessionCardShowsACPModelStatus(t *testing.T) {
 	ag.sessionConfig = agent.ClaudeSessionConfig{Model: "claude-sonnet-4-5", Effort: "high"}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "feishu-cc-switch",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cc switch 1"}},
 	}, reply)

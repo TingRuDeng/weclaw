@@ -27,7 +27,7 @@ type feishuOriginalRouteFixture struct {
 func TestFeishuSessionButtonBindsOriginalRouteOnly(t *testing.T) {
 	fixture := newFeishuOriginalRouteFixture(t)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	fixture.h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	fixture.h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "fs-bot", UserID: fixture.actor,
 		MessageID: "session-button", Metadata: map[string]string{feishuSessionMetadataKey: fixture.route},
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cx switch thread-target"}},
@@ -42,7 +42,6 @@ func newFeishuOriginalRouteFixture(t *testing.T) feishuOriginalRouteFixture {
 	privateWorkspace := filepath.Join(root, "private")
 	routeWorkspace := filepath.Join(root, "route-old")
 	targetWorkspace := filepath.Join(root, "target")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	h.SetAgentWorkDirs(map[string]string{"codex": routeWorkspace})
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.defaultName = "codex"
@@ -96,7 +95,6 @@ func assertFeishuOriginalRouteBound(t *testing.T, fixture feishuOriginalRouteFix
 func TestCodexReadOnlyCommandsDoNotChangeBinding(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := filepath.Join(t.TempDir(), "workspace")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.defaultName = "codex"
@@ -123,7 +121,7 @@ func TestCodexReadOnlyCommandsDoNotChangeBinding(t *testing.T) {
 	}
 	for index, command := range commands {
 		reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-		h.HandleMessage(context.Background(), platform.IncomingMessage{
+		h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 			Platform: platform.PlatformWeChat, AccountID: "wx-readonly", UserID: route,
 			MessageID: "readonly-" + string(rune('0'+index)), Text: command.command,
 		}, reply)

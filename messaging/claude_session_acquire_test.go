@@ -191,7 +191,6 @@ func TestForceClaudeBindingFailClosedObeysLockOrder(t *testing.T) {
 func TestAcquireClaudeSessionClearsOnlyPreviousRouteRuntimeMapping(t *testing.T) {
 	h, fake, workspaceA := newClaudeACPNavigationHandler(t)
 	workspaceB := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspaceA, workspaceB})
 	seedClaudeBinding(t, h, "user-1", "claude", workspaceA, "session-a", 1)
 	oldConversation := buildClaudeConversationID("user-1", "claude", workspaceA)
 	fake.runtimeSessions = map[string]string{oldConversation: "session-a"}

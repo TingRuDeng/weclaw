@@ -740,6 +740,33 @@ func TestConfigPreservesLegacyAdminUsersWithoutPromotingThem(t *testing.T) {
 	}
 }
 
+func TestConfigPreservesLegacyAllowedWorkspaceRootsForRoundTrip(t *testing.T) {
+	var cfg Config
+	data := []byte(`{
+		"allowed_workspace_roots": ["/srv/projects", "/opt/work"],
+		"agents": {}
+	}`)
+
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	want := []string{"/srv/projects", "/opt/work"}
+	if !reflect.DeepEqual(cfg.LegacyAllowedWorkspaceRoots, want) {
+		t.Fatalf("LegacyAllowedWorkspaceRoots=%#v, want %#v", cfg.LegacyAllowedWorkspaceRoots, want)
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	var roundTrip Config
+	if err := json.Unmarshal(encoded, &roundTrip); err != nil {
+		t.Fatalf("round-trip unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(roundTrip.LegacyAllowedWorkspaceRoots, want) {
+		t.Fatalf("round-trip LegacyAllowedWorkspaceRoots=%#v, want %#v", roundTrip.LegacyAllowedWorkspaceRoots, want)
+	}
+}
+
 func TestLoadEnvOverridesTopLevelOnly(t *testing.T) {
 	t.Setenv("WECLAW_DEFAULT_AGENT", "codex")
 	t.Setenv("WECLAW_API_ADDR", "127.0.0.1:18011")

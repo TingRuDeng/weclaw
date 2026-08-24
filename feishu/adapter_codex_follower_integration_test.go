@@ -90,7 +90,6 @@ func TestCodexSwitchCardCallbackPersistsFollowerDeliveryRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.SetCodexLocalSessionDir(filepath.Join(root, "codex-home"))
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
 	h.SetDefaultAgent("codex", cardFollowerCodexAgent{})
 

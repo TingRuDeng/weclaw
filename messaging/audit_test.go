@@ -137,7 +137,7 @@ func TestServiceAdminCommandAuditsAcceptedAndResult(t *testing.T) {
 	})
 	reply := newAdminCommandTestReplier()
 
-	h.HandleMessage(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizedAdminCommandMessage(t, platform.IncomingMessage{
 		Platform: platform.PlatformWeChat, AccountID: "wx-a", UserID: "admin", Text: "/update",
 	}), reply)
 	reply.waitTexts(t, 2)
@@ -163,7 +163,7 @@ func TestApprovalAndStopActionsEmitAuditRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user",
 		Route: platform.SessionRoute{Key: "route-1"}, MessageID: "card-audit-1",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
@@ -182,7 +182,7 @@ func TestApprovalAndStopActionsEmitAuditRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user",
 		Route: platform.SessionRoute{Key: "route-1"}, MessageID: "text-audit-1", Text: "deny_once",
 	}, reply)
@@ -200,7 +200,7 @@ func TestApprovalAndStopActionsEmitAuditRecords(t *testing.T) {
 	if !started {
 		t.Fatal("active task not started")
 	}
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user",
 		Route: platform.SessionRoute{Key: "route-1"}, MessageID: "stop-audit-1",
 		RawCommand: &platform.CardAction{Action: "stop"},
@@ -268,9 +268,9 @@ func TestFeishuIdentityMutationsAuditTargetWithoutAuthorizationCode(t *testing.T
 		t.Fatal("IssueAuthCode ok=false")
 	}
 	reply := newAdminCommandTestReplier()
-	h.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve-code "+record.AuthCode), reply)
+	h.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users approve-code "+record.AuthCode), reply)
 	reply.waitTexts(t, 1)
-	h.HandleMessage(context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_same_person"), reply)
+	h.handleMessageForTest(context.Background(), feishuAdminCommandMessage(t, "/feishu users revoke on_same_person"), reply)
 	reply.waitTexts(t, 2)
 
 	entries := recorder.snapshot()

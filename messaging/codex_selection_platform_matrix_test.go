@@ -63,7 +63,7 @@ func TestCodexSelectionBindsForWeChatAndFeishu(t *testing.T) {
 			if test.platform == platform.PlatformFeishu {
 				msg = authorizeIncomingMessageForTest(t, msg, test.actor)
 			}
-			h.HandleMessage(context.Background(), msg, reply)
+			h.handleMessageForTest(context.Background(), msg, reply)
 			if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "已切换并绑定") {
 				t.Fatalf("texts=%#v", reply.Texts)
 			}
@@ -90,7 +90,6 @@ func newPlatformBindingFixture(t *testing.T, routeUserID string) (*Handler, *fak
 			t.Fatal(err)
 		}
 	}
-	h.SetAllowedWorkspaceRoots([]string{root})
 	h.SetAgentWorkDirs(map[string]string{"codex": workspaceA})
 	h.SetCodexLocalSessionDir(t.TempDir())
 	h.defaultName = "codex"

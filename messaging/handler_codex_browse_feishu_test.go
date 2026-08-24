@@ -27,7 +27,6 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 			fmt.Sprintf("会话 %02d", index), fmt.Sprintf("2026-04-%02dT09:00:00Z", 29-index),
 		)
 	}
-	h.SetAllowedWorkspaceRoots([]string{root})
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
 	h.agents["codex"] = &fakeCodexThreadAgent{fakeAgent: fakeAgent{
@@ -36,7 +35,7 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
 
 	first := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", Text: "/cx ls",
 		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
 	}, first)
@@ -58,7 +57,7 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 	writeLocalCodexSession(t, codexDir, "thread-inserted", inserted, "插入会话", "2026-04-30T09:00:00Z")
 
 	second := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "evt-page-2",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": "/cx page workspaces 2", "navigation_snapshot": snapshot,
@@ -76,7 +75,7 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 	}
 
 	firstAgain := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "evt-page-1",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": "/cx page workspaces 1", "navigation_snapshot": snapshot,
@@ -88,7 +87,7 @@ func TestFeishuCodexWorkspaceChoicesUseStablePagination(t *testing.T) {
 	}
 
 	secondAgain := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "evt-page-2-again",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": "/cx page workspaces 2", "navigation_snapshot": snapshot,
@@ -106,7 +105,6 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	root := t.TempDir()
 	workspaceA := filepath.Join(root, "alpha")
 	workspaceB := filepath.Join(root, "beta")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-a2", workspaceA, "Alpha 会话 2", "2026-04-29T08:30:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T08:00:00Z")
@@ -120,7 +118,7 @@ func TestFeishuCodexCxLsSendsWorkspaceChoices(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	sessionKey := "feishu:tenant_1:group:oc_1:om_root"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-ls",
@@ -156,7 +154,6 @@ func TestFeishuCodexWorkspaceChoiceKeepsOriginalTargetAfterCatalogReorder(t *tes
 	codexDir, root := t.TempDir(), t.TempDir()
 	beta := filepath.Join(root, "beta")
 	alpha := filepath.Join(root, "alpha")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-beta-1", beta, "Beta 1", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-beta-2", beta, "Beta 2", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -166,7 +163,7 @@ func TestFeishuCodexWorkspaceChoiceKeepsOriginalTargetAfterCatalogReorder(t *tes
 	}}
 	sessionKey := "feishu:tenant_1:dm:oc_1:ou_user"
 	listed := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", Text: "/cx ls",
 		Metadata: map[string]string{feishuSessionMetadataKey: sessionKey},
 	}, listed)
@@ -177,7 +174,7 @@ func TestFeishuCodexWorkspaceChoiceKeepsOriginalTargetAfterCatalogReorder(t *tes
 
 	writeLocalCodexSession(t, codexDir, "thread-alpha", alpha, "Alpha", "2026-04-29T10:00:00Z")
 	clicked := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": staleChoice}},
 		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
@@ -195,7 +192,6 @@ func TestFeishuCodexWorkspaceNameWithErrorWordStillSendsCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "失败案例")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
@@ -204,7 +200,7 @@ func TestFeishuCodexWorkspaceNameWithErrorWordStillSendsCard(t *testing.T) {
 	}}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		MessageID: "feishu-cx-error-word", Text: "/cx ls",
 	}, reply)
@@ -230,7 +226,7 @@ func TestFeishuCodexWorkspaceChoiceKeepsAuthorizedAccess(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	sessionKey := "feishu:tenant_1:dm:oc_1:ou_open"
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_open", UserAliases: []string{"on_admin"},
 		MessageID: "feishu-alias-admin-list", Text: "/cx ls",
 		Metadata: map[string]string{"feishu_session_key": sessionKey},
@@ -240,7 +236,7 @@ func TestFeishuCodexWorkspaceChoiceKeepsAuthorizedAccess(t *testing.T) {
 	}
 
 	workspaceChoice := reply.Choices[0].Choices[1].ID
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_open", UserAliases: []string{"on_admin"},
 		MessageID:  "feishu-alias-admin-choice",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": workspaceChoice}},
@@ -258,7 +254,6 @@ func TestFeishuCodexCxLsDuringActiveTaskStillSendsNavigationCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	ag := &fakeCodexThreadAgent{
@@ -281,7 +276,7 @@ func TestFeishuCodexCxLsDuringActiveTaskStillSendsNavigationCard(t *testing.T) {
 	defer h.finishActiveTask(route.conversationID, task)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-ls-running",
@@ -301,7 +296,6 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspace, "会话 B", "2026-04-29T08:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -315,7 +309,7 @@ func TestFeishuCodexWorkspaceChoiceSendsSessionChoices(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	workspaceChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "weclaw", nil)
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-workspace",
@@ -352,7 +346,6 @@ func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t 
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
@@ -361,7 +354,7 @@ func TestFeishuCodexWorkspaceChoiceAutoAcquiresSingleSessionWithoutSecondCard(t 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	workspaceChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "weclaw", nil)
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-workspace-single",
@@ -390,7 +383,6 @@ func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 	root := t.TempDir()
 	workspaceA := filepath.Join(root, "alpha")
 	workspaceB := filepath.Join(root, "beta")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-a2", workspaceA, "Alpha 会话 2", "2026-04-29T08:30:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T08:00:00Z")
@@ -404,7 +396,7 @@ func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	workspaceChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "alpha", nil)
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-workspace",
@@ -413,7 +405,7 @@ func TestFeishuCodexSessionChoicesCanReturnToWorkspaceList(t *testing.T) {
 			Value:  map[string]string{"choice": workspaceChoice},
 		},
 	}, reply)
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-back",
@@ -438,7 +430,6 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	root := t.TempDir()
 	workspaceA := filepath.Join(root, "alpha")
 	workspaceB := filepath.Join(root, "beta")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
 	appendLocalCodexTurnContext(t, codexDir, "thread-a", "gpt-5.5", "high")
 	writeLocalCodexSession(t, codexDir, "thread-a2", workspaceA, "Alpha 会话 2", "2026-04-29T08:30:00Z")
@@ -450,7 +441,7 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	alphaChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "alpha", nil)
 
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-alpha",
@@ -460,12 +451,12 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 		},
 	}, "ou_user"), reply)
 	staleAlphaChoice := reply.Choices[0].Choices[0].ID
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/cx cd .."}},
 	}, "ou_user"), platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true}))
 	betaChoice := requireFeishuCodexWorkspaceChoice(t, h, "ou_user", "", "beta", nil)
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-beta",
@@ -474,7 +465,7 @@ func TestFeishuCodexStaleSessionChoiceSwitchesOriginalThread(t *testing.T) {
 			Value:  map[string]string{"choice": betaChoice},
 		},
 	}, "ou_user"), reply)
-	h.HandleMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-stale-alpha",
@@ -505,7 +496,7 @@ func requireFeishuCodexWorkspaceChoice(t *testing.T, h *Handler, userID string, 
 	if sessionKey != "" {
 		metadata[feishuSessionMetadataKey] = sessionKey
 	}
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: userID, UserAliases: aliases,
 		Text: "/cx ls", Metadata: metadata,
 	}, reply)
@@ -533,7 +524,6 @@ func TestFeishuCodexInvalidWorkspaceReturnsTextError(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	h.defaultName = "codex"
@@ -544,7 +534,7 @@ func TestFeishuCodexInvalidWorkspaceReturnsTextError(t *testing.T) {
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-cx-invalid-workspace",

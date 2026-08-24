@@ -116,7 +116,7 @@ func TestCommandRepliesUseBlankLinesForWeChat(t *testing.T) {
 
 	tests := map[string]string{
 		"status":      h.buildStatus("user-1"),
-		"cwd":         h.handleCwd("/cwd"),
+		"cwd":         h.handleCwdWithRoute("/cwd", nil, cwdRoute{}),
 		"progress":    h.handleProgressCommand("/progress"),
 		"progressErr": h.handleProgressCommand("/progress unknown"),
 		"codexHelp":   buildCodexSessionHelpText(),
@@ -135,7 +135,6 @@ func TestCodexWorkspaceRepliesUseBlankLinesForWeChat(t *testing.T) {
 	bindingKey := codexBindingKey("user-1", "codex")
 	workspaceA := t.TempDir()
 	workspaceB := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspaceA, workspaceB})
 	h.ensureCodexSessions().setThread(bindingKey, workspaceA, "thread-a")
 	h.ensureCodexSessions().setPendingNew(bindingKey, workspaceB)
 

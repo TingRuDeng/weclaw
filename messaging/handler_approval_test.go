@@ -37,7 +37,7 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 	request := reply.waitChoiceRequest(t, ctx)
 	approvalKey := approvalKeyFromChoices(request.choices)
 
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-nav-during-approval",
@@ -53,7 +53,7 @@ func TestPendingApprovalIgnoresCodexNavigationChoice(t *testing.T) {
 	case <-time.After(taskQueueProbeDelay):
 	}
 
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "feishu-approval-allow",
@@ -269,7 +269,7 @@ func TestDesktopApprovalCardReportsAlreadyHandledWithoutSubmittingDecision(t *te
 	})
 	request := reply.waitChoiceRequest(t, ctx)
 	resultCh := make(chan platform.CardActionResult, 1)
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "approval-action",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": "accept", "approval_key": approvalKeyFromChoices(request.choices),
@@ -406,7 +406,7 @@ func TestApprovalTextFallbackConsumesOnceAndRedactsCommand(t *testing.T) {
 		t.Fatalf("prompt=%q, want approve and deny fallback commands", request.prompt)
 	}
 	command := "/approve " + code
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "approval-text-1", Text: command,
 	}, reply)
 	select {
@@ -417,7 +417,7 @@ func TestApprovalTextFallbackConsumesOnceAndRedactsCommand(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("approval text fallback did not resolve")
 	}
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user", MessageID: "approval-text-2", Text: command,
 	}, reply)
 	texts := reply.textsSnapshot()
@@ -442,7 +442,7 @@ func TestApprovalTextFallbackDenyCommandConsumesOnce(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	command := "/deny " + pending.code
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     command,
@@ -456,7 +456,7 @@ func TestApprovalTextFallbackDenyCommandConsumesOnce(t *testing.T) {
 		t.Fatal("deny command did not resolve pending approval")
 	}
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     command,
@@ -585,7 +585,7 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 		t.Fatalf("approval keys must isolate cards, got both %q", keyA)
 	}
 
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "approval-card-a",
@@ -615,7 +615,7 @@ func TestPendingApprovalUsesApprovalKeyForConcurrentCards(t *testing.T) {
 		t.Fatalf("approval action was treated as normal message: %#v", texts)
 	}
 
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "approval-card-b",
@@ -775,7 +775,7 @@ func startApprovalForTest(ctx context.Context, h *Handler, reply platform.Replie
 
 func resolveApprovalForTest(t *testing.T, ctx context.Context, h *Handler, reply platform.Replier, key string, choice string, result <-chan string, want string) {
 	t.Helper()
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_user",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 			"choice": choice, "approval_key": key,
@@ -807,7 +807,7 @@ func TestExpiredApprovalActionDoesNotStartNewTask(t *testing.T) {
 	h.defaultName = "codex"
 	reply := platformtest.NewReplier(platform.Capabilities{})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "expired-approval-card",
@@ -834,7 +834,7 @@ func TestExpiredApprovalActionReportsResultWhenCallbackWaits(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{})
 	resultCh := make(chan platform.CardActionResult, 1)
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "expired-approval-callback",
@@ -891,7 +891,7 @@ func TestApprovalHandlerIncludesTaskCardIDMetadata(t *testing.T) {
 	if choice.Metadata["task_card_id"] != "card-task-1" {
 		t.Fatalf("choice metadata=%#v, want task card id", choice.Metadata)
 	}
-	h.HandleMessage(ctx, platform.IncomingMessage{
+	h.handleMessageForTest(ctx, platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		RawCommand: &platform.CardAction{

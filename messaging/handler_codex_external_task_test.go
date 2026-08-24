@@ -89,7 +89,6 @@ func TestCodexSwitchActiveAppThreadRegistersExternalTask(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	appendLocalCodexTurnContext(t, codexDir, "thread-active", "gpt-5.5", "high")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -137,7 +136,6 @@ func TestCodexMessageSteersExternalActiveTurnImmediately(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	state := agent.CodexThreadState{
@@ -174,7 +172,6 @@ func TestCodexExternalAppTaskSendsFinalReply(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
 	watchDone := make(chan struct{})

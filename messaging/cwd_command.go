@@ -13,11 +13,6 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-// handleCwd 处理内部或测试调用的工作目录切换命令。
-func (h *Handler) handleCwd(trimmed string, userID ...string) string {
-	return h.handleCwdWithRouteAccess(trimmed, userID, false, cwdRoute{})
-}
-
 type cwdRoute struct {
 	routeUserID string
 	platform    platform.PlatformName
@@ -30,22 +25,14 @@ func (h *Handler) handleCwdForMessage(trimmed string, msg platform.IncomingMessa
 	if routeUserID == "" {
 		routeUserID = msg.UserID
 	}
-	return h.handleCwdWithRouteAccess(trimmed, []string{routeUserID}, h.isAdminMessage(msg), cwdRoute{
+	return h.handleCwdWithRoute(trimmed, []string{routeUserID}, cwdRoute{
 		routeUserID: routeUserID,
 		platform:    msg.Platform,
 		accountID:   msg.AccountID,
 	})
 }
 
-func (h *Handler) handleCwdWithAccess(trimmed string, userID []string, admin bool) string {
-	routeUserID := ""
-	if len(userID) > 0 {
-		routeUserID = userID[0]
-	}
-	return h.handleCwdWithRouteAccess(trimmed, userID, admin, cwdRoute{routeUserID: routeUserID})
-}
-
-func (h *Handler) handleCwdWithRouteAccess(trimmed string, userID []string, admin bool, route cwdRoute) string {
+func (h *Handler) handleCwdWithRoute(trimmed string, userID []string, route cwdRoute) string {
 	trimmed = strings.TrimSpace(trimmed)
 	if !isCwdCommand(trimmed) {
 		return "用法: /cwd [路径]"
@@ -57,10 +44,6 @@ func (h *Handler) handleCwdWithRouteAccess(trimmed string, userID []string, admi
 	absPath, err := resolveCwdPath(arg)
 	if err != nil {
 		return err.Error()
-	}
-	if !admin && !h.isWorkspaceAllowed(absPath) {
-		log.Printf("[handler] rejected /cwd outside allowed workspace roots: %s", absPath)
-		return fmt.Sprintf("该目录不在允许的工作目录范围内：%s\n请在 allowed_workspace_roots 中添加后重试。", absPath)
 	}
 	agents := h.snapshotAgents()
 	unlockRegistry := h.lockWorkspaceRegistryControl()

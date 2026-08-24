@@ -107,7 +107,7 @@ func (h *Handler) prepareCodexSessionCommand(ctx context.Context, req codexSessi
 			"前一项 Codex 会话操作仍在处理，本次命令未执行。",
 		)}
 	}
-	if reply := h.rejectDisallowedCodexWorkspace(runtime.bindingKey, agentName, runtime.workspaceRoot, fields, runtime.admin); reply != "" {
+	if reply := h.rejectHiddenCodexWorkspace(runtime.bindingKey, agentName, runtime.workspaceRoot, fields); reply != "" {
 		unlock()
 		unlockRegistry()
 		return codexSessionCommandPreparation{result: textNavigationResult(reply)}

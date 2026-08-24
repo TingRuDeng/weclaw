@@ -232,7 +232,7 @@ func TestRawCommandStopKeepsTerminalReplyEnabled(t *testing.T) {
 	}
 	replyWriter := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "feishu:ou_user",
 		MessageID: "card-stop-1",

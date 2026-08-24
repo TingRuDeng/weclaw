@@ -17,7 +17,6 @@ import (
 func TestFeishuClaudeSessionChoicesPaginateWithStableIDs(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	for index := 0; index < 9; index++ {
 		ag.catalogSessions = append(ag.catalogSessions, agent.ClaudeSession{
 			ID: fmt.Sprintf("session-%02d", index), Cwd: workspace,
@@ -61,33 +60,33 @@ func TestFeishuClaudeSessionChoicesPaginateWithStableIDs(t *testing.T) {
 	}
 }
 
-func TestFeishuClaudeCcLsSendsAllowedACPWorkspaceChoices(t *testing.T) {
+func TestFeishuClaudeCcLsSendsAllVisibleACPWorkspaceChoices(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
-	allowedRoot := t.TempDir()
+	root := t.TempDir()
 	ag.catalogSessions = []agent.ClaudeSession{
-		{ID: "session-a", Cwd: filepath.Join(allowedRoot, "alpha"), Title: "Alpha 会话"},
-		{ID: "session-b", Cwd: filepath.Join(allowedRoot, "beta"), Title: "Beta 会话"},
-		{ID: "blocked", Cwd: t.TempDir(), Title: "越权会话"},
+		{ID: "session-a", Cwd: filepath.Join(root, "alpha"), Title: "Alpha 会话"},
+		{ID: "session-b", Cwd: filepath.Join(root, "beta"), Title: "Beta 会话"},
+		{ID: "session-c", Cwd: filepath.Join(root, "gamma"), Title: "Gamma 会话"},
 	}
-	for _, session := range ag.catalogSessions[:2] {
+	for _, session := range ag.catalogSessions {
 		if err := os.MkdirAll(session.Cwd, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	h.SetAllowedWorkspaceRoots([]string{allowedRoot})
 	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc ls"})
 
-	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 2 {
-		t.Fatalf("choices=%#v texts=%#v，期望两个已授权 ACP 工作空间", reply.Choices, reply.Texts)
+	if len(reply.Choices) != 1 || len(reply.Choices[0].Choices) != 3 {
+		t.Fatalf("choices=%#v texts=%#v，期望三个可见 ACP 工作空间", reply.Choices, reply.Texts)
 	}
 	if len(reply.Texts) != 0 {
 		t.Fatalf("texts=%#v，卡片成功后不应重复文本", reply.Texts)
 	}
-	if reply.Choices[0].Choices[0].Label != "1. alpha" || reply.Choices[0].Choices[1].Label != "2. beta" {
+	if reply.Choices[0].Choices[0].Label != "1. alpha" || reply.Choices[0].Choices[1].Label != "2. beta" ||
+		reply.Choices[0].Choices[2].Label != "3. gamma" {
 		t.Fatalf("workspace choices=%#v，工作空间卡片必须显示可直接用于命令的编号", reply.Choices[0].Choices)
 	}
 	for _, choice := range reply.Choices[0].Choices {
-		if !isTestFeishuWorkspaceChoice(choice.ID, "/cc") || strings.Contains(choice.ID, allowedRoot) {
+		if !isTestFeishuWorkspaceChoice(choice.ID, "/cc") || strings.Contains(choice.ID, root) {
 			t.Fatalf("workspace choice=%#v，必须使用不泄露路径的 opaque token", choice)
 		}
 	}
@@ -101,7 +100,6 @@ func TestFeishuClaudeWorkspaceChoiceKeepsOriginalTargetAfterCatalogReorder(t *te
 	if err := os.MkdirAll(beta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h.SetAllowedWorkspaceRoots([]string{root})
 	ag.catalogSessions = []agent.ClaudeSession{
 		{ID: "session-beta-1", Cwd: beta, Title: "Beta 1"},
 		{ID: "session-beta-2", Cwd: beta, Title: "Beta 2"},
@@ -127,7 +125,6 @@ func TestFeishuClaudeNewAppearsBeforeACPCatalogPersists(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.resetSessionID = "session-new"
 	ag.sessionConfig = agent.ClaudeSessionConfig{Model: "opus", Effort: "high"}
 
@@ -172,7 +169,6 @@ func TestFeishuClaudeNewStatusCardMarksUnrecordedSessionConfigUnknown(t *testing
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.resetSessionID = "session-new"
 
 	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc new"})
@@ -191,12 +187,11 @@ func TestFeishuClaudeNewFallsBackToTextWhenStatusCardCannotOpen(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
 	h.SetAgentWorkDirs(map[string]string{"claude": workspace})
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.resetSessionID = "session-new"
 
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true, Streaming: true})
 	reply.OpenStreamErr = errors.New("cardkit unavailable")
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "user", MessageID: "cc-new-fallback", Text: "/cc new",
 		Metadata: map[string]string{"feishu_session_key": "feishu:user"},
 	}, reply)
@@ -212,7 +207,6 @@ func TestFeishuClaudeNewFallsBackToTextWhenStatusCardCannotOpen(t *testing.T) {
 func TestFeishuClaudeWorkspaceChoiceSendsStableSessionChoices(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.catalogSessions = []agent.ClaudeSession{
 		{ID: "session-new", Cwd: workspace, Title: "较新会话", UpdatedAt: "2026-07-13T10:00:00Z"},
 		{ID: "session-old", Cwd: workspace, Title: "较早会话", UpdatedAt: "2026-07-13T09:00:00Z"},
@@ -242,7 +236,6 @@ func TestFeishuClaudeSessionLabelsUseAcceptedIndexesAcrossWorkspaces(t *testing.
 			t.Fatal(err)
 		}
 	}
-	h.SetAllowedWorkspaceRoots([]string{root})
 	ag.catalogSessions = []agent.ClaudeSession{
 		{ID: "session-beta", Cwd: beta, Title: "Beta", UpdatedAt: "2026-07-13T11:00:00Z"},
 		{ID: "session-alpha-new", Cwd: alpha, Title: "Alpha 新", UpdatedAt: "2026-07-13T10:00:00Z"},
@@ -281,7 +274,6 @@ func TestFeishuClaudeSessionLabelsUseAcceptedIndexesAcrossWorkspaces(t *testing.
 func TestFeishuClaudeSessionChoiceSwitchesRemoteOwner(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.catalogSessions = []agent.ClaudeSession{
 		{ID: "session-b", Cwd: workspace, Title: "目标会话"},
 	}
@@ -317,7 +309,6 @@ func TestFeishuClaudeCcLsAllowsAuthorizedUserOutsideRoots(t *testing.T) {
 func TestFeishuClaudeInvalidWorkspaceReturnsCcGuidance(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.catalogSessions = []agent.ClaudeSession{{ID: "session-a", Cwd: workspace}}
 	reply := sendClaudeFeishuCommand(claudeFeishuTestRequest{Handler: h, SessionKey: "feishu:user", Text: "/cc cd missing"})
 
@@ -329,7 +320,6 @@ func TestFeishuClaudeInvalidWorkspaceReturnsCcGuidance(t *testing.T) {
 func TestFeishuClaudeCcLsDuringActiveTaskDoesNotSendCard(t *testing.T) {
 	h, ag := newClaudeFeishuCardHandler(t)
 	workspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	ag.catalogSessions = []agent.ClaudeSession{{ID: "session-a", Cwd: workspace}}
 	key := h.agentExecutionKeyForRoute("user", "feishu:user", "claude", ag)
 	task, _, started := h.beginActiveTask(context.Background(), key, activeTaskMeta{owner: "user", agentName: "claude"})
@@ -391,6 +381,6 @@ func sendClaudeFeishuCommand(req claudeFeishuTestRequest) *platformtest.Replier 
 	if req.Authorized {
 		msg = authorizeIncomingMessageForTest(req.T, msg, req.UnionID)
 	}
-	req.Handler.HandleMessage(context.Background(), msg, reply)
+	req.Handler.handleMessageForTest(context.Background(), msg, reply)
 	return reply
 }

@@ -42,11 +42,6 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		return
 	}
-	if !h.workspaceAllowedForAgentContext(opts.ctx, opts.agentName, route.workspaceRoot) {
-		sendPlatformText(opts.ctx, opts.reply, opts.userID, "当前工作空间不在允许范围，请发送 /cx ls 重新选择。")
-		cancelTaskTimeout()
-		return
-	}
 	if err := h.requireCodexFollowerAttachReady(route); err != nil {
 		h.rejectCodexTaskStart(codexTaskPreflightOptions{
 			taskOpts: opts, route: route, cancel: cancelTaskTimeout,

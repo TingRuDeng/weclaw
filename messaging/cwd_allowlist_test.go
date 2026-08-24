@@ -9,25 +9,6 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform"
 )
 
-func TestCwdAllowlistRejectsOutsideRoots(t *testing.T) {
-	root := t.TempDir()
-	allowedSub := filepath.Join(root, "project")
-	if err := os.MkdirAll(allowedSub, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	outside := t.TempDir() // 另一个不在白名单内的目录
-
-	h := NewHandler(nil, nil)
-	h.SetAllowedWorkspaceRoots([]string{root})
-
-	if got := h.handleCwd("/cwd " + allowedSub); strings.Contains(got, "不在允许") {
-		t.Fatalf("expected allowed path accepted, got %q", got)
-	}
-	if got := h.handleCwd("/cwd " + outside); !strings.Contains(got, "不在允许") {
-		t.Fatalf("expected outside path rejected, got %q", got)
-	}
-}
-
 // TestResolveCwdPathReturnsCanonicalPath 验证工作目录校验后使用真实路径而不是符号链接入口。
 func TestResolveCwdPathReturnsCanonicalPath(t *testing.T) {
 	realPath := t.TempDir()
@@ -93,46 +74,7 @@ func TestResolveCwdPathExpandsHome(t *testing.T) {
 	}
 }
 
-// TestCwdAllowlistRejectsSymlinkEscape 验证普通用户不能通过白名单内的链接进入外部目录。
-func TestCwdAllowlistRejectsSymlinkEscape(t *testing.T) {
-	allowedRoot := t.TempDir()
-	outside := t.TempDir()
-	linkPath := filepath.Join(allowedRoot, "outside-link")
-	if err := os.Symlink(outside, linkPath); err != nil {
-		t.Fatal(err)
-	}
-	h := NewHandler(nil, nil)
-	h.SetAllowedWorkspaceRoots([]string{allowedRoot})
-
-	if got := h.handleCwd("/cwd " + linkPath); !strings.Contains(got, "不在允许") {
-		t.Fatalf("符号链接越界应被拒绝，got %q", got)
-	}
-}
-
-// TestConfiguredAgentWorkspaceMatchesCanonicalPath 验证配置中的链接路径与真实会话路径属于同一工作空间。
-func TestConfiguredAgentWorkspaceMatchesCanonicalPath(t *testing.T) {
-	realPath := t.TempDir()
-	linkPath := filepath.Join(t.TempDir(), "configured-link")
-	if err := os.Symlink(realPath, linkPath); err != nil {
-		t.Fatal(err)
-	}
-	h := NewHandler(nil, nil)
-	h.SetAgentWorkDirs(map[string]string{"codex": linkPath})
-
-	if !h.isConfiguredAgentWorkspace("codex", realPath) {
-		t.Fatalf("configured workspace %q should match real path %q", linkPath, realPath)
-	}
-}
-
-func TestCwdAllowlistEmptyRejectsDirectorySwitch(t *testing.T) {
-	dir := t.TempDir()
-	h := NewHandler(nil, nil)
-	if got := h.handleCwd("/cwd " + dir); !strings.Contains(got, "allowed_workspace_roots") {
-		t.Fatalf("empty allowlist should reject /cwd switch, got %q", got)
-	}
-}
-
-func TestCwdAdminBypassesWorkspaceRoots(t *testing.T) {
+func TestCwdAuthorizedUserCanSwitchToAnyDirectory(t *testing.T) {
 	dir := t.TempDir()
 	h := NewHandler(nil, nil)
 
@@ -142,11 +84,11 @@ func TestCwdAdminBypassesWorkspaceRoots(t *testing.T) {
 	}, "wx_admin"), "")
 
 	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
-		t.Fatalf("admin should bypass empty allowed_workspace_roots, got %q", got)
+		t.Fatalf("authorized user should switch cwd, got %q", got)
 	}
 }
 
-func TestCwdFeishuAdminUsesUnionIDBypass(t *testing.T) {
+func TestCwdFeishuAuthorizedUnionIDCanSwitchDirectory(t *testing.T) {
 	dir := t.TempDir()
 	h := NewHandler(nil, nil)
 
@@ -157,6 +99,6 @@ func TestCwdFeishuAdminUsesUnionIDBypass(t *testing.T) {
 	}, "on_admin"), "")
 
 	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
-		t.Fatalf("feishu admin should bypass empty allowed_workspace_roots by union_id, got %q", got)
+		t.Fatalf("authorized Feishu union_id should switch cwd, got %q", got)
 	}
 }

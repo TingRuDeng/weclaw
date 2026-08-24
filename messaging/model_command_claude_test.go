@@ -32,7 +32,7 @@ func TestFeishuModelCommandsUseSessionDefaultAgent(t *testing.T) {
 
 	for index, command := range []string{"/model opus", "/reasoning high"} {
 		reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-		h.HandleMessage(context.Background(), platform.IncomingMessage{
+		h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 			Platform: platform.PlatformFeishu, AccountID: "cli_main", UserID: "user-1",
 			MessageID: fmt.Sprintf("model-session-%d", index), Text: command,
 			Metadata: map[string]string{"feishu_session_key": sessionKey},
@@ -124,7 +124,7 @@ func TestFeishuModelCardValidatesOriginalAgent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h, codex, claude, sessionKey := newModelCardGuardHandler(t, tt.currentAgent)
 			reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-			h.HandleMessage(context.Background(), platform.IncomingMessage{
+			h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 				Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "model-card-" + tt.name,
 				RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{
 					"choice": "/reasoning high", modelSettingAgentMetadataKey: tt.expectedAgent,
@@ -297,7 +297,7 @@ func TestFeishuCodexFastCardExpiresAfterThreadSwitch(t *testing.T) {
 		value[key] = item
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "codex-fast-stale-choice",
 		RawCommand: &platform.CardAction{Action: "choice", Value: value},
 		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
@@ -382,7 +382,7 @@ func TestFeishuCodexModelCardExpiresAfterThreadSwitch(t *testing.T) {
 		value[key] = item
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "codex-stale-choice",
 		RawCommand: &platform.CardAction{Action: "choice", Value: value},
 		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
@@ -443,7 +443,7 @@ func TestFeishuClaudeModelCardExpiresAfterSessionSwitch(t *testing.T) {
 		value[key] = item
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: "claude-stale-choice",
 		RawCommand: &platform.CardAction{Action: "choice", Value: value},
 		Metadata:   map[string]string{feishuSessionMetadataKey: sessionKey},
@@ -585,7 +585,7 @@ type modelCardTestRequest struct {
 func handleModelCardMessage(t *testing.T, h *Handler, request modelCardTestRequest) *platformtest.Replier {
 	t.Helper()
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "user-1", MessageID: request.messageID, Text: request.command,
 		Metadata: map[string]string{"feishu_session_key": request.sessionKey},
 	}, reply)

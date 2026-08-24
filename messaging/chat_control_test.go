@@ -50,9 +50,9 @@ func TestModeYoloIsolatedPerFeishuSession(t *testing.T) {
 	h := NewHandler(nil, nil)
 	routeA := "feishu:tenant:dm:chat-a:ou_user"
 	routeB := "feishu:tenant:group:chat-b"
-	h.HandleMessage(context.Background(), modeCommandMessage("mode-a", routeA, "/mode yolo"), platformtest.NewReplier(platform.Capabilities{Text: true}))
+	h.handleMessageForTest(context.Background(), modeCommandMessage("mode-a", routeA, "/mode yolo"), platformtest.NewReplier(platform.Capabilities{Text: true}))
 	replyB := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), modeCommandMessage("mode-b", routeB, "/mode"), replyB)
+	h.handleMessageForTest(context.Background(), modeCommandMessage("mode-b", routeB, "/mode"), replyB)
 
 	modeA := approvalModeKey("ou_user", routeA)
 	modeB := approvalModeKey("ou_user", routeB)
@@ -74,7 +74,7 @@ func TestFeishuModeCommandUsesSessionScopedChoiceCard(t *testing.T) {
 	h := NewHandler(nil, nil)
 	route := "feishu:tenant:dm:chat-a:ou_user"
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), modeCommandMessage("mode-card", route, "/mode"), reply)
+	h.handleMessageForTest(context.Background(), modeCommandMessage("mode-card", route, "/mode"), reply)
 
 	if len(reply.Texts) != 0 || len(reply.Choices) != 1 {
 		t.Fatalf("texts=%#v choices=%#v，期望飞书 /mode 只发送一张选择卡", reply.Texts, reply.Choices)
@@ -98,7 +98,7 @@ func TestFeishuModeCardChoiceReusesOriginalSessionRoute(t *testing.T) {
 	h := NewHandler(nil, nil)
 	route := "feishu:tenant:group:chat-b"
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_actor", MessageID: "mode-choice",
 		RawCommand: &platform.CardAction{Action: "choice", Value: map[string]string{"choice": "/mode yolo"}},
 		Metadata:   map[string]string{feishuSessionMetadataKey: route},
@@ -117,7 +117,7 @@ func TestGroupModeYoloIsolatedPerActor(t *testing.T) {
 	h := NewHandler(nil, nil)
 	route := "feishu:tenant:group:chat-b"
 	replyA := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, UserID: "ou_actor_a", MessageID: "mode-a", Text: "/mode yolo",
 		Route: platform.SessionRoute{Key: route},
 	}, replyA)
@@ -141,7 +141,7 @@ func TestGroupModeYoloIsolatedPerActor(t *testing.T) {
 func TestModeCommandWithoutFeishuButtonsFallsBackToText(t *testing.T) {
 	h := NewHandler(nil, nil)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), modeCommandMessage("mode-text", "feishu:tenant:dm:chat-a:ou_user", "/mode"), reply)
+	h.handleMessageForTest(context.Background(), modeCommandMessage("mode-text", "feishu:tenant:dm:chat-a:ou_user", "/mode"), reply)
 
 	if len(reply.Choices) != 0 || !containsText(reply.Texts, "default") {
 		t.Fatalf("texts=%#v choices=%#v，缺少按钮能力时应回退文本", reply.Texts, reply.Choices)

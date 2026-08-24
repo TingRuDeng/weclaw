@@ -120,7 +120,6 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	codexDir := t.TempDir()
 	recordedWorkspace := filepath.Join(t.TempDir(), "recorded")
 	localWorkspace := filepath.Join(t.TempDir(), "local")
-	h.SetAllowedWorkspaceRoots([]string{recordedWorkspace, localWorkspace})
 	writeLocalCodexSession(t, codexDir, "thread-recorded", recordedWorkspace, "重复会话", "2026-04-29T08:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-local", localWorkspace, "桌面本机会话", "2026-04-29T09:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -152,7 +151,6 @@ func TestCodexLsDoesNotStartSharedAgent(t *testing.T) {
 	}, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "local")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.SetAgentMetas([]AgentMeta{{Name: "codex", Type: "acp", Command: "codex"}})
 	h.SetCodexLocalSessionDir(codexDir)
 	writeLocalCodexSession(t, codexDir, "thread-local", workspace, "本机会话", "2026-04-29T09:00:00Z")
@@ -180,7 +178,6 @@ func TestCodexCdWithMultipleSessionsDoesNotStartSharedAgent(t *testing.T) {
 	}, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "local")
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.SetAgentMetas([]AgentMeta{{Name: "codex", Type: "acp", Command: "codex"}})
 	h.SetCodexLocalSessionDir(codexDir)
 	writeLocalCodexSession(t, codexDir, "thread-a", workspace, "会话 A", "2026-04-29T09:00:00Z")
@@ -281,7 +278,6 @@ func TestCodexCxLsListsWorkspacesWithoutThreads(t *testing.T) {
 			t.Fatalf("创建测试工作空间失败: %v", err)
 		}
 	}
-	h.SetAllowedWorkspaceRoots([]string{root})
 	ag := &fakeCodexThreadAgent{
 		fakeAgent: fakeAgent{
 			info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
@@ -315,7 +311,6 @@ func TestCodexCxLsUsesCodexAppWorkspaceOrder(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	root := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{root})
 	weclawWorkspace := filepath.Join(root, "weclaw")
 	safariWorkspace := filepath.Join(root, "SafariCollection")
 	tmpWorkspace := filepath.Join(root, "tmp")

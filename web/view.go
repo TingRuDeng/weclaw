@@ -14,19 +14,18 @@ const secretMask = "__WECLAW_UNCHANGED__"
 
 // configView 是面向前端的脱敏配置视图。
 type configView struct {
-	Revision              string                           `json:"revision"`
-	DefaultAgent          string                           `json:"default_agent"`
-	APIAddr               string                           `json:"api_addr"`
-	APIToken              string                           `json:"api_token"`
-	UpdateSource          string                           `json:"update_source"`
-	SaveDir               string                           `json:"save_dir"`
-	AllowedWorkspaceRoots []string                         `json:"allowed_workspace_roots"`
-	RateLimitPerMinute    int                              `json:"rate_limit_per_minute"`
-	AuditLog              *bool                            `json:"audit_log"`
-	AuditLogPath          string                           `json:"audit_log_path"`
-	Progress              config.ProgressConfig            `json:"progress"`
-	Agents                map[string]agentView             `json:"agents"`
-	Platforms             map[string]config.PlatformConfig `json:"platforms"`
+	Revision           string                           `json:"revision"`
+	DefaultAgent       string                           `json:"default_agent"`
+	APIAddr            string                           `json:"api_addr"`
+	APIToken           string                           `json:"api_token"`
+	UpdateSource       string                           `json:"update_source"`
+	SaveDir            string                           `json:"save_dir"`
+	RateLimitPerMinute int                              `json:"rate_limit_per_minute"`
+	AuditLog           *bool                            `json:"audit_log"`
+	AuditLogPath       string                           `json:"audit_log_path"`
+	Progress           config.ProgressConfig            `json:"progress"`
+	Agents             map[string]agentView             `json:"agents"`
+	Platforms          map[string]config.PlatformConfig `json:"platforms"`
 }
 
 // agentView 是脱敏后的 agent 配置（密钥字段掩码）。
@@ -59,18 +58,17 @@ type agentView struct {
 // redactConfig 把配置转为脱敏视图：所有密钥替换为掩码常量(非空时)，env 值掩码。
 func redactConfig(cfg *config.Config) configView {
 	v := configView{
-		Revision:              configRevision(cfg),
-		DefaultAgent:          cfg.DefaultAgent,
-		APIAddr:               cfg.APIAddr,
-		UpdateSource:          cfg.UpdateSource,
-		SaveDir:               cfg.SaveDir,
-		AllowedWorkspaceRoots: cfg.AllowedWorkspaceRoots,
-		RateLimitPerMinute:    cfg.RateLimitPerMinute,
-		AuditLog:              cfg.AuditLog,
-		AuditLogPath:          cfg.AuditLogPath,
-		Progress:              cfg.Progress,
-		Agents:                make(map[string]agentView, len(cfg.Agents)),
-		Platforms:             cfg.Platforms,
+		Revision:           configRevision(cfg),
+		DefaultAgent:       cfg.DefaultAgent,
+		APIAddr:            cfg.APIAddr,
+		UpdateSource:       cfg.UpdateSource,
+		SaveDir:            cfg.SaveDir,
+		RateLimitPerMinute: cfg.RateLimitPerMinute,
+		AuditLog:           cfg.AuditLog,
+		AuditLogPath:       cfg.AuditLogPath,
+		Progress:           cfg.Progress,
+		Agents:             make(map[string]agentView, len(cfg.Agents)),
+		Platforms:          cfg.Platforms,
 	}
 	if cfg.APIToken != "" {
 		v.APIToken = secretMask
@@ -132,7 +130,6 @@ func mergeView(current *config.Config, v configView) *config.Config {
 	merged.APIAddr = v.APIAddr
 	merged.UpdateSource = v.UpdateSource
 	merged.SaveDir = v.SaveDir
-	merged.AllowedWorkspaceRoots = v.AllowedWorkspaceRoots
 	merged.RateLimitPerMinute = v.RateLimitPerMinute
 	merged.AuditLog = v.AuditLog
 	merged.AuditLogPath = v.AuditLogPath

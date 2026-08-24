@@ -41,7 +41,7 @@ func TestClaudeAgentTaskRejectsCwdBindingChange(t *testing.T) {
 		name: "claude", message: "第一条", clientID: "client-1",
 	})
 	waitForAgentEnter(t, ag)
-	result := h.handleCwdWithAccess("/cwd "+t.TempDir(), []string{"route-1"}, true)
+	result := h.handleCwdWithRoute("/cwd "+t.TempDir(), []string{"route-1"}, cwdRoute{routeUserID: "route-1"})
 	if !strings.Contains(result, "当前 Claude 任务正在运行") {
 		t.Fatalf("cwd result=%q，期望拒绝活动任务期间的绑定修改", result)
 	}

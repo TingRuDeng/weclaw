@@ -44,7 +44,7 @@ func TestHandleMessageRecordsOneTraceAcrossTaskProgressAndTerminal(t *testing.T)
 	capture := &traceCapture{}
 	h.SetTraceRecorder(capture)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "app-1", UserID: "user-1",
 		ChatID: "chat-1", MessageID: "message-1", Text: "运行任务",
 	}, reply)
@@ -115,8 +115,8 @@ func TestHandleMessageRecordsDuplicateWithoutAcceptingIt(t *testing.T) {
 		Platform: platform.PlatformWeChat, AccountID: "bot-1", UserID: "user-1",
 		ChatID: "user-1", MessageID: "message-1", Text: "hello",
 	}
-	h.HandleMessage(context.Background(), message, reply)
-	h.HandleMessage(context.Background(), message, reply)
+	h.handleMessageForTest(context.Background(), message, reply)
+	h.handleMessageForTest(context.Background(), message, reply)
 
 	events := capture.snapshot()
 	duplicates := 0

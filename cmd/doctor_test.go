@@ -202,18 +202,6 @@ func TestDoctorPassesLoopbackWithToken(t *testing.T) {
 	}
 }
 
-func TestDoctorWarnsEmptyWorkspaceRoots(t *testing.T) {
-	cfg := config.DefaultConfig()
-	results := runDoctorChecks(cfg, testDoctorDeps())
-	r, ok := findResult(results, "workspace confinement")
-	if !ok {
-		t.Fatal("missing workspace confinement check")
-	}
-	if r.Status != doctorWarn {
-		t.Fatalf("expected warn for empty workspace roots, got %v", r.Status)
-	}
-}
-
 func TestDoctorWarnsAuditDisabled(t *testing.T) {
 	cfg := config.DefaultConfig()
 	disabled := false

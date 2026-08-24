@@ -32,7 +32,7 @@ func TestFeishuGroupStatusUsesChatSessionMetadataForRouting(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant_1:group:oc_1"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "/cx status",
@@ -68,7 +68,7 @@ func TestRemovedCodexOwnerAndUnknownSubcommandsNeverReachAgent(t *testing.T) {
 
 	for index, command := range []string{"/cx owner", "/cx owner desktop", "/cx arbitrary text", "/cx"} {
 		reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-		h.HandleMessage(context.Background(), platform.IncomingMessage{
+		h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 			Platform: platform.PlatformWeChat, UserID: "user-1", MessageID: fmt.Sprintf("cx-namespace-%d", index), Text: command,
 		}, reply)
 		if ag.chatCallCount() != 0 {
@@ -95,7 +95,6 @@ func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
 	root := t.TempDir()
 	workspaceA := filepath.Join(root, "alpha")
 	workspaceB := filepath.Join(root, "beta")
-	h.SetAllowedWorkspaceRoots([]string{root})
 	writeLocalCodexSession(t, codexDir, "thread-a", workspaceA, "Alpha 会话", "2026-04-29T09:00:00Z")
 	writeLocalCodexSession(t, codexDir, "thread-b", workspaceB, "Beta 会话", "2026-04-29T10:00:00Z")
 	h.SetCodexLocalSessionDir(codexDir)
@@ -123,7 +122,7 @@ func TestFeishuDMSessionWorkspaceSwitchStaysInChatSession(t *testing.T) {
 		t.Fatalf("route status=%q, want workspace B after chat session switch", status)
 	}
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "执行一个任务",
@@ -143,11 +142,10 @@ func TestFeishuCwdUsesChatSessionMetadataForClaudeBinding(t *testing.T) {
 	h := NewHandler(nil, nil)
 	h.SetDefaultAgent("claude", ag)
 	workspace := t.TempDir()
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	sessionKey := "feishu:tenant_1:dm:oc_1:ou_user"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "/cwd " + workspace,
@@ -169,7 +167,7 @@ func TestFeishuHelpChoicesCarrySessionMetadata(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true, Buttons: true})
 	sessionKey := "feishu:tenant_1:group:oc_1"
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		Text:     "/help",
@@ -204,7 +202,7 @@ func TestFeishuRawCommandStopUsesSessionMetadata(t *testing.T) {
 	}
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
+	h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu,
 		UserID:   "ou_user",
 		RawCommand: &platform.CardAction{
@@ -239,7 +237,7 @@ func TestFeishuGroupTaskRejectsStopAndCancelFromOtherUser(t *testing.T) {
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
 	for _, command := range []string{"/cancel", "/stop"} {
-		h.HandleMessage(context.Background(), platform.IncomingMessage{
+		h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 			Platform: platform.PlatformFeishu,
 			UserID:   "ou_other",
 			Text:     command,
@@ -277,9 +275,9 @@ func TestFeishuPendingMessageRunsAutomaticallyInOriginalSession(t *testing.T) {
 		}
 	}
 
-	h.HandleMessage(context.Background(), message("第一条"), reply)
+	h.handleMessageForTest(context.Background(), message("第一条"), reply)
 	waitForAgentEnter(t, ag)
-	h.HandleMessage(context.Background(), message("第二条"), reply)
+	h.handleMessageForTest(context.Background(), message("第二条"), reply)
 	ag.release <- struct{}{}
 	waitForAgentEnter(t, ag)
 

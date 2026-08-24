@@ -108,7 +108,7 @@ func TestHandlePlatformMessagePassesTextAndImageToAgent(t *testing.T) {
 	h.SetSaveDir(dir)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	h.HandlePlatformMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "om_img_text",
@@ -118,7 +118,7 @@ func TestHandlePlatformMessagePassesTextAndImageToAgent(t *testing.T) {
 			Path:     imagePath,
 			FileName: "input.png",
 		}},
-	}, reply)
+	}, "ou_user"), reply)
 
 	if !strings.Contains(ag.lastChatMessage(), "请分析这张图") ||
 		!strings.Contains(ag.lastChatMessage(), "用户发送了一张图片") ||
@@ -139,7 +139,7 @@ func TestHandlePlatformMessagePassesImageOnlyToAgent(t *testing.T) {
 	h.SetDefaultAgent("mock", ag)
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 
-	h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	h.HandlePlatformMessage(context.Background(), authorizeIncomingMessageForTest(t, platform.IncomingMessage{
 		Platform:  platform.PlatformFeishu,
 		UserID:    "ou_user",
 		MessageID: "om_image_only",
@@ -149,7 +149,7 @@ func TestHandlePlatformMessagePassesImageOnlyToAgent(t *testing.T) {
 			FileName: "mobile-input.png",
 			Metadata: map[string]string{"temporary": "true"},
 		}},
-	}, reply)
+	}, "ou_user"), reply)
 
 	if !strings.Contains(ag.lastChatMessage(), "用户发送了一张图片") ||
 		!strings.Contains(ag.lastChatMessage(), "文件名：mobile-input.png") ||

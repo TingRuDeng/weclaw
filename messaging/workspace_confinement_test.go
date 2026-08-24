@@ -4,51 +4,26 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
-	"github.com/fastclaw-ai/weclaw/config"
-	"github.com/fastclaw-ai/weclaw/platform"
-	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestCodexWorkspaceGroupsRespectAllowedRootsForOrdinaryUser(t *testing.T) {
+func TestCodexWorkspaceGroupsIncludeAllVisibleWorkspaces(t *testing.T) {
 	h := NewHandler(nil, nil)
-	allowed := filepath.Join(t.TempDir(), "allowed")
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	mustCreateWorkspaceDirs(t, allowed, blocked)
+	workspaceA := filepath.Join(t.TempDir(), "workspace-a")
+	workspaceB := filepath.Join(t.TempDir(), "workspace-b")
+	mustCreateWorkspaceDirs(t, workspaceA, workspaceB)
 	codexDir := t.TempDir()
-	writeCodexAppWorkspaceState(t, codexDir, []string{allowed, blocked}, []string{allowed, blocked})
+	writeCodexAppWorkspaceState(t, codexDir, []string{workspaceA, workspaceB}, []string{workspaceA, workspaceB})
 	h.SetCodexLocalSessionDir(codexDir)
-	h.SetAllowedWorkspaceRoots([]string{allowed})
 
 	groups, err := h.codexWorkspaceGroupsForUser(codexBindingKey("user-1", "codex"), "user-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(groups) != 1 || groups[0].Root != normalizeCodexWorkspaceRoot(allowed) {
-		t.Fatalf("groups=%#v, want only allowed workspace", groups)
-	}
-}
-
-func TestCodexWorkspaceGroupsBypassAllowedRootsForAuthorizedAccess(t *testing.T) {
-	h := NewHandler(nil, nil)
-	allowed := filepath.Join(t.TempDir(), "allowed")
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	mustCreateWorkspaceDirs(t, allowed, blocked)
-	codexDir := t.TempDir()
-	writeCodexAppWorkspaceState(t, codexDir, []string{allowed, blocked}, []string{allowed, blocked})
-	h.SetCodexLocalSessionDir(codexDir)
-	h.SetAllowedWorkspaceRoots([]string{allowed})
-
-	groups, err := h.codexWorkspaceGroupsForAccess(codexBindingKey("admin-1", "codex"), "admin-1", true)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if len(groups) != 2 {
-		t.Fatalf("groups=%#v, want admin to see both workspaces", groups)
+		t.Fatalf("groups=%#v, want both visible workspaces", groups)
 	}
 }
 
@@ -68,7 +43,6 @@ func TestClaudeConversationUsesRouteWorkspaceWithoutChangingGlobalCwd(t *testing
 	mustCreateWorkspaceDirs(t, globalRoot, routeRoot)
 	ag := &fakeClaudeSessionAgent{fakeAgent: fakeAgent{info: agent.AgentInfo{Name: "claude", Type: "cli"}}}
 	h.SetAgentWorkDirs(map[string]string{"claude": globalRoot})
-	h.SetAllowedWorkspaceRoots([]string{routeRoot})
 	bindingKey := claudeBindingKey("route-1", "claude")
 	if err := h.ensureClaudeSessions().commitSelection(bindingKey, routeRoot, "session-route"); err != nil {
 		t.Fatal(err)
@@ -84,97 +58,4 @@ func TestClaudeConversationUsesRouteWorkspaceWithoutChangingGlobalCwd(t *testing
 	if h.agentWorkDirs["claude"] != globalRoot || ag.lastWorkingDir() != "" {
 		t.Fatalf("global cwd mutated: handler=%q agent=%q", h.agentWorkDirs["claude"], ag.lastWorkingDir())
 	}
-}
-
-func TestCodexCommandRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
-	h := NewHandler(nil, nil)
-	allowed := filepath.Join(t.TempDir(), "allowed")
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	mustCreateWorkspaceDirs(t, allowed, blocked)
-	h.SetAllowedWorkspaceRoots([]string{allowed})
-	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
-		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-	}}
-	h.defaultName = "codex"
-	h.agents["codex"] = ag
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("user-1", "codex"), blocked)
-	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx app",
-	})
-
-	if !strings.Contains(reply, "不在允许范围") {
-		t.Fatalf("reply=%q, want confinement rejection", reply)
-	}
-}
-
-func TestCodexCommandAllowsStaleWorkspaceForAdmin(t *testing.T) {
-	h := NewHandler(nil, nil)
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	mustCreateWorkspaceDirs(t, blocked)
-	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
-		info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-	}}
-	h.defaultName = "codex"
-	h.agents["codex"] = ag
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("admin-1", "codex"), blocked)
-	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "admin-1", RouteUserID: "admin-1", Trimmed: "/cx app", Admin: true,
-	})
-
-	if !strings.Contains(reply, "/cx app 已停用") || strings.Contains(reply, "不在允许范围") {
-		t.Fatalf("reply=%q, want shared-host entry rejection", reply)
-	}
-}
-
-func TestCodexStatusRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
-	h := NewHandler(nil, nil)
-	allowed := filepath.Join(t.TempDir(), "allowed")
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	mustCreateWorkspaceDirs(t, allowed, blocked)
-	h.SetAllowedWorkspaceRoots([]string{allowed})
-	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: "thread-1"})
-	h.defaultName = "codex"
-	h.agents["codex"] = ag
-	bindingKey := codexBindingKey("user-1", "codex")
-	h.ensureCodexSessions().setActiveWorkspace(bindingKey, blocked)
-	h.ensureCodexSessions().setThread(bindingKey, blocked, "thread-1")
-
-	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
-		ActorUserID: "user-1", RouteUserID: "user-1", Trimmed: "/cx status",
-	})
-
-	if ag.handoffCalls != 0 || !strings.Contains(reply, "不在允许范围") {
-		t.Fatalf("handoff=%d reply=%q，普通用户不应接管受限工作空间", ag.handoffCalls, reply)
-	}
-}
-
-func TestCodexMessageRejectsStaleWorkspaceForOrdinaryUser(t *testing.T) {
-	h := NewHandler(nil, nil)
-	allowed := filepath.Join(t.TempDir(), "allowed")
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	mustCreateWorkspaceDirs(t, allowed, blocked)
-	h.SetAllowedWorkspaceRoots([]string{allowed})
-	cfg := config.DefaultProgressConfig()
-	cfg.Mode = progressModeOff
-	h.SetProgressConfig(cfg)
-	ag := &fakeCodexThreadAgent{fakeAgent: fakeAgent{
-		reply: "不应执行",
-		info:  agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"},
-	}}
-	h.SetDefaultAgent("codex", ag)
-	h.ensureCodexSessions().setActiveWorkspace(codexBindingKey("user-1", "codex"), blocked)
-	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
-
-	h.HandleMessage(context.Background(), platform.IncomingMessage{
-		Platform: platform.PlatformWeChat, UserID: "user-1", Text: "执行任务",
-	}, reply)
-	waitUntil(t, func() bool { return len(reply.Texts) > 0 || ag.lastChatMessage() != "" })
-
-	if got := ag.lastChatMessage(); got != "" {
-		t.Fatalf("agent received disallowed message=%q", got)
-	}
-	if !containsText(reply.Texts, "不在允许范围") {
-		t.Fatalf("reply texts=%#v, want confinement rejection", reply.Texts)
-	}
-	time.Sleep(10 * time.Millisecond)
 }

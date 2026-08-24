@@ -131,11 +131,6 @@ func (h *Handler) resolveCodexArchiveTarget(
 		return codexThreadArchiveTarget{}, fmt.Errorf("会话编号不存在，请先发送 /cx ls 查看当前工作空间会话")
 	}
 	workspaceRoot := normalizeCodexWorkspaceRoot(view.WorkspaceRoot)
-	if !runtime.admin &&
-		!h.isWorkspaceAllowed(workspaceRoot) &&
-		!h.isConfiguredAgentWorkspace(runtime.agentName, workspaceRoot) {
-		return codexThreadArchiveTarget{}, fmt.Errorf("该会话工作空间不在允许范围，请发送 /cx ls 重新选择")
-	}
 	threadID := strings.TrimSpace(view.ThreadID)
 	if threadID == "" || view.PendingNewThread {
 		return codexThreadArchiveTarget{}, fmt.Errorf("该编号当前没有可归档的会话")

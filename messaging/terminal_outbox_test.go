@@ -3092,7 +3092,6 @@ func TestFollowerRevocationWaitsForStartedFinalMediaDelivery(t *testing.T) {
 	registry := newOutboxTestRegistry(route, reply)
 	h := NewHandler(nil, nil)
 	h.SetPlatformRegistry(registry)
-	h.SetAllowedWorkspaceRoots([]string{root})
 	h.agentWorkDirs = map[string]string{"codex": root}
 	bindingKey := codexBindingKey("route-user", "codex")
 	workspace := "/workspace/jumpserver"

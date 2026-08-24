@@ -13,22 +13,23 @@ import (
 )
 
 type externalCodexTaskOptions struct {
-	ctx                 context.Context
-	actorUserID         string
-	routeUserID         string
-	agentName           string
-	agent               agent.Agent
-	conversationID      string
-	bindingKey          string
-	threadID            string
-	workspaceRoot       string
-	platform            platform.PlatformName
-	accountID           string
-	progressCfg         config.ProgressConfig
-	reply               platform.Replier
-	terminalDeliveryKey string
-	runtimeGeneration   uint64
-	followerAttach      *codexFollowerSnapshot
+	ctx                    context.Context
+	actorUserID            string
+	routeUserID            string
+	agentName              string
+	agent                  agent.Agent
+	conversationID         string
+	bindingKey             string
+	threadID               string
+	workspaceRoot          string
+	platform               platform.PlatformName
+	accountID              string
+	progressCfg            config.ProgressConfig
+	reply                  platform.Replier
+	terminalDeliveryKey    string
+	runtimeGeneration      uint64
+	followerAttach         *codexFollowerSnapshot
+	allowedAttachmentRoots []string
 	// runtimeInactiveAuthoritative 仅用于同一绑定事务内的 active→terminal 二次确认。
 	runtimeInactiveAuthoritative bool
 }
@@ -384,7 +385,8 @@ func (h *Handler) runExternalCodexTaskWatcher(runtime externalCodexTaskRuntime) 
 			delivery: replyDeliveryRequest{
 				ctx: context.WithoutCancel(normalizeContext(runtime.ctx)), replyWriter: runtime.opts.reply,
 				userID: runtime.opts.actorUserID, agentName: runtime.opts.agentName, reply: reply, trace: trace,
-				deliveryGuard: runtime.task.terminalDeliveryGuardSnapshot(),
+				deliveryGuard:          runtime.task.terminalDeliveryGuardSnapshot(),
+				allowedAttachmentRoots: runtime.opts.allowedAttachmentRoots,
 			},
 			failed: result.Failed, stopped: result.Stopped,
 			idempotencyKey: firstNonBlank(runtime.task.terminalDeliveryKeySnapshot(), runtime.opts.terminalDeliveryKey),

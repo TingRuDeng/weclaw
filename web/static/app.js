@@ -36,7 +36,6 @@ let currentConfig = null;
 
 async function loadConfig() {
   currentConfig = await api('GET', '/api/config');
-  document.getElementById('workspace-roots').value = (currentConfig.allowed_workspace_roots || []).join('\n');
   document.getElementById('rate-limit').value = currentConfig.rate_limit_per_minute || 0;
 }
 
@@ -65,8 +64,6 @@ function appendStatusLine(parent, text) {
 
 async function saveConfig() {
   if (!currentConfig) return;
-  currentConfig.allowed_workspace_roots = document.getElementById('workspace-roots').value
-    .split('\n').map(s => s.trim()).filter(Boolean);
   currentConfig.rate_limit_per_minute = parseInt(document.getElementById('rate-limit').value || '0', 10);
   try {
     const r = await api('PUT', '/api/config', currentConfig);

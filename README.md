@@ -369,7 +369,10 @@ Key security rules:
 - An empty platform `allowed_users` list rejects everyone by default.
 - The current platform or bot `allowed_users` is the only remote identity source. Every listed identity has the same WeClaw management capability, and bot accounts cannot authorize each other.
 - A legacy top-level `admin_users` value is ignored with startup and `doctor` warnings. It is never migrated automatically and never expands an allowlist; it is retained only for configuration round trips and is hidden and read-only from the Web configuration view.
-- Identities authorized through `allowed_users` are not restricted by `allowed_workspace_roots`; compatibility or internal paths without a Registry authorization capability remain confined to those roots.
+- A legacy top-level `allowed_workspace_roots` value is retained for one compatibility release of configuration loading and round trips. Runtime behavior ignores it, and the Web configuration view neither exposes nor edits it.
+- Only messages validated through Registry `allowed_users` and carrying its access grant may enter the Handler; directly constructed messages and Registry bypasses are rejected.
+- Authorized identities may switch to and take over any local Agent workspace. Use the Agent sandbox, `run_as_user`, and operating-system permissions for real filesystem isolation.
+- Local attachments are sent only from the message route's Agent workspace or WeClaw's dedicated workspace, with symlink escapes still rejected.
 - A non-loopback `api_addr` requires `api_token`.
 - Loopback listeners may omit `api_token`, but other local processes can then call administrative endpoints; `weclaw doctor` reports this risk, and a random token is still recommended.
 - Audit logging is enabled by default and never records secrets.

@@ -38,7 +38,6 @@ func newRolloutMirrorFixture(t *testing.T) rolloutMirrorFixture {
 	appendCodexRolloutRecord(t, rolloutPath, rolloutUserMessageRecord(turnID, "修复跨进程任务反馈"))
 	appendCodexRolloutRecord(t, rolloutPath, rolloutProgressRecord("正在核对任务状态"))
 	h.SetCodexLocalSessionDir(codexDir)
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	h.defaultName = "codex"
 	ag := newFakeCodexLiveAgent(
 		agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: threadID},
@@ -90,7 +89,7 @@ func switchAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 // steerAndStopRolloutMirror 验证输入立即进入当前任务，但无法从远端停止只读镜像。
 func steerAndStopRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 	t.Helper()
-	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	fixture.h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "补充要求",
 		Metadata: map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
 	}, fixture.reply)
@@ -102,7 +101,7 @@ func steerAndStopRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 		t.Fatalf("pending=%q steer=(%q,%q,%q) texts=%#v", task.pendingGuide(), fixture.agent.steerThreadID,
 			fixture.agent.steerTurnID, fixture.agent.steerMessage, texts)
 	}
-	fixture.h.HandlePlatformMessage(context.Background(), platform.IncomingMessage{
+	fixture.h.handleMessageForTest(context.Background(), platform.IncomingMessage{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", UserID: "ou_user", Text: "/stop",
 		Metadata: map[string]string{feishuSessionMetadataKey: fixture.sessionKey},
 	}, fixture.reply)

@@ -113,11 +113,9 @@ func TestWorkspaceRegistryOverlayMergesCodexAndClaudeCatalogs(t *testing.T) {
 	}
 }
 
-func TestRegisteredWorkspaceDoesNotExpandOrdinaryUserAccess(t *testing.T) {
-	allowed := t.TempDir()
+func TestRegisteredWorkspaceVisibleWithoutAdminFlag(t *testing.T) {
 	registeredOutside := t.TempDir()
 	h := newWorkspaceCommandTestHandler(t, "codex")
-	h.SetAllowedWorkspaceRoots([]string{allowed})
 	if _, err := h.ensureWorkspaceRegistry().Add("codex", registeredOutside); err != nil {
 		t.Fatal(err)
 	}
@@ -126,11 +124,13 @@ func TestRegisteredWorkspaceDoesNotExpandOrdinaryUserAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registeredOutside = canonicalTestWorkspace(t, registeredOutside)
 	for _, group := range groups {
 		if group.Root == registeredOutside {
-			t.Fatalf("ordinary user saw admin-registered outside root: %+v", groups)
+			return
 		}
 	}
+	t.Fatalf("authorized user did not see registered workspace %q: %+v", registeredOutside, groups)
 }
 
 func TestWorkspaceRemoveRejectsActiveFrontendBinding(t *testing.T) {
@@ -246,12 +246,11 @@ func TestCwdRejectsWorkspaceHiddenForConfiguredAgent(t *testing.T) {
 	h := newWorkspaceCommandTestHandler(t, "codex")
 	codex := &fakeAgent{info: agent.AgentInfo{Name: "codex", Type: "acp", Command: "codex"}}
 	h.agents["codex"] = codex
-	h.SetAllowedWorkspaceRoots([]string{workspace})
 	if _, err := h.ensureWorkspaceRegistry().Remove("codex", workspace); err != nil {
 		t.Fatal(err)
 	}
 
-	reply := h.handleCwdWithAccess("/cwd "+workspace, []string{"admin-1"}, true)
+	reply := h.handleCwdWithRoute("/cwd "+workspace, []string{"admin-1"}, cwdRoute{routeUserID: "admin-1"})
 	if !strings.Contains(reply, "已从 WeClaw 导航中移除") {
 		t.Fatalf("reply=%q, want hidden workspace rejection", reply)
 	}

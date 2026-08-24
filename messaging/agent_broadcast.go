@@ -267,6 +267,7 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 		trace = runtime.activeTask.traceSnapshot()
 	}
 	h.recordTraceStage(trace, "task.started", "running", "agent="+name+" broadcast")
+	allowedAttachmentRoots := h.allowedAttachmentRootsForWorkspace(name, runtime.workspaceRoot)
 	onProgressEvent := func(event agent.ProgressEvent) {
 		text := event.DisplayText()
 		update := taskProgressUpdate{latest: text, card: text}
@@ -324,6 +325,7 @@ func (h *Handler) executeBroadcastAgent(req broadcastAgentsRequest, name string,
 			delivery: replyDeliveryRequest{
 				ctx: req.ctx, replyWriter: reply, userID: req.userID,
 				agentName: name, reply: text, trace: trace,
+				allowedAttachmentRoots: allowedAttachmentRoots,
 			},
 			failed: failed, stopped: stopped,
 			finish: finishProgress, progress: progressSession,

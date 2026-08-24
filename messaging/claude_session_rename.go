@@ -99,8 +99,5 @@ func (h *Handler) resolveClaudeRenameTarget(route claudeSessionRoute, target str
 	if err := h.hiddenWorkspaceError(route.AgentName, selected.Cwd, "cc"); err != nil {
 		return agent.ClaudeSession{}, err
 	}
-	if !route.Admin && !h.isWorkspaceAllowed(selected.Cwd) && !h.isConfiguredAgentWorkspace(route.AgentName, selected.Cwd) {
-		return agent.ClaudeSession{}, fmt.Errorf("该会话工作空间不在允许范围，请发送 /cc ls 重新选择")
-	}
 	return selected, nil
 }

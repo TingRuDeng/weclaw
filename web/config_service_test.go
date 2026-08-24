@@ -116,6 +116,21 @@ func TestWebViewHidesAndPreservesLegacyAdminUsers(t *testing.T) {
 	}
 }
 
+func TestWebViewHidesAndPreservesLegacyAllowedWorkspaceRoots(t *testing.T) {
+	current := &config.Config{LegacyAllowedWorkspaceRoots: []string{"/srv/projects"}}
+	view := redactConfig(current)
+	blob, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), "allowed_workspace_roots") || strings.Contains(string(blob), "/srv/projects") {
+		t.Fatalf("web view exposed legacy allowed_workspace_roots: %s", blob)
+	}
+	if got := mergeView(current, view).LegacyAllowedWorkspaceRoots; !reflect.DeepEqual(got, []string{"/srv/projects"}) {
+		t.Fatalf("LegacyAllowedWorkspaceRoots=%#v, want preserved /srv/projects", got)
+	}
+}
+
 func TestConfigServiceRejectsStaleViewWithoutRestoringRevokedAccess(t *testing.T) {
 	t.Setenv("WECLAW_HOME", t.TempDir())
 	base := config.DefaultConfig()
