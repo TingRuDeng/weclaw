@@ -213,6 +213,120 @@ func TestACPAgentRespondsToUnsupportedDynamicToolCall(t *testing.T) {
 	}
 }
 
+func TestACPAgentDefersCodexAppDynamicToolCallForSharedDaemon(t *testing.T) {
+	tests := []struct {
+		name   string
+		params string
+	}{
+		{
+			name:   "namespace and tool",
+			params: `{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"codex_app","tool":"create_thread","arguments":{}}`,
+		},
+		{
+			name:   "qualified tool name",
+			params: `{"threadId":"thread-1","turnId":"turn-1","callId":"call-2","tool":"codex_app__create_thread","arguments":{}}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a, output := newACPServerRequestTestAgent(t)
+			a.codexHostMode = codexHostModeDaemon
+			a.codexDesktopCoordination = true
+			a.codexDesktopPresenceCall = func() (bool, bool) { return true, true }
+			a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+			a.handleACPWireLine(`{"jsonrpc":"2.0","id":60,"method":"item/tool/call","params":` + test.params + `}`)
+			if !a.dispatchCodexKnownNotification(rpcResponse{
+				Method: "serverRequest/resolved",
+				Params: json.RawMessage(`{"threadId":"thread-1","requestId":60}`),
+			}, "") {
+				t.Fatal("serverRequest/resolved notification was not consumed after deferred dynamic tool")
+			}
+
+			if got := output.Len(); got != 0 {
+				t.Fatalf("shared daemon follower wrote %d bytes for Codex App dynamic tool: %s", got, output.String())
+			}
+		})
+	}
+}
+
+func TestACPAgentRejectsCodexAppDynamicToolOnManagedHost(t *testing.T) {
+	a, output := newACPServerRequestTestAgent(t)
+	a.codexDesktopCoordination = true
+	a.codexDesktopPresenceCall = func() (bool, bool) { return true, true }
+
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":63,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"codex_app","tool":"create_thread","arguments":{}}}`)
+
+	var response struct {
+		ID     int64 `json:"id"`
+		Result struct {
+			Success *bool `json:"success"`
+		} `json:"result"`
+	}
+	decodeACPServerResponse(t, output, &response)
+	if response.ID != 63 || response.Result.Success == nil || *response.Result.Success {
+		t.Fatalf("response=%+v, managed Host must fail closed", response)
+	}
+}
+
+func TestACPAgentRejectsCodexAppDynamicToolWithoutFrontend(t *testing.T) {
+	a, output := newACPServerRequestTestAgent(t)
+	a.codexHostMode = codexHostModeDaemon
+	a.codexDesktopCoordination = true
+	a.codexDesktopPresenceCall = func() (bool, bool) { return false, false }
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":61,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"codex_app","tool":"create_thread","arguments":{}}}`)
+
+	var response struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int64  `json:"id"`
+		Result  struct {
+			ContentItems []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"contentItems"`
+			Success *bool `json:"success"`
+		} `json:"result"`
+	}
+	decodeACPServerResponse(t, output, &response)
+	if response.JSONRPC != "2.0" || response.ID != 61 || response.Result.Success == nil {
+		t.Fatalf("response=%+v, want an explicit dynamic tool failure", response)
+	}
+	if *response.Result.Success {
+		t.Fatal("dynamic tool unexpectedly succeeded without a Codex App frontend")
+	}
+	if len(response.Result.ContentItems) != 1 ||
+		!strings.Contains(response.Result.ContentItems[0].Text, "Codex App") ||
+		!strings.Contains(response.Result.ContentItems[0].Text, "/cx new") {
+		t.Fatalf("contentItems=%+v, want actionable Codex App and /cx new guidance", response.Result.ContentItems)
+	}
+}
+
+func TestACPAgentRejectsMalformedCodexAppDynamicToolCall(t *testing.T) {
+	a, output := newACPServerRequestTestAgent(t)
+	a.codexHostMode = codexHostModeDaemon
+	a.codexDesktopCoordination = true
+	a.codexDesktopPresenceCall = func() (bool, bool) { return true, true }
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+	// An empty tool name must fail closed even when an App process is present.
+	a.handleACPWireLine(`{"jsonrpc":"2.0","id":62,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"codex_app","tool":"","arguments":{}}}`)
+
+	var response struct {
+		JSONRPC string `json:"jsonrpc"`
+		ID      int64  `json:"id"`
+		Result  struct {
+			Success *bool `json:"success"`
+		} `json:"result"`
+	}
+	decodeACPServerResponse(t, output, &response)
+	if response.JSONRPC != "2.0" || response.ID != 62 || response.Result.Success == nil || *response.Result.Success {
+		t.Fatalf("response=%+v, want fail-closed result", response)
+	}
+}
+
 func TestACPAgentRejectsUnknownServerRequest(t *testing.T) {
 	a, output := newACPServerRequestTestAgent(t)
 
