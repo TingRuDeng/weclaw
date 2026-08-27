@@ -359,6 +359,97 @@ func TestPrepareCodexRestartWithOptionsStopsVerifiedPrivateAppHostOnlyAfterInten
 	}
 }
 
+func TestStopExplicitCodexHostConflictsForceStopsUnknownCodexGroupAfterFreshProof(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeManaged})
+	uid := uint32(os.Geteuid())
+	processes := []codexHostProcessSnapshot{{
+		PID: 420, PPID: 1, PGID: 420, UID: uid,
+		Executable: "codex", Command: "/opt/custom/codex app-server --listen unix:///tmp/custom.sock",
+		Args: []string{"/opt/custom/codex", "app-server", "--listen", "unix:///tmp/custom.sock"},
+	}}
+	a.codexHostProcessSnapshotCall = func(context.Context, map[uint32]struct{}) ([]codexHostProcessSnapshot, error) {
+		return processes, nil
+	}
+	a.mu.Lock()
+	a.started = true
+	a.hostCmd = &exec.Cmd{Process: &os.Process{Pid: 420}}
+	a.mu.Unlock()
+	a.codexHostProcessIdentityCall = func(pid int) (codexProcessIdentity, error) {
+		if pid != 420 {
+			return codexProcessIdentity{}, fmt.Errorf("unexpected pid %d", pid)
+		}
+		return codexProcessIdentity{uid: uid, pgid: 420, start: "start-420", commandHash: "command-420"}, nil
+	}
+	intentPersisted := false
+	stopped := false
+	a.stopCodexConflictProcessGroupCall = func(_ context.Context, target codexVerifiedHostConflictTarget) error {
+		if !intentPersisted {
+			t.Fatal("unknown Codex group was stopped before intent persistence")
+		}
+		if target.kind != codexHostConflictTargetUnknown || target.group.PGID != 420 || len(target.members) != 1 {
+			t.Fatalf("target=%#v, want freshly proved unknown Codex group", target)
+		}
+		stopped = true
+		return nil
+	}
+	snapshot := CodexRestartSnapshot{HostMode: codexHostModeManaged, SocketPath: filepath.Join(t.TempDir(), "codex.sock")}
+
+	result, planned, err := a.stopExplicitCodexHostConflicts(
+		context.Background(), snapshot,
+		func(current CodexRestartSnapshot) error {
+			if len(current.ConflictingHosts) != 1 || current.ConflictingHosts[0].PGID != 420 {
+				t.Fatalf("persisted snapshot=%#v, want unknown Codex group", current)
+			}
+			intentPersisted = true
+			return nil
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatalf("stopExplicitCodexHostConflicts force: %v", err)
+	}
+	if !stopped || len(planned) != 1 || len(result.ConflictingHosts) != 1 || !result.ConflictingHosts[0].Stopped {
+		t.Fatalf("stopped=%v planned=%#v result=%#v", stopped, planned, result)
+	}
+}
+
+func TestStopExplicitCodexHostConflictsForceRejectsUnknownSharedProcessGroup(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeManaged})
+	uid := uint32(os.Geteuid())
+	processes := []codexHostProcessSnapshot{
+		{PID: 410, PPID: 1, PGID: 410, UID: uid, Executable: "zsh", Command: "/bin/zsh"},
+		{
+			PID: 420, PPID: 410, PGID: 410, UID: uid,
+			Executable: "codex", Command: "/opt/custom/codex app-server --listen unix:///tmp/custom.sock",
+			Args: []string{"/opt/custom/codex", "app-server", "--listen", "unix:///tmp/custom.sock"},
+		},
+	}
+	a.codexHostProcessSnapshotCall = func(context.Context, map[uint32]struct{}) ([]codexHostProcessSnapshot, error) {
+		return processes, nil
+	}
+	a.codexHostProcessIdentityCall = func(pid int) (codexProcessIdentity, error) {
+		return codexProcessIdentity{uid: uid, pgid: 410, start: fmt.Sprintf("start-%d", pid), commandHash: fmt.Sprintf("command-%d", pid)}, nil
+	}
+	stopped := false
+	a.stopCodexConflictProcessGroupCall = func(context.Context, codexVerifiedHostConflictTarget) error {
+		stopped = true
+		return nil
+	}
+
+	_, _, err := a.stopExplicitCodexHostConflicts(
+		context.Background(),
+		CodexRestartSnapshot{HostMode: codexHostModeManaged, SocketPath: filepath.Join(t.TempDir(), "codex.sock")},
+		func(CodexRestartSnapshot) error { return nil },
+		true,
+	)
+	if err == nil {
+		t.Fatal("force accepted an unknown Host sharing its process group with a shell")
+	}
+	if stopped {
+		t.Fatal("force signaled an unknown shared process group")
+	}
+}
+
 func TestStopOfficialDaemonConflictFallsBackToProtectedProcessGroup(t *testing.T) {
 	home := newShortCodexHome(t)
 	socketPath := codexDaemonSocketPath(home)

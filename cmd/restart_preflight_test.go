@@ -45,8 +45,9 @@ func TestBeginRestartDrainUsesAtomicRuntimeEndpoint(t *testing.T) {
 	requested := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested = true
-		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/restart/prepare" || r.URL.Query().Get("force") != "true" {
-			t.Fatalf("request=%s %s, want force drain POST", r.Method, r.URL.String())
+		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/restart/prepare" ||
+			r.URL.Query().Get("force_drain") != "true" || r.URL.Query().Get("force") != "" {
+			t.Fatalf("request=%s %s, want task-only force drain POST", r.Method, r.URL.String())
 		}
 		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true, ActiveTasks: 1})
 	}))
@@ -61,6 +62,31 @@ func TestBeginRestartDrainUsesAtomicRuntimeEndpoint(t *testing.T) {
 	}
 	if !requested {
 		t.Fatal("runtime drain endpoint was not called")
+	}
+}
+
+func TestBeginRestartDrainOptionsPassesCodexTerminationAuthorization(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	requested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		if r.Method != http.MethodPost || r.URL.Path != "/api/runtime/restart/prepare" ||
+			r.URL.Query().Get("force") != "true" || r.URL.Query().Get("force_drain") != "" {
+			t.Fatalf("request=%s %s, want operator force POST", r.Method, r.URL.String())
+		}
+		_ = json.NewEncoder(w).Encode(runtimeDrainResponse{Status: "ok", Draining: true})
+	}))
+	defer server.Close()
+	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
+	if err := beginRestartDrainWithConfigOptions(context.Background(), true, false, cfg); err != nil {
+		t.Fatalf("beginRestartDrainWithConfigOptions: %v", err)
+	}
+	if !requested {
+		t.Fatal("runtime restart endpoint was not called")
 	}
 }
 
@@ -104,6 +130,30 @@ func TestBeginRestartDrainReportsActiveTaskConflict(t *testing.T) {
 	err := beginRestartDrainWithConfig(context.Background(), false, cfg)
 	if err == nil || !strings.Contains(err.Error(), "2 个运行中的任务") {
 		t.Fatalf("error=%v, want active task conflict", err)
+	}
+}
+
+func TestBeginRestartDrainPreservesUnknownHostStopOutcome(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":   "error",
+			"code":     "runtime_restart_host_outcome_unknown",
+			"message":  "Codex Host 停止结果未知",
+			"draining": true,
+		})
+	}))
+	defer server.Close()
+	if err := writeRuntimeState(runtimeState{PID: os.Getpid(), Exe: "/tmp/weclaw"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.APIAddr = strings.TrimPrefix(server.URL, "http://")
+
+	err := beginRestartDrainWithConfig(context.Background(), true, cfg)
+	if !errors.Is(err, agent.ErrCodexRestartUnsafe) {
+		t.Fatalf("error=%v, want ErrCodexRestartUnsafe across runtime API", err)
 	}
 }
 

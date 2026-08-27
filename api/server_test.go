@@ -204,7 +204,7 @@ func TestHandleRuntimeRestartPreparesAndCancelsTransaction(t *testing.T) {
 		CodexHost: agent.CodexRestartSnapshot{HostMode: "daemon", HostGeneration: 9, HostStopped: true},
 	}}
 	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
-	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force=true", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force_drain=true", nil)
 	request.Host = "127.0.0.1:18011"
 	request.RemoteAddr = "127.0.0.1:40001"
 	recorder := httptest.NewRecorder()
@@ -236,6 +236,36 @@ func TestHandleRuntimeRestartPassesConflictingHostAuthorization(t *testing.T) {
 	}
 }
 
+func TestHandleRuntimeRestartSeparatesTaskDrainFromCodexTermination(t *testing.T) {
+	control := &staticRuntimeRestartOptionsControl{}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force_drain=true", nil)
+	request.Host = "127.0.0.1:18011"
+	request.RemoteAddr = "127.0.0.1:40001"
+	recorder := httptest.NewRecorder()
+
+	server.handleRuntimeRestart(recorder, request)
+
+	if recorder.Code != http.StatusOK || !control.forceDrain || control.forceTerminate {
+		t.Fatalf("status=%d forceDrain=%v forceTerminate=%v body=%q", recorder.Code, control.forceDrain, control.forceTerminate, recorder.Body.String())
+	}
+}
+
+func TestHandleRuntimeRestartOperatorForceAuthorizesDrainAndCodexTermination(t *testing.T) {
+	control := &staticRuntimeRestartOptionsControl{}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force=true", nil)
+	request.Host = "127.0.0.1:18011"
+	request.RemoteAddr = "127.0.0.1:40001"
+	recorder := httptest.NewRecorder()
+
+	server.handleRuntimeRestart(recorder, request)
+
+	if recorder.Code != http.StatusOK || !control.forceDrain || !control.forceTerminate {
+		t.Fatalf("status=%d forceDrain=%v forceTerminate=%v body=%q", recorder.Code, control.forceDrain, control.forceTerminate, recorder.Body.String())
+	}
+}
+
 func TestHandleRuntimeRestartReportsCodexBlocker(t *testing.T) {
 	control := &staticRuntimeRestartControl{err: fmt.Errorf(
 		"%w: %w", messaging.ErrRuntimeRestartBlocked, agent.ErrCodexDesktopFrontendActive,
@@ -248,6 +278,22 @@ func TestHandleRuntimeRestartReportsCodexBlocker(t *testing.T) {
 	server.handleRuntimeRestart(recorder, request)
 	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "Codex App") {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestHandleRuntimeRestartMarksUnknownHostStopOutcome(t *testing.T) {
+	control := &staticRuntimeRestartOptionsControl{staticRuntimeRestartControl: staticRuntimeRestartControl{err: agent.ErrCodexRestartUnsafe}}
+	server := NewServer(nil, "127.0.0.1:18011", WithRuntimeRestartController(control))
+	request := httptest.NewRequest(http.MethodPost, "/api/runtime/restart/prepare?force=true", nil)
+	request.Host = "127.0.0.1:18011"
+	request.RemoteAddr = "127.0.0.1:40001"
+	recorder := httptest.NewRecorder()
+
+	server.handleRuntimeRestart(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError ||
+		!strings.Contains(recorder.Body.String(), `"code":"runtime_restart_host_outcome_unknown"`) {
+		t.Fatalf("status=%d body=%q, want stable unknown Host outcome code", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -525,12 +571,16 @@ type staticRuntimeRestartControl struct {
 
 type staticRuntimeRestartOptionsControl struct {
 	staticRuntimeRestartControl
-	stopConflicts bool
+	stopConflicts  bool
+	forceDrain     bool
+	forceTerminate bool
 }
 
-func (s *staticRuntimeRestartOptionsControl) PrepareRuntimeRestartWithOptions(_ context.Context, _ bool, stopConflicts bool) (messaging.RuntimeRestartResult, error) {
+func (s *staticRuntimeRestartOptionsControl) PrepareRuntimeRestartWithOptions(_ context.Context, forceDrain bool, stopConflicts bool, forceTerminate bool) (messaging.RuntimeRestartResult, error) {
+	s.forceDrain = forceDrain
 	s.stopConflicts = stopConflicts
-	return messaging.RuntimeRestartResult{}, nil
+	s.forceTerminate = forceTerminate
+	return s.result, s.err
 }
 
 type staticCodexCLIControl struct {

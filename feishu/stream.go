@@ -23,6 +23,7 @@ type feishuStream struct {
 	ioMu                    sync.Mutex
 	cardKit                 cardKitClient
 	taskCards               *taskCardRegistry
+	cardOps                 *cardKitOperationCoordinator
 	cardID                  string
 	title                   string
 	sequence                int
@@ -48,6 +49,24 @@ type feishuStream struct {
 	preservedApprovals      []string
 	terminal                *platform.TerminalCheckpoint
 	terminalDelivered       bool
+}
+
+func (s *feishuStream) withCardOperation(fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if s == nil {
+		return fn()
+	}
+	if s.taskCards != nil {
+		return s.taskCards.withCardOperation(s.cardID, fn)
+	}
+	if s.cardOps != nil {
+		return s.cardOps.with(s.cardID, fn)
+	}
+	// 直接构造、未挂接 Replier/registry 的测试或兼容 stream 只有自身的
+	// ioMu；不把无共享状态的网络调用扩大成跨更新阻塞。
+	return fn()
 }
 
 type feishuStreamUpdateOp struct {
@@ -124,66 +143,68 @@ func (s *feishuStream) flushPresentation() {
 }
 
 func (s *feishuStream) updatePresentationNow(ctx context.Context, p platform.StreamPresentation) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
-	}
-	op := feishuStreamUpdateOp{content: presentationVisibleContent(p, false)}
-	if !s.collapsible {
-		opts := cardOptions{
-			Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Preview: p.Preview, Content: p.Details,
-			Collapsible: true, Expanded: false, InlineActiveStatus: s.inlineActiveStatus,
-			Approvals: append([]string(nil), s.preservedApprovals...),
+	return s.withCardOperation(func() error {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil
 		}
-		if s.taskCards != nil {
-			if snapshot, sequence, ok := s.taskCards.enableStructuredPresentationWithSequence(s.cardID, p.Summary, p.Preview, p.Details); ok {
-				opts = snapshot
-				op.taskUpdateSeq = sequence
+		op := feishuStreamUpdateOp{content: presentationVisibleContent(p, false)}
+		if !s.collapsible {
+			opts := cardOptions{
+				Status: cardStatusThinking, Title: s.title, Summary: p.Summary, Preview: p.Preview, Content: p.Details,
+				Collapsible: true, Expanded: false, InlineActiveStatus: s.inlineActiveStatus,
+				Approvals: append([]string(nil), s.preservedApprovals...),
+			}
+			if s.taskCards != nil {
+				if snapshot, sequence, ok := s.taskCards.enableStructuredPresentationWithSequence(s.cardID, p.Summary, p.Preview, p.Details); ok {
+					opts = snapshot
+					op.taskUpdateSeq = sequence
+					s.sequence = sequence
+				}
+			}
+			if op.taskUpdateSeq == 0 {
+				op.taskUpdateSeq = s.nextSequence()
+			}
+			cardJSON, err := buildCardV2(opts)
+			if err != nil {
+				s.mu.Unlock()
+				return err
+			}
+			op.taskCardJSON = cardJSON
+		} else if s.taskCards != nil {
+			snapshot, sequence, ok := s.taskCards.updatePresentationWithSequence(s.cardID, p.Summary, p.Preview, p.Details)
+			if ok {
 				s.sequence = sequence
+				op.content = visibleCardContent(snapshot)
+				op.detailsSeq = sequence
 			}
 		}
-		if op.taskUpdateSeq == 0 {
-			op.taskUpdateSeq = s.nextSequence()
-		}
-		cardJSON, err := buildCardV2(opts)
-		if err != nil {
-			s.mu.Unlock()
-			return err
-		}
-		op.taskCardJSON = cardJSON
-	} else if s.taskCards != nil {
-		snapshot, sequence, ok := s.taskCards.updatePresentationWithSequence(s.cardID, p.Summary, p.Preview, p.Details)
-		if ok {
-			s.sequence = sequence
-			op.content = visibleCardContent(snapshot)
-			op.detailsSeq = sequence
-		}
-	}
-	s.lastSummary = p.Summary
-	s.lastPreview = p.Preview
-	s.lastContent = p.Details
-	s.lastUpdate = s.now()
-	s.mu.Unlock()
-	s.ioMu.Lock()
-	defer s.ioMu.Unlock()
-	if op.taskCardJSON != "" {
-		err := s.cardKit.UpdateCard(ctx, s.cardID, op.taskCardJSON, op.taskUpdateSeq)
-		if ignored := ignoreCardKitUpdateError(err); ignored != nil {
-			return ignored
-		}
-		if err != nil {
-			log.Printf("[feishu] ignored non-fatal structured layout update error: %v", err)
-		}
-		s.mu.Lock()
-		s.collapsible = true
+		s.lastSummary = p.Summary
+		s.lastPreview = p.Preview
+		s.lastContent = p.Details
+		s.lastUpdate = s.now()
 		s.mu.Unlock()
-		return nil
-	}
-	if op.detailsSeq == 0 {
-		return nil
-	}
-	return s.streamComponentWithRetry(ctx, cardMainContentID, op.content, op.detailsSeq)
+		s.ioMu.Lock()
+		defer s.ioMu.Unlock()
+		if op.taskCardJSON != "" {
+			err := s.cardKit.UpdateCard(ctx, s.cardID, op.taskCardJSON, op.taskUpdateSeq)
+			if ignored := ignoreCardKitUpdateError(err); ignored != nil {
+				return ignored
+			}
+			if err != nil {
+				log.Printf("[feishu] ignored non-fatal structured layout update error: %v", err)
+			}
+			s.mu.Lock()
+			s.collapsible = true
+			s.mu.Unlock()
+			return nil
+		}
+		if op.detailsSeq == 0 {
+			return nil
+		}
+		return s.streamComponentWithRetry(ctx, cardMainContentID, op.content, op.detailsSeq)
+	})
 }
 
 func presentationVisibleContent(p platform.StreamPresentation, expanded bool) string {
@@ -304,6 +325,7 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 	stream := &feishuStream{
 		cardKit:     r.cardKit,
 		taskCards:   r.taskCards,
+		cardOps:     r.cardOps,
 		cardID:      cardID,
 		title:       opts.Title,
 		throttle:    cardkitThrottle,
@@ -314,35 +336,40 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 		preserveTerminalContent: trackTask,
 		inlineActiveStatus:      trackTask,
 	}
-	if err := stream.cardKit.SetStreaming(ctx, stream.cardID, true, stream.nextSequence()); err != nil {
-		return nil, err
-	}
-	if trackTask {
-		r.setCurrentTaskCardID(cardID)
-		if r.taskCards != nil {
-			r.taskCards.recordWithSequence(cardID, cardOptions{
-				Status:  cardStatusThinking,
-				Title:   opts.Title,
-				Content: initialDetails, Preview: initialPreview, Summary: initialSummary, Collapsible: stream.collapsible, Expanded: false,
-				InlineActiveStatus: trackTask,
-			}, stream.sequence)
-			if stream.collapsible {
-				boundOpts, ok := r.taskCards.snapshot(cardID)
-				if !ok {
-					return nil, fmt.Errorf("task card state is unavailable after creation")
-				}
-				boundCardJSON, buildErr := buildCardV2(boundOpts)
-				if buildErr != nil {
-					return nil, buildErr
-				}
-				if len([]byte(boundCardJSON)) > feishuCardJSONSoftLimitBytes {
-					return nil, fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(boundCardJSON)), feishuCardJSONSoftLimitBytes)
-				}
-				if updateErr := stream.cardKit.UpdateCard(ctx, cardID, boundCardJSON, stream.nextSequence()); updateErr != nil {
-					return nil, updateErr
+	if err := r.withCardOperation(cardID, func() error {
+		if err := stream.cardKit.SetStreaming(ctx, stream.cardID, true, stream.nextSequence()); err != nil {
+			return err
+		}
+		if trackTask {
+			r.setCurrentTaskCardID(cardID)
+			if r.taskCards != nil {
+				r.taskCards.recordWithSequence(cardID, cardOptions{
+					Status:  cardStatusThinking,
+					Title:   opts.Title,
+					Content: initialDetails, Preview: initialPreview, Summary: initialSummary, Collapsible: stream.collapsible, Expanded: false,
+					InlineActiveStatus: trackTask,
+				}, stream.sequence)
+				if stream.collapsible {
+					boundOpts, ok := r.taskCards.snapshot(cardID)
+					if !ok {
+						return fmt.Errorf("task card state is unavailable after creation")
+					}
+					boundCardJSON, buildErr := buildCardV2(boundOpts)
+					if buildErr != nil {
+						return buildErr
+					}
+					if len([]byte(boundCardJSON)) > feishuCardJSONSoftLimitBytes {
+						return fmt.Errorf("%w: rendered=%d bytes soft_limit=%d bytes", platform.ErrStreamContentTooLarge, len([]byte(boundCardJSON)), feishuCardJSONSoftLimitBytes)
+					}
+					if updateErr := stream.cardKit.UpdateCard(ctx, cardID, boundCardJSON, stream.nextSequence()); updateErr != nil {
+						return updateErr
+					}
 				}
 			}
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return stream, nil
 }
@@ -383,31 +410,33 @@ func (s *feishuStream) Update(ctx context.Context, content string) error {
 	if err := s.PreflightUpdate(content); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
-	}
-	if content == s.lastContent {
-		if s.hasPending {
-			s.cancelPendingUpdate()
+	return s.updateNowSerialized(ctx, content)
+}
+
+func (s *feishuStream) updateNowSerialized(ctx context.Context, content string) error {
+	return s.withCardOperation(func() error {
+		s.mu.Lock()
+		if s.closed || content == s.lastContent {
+			if content == s.lastContent && s.hasPending {
+				s.cancelPendingUpdate()
+			}
+			s.mu.Unlock()
+			return nil
 		}
+		now := s.now()
+		if delay := s.throttleDelay(now); delay > 0 {
+			s.queuePendingUpdate(ctx, content, delay)
+			s.mu.Unlock()
+			return nil
+		}
+		s.cancelPendingUpdate()
+		op, err := s.prepareUpdateNowLocked(content, now)
 		s.mu.Unlock()
-		return nil
-	}
-	now := s.now()
-	if delay := s.throttleDelay(now); delay > 0 {
-		s.queuePendingUpdate(ctx, content, delay)
-		s.mu.Unlock()
-		return nil
-	}
-	s.cancelPendingUpdate()
-	op, err := s.prepareUpdateNowLocked(content, now)
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	return s.runUpdateNow(ctx, op)
+		if err != nil {
+			return err
+		}
+		return s.runUpdateNow(ctx, op)
+	})
 }
 
 func (s *feishuStream) prepareUpdateNowLocked(content string, now time.Time) (feishuStreamUpdateOp, error) {
@@ -530,39 +559,42 @@ func (s *feishuStream) schedulePendingUpdate(delay time.Duration) {
 }
 
 func (s *feishuStream) flushPendingUpdate(generation uint64) {
-	s.mu.Lock()
-	if s.closed || generation != s.pendingGeneration || s.pendingTimer == nil {
+	_ = s.withCardOperation(func() error {
+		s.mu.Lock()
+		if s.closed || generation != s.pendingGeneration || s.pendingTimer == nil {
+			s.mu.Unlock()
+			return nil
+		}
+		s.pendingTimer = nil
+		if !s.hasPending {
+			s.mu.Unlock()
+			return nil
+		}
+		now := s.now()
+		if delay := s.throttleDelay(now); delay > 0 {
+			s.schedulePendingUpdate(delay)
+			s.mu.Unlock()
+			return nil
+		}
+		ctx := s.pendingCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		content := s.pendingText
+		s.pendingCtx = nil
+		s.pendingText = ""
+		s.hasPending = false
+		op, err := s.prepareUpdateNowLocked(content, now)
 		s.mu.Unlock()
-		return
-	}
-	s.pendingTimer = nil
-	if !s.hasPending {
-		s.mu.Unlock()
-		return
-	}
-	now := s.now()
-	if delay := s.throttleDelay(now); delay > 0 {
-		s.schedulePendingUpdate(delay)
-		s.mu.Unlock()
-		return
-	}
-	ctx := s.pendingCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	content := s.pendingText
-	s.pendingCtx = nil
-	s.pendingText = ""
-	s.hasPending = false
-	op, err := s.prepareUpdateNowLocked(content, now)
-	s.mu.Unlock()
-	if err != nil {
-		log.Printf("[feishu] failed to build latest throttled card update: %v", err)
-		return
-	}
-	if err := s.runUpdateNow(ctx, op); err != nil {
-		log.Printf("[feishu] failed to flush latest throttled card update: %v", err)
-	}
+		if err != nil {
+			log.Printf("[feishu] failed to build latest throttled card update: %v", err)
+			return nil
+		}
+		if err := s.runUpdateNow(ctx, op); err != nil {
+			log.Printf("[feishu] failed to flush latest throttled card update: %v", err)
+		}
+		return nil
+	})
 }
 
 func (s *feishuStream) cancelPendingUpdate() {
@@ -764,30 +796,32 @@ func (s *feishuStream) Detach(ctx context.Context, notice string) error {
 
 // DeliverPreparedSupersede 先冻结旧 stream，再投递已经持久化的收敛操作。
 func (s *feishuStream) DeliverPreparedSupersede(ctx context.Context, checkpoint platform.SupersedeCheckpoint) error {
-	s.ioMu.Lock()
-	defer s.ioMu.Unlock()
+	return s.withCardOperation(func() error {
+		s.ioMu.Lock()
+		defer s.ioMu.Unlock()
 
-	s.mu.Lock()
-	if s.terminal != nil || s.terminalDelivered {
-		s.mu.Unlock()
-		return nil
-	}
-	s.closed = true
-	s.cancelPendingUpdate()
-	s.cancelPendingPresentation()
-	taskCards, cardID := s.taskCards, s.cardID
-	s.mu.Unlock()
-
-	if taskCards != nil {
-		status := cardStatusSuperseded
-		var op feishuStreamTerminalOp
-		if json.Unmarshal(checkpoint.Payload, &op) == nil && op.Status == cardStatusDetached {
-			status = cardStatusDetached
+		s.mu.Lock()
+		if s.terminal != nil || s.terminalDelivered {
+			s.mu.Unlock()
+			return nil
 		}
-		taskCards.updateAndSnapshot(cardID, status, "", false)
-		taskCards.setDurableReferenceChangeHandler(cardID, nil)
-	}
-	return deliverFeishuSupersedeCheckpoint(ctx, s.cardKit, checkpoint)
+		s.closed = true
+		s.cancelPendingUpdate()
+		s.cancelPendingPresentation()
+		taskCards, cardID := s.taskCards, s.cardID
+		s.mu.Unlock()
+
+		if taskCards != nil {
+			status := cardStatusSuperseded
+			var op feishuStreamTerminalOp
+			if json.Unmarshal(checkpoint.Payload, &op) == nil && op.Status == cardStatusDetached {
+				status = cardStatusDetached
+			}
+			taskCards.updateAndSnapshot(cardID, status, "", false)
+			taskCards.setDurableReferenceChangeHandler(cardID, nil)
+		}
+		return deliverFeishuSupersedeCheckpoint(ctx, s.cardKit, checkpoint)
+	})
 }
 
 func (s *feishuStream) prepareSupersedeUpdate(notice string) (feishuStreamTerminalOp, error) {
@@ -807,21 +841,23 @@ func (s *feishuStream) prepareSupersedeUpdate(notice string) (feishuStreamTermin
 }
 
 func (s *feishuStream) deliverPreparedTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {
-	s.ioMu.Lock()
-	defer s.ioMu.Unlock()
-	s.mu.Lock()
-	if s.terminalDelivered {
+	return s.withCardOperation(func() error {
+		s.ioMu.Lock()
+		defer s.ioMu.Unlock()
+		s.mu.Lock()
+		if s.terminalDelivered {
+			s.mu.Unlock()
+			return nil
+		}
+		s.mu.Unlock()
+		if err := deliverFeishuTerminalCheckpoint(ctx, s.cardKit, checkpoint); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.terminalDelivered = true
 		s.mu.Unlock()
 		return nil
-	}
-	s.mu.Unlock()
-	if err := deliverFeishuTerminalCheckpoint(ctx, s.cardKit, checkpoint); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	s.terminalDelivered = true
-	s.mu.Unlock()
-	return nil
+	})
 }
 
 // PrepareTerminal 冻结流并导出可跨进程重放的 CardKit 终态操作。
@@ -835,45 +871,59 @@ func (s *feishuStream) PrepareTerminal(finalContent string, failed bool) (platfo
 
 // PrepareTerminalWithState 冻结流并保留完成、失败、停止三种终态语义。
 func (s *feishuStream) PrepareTerminalWithState(finalContent string, state platform.StreamTerminalState) (platform.TerminalCheckpoint, error) {
-	s.ioMu.Lock()
-	defer s.ioMu.Unlock()
-	s.mu.Lock()
-	if s.terminal != nil {
-		checkpoint := *s.terminal
+	var checkpoint platform.TerminalCheckpoint
+	var resultErr error
+	err := s.withCardOperation(func() error {
+		s.ioMu.Lock()
+		defer s.ioMu.Unlock()
+		s.mu.Lock()
+		if s.terminal != nil {
+			checkpoint = *s.terminal
+			s.mu.Unlock()
+			return nil
+		}
+		if s.closed {
+			s.mu.Unlock()
+			return nil
+		}
+		status := cardStatusDone
+		switch state {
+		case platform.StreamTerminalCompleted:
+		case platform.StreamTerminalFailed:
+			status = cardStatusError
+		case platform.StreamTerminalStopped:
+			status = cardStatusStopped
+		default:
+			s.mu.Unlock()
+			resultErr = fmt.Errorf("unsupported stream terminal state %q", state)
+			return nil
+		}
+		s.closed = true
+		s.cancelPendingUpdate()
+		s.cancelPendingPresentation()
 		s.mu.Unlock()
-		return checkpoint, nil
-	}
-	if s.closed {
+		op, err := s.prepareTerminalUpdate(status, finalContent)
+		if err != nil {
+			resultErr = err
+			return nil
+		}
+		payload, err := json.Marshal(op)
+		if err != nil {
+			resultErr = err
+			return nil
+		}
+		checkpoint = platform.TerminalCheckpoint{Kind: feishuTerminalCheckpointKind, Payload: payload}
+		s.mu.Lock()
+		s.terminal = &checkpoint
 		s.mu.Unlock()
-		return platform.TerminalCheckpoint{}, nil
-	}
-	status := cardStatusDone
-	switch state {
-	case platform.StreamTerminalCompleted:
-	case platform.StreamTerminalFailed:
-		status = cardStatusError
-	case platform.StreamTerminalStopped:
-		status = cardStatusStopped
-	default:
-		s.mu.Unlock()
-		return platform.TerminalCheckpoint{}, fmt.Errorf("unsupported stream terminal state %q", state)
-	}
-	s.closed = true
-	s.cancelPendingUpdate()
-	s.cancelPendingPresentation()
-	s.mu.Unlock()
-	op, err := s.prepareTerminalUpdate(status, finalContent)
+		return nil
+	})
 	if err != nil {
 		return platform.TerminalCheckpoint{}, err
 	}
-	payload, err := json.Marshal(op)
-	if err != nil {
-		return platform.TerminalCheckpoint{}, err
+	if resultErr != nil {
+		return platform.TerminalCheckpoint{}, resultErr
 	}
-	checkpoint := platform.TerminalCheckpoint{Kind: feishuTerminalCheckpointKind, Payload: payload}
-	s.mu.Lock()
-	s.terminal = &checkpoint
-	s.mu.Unlock()
 	return checkpoint, nil
 }
 

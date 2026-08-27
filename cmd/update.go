@@ -22,7 +22,7 @@ var updateSourceFlag string
 
 func init() {
 	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后协调重启 WeClaw 与受管 Codex Host")
-	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "即使有运行中任务也强制重启")
+	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "中断本地任务，关闭 Codex App，并强制停止当前用户的 Codex Host")
 	updateCmd.Flags().StringVar(&updateSourceFlag, "source", "", "更新来源：auto、github 或 gitee（默认读取配置）")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -226,7 +226,9 @@ func defaultUpdateCompletionOps() updateCompletionOps {
 		prepare: func(ctx context.Context) (preparedStart, error) {
 			return prepareConfiguredStart(ctx, runBackgroundStart)
 		},
-		ensureSafe:     beginRestartDrainWithConfig,
+		ensureSafe: func(ctx context.Context, force bool, cfg *config.Config) error {
+			return beginRestartDrainWithConfigOptions(ctx, force, false, cfg)
+		},
 		running:        weclawIsRunningForRestart,
 		stop:           stopAllWeclaw,
 		isSystemd:      isSystemdManagedRuntime,

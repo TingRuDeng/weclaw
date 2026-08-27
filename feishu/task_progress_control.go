@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 
@@ -18,19 +19,34 @@ func (a *Adapter) handleTaskProgressControl(ctx context.Context, action parsedCa
 	if a.taskCards == nil || a.cardKit == nil || cardID == "" {
 		return taskProgressControlWarning("任务卡状态已失效，请重新打开最新任务卡")
 	}
-	opts, sequence, previousExpanded, ok := a.taskCards.setExpandedWithSequence(cardID, expanded)
-	if !ok {
+	var updateErr error
+	updated := false
+	_ = a.taskCards.withCardOperation(cardID, func() error {
+		opts, sequence, previousExpanded, ok := a.taskCards.setExpandedWithSequence(cardID, expanded)
+		if !ok {
+			updateErr = errTaskProgressCardStateUnavailable
+			return nil
+		}
+		cardJSON, err := buildCardV2(opts)
+		if err != nil {
+			a.taskCards.restoreExpandedIfSequence(cardID, sequence, previousExpanded)
+			updateErr = err
+			log.Printf("[feishu] failed to build task progress visibility update: expanded=%t err=%v", expanded, err)
+			return nil
+		}
+		if err := a.cardKit.UpdateCard(ctx, cardID, cardJSON, sequence); err != nil {
+			a.taskCards.restoreExpandedIfSequence(cardID, sequence, previousExpanded)
+			updateErr = err
+			log.Printf("[feishu] failed to update task progress visibility: card=%q expanded=%t err=%v", cardID, expanded, err)
+			return nil
+		}
+		updated = true
+		return nil
+	})
+	if updateErr == errTaskProgressCardStateUnavailable {
 		return taskProgressControlWarning("任务卡状态已失效，请重新打开最新任务卡")
 	}
-	cardJSON, err := buildCardV2(opts)
-	if err != nil {
-		a.taskCards.restoreExpandedIfSequence(cardID, sequence, previousExpanded)
-		log.Printf("[feishu] failed to build task progress visibility update: expanded=%t err=%v", expanded, err)
-		return taskProgressControlWarning("更新完整进度显示失败，请重试")
-	}
-	if err := a.cardKit.UpdateCard(ctx, cardID, cardJSON, sequence); err != nil {
-		a.taskCards.restoreExpandedIfSequence(cardID, sequence, previousExpanded)
-		log.Printf("[feishu] failed to update task progress visibility: card=%q expanded=%t err=%v", cardID, expanded, err)
+	if !updated {
 		return taskProgressControlWarning("更新完整进度显示失败，请重试")
 	}
 	a.taskCards.notifyDurableReferenceChange(cardID)
@@ -42,6 +58,8 @@ func (a *Adapter) handleTaskProgressControl(ctx context.Context, action parsedCa
 		Toast: &callback.Toast{Type: "success", Content: toast},
 	}
 }
+
+var errTaskProgressCardStateUnavailable = errors.New("task progress card state unavailable")
 
 func taskProgressControlWarning(content string) *callback.CardActionTriggerResponse {
 	return &callback.CardActionTriggerResponse{

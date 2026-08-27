@@ -291,6 +291,15 @@ func codexPrivateAppServerCommand(command string) bool {
 		if index+1 < len(fields) && (fields[index+1] == "daemon" || fields[index+1] == "proxy") {
 			return false
 		}
+		// Codex App starts a short-lived private app-server for Code Mode. It
+		// carries the features.code_mode_host override and is an MCP/tooling
+		// helper, not the App's conversation Host. The main App server may
+		// still be connected to the verified official daemon at the same time.
+		for _, option := range fields[:index] {
+			if option == "features.code_mode_host=true" {
+				return false
+			}
+		}
 		return true
 	}
 	return false

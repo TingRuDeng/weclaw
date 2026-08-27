@@ -21,6 +21,8 @@ type Replier struct {
 	openID       string
 	replyToID    string
 	taskCards    *taskCardRegistry
+	cardOpsMu    sync.Mutex
+	cardOps      *cardKitOperationCoordinator
 	taskCardMu   sync.RWMutex
 	taskCardID   string
 	approvalMu   sync.Mutex
@@ -35,7 +37,7 @@ func NewReplier(sender messageSender, openID string, cardKitClients ...cardKitCl
 	if len(cardKitClients) > 0 {
 		cardKit = cardKitClients[0]
 	}
-	return &Replier{sender: sender, cardKit: cardKit, openID: openID}
+	return &Replier{sender: sender, cardKit: cardKit, openID: openID, cardOps: newCardKitOperationCoordinator()}
 }
 
 // NewReplierForMessage 创建会回复到原飞书消息 / 话题的回复器。
@@ -46,7 +48,26 @@ func NewReplierForMessage(sender messageSender, openID string, replyToID string,
 }
 
 func newReplierWithTaskCards(sender messageSender, openID string, cardKit cardKitClient, cards *taskCardRegistry) *Replier {
-	return &Replier{sender: sender, cardKit: cardKit, openID: openID, taskCards: cards}
+	return &Replier{sender: sender, cardKit: cardKit, openID: openID, taskCards: cards, cardOps: newCardKitOperationCoordinator()}
+}
+
+func (r *Replier) withCardOperation(cardID string, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if r == nil {
+		return fn()
+	}
+	if r.taskCards != nil {
+		return r.taskCards.withCardOperation(cardID, fn)
+	}
+	r.cardOpsMu.Lock()
+	if r.cardOps == nil {
+		r.cardOps = newCardKitOperationCoordinator()
+	}
+	ops := r.cardOps
+	r.cardOpsMu.Unlock()
+	return ops.with(cardID, fn)
 }
 
 func (r *Replier) withDeliveryAccount(accountID string) *Replier {
@@ -152,32 +173,32 @@ func (r *Replier) DeliveryRoute() platform.DeliveryRoute {
 
 // DeliverTerminal 重放已经持久化的 CardKit 终态操作。
 func (r *Replier) DeliverTerminal(ctx context.Context, checkpoint platform.TerminalCheckpoint) error {
-	if err := deliverFeishuTerminalCheckpoint(ctx, r.cardKit, checkpoint); err != nil {
-		return err
-	}
-	if r.taskCards == nil {
-		return nil
-	}
 	var op feishuStreamTerminalOp
-	if json.Unmarshal(checkpoint.Payload, &op) == nil && op.TaskCard != nil {
-		r.taskCards.recordWithSequence(op.CardID, op.TaskCard.cardOptions(op.CardID), op.UpdateSeq)
-	}
-	return nil
+	_ = json.Unmarshal(checkpoint.Payload, &op)
+	return r.withCardOperation(op.CardID, func() error {
+		if err := deliverFeishuTerminalCheckpoint(ctx, r.cardKit, checkpoint); err != nil {
+			return err
+		}
+		if r.taskCards != nil && op.TaskCard != nil {
+			r.taskCards.recordWithSequence(op.CardID, op.TaskCard.cardOptions(op.CardID), op.UpdateSeq)
+		}
+		return nil
+	})
 }
 
 // DeliverSupersede 重放已经持久化的 CardKit 旧卡收敛操作。
 func (r *Replier) DeliverSupersede(ctx context.Context, checkpoint platform.SupersedeCheckpoint) error {
-	if err := deliverFeishuSupersedeCheckpoint(ctx, r.cardKit, checkpoint); err != nil {
-		return err
-	}
-	if r.taskCards == nil {
-		return nil
-	}
 	var op feishuStreamTerminalOp
-	if json.Unmarshal(checkpoint.Payload, &op) == nil && op.TaskCard != nil {
-		r.taskCards.recordWithSequence(op.CardID, op.TaskCard.cardOptions(op.CardID), op.UpdateSeq)
-	}
-	return nil
+	_ = json.Unmarshal(checkpoint.Payload, &op)
+	return r.withCardOperation(op.CardID, func() error {
+		if err := deliverFeishuSupersedeCheckpoint(ctx, r.cardKit, checkpoint); err != nil {
+			return err
+		}
+		if r.taskCards != nil && op.TaskCard != nil {
+			r.taskCards.recordWithSequence(op.CardID, op.TaskCard.cardOptions(op.CardID), op.UpdateSeq)
+		}
+		return nil
+	})
 }
 
 // SendImage 上传并发送本地图片。
@@ -274,22 +295,37 @@ func (r *Replier) askApprovalPanel(ctx context.Context, req approvalPanelRequest
 	if !ok || r.taskCards == nil {
 		return false, nil
 	}
-	snapshot, ok := r.taskCards.upsertApprovalPanelItem(req.TaskCard, item)
-	if !ok {
-		return false, nil
-	}
-	cardJSON, err := buildApprovalPanelCardJSON(snapshot)
-	if err != nil {
+	var handled bool
+	var resultErr error
+	if err := r.withCardOperation(req.TaskCard, func() error {
+		snapshot, ok := r.taskCards.upsertApprovalPanelItem(req.TaskCard, item)
+		if !ok {
+			return nil
+		}
+		cardJSON, err := buildApprovalPanelCardJSON(snapshot)
+		if err != nil {
+			resultErr = err
+			return nil
+		}
+		if snapshot.CardID == "" {
+			handled, resultErr = r.createApprovalPanel(ctx, req.TaskCard, targetOpenID, cardJSON)
+			return nil
+		}
+		if err := r.withCardOperation(snapshot.CardID, func() error {
+			return r.cardKit.UpdateCard(ctx, snapshot.CardID, cardJSON, snapshot.Seq)
+		}); err != nil {
+			r.taskCards.removeApprovalPanelItem(req.TaskCard, item.Key)
+			return nil
+		}
+		handled = true
+		return nil
+	}); err != nil {
 		return false, err
 	}
-	if snapshot.CardID == "" {
-		return r.createApprovalPanel(ctx, req.TaskCard, targetOpenID, cardJSON)
+	if resultErr != nil {
+		return false, resultErr
 	}
-	if err := r.cardKit.UpdateCard(ctx, snapshot.CardID, cardJSON, snapshot.Seq); err != nil {
-		r.taskCards.removeApprovalPanelItem(req.TaskCard, item.Key)
-		return false, nil
-	}
-	return true, nil
+	return handled, nil
 }
 
 func (r *Replier) createApprovalPanel(ctx context.Context, taskCardID string, targetOpenID string, cardJSON string) (bool, error) {

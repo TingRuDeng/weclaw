@@ -31,6 +31,7 @@ type runtimeStatusResponse struct {
 
 type runtimeDrainResponse struct {
 	Status         string `json:"status"`
+	Code           string `json:"code"`
 	Draining       bool   `json:"draining"`
 	ActiveTasks    int    `json:"active_tasks"`
 	RemainingTasks int    `json:"remaining_tasks"`
@@ -81,13 +82,23 @@ func ensureRestartSafe(ctx context.Context, opts restartSafetyOptions) error {
 }
 
 func beginRestartDrainWithConfig(ctx context.Context, force bool, cfg *config.Config) error {
-	return beginRestartDrainWithConfigOptions(ctx, force, false, cfg)
+	return beginRestartDrainWithControl(ctx, force, false, false, cfg)
 }
 
 func beginRestartDrainWithConfigOptions(
 	ctx context.Context,
 	force bool,
 	stopConflictingCodexHosts bool,
+	cfg *config.Config,
+) error {
+	return beginRestartDrainWithControl(ctx, force, stopConflictingCodexHosts, force, cfg)
+}
+
+func beginRestartDrainWithControl(
+	ctx context.Context,
+	forceDrain bool,
+	stopConflictingCodexHosts bool,
+	forceTerminateCodex bool,
 	cfg *config.Config,
 ) error {
 	state, err := readRuntimeState()
@@ -98,14 +109,16 @@ func beginRestartDrainWithConfigOptions(
 	if err != nil {
 		return fmt.Errorf("无法连接安全重启排空入口: %w", err)
 	}
-	if force || stopConflictingCodexHosts {
+	if forceDrain || stopConflictingCodexHosts || forceTerminateCodex {
 		parsed, err := url.Parse(endpoint)
 		if err != nil {
 			return fmt.Errorf("解析安全重启排空入口: %w", err)
 		}
 		query := parsed.Query()
-		if force {
+		if forceTerminateCodex {
 			query.Set("force", "true")
+		} else if forceDrain {
+			query.Set("force_drain", "true")
 		}
 		if stopConflictingCodexHosts {
 			query.Set("stop_conflicting_codex_hosts", "true")
@@ -143,6 +156,9 @@ func beginRestartDrainWithConfigOptions(
 	}
 	if resp.StatusCode != http.StatusOK {
 		if message := strings.TrimSpace(result.Message); message != "" {
+			if result.Code == "runtime_restart_host_outcome_unknown" {
+				return fmt.Errorf("%w: %s", agent.ErrCodexRestartUnsafe, message)
+			}
 			return fmt.Errorf("%s", message)
 		}
 		return fmt.Errorf("安全重启排空入口返回异常状态 %d", resp.StatusCode)
@@ -181,7 +197,7 @@ func stopLegacyRuntime(ctx context.Context, cfg *config.Config, stop func() erro
 		return fmt.Errorf("旧版服务迁移停止无法取得 Codex frontend 租约: %w", err)
 	}
 	defer lease.Close()
-	if err := ensureOfflineCodexRestartSafeWithOptions(cfg, false); err != nil {
+	if err := ensureOfflineCodexRestartSafeWithOptions(cfg, false, false); err != nil {
 		return fmt.Errorf("旧版服务迁移停止前 Codex App 检查失败: %w", err)
 	}
 	if err := beginLegacyRuntimeDrain(ctx, cfg); err != nil {

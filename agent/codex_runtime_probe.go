@@ -80,12 +80,14 @@ func (a *ACPAgent) CurrentCodexRuntime(req CodexRuntimeRequest) (CodexThreadBind
 	return binding, nil
 }
 
-// ReconcileCodexObservedTurn 收敛显式接管后正在观察的 Desktop turn 状态。
+// ReconcileCodexObservedTurn 收敛显式接管后正在观察的 Desktop 或共享 daemon turn 状态。
 func (a *ACPAgent) ReconcileCodexObservedTurn(_ context.Context, req CodexRuntimeRequest, state CodexThreadState) (CodexThreadBinding, error) {
 	if err := a.validateCodexRuntimeSupport(req); err != nil {
 		return CodexThreadBinding{}, err
 	}
-	if a.desktopProbe == nil {
+	officialSharedHost := a.usesOfficialCodexDaemon() &&
+		a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw && !a.codexDesktopHostSelection
+	if officialSharedHost {
 		binding, retained, err := a.codexOwners.reconcileUncertainSharedHostLease(req, state)
 		if err != nil {
 			return binding, err
@@ -93,6 +95,9 @@ func (a *ACPAgent) ReconcileCodexObservedTurn(_ context.Context, req CodexRuntim
 		if retained {
 			return binding, nil
 		}
+		return a.codexOwners.reconcileSharedHostObservedTurn(req, state)
+	}
+	if a.desktopProbe == nil {
 		return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
 	}
 	return a.codexOwners.reconcileObservedTurn(req, state)

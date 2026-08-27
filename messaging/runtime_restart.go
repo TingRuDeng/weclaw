@@ -41,18 +41,26 @@ type codexRestartOptionsController interface {
 	) (agent.CodexRestartSnapshot, error)
 }
 
+type codexForceRestartController interface {
+	ForceCompleteCodexRestart(
+		context.Context,
+		func(agent.CodexRestartSnapshot) error,
+	) (agent.CodexRestartSnapshot, error)
+}
+
 // PrepareRuntimeRestart atomically closes message admission, drains tasks and
 // stops the verified Codex Host before the outer CLI replaces the service.
 func (h *Handler) PrepareRuntimeRestart(ctx context.Context, force bool) (RuntimeRestartResult, error) {
-	return h.PrepareRuntimeRestartWithOptions(ctx, force, false)
+	return h.PrepareRuntimeRestartWithOptions(ctx, force, false, false)
 }
 
 // PrepareRuntimeRestartWithOptions carries explicit external-Host stop
 // authority from the loopback restart endpoint into the Codex transaction.
 func (h *Handler) PrepareRuntimeRestartWithOptions(
 	ctx context.Context,
-	force bool,
+	forceDrain bool,
 	stopConflictingCodexHosts bool,
+	forceTerminateCodex bool,
 ) (RuntimeRestartResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -60,6 +68,15 @@ func (h *Handler) PrepareRuntimeRestartWithOptions(
 	h.runtimeRestartMu.Lock()
 	defer h.runtimeRestartMu.Unlock()
 	if h.runtimeRestartPrepared {
+		if h.runtimeRestartUnsafe {
+			if forceTerminateCodex {
+				return h.forceCompleteUnsafeRuntimeRestart(ctx)
+			}
+			return h.runtimeRestartResult, fmt.Errorf(
+				"Codex Host 停止结果未知，服务保持不可写；请修复 Host 状态或显式使用 --force 收敛: %w",
+				agent.ErrCodexRestartUnsafe,
+			)
+		}
 		return h.runtimeRestartResult, nil
 	}
 	if h.runtimeRestartLease == nil {
@@ -70,7 +87,7 @@ func (h *Handler) PrepareRuntimeRestartWithOptions(
 		h.runtimeRestartLease = lease
 	}
 
-	drain, err := h.Drain(ctx, force)
+	drain, err := h.Drain(ctx, forceDrain)
 	result := RuntimeRestartResult{ActiveTasks: drain.ActiveTasks, RemainingTasks: drain.RemainingTasks}
 	if err != nil {
 		_ = h.releaseRuntimeRestartLease()
@@ -118,14 +135,20 @@ func (h *Handler) PrepareRuntimeRestartWithOptions(
 			snapshot, prepareErr = optionsController.PrepareCodexRestartWithOptions(
 				ctx,
 				persistIntent,
-				agent.CodexRestartOptions{StopConflictingCodexHosts: stopConflictingCodexHosts},
+				agent.CodexRestartOptions{
+					StopConflictingCodexHosts: stopConflictingCodexHosts,
+					ForceTerminateCodex:       forceTerminateCodex,
+				},
 			)
+		} else if stopConflictingCodexHosts || forceTerminateCodex {
+			prepareErr = fmt.Errorf("当前 Codex Agent 不支持显式 Host 终止授权")
 		} else {
 			snapshot, prepareErr = controller.PrepareCodexRestart(ctx, persistIntent)
 		}
 		if prepareErr != nil {
 			if errors.Is(prepareErr, agent.ErrCodexRestartUnsafe) {
 				h.runtimeRestartPrepared = true
+				h.runtimeRestartUnsafe = true
 				h.runtimeRestartController = controller
 				h.runtimeRestartResult = result
 				return result, fmt.Errorf("Codex Host 停止结果未知，服务保持不可写: %w", prepareErr)
@@ -168,8 +191,44 @@ func (h *Handler) PrepareRuntimeRestartWithOptions(
 		return result, fmt.Errorf("记录重启事务: %w", err)
 	}
 	h.runtimeRestartPrepared = true
+	h.runtimeRestartUnsafe = false
 	h.runtimeRestartController = controller
 	h.runtimeRestartResult = result
+	return result, nil
+}
+
+func (h *Handler) forceCompleteUnsafeRuntimeRestart(ctx context.Context) (RuntimeRestartResult, error) {
+	controller, ok := h.runtimeRestartController.(codexForceRestartController)
+	if !ok {
+		return h.runtimeRestartResult, fmt.Errorf(
+			"%w: 当前 Codex Agent 不支持从未知停止结果升级为强制终止",
+			ErrRuntimeRestartBlocked,
+		)
+	}
+	result := h.runtimeRestartResult
+	persistIntent := func(snapshot agent.CodexRestartSnapshot) error {
+		state := runtimeRestartState{
+			Version: runtimeRestartStateVersion, PreparedAt: time.Now().UTC(),
+			Codex: true, CodexHost: snapshot,
+		}
+		if err := h.writeRuntimeRestartState(state); err != nil {
+			return err
+		}
+		result.Codex = true
+		result.CodexHost = snapshot
+		return nil
+	}
+	snapshot, err := controller.ForceCompleteCodexRestart(ctx, persistIntent)
+	if err != nil {
+		return h.runtimeRestartResult, errors.Join(
+			agent.ErrCodexRestartUnsafe,
+			fmt.Errorf("Codex Host 停止结果仍无法确认，服务保持不可写: %w", err),
+		)
+	}
+	result.Codex = true
+	result.CodexHost = snapshot
+	h.runtimeRestartResult = result
+	h.runtimeRestartUnsafe = false
 	return result, nil
 }
 
@@ -191,6 +250,7 @@ func (h *Handler) CancelRuntimeRestart(ctx context.Context) error {
 	}
 	leaseErr := h.releaseRuntimeRestartLease()
 	h.runtimeRestartPrepared = false
+	h.runtimeRestartUnsafe = false
 	h.runtimeRestartController = nil
 	h.runtimeRestartResult = RuntimeRestartResult{}
 	h.CancelDrain()

@@ -24,8 +24,8 @@ func TestRestartRegistersIndependentConflictingCodexHostStopFlag(t *testing.T) {
 	if force == nil {
 		t.Fatal("restart 缺少 --force")
 	}
-	if !strings.Contains(force.Usage, "不绕过 Codex Host thread 门禁") {
-		t.Fatalf("force usage=%q, must explain Codex Host thread boundary", force.Usage)
+	if !strings.Contains(force.Usage, "关闭 Codex App") || !strings.Contains(force.Usage, "Codex Host") {
+		t.Fatalf("force usage=%q, must explain Codex termination authority", force.Usage)
 	}
 }
 
@@ -57,10 +57,32 @@ func TestRunRestartWithOptionsPropagatesOfflineConflictingHostAuthorization(t *t
 			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
 		},
 		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
-		offlineSafeWithOptions: func(_ *config.Config, stopConflicts bool) error {
+		offlineSafeWithOptions: func(_ *config.Config, force bool, stopConflicts bool) error {
 			called = true
-			if !stopConflicts {
-				t.Fatal("offline stop authorization was not propagated")
+			if force || !stopConflicts {
+				t.Fatalf("force=%v stopConflicts=%v", force, stopConflicts)
+			}
+			return nil
+		},
+		isRunning: func() bool { return false },
+		out:       &bytes.Buffer{},
+	})
+	if err != nil || !called {
+		t.Fatalf("runRestartWithOptions error=%v called=%v", err, called)
+	}
+}
+
+func TestRunRestartWithOptionsPropagatesOfflineForceCodexTermination(t *testing.T) {
+	called := false
+	err := runRestartWithOptions(context.Background(), true, false, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error { return nil }}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error { return nil },
+		offlineSafeWithOptions: func(_ *config.Config, force bool, stopConflicts bool) error {
+			called = true
+			if !force || stopConflicts {
+				t.Fatalf("force=%v stopConflicts=%v", force, stopConflicts)
 			}
 			return nil
 		},
@@ -199,6 +221,59 @@ func TestRunRestartStopsBeforeStartWhenWeclawIsRunning(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "正在停止 WeClaw") {
 		t.Fatalf("output=%q，运行中应提示停止", out.String())
+	}
+}
+
+func TestRunRestartForceDoesNotBypassCodexTerminationFailure(t *testing.T) {
+	wantErr := errors.New("Codex Host 进程身份无法确认")
+	var calls []string
+	err := runRestart(context.Background(), true, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			calls = append(calls, "prepare")
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error {
+				calls = append(calls, "start")
+				return nil
+			}}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			calls = append(calls, "safe")
+			return wantErr
+		},
+		cancelDrain: func(context.Context, *config.Config) error {
+			calls = append(calls, "cancel")
+			return nil
+		},
+		isRunning: func() bool { calls = append(calls, "running"); return true },
+		stop:      func() error { calls = append(calls, "stop"); return nil },
+		out:       &bytes.Buffer{},
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("runRestart force error=%v, want termination failure", err)
+	}
+	wantCalls := "prepare,safe,cancel"
+	if got := strings.Join(calls, ","); got != wantCalls {
+		t.Fatalf("calls=%s, want %s", got, wantCalls)
+	}
+}
+
+func TestRunRestartForceDoesNotContinueAfterUnknownHostStopOutcome(t *testing.T) {
+	stopped := false
+	err := runRestart(context.Background(), true, restartOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			return preparedStart{cfg: config.DefaultConfig()}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			return agent.ErrCodexRestartUnsafe
+		},
+		cancelDrain: func(context.Context, *config.Config) error { return nil },
+		isRunning:   func() bool { return true },
+		stop:        func() error { stopped = true; return nil },
+		out:         &bytes.Buffer{},
+	})
+
+	if !errors.Is(err, agent.ErrCodexRestartUnsafe) || stopped {
+		t.Fatalf("error=%v stopped=%t, unknown mutation outcome must remain blocked", err, stopped)
 	}
 }
 

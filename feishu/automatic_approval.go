@@ -127,53 +127,87 @@ func (r *Replier) recordAutomaticApprovalOnTaskCard(ctx context.Context, action 
 	if r.taskCards == nil || strings.TrimSpace(action.TaskCard) == "" {
 		return false, nil
 	}
-	opts, sequence, ok := r.taskCards.addApprovalWithSequence(action.TaskCard, action)
-	if !ok {
-		return false, nil
+	var updated bool
+	var resultErr error
+	if err := r.withCardOperation(action.TaskCard, func() error {
+		opts, sequence, ok := r.taskCards.addApprovalWithSequence(action.TaskCard, action)
+		if !ok {
+			return nil
+		}
+		updated = true
+		cardJSON, err := buildCardV2(opts)
+		if err != nil {
+			resultErr = fmt.Errorf("build automatic approval task card: %w", err)
+			return nil
+		}
+		if err := r.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, sequence); err != nil {
+			resultErr = fmt.Errorf("update automatic approval task card: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return false, err
 	}
-	cardJSON, err := buildCardV2(opts)
-	if err != nil {
-		return true, fmt.Errorf("build automatic approval task card: %w", err)
-	}
-	if err := r.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, sequence); err != nil {
-		return true, fmt.Errorf("update automatic approval task card: %w", err)
-	}
-	return true, nil
+	return updated, resultErr
 }
 
 func (r *Replier) recordAutomaticApprovalOnPanel(ctx context.Context, action parsedCardAction) (bool, error) {
-	if r.taskCards == nil {
+	if r.taskCards == nil || strings.TrimSpace(action.TaskCard) == "" {
 		return false, nil
 	}
-	snapshot, ok := r.taskCards.completeApprovalPanelItem(action)
-	if !ok || strings.TrimSpace(snapshot.CardID) == "" {
-		return false, nil
+	var updated bool
+	var resultErr error
+	if err := r.withCardOperation(action.TaskCard, func() error {
+		snapshot, ok := r.taskCards.completeApprovalPanelItem(action)
+		if !ok || strings.TrimSpace(snapshot.CardID) == "" {
+			return nil
+		}
+		updated = true
+		cardJSON, err := buildApprovalPanelCardJSON(snapshot)
+		if err != nil {
+			resultErr = fmt.Errorf("build automatic approval panel card: %w", err)
+			return nil
+		}
+		if err := r.withCardOperation(snapshot.CardID, func() error {
+			return r.cardKit.UpdateCard(ctx, snapshot.CardID, cardJSON, snapshot.Seq)
+		}); err != nil {
+			resultErr = fmt.Errorf("update automatic approval panel card: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return false, err
 	}
-	cardJSON, err := buildApprovalPanelCardJSON(snapshot)
-	if err != nil {
-		return true, fmt.Errorf("build automatic approval panel card: %w", err)
-	}
-	if err := r.cardKit.UpdateCard(ctx, snapshot.CardID, cardJSON, snapshot.Seq); err != nil {
-		return true, fmt.Errorf("update automatic approval panel card: %w", err)
-	}
-	return true, nil
+	return updated, resultErr
 }
 
 func (r *Replier) recordAutomaticApprovalOnStandaloneCard(ctx context.Context, action parsedCardAction) (bool, error) {
 	key := strings.TrimSpace(action.Approval)
-	card, ok := r.nextStandaloneApprovalCard(key)
-	if !ok {
+	cardID := r.standaloneApprovalCardID(key)
+	if cardID == "" {
 		return false, nil
 	}
-	cardJSON, err := json.Marshal(buildChoiceHandledCard(action).Data)
-	if err != nil {
-		return true, fmt.Errorf("marshal automatic approval card: %w", err)
+	var updated bool
+	var resultErr error
+	if err := r.withCardOperation(cardID, func() error {
+		card, ok := r.nextStandaloneApprovalCard(key)
+		if !ok {
+			return nil
+		}
+		updated = true
+		cardJSON, err := json.Marshal(buildChoiceHandledCard(action).Data)
+		if err != nil {
+			resultErr = fmt.Errorf("marshal automatic approval card: %w", err)
+			return nil
+		}
+		if err := r.cardKit.UpdateCard(ctx, card.cardID, string(cardJSON), card.sequence); err != nil {
+			resultErr = fmt.Errorf("update automatic approval card: %w", err)
+			return nil
+		}
+		r.forgetStandaloneApprovalCard(key, card.cardID)
+		return nil
+	}); err != nil {
+		return false, err
 	}
-	if err := r.cardKit.UpdateCard(ctx, card.cardID, string(cardJSON), card.sequence); err != nil {
-		return true, fmt.Errorf("update automatic approval card: %w", err)
-	}
-	r.forgetStandaloneApprovalCard(key, card.cardID)
-	return true, nil
+	return updated, resultErr
 }
 
 func (r *Replier) rememberStandaloneApprovalCard(prompt string, choices []platform.Choice, conv string, cardID string) {
@@ -212,6 +246,16 @@ func (r *Replier) nextStandaloneApprovalCard(key string) (standaloneApprovalCard
 	card.sequence++
 	r.approvalCard[key] = card
 	return card, true
+}
+
+func (r *Replier) standaloneApprovalCardID(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	r.approvalMu.Lock()
+	defer r.approvalMu.Unlock()
+	return strings.TrimSpace(r.approvalCard[key].cardID)
 }
 
 func (r *Replier) forgetStandaloneApprovalCard(key string, cardID string) {

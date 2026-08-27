@@ -195,7 +195,11 @@ func (a *ACPAgent) dispatchCodexProgressNotification(msg rpcResponse) bool {
 	switch msg.Method {
 	case "item/autoApprovalReview/started", "item/autoApprovalReview/completed", "guardianWarning",
 		"item/commandExecution/outputDelta", "item/commandExecution/terminalInteraction",
-		"item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated":
+		"item/fileChange/outputDelta", "item/fileChange/patchUpdated", "turn/diff/updated",
+		// Codex 0.149+ emits reasoning summaries as internal projection events.
+		// They are useful to the App UI but must not become user-visible progress
+		// or trigger the legacy ACP unhandled-method warning.
+		"item/reasoning/summaryPartAdded", "item/reasoning/summaryTextDelta":
 	default:
 		return false
 	}

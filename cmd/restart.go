@@ -23,7 +23,7 @@ func init() {
 		&restartForceFlag,
 		"force",
 		false,
-		"中断 WeClaw 自身运行中任务；不绕过 Codex Host thread 门禁",
+		"中断本地任务，关闭 Codex App，并强制停止当前用户的 Codex Host",
 	)
 	restartCmd.Flags().BoolVar(
 		&restartStopConflictingCodexHostsFlag,
@@ -53,7 +53,7 @@ type restartOps struct {
 	ensureSafe             func(context.Context, bool, *config.Config) error
 	ensureSafeWithOptions  func(context.Context, bool, bool, *config.Config) error
 	offlineSafe            func(*config.Config) error
-	offlineSafeWithOptions func(*config.Config, bool) error
+	offlineSafeWithOptions func(*config.Config, bool, bool) error
 	isRunning              func() bool
 	stop                   func() error
 	isSystemd              func() bool
@@ -118,7 +118,7 @@ func runRestartWithOptions(ctx context.Context, force bool, stopConflictingCodex
 		offlineSafe := ops.offlineSafe
 		if ops.offlineSafeWithOptions != nil {
 			offlineSafe = func(cfg *config.Config) error {
-				return ops.offlineSafeWithOptions(cfg, stopConflictingCodexHosts)
+				return ops.offlineSafeWithOptions(cfg, force, stopConflictingCodexHosts)
 			}
 		}
 		if offlineSafe != nil {
@@ -168,10 +168,10 @@ func compensateRestartDrain(
 }
 
 func ensureOfflineCodexRestartSafe(cfg *config.Config) error {
-	return ensureOfflineCodexRestartSafeWithOptions(cfg, false)
+	return ensureOfflineCodexRestartSafeWithOptions(cfg, false, false)
 }
 
-func ensureOfflineCodexRestartSafeWithOptions(cfg *config.Config, stopConflictingCodexHosts bool) error {
+func ensureOfflineCodexRestartSafeWithOptions(cfg *config.Config, force bool, stopConflictingCodexHosts bool) error {
 	configured := false
 	var codexConfig config.AgentConfig
 	for _, candidate := range cfg.Agents {
@@ -184,9 +184,15 @@ func ensureOfflineCodexRestartSafeWithOptions(cfg *config.Config, stopConflictin
 	if !configured {
 		return nil
 	}
-	if stopConflictingCodexHosts {
+	if force || stopConflictingCodexHosts {
 		codexAgent := agent.NewACPAgent(acpAgentConfigFromConfig("codex", codexConfig))
-		if _, err := codexAgent.StopConflictingCodexHosts(context.Background()); err != nil {
+		var err error
+		if force {
+			_, err = codexAgent.ForceStopCodexRuntime(context.Background())
+		} else {
+			_, err = codexAgent.StopConflictingCodexHosts(context.Background())
+		}
+		if err != nil {
 			return err
 		}
 		return nil

@@ -960,3 +960,11 @@
 - 反例：只硬链接单个 `codex` 到临时 `CODEX_HOME`，继续继承真实 `HOME`/PATH，并只等待主 daemon 停止；官方 updater 会把临时包写入用户全局入口，随后以 `PPID=1` 留在后台，Codex App 可能误用这套 runtime 并失去终端能力。
 - 正确做法：拒绝含 daemon/control 状态、日常入口引用或残留进程的 prepared home；只复制 manifest 验证通过且软链接不越界的完整 release 树。清理只能对 PID 记录、UID、启动时间、独立 PGID 和精确 standalone 入口全部匹配的测试 updater 发送 `SIGTERM`，入口只接受 native 或验证通过的 Node wrapper 形态；任何不确定结果保留 runtime 并失败关闭，不恢复入口、不按名称结束 App 或未知进程。生产服务启动或 `weclaw codex cli` 若看到 `weclaw-codex-live*` 命令、`PATH` 或 `CODEX_HOME`，也必须在副作用前拒绝。
 - 来源：2026-08-17 真实协议门禁遗留 `/private/tmp/weclaw-codex-live.*` updater 并把 `~/.local/bin/codex` 指向临时包，用户结束全部 Codex 进程后 Codex App 终端能力才恢复。
+
+## 2026-08-27 `--force` 是本地 Codex 终止授权
+
+- 触发条件：操作者明确执行 `restart --force`、`stop --force` 或 `update --restart --force`，意图是不重启操作系统就收敛 WeClaw、Codex App 和当前用户的 Codex Host。
+- 规则：`--force` 表示用户接受正在执行的本地任务被中断；它不得降级为“只操作 WeClaw，保留 Host”。强制路径先退出 App，再对实时快照中当前用户的实际 Codex `app-server` 进程组执行终止，不要求 metadata/lifecycle 管理身份完整。
+- 安全边界：管理身份不完整不等于可以盲杀。首次发信号前必须重读进程表和原始 argv，复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。未知 Host 还必须由 app-server 领衔独立进程组，不能仅根据持久化旧 PID、进程名或一个共享 PGID 停止程序。
+- 失败边界：进程表/参数不可读、身份漂移、受控 CLI 租约存在或 Host 停止结果未知时，整个操作仍失败关闭；命令层必须补偿并返回错误，不得启动可能产生第二 Host 的新服务。服务已因未知结果保持不可写时，后续显式 `--force` 必须重新扫描并尝试强制收敛，不能直接复用旧事务成功。
+- 来源：用户明确说明“强制重启”的前提就是知道并接受正在执行的本地任务被中断。

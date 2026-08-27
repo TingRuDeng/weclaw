@@ -148,6 +148,8 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 		}
 	} else if result.handoffReleaseRetained {
 		lines = append(lines, "旧会话: 仍被其他窗口选中，未回交给 Codex App。")
+	} else if result.handoffReleaseRetainedByTask {
+		lines = append(lines, "旧会话: 仍有运行中任务，暂不回交给 Codex App。")
 	}
 	if result.runtimeErr != nil {
 		log.Printf("[codex-session-bind] 绑定已提交但共享 host 暂不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)

@@ -78,9 +78,9 @@ macOS 默认 `codex_host_mode: auto` 在构造 Agent 时固定 Host 拓扑：固
 
 需要把多前端共享作为强制能力时，在原生 Codex Agent 上设置 `"codex_multi_frontend": true`。该开关把有效 Host 模式固定为 `daemon`，同时启用 macOS App daemon 复用；official standalone 缺失时，`weclaw doctor` 报阻断错误，`weclaw start` 也会在平台启动前失败并提示 `weclaw doctor --fix --components codex`，不会回退 managed。文件存在后，启动流程还会在平台注册前同步启动并验证 daemon、App 复用和 Host 身份，任一步失败都不会先开放消息入口。它不能与 `codex_host_mode: managed`、自定义 `app_server_socket`、`run_as_user` 或 `codex_app_reuse_daemon: false` 并用。省略该字段保留旧版 `auto` 行为；显式设为 `false` 时，配置规范化不会再次打开 App daemon 复用。
 
-shared managed Host、official daemon 和受控 `weclaw codex cli` 在启动、接管或协调停止前都会执行一次只读多 Host 预检：普通模式检查当前有效 UID；配置 `run_as_user` 时还检查目标 UID，以及只用于识别 sudo 包装进程的 root UID。macOS 通过 `kern.procargs2`、Linux 通过 `/proc/<pid>/cmdline` 读取候选进程的原始 argv，避免路径空格或参数边界造成误判；随后把 Node 包装进程和原生子进程按 PGID 聚合，并且只放行已由受保护 metadata 或 official lifecycle PID 验证的权威进程组。额外 `codex app-server`、进程表或候选原始参数不可读、权威身份无法确认都会让本次操作失败关闭；错误只显示脱敏分类、PGID 和有界 PID，不输出完整命令。`codex --remote`、帮助、daemon、proxy、schema generation 等 tooling 和近似命令不算 Host。只读预检本身不会停止任何进程；启动后复核若发现竞态，兼容 managed 路径只回收本次明确由 WeClaw 创建的新 Host，绝不会按名称结束既有 Codex App 或未知进程。该检查只证明扫描时点，没有替代跨 socket/CODEX_HOME 的持续全局锁；外部程序在扫描后另启 Host 仍会在下一次门禁被发现。
+除显式 `--force` 外，shared managed Host、official daemon 和受控 `weclaw codex cli` 在启动、接管或协调停止前都会执行只读多 Host 预检。macOS 通过 `kern.procargs2`、Linux 通过 `/proc/<pid>/cmdline` 读取原始 argv，再按 PGID 聚合 Node 包装进程和原生子进程；额外 Host、进程表/原始参数不可读或权威身份无法确认都失败关闭。`codex --remote`、帮助、daemon、proxy 和 schema generation 不算 Host。只读预检不停止任何进程；强制路径的额外终止权限和身份复核见“运行与更新”。任何路径都不按名称结束既有 App 或未知进程。该检查只证明扫描时点，不是跨 socket/CODEX_HOME 的持续全局锁。
 
-这里的“Codex App 与 daemon 同时存在”以 App 已经连接同一个官方 daemon 为前提。原生 Codex shared app-server 配置会默认写入 `codex_app_reuse_daemon: true`：WeClaw 先验证官方 daemon、固定 control socket 与 App 使用的 `CODEX_HOME` 完全一致，再通过当前 macOS 用户的 launchd 环境为后续启动的 App 启用官方 local-daemon 入口；不会修改 App 包或签名。已经运行且仍带私有 `app-server` 子进程的 App 不会被强退，Codex Agent 会失败关闭并要求完整退出、重新打开 App。首次升级到此版本时因此需要重启 App 一次；如果重启后仍回退私有 Host，应同步更新 Codex App 与 standalone CLI，并清除冲突的 `CODEX_CLI_PATH` 或 `CODEX_APP_SERVER_FORCE_CLI=1` 启动覆盖。连接 daemon 后，App 展示的是该 daemon 的会话目录；若 WeClaw 配置了独立 `CODEX_SQLITE_HOME`，界面目录可能与升级前 App 私有 Host 不同，但原目录不会被删除。显式设为 `false` 会撤销 WeClaw 管理的 launchd 开关，同样只在 App 下次启动后生效。
+这里的“Codex App 与 daemon 同时存在”以 App 已经连接同一个官方 daemon 为前提。原生 Codex shared app-server 配置会默认写入 `codex_app_reuse_daemon: true`：WeClaw 先验证官方 daemon、固定 control socket 与 App 使用的 `CODEX_HOME` 完全一致，再通过当前 macOS 用户的 launchd 环境为后续启动的 App 启用官方 local-daemon 入口；不会修改 App 包或签名。Code Mode 专用且带 `features.code_mode_host=true` 的辅助 `app-server` 不代表 App 的会话 Host，不会单独阻断 daemon 复用。已经运行且仍带私有 `app-server` 子进程的 App 不会被强退，Codex Agent 会失败关闭并要求完整退出、重新打开 App。首次升级到此版本时因此需要重启 App 一次；如果重启后仍回退私有 Host，应同步更新 Codex App 与 standalone CLI，并清除冲突的 `CODEX_CLI_PATH` 或 `CODEX_APP_SERVER_FORCE_CLI=1` 启动覆盖。连接 daemon 后，App 展示的是该 daemon 的会话目录；若 WeClaw 配置了独立 `CODEX_SQLITE_HOME`，界面目录可能与升级前 App 私有 Host 不同，但原目录不会被删除。显式设为 `false` 会撤销 WeClaw 管理的 launchd 开关，同样只在 App 下次启动后生效。
 
 常见且重点支持的协作形态是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”，前提是各端均已连接同一 verified official daemon。飞书绑定空闲 thread 后，App 或 CLI 稍后启动任务会自动开始同步；选择正在运行的会话时，WeClaw 先回填已有的可见自然语言进度，再持续同步后续进度。普通消息携带当前 `turnId` 直接加入 active turn，thread 空闲时才开始下一 turn。完整共享模式也允许 App、CLI 和飞书同时打开同一 thread；上游仍按请求接受顺序处理，WeClaw 不宣称客户端级排他或精确归属。
 
@@ -386,7 +386,7 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - Codex 默认自动管理共享 Unix socket；仅在多进程或 `run_as_user` 部署中配置 `app_server_socket`，其父目录必须归目标用户所有且权限不宽于 `0700`。
 - `codex_multi_frontend: true` 是完整共享的用户意图开关：它强制 official daemon、要求 standalone 已安装并禁止兼容回退；省略时继续使用旧版 `auto` 兼容策略。
 - `codex_host_mode` 支持 `auto`、`daemon`、`managed`。macOS 默认 `auto` 在官方 daemon 已运行或 standalone 可用时直接固定为 `daemon`，不会因 App 已运行而改选 Desktop Host；只有 standalone 不可用时才进入 App 私有 Host 或 `managed` 的兼容路径。显式 `daemon` 在 macOS 保留 Desktop IPC 协调，但不允许切换到 App Host；它不回退，且不能与 `app_server_socket` 或 `run_as_user` 混用。不启用 Desktop 协调的平台同样按“官方 daemon 可用则使用，否则 managed”选择。官方 socket 身份不明、App 私有 IPC 不可达或 Host authority 无法证明时都失败关闭，不静默启动第二个 Host。
-- shared managed Host、official daemon、受控 `weclaw codex cli` 及协调停止在变更 Host 状态前执行受检 UID 范围内的多 Host 只读预检；`run_as_user` 模式会额外覆盖目标 UID 和 sudo wrapper 的 root UID。额外 `app-server`、进程表或候选原始参数不可读时失败关闭，只报告脱敏 PGID/PID，且不按进程名停止既有或未知进程。该检查是时点门禁，不是持续全局锁。
+- shared managed Host、official daemon、受控 `weclaw codex cli` 及协调停止在变更 Host 状态前执行受检 UID 范围内的多 Host 预检；普通模式只读且对额外/不可证明 Host 失败关闭。显式 `--force` 才允许退出 App，并在实时 UID、PGID、启动时间、原始 argv 和命令指纹复核后停止当前用户的 Codex `app-server` 进程组。任何模式都不按名称或旧 PID 停止进程。该检查是时点门禁，不是持续全局锁。
 - 原生 Codex 的 `auto`/`daemon` 配置默认写入 `codex_app_reuse_daemon: true`。该字段只在 macOS 生效，并只管理后续 App 启动使用的 launchd 环境；官方 daemon 尚未验证、App 与 WeClaw 的 `CODEX_HOME`/control socket 不一致、存在强制 CLI 覆盖，或已运行 App 仍持有私有 `app-server` 时都会失败关闭。WeClaw 不会为此退出 App；首次启用后完整重启 App 一次。
 - 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。官方 `daemon` 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
 
@@ -407,9 +407,10 @@ weclaw start                 # 后台启动
 weclaw start --foreground    # 前台调试
 weclaw status
 weclaw restart
-weclaw restart --force       # 只中断 WeClaw 自身运行中任务
+weclaw restart --force       # 中断任务，关闭 App 并强制停止当前用户的 Codex Host
 weclaw restart --stop-conflicting-codex-hosts  # 明确停止已验证的冲突 Codex Host
 weclaw stop
+weclaw stop --force          # 中断任务，关闭 App 并强制停止当前用户的 Codex Host
 weclaw update
 weclaw update --source gitee  # Apple Silicon Mac 或 Debian amd64 在 GitHub 不可达时显式使用 Gitee
 weclaw update --restart
@@ -418,9 +419,13 @@ weclaw version
 
 更新来源支持 `auto`（默认）、`github` 和 `gitee`。Gitee 二进制镜像提供 `darwin/arm64` 与 `linux/amd64`。可用 `--source` 临时指定，在 `~/.weclaw/config.json` 写入 `"update_source": "gitee"` 持久指定，或用 `WECLAW_UPDATE_SOURCE` 覆盖。`auto` 只在 DNS、连接、TLS、超时或 HTTP 5xx 时从 GitHub 切换 Gitee；4xx、版本格式或 SHA-256 异常会直接失败，不通过换源掩盖完整性问题。Gitee 镜像落后时更新器也会拒绝降级。
 
-`weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。支持协调端点的运行中服务，`stop`、`restart` 和 `update --restart` 都通过本机 `/api/runtime/restart/prepare` 使用同一套 Host 安全事务：先持有排他的 Codex frontend 租约，关闭消息准入并排空任务，再确认 Codex App 已完整退出、没有受控 `weclaw codex cli`、writer lease 或活动/未知 thread，最后停止身份验证通过的 official daemon 或 WeClaw-managed Host。普通重启若发现到 shared Host 的客户端连接已断开，会先重新连接已有 socket，并通过完整的 `thread/list` 权威状态复核全局空闲；只有 Host 确认全部 idle 时才清除 `CodexRuntimeWeClaw` binding 中陈旧的 active 快照，Desktop/unknown/conflict、重连失败或真实 active 仍会阻断。`stop` 只有在事务准备成功后才向 WeClaw 发送 `SIGTERM`；准备失败时服务保持运行，外层停止失败时先重建旧 Host 并恢复消息准入。直接的 `SIGINT`/`SIGTERM`（包括 systemd stop 或消息桥异常退出）也会在进程内尝试同一事务；若外部停止已经不可撤销但 Host 状态不安全或不可确认，WeClaw 会退出并明确记录保留 Host 的原因，不会强杀它。仓库自带的 `service/weclaw.service` 使用 `KillMode=process`，让 systemd 只向 WeClaw 主进程发信号、由上述事务管理 Host；自定义 unit 也必须保留该设置，不能使用默认的 `control-group`。Codex App 或受控 CLI 仍在运行时 CLI 管理命令会在停止 WeClaw 前明确拒绝；WeClaw 只用受保护 IPC 和同用户主进程名做保守存在性探测，不会按进程名终止或自动退出 Codex App，强制排空也只中断 WeClaw 自己的任务，不能绕过这些 Host 安全门禁。后续服务启动必须在平台监听前读取受保护的事务状态、启动唯一 Host，并验证 Host generation 已变化；验证失败保持不可写。systemd 托管实例继续由 systemd 停止或重启，不会另起私有后台进程。实际安装新版本后的预检失败时，WeClaw 会恢复旧二进制；使用 `update --restart` 时，后续安全检查、停止或启动阶段失败也会恢复旧二进制，若旧服务已停止还会重新启动旧版本，回滚失败会与原始更新错误一起报告。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
+`weclaw update` 在当前已是最新版时会立即返回；只有实际安装新版本，或显式使用 `update --restart` 时才执行配置与 Agent 预检。支持协调端点的运行中服务，`stop`、`restart` 和 `update --restart` 都通过本机 `/api/runtime/restart/prepare` 使用同一套 Host 事务。普通模式要求消息任务、受控 CLI、writer lease、thread 和 Host 全部可证明安全；断线时只重连已有 socket 并以完整 `thread/list` 复核空闲。metadata 声称 running 但 PID 已消失时，只有 socket 无监听者且进程表确认没有替代 Host，才在 lifecycle lock 内标记 stopped 并清理陈旧 socket。
 
-若 WeClaw 服务本来就未运行，`weclaw restart` 默认仍只检查 Codex App/受控 CLI 并直接启动；发现外部 Host 时会失败关闭，不停止任何进程。只有显式传入 `--stop-conflicting-codex-hosts` 才会在启动前识别并停止身份验证通过的 official daemon、Codex App 私有 Host 或 WeClaw-managed Host；PID、PGID、UID、启动时间、命令指纹或受保护 metadata 任一无法匹配时仍拒绝停止。`--force` 只处理中断 WeClaw 自身任务，不授予停止 Codex Host 或 Codex App 的权限。
+显式 `restart --force`、`stop --force` 或 `update --restart --force` 表示操作者接受本地任务中断。WeClaw 会取消自身任务、请求 Codex App 退出，然后从实时进程快照中强制停止当前用户的 Codex `app-server` 进程组，包括管理身份不完整的 Host。未知 Host 必须由 app-server 领衔独立进程组；若它与 shell 或其他程序共享进程组，WeClaw 会拒绝连带终止。首次发信号前会重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份，不仅根据旧 PID 或进程名杀进程。进程表/参数不可读、身份漂移或 Host 停止结果未知时，整个 stop/restart/update 仍失败关闭，不会继续启动可能形成第二个 Host 的服务；若服务已因上一次未知结果保持不可写，后续显式 `--force` 会重新扫描并尝试收敛，而不是复用旧的成功缓存。直接 `SIGINT`/`SIGTERM` 没有这份显式授权，仍按普通模式保留无法确认的 Host。
+
+仓库自带的 `service/weclaw.service` 使用 `KillMode=process`，让 systemd 只向 WeClaw 主进程发信号、由上述事务管理 Host。后续服务启动必须在平台监听前读取事务状态、启动唯一 Host 并验证 generation 已变化。实际安装新版本后任何预检、停止或启动失败都会恢复旧二进制并在必要时重启旧服务。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
+
+若 WeClaw 服务本来就未运行，`weclaw restart` 默认仍只检查 Codex App/受控 CLI 并直接启动；发现外部 Host 时会失败关闭，不停止任何进程。显式 `--stop-conflicting-codex-hosts` 只停止 metadata/lifecycle 身份验证通过的 Host；显式 `--force` 则先退出 Codex App，再使用实时进程快照停止当前用户的 Codex `app-server` 进程组，包括管理身份不完整的 Host。首次信号前会重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。进程表/参数不可读或身份发生漂移时仍失败关闭，不会仅根据旧 PID 或进程名强杀。
 从尚不支持该协调端点的旧版本首次升级时，PATH 中的新二进制与内存中仍运行的旧服务具有不同能力。新 CLI 收到协调端点的 HTTP 404 时会先识别能力协商结果，不把纯文本 `404 page not found` 误解析成 JSON，也不向不存在的事务发送补偿请求；随后只有在 Codex App 和受控 CLI 已退出、能够取得 frontend lease，且旧服务的 `/api/runtime/drain` 明确返回 `draining=true`、`active_tasks=0`、`remaining_tasks=0` 时，才关闭旧服务的消息准入并只停止 WeClaw 自身。任一迁移门禁失败都保持失败关闭，不停止任何进程。迁移停止不代表 Codex Host 已轮换：先执行 `weclaw start` 让新版服务真正运行，再执行 `weclaw restart` 完成正式 Host 停止和 generation 验证。
 
 ## 从源码构建

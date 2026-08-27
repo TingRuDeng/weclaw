@@ -8,9 +8,241 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestReconnectExistingCodexHostForRestartRepairsDeadHostArtifacts(t *testing.T) {
+	dir := newShortCodexHome(t)
+	socketPath := filepath.Join(dir, "codex.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok {
+		_ = listener.Close()
+		t.Fatal("unix listener type unavailable")
+	}
+	unixListener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		AppServerSocket: socketPath,
+	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
+	deadPID := 1 << 30
+	metadata := codexHostMetadata{
+		Version: codexHostMetadataVersion, Manager: codexHostManagerWeClaw, State: "running",
+		PID: deadPID, ProcessGroupID: deadPID, UID: uint32(os.Geteuid()),
+		ProcessStart: "stale-start", ObservedCommandHash: "stale-command",
+		CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath),
+		SocketPath:         socketPath, Generation: 7, StartedAt: time.Now().UTC(),
+	}
+	if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.reconnectExistingCodexHostForRestart(context.Background()); err != nil {
+		t.Fatalf("reconnectExistingCodexHostForRestart error=%v, dead Host artifacts should be repaired", err)
+	}
+	updated, err := a.readCodexHostMetadata(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.State != "stopped" || updated.Generation != metadata.Generation {
+		t.Fatalf("metadata=%#v, want same generation marked stopped", updated)
+	}
+	if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale socket remains: %v", err)
+	}
+}
+
+func TestReconnectExistingCodexHostForRestartRepairsDeadMetadataWithoutSocket(t *testing.T) {
+	dir := newShortCodexHome(t)
+	socketPath := filepath.Join(dir, "codex.sock")
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		AppServerSocket: socketPath,
+	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
+	deadPID := 1 << 30
+	metadata := codexHostMetadata{
+		Version: codexHostMetadataVersion, Manager: codexHostManagerWeClaw, State: "running",
+		PID: deadPID, ProcessGroupID: deadPID, UID: uint32(os.Geteuid()),
+		ProcessStart: "stale-start", ObservedCommandHash: "stale-command",
+		CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath),
+		SocketPath:         socketPath, Generation: 7, StartedAt: time.Now().UTC(),
+	}
+	if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.reconnectExistingCodexHostForRestart(context.Background()); err != nil {
+		t.Fatalf("reconnectExistingCodexHostForRestart error=%v, dead metadata should be repaired", err)
+	}
+	updated, err := a.readCodexHostMetadata(socketPath)
+	if err != nil || updated.State != "stopped" || updated.Generation != metadata.Generation {
+		t.Fatalf("metadata=%#v err=%v, want same generation marked stopped", updated, err)
+	}
+}
+
+func TestReconnectExistingCodexHostForRestartPreservesReplacementGeneration(t *testing.T) {
+	dir := newShortCodexHome(t)
+	socketPath := filepath.Join(dir, "codex.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok {
+		_ = listener.Close()
+		t.Fatal("unix listener type unavailable")
+	}
+	unixListener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		AppServerSocket: socketPath,
+	})
+	deadPID := 1 << 30
+	metadata := codexHostMetadata{
+		Version: codexHostMetadataVersion, Manager: codexHostManagerWeClaw, State: "running",
+		PID: deadPID, ProcessGroupID: deadPID, UID: uint32(os.Geteuid()),
+		ProcessStart: "stale-start", ObservedCommandHash: "stale-command",
+		CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath),
+		SocketPath:         socketPath, Generation: 7, StartedAt: time.Now().UTC(),
+	}
+	if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
+		t.Fatal(err)
+	}
+	replacement := metadata
+	replacement.Generation++
+	replacement.PID++
+	replacement.ProcessGroupID++
+	replacement.StartedAt = replacement.StartedAt.Add(time.Second)
+	a.codexHostConflictPreflightCall = func(context.Context, int) error {
+		return a.writeCodexHostMetadata(socketPath, replacement)
+	}
+
+	err = a.reconnectExistingCodexHostForRestart(context.Background())
+	if err == nil {
+		t.Fatal("reconnect error=nil, replacement generation should keep original reconnect failure")
+	}
+	updated, readErr := a.readCodexHostMetadata(socketPath)
+	if readErr != nil || !sameCodexHostGeneration(updated, replacement) || updated.State != "running" {
+		t.Fatalf("metadata=%#v readErr=%v, want replacement generation preserved", updated, readErr)
+	}
+	if _, statErr := os.Lstat(socketPath); statErr != nil {
+		t.Fatalf("replacement socket was removed: %v", statErr)
+	}
+}
+
+func TestReconnectExistingCodexHostForRestartPreservesLiveNonWebSocketListener(t *testing.T) {
+	dir := newShortCodexHome(t)
+	socketPath := filepath.Join(dir, "codex.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+			select {
+			case <-done:
+				return
+			default:
+			}
+		}
+	}()
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		AppServerSocket: socketPath,
+	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
+	deadPID := 1 << 30
+	metadata := codexHostMetadata{
+		Version: codexHostMetadataVersion, Manager: codexHostManagerWeClaw, State: "running",
+		PID: deadPID, ProcessGroupID: deadPID, UID: uint32(os.Geteuid()),
+		ProcessStart: "stale-start", ObservedCommandHash: "stale-command",
+		CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath),
+		SocketPath:         socketPath, Generation: 7, StartedAt: time.Now().UTC(),
+	}
+	if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	err = a.reconnectExistingCodexHostForRestart(context.Background())
+	if err == nil {
+		t.Fatal("reconnect error=nil, live listener must remain a failed-closed preflight")
+	}
+	updated, readErr := a.readCodexHostMetadata(socketPath)
+	if readErr != nil || updated.State != "running" {
+		t.Fatalf("metadata=%#v readErr=%v, live listener metadata must remain unchanged", updated, readErr)
+	}
+	if _, statErr := os.Lstat(socketPath); statErr != nil {
+		t.Fatalf("live listener socket was removed: %v", statErr)
+	}
+}
+
+func TestReconnectExistingCodexHostForRestartKeepsPreMutationFailureSafe(t *testing.T) {
+	dir := newShortCodexHome(t)
+	socketPath := filepath.Join(dir, "codex.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	identity, err := inspectCodexHostProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pgid, err := syscall.Getpgid(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
+		AppServerSocket: socketPath,
+	})
+	metadata := codexHostMetadata{
+		Version: codexHostMetadataVersion, Manager: codexHostManagerWeClaw, State: "running",
+		PID: os.Getpid(), ProcessGroupID: pgid, UID: identity.uid,
+		ProcessStart: identity.start, ObservedCommandHash: "mismatched-command",
+		CommandFingerprint: a.configuredCodexHostCommandFingerprint(socketPath),
+		SocketPath:         socketPath, Generation: 9, StartedAt: time.Now().UTC(),
+	}
+	if err := a.writeCodexHostMetadata(socketPath, metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	err = a.reconnectExistingCodexHostForRestart(context.Background())
+	if err == nil {
+		t.Fatal("reconnect error=nil, want live identity mismatch rejection")
+	}
+	if errors.Is(err, ErrCodexRestartUnsafe) {
+		t.Fatalf("pre-mutation error=%v must not claim an unknown Host stop outcome", err)
+	}
+	updated, readErr := a.readCodexHostMetadata(socketPath)
+	if readErr != nil || updated.State != "running" {
+		t.Fatalf("metadata=%#v readErr=%v, live Host record must remain unchanged", updated, readErr)
+	}
+}
 
 func TestPrepareCodexRestartRejectsVisibleDesktopBeforeHostMutation(t *testing.T) {
 	dir := newShortCodexHome(t)
@@ -35,6 +267,152 @@ func TestPrepareCodexRestartRejectsVisibleDesktopBeforeHostMutation(t *testing.T
 	}
 	if state := a.ensureCodexAppServerGate().stateSnapshot(); state != codexAppServerRunning {
 		t.Fatalf("gate state=%s, want running after safe rejection", state)
+	}
+}
+
+func TestForceCloseCodexDesktopAppStopsPresentFrontend(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	present := true
+	a.codexDesktopPresenceCall = func() (bool, bool) { return present, present }
+	stopCalls := 0
+	a.stopDesktopHostCall = func(context.Context) error {
+		stopCalls++
+		present = false
+		return nil
+	}
+
+	if err := a.forceCloseCodexDesktopApp(context.Background()); err != nil {
+		t.Fatalf("forceCloseCodexDesktopApp: %v", err)
+	}
+	if stopCalls != 1 || present {
+		t.Fatalf("stopCalls=%d present=%v, want App closed once", stopCalls, present)
+	}
+}
+
+func TestPrepareCodexRestartForceStopsCurrentUnknownHostWithoutManagedIdentity(t *testing.T) {
+	dir := newShortCodexHome(t)
+	socketPath := filepath.Join(dir, "codex.sock")
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeManaged,
+		AppServerSocket: socketPath,
+	})
+	a.codexDesktopPresenceCall = func() (bool, bool) { return false, false }
+	a.mu.Lock()
+	a.started = true
+	a.hostCmd = &exec.Cmd{Process: &os.Process{Pid: 420}}
+	a.mu.Unlock()
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+	uid := uint32(os.Geteuid())
+	processes := []codexHostProcessSnapshot{{
+		PID: 420, PPID: 1, PGID: 420, UID: uid,
+		Executable: "codex", Command: "/opt/custom/codex app-server --listen unix:///tmp/custom.sock",
+		Args: []string{"/opt/custom/codex", "app-server", "--listen", "unix:///tmp/custom.sock"},
+	}}
+	a.codexHostProcessSnapshotCall = func(context.Context, map[uint32]struct{}) ([]codexHostProcessSnapshot, error) {
+		return processes, nil
+	}
+	a.codexHostProcessIdentityCall = func(pid int) (codexProcessIdentity, error) {
+		if pid != 420 {
+			return codexProcessIdentity{}, errors.New("unexpected pid")
+		}
+		return codexProcessIdentity{uid: uid, pgid: 420, start: "start-420", commandHash: "command-420"}, nil
+	}
+	stopped := false
+	a.stopCodexConflictProcessGroupCall = func(_ context.Context, target codexVerifiedHostConflictTarget) error {
+		if target.group.PGID != 420 {
+			t.Fatalf("target=%#v, want current unknown Host", target)
+		}
+		stopped = true
+		return nil
+	}
+	managedStopCalls := 0
+	a.stopManagedHostCall = func(context.Context, string) error {
+		managedStopCalls++
+		return errors.New("force must not require stale management identity")
+	}
+	persistCalls := 0
+
+	snapshot, err := a.PrepareCodexRestartWithOptions(
+		context.Background(),
+		func(current CodexRestartSnapshot) error {
+			persistCalls++
+			if len(current.ConflictingHosts) != 1 || current.ConflictingHosts[0].PGID != 420 {
+				t.Fatalf("persisted snapshot=%#v, want current unknown Host", current)
+			}
+			return nil
+		},
+		CodexRestartOptions{ForceTerminateCodex: true},
+	)
+	if err != nil {
+		t.Fatalf("PrepareCodexRestartWithOptions force: %v", err)
+	}
+	if !stopped || managedStopCalls != 0 || persistCalls < 2 {
+		t.Fatalf("stopped=%v managedStopCalls=%d persistCalls=%d", stopped, managedStopCalls, persistCalls)
+	}
+	if len(snapshot.ConflictingHosts) != 1 || !snapshot.ConflictingHosts[0].Stopped {
+		t.Fatalf("snapshot=%#v, want stopped current Host", snapshot)
+	}
+	if a.isRuntimeStarted() || a.runtimePID() != 0 || a.codexRuntimeModeSnapshot() != CodexRuntimeUnknown {
+		t.Fatalf("runtime remained attached after force stop: started=%v pid=%d mode=%s", a.isRuntimeStarted(), a.runtimePID(), a.codexRuntimeModeSnapshot())
+	}
+}
+
+func TestForceCompleteCodexRestartEscalatesPreparedUnknownHost(t *testing.T) {
+	dir := newShortCodexHome(t)
+	socketPath := filepath.Join(dir, "codex.sock")
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeManaged,
+		AppServerSocket: socketPath,
+	})
+	a.codexDesktopPresenceCall = func() (bool, bool) { return false, false }
+	a.mu.Lock()
+	a.started = true
+	a.hostCmd = &exec.Cmd{Process: &os.Process{Pid: 420}}
+	a.mu.Unlock()
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	a.codexRestartMu.Lock()
+	a.codexRestartPrepared = true
+	a.codexRestartSnapshot = CodexRestartSnapshot{
+		HostMode: codexHostModeManaged, SocketPath: socketPath, HostGeneration: 9, HostStopped: true,
+	}
+	a.codexRestartMu.Unlock()
+	a.ensureCodexAppServerGate().fail(ErrCodexRestartUnsafe)
+
+	uid := uint32(os.Geteuid())
+	processes := []codexHostProcessSnapshot{{
+		PID: 420, PPID: 1, PGID: 420, UID: uid,
+		Executable: "codex", Command: "/opt/custom/codex app-server --listen unix:///tmp/custom.sock",
+		Args: []string{"/opt/custom/codex", "app-server", "--listen", "unix:///tmp/custom.sock"},
+	}}
+	a.codexHostProcessSnapshotCall = func(context.Context, map[uint32]struct{}) ([]codexHostProcessSnapshot, error) {
+		return processes, nil
+	}
+	a.codexHostProcessIdentityCall = func(pid int) (codexProcessIdentity, error) {
+		return codexProcessIdentity{uid: uid, pgid: 420, start: "start-420", commandHash: "command-420"}, nil
+	}
+	stopped := false
+	a.stopCodexConflictProcessGroupCall = func(context.Context, codexVerifiedHostConflictTarget) error {
+		stopped = true
+		return nil
+	}
+	persistCalls := 0
+
+	snapshot, err := a.ForceCompleteCodexRestart(context.Background(), func(current CodexRestartSnapshot) error {
+		persistCalls++
+		if current.HostGeneration != 9 {
+			t.Fatalf("persisted snapshot=%#v, want original generation", current)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ForceCompleteCodexRestart: %v", err)
+	}
+	if !stopped || persistCalls < 2 || len(snapshot.ConflictingHosts) != 1 || !snapshot.ConflictingHosts[0].Stopped {
+		t.Fatalf("stopped=%v persistCalls=%d snapshot=%#v", stopped, persistCalls, snapshot)
+	}
+	if a.isRuntimeStarted() || a.runtimePID() != 0 || a.codexRuntimeModeSnapshot() != CodexRuntimeUnknown {
+		t.Fatalf("runtime remained attached after escalation: started=%v pid=%d mode=%s", a.isRuntimeStarted(), a.runtimePID(), a.codexRuntimeModeSnapshot())
 	}
 }
 

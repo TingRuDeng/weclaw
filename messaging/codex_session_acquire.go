@@ -39,20 +39,21 @@ type codexSessionAcquireRequest struct {
 }
 
 type codexSessionAcquireResult struct {
-	route                   codexConversationRoute
-	resolution              codexRuntimeResolution
-	externalState           externalCodexTaskState
-	externalActive          bool
-	externalProgressCard    bool
-	agentSessionErr         error
-	runtimeErr              error
-	selectionChanged        bool
-	progressReanchored      bool
-	progressReanchorErr     error
-	handoffReleaseAttempted bool
-	handoffReleaseRetained  bool
-	handoffReleaseThreadID  string
-	handoffReleaseErr       error
+	route                        codexConversationRoute
+	resolution                   codexRuntimeResolution
+	externalState                externalCodexTaskState
+	externalActive               bool
+	externalProgressCard         bool
+	agentSessionErr              error
+	runtimeErr                   error
+	selectionChanged             bool
+	progressReanchored           bool
+	progressReanchorErr          error
+	handoffReleaseAttempted      bool
+	handoffReleaseRetained       bool
+	handoffReleaseThreadID       string
+	handoffReleaseErr            error
+	handoffReleaseRetainedByTask bool
 }
 
 // acquireCodexSessionWithBindingLocked atomically commits one frontend's
@@ -236,6 +237,10 @@ func (h *Handler) recoverPreviousCodexThreadHandoff(
 	result.handoffReleaseThreadID = previousThreadID
 	if h.ensureCodexSessions().activeFrontendUsesThread(previousThreadID) {
 		result.handoffReleaseRetained = true
+		return result
+	}
+	if h.hasNonterminalCodexTaskForThread(previousThreadID) {
+		result.handoffReleaseRetainedByTask = true
 		return result
 	}
 	handoffAgent, ok := req.agent.(agent.CodexThreadHandoffAgent)

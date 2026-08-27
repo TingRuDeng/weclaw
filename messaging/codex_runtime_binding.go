@@ -170,14 +170,11 @@ func (route codexConversationRoute) ref(threadID string) agent.CodexThreadRef {
 }
 
 func (h *Handler) guardCodexThreadSwitch(route codexConversationRoute, targetThreadID string) error {
-	task, active := h.activeTask(route.conversationID)
-	if !active || task == nil {
-		return nil
-	}
-	currentThreadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
-	if !pending && currentThreadID != "" && currentThreadID != targetThreadID {
-		return fmt.Errorf("当前任务执行期间不能切换到其他 Codex 会话")
-	}
+	// A frontend binding is a view, not the owner of a running turn. The
+	// previous implementation rejected a switch whenever the same route had an
+	// active task, which made it impossible to browse another session while a
+	// task continued in the background. The handoff path separately retains a
+	// thread that is still used by an active task.
 	return nil
 }
 

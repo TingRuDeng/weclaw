@@ -101,6 +101,12 @@ func classifyCodexHostConflictTarget(
 	group codexHostProcessGroup,
 ) codexHostConflictTarget {
 	target := codexHostConflictTarget{kind: codexHostConflictTargetUnknown, group: group}
+	for _, pid := range group.PIDs {
+		if pid == group.PGID {
+			target.hostPID = pid
+			break
+		}
+	}
 	byPID := make(map[int]codexHostProcessSnapshot, len(processes))
 	parents := make(map[int]int, len(processes))
 	groupMembers := make([]codexHostProcessSnapshot, 0)
@@ -847,6 +853,30 @@ func (a *ACPAgent) preflightCodexHostConflicts(ctx context.Context, authorityPID
 // first proves every discovered extra Host, then performs stops one by one.
 // The default restart path never calls this method.
 func (a *ACPAgent) StopConflictingCodexHosts(ctx context.Context) ([]CodexRestartConflictSnapshot, error) {
+	return a.stopConflictingCodexHosts(ctx, false)
+}
+
+// ForceStopCodexRuntime closes Codex App and stops every current-user Codex
+// app-server group that can be proved from a fresh process snapshot. Unlike
+// StopConflictingCodexHosts, protected lifecycle metadata is not required,
+// but the live UID, PGID, start time, executable and argv fingerprint still
+// have to match immediately before signaling.
+func (a *ACPAgent) ForceStopCodexRuntime(ctx context.Context) ([]CodexRestartConflictSnapshot, error) {
+	if a == nil || !a.usesCodexSharedHost() {
+		return nil, fmt.Errorf("当前 Agent 不是 Codex shared app-server")
+	}
+	if err := a.forceCloseCodexDesktopApp(ctx); err != nil {
+		return nil, err
+	}
+	stopped, err := a.stopConflictingCodexHosts(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	a.detachForceStoppedCodexHostClient()
+	return stopped, nil
+}
+
+func (a *ACPAgent) stopConflictingCodexHosts(ctx context.Context, force bool) ([]CodexRestartConflictSnapshot, error) {
 	if a == nil || !a.usesCodexSharedHost() {
 		return nil, fmt.Errorf("当前 Agent 不是 Codex shared app-server")
 	}
@@ -859,13 +889,19 @@ func (a *ACPAgent) StopConflictingCodexHosts(ctx context.Context) ([]CodexRestar
 	}
 	verified := make([]codexVerifiedHostConflictTarget, 0, len(plan.conflicts))
 	for _, target := range plan.conflicts {
-		if target.kind == codexHostConflictTargetUnknown {
+		if target.kind == codexHostConflictTargetUnknown && !force {
 			return nil, fmt.Errorf(
 				"%w：PGID %d（%s）的身份无法完整证明；显式参数不会停止未知进程",
 				ErrCodexHostConflict, target.group.PGID, target.group.Kind,
 			)
 		}
-		candidate, verifyErr := a.verifyCodexHostConflictTarget(ctx, target)
+		var candidate codexVerifiedHostConflictTarget
+		var verifyErr error
+		if force {
+			candidate, verifyErr = a.captureCodexHostConflictTarget(ctx, target)
+		} else {
+			candidate, verifyErr = a.verifyCodexHostConflictTarget(ctx, target)
+		}
 		if verifyErr != nil {
 			return nil, fmt.Errorf("复核待停止的 Codex Host PGID %d: %w", target.group.PGID, verifyErr)
 		}
@@ -877,8 +913,14 @@ func (a *ACPAgent) StopConflictingCodexHosts(ctx context.Context) ([]CodexRestar
 	}
 	stopped := make(map[int]bool, len(verified))
 	for _, target := range verified {
-		if err := a.stopVerifiedCodexHostConflict(ctx, target); err != nil {
-			return nil, fmt.Errorf("%w: 停止冲突 Codex Host PGID %d: %v", ErrCodexRestartUnsafe, target.group.PGID, err)
+		var stopErr error
+		if force {
+			stopErr = a.stopForceCodexHostConflict(ctx, target)
+		} else {
+			stopErr = a.stopVerifiedCodexHostConflict(ctx, target)
+		}
+		if stopErr != nil {
+			return nil, fmt.Errorf("%w: 停止冲突 Codex Host PGID %d: %v", ErrCodexRestartUnsafe, target.group.PGID, stopErr)
 		}
 		stopped[target.group.PGID] = true
 	}
@@ -889,6 +931,12 @@ func (a *ACPAgent) captureCodexHostConflictTarget(
 	ctx context.Context,
 	expected codexHostConflictTarget,
 ) (codexVerifiedHostConflictTarget, error) {
+	if expected.kind == codexHostConflictTargetUnknown && expected.hostPID <= 0 {
+		return codexVerifiedHostConflictTarget{}, fmt.Errorf(
+			"候选 Codex Host PGID %d 不是由 app-server 领衔的独立进程组，拒绝连带停止同组其他程序",
+			expected.group.PGID,
+		)
+	}
 	processes, allowedUIDs, err := a.readCodexHostConflictSnapshot(ctx)
 	if err != nil {
 		return codexVerifiedHostConflictTarget{}, err

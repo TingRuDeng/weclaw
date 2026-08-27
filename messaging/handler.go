@@ -98,6 +98,7 @@ type Handler struct {
 	adminTimeout             time.Duration
 	runtimeRestartMu         sync.Mutex
 	runtimeRestartPrepared   bool
+	runtimeRestartUnsafe     bool
 	runtimeRestartController agent.CodexRestartController
 	runtimeRestartLease      *agent.CodexFrontendLease
 	runtimeRestartResult     RuntimeRestartResult

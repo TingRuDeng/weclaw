@@ -84,13 +84,13 @@ managed 默认 socket 位于 WeClaw 状态目录的 `runtime/` 下。若完整�
 
 ### 协调停止与重启
 
-`weclaw stop`、`weclaw restart` 与 `weclaw update --restart` 是 Host 级事务，不等同于只向 WeClaw PID 发送信号。运行中服务在协调 API 边界持有 Codex frontend 排他租约，离线启动分支则由外层命令持有，两者都阻止新的受控 CLI；持久化事务在旧服务退出后继续拦截 CLI。运行中服务再关闭消息准入、排空 `Handler.tasks`，并在 admission、writer lease、全量 thread idle 与 socket lifecycle lock 下确认 Codex App 已退出，随后只停止身份和 generation 均验证通过的 official daemon 或 managed Host。强制排空只能取消 WeClaw 自己拥有的任务，不能绕过 App、受控 CLI、active/unknown thread 或不明 Host。
+`weclaw stop`、`weclaw restart` 与 `weclaw update --restart` 默认是 Host 级事务，不等同于只向 WeClaw PID 发送信号。运行中服务在协调 API 边界持有 Codex frontend 排他租约，离线启动分支则由外层命令持有，两者都阻止新的受控 CLI；持久化事务在旧服务退出后继续拦截 CLI。普通模式关闭消息准入、排空 `Handler.tasks`，并在 admission、writer lease、全量 thread idle 与 socket lifecycle lock 下确认 Codex App 已退出，随后只停止身份和 generation 均验证通过的 official daemon 或 managed Host。
 
-WeClaw 不管理或终止 Codex App；App 仍存在时协调重启在触碰 Host 和 WeClaw 服务前返回可操作错误。受控 `weclaw codex cli` 在整个 TUI 生命周期持有共享内核租约，因此无需扫描或误杀进程。Host 停止前写入受保护的重启状态；新服务必须在平台监听前启动/连接唯一 Host，并证明新 generation 不同于已停止代次。启动验证失败保持不可写；若外层停止 WeClaw 失败，则先重建并验证 Host，再删除重启状态并恢复消息准入。
+显式 `--force` 表示操作者接受中断本地任务。强制路径先取消 WeClaw 任务并请求 Codex App 退出，再从实时进程表筛选当前用户的实际 Codex `app-server` 进程组；它可以停止缺少 metadata/lifecycle 证明的 Host，但必须在停止前持久化完整计划。管理身份未知时，app-server 必须领衔独立进程组；与 shell 或其他程序共享 PGID 的候选会被拒绝，不能为了结束 Host 连带停止无关程序。首次信号前重读原始 argv 并复核每个成员的 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。它不根据陈旧 PID 或进程名发信号；进程表/参数不可读、身份漂移或停止结果未知时仍失败关闭。服务已因未知结果保持不可写时，后续显式 `--force` 必须重新扫描、持久化新计划并尝试收敛，不得直接复用旧事务成功。受控 `weclaw codex cli` 在整个 TUI 生命周期持有共享内核租约，强制路径不绕过这一租约。Host 停止前写入受保护的重启状态；新服务必须在平台监听前启动/连接唯一 Host，并证明新 generation 不同于已停止代次。
 
-CLI `weclaw stop` 必须先完成协调事务，成功后才向服务发送 `SIGTERM`；事务失败不得停止服务，外层停止失败必须调用同一补偿入口恢复旧 Host 和消息准入。服务直接收到 `SIGINT`/`SIGTERM` 或消息桥自行退出时，仍要先有界尝试同一事务；Host 身份、App/CLI 或 thread 状态不安全时保留 Host 并记录原因，禁止退化为按进程名或残留 socket 强杀。systemd unit 必须使用 `KillMode=process`，只向 WeClaw 主进程发停止信号；默认 `control-group` 会同时触碰同一 cgroup 中的 Host，绕过上述身份和空闲门禁。成功停止 Host 后保留 generation 恢复状态，后续 `start` 在平台监听前启动并验证唯一的新代次。
+CLI `weclaw stop` 必须先完成对应模式的协调事务，成功后才向服务发送 `SIGTERM`；包括强制终止在内的事务失败都不得停止或替换 WeClaw 服务。外层停止失败必须调用同一补偿入口恢复旧 Host 和消息准入。服务直接收到 `SIGINT`/`SIGTERM` 或消息桥自行退出时没有显式强制授权，仍按普通模式保留不安全或无法确认的 Host。metadata 标记 running 但 PID 已消失时，只有 socket 无监听者且进程表确认没有替代 Host，才可在 lifecycle lock 内把 metadata 标记 stopped 并删除陈旧 socket。systemd unit 必须使用 `KillMode=process`，只向 WeClaw 主进程发停止信号；默认 `control-group` 会同时触碰同一 cgroup 中的 Host，绕过上述身份和空闲门禁。成功停止 Host 后保留 generation 恢复状态，后续 `start` 在平台监听前启动并验证唯一的新代次。
 
-旧 WeClaw 服务未运行时，`restart` 仅在离线分支持有排他租约、检查 App 后直接启动；由于没有旧服务可执行 Host 事务，该分支不承诺轮换独立存在的外部 Host。
+旧 WeClaw 服务未运行时，`restart` 默认仅在离线分支持有排他租约、检查 App 后直接启动；`restart --force` 在同一租约内调用 Agent 的离线强制终止入口，退出 App 并实时复核、停止当前用户的 Codex Host 后再启动 WeClaw。
 
 新二进制已经安装但内存中的旧服务尚未替换时，协调端点的 HTTP 404 表示运行时能力不匹配。CLI 必须在触碰进程前失败关闭并显示运行态记录中的服务版本；不得把纯文本 404 正文当作 JSON、不得对未开始的事务执行 DELETE，也不得静默回退到只排空任务的旧接口。一次性迁移要求任务全部终态且 App/受控 CLI 已退出，随后按 `stop`、`start`、`restart` 顺序先引导新服务，再由新服务完成 Host generation 轮换。
 

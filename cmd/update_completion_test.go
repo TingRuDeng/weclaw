@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/config"
@@ -56,6 +57,38 @@ func TestCompleteUpdateRestartUsesValidatedStart(t *testing.T) {
 	want := []string{"prepare", "safe", "running", "stop", "start"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls=%v, want %v", calls, want)
+	}
+}
+
+func TestCompleteUpdateForceDoesNotBypassCodexTerminationFailure(t *testing.T) {
+	wantErr := errors.New("Codex Host 进程身份无法确认")
+	var calls []string
+	ops := updateCompletionOps{
+		prepare: func(context.Context) (preparedStart, error) {
+			calls = append(calls, "prepare")
+			return preparedStart{cfg: config.DefaultConfig(), run: func() error {
+				calls = append(calls, "start")
+				return nil
+			}}, nil
+		},
+		ensureSafe: func(context.Context, bool, *config.Config) error {
+			calls = append(calls, "safe")
+			return wantErr
+		},
+		cancelDrain: func(context.Context, *config.Config) error {
+			calls = append(calls, "cancel")
+			return nil
+		},
+		running: func() bool { calls = append(calls, "running"); return true },
+		stop:    func() error { calls = append(calls, "stop"); return nil },
+		out:     &bytes.Buffer{},
+	}
+
+	if err := completeUpdate(context.Background(), true, true, ops); !errors.Is(err, wantErr) {
+		t.Fatalf("completeUpdate force error=%v, want termination failure", err)
+	}
+	if got, want := strings.Join(calls, ","), "prepare,safe,cancel"; got != want {
+		t.Fatalf("calls=%s, want %s", got, want)
 	}
 }
 

@@ -410,10 +410,10 @@ func TestAcquireCodexSessionAgentSelectionFailureRollsBackBinding(t *testing.T) 
 	}
 }
 
-func TestAcquireCodexSessionSameConversationActiveTurnBlocksRebind(t *testing.T) {
+func TestAcquireCodexSessionSameConversationActiveTurnKeepsOldThread(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	request := f.request("thread-b")
-	f.h.ensureCodexSessions().setThread(f.bindingKey, f.workspaceB, "thread-a")
+	f.ag.threadHandoffApplicable = true
 	task, _, started := f.h.beginActiveTask(context.Background(), request.route.conversationID, activeTaskMeta{
 		owner: f.routeUser, routeUserID: f.routeUser, agentName: "codex",
 		codexThreadID: "thread-a", codexTurnID: "turn-a",
@@ -422,14 +422,24 @@ func TestAcquireCodexSessionSameConversationActiveTurnBlocksRebind(t *testing.T)
 		t.Fatal("failed to create active task")
 	}
 	defer f.h.finishActiveTask(request.route.conversationID, task)
-	_, err := f.h.acquireCodexSessionWithBindingLocked(request)
-	if err == nil || !strings.Contains(err.Error(), "任务执行期间不能切换") {
-		t.Fatalf("error=%v", err)
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+	if err != nil || result.runtimeErr != nil {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	if retained := result.handoffReleaseRetainedByTask; !retained {
+		t.Fatalf("result=%#v, want old thread retained for active task", result)
+	}
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceB {
+		t.Fatalf("active workspace=%q, want %q", active, f.workspaceB)
+	}
+	if threads, _ := f.ag.threadHandoffSnapshot(); len(threads) != 0 {
+		t.Fatalf("old active thread was handed off: %v", threads)
 	}
 }
 
 func TestAcquireCodexSessionDifferentFrontendDoesNotAbandonRunningTask(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
+	f.ag.threadHandoffApplicable = true
 	oldConversation := buildCodexConversationID(f.routeUser, "codex", f.workspaceA)
 	task, _, started := f.h.beginActiveTask(context.Background(), oldConversation, activeTaskMeta{
 		owner: f.routeUser, routeUserID: f.routeUser, agentName: "codex",
@@ -444,6 +454,10 @@ func TestAcquireCodexSessionDifferentFrontendDoesNotAbandonRunningTask(t *testin
 	}
 	if current, active := f.h.activeTask(oldConversation); !active || current != task {
 		t.Fatal("binding another conversation abandoned a running task")
+	}
+	threads, _ := f.ag.threadHandoffSnapshot()
+	if len(threads) != 0 {
+		t.Fatalf("old active thread was handed off: %v", threads)
 	}
 }
 

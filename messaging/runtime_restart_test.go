@@ -23,7 +23,11 @@ type fakeCodexRestartAgent struct {
 
 type optionsFakeCodexRestartAgent struct {
 	*fakeCodexRestartAgent
-	stopConflicts bool
+	stopConflicts       bool
+	forceTerminate      bool
+	forceCompleteCalls  int
+	forceCompleteResult agent.CodexRestartSnapshot
+	forceCompleteErr    error
 }
 
 func (f *optionsFakeCodexRestartAgent) PrepareCodexRestartWithOptions(
@@ -32,7 +36,21 @@ func (f *optionsFakeCodexRestartAgent) PrepareCodexRestartWithOptions(
 	opts agent.CodexRestartOptions,
 ) (agent.CodexRestartSnapshot, error) {
 	f.stopConflicts = opts.StopConflictingCodexHosts
+	f.forceTerminate = opts.ForceTerminateCodex
 	return f.PrepareCodexRestart(ctx, persist)
+}
+
+func (f *optionsFakeCodexRestartAgent) ForceCompleteCodexRestart(
+	_ context.Context,
+	persist func(agent.CodexRestartSnapshot) error,
+) (agent.CodexRestartSnapshot, error) {
+	f.forceCompleteCalls++
+	if f.forceCompleteErr == nil && persist != nil {
+		if err := persist(f.forceCompleteResult); err != nil {
+			return agent.CodexRestartSnapshot{}, err
+		}
+	}
+	return f.forceCompleteResult, f.forceCompleteErr
 }
 
 func newFakeCodexRestartAgent() *fakeCodexRestartAgent {
@@ -89,11 +107,59 @@ func TestPrepareRuntimeRestartWithOptionsPropagatesConflictAuthorization(t *test
 	controller := &optionsFakeCodexRestartAgent{fakeCodexRestartAgent: newFakeCodexRestartAgent()}
 	controller.prepareResult = agent.CodexRestartSnapshot{HostGeneration: 3, HostStopped: true}
 	h.SetDefaultAgent("codex", controller)
-	if _, err := h.PrepareRuntimeRestartWithOptions(context.Background(), false, true); err != nil {
+	if _, err := h.PrepareRuntimeRestartWithOptions(context.Background(), false, true, false); err != nil {
 		t.Fatalf("PrepareRuntimeRestartWithOptions: %v", err)
 	}
 	if !controller.stopConflicts {
 		t.Fatal("conflicting-host authorization was not propagated to Codex Agent")
+	}
+}
+
+func TestPrepareRuntimeRestartForcePropagatesCodexTerminationAuthorization(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	h := NewHandler(nil, nil)
+	h.runtimeRestartStateFile = filepath.Join(t.TempDir(), "runtime-restart.json")
+	controller := &optionsFakeCodexRestartAgent{fakeCodexRestartAgent: newFakeCodexRestartAgent()}
+	controller.prepareResult = agent.CodexRestartSnapshot{HostGeneration: 3, HostStopped: true}
+	h.SetDefaultAgent("codex", controller)
+
+	if _, err := h.PrepareRuntimeRestartWithOptions(context.Background(), true, false, true); err != nil {
+		t.Fatalf("PrepareRuntimeRestartWithOptions force: %v", err)
+	}
+	if !controller.forceTerminate {
+		t.Fatal("force restart did not authorize Codex App and Host termination")
+	}
+}
+
+func TestPrepareRuntimeRestartForceDrainDoesNotAuthorizeCodexTermination(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	h := NewHandler(nil, nil)
+	h.runtimeRestartStateFile = filepath.Join(t.TempDir(), "runtime-restart.json")
+	controller := &optionsFakeCodexRestartAgent{fakeCodexRestartAgent: newFakeCodexRestartAgent()}
+	controller.prepareResult = agent.CodexRestartSnapshot{HostGeneration: 4, HostStopped: true}
+	h.SetDefaultAgent("codex", controller)
+
+	if _, err := h.PrepareRuntimeRestart(context.Background(), true); err != nil {
+		t.Fatalf("PrepareRuntimeRestart forced drain: %v", err)
+	}
+	if controller.forceTerminate {
+		t.Fatal("ordinary shutdown task drain must not authorize Codex termination")
+	}
+}
+
+func TestPrepareRuntimeRestartRejectsForceWhenCodexAgentLacksOptions(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	h := NewHandler(nil, nil)
+	h.runtimeRestartStateFile = filepath.Join(t.TempDir(), "runtime-restart.json")
+	controller := newFakeCodexRestartAgent()
+	h.SetDefaultAgent("codex", controller)
+
+	_, err := h.PrepareRuntimeRestartWithOptions(context.Background(), true, false, true)
+	if !errors.Is(err, ErrRuntimeRestartBlocked) {
+		t.Fatalf("PrepareRuntimeRestartWithOptions error=%v, want unsupported force rejection", err)
+	}
+	if controller.prepareCalls != 0 || h.IsDraining() {
+		t.Fatalf("prepareCalls=%d draining=%v, force authority must not be silently dropped", controller.prepareCalls, h.IsDraining())
 	}
 }
 
@@ -176,6 +242,42 @@ func TestPrepareRuntimeRestartKeepsJournalAndAdmissionClosedWhenHostStopIsUnknow
 	}
 	if controller.cancelCalls != 1 || h.IsDraining() {
 		t.Fatalf("cancelCalls=%d draining=%v", controller.cancelCalls, h.IsDraining())
+	}
+}
+
+func TestPrepareRuntimeRestartForceEscalatesUnknownPreviousStop(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	h := NewHandler(nil, nil)
+	h.runtimeRestartStateFile = filepath.Join(t.TempDir(), "runtime-restart.json")
+	controller := &optionsFakeCodexRestartAgent{fakeCodexRestartAgent: newFakeCodexRestartAgent()}
+	controller.prepareResult = agent.CodexRestartSnapshot{
+		HostMode: "managed", SocketPath: "/tmp/codex.sock", HostGeneration: 7, HostStopped: true,
+	}
+	controller.prepareErr = agent.ErrCodexRestartUnsafe
+	controller.forceCompleteResult = agent.CodexRestartSnapshot{
+		HostMode: "managed", SocketPath: "/tmp/codex.sock", HostGeneration: 7, HostStopped: true,
+		ConflictingHosts: []agent.CodexRestartConflictSnapshot{{Kind: "Codex app-server", PGID: 420, PIDs: []int{420}, Stopped: true}},
+	}
+	h.SetDefaultAgent("codex", controller)
+
+	if _, err := h.PrepareRuntimeRestart(context.Background(), false); !errors.Is(err, agent.ErrCodexRestartUnsafe) {
+		t.Fatalf("initial PrepareRuntimeRestart error=%v", err)
+	}
+	if _, err := h.PrepareRuntimeRestart(context.Background(), false); !errors.Is(err, agent.ErrCodexRestartUnsafe) {
+		t.Fatalf("ordinary retry error=%v, want unsafe state to remain blocked", err)
+	}
+	if controller.forceCompleteCalls != 0 {
+		t.Fatalf("ordinary retry unexpectedly forced Host %d time(s)", controller.forceCompleteCalls)
+	}
+	result, err := h.PrepareRuntimeRestartWithOptions(context.Background(), true, false, true)
+	if err != nil {
+		t.Fatalf("forced retry: %v", err)
+	}
+	if controller.forceCompleteCalls != 1 {
+		t.Fatalf("forceCompleteCalls=%d, want one real force escalation", controller.forceCompleteCalls)
+	}
+	if len(result.CodexHost.ConflictingHosts) != 1 || !result.CodexHost.ConflictingHosts[0].Stopped {
+		t.Fatalf("result=%#v, want force-stopped Host journal", result)
 	}
 }
 

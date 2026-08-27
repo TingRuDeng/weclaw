@@ -124,7 +124,7 @@ func TestCodexDesktopHostProcessStateFindsPrivateAppServer(t *testing.T) {
 	state, err := codexDesktopHostProcessStateFrom(processes, func(pid int) (string, error) {
 		switch pid {
 		case 102:
-			return "/Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled", nil
+			return "/Applications/ChatGPT.app/Contents/Resources/codex app-server --stdio", nil
 		case 200:
 			return "/usr/local/bin/codex app-server", nil
 		default:
@@ -133,6 +133,24 @@ func TestCodexDesktopHostProcessStateFindsPrivateAppServer(t *testing.T) {
 	})
 	if err != nil || !state.AppRunning || !state.PrivateAppServer {
 		t.Fatalf("state=%#v error=%v, want private App app-server", state, err)
+	}
+}
+
+func TestCodexDesktopHostProcessStateIgnoresCodeModeHost(t *testing.T) {
+	uid := uint32(os.Getuid())
+	processes := []unix.KinfoProc{
+		codexAppDaemonTestProcess("ChatGPT", uid, 100, 1),
+		codexAppDaemonTestProcess("ChatGPT Helper", uid, 101, 100),
+		codexAppDaemonTestProcess("codex", uid, 102, 101),
+	}
+	state, err := codexDesktopHostProcessStateFrom(processes, func(pid int) (string, error) {
+		if pid != 102 {
+			return "", errors.New("unexpected pid")
+		}
+		return "/Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled", nil
+	})
+	if err != nil || !state.AppRunning || state.PrivateAppServer {
+		t.Fatalf("state=%#v error=%v, Code Mode helper is not the App conversation Host", state, err)
 	}
 }
 
@@ -152,11 +170,12 @@ func TestCodexDesktopHostProcessStateIgnoresDaemonProbe(t *testing.T) {
 
 func TestCodexPrivateAppServerCommand(t *testing.T) {
 	tests := map[string]bool{
-		"codex app-server":                         true,
-		"codex -c feature=true app-server --stdio": true,
-		"codex app-server daemon version":          false,
-		"codex app-server proxy":                   false,
-		"codex --remote unix:///tmp/codex.sock":    false,
+		"codex app-server":                                         true,
+		"codex -c feature=true app-server --stdio":                 true,
+		"codex -c features.code_mode_host=true app-server --stdio": false,
+		"codex app-server daemon version":                          false,
+		"codex app-server proxy":                                   false,
+		"codex --remote unix:///tmp/codex.sock":                    false,
 	}
 	for command, want := range tests {
 		if got := codexPrivateAppServerCommand(command); got != want {

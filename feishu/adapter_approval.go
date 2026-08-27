@@ -267,20 +267,25 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 	if a.cardKit == nil || strings.TrimSpace(action.TaskCard) == "" {
 		return false
 	}
-	opts, sequence, ok := a.taskCards.addApprovalWithSequence(action.TaskCard, action)
-	if !ok {
-		return false
-	}
-	cardJSON, err := buildCardV2(opts)
-	if err != nil {
-		log.Printf("[feishu] failed to build task card approval snapshot: %v", err)
-		return false
-	}
-	if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, sequence); err != nil {
-		log.Printf("[feishu] ignored task approval card update error: %v", err)
-		return false
-	}
-	return true
+	updated := false
+	_ = a.taskCards.withCardOperation(action.TaskCard, func() error {
+		opts, sequence, ok := a.taskCards.addApprovalWithSequence(action.TaskCard, action)
+		if !ok {
+			return nil
+		}
+		cardJSON, err := buildCardV2(opts)
+		if err != nil {
+			log.Printf("[feishu] failed to build task card approval snapshot: %v", err)
+			return nil
+		}
+		if err := a.cardKit.UpdateCard(ctx, action.TaskCard, cardJSON, sequence); err != nil {
+			log.Printf("[feishu] ignored task approval card update error: %v", err)
+			return nil
+		}
+		updated = true
+		return nil
+	})
+	return updated
 }
 
 func (a *Adapter) updateApprovalPanelWithAction(action parsedCardAction) *callback.Card {

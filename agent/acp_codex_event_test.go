@@ -371,6 +371,8 @@ func TestCodexInternalProgressNotificationsAreConsumedWithoutUserProgress(t *tes
 		"guardianWarning",
 		"item/commandExecution/outputDelta",
 		"item/fileChange/patchUpdated",
+		"item/reasoning/summaryPartAdded",
+		"item/reasoning/summaryTextDelta",
 	} {
 		message := rpcResponse{
 			Method: method,

@@ -9,9 +9,11 @@ import (
 const taskCardRecordTTL = 30 * time.Minute
 
 type taskCardRegistry struct {
-	mu    sync.Mutex
-	cards map[string]*taskCardState
-	now   func() time.Time
+	mu      sync.Mutex
+	opsMu   sync.Mutex
+	cards   map[string]*taskCardState
+	now     func() time.Time
+	cardOps *cardKitOperationCoordinator
 }
 
 type taskCardState struct {
@@ -34,7 +36,27 @@ type taskCardState struct {
 }
 
 func newTaskCardRegistry() *taskCardRegistry {
-	return &taskCardRegistry{cards: make(map[string]*taskCardState), now: time.Now}
+	return &taskCardRegistry{
+		cards:   make(map[string]*taskCardState),
+		now:     time.Now,
+		cardOps: newCardKitOperationCoordinator(),
+	}
+}
+
+func (r *taskCardRegistry) withCardOperation(cardID string, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if r == nil {
+		return fn()
+	}
+	r.opsMu.Lock()
+	if r.cardOps == nil {
+		r.cardOps = newCardKitOperationCoordinator()
+	}
+	ops := r.cardOps
+	r.opsMu.Unlock()
+	return ops.with(cardID, fn)
 }
 
 func (r *taskCardRegistry) record(cardID string, opts cardOptions) {

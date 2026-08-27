@@ -63,7 +63,7 @@ type RuntimeRestartController interface {
 // RuntimeRestartOptionsController lets newer controllers receive explicit
 // restart authority without changing the legacy loopback controller contract.
 type RuntimeRestartOptionsController interface {
-	PrepareRuntimeRestartWithOptions(context.Context, bool, bool) (messaging.RuntimeRestartResult, error)
+	PrepareRuntimeRestartWithOptions(context.Context, bool, bool, bool) (messaging.RuntimeRestartResult, error)
 }
 
 // CodexAccountController 由消息层实现，统一协调运行中的任务、Agent 与账号事务。
@@ -241,6 +241,15 @@ func (s *Server) handleRuntimeRestart(w http.ResponseWriter, r *http.Request) {
 		}
 		force = parsed
 	}
+	forceDrain := force
+	if raw := strings.TrimSpace(r.URL.Query().Get("force_drain")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_force_drain", "force_drain 必须是布尔值")
+			return
+		}
+		forceDrain = forceDrain || parsed
+	}
 	stopConflictingCodexHosts := false
 	if raw := strings.TrimSpace(r.URL.Query().Get("stop_conflicting_codex_hosts")); raw != "" {
 		parsed, err := strconv.ParseBool(raw)
@@ -255,9 +264,13 @@ func (s *Server) handleRuntimeRestart(w http.ResponseWriter, r *http.Request) {
 	var result messaging.RuntimeRestartResult
 	var err error
 	if controller, ok := s.restart.(RuntimeRestartOptionsController); ok {
-		result, err = controller.PrepareRuntimeRestartWithOptions(restartCtx, force, stopConflictingCodexHosts)
+		result, err = controller.PrepareRuntimeRestartWithOptions(
+			restartCtx, forceDrain, stopConflictingCodexHosts, force,
+		)
+	} else if force || stopConflictingCodexHosts {
+		err = fmt.Errorf("%w: 当前运行时不支持显式 Codex Host 终止授权", messaging.ErrRuntimeRestartBlocked)
 	} else {
-		result, err = s.restart.PrepareRuntimeRestart(restartCtx, force)
+		result, err = s.restart.PrepareRuntimeRestart(restartCtx, forceDrain)
 	}
 	if errors.Is(err, messaging.ErrActiveTasksRunning) || errors.Is(err, messaging.ErrRuntimeRestartBlocked) {
 		writeJSONStatus(w, http.StatusConflict, map[string]any{
@@ -268,8 +281,12 @@ func (s *Server) handleRuntimeRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		code := "runtime_restart_failed"
+		if errors.Is(err, agent.ErrCodexRestartUnsafe) {
+			code = "runtime_restart_host_outcome_unknown"
+		}
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]any{
-			"status": "error", "code": "runtime_restart_failed",
+			"status": "error", "code": code,
 			"message": observability.SanitizeText(err.Error()), "draining": s.runtimeRestartDraining(),
 		})
 		return
