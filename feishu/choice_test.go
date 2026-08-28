@@ -56,6 +56,24 @@ func TestBuildChoiceCardMarksApprovalButtons(t *testing.T) {
 	}
 }
 
+func TestBuildChoiceCardShowsStructuredApprovalPurpose(t *testing.T) {
+	prompt := "Codex 请求执行敏感操作，请确认：\n\n申请目的：为了运行项目测试\n操作类型：命令执行\n命令：go test ./...\n工作目录：/workspace/demo\n可能影响：将在该目录执行命令。"
+	cardJSON, err := buildChoiceCard(prompt, []platform.Choice{{ID: "allow", Label: "仅本次允许"}}, "feishu:ou_user")
+	if err != nil {
+		t.Fatalf("buildChoiceCard error: %v", err)
+	}
+	card := decodeCardJSON(t, cardJSON)
+	elements := card["body"].(map[string]any)["elements"].([]any)
+	content := elements[0].(map[string]any)["content"].(string)
+	if !strings.Contains(content, "申请目的：为了运行项目测试") || !strings.Contains(content, "可能影响：将在该目录执行命令") {
+		t.Fatalf("approval card content=%q, want purpose and impact", content)
+	}
+	value := elements[1].(map[string]any)["value"].(map[string]any)
+	if !strings.Contains(value["summary"].(string), "purpose: 为了运行项目测试") {
+		t.Fatalf("approval summary=%#v, want purpose", value["summary"])
+	}
+}
+
 func TestBuildChoiceCardLabelsClaudeApprovalSource(t *testing.T) {
 	cardJSON, err := buildChoiceCard("Claude 请求执行敏感操作，请确认：\n\n{\"cmd\":\"date\"}", []platform.Choice{{
 		ID: "allow", Label: "允许本次", Metadata: map[string]string{

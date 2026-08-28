@@ -243,6 +243,9 @@ func approvalSummaryFromPrompt(prompt string) string {
 	if raw == "" {
 		return ""
 	}
+	if strings.Contains(raw, "申请目的：") || strings.Contains(raw, "操作类型：") {
+		return approvalStructuredSummary(raw)
+	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return "command: " + compactOneLine(raw, approvalSummaryMaxRune)
@@ -255,6 +258,33 @@ func approvalSummaryFromPrompt(prompt string) string {
 	}
 	if cwd != "" {
 		lines = append(lines, "cwd: "+cwd)
+	}
+	return compactOneLine(strings.Join(lines, "\n"), approvalSummaryMaxRune)
+}
+
+func approvalStructuredSummary(raw string) string {
+	values := make(map[string]string, 4)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		for _, field := range []string{"申请目的", "操作类型", "命令", "工作目录"} {
+			prefix := field + "："
+			if strings.HasPrefix(line, prefix) {
+				values[field] = compactOneLine(strings.TrimSpace(strings.TrimPrefix(line, prefix)), approvalSummaryMaxRune/2)
+			}
+		}
+	}
+	lines := make([]string, 0, 4)
+	if values["命令"] != "" {
+		lines = append(lines, "command: "+values["命令"])
+	}
+	if values["工作目录"] != "" {
+		lines = append(lines, "cwd: "+values["工作目录"])
+	}
+	if values["申请目的"] != "" {
+		lines = append(lines, "purpose: "+values["申请目的"])
+	}
+	if values["操作类型"] != "" {
+		lines = append(lines, "operation: "+values["操作类型"])
 	}
 	return compactOneLine(strings.Join(lines, "\n"), approvalSummaryMaxRune)
 }

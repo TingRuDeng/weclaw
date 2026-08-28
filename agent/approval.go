@@ -31,10 +31,21 @@ var (
 
 type ApprovalRequestStateProbe func(context.Context) (ApprovalRequestState, error)
 
+// ApprovalContext 保留上游审批请求中供用户判断风险的结构化信息。
+// ToolCall 仍作为兼容字段保留，旧版 Agent 可以继续只提供原始调用内容。
+type ApprovalContext struct {
+	Operation   string
+	Reason      string
+	Command     []string
+	Cwd         string
+	Permissions json.RawMessage
+}
+
 // ApprovalRequest 描述一次需要用户确认的 Codex 敏感操作。
 type ApprovalRequest struct {
 	RequestID  string
 	ToolCall   json.RawMessage
+	Context    ApprovalContext
 	Options    []ApprovalOption
 	StateProbe ApprovalRequestStateProbe
 	Resolution CodexInteractionResolution

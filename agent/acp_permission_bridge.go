@@ -35,6 +35,7 @@ func (a *ACPAgent) handlePermissionRequestAt(raw string, sequence uint64) {
 		Request: ApprovalRequest{
 			RequestID: strings.TrimSpace(string(req.ID)),
 			ToolCall:  permissionToolCall(req.Params),
+			Context:   approvalContextForPermission(req.Method, req.Params),
 			Options:   options,
 		},
 	}
@@ -279,6 +280,31 @@ func permissionToolCall(params permissionRequestParams) json.RawMessage {
 		return nil
 	}
 	return data
+}
+
+// approvalContextForPermission 将 ACP 的审批字段转换为跨平台可展示的摘要上下文。
+func approvalContextForPermission(method string, params permissionRequestParams) ApprovalContext {
+	operation := "需要确认的操作"
+	switch method {
+	case "item/commandExecution/requestApproval":
+		operation = "命令执行"
+	case "item/fileChange/requestApproval":
+		operation = "文件修改"
+	case "item/fileRead/requestApproval":
+		operation = "文件读取"
+	case "item/permissions/requestApproval":
+		operation = "权限申请"
+	}
+	command := make([]string, len(params.Command))
+	copy(command, params.Command)
+	permissions := append(json.RawMessage(nil), params.Permissions...)
+	return ApprovalContext{
+		Operation:   operation,
+		Reason:      strings.TrimSpace(params.Reason),
+		Command:     command,
+		Cwd:         strings.TrimSpace(params.Cwd),
+		Permissions: permissions,
+	}
 }
 
 // approvalOptionsFromPermission 统一旧 options 和新版 availableDecisions。

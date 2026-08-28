@@ -3,9 +3,11 @@ package messaging
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/fastclaw-ai/weclaw/observability"
 	"github.com/fastclaw-ai/weclaw/platform"
 	"github.com/google/uuid"
 )
@@ -65,6 +67,9 @@ func approvalOptionKind(option agent.ApprovalOption) string {
 
 func approvalPrompt(req agent.ApprovalRequest, agentName string) string {
 	displayName := agentDisplayName(agentName)
+	if prompt := structuredApprovalPrompt(req, displayName); prompt != "" {
+		return prompt
+	}
 	toolCall := strings.TrimSpace(string(req.ToolCall))
 	if toolCall == "" {
 		toolCall = displayName + " 请求执行一项需要确认的操作。"
@@ -73,6 +78,96 @@ func approvalPrompt(req agent.ApprovalRequest, agentName string) string {
 		toolCall = string(runes[:1200]) + "..."
 	}
 	return displayName + " 请求执行敏感操作，请确认：\n\n" + toolCall
+}
+
+func structuredApprovalPrompt(req agent.ApprovalRequest, displayName string) string {
+	ctx := req.Context
+	if strings.TrimSpace(ctx.Reason) == "" && strings.TrimSpace(ctx.Operation) == "" && len(ctx.Command) == 0 && strings.TrimSpace(ctx.Cwd) == "" && len(ctx.Permissions) == 0 {
+		return ""
+	}
+	lines := []string{displayName + " 请求执行敏感操作，请确认：", ""}
+	if reason := approvalPurpose(req); reason != "" {
+		lines = append(lines, "申请目的："+reason)
+	}
+	if operation := approvalDisplayText(ctx.Operation); operation != "" {
+		lines = append(lines, "操作类型："+operation)
+	}
+	if command := approvalDisplayText(strings.Join(ctx.Command, " ")); command != "" {
+		lines = append(lines, "命令："+command)
+	}
+	if cwd := approvalDisplayText(ctx.Cwd); cwd != "" {
+		lines = append(lines, "工作目录："+cwd)
+	}
+	if len(ctx.Permissions) > 0 && strings.TrimSpace(string(ctx.Permissions)) != "null" {
+		lines = append(lines, "权限范围：申请额外运行权限")
+	}
+	if detail := approvalToolCallDetail(req.ToolCall, ctx); detail != "" {
+		lines = append(lines, "操作详情："+detail)
+	}
+	impact := approvalImpact(ctx.Operation)
+	if impact != "" {
+		lines = append(lines, "可能影响："+impact)
+	}
+	lines = append(lines, "", "请确认是否继续。")
+	return strings.Join(lines, "\n")
+}
+
+func approvalToolCallDetail(raw json.RawMessage, ctx agent.ApprovalContext) string {
+	if len(ctx.Command) > 0 || strings.TrimSpace(ctx.Cwd) != "" {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return approvalDisplayText(string(raw))
+	}
+	for _, key := range []string{"cmd", "command", "path", "file"} {
+		if value, ok := payload[key].(string); ok {
+			if value = approvalDisplayText(value); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func approvalPurpose(req agent.ApprovalRequest) string {
+	if reason := approvalDisplayText(req.Context.Reason); reason != "" {
+		return reason
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(req.ToolCall, &payload); err == nil {
+		for _, key := range []string{"title", "description"} {
+			if value, ok := payload[key].(string); ok {
+				if value = approvalDisplayText(value); value != "" {
+					return value
+				}
+			}
+		}
+	}
+	return "上游未提供具体原因，请根据操作内容判断。"
+}
+
+func approvalImpact(operation string) string {
+	switch strings.TrimSpace(operation) {
+	case "命令执行":
+		return "将在该目录执行命令，可能读取项目文件并生成临时文件。"
+	case "文件修改":
+		return "将修改工作区中的文件内容。"
+	case "文件读取":
+		return "将读取工作区中的文件内容。"
+	case "权限申请":
+		return "将扩大本次操作可使用的运行权限。"
+	default:
+		return "可能改变当前任务的工作区或运行环境。"
+	}
+}
+
+func approvalDisplayText(value string) string {
+	value = observability.SanitizeText(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+	if runes := []rune(value); len(runes) > 500 {
+		return string(runes[:497]) + "..."
+	}
+	return value
 }
 
 func approvalChoices(options []agent.ApprovalOption, approvalKey string, taskCardID string, ownerUserID string, routeUserID string, agentName string) []platform.Choice {

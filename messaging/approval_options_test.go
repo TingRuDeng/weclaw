@@ -1,6 +1,8 @@
 package messaging
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -36,5 +38,31 @@ func TestApprovalChoiceLabelDistinguishesClaudeAllowScopes(t *testing.T) {
 				t.Fatalf("approvalChoiceLabel()=%q，期望 %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestApprovalPromptUsesToolCallTitleWhenReasonMissing(t *testing.T) {
+	prompt := approvalPrompt(agent.ApprovalRequest{
+		ToolCall: json.RawMessage(`{"title":"读取配置文件"}`),
+		Context:  agent.ApprovalContext{Operation: "文件读取"},
+	}, "claude")
+	if !strings.Contains(prompt, "申请目的：读取配置文件") {
+		t.Fatalf("approval prompt=%q, want tool call title as purpose", prompt)
+	}
+}
+
+func TestApprovalPromptExplainsPurposeAndImpact(t *testing.T) {
+	prompt := approvalPrompt(agent.ApprovalRequest{
+		Context: agent.ApprovalContext{
+			Operation: "命令执行",
+			Reason:    "为了运行项目测试",
+			Command:   []string{"go", "test", "./..."},
+			Cwd:       "/workspace/demo",
+		},
+	}, "codex")
+	for _, want := range []string{"申请目的：为了运行项目测试", "操作类型：命令执行", "命令：go test ./...", "工作目录：/workspace/demo", "可能影响：将在该目录执行命令"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("approval prompt=%q, missing %q", prompt, want)
+		}
 	}
 }

@@ -117,6 +117,30 @@ func TestHandleCodexCommandApprovalUsesAvailableDecisions(t *testing.T) {
 	}
 }
 
+func TestHandlePermissionRequestPreservesApprovalContext(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	turnCh := make(chan *codexTurnEvent, 1)
+	a.notifyMu.Lock()
+	a.turnCh["thread-context"] = turnCh
+	a.notifyMu.Unlock()
+
+	raw := `{"jsonrpc":"2.0","id":13,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-context","turnId":"turn-1","toolCall":{"cmd":"npm test"},"command":["npm","test"],"cwd":"/workspace/demo","reason":"为了验证修复","permissions":{"network":true},"availableDecisions":["allow","deny"]}}`
+	a.handlePermissionRequest(raw)
+
+	select {
+	case evt := <-turnCh:
+		context := evt.Approval.Request.Context
+		if context.Reason != "为了验证修复" || context.Operation != "命令执行" || context.Cwd != "/workspace/demo" {
+			t.Fatalf("approval context=%#v", context)
+		}
+		if len(context.Command) != 2 || context.Command[0] != "npm" || len(context.Permissions) == 0 {
+			t.Fatalf("approval context=%#v, want command and permissions", context)
+		}
+	default:
+		t.Fatal("approval request was not dispatched")
+	}
+}
+
 func TestHandleCodexCommandApprovalUsesSnakeCaseAvailableDecisions(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	turnCh := make(chan *codexTurnEvent, 1)

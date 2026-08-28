@@ -37,6 +37,7 @@ func (a *codexDesktopActions) approvalEvent(threadID string, action codexDesktop
 	approval := &codexApprovalRequest{
 		Request: ApprovalRequest{
 			RequestID: action.ID, ToolCall: permissionToolCall(params),
+			Context: approvalContextForPermission(action.Method, params),
 			Options: approvalOptionsFromPermission(params),
 		},
 	}
