@@ -256,7 +256,7 @@ func loadCodexAccountRuntime() (*config.Config, bool, error) {
 	}
 	state, err := readRuntimeState()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return cfg, false, nil
 		}
 		return nil, false, fmt.Errorf("无法确认 WeClaw 服务状态，已拒绝离线修改: %w", err)

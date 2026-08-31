@@ -51,3 +51,16 @@ func TestWriteTerminalOutboxStatusEmptyAndJSON(t *testing.T) {
 		t.Fatalf("json=%q", buffer.String())
 	}
 }
+
+func TestLoadCodexAccountRuntimeTreatsMissingPIDAsOffline(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+
+	_, online, err := loadCodexAccountRuntime()
+
+	if err != nil {
+		t.Fatalf("loadCodexAccountRuntime error=%v, want offline status", err)
+	}
+	if online {
+		t.Fatal("loadCodexAccountRuntime online=true, want false")
+	}
+}
