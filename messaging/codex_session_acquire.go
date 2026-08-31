@@ -88,6 +88,9 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 	if err != nil {
 		return codexSessionAcquireResult{}, err
 	}
+	if req.pendingFirstTurn {
+		providerRequest.PendingFirstTurn = true
+	}
 	providerPreparation := agent.CodexProviderPreparation{}
 	if providerAgent, supported := req.agent.(agent.CodexProviderRuntimeAgent); supported {
 		providerPreparation, err = providerAgent.PrepareCodexThread(req.ctx, providerRequest)

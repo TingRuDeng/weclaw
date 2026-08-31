@@ -47,6 +47,10 @@ func (a *ACPAgent) prepareCodexThreadProviderLocked(ctx context.Context, req Cod
 		return result, err
 	}
 	result.Provider = provider
+	if req.PendingFirstTurn {
+		a.rememberCodexThreadProvider(threadID, provider)
+		return result, nil
+	}
 	codexHome, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
 	if err != nil {
 		return result, fmt.Errorf("解析 CODEX_HOME: %w", err)

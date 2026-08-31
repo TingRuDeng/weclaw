@@ -250,9 +250,11 @@ func parseLocalCodexSessionMeta(line []byte) (localCodexSessionMeta, bool) {
 	return meta, meta.ID != "" && meta.Cwd != ""
 }
 
-// isVisibleLocalCodexSession 保持本机扫描结果接近 Codex 桌面端可见的用户主会话。
+// isVisibleLocalCodexSession 只展示 Codex Desktop 或 WeClaw 受控 CLI 创建的用户主会话。
 func isVisibleLocalCodexSession(meta localCodexSessionMeta) bool {
-	if strings.TrimSpace(meta.Originator) != "Codex Desktop" {
+	switch strings.TrimSpace(meta.Originator) {
+	case "Codex Desktop", "weclaw":
+	default:
 		return false
 	}
 	threadSource := strings.TrimSpace(meta.ThreadSource)

@@ -143,7 +143,7 @@ func TestCodexLsIncludesLocalCodexSessionsAndDeduplicatesRecordedThread(t *testi
 	}
 }
 
-func TestCodexLsDoesNotStartSharedAgent(t *testing.T) {
+func TestCodexLsIncludesWeClawControlledCLISessionWithoutStartingSharedAgent(t *testing.T) {
 	started := false
 	h := NewHandler(func(context.Context, string) agent.Agent {
 		started = true
@@ -153,7 +153,11 @@ func TestCodexLsDoesNotStartSharedAgent(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "local")
 	h.SetAgentMetas([]AgentMeta{{Name: "codex", Type: "acp", Command: "codex"}})
 	h.SetCodexLocalSessionDir(codexDir)
-	writeLocalCodexSession(t, codexDir, "thread-local", workspace, "本机会话", "2026-04-29T09:00:00Z")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("create controlled CLI workspace: %v", err)
+	}
+	writeLocalCodexIndex(t, codexDir, "thread-local", "受控 CLI 会话", "2026-04-29T09:00:00Z")
+	writeLocalCodexSessionMeta(t, codexDir, "thread-local", workspace, "2026-04-29T09:00:00Z", `"weclaw"`, `"user"`, `"vscode"`)
 
 	result := h.handleCodexSessionCommandForRouteResult(context.Background(), codexSessionCommandRequest{
 		ActorUserID: "user-1",
@@ -166,7 +170,7 @@ func TestCodexLsDoesNotStartSharedAgent(t *testing.T) {
 		t.Fatal("/cx ls must read the local catalog without starting the shared Codex agent")
 	}
 	if !result.ShowCard || !strings.Contains(result.Reply, "local") {
-		t.Fatalf("result=%#v, want local workspace navigation result", result)
+		t.Fatalf("result=%#v, want controlled CLI workspace navigation result", result)
 	}
 }
 

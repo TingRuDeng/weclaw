@@ -250,6 +250,12 @@ func TestAcquireCodexSessionDoesNotRecycleHostForPendingFirstTurn(t *testing.T) 
 	if len(threads) != 0 || result.handoffReleaseAttempted {
 		t.Fatalf("release calls=%v result=%#v", threads, result)
 	}
+	f.ag.mu.Lock()
+	providerPrepareRequest := f.ag.providerPrepareRequest
+	f.ag.mu.Unlock()
+	if !providerPrepareRequest.PendingFirstTurn {
+		t.Fatal("pending-first-turn must reach provider preparation and runtime binding before store commit")
+	}
 }
 
 func TestAcquireCodexSessionKeepsBindingWhenOldThreadReleaseIsBusy(t *testing.T) {

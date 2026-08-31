@@ -92,12 +92,49 @@ func TestPrepareCodexCLILaunchStartsOfficialDaemonAndPinsRemote(t *testing.T) {
 	if !reflect.DeepEqual(actions, []string{"start"}) {
 		t.Fatalf("lifecycle actions=%v, want start", actions)
 	}
-	wantArgs := []string{"-c", "feature=true", "--remote", "unix://" + codexDaemonSocketPath(home), "resume", "thread-1"}
+	wantArgs := []string{"-c", "feature=true", "--cd", "/tmp/project", "--remote", "unix://" + codexDaemonSocketPath(home), "resume", "thread-1"}
 	if launch.Command != managedCodex || !reflect.DeepEqual(launch.Args, wantArgs) || launch.Cwd != "/tmp/project" {
 		t.Fatalf("launch=%#v, want command=%q args=%#v cwd=/tmp/project", launch, managedCodex, wantArgs)
 	}
 	if !containsEnvValue(launch.Env, "CODEX_HOME", home) {
 		t.Fatalf("launch env does not preserve CODEX_HOME: %#v", launch.Env)
+	}
+}
+
+func TestPrepareCodexCLILaunchPreservesExplicitWorkingDirectory(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "wc-codex-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	managedCodex := filepath.Join(home, "packages", "standalone", "current", "codex")
+	if err := os.MkdirAll(filepath.Dir(managedCodex), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managedCodex, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, Cwd: t.TempDir(),
+		Env: map[string]string{"CODEX_HOME": home}, CodexHostMode: "daemon",
+	})
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
+	a.codexDaemonLifecycleCall = func(context.Context, string) (codexDaemonLifecycleOutput, error) {
+		return codexDaemonLifecycleOutput{
+			Status: "started", Backend: "pid", PID: 123,
+			ManagedCodexPath: managedCodex, SocketPath: codexDaemonSocketPath(home),
+		}, nil
+	}
+
+	launch, err := a.PrepareCodexCLILaunch(context.Background(), CodexCLILaunchOptions{
+		Cwd: "/tmp/default", Args: []string{"-C", "/tmp/override", "resume", "thread-1"}, AllowHostStart: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{"--remote", "unix://" + codexDaemonSocketPath(home), "-C", "/tmp/override", "resume", "thread-1"}
+	if !reflect.DeepEqual(launch.Args, wantArgs) {
+		t.Fatalf("launch args=%#v, want explicit working directory without duplicate --cd: %#v", launch.Args, wantArgs)
 	}
 }
 

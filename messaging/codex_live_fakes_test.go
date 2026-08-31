@@ -28,6 +28,7 @@ type fakeCodexLiveAgent struct {
 	runErr                       error
 	providerPreparation          agent.CodexProviderPreparation
 	providerPrepareErr           error
+	providerPrepareRequest       agent.CodexRuntimeRequest
 	providerPrepareCalls         int
 	providerPrepared             bool
 	handoffBeforeProviderPrepare bool
@@ -227,6 +228,7 @@ func (f *fakeCodexLiveAgent) PrepareCodexThread(_ context.Context, req agent.Cod
 	defer f.mu.Unlock()
 	f.providerPrepareCalls++
 	f.providerPrepared = true
+	f.providerPrepareRequest = req
 	f.lastRuntimeReq = req
 	return f.providerPreparation, f.providerPrepareErr
 }

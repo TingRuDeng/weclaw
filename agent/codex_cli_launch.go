@@ -147,11 +147,26 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	if cwd == "" {
 		cwd = a.cwd
 	}
-	args := append(codexCLIFrontendPrefixArgs(a.args), "--remote", "unix://"+socketPath)
+	prefixArgs := codexCLIFrontendPrefixArgs(a.args)
+	args := prefixArgs
+	if !codexCLIFrontendHasWorkingDirectoryArg(prefixArgs) && !codexCLIFrontendHasWorkingDirectoryArg(opts.Args) {
+		args = append(args, "--cd", cwd)
+	}
+	args = append(args, "--remote", "unix://"+socketPath)
 	args = append(args, opts.Args...)
 	return CodexCLILaunch{
 		Command: command, Args: args, Cwd: cwd, Env: env, SocketPath: socketPath,
 	}, nil
+}
+
+func codexCLIFrontendHasWorkingDirectoryArg(args []string) bool {
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "-C" || strings.HasPrefix(arg, "-C") || arg == "--cd" || strings.HasPrefix(arg, "--cd=") {
+			return true
+		}
+	}
+	return false
 }
 
 func codexCLIFrontendPrefixArgs(configured []string) []string {

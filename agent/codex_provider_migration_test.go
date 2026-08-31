@@ -228,6 +228,31 @@ func TestPrepareCodexThreadUsesCurrentProviderAndDefersActiveMismatch(t *testing
 	assertSQLiteScalar(t, stateDB, "SELECT model_provider FROM threads WHERE id='thread-1';", "relay")
 }
 
+func TestPrepareCodexThreadPendingFirstTurnDoesNotRequirePersistedState(t *testing.T) {
+	codexHome := t.TempDir()
+	if err := os.Chmod(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, Env: map[string]string{"CODEX_HOME": codexHome},
+	})
+	a.rpcCall = func(context.Context, string, any) (json.RawMessage, error) { return nil, nil }
+	a.codexProviderReadCall = func(context.Context, string) (string, error) { return "openai", nil }
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+	result, err := a.PrepareCodexThread(context.Background(), CodexRuntimeRequest{
+		Ref:              CodexThreadRef{ConversationID: "conversation-1", ThreadID: "thread-new"},
+		WorkspaceRoot:    t.TempDir(),
+		PendingFirstTurn: true,
+	})
+	if err != nil || result.Provider != "openai" || result.PreviousProvider != "" {
+		t.Fatalf("PrepareCodexThread() = %+v, %v", result, err)
+	}
+	if provider := a.codexThreadProvider("thread-new"); provider != "openai" {
+		t.Fatalf("remembered provider=%q, want openai", provider)
+	}
+}
+
 func runSQLiteFixture(t *testing.T, database string, sql string) {
 	t.Helper()
 	cmd := exec.Command("sqlite3", database, sql)
