@@ -57,7 +57,7 @@ ai_summary:
 - `feishu/` 负责飞书事件、会话范围、卡片、按钮和审批；`wechat/` 与 `ilink/` 负责微信个人号接入。
 - 全新配置不默认启用消息平台；未选择平台时 `doctor` 警告而 `start` 以 API-only 模式常驻。微信扫码只由显式 `weclaw wechat login` 触发；旧微信凭证在首次启动时迁移为显式启用，飞书已启用时不隐式同时启用微信。
 - 持久配置缺少 `api_token` 时，`start` 与 `doctor --fix` 一次性生成并原子保存强随机 Token；普通配置读取和普通 `doctor` 只读，`WECLAW_API_TOKEN` 只做运行态覆盖且不得经配置更新写回。
-- `scripts/release.sh` 和 CI 只为 GitHub 构建、上传 `darwin/arm64`、`linux/amd64` 正式资产及原始摘要，Gitee 镜像同两项资产的压缩表示和同一摘要。发布门禁包含安装脚本、文档、module tidy、全仓测试、race、vet、Staticcheck、govulncheck 和 `git diff --check`；本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。
+- `scripts/release.sh` 和 CI 只为 GitHub 构建、上传 `darwin/arm64`、`linux/amd64` 正式资产及原始摘要，Gitee 镜像同两项资产的压缩表示和同一摘要。Gitee CI/Linux 认证优先使用外部 `GITEE_TOKEN`，macOS 本地缺失时回退读取 `weclaw-gitee-release` 登录钥匙串；API 只通过受保护临时请求头传递 Token，并在 Git 推送前验证目标仓库。发布门禁包含安装脚本、文档、module tidy、全仓测试、race、vet、Staticcheck、govulncheck 和 `git diff --check`；本地发布通过 `WECLAW_GOCACHE`、调用方 `GOCACHE` 或平台默认值统一复用单一持久化 Go 缓存。
 - `tasks/todo.md` 只保留当前或正在执行的任务记录；已完成历史流水账不长期保留。
 - `tasks/lessons.md` 是长期经验沉淀，清理文档时必须保留。
 - 不要把机器本地绝对路径写入项目上下文文档；配置示例可以使用 `/path/to/project` 这类占位路径。

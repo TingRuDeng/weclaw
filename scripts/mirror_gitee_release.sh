@@ -14,14 +14,39 @@ usage() {
 将当前 Git main/tag 和 asset-dir 中已由 GitHub 权威发布流程验证的资产镜像到 Gitee。
 
 环境:
-  GITEE_TOKEN  必需；仅从外部 Secret 注入，不写入仓库或命令参数
-  GITEE_REPO   可选，默认 jimdeng891/weclaw
+  GITEE_TOKEN             优先使用；CI/Linux 通过外部 Secret 注入
+  GITEE_KEYCHAIN_SERVICE  macOS 回退服务名，默认 weclaw-gitee-release
+  GITEE_KEYCHAIN_ACCOUNT  macOS 回退账户名，默认当前用户
+  GITEE_REPO              可选，默认 jimdeng891/weclaw
 EOF
 }
 
 fail() {
   printf 'Gitee 镜像失败：%s\n' "$*" >&2
   exit 1
+}
+
+load_gitee_token() {
+  if [[ -n "${GITEE_TOKEN:-}" ]]; then
+    export GITEE_TOKEN
+    return
+  fi
+
+  [[ "$(uname -s 2>/dev/null)" == "Darwin" ]] || fail "缺少 GITEE_TOKEN"
+  command -v security >/dev/null 2>&1 || fail "缺少 GITEE_TOKEN，且系统没有 macOS security 命令"
+
+  local account service token
+  account="${GITEE_KEYCHAIN_ACCOUNT:-${USER:-}}"
+  service="${GITEE_KEYCHAIN_SERVICE:-weclaw-gitee-release}"
+  [[ -n "$account" ]] || fail "无法确定 macOS 钥匙串账户名"
+  if ! token="$(security find-generic-password -a "$account" -s "$service" -w)"; then
+    fail "缺少 GITEE_TOKEN，且无法读取 macOS 钥匙串服务 $service"
+  fi
+  [[ -n "$token" ]] || fail "macOS 钥匙串服务 $service 中的 Token 为空"
+  GITEE_TOKEN="$token"
+  export GITEE_TOKEN
+  unset token
+  printf '==> 已从 macOS 钥匙串加载 Gitee Token\n'
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -34,7 +59,7 @@ TAG="$1"
 ASSET_DIR="$2"
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag 必须是 vX.Y.Z"
 [[ -d "$ASSET_DIR" ]] || fail "asset-dir 不存在：$ASSET_DIR"
-[[ -n "${GITEE_TOKEN:-}" ]] || fail "缺少 GITEE_TOKEN"
+load_gitee_token
 [[ "$GITEE_TOKEN" != *$'\n'* && "$GITEE_TOKEN" != *$'\r'* ]] || fail "GITEE_TOKEN 格式无效"
 [[ "$GITEE_CURL_MAX_TIME" =~ ^[1-9][0-9]*$ ]] || fail "GITEE_CURL_MAX_TIME 必须是正整数秒"
 
@@ -76,9 +101,9 @@ for asset_name in "${GITEE_BINARY_ASSETS[@]}"; do
 done
 cp "$ASSET_DIR/checksums.txt" "$MIRROR_DIR/checksums.txt"
 
-TOKEN_FILE="$TEMP_DIR/token"
+AUTH_HEADER_FILE="$TEMP_DIR/auth-header"
 ASKPASS_FILE="$TEMP_DIR/askpass.sh"
-printf '%s' "$GITEE_TOKEN" >"$TOKEN_FILE"
+printf 'Authorization: token %s\n' "$GITEE_TOKEN" >"$AUTH_HEADER_FILE"
 cat >"$ASKPASS_FILE" <<'EOF'
 #!/bin/sh
 case "$1" in
@@ -93,7 +118,23 @@ GITEE_OWNER="${GITEE_REPO%%/*}"
 export GITEE_USERNAME="${GITEE_USERNAME:-$GITEE_OWNER}"
 export GIT_ASKPASS="$ASKPASS_FILE"
 export GIT_TERMINAL_PROMPT=0
-CURL_SECURE=(--connect-timeout 30 --max-time "$GITEE_CURL_MAX_TIME" --proto '=https' --tlsv1.2)
+CURL_SECURE=(--connect-timeout 30 --max-time "$GITEE_CURL_MAX_TIME" --proto '=https' --tlsv1.2 --header "@${AUTH_HEADER_FILE}")
+
+printf '==> 验证 Gitee Token 和目标仓库\n'
+repo_json="$TEMP_DIR/repo.json"
+repo_probe_status="$(curl -sS "${CURL_SECURE[@]}" --get \
+  -o "$repo_json" -w '%{http_code}' \
+  "${GITEE_API_BASE}/repos/${GITEE_REPO}")"
+[[ "$repo_probe_status" == "200" ]] || fail "验证 Gitee Token 返回 HTTP ${repo_probe_status}"
+python3 - "$repo_json" "$GITEE_REPO" <<'PY' || fail "Gitee Token 返回的目标仓库不匹配"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    repo = json.load(handle)
+if not isinstance(repo, dict) or repo.get("full_name") != sys.argv[2]:
+    raise SystemExit(1)
+PY
 
 printf '==> 同步 main 和 %s 到 Gitee\n' "$TAG"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || fail "本地 tag 不存在：$TAG"
@@ -109,7 +150,6 @@ remote_tag="$(awk -v ref="refs/tags/$TAG" '$2 == ref { print $1 }' <<<"$remote_r
 
 release_json="$TEMP_DIR/release.json"
 probe_status="$(curl -sS "${CURL_SECURE[@]}" --get \
-  --data-urlencode "access_token@${TOKEN_FILE}" \
   -o "$release_json" -w '%{http_code}' \
   "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/tags/${TAG}")"
 create_release=false
@@ -151,7 +191,6 @@ esac
 if [[ "$create_release" == true ]]; then
   printf '==> 创建 Gitee Release：%s\n' "$TAG"
   curl -fsS "${CURL_SECURE[@]}" \
-    --form "access_token=<${TOKEN_FILE}" \
     --form-string "tag_name=$TAG" \
     --form-string "target_commitish=main" \
     --form-string "name=$TAG" \
@@ -175,7 +214,6 @@ PY
 
 attachment_json="$TEMP_DIR/attachments.json"
 curl -fsS "${CURL_SECURE[@]}" --get \
-  --data-urlencode "access_token@${TOKEN_FILE}" \
   -o "$attachment_json" \
   "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
 python3 - "$attachment_json" "$TEMP_DIR/existing-assets" <<'PY'
@@ -198,7 +236,6 @@ for asset_name in "${EXPECTED_ASSETS[@]}"; do
   fi
   printf '==> 上传 Gitee 资产：%s\n' "$asset_name"
   curl -fsS "${CURL_SECURE[@]}" \
-    --form "access_token=<${TOKEN_FILE}" \
     --form "file=@${MIRROR_DIR}/${asset_name}" \
     -o "$TEMP_DIR/upload-${asset_name}.json" \
     "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
@@ -206,7 +243,6 @@ done
 
 printf '==> 核对 Gitee Release 资产清单\n'
 curl -fsS "${CURL_SECURE[@]}" --get \
-  --data-urlencode "access_token@${TOKEN_FILE}" \
   -o "$attachment_json" \
   "${GITEE_API_BASE}/repos/${GITEE_REPO}/releases/${release_id}/attach_files"
 

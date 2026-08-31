@@ -132,6 +132,7 @@ func TestGiteeMirrorPublishesVerifiedOfficialAssetsWithoutLeakingToken(t *testin
 	}
 
 	gitCalls := filepath.Join(root, "git-calls")
+	securityCalls := filepath.Join(root, "security-calls")
 	fakeGit := `#!/bin/sh
 if [ "$1" = "rev-parse" ]; then printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'; exit 0; fi
 if [ "$1" = "ls-remote" ]; then
@@ -148,13 +149,31 @@ printf '%s\n' "$*" >>"$TEST_GIT_CALLS"
 output=''
 previous=''
 url=''
+header_file=''
 for argument do
   [ "$previous" = "-o" ] && output="$argument"
+  [ "$previous" = "--header" ] && header_file="${argument#@}"
+  case "$argument" in
+    *access_token*) echo 'access_token parameter is forbidden' >&2; exit 92 ;;
+  esac
   previous="$argument"
   url="$argument"
 done
+if [ -z "$header_file" ] || [ "$(cat "$header_file")" != "Authorization: token $GITEE_TOKEN" ]; then
+  echo 'missing Gitee authorization header' >&2
+  exit 93
+fi
 printf '%s\n' "$*" >>"$TEST_CURL_CALLS"
 case "$url" in
+  */api/v5/repos/jimdeng891/weclaw)
+    repo_status=${TEST_REPO_PROBE_STATUS:-200}
+    if [ "$repo_status" = "200" ]; then
+      printf '{"full_name":"jimdeng891/weclaw"}' >"$output"
+    else
+      printf '{"message":"unauthorized"}' >"$output"
+    fi
+    printf '%s' "$repo_status"
+    ;;
   */releases) printf '{"id":42,"tag_name":"v9.9.9"}' >"$output" ;;
   */releases/tags/*)
     if [ "${TEST_RELEASE_PROBE_NULL:-}" = "1" ]; then
@@ -178,7 +197,20 @@ case "$url" in
   *) exit 91 ;;
 esac
 `
-	for name, content := range map[string]string{"git": fakeGit, "curl": fakeCurl} {
+	fakeSecurity := `#!/bin/sh
+printf '%s\n' "$*" >>"$TEST_SECURITY_CALLS"
+if [ "$1" = "find-generic-password" ]; then
+  printf '%s' "$TEST_KEYCHAIN_TOKEN"
+  exit 0
+fi
+exit 94
+`
+	fakeUname := `#!/bin/sh
+printf 'Darwin\n'
+`
+	for name, content := range map[string]string{
+		"curl": fakeCurl, "git": fakeGit, "security": fakeSecurity, "uname": fakeUname,
+	} {
 		path := filepath.Join(fakeBin, name)
 		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 			t.Fatal(err)
@@ -190,32 +222,75 @@ esac
 		t.Fatal(err)
 	}
 	secret := "gitee-secret-must-not-leak"
-	runMirror := func(extraEnv ...string) string {
+	baseEnv := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GITEE_TOKEN=") {
+			baseEnv = append(baseEnv, entry)
+		}
+	}
+	mirrorCommand := func(token string, extraEnv ...string) *exec.Cmd {
 		t.Helper()
 		cmd := exec.Command(script, "v9.9.9", assetsDir)
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(append([]string{}, baseEnv...),
 			"PATH="+fakeBin+":"+os.Getenv("PATH"),
-			"GITEE_TOKEN="+secret,
+			"GITEE_TOKEN="+token,
 			"TEST_ASSET_DIR="+assetsDir,
 			"TEST_RELEASE_JSON="+checkJSON,
 			"TEST_ATTACH_READY="+filepath.Join(root, "attachments-ready"),
 			"TEST_GIT_CALLS="+gitCalls,
 			"TEST_CURL_CALLS="+filepath.Join(root, "curl-calls"),
+			"TEST_KEYCHAIN_TOKEN="+secret,
+			"TEST_SECURITY_CALLS="+securityCalls,
 		)
 		cmd.Env = append(cmd.Env, extraEnv...)
+		return cmd
+	}
+	runMirror := func(token string, extraEnv ...string) string {
+		t.Helper()
+		cmd := mirrorCommand(token, extraEnv...)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("mirror script failed: %v\n%s", err, output)
 		}
 		return string(output)
 	}
-	createdOutput := runMirror("TEST_RELEASE_PROBE_NULL=1")
+	runMirrorExpectFailure := func(token string, extraEnv ...string) string {
+		t.Helper()
+		cmd := mirrorCommand(token, extraEnv...)
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("mirror script unexpectedly succeeded:\n%s", output)
+		}
+		return string(output)
+	}
+	invalidOutput := runMirrorExpectFailure(secret, "TEST_REPO_PROBE_STATUS=401")
+	if !strings.Contains(invalidOutput, "HTTP 401") {
+		t.Fatalf("invalid Gitee token rejection=%q, want HTTP status", invalidOutput)
+	}
+	if gitOutput, err := os.ReadFile(gitCalls); err == nil {
+		t.Fatalf("invalid Gitee token must fail before git push: %s", gitOutput)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	createdOutput := runMirror(secret, "TEST_RELEASE_PROBE_NULL=1")
 	if !strings.Contains(createdOutput, "创建 Gitee Release") {
 		t.Fatalf("HTTP 200 + null must create the missing Gitee release: %s", createdOutput)
 	}
-	reusedOutput := runMirror()
+	reusedOutput := runMirror(secret)
 	if !strings.Contains(reusedOutput, "复用已有 Gitee Release") {
 		t.Fatalf("valid release response must reuse the Gitee release: %s", reusedOutput)
+	}
+	keychainOutput := runMirror("")
+	if !strings.Contains(keychainOutput, "Gitee 镜像完成") {
+		t.Fatalf("macOS keychain token must complete the Gitee mirror: %s", keychainOutput)
+	}
+	securityOutput, err := os.ReadFile(securityCalls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(securityOutput), "find-generic-password -a") ||
+		!strings.Contains(string(securityOutput), "-s weclaw-gitee-release -w") {
+		t.Fatalf("Gitee keychain lookup=%q, want default service lookup", securityOutput)
 	}
 	gitOutput, err := os.ReadFile(gitCalls)
 	if err != nil {
@@ -225,7 +300,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined := createdOutput + reusedOutput + string(gitOutput) + string(curlOutput)
+	combined := createdOutput + reusedOutput + keychainOutput + string(gitOutput) + string(curlOutput) + string(securityOutput)
 	if strings.Contains(combined, secret) {
 		t.Fatal("Gitee token leaked to output or git arguments")
 	}

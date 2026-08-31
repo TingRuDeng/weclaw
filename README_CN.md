@@ -439,7 +439,7 @@ go build -o weclaw .
 
 仓库当前使用 Go 1.26.6。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
 
-正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，CI 与发布脚本只构建并上传 `weclaw_darwin_arm64`、`weclaw_linux_amd64` 和原始 `checksums.txt`。正式 Release 验证通过后，把两项二进制的可还原 `.gz` 表示和同一份原始摘要镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)。镜像上传后只核对最终附件名称和数量，不再重复回下载；安装器和更新器仍按权威摘要校验所选二进制。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 幂等续传缺失附件并重新核对清单。
+正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，CI 与发布脚本只构建并上传 `weclaw_darwin_arm64`、`weclaw_linux_amd64` 和原始 `checksums.txt`。正式 Release 验证通过后，把两项二进制的可还原 `.gz` 表示和同一份原始摘要镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)。CI 和 Linux 通过 `GITEE_TOKEN` 注入凭据；macOS 本地发布在环境变量缺失时回退读取登录钥匙串中的 `weclaw-gitee-release`。镜像脚本在 Git 推送前先通过仅存在于受保护临时目录的 Authorization 请求头验证 Token 与目标仓库完全匹配。镜像上传后只核对最终附件名称和数量，不再重复回下载；安装器和更新器仍按权威摘要校验所选二进制。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 幂等续传缺失附件并重新核对清单。
 
 ## 上游与许可
 
