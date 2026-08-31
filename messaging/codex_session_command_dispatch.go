@@ -287,7 +287,7 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 	case "model":
 		return textNavigationResult(h.handleCodexModelCommand(runtime.ctx, runtime.agent, fields[2:]))
 	case "new":
-		return textNavigationResult(h.handleCodexNewForRoute(codexNewRequest{
+		return h.handleCodexNewForRouteResult(codexNewRequest{
 			ctx: runtime.ctx, taskContext: runtime.externalTaskCtx,
 			actorUserID: runtime.actorUserID, userID: runtime.routeUserID,
 			authorizedIdentity: runtime.req.AuthorizedIdentity,
@@ -295,7 +295,7 @@ func (h *Handler) dispatchCodexMutationCommand(runtime codexSessionCommandRuntim
 			agent:    runtime.agent,
 			platform: runtime.req.Platform, accountID: runtime.req.AccountID,
 			reply: runtime.req.Reply,
-		}))
+		})
 	case "archive":
 		return textNavigationResult(h.handleCodexArchiveCommand(runtime))
 	case "rename":

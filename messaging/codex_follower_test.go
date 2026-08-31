@@ -32,6 +32,26 @@ func TestCodexFollowerFailureLoggingUsesPowerOfTwoSampling(t *testing.T) {
 	}
 }
 
+func TestCodexFollowerDefersPendingFirstTurnUntilUserMessage(t *testing.T) {
+	h, ag, registry, snapshot, _ := newCodexFollowerFixture(t, agent.CodexThreadState{ThreadID: "thread-local"})
+	h.ensureCodexSessions().updateWorkspace(snapshot.BindingKey, snapshot.Target.WorkspaceRoot, codexWorkspaceSession{
+		ThreadID:         snapshot.Target.ThreadID,
+		PendingFirstTurn: true,
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+	})
+	ag.binding.Runtime = agent.CodexRuntimeUnknown
+	ag.handoffErr = errors.New("agent error: no rollout found for thread id thread-local")
+
+	err := h.reconcileCodexFollower(context.Background(), registry, h.ensureCodexSessions().followerSnapshots()[0])
+
+	if err != nil {
+		t.Fatalf("reconcileCodexFollower() error=%v, pending first turn must wait for the user message", err)
+	}
+	if ag.handoffCalls != 0 {
+		t.Fatalf("handoff calls=%d, empty thread must not be resumed before its first user message", ag.handoffCalls)
+	}
+}
+
 type codexFollowerTestPlatform struct {
 	name    platform.PlatformName
 	account string

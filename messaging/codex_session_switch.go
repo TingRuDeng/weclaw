@@ -56,6 +56,11 @@ type codexNewRequest struct {
 
 // handleCodexNewForRoute 创建 thread 后立即绑定当前 frontend。
 func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
+	return h.handleCodexNewForRouteResult(req).Reply
+}
+
+// handleCodexNewForRouteResult 只把成功结果标记为可升级状态卡；失败保持文本语义。
+func (h *Handler) handleCodexNewForRouteResult(req codexNewRequest) navigationCommandResult {
 	conversationID := buildCodexConversationID(req.userID, req.agentName, req.workspaceRoot)
 	bindingKey := codexBindingKey(req.userID, req.agentName)
 	result, err := h.createAndAcquireCodexSessionWithBindingLocked(codexSessionCreateRequest{
@@ -72,10 +77,13 @@ func (h *Handler) handleCodexNewForRoute(req codexNewRequest) string {
 		},
 	})
 	if err != nil {
-		return renderCodexSessionCreateFailure(result, err)
+		return textNavigationResult(renderCodexSessionCreateFailure(result, err))
 	}
-	return h.renderCodexSessionAcquireResult(
-		result.acquireResult, "已创建并绑定。", shortCodexWorkspaceName(req.workspaceRoot),
+	return statusCardNavigationResult(
+		h.renderCodexSessionAcquireResult(
+			result.acquireResult, "已创建并绑定。", shortCodexWorkspaceName(req.workspaceRoot),
+		),
+		"Codex 会话",
 	)
 }
 

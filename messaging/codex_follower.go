@@ -239,6 +239,11 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 			snapshot.Target.DeliveryRoute.AccountID)
 		return nil
 	}
+	if h.ensureCodexSessions().isPendingFirstTurn(
+		snapshot.BindingKey, snapshot.Target.WorkspaceRoot, snapshot.Target.ThreadID,
+	) {
+		return nil
+	}
 	reply, ok := registry.ReplierForRoute(snapshot.Target.DeliveryRoute)
 	if !ok || reply == nil {
 		return fmt.Errorf("飞书投递路由暂不可用")

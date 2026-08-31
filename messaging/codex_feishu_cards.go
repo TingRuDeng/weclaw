@@ -86,10 +86,33 @@ func (h *Handler) handleFeishuCodexSessionCommand(req feishuCodexSessionCommandR
 		}
 		return true
 	}
+	if h.sendFeishuCodexStatusCard(req) {
+		return true
+	}
 	if h.sendFeishuCodexNavigationChoices(req) {
 		return true
 	}
 	sendPlatformText(ctx, reply, msg.UserID, req.result.Reply)
+	return true
+}
+
+// sendFeishuCodexStatusCard 把已完成的新会话结果收敛到单张 CardKit 完成卡片。
+func (h *Handler) sendFeishuCodexStatusCard(req feishuCodexSessionCommandRequest) bool {
+	title := strings.TrimSpace(req.result.StatusCardTitle)
+	if title == "" {
+		return false
+	}
+	stream, err := req.reply.OpenStream(req.ctx, platform.StreamOptions{
+		Title: title, InitialContent: req.result.Reply,
+	})
+	if err != nil {
+		log.Printf("[handler] failed to open feishu codex status card: %v", err)
+		return false
+	}
+	if err := stream.Complete(req.ctx, req.result.Reply); err != nil {
+		log.Printf("[handler] failed to complete feishu codex status card: %v", err)
+		return false
+	}
 	return true
 }
 

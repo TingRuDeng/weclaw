@@ -46,6 +46,30 @@ func TestCodexProgressSnapshotFallsBackForIdleThreadWhenItemsListUnsupported(t *
 	}
 }
 
+func TestCodexProgressSnapshotTreatsUnmaterializedTurnsListAsPendingFirstTurn(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-new","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return nil, errors.New("agent error: thread thread-new is not materialized yet; thread/turns/list is unavailable before first user message")
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+
+	state, progress, err := a.ReadCodexThreadProgressSnapshot(context.Background(), "conversation-1", "thread-new")
+	if err != nil {
+		t.Fatalf("ReadCodexThreadProgressSnapshot() error=%v, want pending first turn without runtime failure", err)
+	}
+	if state.Active || state.LastTurnID != "" || len(progress) != 0 {
+		t.Fatalf("state=%#v progress=%#v, want empty pending-first-turn snapshot", state, progress)
+	}
+}
+
 func TestCodexProgressSnapshotFallsBackToFullTurnViewWhenItemsListUnsupported(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),

@@ -122,9 +122,12 @@ func projectCodexVisibleProgressEvents(events []*codexTurnEvent) []ProgressEvent
 }
 
 func isCodexThreadPendingFirstTurn(err error) bool {
-	return err != nil && strings.Contains(
-		err.Error(), "includeTurns is unavailable before first user message",
-	)
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "includeTurns is unavailable before first user message") ||
+		strings.Contains(message, "thread/turns/list is unavailable before first user message")
 }
 
 // SteerCodexThread 把用户补充输入追加到当前 active turn。
