@@ -80,13 +80,14 @@ func switchAndAssertRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 		t.Fatalf("switch notice=%q, rollout mirror must not advertise unavailable commands", notice)
 	}
 	if strings.Contains(notice, "需在 Codex App 中操作") ||
-		!strings.Contains(notice, "新消息会直接发送到当前任务") ||
+		!strings.Contains(notice, "当前仅同步进度") ||
+		!strings.Contains(notice, "不会接收或排队新输入") ||
 		!strings.Contains(notice, "结果会自动返回当前会话") {
-		t.Fatalf("switch notice=%q, must describe direct input and automatic result delivery", notice)
+		t.Fatalf("switch notice=%q, must describe read-only synchronization and automatic result delivery", notice)
 	}
 }
 
-// steerAndStopRolloutMirror 验证输入立即进入当前任务，但无法从远端停止只读镜像。
+// steerAndStopRolloutMirror 验证只读镜像不接收、不排队输入，也无法从远端停止。
 func steerAndStopRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 	t.Helper()
 	fixture.h.handleMessageForTest(context.Background(), platform.IncomingMessage{
@@ -95,9 +96,9 @@ func steerAndStopRolloutMirror(t *testing.T, fixture rolloutMirrorFixture) {
 	}, fixture.reply)
 	task, _ := fixture.h.activeTask(fixture.conversationID)
 	texts := fixture.reply.TextsSnapshot()
-	if task.pendingGuide() != "" || fixture.agent.steerThreadID != "thread-rollout-active" ||
-		fixture.agent.steerTurnID != fixture.turnID || fixture.agent.steerMessage != "补充要求" ||
-		!containsText(texts, "已发送到当前共享 Codex 任务") || containsText(texts, queuedAgentMessage) {
+	if task.pendingGuide() != "" || fixture.agent.steerThreadID != "" ||
+		fixture.agent.steerTurnID != "" || fixture.agent.steerMessage != "" ||
+		!containsText(texts, "输入未发送") || !containsText(texts, "不会排队") || containsText(texts, queuedAgentMessage) {
 		t.Fatalf("pending=%q steer=(%q,%q,%q) texts=%#v", task.pendingGuide(), fixture.agent.steerThreadID,
 			fixture.agent.steerTurnID, fixture.agent.steerMessage, texts)
 	}

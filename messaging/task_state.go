@@ -152,11 +152,17 @@ type activeTaskMeta struct {
 func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
 	h.tasks.mu.Lock()
 	removed := false
+	agentName := ""
+	threadID := ""
 	if h.tasks.active[key] == task {
 		task.mu.Lock()
 		terminal := task.phase == codexTaskTerminal
 		task.mu.Unlock()
 		if !terminal {
+			task.mu.Lock()
+			agentName = task.agentName
+			threadID = task.codexThreadID
+			task.mu.Unlock()
 			delete(h.tasks.active, key)
 			removed = true
 		}
@@ -164,6 +170,7 @@ func (h *Handler) finishActiveTask(key string, task *activeAgentTask) {
 	h.tasks.mu.Unlock()
 	if removed {
 		close(task.done)
+		h.unsubscribeCodexThreadAfterTask(agentName, threadID)
 	}
 }
 
@@ -324,10 +331,13 @@ func (h *Handler) claimAndCompleteActiveTask(key string, task *activeAgentTask) 
 		pending = task.pending
 		task.pending = pendingAgentTask{}
 	}
+	agentName := task.agentName
+	threadID := task.codexThreadID
 	delete(h.tasks.active, key)
 	task.mu.Unlock()
 	h.tasks.mu.Unlock()
 	close(task.done)
+	h.unsubscribeCodexThreadAfterTask(agentName, threadID)
 	if pending.message == "" || pending.run == nil {
 		return pendingAgentTask{}, false, true
 	}
@@ -353,13 +363,14 @@ func (h *Handler) claimActiveTaskTerminal(key string, task *activeAgentTask) boo
 
 func (h *Handler) finishClaimedActiveTask(key string, task *activeAgentTask) (pendingAgentTask, bool) {
 	h.tasks.mu.Lock()
-	defer h.tasks.mu.Unlock()
 	if task == nil || h.tasks.active[key] != task {
+		h.tasks.mu.Unlock()
 		return pendingAgentTask{}, false
 	}
 	task.mu.Lock()
 	if task.phase != codexTaskTerminal {
 		task.mu.Unlock()
+		h.tasks.mu.Unlock()
 		return pendingAgentTask{}, false
 	}
 	pending := pendingAgentTask{}
@@ -367,9 +378,13 @@ func (h *Handler) finishClaimedActiveTask(key string, task *activeAgentTask) (pe
 		pending = task.pending
 		task.pending = pendingAgentTask{}
 	}
+	agentName := task.agentName
+	threadID := task.codexThreadID
 	delete(h.tasks.active, key)
 	task.mu.Unlock()
+	h.tasks.mu.Unlock()
 	close(task.done)
+	h.unsubscribeCodexThreadAfterTask(agentName, threadID)
 	if pending.message == "" || pending.run == nil {
 		return pendingAgentTask{}, false
 	}

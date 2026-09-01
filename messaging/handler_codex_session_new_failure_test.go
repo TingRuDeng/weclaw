@@ -13,7 +13,7 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-func TestHandleCodexNewRuntimeFailureKeepsNewThreadBinding(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureRestoresPreviousThreadBinding(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.handoffErrors["thread-new"] = fmt.Errorf("handoff failed")
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -22,19 +22,20 @@ func TestHandleCodexNewRuntimeFailureKeepsNewThreadBinding(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(122, "/cx new"))
 
 	thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
-	if thread != "thread-new" || pending || ag.threadID != "thread-new" {
+	if thread != "thread-old" || pending || ag.threadID != "thread-old" {
 		t.Fatalf("运行通道失败后状态 thread=%q pending=%v mapping=%q", thread, pending, ag.threadID)
 	}
-	if !h.ensureCodexSessions().isPendingFirstTurn(bindingKey, workspace, "thread-new") {
-		t.Fatal("/cx new 创建的 thread 在首条消息前必须持久标记 pending-first-turn")
+	if h.ensureCodexSessions().isPendingFirstTurn(bindingKey, workspace, "thread-new") {
+		t.Fatal("未绑定的新 thread 不得成为 frontend 的 pending-first-turn")
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已创建并绑定") || strings.Contains(text, "原会话已恢复") {
+	if !strings.Contains(text, "新 Codex 会话已创建，但绑定失败") ||
+		!strings.Contains(text, "原会话已恢复") || !strings.Contains(text, "新会话仍保留在 Codex 历史中") {
 		t.Fatalf("回复=%q", text)
 	}
 }
 
-func TestHandleCodexNewRuntimeFailureKeepsMappingWithoutPreviousThread(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureClearsMappingWithoutPreviousThread(t *testing.T) {
 	h := NewHandler(nil, nil)
 	workspace := t.TempDir()
 	ag := newFakeCodexSessionCreateAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{})
@@ -48,15 +49,17 @@ func TestHandleCodexNewRuntimeFailureKeepsMappingWithoutPreviousThread(t *testin
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(124, "/cx new"))
 
 	thread, pending := h.ensureCodexSessions().getThread(codexBindingKey("user-1", "codex"), workspace)
-	if ag.clearCalledWith != "" || ag.threadID != "thread-new" || thread != "thread-new" || pending {
+	wantConversation := buildCodexConversationID("user-1", "codex", workspace)
+	if ag.clearCalledWith != wantConversation || ag.threadID != "" || thread != "" || pending {
 		t.Fatalf("mapping clear=%q runtime=%q store=(%q,%v)", ag.clearCalledWith, ag.threadID, thread, pending)
 	}
-	if !containsText(calls.texts(), "已创建并绑定") {
-		t.Fatalf("回复未说明绑定状态: %#v", calls.texts())
+	if !containsText(calls.texts(), "新 Codex 会话已创建，但绑定失败") ||
+		!containsText(calls.texts(), "原会话已恢复") {
+		t.Fatalf("回复未说明失败恢复状态: %#v", calls.texts())
 	}
 }
 
-func TestHandleCodexNewRuntimeFailureDoesNotBlockRemoteWrites(t *testing.T) {
+func TestHandleCodexNewRuntimeFailureKeepsPreviousThreadWritable(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.handoffErrors["thread-new"] = fmt.Errorf("handoff failed")
 	client, calls, closeServer := newRecordingILinkClient(t)
@@ -65,13 +68,13 @@ func TestHandleCodexNewRuntimeFailureDoesNotBlockRemoteWrites(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(125, "/cx new"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已创建并绑定") {
+	if !strings.Contains(text, "原会话已恢复") {
 		t.Fatalf("回复=%q", text)
 	}
-	assertCodexCreateRuntimeFailureAllowsRemoteWrite(t, h, ag, workspace, bindingKey)
+	assertCodexCreateRuntimeFailureKeepsPreviousWrite(t, h, ag, workspace, bindingKey)
 }
 
-func assertCodexCreateRuntimeFailureAllowsRemoteWrite(t *testing.T, h *Handler, ag *fakeCodexSessionCreateAgent, workspace string, bindingKey string) {
+func assertCodexCreateRuntimeFailureKeepsPreviousWrite(t *testing.T, h *Handler, ag *fakeCodexSessionCreateAgent, workspace string, bindingKey string) {
 	t.Helper()
 	reply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	cfg := config.DefaultProgressConfig()
@@ -80,12 +83,12 @@ func assertCodexCreateRuntimeFailureAllowsRemoteWrite(t *testing.T, h *Handler, 
 	opts := codexAgentTaskOptions{
 		ctx: context.Background(), userID: "user-1", routeUserID: "user-1",
 		reply: reply, agentName: "codex", message: "继续任务", agent: ag, progressCfg: cfg,
-		route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID, threadID: "thread-new"},
+		route: codexConversationRoute{bindingKey: bindingKey, workspaceRoot: workspace, conversationID: conversationID, threadID: "thread-old"},
 	}
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool { return ag.runCallSnapshot() == 1 })
-	if h.ensureCodexSessions().isPendingFirstTurn(bindingKey, workspace, "thread-new") {
-		t.Fatal("Codex 接受首个 turn 后必须立即清除 pending-first-turn")
+	if thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace); pending || thread != "thread-old" {
+		t.Fatalf("previous binding changed after write: thread=%q pending=%v", thread, pending)
 	}
 	if text := strings.Join(reply.Texts, "\n"); strings.Contains(text, "运行通道暂不可用") {
 		t.Fatalf("remote owner 的普通消息被技术恢复失败阻断: %q", text)
@@ -95,7 +98,7 @@ func assertCodexCreateRuntimeFailureAllowsRemoteWrite(t *testing.T, h *Handler, 
 func TestCreateAndAcquireCodexSessionRestoresAfterHardFailureWithCanceledParent(t *testing.T) {
 	h, ag, workspace, bindingKey := newCodexCreateFailureFixture(t)
 	ag.rejectCanceledUse = true
-	// 运行通道失败不再回滚新会话；用本地持久化硬失败进入创建补偿路径。
+	// Host 绑定失败会回滚新会话；这里用本地持久化硬失败覆盖创建补偿路径。
 	h.ensureCodexSessions().SetFilePath(t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

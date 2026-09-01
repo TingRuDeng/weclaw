@@ -239,7 +239,7 @@ func TestHandleCodexSwitchCommandBindsLocalCodexSessionIndex(t *testing.T) {
 	}
 }
 
-func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
+func TestHandleCodexSwitchRuntimeFailureKeepsPreviousSelection(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	currentWorkspace := filepath.Join(t.TempDir(), "current")
@@ -261,13 +261,13 @@ func TestHandleCodexSwitchRuntimeFailureKeepsCommittedSelection(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(116, "/cx switch thread-bad"))
 
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已选择，等待运行通道") || !strings.Contains(text, "运行通道: 暂不可用") {
-		t.Fatalf("reply should preserve binding while reporting runtime failure, messages=%#v", calls.texts())
+	if !strings.Contains(text, "原会话已保留") {
+		t.Fatalf("reply should report the retained previous binding, messages=%#v", calls.texts())
 	}
 	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
 	currentThread, _ := h.ensureCodexSessions().getThread(bindingKey, currentWorkspace)
 	targetThread, pending := h.ensureCodexSessions().getThread(bindingKey, localWorkspace)
-	if active != localWorkspace || currentThread != "thread-current" || targetThread != "thread-bad" || pending {
+	if active != currentWorkspace || currentThread != "thread-current" || targetThread != "" || pending {
 		t.Fatalf("active=%q current=%q target=%q pending=%t", active, currentThread, targetThread, pending)
 	}
 }

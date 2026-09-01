@@ -52,6 +52,68 @@ type codexThreadItemsListResponse struct {
 	NextCursor string                 `json:"nextCursor"`
 }
 
+// ValidateCodexThread performs the lightweight pre-commit selection check. A
+// private Desktop Host is queried only through verified IPC; every app-server
+// topology uses thread/read without resuming, subscribing, or loading turns.
+func (a *ACPAgent) ValidateCodexThread(ctx context.Context, conversationID string, threadID string) (CodexThreadState, error) {
+	if a.protocol != protocolCodexAppServer {
+		return CodexThreadState{}, fmt.Errorf("agent is not codex app-server")
+	}
+	conversationID = strings.TrimSpace(conversationID)
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return CodexThreadState{}, fmt.Errorf("empty thread id")
+	}
+	if a.codexDesktopHostSelection && a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop {
+		if a.desktopProbe == nil || a.desktopRuntime == nil {
+			return CodexThreadState{}, ErrCodexRuntimeUnavailable
+		}
+		if err := a.desktopProbe.LoadHistory(ctx, CodexThreadRef{
+			ConversationID: conversationID, ThreadID: threadID,
+		}); err != nil {
+			return CodexThreadState{}, err
+		}
+		state, err := a.desktopRuntime.threadState(threadID)
+		return validateCodexThreadSelectionState(threadID, state, err)
+	}
+	if binding, ok := a.runtimeBindingForThread(conversationID, threadID); ok {
+		switch binding.Runtime {
+		case CodexRuntimeDesktop:
+			if a.desktopProbe == nil || a.desktopRuntime == nil {
+				return CodexThreadState{}, ErrCodexRuntimeUnavailable
+			}
+			if err := a.desktopProbe.LoadHistory(ctx, CodexThreadRef{
+				ConversationID: conversationID, ThreadID: threadID,
+			}); err != nil {
+				return CodexThreadState{}, err
+			}
+			state, err := a.desktopRuntime.threadState(threadID)
+			return validateCodexThreadSelectionState(threadID, state, err)
+		case CodexRuntimeUnknown:
+			if !a.officialDaemonIsAuthoritativeForUnknownBinding() {
+				return CodexThreadState{}, ErrCodexRuntimeUnavailable
+			}
+		case CodexRuntimeConflict:
+			return CodexThreadState{}, ErrCodexRuntimeConflict
+		}
+	}
+	thread, _, _, err := a.readCodexAppServerThreadMetadata(ctx, threadID)
+	return validateCodexThreadSelectionState(threadID, codexThreadStateFromSnapshot(thread), err)
+}
+
+func validateCodexThreadSelectionState(threadID string, state CodexThreadState, err error) (CodexThreadState, error) {
+	if err != nil {
+		return CodexThreadState{}, err
+	}
+	if got := strings.TrimSpace(state.ThreadID); got != "" && got != strings.TrimSpace(threadID) {
+		return CodexThreadState{}, fmt.Errorf("Codex Host returned thread %q for target %q", got, threadID)
+	}
+	if strings.EqualFold(state.ThreadStatus, "systemError") {
+		return CodexThreadState{}, fmt.Errorf("%w: Codex thread 处于 systemError", ErrCodexRuntimeUnavailable)
+	}
+	return state, nil
+}
+
 // ReadCodexThreadState 读取 Codex app-server thread 当前状态，用于接管本地 App 运行中任务。
 func (a *ACPAgent) ReadCodexThreadState(ctx context.Context, conversationID string, threadID string) (CodexThreadState, error) {
 	if a.protocol != protocolCodexAppServer {
@@ -65,7 +127,9 @@ func (a *ACPAgent) ReadCodexThreadState(ctx context.Context, conversationID stri
 			}
 			return a.desktopRuntime.threadState(threadID)
 		case CodexRuntimeUnknown:
-			return CodexThreadState{}, ErrCodexRuntimeUnavailable
+			if !a.officialDaemonIsAuthoritativeForUnknownBinding() {
+				return CodexThreadState{}, ErrCodexRuntimeUnavailable
+			}
 		case CodexRuntimeConflict:
 			return CodexThreadState{}, ErrCodexRuntimeConflict
 		}
@@ -88,7 +152,9 @@ func (a *ACPAgent) ReadCodexThreadProgressSnapshot(ctx context.Context, conversa
 			state, batch, err := a.desktopRuntime.activeWatchSnapshot(threadID)
 			return state, projectCodexVisibleProgressEvents(batch.Events), err
 		case CodexRuntimeUnknown:
-			return CodexThreadState{}, nil, ErrCodexRuntimeUnavailable
+			if !a.officialDaemonIsAuthoritativeForUnknownBinding() {
+				return CodexThreadState{}, nil, ErrCodexRuntimeUnavailable
+			}
 		case CodexRuntimeConflict:
 			return CodexThreadState{}, nil, ErrCodexRuntimeConflict
 		}
@@ -99,6 +165,14 @@ func (a *ACPAgent) ReadCodexThreadProgressSnapshot(ctx context.Context, conversa
 	}
 	events := projectCodexAppServerActiveTurnEvents(snapshot, state.ActiveTurnID)
 	return state, projectCodexVisibleProgressEvents(events), nil
+}
+
+// officialDaemonIsAuthoritativeForUnknownBinding distinguishes a stale
+// frontend/runtime cache from an unknown private Desktop Host. In daemon mode
+// there is exactly one app-server authority, so thread/read itself is the
+// safe source of truth and does not create a second Host or a subscription.
+func (a *ACPAgent) officialDaemonIsAuthoritativeForUnknownBinding() bool {
+	return a.usesOfficialCodexDaemon() && !a.codexDesktopHostSelection
 }
 
 func projectCodexVisibleProgressEvents(events []*codexTurnEvent) []ProgressEvent {
@@ -186,7 +260,10 @@ func (a *ACPAgent) InterruptCodexThread(ctx context.Context, conversationID stri
 }
 
 func codexThreadStateFromSnapshot(thread codexThreadSnapshot) CodexThreadState {
-	state := CodexThreadState{ThreadID: strings.TrimSpace(thread.ID)}
+	state := CodexThreadState{
+		ThreadID:     strings.TrimSpace(thread.ID),
+		ThreadStatus: strings.TrimSpace(thread.Status.Type),
+	}
 	state.Active = thread.Status.Type == "active"
 	state.WaitingOnApproval = codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnApproval")
 	state.WaitingOnUserInput = codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnUserInput")

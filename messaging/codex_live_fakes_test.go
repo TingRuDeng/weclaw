@@ -26,6 +26,7 @@ type fakeCodexLiveAgent struct {
 	handoffHooks                 map[string]func()
 	rejectCanceledContext        bool
 	runErr                       error
+	steerInputErr                error
 	providerPreparation          agent.CodexProviderPreparation
 	providerPrepareErr           error
 	providerPrepareRequest       agent.CodexRuntimeRequest
@@ -39,6 +40,8 @@ type fakeCodexLiveAgent struct {
 	bindCalls                    int
 	handoffCalls                 int
 	runCalls                     int
+	steerInputCalls              int
+	steerInputHasDeadline        bool
 	lastRuntimeReq               agent.CodexRuntimeRequest
 	lastTurnReq                  agent.CodexTurnRequest
 	watchResults                 []fakeCodexWatchResult
@@ -214,12 +217,12 @@ func (f *fakeCodexLiveAgent) HandoffCodexRuntime(ctx context.Context, req agent.
 	return binding, nil
 }
 
-func (f *fakeCodexLiveAgent) RecoverCodexThreadHandoff(_ context.Context, threadID string) (bool, error) {
+func (f *fakeCodexLiveAgent) UnsubscribeCodexThread(_ context.Context, threadID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	threadID = strings.TrimSpace(threadID)
 	f.threadHandoffThreads = append(f.threadHandoffThreads, threadID)
-	f.operationHistory = append(f.operationHistory, "release:"+threadID)
+	f.operationHistory = append(f.operationHistory, "unsubscribe:"+threadID)
 	return f.threadHandoffApplicable, f.threadHandoffErr
 }
 
@@ -273,10 +276,22 @@ func (f *fakeCodexLiveAgent) RunCodexTurn(ctx context.Context, req agent.CodexTu
 	f.runCalls++
 	f.lastTurnReq = req
 	runErr := f.runErr
+	binding, hasBinding := f.bindings[req.Runtime.Ref.ThreadID]
+	if !hasBinding {
+		binding = f.binding
+	}
 	entered, release := f.turnEntered, f.turnRelease
 	f.mu.Unlock()
 	if runErr != nil {
 		return "", runErr
+	}
+	if binding.State.Active {
+		if _, err := f.SteerCodexInput(ctx, req); err != nil {
+			return "", err
+		}
+		return f.fakeCodexThreadAgent.WatchCodexThread(
+			ctx, req.Runtime.Ref.ConversationID, req.Runtime.Ref.ThreadID, textProgressCallback(req.OnProgressEvent),
+		)
 	}
 	signalCodexLiveTestHook(entered)
 	if err := waitCodexLiveTestHook(ctx, release); err != nil {
@@ -288,6 +303,69 @@ func (f *fakeCodexLiveAgent) RunCodexTurn(ctx context.Context, req agent.CodexTu
 		}
 	}
 	return f.fakeCodexThreadAgent.Chat(ctx, req.Runtime.Ref.ConversationID, req.Message)
+}
+
+func (f *fakeCodexLiveAgent) SteerCodexInput(ctx context.Context, req agent.CodexTurnRequest) (string, error) {
+	f.mu.Lock()
+	f.steerInputCalls++
+	_, f.steerInputHasDeadline = ctx.Deadline()
+	f.lastTurnReq = req
+	binding, ok := f.bindings[req.Runtime.Ref.ThreadID]
+	if !ok {
+		binding = f.binding
+	}
+	configuredErr := f.steerInputErr
+	f.mu.Unlock()
+	turnID := strings.TrimSpace(binding.State.ActiveTurnID)
+	if !binding.State.Active || turnID == "" {
+		return "", agent.ErrCodexNoActiveTurn
+	}
+	attempt := agent.CodexInputAttempt{
+		AttemptID: req.AttemptID, MessageKey: req.MessageKey,
+		ThreadID: req.Runtime.Ref.ThreadID, ExpectedTurnID: turnID,
+		MessageDigest: "sha256:fake", Status: agent.CodexInputAttemptPending,
+	}
+	if req.OnInputAttempt != nil {
+		if err := req.OnInputAttempt(attempt); err != nil {
+			return "", err
+		}
+	}
+	if configuredErr != nil {
+		attempt.Status = agent.CodexInputAttemptUnconfirmed
+		if req.OnInputAttempt != nil {
+			_ = req.OnInputAttempt(attempt)
+		}
+		return "", configuredErr
+	}
+	if err := f.fakeCodexThreadAgent.SteerCodexThread(
+		ctx, req.Runtime.Ref.ConversationID, req.Runtime.Ref.ThreadID, turnID, req.Message,
+	); err != nil {
+		return "", err
+	}
+	attempt.Status = agent.CodexInputAttemptAccepted
+	if req.OnInputAttempt != nil {
+		if err := req.OnInputAttempt(attempt); err != nil {
+			return "", err
+		}
+	}
+	if req.OnTurnSteered != nil {
+		if err := req.OnTurnSteered(req.Runtime.Ref, turnID); err != nil {
+			return "", err
+		}
+	}
+	return turnID, nil
+}
+
+func (f *fakeCodexLiveAgent) steerInputDeadlineSnapshot() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.steerInputHasDeadline
+}
+
+func (f *fakeCodexLiveAgent) steerInputCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.steerInputCalls
 }
 
 func signalCodexLiveTestHook(ch chan struct{}) {

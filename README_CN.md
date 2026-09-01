@@ -84,17 +84,19 @@ macOS 默认 `codex_host_mode: auto` 在构造 Agent 时固定 Host 拓扑：固
 
 常见且重点支持的协作形态是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”，前提是各端均已连接同一 verified official daemon。飞书绑定空闲 thread 后，App 或 CLI 稍后启动任务会自动开始同步；选择正在运行的会话时，WeClaw 先回填已有的可见自然语言进度，再持续同步后续进度。普通消息携带当前 `turnId` 直接加入 active turn，thread 空闲时才开始下一 turn。完整共享模式也允许 App、CLI 和飞书同时打开同一 thread；上游仍按请求接受顺序处理，WeClaw 不宣称客户端级排他或精确归属。
 
-会话选择是持久化的两阶段接管。第一阶段 `preparing` 只表示当前 route 的 workspace/thread 意图已保存，不表示可写或同步成功；普通消息在此期间失败关闭。WeClaw 必须验证精确 Host generation，读取权威历史，并在目标 turn 活动时先建立原生进度卡和 exact-turn observer，才通过 revision/turn/generation CAS 提交 `ready` 并显示“已切换并绑定”。其中任一步失败都保留 `preparing` 意图并后台幂等重试；原切换结果卡只在真正 `ready` 后原地收敛，卡片更新失败与运行通道恢复独立重试。
+会话 binding 只表示当前窗口选择，不是写入所有权。`/cx switch` 与 `/cx new` 会先确认唯一 Host 可达并用轻量 `thread/read` 验证目标；Host 或目标不可读时保留原 binding，验证通过后立即提交新 binding。v14 状态中的 `preparing/ready` 继续表示 follower observer 的同步阶段并兼容旧版本回滚，但不再决定普通消息能否写入。历史回放、进度卡或 exact-turn observer 建立失败只把“进度同步”标记为“同步中”或“已降级”，不会回滚已经成功的 binding。
 
-多个已绑定的飞书 route 可同时观察同一 thread：每个 route 独立接收进度、审批或问答展示和唯一终态结果。审批与结构化问答按 `(thread, turn, request)` 绑定单决策 broker；任一前端处理后，其他展示收敛为“已由其他前端处理”，不会重复提交。WeClaw 重启时按 Host authority、历史与待处理交互回放、observer readiness、terminal outbox 的顺序恢复；未重新达到 `ready` 的 route 不会提前投递受保护结果。durable follower 还会记录当前机器人 `allowed_users` 实际命中的授权身份；撤权会清除该 route 的 follower 并阻止尚未投递的受保护结果。`/cx release` 只在 durable release tombstone 保存成功后才停止当前 route 的观察和交互投递，并把现有进度卡冻结为非终态；持久化失败则保留原绑定。它不 interrupt active turn、不重启 Host、不影响其他 route，也不保留只读观察。
+多个已绑定的飞书 route 可同时观察和写入同一 thread：每个 route 独立接收进度、审批或问答展示和唯一终态结果。审批与结构化问答按 `(thread, turn, request)` 绑定单决策 broker；任一前端处理后，其他展示收敛为“已由其他前端处理”，不会重复提交。WeClaw 重启时按 Host authority、历史与待处理交互回放、observer readiness、terminal outbox 的顺序恢复；observer 尚未恢复只影响同步和终态补投，不阻止新输入使用可用的运行通道。durable follower 还会记录当前机器人 `allowed_users` 实际命中的授权身份；撤权会清除该 route 的 follower 并阻止尚未投递的受保护结果。`/cx release` 只在 durable release tombstone 保存成功后才停止当前 route 的观察和交互投递，并把现有进度卡冻结为非终态；没有其他前端或活动任务继续观察时，它只向当前 app-server 连接发送 `thread/unsubscribe`。它不 interrupt active turn、不重启 Host，也不影响其他 route。
 
 历史 thread 不再绑定创建时使用的 provider。选择或续写已有会话时，WeClaw 会读取当前 Codex Host 对该 workspace 生效的 `model_provider`；若与 thread 元数据不同，会在所有已知任务空闲且没有 writer lease 时备份并只迁移该 thread 的 rollout、`state_5.sqlite` 和可选 local catalog，再用同一 thread ID 和显式 provider 执行 resume。用户消息、可见回复、工具调用和结果会保留；无法跨 provider 使用的加密 reasoning 与 compaction 状态会删除。目标 thread 仍在运行时不会中断，当前 turn 的引导仍进入它已经使用的 provider；下一个新 turn 会先完成迁移。已加载但空闲的 App/shared Host 可以受控重启后继续。迁移记录保存在 `CODEX_HOME/backups/weclaw-provider-migration/`，任何身份、路径、状态或 resume 核验不确定都会失败关闭。
 
-当 Codex App 作为同一 official daemon 的 frontend 时，飞书可以选择已有会话、继续 active turn、接收进度与交互、执行 `/stop`，并修改当前 thread 的模型和推理强度。App 中已经运行的 thread 达到 `ready` 后，飞书普通消息直接进入当前 turn，不先暂存或开始第二 turn。App 仍使用私有 app-server 时属于兼容路径，不宣称完整共享；应完全退出并重开 App，让它重新连接已验证 daemon，而不是热迁移 active turn。
+当 Codex App 作为同一 official daemon 的 frontend 时，飞书可以选择已有会话、继续 active turn、接收进度与交互、执行 `/stop`，并修改当前 thread 的模型和推理强度。App 中已经运行的 thread 无需等待 observer `ready`：运行通道可读时，飞书普通消息直接进入当前 turn；飞书先启动的 turn 也允许 App 继续输入。App 仍使用私有 app-server 时属于兼容路径，不宣称完整共享；应完全退出并重开 App，让它重新连接已验证 daemon，而不是热迁移 active turn。
 
-同一 official daemon 上的审批和结构化问答会向所有 ready observer 展示，但只允许 broker 接受一次决策。Codex App 或其他 route 先处理后，official daemon 的 `serverRequest/resolved` 会让飞书等待者幂等结束，不发默认拒绝或重复回应。状态暂时不可读时保持失败关闭，保留会话绑定和待处理请求；只有写入后断线或等待响应超时才属于“交付状态未知”。兼容 Desktop IPC 路径的五分钟等待同样只触发带 revision 屏障的状态复核，绝不自动拒绝。
+同一 official daemon 上的审批和结构化问答会向所有已完成同步的 observer 展示，但只允许 broker 接受一次决策。Codex App 或其他 route 先处理后，official daemon 的 `serverRequest/resolved` 会让飞书等待者幂等结束，不发默认拒绝或重复回应。每次普通输入都重新读取权威 thread 状态：active 使用带 `expectedTurnId` 的 `turn/steer`，idle 使用 `turn/start`，尚未加载的 thread 只在写入前即时 resume；start/steer 发生确定性状态竞态时重读并把同一输入提交一次。Host 真正不可用时立即拒绝，不排队、不保存输入，也不会在恢复后晚到执行。
 
-App 进程、安全 IPC 或历史可见都只是 frontend 证据，不代表 WeClaw route 已达到 `ready`，也不能改变 official daemon authority。精确错误 `no-client-found: thread stream owner became unavailable` 属于 App 私有 Host 的兼容 Desktop IPC 路径：WeClaw 会保留 `preparing` 绑定并幂等重试，不会启动第二 Host 或伪报接管成功。完整共享模式下应先确认 App 已完全重开并连接同一 official daemon，再用 `/cx status` 检查目标 route 是否 ready；原会话不需要删除或重建。
+App 进程、安全 IPC 或历史可见都只是 frontend 证据，不能改变 official daemon authority。精确错误 `no-client-found: thread stream owner became unavailable` 属于 App 私有 Host 的兼容 Desktop IPC 路径：WeClaw 不会因此启动第二 Host。完整共享模式下应先确认 App 已完全重开并连接同一 official daemon，再用 `/cx status` 分别检查“绑定”“运行通道”和“进度同步”；“进度同步已降级”不表示会话不可写，原会话也不需要删除或重建。
+
+如果 `turn/start` 或 `turn/steer` 写出后连接断开或超时，WeClaw 会以发送前最近 turn 基线和消息摘要读取最近 turn/items。能够证明 daemon 已接收时继续恢复 observer；无法证明时明确要求先在 Codex App 核对后手工重发，绝不自动重试。持久状态只保存 attempt ID、平台消息键、thread/turn 基线、消息摘要和结果状态，不保存可供以后自动执行的完整输入。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用，因为消息命令不能在本机启动额外进程。本机终端使用受控入口：
 

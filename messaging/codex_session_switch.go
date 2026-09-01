@@ -149,19 +149,23 @@ func (h *Handler) renderCodexSessionAcquireResult(result codexSessionAcquireResu
 	lines = append(lines, renderCompactSessionModelStatus(modelStatus))
 	if result.handoffReleaseAttempted {
 		if result.handoffReleaseErr == nil {
-			lines = append(lines, "旧会话: 已释放，可在 Codex App 打开。")
+			lines = append(lines, "旧会话: 已停止当前连接观察。")
 		} else {
-			log.Printf("[codex-session-handoff] 会话已切换但旧 thread 暂未回交 thread=%q: %v", result.handoffReleaseThreadID, result.handoffReleaseErr)
-			lines = append(lines, "旧会话: 暂未回交给 Codex App（共享 Host 仍在使用或状态未确认）。")
+			log.Printf("[codex-session-subscription] 会话已切换但旧 thread 停止观察失败 thread=%q: %v", result.handoffReleaseThreadID, result.handoffReleaseErr)
+			lines = append(lines, "旧会话: 当前连接停止观察失败（不影响新会话写入）。")
 		}
 	} else if result.handoffReleaseRetained {
-		lines = append(lines, "旧会话: 仍被其他窗口选中，未回交给 Codex App。")
+		lines = append(lines, "旧会话: 仍被其他窗口选中，保留观察订阅。")
 	} else if result.handoffReleaseRetainedByTask {
-		lines = append(lines, "旧会话: 仍有运行中任务，暂不回交给 Codex App。")
+		lines = append(lines, "旧会话: 仍有运行中任务，保留观察订阅。")
 	}
 	if result.runtimeErr != nil {
 		log.Printf("[codex-session-bind] 绑定已提交但共享 host 暂不可用 thread=%q: %v", result.route.threadID, result.runtimeErr)
 		lines = append(lines, renderCodexRuntimeRecoveryNotice(result.runtimeErr)...)
+	}
+	if result.syncErr != nil {
+		log.Printf("[codex-session-bind] 会话可写但进度同步已降级 thread=%q: %v", result.route.threadID, result.syncErr)
+		lines = append(lines, "进度同步: 已降级（会话仍可写，后台将继续补查）")
 	}
 	if result.externalActive {
 		if result.externalProgressCard {

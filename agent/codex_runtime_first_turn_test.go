@@ -19,7 +19,7 @@ func TestRunCodexTurnReplacesMissingPendingFirstTurnEndToEnd(t *testing.T) {
 	a.restartCodexAppServerCall = func(context.Context) error { return nil }
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		switch method {
-		case "thread/resume":
+		case "thread/read":
 			return nil, errors.New("agent error: no rollout found for thread id thread-old")
 		case "thread/start":
 			return json.RawMessage(`{"thread":{"id":"thread-new"}}`), nil

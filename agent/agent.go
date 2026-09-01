@@ -136,6 +136,7 @@ type CodexThreadActivityEventSource interface {
 // CodexThreadState 描述 app-server 或 Desktop 持有的 Codex thread 当前运行态。
 type CodexThreadState struct {
 	ThreadID             string
+	ThreadStatus         string
 	Model                string
 	Effort               string
 	Active               bool
@@ -155,6 +156,12 @@ type CodexThreadRuntimeAgent interface {
 	WatchCodexThread(ctx context.Context, conversationID string, threadID string, onProgress func(delta string)) (string, error)
 	SteerCodexThread(ctx context.Context, conversationID string, threadID string, turnID string, message string) error
 	InterruptCodexThread(ctx context.Context, conversationID string, threadID string, turnID string) error
+}
+
+// CodexThreadValidationAgent verifies that the one authoritative Host can read
+// a selected thread without subscribing it or loading turn history.
+type CodexThreadValidationAgent interface {
+	ValidateCodexThread(ctx context.Context, conversationID string, threadID string) (CodexThreadState, error)
 }
 
 // CodexThreadProgressSnapshotAgent 原子读取活动 turn 状态及当前可回放的用户可见进度。

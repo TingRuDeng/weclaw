@@ -247,7 +247,7 @@ func renderExternalCodexActiveNotice(state externalCodexTaskState) []string {
 	if state.Controllable {
 		lines = append(lines, "新消息会直接发送到当前任务；回复 /stop 会同时停止本地 Codex 和当前消息窗口中的共享任务。")
 	} else {
-		lines = append(lines, "新消息会直接发送到当前任务；当前任务暂不支持从飞书或微信停止，完成后结果会自动返回当前会话。")
+		lines = append(lines, "当前仅同步进度；运行通道恢复前不会接收或排队新输入。任务完成后结果会自动返回当前会话。")
 	}
 	return lines
 }

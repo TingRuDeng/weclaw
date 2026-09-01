@@ -22,8 +22,10 @@ func TestCodexStatusReturnsSharedHostState(t *testing.T) {
 		"Codex 状态",
 		"工作空间: " + filepath.Base(runtime.workspaceRoot),
 		"会话: 未命名会话",
+		"绑定: 已绑定",
 		"任务: 空闲",
-		"运行: 正常",
+		"运行通道: 可用",
+		"进度同步: 正常",
 	} {
 		if !strings.Contains(result.Reply, want) {
 			t.Fatalf("reply=%q, want %q", result.Reply, want)
@@ -48,7 +50,7 @@ func TestCodexStatusTimeoutReleasesThreadLock(t *testing.T) {
 
 	result := h.renderCodexStatus(runtime)
 	if !strings.Contains(result.Reply, "任务: 未确认") ||
-		!strings.Contains(result.Reply, "运行: 暂不可用") {
+		!strings.Contains(result.Reply, "运行通道: 不可用") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
 	assertCodexThreadLockReusable(t, h, "thread-1")
@@ -61,7 +63,7 @@ func TestCodexStatusInternalControlTimeoutReleasesThreadLock(t *testing.T) {
 
 	result := h.renderCodexStatus(runtime)
 	if !strings.Contains(result.Reply, "任务: 未确认") ||
-		!strings.Contains(result.Reply, "运行: 暂不可用") {
+		!strings.Contains(result.Reply, "运行通道: 不可用") {
 		t.Fatalf("reply=%q", result.Reply)
 	}
 	assertCodexThreadLockReusable(t, h, "thread-1")
@@ -78,7 +80,7 @@ func TestCompactCodexRuntimeStatusLinesPreserveTaskAndRuntimeFailures(t *testing
 			name:       "idle",
 			resolution: codexRuntimeResolution{Binding: agent.CodexThreadBinding{Runtime: agent.CodexRuntimeWeClaw}},
 			task:       "任务: 空闲",
-			runtime:    "运行: 正常",
+			runtime:    "运行通道: 可用",
 		},
 		{
 			name: "active",
@@ -87,25 +89,25 @@ func TestCompactCodexRuntimeStatusLinesPreserveTaskAndRuntimeFailures(t *testing
 				State:   agent.CodexThreadState{Active: true},
 			}},
 			task:    "任务: 正在执行",
-			runtime: "运行: 正常",
+			runtime: "运行通道: 可用",
 		},
 		{
 			name:       "conflict",
 			resolution: codexRuntimeResolution{Binding: agent.CodexThreadBinding{Runtime: agent.CodexRuntimeConflict}},
 			task:       "任务: 空闲",
-			runtime:    "运行: 异常（写入冲突）",
+			runtime:    "运行通道: 不可用（Host 冲突）",
 		},
 		{
 			name:       "desktop",
 			resolution: codexRuntimeResolution{Binding: agent.CodexThreadBinding{Runtime: agent.CodexRuntimeDesktop}},
 			task:       "任务: 空闲",
-			runtime:    "运行: 正常（Codex App）",
+			runtime:    "运行通道: 可用（Codex App）",
 		},
 		{
 			name:       "unknown",
 			resolution: codexRuntimeResolution{Binding: agent.CodexThreadBinding{Runtime: agent.CodexRuntimeUnknown}},
 			task:       "任务: 空闲",
-			runtime:    "运行: 未确认",
+			runtime:    "运行通道: 不可用（未确认）",
 		},
 	}
 	for _, test := range tests {

@@ -45,18 +45,20 @@ func TestCodexDesktopActiveMessageSteersCurrentTurn(t *testing.T) {
 	ag.watchDone = make(chan struct{})
 	h.startCodexAgentTask(opts)
 	waitUntil(t, func() bool {
-		return ag.steerMessage == "继续任务"
+		_, _, message := ag.steerSnapshot()
+		return message == "继续任务"
 	})
 	task, _ := h.activeTask(route.conversationID)
 	defer task.cancel()
 	if ag.chatCallCount() != 0 {
 		t.Fatal("active Desktop thread 不应开始新 turn")
 	}
-	if task.pendingGuide() != "" || ag.steerThreadID != route.threadID || ag.steerTurnID != "turn-1" {
-		t.Fatalf("pending=%q steer=(%q,%q,%q)", task.pendingGuide(), ag.steerThreadID, ag.steerTurnID, ag.steerMessage)
+	steerThreadID, steerTurnID, steerMessage := ag.steerSnapshot()
+	if task.pendingGuide() != "" || steerThreadID != route.threadID || steerTurnID != "turn-1" {
+		t.Fatalf("pending=%q steer=(%q,%q,%q)", task.pendingGuide(), steerThreadID, steerTurnID, steerMessage)
 	}
-	text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n")
-	if !strings.Contains(text, "已发送到当前共享 Codex 任务") || strings.Contains(text, queuedAgentMessage) {
+	text := strings.Join(opts.reply.(*platformtest.Replier).TextsSnapshot(), "\n")
+	if !strings.Contains(text, "已作为补充输入加入当前任务") || strings.Contains(text, queuedAgentMessage) {
 		t.Fatalf("reply=%q", text)
 	}
 }
@@ -97,7 +99,10 @@ func TestCodexDesktopActiveMessageClaimsStableFollowerTerminalDelivery(t *testin
 	opts.reply = &codexFollowerRouteReplier{Replier: opts.reply.(*platformtest.Replier), route: deliveryRoute}
 
 	h.startCodexAgentTask(opts)
-	waitUntil(t, func() bool { return ag.steerMessage == "继续任务" })
+	waitUntil(t, func() bool {
+		_, _, message := ag.steerSnapshot()
+		return message == "继续任务"
+	})
 	task, ok := h.activeTask(route.conversationID)
 	if !ok {
 		t.Fatal("active steer did not register its observer")
@@ -107,45 +112,50 @@ func TestCodexDesktopActiveMessageClaimsStableFollowerTerminalDelivery(t *testin
 		t.Fatalf("steer follower snapshot=%#v ok=%v, want pending turn-1", snapshot, ok)
 	}
 	wantKey := codexFollowerTerminalOutboxID(snapshot, "turn-1")
-	task.mu.Lock()
-	control := task.externalReservation
-	task.mu.Unlock()
-	if control == nil {
-		t.Fatal("active steer observer has no external reservation")
-	}
-	control.mu.Lock()
-	gotKey := control.runtime.opts.terminalDeliveryKey
-	control.mu.Unlock()
+	gotKey := task.terminalDeliveryKeySnapshot()
 	if gotKey != wantKey {
 		t.Fatalf("terminal delivery key=%q, want %q", gotKey, wantKey)
 	}
 }
 
-func TestCodexActivePreflightTimeoutReleasesThreadLock(t *testing.T) {
+func TestCodexActiveInputReleasesThreadLockAfterUnifiedDispatch(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, true)
-	h.codexControlTimeout = 20 * time.Millisecond
-	ag.threadStateEntered = make(chan struct{}, 1)
-	ag.threadStateRelease = make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		h.startCodexAgentTask(opts)
-		close(done)
-	}()
-
-	select {
-	case <-ag.threadStateEntered:
-	case <-time.After(taskWaitTimeout):
-		t.Fatal("preflight did not start thread/read")
-	}
-	select {
-	case <-done:
-	case <-time.After(taskWaitTimeout):
-		t.Fatal("preflight did not return after the internal control timeout")
-	}
-	if _, active := h.activeTask(route.conversationID); active {
-		t.Fatal("timed out preflight must not register an active task")
+	ag.watchDone = make(chan struct{})
+	h.startCodexAgentTask(opts)
+	waitUntil(t, func() bool { return ag.steerInputCallCount() == 1 })
+	if task, ok := h.activeTask(route.conversationID); ok {
+		task.cancel()
 	}
 	assertCodexThreadLockReusable(t, h, route.threadID)
+}
+
+func TestCodexActiveInputUsesBoundedControlContext(t *testing.T) {
+	h, ag, first, route := liveMessageFixture(t, false)
+	h.codexControlTimeout = 50 * time.Millisecond
+	turnEntered := make(chan struct{}, 1)
+	turnRelease := make(chan struct{})
+	ag.turnEntered, ag.turnRelease = turnEntered, turnRelease
+	h.startCodexAgentTask(first)
+	select {
+	case <-turnEntered:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("first Codex turn did not enter the blocking fixture")
+	}
+	ag.setBindingState(agent.CodexThreadState{
+		ThreadID: route.threadID, Active: true, ActiveTurnID: "turn-1",
+	})
+	second := first
+	second.message = "bounded steer"
+	second.reply = platformtest.NewReplier(platform.Capabilities{Text: true})
+
+	h.startCodexAgentTask(second)
+
+	waitUntil(t, func() bool { return ag.steerInputCallCount() == 1 })
+	if !ag.steerInputDeadlineSnapshot() {
+		t.Fatal("active input submission must inherit the bounded thread-control context")
+	}
+	close(turnRelease)
+	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
 }
 
 func TestCodexInProcessActiveTaskSteersSecondMessage(t *testing.T) {
@@ -166,14 +176,23 @@ func TestCodexInProcessActiveTaskSteersSecondMessage(t *testing.T) {
 	ag.setBindingState(activeState)
 	secondReply := platformtest.NewReplier(platform.Capabilities{Text: true})
 	second := first
-	second.message, second.reply = "第二条", secondReply
+	second.message, second.reply, second.messageKey = "第二条", secondReply, "message-second"
 	h.startCodexAgentTask(second)
-	text := strings.Join(secondReply.Texts, "\n")
+	text := strings.Join(secondReply.TextsSnapshot(), "\n")
 	if !strings.Contains(text, "已发送到当前共享 Codex 任务") || strings.Contains(text, queuedAgentMessage) || strings.Contains(text, "暂不能开始任务") {
 		t.Fatalf("第二条应直接进入现有 in-process turn，reply=%q", text)
 	}
-	if ag.steerThreadID != route.threadID || ag.steerTurnID != "turn-1" || ag.steerMessage != "第二条" {
-		t.Fatalf("steer=(%q,%q,%q)", ag.steerThreadID, ag.steerTurnID, ag.steerMessage)
+	steerThreadID, steerTurnID, steerMessage := ag.steerSnapshot()
+	if steerThreadID != route.threadID || steerTurnID != "turn-1" || steerMessage != "第二条" {
+		t.Fatalf("steer=(%q,%q,%q)", steerThreadID, steerTurnID, steerMessage)
+	}
+	if calls := ag.steerInputCallCount(); calls != 1 {
+		t.Fatalf("protected steer calls=%d, want 1", calls)
+	}
+	attempts := h.ensureCodexInputAttempts().snapshot()
+	if len(attempts) != 1 || attempts[0].MessageKey != "message-second" ||
+		attempts[0].Status != agent.CodexInputAttemptAccepted {
+		t.Fatalf("input attempts=%#v", attempts)
 	}
 	idleState := agent.CodexThreadState{ThreadID: route.threadID, Model: "gpt-live"}
 	ag.setBindingState(idleState)
@@ -181,6 +200,108 @@ func TestCodexInProcessActiveTaskSteersSecondMessage(t *testing.T) {
 	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
 	if ag.chatCallCount() != 1 {
 		t.Fatalf("run calls=%d, want only the original turn", ag.chatCallCount())
+	}
+}
+
+func TestCodexActiveInputUnknownDeliveryIsNotQueuedOrRetried(t *testing.T) {
+	h, ag, first, route := liveMessageFixture(t, false)
+	turnEntered := make(chan struct{}, 1)
+	turnRelease := make(chan struct{})
+	ag.turnEntered, ag.turnRelease = turnEntered, turnRelease
+	first.message = "第一条"
+	h.startCodexAgentTask(first)
+	select {
+	case <-turnEntered:
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("第一条 in-process Codex 任务未进入阻塞执行")
+	}
+	ag.setBindingState(agent.CodexThreadState{
+		ThreadID: route.threadID, Active: true, ActiveTurnID: "turn-1",
+	})
+	ag.steerInputErr = agent.ErrCodexInputDeliveryUnconfirmed
+	secondReply := platformtest.NewReplier(platform.Capabilities{Text: true})
+	second := first
+	second.message, second.reply, second.messageKey = "未知交付补充", secondReply, "message-unknown"
+
+	h.startCodexAgentTask(second)
+
+	text := strings.Join(secondReply.TextsSnapshot(), "\n")
+	if !strings.Contains(text, "没有自动重发") || !strings.Contains(text, "Codex App") {
+		t.Fatalf("reply=%q", text)
+	}
+	_, _, steerMessage := ag.steerSnapshot()
+	if calls := ag.steerInputCallCount(); calls != 1 || steerMessage != "" {
+		t.Fatalf("protected calls=%d low-level steer=%q, want one unconfirmed submission and no retry", calls, steerMessage)
+	}
+	if task, ok := h.activeTask(route.conversationID); !ok {
+		t.Fatal("original active task disappeared after unknown delivery")
+	} else if pending := task.pendingGuide(); pending != "" {
+		t.Fatalf("pending=%q, unknown delivery must not be queued", pending)
+	}
+	attempts := h.ensureCodexInputAttempts().snapshot()
+	if len(attempts) != 1 || attempts[0].Status != agent.CodexInputAttemptUnconfirmed {
+		t.Fatalf("input attempts=%#v", attempts)
+	}
+
+	close(turnRelease)
+	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
+}
+
+func TestCodexIdleAuthorityWaitsForLocalTaskReleaseInsteadOfQueueing(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{
+		owner: opts.userID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		codexThreadID: route.threadID,
+	})
+	result := make(chan bool, 1)
+	go func() {
+		result <- h.steerMessageIntoLiveTask(codexTaskPreflightOptions{
+			ctx: context.Background(), taskOpts: opts, route: route, cancel: func() {},
+		}, task)
+	}()
+	waitUntil(t, func() bool { return ag.steerInputCallCount() == 1 })
+
+	select {
+	case handled := <-result:
+		close(task.done)
+		t.Fatalf("handled=%v, idle authority returned before the stale local lifecycle was released", handled)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(task.done)
+	select {
+	case handled := <-result:
+		if handled {
+			t.Fatal("released local lifecycle should let the caller start a new turn")
+		}
+	case <-time.After(taskWaitTimeout):
+		t.Fatal("idle input did not resume after the stale local lifecycle was released")
+	}
+	if pending := task.pendingGuide(); pending != "" {
+		t.Fatalf("pending=%q, idle input must not enter the old task queue", pending)
+	}
+}
+
+func TestCodexIdleAuthorityDoesNotQueueWhenLocalTaskReleaseTimesOut(t *testing.T) {
+	h, _, opts, route := liveMessageFixture(t, false)
+	task, _ := newActiveAgentTask(context.Background(), activeTaskMeta{
+		owner: opts.userID, routeUserID: opts.routeUserID, agentName: opts.agentName,
+		codexThreadID: route.threadID,
+	})
+	defer close(task.done)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	handled := h.steerMessageIntoLiveTask(codexTaskPreflightOptions{
+		ctx: ctx, taskOpts: opts, route: route, cancel: func() {},
+	}, task)
+
+	text := strings.Join(opts.reply.(*platformtest.Replier).TextsSnapshot(), "\n")
+	if !handled || !strings.Contains(text, "输入未发送且不会排队") {
+		t.Fatalf("handled=%v reply=%q", handled, text)
+	}
+	if pending := task.pendingGuide(); pending != "" {
+		t.Fatalf("pending=%q, timed out input must not be retained", pending)
 	}
 }
 
@@ -213,18 +334,21 @@ func TestCodexDesktopDirectInputKeepsResolvedStreamProgress(t *testing.T) {
 	}
 }
 
-func TestCodexUnknownRuntimeDoesNotStartTurn(t *testing.T) {
+func TestCodexUnavailableHostDoesNotQueueOrWriteInput(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
+	ag.runErr = agent.ErrCodexRuntimeUnavailable
 	h.startCodexAgentTask(opts)
-	text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n")
-	if ag.chatCallCount() != 0 || ag.steerTurnID != "" || ag.bindCalls != 0 || ag.handoffCalls != 0 {
-		t.Fatalf("chat=%d steer=%q inspect=%d handoff=%d", ag.chatCallCount(), ag.steerTurnID, ag.bindCalls, ag.handoffCalls)
+	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
+	text := strings.Join(opts.reply.(*platformtest.Replier).TextsSnapshot(), "\n")
+	_, steerTurnID, _ := ag.steerSnapshot()
+	if ag.chatCallCount() != 0 || steerTurnID != "" {
+		t.Fatalf("chat=%d steer=%q", ag.chatCallCount(), steerTurnID)
 	}
 	if _, active := h.activeTask(route.conversationID); active {
-		t.Fatal("runtime unknown 时不应登记新的 active task")
+		t.Fatal("unavailable Host failure must not leave an active or queued task")
 	}
-	if !strings.Contains(text, "运行通道暂不可用") || !strings.Contains(text, "绑定已保留") {
+	if !strings.Contains(text, "运行通道暂不可用") || !strings.Contains(text, "绑定保持不变") {
 		t.Fatalf("reply=%q, want binding-preserving unavailable notice", text)
 	}
 }
@@ -239,8 +363,9 @@ func TestCodexDesktopGuideUsesCurrentTurn(t *testing.T) {
 	})
 	h.storePendingGuide(route.conversationID, pendingAgentTask{message: "补充要求", run: func() {}})
 	text, handled := h.steerPendingGuideToExternalCodex(externalCodexTaskCommand{ctx: context.Background(), key: route.conversationID, agentName: "codex", actor: "user-1"})
-	if !handled || !strings.Contains(text, "已发送") || ag.steerTurnID != "turn-1" {
-		t.Fatalf("handled=%v text=%q turn=%q", handled, text, ag.steerTurnID)
+	_, steerTurnID, _ := ag.steerSnapshot()
+	if !handled || !strings.Contains(text, "已发送") || steerTurnID != "turn-1" {
+		t.Fatalf("handled=%v text=%q turn=%q", handled, text, steerTurnID)
 	}
 	_ = task
 }
@@ -325,27 +450,31 @@ func TestCodexDesktopRepeatedStopDoesNotRepeatInterrupt(t *testing.T) {
 	}
 }
 
-func TestCodexPendingMessageFailsClosedWhenRuntimeBecomesUnknown(t *testing.T) {
-	h, ag, opts, _ := liveMessageFixture(t, false)
+func TestCodexPendingMessageDoesNotWriteWhenHostBecomesUnavailable(t *testing.T) {
+	h, ag, opts, route := liveMessageFixture(t, false)
 	pending := h.pendingCodexTask(opts)
 	ag.setBindingRuntime(agent.CodexRuntimeUnknown)
+	ag.runErr = agent.ErrCodexRuntimeUnavailable
 	pending.run()
+	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
 	if ag.chatCallCount() != 0 {
-		t.Fatal("runtime unknown 时 pending 输入不应启动新 turn")
+		t.Fatal("Host unavailable 时 pending 输入不应启动新 turn")
 	}
 }
 
-func TestCodexRuntimeSnapshotErrorDoesNotStartTurn(t *testing.T) {
+func TestCodexRuntimeReadErrorDoesNotWriteOrLeaveQueuedTask(t *testing.T) {
 	h, ag, opts, route := liveMessageFixture(t, false)
-	ag.currentErr = agent.ErrCodexDesktopOwnershipUnknown
+	ag.runErr = agent.ErrCodexDesktopOwnershipUnknown
 
 	h.startCodexAgentTask(opts)
+	waitUntil(t, func() bool { _, active := h.activeTask(route.conversationID); return !active })
 
-	if ag.chatCallCount() != 0 || ag.steerTurnID != "" {
-		t.Fatalf("snapshot error started work: chat=%d steer=%q", ag.chatCallCount(), ag.steerTurnID)
+	_, steerTurnID, _ := ag.steerSnapshot()
+	if ag.chatCallCount() != 0 || steerTurnID != "" {
+		t.Fatalf("runtime read error started work: chat=%d steer=%q", ag.chatCallCount(), steerTurnID)
 	}
 	if _, active := h.activeTask(route.conversationID); active {
-		t.Fatal("snapshot error must fail before task admission")
+		t.Fatal("runtime read error must not leave an active or queued task")
 	}
 }
 
@@ -363,7 +492,8 @@ func TestUnauthorizedUserCannotGuideStopOrReadPendingAction(t *testing.T) {
 	if !handled || !stopHandled || !strings.Contains(guide, "只有任务发起人") || !strings.Contains(stop, "只有任务发起人") {
 		t.Fatalf("guide=%q stop=%q", guide, stop)
 	}
-	if task.pendingGuide() != "私有指令" || ag.interruptTurnID != "" || ag.steerTurnID != "" {
+	_, steerTurnID, _ := ag.steerSnapshot()
+	if task.pendingGuide() != "私有指令" || ag.interruptTurnID != "" || steerTurnID != "" {
 		t.Fatal("未授权控制读取或消费了 pending action")
 	}
 }
@@ -406,12 +536,41 @@ type recordingGuideAgent struct {
 func (a *recordingGuideAgent) SteerCodexThread(_ context.Context, _ string, threadID string, turnID string, message string) error {
 	a.guideMu.Lock()
 	a.guides = append(a.guides, guideSteerCall{threadID: threadID, turnID: turnID, message: message})
+	a.fakeCodexThreadAgent.steerMu.Lock()
 	a.fakeCodexThreadAgent.steerThreadID = threadID
 	a.fakeCodexThreadAgent.steerTurnID = turnID
 	a.fakeCodexThreadAgent.steerMessage = message
 	err := a.fakeCodexThreadAgent.steerErr
+	a.fakeCodexThreadAgent.steerMu.Unlock()
 	a.guideMu.Unlock()
 	return err
+}
+
+func (a *recordingGuideAgent) SteerCodexInput(_ context.Context, req agent.CodexTurnRequest) (string, error) {
+	turnID := strings.TrimSpace(a.threadBinding(req.Runtime.Ref.ThreadID).State.ActiveTurnID)
+	if turnID == "" {
+		return "", agent.ErrCodexNoActiveTurn
+	}
+	a.guideMu.Lock()
+	a.guides = append(a.guides, guideSteerCall{
+		threadID: req.Runtime.Ref.ThreadID, turnID: turnID, message: req.Message,
+	})
+	a.fakeCodexThreadAgent.steerMu.Lock()
+	a.fakeCodexThreadAgent.steerThreadID = req.Runtime.Ref.ThreadID
+	a.fakeCodexThreadAgent.steerTurnID = turnID
+	a.fakeCodexThreadAgent.steerMessage = req.Message
+	err := a.fakeCodexThreadAgent.steerErr
+	a.fakeCodexThreadAgent.steerMu.Unlock()
+	a.guideMu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	if req.OnTurnSteered != nil {
+		if err := req.OnTurnSteered(req.Runtime.Ref, turnID); err != nil {
+			return "", err
+		}
+	}
+	return turnID, nil
 }
 
 func (a *recordingGuideAgent) guideSnapshot() []guideSteerCall {

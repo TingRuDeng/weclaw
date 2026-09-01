@@ -88,8 +88,19 @@ func (h *Handler) handleCodexReleaseCommand(runtime codexSessionCommandRuntime) 
 		}
 		return fmt.Sprintf("已停止当前窗口同步；解绑状态已保存，最终提交将在重启时恢复: %v", commitErr)
 	}
+	var unsubscribeErr error
+	if lockedThreadID != "" {
+		if subscriptionAgent, ok := runtime.agent.(agent.CodexThreadSubscriptionAgent); ok {
+			_, unsubscribeErr = h.unsubscribeCodexThreadIfUnusedLocked(
+				runtime.ctx, subscriptionAgent, lockedThreadID,
+			)
+		}
+	}
 	if freezeErr != nil {
 		return fmt.Sprintf("已解除当前窗口与 Codex 会话的绑定；本地 Codex 任务继续运行。进度卡冻结失败: %v", freezeErr)
+	}
+	if unsubscribeErr != nil {
+		return fmt.Sprintf("已解除当前窗口与 Codex 会话的绑定；停止当前连接观察失败，但不影响 Codex Host 和其他前端: %v", unsubscribeErr)
 	}
 	return "已解除当前窗口与 Codex 会话的绑定；本地 Codex 任务继续运行。"
 }

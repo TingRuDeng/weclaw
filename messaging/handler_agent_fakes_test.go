@@ -97,6 +97,7 @@ func (f *fakeAgent) resetConversationID() string {
 type fakeCodexThreadAgent struct {
 	fakeAgent
 	threadStateMu      sync.RWMutex
+	steerMu            sync.RWMutex
 	threadID           string
 	useConversation    string
 	useThreadID        string
@@ -207,10 +208,18 @@ func (f *fakeCodexThreadAgent) WatchCodexThread(ctx context.Context, _ string, _
 }
 
 func (f *fakeCodexThreadAgent) SteerCodexThread(_ context.Context, _ string, threadID string, turnID string, message string) error {
+	f.steerMu.Lock()
+	defer f.steerMu.Unlock()
 	f.steerThreadID = threadID
 	f.steerTurnID = turnID
 	f.steerMessage = message
 	return f.steerErr
+}
+
+func (f *fakeCodexThreadAgent) steerSnapshot() (threadID string, turnID string, message string) {
+	f.steerMu.RLock()
+	defer f.steerMu.RUnlock()
+	return f.steerThreadID, f.steerTurnID, f.steerMessage
 }
 
 func (f *fakeCodexThreadAgent) InterruptCodexThread(_ context.Context, _ string, threadID string, turnID string) error {

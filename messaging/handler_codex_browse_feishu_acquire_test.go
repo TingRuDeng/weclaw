@@ -12,8 +12,8 @@ import (
 	"github.com/fastclaw-ai/weclaw/platform/platformtest"
 )
 
-// TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection 验证运行通道失败不撤销窗口选择。
-func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testing.T) {
+// TestFeishuCodexSingleSessionRuntimeFailureKeepsPreviousSelection 验证运行通道失败不提交候选窗口选择。
+func TestFeishuCodexSingleSessionRuntimeFailureKeepsPreviousSelection(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir, root := t.TempDir(), t.TempDir()
 	oldWorkspace := filepath.Join(root, "old")
@@ -36,11 +36,10 @@ func TestFeishuCodexSingleSessionRuntimeFailureKeepsCommittedSelection(t *testin
 	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
 	targetThread, pending := h.ensureCodexSessions().getThread(bindingKey, targetWorkspace)
 	if len(reply.Choices) != 0 || len(reply.Texts) != 1 ||
-		!strings.Contains(reply.Texts[0], "已进入工作空间并绑定唯一会话") ||
-		!strings.Contains(reply.Texts[0], "运行通道: 暂不可用") {
+		!strings.Contains(reply.Texts[0], "原会话已保留") {
 		t.Fatalf("choices=%#v texts=%#v", reply.Choices, reply.Texts)
 	}
-	if active != targetWorkspace || targetThread != "thread-b" || pending {
+	if active != oldWorkspace || targetThread != "" || pending {
 		t.Fatalf("active=%q target=%q pending=%t", active, targetThread, pending)
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -406,7 +408,7 @@ func TestHandoffCodexRuntimeRemoteDoesNotLetCheckpointVetoOwner(t *testing.T) {
 	}
 }
 
-func TestHandoffCodexRuntimeRemoteIgnoresPartialCheckpoint(t *testing.T) {
+func TestHandoffCodexRuntimeDoesNotRestartHostForPartialCheckpoint(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{
 		loadErr:      errors.New("dial unix codex-ipc.sock: connect: connection refused"),
 		socketExists: true, processExists: true,
@@ -419,14 +421,28 @@ func TestHandoffCodexRuntimeRemoteIgnoresPartialCheckpoint(t *testing.T) {
 		restarted = true
 		return nil
 	}
-	a.rpcCall = codexHandoffRPCFake(t, "thread-new", "turn-1")
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-new","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"turn-1","status":"completed","items":[]}],"nextCursor":null}`), nil
+		default:
+			return nil, fmt.Errorf("ordinary handoff must not call %s", method)
+		}
+	}
 	req := remoteCodexRuntimeRequest("thread-new", "route-1", 1)
 	req.Checkpoint = CodexRolloutCheckpoint{TurnID: "turn-unbacked"}
 
 	binding, err := a.HandoffCodexRuntime(context.Background(), req)
 
-	if err != nil || !restarted || binding.Runtime != CodexRuntimeWeClaw {
+	if err != nil || restarted || binding.Runtime != CodexRuntimeWeClaw {
 		t.Fatalf("binding=%#v error=%v restarted=%v", binding, err, restarted)
+	}
+	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/turns/list"}) {
+		t.Fatalf("methods=%v, want read-only handoff", methods)
 	}
 }
 
@@ -544,7 +560,7 @@ func TestExplicitDaemonHandoffTreatsAppHistoryAsSharedDaemonFrontend(t *testing.
 	}
 }
 
-func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *testing.T) {
+func TestOfficialDaemonHandoffUsesIndependentProbeAndReadDeadlines(t *testing.T) {
 	var probeDeadline time.Time
 	probe := &codexDesktopOwnerProbeFake{
 		loadErr: ErrCodexDesktopNoClient, socketExists: true, processExists: true,
@@ -562,7 +578,6 @@ func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *test
 		CodexHostMode: "daemon", StateFile: filepath.Join(t.TempDir(), "state.json"),
 	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
 	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
-	var resumeDeadline time.Time
 	var readDeadline time.Time
 	a.rpcCall = func(ctx context.Context, method string, _ interface{}) (json.RawMessage, error) {
 		deadline, ok := ctx.Deadline()
@@ -570,10 +585,6 @@ func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *test
 			t.Fatalf("%s must be bounded", method)
 		}
 		switch method {
-		case "thread/resume":
-			resumeDeadline = deadline
-			time.Sleep(10 * time.Millisecond)
-			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
 		case "thread/read":
 			readDeadline = deadline
 			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
@@ -593,17 +604,14 @@ func TestOfficialDaemonHandoffUsesIndependentProbeAndActivationDeadlines(t *test
 	if err != nil || binding.Runtime != CodexRuntimeWeClaw {
 		t.Fatalf("binding=%#v error=%v", binding, err)
 	}
-	if probeDeadline.IsZero() || resumeDeadline.IsZero() || readDeadline.IsZero() {
-		t.Fatalf("probe deadline=%v resume deadline=%v read deadline=%v", probeDeadline, resumeDeadline, readDeadline)
+	if probeDeadline.IsZero() || readDeadline.IsZero() {
+		t.Fatalf("probe deadline=%v read deadline=%v", probeDeadline, readDeadline)
 	}
-	if !probeDeadline.Before(parentDeadline) || !resumeDeadline.Before(parentDeadline) || !readDeadline.Before(parentDeadline) {
-		t.Fatalf("phase deadlines must be shorter than parent: parent=%v probe=%v resume=%v read=%v", parentDeadline, probeDeadline, resumeDeadline, readDeadline)
+	if !probeDeadline.Before(parentDeadline) || !readDeadline.Before(parentDeadline) {
+		t.Fatalf("phase deadlines must be shorter than parent: parent=%v probe=%v read=%v", parentDeadline, probeDeadline, readDeadline)
 	}
-	if !probeDeadline.After(resumeDeadline) {
-		t.Fatalf("activation must receive a fresh independent budget: probe=%v resume=%v", probeDeadline, resumeDeadline)
-	}
-	if !readDeadline.After(resumeDeadline) {
-		t.Fatalf("thread/read must receive a fresh budget after thread/resume: resume=%v read=%v", resumeDeadline, readDeadline)
+	if !probeDeadline.After(readDeadline) {
+		t.Fatalf("thread/read must receive a fresh independent activation budget: probe=%v read=%v", probeDeadline, readDeadline)
 	}
 }
 

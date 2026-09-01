@@ -86,6 +86,7 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		sessionGenerations:         make(map[string]uint64),
 		bindingRevisions:           make(map[string]uint64),
 		threads:                    make(map[string]string),
+		codexThreadSubscriptions:   make(map[string]uint64),
 		codexThreadConfigs:         make(map[string]CodexThreadConfig),
 		codexThreadConfigRevisions: make(map[string]uint64),
 		codexThreadProviders:       make(map[string]string),

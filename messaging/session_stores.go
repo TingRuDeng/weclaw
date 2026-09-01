@@ -2,16 +2,18 @@ package messaging
 
 // sessionService 收拢 Handler 的会话状态仓库归属；各 store 继续自行维护锁和持久化事务。
 type sessionService struct {
-	agent  *agentSessionStore
-	codex  *codexSessionStore
-	claude *claudeSessionStore
+	agent         *agentSessionStore
+	codex         *codexSessionStore
+	codexAttempts *codexInputAttemptStore
+	claude        *claudeSessionStore
 }
 
 func newSessionService() *sessionService {
 	return &sessionService{
-		agent:  newAgentSessionStore(),
-		codex:  newCodexSessionStore(),
-		claude: newClaudeSessionStore(),
+		agent:         newAgentSessionStore(),
+		codex:         newCodexSessionStore(),
+		codexAttempts: newCodexInputAttemptStore(),
+		claude:        newClaudeSessionStore(),
 	}
 }
 
@@ -39,7 +41,13 @@ func (h *Handler) ensureCodexSessions() *codexSessionStore {
 
 // SetCodexSessionFile 设置 Codex workspace/thread 列表的持久化文件。
 func (h *Handler) SetCodexSessionFile(filePath string) {
-	h.ensureCodexSessions().SetFilePath(filePath)
+	service := h.ensureSessionService()
+	service.codex.SetFilePath(filePath)
+	service.codexAttempts.SetFilePath(codexInputAttemptFileForSession(filePath))
+}
+
+func (h *Handler) ensureCodexInputAttempts() *codexInputAttemptStore {
+	return h.ensureSessionService().codexAttempts
 }
 
 func (h *Handler) ensureFeishuIdentities() *feishuIdentityStore {

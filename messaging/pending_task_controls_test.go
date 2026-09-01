@@ -278,7 +278,7 @@ func TestPendingTaskGuideControlRevisionSteersAndReanchorsOnce(t *testing.T) {
 	}
 }
 
-func TestPendingTaskGuideSteerFailureDoesNotCreateRelayCard(t *testing.T) {
+func TestPendingTaskGuideSteerFailureClearsInputAndDoesNotCreateRelayCard(t *testing.T) {
 	fixture := newLiveGuideRelayFixture(t, true)
 	token := issuePendingGuideControl(t, fixture, "会失败的引导")
 	fixture.agent.fakeCodexThreadAgent.steerErr = errors.New("steer denied")
@@ -289,7 +289,7 @@ func TestPendingTaskGuideSteerFailureDoesNotCreateRelayCard(t *testing.T) {
 		reply,
 	)
 
-	if reply.openAttempts != 0 || fixture.oldReply.stream.supersededCount() != 0 || fixture.task.pendingGuide() != "会失败的引导" {
+	if reply.openAttempts != 0 || fixture.oldReply.stream.supersededCount() != 0 || fixture.task.pendingGuide() != "" {
 		t.Fatalf("open=%d superseded=%d pending=%q", reply.openAttempts, fixture.oldReply.stream.supersededCount(), fixture.task.pendingGuide())
 	}
 	if text := strings.Join(reply.textsSnapshot(), "\n"); !strings.Contains(text, "steer denied") {

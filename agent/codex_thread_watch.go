@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -88,6 +89,16 @@ func (a *ACPAgent) watchCodexThreadWithReconcile(ctx context.Context, opts codex
 		}
 		if binding.Runtime == CodexRuntimeConflict {
 			return "", ErrCodexRuntimeConflict
+		}
+	}
+	if (!hasBinding || binding.Runtime != CodexRuntimeDesktop) &&
+		a.codexThreadSubscriptionPending(opts.conversationID, opts.threadID) {
+		if _, err := a.SubscribeCodexThread(ctx, opts.conversationID, opts.threadID); err != nil {
+			// Subscription only improves real-time delivery. The authoritative
+			// snapshot and periodic reconciliation below remain sufficient to
+			// recover progress and terminal state without rejecting an input that
+			// the Host has already accepted.
+			log.Printf("[codex-watch] observer subscription degraded; continuing with authoritative polling thread=%q: %v", opts.threadID, err)
 		}
 	}
 	turnCh := make(chan *codexTurnEvent, codexTurnEventBufferSize)

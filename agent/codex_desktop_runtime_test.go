@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,159 @@ func TestACPAgentExplicitDaemonDoesNotSelectDesktopHost(t *testing.T) {
 
 	if err != nil || selected || desktopDialed {
 		t.Fatalf("selected=%v desktopDialed=%v err=%v", selected, desktopDialed, err)
+	}
+}
+
+func TestOfficialDaemonReadsThreadWhenPersistedBindingRuntimeIsUnknown(t *testing.T) {
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon",
+		CodexDesktopBridge: true, Env: map[string]string{"CODEX_HOME": t.TempDir()},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeUnknown, CodexThreadState{
+		ThreadID: "thread-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readCalls := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			readCalls++
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+
+	state, err := a.ReadCodexThreadState(context.Background(), request.Ref.ConversationID, request.Ref.ThreadID)
+
+	if err != nil || state.ThreadID != "thread-1" || state.Active || readCalls != 1 {
+		t.Fatalf("state=%#v readCalls=%d error=%v", state, readCalls, err)
+	}
+}
+
+func TestOfficialDaemonInspectUsesAuthoritativeThreadReadWithoutDesktopProbe(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{
+		loadErr:       errors.New("Desktop frontend is temporarily unreachable"),
+		socketExists:  true,
+		processExists: true,
+	}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon",
+		CodexDesktopBridge: true, Env: map[string]string{"CODEX_HOME": t.TempDir()},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+
+	binding, err := a.InspectCodexRuntime(context.Background(), request)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.State.ThreadID != "thread-1" {
+		t.Fatalf("binding=%#v error=%v", binding, err)
+	}
+	if probe.loadCalls != 0 {
+		t.Fatalf("official daemon Inspect queried Desktop %d time(s), want 0", probe.loadCalls)
+	}
+	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/turns/list"}) {
+		t.Fatalf("methods=%v, want authoritative daemon read", methods)
+	}
+}
+
+func TestPrivateDesktopHostKeepsUnknownBindingUnreadable(t *testing.T) {
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexDesktopBridge: true,
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: &codexDesktopOwnerProbeFake{}, desktopBridge: true})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeUnknown, CodexThreadState{
+		ThreadID: "thread-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rpcCalls := 0
+	a.rpcCall = func(_ context.Context, _ string, _ interface{}) (json.RawMessage, error) {
+		rpcCalls++
+		return nil, errors.New("private Host must not fall through to another app-server")
+	}
+
+	_, err := a.ReadCodexThreadState(context.Background(), request.Ref.ConversationID, request.Ref.ThreadID)
+
+	if !errors.Is(err, ErrCodexRuntimeUnavailable) || rpcCalls != 0 {
+		t.Fatalf("error=%v rpcCalls=%d", err, rpcCalls)
+	}
+}
+
+func TestValidateCodexThreadUsesLightweightThreadRead(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		if method != "thread/read" {
+			return nil, fmt.Errorf("validation must not call %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+	}
+
+	state, err := a.ValidateCodexThread(context.Background(), "conversation-1", "thread-1")
+
+	if err != nil || state.ThreadID != "thread-1" || state.ThreadStatus != "idle" {
+		t.Fatalf("state=%#v error=%v", state, err)
+	}
+	if len(methods) != 1 || methods[0] != "thread/read" {
+		t.Fatalf("methods=%v, want thread/read only", methods)
+	}
+}
+
+func TestValidateCodexThreadUsesPrivateDesktopIPCWithoutAppServerFallback(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexDesktopBridge: true,
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	a.desktopRuntime = &codexDesktopRuntime{
+		state:   newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now}),
+		tracked: make(map[string]bool),
+	}
+	a.setCodexRuntimeMode(CodexRuntimeDesktop)
+	probe.loadHook = func(ref CodexThreadRef) {
+		raw := desktopStateFixture(ref.ThreadID, "idle")
+		if _, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+			threadID: ref.ThreadID, epoch: 1, revision: 1, raw: raw,
+		}); err != nil {
+			t.Fatalf("applySnapshot() error=%v", err)
+		}
+	}
+	rpcCalls := 0
+	a.rpcCall = func(_ context.Context, _ string, _ interface{}) (json.RawMessage, error) {
+		rpcCalls++
+		return nil, errors.New("private Desktop Host must not use app-server")
+	}
+
+	state, err := a.ValidateCodexThread(context.Background(), "conversation-2", "thread-2")
+
+	if err != nil || state.ThreadID != "thread-2" || probe.loadCalls != 1 || rpcCalls != 0 {
+		t.Fatalf("state=%#v loadCalls=%d rpcCalls=%d error=%v", state, probe.loadCalls, rpcCalls, err)
 	}
 }
 
@@ -616,6 +770,33 @@ func TestACPAgentDesktopReadStateDoesNotCallThreadRead(t *testing.T) {
 	state, err := a.ReadCodexThreadState(context.Background(), "conversation-1", "thread-1")
 	if err != nil || state.Model != "gpt-test" || len(caller.calls) != 0 {
 		t.Fatalf("ReadCodexThreadState() = %#v, %v", state, err)
+	}
+}
+
+func TestDesktopInputResolutionRefreshesAuthoritativeIPCState(t *testing.T) {
+	a, _ := desktopRuntimeTestAgent(t)
+	claimDesktopRemoteControl(t, a)
+	probe := a.desktopProbe.(*codexDesktopOwnerProbeFake)
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{desktopTurnFixture("turn-authoritative", "inProgress", nil)}
+	if _, err := a.desktopRuntime.state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 2, raw: raw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	a.codexAdmissionMu.Lock()
+	binding, err := a.resolveCodexRuntimeForInputLocked(context.Background(), desktopRuntimeRequest())
+	a.codexAdmissionMu.Unlock()
+
+	if err != nil {
+		t.Fatalf("resolveCodexRuntimeForInputLocked() error=%v", err)
+	}
+	if probe.loadCalls != 1 {
+		t.Fatalf("Desktop IPC refresh calls=%d, want 1 before input dispatch", probe.loadCalls)
+	}
+	if !binding.State.Active || binding.State.ActiveTurnID != "turn-authoritative" {
+		t.Fatalf("binding=%#v, want authoritative active Desktop turn", binding)
 	}
 }
 

@@ -52,7 +52,7 @@ func TestCodexUnknownClientSnapshotDoesNotVetoSharedHostTurn(t *testing.T) {
 	}
 }
 
-func TestCodexPreparingFollowerRejectsOrdinaryMessageBeforeRunOrSteer(t *testing.T) {
+func TestCodexPreparingFollowerAllowsOrdinaryMessageBeforeObserverReady(t *testing.T) {
 	for _, active := range []bool{false, true} {
 		active := active
 		t.Run(map[bool]string{false: "idle", true: "active"}[active], func(t *testing.T) {
@@ -79,15 +79,21 @@ func TestCodexPreparingFollowerRejectsOrdinaryMessageBeforeRunOrSteer(t *testing
 
 			waitUntil(t, func() bool {
 				runCalls, _ := ag.runCallSnapshot()
-				return len(opts.reply.(*platformtest.Replier).Texts) > 0 || runCalls > 0 || ag.steerTurnID != ""
+				_, steerTurnID, _ := ag.steerSnapshot()
+				return runCalls > 0 || steerTurnID != ""
 			})
 			runCalls, _ := ag.runCallSnapshot()
-			if runCalls != 0 || ag.steerTurnID != "" {
-				t.Fatalf("preparing follower wrote to Codex: run=%d steer=%q", runCalls, ag.steerTurnID)
+			_, steerTurnID, _ := ag.steerSnapshot()
+			if active {
+				if runCalls != 1 || steerTurnID != "turn-1" {
+					t.Fatalf("active preparing follower run=%d steer=%q, want unified dispatch to steer turn-1", runCalls, steerTurnID)
+				}
+			} else if runCalls != 1 || steerTurnID != "" {
+				t.Fatalf("idle preparing follower run=%d steer=%q, want one turn start", runCalls, steerTurnID)
 			}
-			text := strings.Join(opts.reply.(*platformtest.Replier).Texts, "\n")
-			if !strings.Contains(text, "正在切换中") || !strings.Contains(text, "请稍后") {
-				t.Fatalf("reply=%q, want friendly attach-in-progress notice", text)
+			text := strings.Join(opts.reply.(*platformtest.Replier).TextsSnapshot(), "\n")
+			if strings.Contains(text, "正在切换中") || strings.Contains(text, "请稍后") {
+				t.Fatalf("observer preparation still blocked writing: %q", text)
 			}
 		})
 	}

@@ -46,6 +46,7 @@ type codexSessionAcquireResult struct {
 	externalProgressCard         bool
 	agentSessionErr              error
 	runtimeErr                   error
+	syncErr                      error
 	selectionChanged             bool
 	progressReanchored           bool
 	progressReanchorErr          error
@@ -59,7 +60,8 @@ type codexSessionAcquireResult struct {
 // acquireCodexSessionWithBindingLocked atomically commits one frontend's
 // workspace/thread binding, then asks the shared app-server client to bind its
 // conversation mapping to that thread. Other durable frontend bindings are
-// never released; an idle Host may be recycled to return the old thread lock.
+// never released; observer synchronization is best effort after the binding
+// transaction commits.
 func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRequest) (codexSessionAcquireResult, error) {
 	liveAgent, ok := req.agent.(agent.CodexLiveRuntimeAgent)
 	if !ok {
@@ -84,6 +86,9 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		return codexSessionAcquireResult{}, errCodexRemoteSelectionChanged
 	}
 	h.bindConversationCwd(req.agent, req.route.conversationID, req.route.workspaceRoot)
+	if err := validateCodexAcquireTarget(req); err != nil {
+		return codexSessionAcquireResult{}, err
+	}
 	providerRequest, providerRollout, err := h.buildCodexRuntimeRequest(req.route, req.route.threadID)
 	if err != nil {
 		return codexSessionAcquireResult{}, err
@@ -128,6 +133,13 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		return codexSessionAcquireResult{}, err
 	}
 
+	previousAgentSelection := h.ensureAgentSessions().snapshot(req.routeUserID)
+	previousGlobalWorkspace := ""
+	if shouldSyncCodexGlobalWorkspace(
+		firstNonBlank(req.actorUserID, req.routeUserID), req.routeUserID,
+	) {
+		previousGlobalWorkspace = h.codexWorkspaceRoot(req.agentName)
+	}
 	result := h.finishCodexFrontendBinding(req)
 	if result.agentSessionErr != nil {
 		rollbackErr := store.rollbackRemoteSelection(committed)
@@ -138,11 +150,6 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		}
 		return codexSessionAcquireResult{}, result.agentSessionErr
 	}
-	result = h.recoverPreviousCodexThreadHandoff(result, req, locked)
-	storeSelectionChanged := !codexRemoteSelectionMatchesRoute(locked, req.route)
-	result.selectionChanged = h.codexTaskCardSelectionChanged(
-		req.route.bindingKey, req.route.conversationID, storeSelectionChanged,
-	)
 	if providerPreparation.Deferred && !providerPreparation.TargetActive && !providerRequest.Checkpoint.Active {
 		result.resolution = codexRuntimeResolution{
 			Request: providerRequest, Binding: unknownCodexRuntimeBinding(providerRequest),
@@ -154,8 +161,16 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 
 	result.resolution, result.runtimeErr = h.bindCodexSharedRuntime(req, liveAgent)
 	if result.runtimeErr != nil {
-		return h.recordCodexRuntimeRecoveryResult(req, result), nil
+		return result, h.rollbackCodexAcquireBinding(
+			store, committed, previousAgentSelection, previousGlobalWorkspace,
+			req, result.runtimeErr,
+		)
 	}
+	result = h.unsubscribePreviousCodexThread(result, req, locked)
+	storeSelectionChanged := !codexRemoteSelectionMatchesRoute(locked, req.route)
+	result.selectionChanged = h.codexTaskCardSelectionChanged(
+		req.route.bindingKey, req.route.conversationID, storeSelectionChanged,
+	)
 	result, err = h.attachCodexAcquireObserver(result, req, liveAgent)
 	if result.runtimeErr != nil {
 		result = h.recordCodexRuntimeRecoveryResult(req, result)
@@ -165,6 +180,62 @@ func (h *Handler) acquireCodexSessionWithBindingLocked(req codexSessionAcquireRe
 		h.commitCodexTaskCardFocus(req.route.bindingKey, req.route.conversationID)
 	}
 	return result, err
+}
+
+func (h *Handler) rollbackCodexAcquireBinding(
+	store *codexSessionStore,
+	committed codexRemoteSelectionResult,
+	previousAgentSelection agentSessionSelectionSnapshot,
+	previousGlobalWorkspace string,
+	req codexSessionAcquireRequest,
+	cause error,
+) error {
+	agentRollbackErr := h.ensureAgentSessions().rollbackSelection(
+		previousAgentSelection, req.agentName,
+	)
+	selectionRollbackErr := store.rollbackRemoteSelection(committed)
+	if selectionRollbackErr == nil && strings.TrimSpace(previousGlobalWorkspace) != "" {
+		h.switchCodexWorkspaceForRoute(
+			firstNonBlank(req.actorUserID, req.routeUserID), req.routeUserID,
+			req.agentName, previousGlobalWorkspace, req.agent,
+		)
+	}
+	if agentRollbackErr != nil || selectionRollbackErr != nil {
+		return errors.Join(
+			errCodexSessionAcquireUncertain, cause, agentRollbackErr, selectionRollbackErr,
+		)
+	}
+	return cause
+}
+
+// validateCodexAcquireTarget keeps the previous frontend selection until the
+// single authoritative Host can read the requested thread. A follower/card
+// failure happens later and never participates in this write-availability gate.
+func validateCodexAcquireTarget(req codexSessionAcquireRequest) error {
+	var (
+		state agent.CodexThreadState
+		err   error
+	)
+	if validator, supported := req.agent.(agent.CodexThreadValidationAgent); supported {
+		state, err = validator.ValidateCodexThread(
+			req.ctx, req.route.conversationID, req.route.threadID,
+		)
+	} else {
+		runtimeAgent, ok := req.agent.(agent.CodexThreadRuntimeAgent)
+		if !ok {
+			return errCodexSessionAcquireUnsupported
+		}
+		state, err = runtimeAgent.ReadCodexThreadState(
+			req.ctx, req.route.conversationID, req.route.threadID,
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if got, want := strings.TrimSpace(state.ThreadID), strings.TrimSpace(req.route.threadID); got != "" && got != want {
+		return fmt.Errorf("Codex Host 返回了错误的目标会话: got %q want %q", got, want)
+	}
+	return nil
 }
 
 func (h *Handler) recordCodexRuntimeRecoveryResult(
@@ -228,13 +299,13 @@ func codexFollowerBaselineFromSources(
 	return codexFollowerBaseline{initialized: true}
 }
 
-func (h *Handler) recoverPreviousCodexThreadHandoff(
+func (h *Handler) unsubscribePreviousCodexThread(
 	result codexSessionAcquireResult,
 	req codexSessionAcquireRequest,
 	previous codexRemoteSelectionSnapshot,
 ) codexSessionAcquireResult {
 	previousThreadID := codexRemoteSelectionActiveThreadID(previous)
-	if req.pendingFirstTurn || previousThreadID == "" || previousThreadID == strings.TrimSpace(req.route.threadID) {
+	if previousThreadID == "" || previousThreadID == strings.TrimSpace(req.route.threadID) {
 		return result
 	}
 	result.handoffReleaseThreadID = previousThreadID
@@ -246,11 +317,11 @@ func (h *Handler) recoverPreviousCodexThreadHandoff(
 		result.handoffReleaseRetainedByTask = true
 		return result
 	}
-	handoffAgent, ok := req.agent.(agent.CodexThreadHandoffAgent)
+	subscriptionAgent, ok := req.agent.(agent.CodexThreadSubscriptionAgent)
 	if !ok {
 		return result
 	}
-	attempted, err := handoffAgent.RecoverCodexThreadHandoff(req.ctx, previousThreadID)
+	attempted, err := subscriptionAgent.UnsubscribeCodexThread(req.ctx, previousThreadID)
 	result.handoffReleaseAttempted = attempted
 	result.handoffReleaseErr = err
 	return result
@@ -289,6 +360,13 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 // attachCodexAcquireObserver mirrors a turn already active in the shared host.
 // Failure affects progress mirroring only; the frontend binding remains valid.
 func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, req codexSessionAcquireRequest, liveAgent agent.CodexLiveRuntimeAgent) (codexSessionAcquireResult, error) {
+	if subscriptionAgent, ok := req.agent.(agent.CodexThreadObserverSubscriptionAgent); ok {
+		if _, err := subscriptionAgent.SubscribeCodexThread(
+			req.ctx, req.route.conversationID, req.route.threadID,
+		); err != nil {
+			return h.failCodexAcquireSync(result, liveAgent, err), nil
+		}
+	}
 	opts := externalCodexTaskOptionsFromAcquire(req)
 	opts.runtimeGeneration = result.resolution.Binding.RuntimeGeneration
 	// 只有绑定事务最初确实看见过 active turn，后续的 inactive 快照才是
@@ -297,7 +375,7 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	opts.runtimeInactiveAuthoritative = result.resolution.Binding.State.Active
 	prepared, err := h.prepareExternalCodexTask(opts)
 	if err != nil {
-		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
+		return h.failCodexAcquireSync(result, liveAgent, err), nil
 	}
 	if prepared.state.Controllable && (prepared.active || result.resolution.Binding.State.Active) {
 		controlCtx, cancel := h.codexThreadControlContext(req.ctx)
@@ -306,7 +384,7 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 		)
 		cancel()
 		if reconcileErr != nil {
-			return h.failCodexAcquireRuntime(result, liveAgent, reconcileErr), nil
+			return h.failCodexAcquireSync(result, liveAgent, reconcileErr), nil
 		}
 		result.resolution.Binding = binding
 		opts.runtimeGeneration = binding.RuntimeGeneration
@@ -314,7 +392,7 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	if result.resolution.Binding.State.Active &&
 		!prepared.confirmedInactive && (!prepared.active || !prepared.state.Controllable) {
 		err = fmt.Errorf("共享 app-server 的活动任务暂不能建立观察流")
-		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
+		return h.failCodexAcquireSync(result, liveAgent, err), nil
 	}
 	if prepared.active {
 		if snapshot, ok := h.ensureCodexSessions().followerSnapshot(req.route.bindingKey); ok {
@@ -330,20 +408,20 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 			snapshot, turnID, opts.runtimeGeneration,
 		)
 		if prepareErr != nil {
-			return h.failCodexAcquireRuntime(result, liveAgent, prepareErr), nil
+			return h.failCodexAcquireSync(result, liveAgent, prepareErr), nil
 		}
 		opts.followerAttach = &preparedAttach
 		if !prepared.active {
 			if readyErr := h.ensureCodexSessions().commitFollowerAttachReady(
 				preparedAttach, turnID, opts.runtimeGeneration,
 			); readyErr != nil {
-				return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+				return h.failCodexAcquireSync(result, liveAgent, readyErr), nil
 			}
 		}
 	}
 	reservation, err := h.reserveExternalCodexTask(opts, prepared)
 	if err != nil {
-		return h.failCodexAcquireRuntime(result, liveAgent, err), nil
+		return h.failCodexAcquireSync(result, liveAgent, err), nil
 	}
 	if prepared.active {
 		if snapshot, ok := h.ensureCodexSessions().followerSnapshot(req.route.bindingKey); ok {
@@ -351,25 +429,25 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 			reservation.task.setTerminalDeliveryGuard(terminalDeliveryGuardFromFollower(snapshot))
 			if err := h.ensureCodexSessions().commitFollowerTurnPending(snapshot, prepared.state.ActiveTurnID); err != nil {
 				h.cancelExternalCodexTaskReservation(reservation)
-				return h.failCodexAcquireRuntime(result, liveAgent, err), nil
+				return h.failCodexAcquireSync(result, liveAgent, err), nil
 			}
 		}
 	}
 	observerReady := h.activateExternalCodexTaskReservation(reservation)
 	if prepared.active && !observerReady {
 		h.cancelExternalCodexTaskReservation(reservation)
-		return h.failCodexAcquireRuntime(result, liveAgent, errExternalCodexTaskReservationConflict), nil
+		return h.failCodexAcquireSync(result, liveAgent, errExternalCodexTaskReservationConflict), nil
 	}
 	if prepared.active && observerReady {
 		if readyErr := h.waitExternalCodexTaskReservationReady(req.ctx, reservation); readyErr != nil {
 			result.externalState = prepared.state
-			return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+			return h.failCodexAcquireSync(result, liveAgent, readyErr), nil
 		}
 		if reservation.reused && opts.followerAttach != nil {
 			if reservation.control == nil {
 				if readyErr := reservation.task.nativeProgressCardReadyError(); readyErr != nil {
 					result.externalState = prepared.state
-					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+					return h.failCodexAcquireSync(result, liveAgent, readyErr), nil
 				}
 				readyErr := h.commitCodexObserverReadyForAttach(
 					opts.followerAttach, opts.threadID, prepared.state.ActiveTurnID,
@@ -380,7 +458,7 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 				)
 				if readyErr != nil {
 					result.externalState = prepared.state
-					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+					return h.failCodexAcquireSync(result, liveAgent, readyErr), nil
 				}
 			} else {
 				ready, seen, readyErr, complete := reservation.control.observerReadyResult()
@@ -389,13 +467,13 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 						readyErr = fmt.Errorf("已复用的 Codex observer 缺少就绪证据")
 					}
 					result.externalState = prepared.state
-					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+					return h.failCodexAcquireSync(result, liveAgent, readyErr), nil
 				}
 				if readyErr = h.commitCodexObserverReadyForAttach(
 					opts.followerAttach, opts.threadID, prepared.state.ActiveTurnID, ready,
 				); readyErr != nil {
 					result.externalState = prepared.state
-					return h.failCodexAcquireRuntime(result, liveAgent, readyErr), nil
+					return h.failCodexAcquireSync(result, liveAgent, readyErr), nil
 				}
 			}
 		}
@@ -473,13 +551,14 @@ func (h *Handler) reanchorActiveCodexTask(ctx context.Context, task *activeAgent
 	return result.Moved, err
 }
 
-func (h *Handler) failCodexAcquireRuntime(result codexSessionAcquireResult, liveAgent agent.CodexLiveRuntimeAgent, cause error) codexSessionAcquireResult {
+func (h *Handler) failCodexAcquireSync(result codexSessionAcquireResult, liveAgent agent.CodexLiveRuntimeAgent, cause error) codexSessionAcquireResult {
 	request := result.resolution.Request
 	binding, currentErr := liveAgent.CurrentCodexRuntime(request)
 	if currentErr == nil {
 		result.resolution.Binding = binding
 	}
-	result.runtimeErr = errors.Join(cause, currentErr)
+	result.syncErr = errors.Join(cause, currentErr)
+	h.recordCodexFollowerSyncFailure(result.route.bindingKey, result.route.threadID, result.syncErr)
 	return result
 }
 
@@ -502,6 +581,6 @@ func renderCodexSessionAcquireFailure(err error) string {
 	case errors.Is(err, agent.ErrACPFrameTooLarge):
 		return "Codex 返回的单条会话数据过大，本次绑定已安全停止。请更新 Codex CLI 后重试。"
 	default:
-		return "绑定 Codex 会话失败，请重试。"
+		return "绑定 Codex 会话失败；原会话已保留。请确认 Codex 运行通道恢复后重试。"
 	}
 }

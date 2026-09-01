@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -379,7 +380,7 @@ func TestACPAgentConversationCwdOverridesGlobalCwdForCodexThreadAndTurn(t *testi
 	}
 }
 
-func TestACPAgentConversationCwdOverridesGlobalCwdForCodexResume(t *testing.T) {
+func TestACPAgentConversationCwdOverridesGlobalCwdForCodexSubscription(t *testing.T) {
 	ctx := context.Background()
 	workspaceA := filepath.Join(t.TempDir(), "workspace-a")
 	workspaceB := filepath.Join(t.TempDir(), "workspace-b")
@@ -398,31 +399,78 @@ func TestACPAgentConversationCwdOverridesGlobalCwdForCodexResume(t *testing.T) {
 	a.SetCwd(workspaceB)
 
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
-		if method != "thread/resume" {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-a","status":{"type":"idle"}}}`), nil
+		case "thread/resume":
+			p, ok := params.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("unexpected thread/resume params type %T", params)
+			}
+			if p["cwd"] != workspaceA {
+				return nil, fmt.Errorf("thread/resume cwd=%q, want %q", p["cwd"], workspaceA)
+			}
+			if _, ok := p["model"]; ok {
+				return nil, fmt.Errorf("thread/resume must preserve thread model: %#v", p)
+			}
+			if _, ok := p["effort"]; ok {
+				return nil, fmt.Errorf("thread/resume must preserve thread effort: %#v", p)
+			}
+			return json.RawMessage(`{"model":"gpt-thread","reasoningEffort":"max","thread":{"id":"thread-a"}}`), nil
+		default:
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
-		p, ok := params.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("unexpected thread/resume params type %T", params)
-		}
-		if p["cwd"] != workspaceA {
-			return nil, fmt.Errorf("thread/resume cwd=%q, want %q", p["cwd"], workspaceA)
-		}
-		if _, ok := p["model"]; ok {
-			return nil, fmt.Errorf("thread/resume must preserve thread model: %#v", p)
-		}
-		if _, ok := p["effort"]; ok {
-			return nil, fmt.Errorf("thread/resume must preserve thread effort: %#v", p)
-		}
-		return json.RawMessage(`{"model":"gpt-thread","reasoningEffort":"max","thread":{"id":"thread-a"}}`), nil
 	}
 
 	if err := a.UseCodexThread(ctx, "conversation-a", "thread-a"); err != nil {
 		t.Fatalf("UseCodexThread error: %v", err)
 	}
+	if attempted, err := a.SubscribeCodexThread(ctx, "conversation-a", "thread-a"); err != nil || !attempted {
+		t.Fatalf("SubscribeCodexThread=(%v,%v), want true,nil", attempted, err)
+	}
 	config, err := a.CodexThreadConfig(ctx, "conversation-a", "thread-a")
 	if err != nil || config.Model != "gpt-thread" || config.Effort != "max" {
-		t.Fatalf("CodexThreadConfig=(%#v,%v), want thread/resume settings", config, err)
+		t.Fatalf("CodexThreadConfig=(%#v,%v), want subscription resume settings", config, err)
+	}
+}
+
+func TestACPAgentUseCodexThreadValidatesWithReadWithoutSubscribing(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "acp-state.json")
+	a := NewACPAgent(ACPAgentConfig{
+		Command:   "codex",
+		Args:      []string{"app-server", "--listen", "stdio://"},
+		StateFile: stateFile,
+	})
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		if method != "thread/read" {
+			return nil, fmt.Errorf("binding must not subscribe or resume, got %s", method)
+		}
+		request := params.(map[string]interface{})
+		if request["threadId"] != "thread-2" || request["includeTurns"] != false {
+			return nil, fmt.Errorf("thread/read params=%#v", request)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-2","status":{"type":"notLoaded"}}}`), nil
+	}
+
+	if err := a.UseCodexThread(ctx, "conversation-1", "thread-2"); err != nil {
+		t.Fatalf("UseCodexThread error: %v", err)
+	}
+	if !reflect.DeepEqual(methods, []string{"thread/read"}) {
+		t.Fatalf("methods=%v, want lightweight thread/read only", methods)
+	}
+	threadID, ok := a.CurrentCodexThread("conversation-1")
+	if !ok || threadID != "thread-2" {
+		t.Fatalf("CurrentCodexThread=(%q,%v), want thread-2 true", threadID, ok)
+	}
+	if !a.codexThreadSubscriptionPending("conversation-1", "thread-2") {
+		t.Fatal("new binding must defer resume until observer subscription or first write")
+	}
+	persisted := readACPStateFile(t, stateFile)
+	if got := persisted.Threads["conversation-1"]; got != "thread-2" {
+		t.Fatalf("persisted thread=%q, want thread-2", got)
 	}
 }
 
@@ -435,21 +483,21 @@ func TestACPAgentCodexThreadControls(t *testing.T) {
 		Cwd:       t.TempDir(),
 		StateFile: stateFile,
 	})
-	resumed := ""
+	readThread := ""
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
-		if method != "thread/resume" {
+		if method != "thread/read" {
 			return nil, fmt.Errorf("unexpected rpc method: %s", method)
 		}
 		p := params.(map[string]interface{})
-		resumed = p["threadId"].(string)
-		return json.RawMessage(`{"thread":{"id":"thread-2"}}`), nil
+		readThread = p["threadId"].(string)
+		return json.RawMessage(`{"thread":{"id":"thread-2","status":{"type":"idle"}}}`), nil
 	}
 
 	if err := a.UseCodexThread(ctx, "conversation-1", "thread-2"); err != nil {
 		t.Fatalf("UseCodexThread error: %v", err)
 	}
-	if resumed != "thread-2" {
-		t.Fatalf("resumed thread=%q, want thread-2", resumed)
+	if readThread != "thread-2" {
+		t.Fatalf("read thread=%q, want thread-2", readThread)
 	}
 	threadID, ok := a.CurrentCodexThread("conversation-1")
 	if !ok || threadID != "thread-2" {

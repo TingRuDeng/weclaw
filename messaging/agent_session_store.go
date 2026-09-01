@@ -24,6 +24,12 @@ type agentSessionState struct {
 	Updated    string            `json:"updated"`
 }
 
+type agentSessionSelectionSnapshot struct {
+	RouteUserID string
+	AgentName   string
+	Exists      bool
+}
+
 func newAgentSessionStore() *agentSessionStore {
 	return &agentSessionStore{selections: make(map[string]string)}
 }
@@ -57,6 +63,16 @@ func (s *agentSessionStore) Get(routeUserID string) (string, bool) {
 	return agentName, ok
 }
 
+func (s *agentSessionStore) snapshot(routeUserID string) agentSessionSelectionSnapshot {
+	routeUserID = strings.TrimSpace(routeUserID)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	agentName, exists := s.selections[routeUserID]
+	return agentSessionSelectionSnapshot{
+		RouteUserID: routeUserID, AgentName: agentName, Exists: exists,
+	}
+}
+
 // Set 原子持久化会话选择；写盘失败时不污染内存状态。
 func (s *agentSessionStore) Set(routeUserID string, agentName string) error {
 	routeUserID = strings.TrimSpace(routeUserID)
@@ -68,6 +84,40 @@ func (s *agentSessionStore) Set(routeUserID string, agentName string) error {
 	defer s.mu.Unlock()
 	next := cloneAgentSelections(s.selections)
 	next[routeUserID] = agentName
+	if s.filePath != "" {
+		if err := saveAgentSessionSelections(s.filePath, next); err != nil {
+			return err
+		}
+	}
+	s.selections = next
+	return nil
+}
+
+// rollbackSelection restores a captured selection only while the current value
+// still matches this transaction's after-image. A concurrent later selection
+// must never be overwritten by an older acquire rollback.
+func (s *agentSessionStore) rollbackSelection(
+	previous agentSessionSelectionSnapshot,
+	committedAgentName string,
+) error {
+	routeUserID := strings.TrimSpace(previous.RouteUserID)
+	committedAgentName = strings.TrimSpace(committedAgentName)
+	previousAgentName := strings.TrimSpace(previous.AgentName)
+	if routeUserID == "" || committedAgentName == "" || (previous.Exists && previousAgentName == "") {
+		return fmt.Errorf("会话 Agent 回滚快照不完整")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, exists := s.selections[routeUserID]
+	if !exists || current != committedAgentName {
+		return fmt.Errorf("会话 Agent 选择已变化，拒绝覆盖并发更新")
+	}
+	next := cloneAgentSelections(s.selections)
+	if previous.Exists {
+		next[routeUserID] = previousAgentName
+	} else {
+		delete(next, routeUserID)
+	}
 	if s.filePath != "" {
 		if err := saveAgentSessionSelections(s.filePath, next); err != nil {
 			return err

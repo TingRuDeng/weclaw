@@ -84,7 +84,7 @@ func TestCodexSwitchHidesAppThreadStateReadError(t *testing.T) {
 	client, calls, closeServer := newRecordingILinkClient(t)
 	defer closeServer()
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(169, "/cx cd weclaw"))
-	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "窗口绑定已保留") || strings.Contains(text, "app-server unavailable") {
+	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "原会话已保留") || strings.Contains(text, "app-server unavailable") {
 		t.Fatalf("切换响应不得暴露状态读取失败，messages=%#v", calls.texts())
 	}
 }
@@ -105,7 +105,8 @@ func TestCodexSwitchHidesMissingActiveTurnError(t *testing.T) {
 	if _, ok := h.activeTask(key); ok {
 		t.Fatal("缺少 active turn 时不应登记外部任务镜像")
 	}
-	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "窗口绑定已保留") || strings.Contains(text, "active turn") {
+	if text := strings.Join(calls.texts(), "\n"); !strings.Contains(text, "进度同步: 已降级") ||
+		!strings.Contains(text, "会话仍可写") || strings.Contains(text, "active turn") {
 		t.Fatalf("切换响应不得暴露 active turn 细节，messages=%#v", calls.texts())
 	}
 }

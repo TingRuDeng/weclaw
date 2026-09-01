@@ -15,8 +15,11 @@ var (
 	ErrCodexControlRequired              = errors.New("当前窗口没有 Codex 远程控制权")
 	ErrCodexRuntimeConflict              = errors.New("Codex Desktop 与 WeClaw 发生写入冲突")
 	ErrCodexRuntimeUnavailable           = errors.New("Codex 实际运行时不可用")
+	ErrCodexNoActiveTurn                 = errors.New("Codex thread 当前没有活动 turn")
 	ErrCodexWriterBusy                   = errors.New("Codex thread 已有写入任务")
 	ErrCodexDesktopAdoptionDeferred      = errors.New("Codex App Host 接入等待共享 Host 空闲")
+	ErrCodexInputDeliveryUnknown         = errors.New("Codex 输入交付状态未知")
+	ErrCodexInputDeliveryUnconfirmed     = errors.New("Codex 输入是否已接收无法确认")
 )
 
 type CodexControlOwner string
@@ -86,6 +89,32 @@ type CodexTurnRequest struct {
 	OnThreadReplaced func(previous CodexThreadRef, current CodexThreadRef) error
 	// OnTurnStarted 在协议返回真实 turn ID 后同步外层首次写入生命周期。
 	OnTurnStarted func(thread CodexThreadRef, turnID string) error
+	// OnTurnSteered 在同一输入因多前端竞态加入现有 active turn 后同步外层生命周期。
+	OnTurnSteered func(thread CodexThreadRef, turnID string) error
+	AttemptID     string
+	MessageKey    string
+	// OnInputAttempt persists only delivery metadata; Message is deliberately
+	// absent so a restart can never auto-execute saved user input.
+	OnInputAttempt func(CodexInputAttempt) error
+}
+
+type CodexInputAttemptStatus string
+
+const (
+	CodexInputAttemptPending     CodexInputAttemptStatus = "pending"
+	CodexInputAttemptAccepted    CodexInputAttemptStatus = "accepted"
+	CodexInputAttemptUnconfirmed CodexInputAttemptStatus = "unconfirmed"
+	CodexInputAttemptRejected    CodexInputAttemptStatus = "rejected"
+)
+
+type CodexInputAttempt struct {
+	AttemptID      string
+	MessageKey     string
+	ThreadID       string
+	BaselineTurnID string
+	ExpectedTurnID string
+	MessageDigest  string
+	Status         CodexInputAttemptStatus
 }
 
 // CodexTurnInterruptedError 表示 app-server 的观察流中断，最终结果仍需由调用方核对。
@@ -139,18 +168,29 @@ type CodexLiveRuntimeAgent interface {
 	RunCodexTurn(context.Context, CodexTurnRequest) (string, error)
 }
 
+// CodexInputSteeringAgent submits one input to the authoritative active turn
+// without creating another observer. It is used when an existing task already
+// owns the frontend progress lifecycle.
+type CodexInputSteeringAgent interface {
+	SteerCodexInput(context.Context, CodexTurnRequest) (turnID string, err error)
+}
+
 // CodexProviderRuntimeAgent is implemented by local Codex app-server agents
 // that can migrate one persisted thread to the Host's effective provider.
 type CodexProviderRuntimeAgent interface {
 	PrepareCodexThread(context.Context, CodexRuntimeRequest) (CodexProviderPreparation, error)
 }
 
-// CodexThreadHandoffAgent releases an idle historical thread from the
-// official shared daemon so Codex App can open that thread with its own writer.
-// The caller must first prove the thread is no longer selected by any active
-// frontend; the implementation independently enforces Host-wide idle gates.
-type CodexThreadHandoffAgent interface {
-	RecoverCodexThreadHandoff(context.Context, string) (attempted bool, err error)
+// CodexThreadSubscriptionAgent removes only the current app-server client's
+// subscription. It does not transfer writer ownership or restart the Host.
+type CodexThreadSubscriptionAgent interface {
+	UnsubscribeCodexThread(context.Context, string) (attempted bool, err error)
+}
+
+// CodexThreadObserverSubscriptionAgent establishes the current app-server
+// client's observer subscription after a frontend binding has committed.
+type CodexThreadObserverSubscriptionAgent interface {
+	SubscribeCodexThread(context.Context, string, string) (attempted bool, err error)
 }
 
 type codexDesktopOwnerProbe interface {

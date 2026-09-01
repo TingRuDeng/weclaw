@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/google/uuid"
 )
 
 // startCodexAgentTask 先登记 active task 再后台执行，保证 /guide 和 /cancel 可及时进入 Handler。
@@ -42,12 +43,6 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 		cancelTaskTimeout()
 		return
 	}
-	if err := h.requireCodexFollowerAttachReady(route); err != nil {
-		h.rejectCodexTaskStart(codexTaskPreflightOptions{
-			taskOpts: opts, route: route, cancel: cancelTaskTimeout,
-		}, err)
-		return
-	}
 	controlCtx, cancelControl := h.codexThreadControlContext(agentCtx)
 	defer cancelControl()
 	unlockControl, err := h.lockCodexThreadControlContext(controlCtx, route.threadID)
@@ -58,7 +53,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	}
 	defer unlockControl()
 	if h.preflightCodexTaskStart(codexTaskPreflightOptions{
-		taskOpts: opts, route: route, cancel: cancelTaskTimeout,
+		ctx: controlCtx, taskOpts: opts, route: route, cancel: cancelTaskTimeout,
 	}) {
 		return
 	}
@@ -177,6 +172,11 @@ func (h *Handler) runCodexAgentTurn(runtime codexAgentTaskRuntime, onProgress fu
 	return h.runControlledCodexTurn(codexControlledTurnOptions{
 		ctx: runtime.agentCtx, agent: runtime.opts.agent, route: runtime.route,
 		message: runtime.opts.message, onProgress: onProgress, task: runtime.task,
+		messageKey: runtime.opts.messageKey,
+		onSteered: func() {
+			sendPlatformText(runtime.opts.ctx, runtime.opts.reply, runtime.opts.userID,
+				"已作为补充输入加入当前任务。")
+		},
 	})
 }
 
@@ -187,6 +187,8 @@ type codexControlledTurnOptions struct {
 	message    string
 	onProgress func(agent.ProgressEvent)
 	task       *activeAgentTask
+	onSteered  func()
+	messageKey string
 }
 
 // runControlledCodexTurn 是所有消息入口启动 Codex turn 的唯一业务层出口。
@@ -198,34 +200,50 @@ func (h *Handler) runControlledCodexTurn(opts codexControlledTurnOptions) (strin
 		)
 	}
 	request := h.buildCodexRuntimeRequestForTurn(opts.route, opts.route.threadID)
+	acceptTurn := func(thread agent.CodexThreadRef, turnID string, started bool) error {
+		trace, traceErr := opts.task.setTraceThreadTurn(thread.ThreadID, turnID)
+		stageSummary := "input steered to active Codex turn"
+		if started {
+			stageSummary = "Codex turn accepted"
+		}
+		h.recordTraceStage(trace, "turn.started", "running", stageSummary)
+		if traceErr != nil {
+			log.Printf("[terminal-outbox] 首次 turn trace 暂未持久化，将在 follower 恢复时重试: %v", traceErr)
+		}
+		if err := h.claimCodexFollowerTurnForTask(
+			opts.route.bindingKey, opts.route.conversationID, thread.ThreadID, turnID, opts.task,
+		); err != nil {
+			h.recordCodexFollowerSyncFailure(opts.route.bindingKey, thread.ThreadID, err)
+			log.Printf("[codex-task] 输入已接收，但 follower 同步降级 thread=%q: %v", thread.ThreadID, err)
+		}
+		if started && thread.ConversationID == opts.route.conversationID {
+			h.ensureCodexSessions().clearPendingFirstTurn(
+				opts.route.bindingKey, opts.route.workspaceRoot, thread.ThreadID,
+			)
+			if traceErr == nil {
+				h.ensureCodexSessions().clearFirstTurnRecoveryJournal(
+					opts.route.bindingKey, opts.route.workspaceRoot, thread.ThreadID,
+					opts.route.threadID, opts.task.activeRecoveryReservationID(),
+				)
+			}
+		}
+		if !started && opts.onSteered != nil {
+			opts.onSteered()
+		}
+		return nil
+	}
 	return liveAgent.RunCodexTurn(opts.ctx, agent.CodexTurnRequest{
 		Runtime: request, Message: opts.message, OnProgressEvent: opts.onProgress,
+		AttemptID: uuid.NewString(), MessageKey: opts.messageKey,
+		OnInputAttempt: h.ensureCodexInputAttempts().record,
 		OnThreadReplaced: func(previous agent.CodexThreadRef, current agent.CodexThreadRef) error {
 			return h.commitCodexFirstTurnReplacement(opts, previous, current)
 		},
 		OnTurnStarted: func(thread agent.CodexThreadRef, turnID string) error {
-			trace, traceErr := opts.task.setTraceThreadTurn(thread.ThreadID, turnID)
-			h.recordTraceStage(trace, "turn.started", "running", "Codex turn accepted")
-			if traceErr != nil {
-				log.Printf("[terminal-outbox] 首次 turn trace 暂未持久化，将在 follower 恢复时重试: %v", traceErr)
-			}
-			if err := h.claimCodexFollowerTurnForTask(
-				opts.route.bindingKey, opts.route.conversationID, thread.ThreadID, turnID, opts.task,
-			); err != nil {
-				return err
-			}
-			if thread.ConversationID == opts.route.conversationID {
-				h.ensureCodexSessions().clearPendingFirstTurn(
-					opts.route.bindingKey, opts.route.workspaceRoot, thread.ThreadID,
-				)
-				if traceErr == nil {
-					h.ensureCodexSessions().clearFirstTurnRecoveryJournal(
-						opts.route.bindingKey, opts.route.workspaceRoot, thread.ThreadID,
-						opts.route.threadID, opts.task.activeRecoveryReservationID(),
-					)
-				}
-			}
-			return nil
+			return acceptTurn(thread, turnID, true)
+		},
+		OnTurnSteered: func(thread agent.CodexThreadRef, turnID string) error {
+			return acceptTurn(thread, turnID, false)
 		},
 	})
 }

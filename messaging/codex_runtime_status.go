@@ -15,29 +15,33 @@ func (h *Handler) renderCodexStatus(runtime codexSessionCommandRuntime) navigati
 	threadID = strings.TrimSpace(threadID)
 	speedLine := codexFastStatusLine(runtime.ctx, runtime.agent, threadID)
 	if pending || threadID == "" {
-		runtimeLine := "运行: 未绑定会话"
+		bindingLine := "绑定: 未绑定"
+		runtimeLine := "运行通道: 不可用（未绑定会话）"
 		if pending {
-			runtimeLine = "运行: 等待首条消息"
+			bindingLine = "绑定: 已绑定"
+			runtimeLine = "运行通道: 可用（等待首条消息）"
 		}
-		return compactCodexStatusResult(base, "任务: 空闲", accountLine, runtimeLine)
+		return compactCodexStatusResult(base, bindingLine, "任务: 空闲", accountLine, runtimeLine, "进度同步: 正常")
 	}
+	bindingLine := "绑定: 已绑定"
+	syncLine := h.codexProgressSyncStatusLine(runtime.bindingKey, threadID)
 	if _, ok := runtime.agent.(agent.CodexLiveRuntimeAgent); !ok {
-		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 兼容模式", speedLine)
+		return compactCodexStatusResult(base, bindingLine, "任务: 未确认", accountLine, "运行通道: 可用（兼容模式）", syncLine, speedLine)
 	}
 
 	unlock, err := h.lockCodexSessionThread(runtime.ctx, threadID, "status")
 	if err != nil {
-		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 查询繁忙，请稍后重试", speedLine)
+		return compactCodexStatusResult(base, bindingLine, "任务: 未确认", accountLine, "运行通道: 不可用（查询繁忙）", syncLine, speedLine)
 	}
 	defer unlock()
 	resolution, err := h.resolveCodexRuntimeLocked(runtime.ctx, codexRuntimeResolveOptions{
 		route: runtime.codexRoute(threadID), threadID: threadID, ag: runtime.agent,
 	})
 	if err != nil {
-		return compactCodexStatusResult(base, "任务: 未确认", accountLine, "运行: 暂不可用，请稍后重试", speedLine)
+		return compactCodexStatusResult(base, bindingLine, "任务: 未确认", accountLine, "运行通道: 不可用", syncLine, speedLine)
 	}
 	taskLine, runtimeLine := compactCodexRuntimeStatusLines(resolution)
-	return compactCodexStatusResult(base, taskLine, accountLine, runtimeLine, speedLine)
+	return compactCodexStatusResult(base, bindingLine, taskLine, accountLine, runtimeLine, syncLine, speedLine)
 }
 
 func renderCodexStatusAccountLine(runtime codexSessionCommandRuntime) string {
@@ -98,22 +102,39 @@ func compactCodexRuntimeStatusLines(resolution codexRuntimeResolution) (string, 
 	if resolution.Binding.State.Active || resolution.Rollout.Active {
 		taskLine = "任务: 正在执行"
 	}
-	runtimeLine := "运行: 未确认"
+	runtimeLine := "运行通道: 不可用（未确认）"
 	switch resolution.Binding.Runtime {
 	case agent.CodexRuntimeWeClaw:
-		runtimeLine = "运行: 正常"
+		runtimeLine = "运行通道: 可用"
 	case agent.CodexRuntimeConflict:
-		runtimeLine = "运行: 异常（写入冲突）"
+		runtimeLine = "运行通道: 不可用（Host 冲突）"
 	case agent.CodexRuntimeDesktop:
-		runtimeLine = "运行: 正常（Codex App）"
+		runtimeLine = "运行通道: 可用（Codex App）"
 	}
 	return taskLine, runtimeLine
 }
 
-func compactCodexStatusResult(base string, taskLine string, accountLine string, runtimeLine string, extraLines ...string) navigationCommandResult {
-	lines := []string{base, taskLine, accountLine, runtimeLine}
+func compactCodexStatusResult(base string, bindingLine string, taskLine string, accountLine string, runtimeLine string, extraLines ...string) navigationCommandResult {
+	lines := []string{base, bindingLine, taskLine, accountLine, runtimeLine}
 	lines = append(lines, extraLines...)
 	return textNavigationResult(wechatCommandText(lines...))
+}
+
+func (h *Handler) codexProgressSyncStatusLine(bindingKey string, threadID string) string {
+	snapshot, ok := h.ensureCodexSessions().followerSnapshot(bindingKey)
+	if !ok || strings.TrimSpace(snapshot.Target.ThreadID) != strings.TrimSpace(threadID) {
+		return "进度同步: 正常"
+	}
+	h.codexFollowerMu.Lock()
+	service := h.codexFollower
+	h.codexFollowerMu.Unlock()
+	if service != nil && service.synchronizationDegraded(bindingKey, threadID) {
+		return "进度同步: 已降级"
+	}
+	if snapshot.AttachPhase != codexFollowerAttachReady {
+		return "进度同步: 同步中"
+	}
+	return "进度同步: 正常"
 }
 
 func (runtime codexSessionCommandRuntime) codexRoute(threadID string) codexConversationRoute {

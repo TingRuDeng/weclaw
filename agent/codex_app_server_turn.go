@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -183,6 +184,9 @@ func (a *ACPAgent) collectCodexAppServerTurn(runtime *codexAppServerTurnRuntime)
 }
 
 func (a *ACPAgent) handleCodexAppServerTurnStartError(runtime *codexAppServerTurnRuntime, err error) (string, error) {
+	if errors.Is(err, ErrCodexInputDeliveryUnknown) {
+		return "", err
+	}
 	result, _, handledErr := a.handleCodexAppServerEvent(runtime, &codexTurnEvent{Kind: "error", Text: err.Error()})
 	return result, handledErr
 }

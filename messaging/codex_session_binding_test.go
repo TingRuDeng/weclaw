@@ -38,6 +38,21 @@ type readyGateCodexLiveAgent struct {
 	readyErr     error
 }
 
+type failingCodexSubscriptionAgent struct {
+	*fakeCodexLiveAgent
+	err   error
+	calls int
+}
+
+func (a *failingCodexSubscriptionAgent) SubscribeCodexThread(
+	context.Context,
+	string,
+	string,
+) (bool, error) {
+	a.calls++
+	return true, a.err
+}
+
 func (a *readyGateCodexLiveAgent) WatchCodexThreadEventsForTurnReady(
 	ctx context.Context,
 	conversationID string,
@@ -195,7 +210,7 @@ func TestAcquireCodexSessionCannotRestoreFollowerAfterConcurrentRevocation(t *te
 	}
 }
 
-func TestAcquireCodexSessionReleasesUnusedOldThreadBeforeBindingTarget(t *testing.T) {
+func TestAcquireCodexSessionUnsubscribesUnusedOldThreadAfterBindingTarget(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	f.ag.threadHandoffApplicable = true
 
@@ -207,11 +222,11 @@ func TestAcquireCodexSessionReleasesUnusedOldThreadBeforeBindingTarget(t *testin
 	if len(threads) != 1 || threads[0] != "thread-a" {
 		t.Fatalf("released threads=%v, want thread-a", threads)
 	}
-	if len(operations) < 2 || operations[0] != "release:thread-a" || operations[1] != "bind:thread-b" {
-		t.Fatalf("operations=%v, want release before target bind", operations)
+	if len(operations) < 2 || operations[0] != "bind:thread-b" || operations[1] != "unsubscribe:thread-a" {
+		t.Fatalf("operations=%v, want confirmed target bind before old subscription cleanup", operations)
 	}
-	if text := f.h.renderCodexSessionAcquireSuccess(result); !strings.Contains(text, "旧会话: 已释放，可在 Codex App 打开") {
-		t.Fatalf("text=%q, want released handoff notice", text)
+	if text := f.h.renderCodexSessionAcquireSuccess(result); !strings.Contains(text, "旧会话: 已停止当前连接观察") {
+		t.Fatalf("text=%q, want unsubscribe notice", text)
 	}
 }
 
@@ -236,7 +251,7 @@ func TestAcquireCodexSessionKeepsOldThreadWhenAnotherFrontendUsesIt(t *testing.T
 	}
 }
 
-func TestAcquireCodexSessionDoesNotRecycleHostForPendingFirstTurn(t *testing.T) {
+func TestAcquireCodexSessionUnsubscribesPreviousThreadForPendingFirstTurn(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	f.ag.threadHandoffApplicable = true
 	request := f.request("thread-b")
@@ -247,8 +262,8 @@ func TestAcquireCodexSessionDoesNotRecycleHostForPendingFirstTurn(t *testing.T) 
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
 	threads, _ := f.ag.threadHandoffSnapshot()
-	if len(threads) != 0 || result.handoffReleaseAttempted {
-		t.Fatalf("release calls=%v result=%#v", threads, result)
+	if len(threads) != 1 || threads[0] != "thread-a" || !result.handoffReleaseAttempted {
+		t.Fatalf("unsubscribe calls=%v result=%#v", threads, result)
 	}
 	f.ag.mu.Lock()
 	providerPrepareRequest := f.ag.providerPrepareRequest
@@ -274,8 +289,9 @@ func TestAcquireCodexSessionKeepsBindingWhenOldThreadReleaseIsBusy(t *testing.T)
 	if got := len(f.ag.handoffRequests()); got != 1 {
 		t.Fatalf("target bind calls=%d, want 1", got)
 	}
-	if text := f.h.renderCodexSessionAcquireSuccess(result); !strings.Contains(text, "旧会话: 暂未回交给 Codex App") {
-		t.Fatalf("text=%q, want deferred handoff notice", text)
+	if text := f.h.renderCodexSessionAcquireSuccess(result); !strings.Contains(text, "当前连接停止观察失败") ||
+		!strings.Contains(text, "不影响新会话写入") {
+		t.Fatalf("text=%q, want non-blocking unsubscribe failure notice", text)
 	}
 }
 
@@ -356,21 +372,81 @@ func TestAcquireCodexSessionKeepsObservingActiveTargetUntilNextTurnCanMigrate(t 
 	}
 }
 
-func TestAcquireCodexSessionRuntimeFailureKeepsFrontendBinding(t *testing.T) {
+func TestAcquireCodexSessionUnreadableTargetKeepsPreviousFrontendBinding(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
-	f.ag.handoffErrors["thread-b"] = context.DeadlineExceeded
-	result, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
-	if err != nil || !errors.Is(result.runtimeErr, context.DeadlineExceeded) {
-		t.Fatalf("result=%#v err=%v", result, err)
+	f.ag.threadStateErr = context.DeadlineExceeded
+	_, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v, want target read failure", err)
 	}
-	if threadID, _ := f.h.ensureCodexSessions().getThread(f.bindingKey, f.workspaceB); threadID != "thread-b" {
-		t.Fatalf("binding rolled back to %q", threadID)
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceA {
+		t.Fatalf("active workspace=%q, want previous %q", active, f.workspaceA)
 	}
-	if got := len(f.ag.handoffRequests()); got != 1 {
-		t.Fatalf("shared host bind retried %d times", got)
+	if got := len(f.ag.handoffRequests()); got != 0 {
+		t.Fatalf("shared host binding started before target validation: %d calls", got)
 	}
-	if f.ag.threadBinding("thread-b").Runtime == agent.CodexRuntimeConflict {
-		t.Fatal("transport timeout was promoted to writer conflict")
+}
+
+func TestAcquireCodexSessionBindFailureRollsBackFrontendBinding(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.ag.handoffErrors["thread-b"] = agent.ErrCodexRuntimeUnavailable
+	if err := f.h.ensureAgentSessions().Set(f.routeUser, "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+
+	if !errors.Is(err, agent.ErrCodexRuntimeUnavailable) {
+		t.Fatalf("err=%v, want runtime bind failure", err)
+	}
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceA {
+		t.Fatalf("active workspace=%q, want previous %q", active, f.workspaceA)
+	}
+	if threadID, pending := f.h.ensureCodexSessions().getThread(f.bindingKey, f.workspaceA); pending || threadID != "thread-a" {
+		t.Fatalf("previous thread=%q pending=%v", threadID, pending)
+	}
+	if _, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey); ok {
+		t.Fatal("failed bind must not retain a follower for the uncommitted target")
+	}
+	if selected, ok := f.h.ensureAgentSessions().Get(f.routeUser); !ok || selected != "claude" {
+		t.Fatalf("selected agent=%q ok=%v, want previous claude selection", selected, ok)
+	}
+}
+
+func TestAcquireCodexSessionBindFailureRemovesNewAgentSelectionWhenPreviouslyUnset(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	f.ag.handoffErrors["thread-b"] = agent.ErrCodexRuntimeUnavailable
+
+	_, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+
+	if !errors.Is(err, agent.ErrCodexRuntimeUnavailable) {
+		t.Fatalf("err=%v, want runtime bind failure", err)
+	}
+	if selected, ok := f.h.ensureAgentSessions().Get(f.routeUser); ok {
+		t.Fatalf("selected agent=%q, failed acquire must restore the absent selection", selected)
+	}
+}
+
+func TestAcquireCodexSessionBindFailureRestoresGlobalCwdWithoutPreviousBinding(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	store := f.h.ensureCodexSessions()
+	store.mu.Lock()
+	delete(store.bindings, f.bindingKey)
+	store.mu.Unlock()
+	previousCwd := "/workspace/runtime-default"
+	f.h.switchCodexWorkspace("codex", previousCwd, f.ag)
+	f.ag.handoffErrors["thread-b"] = agent.ErrCodexRuntimeUnavailable
+
+	_, err := f.h.acquireCodexSessionWithBindingLocked(f.request("thread-b"))
+
+	if !errors.Is(err, agent.ErrCodexRuntimeUnavailable) {
+		t.Fatalf("err=%v, want runtime bind failure", err)
+	}
+	if got := f.ag.lastWorkingDir(); got != previousCwd {
+		t.Fatalf("runtime cwd=%q, want previous %q", got, previousCwd)
+	}
+	if got := f.h.codexWorkspaceRoot("codex"); got != previousCwd {
+		t.Fatalf("handler cwd=%q, want previous %q", got, previousCwd)
 	}
 }
 
@@ -672,7 +748,7 @@ func TestAcquireCodexSessionReusesReadyInProcessCardWithoutObserverControl(t *te
 	}
 }
 
-func TestAcquireCodexSessionCardFailureKeepsFollowerPreparing(t *testing.T) {
+func TestAcquireCodexSessionCardFailureKeepsBindingWritableAndMarksSyncDegraded(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	f.setActiveTarget("turn-b")
 	f.ag.watchDone = make(chan struct{})
@@ -688,12 +764,58 @@ func TestAcquireCodexSessionCardFailureKeepsFollowerPreparing(t *testing.T) {
 
 	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
 
-	if err != nil || result.runtimeErr == nil || !strings.Contains(result.runtimeErr.Error(), "card unavailable") {
+	if err != nil || result.runtimeErr != nil {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	text := f.h.renderCodexSessionAcquireSuccess(result)
+	if !strings.Contains(text, "进度同步: 已降级") || strings.Contains(text, "运行通道: 暂不可用") {
+		t.Fatalf("text=%q, want writable binding with degraded synchronization", text)
 	}
 	snapshot := f.h.ensureCodexSessions().followerSnapshots()[0]
 	if snapshot.AttachPhase != codexFollowerAttachPreparing {
 		t.Fatalf("card failure follower=%#v, want preparing", snapshot)
+	}
+}
+
+func TestAcquireCodexSessionSubscriptionFailureKeepsBindingWritable(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	service := &codexFollowerService{
+		failures: make(map[string]codexFollowerFailureState), resultFailures: make(map[string]codexFollowerFailureState),
+	}
+	f.h.codexFollowerMu.Lock()
+	f.h.codexFollower = service
+	f.h.codexFollowerMu.Unlock()
+	t.Cleanup(func() {
+		f.h.codexFollowerMu.Lock()
+		if f.h.codexFollower == service {
+			f.h.codexFollower = nil
+		}
+		f.h.codexFollowerMu.Unlock()
+	})
+	wantErr := errors.New("observer subscription unavailable")
+	ag := &failingCodexSubscriptionAgent{fakeCodexLiveAgent: f.ag, err: wantErr}
+	request := f.request("thread-b")
+	request.agent = ag
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = &codexFollowerRouteReplier{Replier: f.reply, route: platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+
+	if err != nil || result.runtimeErr != nil || !errors.Is(result.syncErr, wantErr) || ag.calls != 1 {
+		t.Fatalf("result=%#v calls=%d err=%v", result, ag.calls, err)
+	}
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceB {
+		t.Fatalf("active workspace=%q, want committed target %q", active, f.workspaceB)
+	}
+	text := f.h.renderCodexSessionAcquireSuccess(result)
+	if !strings.Contains(text, "进度同步: 已降级") || strings.Contains(text, "运行通道: 暂不可用") {
+		t.Fatalf("text=%q, want writable binding with degraded subscription", text)
+	}
+	if line := f.h.codexProgressSyncStatusLine(f.bindingKey, "thread-b"); line != "进度同步: 已降级" {
+		t.Fatalf("status line=%q, want degraded synchronization", line)
 	}
 }
 
@@ -803,7 +925,7 @@ func TestCodexFollowerBaselineStartsEmptyWhenRuntimeIsTemporarilyUnavailable(t *
 	}
 }
 
-func TestUnavailableEmptyThreadFollowerDeliversFirstFastTerminalAfterBinding(t *testing.T) {
+func TestUnavailableTargetDoesNotInstallFollowerOrDeliverLaterTerminal(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	route := platform.DeliveryRoute{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
@@ -814,55 +936,19 @@ func TestUnavailableEmptyThreadFollowerDeliversFirstFastTerminalAfterBinding(t *
 	req.reply = &codexFollowerRouteReplier{Replier: f.reply, route: route}
 	f.ag.handoffErrors["thread-b"] = agent.ErrCodexRuntimeUnavailable
 
-	result, err := f.h.acquireCodexSessionWithBindingLocked(req)
-	if err != nil || !errors.Is(result.runtimeErr, agent.ErrCodexRuntimeUnavailable) {
-		t.Fatalf("result=%#v err=%v", result, err)
+	_, err := f.h.acquireCodexSessionWithBindingLocked(req)
+	if !errors.Is(err, agent.ErrCodexRuntimeUnavailable) {
+		t.Fatalf("err=%v", err)
 	}
-	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
-	if !ok || !snapshot.FollowTurnInitialized || snapshot.FollowTurnID != "" || snapshot.FollowTurnPending {
-		t.Fatalf("initial follower snapshot=%#v ok=%v", snapshot, ok)
+	if snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey); ok {
+		t.Fatalf("snapshot=%#v, unavailable target must not install a future-delivery follower", snapshot)
 	}
-
-	reply := newOutboxTestReplier(route)
-	registry := platform.NewRegistry([]platform.RegistryEntry{{
-		Platform: &outboxTestPlatform{name: route.Platform, account: route.AccountID, reply: reply},
-		Access:   platform.NewAccessControl([]string{f.routeUser}),
-	}})
-	outbox, err := newTerminalOutbox(filepath.Join(t.TempDir(), "terminal-outbox.json"), registry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.h.terminalOutboxMu.Lock()
-	f.h.terminalOutbox = outbox
-	f.h.terminalOutboxMu.Unlock()
-	delete(f.ag.handoffErrors, "thread-b")
-	f.h.agents["codex"] = f.ag
-	terminalState := agent.CodexThreadState{
-		ThreadID: "thread-b", LastTurnID: "turn-first", LastTurnStatus: "completed",
-		LastAgentMessageText: "绑定后的首轮结果",
-	}
-	f.ag.setBindingState(terminalState)
-	f.ag.setThreadBinding("thread-b", agent.CodexThreadBinding{
-		Runtime: agent.CodexRuntimeDesktop,
-		State:   terminalState,
-	})
-	if err := f.h.reconcileCodexFollower(context.Background(), registry, snapshot); err != nil {
-		t.Fatal(err)
-	}
-	id := codexFollowerTerminalOutboxID(snapshot, "turn-first")
-	if err := outbox.attempt(context.Background(), id, reply); err != nil {
-		t.Fatal(err)
-	}
-	reply.mu.Lock()
-	results := append([]platform.TerminalResult(nil), reply.results...)
-	reply.mu.Unlock()
-	if len(results) != 1 || !strings.Contains(results[0].Text, "绑定后的首轮结果") {
-		current, _ := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
-		t.Fatalf("results=%#v entries=%#v current=%#v", results, outbox.entries, current)
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceA {
+		t.Fatalf("active workspace=%q, want previous %q", active, f.workspaceA)
 	}
 }
 
-func TestAcquireCodexSessionPersistsRuntimeRecoveryResultOnlyWhenRuntimeUnavailable(t *testing.T) {
+func TestAcquireCodexSessionDoesNotPersistRecoveryForUncommittedTarget(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
 	route := platform.DeliveryRoute{
 		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a",
@@ -880,14 +966,12 @@ func TestAcquireCodexSessionPersistsRuntimeRecoveryResultOnlyWhenRuntimeUnavaila
 	}
 	f.ag.handoffErrors["thread-b"] = agent.ErrCodexRuntimeUnavailable
 
-	result, err := f.h.acquireCodexSessionWithBindingLocked(req)
-	if err != nil || !errors.Is(result.runtimeErr, agent.ErrCodexRuntimeUnavailable) {
-		t.Fatalf("result=%#v err=%v", result, err)
+	_, err := f.h.acquireCodexSessionWithBindingLocked(req)
+	if !errors.Is(err, agent.ErrCodexRuntimeUnavailable) {
+		t.Fatalf("err=%v", err)
 	}
-	snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey)
-	if !ok || snapshot.Target.RuntimeRecoveryResult == nil ||
-		*snapshot.Target.RuntimeRecoveryResult != reference {
-		t.Fatalf("snapshot=%#v ok=%v, want pending original-card recovery", snapshot, ok)
+	if snapshot, ok := f.h.ensureCodexSessions().followerSnapshot(f.bindingKey); ok {
+		t.Fatalf("snapshot=%#v, failed target must not keep a recovery result", snapshot)
 	}
 }
 

@@ -519,6 +519,10 @@ func TestACPAgentContinuesSameThreadAfterUsageLimit(t *testing.T) {
 	threadStarts := 0
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"old-thread","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
 		case "thread/start":
 			threadStarts++
 			return nil, fmt.Errorf("thread/start must not be called")
@@ -601,6 +605,9 @@ func TestACPAgentKeepsCodexThreadWhenResumeReportsMissing(t *testing.T) {
 		}
 		if method == "thread/resume" {
 			return nil, fmt.Errorf("thread not found")
+		}
+		if method == "thread/read" {
+			return json.RawMessage(`{"thread":{"id":"old-thread","status":{"type":"notLoaded"}}}`), nil
 		}
 		return nil, fmt.Errorf("unexpected rpc method: %s", method)
 	}

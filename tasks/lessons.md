@@ -18,10 +18,10 @@
 - 正确做法：先调用 `cancel()` 并用有超时的条件等待 reconciler 已注销，再撤销并等待最后一个 watcher/任务投递，最后释放测试通道和临时目录。只先 detach 当前 watcher 会留下一个 ticker 窗口，仍持有 durable binding 的 reconciler 可以合法地重新挂载新 watcher。
 - 来源：2026-08-16 v0.1.277 首次发布的全仓 race 门禁稳定复现 follower 恢复测试清理竞态；按同文件已有的 cancel + wait 模式修复后定向连跑 50 次通过。
 
-## 2026-08-16 Codex 完整多前端共享必须以 official daemon 和 ready attach 为边界
+## 2026-08-16 Codex 完整多前端共享必须以 official daemon 和 ready attach 为边界（历史）
 
 - Host 边界：已验证 official standalone daemon 是完整共享模式的唯一写入权威；Codex App、受控 CLI、飞书和微信只是连接它的 frontend。App 进程、IPC 或历史可见不能切换 Host authority，App 私有 Host 和 WeClaw-managed Host 只保留兼容边界，不宣称完整共享。
-- 接管边界：follower LP1 只持久化 `preparing` 意图；精确 Host generation、权威历史、活动 turn 的原生卡与 observer 都就绪后，才能按 binding revision、attach revision、turn 和 generation 执行 LP2 CAS 提交 `ready`。`preparing` 期间普通输入必须失败关闭，不得回复“已切换并绑定”。
+- 当时的接管边界：follower LP1 只持久化 `preparing` 意图；精确 Host generation、权威历史、活动 turn 的原生卡与 observer 都就绪后，才按 binding revision、attach revision、turn 和 generation 执行 LP2 CAS 提交 `ready`。该状态机仍用于 observer 同步和旧版本回滚，但其中“`preparing` 期间普通输入失败关闭”的写入授权语义已被 2026-09-01 的可用性优先规则取代。
 - 交互边界：同一 turn 的进度、审批/问答展示和终态可向多个 ready route 广播，但审批与结构化问答必须用 `(thread, turn, request)` broker 串行唯一提交；其他展示在 `serverRequest/resolved` 后收敛为外部已处理，不重复回应。
 - 释放与恢复边界：`/cx release` 先持久化 route tombstone 再 detach，不 interrupt turn、不重启 Host、不影响其他 route。新进程按 `host_authority -> history_snapshot -> interaction_replay -> observer_ready -> outbox_delivery` 恢复，guarded terminal 和 pending supersede 在 observer-ready 前都必须 hold。
 - 验证边界：隔离 official daemon 的真实双客户端门禁必须证明审批回放、跨连接 `turn/steer`、`serverRequest/resolved` 和两端各一次终态；只有包内 fake 测试不能证明上游真实协议支持。
@@ -968,3 +968,13 @@
 - 安全边界：管理身份不完整不等于可以盲杀。首次发信号前必须重读进程表和原始 argv，复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。未知 Host 还必须由 app-server 领衔独立进程组，不能仅根据持久化旧 PID、进程名或一个共享 PGID 停止程序。
 - 失败边界：进程表/参数不可读、身份漂移、受控 CLI 租约存在或 Host 停止结果未知时，整个操作仍失败关闭；命令层必须补偿并返回错误，不得启动可能产生第二 Host 的新服务。服务已因未知结果保持不可写时，后续显式 `--force` 必须重新扫描并尝试强制收敛，不能直接复用旧事务成功。
 - 来源：用户明确说明“强制重启”的前提就是知道并接受正在执行的本地任务被中断。
+
+## 2026-09-01 Codex 多前端写入以权威 Host 可用性为准
+
+- 触发条件：Codex App、受控 CLI、飞书或微信同时打开同一 thread，follower observer、历史回放或任务卡同步短暂失败，导致本地 App 显示“已在别处处理”或消息窗口虽已选中会话却无法输入。
+- 当前规则：frontend binding 只表示窗口选择，v14 `preparing/ready` 只表示 observer 同步阶段；普通写入不得再依赖 route owner、follower ready 或客户端排他。每条输入按唯一 Host 的 `thread/read` 权威状态调度：active steer、idle start、确定性竞态有界重读后只提交一次。
+- 失败边界：Host 或目标 thread 在写入前不可读时立即拒绝，不排队、不保存完整输入、不恢复后晚到执行；写后断线或超时只根据发送前 turn 基线、最近 items 和消息摘要核对，不能证明已接收就要求用户人工检查并重发，绝不自动重试。
+- 同步边界：binding 提交后，历史回放、进度卡与 exact-turn observer 失败只标记同步降级并后台只读补查；`/cx status` 必须分别展示绑定、运行通道和进度同步。普通 switch/release 不重启 Host，无人继续观察时只对当前连接执行 `thread/unsubscribe`。
+- 保留边界：单一 Host、Host 身份验证、账号/provider 迁移、归档/删除、启停和未知交付防重复仍失败关闭；不得通过启动第二个 app-server 换取表面可用性。
+- 本条取代历史上把 remote owner、`preparing/ready` 或 follower attach 当作普通输入授权的规则；这些状态只保留迁移、同步和破坏性操作保护用途。
+- 来源：用户明确要求个人单用户场景优先保障可用性，接受少量多端输入竞态，并要求 Codex App 与飞书双向继续同一 active turn。

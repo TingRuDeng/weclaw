@@ -37,7 +37,7 @@ func (a *ACPAgent) inspectCodexRuntimeLocked(ctx context.Context, req CodexRunti
 	if err := a.reconcileCodexHostTopologyLocked(ctx); err != nil {
 		return unknownCodexRuntimeSnapshot(req, CodexThreadState{}), err
 	}
-	if a.desktopProbe == nil {
+	if a.desktopProbe == nil || a.officialDaemonIsAuthoritativeForUnknownBinding() {
 		return a.activateSharedCodexHost(ctx, req)
 	}
 	runtime, state, err := a.probeCodexRuntime(ctx, req, codexRuntimeProbeOptions{})
@@ -178,9 +178,9 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 		return CodexThreadBinding{}, err
 	}
 	// The verified daemon is already the authoritative Host. Once the explicit
-	// Desktop probe confirms release, attaching a new frontend only needs to
-	// resume and read the target thread on the existing client. Restarting that
-	// client would unnecessarily drain unrelated active turns.
+	// Desktop probe confirms release, attaching a new frontend only needs to read
+	// and bind the target thread on the existing client. Restarting that client
+	// would unnecessarily drain unrelated active turns.
 	if req.Intent.Owner == CodexControlRemote && runtime == CodexRuntimeUnknown &&
 		a.usesOfficialCodexDaemon() && a.codexRuntimeModeSnapshot() == CodexRuntimeWeClaw {
 		return a.activateSharedCodexHostWithPhaseTimeout(
@@ -207,7 +207,7 @@ func (a *ACPAgent) handoffCodexRuntimeLocked(ctx context.Context, req CodexRunti
 		}
 		return binding, activateErr
 	}
-	return a.recoverCodexRuntimeForRemoteWithPhaseTimeout(
+	return a.activateSharedCodexHostWithPhaseTimeout(
 		ctx, req, codexRuntimeHandoffActivationTimeout,
 	)
 }
@@ -233,41 +233,20 @@ func (a *ACPAgent) MarkCodexRuntimeConflict(ctx context.Context, req CodexRuntim
 	return err
 }
 
-// activateSharedCodexHost binds a frontend route to the one authoritative
-// app-server. Repeated calls reuse the live connection and do not perform any
-// Desktop ownership probe.
+// activateSharedCodexHost validates and binds a frontend route against the one
+// authoritative app-server. It deliberately does not resume or subscribe the
+// thread; writing and observation prepare those capabilities independently.
 func (a *ACPAgent) activateSharedCodexHost(ctx context.Context, req CodexRuntimeRequest) (CodexThreadBinding, error) {
 	return a.activateSharedCodexHostWithPhaseTimeout(ctx, req, 0)
 }
 
 func (a *ACPAgent) activateSharedCodexHostWithPhaseTimeout(ctx context.Context, req CodexRuntimeRequest, phaseTimeout time.Duration) (CodexThreadBinding, error) {
 	hasLease, uncertainLease := a.codexOwners.writerLeaseStatus(req.Ref.ThreadID)
-	if hasLease && !uncertainLease {
-		binding, ok := a.codexOwners.threadBinding(req.Ref.ThreadID)
-		if !ok {
-			return CodexThreadBinding{}, ErrCodexWriterBusy
-		}
-		binding.Ref = req.Ref
-		return binding, nil
-	}
 	startCtx, cancelStart := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
 	err := a.ensureCodexAppServerStartedForTurn(startCtx, req.Ref.ConversationID)
 	cancelStart()
 	if err != nil {
 		return CodexThreadBinding{}, err
-	}
-	a.mu.Lock()
-	boundThread := strings.TrimSpace(a.threads[req.Ref.ConversationID])
-	shouldResume := boundThread != strings.TrimSpace(req.Ref.ThreadID) || a.resumeOnFirstUse[req.Ref.ConversationID]
-	a.mu.Unlock()
-	if shouldResume {
-		resumeCtx, cancelResume := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
-		err := a.resumeThread(resumeCtx, req.Ref.ConversationID, req.Ref.ThreadID)
-		cancelResume()
-		if err != nil {
-			return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)
-		}
-		a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
 	}
 	readCtx, cancelRead := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
 	state, _, err := a.readCodexAppServerThreadStateResult(readCtx, req.Ref.ThreadID)
@@ -281,10 +260,33 @@ func (a *ACPAgent) activateSharedCodexHostWithPhaseTimeout(ctx context.Context, 
 			return binding, reconcileErr
 		}
 		if retained {
+			a.codexOwners.bindConversation(req.Ref, binding)
+			a.bindCodexAppServerThreadForResume(
+				req.Ref.ConversationID, req.Ref.ThreadID,
+				strings.EqualFold(state.ThreadStatus, "notLoaded"),
+			)
 			return binding, nil
 		}
 	}
-	return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
+	if hasLease && !uncertainLease {
+		binding, bindErr := a.codexOwners.bindSharedHostFrontendDuringLease(req, state)
+		if bindErr != nil {
+			return binding, bindErr
+		}
+		a.bindCodexAppServerThreadForResume(
+			req.Ref.ConversationID, req.Ref.ThreadID,
+			strings.EqualFold(state.ThreadStatus, "notLoaded"),
+		)
+		return binding, nil
+	}
+	binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
+	if err == nil {
+		a.bindCodexAppServerThreadForResume(
+			req.Ref.ConversationID, req.Ref.ThreadID,
+			strings.EqualFold(state.ThreadStatus, "notLoaded"),
+		)
+	}
+	return binding, err
 }
 
 func codexRuntimeActivationPhaseContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -375,36 +377,11 @@ func codexProbeError(loadErr error) error {
 	return ErrCodexDesktopOwnershipUnknown
 }
 
-func (a *ACPAgent) recoverCodexRuntimeForRemoteWithPhaseTimeout(ctx context.Context, req CodexRuntimeRequest, phaseTimeout time.Duration) (CodexThreadBinding, error) {
-	restartCtx, cancelRestart := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
-	err := a.restartCodexAppServer(restartCtx)
-	cancelRestart()
-	if err != nil {
-		return CodexThreadBinding{}, err
-	}
-	if a.codexDesktopHostSelection && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
-		return CodexThreadBinding{}, ErrCodexRuntimeUnavailable
-	}
-	resumeCtx, cancelResume := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
-	err = a.resumeThread(resumeCtx, req.Ref.ConversationID, req.Ref.ThreadID)
-	cancelResume()
-	if err != nil {
-		return CodexThreadBinding{}, fmt.Errorf("恢复 Codex thread 失败: %w", err)
-	}
-	readCtx, cancelRead := codexRuntimeActivationPhaseContext(ctx, phaseTimeout)
-	state, _, err := a.readCodexAppServerThreadStateResult(readCtx, req.Ref.ThreadID)
-	cancelRead()
-	if err != nil {
-		return CodexThreadBinding{}, err
-	}
-	binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
-	if err == nil {
-		a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
-	}
-	return binding, err
+func (a *ACPAgent) bindCodexAppServerThread(conversationID string, threadID string) {
+	a.bindCodexAppServerThreadForResume(conversationID, threadID, false)
 }
 
-func (a *ACPAgent) bindCodexAppServerThread(conversationID string, threadID string) {
+func (a *ACPAgent) bindCodexAppServerThreadForResume(conversationID string, threadID string, needsResume bool) {
 	conversationID = strings.TrimSpace(conversationID)
 	threadID = strings.TrimSpace(threadID)
 	if conversationID == "" || threadID == "" {
@@ -412,7 +389,11 @@ func (a *ACPAgent) bindCodexAppServerThread(conversationID string, threadID stri
 	}
 	a.mu.Lock()
 	a.threads[conversationID] = threadID
-	delete(a.resumeOnFirstUse, conversationID)
+	if needsResume {
+		a.resumeOnFirstUse[conversationID] = true
+	} else {
+		delete(a.resumeOnFirstUse, conversationID)
+	}
 	a.mu.Unlock()
 	a.persistState()
 }
@@ -427,6 +408,10 @@ func (a *ACPAgent) readCodexAppServerThreadStateResult(ctx context.Context, thre
 	if err != nil || pendingFirstTurn {
 		return codexThreadStateFromSnapshot(thread), pendingFirstTurn, err
 	}
+	state := codexThreadStateFromSnapshot(thread)
+	if codexThreadStatusDoesNotExposeTurns(state.ThreadStatus) {
+		return state, false, nil
+	}
 	turn, found, _, err := a.readCodexAppServerTargetTurn(ctx, threadID, "", false)
 	if err != nil {
 		return CodexThreadState{}, false, err
@@ -437,12 +422,25 @@ func (a *ACPAgent) readCodexAppServerThreadStateResult(ctx context.Context, thre
 	return codexThreadStateFromSnapshot(thread), false, nil
 }
 
+func codexThreadStatusDoesNotExposeTurns(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "notloaded", "systemerror":
+		return true
+	default:
+		return false
+	}
+}
+
 // readCodexAppServerThreadSnapshotResult 先读取轻量 thread 元数据，再只为目标
 // turn 分页加载 items，避免把整个 rollout 历史放进一条 ACP 响应。
 func (a *ACPAgent) readCodexAppServerThreadSnapshotResult(ctx context.Context, threadID string, targetTurnID string) (CodexThreadState, codexThreadSnapshot, bool, uint64, error) {
 	thread, pendingFirstTurn, sequence, err := a.readCodexAppServerThreadMetadata(ctx, threadID)
 	if err != nil || pendingFirstTurn {
 		return codexThreadStateFromSnapshot(thread), thread, pendingFirstTurn, sequence, err
+	}
+	state := codexThreadStateFromSnapshot(thread)
+	if codexThreadStatusDoesNotExposeTurns(state.ThreadStatus) {
+		return state, thread, false, sequence, nil
 	}
 	turn, found, turnSequence, err := a.readCodexAppServerTargetTurn(ctx, threadID, targetTurnID, true)
 	if turnSequence > sequence {
@@ -454,7 +452,7 @@ func (a *ACPAgent) readCodexAppServerThreadSnapshotResult(ctx context.Context, t
 	if found {
 		thread.Turns = []codexTurnSnapshot{turn}
 	}
-	state := codexThreadStateFromSnapshot(thread)
+	state = codexThreadStateFromSnapshot(thread)
 	if strings.TrimSpace(targetTurnID) != "" && found {
 		state.Active = turn.Status == "inProgress"
 		state.WaitingOnApproval = state.Active && codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnApproval")

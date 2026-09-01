@@ -4,153 +4,115 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
-func TestRecoverCodexThreadHandoffRestartsIdleOfficialDaemon(t *testing.T) {
-	a := newCodexThreadHandoffTestAgent(t, "idle")
-	var actions []string
+func TestUnsubscribeCodexThreadDoesNotRestartHost(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	a.stopManagedHostCall = func(context.Context, string) error {
-		actions = append(actions, "stop")
+		t.Fatal("ordinary unsubscribe must not stop the Host")
 		return nil
 	}
 	a.startManagedHostCall = func(context.Context, string) error {
-		actions = append(actions, "start")
+		t.Fatal("ordinary unsubscribe must not start the Host")
 		return nil
 	}
-	a.mu.Lock()
-	a.threads["conversation-old"] = "thread-old"
-	a.mu.Unlock()
-	req := CodexRuntimeRequest{
-		Ref: CodexThreadRef{ConversationID: "conversation-old", ThreadID: "thread-old"},
-		Intent: CodexControlIntent{
-			Owner: CodexControlRemote, RouteKey: "route-old",
-			ConversationID: "conversation-old", Revision: 1,
-		},
-	}
-	if _, err := a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, CodexThreadState{ThreadID: "thread-old"}); err != nil {
-		t.Fatal(err)
+	called := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		called++
+		if method != "thread/unsubscribe" {
+			t.Fatalf("method=%q, want thread/unsubscribe", method)
+		}
+		if got := params.(map[string]interface{})["threadId"]; got != "thread-old" {
+			t.Fatalf("threadId=%v", got)
+		}
+		return json.RawMessage(`{"status":"unsubscribed"}`), nil
 	}
 
-	attempted, err := a.RecoverCodexThreadHandoff(context.Background(), "thread-old")
-	if err != nil || !attempted {
-		t.Fatalf("RecoverCodexThreadHandoff() attempted=%v err=%v", attempted, err)
-	}
-	if len(actions) != 2 || actions[0] != "stop" || actions[1] != "start" {
-		t.Fatalf("actions=%v, want stop/start", actions)
-	}
-	a.mu.Lock()
-	resume := a.resumeOnFirstUse["conversation-old"]
-	a.mu.Unlock()
-	if !resume || a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
-		t.Fatalf("resume=%v runtime=%q", resume, a.codexRuntimeModeSnapshot())
-	}
-	if binding, ok := a.codexOwners.threadBinding("thread-old"); !ok || binding.Runtime != CodexRuntimeUnknown {
-		t.Fatalf("binding=%#v ok=%v, restarted Host snapshot must be unknown", binding, ok)
+	attempted, err := a.UnsubscribeCodexThread(context.Background(), "thread-old")
+
+	if err != nil || !attempted || called != 1 {
+		t.Fatalf("attempted=%v calls=%d err=%v", attempted, called, err)
 	}
 }
 
-func TestRecoverCodexThreadHandoffKeepsHostWhenAnyThreadIsActive(t *testing.T) {
-	a := newCodexThreadHandoffTestAgent(t, "active")
-	stopped := false
-	a.stopManagedHostCall = func(context.Context, string) error {
-		stopped = true
-		return nil
+func TestUnsubscribeCodexThreadSkipsEmptyThread(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		t.Fatal("empty thread must not call RPC")
+		return nil, nil
 	}
 
-	attempted, err := a.RecoverCodexThreadHandoff(context.Background(), "thread-old")
-	if !attempted || !errors.Is(err, ErrCodexWriterBusy) {
-		t.Fatalf("RecoverCodexThreadHandoff() attempted=%v err=%v", attempted, err)
-	}
-	if stopped {
-		t.Fatal("active thread must prevent Host restart")
-	}
-}
-
-func TestRecoverCodexThreadHandoffSkipsWhenDesktopIsAbsent(t *testing.T) {
-	a := newCodexThreadHandoffTestAgent(t, "idle")
-	a.desktopRuntime.presence = func() (bool, bool) { return false, false }
-	stopped := false
-	a.stopManagedHostCall = func(context.Context, string) error {
-		stopped = true
-		return nil
-	}
-
-	attempted, err := a.RecoverCodexThreadHandoff(context.Background(), "thread-old")
-	if err != nil || attempted || stopped {
-		t.Fatalf("attempted=%v stopped=%v err=%v", attempted, stopped, err)
-	}
-}
-
-func TestRecoverCodexThreadHandoffDoesNotRestartForUnreachableDesktop(t *testing.T) {
-	a := newCodexThreadHandoffTestAgent(t, "idle")
-	a.desktopRuntime.presence = func() (bool, bool) { return false, true }
-	stopped := false
-	a.stopManagedHostCall = func(context.Context, string) error {
-		stopped = true
-		return nil
-	}
-
-	attempted, err := a.RecoverCodexThreadHandoff(context.Background(), "thread-old")
-	if !attempted || !errors.Is(err, ErrCodexDesktopUnavailable) || stopped {
-		t.Fatalf("attempted=%v stopped=%v err=%v", attempted, stopped, err)
-	}
-}
-
-func TestRecoverCodexThreadHandoffFailsClosedWhenDaemonRestartFails(t *testing.T) {
-	a := newCodexThreadHandoffTestAgent(t, "idle")
-	a.stopManagedHostCall = func(context.Context, string) error { return nil }
-	a.startManagedHostCall = func(context.Context, string) error { return errors.New("start failed") }
-
-	attempted, err := a.RecoverCodexThreadHandoff(context.Background(), "thread-old")
-	if !attempted || err == nil {
+	attempted, err := a.UnsubscribeCodexThread(context.Background(), "  ")
+	if err != nil || attempted {
 		t.Fatalf("attempted=%v err=%v", attempted, err)
 	}
-	if state := a.ensureCodexAppServerGate().stateSnapshot(); state != codexAppServerFailed {
-		t.Fatalf("gate state=%q, want failed", state)
+}
+
+func TestUnsubscribeCodexThreadReturnsProtocolFailureWithoutRestart(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	wantErr := errors.New("unsubscribe unavailable")
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		return nil, wantErr
+	}
+
+	attempted, err := a.UnsubscribeCodexThread(context.Background(), "thread-old")
+	if !attempted || !errors.Is(err, wantErr) {
+		t.Fatalf("attempted=%v err=%v, want protocol failure", attempted, err)
 	}
 }
 
-func TestRecoverCodexThreadHandoffRestartsAfterCallerCancellationOnceStopped(t *testing.T) {
-	a := newCodexThreadHandoffTestAgent(t, "idle")
-	ctx, cancel := context.WithCancel(context.Background())
-	a.stopManagedHostCall = func(context.Context, string) error {
-		cancel()
-		return nil
-	}
-	restartContextErr := errors.New("restart not called")
-	a.startManagedHostCall = func(ctx context.Context, _ string) error {
-		restartContextErr = ctx.Err()
-		return nil
-	}
-
-	attempted, err := a.RecoverCodexThreadHandoff(ctx, "thread-old")
-	if !attempted || err != nil || restartContextErr != nil {
-		t.Fatalf("attempted=%v err=%v restart context err=%v", attempted, err, restartContextErr)
-	}
-}
-
-func newCodexThreadHandoffTestAgent(t *testing.T, threadStatus string) *ACPAgent {
-	t.Helper()
-	home := newShortCodexHome(t)
-	if err := os.MkdirAll(filepath.Dir(codexDaemonSocketPath(home)), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	runtime := newCodexDesktopRuntime()
-	runtime.presence = func() (bool, bool) { return true, true }
-	a := newACPAgent(ACPAgentConfig{
-		Command: "codex", Args: []string{"app-server"}, CodexHostMode: codexHostModeDaemon,
-		CodexDesktopBridge: true,
-		Env:                map[string]string{"CODEX_HOME": home}, StateFile: filepath.Join(home, "state.json"),
-	}, acpAgentOptions{desktopProbe: runtime})
-	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
-	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
-		if method != "thread/list" {
-			t.Fatalf("unexpected RPC method %q", method)
+func TestCodexThreadSubscriptionIsIndependentFromBindingAndRestoredAfterUnsubscribe(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, StateFile: t.TempDir() + "/state.json",
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	resumeCalls := 0
+	unsubscribeCalls := 0
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "thread/resume":
+			resumeCalls++
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "thread/unsubscribe":
+			unsubscribeCalls++
+			return json.RawMessage(`{"status":"unsubscribed"}`), nil
+		default:
+			t.Fatalf("unexpected rpc method %s", method)
+			return nil, nil
 		}
-		return json.RawMessage(`{"data":[{"id":"thread-1","status":{"type":"` + threadStatus + `"}}],"nextCursor":null}`), nil
 	}
-	return a
+
+	if _, err := a.HandoffCodexRuntime(context.Background(), request); err != nil {
+		t.Fatalf("HandoffCodexRuntime() error=%v", err)
+	}
+	if resumeCalls != 0 {
+		t.Fatalf("binding resumed thread %d times, want 0", resumeCalls)
+	}
+	attempted, err := a.SubscribeCodexThread(
+		context.Background(), request.Ref.ConversationID, request.Ref.ThreadID,
+	)
+	if err != nil || !attempted || resumeCalls != 1 {
+		t.Fatalf("first subscribe attempted=%v resumeCalls=%d error=%v", attempted, resumeCalls, err)
+	}
+	attempted, err = a.SubscribeCodexThread(
+		context.Background(), request.Ref.ConversationID, request.Ref.ThreadID,
+	)
+	if err != nil || attempted || resumeCalls != 1 {
+		t.Fatalf("second subscribe attempted=%v resumeCalls=%d error=%v", attempted, resumeCalls, err)
+	}
+	if attempted, err = a.UnsubscribeCodexThread(context.Background(), request.Ref.ThreadID); err != nil || !attempted {
+		t.Fatalf("unsubscribe attempted=%v error=%v", attempted, err)
+	}
+	attempted, err = a.SubscribeCodexThread(
+		context.Background(), request.Ref.ConversationID, request.Ref.ThreadID,
+	)
+	if err != nil || !attempted || resumeCalls != 2 || unsubscribeCalls != 1 {
+		t.Fatalf("resubscribe attempted=%v resumeCalls=%d unsubscribeCalls=%d error=%v",
+			attempted, resumeCalls, unsubscribeCalls, err)
+	}
 }

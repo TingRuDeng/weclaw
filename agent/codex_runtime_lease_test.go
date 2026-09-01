@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -492,16 +493,22 @@ func TestExplicitDaemonTurnUsesValidatedWeClawRuntimeWithoutDesktopProbe(t *test
 	}
 	a.threads[req.Ref.ConversationID] = req.Ref.ThreadID
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
-		if method != "turn/start" {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/start":
+			turn := params.(codexTurnStartParams)
+			a.notifyMu.Lock()
+			ch := a.turnCh[turn.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Delta: "受控执行成功"}
+			ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-1"}
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		default:
 			return nil, fmt.Errorf("unexpected rpc method %s", method)
 		}
-		turn := params.(codexTurnStartParams)
-		a.notifyMu.Lock()
-		ch := a.turnCh[turn.ThreadID]
-		a.notifyMu.Unlock()
-		ch <- &codexTurnEvent{Delta: "受控执行成功"}
-		ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-1"}
-		return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
 	}
 
 	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
@@ -531,17 +538,23 @@ func TestRunCodexTurnDoesNotCreateWriterLeaseWhileAccountGateIsExclusive(t *test
 	a.threads[req.Ref.ConversationID] = req.Ref.ThreadID
 	turnStarted := make(chan struct{}, 1)
 	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
-		if method != "turn/start" {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"idle"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/start":
+			turn := params.(codexTurnStartParams)
+			turnStarted <- struct{}{}
+			a.notifyMu.Lock()
+			ch := a.turnCh[turn.ThreadID]
+			a.notifyMu.Unlock()
+			ch <- &codexTurnEvent{Delta: "切号后执行"}
+			ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-1"}
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		default:
 			return nil, fmt.Errorf("unexpected rpc method %s", method)
 		}
-		turn := params.(codexTurnStartParams)
-		turnStarted <- struct{}{}
-		a.notifyMu.Lock()
-		ch := a.turnCh[turn.ThreadID]
-		a.notifyMu.Unlock()
-		ch <- &codexTurnEvent{Delta: "切号后执行"}
-		ch <- &codexTurnEvent{Kind: "completed", TurnID: "turn-1"}
-		return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
 	}
 	gate := a.ensureCodexAppServerGate()
 	if err := gate.beginExclusive(); err != nil {
@@ -647,7 +660,7 @@ func TestRunCodexTurnPreflightSerializesAccountMaintenance(t *testing.T) {
 	}
 }
 
-func TestRunCodexTurnRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
+func TestRunCodexTurnSteersActiveSharedHostWithoutLocalLease(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"},
 		StateFile: filepath.Join(t.TempDir(), "state.json"),
@@ -655,12 +668,22 @@ func TestRunCodexTurnRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
 	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
 	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
 	turnStartCalls := 0
-	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+	turnSteerCalls := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
 		switch method {
 		case "thread/read":
 			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]}}}`), nil
 		case "thread/turns/list":
 			return json.RawMessage(`{"data":[{"id":"turn-existing","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/steer":
+			turnSteerCalls++
+			steer := params.(map[string]interface{})
+			if steer["expectedTurnId"] != "turn-existing" {
+				return nil, fmt.Errorf("expectedTurnId=%v", steer["expectedTurnId"])
+			}
+			return json.RawMessage(`{"turnId":"turn-existing"}`), nil
 		case "turn/start":
 			turnStartCalls++
 			return nil, fmt.Errorf("turn/start must not be called while host thread is active")
@@ -668,16 +691,17 @@ func TestRunCodexTurnRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
 			return nil, fmt.Errorf("unexpected rpc method %s", method)
 		}
 	}
+	dispatchCodexRuntimeTestCompletion(a, "thread-1", "turn-existing", "已合并补充输入")
 
-	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
-		Runtime: request, Message: "不能重叠执行",
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "补充输入",
 	})
 
-	if !errors.Is(err, ErrCodexWriterBusy) {
-		t.Fatalf("RunCodexTurn error=%v, want ErrCodexWriterBusy", err)
+	if err != nil || reply != "已合并补充输入" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
 	}
-	if turnStartCalls != 0 {
-		t.Fatalf("turn/start calls=%d, want 0", turnStartCalls)
+	if turnStartCalls != 0 || turnSteerCalls != 1 {
+		t.Fatalf("turn/start calls=%d turn/steer calls=%d, want 0/1", turnStartCalls, turnSteerCalls)
 	}
 	binding, ok := a.codexOwners.threadBinding(request.Ref.ThreadID)
 	if !ok || !binding.State.Active || binding.State.ActiveTurnID != "turn-existing" {
@@ -685,7 +709,308 @@ func TestRunCodexTurnRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
 	}
 }
 
-func TestDesktopBridgeRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
+func TestRunCodexTurnReadsAuthoritativeTurnBeforeSteeringPastLocalLease(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	local := remoteCodexRuntimeRequest("thread-1", "route-local", 1)
+	local.Ref.ConversationID = "conversation-local"
+	local.Intent.ConversationID = local.Ref.ConversationID
+	if _, err := a.codexOwners.activateRuntime(local, CodexRuntimeWeClaw, CodexThreadState{
+		ThreadID: "thread-1", Active: true, ActiveTurnID: "turn-local",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := a.codexOwners.beginTurn(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(lease.finish)
+	if err := lease.accept("turn-local"); err != nil {
+		t.Fatal(err)
+	}
+
+	remote := remoteCodexRuntimeRequest("thread-1", "route-remote", 1)
+	remote.Ref.ConversationID = "conversation-remote"
+	remote.Intent.ConversationID = remote.Ref.ConversationID
+	var methods []string
+	var steered []string
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"turn-authoritative","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/steer":
+			expected := params.(map[string]interface{})["expectedTurnId"].(string)
+			steered = append(steered, expected)
+			if expected != "turn-authoritative" {
+				return nil, fmt.Errorf("expected turn id no longer matches active turn")
+			}
+			return json.RawMessage(`{"turnId":"turn-authoritative"}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+	dispatchCodexRuntimeTestCompletion(a, "thread-1", "turn-authoritative", "权威 turn 已接收")
+
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: remote, Message: "补充到 Host 当前任务",
+	})
+
+	if err != nil || reply != "权威 turn 已接收" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
+	}
+	if len(methods) == 0 || methods[0] != "thread/read" {
+		t.Fatalf("methods=%v, every input must read the authoritative Host before writing", methods)
+	}
+	if !reflect.DeepEqual(steered, []string{"turn-authoritative"}) {
+		t.Fatalf("steered=%v, stale local lease must not receive the first write", steered)
+	}
+	if !a.codexOwners.hasWriterLease("thread-1") {
+		t.Fatal("steering another frontend must not release the local turn lease")
+	}
+	lease.finish()
+	binding, ok := a.codexOwners.threadBinding("thread-1")
+	if !ok || !binding.State.Active || binding.State.ActiveTurnID != "turn-authoritative" {
+		t.Fatalf("binding=%#v ok=%v, finishing an older lease must preserve the newer authoritative turn", binding, ok)
+	}
+}
+
+func TestHandoffCodexRuntimeReadsNotLoadedWithoutResuming(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded"}}}`), nil
+		default:
+			return nil, fmt.Errorf("binding must use only thread/read, got %s", method)
+		}
+	}
+	restarted := false
+	a.restartCodexAppServerCall = func(context.Context) error {
+		restarted = true
+		return nil
+	}
+
+	binding, err := a.HandoffCodexRuntime(context.Background(), request)
+
+	if err != nil || binding.Runtime != CodexRuntimeWeClaw || binding.State.ThreadID != "thread-1" {
+		t.Fatalf("binding=%#v error=%v", binding, err)
+	}
+	if restarted {
+		t.Fatal("ordinary frontend binding must not restart the Codex Host")
+	}
+	if !reflect.DeepEqual(methods, []string{"thread/read"}) {
+		t.Fatalf("methods=%v, want lightweight thread/read only", methods)
+	}
+	if threadID, ok := a.CurrentCodexThread(request.Ref.ConversationID); !ok || threadID != request.Ref.ThreadID {
+		t.Fatalf("CurrentCodexThread()=(%q,%v), want (%q,true)", threadID, ok, request.Ref.ThreadID)
+	}
+}
+
+func TestRunCodexTurnResumesNotLoadedAfterAuthorityRead(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	loaded := false
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			status := "notLoaded"
+			if loaded {
+				status = "idle"
+			}
+			return json.RawMessage(fmt.Sprintf(`{"thread":{"id":"thread-1","status":{"type":%q}}}`, status)), nil
+		case "thread/resume":
+			if len(methods) == 1 || methods[len(methods)-2] != "thread/read" {
+				return nil, fmt.Errorf("thread/resume ran before authoritative thread/read: %v", methods)
+			}
+			loaded = true
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/start":
+			go func() {
+				a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "started", TurnID: "turn-1"})
+				a.dispatchToTurnCh("thread-1", &codexTurnEvent{TurnID: "turn-1", ItemID: "answer", Delta: "完成"})
+				a.dispatchToTurnCh("thread-1", &codexTurnEvent{Kind: "completed", TurnID: "turn-1"})
+			}()
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "执行任务",
+	})
+
+	if err != nil || reply != "完成" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
+	}
+	wantPrefix := []string{"thread/read", "thread/resume", "thread/read", "thread/turns/list", "turn/start"}
+	if !reflect.DeepEqual(methods, wantPrefix) {
+		t.Fatalf("methods=%v, want %v", methods, wantPrefix)
+	}
+}
+
+func TestRunCodexTurnRejectsSystemErrorWithoutWriting(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		if method != "thread/read" {
+			return nil, fmt.Errorf("systemError thread must not be written, got %s", method)
+		}
+		return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"systemError"}}}`), nil
+	}
+
+	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "不得排队或晚到执行",
+	})
+
+	if !errors.Is(err, ErrCodexRuntimeUnavailable) {
+		t.Fatalf("RunCodexTurn error=%v, want ErrCodexRuntimeUnavailable", err)
+	}
+	if !reflect.DeepEqual(methods, []string{"thread/read"}) {
+		t.Fatalf("methods=%v, want read-only failure", methods)
+	}
+}
+
+func TestRunCodexTurnConvertsStartRaceToSteerExactlyOnce(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	active := false
+	startCalls := 0
+	steerCalls := 0
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			status := "idle"
+			if active {
+				status = "active"
+			}
+			return json.RawMessage(fmt.Sprintf(`{"thread":{"id":"thread-1","status":{"type":%q,"activeFlags":[]}}}`, status)), nil
+		case "thread/turns/list":
+			if active {
+				return json.RawMessage(`{"data":[{"id":"turn-other","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+			}
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/start":
+			startCalls++
+			active = true
+			return nil, fmt.Errorf("thread already has an active turn")
+		case "turn/steer":
+			steerCalls++
+			if params.(map[string]interface{})["expectedTurnId"] != "turn-other" {
+				return nil, fmt.Errorf("wrong expected turn")
+			}
+			return json.RawMessage(`{"turnId":"turn-other"}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+	dispatchCodexRuntimeTestCompletion(a, "thread-1", "turn-other", "竞态输入已加入")
+
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "同一条输入",
+	})
+
+	if err != nil || reply != "竞态输入已加入" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
+	}
+	if startCalls != 1 || steerCalls != 1 {
+		t.Fatalf("start=%d steer=%d, want exactly 1/1", startCalls, steerCalls)
+	}
+}
+
+func TestRunCodexTurnRereadsStaleSteerTurnID(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	})
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	activeTurnID := "turn-old"
+	var steered []string
+	a.rpcCall = func(_ context.Context, method string, params interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(fmt.Sprintf(`{"data":[{"id":%q,"status":"inProgress","items":[]}],"nextCursor":null}`, activeTurnID)), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/steer":
+			expected := params.(map[string]interface{})["expectedTurnId"].(string)
+			steered = append(steered, expected)
+			if len(steered) == 1 {
+				activeTurnID = "turn-new"
+				return nil, fmt.Errorf("expected turn id no longer matches active turn")
+			}
+			return json.RawMessage(`{"turnId":"turn-new"}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
+		}
+	}
+	dispatchCodexRuntimeTestCompletion(a, "thread-1", "turn-new", "新 turn 已接收")
+
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "补充到最新任务",
+	})
+
+	if err != nil || reply != "新 turn 已接收" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
+	}
+	if !reflect.DeepEqual(steered, []string{"turn-old", "turn-new"}) {
+		t.Fatalf("steered=%v, want stale then current turn", steered)
+	}
+}
+
+func dispatchCodexRuntimeTestCompletion(a *ACPAgent, threadID string, turnID string, reply string) {
+	go func() {
+		for {
+			a.notifyMu.Lock()
+			registered := len(a.turnObservers[threadID]) > 0
+			a.notifyMu.Unlock()
+			if registered {
+				a.dispatchToTurnCh(threadID, &codexTurnEvent{TurnID: turnID, ItemID: "answer", Delta: reply})
+				a.dispatchToTurnCh(threadID, &codexTurnEvent{Kind: "completed", TurnID: turnID})
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+}
+
+func TestDesktopBridgeSteersActiveSharedHostWithoutLocalLease(t *testing.T) {
 	probe := &codexDesktopOwnerProbeFake{}
 	a := newACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"},
@@ -698,23 +1023,40 @@ func TestDesktopBridgeRejectsActiveSharedHostWithoutLocalLease(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	turnStartCalls := 0
+	var calls []string
 	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
-		if method == "turn/start" {
-			turnStartCalls++
+		calls = append(calls, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"active","activeFlags":[]}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"turn-existing","status":"inProgress","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/steer":
+			return json.RawMessage(`{"turnId":"turn-existing"}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected rpc method %s", method)
 		}
-		return nil, fmt.Errorf("unexpected rpc method %s", method)
 	}
+	dispatchCodexRuntimeTestCompletion(a, "thread-1", "turn-existing", "补充输入已处理")
 
-	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
-		Runtime: request, Message: "不能重叠执行",
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "补充现有任务",
 	})
 
-	if !errors.Is(err, ErrCodexWriterBusy) {
-		t.Fatalf("RunCodexTurn error=%v, want ErrCodexWriterBusy", err)
+	if err != nil || reply != "补充输入已处理" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
 	}
-	if turnStartCalls != 0 {
-		t.Fatalf("turn/start calls=%d, want 0", turnStartCalls)
+	steered := false
+	for _, method := range calls {
+		if method == "turn/start" {
+			t.Fatalf("calls=%v, active shared Host must steer instead of starting a second turn", calls)
+		}
+		steered = steered || method == "turn/steer"
+	}
+	if !steered {
+		t.Fatalf("calls=%v, want turn/steer", calls)
 	}
 }
 
@@ -774,6 +1116,37 @@ func TestInspectCodexRuntimeReconcilesUncertainWriterLease(t *testing.T) {
 	}
 	if binding.State.Active || binding.State.LastTurnID != "turn-1" || binding.State.LastTurnStatus != "completed" {
 		t.Fatalf("binding=%#v, want reconciled terminal turn", binding)
+	}
+}
+
+func TestUncertainLeaseReleasesWhenAuthoritativeIdleAdvancedPastAcceptedTurn(t *testing.T) {
+	registry := newCodexRuntimeOwnerRegistry(nil)
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	initial := CodexThreadState{ThreadID: "thread-1", LastTurnID: "turn-before", LastTurnStatus: "completed"}
+	if _, err := registry.activateRuntime(request, CodexRuntimeWeClaw, initial); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := registry.beginTurn(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.accept("turn-weclaw"); err != nil {
+		t.Fatal(err)
+	}
+	lease.markUncertain()
+
+	binding, retained, err := registry.reconcileUncertainSharedHostLease(request, CodexThreadState{
+		ThreadID: "thread-1", LastTurnID: "turn-app", LastTurnStatus: "completed",
+	})
+
+	if err != nil {
+		t.Fatalf("reconcile error=%v", err)
+	}
+	if retained || registry.hasWriterLease(request.Ref.ThreadID) {
+		t.Fatalf("retained=%v lease=%v, authoritative idle state must release the accepted old turn", retained, registry.hasWriterLease(request.Ref.ThreadID))
+	}
+	if binding.State.Active || binding.State.LastTurnID != "turn-app" {
+		t.Fatalf("binding=%#v, want latest authoritative idle state", binding)
 	}
 }
 

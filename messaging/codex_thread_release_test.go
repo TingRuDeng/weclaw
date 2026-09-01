@@ -101,6 +101,106 @@ func TestCodexReleaseClearsOnlyCurrentFrontendBindingWithoutInterrupt(t *testing
 	}
 }
 
+func TestCodexReleaseUnsubscribesIdleThreadWhenNoFrontendStillUsesIt(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: "thread-idle"})
+	ag.threadHandoffApplicable = true
+	h.SetDefaultAgent("codex", ag)
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	routeUserID := "feishu:tenant:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-idle")
+
+	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "user", RouteUserID: routeUserID,
+		Trimmed: "/cx release", Platform: platform.PlatformFeishu,
+	})
+
+	threads, operations := ag.threadHandoffSnapshot()
+	if len(threads) != 1 || threads[0] != "thread-idle" ||
+		len(operations) != 1 || operations[0] != "unsubscribe:thread-idle" {
+		t.Fatalf("threads=%v operations=%v, want one unsubscribe", threads, operations)
+	}
+	if !strings.Contains(reply, "已解除当前窗口") {
+		t.Fatalf("reply=%q", reply)
+	}
+}
+
+func TestCodexReleaseUnsubscribesDetachedActiveThreadWhenNoFrontendStillUsesIt(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	state := agent.CodexThreadState{
+		ThreadID: "thread-active", Active: true, ActiveTurnID: "turn-active",
+	}
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, state)
+	ag.threadHandoffApplicable = true
+	h.SetDefaultAgent("codex", ag)
+	h.SetAgentWorkDirs(map[string]string{"codex": workspace})
+	routeUserID := "feishu:tenant:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-active")
+	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
+	observerDetached := make(chan struct{})
+	if _, _, started := h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
+		owner: "user", routeUserID: routeUserID, agentName: "codex",
+		codexThreadID: "thread-active", codexTurnID: "turn-active", inProcessCodexLifecycle: true,
+		interactionLease: &agentInteractionLease{}, detachCodexObserver: func() { close(observerDetached) },
+	}); !started {
+		t.Fatal("active task was not started")
+	}
+
+	reply := h.handleCodexSessionCommandForRoute(context.Background(), codexSessionCommandRequest{
+		ActorUserID: "user", RouteUserID: routeUserID,
+		Trimmed: "/cx release", Platform: platform.PlatformFeishu,
+	})
+
+	threads, operations := ag.threadHandoffSnapshot()
+	if len(threads) != 1 || threads[0] != "thread-active" ||
+		len(operations) != 1 || operations[0] != "unsubscribe:thread-active" {
+		t.Fatalf("threads=%v operations=%v, want one unsubscribe after observer detach", threads, operations)
+	}
+	select {
+	case <-observerDetached:
+	default:
+		t.Fatal("release did not detach the active observer")
+	}
+	if !strings.Contains(reply, "已解除当前窗口") {
+		t.Fatalf("reply=%q", reply)
+	}
+}
+
+func TestCodexTaskCompletionUnsubscribesThreadAfterFrontendSwitchedAway(t *testing.T) {
+	h := NewHandler(nil, nil)
+	workspace := t.TempDir()
+	ag := newFakeCodexLiveAgent(agent.CodexRuntimeWeClaw, agent.CodexThreadState{ThreadID: "thread-old"})
+	ag.threadHandoffApplicable = true
+	h.SetDefaultAgent("codex", ag)
+	routeUserID := "feishu:tenant:dm:chat:user"
+	bindingKey := codexBindingKey(routeUserID, "codex")
+	h.ensureCodexSessions().setActiveWorkspace(bindingKey, workspace)
+	h.ensureCodexSessions().setThread(bindingKey, workspace, "thread-new")
+	conversationID := buildCodexConversationID(routeUserID, "codex", workspace)
+	task, _, started := h.beginActiveTask(context.Background(), conversationID, activeTaskMeta{
+		owner: "user", routeUserID: routeUserID, agentName: "codex", codexThreadID: "thread-old",
+	})
+	if !started {
+		t.Fatal("active task was not started")
+	}
+
+	if pending, ok := h.completeActiveTask(conversationID, task); ok || pending.run != nil {
+		t.Fatalf("unexpected pending task=%#v ok=%v", pending, ok)
+	}
+
+	threads, operations := ag.threadHandoffSnapshot()
+	if len(threads) != 1 || threads[0] != "thread-old" ||
+		len(operations) != 1 || operations[0] != "unsubscribe:thread-old" {
+		t.Fatalf("threads=%v operations=%v, want one terminal unsubscribe", threads, operations)
+	}
+}
+
 func TestDetachCodexFrontendTaskDoesNotCancelInProcessTurn(t *testing.T) {
 	h := NewHandler(nil, nil)
 	key := buildCodexConversationID("feishu:tenant:dm:chat:user", "codex", "/workspace/project")

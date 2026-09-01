@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fastclaw-ai/weclaw/agent"
@@ -18,6 +19,7 @@ const defaultCodexFollowerReconcileInterval = 2 * time.Second
 const codexFollowerRuntimeResultTimeout = 5 * time.Second
 
 type codexFollowerService struct {
+	mu             sync.RWMutex
 	registry       *platform.Registry
 	interval       time.Duration
 	wake           chan struct{}
@@ -112,6 +114,8 @@ func (s *codexFollowerService) recordRuntimeResult(snapshot codexFollowerSnapsho
 		return
 	}
 	key := snapshot.BindingKey + "\x00" + snapshot.Target.ThreadID
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err == nil {
 		delete(s.resultFailures, key)
 		return
@@ -137,6 +141,8 @@ func (s *codexFollowerService) recordReconcileResult(snapshot codexFollowerSnaps
 		return
 	}
 	key := snapshot.BindingKey + "\x00" + snapshot.Target.ThreadID
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err == nil {
 		delete(s.failures, key)
 		return
@@ -157,6 +163,33 @@ func (s *codexFollowerService) recordReconcileResult(snapshot codexFollowerSnaps
 	}
 	log.Printf("[codex-follower] 同步观察暂未恢复 route=%q thread=%q revision=%d attempts=%d: %v",
 		snapshot.BindingKey, snapshot.Target.ThreadID, snapshot.Revision, state.count, err)
+}
+
+func (s *codexFollowerService) synchronizationDegraded(bindingKey string, threadID string) bool {
+	if s == nil {
+		return false
+	}
+	key := strings.TrimSpace(bindingKey) + "\x00" + strings.TrimSpace(threadID)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, failed := s.failures[key]
+	return failed
+}
+
+func (h *Handler) recordCodexFollowerSyncFailure(bindingKey string, threadID string, err error) {
+	if err == nil {
+		return
+	}
+	h.codexFollowerMu.Lock()
+	service := h.codexFollower
+	h.codexFollowerMu.Unlock()
+	if service == nil {
+		return
+	}
+	service.recordReconcileResult(codexFollowerSnapshot{
+		BindingKey: strings.TrimSpace(bindingKey),
+		Target:     codexFrontendFollower{ThreadID: strings.TrimSpace(threadID)},
+	}, err, nil)
 }
 
 func (h *Handler) reconcileCodexFollowerRuntimeResult(
@@ -433,19 +466,25 @@ func ensureCodexFollowerRuntime(ctx context.Context, liveAgent agent.CodexLiveRu
 		}
 	}
 	binding, err := liveAgent.CurrentCodexRuntime(request)
-	if err == nil && codexRuntimeReadyForRemoteTurn(binding.Runtime) {
-		return binding, nil
-	}
-	binding, err = liveAgent.HandoffCodexRuntime(ctx, request)
-	if err != nil {
-		return agent.CodexThreadBinding{}, err
-	}
-	binding, err = liveAgent.CurrentCodexRuntime(request)
-	if err != nil {
-		return agent.CodexThreadBinding{}, err
+	if err != nil || !codexRuntimeReadyForRemoteTurn(binding.Runtime) {
+		binding, err = liveAgent.HandoffCodexRuntime(ctx, request)
+		if err != nil {
+			return agent.CodexThreadBinding{}, err
+		}
+		binding, err = liveAgent.CurrentCodexRuntime(request)
+		if err != nil {
+			return agent.CodexThreadBinding{}, err
+		}
 	}
 	if !codexRuntimeReadyForRemoteTurn(binding.Runtime) {
 		return binding, agent.ErrCodexRuntimeUnavailable
+	}
+	if subscriptionAgent, ok := liveAgent.(agent.CodexThreadObserverSubscriptionAgent); ok {
+		if _, err := subscriptionAgent.SubscribeCodexThread(
+			ctx, request.Ref.ConversationID, request.Ref.ThreadID,
+		); err != nil {
+			return binding, err
+		}
 	}
 	return binding, nil
 }

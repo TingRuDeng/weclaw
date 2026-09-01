@@ -11,9 +11,8 @@ import (
 const codexSessionAcquireCleanupTimeout = 3 * time.Second
 
 // bindCodexSharedRuntime ensures this frontend conversation maps to the
-// selected thread on the one shared app-server. A transport failure does not
-// roll back the durable frontend binding and is never promoted to a writer
-// conflict without authoritative server evidence.
+// selected thread on the one shared app-server. Its caller rolls back the
+// candidate frontend selection when this Host-level bind cannot be confirmed.
 func (h *Handler) bindCodexSharedRuntime(req codexSessionAcquireRequest, liveAgent agent.CodexLiveRuntimeAgent) (codexRuntimeResolution, error) {
 	request, rollout, err := h.buildCodexRuntimeRequest(req.route, req.route.threadID)
 	if err != nil {

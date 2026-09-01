@@ -37,7 +37,9 @@ func (a *ACPAgent) CurrentCodexThread(conversationID string) (string, bool) {
 	return threadID, threadID != ""
 }
 
-// UseCodexThread 将指定会话切换到已有 Codex thread，并先 resume 验证可用性。
+// UseCodexThread 将指定会话绑定到已有 Codex thread。绑定阶段只执行轻量
+// thread/read；observer 订阅或首次写入再按需 resume，避免把窗口选择变成
+// 排他的 writer 所有权操作。
 func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, threadID string) error {
 	if a.protocol != protocolCodexAppServer {
 		return fmt.Errorf("agent is not codex app-server")
@@ -51,19 +53,20 @@ func (a *ACPAgent) UseCodexThread(ctx context.Context, conversationID string, th
 			return err
 		}
 	}
-	if err := a.resumeThread(ctx, conversationID, threadID); err != nil {
-		return fmt.Errorf("resume thread %s: %w", threadID, err)
+	state, err := a.ValidateCodexThread(ctx, conversationID, threadID)
+	if err != nil {
+		return fmt.Errorf("read thread %s: %w", threadID, err)
 	}
-	a.mu.Lock()
-	a.threads[conversationID] = threadID
-	delete(a.resumeOnFirstUse, conversationID)
-	a.mu.Unlock()
 	if a.codexOwners != nil {
 		a.codexOwners.claimWeClawConversation(CodexThreadRef{
 			ConversationID: conversationID, ThreadID: threadID,
-		}, CodexThreadState{ThreadID: threadID})
+		}, state)
 	}
-	a.persistState()
+	a.bindCodexAppServerThreadForResume(
+		conversationID,
+		threadID,
+		strings.EqualFold(state.ThreadStatus, "notLoaded"),
+	)
 	return nil
 }
 
@@ -139,6 +142,10 @@ func (a *ACPAgent) createThread(ctx context.Context, conversationID string) (str
 	a.mu.Lock()
 	a.threads[conversationID] = threadID
 	delete(a.resumeOnFirstUse, conversationID)
+	if a.codexThreadSubscriptions == nil {
+		a.codexThreadSubscriptions = make(map[string]uint64)
+	}
+	a.codexThreadSubscriptions[threadID] = a.wireEpoch
 	a.mu.Unlock()
 	if a.codexOwners != nil {
 		a.codexOwners.claimWeClawConversation(CodexThreadRef{
@@ -252,6 +259,7 @@ func (a *ACPAgent) resumeThreadWithProvider(ctx context.Context, conversationID 
 	if provider != "" && returnedProvider != provider {
 		return fmt.Errorf("thread/resume provider mismatch (requested=%s, returned=%s)", provider, returnedProvider)
 	}
+	a.markCodexThreadSubscribed(conversationID, threadID)
 	return nil
 }
 

@@ -19,6 +19,8 @@ type codexWriterLeaseState struct {
 	conflict             bool
 	conflictCh           chan struct{}
 	conflictOnce         sync.Once
+	resolvedCh           chan struct{}
+	resolvedOnce         sync.Once
 }
 
 type codexWriterLease struct {
@@ -111,9 +113,20 @@ func (r *codexRuntimeOwnerRegistry) beginTurn(req CodexRuntimeRequest) (*codexWr
 		runtimeGeneration: binding.RuntimeGeneration, controlRevision: req.Intent.Revision,
 		runtime: binding.Runtime, routeKey: req.Intent.RouteKey,
 		baselineLastTurnID: strings.TrimSpace(binding.State.LastTurnID), conflictCh: make(chan struct{}),
+		resolvedCh: make(chan struct{}),
 	}
 	r.leases[req.Ref.ThreadID] = state
 	return &codexWriterLease{registry: r, threadID: req.Ref.ThreadID, state: state}, nil
+}
+
+func (r *codexRuntimeOwnerRegistry) writerLeaseResolution(threadID string) (<-chan struct{}, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lease := r.leases[strings.TrimSpace(threadID)]
+	if lease == nil {
+		return nil, false
+	}
+	return lease.resolvedCh, true
 }
 
 func (r *codexRuntimeOwnerRegistry) hasWriterLease(threadID string) bool {
@@ -127,6 +140,42 @@ func (r *codexRuntimeOwnerRegistry) writerLeaseStatus(threadID string) (exists b
 	defer r.mu.Unlock()
 	lease := r.leases[strings.TrimSpace(threadID)]
 	return lease != nil, lease != nil && lease.uncertain
+}
+
+// bindSharedHostFrontendDuringLease refreshes one frontend from the
+// authoritative daemon without replacing the local turn lease. Another
+// frontend may already have advanced the thread to a different active turn;
+// that is valid shared-Host state, not a second writer authority.
+func (r *codexRuntimeOwnerRegistry) bindSharedHostFrontendDuringLease(
+	req CodexRuntimeRequest,
+	state CodexThreadState,
+) (CodexThreadBinding, error) {
+	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
+		return CodexThreadBinding{}, err
+	}
+	threadID := strings.TrimSpace(req.Ref.ThreadID)
+	if stateThreadID := strings.TrimSpace(state.ThreadID); stateThreadID != "" && stateThreadID != threadID {
+		return CodexThreadBinding{}, fmt.Errorf("Codex authoritative thread 不一致")
+	}
+	state.ThreadID = threadID
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	binding, ok := r.threads[threadID]
+	if !ok || r.leases[threadID] == nil {
+		return binding, ErrCodexControlChanged
+	}
+	if binding.Runtime == CodexRuntimeConflict {
+		return binding, ErrCodexRuntimeConflict
+	}
+	if binding.Runtime != CodexRuntimeWeClaw {
+		return binding, ErrCodexRuntimeUnavailable
+	}
+	binding.Ref = req.Ref
+	binding.State = state
+	r.threads[threadID] = binding
+	r.conversations[req.Ref.ConversationID] = threadID
+	return binding, nil
 }
 
 // anyWriterLeaseStatus 返回整个 shared host 的 writer lease 快照。账号切换是
@@ -195,6 +244,7 @@ func (l *codexWriterLease) accept(turnID string) error {
 		log.Printf("[codex-runtime] Desktop 与 WeClaw turn 并存 thread=%q remoteTurn=%q desktopTurn=%q", l.threadID, turnID, candidate)
 	}
 	l.state.turnID = turnID
+	l.state.resolvedOnce.Do(func() { close(l.state.resolvedCh) })
 	binding := r.threads[l.threadID]
 	binding.State.Active = true
 	binding.State.ActiveTurnID = turnID
@@ -213,6 +263,19 @@ func (l *codexWriterLease) check() error {
 		return ErrCodexRuntimeConflict
 	}
 	return l.bindingErrorLocked()
+}
+
+func (l *codexWriterLease) acceptedTurnID() string {
+	if l == nil || l.registry == nil {
+		return ""
+	}
+	r := l.registry
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.leases[l.threadID] != l.state {
+		return ""
+	}
+	return strings.TrimSpace(l.state.turnID)
 }
 
 // markUncertain keeps the lease after the client observation channel is lost.
@@ -237,9 +300,10 @@ func (l *codexWriterLease) markUncertain() {
 	r.threads[l.threadID] = binding
 }
 
-// reconcileUncertainSharedHostLease releases an uncertain lease only when the
-// authoritative app-server state identifies the same turn as terminal. An
-// active or ambiguous snapshot remains fail-closed.
+// reconcileUncertainSharedHostLease releases an uncertain accepted turn when
+// the authoritative app-server is idle and either identifies that turn as the
+// latest terminal turn or has advanced beyond the pre-start history baseline.
+// Active or otherwise ambiguous snapshots remain fail-closed.
 func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLease(req CodexRuntimeRequest, state CodexThreadState) (CodexThreadBinding, bool, error) {
 	if err := validateCodexRuntimeRequestForRegistry(req, r.enforceControl); err != nil {
 		return CodexThreadBinding{}, false, err
@@ -262,7 +326,9 @@ func (r *codexRuntimeOwnerRegistry) reconcileUncertainSharedHostLease(req CodexR
 	}
 	lastTurnID := strings.TrimSpace(state.LastTurnID)
 	terminalMatch := lease.turnID != "" && lastTurnID == lease.turnID
-	if terminalMatch {
+	authoritativeHistoryAdvanced := lease.turnID != "" && lastTurnID != "" &&
+		lastTurnID != lease.baselineLastTurnID
+	if terminalMatch || authoritativeHistoryAdvanced {
 		delete(r.leases, req.Ref.ThreadID)
 		binding := r.threads[req.Ref.ThreadID]
 		binding.Ref = req.Ref
@@ -317,11 +383,16 @@ func (l *codexWriterLease) finish() {
 	if r.leases[l.threadID] != l.state {
 		return
 	}
+	l.state.resolvedOnce.Do(func() { close(l.state.resolvedCh) })
 	delete(r.leases, l.threadID)
 	binding := r.threads[l.threadID]
 	if binding.Runtime != CodexRuntimeConflict {
-		binding.State.Active = false
-		binding.State.ActiveTurnID = ""
+		activeTurnID := strings.TrimSpace(binding.State.ActiveTurnID)
+		leaseTurnID := strings.TrimSpace(l.state.turnID)
+		if !binding.State.Active || activeTurnID == "" || leaseTurnID == "" || activeTurnID == leaseTurnID {
+			binding.State.Active = false
+			binding.State.ActiveTurnID = ""
+		}
 	}
 	r.threads[l.threadID] = binding
 }

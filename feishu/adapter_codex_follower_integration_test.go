@@ -35,6 +35,11 @@ func (cardFollowerCodexAgent) HandoffCodexRuntime(
 ) (agent.CodexThreadBinding, error) {
 	return cardFollowerRuntimeBinding(req), nil
 }
+func (cardFollowerCodexAgent) ValidateCodexThread(
+	_ context.Context, _ string, threadID string,
+) (agent.CodexThreadState, error) {
+	return agent.CodexThreadState{ThreadID: threadID}, nil
+}
 func (cardFollowerCodexAgent) ReconcileCodexObservedTurn(
 	_ context.Context, req agent.CodexRuntimeRequest, state agent.CodexThreadState,
 ) (agent.CodexThreadBinding, error) {

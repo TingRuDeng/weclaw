@@ -3,96 +3,84 @@ package messaging
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
+	"strings"
 
 	"github.com/fastclaw-ai/weclaw/agent"
+	"github.com/google/uuid"
 )
 
-var errCodexFollowerAttachPreparing = errors.New("Codex 会话正在切换中")
-
 type codexTaskPreflightOptions struct {
+	ctx      context.Context
 	taskOpts codexAgentTaskOptions
 	route    codexConversationRoute
 	cancel   context.CancelFunc
 }
 
-// preflightCodexTaskStart 在登记新任务前读取共享 host 的已有 active turn。
-// frontend binding 不再执行 owner 检查，也不会弹出控制权选择卡。
+// preflightCodexTaskStart only intercepts a message when this frontend already
+// has a progress lifecycle for the same thread. A new frontend task always
+// proceeds through RunCodexTurn, which performs the authoritative read and
+// start/steer dispatch itself.
 func (h *Handler) preflightCodexTaskStart(opts codexTaskPreflightOptions) bool {
 	if opts.route.threadID == "" {
 		return false
 	}
-	if _, ok := opts.taskOpts.agent.(agent.CodexLiveRuntimeAgent); !ok {
+	if _, ok := opts.taskOpts.agent.(agent.CodexInputSteeringAgent); !ok {
 		return false
 	}
-	if h.ensureCodexSessions().isPendingFirstTurn(
-		opts.route.bindingKey, opts.route.workspaceRoot, opts.route.threadID,
-	) {
+	task, ok := h.activeTask(opts.route.conversationID)
+	if !ok {
 		return false
 	}
-	resolution, err := h.resolveBoundCodexRuntimeLocked(codexRuntimeResolveOptions{
-		route: opts.route, threadID: opts.route.threadID, ag: opts.taskOpts.agent,
-	})
-	if err != nil {
-		log.Printf("[codex-task] 共享 host 运行时快照暂不可用 thread=%q: %v", opts.route.threadID, err)
-		h.rejectCodexTaskStart(opts, err)
-		return true
-	}
-	switch resolution.Binding.Runtime {
-	case agent.CodexRuntimeDesktop, agent.CodexRuntimeWeClaw:
-		if codexResolutionActive(resolution) {
-			return h.steerMessageIntoLiveTask(opts)
-		}
+	task.mu.Lock()
+	sameThread := strings.TrimSpace(task.codexThreadID) == strings.TrimSpace(opts.route.threadID)
+	task.mu.Unlock()
+	if !sameThread {
 		return false
-	case agent.CodexRuntimeConflict:
-		h.rejectCodexTaskStart(opts, agent.ErrCodexRuntimeConflict)
-	default:
-		h.rejectCodexTaskStart(opts, agent.ErrCodexRuntimeUnavailable)
 	}
-	return true
-}
-
-func codexResolutionActive(resolution codexRuntimeResolution) bool {
-	return resolution.Binding.State.Active || resolution.Rollout.Active
+	return h.steerMessageIntoLiveTask(opts, task)
 }
 
 // steerMessageIntoLiveTask submits accepted input directly to the canonical
 // app-server turn. No WeClaw-private pending queue sits between equal frontends.
-func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions) bool {
+func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions, task *activeAgentTask) bool {
 	taskOpts := opts.taskOpts
-	state, active, err := h.startExternalCodexTaskIfActive(externalCodexTaskOptions{
-		ctx: taskOpts.ctx, actorUserID: taskOpts.userID, routeUserID: taskOpts.routeUserID,
-		agentName: taskOpts.agentName, agent: taskOpts.agent,
-		conversationID: opts.route.conversationID, bindingKey: opts.route.bindingKey,
-		threadID:      opts.route.threadID,
-		workspaceRoot: opts.route.workspaceRoot,
-		progressCfg:   taskOpts.progressCfg, reply: taskOpts.reply,
-	})
-	if err != nil {
-		h.rejectCodexTaskStart(opts, err)
-		return true
-	}
-	if !active {
+	steeringAgent, ok := taskOpts.agent.(agent.CodexInputSteeringAgent)
+	if !ok {
 		return false
 	}
-	runtimeAgent, ok := taskOpts.agent.(agent.CodexThreadRuntimeAgent)
-	if !ok {
-		h.rejectCodexTaskStart(opts, agent.ErrCodexRuntimeUnavailable)
-		return true
+	submitCtx := opts.ctx
+	if submitCtx == nil {
+		submitCtx = taskOpts.ctx
+	}
+	_, err := steeringAgent.SteerCodexInput(submitCtx, h.codexSteerInputRequest(
+		opts.route, task, taskOpts.message, taskOpts.messageKey,
+	))
+	if errors.Is(err, agent.ErrCodexNoActiveTurn) {
+		if codexTaskUsesReadOnlySynchronization(task) {
+			opts.cancel()
+			sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID,
+				"当前仅能同步 Codex 任务进度，输入未发送且不会排队。请在运行通道恢复后重新发送。")
+			return true
+		}
+		select {
+		case <-task.done:
+			return false
+		case <-submitCtx.Done():
+			opts.cancel()
+			sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID,
+				"Codex Host 已空闲，但本地上一任务的终态同步尚未完成；输入未发送且不会排队，请重新发送。")
+			return true
+		}
 	}
 	opts.cancel()
-	if err := runtimeAgent.SteerCodexThread(
-		taskOpts.ctx, opts.route.conversationID, opts.route.threadID, state.ActiveTurnID, taskOpts.message,
-	); err != nil {
+	if err != nil {
 		sendPlatformText(taskOpts.ctx, taskOpts.reply, taskOpts.userID,
-			"发送到当前共享 Codex 任务失败: "+sanitizeAgentError(err.Error()))
+			"发送到当前共享 Codex 任务失败: "+friendlyAgentError(err))
 		return true
 	}
-	h.recordTraceStage(taskOpts.trace.WithConversation(opts.route.conversationID).
-		WithThreadTurn(opts.route.threadID, state.ActiveTurnID), "task.input_accepted", "running", "input steered to active Codex turn")
 	delivery := codexGuideDeliveryResult{ReplyText: codexGuideAcceptedReply}
-	if task, ok := h.activeTask(opts.route.conversationID); ok {
+	if task != nil {
 		delivery = h.completeAcceptedCodexGuide(
 			taskOpts.ctx, task, taskOpts.reply, taskOpts.messageKey, "已接收新的补充输入。",
 		)
@@ -103,20 +91,46 @@ func (h *Handler) steerMessageIntoLiveTask(opts codexTaskPreflightOptions) bool 
 	return true
 }
 
-func (h *Handler) rejectCodexTaskStart(opts codexTaskPreflightOptions, err error) {
-	opts.cancel()
-	if errors.Is(err, errCodexFollowerAttachPreparing) {
-		sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID,
-			"Codex 会话正在切换中，请稍后重试。")
-		return
+func codexTaskUsesReadOnlySynchronization(task *activeAgentTask) bool {
+	if task == nil {
+		return false
 	}
-	if errors.Is(err, agent.ErrCodexRuntimeUnavailable) ||
-		errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown) ||
-		errors.Is(err, agent.ErrCodexDesktopDisconnected) {
-		sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID,
-			"Codex App 运行通道暂不可用，会话绑定已保留。请稍后重试，或发送 /cx status 查看状态。")
-		return
+	task.mu.Lock()
+	control := task.externalReservation
+	task.mu.Unlock()
+	if control == nil {
+		return false
 	}
-	message := fmt.Sprintf("当前 Codex 会话暂不能开始任务: %v", err)
-	sendPlatformText(opts.taskOpts.ctx, opts.taskOpts.reply, opts.taskOpts.userID, message)
+	control.mu.Lock()
+	readOnly := !control.runtime.state.Controllable
+	control.mu.Unlock()
+	return readOnly
+}
+
+func (h *Handler) codexSteerInputRequest(
+	route codexConversationRoute,
+	task *activeAgentTask,
+	message string,
+	messageKey string,
+) agent.CodexTurnRequest {
+	request := h.buildCodexRuntimeRequestForTurn(route, route.threadID)
+	return agent.CodexTurnRequest{
+		Runtime: request, Message: message,
+		AttemptID: uuid.NewString(), MessageKey: messageKey,
+		OnInputAttempt: h.ensureCodexInputAttempts().record,
+		OnTurnSteered: func(thread agent.CodexThreadRef, turnID string) error {
+			trace, traceErr := task.setTraceThreadTurn(thread.ThreadID, turnID)
+			h.recordTraceStage(trace, "task.input_accepted", "running", "input steered to active Codex turn")
+			if traceErr != nil {
+				log.Printf("[codex-task] 补充输入 trace 同步降级 thread=%q: %v", thread.ThreadID, traceErr)
+			}
+			if claimErr := h.claimCodexFollowerTurnForTask(
+				route.bindingKey, route.conversationID, thread.ThreadID, turnID, task,
+			); claimErr != nil {
+				h.recordCodexFollowerSyncFailure(route.bindingKey, thread.ThreadID, claimErr)
+				log.Printf("[codex-task] 补充输入 follower 同步降级 thread=%q: %v", thread.ThreadID, claimErr)
+			}
+			return nil
+		},
+	}
 }

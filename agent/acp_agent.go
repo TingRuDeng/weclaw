@@ -84,11 +84,12 @@ type ACPAgent struct {
 	bindingRevisions           map[string]uint64 // conversationID -> latest binding intent revision
 	bindingRevisionCounter     uint64
 	threads                    map[string]string // conversationID -> threadID (codex app-server)
+	codexThreadSubscriptions   map[string]uint64 // threadID -> subscribed wire epoch
 	codexThreadConfigs         map[string]CodexThreadConfig
 	codexThreadConfigRevisions map[string]uint64
 	codexThreadProviders       map[string]string
-	// resumeOnFirstUse marks restored thread mappings that should trigger a
-	// best-effort thread/resume call before first turn.
+	// resumeOnFirstUse marks bindings whose current client still needs a
+	// thread/resume subscription before observation or the first write.
 	resumeOnFirstUse      map[string]bool // conversationID -> resume needed
 	conversationCwds      map[string]string
 	stateFile             string // optional persisted state file path
@@ -153,6 +154,7 @@ type ACPAgent struct {
 	// permit and writer lease; account operations then either run before the
 	// preflight or observe the admitted turn and fail busy.
 	codexAdmissionMu               sync.Mutex
+	codexSubscriptionMu            sync.Mutex
 	codexRestartMu                 sync.Mutex
 	codexRestartSnapshot           CodexRestartSnapshot
 	codexRestartPrepared           bool

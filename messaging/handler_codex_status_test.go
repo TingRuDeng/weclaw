@@ -66,8 +66,10 @@ func TestCodexStatusShowsCompactWorkspaceAndSessionState(t *testing.T) {
 		"Codex 状态",
 		"工作空间: " + filepath.Base(workspace),
 		"会话: 未命名会话",
+		"绑定: 已绑定",
 		"任务: 未确认",
-		"运行: 兼容模式",
+		"运行通道: 可用（兼容模式）",
+		"进度同步: 正常",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status should contain %q, messages=%#v", want, calls.texts())

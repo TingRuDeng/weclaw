@@ -42,7 +42,7 @@ func TestCodexCxSwitchUsesCurrentWorkspaceSessionIndex(t *testing.T) {
 	}
 }
 
-func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
+func TestCodexCxSwitchRuntimeFailureKeepsPreviousBindingWithoutDraft(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
@@ -62,13 +62,13 @@ func TestCodexCxSwitchRuntimeFailureCommitsTargetWithoutDraft(t *testing.T) {
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(148, "/cx switch 1"))
 
 	thread, pending := h.ensureCodexSessions().getThread(bindingKey, workspace)
-	if thread != "thread-bad" || pending {
-		t.Fatalf("运行通道失败后仍应提交目标，thread=%q pending=%v", thread, pending)
+	if thread != "" || pending {
+		t.Fatalf("运行通道失败后目标不得提交，thread=%q pending=%v", thread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已选择，等待运行通道。") || !strings.Contains(text, "运行通道: 暂不可用") ||
+	if !strings.Contains(text, "原会话已保留") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") || strings.Contains(text, "thread-store internal error") {
-		t.Fatalf("runtime failure should keep committed selection without false conflict or draft, messages=%#v", calls.texts())
+		t.Fatalf("runtime failure should retain the previous selection without a false draft, messages=%#v", calls.texts())
 	}
 }
 
@@ -126,7 +126,7 @@ func TestCodexZeroIndexDoesNotSelectFirstWorkspace(t *testing.T) {
 	}
 }
 
-func TestCodexShortIndexCommitsBindingWhenSingleSessionRuntimeCannotBeRestored(t *testing.T) {
+func TestCodexShortIndexKeepsBindingWhenSingleSessionRuntimeCannotBeRestored(t *testing.T) {
 	h := NewHandler(nil, nil)
 	codexDir := t.TempDir()
 	root := t.TempDir()
@@ -149,13 +149,13 @@ func TestCodexShortIndexCommitsBindingWhenSingleSessionRuntimeCannotBeRestored(t
 	active, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
 	oldThread, _ := h.ensureCodexSessions().getThread(bindingKey, oldWorkspace)
 	targetThread, pending := h.ensureCodexSessions().getThread(bindingKey, targetWorkspace)
-	if active != targetWorkspace || oldThread != "thread-old" || targetThread != "thread-bad" || pending {
+	if active != oldWorkspace || oldThread != "thread-old" || targetThread != "" || pending {
 		t.Fatalf("active=%q old=%q target=%q pending=%t", active, oldThread, targetThread, pending)
 	}
 	text := strings.Join(calls.texts(), "\n")
-	if !strings.Contains(text, "已进入工作空间并绑定唯一会话") || !strings.Contains(text, "运行通道: 暂不可用") ||
+	if !strings.Contains(text, "原会话已保留") ||
 		strings.Contains(text, "已进入工作空间并创建新会话草稿") {
-		t.Fatalf("reply should report committed selection without false conflict, messages=%#v", calls.texts())
+		t.Fatalf("reply should report retained previous selection without false draft, messages=%#v", calls.texts())
 	}
 }
 

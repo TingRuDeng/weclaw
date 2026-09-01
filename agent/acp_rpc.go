@@ -15,6 +15,8 @@ import (
 
 const acpStdinWriteTimeout = 10 * time.Second
 
+var errACPWriteMayHaveDelivered = errors.New("ACP request may have been partially delivered")
+
 type acpWriteDeadlineSetter interface {
 	SetWriteDeadline(time.Time) error
 }
@@ -96,11 +98,14 @@ func (a *ACPAgent) writeJSONLineWithContext(ctx context.Context, data []byte, tr
 		}
 	}
 
-	_, err := fmt.Fprintf(stdin, "%s\n", data)
+	written, err := fmt.Fprintf(stdin, "%s\n", data)
 	if deadlineArmed {
 		if resetErr := deadlineWriter.SetWriteDeadline(time.Time{}); err == nil && resetErr != nil {
 			err = fmt.Errorf("clear ACP stdin write deadline: %w", resetErr)
 		}
+	}
+	if err != nil && written > 0 && !errors.Is(err, errACPWriteMayHaveDelivered) {
+		err = fmt.Errorf("%w: %w", errACPWriteMayHaveDelivered, err)
 	}
 	if err == nil {
 		a.recordProtocolTrace("outbound", epoch, 0, trace, data)
@@ -127,21 +132,39 @@ func (a *ACPAgent) callWithSequence(ctx context.Context, method string, params i
 	trace, _ := observability.TraceFromContext(ctx)
 	err = a.writeJSONLineWithContext(ctx, data, trace)
 	if err != nil {
+		if isCodexInputRPCMethod(method) && errors.Is(err, errACPWriteMayHaveDelivered) {
+			return nil, 0, fmt.Errorf("%w: write to stdin: %w", ErrCodexInputDeliveryUnknown, err)
+		}
 		return nil, 0, fmt.Errorf("write to stdin: %w", err)
 	}
 
 	select {
 	case <-ctx.Done():
+		if isCodexInputRPCMethod(method) {
+			return nil, 0, fmt.Errorf("%w: %w", ErrCodexInputDeliveryUnknown, ctx.Err())
+		}
 		return nil, 0, ctx.Err()
 	case resp := <-ch:
 		if resp.Error != nil {
 			msg := formatRPCErrorMessage(resp.Error, a.stderrSnapshot())
 			if resp.Cause != nil {
+				if isCodexInputRPCMethod(method) {
+					return nil, resp.Sequence, fmt.Errorf("%w: %w: %s", ErrCodexInputDeliveryUnknown, resp.Cause, msg)
+				}
 				return nil, resp.Sequence, fmt.Errorf("%w: %s", resp.Cause, msg)
 			}
 			return nil, resp.Sequence, fmt.Errorf("agent error: %s", msg)
 		}
 		return resp.Result, resp.Sequence, nil
+	}
+}
+
+func isCodexInputRPCMethod(method string) bool {
+	switch strings.TrimSpace(method) {
+	case "turn/start", "turn/steer":
+		return true
+	default:
+		return false
 	}
 }
 

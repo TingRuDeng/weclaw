@@ -190,7 +190,7 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 		trace: req.trace.WithConversation(route.conversationID).WithThreadTurn(route.threadID, ""),
 	}
 	if h.preflightCodexTaskStart(codexTaskPreflightOptions{
-		taskOpts: taskOpts, route: route, cancel: func() {},
+		ctx: controlCtx, taskOpts: taskOpts, route: route, cancel: func() {},
 	}) {
 		results <- newBroadcastAgentResult(req, name, "", true)
 		return broadcastAgentRuntime{}, false

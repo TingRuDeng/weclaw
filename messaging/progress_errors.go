@@ -18,10 +18,16 @@ func friendlyAgentError(err error) string {
 	if errors.Is(err, agent.ErrAgentSessionNotBound) {
 		return "当前窗口尚未绑定会话，请选择已有会话或发送 /new。"
 	}
+	if errors.Is(err, agent.ErrCodexInputDeliveryUnconfirmed) ||
+		errors.Is(err, agent.ErrCodexInputDeliveryUnknown) {
+		return "Codex 是否已接收这条输入暂时无法确认。为避免重复执行，我没有自动重发；请先在 Codex App 核对该会话，若确实没有这条输入再手工重发。"
+	}
 	if errors.Is(err, agent.ErrCodexDesktopDeliveryUnknown) {
 		return "共享 Codex 通道在请求发送后中断，任务是否已开始暂时无法确认。当前窗口绑定保持不变；请先发送 /cx status 确认状态，避免重复提交。"
 	}
-	if errors.Is(err, agent.ErrCodexDesktopDisconnected) {
+	if errors.Is(err, agent.ErrCodexRuntimeUnavailable) ||
+		errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown) ||
+		errors.Is(err, agent.ErrCodexDesktopDisconnected) {
 		return "共享 Codex 运行通道暂不可用；当前窗口绑定保持不变。请稍后重试，或发送 /cx status 查看状态。"
 	}
 	raw := sanitizeAgentError(err.Error())
@@ -41,7 +47,11 @@ func friendlyAgentError(err error) string {
 }
 
 func isCodexBindingPreservingTransportFailure(err error) bool {
-	return errors.Is(err, agent.ErrCodexDesktopDeliveryUnknown) ||
+	return errors.Is(err, agent.ErrCodexInputDeliveryUnconfirmed) ||
+		errors.Is(err, agent.ErrCodexInputDeliveryUnknown) ||
+		errors.Is(err, agent.ErrCodexRuntimeUnavailable) ||
+		errors.Is(err, agent.ErrCodexDesktopOwnershipUnknown) ||
+		errors.Is(err, agent.ErrCodexDesktopDeliveryUnknown) ||
 		errors.Is(err, agent.ErrCodexDesktopDisconnected)
 }
 

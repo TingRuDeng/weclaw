@@ -1,11 +1,48 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
 	"time"
 )
+
+type partialACPWriteCloser struct{}
+
+func (partialACPWriteCloser) Write(payload []byte) (int, error) {
+	return len(payload) / 2, io.ErrUnexpectedEOF
+}
+
+func (partialACPWriteCloser) Close() error { return nil }
+
+func TestACPPartialInputWriteHasUnknownDeliveryWithoutAffectingReads(t *testing.T) {
+	tests := []struct {
+		method      string
+		wantUnknown bool
+	}{
+		{method: "turn/start", wantUnknown: true},
+		{method: "turn/steer", wantUnknown: true},
+		{method: "thread/read", wantUnknown: false},
+	}
+	for _, test := range tests {
+		t.Run(test.method, func(t *testing.T) {
+			a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+			a.stdin = partialACPWriteCloser{}
+			a.wireEpoch = 1
+
+			_, _, err := a.callWithSequence(context.Background(), test.method, map[string]interface{}{})
+
+			if got := errors.Is(err, ErrCodexInputDeliveryUnknown); got != test.wantUnknown {
+				t.Fatalf("error=%v unknown=%t, want %t", err, got, test.wantUnknown)
+			}
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("error=%v, want underlying partial-write failure", err)
+			}
+		})
+	}
+}
 
 type blockingACPWriteCloser struct {
 	entered   chan struct{}

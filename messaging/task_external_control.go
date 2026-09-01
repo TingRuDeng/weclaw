@@ -103,7 +103,8 @@ func (h *Handler) resolveExternalCodexControlLocked(
 	if err != nil {
 		return target, fmt.Errorf("无法确认 Codex 实时运行位置: %w", err)
 	}
-	if binding.Runtime != agent.CodexRuntimeWeClaw {
+	if binding.Runtime != agent.CodexRuntimeWeClaw &&
+		!(req.action == "guide" && binding.Runtime == agent.CodexRuntimeDesktop) {
 		return target, fmt.Errorf("Codex 实时运行位置不可用，无法确认%s操作", req.action)
 	}
 	state, err := runtimeAgent.ReadCodexThreadState(ctx, req.key, target.threadID)

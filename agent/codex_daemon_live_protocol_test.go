@@ -40,9 +40,13 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 		approvalCallID  = "weclaw-live-approval"
 		steerMarker     = "LIVE_GATE_STEER_MARKER_7F3A"
 		finalAnswer     = "LIVE_GATE_READY " + steerMarker
+		raceSteerMarker = "LIVE_GATE_RACE_STEER_MARKER_7F3A"
+		raceFinalAnswer = "LIVE_GATE_RACE_READY " + raceSteerMarker
 	)
 	approvalTarget := filepath.Join(workspace, "LIVE_GATE_APPROVAL_7F3A")
-	modelServer := newCodexDaemonLiveModelServer(t, workspace, approvalCommand, approvalCallID, finalAnswer)
+	modelServer := newCodexDaemonLiveModelServer(
+		t, workspace, approvalCommand, approvalCallID, finalAnswer, raceFinalAnswer,
+	)
 	installCodexDaemonLiveModelConfig(t, codexHome, modelServer.URL())
 	managedBinary := codexDaemonManagedBinaryPath(codexHome)
 	clientA := newCodexDaemonLiveClient(
@@ -142,7 +146,22 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 	observerA := clientA.registerTurnObserver(threadID, eventsA)
 	observerB := clientB.registerTurnObserver(threadID, eventsB)
 	defer clientA.unregisterTurnObserver(threadID, observerA, eventsA)
-	defer clientB.unregisterTurnObserver(threadID, observerB, eventsB)
+	observerBRegistered := true
+	defer func() {
+		if observerBRegistered {
+			clientB.unregisterTurnObserver(threadID, observerB, eventsB)
+		}
+	}()
+
+	readOnlyView, err := clientB.rpc(ctx, "thread/read", map[string]interface{}{
+		"threadId": threadID, "includeTurns": true,
+	})
+	if err != nil {
+		t.Fatalf("client B thread/read before turn start: %v", err)
+	}
+	if !strings.Contains(string(readOnlyView), threadID) {
+		t.Fatalf("client B thread/read returned the wrong thread: %s", readOnlyView)
+	}
 
 	turnID := startCodexDaemonLiveTurn(t, ctx, clientA, codexTurnStartParams{
 		ThreadID:       threadID,
@@ -158,6 +177,10 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 		return event.Kind == "started"
 	}, "client A turn/started")
 	approvalA := waitForCodexDaemonLiveApproval(t, eventsA, turnID, "client A")
+	assertCodexDaemonLiveNoEvent(
+		t, eventsB, 300*time.Millisecond,
+		"client B received turn events after thread/read without thread/resume",
+	)
 	denyDecision := defaultDenyDecision(approvalA.Approval.Request.Options)
 	allowDecision := selectApprovalOption(approvalA.Approval.Request.Options, "allow")
 	approvalSettled := false
@@ -217,8 +240,13 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 	if err := approvalB.Approval.Request.Resolution.Err(); !errors.Is(err, ErrCodexInteractionResolvedExternally) {
 		t.Fatalf("client B resolution error=%v, want external resolution", err)
 	}
+	if _, err := clientB.rpc(ctx, "thread/unsubscribe", map[string]interface{}{"threadId": threadID}); err != nil {
+		t.Fatalf("client B thread/unsubscribe during active turn: %v", err)
+	}
+	clientB.unregisterTurnObserver(threadID, observerB, eventsB)
+	observerBRegistered = false
+	modelServer.releaseResponse(1)
 	assertCodexDaemonLiveUniqueCompletion(t, eventsA, turnID, "client A")
-	assertCodexDaemonLiveUniqueCompletion(t, eventsB, turnID, "client B")
 	if info, err := os.Stat(approvalTarget); err != nil || !info.IsDir() {
 		t.Fatalf("accepted command did not create the isolated marker directory: info=%v err=%v", info, err)
 	}
@@ -233,13 +261,132 @@ func TestCodexOfficialDaemonTwoClientProtocol(t *testing.T) {
 	if !strings.Contains(string(history), finalAnswer) {
 		t.Fatalf("thread history does not contain final answer marker: %s", history)
 	}
+
+	runCodexDaemonLiveConcurrentStartGate(
+		t, ctx, clientA, clientB, modelServer, workspace, raceSteerMarker, raceFinalAnswer,
+	)
+}
+
+type codexDaemonLiveStartResult struct {
+	clientName string
+	client     *ACPAgent
+	result     json.RawMessage
+	err        error
+}
+
+func runCodexDaemonLiveConcurrentStartGate(
+	t *testing.T,
+	ctx context.Context,
+	clientA *ACPAgent,
+	clientB *ACPAgent,
+	modelServer *codexDaemonLiveModelServer,
+	workspace string,
+	steerMarker string,
+	finalAnswer string,
+) {
+	t.Helper()
+	threadID := startCodexDaemonLiveThread(t, ctx, clientA, workspace)
+	for name, client := range map[string]*ACPAgent{"client A": clientA, "client B": clientB} {
+		state, err := client.readCodexAppServerThreadState(ctx, threadID)
+		if err != nil {
+			t.Fatalf("%s authoritative read before concurrent turn/start: %v", name, err)
+		}
+		if state.ThreadID != threadID || state.Active {
+			t.Fatalf("%s pre-start state=%#v, want the same idle thread", name, state)
+		}
+	}
+	ownerA := make(chan *codexTurnEvent, codexTurnEventBufferSize)
+	if !clientA.registerTurnChannel(threadID, ownerA) {
+		t.Fatalf("register client A race turn owner for %s", threadID)
+	}
+	defer clientA.unregisterTurnChannel(threadID, ownerA)
+	eventsA := make(chan *codexTurnEvent, codexTurnEventBufferSize)
+	observerA := clientA.registerTurnObserver(threadID, eventsA)
+	defer clientA.unregisterTurnObserver(threadID, observerA, eventsA)
+
+	params := codexTurnStartParams{
+		ThreadID:       threadID,
+		ApprovalPolicy: "never",
+		Input: []codexUserInput{{
+			Type: "text",
+			Text: "Return a short response for the concurrent-start protocol gate.",
+		}},
+		SandboxPolicy: map[string]interface{}{"type": "readOnly"},
+		Cwd:           workspace,
+	}
+	start := make(chan struct{})
+	results := make(chan codexDaemonLiveStartResult, 2)
+	for _, candidate := range []codexDaemonLiveStartResult{
+		{clientName: "client A", client: clientA},
+		{clientName: "client B", client: clientB},
+	} {
+		candidate := candidate
+		go func() {
+			<-start
+			result, err := candidate.client.rpc(ctx, "turn/start", params)
+			candidate.result = result
+			candidate.err = err
+			results <- candidate
+		}()
+	}
+	close(start)
+
+	first := <-results
+	second := <-results
+	var winner, loser codexDaemonLiveStartResult
+	switch {
+	case first.err == nil && second.err != nil:
+		winner, loser = first, second
+	case first.err != nil && second.err == nil:
+		winner, loser = second, first
+	default:
+		t.Fatalf(
+			"concurrent turn/start results: %s error=%v result=%s; %s error=%v result=%s; want one success and one active-turn rejection",
+			first.clientName, first.err, first.result, second.clientName, second.err, second.result,
+		)
+	}
+	if !isCodexTurnStateRace(loser.err) {
+		t.Fatalf("%s concurrent turn/start error=%v, want deterministic active-turn race", loser.clientName, loser.err)
+	}
+	turnID := codexTurnIDFromStartResult(winner.result)
+	if turnID == "" {
+		t.Fatalf("%s winning turn/start response has no turn id: %s", winner.clientName, winner.result)
+	}
+	modelServer.waitForRequest(t, 2)
+	if err := loser.client.SteerCodexThread(
+		ctx, loser.clientName, threadID, turnID,
+		"Continue the same turn and include the exact marker "+steerMarker+" in the final answer.",
+	); err != nil {
+		t.Fatalf("%s convert rejected turn/start to turn/steer: %v", loser.clientName, err)
+	}
+	modelServer.releaseResponse(2)
+	assertCodexDaemonLiveUniqueCompletion(t, eventsA, turnID, "client A concurrent-start observer")
+	modelServer.assertRaceRequests(t, steerMarker)
+
+	history, err := loser.client.rpc(ctx, "thread/read", map[string]interface{}{
+		"threadId": threadID, "includeTurns": true,
+	})
+	if err != nil {
+		t.Fatalf("%s thread/read after concurrent-start completion: %v", loser.clientName, err)
+	}
+	if !strings.Contains(string(history), finalAnswer) {
+		t.Fatalf("concurrent-start thread history does not contain final marker: %s", history)
+	}
 }
 
 type codexDaemonLiveModelServer struct {
-	server    *httptest.Server
-	mu        sync.Mutex
-	requests  [][]byte
-	responses []string
+	server        *httptest.Server
+	mu            sync.Mutex
+	requests      [][]byte
+	responses     []string
+	responseGates map[int]*codexDaemonLiveResponseGate
+}
+
+type codexDaemonLiveResponseGate struct {
+	entered     chan struct{}
+	release     chan struct{}
+	enteredOnce sync.Once
+	releaseOnce sync.Once
 }
 
 func newCodexDaemonLiveModelServer(
@@ -248,6 +395,7 @@ func newCodexDaemonLiveModelServer(
 	approvalCommand string,
 	approvalCallID string,
 	finalAnswer string,
+	raceFinalAnswer string,
 ) *codexDaemonLiveModelServer {
 	t.Helper()
 	arguments, err := json.Marshal(map[string]interface{}{
@@ -288,11 +436,52 @@ func newCodexDaemonLiveModelServer(
 				},
 				codexDaemonLiveCompletedEvent("weclaw-live-final-response"),
 			),
+			codexDaemonLiveSSE(t,
+				map[string]interface{}{
+					"type":     "response.created",
+					"response": map[string]interface{}{"id": "weclaw-live-race-initial-response"},
+				},
+				map[string]interface{}{
+					"type": "response.output_item.done",
+					"item": map[string]interface{}{
+						"type": "message", "role": "assistant", "id": "weclaw-live-race-initial-message",
+						"content": []map[string]interface{}{{"type": "output_text", "text": "LIVE_GATE_RACE_INITIAL"}},
+					},
+				},
+				codexDaemonLiveCompletedEvent("weclaw-live-race-initial-response"),
+			),
+			codexDaemonLiveSSE(t,
+				map[string]interface{}{
+					"type":     "response.created",
+					"response": map[string]interface{}{"id": "weclaw-live-race-final-response"},
+				},
+				map[string]interface{}{
+					"type": "response.output_item.done",
+					"item": map[string]interface{}{
+						"type": "message", "role": "assistant", "id": "weclaw-live-race-final-message",
+						"content": []map[string]interface{}{{"type": "output_text", "text": raceFinalAnswer}},
+					},
+				},
+				codexDaemonLiveCompletedEvent("weclaw-live-race-final-response"),
+			),
+		},
+		responseGates: map[int]*codexDaemonLiveResponseGate{
+			1: newCodexDaemonLiveResponseGate(),
+			2: newCodexDaemonLiveResponseGate(),
 		},
 	}
 	model.server = httptest.NewServer(http.HandlerFunc(model.serveHTTP))
 	t.Cleanup(model.server.Close)
+	t.Cleanup(func() {
+		for index := range model.responseGates {
+			model.releaseResponse(index)
+		}
+	})
 	return model
+}
+
+func newCodexDaemonLiveResponseGate() *codexDaemonLiveResponseGate {
+	return &codexDaemonLiveResponseGate{entered: make(chan struct{}), release: make(chan struct{})}
 }
 
 func (s *codexDaemonLiveModelServer) URL() string {
@@ -327,11 +516,44 @@ func (s *codexDaemonLiveModelServer) serveHTTP(w http.ResponseWriter, req *http.
 		return
 	}
 	response := s.responses[requestIndex]
+	gate := s.responseGates[requestIndex]
 	s.mu.Unlock()
+	if gate != nil {
+		gate.enteredOnce.Do(func() { close(gate.entered) })
+		select {
+		case <-gate.release:
+		case <-req.Context().Done():
+			return
+		}
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = io.WriteString(w, response)
+}
+
+func (s *codexDaemonLiveModelServer) waitForRequest(t *testing.T, index int) {
+	t.Helper()
+	s.mu.Lock()
+	gate := s.responseGates[index]
+	s.mu.Unlock()
+	if gate == nil {
+		t.Fatalf("local Responses fixture has no gate for request %d", index+1)
+	}
+	select {
+	case <-gate.entered:
+	case <-time.After(protocolLiveEventTimeout):
+		t.Fatalf("timed out waiting for local Responses request %d", index+1)
+	}
+}
+
+func (s *codexDaemonLiveModelServer) releaseResponse(index int) {
+	s.mu.Lock()
+	gate := s.responseGates[index]
+	s.mu.Unlock()
+	if gate != nil {
+		gate.releaseOnce.Do(func() { close(gate.release) })
+	}
 }
 
 func (s *codexDaemonLiveModelServer) assertRequests(t *testing.T, callID string, steerMarker string) {
@@ -372,6 +594,26 @@ func (s *codexDaemonLiveModelServer) assertRequests(t *testing.T, callID string,
 	}
 	if !codexDaemonLiveJSONContains(payload, steerMarker) {
 		t.Fatalf("second Responses request does not contain cross-client steer marker %q", steerMarker)
+	}
+}
+
+func (s *codexDaemonLiveModelServer) assertRaceRequests(t *testing.T, steerMarker string) {
+	t.Helper()
+	s.mu.Lock()
+	requests := make([][]byte, len(s.requests))
+	for index := range s.requests {
+		requests[index] = append([]byte(nil), s.requests[index]...)
+	}
+	s.mu.Unlock()
+	if len(requests) != 4 {
+		t.Fatalf("local Responses fixture received %d request(s), want 4 after concurrent start", len(requests))
+	}
+	var payload interface{}
+	if err := json.Unmarshal(requests[3], &payload); err != nil {
+		t.Fatalf("parse race follow-up Responses request: %v", err)
+	}
+	if !codexDaemonLiveJSONContains(payload, steerMarker) {
+		t.Fatalf("race follow-up Responses request does not contain steer marker %q", steerMarker)
 	}
 }
 
@@ -702,6 +944,17 @@ func waitForCodexDaemonLiveEvent(
 		case <-timer.C:
 			t.Fatalf("timed out waiting for %s on turn %s", label, turnID)
 		}
+	}
+}
+
+func assertCodexDaemonLiveNoEvent(t *testing.T, events <-chan *codexTurnEvent, wait time.Duration, message string) {
+	t.Helper()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case event := <-events:
+		t.Fatalf("%s: %#v", message, event)
+	case <-timer.C:
 	}
 }
 

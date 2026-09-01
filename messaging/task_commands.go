@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -156,7 +157,7 @@ func (h *Handler) steerPendingGuideToExternalCodex(req externalCodexTaskCommand)
 	if err != nil {
 		return fmt.Sprintf("Codex Agent 不可用: %v", err), true
 	}
-	runtimeAg, ok := ag.(agent.CodexThreadRuntimeAgent)
+	steeringAg, ok := ag.(agent.CodexInputSteeringAgent)
 	if !ok {
 		return "", false
 	}
@@ -191,9 +192,26 @@ func (h *Handler) steerPendingGuideToExternalCodex(req externalCodexTaskCommand)
 		}
 		return "", false
 	}
-	if err := runtimeAg.SteerCodexThread(controlCtx, req.key, target.threadID, target.turnID, pending.message); err != nil {
-		h.finishExternalCodexGuide(req.key, task, false)
-		return fmt.Sprintf("发送到当前共享 Codex 任务失败: %v", err), true
+	task.mu.Lock()
+	routeUserID, taskAgentName := task.routeUserID, task.agentName
+	task.mu.Unlock()
+	bindingKey := codexBindingKey(routeUserID, taskAgentName)
+	workspaceRoot, _ := h.ensureCodexSessions().getActiveWorkspace(bindingKey)
+	route := codexConversationRoute{
+		bindingKey: bindingKey, workspaceRoot: workspaceRoot,
+		conversationID: req.key, threadID: target.threadID,
+	}
+	_, err = steeringAg.SteerCodexInput(controlCtx, h.codexSteerInputRequest(
+		route, task, pending.message, req.messageKey,
+	))
+	if err != nil {
+		// Once a guide submission is attempted it must never remain queued: an
+		// unknown write could otherwise execute the same input again later.
+		h.finishExternalCodexGuide(req.key, task, true)
+		if errors.Is(err, agent.ErrCodexNoActiveTurn) {
+			return "当前任务刚刚结束，引导未发送且不会自动补发；请作为新消息重新发送。", true
+		}
+		return "发送到当前共享 Codex 任务失败: " + friendlyAgentError(err), true
 	}
 	h.finishExternalCodexGuide(req.key, task, true)
 	delivery := h.completeAcceptedCodexGuide(
