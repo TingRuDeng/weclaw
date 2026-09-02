@@ -487,7 +487,7 @@ func (a *ACPAgent) CancelCodexRestart(ctx context.Context) error {
 	if err := a.requireCodexDesktopAbsent(); err != nil {
 		return err
 	}
-	verified, err := a.verifyStartedCodexHost(ctx, previous, false)
+	verified, err := a.verifyStartedCodexHost(ctx, previous, false, false)
 	if err != nil {
 		return fmt.Errorf("恢复重启前的 Codex Host: %w", err)
 	}
@@ -511,13 +511,17 @@ func (a *ACPAgent) VerifyCodexRestart(ctx context.Context, previous CodexRestart
 	if err != nil {
 		return CodexRestartSnapshot{}, err
 	}
-	if topologyChanged && !a.usesOfficialCodexDaemon() {
+	managedMigration := previous.HostStopped &&
+		strings.TrimSpace(previous.HostMode) == codexHostModeDaemon &&
+		strings.TrimSpace(a.codexHostMode) == codexHostModeManaged
+	if topologyChanged && !a.usesOfficialCodexDaemon() && !managedMigration {
 		return CodexRestartSnapshot{}, fmt.Errorf(
-			"%w: 已停止的 Codex Host 拓扑发生变化，但当前不是官方 daemon，拒绝自动迁移",
+			"%w: 已停止的 Codex Host 拓扑发生变化，拒绝未经验证的自动迁移",
 			ErrCodexRuntimeUnavailable,
 		)
 	}
-	if !topologyChanged {
+	allowDaemonFrontend := topologyChanged && a.usesOfficialCodexDaemon()
+	if !allowDaemonFrontend {
 		if err := a.requireCodexDesktopAbsent(); err != nil {
 			return CodexRestartSnapshot{}, err
 		}
@@ -538,14 +542,15 @@ func (a *ACPAgent) VerifyCodexRestart(ctx context.Context, previous CodexRestart
 			return CodexRestartSnapshot{}, fmt.Errorf("%w: Codex Host socket 已变更", ErrCodexRuntimeUnavailable)
 		}
 	}
-	return a.verifyStartedCodexHost(ctx, previous, topologyChanged)
+	return a.verifyStartedCodexHost(ctx, previous, topologyChanged, allowDaemonFrontend)
 }
 
 // codexRestartTopologyChanged reports whether a persisted stopped-Host intent
-// describes a different mode or socket from the current configuration. A
-// changed topology is only safe to migrate when the current mode is later
-// proven to be the official daemon; callers still run the normal identity and
-// process-group preflight after startup.
+// describes a different mode or socket from the current configuration. Callers
+// still prove the current Host identity and process group after startup. Only
+// migration from a stopped official daemon to explicit managed mode is allowed
+// in that direction, while only migration to the official daemon may keep a
+// Desktop frontend attached.
 func (a *ACPAgent) codexRestartTopologyChanged(previous CodexRestartSnapshot) (bool, error) {
 	if !previous.HostStopped {
 		return false, nil
@@ -560,8 +565,13 @@ func (a *ACPAgent) codexRestartTopologyChanged(previous CodexRestartSnapshot) (b
 	return modeChanged || socketChanged, nil
 }
 
-func (a *ACPAgent) verifyStartedCodexHost(ctx context.Context, previous CodexRestartSnapshot, topologyChanged bool) (CodexRestartSnapshot, error) {
-	current, err := a.inspectStartedCodexHost(ctx, topologyChanged)
+func (a *ACPAgent) verifyStartedCodexHost(
+	ctx context.Context,
+	previous CodexRestartSnapshot,
+	topologyChanged bool,
+	allowDaemonFrontend bool,
+) (CodexRestartSnapshot, error) {
+	current, err := a.inspectStartedCodexHost(ctx, allowDaemonFrontend)
 	if err != nil {
 		return CodexRestartSnapshot{}, err
 	}

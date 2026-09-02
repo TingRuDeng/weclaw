@@ -107,7 +107,7 @@ weclaw codex cli resume <thread-id>
 
 该命令把 `--remote` 固定到 WeClaw 已验证的唯一共享 Host socket，只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。`daemon` 模式继续使用官方 standalone Codex；服务未运行且 Codex App 不存在时，可直接受控启动官方 daemon。`managed` 模式使用 Agent 配置中的原生 Codex 命令，因此支持通过 npm 安装和更新的 `@openai/codex`，但必须先启动 WeClaw，由服务创建并验证 Host，CLI 自己不得拉起或遗留第二个 Host。服务运行时，CLI 先通过仅限本机的控制接口准备 Host，再核对返回 socket 与本地配置完全一致。App 是当前 Host、控制接口不可达、Host 身份不明确或 managed 服务未启动时都会拒绝；仅有 App 可见不再单独构成拒绝理由，但服务必须已证明共享 Host 是 WeClaw 权威。旧 `type: cli` Codex 配置会迁移为共享 app-server，旧 `codex exec` 独立会话模式不再保留。
 
-不能访问 standalone 安装地址、但可以访问 npm registry 的 Linux 服务器，可使用用户级 npm 渠道并显式选择 managed Host：先执行 `npm install -g --prefix "$HOME/.local" @openai/codex@latest`，再把 Codex Agent 的 `command` 设为展开后的绝对路径（例如 `/home/user/.local/bin/codex`）、`codex_host_mode` 设为 `managed`、`codex_app_reuse_daemon` 设为 `false`。更新使用相同 npm 命令；切换版本前先停止或协调重启 WeClaw，不能在旧 Host 运行时直接替换其生命周期。`weclaw doctor --fix --components codex` 仍使用官方 standalone 安装器，不会擅自改变现有安装渠道。
+不能访问 standalone 安装地址、但可以访问 npm registry 的 Linux 服务器，可使用用户级 npm 渠道并显式选择 managed Host：先执行 `npm install -g --prefix "$HOME/.local" @openai/codex@latest`，再把 Codex Agent 的 `command` 设为展开后的绝对路径（例如 `/home/user/.local/bin/codex`）、`codex_host_mode` 设为 `managed`、`codex_app_reuse_daemon` 设为 `false`。更新使用相同 npm 命令；切换版本前先停止或协调重启 WeClaw，不能在旧 Host 运行时直接替换其生命周期。若协调停止留下了已确认停止的 daemon 重启事务，首次 managed 启动会在 Desktop 缺席、当前 Host 身份及多 Host 预检全部通过后迁移该事务；其他拓扑漂移仍失败关闭。`weclaw doctor --fix --components codex` 仍使用官方 standalone 安装器，不会擅自改变现有安装渠道。
 
 Codex App 和 CLI 中尚未发送的 queued follow-up 仍是各自客户端的本地草稿。只有输入被 app-server 接受后，才进入所有入口共享的顺序；WeClaw 不会把草稿当成已提交任务或自动代发。
 

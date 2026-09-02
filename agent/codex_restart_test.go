@@ -700,6 +700,65 @@ func TestVerifyCodexRestartAllowsStoppedManagedToOfficialDaemonMigration(t *test
 	}
 }
 
+func TestVerifyCodexRestartAllowsStoppedOfficialDaemonToManagedMigration(t *testing.T) {
+	a, currentSocket, cleanup := newManagedRestartFixture(t, 31)
+	defer cleanup()
+
+	stopCalls := 0
+	a.stopManagedHostCall = func(context.Context, string) error {
+		stopCalls++
+		return errors.New("must not replace the newly verified managed Host during migration")
+	}
+	previous := CodexRestartSnapshot{
+		HostMode:       codexHostModeDaemon,
+		SocketPath:     filepath.Join(filepath.Dir(currentSocket), "old-daemon.sock"),
+		HostGeneration: 30,
+		HostStopped:    true,
+	}
+	current, err := a.VerifyCodexRestart(context.Background(), previous)
+	if err != nil {
+		t.Fatalf("VerifyCodexRestart migration: %v", err)
+	}
+	if stopCalls != 0 {
+		t.Fatalf("migration stopped current Host %d time(s)", stopCalls)
+	}
+	if current.HostMode != codexHostModeManaged || current.SocketPath != currentSocket ||
+		current.HostGeneration != 31 || current.HostStopped {
+		t.Fatalf("current snapshot=%#v", current)
+	}
+}
+
+func TestVerifyCodexRestartDaemonToManagedMigrationRetainsSafetyChecks(t *testing.T) {
+	t.Run("desktop present", func(t *testing.T) {
+		a, currentSocket, cleanup := newManagedRestartFixture(t, 31)
+		defer cleanup()
+		a.codexDesktopPresenceCall = func() (bool, bool) { return true, true }
+
+		previous := CodexRestartSnapshot{
+			HostMode: codexHostModeDaemon, SocketPath: filepath.Join(filepath.Dir(currentSocket), "old-daemon.sock"),
+			HostGeneration: 30, HostStopped: true,
+		}
+		if _, err := a.VerifyCodexRestart(context.Background(), previous); !errors.Is(err, ErrCodexDesktopFrontendActive) {
+			t.Fatalf("VerifyCodexRestart error=%v, want Desktop gate", err)
+		}
+	})
+
+	t.Run("host conflict", func(t *testing.T) {
+		a, currentSocket, cleanup := newManagedRestartFixture(t, 31)
+		defer cleanup()
+		conflictErr := errors.New("conflicting Codex Host")
+		a.codexHostConflictPreflightCall = func(context.Context, int) error { return conflictErr }
+
+		previous := CodexRestartSnapshot{
+			HostMode: codexHostModeDaemon, SocketPath: filepath.Join(filepath.Dir(currentSocket), "old-daemon.sock"),
+			HostGeneration: 30, HostStopped: true,
+		}
+		if _, err := a.VerifyCodexRestart(context.Background(), previous); !errors.Is(err, conflictErr) {
+			t.Fatalf("VerifyCodexRestart error=%v, want conflict gate", err)
+		}
+	})
+}
+
 func newManagedRestartFixture(t *testing.T, generation uint64) (*ACPAgent, string, func()) {
 	t.Helper()
 	dir := newShortCodexHome(t)
