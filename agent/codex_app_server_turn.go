@@ -38,6 +38,8 @@ type codexAppServerTurnRuntime struct {
 	assembler       *codexFinalAssembler
 	diagnostics     *codexTurnDiagnostics
 	messageProgress codexMessageProgressBuffer
+	reconcileError  string
+	reconcileCount  uint64
 }
 
 func newCodexTurnMetrics(startedAt time.Time) codexTurnMetrics {
@@ -145,6 +147,8 @@ func (a *ACPAgent) logCodexTurnStart(runtime *codexAppServerTurnRuntime, elapsed
 func (a *ACPAgent) collectCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, error) {
 	detach := codexObserverDetachFromContext(runtime.opts.ctx)
 	startResultCh := runtime.startResultCh
+	reconcileTicker := time.NewTicker(codexThreadWatchReconcileInterval)
+	defer reconcileTicker.Stop()
 	for {
 		select {
 		case <-detach:
@@ -157,6 +161,19 @@ func (a *ACPAgent) collectCodexAppServerTurn(runtime *codexAppServerTurnRuntime)
 				return a.handleCodexAppServerTurnStartError(runtime, err)
 			}
 		case runtime.activeTurnID = <-runtime.turnIDCh:
+		case <-reconcileTicker.C:
+			if startResultCh != nil || strings.TrimSpace(runtime.activeTurnID) == "" {
+				continue
+			}
+			result, done, err := a.reconcileCodexAppServerTurn(runtime)
+			if !done && err != nil {
+				runtime.recordReconcileFailure(err)
+				continue
+			}
+			runtime.clearReconcileFailure()
+			if done {
+				return result, err
+			}
 		case evt := <-runtime.turnCh:
 			result, done, err := a.handleCodexAppServerEvent(runtime, evt)
 			if !done && err == nil {
@@ -181,6 +198,71 @@ func (a *ACPAgent) collectCodexAppServerTurn(runtime *codexAppServerTurnRuntime)
 			return result, err
 		}
 	}
+}
+
+// reconcileCodexAppServerTurn 用指定 turn 的权威快照弥补实时终态通知丢失。
+// 读取失败只降低同步能力；未知状态不能被猜测成终态，也不能触发自动重试输入。
+func (a *ACPAgent) reconcileCodexAppServerTurn(runtime *codexAppServerTurnRuntime) (string, bool, error) {
+	state, _, pendingFirstTurn, _, err := a.readCodexAppServerThreadSnapshotResultWithItems(
+		runtime.opts.ctx, runtime.threadID, runtime.activeTurnID, false,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	if pendingFirstTurn || strings.TrimSpace(state.LastTurnID) != strings.TrimSpace(runtime.activeTurnID) {
+		return "", false, nil
+	}
+	if state.Active {
+		return "", false, nil
+	}
+	if interrupted := interruptedCodexThreadStateError(state, runtime.threadID, runtime.activeTurnID); interrupted != nil {
+		log.Printf("[acp] turn terminal reconciled (pid=%d, thread=%s, turn=%s, conversation=%s, status=%s, elapsed=%s)",
+			runtime.pid, runtime.threadID, runtime.activeTurnID, runtime.opts.conversationID,
+			state.LastTurnStatus, runtime.metrics.elapsed(time.Now()))
+		return "", true, interrupted
+	}
+	if failed := failedCodexThreadStateError(state); failed != nil {
+		return "", true, failed
+	}
+	if !isCodexDesktopTerminalStatus(state.LastTurnStatus) {
+		return "", false, nil
+	}
+	log.Printf("[acp] turn terminal reconciled (pid=%d, thread=%s, turn=%s, conversation=%s, status=%s, elapsed=%s)",
+		runtime.pid, runtime.threadID, runtime.activeTurnID, runtime.opts.conversationID,
+		state.LastTurnStatus, runtime.metrics.elapsed(time.Now()))
+	if result := runtime.assembler.finalText(); result != "" {
+		return result, true, nil
+	}
+	state, _, _, _, err = a.readCodexAppServerThreadSnapshotResult(
+		runtime.opts.ctx, runtime.threadID, runtime.activeTurnID,
+	)
+	if err != nil {
+		return "", false, err
+	}
+	if result := strings.TrimSpace(state.LastAgentMessageText); result != "" {
+		return result, true, nil
+	}
+	return "", true, fmt.Errorf("agent returned empty response")
+}
+
+func (runtime *codexAppServerTurnRuntime) recordReconcileFailure(err error) {
+	summary := err.Error()
+	if runtime.reconcileError != summary {
+		runtime.reconcileError = summary
+		runtime.reconcileCount = 0
+	}
+	runtime.reconcileCount++
+	if runtime.reconcileCount&(runtime.reconcileCount-1) != 0 {
+		return
+	}
+	log.Printf("[acp] turn terminal reconciliation degraded (pid=%d, thread=%s, turn=%s, conversation=%s, attempts=%d): %v",
+		runtime.pid, runtime.threadID, runtime.activeTurnID, runtime.opts.conversationID,
+		runtime.reconcileCount, err)
+}
+
+func (runtime *codexAppServerTurnRuntime) clearReconcileFailure() {
+	runtime.reconcileError = ""
+	runtime.reconcileCount = 0
 }
 
 func (a *ACPAgent) handleCodexAppServerTurnStartError(runtime *codexAppServerTurnRuntime, err error) (string, error) {

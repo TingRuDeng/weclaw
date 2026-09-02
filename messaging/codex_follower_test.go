@@ -74,6 +74,27 @@ type codexFollowerCommandResultReplier struct {
 	err        error
 }
 
+type codexFollowerBlockingCommandResultReplier struct {
+	*codexFollowerCommandResultReplier
+	entered chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (r *codexFollowerBlockingCommandResultReplier) DeliverCommandResult(
+	ctx context.Context,
+	reference platform.DurableCommandResultReference,
+	text string,
+) error {
+	r.once.Do(func() { close(r.entered) })
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return r.codexFollowerCommandResultReplier.DeliverCommandResult(ctx, reference, text)
+}
+
 func (r *codexFollowerCommandResultReplier) DeliverCommandResult(_ context.Context, reference platform.DurableCommandResultReference, text string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -243,6 +264,23 @@ type codexFollowerHostTopologyAgent struct {
 	reconciled bool
 }
 
+type codexFollowerBlockingHostTopologyAgent struct {
+	*codexFollowerWatchAgent
+	entered chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (a *codexFollowerBlockingHostTopologyAgent) ReconcileCodexHostTopology(ctx context.Context) error {
+	a.once.Do(func() { close(a.entered) })
+	select {
+	case <-a.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (a *codexFollowerHostTopologyAgent) ReconcileCodexHostTopology(context.Context) error {
 	a.mu.Lock()
 	a.reconciled = true
@@ -273,6 +311,103 @@ func TestEnsureCodexFollowerRuntimeReconcilesHostBeforeAcceptingExistingBinding(
 	if err != nil || !ag.topologyReconciled() {
 		t.Fatalf("error=%v reconciled=%v", err, ag.topologyReconciled())
 	}
+}
+
+func TestCodexFollowerHostReconcileDoesNotHoldBindingLock(t *testing.T) {
+	h, base, registry, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	defer closeTestChannel(watchDone)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer closeTestChannel(release)
+	ag := &codexFollowerBlockingHostTopologyAgent{
+		codexFollowerWatchAgent: base,
+		entered:                 entered,
+		release:                 release,
+	}
+	h.SetDefaultAgent("codex", ag)
+
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- h.reconcileCodexFollower(context.Background(), registry, snapshot)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("follower did not enter Host topology reconciliation")
+	}
+
+	assertCodexFollowerControlLocksAvailable(t, h, snapshot, "Host reconciliation")
+	closeTestChannel(release)
+
+	select {
+	case err := <-reconcileDone:
+		if err != nil {
+			t.Fatalf("reconcileCodexFollower() error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follower did not finish after Host reconciliation resumed")
+	}
+}
+
+func TestCodexFollowerObserverReadinessDoesNotHoldBindingLock(t *testing.T) {
+	h, base, registry, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: true, ActiveTurnID: "turn-local-1",
+	})
+	defer closeTestChannel(watchDone)
+	readyEntered := make(chan struct{})
+	readyRelease := make(chan struct{})
+	defer closeTestChannel(readyRelease)
+	ag := &readyGateCodexLiveAgent{
+		fakeCodexLiveAgent: base.fakeCodexLiveAgent,
+		readyEntered:       readyEntered,
+		readyRelease:       readyRelease,
+	}
+	h.SetDefaultAgent("codex", ag)
+
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- h.reconcileCodexFollower(context.Background(), registry, snapshot)
+	}()
+	select {
+	case <-readyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("follower did not begin observer readiness validation")
+	}
+
+	assertCodexFollowerControlLocksAvailable(t, h, snapshot, "observer readiness validation")
+	closeTestChannel(readyRelease)
+
+	select {
+	case err := <-reconcileDone:
+		if err != nil {
+			t.Fatalf("reconcileCodexFollower() error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follower did not finish after observer became ready")
+	}
+}
+
+func assertCodexFollowerControlLocksAvailable(
+	t *testing.T,
+	h *Handler,
+	snapshot codexFollowerSnapshot,
+	phase string,
+) {
+	t.Helper()
+	lockCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	unlockBinding, err := h.lockCodexSessionBinding(lockCtx, snapshot.BindingKey, "test-command")
+	if err != nil {
+		t.Fatalf("binding lock blocked by %s: %v", phase, err)
+	}
+	defer unlockBinding()
+	unlockThread, err := h.lockCodexSessionThread(lockCtx, snapshot.Target.ThreadID, "test-command")
+	if err != nil {
+		t.Fatalf("thread lock blocked by %s: %v", phase, err)
+	}
+	unlockThread()
 }
 
 func (a *codexFollowerRuntimeBootstrapAgent) CurrentCodexRuntime(req agent.CodexRuntimeRequest) (agent.CodexThreadBinding, error) {
@@ -369,6 +504,58 @@ func TestCodexFollowerRecoveryUpdatesPendingSwitchResult(t *testing.T) {
 	current, ok := store.followerSnapshot(snapshot.BindingKey)
 	if !ok || current.Target.RuntimeRecoveryResult != nil {
 		t.Fatalf("current=%#v ok=%v, recovered result must be cleared after delivery", current, ok)
+	}
+}
+
+func TestCodexFollowerRuntimeResultDeliveryDoesNotHoldControlLocks(t *testing.T) {
+	h, _, _, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", Active: false,
+	})
+	defer closeTestChannel(watchDone)
+	reference := platform.DurableCommandResultReference{
+		Kind: "test_command_result", TargetID: "switch-card", Title: "会话切换结果",
+		Command: "/cx switch thread-local",
+	}
+	store := h.ensureCodexSessions()
+	store.mu.Lock()
+	binding := store.bindings[snapshot.BindingKey]
+	binding.FollowerAttachPhase = codexFollowerAttachReady
+	binding.Follower.RuntimeRecoveryResult = &reference
+	store.bindings[snapshot.BindingKey] = binding
+	store.mu.Unlock()
+	store.save()
+	snapshot = store.followerSnapshots()[0]
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer closeTestChannel(release)
+	reply := &codexFollowerBlockingCommandResultReplier{
+		codexFollowerCommandResultReplier: &codexFollowerCommandResultReplier{
+			Replier: platformtest.NewReplier(platform.Capabilities{Text: true}),
+		},
+		entered: entered,
+		release: release,
+	}
+	registry := newCodexFollowerTestRegistry(snapshot.Target.DeliveryRoute, reply)
+	done := make(chan error, 1)
+	go func() {
+		done <- h.reconcileCodexFollowerRuntimeResult(context.Background(), registry, snapshot)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("runtime result delivery did not start")
+	}
+
+	assertCodexFollowerControlLocksAvailable(t, h, snapshot, "runtime result delivery")
+	closeTestChannel(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconcileCodexFollowerRuntimeResult() error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runtime result delivery did not finish")
 	}
 }
 

@@ -434,15 +434,24 @@ func codexThreadStatusDoesNotExposeTurns(status string) bool {
 // readCodexAppServerThreadSnapshotResult 先读取轻量 thread 元数据，再只为目标
 // turn 分页加载 items，避免把整个 rollout 历史放进一条 ACP 响应。
 func (a *ACPAgent) readCodexAppServerThreadSnapshotResult(ctx context.Context, threadID string, targetTurnID string) (CodexThreadState, codexThreadSnapshot, bool, uint64, error) {
+	return a.readCodexAppServerThreadSnapshotResultWithItems(ctx, threadID, targetTurnID, true)
+}
+
+func (a *ACPAgent) readCodexAppServerThreadSnapshotResultWithItems(
+	ctx context.Context,
+	threadID string,
+	targetTurnID string,
+	loadItems bool,
+) (CodexThreadState, codexThreadSnapshot, bool, uint64, error) {
 	thread, pendingFirstTurn, sequence, err := a.readCodexAppServerThreadMetadata(ctx, threadID)
 	if err != nil || pendingFirstTurn {
 		return codexThreadStateFromSnapshot(thread), thread, pendingFirstTurn, sequence, err
 	}
 	state := codexThreadStateFromSnapshot(thread)
-	if codexThreadStatusDoesNotExposeTurns(state.ThreadStatus) {
+	if codexThreadStatusDoesNotExposeTurns(state.ThreadStatus) && strings.TrimSpace(targetTurnID) == "" {
 		return state, thread, false, sequence, nil
 	}
-	turn, found, turnSequence, err := a.readCodexAppServerTargetTurn(ctx, threadID, targetTurnID, true)
+	turn, found, turnSequence, err := a.readCodexAppServerTargetTurn(ctx, threadID, targetTurnID, loadItems)
 	if turnSequence > sequence {
 		sequence = turnSequence
 	}

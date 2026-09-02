@@ -31,6 +31,34 @@ func TestDiscoverLocalCodexSessionsReadsIndexAndSessionMeta(t *testing.T) {
 	}
 }
 
+func TestDiscoverLocalCodexSessionsIncludesAgentCreatedUserThread(t *testing.T) {
+	codexDir := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	writeLocalCodexIndex(t, codexDir, "thread-created", "App 新建任务", "2026-09-01T08:13:55Z")
+	writeLocalCodexSessionMeta(
+		t,
+		codexDir,
+		"thread-created",
+		workspace,
+		"2026-09-01T08:13:55Z",
+		`"Codex Desktop"`,
+		`"agent_created_thread"`,
+		`"vscode"`,
+	)
+
+	sessions := discoverLocalCodexSessions(codexDir)
+
+	if len(sessions) != 1 {
+		t.Fatalf("sessions len=%d, want 1: %#v", len(sessions), sessions)
+	}
+	if sessions[0].ThreadID != "thread-created" || sessions[0].ThreadName != "App 新建任务" {
+		t.Fatalf("session=%#v, want agent-created user thread", sessions[0])
+	}
+}
+
 func TestReadLocalCodexSessionIndexContinuesAfterLargeRecord(t *testing.T) {
 	codexDir := t.TempDir()
 	writeLocalCodexIndex(t, codexDir, "thread-large", strings.Repeat("x", 70*1024), "2026-04-29T07:00:00Z")

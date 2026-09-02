@@ -78,7 +78,7 @@ func readCodexAppProjectRecency(codexDir string, state codexAppWorkspaceState) (
 		return nil, fmt.Errorf("inspect Codex App thread database: %w", err)
 	}
 	query := "select id, cwd, recency_at_ms, source, thread_source from threads where archived=0 and preview<>'' and " +
-		"(thread_source is null or thread_source='' or thread_source='user')"
+		userVisibleCodexThreadSourceSQL()
 	output, err := exec.Command("sqlite3", "-json", dbPath, query).Output()
 	if err != nil {
 		return nil, fmt.Errorf("query Codex App project recency: %w", err)
@@ -137,7 +137,7 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) ([]code
 		return nil, true, fmt.Errorf("inspect Codex App thread database: %w", err)
 	}
 	query := "select id, title, recency_at_ms, source, thread_source from threads where archived=0 and preview<>'' and cwd=" +
-		sqliteString(workspaceRoot) + " and (thread_source is null or thread_source='' or thread_source='user') order by recency_at_ms desc, id desc"
+		sqliteString(workspaceRoot) + " and " + userVisibleCodexThreadSourceSQL() + " order by recency_at_ms desc, id desc"
 	output, err := exec.Command("sqlite3", "-json", dbPath, query).Output()
 	if err != nil {
 		return nil, true, fmt.Errorf("query Codex App workspace threads: %w", err)
@@ -170,11 +170,18 @@ func readCodexAppWorkspaceThreads(codexDir string, workspaceRoot string) ([]code
 }
 
 func isVisibleCodexAppThread(row codexAppThreadRow) bool {
-	threadSource := strings.TrimSpace(row.ThreadSource)
-	if threadSource != "" && threadSource != "user" {
+	if !isUserVisibleCodexThreadSource(row.ThreadSource) {
 		return false
 	}
 	return !localCodexSourceTextIsSubagent(row.Source)
+}
+
+func userVisibleCodexThreadSourceSQL() string {
+	clauses := []string{"thread_source is null"}
+	for _, source := range userVisibleCodexThreadSources {
+		clauses = append(clauses, "thread_source="+sqliteString(source))
+	}
+	return "(" + strings.Join(clauses, " or ") + ")"
 }
 
 func sqliteString(value string) string {

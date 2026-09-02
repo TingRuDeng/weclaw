@@ -19,6 +19,8 @@ const (
 	codexLocalIndexMaxRecordBytes = 4 * 1024 * 1024
 )
 
+var userVisibleCodexThreadSources = [...]string{"", "user", "agent_created_thread"}
+
 type localCodexIndexEntry struct {
 	ThreadName string `json:"thread_name"`
 	UpdatedAt  string `json:"updated_at"`
@@ -257,11 +259,20 @@ func isVisibleLocalCodexSession(meta localCodexSessionMeta) bool {
 	default:
 		return false
 	}
-	threadSource := strings.TrimSpace(meta.ThreadSource)
-	if threadSource != "" && threadSource != "user" {
+	if !isUserVisibleCodexThreadSource(meta.ThreadSource) {
 		return false
 	}
 	return !localCodexSourceIsSubagent(meta.Source)
+}
+
+func isUserVisibleCodexThreadSource(threadSource string) bool {
+	threadSource = strings.TrimSpace(threadSource)
+	for _, visibleSource := range userVisibleCodexThreadSources {
+		if threadSource == visibleSource {
+			return true
+		}
+	}
+	return false
 }
 
 func localCodexSourceIsSubagent(raw json.RawMessage) bool {

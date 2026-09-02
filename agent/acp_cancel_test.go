@@ -186,6 +186,54 @@ func TestChatCodexAppServerReturnsStructuredInterruptedTurn(t *testing.T) {
 	}
 }
 
+func TestChatCodexAppServerReconcilesInterruptedTurnWhenTerminalNotificationMissing(t *testing.T) {
+	t.Setenv("WECLAW_HOME", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server", "--listen", "stdio://"}, Cwd: t.TempDir(),
+	})
+	turnStarted := make(chan struct{})
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		switch method {
+		case "thread/start":
+			return json.RawMessage(`{"thread":{"id":"thread-1"}}`), nil
+		case "turn/start":
+			close(turnStarted)
+			return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded"}}}`), nil
+		case "thread/turns/list":
+			return json.RawMessage(`{"data":[{"id":"turn-1","status":"interrupted","items":[]}],"nextCursor":null}`), nil
+		case "thread/items/list":
+			return json.RawMessage(`{"data":[],"nextCursor":null}`), nil
+		case "turn/interrupt":
+			return json.RawMessage(`{}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected method %s", method)
+		}
+	}
+	createCodexThreadForTest(t, ctx, a, "conversation-1")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.chatCodexAppServer(codexAppServerTurnOptions{
+			ctx: ctx, conversationID: "conversation-1", message: "hello",
+		})
+		done <- err
+	}()
+	<-turnStarted
+
+	err := <-done
+	var interrupted *CodexTurnInterruptedError
+	if !errors.As(err, &interrupted) {
+		t.Fatalf("chat error=%v, want authoritative CodexTurnInterruptedError", err)
+	}
+	if interrupted.ThreadID != "thread-1" || interrupted.TurnID != "turn-1" {
+		t.Fatalf("interrupted=%#v, want thread-1 turn-1", interrupted)
+	}
+}
+
 func waitForCodexTurnChannel(t *testing.T, a *ACPAgent, threadID string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

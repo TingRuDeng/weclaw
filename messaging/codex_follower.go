@@ -211,7 +211,12 @@ func (h *Handler) reconcileCodexFollowerRuntimeResult(
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	bindingLocked := true
+	defer func() {
+		if bindingLocked {
+			unlock()
+		}
+	}()
 	current, ok := h.ensureCodexSessions().followerSnapshot(expected.BindingKey)
 	if !ok || current.Revision != expected.Revision ||
 		!sameCodexFrontendFollower(&current.Target, &expected.Target) {
@@ -236,7 +241,12 @@ func (h *Handler) reconcileCodexFollowerRuntimeResult(
 	deliveryCtx, cancel := context.WithTimeout(ctx, codexFollowerRuntimeResultTimeout)
 	defer cancel()
 	content := h.renderCodexFollowerRuntimeRecovered(current)
-	if err := durable.DeliverCommandResult(deliveryCtx, *current.Target.RuntimeRecoveryResult, content); err != nil {
+	reference := *current.Target.RuntimeRecoveryResult
+	// 卡片补投是外部 I/O；durable follower 快照和投递屏障负责防止旧端点
+	// 越权投递，binding 锁不应因此阻塞新的会话命令。
+	unlock()
+	bindingLocked = false
+	if err := durable.DeliverCommandResult(deliveryCtx, reference, content); err != nil {
 		return err
 	}
 	return h.ensureCodexSessions().clearFollowerRuntimeRecovery(current)
@@ -305,59 +315,17 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		reply:                        reply,
 		runtimeInactiveAuthoritative: true,
 	}
-	unlock, err := h.lockCodexSessionBinding(ctx, snapshot.BindingKey, "follow")
-	if err != nil {
-		return err
-	}
-	bindingLocked := true
-	defer func() {
-		if bindingLocked {
-			unlock()
-		}
-	}()
-	if !h.ensureCodexSessions().followerMatches(snapshot) {
-		return nil
-	}
 	liveAgent, ok := ag.(agent.CodexLiveRuntimeAgent)
 	if !ok {
 		return errCodexSessionAcquireUnsupported
-	}
-	unlockThread, err := h.lockCodexSessionThread(ctx, snapshot.Target.ThreadID, "follow")
-	if err != nil {
-		return err
-	}
-	threadLocked := true
-	defer func() {
-		if threadLocked {
-			unlockThread()
-		}
-	}()
-	h.codexFollowerDeliveryMu.RLock()
-	deliveryLocked := true
-	defer func() {
-		if deliveryLocked {
-			h.codexFollowerDeliveryMu.RUnlock()
-		}
-	}()
-	if !h.ensureCodexSessions().followerMatches(snapshot) {
-		return nil
-	}
-	if !h.codexFollowerAuthorized(registry, snapshot) {
-		h.codexFollowerDeliveryMu.RUnlock()
-		deliveryLocked = false
-		unlockThread()
-		threadLocked = false
-		unlock()
-		bindingLocked = false
-		h.detachUnauthorizedCodexFollowers(registry, snapshot.Target.DeliveryRoute.Platform,
-			snapshot.Target.DeliveryRoute.AccountID)
-		return nil
 	}
 	route := codexConversationRoute{
 		bindingKey: snapshot.BindingKey, conversationID: snapshot.ConversationID,
 		workspaceRoot: snapshot.Target.WorkspaceRoot, threadID: snapshot.Target.ThreadID,
 	}
 	request := h.buildCodexRuntimeRequestForTurn(route, snapshot.Target.ThreadID)
+	// Host 协调、权威读取和观察 turn 收敛都可能等待外部进程。它们不修改
+	// 当前窗口的 durable binding，因此不能占用 binding/thread 命令锁。
 	runtimeBinding, err := ensureCodexFollowerRuntime(ctx, liveAgent, request)
 	if err != nil {
 		return err
@@ -378,8 +346,38 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		}
 		opts.runtimeGeneration = reconciledBinding.RuntimeGeneration
 	}
-	unlockThread()
-	threadLocked = false
+	unlock, err := h.lockCodexSessionBinding(ctx, snapshot.BindingKey, "follow")
+	if err != nil {
+		return err
+	}
+	bindingLocked := true
+	defer func() {
+		if bindingLocked {
+			unlock()
+		}
+	}()
+	if !h.ensureCodexSessions().followerMatches(snapshot) {
+		return nil
+	}
+	h.codexFollowerDeliveryMu.RLock()
+	deliveryLocked := true
+	defer func() {
+		if deliveryLocked {
+			h.codexFollowerDeliveryMu.RUnlock()
+		}
+	}()
+	if !h.ensureCodexSessions().followerMatches(snapshot) {
+		return nil
+	}
+	if !h.codexFollowerAuthorized(registry, snapshot) {
+		h.codexFollowerDeliveryMu.RUnlock()
+		deliveryLocked = false
+		unlock()
+		bindingLocked = false
+		h.detachUnauthorizedCodexFollowers(registry, snapshot.Target.DeliveryRoute.Platform,
+			snapshot.Target.DeliveryRoute.AccountID)
+		return nil
+	}
 	attachTurnID := strings.TrimSpace(prepared.state.LastTurnID)
 	if prepared.active {
 		attachTurnID = strings.TrimSpace(prepared.state.ActiveTurnID)
@@ -414,6 +412,10 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 			snapshot = current
 		}
 	}
+	// Durable binding 的本地提交到此结束。后续卡片恢复、observer 启动和
+	// readiness 等待均不得阻塞 /cx switch、/cx cd 或 /cx release。
+	unlock()
+	bindingLocked = false
 	recoveredTerminal, recoveryErr := h.reconcileCodexFollowerRecoveries(snapshot, prepared.state, reply)
 	if recoveryErr != nil {
 		log.Printf("[codex-follower] 恢复旧进度卡失败 route=%q thread=%q: %v",
@@ -444,6 +446,8 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		// 后续调和会重试观察；若 turn 已结束，inactive 分支会补投确定性终态。
 		return errExternalCodexTaskReservationConflict
 	}
+	h.codexFollowerDeliveryMu.RUnlock()
+	deliveryLocked = false
 	return h.waitExternalCodexTaskReservationReady(ctx, reservation)
 }
 
