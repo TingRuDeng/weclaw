@@ -2,6 +2,13 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
+## 2026-09-02 官方 daemon 启动不能继承登录环境的宽松 umask
+
+- 触发条件：Debian 用户默认 `umask=0002`，WeClaw 协调重启并调用官方 standalone daemon `start`；上游创建的 `app-server.pid` 因此成为 `0664`，下一阶段按安全规则读取时被判定为 group/world writable，服务恢复失败。
+- 规则：WeClaw 自己发起 official daemon `start` 时必须在子进程边界固定 `umask 0077`，不能修改用户全局 umask，也不能在连接外部既有 daemon 时自动修权后接管。
+- 正确做法：使用无动态参数插值的固定 POSIX shell 包装设置 umask，再以位置参数 `exec` 官方 standalone 命令；保留既有 PID 文件类型、权限、owner、PID、启动时间和命令身份验证。回归测试运行真实子进程并读取其实际 umask，不能只断言命令字符串。
+- 来源：QA 更新到 `v0.1.298` 后协调重启，官方 daemon 进程继承 `Umask: 0002` 并创建 `0664` PID 记录；临时收紧为 `0600` 后服务恢复。
+
 ## 2026-09-02 空闲 follower 与中断恢复不得永久占用 Codex thread
 
 - 触发条件：飞书绑定空闲 thread 后，WeClaw 启动恢复无条件调用 `thread/resume`；一次真实 turn 已记录 `turn_aborted`，但中断 watcher 只检查同 root thread 的首个旧 rollout lineage，导致任务登记长期不释放。随后普通重启被“已有写入任务”拒绝，Codex App 也持续显示会话已在其他应用中打开。

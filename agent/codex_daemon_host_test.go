@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,6 +147,41 @@ func TestCodexDaemonLifecycleCommandUsesStandaloneBinary(t *testing.T) {
 	}
 	if got != binary {
 		t.Fatalf("lifecycle command=%q, want standalone %q", got, binary)
+	}
+}
+
+func TestCodexDaemonStartUsesPrivateUmask(t *testing.T) {
+	a, socketPath := newCodexDaemonTestAgent(t)
+	home := filepath.Dir(filepath.Dir(socketPath))
+	binary := codexDaemonManagedBinaryPath(home)
+	if err := os.MkdirAll(filepath.Dir(binary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\numask > \"$WECLAW_TEST_UMASK_FILE\"\nprintf '%s\\n' \"$WECLAW_TEST_DAEMON_OUTPUT\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wantOutput := testCodexDaemonOutput("started", "pid", socketPath)
+	encodedOutput, err := json.Marshal(wantOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	umaskFile := filepath.Join(home, "observed-umask")
+	a.env["WECLAW_TEST_UMASK_FILE"] = umaskFile
+	a.env["WECLAW_TEST_DAEMON_OUTPUT"] = string(encodedOutput)
+
+	if _, err := a.runCodexDaemonLifecycle(context.Background(), "start"); err != nil {
+		t.Fatalf("runCodexDaemonLifecycle() error=%v", err)
+	}
+	data, err := os.ReadFile(umaskFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := strconv.ParseUint(strings.TrimSpace(string(data)), 8, 32)
+	if err != nil {
+		t.Fatalf("parse child umask %q: %v", data, err)
+	}
+	if got != 0o077 {
+		t.Fatalf("daemon start child umask=%04o, want 0077", got)
 	}
 }
 

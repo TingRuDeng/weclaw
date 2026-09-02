@@ -401,6 +401,9 @@ func (a *ACPAgent) runCodexDaemonLifecycle(
 		return codexDaemonLifecycleOutput{}, err
 	}
 	args := codexDaemonCommandArgs(a.args, action)
+	if action == "start" {
+		command, args = codexDaemonPrivateUmaskCommand(command, args)
+	}
 	command, args = a.runAs.wrapCommand(command, args)
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = a.cwd
@@ -432,6 +435,13 @@ func (a *ACPAgent) runCodexDaemonLifecycle(
 		)
 	}
 	return parseCodexDaemonLifecycleOutput(stdout.String())
+}
+
+func codexDaemonPrivateUmaskCommand(command string, args []string) (string, []string) {
+	wrapped := make([]string, 0, len(args)+4)
+	wrapped = append(wrapped, "-c", `umask 077; exec "$@"`, "weclaw-codex-daemon", command)
+	wrapped = append(wrapped, args...)
+	return "/bin/sh", wrapped
 }
 
 func codexDaemonCommandArgs(configured []string, action string) []string {
