@@ -107,7 +107,11 @@ func (a *ACPAgent) PrepareCodexRestartWithOptions(
 	a.codexRestartMu.Unlock()
 
 	gate := a.ensureCodexAppServerGate()
-	if err := gate.beginExclusive(); err != nil {
+	beginExclusive := gate.beginExclusive
+	if opts.ForceTerminateCodex {
+		beginExclusive = gate.beginForcedExclusive
+	}
+	if err := beginExclusive(); err != nil {
 		return CodexRestartSnapshot{}, fmt.Errorf("Codex Host 正在执行任务或维护操作: %w", err)
 	}
 	available := true

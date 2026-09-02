@@ -474,6 +474,32 @@ func TestACPAgentUseCodexThreadValidatesWithReadWithoutSubscribing(t *testing.T)
 	}
 }
 
+func TestAcceptedCodexTurnMarksCurrentConnectionSubscribed(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.mu.Lock()
+	a.threads["conversation-1"] = "thread-1"
+	a.mu.Unlock()
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		if method != "turn/start" {
+			t.Fatalf("method=%q, want turn/start", method)
+		}
+		return json.RawMessage(`{"turn":{"id":"turn-1"}}`), nil
+	}
+	runtime := &codexAppServerTurnRuntime{
+		opts: codexAppServerTurnOptions{
+			ctx: context.Background(), conversationID: "conversation-1", message: "hello",
+		},
+		threadID: "thread-1", turnIDCh: make(chan string, 1),
+	}
+
+	if err := a.callCodexAppServerTurnStart(runtime); err != nil {
+		t.Fatal(err)
+	}
+	if a.codexThreadSubscriptionPending("conversation-1", "thread-1") {
+		t.Fatal("accepted turn left the current app-server subscription untracked")
+	}
+}
+
 func TestACPAgentCodexThreadControls(t *testing.T) {
 	ctx := context.Background()
 	stateFile := filepath.Join(t.TempDir(), "acp-state.json")

@@ -360,13 +360,6 @@ func externalCodexTaskOptionsFromAcquire(req codexSessionAcquireRequest) externa
 // attachCodexAcquireObserver mirrors a turn already active in the shared host.
 // Failure affects progress mirroring only; the frontend binding remains valid.
 func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, req codexSessionAcquireRequest, liveAgent agent.CodexLiveRuntimeAgent) (codexSessionAcquireResult, error) {
-	if subscriptionAgent, ok := req.agent.(agent.CodexThreadObserverSubscriptionAgent); ok {
-		if _, err := subscriptionAgent.SubscribeCodexThread(
-			req.ctx, req.route.conversationID, req.route.threadID,
-		); err != nil {
-			return h.failCodexAcquireSync(result, liveAgent, err), nil
-		}
-	}
 	opts := externalCodexTaskOptionsFromAcquire(req)
 	opts.runtimeGeneration = result.resolution.Binding.RuntimeGeneration
 	// 只有绑定事务最初确实看见过 active turn，后续的 inactive 快照才是
@@ -376,6 +369,15 @@ func (h *Handler) attachCodexAcquireObserver(result codexSessionAcquireResult, r
 	prepared, err := h.prepareExternalCodexTask(opts)
 	if err != nil {
 		return h.failCodexAcquireSync(result, liveAgent, err), nil
+	}
+	if prepared.active {
+		if subscriptionAgent, ok := req.agent.(agent.CodexThreadObserverSubscriptionAgent); ok {
+			if _, err := subscriptionAgent.SubscribeCodexThread(
+				req.ctx, req.route.conversationID, req.route.threadID,
+			); err != nil {
+				return h.failCodexAcquireSync(result, liveAgent, err), nil
+			}
+		}
 	}
 	if prepared.state.Controllable && (prepared.active || result.resolution.Binding.State.Active) {
 		controlCtx, cancel := h.codexThreadControlContext(req.ctx)

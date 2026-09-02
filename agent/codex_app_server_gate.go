@@ -75,6 +75,23 @@ func (g *codexAppServerGate) beginExclusive() error {
 	return nil
 }
 
+// beginForcedExclusive blocks new turns without waiting for already admitted
+// turns. The caller has explicit authority to terminate their Host, so those
+// permits must not veto the operation they are about to be interrupted by.
+func (g *codexAppServerGate) beginForcedExclusive() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.state == codexAppServerFailed {
+		return g.unavailableErrorLocked()
+	}
+	if g.state != codexAppServerRunning {
+		return ErrCodexWriterBusy
+	}
+	g.state = codexAppServerDraining
+	g.notifyLocked()
+	return nil
+}
+
 // finishExclusive 收敛账号切换。committed 只在新账号已验证时增加 generation；
 // available=false 用于回滚也失败的情形，后续 turn 必须 fail-closed。
 func (g *codexAppServerGate) finishExclusive(committed bool, available bool) {

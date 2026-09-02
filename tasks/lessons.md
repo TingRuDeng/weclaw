@@ -2,6 +2,13 @@
 
 > 阅读边界：本文件保留故障发生时的历史规则和证据，条目不按日期严格排序。标注“历史”或被较新条目明确取代的内容只用于解释旧故障；当前产品事实始终以 `docs/AI_CONTEXT.md`、源码和测试为准。
 
+## 2026-09-02 空闲 follower 与中断恢复不得永久占用 Codex thread
+
+- 触发条件：飞书绑定空闲 thread 后，WeClaw 启动恢复无条件调用 `thread/resume`；一次真实 turn 已记录 `turn_aborted`，但中断 watcher 只检查同 root thread 的首个旧 rollout lineage，导致任务登记长期不释放。随后普通重启被“已有写入任务”拒绝，Codex App 也持续显示会话已在其他应用中打开。
+- 规则：durable binding 只表示 route 选择。空闲恢复只读，不建立 observer 订阅；活动 turn 终态确认后幂等 `thread/unsubscribe`，但保留 binding。中断恢复必须枚举 root thread 的全部 rollout lineage，并按精确 turn ID 收敛终态。
+- 强制边界：显式 `--force` 仍要先关闭新任务 admission 并执行实时进程身份复核，但不能先经过要求 active turn 为零的普通 app-server 排他门禁，否则用户明确接受任务中断的强制语义永远无法到达。
+- 来源：本机 `v0.1.297` 的 Legado thread 在 13:17 已记录 `turn_aborted`，运行时仍报告 `active_tasks=1`；同 root thread 有五个 rollout lineage，目标 turn 位于较新的 lineage，而旧实现固定等待首个旧文件。
+
 ## 2026-08-17 完整多前端共享必须由用户意图开关强制依赖
 
 - 触发条件：原生 Codex 配置使用默认 `auto`，本机没有 official standalone；WeClaw 先启动 managed Host，随后 Codex App 又启动私有 Host，用户却合理地认为启动顺序已经保证复用。

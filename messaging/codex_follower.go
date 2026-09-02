@@ -428,7 +428,15 @@ func (h *Handler) reconcileCodexFollower(ctx context.Context, registry *platform
 		return h.ensureCodexSessions().commitFollowerTurnClaim(snapshot, prepared.state.LastTurnID)
 	}
 	if !prepared.active {
-		return h.reconcileInactiveCodexFollower(snapshot, prepared.state)
+		if err := h.reconcileInactiveCodexFollower(snapshot, prepared.state); err != nil {
+			return err
+		}
+		if subscriptionAgent, ok := ag.(agent.CodexThreadSubscriptionAgent); ok {
+			if _, err := subscriptionAgent.UnsubscribeCodexThread(ctx, snapshot.Target.ThreadID); err != nil {
+				return fmt.Errorf("释放空闲 Codex observer: %w", err)
+			}
+		}
+		return nil
 	}
 	reservation, err := h.reserveExternalCodexTask(opts, prepared)
 	if err != nil {
@@ -482,13 +490,6 @@ func ensureCodexFollowerRuntime(ctx context.Context, liveAgent agent.CodexLiveRu
 	}
 	if !codexRuntimeReadyForRemoteTurn(binding.Runtime) {
 		return binding, agent.ErrCodexRuntimeUnavailable
-	}
-	if subscriptionAgent, ok := liveAgent.(agent.CodexThreadObserverSubscriptionAgent); ok {
-		if _, err := subscriptionAgent.SubscribeCodexThread(
-			ctx, request.Ref.ConversationID, request.Ref.ThreadID,
-		); err != nil {
-			return binding, err
-		}
 	}
 	return binding, nil
 }

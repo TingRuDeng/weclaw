@@ -3,6 +3,9 @@ package messaging
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +111,44 @@ func TestCodexInterruptedTurnReportsExplicitAbort(t *testing.T) {
 	}, nil)
 	if !result.Terminal || !result.Failed || !strings.Contains(result.Err.Error(), "interrupted") ||
 		!errors.Is(result.Err, errCodexRolloutAborted) {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestCodexInterruptedTurnFindsTargetInLatestLineageRollout(t *testing.T) {
+	h := NewHandler(nil, nil)
+	codexDir := t.TempDir()
+	workspace := t.TempDir()
+	threadID := "thread-lineage"
+	turnID := "turn-latest"
+	writeLocalCodexSession(t, codexDir, threadID, workspace, "会话", "2026-09-01T01:00:00Z")
+	oldPath := localRolloutPathForTest(codexDir, threadID)
+	appendCodexRolloutRecord(t, oldPath, rolloutTaskStartedRecord("turn-old"))
+	appendCodexRolloutRecord(t, oldPath, rolloutTaskCompleteRecord("turn-old", "旧结果"))
+
+	lineageDir := filepath.Join(codexDir, "sessions", "2026", "09", "02")
+	if err := os.MkdirAll(lineageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lineagePath := filepath.Join(lineageDir, "rollout-"+threadID+"_continuation.jsonl")
+	meta := fmt.Sprintf(
+		`{"timestamp":"2026-09-02T05:11:29Z","type":"session_meta","payload":{"id":%q,"timestamp":"2026-09-02T05:11:29Z","cwd":%q,"originator":"weclaw","thread_source":"user","source":"exec"}}`+"\n",
+		threadID, workspace,
+	)
+	if err := os.WriteFile(lineagePath, []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appendCodexRolloutRecord(t, lineagePath, rolloutTaskStartedRecord(turnID))
+	appendCodexRolloutRecord(t, lineagePath, rolloutTurnAbortedRecord(turnID))
+	h.SetCodexLocalSessionDir(codexDir)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result := h.reconcileInterruptedCodexTurn(ctx, &agent.CodexTurnInterruptedError{
+		ThreadID: threadID, TurnID: turnID,
+	}, nil)
+
+	if !result.Terminal || !result.Failed || !errors.Is(result.Err, errCodexRolloutAborted) {
 		t.Fatalf("result=%#v", result)
 	}
 }

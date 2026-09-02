@@ -9,6 +9,7 @@ import (
 
 func TestUnsubscribeCodexThreadDoesNotRestartHost(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.markCodexThreadSubscribed("conversation-old", "thread-old")
 	a.stopManagedHostCall = func(context.Context, string) error {
 		t.Fatal("ordinary unsubscribe must not stop the Host")
 		return nil
@@ -51,6 +52,7 @@ func TestUnsubscribeCodexThreadSkipsEmptyThread(t *testing.T) {
 
 func TestUnsubscribeCodexThreadReturnsProtocolFailureWithoutRestart(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.markCodexThreadSubscribed("conversation-old", "thread-old")
 	wantErr := errors.New("unsubscribe unavailable")
 	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
 		return nil, wantErr
@@ -59,6 +61,38 @@ func TestUnsubscribeCodexThreadReturnsProtocolFailureWithoutRestart(t *testing.T
 	attempted, err := a.UnsubscribeCodexThread(context.Background(), "thread-old")
 	if !attempted || !errors.Is(err, wantErr) {
 		t.Fatalf("attempted=%v err=%v, want protocol failure", attempted, err)
+	}
+}
+
+func TestUnsubscribeCodexThreadIsIdempotentPerConnection(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.markCodexThreadSubscribed("conversation-idle", "thread-idle")
+	calls := 0
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		calls++
+		return json.RawMessage(`{"status":"unsubscribed"}`), nil
+	}
+
+	first, err := a.UnsubscribeCodexThread(context.Background(), "thread-idle")
+	if err != nil || !first {
+		t.Fatalf("first unsubscribe attempted=%v err=%v", first, err)
+	}
+	second, err := a.UnsubscribeCodexThread(context.Background(), "thread-idle")
+	if err != nil || second || calls != 1 {
+		t.Fatalf("second unsubscribe attempted=%v calls=%d err=%v", second, calls, err)
+	}
+}
+
+func TestUnsubscribeCodexThreadSkipsThreadNotSubscribedByCurrentConnection(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+	a.rpcCall = func(context.Context, string, interface{}) (json.RawMessage, error) {
+		t.Fatal("an idle binding that was only read must not send thread/unsubscribe")
+		return nil, nil
+	}
+
+	attempted, err := a.UnsubscribeCodexThread(context.Background(), "thread-idle")
+	if err != nil || attempted {
+		t.Fatalf("attempted=%v err=%v", attempted, err)
 	}
 }
 

@@ -68,6 +68,13 @@ func (a *ACPAgent) UnsubscribeCodexThread(ctx context.Context, threadID string) 
 	}
 	a.codexSubscriptionMu.Lock()
 	defer a.codexSubscriptionMu.Unlock()
+	a.mu.Lock()
+	subscribedEpoch, subscribed := a.codexThreadSubscriptions[threadID]
+	currentEpoch := a.wireEpoch
+	a.mu.Unlock()
+	if !subscribed || subscribedEpoch != currentEpoch {
+		return false, nil
+	}
 	_, err = a.rpc(ctx, "thread/unsubscribe", map[string]interface{}{"threadId": threadID})
 	if err != nil {
 		return true, fmt.Errorf("停止观察 Codex thread: %w", err)
@@ -77,6 +84,11 @@ func (a *ACPAgent) UnsubscribeCodexThread(ctx context.Context, threadID string) 
 }
 
 func (a *ACPAgent) markCodexThreadSubscribed(conversationID string, threadID string) {
+	a.trackCodexThreadSubscription(conversationID, threadID)
+	a.persistState()
+}
+
+func (a *ACPAgent) trackCodexThreadSubscription(conversationID string, threadID string) {
 	conversationID = strings.TrimSpace(conversationID)
 	threadID = strings.TrimSpace(threadID)
 	a.mu.Lock()
@@ -91,7 +103,6 @@ func (a *ACPAgent) markCodexThreadSubscribed(conversationID string, threadID str
 		}
 	}
 	a.mu.Unlock()
-	a.persistState()
 }
 
 func (a *ACPAgent) markCodexThreadUnsubscribed(threadID string) {

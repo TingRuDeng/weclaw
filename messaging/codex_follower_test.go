@@ -52,6 +52,27 @@ func TestCodexFollowerDefersPendingFirstTurnUntilUserMessage(t *testing.T) {
 	}
 }
 
+func TestCodexFollowerIdleBindingReleasesObservationWithoutUnbinding(t *testing.T) {
+	h, ag, registry, snapshot, watchDone := newCodexFollowerFixture(t, agent.CodexThreadState{
+		ThreadID: "thread-local", LastTurnID: "turn-done", LastTurnStatus: "completed",
+	})
+	defer close(watchDone)
+
+	if err := h.reconcileCodexFollower(context.Background(), registry, snapshot); err != nil {
+		t.Fatalf("reconcileCodexFollower() error=%v", err)
+	}
+	threads, operations := ag.threadHandoffSnapshot()
+	if len(threads) != 1 || threads[0] != "thread-local" {
+		t.Fatalf("unsubscribed threads=%v, want idle thread", threads)
+	}
+	if len(operations) != 1 || operations[0] != "unsubscribe:thread-local" {
+		t.Fatalf("operations=%v, want idle observer release", operations)
+	}
+	if _, ok := h.ensureCodexSessions().followerSnapshot(snapshot.BindingKey); !ok {
+		t.Fatal("idle observer release removed the durable frontend binding")
+	}
+}
+
 type codexFollowerTestPlatform struct {
 	name    platform.PlatformName
 	account string

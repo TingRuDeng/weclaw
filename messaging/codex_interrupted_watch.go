@@ -3,7 +3,6 @@ package messaging
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -39,71 +38,31 @@ func (h *Handler) watchInterruptedCodexRollout(ctx context.Context, interrupted 
 	return classifyCodexWatchResult(text, err, "rollout")
 }
 
-// awaitInterruptedCodexTurn 首次扫描一次历史文件，后续只增量等待目标 turn。
+// awaitInterruptedCodexTurn 扫描同一 root thread 的全部 lineage rollout，
+// 直到精确目标 turn 出现或调用方取消。
 func (h *Handler) awaitInterruptedCodexTurn(ctx context.Context, threadID string, turnID string) (codexRolloutTaskState, error) {
-	path, err := h.waitCodexRolloutPath(ctx, threadID)
-	if err != nil {
-		return codexRolloutTaskState{}, err
-	}
-	state, found, err := readCodexRolloutTaskStateForTurn(path, turnID)
-	if err != nil || found {
-		return state, err
-	}
-	return waitCodexRolloutTurnStart(ctx, state, turnID)
-}
-
-// waitCodexRolloutPath 等待共享 session 文件出现，由任务 context 控制最长时间。
-func (h *Handler) waitCodexRolloutPath(ctx context.Context, threadID string) (string, error) {
 	ticker := time.NewTicker(codexRolloutPollInterval)
 	defer ticker.Stop()
 	for {
 		h.mu.RLock()
 		dir := h.codexLocalSessionDir
 		h.mu.RUnlock()
-		path, found, err := findLocalCodexRolloutPath(dir, threadID)
-		if err != nil || found {
-			return path, err
+		paths, err := findLocalCodexRolloutPaths(dir, threadID)
+		if err != nil {
+			return codexRolloutTaskState{}, err
+		}
+		for _, path := range paths {
+			state, found, readErr := readCodexRolloutTaskStateForTurn(path, turnID)
+			if readErr != nil {
+				return state, readErr
+			}
+			if found {
+				return state, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-// waitCodexRolloutTurnStart 从已知 EOF 增量等待目标任务，其他新 turn 视为替换。
-func waitCodexRolloutTurnStart(ctx context.Context, state codexRolloutTaskState, turnID string) (codexRolloutTaskState, error) {
-	ticker := time.NewTicker(codexRolloutPollInterval)
-	defer ticker.Stop()
-	for {
-		found := false
-		next, err := readCodexRolloutEvents(state.Path, state.Offset, func(event codexRolloutEvent) error {
-			if !found {
-				if event.Kind != codexRolloutTaskStarted {
-					return nil
-				}
-				if event.TurnID != turnID {
-					return fmt.Errorf("%w: %s", errCodexRolloutTurnChanged, event.TurnID)
-				}
-				state = codexRolloutTaskState{Path: state.Path, TurnID: turnID, Active: true}
-				found = true
-			}
-			if event.Kind == codexRolloutTaskStarted && event.TurnID != turnID && state.Active {
-				return fmt.Errorf("%w: %s", errCodexRolloutTurnChanged, event.TurnID)
-			}
-			if event.Kind != codexRolloutTaskStarted || event.TurnID == turnID {
-				applyCodexRolloutEvent(&state, event)
-			}
-			return nil
-		})
-		state.Offset = next
-		if err != nil || found {
-			return state, err
-		}
-		select {
-		case <-ctx.Done():
-			return state, ctx.Err()
+			return codexRolloutTaskState{}, ctx.Err()
 		case <-ticker.C:
 		}
 	}

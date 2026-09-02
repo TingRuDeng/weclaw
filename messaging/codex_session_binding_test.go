@@ -779,6 +779,7 @@ func TestAcquireCodexSessionCardFailureKeepsBindingWritableAndMarksSyncDegraded(
 
 func TestAcquireCodexSessionSubscriptionFailureKeepsBindingWritable(t *testing.T) {
 	f := newCodexSessionBindingFixture(t)
+	f.setActiveTarget("turn-b")
 	service := &codexFollowerService{
 		failures: make(map[string]codexFollowerFailureState), resultFailures: make(map[string]codexFollowerFailureState),
 	}
@@ -816,6 +817,30 @@ func TestAcquireCodexSessionSubscriptionFailureKeepsBindingWritable(t *testing.T
 	}
 	if line := f.h.codexProgressSyncStatusLine(f.bindingKey, "thread-b"); line != "进度同步: 已降级" {
 		t.Fatalf("status line=%q, want degraded synchronization", line)
+	}
+}
+
+func TestAcquireCodexSessionIdleTargetDoesNotSubscribeObserver(t *testing.T) {
+	f := newCodexSessionBindingFixture(t)
+	ag := &failingCodexSubscriptionAgent{
+		fakeCodexLiveAgent: f.ag,
+		err:                errors.New("idle target must not subscribe"),
+	}
+	request := f.request("thread-b")
+	request.agent = ag
+	request.platform = platform.PlatformFeishu
+	request.accountID = "cli_a"
+	request.reply = &codexFollowerRouteReplier{Replier: f.reply, route: platform.DeliveryRoute{
+		Platform: platform.PlatformFeishu, AccountID: "cli_a", ChatID: "chat-a", ReplyToID: "message-a",
+	}}
+
+	result, err := f.h.acquireCodexSessionWithBindingLocked(request)
+
+	if err != nil || result.runtimeErr != nil || result.syncErr != nil || ag.calls != 0 {
+		t.Fatalf("result=%#v calls=%d err=%v", result, ag.calls, err)
+	}
+	if active, _ := f.h.ensureCodexSessions().getActiveWorkspace(f.bindingKey); active != f.workspaceB {
+		t.Fatalf("active workspace=%q, want committed idle target %q", active, f.workspaceB)
 	}
 }
 

@@ -123,6 +123,11 @@ func (a *ACPAgent) callCodexAppServerTurnStart(runtime *codexAppServerTurnRuntim
 		Cwd:               a.cwdForConversation(runtime.opts.conversationID),
 	})
 	if turnID := codexTurnIDFromStartResult(result); turnID != "" {
+		// turn/start implicitly subscribes this live app-server connection. The
+		// conversation/thread mapping was persisted before the turn began, so only
+		// update the connection-local subscription index here. In particular, an
+		// observer may detach while this RPC is still returning.
+		a.trackCodexThreadSubscription(runtime.opts.conversationID, runtime.threadID)
 		if runtime.opts.onStarted != nil {
 			if acceptErr := runtime.opts.onStarted(turnID); acceptErr != nil {
 				return a.rejectStartedCodexTurn(runtime.threadID, turnID, acceptErr)

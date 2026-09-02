@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -250,14 +251,20 @@ func codexRolloutContentText(content []struct {
 	return strings.Join(parts, "\n")
 }
 
-// findLocalCodexRolloutPath 在用户主会话目录中定位指定 thread 的 rollout。
-func findLocalCodexRolloutPath(codexDir string, threadID string) (string, bool, error) {
+// findLocalCodexRolloutPaths 按最近修改优先返回同一 root thread 的所有
+// lineage rollout。Codex 可把后续 turn 写入带 lineage 后缀的新文件，不能
+// 因为先遇到最早的 root rollout 就停止扫描。
+func findLocalCodexRolloutPaths(codexDir string, threadID string) ([]string, error) {
 	threadID = strings.TrimSpace(threadID)
 	root := filepath.Join(strings.TrimSpace(codexDir), "sessions")
 	if threadID == "" || strings.TrimSpace(codexDir) == "" {
-		return "", false, nil
+		return nil, nil
 	}
-	var found string
+	type candidate struct {
+		path    string
+		modTime int64
+	}
+	var candidates []candidate
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -267,18 +274,40 @@ func findLocalCodexRolloutPath(codexDir string, threadID string) (string, bool, 
 		}
 		meta, ok := readLocalCodexSessionMeta(path)
 		if ok && meta.ID == threadID {
-			found = path
-			return fs.SkipAll
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			candidates = append(candidates, candidate{path: path, modTime: info.ModTime().UnixNano()})
 		}
 		return nil
 	})
 	if os.IsNotExist(err) {
-		return "", false, nil
+		return nil, nil
 	}
-	if err != nil && err != fs.SkipAll {
-		return "", false, fmt.Errorf("扫描 Codex rollout 失败: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("扫描 Codex rollout 失败: %w", err)
 	}
-	return found, found != "", nil
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].modTime != candidates[j].modTime {
+			return candidates[i].modTime > candidates[j].modTime
+		}
+		return candidates[i].path > candidates[j].path
+	})
+	paths := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		paths = append(paths, candidate.path)
+	}
+	return paths, nil
+}
+
+// findLocalCodexRolloutPath 返回当前 root thread 最近活动的 lineage rollout。
+func findLocalCodexRolloutPath(codexDir string, threadID string) (string, bool, error) {
+	paths, err := findLocalCodexRolloutPaths(codexDir, threadID)
+	if err != nil || len(paths) == 0 {
+		return "", false, err
+	}
+	return paths[0], true, nil
 }
 
 // readLocalCodexRolloutTaskState 读取 Handler 配置目录中指定 thread 的共享 rollout 状态。

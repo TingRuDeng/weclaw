@@ -289,7 +289,7 @@ func TestForceCloseCodexDesktopAppStopsPresentFrontend(t *testing.T) {
 	}
 }
 
-func TestPrepareCodexRestartForceStopsCurrentUnknownHostWithoutManagedIdentity(t *testing.T) {
+func TestPrepareCodexRestartForceStopsCurrentUnknownHostDuringActiveTurn(t *testing.T) {
 	dir := newShortCodexHome(t)
 	socketPath := filepath.Join(dir, "codex.sock")
 	a := NewACPAgent(ACPAgentConfig{
@@ -302,6 +302,11 @@ func TestPrepareCodexRestartForceStopsCurrentUnknownHostWithoutManagedIdentity(t
 	a.hostCmd = &exec.Cmd{Process: &os.Process{Pid: 420}}
 	a.mu.Unlock()
 	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	permit, err := a.ensureCodexAppServerGate().acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer permit.release()
 
 	uid := uint32(os.Geteuid())
 	processes := []codexHostProcessSnapshot{{
