@@ -116,7 +116,8 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 	}
 	a.codexHostMode = a.resolveAgentCodexHostMode()
 	// auto 只有在最终落到 managed 时才允许选择 Desktop Host。official
-	// daemon 已经是唯一写入权威，Desktop bridge 在该拓扑下只负责协调。
+	// daemon 是默认共享写入权威；Desktop bridge 在该拓扑下只负责协调，
+	// 以及 active-writer 证据成立时的单 thread follower 写入。
 	// options.desktopBridge 保留包内测试对完整 Desktop Host 的显式注入语义。
 	if a.codexHostMode == codexHostModeDaemon && !options.desktopBridge {
 		a.codexDesktopHostSelection = false
@@ -159,8 +160,12 @@ func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 		return
 	}
 	a.desktopRuntime.setOwnerRegistry(a.codexOwners)
-	a.desktopRuntime.setAuthoritative(func() bool {
-		return a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop
+	a.desktopRuntime.setAuthoritative(func(threadID string) bool {
+		if a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop {
+			return true
+		}
+		binding, ok := a.codexOwners.threadBinding(strings.TrimSpace(threadID))
+		return ok && binding.Runtime == CodexRuntimeDesktop
 	})
 	a.desktopRuntime.setDisconnectHandler(a.handleCodexDesktopDisconnect)
 	a.desktopRuntime.setEventHandler(func(threadID string, events []*codexTurnEvent) {

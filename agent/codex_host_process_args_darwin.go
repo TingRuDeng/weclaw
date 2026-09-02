@@ -11,34 +11,44 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func readCodexHostProcessArgs(pid int) ([]string, error) {
+func readCodexHostProcessArgs(pid int) (string, []string, error) {
 	data, err := unix.SysctlRaw("kern.procargs2", pid)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if len(data) > codexHostSnapshotScanLimit {
-		return nil, fmt.Errorf("原始参数超过 %d 字节", codexHostSnapshotScanLimit)
+		return "", nil, fmt.Errorf("原始参数超过 %d 字节", codexHostSnapshotScanLimit)
 	}
-	return parseDarwinCodexHostArgs(data)
+	executable, args, _, err := parseDarwinProcessDetails(data)
+	return executable, args, err
 }
 
 func parseDarwinCodexHostArgs(data []byte) ([]string, error) {
-	args, _, err := parseDarwinProcessArgs(data)
+	_, args, _, err := parseDarwinProcessDetails(data)
 	return args, err
 }
 
 func parseDarwinProcessArgs(data []byte) ([]string, int, error) {
+	_, args, cursor, err := parseDarwinProcessDetails(data)
+	return args, cursor, err
+}
+
+func parseDarwinProcessDetails(data []byte) (string, []string, int, error) {
 	if len(data) < 4 {
-		return nil, 0, fmt.Errorf("kern.procargs2 输出过短")
+		return "", nil, 0, fmt.Errorf("kern.procargs2 输出过短")
 	}
 	argc := int(binary.NativeEndian.Uint32(data[:4]))
 	if argc <= 0 || argc > 1<<16 {
-		return nil, 0, fmt.Errorf("kern.procargs2 argc=%d 无效", argc)
+		return "", nil, 0, fmt.Errorf("kern.procargs2 argc=%d 无效", argc)
 	}
 	cursor := 4
 	executableEnd := bytes.IndexByte(data[cursor:], 0)
 	if executableEnd < 0 {
-		return nil, 0, fmt.Errorf("kern.procargs2 缺少 executable 终止符")
+		return "", nil, 0, fmt.Errorf("kern.procargs2 缺少 executable 终止符")
+	}
+	executable := string(data[cursor : cursor+executableEnd])
+	if executable == "" {
+		return "", nil, 0, fmt.Errorf("kern.procargs2 executable 为空")
 	}
 	cursor += executableEnd + 1
 	for cursor < len(data) && data[cursor] == 0 {
@@ -47,16 +57,16 @@ func parseDarwinProcessArgs(data []byte) ([]string, int, error) {
 	args := make([]string, 0, argc)
 	for len(args) < argc {
 		if cursor >= len(data) {
-			return nil, 0, fmt.Errorf("kern.procargs2 argv 不完整")
+			return "", nil, 0, fmt.Errorf("kern.procargs2 argv 不完整")
 		}
 		argumentEnd := bytes.IndexByte(data[cursor:], 0)
 		if argumentEnd < 0 {
-			return nil, 0, fmt.Errorf("kern.procargs2 argv 缺少终止符")
+			return "", nil, 0, fmt.Errorf("kern.procargs2 argv 缺少终止符")
 		}
 		args = append(args, string(data[cursor:cursor+argumentEnd]))
 		cursor += argumentEnd + 1
 	}
-	return args, cursor, nil
+	return executable, args, cursor, nil
 }
 
 // parseDarwinProcessEnvironmentValue returns only the requested variable so

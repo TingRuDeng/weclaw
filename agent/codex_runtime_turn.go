@@ -25,7 +25,7 @@ func (a *ACPAgent) RunCodexTurn(ctx context.Context, req CodexTurnRequest) (stri
 	return a.runCodexTurn(ctx, req, codexTurnStateRaceRetries)
 }
 
-// SteerCodexInput reads the single Host's authoritative state and submits one
+// SteerCodexInput reads the selected thread runtime's authoritative state and submits one
 // input only when the thread is active. It never starts a new turn or creates a
 // second observer; callers can fall back to RunCodexTurn after ErrCodexNoActiveTurn.
 func (a *ACPAgent) SteerCodexInput(ctx context.Context, req CodexTurnRequest) (string, error) {
@@ -271,6 +271,9 @@ func (a *ACPAgent) prepareCodexRuntimeForWrite(
 		return binding, nil
 	}
 	if err := a.resumeThread(ctx, req.Ref.ConversationID, req.Ref.ThreadID); err != nil {
+		if recovered, ok := a.recoverCodexDesktopActiveWriter(ctx, req, err); ok {
+			return recovered, nil
+		}
 		return binding, fmt.Errorf("写入前恢复 Codex thread: %w", err)
 	}
 	a.bindCodexAppServerThread(req.Ref.ConversationID, req.Ref.ThreadID)
@@ -282,6 +285,36 @@ func (a *ACPAgent) prepareCodexRuntimeForWrite(
 		return binding, fmt.Errorf("%w: Codex thread 状态为 %s", ErrCodexRuntimeUnavailable, state.ThreadStatus)
 	}
 	return a.codexOwners.activateRuntime(req, CodexRuntimeWeClaw, state)
+}
+
+// recoverCodexDesktopActiveWriter handles the Codex App Code Mode topology:
+// the official daemon can read the stored thread, while the App's verified
+// follower IPC is the only transport that can steer the process holding the
+// thread writer lock. No other resume failure is eligible for this fallback.
+func (a *ACPAgent) recoverCodexDesktopActiveWriter(
+	ctx context.Context,
+	req CodexRuntimeRequest,
+	resumeErr error,
+) (CodexThreadBinding, bool) {
+	if !a.codexDesktopCoordination || a.desktopProbe == nil || a.desktopRuntime == nil ||
+		!strings.Contains(strings.ToLower(resumeErr.Error()), "already has an active writer") {
+		return CodexThreadBinding{}, false
+	}
+	if err := a.desktopProbe.LoadHistoryForActiveWriter(ctx, req.Ref); err != nil {
+		return CodexThreadBinding{}, false
+	}
+	state, err := a.desktopRuntime.threadState(req.Ref.ThreadID)
+	state, err = validateCodexThreadSelectionState(req.Ref.ThreadID, state, err)
+	if err != nil || !state.Active || strings.TrimSpace(state.ActiveTurnID) == "" {
+		return CodexThreadBinding{}, false
+	}
+	binding, err := a.codexOwners.activateRuntime(req, CodexRuntimeDesktop, state)
+	if err != nil {
+		return CodexThreadBinding{}, false
+	}
+	log.Printf("[codex-runtime] Codex App Code Mode owns active writer; using verified Desktop follower thread=%q turn=%q",
+		req.Ref.ThreadID, state.ActiveTurnID)
+	return binding, true
 }
 
 func (a *ACPAgent) redispatchCodexTurn(ctx context.Context, req CodexTurnRequest, raceRetries int) (string, error) {

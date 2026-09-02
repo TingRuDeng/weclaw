@@ -41,6 +41,10 @@ func (f *codexDesktopOwnerProbeFake) LoadHistory(ctx context.Context, ref CodexT
 	return f.loadErr
 }
 
+func (f *codexDesktopOwnerProbeFake) LoadHistoryForActiveWriter(ctx context.Context, ref CodexThreadRef) error {
+	return f.LoadHistory(ctx, ref)
+}
+
 func (f *codexDesktopOwnerProbeFake) Presence() (bool, bool) {
 	return f.socketExists, f.processExists
 }

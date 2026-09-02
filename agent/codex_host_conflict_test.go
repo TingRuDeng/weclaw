@@ -281,6 +281,23 @@ func TestCodexHostConflictMatchesOnlyRealAppServerSubcommand(t *testing.T) {
 			want:    false,
 		},
 		{
+			name:       "Codex App Code Mode helper is not the shared conversation Host",
+			executable: "codex",
+			command:    "/Applications/Codex.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled",
+			args: []string{
+				"/Applications/Codex.app/Contents/Resources/codex",
+				"-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled",
+			},
+			want: false,
+		},
+		{
+			name:       "non App process cannot self exempt as Code Mode helper",
+			executable: "/tmp/codex",
+			command:    "/tmp/codex -c features.code_mode_host=true app-server",
+			args:       []string{"/tmp/codex", "-c", "features.code_mode_host=true", "app-server"},
+			want:       true,
+		},
+		{
 			name:       "unknown app-server option before tooling fails closed",
 			executable: "codex",
 			command:    "codex app-server --future-label daemon",

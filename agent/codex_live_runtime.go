@@ -195,5 +195,6 @@ type CodexThreadObserverSubscriptionAgent interface {
 
 type codexDesktopOwnerProbe interface {
 	LoadHistory(context.Context, CodexThreadRef) error
+	LoadHistoryForActiveWriter(context.Context, CodexThreadRef) error
 	Presence() (socketExists bool, processExists bool)
 }

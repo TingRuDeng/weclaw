@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -114,7 +115,7 @@ func TestCodexDesktopRuntimeDoesNotPublishBeforeDesktopBecomesAuthoritative(t *t
 	owners := newCodexRuntimeOwnerRegistry(nil)
 	runtime.setOwnerRegistry(owners)
 	mode := CodexRuntimeUnknown
-	runtime.setAuthoritative(func() bool { return mode == CodexRuntimeDesktop })
+	runtime.setAuthoritative(func(string) bool { return mode == CodexRuntimeDesktop })
 	runtime.trackThread("thread-1")
 
 	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 1))
@@ -126,6 +127,39 @@ func TestCodexDesktopRuntimeDoesNotPublishBeforeDesktopBecomesAuthoritative(t *t
 	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 2))
 	if binding, exists := owners.threadBinding("thread-1"); !exists || binding.Runtime != CodexRuntimeDesktop {
 		t.Fatalf("Desktop 成为权威后的 binding=%#v exists=%v", binding, exists)
+	}
+}
+
+func TestCodexDesktopRuntimePublishesForThreadScopedDesktopBinding(t *testing.T) {
+	runtime := newCodexDesktopRuntime()
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "daemon",
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: runtime, desktopBridge: true})
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	if _, err := a.codexOwners.activateRuntime(request, CodexRuntimeDesktop, CodexThreadState{
+		ThreadID: "thread-1", Model: "before",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clientConn, peerConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = peerConn.Close()
+	})
+	runtime.mu.Lock()
+	runtime.client = &codexDesktopClient{epoch: 1, conn: clientConn}
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	runtime.mu.Unlock()
+	runtime.trackThread("thread-1")
+
+	runtime.handleBroadcast(1, desktopRefreshEnvelope(t, 1))
+
+	binding, ok := a.codexOwners.threadBinding("thread-1")
+	if !ok || binding.Runtime != CodexRuntimeDesktop || binding.State.Model != "gpt-test" {
+		t.Fatalf("binding=%#v found=%v, thread-scoped Desktop events must stay authoritative", binding, ok)
 	}
 }
 

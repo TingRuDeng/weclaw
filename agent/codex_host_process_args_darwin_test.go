@@ -15,9 +15,12 @@ func TestParseDarwinCodexHostArgsPreservesArgumentBoundaries(t *testing.T) {
 		[]byte("/opt/codex\x00\x00/opt/codex\x00-C\x00/tmp/path with spaces\x00TOKEN=secret\x00")...,
 	)
 
-	got, err := parseDarwinCodexHostArgs(data)
+	executable, got, _, err := parseDarwinProcessDetails(data)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if executable != "/opt/codex" {
+		t.Fatalf("executable=%q, want kernel executable path", executable)
 	}
 	want := []string{"/opt/codex", "-C", "/tmp/path with spaces"}
 	if !reflect.DeepEqual(got, want) {

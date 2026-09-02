@@ -22,7 +22,7 @@ type codexDesktopRuntime struct {
 	actions        *codexDesktopActions
 	owners         *codexRuntimeOwnerRegistry
 	presence       func() (bool, bool)
-	authoritative  func() bool
+	authoritative  func(string) bool
 	onDisconnect   func()
 	onEvents       func(string, []*codexTurnEvent)
 	refreshHistory func(context.Context, CodexThreadRef) error
@@ -74,8 +74,8 @@ func (r *codexDesktopRuntime) setOwnerRegistry(owners *codexRuntimeOwnerRegistry
 	r.mu.Unlock()
 }
 
-// setAuthoritative 决定 Desktop 广播当前是否可更新 Host 级 runtime 权威。
-func (r *codexDesktopRuntime) setAuthoritative(authoritative func() bool) {
+// setAuthoritative 决定 Desktop 广播当前是否可更新对应 thread 的 runtime 权威。
+func (r *codexDesktopRuntime) setAuthoritative(authoritative func(string) bool) {
 	r.mu.Lock()
 	r.authoritative = authoritative
 	r.mu.Unlock()
@@ -277,17 +277,34 @@ func (r *codexDesktopRuntime) handleDisconnect(cause error) {
 
 // LoadHistory 请求 Desktop 广播目标 thread 的完整 conversation state。
 func (r *codexDesktopRuntime) LoadHistory(ctx context.Context, ref CodexThreadRef) error {
-	return r.requestHistory(ctx, ref, true)
+	return r.requestHistoryWithFollowing(ctx, ref, true, false)
+}
+
+// LoadHistoryForActiveWriter registers a follower before reading history. It
+// is reserved for the path where another Codex process has already proved it
+// owns the writer lock; registration is required for the App to route the
+// active Code Mode snapshot to this client.
+func (r *codexDesktopRuntime) LoadHistoryForActiveWriter(ctx context.Context, ref CodexThreadRef) error {
+	return r.requestHistoryWithFollowing(ctx, ref, true, true)
 }
 
 // requestHistory 请求目标完整状态，并按需等待返回 revision 完成投影。
 func (r *codexDesktopRuntime) requestHistory(ctx context.Context, ref CodexThreadRef, wait bool) error {
+	return r.requestHistoryWithFollowing(ctx, ref, wait, false)
+}
+
+func (r *codexDesktopRuntime) requestHistoryWithFollowing(
+	ctx context.Context,
+	ref CodexThreadRef,
+	wait bool,
+	forceFollowing bool,
+) error {
 	r.trackThread(ref.ThreadID)
 	client := r.ensureInitialized()
 	if err := client.Connect(ctx); err != nil {
 		return err
 	}
-	if err := r.announceFollowing(ctx, client, ref.ThreadID); err != nil {
+	if err := r.announceFollowing(ctx, client, ref.ThreadID, forceFollowing); err != nil {
 		return err
 	}
 	result, err := client.Call(ctx, "thread-follower-load-complete-history", map[string]string{
@@ -307,7 +324,12 @@ func (r *codexDesktopRuntime) requestHistory(ctx context.Context, ref CodexThrea
 
 // announceFollowing 把显式跟踪从一次性状态询问改成幂等的当前状态声明。
 // App 已先打开 thread 时不会再次询问，只有主动登记后 owner 才能回放 snapshot。
-func (r *codexDesktopRuntime) announceFollowing(ctx context.Context, client *codexDesktopClient, threadID string) error {
+func (r *codexDesktopRuntime) announceFollowing(
+	ctx context.Context,
+	client *codexDesktopClient,
+	threadID string,
+	force bool,
+) error {
 	threadID = strings.TrimSpace(threadID)
 	if client == nil || threadID == "" {
 		return ErrCodexDesktopUnavailable
@@ -316,7 +338,7 @@ func (r *codexDesktopRuntime) announceFollowing(ctx context.Context, client *cod
 	authoritative := r.authoritative
 	state := r.state
 	r.mu.Unlock()
-	if authoritative == nil || !authoritative() {
+	if !force && (authoritative == nil || !authoritative(threadID)) {
 		return nil
 	}
 	epoch := client.Epoch()
@@ -382,7 +404,8 @@ func (r *codexDesktopRuntime) Presence() (bool, bool) {
 func (r *codexDesktopRuntime) handleBroadcast(sourceEpoch uint64, envelope codexDesktopEnvelope) {
 	r.mu.Lock()
 	client, state, owners, authoritative, onEvents := r.client, r.state, r.owners, r.authoritative, r.onEvents
-	tracked := r.tracked[codexDesktopBroadcastThreadID(envelope)]
+	threadID := codexDesktopBroadcastThreadID(envelope)
+	tracked := r.tracked[threadID]
 	r.mu.Unlock()
 	if client == nil || client.Epoch() != sourceEpoch {
 		return
@@ -405,7 +428,7 @@ func (r *codexDesktopRuntime) handleBroadcast(sourceEpoch uint64, envelope codex
 	// Publish while the client holds its epoch lock so installConnection cannot
 	// advance the generation between validation and owner/task notification.
 	client.publishForEpoch(sourceEpoch, func() {
-		isAuthoritative := authoritative == nil || authoritative()
+		isAuthoritative := authoritative == nil || authoritative(threadID)
 		if owners != nil && update.Applied && isAuthoritative {
 			owners.observeDesktopSnapshot(update.Snapshot.ThreadID, update.Snapshot.Revision, update.Snapshot.State)
 		}
@@ -419,10 +442,10 @@ func (r *codexDesktopRuntime) answerFollowingStatusRequest(
 	sourceEpoch uint64,
 	envelope codexDesktopEnvelope,
 	client *codexDesktopClient,
-	authoritative func() bool,
+	authoritative func(string) bool,
 	tracked bool,
 ) {
-	isAuthoritative := authoritative != nil && authoritative()
+	isAuthoritative := authoritative != nil && authoritative(codexDesktopBroadcastThreadID(envelope))
 	status, ok := codexDesktopFollowingStatusResponse(envelope, tracked, isAuthoritative)
 	if !ok {
 		return

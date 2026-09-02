@@ -8,13 +8,19 @@ import (
 	"strconv"
 )
 
-func readCodexHostProcessArgs(pid int) ([]string, error) {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+func readCodexHostProcessArgs(pid int) (string, []string, error) {
+	processPath := "/proc/" + strconv.Itoa(pid)
+	executable, err := os.Readlink(processPath + "/exe")
 	if err != nil {
-		return nil, err
+		return "", nil, err
+	}
+	data, err := os.ReadFile(processPath + "/cmdline")
+	if err != nil {
+		return "", nil, err
 	}
 	if len(data) > codexHostSnapshotScanLimit {
-		return nil, fmt.Errorf("原始参数超过 %d 字节", codexHostSnapshotScanLimit)
+		return "", nil, fmt.Errorf("原始参数超过 %d 字节", codexHostSnapshotScanLimit)
 	}
-	return parseNullTerminatedCodexHostArgs(data)
+	args, err := parseNullTerminatedCodexHostArgs(data)
+	return executable, args, err
 }

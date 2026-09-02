@@ -672,7 +672,6 @@ func installCodexDaemonLiveModelConfig(t *testing.T, codexHome string, serverURL
 	}
 	config := []byte(fmt.Sprintf(`model = "mock-model"
 model_provider = "weclaw_live"
-approval_policy = "untrusted"
 sandbox_mode = "read-only"
 
 [model_providers.weclaw_live]

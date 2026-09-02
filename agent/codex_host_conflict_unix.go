@@ -36,13 +36,14 @@ func systemCodexHostProcessSnapshot(ctx context.Context, allowedUIDs map[uint32]
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		args, err := readCodexHostProcessArgs(process.PID)
+		executable, args, err := readCodexHostProcessArgs(process.PID)
 		if err != nil {
 			if codexHostProcessArgsGone(err) {
 				continue
 			}
 			return nil, fmt.Errorf("读取候选 Codex Host PID %d 原始参数: %w", process.PID, err)
 		}
+		process.Executable = executable
 		process.Args = args
 		filtered = append(filtered, process)
 	}

@@ -405,15 +405,22 @@ func collectCodexHostProcessGroups(
 
 func codexAppServerHostProcess(executable, command string, exactArgs ...[]string) bool {
 	var (
-		args []string
-		ok   bool
+		args             []string
+		ok               bool
+		helperExecutable = strings.Trim(executable, "\"'")
 	)
 	if len(exactArgs) > 0 && exactArgs[0] != nil {
+		if !filepath.IsAbs(helperExecutable) && len(exactArgs[0]) > 0 {
+			helperExecutable = strings.Trim(exactArgs[0][0], "\"'")
+		}
 		args, ok = codexHostExactCommandArgs(executable, exactArgs[0])
 	} else {
 		args, ok = codexHostCommandArgs(executable, command)
 	}
 	if !ok {
+		return false
+	}
+	if codexAppCodeModeHelperProcess(helperExecutable, args) {
 		return false
 	}
 	for index := 0; index < len(args); index++ {
@@ -442,6 +449,27 @@ func codexAppServerHostProcess(executable, command string, exactArgs ...[]string
 			return false
 		}
 		return codexAppServerArgsRunHost(args[index+1:])
+	}
+	return false
+}
+
+func codexAppCodeModeHelperProcess(executable string, args []string) bool {
+	path := strings.ToLower(filepath.ToSlash(strings.Trim(executable, "\"'")))
+	if !strings.Contains(path, "/codex.app/") && !strings.Contains(path, "/chatgpt.app/") {
+		return false
+	}
+	for index := 0; index < len(args); index++ {
+		field := strings.Trim(args[index], "\"'")
+		if field == "-c" || field == "--config" {
+			if index+1 < len(args) && strings.Trim(args[index+1], "\"'") == "features.code_mode_host=true" {
+				return true
+			}
+			index++
+			continue
+		}
+		if field == "-c=features.code_mode_host=true" || field == "--config=features.code_mode_host=true" {
+			return true
+		}
 	}
 	return false
 }

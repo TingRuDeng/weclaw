@@ -537,8 +537,11 @@ func stopCodexDaemonLiveUpdater(ctx context.Context, agent *ACPAgent, runtime *c
 	return stopCodexDaemonLiveUpdaterWithDeps(ctx, runtime.codexHome, codexDaemonLiveUpdaterStopDeps{
 		readRecord:     agent.readCodexDaemonPIDRecord,
 		inspectProcess: inspectCodexHostProcess,
-		readArgs:       readCodexHostProcessArgs,
-		processAlive:   codexHostProcessAlive,
+		readArgs: func(pid int) ([]string, error) {
+			_, args, err := readCodexHostProcessArgs(pid)
+			return args, err
+		},
+		processAlive: codexHostProcessAlive,
 		signalProcess: func(pid int, signal syscall.Signal) error {
 			return syscall.Kill(pid, signal)
 		},

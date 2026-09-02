@@ -497,7 +497,7 @@ func TestACPAgentStartPrefersRunningOfficialDaemonOverDesktopBridge(t *testing.T
 func TestCodexDesktopRuntimeAnswersFollowingStatusForTrackedAuthoritativeThread(t *testing.T) {
 	response := make(chan codexDesktopEnvelope, 1)
 	runtime := newCodexDesktopRuntime()
-	runtime.setAuthoritative(func() bool { return true })
+	runtime.setAuthoritative(func(string) bool { return true })
 	runtime.trackThread("thread-1")
 	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		serveCodexDesktopTestInitialize(t, conn, "weclaw-client")
@@ -538,7 +538,7 @@ func TestCodexDesktopRuntimeAnswersFollowingStatusForTrackedAuthoritativeThread(
 
 func TestCodexDesktopLoadHistoryActivelyRegistersLateFollower(t *testing.T) {
 	runtime := newCodexDesktopRuntime()
-	runtime.setAuthoritative(func() bool { return true })
+	runtime.setAuthoritative(func(string) bool { return true })
 	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		serveCodexDesktopTestInitialize(t, conn, "weclaw-client")
 		first := readCodexDesktopTestEnvelope(t, conn)
@@ -592,9 +592,59 @@ func TestCodexDesktopLoadHistoryActivelyRegistersLateFollower(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopActiveWriterRecoveryRegistersFollowerBeforeHistory(t *testing.T) {
+	runtime := newCodexDesktopRuntime()
+	runtime.setAuthoritative(func(string) bool { return false })
+	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
+		serveCodexDesktopTestInitialize(t, conn, "weclaw-client")
+		followingEnvelope := readCodexDesktopTestEnvelope(t, conn)
+		if followingEnvelope.Method != "thread-stream-following-changed" {
+			t.Errorf("first method=%q, want follower registration", followingEnvelope.Method)
+			return
+		}
+		var following struct {
+			ConversationID string `json:"conversationId"`
+			Following      bool   `json:"following"`
+		}
+		if err := json.Unmarshal(followingEnvelope.Params, &following); err != nil ||
+			following.ConversationID != "thread-1" || !following.Following {
+			t.Errorf("following params=%#v err=%v", following, err)
+			return
+		}
+		snapshot := desktopRefreshEnvelope(t, 1)
+		snapshot.SourceClientID = "desktop-client"
+		writeCodexDesktopTestEnvelope(t, conn, snapshot)
+		historyRequest := readCodexDesktopTestEnvelope(t, conn)
+		if historyRequest.Method != "thread-follower-load-complete-history" {
+			t.Errorf("second method=%q, want history load", historyRequest.Method)
+			return
+		}
+		writeCodexDesktopTestSuccess(t, conn, codexDesktopTestResponse{
+			requestID: historyRequest.RequestID,
+			value:     map[string]uint64{"revision": 1},
+		})
+	}))
+	options.onBroadcast = runtime.handleBroadcast
+	client := newCodexDesktopClient(options)
+	runtime.mu.Lock()
+	runtime.client = client
+	runtime.state = newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now})
+	runtime.mu.Unlock()
+	t.Cleanup(func() { _ = client.Close() })
+
+	err := runtime.LoadHistoryForActiveWriter(context.Background(), CodexThreadRef{ThreadID: "thread-1"})
+
+	if err != nil {
+		t.Fatalf("LoadHistoryForActiveWriter() error = %v", err)
+	}
+	if snapshot, ok := runtime.state.snapshot("thread-1"); !ok || snapshot.Revision != 1 {
+		t.Fatalf("snapshot=%#v found=%v", snapshot, ok)
+	}
+}
+
 func TestCodexDesktopLoadHistoryDoesNotRegisterFollowerWhenDesktopIsNotAuthoritative(t *testing.T) {
 	runtime := newCodexDesktopRuntime()
-	runtime.setAuthoritative(func() bool { return false })
+	runtime.setAuthoritative(func(string) bool { return false })
 	options := codexDesktopTestOptions(codexDesktopTestDial(t, func(conn net.Conn, _ int) {
 		serveCodexDesktopTestInitialize(t, conn, "weclaw-client")
 		request := readCodexDesktopTestEnvelope(t, conn)

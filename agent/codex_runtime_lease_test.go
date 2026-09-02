@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -867,6 +868,118 @@ func TestRunCodexTurnResumesNotLoadedAfterAuthorityRead(t *testing.T) {
 	wantPrefix := []string{"thread/read", "thread/resume", "thread/read", "thread/turns/list", "turn/start"}
 	if !reflect.DeepEqual(methods, wantPrefix) {
 		t.Fatalf("methods=%v, want %v", methods, wantPrefix)
+	}
+}
+
+func TestRunCodexTurnUsesDesktopFollowerWhenCodeModeHostOwnsWriter(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	a.codexDesktopCoordination = true
+	a.codexDesktopHostSelection = false
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+	caller := &codexDesktopActionCaller{result: json.RawMessage(`{}`)}
+	actions := newCodexDesktopActions(caller, func() string { return "sender-1" })
+	state := newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now, actions: actions})
+	raw := desktopStateFixture("thread-1", "active")
+	raw["turns"] = []any{desktopTurnFixture("turn-desktop", "inProgress", nil)}
+	if _, err := state.applySnapshot(codexDesktopSnapshotSpec{
+		threadID: "thread-1", epoch: 1, revision: 1, raw: raw,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.desktopRuntime = &codexDesktopRuntime{state: state, actions: actions}
+
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded"}}}`), nil
+		case "thread/resume":
+			return nil, fmt.Errorf("agent error: thread thread-1 already has an active writer")
+		default:
+			return nil, fmt.Errorf("daemon must not receive %s after the Desktop writer is identified", method)
+		}
+	}
+	dispatchCodexRuntimeTestCompletion(a, "thread-1", "turn-desktop", "补充输入已处理")
+
+	reply, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "补充当前 App 任务",
+	})
+
+	if err != nil || reply != "补充输入已处理" {
+		t.Fatalf("RunCodexTurn reply=%q error=%v", reply, err)
+	}
+	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/resume"}) {
+		t.Fatalf("daemon methods=%v, want read then one resume attempt", methods)
+	}
+	if probe.loadCalls != 1 {
+		t.Fatalf("Desktop history loads=%d, want 1", probe.loadCalls)
+	}
+	if len(caller.calls) != 1 || caller.calls[0].method != "thread-follower-steer-turn" {
+		t.Fatalf("Desktop calls=%#v, want one steer", caller.calls)
+	}
+	payload := caller.calls[0].params.(codexDesktopSteerTurnPayload)
+	if payload.ExpectedTurnID != "turn-desktop" || len(payload.Input) != 1 || payload.Input[0].Text != "补充当前 App 任务" {
+		t.Fatalf("Desktop steer payload=%#v", payload)
+	}
+	binding, ok := a.codexOwners.threadBinding("thread-1")
+	if !ok || binding.Runtime != CodexRuntimeDesktop || binding.State.ActiveTurnID != "turn-desktop" {
+		t.Fatalf("binding=%#v found=%v, want thread-scoped Desktop runtime", binding, ok)
+	}
+}
+
+func TestRunCodexTurnDoesNotUseDesktopFollowerWithoutActiveTurnProof(t *testing.T) {
+	probe := &codexDesktopOwnerProbeFake{}
+	a := newACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		StateFile: filepath.Join(t.TempDir(), "state.json"),
+	}, acpAgentOptions{desktopProbe: probe, desktopBridge: true})
+	a.codexDesktopCoordination = true
+	a.codexDesktopHostSelection = false
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+
+	caller := &codexDesktopActionCaller{result: json.RawMessage(`{}`)}
+	a.desktopRuntime = &codexDesktopRuntime{
+		state:   newCodexDesktopStateStore(codexDesktopStateOptions{now: time.Now}),
+		actions: newCodexDesktopActions(caller, func() string { return "sender-1" }),
+	}
+	request := remoteCodexRuntimeRequest("thread-1", "route-1", 1)
+	a.threads[request.Ref.ConversationID] = request.Ref.ThreadID
+	var methods []string
+	a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+		methods = append(methods, method)
+		switch method {
+		case "thread/read":
+			return json.RawMessage(`{"thread":{"id":"thread-1","status":{"type":"notLoaded"}}}`), nil
+		case "thread/resume":
+			return nil, fmt.Errorf("agent error: thread thread-1 already has an active writer")
+		default:
+			return nil, fmt.Errorf("unexpected daemon method %s", method)
+		}
+	}
+
+	_, err := a.RunCodexTurn(context.Background(), CodexTurnRequest{
+		Runtime: request, Message: "不得发送",
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "already has an active writer") {
+		t.Fatalf("RunCodexTurn error=%v, want original active-writer failure", err)
+	}
+	if !reflect.DeepEqual(methods, []string{"thread/read", "thread/resume"}) {
+		t.Fatalf("daemon methods=%v, want read then one resume attempt", methods)
+	}
+	if probe.loadCalls != 1 || len(caller.calls) != 0 {
+		t.Fatalf("Desktop history loads=%d calls=%#v, input must not be sent without active-turn proof", probe.loadCalls, caller.calls)
+	}
+	if binding, ok := a.codexOwners.threadBinding("thread-1"); ok && binding.Runtime == CodexRuntimeDesktop {
+		t.Fatalf("binding=%#v, unproven Desktop runtime must not be committed", binding)
 	}
 }
 
