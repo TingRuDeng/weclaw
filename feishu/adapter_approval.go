@@ -268,11 +268,13 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 		return false
 	}
 	updated := false
+	changed := false
 	_ = a.taskCards.withCardOperation(action.TaskCard, func() error {
 		opts, sequence, ok := a.taskCards.addApprovalWithSequence(action.TaskCard, action)
 		if !ok {
 			return nil
 		}
+		changed = true
 		cardJSON, err := buildCardV2(opts)
 		if err != nil {
 			log.Printf("[feishu] failed to build task card approval snapshot: %v", err)
@@ -285,6 +287,9 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 		updated = true
 		return nil
 	})
+	if changed {
+		a.taskCards.notifyDurableReferenceChange(action.TaskCard)
+	}
 	return updated
 }
 

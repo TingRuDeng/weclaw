@@ -129,7 +129,7 @@ func (r *Replier) recordAutomaticApprovalOnTaskCard(ctx context.Context, action 
 	}
 	var updated bool
 	var resultErr error
-	if err := r.withCardOperation(action.TaskCard, func() error {
+	err := r.withCardOperation(action.TaskCard, func() error {
 		opts, sequence, ok := r.taskCards.addApprovalWithSequence(action.TaskCard, action)
 		if !ok {
 			return nil
@@ -144,7 +144,11 @@ func (r *Replier) recordAutomaticApprovalOnTaskCard(ctx context.Context, action 
 			resultErr = fmt.Errorf("update automatic approval task card: %w", err)
 		}
 		return nil
-	}); err != nil {
+	})
+	if updated {
+		r.taskCards.notifyDurableReferenceChange(action.TaskCard)
+	}
+	if err != nil {
 		return false, err
 	}
 	return updated, resultErr

@@ -281,9 +281,14 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 
 func (r *taskCardRegistry) addApproval(cardID string, action parsedCardAction) (cardOptions, bool) {
 	opts, _, ok := r.addApprovalWithSequence(cardID, action)
+	if ok {
+		r.notifyDurableReferenceChange(cardID)
+	}
 	return opts, ok
 }
 
+// addApprovalWithSequence 只修改 registry；调用方必须在同卡 CardKit 操作锁
+// 释放后通知 recovery 变化，否则回调进入 progressSession 时会与并发进度更新形成反向锁序。
 func (r *taskCardRegistry) addApprovalWithSequence(cardID string, action parsedCardAction) (cardOptions, int, bool) {
 	if r == nil || strings.TrimSpace(cardID) == "" {
 		return cardOptions{}, 0, false
@@ -299,11 +304,7 @@ func (r *taskCardRegistry) addApprovalWithSequence(cardID string, action parsedC
 	state.updatedAt = r.nowOrDefault()
 	opts := state.cardOptions()
 	sequence := state.sequence
-	recoveryChanged := state.recoveryChanged
 	r.mu.Unlock()
-	if recoveryChanged != nil {
-		recoveryChanged()
-	}
 	return opts, sequence, true
 }
 

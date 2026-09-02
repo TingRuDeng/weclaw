@@ -109,6 +109,88 @@ func TestCardKitUpdatesForOneTaskCardAreSerializedBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestAutomaticApprovalRecoveryCallbackDoesNotDeadlockWithProgressUpdate(t *testing.T) {
+	kit := &fakeCardKitClient{}
+	registry := newTaskCardRegistry()
+	registry.recordWithSequence("card-1", cardOptions{
+		Status:  cardStatusThinking,
+		Title:   "Codex",
+		Content: "旧内容",
+	}, 1)
+	stream := &feishuStream{
+		cardKit:   kit,
+		taskCards: registry,
+		cardID:    "card-1",
+		title:     "Codex",
+		throttle:  0,
+		now:       time.Now,
+	}
+	reply := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, registry)
+
+	var progressMu sync.Mutex
+	progressLocked := make(chan struct{})
+	startProgressUpdate := make(chan struct{})
+	progressDone := make(chan error, 1)
+	go func() {
+		progressMu.Lock()
+		close(progressLocked)
+		<-startProgressUpdate
+		err := stream.Update(context.Background(), "新进展")
+		progressMu.Unlock()
+		progressDone <- err
+	}()
+	<-progressLocked
+
+	callbackEntered := make(chan struct{})
+	var callbackOnce sync.Once
+	callbackCompletions := 0
+	registry.setDurableReferenceChangeHandler("card-1", func() {
+		callbackOnce.Do(func() { close(callbackEntered) })
+		progressMu.Lock()
+		callbackCompletions++
+		progressMu.Unlock()
+	})
+	approvalDone := make(chan error, 1)
+	go func() {
+		approvalDone <- reply.RecordAutomaticApproval(
+			context.Background(),
+			approvalPromptForTest("date"),
+			automaticApprovalChoiceForTest("approval-1", "card-1"),
+		)
+	}()
+
+	select {
+	case <-callbackEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for automatic approval recovery callback")
+	}
+	close(startProgressUpdate)
+
+	deadline := time.After(time.Second)
+	for progressDone != nil || approvalDone != nil {
+		select {
+		case err := <-progressDone:
+			if err != nil {
+				t.Fatalf("progress update error: %v", err)
+			}
+			progressDone = nil
+		case err := <-approvalDone:
+			if err != nil {
+				t.Fatalf("automatic approval error: %v", err)
+			}
+			approvalDone = nil
+		case <-deadline:
+			t.Fatal("automatic approval and progress update deadlocked")
+		}
+	}
+	progressMu.Lock()
+	completed := callbackCompletions
+	progressMu.Unlock()
+	if completed != 1 {
+		t.Fatalf("recovery callback completions=%d, want 1", completed)
+	}
+}
+
 var _ cardKitClient = (*blockingCardKitClient)(nil)
 
 var _ platform.Stream = (*feishuStream)(nil)
