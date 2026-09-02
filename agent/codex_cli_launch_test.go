@@ -138,13 +138,64 @@ func TestPrepareCodexCLILaunchPreservesExplicitWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestPrepareCodexCLILaunchRejectsCompatibilityHost(t *testing.T) {
+func TestPrepareCodexCLILaunchUsesVerifiedManagedHost(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "wc-codex-managed-cli-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	command := filepath.Join(home, "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(command), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(home, "runtime", "codex.sock")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	a := NewACPAgent(ACPAgentConfig{
+		Command: command, Args: []string{"-c", "feature=true", "app-server", "--listen", "stdio://"},
+		Cwd: "/tmp/default", AppServerSocket: socketPath, CodexHostMode: "managed",
+	})
+	preflightCalls := 0
+	a.codexHostConflictPreflightCall = func(context.Context, int) error {
+		preflightCalls++
+		return nil
+	}
+
+	launch, err := a.PrepareCodexCLILaunch(context.Background(), CodexCLILaunchOptions{
+		Cwd: "/tmp/project", Args: []string{"resume", "thread-1"}, AllowHostStart: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{
+		"-c", "feature=true", "--cd", "/tmp/project", "--remote", "unix://" + socketPath,
+		"resume", "thread-1",
+	}
+	if launch.Command != command || !reflect.DeepEqual(launch.Args, wantArgs) || launch.SocketPath != socketPath {
+		t.Fatalf("launch=%#v, want command=%q args=%#v socket=%q", launch, command, wantArgs, socketPath)
+	}
+	if preflightCalls != 1 {
+		t.Fatalf("managed Host preflight calls=%d, want 1", preflightCalls)
+	}
+}
+
+func TestPrepareCodexCLILaunchRejectsManagedHostStartupWithoutService(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{
 		Command: "codex", Args: []string{"app-server"}, CodexHostMode: "managed",
 	})
 	_, err := a.PrepareCodexCLILaunch(context.Background(), CodexCLILaunchOptions{AllowHostStart: true})
-	if err == nil || !strings.Contains(err.Error(), "official") {
-		t.Fatalf("error=%v, want official daemon requirement", err)
+	if err == nil || !strings.Contains(err.Error(), "WeClaw") {
+		t.Fatalf("error=%v, want running WeClaw requirement", err)
 	}
 }
 
@@ -276,6 +327,37 @@ func TestPrepareCodexCLIHostRejectsDesktopAuthority(t *testing.T) {
 	_, err := a.PrepareCodexCLIHost(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "Codex App") {
 		t.Fatalf("error=%v, want Desktop authority rejection", err)
+	}
+}
+
+func TestPrepareCodexCLIHostUsesRunningManagedHost(t *testing.T) {
+	home, err := os.MkdirTemp("/tmp", "wc-codex-managed-service-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	socketPath := filepath.Join(home, "codex.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"}, AppServerSocket: socketPath,
+		CodexHostMode: "managed",
+	})
+	a.mu.Lock()
+	a.started = true
+	a.mu.Unlock()
+	a.setCodexRuntimeMode(CodexRuntimeWeClaw)
+	a.codexHostConflictPreflightCall = func(context.Context, int) error { return nil }
+
+	host, err := a.PrepareCodexCLIHost(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.SocketPath != socketPath {
+		t.Fatalf("host socket=%q, want %q", host.SocketPath, socketPath)
 	}
 }
 

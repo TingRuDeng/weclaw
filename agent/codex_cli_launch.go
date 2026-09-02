@@ -37,8 +37,10 @@ type CodexCLIHostController interface {
 	PrepareCodexCLIHost(context.Context) (CodexCLIHost, error)
 }
 
-// PrepareCodexCLIHost starts or validates the official daemon through the
-// service-owned ACPAgent, preserving its resolved Host topology.
+// PrepareCodexCLIHost starts or validates the configured shared Host through
+// the service-owned ACPAgent, preserving its resolved Host topology. Managed
+// Hosts must be prepared here so a separate CLI process never owns their
+// lifecycle.
 func (a *ACPAgent) PrepareCodexCLIHost(ctx context.Context) (CodexCLIHost, error) {
 	if a == nil || a.protocol != protocolCodexAppServer {
 		return CodexCLIHost{}, fmt.Errorf("受控 Codex CLI 需要原生 app-server 配置")
@@ -46,23 +48,27 @@ func (a *ACPAgent) PrepareCodexCLIHost(ctx context.Context) (CodexCLIHost, error
 	a.codexAdmissionMu.Lock()
 	defer a.codexAdmissionMu.Unlock()
 	if a.codexRuntimeModeSnapshot() == CodexRuntimeDesktop {
-		return CodexCLIHost{}, fmt.Errorf("Codex App 当前是唯一 Host，不能准备 official daemon CLI")
+		return CodexCLIHost{}, fmt.Errorf("Codex App 当前是唯一 Host，不能准备共享 Codex CLI")
+	}
+	if err := a.ensureStarted(ctx); err != nil {
+		return CodexCLIHost{}, fmt.Errorf("准备共享 Codex Host: %w", err)
 	}
 	permit, err := a.ensureCodexAppServerGate().acquire(ctx)
 	if err != nil {
 		return CodexCLIHost{}, err
 	}
 	defer permit.release()
-	launch, err := a.PrepareCodexCLILaunch(ctx, CodexCLILaunchOptions{AllowHostStart: true})
+	launch, err := a.PrepareCodexCLILaunch(ctx, CodexCLILaunchOptions{AllowHostStart: false})
 	if err != nil {
 		return CodexCLIHost{}, err
 	}
 	return CodexCLIHost{SocketPath: launch.SocketPath}, nil
 }
 
-// PrepareCodexCLILaunch starts or validates the official daemon and pins the
-// interactive Codex client to that exact Unix socket. A running WeClaw process
-// passes AllowHostStart=false so this command cannot create a second Host.
+// PrepareCodexCLILaunch validates the configured shared Host and pins the
+// interactive Codex client to that exact Unix socket. The official daemon may
+// be started directly when WeClaw is absent; a managed Host must already have
+// been prepared by the running service so a CLI process cannot orphan it.
 func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunchOptions) (CodexCLILaunch, error) {
 	if a == nil || a.protocol != protocolCodexAppServer {
 		return CodexCLILaunch{}, fmt.Errorf("受控 Codex CLI 需要原生 app-server 配置")
@@ -79,14 +85,19 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	if a.runAs.shouldIsolate() {
 		return CodexCLILaunch{}, fmt.Errorf("受控 Codex CLI 不支持 run_as_user")
 	}
-	if !a.usesOfficialCodexDaemon() {
-		return CodexCLILaunch{}, fmt.Errorf("受控 Codex CLI 只支持 official standalone daemon；当前是 managed 兼容 Host")
+	officialDaemon := a.usesOfficialCodexDaemon()
+	if !officialDaemon && opts.AllowHostStart {
+		return CodexCLILaunch{}, fmt.Errorf("managed Codex Host 必须由运行中的 WeClaw 服务准备；请先启动 WeClaw")
 	}
-	command, err := a.resolveCodexDaemonLifecycleCommand()
-	if err != nil {
-		return CodexCLILaunch{}, err
+	command := a.command
+	if officialDaemon {
+		var err error
+		command, err = a.resolveCodexDaemonLifecycleCommand()
+		if err != nil {
+			return CodexCLILaunch{}, err
+		}
 	}
-	socketPath, err := a.resolveCodexDaemonSocket()
+	socketPath, err := a.resolveCodexHostSocket()
 	if err != nil {
 		return CodexCLILaunch{}, err
 	}
@@ -116,26 +127,30 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	if err != nil {
 		return CodexCLILaunch{}, err
 	}
-	action := "version"
-	if !exists {
-		action = "start"
-		if err := a.preflightCodexHostConflicts(ctx, 0); err != nil {
+	if officialDaemon {
+		action := "version"
+		if !exists {
+			action = "start"
+			if err := a.preflightCodexHostConflicts(ctx, 0); err != nil {
+				return CodexCLILaunch{}, err
+			}
+		}
+		output, err := a.runAndValidateCodexDaemonLifecycle(ctx, action, socketPath)
+		if err != nil {
 			return CodexCLILaunch{}, err
 		}
-	}
-	output, err := a.runAndValidateCodexDaemonLifecycle(ctx, action, socketPath)
-	if err != nil {
-		return CodexCLILaunch{}, err
-	}
-	if filepath.Clean(output.ManagedCodexPath) != filepath.Clean(command) {
-		return CodexCLILaunch{}, fmt.Errorf(
-			"%w: managed Codex path=%s, expected=%s",
-			errCodexDaemonUnmanaged,
-			output.ManagedCodexPath,
-			command,
-		)
-	}
-	if err := a.preflightCodexHostConflicts(ctx, output.PID); err != nil {
+		if filepath.Clean(output.ManagedCodexPath) != filepath.Clean(command) {
+			return CodexCLILaunch{}, fmt.Errorf(
+				"%w: managed Codex path=%s, expected=%s",
+				errCodexDaemonUnmanaged,
+				output.ManagedCodexPath,
+				command,
+			)
+		}
+		if err := a.preflightCodexHostConflicts(ctx, output.PID); err != nil {
+			return CodexCLILaunch{}, err
+		}
+	} else if err := a.preflightConnectedManagedCodexHost(ctx, socketPath); err != nil {
 		return CodexCLILaunch{}, err
 	}
 

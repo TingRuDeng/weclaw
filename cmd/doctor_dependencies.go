@@ -104,7 +104,7 @@ func checkCodexStandalone(cfg *config.Config, deps doctorDeps) doctorResult {
 	mode := agentConfig.EffectiveCodexHostMode()
 	if mode == "managed" {
 		result.Status = doctorOK
-		result.Detail = "当前显式使用 managed 兼容 Host"
+		result.Detail = "当前显式使用 WeClaw-managed Host；受控 CLI 需先启动 WeClaw"
 		return result
 	}
 	codexHome := ""
@@ -119,7 +119,7 @@ func checkCodexStandalone(cfg *config.Config, deps doctorDeps) doctorResult {
 		return result
 	}
 	result.Status = doctorWarn
-	result.Detail = "未安装官方 standalone；auto 将使用 managed 兼容 Host，受控 weclaw codex cli 不可用"
+	result.Detail = "未安装官方 standalone；auto 将使用 WeClaw-managed Host，受控 CLI 需先启动 WeClaw"
 	if agentConfig.EffectiveCodexMultiFrontend() {
 		result.Status = doctorFail
 		result.Detail = "codex_multi_frontend=true 需要官方 standalone；运行 weclaw doctor --fix --components codex"
