@@ -260,6 +260,29 @@ if backed_up_paths != expected_paths:
 PY
 }
 
+test_apply_handles_wal_databases() {
+  local codex_home="${test_root}/wal-home"
+  local output
+
+  create_fixture "${codex_home}"
+  python3 - "${codex_home}" <<'PY'
+import pathlib
+import sqlite3
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for database_path in (root / "state_5.sqlite", root / "sqlite" / "codex-dev.db"):
+    connection = sqlite3.connect(database_path)
+    if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() != "wal":
+        raise SystemExit(f"failed to enable WAL mode for {database_path}")
+    connection.commit()
+    connection.close()
+PY
+
+  output="$(${switch_script} openai --apply --codex-home "${codex_home}")"
+  assert_contains "${output}" "status=applied"
+}
+
 test_bidirectional_idempotent_and_restore() {
   local codex_home="${test_root}/restore-home"
   local first_output
@@ -693,6 +716,8 @@ test_dry_run_reports_changes_without_writing
 echo "PASS: dry-run reports planned changes without writing"
 test_apply_updates_all_stores_and_repairs_ids
 echo "PASS: apply updates all stores and repairs item IDs"
+test_apply_handles_wal_databases
+echo "PASS: apply handles WAL databases"
 test_bidirectional_idempotent_and_restore
 echo "PASS: bidirectional switching is idempotent and backups restore"
 test_unknown_item_ids_are_reported_as_unrepaired

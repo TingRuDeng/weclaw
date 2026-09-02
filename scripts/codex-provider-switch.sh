@@ -136,6 +136,16 @@ def table_has_column(connection: sqlite3.Connection, table: str, column: str) ->
     return any(row[1] == column for row in rows)
 
 
+def sqlite_readonly(path: pathlib.Path) -> sqlite3.Connection:
+    sidecars = [pathlib.Path(f"{path}{suffix}") for suffix in ("-wal", "-shm")]
+    if not any(sidecar.exists() for sidecar in sidecars):
+        # A checkpointed WAL database may have no sidecars after its last writer
+        # exits. immutable=1 lets us inspect that stable main file without
+        # asking SQLite to create a missing -shm file in read-only mode.
+        return sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
 def provider_change_filter(
     table: str, target: str, archived_thread_ids: set[str]
 ) -> tuple[str, tuple[str, ...]]:
@@ -164,7 +174,7 @@ def count_sqlite_changes(
     if path.is_symlink() or not path.is_file():
         fail(f"SQLite path must be a regular file: {path}")
     try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        connection = sqlite_readonly(path)
         try:
             if not table_has_column(connection, table, "model_provider"):
                 if optional:
@@ -185,7 +195,7 @@ def sqlite_table_available(path: pathlib.Path, table: str) -> bool:
     if not path.exists() or path.is_symlink() or not path.is_file():
         return False
     try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        connection = sqlite_readonly(path)
         try:
             return table_has_column(connection, table, "model_provider")
         finally:
@@ -198,7 +208,7 @@ def read_archived_thread_ids(path: pathlib.Path) -> set[str]:
     if not path.exists() or path.is_symlink() or not path.is_file():
         fail(f"required SQLite database does not exist or is unsafe: {path}")
     try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        connection = sqlite_readonly(path)
         try:
             if not table_has_column(connection, "threads", "archived"):
                 fail(f"{path} does not contain threads.archived")
@@ -395,16 +405,22 @@ def append_operation_log(backup_dir: pathlib.Path, status: str, detail: str = ""
 
 def sqlite_backup(source: pathlib.Path, destination: pathlib.Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    source_connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    source_connection = sqlite_readonly(source)
     destination_connection = sqlite3.connect(destination)
     try:
         source_connection.backup(destination_connection)
+        destination_connection.execute("PRAGMA journal_mode=DELETE")
+        destination_connection.commit()
         result = destination_connection.execute("PRAGMA integrity_check").fetchone()
         if not result or result[0] != "ok":
             fail(f"SQLite backup integrity check failed: {source}")
     finally:
         destination_connection.close()
         source_connection.close()
+    for suffix in ("-wal", "-shm"):
+        sidecar = pathlib.Path(f"{destination}{suffix}")
+        if sidecar.exists():
+            sidecar.unlink()
     os.chmod(destination, 0o600)
 
 
@@ -592,7 +608,7 @@ def stage_sqlite_update(
 def validate_sqlite_provider(
     path: pathlib.Path, table: str, provider: str, archived_thread_ids: set[str]
 ) -> None:
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    connection = sqlite_readonly(path)
     try:
         result = connection.execute("PRAGMA integrity_check").fetchone()
         if not result or result[0] != "ok":
@@ -817,7 +833,7 @@ def load_restore_manifest(
         if not isinstance(source_mode, int) or source_mode < 0 or source_mode > 0o777:
             fail(f"backup manifest contains an invalid mode for {relative_text}")
         if kind == "sqlite":
-            connection = sqlite3.connect(f"file:{backup_file}?mode=ro", uri=True)
+            connection = sqlite_readonly(backup_file)
             try:
                 result = connection.execute("PRAGMA integrity_check").fetchone()
                 if not result or result[0] != "ok":
@@ -866,7 +882,7 @@ def restore_backup(
             if sha256_file(destination) != sha256_file(backup_file):
                 fail(f"restored file checksum mismatch: {destination}")
             if entry["kind"] == "sqlite":
-                connection = sqlite3.connect(f"file:{destination}?mode=ro", uri=True)
+                connection = sqlite_readonly(destination)
                 try:
                     result = connection.execute("PRAGMA integrity_check").fetchone()
                     if not result or result[0] != "ok":
