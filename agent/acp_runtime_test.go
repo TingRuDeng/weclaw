@@ -302,6 +302,17 @@ func TestACPScannerReadsLargeCodexNotification(t *testing.T) {
 	}
 }
 
+type signalingACPWriteCloser struct {
+	written chan struct{}
+}
+
+func (w *signalingACPWriteCloser) Write(payload []byte) (int, error) {
+	close(w.written)
+	return len(payload), nil
+}
+
+func (*signalingACPWriteCloser) Close() error { return nil }
+
 func TestACPReadLoopClassifiesOversizedProtocolFrame(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader(strings.Repeat("x", 128)))
 	scanner.Buffer(make([]byte, 8), 16)
@@ -310,7 +321,8 @@ func TestACPReadLoopClassifiesOversizedProtocolFrame(t *testing.T) {
 	}
 
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
-	a.stdin = nopWriteCloser{Buffer: &bytes.Buffer{}}
+	writer := &signalingACPWriteCloser{written: make(chan struct{})}
+	a.stdin = writer
 	a.scanner = scanner
 	a.wireEpoch = 1
 	done := make(chan error, 1)
@@ -318,12 +330,10 @@ func TestACPReadLoopClassifiesOversizedProtocolFrame(t *testing.T) {
 		_, _, err := a.callWithSequence(context.Background(), "thread/read", map[string]interface{}{"threadId": "thread-large"})
 		done <- err
 	}()
-	deadline := time.Now().Add(time.Second)
-	for !a.pending.contains(1) {
-		if time.Now().After(deadline) {
-			t.Fatal("thread/read request was not registered")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-writer.written:
+	case <-time.After(time.Second):
+		t.Fatal("thread/read request was not written")
 	}
 
 	a.finishReadLoop(scanner, 1, nil)
