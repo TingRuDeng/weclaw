@@ -17,6 +17,92 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestCodexAppSharedHostStartsAndSurvivesFrontendCancellation(t *testing.T) {
+	if !codexAppSharedHostAvailable() {
+		t.Skip("Codex App signed Node is unavailable")
+	}
+	dir, err := os.MkdirTemp("/tmp", "weclaw-app-host-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "app-server.sock")
+	bridgeDir := codexAppBridgeDirectory(socket)
+	if err := securefile.EnsureDir(bridgeDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCodexAppBridgeArtifact(filepath.Join(bridgeDir, "host.cjs"), codexAppHostScript, false); err != nil {
+		t.Fatal(err)
+	}
+	a := NewACPAgent(ACPAgentConfig{
+		Command: os.Args[0], Args: []string{"app-server"}, Cwd: dir,
+		CodexHostMode: "shared",
+		Env: map[string]string{
+			testCodexUnixHostSocketEnv: socket,
+			testCodexUnixHostCountEnv:  filepath.Join(dir, "starts.log"),
+		},
+	})
+	// Keep identity validation real without scanning unrelated user processes.
+	a.codexHostConflictPreflightCall = func(context.Context, int) error {
+		_, err := a.validateManagedCodexHost(socket)
+		return err
+	}
+	t.Cleanup(func() {
+		metadata, err := a.readCodexHostMetadata(socket)
+		if err != nil {
+			return
+		}
+		process, err := os.FindProcess(metadata.PID)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer process.Release()
+		if err := process.Kill(); err != nil {
+			t.Error(err)
+			return
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for codexHostProcessAlive(metadata.PID) {
+			if time.Now().After(deadline) {
+				t.Error("signed Node launcher did not reap its test Host")
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := a.startCodexAppSharedHostLocked(ctx, socket, os.Args[0], []string{
+		"-test.run=^TestHelperCodexUnixHost$", "-test.timeout=15s", "--",
+	})
+	if err != nil {
+		t.Fatalf("start shared Host through signed Node: %v", err)
+	}
+	defer conn.Close()
+	cancel()
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteJSON(map[string]any{"id": 1, "method": "initialize", "params": codexInitializeParams()}); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		ID     int `json:"id"`
+		Result struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := conn.ReadJSON(&response); err != nil {
+		t.Fatalf("shared Host stopped with its frontend: %v", err)
+	}
+	if response.ID != 1 || response.Result.ServerInfo.Name != "fake-codex-host" {
+		t.Fatalf("unexpected shared Host handshake: %+v", response)
+	}
+}
+
 func TestCodexAppBridgeMCPPreloadFollowsCurrentAppPipe(t *testing.T) {
 	node := codexAppSharedNodePath()
 	if info, err := os.Stat(node); err != nil || !info.Mode().IsRegular() {

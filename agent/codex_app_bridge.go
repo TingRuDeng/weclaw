@@ -431,7 +431,8 @@ func (a *ACPAgent) startCodexAppSharedHostLocked(ctx context.Context, socket, bi
 	if err != nil {
 		return nil, err
 	}
-	command := exec.Command(codexAppSharedNodePath(), filepath.Join(dir, "host.cjs"))
+	// The signed launcher must outlive the frontend that starts the shared Host.
+	command := exec.CommandContext(context.WithoutCancel(ctx), codexAppSharedNodePath(), filepath.Join(dir, "host.cjs"))
 	configureACPProcess(command)
 	command.Dir, command.Stdin, command.Stderr = a.cwd, bytes.NewReader(spec), logFile
 	command.Env, err = mergeEnv(os.Environ(), a.env)
