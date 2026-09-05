@@ -20,6 +20,7 @@ const (
 	codexHostModeAuto    = "auto"
 	codexHostModeDaemon  = "daemon"
 	codexHostModeManaged = "managed"
+	codexHostModeShared  = "shared"
 
 	codexHostManagerWeClaw = "weclaw"
 	codexHostManagerDaemon = "codex_daemon"
@@ -54,7 +55,7 @@ func normalizeAgentCodexHostMode(mode string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	mode = strings.ReplaceAll(mode, "-", "_")
 	switch mode {
-	case codexHostModeAuto, codexHostModeDaemon, codexHostModeManaged:
+	case codexHostModeAuto, codexHostModeDaemon, codexHostModeManaged, codexHostModeShared:
 		return mode
 	case "":
 		// Direct agent constructors predate host-mode configuration and are
@@ -72,11 +73,14 @@ func normalizeAgentCodexHostMode(mode string) string {
 // fall back to a second Host in the same process.
 func (a *ACPAgent) resolveAgentCodexHostMode() string {
 	switch a.codexHostMode {
-	case codexHostModeDaemon, codexHostModeManaged:
+	case codexHostModeDaemon, codexHostModeManaged, codexHostModeShared:
 		return a.codexHostMode
 	}
 	if strings.TrimSpace(a.codexHostSocketSnapshot()) != "" || a.runAs.shouldIsolate() {
 		return codexHostModeManaged
+	}
+	if a.codexAppReuseDaemon != nil && *a.codexAppReuseDaemon && codexAppSharedHostAvailable() {
+		return codexHostModeShared
 	}
 	codexHome, err := codexauth.ResolveCodexHome(a.env, a.runAs.User)
 	if err != nil {

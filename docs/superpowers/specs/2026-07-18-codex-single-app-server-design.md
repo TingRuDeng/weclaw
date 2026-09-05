@@ -51,7 +51,7 @@ flowchart LR
 4. 显式 `managed` 使用 `agent/codex_app_server_host.go` 管理兼容 Host，不主动接入 Desktop。
 5. `codex_multi_frontend: true` 是产品级严格共享开关：它覆盖 `auto` 的降级语义，把有效模式固定为 `daemon`，并在平台启动前要求 official standalone 可执行文件存在；与 `managed`、自定义 socket、`run_as_user` 或 App daemon 复用关闭冲突时配置校验直接失败。字段省略保留旧兼容策略，显式 `false` 不得被规范化改回 App daemon 复用开启。
 
-原生 Codex 的 `auto`/`daemon` 配置默认启用 `codex_app_reuse_daemon`。macOS 只有在官方 lifecycle 与进程身份验证完成、App 根据 launchd `CODEX_HOME` 推导出的 control socket 与当前 daemon socket 完全一致、且没有 `CODEX_CLI_PATH` 或 `CODEX_APP_SERVER_FORCE_CLI=1` 冲突时，才为后续 App 启动提交 `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`。已经运行且仍有私有 `codex ... app-server` 后代的 App 必须要求完整重启；WeClaw 不退出 App、不修改 App 包，也不在这种过渡态继续附着 daemon。显式关闭只撤销后续启动环境，当前 App 仍需重启才改变 Host。
+原生 Codex 的 `auto`/`daemon` 配置默认启用 `codex_app_reuse_daemon`。macOS 只有在官方 lifecycle 与进程身份验证完成、daemon 实际使用的有效 `CODEX_HOME`、`CODEX_SQLITE_HOME` 与 App 根据 launchd 环境解析出的 control socket 完全一致、且没有 `CODEX_CLI_PATH` 或 `CODEX_APP_SERVER_FORCE_CLI=1` 冲突时，才为后续 App 启动提交 `CODEX_APP_SERVER_USE_LOCAL_DAEMON=1`。launchd 中缺失的路径变量可以被补齐，但显式值不覆盖，冲突直接失败关闭。已经运行且仍有私有 `codex ... app-server` 后代的 App 必须要求完整重启；WeClaw 不退出 App、不修改 App 包，也不在这种过渡态继续附着 daemon。该流程不迁移、删除或清理旧数据库、WAL/SHM 或 writer-lock 文件。显式关闭只撤销后续启动的 local-daemon 开关，当前 App 仍需重启才改变 Host。
 
 `weclaw codex cli` 固定连接当前唯一共享 Host 的 `--remote unix://...`；只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。官方 daemon 模式使用 standalone，在 WeClaw 服务未运行且 App 不存在时仍可直接受控启动。WeClaw-managed 模式可使用配置中的 npm Codex 命令，但只允许运行中的服务先创建并验证 Host，独立 CLI 不得自己启动 managed Host。服务运行时，CLI 先调用仅限 loopback 的 `POST /api/codex/cli/prepare`，由服务内同一个 Agent 在 admission/gate 内按启动时已经解析的拓扑准备 Host，再核对返回 socket 与客户端解析值一致。App 是当前 Host、控制接口不可达或 Host 身份不明确时都失败关闭；若服务已证明共享 Host 是 WeClaw 权威，App 仅可见不能单独构成拒绝理由。
 

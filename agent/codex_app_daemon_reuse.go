@@ -7,7 +7,7 @@ import (
 	"log"
 )
 
-var ErrCodexAppRestartRequired = errors.New("Codex App 需要重启后才能复用官方 daemon")
+var ErrCodexAppRestartRequired = errors.New("Codex App 需要重启后才能接入共享服务")
 
 type codexAppDaemonReuseResult struct {
 	Changed          bool
@@ -19,7 +19,15 @@ type codexAppDaemonReuseResult struct {
 // 启用必须等官方 daemon 已验证并可连接后再提交，避免 App 在 daemon 尚未就绪时
 // 回退到自己的 stdio app-server。
 func (a *ACPAgent) applyCodexAppDaemonReusePreference(ctx context.Context) error {
-	if a.protocol != protocolCodexAppServer || a.codexAppReuseDaemon == nil || *a.codexAppReuseDaemon {
+	if a.protocol != protocolCodexAppServer {
+		return nil
+	}
+	if a.codexHostMode != codexHostModeShared {
+		if err := a.restoreCodexAppSharedPreference(ctx); err != nil {
+			return fmt.Errorf("恢复 Codex App 原启动环境: %w", err)
+		}
+	}
+	if a.codexAppReuseDaemon == nil || *a.codexAppReuseDaemon {
 		return nil
 	}
 	result, err := a.configureCodexAppDaemonReuse(ctx, false, "")
@@ -59,10 +67,18 @@ func (a *ACPAgent) validateRunningCodexAppDaemonReuse(ctx context.Context) error
 		return nil
 	}
 	inspect := a.codexAppDaemonInspectCall
-	if inspect == nil {
-		inspect = inspectSystemCodexAppDaemonReuse
+	if inspect != nil {
+		result, err := inspect(ctx)
+		if err != nil {
+			return fmt.Errorf("复核 Codex App daemon 复用状态: %w", err)
+		}
+		return codexAppDaemonReuseResultError(result)
 	}
-	result, err := inspect(ctx)
+	expected, err := a.resolveCodexAppDaemonEnvironment()
+	if err != nil {
+		return fmt.Errorf("解析 Codex App 共享环境: %w", err)
+	}
+	result, err := inspectSystemCodexAppDaemonReuseWithExpected(ctx, &expected)
 	if err != nil {
 		return fmt.Errorf("复核 Codex App daemon 复用状态: %w", err)
 	}
@@ -86,6 +102,13 @@ func (a *ACPAgent) configureCodexAppDaemonReuse(
 ) (codexAppDaemonReuseResult, error) {
 	if a.codexAppDaemonReuseCall != nil {
 		return a.codexAppDaemonReuseCall(ctx, enabled, socketPath)
+	}
+	if enabled {
+		expected, err := a.resolveCodexAppDaemonEnvironment()
+		if err != nil {
+			return codexAppDaemonReuseResult{}, fmt.Errorf("解析 Codex App 共享环境: %w", err)
+		}
+		return configureSystemCodexAppDaemonReuseWithExpected(ctx, enabled, socketPath, expected)
 	}
 	return configureSystemCodexAppDaemonReuse(ctx, enabled, socketPath)
 }

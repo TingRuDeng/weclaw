@@ -83,8 +83,8 @@ type AgentConfig struct {
 	Progress           *ProgressConfig   `json:"progress,omitempty"`               // 微信进度反馈配置
 	AutoLaunch         *bool             `json:"auto_launch,omitempty"`            // companion 是否自动打开本地可见终端
 	AppServerSocket    string            `json:"app_server_socket,omitempty"`      // Codex 单一 app-server 的共享 Unix socket
-	CodexHostMode      string            `json:"codex_host_mode,omitempty"`        // Codex Host：auto / daemon / managed
-	CodexMultiFrontend *bool             `json:"codex_multi_frontend,omitempty"`   // Codex App、受控 CLI 与消息平台是否强制共享官方 daemon
+	CodexHostMode      string            `json:"codex_host_mode,omitempty"`        // Codex Host：auto / daemon / managed / shared
+	CodexMultiFrontend *bool             `json:"codex_multi_frontend,omitempty"`   // Codex App、受控 CLI 与消息平台是否强制共享同一官方服务
 	CodexAutoUpdate    string            `json:"codex_auto_update,omitempty"`      // Codex CLI 自动更新：off / incompatible
 	CodexAppDaemon     *bool             `json:"codex_app_reuse_daemon,omitempty"` // macOS Codex App 是否复用官方 daemon；nil 表示不管理
 	RunAsUser          string            `json:"run_as_user,omitempty"`            // 以独立 Unix 用户运行 agent，做文件系统隔离
@@ -169,13 +169,9 @@ func (c AgentConfig) ValidateCodexAutoUpdateConfig() error {
 	}
 }
 
-// EffectiveCodexHostMode 返回 Codex Host 生命周期策略。auto 会在运行时仅当
-// 官方 standalone daemon 可用时启用 daemon；否则保留兼容的 WeClaw managed
-// Host。显式 daemon 从不静默回退到第二个 Host。
+// EffectiveCodexHostMode 返回 Codex Host 生命周期策略。auto 由运行时选择
+// macOS App 共享适配或 standalone daemon；显式模式不静默切换 Host。
 func (c AgentConfig) EffectiveCodexHostMode() string {
-	if c.EffectiveCodexMultiFrontend() {
-		return "daemon"
-	}
 	mode := normalizeCodexHostMode(c.CodexHostMode)
 	if mode == "" {
 		return "auto"
@@ -183,7 +179,7 @@ func (c AgentConfig) EffectiveCodexHostMode() string {
 	return mode
 }
 
-// EffectiveCodexMultiFrontend 返回是否强制使用 official daemon 承载多个前端。
+// EffectiveCodexMultiFrontend 返回是否在平台启动前准备唯一共享服务。
 // 缺省保持旧版 auto/managed 兼容行为，避免升级后改变既有 Host 拓扑。
 func (c AgentConfig) EffectiveCodexMultiFrontend() bool {
 	return boolValueDefault(c.CodexMultiFrontend, false)
@@ -198,11 +194,11 @@ func (c AgentConfig) ValidateCodexMultiFrontendConfig() error {
 		return fmt.Errorf("codex_multi_frontend requires native Codex ACP app-server")
 	}
 	switch mode := normalizeCodexHostMode(c.CodexHostMode); mode {
-	case "", "auto", "daemon":
+	case "", "auto", "daemon", "shared":
 	case "managed":
 		return fmt.Errorf("codex_multi_frontend cannot be combined with codex_host_mode managed")
 	default:
-		return fmt.Errorf("codex_multi_frontend requires codex_host_mode auto or daemon")
+		return fmt.Errorf("codex_multi_frontend requires codex_host_mode auto, daemon, or shared")
 	}
 	if strings.TrimSpace(c.AppServerSocket) != "" {
 		return fmt.Errorf("codex_multi_frontend cannot be combined with app_server_socket")
@@ -222,16 +218,19 @@ func (c AgentConfig) ValidateCodexHostModeConfig() error {
 	switch mode := c.EffectiveCodexHostMode(); mode {
 	case "auto", "managed":
 		return nil
-	case "daemon":
+	case "daemon", "shared":
+		if mode == "shared" && c.CodexAppDaemon != nil && !*c.CodexAppDaemon {
+			return fmt.Errorf("codex_host_mode shared cannot disable codex_app_reuse_daemon")
+		}
 		if strings.TrimSpace(c.AppServerSocket) != "" {
-			return fmt.Errorf("codex_host_mode daemon cannot be combined with app_server_socket")
+			return fmt.Errorf("codex_host_mode %s cannot be combined with app_server_socket", mode)
 		}
 		if strings.TrimSpace(c.RunAsUser) != "" {
-			return fmt.Errorf("codex_host_mode daemon cannot be combined with run_as_user")
+			return fmt.Errorf("codex_host_mode %s cannot be combined with run_as_user", mode)
 		}
 		return nil
 	default:
-		return fmt.Errorf("invalid codex_host_mode %q: use auto, daemon, or managed", c.CodexHostMode)
+		return fmt.Errorf("invalid codex_host_mode %q: use auto, daemon, managed, or shared", c.CodexHostMode)
 	}
 }
 
@@ -251,8 +250,8 @@ func (c AgentConfig) ValidateCodexAppDaemonConfig() error {
 	if !isNativeCodexAppServerConfig(c) {
 		return fmt.Errorf("codex_app_reuse_daemon requires native codex app-server")
 	}
-	if mode := c.EffectiveCodexHostMode(); mode != "auto" && mode != "daemon" {
-		return fmt.Errorf("codex_app_reuse_daemon requires codex_host_mode auto or daemon")
+	if mode := c.EffectiveCodexHostMode(); mode != "auto" && mode != "daemon" && mode != "shared" {
+		return fmt.Errorf("codex_app_reuse_daemon requires codex_host_mode auto, daemon, or shared")
 	}
 	if strings.TrimSpace(c.AppServerSocket) != "" {
 		return fmt.Errorf("codex_app_reuse_daemon cannot be combined with app_server_socket")

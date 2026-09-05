@@ -76,8 +76,8 @@ func TestACPAgentConfigFromConfigEnforcesMultiFrontendRuntime(t *testing.T) {
 	}
 
 	got := acpAgentConfigFromConfig("codex", cfg.Agents["codex"])
-	if got.CodexHostMode != "daemon" {
-		t.Fatalf("CodexHostMode=%q, want daemon", got.CodexHostMode)
+	if got.CodexHostMode != "auto" {
+		t.Fatalf("CodexHostMode=%q, want platform-specific shared Host selection", got.CodexHostMode)
 	}
 	if got.CodexAppDaemon == nil || !*got.CodexAppDaemon {
 		t.Fatalf("CodexAppDaemon=%v, want derived true", got.CodexAppDaemon)

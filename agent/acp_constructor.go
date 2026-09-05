@@ -115,11 +115,17 @@ func buildACPAgent(cfg ACPAgentConfig, options acpAgentOptions) *ACPAgent {
 		protocolTrace:              cfg.ProtocolTrace,
 	}
 	a.codexHostMode = a.resolveAgentCodexHostMode()
+	if a.codexHostMode == codexHostModeShared {
+		// App is another socket client; private Desktop ownership/IPC no
+		// longer participates in routing or release in this topology.
+		a.codexDesktopCoordination = false
+		a.codexDesktopHostSelection = false
+	}
 	// auto 只有在最终落到 managed 时才允许选择 Desktop Host。official
 	// daemon 是默认共享写入权威；Desktop bridge 在该拓扑下只负责协调，
 	// 以及 active-writer 证据成立时的单 thread follower 写入。
 	// options.desktopBridge 保留包内测试对完整 Desktop Host 的显式注入语义。
-	if a.codexHostMode == codexHostModeDaemon && !options.desktopBridge {
+	if (a.codexHostMode == codexHostModeDaemon || a.codexHostMode == codexHostModeShared) && !options.desktopBridge {
 		a.codexDesktopHostSelection = false
 	}
 	return a
@@ -144,6 +150,9 @@ func (a *ACPAgent) configureCodexRuntime(probe codexDesktopOwnerProbe) {
 		probe = newSystemCodexDesktopRuntime()
 	}
 	a.codexOwners = newCodexRuntimeOwnerRegistry(probe)
+	if a.codexHostMode == codexHostModeShared {
+		a.codexOwners.enforceControl = false
+	}
 	if probe == nil {
 		return
 	}

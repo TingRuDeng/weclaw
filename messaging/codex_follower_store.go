@@ -11,7 +11,7 @@ import (
 )
 
 func codexFollowerFromAcquire(req codexSessionAcquireRequest) (*codexFrontendFollower, bool) {
-	if req.platform != platform.PlatformFeishu || req.reply == nil {
+	if (req.platform != platform.PlatformFeishu && req.platform != platform.PlatformWeChat) || req.reply == nil {
 		return nil, false
 	}
 	authorizedIdentity := strings.TrimSpace(req.authorizedIdentity)
@@ -29,7 +29,7 @@ func codexFollowerFromAcquire(req codexSessionAcquireRequest) (*codexFrontendFol
 	if strings.TrimSpace(route.AccountID) == "" {
 		route.AccountID = strings.TrimSpace(req.accountID)
 	}
-	if route.Platform != platform.PlatformFeishu || !route.Valid() {
+	if route.Platform != req.platform || !route.Valid() {
 		return nil, false
 	}
 	follower := normalizeCodexFrontendFollower(&codexFrontendFollower{

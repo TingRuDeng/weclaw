@@ -1,9 +1,56 @@
 package agent
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
+
+func TestCodexThreadStatePreservesLatestTurnFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		rawError  string
+		wantError string
+	}{
+		{
+			name:      "model requires newer Codex",
+			rawError:  `{"message":"The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.","codexErrorInfo":"other"}`,
+			wantError: "model requires a newer version of Codex",
+		},
+		{
+			name:      "failure without details",
+			rawError:  `null`,
+			wantError: "Codex 任务执行失败",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var response codexThreadReadResponse
+			payload := fmt.Sprintf(`{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"turn-new","status":"failed","error":%s,"items":[]}]}}`, test.rawError)
+			if err := json.Unmarshal([]byte(payload), &response); err != nil {
+				t.Fatal(err)
+			}
+			state := codexThreadStateFromSnapshot(response.Thread)
+			err := failedCodexThreadStateError(state)
+			if !errors.Is(err, ErrCodexTurnTerminal) || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("failure=%v, want terminal error containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestCodexThreadStateDoesNotReusePreviousTurnError(t *testing.T) {
+	var response codexThreadReadResponse
+	payload := `{"thread":{"id":"thread-1","status":{"type":"idle"},"turns":[{"id":"turn-old","status":"failed","error":{"message":"previous failure"}},{"id":"turn-new","status":"completed","error":null}]}}`
+	if err := json.Unmarshal([]byte(payload), &response); err != nil {
+		t.Fatal(err)
+	}
+	state := codexThreadStateFromSnapshot(response.Thread)
+	if state.LastTurnID != "turn-new" || state.LastTurnError != "" || failedCodexThreadStateError(state) != nil {
+		t.Fatalf("state=%#v, latest turn must not reuse the previous failure", state)
+	}
+}
 
 func TestCodexThreadStateDoesNotReusePreviousTurnFinalText(t *testing.T) {
 	state := codexThreadStateFromSnapshot(codexThreadSnapshot{

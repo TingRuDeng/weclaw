@@ -84,7 +84,8 @@ func (a *ACPAgent) codexAppFrontendPresent() bool {
 }
 
 func (a *ACPAgent) shouldDeferCodexAppDynamicToolCall() bool {
-	return a.usesOfficialCodexDaemon() && a.codexDesktopCoordination && a.codexAppFrontendPresent()
+	sharedApp := a.codexHostMode == codexHostModeShared
+	return (sharedApp || (a.usesOfficialCodexDaemon() && a.codexDesktopCoordination)) && a.codexAppFrontendPresent()
 }
 
 func (a *ACPAgent) logCodexDynamicToolCall(call codexDynamicToolCallParams, deferred bool) {

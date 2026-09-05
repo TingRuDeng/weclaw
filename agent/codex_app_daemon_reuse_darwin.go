@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ const (
 	codexAppUseLocalDaemonEnv = "CODEX_APP_SERVER_USE_LOCAL_DAEMON"
 	codexAppForceCLIEnv       = "CODEX_APP_SERVER_FORCE_CLI"
 	codexCLIPathEnv           = "CODEX_CLI_PATH"
+	codexAppCodexHomeEnv      = "CODEX_HOME"
 	codexAppLaunchctlTimeout  = 3 * time.Second
 )
 
@@ -29,15 +31,25 @@ type codexDesktopHostProcessState struct {
 }
 
 type codexAppDaemonInspectDeps struct {
-	hostState          func() (codexDesktopHostProcessState, error)
-	processEnvironment func(int, string) (string, bool, error)
+	hostState           func() (codexDesktopHostProcessState, error)
+	processEnvironment  func(int, string) (string, bool, error)
+	launchEnvironment   func(context.Context, string) (string, error)
+	userHome            func() (string, error)
+	expectedEnvironment *codexAppDaemonEnvironment
+	inspectionContext   context.Context
 }
 
 type codexAppDaemonReuseDeps struct {
-	launchEnvironment func(context.Context, string) (string, error)
-	launchctl         func(context.Context, ...string) (string, error)
-	inspect           func(context.Context) (codexAppDaemonReuseResult, error)
-	userHome          func() (string, error)
+	launchEnvironment   func(context.Context, string) (string, error)
+	launchctl           func(context.Context, ...string) (string, error)
+	inspect             func(context.Context) (codexAppDaemonReuseResult, error)
+	userHome            func() (string, error)
+	expectedEnvironment *codexAppDaemonEnvironment
+}
+
+type codexAppDaemonLaunchMutation struct {
+	apply    []string
+	rollback []string
 }
 
 func configureSystemCodexAppDaemonReuse(
@@ -53,18 +65,39 @@ func configureSystemCodexAppDaemonReuse(
 	})
 }
 
+func configureSystemCodexAppDaemonReuseWithExpected(
+	ctx context.Context,
+	enabled bool,
+	socketPath string,
+	expected codexAppDaemonEnvironment,
+) (codexAppDaemonReuseResult, error) {
+	return configureCodexAppDaemonReuseWithDeps(ctx, enabled, socketPath, codexAppDaemonReuseDeps{
+		launchEnvironment: codexAppLaunchEnvironment,
+		launchctl:         runCodexAppLaunchctl,
+		inspect: func(inspectCtx context.Context) (codexAppDaemonReuseResult, error) {
+			return inspectSystemCodexAppDaemonReuseWithExpected(inspectCtx, &expected)
+		},
+		userHome:            os.UserHomeDir,
+		expectedEnvironment: &expected,
+	})
+}
+
 func configureCodexAppDaemonReuseWithDeps(
 	ctx context.Context,
 	enabled bool,
 	socketPath string,
 	deps codexAppDaemonReuseDeps,
 ) (codexAppDaemonReuseResult, error) {
+	if deps.launchEnvironment == nil || deps.launchctl == nil || deps.inspect == nil {
+		return codexAppDaemonReuseResult{}, fmt.Errorf("Codex App launchd dependencies are incomplete")
+	}
 	commandCtx, cancel := context.WithTimeout(ctx, codexAppLaunchctlTimeout)
 	defer cancel()
 	current, err := deps.launchEnvironment(commandCtx, codexAppUseLocalDaemonEnv)
 	if err != nil {
 		return codexAppDaemonReuseResult{}, err
 	}
+	current = strings.TrimSpace(current)
 	result := codexAppDaemonReuseResult{}
 	if !enabled {
 		if current != "" {
@@ -97,23 +130,108 @@ func configureCodexAppDaemonReuseWithDeps(
 			)
 		}
 	}
-	appSocketPath, err := codexAppDaemonSocketFromLaunchEnvironment(commandCtx, deps)
-	if err != nil {
-		return result, err
-	}
-	if filepath.Clean(appSocketPath) != filepath.Clean(socketPath) {
-		return result, fmt.Errorf(
-			"Codex App daemon socket %s does not match WeClaw official daemon socket %s; align CODEX_HOME first",
-			appSocketPath,
-			socketPath,
-		)
+	mutations := make([]codexAppDaemonLaunchMutation, 0, 3)
+	if expected := deps.expectedEnvironment; expected != nil {
+		if deps.userHome == nil {
+			return result, fmt.Errorf("Codex App user-home dependency is incomplete")
+		}
+		if err := expected.validate(); err != nil {
+			return result, fmt.Errorf("validate Codex App shared environment: %w", err)
+		}
+		expectedSocket := codexDaemonSocketPath(expected.CodexHome)
+		if filepath.Clean(expectedSocket) != filepath.Clean(socketPath) {
+			return result, fmt.Errorf(
+				"WeClaw official daemon socket %s does not match resolved CODEX_HOME socket %s",
+				socketPath,
+				expectedSocket,
+			)
+		}
+
+		launchHomeRaw, homeErr := deps.launchEnvironment(commandCtx, codexAppCodexHomeEnv)
+		if homeErr != nil {
+			return result, homeErr
+		}
+		launchHome, homeErr := codexAppHomeFromLaunchValue(launchHomeRaw, deps.userHome)
+		if homeErr != nil {
+			return result, homeErr
+		}
+		plannedHome := launchHome
+		if launchHome != expected.CodexHome {
+			if strings.TrimSpace(launchHomeRaw) != "" {
+				return result, fmt.Errorf(
+					"launchd environment %s=%q resolves to %s, want %s; refusing to overwrite explicit Codex home",
+					codexAppCodexHomeEnv,
+					strings.TrimSpace(launchHomeRaw),
+					launchHome,
+					expected.CodexHome,
+				)
+			}
+			mutations = append(mutations, codexAppDaemonLaunchMutation{
+				apply:    []string{"setenv", codexAppCodexHomeEnv, expected.CodexHome},
+				rollback: codexAppDaemonLaunchRestoreArgs(codexAppCodexHomeEnv, launchHomeRaw),
+			})
+			plannedHome = expected.CodexHome
+		}
+
+		launchSQLiteRaw, sqliteErr := deps.launchEnvironment(commandCtx, codexAppSQLiteHomeEnv)
+		if sqliteErr != nil {
+			return result, sqliteErr
+		}
+		launchSQLite, sqliteErr := normalizeOptionalCodexEnvironmentPath(codexAppSQLiteHomeEnv, launchSQLiteRaw)
+		if sqliteErr != nil {
+			return result, sqliteErr
+		}
+		if launchSQLite == "" {
+			launchSQLite = plannedHome
+		}
+		expectedSQLite := expected.effectiveSQLiteHome()
+		if launchSQLite != expectedSQLite {
+			if strings.TrimSpace(launchSQLiteRaw) == "" && expected.CodexSQLiteHome != "" {
+				mutations = append(mutations, codexAppDaemonLaunchMutation{
+					apply:    []string{"setenv", codexAppSQLiteHomeEnv, expected.CodexSQLiteHome},
+					rollback: codexAppDaemonLaunchRestoreArgs(codexAppSQLiteHomeEnv, launchSQLiteRaw),
+				})
+			} else {
+				return result, fmt.Errorf(
+					"launchd environment %s resolves to %s, want %s; refusing to overwrite explicit SQLite home",
+					codexAppSQLiteHomeEnv,
+					launchSQLite,
+					expectedSQLite,
+				)
+			}
+		}
+	} else {
+		appSocketPath, socketErr := codexAppDaemonSocketFromLaunchEnvironment(commandCtx, deps)
+		if socketErr != nil {
+			return result, socketErr
+		}
+		if filepath.Clean(appSocketPath) != filepath.Clean(socketPath) {
+			return result, fmt.Errorf(
+				"Codex App daemon socket %s does not match WeClaw official daemon socket %s; align CODEX_HOME first",
+				appSocketPath,
+				socketPath,
+			)
+		}
 	}
 	if current != "1" {
-		if _, err := deps.launchctl(commandCtx, "setenv", codexAppUseLocalDaemonEnv, "1"); err != nil {
-			return result, err
-		}
-		result.Changed = true
+		mutations = append(mutations, codexAppDaemonLaunchMutation{
+			apply:    []string{"setenv", codexAppUseLocalDaemonEnv, "1"},
+			rollback: codexAppDaemonLaunchRestoreArgs(codexAppUseLocalDaemonEnv, current),
+		})
 	}
+	for index, mutation := range mutations {
+		if _, err := deps.launchctl(commandCtx, mutation.apply...); err != nil {
+			rollbackErr := rollbackCodexAppDaemonLaunchMutations(ctx, deps.launchctl, mutations[:index+1])
+			if rollbackErr != nil {
+				return result, errors.Join(
+					fmt.Errorf("apply launchd Codex App environment: %w", err),
+					fmt.Errorf("rollback launchd Codex App environment: %w", rollbackErr),
+				)
+			}
+			return result, fmt.Errorf("apply launchd Codex App environment: %w", err)
+		}
+	}
+	result.Changed = len(mutations) > 0
 	inspected, err := deps.inspect(ctx)
 	result.AppRunning = inspected.AppRunning
 	result.PrivateAppServer = inspected.PrivateAppServer
@@ -124,6 +242,20 @@ func inspectSystemCodexAppDaemonReuse(_ context.Context) (codexAppDaemonReuseRes
 	return inspectCodexAppDaemonReuseWithDeps(codexAppDaemonInspectDeps{
 		hostState:          codexDesktopHostProcessStateFromSystem,
 		processEnvironment: readCodexAppProcessEnvironmentValue,
+	})
+}
+
+func inspectSystemCodexAppDaemonReuseWithExpected(
+	ctx context.Context,
+	expected *codexAppDaemonEnvironment,
+) (codexAppDaemonReuseResult, error) {
+	return inspectCodexAppDaemonReuseWithDeps(codexAppDaemonInspectDeps{
+		hostState:           codexDesktopHostProcessStateFromSystem,
+		processEnvironment:  readCodexAppProcessEnvironmentValue,
+		launchEnvironment:   codexAppLaunchEnvironment,
+		userHome:            os.UserHomeDir,
+		expectedEnvironment: expected,
+		inspectionContext:   ctx,
 	})
 }
 
@@ -141,6 +273,38 @@ func inspectCodexAppDaemonReuseWithDeps(deps codexAppDaemonInspectDeps) (codexAp
 	if len(state.AppPIDs) == 0 || deps.processEnvironment == nil {
 		return result, fmt.Errorf("running Codex App process identity is incomplete")
 	}
+	expected := deps.expectedEnvironment
+	inspectionContext := deps.inspectionContext
+	if inspectionContext == nil {
+		inspectionContext = context.Background()
+	}
+	if expected != nil {
+		if validateErr := expected.validate(); validateErr != nil {
+			return result, fmt.Errorf("validate running Codex App shared environment: %w", validateErr)
+		}
+		if deps.launchEnvironment != nil {
+			launchEnvironment, resolveErr := codexAppDaemonEnvironmentFromLaunch(
+				inspectionContext, deps.launchEnvironment, deps.userHome,
+			)
+			if resolveErr != nil {
+				return result, resolveErr
+			}
+			if launchEnvironment.CodexHome != expected.CodexHome ||
+				launchEnvironment.effectiveSQLiteHome() != expected.effectiveSQLiteHome() {
+				return result, fmt.Errorf(
+					"%w: launchd Codex environment is not aligned: %s=%s, %s=%s; want %s=%s, effective SQLite home=%s; fully quit and reopen Codex App after correcting launchd environment",
+					ErrCodexAppRestartRequired,
+					codexAppCodexHomeEnv,
+					launchEnvironment.CodexHome,
+					codexAppSQLiteHomeEnv,
+					launchEnvironment.effectiveSQLiteHome(),
+					codexAppCodexHomeEnv,
+					expected.CodexHome,
+					expected.effectiveSQLiteHome(),
+				)
+			}
+		}
+	}
 	for _, pid := range state.AppPIDs {
 		value, present, envErr := deps.processEnvironment(pid, codexAppUseLocalDaemonEnv)
 		if envErr != nil {
@@ -148,12 +312,42 @@ func inspectCodexAppDaemonReuseWithDeps(deps codexAppDaemonInspectDeps) (codexAp
 		}
 		if !present || value != "1" {
 			return result, fmt.Errorf(
-				"running Codex App did not inherit %s=1; fully quit and reopen Codex App",
+				"%w: running Codex App did not inherit %s=1; fully quit and reopen Codex App",
+				ErrCodexAppRestartRequired,
 				codexAppUseLocalDaemonEnv,
 			)
 		}
+		if expected != nil {
+			if err := inspectCodexAppProcessPathEnvironment(pid, deps.processEnvironment, *expected); err != nil {
+				return result, err
+			}
+		}
 	}
 	return result, nil
+}
+
+func codexAppDaemonLaunchRestoreArgs(name, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{"unsetenv", name}
+	}
+	return []string{"setenv", name, value}
+}
+
+func rollbackCodexAppDaemonLaunchMutations(
+	ctx context.Context,
+	launchctl func(context.Context, ...string) (string, error),
+	mutations []codexAppDaemonLaunchMutation,
+) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexAppLaunchctlTimeout)
+	defer cancel()
+	var rollbackErrors []error
+	for index := len(mutations) - 1; index >= 0; index-- {
+		if _, err := launchctl(rollbackCtx, mutations[index].rollback...); err != nil {
+			rollbackErrors = append(rollbackErrors, err)
+		}
+	}
+	return errors.Join(rollbackErrors...)
 }
 
 func readCodexAppProcessEnvironmentValue(pid int, name string) (string, bool, error) {
@@ -167,22 +361,125 @@ func readCodexAppProcessEnvironmentValue(pid int, name string) (string, bool, er
 	return parseDarwinProcessEnvironmentValue(data, name)
 }
 
+func inspectCodexAppProcessPathEnvironment(
+	pid int,
+	processEnvironment func(int, string) (string, bool, error),
+	expected codexAppDaemonEnvironment,
+) error {
+	homeValue, homePresent, err := processEnvironment(pid, codexAppCodexHomeEnv)
+	if err != nil {
+		return fmt.Errorf("inspect running Codex App %s: %w", codexAppCodexHomeEnv, err)
+	}
+	actualHome := expected.DefaultCodexHome
+	if homePresent && strings.TrimSpace(homeValue) != "" {
+		actualHome, err = normalizeCodexAbsoluteEnvironmentPath(codexAppCodexHomeEnv, homeValue)
+		if err != nil {
+			return fmt.Errorf("inspect running Codex App PID %d: %w", pid, err)
+		}
+	}
+	if actualHome != expected.CodexHome {
+		return fmt.Errorf(
+			"%w: running Codex App PID %d resolves %s to %s, want %s; fully quit and reopen Codex App",
+			ErrCodexAppRestartRequired,
+			pid,
+			codexAppCodexHomeEnv,
+			actualHome,
+			expected.CodexHome,
+		)
+	}
+
+	sqliteValue, sqlitePresent, err := processEnvironment(pid, codexAppSQLiteHomeEnv)
+	if err != nil {
+		return fmt.Errorf("inspect running Codex App %s: %w", codexAppSQLiteHomeEnv, err)
+	}
+	actualSQLite := actualHome
+	if sqlitePresent && strings.TrimSpace(sqliteValue) != "" {
+		actualSQLite, err = normalizeCodexAbsoluteEnvironmentPath(codexAppSQLiteHomeEnv, sqliteValue)
+		if err != nil {
+			return fmt.Errorf("inspect running Codex App PID %d: %w", pid, err)
+		}
+	}
+	if actualSQLite != expected.effectiveSQLiteHome() {
+		return fmt.Errorf(
+			"%w: running Codex App PID %d resolves %s to %s, want %s; fully quit and reopen Codex App",
+			ErrCodexAppRestartRequired,
+			pid,
+			codexAppSQLiteHomeEnv,
+			actualSQLite,
+			expected.effectiveSQLiteHome(),
+		)
+	}
+	return nil
+}
+
+func codexAppDaemonEnvironmentFromLaunch(
+	ctx context.Context,
+	launchEnvironment func(context.Context, string) (string, error),
+	userHome func() (string, error),
+) (codexAppDaemonEnvironment, error) {
+	if launchEnvironment == nil || userHome == nil {
+		return codexAppDaemonEnvironment{}, fmt.Errorf("Codex App launchd environment dependencies are incomplete")
+	}
+	rawHome, err := launchEnvironment(ctx, codexAppCodexHomeEnv)
+	if err != nil {
+		return codexAppDaemonEnvironment{}, err
+	}
+	home, err := codexAppHomeFromLaunchValue(rawHome, userHome)
+	if err != nil {
+		return codexAppDaemonEnvironment{}, err
+	}
+	userHomePath, err := userHome()
+	if err != nil {
+		return codexAppDaemonEnvironment{}, fmt.Errorf("resolve Codex App default home: %w", err)
+	}
+	defaultHome, err := normalizeCodexAbsoluteEnvironmentPath(
+		"default CODEX_HOME", filepath.Join(userHomePath, ".codex"),
+	)
+	if err != nil {
+		return codexAppDaemonEnvironment{}, err
+	}
+	rawSQLite, err := launchEnvironment(ctx, codexAppSQLiteHomeEnv)
+	if err != nil {
+		return codexAppDaemonEnvironment{}, err
+	}
+	sqliteHome, err := normalizeOptionalCodexEnvironmentPath(codexAppSQLiteHomeEnv, rawSQLite)
+	if err != nil {
+		return codexAppDaemonEnvironment{}, err
+	}
+	environment := codexAppDaemonEnvironment{
+		CodexHome:        home,
+		CodexSQLiteHome:  sqliteHome,
+		DefaultCodexHome: defaultHome,
+	}
+	if err := environment.validate(); err != nil {
+		return codexAppDaemonEnvironment{}, fmt.Errorf("validate launchd Codex environment: %w", err)
+	}
+	return environment, nil
+}
+
+func codexAppHomeFromLaunchValue(
+	value string,
+	userHome func() (string, error),
+) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		home, err := userHome()
+		if err != nil {
+			return "", fmt.Errorf("resolve Codex App home: %w", err)
+		}
+		value = filepath.Join(home, ".codex")
+	}
+	return normalizeCodexAbsoluteEnvironmentPath(codexAppCodexHomeEnv, value)
+}
+
 func codexAppDaemonSocketFromLaunchEnvironment(ctx context.Context, deps codexAppDaemonReuseDeps) (string, error) {
-	codexHome, err := deps.launchEnvironment(ctx, "CODEX_HOME")
+	environment, err := codexAppDaemonEnvironmentFromLaunch(
+		ctx, deps.launchEnvironment, deps.userHome,
+	)
 	if err != nil {
 		return "", err
 	}
-	if codexHome == "" {
-		home, homeErr := deps.userHome()
-		if homeErr != nil {
-			return "", fmt.Errorf("resolve Codex App home: %w", homeErr)
-		}
-		codexHome = filepath.Join(home, ".codex")
-	}
-	if !filepath.IsAbs(codexHome) {
-		return "", fmt.Errorf("Codex App CODEX_HOME must be absolute: %s", codexHome)
-	}
-	return codexDaemonSocketPath(filepath.Clean(codexHome)), nil
+	return codexDaemonSocketPath(environment.CodexHome), nil
 }
 
 func codexAppLaunchEnvironment(ctx context.Context, name string) (string, error) {

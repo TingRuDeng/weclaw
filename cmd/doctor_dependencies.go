@@ -123,9 +123,9 @@ func checkCodexStandalone(cfg *config.Config, deps doctorDeps) doctorResult {
 	if agentConfig.EffectiveCodexMultiFrontend() {
 		result.Status = doctorFail
 		result.Detail = "codex_multi_frontend=true 需要官方 standalone；运行 weclaw doctor --fix --components codex"
-	} else if mode == "daemon" {
+	} else if mode == "daemon" || mode == "shared" {
 		result.Status = doctorFail
-		result.Detail = "codex_host_mode=daemon 需要官方 standalone；运行 weclaw doctor --fix --components codex"
+		result.Detail = "codex_host_mode=" + mode + " 需要官方 standalone；运行 weclaw doctor --fix --components codex"
 	}
 	return result
 }

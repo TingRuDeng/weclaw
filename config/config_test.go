@@ -316,7 +316,7 @@ func TestAgentConfigCodexAppDaemon(t *testing.T) {
 	}
 }
 
-func TestCodexMultiFrontendForcesOfficialDaemon(t *testing.T) {
+func TestCodexMultiFrontendSelectsPlatformSharedHost(t *testing.T) {
 	var cfg Config
 	data := []byte(`{
 		"agents": {
@@ -332,8 +332,8 @@ func TestCodexMultiFrontendForcesOfficialDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentCfg := cfg.Agents["codex"]
-	if got := agentCfg.EffectiveCodexHostMode(); got != "daemon" {
-		t.Fatalf("EffectiveCodexHostMode()=%q, want daemon when multi-frontend sharing is enabled", got)
+	if got := agentCfg.EffectiveCodexHostMode(); got != "auto" {
+		t.Fatalf("EffectiveCodexHostMode()=%q, want platform-specific shared Host selection", got)
 	}
 	if !agentCfg.EffectiveCodexAppDaemon() {
 		t.Fatal("multi-frontend sharing must enable Codex App daemon reuse")

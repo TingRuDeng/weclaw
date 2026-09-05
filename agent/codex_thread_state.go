@@ -26,6 +26,7 @@ type codexThreadStatus struct {
 type codexTurnSnapshot struct {
 	ID     string            `json:"id"`
 	Status string            `json:"status"`
+	Error  json.RawMessage   `json:"error"`
 	Items  []codexThreadItem `json:"items"`
 }
 
@@ -172,7 +173,7 @@ func (a *ACPAgent) ReadCodexThreadProgressSnapshot(ctx context.Context, conversa
 // there is exactly one app-server authority, so thread/read itself is the
 // safe source of truth and does not create a second Host or a subscription.
 func (a *ACPAgent) officialDaemonIsAuthoritativeForUnknownBinding() bool {
-	return a.usesOfficialCodexDaemon() && !a.codexDesktopHostSelection
+	return (a.usesOfficialCodexDaemon() || a.codexHostMode == codexHostModeShared) && !a.codexDesktopHostSelection
 }
 
 func projectCodexVisibleProgressEvents(events []*codexTurnEvent) []ProgressEvent {
@@ -268,7 +269,7 @@ func codexThreadStateFromSnapshot(thread codexThreadSnapshot) CodexThreadState {
 	state.WaitingOnApproval = codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnApproval")
 	state.WaitingOnUserInput = codexStatusHasFlag(thread.Status.ActiveFlags, "waitingOnUserInput")
 	state.ActiveTurnID = activeCodexTurnID(thread.Turns)
-	state.LastTurnID, state.LastTurnStatus = latestCodexTurnState(thread.Turns)
+	state.LastTurnID, state.LastTurnStatus, state.LastTurnError = latestCodexTurnState(thread.Turns)
 	state.Preview = latestCodexUserPreview(thread.Turns)
 	state.LastAgentMessageText = latestCodexAgentText(thread.Turns)
 	return state
@@ -311,13 +312,13 @@ func projectCodexAppServerActiveTurnEvents(thread codexThreadSnapshot, targetTur
 	return nil
 }
 
-// latestCodexTurnState 返回 thread/read 中最近 turn 的身份和权威状态。
-func latestCodexTurnState(turns []codexTurnSnapshot) (string, string) {
+// latestCodexTurnState 返回 thread/read 中最近 turn 的身份、权威状态和失败原因。
+func latestCodexTurnState(turns []codexTurnSnapshot) (string, string, string) {
 	if len(turns) == 0 {
-		return "", ""
+		return "", "", ""
 	}
 	latest := turns[len(turns)-1]
-	return strings.TrimSpace(latest.ID), strings.TrimSpace(latest.Status)
+	return strings.TrimSpace(latest.ID), strings.TrimSpace(latest.Status), formatCodexTurnError(latest.Error)
 }
 
 func activeCodexTurnID(turns []codexTurnSnapshot) string {

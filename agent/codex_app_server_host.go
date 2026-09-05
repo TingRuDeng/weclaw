@@ -48,6 +48,9 @@ func (a *ACPAgent) usesCodexSharedHost() bool {
 }
 
 func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {
+	if a.codexHostMode == codexHostModeShared {
+		return a.launchCodexAppSharedClient(ctx)
+	}
 	socketPath, err := a.resolveCodexHostSocket()
 	if err != nil {
 		return 0, err
@@ -82,6 +85,9 @@ func (a *ACPAgent) launchCodexHostClient(ctx context.Context) (int, error) {
 
 // launchCodexHostClientLocked 仅在持有 socket lifecycle lock 时调用。
 func (a *ACPAgent) launchCodexHostClientLocked(ctx context.Context, socketPath string) (int, error) {
+	if a.codexHostMode == codexHostModeShared {
+		return a.restartCodexAppSharedClientLocked(ctx, socketPath)
+	}
 	if a.usesOfficialCodexDaemon() {
 		return a.launchCodexDaemonClientLocked(ctx, socketPath)
 	}
@@ -248,6 +254,9 @@ func releaseCodexHostStartupLock(lockFile *os.File) {
 }
 
 func (a *ACPAgent) resolveCodexHostSocket() (string, error) {
+	if a.codexHostMode == codexHostModeShared {
+		return a.resolveCodexAppSharedSocket()
+	}
 	if a.usesOfficialCodexDaemon() {
 		return a.resolveCodexDaemonSocket()
 	}

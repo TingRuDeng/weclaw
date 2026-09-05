@@ -294,6 +294,143 @@ func TestACPAgentCodexThreadConfigPropagatesUpdateFailure(t *testing.T) {
 	}
 }
 
+func TestACPAgentCodexThreadConfigResumesUnloadedThread(t *testing.T) {
+	for _, failure := range []string{"", "read", "resume", "update", "unsubscribe", "cancel"} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}, Model: "default-model"})
+			a.threads["conversation-1"] = "thread-current"
+			var methods []string
+			updates := 0
+			a.rpcCall = func(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+				methods = append(methods, method)
+				p := params.(map[string]interface{})
+				if p["threadId"] != "thread-current" {
+					t.Fatalf("wrong target: %#v", p)
+				}
+				switch method {
+				case "thread/settings/update":
+					updates++
+					if updates == 1 {
+						return nil, errors.New("agent error: thread not found: thread-current")
+					}
+					if failure == "update" {
+						return nil, errors.New("update rejected")
+					}
+					if failure == "cancel" {
+						cancel()
+						return nil, ctx.Err()
+					}
+					if p["model"] != "selected-model" || p["effort"] != "high" {
+						t.Fatalf("lost requested settings: %#v", p)
+					}
+				case "thread/read":
+					if failure == "read" {
+						return nil, errors.New("read failed")
+					}
+					return json.RawMessage(`{"thread":{"id":"thread-current","status":{"type":"notLoaded"}}}`), nil
+				case "thread/resume":
+					if failure == "resume" {
+						return nil, errors.New("resume failed")
+					}
+					if _, ok := p["model"]; ok {
+						t.Fatal("resume must not inject default model")
+					}
+					return json.RawMessage(`{"thread":{"id":"thread-current"},"model":"original-model","reasoningEffort":"low"}`), nil
+				case "thread/unsubscribe":
+					if ctx.Err() != nil {
+						t.Fatal("cleanup inherited canceled context")
+					}
+					if failure == "unsubscribe" {
+						return nil, errors.New("unsubscribe failed")
+					}
+				default:
+					t.Fatalf("unexpected RPC: %s", method)
+				}
+				return json.RawMessage(`{}`), nil
+			}
+			err := a.SetCodexThreadConfig(ctx, CodexThreadConfigUpdate{
+				ConversationID: "conversation-1", ThreadID: "thread-current", Model: "selected-model", Effort: "high",
+			})
+			if failure == "" && err != nil || failure != "" && (err == nil || !strings.Contains(err.Error(), failure)) {
+				t.Fatalf("error=%v, failure=%q", err, failure)
+			}
+			want := []string{"thread/settings/update", "thread/read"}
+			if failure != "read" {
+				want = append(want, "thread/resume")
+				if failure != "resume" {
+					want = append(want, "thread/settings/update", "thread/unsubscribe")
+				}
+			}
+			if !reflect.DeepEqual(methods, want) {
+				t.Fatalf("methods=%v, want %v", methods, want)
+			}
+			config, _ := a.CodexThreadConfig(context.Background(), "conversation-1", "thread-current")
+			if failure == "" || failure == "unsubscribe" {
+				if config.Model != "selected-model" || config.Effort != "high" {
+					t.Fatalf("config=%#v", config)
+				}
+			} else if config.Model == "selected-model" {
+				t.Fatal("failed update was cached as successful")
+			}
+			if a.CodexModelStatus().Model != "default-model" || a.threads["conversation-1"] != "thread-current" {
+				t.Fatal("default model or binding changed")
+			}
+			if _, subscribed := a.codexThreadSubscriptions["thread-current"]; subscribed && failure != "unsubscribe" {
+				t.Fatal("temporary subscription was retained")
+			}
+		})
+	}
+}
+
+func TestACPAgentCodexThreadConfigDoesNotBlindlyRetry(t *testing.T) {
+	missing := errors.New("agent error: thread not found: thread-current")
+	for _, tc := range []struct {
+		name, state, returnedID string
+		failure                 error
+		wantRead                bool
+	}{
+		{name: "timeout", failure: context.DeadlineExceeded},
+		{name: "unknown delivery", failure: errors.Join(missing, errACPWriteMayHaveDelivered)},
+		{name: "already loaded", failure: missing, wantRead: true, state: "idle", returnedID: "thread-current"},
+		{name: "active", failure: missing, wantRead: true, state: "active", returnedID: "thread-current"},
+		{name: "wrong thread", failure: missing, wantRead: true, state: "notLoaded", returnedID: "thread-other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
+			var methods []string
+			a.rpcCall = func(_ context.Context, method string, _ interface{}) (json.RawMessage, error) {
+				methods = append(methods, method)
+				switch method {
+				case "thread/settings/update":
+					return nil, tc.failure
+				case "thread/read":
+					return json.Marshal(map[string]any{"thread": map[string]any{
+						"id": tc.returnedID, "status": map[string]string{"type": tc.state},
+					}})
+				default:
+					t.Fatalf("unexpected recovery RPC: %s", method)
+					return nil, nil
+				}
+			}
+			err := a.SetCodexThreadConfig(context.Background(), CodexThreadConfigUpdate{
+				ConversationID: "conversation-1", ThreadID: "thread-current", Effort: "high",
+			})
+			if err == nil {
+				t.Fatal("failure was hidden")
+			}
+			want := []string{"thread/settings/update"}
+			if tc.wantRead {
+				want = append(want, "thread/read")
+			}
+			if !reflect.DeepEqual(methods, want) {
+				t.Fatalf("methods=%v, want %v", methods, want)
+			}
+		})
+	}
+}
+
 func TestACPAgentCodexLifecycleConfigPreservesExplicitDefaultEffort(t *testing.T) {
 	a := NewACPAgent(ACPAgentConfig{Command: "codex", Args: []string{"app-server"}})
 	a.cacheCodexThreadConfigFromLifecycleResult(

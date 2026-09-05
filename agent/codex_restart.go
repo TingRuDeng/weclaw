@@ -513,14 +513,14 @@ func (a *ACPAgent) VerifyCodexRestart(ctx context.Context, previous CodexRestart
 	}
 	managedMigration := previous.HostStopped &&
 		strings.TrimSpace(previous.HostMode) == codexHostModeDaemon &&
-		strings.TrimSpace(a.codexHostMode) == codexHostModeManaged
+		(strings.TrimSpace(a.codexHostMode) == codexHostModeManaged || a.codexHostMode == codexHostModeShared)
 	if topologyChanged && !a.usesOfficialCodexDaemon() && !managedMigration {
 		return CodexRestartSnapshot{}, fmt.Errorf(
 			"%w: 已停止的 Codex Host 拓扑发生变化，拒绝未经验证的自动迁移",
 			ErrCodexRuntimeUnavailable,
 		)
 	}
-	allowDaemonFrontend := topologyChanged && a.usesOfficialCodexDaemon()
+	allowDaemonFrontend := (topologyChanged && a.usesOfficialCodexDaemon()) || a.codexHostMode == codexHostModeShared
 	if !allowDaemonFrontend {
 		if err := a.requireCodexDesktopAbsent(); err != nil {
 			return CodexRestartSnapshot{}, err
@@ -598,6 +598,7 @@ func (a *ACPAgent) verifyStartedCodexHost(
 }
 
 func (a *ACPAgent) inspectStartedCodexHost(ctx context.Context, allowDaemonFrontend bool) (CodexRestartSnapshot, error) {
+	allowDaemonFrontend = allowDaemonFrontend || a.codexHostMode == codexHostModeShared
 	if err := a.ensureStarted(ctx); err != nil {
 		return CodexRestartSnapshot{}, err
 	}
@@ -606,7 +607,7 @@ func (a *ACPAgent) inspectStartedCodexHost(ctx context.Context, allowDaemonFront
 			return CodexRestartSnapshot{}, err
 		}
 	}
-	if allowDaemonFrontend && !a.usesOfficialCodexDaemon() {
+	if allowDaemonFrontend && !a.usesOfficialCodexDaemon() && a.codexHostMode != codexHostModeShared {
 		return CodexRestartSnapshot{}, fmt.Errorf(
 			"%w: 仅官方 daemon 恢复允许 Codex App 前端保持运行",
 			ErrCodexRuntimeUnavailable,
@@ -618,7 +619,7 @@ func (a *ACPAgent) inspectStartedCodexHost(ctx context.Context, allowDaemonFront
 	// A topology migration only attaches to the already verified official
 	// daemon. It does not stop or replace that Host, so its active threads may
 	// continue while WeClaw recovers the old transaction.
-	if !allowDaemonFrontend {
+	if !allowDaemonFrontend || a.codexHostMode == codexHostModeShared {
 		if err := a.requireCodexRestartIdle(ctx); err != nil {
 			return CodexRestartSnapshot{}, err
 		}

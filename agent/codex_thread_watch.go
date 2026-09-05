@@ -480,7 +480,7 @@ func failedCodexThreadStateError(state CodexThreadState) error {
 	}
 	message := strings.TrimSpace(state.LastTurnError)
 	if message == "" {
-		message = "Codex App 本地任务执行失败"
+		message = "Codex 任务执行失败"
 	}
 	return fmt.Errorf("%w: %s", ErrCodexTurnTerminal, message)
 }

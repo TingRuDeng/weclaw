@@ -86,11 +86,12 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 		return CodexCLILaunch{}, fmt.Errorf("受控 Codex CLI 不支持 run_as_user")
 	}
 	officialDaemon := a.usesOfficialCodexDaemon()
-	if !officialDaemon && opts.AllowHostStart {
+	sharedApp := a.codexHostMode == codexHostModeShared
+	if !officialDaemon && !sharedApp && opts.AllowHostStart {
 		return CodexCLILaunch{}, fmt.Errorf("managed Codex Host 必须由运行中的 WeClaw 服务准备；请先启动 WeClaw")
 	}
 	command := a.command
-	if officialDaemon {
+	if officialDaemon || sharedApp {
 		var err error
 		command, err = a.resolveCodexDaemonLifecycleCommand()
 		if err != nil {
@@ -101,6 +102,17 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	if err != nil {
 		return CodexCLILaunch{}, err
 	}
+	if sharedApp && opts.AllowHostStart {
+		if _, err := a.launchCodexAppSharedClient(ctx); err != nil {
+			return CodexCLILaunch{}, err
+		}
+		// This short-lived launcher owns only its connection; the signed host
+		// launcher and the App keep the shared service alive.
+		connection, _, _ := a.disconnectCodexHostClient(false)
+		if connection != nil {
+			_ = connection.Close()
+		}
+	}
 	exists, err := existingCodexHostSocket(socketPath)
 	if err != nil {
 		return CodexCLILaunch{}, err
@@ -108,7 +120,7 @@ func (a *ACPAgent) PrepareCodexCLILaunch(ctx context.Context, opts CodexCLILaunc
 	if !exists && !opts.AllowHostStart {
 		return CodexCLILaunch{}, fmt.Errorf("WeClaw 正在运行但未使用 official daemon，已拒绝启动第二个 Codex Host；请先停止并重启 WeClaw")
 	}
-	if a.desktopProbe != nil {
+	if a.desktopProbe != nil && !sharedApp {
 		socketExists, processExists := a.desktopProbe.Presence()
 		if (socketExists || processExists) && a.codexRuntimeModeSnapshot() != CodexRuntimeWeClaw {
 			return CodexCLILaunch{}, fmt.Errorf("Codex App 当前可见，无法证明 official daemon 是唯一 Host；受控 CLI 已拒绝连接")

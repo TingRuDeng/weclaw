@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-black)](https://github.com/TingRuDeng/weclaw/releases/latest)
 [![License](https://img.shields.io/github/license/TingRuDeng/weclaw)](LICENSE)
 
-通过微信和飞书远程使用本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果。Codex 始终只保留一个 Host 写入权威；完整多前端共享模式下，Codex App、受控 CLI、微信和飞书都连接同一个已验证的 official daemon，并从同一 thread 继续任务。
+通过微信和飞书远程使用本机 Codex、Claude：复用真实工作空间与会话上下文，实时回传进度、审批和结果。Codex 始终只保留一个 Host 写入权威；完整多前端共享模式下，Codex App、受控 CLI、微信和飞书都连接同一个已验证的官方会话服务，并从同一 thread 继续任务。
 
 > 当前正式构建与上传只提供 **macOS Apple Silicon（darwin/arm64）** 和 **Linux amd64** 二进制；其他平台不提供正式二进制或自更新支持。
 
@@ -17,7 +17,7 @@
 - **远程同步本地任务**：离开电脑后，从微信或飞书继续 Codex、Claude 会话。
 - **上下文不中断**：复用 Codex workspace/thread 和 Claude ACP session，不把每条消息当成新对话。
 - **过程可见、结果可达**：飞书使用 CardKit 实时更新，微信提供输入状态和任务结果。
-- **受控 Codex 运行边界**：已验证的 official daemon 是默认共享 Host；App Code Mode 持有某个 active thread writer 时只通过安全 follower IPC 定向协作，WeClaw 不自行启动第二 Host。
+- **共享原任务**：macOS App 共享适配保留官方工具与界面，消息端和官方 CLI 连接同一个会话服务。
 - **安全边界可配置**：平台或机器人用户白名单、工作目录白名单、审计日志和 Codex 权限档位均可独立配置；个人的多个已授权账号具有相同管理能力。
 
 ## 快速开始
@@ -74,38 +74,39 @@ weclaw status
 /cx release            # 只解除当前飞书窗口绑定，本地任务继续运行
 ```
 
-macOS 默认 `codex_host_mode: auto` 在构造 Agent 时固定共享 Host 拓扑：固定 control socket 上已有已验证 daemon，或 `CODEX_HOME` 中可用 official standalone 时，都选择 official daemon 作为默认共享 authority。即使 Codex App 已运行，App 的历史可见性也不会整体切换该 authority。新版 Codex App 的 Code Mode 可以为正在打开的 thread 启动 App 自己的受锁 Host；当 official daemon 明确返回该 thread 已有 active writer 时，WeClaw 只通过已验证 Desktop follower IPC 读取并 steer 这个 active turn，其他 thread 仍使用 daemon。只有 standalone 不可用时，`auto` 才保留 App 私有 Host 或 WeClaw-managed Host 的兼容路径；WeClaw 不会为了伪同步自行启动第二个 Host。显式 `daemon` 模式保留同样的定向 Desktop 协调，daemon 启动或身份验证失败时保持失败关闭。
+macOS 上，`codex_host_mode: auto` 在启用 App 复用且安装了带官方 Node 的 Codex App 时选择 `shared`：App、官方 CLI、飞书和微信连接同一个官方 app-server。App 的完整启动配置、工具和权限通过适配入口保留，消息端无需另建会话服务。其他环境沿用 official daemon 或 managed 兼容路径；显式 `daemon`、`managed` 不会自动改为 `shared`。
 
-需要把多前端共享作为强制能力时，在原生 Codex Agent 上设置 `"codex_multi_frontend": true`。该开关把有效 Host 模式固定为 `daemon`，同时启用 macOS App daemon 复用；official standalone 缺失时，`weclaw doctor` 报阻断错误，`weclaw start` 也会在平台启动前失败并提示 `weclaw doctor --fix --components codex`，不会回退 managed。文件存在后，启动流程还会在平台注册前同步启动并验证 daemon、App 复用和 Host 身份，任一步失败都不会先开放消息入口。它不能与 `codex_host_mode: managed`、自定义 `app_server_socket`、`run_as_user` 或 `codex_app_reuse_daemon: false` 并用。省略该字段保留旧版 `auto` 行为；显式设为 `false` 时，配置规范化不会再次打开 App daemon 复用。
+设置 `"codex_multi_frontend": true` 后，WeClaw 在消息平台启动前准备并验证共享服务。macOS 的 `auto` 选择 App 共享适配，其他平台使用官方 daemon；standalone 缺失、Host 冲突或身份验证失败会阻止启动。该开关不能与 `managed`、自定义 `app_server_socket`、`run_as_user` 或 `codex_app_reuse_daemon: false` 并用。
 
 除显式 `--force` 外，shared managed Host、official daemon 和受控 `weclaw codex cli` 在启动、接管或协调停止前都会执行只读多 Host 预检。macOS 通过 `kern.procargs2` 读取内核记录的可执行文件路径和原始 argv，Linux 通过 `/proc/<pid>/exe` 与 `/proc/<pid>/cmdline` 读取，再按 PGID 聚合 Node 包装进程和原生子进程；额外 Host、进程表/原始参数不可读或权威身份无法确认都失败关闭。`codex --remote`、帮助、daemon、proxy、schema generation，以及 App 包内带精确 `features.code_mode_host=true` 标记的 Code Mode helper 不算额外共享 Host；同样标记不能替非 App 可执行文件绕过预检。只读预检不停止任何进程；强制路径的额外终止权限和身份复核见“运行与更新”。任何路径都不按名称结束既有 App 或未知进程。该检查只证明扫描时点，不是跨 socket/CODEX_HOME 的持续全局锁。
 
-这里的“Codex App 与 daemon 同时存在”表示 App 已继承官方 local-daemon 配置，但不再假定每个 Code Mode thread 都由 daemon 进程持有。原生 Codex shared app-server 配置会默认写入 `codex_app_reuse_daemon: true`：WeClaw 先验证官方 daemon、固定 control socket 与 App 使用的 `CODEX_HOME` 完全一致，再通过当前 macOS 用户的 launchd 环境为后续启动的 App 启用官方 local-daemon 入口；不会修改 App 包或签名。App 包内带 `features.code_mode_host=true` 的辅助 `app-server` 可能持有当前 Code Mode thread 的 writer lock，但不会单独阻断 daemon 复用；只有 daemon 的 `thread/resume` 明确返回 active writer、Desktop IPC 又确认同一 active turn 时，WeClaw 才为该 thread 使用 follower。未带该标记的私有 `app-server` 仍会失败关闭并要求完整退出、重新打开 App。若重启后仍回退未标记的私有 Host，应同步更新 Codex App 与 standalone CLI，并清除冲突的 `CODEX_CLI_PATH` 或 `CODEX_APP_SERVER_FORCE_CLI=1` 启动覆盖。显式设为 `false` 会撤销 WeClaw 管理的 launchd 开关，同样只在 App 下次启动后生效。
+首次启用 `shared` 时，完整退出旧 App，再运行 `weclaw codex app`。WeClaw 为后续 App 启动设置受保护的共享入口，并核对 `CODEX_HOME`、`CODEX_SQLITE_HOME`；显式冲突不会被覆盖。之后正常打开 App 即可，释放会话不需要重启 App 或等待后台卸载。App 重开后工具连接会刷新；其他启动配置发生变化时，需等任务结束后协调重启共享服务。切回其他 Host 模式时，只恢复仍与 WeClaw 记录一致的启动环境。整个过程不修改 App 包、签名、历史数据库或 writer-lock 文件。
 
-常见且重点支持的协作形态是“飞书 + Codex App”或“飞书 + 受控 Codex CLI”。空闲 thread 默认由 verified official daemon 续写；若正在运行的 App Code Mode thread 由 App helper 持有 writer，飞书会经 Desktop follower 加入该 active turn。普通消息携带当前 `turnId` 直接加入 active turn，thread 空闲时才开始下一 turn。App、CLI 和飞书可以同时打开同一 thread；上游仍按请求接受顺序处理，WeClaw 不宣称客户端级排他或精确归属。
+共享模式中的普通输入每次读取原 thread 的权威状态：运行中发送带当前 `turnId` 的补充指令，空闲时开始下一轮。App、官方 CLI、飞书和微信可以同时选择同一 thread，上游按请求接受顺序处理。
 
 会话 binding 只表示当前窗口选择，不是写入所有权。`/cx switch` 与 `/cx new` 会先确认默认共享 Host 可达并用轻量 `thread/read` 验证目标；Host 或目标不可读时保留原 binding，验证通过后立即提交新 binding。v14 状态中的 `preparing/ready` 继续表示 follower observer 的同步阶段并兼容旧版本回滚，但不再决定普通消息能否写入。历史回放、进度卡或 exact-turn observer 建立失败只把“进度同步”标记为“同步中”或“已降级”，不会回滚已经成功的 binding。
 
-多个已绑定的飞书 route 可同时观察和写入同一 thread：每个 route 独立接收进度、审批或问答展示和唯一终态结果。审批与结构化问答按 `(thread, turn, request)` 绑定单决策 broker；任一前端处理后，其他展示收敛为“已由其他前端处理”，不会重复提交。WeClaw 重启时按 Host authority、历史与待处理交互回放、observer readiness、terminal outbox 的顺序恢复；observer 尚未恢复只影响同步和终态补投，不阻止新输入使用可用的运行通道。durable follower 还会记录当前机器人 `allowed_users` 实际命中的授权身份；撤权会清除该 route 的 follower 并阻止尚未投递的受保护结果。空闲 binding 只执行轻量读取，不用 `thread/resume` 建立长期订阅；活动 turn 终态确认后会发送一次 `thread/unsubscribe`，但保留 durable binding，避免飞书空闲绑定持续让 Codex App 显示会话已在其他应用中打开。`/cx release` 只在 durable release tombstone 保存成功后才停止当前 route 的观察和交互投递，并把现有进度卡冻结为非终态；没有其他前端或活动任务继续观察时，它只向当前 app-server 连接发送 `thread/unsubscribe`。它不 interrupt active turn、不重启 Host，也不影响其他 route。
+多个已绑定的飞书或微信 route 可同时观察和写入同一 thread：每个 route 独立接收进度、审批或问答展示和唯一终态结果。审批与结构化问答按 `(thread, turn, request)` 绑定单决策 broker；任一前端处理后，其他展示收敛为“已由其他前端处理”，不会重复提交。WeClaw 重启时按 Host authority、历史与待处理交互回放、observer readiness、terminal outbox 的顺序恢复；observer 尚未恢复只影响同步和终态补投，不阻止新输入使用可用的运行通道。durable follower 还会记录当前机器人 `allowed_users` 实际命中的授权身份；撤权会清除该 route 的 follower 并阻止尚未投递的受保护结果。空闲 binding 只执行轻量读取，不用 `thread/resume` 建立长期订阅；活动 turn 终态确认后会发送一次 `thread/unsubscribe`，但保留 durable binding，减少空闲订阅；本地持续可用由各端连接同一服务保证。`/cx release` 只在 durable release tombstone 保存成功后才停止当前 route 的观察和交互投递，并把现有进度卡冻结为非终态；没有其他前端或活动任务继续观察时，它只向当前 app-server 连接发送 `thread/unsubscribe`。它不 interrupt active turn、不重启 Host，也不影响其他 route。
 
 历史 thread 不再绑定创建时使用的 provider。选择或续写已有会话时，WeClaw 会读取当前 Codex Host 对该 workspace 生效的 `model_provider`；若与 thread 元数据不同，会在所有已知任务空闲且没有 writer lease 时备份并只迁移该 thread 的 rollout、`state_5.sqlite` 和可选 local catalog，再用同一 thread ID 和显式 provider 执行 resume。用户消息、可见回复、工具调用和结果会保留；无法跨 provider 使用的加密 reasoning 与 compaction 状态会删除。目标 thread 仍在运行时不会中断，当前 turn 的引导仍进入它已经使用的 provider；下一个新 turn 会先完成迁移。已加载但空闲的 App/shared Host 可以受控重启后继续。迁移记录保存在 `CODEX_HOME/backups/weclaw-provider-migration/`，任何身份、路径、状态或 resume 核验不确定都会失败关闭。
 
-当 Codex App 使用 official daemon 或受支持的 Code Mode helper 时，飞书可以选择已有会话、继续 active turn、接收进度与交互、执行 `/stop`，并修改当前 thread 的模型和推理强度。App 中已经运行的 thread 无需等待 observer `ready`：运行通道可读时，飞书普通消息直接进入当前 turn；飞书先启动的 turn 也允许 App 继续输入。未带 Code Mode 标记的私有 app-server 仍属于不承诺共享的兼容路径，应完全退出并重开 App。
+当前 thread 的模型、推理强度和速度档位通过官方 `thread/settings/update` 修改，对后续轮次生效。目标尚未加载时，仅恢复该原 thread 后重试已确定未提交的设置请求，结束时释放临时订阅；不新建会话，也不把失败显示为成功。
 
-同一 official daemon 上的审批和结构化问答会向所有已完成同步的 observer 展示，但只允许 broker 接受一次决策。Codex App 或其他 route 先处理后，official daemon 的 `serverRequest/resolved` 会让飞书等待者幂等结束，不发默认拒绝或重复回应。每次普通输入都重新读取权威 thread 状态：active 使用带 `expectedTurnId` 的 `turn/steer`，idle 使用 `turn/start`，尚未加载的 thread 只在写入前即时 resume；start/steer 发生确定性状态竞态时重读并把同一输入提交一次。Host 真正不可用时立即拒绝，不排队、不保存输入，也不会在恢复后晚到执行。
+同一共享服务上的审批和结构化问答会向所有已完成同步的 observer 展示，但只允许 broker 接受一次决策。Codex App 或其他 route 先处理后，official daemon 的 `serverRequest/resolved` 会让飞书等待者幂等结束，不发默认拒绝或重复回应。每次普通输入都重新读取权威 thread 状态：active 使用带 `expectedTurnId` 的 `turn/steer`，idle 使用 `turn/start`，尚未加载的 thread 只在写入前即时 resume；start/steer 发生确定性状态竞态时重读并把同一输入提交一次。Host 真正不可用时立即拒绝，不排队、不保存输入，也不会在恢复后晚到执行。
 
-App 进程、安全 IPC 或历史可见本身都不足以改变运行通道。只有 official daemon 明确报告 active writer，且安全 Desktop IPC 返回同一 thread 的 active turn ID 时，WeClaw 才提交 thread 级 follower binding；IPC 返回 `no-client-found`、idle 或身份不符时继续失败关闭，不发送或排队用户输入。可用 `/cx status` 分别检查“绑定”“运行通道”和“进度同步”；“进度同步已降级”不表示会话不可写。
+`shared` 直接连接 App 使用的同一个服务，不通过 Desktop IPC 转移写入权。显式 `daemon` 仍保留旧版定向 Desktop follower 兼容逻辑，其 active-writer 错误必须由同 thread/turn 的 IPC 证据确认；不能据此推断所有 App 版本都已共享。`/cx status` 分别展示绑定、运行通道和进度同步，进度同步降级不表示会话不可写。
 
 如果 `turn/start` 或 `turn/steer` 写出后连接断开或超时，WeClaw 会以发送前最近 turn 基线和消息摘要读取最近 turn/items。能够证明 daemon 已接收时继续恢复 observer；无法证明时明确要求先在 Codex App 核对后手工重发，绝不自动重试。持久状态只保存 attempt ID、平台消息键、thread/turn 基线、消息摘要和结果状态，不保存可供以后自动执行的完整输入。
 
 `/cx app`、`/cx cli`、`/cx attach` 和 `/cx detach` 仍停用，因为消息命令不能在本机启动额外进程。本机终端使用受控入口：
 
 ```bash
+weclaw codex app          # macOS 首次接入 App 共享服务
 weclaw codex cli
 weclaw codex cli resume <thread-id>
 ```
 
-该命令把 `--remote` 固定到 WeClaw 已验证的唯一共享 Host socket，只允许交互 TUI 及其 `resume`、`fork`、`archive` 操作，不接受自定义 `--remote`、非交互或管理子命令。`daemon` 模式继续使用官方 standalone Codex；服务未运行且 Codex App 不存在时，可直接受控启动官方 daemon。`managed` 模式使用 Agent 配置中的原生 Codex 命令，因此支持通过 npm 安装和更新的 `@openai/codex`，但必须先启动 WeClaw，由服务创建并验证 Host，CLI 自己不得拉起或遗留第二个 Host。服务运行时，CLI 先通过仅限本机的控制接口准备 Host，再核对返回 socket 与本地配置完全一致。App 是当前 Host、控制接口不可达、Host 身份不明确或 managed 服务未启动时都会拒绝；仅有 App 可见不再单独构成拒绝理由，但服务必须已证明共享 Host 是 WeClaw 权威。旧 `type: cli` Codex 配置会迁移为共享 app-server，旧 `codex exec` 独立会话模式不再保留。
+该命令把 `--remote` 固定到已验证的共享 socket，并保留官方交互 TUI 及 `resume`、`fork`、`archive` 操作。`shared` 使用 standalone Codex，可在服务未运行时通过 App 准备同一共享 Host；`daemon` 使用官方 daemon；`managed` 使用 Agent 配置中的原生命令，必须先由 WeClaw 服务准备 Host。服务运行时，CLI 先通过本机控制接口准备 Host，再核对返回 socket 与本地配置一致。自定义 remote、非交互或管理子命令、不可达控制接口及不明 Host 身份均会被拒绝。旧 Codex `type: cli` 配置继续迁移为共享 app-server。
 
 不能访问 standalone 安装地址、但可以访问 npm registry 的 Linux 服务器，可使用用户级 npm 渠道并显式选择 managed Host：先执行 `npm config set prefix "$HOME/.local" --location=user` 固定该用户的全局包目录，再执行 `npm install -g @openai/codex@latest`。随后把 Codex Agent 的 `command` 设为展开后的绝对路径（例如 `/home/user/.local/bin/codex`）、`codex_host_mode` 设为 `managed`、`codex_app_reuse_daemon` 设为 `false`。更新使用相同的 `npm install -g @openai/codex@latest`；只给单次安装传 `--prefix` 不会改变 npm 的默认更新目标，可能导致 `codex update` 指向另一套全局目录。切换版本前先停止或协调重启 WeClaw，不能在旧 Host 运行时直接替换其生命周期。若协调停止留下了已确认停止的 daemon 重启事务，首次 managed 启动会在 Desktop 缺席、当前 Host 身份及多 Host 预检全部通过后迁移该事务；其他拓扑漂移仍失败关闭。`weclaw doctor --fix --components codex` 仍使用官方 standalone 安装器，不会擅自改变现有安装渠道。
 
@@ -391,7 +392,7 @@ Codex 安装脚本先下载到独立临时文件，再以 `CODEX_NON_INTERACTIVE
 - `codex_multi_frontend: true` 是完整共享的用户意图开关：它强制 official daemon、要求 standalone 已安装并禁止兼容回退；省略时继续使用旧版 `auto` 兼容策略。
 - `codex_host_mode` 支持 `auto`、`daemon`、`managed`。macOS 默认 `auto` 在官方 daemon 已运行或 standalone 可用时直接固定为 `daemon`，不会因 App 已运行而改选 Desktop Host；只有 standalone 不可用时才进入 App 私有 Host 或 `managed` 的兼容路径。显式 `daemon` 在 macOS 保留 Desktop IPC 协调，但不允许切换到 App Host；它不回退，且不能与 `app_server_socket` 或 `run_as_user` 混用。不启用 Desktop 协调的平台同样按“官方 daemon 可用则使用，否则 managed”选择。官方 socket 身份不明、App 私有 IPC 不可达或 Host authority 无法证明时都失败关闭，不静默启动第二个 Host。
 - shared managed Host、official daemon、受控 `weclaw codex cli` 及协调停止在变更 Host 状态前执行受检 UID 范围内的多 Host 预检；普通模式只读且对额外/不可证明 Host 失败关闭。显式 `--force` 才允许退出 App，并在实时 UID、PGID、启动时间、原始 argv 和命令指纹复核后停止当前用户的 Codex `app-server` 进程组。任何模式都不按名称或旧 PID 停止进程。该检查是时点门禁，不是持续全局锁。
-- 原生 Codex 的 `auto`/`daemon` 配置默认写入 `codex_app_reuse_daemon: true`。该字段只在 macOS 生效，并只管理后续 App 启动使用的 launchd 环境；官方 daemon 尚未验证、App 与 WeClaw 的 `CODEX_HOME`/control socket 不一致、存在强制 CLI 覆盖，或已运行 App 仍持有私有 `app-server` 时都会失败关闭。WeClaw 不会为此退出 App；首次启用后完整重启 App 一次。
+- 原生 Codex 的 `auto`/`daemon` 配置默认写入 `codex_app_reuse_daemon: true`。该字段只在 macOS 生效，并管理后续 App 启动使用的 launchd 环境：WeClaw 会对齐有效的 `CODEX_HOME`、`CODEX_SQLITE_HOME` 与 control socket，只补齐缺失路径，显式冲突则失败关闭。官方 daemon 尚未验证、存在强制 CLI 覆盖，或已运行 App 仍持有私有 `app-server` 时也会失败关闭。WeClaw 不会为此退出 App；首次启用或路径变更后必须完整重启 App。该流程不迁移、删除或清理旧数据库、WAL/SHM 或 writer-lock 文件。
 - 原生 Codex shared app-server 默认使用 `codex_auto_update: incompatible`：只有上游错误明确指出状态库 schema/version 与当前 CLI 不兼容，且没有 writer lease 时，兼容 `managed` 模式才调用官方 `codex update` 并验证版本真实变化。通用 `failed to initialize sqlite state runtime`、数据库锁争用、损坏、socket 就绪超时、调用方取消、普通进程退出和连接错误都不是升级证据。官方 `daemon` 模式不由 WeClaw 更新 CLI。设为 `off` 可完全禁用；失败或版本未变化时保持不可写，不回退其他 Agent。
 
 | Codex 权限档位 | 行为 |

@@ -64,7 +64,7 @@ func isCodexCLICompatibilityFailure(err error) bool {
 func (a *ACPAgent) maybeAutoUpdateCodexCLI(ctx context.Context, startErr error) (bool, error) {
 	compatibilityFailure := isCodexCLICompatibilityFailure(startErr)
 	if a.codexAutoUpdate != "incompatible" || !a.usesCodexSharedHost() ||
-		a.usesOfficialCodexDaemon() ||
+		(a.usesOfficialCodexDaemon() || a.codexHostMode == codexHostModeShared) ||
 		!compatibilityFailure {
 		if !compatibilityFailure {
 			a.resetCodexCompatibilityFailures()

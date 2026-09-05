@@ -3,8 +3,42 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
+
+func TestResolveCodexAppDaemonEnvironmentUsesAgentPaths(t *testing.T) {
+	t.Setenv("HOME", "/Users/test")
+	t.Setenv("CODEX_HOME", "/process/codex")
+	t.Setenv("CODEX_SQLITE_HOME", "/process/sqlite")
+	a := &ACPAgent{env: map[string]string{
+		"CODEX_HOME":        "/agent/codex",
+		"CODEX_SQLITE_HOME": "/agent/sqlite",
+	}}
+
+	got, err := a.resolveCodexAppDaemonEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := codexAppDaemonEnvironment{
+		CodexHome:        "/agent/codex",
+		CodexSQLiteHome:  "/agent/sqlite",
+		DefaultCodexHome: "/Users/test/.codex",
+	}
+	if got != want {
+		t.Fatalf("environment=%#v, want %#v", got, want)
+	}
+}
+
+func TestResolveCodexAppDaemonEnvironmentRejectsRelativeSQLiteHome(t *testing.T) {
+	a := &ACPAgent{env: map[string]string{
+		"CODEX_HOME":        "/agent/codex",
+		"CODEX_SQLITE_HOME": "relative/sqlite",
+	}}
+	if _, err := a.resolveCodexAppDaemonEnvironment(); err == nil || !strings.Contains(err.Error(), "CODEX_SQLITE_HOME") {
+		t.Fatalf("error=%v, want invalid SQLite home", err)
+	}
+}
 
 func TestEnsureCodexAppReusesDaemonRejectsPrivateAppServer(t *testing.T) {
 	enabled := true

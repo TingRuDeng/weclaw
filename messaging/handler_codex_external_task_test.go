@@ -170,6 +170,12 @@ func TestCodexMessageSteersExternalActiveTurnImmediately(t *testing.T) {
 
 func TestCodexExternalAppTaskSendsFinalReply(t *testing.T) {
 	h := NewHandler(nil, nil)
+	// Durable WeChat replies recheck the same account authorization that the
+	// production registry retains after the incoming message has returned.
+	h.SetPlatformRegistry(platform.NewRegistry([]platform.RegistryEntry{{
+		Platform: &accessCapabilityTestPlatform{name: platform.PlatformWeChat, account: "bot-1"},
+		Access:   platform.NewAccessControl([]string{"user-1"}),
+	}}))
 	codexDir := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "weclaw")
 	writeLocalCodexSession(t, codexDir, "thread-active", workspace, "本地任务会话", "2026-07-06T09:00:00Z")

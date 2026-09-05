@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // CodexModelStatus 返回新建 Codex thread 的默认配置，空值表示沿用 Codex 默认值。
@@ -53,7 +55,7 @@ func (a *ACPAgent) CodexThreadConfig(_ context.Context, _ string, threadID strin
 }
 
 // SetCodexThreadConfig 通过官方 thread/settings/update 更新当前 thread 后续 turn 的配置。
-func (a *ACPAgent) SetCodexThreadConfig(ctx context.Context, update CodexThreadConfigUpdate) error {
+func (a *ACPAgent) SetCodexThreadConfig(ctx context.Context, update CodexThreadConfigUpdate) (retErr error) {
 	if a.protocol != protocolCodexAppServer {
 		return fmt.Errorf("当前 Agent 不支持 Codex thread 配置")
 	}
@@ -120,13 +122,44 @@ func (a *ACPAgent) SetCodexThreadConfig(ctx context.Context, update CodexThreadC
 			params["serviceTier"] = serviceTier
 		}
 	}
-	if _, sequence, err := a.rpcWithSequence(ctx, "thread/settings/update", params); err != nil {
-		return fmt.Errorf("更新 Codex thread 配置: %w", err)
-	} else {
-		a.mergeCodexThreadConfigAt(threadID, CodexThreadConfig{
-			Model: model, Effort: effort, ServiceTier: serviceTier, ServiceTierKnown: serviceTierSet,
-		}, sequence)
+	// 设置 API 只接受已加载的 thread。恢复和临时订阅释放必须与 observer
+	// 串行，避免设置操作结束时撤销刚由其他调用建立的订阅。
+	a.codexSubscriptionMu.Lock()
+	defer a.codexSubscriptionMu.Unlock()
+	_, sequence, err := a.rpcWithSequence(ctx, "thread/settings/update", params)
+	if err != nil && isMissingThreadError(err) && !errors.Is(err, errACPWriteMayHaveDelivered) {
+		state, readErr := a.ValidateCodexThread(ctx, update.ConversationID, threadID)
+		if readErr != nil {
+			return fmt.Errorf("更新 Codex thread 配置: %w", errors.Join(err, readErr))
+		}
+		if !strings.EqualFold(state.ThreadStatus, "notLoaded") || strings.TrimSpace(update.ConversationID) == "" {
+			return fmt.Errorf("更新 Codex thread 配置: %w", err)
+		}
+		if resumeErr := a.resumeThread(ctx, update.ConversationID, threadID); resumeErr != nil {
+			return fmt.Errorf("恢复 Codex thread 以更新配置: %w", resumeErr)
+		}
+		defer func() {
+			// 调用方取消也需要释放本次恢复产生的临时订阅。
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if _, err := a.rpc(cleanupCtx, "thread/unsubscribe", map[string]interface{}{"threadId": threadID}); err != nil {
+				if retErr == nil {
+					retErr = fmt.Errorf("配置更新已提交，但释放 Codex 临时订阅失败: %w", err)
+				} else {
+					retErr = errors.Join(retErr, fmt.Errorf("释放 Codex 临时订阅失败: %w", err))
+				}
+				return
+			}
+			a.markCodexThreadUnsubscribed(threadID)
+		}()
+		_, sequence, err = a.rpcWithSequence(ctx, "thread/settings/update", params)
 	}
+	if err != nil {
+		return fmt.Errorf("更新 Codex thread 配置: %w", err)
+	}
+	a.mergeCodexThreadConfigAt(threadID, CodexThreadConfig{
+		Model: model, Effort: effort, ServiceTier: serviceTier, ServiceTierKnown: serviceTierSet,
+	}, sequence)
 	return nil
 }
 

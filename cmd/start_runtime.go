@@ -175,7 +175,7 @@ func startCodexAppDaemonReuseAgentWithDone(ctx context.Context, handler startAge
 	done := make(chan struct{})
 	if cfg != nil {
 		if agentCfg, ok := cfg.Agents["codex"]; ok && agentCfg.EffectiveCodexMultiFrontend() {
-			log.Printf("Preparing required Codex multi-frontend daemon...")
+			log.Printf("Preparing required Codex shared Host...")
 			if _, err := handler.EnsureAgentStarted(ctx, "codex"); err != nil {
 				close(done)
 				return done, fmt.Errorf("启动 Codex 多前端共享失败: %w", err)
@@ -207,7 +207,7 @@ func shouldWarmCodexAppDaemonReuse(cfg *config.Config) bool {
 		return false
 	}
 	mode := agentCfg.EffectiveCodexHostMode()
-	return (mode == "auto" || mode == "daemon") &&
+	return (mode == "auto" || mode == "daemon" || mode == "shared") &&
 		strings.TrimSpace(agentCfg.AppServerSocket) == "" && strings.TrimSpace(agentCfg.RunAsUser) == ""
 }
 

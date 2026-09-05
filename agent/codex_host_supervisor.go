@@ -59,6 +59,10 @@ type CodexHostSupervisor interface {
 func codexHostMetadataPath(socketPath string) string { return socketPath + ".pid.json" }
 
 func (a *ACPAgent) configuredCodexHostCommandFingerprint(socketPath string) string {
+	if a.codexHostMode == codexHostModeShared {
+		sum := sha256.Sum256([]byte("weclaw_app_shared\x00" + filepath.Clean(socketPath)))
+		return hex.EncodeToString(sum[:])
+	}
 	if a.usesOfficialCodexDaemon() {
 		value := codexHostManagerDaemon + "\x00" + filepath.Clean(socketPath)
 		sum := sha256.Sum256([]byte(value))

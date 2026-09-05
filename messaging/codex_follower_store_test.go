@@ -78,3 +78,21 @@ func TestCodexFollowerFromAcquireRequiresAuthorizedIdentity(t *testing.T) {
 		t.Fatalf("missing authorized identity created follower=%#v ok=%v", follower, ok)
 	}
 }
+
+func TestCodexFollowerFromAcquirePersistsWechatRoute(t *testing.T) {
+	route := platform.DeliveryRoute{Platform: platform.PlatformWeChat, AccountID: "wechat-account", ChatID: "wechat-user"}
+	replier := &codexFollowerRouteReplier{Replier: platformtest.NewReplier(platform.Capabilities{Text: true}), route: route}
+	request := codexSessionAcquireRequest{
+		actorUserID: "wechat-user", authorizedIdentity: "wechat-user", platform: platform.PlatformWeChat,
+		accountID: "wechat-account", reply: replier,
+		route: codexConversationRoute{workspaceRoot: "/workspace/project", threadID: "original-thread"},
+	}
+	follower, ok := codexFollowerFromAcquire(request)
+	if !ok || follower == nil || follower.DeliveryRoute != route || follower.AuthorizedIdentity != "wechat-user" {
+		t.Fatalf("WeChat route was not retained: follower=%#v ok=%v", follower, ok)
+	}
+	request.platform = platform.PlatformFeishu
+	if follower, ok := codexFollowerFromAcquire(request); ok || follower != nil {
+		t.Fatal("accepted a delivery route from a different platform")
+	}
+}
