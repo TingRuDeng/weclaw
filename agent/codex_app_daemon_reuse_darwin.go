@@ -52,6 +52,13 @@ type codexAppDaemonLaunchMutation struct {
 	rollback []string
 }
 
+func (e codexAppDaemonEnvironment) effectiveSQLiteHome() string {
+	if e.CodexSQLiteHome != "" {
+		return e.CodexSQLiteHome
+	}
+	return e.CodexHome
+}
+
 func configureSystemCodexAppDaemonReuse(
 	ctx context.Context,
 	enabled bool,

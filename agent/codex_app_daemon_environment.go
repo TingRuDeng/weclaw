@@ -20,13 +20,6 @@ type codexAppDaemonEnvironment struct {
 	DefaultCodexHome string
 }
 
-func (e codexAppDaemonEnvironment) effectiveSQLiteHome() string {
-	if e.CodexSQLiteHome != "" {
-		return e.CodexSQLiteHome
-	}
-	return e.CodexHome
-}
-
 func (e codexAppDaemonEnvironment) validate() error {
 	for _, item := range []struct {
 		name  string

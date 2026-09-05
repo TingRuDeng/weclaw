@@ -17,10 +17,6 @@ func configureSystemCodexAppDaemonReuseWithExpected(
 	return codexAppDaemonReuseResult{}, nil
 }
 
-func inspectSystemCodexAppDaemonReuse(context.Context) (codexAppDaemonReuseResult, error) {
-	return codexAppDaemonReuseResult{}, nil
-}
-
 func inspectSystemCodexAppDaemonReuseWithExpected(
 	context.Context,
 	*codexAppDaemonEnvironment,
