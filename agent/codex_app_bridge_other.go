@@ -15,5 +15,8 @@ func validateCodexAppSharedNode(context.Context) error {
 func prepareSystemCodexAppShared(context.Context, string, codexAppDaemonEnvironment) error {
 	return fmt.Errorf("Codex App shared Host currently requires macOS")
 }
+func configureSystemCodexAppShared(context.Context, string, codexAppDaemonEnvironment) error {
+	return fmt.Errorf("Codex App shared Host currently requires macOS")
+}
 
 func restoreSystemCodexAppSharedEnvironment(context.Context, string) error { return nil }

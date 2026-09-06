@@ -38,7 +38,7 @@ func (h *Handler) startCodexAgentTask(opts codexAgentTaskOptions) {
 	if route.conversationID == "" {
 		route = h.codexConversationRouteForSession(opts.userID, opts.routeUserID, opts.agentName, opts.agent)
 	}
-	if _, err := h.codexConversationThread(route, opts.agent); err != nil {
+	if _, err := h.validateCodexConversationBinding(route, opts.agent); err != nil {
 		sendPlatformText(opts.ctx, opts.reply, opts.userID, err.Error())
 		cancelTaskTimeout()
 		return

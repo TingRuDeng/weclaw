@@ -181,6 +181,27 @@ func TestCodexAppBridgeRejectsConflictingTransportAndPreload(t *testing.T) {
 	}
 }
 
+func TestExistingSharedHostConfiguresNextAppLaunch(t *testing.T) {
+	a := NewACPAgent(ACPAgentConfig{
+		Command: "codex", Args: []string{"app-server"},
+		CodexHostMode: "shared",
+	})
+	called := false
+	a.codexAppSharedEnvironmentCall = func(_ context.Context, launcher string) error {
+		called = true
+		if launcher != "/tmp/weclaw-app-launcher" {
+			t.Fatalf("launcher=%q", launcher)
+		}
+		return nil
+	}
+	if err := a.configureCodexAppSharedEnvironment(context.Background(), "/tmp/weclaw-app-launcher", false); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("existing shared Host did not configure the next App launch")
+	}
+}
+
 func TestCodexAppBridgeRelaysAppJSONLWithoutChangingMessages(t *testing.T) {
 	client, server := newCodexWebSocketPair(t)
 	defer client.Close()

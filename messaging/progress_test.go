@@ -18,8 +18,9 @@ func TestRenderFinalFailureExplainsAgentSessionNotBound(t *testing.T) {
 	got := renderFinalFailure("", agent.ErrAgentSessionNotBound)
 
 	if !strings.Contains(got, "当前窗口尚未绑定会话") ||
-		!strings.Contains(got, "选择已有会话") ||
-		!strings.Contains(got, "发送 /new") {
+		!strings.Contains(got, "/cx ls") || !strings.Contains(got, "/cx new") ||
+		!strings.Contains(got, "/cc ls") || !strings.Contains(got, "/cc new") ||
+		strings.Contains(got, "发送 /new") {
 		t.Fatalf("session not bound should include explicit choices, got %q", got)
 	}
 }

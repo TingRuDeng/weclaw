@@ -44,7 +44,13 @@ func validateCodexAppSharedNode(ctx context.Context) error {
 
 func prepareSystemCodexAppShared(ctx context.Context, launcher string, expected codexAppDaemonEnvironment) error {
 	return securefile.WithExclusiveLock(ctx, filepath.Join(filepath.Dir(launcher), "launch.lock"), func() error {
-		return prepareSystemCodexAppSharedLocked(ctx, launcher, expected)
+		return prepareSystemCodexAppSharedLocked(ctx, launcher, expected, true)
+	})
+}
+
+func configureSystemCodexAppShared(ctx context.Context, launcher string, expected codexAppDaemonEnvironment) error {
+	return securefile.WithExclusiveLock(ctx, filepath.Join(filepath.Dir(launcher), "launch.lock"), func() error {
+		return prepareSystemCodexAppSharedLocked(ctx, launcher, expected, false)
 	})
 }
 
@@ -53,7 +59,7 @@ type codexAppSharedLaunchBackup struct {
 	Applied  map[string]string `json:"applied"`
 }
 
-func prepareSystemCodexAppSharedLocked(ctx context.Context, launcher string, expected codexAppDaemonEnvironment) error {
+func prepareSystemCodexAppSharedLocked(ctx context.Context, launcher string, expected codexAppDaemonEnvironment, launchApp bool) error {
 	if err := expected.validate(); err != nil {
 		return err
 	}
@@ -119,7 +125,7 @@ func prepareSystemCodexAppSharedLocked(ctx context.Context, launcher string, exp
 			return errors.Join(err, rollbackCodexAppDaemonLaunchMutations(ctx, runCodexAppLaunchctl, mutations[:i+1]))
 		}
 	}
-	if state.AppRunning {
+	if state.AppRunning || !launchApp {
 		return nil
 	}
 	command := exec.CommandContext(ctx, "/usr/bin/open", "-g", "-a", codexAppSharedBundlePath())

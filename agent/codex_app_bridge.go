@@ -166,15 +166,25 @@ func (a *ACPAgent) PrepareCodexApp(ctx context.Context) error {
 	} else if err := a.preflightCodexHostConflicts(ctx, 0); err != nil {
 		return err
 	}
+	return a.configureCodexAppSharedEnvironment(ctx, launcher, true)
+}
+
+func (a *ACPAgent) configureCodexAppSharedEnvironment(ctx context.Context, launcher string, launchApp bool) error {
+	if a.codexAppSharedEnvironmentCall != nil {
+		return a.codexAppSharedEnvironmentCall(ctx, launcher)
+	}
 	environment, err := a.resolveCodexAppDaemonEnvironment()
 	if err != nil {
 		return err
 	}
-	return prepareSystemCodexAppShared(ctx, launcher, environment)
+	if launchApp {
+		return prepareSystemCodexAppShared(ctx, launcher, environment)
+	}
+	return configureSystemCodexAppShared(ctx, launcher, environment)
 }
 
 func (a *ACPAgent) launchCodexAppSharedClient(ctx context.Context) (int, error) {
-	socket, _, err := a.prepareCodexAppBridge(ctx)
+	socket, launcher, err := a.prepareCodexAppBridge(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -187,6 +197,10 @@ func (a *ACPAgent) launchCodexAppSharedClient(ctx context.Context) (int, error) 
 		err = a.preflightConnectedManagedCodexHost(ctx, socket)
 		releaseCodexHostStartupLock(lock)
 		if err != nil {
+			_ = conn.Close()
+			return 0, err
+		}
+		if err := a.configureCodexAppSharedEnvironment(ctx, launcher, false); err != nil {
 			_ = conn.Close()
 			return 0, err
 		}

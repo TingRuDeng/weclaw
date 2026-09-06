@@ -119,16 +119,19 @@ func (h *Handler) resolveCodexConversationIDForRoute(ctx context.Context, ownerU
 	return route.conversationID, nil
 }
 
-// codexConversationThread validates the local binding without creating a task or touching the Host.
-func (h *Handler) codexConversationThread(route codexConversationRoute, ag agent.Agent) (string, error) {
+// validateCodexConversationBinding rejects invalid bindings before task admission, without touching the Host.
+func (h *Handler) validateCodexConversationBinding(route codexConversationRoute, ag agent.Agent) (string, error) {
 	if err := h.hiddenWorkspaceError(agentNameFromBindingKey(route.bindingKey), route.workspaceRoot, "cx"); err != nil {
 		return "", err
 	}
-	if _, ok := ag.(agent.CodexThreadAgent); !ok {
+	codexAg, ok := ag.(agent.CodexThreadAgent)
+	if !ok {
 		return "", nil
 	}
 	threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
 	if pending {
+		// Legacy persisted pending bindings must not retain an Agent-side conversation mapping.
+		codexAg.ClearCodexThread(route.conversationID)
 		return "", fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
 	}
 	if route.threadID != "" {
@@ -144,7 +147,7 @@ func (h *Handler) codexConversationThread(route codexConversationRoute, ag agent
 }
 
 func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConversationRoute, ag agent.Agent) error {
-	threadID, bindingErr := h.codexConversationThread(route, ag)
+	threadID, bindingErr := h.validateCodexConversationBinding(route, ag)
 	if bindingErr != nil {
 		return bindingErr
 	}

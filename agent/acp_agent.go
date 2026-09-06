@@ -153,23 +153,26 @@ type ACPAgent struct {
 	// maintenance. A turn releases it only after holding both the app-server
 	// permit and writer lease; account operations then either run before the
 	// preflight or observe the admitted turn and fail busy.
-	codexAdmissionMu               sync.Mutex
-	codexSubscriptionMu            sync.Mutex
-	codexRestartMu                 sync.Mutex
-	codexRestartSnapshot           CodexRestartSnapshot
-	codexRestartPrepared           bool
-	codexAccountSafetyOnce         sync.Once
-	restartCodexAppServerCall      func(context.Context) error
-	codexAccountStoreCall          func() (*codexauth.Store, error)
-	stopManagedHostCall            func(context.Context, string) error
-	startManagedHostCall           func(context.Context, string) error
-	updateHostIdentityCall         func(string, codexauth.Profile) error
-	codexHostLockContendedCall     func()
-	codexCLIUpdaterCall            func(context.Context) (codexCLIUpdateResult, error)
-	codexDaemonLifecycleCall       func(context.Context, string) (codexDaemonLifecycleOutput, error)
-	codexDaemonMetadataCall        func(context.Context, codexDaemonLifecycleOutput, string) (codexHostMetadata, error)
-	codexAppDaemonReuseCall        func(context.Context, bool, string) (codexAppDaemonReuseResult, error)
-	codexAppDaemonInspectCall      func(context.Context) (codexAppDaemonReuseResult, error)
+	codexAdmissionMu           sync.Mutex
+	codexSubscriptionMu        sync.Mutex
+	codexRestartMu             sync.Mutex
+	codexRestartSnapshot       CodexRestartSnapshot
+	codexRestartPrepared       bool
+	codexAccountSafetyOnce     sync.Once
+	restartCodexAppServerCall  func(context.Context) error
+	codexAccountStoreCall      func() (*codexauth.Store, error)
+	stopManagedHostCall        func(context.Context, string) error
+	startManagedHostCall       func(context.Context, string) error
+	updateHostIdentityCall     func(string, codexauth.Profile) error
+	codexHostLockContendedCall func()
+	codexCLIUpdaterCall        func(context.Context) (codexCLIUpdateResult, error)
+	codexDaemonLifecycleCall   func(context.Context, string) (codexDaemonLifecycleOutput, error)
+	codexDaemonMetadataCall    func(context.Context, codexDaemonLifecycleOutput, string) (codexHostMetadata, error)
+	codexAppDaemonReuseCall    func(context.Context, bool, string) (codexAppDaemonReuseResult, error)
+	codexAppDaemonInspectCall  func(context.Context) (codexAppDaemonReuseResult, error)
+	// codexAppSharedEnvironmentCall lets process-control tests verify that an
+	// already-running shared Host still configures the next App launch.
+	codexAppSharedEnvironmentCall  func(context.Context, string) error
 	codexHostConflictPreflightCall func(context.Context, int) error
 	codexHostProcessSnapshotCall   func(context.Context, map[uint32]struct{}) ([]codexHostProcessSnapshot, error)
 	// The following seams keep process-control tests fully local. Production

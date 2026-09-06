@@ -16,7 +16,7 @@ var internalPathPattern = regexp.MustCompile(`(?:/Users|/home|/private/tmp|/var/
 // friendlyAgentError 将常见 Agent 底层错误转换成微信侧可操作提示。
 func friendlyAgentError(err error) string {
 	if errors.Is(err, agent.ErrAgentSessionNotBound) {
-		return "当前窗口尚未绑定会话，请选择已有会话或发送 /new。"
+		return "当前窗口尚未绑定会话。Codex 请发送 /cx ls 选择已有会话，或 /cx new 新建；Claude 请发送 /cc ls 或 /cc new。"
 	}
 	if errors.Is(err, agent.ErrCodexInputDeliveryUnconfirmed) ||
 		errors.Is(err, agent.ErrCodexInputDeliveryUnknown) {
