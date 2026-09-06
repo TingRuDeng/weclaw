@@ -1,11 +1,67 @@
 package feishu
 
 import (
+	"context"
 	"log"
+	"strings"
 	"time"
 
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
+
+func (a *Adapter) notifyStaleMessage(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+	if _, valid := feishuMessageCreateTimeValue(event); !valid {
+		return nil
+	}
+	if ExtractFeishuSessionScope(event).ChatType != "p2p" {
+		return nil
+	}
+	// Feedback requires explicit account authorization, even before Registry dispatch.
+	a.accessMu.RLock()
+	configured := a.accessSet
+	a.accessMu.RUnlock()
+	if !configured {
+		return nil
+	}
+	msg, _, reservation, ok := a.toIncomingEnvelopeFromMessage(event)
+	if !ok {
+		return nil
+	}
+	if !a.allowIncomingMessage(msg) {
+		reservation.release()
+		return nil
+	}
+	if err := completeFeishuDedupReservation(reservation); err != nil {
+		reservation.release()
+		return err
+	}
+	now := a.now()
+	key := strings.Join([]string{msg.AccountID, msg.ChatID, msg.UserID}, "\x00")
+	a.staleNoticeMu.Lock()
+	if a.staleNotices == nil {
+		a.staleNotices = make(map[string]time.Time)
+	}
+	for k, last := range a.staleNotices {
+		if now.Sub(last) >= time.Minute {
+			delete(a.staleNotices, k)
+		}
+	}
+	_, limited := a.staleNotices[key]
+	if !limited {
+		a.staleNotices[key] = now
+	}
+	a.staleNoticeMu.Unlock()
+	if limited {
+		return nil
+	}
+	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), feishuMessageNoticeTimeout)
+	defer cancel()
+	if err := a.newScopedReplier(msg).SendText(noticeCtx, "本次收到的较早消息已跳过自动执行；如请求尚未完成，请确认后重新发送。"); err != nil {
+		log.Printf("[feishu] failed to send stale message notice: %v", err)
+		return err
+	}
+	return nil
+}
 
 // DefaultMessageMaxAge 是飞书普通消息默认允许的最大投递延迟。
 const DefaultMessageMaxAge = 2 * time.Minute

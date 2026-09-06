@@ -27,35 +27,39 @@ func (h *Handler) buildStatusForRoute(userID string, routeUserID string, platfor
 	}
 	h.mu.RUnlock()
 
-	lines := []string{"WeClaw 运行态", "version: " + version}
+	lines := []string{"WeClaw 运行态", "版本: " + version}
 
 	switch {
 	case currentName == "":
-		lines = append(lines, "agent: none (echo mode)")
+		lines = append(lines, "agent: 未配置默认 Agent")
 	case ag == nil:
-		lines = append(lines, "agent: "+currentName+" (not started)")
+		lines = append(lines, "agent: "+currentName+"（未启动）")
 	default:
 		info := ag.Info()
-		lines = append(lines, "agent: "+currentName+" ("+info.Type+")", "model: "+agentStatusModelValue(info.Model))
+		lines = append(lines, "agent: "+currentName+" ("+info.Type+")", "默认模型: "+agentStatusModelValue(info.Model))
 	}
 
 	totalActive, userActive := h.activeTaskCounts(userID)
 	lines = append(lines,
-		"uptime: "+formatUptime(time.Since(h.startedAt)),
-		fmt.Sprintf("running tasks: %d (you: %d)", totalActive, userActive),
-		fmt.Sprintf("agent calls: %d, errors: %d", h.agentInvocations.Load(), h.agentErrors.Load()),
+		"运行时间: "+formatUptime(time.Since(h.startedAt)),
+		fmt.Sprintf("运行任务: %d（你的任务: %d）", totalActive, userActive),
+		fmt.Sprintf("调用次数: %d，错误次数: %d", h.agentInvocations.Load(), h.agentErrors.Load()),
 	)
 
-	mode := "default"
+	mode := "默认"
 	if h.isYoloMode(approvalModeKey(userID, routeUserID)) {
 		mode = "yolo"
 	}
-	rateText := "off"
+	rateText := "关闭"
 	if rateLimit > 0 {
-		rateText = fmt.Sprintf("%d/min", rateLimit)
+		rateText = fmt.Sprintf("%d/分钟", rateLimit)
 	}
-	lines = append(lines, fmt.Sprintf("mode: %s · rate limit: %s", mode, rateText))
-	lines = append(lines, fmt.Sprintf("audit: %t", auditOn))
+	lines = append(lines, fmt.Sprintf("模式: %s · 限流: %s", mode, rateText))
+	auditText := "关闭"
+	if auditOn {
+		auditText = "开启"
+	}
+	lines = append(lines, "审计: "+auditText)
 
 	return wechatCommandText(lines...)
 }
@@ -104,7 +108,7 @@ func formatUptime(d time.Duration) string {
 // agentStatusModelValue 用明确文案区分空模型配置和真实模型名。
 func agentStatusModelValue(model string) string {
 	if strings.TrimSpace(model) == "" {
-		return "(Agent 默认)"
+		return "跟随 Agent 默认"
 	}
 	return model
 }

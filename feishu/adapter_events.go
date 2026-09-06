@@ -56,7 +56,7 @@ func (a *Adapter) handleMessageReadEvent(_ context.Context, _ *larkim.P2MessageR
 // handleMessageEvent 解析飞书消息并分发到业务层。
 func (a *Adapter) handleMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1, dispatch platform.DispatchFunc) error {
 	if a.shouldIgnoreStaleMessage(event) {
-		return nil
+		return a.notifyStaleMessage(ctx, event)
 	}
 	msg, resources, reservation, ok := a.toIncomingEnvelopeFromMessage(event)
 	if !ok {
@@ -141,8 +141,10 @@ func (a *Adapter) handleResourceDownloadFailure(ctx context.Context, msg platfor
 	notice := "附件获取失败，请稍后重试。"
 	if permission {
 		notice = ResourcePermissionGuideMessage(a.creds.AppID)
+	} else if errors.Is(err, errFeishuResourceTooLarge) {
+		notice = fmt.Sprintf("附件超过本地 %d MiB 上限，本条消息未执行。请缩小附件后重新发送。", maxFeishuResourceBytes/(1024*1024))
 	} else if permanent {
-		notice = "附件获取失败：文件过大或资源不可用，请重新发送。"
+		notice = "附件获取失败：资源不可用，本条消息未执行。请检查附件后重新发送。"
 	}
 	target := firstNonEmpty(msg.ChatID, msg.UserID)
 	var replier *Replier
@@ -215,7 +217,7 @@ func (a *Adapter) dispatchIncomingMessage(ctx context.Context, msg platform.Inco
 // dispatchReservedIncomingMessage 在真正轮到本消息进入业务层时才提交去重记录。
 // 返回 cleanup 是否已交给正在执行（或已经执行完）的业务调用。
 func (a *Adapter) dispatchReservedIncomingMessage(ctx context.Context, msg platform.IncomingMessage, dispatch platform.DispatchFunc, reservation feishuDedupReservation, cleanup func()) (bool, error) {
-	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
+	ticket := a.dispatches.reserve(feishuDispatchKey(msg), feishuDispatchOperationLabel(msg))
 	var admissionErr error
 	admit := func() bool {
 		admissionErr = completeFeishuDedupReservation(reservation)
@@ -230,12 +232,12 @@ func (a *Adapter) dispatchReservedIncomingMessage(ctx context.Context, msg platf
 		defer cancel()
 		outcome := ticket.runWithWaitNotice(dispatchCtx, dispatchWaitOptions{
 			delay:    a.dispatchNoticeDelay,
-			notice:   func() { go a.sendQueueWaitNotice(msg) },
+			notice:   func() { go a.sendQueueWaitNotice(msg, ticket.previousOperation()) },
 			admit:    admit,
 			dispatch: dispatchMessage,
 		})
 		if outcome == dispatchRunWaitCanceled || outcome == dispatchRunExecutionCanceled {
-			go a.sendQueueTimeoutNotice(msg, outcome)
+			go a.sendQueueTimeoutNotice(msg, outcome, ticket.previousOperation())
 		}
 		switch outcome {
 		case dispatchRunCompleted, dispatchRunExecutionCanceled:
@@ -270,12 +272,12 @@ func completeFeishuDedupReservation(reservation feishuDedupReservation) error {
 }
 
 // sendQueueTimeoutNotice 区分尚未执行与执行未返回，避免超时后给出错误承诺。
-func (a *Adapter) sendQueueTimeoutNotice(msg platform.IncomingMessage, outcome dispatchRunOutcome) {
+func (a *Adapter) sendQueueTimeoutNotice(msg platform.IncomingMessage, outcome dispatchRunOutcome, previous string) {
 	ctx, cancel := context.WithTimeout(context.Background(), feishuMessageNoticeTimeout)
 	defer cancel()
-	text := "前一项操作仍未结束，排队等待已超时，本消息未执行。请发送 /stop 或稍后重试。"
+	text := "前一项操作（" + previous + "）仍未结束，排队等待已超时，本消息未执行。请确认前序操作状态后重试。"
 	if outcome == dispatchRunExecutionCanceled {
-		text = "本消息处理超过等待上限，后台操作仍可能继续。请先检查当前状态，必要时发送 /stop。"
+		text = "本消息操作（" + feishuDispatchOperationLabel(msg) + "）执行超过等待上限，后台操作仍可能继续。请先检查当前状态，勿重复提交。"
 	}
 	if err := a.newScopedReplier(msg).SendText(ctx, text); err != nil {
 		log.Printf("[feishu] failed to send message dispatch timeout notice: %v", err)
@@ -283,10 +285,10 @@ func (a *Adapter) sendQueueTimeoutNotice(msg platform.IncomingMessage, outcome d
 }
 
 // sendQueueWaitNotice 独立反馈排队状态，避免平台事件 context 结束后提示被取消。
-func (a *Adapter) sendQueueWaitNotice(msg platform.IncomingMessage) {
+func (a *Adapter) sendQueueWaitNotice(msg platform.IncomingMessage, previous string) {
 	ctx, cancel := context.WithTimeout(context.Background(), feishuMessageNoticeTimeout)
 	defer cancel()
-	text := "前一项操作仍在处理，本消息已排队，完成后将自动执行。"
+	text := "前一项操作（" + previous + "）仍在处理，本消息已排队，将在轮到时执行；等待超时会另行提示。"
 	if err := a.newScopedReplier(msg).SendText(ctx, text); err != nil {
 		log.Printf("[feishu] failed to send message queue notice: %v", err)
 	}
@@ -353,7 +355,7 @@ func (a *Adapter) handleCardActionEvent(ctx context.Context, event *callback.Car
 		},
 		Metadata: metadata,
 	}
-	ticket := a.dispatches.reserve(feishuDispatchKey(msg))
+	ticket := a.dispatches.reserve(feishuDispatchKey(msg), feishuDispatchOperationLabel(msg))
 	if isInlineCardCommand(action.Choice) {
 		return a.handleInlineCardAction(ctx, msg, action, dispatch, ticket), nil
 	}

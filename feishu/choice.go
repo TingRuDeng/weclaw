@@ -23,6 +23,7 @@ const (
 	approvalStatusUnconfirmed    = "unconfirmed"
 	approvalStatusResolvedInApp  = "resolved_in_app"
 	approvalStatusTurnTerminal   = "turn_terminal"
+	approvalStatusTimedOut       = "timed_out_denied"
 	approvalStatusStateUnknown   = "state_unknown"
 	approvalPromptHead           = "Codex 请求执行敏感操作，请确认："
 	approvalPromptMarker         = "请求执行敏感操作，请确认："
@@ -248,16 +249,16 @@ func approvalSummaryFromPrompt(prompt string) string {
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return "command: " + compactOneLine(raw, approvalSummaryMaxRune)
+		return "命令：" + compactOneLine(raw, approvalSummaryMaxRune)
 	}
 	command := compactOneLine(firstStringValue(payload, "cmd", "command"), approvalSummaryMaxRune/2)
 	cwd := compactOneLine(firstStringValue(payload, "cwd", "path"), approvalSummaryMaxRune/2)
 	lines := make([]string, 0, 2)
 	if command != "" {
-		lines = append(lines, "command: "+command)
+		lines = append(lines, "命令："+command)
 	}
 	if cwd != "" {
-		lines = append(lines, "cwd: "+cwd)
+		lines = append(lines, "工作目录："+cwd)
 	}
 	return compactOneLine(strings.Join(lines, "\n"), approvalSummaryMaxRune)
 }
@@ -275,16 +276,16 @@ func approvalStructuredSummary(raw string) string {
 	}
 	lines := make([]string, 0, 4)
 	if values["命令"] != "" {
-		lines = append(lines, "command: "+values["命令"])
+		lines = append(lines, "命令："+values["命令"])
 	}
 	if values["工作目录"] != "" {
-		lines = append(lines, "cwd: "+values["工作目录"])
+		lines = append(lines, "工作目录："+values["工作目录"])
 	}
 	if values["申请目的"] != "" {
-		lines = append(lines, "purpose: "+values["申请目的"])
+		lines = append(lines, "申请目的："+values["申请目的"])
 	}
 	if values["操作类型"] != "" {
-		lines = append(lines, "operation: "+values["操作类型"])
+		lines = append(lines, "操作类型："+values["操作类型"])
 	}
 	return compactOneLine(strings.Join(lines, "\n"), approvalSummaryMaxRune)
 }

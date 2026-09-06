@@ -198,7 +198,7 @@ func TestFeishuPrepareSupersedeFromLegacyReferenceUsesContentFallback(t *testing
 	reply := NewReplier(nil, "oc_chat", &fakeIdempotentCardKitClient{})
 	reference := platform.DurableStreamReference{
 		Kind:    feishuStreamReferenceKind,
-		Payload: json.RawMessage(`{"card_id":"card-legacy","title":"Codex","sequence":3,"content":"旧版已展示进度","approvals":["允许本次：command: date"]}`),
+		Payload: json.RawMessage(`{"card_id":"card-legacy","title":"Codex","sequence":3,"content":"旧版已展示进度","approvals":["允许本次：命令：date"]}`),
 	}
 	checkpoint, err := reply.PrepareSupersedeFromReference(reference, "已在下方新卡继续展示。", "reanchor-legacy")
 	if err != nil {
@@ -211,7 +211,7 @@ func TestFeishuPrepareSupersedeFromLegacyReferenceUsesContentFallback(t *testing
 	if op.CardID != "card-legacy" || op.DisableSeq != 4 || op.UpdateSeq != 5 {
 		t.Fatalf("operation=%#v", op)
 	}
-	if !strings.Contains(op.CardJSON, "旧版已展示进度") || !strings.Contains(op.CardJSON, "command: date") {
+	if !strings.Contains(op.CardJSON, "旧版已展示进度") || !strings.Contains(op.CardJSON, "命令：date") {
 		t.Fatalf("card=%q, want legacy content fallback and approvals", op.CardJSON)
 	}
 }

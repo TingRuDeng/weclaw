@@ -56,7 +56,7 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 	name := h.defaultAgentNameForRoute(routeUserID, req.platform, req.accountID)
 	ag, err := h.getAgent(ctx, name)
 	if err != nil || ag == nil {
-		return "No agent running."
+		return "当前 Agent 不可用，无法新建会话。"
 	}
 	if isCodexAgent(name, ag.Info()) {
 		return h.resetDefaultCodexSessionForRoute(ctx, defaultCodexSessionCreateRequest{
@@ -74,7 +74,7 @@ func (h *Handler) resetDefaultSessionForMessage(ctx context.Context, req default
 	sessionID, err := ag.ResetSession(ctx, routeUserID)
 	if err != nil {
 		log.Printf("[handler] reset session failed for %s: %v", routeUserID, err)
-		return fmt.Sprintf("Failed to reset session: %v", err)
+		return "新建会话失败：" + friendlyAgentError(err)
 	}
 	if sessionID != "" {
 		return wechatCommandText(fmt.Sprintf("已创建新的%s会话", name), sessionID)

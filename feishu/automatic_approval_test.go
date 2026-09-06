@@ -14,6 +14,38 @@ type automaticApprovalRecorderForTest interface {
 	RecordAutomaticApproval(context.Context, string, platform.Choice) error
 }
 
+func TestRecordApprovalTimeoutClosesTaskAndPanel(t *testing.T) {
+	kit := &fakeCardKitClient{cardIDs: []string{"task", "panel"}}
+	r := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	if _, err := r.OpenStream(context.Background(), platform.StreamOptions{Title: "Claude", InitialContent: "执行中"}); err != nil {
+		t.Fatal(err)
+	}
+	choices := []platform.Choice{automaticApprovalChoiceForTest("request", "task")}
+	if err := r.AskChoices(context.Background(), approvalPromptForTest("date"), choices); err != nil {
+		t.Fatal(err)
+	}
+	recorder, ok := any(r).(interface {
+		RecordApprovalTimeout(context.Context, string, []platform.Choice) error
+	})
+	if !ok {
+		t.Fatal("timeout display unsupported")
+	}
+	if err := recorder.RecordApprovalTimeout(context.Background(), approvalPromptForTest("date"), choices); err != nil {
+		t.Fatal(err)
+	}
+	if len(kit.updateCards) != 2 {
+		t.Fatalf("updates=%v", kit.updateCards)
+	}
+	for _, card := range kit.updateCards {
+		if !strings.Contains(card, "已超时拒绝") {
+			t.Fatalf("card=%s", card)
+		}
+	}
+	if strings.Contains(kit.updateCards[1], `"tag":"button"`) {
+		t.Fatal("panel still actionable")
+	}
+}
+
 func TestRecordAutomaticApprovalUpdatesTaskAndExistingPanel(t *testing.T) {
 	sender := &fakeMessageSender{}
 	cardKit := &fakeCardKitClient{cardIDs: []string{"card-task-1", "card-panel-1"}}
@@ -37,7 +69,7 @@ func TestRecordAutomaticApprovalUpdatesTaskAndExistingPanel(t *testing.T) {
 	}
 	taskCard := cardKit.updateCards[0]
 	if !strings.Contains(taskCard, "已自动批准（YOLO）") ||
-		!strings.Contains(taskCard, "始终允许") || !strings.Contains(taskCard, "command: date") {
+		!strings.Contains(taskCard, "始终允许") || !strings.Contains(taskCard, "命令：date") {
 		t.Fatalf("task card=%s，期望记录 YOLO 自动批准、真实选项和操作摘要", taskCard)
 	}
 	panelCard := cardKit.updateCards[1]
@@ -83,6 +115,23 @@ func TestRecordApprovalStateClosesExistingStandaloneCard(t *testing.T) {
 	}
 	if len(cardKit.updateCards) != 1 || !strings.Contains(cardKit.updateCards[0], "已在 Codex App 处理") {
 		t.Fatalf("updates=%#v", cardKit.updateCards)
+	}
+}
+
+func TestExternalApprovalStateDoesNotInventDecision(t *testing.T) {
+	kit := &fakeCardKitClient{cardID: "task"}
+	r := newReplierWithTaskCards(&fakeMessageSender{}, "ou_user", kit, newTaskCardRegistry())
+	if _, err := r.OpenStream(context.Background(), platform.StreamOptions{Title: "Codex"}); err != nil {
+		t.Fatal(err)
+	}
+	choice := automaticApprovalChoiceForTest("request", "task")
+	choice.Label = "invented-choice"
+	if err := r.RecordApprovalState(context.Background(), "", []platform.Choice{choice}, agent.ApprovalRequestStateResolvedExternally); err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := r.taskCards.snapshot("task")
+	if strings.Contains(strings.Join(opts.Approvals, ""), "invented-choice") {
+		t.Fatalf("external resolution invented a decision: %v", opts.Approvals)
 	}
 }
 

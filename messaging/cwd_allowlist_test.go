@@ -38,8 +38,8 @@ func TestResolveCwdPathRejectsInvalidTargets(t *testing.T) {
 		path string
 		want string
 	}{
-		{name: "路径不存在", path: filepath.Join(t.TempDir(), "missing"), want: "Path not found"},
-		{name: "目标是文件", path: filePath, want: "Not a directory"},
+		{name: "路径不存在", path: filepath.Join(t.TempDir(), "missing"), want: "路径不存在"},
+		{name: "目标是文件", path: filePath, want: "路径不是目录"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestCwdAuthorizedUserCanSwitchToAnyDirectory(t *testing.T) {
 		UserID:   "wx_admin",
 	}, "wx_admin"), "")
 
-	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
+	if !strings.Contains(got, "工作目录: "+canonicalTestPath(t, dir)) {
 		t.Fatalf("authorized user should switch cwd, got %q", got)
 	}
 }
@@ -98,7 +98,7 @@ func TestCwdFeishuAuthorizedUnionIDCanSwitchDirectory(t *testing.T) {
 		Metadata: map[string]string{"feishu_union_id": "on_admin"},
 	}, "on_admin"), "")
 
-	if !strings.Contains(got, "cwd: "+canonicalTestPath(t, dir)) {
+	if !strings.Contains(got, "工作目录: "+canonicalTestPath(t, dir)) {
 		t.Fatalf("authorized Feishu union_id should switch cwd, got %q", got)
 	}
 }

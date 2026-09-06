@@ -124,10 +124,10 @@ func (h *Handler) approvalHandlerForRoute(opts agentInteractionContextOptions) a
 		}
 		h.pendingApprovalsMu.Lock()
 		pending.stateProbe = req.StateProbe
+		pending.stateChoices = append([]platform.Choice(nil), choices...)
+		pending.automaticPrompt = prompt
 		if recorder, ok := optionalApprovalStateRecorder(opts.reply); ok {
 			pending.stateRecorder = recorder
-			pending.stateChoices = append([]platform.Choice(nil), choices...)
-			pending.automaticPrompt = prompt
 		}
 		h.pendingApprovalsMu.Unlock()
 		defer h.clearPendingApproval(opts.actorUserID, pending)
@@ -190,7 +190,12 @@ func (h *Handler) waitForPendingApproval(ctx context.Context, opts agentInteract
 			return "", codexInteractionResolutionError(req.Resolution)
 		case <-timer.C:
 			if pending.stateProbe == nil {
+				if !pending.resolved.CompareAndSwap(false, true) {
+					pending.renewDeadline()
+					continue
+				}
 				h.auditDefaultDenyApproval(opts, "timeout")
+				h.recordApprovalTimeoutAsync(ctx, opts, pending)
 				return defaultDenyApprovalOption(req.Options), nil
 			}
 			state, err := pending.stateProbe(ctx)

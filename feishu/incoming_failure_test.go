@@ -129,3 +129,27 @@ func assertAttachmentFailureReply(t *testing.T, sender *fakeMessageSender) {
 		t.Fatalf("replyTexts=%#v, want attachment failure notice", sender.replyTexts)
 	}
 }
+
+func TestAttachmentFailureDistinguishesLimitFromUnavailable(t *testing.T) {
+	for _, tooLarge := range []bool{true, false} {
+		err := permanentResourceDownloadError{message: "resource unavailable"}
+		want := "资源不可用"
+		if tooLarge {
+			err.cause = errFeishuResourceTooLarge
+			want = "32 MiB"
+		}
+		a := NewAdapter(Credentials{AppID: "test"})
+		sender := &fakeMessageSender{}
+		a.sender = sender
+		a.downloader = &fakeResourceDownloader{errors: []error{err}}
+		event := newMessageEvent("p2p", "image", `{"image_key":"image"}`)
+		if err := a.handleMessageEvent(context.Background(), event, func(context.Context, platform.IncomingMessage, platform.Replier) {
+			t.Error("incomplete message executed")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(sender.replyTexts) != 1 || !strings.Contains(sender.replyTexts[0], want) || !strings.Contains(sender.replyTexts[0], "未执行") {
+			t.Fatalf("reply=%v", sender.replyTexts)
+		}
+	}
+}

@@ -3,7 +3,9 @@ package feishu
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +15,40 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
+
+func TestStaleMessageNoticeFailureRemainsDeduplicatedAcrossRestart(t *testing.T) {
+	now := time.Now()
+	event := newFreshnessDMEvent("old-image", now.Add(-time.Hour), "")
+	event.Event.Message.MessageType = stringPtr("image")
+	event.Event.Message.Content = stringPtr(`{"image_key":"private-resource"}`)
+	stateFile := filepath.Join(t.TempDir(), "dedup.json")
+	makeAdapter := func() *Adapter {
+		a := NewAdapter(Credentials{AppID: "test"})
+		a.now = func() time.Time { return now }
+		a.SetAccessControl(platform.NewAccessControl([]string{ExtractFeishuSessionScope(event).SenderOpenID}))
+		a.SetDedupStateFile(stateFile)
+		a.beginMessageAcceptance()
+		return a
+	}
+	a := makeAdapter()
+	download := &fakeResourceDownloader{}
+	a.downloader = download
+	failure := errors.New("notice send failed")
+	sender := &failingDirectTextSender{err: failure}
+	a.sender = sender
+	dispatch := func(context.Context, platform.IncomingMessage, platform.Replier) { t.Error("stale input dispatched") }
+	if err := a.handleMessageEvent(context.Background(), event, dispatch); !errors.Is(err, failure) {
+		t.Fatalf("err=%v", err)
+	}
+	a = makeAdapter()
+	a.sender, a.downloader = sender, download
+	if err := a.handleMessageEvent(context.Background(), event, dispatch); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.texts) != 1 || len(download.seen) != 0 {
+		t.Fatalf("notices=%v downloads=%v", sender.texts, download.seen)
+	}
+}
 
 // TestHandleMessageEventRejectsMessageCreatedBeforeRun 验证服务停机期间的积压消息不会进入业务层。
 func TestHandleMessageEventRejectsMessageCreatedBeforeRun(t *testing.T) {
@@ -140,4 +176,55 @@ func newFreshnessDMEvent(messageID string, createdAt time.Time, text string) *la
 		CreateTime: strconv.FormatInt(createdAt.UnixMilli(), 10),
 		Text:       text,
 	})
+}
+
+func TestStaleMessageNoticeAuthorizedDeduplicatedAndLimited(t *testing.T) {
+	now := time.Now()
+	a := NewAdapter(Credentials{AppID: "test"})
+	a.now = func() time.Time { return now }
+	a.beginMessageAcceptance()
+	sender := &fakeMessageSender{}
+	a.sender = sender
+	event := newFreshnessDMEvent("old-1", now.Add(-time.Hour), "private")
+	a.SetAccessControl(platform.NewAccessControl([]string{ExtractFeishuSessionScope(event).SenderOpenID}))
+	if got := dispatchFeishuEvents(a, event, event, newFreshnessDMEvent("old-2", now.Add(-time.Hour), "private")); got != 0 {
+		t.Fatal("stale message dispatched")
+	}
+	if len(sender.texts) != 1 || !strings.Contains(sender.texts[0], "较早消息") || strings.Contains(sender.texts[0], "private") {
+		t.Fatalf("notices=%v", sender.texts)
+	}
+	now = now.Add(time.Minute)
+	dispatchFeishuEvents(a, event, newFreshnessDMEvent("old-3", now.Add(-time.Hour), "private"))
+	if len(sender.texts) != 2 {
+		t.Fatalf("notices=%v", sender.texts)
+	}
+}
+
+func TestStaleMessageNoticeSkipsUnauthorizedGroupAndInvalidTime(t *testing.T) {
+	for _, kind := range []string{"unauthorized", "group", "invalid", "unconfigured"} {
+		t.Run(kind, func(t *testing.T) {
+			now := time.Now()
+			a := NewAdapter(Credentials{AppID: "test"})
+			a.now = func() time.Time { return now }
+			a.beginMessageAcceptance()
+			sender := &fakeMessageSender{}
+			a.sender = sender
+			event := newFreshnessDMEvent("old", now.Add(-time.Hour), "private")
+			if kind != "unconfigured" {
+				a.SetAccessControl(platform.NewAccessControl([]string{ExtractFeishuSessionScope(event).SenderOpenID}))
+			}
+			if kind == "unauthorized" {
+				a.SetAccessControl(platform.NewAccessControl(nil))
+			}
+			if kind == "group" {
+				event.Event.Message.ChatType = stringPtr("group")
+			}
+			if kind == "invalid" {
+				event.Event.Message.CreateTime = stringPtr("invalid")
+			}
+			if got := dispatchFeishuEvents(a, event); got != 0 || len(sender.texts) != 0 {
+				t.Fatalf("dispatches=%d notices=%v", got, sender.texts)
+			}
+		})
+	}
 }

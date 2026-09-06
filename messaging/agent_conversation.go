@@ -119,28 +119,38 @@ func (h *Handler) resolveCodexConversationIDForRoute(ctx context.Context, ownerU
 	return route.conversationID, nil
 }
 
-func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConversationRoute, ag agent.Agent) error {
+// codexConversationThread validates the local binding without creating a task or touching the Host.
+func (h *Handler) codexConversationThread(route codexConversationRoute, ag agent.Agent) (string, error) {
 	if err := h.hiddenWorkspaceError(agentNameFromBindingKey(route.bindingKey), route.workspaceRoot, "cx"); err != nil {
-		return err
+		return "", err
 	}
-	codexAg, ok := ag.(agent.CodexThreadAgent)
-	if !ok {
-		h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
-		return nil
+	if _, ok := ag.(agent.CodexThreadAgent); !ok {
+		return "", nil
 	}
 	threadID, pending := h.ensureCodexSessions().getThread(route.bindingKey, route.workspaceRoot)
 	if pending {
-		codexAg.ClearCodexThread(route.conversationID)
-		return fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
+		return "", fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
 	}
 	if route.threadID != "" {
 		threadID = route.threadID
 	}
 	if threadID == "" {
-		return fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
+		return "", fmt.Errorf("当前窗口没有有效的 Codex 会话，请发送 /cx ls 选择或 /cx new 新建")
 	}
 	if err := h.hiddenSessionError(agentNameFromBindingKey(route.bindingKey), threadID, "cx"); err != nil {
-		return err
+		return "", err
+	}
+	return threadID, nil
+}
+
+func (h *Handler) prepareCodexConversation(ctx context.Context, route codexConversationRoute, ag agent.Agent) error {
+	threadID, bindingErr := h.codexConversationThread(route, ag)
+	if bindingErr != nil {
+		return bindingErr
+	}
+	if _, ok := ag.(agent.CodexThreadAgent); !ok {
+		h.ensureCodexSessions().ensureWorkspace(route.bindingKey, route.workspaceRoot)
+		return nil
 	}
 	resolveOpts := codexRuntimeResolveOptions{route: route, threadID: threadID, ag: ag}
 	var resolution codexRuntimeResolution

@@ -97,7 +97,9 @@ go test ./agent -run '^TestCodexOfficialDaemonTwoClientProtocol$' -count=1 -time
 release-side-effect:
 
 ```bash
-scripts/release.sh --next-patch
+scripts/release.sh package --next-patch
+# 真机验证并推送相同提交后
+scripts/release.sh publish vX.Y.Z
 ```
 
 ## Stale when

@@ -11,6 +11,25 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 )
 
+func TestDispatchOperationLabelsExcludePrivateArgumentsAndFollowRedirect(t *testing.T) {
+	for _, input := range []string{"/cx switch private-thread", "/cx account confirm private-token", "/cwd /private/path", "/unknown secret", "private prompt"} {
+		label := feishuDispatchOperationLabel(platform.IncomingMessage{Text: input})
+		if strings.Contains(label, "private") || strings.Contains(label, "secret") || strings.Contains(label, "unknown") {
+			t.Fatalf("label leaks input: %s", label)
+		}
+	}
+	s := newFeishuDispatchSequencer()
+	first := s.reserve("route", "/cx switch")
+	second := s.reserve("route", "/status")
+	third := s.reserve("route", "消息处理")
+	second.finishPreservingPrevious()
+	if got := third.previousOperation(); got != "/cx switch" {
+		t.Fatalf("label=%q", got)
+	}
+	first.finish()
+	third.finish()
+}
+
 // TestCardActionBlocksLaterMessageDispatch 验证卡片切换完成前，同窗口普通消息不能抢跑。
 func TestCardActionBlocksLaterMessageDispatch(t *testing.T) {
 	adapter := NewAdapter(Credentials{AppID: "cli_a", AppSecret: "secret"})

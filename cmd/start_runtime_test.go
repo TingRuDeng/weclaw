@@ -56,7 +56,7 @@ func TestStartHandlerStatusShowsWeClawVersion(t *testing.T) {
 	handler.HandleMessage(context.Background(), msg, reply)
 
 	text := strings.Join(reply.TextsSnapshot(), "\n")
-	if !strings.Contains(text, "version: v9.8.7") {
+	if !strings.Contains(text, "版本: v9.8.7") {
 		t.Fatalf("/status reply missing build version, got %q", text)
 	}
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildChoiceHandledCardShowsDenyStatus(t *testing.T) {
-	card := buildChoiceHandledCard(parsedCardAction{Choice: "deny", Label: "拒绝", Summary: "command: rm file"})
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "deny", Label: "拒绝", Summary: "命令：rm file"})
 	if card.Type != "raw" {
 		t.Fatalf("card type=%q, want raw for callback card update", card.Type)
 	}
@@ -27,7 +27,7 @@ func TestBuildChoiceHandledCardShowsDenyStatus(t *testing.T) {
 }
 
 func TestBuildChoiceHandledCardShowsCancelAsDenyStatus(t *testing.T) {
-	card := buildChoiceHandledCard(parsedCardAction{Choice: "cancel", Label: "cancel", Summary: "command: rm file"})
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "cancel", Label: "cancel", Summary: "命令：rm file"})
 	data := card.Data.(map[string]any)
 	header := data["header"].(map[string]any)
 	if header["template"] != "red" {
@@ -41,7 +41,7 @@ func TestBuildChoiceHandledCardShowsCancelAsDenyStatus(t *testing.T) {
 }
 
 func TestBuildChoiceHandledCardShowsExpiredStatus(t *testing.T) {
-	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date", Status: approvalStatusExpired})
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "命令：date", Status: approvalStatusExpired})
 	data := card.Data.(map[string]any)
 	header := data["header"].(map[string]any)
 	if header["template"] != "yellow" {
@@ -55,7 +55,7 @@ func TestBuildChoiceHandledCardShowsExpiredStatus(t *testing.T) {
 }
 
 func TestBuildChoiceHandledCardShowsArchivedStatus(t *testing.T) {
-	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date", Status: approvalStatusArchived})
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "命令：date", Status: approvalStatusArchived})
 	data := card.Data.(map[string]any)
 	header := data["header"].(map[string]any)
 	if header["template"] != "green" {
@@ -66,13 +66,13 @@ func TestBuildChoiceHandledCardShowsArchivedStatus(t *testing.T) {
 	if !strings.Contains(content, "✅ 已收纳到任务卡片") {
 		t.Fatalf("content=%q, want archived status", content)
 	}
-	if strings.Contains(content, "command: date") || strings.Contains(content, "允许本次") {
+	if strings.Contains(content, "命令：date") || strings.Contains(content, "允许本次") {
 		t.Fatalf("content=%q, want one-line archived status", content)
 	}
 }
 
 func TestBuildChoiceHandledCardCompactsHandledApprovalSummary(t *testing.T) {
-	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: apply_patch very long payload"})
+	card := buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "命令：apply_patch very long payload"})
 	data := card.Data.(map[string]any)
 	body := data["body"].(map[string]any)
 	content := body["elements"].([]map[string]any)[0]["content"].(string)
@@ -131,7 +131,7 @@ func TestTaskControlHandledCardKeepsContextualTitle(t *testing.T) {
 
 func TestBuildChoiceHandledCardCallbackJSONUsesRawType(t *testing.T) {
 	resp := &callback.CardActionTriggerResponse{
-		Card: buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "command: date"}),
+		Card: buildChoiceHandledCard(parsedCardAction{Choice: "allow", Label: "允许本次", Summary: "命令：date"}),
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {

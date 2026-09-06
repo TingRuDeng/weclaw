@@ -3,15 +3,26 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      phase:
+        description: 'Package first; publish an existing successful package run later'
+        type: choice
+        options: [package, publish]
+        default: package
+        required: true
       tag:
         description: 'Release tag, e.g. v0.1.42'
         required: true
+      package_run_id:
+        description: 'Successful package workflow run ID (required for publish)'
+        required: false
 
 permissions:
   contents: write
+  actions: read
 
 env:
   RELEASE_TAG: ${{ inputs.tag }}
+  PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
 
 concurrency:
   group: stable-release-${{ inputs.tag }}
@@ -32,8 +43,36 @@ jobs:
         with:
           go-version: '1.26.6'
 
-      - name: Run canonical release pipeline
+      - name: Package without publishing
+        if: inputs.phase == 'package'
+        run: scripts/release.sh package "$RELEASE_TAG"
+
+      - name: Preserve verified package
+        if: inputs.phase == 'package'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-${{ inputs.tag }}
+          path: |
+            dist/${{ inputs.tag }}/
+            dist/${{ inputs.tag }}.package.json
+          if-no-files-found: error
+
+      - name: Restore the requested package run
+        if: inputs.phase == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          run_info="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN_ID" --jq '[.path, .head_sha, .conclusion, .event] | @tsv')"
+          IFS=$'\t' read -r workflow commit conclusion event <<<"$run_info"
+          [[ "$workflow" == '.github/workflows/release.yml' && "$commit" == "$(git rev-parse HEAD)" && "$conclusion" == success && "$event" == workflow_dispatch ]]
+          gh run download "$PACKAGE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "release-$RELEASE_TAG" --dir dist
+
+      - name: Publish the existing package
+        if: inputs.phase == 'publish'
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        run: scripts/release.sh "$RELEASE_TAG"
+        run: scripts/release.sh publish "$RELEASE_TAG"

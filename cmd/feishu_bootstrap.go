@@ -85,6 +85,9 @@ func upsertFeishuBotConfig(cfg *config.Config, opts feishuBootstrapOptions) {
 			return
 		}
 	}
+	if bot.Progress == nil {
+		bot.Progress = &config.ProgressConfig{Mode: feishuAddDefaultProgressMode}
+	}
 	platformCfg.Bots = append(platformCfg.Bots, bot)
 	cfg.Platforms["feishu"] = platformCfg
 }
@@ -115,7 +118,7 @@ func mergeFeishuBootstrapBot(existing config.FeishuBotConfig, next config.Feishu
 
 // printFeishuBootstrapResult 输出不含 app_secret 的配置结果和后续诊断提示。
 func printFeishuBootstrapResult(opts feishuBootstrapOptions) {
-	fmt.Println("飞书 bootstrap 完成")
+	fmt.Println("飞书机器人配置已保存")
 	fmt.Printf("Bot: %s\n", opts.Name)
 	if opts.DisplayName != "" {
 		fmt.Printf("显示名：%s\n", opts.DisplayName)
@@ -125,6 +128,12 @@ func printFeishuBootstrapResult(opts feishuBootstrapOptions) {
 	if path, err := feishu.CredentialsPathForBot(opts.Name); err == nil {
 		fmt.Printf("已保存：%s\n", path)
 	}
+	fmt.Println("凭据验证通过不代表消息接入已就绪，请确认以下配置：")
+	fmt.Println("1. 在飞书开放平台启用机器人能力。")
+	fmt.Println("2. 事件与回调选择长连接，订阅 im.message.receive_v1 和 card.action.trigger。")
+	fmt.Println("3. 配置应用权限：im:message.p2p_msg:readonly、im:message.group_at_msg:readonly、im:message.group_at_msg.include_bot:readonly、im:message:readonly、im:message:send_as_bot、im:resource、im:chat、cardkit:card:read、cardkit:card:write、application:bot.basic_info:read、application:bot.menu:write。")
+	fmt.Println("4. 配置 allowed_users（open_id/union_id）；名单为空时不放行用户。")
+	fmt.Println("5. 创建并发布飞书应用版本，完成所需审批；权限变更后需重新发布。")
 	if path, err := exec.LookPath("lark-cli"); err == nil {
 		fmt.Printf("检测到 lark-cli：%s\n", path)
 		fmt.Println("建议继续用 lark-cli 检查应用权限、事件订阅和消息发送能力。")

@@ -1,6 +1,11 @@
 package feishu
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+var errFeishuResourceTooLarge = errors.New("feishu resource exceeds local size limit")
 
 // permanentResourceDownloadError 标记重投同一事件也无法恢复的飞书资源错误。
 type permanentResourceDownloadError struct {

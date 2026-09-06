@@ -23,9 +23,11 @@ type cardOptions struct {
 	Status             string
 	Title              string
 	Content            string
+	PreserveWhitespace bool
 	Preview            string
 	Summary            string
 	Approvals          []string
+	WaitingApprovals   int
 	Collapsible        bool
 	Expanded           bool
 	InlineActiveStatus bool
@@ -40,6 +42,9 @@ func buildCardV2(opts cardOptions) (string, error) {
 		title = "WeClaw"
 	}
 	content := strings.TrimSpace(opts.Content)
+	if opts.PreserveWhitespace {
+		content = opts.Content
+	}
 	if opts.Collapsible && !opts.Expanded {
 		if preview := strings.TrimSpace(opts.Preview); preview != "" {
 			content = preview
@@ -63,6 +68,9 @@ func buildCardV2(opts cardOptions) (string, error) {
 		})
 	}
 	var main map[string]any
+	if opts.WaitingApprovals > 0 && (status == cardStatusThinking || status == cardStatusStreaming) {
+		elements = append(elements, map[string]any{"tag": "markdown", "element_id": "approval_waiting", "content": fmt.Sprintf("等待私聊审批（%d 项）", opts.WaitingApprovals)})
+	}
 	if content != "" {
 		main = map[string]any{
 			"tag":        "markdown",
@@ -190,7 +198,7 @@ func statusLabel(status string) string {
 	case cardStatusSuperseded:
 		return "**已转移**"
 	case cardStatusDetached:
-		return "**已停止同步**"
+		return "**此窗口已停止跟踪**"
 	default:
 		return "**思考中**"
 	}
@@ -220,7 +228,7 @@ func statusDefaultContent(status string) string {
 	case cardStatusSuperseded:
 		return "已在新位置继续展示。"
 	case cardStatusDetached:
-		return "已解除当前窗口的会话绑定。"
+		return "已解除当前窗口的会话绑定；本次操作不会停止任务。"
 	default:
 		return "正在分析任务，请稍候。"
 	}

@@ -258,6 +258,10 @@ func (h *Handler) dispatchPlatformMessage(runtime platformMessageRuntime) {
 	}) {
 		return
 	}
+	if command := h.unknownSlashCommand(trimmed); command != "" {
+		runtime.sendText("命令不存在：" + command + "。请发送 /help 查看可用命令。")
+		return
+	}
 	if !h.allowAgentInvocation(runtime.msg.Platform, runtime.msg.AccountID, runtime.msg.UserID) {
 		log.Printf("[handler] rate limit exceeded for %s", agentRateLimitKey(runtime.msg.Platform, runtime.msg.AccountID, runtime.msg.UserID))
 		runtime.sendText("请求过于频繁，请稍后再试。")
@@ -268,6 +272,25 @@ func (h *Handler) dispatchPlatformMessage(runtime platformMessageRuntime) {
 		Action: "agent_message", Summary: auditMessageSummary(runtime.text),
 	})
 	h.dispatchParsedAgentMessage(runtime)
+}
+
+func (h *Handler) unknownSlashCommand(text string) string {
+	if !strings.HasPrefix(text, "/") {
+		return ""
+	}
+	for _, field := range strings.Fields(text) {
+		if !strings.HasPrefix(field, "/") && !strings.HasPrefix(field, "@") {
+			break
+		}
+		name, ok := h.parseAgentToken(field)
+		if !ok {
+			break
+		}
+		if strings.HasPrefix(field, "/") && !h.isKnownAgent(name) {
+			return field
+		}
+	}
+	return ""
 }
 
 // trySavePlatformURL 在配置保存目录时优先收录单独发送的链接。
@@ -319,7 +342,7 @@ func (h *Handler) dispatchParsedAgentMessage(runtime platformMessageRuntime) {
 // handleAgentSwitchMessage 处理仅包含 Agent 名称的窗口切换消息。
 func (h *Handler) handleAgentSwitchMessage(runtime platformMessageRuntime, names []string) {
 	if len(names) != 1 {
-		runtime.sendText("Usage: specify one agent to switch, or add a message to broadcast")
+		runtime.sendText("请指定一个 Agent 进行切换，或附上消息内容以广播。")
 		return
 	}
 	if !h.isKnownAgent(names[0]) {

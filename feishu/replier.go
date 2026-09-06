@@ -15,20 +15,21 @@ const feishuTextChunkRunes = 30000
 
 // Replier 实现飞书平台的统一回复接口。
 type Replier struct {
-	sender       messageSender
-	cardKit      cardKitClient
-	accountID    string
-	openID       string
-	replyToID    string
-	taskCards    *taskCardRegistry
-	cardOpsMu    sync.Mutex
-	cardOps      *cardKitOperationCoordinator
-	taskCardMu   sync.RWMutex
-	taskCardID   string
-	approvalMu   sync.Mutex
-	approvalCard map[string]standaloneApprovalCard
-	typingMu     sync.Mutex
-	typingStream platform.Stream
+	sender             messageSender
+	cardKit            cardKitClient
+	accountID          string
+	openID             string
+	replyToID          string
+	taskCards          *taskCardRegistry
+	cardOpsMu          sync.Mutex
+	cardOps            *cardKitOperationCoordinator
+	taskCardMu         sync.RWMutex
+	taskCardID         string
+	approvalTaskCardID string
+	approvalMu         sync.Mutex
+	approvalCard       map[string]standaloneApprovalCard
+	typingMu           sync.Mutex
+	typingStream       platform.Stream
 }
 
 // NewReplier 创建飞书回复器。
@@ -263,6 +264,9 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 		targetOpenID := approvalTargetOpenID(choices, r.openID)
 		panelReq := approvalPanelRequest{Prompt: prompt, Choices: choices, Conv: conv, TaskCard: taskCardID}
 		if handled, err := r.askApprovalPanel(ctx, panelReq, targetOpenID); handled || err != nil {
+			if err == nil {
+				r.recordPrivateApprovalWaiting(ctx, choices, targetOpenID)
+			}
 			return err
 		}
 		cardJSON, err := buildChoiceCard(prompt, choices, conv)
@@ -277,6 +281,7 @@ func (r *Replier) AskChoices(ctx context.Context, prompt string, choices []platf
 			return err
 		}
 		r.rememberStandaloneApprovalCard(prompt, choices, conv, cardID)
+		r.recordPrivateApprovalWaiting(ctx, choices, targetOpenID)
 		return nil
 	}
 	var lines []string
@@ -355,13 +360,24 @@ func (r *Replier) CurrentTaskCardID() string {
 
 func (r *Replier) setCurrentTaskCardID(cardID string) {
 	r.taskCardMu.Lock()
+	if r.approvalTaskCardID == "" {
+		r.approvalTaskCardID = strings.TrimSpace(cardID)
+	} else if opts, ok := r.taskCards.snapshot(r.approvalTaskCardID); ok && (isCompactTerminalStatus(opts.Status) || opts.Status == cardStatusDetached) {
+		r.approvalTaskCardID = strings.TrimSpace(cardID)
+	}
 	r.taskCardID = strings.TrimSpace(cardID)
 	r.taskCardMu.Unlock()
 }
 
 // BindTaskCard 把后续审批和结构化问答关联到当前任务卡。
 func (r *Replier) BindTaskCard(cardID string) {
-	r.setCurrentTaskCardID(cardID)
+	r.taskCardMu.Lock()
+	r.taskCards.moveApprovalWaiting(r.approvalTaskCardID, strings.TrimSpace(cardID))
+	r.taskCardID, r.approvalTaskCardID = strings.TrimSpace(cardID), strings.TrimSpace(cardID)
+	r.taskCardMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), feishuMessageNoticeTimeout)
+	defer cancel()
+	r.refreshApprovalWaiting(ctx, cardID)
 }
 
 func attachTaskCardID(choices []platform.Choice, cardID string) []platform.Choice {

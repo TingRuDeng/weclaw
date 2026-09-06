@@ -882,7 +882,8 @@ func TestStableReleaseWorkflowIsManualOnlyAndBuildsRequestedTag(t *testing.T) {
 	}
 	for _, required := range []string{
 		"fetch-depth: 0",
-		`scripts/release.sh "$RELEASE_TAG"`,
+		`scripts/release.sh package "$RELEASE_TAG"`,
+		`scripts/release.sh publish "$RELEASE_TAG"`,
 		"GH_TOKEN: ${{ github.token }}",
 	} {
 		if !strings.Contains(text, required) {
@@ -902,7 +903,7 @@ func assertReleaseWorkflowDelegatesCanonicalScript(t *testing.T) {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	text := string(content)
-	if !strings.Contains(text, `scripts/release.sh "$RELEASE_TAG"`) {
+	if !strings.Contains(text, `scripts/release.sh package "$RELEASE_TAG"`) || !strings.Contains(text, `scripts/release.sh publish "$RELEASE_TAG"`) {
 		t.Fatal("stable release workflow must delegate to scripts/release.sh")
 	}
 	for _, duplicatedGate := range []string{"go test ./...", "govulncheck@", "softprops/action-gh-release@"} {

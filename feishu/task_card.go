@@ -24,6 +24,9 @@ type taskCardState struct {
 	preview            string
 	summary            string
 	approvals          []string
+	waitingApprovals   map[string]bool
+	resolvedApprovals  map[string]bool
+	approvalSuccessor  string
 	sequence           int
 	approvalPanelID    string
 	approvalPanelSeq   int
@@ -232,6 +235,9 @@ func (r *taskCardRegistry) update(cardID string, status string, content string) 
 	}
 	if strings.TrimSpace(status) != "" {
 		state.status = normalizeCardStatus(status)
+		if isCompactTerminalStatus(state.status) || state.status == cardStatusDetached {
+			state.waitingApprovals = nil
+		}
 	}
 	if strings.TrimSpace(content) != "" {
 		state.content = content
@@ -252,6 +258,9 @@ func (r *taskCardRegistry) updateAndSnapshot(cardID string, status string, conte
 	if strings.TrimSpace(status) != "" {
 		normalized := normalizeCardStatus(status)
 		state.status = normalized
+		if isCompactTerminalStatus(normalized) || normalized == cardStatusDetached {
+			state.waitingApprovals = nil
+		}
 		terminalDisplay := normalized == cardStatusDone || normalized == cardStatusError || normalized == cardStatusStopped ||
 			normalized == cardStatusSuperseded || normalized == cardStatusDetached
 		if terminalDisplay {
@@ -299,7 +308,16 @@ func (r *taskCardRegistry) addApprovalWithSequence(cardID string, action parsedC
 		r.mu.Unlock()
 		return cardOptions{}, 0, false
 	}
-	state.approvals = append(state.approvals, approvalRecordLine(action))
+	if action.Approval == "" || !state.resolvedApprovals[action.Approval] {
+		state.approvals = append(state.approvals, approvalRecordLine(action))
+	}
+	if action.Approval != "" {
+		if state.resolvedApprovals == nil {
+			state.resolvedApprovals = make(map[string]bool)
+		}
+		state.resolvedApprovals[action.Approval] = true
+	}
+	delete(state.waitingApprovals, action.Approval)
 	state.sequence++
 	state.updatedAt = r.nowOrDefault()
 	opts := state.cardOptions()
@@ -335,6 +353,7 @@ func (s *taskCardState) cardOptions() cardOptions {
 		Preview:            s.preview,
 		Summary:            s.summary,
 		Approvals:          append([]string(nil), s.approvals...),
+		WaitingApprovals:   len(s.waitingApprovals),
 		Collapsible:        s.collapsible,
 		Expanded:           s.expanded,
 		InlineActiveStatus: s.inlineActiveStatus,

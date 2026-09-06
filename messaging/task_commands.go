@@ -108,7 +108,7 @@ func (h *Handler) handleCancelPendingGuide(req taskCommandRequest) string {
 		return "只有任务发起人可以撤回暂存消息。"
 	}
 	if !cleared {
-		return "当前没有可撤回的消息。"
+		return "当前没有可撤回的暂存消息。/cancel 仅撤回暂存输入；如需停止正在执行的任务，请发送 /stop。"
 	}
 	return "已撤回该消息。"
 }

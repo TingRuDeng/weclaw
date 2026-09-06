@@ -52,12 +52,13 @@ type synchronousAgentResult struct {
 func (h *Handler) sendToDefaultAgent(req agentMessageRequest) {
 	req.name = h.defaultAgentNameForRoute(req.routeUserID, req.platformName, req.accountID)
 	if req.name == "" {
-		h.sendDefaultAgentEcho(req, nil)
+		sendPlatformText(req.ctx, req.reply, req.userID, "未配置默认 Agent，请先配置或选择 Agent。")
 		return
 	}
 	ag, err := h.getAgent(req.ctx, req.name)
 	if err != nil {
-		h.sendDefaultAgentEcho(req, err)
+		log.Printf("[handler] default agent %q not available: %v", req.name, err)
+		sendPlatformText(req.ctx, req.reply, req.userID, "Agent 启动失败："+friendlyAgentError(err))
 		return
 	}
 	h.dispatchAgentMessage(req, ag, "")
@@ -68,19 +69,10 @@ func (h *Handler) sendToNamedAgent(req agentMessageRequest) {
 	ag, err := h.getAgent(req.ctx, req.name)
 	if err != nil {
 		log.Printf("[handler] agent %q not available: %v", req.name, err)
-		sendPlatformText(req.ctx, req.reply, req.userID, fmt.Sprintf("Agent %q is not available: %v", req.name, err))
+		sendPlatformText(req.ctx, req.reply, req.userID, fmt.Sprintf("Agent %q 不可用：%s", req.name, friendlyAgentError(err)))
 		return
 	}
 	h.dispatchAgentMessage(req, ag, "["+req.name+"] ")
-}
-
-// sendDefaultAgentEcho 在默认 Agent 尚不可用时保留原有回显行为。
-func (h *Handler) sendDefaultAgentEcho(req agentMessageRequest, agentErr error) {
-	if agentErr != nil {
-		log.Printf("[handler] default agent %q not available, using echo mode for %s: %v", req.name, req.userID, agentErr)
-	}
-	log.Printf("[handler] agent not ready, using echo mode for %s", req.userID)
-	h.sendReplyWithMediaForRoute(req.ctx, req.reply, req.userID, req.routeUserID, req.name, "[echo] "+req.message)
 }
 
 // dispatchAgentMessage 根据 Agent 能力选择专用后台执行器或通用同步执行器。

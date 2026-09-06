@@ -35,7 +35,7 @@ func TestHandleCardActionEventUpdatesMappedTaskCard(t *testing.T) {
 		t.Fatalf("response=%#v, want compact approval card", resp)
 	}
 	assertApprovalCardContent(t, resp, "✅ 已收纳到任务卡片")
-	assertApprovalCardNotContains(t, resp, "command: date")
+	assertApprovalCardNotContains(t, resp, "命令：date")
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
 	}
@@ -140,7 +140,7 @@ func TestHandleCardActionEventAppendsApprovalToTaskCardState(t *testing.T) {
 		t.Fatalf("response=%#v, want compact approval card", resp)
 	}
 	assertApprovalCardContent(t, resp, "✅ 已收纳到任务卡片")
-	assertApprovalCardNotContains(t, resp, "command: date")
+	assertApprovalCardNotContains(t, resp, "命令：date")
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want task card update", cardKit.updateCardIDs)
 	}
@@ -176,7 +176,7 @@ func TestHandleCardActionEventUpdatesApprovalPanelCard(t *testing.T) {
 	})
 	item := approvalPanelItem{
 		Key:      "approval-key-1",
-		Summary:  "command: date",
+		Summary:  "命令：date",
 		TaskCard: "card-task-1",
 		Choices:  []approvalPanelChoice{{ID: "allow", Label: "允许本次", Conv: "feishu:ou_user"}},
 	}
@@ -225,7 +225,7 @@ func TestHandleCardActionEventKeepsPanelRecordWhenTaskCardUpdateFails(t *testing
 	})
 	item := approvalPanelItem{
 		Key:      "approval-key-1",
-		Summary:  "command: date",
+		Summary:  "命令：date",
 		TaskCard: "card-task-1",
 		Choices:  []approvalPanelChoice{{ID: "allow", Label: "允许本次", Conv: "feishu:ou_user"}},
 	}
@@ -248,7 +248,7 @@ func TestHandleCardActionEventKeepsPanelRecordWhenTaskCardUpdateFails(t *testing
 		t.Fatalf("handleCardActionEvent error: %v", err)
 	}
 	assertApprovalCardContent(t, resp, "已处理审批：1 个")
-	assertApprovalCardAllContent(t, resp, "✅ 已授权：允许本次", "command: date")
+	assertApprovalCardAllContent(t, resp, "✅ 已授权：允许本次", "命令：date")
 	if cardKit.updateCountFor("card-task-1") != 1 {
 		t.Fatalf("updated card ids=%#v, want attempted task card update", cardKit.updateCardIDs)
 	}
@@ -293,7 +293,7 @@ func TestHandleCardActionEventIgnoresTaskCardUpdateFailure(t *testing.T) {
 		t.Fatalf("response=%#v, want compact approval card despite task card failure", resp)
 	}
 	assertApprovalCardContent(t, resp, "✅ 已授权", "允许本次")
-	assertApprovalCardNotContains(t, resp, "command: date")
+	assertApprovalCardNotContains(t, resp, "命令：date")
 	assertApprovalCardNotContains(t, resp, "已收纳到任务卡片")
 	select {
 	case <-dispatched:

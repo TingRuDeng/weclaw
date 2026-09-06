@@ -133,7 +133,7 @@ func TestRunFeishuBootstrapCreatesBotConfigAndCredentials(t *testing.T) {
 	if strings.Contains(output, "secret-a") {
 		t.Fatalf("bootstrap output leaks secret: %s", output)
 	}
-	if !strings.Contains(output, "飞书 bootstrap 完成") {
+	if !strings.Contains(output, "飞书机器人配置已保存") {
 		t.Fatalf("output=%q, want completion message", output)
 	}
 	credentialPath, err := feishu.CredentialsPathForBot("project-a")

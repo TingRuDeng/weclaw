@@ -306,6 +306,10 @@ weclaw wechat users approve-code <授权码>
 
 ### 飞书
 
+首次接入还需在飞书开放平台启用机器人能力，将事件与回调设置为长连接，并订阅 `im.message.receive_v1`、`card.action.trigger`。配置下方权限及机器人 `allowed_users` 后，创建并发布应用版本，完成所需审批。凭据验证通过不代表事件和卡片回调已就绪。
+
+新机器人未指定进度模式时默认 `stream`；更新已有机器人并留空时保留原配置。`feishu login`、`feishu bootstrap` 保留为兼容入口，首次配置推荐使用 `feishu add`。
+
 ```bash
 weclaw feishu add
 weclaw feishu status --name <bot名称>
@@ -428,7 +432,7 @@ weclaw version
 
 显式 `restart --force`、`stop --force` 或 `update --restart --force` 表示操作者接受本地任务中断。WeClaw 会取消自身任务、请求 Codex App 退出，然后从实时进程快照中强制停止当前用户的 Codex `app-server` 进程组，包括管理身份不完整的 Host。未知 Host 必须由 app-server 领衔独立进程组；若它与 shell 或其他程序共享进程组，WeClaw 会拒绝连带终止。首次发信号前会重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份，不仅根据旧 PID 或进程名杀进程。进程表/参数不可读、身份漂移或 Host 停止结果未知时，整个 stop/restart/update 仍失败关闭，不会继续启动可能形成第二个 Host 的服务；若服务已因上一次未知结果保持不可写，后续显式 `--force` 会重新扫描并尝试收敛，而不是复用旧的成功缓存。直接 `SIGINT`/`SIGTERM` 没有这份显式授权，仍按普通模式保留无法确认的 Host。
 
-仓库自带的 `service/weclaw.service` 使用 `KillMode=process`，让 systemd 只向 WeClaw 主进程发信号、由上述事务管理 Host。后续服务启动必须在平台监听前读取事务状态、启动唯一 Host 并验证 generation 已变化。实际安装新版本后任何预检、停止或启动失败都会恢复旧二进制并在必要时重启旧服务。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新必须使用 `weclaw update`，不要用本地构建产物覆盖 PATH 中的二进制。
+仓库自带的 `service/weclaw.service` 使用 `KillMode=process`，让 systemd 只向 WeClaw 主进程发信号、由上述事务管理 Host。后续服务启动必须在平台监听前读取事务状态、启动唯一 Host 并验证 generation 已变化。实际安装新版本后任何预检、停止或启动失败都会恢复旧二进制并在必要时重启旧服务。未显式传入 `--restart` 的 `weclaw update` 只更新二进制，不重启服务。正式安装更新使用 `weclaw update`；发布前本地包验证使用下文的 `package --install`，同样经过校验和回滚事务，不直接复制覆盖二进制。
 
 若 WeClaw 服务本来就未运行，`weclaw restart` 默认仍只检查 Codex App/受控 CLI 并直接启动；发现外部 Host 时会失败关闭，不停止任何进程。显式 `--stop-conflicting-codex-hosts` 只停止 metadata/lifecycle 身份验证通过的 Host；显式 `--force` 则先退出 Codex App，再使用实时进程快照停止当前用户的 Codex `app-server` 进程组，包括管理身份不完整的 Host。首次信号前会重读原始 argv 并复核 UID、PGID、启动时间和命令指纹；升级 `SIGKILL` 前再复核进程身份。进程表/参数不可读或身份发生漂移时仍失败关闭，不会仅根据旧 PID 或进程名强杀。
 从尚不支持该协调端点的旧版本首次升级时，PATH 中的新二进制与内存中仍运行的旧服务具有不同能力。新 CLI 收到协调端点的 HTTP 404 时会先识别能力协商结果，不把纯文本 `404 page not found` 误解析成 JSON，也不向不存在的事务发送补偿请求；随后只有在 Codex App 和受控 CLI 已退出、能够取得 frontend lease，且旧服务的 `/api/runtime/drain` 明确返回 `draining=true`、`active_tasks=0`、`remaining_tasks=0` 时，才关闭旧服务的消息准入并只停止 WeClaw 自身。任一迁移门禁失败都保持失败关闭，不停止任何进程。迁移停止不代表 Codex Host 已轮换：先执行 `weclaw start` 让新版服务真正运行，再执行 `weclaw restart` 完成正式 Host 停止和 generation 验证。
@@ -443,6 +447,23 @@ go build -o weclaw .
 ```
 
 仓库当前使用 Go 1.26.6。当前没有发布可公开拉取、且与本维护版同步的容器镜像。
+
+打包和发布分两步，发布前可以先更新本机进行真机验证：
+
+```bash
+# 先提交本地改动；此时不需要推送，也不需要 GitHub/Gitee 凭据
+scripts/release.sh package --next-patch --install
+# 真机验证需要重启时，单独执行 weclaw restart，不会自动中断活动任务
+# 验证通过后推送相同提交，再发布打包时输出的确切版本
+git push origin main
+scripts/release.sh publish vX.Y.Z
+```
+
+省略 `--install` 就只打包。输出为 `dist/vX.Y.Z/` 下的双平台二进制和 `checksums.txt`，以及相邻的 `dist/vX.Y.Z.package.json`；清单记录通过打包门禁的 Git 提交、版本和三个文件的 SHA-256，不作为 Release 附件上传。打包要求已提交的干净工作区，但不要求提交已推送；首次打包执行完整门禁。同提交、同摘要的已有包可重复验证或安装，不覆盖已封装资产。若修改源码，请提交后把旧包目录及清单移到其他位置再重新打包；不能修改清单来发布旧验证结果。
+
+`package --install` 使用包内的新更新器，因此旧安装不支持新参数时也能使用；它只更新 PATH 中已有的本机 WeClaw。支持新参数的安装也可直接执行 `weclaw update --from-package /path/to/dist/vX.Y.Z`。本地安装验证摘要、平台和程序版本，拒绝降级，保留原子替换与预检失败回滚；不联网查询版本、不自动重启、不自动回滚后续人工验证结果。`--target` 仅配合本地包使用，目标必须是已有安装且与运行中服务的路径一致。
+
+`publish` 只接受与 clean `main`、`origin/main` 相同提交的完整包，不重建发布资产；`publish vX.Y.Z --dry-run` 只检查包和发布前置条件。GitHub 草稿资产及从上一正式版升级的烟测通过后才公开为 latest。CI 的手动 Release workflow 也分为 `package` 和 `publish`：前者保存构建产物，后者要求指定成功打包的 `package_run_id`，取回原包并校验相同提交，不能在上传时重新打包。
 
 正式发布以 `scripts/release.sh` 为唯一权威入口；GitHub Actions 的手动 Release workflow 也只从 clean `main` 调用该脚本，不维护第二套测试、构建或上传逻辑。GitHub Release 是版本与构建的权威来源，CI 与发布脚本只构建并上传 `weclaw_darwin_arm64`、`weclaw_linux_amd64` 和原始 `checksums.txt`。正式 Release 验证通过后，把两项二进制的可还原 `.gz` 表示和同一份原始摘要镜像到 [Gitee](https://gitee.com/jimdeng891/weclaw)。CI 和 Linux 通过 `GITEE_TOKEN` 注入凭据；macOS 本地发布在环境变量缺失时回退读取登录钥匙串中的 `weclaw-gitee-release`。镜像脚本在 Git 推送前先通过仅存在于受保护临时目录的 Authorization 请求头验证 Token 与目标仓库完全匹配。镜像上传后只核对最终附件名称和数量，不再重复回下载；安装器和更新器仍按权威摘要校验所选二进制。镜像失败会让发布任务明确失败，但不会删除已经公开并验证的 GitHub Release；可用手动 `Repair Gitee Mirror` workflow 从 GitHub Release 幂等续传缺失附件并重新核对清单。
 

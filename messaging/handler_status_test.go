@@ -86,7 +86,7 @@ func TestStatusCommandShowsRuntimeMetrics(t *testing.T) {
 	_, _, _ = h.beginActiveTask(context.Background(), "k1", activeTaskMeta{owner: "user-1", agentName: "codex", message: "x"})
 
 	text := h.buildStatus("user-1")
-	for _, want := range []string{"running tasks: 1 (you: 1)", "agent calls: 5, errors: 2", "mode: yolo", "rate limit: 30/min", "uptime:"} {
+	for _, want := range []string{"运行任务: 1（你的任务: 1）", "调用次数: 5，错误次数: 2", "模式: yolo", "限流: 30/分钟", "运行时间:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status missing %q, got %q", want, text)
 		}
@@ -102,7 +102,7 @@ func TestStatusCommandShowsDefaultModelWhenModelEmpty(t *testing.T) {
 
 	text := h.buildStatus("user-1")
 
-	if !strings.Contains(text, "model: (Agent 默认)") {
+	if !strings.Contains(text, "默认模型: 跟随 Agent 默认") {
 		t.Fatalf("status should show default model, got %q", text)
 	}
 }

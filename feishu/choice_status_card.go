@@ -203,6 +203,9 @@ func choiceCommandSucceeded(content string) bool {
 }
 
 func approvalHandledStatus(action parsedCardAction) (string, string) {
+	if strings.TrimSpace(action.Status) == approvalStatusTimedOut {
+		return "已超时拒绝", "red"
+	}
 	if strings.TrimSpace(action.Status) == approvalStatusAutoApproved {
 		return "✅ 已自动批准（YOLO）", "green"
 	}

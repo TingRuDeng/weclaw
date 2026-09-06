@@ -341,7 +341,6 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 			return err
 		}
 		if trackTask {
-			r.setCurrentTaskCardID(cardID)
 			if r.taskCards != nil {
 				r.taskCards.recordWithSequence(cardID, cardOptions{
 					Status:  cardStatusThinking,
@@ -370,6 +369,9 @@ func (r *Replier) openCardKitStreamWithMode(ctx context.Context, opts platform.S
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if trackTask {
+		r.setCurrentTaskCardID(cardID)
 	}
 	return stream, nil
 }

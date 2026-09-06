@@ -489,13 +489,13 @@ func TestFeishuTaskStreamWithoutProgressKeepsApprovalRecordsInCompactTerminal(t 
 	if err != nil {
 		t.Fatalf("OpenStream error: %v", err)
 	}
-	registry.addApproval("card-approval-only", parsedCardAction{Choice: "accept", Label: "accept", Summary: "command: date"})
+	registry.addApproval("card-approval-only", parsedCardAction{Choice: "accept", Label: "accept", Summary: "命令：date"})
 	if err := stream.Complete(context.Background(), ""); err != nil {
 		t.Fatalf("Complete error: %v", err)
 	}
 	doneCard := decodeCardJSON(t, cardKit.updateCards[len(cardKit.updateCards)-1])
 	elements := doneCard["body"].(map[string]any)["elements"].([]any)
-	if len(elements) != 1 || !strings.Contains(elements[0].(map[string]any)["content"].(string), "command: date") {
+	if len(elements) != 1 || !strings.Contains(elements[0].(map[string]any)["content"].(string), "命令：date") {
 		t.Fatalf("done body=%#v, want preserved approval without redundant terminal text", doneCard["body"])
 	}
 }
@@ -886,7 +886,7 @@ func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 	cardKit := &fakeCardKitClient{}
 	registry := newTaskCardRegistry()
 	registry.record("card-1", cardOptions{Status: cardStatusThinking, Title: "Codex", Content: "处理中"})
-	registry.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "accept", Summary: "command: date"})
+	registry.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "accept", Summary: "命令：date"})
 	stream := &feishuStream{cardKit: cardKit, taskCards: registry, cardID: "card-1", sequence: 4, throttle: cardkitThrottle, now: time.Now}
 
 	if err := stream.Complete(context.Background(), "最终结果"); err != nil {
@@ -902,7 +902,7 @@ func TestFeishuStreamCompleteKeepsApprovalRecords(t *testing.T) {
 		t.Fatalf("content=%q, want preserved progress", got)
 	}
 	approval := elements[1].(map[string]any)
-	if !strings.Contains(approval["content"].(string), "command: date") {
+	if !strings.Contains(approval["content"].(string), "命令：date") {
 		t.Fatalf("approval content=%q, want approval record", approval["content"])
 	}
 	if strings.Contains(cardKit.updateCards[0], "最终结果") {
@@ -997,7 +997,7 @@ func TestTaskCardApprovalUpdateKeepsStreamSequenceMonotonic(t *testing.T) {
 	adapter.taskCards = registry
 	adapter.now = func() time.Time { return time.Date(2026, 7, 3, 10, 40, 0, 0, time.UTC) }
 
-	if !adapter.updateTaskCardWithApproval(context.Background(), parsedCardAction{TaskCard: "card-1", Choice: "accept", Label: "允许本次", Summary: "command: date"}) {
+	if !adapter.updateTaskCardWithApproval(context.Background(), parsedCardAction{TaskCard: "card-1", Choice: "accept", Label: "允许本次", Summary: "命令：date"}) {
 		t.Fatal("approval update should update task card")
 	}
 	if err := stream.Complete(context.Background(), "最终结果"); err != nil {
@@ -1031,7 +1031,7 @@ func TestTaskCardApprovalRefreshesDurableReferenceAfterStreamEnable(t *testing.T
 	adapter.cardKit = cardKit
 	adapter.taskCards = registry
 	if !adapter.updateTaskCardWithApproval(context.Background(), parsedCardAction{
-		TaskCard: "card-1", Choice: "accept", Label: "允许本次", Summary: "command: date",
+		TaskCard: "card-1", Choice: "accept", Label: "允许本次", Summary: "命令：date",
 	}) {
 		t.Fatal("approval update should update task card")
 	}
@@ -1049,7 +1049,7 @@ func TestTaskCardApprovalRefreshesDurableReferenceAfterStreamEnable(t *testing.T
 	if err := json.Unmarshal(reference.Payload, &payload); err != nil {
 		t.Fatalf("decode durable reference: %v", err)
 	}
-	if payload.Sequence != cardKit.updateSeqs[0] || len(payload.Approvals) != 1 || !strings.Contains(payload.Approvals[0], "command: date") {
+	if payload.Sequence != cardKit.updateSeqs[0] || len(payload.Approvals) != 1 || !strings.Contains(payload.Approvals[0], "命令：date") {
 		t.Fatalf("payload=%#v, want latest approval and sequence", payload)
 	}
 }
@@ -1151,7 +1151,7 @@ func TestFeishuPrepareSupersedeFromReferencePreservesHiddenProgressAndExpandCont
 	payload, err := json.Marshal(feishuStreamReferencePayload{
 		CardID: "card-1", Title: "Codex · project-a", Sequence: 7,
 		Content: "旧兼容进度", Summary: "已完成代码检查", Details: "1. 已读取实现\n2. 已补充测试",
-		Collapsible: true, Approvals: []string{"允许本次：command: date"},
+		Collapsible: true, Approvals: []string{"允许本次：命令：date"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1202,7 +1202,7 @@ func TestFeishuPrepareSupersedeFromReferencePreservesHiddenProgressAndExpandCont
 		!strings.Contains(op.TaskCard.Content, "已在下方新卡继续展示。") {
 		t.Fatalf("task card=%#v, want preserved hidden progress and transfer notice", op.TaskCard)
 	}
-	if !strings.Contains(approval, "command: date") {
+	if !strings.Contains(approval, "命令：date") {
 		t.Fatalf("approval=%q", approval)
 	}
 }
@@ -1351,7 +1351,7 @@ func TestFeishuDeliverPreparedSupersedeCancelsPendingState(t *testing.T) {
 	if !closed || hasPending {
 		t.Fatalf("closed=%v pending=%v", closed, hasPending)
 	}
-	registry.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "允许本次", Summary: "command: date"})
+	registry.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "允许本次", Summary: "命令：date"})
 	if notified != 0 {
 		t.Fatalf("recovery callback fired after supersede: %d", notified)
 	}
@@ -1375,7 +1375,7 @@ func TestFeishuStreamReferenceCompletesOriginalCardAfterRestart(t *testing.T) {
 	if err := stream.Update(context.Background(), "已完成验证，正在收尾"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	beforeCards.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "允许本次", Summary: "command: date"})
+	beforeCards.addApproval("card-1", parsedCardAction{Choice: "accept", Label: "允许本次", Summary: "命令：date"})
 	reference, err := exporter.DurableReference()
 	if err != nil {
 		t.Fatalf("DurableReference: %v", err)
@@ -1402,7 +1402,7 @@ func TestFeishuStreamReferenceCompletesOriginalCardAfterRestart(t *testing.T) {
 	}
 	terminalCard := cardKit.updateCards[len(cardKit.updateCards)-1]
 	if strings.Contains(terminalCard, "**已完成**") || !strings.Contains(terminalCard, "已完成验证，正在收尾") ||
-		!strings.Contains(terminalCard, "command: date") || strings.Contains(terminalCard, "v0.1.test") {
+		!strings.Contains(terminalCard, "命令：date") || strings.Contains(terminalCard, "v0.1.test") {
 		t.Fatalf("terminal card=%q, want preserved progress and approval without final answer", terminalCard)
 	}
 }

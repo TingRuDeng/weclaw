@@ -72,7 +72,7 @@ func TestRegularMessageDispatchWaitIsBounded(t *testing.T) {
 	}
 	select {
 	case got := <-sender.texts:
-		if got != "oc_1:前一项操作仍未结束，排队等待已超时，本消息未执行。请发送 /stop 或稍后重试。" {
+		if got != "oc_1:前一项操作（消息处理）仍未结束，排队等待已超时，本消息未执行。请确认前序操作状态后重试。" {
 			t.Fatalf("timeout notice=%q", got)
 		}
 	case <-time.After(time.Second):
@@ -102,7 +102,7 @@ func TestRegularMessageDispatchExecutionTimeoutPreservesQueue(t *testing.T) {
 	})
 	select {
 	case got := <-sender.texts:
-		if got != "oc_1:本消息处理超过等待上限，后台操作仍可能继续。请先检查当前状态，必要时发送 /stop。" {
+		if got != "oc_1:本消息操作（消息处理）执行超过等待上限，后台操作仍可能继续。请先检查当前状态，勿重复提交。" {
 			t.Fatalf("timeout notice=%q", got)
 		}
 	case <-time.After(time.Second):
@@ -143,7 +143,7 @@ func TestRegularMessageDispatchSendsSingleQueueNotice(t *testing.T) {
 
 	select {
 	case got := <-sender.texts:
-		if got != "oc_1:前一项操作仍在处理，本消息已排队，完成后将自动执行。" {
+		if got != "oc_1:前一项操作（消息处理）仍在处理，本消息已排队，将在轮到时执行；等待超时会另行提示。" {
 			t.Fatalf("queue notice=%q", got)
 		}
 	case <-time.After(time.Second):

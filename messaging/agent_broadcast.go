@@ -173,6 +173,10 @@ func (h *Handler) beginCodexBroadcastRuntime(req broadcastAgentsRequest, name st
 	unlockBinding := h.lockAgentExecution(codexBindingExecutionKey(bindingKey))
 	defer unlockBinding()
 	route := h.codexConversationRouteForSession(req.userID, req.routeUserID, name, ag)
+	if _, err := h.codexConversationThread(route, ag); err != nil {
+		results <- newBroadcastAgentResult(req, name, err.Error(), false)
+		return broadcastAgentRuntime{}, false
+	}
 	controlCtx, cancelControl := h.codexThreadControlContext(ctx)
 	defer cancelControl()
 	unlockControl, err := h.lockCodexThreadControlContext(controlCtx, route.threadID)

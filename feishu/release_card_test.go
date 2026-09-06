@@ -37,7 +37,7 @@ func TestPrepareDetachFromReferenceUsesSynchronizationLanguage(t *testing.T) {
 			status, _ = element["content"].(string)
 		}
 	}
-	if status != "**已停止同步**" {
+	if status != "**此窗口已停止跟踪**" {
 		t.Fatalf("detach status=%q", status)
 	}
 	if op.TaskCard == nil || !strings.Contains(op.TaskCard.Content, "1. 已读取实现") ||

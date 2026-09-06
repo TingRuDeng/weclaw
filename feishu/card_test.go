@@ -258,7 +258,7 @@ func TestBuildCardV2AppendsApprovalRecords(t *testing.T) {
 		Status:    cardStatusDone,
 		Title:     "Codex",
 		Content:   "最终回答",
-		Approvals: []string{"✅ 已授权：accept\ncommand: date"},
+		Approvals: []string{"✅ 已授权：accept\n命令：date"},
 	})
 	if err != nil {
 		t.Fatalf("buildCardV2 error: %v", err)
@@ -275,7 +275,7 @@ func TestBuildCardV2AppendsApprovalRecords(t *testing.T) {
 	}
 	approval := elements[1].(map[string]any)
 	content := approval["content"].(string)
-	if !strings.Contains(content, "审批记录") || !strings.Contains(content, "command: date") {
+	if !strings.Contains(content, "审批记录") || !strings.Contains(content, "命令：date") {
 		t.Fatalf("approval content=%q, want approval summary", content)
 	}
 }

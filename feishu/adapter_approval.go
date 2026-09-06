@@ -179,7 +179,7 @@ func approvalActionToast(action parsedCardAction) *callback.Toast {
 	case approvalStatusPending:
 		return &callback.Toast{Type: "info", Content: "已受理，正在处理"}
 	case approvalStatusExpired:
-		return &callback.Toast{Type: "warning", Content: "授权请求已过期，请重新发起任务"}
+		return &callback.Toast{Type: "warning", Content: "授权请求已过期，请先查看当前任务状态"}
 	case approvalStatusResolvedInApp:
 		return &callback.Toast{Type: "info", Content: "该授权已在 Codex App 处理"}
 	case approvalStatusTurnTerminal:
@@ -187,7 +187,7 @@ func approvalActionToast(action parsedCardAction) *callback.Toast {
 	case approvalStatusStateUnknown:
 		return &callback.Toast{Type: "warning", Content: "暂时无法确认授权状态，请稍后重试"}
 	case approvalStatusUnconfirmed:
-		return &callback.Toast{Type: "warning", Content: "授权处理结果未确认，请重新发起任务"}
+		return &callback.Toast{Type: "warning", Content: "授权处理结果未确认，请先查看状态，勿重复提交任务"}
 	default:
 		return &callback.Toast{Type: "success", Content: "已处理"}
 	}
@@ -269,8 +269,9 @@ func (a *Adapter) updateTaskCardWithApproval(ctx context.Context, action parsedC
 	}
 	updated := false
 	changed := false
-	_ = a.taskCards.withCardOperation(action.TaskCard, func() error {
-		opts, sequence, ok := a.taskCards.addApprovalWithSequence(action.TaskCard, action)
+	_ = a.taskCards.withApprovalCardOperation(action.TaskCard, func(cardID string) error {
+		action.TaskCard = cardID
+		opts, sequence, ok := a.taskCards.addApprovalWithSequence(cardID, action)
 		if !ok {
 			return nil
 		}

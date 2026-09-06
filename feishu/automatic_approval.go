@@ -32,8 +32,24 @@ func (r *Replier) RecordApprovalState(ctx context.Context, prompt string, choice
 		return platform.ErrUnsupported
 	}
 	choice := choices[0]
+	choice.ID, choice.Label = "", ""
+	return r.recordApprovalDisplay(ctx, prompt, choice, status)
+}
+
+// RecordApprovalTimeout closes local approval controls after the decision channel denies.
+func (r *Replier) RecordApprovalTimeout(ctx context.Context, prompt string, choices []platform.Choice) error {
+	if r == nil || r.cardKit == nil || len(choices) == 0 {
+		return platform.ErrUnsupported
+	}
+	choice := choices[0]
+	choice.ID, choice.Label = "decline", "拒绝"
+	return r.recordApprovalDisplay(ctx, prompt, choice, approvalStatusTimedOut)
+}
+
+func (r *Replier) recordApprovalDisplay(ctx context.Context, prompt string, choice platform.Choice, status string) error {
 	action := parsedCardAction{
 		Action: cardActionChoice, Kind: cardKindApproval,
+		Choice: choice.ID, Label: choice.Label,
 		Summary:  approvalSummaryFromPrompt(prompt),
 		TaskCard: strings.TrimSpace(choice.Metadata["task_card_id"]),
 		Approval: strings.TrimSpace(choice.Metadata["approval_key"]),
@@ -129,8 +145,9 @@ func (r *Replier) recordAutomaticApprovalOnTaskCard(ctx context.Context, action 
 	}
 	var updated bool
 	var resultErr error
-	err := r.withCardOperation(action.TaskCard, func() error {
-		opts, sequence, ok := r.taskCards.addApprovalWithSequence(action.TaskCard, action)
+	err := r.taskCards.withApprovalCardOperation(action.TaskCard, func(cardID string) error {
+		action.TaskCard = cardID
+		opts, sequence, ok := r.taskCards.addApprovalWithSequence(cardID, action)
 		if !ok {
 			return nil
 		}

@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 DRY_RUN=0
 TAG=""
+MODE=""
+INSTALL=0
+PACKAGE_COMMIT=""
 RELEASE_TAG_CREATED=0
 RELEASE_TAG_PUSHED=0
 RELEASE_DRAFT_ATTEMPTED=0
@@ -19,13 +22,17 @@ TARGETS=(
 usage() {
   cat <<'EOF'
 用法:
-  scripts/release.sh v0.1.42
-  scripts/release.sh --next-patch
-  scripts/release.sh --next-patch --dry-run
+  scripts/release.sh package --next-patch
+  scripts/release.sh package v0.1.42 --install
+  scripts/release.sh publish v0.1.42
+  scripts/release.sh publish v0.1.42 --dry-run
 
 选项:
-  --next-patch   基于当前最大 vX.Y.Z tag 自动递增 patch 版本
-  --dry-run      执行检查、测试和打包，但不创建 tag、不推送、不创建 release
+  package       完整验证并打包，不访问发布服务、不推送；同提交的已封装包可复用
+  publish       验证并上传已有包，不重新构建发布资产
+  --next-patch  打包时基于本地最大 vX.Y.Z tag 自动递增 patch
+  --install     打包后安全更新 PATH 中的本机 weclaw，不自动重启
+  --dry-run     只验证发布前置条件，不创建 tag、不上传
   -h, --help     显示帮助
 
 环境:
@@ -92,6 +99,9 @@ next_patch_tag() {
 }
 
 parse_args() {
+  case "${1:-}" in
+    package|publish) MODE="$1"; shift ;;
+  esac
   while (($# > 0)); do
     case "$1" in
       --next-patch)
@@ -100,6 +110,9 @@ parse_args() {
         ;;
       --dry-run)
         DRY_RUN=1
+        ;;
+      --install)
+        INSTALL=1
         ;;
       -h|--help)
         usage
@@ -117,12 +130,15 @@ parse_args() {
   done
   [[ -n "$TAG" ]] || fail "必须指定 tag 或 --next-patch"
   [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag 必须形如 v0.1.42"
+  [[ "$MODE" == package || "$MODE" == publish ]] || fail "请显式选择 package 或 publish"
+  [[ "$INSTALL" -eq 0 || "$MODE" == package ]] || fail "--install 仅用于 package"
+  [[ "$DRY_RUN" -eq 0 || "$MODE" == publish ]] || fail "--dry-run 仅用于 publish"
 }
 
 check_dependencies() {
   require_command git
   require_command go
-  require_command gh
+  [[ "$MODE" != publish ]] || require_command gh
   require_command python3
   require_command shasum
 }
@@ -174,8 +190,8 @@ run_validations() {
 build_assets() {
 	local out_dir="$DIST_DIR/$TAG"
 	log "构建发布资产：$out_dir"
+	[[ ! -e "$out_dir" ]] || fail "包目录已存在但未通过封装验证，请检查并移走后重新打包：$out_dir"
 	mkdir -p "$out_dir"
-	rm -f "$out_dir"/weclaw_* "$out_dir/checksums.txt"
 
 	local target goos goarch ext output
 	for target in "${TARGETS[@]}"; do
@@ -190,6 +206,43 @@ build_assets() {
 
 	# update 命令依赖 checksums.txt 校验资产完整性，本地和 Actions 产物必须保持同名格式。
 	(cd "$out_dir" && shasum -a 256 weclaw_* > checksums.txt)
+}
+
+write_package_manifest() {
+  python3 "$ROOT_DIR/scripts/release_package.py" seal "$DIST_DIR/$TAG" "$TAG" "$PACKAGE_COMMIT"
+}
+
+verify_package() {
+  python3 "$ROOT_DIR/scripts/release_package.py" verify "$DIST_DIR/$TAG" "$TAG" "$(git rev-parse HEAD)"
+}
+
+install_package() {
+  local installed host_os host_arch
+  installed="$(command -v weclaw)" || fail "PATH 中未找到已有 weclaw 安装"
+  [[ "$installed" == /* && -f "$installed" ]] || fail "本地安装目标必须是 PATH 中的可执行文件"
+  host_os="$(go env GOHOSTOS)"
+  host_arch="$(go env GOHOSTARCH)"
+  release_target_supported "$host_os/$host_arch" || fail "当前主机不在本地安装矩阵中"
+  verify_package
+  "$DIST_DIR/$TAG/weclaw_${host_os}_${host_arch}" update --from-package "$DIST_DIR/$TAG" --target "$installed"
+}
+
+package_release() {
+  PACKAGE_COMMIT="$(git rev-parse HEAD)"
+  if [[ -e "$DIST_DIR/$TAG.package.json" ]]; then
+    verify_package
+    log "复用已验证包：$TAG"
+  else
+    configure_go_cache
+    run_validations
+    build_assets
+    check_clean_tree
+    [[ "$(git rev-parse HEAD)" == "$PACKAGE_COMMIT" ]] || fail "打包期间提交已变化，拒绝封装"
+    write_package_manifest
+    verify_package
+  fi
+  [[ "$INSTALL" -eq 0 ]] || install_package
+  log "打包完成：$DIST_DIR/${TAG}；真机验证后执行 scripts/release.sh publish $TAG"
 }
 
 query_release_id() {
@@ -337,7 +390,7 @@ verify_update_smoke() {
 
 	(
 		set -euo pipefail
-		local github_token tmp_dir smoke_bin version_output
+		local github_token tmp_dir smoke_bin version_output previous filename
 		tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/weclaw-update-smoke.XXXXXX")"
 		cleanup() {
 			rm -rf "$tmp_dir"
@@ -352,7 +405,13 @@ verify_update_smoke() {
 		[[ -n "$github_token" ]] || fail "无法取得 GitHub 凭据，不能验证 draft Release 的 update 链路"
 		smoke_bin="$tmp_dir/weclaw"
 		mkdir -p "$tmp_dir/home"
-		go build -trimpath -ldflags="-s -w -X github.com/fastclaw-ai/weclaw/cmd.Version=v0.0.0-update-smoke" -o "$smoke_bin" .
+		previous="$(gh release view --repo TingRuDeng/weclaw --json tagName --jq '.tagName')"
+		[[ "$previous" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ && "$previous" != "$TAG" ]] || fail "找不到可用于自更新验证的上一正式版"
+		filename="weclaw_${host_os}_${host_arch}"
+		gh release download "$previous" --repo TingRuDeng/weclaw --pattern "$filename" --pattern checksums.txt --dir "$tmp_dir"
+		(cd "$tmp_dir" && shasum -a 256 --ignore-missing -c checksums.txt) || fail "上一正式版摘要校验失败"
+		mv "$tmp_dir/$filename" "$smoke_bin"
+		chmod 755 "$smoke_bin"
 		env -u WECLAW_DAEMON_CHILD -u WECLAW_DAEMON_CLAUDE_PREFLIGHT \
 			GITHUB_TOKEN="$github_token" WECLAW_HOME="$tmp_dir/home" WECLAW_UPDATE_RELEASE_TAG="$TAG" "$smoke_bin" update
 		version_output="$(WECLAW_HOME="$tmp_dir/home" "$smoke_bin" version)"
@@ -365,11 +424,16 @@ main() {
   parse_args "$@"
   check_dependencies
   check_clean_tree
+  if [[ "$MODE" == package ]]; then
+    package_release
+    return
+  fi
+  verify_package
   check_release_source
   check_tag_available
-  configure_go_cache
-  run_validations
-	build_assets
+	[[ "$DRY_RUN" -eq 0 ]] || { log "dry-run：包与发布来源验证通过，未上传"; return; }
+	check_clean_tree
+	verify_package
 	trap cleanup_failed_release EXIT
 	stage_release
 	verify_release_assets true

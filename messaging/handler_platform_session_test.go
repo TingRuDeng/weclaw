@@ -179,7 +179,7 @@ func TestStatusUsesFeishuSessionSelectedAgent(t *testing.T) {
 		t.Fatalf("回复数量=%d，期望切换和状态各一条：%#v", len(reply.Texts), reply.Texts)
 	}
 	status := reply.Texts[1]
-	if !strings.Contains(status, "agent: claude (cli)") || !strings.Contains(status, "model: claude-test") {
+	if !strings.Contains(status, "agent: claude (cli)") || !strings.Contains(status, "默认模型: claude-test") {
 		t.Fatalf("会话状态未展示当前 Claude Agent：%q", status)
 	}
 	if strings.Contains(status, "agent: codex") {
@@ -375,7 +375,7 @@ func TestExplicitUnavailableRouteAgentDoesNotFallbackToPlatformDefault(t *testin
 		t.Fatalf("route agent=%q, want explicit unavailable selection", got)
 	}
 	status := h.buildStatusForRoute("user-a", route, platform.PlatformFeishu, "main")
-	if !strings.Contains(status, "agent: removed-agent (not started)") || strings.Contains(status, "agent: codex") {
+	if !strings.Contains(status, "agent: removed-agent（未启动）") || strings.Contains(status, "agent: codex") {
 		t.Fatalf("status=%q, must not silently fall back to codex", status)
 	}
 }

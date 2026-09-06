@@ -72,7 +72,7 @@ func (h *Handler) handleCwdWithRoute(trimmed string, userID []string, route cwdR
 	}
 	h.updateAgentWorkingDirectories(absPath, agents)
 	h.recordActiveWorkspaceForUser(userID, agents, absPath)
-	return fmt.Sprintf("cwd: %s", absPath)
+	return fmt.Sprintf("工作目录: %s", absPath)
 }
 
 func (h *Handler) hiddenCwdWorkspaceAgent(agents map[string]agent.Agent, workspaceRoot string) string {
@@ -122,14 +122,14 @@ func (h *Handler) releaseClaudeWorkspacesForCwd(userIDs []string, agents map[str
 func (h *Handler) currentCwdStatusForRoute(route cwdRoute) string {
 	name := h.defaultAgentNameForRoute(route.routeUserID, route.platform, route.accountID)
 	if strings.TrimSpace(name) == "" {
-		return "No agent running."
+		return "未配置默认 Agent。"
 	}
 	h.mu.RLock()
 	ag := h.agents[name]
 	workspaceRoot := h.agentWorkDirs[name]
 	h.mu.RUnlock()
 	if ag == nil {
-		return wechatCommandText("cwd: "+firstNonBlank(workspaceRoot, defaultAttachmentWorkspace()), "agent: "+name+" (not started)")
+		return wechatCommandText("工作目录: "+firstNonBlank(workspaceRoot, defaultAttachmentWorkspace()), "agent: "+name+"（未启动）")
 	}
 	switch {
 	case isCodexAgent(name, ag.Info()):
@@ -146,7 +146,7 @@ func (h *Handler) currentCwdStatusForRoute(route cwdRoute) string {
 	default:
 		workspaceRoot = firstNonBlank(workspaceRoot, defaultAttachmentWorkspace())
 	}
-	return wechatCommandText("cwd: "+workspaceRoot, "agent: "+name)
+	return wechatCommandText("工作目录: "+workspaceRoot, "agent: "+name)
 }
 
 // resolveCwdPath 展开用户目录并校验目标确实是目录。
@@ -160,19 +160,19 @@ func resolveCwdPath(arg string) (string, error) {
 	}
 	absPath, err := filepath.Abs(arg)
 	if err != nil {
-		return "", fmt.Errorf("Invalid path: %v", err)
+		return "", fmt.Errorf("路径无效: %v", err)
 	}
 	realPath, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
-		return "", fmt.Errorf("Path not found: %s", absPath)
+		return "", fmt.Errorf("路径不存在: %s", absPath)
 	}
 	realPath = filepath.Clean(realPath)
 	info, err := os.Stat(realPath)
 	if err != nil {
-		return "", fmt.Errorf("Path not found: %s", realPath)
+		return "", fmt.Errorf("路径不存在: %s", realPath)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("Not a directory: %s", realPath)
+		return "", fmt.Errorf("路径不是目录: %s", realPath)
 	}
 	return realPath, nil
 }

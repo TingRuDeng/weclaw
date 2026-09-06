@@ -46,7 +46,7 @@ func TestCwdStatusUsesFeishuRouteCodexWorkspaceWithoutMutation(t *testing.T) {
 		Metadata: map[string]string{"feishu_session_key": route},
 	}, reply)
 
-	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "cwd: "+workspace) ||
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "工作目录: "+workspace) ||
 		!strings.Contains(reply.Texts[0], "agent: codex") {
 		t.Fatalf("cwd reply=%#v, want route workspace %q", reply.Texts, workspace)
 	}
@@ -82,7 +82,7 @@ func TestCwdStatusUsesFeishuRouteClaudeWorkspaceWithoutMutation(t *testing.T) {
 		Metadata: map[string]string{"feishu_session_key": route},
 	}, reply)
 
-	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "cwd: "+workspace) ||
+	if len(reply.Texts) != 1 || !strings.Contains(reply.Texts[0], "工作目录: "+workspace) ||
 		!strings.Contains(reply.Texts[0], "agent: claude") {
 		t.Fatalf("cwd reply=%#v, want route workspace %q", reply.Texts, workspace)
 	}

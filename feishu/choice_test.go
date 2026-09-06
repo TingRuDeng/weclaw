@@ -69,7 +69,7 @@ func TestBuildChoiceCardShowsStructuredApprovalPurpose(t *testing.T) {
 		t.Fatalf("approval card content=%q, want purpose and impact", content)
 	}
 	value := elements[1].(map[string]any)["value"].(map[string]any)
-	if !strings.Contains(value["summary"].(string), "purpose: 为了运行项目测试") {
+	if !strings.Contains(value["summary"].(string), "申请目的：为了运行项目测试") {
 		t.Fatalf("approval summary=%#v, want purpose", value["summary"])
 	}
 }
@@ -277,7 +277,7 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 				"choice":         "allow",
 				"kind":           "approval",
 				"label":          "允许本次",
-				"summary":        "command: date\ncwd: /tmp/work",
+				"summary":        "命令：date\n工作目录：/tmp/work",
 				"approval_owner": "ou_user",
 			}},
 		},
@@ -308,7 +308,7 @@ func TestHandleCardActionEventReturnsApprovalStatusCard(t *testing.T) {
 	if !strings.Contains(content, "✅ 已授权") || !strings.Contains(content, "允许本次") {
 		t.Fatalf("content=%q, want compact allow status", content)
 	}
-	if strings.Contains(content, "command: date") || strings.Contains(content, "{") || strings.Contains(content, "}") || len(body["elements"].([]map[string]any)) != 1 {
+	if strings.Contains(content, "命令：date") || strings.Contains(content, "{") || strings.Contains(content, "}") || len(body["elements"].([]map[string]any)) != 1 {
 		t.Fatalf("content=%q, want compact card without verbose JSON or buttons", content)
 	}
 	select {

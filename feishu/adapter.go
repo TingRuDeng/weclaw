@@ -56,6 +56,8 @@ type Adapter struct {
 	dispatchNoticeDelay time.Duration
 	maxMessageAge       time.Duration
 	messageAcceptAfter  time.Time
+	staleNoticeMu       sync.Mutex
+	staleNotices        map[string]time.Time
 }
 
 // NewAdapter 创建飞书平台 adapter。

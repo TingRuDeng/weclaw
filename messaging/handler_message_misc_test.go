@@ -80,12 +80,12 @@ func TestHandleMessage_AbsolutePathTextGoesToDefaultAgent(t *testing.T) {
 	if ag.lastChatMessage() != text {
 		t.Fatalf("agent message=%q, want original text", ag.lastChatMessage())
 	}
-	if containsText(calls.texts(), "Usage: specify one agent") {
+	if containsText(calls.texts(), "请指定一个 Agent") {
 		t.Fatalf("absolute path text should not reply usage, messages=%#v", calls.texts())
 	}
 }
 
-func TestHandleMessageRemovedSwitchCommandGoesToDefaultAgent(t *testing.T) {
+func TestHandleMessageRemovedSwitchCommandIsRejected(t *testing.T) {
 	h := NewHandler(nil, nil)
 	ag := &fakeAgent{reply: "ok"}
 	h.defaultName = "codex"
@@ -99,12 +99,8 @@ func TestHandleMessageRemovedSwitchCommandGoesToDefaultAgent(t *testing.T) {
 
 	handleTestWeChatMessage(h, context.Background(), client, newTextMessage(101, "/sw reload"))
 
-	waitForFakeAgentCalls(t, ag, 1)
-	if ag.chatCallCount() != 1 {
-		t.Fatalf("已删除的 /sw 命令应落到默认 Agent，chatCalls=%d", ag.chatCallCount())
-	}
-	if ag.lastChatMessage() != "/sw reload" {
-		t.Fatalf("agent message=%q，期望保留原始已删除命令文本", ag.lastChatMessage())
+	if ag.chatCallCount() != 0 || !containsText(calls.texts(), "命令不存在") {
+		t.Fatalf("已删除的 /sw 命令不应调用 Agent，chatCalls=%d replies=%v", ag.chatCallCount(), calls.texts())
 	}
 	if containsText(calls.texts(), "不再支持从微信端切换 Codex 账号") {
 		t.Fatalf("已删除的 /sw 命令不应再被内置命令消费，messages=%#v", calls.texts())

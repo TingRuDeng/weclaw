@@ -13,7 +13,7 @@ import (
 )
 
 func staleApprovalReply() string {
-	return "这次交互已过期或原任务已结束，没有再发送给 Agent。\n\n请重新发起任务。"
+	return "这次交互已过期或原任务已结束，没有再发送给 Agent。\n\n请先查看当前任务状态，勿重复提交原任务。"
 }
 
 func approvalOptionSet(options []agent.ApprovalOption) map[string]bool {

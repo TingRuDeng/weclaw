@@ -18,10 +18,6 @@ func (h *Handler) sendReplyWithMediaAfterStream(ctx context.Context, replyWriter
 	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, userID, agentName, reply, finalInStream)
 }
 
-func (h *Handler) sendReplyWithMediaForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string) {
-	h.sendReplyWithMediaAfterStreamForRoute(ctx, replyWriter, userID, routeUserID, agentName, reply, false)
-}
-
 func (h *Handler) sendReplyWithMediaAfterStreamForRoute(ctx context.Context, replyWriter platform.Replier, userID string, routeUserID string, agentName string, reply string, finalInStream bool) {
 	h.sendReplyWithMediaAfterStreamCore(ctx, replyWriter, userID, routeUserID, agentName, reply, finalInStream)
 }

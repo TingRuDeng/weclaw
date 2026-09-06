@@ -20,7 +20,7 @@ func approvalCardActionEvent(choice string, label string, taskCardID string) *ca
 		"choice":         choice,
 		"kind":           cardKindApproval,
 		"label":          label,
-		"summary":        "command: date",
+		"summary":        "命令：date",
 		"approval_key":   "approval-key-1",
 		"approval_owner": "ou_user",
 	}

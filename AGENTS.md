@@ -41,6 +41,7 @@ ai_summary:
 - 平台 adapter：`wechat/`、`feishu/`、`platform/`
 - 配置结构：`config/config.go`
 - 发布脚本：`scripts/release.sh`
+- 两阶段产物契约：`scripts/release_package.py`、`cmd/update_local.go`；`package` 验证和构建，`publish` 只上传相同提交和摘要的已有包，CI 按成功打包 run 恢复产物。
 
 ## Key facts
 
@@ -61,7 +62,7 @@ ai_summary:
 - `tasks/todo.md` 只保留当前或正在执行的任务记录；已完成历史流水账不长期保留。
 - `tasks/lessons.md` 是长期经验沉淀，清理文档时必须保留。
 - 不要把机器本地绝对路径写入项目上下文文档；配置示例可以使用 `/path/to/project` 这类占位路径。
-- 发布后本机安装必须走 `weclaw update`，不要用本地构建产物直接覆盖 PATH 中的 `weclaw`。
+- 本机正式更新使用 `weclaw update`；发布前真机验证允许 `scripts/release.sh package --next-patch --install`，它通过新包中的 `update --from-package ... --target ...` 复用摘要校验、原子替换与预检失败回滚，不直接 cp、不自动重启。
 
 ## How to verify
 
@@ -92,7 +93,9 @@ go test ./agent -run '^TestCodexOfficialDaemonTwoClientProtocol$' -count=1 -time
 release-side-effect:
 
 ```bash
-scripts/release.sh --next-patch
+scripts/release.sh package --next-patch
+# 真机验证并推送相同提交后，上传已有包
+scripts/release.sh publish vX.Y.Z
 ```
 
 ## Stale when

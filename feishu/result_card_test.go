@@ -46,6 +46,68 @@ func TestBuildResultCardsPreservesMarkdownAndRewritesLocalLinks(t *testing.T) {
 	}
 }
 
+func TestResultChunksPreserveFencedCode(t *testing.T) {
+	for _, fence := range []string{"```", "~~~~"} {
+		t.Run(fence, func(t *testing.T) {
+			body := strings.Repeat("    中文 \"escaped\" \\\n\n", 1600)
+			chunks, err := splitResultCardMarkdown("test", cardStatusDone, fence+"go\n"+body+fence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(chunks) < 2 {
+				t.Fatal("expected continuation")
+			}
+			var restored strings.Builder
+			for _, chunk := range chunks {
+				if !strings.HasPrefix(chunk, fence+"go\n") || !strings.HasSuffix(chunk, fence) {
+					t.Fatalf("unbalanced chunk: %.100s ...", chunk)
+				}
+				restored.WriteString(strings.TrimSuffix(strings.TrimPrefix(chunk, fence+"go\n"), fence))
+				fits, err := resultCardContentFits(resultCardTitle("test", 999999, 999999), cardStatusDone, chunk)
+				if err != nil || !fits {
+					t.Fatalf("oversize chunk: %v", err)
+				}
+			}
+			if restored.String() != body {
+				t.Fatal("code whitespace or content changed")
+			}
+		})
+	}
+}
+
+func TestResultCardsPreserveBoundaryWhitespace(t *testing.T) {
+	content := "\n\n  ```go\n    first line\n\n  ```\n\n"
+	cards, err := buildResultCards(resultCardOptions{Title: "test", Content: content})
+	if err != nil || len(cards) != 1 {
+		t.Fatalf("cards=%d err=%v", len(cards), err)
+	}
+	if got := resultCardMainMarkdown(t, parseResultCard(t, cards[0])); got != content {
+		t.Fatalf("boundary whitespace changed: got %q want %q", got, content)
+	}
+}
+
+func TestResultChunksKeepLanguageOnLongSingleCodeLine(t *testing.T) {
+	body := strings.Repeat("中文\"\\", 10000)
+	chunks, err := splitResultCardMarkdown("test", cardStatusDone, "````text\n"+body+"\n```\n````")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored strings.Builder
+	for _, chunk := range chunks {
+		if !strings.HasPrefix(chunk, "````text\n") || !strings.HasSuffix(chunk, "````") {
+			t.Fatal("code fence or language lost")
+		}
+		restored.WriteString(strings.TrimSuffix(strings.TrimPrefix(chunk, "````text\n"), "````"))
+		fits, err := resultCardContentFits(resultCardTitle("test", 999999, 999999), cardStatusDone, chunk)
+		if err != nil || !fits {
+			t.Fatalf("size: %v", err)
+		}
+	}
+	if strings.ReplaceAll(restored.String(), "\n", "") != body+"```" {
+		t.Fatal("code content lost or shorter literal fence misparsed")
+	}
+}
+
 func TestBuildResultCardsUsesTerminalStatusStyle(t *testing.T) {
 	tests := []struct {
 		name       string

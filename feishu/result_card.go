@@ -26,8 +26,8 @@ type resultCardOptions struct {
 // buildResultCards 把一个逻辑终态结果渲染为一组有序静态卡片；每张卡都在本地完成容量预检。
 func buildResultCards(opts resultCardOptions) ([]string, error) {
 	status := resultCardStatus(opts.Status)
-	content := rewriteFeishuLocalMarkdownLinks(strings.TrimSpace(opts.Content))
-	if content == "" {
+	content := rewriteFeishuLocalMarkdownLinks(opts.Content)
+	if strings.TrimSpace(content) == "" {
 		content = statusDefaultContent(status)
 	}
 	baseTitle := compactResultCardTitle(opts.Title)
@@ -39,6 +39,7 @@ func buildResultCards(opts resultCardOptions) ([]string, error) {
 	for index, chunk := range chunks {
 		raw, err := buildCardV2(cardOptions{
 			Status: status, Title: resultCardTitle(baseTitle, index+1, len(chunks)), Content: chunk,
+			PreserveWhitespace: true,
 		})
 		if err != nil {
 			return nil, err
@@ -98,42 +99,67 @@ func rewriteFeishuLocalMarkdownLinks(content string) string {
 
 func splitResultCardMarkdown(title string, status string, content string) ([]string, error) {
 	sizingTitle := resultCardTitle(title, 999999, 999999)
-	lines := strings.Split(content, "\n")
-	chunks := make([]string, 0, 1)
+	var chunks []string
+	var fence resultMarkdownFence
 	current := ""
+	hasContent := false
 	flush := func() {
-		if chunk := strings.TrimSpace(current); chunk != "" {
-			chunks = append(chunks, chunk)
+		if hasContent {
+			chunks = append(chunks, fence.close(current))
 		}
 		current = ""
+		if fence.marker != "" {
+			current = fence.opener + "\n"
+		}
+		hasContent = false
 	}
-	for _, line := range lines {
-		candidate := line
-		if current != "" {
-			candidate = current + "\n" + line
-		}
-		fits, err := resultCardContentFits(sizingTitle, status, candidate)
-		if err != nil {
-			return nil, err
-		}
-		if fits {
-			current = candidate
+	for _, line := range strings.SplitAfter(content, "\n") {
+		if line == "" {
 			continue
 		}
-		flush()
-		fits, err = resultCardContentFits(sizingTitle, status, line)
-		if err != nil {
-			return nil, err
+		next, boundary := fence.afterLine(line)
+		for line != "" {
+			fits, err := resultCardContentFits(sizingTitle, status, next.close(current+line))
+			if err != nil {
+				return nil, err
+			}
+			if fits {
+				current += line
+				hasContent = true
+				fence = next
+				break
+			}
+			if hasContent {
+				flush()
+				continue
+			}
+			// A fence delimiter cannot be split without changing Markdown semantics.
+			if boundary {
+				return nil, fmt.Errorf("result card cannot fit code fence delimiter")
+			}
+			runes := []rune(line)
+			low, high, best := 1, len(runes), 0
+			for low <= high {
+				middle := low + (high-low)/2
+				fits, err := resultCardContentFits(sizingTitle, status, fence.close(current+string(runes[:middle])))
+				if err != nil {
+					return nil, err
+				}
+				if fits {
+					best = middle
+					low = middle + 1
+				} else {
+					high = middle - 1
+				}
+			}
+			if best == 0 {
+				return nil, fmt.Errorf("result card cannot fit one content rune")
+			}
+			current += string(runes[:best])
+			hasContent = true
+			line = string(runes[best:])
+			flush()
 		}
-		if fits {
-			current = line
-			continue
-		}
-		parts, err := splitOversizedResultCardLine(sizingTitle, status, line)
-		if err != nil {
-			return nil, err
-		}
-		chunks = append(chunks, parts...)
 	}
 	flush()
 	if len(chunks) == 0 {
@@ -142,36 +168,45 @@ func splitResultCardMarkdown(title string, status string, content string) ([]str
 	return chunks, nil
 }
 
-func splitOversizedResultCardLine(title string, status string, line string) ([]string, error) {
-	runes := []rune(line)
-	parts := make([]string, 0, 2)
-	for len(runes) > 0 {
-		low, high := 1, len(runes)
-		best := 0
-		for low <= high {
-			middle := low + (high-low)/2
-			fits, err := resultCardContentFits(title, status, string(runes[:middle]))
-			if err != nil {
-				return nil, err
-			}
-			if fits {
-				best = middle
-				low = middle + 1
-			} else {
-				high = middle - 1
-			}
-		}
-		if best == 0 {
-			return nil, fmt.Errorf("result card cannot fit one content rune")
-		}
-		parts = append(parts, string(runes[:best]))
-		runes = runes[best:]
+type resultMarkdownFence struct{ marker, opener string }
+
+func (f resultMarkdownFence) close(content string) string {
+	if f.marker == "" {
+		return content
 	}
-	return parts, nil
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return content + f.marker
+}
+
+func (f resultMarkdownFence) afterLine(line string) (resultMarkdownFence, bool) {
+	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 || len(trimmed) < 3 || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return f, false
+	}
+	n := 1
+	for n < len(trimmed) && trimmed[n] == trimmed[0] {
+		n++
+	}
+	if n < 3 {
+		return f, false
+	}
+	if f.marker != "" {
+		if trimmed[0] == f.marker[0] && n >= len(f.marker) && strings.TrimSpace(trimmed[n:]) == "" {
+			return resultMarkdownFence{}, true
+		}
+		return f, false
+	}
+	if trimmed[0] == '`' && strings.Contains(trimmed[n:], "`") {
+		return f, false
+	}
+	return resultMarkdownFence{marker: trimmed[:n], opener: line}, true
 }
 
 func resultCardContentFits(title string, status string, content string) (bool, error) {
-	raw, err := buildCardV2(cardOptions{Status: status, Title: title, Content: content})
+	raw, err := buildCardV2(cardOptions{Status: status, Title: title, Content: content, PreserveWhitespace: true})
 	if err != nil {
 		return false, err
 	}

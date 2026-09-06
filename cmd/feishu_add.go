@@ -131,7 +131,15 @@ func collectFeishuAddOptions(opts feishuAddOptions, prompter feishuAddPrompter) 
 		}
 	}
 	if !opts.ProgressModeSet {
-		opts.ProgressMode, err = prompter.Prompt("进度模式 off/typing/summary/verbose/stream/debug", feishuAddDefaultProgressMode)
+		defaultMode := feishuAddDefaultProgressMode
+		_, exists, lookupErr := resolveFeishuBotRef(opts.Name)
+		if lookupErr != nil {
+			return feishuBootstrapOptions{}, lookupErr
+		}
+		if exists {
+			defaultMode = ""
+		}
+		opts.ProgressMode, err = prompter.Prompt("进度模式 off/typing/summary/verbose/stream/debug（已有机器人留空保留）", defaultMode)
 		if err != nil {
 			return feishuBootstrapOptions{}, err
 		}

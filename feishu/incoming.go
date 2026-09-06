@@ -96,6 +96,7 @@ func writeFeishuResourceFile(dir string, reader io.Reader) (string, int64, error
 	if written > maxFeishuResourceBytes {
 		return "", written, permanentResourceDownloadError{
 			message: fmt.Sprintf("feishu resource exceeds %d MiB", maxFeishuResourceBytes/(1024*1024)),
+			cause:   errFeishuResourceTooLarge,
 		}
 	}
 	if err := file.Close(); err != nil {

@@ -18,10 +18,11 @@ type feishuDispatchSequencer struct {
 // feishuDispatchNode 可以在票据放弃执行时重定向到它原本等待的前序节点。
 // 后继票据会沿依赖链继续等待，不需要为每个超时票据创建中继 goroutine。
 type feishuDispatchNode struct {
-	mu       sync.Mutex
-	done     chan struct{}
-	redirect *feishuDispatchNode
-	closed   bool
+	mu        sync.Mutex
+	done      chan struct{}
+	redirect  *feishuDispatchNode
+	closed    bool
+	operation string
 }
 
 type feishuDispatchTicket struct {
@@ -52,7 +53,7 @@ func newFeishuDispatchSequencer() *feishuDispatchSequencer {
 }
 
 // reserve 在启动异步卡片处理前同步登记位置，消除 goroutine 调度造成的抢跑窗口。
-func (s *feishuDispatchSequencer) reserve(key string) feishuDispatchTicket {
+func (s *feishuDispatchSequencer) reserve(key string, operations ...string) feishuDispatchTicket {
 	key = strings.TrimSpace(key)
 	if s == nil || key == "" {
 		return feishuDispatchTicket{}
@@ -60,9 +61,46 @@ func (s *feishuDispatchSequencer) reserve(key string) feishuDispatchTicket {
 	s.mu.Lock()
 	previous := s.tails[key]
 	current := &feishuDispatchNode{done: make(chan struct{})}
+	current.operation = "消息处理"
+	if len(operations) > 0 && operations[0] != "" {
+		current.operation = operations[0]
+	}
 	s.tails[key] = current
 	s.mu.Unlock()
 	return feishuDispatchTicket{sequencer: s, key: key, previous: previous, current: current}
+}
+
+func (t feishuDispatchTicket) previousOperation() string {
+	if node := pendingFeishuDispatchNode(t.previous); node != nil && node.operation != "" {
+		return node.operation
+	}
+	return "消息处理"
+}
+
+// Only fixed command names enter a queue label; arguments and free text stay private.
+func feishuDispatchOperationLabel(msg platform.IncomingMessage) string {
+	text := msg.Text
+	if msg.RawCommand != nil {
+		text = msg.RawCommand.Value["choice"]
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return "消息处理"
+	}
+	switch fields[0] {
+	case "/cx", "/cc":
+		if len(fields) > 1 {
+			switch fields[1] {
+			case "ls", "status", "switch", "new", "cd", "workspace", "account", "model", "quota", "rename", "release", "attach", "detach", "help":
+				return fields[0] + " " + fields[1]
+			}
+		}
+		return fields[0]
+	case "/status", "/help", "/new", "/cwd", "/model", "/reasoning", "/progress", "/ps", "/stop", "/cancel", "/guide", "/mode", "/fast":
+		return fields[0]
+	default:
+		return "消息处理"
+	}
 }
 
 // run 等待前序分发完成；超时会释放队列，避免单个卡片命令永久阻塞整个窗口。

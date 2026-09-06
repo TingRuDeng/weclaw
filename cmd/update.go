@@ -19,11 +19,15 @@ const giteeRepo = "jimdeng891/weclaw"
 
 var updateRestartFlag bool
 var updateSourceFlag string
+var updatePackageFlag string
+var updateTargetFlag string
 
 func init() {
 	updateCmd.Flags().BoolVar(&updateRestartFlag, "restart", false, "更新后协调重启 WeClaw 与受管 Codex Host")
 	updateCmd.Flags().BoolVar(&restartForceFlag, "force", false, "中断本地任务，关闭 Codex App，并强制停止当前用户的 Codex Host")
 	updateCmd.Flags().StringVar(&updateSourceFlag, "source", "", "更新来源：auto、github 或 gitee（默认读取配置）")
+	updateCmd.Flags().StringVar(&updatePackageFlag, "from-package", "", "从已封装的本地包目录更新，不查询远端版本、不重启")
+	updateCmd.Flags().StringVar(&updateTargetFlag, "target", "", "本地包安装目标（仅用于 --from-package，默认当前程序）")
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 }
@@ -43,6 +47,15 @@ var updateCmd = &cobra.Command{
 }
 
 func runUpdate(cmd *cobra.Command, args []string) error {
+	if updatePackageFlag != "" {
+		if updateSourceFlag != "" || updateRestartFlag || restartForceFlag || os.Getenv("WECLAW_UPDATE_RELEASE_TAG") != "" {
+			return fmt.Errorf("--from-package 不可与远端来源、版本覆盖或重启选项组合；安装后请显式执行 restart")
+		}
+		return installLocalPackage(cmd.Context(), updatePackageFlag, updateTargetFlag, defaultUpdateCompletionOps(), os.Stdout)
+	}
+	if updateTargetFlag != "" {
+		return fmt.Errorf("--target 只能与 --from-package 一起使用")
+	}
 	fmt.Println("正在检查更新...")
 	latest, overridden, err := updateReleaseTagOverride()
 	if err != nil {

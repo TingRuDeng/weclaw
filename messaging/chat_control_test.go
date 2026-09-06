@@ -62,10 +62,10 @@ func TestModeYoloIsolatedPerFeishuSession(t *testing.T) {
 	if !containsText(replyB.Texts, "default") {
 		t.Fatalf("窗口 B 回复=%#v，期望保持 default", replyB.Texts)
 	}
-	if !strings.Contains(h.buildStatusForRoute("ou_user", routeA, platform.PlatformFeishu, "cli_main"), "mode: yolo") {
+	if !strings.Contains(h.buildStatusForRoute("ou_user", routeA, platform.PlatformFeishu, "cli_main"), "模式: yolo") {
 		t.Fatal("窗口 A 状态应显示 yolo")
 	}
-	if !strings.Contains(h.buildStatusForRoute("ou_user", routeB, platform.PlatformFeishu, "cli_main"), "mode: default") {
+	if !strings.Contains(h.buildStatusForRoute("ou_user", routeB, platform.PlatformFeishu, "cli_main"), "模式: 默认") {
 		t.Fatal("窗口 B 状态应显示 default")
 	}
 }
